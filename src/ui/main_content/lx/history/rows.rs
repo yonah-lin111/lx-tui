@@ -6,9 +6,7 @@
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
-use crate::ui::markdown_render;
-
-use super::{SCROLLBAR_COLUMNS, STEP_GUTTER, USER_INDENT, tool};
+use super::{SCROLLBAR_COLUMNS, tool};
 
 /// 行数 → 矩形高度（饱和转换：极端长历史不会回绕成 0）。
 pub(crate) fn rows_to_u16(rows: usize) -> u16 {
@@ -25,24 +23,6 @@ pub(crate) fn content_rect(area: Rect) -> Rect {
     } else {
         area
     }
-}
-
-/// 消息正文渲染行数：assistant 用 markdown 渲染（宽度自适应，扣步骤标记缩进），
-/// 用户按纯文本换行（扣 `> ` 前缀）。
-pub(crate) fn text_rows(
-    message: &crate::app::state::ChatMessageView,
-    content: &str,
-    width: u16,
-) -> usize {
-    if message.role == "user" {
-        return wrap(content, width.saturating_sub(USER_INDENT)).len();
-    }
-    markdown_rows(content, width.saturating_sub(STEP_GUTTER))
-}
-
-/// assistant markdown 正文渲染成若干行（已按 `width` 自适应：表格收缩、其余软换行）。
-fn markdown_rows(content: &str, width: u16) -> usize {
-    markdown_render::render_wrapped(content, width).len()
 }
 
 /// 工具步骤占用的渲染行数。

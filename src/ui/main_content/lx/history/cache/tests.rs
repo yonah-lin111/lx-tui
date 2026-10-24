@@ -1,5 +1,7 @@
 //! 几何快照缓存的失效口径测试。
 
+use std::sync::Arc;
+
 use ratatui::layout::Rect;
 
 use super::*;
@@ -8,6 +10,8 @@ use crate::app::state::{
     ToolStatus, ToolSummary,
 };
 use crate::chat::events::PartKind;
+use crate::ui::main_content::lx::history::paint::BlockPaint;
+use crate::ui::main_content::lx::history::snapshot::HistorySnapshot;
 use crate::ui::main_content::lx::history::{Grid, layout, render};
 
 fn text_part(content: &str) -> ChatPartView {
@@ -204,4 +208,137 @@ fn one_frame_geometry_and_draw_share_the_snapshot() {
     let _ = render(&mut grid, area, &lx, 0, &mut cache);
     let _ = layout(area, &lx, &mut cache);
     assert_eq!(cache.builds(), 1, "同宽度同状态不重复建快照");
+}
+
+/// 快照里按时间线顺序取每块的绘制数据。
+fn paints(snapshot: &HistorySnapshot) -> Vec<Arc<BlockPaint>> {
+    snapshot
+        .entries
+        .iter()
+        .flat_map(|entry| entry.blocks.iter())
+        .map(|block| Arc::clone(&block.paint))
+        .collect()
+}
+
+#[test]
+fn identical_frames_reuse_the_same_paints() {
+    let lx = lx_with(vec![message(
+        "u1",
+        "user",
+        "complete",
+        vec![text_part("问题")],
+    )]);
+    let mut cache = PaneCache::default();
+    let first = paints(&cache.snapshot(40, &lx));
+    let second = paints(&cache.snapshot(40, &lx));
+    assert_eq!(first.len(), 1);
+    assert!(
+        Arc::ptr_eq(&first[0], &second[0]),
+        "同一状态两帧必须复用同一份绘制数据"
+    );
+}
+
+#[test]
+fn only_the_changed_message_is_repainted() {
+    let mut lx = lx_with(vec![
+        message("u1", "user", "complete", vec![text_part("第一个问题")]),
+        message("a1", "assistant", "complete", vec![text_part("第一段回答")]),
+        message("u2", "user", "complete", vec![text_part("第二个问题")]),
+    ]);
+    let mut cache = PaneCache::default();
+    let before = paints(&cache.snapshot(40, &lx));
+    assert_eq!(before.len(), 3);
+
+    if let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[1].steps[0] {
+        part.content.push_str("，追加一句");
+    }
+    let after = paints(&cache.snapshot(40, &lx));
+    assert_eq!(after.len(), 3, "块数不因正文追加而变");
+    assert!(Arc::ptr_eq(&before[0], &after[0]), "未变的消息复用旧块");
+    assert!(
+        !Arc::ptr_eq(&before[1], &after[1]),
+        "追加正文的消息必须重排"
+    );
+    assert!(Arc::ptr_eq(&before[2], &after[2]), "未变的消息复用旧块");
+}
+
+#[test]
+fn cached_bytes_stay_under_the_limit() {
+    let messages: Vec<ChatMessageView> = (0..50)
+        .map(|index| {
+            message(
+                &format!("m{index}"),
+                "assistant",
+                "complete",
+                vec![text_part("一行正文\n两行正文\n三行正文")],
+            )
+        })
+        .collect();
+    let lx = lx_with(messages);
+    let mut cache = PaneCache::default();
+    let _ = cache.snapshot(40, &lx);
+    assert!(cache.bytes() > 0, "正文块必须进二级缓存");
+    assert!(cache.bytes() <= MAX_CACHED_BYTES);
+}
+
+#[test]
+fn eviction_keeps_rows_identical_after_rebuild() {
+    let messages: Vec<ChatMessageView> = (0..30)
+        .map(|index| {
+            let role = if index % 2 == 0 { "user" } else { "assistant" };
+            message(
+                &format!("m{index}"),
+                role,
+                "complete",
+                vec![text_part("一行\n两行\n三行")],
+            )
+        })
+        .collect();
+    let mut lx = lx_with(messages);
+    let mut cache = PaneCache::default();
+    let first_total = cache.snapshot(40, &lx).total_rows;
+    let first_blocks = cache.block_count();
+    assert!(first_blocks > 0);
+
+    // 推进帧号后，上一帧构建的块都成了「冷块」，强制淘汰全部。
+    cache.advance_frame();
+    cache.set_limit(1);
+    assert_eq!(cache.block_count(), 0, "冷块全部淘汰");
+    assert_eq!(cache.bytes(), 0, "字节计数同步归零");
+
+    // 序号只进指纹、不进画面：用它触发重建，行数必须与淘汰前一致。
+    lx.chat.messages[29].sequence += 1;
+    let rebuilt = cache.snapshot(40, &lx);
+    assert_eq!(rebuilt.total_rows, first_total, "淘汰重建后行数不变");
+    assert_eq!(cache.block_count(), first_blocks, "块按需全部重建");
+}
+
+#[test]
+fn visible_blocks_survive_eviction() {
+    let messages: Vec<ChatMessageView> = (0..20)
+        .map(|index| {
+            message(
+                &format!("m{index}"),
+                "user",
+                "complete",
+                vec![text_part(&format!("第 {index} 条消息"))],
+            )
+        })
+        .collect();
+    let lx = lx_with(messages);
+    let area = Rect::new(0, 0, 40, 10);
+    let mut cache = PaneCache::default();
+    let mut grid = Grid::new(area);
+    let total = render(&mut grid, area, &lx, 0, &mut cache);
+    let all_blocks = cache.block_count();
+    assert!(all_blocks > 1, "历史必须有多个块");
+
+    // 换一帧后只画最后 10 行：只有视口内的块被标记为本帧使用。
+    cache.advance_frame();
+    let _ = render(&mut grid, area, &lx, total.saturating_sub(10), &mut cache);
+    cache.set_limit(1);
+
+    let kept = cache.block_count();
+    assert!(kept > 0, "本帧画过的块不许淘汰");
+    assert!(kept < all_blocks, "视口外的冷块必须被淘汰");
 }

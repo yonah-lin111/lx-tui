@@ -18,6 +18,9 @@ use crate::ui::main_content::lx::{history_center_target, history_rect};
 /// 工具步骤的几何一致性测试（布局/渲染行数、滚动条、置顶行、thinking 命中）。
 mod tool_geometry;
 
+/// 滚动性能回归（`#[ignore]`）。
+mod perf;
+
 fn lx_with(messages: Vec<ChatMessageView>) -> Lx {
     let mut lx = Lx::new();
     let mut chat = LxChat::new();

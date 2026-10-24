@@ -27,11 +27,11 @@ use crate::ui::{style, text};
 use super::Grid;
 use super::notice;
 
-mod body;
 mod cache;
 mod cards;
 mod compact;
 mod layout;
+mod paint;
 mod render;
 mod rewind;
 mod rows;
@@ -49,7 +49,7 @@ pub(crate) use render::render;
 pub use timeline::has_history;
 use tool::Folds;
 
-pub(crate) use rows::{content_rect, rows_to_u16, text_rows, tool_rows, visible_row, wrap};
+pub(crate) use rows::{content_rect, rows_to_u16, tool_rows, visible_row, wrap};
 pub(crate) use stats::{format_duration, stats_line};
 
 /// 用户消息前缀（`> `）。

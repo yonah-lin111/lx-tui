@@ -1,17 +1,28 @@
 //! 历史几何快照：只依赖「内容宽度 + 列表状态」，产出内容行空间
-//! （0 = 最早，不含屏幕坐标与滚动）的行区间。
+//! （0 = 最早，不含屏幕坐标与滚动）的行区间与每块绘制数据。
 //!
-//! `layout` 把内容行映射成屏幕矩形；`render` 用 `entries` 跳过视口外的条目；
-//! 命中入口用 `cards` 换算内容行。三处读同一份快照，行数口径只有一个来源。
+//! `layout` 把内容行映射成屏幕矩形；`render` 用 `entries` 跳过视口外的条目、
+//! 用 `blocks` 复用每块已排好的行；命中入口用 `cards` 换算内容行。三处读同一份快照。
+//!
+//! 行数与绘制数据**同源**：每个 `SnapBlock` 的 `rows` 就是 `paint.rows()`。
 //!
 //! 快照**不含**高度/`y`/滚动偏移：这些随视口每帧变化，进了键就会每帧重建。
 
-use crate::app::state::{AssistantStepView, CardSection, Lx};
+use std::sync::Arc;
 
+use crate::app::state::{AssistantStepView, CardSection, Lx, UserShellView};
+use crate::ui::markdown_render;
+
+use super::cache::{
+    BlockKey, PaneCache, SHELL_SLOT_BLOCK, compact_block_signature, group_block_signature,
+    notice_block_signature, part_block_signature, rewind_block_signature, shell_block_signature,
+    stats_block_signature,
+};
+use super::paint::{BlockPaint, BlockSource};
 use super::timeline::{TimelineEntry, timeline};
 use super::{
-    CardKind, MessageRows, body, compact, folds_of, needs_spacer, notice, rewind, shell_folds,
-    should_register_card, stats_line, text_rows, tool, tool_rows, user_shell, wrap,
+    CardKind, MessageRows, compact, folds_of, needs_spacer, notice, rewind, shell_folds,
+    should_register_card, stats_line, tool, tool_rows, user_shell, wrap,
 };
 
 /// 时间线条目类别（与 [`TimelineEntry`] 一一对应，但可跨帧独立持有）。
@@ -22,12 +33,47 @@ pub(crate) enum SnapEntryKind {
     Compact(usize),
 }
 
+/// 快照里的一个块：起止行 + 绘制数据。
+#[derive(Clone)]
+pub(crate) struct SnapBlock {
+    /// 块首行的绝对内容行号。
+    pub(crate) start: usize,
+    /// 块占用的行数（= `paint.rows()`）。
+    pub(crate) rows: usize,
+    /// 绘制数据（二级缓存命中/构建的结果）。
+    pub(crate) paint: Arc<BlockPaint>,
+    /// 缓存键（绘制时刷新 LRU）。
+    pub(crate) key: BlockKey,
+    /// 块在 `Lx` 里的定位。
+    pub(crate) source: BlockSource,
+}
+
+impl std::fmt::Debug for SnapBlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SnapBlock")
+            .field("start", &self.start)
+            .field("rows", &self.rows)
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+impl PartialEq for SnapBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self.start == other.start && self.rows == other.rows && self.source == other.source
+    }
+}
+
+impl Eq for SnapBlock {}
+
 /// 一条时间线条目的内容行区间（`end` 不含）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SnapEntry {
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) kind: SnapEntryKind,
+    /// 条目内的块（顺序即绘制顺序）。
+    pub(crate) blocks: Vec<SnapBlock>,
 }
 
 /// 一个可折叠块的内容行区间（点击面 + 折叠内容）。
@@ -57,304 +103,482 @@ pub(crate) struct HistorySnapshot {
 }
 
 /// 构建快照。`width` 是历史内容列宽（已扣除滚动条预留列）。
-pub(crate) fn build(width: u16, lx: &Lx) -> HistorySnapshot {
-    let mut rows = 0usize;
-    let mut snapshot = HistorySnapshot::default();
+pub(crate) fn build(width: u16, lx: &Lx, cache: &mut PaneCache) -> HistorySnapshot {
     if width == 0 {
-        return snapshot;
+        return HistorySnapshot::default();
     }
     let timeline = timeline(lx);
+    let mut builder = Builder {
+        cache,
+        width,
+        snapshot: HistorySnapshot::default(),
+        rows: 0,
+    };
     let mut entry_has_previous = false;
     for entry in &timeline {
+        if entry_has_previous {
+            builder.rows += 1;
+        }
+        entry_has_previous = true;
         match entry {
-            TimelineEntry::Notices { last, count } => {
-                if entry_has_previous {
-                    rows += 1;
-                }
-                entry_has_previous = true;
-                let start = rows;
-                rows += rewind::rows(&lx.chat.notices[*last], *count, width);
-                snapshot.entries.push(SnapEntry {
-                    start,
-                    end: rows,
-                    kind: SnapEntryKind::Notices {
-                        last: *last,
-                        count: *count,
-                    },
-                });
-            }
-            TimelineEntry::Compact(index) => {
-                if entry_has_previous {
-                    rows += 1;
-                }
-                entry_has_previous = true;
-                let start = rows;
-                let notice = &lx.compact.checkpoints[*index];
-                let expanded = compact::is_expanded(lx, &notice.id);
-                let notice_rows = compact::rows(notice, 1, width, expanded);
-                rows += notice_rows;
-                // 整块都是点击面：折叠态只有头部两行，点哪里都应能展开。
-                snapshot.cards.push(CardRegion {
-                    kind: CardKind::Compact {
-                        checkpoint_id: notice.id.clone(),
-                        expanded,
-                    },
-                    card_start: start,
-                    card_rows: notice_rows,
-                    fold_start: start,
-                    fold_rows: notice_rows,
-                    clickable: true,
-                });
-                snapshot.entries.push(SnapEntry {
-                    start,
-                    end: rows,
-                    kind: SnapEntryKind::Compact(*index),
-                });
-            }
-            TimelineEntry::Message(message_index) => {
-                if entry_has_previous {
-                    rows += 1;
-                }
-                entry_has_previous = true;
-                let message = &lx.chat.messages[*message_index];
-                let start = rows;
-                if let Some(shell) = &message.shell {
-                    build_shell(&mut snapshot, lx, message, shell, width, start, &mut rows);
-                    snapshot.messages.push(MessageRows {
-                        start,
-                        end: rows,
-                        is_user: false,
-                    });
-                    snapshot.entries.push(SnapEntry {
-                        start,
-                        end: rows,
-                        kind: SnapEntryKind::Message(*message_index),
-                    });
-                    continue;
-                }
-                let mut has_previous =
-                    build_steps(&mut snapshot, lx, message, *message_index, width, &mut rows);
-                if let Some(notice) = notice(message) {
-                    if has_previous && needs_spacer() {
-                        rows += 1;
-                    }
-                    has_previous = true;
-                    rows += notice::rows(&notice, width);
-                }
-                if let Some(line) = stats_line(message) {
-                    if has_previous && needs_spacer() {
-                        rows += 1;
-                    }
-                    rows += wrap(&line, width).len();
-                }
-                snapshot.messages.push(MessageRows {
-                    start,
-                    end: rows,
-                    is_user: message.role == "user" && message.shell.is_none(),
-                });
-                snapshot.entries.push(SnapEntry {
-                    start,
-                    end: rows,
-                    kind: SnapEntryKind::Message(*message_index),
-                });
-            }
+            TimelineEntry::Notices { last, count } => builder.notices(lx, *last, *count),
+            TimelineEntry::Compact(index) => builder.compact(lx, *index),
+            TimelineEntry::Message(message_index) => builder.message(lx, *message_index),
         }
     }
     // 末尾留一行呼吸位（滚动到底部时不贴死）；归最后一条消息。
     if !timeline.is_empty() {
-        rows += 1;
+        builder.rows += 1;
         if matches!(timeline.last(), Some(TimelineEntry::Message(_)))
-            && let Some(last) = snapshot.messages.last_mut()
+            && let Some(last) = builder.snapshot.messages.last_mut()
         {
-            last.end = rows;
+            last.end = builder.rows;
         }
     }
-    snapshot.total_rows = rows;
-    snapshot
+    builder.snapshot.total_rows = builder.rows;
+    builder.snapshot
 }
 
-/// 本地命令卡片（独立条目，不进入步骤时间线）。
-fn build_shell(
-    snapshot: &mut HistorySnapshot,
-    lx: &Lx,
-    message: &crate::app::state::ChatMessageView,
-    shell: &crate::app::state::UserShellView,
+/// 快照构建中的可变累加器。
+struct Builder<'a> {
+    cache: &'a mut PaneCache,
     width: u16,
-    start: usize,
-    rows: &mut usize,
-) {
-    let folds = shell_folds(lx, &message.id);
-    *rows += user_shell::rows(
-        shell,
-        width,
-        lx.chat.loading_frame,
-        lx.chat.status.streaming || shell.is_running(),
-        folds,
-    );
-    for region in user_shell::regions(shell, width, folds) {
-        let expanded = folds.of(region.section);
-        snapshot.cards.push(CardRegion {
-            kind: CardKind::Shell {
-                message_id: message.id.clone(),
-                section: region.section,
-                expanded,
-            },
-            card_start: start + region.offset,
-            card_rows: region.rows,
-            fold_start: start + region.offset,
-            fold_rows: region.rows,
-            clickable: region.clickable,
+    snapshot: HistorySnapshot,
+    rows: usize,
+}
+
+impl Builder<'_> {
+    fn spacer(&mut self) {
+        self.rows += 1;
+    }
+
+    /// 按块键取/建绘制数据，并把行数作为唯一行数来源写进块。
+    fn block(
+        &mut self,
+        key: BlockKey,
+        source: BlockSource,
+        start: usize,
+        build: impl FnOnce() -> BlockPaint,
+    ) -> SnapBlock {
+        let paint = self.cache.block(key, || Arc::new(build()));
+        let rows = paint.rows();
+        SnapBlock {
+            start,
+            rows,
+            paint,
+            key,
+            source,
+        }
+    }
+
+    /// 撤销提示条目（连续提示合并为一条）。
+    fn notices(&mut self, lx: &Lx, last: usize, count: usize) {
+        let start = self.rows;
+        let key = BlockKey {
+            message_index: last,
+            step_index: super::cache::REWIND_SLOT_BLOCK,
+            width: self.width,
+            sig: rewind_block_signature(&lx.chat.notices[last], count),
+        };
+        let rows = rewind::rows(&lx.chat.notices[last], count, self.width);
+        let block = self.block(key, BlockSource::Rewind { last, count }, start, || {
+            BlockPaint::Legacy { rows }
+        });
+        self.rows += block.rows;
+        self.snapshot.entries.push(SnapEntry {
+            start,
+            end: self.rows,
+            kind: SnapEntryKind::Notices { last, count },
+            blocks: vec![block],
         });
     }
-}
 
-/// assistant/用户消息的步骤时间线（含合并组、工具卡片与 thinking 头部）。
-///
-/// 返回消息内是否有过块（决定其后的通知/统计行是否留空行）。
-fn build_steps(
-    snapshot: &mut HistorySnapshot,
-    lx: &Lx,
-    message: &crate::app::state::ChatMessageView,
-    message_index: usize,
-    width: u16,
-    rows: &mut usize,
-) -> bool {
-    let mut has_previous = false;
-    let mut step_index = 0usize;
-    while let Some(step) = message.steps.get(step_index) {
-        // 同种文件工具的连续调用共用一行合并标题，但每个调用各自独立成块。
-        if let AssistantStepView::Tool { .. } = step {
-            let group = tool::merge_group(&message.steps, step_index);
-            if group.len() > 1 {
-                let expanded: Vec<bool> = group
-                    .iter()
-                    .map(|call| lx.chat.detail_is_expanded(&message.id, &call.call_id))
-                    .collect();
-                let group_rows = tool::group_rows(&group, width, &expanded);
-                if group_rows > 0 {
-                    if has_previous && needs_spacer() {
-                        *rows += 1;
-                    }
-                    has_previous = true;
-                    let block_start = *rows;
-                    let blocks = tool::group_blocks(&group, width, &expanded);
-                    for (index, block) in blocks.iter().enumerate() {
-                        let call = group[index];
-                        if !should_register_card(group[index], width) {
-                            continue;
-                        }
-                        let card_start = block_start + block.start;
-                        let (fold_start, fold_rows) = if expanded[index] {
-                            (card_start, 0)
-                        } else {
-                            let region = tool::fold_region(call, width);
-                            (
-                                block_start + block.start + region.offset,
-                                region.rows.min(block.len.saturating_sub(region.offset)),
-                            )
-                        };
-                        snapshot.cards.push(CardRegion {
-                            kind: CardKind::Tool {
-                                message_id: message.id.clone(),
-                                call_id: call.call_id.clone(),
-                                section: CardSection::Body,
-                                expanded: expanded[index],
-                            },
-                            card_start,
-                            card_rows: block.len,
-                            fold_start,
-                            fold_rows,
-                            clickable: true,
-                        });
-                    }
-                    *rows += group_rows;
-                }
-                step_index += group.len();
-                continue;
-            }
-        }
-        let (is_reasoning, step_rows) = match step {
-            AssistantStepView::Part { part, .. } => match part.kind {
-                crate::chat::events::PartKind::Text => {
-                    (false, text_rows(message, &part.content, width))
-                }
-                crate::chat::events::PartKind::Reasoning => (
-                    true,
-                    1 + if lx.chat.reasoning_expanded(message_index, step_index) {
-                        body::thinking_rows(&part.content, width)
-                    } else {
-                        0
-                    },
-                ),
-            },
-            AssistantStepView::Tool { call, .. } => (
-                false,
-                tool_rows(call, width, folds_of(lx, &message.id, call)),
-            ),
+    /// compact 检查点条目。
+    fn compact(&mut self, lx: &Lx, index: usize) {
+        let start = self.rows;
+        let notice = &lx.compact.checkpoints[index];
+        let expanded = compact::is_expanded(lx, &notice.id);
+        let key = BlockKey {
+            message_index: index,
+            step_index: super::cache::COMPACT_SLOT_BLOCK,
+            width: self.width,
+            sig: compact_block_signature(notice, expanded),
         };
-        if step_rows == 0 {
-            step_index += 1;
-            continue; // 空正文块不占行，也不引入块间空行。
+        let rows = compact::rows(notice, 1, self.width, expanded);
+        let block = self.block(key, BlockSource::Compact { index, expanded }, start, || {
+            BlockPaint::Legacy { rows }
+        });
+        self.rows += block.rows;
+        // 整块都是点击面：折叠态只有头部两行，点哪里都应能展开。
+        self.snapshot.cards.push(CardRegion {
+            kind: CardKind::Compact {
+                checkpoint_id: notice.id.clone(),
+                expanded,
+            },
+            card_start: start,
+            card_rows: block.rows,
+            fold_start: start,
+            fold_rows: block.rows,
+            clickable: true,
+        });
+        self.snapshot.entries.push(SnapEntry {
+            start,
+            end: self.rows,
+            kind: SnapEntryKind::Compact(index),
+            blocks: vec![block],
+        });
+    }
+
+    /// 一条消息（含本地命令卡片分支）。
+    fn message(&mut self, lx: &Lx, message_index: usize) {
+        let message = &lx.chat.messages[message_index];
+        let start = self.rows;
+        let mut blocks = Vec::new();
+        if let Some(shell) = &message.shell {
+            self.shell(lx, message_index, message, shell, start, &mut blocks);
+        } else {
+            self.steps(lx, message_index, message, &mut blocks);
+            self.tail(lx, message_index, message, &mut blocks);
         }
-        if has_previous && needs_spacer() {
-            *rows += 1;
-        }
-        has_previous = true;
-        let block_start = *rows;
-        if let AssistantStepView::Tool { call, .. } = step {
-            let folds = folds_of(lx, &message.id, call);
-            // 命令卡片登记两条：参数区与输出区各自点击；文件工具是一条整卡点击面。
-            for region in tool::card_regions(call, width, folds, step_rows) {
-                let card_rows = region
-                    .card
-                    .rows
-                    .min(step_rows.saturating_sub(region.card.offset));
-                if card_rows == 0 {
-                    continue;
-                }
-                let fold_rows = region
-                    .fold
-                    .rows
-                    .min(step_rows.saturating_sub(region.fold.offset));
-                let expanded = match region.section {
-                    CardSection::Body => folds.body,
-                    CardSection::Output => folds.output,
-                };
-                snapshot.cards.push(CardRegion {
-                    kind: CardKind::Tool {
-                        message_id: message.id.clone(),
-                        call_id: call.call_id.clone(),
-                        section: region.section,
-                        expanded,
-                    },
-                    card_start: block_start + region.card.offset,
-                    card_rows,
-                    fold_start: block_start + region.fold.offset,
-                    fold_rows,
-                    clickable: region.clickable,
-                });
-            }
-        }
-        if is_reasoning {
-            let expanded = lx.chat.reasoning_expanded(message_index, step_index);
-            snapshot
-                .thinking
-                .push((message_index, step_index, (block_start, 1)));
-            snapshot.cards.push(CardRegion {
-                kind: CardKind::Thinking {
-                    message_index,
-                    step_index,
+        let is_user = message.role == "user" && message.shell.is_none();
+        self.snapshot.messages.push(MessageRows {
+            start,
+            end: self.rows,
+            is_user,
+        });
+        self.snapshot.entries.push(SnapEntry {
+            start,
+            end: self.rows,
+            kind: SnapEntryKind::Message(message_index),
+            blocks,
+        });
+    }
+
+    /// 本地命令卡片（独立条目，不进入步骤时间线）。
+    fn shell(
+        &mut self,
+        lx: &Lx,
+        message_index: usize,
+        message: &crate::app::state::ChatMessageView,
+        shell: &UserShellView,
+        entry_start: usize,
+        blocks: &mut Vec<SnapBlock>,
+    ) {
+        let folds = shell_folds(lx, &message.id);
+        let key = BlockKey {
+            message_index,
+            step_index: SHELL_SLOT_BLOCK,
+            width: self.width,
+            sig: shell_block_signature(lx, message, shell),
+        };
+        let start = self.rows;
+        let rows = user_shell::rows(
+            shell,
+            self.width,
+            lx.chat.loading_frame,
+            lx.chat.status.streaming || shell.is_running(),
+            folds,
+        );
+        let block = self.block(key, BlockSource::Shell { message_index }, start, || {
+            BlockPaint::Legacy { rows }
+        });
+        self.rows += block.rows;
+        blocks.push(block);
+        for region in user_shell::regions(shell, self.width, folds) {
+            let expanded = folds.of(region.section);
+            self.snapshot.cards.push(CardRegion {
+                kind: CardKind::Shell {
+                    message_id: message.id.clone(),
+                    section: region.section,
                     expanded,
                 },
-                card_start: block_start,
-                card_rows: step_rows,
-                fold_start: block_start,
-                fold_rows: step_rows,
+                card_start: entry_start + region.offset,
+                card_rows: region.rows,
+                fold_start: entry_start + region.offset,
+                fold_rows: region.rows,
+                clickable: region.clickable,
+            });
+        }
+    }
+
+    /// assistant/用户消息的步骤时间线（含合并组、工具卡片与 thinking 头部）。
+    fn steps(
+        &mut self,
+        lx: &Lx,
+        message_index: usize,
+        message: &crate::app::state::ChatMessageView,
+        blocks: &mut Vec<SnapBlock>,
+    ) {
+        let mut has_previous = false;
+        let mut step_index = 0usize;
+        while let Some(step) = message.steps.get(step_index) {
+            // 同种文件工具的连续调用共用一行合并标题，但每个调用各自独立成块。
+            if let AssistantStepView::Tool { .. } = step {
+                let group = tool::merge_group(&message.steps, step_index);
+                if group.len() > 1 {
+                    if self.merge_group(lx, message_index, message, &group, step_index, blocks) {
+                        has_previous = true;
+                    }
+                    step_index += group.len();
+                    continue;
+                }
+            }
+            // 先取块（命中二级缓存时不再重排正文），行数**只**从 paint 取。
+            let mut block = self.build_step(lx, message_index, step_index, message, step);
+            if block.rows == 0 {
+                step_index += 1;
+                continue; // 空正文块不占行，也不引入块间空行。
+            }
+            if has_previous && needs_spacer() {
+                self.spacer();
+            }
+            has_previous = true;
+            block.start = self.rows;
+            let block_start = self.rows;
+            if let AssistantStepView::Tool { call, .. } = step {
+                self.tool_cards(lx, message, call, block.rows, block_start);
+            }
+            if matches!(
+                step,
+                AssistantStepView::Part { part, .. }
+                    if part.kind == crate::chat::events::PartKind::Reasoning
+            ) {
+                let expanded = lx.chat.reasoning_expanded(message_index, step_index);
+                self.snapshot
+                    .thinking
+                    .push((message_index, step_index, (block_start, 1)));
+                self.snapshot.cards.push(CardRegion {
+                    kind: CardKind::Thinking {
+                        message_index,
+                        step_index,
+                        expanded,
+                    },
+                    card_start: block_start,
+                    card_rows: block.rows,
+                    fold_start: block_start,
+                    fold_rows: block.rows,
+                    clickable: true,
+                });
+            }
+            self.rows = block_start.saturating_add(block.rows);
+            blocks.push(block);
+            step_index += 1;
+        }
+    }
+
+    /// 单个步骤块：用户正文 / markdown 正文 / thinking / 单个工具。
+    ///
+    /// `start` 先给 0；调用方决定空行后再回填真实行号。
+    fn build_step(
+        &mut self,
+        lx: &Lx,
+        message_index: usize,
+        step_index: usize,
+        message: &crate::app::state::ChatMessageView,
+        step: &AssistantStepView,
+    ) -> SnapBlock {
+        let key = BlockKey {
+            message_index,
+            step_index,
+            width: self.width,
+            sig: part_block_signature(lx, message, message_index, step_index, step),
+        };
+        let source = BlockSource::Step {
+            message_index,
+            step_index,
+        };
+        let width = self.width;
+        let is_user = message.role == "user";
+        let expanded = lx.chat.reasoning_expanded(message_index, step_index);
+        self.block(key, source, 0, || match step {
+            AssistantStepView::Part { part, .. } => match part.kind {
+                crate::chat::events::PartKind::Text if is_user => BlockPaint::UserText {
+                    lines: wrap(&part.content, width.saturating_sub(super::USER_INDENT)),
+                },
+                crate::chat::events::PartKind::Text => BlockPaint::Markdown {
+                    lines: markdown_render::render_wrapped(
+                        &part.content,
+                        width.saturating_sub(super::STEP_GUTTER),
+                    ),
+                },
+                crate::chat::events::PartKind::Reasoning => BlockPaint::Thinking {
+                    body: if expanded {
+                        markdown_render::render_wrapped(
+                            &part.content,
+                            width.saturating_sub(super::STEP_GUTTER),
+                        )
+                    } else {
+                        Vec::new()
+                    },
+                },
+            },
+            AssistantStepView::Tool { call, .. } => BlockPaint::Legacy {
+                rows: tool_rows(call, width, folds_of(lx, &message.id, call)),
+            },
+        })
+    }
+
+    /// 命令卡片的点击面（参数区 / 输出区各自独立）。
+    fn tool_cards(
+        &mut self,
+        lx: &Lx,
+        message: &crate::app::state::ChatMessageView,
+        call: &crate::app::state::ToolCallView,
+        step_rows: usize,
+        block_start: usize,
+    ) {
+        let folds = folds_of(lx, &message.id, call);
+        for region in tool::card_regions(call, self.width, folds, step_rows) {
+            let card_rows = region
+                .card
+                .rows
+                .min(step_rows.saturating_sub(region.card.offset));
+            if card_rows == 0 {
+                continue;
+            }
+            let fold_rows = region
+                .fold
+                .rows
+                .min(step_rows.saturating_sub(region.fold.offset));
+            let expanded = match region.section {
+                CardSection::Body => folds.body,
+                CardSection::Output => folds.output,
+            };
+            self.snapshot.cards.push(CardRegion {
+                kind: CardKind::Tool {
+                    message_id: message.id.clone(),
+                    call_id: call.call_id.clone(),
+                    section: region.section,
+                    expanded,
+                },
+                card_start: block_start + region.card.offset,
+                card_rows,
+                fold_start: block_start + region.fold.offset,
+                fold_rows,
+                clickable: region.clickable,
+            });
+        }
+    }
+
+    /// 合并的文件工具组：一个块（标题行 + 各调用文件块）。
+    fn merge_group(
+        &mut self,
+        lx: &Lx,
+        message_index: usize,
+        message: &crate::app::state::ChatMessageView,
+        group: &[&crate::app::state::ToolCallView],
+        first_step: usize,
+        blocks: &mut Vec<SnapBlock>,
+    ) -> bool {
+        let expanded: Vec<bool> = group
+            .iter()
+            .map(|call| lx.chat.detail_is_expanded(&message.id, &call.call_id))
+            .collect();
+        let group_rows = tool::group_rows(group, self.width, &expanded);
+        if group_rows == 0 {
+            return false;
+        }
+        let block_start = self.rows;
+        let key = BlockKey {
+            message_index,
+            step_index: first_step,
+            width: self.width,
+            sig: group_block_signature(lx, message, group, &expanded),
+        };
+        let block = self.block(
+            key,
+            BlockSource::Group {
+                message_index,
+                first_step,
+                count: group.len(),
+            },
+            block_start,
+            || BlockPaint::Legacy { rows: group_rows },
+        );
+        blocks.push(block);
+        let spans = tool::group_blocks(group, self.width, &expanded);
+        for (index, span) in spans.iter().enumerate() {
+            let call = group[index];
+            if !should_register_card(call, self.width) {
+                continue;
+            }
+            let card_start = block_start + span.start;
+            let (fold_start, fold_rows) = if expanded[index] {
+                (card_start, 0)
+            } else {
+                let region = tool::fold_region(call, self.width);
+                (
+                    block_start + span.start + region.offset,
+                    region.rows.min(span.len.saturating_sub(region.offset)),
+                )
+            };
+            self.snapshot.cards.push(CardRegion {
+                kind: CardKind::Tool {
+                    message_id: message.id.clone(),
+                    call_id: call.call_id.clone(),
+                    section: CardSection::Body,
+                    expanded: expanded[index],
+                },
+                card_start,
+                card_rows: span.len,
+                fold_start,
+                fold_rows,
                 clickable: true,
             });
         }
-        *rows += step_rows;
-        step_index += 1;
+        self.rows += group_rows;
+        true
     }
-    has_previous
+
+    /// 消息底部通知与统计行。
+    fn tail(
+        &mut self,
+        lx: &Lx,
+        message_index: usize,
+        message: &crate::app::state::ChatMessageView,
+        blocks: &mut Vec<SnapBlock>,
+    ) {
+        let mut has_previous = !blocks.is_empty();
+        if let Some(notice) = notice(message) {
+            if has_previous && needs_spacer() {
+                self.spacer();
+            }
+            has_previous = true;
+            let start = self.rows;
+            let key = BlockKey {
+                message_index,
+                step_index: super::cache::NOTICE_SLOT_BLOCK,
+                width: self.width,
+                sig: notice_block_signature(&notice),
+            };
+            let rows = notice::rows(&notice, self.width);
+            let block = self.block(key, BlockSource::Notice { message_index }, start, || {
+                BlockPaint::Legacy { rows }
+            });
+            self.rows += block.rows;
+            blocks.push(block);
+        }
+        if let Some(line) = stats_line(message) {
+            if has_previous && needs_spacer() {
+                self.spacer();
+            }
+            let start = self.rows;
+            let key = BlockKey {
+                message_index,
+                step_index: super::cache::STATS_SLOT_BLOCK,
+                width: self.width,
+                sig: stats_block_signature(&line),
+            };
+            let lines = wrap(&line, self.width);
+            let block = self.block(key, BlockSource::Notice { message_index }, start, || {
+                BlockPaint::Static {
+                    lines,
+                    style: crate::ui::style::muted(),
+                }
+            });
+            self.rows += block.rows;
+            blocks.push(block);
+        }
+        let _ = lx;
+    }
 }

@@ -11,7 +11,43 @@ use crate::app::state::{
 };
 use crate::layout::PaneId;
 
+use super::paint::BlockPaint;
 use super::snapshot::{self, HistorySnapshot};
+
+/// 二级缓存（绘制数据）的字节上限；超限按 `last_frame` 淘汰。
+pub(crate) const MAX_CACHED_BYTES: usize = 32 * 1024 * 1024;
+
+/// 块级缓存的键：消息/步骤定位 + 内容宽度 + 该块自身的内容指纹。
+///
+/// `step_index` 对非步骤块使用稳定哨兵（见 [`SHELL_SLOT_BLOCK`] 等）。
+/// 指纹**不**包含 hover / loading 帧 / 滚动 / 选中态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct BlockKey {
+    pub(crate) message_index: usize,
+    pub(crate) step_index: usize,
+    pub(crate) width: u16,
+    pub(crate) sig: u64,
+}
+
+/// 消息级本地命令卡片（一条消息一个块）。
+pub(crate) const SHELL_SLOT_BLOCK: usize = usize::MAX;
+/// 消息底部失败/中断通知。
+pub(crate) const NOTICE_SLOT_BLOCK: usize = usize::MAX - 1;
+/// 消息底部统计行。
+pub(crate) const STATS_SLOT_BLOCK: usize = usize::MAX - 2;
+/// 时间线里的独立撤销提示（无消息下标）。
+pub(crate) const REWIND_SLOT_BLOCK: usize = usize::MAX - 3;
+/// 时间线里的 compact 检查点。
+pub(crate) const COMPACT_SLOT_BLOCK: usize = usize::MAX - 4;
+
+/// 二级缓存项。
+#[derive(Debug)]
+struct BlockEntry {
+    paint: Arc<BlockPaint>,
+    bytes: usize,
+    /// 最近一次被**绘制路径**命中的帧号（构建快照不算使用）。
+    last_frame: u64,
+}
 
 /// 跨帧渲染缓存：事件循环持有，按窗格隔离。
 #[derive(Debug, Default)]
@@ -26,9 +62,12 @@ impl RenderCache {
         self.frame = self.frame.wrapping_add(1);
     }
 
-    /// 取（或创建）指定窗格的缓存。
+    /// 取（或创建）指定窗格的缓存；同时把当前帧号写进窗格。
     pub(crate) fn pane(&mut self, id: PaneId) -> &mut PaneCache {
-        self.panes.entry(id).or_default()
+        let frame = self.frame;
+        let pane = self.panes.entry(id).or_default();
+        pane.frame = frame;
+        pane
     }
 
     /// 窗格关闭后清理，避免缓存泄漏。
@@ -37,15 +76,42 @@ impl RenderCache {
     }
 }
 
-/// 单窗格的历史几何缓存。
-#[derive(Debug, Default)]
+/// 单窗格缓存：一级几何快照 + 二级绘制数据。
+#[derive(Debug)]
 pub(crate) struct PaneCache {
+    /// 本帧帧号（由 [`RenderCache::pane`] 写入）。
+    frame: u64,
     snapshot: Option<(u64, Arc<HistorySnapshot>)>,
     /// 快照重建次数；仅供测试断言「同一份状态只重建一次」。
     builds: u64,
+    blocks: HashMap<BlockKey, BlockEntry>,
+    /// 已缓存绘制数据的近似字节数。
+    bytes: usize,
+    /// 二级缓存字节上限（生产恒为 [`MAX_CACHED_BYTES`]；测试可调小）。
+    limit: usize,
+}
+
+impl Default for PaneCache {
+    fn default() -> Self {
+        Self {
+            frame: 0,
+            snapshot: None,
+            builds: 0,
+            blocks: HashMap::new(),
+            bytes: 0,
+            limit: MAX_CACHED_BYTES,
+        }
+    }
 }
 
 impl PaneCache {
+    /// 调小二级缓存上限（测试淘汰路径用）。
+    #[cfg(test)]
+    pub(crate) fn set_limit(&mut self, limit: usize) {
+        self.limit = limit;
+        self.evict();
+    }
+
     /// 当前宽度与列表状态下的快照；指纹不变时直接复用同一个 `Arc`。
     pub(crate) fn snapshot(&mut self, width: u16, lx: &Lx) -> Arc<HistorySnapshot> {
         let signature = list_signature(lx, width);
@@ -54,10 +120,92 @@ impl PaneCache {
         {
             return Arc::clone(snapshot);
         }
-        let snapshot = Arc::new(snapshot::build(width, lx));
+        let snapshot = Arc::new(snapshot::build(width, lx, self));
         self.builds = self.builds.saturating_add(1);
         self.snapshot = Some((signature, Arc::clone(&snapshot)));
+        self.evict();
         snapshot
+    }
+
+    /// 取块级绘制数据：命中直接复用；未命中调用 `build` 并记账。
+    ///
+    /// **命中不刷新 `last_frame`**：快照重建时会遍历全部块，若在这里刷新，
+    /// 一次流式追加就会把所有缓存标成「本帧使用」，LRU 将永远无法淘汰。
+    /// 「本帧真的画过」由 [`Self::mark_used`] 记录。
+    pub(crate) fn block(
+        &mut self,
+        key: BlockKey,
+        build: impl FnOnce() -> Arc<BlockPaint>,
+    ) -> Arc<BlockPaint> {
+        if let Some(entry) = self.blocks.get(&key) {
+            return Arc::clone(&entry.paint);
+        }
+        let paint = build();
+        let bytes = paint.bytes();
+        self.insert_block(key, Arc::clone(&paint), bytes);
+        paint
+    }
+
+    /// 推进本窗格帧号（测试用：模拟事件循环的 `begin_frame`）。
+    #[cfg(test)]
+    pub(crate) fn advance_frame(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
+    }
+
+    /// 标记该块本帧被绘制过（刷新 LRU 时间戳）。
+    pub(crate) fn mark_used(&mut self, key: BlockKey) {
+        let frame = self.frame;
+        if let Some(entry) = self.blocks.get_mut(&key) {
+            entry.last_frame = frame;
+        }
+    }
+
+    fn insert_block(&mut self, key: BlockKey, paint: Arc<BlockPaint>, bytes: usize) {
+        // 新块算「本帧使用过一次」：本帧正在构建的快照不许在插入过程中被自己淘汰。
+        let last_frame = self.frame;
+        if let Some(previous) = self.blocks.insert(
+            key,
+            BlockEntry {
+                paint,
+                bytes,
+                last_frame,
+            },
+        ) {
+            self.bytes = self.bytes.saturating_sub(previous.bytes);
+        }
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.evict();
+    }
+
+    /// 超出字节上限时按 `last_frame` 升序淘汰；**本帧画过的块不淘汰**。
+    fn evict(&mut self) {
+        while self.bytes > self.limit {
+            let frame = self.frame;
+            let victim = self
+                .blocks
+                .iter()
+                .filter(|(_, entry)| entry.last_frame < frame)
+                .min_by_key(|(_, entry)| entry.last_frame)
+                .map(|(key, _)| *key);
+            let Some(victim) = victim else {
+                break;
+            };
+            if let Some(entry) = self.blocks.remove(&victim) {
+                self.bytes = self.bytes.saturating_sub(entry.bytes);
+            }
+        }
+    }
+
+    /// 已缓存绘制数据的近似字节数（测试断言上限用）。
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    /// 已缓存的块数（测试断言淘汰用）。
+    #[cfg(test)]
+    pub(crate) fn block_count(&self) -> usize {
+        self.blocks.len()
     }
 
     /// 已重建次数（测试断言用）。
@@ -361,6 +509,94 @@ fn tool_signature(hash: &mut Fnv, lx: &Lx, message: &ChatMessageView, call: &Too
             }
         }
     }
+}
+
+/// 单个步骤块的指纹（宽度由 [`BlockKey::width`] 承担，这里不含宽度）。
+pub(crate) fn part_block_signature(
+    lx: &Lx,
+    message: &ChatMessageView,
+    message_index: usize,
+    step_index: usize,
+    step: &AssistantStepView,
+) -> u64 {
+    let mut hash = Fnv::new();
+    step_signature(&mut hash, lx, message, message_index, step_index, step);
+    hash.finish()
+}
+
+/// 合并的文件工具组指纹：逐调用独立（含各自折叠状态）。
+pub(crate) fn group_block_signature(
+    lx: &Lx,
+    message: &ChatMessageView,
+    group: &[&ToolCallView],
+    expanded: &[bool],
+) -> u64 {
+    let mut hash = Fnv::new();
+    hash.write_usize(group.len());
+    for (index, call) in group.iter().enumerate() {
+        hash.write_usize(index);
+        tool_signature(&mut hash, lx, message, call);
+        hash.write_u8(u8::from(expanded.get(index).copied().unwrap_or(false)));
+    }
+    hash.finish()
+}
+
+/// 本地命令卡片的指纹（不含宽度）。
+pub(crate) fn shell_block_signature(
+    lx: &Lx,
+    message: &ChatMessageView,
+    shell: &crate::app::state::UserShellView,
+) -> u64 {
+    let mut hash = Fnv::new();
+    shell_signature(&mut hash, lx, message, shell);
+    hash.finish()
+}
+
+/// 消息底部通知的指纹（命中消息通知文案）。
+pub(crate) fn notice_block_signature(notice: &super::notice::Notice) -> u64 {
+    let mut hash = Fnv::new();
+    hash.write_u8(match notice.title {
+        super::notice::NoticeTitle::Failed => 0,
+        super::notice::NoticeTitle::Interrupted => 1,
+    });
+    hash.write_str(&notice.reason);
+    hash.finish()
+}
+
+/// 统计行的指纹。
+pub(crate) fn stats_block_signature(line: &str) -> u64 {
+    let mut hash = Fnv::new();
+    hash.write_str(line);
+    hash.finish()
+}
+
+/// 撤销提示条目的指纹。
+pub(crate) fn rewind_block_signature(
+    notice: &crate::app::state::RewindNoticeView,
+    count: usize,
+) -> u64 {
+    let mut hash = Fnv::new();
+    hash.write_usize(count);
+    hash.write_str(&notice.id);
+    hash.write_str(&notice.kind);
+    hash.write_usize(notice.restored_file_count);
+    hash.write_u8(u8::from(notice.files_already_restored));
+    hash.finish()
+}
+
+/// compact 检查点条目的指纹。
+pub(crate) fn compact_block_signature(
+    notice: &crate::app::state::CompactNoticeView,
+    expanded: bool,
+) -> u64 {
+    let mut hash = Fnv::new();
+    hash.write_str(&notice.id);
+    hash.write_str(&notice.model_label);
+    hash.write_i64(notice.created_at_ms);
+    hash.write_str(&notice.summary);
+    hash.write_u8(u8::from(notice.active));
+    hash.write_u8(u8::from(expanded));
+    hash.finish()
 }
 
 /// 进程状态（含退出码，标题会显示 `exit N`）。
