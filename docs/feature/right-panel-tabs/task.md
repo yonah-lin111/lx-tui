@@ -131,6 +131,8 @@
 ## 完成记录
 
 - 分支：`feat/right-panel-tabs`（worktree：`.worktrees/right-panel-tabs`，基于 `dev` @ `98388df`）。
+  **已合并**：fast-forward 进 `dev`（`dev` 合并前无新提交，无冲突），合并点 `939fc86`；
+  合并后 worktree、分支与隔离库 `~/.lx-t-dev/db/worktrees/right-panel-tabs-46cae2ed` 已删除。
 - 验证：`cargo fmt` 通过；`cargo clippy --all-targets -- -D warnings` 通过；`cargo test` 全绿
   （lib 3377 passed / 0 failed / 2 ignored，其余 15 个测试目标全 ok）。
 - 与设计的差异（详见 `design.md` §9）：
@@ -150,3 +152,5 @@
 - 未做项：无。`src/layout.rs` 保持 999 行未动；`docs/standards/tui-design-requirements.md` 已按
   `design.md` §7 的五点同步。
 - 待人工验收：tab 高亮观感、Todo 空白容器、点击不穿透（Agent 无法交互式验证 TUI，需 `cargo run`）。
+- 合并后复验（在 `dev` 主工作区重跑）：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`
+  通过，`cargo test` 3377 passed / 0 failed。

@@ -1,6 +1,6 @@
 # 右侧统一容器与 Prompt / Todo 标签页 — 设计
 
-> 状态：**待用户审核确认后执行**（Grill Me 已逐条确认 13 条边界，本文即收口版本）。
+> 状态：**已实现并合并到 `dev`**（`939fc86`；Grill Me 确认的 13 条边界即收口口径，实施偏差见 §9）。
 >
 > 任务范围：`src/app/state.rs`、`src/app/update/`（新增 `right_panel.rs`）、`src/event/mouse/*`、
 > `src/ui/right_panel.rs`（新增）、`src/ui/prompt_frame.rs`、`src/ui/prompt.rs`、
