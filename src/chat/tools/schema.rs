@@ -50,7 +50,7 @@ static TOOLS: [ToolSpec; 8] = [
     ),
     ToolSpec::new(
         "edit",
-        "Apply a Codex-style patch to one or more files. The patch text must start with \
+        "Apply a structured patch to one or more files. The patch text must start with \
          `*** Begin Patch` and end with `*** End Patch` and may contain `*** Add File:`, \
          `*** Update File:` (optionally followed by `*** Move to:`), `@@` context blocks \
          with `-`/`+`/space prefixed lines, `*** Delete File:` hunks and a trailing \

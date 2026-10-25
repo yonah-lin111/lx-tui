@@ -17,6 +17,7 @@
 - 浏览器前端资源（如设置页）放在 `assets/*.{html,css,js}`，HTML/CSS/JS 分文件，经 `include_str!` 编译进二进制并按独立路由（`/settings.css`、`/settings.js`）提供；禁止把 HTML/CSS/JS 重新内联进 `.rs`，禁止引入 Tailwind 等需构建步骤的样式方案，遵循 `docs/standards/html-assets.md`。
 - 生产代码禁止 `unwrap()` / `expect()`；错误使用 `Result` 与 `?` 传播。
 - 日志统一使用 `tracing`；禁止用 `println!` / `eprintln!` 输出调试信息，禁止绕过 ratatui 直接写 stdout。
+- **lx 的模型提示词一律用英文编写**（系统提示、工具描述与 schema description、工具错误消息、环境快照、压缩提示、注入上下文的结构文本）；中文只用于代码注释与用户界面文案。系统提示结构对齐 codex `base_instructions`，默认回复语言跟随用户当前输入的语言（不预设、不强制单一语言）。详见 `docs/standards/code-writing-standards.md`。
 - **lx 页的 toast 必须显示在 lx 页内**：lx 视图的反馈一律写 `pane.lx.toast`（`app::update::show_lx_toast` / `show_toast_at` / `show_lx_toast_for_session`），在窗格内容区里绘制（`ui::main_content::lx::toast`，宽度夹在窗格内、允许折行），禁止使用全局 `AppState.toast` 覆盖层。全局槽只有一个，且锚点容器放不下时会降级到屏幕顶部居中、横跨整个窗口——lx 的反馈会因此失去指代并挡住别的窗格（compact 失败提示曾这样横穿全屏）。终端视图与 prompt 栏等非 lx 区域仍用全局 toast。
 - OS 专属代码只允许出现在 `src/platform/`，并按 `#[cfg(...)]` 门控。
 - 终端退出/panic 恢复顺序不可交换：关闭鼠标上报 → 仍在原始模式下 drain 在途输入 → 离开备用屏并关闭括号粘贴 → 最后 `disable_raw_mode()`。先恢复 cooked 模式会让残留鼠标上报（`CSI <…M`）被终端回显、留在行缓冲并泄漏进 shell；改动 `src/tui/` 恢复路径必须保留并运行 `tui::tests` 的顺序回归测试。
