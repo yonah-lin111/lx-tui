@@ -415,7 +415,7 @@ fn long_detail_wraps_to_two_rows_and_expands() {
         None,
     );
     let width = 30u16;
-    let folded = file_summary::detail(&call, width, false, false);
+    let folded = file_summary::detail(&call, width, false);
     assert_eq!(
         folded.len(),
         file_summary::DETAIL_PREVIEW_ROWS + 1,
@@ -437,7 +437,7 @@ fn long_detail_wraps_to_two_rows_and_expands() {
         "有剩余行数提示：{folded_text:?}"
     );
 
-    let expanded = file_summary::detail(&call, width, true, false);
+    let expanded = file_summary::detail(&call, width, true);
     assert!(
         expanded.len() >= folded.len(),
         "展开不少于折叠：{expanded:#?}"
@@ -464,7 +464,7 @@ fn very_long_detail_marks_truncation_and_expands_further() {
         None,
     );
     let width = 24u16;
-    let folded = file_summary::detail(&call, width, false, false);
+    let folded = file_summary::detail(&call, width, false);
     assert_eq!(
         folded.len(),
         file_summary::DETAIL_PREVIEW_ROWS + 1,
@@ -475,7 +475,7 @@ fn very_long_detail_marks_truncation_and_expands_further() {
         folded_text.contains('…'),
         "放不下的参数有省略号：{folded_text:?}"
     );
-    let expanded = file_summary::detail(&call, width, true, false);
+    let expanded = file_summary::detail(&call, width, true);
     assert!(expanded.len() > folded.len(), "展开铺开更多行");
     assert!(expanded.len() <= file_summary::DETAIL_MAX_ROWS);
 }
@@ -484,9 +484,9 @@ fn very_long_detail_marks_truncation_and_expands_further() {
 #[test]
 fn short_detail_stays_one_row_and_is_not_clickable() {
     let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
-    assert_eq!(file_summary::detail(&call, 80, false, false).len(), 1);
+    assert_eq!(file_summary::detail(&call, 80, false).len(), 1);
     assert_eq!(
-        file_summary::detail(&call, 80, true, false).len(),
+        file_summary::detail(&call, 80, true).len(),
         1,
         "短参数展开也只有 1 行"
     );
@@ -512,7 +512,7 @@ fn long_detail_rows_follow_expansion() {
     let folded = rows(&call, 24, folds(false));
     let expanded = rows(&call, 24, folds(true));
     assert!(
-        file_summary::detail(&call, 24, true, false).len() > file_summary::DETAIL_PREVIEW_ROWS,
+        file_summary::detail(&call, 24, true).len() > file_summary::DETAIL_PREVIEW_ROWS,
         "长参数展开超过折叠额度"
     );
     // 折叠 = 标题 + 2 行内容 + 1 行剩余行数提示。
@@ -529,8 +529,8 @@ fn long_detail_rows_follow_expansion() {
 #[test]
 fn parameter_stays_light_yellow_when_expanded() {
     let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
-    let folded = file_summary::detail(&call, 80, false, false);
-    let expanded = file_summary::detail(&call, 80, true, false);
+    let folded = file_summary::detail(&call, 80, false);
+    let expanded = file_summary::detail(&call, 80, true);
     assert_eq!(folded.len(), expanded.len(), "短参数展开后行数不变");
     let param_style = |rows: &[Vec<Segment>]| {
         rows.iter()
@@ -563,7 +563,7 @@ fn folded_detail_reports_remaining_lines_below_content() {
         }),
         None,
     );
-    let folded = file_summary::detail(&call, 24, false, false);
+    let folded = file_summary::detail(&call, 24, false);
     assert_eq!(
         folded.len(),
         file_summary::DETAIL_PREVIEW_ROWS + 1,
@@ -580,7 +580,7 @@ fn folded_detail_reports_remaining_lines_below_content() {
         !hint.contains(text::agent::MARKER_TREE_LEAF),
         "提示行不重复连接符：{hint:?}"
     );
-    let expanded = file_summary::detail(&call, 24, true, false);
+    let expanded = file_summary::detail(&call, 24, true);
     assert!(
         !expanded
             .iter()
@@ -590,12 +590,11 @@ fn folded_detail_reports_remaining_lines_below_content() {
     );
 }
 
-/// 悬停把折叠参数从 dim 提亮为默认前景；展开块有独立底色。
+/// 折叠参数恒为浅黄；普通工具不铺展开底色（底色只属于 diff/命令这类卡片）。
 #[test]
-fn hovered_detail_keeps_the_light_yellow() {
+fn folded_detail_keeps_the_light_yellow() {
     let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
-    let normal = file_summary::detail(&call, 80, false, false);
-    let hovered = file_summary::detail(&call, 80, false, true);
+    let folded = file_summary::detail(&call, 80, false);
     let param_style = |rows: &[Vec<Segment>]| {
         rows.iter()
             .flatten()
@@ -603,23 +602,14 @@ fn hovered_detail_keeps_the_light_yellow() {
             .map(|segment| segment.style)
             .expect("参数段")
     };
-    assert_eq!(param_style(&normal), style::chat_tool_param(), "常态浅黄");
-    assert_eq!(
-        param_style(&hovered),
-        style::chat_tool_param(),
-        "悬停不改参数颜色（不做 hover 高亮）"
-    );
-    assert_eq!(normal.len(), hovered.len(), "悬停不改行数");
+    assert_eq!(param_style(&folded), style::chat_tool_param(), "参数恒浅黄");
     // 普通工具的 `└─` 行是参数本身，展开时**不铺**底色（用户要求不覆盖参数）。
     // 底色只属于文件差异卡片与进程命令这类「展开后铺开一坨内容」的卡片。
 }
 
-/// 折叠区的「剩余行数」提示行**也在 hover 命中区内**且同样提亮。
-///
-/// 用户要求「hover 工具的折叠块时 `… 1 more line` 要显示高亮」：提示行是折叠区
-/// 最后一行，命中区少算一行时指针落在最该提亮的那行反而毫无反应。
+/// 折叠态的「剩余行数」提示行样式恒为 dim（不随鼠标提亮）。
 #[test]
-fn remaining_hint_row_is_inside_the_fold_region_and_lifts() {
+fn remaining_hint_row_stays_dim() {
     let long = "src/deeply/nested/module/path/that/keeps/going/mod.rs".repeat(3);
     let call = tool_call(
         "read",
@@ -631,23 +621,11 @@ fn remaining_hint_row_is_inside_the_fold_region_and_lifts() {
         }),
         None,
     );
-    let folded = file_summary::detail(&call, 24, false, false);
-    assert_eq!(
-        file_summary::foldable_rows(&call, 24),
-        folded.len(),
-        "提示行计入折叠区行数"
-    );
-    let hint_style = |hovered: bool| {
-        let rows = file_summary::detail(&call, 24, false, hovered);
-        rows.last()
-            .and_then(|row| row.last())
-            .map(|segment| segment.style)
-            .expect("提示行")
-    };
-    assert_eq!(
-        hint_style(false),
-        style::agent_step_detail(),
-        "常态提示行是 dim"
-    );
-    assert_eq!(hint_style(true), style::text(), "悬停提示行升为默认前景");
+    let folded = file_summary::detail(&call, 24, false);
+    let hint_style = folded
+        .last()
+        .and_then(|row| row.last())
+        .map(|segment| segment.style)
+        .expect("提示行");
+    assert_eq!(hint_style, style::agent_step_detail(), "提示行恒为 dim");
 }

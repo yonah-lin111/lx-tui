@@ -14,7 +14,7 @@ use crate::app::state::{
     ToolDetailView, ToolStatus,
 };
 use crate::ui::main_content::lx::grid::Grid;
-use crate::ui::main_content::lx::history::{StepMark, tool};
+use crate::ui::main_content::lx::history::{StepKind, StepMark, tool};
 use crate::ui::style;
 use crate::ui::text;
 
@@ -265,7 +265,6 @@ fn alive_mark_never_renders_hollow_when_the_animation_stops() {
                 frame,
                 folds(false),
                 false,
-                None,
             );
             grid
         };
@@ -282,7 +281,7 @@ fn alive_mark_still_blinks_while_the_animation_runs() {
     // 用户要求保留闪烁：动画推进期间两帧交替，实心/空心都要出现。
     let mut glyphs = Vec::new();
     for frame in 0..(text::agent::STEP_BREATH_TICKS * 2) {
-        glyphs.push(StepMark::Alive.glyph(frame, true));
+        glyphs.push(StepMark::Alive.glyph(StepKind::Tool, frame, true));
     }
     assert!(
         glyphs.contains(&text::agent::STEP_MARK_FILLED),
@@ -307,7 +306,7 @@ fn terminal_states_are_always_filled_including_cancelled() {
         for frame in 0..12 {
             for animating in [false, true] {
                 assert_eq!(
-                    mark.glyph(frame, animating),
+                    mark.glyph(StepKind::Tool, frame, animating),
                     text::agent::STEP_MARK_FILLED,
                     "{mark:?} frame={frame} animating={animating} 必须实心"
                 );
@@ -459,8 +458,8 @@ fn plan_in_progress_step_uses_the_running_amber() {
 }
 
 #[test]
-fn folded_command_reports_remaining_lines_and_hover_lifts() {
-    // 折叠态：命令下方单独一行写剩余行数；悬停时命令从 dim 提亮。
+fn folded_command_reports_remaining_lines() {
+    // 折叠态：命令下方单独一行写剩余行数。
     let mut call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
     if let Some(crate::app::state::ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
         view.command = format!("$ {{ {} }}", "echo 项目概览; ".repeat(20));
@@ -472,9 +471,9 @@ fn folded_command_reports_remaining_lines_and_hover_lifts() {
     assert!(!expanded.contains("more line") || expanded.lines().count() > 3);
 }
 
-/// 参数区不响应 hover（恒为浅黄），但「剩余行数」提示行仍属于参数区的点击面。
+/// 参数区恒为浅黄，但「剩余行数」提示行仍属于参数区的点击面。
 #[test]
-fn params_section_has_no_hover_face_and_keeps_its_hint() {
+fn params_section_keeps_its_hint_and_click_face() {
     let mut call = command_call(
         ProcessStateView::Exited { code: Some(0) },
         ToolStatus::Completed,
@@ -490,7 +489,6 @@ fn params_section_has_no_hover_face_and_keeps_its_hint() {
         .iter()
         .find(|region| region.section == crate::app::state::CardSection::Body)
         .expect("参数区");
-    assert_eq!(params.fold.rows, 0, "参数区不做 hover 高亮");
     assert!(params.clickable, "参数区仍可点击展开");
     let text = render_text(&call, width);
     assert!(text.contains("more line"), "折叠态给剩余行数：{text}");
@@ -506,9 +504,9 @@ fn params_more_lines_hint_uses_the_param_color() {
     assert_eq!(hint.style, style::chat_tool_param(), "提示行与参数同色");
 }
 
-/// 短输出（没达到折叠额度）不登记 hover 面：悬停不会提亮任何东西。
+/// 短输出（没达到折叠额度）没有折叠内容区，也不登记点击面。
 #[test]
-fn short_output_has_no_hover_face() {
+fn short_output_has_no_click_face() {
     let call = command_call(
         ProcessStateView::Exited { code: Some(0) },
         ToolStatus::Completed,
@@ -521,11 +519,10 @@ fn short_output_has_no_hover_face() {
         .iter()
         .find(|region| region.section == crate::app::state::CardSection::Output)
         .expect("输出区");
-    assert_eq!(output.fold.rows, 0, "短输出不做 hover 高亮");
     assert!(!output.clickable, "短输出没有可展开内容");
 }
 
-/// 参数区恒为浅黄（不随 hover/展开变色）；输出区折叠 dim、展开为默认前景；
+/// 参数区恒为浅黄（不随展开变色）；输出区折叠 dim、展开为默认前景；
 /// 两块互不连带，且都没有整行底色。
 #[test]
 fn params_stay_light_yellow_and_output_lifts_independently() {
@@ -559,17 +556,7 @@ fn params_stay_light_yellow_and_output_lifts_independently() {
     let area = Rect::new(0, 0, 60, height);
     let mut grid = Grid::new(area);
     let mut row = 0usize;
-    tool::draw_animated(
-        &mut grid,
-        area,
-        0,
-        &mut row,
-        &call,
-        0,
-        only_output,
-        true,
-        None,
-    );
+    tool::draw_animated(&mut grid, area, 0, &mut row, &call, 0, only_output, true);
     assert_eq!(
         command_row_style(&grid, 60),
         Some(style::chat_tool_param()),
@@ -585,27 +572,6 @@ fn params_stay_light_yellow_and_output_lifts_independently() {
         None,
         "展开的输出不铺任何底色"
     );
-    // 悬停参数区：参数仍是同一档浅黄（用户要求去掉 hover 高亮）。
-    let height = tool::rows(&call, 60, folds(false)).max(1) as u16;
-    let area = Rect::new(0, 0, 60, height);
-    let mut grid = Grid::new(area);
-    let mut row = 0usize;
-    tool::draw_animated(
-        &mut grid,
-        area,
-        0,
-        &mut row,
-        &call,
-        0,
-        folds(false),
-        true,
-        Some(crate::app::state::CardSection::Body),
-    );
-    assert_eq!(
-        command_row_style(&grid, 60),
-        Some(style::chat_tool_param()),
-        "悬停不改变参数颜色"
-    );
     // 只展开参数：输出仍 dim。
     let only_params = tool::Folds {
         body: true,
@@ -615,17 +581,7 @@ fn params_stay_light_yellow_and_output_lifts_independently() {
     let area = Rect::new(0, 0, 60, height);
     let mut grid = Grid::new(area);
     let mut row = 0usize;
-    tool::draw_animated(
-        &mut grid,
-        area,
-        0,
-        &mut row,
-        &call,
-        0,
-        only_params,
-        true,
-        None,
-    );
+    tool::draw_animated(&mut grid, area, 0, &mut row, &call, 0, only_params, true);
     assert_eq!(
         command_row_style(&grid, 60),
         Some(style::chat_tool_param()),

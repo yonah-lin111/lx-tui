@@ -66,11 +66,12 @@ pub fn set_lx_history_scroll(
 
 /// 双击 Esc 选中最新轮次后的**一次性居中**：把目标用户消息滚到视口中央。
 ///
-/// `app/` 拿不到几何，故与 [`resolve_lx_viewport_top`] 同一做法：事件循环在绘制前
+/// `app/` 拿不到几何，故与 [`resolve_lx_history`] 同一做法：事件循环在绘制前
 /// 调用。内容不足一屏（滚动条不可滚动）时不改动视口，只清掉请求。
-pub fn resolve_lx_rewind_center(
+pub(crate) fn resolve_lx_rewind_center(
     state: &mut AppState,
     rects: &[(PaneId, ratatui::layout::Rect)],
+    cache: &mut crate::ui::RenderCache,
 ) -> bool {
     let mut changed = false;
     for (pane, rect) in rects {
@@ -83,7 +84,12 @@ pub fn resolve_lx_rewind_center(
             continue;
         };
         let resolved = state.pane_anywhere(*pane).and_then(|target| {
-            crate::ui::main_content::lx::history_center_target(inner, &target.lx, &message_id)
+            crate::ui::main_content::lx::history_center_target(
+                inner,
+                &target.lx,
+                &message_id,
+                cache.pane(*pane),
+            )
         });
         let Some(target) = state.pane_mut_anywhere(*pane) else {
             continue;
@@ -99,14 +105,15 @@ pub fn resolve_lx_rewind_center(
     changed
 }
 
-/// 每轮把各 lx 窗格的「当前视口顶部行」记忆落状态。
+/// 每轮把各 lx 窗格的「当前视口顶部行」与置顶行抑制记忆落状态（绘制前写）。
 ///
 /// 渲染层只读、不写状态（AGENTS：渲染只读），而展开切换需要知道用户正看着哪一行，
-/// 故与 [`resolve_lx_sticky_prompt`] 一样放在事件循环里、`tui.draw` 之前写。
-/// 返回是否有窗格记忆变化。
-pub fn resolve_lx_viewport_top(
+/// 故放在事件循环里、`tui.draw` 之前写。一次 `history_view` 同时给出两处结论，
+/// 且与绘制共用同一份几何快照。返回是否有窗格记忆变化。
+pub(crate) fn resolve_lx_history(
     state: &mut AppState,
     rects: &[(PaneId, ratatui::layout::Rect)],
+    cache: &mut crate::ui::RenderCache,
 ) -> bool {
     let mut changed = false;
     for (pane, rect) in rects {
@@ -114,19 +121,24 @@ pub fn resolve_lx_viewport_top(
         let resolved = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
-            .and_then(|target| crate::ui::main_content::lx::history_view(inner, &target.lx))
-            .map(|view| view.scroll);
-        let Some(scroll) = resolved else {
+            .and_then(|target| {
+                crate::ui::main_content::lx::history_view(inner, &target.lx, cache.pane(*pane))
+            })
+            .map(|view| (view.scroll, view.suppressed));
+        let Some((scroll, suppressed)) = resolved else {
             continue;
         };
         let Some(target) = state.pane_mut_anywhere(*pane) else {
             continue;
         };
-        if target.lx.chat.viewport_top == Some(scroll) {
-            continue;
+        if target.lx.chat.viewport_top != Some(scroll) {
+            target.lx.chat.viewport_top = Some(scroll);
+            changed = true;
         }
-        target.lx.chat.viewport_top = Some(scroll);
-        changed = true;
+        if target.lx.chat.suppressed_prompt_header != suppressed {
+            target.lx.chat.suppressed_prompt_header = suppressed;
+            changed = true;
+        }
     }
     changed
 }
@@ -134,7 +146,7 @@ pub fn resolve_lx_viewport_top(
 /// 每轮把后台任务面板的**输出可见行数**落状态（绘制前写）。
 ///
 /// 面板打开时输入框被控制面板替换，输出容器高度由窗格几何决定；键盘翻页与滚动条
-/// 几何需要它，而 `app/` 拿不到窗格几何，故与 [`resolve_lx_viewport_top`] 同一套做法
+/// 几何需要它，而 `app/` 拿不到窗格几何，故与 [`resolve_lx_history`] 同一套做法
 /// 放在事件循环里。
 ///
 /// 只算 `task_output_rows`（一次 `layout`），**不**顺带算历史行数：面板打开时历史区
@@ -194,40 +206,6 @@ pub fn resolve_ask_preview_visible(
         {
             changed |= ask.resize_preview(visible);
         }
-    }
-    changed
-}
-
-/// 每轮把各 lx 窗格的置顶行**抑制记忆**落状态。
-///
-/// 渲染层只读、不写状态（AGENTS：渲染只读），而记忆是唯一的跨帧状态，故放在
-/// 事件循环里、`tui.draw` 之前由这里写；判定本身是
-/// `ui::main_content::lx::history_view` 的纯函数（渲染/命中各自现算，不存第二份真相）。
-/// 返回是否有窗格记忆变化。
-pub fn resolve_lx_sticky_prompt(
-    state: &mut AppState,
-    rects: &[(PaneId, ratatui::layout::Rect)],
-) -> bool {
-    let mut changed = false;
-    for (pane, rect) in rects {
-        let inner = crate::layout::pane_inner_rect(*rect);
-        // 先只读地算出结论（借用结束后再写状态）。
-        let resolved = state
-            .pane_anywhere(*pane)
-            .filter(|target| target.view == crate::app::state::PaneView::Lx)
-            .and_then(|target| crate::ui::main_content::lx::history_view(inner, &target.lx))
-            .map(|view| view.suppressed);
-        let Some(suppressed) = resolved else {
-            continue;
-        };
-        let Some(target) = state.pane_mut_anywhere(*pane) else {
-            continue;
-        };
-        if target.lx.chat.suppressed_prompt_header == suppressed {
-            continue;
-        }
-        target.lx.chat.suppressed_prompt_header = suppressed;
-        changed = true;
     }
     changed
 }

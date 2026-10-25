@@ -39,8 +39,20 @@ use ratatui::widgets::{Paragraph, Wrap};
 use crate::app::state::AppState;
 use crate::config::Config;
 
-/// 渲染整个界面。
+pub(crate) use main_content::lx::{PaneCache, RenderCache};
+
+/// 渲染整个界面（一次性缓存；供测试与无事件循环的调用方使用）。
 pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
+    render_cached(frame, state, config, &mut RenderCache::default());
+}
+
+/// 渲染整个界面；`cache` 跨帧复用历史几何快照。
+pub(crate) fn render_cached(
+    frame: &mut Frame<'_>,
+    state: &AppState,
+    config: &Config,
+    cache: &mut RenderCache,
+) {
     let area = frame.area();
     if area.width < config.min_width || area.height < config.min_height {
         render_min_size_notice(frame, area, config);
@@ -79,7 +91,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         controls::render_collapsed_strip(frame, view.panes, false);
         None
     } else {
-        panes::render_panes(frame, &pane_rects, state)
+        panes::render_panes(frame, &pane_rects, state, cache)
     };
     let prompt_cursor = prompt_frame::render_prompt(frame, &view, state).or(pane_cursor);
     controls::render_swap_button(frame, &view);

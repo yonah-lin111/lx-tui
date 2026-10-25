@@ -18,6 +18,7 @@ pub(crate) fn render_panes(
     frame: &mut Frame<'_>,
     pane_rects: &[(PaneId, Rect)],
     state: &AppState,
+    cache: &mut crate::ui::RenderCache,
 ) -> Option<(u16, u16)> {
     let tab = state.active_tab();
     let focus = tab.layout.focus();
@@ -75,6 +76,7 @@ pub(crate) fn render_panes(
                         .lx_selection
                         .as_ref()
                         .filter(|selection| selection.pane() == *id),
+                    cache.pane(*id),
                 ) {
                     cursor = Some((inner.x + col, inner.y + row));
                 }

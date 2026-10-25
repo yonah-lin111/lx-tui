@@ -147,7 +147,7 @@ fn header_segments(call: &ToolCallView, width: u16) -> Vec<(String, Style)> {
 
 /// 详情行（`  └─ 详情`，可能多行）拼成一段段文本。
 fn detail_segments(call: &ToolCallView, width: u16) -> Vec<(String, Style)> {
-    file_summary::detail(call, width, false, false)
+    file_summary::detail(call, width, false)
         .into_iter()
         .flatten()
         .map(|segment| (segment.text, segment.style))
@@ -164,7 +164,7 @@ fn header_text(call: &ToolCallView, width: u16) -> String {
 
 /// 详情行文本（可能多行，按 `\\n` 连接，与绘制一致）。
 fn detail_text(call: &ToolCallView, width: u16) -> String {
-    file_summary::detail(call, width, false, false)
+    file_summary::detail(call, width, false)
         .into_iter()
         .map(|row| {
             row.into_iter()
@@ -180,7 +180,7 @@ fn detail_text(call: &ToolCallView, width: u16) -> String {
 fn detail_content_flat(call: &ToolCallView, width: u16) -> String {
     // 用**展开态**的行：让位顺序是在完整组装时决定的，折叠态的 2 行截断会切在
     // 段落中间（`in` 与 path 分处两行），不适合用来断言「整段在不在」。
-    let mut rows = file_summary::detail(call, width, true, false);
+    let mut rows = file_summary::detail(call, width, true);
     if rows
         .last()
         .is_some_and(|row| row.iter().any(|segment| segment.text.contains("more line")))
@@ -202,7 +202,7 @@ fn detail_content_flat(call: &ToolCallView, width: u16) -> String {
 /// 详情行的**逻辑内容**（折行的续行缩进不计）：用于「某段文字是否还在」的断言。
 fn detail_flat(call: &ToolCallView, width: u16) -> String {
     let mut out = String::new();
-    for row in file_summary::detail(call, width, false, false) {
+    for row in file_summary::detail(call, width, false) {
         for (index, segment) in row.into_iter().enumerate() {
             // 续行的第一个段是等宽空白缩进，不属于内容。
             if index == 0 && segment.text.trim().is_empty() {
@@ -217,4 +217,57 @@ fn detail_flat(call: &ToolCallView, width: u16) -> String {
 /// 两行用 `\n` 连接（段拼接，未裁剪）。
 fn full_text(call: &ToolCallView, width: u16) -> String {
     format!("{}\n{}", header_text(call, width), detail_text(call, width))
+}
+
+/// 回归：详情**恰好**折成「折叠额度 + 1」行时，提示行顶掉的那行正文不能被判成
+/// 「没有可展开内容」——只要画出了 `… N more lines`，卡片就必须登记点击面。
+///
+/// 旧判据用「展开行数 − 折叠行数」反推提示行：3 行内容 → 折叠 2 行 + 提示 1 行、
+/// 展开 3 行，差值 0，于是 `has_expandable_content` 为假，卡片显示 `… 1 more line`
+/// 却点不动（与用户报过的「点折叠内容展不开」同一类）。
+#[test]
+fn details_with_hint_row_are_always_clickable() {
+    let mut hinted = 0;
+    // 旧判据只在「展开行数 == 折叠行数」时出错（提示行顶掉一行正文），必须覆盖到。
+    let mut same_height = 0;
+    for width in 20u16..=100 {
+        for path_len in [40usize, 80, 120, 160, 200, 240, 300] {
+            let call = tool_call(
+                "read",
+                ToolStatus::Completed,
+                Some(ToolSummary {
+                    path: Some("a/".repeat(path_len / 2)),
+                    range: Some((1, 40)),
+                    read_lines: Some(40),
+                    ..ToolSummary::default()
+                }),
+                None,
+            );
+            let folded = file_summary::detail(&call, width, false);
+            let has_hint = folded
+                .last()
+                .is_some_and(|row| row.iter().any(|segment| segment.text.contains("more line")));
+            if !has_hint {
+                continue;
+            }
+            hinted += 1;
+            if folded.len() == file_summary::detail(&call, width, true).len() {
+                same_height += 1;
+            }
+            assert!(
+                has_expandable_content(&call, width),
+                "宽 {width}：画出了剩余行数提示就必须能展开"
+            );
+            let regions = card_regions(&call, width, Folds::default(), 1);
+            assert!(
+                regions.iter().any(|region| region.clickable),
+                "宽 {width}：有提示行却没有点击面"
+            );
+        }
+    }
+    assert!(hinted > 0, "扫描必须覆盖到「有提示行」的宽度");
+    assert!(
+        same_height > 0,
+        "扫描必须覆盖到「提示行顶掉一行正文」的形状"
+    );
 }

@@ -138,7 +138,6 @@ fn the_card_registers_a_click_face_only_when_expansion_adds_rows() {
         .expect("ask 卡片必须可点击展开");
     assert!(body.clickable);
     assert_eq!(body.card.rows, step_rows, "整卡都是点击面");
-    assert_eq!(body.fold.rows, 0, "题干不做 hover 提亮");
     let folded = rows(&call, width, false);
     let expanded = rows(&call, width, true);
     assert!(expanded > folded, "展开必须真的多出行");

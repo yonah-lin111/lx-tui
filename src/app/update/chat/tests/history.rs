@@ -318,17 +318,22 @@ fn resolve_writes_sticky_suppression_memory_from_pure_view() {
 
     // 场景 1：顶行落在第一轮回复里 → 让位后仍需要 → 不写记忆。
     let target = state.pane_anywhere(pane).expect("pane");
-    let view = crate::ui::main_content::lx::history_view(inner, &target.lx).expect("view");
+    let view = crate::ui::main_content::lx::history_view(
+        inner,
+        &target.lx,
+        crate::ui::RenderCache::default().pane(pane),
+    )
+    .expect("view");
     let answer_start = view.messages[1].start;
     let boundary = view.messages[2].start.saturating_sub(1);
     assert!(view.total_rows > boundary + 1, "内容确实溢出");
     let target = state.pane_mut_anywhere(pane).expect("pane");
     target.lx.chat.follow_bottom = false;
     target.lx.chat.history_scroll = answer_start;
-    assert!(
-        !resolve_lx_sticky_prompt(&mut state, &rects),
-        "无需抑制：无变化"
-    );
+    // 合并后的 resolve 同时写视口顶部行与抑制记忆：首次调用会因 `viewport_top`
+    // 由 None 变为具体行而返回 true；这里只关心抑制记忆本身。
+    let mut cache = crate::ui::RenderCache::default();
+    resolve_lx_history(&mut state, &rects, &mut cache);
     assert_eq!(
         state
             .pane_anywhere(pane)
@@ -350,8 +355,12 @@ fn resolve_writes_sticky_suppression_memory_from_pure_view() {
             target.lx.chat.follow_bottom = true;
         }
         let target = state.pane_anywhere(pane).expect("pane");
-        let probe =
-            crate::ui::main_content::lx::history_view(probe_inner, &target.lx).expect("view");
+        let probe = crate::ui::main_content::lx::history_view(
+            probe_inner,
+            &target.lx,
+            crate::ui::RenderCache::default().pane(pane),
+        )
+        .expect("view");
         if probe.suppressed.is_some() {
             scenario = Some((probe_rect, probe.suppressed));
             break;
@@ -359,7 +368,11 @@ fn resolve_writes_sticky_suppression_memory_from_pure_view() {
     }
     let (probe_rect, expected) = scenario.expect("存在跟随态下应抑制的视口尺寸");
     let rects = [(pane, probe_rect)];
-    assert!(resolve_lx_sticky_prompt(&mut state, &rects), "写记忆即变化");
+    let mut cache = crate::ui::RenderCache::default();
+    assert!(
+        resolve_lx_history(&mut state, &rects, &mut cache),
+        "写记忆即变化"
+    );
     assert_eq!(
         state
             .pane_anywhere(pane)
@@ -371,7 +384,7 @@ fn resolve_writes_sticky_suppression_memory_from_pure_view() {
         "记忆与纯函数结果一致"
     );
     assert!(
-        !resolve_lx_sticky_prompt(&mut state, &rects),
+        !resolve_lx_history(&mut state, &rects, &mut cache),
         "重复 resolve 无变化"
     );
 }

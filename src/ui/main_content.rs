@@ -14,6 +14,7 @@ use crate::app::selection::Selection;
 use crate::app::state::{Pane, PaneView};
 use crate::layout::PaneId;
 use crate::terminal::{Terminal, WheelRouting};
+use crate::ui::main_content::lx::PaneCache;
 use crate::ui::widgets::scrollbar::{self, ScrollbarLayout};
 use crate::ui::{style, text};
 
@@ -21,15 +22,16 @@ use crate::ui::{style, text};
 const TOGGLE_MARGIN: u16 = 1;
 
 /// 渲染窗格主内容；终端视图返回聚焦光标位置，lx 视图返回输入光标位置。
-pub fn render(
+pub(crate) fn render(
     area: Rect,
     buf: &mut Buffer,
     pane: &Pane,
     focused: bool,
     selection: Option<&Selection>,
+    cache: &mut PaneCache,
 ) -> Option<(u16, u16)> {
     match pane.view {
-        PaneView::Lx => lx::render(area, buf, &pane.lx, focused, selection),
+        PaneView::Lx => lx::render(area, buf, &pane.lx, focused, selection, cache),
         PaneView::Terminal => render_terminal(area, buf, &pane.terminal, focused),
     }
 }

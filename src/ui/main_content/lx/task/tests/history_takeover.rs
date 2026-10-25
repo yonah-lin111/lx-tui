@@ -83,7 +83,14 @@ fn lx_with_messages() -> Lx {
 fn render_lines(lx: &Lx, width: u16, height: u16) -> Vec<String> {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(Rect::new(0, 0, width, height + 1));
-    crate::ui::main_content::lx::render(area, &mut buf, lx, true, None);
+    crate::ui::main_content::lx::render(
+        area,
+        &mut buf,
+        lx,
+        true,
+        None,
+        &mut super::super::super::history::PaneCache::default(),
+    );
     (0..=height)
         .map(|y| {
             (0..width)
@@ -494,7 +501,12 @@ fn task_panel_kills_every_history_hit() {
     let area = Rect::new(0, 0, 70, 30);
     // 关闭态：这些入口在历史区域里是有命中的（先证明前提成立）。
     assert!(
-        crate::ui::main_content::lx::history_scrollbar(area, &lx).is_some()
+        crate::ui::main_content::lx::history_scrollbar(
+            area,
+            &lx,
+            &mut super::super::super::history::PaneCache::default(),
+        )
+        .is_some()
             || crate::ui::main_content::lx::history_wheel_region(area, &lx).is_some(),
         "前提：关闭态存在历史相关命中"
     );
@@ -503,11 +515,23 @@ fn task_panel_kills_every_history_hit() {
 
     lx.task = Some(page_with(vec![entry(1, "npm run dev")]));
     assert!(
-        crate::ui::main_content::lx::chat_hit(area, &lx, probe.0, probe.1).is_none(),
+        crate::ui::main_content::lx::chat_hit(
+            area,
+            &lx,
+            probe.0,
+            probe.1,
+            &mut super::super::super::history::PaneCache::default(),
+        )
+        .is_none(),
         "面板打开时不得命中隐藏的历史行"
     );
     assert!(
-        crate::ui::main_content::lx::history_scrollbar(area, &lx).is_none(),
+        crate::ui::main_content::lx::history_scrollbar(
+            area,
+            &lx,
+            &mut super::super::super::history::PaneCache::default(),
+        )
+        .is_none(),
         "面板打开时历史滚动条命中必须消失"
     );
     assert!(
@@ -515,7 +539,12 @@ fn task_panel_kills_every_history_hit() {
         "面板打开时历史区滚轮不得接管输出区"
     );
     assert!(
-        crate::ui::main_content::lx::sticky_prompt_jump(area, &lx).is_none(),
+        crate::ui::main_content::lx::sticky_prompt_jump(
+            area,
+            &lx,
+            &mut super::super::super::history::PaneCache::default(),
+        )
+        .is_none(),
         "面板打开时置顶行跳转必须消失"
     );
 }

@@ -24,29 +24,30 @@ pub(crate) fn handle_mouse_event(
     sessions: &mut HashMap<PaneId, PtySession>,
     geometry: &Geometry,
     config: &Config,
+    cache: &mut crate::ui::RenderCache,
     dirty: &mut bool,
 ) {
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
-            press::handle_mouse_down_left(&mouse, state, sessions, geometry, config, dirty);
+            press::handle_mouse_down_left(&mouse, state, sessions, geometry, config, cache, dirty);
         }
         MouseEventKind::Down(MouseButton::Right) => {
             press::handle_mouse_down_right(&mouse, state, geometry, dirty);
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            drag::handle_mouse_drag(&mouse, state, sessions, geometry, config, dirty);
+            drag::handle_mouse_drag(&mouse, state, sessions, geometry, config, cache, dirty);
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            drag::handle_mouse_up_left(&mouse, state, sessions, geometry, dirty);
+            drag::handle_mouse_up_left(&mouse, state, sessions, geometry, cache, dirty);
         }
         MouseEventKind::ScrollUp
         | MouseEventKind::ScrollDown
         | MouseEventKind::ScrollLeft
         | MouseEventKind::ScrollRight => {
-            wheel::handle_mouse_wheel(&mouse, state, sessions, geometry, dirty);
+            wheel::handle_mouse_wheel(&mouse, state, sessions, geometry, cache, dirty);
         }
         MouseEventKind::Moved => {
-            hover::handle_mouse_moved(&mouse, state, sessions, geometry, config, dirty);
+            hover::handle_mouse_moved(&mouse, state, sessions, geometry, config, cache, dirty);
         }
         _ => {}
     }

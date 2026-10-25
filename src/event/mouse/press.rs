@@ -37,6 +37,7 @@ pub(crate) fn handle_mouse_down_left(
     sessions: &mut HashMap<PaneId, PtySession>,
     geometry: &Geometry,
     config: &Config,
+    cache: &mut ui::RenderCache,
     dirty: &mut bool,
 ) {
     let Geometry {
@@ -478,13 +479,23 @@ pub(crate) fn handle_mouse_down_left(
                 }
                 // 聊天控件：thinking 折叠头部 / 停止按钮 / 历史入口。
                 let chat_hit = state.pane_anywhere(pane).and_then(|target| {
-                    ui::main_content::lx::chat_hit(inner, &target.lx, mouse.column, mouse.row)
+                    ui::main_content::lx::chat_hit(
+                        inner,
+                        &target.lx,
+                        mouse.column,
+                        mouse.row,
+                        cache.pane(pane),
+                    )
                 });
                 if let Some(hit) = chat_hit {
                     match hit {
                         ui::main_content::lx::LxChatHit::PromptHeader => {
                             let target = state.pane_anywhere(pane).and_then(|target| {
-                                ui::main_content::lx::sticky_prompt_jump(inner, &target.lx)
+                                ui::main_content::lx::sticky_prompt_jump(
+                                    inner,
+                                    &target.lx,
+                                    cache.pane(pane),
+                                )
                             });
                             if let Some(row) = target {
                                 update::jump_lx_history_to_prompt(state, pane, row);
@@ -535,6 +546,7 @@ pub(crate) fn handle_mouse_down_left(
                     inner,
                     mouse.column,
                     mouse.row,
+                    cache,
                 ) {
                     // 历史滚动条按下：已处理。
                 } else {
@@ -550,6 +562,7 @@ pub(crate) fn handle_mouse_down_left(
                             &target.lx,
                             mouse.column,
                             mouse.row,
+                            cache.pane(pane),
                         )
                     });
                     update::begin_lx_selection(state, pane, row, col);

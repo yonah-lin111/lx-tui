@@ -6,12 +6,27 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 
 use super::*;
+
+/// 测试用缓存：每次调用独立，避免测试之间共享几何快照。
+fn cache() -> PaneCache {
+    PaneCache::default()
+}
 use crate::app::state::{AssistantStepView, ChatMessageView, ChatPartView, Lx, LxChat};
 use crate::chat::events::PartKind;
 use crate::ui::main_content::lx::{history_center_target, history_rect};
 
 /// 工具步骤的几何一致性测试（布局/渲染行数、滚动条、置顶行、thinking 命中）。
 mod tool_geometry;
+
+// 按主题拆出的子模块（单文件行数上限）；构造器都在本模块，子模块用 `use super::*`。
+mod cards;
+mod compact;
+mod rewind;
+mod sticky;
+mod transcript;
+
+/// 滚动性能回归（`#[ignore]`）。
+mod perf;
 
 fn lx_with(messages: Vec<ChatMessageView>) -> Lx {
     let mut lx = Lx::new();
@@ -97,7 +112,7 @@ fn thinking_collapsed_after_completion_one_row_each() {
         vec![reasoning_part("长思考\n两行"), text_part("正文")],
     )]);
     let area = Rect::new(0, 0, 40, 20);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     // 完成态默认折叠：折叠头 1 + 块间空行 1 + 正文 1 + 消息间空行 1 = 4
     //（无用量数据不出统计行）。
     assert_eq!(layout.total_rows, 4);
@@ -115,7 +130,7 @@ fn thinking_collapsed_by_default_while_streaming() {
         vec![reasoning_part("l1\nl2"), text_part("")],
     )]);
     let area = Rect::new(0, 0, 40, 20);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     assert!(!lx.chat.reasoning_expanded(0, 0), "生成中保持折叠");
     assert!(lx.chat.reasoning_streaming(0, 0), "仍在生成");
     // 折叠头 1 + 消息间空行 1 = 2（空的正文块不占行、也不引入空行）。
@@ -148,7 +163,7 @@ fn expanded_thinking_counts_content_rows() {
     )]);
     lx.chat.toggle_reasoning(0, 0);
     let area = Rect::new(0, 0, 40, 20);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     // 展开头 1 + 3 内容行 + 块间空行 1 + 正文 1 + 消息间空行 1 = 7。
     assert_eq!(layout.total_rows, 7);
 }
@@ -167,8 +182,8 @@ fn assistant_message_has_no_label_and_shows_body() {
     let line1 = row_text(&buf, area, 1);
     let line2 = row_text(&buf, area, 2);
     assert!(
-        line0.starts_with("■ Thought"),
-        "首个渲染行为方块 + 图标 + 折叠头：{line0}"
+        line0.starts_with("● Thought"),
+        "首个渲染行为圆点 + 图标 + 折叠头：{line0}"
     );
     assert!(
         !line0.contains("assistant"),
@@ -177,8 +192,8 @@ fn assistant_message_has_no_label_and_shows_body() {
     assert!(line1.trim().is_empty(), "折叠头与正文间空一行：{line1}");
     assert!(!line2.contains("秘密思考"), "折叠时不显示内容");
     assert!(
-        line2.starts_with("■ 可见正文"),
-        "正文块同样以方块起头：{line2}"
+        line2.starts_with("● 可见正文"),
+        "正文块同样以圆点起头：{line2}"
     );
 }
 
@@ -213,7 +228,10 @@ fn failed_message_shows_error_notice_with_code_at_bottom() {
     let rows: Vec<String> = (0..4).map(|row| row_text(&buf, area, row)).collect();
     assert!(rows[0].contains("出错了"), "正文：{rows:?}");
     assert_eq!(rows[1], "", "与正文隔一行");
-    assert_eq!(rows[2], "■ Failed", "行首为方块，与步骤标记同款");
+    assert_eq!(
+        rows[2], "● Failed",
+        "行首为圆点（文字类通知与步骤标记同款）"
+    );
     assert_eq!(rows[3], "  └─ http 503");
     assert!(
         !rows.iter().any(|row| row.contains("[failed")),
@@ -232,7 +250,7 @@ fn failed_message_without_code_uses_fallback_reason() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let rows: Vec<String> = (0..4).map(|row| row_text(&buf, area, row)).collect();
-    assert_eq!(rows[2], "■ Failed");
+    assert_eq!(rows[2], "● Failed");
     assert_eq!(
         rows[3], "  └─ no error details provided",
         "无码时给一句话兜底"
@@ -252,7 +270,7 @@ fn interrupted_message_shows_warning_notice_above_stats_line() {
     let rows: Vec<String> = (0..6).map(|row| row_text(&buf, area, row)).collect();
     assert!(rows[0].contains("半截回答"), "正文：{rows:?}");
     assert_eq!(rows[1], "", "通知与正文隔一行");
-    assert_eq!(rows[2], "■ Interrupted", "中断用黄色警告通知 + 方块标记");
+    assert_eq!(rows[2], "● Interrupted", "中断用黄色警告通知 + 圆点标记");
     assert_eq!(
         rows[3], "  └─ interrupted before completion",
         "固定一句话原因"
@@ -345,7 +363,7 @@ fn wrap_preserves_explicit_newlines() {
 #[test]
 fn layout_handles_zero_area() {
     let lx = lx_with(vec![message("user", "complete", vec![text_part("x")])]);
-    let layout = layout(Rect::new(0, 0, 0, 0), &lx);
+    let layout = layout(Rect::new(0, 0, 0, 0), &lx, &mut cache());
     assert_eq!(layout.total_rows, 0);
     assert!(layout.thinking.is_empty());
 }
@@ -357,7 +375,7 @@ fn thinking_header_rect_tracks_row_position() {
         message("assistant", "complete", vec![reasoning_part("思考")]),
     ]);
     let area = Rect::new(3, 5, 40, 20);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     // 第一条：正文(5，用户前缀在首行) + 空行(6)；第二条 thinking 头(7)。
     assert_eq!(layout.thinking.len(), 1);
     let (_, _, header) = layout.thinking[0];
@@ -423,7 +441,7 @@ fn history_layout_reserves_scrollbar_column() {
         vec![text_part("你好世界你好世界")],
     )]);
     let area = Rect::new(0, 0, 20, 10);
-    let _layout = layout(area, &lx);
+    let _layout = layout(area, &lx, &mut cache());
     // thinking 头宽度应扣除滚动条预留列。
     assert_eq!(super::content_rect(area).width, 20 - SCROLLBAR_COLUMNS);
 }
@@ -457,7 +475,7 @@ fn stats_line_row_is_counted_in_layout() {
     let lx = lx_with(vec![completed]);
     // 统计行单行放得下（60 列）。
     let area = Rect::new(0, 0, 60, 20);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     // 正文 1 + 块间空行 1 + 统计行 1 + 消息间空行 1 = 4。
     assert_eq!(layout.total_rows, 4);
 }
@@ -487,7 +505,7 @@ fn token_and_duration_formatting_matches_agent_conventions() {
 }
 
 #[test]
-fn thinking_header_uses_step_square_and_becomes_thought() {
+fn thinking_header_uses_step_dot_and_becomes_thought() {
     // 生成中：行首方块（呼吸第 0 帧为实心、翡翠绿加粗）+ `Thinking`。
     let mut streaming = lx_with(vec![message(
         "assistant",
@@ -530,8 +548,8 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
     let line0 = row_text(&buf, area, 0);
     assert!(
-        line0.starts_with("■ Thinking"),
-        "方块 + 文案（文案从第 2 列起）：{line0}"
+        line0.starts_with("● Thinking"),
+        "圆点 + 文案（文案从第 2 列起）：{line0}"
     );
     assert!(
         !line0.contains('▸') && !line0.contains('▾'),
@@ -543,12 +561,12 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
             .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)),
         "不再使用 braille 转轮：{line0}"
     );
-    // 呼吸：进入空心相位后同一行换成 `□`（相位每 `STEP_BREATH_TICKS` 帧翻转）。
+    // 呼吸：进入空心相位后同一行换成 `○`（相位每 `STEP_BREATH_TICKS` 帧翻转）。
     streaming.chat.loading_frame = text::agent::STEP_BREATH_TICKS;
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
     let line0 = row_text(&buf, area, 0);
-    assert!(line0.starts_with("□ Thinking"), "空心相位：{line0}");
+    assert!(line0.starts_with("○ Thinking"), "空心相位：{line0}");
 
     // 完成后（带起止时刻）：静态实心方块、品牌天蓝加粗（不压暗）、`Thought · 6.3s`。
     let mut done = lx_with(vec![message(
@@ -573,7 +591,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     assert!(!label.modifier.contains(Modifier::BOLD), "完成文案不加粗");
     let line0 = row_text(&buf, area, 0);
     assert!(
-        line0.starts_with("■ Thought · 6.3s"),
+        line0.starts_with("● Thought · 6.3s"),
         "完成后显示思考耗时：{line0}"
     );
     // 终态与帧无关：奇数帧也是实心。
@@ -581,8 +599,8 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     assert!(
-        row_text(&buf, area, 0).starts_with("■ Thought · 6.3s"),
-        "完成后停为静态实心方块"
+        row_text(&buf, area, 0).starts_with("● Thought · 6.3s"),
+        "完成后停为静态实心圆点"
     );
 
     // 展开：文案不变（不再有 ▸/▾），正文缩进 2 列与方块对齐。
@@ -599,7 +617,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     assert_eq!(label.fg, Color::Indexed(218), "展开后文案升为亮粉");
     let line0 = row_text(&buf, area, 0);
     assert!(
-        line0.starts_with("■ Thought · 6.3s"),
+        line0.starts_with("● Thought · 6.3s"),
         "展开后头部不变（折叠标记已移除）：{line0}"
     );
     let line1 = row_text(&buf, area, 1);
@@ -608,7 +626,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
 }
 
 #[test]
-fn markdown_body_block_has_step_square_and_indented_continuation() {
+fn markdown_body_block_has_step_dot_and_indented_continuation() {
     let lx = lx_with(vec![message(
         "assistant",
         "complete",
@@ -620,14 +638,14 @@ fn markdown_body_block_has_step_square_and_indented_continuation() {
     let line0 = row_text(&buf, area, 0);
     let line1 = row_text(&buf, area, 1);
     assert!(
-        line0.starts_with("■ 第一行"),
-        "markdown 正文同样以方块起头：{line0}"
+        line0.starts_with("● 第一行"),
+        "markdown 正文同样以圆点起头：{line0}"
     );
     assert!(
         line1.starts_with("  第二行"),
         "续行缩进 2 列与方块对齐：{line1}"
     );
-    // 正文块的方块用**默认字体颜色**（不设前景），不加粗、不压暗。
+    // 正文块的圆点用**默认字体颜色**（不设前景），不加粗、不压暗。
     let marker = &buf[(0, 0)];
     assert_eq!(
         marker.fg,
@@ -654,680 +672,6 @@ fn only_the_active_last_step_breathes() {
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let first = row_text(&buf, area, 0);
     let last = row_text(&buf, area, 2);
-    assert!(first.starts_with("■ 甲"), "已结束的块停为实心：{first}");
-    assert!(last.starts_with("□ 乙"), "仍在流式的最后一块呼吸：{last}");
-}
-
-// ===== 置顶用户消息行（表现层，codex prompt_header 口径）=====
-
-/// 构造一段够长、能溢出的历史：两轮问答，正文各若干行。
-fn sticky_lx() -> Lx {
-    let mut lx = lx_with(vec![
-        message("user", "complete", vec![text_part("第一轮的问题")]),
-        message("assistant", "complete", vec![text_part("A1\nA2\nA3")]),
-        message("user", "complete", vec![text_part("第二轮的问题")]),
-        message("assistant", "complete", vec![text_part("B1\nB2\nB3")]),
-    ]);
-    // 溢出必需的滚动空间：视口 6 行、内容远多于 6 行。
-    lx.chat.follow_bottom = false;
-    lx
-}
-
-/// 历史区（宽 24、高 8）：body 6 行。
-fn sticky_area() -> Rect {
-    Rect::new(0, 0, 24, 8)
-}
-
-#[test]
-fn sticky_prompt_pins_the_turn_prompt_when_top_row_is_answer() {
-    let mut lx = sticky_lx();
-    let area = sticky_area();
-    let layout = layout(area, &lx);
-    // 顶行落在第一轮回复里。
-    let scroll = layout.messages[1].start;
-    lx.chat.history_scroll = scroll;
-    let computed = view(area, &lx);
-    assert_eq!(computed.sticky, Some(0), "钉第一轮的 prompt");
-    assert_eq!(computed.body.y, area.y + 1, "让位一行");
-    assert_eq!(computed.body.height, area.height - 1);
-    assert_eq!(computed.scroll, computed.scroll, "滚动偏移按 body 钳制");
-}
-
-#[test]
-fn sticky_prompt_yields_when_top_row_is_the_prompt() {
-    let mut lx = sticky_lx();
-    let area = sticky_area();
-    let layout = layout(area, &lx);
-    // 顶行就是第二条用户消息自己的行（含它前面的空行）→ 不钉。
-    lx.chat.history_scroll = layout.messages[2].start;
-    let computed = view(area, &lx);
-    assert_eq!(computed.sticky, None, "用户消息自带上下文");
-    assert_eq!(computed.body, area, "不占行");
-
-    // 轮边界空行（归后一条消息）同样按用户消息自己的行处理。
-    lx.chat.history_scroll = layout.messages[2].start.saturating_sub(1);
-    let at_blank = view(area, &lx);
-    assert_eq!(at_blank.sticky, None, "空行归后一条：仍算用户消息的行");
-}
-
-#[test]
-fn sticky_prompt_revert_records_suppression_memory() {
-    let mut lx = sticky_lx();
-    let area = sticky_area();
-    let layout = layout(area, &lx);
-    // 整块 body 下顶行 = 第一轮回复最后一行 → 需要钉；让位一行后顶行变成
-    // 第二条用户消息的边界空行 → 不再需要 → 撤销让位并记记忆。
-    let scroll = layout.messages[2].start.saturating_sub(1);
-    lx.chat.history_scroll = scroll;
-    let computed = view(area, &lx);
-    assert_eq!(computed.sticky, None, "让位后不再需要 → 撤销");
-    assert_eq!(computed.body, area, "撤销让位");
-    let memory = computed.suppressed.expect("写入抑制记忆");
-    assert_eq!(memory.viewport, area);
-    assert_eq!(memory.message, 1, "记忆的是整块视口的顶行位置");
-}
-
-#[test]
-fn sticky_prompt_respects_suppression_memory_while_reading() {
-    let mut lx = sticky_lx();
-    let area = sticky_area();
-    let layout = layout(area, &lx);
-    // 顶行在第一轮回复里：本会钉，但记忆一致 → 跳过重判、沿用抑制。
-    lx.chat.history_scroll = layout.messages[1].start;
-    let top = sticky::message_at(&layout.messages, layout.messages[1].start).expect("顶行");
-    lx.chat.suppressed_prompt_header = Some(crate::app::state::lx::chat::StickySuppression {
-        viewport: area,
-        message: top.0,
-        row: top.1,
-    });
-    let computed = view(area, &lx);
-    assert_eq!(computed.sticky, None, "阅读态沿用抑制");
-    assert_eq!(computed.body, area);
-    assert_eq!(
-        computed.suppressed, lx.chat.suppressed_prompt_header,
-        "记忆保留"
-    );
-
-    // 视口一变化记忆即失效 → 重新判定（本会钉）。
-    lx.chat.suppressed_prompt_header = Some(crate::app::state::lx::chat::StickySuppression {
-        viewport: Rect::new(0, 0, 23, 8),
-        ..computed.suppressed.expect("记忆")
-    });
-    let resized = view(area, &lx);
-    assert_eq!(resized.sticky, Some(0), "视口变化使记忆失效");
-}
-
-#[test]
-fn sticky_prompt_thresholds_hide_the_row() {
-    let mut lx = sticky_lx();
-    let layout = layout(sticky_area(), &lx);
-    lx.chat.history_scroll = layout.messages[1].start;
-    // 太矮：不显示（也不写记忆）。
-    let short = view(Rect::new(0, 0, 24, 3), &lx);
-    assert_eq!(short.sticky, None, "高度不足不显示");
-    assert_eq!(short.suppressed, None);
-    // 太窄：不显示。
-    let narrow = view(Rect::new(0, 0, 15, 8), &lx);
-    assert_eq!(narrow.sticky, None, "宽度不足不显示");
-}
-
-#[test]
-fn sticky_text_collapses_sanitizes_and_marks_empty() {
-    let mut message = message(
-        "user",
-        "complete",
-        vec![text_part("  第一  行\n\t第二\r行  ")],
-    );
-    assert_eq!(
-        sticky::sticky_text(&message).as_deref(),
-        Some("第一 行 第二 行")
-    );
-    // 只有空白 → 不钉（None）。
-    set_parts(&mut message, vec![text_part("   \n\t ")]);
-    assert_eq!(sticky::sticky_text(&message), None);
-    // 超长粘贴按 512 字符取样（限住每帧成本）。
-    set_parts(&mut message, vec![text_part(&"字".repeat(1_000))]);
-    let text = sticky::sticky_text(&message).expect("摘要");
-    assert_eq!(text.chars().count(), sticky::SAMPLE_CHARS);
-}
-
-#[test]
-fn sticky_row_is_painted_outside_the_grid() {
-    let mut lx = sticky_lx();
-    let area = sticky_area();
-    let layout = layout(area, &lx);
-    lx.chat.history_scroll = layout.messages[1].start;
-    let computed = view(area, &lx);
-    let row = sticky_rect(&computed).expect("置顶行");
-    assert_eq!(row.rect, Rect::new(area.x, area.y, area.width, 1));
-
-    // 表现层：直接写 Buffer，网格那一行保持空白（→ 不进复制与选区）。
-    let message = lx.chat.messages[row.message].clone();
-    let mut buf = Buffer::empty(area);
-    render_sticky_prompt(&mut buf, row, &message);
-    let painted = row_text(&buf, area, 0);
-    let squeezed = painted.replace(' ', "");
-    assert!(
-        squeezed.starts_with(">第一轮的问题"),
-        "前缀与用户消息同款 `> `：{painted}"
-    );
-
-    let mut grid = Grid::new(area);
-    render(&mut grid, computed.body, &lx, computed.scroll);
-    let mut grid_row = String::new();
-    for x in area.x..area.right() {
-        grid_row.push(grid.cell(x, area.y).ch);
-    }
-    assert!(
-        grid_row.trim().is_empty(),
-        "网格置顶行保持空白：{grid_row:?}"
-    );
-}
-
-#[test]
-fn sticky_text_is_truncated_with_ellipsis_to_width() {
-    let mut lx = sticky_lx();
-    set_parts(
-        &mut lx.chat.messages[0],
-        vec![text_part("很长很长很长很长很长很长很长的问题")],
-    );
-    let area = sticky_area();
-    let layout = layout(area, &lx);
-    lx.chat.history_scroll = layout.messages[1].start;
-    let computed = view(area, &lx);
-    let row = sticky_rect(&computed).expect("置顶行");
-    let message = lx.chat.messages[row.message].clone();
-    let mut buf = Buffer::empty(area);
-    render_sticky_prompt(&mut buf, row, &message);
-    let painted = row_text(&buf, area, 0);
-    assert!(
-        painted.trim_end().ends_with('…'),
-        "溢出以省略号收尾：{painted}"
-    );
-    // 截断函数本体：按显示列截断、宽字符按两列计。
-    assert_eq!(truncate_with_ellipsis("abcdef", 4), "abc…");
-    assert_eq!(truncate_with_ellipsis("中文中文", 5), "中文…");
-    assert_eq!(truncate_with_ellipsis("abc", 3), "abc");
-}
-
-// ===== G7：真实工具步骤行（必须占行、不 panic、不与布局漂移）=====
-
-/// 构造工具步骤（`read` / Pending，带路径与行范围摘要）。
-fn tool_step(position: i64) -> AssistantStepView {
-    AssistantStepView::Tool {
-        position,
-        call: crate::app::state::ToolCallView {
-            call_id: format!("call-{position}"),
-            name: "read".into(),
-            position,
-            arguments_json: r#"{"path":"src/a.rs","offset":3,"limit":5}"#.into(),
-            status: crate::app::state::ToolStatus::Pending,
-            summary: Some(Box::new(crate::app::state::ToolSummary {
-                path: Some("src/a.rs".into()),
-                range: Some((3, 7)),
-                ..Default::default()
-            })),
-            error: None,
-            result_json: None,
-            detail: None,
-        },
-    }
-}
-
-/// 工具步骤占两行（`■ 动词` + `  └─ 详情`）：布局行数与渲染行数一致，
-/// 且文本可见（不吞掉、不错位）。
-#[test]
-fn tool_step_occupies_two_rows_and_renders_summary() {
-    let mut message = message("assistant", "complete", vec![text_part("正文")]);
-    message.steps.push(tool_step(1));
-    let lx = lx_with(vec![message]);
-    let area = Rect::new(0, 0, 60, 20);
-    let computed = layout(area, &lx);
-    // 正文 1 + 块间空行 1 + 工具 2 行 + 消息间空行 1 = 5。
-    assert_eq!(computed.total_rows, 5);
-
-    let mut grid = Grid::new(area);
-    render(&mut grid, area, &lx, 0);
-    let mut rows: Vec<String> = Vec::new();
-    for y in 0..7u16 {
-        let mut row = String::new();
-        for x in 0..area.right() {
-            row.push(grid.cell(x, y).ch);
-        }
-        rows.push(row);
-    }
-    let painted = rows.join("\n");
-    let squeezed: String = painted
-        .chars()
-        .filter(|ch| !ch.is_whitespace() && *ch != '\0')
-        .collect();
-    assert!(squeezed.contains("正文"), "正文仍渲染：{painted}");
-    assert!(
-        squeezed.contains(text::agent::VERB_TOOL_READ),
-        "工具行动词可见：{painted}"
-    );
-    // 第 1 行只有方块 + 动词（无状态文字、无路径）。
-    let header_row = rows
-        .iter()
-        .find(|row| row.contains(text::agent::VERB_TOOL_READ))
-        .expect("工具标题行");
-    assert_eq!(
-        header_row.trim_end(),
-        format!(
-            "{} {}",
-            text::agent::STEP_MARK_FILLED,
-            text::agent::VERB_TOOL_READ
-        ),
-        "标题行只有方块 + 动词：{header_row:?}"
-    );
-    // 第 2 行是 `└─` + 参数 + 状态词兜底（pending 没有参数摘要之外的状态字段，
-    // 这里 pending 有摘要 → 只显示参数与范围）。
-    let detail_row = rows
-        .iter()
-        .find(|row| row.contains("src/a.rs"))
-        .expect("详情行");
-    assert!(
-        detail_row
-            .trim_start()
-            .starts_with(text::agent::MARKER_TREE_LEAF),
-        "详情行以 └─ 起头：{detail_row:?}"
-    );
-    assert!(squeezed.contains("3-7"), "行范围可见：{painted}");
-}
-
-/// 仅工具步骤的消息也占行（不会因“没有 text part”而整条消失）。
-#[test]
-fn tool_only_message_still_occupies_rows() {
-    let mut message = message("assistant", "complete", Vec::new());
-    message.steps.push(tool_step(0));
-    let lx = lx_with(vec![message]);
-    let computed = layout(Rect::new(0, 0, 40, 10), &lx);
-    // 工具 2 行 + 消息间空行/呼吸行 1 = 3。
-    assert_eq!(computed.total_rows, 3);
-}
-
-#[test]
-fn transcript_lays_out_step_square_with_two_column_gutter() {
-    // 一份完整观感锁定：用户消息 `> `、每个步骤的方块标记与 2 列内容缩进
-    // （思考头 / 思考正文 / 正文块 / 工具行）、块间空行。
-    let mut assistant = message(
-        "assistant",
-        "streaming",
-        vec![
-            reasoning_part("思考甲\n思考乙"),
-            text_part("正文第一行\n正文第二行"),
-        ],
-    );
-    assistant.steps.push(tool_step(2));
-    let mut lx = lx_with(vec![
-        message("user", "complete", vec![text_part("用户问题")]),
-        assistant,
-    ]);
-    lx.chat.toggle_reasoning(1, 0);
-    lx.chat.loading_frame = text::agent::STEP_BREATH_TICKS; // 呼吸进入空心相位
-    // 动画推进中才呼吸（停止后恒实心，见 `StepMark::glyph`）。
-    lx.chat.status.streaming = true;
-    let area = Rect::new(0, 0, 56, 12);
-    let mut buf = Buffer::empty(area);
-    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
-    // 10 行内容 + 1 行呼吸位：工具行改成两行后多出 1 行。
-    let rows: Vec<String> = (0..11).map(|row| row_text(&buf, area, row)).collect();
-    assert_eq!(
-        rows,
-        vec![
-            "> 用户问题",
-            "",
-            "□ Thinking",
-            "  思考甲",
-            "  思考乙",
-            "",
-            "■ 正文第一行",
-            "  正文第二行",
-            "",
-            "□ Read",
-            "  └─ src/a.rs · 3-7",
-        ],
-        "步骤方块、2 列缩进与两行式工具行的整块观感"
-    );
-}
-
-// ===== 独立撤销提示 =====
-
-fn rewind_notice(sequence: i64) -> crate::app::state::RewindNoticeView {
-    crate::app::state::RewindNoticeView {
-        id: format!("notice-{sequence}"),
-        sequence,
-        kind: "revert_and_delete".into(),
-        restored_file_count: 2,
-        files_already_restored: false,
-    }
-}
-
-#[test]
-fn tip_only_history_stays_on_history_view() {
-    let mut lx = Lx::new();
-    lx.chat.notices = vec![rewind_notice(0)];
-    assert!(has_history(&lx), "messages 为空但提示非空仍是历史");
-    let area = Rect::new(0, 0, 40, 10);
-    let view = view(area, &lx);
-    assert!(view.total_rows > 0);
-}
-
-#[test]
-fn notices_and_messages_share_one_row_budget() {
-    let mut lx = lx_with(vec![
-        message("user", "complete", vec![text_part("hello")]),
-        message("assistant", "complete", vec![text_part("world")]),
-    ]);
-    lx.chat.messages[0].sequence = 0;
-    lx.chat.messages[1].sequence = 2;
-    lx.chat.notices = vec![rewind_notice(1)];
-    let area = Rect::new(0, 0, 40, 20);
-    let layout = layout(area, &lx);
-    let mut grid = Grid::new(area);
-    let drawn = render(&mut grid, area, &lx, 0);
-    assert_eq!(drawn, layout.total_rows, "布局与渲染行数必须一致");
-    assert!(layout.total_rows > 4, "提示占两行，不能与消息共享同一行");
-}
-
-#[test]
-fn selected_latest_user_message_uses_distinct_background() {
-    let mut lx = lx_with(vec![message("user", "complete", vec![text_part("hello")])]);
-    lx.rewind.selected = Some(crate::app::state::RewindTarget {
-        session_id: "s".into(),
-        user_message_id: "user-1".into(),
-        expected_revision: 1,
-        pane: crate::layout::PaneId::alloc(),
-        input_at_open: String::new(),
-        user_text: "hello".into(),
-        kind: crate::app::state::RewindTargetKind::Turn,
-    });
-    let area = Rect::new(0, 0, 40, 10);
-    let view = view(area, &lx);
-    let mut grid = Grid::new(area);
-    render(&mut grid, view.body, &lx, view.scroll);
-    let highlighted = (view.body.y..view.body.bottom()).any(|y| {
-        (view.body.x..view.body.right())
-            .any(|x| grid.cell(x, y).style.bg == Some(ratatui::style::Color::Indexed(24)))
-    });
-    assert!(highlighted, "最新用户消息必须有选中底色");
-}
-
-#[test]
-fn consecutive_rewind_notices_merge_with_count() {
-    let mut lx = Lx::new();
-    lx.chat.notices = vec![rewind_notice(0), rewind_notice(1), rewind_notice(2)];
-    let area = Rect::new(0, 0, 60, 10);
-    let layout = layout(area, &lx);
-    let mut grid = Grid::new(area);
-    let drawn = render(&mut grid, area, &lx, 0);
-    assert_eq!(drawn, layout.total_rows);
-    let text: String = (area.y..area.bottom())
-        .map(|y| {
-            (area.x..area.right())
-                .map(|x| grid.cell(x, y).ch)
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        text.contains("-- Rewind x3 --"),
-        "连续提示合并为 xN：{text}"
-    );
-    assert_eq!(
-        text.matches("-- Rewind").count(),
-        1,
-        "三条连续提示只画一条标题"
-    );
-    assert_eq!(layout.total_rows, 3, "合并后只占标题+描述+空行");
-}
-
-#[test]
-fn notices_separated_by_messages_are_not_merged() {
-    let mut lx = lx_with(vec![message(
-        "assistant",
-        "complete",
-        vec![text_part("middle")],
-    )]);
-    lx.chat.messages[0].sequence = 1;
-    lx.chat.notices = vec![rewind_notice(0), rewind_notice(2)];
-    let area = Rect::new(0, 0, 60, 12);
-    let mut grid = Grid::new(area);
-    render(&mut grid, area, &lx, 0);
-    let text: String = (area.y..area.bottom())
-        .map(|y| {
-            (area.x..area.right())
-                .map(|x| grid.cell(x, y).ch)
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(
-        text.matches("-- Rewind").count(),
-        2,
-        "被消息分隔的提示各自显示：{text}"
-    );
-}
-
-#[test]
-fn center_target_puts_user_message_middle_of_viewport() {
-    let mut messages = Vec::new();
-    for index in 0..24 {
-        let role = if index % 2 == 0 { "user" } else { "assistant" };
-        let mut message = message(role, "complete", vec![text_part("some history line")]);
-        message.id = format!("m{index}");
-        message.sequence = index;
-        messages.push(message);
-    }
-    let lx = lx_with(messages);
-    let area = Rect::new(0, 0, 40, 14);
-    let (top, max_top) = history_center_target(area, &lx, "m10").expect("scrollable");
-    assert!(top > 0 && top < max_top, "目标应有上下可滚动空间");
-    let rect = history_rect(area, &lx).expect("history");
-    let layout = layout(rect, &lx);
-    let rows = layout.messages[10];
-    let height = usize::from(rect.height);
-    assert!(
-        rows.start >= top && rows.start < top + height,
-        "目标必须在视口内"
-    );
-    assert!(
-        rows.start.saturating_sub(top) <= height / 2 + 1,
-        "目标应落在视口中部而不是底部"
-    );
-}
-
-#[test]
-fn center_target_is_none_when_content_fits() {
-    let lx = lx_with(vec![message("user", "complete", vec![text_part("short")])]);
-    assert_eq!(
-        history_center_target(Rect::new(0, 0, 40, 20), &lx, "user-1"),
-        None
-    );
-}
-
-// ===== compact 检查点条目 =====
-
-fn checkpoint(sequence: i64, active: bool) -> crate::app::state::CompactNoticeView {
-    crate::app::state::CompactNoticeView {
-        id: format!("compact-{sequence}"),
-        sequence,
-        model_label: "gpt-5".into(),
-        created_at_ms: 1_700_000_640_000,
-        start_sequence: 0,
-        end_sequence: sequence.saturating_sub(1),
-        summary: "Condensed context for the earlier work.".into(),
-        active,
-    }
-}
-
-/// 只有检查点时仍显示历史（不退回欢迎页）。
-#[test]
-fn compact_only_history_stays_on_history_view() {
-    let mut lx = Lx::new();
-    lx.compact.replace(vec![checkpoint(1, true)]);
-    assert!(has_history(&lx));
-    let area = Rect::new(0, 0, 60, 10);
-    let view = view(area, &lx);
-    assert!(view.total_rows > 0);
-}
-
-/// 折叠态：只画标题+描述两行，布局与渲染行数一致。
-#[test]
-fn compact_entry_folds_to_header_rows() {
-    let mut lx = Lx::new();
-    lx.compact.replace(vec![checkpoint(1, true)]);
-    let area = Rect::new(0, 0, 60, 10);
-    let layout = layout(area, &lx);
-    let mut grid = Grid::new(area);
-    let drawn = render(&mut grid, area, &lx, 0);
-    assert_eq!(drawn, layout.total_rows, "布局与渲染行数必须一致");
-    // 标题 + 描述 + 末尾呼吸行（与其它历史条目同一口径）。
-    assert_eq!(layout.total_rows, 3, "折叠态只占标题+描述+呼吸行");
-    let text: String = (area.y..area.bottom())
-        .map(|y| {
-            (area.x..area.right())
-                .map(|x| grid.cell(x, y).ch)
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(text.contains("-- Context compacted --"), "{text}");
-    assert!(text.contains("gpt-5"), "必须显示实际模型名：{text}");
-    assert!(
-        !text.contains("Condensed context"),
-        "默认折叠不得显示摘要正文：{text}"
-    );
-}
-
-/// 展开态：追加范围行与摘要正文，行数与渲染仍然一致。
-#[test]
-fn compact_entry_expands_to_summary() {
-    let mut lx = Lx::new();
-    lx.compact.replace(vec![checkpoint(4, true)]);
-    lx.compact.toggle("compact-4");
-    let area = Rect::new(0, 0, 60, 14);
-    let layout = layout(area, &lx);
-    let mut grid = Grid::new(area);
-    let drawn = render(&mut grid, area, &lx, 0);
-    assert_eq!(drawn, layout.total_rows, "展开后仍必须一致");
-    assert!(layout.total_rows > 2, "展开必须有更多行");
-    let text: String = (area.y..area.bottom())
-        .map(|y| {
-            (area.x..area.right())
-                .map(|x| grid.cell(x, y).ch)
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(text.contains("covered"), "展开显示覆盖范围：{text}");
-    assert!(text.contains("Condensed context"), "{text}");
-}
-
-/// 检查点与消息按 sequence 排序合并（不插在末尾）。
-#[test]
-fn compact_entry_is_interleaved_by_sequence() {
-    let mut lx = lx_with(vec![message(
-        "assistant",
-        "complete",
-        vec![text_part("after")],
-    )]);
-    lx.chat.messages[0].sequence = 5;
-    lx.compact.replace(vec![checkpoint(2, true)]);
-    let area = Rect::new(0, 0, 60, 16);
-    let mut grid = Grid::new(area);
-    render(&mut grid, area, &lx, 0);
-    let text: String = (area.y..area.bottom())
-        .map(|y| {
-            (area.x..area.right())
-                .map(|x| grid.cell(x, y).ch)
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let compact_at = text.find("-- Context compacted --").expect("compact title");
-    let message_at = text.find("after").expect("message body");
-    assert!(
-        compact_at < message_at,
-        "sequence 更小的检查点必须排在消息之前：{text}"
-    );
-}
-
-/// 连续多个检查点各自独立（不合并成 xN）。
-#[test]
-fn consecutive_compacts_are_not_merged() {
-    let mut lx = Lx::new();
-    lx.compact
-        .replace(vec![checkpoint(1, true), checkpoint(2, true)]);
-    let area = Rect::new(0, 0, 60, 12);
-    let mut grid = Grid::new(area);
-    render(&mut grid, area, &lx, 0);
-    let text: String = (area.y..area.bottom())
-        .map(|y| {
-            (area.x..area.right())
-                .map(|x| grid.cell(x, y).ch)
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(
-        text.matches("-- Context compacted --").count(),
-        2,
-        "每条检查点都需要独立展开：{text}"
-    );
-}
-
-/// 已撤销的检查点保留在时间线上但明确标注。
-#[test]
-fn reverted_checkpoint_is_marked() {
-    let mut lx = Lx::new();
-    lx.compact.replace(vec![checkpoint(3, false)]);
-    let area = Rect::new(0, 0, 60, 10);
-    let mut grid = Grid::new(area);
-    render(&mut grid, area, &lx, 0);
-    let text: String = (area.y..area.bottom())
-        .map(|y| {
-            (area.x..area.right())
-                .map(|x| grid.cell(x, y).ch)
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(text.contains("reverted"), "{text}");
-}
-
-/// 窄屏：compact 条目按内容宽度换行，布局与渲染行数仍必须一致。
-#[test]
-fn compact_entry_wraps_on_narrow_width() {
-    let mut lx = Lx::new();
-    let mut notice = checkpoint(4, true);
-    notice.summary =
-        "a long summary line that will certainly need to wrap on narrow screens".into();
-    lx.compact.replace(vec![notice]);
-    lx.compact.toggle("compact-4");
-    for width in [16u16, 24, 40, 80] {
-        let area = Rect::new(0, 0, width, 30);
-        let layout = layout(area, &lx);
-        let mut grid = Grid::new(area);
-        let drawn = render(&mut grid, area, &lx, 0);
-        assert_eq!(
-            drawn, layout.total_rows,
-            "宽度 {width} 下行数必须一致（换行不得导致滚动漂移）"
-        );
-        assert!(layout.total_rows > 3, "宽度 {width} 下展开条目应有内容");
-    }
-}
-
-/// 折叠/展开切换后布局行数随之变化，且锚点由 `pin_lx_viewport` 之外的层处理。
-#[test]
-fn compact_fold_toggle_changes_row_count_consistently() {
-    let mut lx = Lx::new();
-    lx.compact.replace(vec![checkpoint(4, true)]);
-    let area = Rect::new(0, 0, 50, 20);
-    let folded = layout(area, &lx).total_rows;
-    lx.compact.toggle("compact-4");
-    let expanded = layout(area, &lx).total_rows;
-    assert!(expanded > folded, "展开必须增加行数");
-    let mut grid = Grid::new(area);
-    assert_eq!(render(&mut grid, area, &lx, 0), expanded);
+    assert!(first.starts_with("● 甲"), "已结束的块停为实心：{first}");
+    assert!(last.starts_with("○ 乙"), "仍在流式的最后一块呼吸：{last}");
 }

@@ -6,6 +6,11 @@
 use ratatui::layout::Rect;
 
 use super::*;
+
+/// 测试用缓存：每次调用独立，避免测试之间共享几何快照。
+fn cache() -> PaneCache {
+    PaneCache::default()
+}
 use crate::app::state::{
     AssistantStepView, ChatMessageView, ToolCallView, ToolStatus, ToolSummary,
 };
@@ -38,10 +43,10 @@ fn push_tool(message: &mut ChatMessageView, status: ToolStatus) {
     message.steps.push(read_step(position, status));
 }
 
-/// 渲染整块历史并返回绘制推进的行数（与 `layout().total_rows` 比对用）。
+/// 渲染整块历史并返回绘制推进的行数（与 `layout(...).total_rows` 比对用）。
 fn render_rows(area: Rect, lx: &Lx, scroll: usize) -> usize {
     let mut grid = Grid::new(area);
-    render(&mut grid, area, lx, scroll)
+    render(&mut grid, area, lx, scroll, &mut cache())
 }
 
 /// 测试用历史：3 条消息 + 多个工具 + thinking 交错，足以溢出小视口。
@@ -74,7 +79,7 @@ fn layout_rows_equal_rendered_rows_with_tools_and_thinking() {
                 lx.chat.toggle_reasoning(1, 0);
             }
             let area = Rect::new(0, 0, width, 30);
-            let layout = layout(area, &lx);
+            let layout = layout(area, &lx, &mut cache());
             assert_eq!(
                 render_rows(area, &lx, 0),
                 layout.total_rows,
@@ -88,7 +93,7 @@ fn layout_rows_equal_rendered_rows_with_tools_and_thinking() {
 fn tool_steps_are_counted_inside_message_row_ranges() {
     let lx = mixed_lx();
     let area = Rect::new(0, 0, 60, 30);
-    let computed = layout(area, &lx);
+    let computed = layout(area, &lx, &mut cache());
     assert_eq!(computed.messages.len(), 3, "三条消息各有行区间");
     // 行区间首尾相接、单调不减，且最后一条覆盖到总行数（含呼吸行）。
     let mut previous_end = 0usize;
@@ -111,7 +116,7 @@ fn thinking_header_hit_rect_matches_message_row_range_with_tools() {
     let mut lx = mixed_lx();
     lx.chat.toggle_reasoning(1, 0);
     let area = Rect::new(2, 3, 60, 30);
-    let computed = layout(area, &lx);
+    let computed = layout(area, &lx, &mut cache());
     // thinking 步骤在第二条消息（index 1）的步骤 0，头部必须在它的行区间内。
     let (message_index, step_index, header) = computed
         .thinking
@@ -134,10 +139,10 @@ fn scrollbar_and_sticky_row_stay_consistent_with_tools() {
     let mut lx = mixed_lx();
     lx.chat.follow_bottom = false;
     let area = Rect::new(0, 0, 24, 6);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     // 顶行落在第一条 assistant 回复里 → 需要钉第一轮 prompt，body 让位一行。
     lx.chat.history_scroll = layout.messages[1].start;
-    let computed = view(area, &lx);
+    let computed = view(area, &lx, &mut cache());
     assert_eq!(computed.sticky, Some(0), "含工具步骤时仍能钉住用户消息");
     assert_eq!(computed.body.height, area.height - 1, "让位一行");
     // 滚动条按 body 几何给出，且与渲染同一可见行数。
@@ -165,7 +170,7 @@ fn narrow_and_short_viewports_never_panic_with_tools() {
     for width in [1u16, 2, 4, 8] {
         for height in [0u16, 1, 2, 3] {
             let area = Rect::new(0, 0, width, height);
-            let computed = layout(area, &lx);
+            let computed = layout(area, &lx, &mut cache());
             let rendered = render_rows(area, &lx, 0);
             if width == 0 {
                 assert_eq!(computed.total_rows, 0, "零宽不产生行");
@@ -177,7 +182,7 @@ fn narrow_and_short_viewports_never_panic_with_tools() {
                 assert_eq!(rendered, computed.total_rows, "宽 {width} 高 {height}");
             }
             // 视图 / 滚动条 / 命中都不 panic。
-            let view = view(area, &lx);
+            let view = view(area, &lx, &mut cache());
             let _ = scrollbar(area, view.total_rows, usize::from(area.height), 0);
             let _ = sticky_rect(&view);
         }
@@ -201,7 +206,7 @@ fn tool_steps_occupy_a_header_plus_one_or_two_detail_rows() {
         push_tool(&mut message, status);
         let lx = lx_with(vec![message]);
         let area = Rect::new(0, 0, 40, 10);
-        let computed = layout(area, &lx);
+        let computed = layout(area, &lx, &mut cache());
         // 标题 1 + 详情 1~2 + 收尾呼吸行 1。
         assert!(
             (3..=4).contains(&computed.total_rows),
@@ -239,7 +244,7 @@ fn consecutive_tool_steps_have_a_blank_line_between_them() {
     }
     let lx = lx_with(vec![message]);
     let area = Rect::new(0, 0, 60, 14);
-    let computed = layout(area, &lx);
+    let computed = layout(area, &lx, &mut cache());
     // 3 个工具 × 2 行 + 2 个块间空行 + 消息间呼吸行 1 = 9。
     assert_eq!(computed.total_rows, 9, "连续工具之间各留一行空行");
     assert_eq!(render_rows(area, &lx, 0), 9);
@@ -277,7 +282,7 @@ fn tool_and_text_still_have_a_blank_line_between_them() {
     message.steps.push(read_step(1, ToolStatus::Completed));
     let lx = lx_with(vec![message]);
     let area = Rect::new(0, 0, 60, 12);
-    let computed = layout(area, &lx);
+    let computed = layout(area, &lx, &mut cache());
     // 正文 1 + 空行 1 + 工具 2 + 呼吸行 1 = 5。
     assert_eq!(computed.total_rows, 5, "异构块之间保留空行");
     assert_eq!(render_rows(area, &lx, 0), 5);
@@ -303,8 +308,8 @@ fn completed_thinking_has_no_spinner_even_after_tool_steps() {
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let header = row_text(&buf, area, 0);
     assert!(
-        header.starts_with("■ Thought"),
-        "完成态显示静态方块 + Thought：{header}"
+        header.starts_with("● Thought"),
+        "完成态显示静态圆点 + Thought：{header}"
     );
     assert!(
         !header
@@ -333,7 +338,7 @@ fn completed_thinking_has_no_spinner_even_after_tool_steps() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     assert!(
-        row_text(&buf, area, 0).starts_with("■ Thought"),
+        row_text(&buf, area, 0).starts_with("● Thought"),
         "思考头不随 loading 帧变化：{}",
         row_text(&buf, area, 0)
     );
@@ -456,7 +461,7 @@ fn rendered_text(lx: &Lx, area: Rect) -> String {
 
 /// 卡片命中数（每张可折叠卡片一个）；没有动作行，因此只有一个计数。
 fn card_hits(lx: &Lx, area: Rect) -> usize {
-    layout(area, lx)
+    layout(area, lx, &mut cache())
         .cards
         .iter()
         .filter(|hit| matches!(hit.kind, CardKind::Tool { .. }))
@@ -481,7 +486,7 @@ fn consecutive_file_tools_share_one_header_but_expand_independently() {
     };
 
     let merged = build(["edit", "edit"]);
-    let merged_layout = layout(area, &merged);
+    let merged_layout = layout(area, &merged, &mut cache());
     assert_eq!(
         render_rows(area, &merged, 0),
         merged_layout.total_rows,
@@ -502,7 +507,7 @@ fn consecutive_file_tools_share_one_header_but_expand_independently() {
     );
     assert_eq!(
         render_rows(area, &writes, 0),
-        layout(area, &writes).total_rows
+        layout(area, &writes, &mut cache()).total_rows
     );
 
     // 合并卡内**恰好一个**空行：两块之间的分隔行。
@@ -529,7 +534,7 @@ fn consecutive_file_tools_share_one_header_but_expand_independently() {
     // 消失、内容行铺开，两边总行数可以相等甚至反向，行数不是这个交互的判据。
     let mut expanded = build(["edit", "edit"]);
     assert!(expanded.chat.toggle_detail("assistant-1", "call-a"));
-    let expanded_layout = layout(area, &expanded);
+    let expanded_layout = layout(area, &expanded, &mut cache());
     assert_eq!(render_rows(area, &expanded, 0), expanded_layout.total_rows);
     let folded_text = rendered_text(&merged, area);
     let expanded_text = rendered_text(&expanded, area);
@@ -546,7 +551,7 @@ fn consecutive_file_tools_share_one_header_but_expand_independently() {
 
     // 同种动词才合并：edit + write 各自成卡，行数更多。
     let split = build(["edit", "write"]);
-    let split_layout = layout(area, &split);
+    let split_layout = layout(area, &split, &mut cache());
     assert_eq!(card_hits(&split, area), 2, "不同动词不合并");
     assert!(split_layout.total_rows > merged_layout.total_rows);
     assert_eq!(render_rows(area, &split, 0), split_layout.total_rows);
@@ -567,5 +572,8 @@ fn a_part_step_breaks_the_merge() {
     let lx = lx_with(vec![message]);
     let area = Rect::new(0, 0, 60, 20);
     assert_eq!(card_hits(&lx, area), 2, "正文打断合并");
-    assert_eq!(render_rows(area, &lx, 0), layout(area, &lx).total_rows);
+    assert_eq!(
+        render_rows(area, &lx, 0),
+        layout(area, &lx, &mut cache()).total_rows
+    );
 }

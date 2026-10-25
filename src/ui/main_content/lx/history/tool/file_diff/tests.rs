@@ -133,7 +133,6 @@ fn render_group(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> (Vec<
         0,
         expanded,
         false,
-        None,
     );
     assert_eq!(row_index, total, "draw 推进行数必须等于 rows（宽 {width}）");
     let mut lines = Vec::new();
@@ -165,7 +164,6 @@ fn style_at(call: &ToolCallView, width: u16, expanded: bool, x: u16, y: u16) -> 
         0,
         &[expanded],
         false,
-        None,
     );
     grid.cell(x, y).style
 }
@@ -208,7 +206,6 @@ fn scroll_does_not_change_advanced_rows() {
         0,
         &[true],
         false,
-        None,
     );
     assert_eq!(row_index, total);
 }
@@ -366,7 +363,6 @@ fn merged_card_mark_follows_the_worst_status() {
         0,
         &[false, false],
         false,
-        None,
     );
     assert_eq!(
         grid.cell(0, 0).style,
@@ -599,7 +595,6 @@ fn expanded_body_is_grey_except_the_file_header_and_diff_lines() {
         0,
         &[true],
         false,
-        None,
     );
     let grey = style::chat_expanded_bg().bg;
     let added = style::agent_added_bg().bg;
@@ -629,63 +624,52 @@ fn expanded_body_is_grey_except_the_file_header_and_diff_lines() {
     assert!(diffs > 0, "增删行保留自己的底色");
 }
 
-/// diff 卡的 hover **命中区覆盖整块折叠内容**，但**只有**末尾「… N more lines」提亮。
+/// diff 卡的折叠内容**不随鼠标悬停提亮**：同一次绘制里路径、正文与提示行都恒色。
 ///
-/// 上一版把命中区收成提示行单行，用户实测「hover diff 块时提示没有高亮」——指针落在
-/// 文件头或预览上就整块拿不到 hover。命中区回到整块，提亮仍然只作用于提示行（路径与
-/// 正文不随鼠标变色）。
+/// 悬停面已经取消（只有 thinking 块保留 hover），所以这里断言折叠态的三处样式
+/// 都是固定档位，且「剩余行数」提示行恒为 dim。
 #[test]
-fn file_diff_hover_region_is_the_whole_folded_block_but_only_the_hint_lifts() {
+fn file_diff_folded_content_never_lifts() {
     let call = tool_call("write", detail_of(vec![(long_diff(), 5, 5)]));
     let width = 60u16;
     let folded = rows(&[&call], width, &[false]);
-    let region = super::super::fold_region(&call, width);
-    let content_rows = layout(&call, width, false, false).len();
-    assert_eq!(region.offset, 0, "命中区从内容首行起（块首是标题）");
-    assert_eq!(
-        region.rows, content_rows,
-        "命中区覆盖整块折叠内容（文件头 + 预览 + 提示行）"
-    );
+    let content_rows = layout(&call, width, false).len();
     assert_eq!(folded, 1 + content_rows, "块 = 标题 + 折叠内容");
-    // 悬停时提亮只发生在提示行，路径与正文保持不变。
-    let styles = |hovered: Option<usize>| {
-        let rect = Rect::new(
-            0,
-            0,
-            width,
-            u16::try_from(folded.max(1)).unwrap_or(u16::MAX),
-        );
-        let mut grid = Grid::new(rect);
-        let mut row_index = 0usize;
-        draw(
-            &mut grid,
-            rect,
-            0,
-            &mut row_index,
-            &[&call],
-            0,
-            &[false],
-            false,
-            hovered,
-        );
-        let hint_y = u16::try_from(folded.saturating_sub(1)).unwrap_or(u16::MAX);
-        (
-            grid.cell(6, 1).style,
-            grid.cell(6, hint_y).style,
-            grid.cell(6, 2).style,
-        )
-    };
-    let (path_normal, hint_normal, body_normal) = styles(None);
-    let (path_hovered, hint_hovered, body_hovered) = styles(Some(0));
-    assert_eq!(path_normal, path_hovered, "文件头路径不随 hover 变色");
-    assert_eq!(path_normal, style::chat_tool_param(), "路径恒为浅黄");
-    assert_eq!(body_normal, body_hovered, "diff 正文不随 hover 变色");
-    assert_ne!(hint_normal, hint_hovered, "提示行应提亮");
-    assert_eq!(hint_hovered, style::text(), "提示行升为默认前景");
-    assert!(
-        has_more_content(&call, width),
-        "有 hover 区更要有展开：内容确实更多"
+    let rect = Rect::new(
+        0,
+        0,
+        width,
+        u16::try_from(folded.max(1)).unwrap_or(u16::MAX),
     );
+    let mut grid = Grid::new(rect);
+    let mut row_index = 0usize;
+    draw(
+        &mut grid,
+        rect,
+        0,
+        &mut row_index,
+        &[&call],
+        0,
+        &[false],
+        false,
+    );
+    let hint_y = u16::try_from(folded.saturating_sub(1)).unwrap_or(u16::MAX);
+    assert_eq!(
+        grid.cell(6, 1).style,
+        style::chat_tool_param(),
+        "文件头路径恒为浅黄"
+    );
+    assert_eq!(
+        grid.cell(6, hint_y).style,
+        style::agent_step_detail(),
+        "剩余行数提示恒为 dim"
+    );
+    assert_ne!(
+        grid.cell(6, hint_y).style,
+        style::text(),
+        "提示行不得升为默认前景"
+    );
+    assert!(has_more_content(&call, width), "内容确实可以展开");
 }
 
 /// 文件头路径**恒为 dim**：折叠与展开都不提亮（它是块的标题，不是折叠内容）。
@@ -710,7 +694,6 @@ fn file_header_path_stays_dim_when_expanded() {
             0,
             &[expanded],
             false,
-            None,
         );
         // 行 0 = 标题，行 1 = 文件头；路径从连接符（5 列）之后开始。
         grid.cell(6, 1).style
@@ -759,7 +742,6 @@ fn merging_blocks_keeps_every_header_dim() {
         0,
         &expanded,
         false,
-        None,
     );
     for block in &folded_blocks {
         let y = u16::try_from(block.start).unwrap_or(u16::MAX);

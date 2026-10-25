@@ -26,6 +26,7 @@ pub(crate) fn handle_mouse_drag(
     sessions: &mut HashMap<PaneId, PtySession>,
     geometry: &Geometry,
     config: &Config,
+    cache: &mut ui::RenderCache,
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
@@ -147,9 +148,9 @@ pub(crate) fn handle_mouse_drag(
             .find(|(id, _)| *id == pane)
             .and_then(|(_, rect)| {
                 let inner = layout::pane_inner_rect(*rect);
-                state
-                    .pane_anywhere(pane)
-                    .and_then(|target| ui::main_content::lx::history_scrollbar(inner, &target.lx))
+                state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::history_scrollbar(inner, &target.lx, cache.pane(pane))
+                })
             });
         let Some(bar) = bar else {
             return;
@@ -281,6 +282,7 @@ pub(crate) fn handle_mouse_up_left(
     state: &mut AppState,
     sessions: &mut HashMap<PaneId, PtySession>,
     geometry: &Geometry,
+    cache: &mut ui::RenderCache,
     dirty: &mut bool,
 ) {
     let Geometry { rects, .. } = geometry;
@@ -423,7 +425,8 @@ pub(crate) fn handle_mouse_up_left(
             .find(|(id, _)| *id == pane)
             .map(|(_, rect)| layout::pane_inner_rect(*rect));
         if let Some((area, target)) = area.zip(state.pane_anywhere(pane)) {
-            let text = ui::main_content::lx::copy_text(area, &target.lx, range);
+            // 复用该窗格的常驻缓存：这一帧刚画过历史，快照与绘制数据全命中。
+            let text = ui::main_content::lx::copy_text(area, &target.lx, range, cache.pane(pane));
             if !text.trim().is_empty() {
                 let now = Instant::now();
                 if crate::platform::write_clipboard(&text) {

@@ -72,7 +72,7 @@ fn model_panel_marks_current_model_with_marker() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = model_panel_lx(Some(1));
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let lines = buffer_lines(&buf, area);
     let marked: Vec<&String> = lines
         .iter()
@@ -87,7 +87,7 @@ fn model_panel_without_current_model_has_no_marker() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = model_panel_lx(None);
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let lines = buffer_lines(&buf, area);
     assert!(
         lines
@@ -103,7 +103,7 @@ fn model_panel_marker_cell_carries_selection_background() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = model_panel_lx(Some(1));
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let mut found = false;
     for y in 0..area.height {
         for x in 0..area.width {
@@ -126,7 +126,7 @@ fn model_panel_names_stay_aligned_with_marker_column() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = model_panel_lx(Some(1));
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let line_at = |y: u16| -> String { (0..area.width).map(|x| buf[(x, y)].symbol()).collect() };
     let row_of = |needle: &str| -> u16 {
         (0..area.height)
@@ -163,7 +163,7 @@ fn history_panel_shows_relative_time_instead_of_session_id() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = history_panel_lx();
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let lines = buffer_lines(&buf, area);
     let all = lines.join("\n");
     assert!(all.contains("5m ago"), "显示相对时间: {all}");
@@ -179,7 +179,7 @@ fn history_panel_marks_only_bound_session() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = history_panel_lx();
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let lines = buffer_lines(&buf, area);
     let marked: Vec<&String> = lines
         .iter()
@@ -214,7 +214,7 @@ fn slash_panel_scrollbar_has_no_track_border() {
         filtered: (0..30).collect(),
     })));
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let layout = slash_layout(area, &lx).expect("panel");
     let bar = layout.scrollbar.expect("overflow");
     let lines = buffer_lines(&buf, area);
@@ -240,7 +240,7 @@ fn history_panel_footer_documents_shift_enter_edit() {
     let area = Rect::new(0, 0, 100, 24);
     let lx = history_panel_lx();
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let all = buffer_lines(&buf, area).join("\n");
     assert!(
         all.contains(crate::ui::text::LX_HISTORY_PANEL_FOOTER),
@@ -268,7 +268,7 @@ fn model_panel_footer_stays_without_edit_hint() {
     let area = Rect::new(0, 0, 100, 24);
     let lx = model_panel_lx(Some(0));
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let all = buffer_lines(&buf, area).join("\n");
     assert!(
         all.contains(crate::ui::text::LX_SLASH_PANEL_FOOTER),

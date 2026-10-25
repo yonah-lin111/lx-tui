@@ -57,11 +57,16 @@ pub const WRITE_ADD: &str = "+18";
 // 标记不允许在渲染层再写一份字符串。行首状态标记自 G11 起改由 `history::StepMark`
 // 的方块承担，不再使用按工具区分的类型图标。
 
-/// 聊天历史每个 assistant 步骤左侧的方块标记（思考 / 工具调用 / 正文块共用）：
-/// 运行中 `■`/`□` 两帧呼吸，终态停为静态方块；呼吸相位每 [`STEP_BREATH_TICKS`]
-/// 个 loading 帧翻转一次（loading 帧 100ms → 约 400ms 一相，是“呼吸”而非闪烁）。
+/// 聊天历史每个 assistant 步骤左侧的状态标记：
+/// **工具调用用方块**（`■`/`□`），**正文与思考用圆点**（`●`/`○`）——
+/// 方块代表「一次真实动作」，圆点代表「一段文字数据」。
+///
+/// 运行中两帧呼吸，终态静止；呼吸相位每 [`STEP_BREATH_TICKS`] 个 loading 帧翻转一次
+/// （loading 帧 100ms → 约 400ms 一相，是“呼吸”而非闪烁）。
 pub const STEP_MARK_FILLED: char = '■';
 pub const STEP_MARK_HOLLOW: char = '□';
+pub const STEP_MARK_DOT_FILLED: char = '●';
+pub const STEP_MARK_DOT_HOLLOW: char = '○';
 pub const STEP_BREATH_TICKS: usize = 4;
 
 /// 真实工具步骤行的固定动词（设计 §10：`Read` / `Search` / `Edit` / `Write`）。

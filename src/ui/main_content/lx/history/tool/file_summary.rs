@@ -19,12 +19,12 @@ use super::{
 };
 
 /// 详情行**折叠态**最多显示的物理行数（用户要求「默认显示 2 行，超过 2 行折叠」）。
-pub(super) const DETAIL_PREVIEW_ROWS: usize = 2;
+pub(crate) const DETAIL_PREVIEW_ROWS: usize = 2;
 /// 详情行**展开态**的物理行上限。
 ///
 /// 展开不是「无限展开」：`edit` 的参数里可能塞进 1 MiB 的补丁，逐行铺开会把整屏
 /// 历史挤没。上限之内完整显示，超过上限仍以 `…` 收尾——与折叠态同一种收敛方式。
-pub(super) const DETAIL_MAX_ROWS: usize = 24;
+pub(crate) const DETAIL_MAX_ROWS: usize = 24;
 
 /// 详情行前缀（缩进 + 连接符 + 空格）：与消息底部通知的 `reason_prefix()` 同款，
 /// 列宽固定，续行对齐口径一致。
@@ -397,15 +397,30 @@ fn error_segment(call: &ToolCallView) -> Option<Segment> {
 ///   且不再有剩余行数行；`└─` 行是工具参数本身，不铺展开灰底。
 ///
 /// `rows` 与 `draw` 共用本函数，行数口径只有一份。
-pub(super) fn detail(
-    call: &ToolCallView,
-    width: u16,
-    expanded: bool,
-    hovered: bool,
-) -> Vec<Vec<Segment>> {
+pub(super) fn detail(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Vec<Segment>> {
+    detail_layout(call, width, expanded).rows
+}
+
+/// 详情排版结果：物理行 + 两个行数口径。
+///
+/// 行数必须和刚才那次排版**同源**：`shown` 是这次真正画出的内容行，`total` 是展开后
+/// 会画出的内容行。两者都不含末尾的「剩余行数」提示行。
+struct DetailLayout {
+    rows: Vec<Vec<Segment>>,
+    /// 本态实际画出的内容行数（不含「剩余行数」提示行）。
+    shown: usize,
+    /// 展开后会画出的内容行数（折叠态按展开额度算）——「还能不能展开」只认它。
+    total: usize,
+}
+
+fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> DetailLayout {
     let limit = usize::from(width);
     if limit == 0 {
-        return Vec::new();
+        return DetailLayout {
+            rows: Vec::new(),
+            shown: 0,
+            total: 0,
+        };
     }
     let prefix = detail_prefix();
     let prefix_cols = prefix.width();
@@ -437,7 +452,11 @@ pub(super) fn detail(
     );
     if fold_body.is_empty() {
         // 没有可展示内容：仍占一行（连接符留着，行数恒 ≥ 1）。
-        return vec![vec![Segment::new(head, style::chat_notice_connector())]];
+        return DetailLayout {
+            rows: vec![vec![Segment::new(head, style::chat_notice_connector())]],
+            shown: 0,
+            total: 0,
+        };
     }
     let full_body = if expanded {
         detail_body(
@@ -485,41 +504,30 @@ pub(super) fn detail(
         let indent = " ".repeat(head_cols);
         let room = limit.saturating_sub(head_cols);
         if hint.width() <= room {
-            // 悬停时与折叠内容一起提亮：提示行就是这块可点性的唯一文案。
-            let hint_style = if hovered {
-                style::text()
-            } else {
-                style::agent_step_detail()
-            };
-            rows.push(vec![Segment::new(format!("{indent}{hint}"), hint_style)]);
+            // 提示行恒为 dim：折叠内容不再随鼠标悬停提亮。
+            rows.push(vec![Segment::new(
+                format!("{indent}{hint}"),
+                style::agent_step_detail(),
+            )]);
         }
     }
-    rows
+    DetailLayout { rows, shown, total }
 }
 
 /// 详情行的物理行数（`layout` 用；与 [`detail`] 同一份换行口径，含「剩余行数」提示行）。
 pub(super) fn detail_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
-    detail(call, width, expanded, false).len()
-}
-
-/// 折叠态可提亮的详情行数：**含末尾的「剩余行数」提示行**。
-///
-/// 提示行也是折叠内容的一部分（用户要求「hover 折叠块时 `… 1 more line` 要显示
-/// 高亮」）：它就在折叠区最后一行，把命中区截断在提示行之前会让指针落在最该提亮的
-/// 那行时反而没有任何反应。
-pub(super) fn foldable_rows(call: &ToolCallView, width: u16) -> usize {
-    detail(call, width, false, false).len()
+    detail_layout(call, width, expanded).rows.len()
 }
 
 /// 详情**内容**行数（不含「剩余行数」提示行）；供「能否展开」判定用。
+///
+/// 折叠态取本态真正画出的内容行，展开态取展开后的内容行。**不能**用
+/// 「展开行数 − 折叠行数」反推提示行是否存在：总内容恰好等于「折叠额度 + 1」时，
+/// 提示行顶掉的正是那一行正文，差值为 0，判据会把「能展开」误判成「不能」——
+/// 卡片显示 `… 1 more line` 却没有点击面（真实 bug）。
 pub(super) fn detail_content_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
-    detail_rows(call, width, expanded)
-        .saturating_sub(usize::from(!expanded && omitted_rows(call, width) > 0))
-}
-
-/// 折叠态是否还有内容没画出来。
-fn omitted_rows(call: &ToolCallView, width: u16) -> usize {
-    detail_rows(call, width, true).saturating_sub(detail_rows(call, width, false))
+    let layout = detail_layout(call, width, expanded);
+    if expanded { layout.total } else { layout.shown }
 }
 
 /// 第二行正文（不含 `└─ ` 前缀）：按 [`Detail`] 分支，并在 `limit` 列内收敛。

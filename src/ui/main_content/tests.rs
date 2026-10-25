@@ -127,7 +127,14 @@ fn lx_view_renders_page_with_input_cursor() {
     let pane = pane_with(PaneView::Lx, Terminal::new(100, 20));
     let area = Rect::new(0, 0, 100, 20);
     let mut buf = Buffer::empty(area);
-    let cursor = render(area, &mut buf, &pane, true, None);
+    let cursor = render(
+        area,
+        &mut buf,
+        &pane,
+        true,
+        None,
+        &mut crate::ui::main_content::lx::PaneCache::default(),
+    );
     assert!(cursor.is_some(), "聚焦时输入框产生硬件光标");
     let text = buffer_text(&buf);
     assert!(text.contains("Native Agent"), "入口标签可见");
@@ -141,7 +148,14 @@ fn terminal_view_dispatches_to_grid() {
     terminal.feed(b"ab");
     let pane = pane_with(PaneView::Terminal, terminal);
     let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
-    let cursor = render(Rect::new(0, 0, 10, 2), &mut buf, &pane, true, None);
+    let cursor = render(
+        Rect::new(0, 0, 10, 2),
+        &mut buf,
+        &pane,
+        true,
+        None,
+        &mut crate::ui::main_content::lx::PaneCache::default(),
+    );
     assert_eq!(cursor, Some((0, 2)));
     assert_eq!(buf[(0, 0)].symbol(), "a");
     assert_eq!(buf[(1, 0)].symbol(), "b");

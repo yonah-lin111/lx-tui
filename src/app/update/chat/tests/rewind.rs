@@ -431,6 +431,7 @@ fn resolver_scrolls_center_request_and_consumes_it() {
     let changed = crate::app::update::resolve_lx_rewind_center(
         &mut state,
         &[(pane, ratatui::layout::Rect::new(0, 0, 80, 24))],
+        &mut crate::ui::RenderCache::default(),
     );
     assert!(changed, "居中请求应改变视口");
     let target = state.pane_anywhere(pane).expect("pane");

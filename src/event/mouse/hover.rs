@@ -42,6 +42,7 @@ pub(crate) fn handle_mouse_moved(
     sessions: &mut HashMap<PaneId, PtySession>,
     geometry: &Geometry,
     config: &Config,
+    cache: &mut ui::RenderCache,
     dirty: &mut bool,
 ) {
     let Geometry {
@@ -215,7 +216,13 @@ pub(crate) fn handle_mouse_moved(
     let card_hover = pointer.and_then(|(pane, inner)| {
         let target = state.pane_anywhere(pane)?;
         let inner = pane_content_inner(state, view, pane, inner);
-        ui::main_content::lx::fold_target_at(inner, &target.lx, mouse.column, mouse.row)
+        ui::main_content::lx::fold_target_at(
+            inner,
+            &target.lx,
+            mouse.column,
+            mouse.row,
+            cache.pane(pane),
+        )
     });
     let pointer_pane = pointer.map(|(pane, _)| pane);
     for (id, _) in rects {
