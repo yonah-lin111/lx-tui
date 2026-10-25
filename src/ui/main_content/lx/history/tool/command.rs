@@ -29,7 +29,7 @@ use crate::app::state::{
 use crate::ui::{style, text};
 
 use super::super::{Grid, StepMark, visible_row, wrap};
-use super::file_summary::DETAIL_MAX_ROWS;
+use super::file_summary::{DETAIL_MAX_ROWS, DETAIL_PREVIEW_ROWS};
 use super::{
     Folds, TREE_COLS, header_with_verb, mark_of, output_style, param_lines, put_segments,
     single_line, title_rows, truncate_with_ellipsis,
@@ -95,7 +95,10 @@ pub(super) fn params_expandable(call: &ToolCallView, width: u16) -> bool {
         Some(ToolDetailView::Interaction(view)) => &view.command,
         _ => return false,
     };
-    command_body(command, width, true).len() > command_body(command, width, false).len()
+    // 只比**内容行**：折叠态的 `… N more lines` 提示行是折叠的一部分，不是内容。
+    // 用总行数比会漏判——展开只比预览多一行时，两边总行数相等（提示行换成了正文），
+    // 卡片却写着「还有 N 行」，点了没反应。
+    command_body(command, width, true).len() > DETAIL_PREVIEW_ROWS
 }
 
 /// 输出区展开后是否**真的多出内容**。
@@ -109,7 +112,10 @@ pub(super) fn output_expandable(call: &ToolCallView, width: u16) -> bool {
     if view.state.is_running() {
         return false;
     }
-    finished_output(view, width, true).len() > finished_output(view, width, false).len()
+    // 同上：折叠预览末尾的「… N more lines」不算内容。输出恰好比预览多 1 行时，
+    // 折叠态是「首 3 + 尾 2 + 提示行」= 6 行，展开态也是 6 行，按总行数比会判成不可展开。
+    let rows = output_lines(&view.output_tail, output_width(width)).len();
+    rows.min(DETAIL_MAX_ROWS) > rows.min(OUTPUT_PREVIEW_HEAD + OUTPUT_PREVIEW_TAIL)
 }
 
 /// 整张卡片的树体（未加连接符）：命令参数、输出（或运行中的引导行）。

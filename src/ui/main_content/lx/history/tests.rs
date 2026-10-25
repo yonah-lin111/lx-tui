@@ -1339,3 +1339,117 @@ fn compact_fold_toggle_changes_row_count_consistently() {
     let mut grid = Grid::new(area);
     assert_eq!(render(&mut grid, area, &lx, 0, &mut cache()), expanded);
 }
+
+/// 构造一个已结束的命令卡片。
+fn finished_command(command: &str, output: &str) -> crate::app::state::ToolCallView {
+    use crate::app::state::{
+        CommandView, ProcessStateView, ToolCallView, ToolDetailView, ToolStatus,
+    };
+    ToolCallView {
+        call_id: "call-1".into(),
+        name: "exec_command".into(),
+        position: 0,
+        arguments_json: String::new(),
+        status: ToolStatus::Completed,
+        summary: None,
+        error: None,
+        result_json: None,
+        detail: Some(Box::new(ToolDetailView::Command(CommandView {
+            process_session_id: Some(1),
+            command: command.into(),
+            cwd: "/workspace/lx".into(),
+            tty: false,
+            state: ProcessStateView::Exited { code: Some(0) },
+            output_preview: Vec::new(),
+            truncated: false,
+            dropped_bytes: 0,
+            output_tail: output.into(),
+            started_at_ms: Some(0),
+            ended_at_ms: Some(100),
+        }))),
+    }
+}
+
+/// 带一个命令卡片的历史（消息下标 0 是 assistant，卡片是它的第二步）。
+fn lx_with_command(call: crate::app::state::ToolCallView) -> Lx {
+    let mut lx = lx_with(vec![message(
+        "assistant",
+        "complete",
+        vec![text_part("跑一下")],
+    )]);
+    lx.chat.messages[0]
+        .steps
+        .push(AssistantStepView::Tool { position: 1, call });
+    lx
+}
+
+/// 点击落在某块首行时必须命中该块；用来验证「折叠提示行不能吞掉点击」。
+fn target_at_block_start(
+    area: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+    section: crate::app::state::CardSection,
+) -> Option<crate::app::state::CardTarget> {
+    use crate::ui::main_content::lx::history::CardKind;
+    let width = super::content_rect(area).width;
+    let snapshot = cache.snapshot(width, lx);
+    let region = snapshot.cards.iter().find(
+        |card| matches!(&card.kind, CardKind::Tool { section: hit, .. } if *hit == section),
+    )?;
+    let view = crate::ui::main_content::lx::history_view(area, lx, cache)?;
+    let row = view.body.y.saturating_add(super::rows_to_u16(
+        region.card_start.saturating_sub(view.scroll),
+    ));
+    crate::ui::main_content::lx::card_target_at(area, lx, view.body.x + 2, row, cache)
+}
+
+/// 回归：折叠态末尾那行 `… N more lines` 是提示，不是内容。
+///
+/// 展开只比折叠预览多一行时，折叠总行数（2 行预览 + 1 行提示）与展开总行数相等；
+/// 旧判据用「展开总行数 > 折叠总行数」，于是卡片明明写着「… 1 more line」，
+/// 点它却没有反应。
+#[test]
+fn folded_hint_row_does_not_swallow_the_click() {
+    use crate::app::state::{CardSection, CardTarget};
+    // 展开后恰好 3 行（折叠 2 行 + 提示行 = 3 行）。
+    let command = "$ echo \"=== 当前用户/系统 ===\"; whoami; uname -a; echo \"=== 桌面路径 ===\"; ls -d ~/Desktop 2>/dev/null && echo \"桌面存在\" || echo \"无 ~/Desktop\"; echo \"=== 工作目录 ===\"; pwd";
+    let output = (0..12)
+        .map(|line| format!("output line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let lx = lx_with_command(finished_command(command, &output));
+    let area = Rect::new(0, 0, 80, 40);
+    let mut cache = PaneCache::default();
+    assert_eq!(
+        target_at_block_start(area, &lx, &mut cache, CardSection::Body),
+        Some(CardTarget::Tool {
+            message_id: "assistant-1".into(),
+            call_id: "call-1".into(),
+            section: CardSection::Body,
+        }),
+        "参数区的提示行必须可点"
+    );
+}
+
+/// 回归：输出只比折叠预览多一行时，点击输出区也必须能展开。
+#[test]
+fn short_output_above_preview_still_expands() {
+    use crate::app::state::{CardSection, CardTarget};
+    // 折叠预览 = 首 3 + 尾 2 + 提示行 = 6 行；展开 = 6 行——旧判据同样判成不可展开。
+    let output = (0..6)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let lx = lx_with_command(finished_command("$ ls", &output));
+    let area = Rect::new(0, 0, 80, 40);
+    let mut cache = PaneCache::default();
+    assert_eq!(
+        target_at_block_start(area, &lx, &mut cache, CardSection::Output),
+        Some(CardTarget::Tool {
+            message_id: "assistant-1".into(),
+            call_id: "call-1".into(),
+            section: CardSection::Output,
+        }),
+        "输出区必须可点"
+    );
+}

@@ -24,7 +24,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::app::state::{CardSection, UserShellView};
 use crate::ui::{style, text};
 
-use super::tool::{Folds, TREE_COLS, output_style, param_lines};
+use super::tool::{DETAIL_PREVIEW_ROWS, Folds, TREE_COLS, output_style, param_lines};
 use super::{Grid, truncate_with_ellipsis, visible_row, wrap};
 
 /// 折叠态输出预览最多占用的物理行（含末尾的省略提示行）。
@@ -278,8 +278,9 @@ pub fn params_expandable(shell: &UserShellView, width: u16) -> bool {
         width.max(1)
     };
     let command = format!("$ {}", shell.command);
-    param_lines(&command, content_width, true).len()
-        > param_lines(&command, content_width, false).len()
+    // 折叠态末尾的「… N more lines」是折叠的一部分，不是内容：只比内容行，
+    // 否则展开只比预览多一行时两边行数相等，被误判成不可展开（点了没反应）。
+    param_lines(&command, content_width, true).len() > DETAIL_PREVIEW_ROWS
 }
 
 /// 输出区展开后是否**真的多出内容**。

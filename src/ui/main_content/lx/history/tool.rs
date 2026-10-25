@@ -39,7 +39,7 @@ use crate::ui::{style, text};
 use super::super::Grid;
 use super::{StepKind, StepMark, truncate_with_ellipsis, visible_row};
 
-use file_summary::{DETAIL_MAX_ROWS, DETAIL_PREVIEW_ROWS};
+pub(super) use file_summary::{DETAIL_MAX_ROWS, DETAIL_PREVIEW_ROWS};
 
 mod command;
 mod file_diff;

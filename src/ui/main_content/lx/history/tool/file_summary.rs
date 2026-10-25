@@ -19,12 +19,12 @@ use super::{
 };
 
 /// 详情行**折叠态**最多显示的物理行数（用户要求「默认显示 2 行，超过 2 行折叠」）。
-pub(super) const DETAIL_PREVIEW_ROWS: usize = 2;
+pub(crate) const DETAIL_PREVIEW_ROWS: usize = 2;
 /// 详情行**展开态**的物理行上限。
 ///
 /// 展开不是「无限展开」：`edit` 的参数里可能塞进 1 MiB 的补丁，逐行铺开会把整屏
 /// 历史挤没。上限之内完整显示，超过上限仍以 `…` 收尾——与折叠态同一种收敛方式。
-pub(super) const DETAIL_MAX_ROWS: usize = 24;
+pub(crate) const DETAIL_MAX_ROWS: usize = 24;
 
 /// 详情行前缀（缩进 + 连接符 + 空格）：与消息底部通知的 `reason_prefix()` 同款，
 /// 列宽固定，续行对齐口径一致。
