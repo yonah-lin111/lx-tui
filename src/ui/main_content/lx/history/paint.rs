@@ -40,18 +40,8 @@ pub(crate) enum BlockSource {
     Rewind { last: usize, count: usize },
     /// 时间线里的 compact 检查点。
     Compact { index: usize, expanded: bool },
-}
-
-impl BlockSource {
-    pub(crate) fn message_index(self) -> Option<usize> {
-        match self {
-            Self::Step { message_index, .. }
-            | Self::Group { message_index, .. }
-            | Self::Shell { message_index }
-            | Self::Notice { message_index } => Some(message_index),
-            Self::Rewind { .. } | Self::Compact { .. } => None,
-        }
-    }
+    /// 与 `Lx` 无关的静态块（统计行）：样式已随绘制数据存好，绘制不需要回查状态。
+    Plain,
 }
 
 /// 一个块的绘制数据。
@@ -200,10 +190,7 @@ fn calls_of(lx: &Lx, source: BlockSource) -> Vec<&ToolCallView> {
 }
 
 /// 工具的两块折叠状态（绘制时按当前状态重算，不进缓存键）。
-fn folds_at(lx: &Lx, source: BlockSource, call: &ToolCallView) -> Folds {
-    let Some(message_index) = source.message_index() else {
-        return Folds::default();
-    };
+fn folds_at(lx: &Lx, message_index: usize, call: &ToolCallView) -> Folds {
     let Some(message) = lx.chat.messages.get(message_index) else {
         return Folds::default();
     };
@@ -429,14 +416,14 @@ fn draw_legacy(
 ) {
     let mut row = start;
     match source {
-        BlockSource::Group { .. } => {
+        BlockSource::Group { message_index, .. } => {
             let calls = calls_of(lx, source);
             if calls.is_empty() {
                 return;
             }
             let expanded: Vec<bool> = calls
                 .iter()
-                .map(|call| folds_at(lx, source, call).body)
+                .map(|call| folds_at(lx, message_index, call).body)
                 .collect();
             tool::group_draw_animated(
                 grid,
@@ -449,7 +436,7 @@ fn draw_legacy(
                 lx.chat.status.streaming,
             );
         }
-        BlockSource::Step { .. } => {
+        BlockSource::Step { message_index, .. } => {
             let calls = calls_of(lx, source);
             let Some(call) = calls.first() else {
                 return;
@@ -461,7 +448,7 @@ fn draw_legacy(
                 &mut row,
                 call,
                 lx.chat.loading_frame,
-                folds_at(lx, source, call),
+                folds_at(lx, message_index, call),
                 lx.chat.status.streaming,
             );
         }
@@ -504,5 +491,7 @@ fn draw_legacy(
             };
             super::compact::draw(grid, notice, 1, expanded, rect, scroll, &mut row);
         }
+        // 静态块的绘制数据自带样式，没有需要回查的动态状态。
+        BlockSource::Plain => {}
     }
 }

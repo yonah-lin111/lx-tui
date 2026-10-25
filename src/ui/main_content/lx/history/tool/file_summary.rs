@@ -398,9 +398,29 @@ fn error_segment(call: &ToolCallView) -> Option<Segment> {
 ///
 /// `rows` 与 `draw` 共用本函数，行数口径只有一份。
 pub(super) fn detail(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Vec<Segment>> {
+    detail_layout(call, width, expanded).rows
+}
+
+/// 详情排版结果：物理行 + 两个行数口径。
+///
+/// 行数必须和刚才那次排版**同源**：`shown` 是这次真正画出的内容行，`total` 是展开后
+/// 会画出的内容行。两者都不含末尾的「剩余行数」提示行。
+struct DetailLayout {
+    rows: Vec<Vec<Segment>>,
+    /// 本态实际画出的内容行数（不含「剩余行数」提示行）。
+    shown: usize,
+    /// 展开后会画出的内容行数（折叠态按展开额度算）——「还能不能展开」只认它。
+    total: usize,
+}
+
+fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> DetailLayout {
     let limit = usize::from(width);
     if limit == 0 {
-        return Vec::new();
+        return DetailLayout {
+            rows: Vec::new(),
+            shown: 0,
+            total: 0,
+        };
     }
     let prefix = detail_prefix();
     let prefix_cols = prefix.width();
@@ -432,7 +452,11 @@ pub(super) fn detail(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Vec
     );
     if fold_body.is_empty() {
         // 没有可展示内容：仍占一行（连接符留着，行数恒 ≥ 1）。
-        return vec![vec![Segment::new(head, style::chat_notice_connector())]];
+        return DetailLayout {
+            rows: vec![vec![Segment::new(head, style::chat_notice_connector())]],
+            shown: 0,
+            total: 0,
+        };
     }
     let full_body = if expanded {
         detail_body(
@@ -487,28 +511,23 @@ pub(super) fn detail(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Vec
             )]);
         }
     }
-    rows
+    DetailLayout { rows, shown, total }
 }
 
 /// 详情行的物理行数（`layout` 用；与 [`detail`] 同一份换行口径，含「剩余行数」提示行）。
 pub(super) fn detail_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
-    detail(call, width, expanded).len()
-}
-
-/// 折叠态的详情行数（**含**末尾的「剩余行数」提示行）；供折叠区几何用。
-pub(super) fn foldable_rows(call: &ToolCallView, width: u16) -> usize {
-    detail(call, width, false).len()
+    detail_layout(call, width, expanded).rows.len()
 }
 
 /// 详情**内容**行数（不含「剩余行数」提示行）；供「能否展开」判定用。
+///
+/// 折叠态取本态真正画出的内容行，展开态取展开后的内容行。**不能**用
+/// 「展开行数 − 折叠行数」反推提示行是否存在：总内容恰好等于「折叠额度 + 1」时，
+/// 提示行顶掉的正是那一行正文，差值为 0，判据会把「能展开」误判成「不能」——
+/// 卡片显示 `… 1 more line` 却没有点击面（真实 bug）。
 pub(super) fn detail_content_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
-    detail_rows(call, width, expanded)
-        .saturating_sub(usize::from(!expanded && omitted_rows(call, width) > 0))
-}
-
-/// 折叠态是否还有内容没画出来。
-fn omitted_rows(call: &ToolCallView, width: u16) -> usize {
-    detail_rows(call, width, true).saturating_sub(detail_rows(call, width, false))
+    let layout = detail_layout(call, width, expanded);
+    if expanded { layout.total } else { layout.shown }
 }
 
 /// 第二行正文（不含 `└─ ` 前缀）：按 [`Detail`] 分支，并在 `limit` 列内收敛。

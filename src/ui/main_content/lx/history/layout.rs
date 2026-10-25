@@ -50,7 +50,6 @@ pub(super) fn to_layout(area: Rect, width: u16, snapshot: &HistorySnapshot) -> H
             .map(|region| CardHit {
                 kind: region.kind.clone(),
                 card: rect_at(region.card_start, region.card_rows),
-                fold: rect_at(region.fold_start, region.fold_rows),
                 clickable: region.clickable,
             })
             .collect(),

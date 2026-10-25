@@ -13,8 +13,8 @@ use ratatui::layout::Rect;
 
 use super::*;
 use crate::app::state::{
-    CardSection, DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView,
-    ToolCallView, ToolDetailView, ToolStatus, ToolSummary,
+    CardSection, CommandView, DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView,
+    FileDiffView, ProcessStateView, ToolCallView, ToolDetailView, ToolStatus, ToolSummary,
 };
 use crate::chat::tools::{DiffLineKind, FileChangeKind};
 
@@ -24,6 +24,8 @@ const BODY_LINES: usize = 70;
 const FRAME_BUDGET: Duration = Duration::from_millis(16);
 /// 采样的帧数。
 const FRAMES: usize = 120;
+/// 每条 assistant 消息里的工具调用数（`read` + `exec_command` 各一次）。
+const TOOLS_PER_MESSAGE: usize = 2;
 
 /// 一段带中英文与标点的正文（逼真的折行与 markdown 解析成本）。
 fn body(tag: usize) -> String {
@@ -35,7 +37,67 @@ fn body(tag: usize) -> String {
         .join("\n")
 }
 
-/// 构造压力会话：用户/助手交替，助手额外带一段 thinking。
+/// 完成态的 `read` 卡片：两行摘要，走 `BlockPaint::Legacy`（每次绘制重新排版）。
+fn read_step(position: i64) -> AssistantStepView {
+    AssistantStepView::Tool {
+        position,
+        call: ToolCallView {
+            call_id: format!("call-read-{position}"),
+            name: "read".into(),
+            position,
+            arguments_json: String::new(),
+            status: ToolStatus::Completed,
+            summary: Some(Box::new(ToolSummary {
+                path: Some("src/ui/main_content/lx/history/paint.rs".into()),
+                range: Some((12, 40)),
+                read_lines: Some(29),
+                ..ToolSummary::default()
+            })),
+            error: None,
+            result_json: None,
+            detail: None,
+        },
+    }
+}
+
+/// 完成态的 `exec_command` 卡片：参数区 + 折叠输出预览（同样走 Legacy）。
+fn command_step(position: i64) -> AssistantStepView {
+    let output_tail: String = (0..12)
+        .map(|line| format!("test result line {line}: ok"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    AssistantStepView::Tool {
+        position,
+        call: ToolCallView {
+            call_id: format!("call-command-{position}"),
+            name: "exec_command".into(),
+            position,
+            arguments_json: String::new(),
+            status: ToolStatus::Completed,
+            summary: Some(Box::new(ToolSummary::default())),
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::Command(CommandView {
+                process_session_id: None,
+                command: "cargo test --lib history".into(),
+                cwd: "/repo".into(),
+                tty: false,
+                state: ProcessStateView::Exited { code: Some(0) },
+                output_preview: Vec::new(),
+                truncated: false,
+                dropped_bytes: 0,
+                output_tail,
+                started_at_ms: None,
+                ended_at_ms: None,
+            }))),
+        },
+    }
+}
+
+/// 构造压力会话：用户/助手交替；助手带一段 thinking 与两个工具调用。
+///
+/// 工具卡片是**唯一没进二级内容缓存**的块（`BlockPaint::Legacy`），
+/// 只压满正文与思考量出来的 P95 不能代表真实会话，所以这里必须带上它们。
 fn history(messages: usize) -> Lx {
     let mut out = Vec::with_capacity(messages);
     for index in 0..messages {
@@ -44,7 +106,18 @@ fn history(messages: usize) -> Lx {
         if role == "assistant" {
             parts.push(reasoning_part("先看看现有实现的排版口径"));
         }
-        out.push(message(role, "complete", parts));
+        let mut card = message(role, "complete", parts);
+        if role == "assistant" {
+            for offset in 0..TOOLS_PER_MESSAGE {
+                let position = card.next_position();
+                card.steps.push(if offset == 0 {
+                    read_step(position)
+                } else {
+                    command_step(position)
+                });
+            }
+        }
+        out.push(card);
     }
     lx_with(out)
 }

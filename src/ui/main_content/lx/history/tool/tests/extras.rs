@@ -607,9 +607,9 @@ fn folded_detail_keeps_the_light_yellow() {
     // 底色只属于文件差异卡片与进程命令这类「展开后铺开一坨内容」的卡片。
 }
 
-/// 折叠区的「剩余行数」提示行计入折叠区行数，且样式恒为 dim（不随鼠标提亮）。
+/// 折叠态的「剩余行数」提示行样式恒为 dim（不随鼠标提亮）。
 #[test]
-fn remaining_hint_row_is_inside_the_fold_region_and_stays_dim() {
+fn remaining_hint_row_stays_dim() {
     let long = "src/deeply/nested/module/path/that/keeps/going/mod.rs".repeat(3);
     let call = tool_call(
         "read",
@@ -622,11 +622,6 @@ fn remaining_hint_row_is_inside_the_fold_region_and_stays_dim() {
         None,
     );
     let folded = file_summary::detail(&call, 24, false);
-    assert_eq!(
-        file_summary::foldable_rows(&call, 24),
-        folded.len(),
-        "提示行计入折叠区行数"
-    );
     let hint_style = folded
         .last()
         .and_then(|row| row.last())

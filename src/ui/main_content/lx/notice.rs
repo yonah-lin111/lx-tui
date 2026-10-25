@@ -1,12 +1,11 @@
-//! 消息底部通知：`■ <标题>` + `  └─ <原因>`（对齐 ui 页 `agent` 分组的 error 步骤）。
+//! 消息底部通知：`● <标题>` + `  └─ <原因>`（对齐 ui 页 `agent` 分组的 error 步骤）。
 //!
 //! 标题是**固定枚举**（[`NoticeTitle`]）：文案与配色都由枚举决定，调用点只给一句原因，
 //! 不允许随手拼自由标题。标题整行着色只有两档——失败红 + 粗、中断黄 + 粗（没有灰色档）；
 //! 原因行连接符用供应商灰 + 粗、正文正常色。
 //!
 //! **行首标记与聊天步骤共用同一套字形**（[`StepMark`]）：失败为红色实心圆点 `●`、中断为
-//! 黄色实心圆点 `●`，与思考头 / 正文块同为文字类标记（字宽 1 列、缩进一致）
-//! 字形 + 1 列空格）。
+//! 黄色实心圆点 `●`，与思考头 / 正文块同为文字类标记（1 列字形 + 1 列空格，缩进一致）。
 //!
 //! **不含统计**——本轮统计行由 `history::stats_line` 负责，显示在通知下方（空一行）。
 
@@ -34,7 +33,7 @@ pub(crate) enum NoticeTitle {
 }
 
 impl NoticeTitle {
-    /// 标题文案（渲染为 `■ <label>`）。
+    /// 标题文案（渲染为 `● <label>`）。
     fn label(self) -> &'static str {
         match self {
             Self::Failed => text::LX_CHAT_NOTICE_FAILED,
@@ -45,9 +44,8 @@ impl NoticeTitle {
     /// 行首圆点（与文字类步骤共用标记：失败红实心、中断黄实心）。
     ///
     /// 通知只在**终态**渲染（流中不出通知），因此没有"运行中"的呼吸态，
-    /// 直接取 [`StepMark`] 的两个终态。这两个状态是**跨角色**的语义覆盖色，
-    /// 与 [`StepKind`] 无关，所以这里传 [`StepKind::Tool`] 只是为了满足签名
-    /// （`Failed` / `Interrupted` 会直接命中红/黄，不会落到角色色上）。
+    /// 直接取 [`StepMark`] 的两个终态。通知是文字数据，与正文/思考同档，字形取圆点；
+    /// `Failed` / `Interrupted` 的跨角色覆盖色优先于角色色。
     fn mark(self) -> StepMark {
         match self {
             Self::Failed => StepMark::Failed,
@@ -57,7 +55,7 @@ impl NoticeTitle {
 
     /// 通知标记样式：状态色（红/黄）优先，与角色无关。
     fn mark_style(self) -> Style {
-        self.mark().style(StepKind::Tool, false, false)
+        self.mark().style(StepKind::Body, false, false)
     }
 
     /// 标题文案样式（不含行首标记：标记自带状态色）。
@@ -111,16 +109,16 @@ pub(super) fn rows(notice: &Notice, width: u16) -> usize {
     title_rows + reason_rows
 }
 
-/// 标题整行文本（`■ <label>`）；宽度口径与 [`draw`] 共用。
+/// 标题整行文本（`● <label>`）；宽度口径与 [`draw`] 共用。
 fn title_line(title: NoticeTitle) -> String {
     format!("{}{}", title.marker_segment(), title.label())
 }
 
 /// 绘制通知并推进内容行号；宽度不够放前缀时原因行退回整宽（不画连接符）。
 ///
-/// 行首方块用 [`StepMark`] 的状态色单独绘制（红/黄），其后的标题文案用
+/// 行首圆点用 [`StepMark`] 的状态色单独绘制（红/黄），其后的标题文案用
 /// [`NoticeTitle::style`]——两者在当前配色下同色同字重，但分开画才能保证
-/// 「方块永远是步骤方块的样子」，不受标题样式改动影响。
+/// 「圆点永远是步骤圆点的样子」，不受标题样式改动影响。
 pub(super) fn draw(
     grid: &mut Grid,
     notice: &Notice,
@@ -132,7 +130,7 @@ pub(super) fn draw(
     let marker = notice.title.marker_segment();
     let marker_width = u16::try_from(marker.width()).unwrap_or(u16::MAX);
     let label = notice.title.label();
-    // 标题行按「方块 + 文案」整体换行，但首行要把方块单独着状态色。
+    // 标题行按「圆点 + 文案」整体换行，但首行要把圆点单独着状态色。
     for (index, line) in wrap(&title_line(notice.title), content.width)
         .into_iter()
         .enumerate()

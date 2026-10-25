@@ -256,11 +256,6 @@ fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
     rows
 }
 
-/// 折叠态内容行数（文件头 + 预览 + 剩余行数提示），即折叠区的高度。
-pub(super) fn folded_rows(call: &ToolCallView, width: u16) -> usize {
-    layout(call, width, false).len()
-}
-
 /// 展开是否真的能看到更多内容（判据只看内容行，不看「剩余行数」提示行）。
 pub(super) fn has_more_content(call: &ToolCallView, width: u16) -> bool {
     content_rows(call, width, true).len() > content_rows(call, width, false).len()

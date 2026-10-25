@@ -218,3 +218,56 @@ fn detail_flat(call: &ToolCallView, width: u16) -> String {
 fn full_text(call: &ToolCallView, width: u16) -> String {
     format!("{}\n{}", header_text(call, width), detail_text(call, width))
 }
+
+/// 回归：详情**恰好**折成「折叠额度 + 1」行时，提示行顶掉的那行正文不能被判成
+/// 「没有可展开内容」——只要画出了 `… N more lines`，卡片就必须登记点击面。
+///
+/// 旧判据用「展开行数 − 折叠行数」反推提示行：3 行内容 → 折叠 2 行 + 提示 1 行、
+/// 展开 3 行，差值 0，于是 `has_expandable_content` 为假，卡片显示 `… 1 more line`
+/// 却点不动（与用户报过的「点折叠内容展不开」同一类）。
+#[test]
+fn details_with_hint_row_are_always_clickable() {
+    let mut hinted = 0;
+    // 旧判据只在「展开行数 == 折叠行数」时出错（提示行顶掉一行正文），必须覆盖到。
+    let mut same_height = 0;
+    for width in 20u16..=100 {
+        for path_len in [40usize, 80, 120, 160, 200, 240, 300] {
+            let call = tool_call(
+                "read",
+                ToolStatus::Completed,
+                Some(ToolSummary {
+                    path: Some("a/".repeat(path_len / 2)),
+                    range: Some((1, 40)),
+                    read_lines: Some(40),
+                    ..ToolSummary::default()
+                }),
+                None,
+            );
+            let folded = file_summary::detail(&call, width, false);
+            let has_hint = folded
+                .last()
+                .is_some_and(|row| row.iter().any(|segment| segment.text.contains("more line")));
+            if !has_hint {
+                continue;
+            }
+            hinted += 1;
+            if folded.len() == file_summary::detail(&call, width, true).len() {
+                same_height += 1;
+            }
+            assert!(
+                has_expandable_content(&call, width),
+                "宽 {width}：画出了剩余行数提示就必须能展开"
+            );
+            let regions = card_regions(&call, width, Folds::default(), 1);
+            assert!(
+                regions.iter().any(|region| region.clickable),
+                "宽 {width}：有提示行却没有点击面"
+            );
+        }
+    }
+    assert!(hinted > 0, "扫描必须覆盖到「有提示行」的宽度");
+    assert!(
+        same_height > 0,
+        "扫描必须覆盖到「提示行顶掉一行正文」的形状"
+    );
+}

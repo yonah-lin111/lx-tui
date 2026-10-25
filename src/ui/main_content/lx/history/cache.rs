@@ -177,6 +177,18 @@ impl PaneCache {
         self.evict();
     }
 
+    /// 按当前 LRU 时间戳回收，守住字节上限。
+    ///
+    /// **调用点必须在绘制之后**（`render` 的 `mark_used` 循环之后）：`evict` 只淘汰
+    /// `last_frame < frame` 的块，早于 `mark_used` 调用会把本帧刚画过的块当成冷块淘汰，
+    /// 下一帧又整块重排，缓存反而变成抖动源。
+    ///
+    /// 两次快照重建之间（冷启动后静置、只滚动不产生新内容）也需要回收点：重建时插入的
+    /// 块全是「本帧使用」，当帧 `evict` 无处可淘汰；没有这里，`bytes` 会一直停在上限之上。
+    pub(crate) fn reclaim(&mut self) {
+        self.evict();
+    }
+
     /// 超出字节上限时按 `last_frame` 升序淘汰；**本帧画过的块不淘汰**。
     fn evict(&mut self) {
         while self.bytes > self.limit {
@@ -496,13 +508,24 @@ fn tool_signature(hash: &mut Fnv, lx: &Lx, message: &ChatMessageView, call: &Too
                         crate::app::state::FileDiffView::Complete { hunks, simplified }
                         | crate::app::state::FileDiffView::Truncated { hunks, simplified },
                     ) => {
-                        // 差异正文加载后不再变化：只写 hunk 数与每块行数（O(hunks)），
-                        // 不逐行扫描全文。
+                        // 缓存的 `Legacy` 块存的是**行数**，而差异正文的行数取决于
+                        // 每行文本按列宽折行后的物理行数。只哈希 hunk/行数会让
+                        // 「同形状、不同文本宽度」的两份差异撞指纹 → 命中旧块 → 行数
+                        // 停在旧值，后续块整体错位。所以每行还要写文本长度与 kind：
+                        // 仍是 O(行数) 的整数哈希，不扫全文。
                         hash.write_u8(2);
                         hash.write_u8(u8::from(*simplified));
                         hash.write_usize(hunks.len());
                         for hunk in hunks {
                             hash.write_usize(hunk.lines.len());
+                            for line in &hunk.lines {
+                                hash.write_usize(line.text.len());
+                                hash.write_u8(match line.kind {
+                                    crate::chat::tools::DiffLineKind::Context => 0,
+                                    crate::chat::tools::DiffLineKind::Added => 1,
+                                    crate::chat::tools::DiffLineKind::Removed => 2,
+                                });
+                            }
                         }
                     }
                 }

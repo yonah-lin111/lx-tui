@@ -313,6 +313,82 @@ fn eviction_keeps_rows_identical_after_rebuild() {
     assert_eq!(cache.block_count(), first_blocks, "块按需全部重建");
 }
 
+/// 稳定态（没有新内容、不重建快照）也必须把超限块收回去。
+///
+/// 回归：`evict` 只在重建快照 / 插入块时被调；冷启动把整段历史插进来时所有块都是
+/// 「本帧使用」，当帧谁也不可淘汰，此后静置就再没有回收点，`bytes` 永远停在上限之上。
+#[test]
+fn steady_state_reclaim_enforces_the_limit() {
+    let messages: Vec<ChatMessageView> = (0..40)
+        .map(|index| {
+            message(
+                &format!("m{index}"),
+                "user",
+                "complete",
+                vec![text_part("一行正文\n两行正文\n三行正文")],
+            )
+        })
+        .collect();
+    let lx = lx_with(messages);
+    let mut cache = PaneCache::default();
+    // 上限在建快照**之前**设好：`set_limit` 自带的 evict 面对空缓存是空操作，
+    // 下面超限只可能来自「构建后没有回收点」，不会被 set_limit 掩盖。
+    let limit = 200;
+    cache.set_limit(limit);
+    let _ = cache.snapshot(40, &lx);
+    let bytes = cache.bytes();
+    assert!(
+        bytes > limit,
+        "冷启动的块本帧不可淘汰，应当超限：{bytes} <= {limit}"
+    );
+
+    // 下一帧这些块都成了冷块：稳定态必须自己回收。
+    cache.advance_frame();
+    cache.reclaim();
+    assert!(
+        cache.bytes() <= limit,
+        "稳定态没有回收点，上限失效：{} > {limit}",
+        cache.bytes()
+    );
+}
+
+/// `render` 必须在 `mark_used` 之后回收：本帧画过的块保留，冷块被清走。
+#[test]
+fn render_reclaims_after_marking_used_blocks() {
+    let messages: Vec<ChatMessageView> = (0..30)
+        .map(|index| {
+            message(
+                &format!("m{index}"),
+                "user",
+                "complete",
+                vec![text_part("一行正文\n两行正文\n三行正文")],
+            )
+        })
+        .collect();
+    let lx = lx_with(messages);
+    let area = Rect::new(0, 0, 40, 10);
+    let mut grid = Grid::new(area);
+    let mut cache = PaneCache::default();
+    let limit = 1_000;
+    cache.set_limit(limit);
+    let _ = render(&mut grid, area, &lx, 0, &mut cache);
+    assert!(
+        cache.bytes() > limit,
+        "冷启动那一帧所有块都是本帧插入，不允许被回收：{}",
+        cache.bytes()
+    );
+
+    // 换帧后只画视口内：冷块回收，可见块（本帧标记过）必须留下。
+    cache.advance_frame();
+    let _ = render(&mut grid, area, &lx, 0, &mut cache);
+    assert!(
+        cache.bytes() <= limit,
+        "render 没有在绘制之后回收：{} > {limit}",
+        cache.bytes()
+    );
+    assert!(cache.block_count() > 0, "本帧画过的块不许被回收");
+}
+
 #[test]
 fn visible_blocks_survive_eviction() {
     let messages: Vec<ChatMessageView> = (0..20)

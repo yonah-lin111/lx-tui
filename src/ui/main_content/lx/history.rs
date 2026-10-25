@@ -5,14 +5,15 @@
 //!
 //! - 用户消息：`> ` 前缀（占用整块底色，图标用输入框同款强调色）+ 整块浅底色
 //!   （`style::chat_user_bg`），正文按显示列软换行。
-//! - assistant 消息：每个步骤（思考 / 工具调用 / 正文块）首行以左侧方块标记起头
-//!   （见 [`StepMark`]：运行中 `■`/`□` 两帧呼吸、终态静态并按语义着色），标记右侧
+//! - assistant 消息：每个步骤（思考 / 工具调用 / 正文块）首行以左侧状态标记起头
+//!   （见 [`StepMark`]：文字数据用圆点 `●`/`○`、工具调用用方块 `■`/`□`；运行中两帧
+//!   呼吸、终态静态并按语义着色），标记右侧
 //!   的内容（含续行、展开的思考正文）整体缩进 [`STEP_GUTTER`] 列；正文用共享阅读
 //!   渲染器（`ui::markdown_render`，与 UI 页 agent 回答同款；表格按宽度收缩自适应），
 //!   不显示标题行；失败/中断在**消息底部**（统计行上方）插入一条通知（见 `notice.rs`），
 //!   流中不插入（改用输入框上方 loading 行）。
-//! - thinking：头部为方块 + `Thinking`（生成中）/ `Thought · 6.3s`（完成后，无折叠
-//!   箭头——方块即状态标记）；点击头部或 Ctrl+T 折叠/展开；正文同样走 markdown
+//! - thinking：头部为圆点 + `Thinking`（生成中）/ `Thought · 6.3s`（完成后，无折叠
+//!   箭头——圆点即状态标记）；点击头部或 Ctrl+T 折叠/展开；正文同样走 markdown
 //!   渲染并整体压暗（对齐 opencode 的思考显示）。
 //! - 本轮统计行（assistant 末尾）：模型名、输入/输出 token、缓存命中、tok/s 与耗时。
 //! - 右侧预留一列滚动条（内容溢出时显示），宽度与输入框对齐。
@@ -30,6 +31,7 @@ use super::notice;
 mod cache;
 mod cards;
 mod compact;
+#[cfg(test)]
 mod layout;
 mod paint;
 mod render;
@@ -43,6 +45,7 @@ pub(crate) mod tool;
 pub(crate) mod user_shell;
 
 pub(crate) use cache::{PaneCache, RenderCache};
+#[cfg(test)]
 pub(crate) use layout::layout;
 pub(crate) use render::render;
 
@@ -56,7 +59,7 @@ pub(crate) use stats::{format_duration, stats_line};
 const USER_PREFIX: &str = "> ";
 /// 用户消息正文缩进列（与前缀等宽）。
 const USER_INDENT: u16 = 2;
-/// 每个 assistant 步骤左侧方块标记占用的列数（1 列字形 + 1 列空格）；标记右侧的
+/// 每个 assistant 步骤左侧状态标记占用的列数（1 列字形 + 1 列空格）；标记右侧的
 /// 内容（头部文案、续行、展开的思考正文、markdown 正文）一律缩进到该列之后，
 /// 与用户消息的 `> ` 缩进同宽。
 pub(super) const STEP_GUTTER: u16 = 2;
@@ -65,14 +68,15 @@ const THINKING_DURATION_SEP: &str = " · ";
 /// 历史区右侧滚动条预留列数。
 pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
 
-/// assistant 步骤左侧方块标记的语义状态（思考 / 工具调用 / 正文块共用）。
+/// assistant 步骤左侧状态标记的语义状态（思考 / 工具调用 / 正文块共用）。
 ///
-/// 运行中为 `■`/`□` 两帧呼吸（相位由 `LxChat::loading_frame` 决定，约 400ms 一相）；
-/// 终态停为静态方块、仅以颜色区分：失败（红）、中断（黄）、取消（次要信息色 + 空心
-/// `□`，表示未产出结果）。
+/// 字形按 [`StepKind`] 分派（见 [`Self::glyph`]）：文字数据（正文 / 思考）为圆点
+/// `●`/`○`，只有工具调用为方块 `■`/`□`。运行中为实心/空心两帧呼吸（相位由
+/// `LxChat::loading_frame` 决定，约 400ms 一相）；终态停为静态标记、仅以颜色区分：
+/// 失败（红）、中断（黄）、取消（次要信息色 + 空心标记，表示未产出结果）。
 ///
 /// **颜色由「角色」决定，不只看状态**（用户要求区分三类步骤）：
-/// - [`StepKind::Body`]（正文块）：**终端默认前景**——方块跟正文同色，不额外抢眼；
+/// - [`StepKind::Body`]（正文块）：**终端默认前景**——圆点跟正文同色，不额外抢眼；
 /// - [`StepKind::Thinking`]（思考块）：折叠浅粉 `Indexed 182`、展开/悬停亮粉 `Indexed 218`；
 /// - [`StepKind::Tool`]（工具调用）：翡翠绿 `Indexed 42`。
 ///
@@ -93,7 +97,7 @@ pub(super) enum StepMark {
 }
 
 impl StepMark {
-    /// 方块字形：**有动画时**运行中按帧呼吸；取消恒空心，其余终态恒实心。
+    /// 标记字形：**有动画时**运行中按帧呼吸；取消恒空心，其余终态恒实心。
     ///
     /// `animating` 是"这一帧的相位是否还在推进"（渲染层传 `lx.chat.status.streaming`）。
     /// **动画一停就必须画实心**：相位冻结在空心那一相会让一个活着的后台任务永久显示
@@ -117,7 +121,7 @@ impl StepMark {
         }
     }
 
-    /// 方块样式：先看状态（失败/中断/取消跨角色覆盖），否则按角色取色。
+    /// 标记样式：先看状态（失败/中断/取消跨角色覆盖），否则按角色取色。
     ///
     /// `expanded` / `hovered` 只对思考块有意义（折叠浅粉 → 展开/悬停亮粉）；
     /// 其余角色忽略它们。
@@ -139,10 +143,10 @@ impl StepMark {
     }
 }
 
-/// 步骤的**类别**：决定运行中 / 已完成时的方块与文案用什么颜色。
+/// 步骤的**类别**：决定运行中 / 已完成时的标记与文案用什么颜色与字形。
 ///
-/// 三类的分工（用户要求「正文方块用默认前景、thinking 用别的颜色」）：
-/// - `Body` 用终端默认前景 → 方块与正文本就同色，视觉上不打断阅读；
+/// 三类的分工（用户要求「正文用默认前景、thinking 用别的颜色」）：
+/// - `Body` 用终端默认前景 → 圆点与正文本就同色，视觉上不打断阅读；
 /// - `Thinking` 用粉色（折叠 182 / 展开 218）→ 一眼看出「这段是模型的内心活动」；
 /// - `Tool` 用翡翠绿 → 一眼看出「这段是真实动作」，且与 markdown 的 GitHub 色域不相交。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,20 +193,6 @@ impl StepKind {
     }
 }
 
-/// 消息内**前一块与本块之间是否要空一行**。
-///
-/// 已定稿规则：**一律留空行**（含连续工具步骤之间、两个相邻正文块之间）。每个工具
-/// 调用是独立的动作记录，两行式的 `■ 动词` / `  └─ 详情` 与下一个调用之间空一行才分得清
-/// 彼此的边界——不留空行时会读成一棵树，误以为下面的 `└─` 属于上一个调用。
-///
-/// 该规则**当前不区分块类别**，因此本函数不需要任何参数，也不保留
-/// 「`previous: Block, next: Block` 但恒返回 true」这种看起来支持区分、实则恒真的死抽象
-/// （review P3-3）。`layout` 与 `render` 必须共用本函数，否则滚动条/置顶行/命中矩形会与
-/// 实际绘制错位一行；将来若要按类别收敛留白，在这里加参数并同步两个调用点即可。
-fn needs_spacer() -> bool {
-    true
-}
-
 /// 一条消息在渲染行空间中的区间（`end` 不含；含它**前面**的空行，
 /// 末尾那条含收尾呼吸行）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,7 +202,8 @@ pub struct MessageRows {
     pub is_user: bool,
 }
 
-/// 历史区布局：内容矩形 + 每个 thinking 折叠块的头部矩形（命中用）。
+/// 历史区布局：内容矩形 + 每个 thinking 折叠块的头部矩形（仅测试使用）。
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryLayout {
     pub area: Rect,
@@ -291,8 +282,9 @@ fn folds_of(lx: &Lx, message_id: &str, call: &crate::app::state::ToolCallView) -
 ///    → 撤销让位、不画置顶行，并把"整块视口 + 顶行位置"记入记忆；
 /// 3. 非跟随时，若记忆与当前位置一致 → 直接跳过重判（沿用抑制，防让位/撤销抖动）。
 pub(super) fn view(area: Rect, lx: &Lx, cache: &mut PaneCache) -> HistoryView {
-    let layout = layout(area, lx, cache);
-    let total = layout.total_rows;
+    // 生产路径只要行数与消息区间：直接读快照，不构造每张卡片的 `CardHit`。
+    let snapshot = cache.snapshot(content_rect(area).width, lx);
+    let total = snapshot.total_rows;
     let full_height = area.height;
     let scroll_for = |height: u16| -> usize {
         let max_top = total.saturating_sub(usize::from(height));
@@ -307,7 +299,7 @@ pub(super) fn view(area: Rect, lx: &Lx, cache: &mut PaneCache) -> HistoryView {
         body: area,
         scroll: scroll_for(full_height),
         total_rows: total,
-        messages: layout.messages,
+        messages: snapshot.messages.clone(),
         sticky: None,
         suppressed: None,
     };

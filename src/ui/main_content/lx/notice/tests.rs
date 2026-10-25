@@ -78,7 +78,7 @@ fn reason_wraps_aligned_and_rows_match_draw() {
         assert_eq!(rows(&notice, width), row, "width={width}：行数口径一致");
         if width > 5 {
             // 首条原因行带连接符；续行按前缀宽度对齐、不重复画。
-            let title_rows = u16::try_from(wrap("■ Failed", width).len()).expect("rows");
+            let title_rows = u16::try_from(wrap("● Failed", width).len()).expect("rows");
             let first = row_text(&grid, area, title_rows);
             assert!(first.starts_with("  └─ "), "width={width}: {first}");
         }
@@ -95,7 +95,7 @@ fn too_narrow_for_prefix_falls_back_to_full_width_reason() {
     let mut row = 0;
     draw(&mut grid, &notice, area, 0, &mut row);
     assert_eq!(rows(&notice, width), row);
-    let title_rows = wrap("■ Failed", width).len();
+    let title_rows = wrap("● Failed", width).len();
     let reason: String = (title_rows..row)
         .map(|line| row_text(&grid, area, u16::try_from(line).expect("row")))
         .collect();
@@ -115,7 +115,7 @@ fn scrolled_out_rows_do_not_paint() {
     assert_eq!(row_text(&grid, area, 0), "  └─ http 503");
 }
 
-/// 通知的行首标记必须是**步骤方块**，且颜色按级别红/黄。
+/// 通知的行首标记必须是**步骤圆点**，且颜色按级别红/黄。
 #[test]
 fn notice_marker_is_dot_in_red_or_yellow() {
     for (title, expected) in [
@@ -146,8 +146,8 @@ fn notice_marker_is_dot_in_red_or_yellow() {
     }
 }
 
-/// 通知的方块与工具行 / 思考头的方块**形状与宽度完全一致**（同一个 `StepMark`），
-/// 这样历史里所有步骤标记在视觉上是同一套符号。
+/// 通知的圆点与正文 / 思考头同为文字类标记（同一个 `StepMark`），
+/// 1 列字形 + 1 列空格，与其它步骤的标记在视觉上同一套。
 #[test]
 fn notice_marker_matches_step_mark_shape() {
     let area = Rect::new(0, 0, 40, 4);
@@ -164,5 +164,5 @@ fn notice_marker_matches_step_mark_shape() {
         .enumerate()
         .map(|(x, _)| grid.cell(u16::try_from(x).expect("col"), 0).ch)
         .collect();
-    assert_eq!(painted, expected, "通知方块与步骤方块拼法一致");
+    assert_eq!(painted, expected, "通知圆点与步骤圆点拼法一致");
 }

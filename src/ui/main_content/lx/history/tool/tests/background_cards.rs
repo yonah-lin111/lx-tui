@@ -470,7 +470,7 @@ fn folded_command_reports_remaining_lines() {
 
 /// 参数区恒为浅黄，但「剩余行数」提示行仍属于参数区的点击面。
 #[test]
-fn params_section_has_no_fold_region_and_keeps_its_hint() {
+fn params_section_keeps_its_hint_and_click_face() {
     let mut call = command_call(
         ProcessStateView::Exited { code: Some(0) },
         ToolStatus::Completed,
@@ -486,7 +486,6 @@ fn params_section_has_no_fold_region_and_keeps_its_hint() {
         .iter()
         .find(|region| region.section == crate::app::state::CardSection::Body)
         .expect("参数区");
-    assert_eq!(params.fold.rows, 0, "参数区没有折叠内容区");
     assert!(params.clickable, "参数区仍可点击展开");
     let text = render_text(&call, width);
     assert!(text.contains("more line"), "折叠态给剩余行数：{text}");
@@ -517,7 +516,6 @@ fn short_output_has_no_click_face() {
         .iter()
         .find(|region| region.section == crate::app::state::CardSection::Output)
         .expect("输出区");
-    assert_eq!(output.fold.rows, 0, "短输出没有折叠内容区");
     assert!(!output.clickable, "短输出没有可展开内容");
 }
 

@@ -83,8 +83,6 @@ pub(super) struct RowSpan {
 pub(super) struct CardRegion {
     pub section: CardSection,
     pub card: RowSpan,
-    /// 该区域折叠内容的行区间（不再驱动任何悬停提亮，保留为折叠几何）。
-    pub fold: RowSpan,
     /// 点击是否真的会改变内容（false 时不登记点击面）。
     pub clickable: bool,
 }
@@ -272,43 +270,6 @@ pub(super) fn merge_group(steps: &[AssistantStepView], start: usize) -> Vec<&Too
     group
 }
 
-/// 折叠区的几何：相对该调用块的内容首行（标题在块外）从哪一行开始、占几行。
-///
-/// 普通工具 / 命令卡片是整段折叠内容（含末尾的 `… N more lines` 提示行），
-/// 文件差异卡片是整块折叠内容；计划卡片没有折叠内容。
-pub(super) struct FoldRegion {
-    /// 折叠区相对内容首行的起始偏移（0 = 内容第一行）。
-    pub(super) offset: usize,
-    /// 折叠区高度（0 = 该卡片没有折叠内容）。
-    pub(super) rows: usize,
-}
-
-impl FoldRegion {
-    const NONE: Self = Self { offset: 0, rows: 0 };
-}
-
-/// 折叠区几何（见 [`FoldRegion`]）。
-pub(super) fn fold_region(call: &ToolCallView, width: u16) -> FoldRegion {
-    if width == 0 {
-        return FoldRegion::NONE;
-    }
-    match call.detail.as_deref() {
-        Some(crate::app::state::ToolDetailView::Command(_))
-        | Some(crate::app::state::ToolDetailView::Interaction(_)) => FoldRegion::NONE,
-        Some(crate::app::state::ToolDetailView::Plan(_)) => FoldRegion::NONE,
-        Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
-            FoldRegion {
-                offset: 0,
-                rows: file_diff::folded_rows(call, width),
-            }
-        }
-        Some(crate::app::state::ToolDetailView::File(_)) | None => FoldRegion {
-            offset: 0,
-            rows: file_summary::foldable_rows(call, width),
-        },
-    }
-}
-
 /// 输出区的文字档位：折叠 = dim；展开 = 终端默认前景。
 ///
 /// 只有**输出正文**随展开态变化；参数/路径恒为浅黄（[`style::chat_tool_param`]）。
@@ -450,7 +411,6 @@ pub(super) fn card_regions(
     if width == 0 {
         return Vec::new();
     }
-    let no_fold = RowSpan { offset: 0, rows: 0 };
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(view)) => {
             let blocks = command::blocks(call, width, folds);
@@ -471,13 +431,11 @@ pub(super) fn card_regions(
                             offset: 0,
                             rows: HEADER_ROWS + blocks.params,
                         },
-                        fold: no_fold,
                         clickable: true,
                     },
                     CardRegion {
                         section: CardSection::Output,
                         card: guide,
-                        fold: guide,
                         clickable: true,
                     },
                 ];
@@ -485,7 +443,6 @@ pub(super) fn card_regions(
             let mut regions = vec![CardRegion {
                 section: CardSection::Body,
                 card: params,
-                fold: no_fold,
                 clickable: command::params_expandable(call, width),
             }];
             if blocks.output > 0 {
@@ -494,7 +451,6 @@ pub(super) fn card_regions(
                 regions.push(CardRegion {
                     section: CardSection::Output,
                     card: guide,
-                    fold: if expandable { guide } else { no_fold },
                     clickable: expandable,
                 });
             }
@@ -508,7 +464,6 @@ pub(super) fn card_regions(
             vec![CardRegion {
                 section: CardSection::Body,
                 card: params,
-                fold: no_fold,
                 clickable: command::params_expandable(call, width),
             }]
         }
@@ -518,17 +473,11 @@ pub(super) fn card_regions(
             if !has_expandable_content(call, width) {
                 return Vec::new();
             }
-            let region = fold_region(call, width);
-            let fold_offset = HEADER_ROWS + region.offset;
             vec![CardRegion {
                 section: CardSection::Body,
                 card: RowSpan {
                     offset: 0,
                     rows: step_rows,
-                },
-                fold: RowSpan {
-                    offset: fold_offset,
-                    rows: region.rows.min(step_rows.saturating_sub(fold_offset)),
                 },
                 clickable: true,
             }]

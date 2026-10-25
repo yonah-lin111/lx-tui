@@ -42,8 +42,6 @@ pub struct CardHit {
     pub kind: CardKind,
     /// 点击面：命令卡片是单个分区（参数 / 输出 / 运行中整卡），文件工具是整块。
     pub card: Rect,
-    /// **可折叠内容区**（标题之下、工具参数之上）的几何；不再驱动悬停提亮。
-    pub fold: Rect,
     /// 点击是否真的会改变内容（`false` 表示点了没反应，不登记点击面）。
     pub clickable: bool,
 }

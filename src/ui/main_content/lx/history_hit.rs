@@ -47,16 +47,20 @@ pub(crate) fn history_center_target(
     message_id: &str,
     cache: &mut PaneCache,
 ) -> Option<(usize, usize)> {
+    if !chat_geometry_is_live(lx) {
+        return None;
+    }
     let rect = history_rect(area, lx)?;
-    let layout = history::layout(rect, lx, cache);
+    // 只要行数与消息区间：直接读快照，不构造每张卡片的 `CardHit`。
+    let snapshot = cache.snapshot(history::content_rect(rect).width, lx);
     let index = lx
         .chat
         .messages
         .iter()
         .position(|message| message.id == message_id)?;
-    let rows = layout.messages.get(index)?;
+    let rows = snapshot.messages.get(index)?;
     let height = usize::from(rect.height.max(1));
-    let max_top = layout.total_rows.saturating_sub(height);
+    let max_top = snapshot.total_rows.saturating_sub(height);
     if max_top == 0 {
         return None;
     }
@@ -90,6 +94,9 @@ pub fn history_scrollbar(
 ///
 /// 视口行数取 **body**（置顶行让位后），与渲染同口径——否则滚不到最后一行。
 pub fn history_rows(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<(usize, usize)> {
+    if !chat_geometry_is_live(lx) {
+        return None;
+    }
     let view = history_view(area, lx, cache)?;
     Some((view.total_rows, usize::from(view.body.height)))
 }
@@ -178,23 +185,33 @@ pub fn card_at(
         content_row >= region.card_start
             && content_row < region.card_start.saturating_add(region.card_rows)
     })?;
-    // 与 `layout(view.body, ...)` 同一套矩形口径：内容行 0 落在 body 顶，滚动由
-    // `screen_rect` 统一裁剪。
-    let rect_at = |start: usize, rows: usize| -> Rect {
-        Rect::new(
-            view.body.x,
-            view.body.y.saturating_add(history::rows_to_u16(start)),
-            width,
-            history::rows_to_u16(rows),
-        )
+    // 与 `layout(view.body, ...)` 同一套矩形口径：内容行 0 落在 body 顶。
+    //
+    // 裁剪必须在 **usize** 空间完成：`card_start` 是内容行绝对下标，直接交给
+    // `rows_to_u16` 会在 65535 行处饱和，长历史（10 万行）里所有卡片都"落在视口外"，
+    // 点击被静默丢弃。先裁出可见区间，再把**已裁剪的相对偏移**转 u16。
+    let clip = |start: usize, rows: usize| -> Option<Rect> {
+        let first = start.max(view.scroll);
+        let last = start
+            .saturating_add(rows)
+            .min(view.scroll.saturating_add(usize::from(view.body.height)));
+        (last > first).then(|| {
+            Rect::new(
+                view.body.x,
+                view.body
+                    .y
+                    .saturating_add(history::rows_to_u16(first - view.scroll)),
+                width,
+                history::rows_to_u16(last - first),
+            )
+        })
     };
+    let card = clip(region.card_start, region.card_rows)?;
     let hit = history::CardHit {
         kind: region.kind.clone(),
-        card: rect_at(region.card_start, region.card_rows),
-        fold: rect_at(region.fold_start, region.fold_rows),
+        card,
         clickable: region.clickable,
     };
-    let card = screen_rect(&view, hit.card)?;
     card.contains((column, row).into()).then_some(hit)
 }
 
@@ -262,25 +279,4 @@ fn target_of(kind: &history::CardKind) -> CardTarget {
             checkpoint_id: checkpoint_id.clone(),
         },
     }
-}
-
-/// 内容行矩形 → 屏幕矩形（按滚动窗口裁剪）；完全在视口上方时为 None。
-fn screen_rect(view: &history::HistoryView, rect: Rect) -> Option<Rect> {
-    if rect.width == 0 || rect.height == 0 {
-        return None;
-    }
-    let offset = usize::from(rect.y.saturating_sub(view.body.y));
-    let skip = view.scroll.saturating_sub(offset);
-    if skip >= usize::from(rect.height) {
-        return None;
-    }
-    let y = view
-        .body
-        .y
-        .saturating_add(u16::try_from(offset.saturating_sub(view.scroll)).unwrap_or(u16::MAX));
-    let height = rect
-        .height
-        .saturating_sub(u16::try_from(skip).unwrap_or(u16::MAX));
-    let bottom = y.saturating_add(height).min(view.body.bottom());
-    (bottom > y).then(|| Rect::new(view.body.x, y, view.body.width, bottom - y))
 }

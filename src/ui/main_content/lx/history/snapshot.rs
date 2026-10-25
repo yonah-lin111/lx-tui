@@ -21,8 +21,8 @@ use super::cache::{
 use super::paint::{BlockPaint, BlockSource};
 use super::timeline::{TimelineEntry, timeline};
 use super::{
-    CardKind, MessageRows, compact, folds_of, needs_spacer, notice, rewind, shell_folds,
-    should_register_card, stats_line, tool, tool_rows, user_shell, wrap,
+    CardKind, MessageRows, compact, folds_of, notice, rewind, shell_folds, should_register_card,
+    stats_line, tool, tool_rows, user_shell, wrap,
 };
 
 /// 时间线条目类别（与 [`TimelineEntry`] 一一对应，但可跨帧独立持有）。
@@ -76,14 +76,12 @@ pub(crate) struct SnapEntry {
     pub(crate) blocks: Vec<SnapBlock>,
 }
 
-/// 一个可折叠块的内容行区间（点击面 + 折叠内容）。
+/// 一个可折叠块的内容行区间（点击面）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CardRegion {
     pub(crate) kind: CardKind,
     pub(crate) card_start: usize,
     pub(crate) card_rows: usize,
-    pub(crate) fold_start: usize,
-    pub(crate) fold_rows: usize,
     pub(crate) clickable: bool,
 }
 
@@ -148,6 +146,12 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
+    /// 块间空行：**一律留**（含连续工具步骤之间、相邻正文块之间）。
+    ///
+    /// 每个工具调用是独立的动作记录，`■ 动词` / `  └─ 详情` 与下一个调用之间空一行
+    /// 才分得清边界——不留会被读成一棵树，误以为 `└─` 属于上一个调用。规则不区分
+    /// 块类别，因此没有谓词：`if has_previous { self.spacer() }` 就是全部。
+    /// 空行只在这里累加（AGENTS：绘制路径不得另算）。
     fn spacer(&mut self) {
         self.rows += 1;
     }
@@ -217,8 +221,6 @@ impl Builder<'_> {
             },
             card_start: start,
             card_rows: block.rows,
-            fold_start: start,
-            fold_rows: block.rows,
             clickable: true,
         });
         self.snapshot.entries.push(SnapEntry {
@@ -238,7 +240,7 @@ impl Builder<'_> {
             self.shell(lx, message_index, message, shell, start, &mut blocks);
         } else {
             self.steps(lx, message_index, message, &mut blocks);
-            self.tail(lx, message_index, message, &mut blocks);
+            self.tail(message_index, message, &mut blocks);
         }
         let is_user = message.role == "user" && message.shell.is_none();
         self.snapshot.messages.push(MessageRows {
@@ -294,8 +296,6 @@ impl Builder<'_> {
                 },
                 card_start: entry_start + region.offset,
                 card_rows: region.rows,
-                fold_start: entry_start + region.offset,
-                fold_rows: region.rows,
                 clickable: region.clickable,
             });
         }
@@ -337,7 +337,7 @@ impl Builder<'_> {
                 step_index += 1;
                 continue; // 空正文块不占行，也不引入块间空行。
             }
-            if has_previous && needs_spacer() {
+            if has_previous {
                 self.spacer();
             }
             has_previous = true;
@@ -363,8 +363,6 @@ impl Builder<'_> {
                     },
                     card_start: block_start,
                     card_rows: block.rows,
-                    fold_start: block_start,
-                    fold_rows: block.rows,
                     clickable: true,
                 });
             }
@@ -444,10 +442,6 @@ impl Builder<'_> {
             if card_rows == 0 {
                 continue;
             }
-            let fold_rows = region
-                .fold
-                .rows
-                .min(step_rows.saturating_sub(region.fold.offset));
             let expanded = match region.section {
                 CardSection::Body => folds.body,
                 CardSection::Output => folds.output,
@@ -461,8 +455,6 @@ impl Builder<'_> {
                 },
                 card_start: block_start + region.card.offset,
                 card_rows,
-                fold_start: block_start + region.fold.offset,
-                fold_rows,
                 clickable: region.clickable,
             });
         }
@@ -489,7 +481,7 @@ impl Builder<'_> {
         }
         // 与单块同口径：合并组也是消息内的一个块，前面有块就空一行
         // （否则正文下面直接顶着 `▣ Write 2 files`，两段粘成一片）。
-        if has_previous && needs_spacer() {
+        if has_previous {
             self.spacer();
         }
         let block_start = self.rows;
@@ -517,15 +509,6 @@ impl Builder<'_> {
                 continue;
             }
             let card_start = block_start + span.start;
-            let (fold_start, fold_rows) = if expanded[index] {
-                (card_start, 0)
-            } else {
-                let region = tool::fold_region(call, self.width);
-                (
-                    block_start + span.start + region.offset,
-                    region.rows.min(span.len.saturating_sub(region.offset)),
-                )
-            };
             self.snapshot.cards.push(CardRegion {
                 kind: CardKind::Tool {
                     message_id: message.id.clone(),
@@ -535,8 +518,6 @@ impl Builder<'_> {
                 },
                 card_start,
                 card_rows: span.len,
-                fold_start,
-                fold_rows,
                 clickable: true,
             });
         }
@@ -547,14 +528,13 @@ impl Builder<'_> {
     /// 消息底部通知与统计行。
     fn tail(
         &mut self,
-        lx: &Lx,
         message_index: usize,
         message: &crate::app::state::ChatMessageView,
         blocks: &mut Vec<SnapBlock>,
     ) {
         let mut has_previous = !blocks.is_empty();
         if let Some(notice) = notice(message) {
-            if has_previous && needs_spacer() {
+            if has_previous {
                 self.spacer();
             }
             has_previous = true;
@@ -573,7 +553,7 @@ impl Builder<'_> {
             blocks.push(block);
         }
         if let Some(line) = stats_line(message) {
-            if has_previous && needs_spacer() {
+            if has_previous {
                 self.spacer();
             }
             let start = self.rows;
@@ -584,15 +564,12 @@ impl Builder<'_> {
                 sig: stats_block_signature(&line),
             };
             let lines = wrap(&line, self.width);
-            let block = self.block(key, BlockSource::Notice { message_index }, start, || {
-                BlockPaint::Static {
-                    lines,
-                    style: crate::ui::style::muted(),
-                }
+            let block = self.block(key, BlockSource::Plain, start, || BlockPaint::Static {
+                lines,
+                style: crate::ui::style::muted(),
             });
             self.rows += block.rows;
             blocks.push(block);
         }
-        let _ = lx;
     }
 }

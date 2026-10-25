@@ -50,5 +50,8 @@ pub(crate) fn render(
     for key in used {
         cache.mark_used(key);
     }
+    // 显示之后回收：此刻 LRU 才反映本帧真实使用情况，超限才会扫描（未超限零成本）。
+    // 两次快照重建之间（静置、只滚动）这是唯一的回收点。
+    cache.reclaim();
     snapshot.total_rows
 }
