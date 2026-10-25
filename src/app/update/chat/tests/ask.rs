@@ -621,7 +621,7 @@ fn confirm_only_submits_after_every_question_is_answered() {
 }
 
 #[test]
-fn wheel_preview_scrolls_and_options_move_highlight() {
+fn wheel_preview_scrolls_and_options_scroll_the_list_without_moving_the_highlight() {
     let mut q = question("q", false, &["A", "B"]);
     q.options[0].preview = Some("1\n2\n3\n4\n5\n6\n7\n8".into());
     let (mut state, pane, _key) = asking(vec![q]);
@@ -629,18 +629,50 @@ fn wheel_preview_scrolls_and_options_move_highlight() {
         &mut state,
         pane,
         AskWheelZone::Preview,
-        1
+        1,
+        None
     ));
     assert_eq!(panel(&state, pane).preview_scroll[0], 3);
     assert_eq!(panel(&state, pane).highlight[0], 0, "预览滚轮不改高亮");
+
+    // 选项区：只滚列表视口，高亮原地不动（与 `@`/`/` 面板同语义）。
+    let window = Some((0usize, 20usize, 5usize));
     assert!(crate::app::update::apply_ask_wheel(
         &mut state,
         pane,
         AskWheelZone::Options,
-        1
+        1,
+        window
     ));
-    assert_eq!(panel(&state, pane).highlight[0], 1);
+    assert_eq!(panel(&state, pane).highlight[0], 0, "选项滚轮绝不动高亮");
+    assert_eq!(panel(&state, pane).viewport, Some(3), "滚轮推进显式视口");
     assert_eq!(panel(&state, pane).preview_scroll[0], 3, "选项滚轮不改预览");
+
+    // 内容装得下时滚轮不产生位移，也不记视口。
+    assert!(!crate::app::update::apply_ask_wheel(
+        &mut state,
+        pane,
+        AskWheelZone::Options,
+        1,
+        Some((0, 4, 8))
+    ));
+}
+
+#[test]
+fn keyboard_navigation_clears_the_explicit_viewport() {
+    // 滚轮建立的显式视口在键盘移动高亮后必须作废，窗口重新跟随高亮。
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A", "B", "C"])]);
+    assert!(crate::app::update::apply_ask_wheel(
+        &mut state,
+        pane,
+        AskWheelZone::Options,
+        1,
+        Some((0, 20, 5))
+    ));
+    assert_eq!(panel(&state, pane).viewport, Some(3));
+    press(&mut state, LxInput::Down);
+    assert_eq!(panel(&state, pane).highlight[0], 1, "键盘移动高亮");
+    assert_eq!(panel(&state, pane).viewport, None, "窗口重新跟随高亮");
 }
 
 // ===== 与其它面板/路由的关系 =====
@@ -701,4 +733,23 @@ fn single_question_multi_select_submits_with_enter_after_space() {
         answers.get("q"),
         Some(&vec!["A".to_string(), "B".to_string()])
     );
+}
+
+#[test]
+fn pressing_an_arrow_at_the_boundary_restores_the_follow_window() {
+    // 高亮被滚出视口后，按到边界的方向键必须把窗口交还给高亮：
+    // 否则键盘"没反应"，用户只能继续盲目滚轮。
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A", "B", "C"])]);
+    assert!(crate::app::update::apply_ask_wheel(
+        &mut state,
+        pane,
+        AskWheelZone::Options,
+        3,
+        Some((0, 20, 5))
+    ));
+    assert!(panel(&state, pane).viewport().is_some());
+    // 高亮已在首行，再按 ↑ 不会移动，但窗口必须回来。
+    press(&mut state, LxInput::Up);
+    assert_eq!(panel(&state, pane).highlight[0], 0, "已在首行");
+    assert_eq!(panel(&state, pane).viewport(), None, "窗口交还给高亮");
 }

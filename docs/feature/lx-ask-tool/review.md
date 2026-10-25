@@ -282,3 +282,68 @@ lx 是唯一需要长期跑在 9router 后面的，必须自己解决。
 | `cargo test`（全量，合并后在 `dev` 上跑） | **3321 lib + 16 个 target 全绿** |
 
 未验证：真实 TUI 手感（`cargo run`）；规则以 user 角色承载后的长期遵从度。
+
+## 9. 修复：滚轮不该选中（对齐 `@` 提及面板）
+
+**现象**：ask 面板里滚动滚轮，高亮跟着动，滚到哪就选到哪。
+
+**根因**：`place_rows` 的滚动窗口是从高亮**推导**出来的
+（`scroll = highlight_end - visible`），因此"让列表滚动"的唯一办法就是移动高亮——
+滚轮被实现成 `move_highlight`，浏览和选择被合并成一个动作。
+
+**参考实现**（`@` 提及面板 / `/` 命令面板的 `PanelWindow`）早就把三态分开了：
+
+```rust
+pub struct PanelWindow {
+    pub active: usize,          // 高亮
+    pub anchor: usize,          // 窗口底部锚点（跟随高亮）
+    pub viewport: Option<usize>,// 滚轮建立的显式视口
+}
+```
+
+- 键盘移动 → `active` 移动、`anchor` 跟随、`viewport = None`；
+- 鼠标悬停 → 只改 `active`；
+- **滚轮 → 只改 `viewport`**，高亮与锚点不动。
+
+**修法**（`app/state/lx/ask.rs` 新增 `viewport: Option<usize>`）：
+
+| 操作 | 高亮 | 视口 |
+|---|---|---|
+| 滚轮（选项区） | 不动 | `Some(start ± WHEEL_STEP)`，按 `total - visible` 钳制 |
+| 滚轮（预览区） | 不动 | 只动 `preview_scroll` |
+| ↑/↓/j/k、数字键 | 移动 | 清空 → 窗口重新跟随高亮 |
+| 鼠标点选、切题、Confirm 切换 | 变更 | 清空 |
+| 内容装得下（`total <= visible`） | 不动 | 不变，滚轮吞掉且不产生虚假位移 |
+
+关键代码：
+
+```rust
+// 渲染层：显式视口优先，否则从高亮推导
+let scroll = match ask.viewport() {
+    Some(start) => start.min(total.saturating_sub(visible)),
+    None => follow_highlight(),
+};
+```
+
+```rust
+// 事件层：几何由渲染层给出，事件层不重算
+AskWheelZone::Options => ask.scroll_viewport(
+    direction.saturating_mul(WHEEL_STEP), base, total, visible),
+```
+
+新增 `ui::main_content::lx::ask_list_window(area, lx) -> Option<(起点, 总行数, 可视行数)>`，
+与绘制共用 `AskLayout::compute`，保证"滚一格"与"画到哪"永远是同一份几何。
+
+**顺手修掉的一个边界**：高亮被滚出视口后按到边界方向键，`moved == false` 时若只在
+`moved` 分支清视口，窗口不会回来——键盘看起来"完全没反应"。改为「移动或曾经有视口」
+都清空并返回 `true`。
+
+**测试**（4 个新增 / 2 个改写）：
+
+- `wheel_preview_scrolls_and_options_scroll_the_list_without_moving_the_highlight`
+- `keyboard_navigation_clears_the_explicit_viewport`
+- `pressing_an_arrow_at_the_boundary_restores_the_follow_window`
+- `explicit_viewport_wins_over_the_highlight_and_keeps_the_highlight_stable`（UI 层）
+- `list_window_matches_the_rendered_geometry`（事件层基准与渲染同源）
+
+**验证**：`cargo fmt` 无 diff、`clippy -D warnings` 零警告、`cargo test` **3325 lib + 16 target 全绿**。

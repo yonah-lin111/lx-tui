@@ -34,6 +34,9 @@ pub const ASK_HINT_TOO_LONG: &str = "answer is too long";
 /// 预览滚动的单次步长（`PgUp`/`PgDn` 与滚轮共用）。
 const PREVIEW_STEP: isize = 3;
 
+/// 选项列表滚轮的单次步长（行）；与输入框、历史区的滚轮步长一致。
+const WHEEL_STEP: isize = 3;
+
 /// ask 面板接管 lx 输入；返回是否产生状态变化。
 pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
     let Some(ask) = state
@@ -254,12 +257,19 @@ pub fn apply_ask_click(state: &mut AppState, pane: PaneId, hit: AskHit) -> bool 
     }
 }
 
-/// 面板内的滚轮：预览区只滚预览，选项区移动高亮。
+/// 面板内的滚轮：预览区只滚预览，选项区只滚列表视口。
+///
+/// **选项区滚轮绝不动高亮**（与 `@` 提及面板、`/` 命令面板的 `PanelWindow.viewport`
+/// 同一语义）：滚轮是"浏览"，移动高亮是"选择"，两者混在一起会让滚到哪就选到哪。
+///
+/// `window` 是渲染层给出的 `(窗口起点, 总行数, 可视行数)`，事件层不重算几何；
+/// 拿不到几何时吞掉滚轮（返回 false），绝不猜一个基准去挪状态。
 pub fn apply_ask_wheel(
     state: &mut AppState,
     pane: PaneId,
     zone: AskWheelZone,
     direction: isize,
+    window: Option<(usize, usize, usize)>,
 ) -> bool {
     let Some(ask) = state
         .pane_mut_anywhere(pane)
@@ -269,7 +279,12 @@ pub fn apply_ask_wheel(
     };
     match zone {
         AskWheelZone::Preview => ask.scroll_preview(direction.saturating_mul(PREVIEW_STEP)),
-        AskWheelZone::Options => ask.move_highlight(direction),
+        AskWheelZone::Options => {
+            let Some((base, total, visible)) = window else {
+                return false;
+            };
+            ask.scroll_viewport(direction.saturating_mul(WHEEL_STEP), base, total, visible)
+        }
     }
 }
 

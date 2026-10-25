@@ -56,6 +56,12 @@ pub struct AskState {
     ///
     /// 滚动上限必须扣掉可视行数，否则短预览也能滚出一片空白。
     pub preview_visible: usize,
+    /// 选项列表的显式滚动起点（行）；`None` 表示窗口跟随高亮。
+    ///
+    /// 语义与 `@` 提及面板、`/` 命令面板的 `PanelWindow.viewport` 一致：
+    /// **滚轮只动它，不动高亮**。键盘移动/点击选中会把它清空，窗口重新跟随高亮。
+    /// 之前把滚动从高亮推导，导致「滚轮 = 移高亮」，滚到哪就选到哪。
+    pub viewport: Option<usize>,
 }
 
 impl AskState {
@@ -75,6 +81,7 @@ impl AskState {
             editing: false,
             preview_scroll: vec![0; count],
             preview_visible: 0,
+            viewport: None,
         }
     }
 
@@ -195,7 +202,13 @@ impl AskState {
             .clamp(0, max as isize) as usize;
         let moved = next != self.highlight[self.current];
         self.highlight[self.current] = next;
-        moved
+        // 键盘移动（或已到边界）都把窗口交还给高亮：与 `@`/`/` 面板同语义。
+        //
+        // 必须在 `moved` 之外清视口：高亮滚出可视区后按到边界方向键时 `moved`
+        // 为 false，若只在 `moved` 时清，窗口不会回来——键盘看起来"完全没反应"，
+        // 用户唯一的出路是继续盲目滚轮。
+        let had_viewport = self.viewport.take().is_some();
+        moved || had_viewport
     }
 
     /// 设置高亮行（鼠标点击）；越界返回 false。
@@ -204,6 +217,8 @@ impl AskState {
             return false;
         }
         self.highlight[self.current] = index;
+        // 选中/悬停高亮后窗口跟随高亮，滚轮留下的显式视口作废。
+        self.viewport = None;
         true
     }
 
@@ -287,6 +302,7 @@ impl AskState {
         }
         self.confirm = confirm;
         self.editing = false;
+        self.viewport = None;
         self.restore_highlight();
         true
     }
@@ -319,12 +335,14 @@ impl AskState {
         if self.current + 1 < self.questions.len() {
             self.current += 1;
             self.editing = false;
+            self.viewport = None;
             self.restore_highlight();
             return true;
         }
         if self.questions.len() > 1 {
             self.confirm = true;
             self.editing = false;
+            self.viewport = None;
             return true;
         }
         false
@@ -334,6 +352,7 @@ impl AskState {
     pub fn prev_step(&mut self) -> bool {
         if self.confirm {
             self.confirm = false;
+            self.viewport = None;
             return true;
         }
         if self.current == 0 {
@@ -341,6 +360,7 @@ impl AskState {
         }
         self.current -= 1;
         self.editing = false;
+        self.viewport = None;
         self.restore_highlight();
         true
     }
@@ -391,6 +411,34 @@ impl AskState {
             }
         }
         moved
+    }
+
+    /// 滚轮滚动选项列表：只动显式视口，**不动高亮**（与 `@`/`/` 面板同语义）。
+    ///
+    /// `base` 是当前窗口起点（由渲染层给出，事件层不重算）；`total` 是列表总行数。
+    /// 返回视口是否变化。列表装得下时返回 false，滚轮被吞掉但不产生虚假位移。
+    pub fn scroll_viewport(
+        &mut self,
+        delta: isize,
+        base: usize,
+        total: usize,
+        visible: usize,
+    ) -> bool {
+        if self.confirm || total == 0 || visible == 0 || total <= visible {
+            return false;
+        }
+        let max = total.saturating_sub(visible);
+        let next = (base.min(max) as isize)
+            .saturating_add(delta)
+            .clamp(0, max as isize) as usize;
+        let changed = next != base;
+        self.viewport = Some(next);
+        changed
+    }
+
+    /// 选项列表的显式视口起点；`None` 表示窗口跟随高亮。
+    pub fn viewport(&self) -> Option<usize> {
+        self.viewport
     }
 
     /// 滚动预览（正数向下）；返回偏移是否变化。

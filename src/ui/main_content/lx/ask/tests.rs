@@ -378,3 +378,67 @@ fn wheel_zone_splits_preview_and_options() {
     );
     assert_eq!(wheel_zone(area, &lx, 0, 0), None);
 }
+
+#[test]
+fn explicit_viewport_wins_over_the_highlight_and_keeps_the_highlight_stable() {
+    // 滚轮建立的显式视口必须覆盖「跟随高亮」的推导：窗口滚动时高亮原地不动。
+    let options = (0..6)
+        .map(|index| option(&format!("o{index}"), "desc", None))
+        .collect();
+    let mut lx = lx_with(vec![question("q", false, options)]);
+    let area = surface(80, 20);
+    let before = computed(&lx, area);
+    assert!(
+        before.content_rows > usize::from(before.options.height),
+        "内容必须溢出（否则测不到滚动）"
+    );
+    assert_eq!(before.scroll, 0, "初始窗口跟随首个高亮");
+
+    {
+        let ask = lx.ask.as_mut().expect("ask");
+        assert!(ask.scroll_viewport(
+            1,
+            before.scroll,
+            before.content_rows,
+            usize::from(before.options.height)
+        ));
+    }
+    let after = computed(&lx, area);
+    assert_eq!(after.scroll, 1, "窗口按显式视口滚动");
+    let ask = lx.ask.as_ref().expect("ask");
+    assert_eq!(ask.highlight[0], 0, "滚轮不得移动高亮");
+    assert_eq!(ask.viewport(), Some(1));
+    // 落位后的每一行仍可命中（滚动不破坏几何一致性）。
+    for row in &after.rows {
+        if let Some(expected) = row.hit {
+            assert_eq!(hit(area, &lx, row.rect.x + 1, row.rect.y), Some(expected));
+        }
+    }
+}
+
+#[test]
+fn list_window_matches_the_rendered_geometry() {
+    // 事件层滚轮用的基准必须与渲染同源，否则滚一格会跳两格或原地不动。
+    let mut q = question(
+        "q",
+        false,
+        vec![
+            option("a", "da", None),
+            option("b", "db", None),
+            option("c", "dc", None),
+            option("d", "dd", None),
+        ],
+    );
+    q.question = "很长的题干 ".repeat(40);
+    let mut lx = lx_with(vec![q]);
+    let area = surface(80, 16);
+    {
+        let ask = lx.ask.as_mut().expect("ask");
+        ask.set_highlight(3);
+    }
+    let lay = computed(&lx, area);
+    let (scroll, total, visible) = super::list_window(area, &lx).expect("list window");
+    assert_eq!(scroll, lay.scroll);
+    assert_eq!(total, lay.content_rows);
+    assert_eq!(visible, usize::from(lay.options.height));
+}
