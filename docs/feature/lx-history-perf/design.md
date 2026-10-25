@@ -1,6 +1,7 @@
 # lx 消息列表滚动性能优化与工具输出高亮调整设计
 
-> 状态：待用户审核，审核通过后才能进入实现。
+> 状态：**已实现并合并到 `dev`**（`03b1ab1`）。实现偏差与实测见 §13 与
+> `task.md` 的「性能记录」，评审结论与修复清单见 `review.md`。
 >
 > 本文所有“当前代码位置”均以 2026-10-25 的 `dev` 工作区为准。
 
@@ -585,7 +586,8 @@ pub fn fold_target_at(area: Rect, lx: &Lx, column: u16, row: u16, cache: &mut Pa
 保留：
 - `thinking_is_hovered` 与 `StepKind::Thinking` 的 hover/expanded 亮粉；
 - `card_target_at`（点击展开）不变；
-- `file_summary::foldable_rows` / `file_diff::folded_rows` / `tool::fold_region`：仍用于填充点击卡片几何；如果只剩 thinking 使用，可在实现时一并删除折区字段，但**不在本次强求**，避免把改动扩大到命中结构。
+- ~~`file_summary::foldable_rows` / `file_diff::folded_rows` / `tool::fold_region`~~：
+  hover 提亮删除后已无消费者，**实现时整条折区已删除**（`review.md` §5）。
 
 ### 7.3 测试更新
 
@@ -690,7 +692,7 @@ cargo test --release -- --ignored perf_lx_history
 |----|------|------|------|
 | `ui::render` 签名 | 直接加 `cache` 参数 | 保留三参 `render`（内部建临时缓存）+ 新增 `render_cached` | `tests/` 下 8 个集成测试文件依赖三参签名，改签名要污染全部集成测试 |
 | 文件拆分 | `history.rs` → `cache/snapshot/layout/render` | 额外拆出 `paint.rs`（绘制数据与绘制函数），`body.rs` 并入 | 绘制数据与绘制逻辑放一处，`rows()` 与 `draw()` 同源 |
-| 二级缓存覆盖 | C1~C8 全部块 | 只覆盖用户正文、markdown、thinking、统计行；工具卡片走 `BlockPaint::Legacy` | 命令/文件摘要展开上限 24 行；唯一无上限的展开差异实测 P95 6.04ms，未超预算 |
+| 二级缓存覆盖 | C1~C8 全部块 | 绘制数据只覆盖用户正文、markdown、thinking、统计行；工具卡片走 `BlockPaint::Legacy`，但**行数与点击面几何**同键缓存 | 命令/文件摘要展开上限 24 行；唯一无上限的展开差异实测 P95 6.19ms，未超预算；几何重算是流式的主要成本（4.7ms/帧），已随块缓存 |
 | LRU 使用标记 | 「本帧使用」在取块时刷新 | 取块**不**刷新，只有绘制路径 `mark_used` 刷新 | 快照重建会遍历全部块，取块即刷新会让一次流式追加把全部缓存钉住，LRU 失效 |
 
 ### 13.2 实测（release，200×50 视口）
