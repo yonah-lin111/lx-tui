@@ -698,7 +698,7 @@ fn build(
             task::draw_list(&mut grid, rect, page);
         }
     } else if let Some(rect) = lay.ask {
-        cursor = ask::draw(&mut grid, rect, lx, focused)
+        cursor = ask::draw(&mut grid, rect, area.height, lx, focused)
             .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
     } else if let Some(input) = lay.input {
         cursor = input::draw(
@@ -774,7 +774,7 @@ fn build_chat(
             task::draw_list(&mut grid, rect, page);
         }
     } else if let Some(rect) = lay.ask {
-        cursor = ask::draw(&mut grid, rect, lx, focused)
+        cursor = ask::draw(&mut grid, rect, area.height, lx, focused)
             .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
     } else if let Some(input) = lay.input
         && lay.input_visible > 0

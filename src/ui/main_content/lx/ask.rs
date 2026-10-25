@@ -3,20 +3,23 @@
 //! 纯渲染：只读 `Lx`，只写 lx 页网格。几何是唯一来源：绘制、鼠标命中与滚轮分区
 //! 全部走 [`AskLayout::compute`]，事件层禁止重算（design §7.3）。
 //!
-//! 版式：
+//! 版式对照后台任务面板：**只有顶部一条分隔线**，不画四周边框。
 //!
 //! ```text
-//! ╭ ASK 1/2 · 布局 ───────────────────────────────╮
-//! │ 1 布局   2 主题                                │  ← 多题时的标签行
-//! │ 侧栏用哪种布局？                                │
-//! │ ❯ (•) 双栏  left list right preview  │ ┌──┬──┐ │
-//! │   ( ) 单栏                           │ │a │b │ │
-//! │   ( ) 上下堆叠                        │ └──┴──┘ │
-//! │   ( ) Other...                       │         │
-//! │   [ Submit ]                         │         │
-//! │ up/down move · space select · ...     esc cancel│
-//! ╰────────────────────────────────────────────────╯
+//! ────────────────────────────────────────────────────────
+//!  1 布局   2 主题   Confirm
+//!  侧栏用哪种布局？
+//! ❯ (•) 双栏                    │ ┌──┬──┐
+//!       left list right preview  │ │a │b │
+//!   ( ) 单栏                    │ └──┴──┘
+//!       one column             │
+//!   ( ) Other...
+//!   [ Submit ]
+//! enter select · space toggle · tab switch     esc cancel
 //! ```
+//!
+//! 问题项**双行**：第一行是标记 + 选项，第二行是缩进的描述；标记始终在第一行左侧。
+//! 内容超过「窗格高度 70%」时选项区内部滚动（右侧滚动条），顶部题目 tab 始终保留。
 
 use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -27,10 +30,8 @@ use crate::ui::text::agent as a;
 
 use super::grid::Grid;
 
-/// 面板高度上限占内容区高度的百分比（与输入框同一档取舍）。
+/// 面板高度上限占内容区高度的百分比（用户要求：最多 70%，不够就滚动）。
 const HEIGHT_PERCENT: u16 = crate::layout::LX_ASK_HEIGHT_PERCENT;
-/// 面板最小高度（含上下边框）。
-const MIN_HEIGHT: u16 = crate::layout::LX_ASK_MIN_BOX;
 /// 低于该高度不画预览（design §8.1）。
 const SMALL_PANE_HEIGHT: u16 = 12;
 /// 内容宽度达到该列才左右分栏。
@@ -45,69 +46,93 @@ const EDITOR_MAX_ROWS: u16 = crate::layout::LX_ASK_EDITOR_ROWS;
 const PREVIEW_GAP: u16 = 1;
 /// 选项行前缀列数（高亮箭头 2 + 标记 3 + 空格 1）。
 const ROW_PREFIX: u16 = 6;
-/// 边框与左右内边距列数（面板内容相对外框的缩进）。
-const INNER_INSET: u16 = 2;
+
+/// 选项区一行。
+#[derive(Clone, Copy)]
+enum RowKind {
+    /// 选项第一行：标记 + 标签。
+    OptionLabel(usize),
+    /// 选项第二行：缩进的描述。
+    OptionDesc(usize),
+    /// 「其他」行（未输入 / 已输入）。
+    Other,
+    /// 单题提交行。
+    Submit,
+    /// Confirm 步：一题的作答摘要。
+    Review(usize),
+    /// Confirm 步的确认行。
+    Confirm,
+}
+
+/// 一条已落位的可视行（绘制与命中共用）。
+struct VisualRow {
+    kind: RowKind,
+    hit: Option<AskHit>,
+    rect: Rect,
+}
 
 /// 一次布局的全部矩形（绝对屏幕坐标）。
 pub(super) struct AskLayout {
-    title: Rect,
-    /// 多题时的可点击标签：`(题号, 矩形)`。
+    /// 顶部可选中的 tab：`(tab 下标, 矩形)`；下标 `questions.len()` 是 Confirm。
     tabs: Vec<(usize, Rect)>,
     question: Rect,
-    /// 选项列区域。
+    /// 选项 / Confirm 列表区域。
     options: Rect,
-    /// 选项区可点击行：选项下标 / `Other` / `Submit`。
-    option_rows: Vec<(AskHit, Rect)>,
+    /// 列表区可视行（已按滚动窗口裁剪）。
+    rows: Vec<VisualRow>,
+    /// 列表内容总行数（滚动条用）。
+    content_rows: usize,
+    /// 列表滚动起点（行）。
+    scroll: usize,
     preview: Option<Rect>,
-    /// 编辑框（含上下分割线）；仅编辑态。
+    /// 编辑框（顶部一条分割线 + 内容行）；仅编辑态。
     editor: Option<Rect>,
     footer: Rect,
-    /// 编辑框可视内容行数（不含上下分割线）。
+    /// 编辑框可视内容行数。
     editor_visible: usize,
-    /// 窗格太矮，预览被隐藏。
-    preview_hidden: bool,
 }
 
 impl AskLayout {
     /// 按面板外框与状态计算内部几何。
-    fn compute(rect: Rect, ask: &AskState) -> Self {
+    fn compute(rect: Rect, pane_height: u16, ask: &AskState) -> Self {
+        // 顶部一条分隔线占第一行，其余从下一行开始（与后台任务面板同款）。
         let inner = Rect::new(
-            rect.x.saturating_add(INNER_INSET),
+            rect.x,
             rect.y.saturating_add(1),
-            rect.width.saturating_sub(INNER_INSET.saturating_mul(2)),
-            rect.height.saturating_sub(2),
+            rect.width,
+            rect.height.saturating_sub(1),
         );
         let mut lay = Self {
-            title: inner,
             tabs: Vec::new(),
             question: Rect::new(inner.x, inner.y, inner.width, 0),
             options: Rect::new(inner.x, inner.y, inner.width, 0),
-            option_rows: Vec::new(),
+            rows: Vec::new(),
+            content_rows: 0,
+            scroll: 0,
             preview: None,
             editor: None,
             footer: Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1),
             editor_visible: 0,
-            preview_hidden: false,
         };
-        if inner.width == 0 || inner.height < 3 {
+        if inner.width == 0 || inner.height < 2 {
             return lay;
         }
         let mut y = inner.y;
-        lay.title = Rect::new(inner.x, y, inner.width, 1);
-        y = y.saturating_add(1);
-
-        // 多题标签行：题数 ≥2 且高度够时才画（单题标题已说明一切）。
-        if ask.questions.len() > 1 && inner.height >= 8 {
+        // 题目 tab **始终显示**（多题时含 Confirm）；高度再小也保留这一行。
+        if ask.tab_len() > 1 {
             lay.tabs = place_tabs(ask, inner.x, y, inner.width);
             y = y.saturating_add(1);
         }
 
         let footer_y = inner.bottom().saturating_sub(1);
-        // 编辑框贴底栏上方；高度按内容行（1–5）+ 上下分割线。
-        if ask.editing {
+        if y > footer_y {
+            return lay;
+        }
+        // 编辑框贴底栏上方：顶部一条分割线 + 1–5 行内容。
+        if ask.editing && ask.question().is_some() {
             let room = footer_y.saturating_sub(y);
-            let content_rows = EDITOR_MAX_ROWS.min(room.saturating_sub(3)).max(1);
-            let height = content_rows.saturating_add(2);
+            let content_rows = EDITOR_MAX_ROWS.min(room.saturating_sub(2)).max(1);
+            let height = content_rows.saturating_add(1);
             let editor_y = footer_y.saturating_sub(height);
             lay.editor = Some(Rect::new(inner.x, editor_y, inner.width, height));
             lay.editor_visible = usize::from(content_rows);
@@ -117,7 +142,7 @@ impl AskLayout {
         let need = question_rows(ask, inner.width);
         let available = body_bottom.saturating_sub(y);
         let question_h = need
-            .min(available.saturating_sub(2))
+            .min(available.saturating_sub(1))
             .max(u16::from(available > 0));
         lay.question = Rect::new(inner.x, y, inner.width, question_h);
         y = y.saturating_add(question_h);
@@ -126,10 +151,9 @@ impl AskLayout {
         if body_h == 0 {
             return lay;
         }
-        let row_count = row_count(ask);
-        // 窗格太矮时只画题干 + 选项 + 底栏，预览整块让位（design §8.1）。
-        let small = rect.height < SMALL_PANE_HEIGHT;
-        if !small && inner.width >= SPLIT_MIN_WIDTH && body_h >= 3 {
+        let small = pane_height < SMALL_PANE_HEIGHT;
+        let show_preview = !small && !ask.is_confirm();
+        if show_preview && inner.width >= SPLIT_MIN_WIDTH && body_h >= 3 {
             let options_w = (inner.width.saturating_mul(2) / 5)
                 .max(OPTIONS_MIN_COLS)
                 .min(
@@ -151,12 +175,9 @@ impl AskLayout {
                     .saturating_sub(PREVIEW_GAP),
                 body_h,
             ));
-        } else if !small && inner.height >= SMALL_PANE_HEIGHT && body_h >= 6 {
-            // 窄窗格：上下排；选项优先，预览拿剩余（至少 2 行才有意义）。
-            let options_h = u16::try_from(row_count)
-                .unwrap_or(u16::MAX)
-                .min(body_h.saturating_sub(3))
-                .max(1);
+        } else if show_preview && inner.height >= SMALL_PANE_HEIGHT && body_h >= 6 {
+            let rows = u16::try_from(content_rows(ask)).unwrap_or(u16::MAX);
+            let options_h = rows.min(body_h.saturating_sub(3)).max(1);
             lay.options = Rect::new(inner.x, y, inner.width, options_h);
             let preview_y = y.saturating_add(options_h).saturating_add(PREVIEW_GAP);
             let preview_h = body_bottom.saturating_sub(preview_y);
@@ -166,42 +187,40 @@ impl AskLayout {
         } else {
             lay.options = Rect::new(inner.x, y, inner.width, body_h);
         }
-        lay.preview_hidden = small || lay.preview.is_none();
-        lay.option_rows = place_option_rows(ask, lay.options, row_count);
+        place_rows(&mut lay, ask);
         lay
     }
 }
 
-/// 面板高度：`need` 夹在「最小 10 行」与「70% 内容区」之间（design §8.1）。
+/// 面板高度：内容需要多少给多少，但**不超过窗格内容区的 70%**；超出部分靠列表滚动。
 pub(super) fn height(area_h: u16, width: u16, lx: &Lx) -> u16 {
     let Some(ask) = lx.ask.as_ref() else {
         return 0;
     };
     let max_h = area_h.saturating_mul(HEIGHT_PERCENT) / 100;
-    let max_h = max_h.max(MIN_HEIGHT).min(area_h);
-    let min_h = MIN_HEIGHT.min(area_h);
-    let inner_w = width.saturating_sub(INNER_INSET.saturating_mul(2));
-    let rows = u16::try_from(row_count(ask)).unwrap_or(u16::MAX);
-    let tabs = u16::from(ask.questions.len() > 1);
-    let preview = if ask.preview().is_some() { 8 } else { 1 };
-    let body = if inner_w >= SPLIT_MIN_WIDTH {
-        rows.saturating_add(1).max(preview)
-    } else {
-        rows.saturating_add(1).saturating_add(preview)
-    };
-    let editor = if ask.editing {
-        EDITOR_MAX_ROWS.saturating_add(2)
+    let inner_w = width;
+    let tabs = u16::from(ask.tab_len() > 1);
+    let editor = if ask.editing && ask.question().is_some() {
+        EDITOR_MAX_ROWS.saturating_add(1)
     } else {
         0
     };
-    let need = 2u16
-        .saturating_add(1)
+    let rows = content_rows(ask);
+    let body = if ask.is_confirm() || inner_w >= SPLIT_MIN_WIDTH {
+        // 分栏时预览与选项并排，不增加高度。
+        u16::try_from(rows).unwrap_or(u16::MAX)
+    } else {
+        u16::try_from(rows)
+            .unwrap_or(u16::MAX)
+            .saturating_add(if ask.preview().is_some() { 8 } else { 1 })
+    };
+    let need = 1u16
         .saturating_add(tabs)
         .saturating_add(question_rows(ask, inner_w))
         .saturating_add(body)
         .saturating_add(editor)
         .saturating_add(1);
-    need.clamp(min_h, max_h.max(min_h))
+    need.min(max_h).min(area_h).max(1)
 }
 
 /// 面板外框（输入框原位置）；未激活为 None。
@@ -209,15 +228,15 @@ pub(crate) fn rect(area: Rect, lx: &Lx) -> Option<Rect> {
     super::layout(area, lx).ask
 }
 
-/// 命中：选项行 / Other / Submit / 题目标签。
+/// 命中：选项行 / Other / Submit（含 Confirm）/ 题目 tab。
 pub(super) fn hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<AskHit> {
     let ask = lx.ask.as_ref()?;
     let rect = rect(area, lx)?;
-    let lay = AskLayout::compute(rect, ask);
+    let lay = AskLayout::compute(rect, area.height, ask);
     let point = (column, row).into();
-    lay.option_rows
+    lay.rows
         .iter()
-        .find_map(|(hit, target)| target.contains(point).then_some(*hit))
+        .find_map(|line| line.hit.filter(|_| line.rect.contains(point)))
         .or_else(|| {
             lay.tabs
                 .iter()
@@ -232,53 +251,58 @@ pub(super) fn wheel_zone(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<A
     if !rect.contains((column, row).into()) {
         return None;
     }
-    let lay = AskLayout::compute(rect, ask);
+    let lay = AskLayout::compute(rect, area.height, ask);
     match lay.preview {
         Some(preview) if preview.contains((column, row).into()) => Some(AskWheelZone::Preview),
         _ => Some(AskWheelZone::Options),
     }
 }
 
-/// 绘制面板；返回聚焦且编辑态时的光标绝对坐标。
-pub(super) fn draw(grid: &mut Grid, rect: Rect, lx: &Lx, focused: bool) -> Option<(u16, u16)> {
+/// 绘制面板；返回聚焦且编辑态时的光标绝对坐标（行, 列）。
+pub(super) fn draw(
+    grid: &mut Grid,
+    rect: Rect,
+    pane_height: u16,
+    lx: &Lx,
+    focused: bool,
+) -> Option<(u16, u16)> {
     let ask = lx.ask.as_ref()?;
-    let lay = AskLayout::compute(rect, ask);
-    super::draw_box(grid, rect, style::border(focused));
-    draw_title(grid, &lay, ask);
+    let lay = AskLayout::compute(rect, pane_height, ask);
+    draw_rule(grid, rect);
     draw_tabs(grid, &lay, ask);
     draw_question(grid, &lay, ask);
-    draw_options(grid, &lay, ask);
+    draw_rows(grid, &lay, ask);
+    draw_scrollbar(grid, &lay);
     draw_preview(grid, &lay, ask);
     let cursor = draw_editor(grid, &lay, ask, focused);
-    draw_footer(grid, &lay, lx, ask);
+    draw_footer(grid, &lay, lx);
     cursor
 }
 
-/// 标题行：`ASK 1/2 · 布局`。
-fn draw_title(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
-    let area = lay.title;
-    if area.width == 0 || area.height == 0 {
+/// 顶部一条分隔线（与后台任务面板同款：淡青 + dim，画在内容区内）。
+fn draw_rule(grid: &mut Grid, rect: Rect) {
+    if rect.width == 0 {
         return;
     }
-    let mut x = area.x;
-    x = put(grid, x, area.y, a::ASK_TITLE, style::accent(), area);
-    let position = a::ask_position(ask.current, ask.questions.len());
-    x = put(grid, x, area.y, " ", style::muted(), area);
-    x = put(grid, x, area.y, &position, style::muted(), area);
-    if let Some(question) = ask.question() {
-        x = put(grid, x, area.y, a::ASK_TITLE_SEP, style::muted(), area);
-        put(grid, x, area.y, &question.header, style::strong(), area);
-    }
+    grid.put_clipped(
+        rect.x,
+        rect.y,
+        &"─".repeat(usize::from(rect.width)),
+        style::border_title(),
+        rect.width,
+    );
 }
 
-/// 多题标签：` 1 布局  2 主题 `，当前题反显。
+/// 题目 tab：题目标题（+ Confirm）；当前步反显。
 fn draw_tabs(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
     for (index, rect) in &lay.tabs {
-        let Some(question) = ask.questions.get(*index) else {
-            continue;
+        let active = if *index == ask.questions.len() {
+            ask.is_confirm()
+        } else {
+            !ask.is_confirm() && *index == ask.current
         };
-        let label = format!(" {} {} ", index + 1, question.header);
-        let tab_style = if *index == ask.current {
+        let label = tab_label(ask, *index);
+        let tab_style = if active {
             style::selected_item()
         } else {
             style::muted()
@@ -287,15 +311,16 @@ fn draw_tabs(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
     }
 }
 
-/// 题干：最多 3 行，超出截断。
+/// 题干；Confirm 步显示复核标题。
 fn draw_question(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
-    let Some(question) = ask.question() else {
-        return;
-    };
     if lay.question.width == 0 || lay.question.height == 0 {
         return;
     }
-    let lines = wrap(&question.question, usize::from(lay.question.width));
+    let text = match ask.question() {
+        Some(question) if !ask.is_confirm() => question.question.clone(),
+        _ => a::ASK_REVIEW.to_string(),
+    };
+    let lines = wrap(&text, usize::from(lay.question.width));
     for (index, line) in lines
         .iter()
         .take(usize::from(lay.question.height))
@@ -311,65 +336,74 @@ fn draw_question(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
     }
 }
 
-/// 选项列：标记 + 标签（+ 高亮项的说明）、Other 行、Submit 行。
-fn draw_options(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
-    let Some(question) = ask.question() else {
-        return;
-    };
-    let multi = question.multi_select;
-    let selected = ask
-        .selected
-        .get(ask.current)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    let highlight = ask.highlight.get(ask.current).copied().unwrap_or(0);
-    let other = question.options.len();
-    for (hit, rect) in &lay.option_rows {
-        let y = rect.y;
-        let pointed = match hit {
-            AskHit::Option(index) => *index == highlight,
-            AskHit::Other => highlight == other,
-            _ => false,
-        };
-        if pointed {
-            grid.put_clipped(rect.x, y, a::ASK_CURSOR, style::accent(), 2);
-        }
-        match hit {
-            AskHit::Option(index) => {
-                let Some(option) = question.options.get(*index) else {
+/// 列表：选项（双行）/ Other / Submit / Confirm 复核行。
+fn draw_rows(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
+    for line in &lay.rows {
+        let y = line.rect.y;
+        let rect = line.rect;
+        match line.kind {
+            RowKind::OptionLabel(index) | RowKind::OptionDesc(index) => {
+                let Some(question) = ask.question() else {
                     continue;
                 };
-                let marker = match (multi, selected.contains(index)) {
-                    (true, true) => a::ASK_MULTI_ON,
-                    (true, false) => a::ASK_MULTI_OFF,
-                    (false, true) => a::ASK_SINGLE_ON,
-                    (false, false) => a::ASK_SINGLE_OFF,
+                let Some(option) = question.options.get(index) else {
+                    continue;
                 };
-                let marker_style = if selected.contains(index) || pointed {
-                    style::accent()
+                let selected = ask
+                    .selected
+                    .get(ask.current)
+                    .is_some_and(|picked| picked.contains(&index));
+                let pointed = ask.highlight.get(ask.current).copied() == Some(index);
+                if matches!(line.kind, RowKind::OptionLabel(_)) {
+                    if pointed {
+                        grid.put_clipped(rect.x, y, a::ASK_CURSOR, style::accent(), 2);
+                    }
+                    let marker = match (question.multi_select, selected) {
+                        (true, true) => a::ASK_MULTI_ON,
+                        (true, false) => a::ASK_MULTI_OFF,
+                        (false, true) => a::ASK_SINGLE_ON,
+                        (false, false) => a::ASK_SINGLE_OFF,
+                    };
+                    let marker_style = if selected || pointed {
+                        style::accent()
+                    } else {
+                        style::muted()
+                    };
+                    grid.put_clipped(
+                        rect.x.saturating_add(2),
+                        y,
+                        marker,
+                        marker_style,
+                        rect.width,
+                    );
+                    let label_style = if pointed {
+                        style::strong()
+                    } else {
+                        style::text()
+                    };
+                    grid.put_clipped(
+                        rect.x.saturating_add(ROW_PREFIX),
+                        y,
+                        &option.label,
+                        label_style,
+                        rect.width.saturating_sub(ROW_PREFIX),
+                    );
                 } else {
-                    style::muted()
-                };
-                put(grid, rect.x + 2, y, marker, marker_style, *rect);
-                let label_x = rect.x.saturating_add(ROW_PREFIX);
-                let label_style = if pointed {
-                    style::strong()
-                } else {
-                    style::text()
-                };
-                let x = put(grid, label_x, y, &option.label, label_style, *rect);
-                if pointed && !option.description.is_empty() {
-                    put(
-                        grid,
-                        x.saturating_add(2),
+                    // 描述行缩进到标签列；选项未选中也显示（双行布局的核心信息）。
+                    grid.put_clipped(
+                        rect.x.saturating_add(ROW_PREFIX),
                         y,
                         &option.description,
-                        style::agent_step_detail(),
-                        *rect,
+                        if pointed {
+                            style::text()
+                        } else {
+                            style::agent_step_detail()
+                        },
+                        rect.width.saturating_sub(ROW_PREFIX),
                     );
                 }
             }
-            AskHit::Other => {
+            RowKind::Other => {
                 let text = ask
                     .custom
                     .get(ask.current)
@@ -377,52 +411,109 @@ fn draw_options(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
                     .unwrap_or_default();
                 let text = text.trim();
                 let custom_on = ask.custom_on.get(ask.current).copied().unwrap_or(false);
+                let multi = ask.question().is_some_and(|question| question.multi_select);
+                let pointed = ask
+                    .question()
+                    .is_some_and(|question| ask.highlight[ask.current] == question.options.len());
+                if pointed {
+                    grid.put_clipped(rect.x, y, a::ASK_CURSOR, style::accent(), 2);
+                }
                 let marker = match (multi, custom_on && !text.is_empty()) {
                     (true, true) => a::ASK_MULTI_ON,
                     (true, false) => a::ASK_MULTI_OFF,
                     (false, true) => a::ASK_SINGLE_ON,
                     (false, false) => a::ASK_SINGLE_OFF,
                 };
-                if text.is_empty() {
-                    put(grid, rect.x + 2, y, marker, style::muted(), *rect);
-                    put(
-                        grid,
-                        rect.x + ROW_PREFIX,
-                        y,
-                        a::ASK_OTHER,
-                        if pointed {
-                            style::strong()
-                        } else {
-                            style::text()
-                        },
-                        *rect,
-                    );
-                } else {
-                    let marker_style = if custom_on {
+                grid.put_clipped(
+                    rect.x.saturating_add(2),
+                    y,
+                    marker,
+                    if custom_on {
                         style::accent()
                     } else {
                         style::muted()
-                    };
-                    put(grid, rect.x + 2, y, marker, marker_style, *rect);
-                    let label = format!("{}{text}", a::ASK_OTHER_PREFIX);
-                    put(
-                        grid,
-                        rect.x + ROW_PREFIX,
-                        y,
-                        &label,
-                        if pointed {
-                            style::strong()
-                        } else {
-                            style::text()
-                        },
-                        *rect,
-                    );
-                }
+                    },
+                    rect.width,
+                );
+                let label = if text.is_empty() {
+                    a::ASK_OTHER.to_string()
+                } else {
+                    format!("{}{text}", a::ASK_OTHER_PREFIX)
+                };
+                grid.put_clipped(
+                    rect.x.saturating_add(ROW_PREFIX),
+                    y,
+                    &label,
+                    if pointed {
+                        style::strong()
+                    } else {
+                        style::text()
+                    },
+                    rect.width.saturating_sub(ROW_PREFIX),
+                );
             }
-            AskHit::Submit => {
-                put(grid, rect.x + 2, y, a::ASK_SUBMIT, style::accent(), *rect);
+            RowKind::Submit => {
+                grid.put_clipped(rect.x, y, a::ASK_SUBMIT, style::accent(), rect.width);
             }
-            AskHit::Tab(_) => {}
+            RowKind::Review(index) => {
+                let Some(question) = ask.questions.get(index) else {
+                    continue;
+                };
+                let answers = ask.answers_at(index);
+                let summary = if answers.is_empty() {
+                    a::ASK_NO_ANSWER.to_string()
+                } else {
+                    answers.join(", ")
+                };
+                let line = format!("{} · {summary}", question.header);
+                let ok = !answers.is_empty();
+                grid.put_clipped(
+                    rect.x,
+                    y,
+                    &line,
+                    if ok {
+                        style::text()
+                    } else {
+                        style::agent_warn()
+                    },
+                    rect.width,
+                );
+            }
+            RowKind::Confirm => {
+                let ready = ask.all_answered();
+                grid.put_clipped(
+                    rect.x,
+                    y,
+                    a::ASK_CONFIRM,
+                    if ready {
+                        style::accent()
+                    } else {
+                        style::muted()
+                    },
+                    rect.width,
+                );
+            }
+        }
+    }
+}
+
+/// 列表滚动条：内容超出可视区时贴列表最右一列画 thumb（只画 thumb，不画轨道）。
+fn draw_scrollbar(grid: &mut Grid, lay: &AskLayout) {
+    let visible = usize::from(lay.options.height);
+    if visible == 0 || lay.content_rows <= visible || lay.options.width < 2 {
+        return;
+    }
+    let track = Rect::new(
+        lay.options.right().saturating_sub(1),
+        lay.options.y,
+        1,
+        lay.options.height,
+    );
+    if let Some(bar) =
+        crate::ui::widgets::scrollbar::layout(track, lay.content_rows, visible, lay.scroll)
+    {
+        for y in bar.thumb.y..bar.thumb.bottom() {
+            grid.set(track.x, y, '▐', style::text());
         }
     }
 }
@@ -454,7 +545,6 @@ fn draw_preview(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
         .copied()
         .unwrap_or(0)
         .min(total.saturating_sub(1));
-    // 溢出时最右列让给滚动条 thumb。
     let overflow = total > visible;
     let width = preview.width.saturating_sub(u16::from(overflow));
     for (index, line) in lines.iter().skip(offset).take(visible).enumerate() {
@@ -466,17 +556,16 @@ fn draw_preview(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
             width,
         );
     }
-    if overflow {
-        let bar = crate::ui::widgets::scrollbar::layout(preview, total, visible, offset);
-        if let Some(bar) = bar {
-            for y in bar.thumb.y..bar.thumb.bottom() {
-                grid.set(preview.right().saturating_sub(1), y, '▐', style::text());
-            }
+    if overflow
+        && let Some(bar) = crate::ui::widgets::scrollbar::layout(preview, total, visible, offset)
+    {
+        for y in bar.thumb.y..bar.thumb.bottom() {
+            grid.set(preview.right().saturating_sub(1), y, '▐', style::text());
         }
     }
 }
 
-/// 编辑框：上下分割线 + 软换行文本 + 光标。
+/// 编辑框：顶部一条分割线 + 软换行文本 + 光标。
 fn draw_editor(
     grid: &mut Grid,
     lay: &AskLayout,
@@ -484,18 +573,10 @@ fn draw_editor(
     focused: bool,
 ) -> Option<(u16, u16)> {
     let editor_rect = lay.editor?;
-    if editor_rect.height < 2 || editor_rect.width < 2 {
+    if editor_rect.height < 2 || editor_rect.width == 0 {
         return None;
     }
-    for x in editor_rect.x..editor_rect.right() {
-        grid.set(x, editor_rect.y, '─', style::muted());
-        grid.set(
-            x,
-            editor_rect.bottom().saturating_sub(1),
-            '─',
-            style::muted(),
-        );
-    }
+    draw_rule(grid, editor_rect);
     let editor = ask.editor()?;
     let text = editor.text();
     let rows = editor.visual_rows();
@@ -506,12 +587,8 @@ fn draw_editor(
     } else {
         0
     };
-    let content_x = editor_rect.x.saturating_add(1);
-    // 与缓冲区自身的软换行宽度同源（窗格 resize 后由 `resize_panes` 精确同步）。
-    let content_w = editor
-        .width()
-        .max(1)
-        .min(editor_rect.width.saturating_sub(2).max(1));
+    let content_x = editor_rect.x;
+    let content_w = editor.width().max(1).min(editor_rect.width.max(1));
     for (index, line) in rows.iter().skip(start).take(visible).enumerate() {
         let Some(segment) = text.get(line.start..line.end) else {
             break;
@@ -538,29 +615,26 @@ fn draw_editor(
     ))
 }
 
-/// 底栏：左内联提示 / 键位，右预览降级或 Esc 状态。
-fn draw_footer(grid: &mut Grid, lay: &AskLayout, lx: &Lx, ask: &AskState) {
+/// 底栏：左侧键位提示（多选/单选、单题/多题各一套），右侧预览降级或 Esc 状态。
+fn draw_footer(grid: &mut Grid, lay: &AskLayout, lx: &Lx) {
     let area = lay.footer;
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let right = if lay.preview_hidden {
-        a::ASK_PREVIEW_HIDDEN.to_string()
-    } else if stop_armed(lx) {
+    let right = if stop_armed(lx) {
         a::ASK_FOOTER_CANCEL_ARMED.to_string()
     } else {
         a::ASK_FOOTER_CANCEL.to_string()
     };
     let right_w = u16::try_from(right.width()).unwrap_or(u16::MAX);
-    let left = ask.hint.as_deref().unwrap_or(a::ASK_FOOTER_KEYS);
-    let left_style = if ask.hint.is_some() {
-        style::agent_warn()
-    } else {
-        style::muted()
-    };
     if right_w.saturating_add(2) <= area.width {
-        let left_w = area.width.saturating_sub(right_w).saturating_sub(1);
-        grid.put_clipped(area.x, area.y, left, left_style, left_w);
+        grid.put_clipped(
+            area.x,
+            area.y,
+            a::ASK_FOOTER_KEYS,
+            style::muted(),
+            area.width.saturating_sub(right_w).saturating_sub(1),
+        );
         grid.put_clipped(
             area.right().saturating_sub(right_w),
             area.y,
@@ -569,7 +643,13 @@ fn draw_footer(grid: &mut Grid, lay: &AskLayout, lx: &Lx, ask: &AskState) {
             right_w,
         );
     } else {
-        grid.put_clipped(area.x, area.y, left, left_style, area.width);
+        grid.put_clipped(
+            area.x,
+            area.y,
+            a::ASK_FOOTER_KEYS,
+            style::muted(),
+            area.width,
+        );
     }
 }
 
@@ -581,12 +661,20 @@ fn stop_armed(lx: &Lx) -> bool {
     })
 }
 
-/// 题目标签落位；标签总宽超出时只画放得下的（命中同步）。
+/// tab 文案：题目 ` N header `，最后一个是 ` Confirm `。
+fn tab_label(ask: &AskState, index: usize) -> String {
+    match ask.questions.get(index) {
+        Some(question) => format!(" {} {} ", index + 1, question.header),
+        None => format!(" {} ", a::ASK_CONFIRM_TAB),
+    }
+}
+
+/// 题目 tab 落位；总宽超出时只画放得下的（命中同步）。
 fn place_tabs(ask: &AskState, x: u16, y: u16, width: u16) -> Vec<(usize, Rect)> {
-    let mut out = Vec::with_capacity(ask.questions.len());
+    let mut out = Vec::with_capacity(ask.tab_len());
     let mut cx = x;
-    for (index, question) in ask.questions.iter().enumerate() {
-        let label = format!(" {} {} ", index + 1, question.header);
+    for index in 0..ask.tab_len() {
+        let label = tab_label(ask, index);
         let w = u16::try_from(label.width()).unwrap_or(u16::MAX);
         if w > width.saturating_sub(cx.saturating_sub(x)) {
             break;
@@ -597,49 +685,105 @@ fn place_tabs(ask: &AskState, x: u16, y: u16, width: u16) -> Vec<(usize, Rect)> 
     out
 }
 
-/// 选项区可点击行（窗口随高亮滚动，避免高亮跑出可视区）。
-fn place_option_rows(ask: &AskState, options: Rect, row_count: usize) -> Vec<(AskHit, Rect)> {
-    if options.width == 0 || options.height == 0 || row_count == 0 {
-        return Vec::new();
+/// 列表内容行数（选项各 1–2 行 + Other + Submit / 复核行）。
+fn content_rows(ask: &AskState) -> usize {
+    rows_model(ask).iter().map(|row| row.1).sum()
+}
+
+/// 列表模型：`(行种类, 占用行数)`；绘制、滚动与命中共用。
+fn rows_model(ask: &AskState) -> Vec<(RowKind, usize)> {
+    let mut out = Vec::new();
+    if ask.is_confirm() {
+        for index in 0..ask.questions.len() {
+            out.push((RowKind::Review(index), 1));
+        }
+        out.push((RowKind::Confirm, 1));
+        return out;
     }
-    let visible = usize::from(options.height);
-    let highlight = ask.highlight.get(ask.current).copied().unwrap_or(0);
-    let start = if highlight >= visible {
-        highlight + 1 - visible
-    } else {
-        0
+    let Some(question) = ask.question() else {
+        return out;
     };
-    let mut rows = Vec::with_capacity(visible);
-    for index in start..row_count.min(start.saturating_add(visible)) {
-        let hit = if index < ask.question().map_or(0, |q| q.options.len()) {
-            AskHit::Option(index)
-        } else if index + 1 == row_count {
-            AskHit::Submit
-        } else {
-            AskHit::Other
-        };
-        rows.push((
-            hit,
-            Rect::new(
-                options.x,
-                options
-                    .y
-                    .saturating_add(u16::try_from(index - start).unwrap_or(0)),
-                options.width,
-                1,
-            ),
-        ));
+    for (index, option) in question.options.iter().enumerate() {
+        out.push((RowKind::OptionLabel(index), 1));
+        if !option.description.trim().is_empty() {
+            out.push((RowKind::OptionDesc(index), 1));
+        }
     }
-    rows
+    out.push((RowKind::Other, 1));
+    // 单题才有独立 Submit；多题的提交入口是 Confirm（避免两个提交点）。
+    if ask.questions.len() == 1 {
+        out.push((RowKind::Submit, 1));
+    }
+    out
 }
 
-/// 选项行数：选项 + 固定「其他」+ 提交行。
-fn row_count(ask: &AskState) -> usize {
-    ask.row_count().saturating_add(1)
+/// 可见行落位：按高亮自动滚动，保证高亮项完整可见。
+fn place_rows(lay: &mut AskLayout, ask: &AskState) {
+    let model = rows_model(ask);
+    let total: usize = model.iter().map(|row| row.1).sum();
+    lay.content_rows = total;
+    let visible = usize::from(lay.options.height);
+    if visible == 0 || total == 0 {
+        return;
+    }
+    // 高亮项的末行：滚动只需保证它在可视区底部（其余内容自然在上方）。
+    let highlight_end = if ask.is_confirm() {
+        total
+    } else {
+        let highlight = ask.highlight.get(ask.current).copied().unwrap_or(0);
+        let mut row = 0usize;
+        let mut end = 0usize;
+        for (kind, height) in &model {
+            row += height;
+            let item = match kind {
+                RowKind::OptionLabel(index) | RowKind::OptionDesc(index) => Some(*index),
+                RowKind::Other => ask.question().map(|question| question.options.len()),
+                _ => None,
+            };
+            if item == Some(highlight) {
+                end = row;
+            }
+        }
+        end
+    };
+    let scroll = highlight_end.saturating_sub(visible);
+    lay.scroll = scroll;
+    let mut row = 0usize;
+    for (kind, height) in model {
+        for offset in 0..height {
+            let absolute = row + offset;
+            if absolute < scroll {
+                continue;
+            }
+            let index = absolute - scroll;
+            if index >= visible {
+                break;
+            }
+            let rect = Rect::new(
+                lay.options.x,
+                lay.options
+                    .y
+                    .saturating_add(u16::try_from(index).unwrap_or(0)),
+                lay.options.width,
+                1,
+            );
+            let hit = match kind {
+                RowKind::OptionLabel(i) | RowKind::OptionDesc(i) => Some(AskHit::Option(i)),
+                RowKind::Other => Some(AskHit::Other),
+                RowKind::Submit | RowKind::Confirm => Some(AskHit::Submit),
+                RowKind::Review(_) => None,
+            };
+            lay.rows.push(VisualRow { kind, hit, rect });
+        }
+        row += height;
+    }
 }
 
-/// 题干占用行数（1–3）。
+/// 题干占用行数：Confirm 步固定 1 行，其余最多 3 行。
 fn question_rows(ask: &AskState, width: u16) -> u16 {
+    if ask.is_confirm() {
+        return 1;
+    }
     let Some(question) = ask.question() else {
         return 1;
     };
@@ -647,25 +791,6 @@ fn question_rows(ask: &AskState, width: u16) -> u16 {
     u16::try_from(rows)
         .unwrap_or(MAX_QUESTION_ROWS)
         .clamp(1, MAX_QUESTION_ROWS)
-}
-
-/// 写入一段文本并返回下一列；整体不越过 `bounds`。
-fn put(
-    grid: &mut Grid,
-    x: u16,
-    y: u16,
-    content: &str,
-    style: ratatui::style::Style,
-    bounds: Rect,
-) -> u16 {
-    let right = bounds.right();
-    if x >= right {
-        return x;
-    }
-    let width = right.saturating_sub(x);
-    grid.put_clipped(x, y, content, style, width);
-    x.saturating_add(u16::try_from(content.width()).unwrap_or(u16::MAX))
-        .min(right)
 }
 
 /// `\t` 展开为 4 列（预览原样渲染，不做 Markdown）。

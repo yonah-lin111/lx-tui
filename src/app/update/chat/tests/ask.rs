@@ -73,16 +73,16 @@ fn snapshot(state: &AppState, pane: PaneId) -> String {
     let target = state.pane_anywhere(pane).expect("pane");
     let ask = target.lx.ask.as_ref();
     format!(
-        "input={:?} cursor={} rev={} ask={:?} editing={:?} current={:?} selected={:?} custom_on={:?} hint={:?}",
+        "input={:?} cursor={} rev={} ask={:?} editing={:?} current={:?} confirm={:?} selected={:?} custom_on={:?}",
         target.lx.input,
         target.lx.cursor,
         target.lx.revision(),
         ask.map(|ask| ask.call_id.clone()),
         ask.map(|ask| ask.editing),
         ask.map(|ask| ask.current),
+        ask.map(|ask| ask.confirm),
         ask.map(|ask| ask.selected.clone()),
         ask.map(|ask| ask.custom_on.clone()),
-        ask.map(|ask| ask.hint.clone()),
     )
 }
 
@@ -138,20 +138,20 @@ fn enter_submits_and_tab_arrows_switch_questions() {
         question("a", false, &["A"]),
         question("b", false, &["B"]),
     ]);
-    press(&mut state, LxInput::Char(' '));
+    // 单选：Enter 直接选中高亮项并前进（无需先按 Space）。
     press(&mut state, LxInput::Enter);
     assert_eq!(panel(&state, pane).current, 1, "非末题 Enter 前进");
+    assert_eq!(
+        panel(&state, pane).answers_at(0),
+        vec!["A".to_string()],
+        "Enter 即选中"
+    );
     press(&mut state, LxInput::Left);
     assert_eq!(panel(&state, pane).current, 0, "← 上一题");
     press(&mut state, LxInput::Right);
     assert_eq!(panel(&state, pane).current, 1, "→ 下一题");
     press(&mut state, LxInput::Tab);
-    assert_eq!(panel(&state, pane).current, 1, "末题 Tab 不越界");
-    assert_eq!(
-        panel(&state, pane).collected[0],
-        vec!["A".to_string()],
-        "切题保留已提交答案"
-    );
+    assert!(panel(&state, pane).is_confirm(), "末题 Tab 进入 Confirm");
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn enter_on_other_row_enters_edit_instead_of_submitting() {
     press(&mut state, LxInput::Enter);
     assert!(panel(&state, pane).editing);
     assert!(
-        panel(&state, pane).collected[0].is_empty(),
+        panel(&state, pane).answers_at(0).is_empty(),
         "进入编辑不等于提交"
     );
 }
@@ -195,9 +195,10 @@ fn edit_mode_enter_commits_text_and_escape_only_leaves_edit() {
     assert_eq!(current.current_answers(), vec!["自己写".to_string()]);
     assert_eq!(current.current, 0, "提交文本不提交整题");
 
-    // 再进编辑：Esc 只退出，文本保留，整轮不取消。
+    // 再进编辑（已提交的手写答案之上回车会提交，故用 Space 重进编辑）：
+    // Esc 只退出，文本保留，整轮不取消。
     press(&mut state, LxInput::Down);
-    press(&mut state, LxInput::Enter);
+    press(&mut state, LxInput::Char(' '));
     press(&mut state, LxInput::Char('x'));
     press(&mut state, LxInput::Escape);
     let panel = panel(&state, pane);
@@ -248,21 +249,24 @@ fn shift_enter_newline_in_edit_mode() {
 // ===== 提交（design §6.3）=====
 
 #[test]
-fn empty_answer_sets_hint_and_does_not_submit() {
-    let (mut state, pane, _key) = asking(vec![question("q", false, &["A"])]);
+fn empty_answer_shows_toast_and_does_not_submit() {
+    // 多选 + 单题：Enter 不会自动勾选，因此答案为空 → toast。
+    let (mut state, pane, _key) = asking(vec![question("q", true, &["A"])]);
     press(&mut state, LxInput::Enter);
     let current = panel(&state, pane);
-    assert_eq!(
-        current.hint.as_deref(),
-        Some(crate::app::update::chat::ask::ASK_HINT_EMPTY)
-    );
-    assert!(current.collected[0].is_empty());
+    assert!(current.answers_at(0).is_empty());
+    let toast = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.toast.as_ref())
+        .expect("空答案必须给出窗格内 toast");
+    assert_eq!(toast.message, crate::app::update::chat::ask::ASK_HINT_EMPTY);
     assert!(
         !state
             .effects
             .iter()
             .any(|effect| matches!(effect, crate::app::effects::Effect::AnswerAsk { .. }))
     );
+    assert!(state.pane_anywhere(pane).expect("pane").lx.ask.is_some());
 }
 
 #[test]
@@ -273,13 +277,20 @@ fn last_question_submit_pushes_answer_effect_and_clears_panel() {
     ]);
     press(&mut state, LxInput::Char(' '));
     press(&mut state, LxInput::Enter);
+    assert_eq!(panel(&state, pane).current, 1, "第 1 题作答后前进");
     press(&mut state, LxInput::Char(' '));
     press(&mut state, LxInput::Down);
     press(&mut state, LxInput::Char(' '));
     press(&mut state, LxInput::Enter);
+    assert!(panel(&state, pane).is_confirm(), "末题后进入 Confirm");
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.ask.is_some(),
+        "Confirm 之前绝不提交"
+    );
+    press(&mut state, LxInput::Enter);
     assert!(
         state.pane_anywhere(pane).expect("pane").lx.ask.is_none(),
-        "末题提交后清面板"
+        "Confirm 提交后清面板"
     );
     let effect = state
         .effects
@@ -303,7 +314,7 @@ fn last_question_submit_pushes_answer_effect_and_clears_panel() {
 }
 
 #[test]
-fn resubmitting_after_going_back_updates_collected() {
+fn going_back_and_changing_answers_updates_the_submitted_payload() {
     let (mut state, pane, _key) = asking(vec![
         question("a", true, &["A1", "A2"]),
         question("b", false, &["B"]),
@@ -315,11 +326,21 @@ fn resubmitting_after_going_back_updates_collected() {
     press(&mut state, LxInput::Char('1'));
     press(&mut state, LxInput::Char('2'));
     press(&mut state, LxInput::Enter);
-    assert_eq!(
-        panel(&state, pane).collected[0],
-        vec!["A2".to_string()],
-        "回看修改后重提交覆盖 collected"
-    );
+    // 第 2 题是单选：Enter 直接选中 B 并进入 Confirm。
+    press(&mut state, LxInput::Enter);
+    assert!(panel(&state, pane).is_confirm());
+    press(&mut state, LxInput::Enter);
+    assert!(state.pane_anywhere(pane).expect("pane").lx.ask.is_none());
+    let answers = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::AnswerAsk { answers, .. } => Some(answers.clone()),
+            _ => None,
+        })
+        .expect("AnswerAsk");
+    assert_eq!(answers.get("a"), Some(&vec!["A2".to_string()]));
+    assert_eq!(answers.get("b"), Some(&vec!["B".to_string()]));
 }
 
 #[test]
@@ -494,21 +515,28 @@ fn click_other_enters_edit_and_click_tab_switches_question() {
 }
 
 #[test]
-fn click_submit_enters_question_and_final_click_submits() {
+fn confirm_only_submits_after_every_question_is_answered() {
     let (mut state, pane, _key) = asking(vec![
         question("a", false, &["A"]),
         question("b", false, &["B"]),
     ]);
-    // 高亮「其他」时点 Submit = 进编辑（与 Enter 等价）。
-    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Other);
+    // 直接跳过第 1 题点 Confirm：全部作答未满足 → toast，不提交。
+    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Tab(2));
+    assert!(panel(&state, pane).is_confirm());
     crate::app::update::apply_ask_click(&mut state, pane, AskHit::Submit);
-    assert!(panel(&state, pane).editing);
-    // 退出编辑，选第 0 行后点 Submit 提交本题。
+    assert!(state.pane_anywhere(pane).expect("pane").lx.ask.is_some());
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|target| target.lx.toast.as_ref())
+            .is_some()
+    );
+    // 逐题作答后 Confirm 才放行。
+    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Tab(0));
     crate::app::update::apply_ask_click(&mut state, pane, AskHit::Option(0));
-    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Submit);
-    assert_eq!(panel(&state, pane).current, 1);
-    // 末题：再选再 Submit → 面板清空 + 推效应。
+    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Tab(1));
     crate::app::update::apply_ask_click(&mut state, pane, AskHit::Option(0));
+    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Tab(2));
     crate::app::update::apply_ask_click(&mut state, pane, AskHit::Submit);
     assert!(state.pane_anywhere(pane).expect("pane").lx.ask.is_none());
     assert!(state.effects.iter().any(|effect| matches!(
@@ -553,4 +581,49 @@ fn ask_branch_precedes_history_browsing() {
     let target = state.pane_anywhere(pane).expect("pane");
     assert_eq!(target.lx.input, "草稿 abc", "面板接管期间草稿不变");
     assert_eq!(target.lx.cursor, "草稿 abc".len());
+}
+
+#[test]
+fn single_question_enter_selects_highlight_and_submits_immediately() {
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A", "B"])]);
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Enter);
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.ask.is_none(),
+        "单题单选：回车选中后直接提交"
+    );
+    let answers = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::AnswerAsk { answers, .. } => Some(answers.clone()),
+            _ => None,
+        })
+        .expect("AnswerAsk");
+    assert_eq!(answers.get("q"), Some(&vec!["B".to_string()]));
+}
+
+#[test]
+fn single_question_multi_select_submits_with_enter_after_space() {
+    let (mut state, pane, _key) = asking(vec![question("q", true, &["A", "B"])]);
+    // 多选：回车不会自动勾选，需要先按空格。
+    press(&mut state, LxInput::Enter);
+    assert!(state.pane_anywhere(pane).expect("pane").lx.ask.is_some());
+    press(&mut state, LxInput::Char(' '));
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Char(' '));
+    press(&mut state, LxInput::Enter);
+    assert!(state.pane_anywhere(pane).expect("pane").lx.ask.is_none());
+    let answers = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::AnswerAsk { answers, .. } => Some(answers.clone()),
+            _ => None,
+        })
+        .expect("AnswerAsk");
+    assert_eq!(
+        answers.get("q"),
+        Some(&vec!["A".to_string(), "B".to_string()])
+    );
 }

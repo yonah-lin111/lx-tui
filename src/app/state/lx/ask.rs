@@ -38,6 +38,8 @@ pub struct AskState {
     pub call_id: String,
     pub questions: Vec<AskQuestion>,
     pub current: usize,
+    /// 多题流程的最后一步：复核 + 确认提交（`current` 此时仍停在末题）。
+    pub confirm: bool,
     /// 每题高亮行：`0..options.len()`，最后一行固定是「其他」。
     pub highlight: Vec<usize>,
     /// 每题已勾选项（按下标保存，顺序即勾选顺序）。
@@ -46,16 +48,10 @@ pub struct AskState {
     pub custom: Vec<AskEditor>,
     /// 每题手写文本是否计入答案（提交编辑态即计入；清空即不计入）。
     pub custom_on: Vec<bool>,
-    /// 已提交的题答案（回看/重提时保留）。
-    pub collected: Vec<Vec<String>>,
     /// 当前题是否处于编辑态。
     pub editing: bool,
     /// 每题预览滚动偏移。
     pub preview_scroll: Vec<usize>,
-    /// 每题选项列表滚动偏移。
-    pub list_scroll: Vec<usize>,
-    /// 内联提示（例如「select at least one option」）。
-    pub hint: Option<String>,
 }
 
 impl AskState {
@@ -67,15 +63,13 @@ impl AskState {
             call_id,
             questions,
             current: 0,
+            confirm: false,
             highlight: vec![0; count],
             selected: vec![Vec::new(); count],
             custom: (0..count).map(|_| AskEditor::new()).collect(),
             custom_on: vec![false; count],
-            collected: vec![Vec::new(); count],
             editing: false,
             preview_scroll: vec![0; count],
-            list_scroll: vec![0; count],
-            hint: None,
         }
     }
 
@@ -135,6 +129,9 @@ impl AskState {
     /// 单选：设为唯一勾选并清空该题手写答案（先勾后写、先写后勾都只留一个答案）。
     /// 多选：切换该选项，勾选与手写可共存。
     pub fn choose(&mut self, index: usize) -> bool {
+        if self.confirm {
+            return false;
+        }
         let Some(question) = self.question() else {
             return false;
         };
@@ -158,7 +155,6 @@ impl AskState {
             self.selected[current] = vec![index];
             self.clear_custom(current);
         }
-        self.hint = None;
         true
     }
 
@@ -167,6 +163,9 @@ impl AskState {
     /// 单选按下标独占选择，多选切换。单选若只高亮不选中，纯鼠标用户永远交不出
     /// 答案（Submit 只会得到空答案提示）——单击选中、Submit 提交是唯一可行的鼠标路径。
     pub fn click_option(&mut self, index: usize) -> bool {
+        if self.confirm {
+            return false;
+        }
         let Some(question) = self.question() else {
             return false;
         };
@@ -176,19 +175,11 @@ impl AskState {
         self.choose(index)
     }
 
-    /// 切到指定题（鼠标点题目标签）；越界返回 false。
-    pub fn goto_question(&mut self, index: usize) -> bool {
-        if index >= self.questions.len() || index == self.current {
-            return false;
-        }
-        self.current = index;
-        self.editing = false;
-        self.hint = None;
-        true
-    }
-
     /// 移动高亮（钳制在 `0..row_count`，不循环）；返回是否移动。
     pub fn move_highlight(&mut self, delta: isize) -> bool {
+        if self.confirm {
+            return false;
+        }
         let len = self.row_count();
         if len == 0 {
             return false;
@@ -204,7 +195,7 @@ impl AskState {
 
     /// 设置高亮行（鼠标点击）；越界返回 false。
     pub fn set_highlight(&mut self, index: usize) -> bool {
-        if index >= self.row_count() || index == self.highlight[self.current] {
+        if self.confirm || index >= self.row_count() || index == self.highlight[self.current] {
             return false;
         }
         self.highlight[self.current] = index;
@@ -213,7 +204,7 @@ impl AskState {
 
     /// 进入「其他」编辑态，光标落在文本末尾。
     pub fn begin_edit(&mut self) -> bool {
-        if self.row_count() == 0 {
+        if self.confirm || self.row_count() == 0 {
             return false;
         }
         self.highlight[self.current] = self.other_row();
@@ -221,7 +212,6 @@ impl AskState {
             editor.set_cursor_end();
         }
         self.editing = true;
-        self.hint = None;
         true
     }
 
@@ -250,48 +240,111 @@ impl AskState {
         {
             self.selected[current].clear();
         }
-        self.hint = None;
         true
     }
 
     /// 退出编辑态，文本保留（`Esc` 语义）。
     pub fn cancel_edit(&mut self) -> bool {
-        let was_editing = std::mem::replace(&mut self.editing, false);
-        if was_editing {
-            self.hint = None;
-        }
-        was_editing
+        std::mem::replace(&mut self.editing, false)
     }
 
-    /// 切到下一题（保留各题已选状态）；已是最后一题返回 false。
-    pub fn next_question(&mut self) -> bool {
-        if self.current + 1 >= self.questions.len() {
+    /// 是否处于多题流程的复核步。
+    pub fn is_confirm(&self) -> bool {
+        self.confirm
+    }
+
+    /// tab 总数：多题时最后多一个 Confirm。
+    pub fn tab_len(&self) -> usize {
+        self.questions.len() + usize::from(self.questions.len() > 1)
+    }
+
+    /// 指定题是否已有答案（勾选或已提交的手写文本）。
+    pub fn answered(&self, index: usize) -> bool {
+        !self.answers_at(index).is_empty()
+    }
+
+    /// 是否全部题目都已作答（Confirm 的放行条件）。
+    pub fn all_answered(&self) -> bool {
+        (0..self.questions.len()).all(|index| self.answered(index))
+    }
+
+    /// 切到指定 tab（题目或 Confirm）；同位置返回 false。
+    pub fn goto_tab(&mut self, index: usize) -> bool {
+        if index >= self.tab_len() {
             return false;
         }
-        self.current += 1;
+        let confirm = index >= self.questions.len();
+        if confirm == self.confirm && (confirm || index == self.current) {
+            return false;
+        }
+        if !confirm {
+            self.current = index;
+        }
+        self.confirm = confirm;
         self.editing = false;
-        self.hint = None;
+        self.restore_highlight();
         true
     }
 
-    /// 切到上一题（保留各题已选状态）；已是第一题返回 false。
-    pub fn prev_question(&mut self) -> bool {
+    /// 回到某题时把高亮落到已选答案上（opencode 的 `pickFocus`）：
+    /// 否则回车会默认选中第 1 项，悄悄覆盖用户之前的选择。
+    fn restore_highlight(&mut self) {
+        if self.confirm {
+            return;
+        }
+        let current = self.current;
+        let highlight = if self.custom_on.get(current).copied().unwrap_or(false) {
+            self.other_row()
+        } else {
+            self.selected
+                .get(current)
+                .and_then(|picked| picked.first().copied())
+                .unwrap_or(0)
+        };
+        if let Some(slot) = self.highlight.get_mut(current) {
+            *slot = highlight;
+        }
+    }
+
+    /// 前进到下一题；末题之后进入 Confirm（仅多题）。已是 Confirm 返回 false。
+    pub fn next_step(&mut self) -> bool {
+        if self.confirm {
+            return false;
+        }
+        if self.current + 1 < self.questions.len() {
+            self.current += 1;
+            self.editing = false;
+            self.restore_highlight();
+            return true;
+        }
+        if self.questions.len() > 1 {
+            self.confirm = true;
+            self.editing = false;
+            return true;
+        }
+        false
+    }
+
+    /// 后退：Confirm → 末题；末题 → 上一题。
+    pub fn prev_step(&mut self) -> bool {
+        if self.confirm {
+            self.confirm = false;
+            return true;
+        }
         if self.current == 0 {
             return false;
         }
         self.current -= 1;
         self.editing = false;
-        self.hint = None;
+        self.restore_highlight();
         true
     }
 
-    /// 是否在最后一题（提交即整题作答完成）。
-    pub fn is_last_question(&self) -> bool {
-        self.current + 1 >= self.questions.len()
-    }
-
-    /// 当前高亮选项的预览文本。
+    /// 当前高亮选项的预览文本（Confirm 步没有预览）。
     pub fn preview(&self) -> Option<&str> {
+        if self.confirm {
+            return None;
+        }
         let question = self.question()?;
         question
             .options
@@ -309,6 +362,9 @@ impl AskState {
 
     /// 滚动预览（正数向下）；返回偏移是否变化。
     pub fn scroll_preview(&mut self, delta: isize) -> bool {
+        if self.confirm {
+            return false;
+        }
         let max = self.preview_max_scroll();
         let next = (self.preview_scroll[self.current] as isize)
             .saturating_add(delta)

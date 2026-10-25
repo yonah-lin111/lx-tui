@@ -61,3 +61,21 @@
 - 无数据库迁移、无 `SCHEMA_VERSION` 变更。
 - 与 `.worktrees/lx-history-perf`（未提交改动含 `history/tool.rs`）存在同文件冲突风险：对方合并前需先 rebase，`tool.rs` 的 ask 分支只有两处（`rows` / `draw_animated`）。
 - 合并后建议实机走一遍：模型发起 ask → 单选/多选/手写/字符画预览 → 鼠标点选与滚轮 → 标签 `?` → Esc 双击取消 → 历史卡片与草稿状态。
+
+## 6. v2 修订（用户复审后）
+
+按复审意见重做了面板外观与交互，对应 commit 见分支历史：
+
+1. **去掉四周边框**：只保留顶部一条通栏分隔线（`border_title()` 样式，与后台任务面板 `task::draw_list` 同款）；不再调用 `draw_box`。
+2. **高度上限改为窗格 70%**：`height = min(need, 70%)`，不再强制 10 行最小；内容超出时选项列表内部滚动，最右一列只画 thumb 的滚动条，滚动窗口跟随高亮。
+3. **题目 tab 常驻**：多题时 tab 行（含 `Confirm`）无论窗格多矮都保留。
+4. **选项改为双行**：第一行左侧是勾选标记 + 标签，第二行是缩进的描述；两行都命中该选项（`AskHit::Option(i)`）。
+5. **空答案回车 → 窗格内 toast**（`select an answer first`），不前进、不提交；移除内联 `hint`。
+6. **交互对齐 opencode**：
+   - 单题单选：`Enter` 选中高亮项后立即提交；单题多选：`Space` 勾选、`Enter` 提交。
+   - 多题：单选 `Enter` 选中并进入下一题；多选 `Space` 勾选、`Enter` 下一题；末题后进入 `Confirm`。
+   - `Confirm` 只有全部题目都有答案时 `Enter` 才提交（否则 toast），tab 可直接点 `Confirm`。
+   - 切题时高亮自动落到已选答案（`restore_highlight`），避免回车默认覆盖旧选择。
+7. **状态模型简化**：删除 `hint` / `collected` / `list_scroll`，新增 `confirm: bool`；`submit_current` → `submit_all`（唯一提交入口）。
+
+验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings` 零警告；`cargo test` **3293** 个 lib 用例 + 16 个 target 全绿（新增/改写用例覆盖：单题回车即提交、多选空格后回车提交、多题前进到 Confirm、Confirm 未答完不提交、空答案 toast、双行选项命中、70% 上限与滚动、tab 常驻、无边框单线）。

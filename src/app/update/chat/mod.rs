@@ -26,8 +26,7 @@ mod view;
 mod viewport;
 
 pub use ask::{
-    apply_ask_click, apply_ask_paste, apply_ask_wheel, apply_input as apply_ask_input,
-    submit_current,
+    apply_ask_click, apply_ask_paste, apply_ask_wheel, apply_input as apply_ask_input, submit_all,
 };
 pub use compact::{
     compact_command, on_compact_empty, on_compact_failed, on_compact_finished,

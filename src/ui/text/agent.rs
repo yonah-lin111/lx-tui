@@ -358,16 +358,17 @@ pub const ASK_SINGLE_OFF: &str = "( )";
 pub const ASK_MULTI_ON: &str = "[x]";
 pub const ASK_MULTI_OFF: &str = "[ ]";
 pub const ASK_CURSOR: &str = "❯";
-/// 固定最后一行的「其他」与唯一提交入口。
+/// 固定最后一行的「其他」与单题提交入口。
 pub const ASK_OTHER: &str = "Other...";
 pub const ASK_OTHER_PREFIX: &str = "Other: ";
 pub const ASK_SUBMIT: &str = "[ Submit ]";
+/// 多题最后一步：复核作答 + 确认提交（tab 与行各一份文案）。
+pub const ASK_REVIEW: &str = "Review your answers";
+pub const ASK_CONFIRM_TAB: &str = "Confirm";
+pub const ASK_CONFIRM: &str = "[ Confirm ]";
 /// 预览区占位与降级提示。
 pub const ASK_NO_PREVIEW: &str = "(no preview)";
-pub const ASK_PREVIEW_HIDDEN: &str = "preview hidden (small pane)";
-/// 空答案内联提示；底栏键位提示与双击 Esc 两态。
-pub const ASK_EMPTY_HINT: &str = "select at least one option";
-pub const ASK_FOOTER_KEYS: &str = "up/down move · space select · enter submit · tab next";
+pub const ASK_FOOTER_KEYS: &str = "enter select/next · space toggle · tab switch";
 pub const ASK_FOOTER_CANCEL: &str = "esc cancel";
 pub const ASK_FOOTER_CANCEL_ARMED: &str = "esc again to cancel";
 /// 卡片状态文字：等待作答（运行中）。

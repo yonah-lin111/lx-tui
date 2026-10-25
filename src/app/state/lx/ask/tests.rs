@@ -110,11 +110,15 @@ fn navigation_keeps_per_question_state_and_is_clamped() {
         question("b", true, &["B1"]),
     ]);
     ask.choose(1);
-    assert!(ask.next_question());
+    assert!(ask.next_step());
     ask.choose(0);
     assert_eq!(ask.current, 1);
-    assert!(!ask.next_question(), "最后一题不能再前进");
-    assert!(ask.prev_question());
+    assert!(ask.next_step(), "末题之后进入 Confirm");
+    assert!(ask.is_confirm());
+    assert!(!ask.next_step(), "Confirm 已是最后一步");
+    assert!(ask.prev_step(), "Confirm 回到末题");
+    assert!(!ask.is_confirm());
+    assert!(ask.prev_step());
     assert_eq!(
         ask.current_answers(),
         vec!["A2".to_string()],
@@ -160,7 +164,7 @@ fn answer_editing_never_touches_the_prompt_draft() {
         ask.begin_edit();
         ask.editor_mut().expect("editor").insert_str("手写答案");
         ask.commit_edit();
-        ask.next_question();
+        ask.next_step();
         ask.cancel_edit();
     }
     assert_eq!(lx.input, draft, "作答全程不许改草稿");
