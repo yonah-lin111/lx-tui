@@ -1,6 +1,6 @@
 //! 块绘制数据（二级缓存）：把每个内容块「排好的行」存下来跨帧复用。
 //!
-//! 每个变体只存**内容与静态样式**；方块呼吸字形、thinking 悬停色、用户消息 rewind
+//! 每个变体只存**内容与静态样式**；步骤标记的呼吸字形、thinking 悬停色、用户消息 rewind
 //! 选中底色、`loading_frame` 等动态内容一律在 [`BlockPaint::draw`] 时现算。
 //!
 //! `rows()` 与绘制共用同一份数据：快照行数、滚动条几何、点击面几何都从这里取。
@@ -283,7 +283,7 @@ fn draw_markdown(
     let Some(message) = lx.chat.messages.get(message_index) else {
         return;
     };
-    // 正文块也是步骤：消息仍在流式且它是最后一步 → 方块呼吸，否则静态。
+    // 正文块也是步骤：消息仍在流式且它是最后一步 → 标记呼吸，否则静态。
     let mark = if message.status == "streaming" && step_index + 1 == message.steps.len() {
         StepMark::Running
     } else {
@@ -301,7 +301,11 @@ fn draw_markdown(
             grid.put_char(
                 rect.x,
                 y,
-                mark.glyph(lx.chat.loading_frame, lx.chat.status.streaming),
+                mark.glyph(
+                    StepKind::Body,
+                    lx.chat.loading_frame,
+                    lx.chat.status.streaming,
+                ),
                 mark.style(StepKind::Body, false, false),
             );
         }
@@ -359,7 +363,11 @@ fn draw_thinking(
         grid.put_char(
             rect.x,
             y,
-            mark.glyph(lx.chat.loading_frame, lx.chat.status.streaming),
+            mark.glyph(
+                StepKind::Thinking,
+                lx.chat.loading_frame,
+                lx.chat.status.streaming,
+            ),
             mark.style(StepKind::Thinking, expanded, hovered),
         );
         let x = rect.x.saturating_add(STEP_GUTTER);

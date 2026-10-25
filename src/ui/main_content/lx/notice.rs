@@ -4,8 +4,8 @@
 //! 不允许随手拼自由标题。标题整行着色只有两档——失败红 + 粗、中断黄 + 粗（没有灰色档）；
 //! 原因行连接符用供应商灰 + 粗、正文正常色。
 //!
-//! **行首标记与聊天步骤共用同一个方块**（[`StepMark`]）：失败为红色实心 `■`、中断为
-//! 黄色实心 `■`，与工具行 / 思考头 / 正文块的方块形状、字宽、缩进完全一致（都是 1 列
+//! **行首标记与聊天步骤共用同一套字形**（[`StepMark`]）：失败为红色实心圆点 `●`、中断为
+//! 黄色实心圆点 `●`，与思考头 / 正文块同为文字类标记（字宽 1 列、缩进一致）
 //! 字形 + 1 列空格）。
 //!
 //! **不含统计**——本轮统计行由 `history::stats_line` 负责，显示在通知下方（空一行）。
@@ -21,7 +21,7 @@ use super::history::{StepKind, StepMark, visible_row, wrap};
 
 /// 原因行的连接符（与 ui 页 agent error 一致）。
 const LEAF: &str = text::agent::MARKER_TREE_LEAF;
-/// 原因行缩进（两空格，与 ui 页样例一致；同时对齐方块的 `STEP_GUTTER` 缩进）。
+/// 原因行缩进（两空格，与 ui 页样例一致；同时对齐标记的 `STEP_GUTTER` 缩进）。
 const DETAIL_INDENT: &str = "  ";
 
 /// 通知标题：固定枚举，文案与配色都从这里派生（只有红、黄两档，没有灰色档）。
@@ -42,7 +42,7 @@ impl NoticeTitle {
         }
     }
 
-    /// 行首方块（与聊天步骤共用同一款标记：失败红实心、中断黄实心）。
+    /// 行首圆点（与文字类步骤共用标记：失败红实心、中断黄实心）。
     ///
     /// 通知只在**终态**渲染（流中不出通知），因此没有"运行中"的呼吸态，
     /// 直接取 [`StepMark`] 的两个终态。这两个状态是**跨角色**的语义覆盖色，
@@ -55,12 +55,12 @@ impl NoticeTitle {
         }
     }
 
-    /// 通知方块样式：状态色（红/黄）优先，与角色无关。
+    /// 通知标记样式：状态色（红/黄）优先，与角色无关。
     fn mark_style(self) -> Style {
         self.mark().style(StepKind::Tool, false, false)
     }
 
-    /// 标题文案样式（不含行首方块：方块自带状态色）。
+    /// 标题文案样式（不含行首标记：标记自带状态色）。
     fn style(self) -> Style {
         match self {
             Self::Failed => style::agent_fail(),
@@ -68,12 +68,12 @@ impl NoticeTitle {
         }
     }
 
-    /// 标题整行的标记段：`■ `（方块 + 1 列空格，与 [`super::history::STEP_GUTTER`] 同宽）。
+    /// 标题整行的标记段：`● `（圆点 + 1 列空格，与 [`super::history::STEP_GUTTER`] 同宽）。
     ///
     /// 通知只在终态渲染，[`StepMark::Failed`] / [`StepMark::Interrupted`] 的字形与
-    /// 呼吸相位无关（恒为实心 `■`），因此这里固定传 0 帧。
+    /// 呼吸相位无关（恒为实心 `●`），因此这里固定传 0 帧。
     fn marker_segment(self) -> String {
-        self.mark().segment(0, false)
+        self.mark().segment(StepKind::Body, 0, false)
     }
 }
 

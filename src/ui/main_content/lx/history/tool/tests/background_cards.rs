@@ -14,7 +14,7 @@ use crate::app::state::{
     ToolDetailView, ToolStatus,
 };
 use crate::ui::main_content::lx::grid::Grid;
-use crate::ui::main_content::lx::history::{StepMark, tool};
+use crate::ui::main_content::lx::history::{StepKind, StepMark, tool};
 use crate::ui::style;
 use crate::ui::text;
 
@@ -281,7 +281,7 @@ fn alive_mark_still_blinks_while_the_animation_runs() {
     // 用户要求保留闪烁：动画推进期间两帧交替，实心/空心都要出现。
     let mut glyphs = Vec::new();
     for frame in 0..(text::agent::STEP_BREATH_TICKS * 2) {
-        glyphs.push(StepMark::Alive.glyph(frame, true));
+        glyphs.push(StepMark::Alive.glyph(StepKind::Tool, frame, true));
     }
     assert!(
         glyphs.contains(&text::agent::STEP_MARK_FILLED),
@@ -299,14 +299,14 @@ fn hollow_glyph_is_reserved_for_cancelled() {
     for mark in [StepMark::Done, StepMark::Failed, StepMark::Interrupted] {
         for frame in 0..12 {
             assert_eq!(
-                mark.glyph(frame, false),
+                mark.glyph(StepKind::Tool, frame, false),
                 text::agent::STEP_MARK_FILLED,
                 "{mark:?} 在动画停止时必须实心"
             );
         }
     }
     assert_eq!(
-        StepMark::Cancelled.glyph(0, false),
+        StepMark::Cancelled.glyph(StepKind::Tool, 0, false),
         text::agent::STEP_MARK_HOLLOW,
         "取消仍是空心（语义就是没产出结果）"
     );

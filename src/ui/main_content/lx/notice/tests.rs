@@ -4,7 +4,7 @@ use ratatui::layout::Rect;
 
 use super::*;
 use crate::ui::main_content::lx::grid::Grid;
-use crate::ui::main_content::lx::history::wrap;
+use crate::ui::main_content::lx::history::{StepKind, wrap};
 
 fn failed(reason: &str) -> Notice {
     Notice::new(NoticeTitle::Failed, reason)
@@ -45,7 +45,7 @@ fn notice_is_title_plus_exactly_one_reason_line() {
     draw(&mut grid, &notice, area, 0, &mut row);
 
     assert_eq!(row, 2, "标题 + 原因各一行");
-    assert_eq!(row_text(&grid, area, 0), "■ Failed");
+    assert_eq!(row_text(&grid, area, 0), "● Failed");
     assert_eq!(row_text(&grid, area, 1), "  └─ http 503");
     // 标题整行红 + 粗（标记也同色）。
     for x in 0..8 {
@@ -117,7 +117,7 @@ fn scrolled_out_rows_do_not_paint() {
 
 /// 通知的行首标记必须是**步骤方块**，且颜色按级别红/黄。
 #[test]
-fn notice_marker_is_step_square_in_red_or_yellow() {
+fn notice_marker_is_dot_in_red_or_yellow() {
     for (title, expected) in [
         (NoticeTitle::Failed, style::agent_fail()),
         (NoticeTitle::Interrupted, style::agent_warn()),
@@ -131,12 +131,12 @@ fn notice_marker_is_step_square_in_red_or_yellow() {
         let cell = grid.cell(0, 0);
         assert_eq!(
             cell.ch,
-            crate::ui::text::agent::STEP_MARK_FILLED,
-            "{:?} 行首应为实心方块，不再是 `!`",
+            crate::ui::text::agent::STEP_MARK_DOT_FILLED,
+            "{:?} 行首应为实心圆点（文字类标记），不再是 `!`",
             title
         );
-        assert_eq!(cell.style, expected, "{:?} 方块取该级别状态色", title);
-        // 方块后紧跟 1 列空格（与 STEP_GUTTER = 2 同宽），文案从第 2 列起。
+        assert_eq!(cell.style, expected, "{:?} 标记取该级别状态色", title);
+        // 标记后紧跟 1 列空格（与 STEP_GUTTER = 2 同宽），文案从第 2 列起。
         assert_eq!(grid.cell(1, 0).ch, ' ');
         assert_eq!(
             grid.cell(2, 0).ch,
@@ -156,8 +156,9 @@ fn notice_marker_matches_step_mark_shape() {
     let notice = Notice::new(NoticeTitle::Failed, "boom");
     draw(&mut grid, &notice, area, 0, &mut row);
 
-    // 失败步骤在工具行里的拼法：`StepMark::Failed.segment(0, false)`。
-    let expected = crate::ui::main_content::lx::history::StepMark::Failed.segment(0, false);
+    // 失败步骤在工具行里的拼法：`StepMark::Failed.segment(StepKind::Body, 0, false)`。
+    let expected =
+        crate::ui::main_content::lx::history::StepMark::Failed.segment(StepKind::Body, 0, false);
     let painted: String = expected
         .chars()
         .enumerate()

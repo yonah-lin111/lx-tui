@@ -308,8 +308,8 @@ fn completed_thinking_has_no_spinner_even_after_tool_steps() {
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let header = row_text(&buf, area, 0);
     assert!(
-        header.starts_with("■ Thought"),
-        "完成态显示静态方块 + Thought：{header}"
+        header.starts_with("● Thought"),
+        "完成态显示静态圆点 + Thought：{header}"
     );
     assert!(
         !header
@@ -338,7 +338,7 @@ fn completed_thinking_has_no_spinner_even_after_tool_steps() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     assert!(
-        row_text(&buf, area, 0).starts_with("■ Thought"),
+        row_text(&buf, area, 0).starts_with("● Thought"),
         "思考头不随 loading 帧变化：{}",
         row_text(&buf, area, 0)
     );

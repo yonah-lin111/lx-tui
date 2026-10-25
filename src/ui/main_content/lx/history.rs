@@ -100,7 +100,7 @@ impl StepMark {
     /// 成 `□`，看起来像失败/取消（用户带截图反馈的真实 bug）。把兜底写在这里而不是
     /// 让状态层在收尾时手动归零，是因为导致动画停下的路径很多（流结束、面板遮挡、
     /// 事件循环短暂卡住），漏掉任何一处都会复现。
-    pub(super) fn glyph(self, loading_frame: usize, animating: bool) -> char {
+    pub(super) fn glyph(self, kind: StepKind, loading_frame: usize, animating: bool) -> char {
         let filled = match self {
             Self::Running | Self::Alive => {
                 !animating || (loading_frame / text::agent::STEP_BREATH_TICKS).is_multiple_of(2)
@@ -108,10 +108,12 @@ impl StepMark {
             Self::Done | Self::Failed | Self::Interrupted => true,
             Self::Cancelled => false,
         };
-        if filled {
-            text::agent::STEP_MARK_FILLED
-        } else {
-            text::agent::STEP_MARK_HOLLOW
+        // 文字数据（正文 / 思考 / 通知）用圆点，只有工具调用用方块。
+        match (kind, filled) {
+            (StepKind::Tool, true) => text::agent::STEP_MARK_FILLED,
+            (StepKind::Tool, false) => text::agent::STEP_MARK_HOLLOW,
+            (_, true) => text::agent::STEP_MARK_DOT_FILLED,
+            (_, false) => text::agent::STEP_MARK_DOT_HOLLOW,
         }
     }
 
@@ -131,9 +133,9 @@ impl StepMark {
     }
 
     /// 标记段（字形 + 空格）；工具行与 thinking 头部共用同一份拼法。
-    /// 颜色由调用方用 [`Self::style`] 单独上，所以这里不需要 [`StepKind`]。
-    pub(super) fn segment(self, loading_frame: usize, animating: bool) -> String {
-        format!("{} ", self.glyph(loading_frame, animating))
+    /// 颜色由调用方用 [`Self::style`] 单独上。
+    pub(super) fn segment(self, kind: StepKind, loading_frame: usize, animating: bool) -> String {
+        format!("{} ", self.glyph(kind, loading_frame, animating))
     }
 }
 

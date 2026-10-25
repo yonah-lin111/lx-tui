@@ -175,8 +175,8 @@ fn assistant_message_has_no_label_and_shows_body() {
     let line1 = row_text(&buf, area, 1);
     let line2 = row_text(&buf, area, 2);
     assert!(
-        line0.starts_with("■ Thought"),
-        "首个渲染行为方块 + 图标 + 折叠头：{line0}"
+        line0.starts_with("● Thought"),
+        "首个渲染行为圆点 + 图标 + 折叠头：{line0}"
     );
     assert!(
         !line0.contains("assistant"),
@@ -185,8 +185,8 @@ fn assistant_message_has_no_label_and_shows_body() {
     assert!(line1.trim().is_empty(), "折叠头与正文间空一行：{line1}");
     assert!(!line2.contains("秘密思考"), "折叠时不显示内容");
     assert!(
-        line2.starts_with("■ 可见正文"),
-        "正文块同样以方块起头：{line2}"
+        line2.starts_with("● 可见正文"),
+        "正文块同样以圆点起头：{line2}"
     );
 }
 
@@ -221,7 +221,10 @@ fn failed_message_shows_error_notice_with_code_at_bottom() {
     let rows: Vec<String> = (0..4).map(|row| row_text(&buf, area, row)).collect();
     assert!(rows[0].contains("出错了"), "正文：{rows:?}");
     assert_eq!(rows[1], "", "与正文隔一行");
-    assert_eq!(rows[2], "■ Failed", "行首为方块，与步骤标记同款");
+    assert_eq!(
+        rows[2], "● Failed",
+        "行首为圆点（文字类通知与步骤标记同款）"
+    );
     assert_eq!(rows[3], "  └─ http 503");
     assert!(
         !rows.iter().any(|row| row.contains("[failed")),
@@ -240,7 +243,7 @@ fn failed_message_without_code_uses_fallback_reason() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let rows: Vec<String> = (0..4).map(|row| row_text(&buf, area, row)).collect();
-    assert_eq!(rows[2], "■ Failed");
+    assert_eq!(rows[2], "● Failed");
     assert_eq!(
         rows[3], "  └─ no error details provided",
         "无码时给一句话兜底"
@@ -260,7 +263,7 @@ fn interrupted_message_shows_warning_notice_above_stats_line() {
     let rows: Vec<String> = (0..6).map(|row| row_text(&buf, area, row)).collect();
     assert!(rows[0].contains("半截回答"), "正文：{rows:?}");
     assert_eq!(rows[1], "", "通知与正文隔一行");
-    assert_eq!(rows[2], "■ Interrupted", "中断用黄色警告通知 + 方块标记");
+    assert_eq!(rows[2], "● Interrupted", "中断用黄色警告通知 + 圆点标记");
     assert_eq!(
         rows[3], "  └─ interrupted before completion",
         "固定一句话原因"
@@ -495,7 +498,7 @@ fn token_and_duration_formatting_matches_agent_conventions() {
 }
 
 #[test]
-fn thinking_header_uses_step_square_and_becomes_thought() {
+fn thinking_header_uses_step_dot_and_becomes_thought() {
     // 生成中：行首方块（呼吸第 0 帧为实心、翡翠绿加粗）+ `Thinking`。
     let mut streaming = lx_with(vec![message(
         "assistant",
@@ -538,8 +541,8 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
     let line0 = row_text(&buf, area, 0);
     assert!(
-        line0.starts_with("■ Thinking"),
-        "方块 + 文案（文案从第 2 列起）：{line0}"
+        line0.starts_with("● Thinking"),
+        "圆点 + 文案（文案从第 2 列起）：{line0}"
     );
     assert!(
         !line0.contains('▸') && !line0.contains('▾'),
@@ -551,12 +554,12 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
             .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)),
         "不再使用 braille 转轮：{line0}"
     );
-    // 呼吸：进入空心相位后同一行换成 `□`（相位每 `STEP_BREATH_TICKS` 帧翻转）。
+    // 呼吸：进入空心相位后同一行换成 `○`（相位每 `STEP_BREATH_TICKS` 帧翻转）。
     streaming.chat.loading_frame = text::agent::STEP_BREATH_TICKS;
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
     let line0 = row_text(&buf, area, 0);
-    assert!(line0.starts_with("□ Thinking"), "空心相位：{line0}");
+    assert!(line0.starts_with("○ Thinking"), "空心相位：{line0}");
 
     // 完成后（带起止时刻）：静态实心方块、品牌天蓝加粗（不压暗）、`Thought · 6.3s`。
     let mut done = lx_with(vec![message(
@@ -581,7 +584,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     assert!(!label.modifier.contains(Modifier::BOLD), "完成文案不加粗");
     let line0 = row_text(&buf, area, 0);
     assert!(
-        line0.starts_with("■ Thought · 6.3s"),
+        line0.starts_with("● Thought · 6.3s"),
         "完成后显示思考耗时：{line0}"
     );
     // 终态与帧无关：奇数帧也是实心。
@@ -589,8 +592,8 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     assert!(
-        row_text(&buf, area, 0).starts_with("■ Thought · 6.3s"),
-        "完成后停为静态实心方块"
+        row_text(&buf, area, 0).starts_with("● Thought · 6.3s"),
+        "完成后停为静态实心圆点"
     );
 
     // 展开：文案不变（不再有 ▸/▾），正文缩进 2 列与方块对齐。
@@ -607,7 +610,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     assert_eq!(label.fg, Color::Indexed(218), "展开后文案升为亮粉");
     let line0 = row_text(&buf, area, 0);
     assert!(
-        line0.starts_with("■ Thought · 6.3s"),
+        line0.starts_with("● Thought · 6.3s"),
         "展开后头部不变（折叠标记已移除）：{line0}"
     );
     let line1 = row_text(&buf, area, 1);
@@ -616,7 +619,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
 }
 
 #[test]
-fn markdown_body_block_has_step_square_and_indented_continuation() {
+fn markdown_body_block_has_step_dot_and_indented_continuation() {
     let lx = lx_with(vec![message(
         "assistant",
         "complete",
@@ -628,14 +631,14 @@ fn markdown_body_block_has_step_square_and_indented_continuation() {
     let line0 = row_text(&buf, area, 0);
     let line1 = row_text(&buf, area, 1);
     assert!(
-        line0.starts_with("■ 第一行"),
-        "markdown 正文同样以方块起头：{line0}"
+        line0.starts_with("● 第一行"),
+        "markdown 正文同样以圆点起头：{line0}"
     );
     assert!(
         line1.starts_with("  第二行"),
         "续行缩进 2 列与方块对齐：{line1}"
     );
-    // 正文块的方块用**默认字体颜色**（不设前景），不加粗、不压暗。
+    // 正文块的圆点用**默认字体颜色**（不设前景），不加粗、不压暗。
     let marker = &buf[(0, 0)];
     assert_eq!(
         marker.fg,
@@ -662,8 +665,8 @@ fn only_the_active_last_step_breathes() {
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let first = row_text(&buf, area, 0);
     let last = row_text(&buf, area, 2);
-    assert!(first.starts_with("■ 甲"), "已结束的块停为实心：{first}");
-    assert!(last.starts_with("□ 乙"), "仍在流式的最后一块呼吸：{last}");
+    assert!(first.starts_with("● 甲"), "已结束的块停为实心：{first}");
+    assert!(last.starts_with("○ 乙"), "仍在流式的最后一块呼吸：{last}");
 }
 
 // ===== 置顶用户消息行（表现层，codex prompt_header 口径）=====
@@ -955,7 +958,7 @@ fn tool_only_message_still_occupies_rows() {
 }
 
 #[test]
-fn transcript_lays_out_step_square_with_two_column_gutter() {
+fn transcript_lays_out_step_marks_with_two_column_gutter() {
     // 一份完整观感锁定：用户消息 `> `、每个步骤的方块标记与 2 列内容缩进
     // （思考头 / 思考正文 / 正文块 / 工具行）、块间空行。
     let mut assistant = message(
@@ -985,11 +988,11 @@ fn transcript_lays_out_step_square_with_two_column_gutter() {
         vec![
             "> 用户问题",
             "",
-            "□ Thinking",
+            "○ Thinking",
             "  思考甲",
             "  思考乙",
             "",
-            "■ 正文第一行",
+            "● 正文第一行",
             "  正文第二行",
             "",
             "□ Read",
@@ -1451,5 +1454,139 @@ fn short_output_above_preview_still_expands() {
             section: CardSection::Output,
         }),
         "输出区必须可点"
+    );
+}
+
+/// 一条文件工具调用（`write`，带一份小差异）。
+fn file_call(call_id: &str, path: &str) -> crate::app::state::ToolCallView {
+    use crate::app::state::{
+        DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, ToolCallView,
+        ToolDetailView, ToolStatus, ToolSummary,
+    };
+    use crate::chat::tools::{DiffLineKind, FileChangeKind};
+    ToolCallView {
+        call_id: call_id.into(),
+        name: "write".into(),
+        position: 0,
+        arguments_json: String::new(),
+        status: ToolStatus::Completed,
+        summary: Some(Box::new(ToolSummary {
+            path: Some(path.into()),
+            added: Some(1),
+            removed: Some(0),
+            counts_known: true,
+            ..ToolSummary::default()
+        })),
+        error: None,
+        result_json: None,
+        detail: Some(Box::new(ToolDetailView::File(FileDiffDetailView {
+            files: vec![FileChangeView {
+                path: path.into(),
+                to: None,
+                kind: FileChangeKind::Added,
+                added: Some(1),
+                removed: Some(0),
+                counts_known: true,
+                simplified: false,
+                diff: Some(FileDiffView::Complete {
+                    hunks: vec![DiffHunkView {
+                        lines: vec![DiffLineView {
+                            kind: DiffLineKind::Added,
+                            old_line: None,
+                            new_line: Some(1),
+                            text: "hello".into(),
+                            no_final_newline: false,
+                        }],
+                    }],
+                    simplified: false,
+                }),
+            }],
+            files_total: 1,
+            added: Some(1),
+            removed: Some(0),
+            simplified: false,
+            omitted_files: 0,
+            single: false,
+        }))),
+    }
+}
+
+/// 消息内**每两块之间都必须空一行**，合并文件组也不例外。
+///
+/// 回归：快照重写时漏了合并组的块前空行，正文下面直接顶着 `▣ Write 2 files`。
+#[test]
+fn every_block_is_separated_by_a_blank_row() {
+    // 正文 + 两步连续 write（合并成一组）+ 一段思考 + 一句正文。
+    let mut lx = lx_with(vec![message(
+        "assistant",
+        "complete",
+        vec![
+            text_part("测试 1: write — 在桌面创建文件和目录"),
+            reasoning_part("先写两个文件"),
+            text_part("收尾"),
+        ],
+    )]);
+    for (step, call) in [
+        file_call("call-1", "/Users/yonah/Desktop/tool-test/hello.txt"),
+        file_call("call-2", "/Users/yonah/Desktop/tool-test/BubbleSort.java"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        lx.chat.messages[0].steps.insert(
+            1 + step,
+            AssistantStepView::Tool {
+                position: 1 + step as i64,
+                call,
+            },
+        );
+    }
+
+    let mut cache = PaneCache::default();
+    let width = super::content_rect(Rect::new(0, 0, 80, 40)).width;
+    let snapshot = cache.snapshot(width, &lx);
+    let entry = snapshot.entries.first().expect("有一条消息");
+    assert!(
+        entry.blocks.len() >= 4,
+        "至少 4 块（正文/合并组/thinking/正文），实际 {}",
+        entry.blocks.len()
+    );
+    for pair in entry.blocks.windows(2) {
+        assert_eq!(
+            pair[1].start,
+            pair[0].start + pair[0].rows + 1,
+            "块之间必须空一行：{:?} 结束于 {}，下一块从 {} 开始",
+            pair[0].source,
+            pair[0].start + pair[0].rows,
+            pair[1].start
+        );
+    }
+}
+
+/// 圆点给文字（正文 / 思考），方块给工具调用。
+#[test]
+fn step_marks_use_dots_for_text_and_squares_for_tools() {
+    use crate::ui::text;
+    for kind in [super::StepKind::Body, super::StepKind::Thinking] {
+        assert_eq!(
+            super::StepMark::Done.glyph(kind, 0, false),
+            text::agent::STEP_MARK_DOT_FILLED,
+            "{kind:?} 完成态必须是圆点"
+        );
+        assert_eq!(
+            super::StepMark::Cancelled.glyph(kind, 0, false),
+            text::agent::STEP_MARK_DOT_HOLLOW,
+            "{kind:?} 取消态必须是空心圆点"
+        );
+    }
+    assert_eq!(
+        super::StepMark::Done.glyph(super::StepKind::Tool, 0, false),
+        text::agent::STEP_MARK_FILLED,
+        "工具调用完成态必须是方块"
+    );
+    assert_eq!(
+        super::StepMark::Cancelled.glyph(super::StepKind::Tool, 0, false),
+        text::agent::STEP_MARK_HOLLOW,
+        "工具调用取消态必须是空心方块"
     );
 }

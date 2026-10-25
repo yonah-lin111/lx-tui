@@ -638,7 +638,7 @@ fn lead(call: &ToolCallView, loading_frame: usize, animating: bool) -> Segment {
         ToolStatus::InputStreaming | ToolStatus::Pending | ToolStatus::Running => StepMark::Running,
     };
     Segment::new(
-        mark.segment(loading_frame, animating),
+        mark.segment(StepKind::Tool, loading_frame, animating),
         mark.style(StepKind::Tool, false, false),
     )
 }
@@ -764,7 +764,7 @@ pub(super) fn header_with_mark(
         None => segment,
     };
     let lead = paint(Segment::new(
-        mark.segment(loading_frame, animating),
+        mark.segment(StepKind::Tool, loading_frame, animating),
         mark.style(StepKind::Tool, false, false),
     ));
     if segments_cols(std::slice::from_ref(&lead)) > limit {

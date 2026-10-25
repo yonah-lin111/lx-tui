@@ -20,6 +20,7 @@
 - **lx 页的 toast 必须显示在 lx 页内**：lx 视图的反馈一律写 `pane.lx.toast`（`app::update::show_lx_toast` / `show_toast_at` / `show_lx_toast_for_session`），在窗格内容区里绘制（`ui::main_content::lx::toast`，宽度夹在窗格内、允许折行），禁止使用全局 `AppState.toast` 覆盖层。全局槽只有一个，且锚点容器放不下时会降级到屏幕顶部居中、横跨整个窗口——lx 的反馈会因此失去指代并挡住别的窗格（compact 失败提示曾这样横穿全屏）。终端视图与 prompt 栏等非 lx 区域仍用全局 toast。
 - OS 专属代码只允许出现在 `src/platform/`，并按 `#[cfg(...)]` 门控。
 - 终端退出/panic 恢复顺序不可交换：关闭鼠标上报 → 仍在原始模式下 drain 在途输入 → 离开备用屏并关闭括号粘贴 → 最后 `disable_raw_mode()`。先恢复 cooked 模式会让残留鼠标上报（`CSI <…M`）被终端回显、留在行缓冲并泄漏进 shell；改动 `src/tui/` 恢复路径必须保留并运行 `tui::tests` 的顺序回归测试。
+- **lx 步骤标记与空行**：文字数据（正文 / 思考 / 消息级通知）用圆点 `●`/`○`，**只有工具调用用方块 `■`/`□`**；字形只在 `ui::text::agent::STEP_MARK_*` 定义，由 `StepMark::glyph(kind, loading_frame, animating)` 按 `StepKind` 选取，渲染层不得写死字符。同一条消息内任意两块之间（含合并文件工具组）一律空一行，空行只由 `history::snapshot` 累加，绘制路径不得另算。
 - 完成修改后按影响范围执行验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
 - Agent 无法交互式验证 TUI 界面；涉及交互与外观的改动由用户运行 `cargo run` 自行确认。
 - 以上文档是项目规范的唯一来源；若与上级指令冲突，以上级指令为准。

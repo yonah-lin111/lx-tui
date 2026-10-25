@@ -1126,8 +1126,8 @@ fn streaming_shows_loading_bar_above_input() {
         "显示 loading 文案：{text}"
     );
     assert!(
-        text.contains(crate::ui::text::agent::STEP_MARK_FILLED),
-        "加载标记是步骤方块（不再是 braille 转轮）：{text}"
+        text.contains(crate::ui::text::agent::STEP_MARK_DOT_FILLED),
+        "流中的步骤标记用圆点（不再是 braille 转轮）：{text}"
     );
     assert!(
         !text
