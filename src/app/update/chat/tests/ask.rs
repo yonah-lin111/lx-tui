@@ -286,6 +286,41 @@ fn custom_text_stops_at_the_byte_limit_with_a_toast() {
     assert_eq!(panel(&state, pane).custom[0].text().len(), limit);
 }
 
+#[test]
+fn paste_budget_uses_the_sanitized_length() {
+    // `\t` 写入时会展开成两个空格：按原始长度预检会让上限翻倍。
+    let limit = crate::chat::tools::ask::MAX_ASK_CUSTOM_BYTES;
+    let (mut state, pane, _key) = asking(vec![question("q", true, &["A"])]);
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Enter);
+
+    let tabs = "\t".repeat(limit);
+    assert!(
+        !crate::app::update::apply_ask_paste(&mut state, pane, &tabs),
+        "净化后超限必须整次拒绝"
+    );
+    assert_eq!(panel(&state, pane).custom[0].text(), "");
+
+    // 半个上限的 tab 净化后正好填满。
+    let half = "\t".repeat(limit / 2);
+    assert!(crate::app::update::apply_ask_paste(&mut state, pane, &half));
+    assert_eq!(panel(&state, pane).custom[0].text().len(), limit);
+}
+
+#[test]
+fn list_mode_paste_is_swallowed_and_never_touches_the_draft() {
+    let (mut state, pane, _key) = asking(vec![question("q", true, &["A"])]);
+    assert!(!crate::app::update::apply_ask_paste(
+        &mut state, pane, "hidden"
+    ));
+    assert_eq!(panel(&state, pane).custom[0].text(), "");
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.input,
+        "草稿 abc",
+        "草稿不变量"
+    );
+}
+
 // ===== 提交（design §6.3）=====
 
 #[test]

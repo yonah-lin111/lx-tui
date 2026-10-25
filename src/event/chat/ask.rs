@@ -57,7 +57,9 @@ pub(crate) fn request(
         return false;
     }
     let mut ask = AskState::new(key.clone(), call_id.clone(), questions);
-    // 手写缓冲的软换行宽度与输入框同源；窗格 resize 时由 `resize_panes` 再精确同步。
+    // 先给一个近似宽度（输入框宽度减去面板内缩），**首帧绘制前**由 `resize_panes`
+    // 用 `layout::lx_ask_editor_size` 换成精确值（它还要扣窗格 margin）。两处相差
+    // 最多两列，只影响创建到首次 resize 之间，用户看不到。
     ask.resize_editor(
         pane.lx
             .input_width()

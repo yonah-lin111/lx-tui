@@ -495,6 +495,9 @@ impl AskEditor {
 
     /// 还能否再插入 `bytes` 字节：手写答案的硬上限在**写入处**执行，
     /// 键入、粘贴、换行共用同一条规则（超限拒绝，绝不截断）。
+    ///
+    /// 传入的必须是**净化后**的字节数：`Lx::insert_str` 内部会把 `\t` 展开成两个
+    /// 空格、丢弃控制字符，按原始输入判长会让上限翻倍。
     pub fn can_insert(&self, bytes: usize) -> bool {
         self.text().len().saturating_add(bytes) <= MAX_ASK_CUSTOM_BYTES
     }
@@ -505,13 +508,21 @@ impl AskEditor {
         }
     }
 
-    pub fn insert_str(&mut self, text: &str) {
-        if self.can_insert(text.len()) {
-            self.0.insert_str(text);
+    /// 粘贴：先按与写入完全相同的净化规则算长度，再决定是否写入。
+    ///
+    /// 判定与写入必须看同一份文本，否则 `\t`（展开为两空格）这类字符会让
+    /// 「预检通过、实际超限」。
+    pub fn insert_str(&mut self, text: &str) -> bool {
+        let sanitized = crate::app::prompt::text::sanitize(text);
+        if !self.can_insert(sanitized.len()) {
+            return false;
         }
+        self.0.insert_str(&sanitized);
+        true
     }
 
     pub fn newline(&mut self) {
+        // `Lx::plain` 的换行恒为 1 字节（不续写列表标记），预算是精确的。
         if self.can_insert(1) {
             self.0.newline();
         }

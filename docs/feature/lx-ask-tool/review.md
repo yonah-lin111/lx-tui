@@ -177,12 +177,34 @@
 - **错误原因**：注释声称 `None` 表示「回执已丢失」，但全仓没有任何代码写 `None`；`if let Some(reply)` 分支永远命中 `Some`。
 - **修法**：改成非 `Option`，唤醒逻辑收敛到 `ChatStreams::wake_ask`（`cancel`/`finish` 共用）。
 
-### 7.3 验证
+### 7.3 第二轮补报（评审 agent 复查后追加）
+
+#### ⑫ 矮窗格出现「可见、吃键、什么都选不了」的死面板
+
+- 位置：`src/ui/main_content/lx/ask.rs::height` / `AskLayout::compute`、`src/layout.rs`
+- **错误原因**：`height()` 只有 70% 上限（`need.min(max_h).max(1)`），6 行内容区多题时 `max_h = 4`：扣掉分隔线、tab 行、题干与底栏后 `body_h = 0`，`place_rows` 直接返回、`rows` 为空；但 `apply_lx_input` 见到 `ask.is_some()` 仍整块接管按键，鼠标也因 `ask_rect` 存在被吞。
+- **修法**：① 面板高度加「最小可用行数」下界（`MIN_PANEL_ROWS = 分隔线 + 一行可选行 + 底栏`，多题再加 tab），取 `need.min(max_h).max(viable.min(area_h))`；② 题干在极矮时让位（`available < 2` 时高度 0），保证列表至少落位一行；③ 删除未落地的 `LX_ASK_MIN_BOX`，注释写清「只有上限 + 最小可用行数」的优先关系。
+- **测试**：`tiny_pane_keeps_at_least_one_selectable_row`；`height_never_exceeds_seventy_percent` 的 cap 断言同步改为 `max(70%, 最小可用行数)`，不再自证。
+
+#### ⑬ `can_insert` 按净化前字节判长，`\t` 可绕过上限一倍
+
+- 位置：`src/app/state/lx/ask.rs::insert_str`、`src/app/update/chat/ask.rs::apply_ask_paste`
+- **错误原因**：上限判定用原始输入长度，实际写入经 `Lx::insert_str` → `text::sanitize`，其中 `\t` 展开为两个空格。空编辑框粘贴 8192 个 `\t`：预检通过、写入 16384 字节。
+- **修法**：`AskEditor::insert_str` 内部先 `sanitize` 再按净化后长度判定，返回是否写入；`apply_ask_paste` 只转发结果，判定与写入口径合一。`Lx::plain` 的换行恒为 1 字节，`newline` 的预算因此精确。
+- **测试**：`paste_budget_uses_the_sanitized_length`、`list_mode_paste_is_swallowed_and_never_touches_the_draft`。
+
+#### ⑭ 其它小项
+
+- 预览超宽直接截断、未补 `…`：**不改**。字符画按列硬截断是刻意的（补省略号会污染对齐，且非文字内容没有「被截断」语义）。
+- 编辑框初始折行宽度（`input_width() - 4`）与 `resize_panes` 后的 `lx_ask_editor_size`（`cols - margin*2 - 4`）差 2 列：创建后第一帧到首次 resize 之间存在短暂差异，`resize_panes` 在首帧前就会覆盖，实际不可见；保留现状但已在代码注释里点明两处来源。
+- 空 `questions` 的 `AskState` 索引：工具层强制 1..=3，生产不可达；不加 `debug_assert!`（会让测试构造空面板时 panic，反而降低可用性），由 `row_count()`/`question()` 的 `Option` 兜底。
+
+### 7.4 验证
 
 | 命令 | 结果 |
 |---|---|
 | `cargo fmt` | 无 diff |
 | `cargo clippy --all-targets -- -D warnings` | 零警告 |
-| `cargo test`（全量） | **3304 lib + 16 个 target 全绿** |
+| `cargo test`（全量） | **3307 lib + 16 个 target 全绿** |
 
-本轮新增/改写用例 12 个，覆盖上表每一条修复；未验证部分仍为真实 TUI 手感（需用户 `cargo run`）。
+本轮新增/改写用例 16 个，覆盖 §7.1–§7.3 的每一条修复；未验证部分仍为真实 TUI 手感（需用户 `cargo run`）。

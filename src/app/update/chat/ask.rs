@@ -193,10 +193,8 @@ pub fn apply_ask_paste(state: &mut AppState, pane: PaneId, text: &str) -> bool {
     let Some(editor) = ask.editor_mut() else {
         return false;
     };
-    let inserted = editor.can_insert(text.len());
-    if inserted {
-        editor.insert_str(text);
-    }
+    // 判定与写入同一口径（净化后长度），超限整次拒绝。
+    let inserted = editor.insert_str(text);
     if !inserted {
         // 超限整次拒绝：用户不可见的半截答案比没有答案更糟。
         hint(state, pane, ASK_HINT_TOO_LONG);

@@ -714,9 +714,11 @@ pub fn lx_input_size(rect: Rect) -> (u16, u16) {
     (width, visible)
 }
 
-/// `ask` 面板高度占窗格内容区高度的百分比上限与最小盒高。
+/// `ask` 面板高度占窗格内容区高度的百分比上限。
+///
+/// **只有上限、没有最小高度**（用户明确要求）：装不下时靠列表内部滚动，
+/// 极矮窗格由渲染层保证「至少留一行可选行」，而不是撑大面板挤掉历史。
 pub const LX_ASK_HEIGHT_PERCENT: u16 = 70;
-pub const LX_ASK_MIN_BOX: u16 = 10;
 /// 面板内手写编辑框相对面板宽度的内缩（左右边框 + 内边距）与最多内容行数。
 pub const LX_ASK_EDITOR_INSET: u16 = 4;
 pub const LX_ASK_EDITOR_ROWS: u16 = 5;

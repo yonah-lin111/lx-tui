@@ -46,6 +46,8 @@ const EDITOR_MAX_ROWS: u16 = crate::layout::LX_ASK_EDITOR_ROWS;
 const PREVIEW_GAP: u16 = 1;
 /// 选项行前缀列数（高亮箭头 2 + 标记 3 + 空格 1）。
 const ROW_PREFIX: u16 = 6;
+/// 面板最小可用行数：分隔线 + 一行可选行 + 底栏（题目 tab 另算）。
+const MIN_PANEL_ROWS: u16 = 3;
 
 /// 选项区一行。
 #[derive(Clone, Copy)]
@@ -139,11 +141,16 @@ impl AskLayout {
         }
         let body_bottom = lay.editor.map_or(footer_y, |editor| editor.y);
 
+        // 题干让位规则：先保证列表至少留一行可操作。极矮窗格（扣掉分隔线、tab 与
+        // 底栏后只剩 1–2 行）里如果题干硬占一行，列表就是 0 行——面板可见、按键
+        // 被整块接管、却什么都选不了，等于一个吃键的死面板。
         let need = question_rows(ask, inner.width);
         let available = body_bottom.saturating_sub(y);
-        let question_h = need
-            .min(available.saturating_sub(1))
-            .max(u16::from(available > 0));
+        let question_h = if available >= 2 {
+            need.min(available.saturating_sub(1))
+        } else {
+            0
+        };
         lay.question = Rect::new(inner.x, y, inner.width, question_h);
         y = y.saturating_add(question_h);
 
@@ -193,6 +200,10 @@ impl AskLayout {
 }
 
 /// 面板高度：内容需要多少给多少，但**不超过窗格内容区的 70%**；超出部分靠列表滚动。
+///
+/// 唯一例外是「最小可用高度」：分隔线 + 至少一行可选行 + 底栏（多题再加 tab 行）。
+/// 70% 上限的本意是不让面板挤掉历史；而在极矮窗格里死守 70% 会得到「可见、吃键、
+/// 什么都选不了」的面板——那种情况下宁可多占一行。两者取 `max`，再夹到窗格高度内。
 pub(super) fn height(area_h: u16, width: u16, lx: &Lx) -> u16 {
     let Some(ask) = lx.ask.as_ref() else {
         return 0;
@@ -220,7 +231,9 @@ pub(super) fn height(area_h: u16, width: u16, lx: &Lx) -> u16 {
         .saturating_add(body)
         .saturating_add(editor)
         .saturating_add(1);
-    need.min(max_h).min(area_h).max(1)
+    // 1 分隔线 + tabs + 1 行可选行 + 1 底栏。
+    let viable = MIN_PANEL_ROWS.saturating_add(tabs);
+    need.min(max_h).max(viable.min(area_h)).min(area_h).max(1)
 }
 
 /// 面板外框（输入框原位置）；未激活为 None。

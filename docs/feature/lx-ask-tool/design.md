@@ -565,7 +565,7 @@ h     = clamp(need, min(10, area.height), max_h)
 
 - **原样**：不做 Markdown、不去空格、不折行合并；`\t` 按 4 列展开。
 - 宽字符按 `unicode-width` 计列；宽字符后半列写 `CONTINUATION`（`ui/main_content/lx/grid.rs`），不出现半个字。
-- 每行超宽截断并加 `…`；总行数超可视行时显示滚动条（复用 `widgets/scrollbar`），滚轮与 `PgUp/PgDn` 驱动 `preview_scroll`。
+- 每行按列硬截断（**不补 `…`**：字符画补省略号会破坏对齐，且截断处没有"被省略"的文字语义）；总行数超可视行时显示滚动条（复用 `widgets/scrollbar`），滚轮与 `PgUp/PgDn` 驱动 `preview_scroll`。
 - 滚动上限是 `总行数 − 可视行数`（不是 `总行数 − 1`）：可视行数由事件循环在绘制前写入 `AskState.preview_visible`（`resolve_ask_preview_visible`），短预览因此滚不出空白，窗口变高时偏移自动收紧。
 - 预览为空或选项无 `preview` 时，预览列画 `(no preview)`（dim）。
 - 光标/选中高亮不进入预览区。

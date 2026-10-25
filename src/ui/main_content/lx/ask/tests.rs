@@ -89,17 +89,39 @@ fn ask_replaces_the_input_box() {
 
 #[test]
 fn height_never_exceeds_seventy_percent() {
+    // 70% 是上限；唯一例外是「最小可用高度」（分隔线 + 一行可选行 + 底栏），
+    // 极矮窗格里宁可多占一行，也不留一个可见却选不了的死面板。
     for (width, height) in [(80, 40), (60, 24), (50, 20), (30, 14), (80, 8)] {
         let lx = lx_with(sample());
         let rect = rect(surface(width, height), &lx).expect("ask rect");
-        let cap = (height * 70 / 100).max(1);
+        let cap = (height * 70 / 100).max(1).max(3.min(height));
         assert!(
-            rect.height <= cap,
-            "{width}x{height}: height {} 超过 70% 上限 {cap}",
+            rect.height <= cap.min(height),
+            "{width}x{height}: height {} 超过上限 {cap}",
             rect.height
         );
         assert!(rect.height >= 1);
     }
+}
+
+#[test]
+fn tiny_pane_keeps_at_least_one_selectable_row() {
+    // 8 行窗格：70% = 5 行，扣掉分隔线 + 底栏只剩 3 行可用；题干让位后
+    // 列表必须有落位的可选行，否则按键被接管却什么都选不了。
+    let lx = lx_with(sample());
+    let area = surface(80, 8);
+    let lay = computed(&lx, area);
+    assert!(
+        !lay.rows.is_empty(),
+        "极矮窗格必须至少落位一行可选行（面板 {} 行）",
+        lay.options.height
+    );
+    let row = lay.rows.first().expect("row");
+    assert_eq!(
+        hit(area, &lx, row.rect.x + 1, row.rect.y),
+        row.hit,
+        "落位的行必须可命中"
+    );
 }
 
 #[test]
