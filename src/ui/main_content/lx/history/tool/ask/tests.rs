@@ -122,3 +122,24 @@ fn wide_characters_and_long_answers_stay_on_one_line() {
     }
     assert!(!line.is_empty());
 }
+
+#[test]
+fn the_card_registers_a_click_face_only_when_expansion_adds_rows() {
+    // 生产上「展开」只能经点击面触发（`history_hit::card_at` → `card_regions`）；
+    // 不登记就等于 expanded 分支永远不可达。
+    let call = call(ToolStatus::Completed, Some(detail()));
+    let width = 60u16;
+    let step_rows = rows(&call, width, false);
+    let regions =
+        super::super::card_regions(&call, width, super::super::Folds::default(), step_rows);
+    let body = regions
+        .iter()
+        .find(|region| region.section == crate::app::state::CardSection::Body)
+        .expect("ask 卡片必须可点击展开");
+    assert!(body.clickable);
+    assert_eq!(body.card.rows, step_rows, "整卡都是点击面");
+    assert_eq!(body.fold.rows, 0, "题干不做 hover 提亮");
+    let folded = rows(&call, width, false);
+    let expanded = rows(&call, width, true);
+    assert!(expanded > folded, "展开必须真的多出行");
+}

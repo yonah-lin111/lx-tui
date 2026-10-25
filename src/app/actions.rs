@@ -79,6 +79,8 @@ pub enum LxInput {
     Clear,
     /// Tab：md 面板打开时采纳高亮候选。
     Tab,
+    /// Shift+Tab：ask 面板「上一步」（Confirm → 末题 → 上一题）。
+    PrevStep,
     /// Enter：md 面板打开时采纳高亮候选；否则预留给发送（当前不动作）。
     Enter,
     /// Esc：关闭 md 面板；无面板且在流中时停止生成。

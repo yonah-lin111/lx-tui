@@ -138,7 +138,15 @@ fn preview_scroll_is_clamped_by_preview_lines() {
     previewed.options[0].preview = Some("one\ntwo\nthree".into());
     let mut ask = state(vec![previewed]);
     assert_eq!(ask.preview(), Some("one\ntwo\nthree"));
+    // 可视行数未同步时按 1 行算，上限 = 总行数 - 1。
     assert_eq!(ask.preview_max_scroll(), 2);
+    // 同步为 3 行可见：内容正好一屏，一点都滚不动（短预览不许滚出空白）。
+    assert!(!ask.resize_preview(3));
+    assert_eq!(ask.preview_max_scroll(), 0);
+    assert!(!ask.scroll_preview(99), "没有溢出时滚动无效");
+    assert_eq!(ask.preview_scroll[0], 0);
+    // 只剩 1 行可见时上限回到 2（偏移本来是 0，无需收紧）。
+    assert!(!ask.resize_preview(1));
     assert!(ask.scroll_preview(99), "一次大滚动钳到上限");
     assert_eq!(ask.preview_scroll[0], 2);
     assert!(!ask.scroll_preview(1), "已到上限不再变化");
@@ -148,6 +156,38 @@ fn preview_scroll_is_clamped_by_preview_lines() {
     ask.set_highlight(1);
     assert_eq!(ask.preview(), None);
     assert_eq!(ask.preview_max_scroll(), 0);
+}
+
+#[test]
+fn shrinking_the_preview_pulls_the_offset_back_into_range() {
+    let mut previewed = question("q", false, &["A"]);
+    previewed.options[0].preview = Some("1\n2\n3\n4\n5\n6".into());
+    let mut ask = state(vec![previewed]);
+    ask.resize_preview(1);
+    assert!(ask.scroll_preview(99));
+    assert_eq!(ask.preview_scroll[0], 5);
+    // 预览区变高：偏移必须被收紧，否则用户看到的是空白。
+    assert!(ask.resize_preview(4));
+    assert_eq!(ask.preview_scroll[0], 2);
+}
+
+#[test]
+fn custom_editor_keeps_leading_bang_as_content() {
+    // `!` 是答案的一部分：不能被吸成 Shell 模式（全角 `！` 更不能被改成半角）。
+    let mut ask = state(vec![question("q", true, &["A"])]);
+    ask.begin_edit();
+    let editor = ask.editor_mut().expect("editor");
+    for ch in "！重要".chars() {
+        editor.insert_char(ch);
+    }
+    assert_eq!(editor.text(), "！重要", "文本逐字保留");
+    assert_eq!(
+        editor.visual_rows().len(),
+        1,
+        "视觉行按原始缓冲计算，与 text() 同源"
+    );
+    assert!(ask.commit_edit());
+    assert_eq!(ask.answers_at(0), vec!["！重要".to_string()]);
 }
 
 #[test]

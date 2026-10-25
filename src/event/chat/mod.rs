@@ -132,8 +132,8 @@ pub struct ChatStreams {
 /// 一次等待作答的提问：回执通道 + 归属用的 `call_id`。
 pub(crate) struct PendingAsk {
     pub call_id: String,
-    /// `None` 表示回执已丢失（窗格关闭等），作答时静默丢弃。
-    pub reply: Option<oneshot::Sender<Result<crate::chat::tools::AskAnswers, HostError>>>,
+    /// 回执通道由本结构独占；轮次结束/取消时取走并回 `Cancelled`。
+    pub reply: oneshot::Sender<Result<crate::chat::tools::AskAnswers, HostError>>,
 }
 
 /// 一次待回执的 BeginTool：DB pending 已提交，UI 已转 Pending。
@@ -201,15 +201,7 @@ impl ChatStreams {
     /// 挂起的 `ask` 在这里被唤醒为 `Err(Cancelled)`，否则 loop 会永久阻塞在作答上。
     fn cancel(&mut self, key: &RequestKey) -> bool {
         // 挂起提问先唤醒：它没有「下一检查点」，不唤醒就永远等不到。
-        let woke = match self.asks.remove(key) {
-            Some(pending) => {
-                if let Some(reply) = pending.reply {
-                    let _ = reply.send(Err(HostError::Cancelled));
-                }
-                true
-            }
-            None => false,
-        };
+        let woke = self.wake_ask(key);
         let Some(cancel) = self.cancels.get(key) else {
             return woke;
         };
@@ -223,10 +215,21 @@ impl ChatStreams {
         true
     }
 
+    /// 取走挂起的提问并回 `Cancelled`；无挂起项返回 `false`。
+    pub(crate) fn wake_ask(&mut self, key: &RequestKey) -> bool {
+        let Some(pending) = self.asks.remove(key) else {
+            return false;
+        };
+        let _ = pending.reply.send(Err(HostError::Cancelled));
+        true
+    }
+
     /// 轮次结束：清除该 key 的取消句柄、checkpoint、冻结工作区与未回执的 pending。
     ///
     /// **不清理进程**：正常结束一轮模型回答时，所属服务继续运行（下一轮复用同一实例）。
     fn finish(&mut self, key: &RequestKey) {
+        // 轮次结束不应还有提问在等；有就是没人再来回执了，一律按取消唤醒。
+        self.wake_ask(key);
         self.cancels.remove(key);
         self.checkpoints.remove(key);
         self.db_workspaces.remove(key);

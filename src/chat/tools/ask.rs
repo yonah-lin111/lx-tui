@@ -38,9 +38,7 @@ pub const MAX_ASK_PREVIEW_LINES: usize = 40;
 pub const MAX_ASK_PREVIEW_LINE_CHARS: usize = 400;
 /// 整次调用所有 preview 合计字节上限。
 pub const MAX_ASK_PREVIEW_TOTAL_BYTES: usize = 24576;
-/// 单题答案（含手写文本）合计字符上限。
-pub const MAX_ASK_ANSWER_CHARS: usize = 8192;
-/// 单题手写文本字节上限。
+/// 单题手写文本字节上限（选项标签另有 80 字符上限，答案总量因此天然有界）。
 pub const MAX_ASK_CUSTOM_BYTES: usize = 8192;
 
 /// 一道提问（已校验的模型参数）。

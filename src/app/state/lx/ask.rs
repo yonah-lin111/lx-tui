@@ -6,7 +6,7 @@
 //! 草稿不变量：本结构持有完全独立的编辑缓冲 [`AskEditor`]，作答期间 `Lx.input`
 //! 一个字节都不动。
 
-use crate::chat::tools::ask::AskQuestion;
+use crate::chat::tools::ask::{AskQuestion, MAX_ASK_CUSTOM_BYTES};
 
 use super::{Lx, LxRow, RequestKey};
 
@@ -52,6 +52,10 @@ pub struct AskState {
     pub editing: bool,
     /// 每题预览滚动偏移。
     pub preview_scroll: Vec<usize>,
+    /// 预览区可视行数（由事件循环按几何同步；0 表示没有预览区）。
+    ///
+    /// 滚动上限必须扣掉可视行数，否则短预览也能滚出一片空白。
+    pub preview_visible: usize,
 }
 
 impl AskState {
@@ -70,6 +74,7 @@ impl AskState {
             custom_on: vec![false; count],
             editing: false,
             preview_scroll: vec![0; count],
+            preview_visible: 0,
         }
     }
 
@@ -353,11 +358,39 @@ impl AskState {
             .as_deref()
     }
 
-    /// 当前预览的最大滚动偏移（可视行数由渲染层决定，这里只按总行数钳制）。
+    /// 当前预览的最大滚动偏移：总行数减可视行数（不足一屏时为 0）。
+    ///
+    /// 只按 `lines - 1` 钳制会让短预览也能滚出一片空白：内容没溢出时滚动毫无意义。
     pub fn preview_max_scroll(&self) -> usize {
-        self.preview()
-            .map(|preview| preview.split('\n').count().saturating_sub(1))
-            .unwrap_or(0)
+        let Some(preview) = self.preview() else {
+            return 0;
+        };
+        let total = preview.split('\n').count();
+        total.saturating_sub(self.preview_visible.max(1))
+    }
+
+    /// 同步预览区可视行数（只有真的溢出才允许滚动，返回值表示偏移被收紧）。
+    pub fn resize_preview(&mut self, visible: usize) -> bool {
+        self.preview_visible = visible;
+        let mut moved = false;
+        for index in 0..self.preview_scroll.len() {
+            let total = self
+                .questions
+                .get(index)
+                .and_then(|question| {
+                    question
+                        .options
+                        .get(self.highlight.get(index).copied().unwrap_or(0))
+                })
+                .and_then(|option| option.preview.as_deref())
+                .map_or(0, |preview| preview.split('\n').count());
+            let max = total.saturating_sub(visible.max(1));
+            if self.preview_scroll[index] > max {
+                self.preview_scroll[index] = max;
+                moved = true;
+            }
+        }
+        moved
     }
 
     /// 滚动预览（正数向下）；返回偏移是否变化。
@@ -419,12 +452,15 @@ impl Default for AskEditor {
 
 impl AskEditor {
     pub fn new() -> Self {
-        Self(Lx::new())
+        Self(Lx::plain())
     }
 
-    /// 当前文本（含 shell 模式下被吸收的 `!` 前缀，保证逐字节还原用户输入）。
+    /// 当前文本：与 [`Self::visual_rows`]/[`Self::cursor_visual`] 同一份原始缓冲。
+    ///
+    /// 不用 `serialized_input()`：那是给 shell 草稿用的（会补 `!` 前缀），与按
+    /// 原始 `input` 计算的视觉行字节偏移不同源，切出来的片段会错位甚至整行丢失。
     pub fn text(&self) -> String {
-        self.0.serialized_input()
+        self.0.input.clone()
     }
 
     /// 光标字节偏移（渲染层计算编辑框内光标用；只读，禁止外部改写）。
@@ -457,16 +493,28 @@ impl AskEditor {
         self.0.end();
     }
 
+    /// 还能否再插入 `bytes` 字节：手写答案的硬上限在**写入处**执行，
+    /// 键入、粘贴、换行共用同一条规则（超限拒绝，绝不截断）。
+    pub fn can_insert(&self, bytes: usize) -> bool {
+        self.text().len().saturating_add(bytes) <= MAX_ASK_CUSTOM_BYTES
+    }
+
     pub fn insert_char(&mut self, ch: char) {
-        self.0.insert_char(ch);
+        if self.can_insert(ch.len_utf8()) {
+            self.0.insert_char(ch);
+        }
     }
 
     pub fn insert_str(&mut self, text: &str) {
-        self.0.insert_str(text);
+        if self.can_insert(text.len()) {
+            self.0.insert_str(text);
+        }
     }
 
     pub fn newline(&mut self) {
-        self.0.newline();
+        if self.can_insert(1) {
+            self.0.newline();
+        }
     }
 
     pub fn backspace(&mut self) {

@@ -222,6 +222,64 @@ fn matching_answer_wakes_the_loop_and_clears_state() {
 }
 
 #[test]
+fn cancel_before_registration_does_not_reopen_the_panel() {
+    // Esc 的取消效应可能先于 AskUser 事件被处理：此时 `CancelChatStream` 只置位取消
+    // 信号（请求态仍是 `Streaming`）。若请求照常装面板，loop 已无人唤醒，整轮卡死。
+    let (mut state, key) = streaming_state();
+    let mut streams = ChatStreams::default();
+    let (cancel_sender, _cancel) = watch::channel(true);
+    streams.cancels.insert(key.clone(), cancel_sender);
+    let mut reply = request(&mut state, &mut streams, key.clone(), "call-1");
+    assert!(
+        matches!(reply.try_recv(), Ok(Err(HostError::Cancelled))),
+        "已取消的轮次必须立即回取消"
+    );
+    assert!(streams.asks.is_empty(), "已取消的轮次不得登记挂起项");
+    assert!(
+        state
+            .pane_anywhere(key.pane)
+            .expect("pane")
+            .lx
+            .ask
+            .is_none(),
+        "已取消的轮次不得重新装面板"
+    );
+}
+
+#[test]
+fn empty_answer_is_rejected_instead_of_reporting_no_selection() {
+    // `answered_result` 会把缺题兜底成 `[]`，那正是「用户全不选」的形状：
+    // 事件层必须在回执前把它挡掉，绝不让半成品当成用户作答交给模型。
+    let (mut state, key) = streaming_state();
+    let mut streams = ChatStreams::default();
+    let mut reply = request(&mut state, &mut streams, key.clone(), "call-1");
+    let mut empty = crate::chat::tools::AskAnswers::new();
+    empty.insert("layout".into(), Vec::new());
+    assert!(crate::event::chat::ask::answer(
+        &mut state,
+        &mut streams,
+        &key,
+        "call-1",
+        empty
+    ));
+    match reply.try_recv() {
+        Ok(Err(HostError::Failed { code })) => {
+            assert_eq!(code, crate::event::chat::ask::ASK_EMPTY_ANSWER_CODE);
+        }
+        other => panic!("空答案必须拒绝，实际 {other:?}"),
+    }
+    assert!(streams.asks.is_empty(), "拒绝后不留挂起项");
+    assert!(
+        state
+            .pane_anywhere(key.pane)
+            .expect("pane")
+            .lx
+            .ask
+            .is_none()
+    );
+}
+
+#[test]
 fn stream_finish_sweeps_the_pending_ask() {
     let (mut state, key) = streaming_state();
     let mut streams = ChatStreams::default();
@@ -246,6 +304,17 @@ fn stream_finish_sweeps_the_pending_ask() {
             .ask
             .is_none()
     );
+}
+
+#[test]
+fn streams_finish_alone_wakes_and_drops_the_pending_ask() {
+    // `finish` 自己就要清 `asks`：不能指望每个调用点都记得再调一次 `ask::cancel`。
+    let (mut state, key) = streaming_state();
+    let mut streams = ChatStreams::default();
+    let mut reply = request(&mut state, &mut streams, key.clone(), "call-1");
+    streams.finish(&key);
+    assert!(streams.asks.is_empty(), "轮次结束不得留下悬挂 sender");
+    assert!(matches!(reply.try_recv(), Ok(Err(HostError::Cancelled))));
 }
 
 #[test]

@@ -134,8 +134,7 @@
 | `MAX_ASK_PREVIEW_LINES` | 40 | 单个 preview 行数 |
 | `MAX_ASK_PREVIEW_LINE_CHARS` | 400 | preview 单行字符数 |
 | `MAX_ASK_PREVIEW_TOTAL_BYTES` | 24576 | 整次调用所有 preview 合计字节 |
-| `MAX_ASK_ANSWER_CHARS` | 8192 | 单题答案（含手写文本）合计字符 |
-| `MAX_ASK_CUSTOM_BYTES` | 8192 | 单题手写文本字节数 |
+| `MAX_ASK_CUSTOM_BYTES` | 8192 | 单题手写文本字节数（写入处执行；选项标签另有 80 字符上限） |
 
 参数总量另有现有上限 `MAX_TOOL_ARGUMENTS_BYTES = 1 MiB`（`src/chat/events.rs:228`）。
 
@@ -488,7 +487,7 @@ Idle ───────────────▶ Asking ──────�
 | `Esc` | 退出编辑，文本保留，不取消整轮 |
 | `Tab` | 编辑态吞掉（不切题，避免误操作） |
 
-> 映射复用：`src/input/mod.rs::lx_input_key` 不改；`LxInput` 原样进入 `apply_lx_input`，由它把 ask 分支排在最前。
+> 映射复用：`src/input/mod.rs::lx_input_key` 只新增一条——`BackTab` 与 `Tab+SHIFT` 都映射为 `LxInput::PrevStep`（终端按 kitty 协议可能报后者）；`LxInput` 原样进入 `apply_lx_input`，由它把 ask 分支排在最前。
 
 ### 7.3 鼠标
 
@@ -567,6 +566,7 @@ h     = clamp(need, min(10, area.height), max_h)
 - **原样**：不做 Markdown、不去空格、不折行合并；`\t` 按 4 列展开。
 - 宽字符按 `unicode-width` 计列；宽字符后半列写 `CONTINUATION`（`ui/main_content/lx/grid.rs`），不出现半个字。
 - 每行超宽截断并加 `…`；总行数超可视行时显示滚动条（复用 `widgets/scrollbar`），滚轮与 `PgUp/PgDn` 驱动 `preview_scroll`。
+- 滚动上限是 `总行数 − 可视行数`（不是 `总行数 − 1`）：可视行数由事件循环在绘制前写入 `AskState.preview_visible`（`resolve_ask_preview_visible`），短预览因此滚不出空白，窗口变高时偏移自动收紧。
 - 预览为空或选项无 `preview` 时，预览列画 `(no preview)`（dim）。
 - 光标/选中高亮不进入预览区。
 
@@ -733,8 +733,10 @@ if let Some(ask) = pane.lx.ask.as_mut() {
 | 等待中窗格关闭 / 切会话 / `/new` | `ChatStreams.cancel` 唤醒 loop → `cancelled`，UI 清 ask |
 | 等待中 app 崩溃 | 重启恢复把 `running` 标 `interrupted` |
 | 等待中会话被另一实例接管 | 现有 session guard 机制；本轮最终 `interrupted`/失败，不写假结果 |
-| 答案为空（未选就 Enter） | 内联提示，不提交 |
-| 手写文本超 8 KiB | 编辑态拒绝继续输入并提示（或提交时截断并标记？→ **拒绝**，保持数据真实） |
+| 答案为空（未选就 Enter） | 窗格内 toast，不提交、不前进 |
+| 手写文本超 8 KiB | 写入处拒绝（`AskEditor::can_insert`，键入/换行/粘贴同一规则）并 toast；绝不截断 |
+| 取消先于 `AskUser` 抵达 | `request` 检查取消信号，直接回 `Cancelled`，不装面板（否则面板与用户意图相反且轮次卡死） |
+| 作答载荷缺题（空数组） | 事件层拒收回执，回 `Failed{ask answer is empty}`，不用 `[]` 冒充「用户全不选」 |
 | preview 超限 | 整次拒绝（4.3） |
 | 0 选项题 | 只剩「其他」行；必须输入文本才能提交 |
 | 单选下勾选 + 手写并存 | 互斥：后操作清掉前者 |

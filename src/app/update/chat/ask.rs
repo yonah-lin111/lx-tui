@@ -28,6 +28,9 @@ use super::escape_stop;
 /// 回车时当前题还没有答案的 toast 文案。
 pub const ASK_HINT_EMPTY: &str = "select an answer first";
 
+/// 手写答案超过字节上限、写入被拒时的 toast 文案。
+pub const ASK_HINT_TOO_LONG: &str = "answer is too long";
+
 /// 预览滚动的单次步长（`PgUp`/`PgDn` 与滚轮共用）。
 const PREVIEW_STEP: isize = 3;
 
@@ -40,7 +43,14 @@ pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool
         return false;
     };
     if ask.editing {
-        return apply_edit_input(ask, command);
+        // 插入类按键先按字节预算判定：超限拒绝写入（绝不截断），并给出窗格内提示。
+        let rejected = inserted_bytes(&command)
+            .is_some_and(|bytes| ask.editor().is_some_and(|editor| !editor.can_insert(bytes)));
+        let changed = apply_edit_input(ask, command);
+        if rejected {
+            hint(state, pane, ASK_HINT_TOO_LONG);
+        }
+        return changed;
     }
     match command {
         // ↑↓ / j / k：移动高亮（含「其他」行）。
@@ -58,9 +68,9 @@ pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool
         LxInput::Char(digit @ '1'..='9') => choose_row(ask, digit),
         // Enter：选中/前进一步/提交流程见 [`enter`]。
         LxInput::Enter => enter(state, pane),
-        // Tab/→ 下一步（含 Confirm），← 上一步。
+        // Tab/→ 下一步（含 Confirm），Shift+Tab/← 上一步。
         LxInput::Tab | LxInput::Right => ask.next_step(),
-        LxInput::Left => ask.prev_step(),
+        LxInput::PrevStep | LxInput::Left => ask.prev_step(),
         LxInput::PageUp => ask.scroll_preview(-PREVIEW_STEP),
         LxInput::PageDown => ask.scroll_preview(PREVIEW_STEP),
         // Esc：沿用双击确认（第一次只待命，第二次取消整轮）。
@@ -125,17 +135,26 @@ fn enter(state: &mut AppState, pane: PaneId) -> bool {
 
 /// 空答案提示：窗格内 toast（不抢全局槽、不写草稿）。
 fn empty_hint(state: &mut AppState, pane: PaneId) -> bool {
+    hint(state, pane, ASK_HINT_EMPTY);
+    true
+}
+
+/// 提问面板的窗格内提示（从不占用全局 toast 槽）。
+fn hint(state: &mut AppState, pane: PaneId, message: &'static str) {
     crate::app::update::show_lx_toast(
         state,
         pane,
-        Toast::new(
-            ToastKind::Warning,
-            ASK_HINT_EMPTY,
-            None,
-            std::time::Instant::now(),
-        ),
+        Toast::new(ToastKind::Warning, message, None, std::time::Instant::now()),
     );
-    true
+}
+
+/// 本次按键会写入的字节数（只有插入类命令会增长手写缓冲）。
+fn inserted_bytes(command: &LxInput) -> Option<usize> {
+    match command {
+        LxInput::Char(ch) => Some(ch.len_utf8()),
+        LxInput::Newline | LxInput::EnterFolder => Some(1),
+        _ => None,
+    }
 }
 
 /// 编辑态按键：编辑子集转发给独立缓冲，`Enter` 提交文本，`Esc` 只退出编辑。
@@ -174,12 +193,15 @@ pub fn apply_ask_paste(state: &mut AppState, pane: PaneId, text: &str) -> bool {
     let Some(editor) = ask.editor_mut() else {
         return false;
     };
-    let limit = crate::chat::tools::ask::MAX_ASK_CUSTOM_BYTES;
-    if editor.text().len().saturating_add(text.len()) > limit {
-        return false;
+    let inserted = editor.can_insert(text.len());
+    if inserted {
+        editor.insert_str(text);
     }
-    editor.insert_str(text);
-    true
+    if !inserted {
+        // 超限整次拒绝：用户不可见的半截答案比没有答案更糟。
+        hint(state, pane, ASK_HINT_TOO_LONG);
+    }
+    inserted
 }
 
 /// 面板内鼠标点击（几何由渲染层 `layout()` 提供，事件层不重算）。

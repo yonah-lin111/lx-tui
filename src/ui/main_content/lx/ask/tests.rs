@@ -250,6 +250,32 @@ fn scrolling_follows_the_highlight_and_keeps_every_row_hittable() {
 }
 
 #[test]
+fn submit_row_stays_visible_when_the_other_row_is_highlighted() {
+    // 单题 4 个带描述的选项 + 题干 → 内容超出一屏；高亮停在「其他」时，
+    // 紧跟其后的 Submit 必须仍落在可视区（否则纯鼠标用户永远点不到提交）。
+    let options = (0..4)
+        .map(|index| option(&format!("o{index}"), "desc", None))
+        .collect();
+    let mut lx = lx_with(vec![question("q", false, options)]);
+    {
+        let ask = lx.ask.as_mut().expect("ask");
+        let rows = ask.row_count();
+        ask.set_highlight(rows - 1);
+        assert_eq!(ask.highlight[0], 4, "高亮「其他」");
+    }
+    let area = surface(80, 16);
+    let lay = computed(&lx, area);
+    assert!(
+        lay.content_rows > usize::from(lay.options.height),
+        "必须溢出"
+    );
+    assert!(
+        lay.rows.iter().any(|row| row.hit == Some(AskHit::Submit)),
+        "Submit 行必须留在可视区"
+    );
+}
+
+#[test]
 fn confirm_tab_renders_review_rows_and_commit() {
     let mut lx = lx_with(vec![
         question("layout", false, vec![option("a", "da", None)]),

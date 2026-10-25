@@ -317,10 +317,19 @@ pub(crate) fn handle_mouse_wheel(
                 return;
             }
             // `ask` 面板：预览区只滚预览、选项区移高亮；面板内一律吞掉。
+            // 后台任务页可见时面板不可见，滚轮必须留给任务列表。
             if let Some(direction) = vertical_wheel_direction(mouse.kind)
-                && let Some(zone) = state.pane_anywhere(pane).and_then(|target| {
-                    ui::main_content::lx::ask_wheel_zone(inner, &target.lx, mouse.column, mouse.row)
-                })
+                && let Some(zone) = state
+                    .pane_anywhere(pane)
+                    .filter(|target| target.lx.task.is_none())
+                    .and_then(|target| {
+                        ui::main_content::lx::ask_wheel_zone(
+                            inner,
+                            &target.lx,
+                            mouse.column,
+                            mouse.row,
+                        )
+                    })
             {
                 if update::apply_ask_wheel(state, pane, zone, direction) {
                     *dirty = true;

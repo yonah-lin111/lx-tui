@@ -61,8 +61,9 @@ pub use user_shell::{
 pub(crate) use view::view_message_of;
 pub use viewport::{
     hover_lx_chat, hover_lx_jump_bottom, jump_lx_history_bottom, jump_lx_history_to_prompt,
-    resolve_lx_rewind_center, resolve_lx_sticky_prompt, resolve_lx_viewport_top,
-    resolve_task_output_visible, scroll_lx_history, set_lx_history_scroll, toggle_lx_card,
+    resolve_ask_preview_visible, resolve_lx_rewind_center, resolve_lx_sticky_prompt,
+    resolve_lx_viewport_top, resolve_task_output_visible, scroll_lx_history, set_lx_history_scroll,
+    toggle_lx_card,
 };
 
 /// 尝试发送：校验 Native 入口、非空草稿、请求空闲与有效模型后冻结快照并入队效应。

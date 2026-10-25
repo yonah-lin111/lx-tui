@@ -283,7 +283,9 @@ impl LxChat {
             // 因此与重载路径共用同一套合并：参数派生值打底、结果侧覆盖。
             // `tool_view_of` 走 `from_arguments().absorb_result_json()`，两条路同口径。
             let from_args = ToolSummary::from_arguments(&call.arguments_json);
-            call.summary = Some(Box::new(from_args.absorb_summary(&summary)));
+            let merged = from_args.absorb_summary(&summary);
+            // 与重载路径同口径：空摘要不挂到步骤上，否则会画出一个孤立的空 `└─`。
+            call.summary = (!merged.is_empty()).then_some(Box::new(merged));
         }
         if result_json.is_some() {
             call.result_json = result_json;

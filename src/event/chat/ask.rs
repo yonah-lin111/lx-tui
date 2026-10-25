@@ -19,6 +19,9 @@ use super::{ChatStreams, PendingAsk, active_assistant_id};
 /// 该窗格已有挂起提问时的稳定失败码（模型侧按工具失败处理）。
 pub const ASK_BUSY_CODE: &str = "another ask is already pending";
 
+/// 作答载荷缺题（空答案数组）时的稳定失败码。
+pub const ASK_EMPTY_ANSWER_CODE: &str = "ask answer is empty";
+
 /// 挂起一次提问；返回是否写入了 UI 状态。
 ///
 /// 归属校验先于一切写入：旧 generation、窗格已删除的迟到请求直接回 `Cancelled`，
@@ -31,7 +34,14 @@ pub(crate) fn request(
     questions: Vec<AskQuestion>,
     reply: oneshot::Sender<Result<AskAnswers, HostError>>,
 ) -> bool {
-    if active_assistant_id(state, &key).is_none() {
+    // 取消可能先于本事件到达：`CancelChatStream` 只置位取消信号并清面板，请求态
+    // 仍是 `Streaming`。这里不补判就会重新装上面板，而 loop 已经收不到唤醒信号了。
+    if active_assistant_id(state, &key).is_none()
+        || streams
+            .cancels
+            .get(&key)
+            .is_some_and(|cancel| *cancel.borrow())
+    {
         let _ = reply.send(Err(HostError::Cancelled));
         return false;
     }
@@ -55,13 +65,7 @@ pub(crate) fn request(
         crate::layout::LX_ASK_EDITOR_ROWS,
     );
     pane.lx.ask = Some(ask);
-    streams.asks.insert(
-        key,
-        PendingAsk {
-            call_id,
-            reply: Some(reply),
-        },
-    );
+    streams.asks.insert(key, PendingAsk { call_id, reply });
     true
 }
 
@@ -70,7 +74,7 @@ pub(crate) fn request(
 /// 返回 UI 是否发生变化。
 pub(crate) fn cancel(state: &mut AppState, streams: &mut ChatStreams, key: &RequestKey) -> bool {
     let changed = clear(state, key);
-    wake(streams.asks.remove(key));
+    streams.wake_ask(key);
     changed
 }
 
@@ -89,6 +93,9 @@ pub(crate) fn clear(state: &mut AppState, key: &RequestKey) -> bool {
 
 /// 作答回执：`call_id` 与当前挂起项一致才发送；不一致视为旧面板的迟到提交，
 /// **静默丢弃且不动**当前挂起项（否则会把正在等待的提问一并取消）。
+///
+/// 空答案数组一律拒收回 `Failed`：`answered_result` 会把缺题补成 `[]`，那正是
+/// 「用户全不选」的形状，绝不能让这种半成品冒充用户作答。
 pub(crate) fn answer(
     state: &mut AppState,
     streams: &mut ChatStreams,
@@ -109,12 +116,20 @@ pub(crate) fn answer(
         );
         return false;
     }
+    if answers.values().any(Vec::is_empty) {
+        let Some(pending) = streams.asks.remove(key) else {
+            return false;
+        };
+        let _ = pending.reply.send(Err(HostError::Failed {
+            code: ASK_EMPTY_ANSWER_CODE.to_string(),
+        }));
+        clear(state, key);
+        return true;
+    }
     let Some(pending) = streams.asks.remove(key) else {
         return false;
     };
-    if let Some(reply) = pending.reply
-        && reply.send(Ok(answers)).is_err()
-    {
+    if pending.reply.send(Ok(answers)).is_err() {
         // loop 已不在（本轮被上游取消）：答案无处可去，但不是错误路径。
         tracing::debug!(target: "lx::chat", pane = key.pane.raw(), "ask answer receiver gone");
     }
@@ -141,13 +156,4 @@ pub(crate) fn sweep_orphans(state: &mut AppState, streams: &mut ChatStreams) -> 
         changed |= cancel(state, streams, &key);
     }
     changed
-}
-
-/// 取走挂起项并回取消；`reply` 已丢失时静默忽略。
-fn wake(pending: Option<PendingAsk>) {
-    if let Some(pending) = pending
-        && let Some(reply) = pending.reply
-    {
-        let _ = reply.send(Err(HostError::Cancelled));
-    }
 }

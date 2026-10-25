@@ -849,6 +849,13 @@ pub fn task_output_rows(area: Rect, lx: &Lx) -> Option<usize> {
     Some(task::output_rows(rect))
 }
 
+/// `ask` 预览区的可见行数（滚动上限钳制用）；无面板或无预览区返回 None。
+///
+/// 与渲染共用 [`ask::layout`] 的同一份几何，因此"能滚多远"与"画到哪停"是同一个数。
+pub fn ask_preview_rows(area: Rect, lx: &Lx) -> Option<usize> {
+    ask::preview_rows(area, lx)
+}
+
 /// md 格式面板：圆角边框 + 标题 + 候选行（标签与预览，高亮项 accent）。
 fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
     draw_box(grid, rect, style::muted());

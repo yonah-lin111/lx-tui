@@ -244,6 +244,14 @@ pub(super) fn hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<AskHit> 
         })
 }
 
+/// 预览区可见行数（滚动上限钳制用）；面板未激活或无预览区返回 None。
+pub(super) fn preview_rows(area: Rect, lx: &Lx) -> Option<usize> {
+    let ask = lx.ask.as_ref()?;
+    let rect = rect(area, lx)?;
+    let lay = AskLayout::compute(rect, area.height, ask);
+    Some(usize::from(lay.preview?.height))
+}
+
 /// 滚轮分区：面板内返回区域，面板外 None（事件层据此吞掉）。
 pub(super) fn wheel_zone(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<AskWheelZone> {
     let ask = lx.ask.as_ref()?;
@@ -746,7 +754,12 @@ fn place_rows(lay: &mut AskLayout, ask: &AskState) {
         }
         end
     };
-    let scroll = highlight_end.saturating_sub(visible);
+    let mut scroll = highlight_end.saturating_sub(visible);
+    // 高亮停在「其他」时它的下一行就是 `Submit`：按高亮对齐的窗口恰好把 `Submit`
+    // 挤到可视区外（行下标 == visible 被丢弃），纯鼠标用户因此永远点不到提交行。
+    if highlight_end + 1 == total && scroll + visible < total {
+        scroll = scroll.saturating_add(1);
+    }
     lay.scroll = scroll;
     let mut row = 0usize;
     for (kind, height) in model {

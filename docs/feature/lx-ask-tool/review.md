@@ -79,3 +79,110 @@
 7. **状态模型简化**：删除 `hint` / `collected` / `list_scroll`，新增 `confirm: bool`；`submit_current` → `submit_all`（唯一提交入口）。
 
 验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings` 零警告；`cargo test` **3293** 个 lib 用例 + 16 个 target 全绿（新增/改写用例覆盖：单题回车即提交、多选空格后回车提交、多题前进到 Confirm、Confirm 未答完不提交、空答案 toast、双行选项命中、70% 上限与滚动、tab 常驻、无边框单线）。
+
+## 7. v3 评审与修复（本轮）
+
+评审方式：两个只读 subagent 并行（协议/握手/事件层；状态/输入/渲染层），逐条要求给出触发路径。以下按严重度记录**缺陷 → 错误原因 → 修法**。
+
+### 7.1 已修（真缺陷）
+
+#### ① 取消竞态：面板在取消之后被重新装上，整轮永久卡住
+
+- 位置：`src/event/chat/ask.rs::request`、`src/event/chat/mod.rs::cancel/finish`
+- **错误原因**：`Esc` 只推 `Effect::CancelChatStream`，不把 `RequestState` 从 `Streaming` 改走；事件层处理该效应时若 `streams.asks` 尚空，`ChatStreams::cancel` 仅置位取消信号。随后才送达的 `AgentHostEvent::AskUser` 通过 `active_assistant_id` 校验 → 重新装面板并登记 sender，而 loop 的取消信号已被消费，`sweep_orphans` 又因 `is_busy()` 为真不清面板 → 面板与用户意图相反且轮次卡到用户作答为止。
+- **修法**：`request` 增加权威判定——`streams.cancels[key]` 已为 `true` 时直接回 `Cancelled`，不写面板、不登记；`ChatStreams::finish` 自己 `wake_ask`（不再依赖调用点记得补 `ask::cancel`）。
+- **代码**：
+  ```rust
+  if active_assistant_id(state, &key).is_none()
+      || streams.cancels.get(&key).is_some_and(|cancel| *cancel.borrow())
+  {
+      let _ = reply.send(Err(HostError::Cancelled));
+      return false;
+  }
+  ```
+- **测试**：`event::chat::tests::ask::cancel_before_registration_does_not_reopen_the_panel`、`streams_finish_alone_wakes_and_drops_the_pending_ask`。
+
+#### ② `AskEditor` 复用 Lx 的 shell 前缀：答案被静默改写、编辑框错位
+
+- 位置：`src/app/state/lx/ask.rs`（`text()`）、`src/app/state/lx.rs`（`adopt_shell_prefix`）
+- **错误原因**：`Lx::insert_char` 会把首个非空白 `!`/`！` 吸掉并切成 Shell 模式；`AskEditor::text()` 用 `serialized_input()`（会补回 `!`、全角转半角），而 `visual_rows()`/`cursor_visual()` 按**未加前缀的 `input`** 算字节偏移。`draw_editor` 拿后者切前者 → `text.get(range)` 落在字符中间返回 `None`，整行不画，光标悬空。答案内容同时被改写（`！重要` → `!重要`）。
+- **修法**：`Lx` 增加 `plain` 开关（`Lx::plain()`）：不吸收 `!`、换行不续写列表标记、不刷新任何面板；`AskEditor::text()` 改读原始 `input`，与视觉行同源。
+- **测试**：`app::state::lx::ask::tests::custom_editor_keeps_leading_bang_as_content`。
+
+#### ③ 手写答案的硬上限只挡粘贴，键入可无限增长
+
+- 位置：`src/chat/tools/ask.rs`、`src/app/update/chat/ask.rs`
+- **错误原因**：只有 `apply_ask_paste` 按 `MAX_ASK_CUSTOM_BYTES` 检查；逐字键入完全绕过。`MAX_ASK_ANSWER_CHARS` 全仓无引用（死常量）。极端输入会让答案超过 `MAX_TOOL_RESULT_REPLAY_BYTES`，回放时 JSON 从中间截断，模型拿到非法 JSON；超过 1 MiB 时 `to_result_json` 的 shrink 不认 `questions`，历史卡片答案全丢。
+- **修法**：上限在**写入处**执行——`AskEditor::can_insert` 统一把关 `insert_char`/`insert_str`/`newline`，键入与粘贴共用一条规则；超限整次拒绝并给窗格内 toast（`answer is too long`）。删除死常量 `MAX_ASK_ANSWER_CHARS`。
+- **代码**：
+  ```rust
+  pub fn can_insert(&self, bytes: usize) -> bool {
+      self.text().len().saturating_add(bytes) <= MAX_ASK_CUSTOM_BYTES
+  }
+  ```
+- **测试**：`app::update::chat::tests::ask::custom_text_stops_at_the_byte_limit_with_a_toast`。
+
+#### ④ 后台任务页打开时，隐藏的 ask 面板抢走任务列表的鼠标点击
+
+- 位置：`src/event/mouse/press.rs`、`src/event/mouse/wheel.rs`
+- **错误原因**：task 与 ask 共用输入框矩形，task 优先绘制。press 先按 `ask_rect` 命中并 `return`，而该矩形此时就是 task 列表——点列表任意位置都在改一个看不见的答案，列表本身点不动；wheel 同样。
+- **修法**：两处命中入口都加 `target.lx.task.is_none()` 前置（不清 `lay.ask`：`build_chat` 的 `bottom_box` 靠它维持 task 打开期间的历史几何）。
+- **测试**：`event::tests::task_page_swallows_ask_hits_so_the_list_stays_clickable`。
+
+#### ⑤ 列表一滚动，单题的 Submit 行永远不可见/不可点
+
+- 位置：`src/ui/main_content/lx/ask.rs::place_rows`
+- **错误原因**：`highlight_end` 对「其他」只取到它自己的末行，而 `Submit` 恰在下一行（下标 == visible），被 `if index >= visible { break }` 丢弃。4 个带描述选项 + 16 行窗格即触发：纯鼠标用户无法提交。
+- **修法**：高亮停在「其他」且其后紧跟 `Submit` 时，滚动窗口多走一行，保证 `Submit` 留在可视区。
+- **测试**：`ui::main_content::lx::ask::tests::submit_row_stays_visible_when_the_other_row_is_highlighted`。
+
+#### ⑥ 预览没溢出也能滚出空白
+
+- 位置：`src/app/state/lx/ask.rs::preview_max_scroll`、`src/ui/main_content/lx/ask.rs::draw_preview`
+- **错误原因**：滚动上限只按 `lines - 1`，不看可视高度。3 行预览 + 10 行预览区按 `PgDn` 后只剩一行内容加一片空白，且因 `total <= visible` 连 thumb 都不画——用户看起来就是「预览坏了」。
+- **修法**：上限改为 `total - visible`；可视行数由事件循环在绘制前写入状态（`resolve_ask_preview_visible`，与 `resolve_task_output_visible` 同款），几何与渲染同源。
+- **测试**：`preview_scroll_is_clamped_by_preview_lines`（改写）、`shrinking_the_preview_pulls_the_offset_back_into_range`。
+
+#### ⑦ 历史 `ask` 卡片永远不能展开（expanded 分支是死代码）
+
+- 位置：`src/ui/main_content/lx/history/tool.rs`（`fold_region` / `has_expandable_content` / `card_regions`）
+- **错误原因**：三处对 `Ask` 一律返回 NONE/false/空；展开只能经 `history_hit::card_at → card_regions` 登记点击面触发，因此完整题干（≤500 字）永远看不到，折叠态的 `header` 只有 12 字。
+- **修法**：为 `Ask` 登记整卡 Body 点击面（仅当展开确实多出行时），`has_expandable_content` 用 `rows(expanded) > rows(folded)` 判定；题干不做 hover 提亮。
+- **测试**：`history::tool::ask::tests::the_card_registers_a_click_face_only_when_expansion_adds_rows`。
+
+#### ⑧ `Shift+Tab` 未接线（设计文档承诺的「上一步」不存在）
+
+- 位置：`src/app/actions.rs`、`src/input/mod.rs`、`src/app/update/chat/ask.rs`
+- **修法**：新增 `LxInput::PrevStep`；`KeyCode::BackTab` 与 `Tab+SHIFT`（kitty 协议）都映射到它；ask 面板中与 `←` 同义（`Confirm → 末题 → 上一题`）。
+- **测试**：`app::update::chat::tests::ask::enter_submits_and_tab_arrows_switch_questions` 追加回退断言。
+
+#### ⑨ 空答案载荷会把「缺题」伪造成「用户全不选」
+
+- 位置：`src/event/chat/ask.rs::answer`
+- **错误原因**：`answered_result` 对缺失的 id 兜底成 `[]`，那正是「用户全不选」的形状；事件层对 `Effect::AnswerAsk` 不做覆盖校验。当前只有 `submit_all`（有 `all_answered()` 把关）一个生产者，属防御缺口，但一旦新增入口就会把假答案交给模型。
+- **修法**：事件层拒收回执中任何空答案数组，回 `Failed { code: "ask answer is empty" }` 并清面板，绝不让它成为工具结果。
+- **测试**：`event::chat::tests::ask::empty_answer_is_rejected_instead_of_reporting_no_selection`。
+
+### 7.2 同口径修正（当前不可见，防回归）
+
+#### ⑩ 实时结算与历史重载的空摘要不一致
+
+- 位置：`src/app/state/lx/chat/stream.rs::settle_tool_result`
+- **错误原因**：实时路径无条件写 `Some(空摘要)`，重载路径 `tool_view_of` 用 `is_empty()` 过滤成 `None`。ask 卡片走类型化 `detail` 分支所以没有可见差异，但一旦回退到摘要路径就会画出孤立的空 `└─`（`steps.rs` 注释记录过同类回归）。
+- **修法**：实时路径同样过滤空摘要。
+- **测试**：`app::state::lx::chat::stream::tests::settle_drops_an_empty_summary_like_the_reload_path`。
+
+#### ⑪ `PendingAsk.reply: Option` 是死设施
+
+- **错误原因**：注释声称 `None` 表示「回执已丢失」，但全仓没有任何代码写 `None`；`if let Some(reply)` 分支永远命中 `Some`。
+- **修法**：改成非 `Option`，唤醒逻辑收敛到 `ChatStreams::wake_ask`（`cancel`/`finish` 共用）。
+
+### 7.3 验证
+
+| 命令 | 结果 |
+|---|---|
+| `cargo fmt` | 无 diff |
+| `cargo clippy --all-targets -- -D warnings` | 零警告 |
+| `cargo test`（全量） | **3304 lib + 16 个 target 全绿** |
+
+本轮新增/改写用例 12 个，覆盖上表每一条修复；未验证部分仍为真实 TUI 手感（需用户 `cargo run`）。

@@ -152,6 +152,13 @@ fn enter_submits_and_tab_arrows_switch_questions() {
     assert_eq!(panel(&state, pane).current, 1, "→ 下一题");
     press(&mut state, LxInput::Tab);
     assert!(panel(&state, pane).is_confirm(), "末题 Tab 进入 Confirm");
+    press(&mut state, LxInput::PrevStep);
+    assert!(!panel(&state, pane).is_confirm(), "Shift+Tab 退回末题");
+    assert_eq!(panel(&state, pane).current, 1);
+    press(&mut state, LxInput::PrevStep);
+    assert_eq!(panel(&state, pane).current, 0, "Shift+Tab 继续退到上一题");
+    press(&mut state, LxInput::PrevStep);
+    assert_eq!(panel(&state, pane).current, 0, "首题再退不越界");
 }
 
 #[test]
@@ -244,6 +251,39 @@ fn shift_enter_newline_in_edit_mode() {
         "ab\nc",
         "Shift+Enter 换行"
     );
+}
+
+#[test]
+fn custom_text_stops_at_the_byte_limit_with_a_toast() {
+    let limit = crate::chat::tools::ask::MAX_ASK_CUSTOM_BYTES;
+    let (mut state, pane, _key) = asking(vec![question("q", true, &["A"])]);
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Enter);
+    assert!(panel(&state, pane).editing);
+
+    // 恰好填满上限：整次写入放行。
+    assert!(crate::app::update::apply_ask_paste(
+        &mut state,
+        pane,
+        &"a".repeat(limit)
+    ));
+    assert_eq!(panel(&state, pane).custom[0].text().len(), limit);
+
+    // 再键入一个字符：拒绝写入（绝不截断）并给出窗格内提示。
+    press(&mut state, LxInput::Char('b'));
+    assert_eq!(panel(&state, pane).custom[0].text().len(), limit);
+    let toast = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.toast.as_ref())
+        .expect("超限必须有窗格内 toast");
+    assert_eq!(
+        toast.message,
+        crate::app::update::chat::ask::ASK_HINT_TOO_LONG
+    );
+
+    // 超限粘贴整次拒绝，已写内容一个字节不变。
+    assert!(!crate::app::update::apply_ask_paste(&mut state, pane, "cc"));
+    assert_eq!(panel(&state, pane).custom[0].text().len(), limit);
 }
 
 // ===== 提交（design §6.3）=====

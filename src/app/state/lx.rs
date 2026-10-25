@@ -102,6 +102,12 @@ pub struct Lx {
     ///
     /// 面板占用输入框的位置与按键路由，但**绝不改** `input`/`cursor`（草稿不变量）。
     pub ask: Option<AskState>,
+    /// 纯文本缓冲：不识别 shell 前缀、不弹 markdown/提及/斜杠面板。
+    ///
+    /// `ask` 的手写答案复用本结构做编辑；`!` 是答案文本的一部分，不能被吸成
+    /// Shell 模式（否则 `serialized_input()` 会补回 `!`、全角 `！` 变成半角，
+    /// 答案被静默改写，且与 `visual_rows()` 的字节偏移错位）。
+    plain: bool,
     /// 本会话正在运行的后台任务数（底部状态行指标）。
     ///
     /// 由事件循环按运行实例刷新，与页面是否打开无关——用户不打开后台任务页也要
@@ -149,6 +155,18 @@ impl Default for Lx {
 
 impl Lx {
     pub fn new() -> Self {
+        Self::build(false)
+    }
+
+    /// 纯文本缓冲：`!` 只是普通字符，也不触发任何面板（`ask` 手写答案用）。
+    ///
+    /// 只把输入当文本编辑的地方必须用它：Chat 模式会吸收首个 `!` 进 Shell 模式，
+    /// 那是给「执行命令」用的语义，答案里没有命令。
+    pub fn plain() -> Self {
+        Self::build(true)
+    }
+
+    fn build(plain: bool) -> Self {
         Self {
             entry: LxEntry::Native,
             input: String::new(),
@@ -169,6 +187,7 @@ impl Lx {
             toast: None,
             task: None,
             ask: None,
+            plain,
             background_tasks: 0,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -266,7 +285,8 @@ impl Lx {
     ///
     /// 只检查整段输入的**首个非空白字符**；正文中间的符号永远不转换。
     fn adopt_shell_prefix(&mut self) {
-        if self.input_mode == LxInputMode::Shell {
+        // 纯文本缓冲没有 Shell 语义：`!` 原样留在文本里（答案就是这么写的）。
+        if self.plain || self.input_mode == LxInputMode::Shell {
             return;
         }
         let Some(offset) = shell::marker_offset(&self.input) else {
@@ -488,6 +508,14 @@ impl Lx {
 
     /// 在光标处换行；列表项自动续写标记（对齐 prompt 编辑器）。
     pub fn newline(&mut self) {
+        // 纯文本缓冲：换行就是换行，不续写列表标记、不刷新面板。
+        if self.plain {
+            self.snapshot();
+            self.input.insert(self.cursor, '\n');
+            self.cursor += 1;
+            self.scroll_cursor_into_view();
+            return;
+        }
         if self.input_mode == LxInputMode::Shell {
             self.snapshot();
             self.input.insert(self.cursor, '\n');

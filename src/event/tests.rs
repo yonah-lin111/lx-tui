@@ -4929,6 +4929,58 @@ fn ask_click_selects_option_and_does_not_reach_history() {
 }
 
 #[test]
+fn task_page_swallows_ask_hits_so_the_list_stays_clickable() {
+    // 后台任务页与 ask 面板共用输入框矩形：页打开时面板不可见，点击必须落在
+    // 任务列表上，绝不能命中隐藏面板改一个看不见的答案。
+    let config = Config::default();
+    let (mut state, pane) = busy_ask_state();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let (column, row) = ask_option_point(&state, pane, &geo);
+    let inner = layout::pane_inner_rect(
+        geo.rects
+            .iter()
+            .find(|(id, _)| *id == pane)
+            .map(|(_, rect)| *rect)
+            .expect("pane rect"),
+    );
+    state.pane_mut_anywhere(pane).expect("pane").lx.task = Some(crate::app::state::TaskPage {
+        tab: crate::app::state::TaskTab::Processes,
+        ..Default::default()
+    });
+
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    // 任务页接管了输入框矩形，ask 几何已经不在这里：点击绝不能落到隐藏面板。
+    assert!(
+        ui::main_content::lx::ask_hit(inner, lx, column, row).is_none(),
+        "任务页打开时 ask 几何必须失效"
+    );
+
+    let before = state
+        .pane_anywhere(pane)
+        .and_then(|pane| pane.lx.ask.as_ref())
+        .expect("ask")
+        .selected
+        .clone();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), column, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let after = state
+        .pane_anywhere(pane)
+        .and_then(|pane| pane.lx.ask.as_ref())
+        .expect("ask")
+        .selected
+        .clone();
+    assert_eq!(before, after, "隐藏的面板不得被点击改状态");
+}
+
+#[test]
 fn ask_paste_only_enters_the_custom_buffer() {
     let config = Config::default();
     let (mut state, pane) = busy_ask_state();
