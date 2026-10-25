@@ -5150,9 +5150,19 @@ fn todo_keys_never_reach_pty() {
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        // 下面三种都**不在** `todo_key` 映射表里：它们只能靠 `route` 的
+        // `todo_focused` 分支吞掉。若该分支写成「未映射键回落去编码写窗格」，
+        // 这三条就会变成 `Routed::Pane`，测试随即失败。
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Insert, KeyModifiers::NONE),
     ];
 
-    // 路由层是唯一可能产出终端字节的地方：Todo 聚焦时不允许出现 `Routed::Pane`。
+    // 路由层是唯一可能产出终端字节的地方。这里断言的是**强不变量**：
+    // Todo 聚焦时任何键只能路由成 `None`（吞掉）或 `Routed::Todo`（进面板）；
+    // `Routed::Pane`/`Lx`/`Editor` 全都意味着字节会流向别处。
+    // （不断言「`sessions` 表为空」——那张表只会被 `write_to_pane` 查不会插，
+    // 空表上的断言恒真，是空转测试。）
     for key in keys {
         let routed = crate::input::route(
             key,
@@ -5163,13 +5173,13 @@ fn todo_keys_never_reach_pty() {
             true,
         );
         assert!(
-            !matches!(routed, Some(crate::input::Routed::Pane(_))),
-            "{key:?} 不得路由到终端"
+            matches!(routed, None | Some(crate::input::Routed::Todo(_))),
+            "{key:?} 只允许进 Todo 或被吞掉，实际 {routed:?}"
         );
     }
 
     // 端到端：`a` 开新建、`j`/`x` 成为文本、`Enter` 提交、`Tab` 被吞——
-    // 全都留在 Todo 面板里，PTY 会话表始终为空。
+    // 全都留在 Todo 面板里。
     for key in keys {
         let mut dirty = false;
         handle_terminal_event(
@@ -5184,7 +5194,98 @@ fn todo_keys_never_reach_pty() {
     }
     assert_eq!(state.todo.items()[0].text, "jx", "按键落在 Todo 编辑框");
     assert!(!state.todo.is_editing(), "Enter 已提交");
-    assert!(sessions.is_empty(), "Todo 聚焦期间不建立任何 PTY 写入");
+}
+
+/// 点终端窗格要提交编辑、并释放 Todo 焦点（`focus_pane` 的两件事）。
+#[test]
+fn focus_pane_releases_todo_focus() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    state.todo.replace(vec![crate::db::todo::TodoRecord::new(
+        "keep",
+        crate::db::todo::TodoStatus::Todo,
+        0,
+    )]);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    assert!(crate::app::update::begin_todo_edit(
+        &mut state,
+        crate::app::state::TodoEditTarget::New
+    ));
+    assert!(crate::app::update::apply_todo_paste(&mut state, "draft"));
+    let pane = state.active_tab().layout.focus();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let inner = layout::pane_inner_rect(geo.view.panes);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x + 1,
+            inner.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert_eq!(
+        state.active_tab().layout.focus(),
+        pane,
+        "前提：点的是终端窗格"
+    );
+    assert!(!state.todo_focused, "点终端窗格释放 Todo 焦点");
+    assert!(!state.todo.is_editing(), "编辑中的内容已提交");
+    assert_eq!(state.todo.items().len(), 2, "提交后新增一条");
+    assert_eq!(state.todo.items()[1].text, "draft");
+}
+
+/// 没有可撤销内容时 `Ctrl+Z` 必须被吞掉，不能漏进终端。
+#[test]
+fn ctrl_z_without_undo_is_consumed_not_forwarded() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    assert!(crate::app::update::focus_todo(&mut state));
+    assert!(!state.todo.can_undo(), "前提：撤销槽为空");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let key = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert!(
+        !matches!(
+            crate::input::route(
+                key,
+                alacritty_terminal::term::TermMode::empty(),
+                false,
+                None,
+                false,
+                true
+            ),
+            Some(crate::input::Routed::Pane(_))
+        ),
+        "Ctrl+Z 在 Todo 聚焦时绝不路由到终端"
+    );
+    handle_terminal_event(
+        TerminalEvent::Key(key),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(!state.todo.can_undo(), "无内容可撤销");
+    assert!(!dirty, "撤销槽为空时不产生状态变化");
 }
 
 #[test]

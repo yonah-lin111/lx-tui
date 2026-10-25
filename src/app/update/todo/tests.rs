@@ -38,7 +38,7 @@ fn texts(state: &AppState) -> Vec<&str> {
         .collect()
 }
 
-/// 取走并清空效应，返回 (kind, status) 摘要。
+/// 取走全部 `SaveTodo` 效应并清空效应队列，返回各次写入的状态序列。
 fn take_saved(state: &mut AppState) -> Vec<TodoStatus> {
     let statuses = state
         .effects
