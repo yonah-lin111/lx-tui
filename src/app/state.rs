@@ -19,6 +19,7 @@ use super::trust::TrustResolution;
 pub mod lx;
 pub mod pane;
 pub mod prompt_history;
+pub mod todo;
 pub mod workspace;
 
 pub use lx::LxInputMode;
@@ -36,6 +37,7 @@ pub use lx::{
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
+pub use todo::{TodoEdit, TodoEditTarget, TodoPanel};
 pub use workspace::{
     PromptDraft, Workspace, WorkspaceGit, WorkspaceIdentity, WorkspaceRow,
     current_workspace_identity, home_dir, path_tail_two, tab_label, unique_workspace_name,
@@ -203,6 +205,15 @@ pub struct AppState {
     pub models: ModelsSnapshot,
     /// 全局已发送 prompt 历史（跨窗格/工作区/会话共享；末尾为最近使用）。
     pub prompt_history: PromptHistory,
+    /// todo 面板是否持有键盘焦点；为真时按键进入 todo 而非焦点窗格。
+    /// 不变量：为真 ⇒ `right_tab == Todo` 且容器未折叠。
+    pub todo_focused: bool,
+    /// 全局 todo 列表状态（不随工作区变化；跟随所在数据库）。
+    pub todo: TodoPanel,
+    /// 拖拽 todo 滚动条 thumb 时相对顶部的抓取偏移。
+    pub todo_scroll_drag: Option<u16>,
+    /// 鼠标悬停的 todo 可见行下标；None 表示未悬停。
+    pub todo_hover: Option<usize>,
 }
 
 impl AppState {
@@ -284,6 +295,10 @@ impl AppState {
             settings_open_requested: false,
             models: ModelsSnapshot::default(),
             prompt_history: PromptHistory::new(),
+            todo_focused: false,
+            todo: TodoPanel::new(),
+            todo_scroll_drag: None,
+            todo_hover: None,
         }
     }
 

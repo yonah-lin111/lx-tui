@@ -131,15 +131,23 @@ fn render_toolbar(
         let Some(rect) = layout::prompt_toolbar_button_rect(panel, button, tree) else {
             continue;
         };
+        // 按矩形宽度整格填充：钉住按钮固定按最宽态 `[unpin]` 占位，`[pin]` 需要右补空格，
+        // 否则两态切换时相邻按钮会左右跳动（残留宽度的旧字形也必须被覆盖掉）。
+        for x in rect.x..rect.right() {
+            let Some(cell) = buf.cell_mut((x, rect.y)) else {
+                break;
+            };
+            cell.reset();
+            cell.set_char(' ');
+            cell.set_style(button_style);
+        }
         for (offset, symbol) in label.chars().enumerate() {
             let x = rect.x + offset as u16;
             if x >= rect.right() {
                 break;
             }
             if let Some(cell) = buf.cell_mut((x, rect.y)) {
-                cell.reset();
                 cell.set_char(symbol);
-                cell.set_style(button_style);
             }
         }
     }

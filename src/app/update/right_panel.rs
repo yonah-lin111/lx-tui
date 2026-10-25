@@ -4,6 +4,7 @@ use crate::app::state::{AppState, RightTab};
 
 use super::prompt::finish_page_rename;
 use super::selection::clear_selection;
+use super::todo::commit_todo_edit;
 
 /// 切换右侧容器面板。切走 Prompt 时提交页重命名并收起"指向可见位置的瞬时指针"；
 /// Prompt 的正文、光标、滚动、撤销栈、页与视图模式**一律不动**。
@@ -12,8 +13,11 @@ pub fn select_right_tab(state: &mut AppState, tab: RightTab) -> bool {
         return false;
     }
     finish_page_rename(state); // 非空写回并产出 Effect::RenamePage；空名保留旧名
+    commit_todo_edit(state); // 切走 Todo 时提交进行中的编辑（与切工作区同口径）
     state.right_tab = tab;
     state.right_tab_hover = None;
+    state.todo_focused = false;
+    state.todo_hover = None;
     if tab != RightTab::Prompt {
         state.prompt_focused = false; // 键盘退回聚焦窗格
         clear_selection(state); // prompt 选区

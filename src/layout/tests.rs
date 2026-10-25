@@ -391,8 +391,11 @@ fn prompt_toolbar_buttons_hit_expected_cells() {
 
 #[test]
 fn prompt_toolbar_hides_select_all_when_narrow() {
-    // 内容区宽度 16 < 17：隐藏 select all，保留模式/undo/redo 与保存点。
-    let panel = Rect::new(0, 0, 18, 8);
+    // 阈值是**内宽**（panel.width - 2），由 `PROMPT_SELECT_ALL_MIN_WIDTH` 推导；
+    // 这里直接引用常量，避免按钮文案从 `[*]` 改成 `[all]` 后测试里留一份会过期的魔法数。
+    assert_eq!(PROMPT_SELECT_ALL_MIN_WIDTH, 19, "[all] 的推导阈值");
+    // 内宽 18 < 19：隐藏 select all，保留模式/undo/redo 与保存点。
+    let panel = Rect::new(0, 0, PROMPT_SELECT_ALL_MIN_WIDTH, 8);
     assert_eq!(
         prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false),
         None
@@ -412,8 +415,8 @@ fn prompt_toolbar_hides_select_all_when_narrow() {
         Some(PromptToolbarButton::Save)
     );
 
-    // 内容区宽度 17：刚好容纳按钮组，select all 恢复显示。
-    let panel = Rect::new(0, 0, 19, 8);
+    // 内宽 19：刚好容纳按钮组，select all 恢复显示。
+    let panel = Rect::new(0, 0, PROMPT_SELECT_ALL_MIN_WIDTH + 2, 8);
     assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false).is_some());
 }
 
@@ -504,33 +507,34 @@ fn prompt_toolbar_pin_sits_left_of_select_all_and_hides_when_narrow() {
     let select_all = prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false)
         .expect("select all visible");
     assert_eq!(pin.y, bar.y, "与功能按钮同行");
-    assert_eq!(pin.width, 3);
-    assert_eq!(select_all.x - pin.right(), 1, "紧邻 [*] 左侧、间隔 1 列");
+    assert_eq!(pin.width, PROMPT_PIN_WIDTH, "按最宽态 [unpin] 占位");
+    assert_eq!(select_all.x - pin.right(), 1, "紧邻 [all] 左侧、间隔 1 列");
     assert_eq!(
         prompt_toolbar_button_at(panel, pin.x, bar.y, false),
         Some(PromptToolbarButton::Pin)
     );
 
-    // 内容区宽度 20 < 21：钉住按钮随 [*] 一并隐藏。
-    let narrow = Rect::new(0, 0, 22, 8);
+    // 内宽 < `PROMPT_PIN_MIN_WIDTH_EDITOR`：钉住按钮随 [all] 一并隐藏。
+    assert_eq!(PROMPT_PIN_MIN_WIDTH_EDITOR, 27, "[unpin] 的推导阈值");
+    let narrow = Rect::new(0, 0, PROMPT_PIN_MIN_WIDTH_EDITOR, 8);
     assert_eq!(
         prompt_toolbar_button_rect(narrow, PromptToolbarButton::Pin, false),
         None
     );
     assert!(
         prompt_toolbar_button_rect(narrow, PromptToolbarButton::SelectAll, false).is_some(),
-        "窄屏时 [*] 仍在"
+        "窄屏时 [all] 仍在"
     );
 
-    // 内容区宽度 21：钉住按钮恢复显示。
-    let mid = Rect::new(0, 0, 23, 8);
+    // 内宽 = 阈值：钉住按钮恢复显示。
+    let mid = Rect::new(0, 0, PROMPT_PIN_MIN_WIDTH_EDITOR + 2, 8);
     assert!(
         prompt_toolbar_button_rect(mid, PromptToolbarButton::Pin, false).is_some(),
-        "内容区 21 列时钉住按钮可见"
+        "内宽达到阈值时钉住按钮可见"
     );
 
-    // 宽面板：钉住按钮紧邻 [*] 左侧、间隔 1 列。
-    let wide = Rect::new(0, 0, 27, 8);
+    // 宽面板：钉住按钮紧邻 [all] 左侧、间隔 1 列。
+    let wide = Rect::new(0, 0, PROMPT_PIN_MIN_WIDTH_EDITOR + 2, 8);
     let pin =
         prompt_toolbar_button_rect(wide, PromptToolbarButton::Pin, false).expect("pin visible");
     let select_all = prompt_toolbar_button_rect(wide, PromptToolbarButton::SelectAll, false)
@@ -558,8 +562,10 @@ fn prompt_toolbar_folders_sits_left_of_pin_in_editor_only() {
         prompt_toolbar_button_rect(panel, PromptToolbarButton::Folders, true),
         None
     );
-    // 内容区过窄（无法在左侧按钮组与右侧 Pin 之间放下）时隐藏。
-    let narrow = Rect::new(0, 0, 26, 8);
+    // 内容区过窄（无法在左侧按钮组与右侧 Pin 之间放下）时隐藏；
+    // 阈值随 `[pin]`→`[unpin]` 变宽而上升，这里同样引用常量。
+    assert_eq!(PROMPT_FOLDERS_MIN_WIDTH_EDITOR, 33, "[dir] 的推导阈值");
+    let narrow = Rect::new(0, 0, PROMPT_FOLDERS_MIN_WIDTH_EDITOR, 8);
     assert_eq!(
         prompt_toolbar_button_rect(narrow, PromptToolbarButton::Folders, false),
         None

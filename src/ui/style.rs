@@ -10,6 +10,10 @@ use crate::app::markdown::{SlashCommandId, TemplateStatus};
 use crate::app::state::LxEntry;
 use crate::detect::AgentState;
 
+pub mod todo;
+
+pub use todo::*;
+
 /// 正文。
 pub fn text() -> Style {
     Style::default()

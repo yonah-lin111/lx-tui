@@ -11,6 +11,7 @@ mod referenced;
 mod resume_edit;
 mod right_panel;
 mod selection;
+mod todo;
 mod trust;
 mod workspace;
 mod workspace_list;
@@ -27,6 +28,7 @@ pub use referenced::*;
 pub use resume_edit::*;
 pub use right_panel::*;
 pub use selection::*;
+pub use todo::*;
 pub use trust::*;
 pub use workspace::*;
 pub use workspace_list::*;
@@ -51,6 +53,8 @@ pub fn apply(action: Action, state: &mut AppState) {
         Action::TogglePrompt => {
             state.prompt_collapsed = !state.prompt_collapsed;
             if state.prompt_collapsed {
+                commit_todo_edit(state);
+                state.todo_focused = false;
                 state.prompt_focused = false;
                 clear_selection(state);
                 state.prompt.clear_panel();

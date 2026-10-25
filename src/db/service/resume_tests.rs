@@ -159,6 +159,7 @@ fn resume_enter_through_key_route_binds_session() {
         false,
         None,
         true,
+        false,
     );
     let Some(crate::input::Routed::Lx(command)) = routed else {
         panic!("Enter 在 lx 页应路由为 LxInput");

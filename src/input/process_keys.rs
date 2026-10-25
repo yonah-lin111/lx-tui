@@ -21,6 +21,7 @@ fn ctrl_o_toggles_tool_detail() {
         false,
         None,
         true,
+        false,
     );
     assert_eq!(routed, Some(Routed::Lx(LxInput::ToggleToolDetail)));
 }
@@ -29,7 +30,14 @@ fn ctrl_o_toggles_tool_detail() {
 fn alt_arrows_move_the_tool_selection() {
     let mode = alacritty_terminal::term::TermMode::empty();
     assert_eq!(
-        route(key(KeyCode::Up, KeyModifiers::ALT), mode, false, None, true),
+        route(
+            key(KeyCode::Up, KeyModifiers::ALT),
+            mode,
+            false,
+            None,
+            true,
+            false
+        ),
         Some(Routed::Lx(LxInput::SelectPrevTool))
     );
     assert_eq!(
@@ -38,7 +46,8 @@ fn alt_arrows_move_the_tool_selection() {
             mode,
             false,
             None,
-            true
+            true,
+            false
         ),
         Some(Routed::Lx(LxInput::SelectNextTool))
     );
@@ -53,7 +62,8 @@ fn plain_arrows_still_edit_the_draft() {
             mode,
             false,
             None,
-            true
+            true,
+            false
         ),
         Some(Routed::Lx(LxInput::Up)),
         "无 Alt 的 ↑ 仍是光标/历史移动"
@@ -70,6 +80,7 @@ fn existing_panels_keep_priority_over_the_new_chords() {
         false,
         Some(crate::app::overlay::OverlayKind::Menu),
         true,
+        false,
     );
     assert!(
         matches!(routed, Some(Routed::Overlay(_)) | None),

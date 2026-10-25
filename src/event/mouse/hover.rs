@@ -240,6 +240,18 @@ pub(crate) fn handle_mouse_moved(
     if update::set_right_tab_hover(state, right_tab_hover) {
         *dirty = true;
     }
+    // Todo 行悬停：仅在 Todo 面板可见时计算；指针离开即清空。
+    let todo_hover = if hovering_toast
+        || state.prompt_collapsed
+        || state.right_tab != crate::app::state::RightTab::Todo
+    {
+        None
+    } else {
+        ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
+    };
+    if update::set_todo_hover(state, todo_hover) {
+        *dirty = true;
+    }
     // 提示词列表悬停：仅树视图且在文本区内；指针离开即清空。
     let tree_hover = if hovering_toast
         || !update::prompt_panel_active(state)

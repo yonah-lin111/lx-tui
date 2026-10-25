@@ -510,8 +510,26 @@ CREATE INDEX IF NOT EXISTS idx_agent_compact_checkpoint_state
     ON agent_compact_checkpoint(session_id, state, id);
 "#;
 
+/// v15 全局 todo 表：不按工作区/会话分区（同 `prompt_history` 的全局口径）。
+///
+/// `position` 为密集递增排序位，插入时由应用层在单事务内顺移（见 `db::todo`）；
+/// `id` 为稳定业务键，UPSERT 与删除都以它为准。
+/// `position` 上的唯一索引是顺移正确性的最后一道闸门：漏顺移会直接报错，
+/// 而不是悄悄出现两条同位置条目。
+const SCHEMA_V15_TODO: &str = r#"
+CREATE TABLE IF NOT EXISTS todo (
+    id TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done')),
+    position INTEGER NOT NULL CHECK (position >= 0),
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_position ON todo(position);
+"#;
+
 impl Database {
-    /// 迁移到当前 Schema：建表与版本推进在同一事务中完成，幂等。
     ///
     /// 开发期的资产/附件表已随截图粘贴功能移除，老库中遗留的这些表不再被读写；
     /// 已有数据（工作区、提示词）原样保留。版本高于程序支持值时返回错误。
@@ -624,6 +642,14 @@ impl Database {
             // 只增表：不触碰既有数据，失败整体回滚（版本不推进）。
             let transaction = self.conn.unchecked_transaction()?;
             transaction.execute_batch(SCHEMA_V14)?;
+            ensure_no_foreign_key_violation(&transaction)?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.commit()?;
+        }
+        if version < 15 {
+            // 只增表：全局 todo 列表，不触碰既有数据，失败整体回滚（版本不推进）。
+            let transaction = self.conn.unchecked_transaction()?;
+            transaction.execute_batch(SCHEMA_V15_TODO)?;
             ensure_no_foreign_key_violation(&transaction)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;

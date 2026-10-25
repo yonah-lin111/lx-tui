@@ -22,9 +22,10 @@ use super::hit::{
     apply_block_button, apply_template_button, block_button_at, dismiss_lx_toast_outside,
     handle_agent_scrollbar_press, handle_lx_history_scrollbar_press,
     handle_lx_input_scrollbar_press, handle_prompt_scrollbar_press,
-    handle_terminal_scrollbar_press, handle_workspace_scrollbar_press, lx_toast_at,
-    mention_item_at, pane_at, pane_boundary_draggable, pane_content_inner, pane_toggle_button_at,
-    panel_item_at, prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
+    handle_terminal_scrollbar_press, handle_todo_scrollbar_press, handle_workspace_scrollbar_press,
+    lx_toast_at, mention_item_at, pane_at, pane_boundary_draggable, pane_content_inner,
+    pane_toggle_button_at, panel_item_at, prompt_boundary_hit, prompt_header_at, slash_item_at,
+    template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -208,6 +209,7 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
     } else if handle_workspace_scrollbar_press(state, view, mouse.column, mouse.row)
         || handle_prompt_scrollbar_press(state, view, mouse.column, mouse.row)
+        || handle_todo_scrollbar_press(state, view, mouse.column, mouse.row)
         || handle_agent_scrollbar_press(state, view, mouse.column, mouse.row)
     {
         *dirty = true;
@@ -266,11 +268,29 @@ pub(crate) fn handle_mouse_down_left(
         && ui::right_panel::tab_row_at(view.prompt, mouse.column, mouse.row)
     {
         // 顶边框 tab 之外的空白属于容器控件区：吞掉，不聚焦编辑器。
+    } else if state.right_tab == crate::app::state::RightTab::Todo
+        && !state.prompt_collapsed
+        && view.prompt.contains((mouse.column, mouse.row).into())
+    {
+        // Todo 面板：先按钮、再行、最后空白吞掉（顺序不可调换，
+        // 否则会先被下面的整块吞掉分支吃掉）。
+        if let Some(button) = ui::right_panel::todo::button_at(view.prompt, mouse.column, mouse.row)
+        {
+            if update::apply_todo_button(state, button) {
+                *dirty = true;
+            }
+        } else if let Some(index) =
+            ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
+            && update::select_todo_row(state, index)
+        {
+            *dirty = true;
+        }
+        // 分割线/工具栏空白/列表外空白：吞掉，既不聚焦也不穿透——
+        // 这里刻意什么都不做（连失焦都不给：点空白不该结束正在进行的编辑）。
     } else if !update::prompt_panel_active(state)
         && view.prompt.contains((mouse.column, mouse.row).into())
     {
-        // Todo 面板（或折叠态容器）：按钮行/分割线/内容区一律吞掉，
-        // 不聚焦、不穿透到窗格。
+        // 折叠态容器：一律吞掉，不聚焦、不穿透到窗格。
     } else if let Some(index) = paste::paste_item_at(state, view, mouse.column, mouse.row) {
         update::select_paste(state, index);
         *dirty = true;

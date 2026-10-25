@@ -796,7 +796,10 @@ fn toolbar_pin_renders_hollow_then_filled_left_of_select_all() {
         false,
         false,
     );
-    assert_eq!(render_label(&buf, pin), text::PROMPT_UNPINNED_LABEL);
+    assert_eq!(
+        render_label(&buf, pin).trim_end(),
+        text::PROMPT_UNPINNED_LABEL
+    );
 
     let mut buf = Buffer::empty(panel);
     render_header(
@@ -808,7 +811,10 @@ fn toolbar_pin_renders_hollow_then_filled_left_of_select_all() {
         false,
         true,
     );
-    assert_eq!(render_label(&buf, pin), text::PROMPT_PINNED_LABEL);
+    assert_eq!(
+        render_label(&buf, pin).trim_end(),
+        text::PROMPT_PINNED_LABEL
+    );
 }
 
 #[test]

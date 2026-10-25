@@ -1710,10 +1710,8 @@ fn prompt_pin_button_sits_left_of_select_all_and_tracks_state() {
         false,
     )
     .expect("select all visible");
-    assert_eq!(
-        pin.width,
-        text::PROMPT_UNPINNED_LABEL.chars().count() as u16
-    );
+    // 按钮按最宽态（`[unpin]`）占位，`[pin]` 绘制时右补空格。
+    assert_eq!(pin.width, text::PROMPT_PINNED_LABEL.chars().count() as u16);
     assert_eq!(pin.y, bar.y, "位于功能按钮行");
     assert_eq!(select_all.x - pin.right(), 1, "紧邻 [*] 左侧，间隔 1 列");
     assert_eq!(
@@ -1762,7 +1760,7 @@ fn prompt_pin_button_renders_state_symbol_in_accent() {
     let rendered: String = (pin.x..pin.right())
         .map(|x| buffer[(x, pin.y)].symbol())
         .collect();
-    assert_eq!(rendered, text::PROMPT_UNPINNED_LABEL);
+    assert_eq!(rendered.trim_end(), text::PROMPT_UNPINNED_LABEL);
     for x in pin.x..pin.right() {
         assert_eq!(buffer[(x, pin.y)].fg, ratatui::style::Color::Cyan);
     }
@@ -1772,7 +1770,7 @@ fn prompt_pin_button_renders_state_symbol_in_accent() {
     let rendered: String = (pin.x..pin.right())
         .map(|x| buffer[(x, pin.y)].symbol())
         .collect();
-    assert_eq!(rendered, text::PROMPT_PINNED_LABEL);
+    assert_eq!(rendered.trim_end(), text::PROMPT_PINNED_LABEL);
 }
 
 #[test]

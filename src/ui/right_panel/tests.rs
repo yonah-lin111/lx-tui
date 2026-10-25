@@ -296,7 +296,7 @@ fn tab_hit_areas() {
 }
 
 #[test]
-fn todo_body_is_blank_with_plain_divider() {
+fn todo_panel_renders_toolbar_and_placeholder() {
     let mut state = AppState::demo();
     state.prompt_width = 56;
     state.right_tab = RightTab::Todo;
@@ -304,14 +304,13 @@ fn todo_body_is_blank_with_plain_divider() {
     let buffer = render_buffer(&state);
     let inner = crate::layout::pane_inner_rect(view.prompt);
 
-    // 功能按钮行：整行除两侧边框外全空白。
-    for x in inner.x..inner.right() {
-        assert_eq!(
-            buffer[(x, inner.y)].symbol(),
-            " ",
-            "Todo 按钮行第 {x} 列必须空白"
-        );
-    }
+    // 工具栏行：左端是 `[new]`，不再整行空白。
+    let new_button = todo::button_rect(view.prompt, crate::app::tooltip::TodoButton::New)
+        .expect("[new] visible");
+    let label: String = (new_button.x..new_button.right())
+        .map(|x| buffer[(x, new_button.y)].symbol())
+        .collect();
+    assert_eq!(label, text::TODO_NEW_LABEL);
 
     // 分割线行：两端 `├` / `┤`，中间全 `─`（无条目名、无页控件）。
     let divider_y = inner.y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
@@ -331,14 +330,15 @@ fn todo_body_is_blank_with_plain_divider() {
         );
     }
 
-    // 内容区：零文案，整块空白。
-    for y in (divider_y + 1)..view.prompt.bottom().saturating_sub(1) {
-        for x in inner.x..inner.right() {
-            assert_eq!(
-                buffer[(x, y)].symbol(),
-                " ",
-                "Todo 内容区 ({x},{y}) 必须空白"
-            );
+    // 空列表：内容区首行是占位文案，其余行空白。
+    let list = todo::list_rect(view.prompt);
+    let first_row: String = (list.x..list.right())
+        .map(|x| buffer[(x, list.y)].symbol())
+        .collect();
+    assert!(first_row.contains(text::TODO_EMPTY), "{first_row:?}");
+    for y in (list.y + 1)..list.bottom() {
+        for x in list.x..list.right() {
+            assert_eq!(buffer[(x, y)].symbol(), " ", "空态其余行必须空白");
         }
     }
 }

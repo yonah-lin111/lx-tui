@@ -536,5 +536,6 @@ pub fn place_prompt_cursor(state: &mut AppState, row: u16, col: u16) {
 pub fn focus_prompt(state: &mut AppState) {
     sync_mention_root(state);
     state.prompt_focused = true;
+    state.todo_focused = false;
     state.right_tab = crate::app::state::RightTab::Prompt;
 }

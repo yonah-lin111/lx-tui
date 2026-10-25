@@ -11,6 +11,7 @@ use crate::layout::{self, PaneId};
 
 use super::prompt::cancel_page_rename;
 use super::selection::{WHEEL_LINES, clear_selection, clear_terminal_selection};
+use super::todo::commit_todo_edit;
 
 /// 按方向滚动终端窗格回滚视口（负数向上、正数向下）；返回视口是否移动。
 pub fn scroll_pane(state: &mut AppState, id: PaneId, direction: isize) -> bool {
@@ -65,6 +66,8 @@ pub fn set_lx_scroll(state: &mut AppState, id: PaneId, offset: usize) -> bool {
 
 /// 点击终端窗格：焦点回到窗格，prompt 失焦并关闭块命令面板与页重命名输入。
 pub fn focus_pane(state: &mut AppState, id: PaneId) {
+    commit_todo_edit(state);
+    state.todo_focused = false;
     state.prompt_focused = false;
     state.prompt.clear_panel();
     cancel_page_rename(state);

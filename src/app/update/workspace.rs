@@ -10,6 +10,8 @@ use crate::app::state::{
     unique_workspace_name, workspace_label,
 };
 use crate::layout::PaneId;
+
+use super::todo::commit_todo_edit;
 use crate::ui::text;
 
 use super::editor::{
@@ -306,6 +308,8 @@ pub fn switch_workspace(state: &mut AppState, index: usize) {
         swap_display_prompt(state, from, index);
     }
     clear_selection(state);
+    // 编辑中切工作区走提交；todo 的列表/选中/滚动/焦点**不随工作区变化**（全局列表）。
+    commit_todo_edit(state);
     state.prompt_focused = false;
     // Agents 列表随工作区切换：滚动与悬停复位，避免旧槽位错位。
     state.agent_scroll = 0;

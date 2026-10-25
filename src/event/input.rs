@@ -48,7 +48,14 @@ pub(crate) fn handle_key_event(
     let pane_lx = state
         .active_pane()
         .is_some_and(|pane| pane.view == PaneView::Lx);
-    let Some(routed) = input::route(key, mode, state.prompt_focused, overlay, pane_lx) else {
+    let Some(routed) = input::route(
+        key,
+        mode,
+        state.prompt_focused,
+        overlay,
+        pane_lx,
+        state.todo_focused,
+    ) else {
         return;
     };
 
@@ -112,6 +119,11 @@ pub(crate) fn handle_key_event(
             update::apply_lx_input(state, command);
             *dirty = true;
         }
+        Routed::Todo(code) => {
+            if update::apply_todo_key(state, code) {
+                *dirty = true;
+            }
+        }
     }
 }
 
@@ -142,6 +154,13 @@ pub(crate) fn handle_paste_event(
     }
     // 浮层打开时粘贴吞掉，不穿透到底层终端（与键盘过滤一致）。
     if state.overlay.is_some() {
+        return;
+    }
+    if state.todo_focused {
+        // 编辑态写入输入框；列表态吞掉，绝不写隐藏终端。
+        if update::apply_todo_paste(state, &text) {
+            *dirty = true;
+        }
         return;
     }
     if state.prompt_focused {

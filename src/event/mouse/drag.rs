@@ -93,6 +93,16 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if let Some(grab) = state.todo_scroll_drag {
+        let Some(bar) = ui::right_panel::todo::scrollbar(view.prompt, state) else {
+            return;
+        };
+        let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+        if update::set_todo_scroll(state, offset) {
+            *dirty = true;
+        }
+        return;
+    }
     if let Some(grab) = state.agent_scroll_drag {
         let Some(bar) = ui::agent_scrollbar(view, state) else {
             return;

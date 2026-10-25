@@ -11,7 +11,9 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::state::{AppState, RightTab, Workspace, WorkspaceIdentity};
 
 use super::controls::{PANEL_BUTTON_MARGIN, PANEL_BUTTON_WIDTH, render_collapsed_strip};
-use super::{layout, prompt, prompt_frame, style, text};
+use super::{layout, prompt_frame, style, text};
+
+pub(crate) mod todo;
 
 /// tab 文案左右内边距（列）。
 const TAB_PAD: u16 = 1;
@@ -81,7 +83,10 @@ pub(crate) fn render(
         render_collapsed_strip(frame, area, false);
         return None;
     }
-    let focused = state.prompt_focused && state.right_tab == RightTab::Prompt;
+    let focused = match state.right_tab {
+        RightTab::Prompt => state.prompt_focused,
+        RightTab::Todo => state.todo_focused,
+    };
     let border = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::border(focused));
@@ -100,20 +105,9 @@ pub(crate) fn render(
     match state.right_tab {
         // Prompt 体：功能按钮行 + 标题行 + 正文/树 + 滚动条 + 硬件光标
         RightTab::Prompt => prompt_frame::render_body(frame, area, state),
-        // Todo：功能按钮行留空，只画一条纯分割线；内容区由 ratatui 每帧清空后天然空白
-        RightTab::Todo => {
-            render_empty_body(area, frame.buffer_mut(), focused);
-            None
-        }
+        // Todo：工具栏按钮 + 三态列表 + 行内编辑 + 滚动条
+        RightTab::Todo => todo::render(frame, area, state),
     }
-}
-
-/// 占位面板体：功能按钮行不画任何东西，只画工具栏下一行的分割线（带 `├`/`┤` 衔接）。
-fn render_empty_body(panel: Rect, buf: &mut Buffer, focused: bool) {
-    let Some(header) = crate::layout::prompt_header_rect(panel) else {
-        return;
-    };
-    prompt::render_divider(panel, header, buf, focused);
 }
 
 /// 绘制顶边框 tab：激活 [`style::right_tab_active`]（深青蓝实心块）、

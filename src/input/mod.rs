@@ -26,8 +26,62 @@ pub enum Routed {
     CopyTemplateBlock,
     /// lx 页单行输入命令。
     Lx(LxInput),
+    /// todo 面板按键（原样翻译，语义由 `update::apply_todo_key` 按是否编辑中判定）。
+    Todo(TodoKey),
     /// 原样写入焦点窗格的字节。
     Pane(Vec<u8>),
+}
+
+/// todo 面板按键：**按键原样**，不做语义解释。
+///
+/// 「`Space` 是循环状态还是输入空格」「`Enter` 是插入新行还是提交」
+/// 全部由 `update::apply_todo_key` 按「是否正在编辑」判定，
+/// 输入层不感知应用状态（同 lx 输入「清空还是复制由 update 决定」的既有口径）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TodoKey {
+    Char(char),
+    /// 裸空格（不带修饰键）。
+    Space,
+    Enter,
+    Esc,
+    Tab,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    /// Ctrl/Cmd+Z：撤销删除（无内容时吞掉）。
+    Undo,
+    /// Ctrl/Cmd+C：编辑态清空输入（列表态吞掉）。
+    Clear,
+}
+
+/// todo 按键映射：只做逐键翻译；未识别的键返回 None（由 `route` 吞掉）。
+fn todo_key(key: KeyEvent) -> Option<TodoKey> {
+    let modifiers = key.modifiers;
+    let ctrl = modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER);
+    let alt = modifiers.contains(KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(TodoKey::Undo),
+        KeyCode::Char('c' | 'C') if ctrl && !alt => Some(TodoKey::Clear),
+        KeyCode::Char(' ') if !ctrl && !alt => Some(TodoKey::Space),
+        KeyCode::Char(ch) if !ctrl && !alt => Some(TodoKey::Char(ch)),
+        KeyCode::Enter => Some(TodoKey::Enter),
+        KeyCode::Esc => Some(TodoKey::Esc),
+        KeyCode::Tab => Some(TodoKey::Tab),
+        KeyCode::Backspace => Some(TodoKey::Backspace),
+        KeyCode::Delete => Some(TodoKey::Delete),
+        KeyCode::Left if !ctrl && !alt => Some(TodoKey::Left),
+        KeyCode::Right if !ctrl && !alt => Some(TodoKey::Right),
+        KeyCode::Up => Some(TodoKey::Up),
+        KeyCode::Down => Some(TodoKey::Down),
+        KeyCode::Home => Some(TodoKey::Home),
+        KeyCode::End => Some(TodoKey::End),
+        _ => None,
+    }
 }
 
 /// 路由一次按键；Release 事件与无法编码的按键返回 None。
@@ -42,6 +96,7 @@ pub fn route(
     prompt_focused: bool,
     overlay: Option<OverlayKind>,
     pane_lx: bool,
+    todo_focused: bool,
 ) -> Option<Routed> {
     if key.kind == KeyEventKind::Release {
         return None;
@@ -78,6 +133,10 @@ pub fn route(
                 None
             }
         };
+    }
+    if todo_focused {
+        // todo 面板持焦点：未映射键一律吞掉（同 prompt 口径），绝不写进隐藏终端。
+        return todo_key(key).map(Routed::Todo);
     }
     if pane_lx {
         // 长按 Esc/Enter 的 Repeat 不推进撤销待命与二次确认，也不重复发送。

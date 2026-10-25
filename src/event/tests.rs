@@ -4895,7 +4895,7 @@ fn mouse_click_current_tab_without_changes_is_not_dirty() {
 }
 
 #[test]
-fn mouse_click_todo_body_swallowed_without_focus_or_cursor() {
+fn mouse_click_todo_blank_still_swallowed() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
     state.prompt.insert_str("ab\ncd");
@@ -4903,17 +4903,18 @@ fn mouse_click_todo_body_swallowed_without_focus_or_cursor() {
         &mut state,
         RightTab::Todo
     ));
+    // 空列表 + 点在分割线上（既不是按钮也不是行）：整块吞掉。
+    let divider = layout::prompt_divider_rect(geo.view.prompt).expect("divider visible");
     let cursor = state.prompt.cursor();
     let focused_pane = state.active_tab().layout.focus();
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    let text = layout::prompt_text_rect(geo.view.prompt);
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
-            text.x + 1,
-            text.y + 1,
+            divider.x + 1,
+            divider.y,
         ),
         &mut state,
         &mut sessions,
@@ -4923,13 +4924,15 @@ fn mouse_click_todo_body_swallowed_without_focus_or_cursor() {
         &mut dirty,
     );
 
-    assert!(!state.prompt_focused, "Todo 内容区点击不聚焦编辑器");
-    assert_eq!(state.prompt.cursor(), cursor, "Todo 内容区点击不动光标");
+    assert!(!state.prompt_focused, "Todo 空白处点击不聚焦编辑器");
+    assert!(!state.todo_focused, "点空白也不聚焦 Todo");
+    assert_eq!(state.prompt.cursor(), cursor, "Todo 空白处点击不动光标");
     assert_eq!(
         state.active_tab().layout.focus(),
         focused_pane,
         "不穿透到窗格、不改焦点"
     );
+    assert!(!dirty, "吞掉的点击不产生副作用");
 }
 
 #[test]
@@ -4970,14 +4973,22 @@ fn mouse_click_prompt_toolbar_ignored_on_todo_tab() {
     assert_eq!(
         state.prompt_owner().prompt_panel.mode,
         mode_before,
-        "Todo 下工具栏按钮不切换视图"
+        "Todo 下提示词工具栏按钮不切换视图"
     );
-    assert!(state.overlay.is_none(), "Todo 下工具栏按钮不打开浮层");
-    assert!(!dirty, "吞掉的点击不产生副作用");
+    assert!(state.overlay.is_none(), "Todo 下提示词工具栏按钮不打开浮层");
+    // 同一坐标现在属于 Todo 自己的 `[new]` 按钮（两个面板共用工具栏行），
+    // 因此这里**会**产生副作用：命中 Todo 按钮并进入编辑。旧断言「不置脏」
+    // 随 Todo 成为真实面板而作废。
+    assert_eq!(
+        state.todo.editing().map(|edit| edit.target.is_none()),
+        Some(true),
+        "点击落到 Todo 的 [new] 按钮上，进入新建编辑"
+    );
+    assert!(dirty, "Todo 按钮命中必须置脏");
 }
 
 #[test]
-fn mouse_wheel_over_todo_does_not_scroll_prompt() {
+fn mouse_wheel_over_todo_scrolls_list_without_moving_selection() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
     let text = layout::prompt_text_rect(geo.view.prompt);
@@ -4987,12 +4998,29 @@ fn mouse_wheel_over_todo_does_not_scroll_prompt() {
     }
     crate::app::update::set_prompt_scroll(&mut state, 2);
     assert!(state.prompt.scroll() > 0, "前提：正文可滚动且已有偏移");
+    let prompt_scroll = state.prompt.scroll();
+    let tree_scroll = state.prompt_owner().prompt_panel.scroll;
+
+    // 塞满超过一屏的 todo，保证视口可以滚动。
+    let visible = crate::ui::right_panel::todo::visible_rows(geo.view.prompt);
+    assert!(visible > 0, "前提：列表区可见");
+    state.todo.replace(
+        (0..visible + 5)
+            .map(|index| {
+                crate::db::todo::TodoRecord::new(
+                    format!("item {index}"),
+                    crate::db::todo::TodoStatus::Todo,
+                    i64::try_from(index).unwrap_or(i64::MAX),
+                )
+            })
+            .collect(),
+    );
+    state.todo.set_viewport_rows(visible);
     assert!(crate::app::update::select_right_tab(
         &mut state,
         RightTab::Todo
     ));
-    let prompt_scroll = state.prompt.scroll();
-    let tree_scroll = state.prompt_owner().prompt_panel.scroll;
+    let selected = state.todo.selected();
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -5006,17 +5034,211 @@ fn mouse_wheel_over_todo_does_not_scroll_prompt() {
         &mut dirty,
     );
 
+    assert!(state.todo.scroll() > 0, "Todo 下滚轮滚动列表视口");
+    assert_eq!(state.todo.selected(), selected, "滚轮不动高亮");
+    assert!(dirty, "视口移动必须置脏");
     assert_eq!(
         state.prompt.scroll(),
         prompt_scroll,
-        "Todo 下滚轮不动正文视口"
+        "Todo 下滚轮不动 prompt 正文视口"
     );
     assert_eq!(
         state.prompt_owner().prompt_panel.scroll,
         tree_scroll,
         "Todo 下滚轮不动树视图视口"
     );
-    assert!(!dirty, "被吞掉的滚轮不触发重绘");
+}
+
+#[test]
+fn mouse_click_todo_row_selects_and_focuses() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    state.todo.replace(
+        (0..3)
+            .map(|index| {
+                crate::db::todo::TodoRecord::new(
+                    format!("item {index}"),
+                    crate::db::todo::TodoStatus::Todo,
+                    index,
+                )
+            })
+            .collect(),
+    );
+    state
+        .todo
+        .set_viewport_rows(crate::ui::right_panel::todo::visible_rows(geo.view.prompt));
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 点第二行。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            list.x + 1,
+            list.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert_eq!(state.todo.selected(), Some(1), "点击选中该行");
+    assert!(state.todo_focused, "点击行聚焦 Todo 面板");
+    assert!(!state.prompt_focused, "与 prompt 焦点互斥");
+    assert!(dirty, "选中变化置脏");
+}
+
+#[test]
+fn mouse_click_todo_toolbar_button_runs_action() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let new = crate::ui::right_panel::todo::button_rect(
+        geo.view.prompt,
+        crate::app::tooltip::TodoButton::New,
+    )
+    .expect("[new] visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), new.x, new.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(
+        state
+            .todo
+            .editing()
+            .is_some_and(|edit| edit.target.is_none()),
+        "[new] 进入新建编辑"
+    );
+    assert!(state.todo_focused, "按钮隐式聚焦");
+    assert!(dirty, "按钮动作置脏");
+}
+
+#[test]
+fn todo_keys_never_reach_pty() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    assert!(crate::app::update::focus_todo(&mut state));
+    let mut sessions = HashMap::new();
+    let keys = [
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    ];
+
+    // 路由层是唯一可能产出终端字节的地方：Todo 聚焦时不允许出现 `Routed::Pane`。
+    for key in keys {
+        let routed = crate::input::route(
+            key,
+            alacritty_terminal::term::TermMode::empty(),
+            false,
+            None,
+            false,
+            true,
+        );
+        assert!(
+            !matches!(routed, Some(crate::input::Routed::Pane(_))),
+            "{key:?} 不得路由到终端"
+        );
+    }
+
+    // 端到端：`a` 开新建、`j`/`x` 成为文本、`Enter` 提交、`Tab` 被吞——
+    // 全都留在 Todo 面板里，PTY 会话表始终为空。
+    for key in keys {
+        let mut dirty = false;
+        handle_terminal_event(
+            TerminalEvent::Key(key),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+    assert_eq!(state.todo.items()[0].text, "jx", "按键落在 Todo 编辑框");
+    assert!(!state.todo.is_editing(), "Enter 已提交");
+    assert!(sessions.is_empty(), "Todo 聚焦期间不建立任何 PTY 写入");
+}
+
+#[test]
+fn todo_key_escape_blurs() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    assert!(crate::app::update::focus_todo(&mut state));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(!state.todo_focused, "Esc 释放 Todo 焦点");
+    assert!(dirty);
+}
+
+#[test]
+fn ctrl_q_wins_over_todo_focus() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    assert!(crate::app::update::focus_todo(&mut state));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(state.should_quit, "Ctrl+Q 始终优先");
+    assert!(dirty, "退出动作置脏");
+    assert!(state.todo_focused, "Ctrl+Q 不碰 todo 焦点");
+    assert!(state.todo.items().is_empty(), "Ctrl+Q 不改 todo 列表");
+    assert!(!state.todo.is_editing(), "Ctrl+Q 不开编辑");
 }
 
 #[test]

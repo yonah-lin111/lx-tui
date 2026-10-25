@@ -232,15 +232,14 @@ fn ui_icons_are_single_width_and_non_pua() {
 fn prompt_button_icons_are_single_width_and_non_pua() {
     use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-    // 按钮标签形如 `[x]`：方括号 ASCII，中间单个图标必须严格 1 列宽且非私有区。
+    // 按钮标签形如 `[x]`，只允许两种形态，不得混写：
+    // 1. 单个非 PUA 图标字符，严格 1 列宽；
+    // 2. 纯 `a-z` 英文单词（`[all]` / `[pin]` / `[unpin]` / `[dir]` / `[tmp]`）。
     for (name, label) in [
         ("PROMPT_UNDO_LABEL", PROMPT_UNDO_LABEL),
         ("PROMPT_REDO_LABEL", PROMPT_REDO_LABEL),
-        ("PROMPT_SELECT_ALL_LABEL", PROMPT_SELECT_ALL_LABEL),
         ("PROMPT_MODE_LIST_LABEL", PROMPT_MODE_LIST_LABEL),
         ("PROMPT_MODE_EDIT_LABEL", PROMPT_MODE_EDIT_LABEL),
-        ("PROMPT_PINNED_LABEL", PROMPT_PINNED_LABEL),
-        ("PROMPT_UNPINNED_LABEL", PROMPT_UNPINNED_LABEL),
         ("TEMPLATE_BUTTON_COPY", TEMPLATE_BUTTON_COPY),
         ("TEMPLATE_BUTTON_CLEAN", TEMPLATE_BUTTON_CLEAN),
         ("TEMPLATE_BUTTON_DEL", TEMPLATE_BUTTON_DEL),
@@ -261,6 +260,31 @@ fn prompt_button_icons_are_single_width_and_non_pua() {
             || (0x100000..=0x10FFFD).contains(&cp);
         assert!(!is_pua, "{name} 图标 {icon:?} 位于私有区，终端会乱码");
     }
+
+    // 单词形态：方括号内全部为小写 ASCII 字母，不含图标、不含空白。
+    for (name, label) in [
+        ("PROMPT_SELECT_ALL_LABEL", PROMPT_SELECT_ALL_LABEL),
+        ("PROMPT_UNPINNED_LABEL", PROMPT_UNPINNED_LABEL),
+        ("PROMPT_PINNED_LABEL", PROMPT_PINNED_LABEL),
+        ("PROMPT_TEMP_PROMPT_LABEL", PROMPT_TEMP_PROMPT_LABEL),
+        ("PROMPT_FOLDERS_LABEL", PROMPT_FOLDERS_LABEL),
+    ] {
+        let inner = label
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+            .unwrap_or_else(|| panic!("{name} 必须形如 [word]: {label:?}"));
+        assert!(!inner.is_empty(), "{name} 单词不得为空");
+        assert!(
+            inner.chars().all(|ch| ch.is_ascii_lowercase()),
+            "{name} 单词只能含 a-z，不得混入图标或大写: {label:?}"
+        );
+        assert!(
+            label.chars().filter(|ch| *ch == '[').count() == 1
+                && label.chars().filter(|ch| *ch == ']').count() == 1,
+            "{name} 只允许一对方括号: {label:?}"
+        );
+    }
+
     assert_eq!(PROMPT_SAVE_DOT.width(), 1, "保存点必须严格 1 列宽");
     assert_eq!(PROMPT_DRAFT_DOT.width(), 1, "草稿空心点必须严格 1 列宽");
     assert_eq!(
@@ -270,6 +294,22 @@ fn prompt_button_icons_are_single_width_and_non_pua() {
     );
     assert_eq!(PROMPT_SECTION_TMP, "tmp:");
     assert_eq!(PROMPT_SECTION_SAVED, "saved:");
+}
+
+/// Todo 三态状态框必须同宽：渲染按固定 3 列推进，宽窄不一会让正文列错位。
+#[test]
+fn todo_labels_align_to_three_columns() {
+    use unicode_width::UnicodeWidthStr;
+
+    for (name, label) in [
+        ("TODO_STATUS_TODO", TODO_STATUS_TODO),
+        ("TODO_STATUS_IN_PROGRESS", TODO_STATUS_IN_PROGRESS),
+        ("TODO_STATUS_DONE", TODO_STATUS_DONE),
+    ] {
+        assert_eq!(label.chars().count(), 3, "{name} 必须 3 个字符: {label:?}");
+        assert_eq!(label.width(), 3, "{name} 必须占 3 列: {label:?}");
+        assert!(label.starts_with('[') && label.ends_with(']'), "{name}");
+    }
 }
 
 /// 全局关闭按钮（模态 + toast）与 prompt 模板块删除按钮共用同一 `✕` 图标：

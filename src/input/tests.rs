@@ -4,7 +4,7 @@ use super::*;
 
 /// 无浮层、终端视图路由的测试别名；浮层与 lx 视图直接调用 `super::route`。
 fn route(key: KeyEvent, mode: TermMode, prompt_focused: bool) -> Option<Routed> {
-    super::route(key, mode, prompt_focused, None, false)
+    super::route(key, mode, prompt_focused, None, false, false)
 }
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -436,6 +436,7 @@ fn menu_overlay_routes_navigation_keys_only() {
             false,
             Some(OverlayKind::Menu),
             false,
+            false,
         )
     };
     for (code, expected) in [
@@ -463,6 +464,7 @@ fn referenced_menu_routes_navigation_copy_and_remove_keys() {
             TermMode::empty(),
             false,
             Some(OverlayKind::ReferencedFolderMenu),
+            false,
             false,
         )
     };
@@ -508,6 +510,7 @@ fn referenced_input_routes_single_line_editing() {
             false,
             Some(OverlayKind::ReferencedFolderInput),
             false,
+            false,
         )
     };
     assert_eq!(
@@ -542,6 +545,7 @@ fn referenced_search_routes_enter_folder_and_back() {
             TermMode::empty(),
             false,
             Some(OverlayKind::ReferencedFolderSearch),
+            false,
             false,
         )
     };
@@ -581,6 +585,7 @@ fn referenced_search_routes_enter_folder_and_back() {
             false,
             Some(OverlayKind::ReferencedFolderSearch),
             false,
+            false,
         ),
         Some(Routed::Action(crate::app::actions::Action::Quit))
     );
@@ -594,6 +599,7 @@ fn referenced_delete_routes_enter_and_esc_only() {
             TermMode::empty(),
             false,
             Some(OverlayKind::ReferencedFolderDelete),
+            false,
             false,
         )
     };
@@ -617,6 +623,7 @@ fn confirm_overlay_routes_enter_and_esc_only() {
             false,
             Some(OverlayKind::ConfirmClose),
             false,
+            false,
         )
     };
     assert_eq!(
@@ -639,6 +646,7 @@ fn confirm_switch_cwd_overlay_routes_enter_and_esc_only() {
             false,
             Some(OverlayKind::ConfirmSwitchCwd),
             false,
+            false,
         )
     };
     assert_eq!(
@@ -660,6 +668,7 @@ fn rename_overlay_routes_editing_keys() {
             TermMode::empty(),
             true,
             Some(OverlayKind::Rename),
+            false,
             false,
         )
     };
@@ -711,6 +720,7 @@ fn overlay_does_not_swallow_ctrl_q() {
             TermMode::empty(),
             false,
             Some(OverlayKind::Menu),
+            false,
             false
         ),
         Some(Routed::Action(Action::Quit))
@@ -725,7 +735,8 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
             TermMode::empty(),
             false,
             None,
-            true
+            true,
+            false
         ),
         Some(Routed::Lx(LxInput::Char('l')))
     );
@@ -735,26 +746,55 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
             TermMode::empty(),
             false,
             None,
-            true
+            true,
+            false
         ),
         Some(Routed::Lx(LxInput::Backspace))
     );
     assert_eq!(
-        super::route(key(KeyCode::Left), TermMode::empty(), false, None, true),
+        super::route(
+            key(KeyCode::Left),
+            TermMode::empty(),
+            false,
+            None,
+            true,
+            false
+        ),
         Some(Routed::Lx(LxInput::Left))
     );
     assert_eq!(
-        super::route(key(KeyCode::Up), TermMode::empty(), false, None, true),
+        super::route(
+            key(KeyCode::Up),
+            TermMode::empty(),
+            false,
+            None,
+            true,
+            false
+        ),
         Some(Routed::Lx(LxInput::Up))
     );
     assert_eq!(
-        super::route(key(KeyCode::Tab), TermMode::empty(), false, None, true),
+        super::route(
+            key(KeyCode::Tab),
+            TermMode::empty(),
+            false,
+            None,
+            true,
+            false
+        ),
         Some(Routed::Lx(LxInput::Tab))
     );
     // Shift+Tab：ask 面板的「上一步」。终端按 kitty 协议可能报 `Tab+SHIFT`
     // 而不是 `BackTab`，两种都必须映射到同一命令。
     assert_eq!(
-        super::route(key(KeyCode::BackTab), TermMode::empty(), false, None, true),
+        super::route(
+            key(KeyCode::BackTab),
+            TermMode::empty(),
+            false,
+            None,
+            true,
+            false
+        ),
         Some(Routed::Lx(LxInput::PrevStep))
     );
     assert_eq!(
@@ -763,23 +803,38 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
             TermMode::empty(),
             false,
             None,
-            true
+            true,
+            false
         ),
         Some(Routed::Lx(LxInput::PrevStep))
     );
     assert_eq!(
-        super::route(key(KeyCode::Esc), TermMode::empty(), false, None, true),
+        super::route(
+            key(KeyCode::Esc),
+            TermMode::empty(),
+            false,
+            None,
+            true,
+            false
+        ),
         Some(Routed::Lx(LxInput::Escape))
     );
     // Shift+Enter 在应用层区分：提及面板打开时进入高亮目录，否则回落为换行；
     // Enter 无面板时交给 update 判定（有面板则采纳候选）。
     let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
     assert_eq!(
-        super::route(shift_enter, TermMode::empty(), false, None, true),
+        super::route(shift_enter, TermMode::empty(), false, None, true, false),
         Some(Routed::Lx(LxInput::EnterFolder))
     );
     assert_eq!(
-        super::route(key(KeyCode::Enter), TermMode::empty(), false, None, true),
+        super::route(
+            key(KeyCode::Enter),
+            TermMode::empty(),
+            false,
+            None,
+            true,
+            false
+        ),
         Some(Routed::Lx(LxInput::Enter))
     );
     // Ctrl+A/E/U/K/W/D 等编辑快捷键映射到 lx 输入命令。
@@ -790,6 +845,7 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
             false,
             None,
             true,
+            false,
         )
     };
     assert_eq!(ctrl('a'), Some(Routed::Lx(LxInput::LineStart)));
@@ -806,6 +862,7 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
             false,
             None,
             true,
+            false,
         )
     };
     assert_eq!(cmd('c'), Some(Routed::Lx(LxInput::Clear)));
@@ -817,17 +874,24 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
     assert_eq!(ctrl('y'), Some(Routed::Lx(LxInput::Redo)));
     let ctrl_left = KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL);
     assert_eq!(
-        super::route(ctrl_left, TermMode::empty(), false, None, true),
+        super::route(ctrl_left, TermMode::empty(), false, None, true, false),
         Some(Routed::Lx(LxInput::WordLeft))
     );
     let quit = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
     assert_eq!(
-        super::route(quit, TermMode::empty(), false, None, true),
+        super::route(quit, TermMode::empty(), false, None, true, false),
         Some(Routed::Action(Action::Quit))
     );
     // prompt 聚焦优先于 lx 输入：按键仍进入编辑器。
     assert_eq!(
-        super::route(key(KeyCode::Char('a')), TermMode::empty(), true, None, true),
+        super::route(
+            key(KeyCode::Char('a')),
+            TermMode::empty(),
+            true,
+            None,
+            true,
+            false
+        ),
         Some(Routed::Editor(EditorCommand::InsertChar('a')))
     );
 }
@@ -840,6 +904,7 @@ fn worktree_open_overlay_routes_search_and_navigation_keys() {
             TermMode::empty(),
             false,
             Some(OverlayKind::WorktreeOpen),
+            false,
             false,
         )
     };
@@ -880,6 +945,7 @@ fn worktree_open_overlay_routes_search_and_navigation_keys() {
             TermMode::empty(),
             false,
             Some(OverlayKind::WorktreeOpen),
+            false,
             false
         ),
         None
@@ -894,6 +960,7 @@ fn save_draft_overlay_routes_navigation_only() {
             TermMode::empty(),
             false,
             Some(OverlayKind::SaveDraft),
+            false,
             false,
         )
     };
@@ -934,15 +1001,36 @@ fn save_draft_overlay_routes_navigation_only() {
 fn page_menu_overlay_routes_navigation_keys_only() {
     let overlay = Some(OverlayKind::PageMenu);
     assert_eq!(
-        super::route(key(KeyCode::Esc), TermMode::empty(), false, overlay, false),
+        super::route(
+            key(KeyCode::Esc),
+            TermMode::empty(),
+            false,
+            overlay,
+            false,
+            false
+        ),
         Some(Routed::Overlay(OverlayKey::Esc))
     );
     assert_eq!(
-        super::route(key(KeyCode::Down), TermMode::empty(), false, overlay, false),
+        super::route(
+            key(KeyCode::Down),
+            TermMode::empty(),
+            false,
+            overlay,
+            false,
+            false
+        ),
         Some(Routed::Overlay(OverlayKey::Down))
     );
     assert_eq!(
-        super::route(key(KeyCode::Up), TermMode::empty(), false, overlay, false),
+        super::route(
+            key(KeyCode::Up),
+            TermMode::empty(),
+            false,
+            overlay,
+            false,
+            false
+        ),
         Some(Routed::Overlay(OverlayKey::Up))
     );
     assert_eq!(
@@ -951,6 +1039,7 @@ fn page_menu_overlay_routes_navigation_keys_only() {
             TermMode::empty(),
             false,
             overlay,
+            false,
             false
         ),
         Some(Routed::Overlay(OverlayKey::Enter))
@@ -961,6 +1050,7 @@ fn page_menu_overlay_routes_navigation_keys_only() {
             TermMode::empty(),
             false,
             overlay,
+            false,
             false
         ),
         None,

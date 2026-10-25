@@ -423,6 +423,19 @@ impl Persistence {
         self.with_db(|db| db.trust_workspace(path, name)).is_some()
     }
 
+    /// 载入全局 todo 列表并写入状态（启动时调用一次）。
+    ///
+    /// 库不可用或读取失败时保持空列表：todo 是便利功能，不应阻断启动。
+    pub fn load_todos(&self, state: &mut AppState) {
+        let Some(db) = self.db.as_ref() else {
+            return;
+        };
+        match db.list_todos() {
+            Ok(items) => update::apply_todo_list(state, items),
+            Err(error) => tracing::warn!(%error, "loading todo list failed"),
+        }
+    }
+
     /// 载入全局 prompt 历史并写入状态（启动时调用一次）。
     ///
     /// 库不可用或读取失败时保持空历史：历史是便利功能，不应阻断启动。
@@ -476,6 +489,7 @@ impl Persistence {
     /// 退出前收尾：提交编辑中的提示词并落库。
     pub fn shutdown(&mut self, state: &mut AppState) {
         update::commit_editing_prompt(state);
+        update::commit_todo_edit(state);
         self.pump(state);
     }
 
@@ -993,6 +1007,24 @@ impl Persistence {
                 }
                 false
             }
+            // todo 写路径：单事务完成，失败只 toast（内存列表已更新，是真源）。
+            // 无持久化（`db: None`）时静默跳过——内存模式可用，与 prompt_history 同口径。
+            Effect::SaveTodo { record } => {
+                self.todo_write(state, |db| db.save_todo(&record));
+                false
+            }
+            Effect::DeleteTodo { id } => {
+                self.todo_write(state, |db| db.delete_todo(&id));
+                false
+            }
+            Effect::DeleteTodosWithStatus { status } => {
+                self.todo_write(state, |db| db.delete_todos_with_status(status).map(|_| ()));
+                false
+            }
+            Effect::RestoreTodos { records } => {
+                self.todo_write(state, |db| db.restore_todos(&records));
+                false
+            }
             // 网络与进程效应由事件层执行（pump 已过滤；此处兜底忽略并记录）。
             // 进程句柄只存在于事件层的运行实例里，持久化层既读不到也停不了。
             Effect::StartChatStream { .. }
@@ -1017,6 +1049,24 @@ impl Persistence {
                 tracing::warn!("user shell effect reached persistence pump");
                 false
             }
+        }
+    }
+
+    /// 执行一次 todo 写操作：失败时记录日志并提示用户（内存列表不回滚）。
+    ///
+    /// 与 [`Self::with_db`] 的区别只有失败反馈：todo 的写入是用户可见动作，
+    /// 静默失败会让「明明加了一条、重启就没了」变得不可解释。
+    fn todo_write(
+        &self,
+        state: &mut AppState,
+        operation: impl FnOnce(&Database) -> super::Result<()>,
+    ) {
+        let Some(db) = self.db.as_ref() else {
+            return;
+        };
+        if let Err(error) = operation(db) {
+            tracing::warn!(%error, "todo write failed");
+            update::fail_todo_write(state);
         }
     }
 
