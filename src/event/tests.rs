@@ -4691,6 +4691,102 @@ fn mouse_click_prompt_padding_only_focuses_without_moving_cursor() {
 
 // ===== 右侧统一容器 tab 事件层 =====
 
+#[test]
+fn worktree_candidates_do_not_resurrect_mention_panel_on_todo() {
+    // `apply_worktree_entries` 结尾无条件 `mention.refresh`，而 `clear()` 只 bump
+    // generation、不清 cache。若 Todo 期间的回调仍被处理，刚收起的提及面板会被
+    // 重新置 Some —— 一个看不见、却能吞滚轮的面板。
+    use crate::app::markdown::{MentionEntry, WorktreeCandidate};
+    use crate::db::Database;
+    use crate::db::service::Persistence;
+    use crate::event::chat::ChatStreams;
+    use std::collections::HashSet;
+
+    fn candidates() -> Vec<WorktreeCandidate> {
+        vec![WorktreeCandidate {
+            branch: "main".into(),
+            path: PathBuf::from("/tmp/lx-tui-wt"),
+            is_main: true,
+        }]
+    }
+
+    let mut state = demo_terminal();
+    state.prompt.resize(40, 8);
+    update::focus_prompt(&mut state);
+    // 制造提及面板：`@` 触发 + 扫描结果入缓存。
+    update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertChar('@'),
+    );
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    let prompt = state.prompt.id();
+    update::apply_mention_entries(
+        &mut state,
+        prompt,
+        generation,
+        vec![MentionEntry {
+            path: "app.rs".into(),
+            is_directory: false,
+        }],
+    );
+    // 回调只在工作区 git 元数据的仓库根匹配时才被处理（`targeted`）：
+    // 不造出来，下面的断言就只是"回调被丢弃"，测不到闸门。
+    let prompt_workspace = state.prompt_workspace();
+    state.workspaces[prompt_workspace].git = Some(crate::app::state::WorkspaceGit {
+        repo_root: PathBuf::from("/tmp/lx-tui-wt"),
+        checkout_path: PathBuf::from("/tmp/lx-tui-wt"),
+        is_linked: false,
+        branch: Some("main".into()),
+        main_branch: Some("main".into()),
+    });
+    // 先建立 worktree 候选，再补一次扫描缓存（候选取值变化会清 cache）。
+    state.prompt.apply_worktree_entries(candidates());
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested again");
+    update::apply_mention_entries(
+        &mut state,
+        prompt,
+        generation,
+        vec![MentionEntry {
+            path: "app.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(state.prompt.mention().is_some(), "前提：提及面板可见");
+
+    assert!(update::select_right_tab(&mut state, RightTab::Todo));
+    assert!(state.prompt.mention().is_none(), "切走即收起");
+
+    // 相同候选到达（cache 不失效）——这正是复活的那条路径。
+    let untrusted =
+        Database::open(&std::env::temp_dir().join("lx-tui-wt-gate.db")).expect("open side db");
+    let persistence = Persistence::with_database(untrusted);
+    let mut streams = ChatStreams::default();
+    let mut inflight = HashSet::new();
+    handle_app_event(
+        AppEvent::PromptWorktreeListed {
+            repo_root: PathBuf::from("/tmp/lx-tui-wt"),
+            candidates: candidates(),
+            failed: false,
+        },
+        &mut state,
+        &mut HashMap::new(),
+        &mut inflight,
+        &mut streams,
+        &persistence,
+    );
+
+    assert!(
+        state.prompt.mention().is_none(),
+        "Todo 期间到达的 worktree 回调不得复活隐藏的提及面板"
+    );
+}
+
 /// 容器顶边框上指定 tab 的矩形（按几何取，避免硬编码列）。
 fn right_tab_rect(geo: &Geometry, tab: RightTab) -> Rect {
     ui::right_panel::tab_rects(geo.view.prompt)
@@ -4975,6 +5071,193 @@ fn mouse_motion_tracks_right_tab_hover() {
         &mut dirty,
     );
     assert_eq!(state.right_tab_hover, None, "折叠态不产生 tab 悬停");
+}
+
+#[test]
+fn mouse_click_prompt_collapse_button_works_on_todo_tab() {
+    // 折叠按钮在容器底边框、位于"Todo 整块吞掉"分支之前；这条用例锁住顺序：
+    // 一旦把吞掉分支提到折叠按钮之前，Todo 下面板就再也折不起来。
+    let config = Config::default();
+    let mut state = demo_terminal();
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let target = ui::controls::collapse_buttons(&geo.view, state.agents_collapsed)
+        .into_iter()
+        .find(|button| button.target == ui::CollapseTarget::Prompt)
+        .expect("prompt collapse button visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            target.area.x,
+            target.area.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(
+        state.prompt_collapsed,
+        "Todo 下点折叠按钮仍要能折叠容器（顺序不能被吞掉分支遮蔽）"
+    );
+    assert_eq!(state.right_tab, RightTab::Todo, "折叠不改当前面板");
+    assert!(dirty);
+}
+
+#[test]
+fn pane_content_inner_is_zero_on_todo_tab() {
+    // 兜底口径：Todo 下 prompt 没有可交互内容区，按内容区坐标换算必须拿到零矩形，
+    // 否则残留路径会把鼠标位置写进一个看不见的编辑器光标。
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let prompt = state.prompt.id();
+    let inner = layout::pane_inner_rect(geo.view.prompt);
+    let active = super::mouse::hit::pane_content_inner(&state, &geo.view, prompt, inner);
+    assert!(
+        active.width > 0 && active.height > 0,
+        "前提：Prompt 态内容区非空: {active:?}"
+    );
+
+    state.right_tab = RightTab::Todo;
+    assert_eq!(
+        super::mouse::hit::pane_content_inner(&state, &geo.view, prompt, inner),
+        Rect::ZERO,
+        "Todo 下 prompt 内容区为零矩形"
+    );
+}
+
+#[test]
+fn mouse_right_click_prompt_tree_on_todo_opens_no_menu() {
+    // 提示词树右键菜单的闸门：Todo 下内容区不接收右键。
+    // 正向对照在前提里：同一坐标在 Prompt 态确实能打开菜单。
+    use crate::app::prompt::PromptItem;
+    let config = Config::default();
+    let mut state = demo_terminal();
+    update::show_prompt_tree(&mut state);
+    state.workspaces[0]
+        .prompt_panel
+        .tree
+        .replace(vec![], vec![PromptItem::single(7, None, "item", "body")]);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let area = paste::prompt_text_area(&geo.view);
+    let target = ui::prompt::tree::row_at(
+        area,
+        &state.prompt_owner().prompt_panel,
+        area.x + 2,
+        area.y + 2,
+    )
+    .map(|_| (area.x + 2, area.y + 2));
+    let Some((col, row)) = target else {
+        panic!("前提：该坐标落在树行上");
+    };
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Right), col, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(
+        matches!(state.overlay, Some(Overlay::Menu(_))),
+        "前提：Prompt 态同坐标能开菜单"
+    );
+
+    update::close_overlay(&mut state);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Right), col, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none(), "Todo 下右键不打开提示词树菜单");
+    assert!(!dirty);
+}
+
+#[test]
+fn mouse_drag_on_todo_does_not_move_hidden_cursor() {
+    // 拖拽光标跟随的闸门：Todo 下拖动不得改写隐藏编辑器的光标。
+    let config = Config::default();
+    let mut state = demo_terminal();
+    state.prompt.set_text("alpha beta gamma\nsecond line");
+    state.prompt.resize(40, 8);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let text = layout::prompt_text_rect(geo.view.prompt);
+    let prompt = state.prompt.id();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 正向对照：Prompt 态拖拽会移动光标。
+    update::focus_prompt(&mut state);
+    update::begin_selection(&mut state, prompt, 0, 0);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            text.x + 3,
+            text.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.prompt.cursor() > 0, "前提：Prompt 态拖拽移动光标");
+
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let cursor = state.prompt.cursor();
+    // `select_right_tab` 已清选区；这里直接构造拖拽事件，验证闸门而非选区状态。
+    state.selection = Some(crate::app::selection::Selection::begin(prompt, 0, 0));
+    dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            text.x + 1,
+            text.y + 2,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(
+        state.prompt.cursor(),
+        cursor,
+        "Todo 下拖拽不改隐藏编辑器的光标"
+    );
+    // 这一条由两道防线共同保证：`drag.rs` 的 `prompt_panel_active` 闸门与
+    // `pane_content_inner` 的零矩形兜底。删掉闸门后零矩形提前返回，行为不变；
+    // 删掉兜底后闸门兜住，行为也不变。两道都删才会漏，因此单独移除任一处的
+    // 变异都不会让本用例变红——这是**冗余防线**，不是测试失效。
+    state.selection = None;
 }
 
 #[test]

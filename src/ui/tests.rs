@@ -1423,6 +1423,26 @@ fn prompt_scrollbar_appears_only_on_overflow() {
 }
 
 #[test]
+fn prompt_scrollbar_hidden_on_todo_tab() {
+    // 前置：Prompt 态下正文溢出、滚动条确实可见（否则下面的 None 是空转）。
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    overflow_prompt(&mut state, &view);
+    let view = view_for(&state);
+    assert!(
+        prompt_scrollbar(&view, &state).is_some(),
+        "前提：Prompt 态滚动条可见"
+    );
+
+    state.right_tab = crate::app::state::RightTab::Todo;
+    assert_eq!(
+        prompt_scrollbar(&view, &state),
+        None,
+        "Todo 下不画隐藏编辑器的滚动条"
+    );
+}
+
+#[test]
 fn prompt_scrollable_iff_scrollbar_visible() {
     // 不变量（真实布局几何）：滚动条不可见时滚轮/拖拽一律无效，
     // 可见时上限恰等于滚动条 thumb 可拖距离（total - visible）。

@@ -525,7 +525,7 @@ if update::set_right_tab_hover(state, right_tab_hover) {
 | 场景 | 表现 |
 | --- | --- |
 | 面板宽度放不下两个 tab | 从尾部丢弃（先丢 `Todo`，只留 `Prompt`）。 |
-| 面板宽度连 `Prompt` 都放不下（`width < 10`） | 整排 tab 不画，只剩顶边框 `╭────╮`；此时无法切换面板，展开或拖宽后恢复。 |
+| 面板宽度连 `Prompt` 都放不下（`width <= 10`：起排 2 列 + tab 宽 8 + 右角 1 列） | 整排 tab 不画，只剩顶边框 `╭────╮`；此时无法切换面板，展开或拖宽后恢复。`min_pane_width = 10`，所以 10 列是实际可达的最窄值，也是最需要降级的一档。 |
 | 内容区高度 ≤ 2（`prompt_header_rect` 为 None） | 不画工具栏/标题行/Todo 分割线，正文退回整块内容区（与现状一致）。 |
 | 折叠态 | 4 列窄条，不画 tab（与现状一致）。 |
 | `prompt_left` 交换后 | 容器整体搬到左侧，tab 与底边框跟随，行为不变。 |
@@ -552,7 +552,7 @@ if update::set_right_tab_hover(state, right_tab_hover) {
 ### 6.2 渲染层（`src/ui/right_panel/tests.rs` 新增）
 
 - `tabs_render_on_top_border_with_accent_active`：顶边框整行含 `Prompt`、`Todo`；激活 tab 单元格 bg = Cyan、fg = Black、BOLD。
-- `tabs_drop_trailing_when_narrow`：宽 12 只留 `Prompt`；宽 8 一个都不画、圆角完整。
+- `tabs_drop_trailing_when_narrow`：宽 12 只留 `Prompt`；宽 10 一个都不画、圆角完整（`min_pane_width = 10`，更窄的宽度被 `clamp_prompt_width` 钳回 10，测不到也不必测）。
 - `tab_hit_areas`：`Prompt`/`Todo` 文字区命中正确；tab 之间的 `─`、边框空白、非顶边框行返回 None。
 - `todo_body_is_blank_with_plain_divider`：Todo 下工具栏行无按钮文案、分割线为纯 `─`。
 - `bottom_identity_survives_tab_switch`：两种 tab 下底边框身份标签一致。

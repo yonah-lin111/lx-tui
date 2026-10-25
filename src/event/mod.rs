@@ -748,6 +748,13 @@ fn handle_app_event(
             failed,
         } => {
             git_inflight.remove(&repo_root);
+            // 面板不可交互时丢弃结果：`apply_worktree_entries` 结尾会无条件
+            // `mention.refresh`，而 `clear()` 只 bump generation、不清 cache，
+            // 于是 Todo 期间到达的回调会把刚收起的提及面板重新置 Some——
+            // 一个看不见、却仍能吞滚轮的面板。
+            if !update::prompt_panel_active(state) {
+                return;
+            }
             let targeted = state
                 .prompt_owner()
                 .git
@@ -813,7 +820,7 @@ fn pump_prompt_worktree(
     sender: &mpsc::UnboundedSender<AppEvent>,
     inflight: &mut HashSet<PathBuf>,
 ) {
-    if state.prompt_collapsed {
+    if !update::prompt_panel_active(state) {
         return;
     }
     let chooser = state.prompt.worktree_chooser_open();

@@ -6,6 +6,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::{AppState, RightTab, Workspace, WorkspaceIdentity};
 
@@ -24,19 +25,28 @@ fn tab_label(tab: RightTab) -> &'static str {
 }
 
 /// 容器顶边框上的 tab 矩形：从 `╭─` 之后 1 列起排，放不下的尾部 tab 丢弃。
+///
+/// 宽度按**显示列**（`UnicodeWidthStr::width`）算，不按字符数：换成中文文案
+/// （`待办`）时两者不等，按字符数算会让矩形比文字窄、`set_stringn` 把宽字符整个丢掉。
+///
+/// 内框为空（高 ≤ 2）时返回空：`render` 此时在 `paint_tabs` 之前就返回了，
+/// 一个 tab 也没画；这里若仍给出矩形，就会出现"看不见却能点"的 tab。
 pub fn tab_rects(panel: Rect) -> Vec<(RightTab, Rect)> {
     let Some(row) = crate::layout::prompt_border_rect(panel) else {
         return Vec::new();
     };
+    if panel.height <= 2 {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     let mut x = row.x.saturating_add(2);
     for tab in [RightTab::Prompt, RightTab::Todo] {
-        let width = u16::try_from(tab_label(tab).chars().count())
+        let width = u16::try_from(UnicodeWidthStr::width(tab_label(tab)))
             .unwrap_or(u16::MAX)
             .saturating_add(TAB_PAD.saturating_mul(2));
-        // 必须给右边角留出 1 列，否则 tab 会盖掉 `╮`。
-        if x.saturating_add(width) >= row.right() {
-            break; // 尾部丢弃：宁可少一个 tab，也不画半个宽字符/压住圆角
+        // 右角前必须留 1 列 `─`：只判"不压住 `╮`"会让 tab 紧贴圆角（宽 11/18 实测）。
+        if x.saturating_add(width) >= row.right().saturating_sub(1) {
+            break; // 尾部丢弃：宁可少一个 tab，也不画半个宽字符/贴住圆角
         }
         out.push((tab, Rect::new(x, row.y, width, 1)));
         x = x.saturating_add(width).saturating_add(1); // 1 列为 tab 间的 `─`
@@ -106,18 +116,22 @@ fn render_empty_body(panel: Rect, buf: &mut Buffer, focused: bool) {
     prompt::render_divider(panel, header, buf, focused);
 }
 
-/// 绘制顶边框 tab：激活 `selected_item`、悬停未激活 `selection`、其余 `muted`。
+/// 绘制顶边框 tab：激活 [`style::right_tab_active`]（深青蓝实心块）、
+/// 悬停未激活 [`style::right_tab_hover`]、其余 `muted`。
+///
+/// 不复用顶部标签栏的 `selected_item`（青底黑字）：同一屏两处同款高亮会分不清
+/// 哪个是当前工作区标签、哪个是当前右侧面板。
 ///
 /// tab 之间那 1 列 `─` 由 Block 已经画好，这里不碰，避免把 tab 连成一片。
 ///
-/// 每格先 `Style::reset()` 再套 token：`muted()` / `selection()` 都不带完整前景，
-/// 直接叠加会继承聚焦边框的 `accent()`（Cyan 加粗），非激活 tab 看起来也在发亮。
+/// 每格先 `Style::reset()` 再套 token：`muted()` 不带前景，直接叠加会继承聚焦边框的
+/// `accent()`（Cyan 加粗），非激活 tab 看起来也在发亮。
 pub fn paint_tabs(buf: &mut Buffer, panel: Rect, active: RightTab, hover: Option<RightTab>) {
     for (tab, rect) in tab_rects(panel) {
         let tab_style = if tab == active {
-            style::selected_item()
+            style::right_tab_active()
         } else if hover == Some(tab) {
-            style::selection()
+            style::right_tab_hover()
         } else {
             style::muted()
         };

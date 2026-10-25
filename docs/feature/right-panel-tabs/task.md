@@ -116,11 +116,23 @@
 - [x] `cargo test`（全量）
 - [x] 交回用户 `cargo run` 人工验收视觉与交互（Agent 无法交互式验证 TUI）。
 
+## 评审与修复
+
+`review.md` 记录了 3 个并行 reviewer 的全部发现与逐条修复，含变异验证结果。
+本轮修复的核心是 3 个真缺陷：
+
+1. `paint_tabs` 的样式继承（非激活 tab 继承聚焦边框的青色加粗，两个 tab 一起发亮）；
+2. 点"当前 tab"不提交页重命名（`select_right_tab` 早退）且无条件置脏；
+3. 异步 worktree 回调在 Todo 期间复活隐藏的提及面板（`clear()` 不清 cache）。
+
+另修正 2 条**空转测试**（"滚动保留"实为 `0 == 0`；5 条 `is_none()` 断言的是
+从未打开过的面板）与 1 处**文档谎言**（底边框 `ws:路径末段名`，代码里不存在）。
+
 ## 完成记录
 
 - 分支：`feat/right-panel-tabs`（worktree：`.worktrees/right-panel-tabs`，基于 `dev` @ `98388df`）。
 - 验证：`cargo fmt` 通过；`cargo clippy --all-targets -- -D warnings` 通过；`cargo test` 全绿
-  （lib 3367 passed / 0 failed / 2 ignored，其余 15 个测试目标全 ok）。
+  （lib 3377 passed / 0 failed / 2 ignored，其余 15 个测试目标全 ok）。
 - 与设计的差异（详见 `design.md` §9）：
   1. `tab_rects` 的右边界从 `>` 收紧为 `>=`：否则 tab 恰好顶到 `row.right()` 时会盖掉右边角 `╮`。
   2. `press.rs` 的「`!prompt_panel_active` 整块吞掉」额外加了 `view.prompt.contains(...)` 前置条件，

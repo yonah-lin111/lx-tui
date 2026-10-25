@@ -91,6 +91,27 @@ pub fn overlay_selection() -> Style {
         .bg(Color::Indexed(240))
 }
 
+/// 右侧容器顶边框标签页的激活项：深青蓝实心块（Indexed 24）+ 近白字 + 加粗。
+///
+/// 刻意**不复用** [`selected_item`]：那一套是顶部标签栏的"青底黑字"，
+/// 同一屏上两处撞色会让人分不清哪一个是"当前工作区标签"、哪一个是"当前右侧面板"。
+/// 这里用同色系（青）的深底并配亮字，既与容器边框呼应，又在亮度上明显区别于顶部标签栏。
+pub fn right_tab_active() -> Style {
+    Style::default()
+        .fg(Color::Indexed(255))
+        .bg(Color::Indexed(24))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 右侧容器顶边框标签页的悬停项（未激活）：比激活块更暗一档的青灰底 + 常规字。
+///
+/// 悬停只是"指针在这里"，不该和激活同样醒目，因此不加粗。
+pub fn right_tab_hover() -> Style {
+    Style::default()
+        .fg(Color::Indexed(252))
+        .bg(Color::Indexed(237))
+}
+
 /// 状态：失败（Red）。
 pub fn error() -> Style {
     Style::default().fg(Color::Red)

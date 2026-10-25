@@ -68,18 +68,24 @@ fn tabs_render_on_top_border_with_accent_active() {
     assert!(border.contains(text::RIGHT_TAB_PROMPT_LABEL), "{border:?}");
     assert!(border.contains(text::RIGHT_TAB_TODO_LABEL), "{border:?}");
 
-    // 激活 tab：`selected_item`（青底黑字加粗），左右内边距与文字区同款。
-    let selected = style::selected_item();
+    // 激活 tab：`right_tab_active`（深青蓝实心块 + 亮白字 + 加粗）。
+    let active = style::right_tab_active();
     let cell = &buffer[(prompt_rect.x, prompt_rect.y)];
-    assert_eq!(Some(cell.bg), selected.bg, "{cell:?}");
-    assert_eq!(Some(cell.fg), selected.fg, "{cell:?}");
+    assert_eq!(Some(cell.bg), active.bg, "{cell:?}");
+    assert_eq!(Some(cell.fg), active.fg, "{cell:?}");
     assert!(cell.modifier.contains(Modifier::BOLD), "{cell:?}");
     let label_cell = &buffer[(prompt_rect.x + 1, prompt_rect.y)];
-    assert_eq!(label_cell.bg, Color::Cyan, "{label_cell:?}");
-    assert_eq!(label_cell.fg, Color::Black, "{label_cell:?}");
+    assert_eq!(label_cell.bg, Color::Indexed(24), "{label_cell:?}");
+    assert_eq!(label_cell.fg, Color::Indexed(255), "{label_cell:?}");
     assert!(
         label_cell.modifier.contains(Modifier::BOLD),
         "{label_cell:?}"
+    );
+    // 必须与顶部标签栏的选中样式区分开：撞色会让人分不清当前工作区与当前面板。
+    assert_ne!(
+        style::right_tab_active().bg,
+        style::selected_item().bg,
+        "右侧容器 tab 不得复用顶部标签栏的青色实心底"
     );
 
     // 非激活 tab：muted（dim、无前景无背景、不加粗）。
@@ -109,8 +115,79 @@ fn tabs_render_on_top_border_with_accent_active() {
         !muted.modifier.contains(Modifier::BOLD),
         "聚焦时非激活 tab 不得继承边框加粗: {muted:?}"
     );
-    let active = &buffer[(prompt_rect.x, prompt_rect.y)];
-    assert_eq!(active.bg, Color::Cyan, "激活 tab 仍为青底: {active:?}");
+    let active_cell = &buffer[(prompt_rect.x, prompt_rect.y)];
+    assert_eq!(
+        active_cell.bg,
+        Color::Indexed(24),
+        "激活 tab 仍为深青蓝实心块: {active_cell:?}"
+    );
+}
+
+#[test]
+fn tabs_stay_on_border_and_follow_active_tab_on_todo() {
+    // tab 行是容器画的，不属于 Prompt 面板体：切到 Todo 后顶边框必须照画，
+    // 且高亮跟着 active 走（paint_tabs 一旦被挪进 Prompt 分支，这行会整行空白）。
+    let mut state = AppState::demo();
+    state.right_tab = RightTab::Todo;
+    let view = view_for(&state);
+    let buffer = render_buffer(&state);
+    let rects = tab_rects(view.prompt);
+    assert_eq!(rects.len(), 2, "Todo 下两个 tab 仍应绘制: {rects:?}");
+    let border = panel_row(&buffer, &view, view.prompt.y);
+    assert!(border.contains(text::RIGHT_TAB_PROMPT_LABEL), "{border:?}");
+    assert!(border.contains(text::RIGHT_TAB_TODO_LABEL), "{border:?}");
+
+    let todo = rects
+        .iter()
+        .find(|(tab, _)| *tab == RightTab::Todo)
+        .map(|(_, rect)| *rect)
+        .expect("todo tab");
+    let prompt = rects
+        .iter()
+        .find(|(tab, _)| *tab == RightTab::Prompt)
+        .map(|(_, rect)| *rect)
+        .expect("prompt tab");
+    assert_eq!(
+        buffer[(todo.x + 1, todo.y)].bg,
+        Color::Indexed(24),
+        "Todo 为激活 tab"
+    );
+    assert_eq!(
+        buffer[(prompt.x, prompt.y)].bg,
+        Color::Reset,
+        "Prompt 退为非激活"
+    );
+}
+
+#[test]
+fn hovered_inactive_tab_uses_hover_style() {
+    // 悬停是第三档样式：既不等于激活块，也不等于 muted。
+    let mut state = AppState::demo();
+    state.right_tab_hover = Some(RightTab::Todo);
+    let view = view_for(&state);
+    let buffer = render_buffer(&state);
+    let todo = tab_rects(view.prompt)
+        .into_iter()
+        .find(|(tab, _)| *tab == RightTab::Todo)
+        .map(|(_, rect)| rect)
+        .expect("todo tab");
+    let cell = &buffer[(todo.x, todo.y)];
+    let hover = style::right_tab_hover();
+    assert_eq!(
+        Some(cell.bg),
+        hover.bg,
+        "悬停未激活 tab 用 right_tab_hover 底色: {cell:?}"
+    );
+    assert_eq!(Some(cell.fg), hover.fg, "{cell:?}");
+    assert!(
+        !cell.modifier.contains(Modifier::BOLD),
+        "悬停不等于激活：不加粗: {cell:?}"
+    );
+    assert_ne!(
+        Some(cell.bg),
+        style::right_tab_active().bg,
+        "悬停不得复用激活底色"
+    );
 }
 
 #[test]
@@ -142,6 +219,41 @@ fn tabs_drop_trailing_when_narrow() {
     assert!(!border.contains(text::RIGHT_TAB_TODO_LABEL), "{border:?}");
     assert!(border.starts_with('╭'), "左圆角仍在: {border:?}");
     assert!(border.ends_with('╮'), "右圆角仍在: {border:?}");
+}
+
+#[test]
+fn tabs_never_touch_the_right_corner() {
+    // 扫遍可达宽度：tab 与右角之间必须恒有 1 列 `─`。
+    // 只判"不压住 ╮"时，宽 11 与 18 会出现 `╭─ Prompt ╮`（实测），要求 >= right-1 才挡住。
+    for width in 10..=24u16 {
+        let mut state = AppState::demo();
+        state.prompt_width = width;
+        let view = view_for(&state);
+        let panel = view.prompt;
+        let buffer = render_buffer(&state);
+        let row: Vec<String> = (panel.x..panel.right())
+            .map(|x| buffer[(x, panel.y)].symbol().to_string())
+            .collect();
+        let rendered = row.join("");
+
+        for (index, (tab, rect)) in tab_rects(panel).into_iter().enumerate() {
+            assert!(
+                rect.right() < panel.right().saturating_sub(1),
+                "宽 {width}: 第 {index} 个 tab({tab:?}) 必须给右角前留 1 列 `─`: {rendered}"
+            );
+        }
+        if !tab_rects(panel).is_empty() {
+            assert_eq!(
+                row[usize::from(panel.width - 2)],
+                text::DIVIDER_MID,
+                "宽 {width}: 右角前一列必须是 `─`: {rendered}"
+            );
+        }
+        assert!(
+            rendered.starts_with('╭') && rendered.ends_with('╮'),
+            "宽 {width}: 圆角完整: {rendered}"
+        );
+    }
 }
 
 #[test]

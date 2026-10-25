@@ -81,10 +81,6 @@ pub const RIGHT_TAB_PROMPT_LABEL: &str = "Prompt";
 pub const RIGHT_TAB_TODO_LABEL: &str = "Todo";
 /// prompt 底边框分支前缀。
 pub const PROMPT_BRANCH_PREFIX: &str = "b:";
-/// 工作区路径标记前缀；prompt 底边框与 lx 窗格顶边框共用（前缀强调色、值 muted）。
-pub const WORKSPACE_PREFIX: &str = "ws:";
-/// prompt 底边框右侧的工作区路径名前缀。
-pub const PROMPT_WORKSPACE_PREFIX: &str = WORKSPACE_PREFIX;
 /// prompt 底边框 linked worktree 标记前缀。
 pub const PROMPT_WORKTREE_PREFIX: &str = "wt:";
 /// prompt 工具栏按钮与保存状态点。

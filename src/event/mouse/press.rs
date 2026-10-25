@@ -378,6 +378,11 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
     } else if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
         let inner = pane_content_inner(state, view, pane, inner);
+        // 内容区可能为零（prompt 面板不可交互时 `pane_content_inner` 返回零矩形）：
+        // 先判空再换算坐标，避免拿屏幕坐标当内容坐标去定位光标/建选区。
+        if inner.width == 0 || inner.height == 0 {
+            return;
+        }
         let row = mouse.row - inner.y;
         let col = mouse.column - inner.x;
         if pane == state.prompt.id() {

@@ -4898,7 +4898,8 @@ fn select_right_tab_preserves_prompt_content() {
     use crate::app::prompt::{PromptItem, PromptPage};
 
     let mut state = AppState::demo();
-    state.prompt.resize(40, 10);
+    // 视口压到 6 行、正文灌到溢出：滚动位置必须是**非零**才有说服力。
+    state.prompt.resize(40, 6);
     let mut item = PromptItem::single(7, None, "paged", "alpha");
     item.pages.push(PromptPage::saved(70, "Page 2", "beta"));
     state.workspaces[0]
@@ -4906,15 +4907,34 @@ fn select_right_tab_preserves_prompt_content() {
         .tree
         .replace(vec![], vec![item]);
     assert!(edit_prompt_item(&mut state, 0, 7));
-    state.prompt.insert_str("\nsecond line");
+    // 切到第 2 页：分页状态也属于"内容"，切 tab 往返后必须还在第 2 页。
+    assert!(select_prompt_page(
+        &mut state,
+        crate::app::prompt::PromptPageId::Saved(70)
+    ));
+    state.prompt.insert_str(&"\nline".repeat(12));
     state.prompt.set_cursor_offset_for_test(3);
-    set_prompt_scroll(&mut state, 1);
+    assert!(set_prompt_scroll(&mut state, 2), "前提：正文可滚动");
+    assert!(state.prompt.scroll() > 0, "前提：滚动偏移非零");
 
     let text = state.prompt.text().to_string();
     let cursor = state.prompt.cursor();
     let scroll = state.prompt.scroll();
     let mode = state.workspaces[0].prompt_panel.mode;
     let editing = state.workspaces[0].prompt_panel.editing;
+    let active_page = state.workspaces[0]
+        .prompt_panel
+        .tree
+        .item(7)
+        .map(|item| item.active_page)
+        .expect("item 7");
+    let page_name = state.workspaces[0]
+        .prompt_panel
+        .tree
+        .item(7)
+        .and_then(|item| item.page(active_page))
+        .map(|page| page.name.clone())
+        .expect("active page");
 
     assert!(select_right_tab(&mut state, RightTab::Todo));
     assert_eq!(state.right_tab, RightTab::Todo);
@@ -4925,6 +4945,25 @@ fn select_right_tab_preserves_prompt_content() {
     assert_eq!(state.prompt.scroll(), scroll, "滚动位置原样保留");
     assert_eq!(state.workspaces[0].prompt_panel.mode, mode);
     assert_eq!(state.workspaces[0].prompt_panel.editing, editing);
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .tree
+            .item(7)
+            .map(|item| item.active_page),
+        Some(active_page),
+        "当前页原样保留"
+    );
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .tree
+            .item(7)
+            .and_then(|item| item.page(active_page))
+            .map(|page| page.name.clone()),
+        Some(page_name),
+        "页数据原样保留"
+    );
     assert!(state.prompt.can_undo(), "撤销栈未被改写");
     state.prompt.undo();
     assert_ne!(state.prompt.text(), text, "撤销可回到上一次编辑");
@@ -4978,6 +5017,7 @@ fn select_right_tab_commits_rename_and_clears_transient_state() {
     begin_selection(&mut state, prompt, 0, 0);
     assert!(state.selection.is_some(), "前提：prompt 选区存在");
     state.prompt_tree_hover = Some(0);
+    state.right_tab_hover = Some(RightTab::Todo);
     assert!(begin_page_rename(&mut state), "前提：页重命名输入中");
     apply_page_rename_key(&mut state, OverlayKey::Clear);
     for ch in "Intro".chars() {
@@ -5016,13 +5056,67 @@ fn select_right_tab_commits_rename_and_clears_transient_state() {
     // 瞬时指针全部收回。
     assert!(!state.prompt_focused, "焦点退回窗格");
     assert!(state.selection.is_none(), "prompt 选区清空");
-    assert!(state.prompt.panel().is_none(), "块命令面板收起");
-    assert!(state.prompt.slash_panel().is_none());
-    assert!(state.prompt.mention().is_none());
-    assert!(state.prompt.refer_panel().is_none());
-    assert!(state.prompt.paste_panel().is_none());
+    assert!(state.prompt.mention().is_none(), "提及面板收起");
     assert_eq!(state.prompt_tree_hover, None, "列表悬停行清空");
     assert_eq!(state.right_tab_hover, None, "tab 悬停清空");
+}
+
+/// 五种输入面板（块/斜杠/提及/引用/粘贴）互斥，不可能在同一状态里同时打开；
+/// 因此逐类单独构造、单独断言，避免"断言一个从未打开过的面板"这种空转。
+#[test]
+fn select_right_tab_clears_each_transient_panel() {
+    type Opener = fn(&mut AppState);
+    let openers: [(&str, Opener); 5] = [
+        ("块命令", |state| {
+            apply_editor(state, EditorCommand::InsertChar('#'));
+        }),
+        ("斜杠", |state| {
+            apply_editor(state, EditorCommand::InsertChar('/'));
+        }),
+        ("提及", |state| {
+            apply_editor(state, EditorCommand::InsertChar('@'));
+            let (generation, _) = state
+                .prompt
+                .take_mention_scan_request()
+                .expect("scan requested");
+            let prompt = state.prompt.id();
+            apply_mention_entries(
+                state,
+                prompt,
+                generation,
+                vec![MentionEntry {
+                    path: "app.rs".into(),
+                    is_directory: false,
+                }],
+            );
+        }),
+        ("引用", |state| {
+            state.prompt.insert_str("@abc 记录\nac");
+        }),
+        ("粘贴", open_paste_panel),
+    ];
+    for (label, open) in openers {
+        let mut state = AppState::demo();
+        state.prompt.resize(40, 8);
+        focus_prompt(&mut state);
+        open(&mut state);
+        let opened = state.prompt.panel().is_some()
+            || state.prompt.slash_panel().is_some()
+            || state.prompt.mention().is_some()
+            || state.prompt.refer_panel().is_some()
+            || state.prompt.paste_panel().is_some();
+        assert!(opened, "前提：{label}面板已打开");
+
+        assert!(select_right_tab(&mut state, RightTab::Todo));
+        assert!(
+            state.prompt.panel().is_none()
+                && state.prompt.slash_panel().is_none()
+                && state.prompt.mention().is_none()
+                && state.prompt.refer_panel().is_none()
+                && state.prompt.paste_panel().is_none(),
+            "切到 Todo 后{label}面板必须收起"
+        );
+    }
 }
 
 #[test]
