@@ -28,6 +28,25 @@ fn request() -> ChatRequest {
     }
 }
 
+/// 前置系统规则段的数量（`role=user` 且内容是 `<system_instructions>` 包裹）。
+fn system_rule_prefix(body: &Value) -> usize {
+    body["messages"]
+        .as_array()
+        .map(|messages| {
+            messages
+                .iter()
+                .take_while(|message| {
+                    message["role"] == "user"
+                        && message["content"]
+                            .as_str()
+                            .or_else(|| message["content"][0]["text"].as_str())
+                            .is_some_and(|text| text.starts_with("<system_instructions>"))
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 /// 带工具调用的结构化历史（一次成功、一次失败结果）。
 fn tool_request() -> ChatRequest {
     let mut req = request();
@@ -148,23 +167,23 @@ fn body_has_max_tokens_messages_and_protocol_headers() {
     assert!(!built.body.contains("key"));
 }
 
-/// 纯文本回退：messages 与旧行为逐字一致（不注入 system 消息）。
+/// 纯文本回退：去掉前置的规则段后，messages 与旧行为逐字一致。
 #[test]
 fn plain_text_history_is_unchanged() {
     let body = body_of(&request());
+    let messages = body["messages"].as_array().expect("messages");
+    // 首段之外的系统规则以 `user` 消息前置（见 `system_messages`），先跳过它们。
+    let prefix = system_rule_prefix(&body);
     assert_eq!(
-        body["messages"],
-        json!([{"role": "user", "content": "你好"}])
+        &messages[prefix..],
+        &[json!({"role": "user", "content": "你好"})],
+        "真实历史必须与旧行为逐字一致"
     );
-    // 系统指令走顶层 system 的多个 text block（代理安全线切分，不在 messages 里）。
-    let expected = crate::chat::prompt::system_prompt();
-    let blocks = body["system"].as_array().expect("system blocks");
-    let joined: String = blocks
-        .iter()
-        .map(|block| block["text"].as_str().unwrap_or_default())
-        .collect();
-    assert_eq!(joined, expected, "分段拼接必须逐字还原");
-    assert!(blocks.iter().all(|block| block["type"] == "text"));
+    // 系统指令只有首段：顶层 system 是字符串。
+    let (head, rest) =
+        crate::chat::transport::system_messages(&crate::chat::prompt::system_prompt());
+    assert_eq!(body["system"], json!(head));
+    assert_eq!(rest.len(), prefix, "前置规则段数必须与切分结果一致");
 }
 
 /// `tools` 用 `input_schema` 承载四工具 schema。
@@ -186,14 +205,16 @@ fn tools_use_input_schema() {
 fn tool_history_encodes_tool_use_and_tool_result_blocks() {
     let body = body_of(&tool_request());
     let messages = body["messages"].as_array().expect("messages");
+    // 跳过前置的系统规则段：真实历史从第一条用户消息开始。
+    let base = system_rule_prefix(&body);
     // user → assistant(text+tool_use_a) → user(tool_result_a) → assistant(tool_use_b) → user(tool_result_b)
-    assert_eq!(messages.len(), 5, "call 与 result 必须成对相邻");
+    assert_eq!(messages.len() - base, 5, "call 与 result 必须成对相邻");
     // 第 1 条：user 文本。
-    assert_eq!(messages[0]["role"], "user");
-    assert_eq!(messages[0]["content"][0]["text"], "读 src/main.rs");
+    assert_eq!(messages[base]["role"], "user");
+    assert_eq!(messages[base]["content"][0]["text"], "读 src/main.rs");
     // 第 2 条：assistant 的 text 与 tool_use 合进同一条消息的 content 数组。
-    assert_eq!(messages[1]["role"], "assistant");
-    let blocks = messages[1]["content"].as_array().expect("blocks");
+    assert_eq!(messages[base + 1]["role"], "assistant");
+    let blocks = messages[base + 1]["content"].as_array().expect("blocks");
     assert_eq!(blocks.len(), 2);
     assert_eq!(blocks[0]["type"], "text");
     assert_eq!(blocks[0]["text"], "先读一下");
@@ -203,24 +224,27 @@ fn tool_history_encodes_tool_use_and_tool_result_blocks() {
     // tool_use.input 是 JSON 对象（不是字符串）。
     assert_eq!(blocks[1]["input"], json!({"path": "src/main.rs"}));
     // 第 3 条：紧邻的 user tool_result（成功）。
-    assert_eq!(messages[2]["role"], "user");
-    let results = messages[2]["content"].as_array().expect("results");
+    assert_eq!(messages[base + 2]["role"], "user");
+    let results = messages[base + 2]["content"].as_array().expect("results");
     assert_eq!(results.len(), 1);
     assert_eq!(results[0]["type"], "tool_result");
     assert_eq!(results[0]["tool_use_id"], "toolu_a");
     assert_eq!(results[0]["content"], "1: fn main() {}");
     assert_eq!(results[0]["is_error"], json!(false));
     // 第 4/5 条：第二次调用与失败结果（is_error 透传）。
-    assert_eq!(messages[3]["role"], "assistant");
-    assert_eq!(messages[3]["content"][0]["type"], "tool_use");
+    assert_eq!(messages[base + 3]["role"], "assistant");
+    assert_eq!(messages[base + 3]["content"][0]["type"], "tool_use");
     assert_eq!(
-        messages[3]["content"][0]["input"],
+        messages[base + 3]["content"][0]["input"],
         json!({"path": "out.rs", "content": ""})
     );
-    assert_eq!(messages[4]["role"], "user");
-    assert_eq!(messages[4]["content"][0]["tool_use_id"], "toolu_b");
-    assert_eq!(messages[4]["content"][0]["is_error"], json!(true));
-    assert_eq!(messages[4]["content"][0]["content"], "permission_denied");
+    assert_eq!(messages[base + 4]["role"], "user");
+    assert_eq!(messages[base + 4]["content"][0]["tool_use_id"], "toolu_b");
+    assert_eq!(messages[base + 4]["content"][0]["is_error"], json!(true));
+    assert_eq!(
+        messages[base + 4]["content"][0]["content"],
+        "permission_denied"
+    );
 }
 
 #[test]

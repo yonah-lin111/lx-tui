@@ -400,15 +400,25 @@ async fn request_body_carries_tools_and_system_prompt() {
     .await;
     let recorded = server.await.expect("server");
     let sent: serde_json::Value = serde_json::from_str(&recorded.body).expect("json body");
-    // 系统提示按代理安全线切成多条 system 消息：拼接后必须逐字等于完整提示。
+    // 线上形状：首条 system 是提示首段，其余段以 user 规则前置（见 system_messages）。
     let messages = sent["messages"].as_array().expect("messages");
-    let system: String = messages
+    let (head, rest) =
+        crate::chat::transport::system_messages(&crate::chat::prompt::system_prompt());
+    assert_eq!(messages[0]["role"], "system");
+    assert_eq!(messages[0]["content"], serde_json::json!(head));
+    assert!(!head.is_empty(), "必须发出系统提示");
+    // 前置规则段的条数与切分一致，且都带包裹标签。
+    let prefixed = messages
         .iter()
-        .take_while(|message| message["role"] == "system")
-        .map(|message| message["content"].as_str().unwrap_or_default())
-        .collect();
-    assert!(!system.is_empty(), "必须发出系统提示");
-    assert_eq!(system, crate::chat::prompt::system_prompt());
+        .skip(1)
+        .take_while(|message| {
+            message["role"] == "user"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|text| text.starts_with("<system_instructions>"))
+        })
+        .count();
+    assert_eq!(prefixed, rest.len());
     let names: Vec<&str> = sent["tools"]
         .as_array()
         .expect("tools")

@@ -54,12 +54,23 @@ pub fn build(
     };
     let url = join_url(base, "v1/messages");
     let messages = messages_of(request)?;
-    // 系统指令：Anthropic 用顶层 system（多段即多个 text block），不进 messages。
-    // 分段理由见 [`super::split_system_prompt`]：代理会整条替换超长 system 消息。
-    let system: Vec<Value> = super::split_system_prompt(&request.resolve_system_prompt())
-        .into_iter()
-        .map(|chunk| json!({"type": "text", "text": chunk}))
-        .collect();
+    // 系统指令：只有首段进顶层 `system`。多 text block 会被代理拼回一条再判长度，
+    // 超过 2000 整条替换（实测），因此其余段改为前置 user 消息（见 [`super::system_messages`]）。
+    let (system, rest) = super::system_messages(&request.resolve_system_prompt());
+    let mut messages = messages;
+    if !rest.is_empty() {
+        let mut prefixed: Vec<Value> = rest
+            .into_iter()
+            .map(|chunk| {
+                json!({
+                    "role": "user",
+                    "content": super::wrap_system_instructions(&chunk),
+                })
+            })
+            .collect();
+        prefixed.extend(messages);
+        messages = prefixed;
+    }
     let mut body = json!({
         "model": request.model.model,
         "system": system,

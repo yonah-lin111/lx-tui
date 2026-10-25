@@ -17,53 +17,69 @@ use serde_json::Value;
 
 use super::events::{ChatDelta, ChatRequest, PartDelta, PartKind};
 
-/// 单条 system 消息的字符上限（代理安全线）。
+/// 单条 system 消息的长度上限，单位是 **UTF-16 码元**（代理安全线）。
 ///
-/// 动机是一条实测：9router 的 CodeBuddy CN 执行器会把**任何超过 2000 字符**的
+/// 动机是一条实测：9router 的 CodeBuddy CN 执行器会把**任何超过 2000 长度单位**的
 /// system 消息整条替换成
 /// `You are a helpful AI assistant that helps with software engineering tasks.`
 /// （源码 `open-sse/executors/codebuddy-cn.js`：`text.length > 2000 || AGENT_PATTERN`）。
 /// 被替换后 lx 的身份、工具纪律与语言规则全部失效，模型开始自称「混元 / AI 助手」。
 ///
-/// 代理不会合并多条 system 消息，所以把提示按行切到该上限以内即可原样送达。
-/// 取 1900 留 100 字符余量：分段拼接点与可能的模板包装都不至于越线。
-pub const MAX_SYSTEM_MESSAGE_CHARS: usize = 1900;
+/// 单位必须是 UTF-16 码元，不是 Unicode 字符：代理跑在 JS 里，`text.length` 对
+/// 增补平面字符（emoji）计 2。实测 1000 个 emoji（1000 字符 / 2000 码元）会被保留，
+/// 1001 个（2002 码元）会被整条替换——按字符数切分会在 emoji 场景下静默失效。
+///
+/// 取 1900 留 100 单位余量。**多段 system 消息只有 OpenAI Chat 的 `messages` 形状
+/// 会被逐条判定**；Anthropic 的 `system` 多 block 与 Responses 的多 system 项都会被
+/// 代理拼回一条再判，因此统一形状见 [`system_messages`]。
+pub const MAX_SYSTEM_MESSAGE_UNITS: usize = 1900;
 
-/// 把系统提示按行切成若干段，每段**字符数**不超过 [`MAX_SYSTEM_MESSAGE_CHARS`]。
+/// 第 2 段起的系统规则包裹标签：内容必须以 `user` 角色前置发送。
+pub const SYSTEM_INSTRUCTIONS_TAG: &str = "system_instructions";
+
+/// 一段系统提示的文本长度（UTF-16 码元，与代理的 `String.length` 同口径）。
+fn utf16_len(text: &str) -> usize {
+    text.chars()
+        .map(|ch| if ch.len_utf16() == 2 { 2 } else { 1 })
+        .sum()
+}
+
+/// 把系统提示按行切成若干段，每段 UTF-16 码元数不超过 [`MAX_SYSTEM_MESSAGE_UNITS`]。
 ///
 /// 只在换行处切分，绝不把一个段落句子拦腰截断；单行本身超限时按字符边界硬切。
-/// 返回值至少含一段（空提示返回一个空串），调用方按顺序发送成多条 system 消息。
+/// 返回值至少含一段（空提示返回一个空串），顺序即发送顺序。
 pub fn split_system_prompt(prompt: &str) -> Vec<String> {
     if prompt.is_empty() {
         return vec![String::new()];
     }
     let mut chunks: Vec<String> = Vec::new();
     let mut current = String::new();
-    let mut current_chars = 0usize;
+    let mut current_units = 0usize;
     for line in prompt.split_inclusive('\n') {
-        let line_chars = line.chars().count();
-        if current_chars > 0 && current_chars + line_chars > MAX_SYSTEM_MESSAGE_CHARS {
+        let line_units = utf16_len(line);
+        if current_units > 0 && current_units + line_units > MAX_SYSTEM_MESSAGE_UNITS {
             chunks.push(std::mem::take(&mut current));
-            current_chars = 0;
+            current_units = 0;
         }
-        if line_chars > MAX_SYSTEM_MESSAGE_CHARS {
+        if line_units > MAX_SYSTEM_MESSAGE_UNITS {
             // 单行超限：按字符边界切开，不产生非法 UTF-8。
             let mut buffer = String::new();
-            let mut count = 0usize;
+            let mut units = 0usize;
             for ch in line.chars() {
-                if count == MAX_SYSTEM_MESSAGE_CHARS {
+                let cell = ch.len_utf16();
+                if units + cell > MAX_SYSTEM_MESSAGE_UNITS {
                     chunks.push(std::mem::take(&mut buffer));
-                    count = 0;
+                    units = 0;
                 }
                 buffer.push(ch);
-                count += 1;
+                units += cell;
             }
             current = buffer;
-            current_chars = count;
+            current_units = units;
             continue;
         }
         current.push_str(line);
-        current_chars += line_chars;
+        current_units += line_units;
     }
     if !current.is_empty() {
         chunks.push(current);
@@ -72,6 +88,27 @@ pub fn split_system_prompt(prompt: &str) -> Vec<String> {
         chunks.push(String::new());
     }
     chunks
+}
+
+/// 系统提示的统一线上形状：`(首段, 其余段)`。
+///
+/// **首段**进各 transport 的原生 system 槽（OpenAI `role=system` 消息、Anthropic 顶层
+/// `system`、Google `systemInstruction`、Responses `instructions`）；**其余段**必须由
+/// 调用方作为 `user` 消息前置到对话历史之前，并用 [`wrap_system_instructions`] 包裹。
+///
+/// 为什么不能都发 system：代理（9router CodeBuddy 执行器）只对 OpenAI Chat 的
+/// `messages` 数组逐条判定长度；Anthropic 的多个 `text` block 与 Responses 的多个
+/// system 项都会被拼回一整条再判，超过 2000 依然被整条替换（已实测）。改成 user
+/// 消息后三种 transport 都能原样送达，且实测 token 数完全一致。
+pub fn system_messages(prompt: &str) -> (String, Vec<String>) {
+    let mut chunks = split_system_prompt(prompt);
+    let head = chunks.remove(0);
+    (head, chunks)
+}
+
+/// 第 2 段起的系统规则包裹：明确标注这是规则而不是用户的自由输入。
+pub fn wrap_system_instructions(text: &str) -> String {
+    format!("<{SYSTEM_INSTRUCTIONS_TAG}>\n{text}\n</{SYSTEM_INSTRUCTIONS_TAG}>")
 }
 
 /// 一次 transport 请求的完整描述（URL、header、body）；由 client 执行。

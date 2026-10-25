@@ -82,15 +82,18 @@ pub fn build(
     })
 }
 
-/// 编码 `messages`：system 段（按代理安全线切成多条）+ 历史；`items` 非空走结构化历史。
+/// 编码 `messages`：首段 system + 其余段的前置 user 规则 + 历史；`items` 非空走结构化历史。
 ///
-/// 切分理由见 [`super::split_system_prompt`]：部分代理会把超长单条 system 整条丢弃/
-/// 替换，分段发送是唯一能让提示原样到达模型又不改提示正文的办法。
+/// 形状见 [`super::system_messages`]：只有首段走 system，其余段用 user 消息承载，
+/// 避免代理把「多条 system」拼回一条后按 2000 上限整条替换。
 fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
-    let mut messages: Vec<Value> = super::split_system_prompt(&request.resolve_system_prompt())
-        .into_iter()
-        .map(|chunk| json!({"role": "system", "content": chunk}))
-        .collect();
+    let (head, rest) = super::system_messages(&request.resolve_system_prompt());
+    let mut messages: Vec<Value> = vec![json!({"role": "system", "content": head})];
+    messages.extend(
+        rest.into_iter().map(
+            |chunk| json!({"role": "user", "content": super::wrap_system_instructions(&chunk)}),
+        ),
+    );
     if request.items.is_empty() {
         messages.extend(
             request

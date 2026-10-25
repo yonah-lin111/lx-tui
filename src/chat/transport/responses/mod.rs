@@ -60,17 +60,21 @@ pub fn build(
         join_url(base_url, "responses")
     };
     let input = input_of(request)?;
-    // 系统指令：`instructions` 只放第一段，其余作为 system input 项。
+    // 系统指令：`instructions` 只放首段，其余段改为前置 user 项。
     //
-    // 分段理由见 [`super::split_system_prompt`]：代理会整条替换超长 `instructions`。
-    // 实测 `instructions`（短）+ 多个 system input 项都能被上游保留。
-    let mut chunks = super::split_system_prompt(&request.resolve_system_prompt());
-    let instructions = chunks.remove(0);
+    // 形状见 [`super::system_messages`]：多个 system input 项会被代理拼回一条再按
+    // 2000 判长度，超限整条替换（实测）；改成 user 项后三种 transport 结果一致。
+    let (instructions, rest) = super::system_messages(&request.resolve_system_prompt());
     let mut input = input;
-    if !chunks.is_empty() {
-        let mut head: Vec<Value> = chunks
+    if !rest.is_empty() {
+        let mut head: Vec<Value> = rest
             .into_iter()
-            .map(|chunk| json!({"role": "system", "content": chunk}))
+            .map(|chunk| {
+                json!({
+                    "role": "user",
+                    "content": super::wrap_system_instructions(&chunk),
+                })
+            })
             .collect();
         head.extend(input);
         input = head;
