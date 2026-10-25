@@ -198,6 +198,19 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    // prompt 列表拖拽：必须在窗格转发之前 return，否则拖动会被当成终端选区/输入。
+    if state.prompt_drag.is_some() {
+        let hit = ui::prompt::tree::drop_hit_at(
+            layout::prompt_content_rect(view.prompt),
+            &state.prompt_owner().prompt_panel,
+            mouse.column,
+            mouse.row,
+        );
+        if update::drag_prompt_to(state, hit) {
+            *dirty = true;
+        }
+        return;
+    }
     // 没有本地选区时，鼠标上报模式的应用自己处理拖拽（对齐 herdr）。
     if state.terminal_selection.is_none()
         && state.selection.is_none()
@@ -288,7 +301,7 @@ pub(crate) fn handle_mouse_up_left(
     cache: &mut ui::RenderCache,
     dirty: &mut bool,
 ) {
-    let Geometry { rects, .. } = geometry;
+    let Geometry { rects, view, .. } = geometry;
     // 卡片正文的「按下可能是一次点击」标记只服务本次释放：任何提前返回的路径
     // （滚动条拖拽、浮层、其它窗格）都必须丢弃它，绝不能让它在下一次松开时误折叠。
     let card_press = state.lx_card_press.take();
@@ -297,6 +310,19 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     if state.referenced_menu_scroll_drag.take().is_some() {
+        *dirty = true;
+        return;
+    }
+    // prompt 列表拖拽：必须在任何更早的早退之前收尾，保证一次 Down 必被一次 Up 清理；
+    // 未跨行时这里走点击/双击语义（折叠与打开编辑器都发生在松开）。
+    if state.prompt_drag.is_some() {
+        let hit = ui::prompt::tree::drop_hit_at(
+            layout::prompt_content_rect(view.prompt),
+            &state.prompt_owner().prompt_panel,
+            mouse.column,
+            mouse.row,
+        );
+        update::finish_prompt_drag(state, hit);
         *dirty = true;
         return;
     }

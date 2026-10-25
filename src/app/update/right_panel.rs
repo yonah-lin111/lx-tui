@@ -14,6 +14,7 @@ pub fn select_right_tab(state: &mut AppState, tab: RightTab) -> bool {
     finish_page_rename(state); // 非空写回并产出 Effect::RenamePage；空名保留旧名
     state.right_tab = tab;
     state.right_tab_hover = None;
+    state.prompt_drag = None; // 拖拽现场不跨面板存活
     if tab != RightTab::Prompt {
         state.prompt_focused = false; // 键盘退回聚焦窗格
         clear_selection(state); // prompt 选区

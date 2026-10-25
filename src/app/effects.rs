@@ -57,6 +57,18 @@ pub enum Effect {
     },
     /// 删除文件夹（级联子文件夹与条目）。
     DeleteFolder { workspace: PathBuf, id: i64 },
+    /// 移动提示词到另一个容器；`folder_id` 为 None 时回根层。
+    MovePrompt {
+        workspace: PathBuf,
+        id: i64,
+        folder_id: Option<i64>,
+    },
+    /// 移动文件夹到另一个容器；`parent_id` 为 None 时回根层。
+    MoveFolder {
+        workspace: PathBuf,
+        id: i64,
+        parent_id: Option<i64>,
+    },
     /// 重命名提示词。
     RenamePrompt {
         workspace: PathBuf,

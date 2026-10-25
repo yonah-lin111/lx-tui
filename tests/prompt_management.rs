@@ -418,3 +418,69 @@ fn draft_prompt_saved_to_new_folder_end_to_end() {
     assert_eq!(panel.tree.folders().len(), 1);
     assert_eq!(panel.tree.items()[0].active_content(), "draft body");
 }
+
+/// 拖拽移动的持久性：泵送 `Effect::MovePrompt` 后落库，重开数据库仍在新容器。
+#[test]
+fn prompt_drag_move_persists_across_reload() {
+    let root = temp_root("drag-move");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let workspace = std::fs::canonicalize(&workspace).expect("canonical");
+    let db_path = root.join("db").join("lx.db");
+
+    let (folder_a, folder_b, prompt_id) = {
+        let database = Database::open(&db_path).expect("db opens");
+        database
+            .trust_workspace(&workspace, "workspace")
+            .expect("trusted");
+        let folder_a = database
+            .create_folder(&workspace, None, "a")
+            .expect("folder a");
+        let folder_b = database
+            .create_folder(&workspace, None, "b")
+            .expect("folder b");
+        let prompt_id = database
+            .create_prompt(&workspace, Some(folder_a), "move me", &[])
+            .expect("prompt ok");
+        (folder_a, folder_b, prompt_id)
+    };
+
+    let database = Database::open(&db_path).expect("reopen db");
+    let mut state = state_with_cwd(&workspace);
+    let mut service = Persistence::with_database(database);
+    service.pump(&mut state);
+    let panel = &state.active_workspace().prompt_panel;
+    assert_eq!(panel.tree.folders().len(), 2);
+    assert_eq!(
+        panel.tree.item(prompt_id).map(|item| item.folder_id),
+        Some(Some(folder_a))
+    );
+
+    state
+        .effects
+        .push(lx_tui::app::effects::Effect::MovePrompt {
+            workspace: workspace.clone(),
+            id: prompt_id,
+            folder_id: Some(folder_b),
+        });
+    service.pump(&mut state);
+    assert_eq!(
+        state
+            .active_workspace()
+            .prompt_panel
+            .tree
+            .item(prompt_id)
+            .map(|item| item.folder_id),
+        Some(Some(folder_b)),
+        "泵送后内存树跟随 DB 真值"
+    );
+
+    // 重启：新连接读到的是新容器。
+    drop(service);
+    drop(state);
+    let reader = Database::open(&db_path).expect("reopen after move");
+    let prompts = reader.list_prompts(&workspace).expect("list prompts");
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].folder_id, Some(folder_b));
+    assert_ne!(prompts[0].folder_id, Some(folder_a));
+}

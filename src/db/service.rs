@@ -598,6 +598,49 @@ impl Persistence {
                 self.with_db(|db| db.delete_folder(id));
                 self.reload_tree(state, &prompt_key_for(state, &workspace))
             }
+            Effect::MovePrompt {
+                workspace,
+                id,
+                folder_id,
+            } => {
+                let key = prompt_key_for(state, &workspace);
+                let moved = self.with_db(|db| db.move_prompt(id, folder_id)).is_some();
+                // 失败也要重载：以 DB 真值把界面拉回原位，不留下“看起来移动了”的假象。
+                let changed = self.reload_tree(state, &key);
+                if !moved {
+                    update::show_toast(
+                        state,
+                        Toast::new(
+                            ToastKind::Danger,
+                            text::TOAST_PROMPT_MOVE_FAILED,
+                            Some(state.prompt.id()),
+                            Instant::now(),
+                        ),
+                    );
+                }
+                changed || !moved
+            }
+            Effect::MoveFolder {
+                workspace,
+                id,
+                parent_id,
+            } => {
+                let key = prompt_key_for(state, &workspace);
+                let moved = self.with_db(|db| db.move_folder(id, parent_id)).is_some();
+                let changed = self.reload_tree(state, &key);
+                if !moved {
+                    update::show_toast(
+                        state,
+                        Toast::new(
+                            ToastKind::Danger,
+                            text::TOAST_PROMPT_MOVE_FAILED,
+                            Some(state.prompt.id()),
+                            Instant::now(),
+                        ),
+                    );
+                }
+                changed || !moved
+            }
             Effect::RenamePrompt {
                 workspace,
                 id,

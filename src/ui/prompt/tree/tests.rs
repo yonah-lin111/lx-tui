@@ -51,7 +51,7 @@ fn first_row_is_search_box_with_placeholder_and_cursor() {
     let mut panel = PromptPanel::new();
     let area = Rect::new(0, 0, 40, 4);
     let mut buf = Buffer::empty(area);
-    let cursor = render(area, &mut buf, &panel, false, None);
+    let cursor = render(area, &mut buf, &panel, false, None, None);
     let search_row = row_text(&buf, area, 0);
     assert!(
         search_row.starts_with(&format!(
@@ -69,7 +69,7 @@ fn first_row_is_search_box_with_placeholder_and_cursor() {
 
     search(&mut panel, "ide");
     let mut buf = Buffer::empty(area);
-    let cursor = render(area, &mut buf, &panel, false, None);
+    let cursor = render(area, &mut buf, &panel, false, None, None);
     let search_row = row_text(&buf, area, 0);
     assert!(
         search_row.starts_with(&format!("{} ide", text::INPUT_PREFIX_ICON)),
@@ -84,7 +84,7 @@ fn search_row_scrolls_viewport_for_long_query() {
     search(&mut panel, "0123456789");
     let area = Rect::new(0, 0, 8, 3);
     let mut buf = Buffer::empty(area);
-    let cursor = render(area, &mut buf, &panel, false, None);
+    let cursor = render(area, &mut buf, &panel, false, None, None);
     let search_row = row_text(&buf, area, 0);
     assert_eq!(
         search_row.trim_end(),
@@ -102,7 +102,7 @@ fn renders_folder_and_item_rows_with_tree_prefix() {
     );
     let area = Rect::new(0, 0, 40, 8);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
 
     // 行 0 搜索框、行 1 分割线，树行从行 2 开始。
     assert_eq!(row_text(&buf, area, 1), text::DIVIDER_MID.repeat(40));
@@ -119,7 +119,7 @@ fn renders_folder_and_item_rows_with_tree_prefix() {
 
     panel.tree.toggle_folder(1);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
     let first = row_text(&buf, area, 2);
     assert!(first.starts_with("❯ ▸ ideas"), "{first}");
     let second = row_text(&buf, area, 3);
@@ -131,7 +131,7 @@ fn folder_fold_icon_keeps_accent_under_hover() {
     let panel = panel_with(vec![folder(1, None, "ideas")], vec![]);
     let area = Rect::new(0, 0, 40, 6);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, Some(0));
+    render(area, &mut buf, &panel, false, Some(0), None);
     // 折叠三角是特殊图标：hover 时仍为 accent 色（前景/修饰符不变，只加 hover 背景）。
     let row = row_text(&buf, area, 2);
     let byte = row.find(text::PROMPT_TREE_EXPANDED).expect("fold icon");
@@ -158,7 +158,7 @@ fn nested_items_keep_vertical_line_when_subfolder_has_later_siblings() {
     );
     let area = Rect::new(0, 0, 40, 6);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
     // rows: solo、deep、nested、sibling；deep 之后仍有同层行（sibling）：续接列画 `│`。
     let deep = row_text(&buf, area, 3);
     assert!(deep.starts_with("  ├─ ▾ deep"), "{deep}");
@@ -176,7 +176,7 @@ fn nested_items_use_spaces_when_root_folder_is_last() {
     );
     let area = Rect::new(0, 0, 40, 6);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
     // solo 为唯一根层文件夹（末项）：续接列留空，嵌套条目以空格对齐。
     let deep = row_text(&buf, area, 3);
     assert!(deep.starts_with("  └─ ▾ deep"), "{deep}");
@@ -190,7 +190,7 @@ fn selected_row_gets_marker_without_background() {
     panel.selected = 0;
     let area = Rect::new(0, 0, 30, 4);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
     let row = row_text(&buf, area, 2);
     assert!(
         row.starts_with(&format!("{} • final", text::AGENT_SELECTED_MARKER)),
@@ -206,7 +206,7 @@ fn hovered_row_gets_selection_background() {
     panel.selected = usize::MAX;
     let area = Rect::new(0, 0, 30, 4);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, Some(0));
+    render(area, &mut buf, &panel, false, Some(0), None);
     assert_eq!(buf[(29, 2)].bg, Color::Indexed(240), "悬停行整行铺选中底色");
     assert_eq!(buf[(29, 2)].fg, Color::Indexed(255));
     let row = row_text(&buf, area, 2);
@@ -214,7 +214,7 @@ fn hovered_row_gets_selection_background() {
 
     // 无悬停时不铺底色。
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
     assert_eq!(buf[(29, 2)].bg, Color::Reset);
 }
 
@@ -226,7 +226,7 @@ fn long_names_are_ellipsized_within_width() {
     );
     let area = Rect::new(0, 0, 18, 4);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
     let text = row_text(&buf, area, 2);
     assert!(text.contains('…'), "{text}");
     assert_eq!(text.chars().count(), 18);
@@ -238,7 +238,7 @@ fn empty_tree_shows_placeholder_under_search_row() {
     let panel = panel_with(vec![], vec![]);
     let area = Rect::new(0, 0, 30, 5);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
     let text = row_text(&buf, area, 2);
     assert!(text.starts_with(text::PROMPT_TREE_EMPTY), "{text}");
 }
@@ -248,7 +248,7 @@ fn default_temp_renders_placeholder_name() {
     let panel = PromptPanel::new();
     let area = Rect::new(0, 0, 40, 5);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
     let tmp = row_text(&buf, area, 2);
     assert!(tmp.starts_with(text::PROMPT_SECTION_TMP), "{tmp}");
     let default = row_text(&buf, area, 3);
@@ -262,7 +262,7 @@ fn filter_without_matches_shows_hint_placeholder() {
     search(&mut panel, "zzz");
     let area = Rect::new(0, 0, 30, 5);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
     let text = row_text(&buf, area, 2);
     assert!(text.starts_with(text::PROMPT_TREE_NO_MATCHES), "{text}");
 }
@@ -278,7 +278,7 @@ fn filter_shows_ancestors_and_expands_collapsed_folders() {
     search(&mut panel, "nested");
     let area = Rect::new(0, 0, 40, 8);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
     let first = row_text(&buf, area, 2);
     assert!(first.starts_with("❯ ▾ ideas"), "{first}");
     // 过滤结果里 ideas 为唯一根层（末项）：子层续接列留空；折叠被忽略按展开绘制。
@@ -315,6 +315,75 @@ fn row_at_maps_viewport_and_respects_scroll_and_search_row() {
 }
 
 #[test]
+fn drop_hit_at_distinguishes_row_blank_and_outside() {
+    let mut panel = panel_with(
+        vec![],
+        vec![
+            item(10, None, "a"),
+            item(11, None, "b"),
+            item(12, None, "c"),
+        ],
+    );
+    let area = Rect::new(2, 1, 20, 6);
+    assert_eq!(
+        drop_hit_at(area, &panel, 1, 3),
+        PromptDropHit::Outside,
+        "区域外"
+    );
+    assert_eq!(
+        drop_hit_at(area, &panel, 22, 3),
+        PromptDropHit::Outside,
+        "右界外（列越界）"
+    );
+    assert_eq!(
+        drop_hit_at(area, &panel, 2, 1),
+        PromptDropHit::Outside,
+        "搜索框行"
+    );
+    assert_eq!(
+        drop_hit_at(area, &panel, 2, 2),
+        PromptDropHit::Outside,
+        "分割线行"
+    );
+    assert_eq!(drop_hit_at(area, &panel, 2, 3), PromptDropHit::Row(0));
+    assert_eq!(drop_hit_at(area, &panel, 2, 5), PromptDropHit::Row(2));
+    assert_eq!(
+        drop_hit_at(area, &panel, 2, 6),
+        PromptDropHit::Root,
+        "末行以下空白回根层"
+    );
+    panel.scroll = 1;
+    assert_eq!(drop_hit_at(area, &panel, 2, 3), PromptDropHit::Row(1));
+    assert_eq!(drop_hit_at(area, &panel, 2, 4), PromptDropHit::Row(2));
+    assert_eq!(
+        drop_hit_at(area, &panel, 2, 5),
+        PromptDropHit::Root,
+        "滚动后末行以下仍是根层"
+    );
+}
+
+#[test]
+fn dragged_row_gets_selection_background() {
+    let mut panel = panel_with(vec![], vec![item(10, None, "dragged")]);
+    panel.selected = usize::MAX;
+    let area = Rect::new(0, 0, 30, 4);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &panel, false, None, Some(0));
+    assert_eq!(
+        buf[(29, 2)].bg,
+        crate::ui::style::selection().bg.expect("selection bg"),
+        "被拖行整行铺选中底色"
+    );
+    let row = row_text(&buf, area, 2);
+    assert!(row.starts_with("  • dragged"), "{row}");
+
+    // 非被拖行不铺底色。
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &panel, false, None, None);
+    assert_eq!(buf[(29, 2)].bg, Color::Reset);
+}
+
+#[test]
 fn temp_rows_render_section_labels_and_summary() {
     let mut panel = panel_with(vec![], vec![item(10, None, "alpha")]);
     let temp_id = panel.new_temp();
@@ -326,7 +395,7 @@ fn temp_rows_render_section_labels_and_summary() {
         .content = "code review\nsecond line".into();
     let area = Rect::new(0, 0, 40, 6);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
 
     let tmp = row_text(&buf, area, 2);
     assert!(tmp.starts_with(text::PROMPT_SECTION_TMP), "{tmp}");
@@ -352,7 +421,7 @@ fn temp_section_hides_saved_label_when_tree_filtered_out() {
     search(&mut panel, "code");
     let area = Rect::new(0, 0, 40, 5);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
     let tmp = row_text(&buf, area, 2);
     assert!(tmp.starts_with(text::PROMPT_SECTION_TMP), "{tmp}");
     let temp = row_text(&buf, area, 3);
@@ -381,7 +450,7 @@ fn item_row_summarizes_template_counts_across_pages() {
     panel.tree.replace(vec![], vec![paged_item()]);
     let area = Rect::new(0, 0, 44, 6);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
     // 行序（绝对行 = 搜索行 0 + 分割线 1 + 列表行）：tmp:、default、saved:、item。
     let row = row_text(&buf, area, 5);
     // 跨页合计 `n|m|x`（todo/run/done），与页码菜单同格式。
@@ -413,7 +482,7 @@ fn item_row_omits_whole_count_group_when_narrow() {
     panel.tree.replace(vec![], vec![paged_item()]);
     let area = Rect::new(0, 0, 9, 6);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None);
+    render(area, &mut buf, &panel, false, None, None);
     let row = row_text(&buf, area, 5);
     // 计数组要么整体保留、要么整体省略，不画半个 `n|m|x`。
     assert!(!row.contains('|'), "计数组整体省略: {row}");

@@ -3498,8 +3498,8 @@ fn prompt_tree_click(
     (area.x + 1, area.y + 2 + index as u16)
 }
 
-/// 左键双击同一坐标：事件循环连续注入两次按下。
-fn prompt_tree_double_click(
+/// 左键单击同一坐标：一次按下紧接一次松开（点击语义在松开时生效）。
+fn prompt_tree_click_once(
     state: &mut AppState,
     geo: &Geometry,
     config: &Config,
@@ -3507,9 +3507,12 @@ fn prompt_tree_double_click(
 ) {
     let mut sessions = HashMap::new();
     let mut dirty = false;
-    for _ in 0..2 {
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
         handle_terminal_event(
-            mouse(MouseEventKind::Down(MouseButton::Left), point.0, point.1),
+            mouse(kind, point.0, point.1),
             state,
             &mut sessions,
             geo,
@@ -3518,6 +3521,173 @@ fn prompt_tree_double_click(
             &mut dirty,
         );
     }
+}
+
+/// 左键双击同一坐标：连续两次「按下 + 松开」。
+fn prompt_tree_double_click(
+    state: &mut AppState,
+    geo: &Geometry,
+    config: &Config,
+    point: (u16, u16),
+) {
+    for _ in 0..2 {
+        prompt_tree_click_once(state, geo, config, point);
+    }
+}
+
+/// 一次按下 → 跨行拖动 → 松开，返回松开后的 `dirty`。
+fn prompt_tree_drag(
+    state: &mut AppState,
+    geo: &Geometry,
+    config: &Config,
+    from: (u16, u16),
+    to: (u16, u16),
+) {
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    for (kind, point) in [
+        (MouseEventKind::Down(MouseButton::Left), from),
+        (MouseEventKind::Drag(MouseButton::Left), to),
+        (MouseEventKind::Up(MouseButton::Left), to),
+    ] {
+        handle_terminal_event(
+            mouse(kind, point.0, point.1),
+            state,
+            &mut sessions,
+            geo,
+            config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+}
+
+#[test]
+fn mouse_drag_prompt_item_into_folder_queues_move_effect() {
+    use crate::app::prompt::{PromptFolder, PromptItem};
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let folder_row = prompt_tree_click(
+        &mut state,
+        &geo,
+        vec![PromptFolder {
+            id: 1,
+            parent_id: None,
+            name: "folder".into(),
+            collapsed: false,
+        }],
+        vec![PromptItem::single(7, None, "item", "item body")],
+        PromptRowKind::Item,
+    );
+    let area = layout::prompt_text_rect(geo.view.prompt);
+    let folder_index = state.workspaces[0]
+        .prompt_panel
+        .rows()
+        .iter()
+        .position(|row| row.kind == PromptRowKind::Folder)
+        .expect("folder row");
+    let folder_point = (area.x + 1, area.y + 2 + folder_index as u16);
+    prompt_tree_drag(&mut state, &geo, &config, folder_row, folder_point);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::MovePrompt {
+                id: 7,
+                folder_id: Some(1),
+                ..
+            }
+        )),
+        "拖条目进文件夹登记移动效应: {:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn mouse_drag_prompt_row_does_not_open_editor() {
+    use crate::app::prompt::{PromptFolder, PromptItem};
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let item_point = prompt_tree_click(
+        &mut state,
+        &geo,
+        vec![PromptFolder {
+            id: 1,
+            parent_id: None,
+            name: "folder".into(),
+            collapsed: false,
+        }],
+        vec![
+            PromptItem::single(7, None, "item", "item body"),
+            PromptItem::single(8, None, "other", "other body"),
+        ],
+        PromptRowKind::Item,
+    );
+    let area = layout::prompt_text_rect(geo.view.prompt);
+    let rows = state.workspaces[0].prompt_panel.rows().len();
+    let blank = (area.x + 1, area.y + 2 + rows as u16);
+    prompt_tree_drag(&mut state, &geo, &config, item_point, blank);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.mode,
+        PromptMode::Tree,
+        "拖动结束不打开编辑器"
+    );
+}
+
+/// 拖动中指针移出窗口会丢掉 Up：下一次无关按下必须先清场，否则它的 Up 会按旧行号
+/// 消费残留现场（例如点工具栏却折叠了树里的文件夹）。
+#[test]
+fn mouse_down_discards_stale_prompt_drag() {
+    use crate::app::prompt::{PromptFolder, PromptItem};
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let folder_point = prompt_tree_click(
+        &mut state,
+        &geo,
+        vec![PromptFolder {
+            id: 1,
+            parent_id: None,
+            name: "folder".into(),
+            collapsed: false,
+        }],
+        vec![PromptItem::single(7, Some(1), "item", "item body")],
+        PromptRowKind::Folder,
+    );
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    // 只按下：现场登记、文件夹尚未折叠。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            folder_point.0,
+            folder_point.1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.prompt_drag.is_some(), "按下登记现场");
+    // 模拟 Up 丢失后的一次全新按下（别处）：旧现场必须被丢弃。
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), 1, 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.prompt_drag.is_none(), "新按下丢弃残留现场");
+    assert!(
+        !state.workspaces[0]
+            .prompt_panel
+            .tree
+            .folder(1)
+            .is_some_and(|folder| folder.collapsed),
+        "残留现场不得在无关松开时折叠文件夹"
+    );
 }
 
 #[test]

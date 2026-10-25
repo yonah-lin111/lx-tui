@@ -5,8 +5,12 @@ use crate::app::actions::{Action, EditorCommand};
 use crate::app::overlay::{
     ConfirmClose, MenuCommand, NewNodeKind, Overlay, OverlayTarget, PageMenuRow, SaveDraftEntry,
 };
-use crate::app::prompt::{PromptPage, PromptPageId, PromptRowKind, PromptSection};
+use crate::app::prompt::{
+    PromptDropHit, PromptFolder, PromptItem, PromptPage, PromptPageId, PromptRowKind, PromptSection,
+};
 use crate::app::state::AppState;
+use crate::app::state::PromptDragSource;
+use crate::app::toast::ToastKind;
 use crate::app::update::{
     apply, apply_editor, apply_overlay_key, create_workspace, create_workspace_with_cwd,
     switch_workspace, tick, toggle_prompt_pin,
@@ -1935,4 +1939,363 @@ fn tree_load_repairs_invalid_active_page_to_first() {
         "登记当前页修复: {:?}",
         state.effects
     );
+}
+
+// ===== 列表拖拽：起点、阈值、落点解析与移动效应 =====
+
+/// 用给定文件夹/条目重建树并进入树视图；返回已清理效应的状态。
+fn drag_state(
+    folders: Vec<(i64, Option<i64>, &str)>,
+    items: Vec<(i64, Option<i64>, &str)>,
+) -> AppState {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    let folders = folders
+        .into_iter()
+        .map(|(id, parent_id, name)| PromptFolder {
+            id,
+            parent_id,
+            name: name.into(),
+            collapsed: false,
+        })
+        .collect();
+    let items = items
+        .into_iter()
+        .map(|(id, folder_id, name)| PromptItem::single(id, folder_id, name, "body"))
+        .collect();
+    state.workspaces[0]
+        .prompt_panel
+        .tree
+        .replace(folders, items);
+    state.effects.clear();
+    state
+}
+
+/// 指定 id 文件夹的可见行。
+fn folder_row(state: &AppState, id: i64) -> usize {
+    let panel = &state.workspaces[0].prompt_panel;
+    panel
+        .rows()
+        .iter()
+        .position(|row| {
+            panel
+                .tree
+                .folder_of_row(*row)
+                .is_some_and(|folder| folder.id == id)
+        })
+        .expect("folder row visible")
+}
+
+/// 指定 id 条目的可见行。
+fn item_row(state: &AppState, id: i64) -> usize {
+    let panel = &state.workspaces[0].prompt_panel;
+    panel
+        .rows()
+        .iter()
+        .position(|row| {
+            panel
+                .tree
+                .item_of_row(*row)
+                .is_some_and(|item| item.id == id)
+        })
+        .expect("item row visible")
+}
+
+/// 首个临时提示词行。
+fn temp_row(state: &AppState) -> usize {
+    state.workspaces[0]
+        .prompt_panel
+        .rows()
+        .iter()
+        .position(|row| row.kind == PromptRowKind::Temp)
+        .expect("temp row visible")
+}
+
+fn begin_and_drag_to(state: &mut AppState, from: usize, to: usize) {
+    assert!(begin_prompt_drag(state, from) || state.prompt_drag.is_some());
+    assert!(drag_prompt_to(state, PromptDropHit::Row(to)));
+}
+
+#[test]
+fn down_does_not_toggle_folder_until_up() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    let row = folder_row(&state, 1);
+    begin_prompt_drag(&mut state, row);
+    assert!(
+        !state.workspaces[0]
+            .prompt_panel
+            .tree
+            .folder(1)
+            .is_some_and(|folder| folder.collapsed),
+        "按下不得折叠文件夹"
+    );
+    finish_prompt_drag(&mut state, PromptDropHit::Root);
+    assert!(
+        state.workspaces[0]
+            .prompt_panel
+            .tree
+            .folder(1)
+            .is_some_and(|folder| folder.collapsed),
+        "松开按点击语义折叠一次"
+    );
+}
+
+#[test]
+fn drag_arms_only_after_row_change() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    let from = item_row(&state, 10);
+    begin_prompt_drag(&mut state, from);
+    // 未离开起点行（含横向抖动）不置臂：行级阈值只认跨行。
+    assert!(!drag_prompt_to(&mut state, PromptDropHit::Row(from)));
+    assert!(!state.prompt_drag.expect("drag registered").dragging);
+    let other = item_row(&state, 12);
+    assert!(drag_prompt_to(&mut state, PromptDropHit::Row(other)));
+    assert!(state.prompt_drag.expect("drag registered").dragging);
+    assert!(
+        !drag_prompt_to(&mut state, PromptDropHit::Root),
+        "已拖动后不再重复置脏"
+    );
+}
+
+#[test]
+fn drag_to_blank_arms_from_last_row() {
+    // 只有一个根层文件夹及其唯一条目、无根层条目：条目就是最后一个可见行，
+    // 拖到末行以下空白没有中间行可跨——这一路径必须仍能置臂。
+    let mut state = drag_state(vec![(1, None, "root")], vec![(10, Some(1), "inside")]);
+    let from = item_row(&state, 10);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.rows().len() - 1,
+        from,
+        "前提：条目是最后一个可见行"
+    );
+    begin_prompt_drag(&mut state, from);
+    assert!(drag_prompt_to(&mut state, PromptDropHit::Root));
+    assert!(state.prompt_drag.expect("drag registered").dragging);
+    assert!(finish_prompt_drag(&mut state, PromptDropHit::Root));
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::MovePrompt {
+                id: 10,
+                folder_id: None,
+                ..
+            }
+        )),
+        "末行拖到空白回根层: {:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn drop_on_item_uses_container_folder() {
+    let mut state = drag_state(
+        vec![(1, None, "root"), (2, Some(1), "sub")],
+        vec![(10, None, "loose"), (12, Some(2), "nested")],
+    );
+    let from = item_row(&state, 10);
+    let target = item_row(&state, 12);
+    begin_and_drag_to(&mut state, from, target);
+    assert!(finish_prompt_drag(&mut state, PromptDropHit::Row(target)));
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::MovePrompt {
+                id: 10,
+                folder_id: Some(2),
+                ..
+            }
+        )),
+        "落点条目所在容器: {:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn drop_on_blank_moves_to_root() {
+    let mut state = drag_state(vec![(1, None, "root")], vec![(10, Some(1), "inside")]);
+    let from = item_row(&state, 10);
+    begin_prompt_drag(&mut state, from);
+    assert!(drag_prompt_to(&mut state, PromptDropHit::Root));
+    assert!(finish_prompt_drag(&mut state, PromptDropHit::Root));
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::MovePrompt {
+                id: 10,
+                folder_id: None,
+                ..
+            }
+        )),
+        "空白落点回根层: {:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn move_folder_into_root_folder_is_allowed() {
+    let mut state = drag_state(vec![(1, None, "one"), (2, None, "two")], vec![]);
+    let from = folder_row(&state, 2);
+    let target = folder_row(&state, 1);
+    begin_and_drag_to(&mut state, from, target);
+    assert!(finish_prompt_drag(&mut state, PromptDropHit::Row(target)));
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::MoveFolder {
+                id: 2,
+                parent_id: Some(1),
+                ..
+            }
+        )),
+        "根层文件夹可进根层文件夹: {:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn move_folder_into_subfolder_is_rejected_depth() {
+    let mut state = drag_state(
+        vec![(1, None, "root"), (2, Some(1), "sub"), (3, None, "other")],
+        vec![],
+    );
+    let from = folder_row(&state, 3);
+    let target = folder_row(&state, 2);
+    begin_and_drag_to(&mut state, from, target);
+    assert!(finish_prompt_drag(&mut state, PromptDropHit::Row(target)));
+    assert!(state.effects.is_empty(), "非法落点不发效应");
+    assert_eq!(
+        state.toast.as_ref().map(|toast| toast.message.as_str()),
+        Some(text::TOAST_PROMPT_MOVE_DEPTH)
+    );
+}
+
+#[test]
+fn move_folder_with_children_is_rejected_nested() {
+    let mut state = drag_state(
+        vec![
+            (1, None, "parent"),
+            (2, Some(1), "child"),
+            (3, None, "other"),
+        ],
+        vec![],
+    );
+    let from = folder_row(&state, 1);
+    let target = folder_row(&state, 3);
+    begin_and_drag_to(&mut state, from, target);
+    assert!(finish_prompt_drag(&mut state, PromptDropHit::Row(target)));
+    assert!(state.effects.is_empty(), "含子文件夹不得整体移动");
+    assert_eq!(
+        state.toast.as_ref().map(|toast| toast.message.as_str()),
+        Some(text::TOAST_PROMPT_MOVE_NESTED)
+    );
+}
+
+#[test]
+fn move_onto_self_and_same_container_is_noop() {
+    let mut state = drag_state(
+        vec![(1, None, "root"), (2, Some(1), "sub")],
+        vec![(10, Some(2), "nested")],
+    );
+    // 拖到自己。
+    let row = folder_row(&state, 1);
+    let sub_row = folder_row(&state, 2);
+    begin_and_drag_to(&mut state, row, sub_row);
+    assert!(!finish_prompt_drag(&mut state, PromptDropHit::Row(row)));
+    // 拖到自己当前容器。
+    let sub = folder_row(&state, 2);
+    begin_and_drag_to(&mut state, sub, row);
+    assert!(!finish_prompt_drag(&mut state, PromptDropHit::Row(row)));
+    // 条目落到自己所在文件夹。
+    let item = item_row(&state, 10);
+    begin_and_drag_to(&mut state, item, sub);
+    assert!(!finish_prompt_drag(&mut state, PromptDropHit::Row(item)));
+    assert!(
+        state.effects.is_empty(),
+        "no-op 不发效应: {:?}",
+        state.effects
+    );
+    assert!(state.toast.is_none(), "no-op 不弹 toast");
+}
+
+#[test]
+fn finish_after_drag_does_not_toggle_nor_open_editor() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    let editing = state.workspaces[0].prompt_panel.editing;
+    let row = folder_row(&state, 1);
+    let target = item_row(&state, 10);
+    begin_and_drag_to(&mut state, row, target);
+    assert!(!finish_prompt_drag(&mut state, PromptDropHit::Row(row)));
+    assert!(
+        !state.workspaces[0]
+            .prompt_panel
+            .tree
+            .folder(1)
+            .is_some_and(|folder| folder.collapsed),
+        "拖动结束不折叠"
+    );
+    assert_eq!(
+        state.workspaces[0].prompt_panel.mode,
+        PromptMode::Tree,
+        "拖动结束不打开编辑器"
+    );
+    assert_eq!(state.workspaces[0].prompt_panel.editing, editing);
+}
+
+#[test]
+fn drag_disabled_when_search_active() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    for ch in "loose".chars() {
+        state.workspaces[0].prompt_panel.search.insert_char(ch);
+    }
+    let row = item_row(&state, 10);
+    begin_prompt_drag(&mut state, row);
+    let drag = state.prompt_drag.expect("drag registered");
+    assert!(!drag.enabled, "搜索过滤态禁用拖动");
+    assert_eq!(drag.source, Some(PromptDragSource::Item(10)));
+    assert!(!drag_prompt_to(&mut state, PromptDropHit::Root));
+    assert!(!state.prompt_drag.expect("drag registered").dragging);
+    finish_prompt_drag(&mut state, PromptDropHit::Root);
+    assert!(state.effects.is_empty(), "过滤态点击不产生移动");
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Tree);
+}
+
+#[test]
+fn temp_row_never_produces_effect() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    let row = temp_row(&state);
+    begin_prompt_drag(&mut state, row);
+    let drag = state.prompt_drag.expect("drag registered");
+    assert!(drag.source.is_none(), "Temp 没有持久身份");
+    assert!(!drag.enabled);
+    assert!(!drag_prompt_to(&mut state, PromptDropHit::Root));
+    // 即便被外部置成拖动形态，也不得发效应。
+    if let Some(drag) = state.prompt_drag.as_mut() {
+        drag.dragging = true;
+    }
+    assert!(!finish_prompt_drag(&mut state, PromptDropHit::Root));
+    assert!(
+        state.effects.is_empty(),
+        "Temp 永不产生移动: {:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn reject_toast_uses_prompt_anchor() {
+    let mut state = drag_state(
+        vec![(1, None, "root"), (2, Some(1), "sub"), (3, None, "other")],
+        vec![],
+    );
+    let from = folder_row(&state, 3);
+    let target = folder_row(&state, 2);
+    begin_and_drag_to(&mut state, from, target);
+    assert!(finish_prompt_drag(&mut state, PromptDropHit::Row(target)));
+    let toast = state.toast.as_ref().expect("reject toast");
+    assert_eq!(toast.anchor, Some(state.prompt.id()));
+    assert_eq!(toast.kind, ToastKind::Danger);
 }

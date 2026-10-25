@@ -307,6 +307,7 @@ pub fn switch_workspace(state: &mut AppState, index: usize) {
     }
     clear_selection(state);
     state.prompt_focused = false;
+    state.prompt_drag = None; // 拖拽现场不跨工作区存活
     // Agents 列表随工作区切换：滚动与悬停复位，避免旧槽位错位。
     state.agent_scroll = 0;
     state.agent_hover = None;

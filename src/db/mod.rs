@@ -48,6 +48,8 @@ pub enum DbError {
     PageMissing,
     /// 文件夹嵌套超过 2 层约束。
     DepthExceeded,
+    /// 目标文件夹仍含子文件夹，不能整体移入另一个文件夹。
+    FolderHasChildren,
     /// 迁移重建后外键校验发现悬空引用。
     ForeignKeyViolation,
     /// 数据库版本高于当前程序支持值（不能用旧代码覆盖新结构）。
@@ -106,6 +108,7 @@ impl fmt::Display for DbError {
             Self::FolderMissing => write!(formatter, "folder not found"),
             Self::PageMissing => write!(formatter, "prompt page not found"),
             Self::DepthExceeded => write!(formatter, "folder nesting depth exceeded"),
+            Self::FolderHasChildren => write!(formatter, "folder still contains subfolders"),
             Self::ForeignKeyViolation => write!(formatter, "foreign key violation after rebuild"),
             Self::UnsupportedSchema(version) => {
                 write!(
@@ -153,6 +156,7 @@ impl DbError {
             Self::FolderMissing => "folder missing",
             Self::PageMissing => "page missing",
             Self::DepthExceeded => "depth exceeded",
+            Self::FolderHasChildren => "folder has children",
             Self::ForeignKeyViolation => "foreign key violation",
             Self::UnsupportedSchema(_) => "unsupported schema",
             Self::SessionMissing => "session missing",
@@ -508,6 +512,95 @@ impl Database {
     pub fn delete_folder(&self, id: i64) -> Result<()> {
         self.conn
             .execute("DELETE FROM workspace_folder WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// 移动提示词到指定文件夹（None 回根层）；文件夹须属同一工作区。
+    ///
+    /// 只改容器，不改顺序（无 `sort_order` 列，顺序仍由 `id` 决定）。
+    pub fn move_prompt(&self, id: i64, folder_id: Option<i64>) -> Result<()> {
+        let folder_external: Option<String> = match folder_id {
+            Some(folder) => {
+                let workspace_external: Option<String> = self
+                    .conn
+                    .query_row(
+                        "SELECT workspace_id FROM workspace_prompt WHERE id = ?1",
+                        params![id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let workspace_external = workspace_external.ok_or(DbError::FolderMissing)?;
+                let external: Option<String> = self
+                    .conn
+                    .query_row(
+                        "SELECT external_id FROM workspace_folder WHERE id = ?1 AND workspace_id = ?2",
+                        params![folder, workspace_external],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                Some(external.ok_or(DbError::FolderMissing)?)
+            }
+            None => None,
+        };
+        self.conn.execute(
+            "UPDATE workspace_prompt SET folder_id = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![folder_external, id],
+        )?;
+        Ok(())
+    }
+
+    /// 移动文件夹（None 回根层）。层数约束：目标必须是根层文件夹，
+    /// 被拖文件夹必须是根层且无子文件夹（对齐 `create_folder` 的 2 层上限）。
+    ///
+    /// 只改容器，不改顺序（无 `sort_order` 列，顺序仍由 `id` 决定）。
+    pub fn move_folder(&self, id: i64, parent_id: Option<i64>) -> Result<()> {
+        let dragged: Option<(String, String, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT external_id, workspace_id, parent_folder_id FROM workspace_folder WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((dragged_external, workspace_external, dragged_parent)) = dragged else {
+            return Err(DbError::FolderMissing);
+        };
+        let parent_external: Option<String> = match parent_id {
+            Some(parent) => {
+                if parent == id {
+                    return Err(DbError::DepthExceeded);
+                }
+                // 带子文件夹时移入另一文件夹会形成第 3 层：整体拒绝（回根层不受影响）。
+                let children: i64 = self.conn.query_row(
+                    "SELECT COUNT(*) FROM workspace_folder WHERE parent_folder_id = ?1",
+                    params![dragged_external],
+                    |row| row.get(0),
+                )?;
+                if children > 0 {
+                    return Err(DbError::FolderHasChildren);
+                }
+                let target: Option<(String, Option<String>)> = self
+                    .conn
+                    .query_row(
+                        "SELECT external_id, parent_folder_id FROM workspace_folder WHERE id = ?1 AND workspace_id = ?2",
+                        params![parent, workspace_external],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+                let Some((target_external, target_parent)) = target else {
+                    return Err(DbError::FolderMissing);
+                };
+                if target_parent.is_some() || dragged_parent.is_some() {
+                    return Err(DbError::DepthExceeded);
+                }
+                Some(target_external)
+            }
+            None => None,
+        };
+        self.conn.execute(
+            "UPDATE workspace_folder SET parent_folder_id = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![parent_external, id],
+        )?;
         Ok(())
     }
 

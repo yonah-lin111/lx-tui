@@ -229,6 +229,137 @@ fn prompt_in_missing_folder_is_rejected() {
 }
 
 #[test]
+fn move_prompt_updates_folder_and_persists() {
+    let (database, _) = open_test_database("move-prompt");
+    let workspace = workspace_path("move-prompt");
+    let first = database
+        .create_folder(&workspace, None, "first")
+        .expect("first folder");
+    let second = database
+        .create_folder(&workspace, None, "second")
+        .expect("second folder");
+    let item = database
+        .create_prompt(&workspace, None, "loose", &[])
+        .expect("prompt ok");
+
+    database
+        .move_prompt(item, Some(first))
+        .expect("move into folder");
+    let prompts = database.list_prompts(&workspace).expect("list ok");
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].folder_id, Some(first));
+
+    database
+        .move_prompt(item, Some(second))
+        .expect("move between folders");
+    let prompts = database.list_prompts(&workspace).expect("list ok");
+    assert_eq!(prompts[0].folder_id, Some(second));
+
+    database.move_prompt(item, None).expect("move to root");
+    let prompts = database.list_prompts(&workspace).expect("list ok");
+    assert_eq!(prompts[0].folder_id, None);
+}
+
+#[test]
+fn move_prompt_rejects_foreign_or_missing_folder() {
+    let (database, _) = open_test_database("move-prompt-foreign");
+    let left = workspace_path("move-left");
+    let right = workspace_path("move-right");
+    let foreign = database
+        .create_folder(&right, None, "foreign")
+        .expect("right folder");
+    let item = database
+        .create_prompt(&left, None, "item", &[])
+        .expect("left prompt");
+
+    let error = database
+        .move_prompt(item, Some(foreign))
+        .expect_err("foreign folder rejected");
+    assert!(matches!(error, DbError::FolderMissing));
+    let error = database
+        .move_prompt(item, Some(999_999))
+        .expect_err("missing folder rejected");
+    assert!(matches!(error, DbError::FolderMissing));
+
+    let prompts = database.list_prompts(&left).expect("list ok");
+    assert_eq!(
+        prompts[0].folder_id, None,
+        "rejected move leaves row intact"
+    );
+}
+
+#[test]
+fn move_folder_rejects_depth_children_and_self() {
+    let (database, _) = open_test_database("move-folder");
+    let workspace = workspace_path("move-folder");
+    let folder_a = database
+        .create_folder(&workspace, None, "a")
+        .expect("folder a");
+    let sub = database
+        .create_folder(&workspace, Some(folder_a), "a-sub")
+        .expect("sub folder");
+    let folder_b = database
+        .create_folder(&workspace, None, "b")
+        .expect("folder b");
+
+    let error = database
+        .move_folder(folder_b, Some(sub))
+        .expect_err("cannot move into subfolder");
+    assert!(matches!(error, DbError::DepthExceeded));
+
+    database
+        .create_folder(&workspace, Some(folder_a), "x")
+        .expect("child folder");
+    let error = database
+        .move_folder(folder_a, Some(folder_b))
+        .expect_err("folder with children rejected");
+    assert!(matches!(error, DbError::FolderHasChildren));
+
+    let error = database
+        .move_folder(folder_a, Some(folder_a))
+        .expect_err("cannot move into itself");
+    assert!(matches!(error, DbError::DepthExceeded));
+
+    let error = database
+        .move_folder(sub, Some(folder_b))
+        .expect_err("nested folder cannot move into folder");
+    assert!(matches!(error, DbError::DepthExceeded));
+
+    // 全部被拒：folder a 仍挂在根层，folder b 也没有接收任何文件夹。
+    let folders = database.list_folders(&workspace).expect("list ok");
+    let parents: Vec<Option<i64>> = folders.iter().map(|folder| folder.parent_id).collect();
+    assert_eq!(parents, vec![None, Some(folder_a), None, Some(folder_a)]);
+}
+
+#[test]
+fn move_folder_to_root_clears_parent() {
+    let (database, _) = open_test_database("move-folder-root");
+    let workspace = workspace_path("move-folder-root");
+    let root = database
+        .create_folder(&workspace, None, "root")
+        .expect("root folder");
+    let sub = database
+        .create_folder(&workspace, Some(root), "sub")
+        .expect("sub folder");
+
+    database.move_folder(sub, None).expect("move to root");
+    let folders = database.list_folders(&workspace).expect("list ok");
+    let moved = folders
+        .iter()
+        .find(|folder| folder.id == sub)
+        .expect("sub folder listed");
+    assert_eq!(moved.parent_id, None);
+    assert_eq!(
+        folders
+            .iter()
+            .find(|folder| folder.id == root)
+            .map(|folder| folder.parent_id),
+        Some(None),
+        "root folder untouched"
+    );
+}
+
+#[test]
 fn referenced_folders_are_scoped_persisted_and_deduplicated() {
     let (database, path) = open_test_database("referenced-folders");
     let left = workspace_path("referenced-left");

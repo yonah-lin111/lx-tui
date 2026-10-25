@@ -4,18 +4,22 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::prompt::{PromptPanel, PromptRow, PromptRowKind, PromptSection};
+use crate::app::prompt::{PromptDropHit, PromptPanel, PromptRow, PromptRowKind, PromptSection};
 use crate::ui::widgets;
 use crate::ui::{style, text};
 
 /// 渲染树内容区：顶部搜索框行 + 分割线 + 过滤后的树行；返回搜索框硬件光标位置；
 /// 空树/无命中显示占位；选中行以行首 `❯` 标记（同 Agents 条目），悬停行铺选中底色。
+///
+/// `drag` 为正在拖动的可见行索引（仅在指针已跨行时给出）：该行与悬停同款整行底色，
+/// 保证拖动期间被拖对象始终可辨。
 pub fn render(
     area: Rect,
     buf: &mut Buffer,
     panel: &PromptPanel,
     focused: bool,
     hover: Option<usize>,
+    drag: Option<usize>,
 ) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
         return None;
@@ -42,7 +46,9 @@ pub fn render(
         .take(usize::from(rows_area.height))
     {
         let selected = index == panel.selected;
-        let hovered = hover == Some(index) && !matches!(row.kind, PromptRowKind::Section(_));
+        let section = matches!(row.kind, PromptRowKind::Section(_));
+        let hovered = hover == Some(index) && !section;
+        let dragging = drag == Some(index) && !section;
         let prefix = tree_prefix(&rows, index);
         // 过滤时折叠被忽略：过滤视图下所有可见文件夹按展开态绘制三角。
         let searching = !panel.search.text().trim().is_empty();
@@ -60,6 +66,7 @@ pub fn render(
             *row,
             selected,
             hovered,
+            dragging,
             &prefix,
             expanded,
         );
@@ -180,9 +187,26 @@ pub fn row_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Option<
     (index < panel.rows().len()).then_some(index)
 }
 
+/// 拖拽落点：区域外或搜索框/分割线行 → `Outside`；末行以下空白 → `Root`；其余按可见行换算。
+pub fn drop_hit_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> PromptDropHit {
+    if !area.contains((column, row).into()) {
+        return PromptDropHit::Outside;
+    }
+    let rows_y = area.y.saturating_add(2);
+    if row < rows_y {
+        return PromptDropHit::Outside;
+    }
+    let index = panel.scroll + usize::from(row - rows_y);
+    if index < panel.rows().len() {
+        PromptDropHit::Row(index)
+    } else {
+        PromptDropHit::Root
+    }
+}
+
 /// 绘制单行：行首标记列（`❯ ` 或空）+ 前缀（续接线 + 连接符）+ 图标 + 名称
 /// +（条目）右对齐的彩色计数组；分区标签行只画 muted 标签；
-/// 悬停行整行铺选中底色（与工作区列表一致），文字统一切换为高亮前景。
+/// 悬停行与被拖行整行铺选中底色（与工作区列表一致），文字统一切换为高亮前景。
 #[allow(clippy::too_many_arguments)]
 fn paint_row(
     buf: &mut Buffer,
@@ -192,15 +216,17 @@ fn paint_row(
     row: PromptRow,
     selected: bool,
     hovered: bool,
+    dragging: bool,
     prefix: &str,
     expanded: bool,
 ) {
-    let highlight = if hovered {
+    let highlighted = hovered || dragging;
+    let highlight = if highlighted {
         style::selection()
     } else {
         ratatui::style::Style::default()
     };
-    if hovered {
+    if highlighted {
         fill_row(buf, area, y);
     }
     let base = style::text().patch(highlight);

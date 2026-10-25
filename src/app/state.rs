@@ -80,6 +80,30 @@ pub enum RightTab {
     Todo,
 }
 
+/// prompt 列表拖拽起点：被拖对象的**持久身份**。
+///
+/// `Temp` 草稿只存内存、没有 DB id，因此不进入本枚举——它可点击但不可拖。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptDragSource {
+    Folder(i64),
+    Item(i64),
+}
+
+/// 一次 prompt 列表拖拽的现场；只在 Down→Up 之间存活。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PromptDrag {
+    /// 按下时显示中 prompt 所属工作区；Up 时与之不符即整体丢弃。
+    pub workspace: usize,
+    /// 被拖对象；None 表示该行可点击但不可拖（`Temp` 行）。
+    pub source: Option<PromptDragSource>,
+    /// 按下时的可见行索引（也是未拖动时点击的目标行）。
+    pub from_row: usize,
+    /// 指针是否已跨行（行级阈值；只横向抖动不算拖动）。
+    pub dragging: bool,
+    /// 本次是否允许拖动（`Temp` 行、搜索过滤态为 false）。
+    pub enabled: bool,
+}
+
 /// 顶层层级：工作区包含标签与挂起的 prompt 草稿，标签包含 BSP 窗格树与窗格终端；
 /// prompt 面板为全局右栏，显示激活（或钉住）工作区的草稿。
 #[derive(Debug)]
@@ -143,6 +167,8 @@ pub struct AppState {
     pub tab_hover: Option<usize>,
     /// 鼠标悬停的提示词列表行索引（树视图可见行）；None 表示未悬停。
     pub prompt_tree_hover: Option<usize>,
+    /// 正在拖动的提示词列表行；None 表示未拖拽。仅一次 Down→Up 内有效。
+    pub prompt_drag: Option<PromptDrag>,
     /// 鼠标是否停留在当前右键菜单/页码菜单容器内；离开容器清除选中高亮反馈。
     pub menu_hover: bool,
     /// 工作区列表滚动偏移（顶部项索引）。
@@ -254,6 +280,7 @@ impl AppState {
             tab_scroll: 0,
             tab_hover: None,
             prompt_tree_hover: None,
+            prompt_drag: None,
             menu_hover: false,
             workspace_scroll: 0,
             workspace_hover: None,

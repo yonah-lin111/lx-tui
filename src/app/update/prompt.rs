@@ -4,10 +4,12 @@
 //! 分页行为见 `prompt::pages`，草稿保存与新建节点浮层见 `prompt::draft`。
 
 mod draft;
+mod drag;
 mod pages;
 mod tree_view;
 
 pub use draft::*;
+pub use drag::*;
 pub use pages::*;
 pub use tree_view::*;
 
@@ -235,6 +237,7 @@ fn select_tree_entry_row(state: &mut AppState, index: usize) {
 /// 工具栏模式按钮：树视图返回编辑（用户未显式改过选中时恢复进入列表前的编辑绑定），
 /// 编辑视图切回树。
 pub fn toggle_prompt_panel_mode(state: &mut AppState) {
+    state.prompt_drag = None;
     if prompt_tree_mode(state) {
         restore_or_edit_selected(state);
     } else {

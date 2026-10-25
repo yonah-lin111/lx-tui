@@ -274,6 +274,19 @@ pub struct PromptRow {
     pub depth: usize,
 }
 
+/// 拖拽落点的几何结果：树内某可见行 / 树内容区末行以下的空白 / 树外。
+///
+/// 只描述"指针落在哪"，不解释业务语义；容器解析在 `app::update::prompt::drag`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptDropHit {
+    /// 树内可见行索引（`PromptPanel::rows` 的下标）。
+    Row(usize),
+    /// 树内容区空白：回根层。
+    Root,
+    /// 树外或搜索框/分割线行：取消。
+    Outside,
+}
+
 /// 提示词树：文件夹与条目的扁平存储。
 #[derive(Debug, Default, Clone)]
 pub struct PromptTree {

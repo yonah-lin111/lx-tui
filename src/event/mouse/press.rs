@@ -47,6 +47,9 @@ pub(crate) fn handle_mouse_down_left(
     if update::clear_tooltip(state) {
         *dirty = true;
     }
+    // 新的一次按下意味着上一轮 Down→Up 已经结束：指针在拖动中移出窗口会丢掉 Up，
+    // 残留现场若被这次无关的 Up 消费，会按旧行号误点（如点工具栏却折叠了树里的文件夹）。
+    state.prompt_drag = None;
     if state.overlay.is_some() {
         // 引用文件夹搜索弹窗的滚动条独立于模态点击：命中轨道/thumb 时滚动视口后再走浮层点击。
         if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref()
@@ -391,7 +394,7 @@ pub(crate) fn handle_mouse_down_left(
                 // 粘贴面板打开时点击编辑区：关闭面板且不穿透、不移动光标。
                 state.prompt.paste_cancel();
             } else if update::prompt_tree_mode(state) {
-                // 树视图：点击行选中；文件夹行同时折叠/展开。
+                // 树视图：按下只选中并登记拖拽起点；折叠/展开与双击判定推迟到松开。
                 let hit = ui::prompt::tree::row_at(
                     inner,
                     &state.prompt_owner().prompt_panel,
@@ -399,11 +402,7 @@ pub(crate) fn handle_mouse_down_left(
                     mouse.row,
                 );
                 if let Some(index) = hit {
-                    if update::prompt_row_double_click(state, index, Instant::now()) {
-                        update::open_prompt_row(state, index);
-                    } else {
-                        update::click_prompt_row(state, index);
-                    }
+                    update::begin_prompt_drag(state, index);
                 }
             } else {
                 // 底部虚拟空占位只聚焦编辑器，不把光标移到不存在的文本行。

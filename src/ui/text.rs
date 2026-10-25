@@ -531,6 +531,12 @@ pub const TOAST_SETTINGS_UNAVAILABLE: &str = "Settings service unavailable";
 
 /// 提示词保存失败：内容保留脏状态，自动保存将重试。
 pub const TOAST_PROMPT_SAVE_FAILED: &str = "Prompt save failed; will retry";
+/// 提示词/文件夹移动失败（写库失败）。
+pub const TOAST_PROMPT_MOVE_FAILED: &str = "Failed to move; unchanged";
+/// 目标会形成第 3 层文件夹，或该层不收文件夹。
+pub const TOAST_PROMPT_MOVE_DEPTH: &str = "Cannot move: folders support two levels";
+/// 被拖文件夹内含子文件夹，不能整体移入另一文件夹。
+pub const TOAST_PROMPT_MOVE_NESTED: &str = "Cannot move: folder contains subfolders";
 
 /// lx 聊天相关提示与状态文案。
 ///

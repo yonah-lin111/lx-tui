@@ -242,6 +242,7 @@ pub(crate) fn handle_mouse_moved(
     }
     // 提示词列表悬停：仅树视图且在文本区内；指针离开即清空。
     let tree_hover = if hovering_toast
+        || state.prompt_drag.is_some()
         || !update::prompt_panel_active(state)
         || !update::prompt_tree_mode(state)
     {
@@ -257,12 +258,13 @@ pub(crate) fn handle_mouse_moved(
     if update::set_prompt_tree_hover(state, tree_hover) {
         *dirty = true;
     }
-    // 按钮 tooltip：拖拽排序或指针在 toast 上时不触发；目标变化重置显示计时。
-    let tooltip_target = if hovering_toast || state.workspace_drag.is_some() {
-        None
-    } else {
-        ui::tooltip::target_at(view, state, rects, *screen, mouse.column, mouse.row)
-    };
+    // 按钮 tooltip：拖拽排序/列表拖拽或指针在 toast 上时不触发；目标变化重置显示计时。
+    let tooltip_target =
+        if hovering_toast || state.workspace_drag.is_some() || state.prompt_drag.is_some() {
+            None
+        } else {
+            ui::tooltip::target_at(view, state, rects, *screen, mouse.column, mouse.row)
+        };
     if update::set_tooltip_target(state, tooltip_target, Instant::now()) {
         *dirty = true;
     }
