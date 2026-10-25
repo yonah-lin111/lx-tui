@@ -121,6 +121,44 @@ fn toolbar_buttons_drop_from_right_when_narrow() {
     }
 }
 
+/// `button_at` 必须与 `button_rect` 是同一份几何：右端 `right()-1` 命中，`right()` 不命中，
+/// 空档（两按钮之间的 1 列）与分割线行都不命中。
+#[test]
+fn button_hit_matches_button_rect_boundaries() {
+    let area = panel(38);
+    let bar = crate::layout::prompt_toolbar_rect(area).expect("toolbar visible");
+
+    for (button, _) in BUTTONS {
+        let rect = button_rect(area, button).expect("wide panel fits all buttons");
+        assert_eq!(
+            button_at(area, rect.x, rect.y),
+            Some(button),
+            "{button:?} 左端必须命中"
+        );
+        assert_eq!(
+            button_at(area, rect.right() - 1, rect.y),
+            Some(button),
+            "{button:?} 右端（含）必须命中"
+        );
+        assert_eq!(
+            button_at(area, rect.right(), rect.y),
+            None,
+            "{button:?} 右端之外不得命中"
+        );
+        assert_eq!(
+            button_at(area, rect.x, rect.y + 1),
+            None,
+            "{button:?} 下一行（分割线）不得命中"
+        );
+    }
+
+    // 两按钮之间的 1 列空档：不命中任何按钮。
+    let new = button_rect(area, TodoButton::New).expect("[new] visible");
+    let edit = button_rect(area, TodoButton::Edit).expect("[edit] visible");
+    assert_eq!(edit.x, new.right().saturating_add(BUTTON_GAP));
+    assert_eq!(button_at(area, new.right(), bar.y), None, "按钮空档不命中");
+}
+
 #[test]
 fn list_rows_render_status_boxes_aligned() {
     let mut state = AppState::demo();

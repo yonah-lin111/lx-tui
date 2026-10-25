@@ -4933,6 +4933,7 @@ fn mouse_click_todo_blank_still_swallowed() {
         "不穿透到窗格、不改焦点"
     );
     assert!(!dirty, "吞掉的点击不产生副作用");
+    assert!(sessions.is_empty(), "吞掉的点击不写终端");
 }
 
 #[test]
