@@ -153,7 +153,7 @@
      否则下一次无关的 Up 会按旧行号误点）；回归用例 `mouse_down_discards_stale_prompt_drag`。
   5. `move_prompt` 在 `Some(folder)` 路径要求条目存在（`FolderMissing`），`None` 路径保持原风格。
 - 测试：`cargo test` 全绿 —— lib 3399 passed / 0 failed / 2 ignored，15 个集成目标全 ok。
-  新增：状态层 12 例、渲染 2 例、DB 4 例、事件 3 例、集成 1 例；
+  新增：状态层 13 例、渲染 2 例、DB 4 例、事件 3 例、集成 1 例；
   `cargo clippy --all-targets -- -D warnings` 无告警；`cargo fmt` 通过。
   注：`event::tests::worktree_candidates_do_not_resurrect_mention_panel_on_todo` 曾因
   `$TMPDIR/lx-tui-wt-gate.db` 遗留（`user_version=15`，来自另一分支的旧测试库）报
