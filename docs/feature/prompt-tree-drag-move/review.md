@@ -16,7 +16,7 @@
 | P1-3 | ✅ 已修 | `design.md` §1.2/§1.3/决策 6/§6.1/§6.2/§9、`task.md:21` |
 | P2-1 | ✅ 已修 | `Persistence::db_result` + `move_reject_message` 三路分流 + 3 用例 |
 | P2-2 | ✅ 已修 | `PromptDrag.pressed_at`，双击改用按下时刻 + 2 用例（正/反例） |
-| P2-3 | ⬜ 未做 | 见下；`prompt/tests.rs` 已涨到 2493 行、`event/tests.rs` 6057 行 |
+| P2-3 | ✅ 按规范澄清关闭 | 撤销本条：测试文件本就不设行数上限，规范补明（`AGENTS.md` + `code-writing-standards.md`）。`prompt/tests.rs` 2493 行、`event/tests.rs` 6057 行**保持原样** |
 | P2-4 | ✅ 已修 | `tree.rs` 加 `!rows.is_empty()` + 1 用例 |
 | P2-5 | ✅ 已修 | `effective_scroll` 三处统一 + 2 用例 |
 
@@ -207,15 +207,17 @@ if prompt_row_double_click(state, drag.from_row, now) { ... }
 - 修复：把按下时刻也记进现场（`PromptDrag` 加 `pressed_at: Instant`），
   双击用按下时刻判定，保持原语义。补一条"慢速单击不触发编辑器"的用例。
 
-### P2-3 测试文件超 1000 行上限
+### P2-3 测试文件超 1000 行上限 —— 已按规范澄清撤销
 
-- 位置：`src/app/update/prompt/tests.rs`（2414 行，dev 1938，本分支 +476）、
-  `src/event/tests.rs`（5993 行，+176）、`src/db/service.rs`（1266 行，+43）
-- 关键点：`AGENTS.md` 单文件上限 1000 行，超限按职责拆分、子文件约 500 行。
-- 错误原因：拖拽相关用例被塞进已超限的巨型文件，后续检索成本继续上升。
-- 修复：`src/app/update/prompt/tests.rs` 的拖拽用例（`drag_*` 前缀）拆到
-  `src/app/update/prompt/drag/tests.rs`；`src/event/tests.rs` 的 prompt 树鼠标用例拆到
-  `src/event/mouse/tests.rs`。纯移动，不改断言。
+- 位置：`src/app/update/prompt/tests.rs`、`src/event/tests.rs`
+- 原判断：按 `AGENTS.md:16` 的"单文件行数上限 1000"要求拆分。
+- **该判断有误，条目撤销**：1000 行约束针对**生产代码**。测试的拆分依据是被测对象与场景
+  归属，不是体积——一个模块的用例就该躺在它自己的 `tests.rs` 里，按行数切开只会让同一模块
+  的用例散落多处，检索成本反而上升。
+- 处理：在 `AGENTS.md` 与 `docs/standards/code-writing-standards.md` 明确"测试文件不受
+  1000 行限制"，并写明两种**应当**拆分的情形（跟随生产模块拆分、按无关测试簇归属），
+  以及禁止"按体积切段"。上述两个文件保持原样，不做搬运。
+- 原始风险仅剩一条：单文件过大时整文件重新解析的编译期成本上升，属可接受代价。
 
 ### P2-4 空树时根层提示行会覆盖空状态占位
 

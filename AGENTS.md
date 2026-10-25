@@ -13,7 +13,7 @@
 - 保持 `app/`（纯状态与更新）与 `ui/`（纯渲染）边界清晰；渲染只读状态，禁止在渲染中修改状态或执行 IO。
 - 优先最小修改，不为未来假设创建空目录、空文件或抽象层。
 - 新增、移动或拆分代码前，确认模块归属、依赖方向及已有可复用能力。
-- 单文件行数上限 1000，超限必须按职责拆分，拆分后子文件控制在 500 行左右。
+- **生产代码**单文件行数上限 1000，超限必须按职责拆分，拆分后子文件控制在 500 行左右。**测试文件不受此限**：`tests.rs`、`*/tests/` 下的用例与 `tests/` 集成测试按被测模块归属组织，允许随用例增长超过 1000 行；不为满足行数而按体积切分测试（详见 `docs/standards/code-writing-standards.md`）。
 - 浏览器前端资源（如设置页）放在 `assets/*.{html,css,js}`，HTML/CSS/JS 分文件，经 `include_str!` 编译进二进制并按独立路由（`/settings.css`、`/settings.js`）提供；禁止把 HTML/CSS/JS 重新内联进 `.rs`，禁止引入 Tailwind 等需构建步骤的样式方案，遵循 `docs/standards/html-assets.md`。
 - 生产代码禁止 `unwrap()` / `expect()`；错误使用 `Result` 与 `?` 传播。
 - 日志统一使用 `tracing`；禁止用 `println!` / `eprintln!` 输出调试信息，禁止绕过 ratatui 直接写 stdout。

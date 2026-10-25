@@ -696,5 +696,7 @@ let highlight = if dragging || state.workspace_hover == Some(row.index) { select
    `blank == 0`，`→ move to root` 正好落在 `PROMPT_TREE_EMPTY` 那一行；加
    `!rows.is_empty()` 与占位互斥（当前不可达，属防未来改门槛时静默生效）。
 
-未处理项：`src/app/update/prompt/tests.rs` 与 `src/event/tests.rs` 已远超
-`AGENTS.md` 的 1000 行上限，拆分属独立清理，不混入本特性。
+关于测试文件体量：`src/app/update/prompt/tests.rs` 与 `src/event/tests.rs` 都远超 1000 行，
+评审时曾列为待拆分项，后确认该上限只约束**生产代码**——测试按被测对象归属组织，
+按体积切分只会让同一模块的用例散落。规范已在 `AGENTS.md` 与
+`docs/standards/code-writing-standards.md` 补明，两个文件保持原样。
