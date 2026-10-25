@@ -34,3 +34,20 @@ fn todo_tooltips_are_non_empty_ascii() {
         assert!(!hint.is_empty() && hint.is_ascii(), "{hint:?}");
     }
 }
+
+#[test]
+fn stats_labels_are_lowercase_ascii_words() {
+    for label in [
+        TODO_STATS_TOTAL_LABEL,
+        TODO_STATS_DOING_LABEL,
+        TODO_STATS_DONE_LABEL,
+    ] {
+        assert!(
+            label.chars().all(|ch| ch.is_ascii_lowercase()),
+            "{label:?} 只含小写 ASCII"
+        );
+    }
+    assert_eq!(TODO_STATS_SEPARATOR, " · ", "段间分隔符与身份标签同款");
+    assert_eq!(TODO_STATS_PERCENT_SUFFIX, "%");
+    assert!(TODO_EDIT_PLACEHOLDER.is_ascii() && !TODO_EDIT_PLACEHOLDER.is_empty());
+}

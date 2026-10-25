@@ -281,7 +281,7 @@ pub(crate) fn handle_mouse_down_left(
             }
         } else if let Some(index) =
             ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
-            && update::select_todo_row(state, index)
+            && update::click_todo_row(state, index, Instant::now())
         {
             *dirty = true;
         }

@@ -778,7 +778,7 @@ pub fn prompt_tree_scrollbar_rect(panel: Rect) -> Option<Rect> {
 
 /// prompt 内容区扣除顶部表头与附件条后的文本/滚动条区域；
 /// 高度不足时表头/附件条隐藏、退回全部内容区。
-fn prompt_body_rect(inner: Rect) -> Rect {
+pub fn prompt_body_rect(inner: Rect) -> Rect {
     if inner.height > PROMPT_HEADER_HEIGHT {
         Rect {
             y: inner.y + PROMPT_HEADER_HEIGHT,

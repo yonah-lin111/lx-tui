@@ -2,6 +2,8 @@
 //!
 //! 全部走 `AppState` 公开入口，断言内存列表与登记的 [`Effect`]，不触库。
 
+use std::time::Duration;
+
 use super::*;
 
 /// 造一条列表并切到 Todo 面板、聚焦（键盘动作的前提）。
@@ -311,4 +313,184 @@ fn paste_while_editing_inserts() {
         "编辑态粘贴写入输入框"
     );
     assert!(state.todo.items().is_empty(), "提交前不建条目");
+}
+
+#[test]
+fn tab_in_list_mode_cycles_status() {
+    let mut state = todo_state(&["a", "b"]);
+
+    assert!(apply_todo_key(&mut state, TodoKey::Tab));
+    assert_eq!(state.todo.items()[0].status, TodoStatus::InProgress);
+    assert_eq!(take_saved(&mut state), [TodoStatus::InProgress]);
+    assert!(!state.todo.is_editing(), "列表态 Tab 只切状态，不进编辑");
+
+    assert!(apply_todo_key(&mut state, TodoKey::Tab));
+    assert_eq!(state.todo.items()[0].status, TodoStatus::Done);
+}
+
+#[test]
+fn tab_while_editing_cycles_status_and_keeps_editing() {
+    let mut state = todo_state(&["item"]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
+    type_text(&mut state, "-edited");
+
+    assert!(apply_todo_key(&mut state, TodoKey::Tab));
+
+    assert!(state.todo.is_editing(), "Tab 不结束编辑");
+    assert_eq!(
+        state.todo.editing().expect("editing").input.text(),
+        "item-edited",
+        "Tab 不写进输入框"
+    );
+    assert_eq!(state.todo.items()[0].status, TodoStatus::InProgress);
+    assert_eq!(take_saved(&mut state), [TodoStatus::InProgress]);
+}
+
+#[test]
+fn tab_while_editing_new_todo_is_swallowed() {
+    let mut state = todo_state(&[]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::New));
+
+    assert!(
+        !apply_todo_key(&mut state, TodoKey::Tab),
+        "新建态没有记录可切状态"
+    );
+    assert!(state.todo.is_editing());
+    assert!(state.effects.is_empty());
+}
+
+#[test]
+fn click_row_twice_within_window_enters_edit() {
+    let mut state = todo_state(&["a", "b"]);
+    let t0 = Instant::now();
+
+    assert!(click_todo_row(&mut state, 1, t0));
+    assert_eq!(state.todo.selected(), Some(1));
+    assert!(!state.todo.is_editing(), "单击不进入编辑");
+
+    assert!(click_todo_row(
+        &mut state,
+        1,
+        t0 + Duration::from_millis(50)
+    ));
+    assert!(state.todo.is_editing(), "双击进入编辑");
+    assert_eq!(
+        state.todo.editing().expect("editing").input.text(),
+        "b",
+        "编辑现场带原文"
+    );
+}
+
+#[test]
+fn click_different_row_resets_double_click() {
+    let mut state = todo_state(&["a", "b", "c"]);
+    let t0 = Instant::now();
+
+    // 首行本来就是选中并聚焦的：这一击没有可见变化，返回值只能是 false。
+    assert!(!click_todo_row(&mut state, 0, t0), "已选中行单击无变化");
+    click_todo_row(&mut state, 1, t0 + Duration::from_millis(50));
+    assert!(!state.todo.is_editing(), "换行后不算双击");
+    // 同一次点击序列被换行重置；紧接着再点第二行仍是一次单击。
+    click_todo_row(&mut state, 1, t0 + Duration::from_millis(80));
+    assert!(state.todo.is_editing(), "同行为双击");
+}
+
+#[test]
+fn click_outside_window_is_single_click() {
+    let mut state = todo_state(&["a"]);
+    let t0 = Instant::now();
+
+    // 唯一一行已被选中，单击无变化。
+    assert!(!click_todo_row(&mut state, 0, t0));
+    click_todo_row(
+        &mut state,
+        0,
+        t0 + crate::app::update::PROMPT_DOUBLE_CLICK_WINDOW + Duration::from_millis(1),
+    );
+    assert!(!state.todo.is_editing(), "超出窗口只算单击");
+}
+
+#[test]
+fn double_click_editing_row_does_not_restart_edit() {
+    let mut state = todo_state(&["a", "b"]);
+    let t0 = Instant::now();
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(1)));
+    type_text(&mut state, "-draft");
+
+    click_todo_row(&mut state, 1, t0);
+    click_todo_row(&mut state, 1, t0 + Duration::from_millis(30));
+
+    assert!(state.todo.is_editing(), "仍是编辑态（未被打断）");
+    assert_eq!(
+        state.todo.editing().expect("editing").input.text(),
+        "b-draft",
+        "草稿不得被原文覆盖"
+    );
+}
+
+/// 幽灵行占一个显示槽位：它下方的行在显示序列里整体后移一位，点击必须换算回列表下标。
+#[test]
+fn click_below_ghost_row_maps_display_to_list_index() {
+    let mut state = todo_state(&["a", "b", "c"]);
+    // 在 a 之后插入：显示序列 a(0) / 幽灵(1) / b(2) / c(3)。
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::After(0)));
+
+    assert!(click_todo_row(&mut state, 2, Instant::now()));
+    assert_eq!(
+        state.todo.selected_item().map(|item| item.text.as_str()),
+        Some("b"),
+        "点幽灵行下方第一行必须选中 b，不是 c"
+    );
+}
+
+/// 幽灵行打开时点它下方的行：选中按**条目**而不是行号落位；
+/// 提交让幽灵行消失后，同一屏幕行的内容已经变了，点击序列随之作废（第二击只选中、不编辑）。
+#[test]
+fn click_below_ghost_selects_by_item_then_resets_sequence() {
+    let mut state = todo_state(&["a", "b", "c"]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::After(0)));
+    let t0 = Instant::now();
+
+    assert!(click_todo_row(&mut state, 2, t0));
+    assert_eq!(
+        state.todo.selected_item().map(|item| item.text.as_str()),
+        Some("b"),
+        "第一击必须选中 b（按条目，不按行号）"
+    );
+    assert!(!state.todo.is_editing(), "空白幽灵行提交后不创建条目");
+    assert!(state.todo_row_click.is_none(), "幽灵行消失后点击序列作废");
+
+    click_todo_row(&mut state, 2, t0 + Duration::from_millis(20));
+    assert_eq!(
+        state.todo.selected_item().map(|item| item.text.as_str()),
+        Some("c"),
+        "行号已整体上移，同一屏幕行现在是 c"
+    );
+    assert!(!state.todo.is_editing(), "序列已作废，不得编辑任何条目");
+}
+
+/// 幽灵行打开时双击幽灵行本身：不提交、不重开——草稿保留。
+#[test]
+fn double_click_ghost_row_keeps_draft() {
+    let mut state = todo_state(&["a", "b"]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::After(0)));
+    type_text(&mut state, "draft");
+    let t0 = Instant::now();
+
+    click_todo_row(&mut state, 1, t0);
+    click_todo_row(&mut state, 1, t0 + Duration::from_millis(20));
+
+    let edit = state.todo.editing().expect("仍在编辑");
+    assert!(edit.target.is_none(), "仍是新建");
+    assert_eq!(edit.input.text(), "draft", "草稿保留");
+}
+
+/// 幽灵行打开时点未选中行之外的位置不再造成越界选中。
+#[test]
+fn click_beyond_list_with_ghost_is_ignored() {
+    let mut state = todo_state(&["a"]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::After(0)));
+    // 显示序列：a(0) / 幽灵(1)，长度 2。点显示下标 2 越界。
+    assert!(!click_todo_row(&mut state, 2, Instant::now()));
+    assert_eq!(state.todo.len(), 1);
 }

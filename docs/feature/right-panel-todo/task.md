@@ -158,5 +158,36 @@
 - 文件行数：`src/layout.rs` 保持 **999** 行（零新增行，只改 2 个常量值）；
   `src/ui/text.rs` 1269、`src/ui/style.rs` 1010（新增代码已拆入子模块）、`src/db/service.rs` 1273。
 - 未做项：无。
-- 待人工验收（`cargo run`）：§5.3 的 7 条视觉要点，尤其是 `[pin]`/`[all]` 与旧图标的观感对比，
-  以及 `[dir]` 从内宽 27 涨到 33 后「面板宽 29~34 时 `[dir]` 消失」这一已知副作用。
+- 待人工验收（`cargo run`）：§5.3 的 10 条视觉要点，尤其是 `[pin]`/`[all]` 与旧图标的观感对比、
+  `[dir]` 从内宽 27 涨到 33 后「面板宽 29~34 时 `[dir]` 消失」这一已知副作用，
+  以及第二轮的底部统计块、双击进编辑与 `Tab` 切状态。
+
+## 第二轮（交互优化，按用户追加要求）
+
+用户追加：`Tab` 切状态、双击进入编辑（输入框与光标逻辑复用既有输入框）、列表与统计之间加分割线。
+
+- [x] `TodoKey::Tab`：列表态与编辑态均循环状态（编辑态切完立即登记 `SaveTodo`；新建态吞掉）。
+- [x] 双击进编辑：`AppState.todo_row_click` + `update::click_todo_row`（判定与选中同一入口），
+      窗口复用 `PROMPT_DOUBLE_CLICK_WINDOW`；双击正在编辑的行不打断草稿。
+- [x] 编辑行改为复用 `widgets::input::view`（按显示宽度滚动，宽字符占 2 列），
+      新建空输入显示 muted 占位 `new todo`。
+- [x] 底部统计块：`layout::prompt_body_rect` 公开 + `ui::prompt::render_rule` 泛化，
+      新增 `stats_divider_rect` / `stats_rect`；列表区与滚动条轨道同步扣掉 2 行；
+      工具栏右端的 `done/total` 计数撤除（避免与统计行重复）。
+- [x] 文案：`TODO_EDIT_PLACEHOLDER`、`TODO_STATS_*`；撤除 `TODO_COUNT_SEPARATOR`。
+- [x] 测试：行为层 11 条、渲染层 8 条、事件层 2 条、文案守卫 1 条。
+- [x] 变异验证：`stats_visible` 恒 false → 4 条渲染用例失败；双击分支改 `if false` → 2 条失败；
+      列表态 / 编辑态 `Tab` 各改 `false` → 对应用例失败；统计块不扣列表高度 → 事件用例失败；
+      统计行整行宽度闸门去掉 → 窄面板残句用例失败。
+- [x] 自查修掉：统计行原本逐段「放不下就跳过」，会让后面的短段顶到前面拼出
+      `total 4 · doing 1 · 2 50%` 这种残句。改成整行量宽、放不下整行不画（分割线保留）。
+- [x] 自查修掉（第一轮遗留缺陷）：幽灵行打开时点它下方的行会选错条目（点 b 选中 c）。
+      改为按显示下标锚定条目 id、提交后按 id 找回位置；幽灵行被提交的那一击同时作废
+      点击序列（否则后半击会落到上移后的另一条）。
+- [x] 文档：`design.md` §3.1/§3.2/§3.4/§5.1/§5.2/§5.3/§6/§7/§9 与
+      `docs/standards/tui-design-requirements.md:25` 同步。
+
+第二轮验证：`cargo fmt --check` 通过；`cargo clippy --all-targets -- -D warnings` 通过；
+`cargo test` 全绿（lib **3459 passed / 0 failed / 2 ignored**，其余 15 个测试目标全 ok）。
+文件行数：`src/layout.rs` 999（`prompt_body_rect` 去私有，零新增行）、
+`src/ui/right_panel/todo.rs` 502、`src/app/update/todo.rs` 530。

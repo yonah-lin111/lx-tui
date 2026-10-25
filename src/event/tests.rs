@@ -5135,6 +5135,122 @@ fn mouse_click_todo_toolbar_button_runs_action() {
 }
 
 #[test]
+fn mouse_double_click_todo_row_enters_edit() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    state.todo.replace(
+        (0..3)
+            .map(|index| {
+                crate::db::todo::TodoRecord::new(
+                    format!("item {index}"),
+                    crate::db::todo::TodoStatus::Todo,
+                    index,
+                )
+            })
+            .collect(),
+    );
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+
+    // 第一击：选中 + 聚焦，不进编辑。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            list.x + 1,
+            list.y + 2,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(state.todo.selected(), Some(2));
+    assert!(!state.todo.is_editing(), "单击不进入编辑");
+
+    // 第二击（仍在判定窗口内）：进入该行的行内编辑，输入框带原文。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            list.x + 1,
+            list.y + 2,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    let edit = state.todo.editing().expect("双击进入编辑");
+    assert_eq!(
+        edit.target.as_deref(),
+        Some(state.todo.items()[2].id.as_str())
+    );
+    assert_eq!(edit.input.text(), "item 2", "编辑现场带原文");
+    assert!(state.todo_focused);
+}
+
+#[test]
+fn mouse_click_todo_stats_row_is_swallowed() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    // 条目必须多到「统计行所在行」在列表下标范围内：若列表区误吞了统计块，
+    // 这一击就会选中一行——用单条列表测不出这个问题。
+    let rows = usize::from(crate::layout::pane_inner_rect(geo.view.prompt).height);
+    state.todo.replace(
+        (0..rows.saturating_add(8))
+            .map(|index| {
+                crate::db::todo::TodoRecord::new(
+                    format!("item {index}"),
+                    crate::db::todo::TodoStatus::Todo,
+                    i64::try_from(index).unwrap_or(i64::MAX),
+                )
+            })
+            .collect(),
+    );
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let stats = crate::ui::right_panel::todo::stats_rect(geo.view.prompt).expect("统计行可见");
+    let cursor = state.prompt.cursor();
+    let focused_pane = state.active_tab().layout.focus();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            stats.x + 2,
+            stats.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(!state.todo_focused, "统计行不是可点区域，不聚焦");
+    assert_eq!(state.prompt.cursor(), cursor, "光标不动");
+    assert_eq!(
+        state.active_tab().layout.focus(),
+        focused_pane,
+        "窗格焦点不动"
+    );
+    assert!(!dirty, "无状态变化");
+}
+
+#[test]
 fn todo_keys_never_reach_pty() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);

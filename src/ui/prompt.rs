@@ -29,8 +29,18 @@ use crate::ui::text;
 /// 分割线整行 `─`（位于按钮行下一行，不穿过功能按钮），
 /// 两端以 `├` / `┤` 衔接外层边框；样式跟随边框焦点态。
 pub(crate) fn render_divider(panel: Rect, header: Rect, buf: &mut Buffer, focused: bool) {
-    let y = header.y + layout::PROMPT_TOOLBAR_HEIGHT;
-    for x in header.x..header.right() {
+    render_rule(
+        panel,
+        header.y + layout::PROMPT_TOOLBAR_HEIGHT,
+        buf,
+        focused,
+    );
+}
+
+/// 在指定行画一条与容器外框衔接的横向分割线（`├ ─ ┤`）；样式跟随边框焦点态。
+pub(crate) fn render_rule(panel: Rect, y: u16, buf: &mut Buffer, focused: bool) {
+    let inner = layout::pane_inner_rect(panel);
+    for x in inner.x..inner.right() {
         if let Some(cell) = buf.cell_mut((x, y)) {
             cell.reset();
             cell.set_symbol(text::DIVIDER_MID);

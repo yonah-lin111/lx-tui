@@ -45,35 +45,78 @@ pub fn blur_todo(state: &mut AppState) -> bool {
     changed
 }
 
-/// 左键点击列表行：先提交别的行的编辑，再选中并聚焦。
+/// 编辑现场在**显示序列**里的位置，以及它是否占着一个幽灵槽位。
 ///
-/// `index` 是**显示下标**（含新建编辑中的幽灵行）。点正在编辑的那一行不打断编辑；
-/// 点别的行先提交——提交会改变列表长度，所以下标必须在提交之后再判定。
-pub fn select_todo_row(state: &mut AppState, index: usize) -> bool {
-    // 点正在编辑的那一行（含新建的幽灵行）：只聚焦，不提交也不改选中。
-    if editing_display_index(state) == Some(index) {
-        return focus_todo(state);
-    }
-    let mut changed = commit_todo_edit(state);
-    // 提交会改变列表长度（幽灵行消失），下标必须在提交之后再判定。
-    if index >= state.todo.len() {
-        return changed;
-    }
-    changed |= state.todo.select(index);
-    changed |= focus_todo(state);
-    changed
-}
-
-/// 编辑现场在**显示下标**里的位置。
-///
-/// 编辑是单槽：`target.is_some()` 时不存在幽灵行，显示下标就是列表下标；
-/// 新建时列表里还没有这条记录，显示下标即插入点 `at`。
-fn editing_display_index(state: &AppState) -> Option<usize> {
+/// 编辑是单槽：编辑既有条目时不存在幽灵行，显示下标就是列表下标；
+/// 新建时列表里还没有这条记录，显示下标即插入点 `at`，且它下方的行整体前移一位。
+fn editing_layout(state: &AppState) -> Option<(usize, bool)> {
     let edit = state.todo.editing()?;
     match edit.target.as_deref() {
-        None => Some(edit.at),
-        Some(id) => state.todo.items().iter().position(|item| item.id == id),
+        None => Some((edit.at, true)),
+        Some(id) => state
+            .todo
+            .items()
+            .iter()
+            .position(|item| item.id == id)
+            .map(|index| (index, false)),
     }
+}
+
+/// 编辑现场在显示序列里的位置。
+fn editing_display_index(state: &AppState) -> Option<usize> {
+    editing_layout(state).map(|(index, _)| index)
+}
+
+/// 显示下标 → 列表下标；越界返回 None。
+///
+/// **必须在提交之前算**：幽灵行占着一个显示槽位，它下方的行在列表里都前移一位，
+/// 提交后幽灵行消失，那时再换算就没有依据了。
+fn resolve_display_index(state: &AppState, display: usize) -> Option<usize> {
+    let shifted = match editing_layout(state) {
+        Some((ghost, true)) if display > ghost => display - 1,
+        _ => display,
+    };
+    (shifted < state.todo.len()).then_some(shifted)
+}
+
+/// 列表行左键点击：单击选中 + 聚焦，双击再进入该行的行内编辑（对齐 lx-agent 点行即改）。
+///
+/// 双击判定与选中在同一次点击内完成，是因为选中会推进视口而**不改行下标**，
+/// 两者都必须以点击当时的显示下标为准；判定先于选中，双击序列在选中生效前复位。
+pub fn click_todo_row(state: &mut AppState, display: usize, now: Instant) -> bool {
+    let double = state.todo_row_click.is_some_and(|(last, at)| {
+        last == display
+            && now.saturating_duration_since(at) <= crate::app::update::PROMPT_DOUBLE_CLICK_WINDOW
+    });
+    state.todo_row_click = (!double).then_some((display, now));
+    // 点中的正是正在编辑的那一行（含幽灵行）：只聚焦，不提交、不重开输入框。
+    if editing_display_index(state) == Some(display) {
+        return focus_todo(state);
+    }
+    // 提交会改变下标（幽灵行消失、新条目插入），所以现在就把被点条目**按 id** 记下来，
+    // 提交后再按 id 找回它的新位置。直接用下标会在幽灵行打开时选错行（实测点 b 选中 c）。
+    let Some(id) =
+        resolve_display_index(state, display).map(|index| state.todo.items()[index].id.clone())
+    else {
+        // 点空白：吞掉，既不提交也不聚焦（点空白不该结束正在进行的编辑）。
+        return false;
+    };
+    // 幽灵行一旦被提交就消失，屏上行号整体上移一位：此刻屏幕已不是点击时那套坐标系，
+    // 同一次「双击」的第二击会落在**另一个**条目上（实测会编辑错行）。作废点击序列。
+    let ghost_open = editing_layout(state).is_some_and(|(_, ghost)| ghost);
+    let mut changed = commit_todo_edit(state);
+    if ghost_open {
+        state.todo_row_click = None;
+    }
+    let Some(index) = state.todo.items().iter().position(|item| item.id == id) else {
+        return changed;
+    };
+    changed |= state.todo.select(index);
+    changed |= focus_todo(state);
+    if double && !ghost_open {
+        changed |= begin_todo_edit(state, TodoEditTarget::Current(index));
+    }
+    changed
 }
 
 /// 键盘/悬停移动选中并滚入视口。
@@ -99,6 +142,23 @@ pub fn cycle_todo_status(state: &mut AppState) -> bool {
         return false;
     }
     let Some(index) = state.todo.selected() else {
+        return false;
+    };
+    let Some(record) = state.todo.cycle_status(index) else {
+        return false;
+    };
+    state.effects.push(Effect::SaveTodo { record });
+    true
+}
+
+/// 编辑态 `Tab`：切换被编辑条目的状态并登记写库。
+///
+/// 新建时列表里还没有记录可切（提交后才出现），吞掉。
+fn cycle_editing_status(state: &mut AppState) -> bool {
+    let Some(id) = state.todo.editing().and_then(|edit| edit.target.clone()) else {
+        return false;
+    };
+    let Some(index) = state.todo.items().iter().position(|item| item.id == id) else {
         return false;
     };
     let Some(record) = state.todo.cycle_status(index) else {
@@ -221,8 +281,10 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
             input.insert_char(' ');
             true
         }
-        // 编辑中不允许上下移动选中、不撤销删除、不切行：一律吞掉。
-        TodoKey::Tab | TodoKey::Up | TodoKey::Down | TodoKey::Undo => false,
+        // `Tab` 切状态（对齐 lx-agent 行内编辑：Tab 循环状态、Enter 提交、Esc 取消）。
+        TodoKey::Tab => cycle_editing_status(state),
+        // 编辑中不允许上下移动选中、不撤销删除：一律吞掉。
+        TodoKey::Up | TodoKey::Down | TodoKey::Undo => false,
     }
 }
 
@@ -232,6 +294,8 @@ fn apply_todo_list_key(state: &mut AppState, key: TodoKey) -> bool {
         TodoKey::Up => move_todo_selection(state, -1),
         TodoKey::Down => move_todo_selection(state, 1),
         TodoKey::Space => cycle_todo_status(state),
+        // `Tab` 切状态（与编辑态同义）：进入编辑只走双击 / `e` / `[edit]`。
+        TodoKey::Tab => cycle_todo_status(state),
         TodoKey::Enter => {
             let index = state.todo.selected().unwrap_or(0);
             begin_todo_edit(state, TodoEditTarget::After(index))
@@ -239,8 +303,7 @@ fn apply_todo_list_key(state: &mut AppState, key: TodoKey) -> bool {
         TodoKey::Esc => blur_todo(state),
         TodoKey::Undo => undo_todo_delete(state),
         TodoKey::Clear => false,
-        TodoKey::Tab
-        | TodoKey::Backspace
+        TodoKey::Backspace
         | TodoKey::Delete
         | TodoKey::Left
         | TodoKey::Right

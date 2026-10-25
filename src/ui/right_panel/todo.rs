@@ -1,6 +1,7 @@
-//! 右侧容器的 Todo 面板体：工具栏按钮、三态列表行、行内单行编辑与滚动条。
+//! 右侧容器的 Todo 面板体：工具栏按钮、三态列表行、行内单行编辑、滚动条与底部统计。
 //!
 //! 绘制与命中共用同一组几何函数（项目既有不变量）；本模块只读状态，不改状态、不做 IO。
+//! 主体区自上而下为「列表 / 分割线 / 统计行」：统计行固定 1 行，主体区太矮时整块降级隐藏。
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -26,6 +27,8 @@ const BUTTON_GAP: u16 = 1;
 const MARKER_WIDTH: u16 = 1;
 /// 状态框宽度（列）：`[ ]` / `[~]` / `[x]` 均为 3。
 const STATUS_WIDTH: u16 = 3;
+/// 底部统计块占的行数：分割线 1 行 + 统计 1 行。
+const STATS_BLOCK: u16 = 2;
 
 /// 全部按钮按显示顺序排列；宽度阶梯按**从右往左**丢弃。
 const BUTTONS: [(TodoButton, u16); 4] = [
@@ -35,9 +38,51 @@ const BUTTONS: [(TodoButton, u16); 4] = [
     (TodoButton::ClearDone, CLEAR_DONE_WIDTH),
 ];
 
-/// 列表区矩形：直接委托 prompt 的正文区几何（已扣表头两行、已让出最右 1 列滚动条槽）。
+/// 主体区：表头两行之下的整块（含最右 1 列滚动条槽）。
+fn body_rect(panel: Rect) -> Rect {
+    crate::layout::prompt_body_rect(crate::layout::pane_inner_rect(panel))
+}
+
+/// 底部统计块是否可见：主体区放得下「列表 + 分割线 + 统计行」才画。
+fn stats_visible(panel: Rect) -> bool {
+    body_rect(panel).height > STATS_BLOCK
+}
+
+/// 列表区矩形：主体区扣掉底部统计块，且让出最右 1 列滚动条槽。
 pub fn list_rect(panel: Rect) -> Rect {
-    crate::layout::prompt_text_rect(panel)
+    let body = body_rect(panel);
+    let height = if stats_visible(panel) {
+        body.height.saturating_sub(STATS_BLOCK)
+    } else {
+        body.height
+    };
+    Rect {
+        width: body.width.saturating_sub(1),
+        height,
+        ..body
+    }
+}
+
+/// 底部统计块的分割线行（整宽，两端 `├` / `┤` 衔接外框）。
+pub fn stats_divider_rect(panel: Rect) -> Option<Rect> {
+    let body = body_rect(panel);
+    stats_visible(panel).then_some(Rect::new(
+        body.x,
+        body.bottom().saturating_sub(2),
+        body.width,
+        1,
+    ))
+}
+
+/// 底部统计行（整宽，与分割线同宽）。
+pub fn stats_rect(panel: Rect) -> Option<Rect> {
+    let body = body_rect(panel);
+    stats_visible(panel).then_some(Rect::new(
+        body.x,
+        body.bottom().saturating_sub(1),
+        body.width,
+        1,
+    ))
 }
 
 /// 可见行数。
@@ -107,9 +152,14 @@ pub fn row_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<us
     (index < total).then_some(index)
 }
 
-/// 滚动条几何（无溢出时为 None）。
+/// 滚动条几何（无溢出时为 None）；轨道只覆盖列表区，不含底部统计块。
 pub fn scrollbar(panel: Rect, state: &AppState) -> Option<widgets::scrollbar::ScrollbarLayout> {
-    let slot = crate::layout::prompt_scrollbar_rect(panel)?;
+    let body = body_rect(panel);
+    if body.width < 2 {
+        return None;
+    }
+    let list = list_rect(panel);
+    let slot = Rect::new(list.right(), list.y, 1, list.height);
     widgets::scrollbar::layout(
         slot,
         state.todo.len(),
@@ -156,10 +206,11 @@ pub(crate) fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Opt
     if let Some(bar) = scrollbar(area, state) {
         widgets::scrollbar::render_buffer(buf, &bar);
     }
+    render_stats(area, buf, state, focused);
     cursor
 }
 
-/// 绘制工具栏按钮（无效按钮置灰）；右端按剩余宽度绘制完成计数。
+/// 绘制工具栏按钮（无效按钮置灰）。计数不在这里：完成情况统一由底部统计行展示。
 fn render_toolbar(panel: Rect, buf: &mut Buffer, state: &AppState) {
     for (button, _) in BUTTONS {
         let Some(rect) = button_rect(panel, button) else {
@@ -191,40 +242,6 @@ fn render_toolbar(panel: Rect, buf: &mut Buffer, state: &AppState) {
                 cell.set_char(symbol);
                 cell.set_style(button_style);
             }
-        }
-    }
-    // 计数 `done/total`：只在按钮右侧剩余的列足够时绘制。
-    if state.todo.is_empty() {
-        return;
-    }
-    let Some(bar) = crate::layout::prompt_toolbar_rect(panel) else {
-        return;
-    };
-    let count = format!(
-        "{}{}{}",
-        state.todo.done_count(),
-        text::TODO_COUNT_SEPARATOR,
-        state.todo.len()
-    );
-    let count_width = u16::try_from(count.chars().count()).unwrap_or(u16::MAX);
-    let right_limit = bar.right().saturating_sub(1);
-    let used = BUTTONS.iter().enumerate().take(button_count(panel)).fold(
-        bar.x,
-        |x, (index, (_, width))| {
-            x.saturating_add(if index == 0 { 0 } else { BUTTON_GAP })
-                .saturating_add(*width)
-        },
-    );
-    if right_limit.saturating_sub(used) < count_width.saturating_add(1) {
-        return;
-    }
-    let x = right_limit.saturating_sub(count_width);
-    for (offset, symbol) in count.chars().enumerate() {
-        let column = x.saturating_add(u16::try_from(offset).unwrap_or(u16::MAX));
-        if let Some(cell) = buf.cell_mut((column, bar.y)) {
-            cell.reset();
-            cell.set_char(symbol);
-            cell.set_style(style::muted());
         }
     }
 }
@@ -366,13 +383,80 @@ fn render_empty(list: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
     None
 }
 
+/// 底部统计块：一条分割线 + 一行 `total N · doing N · done N N%`。
+///
+/// 统计恒显示（空列表也显示 `total 0`），文案只在本模块拼装：
+/// 用户可见的标签与分隔符全部来自 `ui::text`，颜色只取 `style`。
+///
+/// 整行量宽：放不下就整行不画（只留分割线）。逐段「放不下就跳过」会让后面的短段
+/// 顶到前面去，拼出 `total 4 · doing 1 · 2 50%` 这种残句。
+fn render_stats(panel: Rect, buf: &mut Buffer, state: &AppState, focused: bool) {
+    let (Some(divider), Some(row)) = (stats_divider_rect(panel), stats_rect(panel)) else {
+        return;
+    };
+    prompt::render_rule(panel, divider.y, buf, focused);
+    buf.set_style(row, Style::reset());
+    let total = state.todo.len();
+    let doing = state.todo.in_progress_count();
+    let done = state.todo.done_count();
+    let percent = done.saturating_mul(100).checked_div(total).unwrap_or(0);
+    let segments = [
+        (text::TODO_STATS_TOTAL_LABEL, total.to_string()),
+        (text::TODO_STATS_DOING_LABEL, doing.to_string()),
+        (
+            text::TODO_STATS_DONE_LABEL,
+            format!("{done} {percent}{}", text::TODO_STATS_PERCENT_SUFFIX),
+        ),
+    ];
+    let width: usize = segments
+        .iter()
+        .enumerate()
+        .map(|(index, (label, value))| {
+            let separator = if index > 0 {
+                cells(text::TODO_STATS_SEPARATOR)
+            } else {
+                0
+            };
+            separator + cells(label) + 1 + cells(value)
+        })
+        .sum();
+    if width > usize::from(row.width) {
+        return;
+    }
+    let mut x = row.x;
+    for (index, (label, value)) in segments.iter().enumerate() {
+        if index > 0 {
+            x = write_inline(buf, row, x, text::TODO_STATS_SEPARATOR, style::muted());
+        }
+        x = write_inline(buf, row, x, label, style::muted());
+        x = write_inline(buf, row, x, " ", style::muted());
+        x = write_inline(buf, row, x, value, style::text());
+    }
+}
+
+/// 文本显示列数。
+fn cells(value: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(value)
+}
+
+/// 从 `x` 起写一段文本并返回结尾列；调用方已按整行宽度校验，越界时兜底不写。
+fn write_inline(buf: &mut Buffer, row: Rect, x: u16, value: &str, cell_style: Style) -> u16 {
+    let width = u16::try_from(cells(value)).unwrap_or(u16::MAX);
+    if x.saturating_add(width) > row.right() {
+        return x;
+    }
+    buf.set_stringn(x, row.y, value, usize::from(row.right() - x), cell_style);
+    x.saturating_add(width)
+}
+
 /// 该行是否为编辑现场（仅既有条目；新建走上面的幽灵行）。
 fn editing_row<'a>(state: &'a AppState, record: &TodoRecord) -> Option<&'a TodoEdit> {
     let edit = state.todo.editing()?;
     (edit.target.as_deref() == Some(record.id.as_str())).then_some(edit)
 }
 
-/// 绘制编辑行：按光标位置横向滚动，保证光标始终可见；返回光标绝对坐标。
+/// 绘制编辑行：与页重命名/浮层输入共用 `widgets::input` 的视口与光标算法
+/// （按显示宽度滚动，宽字符占两列）；返回光标绝对坐标。
 fn render_edit_row(
     buf: &mut Buffer,
     list: Rect,
@@ -384,18 +468,20 @@ fn render_edit_row(
     if width == 0 {
         return None;
     }
-    let chars: Vec<char> = edit.input.text().chars().collect();
-    let cursor_index = edit.input.cursor().min(chars.len());
-    // 光标落在文本末尾时也要能站住，故可见窗口按「光标至少要留在最后一列」裁剪。
-    let start = cursor_index.saturating_sub(width.saturating_sub(1));
-    let visible: String = chars.iter().skip(start).take(width).collect();
-    write_string_in(buf, list, text_x, y, &visible, style::text());
-    let cursor_x = text_x.saturating_add(
-        u16::try_from(cursor_index.saturating_sub(start))
-            .unwrap_or(u16::MAX)
-            .min(u16::try_from(width.saturating_sub(1)).unwrap_or(u16::MAX)),
-    );
-    Some((cursor_x, y))
+    let text = edit.input.text();
+    let input = widgets::input::view(text, edit.input.cursor(), width);
+    // 新建时没有原文可参照，占位是唯一的「这里能打字」提示；编辑既有条目不加占位。
+    let (visible, input_style) = match text.is_empty() {
+        true if edit.target.is_none() => (text::TODO_EDIT_PLACEHOLDER, style::muted()),
+        _ => (input.visible, style::text()),
+    };
+    write_string_in(buf, list, text_x, y, visible, input_style);
+    Some((
+        text_x
+            .saturating_add(input.cursor_col)
+            .min(list.right().saturating_sub(1)),
+        y,
+    ))
 }
 
 /// 写入单个字符格（宽字符按其显示宽度推进由 `set_stringn` 负责）。

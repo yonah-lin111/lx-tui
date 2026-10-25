@@ -214,6 +214,8 @@ pub struct AppState {
     pub todo_scroll_drag: Option<u16>,
     /// 鼠标悬停的 todo 可见行下标；None 表示未悬停。
     pub todo_hover: Option<usize>,
+    /// todo 列表最近一次左键点击（显示行下标、时刻）；双击判定用。
+    pub todo_row_click: Option<(usize, Instant)>,
 }
 
 impl AppState {
@@ -299,6 +301,7 @@ impl AppState {
             todo: TodoPanel::new(),
             todo_scroll_drag: None,
             todo_hover: None,
+            todo_row_click: None,
         }
     }
 

@@ -132,9 +132,12 @@ impl TodoPanel {
             .count()
     }
 
-    /// 非完成项数量。
-    pub fn pending_count(&self) -> usize {
-        self.items.len().saturating_sub(self.done_count())
+    /// 进行中数量（底部统计用）。
+    pub fn in_progress_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item.status == TodoStatus::InProgress)
+            .count()
     }
 
     /// 选中条目。

@@ -155,16 +155,17 @@
 
 ```text
 ╭─ Prompt ─ Todo ──────────────────────────────────╮  ← 容器顶边框（不变）
-│ [new] [edit] [del] [clear done]      3/8           │  ← Todo 工具栏（本设计新增）
+│ [new] [edit] [del] [clear done]                    │  ← Todo 工具栏（本设计新增）
 ├──────────────────────────────────────────────────┤  ← 分割线（复用 render_divider）
 │ ❯ [~] 写迁移脚本                          ▐      │  ← 选中行：❯ + 状态框 + 文本
 │   [x] 修登录超时                          ▐      │  ← 已完成：删除线 + muted
 │   [ ] 开会                                        │
-│                                                   │
+├──────────────────────────────────────────────────┤  ← 底部统计块分割线（第二轮新增）
+│ total 3 · doing 1 · done 1 33%                    │  ← 统计行（第二轮新增）
 ╰─lx-tui · b:main ───────────────────── [▸]────────╯  ← 容器底边框（不变）
 ```
 
-- 工具栏左端 4 个按钮；右端显示计数 `done/total`（如 `3/8`），用 `style::muted()`。
+- 工具栏左端 4 个按钮；**工具栏右端不再放计数**，完成情况统一交给底部统计行。
 - **宽度阶梯（精确到列，内宽 = 面板宽 − 2）**：按钮宽 `[new]`=5、`[edit]`=6、`[del]`=5、
   `[clear done]`=12，间隔 1；四按钮合计 31 列。
   计数 `done/total` 右对齐，**只在「按钮右边剩余列 ≥ 计数实际宽度 + 1」时绘制**
@@ -185,7 +186,11 @@
   > 窄终端只丢按钮、不截断文字。
 - 行格式：`❯`/空格（1 列）+ 空格 + `[x]`（3 列）+ 空格 + 文本（截断，尾溢用单行截断不折行）。
   未选中行首列为 1 个空格，保证文本左对齐。
-- 滚动条：占内容区最右 1 列（`layout::prompt_scrollbar_rect`），thumb `▐`；
+- 底部统计块（第二轮追加）：列表区之下一条与容器外框衔接的 `├ ─ ┤` 分割线，
+  再下一行统计 `total N · doing N · done N N%`（标签 `style::muted()`、数值 `style::text()`，
+  段间 `" · "`；`N%` = 已完成/总数向下取整，空列表 `total 0 · doing 0 · done 0 0%`）。
+  分割线与统计行各占 1 行；主体区高度 ≤ 2 时整块隐藏，列表区退回整块。
+- 滚动条：占列表区最右 1 列，轨道高度**只到列表底边**（不覆盖统计块），thumb `▐`；
   `total <= visible` 时不画。
 - 空态：列表区首行居中 `no todos yet`（`style::muted()`）。
 - 编辑态：该行文本区变成输入内容，行尾补硬件光标；行首仍是 `❯` + 空格 + 状态框。
@@ -209,14 +214,14 @@
 | `k` / `↑` | 上移选中 |
 | `g` `g` | 跳首（两次 `g`，间隔不限，中间任何非 `g` 按键重置） |
 | `G` | 跳尾 |
-| `Space` | 循环当前项状态 `todo → in_progress → done → todo` |
+| `Space` / `Tab` | 循环当前项状态 `todo → in_progress → done → todo` |
 | `a` | 末尾追加新条目并进入编辑 |
 | `o` / `Enter` | 在当前项之后插入新条目并进入编辑 |
 | `e` | 编辑当前项 |
 | `d` | 删除当前项（立即，无确认） |
 | `Ctrl+Z` | 撤销最近一次删除（单槽） |
 | `Esc` / `q` | 释放焦点（`todo_focused = false`，`q` 仅在无修饰键时） |
-| `Tab` | 不处理（吞掉，避免漏进终端） |
+| `Tab` | 同 `Space`：循环当前项状态（不再吞掉；本轮按 lx-agent 口径改） |
 
 **编辑态**
 
@@ -226,6 +231,7 @@
 | `Esc` | 取消（新建消失、编辑恢复原文） |
 | `←`/`→`/`Home`/`End`/`Backspace`/`Delete` | 单行编辑 |
 | `Ctrl+C` | 清空输入（与页重命名同口径，`OverlayKey::Clear`） |
+| `Tab` | 切换到下一状态并登记写库（新建态无记录可切，吞掉） |
 | `Ctrl+Z` | 同列表态（吞掉不穿透） |
 | 其余 | 吞掉，绝不写 PTY |
 
@@ -252,10 +258,10 @@
 | 区域 | 行为 |
 | --- | --- |
 | 工具栏按钮 | 动作；无效按钮吞掉 |
-| 列表行 | 单击选中 + 聚焦；若正在编辑另一行先提交 |
+| 列表行 | 单击选中 + 聚焦（若正在编辑另一行先提交）；**双击进入该行的行内编辑** |
 | 滚动条 thumb | 开始拖拽（`todo_scroll_drag`） |
 | 滚动条轨道 | 点击跳转（`offset_from_track_row`） |
-| 分割线 / 空白 | 吞掉（不聚焦、不穿透） |
+| 分割线 / 统计行 / 空白 | 吞掉（不聚焦、不穿透、不失焦） |
 | 滚轮 | 视口移动 3 行（不动高亮、不聚焦） |
 | 右键 | 吞掉（本轮不做 Todo 右键菜单） |
 
@@ -830,6 +836,8 @@ pub fn todo_status_done() -> Style;
 | 编辑中点另一行 | 先提交，再选中该行 |
 | 编辑中切 tab | 提交 |
 | 编辑中切工作区 | 提交 |
+| 编辑中按 `Tab` | 切换到下一状态并立即写库；**不**提交、**不**退出编辑（正文草稿保留） |
+| 编辑中双击同一行 | 不打断编辑（草稿保留，不重开输入框） |
 | 编辑中面板折叠（`Ctrl+B` 之类） | 提交，并清 `todo_focused` |
 | 编辑中程序退出 | 提交（`Persistence::shutdown` 前调用 `commit_todo_edit`） |
 | 编辑中库写失败 | 保留内存改动、toast `todo save failed`、编辑态已结束 |
@@ -844,14 +852,15 @@ pub fn todo_status_done() -> Style;
 | 面板高度 ≤ 2 | 只画外框 + tab，不画工具栏与列表（`prompt_header_rect` 返回 None） |
 | 面板内宽 < 5（面板宽 < 7） | 工具栏全丢，只画列表 |
 | 只剩 1 行可见 | 仍能编辑与选行；滚动条 `visible == 1` 时 thumb 高 1 行、仍可拖 |
-| 列表为空 | 首行居中 `no todos yet`；`[edit]`/`[del]`/`[clear done]` 置灰 |
+| 列表为空 | 首行居中 `no todos yet`；`[edit]`/`[del]`/`[clear done]` 置灰；统计行显示 `total 0 · doing 0 · done 0 0%` |
+| 主体区高度 ≤ 2 | 分割线与统计行一并隐藏，列表退回整块（不与表头抢同一行） |
 | 条目超长 | 显示时按行宽截断（不加省略号，保持列对齐）；存储上限 500 字符 |
 | 条目数 0 且未聚焦 | 仍显示空态文案（不是全空白） |
 | 折叠态容器 | 不画 Todo 任何内容（既有 `render_collapsed_strip`） |
 
 ### 5.3 视觉验收要点（用户 `cargo run` 人工确认）
 
-1. 工具栏在 40 列宽（内宽 38）下四按钮 + 计数完整可见；缩到 30 列时只剩三按钮；
+1. 工具栏在 40 列宽（内宽 38）下四按钮完整可见；缩到 30 列时只剩三按钮；
    缩到 20 列时只剩 `[new] [edit]`；缩到 14 列时只剩 `[new]`。
 2. 三态状态框宽度一致，行文本起始列在三种状态下对齐。
 3. 选中行整行有底色，且底色不覆盖状态框与文本各自的颜色。
@@ -859,6 +868,11 @@ pub fn todo_status_done() -> Style;
 5. 滚动条只在溢出时出现，thumb 随滚动移动，拖拽跟手。
 6. 编辑时硬件光标与文本齐平，中文输入法候选框位置正确。
 7. prompt 工具栏 `[pin]` / `[all]` 与原 `[○]` / `[*]` 的观感对比，窄面板降级顺序是否合理。
+8. 底部统计块：分割线与上方列表、下方底边框的间距是否匀称；`total N · doing N · done N N%`
+   在 40 列下不断行、不越界；空列表时统计归零而不是消失。
+9. 双击行进入编辑：光标落在文本末尾，中文/宽字符不出现半格错位；`Tab` 切状态时编辑不中断、
+   左侧状态框跟着变。
+10. 列表溢出时滚动条 thumb 不得压到统计分割线上。
 
 ---
 
@@ -894,6 +908,10 @@ pub fn todo_status_done() -> Style;
 - `clear_done_removes_only_done_and_can_be_undone`。
 - `selection_clamped_after_delete`：删最后一条后 `selected` 落到新的末项。
 - `write_failure_keeps_items_and_toasts`。
+- `tab_in_list_mode_cycles_status`、`tab_while_editing_cycles_status_and_keeps_editing`、
+  `tab_while_editing_new_todo_is_swallowed`（第二轮 `Tab` 语义）。
+- `click_row_twice_within_window_enters_edit`、`click_different_row_resets_double_click`、
+  `click_outside_window_is_single_click`、`double_click_editing_row_does_not_restart_edit`（第二轮双击）。
 
 ### 6.4 渲染层（`src/ui/right_panel/todo/tests.rs`，新）
 
@@ -904,6 +922,11 @@ pub fn todo_status_done() -> Style;
 - `empty_list_shows_placeholder`。
 - `scrollbar_only_when_overflowing`。
 - `edit_row_returns_cursor_position`。
+- `stats_block_sits_below_list_without_overlap`、`stats_hidden_when_body_too_short`、
+  `scrollbar_track_stops_above_stats`（第二轮统计块几何）。
+- `stats_row_shows_counts_and_percent`、`empty_list_still_shows_zero_stats`。
+- `edit_row_cursor_uses_display_width`、`edit_row_reuses_input_view_scrolling`、
+  `placeholder_only_for_new_todo`（第二轮输入框复用）。
 
 ### 6.5 事件层（`src/event/tests.rs`）
 
@@ -916,6 +939,7 @@ pub fn todo_status_done() -> Style;
 - `ctrl_q_wins_over_todo_focus`。
 - `focus_pane_releases_todo_focus`。
 - `ctrl_z_without_undo_is_consumed_not_forwarded`：无删除可撤销时 `Ctrl+Z` 不写终端。
+- `mouse_double_click_todo_row_enters_edit`、`mouse_click_todo_stats_row_is_swallowed`（第二轮）。
 
 ### 6.6 文案守卫（`src/ui/text/tests.rs`）
 
@@ -924,6 +948,7 @@ pub fn todo_status_done() -> Style;
   新口径：**要么**恰好一个单宽非 PUA 字符（`[≡]`/`[dir]`/`[←]`/`[tmp]`），
   **要么**全 ASCII 小写单词（`all`/`pin`/`unpin`）。两组分别断言，不允许混进 PUA 或宽字符。
 - 新增 `todo_labels_align_to_three_columns`：三个状态框宽度均为 3。
+- 新增 `stats_labels_are_lowercase_ascii_words`（第二轮统计文案）。
 
 ---
 
@@ -931,9 +956,10 @@ pub fn todo_status_done() -> Style;
 
 1. `docs/standards/tui-design-requirements.md:25`（右栏整段）：
    - 删除「Todo 面板为占位：功能按钮行整行空白、标题行为纯 `─`、内容区空白，零占位文案」；
-   - 改为描述真实 Todo 面板：工具栏 4 按钮 + 计数、三态状态框、`❯` 选中标记、
-     行内单行编辑、右侧滚动条、空态 `no todos yet`、独立键盘焦点 `todo_focused`（与
-     `prompt_focused` 互斥）、`Ctrl+Z` 单槽删除撤销；
+   - 改为描述真实 Todo 面板：工具栏 4 按钮、底部统计块（分割线 + `total/doing/done`）、
+     三态状态框、`❯` 选中标记、行内单行编辑（`Tab` 切状态）、行双击进编辑、右侧滚动条、
+     空态 `no todos yet`、独立键盘焦点 `todo_focused`（与 `prompt_focused` 互斥）、
+     `Ctrl+Z` 单槽删除撤销；
    - 保留「`right_tab` 不持久化、启动恒为 `Prompt`」。
 2. 同文件工具栏文案段（若提及 `[*]` / `[○]`）改为 `[all]` / `[pin]` / `[unpin]`。
 3. 本目录 `task.md` 维护执行清单与完成记录。
@@ -971,4 +997,13 @@ pub fn todo_status_done() -> Style;
 | 8 | `todo` 文案与样式追加到 `text.rs` / `style.rs` 末尾 | 拆成 `ui/text/todo.rs` 与 `ui/style/todo.rs` 子模块 | 两个文件实施前已分别 1260 / 1006 行，直接追加必然越 1000 行硬顶 |
 | 9 | 点击 Todo 空白「吞掉」 | 吞掉且**不**失焦 | 点空白不该结束正在进行的编辑；失焦只由 `Esc`/`q`/切面板/切工作区/聚焦别处触发 |
 | 10 | 挂 `todo_focused` 后仍需手工处理 `prompt_focused` 互斥 | `focus_todo` / `focus_prompt` / `focus_pane` / `select_right_tab` / 折叠 各自维护 | 互斥是双向的，单点置位不够；已在 §4.12 不变量 4 记录 |
+| 11 | 工具栏右端显示完成计数 `done/total` | 计数整体移到列表下方的新统计行（`total N · doing N · done N N%`），工具栏只剩按钮 | 用户第二轮要求「中间加分割线、上方列表下方统计」；两处都显示计数是重复，且工具栏窄时计率先被丢 |
+| 12 | 统计行不存在 | 新增 `stats_divider_rect` / `stats_rect`（`layout.rs::prompt_body_rect` 就地公开）+ `prompt::render_rule(panel, y, …)` 复用同一条 `├ ─ ┤` | 样式与容器其他分割线必须同源，否则焦点态配色会分叉；`prompt_body_rect` 本来就在 `layout.rs`，只需去掉私有 |
+| 13 | 列表区 = `layout::prompt_text_rect`（整块主体区） | 列表区 = 主体区 − 统计块 2 行；滚动条轨道改用列表矩形推算 | 列表若仍占整块，统计行会落在列表区内部、被行命中吞成「点空白」；必须让几何先扣干净 |
+| 14 | 列表态 `Tab` 吞掉 | 列表态与编辑态 `Tab` 都循环状态，编辑态切换后立即登记写库 | 用户第二轮要求「支持 tab 切换状态」，对齐 lx-agent 行内编辑的 `Tab` 语义（`Enter` 提交、`Esc` 取消、`Tab` 切状态） |
+| 15 | 行只有单击选中 | 新增 `click_todo_row`：同一次点击内先判双击（`todo_row_click`，窗口复用 `PROMPT_DOUBLE_CLICK_WINDOW`）再选中，双击进入行内编辑 | 双击必须与选中在同一入口完成：选中会推进视口但**不改行下标**，拆成两次调用会让「第二次点击的 index」与「第一次的 index」对不上 |
+| 15b | 点击行按显示下标直接选中 | 先按显示下标锚定**条目 id**，提交后按 id 找回新位置；幽灵行被提交的那一击同时清空 `todo_row_click` | 幽灵行占一个显示槽位，它下方的行在列表里前移一位——按行号选中会点 b 选中 c（第一轮遗留缺陷，第二轮补测试时暴露）。提交还让屏上内容整体上移，同一套「双击」第二击会落到别的条目，必须作废序列 |
+| 16 | `render_edit_row` 自写按字符数滚动的视口 | 复用 `widgets::input::view`（按显示宽度滚动、宽字符占 2 列），空输入显示 muted 占位 `new todo`（仅新建态） | 用户第二轮要求「输入框光标逻辑复用其他输入框」；自写版把 CJK 光标放在字符边界上，是真实缺陷 |
+| 17 | 编辑行无占位 | 新建幽灵行空输入时画 `new todo`；编辑既有条目清空时不画 | 清空既有条目意味着「提交即删除」，此时画「new todo」是指引错误 |
+| 18 | 统计行恒显示 | 列表为空也显示 `total 0 · doing 0 · done 0 0%` | 统计是版面固定部分，随列表消失会让面板高度跳变 |
 

@@ -318,3 +318,216 @@ fn edit_row_returns_cursor_position() {
         "光标列 {x} 必须落在列表区 {list:?} 内"
     );
 }
+
+/// 列表区与底部统计块互不重叠：列表底边紧邻分割线，分割线下方恰好 1 行统计。
+#[test]
+fn stats_block_sits_below_list_without_overlap() {
+    let area = panel(38);
+    let list = list_rect(area);
+    let divider = stats_divider_rect(area).expect("统计块可见");
+    let row = stats_rect(area).expect("统计块可见");
+    let body = crate::layout::prompt_body_rect(crate::layout::pane_inner_rect(area));
+
+    assert_eq!(list.height, body.height - STATS_BLOCK, "列表让出统计块两行");
+    assert_eq!(divider.y, list.bottom(), "分割线紧贴列表底部");
+    assert_eq!(row.y, divider.bottom(), "统计行紧贴分割线下方");
+    assert_eq!(row.bottom(), body.bottom(), "统计行贴主体区底部");
+    assert_eq!(list.right(), body.right() - 1, "列表让出最右 1 列滚动条槽");
+}
+
+/// 主体区装不下「列表 + 分割线 + 统计」时整块隐藏，列表退回整块高度。
+#[test]
+fn stats_hidden_when_body_too_short() {
+    for height in 0..=STATS_BLOCK {
+        let area = Rect::new(0, 0, 40, height);
+        assert!(stats_divider_rect(area).is_none(), "高度 {height} 无分割线");
+        assert!(stats_rect(area).is_none(), "高度 {height} 无统计行");
+    }
+}
+
+#[test]
+fn stats_row_shows_counts_and_percent() {
+    let mut state = AppState::demo();
+    let area = panel(46);
+    state.todo.replace(vec![
+        TodoRecord::new("a", TodoStatus::Todo, 0),
+        TodoRecord::new("b", TodoStatus::InProgress, 1),
+        TodoRecord::new("c", TodoStatus::Done, 2),
+        TodoRecord::new("d", TodoStatus::Done, 3),
+    ]);
+
+    let (buffer, _) = render_panel(&state, area);
+    let row = stats_rect(area).expect("统计行可见");
+    let text: String = (row.x..row.right())
+        .map(|x| buffer[(x, row.y)].symbol())
+        .collect();
+    assert_eq!(
+        text.trim_end(),
+        format!(
+            "{total} 4{sep}{doing} 1{sep}{done_label} 2 50%",
+            total = text::TODO_STATS_TOTAL_LABEL,
+            sep = text::TODO_STATS_SEPARATOR,
+            doing = text::TODO_STATS_DOING_LABEL,
+            done_label = text::TODO_STATS_DONE_LABEL,
+        ),
+        "`total 4 · doing 1 · done 2 50%`（标签 muted、数值正文色，段间 ` · `）"
+    );
+}
+
+#[test]
+fn empty_list_still_shows_zero_stats() {
+    let state = AppState::demo();
+    let area = panel(46);
+    let (buffer, _) = render_panel(&state, area);
+    let row = stats_rect(area).expect("统计行可见");
+    let text: String = (row.x..row.right())
+        .map(|x| buffer[(x, row.y)].symbol())
+        .collect();
+    assert!(text.contains("total 0"), "空列表统计归零: {text:?}");
+    assert!(text.contains("done 0 0%"), "空列表百分比为 0: {text:?}");
+}
+
+/// 统计行不得覆盖到滚动条槽：列表溢出时 thumb 与统计行同屏并存。
+#[test]
+fn scrollbar_track_stops_above_stats() {
+    let area = panel(38);
+    let mut state = AppState::demo();
+    let visible = visible_rows(area);
+    state.todo.replace(records(visible.saturating_add(4)));
+    let bar = scrollbar(area, &state).expect("溢出时出现滚动条");
+    let list = list_rect(area);
+    assert_eq!(bar.track.bottom(), list.bottom(), "轨道只在列表区");
+    assert!(
+        bar.track.bottom() <= stats_divider_rect(area).expect("统计块可见").y,
+        "轨道不得压到分割线"
+    );
+}
+
+/// 编辑行复用 `widgets::input` 的视口：长文本横向滚动后光标仍在输入区右缘内。
+#[test]
+fn edit_row_reuses_input_view_scrolling() {
+    let mut state = AppState::demo();
+    let area = panel(30);
+    state
+        .todo
+        .replace(vec![TodoRecord::new("seed", TodoStatus::Todo, 0)]);
+    let id = state.todo.items()[0].id.clone();
+    let long = "x".repeat(80);
+    state.todo.begin_edit(TodoEdit::new(Some(id), long, 0));
+
+    let (_, cursor) = render_panel(&state, area);
+    let (x, y) = cursor.expect("编辑行必须返回光标坐标");
+    let list = list_rect(area);
+    assert_eq!(y, list.y);
+    assert!(
+        x < list.right(),
+        "光标 {x} 不得越过列表右缘 {:?}",
+        list.right()
+    );
+    assert_eq!(
+        x,
+        list.right() - 1,
+        "文本长于输入区时视口滚到末尾、光标贴右缘"
+    );
+}
+
+/// 新建态空输入显示占位；既有条目清空后不显示占位（那是「准备删除」而不是「待填写」）。
+#[test]
+fn placeholder_only_for_new_todo() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    state
+        .todo
+        .replace(vec![TodoRecord::new("old", TodoStatus::Todo, 0)]);
+
+    state.todo.begin_edit(TodoEdit::new(None, String::new(), 1));
+    let (buffer, cursor) = render_panel(&state, area);
+    let list = list_rect(area);
+    let ghost_row = list.y.saturating_add(1);
+    let text: String = (list.x..list.right())
+        .map(|x| buffer[(x, ghost_row)].symbol())
+        .collect();
+    assert!(
+        text.contains(text::TODO_EDIT_PLACEHOLDER),
+        "新建幽灵行显示占位: {text:?}"
+    );
+    assert_eq!(cursor.map(|(_, y)| y), Some(ghost_row), "光标在幽灵行");
+
+    let id = state.todo.items()[0].id.clone();
+    state
+        .todo
+        .begin_edit(TodoEdit::new(Some(id), String::new(), 0));
+    let (buffer, _) = render_panel(&state, area);
+    let text: String = (list.x..list.right())
+        .map(|x| buffer[(x, list.y)].symbol())
+        .collect();
+    assert!(
+        !text.contains(text::TODO_EDIT_PLACEHOLDER),
+        "既有条目清空不显示占位: {text:?}"
+    );
+}
+
+/// 编辑行光标按**显示宽度**落位：宽字符占两列，按字符数算会把光标放到字中间。
+#[test]
+fn edit_row_cursor_uses_display_width() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    state
+        .todo
+        .replace(vec![TodoRecord::new("seed", TodoStatus::Todo, 0)]);
+    let id = state.todo.items()[0].id.clone();
+    // 3 个 CJK 字符 = 6 显示列。
+    state.todo.begin_edit(TodoEdit::new(Some(id), "中文名", 0));
+
+    let (buffer, cursor) = render_panel(&state, area);
+    let list = list_rect(area);
+    let text_x = list
+        .x
+        .saturating_add(MARKER_WIDTH)
+        .saturating_add(1)
+        .saturating_add(STATUS_WIDTH)
+        .saturating_add(1);
+    let (x, _) = cursor.expect("编辑行必须返回光标坐标");
+    assert_eq!(x, text_x + 6, "光标列 = 文本显示宽度，不是字符数");
+    // 文本也确实按两列一格铺开。
+    assert_eq!(buffer[(text_x, list.y)].symbol(), "中");
+    assert_eq!(buffer[(text_x + 4, list.y)].symbol(), "名");
+}
+
+/// 统计行放不下时整行不画（只留分割线），绝不允许后面的短段顶到前面拼出残句。
+#[test]
+fn stats_row_hidden_whole_when_too_narrow() {
+    let mut state = AppState::demo();
+    state.todo.replace(vec![
+        TodoRecord::new("a", TodoStatus::Todo, 0),
+        TodoRecord::new("b", TodoStatus::Done, 1),
+    ]);
+
+    // 足够宽：整句可见。
+    let wide = panel(46);
+    let (buffer, _) = render_panel(&state, wide);
+    let row = stats_rect(wide).expect("统计行可见");
+    let text: String = (row.x..row.right())
+        .map(|x| buffer[(x, row.y)].symbol())
+        .collect();
+    assert!(
+        text.trim_end().ends_with("done 1 50%"),
+        "宽面板整句: {text:?}"
+    );
+
+    // 恰好差一列：整行不画，不得留下半句。
+    let needed = text.trim_end().chars().count();
+    let narrow = panel(u16::try_from(needed).unwrap_or(u16::MAX) - 1);
+    let (buffer, _) = render_panel(&state, narrow);
+    let row = stats_rect(narrow).expect("统计行可见");
+    let text: String = (row.x..row.right())
+        .map(|x| buffer[(x, row.y)].symbol())
+        .collect();
+    assert_eq!(text.trim(), "", "放不下时整行不画: {text:?}");
+    // 分割线仍在：统计块的高度不随内容有无而变化。
+    let divider = stats_divider_rect(narrow).expect("统计块可见");
+    assert_eq!(
+        buffer[(narrow.x, divider.y)].symbol(),
+        text::DIVIDER_LEFT_JOIN
+    );
+}
