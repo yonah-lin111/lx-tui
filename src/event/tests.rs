@@ -4726,6 +4726,79 @@ fn mouse_click_right_tab_switches_panel() {
 }
 
 #[test]
+fn mouse_click_current_tab_commits_page_rename() {
+    // 设计：tab 与工具栏按钮同属控件，点一下即离开重命名输入态。
+    // 点**当前** tab 时 `select_right_tab` 会因同 tab 早退，提交必须由 press 自己完成。
+    let config = Config::default();
+    let mut state = paged_prompt_state();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    assert!(crate::app::update::begin_page_rename(&mut state));
+    crate::app::update::apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Clear);
+    for ch in "Intro".chars() {
+        crate::app::update::apply_page_rename_key(
+            &mut state,
+            crate::app::actions::OverlayKey::Char(ch),
+        );
+    }
+    assert!(
+        crate::app::update::page_rename_active(&state),
+        "前提：重命名中"
+    );
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let prompt_tab = right_tab_rect(&geo, RightTab::Prompt);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            prompt_tab.x,
+            prompt_tab.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert_eq!(state.right_tab, RightTab::Prompt, "点的就是当前 tab");
+    assert!(
+        !crate::app::update::page_rename_active(&state),
+        "提交并退出输入态"
+    );
+    let item = state.workspaces[0].prompt_panel.tree.item(7).expect("item");
+    assert_eq!(item.pages[0].name, "Intro", "非空页名写回");
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_click_current_tab_without_changes_is_not_dirty() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let prompt_tab = right_tab_rect(&geo, RightTab::Prompt);
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            prompt_tab.x,
+            prompt_tab.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert_eq!(state.right_tab, RightTab::Prompt);
+    assert!(!dirty, "同 tab 且无重命名时不该白白重绘");
+}
+
+#[test]
 fn mouse_click_todo_body_swallowed_without_focus_or_cursor() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);

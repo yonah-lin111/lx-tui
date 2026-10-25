@@ -120,7 +120,7 @@
 
 - 分支：`feat/right-panel-tabs`（worktree：`.worktrees/right-panel-tabs`，基于 `dev` @ `98388df`）。
 - 验证：`cargo fmt` 通过；`cargo clippy --all-targets -- -D warnings` 通过；`cargo test` 全绿
-  （lib 3363 passed / 0 failed / 2 ignored，其余 15 个测试目标全 ok）。
+  （lib 3367 passed / 0 failed / 2 ignored，其余 15 个测试目标全 ok）。
 - 与设计的差异（详见 `design.md` §9）：
   1. `tab_rects` 的右边界从 `>` 收紧为 `>=`：否则 tab 恰好顶到 `row.right()` 时会盖掉右边角 `╮`。
   2. `press.rs` 的「`!prompt_panel_active` 整块吞掉」额外加了 `view.prompt.contains(...)` 前置条件，
@@ -130,6 +130,11 @@
      再套 token，并有聚焦态回归用例锁住。
   4. `src/ui/tooltip.rs` 的 prompt 工具栏/块按钮 tooltip 一并加 `right_tab == Prompt` 闸门，
      否则 Todo 下悬停空白处会弹出按钮提示（渲染层已不画按钮）。
+  5. tab 点击分支改为「先 `finish_page_rename` 再 `select_right_tab`，两者都无变化才不置脏」：
+     `select_right_tab` 对同一 tab 早退，点当前 tab 原本既不提交重命名也不退出输入态，
+     且无条件置脏会白重绘一次。已补两条回归用例
+     （`mouse_click_current_tab_commits_page_rename`、
+     `mouse_click_current_tab_without_changes_is_not_dirty`）。
 - 未做项：无。`src/layout.rs` 保持 999 行未动；`docs/standards/tui-design-requirements.md` 已按
   `design.md` §7 的五点同步。
 - 待人工验收：tab 高亮观感、Todo 空白容器、点击不穿透（Agent 无法交互式验证 TUI，需 `cargo run`）。

@@ -253,9 +253,15 @@ pub(crate) fn handle_mouse_down_left(
     } else if !state.prompt_collapsed
         && let Some(tab) = ui::right_panel::tab_at(view.prompt, mouse.column, mouse.row)
     {
-        // 容器顶边框 tab：切换面板（内部提交页重命名、清瞬时指针）。
-        update::select_right_tab(state, tab);
-        *dirty = true;
+        // 容器顶边框 tab：先提交页重命名（tab 与工具栏按钮同属控件，点击即离开输入态），
+        // 再切换面板（内部清瞬时指针）。点当前 tab 也要提交，否则重命名输入会僵在原处；
+        // 都没有状态变化时不置脏。空名提交也结束输入态，因此按"之前是否在重命名"计变化。
+        let was_renaming = update::page_rename_active(state);
+        let mut changed = update::finish_page_rename(state) || was_renaming;
+        changed |= update::select_right_tab(state, tab);
+        if changed {
+            *dirty = true;
+        }
     } else if !state.prompt_collapsed
         && ui::right_panel::tab_row_at(view.prompt, mouse.column, mouse.row)
     {

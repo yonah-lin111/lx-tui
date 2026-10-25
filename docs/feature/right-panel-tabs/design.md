@@ -413,8 +413,14 @@ let prompt_cursor = right_panel::render(frame, &view, state).or(pane_cursor);
 } else if !state.prompt_collapsed
     && let Some(tab) = ui::right_panel::tab_at(view.prompt, mouse.column, mouse.row)
 {
-    update::select_right_tab(state, tab);   // 内部提交页重命名、清瞬时指针
-    *dirty = true;
+    // 先提交页重命名，再切换面板：点**当前** tab 时 select_right_tab 会早退，
+    // 提交必须在这里完成，否则重命名输入僵在原处。无变化则不置脏。
+    let was_renaming = update::page_rename_active(state);
+    let mut changed = update::finish_page_rename(state) || was_renaming;
+    changed |= update::select_right_tab(state, tab);
+    if changed {
+        *dirty = true;
+    }
 } else if !state.prompt_collapsed
     && ui::right_panel::tab_row_at(view.prompt, mouse.column, mouse.row)
 {
@@ -609,3 +615,4 @@ if update::set_right_tab_hover(state, right_tab_hover) {
 | 3 | `paint_tabs` 直接套 `style::muted()` / `selection()` | 每格先 `buf.set_style(rect, Style::reset())` 再套 token | `muted()` 只带 DIM、`selection()` 只带中灰底，`set_stringn` 是 patch 语义，会继承下层聚焦边框的 `accent()`（Cyan 加粗），非激活 tab 看起来也在发亮。已有聚焦态回归用例。 |
 | 4 | 闸门点列了 press/wheel/drag/hover/overlay | 额外给 `ui/tooltip.rs` 的 prompt 按钮 tooltip 加 `right_tab == Prompt` | 渲染层在 Todo 下不画那些按钮，不加闸门会出现「悬停空白处弹出按钮提示」。 |
 | 5 | `ui/layout.rs` 只改文档注释 | 同，另在 `ViewLayout.prompt` 注释写明「prompt 列 = 右侧统一容器」 | §8.1 的命名债，按计划保留字段名。 |
+| 6 | tab 分支调 `select_right_tab` 即完成"切 tab 提交重命名" | 分支内先 `finish_page_rename`，再 `select_right_tab`；两者都没变化时不置脏 | `select_right_tab` 在"同一 tab"时早退，点当前 tab 不会提交重命名，输入态会僵住；无条件置脏还会造成一次多余重绘。已有两条回归用例。 |
