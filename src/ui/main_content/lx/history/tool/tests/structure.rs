@@ -265,8 +265,13 @@ fn cancelled_uses_filled_square_and_puts_the_word_in_the_detail_line() {
     );
     assert_eq!(
         grid.cell(0, 0).style.fg,
-        style::agent_step_detail().fg,
-        "取消方块用次要信息色"
+        style::chat_tool_verb().fg,
+        "取消不是错误态：方块必须是工具色（白色方块会被当成另一种状态）"
+    );
+    assert_eq!(
+        grid.cell(2, 0).style.fg,
+        style::chat_tool_verb().fg,
+        "取消时动词与方块同色"
     );
     assert!(
         detail_line.contains(text::LX_CHAT_TOOL_CANCELLED),

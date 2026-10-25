@@ -61,16 +61,17 @@ pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
 /// assistant 步骤左侧方块标记的语义状态（思考 / 工具调用 / 正文块共用）。
 ///
 /// 运行中为 `■`/`□` 两帧呼吸（相位由 `LxChat::loading_frame` 决定，约 400ms 一相）；
-/// 终态一律停为**实心**方块、仅以颜色区分：失败（红）、中断（黄）、取消（次要信息色）。
-/// 取消不再是空心 `□`：终态的空心会被误读成「还在跑」（用户带截图要求修正）。
+/// 终态一律停为**实心**方块、仅以颜色区分：失败（红）、中断（黄）。
+/// 取消不再特殊化：方块与动词同用工具色（用户要求「方块和 title 统一」，
+/// 空心/白色方块都会显得这张卡是另一种状态）。
 ///
 /// **颜色由「角色」决定，不只看状态**（用户要求区分三类步骤）：
 /// - [`StepKind::Body`]（正文块）：**终端默认前景**——方块跟正文同色，不额外抢眼；
 /// - [`StepKind::Thinking`]（思考块）：折叠浅粉 `Indexed 182`、展开/悬停亮粉 `Indexed 218`；
 /// - [`StepKind::Tool`]（工具调用）：翡翠绿 `Indexed 42`。
 ///
-/// 失败 / 中断 / 取消是**跨角色的语义状态**，一律覆盖角色色（红 / 黄 / 次要灰），
-/// 保证「出问题了」比「是哪类步骤」更先被看到。
+/// 失败 / 中断是**跨角色的语义状态**，一律覆盖角色色（红 / 黄），保证「出问题了」
+/// 比「是哪类步骤」更先被看到；取消不是错误，沿用角色色，只由详情行的 `cancelled` 说明。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StepMark {
     Running,
@@ -115,7 +116,8 @@ impl StepMark {
         match self {
             Self::Failed => style::agent_fail(),
             Self::Interrupted => style::agent_warn(),
-            Self::Cancelled => style::agent_step_detail(),
+            // 取消不是错误态：方块与动词统一用角色色（工具行 = 工具绿）。
+            Self::Cancelled => kind.style_done(expanded, hovered),
             Self::Running => kind.style_running(expanded, hovered),
             Self::Alive => style::chat_step_mark_alive(),
             Self::Done => kind.style_done(expanded, hovered),

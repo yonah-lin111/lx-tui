@@ -703,6 +703,8 @@ fn verb(call: &ToolCallView, running: bool) -> Segment {
 /// 失败时整行红（方块 + 动词），中断整行黄——对应「左侧卡片和工具 title 变红」。
 fn header(call: &ToolCallView, width: u16, loading_frame: usize, animating: bool) -> Vec<Segment> {
     let limit = usize::from(width);
+    // 终态整行同色（方块 + 动词）：失败红、中断黄。取消不是错误态，保持工具色
+    // （方块与 title 统一；详情行的 `cancelled` 已经说明它没有产出结果）。
     let tint = match call.status {
         ToolStatus::Failed => Some(style::agent_fail()),
         ToolStatus::Interrupted => Some(style::agent_warn()),
@@ -786,6 +788,8 @@ pub(super) fn header_with_mark(
     mark: StepMark,
 ) -> Vec<Segment> {
     let limit = usize::from(width);
+    // 终态整行同色（方块 + 动词）：失败红、中断黄。取消不是错误态，保持工具色
+    // （方块与 title 统一；详情行的 `cancelled` 已经说明它没有产出结果）。
     let tint = match call.status {
         ToolStatus::Failed => Some(style::agent_fail()),
         ToolStatus::Interrupted => Some(style::agent_warn()),
