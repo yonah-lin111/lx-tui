@@ -316,7 +316,15 @@ impl Builder<'_> {
             if let AssistantStepView::Tool { .. } = step {
                 let group = tool::merge_group(&message.steps, step_index);
                 if group.len() > 1 {
-                    if self.merge_group(lx, message_index, message, &group, step_index, blocks) {
+                    if self.merge_group(
+                        lx,
+                        message_index,
+                        message,
+                        &group,
+                        step_index,
+                        has_previous,
+                        blocks,
+                    ) {
                         has_previous = true;
                     }
                     step_index += group.len();
@@ -468,6 +476,7 @@ impl Builder<'_> {
         message: &crate::app::state::ChatMessageView,
         group: &[&crate::app::state::ToolCallView],
         first_step: usize,
+        has_previous: bool,
         blocks: &mut Vec<SnapBlock>,
     ) -> bool {
         let expanded: Vec<bool> = group
@@ -477,6 +486,11 @@ impl Builder<'_> {
         let group_rows = tool::group_rows(group, self.width, &expanded);
         if group_rows == 0 {
             return false;
+        }
+        // 与单块同口径：合并组也是消息内的一个块，前面有块就空一行
+        // （否则正文下面直接顶着 `▣ Write 2 files`，两段粘成一片）。
+        if has_previous && needs_spacer() {
+            self.spacer();
         }
         let block_start = self.rows;
         let key = BlockKey {
