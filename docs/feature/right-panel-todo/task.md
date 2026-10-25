@@ -191,3 +191,28 @@
 `cargo test` 全绿（lib **3459 passed / 0 failed / 2 ignored**，其余 15 个测试目标全 ok）。
 文件行数：`src/layout.rs` 999（`prompt_body_rect` 去私有，零新增行）、
 `src/ui/right_panel/todo.rs` 502、`src/app/update/todo.rs` 530。
+
+## 第三轮（真机 bug + 统计块改版）
+
+用户追加：①在 todo 里输入时 IME 跑到 lx 输入框；期望光标/IME 落在被编辑的那一行；
+②点右侧容器就该是选中态，不该"只有点进输入框才算选中"；③统计与列表平分高度并加字符图表。
+
+- [x] **真 bug（渲染层）**：`render_rows` 逐行 `cursor = render_row(…)`，编辑行不在最后一行时
+      被后面的「无光标」行覆盖成 `None`，上层回落窗格光标 → IME 画在 lx 输入框。
+      改为 `cursor = cursor.or(…)` 累积；并用变异验证（逐行覆盖 → 用例失败）。
+- [x] **真 bug（焦点）**：`ui::right_panel::todo::render` 无条件交出硬件光标。
+      改为仅在 `todo_focused` 时交出（未聚焦时上层不该画光标）。
+- [x] **点击即选中**：新增 `update::focus_todo_from_click`，Todo 面板内任意位置（工具栏空白、
+      分割线、统计块、列表外空白、顶边框空白）点击都让容器进入选中态；不产生数据改动。
+- [x] **统计块改版**：与列表平分主体区（`(body - 1) / 2`，主体区 < 7 时不切分）；
+      块内三段 = 摘要行 / 三态竖向柱图（`█`，按计数缩放，非零至少 1 行）/ 轴标签行。
+      新增 `style::todo_bar_open/active/done`、`text::TODO_BAR_FILLED`、`TODO_STATS_OPEN_LABEL`。
+      撤除 `TODO_COUNT_SEPARATOR`（上一轮已由摘要行取代）。
+- [x] 测试：渲染层 +3（`edit_cursor_survives_later_rows`、`unfocused_panel_yields_no_hardware_cursor`、
+      柱图/平分几何），事件层 +1（`mouse_click_todo_border_blank_focuses_container`），
+      并把两条「点空白吞掉」用例改写成「焦点变化但不改数据」。
+- [x] 变异验证：逐行覆盖光标 → 失败；去掉未聚焦闸门 → 失败；去掉顶边框空白聚焦 → 失败。
+- [x] 文档：`design.md` §3.1/§3.4/§5.3/§9 与 `docs/standards/tui-design-requirements.md:25` 同步。
+
+第三轮验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
+`cargo test` 全绿（lib **3463 passed / 0 failed / 2 ignored**）。

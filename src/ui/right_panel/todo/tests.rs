@@ -66,6 +66,13 @@ fn row_text(buffer: &Buffer, list: Rect, y: u16) -> String {
         .collect()
 }
 
+/// 进入编辑并置焦点：真机上 `begin_todo_edit` 必然同时聚焦面板，
+/// 而渲染层只在聚焦时才交出硬件光标。
+fn begin_edit(state: &mut AppState, edit: TodoEdit) {
+    state.todo_focused = true;
+    state.todo.begin_edit(edit);
+}
+
 fn records(count: usize) -> Vec<TodoRecord> {
     (0..count)
         .map(|index| {
@@ -304,9 +311,7 @@ fn edit_row_returns_cursor_position() {
         TodoRecord::new("bravo", TodoStatus::Todo, 1),
     ]);
     let id = state.todo.items()[1].id.clone();
-    state
-        .todo
-        .begin_edit(TodoEdit::new(Some(id), "bravo edit", 1));
+    begin_edit(&mut state, TodoEdit::new(Some(id), "bravo edit", 1));
 
     assert!(edit_row_width(area) > 0, "编辑行必须有可用宽度");
     let (_, cursor) = render_panel(&state, area);
@@ -319,34 +324,50 @@ fn edit_row_returns_cursor_position() {
     );
 }
 
-/// 列表区与底部统计块互不重叠：列表底边紧邻分割线，分割线下方恰好 1 行统计。
+/// 列表与统计块平分主体区：两者高度最多差 1 行（分割线吃掉余数）。
 #[test]
-fn stats_block_sits_below_list_without_overlap() {
+fn list_and_stats_split_body_evenly() {
     let area = panel(38);
     let list = list_rect(area);
     let divider = stats_divider_rect(area).expect("统计块可见");
-    let row = stats_rect(area).expect("统计块可见");
+    let stats = stats_rect(area).expect("统计块可见");
     let body = crate::layout::prompt_body_rect(crate::layout::pane_inner_rect(area));
 
-    assert_eq!(list.height, body.height - STATS_BLOCK, "列表让出统计块两行");
+    assert_eq!(
+        u32::from(list.height) + u32::from(stats.height) + 1,
+        u32::from(body.height),
+        "列表 + 分割线 + 统计 == 主体区高度"
+    );
+    let diff = list.height.abs_diff(stats.height);
+    assert!(
+        diff <= 1,
+        "两者高度差 {diff} 超过 1 行：{list:?} / {stats:?}"
+    );
     assert_eq!(divider.y, list.bottom(), "分割线紧贴列表底部");
-    assert_eq!(row.y, divider.bottom(), "统计行紧贴分割线下方");
-    assert_eq!(row.bottom(), body.bottom(), "统计行贴主体区底部");
+    assert_eq!(stats.y, divider.bottom(), "统计块紧贴分割线下方");
+    assert_eq!(stats.bottom(), body.bottom(), "统计块贴主体区底部");
     assert_eq!(list.right(), body.right() - 1, "列表让出最右 1 列滚动条槽");
 }
 
-/// 主体区装不下「列表 + 分割线 + 统计」时整块隐藏，列表退回整块高度。
+/// 主体区太矮时不切分：列表独占整块，统计块整块隐藏。
 #[test]
 fn stats_hidden_when_body_too_short() {
-    for height in 0..=STATS_BLOCK {
+    for height in 0..MIN_SPLIT_BODY {
         let area = Rect::new(0, 0, 40, height);
         assert!(stats_divider_rect(area).is_none(), "高度 {height} 无分割线");
-        assert!(stats_rect(area).is_none(), "高度 {height} 无统计行");
+        assert!(stats_rect(area).is_none(), "高度 {height} 无统计块");
+        let body = crate::layout::prompt_body_rect(crate::layout::pane_inner_rect(area));
+        assert_eq!(
+            list_rect(area).height,
+            body.height,
+            "高度 {height} 列表独占"
+        );
     }
 }
 
+/// 统计块首行是摘要 `total N · doing N · done N N%`。
 #[test]
-fn stats_row_shows_counts_and_percent() {
+fn stats_summary_row_shows_counts_and_percent() {
     let mut state = AppState::demo();
     let area = panel(46);
     state.todo.replace(vec![
@@ -357,9 +378,9 @@ fn stats_row_shows_counts_and_percent() {
     ]);
 
     let (buffer, _) = render_panel(&state, area);
-    let row = stats_rect(area).expect("统计行可见");
-    let text: String = (row.x..row.right())
-        .map(|x| buffer[(x, row.y)].symbol())
+    let stats = stats_rect(area).expect("统计块可见");
+    let text: String = (stats.x..stats.right())
+        .map(|x| buffer[(x, stats.y)].symbol())
         .collect();
     assert_eq!(
         text.trim_end(),
@@ -374,17 +395,79 @@ fn stats_row_shows_counts_and_percent() {
     );
 }
 
+/// 柱图按三态各占一槽，柱子自下而上堆叠 `█`；轴标签行在统计块最后一行。
+#[test]
+fn stats_chart_draws_bars_per_status() {
+    let mut state = AppState::demo();
+    let area = panel(46);
+    state.todo.replace(vec![
+        TodoRecord::new("a", TodoStatus::Todo, 0),
+        TodoRecord::new("b", TodoStatus::Todo, 1),
+        TodoRecord::new("c", TodoStatus::Done, 2),
+    ]);
+
+    let (buffer, _) = render_panel(&state, area);
+    let stats = stats_rect(area).expect("统计块可见");
+    assert!(
+        stats.height >= MIN_STATS_ROWS,
+        "统计块高度 {}",
+        stats.height
+    );
+
+    // 轴标签行：三段文案都在，且各带自己的计数。
+    let axis: String = (stats.x..stats.right())
+        .map(|x| buffer[(x, stats.bottom() - 1)].symbol())
+        .collect();
+    for label in [
+        text::TODO_STATS_OPEN_LABEL,
+        text::TODO_STATS_DOING_LABEL,
+        text::TODO_STATS_DONE_LABEL,
+    ] {
+        assert!(axis.contains(label), "轴标签缺 {label}: {axis:?}");
+    }
+    assert!(axis.contains("open 2"), "未开始计数: {axis:?}");
+    assert!(axis.contains("done 1"), "已完成计数: {axis:?}");
+
+    // 柱区：`█` 出现在轴标签之上的行里，且未开始（2 条）比已完成（1 条）高。
+    let chart_top = stats.y + 1;
+    let chart_bottom = stats.bottom() - 2;
+    let column_height = |x_test: &dyn Fn(u16) -> bool| -> usize {
+        (chart_top..=chart_bottom)
+            .filter(|y| {
+                (stats.x..stats.right())
+                    .any(|x| x_test(x) && buffer[(x, *y)].symbol() == text::TODO_BAR_FILLED)
+            })
+            .count()
+    };
+    let total_filled = column_height(&|_| true);
+    assert!(total_filled > 0, "柱区必须有柱子");
+
+    // 三种柱子分别用各自的状态色：至少存在一绿（done）一非绿（open / doing）。
+    let has_green = (chart_top..=chart_bottom).any(|y| {
+        (stats.x..stats.right()).any(|x| {
+            let cell = &buffer[(x, y)];
+            cell.symbol() == text::TODO_BAR_FILLED && cell.fg == Color::Green
+        })
+    });
+    assert!(has_green, "已完成柱必须用 Green");
+}
+
 #[test]
 fn empty_list_still_shows_zero_stats() {
     let state = AppState::demo();
     let area = panel(46);
     let (buffer, _) = render_panel(&state, area);
-    let row = stats_rect(area).expect("统计行可见");
-    let text: String = (row.x..row.right())
-        .map(|x| buffer[(x, row.y)].symbol())
+    let stats = stats_rect(area).expect("统计块可见");
+    let text: String = (stats.x..stats.right())
+        .map(|x| buffer[(x, stats.y)].symbol())
         .collect();
     assert!(text.contains("total 0"), "空列表统计归零: {text:?}");
     assert!(text.contains("done 0 0%"), "空列表百分比为 0: {text:?}");
+    let filled = (stats.y..stats.bottom())
+        .flat_map(|y| (stats.x..stats.right()).map(move |x| (x, y)))
+        .filter(|(x, y)| buffer[(*x, *y)].symbol() == text::TODO_BAR_FILLED)
+        .count();
+    assert_eq!(filled, 0, "空列表不画柱子");
 }
 
 /// 统计行不得覆盖到滚动条槽：列表溢出时 thumb 与统计行同屏并存。
@@ -413,7 +496,7 @@ fn edit_row_reuses_input_view_scrolling() {
         .replace(vec![TodoRecord::new("seed", TodoStatus::Todo, 0)]);
     let id = state.todo.items()[0].id.clone();
     let long = "x".repeat(80);
-    state.todo.begin_edit(TodoEdit::new(Some(id), long, 0));
+    begin_edit(&mut state, TodoEdit::new(Some(id), long, 0));
 
     let (_, cursor) = render_panel(&state, area);
     let (x, y) = cursor.expect("编辑行必须返回光标坐标");
@@ -440,7 +523,7 @@ fn placeholder_only_for_new_todo() {
         .todo
         .replace(vec![TodoRecord::new("old", TodoStatus::Todo, 0)]);
 
-    state.todo.begin_edit(TodoEdit::new(None, String::new(), 1));
+    begin_edit(&mut state, TodoEdit::new(None, String::new(), 1));
     let (buffer, cursor) = render_panel(&state, area);
     let list = list_rect(area);
     let ghost_row = list.y.saturating_add(1);
@@ -454,9 +537,7 @@ fn placeholder_only_for_new_todo() {
     assert_eq!(cursor.map(|(_, y)| y), Some(ghost_row), "光标在幽灵行");
 
     let id = state.todo.items()[0].id.clone();
-    state
-        .todo
-        .begin_edit(TodoEdit::new(Some(id), String::new(), 0));
+    begin_edit(&mut state, TodoEdit::new(Some(id), String::new(), 0));
     let (buffer, _) = render_panel(&state, area);
     let text: String = (list.x..list.right())
         .map(|x| buffer[(x, list.y)].symbol())
@@ -477,7 +558,7 @@ fn edit_row_cursor_uses_display_width() {
         .replace(vec![TodoRecord::new("seed", TodoStatus::Todo, 0)]);
     let id = state.todo.items()[0].id.clone();
     // 3 个 CJK 字符 = 6 显示列。
-    state.todo.begin_edit(TodoEdit::new(Some(id), "中文名", 0));
+    begin_edit(&mut state, TodoEdit::new(Some(id), "中文名", 0));
 
     let (buffer, cursor) = render_panel(&state, area);
     let list = list_rect(area);
@@ -494,9 +575,9 @@ fn edit_row_cursor_uses_display_width() {
     assert_eq!(buffer[(text_x + 4, list.y)].symbol(), "名");
 }
 
-/// 统计行放不下时整行不画（只留分割线），绝不允许后面的短段顶到前面拼出残句。
+/// 摘要行放不下时整行不画（分割线与柱图仍在），绝不允许后面的短段顶到前面拼出残句。
 #[test]
-fn stats_row_hidden_whole_when_too_narrow() {
+fn stats_summary_hidden_whole_when_too_narrow() {
     let mut state = AppState::demo();
     state.todo.replace(vec![
         TodoRecord::new("a", TodoStatus::Todo, 0),
@@ -506,9 +587,9 @@ fn stats_row_hidden_whole_when_too_narrow() {
     // 足够宽：整句可见。
     let wide = panel(46);
     let (buffer, _) = render_panel(&state, wide);
-    let row = stats_rect(wide).expect("统计行可见");
-    let text: String = (row.x..row.right())
-        .map(|x| buffer[(x, row.y)].symbol())
+    let stats = stats_rect(wide).expect("统计块可见");
+    let text: String = (stats.x..stats.right())
+        .map(|x| buffer[(x, stats.y)].symbol())
         .collect();
     assert!(
         text.trim_end().ends_with("done 1 50%"),
@@ -519,15 +600,58 @@ fn stats_row_hidden_whole_when_too_narrow() {
     let needed = text.trim_end().chars().count();
     let narrow = panel(u16::try_from(needed).unwrap_or(u16::MAX) - 1);
     let (buffer, _) = render_panel(&state, narrow);
-    let row = stats_rect(narrow).expect("统计行可见");
-    let text: String = (row.x..row.right())
-        .map(|x| buffer[(x, row.y)].symbol())
+    let stats = stats_rect(narrow).expect("统计块可见");
+    let text: String = (stats.x..stats.right())
+        .map(|x| buffer[(x, stats.y)].symbol())
         .collect();
-    assert_eq!(text.trim(), "", "放不下时整行不画: {text:?}");
+    assert_eq!(text.trim(), "", "放不下时摘要整行不画: {text:?}");
     // 分割线仍在：统计块的高度不随内容有无而变化。
     let divider = stats_divider_rect(narrow).expect("统计块可见");
     assert_eq!(
         buffer[(narrow.x, divider.y)].symbol(),
         text::DIVIDER_LEFT_JOIN
     );
+}
+
+/// 编辑首行、后面还有行时，光标不能让后面那些「无光标」的行覆盖掉。
+///
+/// 真机表现：`render_rows` 逐行覆盖 `cursor`，编辑行不在最后一行时被后面的 `None`
+/// 冲掉，上层回落到窗格光标——终端里看起来就是输入法跑到 lx 输入框去了。
+#[test]
+fn edit_cursor_survives_later_rows() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    state.todo.replace(vec![
+        TodoRecord::new("a", TodoStatus::Todo, 0),
+        TodoRecord::new("b", TodoStatus::Todo, 1),
+        TodoRecord::new("c", TodoStatus::Todo, 2),
+    ]);
+    let id = state.todo.items()[0].id.clone();
+    begin_edit(&mut state, TodoEdit::new(Some(id), "editing", 0));
+
+    let (_, cursor) = render_panel(&state, area);
+    let list = list_rect(area);
+    assert_eq!(
+        cursor.map(|(_, y)| y),
+        Some(list.y),
+        "编辑首行时光标必须在首行，不能被后面的行清成 None"
+    );
+}
+
+/// 面板未聚焦时不得交出硬件光标：否则上层会把它当输入位置画出来，
+/// 终端里表现为 IME 落在没有输入框的 Todo 行上（真机缺陷）。
+#[test]
+fn unfocused_panel_yields_no_hardware_cursor() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    state.todo.replace(vec![
+        TodoRecord::new("a", TodoStatus::Todo, 0),
+        TodoRecord::new("b", TodoStatus::Todo, 1),
+    ]);
+    let id = state.todo.items()[0].id.clone();
+    state.todo.begin_edit(TodoEdit::new(Some(id), "draft", 0));
+    state.todo_focused = false;
+
+    let (_, cursor) = render_panel(&state, area);
+    assert!(cursor.is_none(), "未聚焦时不能交出光标");
 }

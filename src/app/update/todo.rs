@@ -83,6 +83,14 @@ fn resolve_display_index(state: &AppState, display: usize) -> Option<usize> {
 ///
 /// 双击判定与选中在同一次点击内完成，是因为选中会推进视口而**不改行下标**，
 /// 两者都必须以点击当时的显示下标为准；判定先于选中，双击序列在选中生效前复位。
+/// 点击 Todo 面板的**任何**位置都让容器进入选中态（聚焦 Todo 面板）。
+///
+/// 用户口径：点右侧容器就该高亮，不该"只有点进输入框才算选中"。工具栏、列表行、
+/// 滚动条之外的分割线/统计区/空白全部走这里；不做任何数据改动，也不打断编辑。
+pub fn focus_todo_from_click(state: &mut AppState) -> bool {
+    focus_todo(state)
+}
+
 pub fn click_todo_row(state: &mut AppState, display: usize, now: Instant) -> bool {
     let double = state.todo_row_click.is_some_and(|(last, at)| {
         last == display

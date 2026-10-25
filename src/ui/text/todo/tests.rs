@@ -39,6 +39,7 @@ fn todo_tooltips_are_non_empty_ascii() {
 fn stats_labels_are_lowercase_ascii_words() {
     for label in [
         TODO_STATS_TOTAL_LABEL,
+        TODO_STATS_OPEN_LABEL,
         TODO_STATS_DOING_LABEL,
         TODO_STATS_DONE_LABEL,
     ] {
@@ -50,4 +51,7 @@ fn stats_labels_are_lowercase_ascii_words() {
     assert_eq!(TODO_STATS_SEPARATOR, " · ", "段间分隔符与身份标签同款");
     assert_eq!(TODO_STATS_PERCENT_SUFFIX, "%");
     assert!(TODO_EDIT_PLACEHOLDER.is_ascii() && !TODO_EDIT_PLACEHOLDER.is_empty());
+    // 柱图字形必须单宽非 ASCII（宽字符会把柱子挤成两格）。
+    assert_eq!(TODO_BAR_FILLED.chars().count(), 1);
+    assert!(!TODO_BAR_FILLED.is_ascii());
 }

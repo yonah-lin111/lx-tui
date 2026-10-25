@@ -27,8 +27,12 @@ const BUTTON_GAP: u16 = 1;
 const MARKER_WIDTH: u16 = 1;
 /// 状态框宽度（列）：`[ ]` / `[~]` / `[x]` 均为 3。
 const STATUS_WIDTH: u16 = 3;
-/// 底部统计块占的行数：分割线 1 行 + 统计 1 行。
-const STATS_BLOCK: u16 = 2;
+/// 主体区低于此行数时不上下两分：列表独占，统计块整块隐藏。
+const MIN_SPLIT_BODY: u16 = 7;
+/// 统计块的最少行数：摘要 1 行 + 柱区 1 行 + 轴标签 1 行。
+const MIN_STATS_ROWS: u16 = 3;
+/// 柱状图每根柱子的宽度（列）；槽位更窄时取槽宽。
+const BAR_WIDTH: u16 = 3;
 
 /// 全部按钮按显示顺序排列；宽度阶梯按**从右往左**丢弃。
 const BUTTONS: [(TodoButton, u16); 4] = [
@@ -43,18 +47,25 @@ fn body_rect(panel: Rect) -> Rect {
     crate::layout::prompt_body_rect(crate::layout::pane_inner_rect(panel))
 }
 
-/// 底部统计块是否可见：主体区放得下「列表 + 分割线 + 统计行」才画。
-fn stats_visible(panel: Rect) -> bool {
-    body_rect(panel).height > STATS_BLOCK
+/// 统计块高度：与列表**平分**主体区（分割线占 1 行，取整余数留给列表）。
+///
+/// 返回 0 表示不分块：主体区太矮时列表独占，避免统计块把列表挤到 1 行。
+fn stats_height(panel: Rect) -> u16 {
+    let body = body_rect(panel).height;
+    if body < MIN_SPLIT_BODY {
+        return 0;
+    }
+    (body - 1) / 2
 }
 
-/// 列表区矩形：主体区扣掉底部统计块，且让出最右 1 列滚动条槽。
+/// 列表区矩形：主体区扣掉分割线与统计块，且让出最右 1 列滚动条槽。
 pub fn list_rect(panel: Rect) -> Rect {
     let body = body_rect(panel);
-    let height = if stats_visible(panel) {
-        body.height.saturating_sub(STATS_BLOCK)
-    } else {
+    let stats = stats_height(panel);
+    let height = if stats == 0 {
         body.height
+    } else {
+        body.height.saturating_sub(stats).saturating_sub(1)
     };
     Rect {
         width: body.width.saturating_sub(1),
@@ -63,26 +74,24 @@ pub fn list_rect(panel: Rect) -> Rect {
     }
 }
 
-/// 底部统计块的分割线行（整宽，两端 `├` / `┤` 衔接外框）。
+/// 列表与统计块之间的分割线行（整宽，两端 `├` / `┤` 衔接外框）。
 pub fn stats_divider_rect(panel: Rect) -> Option<Rect> {
     let body = body_rect(panel);
-    stats_visible(panel).then_some(Rect::new(
-        body.x,
-        body.bottom().saturating_sub(2),
-        body.width,
-        1,
-    ))
+    (stats_height(panel) > 0).then(|| Rect::new(body.x, list_rect(panel).bottom(), body.width, 1))
 }
 
-/// 底部统计行（整宽，与分割线同宽）。
+/// 统计块矩形（整宽，位于分割线之下、贴主体区底边）。
 pub fn stats_rect(panel: Rect) -> Option<Rect> {
     let body = body_rect(panel);
-    stats_visible(panel).then_some(Rect::new(
-        body.x,
-        body.bottom().saturating_sub(1),
-        body.width,
-        1,
-    ))
+    let stats = stats_height(panel);
+    (stats > 0).then(|| {
+        Rect::new(
+            body.x,
+            body.bottom().saturating_sub(stats),
+            body.width,
+            stats,
+        )
+    })
 }
 
 /// 可见行数。
@@ -202,7 +211,9 @@ pub(crate) fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Opt
     prompt::render_divider(area, header, frame.buffer_mut(), focused);
     let buf = frame.buffer_mut();
     render_toolbar(area, buf, state);
-    let cursor = render_rows(area, buf, state);
+    // 只有面板持焦点时才交出硬件光标：否则上层会把它当成「当前输入位置」画出来，
+    // 终端里表现为 IME 落在没有输入框的 Todo 行上。
+    let cursor = render_rows(area, buf, state).filter(|_| focused);
     if let Some(bar) = scrollbar(area, state) {
         widgets::scrollbar::render_buffer(buf, &bar);
     }
@@ -276,7 +287,7 @@ fn render_rows(panel: Rect, buf: &mut Buffer, state: &AppState) -> Option<(u16, 
         let y = list.y.saturating_add(slot as u16);
         let row_selected = state.todo_focused && state.todo.selected() == Some(index);
         if pending_new == Some(index) {
-            cursor = render_row(
+            cursor = cursor.or(render_row(
                 buf,
                 list,
                 y,
@@ -288,7 +299,7 @@ fn render_rows(panel: Rect, buf: &mut Buffer, state: &AppState) -> Option<(u16, 
                     marker: true,
                     edit: state.todo.editing(),
                 },
-            );
+            ));
             continue;
         }
         // 幽灵行占了它自己的槽位，其后既有记录的下标整体前移一位。
@@ -301,7 +312,9 @@ fn render_rows(panel: Rect, buf: &mut Buffer, state: &AppState) -> Option<(u16, 
             break;
         };
         let hovered = state.todo_hover == Some(record_index);
-        cursor = render_row(
+        // 只能 `or` 累积：逐行覆盖会让「编辑行之后还有行」时把已拿到的光标清成 None，
+        // 上层随即回落到窗格光标——终端里表现为 IME 跑到 lx 输入框。
+        cursor = cursor.or(render_row(
             buf,
             list,
             y,
@@ -313,7 +326,7 @@ fn render_rows(panel: Rect, buf: &mut Buffer, state: &AppState) -> Option<(u16, 
                 marker: state.todo.selected() == Some(record_index),
                 edit: editing_row(state, record),
             },
-        );
+        ));
     }
     cursor
 }
@@ -383,22 +396,61 @@ fn render_empty(list: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
     None
 }
 
-/// 底部统计块：一条分割线 + 一行 `total N · doing N · done N N%`。
+/// 底部统计块：摘要行 + 三态竖向柱图 + 轴标签行。
 ///
-/// 统计恒显示（空列表也显示 `total 0`），文案只在本模块拼装：
-/// 用户可见的标签与分隔符全部来自 `ui::text`，颜色只取 `style`。
+/// ```text
+/// total 4 · doing 1 · done 2 50%     ← 摘要（整行量宽，放不下整行不画）
+///      █                             ← 柱区（高度随统计块伸缩）
+///   █  █  █                          ←   柱子用 `█`，柱高按占比缩放
+///  open doing done                   ← 轴标签（含各自计数）
+/// ```
 ///
-/// 整行量宽：放不下就整行不画（只留分割线）。逐段「放不下就跳过」会让后面的短段
-/// 顶到前面去，拼出 `total 4 · doing 1 · 2 50%` 这种残句。
+/// 统计块与列表平分主体区（见 [`stats_height`]），所以柱区高度不是常量：
+/// 柱高 = `count × 可用行数 / 最大值`，非零计数至少 1 行。
 fn render_stats(panel: Rect, buf: &mut Buffer, state: &AppState, focused: bool) {
-    let (Some(divider), Some(row)) = (stats_divider_rect(panel), stats_rect(panel)) else {
+    let (Some(divider), Some(area)) = (stats_divider_rect(panel), stats_rect(panel)) else {
         return;
     };
     prompt::render_rule(panel, divider.y, buf, focused);
-    buf.set_style(row, Style::reset());
-    let total = state.todo.len();
+    buf.set_style(area, Style::reset());
+    if area.height == 0 {
+        return;
+    }
+    let open = state.todo.open_count();
     let doing = state.todo.in_progress_count();
     let done = state.todo.done_count();
+    let total = state.todo.len();
+    render_summary(area, buf, total, doing, done);
+    if area.height < MIN_STATS_ROWS {
+        return;
+    }
+    let chart = Rect {
+        y: area.y.saturating_add(1),
+        height: area.height.saturating_sub(2),
+        ..area
+    };
+    let axis = Rect {
+        y: area.bottom().saturating_sub(1),
+        height: 1,
+        ..area
+    };
+    let columns = [
+        (text::TODO_STATS_OPEN_LABEL, open, style::todo_bar_open()),
+        (
+            text::TODO_STATS_DOING_LABEL,
+            doing,
+            style::todo_bar_active(),
+        ),
+        (text::TODO_STATS_DONE_LABEL, done, style::todo_bar_done()),
+    ];
+    render_bars(chart, axis, buf, &columns);
+}
+
+/// 摘要行：`total N · doing N · done N N%`。
+///
+/// 整行量宽：放不下就整行不画。逐段「放不下就跳过」会让后面的短段顶到前面去，
+/// 拼出 `total 4 · doing 1 · 2 50%` 这种残句。
+fn render_summary(area: Rect, buf: &mut Buffer, total: usize, doing: usize, done: usize) {
     let percent = done.saturating_mul(100).checked_div(total).unwrap_or(0);
     let segments = [
         (text::TODO_STATS_TOTAL_LABEL, total.to_string()),
@@ -420,6 +472,7 @@ fn render_stats(panel: Rect, buf: &mut Buffer, state: &AppState, focused: bool) 
             separator + cells(label) + 1 + cells(value)
         })
         .sum();
+    let row = Rect { height: 1, ..area };
     if width > usize::from(row.width) {
         return;
     }
@@ -432,6 +485,80 @@ fn render_stats(panel: Rect, buf: &mut Buffer, state: &AppState, focused: bool) 
         x = write_inline(buf, row, x, " ", style::muted());
         x = write_inline(buf, row, x, value, style::text());
     }
+}
+
+/// 柱区与轴标签：三态各占一个等宽槽位，柱子在槽内水平居中、自下而上堆叠 `█`。
+///
+/// 计数全为 0 时柱子为空、只留轴标签——空列表也占同样的版面高度，面板不会跳。
+fn render_bars(
+    chart: Rect,
+    axis: Rect,
+    buf: &mut Buffer,
+    columns: &[(&'static str, usize, Style)],
+) {
+    if chart.height == 0 || chart.width == 0 || columns.is_empty() {
+        return;
+    }
+    let count = u16::try_from(columns.len()).unwrap_or(1).max(1);
+    let slot_width = chart.width / count;
+    if slot_width == 0 {
+        return;
+    }
+    let bar_width = slot_width.min(BAR_WIDTH);
+    let max = columns
+        .iter()
+        .map(|(_, value, _)| *value)
+        .max()
+        .unwrap_or(0);
+    let rows = usize::from(chart.height);
+    for (index, (label, value, bar_style)) in columns.iter().enumerate() {
+        let slot = Rect::new(
+            chart
+                .x
+                .saturating_add(slot_width.saturating_mul(u16::try_from(index).unwrap_or(0))),
+            chart.y,
+            slot_width,
+            chart.height,
+        );
+        let bar_x = slot
+            .x
+            .saturating_add(slot.width.saturating_sub(bar_width) / 2);
+        // 非零计数至少占 1 行，否则「有一条未完成」和「一条都没有」看起来一样。
+        let filled = match (*value, max) {
+            (0, _) => 0,
+            (value, max) => (value.saturating_mul(rows) / max.max(1)).max(1).min(rows),
+        };
+        for offset in 0..filled {
+            let y = chart
+                .bottom()
+                .saturating_sub(1)
+                .saturating_sub(u16::try_from(offset).unwrap_or(u16::MAX));
+            for x in bar_x..bar_x.saturating_add(bar_width).min(slot.right()) {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.reset();
+                    cell.set_symbol(text::TODO_BAR_FILLED);
+                    cell.set_style(*bar_style);
+                }
+            }
+        }
+        write_centered(
+            buf,
+            slot,
+            axis.y,
+            &format!("{label} {value}"),
+            style::muted(),
+        );
+    }
+}
+
+/// 在槽位内水平居中写一行文本；放不下时整段不写（不截半句）。
+fn write_centered(buf: &mut Buffer, slot: Rect, y: u16, value: &str, cell_style: Style) {
+    let width = u16::try_from(cells(value)).unwrap_or(u16::MAX);
+    if width > slot.width {
+        return;
+    }
+    let x = slot.x.saturating_add(slot.width.saturating_sub(width) / 2);
+    buf.set_stringn(x, y, value, usize::from(width), cell_style);
 }
 
 /// 文本显示列数。

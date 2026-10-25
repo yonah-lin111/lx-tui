@@ -13,12 +13,15 @@ pub const TODO_STATUS_DONE: &str = "[x]";
 pub const TODO_EMPTY: &str = "no todos yet";
 /// 新建编辑行的占位文案（输入框为空时显示，与页重命名同口径）。
 pub const TODO_EDIT_PLACEHOLDER: &str = "new todo";
-/// 底部统计行：标签、段间分隔符与百分比后缀。
+/// 底部统计：标签、段间分隔符、百分比后缀与柱图字形。
 pub const TODO_STATS_TOTAL_LABEL: &str = "total";
+pub const TODO_STATS_OPEN_LABEL: &str = "open";
 pub const TODO_STATS_DOING_LABEL: &str = "doing";
 pub const TODO_STATS_DONE_LABEL: &str = "done";
 pub const TODO_STATS_SEPARATOR: &str = " · ";
 pub const TODO_STATS_PERCENT_SUFFIX: &str = "%";
+/// 柱图实心格。
+pub const TODO_BAR_FILLED: &str = "█";
 /// 写库失败提示。
 pub const TOAST_TODO_SAVE_FAILED: &str = "todo save failed";
 

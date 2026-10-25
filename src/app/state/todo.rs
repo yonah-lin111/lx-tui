@@ -132,6 +132,14 @@ impl TodoPanel {
             .count()
     }
 
+    /// 未开始数量（底部统计柱图用）。
+    pub fn open_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item.status == TodoStatus::Todo)
+            .count()
+    }
+
     /// 进行中数量（底部统计用）。
     pub fn in_progress_count(&self) -> usize {
         self.items

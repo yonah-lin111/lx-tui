@@ -4895,7 +4895,7 @@ fn mouse_click_current_tab_without_changes_is_not_dirty() {
 }
 
 #[test]
-fn mouse_click_todo_blank_still_swallowed() {
+fn mouse_click_todo_blank_still_focuses_container() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
     state.prompt.insert_str("ab\ncd");
@@ -4903,7 +4903,7 @@ fn mouse_click_todo_blank_still_swallowed() {
         &mut state,
         RightTab::Todo
     ));
-    // 空列表 + 点在分割线上（既不是按钮也不是行）：整块吞掉。
+    // 点分割线（既不是按钮也不是行）：容器进入选中态，但不动数据、不穿透。
     let divider = layout::prompt_divider_rect(geo.view.prompt).expect("divider visible");
     let cursor = state.prompt.cursor();
     let focused_pane = state.active_tab().layout.focus();
@@ -4925,15 +4925,15 @@ fn mouse_click_todo_blank_still_swallowed() {
     );
 
     assert!(!state.prompt_focused, "Todo 空白处点击不聚焦编辑器");
-    assert!(!state.todo_focused, "点空白也不聚焦 Todo");
+    assert!(state.todo_focused, "点容器任意位置即让右侧容器进入选中态");
     assert_eq!(state.prompt.cursor(), cursor, "Todo 空白处点击不动光标");
     assert_eq!(
         state.active_tab().layout.focus(),
         focused_pane,
         "不穿透到窗格、不改焦点"
     );
-    assert!(!dirty, "吞掉的点击不产生副作用");
-    assert!(sessions.is_empty(), "吞掉的点击不写终端");
+    assert!(dirty, "焦点变化必须置脏（边框要重绘为强调色）");
+    assert!(sessions.is_empty(), "点击不写终端");
 }
 
 #[test]
@@ -5198,8 +5198,42 @@ fn mouse_double_click_todo_row_enters_edit() {
     assert!(state.todo_focused);
 }
 
+/// 点容器顶边框的 tab 旁空白：同样让右侧容器进入选中态（不应"只有点进输入框"才算）。
 #[test]
-fn mouse_click_todo_stats_row_is_swallowed() {
+fn mouse_click_todo_border_blank_focuses_container() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    assert!(!state.todo_focused, "前提：切 tab 不自动聚焦");
+    // 顶边框最右端（tab 之外、折叠按钮之外的空白）。
+    let border = crate::layout::prompt_border_rect(geo.view.prompt).expect("border visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            border.right() - 3,
+            border.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(state.todo_focused, "点容器边框空白也要进入选中态");
+    assert!(!state.prompt_focused);
+    assert!(dirty, "焦点变化置脏");
+}
+
+#[test]
+fn mouse_click_todo_stats_row_focuses_without_data_change() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
     // 条目必须多到「统计行所在行」在列表下标范围内：若列表区误吞了统计块，
@@ -5240,14 +5274,16 @@ fn mouse_click_todo_stats_row_is_swallowed() {
         &mut dirty,
     );
 
-    assert!(!state.todo_focused, "统计行不是可点区域，不聚焦");
+    assert!(state.todo_focused, "点统计块同样让容器进入选中态");
+    assert!(!state.todo.is_editing(), "统计块不是行，不进入编辑");
+    assert_eq!(state.todo.selected(), Some(0), "选中行不变");
     assert_eq!(state.prompt.cursor(), cursor, "光标不动");
     assert_eq!(
         state.active_tab().layout.focus(),
         focused_pane,
         "窗格焦点不动"
     );
-    assert!(!dirty, "无状态变化");
+    assert!(dirty, "焦点变化置脏");
 }
 
 #[test]

@@ -268,25 +268,34 @@ pub(crate) fn handle_mouse_down_left(
         && ui::right_panel::tab_row_at(view.prompt, mouse.column, mouse.row)
     {
         // 顶边框 tab 之外的空白属于容器控件区：吞掉，不聚焦编辑器。
+        // Todo 面板例外：点容器任意位置都应让容器进入选中态（用户口径）。
+        if state.right_tab == crate::app::state::RightTab::Todo
+            && update::focus_todo_from_click(state)
+        {
+            *dirty = true;
+        }
     } else if state.right_tab == crate::app::state::RightTab::Todo
         && !state.prompt_collapsed
         && view.prompt.contains((mouse.column, mouse.row).into())
     {
         // Todo 面板：先按钮、再行、最后空白吞掉（顺序不可调换，
         // 否则会先被下面的整块吞掉分支吃掉）。
+        let mut changed = false;
         if let Some(button) = ui::right_panel::todo::button_at(view.prompt, mouse.column, mouse.row)
         {
-            if update::apply_todo_button(state, button) {
-                *dirty = true;
-            }
+            changed = update::apply_todo_button(state, button);
         } else if let Some(index) =
             ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
-            && update::click_todo_row(state, index, Instant::now())
         {
+            changed = update::click_todo_row(state, index, Instant::now());
+        }
+        // 容器内其余位置（工具栏空白 / 分割线 / 统计块 / 列表外空白）同样让容器进入
+        // 选中态，但不改数据、不打断编辑、不穿透到窗格。焦点高亮只由边框表达，
+        // 不再依赖"点进输入框"才算选中。
+        changed |= update::focus_todo_from_click(state);
+        if changed {
             *dirty = true;
         }
-        // 分割线/工具栏空白/列表外空白：吞掉，既不聚焦也不穿透——
-        // 这里刻意什么都不做（连失焦都不给：点空白不该结束正在进行的编辑）。
     } else if !update::prompt_panel_active(state)
         && view.prompt.contains((mouse.column, mouse.row).into())
     {
