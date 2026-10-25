@@ -379,6 +379,9 @@ async fn tools_rejected_with_400_reports_capability_code_once() {
 /// 请求体确实带 tools 与 lx 系统提示（真实网络路径回归）。
 #[tokio::test]
 async fn request_body_carries_tools_and_system_prompt() {
+    // 系统提示含网络探测结果（后台线程异步测量）。先把缓存压到确定值，否则请求
+    // 构造与断言两次取 `system_prompt()` 可能落在 unknown/unavailable 两侧而假失败。
+    let _ = crate::platform::network_available();
     let body = concat!(
         "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
         "data: [DONE]\n\n",
