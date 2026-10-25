@@ -62,26 +62,16 @@ pub fn build(
     let input = input_of(request)?;
     // 系统指令：`instructions` 只放首段，其余段改为前置 user 项。
     //
-    // 形状见 [`super::system_messages`]：多个 system input 项会被代理拼回一条再按
-    // 2000 判长度，超限整条替换（实测）；改成 user 项后三种 transport 结果一致。
-    let (instructions, rest) = super::system_messages(&request.resolve_system_prompt());
+    // 形状见 [`super::SystemPromptParts`]：多个 system input 项会被代理拼回一条再按
+    // 2000 判长度，超限整条替换（实测）；合并成一条前置 user 项后三种 transport 一致。
+    let parts = super::SystemPromptParts::split(&request.resolve_system_prompt());
     let mut input = input;
-    if !rest.is_empty() {
-        let mut head: Vec<Value> = rest
-            .into_iter()
-            .map(|chunk| {
-                json!({
-                    "role": "user",
-                    "content": super::wrap_system_instructions(&chunk),
-                })
-            })
-            .collect();
-        head.extend(input);
-        input = head;
+    if let Some(tail) = parts.tail_message() {
+        input.insert(0, json!({"role": "user", "content": tail}));
     }
     let mut body = json!({
         "model": request.model.model,
-        "instructions": instructions,
+        "instructions": parts.head,
         "input": input,
         "stream": true,
     });

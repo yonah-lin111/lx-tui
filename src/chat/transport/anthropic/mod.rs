@@ -55,25 +55,16 @@ pub fn build(
     let url = join_url(base, "v1/messages");
     let messages = messages_of(request)?;
     // 系统指令：只有首段进顶层 `system`。多 text block 会被代理拼回一条再判长度，
-    // 超过 2000 整条替换（实测），因此其余段改为前置 user 消息（见 [`super::system_messages`]）。
-    let (system, rest) = super::system_messages(&request.resolve_system_prompt());
+    // 超过 2000 码元整条替换（实测），因此其余规则合并成一条前置 user 消息
+    //（见 [`super::SystemPromptParts`]）。
+    let parts = super::SystemPromptParts::split(&request.resolve_system_prompt());
     let mut messages = messages;
-    if !rest.is_empty() {
-        let mut prefixed: Vec<Value> = rest
-            .into_iter()
-            .map(|chunk| {
-                json!({
-                    "role": "user",
-                    "content": super::wrap_system_instructions(&chunk),
-                })
-            })
-            .collect();
-        prefixed.extend(messages);
-        messages = prefixed;
+    if let Some(tail) = parts.tail_message() {
+        messages.insert(0, json!({"role": "user", "content": tail}));
     }
     let mut body = json!({
         "model": request.model.model,
-        "system": system,
+        "system": parts.head,
         "messages": messages,
         "max_tokens": DEFAULT_MAX_TOKENS,
         "stream": true,

@@ -84,16 +84,14 @@ pub fn build(
 
 /// 编码 `messages`：首段 system + 其余段的前置 user 规则 + 历史；`items` 非空走结构化历史。
 ///
-/// 形状见 [`super::system_messages`]：只有首段走 system，其余段用 user 消息承载，
-/// 避免代理把「多条 system」拼回一条后按 2000 上限整条替换。
+/// 形状见 [`super::SystemPromptParts`]：首段走 system，其余规则**合并成一条** user
+/// 消息前置，避免代理把多条 system 拼回一条后按 2000 码元整条替换。
 fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
-    let (head, rest) = super::system_messages(&request.resolve_system_prompt());
-    let mut messages: Vec<Value> = vec![json!({"role": "system", "content": head})];
-    messages.extend(
-        rest.into_iter().map(
-            |chunk| json!({"role": "user", "content": super::wrap_system_instructions(&chunk)}),
-        ),
-    );
+    let parts = super::SystemPromptParts::split(&request.resolve_system_prompt());
+    let mut messages: Vec<Value> = vec![json!({"role": "system", "content": parts.head})];
+    if let Some(tail) = parts.tail_message() {
+        messages.push(json!({"role": "user", "content": tail}));
+    }
     if request.items.is_empty() {
         messages.extend(
             request

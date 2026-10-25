@@ -124,14 +124,14 @@ fn body_uses_input_not_messages() {
     assert!(body.get("messages").is_none(), "不沿用 messages 形状");
     assert_eq!(body["stream"], true);
     assert_eq!(body["model"], "grok");
-    // 系统指令：首段进顶层 instructions，其余作为前置 user 规则项（见 system_messages）。
-    let (head, rest) =
-        crate::chat::transport::system_messages(&crate::chat::prompt::system_prompt());
-    assert_eq!(body["instructions"], json!(head));
-    assert_eq!(system_rule_prefix(&body), rest.len());
+    // 系统指令：首段进顶层 instructions，其余规则合并成一条前置 user 项。
+    let parts =
+        crate::chat::transport::SystemPromptParts::split(&crate::chat::prompt::system_prompt());
+    assert_eq!(body["instructions"], json!(parts.head));
+    assert_eq!(system_rule_prefix(&body), 1);
 }
 
-/// 前置系统规则项的条数（`role=user` 且以 `<system_instructions>` 开头）。
+/// 前置系统规则项的条数（`role=user` 且以 `<system-instructions>` 开头）。
 fn system_rule_prefix(body: &Value) -> usize {
     body["input"]
         .as_array()
@@ -142,7 +142,7 @@ fn system_rule_prefix(body: &Value) -> usize {
                     item["role"] == "user"
                         && item["content"]
                             .as_str()
-                            .is_some_and(|text| text.starts_with("<system_instructions>"))
+                            .is_some_and(|text| text.starts_with("<system-instructions>"))
                 })
                 .count()
         })

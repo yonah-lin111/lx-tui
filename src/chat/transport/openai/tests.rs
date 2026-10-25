@@ -157,7 +157,7 @@ fn official_uses_fixed_url() {
     assert_eq!(built.url, "https://api.openai.com/v1/chat/completions");
 }
 
-/// 前置系统规则消息的条数（`role=user` 且以 `<system_instructions>` 开头）。
+/// 前置系统规则消息的条数（`role=user` 且以 `<system-instructions>` 开头）。
 fn system_rule_prefix(body: &Value) -> usize {
     body["messages"]
         .as_array()
@@ -169,7 +169,7 @@ fn system_rule_prefix(body: &Value) -> usize {
                     message["role"] == "user"
                         && message["content"]
                             .as_str()
-                            .is_some_and(|text| text.starts_with("<system_instructions>"))
+                            .is_some_and(|text| text.starts_with("<system-instructions>"))
                 })
                 .count()
         })
@@ -185,13 +185,13 @@ fn body_uses_messages_and_stream() {
     assert_eq!(body["model"], "example-chat");
     assert_eq!(body["stream"], true);
     let messages = body["messages"].as_array().expect("messages array");
-    // 首条 system 是提示首段；其余段以 user 规则前置（见 `system_messages`）。
-    let (head, rest) =
-        crate::chat::transport::system_messages(&crate::chat::prompt::system_prompt());
+    // 首条 system 是提示首段；其余规则合并成一条 user 消息前置。
+    let parts =
+        crate::chat::transport::SystemPromptParts::split(&crate::chat::prompt::system_prompt());
     assert_eq!(messages[0]["role"], "system");
-    assert_eq!(messages[0]["content"], json!(head));
+    assert_eq!(messages[0]["content"], json!(parts.head));
     let base = system_rule_prefix(&body) + 1;
-    assert_eq!(base - 1, rest.len(), "前置规则段数必须与切分一致");
+    assert_eq!(base - 1, 1, "其余规则只发一条前置消息");
     // 真实历史与 turns 一一对应（旧行为等价）。
     assert_eq!(messages.len(), base + 3);
     assert_eq!(messages[base]["role"], "user");

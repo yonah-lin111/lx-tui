@@ -129,7 +129,7 @@ fn trace(deltas: &[ChatDelta]) -> Vec<String> {
 
 // ---------------------------------------------------------------- 请求编码
 
-/// 前置系统规则段的条数（`user` content 以 `<system_instructions>` 开头）。
+/// 前置系统规则段的条数（`user` content 以 `<system-instructions>` 开头）。
 fn system_rule_prefix(body: &Value) -> usize {
     body["contents"]
         .as_array()
@@ -140,7 +140,7 @@ fn system_rule_prefix(body: &Value) -> usize {
                     content["role"] == "user"
                         && content["parts"][0]["text"]
                             .as_str()
-                            .is_some_and(|text| text.starts_with("<system_instructions>"))
+                            .is_some_and(|text| text.starts_with("<system-instructions>"))
                 })
                 .count()
         })
@@ -187,22 +187,19 @@ fn url_places_key_in_query_and_body_uses_contents() {
 #[test]
 fn system_instruction_carries_lx_prompt() {
     let body = body_of(&request());
-    let (head, rest) =
-        crate::chat::transport::system_messages(&crate::chat::prompt::system_prompt());
+    let split =
+        crate::chat::transport::SystemPromptParts::split(&crate::chat::prompt::system_prompt());
     let parts = body["systemInstruction"]["parts"]
         .as_array()
         .expect("parts");
     assert_eq!(parts.len(), 1, "只发首段，避免被代理拼回后整条替换");
-    assert_eq!(parts[0]["text"], json!(head));
+    assert_eq!(parts[0]["text"], json!(split.head));
 
+    // 其余规则合并成一条前置 user content。
+    assert_eq!(system_rule_prefix(&body), 1);
     let contents = body["contents"].as_array().expect("contents");
-    assert_eq!(system_rule_prefix(&body), rest.len());
-    for (index, chunk) in rest.iter().enumerate() {
-        let text = contents[index]["parts"][0]["text"]
-            .as_str()
-            .expect("rule text");
-        assert!(text.contains(chunk.as_str()), "规则段不得被改写");
-    }
+    let tail = contents[0]["parts"][0]["text"].as_str().expect("rule text");
+    assert!(tail.starts_with("<system-instructions>"));
 }
 
 /// `tools[0].functionDeclarations` 与 `available_tools()` 一一对应。

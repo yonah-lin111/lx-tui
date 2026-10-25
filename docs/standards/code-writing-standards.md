@@ -21,7 +21,9 @@
 - 默认回复语言跟随用户当前输入的语言：提示中写明“不自作主张切换语言，只有用户明确要求才改用指定语言”，不得把某一种语言钉死为默认值。
 - 提示是每次请求的固定开销：系统提示预算 12 KiB、含环境快照的完整提示 16 KiB，超限由测试拦截。
 - **单条 system 消息不得超过 2000 长度单位，单位是 UTF-16 码元**（不是 Unicode 字符：代理跑在 JS 里，emoji 计 2）。实测 9router 的 CodeBuddy CN 执行器（`cbcn/*` 模型）会把超长 system 消息**整条替换**成中性提示，模型随即自称「混元 / AI 助手」，lx 的身份与全部规则失效。
-- 发送侧统一走 `chat::transport::system_messages`：**首段**进各 transport 的原生 system 槽，**其余段**由调用方以 `user` 消息前置并用 `<system_instructions>` 包裹。不能都发 system——只有 OpenAI Chat 的多条 `messages` 会被逐条判定，Anthropic 的多 `text` block 与 Responses 的多 system 项都会被代理拼回一条再判长度。禁止把系统提示拼回单条发送。
+- 发送侧统一走 `chat::transport::SystemPromptParts::split`：**首段**进各 transport 的原生 system 槽，**其余规则合并成一条** `user` 消息前置，用 `<system-instructions>` 包裹（形状对齐 opencode 的 `SystemPart` + `joinText` + `wrapSystemUpdate`）。不能都发 system——只有 OpenAI Chat 的多条 `messages` 会被逐条判定，Anthropic 的多 `text` block 与 Responses 的多 system 项都会被代理拼回一条再判长度；也不能拆成多条 user——扁平化后三种 transport 的 token 数完全一致，历史里只多一条消息。
+- 包裹内部必须做 XML 元字符转义（`&`/`<`/`>`）：否则规则里出现 `</system-instructions>` 会提前闭合包裹，后续规则被降级成用户自由输入。
+- 首段必须逐轮稳定（环境快照固定在 `tail`），否则每轮前缀都不同，上游 prompt cache 全部失效。
 
 ## 错误处理与日志
 

@@ -61,25 +61,15 @@ pub fn build(
     );
     let contents = contents_of(request)?;
     // 系统指令：只有首段进 `systemInstruction`；其余段改为前置 user content
-    // （形状见 [`super::system_messages`]：代理会把多 part 拼回一条再按 2000 判长度）。
-    let (head, rest) = super::system_messages(&request.resolve_system_prompt());
+    // （形状见 [`super::SystemPromptParts`]：代理会把多 part 拼回一条再按 2000 判长度）。
+    let parts = super::SystemPromptParts::split(&request.resolve_system_prompt());
     let mut contents = contents;
-    if !rest.is_empty() {
-        let mut prefixed: Vec<Value> = rest
-            .into_iter()
-            .map(|chunk| {
-                json!({
-                    "role": "user",
-                    "parts": [{"text": super::wrap_system_instructions(&chunk)}],
-                })
-            })
-            .collect();
-        prefixed.extend(contents);
-        contents = prefixed;
+    if let Some(tail) = parts.tail_message() {
+        contents.insert(0, json!({"role": "user", "parts": [{"text": tail}]}));
     }
     let mut body = json!({
         "contents": contents,
-        "systemInstruction": {"parts": [{"text": head}]},
+        "systemInstruction": {"parts": [{"text": parts.head}]},
     });
     // 摘要请求不声明工具（无工具就无从发起调用）。
     if request.includes_tools() {

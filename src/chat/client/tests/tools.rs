@@ -400,25 +400,22 @@ async fn request_body_carries_tools_and_system_prompt() {
     .await;
     let recorded = server.await.expect("server");
     let sent: serde_json::Value = serde_json::from_str(&recorded.body).expect("json body");
-    // 线上形状：首条 system 是提示首段，其余段以 user 规则前置（见 system_messages）。
+    // 线上形状：首条 system 是提示首段，其余规则合并成一条 user 消息前置。
     let messages = sent["messages"].as_array().expect("messages");
-    let (head, rest) =
-        crate::chat::transport::system_messages(&crate::chat::prompt::system_prompt());
+    let parts =
+        crate::chat::transport::SystemPromptParts::split(&crate::chat::prompt::system_prompt());
     assert_eq!(messages[0]["role"], "system");
-    assert_eq!(messages[0]["content"], serde_json::json!(head));
-    assert!(!head.is_empty(), "必须发出系统提示");
-    // 前置规则段的条数与切分一致，且都带包裹标签。
-    let prefixed = messages
-        .iter()
-        .skip(1)
-        .take_while(|message| {
-            message["role"] == "user"
-                && message["content"]
-                    .as_str()
-                    .is_some_and(|text| text.starts_with("<system_instructions>"))
-        })
-        .count();
-    assert_eq!(prefixed, rest.len());
+    assert_eq!(messages[0]["content"], serde_json::json!(parts.head));
+    assert!(!parts.head.is_empty(), "必须发出系统提示");
+    // 其余规则合并成**一条**前置 user 消息（对齐 opencode 的 joinText 扁平化）。
+    let tail = &messages[1];
+    assert_eq!(tail["role"], "user");
+    let tail_text = tail["content"].as_str().expect("tail text");
+    assert!(tail_text.starts_with("<system-instructions>"));
+    assert!(
+        tail_text.contains(parts.tail.as_str()).eq(&false),
+        "tail 已被转义包裹"
+    );
     let names: Vec<&str> = sent["tools"]
         .as_array()
         .expect("tools")

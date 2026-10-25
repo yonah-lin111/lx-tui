@@ -31,11 +31,11 @@ use super::events::{ChatDelta, ChatRequest, PartDelta, PartKind};
 ///
 /// 取 1900 留 100 单位余量。**多段 system 消息只有 OpenAI Chat 的 `messages` 形状
 /// 会被逐条判定**；Anthropic 的 `system` 多 block 与 Responses 的多 system 项都会被
-/// 代理拼回一条再判，因此统一形状见 [`system_messages`]。
+/// 代理拼回一条再判，因此统一形状见 [`SystemPromptParts`]。
 pub const MAX_SYSTEM_MESSAGE_UNITS: usize = 1900;
 
 /// 第 2 段起的系统规则包裹标签：内容必须以 `user` 角色前置发送。
-pub const SYSTEM_INSTRUCTIONS_TAG: &str = "system_instructions";
+pub const SYSTEM_INSTRUCTIONS_TAG: &str = "system-instructions";
 
 /// 一段系统提示的文本长度（UTF-16 码元，与代理的 `String.length` 同口径）。
 fn utf16_len(text: &str) -> usize {
@@ -44,71 +44,95 @@ fn utf16_len(text: &str) -> usize {
         .sum()
 }
 
-/// 把系统提示按行切成若干段，每段 UTF-16 码元数不超过 [`MAX_SYSTEM_MESSAGE_UNITS`]。
+/// 系统提示的线上拆分结果：权威段（进 system 槽）+ 其余规则（降级为 user 文本）。
 ///
-/// 只在换行处切分，绝不把一个段落句子拦腰截断；单行本身超限时按字符边界硬切。
-/// 返回值至少含一段（空提示返回一个空串），顺序即发送顺序。
-pub fn split_system_prompt(prompt: &str) -> Vec<String> {
-    if prompt.is_empty() {
-        return vec![String::new()];
-    }
-    let mut chunks: Vec<String> = Vec::new();
-    let mut current = String::new();
-    let mut current_units = 0usize;
-    for line in prompt.split_inclusive('\n') {
-        let line_units = utf16_len(line);
-        if current_units > 0 && current_units + line_units > MAX_SYSTEM_MESSAGE_UNITS {
-            chunks.push(std::mem::take(&mut current));
-            current_units = 0;
+/// 形状借鉴 opencode 的 `SystemPart` + `wrapSystemUpdate`：
+/// - 系统提示本身是**多段**语义（身份 / 规则 / 环境），但只有第一段能占用原生
+///   system 槽——代理只按 2000 码元判定 system，超长即整条丢弃；
+/// - 其余段**合并成一条** `user` 消息前置，用 `<system-instructions>` 包裹，
+///   既保留权威顺序，又避开长度 gate（user 消息没有该限制，实测 12k 正常送达）。
+///
+/// 为什么不是「多条 system」：OpenAI Chat 的数组会被逐条判定，但 Anthropic 的多个
+/// `text` block 与 Responses 的多个 system 项会被代理**拼回一条**再判，超过 2000 依旧
+/// 整条替换（已实测）。为什么不是「多条 user」：`joinText` 式扁平化少一轮往返、
+/// 三种 transport 的 token 数完全一致，且不会让历史里出现一长串"用户消息"。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemPromptParts {
+    /// 进入各 transport 原生 system 槽的首段（UTF-16 码元数 ≤ [`MAX_SYSTEM_MESSAGE_UNITS`]）。
+    pub head: String,
+    /// 其余规则段落（原样，未包裹）；空串表示没有剩余内容。
+    pub tail: String,
+}
+
+impl SystemPromptParts {
+    /// 在行边界上切出首段；单行本身超限时按字符边界硬切。
+    ///
+    /// 环境快照排在提示末尾，因此永远落在 `tail`：`head` 逐轮稳定，便于命中
+    /// 上游的 prompt cache（opencode 把 initial/environment 单独成段也是这个理由）。
+    pub fn split(prompt: &str) -> Self {
+        if prompt.is_empty() {
+            return Self {
+                head: String::new(),
+                tail: String::new(),
+            };
         }
-        if line_units > MAX_SYSTEM_MESSAGE_UNITS {
-            // 单行超限：按字符边界切开，不产生非法 UTF-8。
-            let mut buffer = String::new();
-            let mut units = 0usize;
-            for ch in line.chars() {
-                let cell = ch.len_utf16();
-                if units + cell > MAX_SYSTEM_MESSAGE_UNITS {
-                    chunks.push(std::mem::take(&mut buffer));
-                    units = 0;
+        let mut head_end = 0usize; // 已并入 head 的字节边界
+        let mut head_units = 0usize;
+        for line in prompt.split_inclusive('\n') {
+            let units = utf16_len(line);
+            if head_units + units > MAX_SYSTEM_MESSAGE_UNITS {
+                if head_units == 0 {
+                    // 首行就超限：按字符边界硬切（不产生非法 UTF-8）。
+                    let mut used = 0usize;
+                    for ch in line.chars() {
+                        let cell = ch.len_utf16();
+                        if used + cell > MAX_SYSTEM_MESSAGE_UNITS {
+                            break;
+                        }
+                        used += cell;
+                        head_end += ch.len_utf8();
+                    }
                 }
-                buffer.push(ch);
-                units += cell;
+                break;
             }
-            current = buffer;
-            current_units = units;
-            continue;
+            head_end += line.len();
+            head_units += units;
         }
-        current.push_str(line);
-        current_units += line_units;
+        Self {
+            head: prompt[..head_end].to_string(),
+            tail: prompt[head_end..].to_string(),
+        }
     }
-    if !current.is_empty() {
-        chunks.push(current);
+
+    /// 其余规则的前置消息（已包裹并转义）；没有剩余内容时返回 `None`。
+    pub fn tail_message(&self) -> Option<String> {
+        (!self.tail.is_empty()).then(|| wrap_system_instructions(&self.tail))
     }
-    if chunks.is_empty() {
-        chunks.push(String::new());
-    }
-    chunks
 }
 
-/// 系统提示的统一线上形状：`(首段, 其余段)`。
+/// 系统规则包裹：标注这是规则而非用户自由输入，并对 XML 元字符转义。
 ///
-/// **首段**进各 transport 的原生 system 槽（OpenAI `role=system` 消息、Anthropic 顶层
-/// `system`、Google `systemInstruction`、Responses `instructions`）；**其余段**必须由
-/// 调用方作为 `user` 消息前置到对话历史之前，并用 [`wrap_system_instructions`] 包裹。
-///
-/// 为什么不能都发 system：代理（9router CodeBuddy 执行器）只对 OpenAI Chat 的
-/// `messages` 数组逐条判定长度；Anthropic 的多个 `text` block 与 Responses 的多个
-/// system 项都会被拼回一整条再判，超过 2000 依然被整条替换（已实测）。改成 user
-/// 消息后三种 transport 都能原样送达，且实测 token 数完全一致。
-pub fn system_messages(prompt: &str) -> (String, Vec<String>) {
-    let mut chunks = split_system_prompt(prompt);
-    let head = chunks.remove(0);
-    (head, chunks)
-}
-
-/// 第 2 段起的系统规则包裹：明确标注这是规则而不是用户的自由输入。
+/// 转义是硬要求（对齐 opencode 的 `escapeSystemUpdateText`）：提示正文里一旦出现
+/// `</system-instructions>`，未转义就会提前闭合包裹，后面的规则会被当成用户输入。
 pub fn wrap_system_instructions(text: &str) -> String {
-    format!("<{SYSTEM_INSTRUCTIONS_TAG}>\n{text}\n</{SYSTEM_INSTRUCTIONS_TAG}>")
+    format!(
+        "<{SYSTEM_INSTRUCTIONS_TAG}>\n{}\n</{SYSTEM_INSTRUCTIONS_TAG}>",
+        escape_instruction_text(text)
+    )
+}
+
+/// XML 元字符转义（只用于包裹内部，不改原文本语义）。
+fn escape_instruction_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            ch => out.push(ch),
+        }
+    }
+    out
 }
 
 /// 一次 transport 请求的完整描述（URL、header、body）；由 client 执行。

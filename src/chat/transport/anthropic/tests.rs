@@ -28,7 +28,7 @@ fn request() -> ChatRequest {
     }
 }
 
-/// 前置系统规则段的数量（`role=user` 且内容是 `<system_instructions>` 包裹）。
+/// 前置系统规则段的数量（`role=user` 且内容是 `<system-instructions>` 包裹）。
 fn system_rule_prefix(body: &Value) -> usize {
     body["messages"]
         .as_array()
@@ -40,7 +40,7 @@ fn system_rule_prefix(body: &Value) -> usize {
                         && message["content"]
                             .as_str()
                             .or_else(|| message["content"][0]["text"].as_str())
-                            .is_some_and(|text| text.starts_with("<system_instructions>"))
+                            .is_some_and(|text| text.starts_with("<system-instructions>"))
                 })
                 .count()
         })
@@ -172,18 +172,19 @@ fn body_has_max_tokens_messages_and_protocol_headers() {
 fn plain_text_history_is_unchanged() {
     let body = body_of(&request());
     let messages = body["messages"].as_array().expect("messages");
-    // 首段之外的系统规则以 `user` 消息前置（见 `system_messages`），先跳过它们。
+    // 首段之外的系统规则合并成一条 `user` 消息前置（见 `SystemPromptParts`），先跳过它。
     let prefix = system_rule_prefix(&body);
     assert_eq!(
         &messages[prefix..],
         &[json!({"role": "user", "content": "你好"})],
         "真实历史必须与旧行为逐字一致"
     );
-    // 系统指令只有首段：顶层 system 是字符串。
-    let (head, rest) =
-        crate::chat::transport::system_messages(&crate::chat::prompt::system_prompt());
-    assert_eq!(body["system"], json!(head));
-    assert_eq!(rest.len(), prefix, "前置规则段数必须与切分结果一致");
+    // 系统指令只有首段：顶层 system 是字符串；其余规则合并成一条前置 user 消息。
+    let parts =
+        crate::chat::transport::SystemPromptParts::split(&crate::chat::prompt::system_prompt());
+    assert_eq!(body["system"], json!(parts.head));
+    assert_eq!(prefix, 1, "其余规则只发一条前置消息");
+    assert!(parts.tail_message().is_some());
 }
 
 /// `tools` 用 `input_schema` 承载四工具 schema。
