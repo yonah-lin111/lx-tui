@@ -17,7 +17,11 @@ use std::path::Path;
 
 use crate::platform::EnvironmentFacts;
 
-/// `lx` agent 的稳定名称。
+/// `lx` agent 的稳定名称。**不可变**：不是配置项。
+///
+/// 身份名的唯一来源，系统提示首行由它生成。不得由环境变量、命令行参数、设置页
+/// 或模型输出改写；改名等于换 agent，必须同时递增 [`PROMPT_VERSION`] 并更新提示
+/// 正文、测试与文档（提示缓存与日志都按这个名字区分身份）。
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
@@ -371,6 +375,20 @@ mod tests {
             timezone: Some("UTC+08:00".into()),
             network: Some(true),
         }
+    }
+
+    /// agent 名字是 `AGENT_NAME` 这一个来源，提示首行必须与它逐字一致。
+    ///
+    /// 身份名不可变、不可配置：这里把它和提示正文锁在一起，防止改名时只改一半
+    /// （提示说 A、日志/缓存按 B 区分）。
+    #[test]
+    fn agent_name_is_wired_into_the_prompt() {
+        assert_eq!(AGENT_NAME, "lx");
+        assert!(
+            LX_SYSTEM_PROMPT.starts_with(&format!("You are {AGENT_NAME},")),
+            "提示首行必须由 AGENT_NAME 生成：{:.60}",
+            LX_SYSTEM_PROMPT
+        );
     }
 
     /// 提示只包含 lx 自己的身份与真实可用工具；不得出现第三方品牌或整份系统指令。

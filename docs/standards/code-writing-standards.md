@@ -16,6 +16,7 @@
 - `lx` 的所有模型可见文本**一律用英文编写**，包括系统提示、工具描述与参数 description、工具错误消息、环境快照、压缩提示与注入的上下文包裹文本。中文只用于代码注释与用户可见界面文案。
 - 模型可见文本的唯一来源：系统提示在 `src/chat/prompt.rs`，工具规格在 `src/chat/tools/schema.rs`，压缩提示在 `src/chat/compact.rs`。禁止在请求装配处另行拼一段同义指令。
 - 不提第三方品牌（`Codex`/`OpenAI`/`Anthropic` 等），不承诺项目没有的能力（沙箱、审批、MCP、图片）。
+- **agent 身份名固定为 `lx`，不可变、不可配置**（`chat::prompt::AGENT_NAME` 是唯一来源）；禁止通过环境变量、命令行参数、设置项或模型输出去改名。提示首行必须与 `AGENT_NAME` 一致（有测试锁定）；确实要改名等于换 agent，必须同时递增 `PROMPT_VERSION`、更新提示正文/测试/文档。
 - 系统提示的章节结构对齐 codex `base_instructions`（personality / language / AGENTS.md / responsiveness / planning / task execution / validation / ambition vs precision / progress / final message / tools / workspace）；改结构时同步改 `PROMPT_VERSION` 与对应测试。
 - 默认回复语言跟随用户当前输入的语言：提示中写明“不自作主张切换语言，只有用户明确要求才改用指定语言”，不得把某一种语言钉死为默认值。
 - 提示是每次请求的固定开销：系统提示预算 12 KiB、含环境快照的完整提示 16 KiB，超限由测试拦截。
