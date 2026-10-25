@@ -76,8 +76,9 @@ pub fn agent_location(tab_index: usize) -> String {
     format!("[tab {}]", tab_index.saturating_add(1))
 }
 
-/// prompt 面板**树视图**顶边框标题（编辑视图改用绑定目标名，见 `ui::prompt::header`）。
-pub const PROMPT_TREE_BORDER_TITLE: &str = "Prompts";
+/// 右侧容器顶边框标签页文案。
+pub const RIGHT_TAB_PROMPT_LABEL: &str = "Prompt";
+pub const RIGHT_TAB_TODO_LABEL: &str = "Todo";
 /// prompt 底边框分支前缀。
 pub const PROMPT_BRANCH_PREFIX: &str = "b:";
 /// 工作区路径标记前缀；prompt 底边框与 lx 窗格顶边框共用（前缀强调色、值 muted）。

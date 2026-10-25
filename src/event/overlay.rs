@@ -453,7 +453,7 @@ pub(crate) fn open_right_click_menu(
         return true;
     }
     // 提示词树：行上打开节点菜单，空白区域打开新建菜单；分区标签行不响应。
-    if !state.prompt_collapsed && update::prompt_tree_mode(state) {
+    if update::prompt_panel_active(state) && update::prompt_tree_mode(state) {
         let area = paste::prompt_text_area(view);
         if area.contains((column, row).into()) {
             let hit = {

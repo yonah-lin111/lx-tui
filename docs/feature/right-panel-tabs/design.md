@@ -597,3 +597,15 @@ if update::set_right_tab_hover(state, right_tab_hover) {
    不要为了几十行去顶破 1000 行上限。
 4. **Todo 是占位**：将来接入真实面板时，只需在 `render` 的 `match` 里加分支、在 `RightTab` 加枚举值，
    容器/tab/底边框/命中闸门都不用重切。
+
+## 9. 实施记录（与设计的差异）
+
+实施后回填；未列出的条目均与上文一致。
+
+| # | 设计写法 | 实际实现 | 原因 |
+| --- | --- | --- | --- |
+| 1 | `tab_rects` 判据 `x + width > row.right()` | `x + width >= row.right()` | 判据为 `>` 时，tab 恰好顶到右端会覆盖右边角 `╮`（宽度 10~11 时实测丢角）。改为 `>=` 后恒定给右角留 1 列。 |
+| 2 | press.rs 加「`!prompt_panel_active` 整块吞掉」 | 追加前置条件 `view.prompt.contains(...)` | `prompt_panel_active` 在**折叠态**同样为假；不加范围约束会把整个屏幕的点击吞掉。 |
+| 3 | `paint_tabs` 直接套 `style::muted()` / `selection()` | 每格先 `buf.set_style(rect, Style::reset())` 再套 token | `muted()` 只带 DIM、`selection()` 只带中灰底，`set_stringn` 是 patch 语义，会继承下层聚焦边框的 `accent()`（Cyan 加粗），非激活 tab 看起来也在发亮。已有聚焦态回归用例。 |
+| 4 | 闸门点列了 press/wheel/drag/hover/overlay | 额外给 `ui/tooltip.rs` 的 prompt 按钮 tooltip 加 `right_tab == Prompt` | 渲染层在 Todo 下不画那些按钮，不加闸门会出现「悬停空白处弹出按钮提示」。 |
+| 5 | `ui/layout.rs` 只改文档注释 | 同，另在 `ViewLayout.prompt` 注释写明「prompt 列 = 右侧统一容器」 | §8.1 的命名债，按计划保留字段名。 |

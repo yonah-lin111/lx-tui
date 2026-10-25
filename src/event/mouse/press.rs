@@ -24,8 +24,7 @@ use super::hit::{
     handle_lx_input_scrollbar_press, handle_prompt_scrollbar_press,
     handle_terminal_scrollbar_press, handle_workspace_scrollbar_press, lx_toast_at,
     mention_item_at, pane_at, pane_boundary_draggable, pane_content_inner, pane_toggle_button_at,
-    panel_item_at, prompt_border_at, prompt_boundary_hit, prompt_header_at, slash_item_at,
-    template_button_at,
+    panel_item_at, prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -251,6 +250,21 @@ pub(crate) fn handle_mouse_down_left(
     {
         update::begin_prompt_resize(state);
         *dirty = true;
+    } else if !state.prompt_collapsed
+        && let Some(tab) = ui::right_panel::tab_at(view.prompt, mouse.column, mouse.row)
+    {
+        // 容器顶边框 tab：切换面板（内部提交页重命名、清瞬时指针）。
+        update::select_right_tab(state, tab);
+        *dirty = true;
+    } else if !state.prompt_collapsed
+        && ui::right_panel::tab_row_at(view.prompt, mouse.column, mouse.row)
+    {
+        // 顶边框 tab 之外的空白属于容器控件区：吞掉，不聚焦编辑器。
+    } else if !update::prompt_panel_active(state)
+        && view.prompt.contains((mouse.column, mouse.row).into())
+    {
+        // Todo 面板（或折叠态容器）：按钮行/分割线/内容区一律吞掉，
+        // 不聚焦、不穿透到窗格。
     } else if let Some(index) = paste::paste_item_at(state, view, mouse.column, mouse.row) {
         update::select_paste(state, index);
         *dirty = true;
@@ -341,8 +355,8 @@ pub(crate) fn handle_mouse_down_left(
             }
         }
         *dirty = true;
-    } else if !state.prompt_collapsed && prompt_border_at(view.prompt, mouse.column, mouse.row) {
-        // 顶边框是控件区：条目名与空白段点击只把焦点交给编辑器，不移动正文光标。
+    } else if !state.prompt_collapsed && ui::prompt_title_at(view.prompt, mouse.column, mouse.row) {
+        // 标题行是控件区：点条目名/空白只把焦点交给编辑器，不移动正文光标。
         update::focus_prompt(state);
         *dirty = true;
     } else if !state.prompt_collapsed && prompt_header_at(view.prompt, mouse.column, mouse.row) {

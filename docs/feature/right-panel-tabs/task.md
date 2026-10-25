@@ -32,90 +32,104 @@
 
 ### 2. 复现测试（先红）
 
-- [ ] `src/ui/right_panel/tests.rs`（新）：`tabs_render_on_top_border_with_accent_active`、
+- [x] `src/ui/right_panel/tests.rs`（新）：`tabs_render_on_top_border_with_accent_active`、
       `tabs_drop_trailing_when_narrow`、`tab_hit_areas`、`todo_body_is_blank_with_plain_divider`、
       `bottom_identity_survives_tab_switch`。
-- [ ] `src/app/update/tests.rs`：`select_right_tab_commits_rename_and_clears_transient_state`、
+- [x] `src/app/update/tests.rs`：`select_right_tab_commits_rename_and_clears_transient_state`、
       `select_right_tab_preserves_prompt_content`、`select_right_tab_same_tab_is_noop`、
       `focus_prompt_switches_back_to_prompt_tab`。
-- [ ] `src/event/tests.rs`：`mouse_click_right_tab_switches_panel`、
+- [x] `src/event/tests.rs`：`mouse_click_right_tab_switches_panel`、
       `mouse_click_todo_body_swallowed_without_focus_or_cursor`、
       `mouse_click_prompt_toolbar_ignored_on_todo_tab`、`mouse_wheel_over_todo_does_not_scroll_prompt`、
       `mouse_motion_tracks_right_tab_hover`。
-- [ ] 确认上述用例在改动前确实失败（红），并记录失败原因。
+- [x] 确认上述用例在改动前确实失败（红），并记录失败原因。
 
 ### 3. 状态层（`src/app/`）
 
-- [ ] `src/app/state.rs`：
-  - [ ] 定义 `RightTab { Prompt, Todo }`（`Default = Prompt`），带文档注释说明"纯视图偏好"。
-  - [ ] `AppState` 新增 `pub right_tab: RightTab` 与 `pub right_tab_hover: Option<RightTab>`。
-  - [ ] `AppState::demo()` 初始化为 `RightTab::Prompt` / `None`。
-- [ ] `src/app/update/right_panel.rs`（新，约 60 行）：
-  - [ ] `select_right_tab(state, tab) -> bool`：先 `finish_page_rename`，再置 tab；
+- [x] `src/app/state.rs`：
+  - [x] 定义 `RightTab { Prompt, Todo }`（`Default = Prompt`），带文档注释说明"纯视图偏好"。
+  - [x] `AppState` 新增 `pub right_tab: RightTab` 与 `pub right_tab_hover: Option<RightTab>`。
+  - [x] `AppState::demo()` 初始化为 `RightTab::Prompt` / `None`。
+- [x] `src/app/update/right_panel.rs`（新，约 60 行）：
+  - [x] `select_right_tab(state, tab) -> bool`：先 `finish_page_rename`，再置 tab；
         切到非 Prompt 时清 `prompt_focused` / `clear_selection` / `prompt.clear_panel()` / `prompt_tree_hover`。
-  - [ ] `set_right_tab_hover(state, hover) -> bool`（变化才返回 true）。
-  - [ ] `prompt_panel_active(state) -> bool`（`right_tab == Prompt && !prompt_collapsed`）。
-- [ ] `src/app/update.rs`：`mod right_panel;` + `pub use right_panel::*;`。
-- [ ] `src/app/update/editor.rs::focus_prompt`：聚焦时一并把 `right_tab` 置回 `Prompt`
+  - [x] `set_right_tab_hover(state, hover) -> bool`（变化才返回 true）。
+  - [x] `prompt_panel_active(state) -> bool`（`right_tab == Prompt && !prompt_collapsed`）。
+- [x] `src/app/update.rs`：`mod right_panel;` + `pub use right_panel::*;`。
+- [x] `src/app/update/editor.rs::focus_prompt`：聚焦时一并把 `right_tab` 置回 `Prompt`
       （保证 `prompt_focused ⇒ right_tab == Prompt` 不变量）。
-- [ ] `src/app/actions.rs`：**不加**新 `Action` 变体——tab 切换带参数（`RightTab`），
+- [x] `src/app/actions.rs`：**不加**新 `Action` 变体——tab 切换带参数（`RightTab`），
       而 `Action` 是 `Copy` 无参枚举；由事件层直接调 `update::select_right_tab`（与
       `toggle_prompt_panel_mode` 等既有做法一致）。
 
 ### 4. 布局与渲染（`src/ui/`）
 
-- [ ] `src/ui/right_panel.rs`（新，约 220 行）：
-  - [ ] `tab_label` / `tab_rects` / `tab_at` / `tab_row_at` / `paint_tabs`（纯函数，绘制与命中共用几何）。
-  - [ ] `render(frame, view, state)`：折叠窄条 → `Block` → tab → 底边框 → 按 `right_tab` 分发。
-  - [ ] `render_empty_body`（Todo）：只画工具栏下一行的分割线。
-  - [ ] `render_bottom` / `prompt_identity`：从 `prompt_frame.rs` 原样搬入。
-  - [ ] `#[cfg(test)] mod tests;` + 同目录 `tests.rs`。
-- [ ] `src/ui/prompt_frame.rs`：
-  - [ ] `render_prompt` → `render_body(frame, area, state)`：去掉 `Block`、去掉顶边框标题、去掉底边框；
+- [x] `src/ui/right_panel.rs`（新，约 220 行）：
+  - [x] `tab_label` / `tab_rects` / `tab_at` / `tab_row_at` / `paint_tabs`（纯函数，绘制与命中共用几何）。
+  - [x] `render(frame, view, state)`：折叠窄条 → `Block` → tab → 底边框 → 按 `right_tab` 分发。
+  - [x] `render_empty_body`（Todo）：只画工具栏下一行的分割线。
+  - [x] `render_bottom` / `prompt_identity`：从 `prompt_frame.rs` 原样搬入。
+  - [x] `#[cfg(test)] mod tests;` + 同目录 `tests.rs`。
+- [x] `src/ui/prompt_frame.rs`：
+  - [x] `render_prompt` → `render_body(frame, area, state)`：去掉 `Block`、去掉顶边框标题、去掉底边框；
         改为"先 `render_header` 画分割线 → 再 `paint_title_row` 覆盖标题与页控件"。
-  - [ ] 树视图 `TitleRow` 变体改为"无标题"（不再引用 `PROMPT_TREE_BORDER_TITLE`）。
-  - [ ] `prompt_scrollbar` 增加 `right_tab == Prompt` 闸门。
-  - [ ] `prompt_page_control_at` 改用 `prompt::title_row(area)` 作为控件区矩形。
-  - [ ] 新增 `pub fn title_row(panel) -> Option<Rect>`（整行版本，复用 `prompt_divider_rect` 的行号）。
-  - [ ] 新增 `pub fn prompt_title_at(panel, column, row) -> bool`（标题行整行命中，供"点标题行聚焦"用）。
-- [ ] `src/ui/prompt/header.rs`：按 `design.md` §4.3.3 重命名 6 个符号；`page_controls` 算术不动。
-- [ ] `src/ui/prompt.rs`：`render_divider` 改 `pub(crate)`；`render_toolbar` 不动。
-- [ ] `src/ui/text.rs`：新增 `RIGHT_TAB_PROMPT_LABEL` / `RIGHT_TAB_TODO_LABEL`，删除 `PROMPT_TREE_BORDER_TITLE`。
-- [ ] `src/ui/mod.rs`：`pub mod right_panel;`，`render_prompt` 调用改为 `right_panel::render`。
-- [ ] `src/ui/mod.rs` 顶部浮层 tooltip 判断：`Overlay::PageMenu(...)` 等分支不变（浮层未改）。
+  - [x] 树视图 `TitleRow` 变体改为"无标题"（不再引用 `PROMPT_TREE_BORDER_TITLE`）。
+  - [x] `prompt_scrollbar` 增加 `right_tab == Prompt` 闸门。
+  - [x] `prompt_page_control_at` 改用 `prompt::title_row(area)` 作为控件区矩形。
+  - [x] 新增 `pub fn title_row(panel) -> Option<Rect>`（整行版本，复用 `prompt_divider_rect` 的行号）。
+  - [x] 新增 `pub fn prompt_title_at(panel, column, row) -> bool`（标题行整行命中，供"点标题行聚焦"用）。
+- [x] `src/ui/prompt/header.rs`：按 `design.md` §4.3.3 重命名 6 个符号；`page_controls` 算术不动。
+- [x] `src/ui/prompt.rs`：`render_divider` 改 `pub(crate)`；`render_toolbar` 不动。
+- [x] `src/ui/text.rs`：新增 `RIGHT_TAB_PROMPT_LABEL` / `RIGHT_TAB_TODO_LABEL`，删除 `PROMPT_TREE_BORDER_TITLE`。
+- [x] `src/ui/mod.rs`：`pub mod right_panel;`，`render_prompt` 调用改为 `right_panel::render`。
+- [x] `src/ui/mod.rs` 顶部浮层 tooltip 判断：`Overlay::PageMenu(...)` 等分支不变（浮层未改）。
 
 ### 5. 事件与交互（`src/event/`）
 
-- [ ] `src/event/mouse/press.rs`：按 `design.md` §4.4.1 插入 tab 命中、tab 行空白吞掉、
+- [x] `src/event/mouse/press.rs`：按 `design.md` §4.4.1 插入 tab 命中、tab 行空白吞掉、
       `!prompt_panel_active` 整块吞掉三段分支；其余 prompt 分支保持原顺序。
-- [ ] `src/event/mouse/hover.rs`：新增 tab 悬停计算与 `set_right_tab_hover`；树视图行悬停闸门改为
+- [x] `src/event/mouse/hover.rs`：新增 tab 悬停计算与 `set_right_tab_hover`；树视图行悬停闸门改为
       `!update::prompt_panel_active(state)`。
-- [ ] `src/event/mouse/hit.rs`：
-  - [ ] `pane_content_inner`：prompt 且 `!prompt_panel_active` 时返回零矩形。
-  - [ ] 删除 `prompt_border_at`（改用 `ui::right_panel::tab_row_at`）。
-- [ ] `src/event/mouse/wheel.rs`：prompt 分支加 `prompt_panel_active` 闸门。
-- [ ] `src/event/mouse/drag.rs`：prompt 光标跟随分支加同一闸门。
-- [ ] `src/event/overlay.rs`：提示词树右键菜单分支加同一闸门。
-- [ ] `src/event/session.rs`：**不改**（rects 仍需 prompt 列，保证分割线拖拽与 toast 锚点）。
+- [x] `src/event/mouse/hit.rs`：
+  - [x] `pane_content_inner`：prompt 且 `!prompt_panel_active` 时返回零矩形。
+  - [x] 删除 `prompt_border_at`（改用 `ui::right_panel::tab_row_at`）。
+- [x] `src/event/mouse/wheel.rs`：prompt 分支加 `prompt_panel_active` 闸门。
+- [x] `src/event/mouse/drag.rs`：prompt 光标跟随分支加同一闸门。
+- [x] `src/event/overlay.rs`：提示词树右键菜单分支加同一闸门。
+- [x] `src/event/session.rs`：**不改**（rects 仍需 prompt 列，保证分割线拖拽与 toast 锚点）。
 
 ### 6. 测试与文档
 
-- [ ] 迁移/更新既有用例：`src/ui/prompt/tests.rs`（标题行落点、重命名光标、树视图标题）、
+- [x] 迁移/更新既有用例：`src/ui/prompt/tests.rs`（标题行落点、重命名光标、树视图标题）、
       `src/ui/tests.rs::prompt_renders_toolbar_and_divider_rows`、
       `src/event/tests.rs` 中页控件两例的命中行号。
-- [ ] 补齐第 2 节列出的新用例，全部转绿。
-- [ ] 同步 `docs/standards/tui-design-requirements.md` 第 25 行（按 `design.md` §7 五点改写）。
-- [ ] 回写 `docs/feature/right-panel-tabs/design.md` 的"实施记录（与设计的差异）"（若实现期有偏差）。
+- [x] 补齐第 2 节列出的新用例，全部转绿。
+- [x] 同步 `docs/standards/tui-design-requirements.md` 第 25 行（按 `design.md` §7 五点改写）。
+- [x] 回写 `docs/feature/right-panel-tabs/design.md` 的"实施记录（与设计的差异）"（若实现期有偏差）。
 
 ### 7. 精确验证
 
-- [ ] `cargo fmt`
-- [ ] `cargo clippy --all-targets -- -D warnings`
-- [ ] `cargo test ui::right_panel`、`cargo test ui::prompt`、`cargo test layout::`、`cargo test app::update`、
+- [x] `cargo fmt`
+- [x] `cargo clippy --all-targets -- -D warnings`
+- [x] `cargo test ui::right_panel`、`cargo test ui::prompt`、`cargo test layout::`、`cargo test app::update`、
       `cargo test event::`
-- [ ] `cargo test`（全量）
-- [ ] 交回用户 `cargo run` 人工验收视觉与交互（Agent 无法交互式验证 TUI）。
+- [x] `cargo test`（全量）
+- [x] 交回用户 `cargo run` 人工验收视觉与交互（Agent 无法交互式验证 TUI）。
 
 ## 完成记录
 
-（实施完成后回填：分支、提交、与设计的差异、未做项及原因。）
+- 分支：`feat/right-panel-tabs`（worktree：`.worktrees/right-panel-tabs`，基于 `dev` @ `98388df`）。
+- 验证：`cargo fmt` 通过；`cargo clippy --all-targets -- -D warnings` 通过；`cargo test` 全绿
+  （lib 3363 passed / 0 failed / 2 ignored，其余 15 个测试目标全 ok）。
+- 与设计的差异（详见 `design.md` §9）：
+  1. `tab_rects` 的右边界从 `>` 收紧为 `>=`：否则 tab 恰好顶到 `row.right()` 时会盖掉右边角 `╮`。
+  2. `press.rs` 的「`!prompt_panel_active` 整块吞掉」额外加了 `view.prompt.contains(...)` 前置条件，
+     否则折叠态（`prompt_panel_active` 同为假）会把整个屏幕的点击吞掉。
+  3. 修复 `paint_tabs` 的样式继承缺陷：`muted()` / `selection()` 不带完整前景，直接叠加会继承
+     聚焦边框的 `accent()`（Cyan 加粗），导致非激活 tab 也在发亮。改为每格先 `Style::reset()`
+     再套 token，并有聚焦态回归用例锁住。
+  4. `src/ui/tooltip.rs` 的 prompt 工具栏/块按钮 tooltip 一并加 `right_tab == Prompt` 闸门，
+     否则 Todo 下悬停空白处会弹出按钮提示（渲染层已不画按钮）。
+- 未做项：无。`src/layout.rs` 保持 999 行未动；`docs/standards/tui-design-requirements.md` 已按
+  `design.md` §7 的五点同步。
+- 待人工验收：tab 高亮观感、Todo 空白容器、点击不穿透（Agent 无法交互式验证 TUI，需 `cargo run`）。

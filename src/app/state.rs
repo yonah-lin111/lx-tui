@@ -69,6 +69,17 @@ pub struct SelectionAutoscroll {
     pub next_at: Instant,
 }
 
+/// 右侧统一容器的当前面板。
+///
+/// 纯视图偏好：不落库、不写配置，启动恒为 `Prompt`（与 `prompt_left` 同级）。
+/// 切换工作区不改变它。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RightTab {
+    #[default]
+    Prompt,
+    Todo,
+}
+
 /// 顶层层级：工作区包含标签与挂起的 prompt 草稿，标签包含 BSP 窗格树与窗格终端；
 /// prompt 面板为全局右栏，显示激活（或钉住）工作区的草稿。
 #[derive(Debug)]
@@ -120,6 +131,10 @@ pub struct AppState {
     pub prompt_width: u16,
     /// prompt 是否与主区窗格互换、显示在主区左侧；仅存内存，启动复位。
     pub prompt_left: bool,
+    /// 右侧容器当前面板；仅鼠标点击顶边框 tab 切换。
+    pub right_tab: RightTab,
+    /// 鼠标悬停的 tab（仅未激活那个会显示悬停反馈）。
+    pub right_tab_hover: Option<RightTab>,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
     /// 标签栏滚动偏移（首个可见标签索引）；仅作用于当前工作区。
@@ -222,6 +237,8 @@ impl AppState {
             prompt_pinned: None,
             prompt_width: DEFAULT_PROMPT_WIDTH,
             prompt_left: false,
+            right_tab: RightTab::Prompt,
+            right_tab_hover: None,
             workspaces: vec![Workspace {
                 name,
                 tabs: vec![Tab::single_terminal()],

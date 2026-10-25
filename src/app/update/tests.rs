@@ -4890,3 +4890,157 @@ fn lx_history_cursor_is_per_pane_while_entries_are_shared() {
     // 共享验证：A 的游标仍是它自己的第 2 条。
     assert_eq!(state.pane_anywhere(first).expect("pane").lx.input, "two");
 }
+
+// ===== 右侧容器 tab =====
+
+#[test]
+fn select_right_tab_preserves_prompt_content() {
+    use crate::app::prompt::{PromptItem, PromptPage};
+
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 10);
+    let mut item = PromptItem::single(7, None, "paged", "alpha");
+    item.pages.push(PromptPage::saved(70, "Page 2", "beta"));
+    state.workspaces[0]
+        .prompt_panel
+        .tree
+        .replace(vec![], vec![item]);
+    assert!(edit_prompt_item(&mut state, 0, 7));
+    state.prompt.insert_str("\nsecond line");
+    state.prompt.set_cursor_offset_for_test(3);
+    set_prompt_scroll(&mut state, 1);
+
+    let text = state.prompt.text().to_string();
+    let cursor = state.prompt.cursor();
+    let scroll = state.prompt.scroll();
+    let mode = state.workspaces[0].prompt_panel.mode;
+    let editing = state.workspaces[0].prompt_panel.editing;
+
+    assert!(select_right_tab(&mut state, RightTab::Todo));
+    assert_eq!(state.right_tab, RightTab::Todo);
+    assert!(select_right_tab(&mut state, RightTab::Prompt));
+
+    assert_eq!(state.prompt.text(), text, "正文原样保留");
+    assert_eq!(state.prompt.cursor(), cursor, "光标原样保留");
+    assert_eq!(state.prompt.scroll(), scroll, "滚动位置原样保留");
+    assert_eq!(state.workspaces[0].prompt_panel.mode, mode);
+    assert_eq!(state.workspaces[0].prompt_panel.editing, editing);
+    assert!(state.prompt.can_undo(), "撤销栈未被改写");
+    state.prompt.undo();
+    assert_ne!(state.prompt.text(), text, "撤销可回到上一次编辑");
+}
+
+#[test]
+fn focus_prompt_switches_back_to_prompt_tab() {
+    let mut state = AppState::demo();
+    assert!(select_right_tab(&mut state, RightTab::Todo));
+    assert_eq!(state.right_tab, RightTab::Todo);
+    focus_prompt(&mut state);
+    assert_eq!(state.right_tab, RightTab::Prompt);
+    assert!(state.prompt_focused);
+}
+
+#[test]
+fn select_right_tab_commits_rename_and_clears_transient_state() {
+    use crate::app::prompt::{PromptItem, PromptPage};
+
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 10);
+    let mut item = PromptItem::single(7, None, "paged", "alpha");
+    item.pages.push(PromptPage::saved(70, "Page 2", "beta"));
+    state.workspaces[0]
+        .prompt_panel
+        .tree
+        .replace(vec![], vec![item]);
+    assert!(edit_prompt_item(&mut state, 0, 7));
+    state.effects.clear();
+
+    // 瞬时状态全部制造出来：焦点、选区、提及面板、列表悬停、页重命名输入。
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::Newline);
+    apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    let prompt_id = state.prompt.id();
+    apply_mention_entries(
+        &mut state,
+        prompt_id,
+        generation,
+        vec![MentionEntry {
+            path: "app.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(state.prompt.mention().is_some(), "前提：提及面板打开");
+    let prompt = state.prompt.id();
+    begin_selection(&mut state, prompt, 0, 0);
+    assert!(state.selection.is_some(), "前提：prompt 选区存在");
+    state.prompt_tree_hover = Some(0);
+    assert!(begin_page_rename(&mut state), "前提：页重命名输入中");
+    apply_page_rename_key(&mut state, OverlayKey::Clear);
+    for ch in "Intro".chars() {
+        apply_page_rename_key(&mut state, OverlayKey::Char(ch));
+    }
+    let page_id = state.workspaces[0]
+        .prompt_panel
+        .tree
+        .item(7)
+        .map(|item| item.active_page)
+        .expect("item 7");
+    let saved_page_id = page_id.saved().expect("正式页");
+
+    assert!(select_right_tab(&mut state, RightTab::Todo));
+
+    // 重命名已提交（非空写回，产出 RenamePage），输入现场清空。
+    assert!(!page_rename_active(&state), "切 tab 提交页重命名");
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::RenamePage { page_id: id, name, .. } if *id == saved_page_id && name == "Intro"
+        )),
+        "非空页名写回: {:?}",
+        state.effects
+    );
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .tree
+            .item(7)
+            .and_then(|item| item.page(page_id))
+            .map(|page| page.name.as_str()),
+        Some("Intro")
+    );
+
+    // 瞬时指针全部收回。
+    assert!(!state.prompt_focused, "焦点退回窗格");
+    assert!(state.selection.is_none(), "prompt 选区清空");
+    assert!(state.prompt.panel().is_none(), "块命令面板收起");
+    assert!(state.prompt.slash_panel().is_none());
+    assert!(state.prompt.mention().is_none());
+    assert!(state.prompt.refer_panel().is_none());
+    assert!(state.prompt.paste_panel().is_none());
+    assert_eq!(state.prompt_tree_hover, None, "列表悬停行清空");
+    assert_eq!(state.right_tab_hover, None, "tab 悬停清空");
+}
+
+#[test]
+fn select_right_tab_same_tab_is_noop() {
+    let mut state = AppState::demo();
+    state.effects.clear();
+    focus_prompt(&mut state);
+
+    assert!(
+        !select_right_tab(&mut state, RightTab::Prompt),
+        "已是 Prompt"
+    );
+    assert!(state.effects.is_empty(), "幂等：不产生任何 Effect");
+    assert!(state.prompt_focused, "幂等：不动焦点");
+
+    assert!(select_right_tab(&mut state, RightTab::Todo));
+    state.effects.clear();
+    assert!(!select_right_tab(&mut state, RightTab::Todo), "已是 Todo");
+    assert!(state.effects.is_empty(), "幂等：不产生任何 Effect");
+    assert_eq!(state.right_tab, RightTab::Todo);
+}

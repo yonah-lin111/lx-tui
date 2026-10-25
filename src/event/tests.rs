@@ -1,8 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::app::overlay::{ConfirmSwitchCwd, Overlay};
-use crate::app::prompt::{PasteCandidateKind, PromptRowKind};
-use crate::app::state::PaneView;
+use crate::app::prompt::{PasteCandidateKind, PromptMode, PromptRowKind};
+use crate::app::state::{PaneView, RightTab};
 use crate::app::toast::{Toast, ToastKind};
 use crate::layout;
 
@@ -4524,10 +4524,15 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     let mut sessions = HashMap::new();
     let mut dirty = false;
-    let border = crate::layout::prompt_border_rect(geo.view.prompt).expect("border row");
+    let title = ui::prompt_frame::title_row(geo.view.prompt).expect("title row");
+    assert_eq!(
+        title.y,
+        crate::layout::pane_inner_rect(geo.view.prompt).y + 1,
+        "页控件已下移到标题行（工具栏下一行），不再是容器顶边框"
+    );
     // 第一页左箭头置灰：点击不切页、不移动正文光标。
     state.prompt.set_cursor_offset_for_test(0);
-    let controls = ui::prompt::border_page_controls(border, "1/2").expect("controls");
+    let controls = ui::prompt::page_controls(title, "1/2").expect("controls");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -4560,7 +4565,7 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
     assert_eq!(state.prompt.text(), "beta");
     assert!(state.prompt_focused);
     // 计数：打开页码菜单。
-    let controls = ui::prompt::border_page_controls(border, "2/2").expect("controls");
+    let controls = ui::prompt::page_controls(title, "2/2").expect("controls");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -4596,11 +4601,16 @@ fn mouse_click_prompt_page_name_starts_rename_and_keys_commit() {
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     let mut sessions = HashMap::new();
     let mut dirty = false;
-    let border = crate::layout::prompt_border_rect(geo.view.prompt).expect("border row");
-    // 顶边框 `╭─ paged · Page 1 `：点击页名起始后两列。
-    let name_col = border.x + 2 + " paged ".len() as u16 + 2;
+    let title = ui::prompt_frame::title_row(geo.view.prompt).expect("title row");
+    assert_eq!(
+        title.y,
+        crate::layout::pane_inner_rect(geo.view.prompt).y + 1,
+        "页名已下移到标题行（工具栏下一行），不再是容器顶边框"
+    );
+    // 标题行 `├─ paged · Page 1 `：点击页名起始后两列。
+    let name_col = title.x + 2 + " paged ".len() as u16 + 2;
     handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), name_col, border.y),
+        mouse(MouseEventKind::Down(MouseButton::Left), name_col, title.y),
         &mut state,
         &mut sessions,
         &geo,
@@ -4677,6 +4687,258 @@ fn mouse_click_prompt_padding_only_focuses_without_moving_cursor() {
         0,
         "点击留白不移动光标到不存在的文本行"
     );
+}
+
+// ===== 右侧统一容器 tab 事件层 =====
+
+/// 容器顶边框上指定 tab 的矩形（按几何取，避免硬编码列）。
+fn right_tab_rect(geo: &Geometry, tab: RightTab) -> Rect {
+    ui::right_panel::tab_rects(geo.view.prompt)
+        .into_iter()
+        .find_map(|(candidate, rect)| (candidate == tab).then_some(rect))
+        .expect("right tab visible")
+}
+
+#[test]
+fn mouse_click_right_tab_switches_panel() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    state.prompt_focused = true;
+    state.right_tab_hover = Some(RightTab::Prompt);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let todo = right_tab_rect(&geo, RightTab::Todo);
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), todo.x, todo.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert_eq!(state.right_tab, RightTab::Todo);
+    assert!(!state.prompt_focused, "切到 Todo 时键盘退回聚焦窗格");
+    assert_eq!(state.right_tab_hover, None, "切换清空 tab 悬停");
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_click_todo_body_swallowed_without_focus_or_cursor() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    state.prompt.insert_str("ab\ncd");
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let cursor = state.prompt.cursor();
+    let focused_pane = state.active_tab().layout.focus();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let text = layout::prompt_text_rect(geo.view.prompt);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            text.x + 1,
+            text.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(!state.prompt_focused, "Todo 内容区点击不聚焦编辑器");
+    assert_eq!(state.prompt.cursor(), cursor, "Todo 内容区点击不动光标");
+    assert_eq!(
+        state.active_tab().layout.focus(),
+        focused_pane,
+        "不穿透到窗格、不改焦点"
+    );
+}
+
+#[test]
+fn mouse_click_prompt_toolbar_ignored_on_todo_tab() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let mode_before: PromptMode = state.prompt_owner().prompt_panel.mode;
+    assert_eq!(mode_before, PromptMode::Editor, "前提：当前是编辑视图");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 编辑视图 `[≡]` 按钮：Todo 下必须整行吞掉，绝不执行动作。
+    let mode = layout::prompt_toolbar_button_rect(
+        geo.view.prompt,
+        layout::PromptToolbarButton::Mode,
+        false,
+    )
+    .expect("mode button visible");
+    assert_eq!(
+        layout::prompt_toolbar_button_at(geo.view.prompt, mode.x, mode.y, false),
+        Some(layout::PromptToolbarButton::Mode),
+        "前提：该坐标确实命中工具栏按钮"
+    );
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), mode.x, mode.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert_eq!(
+        state.prompt_owner().prompt_panel.mode,
+        mode_before,
+        "Todo 下工具栏按钮不切换视图"
+    );
+    assert!(state.overlay.is_none(), "Todo 下工具栏按钮不打开浮层");
+    assert!(!dirty, "吞掉的点击不产生副作用");
+}
+
+#[test]
+fn mouse_wheel_over_todo_does_not_scroll_prompt() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let text = layout::prompt_text_rect(geo.view.prompt);
+    state.prompt.resize(text.width, text.height);
+    for _ in 0..=usize::from(text.height) {
+        state.prompt.insert_str("line\n");
+    }
+    crate::app::update::set_prompt_scroll(&mut state, 2);
+    assert!(state.prompt.scroll() > 0, "前提：正文可滚动且已有偏移");
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let prompt_scroll = state.prompt.scroll();
+    let tree_scroll = state.prompt_owner().prompt_panel.scroll;
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, text.x + 1, text.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert_eq!(
+        state.prompt.scroll(),
+        prompt_scroll,
+        "Todo 下滚轮不动正文视口"
+    );
+    assert_eq!(
+        state.prompt_owner().prompt_panel.scroll,
+        tree_scroll,
+        "Todo 下滚轮不动树视图视口"
+    );
+    assert!(!dirty, "被吞掉的滚轮不触发重绘");
+}
+
+#[test]
+fn mouse_motion_tracks_right_tab_hover() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let todo = right_tab_rect(&geo, RightTab::Todo);
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, todo.x + 1, todo.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(state.right_tab_hover, Some(RightTab::Todo));
+    assert!(dirty, "悬停变化置脏重绘");
+
+    dirty = false;
+    let text = layout::prompt_text_rect(geo.view.prompt);
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, text.x + 1, text.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(state.right_tab_hover, None, "离开 tab 清空悬停");
+    assert!(dirty);
+
+    // 折叠态：顶边框行不再是 tab 命中区，已有的悬停被清空。
+    state.prompt_collapsed = true;
+    state.right_tab_hover = Some(RightTab::Todo);
+    let collapsed = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Moved,
+            collapsed.view.prompt.x,
+            collapsed.view.prompt.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &collapsed,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(state.right_tab_hover, None, "折叠态不产生 tab 悬停");
+}
+
+#[test]
+fn mouse_click_title_row_focuses_without_moving_cursor() {
+    let config = Config::default();
+    let mut state = paged_prompt_state();
+    state.prompt_focused = false;
+    state.prompt.set_cursor_offset_for_test(0);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    let title = ui::prompt_frame::title_row(geo.view.prompt).expect("title row");
+    assert_eq!(
+        title.y,
+        crate::layout::pane_inner_rect(geo.view.prompt).y + 1,
+        "标题行 = 工具栏下一行的分割线"
+    );
+    // 标题行内找一个既非页控件、也非页名的空白列（避开两侧边框列的分割线拖拽区）。
+    let blank_x = (title.x + 2..title.right().saturating_sub(2))
+        .find(|x| {
+            ui::prompt_frame::prompt_page_control_at(geo.view.prompt, &state, *x, title.y).is_none()
+        })
+        .expect("title row has blank column");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), blank_x, title.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(state.prompt_focused, "点标题行空白只把焦点交给编辑器");
+    assert_eq!(state.prompt.cursor(), 0, "标题行点击不移动正文光标");
+    assert!(dirty);
 }
 
 #[test]

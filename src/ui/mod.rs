@@ -10,6 +10,7 @@ pub mod overlay;
 mod panes;
 pub mod prompt;
 pub mod prompt_frame;
+pub mod right_panel;
 pub mod sidebar;
 pub mod style;
 pub mod tab_bar;
@@ -93,7 +94,7 @@ pub(crate) fn render_cached(
     } else {
         panes::render_panes(frame, &pane_rects, state, cache)
     };
-    let prompt_cursor = prompt_frame::render_prompt(frame, &view, state).or(pane_cursor);
+    let prompt_cursor = right_panel::render(frame, &view, state).or(pane_cursor);
     controls::render_swap_button(frame, &view);
     controls::render_panel_buttons(frame, &view, state);
     controls::render_resize_hint(frame, &view, state);

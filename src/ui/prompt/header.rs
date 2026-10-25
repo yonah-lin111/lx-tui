@@ -1,7 +1,7 @@
-//! prompt 顶边框标题与页控件：只读状态，无 IO。
+//! prompt 标题行与页控件：只读状态，无 IO。
 //!
-//! 编辑视图在**面板顶边框**内嵌 `条目名 · 页名`（左侧）与 `‹ n/m ›`（右侧），
-//! 树视图只内嵌固定标题 `Prompts`、不显示页控件；工具栏下方的分割线保持空行。
+//! 编辑视图在**工具栏下方的分割线**上内嵌 `条目名 · 页名`（左侧）与 `‹ n/m ›`（右侧），
+//! 树视图的标题行为纯 `─`、不显示页控件。
 //! 三段抢宽度时的优先级为 页控件 → 条目名 → 页名（页控件永不截断）。
 
 use ratatui::buffer::Buffer;
@@ -14,7 +14,7 @@ use crate::ui::{style, text, widgets};
 
 use super::{render_divider, render_toolbar};
 
-/// 顶边框页信息：当前页序号（从 1 起）、总页数、页名与重命名输入现场。
+/// 标题行页信息：当前页序号（从 1 起）、总页数、页名与重命名输入现场。
 pub struct PageHeaderData<'a> {
     pub current: usize,
     pub total: usize,
@@ -23,14 +23,14 @@ pub struct PageHeaderData<'a> {
     pub rename: Option<(&'a str, usize)>,
 }
 
-/// 顶边框标题数据：左侧标题（树视图为固定标题、无绑定为 None）、草稿态与页信息。
-pub struct BorderTitleData<'a> {
+/// 标题行数据：左侧标题（树视图为固定标题、无绑定为 None）、草稿态与页信息。
+pub struct TitleRowData<'a> {
     pub title: Option<&'a str>,
     pub draft: bool,
     pub page: Option<PageHeaderData<'a>>,
 }
 
-/// 顶边框页控件几何：左箭头、计数、右箭头。
+/// 标题行页控件几何：左箭头、计数、右箭头。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PromptPageControls {
     pub prev: Rect,
@@ -38,7 +38,7 @@ pub struct PromptPageControls {
     pub next: Rect,
 }
 
-/// 顶边框控件命中种类。
+/// 标题行控件命中种类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageControl {
     Prev,
@@ -47,11 +47,11 @@ pub enum PageControl {
     Name,
 }
 
-/// 顶边框页控件几何：右对齐贴右边角（`‹ 2/4 ›`），与左右圆角各留 1 列边框线。
+/// 标题行页控件几何：右对齐贴右边角（`‹ 2/4 ›`），与左右圆角各留 1 列边框线。
 ///
 /// 左边框之后至少要有 2 列留给标题/页名，否则整组隐藏（返回 None）；
 /// 页控件是最高优先级，可用时永不截断。
-pub fn border_page_controls(area: Rect, counter: &str) -> Option<PromptPageControls> {
+pub fn page_controls(area: Rect, counter: &str) -> Option<PromptPageControls> {
     if area.width == 0 {
         return None;
     }
@@ -74,8 +74,8 @@ pub fn border_page_controls(area: Rect, counter: &str) -> Option<PromptPageContr
     })
 }
 
-/// 顶边框左侧标题区（页控件之前）；无控件时到右边角前一列。
-fn border_title_rect(area: Rect, controls: Option<&PromptPageControls>) -> Rect {
+/// 标题行左侧标题区（页控件之前）；无控件时到右边角前一列。
+fn title_text_rect(area: Rect, controls: Option<&PromptPageControls>) -> Rect {
     let end = match controls {
         Some(controls) => controls.prev.x.saturating_sub(1),
         None => area.right().saturating_sub(1),
@@ -89,7 +89,7 @@ fn border_title_rect(area: Rect, controls: Option<&PromptPageControls>) -> Rect 
     }
 }
 
-/// 顶边框标题排布结果：条目名段、页名段与其起点列；绘制与命中共用同一套截断。
+/// 标题行排布结果：条目名段、页名段与其起点列；绘制与命中共用同一套截断。
 struct BorderText {
     title: String,
     name: Option<String>,
@@ -97,7 +97,7 @@ struct BorderText {
     name_x: u16,
 }
 
-/// 按可用宽度排布顶边框标题。优先级：条目名 → 页名（页控件由调用方单独保证）。
+/// 按可用宽度排布标题行。优先级：条目名 → 页名（页控件由调用方单独保证）。
 ///
 /// 1. 整段放得下 → 原样；
 /// 2. 否则截断页名（连 `· ` 前缀一起按显示宽度截断），条目名保持完整；
@@ -157,7 +157,7 @@ fn rename_input_span(area: Rect, title: &str, width_budget: u16) -> Option<(u16,
     })
 }
 
-/// 顶边框标题样式：正式条目沿用边框标题色，临时提示词用未聚焦灰
+/// 标题行标题样式：正式条目沿用边框标题色，临时提示词用未聚焦灰
 /// （显式前景 + dim，不被聚焦边框的强调色染色）。
 fn border_title_style(draft: bool) -> Style {
     if draft {
@@ -167,8 +167,8 @@ fn border_title_style(draft: bool) -> Style {
     }
 }
 
-/// 绘制顶边框标题与页控件；须在面板边框绘制之后调用（覆盖 `─`）。
-pub fn paint_border_title(buf: &mut Buffer, area: Rect, data: &BorderTitleData<'_>) {
+/// 绘制标题行标题与页控件；须在面板边框绘制之后调用（覆盖 `─`）。
+pub fn paint_title_row(buf: &mut Buffer, area: Rect, data: &TitleRowData<'_>) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -176,8 +176,8 @@ pub fn paint_border_title(buf: &mut Buffer, area: Rect, data: &BorderTitleData<'
     let controls = data
         .page
         .as_ref()
-        .and_then(|page| border_page_controls(area, &text::page_counter(page.current, page.total)));
-    let title_area = border_title_rect(area, controls.as_ref());
+        .and_then(|page| page_controls(area, &text::page_counter(page.current, page.total)));
+    let title_area = title_text_rect(area, controls.as_ref());
     let title_style = border_title_style(data.draft);
     if title_area.width > 0 {
         match data.page.as_ref().and_then(|page| page.rename) {
@@ -193,7 +193,7 @@ pub fn paint_border_title(buf: &mut Buffer, area: Rect, data: &BorderTitleData<'
 }
 
 /// 绘制 `条目名 · 页名`：页名段固定在标题区右缘之后，条目名按剩余宽度截断。
-fn paint_border_text(buf: &mut Buffer, area: Rect, data: &BorderTitleData<'_>, title_style: Style) {
+fn paint_border_text(buf: &mut Buffer, area: Rect, data: &TitleRowData<'_>, title_style: Style) {
     let layout = border_text(area, data.title.unwrap_or(""), data.page.as_ref());
     if !layout.title.is_empty() {
         buf.set_stringn(
@@ -217,7 +217,7 @@ fn paint_border_text(buf: &mut Buffer, area: Rect, data: &BorderTitleData<'_>, t
 
 /// 页重命名输入：标题按剩余宽度截断，页名段位置渲染单行输入视口。
 ///
-/// 输入文本只覆盖自身占据的单元格，右侧保留外层 Block 画好的顶边框线 `─`；
+/// 输入文本只覆盖自身占据的单元格，右侧保留外层 Block 画好的标题行线 `─`；
 /// 不要整段清空，否则聚焦期间右侧边框线会消失、取消聚焦后才由 Block 重绘恢复。
 fn paint_border_rename(
     buf: &mut Buffer,
@@ -267,15 +267,15 @@ fn paint_border_rename(
     }
 }
 
-/// 页重命名输入的硬件光标位置（顶边框行）；输入区放不下时返回 None。
-pub fn border_rename_cursor(
+/// 页重命名输入的硬件光标位置（标题行）；输入区放不下时返回 None。
+pub fn rename_cursor(
     area: Rect,
     title: Option<&str>,
     page: &PageHeaderData<'_>,
 ) -> Option<(u16, u16)> {
     let (input, cursor) = page.rename?;
-    let controls = border_page_controls(area, &text::page_counter(page.current, page.total));
-    let title_area = border_title_rect(area, controls.as_ref());
+    let controls = page_controls(area, &text::page_counter(page.current, page.total));
+    let title_area = title_text_rect(area, controls.as_ref());
     if title_area.width == 0 {
         return None;
     }
@@ -289,11 +289,11 @@ pub fn border_rename_cursor(
     ))
 }
 
-/// 命中顶边框页控件：箭头与计数优先，其次页名段（重命名输入期间命中输入区）；
+/// 命中标题行页控件：箭头与计数优先，其次页名段（重命名输入期间命中输入区）；
 /// 条目名与边框空白返回 None。
-pub fn border_page_control_at(
+pub fn page_control_at(
     area: Rect,
-    data: &BorderTitleData<'_>,
+    data: &TitleRowData<'_>,
     column: u16,
     row: u16,
 ) -> Option<PageControl> {
@@ -301,7 +301,7 @@ pub fn border_page_control_at(
         return None;
     }
     let page = data.page.as_ref()?;
-    let controls = border_page_controls(area, &text::page_counter(page.current, page.total));
+    let controls = page_controls(area, &text::page_counter(page.current, page.total));
     if let Some(controls) = controls.as_ref() {
         for (rect, control) in [
             (controls.prev, PageControl::Prev),
@@ -313,7 +313,7 @@ pub fn border_page_control_at(
             }
         }
     }
-    let title_area = border_title_rect(area, controls.as_ref());
+    let title_area = title_text_rect(area, controls.as_ref());
     let title = data.title.unwrap_or("");
     let span = match page.rename {
         Some(_) => rename_input_span(title_area, title, u16::MAX)?,
@@ -331,7 +331,7 @@ pub fn border_page_control_at(
 
 /// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制。
 ///
-/// 分割线保持空行——条目名、页名与页控件都在面板顶边框上（见 `paint_border_title`）。
+/// 分割线先画成空行；调用方随后用 `paint_title_row` 把标题/页控件覆盖上去。
 pub fn render_header(
     panel: Rect,
     buf: &mut Buffer,

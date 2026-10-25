@@ -231,8 +231,19 @@ pub(crate) fn handle_mouse_moved(
             *dirty = true;
         }
     }
+    // 容器 tab 悬停：仅在未折叠且指针不在 toast 上时生效；离开即清空。
+    let right_tab_hover = if hovering_toast || state.prompt_collapsed {
+        None
+    } else {
+        ui::right_panel::tab_at(view.prompt, mouse.column, mouse.row)
+    };
+    if update::set_right_tab_hover(state, right_tab_hover) {
+        *dirty = true;
+    }
     // 提示词列表悬停：仅树视图且在文本区内；指针离开即清空。
-    let tree_hover = if hovering_toast || state.prompt_collapsed || !update::prompt_tree_mode(state)
+    let tree_hover = if hovering_toast
+        || !update::prompt_panel_active(state)
+        || !update::prompt_tree_mode(state)
     {
         None
     } else {

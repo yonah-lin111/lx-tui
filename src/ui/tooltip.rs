@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::app::overlay::Overlay;
-use crate::app::state::{AppState, PaneKind};
+use crate::app::state::{AppState, PaneKind, RightTab};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::layout::{self, PaneId};
 use crate::ui::layout::ViewLayout;
@@ -151,7 +151,7 @@ fn targets(
     if let Some(area) = ui::swap_button(view) {
         targets.push((TooltipTarget::SwapPromptSide, area));
     }
-    if !state.prompt_collapsed {
+    if !state.prompt_collapsed && state.right_tab == RightTab::Prompt {
         let tree = state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Tree;
         for (button, target) in [
             (layout::PromptToolbarButton::Mode, TooltipTarget::PromptMode),

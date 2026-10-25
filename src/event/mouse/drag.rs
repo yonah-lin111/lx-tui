@@ -263,7 +263,10 @@ pub(crate) fn handle_mouse_drag(
     } else {
         update::drag_selection(state, pane, row, col);
     }
-    if pane == state.prompt.id() && !state.prompt.row_in_padding(row) {
+    if pane == state.prompt.id()
+        && update::prompt_panel_active(state)
+        && !state.prompt.row_in_padding(row)
+    {
         update::place_prompt_cursor(state, row, col);
     }
     update::arm_selection_autoscroll(

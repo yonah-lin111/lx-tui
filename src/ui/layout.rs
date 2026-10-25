@@ -11,6 +11,8 @@ pub struct ViewLayout {
     pub sidebar: Rect,
     pub tab_bar: Rect,
     pub panes: Rect,
+    /// 右侧统一容器（外框 + `Prompt`/`Todo` tab + 底边框身份标签）；字段名沿用历史，
+    /// 语义是"prompt 这一列"，即容器。
     pub prompt: Rect,
     /// prompt 是否位于主区左侧（与 panes 互换）。
     pub prompt_left: bool,

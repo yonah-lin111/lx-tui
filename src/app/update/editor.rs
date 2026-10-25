@@ -530,7 +530,11 @@ pub fn place_prompt_cursor(state: &mut AppState, row: u16, col: u16) {
 }
 
 /// 点击 prompt：键盘焦点交给编辑器。
+///
+/// 同时把容器切回 Prompt 面板：聚焦隐含"Prompt 可见"，
+/// 否则会出现 `prompt_focused = true` 而画面停在 Todo 的分裂状态。
 pub fn focus_prompt(state: &mut AppState) {
     sync_mention_root(state);
     state.prompt_focused = true;
+    state.right_tab = crate::app::state::RightTab::Prompt;
 }

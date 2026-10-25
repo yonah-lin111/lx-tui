@@ -1,15 +1,12 @@
-//! Prompt 面板外框、顶底边框状态、滚动条与页码控件命中。
+//! Prompt 面板体：工具栏、标题行、正文/树视图、滚动条与页码控件命中。
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
 
 use crate::app::prompt::{PromptEditing, PromptMode};
-use crate::app::state::{AppState, Workspace, WorkspaceIdentity};
+use crate::app::state::{AppState, RightTab};
 
-use super::controls::{PANEL_BUTTON_MARGIN, PANEL_BUTTON_WIDTH, render_collapsed_strip};
-use super::{layout, prompt, style, text, widgets};
+use super::{layout, prompt, text, widgets};
 
 /// 编辑视图标题：绑定条目的名称；临时提示词显示固定标题；无绑定不显示。
 pub(crate) fn prompt_edit_title(state: &AppState) -> Option<String> {
@@ -20,8 +17,8 @@ pub(crate) fn prompt_edit_title(state: &AppState) -> Option<String> {
     }
 }
 
-/// 顶边框标题数据：编辑视图取绑定目标名（`None` 时整段留空），树视图用固定标题 `Prompts`。
-enum BorderTitle {
+/// 标题行标题来源：树视图无标题（纯分割线）。
+enum TitleSource {
     Tree,
     Editor {
         title: Option<String>,
@@ -30,12 +27,12 @@ enum BorderTitle {
     },
 }
 
-/// 读当前面板的顶边框标题来源（名称与页信息按所有权持有，供调用方借用组装）。
-fn prompt_border_title(state: &AppState) -> BorderTitle {
+/// 读当前面板的标题行来源（名称与页信息按所有权持有，供调用方借用组装）。
+fn title_source(state: &AppState) -> TitleSource {
     let panel = &state.prompt_owner().prompt_panel;
     match panel.mode {
-        PromptMode::Tree => BorderTitle::Tree,
-        PromptMode::Editor => BorderTitle::Editor {
+        PromptMode::Tree => TitleSource::Tree,
+        PromptMode::Editor => TitleSource::Editor {
             title: prompt_edit_title(state),
             draft: matches!(panel.editing, Some(PromptEditing::Temp(_))),
             page: prompt_page_header(state),
@@ -43,7 +40,7 @@ fn prompt_border_title(state: &AppState) -> BorderTitle {
     }
 }
 
-/// 页信息 → 顶边框渲染/命中数据。
+/// 页信息 → 标题行渲染/命中数据。
 fn page_header_data(page: Option<&PromptPageHeader>) -> Option<prompt::PageHeaderData<'_>> {
     page.map(|page| prompt::PageHeaderData {
         current: page.current,
@@ -96,7 +93,24 @@ pub(crate) fn prompt_page_header(state: &AppState) -> Option<PromptPageHeader> {
     })
 }
 
-/// 命中 prompt 顶边框标题行页控件（编辑视图）；
+/// 标题行几何：工具栏下一行**整行**（含两侧边框列）；表头隐藏时为 None。
+///
+/// 用整行而不是 `prompt_divider_rect` 的内容区矩形，是为了让页控件"距右边角留 1 列
+/// 边框线"的算术与旧顶边框版本完全一致（`next = area.right() - 3`）。
+pub fn title_row(panel: Rect) -> Option<Rect> {
+    crate::layout::prompt_divider_rect(panel).map(|row| Rect {
+        x: panel.x,
+        width: panel.width,
+        ..row
+    })
+}
+
+/// 坐标是否落在标题行（标题/页控件所在的控件区）。
+pub fn prompt_title_at(panel: Rect, column: u16, row: u16) -> bool {
+    title_row(panel).is_some_and(|title| title.contains((column, row).into()))
+}
+
+/// 命中 prompt 标题行页控件（编辑视图）；
 /// 页重命名输入期间命中输入区（`PageControl::Name`），条目名与空白返回 None。
 pub fn prompt_page_control_at(
     panel: Rect,
@@ -107,63 +121,47 @@ pub fn prompt_page_control_at(
     if state.prompt_collapsed {
         return None;
     }
-    let border = crate::layout::prompt_border_rect(panel)?;
-    let BorderTitle::Editor { title, page, .. } = prompt_border_title(state) else {
+    let area = title_row(panel)?;
+    let TitleSource::Editor { title, page, .. } = title_source(state) else {
         return None;
     };
     let page = page.as_ref()?;
-    let data = prompt::BorderTitleData {
+    let data = prompt::TitleRowData {
         title: Some(title.as_deref().unwrap_or("")),
         draft: false,
         page: page_header_data(Some(page)),
     };
-    prompt::border_page_control_at(border, &data, column, row)
+    prompt::page_control_at(area, &data, column, row)
 }
 
-/// 右栏 prompt：编辑视图渲染 markdown 编辑器（聚焦时可输入、可选择复制）、
-/// 树视图渲染提示词管理器；折叠时渲染为窄条。
+/// Prompt 面板体：编辑视图渲染 markdown 编辑器（聚焦时可输入、可选择复制）、
+/// 树视图渲染提示词管理器。外框、tab 与底边框由容器（`ui::right_panel`）负责。
 ///
-/// 面板顶边框内嵌标题（编辑视图 `条目名 · 页名` + 右侧 `‹ n/m ›`，树视图固定 `Prompts`），
-/// 工具栏下方分割线保持空行。文本区固定预留最右 1 列作滚动条槽。
+/// 先画工具栏与分割线，再把标题/页控件覆盖到分割线行上（顺序不可交换）。
+/// 文本区固定预留最右 1 列作滚动条槽。
 /// 返回编辑视图聚焦时的硬件光标位置：终端把 IME 预输入绘制在硬件光标处，需与编辑器光标同步。
-pub(crate) fn render_prompt(
+pub(crate) fn render_body(
     frame: &mut Frame<'_>,
-    view: &layout::ViewLayout,
+    area: Rect,
     state: &AppState,
 ) -> Option<(u16, u16)> {
-    let area = view.prompt;
     if area.width == 0 || area.height == 0 {
-        return None;
-    }
-    if state.prompt_collapsed {
-        render_collapsed_strip(frame, area, false);
         return None;
     }
     let focused = state.prompt_focused;
     let mode = state.prompt_owner().prompt_panel.mode;
-    let border = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(style::border(focused));
-    let inner = border.inner(area);
-    frame.render_widget(border, area);
-    if inner.width == 0 || inner.height == 0 {
-        return None;
-    }
-    let title = prompt_border_title(state);
+    let title = title_source(state);
     let (title_text, draft, page) = match &title {
-        BorderTitle::Tree => (Some(text::PROMPT_TREE_BORDER_TITLE), false, None),
-        BorderTitle::Editor { title, draft, page } => {
+        TitleSource::Tree => (None, false, None),
+        TitleSource::Editor { title, draft, page } => {
             (title.as_deref().or(Some("")), *draft, page.as_ref())
         }
     };
-    let page_data = prompt::BorderTitleData {
+    let page_data = prompt::TitleRowData {
         title: title_text,
         draft,
         page: page_header_data(page),
     };
-    if let Some(border_rect) = crate::layout::prompt_border_rect(area) {
-        prompt::paint_border_title(frame.buffer_mut(), border_rect, &page_data);
-    }
     prompt::render_header(
         area,
         frame.buffer_mut(),
@@ -173,7 +171,9 @@ pub(crate) fn render_prompt(
         draft,
         state.prompt_pinned.is_some(),
     );
-    render_prompt_bottom(frame, area, state);
+    if let Some(row) = title_row(area) {
+        prompt::paint_title_row(frame.buffer_mut(), row, &page_data);
+    }
     let text_area = crate::layout::prompt_text_rect(area);
     let tree_cursor = match mode {
         PromptMode::Tree => prompt::tree::render(
@@ -200,13 +200,11 @@ pub(crate) fn render_prompt(
         // 树视图硬件光标落在搜索框输入位置（与模态输入框一致），未聚焦不显示。
         return focused.then_some(tree_cursor).flatten();
     }
-    if let Some(page) = page.filter(|page| page.rename.is_some())
-        && let Some(border_rect) = crate::layout::prompt_border_rect(area)
-    {
+    if let (Some(page), Some(row)) = (page.filter(|page| page.rename.is_some()), title_row(area)) {
         return focused
             .then(|| {
-                prompt::border_rename_cursor(
-                    border_rect,
+                prompt::rename_cursor(
+                    row,
                     title_text,
                     &prompt::PageHeaderData {
                         current: page.current,
@@ -229,10 +227,15 @@ pub(crate) fn render_prompt(
 }
 
 /// prompt 滚动条几何：文本溢出内容区时可见；渲染与鼠标命中共用。
+///
+/// Todo 停用时既不可见也不可命中。
 pub fn prompt_scrollbar(
     view: &layout::ViewLayout,
     state: &AppState,
 ) -> Option<widgets::scrollbar::ScrollbarLayout> {
+    if state.right_tab != RightTab::Prompt {
+        return None;
+    }
     prompt_scrollbar_for(view.prompt, state)
 }
 
@@ -254,48 +257,4 @@ fn prompt_scrollbar_for(
         ),
     };
     widgets::scrollbar::layout(gutter, total, usize::from(gutter.height), offset)
-}
-
-/// 显示中 prompt 所属工作区的身份标签：与 lx 窗格顶边框同一份数据与格式，
-/// 只读，忽略 `prompt_root`（子目录绑定不改变身份）。
-fn prompt_identity(state: &AppState) -> Option<WorkspaceIdentity> {
-    state
-        .workspaces
-        .get(state.prompt_workspace())
-        .map(Workspace::identity)
-}
-
-/// prompt 底边框：整段左对齐的身份标签 `项目 · b:分支 · wt:工作区名`（与 lx 窗格同款），
-/// 右侧只保留折叠按钮；放不下时按同一降级阶梯省略。
-fn render_prompt_bottom(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
-    if area.height == 0 || area.width == 0 {
-        return;
-    }
-    let Some(identity) = prompt_identity(state) else {
-        return;
-    };
-    let row = area.bottom().saturating_sub(1);
-    let start = area.x.saturating_add(2);
-    let end = area
-        .right()
-        .saturating_sub(PANEL_BUTTON_WIDTH + PANEL_BUTTON_MARGIN);
-    if end <= start {
-        return;
-    }
-    let Some(spans) = text::workspace_identity_spans(&identity, usize::from(end - start)) else {
-        return;
-    };
-    let line: Vec<Span<'_>> = spans
-        .iter()
-        .map(|span| {
-            let span_style = if span.emphasis {
-                style::border_label_prefix()
-            } else {
-                style::border_label_value()
-            };
-            Span::styled(span.text.as_str(), span_style)
-        })
-        .collect();
-    Paragraph::new(Line::from(line))
-        .render(Rect::new(start, row, end - start, 1), frame.buffer_mut());
 }
