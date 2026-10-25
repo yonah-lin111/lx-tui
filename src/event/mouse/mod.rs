@@ -38,7 +38,7 @@ pub(crate) fn handle_mouse_event(
             drag::handle_mouse_drag(&mouse, state, sessions, geometry, config, cache, dirty);
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            drag::handle_mouse_up_left(&mouse, state, sessions, geometry, dirty);
+            drag::handle_mouse_up_left(&mouse, state, sessions, geometry, cache, dirty);
         }
         MouseEventKind::ScrollUp
         | MouseEventKind::ScrollDown

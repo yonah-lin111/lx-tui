@@ -304,9 +304,17 @@ fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
 }
 
 /// 提取选区文本（内容行、列相对内容区左上角）；空选区返回空串。
-pub fn copy_text(area: Rect, lx: &Lx, range: ((i32, u16), (i32, u16))) -> String {
-    let mut cache = PaneCache::default();
-    let (grid, _, _) = build(area, lx, false, &mut cache);
+///
+/// `cache` 由调用方给（事件循环传该窗格的常驻缓存）：拖动选区松开时才复制，此时
+/// 历史刚被这一帧画过，快照与绘制数据全部命中——临时建一个 `PaneCache` 会让整段
+/// 历史重新排版，并且在 `frame = 0` 下连淘汰都跑不起来（`last_frame < frame` 恒假）。
+pub fn copy_text(
+    area: Rect,
+    lx: &Lx,
+    range: ((i32, u16), (i32, u16)),
+    cache: &mut PaneCache,
+) -> String {
+    let (grid, _, _) = build(area, lx, false, cache);
     let ((start_row, start_col), (end_row, end_col)) = range;
     let mut lines: Vec<String> = Vec::new();
     for row in start_row.max(0)..=end_row.max(0) {

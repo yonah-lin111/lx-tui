@@ -18,11 +18,11 @@ use super::cache::{
     notice_block_signature, part_block_signature, rewind_block_signature, shell_block_signature,
     stats_block_signature,
 };
-use super::paint::{BlockPaint, BlockSource};
+use super::paint::{BlockPaint, BlockSource, CardSpan};
 use super::timeline::{TimelineEntry, timeline};
 use super::{
-    CardKind, MessageRows, compact, folds_of, notice, rewind, shell_folds, should_register_card,
-    stats_line, tool, tool_rows, user_shell, wrap,
+    CardKind, Folds, MessageRows, compact, folds_of, notice, rewind, shell_folds,
+    should_register_card, stats_line, tool, tool_rows, user_shell, wrap,
 };
 
 /// 时间线条目类别（与 [`TimelineEntry`] 一一对应，但可跨帧独立持有）。
@@ -137,6 +137,55 @@ pub(crate) fn build(width: u16, lx: &Lx, cache: &mut PaneCache) -> HistorySnapsh
     builder.snapshot
 }
 
+/// 工具卡片的绘制数据：行数与点击面几何**在同一次构建里**算好，随块键缓存。
+fn legacy(
+    rows: usize,
+    regions: impl IntoIterator<Item = tool::CardRegion>,
+    folds: Folds,
+) -> BlockPaint {
+    BlockPaint::Legacy {
+        rows,
+        spans: regions
+            .into_iter()
+            .map(|region| CardSpan {
+                call: 0,
+                section: region.section,
+                expanded: folds.of(region.section),
+                offset: region.card.offset,
+                rows: region.card.rows,
+                clickable: region.clickable,
+            })
+            .collect(),
+    }
+}
+
+/// 合并文件工具组的点击面几何（组内每个可展开的调用一个整块区域）。
+fn group_spans(
+    group: &[&crate::app::state::ToolCallView],
+    width: u16,
+    expanded: &[bool],
+) -> Vec<CardSpan> {
+    let mut out = Vec::with_capacity(group.len());
+    for (index, block) in tool::group_blocks(group, width, expanded)
+        .iter()
+        .enumerate()
+    {
+        let call = group[index];
+        if !should_register_card(call, width) {
+            continue;
+        }
+        out.push(CardSpan {
+            call: index,
+            section: CardSection::Body,
+            expanded: expanded.get(index).copied().unwrap_or(false),
+            offset: block.start,
+            rows: block.len,
+            clickable: true,
+        });
+    }
+    out
+}
+
 /// 快照构建中的可变累加器。
 struct Builder<'a> {
     cache: &'a mut PaneCache,
@@ -186,7 +235,10 @@ impl Builder<'_> {
         };
         let rows = rewind::rows(&lx.chat.notices[last], count, self.width);
         let block = self.block(key, BlockSource::Rewind { last, count }, start, || {
-            BlockPaint::Legacy { rows }
+            BlockPaint::Legacy {
+                rows,
+                spans: Vec::new(),
+            }
         });
         self.rows += block.rows;
         self.snapshot.entries.push(SnapEntry {
@@ -210,7 +262,10 @@ impl Builder<'_> {
         };
         let rows = compact::rows(notice, 1, self.width, expanded);
         let block = self.block(key, BlockSource::Compact { index, expanded }, start, || {
-            BlockPaint::Legacy { rows }
+            BlockPaint::Legacy {
+                rows,
+                spans: Vec::new(),
+            }
         });
         self.rows += block.rows;
         // 整块都是点击面：折叠态只有头部两行，点哪里都应能展开。
@@ -274,31 +329,44 @@ impl Builder<'_> {
             sig: shell_block_signature(lx, message, shell),
         };
         let start = self.rows;
+        let width = self.width;
         let rows = user_shell::rows(
             shell,
-            self.width,
+            width,
             lx.chat.loading_frame,
             lx.chat.status.streaming || shell.is_running(),
             folds,
         );
         let block = self.block(key, BlockSource::Shell { message_index }, start, || {
-            BlockPaint::Legacy { rows }
+            BlockPaint::Legacy {
+                rows,
+                spans: user_shell::regions(shell, width, folds)
+                    .into_iter()
+                    .map(|region| CardSpan {
+                        call: 0,
+                        section: region.section,
+                        expanded: folds.of(region.section),
+                        offset: region.offset,
+                        rows: region.rows,
+                        clickable: region.clickable,
+                    })
+                    .collect(),
+            }
         });
         self.rows += block.rows;
-        blocks.push(block);
-        for region in user_shell::regions(shell, self.width, folds) {
-            let expanded = folds.of(region.section);
+        for span in block.paint.card_spans() {
             self.snapshot.cards.push(CardRegion {
                 kind: CardKind::Shell {
                     message_id: message.id.clone(),
-                    section: region.section,
-                    expanded,
+                    section: span.section,
+                    expanded: span.expanded,
                 },
-                card_start: entry_start + region.offset,
-                card_rows: region.rows,
-                clickable: region.clickable,
+                card_start: entry_start + span.offset,
+                card_rows: span.rows,
+                clickable: span.clickable,
             });
         }
+        blocks.push(block);
     }
 
     /// assistant/用户消息的步骤时间线（含合并组、工具卡片与 thinking 头部）。
@@ -344,7 +412,13 @@ impl Builder<'_> {
             block.start = self.rows;
             let block_start = self.rows;
             if let AssistantStepView::Tool { call, .. } = step {
-                self.tool_cards(lx, message, call, block.rows, block_start);
+                self.tool_cards(
+                    message,
+                    call,
+                    block.paint.card_spans(),
+                    block.rows,
+                    block_start,
+                );
             }
             if matches!(
                 step,
@@ -418,44 +492,43 @@ impl Builder<'_> {
                     },
                 },
             },
-            AssistantStepView::Tool { call, .. } => BlockPaint::Legacy {
-                rows: tool_rows(call, width, folds_of(lx, &message.id, call)),
-            },
+            AssistantStepView::Tool { call, .. } => {
+                let folds = folds_of(lx, &message.id, call);
+                let rows = tool_rows(call, width, folds);
+                legacy(rows, tool::card_regions(call, width, folds, rows), folds)
+            }
         })
     }
 
     /// 命令卡片的点击面（参数区 / 输出区各自独立）。
+    ///
+    /// 几何来自**块的绘制数据**（`card_spans`），不在这里重算：`card_regions` 是
+    /// `(调用, 宽度, 折叠态)` 的纯函数，与块同键缓存；每帧重算在 1400 张工具卡片的
+    /// 会话里要 4.7ms（实测）。
     fn tool_cards(
         &mut self,
-        lx: &Lx,
         message: &crate::app::state::ChatMessageView,
         call: &crate::app::state::ToolCallView,
+        spans: &[CardSpan],
         step_rows: usize,
         block_start: usize,
     ) {
-        let folds = folds_of(lx, &message.id, call);
-        for region in tool::card_regions(call, self.width, folds, step_rows) {
-            let card_rows = region
-                .card
-                .rows
-                .min(step_rows.saturating_sub(region.card.offset));
+        for span in spans {
+            // 区域不能越出块本身（几何与行数同源，这里只是防御性收敛）。
+            let card_rows = span.rows.min(step_rows.saturating_sub(span.offset));
             if card_rows == 0 {
                 continue;
             }
-            let expanded = match region.section {
-                CardSection::Body => folds.body,
-                CardSection::Output => folds.output,
-            };
             self.snapshot.cards.push(CardRegion {
                 kind: CardKind::Tool {
                     message_id: message.id.clone(),
                     call_id: call.call_id.clone(),
-                    section: region.section,
-                    expanded,
+                    section: span.section,
+                    expanded: span.expanded,
                 },
-                card_start: block_start + region.card.offset,
+                card_start: block_start + span.offset,
                 card_rows,
-                clickable: region.clickable,
+                clickable: span.clickable,
             });
         }
     }
@@ -491,6 +564,7 @@ impl Builder<'_> {
             width: self.width,
             sig: group_block_signature(lx, message, group, &expanded),
         };
+        let width = self.width;
         let block = self.block(
             key,
             BlockSource::Group {
@@ -499,28 +573,28 @@ impl Builder<'_> {
                 count: group.len(),
             },
             block_start,
-            || BlockPaint::Legacy { rows: group_rows },
+            || BlockPaint::Legacy {
+                rows: group_rows,
+                spans: group_spans(group, width, &expanded),
+            },
         );
-        blocks.push(block);
-        let spans = tool::group_blocks(group, self.width, &expanded);
-        for (index, span) in spans.iter().enumerate() {
-            let call = group[index];
-            if !should_register_card(call, self.width) {
+        for span in block.paint.card_spans() {
+            let Some(call) = group.get(span.call) else {
                 continue;
-            }
-            let card_start = block_start + span.start;
+            };
             self.snapshot.cards.push(CardRegion {
                 kind: CardKind::Tool {
                     message_id: message.id.clone(),
                     call_id: call.call_id.clone(),
-                    section: CardSection::Body,
-                    expanded: expanded[index],
+                    section: span.section,
+                    expanded: span.expanded,
                 },
-                card_start,
-                card_rows: span.len,
-                clickable: true,
+                card_start: block_start + span.offset,
+                card_rows: span.rows,
+                clickable: span.clickable,
             });
         }
+        blocks.push(block);
         self.rows += group_rows;
         true
     }
@@ -547,7 +621,10 @@ impl Builder<'_> {
             };
             let rows = notice::rows(&notice, self.width);
             let block = self.block(key, BlockSource::Notice { message_index }, start, || {
-                BlockPaint::Legacy { rows }
+                BlockPaint::Legacy {
+                    rows,
+                    spans: Vec::new(),
+                }
             });
             self.rows += block.rows;
             blocks.push(block);

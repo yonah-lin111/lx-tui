@@ -293,6 +293,8 @@ pub(super) fn view(area: Rect, lx: &Lx, cache: &mut PaneCache) -> HistoryView {
 | 10 | P1 | `tool/file_summary.rs`、`tool.rs` | 详情恰好折成 3 行时「能展开」判据失效（见 §12） |
 | 11 | P2 | `history_hit.rs` | `history_rows` / `history_center_target` 补 `chat_geometry_is_live` 守卫 |
 | 12 | — | `history/tests.rs` | 1763 行超上限，按主题拆成 `tests/{cards,compact,rewind,sticky,transcript}.rs` |
+| 13 | P2 | `history/{paint,snapshot}.rs`、`tool.rs`、`user_shell.rs` | 点击面几何与块同键缓存（`BlockPaint::Legacy.spans`），流式 P95 8.0ms → 2.9ms |
+| 14 | P2 | `history/cache.rs`、`ui/main_content/lx.rs`、`event/mouse/drag.rs` | 32MB 改全窗格共享；`copy_text` 复用常驻缓存，不再新建 `frame = 0` 的临时缓存 |
 
 ---
 
@@ -345,9 +347,13 @@ Some(File(_)) | None => {
   恒假 → 一次调用把整段历史的 `BlockPaint` 全部物化且不设上限（旧实现只算行数）。
   实测 1400 条消息的会话约 13.6MB，属一次性峰值、函数返回即释放。
 
-**不本次修的原因**：把预算挪到 `RenderCache` 全局记账、让快照按需物化 paint，都是
-改数据结构而非改 bug；当前规模下没有可观测的故障，先记录口径，避免规范继续写成
-「32MB 封顶」。
+**已修的部分**（第二轮优化）：
+
+- 预算改为 `RenderCache` 全局记账、按窗格数平摊（`share_budget`），不再 N×32MB。
+- `copy_text` 收 `&mut PaneCache`，复用事件循环的常驻缓存：松开选区时历史刚画过，
+  快照与 paint 全命中，不再整段重排。
+- 仍**未改**的：当前快照通过 `Arc` 持有它引用的 paint，因此淘汰只作用于上一代。
+  让快照按需物化 paint 是改数据结构，当前规模下没有可观测故障，继续留作记录。
 
 ### 12.3 复核中发现、但属于既有问题（不在本分支范围）
 

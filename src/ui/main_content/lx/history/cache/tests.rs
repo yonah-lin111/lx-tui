@@ -418,3 +418,89 @@ fn visible_blocks_survive_eviction() {
     assert!(kept > 0, "本帧画过的块不许淘汰");
     assert!(kept < all_blocks, "视口外的冷块必须被淘汰");
 }
+
+/// 字节预算是**所有窗格共享**的 32MB，不是每窗格 32MB。
+#[test]
+fn budget_is_shared_across_panes() {
+    let mut render_cache = RenderCache::default();
+    let a = PaneId::alloc();
+    render_cache.begin_frame();
+    let single = render_cache.pane(a).limit;
+    assert_eq!(single, MAX_CACHED_BYTES, "单窗格独占整个预算");
+
+    let b = PaneId::alloc();
+    render_cache.begin_frame();
+    let _ = render_cache.pane(b);
+    assert_eq!(
+        render_cache.pane(a).limit + render_cache.pane(b).limit,
+        MAX_CACHED_BYTES,
+        "两个窗格必须平摊同一份预算"
+    );
+    assert_eq!(render_cache.pane(a).limit, MAX_CACHED_BYTES / 2);
+
+    render_cache.retain_panes(&[a]);
+    assert_eq!(
+        render_cache.pane(a).limit,
+        MAX_CACHED_BYTES,
+        "窗格关闭后份额收回"
+    );
+}
+
+/// 工具卡片的点击面几何随块缓存：内容不变时**不重算**，内容变了才重建。
+#[test]
+fn tool_card_geometry_is_cached_with_the_block() {
+    let command = crate::app::state::ToolCallView {
+        call_id: "call-1".into(),
+        name: "exec_command".into(),
+        position: 0,
+        arguments_json: String::new(),
+        status: ToolStatus::Completed,
+        summary: Some(Box::new(ToolSummary::default())),
+        error: None,
+        result_json: None,
+        detail: Some(Box::new(crate::app::state::ToolDetailView::Command(
+            crate::app::state::CommandView {
+                process_session_id: None,
+                command: "cargo test --lib history".into(),
+                cwd: "/repo".into(),
+                tty: false,
+                state: crate::app::state::ProcessStateView::Exited { code: Some(0) },
+                output_preview: Vec::new(),
+                truncated: false,
+                dropped_bytes: 0,
+                output_tail: (0..12)
+                    .map(|line| format!("test result line {line}: ok"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                started_at_ms: None,
+                ended_at_ms: None,
+            },
+        ))),
+    };
+    let mut card = message(
+        "assistant-1",
+        "assistant",
+        "complete",
+        vec![text_part("跑一下")],
+    );
+    card.steps.push(AssistantStepView::Tool {
+        position: 1,
+        call: command,
+    });
+    let lx = lx_with(vec![card]);
+    let mut cache = PaneCache::default();
+    let first = cache.snapshot(40, &lx);
+    let spans: Vec<_> = first
+        .entries
+        .iter()
+        .flat_map(|entry| entry.blocks.iter())
+        .flat_map(|block| block.paint.card_spans().to_vec())
+        .collect();
+    assert!(!spans.is_empty(), "命令卡片必须登记点击面几何");
+    let builds = cache.builds();
+
+    // 同一份状态再取一次：块命中，点击面几何也不重算。
+    let second = cache.snapshot(40, &lx);
+    assert_eq!(cache.builds(), builds, "状态未变，不允许重建");
+    assert_eq!(first.cards, second.cards, "点击面必须完全一致");
+}

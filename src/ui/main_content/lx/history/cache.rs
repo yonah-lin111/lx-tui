@@ -14,7 +14,10 @@ use crate::layout::PaneId;
 use super::paint::BlockPaint;
 use super::snapshot::{self, HistorySnapshot};
 
-/// 二级缓存（绘制数据）的字节上限；超限按 `last_frame` 淘汰。
+/// 二级缓存（绘制数据）的字节上限，**所有 lx 窗格共享**；超限按 `last_frame` 淘汰。
+///
+/// 由 [`RenderCache`] 平摊到各窗格（每格 `MAX_CACHED_BYTES / 窗格数`）：预算挂在
+/// `PaneCache` 上只是记账实现，口径必须是总量——否则开 N 个窗格就是 N×32MB。
 pub(crate) const MAX_CACHED_BYTES: usize = 32 * 1024 * 1024;
 
 /// 块级缓存的键：消息/步骤定位 + 内容宽度 + 该块自身的内容指纹。
@@ -57,14 +60,21 @@ pub(crate) struct RenderCache {
 }
 
 impl RenderCache {
-    /// 每帧开始时推进帧号。
+    /// 每帧开始时推进帧号，并按当前窗格数重算各自的字节份额。
     pub(crate) fn begin_frame(&mut self) {
         self.frame = self.frame.wrapping_add(1);
+        self.share_budget();
     }
 
     /// 取（或创建）指定窗格的缓存；同时把当前帧号写进窗格。
     pub(crate) fn pane(&mut self, id: PaneId) -> &mut PaneCache {
         let frame = self.frame;
+        let created = !self.panes.contains_key(&id);
+        if created {
+            self.panes.entry(id).or_default();
+            // 窗格数变了：份额重新平摊（新窗格不许多占，老窗格也要收紧）。
+            self.share_budget();
+        }
         let pane = self.panes.entry(id).or_default();
         pane.frame = frame;
         pane
@@ -73,6 +83,21 @@ impl RenderCache {
     /// 窗格关闭后清理，避免缓存泄漏。
     pub(crate) fn retain_panes(&mut self, alive: &[PaneId]) {
         self.panes.retain(|id, _| alive.contains(id));
+        self.share_budget();
+    }
+
+    /// 把 [`MAX_CACHED_BYTES`] 平摊给当前所有窗格。
+    ///
+    /// 平摊是**记账口径**：预算本就是总量，各窗格按份数收着，超出的部分在下一次
+    /// `render` 的回收点被淘汰。没有窗格时不设限（无缓存可记）。
+    fn share_budget(&mut self) {
+        if self.panes.is_empty() {
+            return;
+        }
+        let per = MAX_CACHED_BYTES / self.panes.len();
+        for pane in self.panes.values_mut() {
+            pane.set_limit(per);
+        }
     }
 }
 
@@ -105,8 +130,7 @@ impl Default for PaneCache {
 }
 
 impl PaneCache {
-    /// 调小二级缓存上限（测试淘汰路径用）。
-    #[cfg(test)]
+    /// 调小二级缓存上限（测试与 [`RenderCache`] 平摊预算用）。
     pub(crate) fn set_limit(&mut self, limit: usize) {
         self.limit = limit;
         self.evict();

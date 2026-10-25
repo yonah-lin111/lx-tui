@@ -400,7 +400,7 @@ fn cursor_aligns_after_wide_chars() {
 fn copy_text_extracts_selected_rows() {
     let area = Rect::new(0, 0, 100, 20);
     let lx = Lx::new();
-    let text = copy_text(area, &lx, ((0, 0), (19, 99)));
+    let text = copy_text(area, &lx, ((0, 0), (19, 99)), &mut PaneCache::default());
     assert!(text.contains("Native Agent"), "{text}");
     assert!(text.contains("Ask anything"), "{text}");
 }
@@ -413,14 +413,27 @@ fn copy_text_keeps_wide_chars_once() {
         lx.insert_char(ch);
     }
     let row = i32::from(area.height - 2);
-    let text = copy_text(area, &lx, ((row, MARGIN), (row, area.width - 1)));
+    let text = copy_text(
+        area,
+        &lx,
+        ((row, MARGIN), (row, area.width - 1)),
+        &mut PaneCache::default(),
+    );
     assert_eq!(text, "> 你谁");
 }
 
 #[test]
 fn copy_text_blank_selection_is_empty() {
     let area = Rect::new(0, 0, 100, 20);
-    assert_eq!(copy_text(area, &Lx::new(), ((0, 0), (0, 0))), "");
+    assert_eq!(
+        copy_text(
+            area,
+            &Lx::new(),
+            ((0, 0), (0, 0)),
+            &mut PaneCache::default()
+        ),
+        ""
+    );
 }
 
 /// 把缓冲区按行拼成文本，便于断言内容。

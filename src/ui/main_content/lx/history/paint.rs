@@ -9,7 +9,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::state::{AssistantStepView, ChatMessageView, Lx, ToolCallView};
+use crate::app::state::{AssistantStepView, CardSection, ChatMessageView, Lx, ToolCallView};
 use crate::ui::markdown_render::MdLine;
 use crate::ui::style;
 
@@ -44,6 +44,23 @@ pub(crate) enum BlockSource {
     Plain,
 }
 
+/// 块内一个可点击区域（行偏移相对块首行）。
+///
+/// 它是 `(块内容, 宽度, 折叠态)` 的纯函数结果，因此和绘制数据存在一起、随同一个
+/// `BlockKey` 失效：快照重建每帧都要登记点击面，重算一遍 `card_regions` 在 1400 张
+/// 工具卡片的会话里要 4.7ms/帧（实测）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CardSpan {
+    /// 该区域属于块内第几个调用：单工具块恒 0，合并组是组内下标。
+    pub call: usize,
+    pub section: CardSection,
+    /// 该区域当前的展开状态（折叠态也进块指纹，因此能随同样的条件失效）。
+    pub expanded: bool,
+    pub offset: usize,
+    pub rows: usize,
+    pub clickable: bool,
+}
+
 /// 一个块的绘制数据。
 #[derive(Debug)]
 pub(crate) enum BlockPaint {
@@ -55,8 +72,8 @@ pub(crate) enum BlockPaint {
     Thinking { body: Vec<MdLine> },
     /// 完全静态的单色行块（统计行）。
     Static { lines: Vec<String>, style: Style },
-    /// 尚未接入内容缓存的块：只缓存行数，绘制仍走原路径。
-    Legacy { rows: usize },
+    /// 尚未接入内容缓存的块：缓存行数与点击面几何，绘制仍走原路径。
+    Legacy { rows: usize, spans: Vec<CardSpan> },
 }
 
 impl BlockPaint {
@@ -67,7 +84,18 @@ impl BlockPaint {
             Self::Markdown { lines } => lines.len(),
             Self::Thinking { body } => 1 + body.len(),
             Self::Static { lines, .. } => lines.len(),
-            Self::Legacy { rows } => *rows,
+            Self::Legacy { rows, .. } => *rows,
+        }
+    }
+
+    /// 块内的可点击区域（非工具块为空）。几何与行数同源、同一次构建。
+    pub(crate) fn card_spans(&self) -> &[CardSpan] {
+        match self {
+            Self::Legacy { spans, .. } => spans,
+            Self::UserText { .. }
+            | Self::Markdown { .. }
+            | Self::Thinking { .. }
+            | Self::Static { .. } => &[],
         }
     }
 
@@ -79,8 +107,9 @@ impl BlockPaint {
             }
             Self::Markdown { lines } => md_bytes(lines),
             Self::Thinking { body } => md_bytes(body),
-            // 旧路径没有缓存正文，不占二级缓存预算（行数已在一级快照里）。
-            Self::Legacy { .. } => 0,
+            // 旧路径没有缓存正文，不占二级缓存预算（行数已在一级快照里）；
+            // 点击面几何是小结构，按条数记个近似值。
+            Self::Legacy { spans, .. } => spans.len() * std::mem::size_of::<CardSpan>(),
         }
     }
 
