@@ -156,8 +156,15 @@ fn plain_text_history_is_unchanged() {
         body["messages"],
         json!([{"role": "user", "content": "你好"}])
     );
-    // 系统指令走顶层 system（不在 messages 里）。
-    assert_eq!(body["system"], crate::chat::prompt::system_prompt());
+    // 系统指令走顶层 system 的多个 text block（代理安全线切分，不在 messages 里）。
+    let expected = crate::chat::prompt::system_prompt();
+    let blocks = body["system"].as_array().expect("system blocks");
+    let joined: String = blocks
+        .iter()
+        .map(|block| block["text"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(joined, expected, "分段拼接必须逐字还原");
+    assert!(blocks.iter().all(|block| block["type"] == "text"));
 }
 
 /// `tools` 用 `input_schema` 承载四工具 schema。

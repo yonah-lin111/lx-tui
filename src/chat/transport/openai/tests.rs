@@ -166,16 +166,24 @@ fn body_uses_messages_and_stream() {
     assert_eq!(body["model"], "example-chat");
     assert_eq!(body["stream"], true);
     let messages = body["messages"].as_array().expect("messages array");
-    // 首条 system 是 lx 身份提示；其后 3 条与 turns 一一对应（旧行为等价）。
-    assert_eq!(messages.len(), 4);
-    assert_eq!(messages[0]["role"], "system");
-    assert_eq!(messages[0]["content"], crate::chat::prompt::system_prompt());
-    assert_eq!(messages[1]["role"], "user");
-    assert_eq!(messages[1]["content"], "第一问");
-    assert_eq!(messages[2]["role"], "assistant");
-    assert_eq!(messages[2]["content"], "第一答");
-    assert_eq!(messages[3]["role"], "user");
-    assert_eq!(messages[3]["content"], "第二问");
+    // 开头的 system 段拼起来必须逐字等于完整提示（代理安全线切成多条）；
+    // 其后 3 条与 turns 一一对应（旧行为等价）。
+    let system_count = messages
+        .iter()
+        .take_while(|message| message["role"] == "system")
+        .count();
+    let joined: String = messages[..system_count]
+        .iter()
+        .map(|message| message["content"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(joined, crate::chat::prompt::system_prompt());
+    assert_eq!(messages.len(), system_count + 3);
+    assert_eq!(messages[system_count]["role"], "user");
+    assert_eq!(messages[system_count]["content"], "第一问");
+    assert_eq!(messages[system_count + 1]["role"], "assistant");
+    assert_eq!(messages[system_count + 1]["content"], "第一答");
+    assert_eq!(messages[system_count + 2]["role"], "user");
+    assert_eq!(messages[system_count + 2]["content"], "第二问");
     // 认证只放 Authorization header，不进 URL/body。
     assert!(!built.url.contains("key"));
     assert!(!built.body.contains("key"));
@@ -210,12 +218,18 @@ fn tools_field_matches_available_tools() {
 fn tool_history_is_encoded_as_call_and_tool_message() {
     let body = body_of(&tool_request());
     let messages = body["messages"].as_array().expect("messages");
-    assert_eq!(messages.len(), 4);
-    assert_eq!(messages[0]["role"], "system");
-    assert_eq!(messages[1]["role"], "user");
-    assert_eq!(messages[1]["content"], "读 src/main.rs");
+    // 开头是若干条 system 段（代理安全线切分），其后是 user / assistant / tool。
+    let system_count = messages
+        .iter()
+        .take_while(|message| message["role"] == "system")
+        .count();
+    assert!(system_count >= 1);
+    assert_eq!(messages.len(), system_count + 3);
+    let user = &messages[system_count];
+    assert_eq!(user["role"], "user");
+    assert_eq!(user["content"], "读 src/main.rs");
     // assistant 的 tool_calls：arguments 是 JSON 字符串（不是嵌套对象、不被二次编码）。
-    let assistant = &messages[2];
+    let assistant = &messages[system_count + 1];
     assert_eq!(assistant["role"], "assistant");
     assert!(assistant["content"].is_null());
     let calls = assistant["tool_calls"].as_array().expect("tool_calls");
@@ -229,9 +243,10 @@ fn tool_history_is_encoded_as_call_and_tool_message() {
     let parsed: Value = serde_json::from_str(arguments).expect("arguments parse");
     assert_eq!(parsed, json!({"path": "src/main.rs"}));
     // 结果消息：role=tool + tool_call_id。
-    assert_eq!(messages[3]["role"], "tool");
-    assert_eq!(messages[3]["tool_call_id"], "call_a");
-    assert_eq!(messages[3]["content"], "1: fn main() {}");
+    let result = &messages[system_count + 2];
+    assert_eq!(result["role"], "tool");
+    assert_eq!(result["tool_call_id"], "call_a");
+    assert_eq!(result["content"], "1: fn main() {}");
 }
 
 #[test]

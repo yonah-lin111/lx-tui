@@ -54,10 +54,15 @@ pub fn build(
     };
     let url = join_url(base, "v1/messages");
     let messages = messages_of(request)?;
+    // 系统指令：Anthropic 用顶层 system（多段即多个 text block），不进 messages。
+    // 分段理由见 [`super::split_system_prompt`]：代理会整条替换超长 system 消息。
+    let system: Vec<Value> = super::split_system_prompt(&request.resolve_system_prompt())
+        .into_iter()
+        .map(|chunk| json!({"type": "text", "text": chunk}))
+        .collect();
     let mut body = json!({
         "model": request.model.model,
-        // 系统指令：Anthropic 用顶层 system，不进 messages。
-        "system": request.resolve_system_prompt(),
+        "system": system,
         "messages": messages,
         "max_tokens": DEFAULT_MAX_TOKENS,
         "stream": true,

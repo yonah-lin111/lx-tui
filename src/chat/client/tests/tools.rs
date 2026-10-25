@@ -400,10 +400,15 @@ async fn request_body_carries_tools_and_system_prompt() {
     .await;
     let recorded = server.await.expect("server");
     let sent: serde_json::Value = serde_json::from_str(&recorded.body).expect("json body");
-    assert_eq!(
-        sent["messages"][0]["content"],
-        crate::chat::prompt::system_prompt()
-    );
+    // 系统提示按代理安全线切成多条 system 消息：拼接后必须逐字等于完整提示。
+    let messages = sent["messages"].as_array().expect("messages");
+    let system: String = messages
+        .iter()
+        .take_while(|message| message["role"] == "system")
+        .map(|message| message["content"].as_str().unwrap_or_default())
+        .collect();
+    assert!(!system.is_empty(), "必须发出系统提示");
+    assert_eq!(system, crate::chat::prompt::system_prompt());
     let names: Vec<&str> = sent["tools"]
         .as_array()
         .expect("tools")

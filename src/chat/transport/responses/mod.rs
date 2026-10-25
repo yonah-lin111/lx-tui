@@ -60,10 +60,24 @@ pub fn build(
         join_url(base_url, "responses")
     };
     let input = input_of(request)?;
+    // 系统指令：`instructions` 只放第一段，其余作为 system input 项。
+    //
+    // 分段理由见 [`super::split_system_prompt`]：代理会整条替换超长 `instructions`。
+    // 实测 `instructions`（短）+ 多个 system input 项都能被上游保留。
+    let mut chunks = super::split_system_prompt(&request.resolve_system_prompt());
+    let instructions = chunks.remove(0);
+    let mut input = input;
+    if !chunks.is_empty() {
+        let mut head: Vec<Value> = chunks
+            .into_iter()
+            .map(|chunk| json!({"role": "system", "content": chunk}))
+            .collect();
+        head.extend(input);
+        input = head;
+    }
     let mut body = json!({
         "model": request.model.model,
-        // 系统指令：Responses 用顶层 instructions（不是 input 里的 system 消息）。
-        "instructions": request.resolve_system_prompt(),
+        "instructions": instructions,
         "input": input,
         "stream": true,
     });

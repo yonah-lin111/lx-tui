@@ -124,8 +124,12 @@ fn body_uses_input_not_messages() {
     assert!(body.get("messages").is_none(), "不沿用 messages 形状");
     assert_eq!(body["stream"], true);
     assert_eq!(body["model"], "grok");
-    // 系统指令走顶层 instructions。
-    assert_eq!(body["instructions"], crate::chat::prompt::system_prompt());
+    // 系统指令：第一段进顶层 instructions，其余作为 system input 项（见 split_system_prompt）。
+    let expected = crate::chat::prompt::system_prompt();
+    let chunks = crate::chat::transport::split_system_prompt(&expected);
+    assert_eq!(body["instructions"], chunks[0]);
+    let joined: String = chunks.iter().cloned().collect();
+    assert_eq!(joined, expected, "分段拼接必须逐字还原");
 }
 
 /// `tools` 是扁平函数项（不套 `function`），schema 与 `available_tools()` 一致。
@@ -151,12 +155,19 @@ fn tools_are_flat_function_items() {
 #[test]
 fn plain_text_input_is_unchanged() {
     let body = body_of(&request());
+    // system 分段（除第一段进 instructions）会作为 system input 项前置；
+    // 去掉它们之后，user/assistant 的编码与旧行为逐字一致。
+    let input = body["input"].as_array().expect("input");
+    let tail: Vec<&Value> = input
+        .iter()
+        .skip_while(|item| item["role"] == "system")
+        .collect();
     assert_eq!(
-        body["input"],
-        json!([
-            {"role": "user", "content": "问"},
-            {"role": "assistant", "content": "答"},
-        ])
+        tail,
+        vec![
+            &json!({"role": "user", "content": "问"}),
+            &json!({"role": "assistant", "content": "答"}),
+        ]
     );
 }
 
@@ -165,22 +176,29 @@ fn plain_text_input_is_unchanged() {
 fn tool_history_encodes_function_call_items() {
     let body = body_of(&tool_request());
     let input = body["input"].as_array().expect("input");
-    assert_eq!(input.len(), 3);
-    assert_eq!(input[0]["role"], "user");
+    // system 分段前置（第一段已进 instructions），其后才是历史项。
+    let offset = input
+        .iter()
+        .take_while(|item| item["role"] == "system")
+        .count();
+    assert_eq!(input.len(), offset + 3);
+    assert_eq!(input[offset]["role"], "user");
     // function_call：call_id/name/arguments（JSON 字符串，只序列化一次）。
-    assert_eq!(input[1]["type"], "function_call");
-    assert_eq!(input[1]["call_id"], "call_a");
-    assert_eq!(input[1]["name"], "read");
-    let arguments = input[1]["arguments"].as_str().expect("arguments string");
+    assert_eq!(input[offset + 1]["type"], "function_call");
+    assert_eq!(input[offset + 1]["call_id"], "call_a");
+    assert_eq!(input[offset + 1]["name"], "read");
+    let arguments = input[offset + 1]["arguments"]
+        .as_str()
+        .expect("arguments string");
     assert_eq!(
         serde_json::from_str::<Value>(arguments).expect("parse"),
         json!({"path": "src/main.rs"})
     );
     // function_call_output：只用 call_id 关联。
-    assert_eq!(input[2]["type"], "function_call_output");
-    assert_eq!(input[2]["call_id"], "call_a");
-    assert_eq!(input[2]["output"], "1: fn main() {}");
-    assert!(input[2].get("name").is_none());
+    assert_eq!(input[offset + 2]["type"], "function_call_output");
+    assert_eq!(input[offset + 2]["call_id"], "call_a");
+    assert_eq!(input[offset + 2]["output"], "1: fn main() {}");
+    assert!(input[offset + 2].get("name").is_none());
 }
 
 #[test]

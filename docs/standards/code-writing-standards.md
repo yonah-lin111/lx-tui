@@ -20,6 +20,7 @@
 - 系统提示的章节结构对齐 codex `base_instructions`（personality / language / AGENTS.md / responsiveness / planning / task execution / validation / ambition vs precision / progress / final message / tools / workspace）；改结构时同步改 `PROMPT_VERSION` 与对应测试。
 - 默认回复语言跟随用户当前输入的语言：提示中写明“不自作主张切换语言，只有用户明确要求才改用指定语言”，不得把某一种语言钉死为默认值。
 - 提示是每次请求的固定开销：系统提示预算 12 KiB、含环境快照的完整提示 16 KiB，超限由测试拦截。
+- **单条 system 消息不得超过 2000 字符**：部分代理（实测 9router 的 CodeBuddy CN 执行器，`cbcn/*` 模型）会把超长 system 消息**整条替换**成中性提示，模型随即自称「混元 / AI 助手」，lx 的身份与全部规则失效。发送侧统一走 `chat::transport::split_system_prompt` 按行切成多段（每段 ≤ `MAX_SYSTEM_MESSAGE_CHARS` = 1900），四类 transport 各自用原生多段形状承载（OpenAI 多条 system、Anthropic 多个 text block、Google 多个 part、Responses `instructions` + system input 项）。禁止把系统提示拼回单条发送。
 
 ## 错误处理与日志
 

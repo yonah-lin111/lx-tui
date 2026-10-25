@@ -60,10 +60,15 @@ pub fn build(
         key
     );
     let contents = contents_of(request)?;
+    // 系统指令：Gemini 用 systemInstruction.parts（多段即多个 part）。
+    // 分段理由见 [`super::split_system_prompt`]：代理会整条替换超长 system 消息。
+    let parts: Vec<Value> = super::split_system_prompt(&request.resolve_system_prompt())
+        .into_iter()
+        .map(|chunk| json!({"text": chunk}))
+        .collect();
     let mut body = json!({
         "contents": contents,
-        // 系统指令：Gemini 用 systemInstruction.parts[0].text。
-        "systemInstruction": {"parts": [{"text": request.resolve_system_prompt()}]},
+        "systemInstruction": {"parts": parts},
     });
     // 摘要请求不声明工具（无工具就无从发起调用）。
     if request.includes_tools() {

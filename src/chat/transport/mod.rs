@@ -17,6 +17,63 @@ use serde_json::Value;
 
 use super::events::{ChatDelta, ChatRequest, PartDelta, PartKind};
 
+/// 单条 system 消息的字符上限（代理安全线）。
+///
+/// 动机是一条实测：9router 的 CodeBuddy CN 执行器会把**任何超过 2000 字符**的
+/// system 消息整条替换成
+/// `You are a helpful AI assistant that helps with software engineering tasks.`
+/// （源码 `open-sse/executors/codebuddy-cn.js`：`text.length > 2000 || AGENT_PATTERN`）。
+/// 被替换后 lx 的身份、工具纪律与语言规则全部失效，模型开始自称「混元 / AI 助手」。
+///
+/// 代理不会合并多条 system 消息，所以把提示按行切到该上限以内即可原样送达。
+/// 取 1900 留 100 字符余量：分段拼接点与可能的模板包装都不至于越线。
+pub const MAX_SYSTEM_MESSAGE_CHARS: usize = 1900;
+
+/// 把系统提示按行切成若干段，每段**字符数**不超过 [`MAX_SYSTEM_MESSAGE_CHARS`]。
+///
+/// 只在换行处切分，绝不把一个段落句子拦腰截断；单行本身超限时按字符边界硬切。
+/// 返回值至少含一段（空提示返回一个空串），调用方按顺序发送成多条 system 消息。
+pub fn split_system_prompt(prompt: &str) -> Vec<String> {
+    if prompt.is_empty() {
+        return vec![String::new()];
+    }
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_chars = 0usize;
+    for line in prompt.split_inclusive('\n') {
+        let line_chars = line.chars().count();
+        if current_chars > 0 && current_chars + line_chars > MAX_SYSTEM_MESSAGE_CHARS {
+            chunks.push(std::mem::take(&mut current));
+            current_chars = 0;
+        }
+        if line_chars > MAX_SYSTEM_MESSAGE_CHARS {
+            // 单行超限：按字符边界切开，不产生非法 UTF-8。
+            let mut buffer = String::new();
+            let mut count = 0usize;
+            for ch in line.chars() {
+                if count == MAX_SYSTEM_MESSAGE_CHARS {
+                    chunks.push(std::mem::take(&mut buffer));
+                    count = 0;
+                }
+                buffer.push(ch);
+                count += 1;
+            }
+            current = buffer;
+            current_chars = count;
+            continue;
+        }
+        current.push_str(line);
+        current_chars += line_chars;
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    if chunks.is_empty() {
+        chunks.push(String::new());
+    }
+    chunks
+}
+
 /// 一次 transport 请求的完整描述（URL、header、body）；由 client 执行。
 #[derive(Debug, Clone)]
 pub struct TransportRequest {
@@ -189,3 +246,6 @@ pub(crate) fn openai_usage(value: &Value) -> Option<ChatDelta> {
         cache_write: None,
     }))
 }
+
+#[cfg(test)]
+mod tests;

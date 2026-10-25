@@ -163,14 +163,19 @@ fn url_places_key_in_query_and_body_uses_contents() {
     assert!(!built.body.contains("g-key"));
 }
 
-/// 系统指令走 `systemInstruction.parts[0].text`。
+/// 系统指令走 `systemInstruction.parts`：拼接后逐字等于完整提示。
 #[test]
 fn system_instruction_carries_lx_prompt() {
     let body = body_of(&request());
-    assert_eq!(
-        body["systemInstruction"]["parts"][0]["text"],
-        crate::chat::prompt::system_prompt()
-    );
+    let expected = crate::chat::prompt::system_prompt();
+    let parts = body["systemInstruction"]["parts"]
+        .as_array()
+        .expect("parts");
+    let joined: String = parts
+        .iter()
+        .map(|part| part["text"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(joined, expected, "分段拼接必须逐字还原");
 }
 
 /// `tools[0].functionDeclarations` 与 `available_tools()` 一一对应。
