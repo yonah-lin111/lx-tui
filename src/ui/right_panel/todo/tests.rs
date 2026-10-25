@@ -86,9 +86,30 @@ fn records(count: usize) -> Vec<TodoRecord> {
 }
 
 #[test]
-fn toolbar_buttons_drop_from_right_when_narrow() {
-    // 宽度阶梯：5 / +1+6=12 / +1+5=18 / +1+12=31，从右往左丢弃。
-    let cases: [(u16, Vec<TodoButton>); 5] = [
+fn toolbar_puts_new_on_left_and_actions_on_right() {
+    let area = panel(38);
+    let bar = crate::layout::prompt_toolbar_rect(area).expect("toolbar visible");
+    let new = button_rect(area, TodoButton::New).expect("[+] visible");
+    assert_eq!(new.x, bar.x, "[+] 贴左边框");
+    assert_eq!(new.width, NEW_WIDTH);
+
+    // 右侧组贴右缘，从左到右依次 `[edit] [del] [clear done]`。
+    let edit = button_rect(area, TodoButton::Edit).expect("[edit] visible");
+    let del = button_rect(area, TodoButton::Delete).expect("[del] visible");
+    let clear = button_rect(area, TodoButton::ClearDone).expect("[clear done] visible");
+    assert_eq!(clear.right(), bar.right(), "[clear done] 贴右缘");
+    assert_eq!(del.right().saturating_add(BUTTON_GAP), clear.x);
+    assert_eq!(edit.right().saturating_add(BUTTON_GAP), del.x);
+    assert!(
+        new.right().saturating_add(BUTTON_GAP) <= edit.x,
+        "左右两组之间至少留 1 列空白: {new:?} / {edit:?}"
+    );
+}
+
+#[test]
+fn toolbar_drops_action_buttons_before_new() {
+    // `[+]` 恒在；右侧组从右往左丢弃，靠右的 `[clear done]` 先丢。
+    let cases: [(u16, Vec<TodoButton>); 4] = [
         (
             38,
             vec![
@@ -99,17 +120,12 @@ fn toolbar_buttons_drop_from_right_when_narrow() {
             ],
         ),
         (
-            28,
+            20,
             vec![TodoButton::New, TodoButton::Edit, TodoButton::Delete],
         ),
-        (
-            18,
-            vec![TodoButton::New, TodoButton::Edit, TodoButton::Delete],
-        ),
-        (12, vec![TodoButton::New, TodoButton::Edit]),
-        (4, Vec::new()),
+        (13, vec![TodoButton::New, TodoButton::Edit]),
+        (8, vec![TodoButton::New]),
     ];
-
     for (inner, want) in cases {
         let area = panel(inner);
         let got: Vec<TodoButton> = BUTTONS
@@ -119,17 +135,10 @@ fn toolbar_buttons_drop_from_right_when_narrow() {
             .collect();
         assert_eq!(got, want, "内宽 {inner} 时可见按钮集");
     }
-
-    // 18 列恰好放下三个按钮，ClearDone 被丢弃。
-    let area = panel(18);
-    assert!(button_rect(area, TodoButton::ClearDone).is_none());
-    for button in [TodoButton::New, TodoButton::Edit, TodoButton::Delete] {
-        assert!(button_rect(area, button).is_some(), "{button:?} 必须可见");
-    }
 }
 
-/// `button_at` 必须与 `button_rect` 是同一份几何：右端 `right()-1` 命中，`right()` 不命中，
-/// 空档（两按钮之间的 1 列）与分割线行都不命中。
+/// `button_at` 必须与 `button_rect` 是同一份几何：两端命中、之外不命中，
+/// 两组之间的空档与分割线行都不命中。
 #[test]
 fn button_hit_matches_button_rect_boundaries() {
     let area = panel(38);
@@ -159,11 +168,13 @@ fn button_hit_matches_button_rect_boundaries() {
         );
     }
 
-    // 两按钮之间的 1 列空档：不命中任何按钮。
-    let new = button_rect(area, TodoButton::New).expect("[new] visible");
+    // 左右两组之间的空档：不命中任何按钮。
+    let new = button_rect(area, TodoButton::New).expect("[+] visible");
     let edit = button_rect(area, TodoButton::Edit).expect("[edit] visible");
-    assert_eq!(edit.x, new.right().saturating_add(BUTTON_GAP));
-    assert_eq!(button_at(area, new.right(), bar.y), None, "按钮空档不命中");
+    assert!(new.right() < edit.x, "两组之间必须有空档");
+    for x in (new.right())..edit.x {
+        assert_eq!(button_at(area, x, bar.y), None, "第 {x} 列空档不命中");
+    }
 }
 
 #[test]

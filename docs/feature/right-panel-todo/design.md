@@ -225,7 +225,8 @@
 | `G` | 跳尾 |
 | `Space` / `Tab` | 循环当前项状态 `todo → in_progress → done → todo` |
 | `a` | 末尾追加新条目并进入编辑 |
-| `o` / `Enter` | 在当前项之后插入新条目并进入编辑 |
+| `Enter` | 编辑当前项（列表为空时新建） |
+| `Shift+Enter` / `o` | 在当前项之后插入新条目并进入编辑 |
 | `e` | 编辑当前项 |
 | `d` | 删除当前项（立即，无确认） |
 | `Ctrl+Z` | 撤销最近一次删除（单槽） |
@@ -236,7 +237,7 @@
 
 | 键 | 行为 |
 | --- | --- |
-| `Enter` | 提交（trim；空则新建不创建 / 编辑则删除该条） |
+| `Enter` / `Shift+Enter` | 提交（trim；空则新建不创建 / 编辑则删除该条；单行输入没有换行语义） |
 | `Esc` | 取消（新建消失、编辑恢复原文） |
 | `←`/`→`/`Home`/`End`/`Backspace`/`Delete` | 单行编辑 |
 | `Ctrl+C` | 清空输入（与页重命名同口径，`OverlayKey::Clear`） |
@@ -1027,4 +1028,8 @@ pub fn todo_status_done() -> Style;
 | 23 | 焦点是两个独立 bool（`prompt_focused` / `todo_focused`），各容器自己判 | 收敛成单一枚举 `FocusedContainer`（`Sidebar`/`Panes`/`Prompt`/`Todo`）+ `set_focus` / `prompt_focused()` 等读侧谓词 | 真机缺陷：`panes.rs` 只看 `!prompt_focused`、侧栏边框恒 `false`，于是点右侧容器后主区**也**描边强调色（截图里两个容器同时高亮），且光标归属分裂。两个 bool 无法表达"同一时刻只有一个" |
 | 24 | 侧栏没有任何焦点概念、点侧栏空白不产生状态 | 新增 `FocusSidebar` 分支 + `focus_sidebar()`；侧栏边框随焦点描边，Agents 条目 `❯` 标记改由 `panes_focused()` 决定 | 用户口径：点哪个容器就高亮哪个容器。侧栏持焦点时 `route` 直接返回 `None`，按键绝不落进别的容器输入框 |
 | 25 | `route(key, mode, prompt_focused, overlay, pane_lx, todo_focused)` | 改为 `route(key, mode, focus: FocusedContainer, overlay, pane_lx)` | 五个入场状态里两个是互斥布尔，调用方稍一漏改就分裂；换成枚举后「不可能同时为真」由类型保证 |
+| 26 | `select_right_tab` 切 tab 后把焦点退回主区 | 改为**直接聚焦到目标面板**（Prompt → `FocusedContainer::Prompt`，Todo → `Todo`） | 真机缺陷：点右侧容器的 tab 后高亮跑回主区。点 tab 本身就是「点了右侧容器」，焦点必须留在右栏 |
+| 27 | 列表态 `Enter` = 在当前项之后新建 | `Enter` 编辑当前项（空列表退化为新建），`Shift+Enter` 才是其后新建；编辑态两者都提交 | 用户第三轮口径（对齐 lx-agent「点行即改」）。单行输入没有换行语义，编辑态不必区分 |
+| 28 | Todo 工具栏单组从右往左排，`[new]` 宽 5 | 分**左右两组**：左端恒为 `[+]`（宽 3、贴左边框），右端贴右缘依次 `[clear done]` `[del]` `[edit]`，从右往左丢弃；两组间至少 1 列空白 | 用户口径：设置左右都有、添加按钮用加号。`[+]` 恒在意味着「新建」永远不会被窄面板丢掉 |
+| 29 | 工具栏标签一律左对齐 | prompt 工具栏标签改为**槽内右对齐**（其余按钮槽宽 == 标签宽，效果不变） | `[pin]` 固定占 `[unpin]` 的 7 列、自身只有 5 列，左对齐把 2 列余量甩到右侧，加 1 列间距就是用户看到的「pin 与 all 之间大间隙」 |
 

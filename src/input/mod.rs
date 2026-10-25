@@ -44,6 +44,8 @@ pub enum TodoKey {
     /// 裸空格（不带修饰键）。
     Space,
     Enter,
+    /// Shift+Enter：列表态新建一条（与 `Enter` 的「编辑当前项」区分）。
+    ShiftEnter,
     Esc,
     Tab,
     Backspace,
@@ -70,6 +72,7 @@ fn todo_key(key: KeyEvent) -> Option<TodoKey> {
         KeyCode::Char('c' | 'C') if ctrl && !alt => Some(TodoKey::Clear),
         KeyCode::Char(' ') if !ctrl && !alt => Some(TodoKey::Space),
         KeyCode::Char(ch) if !ctrl && !alt => Some(TodoKey::Char(ch)),
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => Some(TodoKey::ShiftEnter),
         KeyCode::Enter => Some(TodoKey::Enter),
         KeyCode::Esc => Some(TodoKey::Esc),
         KeyCode::Tab => Some(TodoKey::Tab),

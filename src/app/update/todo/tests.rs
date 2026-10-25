@@ -19,7 +19,8 @@ fn todo_state(texts: &[&str]) -> AppState {
         .map(|(index, text)| TodoRecord::new(*text, TodoStatus::Todo, index as i64))
         .collect();
     apply_todo_list(&mut state, records);
-    assert!(focus_todo(&mut state));
+    // 切到 Todo tab 已经同时把焦点交给右栏（见 `select_right_tab`），这里只做断言。
+    assert!(state.todo_focused(), "切到 Todo tab 后右栏应持焦点");
     state
 }
 
@@ -493,4 +494,53 @@ fn click_beyond_list_with_ghost_is_ignored() {
     // 显示序列：a(0) / 幽灵(1)，长度 2。点显示下标 2 越界。
     assert!(!click_todo_row(&mut state, 2, Instant::now()));
     assert_eq!(state.todo.len(), 1);
+}
+
+/// 列表态 `Enter` 编辑当前项（不是新建）；`Shift+Enter` 才是新建。
+#[test]
+fn enter_edits_current_row_and_shift_enter_creates() {
+    let mut state = todo_state(&["a", "b"]);
+    assert!(state.todo.select(1));
+
+    assert!(apply_todo_key(&mut state, TodoKey::Enter));
+    let edit = state.todo.editing().expect("Enter 进入编辑");
+    assert_eq!(
+        edit.target.as_deref(),
+        Some(state.todo.items()[1].id.as_str()),
+        "编辑的是当前选中项"
+    );
+    assert_eq!(edit.input.text(), "b", "输入框带原文");
+    assert!(apply_todo_key(&mut state, TodoKey::Esc));
+
+    assert!(apply_todo_key(&mut state, TodoKey::ShiftEnter));
+    let edit = state.todo.editing().expect("Shift+Enter 新建");
+    assert!(edit.target.is_none(), "新建现场没有目标 id");
+    assert_eq!(edit.at, 2, "插在当前项之后");
+    assert_eq!(edit.input.text(), "", "新建输入框为空");
+}
+
+/// 列表为空时 `Enter` 退化为新建（没有当前项可编辑）。
+#[test]
+fn enter_on_empty_list_starts_new_todo() {
+    let mut state = todo_state(&[]);
+    assert!(apply_todo_key(&mut state, TodoKey::Enter));
+    assert!(
+        state
+            .todo
+            .editing()
+            .is_some_and(|edit| edit.target.is_none())
+    );
+}
+
+/// 编辑态 `Shift+Enter` 与 `Enter` 同义（单行输入没有换行）。
+#[test]
+fn shift_enter_while_editing_commits() {
+    let mut state = todo_state(&["seed"]);
+    assert!(apply_todo_key(&mut state, TodoKey::Enter));
+    type_text(&mut state, "-x");
+
+    assert!(apply_todo_key(&mut state, TodoKey::ShiftEnter));
+
+    assert!(!state.todo.is_editing(), "Shift+Enter 也提交");
+    assert_eq!(texts(&state), ["seed-x"]);
 }

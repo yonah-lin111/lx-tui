@@ -17,7 +17,7 @@ use crate::ui::text;
 use super::super::{prompt, style, widgets};
 
 /// 工具栏按钮宽度（列）；与 `text::TODO_*_LABEL` 的显示宽度一一对应。
-const NEW_WIDTH: u16 = 5;
+const NEW_WIDTH: u16 = 3;
 const EDIT_WIDTH: u16 = 6;
 const DELETE_WIDTH: u16 = 5;
 const CLEAR_DONE_WIDTH: u16 = 12;
@@ -34,7 +34,15 @@ const MIN_STATS_ROWS: u16 = 3;
 /// 柱状图每根柱子的宽度（列）；槽位更窄时取槽宽。
 const BAR_WIDTH: u16 = 3;
 
-/// 全部按钮按显示顺序排列；宽度阶梯按**从右往左**丢弃。
+/// 工具栏左侧组：新建（`[+]`，贴近左边框）。
+const LEFT_BUTTONS: [(TodoButton, u16); 1] = [(TodoButton::New, NEW_WIDTH)];
+/// 工具栏右侧组：条目操作，从右缘往左排。
+const RIGHT_BUTTONS: [(TodoButton, u16); 3] = [
+    (TodoButton::Edit, EDIT_WIDTH),
+    (TodoButton::Delete, DELETE_WIDTH),
+    (TodoButton::ClearDone, CLEAR_DONE_WIDTH),
+];
+/// 全部按钮（命中与文案查表用）。
 const BUTTONS: [(TodoButton, u16); 4] = [
     (TodoButton::New, NEW_WIDTH),
     (TodoButton::Edit, EDIT_WIDTH),
@@ -99,12 +107,26 @@ pub fn visible_rows(panel: Rect) -> usize {
     usize::from(list_rect(panel).height)
 }
 
-/// 放得下的按钮数（宽度阶梯）。
-fn button_count(panel: Rect) -> usize {
+/// 左侧组占用宽度（`[+]` 恒显示，永不参与丢弃）。
+fn left_width() -> u16 {
+    LEFT_BUTTONS
+        .iter()
+        .enumerate()
+        .fold(0u16, |acc, (index, (_, width))| {
+            acc.saturating_add(if index == 0 { 0 } else { BUTTON_GAP })
+                .saturating_add(*width)
+        })
+}
+
+/// 右侧组放得下的按钮数（宽度阶梯：从右缘往左排，先丢 `[clear done]` 再丢 `[del]`）。
+///
+/// 左侧组先扣掉并额外让出 1 列间隔：两组之间必须留出至少 1 列空白，
+/// 否则窄面板下 `[+]` 会紧贴 `[edit]` 连成一串。
+fn right_button_count(panel: Rect) -> usize {
     let width = crate::layout::pane_inner_rect(panel).width;
-    let mut total: u16 = 0;
+    let mut total = left_width().saturating_add(BUTTON_GAP);
     let mut count = 0;
-    for (index, (_, button_width)) in BUTTONS.iter().enumerate() {
+    for (index, (_, button_width)) in RIGHT_BUTTONS.iter().enumerate() {
         let next = total
             .saturating_add(if index == 0 { 0 } else { BUTTON_GAP })
             .saturating_add(*button_width);
@@ -117,19 +139,39 @@ fn button_count(panel: Rect) -> usize {
     count
 }
 
-/// 工具栏按钮矩形；放不下时返回 None（按 [`BUTTONS`] 的阶梯从右往左丢弃）。
+/// 工具栏按钮矩形；放不下时返回 None。
+///
+/// 布局：`[+]` 贴左；右侧组从**右缘往左**依次排 `[clear done]` `[del]` `[edit]`，
+/// 这样窄面板丢按钮时是从左往右少（最常用的 `[edit]` 最后才丢）。
 pub fn button_rect(panel: Rect, button: TodoButton) -> Option<Rect> {
     let bar = crate::layout::prompt_toolbar_rect(panel)?;
-    let count = button_count(panel);
-    let mut x = bar.x;
-    for (index, (kind, width)) in BUTTONS.iter().enumerate() {
-        if index >= count {
-            return None;
+    if LEFT_BUTTONS.iter().any(|(kind, _)| *kind == button) {
+        // 左侧组只有 `[+]`，宽度固定 3，放不下时整组消失。
+        let width = LEFT_BUTTONS[0].1;
+        let rect = Rect::new(bar.x, bar.y, width, 1);
+        return (rect.right() <= bar.right()).then_some(rect);
+    }
+    let count = right_button_count(panel);
+    if count == 0 {
+        return None;
+    }
+    let visible = &RIGHT_BUTTONS[..count.min(RIGHT_BUTTONS.len())];
+    let total = visible
+        .iter()
+        .enumerate()
+        .fold(0u16, |acc, (index, (_, width))| {
+            acc.saturating_add(if index == 0 { 0 } else { BUTTON_GAP })
+                .saturating_add(*width)
+        });
+    let mut x = bar.right().saturating_sub(total);
+    for (index, (kind, width)) in visible.iter().enumerate() {
+        if index > 0 {
+            x = x.saturating_add(BUTTON_GAP);
         }
         if *kind == button {
             return Some(Rect::new(x, bar.y, *width, 1));
         }
-        x = x.saturating_add(*width).saturating_add(BUTTON_GAP);
+        x = x.saturating_add(*width);
     }
     None
 }

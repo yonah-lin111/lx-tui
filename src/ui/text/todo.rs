@@ -1,7 +1,7 @@
 //! 右侧容器 Todo 面板的全部文案。
 
 /// 工具栏按钮。
-pub const TODO_NEW_LABEL: &str = "[new]";
+pub const TODO_NEW_LABEL: &str = "[+]";
 pub const TODO_EDIT_LABEL: &str = "[edit]";
 pub const TODO_DELETE_LABEL: &str = "[del]";
 pub const TODO_CLEAR_DONE_LABEL: &str = "[clear done]";

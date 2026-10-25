@@ -215,7 +215,8 @@ pub fn apply_todo_key(state: &mut AppState, key: TodoKey) -> bool {
 /// 编辑态按键。
 fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
     match key {
-        TodoKey::Enter => commit_todo_edit(state),
+        // 单行输入：`Enter` 与 `Shift+Enter` 都提交（Shift 只用于**列表态**的新建）。
+        TodoKey::Enter | TodoKey::ShiftEnter => commit_todo_edit(state),
         TodoKey::Esc => cancel_todo_edit(state),
         TodoKey::Clear => {
             let Some(input) = state.todo.edit_input_mut() else {
@@ -304,7 +305,12 @@ fn apply_todo_list_key(state: &mut AppState, key: TodoKey) -> bool {
         TodoKey::Space => cycle_todo_status(state),
         // `Tab` 切状态（与编辑态同义）：进入编辑只走双击 / `e` / `[edit]`。
         TodoKey::Tab => cycle_todo_status(state),
-        TodoKey::Enter => {
+        // `Enter` 编辑当前项（对齐 lx-agent 点行即改）；`Shift+Enter` 新建一条。
+        TodoKey::Enter => match state.todo.selected() {
+            Some(index) => begin_todo_edit(state, TodoEditTarget::Current(index)),
+            None => begin_todo_edit(state, TodoEditTarget::New),
+        },
+        TodoKey::ShiftEnter => {
             let index = state.todo.selected().unwrap_or(0);
             begin_todo_edit(state, TodoEditTarget::After(index))
         }

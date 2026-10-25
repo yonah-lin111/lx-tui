@@ -11,7 +11,9 @@ fn todo_labels_align_to_three_columns() {
 
 #[test]
 fn todo_buttons_are_ascii_words() {
-    for label in [TODO_NEW_LABEL, TODO_EDIT_LABEL, TODO_DELETE_LABEL] {
+    // `[+]` 是加号图标（新建），其余为小写单词。
+    assert_eq!(TODO_NEW_LABEL, "[+]");
+    for label in [TODO_EDIT_LABEL, TODO_DELETE_LABEL] {
         assert!(label.starts_with('[') && label.ends_with(']'), "{label}");
         assert!(
             label[1..label.len() - 1]
@@ -21,6 +23,14 @@ fn todo_buttons_are_ascii_words() {
         );
     }
     assert_eq!(TODO_CLEAR_DONE_LABEL, "[clear done]");
+    for label in [
+        TODO_NEW_LABEL,
+        TODO_EDIT_LABEL,
+        TODO_DELETE_LABEL,
+        TODO_CLEAR_DONE_LABEL,
+    ] {
+        assert!(label.is_ascii(), "{label} 必须纯 ASCII");
+    }
 }
 
 #[test]

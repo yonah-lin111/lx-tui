@@ -898,6 +898,7 @@ pub fn prompt_toolbar_button_rect(
             if tree || inner.width < PROMPT_SELECT_ALL_MIN_WIDTH {
                 return None;
             }
+            // 右对齐到保存点左侧；`[pin]`/`[dir]` 依次贴它左边，整组等距相邻。
             Rect::new(
                 bar.right()
                     .saturating_sub(PROMPT_SELECT_ALL_WIDTH + PROMPT_SELECT_ALL_GAP + 1),

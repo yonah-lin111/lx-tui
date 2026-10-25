@@ -17,7 +17,12 @@ pub fn select_right_tab(state: &mut AppState, tab: RightTab) -> bool {
     state.right_tab = tab;
     state.right_tab_hover = None;
     state.todo_hover = None;
-    state.set_focus(FocusedContainer::Panes); // 键盘退回聚焦窗格
+    // 点右侧容器的 tab 就是「点了右侧容器」：焦点必须留在右栏（高亮它），
+    // 不能退回主区——否则会出现「切了 tab 主区高亮」的错位。
+    state.set_focus(match tab {
+        RightTab::Prompt => FocusedContainer::Prompt,
+        RightTab::Todo => FocusedContainer::Todo,
+    });
     if tab != RightTab::Prompt {
         clear_selection(state); // prompt 选区
         state.prompt.clear_panel(); // 块/斜杠/提及/引用/粘贴面板

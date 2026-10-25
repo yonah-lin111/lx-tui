@@ -4932,7 +4932,7 @@ fn mouse_click_todo_blank_still_focuses_container() {
         focused_pane,
         "不穿透到窗格、不改焦点"
     );
-    assert!(dirty, "焦点变化必须置脏（边框要重绘为强调色）");
+    assert!(!dirty, "已聚焦时点空白不产生变化");
     assert!(sessions.is_empty(), "点击不写终端");
 }
 
@@ -5207,7 +5207,7 @@ fn mouse_click_todo_border_blank_focuses_container() {
         &mut state,
         RightTab::Todo
     ));
-    assert!(!state.todo_focused(), "前提：切 tab 不自动聚焦");
+    assert!(state.todo_focused(), "前提：切 tab 后右栏持焦点");
     // 顶边框最右端（tab 之外、折叠按钮之外的空白）。
     let border = crate::layout::prompt_border_rect(geo.view.prompt).expect("border visible");
     let mut sessions = HashMap::new();
@@ -5227,9 +5227,12 @@ fn mouse_click_todo_border_blank_focuses_container() {
         &mut dirty,
     );
 
-    assert!(state.todo_focused(), "点容器边框空白也要进入选中态");
+    assert!(
+        state.todo_focused(),
+        "切 tab 后右栏即选中；点边框空白不改焦点"
+    );
     assert!(!state.prompt_focused());
-    assert!(dirty, "焦点变化置脏");
+    assert!(!dirty, "已聚焦时点边框空白不产生变化");
 }
 
 #[test]
@@ -5274,7 +5277,7 @@ fn mouse_click_todo_stats_row_focuses_without_data_change() {
         &mut dirty,
     );
 
-    assert!(state.todo_focused(), "点统计块同样让容器进入选中态");
+    assert!(state.todo_focused(), "点统计块时右栏保持选中");
     assert!(!state.todo.is_editing(), "统计块不是行，不进入编辑");
     assert_eq!(state.todo.selected(), Some(0), "选中行不变");
     assert_eq!(state.prompt.cursor(), cursor, "光标不动");
@@ -5283,7 +5286,7 @@ fn mouse_click_todo_stats_row_focuses_without_data_change() {
         focused_pane,
         "窗格焦点不动"
     );
-    assert!(dirty, "焦点变化置脏");
+    assert!(!dirty, "已聚焦时点统计块不产生变化");
 }
 
 #[test]
@@ -5294,7 +5297,7 @@ fn todo_keys_never_reach_pty() {
         &mut state,
         RightTab::Todo
     ));
-    assert!(crate::app::update::focus_todo(&mut state));
+    assert!(state.todo_focused(), "切到 Todo tab 后右栏持焦点");
     let mut sessions = HashMap::new();
     let keys = [
         KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
@@ -5405,7 +5408,7 @@ fn ctrl_z_without_undo_is_consumed_not_forwarded() {
         &mut state,
         RightTab::Todo
     ));
-    assert!(crate::app::update::focus_todo(&mut state));
+    assert!(state.todo_focused(), "切到 Todo tab 后右栏持焦点");
     assert!(!state.todo.can_undo(), "前提：撤销槽为空");
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -5446,7 +5449,7 @@ fn todo_key_escape_blurs() {
         &mut state,
         RightTab::Todo
     ));
-    assert!(crate::app::update::focus_todo(&mut state));
+    assert!(state.todo_focused(), "切到 Todo tab 后右栏持焦点");
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -5472,7 +5475,7 @@ fn ctrl_q_wins_over_todo_focus() {
         &mut state,
         RightTab::Todo
     ));
-    assert!(crate::app::update::focus_todo(&mut state));
+    assert!(state.todo_focused(), "切到 Todo tab 后右栏持焦点");
     let mut sessions = HashMap::new();
     let mut dirty = false;
 

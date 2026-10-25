@@ -1760,7 +1760,7 @@ fn prompt_pin_button_renders_state_symbol_in_accent() {
     let rendered: String = (pin.x..pin.right())
         .map(|x| buffer[(x, pin.y)].symbol())
         .collect();
-    assert_eq!(rendered.trim_end(), text::PROMPT_UNPINNED_LABEL);
+    assert_eq!(rendered.trim(), text::PROMPT_UNPINNED_LABEL);
     for x in pin.x..pin.right() {
         assert_eq!(buffer[(x, pin.y)].fg, ratatui::style::Color::Cyan);
     }
@@ -1770,7 +1770,7 @@ fn prompt_pin_button_renders_state_symbol_in_accent() {
     let rendered: String = (pin.x..pin.right())
         .map(|x| buffer[(x, pin.y)].symbol())
         .collect();
-    assert_eq!(rendered.trim_end(), text::PROMPT_PINNED_LABEL);
+    assert_eq!(rendered.trim(), text::PROMPT_PINNED_LABEL);
 }
 
 #[test]
@@ -3343,4 +3343,40 @@ fn only_focused_container_uses_accent_border() {
         };
         assert_eq!(accented, expected, "{target:?} 时应只有 {expected:?} 描边");
     }
+}
+
+/// 点右侧容器的 tab 后，高亮必须留在右栏——不得退回主区（真机缺陷）。
+#[test]
+fn switching_right_tab_keeps_focus_in_right_panel() {
+    use crate::app::state::RightTab;
+    let mut state = AppState::demo();
+    state.prompt_width = 40;
+    assert!(state.panes_focused(), "前提：启动时主区持焦点");
+
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    assert!(state.todo_focused(), "切到 Todo 后右栏持焦点");
+    assert!(!state.panes_focused(), "主区必须让出焦点");
+
+    let view = view_for(&state);
+    let buffer = render_buffer(&state);
+    assert_eq!(
+        buffer[(view.prompt.x, view.prompt.y)].fg,
+        ratatui::style::Color::Cyan,
+        "右栏边框必须是强调色"
+    );
+    assert_ne!(
+        buffer[(view.panes.x, view.panes.y)].fg,
+        ratatui::style::Color::Cyan,
+        "主区边框必须让出强调色"
+    );
+
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Prompt
+    ));
+    assert!(state.prompt_focused(), "切回 Prompt 后右栏仍持焦点");
+    assert!(!state.panes_focused());
 }

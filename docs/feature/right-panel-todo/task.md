@@ -249,3 +249,27 @@
 
 第四轮验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
 `cargo test` 全绿（lib **3469 passed / 0 failed / 2 ignored**）。
+
+## 第五轮（tab 焦点、Enter/Shift+Enter、工具栏分组）
+
+用户追加：①点右侧栏顶部 tab 后高亮跑回主区；②todo 里回车也进编辑、Shift+回车才新建；
+③prompt 工具栏 pin 与 all 之间有大间隔；todo 工具栏改左右两组、新建用 `+`。
+
+- [x] **tab 焦点**：`select_right_tab` 原来无条件把焦点退回主区，改为**直接聚焦目标面板**。
+      点 tab 本身就是「点了右侧容器」，焦点必须留在右栏。
+- [x] **Enter / Shift+Enter**：`TodoKey` 新增 `ShiftEnter`；列表态 `Enter` 编辑当前项
+      （空列表退化为新建）、`Shift+Enter` 其后新建；编辑态两者都提交（单行输入没有换行）。
+- [x] **prompt 工具栏**：标签改为**槽内右对齐**。`[pin]` 固定占 `[unpin]` 的 7 列、
+      自身只有 5 列，左对齐把 2 列余量甩到右侧，加 1 列间距 = 用户看到的 3 列间隙。
+- [x] **todo 工具栏**：分左右两组——左端恒为 `[+]`（宽 3、贴左边框、永不丢弃），
+      右端贴右缘依次 `[clear done]` `[del]` `[edit]`，从右往左丢弃；两组间至少 1 列空白。
+- [x] 测试：`enter_edits_current_row_and_shift_enter_creates`、`enter_on_empty_list_starts_new_todo`、
+      `shift_enter_while_editing_commits`、`switching_right_tab_keeps_focus_in_right_panel`（渲染层断言
+      右栏 Cyan / 主区非 Cyan）、`toolbar_puts_new_on_left_and_actions_on_right`、
+      `toolbar_drops_action_buttons_before_new`、`pin_label_is_right_aligned_inside_its_slot`。
+- [x] 变异验证：`select_right_tab` 改回退回主区 → 焦点用例失败；`Enter` 改回「其后新建」→ 用例失败；
+      todo 右侧组改为左对齐排布 → 用例失败；`[pin]` 改回左对齐 → 右对齐用例失败。
+- [x] 文档：`design.md` §3.2/§3.3/§9 与 `docs/standards/tui-design-requirements.md:25` 同步。
+
+第五轮验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
+`cargo test` 全绿（lib **3475 passed / 0 failed / 2 ignored**）。`src/layout.rs` 保持 1000 行。

@@ -151,10 +151,17 @@ fn render_toolbar(
             cell.set_char(' ');
             cell.set_style(button_style);
         }
+        // 标签**右对齐**：钉住按钮固定按最宽态 `[unpin]` 占 7 列，`[pin]` 只有 5 列。
+        // 左对齐会把余下 2 列甩到右侧，紧邻的 `[all]` 前就多出 3 列空档（用户报告的
+        // 「pin 与 all 之间有大间隔」）。右对齐把余量留在按钮左侧——那里本来就是
+        // 工具栏中段的弹性空白，看不出来，且宽度不变仍不会跳动。
+        let start = rect
+            .right()
+            .saturating_sub(u16::try_from(label.chars().count()).unwrap_or(u16::MAX));
         for (offset, symbol) in label.chars().enumerate() {
-            let x = rect.x + offset as u16;
-            if x >= rect.right() {
-                break;
+            let x = start + offset as u16;
+            if x < rect.x || x >= rect.right() {
+                continue;
             }
             if let Some(cell) = buf.cell_mut((x, rect.y)) {
                 cell.set_char(symbol);
