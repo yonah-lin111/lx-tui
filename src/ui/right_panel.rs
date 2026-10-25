@@ -83,9 +83,10 @@ pub(crate) fn render(
         render_collapsed_strip(frame, area, false);
         return None;
     }
+    // 容器聚不聚焦只看单一焦点源：主区持焦点时右栏一律 muted，反之亦然。
     let focused = match state.right_tab {
-        RightTab::Prompt => state.prompt_focused,
-        RightTab::Todo => state.todo_focused,
+        RightTab::Prompt => state.prompt_focused(),
+        RightTab::Todo => state.todo_focused(),
     };
     let border = Block::bordered()
         .border_type(BorderType::Rounded)

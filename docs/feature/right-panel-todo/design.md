@@ -826,8 +826,9 @@ pub fn todo_status_done() -> Style;
 2. **选中合法**：`items.is_empty() ⇒ selected == None`；否则 `selected < items.len()`。
    每次列表变动后调用 `clamp_todo_selection`。
 3. **编辑唯一**：`editing.is_some() ⇒ todo_focused`。
-4. **焦点互斥**：`todo_focused && prompt_focused` 永不同时为真；
-   `todo_focused ⇒ right_tab == Todo`。
+4. **焦点互斥**：焦点由 `AppState.focused: FocusedContainer`（`Sidebar`/`Panes`/`Prompt`/`Todo`）
+   **单一真源**决定，同一时刻只有一个容器描边强调色、持有硬件光标并接收按键；
+   焦点为 `Todo` ⇒ `right_tab == Todo`。（第三轮从两个互不同步的 bool 收敛而来。）
 5. **绘制即命中**：行/按钮/滚动条矩形的绘制与命中调用**同一个**几何函数。
 6. **渲染只读**：`ui/` 不改状态、不做 IO；所有改动经 `app/update`。
 7. **写失败不丢数据**：库写失败只 toast，内存列表不变；下次成功写入自然补齐。
@@ -1023,4 +1024,7 @@ pub fn todo_status_done() -> Style;
 | 20 | 点分割线 / 统计块 / 空白「吞掉，不聚焦」 | 改为**让容器进入选中态**（`focus_todo_from_click`），顶边框空白行也覆盖 | 用户第三轮口径：点右侧容器就该高亮，不该"只有点进输入框才算选中"；焦点高亮本应由边框表达 |
 | 21 | 编辑行光标恒交出 | 仅当 `todo_focused` 为真才交出硬件光标 | 真机缺陷：未聚焦时上层把它当输入位置，IME 画在没有输入框的 Todo 行上 |
 | 22 | `render_rows` 逐行 `cursor = render_row(…)` | 改为 `cursor = cursor.or(render_row(…))` 累积 | 真机缺陷：编辑行不在最后一行时，后面的「无光标」行把已拿到的光标清成 `None`，上层回落到窗格光标——IME 跑到 lx 输入框（用户报告的 bug） |
+| 23 | 焦点是两个独立 bool（`prompt_focused` / `todo_focused`），各容器自己判 | 收敛成单一枚举 `FocusedContainer`（`Sidebar`/`Panes`/`Prompt`/`Todo`）+ `set_focus` / `prompt_focused()` 等读侧谓词 | 真机缺陷：`panes.rs` 只看 `!prompt_focused`、侧栏边框恒 `false`，于是点右侧容器后主区**也**描边强调色（截图里两个容器同时高亮），且光标归属分裂。两个 bool 无法表达"同一时刻只有一个" |
+| 24 | 侧栏没有任何焦点概念、点侧栏空白不产生状态 | 新增 `FocusSidebar` 分支 + `focus_sidebar()`；侧栏边框随焦点描边，Agents 条目 `❯` 标记改由 `panes_focused()` 决定 | 用户口径：点哪个容器就高亮哪个容器。侧栏持焦点时 `route` 直接返回 `None`，按键绝不落进别的容器输入框 |
+| 25 | `route(key, mode, prompt_focused, overlay, pane_lx, todo_focused)` | 改为 `route(key, mode, focus: FocusedContainer, overlay, pane_lx)` | 五个入场状态里两个是互斥布尔，调用方稍一漏改就分裂；换成枚举后「不可能同时为真」由类型保证 |
 

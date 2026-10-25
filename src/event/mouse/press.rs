@@ -228,7 +228,10 @@ pub(crate) fn handle_mouse_down_left(
         ensure_workspace_visible(state, view);
         *dirty = true;
     } else if let Some(index) = ui::workspace_item_at(view, state, mouse.column, mouse.row) {
+        // 点侧栏条目：侧栏成为焦点容器，同时切换工作区（切换本身会把焦点交回主区，
+        // 这里在切换之后再抢回，保证「点哪个容器就高亮哪个」）。
         update::switch_workspace(state, index);
+        update::focus_sidebar(state);
         ensure_workspace_visible(state, view);
         reveal_active_tab(state, view);
         update::begin_workspace_drag(state, index);
@@ -240,6 +243,12 @@ pub(crate) fn handle_mouse_down_left(
         ensure_workspace_visible(state, view);
         reveal_active_tab(state, view);
         *dirty = true;
+    } else if !state.sidebar_collapsed && view.sidebar.contains((mouse.column, mouse.row).into()) {
+        // 侧栏内其余位置（工作区列表空白、Agents 分区空白、边框）都让侧栏进入选中态。
+        // 必须排在所有侧栏控件之后：放前面会把条目点击整块吃掉。
+        if update::focus_sidebar(state) {
+            *dirty = true;
+        }
     } else if ui::swap_button_at(view, mouse.column, mouse.row) {
         // 交换按钮是控件：命中优先于分割线拖拽与面板点击；
         // 宽度按位置模型重置：右列取侧栏默认宽、左列占其余。

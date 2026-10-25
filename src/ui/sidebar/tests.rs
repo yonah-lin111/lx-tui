@@ -138,7 +138,7 @@ fn selected_agent_row_uses_symbol_marker_without_color() {
     );
 
     // prompt 持有键盘焦点时窗格不处于聚焦态，标记让位为空列。
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     let row = agents_row_text(&state);
     assert!(
         !row.contains(text::AGENT_SELECTED_MARKER),

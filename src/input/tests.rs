@@ -4,7 +4,17 @@ use super::*;
 
 /// 无浮层、终端视图路由的测试别名；浮层与 lx 视图直接调用 `super::route`。
 fn route(key: KeyEvent, mode: TermMode, prompt_focused: bool) -> Option<Routed> {
-    super::route(key, mode, prompt_focused, None, false, false)
+    super::route(
+        key,
+        mode,
+        if prompt_focused {
+            crate::app::state::FocusedContainer::Prompt
+        } else {
+            crate::app::state::FocusedContainer::Panes
+        },
+        None,
+        false,
+    )
 }
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -433,9 +443,8 @@ fn menu_overlay_routes_navigation_keys_only() {
         super::route(
             KeyEvent::new(code, modifiers),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::Menu),
-            false,
             false,
         )
     };
@@ -462,9 +471,8 @@ fn referenced_menu_routes_navigation_copy_and_remove_keys() {
         super::route(
             KeyEvent::new(code, modifiers),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::ReferencedFolderMenu),
-            false,
             false,
         )
     };
@@ -507,9 +515,8 @@ fn referenced_input_routes_single_line_editing() {
         super::route(
             KeyEvent::new(code, modifiers),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::ReferencedFolderInput),
-            false,
             false,
         )
     };
@@ -543,9 +550,8 @@ fn referenced_search_routes_enter_folder_and_back() {
         super::route(
             KeyEvent::new(code, modifiers),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::ReferencedFolderSearch),
-            false,
             false,
         )
     };
@@ -582,9 +588,8 @@ fn referenced_search_routes_enter_folder_and_back() {
         super::route(
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::ReferencedFolderSearch),
-            false,
             false,
         ),
         Some(Routed::Action(crate::app::actions::Action::Quit))
@@ -597,9 +602,8 @@ fn referenced_delete_routes_enter_and_esc_only() {
         super::route(
             key(code),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::ReferencedFolderDelete),
-            false,
             false,
         )
     };
@@ -620,9 +624,8 @@ fn confirm_overlay_routes_enter_and_esc_only() {
         super::route(
             key(code),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::ConfirmClose),
-            false,
             false,
         )
     };
@@ -643,9 +646,8 @@ fn confirm_switch_cwd_overlay_routes_enter_and_esc_only() {
         super::route(
             key(code),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::ConfirmSwitchCwd),
-            false,
             false,
         )
     };
@@ -666,9 +668,8 @@ fn rename_overlay_routes_editing_keys() {
         super::route(
             KeyEvent::new(code, modifiers),
             TermMode::empty(),
-            true,
+            crate::app::state::FocusedContainer::Prompt,
             Some(OverlayKind::Rename),
-            false,
             false,
         )
     };
@@ -718,9 +719,8 @@ fn overlay_does_not_swallow_ctrl_q() {
         super::route(
             key,
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::Menu),
-            false,
             false
         ),
         Some(Routed::Action(Action::Quit))
@@ -733,10 +733,9 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(
             key(KeyCode::Char('l')),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             None,
-            true,
-            false
+            true
         ),
         Some(Routed::Lx(LxInput::Char('l')))
     );
@@ -744,10 +743,9 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(
             key(KeyCode::Backspace),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             None,
-            true,
-            false
+            true
         ),
         Some(Routed::Lx(LxInput::Backspace))
     );
@@ -755,10 +753,9 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(
             key(KeyCode::Left),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             None,
-            true,
-            false
+            true
         ),
         Some(Routed::Lx(LxInput::Left))
     );
@@ -766,10 +763,9 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(
             key(KeyCode::Up),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             None,
-            true,
-            false
+            true
         ),
         Some(Routed::Lx(LxInput::Up))
     );
@@ -777,10 +773,9 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(
             key(KeyCode::Tab),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             None,
-            true,
-            false
+            true
         ),
         Some(Routed::Lx(LxInput::Tab))
     );
@@ -790,10 +785,9 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(
             key(KeyCode::BackTab),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             None,
-            true,
-            false
+            true
         ),
         Some(Routed::Lx(LxInput::PrevStep))
     );
@@ -801,10 +795,9 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(
             KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             None,
-            true,
-            false
+            true
         ),
         Some(Routed::Lx(LxInput::PrevStep))
     );
@@ -812,10 +805,9 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(
             key(KeyCode::Esc),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             None,
-            true,
-            false
+            true
         ),
         Some(Routed::Lx(LxInput::Escape))
     );
@@ -823,17 +815,22 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
     // Enter 无面板时交给 update 判定（有面板则采纳候选）。
     let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
     assert_eq!(
-        super::route(shift_enter, TermMode::empty(), false, None, true, false),
+        super::route(
+            shift_enter,
+            TermMode::empty(),
+            crate::app::state::FocusedContainer::Panes,
+            None,
+            true
+        ),
         Some(Routed::Lx(LxInput::EnterFolder))
     );
     assert_eq!(
         super::route(
             key(KeyCode::Enter),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             None,
-            true,
-            false
+            true
         ),
         Some(Routed::Lx(LxInput::Enter))
     );
@@ -842,10 +839,9 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(
             KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             None,
             true,
-            false,
         )
     };
     assert_eq!(ctrl('a'), Some(Routed::Lx(LxInput::LineStart)));
@@ -859,10 +855,9 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(
             KeyEvent::new(KeyCode::Char(ch), KeyModifiers::SUPER),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             None,
             true,
-            false,
         )
     };
     assert_eq!(cmd('c'), Some(Routed::Lx(LxInput::Clear)));
@@ -874,12 +869,24 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
     assert_eq!(ctrl('y'), Some(Routed::Lx(LxInput::Redo)));
     let ctrl_left = KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL);
     assert_eq!(
-        super::route(ctrl_left, TermMode::empty(), false, None, true, false),
+        super::route(
+            ctrl_left,
+            TermMode::empty(),
+            crate::app::state::FocusedContainer::Panes,
+            None,
+            true
+        ),
         Some(Routed::Lx(LxInput::WordLeft))
     );
     let quit = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
     assert_eq!(
-        super::route(quit, TermMode::empty(), false, None, true, false),
+        super::route(
+            quit,
+            TermMode::empty(),
+            crate::app::state::FocusedContainer::Panes,
+            None,
+            true
+        ),
         Some(Routed::Action(Action::Quit))
     );
     // prompt 聚焦优先于 lx 输入：按键仍进入编辑器。
@@ -887,10 +894,9 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(
             key(KeyCode::Char('a')),
             TermMode::empty(),
-            true,
+            crate::app::state::FocusedContainer::Prompt,
             None,
-            true,
-            false
+            true
         ),
         Some(Routed::Editor(EditorCommand::InsertChar('a')))
     );
@@ -902,9 +908,8 @@ fn worktree_open_overlay_routes_search_and_navigation_keys() {
         super::route(
             key(code),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::WorktreeOpen),
-            false,
             false,
         )
     };
@@ -943,9 +948,8 @@ fn worktree_open_overlay_routes_search_and_navigation_keys() {
         super::route(
             ctrl,
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::WorktreeOpen),
-            false,
             false
         ),
         None
@@ -958,9 +962,8 @@ fn save_draft_overlay_routes_navigation_only() {
         super::route(
             key(code),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::SaveDraft),
-            false,
             false,
         )
     };
@@ -1004,9 +1007,8 @@ fn page_menu_overlay_routes_navigation_keys_only() {
         super::route(
             key(KeyCode::Esc),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             overlay,
-            false,
             false
         ),
         Some(Routed::Overlay(OverlayKey::Esc))
@@ -1015,9 +1017,8 @@ fn page_menu_overlay_routes_navigation_keys_only() {
         super::route(
             key(KeyCode::Down),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             overlay,
-            false,
             false
         ),
         Some(Routed::Overlay(OverlayKey::Down))
@@ -1026,9 +1027,8 @@ fn page_menu_overlay_routes_navigation_keys_only() {
         super::route(
             key(KeyCode::Up),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             overlay,
-            false,
             false
         ),
         Some(Routed::Overlay(OverlayKey::Up))
@@ -1037,9 +1037,8 @@ fn page_menu_overlay_routes_navigation_keys_only() {
         super::route(
             key(KeyCode::Enter),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             overlay,
-            false,
             false
         ),
         Some(Routed::Overlay(OverlayKey::Enter))
@@ -1048,9 +1047,8 @@ fn page_menu_overlay_routes_navigation_keys_only() {
         super::route(
             key(KeyCode::Char('x')),
             TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Panes,
             overlay,
-            false,
             false
         ),
         None,

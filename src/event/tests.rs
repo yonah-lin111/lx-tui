@@ -420,7 +420,7 @@ fn mouse_track_click_prompt_scrollbar_scrolls_without_focus() {
     );
     assert!(state.prompt.scroll() > 0, "track click jumps down");
     assert!(
-        !state.prompt_focused,
+        !state.prompt_focused(),
         "scrollbar press must not focus prompt"
     );
     assert!(state.prompt_scroll_drag.is_none());
@@ -461,7 +461,7 @@ fn mouse_track_click_prompt_tree_scrollbar_scrolls_list() {
         &mut dirty,
     );
     assert!(state.workspaces[0].prompt_panel.scroll > 0, "轨道点击跳转");
-    assert!(!state.prompt_focused, "滚动条按下不抢焦点");
+    assert!(!state.prompt_focused(), "滚动条按下不抢焦点");
     assert!(state.prompt_scroll_drag.is_none());
     assert!(dirty);
 }
@@ -1551,7 +1551,7 @@ fn toggle_button_click_flips_view_without_stealing_focus() {
         &mut dirty,
     );
     assert!(dirty);
-    assert!(state.prompt_focused, "按钮是控件，不抢焦点");
+    assert!(state.prompt_focused(), "按钮是控件，不抢焦点");
     assert_eq!(view_of(&state, pane), PaneView::Terminal);
 
     handle_terminal_event(
@@ -1700,7 +1700,7 @@ fn lx_view_content_click_focuses_and_starts_selection() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert!(!state.prompt_focused);
+    assert!(!state.prompt_focused());
     assert_eq!(state.active_tab().layout.focus(), pane);
     assert!(state.terminal_selection.is_none(), "lx 视图不启动终端选区");
     assert!(state.selection.is_none(), "lx 视图不启动 prompt 选区");
@@ -3205,7 +3205,7 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
     );
     assert_eq!(state.prompt.text(), "");
     assert!(state.prompt.can_redo());
-    assert!(!state.prompt_focused, "工具栏按钮不抢焦点");
+    assert!(!state.prompt_focused(), "工具栏按钮不抢焦点");
     assert!(dirty);
 
     let redo = toolbar_button(&geo, layout::PromptToolbarButton::Redo);
@@ -3260,7 +3260,7 @@ fn ctrl_s_saves_prompt_from_editor() {
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
     let mut dirty = false;
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
 
     // 默认绑定临时提示词：Ctrl+S 提交缓冲并打开保存选择器。
     state.prompt.insert_str("draft body");
@@ -3308,7 +3308,7 @@ fn ctrl_s_saves_open_item_immediately() {
         .tree
         .replace(vec![], vec![PromptItem::single(7, None, "item", "body")]);
     assert!(crate::app::update::edit_prompt_item(&mut state, 0, 7));
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     state.prompt.insert_str("+");
     handle_terminal_event(
         TerminalEvent::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
@@ -3336,7 +3336,7 @@ fn ctrl_s_ignores_empty_prompt_content() {
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
     let mut dirty = false;
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     let press =
         |state: &mut AppState, sessions: &mut HashMap<PaneId, PtySession>, dirty: &mut bool| {
             handle_terminal_event(
@@ -3441,7 +3441,7 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
         &mut dirty,
     );
 
-    assert!(!state.prompt_focused, "表头空白不聚焦文本视口");
+    assert!(!state.prompt_focused(), "表头空白不聚焦文本视口");
     assert!(state.selection.is_none());
     assert_eq!(state.prompt.cursor_cell(), Some((1, 2)), "光标保持在文末");
     assert!(!dirty, "表头空白点击无副作用");
@@ -3469,7 +3469,7 @@ fn mouse_click_prompt_text_row_places_cursor_below_header() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert!(state.prompt_focused);
+    assert!(state.prompt_focused());
     assert_eq!(state.prompt.cursor_cell(), Some((1, 1)));
     assert!(dirty);
 }
@@ -3544,7 +3544,7 @@ fn mouse_double_click_prompt_item_row_opens_editor() {
         "item body",
         "双击进入编辑并载入条目内容"
     );
-    assert!(state.prompt_focused);
+    assert!(state.prompt_focused());
 }
 
 #[test]
@@ -3971,7 +3971,7 @@ fn mouse_click_agent_item_switches_tab_and_terminal_view() {
         state.active_tab().pane(first).map(|pane| pane.view),
         Some(PaneView::Terminal)
     );
-    assert!(!state.prompt_focused);
+    assert!(!state.prompt_focused());
 }
 
 #[test]
@@ -4414,7 +4414,7 @@ fn terminal_paste_valid_paths_open_proposal_and_plain_text_inserts() {
     let file = dir.join("note.txt");
     std::fs::write(&file, b"note").expect("file");
     let mut state = AppState::demo();
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     paste::handle_terminal_paste(&mut state, file.display().to_string());
     let panel = state.prompt.paste_panel().expect("proposal open");
     assert_eq!(panel.candidates.len(), 1);
@@ -4429,7 +4429,7 @@ fn terminal_paste_valid_paths_open_proposal_and_plain_text_inserts() {
 #[test]
 fn terminal_empty_paste_is_ignored() {
     let mut state = AppState::demo();
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     state.prompt.insert_str("keep ");
     state.prompt.paste_cancel();
     // 终端自身粘贴只承载位图时送来空内容：没有正文可插入，静默忽略。
@@ -4441,7 +4441,7 @@ fn terminal_empty_paste_is_ignored() {
 #[test]
 fn terminal_paste_missing_path_falls_back_to_text() {
     let mut state = AppState::demo();
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     let missing = std::env::temp_dir().join("lx-tui-definitely-missing-paste.txt");
     let _ = std::fs::remove_file(&missing);
     paste::handle_terminal_paste(&mut state, missing.display().to_string());
@@ -4452,7 +4452,7 @@ fn terminal_paste_missing_path_falls_back_to_text() {
 #[test]
 fn terminal_paste_plain_text_does_not_arm_completion_panel() {
     let mut state = AppState::demo();
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     state
         .prompt
         .insert_str("see @[refer-file](/tmp/template.md) then ");
@@ -4484,7 +4484,7 @@ fn terminal_paste_shell_escaped_path_builds_proposal_from_real_file() {
     std::fs::write(&file, b"x").expect("file");
     let escaped = format!("{}/ai_agent_api\\(1\\).md", dir.display());
     let mut state = AppState::demo();
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     paste::handle_terminal_paste(&mut state, escaped.clone());
     let panel = state.prompt.paste_panel().expect("转义路径打开提案");
     assert_eq!(panel.candidates[0].path, file, "候选用去转义后的真实路径");
@@ -4563,7 +4563,7 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
         &mut dirty,
     );
     assert_eq!(state.prompt.text(), "beta");
-    assert!(state.prompt_focused);
+    assert!(state.prompt_focused());
     // 计数：打开页码菜单。
     let controls = ui::prompt::page_controls(title, "2/2").expect("controls");
     handle_terminal_event(
@@ -4662,7 +4662,7 @@ fn mouse_click_prompt_padding_only_focuses_without_moving_cursor() {
     let mut state = paged_prompt_state();
     state.prompt.set_text("short");
     state.prompt.set_cursor_offset_for_test(0);
-    state.prompt_focused = false;
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -4681,7 +4681,7 @@ fn mouse_click_prompt_padding_only_focuses_without_moving_cursor() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert!(state.prompt_focused, "点击留白聚焦编辑器");
+    assert!(state.prompt_focused(), "点击留白聚焦编辑器");
     assert_eq!(
         state.prompt.cursor(),
         0,
@@ -4799,7 +4799,7 @@ fn right_tab_rect(geo: &Geometry, tab: RightTab) -> Rect {
 fn mouse_click_right_tab_switches_panel() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     state.right_tab_hover = Some(RightTab::Prompt);
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -4816,7 +4816,7 @@ fn mouse_click_right_tab_switches_panel() {
     );
 
     assert_eq!(state.right_tab, RightTab::Todo);
-    assert!(!state.prompt_focused, "切到 Todo 时键盘退回聚焦窗格");
+    assert!(!state.prompt_focused(), "切到 Todo 时键盘退回聚焦窗格");
     assert_eq!(state.right_tab_hover, None, "切换清空 tab 悬停");
     assert!(dirty);
 }
@@ -4924,8 +4924,8 @@ fn mouse_click_todo_blank_still_focuses_container() {
         &mut dirty,
     );
 
-    assert!(!state.prompt_focused, "Todo 空白处点击不聚焦编辑器");
-    assert!(state.todo_focused, "点容器任意位置即让右侧容器进入选中态");
+    assert!(!state.prompt_focused(), "Todo 空白处点击不聚焦编辑器");
+    assert!(state.todo_focused(), "点容器任意位置即让右侧容器进入选中态");
     assert_eq!(state.prompt.cursor(), cursor, "Todo 空白处点击不动光标");
     assert_eq!(
         state.active_tab().layout.focus(),
@@ -5092,8 +5092,8 @@ fn mouse_click_todo_row_selects_and_focuses() {
     );
 
     assert_eq!(state.todo.selected(), Some(1), "点击选中该行");
-    assert!(state.todo_focused, "点击行聚焦 Todo 面板");
-    assert!(!state.prompt_focused, "与 prompt 焦点互斥");
+    assert!(state.todo_focused(), "点击行聚焦 Todo 面板");
+    assert!(!state.prompt_focused(), "与 prompt 焦点互斥");
     assert!(dirty, "选中变化置脏");
 }
 
@@ -5130,7 +5130,7 @@ fn mouse_click_todo_toolbar_button_runs_action() {
             .is_some_and(|edit| edit.target.is_none()),
         "[new] 进入新建编辑"
     );
-    assert!(state.todo_focused, "按钮隐式聚焦");
+    assert!(state.todo_focused(), "按钮隐式聚焦");
     assert!(dirty, "按钮动作置脏");
 }
 
@@ -5195,7 +5195,7 @@ fn mouse_double_click_todo_row_enters_edit() {
         Some(state.todo.items()[2].id.as_str())
     );
     assert_eq!(edit.input.text(), "item 2", "编辑现场带原文");
-    assert!(state.todo_focused);
+    assert!(state.todo_focused());
 }
 
 /// 点容器顶边框的 tab 旁空白：同样让右侧容器进入选中态（不应"只有点进输入框"才算）。
@@ -5207,7 +5207,7 @@ fn mouse_click_todo_border_blank_focuses_container() {
         &mut state,
         RightTab::Todo
     ));
-    assert!(!state.todo_focused, "前提：切 tab 不自动聚焦");
+    assert!(!state.todo_focused(), "前提：切 tab 不自动聚焦");
     // 顶边框最右端（tab 之外、折叠按钮之外的空白）。
     let border = crate::layout::prompt_border_rect(geo.view.prompt).expect("border visible");
     let mut sessions = HashMap::new();
@@ -5227,8 +5227,8 @@ fn mouse_click_todo_border_blank_focuses_container() {
         &mut dirty,
     );
 
-    assert!(state.todo_focused, "点容器边框空白也要进入选中态");
-    assert!(!state.prompt_focused);
+    assert!(state.todo_focused(), "点容器边框空白也要进入选中态");
+    assert!(!state.prompt_focused());
     assert!(dirty, "焦点变化置脏");
 }
 
@@ -5274,7 +5274,7 @@ fn mouse_click_todo_stats_row_focuses_without_data_change() {
         &mut dirty,
     );
 
-    assert!(state.todo_focused, "点统计块同样让容器进入选中态");
+    assert!(state.todo_focused(), "点统计块同样让容器进入选中态");
     assert!(!state.todo.is_editing(), "统计块不是行，不进入编辑");
     assert_eq!(state.todo.selected(), Some(0), "选中行不变");
     assert_eq!(state.prompt.cursor(), cursor, "光标不动");
@@ -5319,10 +5319,9 @@ fn todo_keys_never_reach_pty() {
         let routed = crate::input::route(
             key,
             alacritty_terminal::term::TermMode::empty(),
-            false,
+            crate::app::state::FocusedContainer::Todo,
             None,
             false,
-            true,
         );
         assert!(
             matches!(routed, None | Some(crate::input::Routed::Todo(_))),
@@ -5391,7 +5390,7 @@ fn focus_pane_releases_todo_focus() {
         pane,
         "前提：点的是终端窗格"
     );
-    assert!(!state.todo_focused, "点终端窗格释放 Todo 焦点");
+    assert!(!state.todo_focused(), "点终端窗格释放 Todo 焦点");
     assert!(!state.todo.is_editing(), "编辑中的内容已提交");
     assert_eq!(state.todo.items().len(), 2, "提交后新增一条");
     assert_eq!(state.todo.items()[1].text, "draft");
@@ -5417,10 +5416,9 @@ fn ctrl_z_without_undo_is_consumed_not_forwarded() {
             crate::input::route(
                 key,
                 alacritty_terminal::term::TermMode::empty(),
-                false,
+                crate::app::state::FocusedContainer::Todo,
                 None,
-                false,
-                true
+                false
             ),
             Some(crate::input::Routed::Pane(_))
         ),
@@ -5462,7 +5460,7 @@ fn todo_key_escape_blurs() {
         &mut dirty,
     );
 
-    assert!(!state.todo_focused, "Esc 释放 Todo 焦点");
+    assert!(!state.todo_focused(), "Esc 释放 Todo 焦点");
     assert!(dirty);
 }
 
@@ -5490,7 +5488,7 @@ fn ctrl_q_wins_over_todo_focus() {
 
     assert!(state.should_quit, "Ctrl+Q 始终优先");
     assert!(dirty, "退出动作置脏");
-    assert!(state.todo_focused, "Ctrl+Q 不碰 todo 焦点");
+    assert!(state.todo_focused(), "Ctrl+Q 不碰 todo 焦点");
     assert!(state.todo.items().is_empty(), "Ctrl+Q 不改 todo 列表");
     assert!(!state.todo.is_editing(), "Ctrl+Q 不开编辑");
 }
@@ -5740,7 +5738,7 @@ fn mouse_drag_on_todo_does_not_move_hidden_cursor() {
 fn mouse_click_title_row_focuses_without_moving_cursor() {
     let config = Config::default();
     let mut state = paged_prompt_state();
-    state.prompt_focused = false;
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
     state.prompt.set_cursor_offset_for_test(0);
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     let title = ui::prompt_frame::title_row(geo.view.prompt).expect("title row");
@@ -5768,7 +5766,7 @@ fn mouse_click_title_row_focuses_without_moving_cursor() {
         &mut dirty,
     );
 
-    assert!(state.prompt_focused, "点标题行空白只把焦点交给编辑器");
+    assert!(state.prompt_focused(), "点标题行空白只把焦点交给编辑器");
     assert_eq!(state.prompt.cursor(), 0, "标题行点击不移动正文光标");
     assert!(dirty);
 }
@@ -5838,7 +5836,7 @@ fn event_input_paste_overlay_and_prompt_routing() {
 
     // 2. prompt 聚焦时：粘贴进入 prompt 编辑器，dirty 置为 true。
     state.overlay = None;
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     dirty = false;
     handle_terminal_event(
         TerminalEvent::Paste("hello prompt".to_string()),
@@ -6296,4 +6294,157 @@ fn ask_paste_only_enters_the_custom_buffer() {
         "own words",
         "编辑态粘贴进入手写缓冲"
     );
+}
+
+// ===== 单一焦点源：同一时刻只有一个容器高亮/持有光标/收键 =====
+
+/// 点右侧容器后主区让出焦点高亮（真机缺陷：两者同时描边强调色）。
+#[test]
+fn focusing_right_panel_releases_pane_highlight() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), list.x + 1, list.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(state.todo_focused());
+    assert!(!state.panes_focused(), "主区必须让出焦点");
+    assert!(!state.sidebar_focused());
+    assert!(state.todo_focused() ^ state.prompt_focused() ^ state.panes_focused());
+}
+
+/// 点主区窗格后右侧容器让出焦点：不会出现"两个容器同时高亮"。
+#[test]
+fn focusing_pane_releases_right_panel_highlight() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), list.x + 1, list.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.todo_focused());
+
+    let inner = layout::pane_inner_rect(geo.rects[0].1);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x + 1,
+            inner.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(state.panes_focused(), "点主区后主区持焦点");
+    assert!(!state.todo_focused(), "右侧容器必须让出焦点");
+}
+
+/// 点侧栏后：侧栏高亮，主区与右侧容器都不再高亮。
+#[test]
+fn focusing_sidebar_releases_other_containers() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    // 先让右侧容器持焦点。
+    state.set_focus(crate::app::state::FocusedContainer::Todo);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 点 Agents 分区空白（侧栏内、非条目）。
+    let sections = ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed)
+        .expect("sidebar sections visible");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            sections.agents.x,
+            sections.agents.y + sections.agents.height.saturating_sub(1),
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(state.sidebar_focused(), "点侧栏空白让侧栏持焦点");
+    assert!(!state.todo_focused(), "右侧容器让出焦点");
+    assert!(!state.panes_focused(), "主区让出焦点");
+}
+
+/// 侧栏持焦点时按键全部吞掉，绝不写进 PTY 或其它输入框。
+#[test]
+fn sidebar_focus_swallows_all_keys() {
+    use alacritty_terminal::term::TermMode;
+    for key in [
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    ] {
+        let routed = crate::input::route(
+            key,
+            TermMode::empty(),
+            crate::app::state::FocusedContainer::Sidebar,
+            None,
+            true,
+        );
+        assert!(routed.is_none(), "{key:?} 必须被吞掉，实际 {routed:?}");
+    }
+}
+
+/// 焦点容器互斥由类型保证：设置任一容器后，其余三个的查询都返回 false。
+#[test]
+fn focused_container_is_mutually_exclusive() {
+    use crate::app::state::FocusedContainer;
+    let mut state = AppState::demo();
+    for target in [
+        FocusedContainer::Sidebar,
+        FocusedContainer::Panes,
+        FocusedContainer::Prompt,
+        FocusedContainer::Todo,
+    ] {
+        state.set_focus(target);
+        let flags = [
+            state.sidebar_focused(),
+            state.panes_focused(),
+            state.prompt_focused(),
+            state.todo_focused(),
+        ];
+        assert_eq!(flags.iter().filter(|flag| **flag).count(), 1, "{target:?}");
+        assert_eq!(state.focus(), target);
+    }
 }

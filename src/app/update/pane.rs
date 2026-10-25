@@ -9,9 +9,7 @@ use crate::app::state::{AppState, Lx, PaneKind, PaneView};
 use crate::detect::PaneAgentSnapshot;
 use crate::layout::{self, PaneId};
 
-use super::prompt::cancel_page_rename;
 use super::selection::{WHEEL_LINES, clear_selection, clear_terminal_selection};
-use super::todo::commit_todo_edit;
 
 /// 按方向滚动终端窗格回滚视口（负数向上、正数向下）；返回视口是否移动。
 pub fn scroll_pane(state: &mut AppState, id: PaneId, direction: isize) -> bool {
@@ -62,16 +60,6 @@ pub fn set_lx_scroll(state: &mut AppState, id: PaneId, offset: usize) -> bool {
     let before = pane.lx.scroll();
     pane.lx.scroll_to(offset);
     pane.lx.scroll() != before
-}
-
-/// 点击终端窗格：焦点回到窗格，prompt 失焦并关闭块命令面板与页重命名输入。
-pub fn focus_pane(state: &mut AppState, id: PaneId) {
-    commit_todo_edit(state);
-    state.todo_focused = false;
-    state.prompt_focused = false;
-    state.prompt.clear_panel();
-    cancel_page_rename(state);
-    state.active_tab_mut().layout.focus_pane(id);
 }
 
 /// 应用 lx 页输入命令到焦点窗格；非 lx 视图忽略。
@@ -976,7 +964,7 @@ pub fn focus_agent_pane(state: &mut AppState, pane: PaneId) -> bool {
     {
         target.view = PaneView::Terminal;
     }
-    focus_pane(state, pane);
+    super::focus::focus_pane(state, pane);
     clear_selection(state);
     true
 }

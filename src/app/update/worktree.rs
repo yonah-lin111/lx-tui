@@ -6,7 +6,8 @@ use crate::app::actions::OverlayKey;
 use crate::app::effects::Effect;
 use crate::app::overlay::{Overlay, TextInput, WorktreeOpen, WorktreeOpenEntry};
 use crate::app::state::{
-    AppState, Workspace, WorkspaceGit, home_dir, unique_workspace_name, workspace_label,
+    AppState, FocusedContainer, Workspace, WorkspaceGit, home_dir, unique_workspace_name,
+    workspace_label,
 };
 use crate::app::trust::TrustTrigger;
 use crate::git;
@@ -306,7 +307,7 @@ pub(super) fn open_worktree_checkout(
         swap_display_prompt(state, from, child);
     }
     clear_selection(state);
-    state.prompt_focused = false;
+    state.set_focus(FocusedContainer::Panes);
     ensure_main_workspace(state, child);
 }
 

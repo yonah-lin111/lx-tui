@@ -31,7 +31,10 @@ pub(crate) fn handle_key_event(
 
     // 页重命名输入优先于编辑器：除 Ctrl+Q 外的按键按单行输入语义消费。
     let quit = key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL);
-    if !quit && state.overlay.is_none() && state.prompt_focused && update::page_rename_active(state)
+    if !quit
+        && state.overlay.is_none()
+        && state.prompt_focused()
+        && update::page_rename_active(state)
     {
         if let Some(overlay_key) = input::page_rename_key(key) {
             update::apply_page_rename_key(state, overlay_key);
@@ -48,14 +51,7 @@ pub(crate) fn handle_key_event(
     let pane_lx = state
         .active_pane()
         .is_some_and(|pane| pane.view == PaneView::Lx);
-    let Some(routed) = input::route(
-        key,
-        mode,
-        state.prompt_focused,
-        overlay,
-        pane_lx,
-        state.todo_focused,
-    ) else {
+    let Some(routed) = input::route(key, mode, state.focus(), overlay, pane_lx) else {
         return;
     };
 
@@ -156,14 +152,14 @@ pub(crate) fn handle_paste_event(
     if state.overlay.is_some() {
         return;
     }
-    if state.todo_focused {
+    if state.todo_focused() {
         // 编辑态写入输入框；列表态吞掉，绝不写隐藏终端。
         if update::apply_todo_paste(state, &text) {
             *dirty = true;
         }
         return;
     }
-    if state.prompt_focused {
+    if state.prompt_focused() {
         paste::handle_terminal_paste(state, text);
         *dirty = true;
         return;

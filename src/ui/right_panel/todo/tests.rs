@@ -69,7 +69,7 @@ fn row_text(buffer: &Buffer, list: Rect, y: u16) -> String {
 /// 进入编辑并置焦点：真机上 `begin_todo_edit` 必然同时聚焦面板，
 /// 而渲染层只在聚焦时才交出硬件光标。
 fn begin_edit(state: &mut AppState, edit: TodoEdit) {
-    state.todo_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Todo);
     state.todo.begin_edit(edit);
 }
 
@@ -207,7 +207,7 @@ fn list_rows_render_status_boxes_aligned() {
 fn selected_row_uses_selection_style_without_inheriting_border_accent() {
     let mut state = AppState::demo();
     state.right_tab = RightTab::Todo;
-    state.todo_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Todo);
     state.prompt_width = 40;
     state
         .todo
@@ -650,7 +650,7 @@ fn unfocused_panel_yields_no_hardware_cursor() {
     ]);
     let id = state.todo.items()[0].id.clone();
     state.todo.begin_edit(TodoEdit::new(Some(id), "draft", 0));
-    state.todo_focused = false;
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
 
     let (_, cursor) = render_panel(&state, area);
     assert!(cursor.is_none(), "未聚焦时不能交出光标");

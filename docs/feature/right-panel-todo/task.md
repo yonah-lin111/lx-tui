@@ -216,3 +216,36 @@
 
 第三轮验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
 `cargo test` 全绿（lib **3463 passed / 0 failed / 2 ignored**）。
+
+## 第四轮（容器焦点收敛）
+
+用户追加：主区与右侧容器会**同时**高亮（截图）；要求点哪个容器就只高亮并聚焦哪个容器，
+且输入框光标不得出现在别的容器里。
+
+**根因**：「谁持有焦点」由两个互不同步的 bool 表达，各渲染/路由点自己判：
+- `ui/panes.rs`：`*id == focus && !state.prompt_focused` —— 完全不看 `todo_focused`，
+  于是右侧容器持焦点时主区仍然描边强调色；
+- `ui/sidebar.rs`：边框硬编码 `style::border(false)`，侧栏根本没有"聚焦"概念；
+- `route()` 收 `prompt_focused` + `todo_focused` 两个 bool，调用方漏改即分裂。
+
+- [x] 新增 `FocusedContainer { Sidebar, Panes, Prompt, Todo }` + `AppState.focused`，
+      删除 `prompt_focused` / `todo_focused` 两个字段；读侧提供
+      `prompt_focused()` / `todo_focused()` / `sidebar_focused()` / `panes_focused()`。
+- [x] `input::route` 签名从 6 参收敛为 5 参（`focus: FocusedContainer`）；侧栏持焦点时全部吞掉。
+- [x] 侧栏：边框随 `sidebar_focused()` 描边；新增 `focus_sidebar()`；点侧栏内任意位置（条目、
+      Agents 分区、列表空白、边框）都让侧栏进入选中态（兜底分支必须排在所有侧栏控件之后，
+      否则会吃掉条目点击）。
+- [x] 主区：`panes.rs` 焦点判定改 `state.panes_focused()`；Agents 条目 `❯` 标记同源。
+- [x] `switch_workspace` 只在 **Prompt** 持焦点时交回主区：Todo 焦点按设计不随工作区变化，
+      侧栏刚点下去的也不该被抢走。
+- [x] 把 `focus_sidebar` / `focus_pane` 从 `pane.rs`（本就 1074 行、已超 1000 上限）拆到新模块
+      `src/app/update/focus.rs`（30 行）。
+- [x] 测试：`focusing_right_panel_releases_pane_highlight`、
+      `focusing_pane_releases_right_panel_highlight`、`focusing_sidebar_releases_other_containers`、
+      `sidebar_focus_swallows_all_keys`、`focused_container_is_mutually_exclusive`、
+      `only_focused_container_uses_accent_border`（渲染层：逐容器断言只有焦点容器是 Cyan 圆角）。
+- [x] 变异验证：`panes.rs` 改回 `!prompt_focused()` → 边框用例失败；
+      侧栏边框改回 `border(false)` → 边框用例失败。
+
+第四轮验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
+`cargo test` 全绿（lib **3469 passed / 0 failed / 2 ignored**）。

@@ -53,11 +53,11 @@ fn toggle_prompt_flips_flag() {
 fn collapsing_prompt_clears_focus() {
     let mut state = AppState::demo();
     focus_prompt(&mut state);
-    assert!(state.prompt_focused);
+    assert!(state.prompt_focused());
     apply(Action::TogglePrompt, &mut state);
-    assert!(!state.prompt_focused);
+    assert!(!state.prompt_focused());
     apply(Action::TogglePrompt, &mut state);
-    assert!(!state.prompt_focused);
+    assert!(!state.prompt_focused());
 }
 
 #[test]
@@ -65,9 +65,9 @@ fn focus_switches_between_prompt_and_pane() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
     focus_prompt(&mut state);
-    assert!(state.prompt_focused);
+    assert!(state.prompt_focused());
     focus_pane(&mut state, pane);
-    assert!(!state.prompt_focused);
+    assert!(!state.prompt_focused());
     assert_eq!(state.active_tab().layout.focus(), pane);
 }
 
@@ -207,7 +207,7 @@ fn prompt_click_dismisses_worktree_chooser_without_text_change() {
         main_branch: Some("main".into()),
     });
     state.prompt.resize(60, 12);
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     state.prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
     state
         .prompt
@@ -850,7 +850,7 @@ fn create_workspace_activates_deduped_cwd_workspace() {
     assert_eq!(workspace.tabs[0].layout.pane_ids().len(), 1);
     assert!(!workspace.name_is_manual);
     assert!(!workspace.is_initial);
-    assert!(!state.prompt_focused);
+    assert!(!state.prompt_focused());
 }
 
 #[test]
@@ -897,7 +897,7 @@ fn switch_workspace_clears_selection_and_prompt_focus() {
     begin_selection(&mut state, pane, 0, 0);
     switch_workspace(&mut state, 0);
     assert_eq!(state.active_workspace, 0);
-    assert!(!state.prompt_focused);
+    assert!(!state.prompt_focused());
     assert!(state.selection.is_none());
     switch_workspace(&mut state, 5);
     assert_eq!(state.active_workspace, 0);
@@ -1744,7 +1744,7 @@ fn create_tab_appends_and_activates_auto_named_tab() {
     assert_eq!(state.active_workspace().active_tab, 1);
     assert_eq!(state.active_tab().name, None);
     assert_eq!(tab_label(1, state.active_tab().name.as_deref()), "tab 2");
-    assert!(!state.prompt_focused);
+    assert!(!state.prompt_focused());
     assert!(state.selection.is_none());
 }
 
@@ -1755,7 +1755,7 @@ fn switch_tab_switches_and_ignores_out_of_range() {
     focus_prompt(&mut state);
     switch_tab(&mut state, 0);
     assert_eq!(state.active_workspace().active_tab, 0);
-    assert!(!state.prompt_focused);
+    assert!(!state.prompt_focused());
     switch_tab(&mut state, 9);
     assert_eq!(state.active_workspace().active_tab, 0);
 }
@@ -2214,7 +2214,7 @@ fn create_terminal_in_workspace_appends_terminal_tab_and_activates() {
     create_workspace(&mut state);
     let target_cwd = state.workspaces[1].cwd.clone();
     state.active_workspace = 0;
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
 
     create_terminal_in_workspace(&mut state, 1);
 
@@ -2228,7 +2228,7 @@ fn create_terminal_in_workspace_appends_terminal_tab_and_activates() {
         PaneView::Terminal
     );
     assert_eq!(state.workspace_cwd_for_pane(pane), target_cwd);
-    assert!(!state.prompt_focused);
+    assert!(!state.prompt_focused());
 
     create_terminal_in_workspace(&mut state, 9);
     assert_eq!(state.active_workspace().tabs.len(), 2);
@@ -2259,7 +2259,7 @@ fn open_prompt_for_workspace_switches_binds_and_focuses() {
     open_prompt_for_workspace(&mut state, 1);
 
     assert_eq!(state.active_workspace, 1);
-    assert!(state.prompt_focused);
+    assert!(state.prompt_focused());
     assert!(!state.prompt_collapsed);
     assert_eq!(
         state.prompt_root.as_deref(),
@@ -2278,7 +2278,7 @@ fn activate_menu_open_prompt_from_workspace_menu_binds_workspace_cwd() {
     activate_menu(&mut state);
 
     assert_eq!(state.active_workspace, 1);
-    assert!(state.prompt_focused);
+    assert!(state.prompt_focused());
     assert_eq!(
         state.prompt_root.as_deref(),
         Some(std::path::Path::new("/tmp/ws-target"))
@@ -2299,7 +2299,7 @@ fn open_prompt_for_pane_binds_pane_cwd_and_keeps_workspace() {
     open_prompt_for_pane(&mut state, pane);
 
     assert_eq!(state.active_workspace, 0);
-    assert!(state.prompt_focused);
+    assert!(state.prompt_focused());
     assert!(!state.prompt_collapsed);
     assert_eq!(
         state.prompt_root.as_deref(),
@@ -2333,7 +2333,7 @@ fn activate_menu_open_prompt_from_pane_menu_binds_pane_cwd() {
     select_menu_command(&mut state, MenuCommand::OpenPrompt);
     activate_menu(&mut state);
 
-    assert!(state.prompt_focused);
+    assert!(state.prompt_focused());
     assert_eq!(
         state.prompt_root.as_deref(),
         Some(std::path::Path::new("/tmp/pane-dir"))
@@ -3770,7 +3770,7 @@ fn focus_agent_pane_switches_tab_focus_and_view() {
         Some(PaneView::Terminal),
         "lx view must switch back to terminal"
     );
-    assert!(!state.prompt_focused, "prompt focus must be released");
+    assert!(!state.prompt_focused(), "prompt focus must be released");
 }
 
 #[test]
@@ -4976,7 +4976,7 @@ fn focus_prompt_switches_back_to_prompt_tab() {
     assert_eq!(state.right_tab, RightTab::Todo);
     focus_prompt(&mut state);
     assert_eq!(state.right_tab, RightTab::Prompt);
-    assert!(state.prompt_focused);
+    assert!(state.prompt_focused());
 }
 
 #[test]
@@ -5054,7 +5054,7 @@ fn select_right_tab_commits_rename_and_clears_transient_state() {
     );
 
     // 瞬时指针全部收回。
-    assert!(!state.prompt_focused, "焦点退回窗格");
+    assert!(!state.prompt_focused(), "焦点退回窗格");
     assert!(state.selection.is_none(), "prompt 选区清空");
     assert!(state.prompt.mention().is_none(), "提及面板收起");
     assert_eq!(state.prompt_tree_hover, None, "列表悬停行清空");
@@ -5130,7 +5130,7 @@ fn select_right_tab_same_tab_is_noop() {
         "已是 Prompt"
     );
     assert!(state.effects.is_empty(), "幂等：不产生任何 Effect");
-    assert!(state.prompt_focused, "幂等：不动焦点");
+    assert!(state.prompt_focused(), "幂等：不动焦点");
 
     assert!(select_right_tab(&mut state, RightTab::Todo));
     state.effects.clear();

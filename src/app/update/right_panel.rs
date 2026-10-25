@@ -1,6 +1,6 @@
 //! 右侧统一容器的面板切换与悬停状态。
 
-use crate::app::state::{AppState, RightTab};
+use crate::app::state::{AppState, FocusedContainer, RightTab};
 
 use super::prompt::finish_page_rename;
 use super::selection::clear_selection;
@@ -16,10 +16,9 @@ pub fn select_right_tab(state: &mut AppState, tab: RightTab) -> bool {
     commit_todo_edit(state); // 切走 Todo 时提交进行中的编辑（与切工作区同口径）
     state.right_tab = tab;
     state.right_tab_hover = None;
-    state.todo_focused = false;
     state.todo_hover = None;
+    state.set_focus(FocusedContainer::Panes); // 键盘退回聚焦窗格
     if tab != RightTab::Prompt {
-        state.prompt_focused = false; // 键盘退回聚焦窗格
         clear_selection(state); // prompt 选区
         state.prompt.clear_panel(); // 块/斜杠/提及/引用/粘贴面板
         state.prompt_tree_hover = None; // 列表悬停行

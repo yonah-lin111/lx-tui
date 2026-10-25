@@ -8,6 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::actions::{Action, EditorCommand, LxInput, OverlayKey};
 use crate::app::overlay::OverlayKind;
+use crate::app::state::FocusedContainer;
 
 /// 路由结果。
 #[derive(Debug, PartialEq, Eq)]
@@ -87,16 +88,18 @@ fn todo_key(key: KeyEvent) -> Option<TodoKey> {
 /// 路由一次按键；Release 事件与无法编码的按键返回 None。
 ///
 /// `Ctrl+Q` 始终优先；浮层打开时只放行该浮层支持的键，其余吞掉；
-/// `prompt_focused` 为真时按键只进入编辑器：`Ctrl/Cmd+C` 复制选区（无选区全文）、
-/// `Ctrl/Cmd+Shift+C` 复制光标所在模板块/补充块正文，未映射的按键被吞掉，绝不写入 PTY；
-/// `pane_lx` 为真（活动窗格显示 lx 页）时按键进入 lx 单行输入框，未映射键吞掉，不写入隐藏终端。
+/// 否则按**唯一焦点源** `focus` 决定去向，同一时刻只有一个容器收键：
+/// - `Prompt`：按键只进入编辑器（`Ctrl/Cmd+C` 复制选区全文、`Ctrl/Cmd+Shift+C`
+///   复制光标所在模板块正文），未映射键吞掉，绝不写入 PTY；
+/// - `Todo`：按键只进入 todo 面板，未映射键吞掉；
+/// - `Panes`：`pane_lx` 为真时进入 lx 单行输入，否则编码写进焦点窗格的 PTY；
+/// - `Sidebar`：侧栏没有键盘交互，全部吞掉——绝不穿透到窗格。
 pub fn route(
     key: KeyEvent,
     mode: TermMode,
-    prompt_focused: bool,
+    focus: FocusedContainer,
     overlay: Option<OverlayKind>,
     pane_lx: bool,
-    todo_focused: bool,
 ) -> Option<Routed> {
     if key.kind == KeyEventKind::Release {
         return None;
@@ -107,7 +110,11 @@ pub fn route(
     if let Some(kind) = overlay {
         return overlay_key(key, kind).map(Routed::Overlay);
     }
-    if prompt_focused {
+    if focus == FocusedContainer::Sidebar {
+        // 侧栏只有鼠标交互：键盘一律吞掉，避免误写进别的容器的输入框。
+        return None;
+    }
+    if focus == FocusedContainer::Prompt {
         let copy_chord = matches!(key.code, KeyCode::Char('c' | 'C'))
             && (key.modifiers.contains(KeyModifiers::CONTROL)
                 || key.modifiers.contains(KeyModifiers::SUPER))
@@ -134,7 +141,7 @@ pub fn route(
             }
         };
     }
-    if todo_focused {
+    if focus == FocusedContainer::Todo {
         // todo 面板持焦点：未映射键一律吞掉（同 prompt 口径），绝不写进隐藏终端。
         return todo_key(key).map(Routed::Todo);
     }

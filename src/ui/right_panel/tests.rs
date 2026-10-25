@@ -103,7 +103,7 @@ fn tabs_render_on_top_border_with_accent_active() {
     // 聚焦态边框是 accent（Cyan 加粗）：`muted()` 不带前景，若不先重置本格，
     // 非激活 tab 会继承开边框的青色加粗，看起来也亮着。见 `paint_tabs`。
     let mut focused = AppState::demo();
-    focused.prompt_focused = true;
+    focused.set_focus(crate::app::state::FocusedContainer::Prompt);
     let buffer = render_buffer(&focused);
     let muted = &buffer[(todo_rect.x, todo_rect.y)];
     assert_eq!(

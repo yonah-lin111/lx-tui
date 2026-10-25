@@ -778,7 +778,7 @@ fn handle_app_event(
 ///
 /// prompt 未聚焦时不扫描；扫描失败按空结果处理（面板保持隐藏）。
 fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
-    if !state.prompt_focused {
+    if !state.prompt_focused() {
         return;
     }
     let prompt = state.prompt.id();

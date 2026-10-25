@@ -207,7 +207,7 @@ fn text_style(status: TodoStatus) -> Style {
 /// 绘制 Todo 面板体；有编辑现场时返回输入光标坐标（走与 prompt 相同的硬件光标链路）。
 pub(crate) fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<(u16, u16)> {
     let header = crate::layout::prompt_header_rect(area)?;
-    let focused = state.todo_focused;
+    let focused = state.todo_focused();
     prompt::render_divider(area, header, frame.buffer_mut(), focused);
     let buf = frame.buffer_mut();
     render_toolbar(area, buf, state);
@@ -285,7 +285,7 @@ fn render_rows(panel: Rect, buf: &mut Buffer, state: &AppState) -> Option<(u16, 
             break;
         }
         let y = list.y.saturating_add(slot as u16);
-        let row_selected = state.todo_focused && state.todo.selected() == Some(index);
+        let row_selected = state.todo_focused() && state.todo.selected() == Some(index);
         if pending_new == Some(index) {
             cursor = cursor.or(render_row(
                 buf,

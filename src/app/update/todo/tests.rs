@@ -171,7 +171,7 @@ fn switch_workspace_commits_edit_and_preserves_list() {
     assert_eq!(texts(&state), ["a", "b", "c-edited"]);
     assert_eq!(state.todo.selected(), Some(2), "选中不随工作区变化");
     assert_eq!(state.todo.scroll(), 1, "视口不随工作区变化");
-    assert!(state.todo_focused, "焦点不随工作区变化");
+    assert!(state.todo_focused(), "焦点不随工作区变化");
 }
 
 #[test]
@@ -257,7 +257,7 @@ fn toolbar_button_disabled_states() {
         state.todo.len(),
         state.todo.selected(),
         state.todo.is_editing(),
-        state.prompt_focused,
+        state.prompt_focused(),
     );
 
     assert!(
@@ -277,7 +277,7 @@ fn toolbar_button_disabled_states() {
             state.todo.len(),
             state.todo.selected(),
             state.todo.is_editing(),
-            state.prompt_focused,
+            state.prompt_focused(),
         ),
         snapshot,
         "无效按钮不产生任何状态变化"

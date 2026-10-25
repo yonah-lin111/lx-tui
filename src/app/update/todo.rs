@@ -6,7 +6,7 @@
 use std::time::Instant;
 
 use crate::app::effects::Effect;
-use crate::app::state::{AppState, RightTab, TodoEdit, TodoEditTarget};
+use crate::app::state::{AppState, FocusedContainer, RightTab, TodoEdit, TodoEditTarget};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::tooltip::TodoButton;
 use crate::db::todo::{TodoRecord, TodoStatus};
@@ -17,26 +17,27 @@ use super::show_toast;
 /// 滚轮每格移动的行数（与 prompt 正文一致）。
 const WHEEL_LINES: usize = 3;
 
-/// 聚焦 todo 面板：清 prompt 焦点（互斥）、收起 prompt 瞬时指针。
+/// 聚焦 todo 面板：收起 prompt 瞬时指针。
 ///
-/// 不变量：`todo_focused ⇒ right_tab == Todo`；容器折叠时拒绝聚焦。
+/// 不变量：焦点为 Todo ⇒ `right_tab == Todo`；容器折叠时拒绝聚焦。
+/// 焦点互斥由 [`FocusedContainer`] 单一真源保证，不再逐处手工对消。
 pub fn focus_todo(state: &mut AppState) -> bool {
     if state.prompt_collapsed || state.right_tab != RightTab::Todo {
         return false;
     }
-    let changed = !state.todo_focused || state.prompt_focused;
-    state.todo_focused = true;
-    state.prompt_focused = false;
+    let mut changed = state.set_focus(FocusedContainer::Todo);
+    // `clear_panel` 幂等且无返回值，故直接算作变化（与旧口径一致：一次聚焦就是一次重绘）。
     state.prompt.clear_panel();
-    state.prompt_tree_hover = None;
+    if state.prompt_tree_hover.take().is_some() {
+        changed = true;
+    }
     changed
 }
 
 /// 释放 todo 焦点；先提交进行中的编辑（与切 tab 同口径）。
 pub fn blur_todo(state: &mut AppState) -> bool {
     let mut changed = commit_todo_edit(state);
-    if state.todo_focused {
-        state.todo_focused = false;
+    if state.set_focus(FocusedContainer::Panes) {
         changed = true;
     }
     if state.todo_hover.take().is_some() {
@@ -199,8 +200,7 @@ pub fn begin_todo_edit(state: &mut AppState, target: TodoEditTarget) -> bool {
         }
     };
     state.todo.begin_edit(edit);
-    state.todo_focused = true;
-    state.prompt_focused = false;
+    state.set_focus(FocusedContainer::Todo);
     true
 }
 

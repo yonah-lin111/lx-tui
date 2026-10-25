@@ -584,7 +584,7 @@ fn render_cursor(state: &AppState) -> (bool, (u16, u16)) {
 /// prompt 聚焦且处于树视图：搜索框持有硬件光标。
 fn focused_tree_state() -> AppState {
     let mut state = AppState::demo();
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     state.workspaces[0].prompt_panel.mode = PromptMode::Tree;
     state
 }
@@ -2036,7 +2036,7 @@ fn lx_pane_top_border_shows_workspace_identity() {
     );
 
     // 失焦（prompt 持有键盘焦点）：取值不变。
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     let buffer = render_buffer(&state);
     let value = &buffer[(start as u16 + "lx · b:".len() as u16, rect.y)];
     assert_eq!(
@@ -2044,7 +2044,7 @@ fn lx_pane_top_border_shows_workspace_identity() {
         (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
         "失焦窗格取值一致"
     );
-    state.prompt_focused = false;
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
 
     // 切到终端视图：身份标签消失（终端页只留 agent 标记）。
     let focused = state.active_tab().layout.focus();
@@ -2110,7 +2110,7 @@ fn lx_pane_identity_value_ignores_focus() {
     );
 
     // 失焦：前缀与值都与聚焦时逐字段相同（焦点不再影响取色）。
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     let lines = render_lines(&state);
     let buffer = render_buffer(&state);
     assert_eq!(
@@ -2202,7 +2202,7 @@ fn pane_agent_value_ignores_focus() {
         "聚焦窗格 agent: 值保持默认灰、不带 BOLD"
     );
 
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     let lines = render_lines(&state);
     let buffer = render_buffer(&state);
     assert_eq!(
@@ -2233,7 +2233,7 @@ fn prompt_bottom_values_stay_default_while_focused() {
         main_branch: Some("dev".to_string()),
     });
     // prompt 持有焦点：底边框本身是 accent()，值不能被染色。
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     state.prompt_width = 60;
     let view = view_for(&state);
     let row = view.prompt.bottom() - 1;
@@ -2274,7 +2274,11 @@ fn prompt_bottom_prefix_ignores_focus() {
     let row = view.prompt.bottom() - 1;
     let mut styles = Vec::new();
     for focused in [false, true] {
-        state.prompt_focused = focused;
+        state.set_focus(if focused {
+            crate::app::state::FocusedContainer::Prompt
+        } else {
+            crate::app::state::FocusedContainer::Panes
+        });
         let lines = render_lines(&state);
         let buffer = render_buffer(&state);
         let prefix = border_label_cell(&buffer, &lines, row, "b:main", 0);
@@ -2296,7 +2300,11 @@ fn prompt_page_name_ignores_focus() {
     let view = view_for(&state);
     let mut styles = Vec::new();
     for focused in [false, true] {
-        state.prompt_focused = focused;
+        state.set_focus(if focused {
+            crate::app::state::FocusedContainer::Prompt
+        } else {
+            crate::app::state::FocusedContainer::Panes
+        });
         let lines = render_lines(&state);
         let buffer = render_buffer(&state);
         let row =
@@ -2433,7 +2441,7 @@ fn pane_border_shows_agent_label_separated_from_toggle_button() {
     );
 
     // 窗格失焦（prompt 持有键盘焦点）：值与聚焦时一致，焦点不再影响取色。
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     let buffer = render_buffer(&state);
     let name = &buffer[(name_col, label_area.y)];
     assert_eq!(
@@ -3212,7 +3220,7 @@ fn no_tooltip_target_points_at_the_removed_ui_button() {
 #[test]
 fn slash_rows_show_source_tags_and_worktree_selector_title() {
     let mut state = AppState::demo();
-    state.prompt_focused = true;
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
     let dir = std::env::temp_dir().join(format!("lx-tui-ui-wt-{}", std::process::id()));
     state.prompt.set_worktree_repo(Some(dir));
     state
@@ -3292,4 +3300,47 @@ fn controls_and_prompt_frame_geometry_and_hit_tests() {
         prompt_scrollbar(&view, &state).is_none(),
         "内容未超出时不显示滚动条"
     );
+}
+
+/// 同一时刻只有一个容器描边强调色：右侧容器持焦点时主区与侧栏一律 muted。
+///
+/// 真机缺陷：主区按 `!prompt_focused` 判焦点、侧栏恒为 `false`，于是点右侧容器后
+/// 主区也仍然高亮，两个容器同时描边（截图里 8 条 Cyan 边框）。
+#[test]
+fn only_focused_container_uses_accent_border() {
+    use crate::app::state::FocusedContainer;
+    let mut state = AppState::demo();
+    state.prompt_width = 40;
+
+    for target in [
+        FocusedContainer::Panes,
+        FocusedContainer::Sidebar,
+        FocusedContainer::Prompt,
+        FocusedContainer::Todo,
+    ] {
+        state.set_focus(target);
+        state.right_tab = match target {
+            FocusedContainer::Todo => crate::app::state::RightTab::Todo,
+            _ => crate::app::state::RightTab::Prompt,
+        };
+        let view = view_for(&state);
+        let buffer = render_buffer(&state);
+        // 取每个容器左上角圆角的颜色：聚焦 = Cyan，其余 = muted（非 Cyan）。
+        let corners = [
+            ("sidebar", view.sidebar.x, view.sidebar.y),
+            ("panes", view.panes.x, view.panes.y),
+            ("right", view.prompt.x, view.prompt.y),
+        ];
+        let accented: Vec<&str> = corners
+            .iter()
+            .filter(|(_, x, y)| buffer[(*x, *y)].fg == ratatui::style::Color::Cyan)
+            .map(|(name, _, _)| *name)
+            .collect();
+        let expected = match target {
+            FocusedContainer::Sidebar => vec!["sidebar"],
+            FocusedContainer::Panes => vec!["panes"],
+            FocusedContainer::Prompt | FocusedContainer::Todo => vec!["right"],
+        };
+        assert_eq!(accented, expected, "{target:?} 时应只有 {expected:?} 描边");
+    }
 }

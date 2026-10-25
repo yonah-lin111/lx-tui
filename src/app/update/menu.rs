@@ -6,7 +6,7 @@ use crate::app::effects::Effect;
 use crate::app::overlay::{
     ConfirmClose, Menu, MenuCommand, Overlay, OverlayTarget, Rename, RenameTarget, TextInput,
 };
-use crate::app::state::{AppState, PaneView, tab_label};
+use crate::app::state::{AppState, FocusedContainer, PaneView, tab_label};
 use crate::app::trust::TrustTrigger;
 use crate::layout::PaneId;
 
@@ -441,7 +441,7 @@ pub(crate) fn split_pane(
     if tab_state.split_pane(pane, direction).is_none() {
         return false;
     }
-    state.prompt_focused = false;
+    state.set_focus(FocusedContainer::Panes);
     state.prompt.clear_panel();
     clear_selection(state);
     true
