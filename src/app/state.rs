@@ -89,6 +89,20 @@ pub enum PromptDragSource {
     Item(i64),
 }
 
+/// 拖动中的落点反馈：已通过容器校验，渲染照着铺 hover 底色即可。
+///
+/// 只描述"会落到哪"，不含业务规则；`None` 覆盖树外、非法目标与不会产生移动的落点
+/// （拖到自己、已是同一容器），避免画出一个按下去什么都不会发生的高亮。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptDropMark {
+    /// 无有效落点。
+    None,
+    /// 落到该可见行对应的容器。
+    Row(usize),
+    /// 落到末行以下空白，即回根层。
+    Root,
+}
+
 /// 一次 prompt 列表拖拽的现场；只在 Down→Up 之间存活。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PromptDrag {
@@ -98,8 +112,12 @@ pub struct PromptDrag {
     pub source: Option<PromptDragSource>,
     /// 按下时的可见行索引（也是未拖动时点击的目标行）。
     pub from_row: usize,
+    /// 按下的时刻：双击窗口按 Down→Down 判定，不能用松开时刻顶替。
+    pub pressed_at: Instant,
     /// 指针是否已跨行（行级阈值；只横向抖动不算拖动）。
     pub dragging: bool,
+    /// 当前落点反馈；未置臂或落点无效时为 `None`。
+    pub drop_mark: PromptDropMark,
     /// 本次是否允许拖动（`Temp` 行、搜索过滤态为 false）。
     pub enabled: bool,
 }

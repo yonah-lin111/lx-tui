@@ -604,21 +604,21 @@ impl Persistence {
                 folder_id,
             } => {
                 let key = prompt_key_for(state, &workspace);
-                let moved = self.with_db(|db| db.move_prompt(id, folder_id)).is_some();
+                let result = self.db_result(|db| db.move_prompt(id, folder_id));
                 // 失败也要重载：以 DB 真值把界面拉回原位，不留下“看起来移动了”的假象。
                 let changed = self.reload_tree(state, &key);
-                if !moved {
+                if let Err(ref error) = result {
                     update::show_toast(
                         state,
                         Toast::new(
                             ToastKind::Danger,
-                            text::TOAST_PROMPT_MOVE_FAILED,
+                            move_reject_message(error),
                             Some(state.prompt.id()),
                             Instant::now(),
                         ),
                     );
                 }
-                changed || !moved
+                changed || result.is_err()
             }
             Effect::MoveFolder {
                 workspace,
@@ -626,20 +626,20 @@ impl Persistence {
                 parent_id,
             } => {
                 let key = prompt_key_for(state, &workspace);
-                let moved = self.with_db(|db| db.move_folder(id, parent_id)).is_some();
+                let result = self.db_result(|db| db.move_folder(id, parent_id));
                 let changed = self.reload_tree(state, &key);
-                if !moved {
+                if let Err(ref error) = result {
                     update::show_toast(
                         state,
                         Toast::new(
                             ToastKind::Danger,
-                            text::TOAST_PROMPT_MOVE_FAILED,
+                            move_reject_message(error),
                             Some(state.prompt.id()),
                             Instant::now(),
                         ),
                     );
                 }
-                changed || !moved
+                changed || result.is_err()
             }
             Effect::RenamePrompt {
                 workspace,
@@ -1063,6 +1063,17 @@ impl Persistence {
         }
     }
 
+    /// 执行一次数据库操作并透出错误类型；库不可用时返回 [`super::DbError::Unavailable`]。
+    ///
+    /// 与 [`Self::with_db`] 同样记录 `tracing::warn!`，区别只在调用方能按错误分流文案。
+    fn db_result<T>(
+        &self,
+        operation: impl FnOnce(&Database) -> super::Result<T>,
+    ) -> super::Result<T> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        operation(db).inspect_err(|error| tracing::warn!(%error, "database operation failed"))
+    }
+
     /// 执行一次数据库操作并记录错误；库不可用时跳过。
     fn with_db<T>(&self, operation: impl FnOnce(&Database) -> super::Result<T>) -> Option<T> {
         let db = self.db.as_ref()?;
@@ -1237,6 +1248,15 @@ fn prompt_key_for(state: &AppState, workspace: &Path) -> PathBuf {
         .and_then(|index| state.workspaces[index].repo_key())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| workspace.to_path_buf())
+}
+
+/// 移动被 DB 拒绝时的用户文案：状态层同样分流这三条，两层口径保持一致。
+fn move_reject_message(error: &super::DbError) -> &'static str {
+    match error {
+        super::DbError::DepthExceeded => text::TOAST_PROMPT_MOVE_DEPTH,
+        super::DbError::FolderHasChildren => text::TOAST_PROMPT_MOVE_NESTED,
+        _ => text::TOAST_PROMPT_MOVE_FAILED,
+    }
 }
 
 /// 规范化路径；失败时保留原路径（路径可能刚被删除）。

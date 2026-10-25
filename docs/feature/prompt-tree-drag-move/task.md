@@ -18,7 +18,11 @@
 - [x] 质问 4：点击语义从 Down 推迟到 Up，Down 只选中并登记起点，Drag 跨行才置 dragging → 采纳推荐。
 - [x] 质问 5：不做乐观更新；`Effect::MovePrompt`/`MoveFolder` → pump 写库 → `reload_tree`；
       失败补 Danger toast；Temp/Section 不可拖；只改 `folder_id`/`parent_folder_id`/`updated_at` → 采纳推荐。
-- [x] 质问 6：拖动中仅被拖行 `style::selection()`；不画预览；非法落点松手 toast；树外静默取消 → 采纳推荐。
+- [x] 质问 6：拖动中**源行压暗（`style::muted()`）+ 目标容器行铺 `style::selection()`**，落点为
+      空根层时末行以下铺 `→ move to root`；被拒绝的落点不亮；不新增颜色/动效；非法落点松手
+      toast；树外静默取消 → 采纳推荐（最终口径由 `design.md` §11.7 返工取代初版"仅被拖行铺底色"）。
+- [x] 交付后发现的现场清理缺口：拖动中切钉住 / 关工作区都会换面板或整体前移索引，
+      `toggle_prompt_pin`、`release_prompt_pin`、`close_workspace` 补 `state.prompt_drag = None;`。
 - [x] 质问 7：带子文件夹的文件夹拖进文件夹 → 拒绝 + toast（否则第三层不渲染） → 采纳推荐。
 - [x] 默认处理（未单独提问）：搜索词非空禁用拖拽；拖动期抑制 hover/tooltip。
 - [x] 用户审核 `design.md` 与本清单，确认后开始实施。
@@ -112,9 +116,10 @@
   - [x] `:261` tooltip 条件追加 `|| state.prompt_drag.is_some()`。
 - [x] `src/ui/prompt/tree.rs`：
   - [x] 新增 `PromptDropHit { Row(usize), Root, Outside }` + `pub fn drop_hit_at(...)`（与 `row_at` `:171` 同源换算）。
-  - [x] `render(...)` 增加 `drag: Option<usize>` 参数，`paint_row`（`:187`）增加 `dragging: bool`，
-        整行 `style::selection()`（复用 `fill_row` `:291`）。
-- [x] `src/ui/prompt_frame.rs:179`：调用点补 `state.prompt_drag.and_then(...)`。
+  - [x] `render(...)` 增加 `drag: Option<PromptDrag>` 参数（§11.7 返工后传整个现场），
+        `paint_row`（`:250`）按 `DragRow::{Source, Target}` 分派：源行 `style::muted()` 压暗、
+        目标容器行 `style::selection()` 铺底色（复用 `fill_row`），根层落点画 `→ move to root` 提示行。
+- [x] `src/ui/prompt_frame.rs:179-186`：调用点补 `state.prompt_drag.filter(|drag| drag.dragging)`。
 - [x] `src/ui/prompt/tree/tests.rs`：20 处 `render(...)` 调用补 `None`。
 - [x] `src/ui/text.rs`（`:533` 附近）：
   - [x] `TOAST_PROMPT_MOVE_FAILED` = `"Failed to move; unchanged"`
@@ -124,7 +129,8 @@
 ### 6. 文档同步
 
 - [x] `docs/standards/tui-design-requirements.md`「交互」补 prompt 列表拖拽口径：
-      reparent 语义、行级阈值、整行底色、拖拽期抑制 hover、非法落点松手 toast、不做预览/自动展开。
+      reparent 语义、行级阈值、拖拽期抑制 hover、源行压暗 + 目标容器行底色 + 根层提示行、
+      非法落点松手 toast、不做自动展开（对齐 `design.md` §11.7）。
 - [x] 本目录 `task.md` 勾选并补「完成记录」。
 
 ### 7. 精确验证（只跑受影响范围）
@@ -151,15 +157,34 @@
      （`drop_on_blank_moves_to_root` 先红后绿为证）。
   4. 额外清场：`handle_mouse_down_left` 入口丢弃残留现场（拖动中指针移出窗口会丢 Up，
      否则下一次无关的 Up 会按旧行号误点）；回归用例 `mouse_down_discards_stale_prompt_drag`。
-  5. `move_prompt` 在 `Some(folder)` 路径要求条目存在（`FolderMissing`），`None` 路径保持原风格。
-- 测试：`cargo test` 全绿 —— lib 3399 passed / 0 failed / 2 ignored，15 个集成目标全 ok。
-  新增：状态层 13 例、渲染 2 例、DB 4 例、事件 3 例、集成 1 例；
-  `cargo clippy --all-targets -- -D warnings` 无告警；`cargo fmt` 通过。
+     评审后补 `toggle_prompt_pin` / `release_prompt_pin` / `close_workspace` 三处（§11.8 第 2 条）。
+  5. `move_prompt` 要求条目存在：评审改为**两个分支共用**校验并新增
+     `DbError::PromptMissing`（初版只在 `Some(folder)` 校验且误报 `FolderMissing`）。
+- 测试（合并前最终值）：`cargo test --lib` **3420 passed / 0 failed / 2 ignored**，
+  `cargo test --test prompt_management` **3 passed**；
+  `cargo clippy --all-targets -- -D warnings` 无告警；`cargo fmt --check` 通过。
+  新增：状态层 20 例、渲染 6 例、DB 5 例、事件 4 例、集成 1 例。
   注：`event::tests::worktree_candidates_do_not_resurrect_mention_panel_on_todo` 曾因
   `$TMPDIR/lx-tui-wt-gate.db` 遗留（`user_version=15`，来自另一分支的旧测试库）报
-  `UnsupportedSchema`，删除该临时文件后转绿；与本次改动无关。
+  `UnsupportedSchema`，删除该临时文件后转绿；与本次改动无关（合并前需再删一次）。
 - 手工验收项（Agent 无法交互式验证 TUI，需 `cargo run`）：
   1. 拖条目进文件夹、拖回根层，重启后仍在原容器。
   2. 拖根层文件夹进另一根层文件夹、拖回根层。
   3. 子文件夹作落点、含子文件夹的文件夹拖进文件夹 → 底部 Danger toast。
   4. 单击文件夹只在松手时折叠/展开；双击条目仍进编辑器；拖到树外松手无任何提示。
+  5. 拖动中源行压暗、目标容器行铺 `selection` 底色并随指针移动；拖到末行以下空白出现
+     `→ move to root`；移到非法落点或树外时高亮立即消失（design §11.7）。
+- 交互手感返工（2026-10-25，用户验收反馈"拖拽效果十分不好"）：把初版"只有源行铺底色"
+  改为"源行压暗 + 目标容器行反显 + 根层提示行"，落点判定复用 `prompt_drop_container`。
+  新增用例：状态层 6 例、渲染层 4 例（原 `dragged_row_gets_selection_background` 语义被
+  源行压暗取代，改名重写为 `drag_target_row_gets_selection_background` 等）。
+  验证：`cargo test --lib` 3408 passed / 0 failed / 2 ignored，`cargo test --test
+  prompt_management` 3 passed，`cargo clippy --all-targets -- -D warnings` 无告警。
+- 评审与修复（2026-10-25，P0×1 / P1×3 / P2×5，详见 `review.md` 与 `design.md` §11.8）：
+  P0 = 拖动中滚轮改视口导致误置臂、松手静默移动；P1 = 拖拽现场漏清理（切钉住/关工作区）、
+  `move_prompt` 对不存在条目返回 `Ok`、feature 文档正文仍是旧口径；P2 = DB 拒绝原因不可区分、
+  双击窗口漂到 Up→Up、渲染与命中 `scroll` 钳制不一致、空树提示行盖占位、测试文件超长。
+  除"测试文件拆分"外全部修复，两侧合计新增 13 条用例。手工验收项新增一条：
+  6. 拖动中滚轮不应让列表滚动，也不应在松手时产生任何移动。
+- 合并：`dev`（`8707aa7`）→ `feat/prompt-tree-drag-move`，快进合并，无冲突；
+  合并后 `SCHEMA_VERSION` 仍为 14（本特性无迁移，不与 `feat/right-panel-todo` 冲突）。

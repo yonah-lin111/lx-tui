@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use crate::app::effects::Effect;
 use crate::app::prompt::{PromptDropHit, PromptRowKind};
-use crate::app::state::{AppState, PromptDrag, PromptDragSource};
+use crate::app::state::{AppState, PromptDrag, PromptDragSource, PromptDropMark};
 use crate::app::toast::{Toast, ToastKind};
 use crate::ui::text;
 
@@ -64,7 +64,9 @@ pub fn begin_prompt_drag(state: &mut AppState, row: usize) -> bool {
         workspace,
         source,
         from_row: row,
+        pressed_at: Instant::now(),
         dragging: false,
+        drop_mark: PromptDropMark::None,
         enabled,
     });
     state.prompt_tree_hover = None;
@@ -75,11 +77,14 @@ pub fn begin_prompt_drag(state: &mut AppState, row: usize) -> bool {
 ///
 /// 空白（`Root`）也算跨行：它是"拖出文件夹回根层"的落点，若只在行上置位，
 /// 末行条目往下拖出到空白将永远退化成一次点击，该路径不可达。
+///
+/// 置臂后每次移动都重算落点反馈：指针换行时高亮跟着走，回到会被拒绝的落点
+/// （自己、同一容器）或移出树时高亮立刻消失——不给"按下去会移动"的假承诺。
 pub fn drag_prompt_to(state: &mut AppState, hit: PromptDropHit) -> bool {
-    let Some(drag) = state.prompt_drag.as_mut() else {
+    let Some(drag) = state.prompt_drag else {
         return false;
     };
-    if !drag.enabled || drag.dragging {
+    if !drag.enabled {
         return false;
     }
     let crossed = match hit {
@@ -88,11 +93,57 @@ pub fn drag_prompt_to(state: &mut AppState, hit: PromptDropHit) -> bool {
         PromptDropHit::Root => true,
         PromptDropHit::Outside => false,
     };
-    if !crossed {
-        return false;
-    }
-    drag.dragging = true;
-    true
+    // 已置臂后即便指针回到起点行（或移出树）也保持拖动状态：此时是"取消"而非"没在拖"。
+    let armed = drag.dragging || crossed;
+    let drop_mark = if armed {
+        prompt_drop_mark(state, &drag, hit)
+    } else {
+        PromptDropMark::None
+    };
+    let changed = armed != drag.dragging || drop_mark != drag.drop_mark;
+    state.prompt_drag = Some(PromptDrag {
+        dragging: armed,
+        drop_mark,
+        ..drag
+    });
+    changed
+}
+
+/// 落点反馈：只对**会真正产生移动**的落点给出高亮。
+///
+/// 复用 [`prompt_drop_container`] 的判定，保证高亮与松手后的行为永远一致；
+/// 被拒绝的落点（第 3 层、含子文件夹、拖到自己、同一容器）一律不亮，
+/// 由松手时的 toast 说明原因。
+///
+/// 亮哪一行：容器是文件夹时亮**该文件夹行**（而不是指针下的条目行——条目行的容器是
+/// 它所在的文件夹，亮条目行会被读成"插到这条旁边"）；容器是根层时，指针若在某一行上，
+/// 就亮那一行（那一行的容器本来就是根层，松手确实落在这里），只有指针落在末行以下
+/// 空白才退回 `Root`，由渲染层画 `→ move to root` 提示。
+fn prompt_drop_mark(state: &AppState, drag: &PromptDrag, hit: PromptDropHit) -> PromptDropMark {
+    let Ok(target) = prompt_drop_container(state, drag, hit) else {
+        return PromptDropMark::None;
+    };
+    let Some(folder_id) = target else {
+        return match hit {
+            PromptDropHit::Row(row) => PromptDropMark::Row(row),
+            PromptDropHit::Root => PromptDropMark::Root,
+            PromptDropHit::Outside => PromptDropMark::None,
+        };
+    };
+    let Some(workspace) = state.workspaces.get(drag.workspace) else {
+        return PromptDropMark::None;
+    };
+    let panel = &workspace.prompt_panel;
+    panel
+        .rows()
+        .iter()
+        .position(|row| {
+            panel
+                .tree
+                .folder_of_row(*row)
+                .is_some_and(|folder| folder.id == folder_id)
+        })
+        .map_or(PromptDropMark::None, PromptDropMark::Row)
 }
 
 /// 松开：未拖动按点击/双击处理；拖动则解析落点并登记移动效应。
@@ -107,8 +158,7 @@ pub fn finish_prompt_drag(state: &mut AppState, hit: PromptDropHit) -> bool {
         return false;
     }
     if !drag.dragging {
-        let now = Instant::now();
-        if prompt_row_double_click(state, drag.from_row, now) {
+        if prompt_row_double_click(state, drag.from_row, drag.pressed_at) {
             return open_prompt_row(state, drag.from_row);
         }
         return click_prompt_row(state, drag.from_row);

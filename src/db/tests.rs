@@ -289,6 +289,24 @@ fn move_prompt_rejects_foreign_or_missing_folder() {
 }
 
 #[test]
+fn move_prompt_rejects_missing_prompt() {
+    let (database, _) = open_test_database("move-prompt-missing");
+    let workspace = workspace_path("move-missing");
+    let folder = database
+        .create_folder(&workspace, None, "dest")
+        .expect("dest folder");
+
+    let error = database
+        .move_prompt(999_999, None)
+        .expect_err("missing prompt rejected on root move");
+    assert!(matches!(error, DbError::PromptMissing));
+    let error = database
+        .move_prompt(999_999, Some(folder))
+        .expect_err("missing prompt rejected on folder move");
+    assert!(matches!(error, DbError::PromptMissing));
+}
+
+#[test]
 fn move_folder_rejects_depth_children_and_self() {
     let (database, _) = open_test_database("move-folder");
     let workspace = workspace_path("move-folder");

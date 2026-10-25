@@ -9,11 +9,11 @@ use crate::app::prompt::{
     PromptDropHit, PromptFolder, PromptItem, PromptPage, PromptPageId, PromptRowKind, PromptSection,
 };
 use crate::app::state::AppState;
-use crate::app::state::PromptDragSource;
+use crate::app::state::{PromptDragSource, PromptDropMark};
 use crate::app::toast::ToastKind;
 use crate::app::update::{
-    apply, apply_editor, apply_overlay_key, create_workspace, create_workspace_with_cwd,
-    switch_workspace, tick, toggle_prompt_pin,
+    apply, apply_editor, apply_overlay_key, close_workspace, create_workspace,
+    create_workspace_with_cwd, switch_workspace, tick, toggle_prompt_pin,
 };
 use crate::db::{FolderRecord, PromptPageRecord, PromptRecord};
 use crate::ui::text;
@@ -2054,8 +2054,121 @@ fn drag_arms_only_after_row_change() {
     assert!(drag_prompt_to(&mut state, PromptDropHit::Row(other)));
     assert!(state.prompt_drag.expect("drag registered").dragging);
     assert!(
-        !drag_prompt_to(&mut state, PromptDropHit::Root),
-        "已拖动后不再重复置脏"
+        drag_prompt_to(&mut state, PromptDropHit::Root),
+        "落点从行换到空白要重绘"
+    );
+}
+
+#[test]
+fn drag_marks_target_container_row() {
+    // 拖根层条目到子文件夹行上：条目行的容器是它所在的子文件夹，高亮要落在文件夹行。
+    let mut state = drag_state(
+        vec![(1, None, "root"), (2, Some(1), "sub")],
+        vec![(10, None, "loose"), (12, Some(2), "nested")],
+    );
+    let from = item_row(&state, 10);
+    let nested = item_row(&state, 12);
+    begin_prompt_drag(&mut state, from);
+    assert!(drag_prompt_to(&mut state, PromptDropHit::Row(nested)));
+    let drag = state.prompt_drag.expect("drag registered");
+    assert_eq!(
+        drag.drop_mark,
+        PromptDropMark::Row(folder_row(&state, 2)),
+        "高亮画在目标容器（子文件夹）行上，而不是指针所在的条目行"
+    );
+}
+
+#[test]
+fn drag_marks_pointer_row_when_container_is_root() {
+    // 容器是根层时高亮指针所在行：那一行的容器本来就是根层，松手确实落在这里。
+    let mut state = drag_state(
+        vec![(1, None, "root")],
+        vec![(10, Some(1), "inside"), (12, None, "loose")],
+    );
+    let from = item_row(&state, 10);
+    let loose = item_row(&state, 12);
+    begin_prompt_drag(&mut state, from);
+    assert!(drag_prompt_to(&mut state, PromptDropHit::Row(loose)));
+    assert_eq!(
+        state.prompt_drag.expect("drag registered").drop_mark,
+        PromptDropMark::Row(loose),
+        "根层落点亮指针所在的条目行"
+    );
+}
+
+#[test]
+fn drag_marks_root_when_dropping_below_rows() {
+    let mut state = drag_state(vec![(1, None, "root")], vec![(10, Some(1), "inside")]);
+    let from = item_row(&state, 10);
+    begin_prompt_drag(&mut state, from);
+    assert!(drag_prompt_to(&mut state, PromptDropHit::Root));
+    assert_eq!(
+        state.prompt_drag.expect("drag registered").drop_mark,
+        PromptDropMark::Root
+    );
+}
+
+#[test]
+fn drag_mark_clears_on_rejected_drop() {
+    // 子文件夹不能再进别的文件夹（会成第 3 层）：先亮在根层，再移到会被拒绝的落点。
+    let mut state = drag_state(
+        vec![(1, None, "a"), (2, None, "b"), (3, Some(1), "a-sub")],
+        vec![(10, Some(2), "in-b")],
+    );
+    let sub = folder_row(&state, 3);
+    let other = folder_row(&state, 2);
+    begin_prompt_drag(&mut state, sub);
+    assert!(drag_prompt_to(&mut state, PromptDropHit::Root));
+    assert_eq!(
+        state.prompt_drag.expect("drag registered").drop_mark,
+        PromptDropMark::Root
+    );
+    assert!(drag_prompt_to(&mut state, PromptDropHit::Row(other)));
+    let drag = state.prompt_drag.expect("drag registered");
+    assert!(drag.dragging, "回到被拒落点仍是拖动中，不退化成点击");
+    assert_eq!(drag.drop_mark, PromptDropMark::None, "第 3 层不发假高亮");
+}
+
+#[test]
+fn drag_mark_clears_on_same_container() {
+    // 条目落回自己所在文件夹：无可移动，不亮。
+    let mut state = drag_state(
+        vec![(1, None, "a"), (2, None, "b")],
+        vec![(10, Some(2), "in-b")],
+    );
+    let item = item_row(&state, 10);
+    let own = folder_row(&state, 2);
+    begin_prompt_drag(&mut state, item);
+    assert!(drag_prompt_to(&mut state, PromptDropHit::Root));
+    drag_prompt_to(&mut state, PromptDropHit::Row(own));
+    assert_eq!(
+        state.prompt_drag.expect("drag registered").drop_mark,
+        PromptDropMark::None,
+        "落回自己所在容器不亮"
+    );
+}
+
+#[test]
+fn drag_mark_clears_when_leaving_tree() {
+    let mut state = drag_state(vec![(1, None, "a")], vec![(10, Some(1), "inside")]);
+    let from = item_row(&state, 10);
+    begin_prompt_drag(&mut state, from);
+    assert!(drag_prompt_to(&mut state, PromptDropHit::Root));
+    assert!(drag_prompt_to(&mut state, PromptDropHit::Outside));
+    let drag = state.prompt_drag.expect("drag registered");
+    assert!(drag.dragging);
+    assert_eq!(drag.drop_mark, PromptDropMark::None, "拖到树外不亮任何落点");
+}
+
+#[test]
+fn drag_mark_absent_before_arming() {
+    let mut state = drag_state(vec![], vec![(10, None, "loose")]);
+    let from = item_row(&state, 10);
+    begin_prompt_drag(&mut state, from);
+    assert_eq!(
+        state.prompt_drag.expect("drag registered").drop_mark,
+        PromptDropMark::None,
+        "按下未移动不亮落点"
     );
 }
 
@@ -2286,6 +2399,54 @@ fn temp_row_never_produces_effect() {
 }
 
 #[test]
+fn double_click_uses_press_time_not_release_time() {
+    // 双击窗口按 Down→Down 判定：两次按下间隔超过窗口即不构成双击，
+    // 即便第二次松开紧跟在第一次松开之后。
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    let row = item_row(&state, 10);
+
+    begin_prompt_drag(&mut state, row);
+    let pressed_at = state.prompt_drag.expect("drag registered").pressed_at;
+    finish_prompt_drag(&mut state, PromptDropHit::Row(row));
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Tree);
+    let first_press = state.prompt_row_click.expect("first click recorded").1;
+    assert_eq!(
+        pressed_at, first_press,
+        "双击判定收到的是按下时刻，而不是松开时刻"
+    );
+
+    // 把首次按下时刻前移出窗口：模拟第二次按下发生在窗口之后。
+    state.prompt_row_click = Some((
+        row,
+        Instant::now() - PROMPT_DOUBLE_CLICK_WINDOW - Duration::from_millis(1),
+    ));
+    begin_prompt_drag(&mut state, row);
+    finish_prompt_drag(&mut state, PromptDropHit::Row(row));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.mode,
+        PromptMode::Tree,
+        "超窗口的两次单击不打开编辑器"
+    );
+}
+
+#[test]
+fn double_click_within_window_opens_editor() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    let row = item_row(&state, 10);
+    begin_prompt_drag(&mut state, row);
+    finish_prompt_drag(&mut state, PromptDropHit::Row(row));
+    begin_prompt_drag(&mut state, row);
+    finish_prompt_drag(&mut state, PromptDropHit::Row(row));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.mode,
+        PromptMode::Editor,
+        "窗口内的两次按下打开编辑器"
+    );
+}
+
+#[test]
 fn reject_toast_uses_prompt_anchor() {
     let mut state = drag_state(
         vec![(1, None, "root"), (2, Some(1), "sub"), (3, None, "other")],
@@ -2298,4 +2459,35 @@ fn reject_toast_uses_prompt_anchor() {
     let toast = state.toast.as_ref().expect("reject toast");
     assert_eq!(toast.anchor, Some(state.prompt.id()));
     assert_eq!(toast.kind, ToastKind::Danger);
+}
+
+#[test]
+fn toggle_prompt_pin_clears_drag_scene() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    let from = item_row(&state, 10);
+    let to = item_row(&state, 12);
+    begin_and_drag_to(&mut state, from, to);
+    assert!(state.prompt_drag.expect("drag registered").dragging);
+
+    toggle_prompt_pin(&mut state);
+    assert!(state.prompt_drag.is_none(), "切钉住丢弃拖拽现场");
+    assert_eq!(state.prompt_pinned, Some(0));
+}
+
+#[test]
+fn close_workspace_clears_drag_scene() {
+    let mut state = demo_state();
+    create_workspace(&mut state);
+    switch_workspace(&mut state, 0);
+    enter_tree(&mut state);
+    let from = item_row(&state, 10);
+    let to = item_row(&state, 12);
+    begin_and_drag_to(&mut state, from, to);
+    assert!(state.prompt_drag.expect("drag registered").dragging);
+
+    // 关掉非显示中的工作区：索引仍可能整体前移，现场同样作废。
+    close_workspace(&mut state, 1);
+    assert!(state.prompt_drag.is_none(), "关工作区丢弃拖拽现场");
+    assert_eq!(state.workspaces.len(), 1);
 }

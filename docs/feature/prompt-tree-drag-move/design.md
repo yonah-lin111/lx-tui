@@ -45,14 +45,14 @@
 
 1. 在右侧 Prompt 列表页，可用鼠标把**条目**拖进文件夹、拖出到根层。
 2. 可把**根层文件夹**拖进另一个根层文件夹、拖回根层。
-3. 拖动期间被拖行保持整行选中底色；非法落点在松手时给出可见反馈。
+3. 拖动期间源行压暗、目标容器行铺底色（落点实时反显）；非法落点在松手时给出可见反馈。
 4. 移动结果落库，重载/重启后保持（沿用 `reload_tree`）。
 
 ### 1.3 非目标
 
 - **不做列表内精细排序**（不引入 `sort_order`、不写迁移）。落点只决定"进哪个文件夹"，
   文件夹内先后顺序仍由 `id` 决定。
-- 不做边缘自动滚动、不做 hover 自动展开、不做半透明幽灵行、不做落点预览。
+- 不做边缘自动滚动、不做 hover 自动展开、不做半透明幽灵行/插入位预览；落点反显见 §11.7。
 - 不加"移动到…"右键菜单等价入口（移动只有拖拽一条入口）。
 - 不支持拖 `Temp` 草稿行、`Section` 分组标题行。
 - 不支持第 3 层文件夹。
@@ -66,7 +66,7 @@
 | 3 | 落点判定 | 文件夹行 → 该文件夹；条目行 → 该条目**所在的文件夹**（根层条目 → 根层）；`Temp` 行 → 根层；空白区（末行以下）→ 根层；`Section` 行 → 不响应；树外 → 取消。折叠的文件夹不自动展开。 |
 | 4 | 与"按下即折叠"的冲突 | **点击语义推迟到 Up**：Down 只选中 + 登记拖拽起点；`Drag` 跨行才置 `dragging`；Up 时未拖动走原点击/双击语义，拖动则提交移动（不折叠、不开编辑器）。 |
 | 5 | 持久化 | 不做乐观更新：登记 `Effect::MovePrompt` / `Effect::MoveFolder` → `pump` 写库 → `reload_tree` 刷新。写库失败补 `ToastKind::Danger`（锚点 = prompt 面板）。`Temp` 行禁止拖动。只改 `folder_id` / `parent_folder_id` 与 `updated_at`。 |
-| 6 | 视觉与非法落点反馈 | 拖动中仅被拖行保持 `style::selection()` 背景（与左侧 ws 一致，不新增颜色/动效）；不画落点预览；非法落点松手时弹 toast；拖到树外静默取消。 |
+| 6 | 视觉与非法落点反馈 | **源行压暗（`style::muted()`）+ 目标容器行铺 `style::selection()` + 落点为空根层时末行以下铺 `→ move to root`**；被拒绝的落点不亮；不新增颜色/动效；非法落点松手 toast；树外静默取消。 |
 | 7 | 带子文件夹的根层文件夹 | 拖进另一个文件夹 → 拒绝并 toast（否则其子文件夹会掉进 `push_children` 渲染不到的第 3 层）。拖到根层 → 允许（层数不变）。 |
 
 ### 2.1 决策 2 的补充说明（必须写清，避免实现跑偏）
@@ -397,34 +397,39 @@ pub const TOAST_PROMPT_MOVE_NESTED: &str = "Cannot move: folder contains subfold
 
 ## 6. 渲染
 
-### 6.1 被拖行高亮（`src/ui/prompt/tree.rs`）
+### 6.1 拖拽反显（`src/ui/prompt/tree.rs`）
 
-`render` 增加第 6 个参数 `drag: Option<usize>`（被拖行索引，仅 `dragging == true` 时给）：
+`render` 增加第 6 个参数 `drag: Option<PromptDrag>`（仅 `dragging == true` 时给整个现场，
+渲染要同时读 `from_row` 与 `drop_mark`）：
 
 ```rust
 pub fn render(
     area: Rect, buf: &mut Buffer, panel: &PromptPanel,
-    focused: bool, hover: Option<usize>, drag: Option<usize>,
+    focused: bool, hover: Option<usize>, drag: Option<PromptDrag>,
 ) -> Option<(u16, u16)>
 ```
 
-`paint_row`（`:187`）增加 `dragging: bool`，与 hover 同款整行底色：
+`paint_row`（`src/ui/prompt/tree.rs:250`）按 `DragRow::{None, Source, Target}` 分别上样式：
 
 ```rust
-let highlight = if dragging {
+let highlighted = hovered || drag_row == DragRow::Target;
+let highlight = if highlighted {
     style::selection()                 // 与 workspace 拖拽一致（src/ui/sidebar.rs:92）
-} else if hovered {
-    style::selection()
+} else if drag_row == DragRow::Source {
+    style::muted()                     // 源行压暗，表示"正在搬走"
 } else {
     Style::default()
 };
-if dragging || hovered { fill_row(buf, area, y); }
+if highlighted {
+    fill_row(buf, area, y);
+}
 ```
 
 不新增 `ui/style.rs` token（`docs/standards/tui-design-requirements.md:45` 禁止自造颜色）。
-落点行**不做**额外标记；不画预览。
+`drop_mark == Root` 时在末行以下空白铺一行 `text::PROMPT_TREE_DROP_ROOT`（`→ move to root`）；
+被拒绝的落点 `drop_mark == None`，一律不亮。详见 §11.7。
 
-### 6.2 调用点（`src/ui/prompt_frame.rs:179`）
+### 6.2 调用点（`src/ui/prompt_frame.rs:179-186`）
 
 ```rust
 prompt::tree::render(
@@ -433,7 +438,7 @@ prompt::tree::render(
     &state.prompt_owner().prompt_panel,
     focused,
     state.prompt_tree_hover,
-    state.prompt_drag.and_then(|drag| drag.dragging.then_some(drag.from_row)),
+    state.prompt_drag.filter(|drag| drag.dragging),
 )
 ```
 
@@ -533,8 +538,8 @@ if hovering_toast || state.workspace_drag.is_some() || state.prompt_drag.is_some
 ## 9. 文档同步
 
 - `docs/standards/tui-design-requirements.md`「交互」一节（`:21` 已有左侧排序拖拽口径）补一条：
-  prompt 列表拖拽为 **reparent**（进/出文件夹），行级阈值、整行底色、拖拽期抑制 hover、
-  非法落点松手 toast；不做落点预览与自动展开。
+  prompt 列表拖拽为 **reparent**（进/出文件夹），行级阈值、拖拽期抑制 hover、
+  源行压暗 + 目标容器行铺底色 + 根层提示行（§11.7）、非法落点松手 toast；不做自动展开。
 - 本目录 `task.md` 记录实施偏差与验证结果。
 
 ## 10. 风险与取舍
@@ -586,20 +591,110 @@ if hovering_toast || state.workspace_drag.is_some() || state.prompt_drag.is_some
 指针到达它必然已离开起点所在的物理行，仍满足行级阈值本意，不会让"按住不动"变成拖动
 （crossterm 只在按住并移动时才发 Drag 事件）。
 
-### 11.4 额外清场：新按下丢弃残留现场
+### 11.4 额外清场：新按下、切钉住、关工作区都丢弃残留现场
 
 `handle_mouse_down_left` 入口加 `state.prompt_drag = None`。理由：指针在拖动中移出窗口时
 Up 会丢失，残留现场会被下一次无关的 Up 消费——按旧行号误点（点工具栏却在松手时折叠了
 树里的文件夹）。§4.4 不变量 4 的"额外清场"原本只列了三处状态切换，这里补上最直接的一处。
 回归用例：`mouse_down_discards_stale_prompt_drag`。
 
-### 11.5 `move_prompt` 在 `Some(folder)` 路径要求条目存在
+评审补漏（§11.8 第 2 条）：`toggle_prompt_pin`（含 `release_prompt_pin`）与
+`close_workspace` 同样会换掉 `prompt_workspace()` / 平移索引，一并补清理，
+回归用例 `toggle_prompt_pin_clears_drag_scene`、`close_workspace_clears_drag_scene`。
 
-解析目标文件夹所属工作区必须先读条目行，因此条目不存在时返回 `DbError::FolderMissing`，
-而非静默 UPDATE 0 行（`None` 路径仍保持既有风格）。
+### 11.5 `move_prompt` 要求条目存在
+
+解析目标文件夹所属工作区必须先读条目行。初版只在 `Some(folder)` 路径校验、且条目不存在
+时误报 `DbError::FolderMissing`，`None` 路径则完全跳过校验（更新 0 行仍返回 `Ok`）。
+评审后改为**两个分支共用**一次存在性校验，并新增 `DbError::PromptMissing`；
+`execute` 的影响行数为 0 也返回 `PromptMissing`。见 §11.8 第 3 条。
 
 ### 11.6 三个既有双击用例未改断言
 
 §8.4 原预计语义迁移会让它们失败。实际没有：helper 改为 Down+Up 序列后，两次点击
 （Down/Up/Down/Up）在 400ms 窗口内仍构成双击，`click_prompt_row` 的折叠与
 `open_prompt_row` 的编辑器打开都发生在 Up，行为与预期一致。
+
+### 11.7 交互手感返工：落点实时反显（用户验收反馈）
+
+初版严格照 §6.1 实现"只有源行铺 `selection`"。用户试用后反馈"拖拽效果十分不好，
+参考 ws 的，长按拖拽后需要出现移动效果和 hover 的背景颜色"。核对左侧 ws 的实现
+（`src/ui/sidebar.rs:90-96`）可知**它的反显是落点反馈**：
+
+```rust
+let dragging = state.workspace_dragging && drag_block.contains(&row.index);
+let highlight = if dragging || state.workspace_hover == Some(row.index) { selection() } else ...
+```
+
+即"被拖块 + 指针所在行"都反显。prompt 列表此前把 `dragging` 只给了源行，指针行因为
+"拖动期抑制 hover"（§4.5）而彻底没有反馈——用户看不到会落到哪，这是手感差的根因，
+不是缺动效。
+
+改动（`PromptDrag` 增加 `drop_mark: PromptDropMark`）：
+
+1. `PromptDropMark { None, Row(usize), Root }` 定义在 app 层，随 `PromptDrag` 一起存。
+   只描述"会落到哪"，不含业务规则。
+2. `drag_prompt_to` 在**置臂之后每次移动**都重算落点，`drop_mark` 变化也返回 `true` 置脏，
+   否则高亮不会跟着指针刷新。
+3. `prompt_drop_mark` **复用 `prompt_drop_container`** 的判定求容器：高亮与松手行为
+   永远一致，不可能出现"亮着却什么也没发生"。被拒绝的落点（第 3 层、含子文件夹、
+   拖到自己、同一容器）一律不亮，由松手 toast 说明原因。
+4. 高亮画在**目标容器所在的那一行**，不是指针命中的那一行：条目行的容器是它所在的
+   文件夹，亮条目行会被读成"插到这条旁边"。
+5. 源行改为**压暗**（`style::muted()` 叠加）而不是铺底色：底色语义已被"落点"占用，
+   两个都铺会让用户分不清哪一行是落点。
+5.1 容器为根层时，指针在某一行上就亮**那一行**（那一行的容器本来就是根层，松手确实落在这里），
+   只有指针在末行以下空白才退回 `Root` 提示行：否则用户把条目拖到另一条根层条目上时，
+   高亮会莫名跳到列表底部。
+6. 根层没有容器行可铺，在末行以下空白铺一行 `→ move to root`（文案在 `ui::text`），
+   让"拖到空白回根层"这个最容易迷路的路径有明确落点。
+7. 置臂后指针回到起点行或移出树时**保持 `dragging == true`**、只清 `drop_mark`：
+   此时是"取消"而不是"没在拖"，松手不该退化成一次单击。
+
+新增用例：状态层 `drag_marks_target_container_row`、`drag_marks_root_when_dropping_below_rows`、
+`drag_mark_clears_on_rejected_drop`、`drag_mark_clears_on_same_container`、
+`drag_mark_clears_when_leaving_tree`、`drag_mark_absent_before_arming`；
+渲染层 `drag_target_row_gets_selection_background`、`drag_source_row_is_dimmed_not_highlighted`、
+`drag_root_mark_paints_hint_below_rows`、`not_dragging_renders_no_drag_feedback`
+（原 `dragged_row_gets_selection_background` 的语义已被源行压暗取代，改名重写）。
+
+### 11.8 评审与修复（P0–P2）
+
+交付前对 `dev...HEAD` 全量改动做了一次分模块评审，结论与复现路径落在
+`review.md`（同目录），本节只记设计与实现的实质修正：
+
+1. **P0：拖动中滚轮可改视口。** `drag_prompt_to` 的"跨行"判定、`drop_hit_at` 的行换算、
+   `drop_mark` 三者都按**绝对行号**（`panel.scroll + 视口行`）。滚轮改 `scroll` 后指针
+   像素未动，绝对行号却整体平移 → 被误判"已跨行"而置臂，松手走移动分支，条目被静默
+   移进指针当前所在行的容器。修法：`handle_mouse_wheel` 最前加 `prompt_drag` 早退，
+   与 §1.3「不做边缘自动滚动」同一约束。回归用例
+   `mouse_wheel_during_prompt_drag_keeps_viewport_and_state`（反向验证：去掉守卫即
+   失败于 `panel.scroll` 由 0 变 1）。
+2. **P1：拖拽现场的生命周期漏了两处。** §4.4 不变量只列了 `switch_workspace` /
+   `select_right_tab` / `toggle_prompt_panel_mode` / 新一次 Down，实际
+   `toggle_prompt_pin`（含 `release_prompt_pin`）与 `close_workspace` 也会让索引与面板
+   换人，把现场清理由四处补到六处。否则高亮按新面板的行号画、松手因 `workspace` 校验
+   被丢弃，表现为"亮着但什么也没发生"。
+3. **P1：`move_prompt` 会对不存在的条目返回 `Ok`。** `folder_id == None` 分支完全跳过
+   校验、`execute` 的 `rows_affected` 被丢弃，另一实例删掉条目后本实例拖动会静默成功、
+   不弹 `TOAST_PROMPT_MOVE_FAILED`；且条目不存在被误报成 `FolderMissing`。现新增
+   `DbError::PromptMissing`，两个分支都先做存在性校验，并检查影响行数。
+4. **P2：DB 拒绝原因在 UI 层只剩一句话。** 状态层已区分 `Depth` / `Nested`，但
+   `with_db` 把错误压成 `Option`，落库侧再拒绝时用户只能看到笼统的
+   `Failed to move; unchanged`。新增 `Persistence::db_result` 保留错误类型，按
+   `DbError` 变体分流到已有两条精确文案（`with_db` 未动，其它 effect 不受影响）。
+5. **P2：双击窗口从"Down→Down"漂移成"Up→Up"。** 点击语义整体推迟到 Up 后，
+   `prompt_row_double_click` 收到的是松开时刻，两次按下间隔可被拉长到
+   `400ms + 两次按压时长`。`PromptDrag` 记 `pressed_at`，判定改用按下时刻。
+6. **P2：渲染与命中的 `scroll` 钳制口径不一。** `render` 把 `panel.scroll` 钳到
+   `len-1`，`row_at` / `drop_hit_at` 直接用原值，行数骤减的瞬时窗口里会"画的是末行、
+   命中的是越界行"。抽 `effective_scroll` 三处共用。**这带来一处行为变更**：
+   命中语义由"越界即未命中"变为"钳到末行"，并据此改写了既有用例
+   `row_at_maps_viewport_and_respects_scroll_and_search_row` 末尾一条断言
+   （`scroll = 3`：`None` → `Some(2)`）——是为对齐渲染语义，不是迁就实现。
+7. **P2：空树时根层提示行会盖掉空状态占位。** `rows.is_empty()` 时
+   `blank == 0`，`→ move to root` 正好落在 `PROMPT_TREE_EMPTY` 那一行；加
+   `!rows.is_empty()` 与占位互斥（当前不可达，属防未来改门槛时静默生效）。
+
+未处理项：`src/app/update/prompt/tests.rs` 与 `src/event/tests.rs` 已远超
+`AGENTS.md` 的 1000 行上限，拆分属独立清理，不混入本特性。

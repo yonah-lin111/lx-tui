@@ -44,6 +44,8 @@ pub enum DbError {
     WorkspaceMissing,
     /// 目标文件夹不存在。
     FolderMissing,
+    /// 目标提示词不存在（已被删除或从未落库）。
+    PromptMissing,
     /// 目标提示词页不存在。
     PageMissing,
     /// 文件夹嵌套超过 2 层约束。
@@ -106,6 +108,7 @@ impl fmt::Display for DbError {
             Self::Sqlite(error) => write!(formatter, "sqlite error: {error}"),
             Self::WorkspaceMissing => write!(formatter, "workspace not registered"),
             Self::FolderMissing => write!(formatter, "folder not found"),
+            Self::PromptMissing => write!(formatter, "prompt not found"),
             Self::PageMissing => write!(formatter, "prompt page not found"),
             Self::DepthExceeded => write!(formatter, "folder nesting depth exceeded"),
             Self::FolderHasChildren => write!(formatter, "folder still contains subfolders"),
@@ -154,6 +157,7 @@ impl DbError {
             Self::Sqlite(_) => "sqlite",
             Self::WorkspaceMissing => "workspace missing",
             Self::FolderMissing => "folder missing",
+            Self::PromptMissing => "prompt missing",
             Self::PageMissing => "page missing",
             Self::DepthExceeded => "depth exceeded",
             Self::FolderHasChildren => "folder has children",
@@ -519,17 +523,18 @@ impl Database {
     ///
     /// 只改容器，不改顺序（无 `sort_order` 列，顺序仍由 `id` 决定）。
     pub fn move_prompt(&self, id: i64, folder_id: Option<i64>) -> Result<()> {
+        // 提示词可能已被另一实例删除：两个分支都要先确认它存在。
+        let workspace_external: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT workspace_id FROM workspace_prompt WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let workspace_external = workspace_external.ok_or(DbError::PromptMissing)?;
         let folder_external: Option<String> = match folder_id {
             Some(folder) => {
-                let workspace_external: Option<String> = self
-                    .conn
-                    .query_row(
-                        "SELECT workspace_id FROM workspace_prompt WHERE id = ?1",
-                        params![id],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
-                let workspace_external = workspace_external.ok_or(DbError::FolderMissing)?;
                 let external: Option<String> = self
                     .conn
                     .query_row(
@@ -542,10 +547,13 @@ impl Database {
             }
             None => None,
         };
-        self.conn.execute(
+        let changed = self.conn.execute(
             "UPDATE workspace_prompt SET folder_id = ?1, updated_at = datetime('now') WHERE id = ?2",
             params![folder_external, id],
         )?;
+        if changed == 0 {
+            return Err(DbError::PromptMissing);
+        }
         Ok(())
     }
 

@@ -182,9 +182,7 @@ pub(crate) fn render_body(
             &state.prompt_owner().prompt_panel,
             focused,
             state.prompt_tree_hover,
-            state
-                .prompt_drag
-                .and_then(|drag| drag.dragging.then_some(drag.from_row)),
+            state.prompt_drag.filter(|drag| drag.dragging),
         ),
         PromptMode::Editor => {
             prompt::render(

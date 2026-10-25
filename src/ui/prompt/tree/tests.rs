@@ -6,6 +6,7 @@ use ratatui::style::Color;
 
 use super::*;
 use crate::app::prompt::{PromptFolder, PromptItem, PromptPage};
+use crate::app::state::{PromptDrag, PromptDragSource, PromptDropMark};
 
 /// 列表行不再展示的历史标注（断言不出现用）。
 const PROMPT_TEMP_BADGE_LITERAL: &str = "[tmp]";
@@ -310,8 +311,42 @@ fn row_at_maps_viewport_and_respects_scroll_and_search_row() {
     assert_eq!(row_at(area, &panel, 2, 3), Some(1));
     assert_eq!(row_at(area, &panel, 2, 4), Some(2));
     assert_eq!(row_at(area, &panel, 2, 5), None, "滚动后超出末行");
+    // 滚动超过末行时与渲染一致：钳到末行，首行命中即末行。
     panel.scroll = 3;
-    assert_eq!(row_at(area, &panel, 2, 3), None, "滚动超过末行");
+    assert_eq!(row_at(area, &panel, 2, 3), Some(2), "钳到末行");
+    assert_eq!(row_at(area, &panel, 2, 4), None, "末行以下为空");
+}
+
+#[test]
+fn hit_test_clamps_scroll_to_last_row_like_render() {
+    // 行数骤减导致的瞬时窗口：scroll 超过末行，渲染显示末行，命中也必须落到末行。
+    let mut panel = panel_with(
+        vec![],
+        vec![
+            item(10, None, "a"),
+            item(11, None, "b"),
+            item(12, None, "c"),
+        ],
+    );
+    panel.scroll = 10;
+    let area = Rect::new(0, 0, 30, 5);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &panel, false, None, None);
+    let rendered = row_text(&buf, area, 2);
+    assert!(rendered.starts_with("  • c"), "钳到末行: {rendered}");
+
+    assert_eq!(row_at(area, &panel, 0, 2), Some(2), "命中与渲染同一行");
+    assert_eq!(row_at(area, &panel, 0, 3), None, "不返回越界索引");
+    assert_eq!(
+        drop_hit_at(area, &panel, 0, 2),
+        PromptDropHit::Row(2),
+        "不误判 Root"
+    );
+    assert_eq!(
+        drop_hit_at(area, &panel, 0, 3),
+        PromptDropHit::Root,
+        "末行以下才是根层"
+    );
 }
 
 #[test]
@@ -362,25 +397,125 @@ fn drop_hit_at_distinguishes_row_blank_and_outside() {
     );
 }
 
+/// 构造一次"已置臂"的拖拽现场。
+fn dragging(from_row: usize, drop_mark: PromptDropMark) -> PromptDrag {
+    PromptDrag {
+        workspace: 0,
+        source: Some(PromptDragSource::Item(0)),
+        from_row,
+        pressed_at: std::time::Instant::now(),
+        dragging: true,
+        drop_mark,
+        enabled: true,
+    }
+}
+
 #[test]
-fn dragged_row_gets_selection_background() {
-    let mut panel = panel_with(vec![], vec![item(10, None, "dragged")]);
+fn drag_target_row_gets_selection_background() {
+    let mut panel = panel_with(vec![], vec![item(10, None, "from"), item(11, None, "to")]);
     panel.selected = usize::MAX;
     let area = Rect::new(0, 0, 30, 4);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false, None, Some(0));
-    assert_eq!(
-        buf[(29, 2)].bg,
-        crate::ui::style::selection().bg.expect("selection bg"),
-        "被拖行整行铺选中底色"
+    render(
+        area,
+        &mut buf,
+        &panel,
+        false,
+        None,
+        Some(dragging(0, PromptDropMark::Row(1))),
     );
-    let row = row_text(&buf, area, 2);
-    assert!(row.starts_with("  • dragged"), "{row}");
+    assert_eq!(
+        buf[(29, 3)].bg,
+        crate::ui::style::selection().bg.expect("selection bg"),
+        "落点行整行铺选中底色（高亮跟着指针走）"
+    );
+    assert_eq!(buf[(29, 2)].bg, Color::Reset, "落点之外的行不铺底色");
+}
 
-    // 非被拖行不铺底色。
+#[test]
+fn drag_source_row_is_dimmed_not_highlighted() {
+    let mut panel = panel_with(vec![], vec![item(10, None, "from"), item(11, None, "to")]);
+    panel.selected = usize::MAX;
+    let area = Rect::new(0, 0, 30, 4);
     let mut buf = Buffer::empty(area);
+    render(
+        area,
+        &mut buf,
+        &panel,
+        false,
+        None,
+        Some(dragging(0, PromptDropMark::None)),
+    );
+    assert_eq!(buf[(4, 2)].bg, Color::Reset, "源行不铺底色：底色只表示落点");
+    assert!(
+        buf[(4, 2)].modifier.contains(ratatui::style::Modifier::DIM),
+        "源行压暗表示正在被拖走"
+    );
+    assert_eq!(buf[(29, 3)].bg, Color::Reset, "无落点时不亮任何行");
+}
+
+#[test]
+fn drag_root_mark_paints_hint_below_rows() {
+    let mut panel = panel_with(vec![], vec![item(10, None, "only")]);
+    panel.selected = usize::MAX;
+    let area = Rect::new(0, 0, 30, 5);
+    let mut buf = Buffer::empty(area);
+    render(
+        area,
+        &mut buf,
+        &panel,
+        false,
+        None,
+        Some(dragging(0, PromptDropMark::Root)),
+    );
+    let hint = row_text(&buf, area, 3);
+    assert!(
+        hint.starts_with(text::PROMPT_TREE_DROP_ROOT),
+        "末行以下空白显示回根层提示: {hint}"
+    );
+    assert_eq!(
+        buf[(29, 3)].bg,
+        crate::ui::style::selection().bg.expect("selection bg"),
+        "提示行整行铺底色"
+    );
+}
+
+#[test]
+fn empty_tree_keeps_placeholder_under_root_drop_mark() {
+    // 空树没有行可拖，根层提示与空状态占位互斥：占位不得被 `→ move to root` 盖掉。
+    let mut panel = panel_with(vec![], vec![]);
+    panel.selected = usize::MAX;
+    let area = Rect::new(0, 0, 30, 5);
+    let mut buf = Buffer::empty(area);
+    render(
+        area,
+        &mut buf,
+        &panel,
+        false,
+        None,
+        Some(dragging(0, PromptDropMark::Root)),
+    );
+    let placeholder = row_text(&buf, area, 2);
+    assert!(
+        placeholder.starts_with(text::PROMPT_TREE_EMPTY),
+        "空状态占位仍可见: {placeholder}"
+    );
+    assert!(!placeholder.contains(text::PROMPT_TREE_DROP_ROOT));
+}
+
+#[test]
+fn not_dragging_renders_no_drag_feedback() {
+    let mut panel = panel_with(vec![], vec![item(10, None, "idle")]);
+    panel.selected = usize::MAX;
+    let area = Rect::new(0, 0, 30, 4);
+    let mut buf = Buffer::empty(area);
+    // 只按下未置臂：`prompt_frame` 不会把现场传进来，这里直接传 None 验证同一路径。
     render(area, &mut buf, &panel, false, None, None);
     assert_eq!(buf[(29, 2)].bg, Color::Reset);
+    assert!(
+        !buf[(4, 2)].modifier.contains(ratatui::style::Modifier::DIM),
+        "非拖拽态名称不压暗"
+    );
 }
 
 #[test]

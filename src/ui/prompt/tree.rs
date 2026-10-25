@@ -5,21 +5,24 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
 use crate::app::prompt::{PromptDropHit, PromptPanel, PromptRow, PromptRowKind, PromptSection};
+use crate::app::state::{PromptDrag, PromptDropMark};
 use crate::ui::widgets;
 use crate::ui::{style, text};
 
 /// 渲染树内容区：顶部搜索框行 + 分割线 + 过滤后的树行；返回搜索框硬件光标位置；
 /// 空树/无命中显示占位；选中行以行首 `❯` 标记（同 Agents 条目），悬停行铺选中底色。
 ///
-/// `drag` 为正在拖动的可见行索引（仅在指针已跨行时给出）：该行与悬停同款整行底色，
-/// 保证拖动期间被拖对象始终可辨。
+/// `drag` 为仅在指针已跨行时给出的拖拽现场，渲染据此画两处反馈（与工作区列表同款
+/// 整行底色）：**源行压暗**表示"这一项正在被拖走"，**目标容器的行铺 `selection`**
+/// 表示"松手会落到这里"——高亮跟着指针走，就是拖动最直接的可视反馈。
+/// 落点为根层时没有容器行可铺，改在末行以下空白画一行 `→ move to root` 提示。
 pub fn render(
     area: Rect,
     buf: &mut Buffer,
     panel: &PromptPanel,
     focused: bool,
     hover: Option<usize>,
-    drag: Option<usize>,
+    drag: Option<PromptDrag>,
 ) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
         return None;
@@ -38,7 +41,10 @@ pub fn render(
         ..area
     };
     let rows = panel.rows();
-    let scroll = panel.scroll.min(rows.len().saturating_sub(1));
+    let scroll = effective_scroll(panel, rows.len());
+    let drop_mark = drag
+        .map(|drag| drag.drop_mark)
+        .unwrap_or(PromptDropMark::None);
     for (index, row) in rows
         .iter()
         .enumerate()
@@ -48,7 +54,15 @@ pub fn render(
         let selected = index == panel.selected;
         let section = matches!(row.kind, PromptRowKind::Section(_));
         let hovered = hover == Some(index) && !section;
-        let dragging = drag == Some(index) && !section;
+        let drag_row = if section {
+            DragRow::None
+        } else if drag.is_some_and(|drag| drag.dragging && drag.from_row == index) {
+            DragRow::Source
+        } else if drop_mark == PromptDropMark::Row(index) {
+            DragRow::Target
+        } else {
+            DragRow::None
+        };
         let prefix = tree_prefix(&rows, index);
         // 过滤时折叠被忽略：过滤视图下所有可见文件夹按展开态绘制三角。
         let searching = !panel.search.text().trim().is_empty();
@@ -66,7 +80,7 @@ pub fn render(
             *row,
             selected,
             hovered,
-            dragging,
+            drag_row,
             &prefix,
             expanded,
         );
@@ -87,7 +101,32 @@ pub fn render(
             rows_area.right(),
         );
     }
+    // 根层没有容器行可铺底色：在末行下方的空白处铺一行落点提示，让"会落回根层"可见。
+    // 空树时该行属于空状态占位（见上），根层提示与它互斥，否则会盖掉 `no prompts yet`。
+    if drop_mark == PromptDropMark::Root && !rows.is_empty() {
+        let blank = rows.len().saturating_sub(scroll);
+        if blank < usize::from(rows_area.height) {
+            let y = rows_area.y + blank as u16;
+            fill_row(buf, rows_area, y);
+            paint_text(
+                buf,
+                rows_area.x,
+                y,
+                text::PROMPT_TREE_DROP_ROOT,
+                style::text().patch(style::selection()),
+                rows_area.right(),
+            );
+        }
+    }
     cursor
+}
+
+/// 单行的拖拽反馈：源行压暗表示"正在搬走"，目标行铺底色表示"松手落在这里"。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DragRow {
+    None,
+    Source,
+    Target,
 }
 
 /// 绘制搜索框下方分割线：整行 `─`，两端 `├` / `┤` 衔接面板边框；样式跟随边框焦点态。
@@ -174,6 +213,12 @@ fn last_sibling(rows: &[PromptRow], index: usize) -> bool {
     true
 }
 
+/// 滚动偏移的钳制：`panel.scroll` 超出末行时按末行显示。
+/// 渲染与命中共用，避免行数骤减的瞬时窗口里出现"画的是末行、命中的是越界行"。
+fn effective_scroll(panel: &PromptPanel, rows_len: usize) -> usize {
+    panel.scroll.min(rows_len.saturating_sub(1))
+}
+
 /// 命中可见行索引（`panel.rows` 的下标，非选中索引）；搜索框/分割线行、区域外或超出末行返回 None。
 pub fn row_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Option<usize> {
     if !area.contains((column, row).into()) {
@@ -183,8 +228,9 @@ pub fn row_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Option<
     if row < rows_y {
         return None;
     }
-    let index = panel.scroll + usize::from(row - rows_y);
-    (index < panel.rows().len()).then_some(index)
+    let rows_len = panel.rows().len();
+    let index = effective_scroll(panel, rows_len) + usize::from(row - rows_y);
+    (index < rows_len).then_some(index)
 }
 
 /// 拖拽落点：区域外或搜索框/分割线行 → `Outside`；末行以下空白 → `Root`；其余按可见行换算。
@@ -196,8 +242,9 @@ pub fn drop_hit_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Pr
     if row < rows_y {
         return PromptDropHit::Outside;
     }
-    let index = panel.scroll + usize::from(row - rows_y);
-    if index < panel.rows().len() {
+    let rows_len = panel.rows().len();
+    let index = effective_scroll(panel, rows_len) + usize::from(row - rows_y);
+    if index < rows_len {
         PromptDropHit::Row(index)
     } else {
         PromptDropHit::Root
@@ -206,7 +253,8 @@ pub fn drop_hit_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Pr
 
 /// 绘制单行：行首标记列（`❯ ` 或空）+ 前缀（续接线 + 连接符）+ 图标 + 名称
 /// +（条目）右对齐的彩色计数组；分区标签行只画 muted 标签；
-/// 悬停行与被拖行整行铺选中底色（与工作区列表一致），文字统一切换为高亮前景。
+/// 悬停行与拖拽目标行整行铺选中底色（与工作区列表一致），文字统一切换为高亮前景；
+/// 拖拽源行整行压暗，读作"这一项已经被拿起来了"。
 #[allow(clippy::too_many_arguments)]
 fn paint_row(
     buf: &mut Buffer,
@@ -216,13 +264,16 @@ fn paint_row(
     row: PromptRow,
     selected: bool,
     hovered: bool,
-    dragging: bool,
+    drag_row: DragRow,
     prefix: &str,
     expanded: bool,
 ) {
-    let highlighted = hovered || dragging;
+    let highlighted = hovered || drag_row == DragRow::Target;
     let highlight = if highlighted {
         style::selection()
+    } else if drag_row == DragRow::Source {
+        // 源行不铺底色（底色会被读成"落点"），改为整体 dim，作为"拖走中"的弱化标记。
+        style::muted()
     } else {
         ratatui::style::Style::default()
     };

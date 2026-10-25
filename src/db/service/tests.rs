@@ -1105,3 +1105,86 @@ fn load_prompt_history_without_database_keeps_empty() {
     service.load_prompt_history(&mut state);
     assert!(state.prompt_history.is_empty(), "降级模式历史为空");
 }
+
+#[test]
+fn move_prompt_missing_reports_generic_failure() {
+    let (mut service, mut state, cwd, _) = trusted_service("move-missing");
+    state.effects.push(Effect::MovePrompt {
+        workspace: cwd.clone(),
+        id: 999,
+        folder_id: None,
+    });
+    service.pump(&mut state);
+    let toast = state.toast.as_ref().expect("失败给出反馈");
+    assert_eq!(toast.message, text::TOAST_PROMPT_MOVE_FAILED);
+}
+
+#[test]
+fn move_folder_depth_rejection_reports_precise_reason() {
+    let (mut service, mut state, cwd, _) = trusted_service("move-depth");
+    state.effects.push(Effect::CreateFolder {
+        workspace: cwd.clone(),
+        parent_id: None,
+        name: "root".into(),
+    });
+    service.pump(&mut state);
+    let root = state.workspaces[0].prompt_panel.tree.folders()[0].id;
+    state.effects.push(Effect::CreateFolder {
+        workspace: cwd.clone(),
+        parent_id: Some(root),
+        name: "sub".into(),
+    });
+    service.pump(&mut state);
+    let sub = state.workspaces[0].prompt_panel.tree.folders()[1].id;
+    state.effects.push(Effect::CreateFolder {
+        workspace: cwd.clone(),
+        parent_id: None,
+        name: "other".into(),
+    });
+    service.pump(&mut state);
+    let other = state.workspaces[0].prompt_panel.tree.folders()[2].id;
+
+    // 根层文件夹移入子文件夹：DB 层判定为第 3 层。
+    state.effects.push(Effect::MoveFolder {
+        workspace: cwd.clone(),
+        id: other,
+        parent_id: Some(sub),
+    });
+    service.pump(&mut state);
+    let toast = state.toast.as_ref().expect("失败给出反馈");
+    assert_eq!(toast.message, text::TOAST_PROMPT_MOVE_DEPTH);
+}
+
+#[test]
+fn move_folder_with_children_reports_nested_reason() {
+    let (mut service, mut state, cwd, _) = trusted_service("move-nested");
+    state.effects.push(Effect::CreateFolder {
+        workspace: cwd.clone(),
+        parent_id: None,
+        name: "parent".into(),
+    });
+    service.pump(&mut state);
+    let parent = state.workspaces[0].prompt_panel.tree.folders()[0].id;
+    state.effects.push(Effect::CreateFolder {
+        workspace: cwd.clone(),
+        parent_id: Some(parent),
+        name: "child".into(),
+    });
+    service.pump(&mut state);
+    state.effects.push(Effect::CreateFolder {
+        workspace: cwd.clone(),
+        parent_id: None,
+        name: "other".into(),
+    });
+    service.pump(&mut state);
+    let other = state.workspaces[0].prompt_panel.tree.folders()[2].id;
+
+    state.effects.push(Effect::MoveFolder {
+        workspace: cwd.clone(),
+        id: parent,
+        parent_id: Some(other),
+    });
+    service.pump(&mut state);
+    let toast = state.toast.as_ref().expect("失败给出反馈");
+    assert_eq!(toast.message, text::TOAST_PROMPT_MOVE_NESTED);
+}

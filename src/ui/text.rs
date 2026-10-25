@@ -177,6 +177,8 @@ pub const PROMPT_TREE_MIDDLE: &str = "├─";
 /// 提示词树空状态与搜索无命中占位。
 pub const PROMPT_TREE_EMPTY: &str = "no prompts yet";
 pub const PROMPT_TREE_NO_MATCHES: &str = "no matching prompts";
+/// 拖拽落点为根层（末行以下空白）时的落点提示。
+pub const PROMPT_TREE_DROP_ROOT: &str = "→ move to root";
 /// 临时草稿保存选择器：标题、根层项与新建文件夹动作项。
 pub const SAVE_DRAFT_TITLE: &str = "Save prompt to folder";
 pub const SAVE_DRAFT_ROOT: &str = "/";

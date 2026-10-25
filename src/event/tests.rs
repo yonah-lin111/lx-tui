@@ -3602,6 +3602,70 @@ fn mouse_drag_prompt_item_into_folder_queues_move_effect() {
     );
 }
 
+/// 拖动中滚轮不得改视口：落点与跨行阈值都按绝对行号换算，滚动会让指针原地"跨行"，
+/// 松手时把条目静默移进此时指针所在行的容器。
+#[test]
+fn mouse_wheel_during_prompt_drag_keeps_viewport_and_state() {
+    use crate::app::prompt::{PromptFolder, PromptItem};
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    // 文件夹内一个条目 + 一批根层条目，使可见行超过视口（panel.scroll 可动）。
+    let mut items = vec![PromptItem::single(7, Some(1), "inside", "inside body")];
+    items.extend((0..40).map(|n| PromptItem::single(100 + n, None, format!("item {n}"), "body")));
+    let item_point = prompt_tree_click(
+        &mut state,
+        &geo,
+        vec![PromptFolder {
+            id: 1,
+            parent_id: None,
+            name: "folder".into(),
+            collapsed: false,
+        }],
+        items,
+        PromptRowKind::Item,
+    );
+    let visible = update::prompt_tree_visible_rows(&state);
+    assert!(
+        state.prompt_owner().prompt_panel.rows().len() > visible,
+        "夹具：列表必须长于视口才能滚动"
+    );
+    assert_eq!(state.prompt_owner().prompt_panel.scroll, 0);
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::ScrollDown,
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        handle_terminal_event(
+            mouse(kind, item_point.0, item_point.1),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+
+    assert_eq!(
+        state.prompt_owner().prompt_panel.scroll,
+        0,
+        "拖动中滚轮不改视口"
+    );
+    assert!(state.prompt_drag.is_none(), "松开清理拖拽现场");
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::MovePrompt { .. }
+                | crate::app::effects::Effect::MoveFolder { .. }
+        )),
+        "指针未动，不得登记移动效应: {:?}",
+        state.effects
+    );
+}
+
 #[test]
 fn mouse_drag_prompt_row_does_not_open_editor() {
     use crate::app::prompt::{PromptFolder, PromptItem};

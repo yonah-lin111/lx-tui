@@ -363,7 +363,10 @@ pub(crate) fn load_displayed_draft(state: &mut AppState) {
 /// 切换 prompt 钉住：未钉住时钉住当前显示的工作区，已钉住时释放。
 pub fn toggle_prompt_pin(state: &mut AppState) {
     match state.prompt_pinned {
-        None => state.prompt_pinned = Some(state.active_workspace),
+        None => {
+            state.prompt_pinned = Some(state.active_workspace);
+            state.prompt_drag = None; // 拖拽现场不跨面板/工作区存活
+        }
         Some(_) => release_prompt_pin(state),
     }
 }
@@ -375,6 +378,7 @@ pub fn release_prompt_pin(state: &mut AppState) {
     };
     swap_display_prompt(state, pinned, state.active_workspace);
     clear_selection(state);
+    state.prompt_drag = None; // 拖拽现场不跨面板/工作区存活
 }
 
 /// 写入文件提及扫描结果；按编辑器标识路由到显示中或挂起的草稿，工作区已关则丢弃。

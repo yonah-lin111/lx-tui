@@ -374,6 +374,9 @@ pub(crate) fn close_workspace(state: &mut AppState, target: usize) {
     if display_removed {
         load_displayed_draft(state);
     }
+    // 拖拽现场不跨面板/工作区存活：索引整体前移，现场行号无论显示的
+    // 工作区是否被关都不再可信，故无条件清理。
+    state.prompt_drag = None;
     clear_selection(state);
 }
 
