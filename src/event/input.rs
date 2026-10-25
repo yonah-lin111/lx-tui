@@ -154,6 +154,18 @@ pub(crate) fn handle_paste_event(
         .active_pane()
         .is_some_and(|pane| pane.view == PaneView::Lx)
     {
+        // `ask` 面板激活：编辑态写入手写缓冲，列表态整段吞掉——绝不写隐藏草稿，
+        // 也不触发路径粘贴面板。
+        let id = state.active_tab().layout.focus();
+        if state
+            .pane_anywhere(id)
+            .is_some_and(|pane| pane.lx.ask.is_some())
+        {
+            if update::apply_ask_paste(state, id, &text) {
+                *dirty = true;
+            }
+            return;
+        }
         if paste::handle_lx_paste(state, text) {
             *dirty = true;
         }

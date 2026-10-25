@@ -57,6 +57,11 @@ pub struct Pane {
 }
 
 impl Tab {
+    /// 是否有窗格的 lx 页挂着 `ask` 面板（标签页 `?` 标记用）。
+    pub fn has_pending_ask(&self) -> bool {
+        self.panes.values().any(|pane| pane.lx.has_pending_ask())
+    }
+
     fn with_layout(name: Option<String>, layout: TileLayout) -> Self {
         let panes = layout
             .pane_ids()

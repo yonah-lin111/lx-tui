@@ -183,3 +183,51 @@ fn tabs_render_icon_prefix() {
     );
     assert!(row.contains("tab 1"), "tab row must contain label: {row:?}");
 }
+
+#[test]
+fn tab_with_pending_ask_is_two_columns_wider_and_shows_marker() {
+    use crate::app::state::{AskState, RequestKey};
+
+    let mut state = state_with_tabs(2);
+    // 固定在第一个标签上挂 ask，才能同时验证「后续标签右移」。
+    update::switch_tab(&mut state, 0);
+    let view = view_for(&state);
+    let before = layout(&view, state.active_workspace(), 0);
+    let widths_before = before.tab_widths.clone();
+    let second_x_before = before.tabs[1].1.x;
+
+    let id = state.active_tab().layout.focus();
+    let ask = AskState::new(
+        RequestKey {
+            pane: id,
+            session: "s".into(),
+            generation: 1,
+        },
+        "call".into(),
+        Vec::new(),
+    );
+    state
+        .pane_mut_anywhere(id)
+        .expect("focused pane exists")
+        .lx
+        .ask = Some(ask);
+
+    let after = layout(&view, state.active_workspace(), 0);
+    assert_eq!(
+        after.tab_widths[0],
+        widths_before[0] + 2,
+        "挂起 ask 的标签必须加宽两列"
+    );
+    assert_eq!(
+        after.tabs[1].1.x,
+        second_x_before + 2,
+        "后续标签起点必须同步右移"
+    );
+
+    let buffer = render_buffer(&state);
+    let rect = after.tabs[0].1;
+    let row: String = (rect.x..rect.right())
+        .map(|x| buffer[(x, rect.y)].symbol().to_string())
+        .collect();
+    assert!(row.contains('?'), "标签标题必须显示 `?` 标记：{row:?}");
+}

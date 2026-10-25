@@ -453,3 +453,23 @@ fn settle_merges_argument_and_result_summaries() {
     assert_eq!(summary.path.as_deref(), Some("src"), "path 来自参数");
     assert_eq!(summary.matches, Some(3), "命中数来自结果侧");
 }
+
+#[test]
+fn settle_drops_an_empty_summary_like_the_reload_path() {
+    use crate::app::state::{ToolStatus, ToolSummary};
+
+    // `ask` 等工具的参数派生摘要与结果摘要都为空：重载路径 `tool_view_of` 用
+    // `is_empty()` 过滤成 `None`，实时结算必须同口径，否则会画出一个孤立空 `└─`。
+    let mut chat = streaming_chat();
+    chat.start_tool_input("c1", "ask", 0);
+    chat.end_tool_input("c1", r#"{"questions":[]}"#);
+    chat.mark_tool_running("c1");
+    assert!(chat.settle_tool_result(
+        "c1",
+        ToolStatus::Completed,
+        Some(ToolSummary::default()),
+        None,
+        None
+    ));
+    assert!(tool(&chat, "c1").summary.is_none(), "空摘要不得挂到步骤上");
+}

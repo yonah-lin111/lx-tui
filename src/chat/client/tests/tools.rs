@@ -379,6 +379,9 @@ async fn tools_rejected_with_400_reports_capability_code_once() {
 /// 请求体确实带 tools 与 lx 系统提示（真实网络路径回归）。
 #[tokio::test]
 async fn request_body_carries_tools_and_system_prompt() {
+    // 系统提示含网络探测结果（后台线程异步测量）。先把缓存压到确定值，否则请求
+    // 构造与断言两次取 `system_prompt()` 可能落在 unknown/unavailable 两侧而假失败。
+    let _ = crate::platform::network_available();
     let body = concat!(
         "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
         "data: [DONE]\n\n",
@@ -397,9 +400,21 @@ async fn request_body_carries_tools_and_system_prompt() {
     .await;
     let recorded = server.await.expect("server");
     let sent: serde_json::Value = serde_json::from_str(&recorded.body).expect("json body");
-    assert_eq!(
-        sent["messages"][0]["content"],
-        crate::chat::prompt::system_prompt()
+    // 线上形状：首条 system 是提示首段，其余规则合并成一条 user 消息前置。
+    let messages = sent["messages"].as_array().expect("messages");
+    let parts =
+        crate::chat::transport::SystemPromptParts::split(&crate::chat::prompt::system_prompt());
+    assert_eq!(messages[0]["role"], "system");
+    assert_eq!(messages[0]["content"], serde_json::json!(parts.head));
+    assert!(!parts.head.is_empty(), "必须发出系统提示");
+    // 其余规则合并成**一条**前置 user 消息（对齐 opencode 的 joinText 扁平化）。
+    let tail = &messages[1];
+    assert_eq!(tail["role"], "user");
+    let tail_text = tail["content"].as_str().expect("tail text");
+    assert!(tail_text.starts_with("<system-instructions>"));
+    assert!(
+        tail_text.contains(parts.tail.as_str()).eq(&false),
+        "tail 已被转义包裹"
     );
     let names: Vec<&str> = sent["tools"]
         .as_array()

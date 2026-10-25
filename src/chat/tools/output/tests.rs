@@ -722,3 +722,66 @@ fn chunk_ids_are_six_hex_digits_and_unique() {
     }
     assert!(seen.len() > 1, "不同调用不得恒定同一 ID");
 }
+
+/// `ask` 的模型文本与 codex 同构：`{"answers":{"<id>":{"answers":[...]}}}`。
+#[test]
+fn ask_text_is_the_answers_object() {
+    let result = ToolExecutionResult::Ask {
+        questions: vec![
+            lx_ask_answered(
+                "layout",
+                "布局",
+                "侧栏用哪种布局？",
+                &["双栏", "自己画一版"],
+            ),
+            lx_ask_answered("color", "配色", "用哪套配色？", &["暖色"]),
+        ],
+    };
+    let text = format_for_model(&result);
+    let value: serde_json::Value = serde_json::from_str(&text).expect("ask 文本必须是 JSON");
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "answers": {
+                "layout": {"answers": ["双栏", "自己画一版"]},
+                "color": {"answers": ["暖色"]},
+            }
+        })
+    );
+    // 摘要不新增字段：ask 的展示数据走类型化详情。
+    assert_eq!(to_summary(&result), Default::default());
+}
+
+/// `ask` 落库 JSON 自包含（含题面与答案），且绝不携带 preview。
+#[test]
+fn ask_result_json_is_self_contained_without_preview() {
+    let result = ToolExecutionResult::Ask {
+        questions: vec![lx_ask_answered("q", "问", "选哪个？", &["A"])],
+    };
+    let json = to_result_json(&result).expect("json");
+    assert!(
+        !json.contains("preview"),
+        "落库 JSON 不得带 preview：{json}"
+    );
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    assert_eq!(value["tool"], "ask");
+    assert_eq!(value["questions"][0]["id"], "q");
+    assert_eq!(value["questions"][0]["header"], "问");
+    assert_eq!(value["questions"][0]["question"], "选哪个？");
+    assert_eq!(value["questions"][0]["answers"], serde_json::json!(["A"]));
+}
+
+/// 构造一条作答记录（测试辅助）。
+fn lx_ask_answered(
+    id: &str,
+    header: &str,
+    question: &str,
+    answers: &[&str],
+) -> crate::chat::tools::AnsweredQuestion {
+    crate::chat::tools::AnsweredQuestion {
+        id: id.to_string(),
+        header: header.to_string(),
+        question: question.to_string(),
+        answers: answers.iter().map(|answer| answer.to_string()).collect(),
+    }
+}

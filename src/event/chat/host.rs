@@ -13,6 +13,7 @@ use crate::chat::agent_loop::{
 };
 use crate::chat::client::StreamOutcome;
 use crate::chat::events::ChatRequest;
+use crate::chat::tools::ask::{AskAnswers, AskQuestion};
 use crate::db::chat::ToolCallTicket;
 use crate::event::AppEvent;
 
@@ -47,6 +48,15 @@ pub enum AgentHostEvent {
         outcome: ToolOutcome,
         reply: oneshot::Sender<Result<(), HostError>>,
     },
+    /// 向用户提问并等待作答；回执丢失等价于取消。
+    ///
+    /// 与 `BeginTool`/`FinishTool` 不同，这里不改 DB：ask 的行状态已由前后两个门槛维护。
+    AskUser {
+        key: RequestKey,
+        call_id: String,
+        questions: Vec<AskQuestion>,
+        reply: oneshot::Sender<Result<AskAnswers, HostError>>,
+    },
     /// 文件 mutation 的 Prepare/Commit：worker 在路径锁内等待持久化回执。
     Mutation(super::file_snapshots::MutationHostEvent),
     /// 下一次采样前的本地命令结果增量。
@@ -78,6 +88,16 @@ impl AgentHost for EventHost {
                 key: self.key.clone(),
                 ticket,
                 outcome,
+                reply,
+            },
+            AgentHostRequest::AskUser {
+                call_id,
+                questions,
+                reply,
+            } => AgentHostEvent::AskUser {
+                key: self.key.clone(),
+                call_id,
+                questions,
                 reply,
             },
             // mutation 请求不经 `EventHost`（由文件 recorder 直接投递）。

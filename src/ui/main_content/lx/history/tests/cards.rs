@@ -222,7 +222,7 @@ fn every_block_is_separated_by_a_blank_row() {
     }
 }
 
-/// 圆点给文字（正文 / 思考），方块给工具调用。
+/// 圆点给文字（正文 / 思考 / 通知），方块只给工具调用；终态（含取消）一律实心。
 #[test]
 fn step_marks_use_dots_for_text_and_squares_for_tools() {
     use crate::ui::text;
@@ -232,10 +232,11 @@ fn step_marks_use_dots_for_text_and_squares_for_tools() {
             text::agent::STEP_MARK_DOT_FILLED,
             "{kind:?} 完成态必须是圆点"
         );
+        // 取消不再是空心：空心会被读成「还在跑」，终态一律实心。
         assert_eq!(
             super::StepMark::Cancelled.glyph(kind, 0, false),
-            text::agent::STEP_MARK_DOT_HOLLOW,
-            "{kind:?} 取消态必须是空心圆点"
+            text::agent::STEP_MARK_DOT_FILLED,
+            "{kind:?} 取消态也是实心圆点"
         );
     }
     assert_eq!(
@@ -245,8 +246,8 @@ fn step_marks_use_dots_for_text_and_squares_for_tools() {
     );
     assert_eq!(
         super::StepMark::Cancelled.glyph(super::StepKind::Tool, 0, false),
-        text::agent::STEP_MARK_HOLLOW,
-        "工具调用取消态必须是空心方块"
+        text::agent::STEP_MARK_FILLED,
+        "工具调用取消态也是实心方块"
     );
 }
 

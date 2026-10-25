@@ -129,6 +129,24 @@ fn trace(deltas: &[ChatDelta]) -> Vec<String> {
 
 // ---------------------------------------------------------------- 请求编码
 
+/// 前置系统规则段的条数（`user` content 以 `<system-instructions>` 开头）。
+fn system_rule_prefix(body: &Value) -> usize {
+    body["contents"]
+        .as_array()
+        .map(|contents| {
+            contents
+                .iter()
+                .take_while(|content| {
+                    content["role"] == "user"
+                        && content["parts"][0]["text"]
+                            .as_str()
+                            .is_some_and(|text| text.starts_with("<system-instructions>"))
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 #[test]
 fn url_places_key_in_query_and_body_uses_contents() {
     let built =
@@ -154,23 +172,34 @@ fn url_places_key_in_query_and_body_uses_contents() {
         .get("contents")
         .and_then(Value::as_array)
         .expect("contents");
-    assert_eq!(contents.len(), 3);
+    // 跳过前置的系统规则段，真实历史仍是 3 条。
+    let base = system_rule_prefix(&body);
+    assert_eq!(contents.len() - base, 3);
     // assistant 历史 role 映射为 model。
-    assert_eq!(contents[0]["role"], "user");
-    assert_eq!(contents[1]["role"], "model");
-    assert_eq!(contents[2]["role"], "user");
+    assert_eq!(contents[base]["role"], "user");
+    assert_eq!(contents[base + 1]["role"], "model");
+    assert_eq!(contents[base + 2]["role"], "user");
     // Key 不进 body。
     assert!(!built.body.contains("g-key"));
 }
 
-/// 系统指令走 `systemInstruction.parts[0].text`。
+/// 系统指令：`systemInstruction` 只有首段，其余段作为前置 user content。
 #[test]
 fn system_instruction_carries_lx_prompt() {
     let body = body_of(&request());
-    assert_eq!(
-        body["systemInstruction"]["parts"][0]["text"],
-        crate::chat::prompt::system_prompt()
-    );
+    let split =
+        crate::chat::transport::SystemPromptParts::split(&crate::chat::prompt::system_prompt());
+    let parts = body["systemInstruction"]["parts"]
+        .as_array()
+        .expect("parts");
+    assert_eq!(parts.len(), 1, "只发首段，避免被代理拼回后整条替换");
+    assert_eq!(parts[0]["text"], json!(split.head));
+
+    // 其余规则合并成一条前置 user content。
+    assert_eq!(system_rule_prefix(&body), 1);
+    let contents = body["contents"].as_array().expect("contents");
+    let tail = contents[0]["parts"][0]["text"].as_str().expect("rule text");
+    assert!(tail.starts_with("<system-instructions>"));
 }
 
 /// `tools[0].functionDeclarations` 与 `available_tools()` 一一对应。
@@ -194,21 +223,26 @@ fn tools_use_function_declarations() {
 fn tool_history_encodes_function_call_and_response_parts() {
     let body = body_of(&tool_request());
     let contents = body["contents"].as_array().expect("contents");
-    assert_eq!(contents.len(), 5, "user → model → user → model → user");
-    assert_eq!(contents[0]["parts"][0]["text"], "读 a.rs");
+    let base = system_rule_prefix(&body);
+    assert_eq!(
+        contents.len() - base,
+        5,
+        "user → model → user → model → user"
+    );
+    assert_eq!(contents[base]["parts"][0]["text"], "读 a.rs");
     // model functionCall：args 是对象，不写入合成 call ID。
-    let call = &contents[1]["parts"][0]["functionCall"];
-    assert_eq!(contents[1]["role"], "model");
+    let call = &contents[base + 1]["parts"][0]["functionCall"];
+    assert_eq!(contents[base + 1]["role"], "model");
     assert_eq!(call["name"], "read");
     assert_eq!(call["args"], json!({"path": "a.rs"}));
     assert!(call.get("id").is_none(), "不得把合成 ID 写进供应商字段");
     // user functionResponse：name 由配对调用解析，response 包装结构化结果。
-    assert_eq!(contents[2]["role"], "user");
-    let response = &contents[2]["parts"][0]["functionResponse"];
+    assert_eq!(contents[base + 2]["role"], "user");
+    let response = &contents[base + 2]["parts"][0]["functionResponse"];
     assert_eq!(response["name"], "read");
     assert_eq!(response["response"]["result"], "1: fn main() {}");
     // 失败结果用 error 键标注，不与成功结果混淆。
-    let failed = &contents[4]["parts"][0]["functionResponse"];
+    let failed = &contents[base + 4]["parts"][0]["functionResponse"];
     assert_eq!(failed["name"], "write");
     assert_eq!(failed["response"]["error"], "permission_denied");
 }
@@ -231,15 +265,16 @@ fn synthesized_call_ids_never_reach_the_wire() {
     };
     let body = body_of(&req);
     let contents = body["contents"].as_array().expect("contents");
+    let base = system_rule_prefix(&body);
     // functionCall：只有 name / args 两个键。
-    let call = contents[1]["parts"][0]["functionCall"]
+    let call = contents[base + 1]["parts"][0]["functionCall"]
         .as_object()
         .expect("functionCall object");
     let mut call_keys: Vec<&str> = call.keys().map(String::as_str).collect();
     call_keys.sort_unstable();
     assert_eq!(call_keys, vec!["args", "name"], "functionCall 不得带 id");
     // functionResponse：只有 name / response 两个键。
-    for index in [2_usize, 4] {
+    for index in [base + 2, base + 4] {
         let response = contents[index]["parts"][0]["functionResponse"]
             .as_object()
             .expect("functionResponse object");

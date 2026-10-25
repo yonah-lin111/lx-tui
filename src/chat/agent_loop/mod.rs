@@ -30,6 +30,7 @@ use crate::chat::events::{
     ChatDelta, ChatRequest, ModelItem, ModelStepStop, PartKind, StopReason,
     TOOL_ARGUMENTS_INVALID_CODE,
 };
+use crate::chat::tools::ask::{AskAnswers, AskQuestion};
 use crate::chat::tools::{self, ToolContext, ToolErrorCode, ToolExecutionResult};
 use crate::chat::transport::tools::{TOOL_INPUT_TRUNCATED_CODE, TOOL_PROTOCOL_ERROR_CODE};
 use crate::db::chat::{ToolCallTicket, Usage};
@@ -116,6 +117,15 @@ pub enum AgentHostRequest {
         outcome: ToolOutcome,
         reply: oneshot::Sender<Result<(), HostError>>,
     },
+    /// 把提问交给 UI 并等待作答；回执携带用户答案（`id -> 答案数组`）。
+    ///
+    /// 与 `BeginTool` 不同，这里没有 DB 写入：ask 的 pending/running 行已由
+    /// `BeginTool` 提交，本请求只负责阻塞等待 UI 的答案或取消。
+    AskUser {
+        call_id: String,
+        questions: Vec<AskQuestion>,
+        reply: oneshot::Sender<Result<AskAnswers, HostError>>,
+    },
     /// 下一次采样前取已落库的本地命令结果（按提交序的连续终态前缀）。
     UserShellUpdates { reply: oneshot::Sender<Vec<String>> },
 }
@@ -161,6 +171,31 @@ pub trait AgentHost: Send {
             self.send(AgentHostRequest::FinishTool {
                 ticket,
                 outcome,
+                reply,
+            });
+            match receiver.await {
+                Ok(result) => result,
+                Err(_) => Err(HostError::Cancelled),
+            }
+        }
+    }
+
+    /// 把提问交给 UI 并阻塞等待作答；回执丢失（窗格关闭、会话切换）等价于取消。
+    ///
+    /// 与 `begin_tool` 一样，通道细节收敛在这里：loop 侧看不到 oneshot。
+    fn ask_user(
+        &mut self,
+        call_id: String,
+        questions: Vec<AskQuestion>,
+    ) -> impl Future<Output = Result<AskAnswers, HostError>> + Send
+    where
+        Self: Sized,
+    {
+        async move {
+            let (reply, receiver) = oneshot::channel();
+            self.send(AgentHostRequest::AskUser {
+                call_id,
+                questions,
                 reply,
             });
             match receiver.await {
@@ -519,9 +554,43 @@ where
                 return TurnSummary::interrupted(usage);
             }
             // 门槛二：running 已推进（事件层在 ack 内完成），此后才允许文件 IO。
-            let result = executor
-                .execute_tracked(context.cwd(), &call, &ticket)
-                .await;
+            //
+            // `ask` 不经过文件执行器：它把提问交给 UI 并**阻塞**等待作答，答案即工具结果。
+            // 参数非法时整次拒绝、不打扰用户，按普通工具失败回给模型（轮次继续）。
+            let result = if call.name == crate::chat::tools::ask::ASK_TOOL {
+                match crate::chat::tools::ask::parse_arguments(&call.arguments_json) {
+                    Err(failure) => failure.into_result(Vec::new()),
+                    Ok(questions) => {
+                        match host.ask_user(call.call_id.clone(), questions.clone()).await {
+                            Ok(answers) => {
+                                crate::chat::tools::ask::answered_result(&questions, &answers)
+                            }
+                            Err(HostError::Cancelled) => {
+                                // 本轮被取消：只结算这一行，未开始的调用按 cancelled
+                                // 处理，不再采样。
+                                let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
+                                cancel_unstarted(&mut host, remaining).await;
+                                return TurnSummary::interrupted(usage);
+                            }
+                            Err(HostError::Failed { code }) => {
+                                let failure = crate::chat::tools::ToolFailure::new(
+                                    ToolErrorCode::Io,
+                                    code.clone(),
+                                )
+                                .into_result(Vec::new());
+                                let _ = host
+                                    .finish_tool(ticket, ToolOutcome::Executed(failure))
+                                    .await;
+                                return TurnSummary::failed(code, usage);
+                            }
+                        }
+                    }
+                }
+            } else {
+                executor
+                    .execute_tracked(context.cwd(), &call, &ticket)
+                    .await
+            };
             let content = tools::format_for_model(&result);
             let is_error = result.is_failure();
             // 结果必须先落库再进入上下文；落库失败即停止本轮，**不重试写入**。

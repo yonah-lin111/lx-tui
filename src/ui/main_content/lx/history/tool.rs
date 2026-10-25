@@ -41,6 +41,7 @@ use super::{StepKind, StepMark, truncate_with_ellipsis, visible_row};
 
 pub(super) use file_summary::{DETAIL_MAX_ROWS, DETAIL_PREVIEW_ROWS};
 
+mod ask;
 mod command;
 mod file_diff;
 mod file_summary;
@@ -108,6 +109,7 @@ pub(super) fn rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
             command::rows(call, width, folds)
         }
         Some(crate::app::state::ToolDetailView::Plan(_)) => plan::rows(call, width, folds.body),
+        Some(crate::app::state::ToolDetailView::Ask(_)) => ask::rows(call, width, folds.body),
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::rows(&[call], width, &[folds.body])
         }
@@ -203,6 +205,19 @@ pub(super) fn draw_animated(
             );
             return;
         }
+        Some(crate::app::state::ToolDetailView::Ask(_)) => {
+            ask::draw(
+                grid,
+                rect,
+                scroll,
+                row_index,
+                call,
+                loading_frame,
+                animating,
+                folds.body,
+            );
+            return;
+        }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::draw(
                 grid,
@@ -273,6 +288,8 @@ pub(super) fn merge_group(steps: &[AssistantStepView], start: usize) -> Vec<&Too
 /// 输出区的文字档位：折叠 = dim；展开 = 终端默认前景。
 ///
 /// 只有**输出正文**随展开态变化；参数/路径恒为浅黄（[`style::chat_tool_param`]）。
+///
+/// 折叠内容不再随鼠标悬停提亮（只有思考块保留悬停态），因此这里只看展开态。
 pub(super) fn output_style(expanded: bool) -> Style {
     if expanded {
         style::text()
@@ -387,6 +404,10 @@ pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
             command::params_expandable(call, width)
         }
         Some(crate::app::state::ToolDetailView::Plan(_)) => false,
+        // `ask` 折叠态只有 `header · answers`；题干最多 500 字，展开才看得全。
+        Some(crate::app::state::ToolDetailView::Ask(_)) => {
+            ask::rows(call, width, true) > ask::rows(call, width, false)
+        }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::has_more_content(call, width)
         }
@@ -468,6 +489,20 @@ pub(super) fn card_regions(
             }]
         }
         Some(crate::app::state::ToolDetailView::Plan(_)) => Vec::new(),
+        Some(crate::app::state::ToolDetailView::Ask(_)) => {
+            // 整卡一个 Body 点击面：展开前后行数不变就不登记（点了也不会有变化）。
+            if !has_expandable_content(call, width) {
+                return Vec::new();
+            }
+            vec![CardRegion {
+                section: CardSection::Body,
+                card: RowSpan {
+                    offset: 0,
+                    rows: step_rows,
+                },
+                clickable: true,
+            }]
+        }
         Some(crate::app::state::ToolDetailView::File(_)) | None => {
             // 展开前后行数不变就不登记：留下一个点了没反应的点击面只会误导。
             if !has_expandable_content(call, width) {
@@ -620,6 +655,8 @@ fn verb(call: &ToolCallView, running: bool) -> Segment {
 /// 失败时整行红（方块 + 动词），中断整行黄——对应「左侧卡片和工具 title 变红」。
 fn header(call: &ToolCallView, width: u16, loading_frame: usize, animating: bool) -> Vec<Segment> {
     let limit = usize::from(width);
+    // 终态整行同色（方块 + 动词）：失败红、中断黄。取消不是错误态，保持工具色
+    // （方块与 title 统一；详情行的 `cancelled` 已经说明它没有产出结果）。
     let tint = match call.status {
         ToolStatus::Failed => Some(style::agent_fail()),
         ToolStatus::Interrupted => Some(style::agent_warn()),
@@ -703,6 +740,8 @@ pub(super) fn header_with_mark(
     mark: StepMark,
 ) -> Vec<Segment> {
     let limit = usize::from(width);
+    // 终态整行同色（方块 + 动词）：失败红、中断黄。取消不是错误态，保持工具色
+    // （方块与 title 统一；详情行的 `cancelled` 已经说明它没有产出结果）。
     let tint = match call.status {
         ToolStatus::Failed => Some(style::agent_fail()),
         ToolStatus::Interrupted => Some(style::agent_warn()),

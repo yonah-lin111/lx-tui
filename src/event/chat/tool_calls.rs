@@ -315,6 +315,9 @@ fn detail_of(
         ToolExecutionResult::Plan(snapshot) => Some(crate::app::state::ToolDetailView::Plan(
             crate::app::state::PlanSnapshotView::from_snapshot(snapshot),
         )),
+        ToolExecutionResult::Ask { questions } => Some(crate::app::state::ToolDetailView::Ask(
+            crate::app::state::AskDetailView::from_answered(questions),
+        )),
         ToolExecutionResult::Edit { .. }
         | ToolExecutionResult::Write { .. }
         | ToolExecutionResult::Failed { .. } => {

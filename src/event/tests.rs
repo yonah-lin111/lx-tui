@@ -5003,3 +5003,203 @@ fn lx_paste_cancels_rewind_arming() {
     assert!(target.lx.rewind.armed_at.is_none(), "粘贴必须清除撤销待命");
     assert_eq!(target.lx.input, "pasted");
 }
+
+// ===== ask 面板接线：点击吞掉、粘贴只进手写缓冲 =====
+
+/// 流中窗格 + 一道两选项的挂起提问（真实 request 路径会跑串行锁，这里直接构造，
+/// 但 `request` 必须是 busy，否则面板会被 sweep 当成孤儿清掉）。
+fn busy_ask_state() -> (AppState, PaneId) {
+    use crate::app::state::{AskState, RequestKey, RequestState};
+    use crate::chat::tools::ask::{AskOption, AskQuestion};
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let key = RequestKey {
+        pane,
+        session: "sess-ask".into(),
+        generation: 1,
+    };
+    let question = AskQuestion {
+        id: "layout".into(),
+        header: "布局".into(),
+        question: "用哪种布局？".into(),
+        multi_select: false,
+        options: vec![
+            AskOption {
+                label: "two columns".into(),
+                description: "left list".into(),
+                preview: Some("┌──┐\n└──┘".into()),
+            },
+            AskOption {
+                label: "stacked".into(),
+                description: "top down".into(),
+                preview: None,
+            },
+        ],
+    };
+    let target = state.pane_mut_anywhere(pane).expect("focused pane");
+    target.lx.input = "draft".into();
+    target.lx.chat.session_id = Some(key.session.clone());
+    target.lx.chat.request = RequestState::Streaming {
+        key: key.clone(),
+        assistant_id: "a1".into(),
+    };
+    target.lx.ask = Some(AskState::new(key, "call".into(), vec![question]));
+    (state, pane)
+}
+
+/// 面板内第一处命中 `AskHit::Option(0)` 的坐标（几何由渲染层给出，事件层不重算）。
+fn ask_option_point(state: &AppState, pane: PaneId, geo: &Geometry) -> (u16, u16) {
+    let rect = geo
+        .rects
+        .iter()
+        .find(|(id, _)| *id == pane)
+        .map(|(_, rect)| *rect)
+        .expect("pane rect");
+    let inner = layout::pane_inner_rect(rect);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    let area = ui::main_content::lx::ask_rect(inner, lx).expect("ask rect");
+    for row in area.y..area.bottom() {
+        for column in area.x..area.right() {
+            if ui::main_content::lx::ask_hit(inner, lx, column, row)
+                == Some(crate::app::state::AskHit::Option(0))
+            {
+                return (column, row);
+            }
+        }
+    }
+    panic!("找不到选项行");
+}
+
+#[test]
+fn ask_click_selects_option_and_does_not_reach_history() {
+    let config = Config::default();
+    let (mut state, pane) = busy_ask_state();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let (column, row) = ask_option_point(&state, pane, &geo);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), column, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    let ask = state
+        .pane_anywhere(pane)
+        .and_then(|pane| pane.lx.ask.as_ref())
+        .expect("面板仍在（busy 不会被 sweep）");
+    assert_eq!(ask.selected[0], vec![0], "单击选项即选中（单选独占）");
+    assert!(!ask.editing, "点选项不提交、不进入编辑");
+    assert!(dirty, "点击必须重绘");
+    assert!(
+        state.lx_card_press.is_none(),
+        "面板内点击不得登记历史卡片点击"
+    );
+}
+
+#[test]
+fn task_page_swallows_ask_hits_so_the_list_stays_clickable() {
+    // 后台任务页与 ask 面板共用输入框矩形：页打开时面板不可见，点击必须落在
+    // 任务列表上，绝不能命中隐藏面板改一个看不见的答案。
+    let config = Config::default();
+    let (mut state, pane) = busy_ask_state();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let (column, row) = ask_option_point(&state, pane, &geo);
+    let inner = layout::pane_inner_rect(
+        geo.rects
+            .iter()
+            .find(|(id, _)| *id == pane)
+            .map(|(_, rect)| *rect)
+            .expect("pane rect"),
+    );
+    state.pane_mut_anywhere(pane).expect("pane").lx.task = Some(crate::app::state::TaskPage {
+        tab: crate::app::state::TaskTab::Processes,
+        ..Default::default()
+    });
+
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    // 任务页接管了输入框矩形，ask 几何已经不在这里：点击绝不能落到隐藏面板。
+    assert!(
+        ui::main_content::lx::ask_hit(inner, lx, column, row).is_none(),
+        "任务页打开时 ask 几何必须失效"
+    );
+
+    let before = state
+        .pane_anywhere(pane)
+        .and_then(|pane| pane.lx.ask.as_ref())
+        .expect("ask")
+        .selected
+        .clone();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), column, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    let after = state
+        .pane_anywhere(pane)
+        .and_then(|pane| pane.lx.ask.as_ref())
+        .expect("ask")
+        .selected
+        .clone();
+    assert_eq!(before, after, "隐藏的面板不得被点击改状态");
+}
+
+#[test]
+fn ask_paste_only_enters_the_custom_buffer() {
+    let config = Config::default();
+    let (mut state, pane) = busy_ask_state();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+
+    // 列表态：整段吞掉，草稿一个字节都不动。
+    let mut dirty = false;
+    handle_terminal_event(
+        TerminalEvent::Paste("ignored".into()),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(!dirty);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(lx.input, "draft");
+    let ask = lx.ask.as_ref().expect("ask");
+    assert_eq!(ask.custom[0].text(), "");
+
+    // 编辑态：写入手写缓冲，草稿仍不变。
+    state
+        .pane_mut_anywhere(pane)
+        .and_then(|pane| pane.lx.ask.as_mut())
+        .expect("ask")
+        .begin_edit();
+    let mut dirty = false;
+    handle_terminal_event(
+        TerminalEvent::Paste("own words".into()),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(dirty);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(lx.input, "draft", "草稿不变量");
+    assert_eq!(
+        lx.ask.as_ref().expect("ask").custom[0].text(),
+        "own words",
+        "编辑态粘贴进入手写缓冲"
+    );
+}

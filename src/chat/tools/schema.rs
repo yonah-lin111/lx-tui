@@ -1,13 +1,19 @@
-//! 七工具的模型可见规格：稳定英文名、英文描述与严格 JSON Schema。
+//! 八工具的模型可见规格：稳定英文名、英文描述与严格 JSON Schema。
 //!
 //! Schema 只声明工具真正接受的字段（`additionalProperties: false`），`read` 的
 //! `offset` 明确写为 1-based；运行时仍会重新校验，不信任模型遵守 schema。
 //!
-//! 三个进程/计划工具的字段白名单、默认值与上限与 [`super::process`] /
-//! [`super::plan`] 的常量**同一来源**：schema 里的数字由常量生成，不手写第二份。
+//! 三个进程/计划工具与 `ask` 的字段白名单、默认值与上限与 [`super::process`] /
+//! [`super::plan`] / [`super::ask`] 的常量**同一来源**：schema 里的数字由常量生成，
+//! 不手写第二份。
 
 use serde_json::{Value, json};
 
+use super::ask::{
+    MAX_ASK_DESC_CHARS, MAX_ASK_HEADER_CHARS, MAX_ASK_ID_CHARS, MAX_ASK_LABEL_CHARS,
+    MAX_ASK_OPTIONS, MAX_ASK_PREVIEW_BYTES, MAX_ASK_PREVIEW_LINE_CHARS, MAX_ASK_PREVIEW_LINES,
+    MAX_ASK_QUESTION_CHARS, MAX_ASK_QUESTIONS,
+};
 use super::types::ToolSpec;
 use super::{MAX_READ_LINES, MAX_SEARCH_RESULTS};
 use crate::chat::plan::{MAX_EXPLANATION_CHARS, MAX_PLAN_STEPS, MAX_STEP_CHARS};
@@ -16,7 +22,7 @@ use crate::chat::process::{
 };
 
 /// 固定工具表：顺序即给模型的呈现顺序。
-static TOOLS: [ToolSpec; 7] = [
+static TOOLS: [ToolSpec; 8] = [
     ToolSpec::new(
         "read",
         "Read a UTF-8 text file, or list a directory. \
@@ -44,7 +50,7 @@ static TOOLS: [ToolSpec; 7] = [
     ),
     ToolSpec::new(
         "edit",
-        "Apply a Codex-style patch to one or more files. The patch text must start with \
+        "Apply a structured patch to one or more files. The patch text must start with \
          `*** Begin Patch` and end with `*** End Patch` and may contain `*** Add File:`, \
          `*** Update File:` (optionally followed by `*** Move to:`), `@@` context blocks \
          with `-`/`+`/space prefixed lines, `*** Delete File:` hunks and a trailing \
@@ -104,9 +110,19 @@ static TOOLS: [ToolSpec; 7] = [
          normalized plan snapshot; the plan is shown to the user as a checklist.",
         update_plan_parameters,
     ),
+    ToolSpec::new(
+        "ask",
+        "Ask the user 1-3 short questions and block the turn until they answer. Use it only \
+         when a user preference really decides the outcome and the workspace cannot answer \
+         it. Each question has 0-4 options (recommended first) plus automatic free-form \
+         input; `multi_select` allows several choices. Optional `preview` is a plain-text \
+         monospace sketch rendered verbatim (useful for layout/design choices). The result \
+         is `{\"answers\":{\"<id>\":{\"answers\":[...]}}}`. Do not ask permission questions.",
+        ask_parameters,
+    ),
 ];
 
-/// 全部可用工具规格（固定七个）。
+/// 全部可用工具规格（固定八个）。
 pub fn available_tools() -> &'static [ToolSpec] {
     &TOOLS
 }
@@ -336,6 +352,76 @@ fn update_plan_parameters() -> Value {
             }
         },
         "required": ["plan"],
+        "additionalProperties": false
+    })
+}
+
+/// `ask` 参数 schema。
+fn ask_parameters() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_ASK_QUESTIONS,
+                "description": "Questions to show the user, in order. Prefer 1.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": format!(
+                                "Stable snake_case id used to map answers (max {MAX_ASK_ID_CHARS} characters, lowercase letters/digits/underscores)."
+                            )
+                        },
+                        "header": {
+                            "type": "string",
+                            "description": format!("Short label shown in the panel ({MAX_ASK_HEADER_CHARS} chars or fewer).")
+                        },
+                        "question": {
+                            "type": "string",
+                            "description": format!("One self-contained question sentence (max {MAX_ASK_QUESTION_CHARS} characters).")
+                        },
+                        "multi_select": {
+                            "type": "boolean",
+                            "description": "Allow selecting more than one option (default false)."
+                        },
+                        "options": {
+                            "type": "array",
+                            "maxItems": MAX_ASK_OPTIONS,
+                            "description": format!(
+                                "0-{MAX_ASK_OPTIONS} choices. Put the recommended one first. Do not add an 'Other' option: the client adds free-form input automatically."
+                            ),
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "label": {
+                                        "type": "string",
+                                        "description": format!("User-facing label (1-5 words, max {MAX_ASK_LABEL_CHARS} characters).")
+                                    },
+                                    "description": {
+                                        "type": "string",
+                                        "description": format!("One short sentence about the impact/tradeoff (max {MAX_ASK_DESC_CHARS} characters).")
+                                    },
+                                    "preview": {
+                                        "type": "string",
+                                        "description": format!(
+                                            "Optional plain-text monospace sketch (layout/diagram). Rendered verbatim; max {MAX_ASK_PREVIEW_BYTES} bytes, {MAX_ASK_PREVIEW_LINES} lines, {MAX_ASK_PREVIEW_LINE_CHARS} chars per line."
+                                        )
+                                    }
+                                },
+                                "required": ["label", "description"],
+                                "additionalProperties": false
+                            }
+                        }
+                    },
+                    "required": ["id", "header", "question"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["questions"],
         "additionalProperties": false
     })
 }

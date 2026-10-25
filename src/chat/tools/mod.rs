@@ -16,6 +16,7 @@
 //! - 不触碰 Git 索引/分支/暂存区/提交。
 
 mod args;
+pub mod ask;
 mod diff;
 mod edit;
 mod lock;
@@ -38,6 +39,10 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
+pub use ask::{
+    ASK_TOOL, AnsweredQuestion, AskAnswers, AskOption, AskQuestion, answered_result,
+    parse_arguments as parse_ask_arguments,
+};
 pub use diff::{
     DiffCounts, DiffHunk, DiffLine, DiffLineKind, DiffUnavailableReason, FileDiff, MAX_DIFF_LINES,
     diff_lines,
@@ -147,7 +152,7 @@ pub fn execute_with(
         "edit" => edit::run_with(ctx, arguments_json, recorder),
         "write" => write::run_with(ctx, arguments_json, recorder),
         // 需要长期进程句柄/会话状态：本入口不执行，返回明确的错误而不是静默成功。
-        "exec_command" | "write_stdin" | "update_plan" => ToolFailure::new(
+        "exec_command" | "write_stdin" | "update_plan" | ASK_TOOL => ToolFailure::new(
             ToolErrorCode::UnknownTool,
             format!("tool '{name}' must be executed by the agent loop, not the file executor"),
         )

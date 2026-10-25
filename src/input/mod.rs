@@ -156,6 +156,10 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
         KeyCode::Down => Some(LxInput::Down),
         KeyCode::Home => Some(LxInput::Home),
         KeyCode::End => Some(LxInput::End),
+        // Shift+Tab 与 `←` 同为「上一步」；lx 其它形态没有该语义。
+        // 终端可能报 `Tab+SHIFT`（kitty 协议）或 `BackTab`，两种都要接。
+        KeyCode::Tab if shift => Some(LxInput::PrevStep),
+        KeyCode::BackTab => Some(LxInput::PrevStep),
         KeyCode::Tab => Some(LxInput::Tab),
         KeyCode::PageUp => Some(LxInput::PageUp),
         KeyCode::PageDown => Some(LxInput::PageDown),

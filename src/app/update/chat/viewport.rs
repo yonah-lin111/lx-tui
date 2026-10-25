@@ -182,6 +182,34 @@ pub fn resolve_task_output_visible(
     changed
 }
 
+/// 每轮把 `ask` 预览区的可见行数落状态（滚动上限钳制用）。
+///
+/// 与 [`resolve_task_output_visible`] 同款：渲染层只读，几何由事件循环在绘制前写入，
+/// 状态里的偏移因此永远落在「真的能滚到」的范围内。
+pub fn resolve_ask_preview_visible(
+    state: &mut AppState,
+    rects: &[(PaneId, ratatui::layout::Rect)],
+) -> bool {
+    let mut changed = false;
+    for (pane, rect) in rects {
+        let inner = crate::layout::pane_inner_rect(*rect);
+        let Some(visible) = state
+            .pane_anywhere(*pane)
+            .filter(|target| target.view == crate::app::state::PaneView::Lx)
+            .and_then(|target| crate::ui::main_content::lx::ask_preview_rows(inner, &target.lx))
+        else {
+            continue;
+        };
+        if let Some(ask) = state
+            .pane_mut_anywhere(*pane)
+            .and_then(|target| target.lx.ask.as_mut())
+        {
+            changed |= ask.resize_preview(visible);
+        }
+    }
+    changed
+}
+
 /// 点击置顶行：跳到该 prompt（顶部对齐该消息起始行），并退出跟随底部。
 /// `target_row` 由 `ui::main_content::lx::sticky_prompt_jump` 按当前几何给出。
 pub fn jump_lx_history_to_prompt(state: &mut AppState, pane: PaneId, target_row: usize) -> bool {

@@ -751,6 +751,22 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(key(KeyCode::Tab), TermMode::empty(), false, None, true),
         Some(Routed::Lx(LxInput::Tab))
     );
+    // Shift+Tab：ask 面板的「上一步」。终端按 kitty 协议可能报 `Tab+SHIFT`
+    // 而不是 `BackTab`，两种都必须映射到同一命令。
+    assert_eq!(
+        super::route(key(KeyCode::BackTab), TermMode::empty(), false, None, true),
+        Some(Routed::Lx(LxInput::PrevStep))
+    );
+    assert_eq!(
+        super::route(
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT),
+            TermMode::empty(),
+            false,
+            None,
+            true
+        ),
+        Some(Routed::Lx(LxInput::PrevStep))
+    );
     assert_eq!(
         super::route(key(KeyCode::Esc), TermMode::empty(), false, None, true),
         Some(Routed::Lx(LxInput::Escape))

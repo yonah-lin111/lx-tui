@@ -483,12 +483,12 @@ fn streaming_input_skips_fallback_parse_for_oversized_arguments() {
 
 #[test]
 fn lead_marker_identifies_the_state_at_any_width() {
-    // 极窄档唯一保留的是行首方块：五个状态的（字形 + 样式）必须两两不同。
+    // 极窄档唯一保留的是行首方块。取消与完成同字形同色（都是实心的工具绿终端态），
+    // 二者的区别由详情行的 `cancelled` 承担；其余状态仍两两不同。
     let cases = [
         ("read", ToolStatus::Running, None),
         ("read", ToolStatus::Completed, None),
         ("read", ToolStatus::Failed, Some("boom")),
-        ("read", ToolStatus::Cancelled, None),
         ("read", ToolStatus::Interrupted, Some("gone")),
     ];
     let mut seen: Vec<(char, Style)> = Vec::new();
@@ -506,6 +506,23 @@ fn lead_marker_identifies_the_state_at_any_width() {
         );
         seen.push((lead_char, lead_style));
     }
+    // 取消：实心 + 工具色（不是白色、不是空心），详情行明确写 cancelled。
+    let cancelled = tool_call("read", ToolStatus::Cancelled, Some(read_summary()), None);
+    let (painted, grid) = render_row(&cancelled, 40);
+    assert_eq!(
+        painted.chars().next(),
+        Some(text::agent::STEP_MARK_FILLED),
+        "取消必须是实心方块：{painted}"
+    );
+    assert_eq!(
+        grid.cell(0, 0).style,
+        style::chat_tool_verb(),
+        "取消方块必须与工具动词同色"
+    );
+    assert!(
+        detail_text(&cancelled, 80).contains(text::LX_CHAT_TOOL_CANCELLED),
+        "取消由详情行区分"
+    );
 }
 
 /// 详情行内容不随 loading 帧变化（只有标题行的方块在呼吸）。

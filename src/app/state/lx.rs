@@ -4,6 +4,7 @@ use crate::app::markdown::{BlockPanel, block_commands, block_insertion, block_tr
 use crate::app::paste::{PasteAction, PasteCandidate, PastePanel};
 use crate::app::prompt::{list, text};
 
+pub mod ask;
 pub mod chat;
 pub mod compact;
 mod history;
@@ -17,13 +18,15 @@ use history::HistoryBrowse;
 pub(crate) use history::HistoryMove;
 pub use shell::LxInputMode;
 
+pub use ask::{AskEditor, AskHit, AskState, AskWheelZone};
 pub use chat::SHELL_SLOT;
 pub use chat::{
-    AssistantStepView, CardSection, CardTarget, ChatMessageView, ChatPartView, CommandView,
-    DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, FrozenModel,
-    InputHintLevel, InteractionAction, LxChat, ModelsSnapshot, PendingShell, PlanSnapshotView,
-    PlanStepView, ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey,
-    RequestState, ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
+    AskAnsweredView, AskDetailView, AssistantStepView, CardSection, CardTarget, ChatMessageView,
+    ChatPartView, CommandView, DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView,
+    FileDiffView, FrozenModel, InputHintLevel, InteractionAction, LxChat, ModelsSnapshot,
+    PendingShell, PlanSnapshotView, PlanStepView, ProcessInteractionView, ProcessStateView,
+    QueuedSubmission, RequestKey, RequestState, ToolCallView, ToolDetailView, ToolStatus,
+    ToolSummary, UserShellView,
 };
 pub use compact::{CompactNoticeView, LxCompact};
 pub use mention::{LxMention, LxMentionView};
@@ -95,6 +98,16 @@ pub struct Lx {
     /// 后台任务页面；`Some` 表示当前窗格正停在该页（整页替换 lx 页的绘制，
     /// 但 `Lx` 其余字段——会话、消息、草稿、滚动——全部原样保留，退出页面即复原）。
     pub task: Option<TaskPage>,
+    /// 当前挂起的 ask 面板；`None` 表示输入框正常显示。
+    ///
+    /// 面板占用输入框的位置与按键路由，但**绝不改** `input`/`cursor`（草稿不变量）。
+    pub ask: Option<AskState>,
+    /// 纯文本缓冲：不识别 shell 前缀、不弹 markdown/提及/斜杠面板。
+    ///
+    /// `ask` 的手写答案复用本结构做编辑；`!` 是答案文本的一部分，不能被吸成
+    /// Shell 模式（否则 `serialized_input()` 会补回 `!`、全角 `！` 变成半角，
+    /// 答案被静默改写，且与 `visual_rows()` 的字节偏移错位）。
+    plain: bool,
     /// 本会话正在运行的后台任务数（底部状态行指标）。
     ///
     /// 由事件循环按运行实例刷新，与页面是否打开无关——用户不打开后台任务页也要
@@ -142,6 +155,18 @@ impl Default for Lx {
 
 impl Lx {
     pub fn new() -> Self {
+        Self::build(false)
+    }
+
+    /// 纯文本缓冲：`!` 只是普通字符，也不触发任何面板（`ask` 手写答案用）。
+    ///
+    /// 只把输入当文本编辑的地方必须用它：Chat 模式会吸收首个 `!` 进 Shell 模式，
+    /// 那是给「执行命令」用的语义，答案里没有命令。
+    pub fn plain() -> Self {
+        Self::build(true)
+    }
+
+    fn build(plain: bool) -> Self {
         Self {
             entry: LxEntry::Native,
             input: String::new(),
@@ -161,6 +186,8 @@ impl Lx {
             compact: LxCompact::default(),
             toast: None,
             task: None,
+            ask: None,
+            plain,
             background_tasks: 0,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -182,6 +209,16 @@ impl Lx {
         self.width = width.max(1);
         self.height = usize::from(height.max(1));
         self.scroll_cursor_into_view();
+    }
+
+    /// 输入框内容宽度（列）；ask 面板同步手写编辑缓冲的软换行宽度用。
+    pub fn input_width(&self) -> u16 {
+        self.width
+    }
+
+    /// 是否有挂起的 `ask` 面板（输入分支、标签页标记与 sweep 共用）。
+    pub fn has_pending_ask(&self) -> bool {
+        self.ask.is_some()
     }
 
     /// 输入框视口首视觉行索引。
@@ -248,7 +285,8 @@ impl Lx {
     ///
     /// 只检查整段输入的**首个非空白字符**；正文中间的符号永远不转换。
     fn adopt_shell_prefix(&mut self) {
-        if self.input_mode == LxInputMode::Shell {
+        // 纯文本缓冲没有 Shell 语义：`!` 原样留在文本里（答案就是这么写的）。
+        if self.plain || self.input_mode == LxInputMode::Shell {
             return;
         }
         let Some(offset) = shell::marker_offset(&self.input) else {
@@ -470,6 +508,14 @@ impl Lx {
 
     /// 在光标处换行；列表项自动续写标记（对齐 prompt 编辑器）。
     pub fn newline(&mut self) {
+        // 纯文本缓冲：换行就是换行，不续写列表标记、不刷新面板。
+        if self.plain {
+            self.snapshot();
+            self.input.insert(self.cursor, '\n');
+            self.cursor += 1;
+            self.scroll_cursor_into_view();
+            return;
+        }
         if self.input_mode == LxInputMode::Shell {
             self.snapshot();
             self.input.insert(self.cursor, '\n');
@@ -738,12 +784,14 @@ impl Lx {
     }
 
     /// 向后删除一个词。
+    ///
+    /// 光标**不动**（readline M-d 语义）：被删区间在光标之后，删完光标位置仍然合法。
+    /// 曾经把光标设成删除前的 `end`，缓冲区缩短后光标越界，下一次编辑直接 panic。
     pub fn delete_word_forward(&mut self) {
         let end = text::word_end_after(&self.input, self.cursor);
         if self.cursor < end {
             self.snapshot();
             self.input.replace_range(self.cursor..end, "");
-            self.cursor = end;
         }
     }
 

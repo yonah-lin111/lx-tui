@@ -157,6 +157,25 @@ fn official_uses_fixed_url() {
     assert_eq!(built.url, "https://api.openai.com/v1/chat/completions");
 }
 
+/// 前置系统规则消息的条数（`role=user` 且以 `<system-instructions>` 开头）。
+fn system_rule_prefix(body: &Value) -> usize {
+    body["messages"]
+        .as_array()
+        .map(|messages| {
+            messages
+                .iter()
+                .skip_while(|message| message["role"] == "system")
+                .take_while(|message| {
+                    message["role"] == "user"
+                        && message["content"]
+                            .as_str()
+                            .is_some_and(|text| text.starts_with("<system-instructions>"))
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 /// 纯文本 `items` 为空时：首条是 system（lx 指令），其后逐条等价于旧 `turns` 编码。
 #[test]
 fn body_uses_messages_and_stream() {
@@ -166,16 +185,21 @@ fn body_uses_messages_and_stream() {
     assert_eq!(body["model"], "example-chat");
     assert_eq!(body["stream"], true);
     let messages = body["messages"].as_array().expect("messages array");
-    // 首条 system 是 lx 身份提示；其后 3 条与 turns 一一对应（旧行为等价）。
-    assert_eq!(messages.len(), 4);
+    // 首条 system 是提示首段；其余规则合并成一条 user 消息前置。
+    let parts =
+        crate::chat::transport::SystemPromptParts::split(&crate::chat::prompt::system_prompt());
     assert_eq!(messages[0]["role"], "system");
-    assert_eq!(messages[0]["content"], crate::chat::prompt::system_prompt());
-    assert_eq!(messages[1]["role"], "user");
-    assert_eq!(messages[1]["content"], "第一问");
-    assert_eq!(messages[2]["role"], "assistant");
-    assert_eq!(messages[2]["content"], "第一答");
-    assert_eq!(messages[3]["role"], "user");
-    assert_eq!(messages[3]["content"], "第二问");
+    assert_eq!(messages[0]["content"], json!(parts.head));
+    let base = system_rule_prefix(&body) + 1;
+    assert_eq!(base - 1, 1, "其余规则只发一条前置消息");
+    // 真实历史与 turns 一一对应（旧行为等价）。
+    assert_eq!(messages.len(), base + 3);
+    assert_eq!(messages[base]["role"], "user");
+    assert_eq!(messages[base]["content"], "第一问");
+    assert_eq!(messages[base + 1]["role"], "assistant");
+    assert_eq!(messages[base + 1]["content"], "第一答");
+    assert_eq!(messages[base + 2]["role"], "user");
+    assert_eq!(messages[base + 2]["content"], "第二问");
     // 认证只放 Authorization header，不进 URL/body。
     assert!(!built.url.contains("key"));
     assert!(!built.body.contains("key"));
@@ -210,12 +234,15 @@ fn tools_field_matches_available_tools() {
 fn tool_history_is_encoded_as_call_and_tool_message() {
     let body = body_of(&tool_request());
     let messages = body["messages"].as_array().expect("messages");
-    assert_eq!(messages.len(), 4);
+    // 首条 system + 前置规则段，其后是 user / assistant / tool。
     assert_eq!(messages[0]["role"], "system");
-    assert_eq!(messages[1]["role"], "user");
-    assert_eq!(messages[1]["content"], "读 src/main.rs");
+    let base = system_rule_prefix(&body) + 1;
+    assert_eq!(messages.len(), base + 3);
+    let user = &messages[base];
+    assert_eq!(user["role"], "user");
+    assert_eq!(user["content"], "读 src/main.rs");
     // assistant 的 tool_calls：arguments 是 JSON 字符串（不是嵌套对象、不被二次编码）。
-    let assistant = &messages[2];
+    let assistant = &messages[base + 1];
     assert_eq!(assistant["role"], "assistant");
     assert!(assistant["content"].is_null());
     let calls = assistant["tool_calls"].as_array().expect("tool_calls");
@@ -229,9 +256,10 @@ fn tool_history_is_encoded_as_call_and_tool_message() {
     let parsed: Value = serde_json::from_str(arguments).expect("arguments parse");
     assert_eq!(parsed, json!({"path": "src/main.rs"}));
     // 结果消息：role=tool + tool_call_id。
-    assert_eq!(messages[3]["role"], "tool");
-    assert_eq!(messages[3]["tool_call_id"], "call_a");
-    assert_eq!(messages[3]["content"], "1: fn main() {}");
+    let result = &messages[base + 2];
+    assert_eq!(result["role"], "tool");
+    assert_eq!(result["tool_call_id"], "call_a");
+    assert_eq!(result["content"], "1: fn main() {}");
 }
 
 #[test]

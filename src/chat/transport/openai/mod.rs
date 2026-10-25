@@ -82,12 +82,16 @@ pub fn build(
     })
 }
 
-/// 编码 `messages`：首条 system 为 `lx` 指令；`items` 非空走结构化历史。
+/// 编码 `messages`：首段 system + 其余段的前置 user 规则 + 历史；`items` 非空走结构化历史。
+///
+/// 形状见 [`super::SystemPromptParts`]：首段走 system，其余规则**合并成一条** user
+/// 消息前置，避免代理把多条 system 拼回一条后按 2000 码元整条替换。
 fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
-    let mut messages: Vec<Value> = vec![json!({
-        "role": "system",
-        "content": request.resolve_system_prompt(),
-    })];
+    let parts = super::SystemPromptParts::split(&request.resolve_system_prompt());
+    let mut messages: Vec<Value> = vec![json!({"role": "system", "content": parts.head})];
+    if let Some(tail) = parts.tail_message() {
+        messages.push(json!({"role": "user", "content": tail}));
+    }
     if request.items.is_empty() {
         messages.extend(
             request

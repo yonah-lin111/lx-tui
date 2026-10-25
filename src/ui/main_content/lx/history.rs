@@ -70,18 +70,19 @@ pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
 
 /// assistant 步骤左侧状态标记的语义状态（思考 / 工具调用 / 正文块共用）。
 ///
-/// 字形按 [`StepKind`] 分派（见 [`Self::glyph`]）：文字数据（正文 / 思考）为圆点
-/// `●`/`○`，只有工具调用为方块 `■`/`□`。运行中为实心/空心两帧呼吸（相位由
-/// `LxChat::loading_frame` 决定，约 400ms 一相）；终态停为静态标记、仅以颜色区分：
-/// 失败（红）、中断（黄）、取消（次要信息色 + 空心标记，表示未产出结果）。
+/// 字形按 [`StepKind`] 分派（见 [`Self::glyph`]）：文字数据（正文 / 思考 / 通知）为
+/// 圆点 `●`/`○`，只有工具调用为方块 `■`/`□`。运行中为实心/空心两帧呼吸（相位由
+/// `LxChat::loading_frame` 决定，约 400ms 一相）；终态一律停为**实心**标记、仅以颜色
+/// 区分：失败（红）、中断（黄）。取消不再特殊化：标记与动词同用角色色（用户要求
+/// 「方块和 title 统一」，空心/白色方块都会显得这张卡是另一种状态）。
 ///
 /// **颜色由「角色」决定，不只看状态**（用户要求区分三类步骤）：
 /// - [`StepKind::Body`]（正文块）：**终端默认前景**——圆点跟正文同色，不额外抢眼；
 /// - [`StepKind::Thinking`]（思考块）：折叠浅粉 `Indexed 182`、展开/悬停亮粉 `Indexed 218`；
 /// - [`StepKind::Tool`]（工具调用）：翡翠绿 `Indexed 42`。
 ///
-/// 失败 / 中断 / 取消是**跨角色的语义状态**，一律覆盖角色色（红 / 黄 / 次要灰），
-/// 保证「出问题了」比「是哪类步骤」更先被看到。
+/// 失败 / 中断是**跨角色的语义状态**，一律覆盖角色色（红 / 黄），保证「出问题了」
+/// 比「是哪类步骤」更先被看到；取消不是错误，沿用角色色，只由详情行的 `cancelled` 说明。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StepMark {
     Running,
@@ -97,7 +98,7 @@ pub(super) enum StepMark {
 }
 
 impl StepMark {
-    /// 标记字形：**有动画时**运行中按帧呼吸；取消恒空心，其余终态恒实心。
+    /// 标记字形：**有动画时**运行中按帧呼吸；终态（含取消）恒实心。
     ///
     /// `animating` 是"这一帧的相位是否还在推进"（渲染层传 `lx.chat.status.streaming`）。
     /// **动画一停就必须画实心**：相位冻结在空心那一相会让一个活着的后台任务永久显示
@@ -109,8 +110,7 @@ impl StepMark {
             Self::Running | Self::Alive => {
                 !animating || (loading_frame / text::agent::STEP_BREATH_TICKS).is_multiple_of(2)
             }
-            Self::Done | Self::Failed | Self::Interrupted => true,
-            Self::Cancelled => false,
+            Self::Done | Self::Failed | Self::Interrupted | Self::Cancelled => true,
         };
         // 文字数据（正文 / 思考 / 通知）用圆点，只有工具调用用方块。
         match (kind, filled) {
@@ -129,7 +129,8 @@ impl StepMark {
         match self {
             Self::Failed => style::agent_fail(),
             Self::Interrupted => style::agent_warn(),
-            Self::Cancelled => style::agent_step_detail(),
+            // 取消不是错误态：方块与动词统一用角色色（工具行 = 工具绿）。
+            Self::Cancelled => kind.style_done(expanded, hovered),
             Self::Running => kind.style_running(expanded, hovered),
             Self::Alive => style::chat_step_mark_alive(),
             Self::Done => kind.style_done(expanded, hovered),

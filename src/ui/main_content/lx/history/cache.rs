@@ -505,6 +505,19 @@ fn tool_signature(hash: &mut Fnv, lx: &Lx, message: &ChatMessageView, call: &Too
                 hash.write_u8(plan_status_code(*status));
             }
         }
+        Some(ToolDetailView::Ask(view)) => {
+            // `ask` 的行数取决于题干/答案的折行，文本必须全进指纹（题干限 500 字）。
+            hash.write_u8(5);
+            hash.write_usize(view.questions.len());
+            for question in &view.questions {
+                hash.write_str(&question.header);
+                hash.write_str(&question.question);
+                hash.write_usize(question.answers.len());
+                for answer in &question.answers {
+                    hash.write_str(answer);
+                }
+            }
+        }
         Some(ToolDetailView::File(view)) => {
             hash.write_u8(4);
             hash.write_usize(view.files.len());

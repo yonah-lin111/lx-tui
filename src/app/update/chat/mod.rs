@@ -16,6 +16,7 @@ use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
 use crate::layout::PaneId;
 use crate::ui::text;
 
+pub mod ask;
 pub mod compact;
 mod process;
 pub mod rewind;
@@ -24,6 +25,9 @@ pub mod user_shell;
 mod view;
 mod viewport;
 
+pub use ask::{
+    apply_ask_click, apply_ask_paste, apply_ask_wheel, apply_input as apply_ask_input, submit_all,
+};
 pub use compact::{
     compact_command, on_compact_empty, on_compact_failed, on_compact_finished,
     on_compact_revert_failed, on_compact_reverted, set_checkpoints as set_compact_checkpoints,
@@ -57,7 +61,8 @@ pub use user_shell::{
 pub(crate) use view::view_message_of;
 pub use viewport::{
     hover_lx_chat, hover_lx_jump_bottom, jump_lx_history_bottom, jump_lx_history_to_prompt,
-    resolve_task_output_visible, scroll_lx_history, set_lx_history_scroll, toggle_lx_card,
+    resolve_ask_preview_visible, resolve_task_output_visible, scroll_lx_history,
+    set_lx_history_scroll, toggle_lx_card,
 };
 pub(crate) use viewport::{resolve_lx_history, resolve_lx_rewind_center};
 

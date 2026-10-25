@@ -17,6 +17,124 @@ use serde_json::Value;
 
 use super::events::{ChatDelta, ChatRequest, PartDelta, PartKind};
 
+/// 单条 system 消息的长度上限，单位是 **UTF-16 码元**（代理安全线）。
+///
+/// 动机是一条实测：9router 的 CodeBuddy CN 执行器会把**任何超过 2000 长度单位**的
+/// system 消息整条替换成
+/// `You are a helpful AI assistant that helps with software engineering tasks.`
+/// （源码 `open-sse/executors/codebuddy-cn.js`：`text.length > 2000 || AGENT_PATTERN`）。
+/// 被替换后 lx 的身份、工具纪律与语言规则全部失效，模型开始自称「混元 / AI 助手」。
+///
+/// 单位必须是 UTF-16 码元，不是 Unicode 字符：代理跑在 JS 里，`text.length` 对
+/// 增补平面字符（emoji）计 2。实测 1000 个 emoji（1000 字符 / 2000 码元）会被保留，
+/// 1001 个（2002 码元）会被整条替换——按字符数切分会在 emoji 场景下静默失效。
+///
+/// 取 1900 留 100 单位余量。**多段 system 消息只有 OpenAI Chat 的 `messages` 形状
+/// 会被逐条判定**；Anthropic 的 `system` 多 block 与 Responses 的多 system 项都会被
+/// 代理拼回一条再判，因此统一形状见 [`SystemPromptParts`]。
+pub const MAX_SYSTEM_MESSAGE_UNITS: usize = 1900;
+
+/// 第 2 段起的系统规则包裹标签：内容必须以 `user` 角色前置发送。
+pub const SYSTEM_INSTRUCTIONS_TAG: &str = "system-instructions";
+
+/// 一段系统提示的文本长度（UTF-16 码元，与代理的 `String.length` 同口径）。
+fn utf16_len(text: &str) -> usize {
+    text.chars()
+        .map(|ch| if ch.len_utf16() == 2 { 2 } else { 1 })
+        .sum()
+}
+
+/// 系统提示的线上拆分结果：权威段（进 system 槽）+ 其余规则（降级为 user 文本）。
+///
+/// 形状借鉴 opencode 的 `SystemPart` + `wrapSystemUpdate`：
+/// - 系统提示本身是**多段**语义（身份 / 规则 / 环境），但只有第一段能占用原生
+///   system 槽——代理只按 2000 码元判定 system，超长即整条丢弃；
+/// - 其余段**合并成一条** `user` 消息前置，用 `<system-instructions>` 包裹，
+///   既保留权威顺序，又避开长度 gate（user 消息没有该限制，实测 12k 正常送达）。
+///
+/// 为什么不是「多条 system」：OpenAI Chat 的数组会被逐条判定，但 Anthropic 的多个
+/// `text` block 与 Responses 的多个 system 项会被代理**拼回一条**再判，超过 2000 依旧
+/// 整条替换（已实测）。为什么不是「多条 user」：`joinText` 式扁平化少一轮往返、
+/// 三种 transport 的 token 数完全一致，且不会让历史里出现一长串"用户消息"。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemPromptParts {
+    /// 进入各 transport 原生 system 槽的首段（UTF-16 码元数 ≤ [`MAX_SYSTEM_MESSAGE_UNITS`]）。
+    pub head: String,
+    /// 其余规则段落（原样，未包裹）；空串表示没有剩余内容。
+    pub tail: String,
+}
+
+impl SystemPromptParts {
+    /// 在行边界上切出首段；单行本身超限时按字符边界硬切。
+    ///
+    /// 环境快照排在提示末尾，因此永远落在 `tail`：`head` 逐轮稳定，便于命中
+    /// 上游的 prompt cache（opencode 把 initial/environment 单独成段也是这个理由）。
+    pub fn split(prompt: &str) -> Self {
+        if prompt.is_empty() {
+            return Self {
+                head: String::new(),
+                tail: String::new(),
+            };
+        }
+        let mut head_end = 0usize; // 已并入 head 的字节边界
+        let mut head_units = 0usize;
+        for line in prompt.split_inclusive('\n') {
+            let units = utf16_len(line);
+            if head_units + units > MAX_SYSTEM_MESSAGE_UNITS {
+                if head_units == 0 {
+                    // 首行就超限：按字符边界硬切（不产生非法 UTF-8）。
+                    let mut used = 0usize;
+                    for ch in line.chars() {
+                        let cell = ch.len_utf16();
+                        if used + cell > MAX_SYSTEM_MESSAGE_UNITS {
+                            break;
+                        }
+                        used += cell;
+                        head_end += ch.len_utf8();
+                    }
+                }
+                break;
+            }
+            head_end += line.len();
+            head_units += units;
+        }
+        Self {
+            head: prompt[..head_end].to_string(),
+            tail: prompt[head_end..].to_string(),
+        }
+    }
+
+    /// 其余规则的前置消息（已包裹并转义）；没有剩余内容时返回 `None`。
+    pub fn tail_message(&self) -> Option<String> {
+        (!self.tail.is_empty()).then(|| wrap_system_instructions(&self.tail))
+    }
+}
+
+/// 系统规则包裹：标注这是规则而非用户自由输入，并对 XML 元字符转义。
+///
+/// 转义是硬要求（对齐 opencode 的 `escapeSystemUpdateText`）：提示正文里一旦出现
+/// `</system-instructions>`，未转义就会提前闭合包裹，后面的规则会被当成用户输入。
+pub fn wrap_system_instructions(text: &str) -> String {
+    format!(
+        "<{SYSTEM_INSTRUCTIONS_TAG}>\n{}\n</{SYSTEM_INSTRUCTIONS_TAG}>",
+        escape_instruction_text(text)
+    )
+}
+
+/// XML 元字符转义（只用于包裹内部，不改原文本语义）。
+fn escape_instruction_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
 /// 一次 transport 请求的完整描述（URL、header、body）；由 client 执行。
 #[derive(Debug, Clone)]
 pub struct TransportRequest {
@@ -189,3 +307,6 @@ pub(crate) fn openai_usage(value: &Value) -> Option<ChatDelta> {
         cache_write: None,
     }))
 }
+
+#[cfg(test)]
+mod tests;

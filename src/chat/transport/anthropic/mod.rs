@@ -54,10 +54,17 @@ pub fn build(
     };
     let url = join_url(base, "v1/messages");
     let messages = messages_of(request)?;
+    // 系统指令：只有首段进顶层 `system`。多 text block 会被代理拼回一条再判长度，
+    // 超过 2000 码元整条替换（实测），因此其余规则合并成一条前置 user 消息
+    //（见 [`super::SystemPromptParts`]）。
+    let parts = super::SystemPromptParts::split(&request.resolve_system_prompt());
+    let mut messages = messages;
+    if let Some(tail) = parts.tail_message() {
+        messages.insert(0, json!({"role": "user", "content": tail}));
+    }
     let mut body = json!({
         "model": request.model.model,
-        // 系统指令：Anthropic 用顶层 system，不进 messages。
-        "system": request.resolve_system_prompt(),
+        "system": parts.head,
         "messages": messages,
         "max_tokens": DEFAULT_MAX_TOKENS,
         "stream": true,

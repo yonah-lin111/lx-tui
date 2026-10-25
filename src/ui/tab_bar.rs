@@ -29,12 +29,17 @@ pub struct TabBarLayout {
     pub overflow: bool,
 }
 
-/// 单个标签的完整宽度（含图标、内边距与分隔线）。
-fn tab_width(tab_name: Option<&str>, index: usize) -> u16 {
+/// 有挂起 `ask` 面板的标签在标题后追加「空格 + 标记」两列。
+const ASK_MARKER_WIDTH: usize = 2;
+
+/// 单个标签的完整宽度（含图标、内边距与分隔线、ask 标记）。
+fn tab_width(tab_name: Option<&str>, index: usize, pending_ask: bool) -> u16 {
     let label = tab_label(index, tab_name);
     let label_width = label.chars().count();
     let icon_width = text::TAB_ITEM_ICON.chars().count() + 1;
-    u16::try_from(label_width + icon_width + TAB_PADDING + TAB_SEPARATOR).unwrap_or(u16::MAX)
+    let marker_width = if pending_ask { ASK_MARKER_WIDTH } else { 0 };
+    u16::try_from(label_width + icon_width + TAB_PADDING + TAB_SEPARATOR + marker_width)
+        .unwrap_or(u16::MAX)
 }
 
 /// 按当前几何计算标签栏布局；不溢出时不出现滚动按钮，`[+]` 紧跟最后一个标签。
@@ -60,7 +65,7 @@ pub fn layout(view: &ViewLayout, workspace: &Workspace, scroll: usize) -> TabBar
         .tabs
         .iter()
         .enumerate()
-        .map(|(index, tab)| tab_width(tab.name.as_deref(), index))
+        .map(|(index, tab)| tab_width(tab.name.as_deref(), index, tab.has_pending_ask()))
         .collect();
     let total: u32 = widths.iter().map(|width| u32::from(*width)).sum();
     let add_width = text::ADD_TAB_LABEL.chars().count() as u16;
@@ -189,17 +194,25 @@ pub fn render(frame: &mut Frame<'_>, view: &ViewLayout, state: &AppState) {
         } else {
             style::muted()
         };
+        let pending = tab.has_pending_ask();
         let content_width = usize::from(rect.width).saturating_sub(TAB_PADDING + TAB_SEPARATOR);
+        let marker_width = if pending { ASK_MARKER_WIDTH } else { 0 };
         let tab_content = format!("{} {label}", text::TAB_ITEM_ICON);
-        let content_text = text::ellipsize(&tab_content, content_width);
-        let text = format!(" {:<width$} ", content_text, width = content_width);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(text, label_style),
-                Span::styled(text::TAB_SEPARATOR, style::muted()),
-            ])),
-            *rect,
-        );
+        let content_text =
+            text::ellipsize(&tab_content, content_width.saturating_sub(marker_width));
+        let pad = content_width
+            .saturating_sub(content_text.chars().count())
+            .saturating_sub(marker_width);
+        let text = format!(" {:<width$} ", content_text, width = pad);
+        let mut spans = vec![Span::styled(text, label_style)];
+        if pending {
+            spans.push(Span::styled(
+                format!("{} ", text::TAB_ASK_MARKER),
+                style::accent(),
+            ));
+        }
+        spans.push(Span::styled(text::TAB_SEPARATOR, style::muted()));
+        frame.render_widget(Paragraph::new(Line::from(spans)), *rect);
     }
     if let Some(area) = bar.add {
         render_label(frame, area, text::ADD_TAB_LABEL, style::accent());

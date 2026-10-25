@@ -394,6 +394,8 @@ async fn run_loop(
             update::resolve_lx_history(state, &geometry.rects, &mut ui_cache);
             // 后台任务面板的输出可见行数：同上，供翻页与滚动条几何钳制。
             update::resolve_task_output_visible(state, &geometry.rects);
+            // ask 预览区可见行数：同上，保证短预览滚不出空白。
+            update::resolve_ask_preview_visible(state, &geometry.rects);
             ui_cache.begin_frame();
             tui.draw(|frame| ui::render_cached(frame, state, &config, &mut ui_cache))?;
             dirty = false;

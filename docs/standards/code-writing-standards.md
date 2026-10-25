@@ -11,6 +11,20 @@
 - 公共项使用 `///` 文档注释说明职责与错误条件；内部逻辑使用简体中文单行注释，保持简洁。
 - 所有用户可见文案集中在 `src/ui/text.rs`，禁止在组件或逻辑中硬编码字符串。
 
+## 模型提示词（模型可见文本）
+
+- `lx` 的所有模型可见文本**一律用英文编写**，包括系统提示、工具描述与参数 description、工具错误消息、环境快照、压缩提示与注入的上下文包裹文本。中文只用于代码注释与用户可见界面文案。
+- 模型可见文本的唯一来源：系统提示在 `src/chat/prompt.rs`，工具规格在 `src/chat/tools/schema.rs`，压缩提示在 `src/chat/compact.rs`。禁止在请求装配处另行拼一段同义指令。
+- 不提第三方品牌（`Codex`/`OpenAI`/`Anthropic` 等），不承诺项目没有的能力（沙箱、审批、MCP、图片）。
+- **agent 身份名固定为 `lx`，不可变、不可配置**（`chat::prompt::AGENT_NAME` 是唯一来源）；禁止通过环境变量、命令行参数、设置项或模型输出去改名。提示首行必须与 `AGENT_NAME` 一致（有测试锁定）；确实要改名等于换 agent，必须同时递增 `PROMPT_VERSION`、更新提示正文/测试/文档。
+- 系统提示的章节结构对齐 codex `base_instructions`（personality / language / AGENTS.md / responsiveness / planning / task execution / validation / ambition vs precision / progress / final message / tools / workspace）；改结构时同步改 `PROMPT_VERSION` 与对应测试。
+- 默认回复语言跟随用户当前输入的语言：提示中写明“不自作主张切换语言，只有用户明确要求才改用指定语言”，不得把某一种语言钉死为默认值。
+- 提示是每次请求的固定开销：系统提示预算 12 KiB、含环境快照的完整提示 16 KiB，超限由测试拦截。
+- **单条 system 消息不得超过 2000 长度单位，单位是 UTF-16 码元**（不是 Unicode 字符：代理跑在 JS 里，emoji 计 2）。实测 9router 的 CodeBuddy CN 执行器（`cbcn/*` 模型）会把超长 system 消息**整条替换**成中性提示，模型随即自称「混元 / AI 助手」，lx 的身份与全部规则失效。
+- 发送侧统一走 `chat::transport::SystemPromptParts::split`：**首段**进各 transport 的原生 system 槽，**其余规则合并成一条** `user` 消息前置，用 `<system-instructions>` 包裹（形状对齐 opencode 的 `SystemPart` + `joinText` + `wrapSystemUpdate`）。不能都发 system——只有 OpenAI Chat 的多条 `messages` 会被逐条判定，Anthropic 的多 `text` block 与 Responses 的多 system 项都会被代理拼回一条再判长度；也不能拆成多条 user——扁平化后三种 transport 的 token 数完全一致，历史里只多一条消息。
+- 包裹内部必须做 XML 元字符转义（`&`/`<`/`>`）：否则规则里出现 `</system-instructions>` 会提前闭合包裹，后续规则被降级成用户自由输入。
+- 首段必须逐轮稳定（环境快照固定在 `tail`），否则每轮前缀都不同，上游 prompt cache 全部失效。
+
 ## 错误处理与日志
 
 - 生产代码禁止 `unwrap()` / `expect()`；测试代码允许。

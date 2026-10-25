@@ -124,8 +124,29 @@ fn body_uses_input_not_messages() {
     assert!(body.get("messages").is_none(), "不沿用 messages 形状");
     assert_eq!(body["stream"], true);
     assert_eq!(body["model"], "grok");
-    // 系统指令走顶层 instructions。
-    assert_eq!(body["instructions"], crate::chat::prompt::system_prompt());
+    // 系统指令：首段进顶层 instructions，其余规则合并成一条前置 user 项。
+    let parts =
+        crate::chat::transport::SystemPromptParts::split(&crate::chat::prompt::system_prompt());
+    assert_eq!(body["instructions"], json!(parts.head));
+    assert_eq!(system_rule_prefix(&body), 1);
+}
+
+/// 前置系统规则项的条数（`role=user` 且以 `<system-instructions>` 开头）。
+fn system_rule_prefix(body: &Value) -> usize {
+    body["input"]
+        .as_array()
+        .map(|input| {
+            input
+                .iter()
+                .take_while(|item| {
+                    item["role"] == "user"
+                        && item["content"]
+                            .as_str()
+                            .is_some_and(|text| text.starts_with("<system-instructions>"))
+                })
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 /// `tools` 是扁平函数项（不套 `function`），schema 与 `available_tools()` 一致。
@@ -151,12 +172,15 @@ fn tools_are_flat_function_items() {
 #[test]
 fn plain_text_input_is_unchanged() {
     let body = body_of(&request());
+    // 系统规则段作为前置 user 项；去掉它们之后，编码与旧行为逐字一致。
+    let input = body["input"].as_array().expect("input");
+    let tail: Vec<&Value> = input.iter().skip(system_rule_prefix(&body)).collect();
     assert_eq!(
-        body["input"],
-        json!([
-            {"role": "user", "content": "问"},
-            {"role": "assistant", "content": "答"},
-        ])
+        tail,
+        vec![
+            &json!({"role": "user", "content": "问"}),
+            &json!({"role": "assistant", "content": "答"}),
+        ]
     );
 }
 
@@ -165,22 +189,26 @@ fn plain_text_input_is_unchanged() {
 fn tool_history_encodes_function_call_items() {
     let body = body_of(&tool_request());
     let input = body["input"].as_array().expect("input");
-    assert_eq!(input.len(), 3);
-    assert_eq!(input[0]["role"], "user");
+    // 系统规则段前置（首段已进 instructions），其后才是历史项。
+    let offset = system_rule_prefix(&body);
+    assert_eq!(input.len(), offset + 3);
+    assert_eq!(input[offset]["role"], "user");
     // function_call：call_id/name/arguments（JSON 字符串，只序列化一次）。
-    assert_eq!(input[1]["type"], "function_call");
-    assert_eq!(input[1]["call_id"], "call_a");
-    assert_eq!(input[1]["name"], "read");
-    let arguments = input[1]["arguments"].as_str().expect("arguments string");
+    assert_eq!(input[offset + 1]["type"], "function_call");
+    assert_eq!(input[offset + 1]["call_id"], "call_a");
+    assert_eq!(input[offset + 1]["name"], "read");
+    let arguments = input[offset + 1]["arguments"]
+        .as_str()
+        .expect("arguments string");
     assert_eq!(
         serde_json::from_str::<Value>(arguments).expect("parse"),
         json!({"path": "src/main.rs"})
     );
     // function_call_output：只用 call_id 关联。
-    assert_eq!(input[2]["type"], "function_call_output");
-    assert_eq!(input[2]["call_id"], "call_a");
-    assert_eq!(input[2]["output"], "1: fn main() {}");
-    assert!(input[2].get("name").is_none());
+    assert_eq!(input[offset + 2]["type"], "function_call_output");
+    assert_eq!(input[offset + 2]["call_id"], "call_a");
+    assert_eq!(input[offset + 2]["output"], "1: fn main() {}");
+    assert!(input[offset + 2].get("name").is_none());
 }
 
 #[test]

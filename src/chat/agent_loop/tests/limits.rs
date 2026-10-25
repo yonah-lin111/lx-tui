@@ -208,6 +208,10 @@ async fn cancel_after_begin_ack_settles_cancelled_without_execution() {
                         .push(format!("finish:{}", ticket.call_id));
                     let _ = reply.send(Ok(()));
                 }
+                // 本文件的脚本从不发起 ask；若发生则按取消处理，绝不悬挂。
+                AgentHostRequest::AskUser { reply, .. } => {
+                    let _ = reply.send(Err(HostError::Cancelled));
+                }
             }
         }
     }

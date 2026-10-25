@@ -60,10 +60,18 @@ pub fn build(
         join_url(base_url, "responses")
     };
     let input = input_of(request)?;
+    // 系统指令：`instructions` 只放首段，其余段改为前置 user 项。
+    //
+    // 形状见 [`super::SystemPromptParts`]：多个 system input 项会被代理拼回一条再按
+    // 2000 判长度，超限整条替换（实测）；合并成一条前置 user 项后三种 transport 一致。
+    let parts = super::SystemPromptParts::split(&request.resolve_system_prompt());
+    let mut input = input;
+    if let Some(tail) = parts.tail_message() {
+        input.insert(0, json!({"role": "user", "content": tail}));
+    }
     let mut body = json!({
         "model": request.model.model,
-        // 系统指令：Responses 用顶层 instructions（不是 input 里的 system 消息）。
-        "instructions": request.resolve_system_prompt(),
+        "instructions": parts.head,
         "input": input,
         "stream": true,
     });

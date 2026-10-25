@@ -398,6 +398,33 @@ pub(crate) fn handle_mouse_down_left(
             {
                 // lx 页：提及面板候选 > 聊天控件 > 后台任务面板控件 > 入口按钮 > …
                 update::focus_pane(state, pane);
+                // `ask` 面板优先于其它一切：面板内点击一律吞掉，绝不穿透到历史/输入框。
+                //
+                // 后台任务页打开时 ask 面板**不可见**（task 与 ask 共用输入框矩形，
+                // 绘制由 task 接管）：此时绝不能命中隐藏面板，否则点任务列表会
+                // 静默改一个看不见的答案，而列表本身永远点不动。
+                let ask_hit = state
+                    .pane_anywhere(pane)
+                    .filter(|target| target.lx.task.is_none())
+                    .and_then(|target| {
+                        let rect = ui::main_content::lx::ask_rect(inner, &target.lx)?;
+                        if !rect.contains((mouse.column, mouse.row).into()) {
+                            return None;
+                        }
+                        Some(ui::main_content::lx::ask_hit(
+                            inner,
+                            &target.lx,
+                            mouse.column,
+                            mouse.row,
+                        ))
+                    });
+                if let Some(hit) = ask_hit {
+                    if let Some(hit) = hit {
+                        update::apply_ask_click(state, pane, hit);
+                    }
+                    *dirty = true;
+                    return;
+                }
                 // 后台任务面板：左上角 tab 与右上角 `[esc]` 都可点击。
                 let task_hit = state.pane_anywhere(pane).and_then(|target| {
                     target.lx.task.as_ref()?;

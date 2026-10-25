@@ -3909,6 +3909,70 @@ fn lx_input_edits_focused_pane_buffer() {
     assert_eq!(state.active_pane().expect("pane").lx.input, "!");
 }
 
+/// 抽出的纯编辑分派必须与 `apply_lx_input` 的编辑结果逐字段一致。
+///
+/// `Up`/`Down` 不在此列：它们在编辑分派**之前**被历史浏览路由接管，属于面板语义，
+/// 不属于纯编辑。
+#[test]
+fn apply_editor_edit_matches_lx_input_for_every_editor_command() {
+    let commands = [
+        LxInput::Char('x'),
+        LxInput::Char('中'),
+        LxInput::Newline,
+        LxInput::EnterFolder,
+        LxInput::Backspace,
+        LxInput::Delete,
+        LxInput::Left,
+        LxInput::Right,
+        LxInput::Home,
+        LxInput::LineStart,
+        LxInput::End,
+        LxInput::LineEnd,
+        LxInput::WordLeft,
+        LxInput::WordRight,
+        LxInput::DeleteToLineStart,
+        LxInput::DeleteToLineEnd,
+        LxInput::DeleteWordBackward,
+        LxInput::DeleteWordForward,
+        LxInput::Undo,
+        LxInput::Redo,
+        LxInput::Clear,
+    ];
+    for command in commands {
+        let mut routed = AppState::demo();
+        let mut direct = AppState::demo();
+        for ch in "ab cd\n中文".chars() {
+            apply_lx_input(&mut routed, LxInput::Char(ch));
+        }
+        for ch in "ab cd\n中文".chars() {
+            let pane = direct.active_pane_mut().expect("pane");
+            super::pane::apply_editor_edit(&mut pane.lx, LxInput::Char(ch));
+        }
+        for _ in 0..3 {
+            apply_lx_input(&mut routed, LxInput::Left);
+            let pane = direct.active_pane_mut().expect("pane");
+            super::pane::apply_editor_edit(&mut pane.lx, LxInput::Left);
+        }
+        apply_lx_input(&mut routed, command);
+        let pane = direct.active_pane_mut().expect("pane");
+        super::pane::apply_editor_edit(&mut pane.lx, command);
+        let routed = routed.active_pane().expect("pane");
+        let direct = direct.active_pane().expect("pane");
+        assert_eq!(routed.lx.input, direct.lx.input, "{command:?} 的正文");
+        assert_eq!(routed.lx.cursor, direct.lx.cursor, "{command:?} 的光标");
+        assert_eq!(
+            routed.lx.input_mode(),
+            direct.lx.input_mode(),
+            "{command:?} 的模式"
+        );
+        assert_eq!(
+            routed.lx.revision(),
+            direct.lx.revision(),
+            "{command:?} 的修订号"
+        );
+    }
+}
+
 #[test]
 fn lx_input_ignored_on_terminal_view() {
     let mut state = demo_terminal();
