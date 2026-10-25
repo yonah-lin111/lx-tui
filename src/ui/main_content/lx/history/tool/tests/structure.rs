@@ -253,15 +253,15 @@ fn interrupted_header_is_yellow_and_detail_shows_only_the_reason() {
     );
 }
 
-/// 取消：空心方块 + 第 2 行 `cancelled` 兜底（状态词从第 1 行搬到第 2 行）。
+/// 取消：实心方块 + 第 2 行 `cancelled` 兜底（状态词从第 1 行搬到第 2 行）。
 #[test]
-fn cancelled_uses_hollow_square_and_puts_the_word_in_the_detail_line() {
+fn cancelled_uses_filled_square_and_puts_the_word_in_the_detail_line() {
     let call = tool_call("read", ToolStatus::Cancelled, Some(read_summary()), None);
     let (painted, grid) = render_row(&call, 80);
     let (header_line, detail_line) = painted.split_once('\n').expect("两行");
     assert!(
-        header_line.starts_with(text::agent::STEP_MARK_HOLLOW),
-        "取消态行首用空心方块：{header_line:?}"
+        header_line.starts_with(text::agent::STEP_MARK_FILLED),
+        "取消态行首必须实心（空空心会被读成还在跑）：{header_line:?}"
     );
     assert_eq!(
         grid.cell(0, 0).style.fg,

@@ -295,22 +295,25 @@ fn alive_mark_still_blinks_while_the_animation_runs() {
 }
 
 #[test]
-fn hollow_glyph_is_reserved_for_cancelled() {
-    // 非 Cancelled 的终态一律实心，且动画停止时实心与相位无关。
-    for mark in [StepMark::Done, StepMark::Failed, StepMark::Interrupted] {
+fn terminal_states_are_always_filled_including_cancelled() {
+    // 终态（完成 / 失败 / 中断 / 取消）一律实心：空心只属于运行中的呼吸。
+    // 取消曾恒空心，被误读成「还在跑」（用户带截图要求修正）。
+    for mark in [
+        StepMark::Done,
+        StepMark::Failed,
+        StepMark::Interrupted,
+        StepMark::Cancelled,
+    ] {
         for frame in 0..12 {
-            assert_eq!(
-                mark.glyph(frame, false),
-                text::agent::STEP_MARK_FILLED,
-                "{mark:?} 在动画停止时必须实心"
-            );
+            for animating in [false, true] {
+                assert_eq!(
+                    mark.glyph(frame, animating),
+                    text::agent::STEP_MARK_FILLED,
+                    "{mark:?} frame={frame} animating={animating} 必须实心"
+                );
+            }
         }
     }
-    assert_eq!(
-        StepMark::Cancelled.glyph(0, false),
-        text::agent::STEP_MARK_HOLLOW,
-        "取消仍是空心（语义就是没产出结果）"
-    );
 }
 
 // ===== 卡片：命令 + 运行中实时尾部 + 整卡引导（终态改为输出预览） =====

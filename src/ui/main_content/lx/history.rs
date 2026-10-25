@@ -61,8 +61,8 @@ pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
 /// assistant 步骤左侧方块标记的语义状态（思考 / 工具调用 / 正文块共用）。
 ///
 /// 运行中为 `■`/`□` 两帧呼吸（相位由 `LxChat::loading_frame` 决定，约 400ms 一相）；
-/// 终态停为静态方块、仅以颜色区分：失败（红）、中断（黄）、取消（次要信息色 + 空心
-/// `□`，表示未产出结果）。
+/// 终态一律停为**实心**方块、仅以颜色区分：失败（红）、中断（黄）、取消（次要信息色）。
+/// 取消不再是空心 `□`：终态的空心会被误读成「还在跑」（用户带截图要求修正）。
 ///
 /// **颜色由「角色」决定，不只看状态**（用户要求区分三类步骤）：
 /// - [`StepKind::Body`]（正文块）：**终端默认前景**——方块跟正文同色，不额外抢眼；
@@ -86,7 +86,7 @@ pub(super) enum StepMark {
 }
 
 impl StepMark {
-    /// 方块字形：**有动画时**运行中按帧呼吸；取消恒空心，其余终态恒实心。
+    /// 方块字形：**有动画时**运行中按帧呼吸；取消与其余终态一样恒实心。
     ///
     /// `animating` 是"这一帧的相位是否还在推进"（渲染层传 `lx.chat.status.streaming`）。
     /// **动画一停就必须画实心**：相位冻结在空心那一相会让一个活着的后台任务永久显示
@@ -98,8 +98,7 @@ impl StepMark {
             Self::Running | Self::Alive => {
                 !animating || (loading_frame / text::agent::STEP_BREATH_TICKS).is_multiple_of(2)
             }
-            Self::Done | Self::Failed | Self::Interrupted => true,
-            Self::Cancelled => false,
+            Self::Done | Self::Failed | Self::Interrupted | Self::Cancelled => true,
         };
         if filled {
             text::agent::STEP_MARK_FILLED

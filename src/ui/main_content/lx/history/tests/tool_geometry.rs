@@ -344,6 +344,38 @@ fn completed_thinking_has_no_spinner_even_after_tool_steps() {
     );
 }
 
+/// 取消 / 完成 / 中断等**终态**的方块必须实心：空心会被读成「还在跑」。
+/// 取消曾经恒空心（用户带截图要求修正），这里把两种呼吸相位都锁住。
+#[test]
+fn terminal_tool_states_keep_a_filled_marker_in_every_frame() {
+    for status in [
+        ToolStatus::Completed,
+        ToolStatus::Cancelled,
+        ToolStatus::Interrupted,
+        ToolStatus::Failed,
+    ] {
+        for (frame, streaming) in [
+            (0, false),
+            (text::agent::STEP_BREATH_TICKS, true),
+            (0, true),
+        ] {
+            let mut message = message("assistant", "complete", Vec::new());
+            push_tool(&mut message, status);
+            let mut lx = lx_with(vec![message]);
+            lx.chat.loading_frame = frame;
+            lx.chat.status.streaming = streaming;
+            let area = Rect::new(0, 0, 40, 10);
+            let mut buf = Buffer::empty(area);
+            crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+            let line = row_text(&buf, area, 0);
+            assert!(
+                line.starts_with(text::agent::STEP_MARK_FILLED),
+                "{status:?} frame={frame} streaming={streaming} 必须是实心方块：{line}"
+            );
+        }
+    }
+}
+
 // ===== 连续同种文件调用合并成一张卡 =====
 
 /// 构造一个带差异正文的文件工具步骤（`name` 决定 `edit` / `write`）。
