@@ -208,3 +208,77 @@
 | `cargo test`（全量） | **3307 lib + 16 个 target 全绿** |
 
 本轮新增/改写用例 16 个，覆盖 §7.1–§7.3 的每一条修复；未验证部分仍为真实 TUI 手感（需用户 `cargo run`）。
+
+## 8. 合并前追加（提示词重构 + 代理兼容）
+
+ask 特性完成后，系统提示在本分支上又做了一轮独立改造，随本特性一起合并：
+
+### 8.1 提示词按 codex 结构重构
+
+- 章节对齐 codex `base_instructions/default.md`：personality / language / AGENTS.md /
+  responsiveness / planning / task execution / validating / ambition vs precision /
+  final message / tools / workspace；删掉 lx 不具备的能力（沙箱、审批、MCP、图片）。
+- 新增「默认回复语言 = 用户当前输入的语言」规则（不自作主张切换、只有用户明确要求才改用）。
+- 系统提示 3.6 KB → 7.8 KB；`PROMPT_VERSION` → `lx-4`；测试预算改为 12 KiB / 16 KiB。
+- `AGENT_NAME = "lx"` 标注为不可变（不得由环境变量/命令行/设置项改写），并加测试锁定「提示首行由 `AGENT_NAME` 生成」。
+- 规范落地：`AGENTS.md` 与 `docs/standards/code-writing-standards.md` 均写明「模型提示词一律英文」。
+
+### 8.2 代理丢弃超长 system 消息（真实故障）
+
+**现象**：用户问「你叫什么名字」，模型答「我是混元 / 我是一个 AI 助手」。
+
+**根因**（逐层实测定位）：
+
+1. lx 发出的系统提示 8983 字符，模型完全没收到；
+2. 直连网关复现：system 长度 2000 正常、**2001 起 `prompt_tokens` 从 263 掉到 26**（只剩 user 消息）；
+3. 源码定位：9router `open-sse/executors/codebuddy-cn.js` 的
+   `if (text.length > 2000 || AGENT_PATTERN.test(text))` 把超长 system **整条替换**成
+   `You are a helpful AI assistant that helps with software engineering tasks.`；
+4. 上游已有 issue `decolua/9router#3339`（open），PR #3342（未合并）把阈值改成
+   `CODEBUDDY_SYSTEM_PROMPT_MAX_LEN` 环境变量。
+
+**踩过的两个坑（都已修正）**：
+
+- **按字符数计数是错的**：代理是 JS 的 `text.length`，UTF-16 码元；emoji 计 2。
+  实测 1000 个 emoji（2000 码元）保留、1001 个（2002 码元）被替换。
+- **多段 system 对 Anthropic/Responses 无效**：代理会把多 `text` block 或多 system 项
+  **拼回一条**再判长度；实测总长 2050 就失效。只有 OpenAI Chat 的多条 `messages` 会逐条判定。
+
+**最终形状**（`chat::transport::SystemPromptParts`，对齐 opencode 的
+`SystemPart` + `joinText` + `wrapSystemUpdate`）：
+
+```text
+system / instructions   You are lx, ... # How you work ## Personality ...      (≤1900 码元)
+user #1                 <system-instructions>
+                        ## Planning ... ## Task execution ... ## Tools ... 环境快照 ...
+                        </system-instructions>
+user (真实提问)          ...
+```
+
+- 首段进各自 transport 的原生 system 槽；其余规则**合并成一条** user 前置消息。
+- 包裹内部做 XML 元字符转义，防止规则里的 `</system-instructions>` 提前闭合。
+- 首段固定不含环境快照，逐轮稳定以命中上游 prompt cache。
+- 端到端实测：三种 transport token 数完全一致（2071），身份与规则完整送达；
+  6k 码元规则段（含 3000 个 emoji）也正常，确认 user 侧无长度 gate。
+
+### 8.3 与三个参考实现的对照
+
+| | 系统提示位置 | 长度限制 | 是否受 2000 gate |
+|---|---|---|---|
+| Codex | `developer` message（input 首项） | 一条 | 是（未适配） |
+| opencode | `SystemPart[]`，按协议拆/拼 | 各 provider 自定 | 是（未适配） |
+| Claude Code | `system` 多 `text` block | 多块 | 是（直连无此问题） |
+| **lx** | 首段 system + 其余 `<system-instructions>` user 前置 | 首段 ≤1900 码元 | 否（已绕过） |
+
+三家都默认直连官方 API，不面对中转代理的丢弃行为，因此都没有为此做适配；
+lx 是唯一需要长期跑在 9router 后面的，必须自己解决。
+
+### 8.4 验证
+
+| 命令 | 结果 |
+|---|---|
+| `cargo fmt --check` | 无 diff |
+| `cargo clippy --all-targets -- -D warnings` | 零警告 |
+| `cargo test`（全量，合并后在 `dev` 上跑） | **3321 lib + 16 个 target 全绿** |
+
+未验证：真实 TUI 手感（`cargo run`）；规则以 user 角色承载后的长期遵从度。

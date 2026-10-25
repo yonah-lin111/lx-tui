@@ -45,7 +45,7 @@
 | 10 | 结果与留痕 | 结果 `{"answers":{...}}`；历史卡片**不展示 preview**；复用现有工具调用落库 |
 | 11 | 编辑缓冲 | **独立缓冲 + 复用编辑核心**；prompt 草稿永不搬迁 |
 | 12 | 鼠标 | **支持**：点选项/点「其他」/点题目标签/点 Submit/滚轮 |
-| 13 | 命名与提示词 | 工具名 `ask`，动词 `Ask`，提示词按 codex 口径，`PROMPT_VERSION` → `lx-3` |
+| 13 | 命名与提示词 | 工具名 `ask`，动词 `Ask`，提示词按 codex 口径；`PROMPT_VERSION` 最终为 `lx-4`（见 §11.1） |
 | 14 | 鼠标语义 | 单选单击只高亮不提交；多选单击即勾选；`Submit` 是唯一提交入口（`Enter` 等价） |
 | 15 | 不可见窗格 | 包含该窗格的**标签页标题加 `?` 标记** |
 
@@ -686,9 +686,25 @@ if let Some(ask) = pane.lx.ask.as_mut() {
   `preview`. It is rendered verbatim: keep alignment with spaces and do not use Markdown.
 ```
 
-3. `PROMPT_VERSION`：`lx-2` → `lx-3`。
+3. `PROMPT_VERSION`：`lx-2` → `lx-3`（本特性交付时）。后续提示词重构再递增到 `lx-4`，见 §11.1。
 4. 现有测试 `prompt_is_lx_specific_and_tool_scoped` 会遍历 `TOOL_NAMES`，加入 `ask` 后必须能在提示里找到（上面的文案已包含）。
-5. 新增测试：提示包含「blocks the turn」「permission」「1-3 questions」「preview」四个关键短语；`PROMPT_VERSION == "lx-3"`。
+5. 新增测试：提示包含「blocks the turn」「permission」「1-3 questions」「preview」四个关键短语；`PROMPT_VERSION` 与实现同值。
+
+### 11.1 后续演进（提示词重构与代理兼容）
+
+本特性合并前，系统提示做了两轮独立演进，都落在同一分支：
+
+1. **结构对齐 codex `base_instructions`**（`lx-4`）：补齐 personality / language / AGENTS.md /
+   responsiveness / planning / task execution / validation / ambition vs precision /
+   progress / final message / tools / workspace 章节；新增「默认回复语言跟随用户当前输入」
+   规则；全部模型可见文本改为英文，并加测试防回退。详见 `docs/standards/code-writing-standards.md`
+   的「模型提示词」章节。
+2. **线上拆分规避代理丢弃**：实测 9router 的 CodeBuddy CN 执行器把超过 2000 UTF-16 码元的
+   system 消息**整条替换**成中性提示（上游 issue `decolua/9router#3339`），导致模型自称
+   「混元 / AI 助手」。发送侧改走 `chat::transport::SystemPromptParts`：首段进原生 system 槽，
+   其余规则合并成**一条** `user` 前置消息并用 `<system-instructions>` 包裹（形状对齐 opencode
+   的 `SystemPart` + `joinText` + `wrapSystemUpdate`，包裹内部做 XML 转义）。
+   实测三种 transport 端到端 token 数一致、身份与规则完整送达。
 
 ---
 

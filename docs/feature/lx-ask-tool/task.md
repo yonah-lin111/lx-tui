@@ -408,6 +408,22 @@ pub(super) fn apply_editor_edit(lx: &mut Lx, command: LxInput) -> bool
 
 **依赖**：T0.2。
 
+### T4.4 提示词结构重构与代理兼容（合并前追加）
+
+**文件**：`src/chat/prompt.rs`、`src/chat/transport/{mod,openai,anthropic,google,responses}.rs`、`src/chat/transport/tests.rs`
+
+**关键点**：见 `design.md §11.1` 与 `review.md §8`。
+
+- 系统提示章节对齐 codex `base_instructions`；新增「默认回复语言跟随用户当前输入」；`PROMPT_VERSION` → `lx-4`。
+- 全部模型可见文本英文（系统提示 / 工具描述 / schema / 环境快照 / 压缩提示），有测试防回退。
+- `AGENT_NAME = "lx"` 不可变，提示首行由它生成（测试锁定）。
+- `SystemPromptParts`：首段进 system 槽，其余规则合并成一条 `<system-instructions>` user 前置；
+  按 **UTF-16 码元**计长（≤1900），包裹内部 XML 转义。
+
+**测试**：`cargo test chat::prompt`、`cargo test chat::transport`
+
+**依赖**：T4.3。
+
 ---
 
 ## 阶段 5：验证与评审
