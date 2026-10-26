@@ -472,3 +472,27 @@ fn deleting_the_parent_session_cancels_live_children() {
     assert!(cancel_rx.has_changed().expect("receiver alive"));
     assert!(*cancel_rx.borrow_and_update(), "子 turn 收到取消信号");
 }
+
+#[test]
+fn wait_timeout_is_not_an_error_and_carries_no_report() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(spawn_explorer(
+            &mut state,
+            &mut streams,
+            &persistence,
+            &key,
+            "slow",
+        ));
+    // 到期结算：仍在跑的目标只报告状态，不带正文、不写错误。
+    let outcome =
+        crate::event::chat::subagent::settle_wait(&streams, &persistence, &key, &[agent_id], true)
+            .expect("settled");
+    let SubagentOutcome::Waited { timed_out, agents } = outcome else {
+        panic!("expected waited");
+    };
+    assert!(timed_out);
+    assert_eq!(agents[0].status, "running");
+    assert_eq!(agents[0].report, None, "超时不带报告");
+}
