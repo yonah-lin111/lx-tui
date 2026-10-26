@@ -38,6 +38,7 @@ fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geometry {
         screen,
         rects,
         view,
+        screen_text: crate::ui::screen::ScreenText::default(),
     }
 }
 
@@ -2519,7 +2520,7 @@ fn referenced_search_entered_state() -> AppState {
 }
 
 #[test]
-fn referenced_search_ctrl_or_cmd_z_returns_to_parent_scope() {
+fn referenced_search_ctrl_or_cmd_z_does_not_leave_scope() {
     for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
         let mut state = referenced_search_entered_state();
         let (config, geo) = toolbar_geometry(&mut state);
@@ -2539,12 +2540,14 @@ fn referenced_search_ctrl_or_cmd_z_returns_to_parent_scope() {
         };
         assert_eq!(
             search.root,
-            std::path::PathBuf::from("/tmp/lx-ref-z/root"),
-            "回退到父搜索范围: {modifiers:?}"
+            std::path::PathBuf::from("/tmp/lx-ref-z/root/docs"),
+            "Ctrl/Cmd+Z 不再回退目录: {modifiers:?}"
         );
-        assert!(search.stack.is_empty(), "{modifiers:?}");
-        assert!(search.request.is_some(), "回退后登记新扫描: {modifiers:?}");
-        assert!(dirty, "{modifiers:?}");
+        assert_eq!(
+            search.stack,
+            vec![std::path::PathBuf::from("/tmp/lx-ref-z/root")],
+            "{modifiers:?}"
+        );
     }
 }
 
@@ -5010,6 +5013,7 @@ fn worktree_candidates_do_not_resurrect_mention_panel_on_todo() {
     let persistence = Persistence::with_database(untrusted);
     let mut streams = ChatStreams::default();
     let mut inflight = HashSet::new();
+    let mut dirty = false;
     handle_app_event(
         AppEvent::PromptWorktreeListed {
             repo_root: PathBuf::from("/tmp/lx-tui-wt"),
@@ -5021,6 +5025,7 @@ fn worktree_candidates_do_not_resurrect_mention_panel_on_todo() {
         &mut inflight,
         &mut streams,
         &persistence,
+        &mut dirty,
     );
 
     assert!(
@@ -5400,7 +5405,7 @@ fn mouse_click_todo_toolbar_button_runs_action() {
 }
 
 #[test]
-fn mouse_double_click_todo_row_enters_edit() {
+fn mouse_double_click_todo_row_selects_word_instead_of_editing() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
     state.todo.replace(
@@ -5440,7 +5445,7 @@ fn mouse_double_click_todo_row_enters_edit() {
     assert_eq!(state.todo.selected(), Some(2));
     assert!(!state.todo.is_editing(), "单击不进入编辑");
 
-    // 第二击（仍在判定窗口内）：进入该行的行内编辑，输入框带原文。
+    // 第二击（仍在判定窗口内）：按屏幕上看到的词选择，不再直接进入编辑。
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -5454,12 +5459,12 @@ fn mouse_double_click_todo_row_enters_edit() {
         &mut cache,
         &mut dirty,
     );
-    let edit = state.todo.editing().expect("双击进入编辑");
-    assert_eq!(
-        edit.target.as_deref(),
-        Some(state.todo.items()[2].id.as_str())
+    assert!(
+        !state.todo.is_editing(),
+        "双击文字格只选词，编辑走 Enter/工具栏"
     );
-    assert_eq!(edit.input.text(), "item 2", "编辑现场带原文");
+    let selection = state.screen_selection.as_ref().expect("word selection");
+    assert_eq!(selection.unit(), crate::app::selection::SelectionUnit::Word);
     assert!(state.todo_focused());
 }
 
@@ -6879,5 +6884,145 @@ fn hover_below_ghost_row_stores_list_index() {
         state.todo_hover,
         Some(1),
         "显示第 2 行是列表下标 1（b），不是显示下标 2（那会被渲染层当成 c）"
+    );
+}
+
+#[test]
+fn shift_drag_selects_screen_text_without_forwarding_to_pty() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let mut geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let (pane, rect) = geo.rects[0];
+    let inner = layout::pane_inner_rect(rect);
+    let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 120, 30));
+    buffer.set_string(
+        inner.x + 1,
+        inner.y + 1,
+        "selectable text",
+        ratatui::style::Style::default(),
+    );
+    geo.screen_text = crate::ui::screen::ScreenText::from_buffer(&buffer);
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let down = TerminalEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: inner.x + 2,
+        row: inner.y + 1,
+        modifiers: KeyModifiers::SHIFT,
+    });
+    handle_terminal_event(
+        down,
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.screen_selection.is_some(), "Shift+按下开始屏幕选择");
+    assert!(
+        state.terminal_selection.is_none(),
+        "Shift 选择不启动终端仿真器选区"
+    );
+
+    handle_terminal_event(
+        TerminalEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: inner.x + 8,
+            row: inner.y + 1,
+            modifiers: KeyModifiers::SHIFT,
+        }),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    handle_terminal_event(
+        TerminalEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: inner.x + 8,
+            row: inner.y + 1,
+            modifiers: KeyModifiers::SHIFT,
+        }),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    let selection = state.screen_selection.as_ref().expect("selection kept");
+    assert!(!selection.is_dragging(), "松开只结束拖动");
+    assert_eq!(
+        selection.range(),
+        Some((
+            crate::app::selection::ScreenPoint::new(inner.y + 1, inner.x + 2),
+            crate::app::selection::ScreenPoint::new(inner.y + 1, inner.x + 8)
+        ))
+    );
+    let mut cache = ui::RenderCache::default();
+    let copied = crate::app::update::copyable_selection(&state, &geo.rects, &mut cache)
+        .expect("copy selection");
+    assert_eq!(copied.text, "electab");
+    assert_eq!(
+        copied.source,
+        crate::app::selection::SelectionSource::Screen
+    );
+    assert_eq!(pane, geo.rects[0].0, "pane id stable");
+}
+
+#[test]
+fn paste_into_new_workspace_overlay_never_reaches_hidden_terminal() {
+    use crate::app::overlay::{NewWorkspace, TextInput};
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::NewWorkspace(NewWorkspace {
+        input: TextInput::new(""),
+    }));
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        TerminalEvent::Paste("~/work\nnext".into()),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    let Some(Overlay::NewWorkspace(dialog)) = state.overlay.as_ref() else {
+        panic!("overlay stays open");
+    };
+    assert_eq!(dialog.input.text(), "~/work next", "单行净化后写入浮层");
+    assert!(dirty);
+}
+
+#[test]
+fn terminal_paste_bumps_clipboard_generation_to_cancel_key_fallback() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.set_focus(crate::app::state::FocusedContainer::Sidebar);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let before = state.clipboard_generation;
+    handle_terminal_event(
+        TerminalEvent::Paste("from terminal".into()),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(
+        state.clipboard_generation,
+        before + 1,
+        "终端 Paste 作废在途按键回退读取"
     );
 }

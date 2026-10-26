@@ -160,22 +160,17 @@ pub fn apply_new_node_key(state: &mut AppState, key: OverlayKey) {
         | OverlayKey::Left
         | OverlayKey::Right
         | OverlayKey::Home
-        | OverlayKey::End => {
+        | OverlayKey::End
+        | OverlayKey::Undo
+        | OverlayKey::Redo
+        | OverlayKey::WordLeft
+        | OverlayKey::WordRight
+        | OverlayKey::DeleteWordBackward
+        | OverlayKey::DeleteWordForward => {
             let Some(Overlay::NewNode(dialog)) = state.overlay.as_mut() else {
                 return;
             };
-            let input = &mut dialog.name;
-            match key {
-                OverlayKey::Char(ch) => input.insert_char(ch),
-                OverlayKey::Clear => input.clear(),
-                OverlayKey::Backspace => input.backspace(),
-                OverlayKey::Delete => input.delete(),
-                OverlayKey::Left => input.move_left(),
-                OverlayKey::Right => input.move_right(),
-                OverlayKey::Home => input.move_home(),
-                OverlayKey::End => input.move_end(),
-                _ => {}
-            }
+            dialog.name.apply_key(key);
         }
         OverlayKey::Up
         | OverlayKey::Down
@@ -206,7 +201,13 @@ pub fn apply_save_draft_key(state: &mut AppState, key: OverlayKey) {
         | OverlayKey::Left
         | OverlayKey::Right
         | OverlayKey::Home
-        | OverlayKey::End => edit_save_draft_input(state, key),
+        | OverlayKey::End
+        | OverlayKey::Undo
+        | OverlayKey::Redo
+        | OverlayKey::WordLeft
+        | OverlayKey::WordRight
+        | OverlayKey::DeleteWordBackward
+        | OverlayKey::DeleteWordForward => edit_save_draft_input(state, key),
         OverlayKey::EnterFolder
         | OverlayKey::Back
         | OverlayKey::Copy
@@ -221,18 +222,7 @@ fn edit_save_draft_input(state: &mut AppState, key: OverlayKey) {
     let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_mut() else {
         return;
     };
-    let input = &mut dialog.name;
-    match key {
-        OverlayKey::Char(ch) => input.insert_char(ch),
-        OverlayKey::Clear => input.clear(),
-        OverlayKey::Backspace => input.backspace(),
-        OverlayKey::Delete => input.delete(),
-        OverlayKey::Left => input.move_left(),
-        OverlayKey::Right => input.move_right(),
-        OverlayKey::Home => input.move_home(),
-        OverlayKey::End => input.move_end(),
-        _ => {}
-    }
+    dialog.name.apply_key(key);
 }
 
 /// 移动草稿保存选择器高亮；返回是否有变化。

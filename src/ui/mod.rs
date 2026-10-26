@@ -11,6 +11,7 @@ mod panes;
 pub mod prompt;
 pub mod prompt_frame;
 pub mod right_panel;
+pub mod screen;
 pub mod sidebar;
 pub mod style;
 pub mod tab_bar;
@@ -44,20 +45,22 @@ pub(crate) use main_content::lx::{PaneCache, RenderCache};
 
 /// 渲染整个界面（一次性缓存；供测试与无事件循环的调用方使用）。
 pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
-    render_cached(frame, state, config, &mut RenderCache::default());
+    let _ = render_cached(frame, state, config, &mut RenderCache::default());
 }
 
 /// 渲染整个界面；`cache` 跨帧复用历史几何快照。
+///
+/// 返回**选择反显之前**的最终可见文本，供事件层做屏幕选择命中与复制。
 pub(crate) fn render_cached(
     frame: &mut Frame<'_>,
     state: &AppState,
     config: &Config,
     cache: &mut RenderCache,
-) {
+) -> screen::ScreenText {
     let area = frame.area();
     if area.width < config.min_width || area.height < config.min_height {
         render_min_size_notice(frame, area, config);
-        return;
+        return screen::ScreenText::from_buffer(frame.buffer_mut());
     }
 
     let view = layout::compute(
@@ -130,6 +133,42 @@ pub(crate) fn render_cached(
     };
     if let Some(position) = cursor {
         frame.set_cursor_position(position);
+    }
+    // 先生成只读画面文本，再叠加选择反显：复制永远读原画面符号，不把选中样式当内容。
+    let screen = screen::ScreenText::from_buffer(frame.buffer_mut());
+    paint_screen_selection(frame, state);
+    screen
+}
+
+/// 在最终可见层叠加屏幕选区反显；不改变文字与布局。
+fn paint_screen_selection(frame: &mut Frame<'_>, state: &AppState) {
+    let Some(selection) = state
+        .screen_selection
+        .as_ref()
+        .filter(|selection| selection.visible())
+    else {
+        return;
+    };
+    let Some((start, end)) = selection.range() else {
+        return;
+    };
+    let area = frame.area();
+    let end_row = end.row.min(area.bottom().saturating_sub(1));
+    for row in start.row..=end_row {
+        let (col_start, col_end) = if start.row == end.row {
+            (start.col, end.col)
+        } else if row == start.row {
+            (start.col, area.right().saturating_sub(1))
+        } else if row == end.row {
+            (area.left(), end.col)
+        } else {
+            (area.left(), area.right().saturating_sub(1))
+        };
+        for col in col_start..=col_end.min(area.right().saturating_sub(1)) {
+            if let Some(cell) = frame.buffer_mut().cell_mut((col, row)) {
+                cell.modifier |= ratatui::style::Modifier::REVERSED;
+            }
+        }
     }
 }
 

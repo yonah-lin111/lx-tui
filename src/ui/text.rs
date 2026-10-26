@@ -429,7 +429,7 @@ pub const WORKTREE_STATUS_ROOT: &str = "root";
 /// 模态底部按钮：名称在前、快捷键在后。
 pub const BUTTON_SAVE: &str = "[save ↵]";
 pub const BUTTON_CREATE: &str = "[create ↵]";
-pub const BUTTON_CLEAR: &str = "[clear ^c]";
+pub const BUTTON_CLEAR: &str = "[clear]";
 pub const BUTTON_CANCEL: &str = "[cancel esc]";
 pub const BUTTON_CONFIRM: &str = "[confirm ↵]";
 /// `/resume` 会话编辑模态的删除与二次确认按钮。
@@ -522,7 +522,9 @@ pub const EXIT_LABEL: &str = "[EXIT]";
 
 /// 复制反馈 toast。
 pub const TOAST_COPIED: &str = "Copied to clipboard";
+pub const TOAST_COPY_SENT: &str = "Copy sent";
 pub const TOAST_COPY_FAILED: &str = "Copy failed";
+pub const TOAST_PASTE_FAILED: &str = "Paste failed";
 /// 复制反馈 toast 的边框标题。
 pub const TOAST_CLIPBOARD_TITLE: &str = "Clipboard";
 /// 工作区反馈 toast 的边框标题。
@@ -1025,7 +1027,7 @@ pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
 /// 写入落在折叠补充块内被拒绝时的提示。
 pub const SUPPLE_FOLD_BLOCKED: &str = "Folded supplement; unfold to edit";
 
-/// @ 面板底边快捷键提示：进入目录 `Shift+Enter` / 回退上一级 `Ctrl+Z`（`^z` 沿用 `[clear ^c]` 记法）。
+/// @ 面板底边快捷键提示：进入目录 `Shift+Enter` / 回退上一级 `Ctrl+Z`（`^z` 沿用 `^` 修饰键记法）。
 pub const MENTION_PANEL_FOOTER: &str = "[open ⇧↵] [back ^z]";
 
 /// lx 输入框 `@` 提及面板：标题与状态行文案（与 prompt 面板同一套外观）。

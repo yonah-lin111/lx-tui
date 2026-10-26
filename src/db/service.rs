@@ -788,7 +788,7 @@ impl Persistence {
             Effect::CopyToClipboard { text, anchor } => {
                 let now = Instant::now();
                 let (kind, message) = if crate::platform::write_clipboard(&text) {
-                    (ToastKind::Default, text::TOAST_COPIED)
+                    (ToastKind::Default, text::TOAST_COPY_SENT)
                 } else {
                     tracing::warn!("clipboard write failed");
                     (ToastKind::Danger, text::TOAST_COPY_FAILED)

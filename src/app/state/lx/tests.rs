@@ -457,3 +457,53 @@ fn exit_shell_is_undoable() {
     assert!(lx.shell_mode(), "undo 恢复退出前的 Shell 模式");
     assert_eq!(lx.input, "pwd");
 }
+
+#[test]
+fn select_all_then_insert_replaces_selection_as_one_undo_step() {
+    let mut lx = Lx::new();
+    lx.insert_str("hello");
+    lx.select_all();
+    assert_eq!(lx.selected_text().as_deref(), Some("hello"));
+    lx.insert_char('x');
+    assert_eq!(lx.input, "x");
+    assert_eq!(lx.cursor, 1);
+    assert!(!lx.has_text_selection());
+    lx.undo();
+    assert_eq!(lx.input, "hello");
+}
+
+#[test]
+fn backspace_and_delete_remove_selection_before_characters() {
+    let mut lx = Lx::new();
+    lx.insert_str("abcdef");
+    lx.select_all();
+    lx.backspace();
+    assert_eq!(lx.input, "");
+    lx.undo();
+
+    lx.select_all();
+    lx.delete();
+    assert_eq!(lx.input, "");
+    assert_eq!(lx.selected_text(), None);
+}
+
+#[test]
+fn cut_selection_returns_text_and_restores_with_undo() {
+    let mut lx = Lx::new();
+    lx.insert_str("keep drop");
+    lx.select_all();
+    assert_eq!(lx.cut_selection().as_deref(), Some("keep drop"));
+    assert_eq!(lx.input, "");
+    lx.undo();
+    assert_eq!(lx.input, "keep drop");
+}
+
+#[test]
+fn newline_replaces_selection_without_list_continuation() {
+    let mut lx = Lx::new();
+    lx.insert_str("- item");
+    lx.select_all();
+    lx.newline();
+    assert_eq!(lx.input, "\n");
+    assert_eq!(lx.cursor, 1);
+}

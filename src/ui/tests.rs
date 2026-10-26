@@ -3380,3 +3380,40 @@ fn switching_right_tab_keeps_focus_in_right_panel() {
     assert!(state.prompt_focused(), "切回 Prompt 后右栏仍持焦点");
     assert!(!state.panes_focused());
 }
+
+#[test]
+fn screen_selection_highlight_is_painted_over_final_frame() {
+    use crate::app::selection::{ScreenPoint, ScreenSelection, SelectionUnit};
+    let mut state = AppState::demo();
+    let config = Config::default();
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    let mut cache = RenderCache::default();
+    let mut selection = ScreenSelection::new(
+        ScreenPoint::new(0, 0),
+        SelectionUnit::Character,
+        crate::app::selection::SelectedCells::default(),
+    );
+    selection.set_range(ScreenPoint::new(0, 0), ScreenPoint::new(5, 0));
+    state.screen_selection = Some(selection);
+
+    let mut screen = None;
+    terminal
+        .draw(|frame| {
+            screen = Some(render_cached(frame, &state, &config, &mut cache));
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    assert!(
+        buffer[(2, 0)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "screen selection must be reversed on the final buffer"
+    );
+    let screen = screen.expect("screen text");
+    assert_eq!(
+        screen.cell(2, 0).map(|cell| cell.symbol.as_str()),
+        Some(buffer[(2, 0)].symbol()),
+        "copy payload reads the visible symbol"
+    );
+}

@@ -394,7 +394,8 @@ pub(crate) fn copy_with_toast(state: &mut AppState, text: &str) {
 pub(crate) fn copy_with_toast_at(state: &mut AppState, text: &str, anchor: Option<PaneId>) {
     let now = Instant::now();
     let (kind, message) = if crate::platform::write_clipboard(text) {
-        (ToastKind::Default, ui::text::TOAST_COPIED)
+        // 普通复制是尽力而为：原生写入在后台启动、OSC 52 无确认，不宣称已落入系统剪贴板。
+        (ToastKind::Default, ui::text::TOAST_COPY_SENT)
     } else {
         tracing::warn!("clipboard write failed");
         (ToastKind::Danger, ui::text::TOAST_COPY_FAILED)

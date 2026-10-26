@@ -61,7 +61,7 @@ fn render_draws_border_and_title() {
 #[test]
 fn button_row_centers_buttons_with_gap() {
     let shell = layout(SCREEN, 40, 5).expect("modal fits");
-    let labels = ["[save enter]", "[clear ^c]", "[cancel esc]"];
+    let labels = ["[save enter]", "[clear]", "[cancel esc]"];
     let rects = button_row(shell.inner, &labels, 2, 2);
     assert_eq!(rects.len(), 3);
     let widths: Vec<u16> = labels

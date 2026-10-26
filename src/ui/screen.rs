@@ -1,0 +1,277 @@
+//! 最终可见画面取样：把 ratatui `Buffer` 转成只读屏幕文本，供选择、复制与高亮定位。
+//!
+//! 只读取已渲染 Buffer，不修改状态、不执行 IO；宽字符续格不重复输出。
+
+use ratatui::buffer::Buffer;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use crate::app::selection::{FrozenRow, ScreenPoint, SelectedCell, SelectedCells, SelectionUnit};
+
+/// 最终画面的一格；宽字符续格 `width == 0` 且符号为空。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenCell {
+    pub symbol: String,
+    pub width: u8,
+}
+
+/// 一帧最终可见文本。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScreenText {
+    width: u16,
+    height: u16,
+    cells: Vec<ScreenCell>,
+}
+
+impl ScreenText {
+    /// 从最终 Buffer 取样；调用方须在所有图层绘制完成、选择反显之前调用。
+    pub fn from_buffer(buffer: &Buffer) -> Self {
+        let area = buffer.area;
+        let width = area.width;
+        let height = area.height;
+        let mut cells = Vec::with_capacity(usize::from(width) * usize::from(height));
+        for y in area.top()..area.bottom() {
+            let mut skip = 0u16;
+            for x in area.left()..area.right() {
+                if skip > 0 {
+                    skip -= 1;
+                    cells.push(ScreenCell {
+                        symbol: String::new(),
+                        width: 0,
+                    });
+                    continue;
+                }
+                let symbol = buffer[(x, y)].symbol().to_string();
+                let width = symbol.width().max(1) as u8;
+                skip = u16::from(width).saturating_sub(1);
+                cells.push(ScreenCell { symbol, width });
+            }
+        }
+        Self {
+            width,
+            height,
+            cells,
+        }
+    }
+
+    /// 画面宽高。
+    pub fn size(&self) -> (u16, u16) {
+        (self.width, self.height)
+    }
+
+    /// 读取一格；越界返回 None。
+    pub fn cell(&self, x: u16, y: u16) -> Option<&ScreenCell> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        self.cells
+            .get(usize::from(y) * usize::from(self.width) + usize::from(x))
+    }
+
+    /// 一整行的可见文本（宽字符只保留首格）。
+    pub fn row_text(&self, y: u16) -> Option<String> {
+        if y >= self.height {
+            return None;
+        }
+        let start = usize::from(y) * usize::from(self.width);
+        let mut line = String::with_capacity(usize::from(self.width));
+        for cell in &self.cells[start..start + usize::from(self.width)] {
+            if cell.width > 0 {
+                line.push_str(&cell.symbol);
+            }
+        }
+        Some(line)
+    }
+
+    /// 冻结 `start..=end` 覆盖的画面片段；按屏幕阅读顺序，端点包含。
+    pub fn selection_cells(&self, start: ScreenPoint, end: ScreenPoint) -> SelectedCells {
+        let Some((start, end)) = normalize(start, end) else {
+            return SelectedCells::default();
+        };
+        if start.row >= self.height || end.row >= self.height {
+            return SelectedCells::default();
+        }
+        let mut rows = Vec::new();
+        for row in start.row..=end.row {
+            let (col_start, col_end) = if start.row == end.row {
+                (start.col, end.col)
+            } else if row == start.row {
+                (start.col, self.width.saturating_sub(1))
+            } else if row == end.row {
+                (0, end.col)
+            } else {
+                (0, self.width.saturating_sub(1))
+            };
+            let (col_start, col_end) = self.widen_columns(row, col_start, col_end);
+            let full = self.row_text(row).unwrap_or_default();
+            let mut cells = Vec::new();
+            for col in col_start..=col_end {
+                if let Some(cell) = self.cell(col, row)
+                    && cell.width > 0
+                {
+                    cells.push(SelectedCell {
+                        symbol: cell.symbol.clone(),
+                        width: cell.width,
+                    });
+                }
+            }
+            rows.push(FrozenRow {
+                full,
+                start_col: col_start,
+                end_col: col_end,
+                cells,
+            });
+        }
+        SelectedCells {
+            rows,
+            start: Some(start),
+            end: Some(end),
+        }
+    }
+
+    /// 双击选词：命中词字符时取连续词；否则取该单格。
+    pub fn word_range(&self, point: ScreenPoint) -> (ScreenPoint, ScreenPoint) {
+        let text = self.row_text(point.row).unwrap_or_default();
+        let chars: Vec<char> = text.chars().collect();
+        let mut col = 0usize;
+        let mut index = chars.len();
+        for (i, ch) in chars.iter().enumerate() {
+            let width = ch.width().unwrap_or(1).max(1);
+            if col >= usize::from(point.col) {
+                index = i;
+                break;
+            }
+            col += width;
+        }
+        if index >= chars.len() {
+            return (point, point);
+        }
+        let is_word = |ch: char| ch.is_alphanumeric() || ch == '_';
+        let hit = chars[index];
+        let (mut from, mut to) = (index, index);
+        if is_word(hit) {
+            while from > 0 && is_word(chars[from - 1]) {
+                from -= 1;
+            }
+            while to + 1 < chars.len() && is_word(chars[to + 1]) {
+                to += 1;
+            }
+        }
+        let start_col = chars[..from]
+            .iter()
+            .map(|ch| ch.width().unwrap_or(1).max(1) as u16)
+            .sum();
+        let end_col = start_col
+            + chars[from..=to]
+                .iter()
+                .map(|ch| ch.width().unwrap_or(1).max(1) as u16)
+                .sum::<u16>()
+                .saturating_sub(1);
+        (
+            ScreenPoint::new(point.row, start_col),
+            ScreenPoint::new(point.row, end_col),
+        )
+    }
+
+    /// 三击选中当前视觉行整行。
+    pub fn line_range(&self, point: ScreenPoint) -> (ScreenPoint, ScreenPoint) {
+        let width = self.width.saturating_sub(1);
+        (
+            ScreenPoint::new(point.row, 0),
+            ScreenPoint::new(point.row, width),
+        )
+    }
+
+    /// 按单位扩展一次点击。
+    pub fn unit_range(
+        &self,
+        point: ScreenPoint,
+        unit: SelectionUnit,
+    ) -> (ScreenPoint, ScreenPoint) {
+        match unit {
+            SelectionUnit::Character => (point, point),
+            SelectionUnit::Word => self.word_range(point),
+            SelectionUnit::Line => self.line_range(point),
+        }
+    }
+
+    /// 拖动时把初始单位扩展到新的拖动点，反向拖动也不切断起始词/行。
+    pub fn drag_range(
+        &self,
+        base: ScreenPoint,
+        cursor: ScreenPoint,
+        unit: SelectionUnit,
+    ) -> (ScreenPoint, ScreenPoint) {
+        let (base_start, base_end) = self.unit_range(base, unit);
+        let (cursor_start, cursor_end) = self.unit_range(cursor, unit);
+        if cursor < base {
+            (cursor_start, base_end)
+        } else {
+            (base_start, cursor_end)
+        }
+    }
+
+    /// 在当前画面中按内容重新定位冻结选区；找不到返回 None。
+    ///
+    /// 只匹配完整视觉行文本，避免把同样文字误认成新内容；重复行取离旧位置最近的一处。
+    pub fn reanchor(&self, cells: &SelectedCells) -> Option<(ScreenPoint, ScreenPoint)> {
+        if cells.rows.is_empty() {
+            return None;
+        }
+        let old = cells.start?;
+        let height = usize::from(self.height);
+        let needle = cells.rows.len();
+        if needle > height {
+            return None;
+        }
+        let mut best: Option<(u16, (ScreenPoint, ScreenPoint))> = None;
+        for start_row in 0..=self.height.saturating_sub(cells.rows.len() as u16) {
+            let mut matched = true;
+            for (offset, row) in cells.rows.iter().enumerate() {
+                let y = start_row + offset as u16;
+                if self.row_text(y).as_deref() != Some(row.full.as_str()) {
+                    matched = false;
+                    break;
+                }
+            }
+            if !matched {
+                continue;
+            }
+            let first = &cells.rows[0];
+            let last = cells.rows.last()?;
+            let distance = start_row.abs_diff(old.row);
+            let candidate = (
+                ScreenPoint::new(start_row, first.start_col),
+                ScreenPoint::new(start_row + needle as u16 - 1, last.end_col),
+            );
+            if best.is_none_or(|(best_distance, _)| distance < best_distance) {
+                best = Some((distance, candidate));
+            }
+        }
+        best.map(|(_, range)| range)
+    }
+
+    /// 把落在宽字符续格上的端点向前扩到宽字符首格，并保证终点覆盖首格。
+    fn widen_columns(&self, row: u16, mut start: u16, mut end: u16) -> (u16, u16) {
+        while start > 0 && self.cell(start, row).is_some_and(|cell| cell.width == 0) {
+            start -= 1;
+        }
+        if end + 1 < self.width && self.cell(end, row).is_some_and(|cell| cell.width > 1) {
+            end += 1;
+        }
+        (start, end.min(self.width.saturating_sub(1)))
+    }
+}
+
+fn normalize(start: ScreenPoint, end: ScreenPoint) -> Option<(ScreenPoint, ScreenPoint)> {
+    if start == end {
+        return None;
+    }
+    Some(if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    })
+}
+
+#[cfg(test)]
+mod tests;

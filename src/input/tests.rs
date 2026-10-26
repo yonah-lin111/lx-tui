@@ -212,11 +212,6 @@ fn prompt_focus_maps_readline_shortcuts() {
             EditorCommand::DeleteWordBackward,
         ),
         (
-            KeyCode::Char('a'),
-            KeyModifiers::CONTROL,
-            EditorCommand::LineStart,
-        ),
-        (
             KeyCode::Char('e'),
             KeyModifiers::CONTROL,
             EditorCommand::LineEnd,
@@ -368,25 +363,53 @@ fn prompt_focus_maps_history_and_indent_keys() {
 }
 
 #[test]
-fn prompt_focus_maps_copy_keys() {
-    let route_prompt =
-        |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
+fn global_edit_keys_are_mod_only() {
+    use crate::input::{GlobalEdit, global_edit_key};
     for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
         assert_eq!(
-            route_prompt(KeyCode::Char('c'), modifiers),
-            Some(Routed::Copy),
+            global_edit_key(KeyEvent::new(KeyCode::Char('a'), modifiers)),
+            Some(GlobalEdit::SelectAll),
             "{modifiers:?}"
         );
         assert_eq!(
-            route_prompt(KeyCode::Char('c'), modifiers | KeyModifiers::SHIFT),
-            Some(Routed::CopyTemplateBlock),
-            "{modifiers:?}+SHIFT"
+            global_edit_key(KeyEvent::new(KeyCode::Char('c'), modifiers)),
+            Some(GlobalEdit::Copy),
+            "{modifiers:?}"
+        );
+        assert_eq!(
+            global_edit_key(KeyEvent::new(KeyCode::Char('x'), modifiers)),
+            Some(GlobalEdit::Cut),
+            "{modifiers:?}"
+        );
+        assert_eq!(
+            global_edit_key(KeyEvent::new(KeyCode::Char('v'), modifiers)),
+            Some(GlobalEdit::Paste),
+            "{modifiers:?}"
+        );
+        assert_eq!(
+            global_edit_key(KeyEvent::new(
+                KeyCode::Char('c'),
+                modifiers | KeyModifiers::SHIFT
+            )),
+            None,
+            "复制键不加 Shift"
         );
     }
     assert_eq!(
-        route_prompt(
+        global_edit_key(KeyEvent::new(
             KeyCode::Char('c'),
             KeyModifiers::CONTROL | KeyModifiers::ALT
+        )),
+        None
+    );
+    // 复制/剪切不再由焦点路由产生。
+    assert_eq!(
+        super::route(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            TermMode::empty(),
+            crate::app::state::FocusedContainer::Prompt,
+            None,
+            false,
         ),
         None
     );
@@ -524,10 +547,8 @@ fn referenced_input_routes_single_line_editing() {
         route_input(KeyCode::Char('a'), KeyModifiers::NONE),
         Some(Routed::Overlay(OverlayKey::Char('a')))
     );
-    assert_eq!(
-        route_input(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        Some(Routed::Overlay(OverlayKey::Clear))
-    );
+    // Ctrl/Cmd+C 由全局复制统一处理，不再是输入框清空。
+    assert_eq!(route_input(KeyCode::Char('c'), KeyModifiers::CONTROL), None);
     assert_eq!(
         route_input(KeyCode::Backspace, KeyModifiers::NONE),
         Some(Routed::Overlay(OverlayKey::Backspace))
@@ -563,13 +584,15 @@ fn referenced_search_routes_enter_folder_and_back() {
         route_search(KeyCode::Enter, KeyModifiers::SHIFT),
         Some(Routed::Overlay(OverlayKey::EnterFolder))
     );
+    // Ctrl+Z 现在是输入框撤销，不再回退目录；回退走 Esc/界面入口。
     assert_eq!(
         route_search(KeyCode::Char('z'), KeyModifiers::CONTROL),
-        Some(Routed::Overlay(OverlayKey::Back))
+        Some(Routed::Overlay(OverlayKey::Undo))
     );
+    // Ctrl+C 由全局复制统一处理。
     assert_eq!(
         route_search(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        Some(Routed::Overlay(OverlayKey::Copy))
+        None
     );
     assert_eq!(
         route_search(KeyCode::Up, KeyModifiers::NONE),
@@ -687,7 +710,7 @@ fn rename_overlay_routes_editing_keys() {
     );
     assert_eq!(
         route_rename(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        Some(Routed::Overlay(OverlayKey::Clear))
+        None
     );
     assert_eq!(
         route_rename(KeyCode::Delete, KeyModifiers::NONE),
@@ -844,12 +867,12 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
             true,
         )
     };
-    assert_eq!(ctrl('a'), Some(Routed::Lx(LxInput::LineStart)));
+    assert_eq!(ctrl('a'), None, "Ctrl+A 由全局全选处理");
     assert_eq!(ctrl('e'), Some(Routed::Lx(LxInput::LineEnd)));
     assert_eq!(ctrl('u'), Some(Routed::Lx(LxInput::DeleteToLineStart)));
     assert_eq!(ctrl('k'), Some(Routed::Lx(LxInput::DeleteToLineEnd)));
     assert_eq!(ctrl('w'), Some(Routed::Lx(LxInput::DeleteWordBackward)));
-    assert_eq!(ctrl('c'), Some(Routed::Lx(LxInput::Clear)));
+    assert_eq!(ctrl('c'), None, "Ctrl+C 由全局复制处理");
     // Cmd+C（macOS）与 Ctrl+C 落到同一命令：是否复制还是清空由 update 层按面板决定。
     let cmd = |ch| {
         super::route(
@@ -860,8 +883,8 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
             true,
         )
     };
-    assert_eq!(cmd('c'), Some(Routed::Lx(LxInput::Clear)));
-    assert_eq!(cmd('C'), Some(Routed::Lx(LxInput::Clear)));
+    assert_eq!(cmd('c'), None, "Cmd+C 由全局复制处理");
+    assert_eq!(cmd('C'), None, "Cmd+C 由全局复制处理");
     // SUPER 分支既有的撤销/重做不受影响。
     assert_eq!(cmd('z'), Some(Routed::Lx(LxInput::Undo)));
     assert_eq!(cmd('y'), Some(Routed::Lx(LxInput::Redo)));
@@ -1074,7 +1097,7 @@ fn page_rename_key_maps_single_line_input_semantics() {
     assert_eq!(page_rename_key(key(KeyCode::Left)), Some(OverlayKey::Left));
     assert_eq!(
         page_rename_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-        Some(OverlayKey::Clear)
+        None
     );
     assert_eq!(
         page_rename_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),

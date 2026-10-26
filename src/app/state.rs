@@ -8,10 +8,10 @@ use ratatui::layout::Rect;
 use crate::layout::{BoundaryHit, PaneId};
 
 use super::effects::Effect;
-use super::overlay::Overlay;
+use super::overlay::{Overlay, OverlayKind};
 use super::prompt::{Prompt, PromptPanel};
 use super::referenced::ReferencedFolders;
-use super::selection::Selection;
+use super::selection::{ScreenClick, ScreenSelection, Selection, SelectionSource};
 use super::toast::Toast;
 use super::tooltip::Tooltip;
 use super::trust::TrustResolution;
@@ -142,6 +142,42 @@ pub enum FocusedContainer {
     Todo,
 }
 
+/// 异步粘贴的目标快照：回投时焦点/浮层/修订号任一变化即丢弃。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PasteTarget {
+    pub focus: FocusedContainer,
+    pub pane: Option<PaneId>,
+    pub overlay: Option<OverlayKind>,
+    pub page_rename: bool,
+    /// 目标编辑器内容修订号；非编辑器为 0。
+    pub revision: u64,
+}
+
+/// 交给事件循环执行的剪贴板请求；后者只负责 spawn_blocking，不阻塞主循环。
+#[derive(Debug)]
+pub enum ClipboardRequest {
+    Read {
+        id: u64,
+        target: PasteTarget,
+        /// 发起时的粘贴代次；终端 Paste 到达后递增，旧回退读取作废。
+        generation: u64,
+    },
+    Write {
+        id: u64,
+        text: String,
+    },
+}
+
+/// 等待原生剪贴板写入结果的剪切事务。
+#[derive(Debug, Clone)]
+pub struct PendingCut {
+    pub id: u64,
+    pub text: String,
+    pub source: SelectionSource,
+    pub revision: u64,
+    pub anchor: Option<PaneId>,
+}
+
 /// prompt 面板为全局右栏，显示激活（或钉住）工作区的草稿。
 #[derive(Debug)]
 pub struct AppState {
@@ -163,6 +199,18 @@ pub struct AppState {
     pub tooltip: Option<Tooltip>,
     /// prompt 等编辑器的视口选区。
     pub selection: Option<Selection>,
+    /// 最终画面通用选区：覆盖侧栏、标签栏、边框、弹窗与静态文字。
+    pub screen_selection: Option<ScreenSelection>,
+    /// 屏幕选择点击计数现场（同格 400 ms，1→2→3→1）。
+    pub screen_click: Option<ScreenClick>,
+    /// 剪贴板请求序号；异步回投按它匹配。
+    pub next_clipboard_id: u64,
+    /// 粘贴事件代次：终端 Paste 到达即递增，作废在途按键回退读取。
+    pub clipboard_generation: u64,
+    /// 待事件循环取走的剪贴板请求。
+    pub clipboard_requests: Vec<ClipboardRequest>,
+    /// 等待写入确认的剪切事务。
+    pub pending_cut: Option<PendingCut>,
     /// 正在拖拽选择的终端窗格；选中内容存于仿真器内部（内容坐标）。
     pub terminal_selection: Option<PaneId>,
     /// lx 页文本选区（内容坐标）；松开鼠标时复制并清除。
@@ -333,6 +381,12 @@ impl AppState {
             toast: None,
             tooltip: None,
             selection: None,
+            screen_selection: None,
+            screen_click: None,
+            next_clipboard_id: 1,
+            clipboard_generation: 0,
+            clipboard_requests: Vec::new(),
+            pending_cut: None,
             terminal_selection: None,
             lx_selection: None,
             lx_input_drag: None,

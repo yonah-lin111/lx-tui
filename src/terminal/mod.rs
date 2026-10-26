@@ -299,9 +299,55 @@ impl Terminal {
         }
     }
 
+    /// 提取选区文本（保留选区）：按屏幕所见保留边框/行尾空格，宽字符只输出一次。
+    ///
+    /// 不用 `selection_to_string`：它按 `line_length` 截断，纯空格选区会变成空串，
+    /// 与“屏幕所见纯文本、不过早 trim”的选择语义冲突。
+    pub fn selection_text(&self) -> Option<String> {
+        let selection = self.term.selection.as_ref()?;
+        let range = selection.to_range(&self.term)?;
+        let grid = self.term.grid();
+        let columns = grid.columns();
+        let mut text = String::new();
+        for line in range.start.line.0..=range.end.line.0 {
+            let mut start = if line == range.start.line.0 {
+                range.start.column.0
+            } else {
+                0
+            };
+            let end = if line == range.end.line.0 {
+                range.end.column.0
+            } else {
+                columns.saturating_sub(1)
+            };
+            // 起点落在宽字符续格时，退回首格，保证宽字符输出一次。
+            if start > 0
+                && grid[Line(line)][Column(start)]
+                    .flags
+                    .contains(Flags::WIDE_CHAR_SPACER)
+            {
+                start -= 1;
+            }
+            for column in start..=end.min(columns.saturating_sub(1)) {
+                let cell = &grid[Line(line)][Column(column)];
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                text.push(if cell.c.is_control() { ' ' } else { cell.c });
+            }
+            if line < range.end.line.0 {
+                text.push('\n');
+            }
+        }
+        Some(text)
+    }
+
     /// 提取并清空选区文本；宽字符与换行交给仿真器处理。
     pub fn take_selection_text(&mut self) -> Option<String> {
-        let text = self.term.selection_to_string();
+        let text = self.selection_text();
         self.term.selection = None;
         text
     }
