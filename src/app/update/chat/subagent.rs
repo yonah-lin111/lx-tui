@@ -454,11 +454,11 @@ pub fn scroll_agents_detail(state: &mut AppState, pane: PaneId, delta: isize) ->
     if page.tab != crate::app::state::TaskTab::Agents {
         return false;
     }
-    let visible = page.agents_visible.max(1);
     let active = page.agents_window.active;
     let Some(run) = target.lx.agents.runs.get_mut(active) else {
         return false;
     };
+    let visible = run.visible.max(1);
     let max = run.total_rows.saturating_sub(visible);
     let current = run.scroll.min(max);
     let next = (current as isize)

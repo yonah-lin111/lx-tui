@@ -314,6 +314,35 @@ fn task_page_switches_between_process_and_agent_lists() {
 }
 
 #[test]
+fn scrolling_the_agents_detail_stops_following() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let mut started = run("sess-a", "sub-a", AgentRole::Explorer);
+    seed_chat(&mut started, key(pane, "sess-a"), "msg-a");
+    started.visible = 10;
+    started.total_rows = 100;
+    started.follow = true;
+    started.scroll = 90;
+    update::on_subagent_started(&mut state, pane, started);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        let mut page = crate::app::state::TaskPage::default();
+        page.tab = crate::app::state::TaskTab::Agents;
+        target.lx.task = Some(page);
+    }
+    assert!(update::scroll_agents_detail(&mut state, pane, -20));
+    let run = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_session("sess-a")
+        .expect("run");
+    assert_eq!(run.scroll, 70);
+    assert!(!run.follow, "上翻后停止跟随");
+}
+
+#[test]
 fn finished_run_records_status_and_tokens() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();

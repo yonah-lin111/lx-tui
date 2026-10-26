@@ -111,8 +111,6 @@ pub struct TaskPage {
     pub agents_window: PanelWindow,
     /// Agents 详情区滚动偏移（渲染回写）。
     pub agents_scroll: usize,
-    /// Agents 详情区可见行数（事件循环在绘制前写入）。
-    pub agents_visible: usize,
     /// 是否跟随 Agents 详情区底部（用户上翻即停）。
     pub agents_follow: bool,
 }
