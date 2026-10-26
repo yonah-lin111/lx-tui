@@ -240,6 +240,21 @@ pub(crate) fn handle_mouse_moved(
     if update::set_right_tab_hover(state, right_tab_hover) {
         *dirty = true;
     }
+    // Todo 行悬停：仅在 Todo 面板可见时计算；指针离开即清空。
+    let todo_hover = if hovering_toast
+        || state.prompt_collapsed
+        || state.right_tab != crate::app::state::RightTab::Todo
+    {
+        None
+    } else {
+        // `row_at` 给的是**显示**下标；悬停状态与渲染层都用列表下标比较，
+        // 必须在这里换算一次，否则幽灵行打开时悬停会高亮到下一行。
+        ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
+            .and_then(|display| ui::right_panel::todo::list_index(state, display))
+    };
+    if update::set_todo_hover(state, todo_hover) {
+        *dirty = true;
+    }
     // 提示词列表悬停：仅树视图且在文本区内；指针离开即清空。
     let tree_hover = if hovering_toast
         || state.prompt_drag.is_some()

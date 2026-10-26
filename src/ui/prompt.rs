@@ -29,8 +29,18 @@ use crate::ui::text;
 /// 分割线整行 `─`（位于按钮行下一行，不穿过功能按钮），
 /// 两端以 `├` / `┤` 衔接外层边框；样式跟随边框焦点态。
 pub(crate) fn render_divider(panel: Rect, header: Rect, buf: &mut Buffer, focused: bool) {
-    let y = header.y + layout::PROMPT_TOOLBAR_HEIGHT;
-    for x in header.x..header.right() {
+    render_rule(
+        panel,
+        header.y + layout::PROMPT_TOOLBAR_HEIGHT,
+        buf,
+        focused,
+    );
+}
+
+/// 在指定行画一条与容器外框衔接的横向分割线（`├ ─ ┤`）；样式跟随边框焦点态。
+pub(crate) fn render_rule(panel: Rect, y: u16, buf: &mut Buffer, focused: bool) {
+    let inner = layout::pane_inner_rect(panel);
+    for x in inner.x..inner.right() {
         if let Some(cell) = buf.cell_mut((x, y)) {
             cell.reset();
             cell.set_symbol(text::DIVIDER_MID);
@@ -131,15 +141,30 @@ fn render_toolbar(
         let Some(rect) = layout::prompt_toolbar_button_rect(panel, button, tree) else {
             continue;
         };
-        for (offset, symbol) in label.chars().enumerate() {
-            let x = rect.x + offset as u16;
-            if x >= rect.right() {
+        // 按矩形宽度整格填充：钉住按钮固定按最宽态 `[unpin]` 占位，`[pin]` 需要右补空格，
+        // 否则两态切换时相邻按钮会左右跳动（残留宽度的旧字形也必须被覆盖掉）。
+        for x in rect.x..rect.right() {
+            let Some(cell) = buf.cell_mut((x, rect.y)) else {
                 break;
+            };
+            cell.reset();
+            cell.set_char(' ');
+            cell.set_style(button_style);
+        }
+        // 标签**右对齐**：钉住按钮固定按最宽态 `[unpin]` 占 7 列，`[pin]` 只有 5 列。
+        // 左对齐会把余下 2 列甩到右侧，紧邻的 `[all]` 前就多出 3 列空档（用户报告的
+        // 「pin 与 all 之间有大间隔」）。右对齐把余量留在按钮左侧——那里本来就是
+        // 工具栏中段的弹性空白，看不出来，且宽度不变仍不会跳动。
+        let start = rect
+            .right()
+            .saturating_sub(u16::try_from(label.chars().count()).unwrap_or(u16::MAX));
+        for (offset, symbol) in label.chars().enumerate() {
+            let x = start + offset as u16;
+            if x < rect.x || x >= rect.right() {
+                continue;
             }
             if let Some(cell) = buf.cell_mut((x, rect.y)) {
-                cell.reset();
                 cell.set_char(symbol);
-                cell.set_style(button_style);
             }
         }
     }

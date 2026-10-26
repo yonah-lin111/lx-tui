@@ -441,7 +441,7 @@ pub(crate) fn split_pane(
     if tab_state.split_pane(pane, direction).is_none() {
         return false;
     }
-    state.prompt_focused = false;
+    super::focus::focus_panes(state);
     state.prompt.clear_panel();
     clear_selection(state);
     true

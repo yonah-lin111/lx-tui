@@ -796,7 +796,7 @@ fn toolbar_pin_renders_hollow_then_filled_left_of_select_all() {
         false,
         false,
     );
-    assert_eq!(render_label(&buf, pin), text::PROMPT_UNPINNED_LABEL);
+    assert_eq!(render_label(&buf, pin).trim(), text::PROMPT_UNPINNED_LABEL);
 
     let mut buf = Buffer::empty(panel);
     render_header(
@@ -808,7 +808,7 @@ fn toolbar_pin_renders_hollow_then_filled_left_of_select_all() {
         false,
         true,
     );
-    assert_eq!(render_label(&buf, pin), text::PROMPT_PINNED_LABEL);
+    assert_eq!(render_label(&buf, pin).trim(), text::PROMPT_PINNED_LABEL);
 }
 
 #[test]
@@ -1726,4 +1726,65 @@ fn selection_reverse_keeps_inline_code_foreground() {
         Color::LightRed,
         "选区反显不覆盖行内代码前景"
     );
+}
+
+/// 钉住按钮按最宽态占 7 列，`[pin]` 只有 5 列：标签必须**右对齐**，
+/// 否则余下 2 列甩到右侧，紧邻的 `[all]` 前会多出 3 列空档（用户报告的缺陷）。
+#[test]
+fn pin_label_is_right_aligned_inside_its_slot() {
+    let panel = Rect::new(0, 0, 46, 14);
+    let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar");
+    let pin = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::Pin,
+        false,
+    )
+    .expect("pin visible");
+    assert!(
+        pin.width > text::PROMPT_UNPINNED_LABEL.chars().count() as u16,
+        "前提：槽位比标签宽"
+    );
+
+    let editor = Prompt::new(PaneId::from_raw_for_test(1));
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        false,
+        false,
+    );
+    let rendered: String = (pin.x..pin.right())
+        .map(|x| buf[(x, pin.y)].symbol())
+        .collect();
+    assert_eq!(
+        rendered.trim(),
+        text::PROMPT_UNPINNED_LABEL,
+        "标签内容不变: {rendered:?}"
+    );
+    assert!(
+        rendered.ends_with(text::PROMPT_UNPINNED_LABEL),
+        "标签必须贴槽位右缘（右对齐），实际 {rendered:?}"
+    );
+
+    // 与 `[all]` 之间恰好 1 列间距。
+    let select_all = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::SelectAll,
+        false,
+    )
+    .expect("all visible");
+    assert_eq!(
+        select_all.x.saturating_sub(pin.right()),
+        1,
+        "与 [all] 只隔 1 列"
+    );
+
+    // 相邻格必须真的是空格，不是旧字形残留。
+    for x in pin.x..(pin.right() - text::PROMPT_UNPINNED_LABEL.chars().count() as u16) {
+        assert_eq!(buf[(x, pin.y)].symbol(), " ", "前导空白列 {x}");
+    }
+    assert_eq!(bar.y, pin.y);
 }

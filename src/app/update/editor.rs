@@ -3,7 +3,7 @@
 use crate::app::actions::EditorCommand;
 use crate::app::markdown::MentionEntry;
 use crate::app::prompt::{PromptEditing, PromptMode};
-use crate::app::state::AppState;
+use crate::app::state::{AppState, FocusedContainer};
 use crate::layout::PaneId;
 
 use super::prompt::{
@@ -539,6 +539,6 @@ pub fn place_prompt_cursor(state: &mut AppState, row: u16, col: u16) {
 /// 否则会出现 `prompt_focused = true` 而画面停在 Todo 的分裂状态。
 pub fn focus_prompt(state: &mut AppState) {
     sync_mention_root(state);
-    state.prompt_focused = true;
+    state.set_focus(FocusedContainer::Prompt);
     state.right_tab = crate::app::state::RightTab::Prompt;
 }

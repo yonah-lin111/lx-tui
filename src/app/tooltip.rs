@@ -61,6 +61,8 @@ pub enum TooltipTarget {
     PageMenuDelete,
     /// 引用文件夹内容搜索弹窗标题行的原始路径复制按钮。
     ReferencedSearchCopyPath,
+    /// 右侧容器 Todo 面板的工具栏按钮。
+    TodoButton(TodoButton),
     /// prompt 文本区内的模板块按钮；`line` 为块起始逻辑行。
     TemplateButton {
         line: usize,
@@ -71,6 +73,15 @@ pub enum TooltipTarget {
         line: usize,
         button: BlockButtonKind,
     },
+}
+
+/// Todo 工具栏按钮（渲染几何与命中、tooltip 目标共用一份定义）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TodoButton {
+    New,
+    Edit,
+    Delete,
+    ClearDone,
 }
 
 /// 鼠标当前悬停的按钮；到显示时刻前只计时不渲染。

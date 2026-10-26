@@ -148,7 +148,7 @@ pub(crate) fn render_body(
     if area.width == 0 || area.height == 0 {
         return None;
     }
-    let focused = state.prompt_focused;
+    let focused = state.prompt_focused();
     let mode = state.prompt_owner().prompt_panel.mode;
     let title = title_source(state);
     let (title_text, draft, page) = match &title {

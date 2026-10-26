@@ -20,9 +20,10 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+    // 侧栏边框随焦点描边：它自己持焦点时用强调色，其余容器持焦点时保持 muted。
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(style::border(false))
+        .border_style(style::border(state.sidebar_focused()))
         .title(Span::styled(
             format!(" {} ", text::SIDEBAR_TITLE),
             style::border_title(),
@@ -573,7 +574,11 @@ fn agent_list_items<'a>(
     items: &[AgentListItem],
     width: usize,
 ) -> Vec<ListItem<'a>> {
-    let focused = (!state.prompt_focused).then(|| state.active_tab().layout.focus());
+    // 只有主区真正持有焦点时，Agents 列表才标出「当前聚焦窗格」；
+    // 右侧容器或侧栏自己持焦点时主区没有焦点，不该再标。
+    let focused = state
+        .panes_focused()
+        .then(|| state.active_tab().layout.focus());
     let mut rows = Vec::with_capacity(items.len());
     for (slot, item) in items.iter().enumerate() {
         let snapshot = &item.snapshot;

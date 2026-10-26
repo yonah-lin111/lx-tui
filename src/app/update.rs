@@ -3,6 +3,7 @@
 mod chat;
 mod dialog;
 mod editor;
+mod focus;
 mod interaction;
 mod menu;
 mod pane;
@@ -11,6 +12,7 @@ mod referenced;
 mod resume_edit;
 mod right_panel;
 mod selection;
+mod todo;
 mod trust;
 mod workspace;
 mod workspace_list;
@@ -19,6 +21,7 @@ mod worktree;
 pub use chat::*;
 pub use dialog::*;
 pub use editor::*;
+pub use focus::*;
 pub use interaction::*;
 pub use menu::*;
 pub use pane::*;
@@ -27,6 +30,7 @@ pub use referenced::*;
 pub use resume_edit::*;
 pub use right_panel::*;
 pub use selection::*;
+pub use todo::*;
 pub use trust::*;
 pub use workspace::*;
 pub use workspace_list::*;
@@ -37,7 +41,7 @@ pub use worktree::{
 };
 
 use super::actions::Action;
-use super::state::AppState;
+use super::state::{AppState, FocusedContainer};
 
 /// 应用行为。
 pub fn apply(action: Action, state: &mut AppState) {
@@ -51,7 +55,8 @@ pub fn apply(action: Action, state: &mut AppState) {
         Action::TogglePrompt => {
             state.prompt_collapsed = !state.prompt_collapsed;
             if state.prompt_collapsed {
-                state.prompt_focused = false;
+                commit_todo_edit(state);
+                state.set_focus(FocusedContainer::Panes);
                 clear_selection(state);
                 state.prompt.clear_panel();
                 cancel_page_rename(state);

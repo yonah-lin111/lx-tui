@@ -19,6 +19,7 @@ use super::trust::TrustResolution;
 pub mod lx;
 pub mod pane;
 pub mod prompt_history;
+pub mod todo;
 pub mod workspace;
 
 pub use lx::LxInputMode;
@@ -36,6 +37,7 @@ pub use lx::{
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
+pub use todo::{TodoEdit, TodoEditTarget, TodoPanel};
 pub use workspace::{
     PromptDraft, Workspace, WorkspaceGit, WorkspaceIdentity, WorkspaceRow,
     current_workspace_identity, home_dir, path_tail_two, tab_label, unique_workspace_name,
@@ -123,6 +125,23 @@ pub struct PromptDrag {
 }
 
 /// 顶层层级：工作区包含标签与挂起的 prompt 草稿，标签包含 BSP 窗格树与窗格终端；
+/// 持有键盘焦点的容器：同一时刻**只有一个**。
+///
+/// 高亮、硬件光标归属与按键去向全部由它派生，杜绝「主区与右侧容器同时描边强调色」
+/// 与「光标画在别的容器输入框里」这类分裂状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FocusedContainer {
+    /// 左侧栏（工作区 / Agents 列表）。
+    Sidebar,
+    /// 主区窗格（终端或 lx 页）。
+    #[default]
+    Panes,
+    /// 右侧容器的 Prompt 面板。
+    Prompt,
+    /// 右侧容器的 Todo 面板。
+    Todo,
+}
+
 /// prompt 面板为全局右栏，显示激活（或钉住）工作区的草稿。
 #[derive(Debug)]
 pub struct AppState {
@@ -162,8 +181,11 @@ pub struct AppState {
     pub prompt_collapsed: bool,
     /// 主区是否折叠为右缘窄条；仅 prompt 在左（右列为主区）时有效，交换即复位。
     pub panes_collapsed: bool,
-    /// prompt 是否持有键盘焦点；为真时按键进入编辑器而非焦点窗格。
-    pub prompt_focused: bool,
+    /// 当前持有键盘焦点的容器（**唯一真源**）。
+    ///
+    /// 高亮、硬件光标归属与按键去向全部由它决定：同一时刻只有一个容器算聚焦，
+    /// 因此不会出现「主区与右侧容器同时描边强调色」或「光标画在别的容器输入框里」。
+    pub focused: FocusedContainer,
     /// 面板当前显示的 prompt 编辑器；其余工作区的草稿挂起在 `Workspace.prompt`。
     pub prompt: Prompt,
     /// 显示中 prompt 的显式绑定上下文根路径；None 时回退显示中工作区 cwd。
@@ -247,9 +269,54 @@ pub struct AppState {
     pub models: ModelsSnapshot,
     /// 全局已发送 prompt 历史（跨窗格/工作区/会话共享；末尾为最近使用）。
     pub prompt_history: PromptHistory,
+    /// 全局 todo 列表状态（不随工作区变化；跟随所在数据库）。
+    pub todo: TodoPanel,
+    /// 拖拽 todo 滚动条 thumb 时相对顶部的抓取偏移。
+    pub todo_scroll_drag: Option<u16>,
+    /// 鼠标悬停的 todo **列表**下标（已扣掉幽灵行槽位）；None 表示未悬停。
+    ///
+    /// 用列表下标而非显示下标：渲染层按 `record_index` 比较，点击路径按条目 id 锚定，
+    /// 三者口径必须一致；显示下标的换算只在命中入口（`todo::list_index`）做一次。
+    pub todo_hover: Option<usize>,
+    /// todo 列表最近一次左键点击（显示行下标、时刻）；双击判定用。
+    pub todo_row_click: Option<(usize, Instant)>,
 }
 
 impl AppState {
+    /// 唯一焦点源的读侧：`prompt_focused` / `todo_focused` 由它派生。
+    pub fn focus(&self) -> FocusedContainer {
+        self.focused
+    }
+
+    /// 设置焦点容器；返回是否发生变化。互斥由类型本身保证，不存在"两个都为真"。
+    pub fn set_focus(&mut self, target: FocusedContainer) -> bool {
+        if self.focused == target {
+            return false;
+        }
+        self.focused = target;
+        true
+    }
+
+    /// prompt 是否持有键盘焦点。
+    pub fn prompt_focused(&self) -> bool {
+        self.focused == FocusedContainer::Prompt
+    }
+
+    /// todo 面板是否持有键盘焦点。
+    pub fn todo_focused(&self) -> bool {
+        self.focused == FocusedContainer::Todo
+    }
+
+    /// 侧栏是否持有键盘焦点。
+    pub fn sidebar_focused(&self) -> bool {
+        self.focused == FocusedContainer::Sidebar
+    }
+
+    /// 主区是否持有键盘焦点。
+    pub fn panes_focused(&self) -> bool {
+        self.focused == FocusedContainer::Panes
+    }
+
     /// 构造初始状态：单个工作区（以当前路径末段命名），单个自动命名终端标签，
     /// 加全局 prompt 右栏。
     pub fn demo() -> Self {
@@ -275,7 +342,7 @@ impl AppState {
             prompt_hover: false,
             prompt_collapsed: false,
             panes_collapsed: false,
-            prompt_focused: false,
+            focused: FocusedContainer::Panes,
             prompt: Prompt::new(PaneId::alloc()),
             prompt_root: None,
             prompt_pinned: None,
@@ -329,6 +396,10 @@ impl AppState {
             settings_open_requested: false,
             models: ModelsSnapshot::default(),
             prompt_history: PromptHistory::new(),
+            todo: TodoPanel::new(),
+            todo_scroll_drag: None,
+            todo_hover: None,
+            todo_row_click: None,
         }
     }
 

@@ -93,6 +93,16 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if let Some(grab) = state.todo_scroll_drag {
+        let Some(bar) = ui::right_panel::todo::scrollbar(view.prompt, state) else {
+            return;
+        };
+        let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+        if update::set_todo_scroll(state, offset) {
+            *dirty = true;
+        }
+        return;
+    }
     if let Some(grab) = state.agent_scroll_drag {
         let Some(bar) = ui::agent_scrollbar(view, state) else {
             return;
@@ -333,6 +343,11 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     if state.prompt_scroll_drag.take().is_some() {
+        return;
+    }
+    // 漏掉这一条会让 drag 分支永久停在 Todo 滚动条上：之后拖分隔线、拖选区、
+    // 拖 lx 卡片全部被静默吞掉（只有再点一次 Todo 滚动条才能解除）。
+    if state.todo_scroll_drag.take().is_some() {
         return;
     }
     if state.task_scroll_drag.take().is_some() {

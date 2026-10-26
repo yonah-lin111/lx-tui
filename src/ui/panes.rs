@@ -31,7 +31,7 @@ pub(crate) fn render_panes(
             continue;
         };
         // prompt 持有键盘焦点时窗格让出焦点表现，避免双焦点指示。
-        let focused = *id == focus && !state.prompt_focused;
+        let focused = *id == focus && state.panes_focused();
         let mut title = match pane.view {
             PaneView::Lx => format!("lx-[{}]", text::lx_entry_label(pane.lx.entry)),
             PaneView::Terminal => pane_display_title(*id, pane),

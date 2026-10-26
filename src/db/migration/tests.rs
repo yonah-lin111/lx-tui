@@ -880,3 +880,102 @@ fn shell_branch_v12_upgrade_creates_rewind_tables() {
         .expect("shell message preserved");
     assert_eq!(kind, "user_shell");
 }
+
+/// v14 库（有全部历史表、无 `todo`）升级到 v15：只增表，既有数据原样保留。
+#[test]
+fn v14_database_upgrades_to_v15_with_todo_table() {
+    let path = temp_db_path("v15-todo");
+    let workspace = workspace_path("v15-todo");
+    {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("temp dir");
+        }
+        let conn = rusqlite::Connection::open(&path).expect("raw open");
+        conn.execute_batch(SCHEMA).expect("base schema");
+        conn.execute_batch(SCHEMA_V7).expect("v7 schema");
+        migrate_v9(&conn).expect("v9 schema");
+        conn.execute_batch(SCHEMA_V10).expect("v10");
+        conn.execute_batch(SCHEMA_V11).expect("v11");
+        conn.execute_batch(SCHEMA_V12).expect("v12");
+        conn.execute_batch(
+            "ALTER TABLE agent_message ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'
+                 CHECK (kind IN ('chat', 'user_shell'));
+             ALTER TABLE agent_message ADD COLUMN user_shell_json TEXT;",
+        )
+        .expect("v12 additions");
+        conn.execute_batch(SCHEMA_V14).expect("v14 schema");
+        // v14 库不该有 todo 表：迁移必须由 v15 建出。
+        let before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'todo'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count todo");
+        assert_eq!(before, 0, "前提：v14 库没有 todo 表");
+        let ws = workspace.to_string_lossy().into_owned();
+        conn.execute(
+            r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, created_at, updated_at)
+               VALUES ('ws1', 'ws', 'filesystem', ?1, 1, datetime('now'), datetime('now'))"#,
+            rusqlite::params![ws],
+        )
+        .expect("workspace");
+        conn.execute_batch("PRAGMA user_version = 14;")
+            .expect("version 14");
+    }
+
+    let database = Database::open(&path).expect("migrate v14 -> v15");
+    let version: i64 = database
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    assert_eq!(version, SCHEMA_VERSION);
+
+    // 列齐、唯一索引在。
+    let mut statement = database
+        .conn
+        .prepare("PRAGMA table_info(todo)")
+        .expect("table info");
+    let columns: Vec<String> = statement
+        .query_map([], |row| row.get(1))
+        .expect("rows")
+        .collect::<std::result::Result<_, _>>()
+        .expect("collect");
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "text",
+            "status",
+            "position",
+            "created_at_ms",
+            "updated_at_ms"
+        ]
+    );
+    let index: i64 = database
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_todo_position'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("index");
+    assert_eq!(index, 1, "position 唯一索引必须存在");
+
+    // 既有数据未动。
+    let workspaces: i64 = database
+        .conn
+        .query_row("SELECT COUNT(*) FROM workspace", [], |row| row.get(0))
+        .expect("workspace count");
+    assert_eq!(workspaces, 1);
+
+    // 新表可用：写入一条再读回。
+    database
+        .save_todo(&crate::db::todo::TodoRecord::new(
+            "hello",
+            crate::db::todo::TodoStatus::Todo,
+            0,
+        ))
+        .expect("save todo");
+    assert_eq!(database.list_todos().expect("list").len(), 1);
+}

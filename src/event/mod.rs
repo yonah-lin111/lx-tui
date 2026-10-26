@@ -396,6 +396,8 @@ async fn run_loop(
             update::resolve_task_output_visible(state, &geometry.rects);
             // ask 预览区可见行数：同上，保证短预览滚不出空白。
             update::resolve_ask_preview_visible(state, &geometry.rects);
+            // Todo 列表可见行数：本帧紧接着绘制，钳制结果直接生效，无需再置脏。
+            update::resolve_todo_viewport(state, geometry.view.prompt);
             ui_cache.begin_frame();
             tui.draw(|frame| ui::render_cached(frame, state, &config, &mut ui_cache))?;
             dirty = false;
@@ -776,7 +778,7 @@ fn handle_app_event(
 ///
 /// prompt 未聚焦时不扫描；扫描失败按空结果处理（面板保持隐藏）。
 fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
-    if !state.prompt_focused {
+    if !state.prompt_focused() {
         return;
     }
     let prompt = state.prompt.id();

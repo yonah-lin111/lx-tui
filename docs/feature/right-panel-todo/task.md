@@ -1,0 +1,299 @@
+# 右侧容器 Todo 面板 — 执行任务
+
+- 任务目录：`docs/feature/right-panel-todo/`
+- 分支：`feat/right-panel-todo`（worktree：`.worktrees/right-panel-todo`，基于 `dev`）
+- 规则：严格遵守 `AGENTS.md`；生产代码禁止 `unwrap()` / `expect()`（测试除外）；
+  用户可见文案进 `ui/text.rs`（超行数上限则进 `ui/text/todo.rs`）；颜色只从 `ui/style.rs` 取；
+  `app/` 不碰 rusqlite，`ui/` 不改状态不做 IO；测试驱动（先红后绿）。
+- 需求原文（用户）：参考 lx-agent 的 todo 编写功能，在右侧容器的 todo 列表中实现 todo 编写；
+  支持 CRUD；显示 todo 图标（字符构成）；输入交互与快捷键参考 lx-agent；功能按钮区加按钮；
+  todo list 加滚动条；另外把 prompt 区域置顶与全选的字符改成英文。
+- 前置：用户已审核并批准同目录 `design.md` 与本清单（17 条 Grill Me 边界已逐条确认）。
+
+## 执行清单
+
+### 1. 需求与边界对齐（Grill Me 阶段，已完成）
+
+- [x] 质问 1：落 SQLite → 用户修正为「全局一份，不按工作区区分」。
+- [x] 质问 2：扁平三态 + `position`，不做父子层级 → 采纳推荐。
+- [x] 质问 3：inline 单行编辑，Esc 撤销式取消 → 采纳推荐。
+- [x] 质问 4：`todo_focused` 独立布尔，与 `prompt_focused` 平行互斥 → 采纳推荐。
+- [x] 质问 5：只改 `[pin]`/`[unpin]`/`[all]`，其余按钮保持原字符 → 用户选 A。
+- [x] 质问 6：纯用户清单，agent 不读不写 → 采纳推荐。
+- [x] 质问 7：`Space` 循环三态 + 按键表 → 采纳推荐（用户对问题 6 回复「使用推荐」，按上下文归入此条）。
+- [x] 质问 8：逐条提交落库，失败只 toast 不回滚 → 用户确认「对」。
+- [x] 质问 9：`position` 密集整数 + 事务内顺移；不做拖拽与 `J`/`K` 重排 → 采纳推荐。
+- [x] 质问 10：右侧 1 列滚动条 + 滚轮 3 行；滚轮不动高亮，键盘移动自动入视口 → 采纳推荐。
+- [x] 质问 11：4 个按钮；`[clear done]` 不确认、只删 done、可撤销；无效置灰；空态 `no todos yet` → 采纳推荐。
+- [x] 质问 12：`[ ]`/`[~]`/`[x]` + `❯`，不引入圆点/方块字形 → 采纳推荐。
+- [x] 质问 13：Esc 取消、切 tab/点别行提交；空输入不建、清空即删；提交 trim → 采纳推荐。
+- [x] 质问 14：单槽删除撤销；`Ctrl+Z` 无内容时吞掉不穿透 → 采纳推荐。
+- [x] 质问 15：切工作区完全不变；编辑中切工作区走提交 → 用户选 A。
+- [x] 质问 16：todo 跟随所在数据库，不做跨 worktree 同步 → 采纳推荐。
+- [x] 质问 17：先出 design.md + task.md，用户审核后开工 → 用户确认「对」。
+- [x] 用户审核 `design.md` 与本清单，确认后开始实施（用户下达「执行 task」指令）。
+
+### 2. 复现测试（先红）
+
+- [x] `src/db/todo/tests.rs`（新，18 条）：§6.1 全部 8 条。
+- [x] `src/db/migration/tests.rs`：`v14_database_upgrades_to_v15_with_todo_table`。
+- [x] `src/app/update/todo/tests.rs`（新，13 条）。
+- [x] `src/ui/right_panel/todo/tests.rs`（新，7 条）。
+- [x] `src/event/tests.rs`：新增 5 条 + 改写 3 条既有「吞掉」用例。
+- [x] `src/ui/text/tests.rs`：改写 `prompt_button_icons_are_single_width_and_non_pua`、
+      新增 `todo_labels_align_to_three_columns`。
+- [ ] 确认上述用例在改动前确实失败（红），记录失败原因。
+
+### 3. 数据库层（`src/db/`）
+
+- [ ] `src/db/migration.rs`：新增 `SCHEMA_V15_TODO` 常量（表 + 唯一索引），
+      `migrate()` 尾部按 v14 写法追加 `if version < 15 { ... }`。**不改任何历史迁移文本**。
+- [ ] `src/db/mod.rs`：`SCHEMA_VERSION = 15`；`pub mod todo;`。
+- [ ] `src/db/todo.rs`（新，约 200 行）：`list_todos` / `save_todo`（UPSERT）/
+      `delete_todo` / `delete_todos_with_status` / `restore_todos`；
+      文本 trim 校验、500 字符上限、`now_ms()`；顺移用「SELECT id ORDER BY position DESC
+      + 逐条 UPDATE」（不依赖 `SQLITE_ENABLE_UPDATE_DELETE_LIMIT`）。
+- [ ] `TodoStatus` / `TodoRecord` 定义在 `db/todo.rs`，`app` 侧只做类型转换使用
+      （与 `app/state/lx/compact.rs:6` 引用 `db::chat::CompactCheckpoint` 同口径）。
+
+### 4. 状态层（`src/app/`）
+
+- [ ] `src/app/state/todo.rs`（新，约 250 行）：`TodoPanel`、`TodoEdit`、`TodoEditTarget`，
+      含 `clamp_selection` / `scroll_into_view` / `visible_rows` 等纯方法。
+- [ ] `src/app/state.rs`：`pub mod todo;` + `pub use todo::{TodoEdit, TodoEditTarget, TodoPanel};`；
+      `AppState` 新增 `todo_focused` / `todo` / `todo_scroll_drag` / `todo_hover`；
+      `demo()` 初始化；`#[cfg(test)]` 下既有 `state` 构造点同步（若有手写全字段的地方）。
+- [ ] `src/app/effects.rs`：新增 4 个变体 `SaveTodo` / `DeleteTodo` /
+      `DeleteTodosWithStatus` / `RestoreTodos`。
+- [ ] `src/app/update/todo.rs`（新，约 400 行）：§4.5 全部函数 + `apply_todo_key` /
+      `apply_todo_paste` / `apply_todo_list` / `fail_todo_write`。
+- [ ] `src/app/update.rs`：`mod todo;` + `pub use todo::*;`。
+- [ ] `src/app/update/right_panel.rs::select_right_tab`：切走 Todo 时 `commit_todo_edit` 并清
+      `todo_focused` / `todo_hover`；切走 Prompt 的既有逻辑保持。
+- [ ] `src/app/update/editor.rs::focus_prompt`：追加 `todo_focused = false`。
+- [ ] `src/app/update/pane.rs:68` 附近：聚焦窗格时清 `todo_focused`。
+- [ ] `src/app/update/workspace.rs::switch_workspace`：切工作区前 `commit_todo_edit`
+      （注意：它现在也会 `prompt_focused = false`，Todo 的列表/选中/滚动/焦点**不得**被清）。
+- [ ] `src/app/update.rs::apply(Action::TogglePrompt)`：折叠时若 `todo_focused` 则先提交再失焦。
+- [ ] `src/app/actions.rs`：**不加** `Action` 变体（todo 命令带字符，走 `Routed::Todo`）。
+- [ ] `src/app/update/interaction.rs`：`tick` / `next_deadline` **不改**（Todo 无定时逻辑）。
+
+### 5. 输入与事件层（`src/input/`、`src/event/`）
+
+- [ ] `src/input/mod.rs`：`Routed::Todo(TodoKey)`、`TodoKey` 枚举、`todo_key(key)` 无状态映射；
+      `route` 新增尾参 `todo_focused: bool`，插在 `prompt_focused` 分支之后、`pane_lx` 之前；
+      `Ctrl+Q` 优先级不变。
+- [ ] `src/input/tests.rs` / `process_keys.rs` / `db/service/resume_tests.rs`：
+      更新 `route` 调用点（补 `false` 实参），新增 Todo 路由用例。
+- [ ] `src/event/input.rs`：`route` 调用补实参；`match` 新增 `Routed::Todo`；
+      粘贴路径在 `prompt_focused` 分支前新增 `todo_focused` 分支。
+- [ ] `src/event/mouse/press.rs`：§4.9 的命中链改造（按钮 → 行 → 滚动条 → 空白吞掉），
+      插在既有「整块吞掉」分支之前。
+- [ ] `src/event/mouse/hit.rs`：新增 `handle_todo_scrollbar_press`。
+- [ ] `src/event/mouse/wheel.rs`：Todo 分支改为滚动列表。
+- [ ] `src/event/mouse/hover.rs`：新增 `todo_hover` 计算与 `set_todo_hover`。
+- [ ] `src/event/mouse/drag.rs`：新增 `todo_scroll_drag` 分支；`handle_mouse_up_left` 补 `take()`。
+
+### 6. 渲染层（`src/ui/`）
+
+- [ ] `src/ui/right_panel.rs`：改为目录模块（`pub(crate) mod todo;`），Todo 分支调
+      `todo::render(frame, area, state)`；删除 `render_empty_body`。
+- [ ] `src/ui/right_panel/todo.rs`（新，约 350 行）：§4.8 全部几何 + 绘制 + 命中 + 光标坐标。
+- [ ] `src/ui/text.rs`（或 `src/ui/text/todo.rs`）：§4.10 全部常量 + tooltip 文案；
+      改 `PROMPT_SELECT_ALL_LABEL` / `PROMPT_UNPINNED_LABEL` / `PROMPT_PINNED_LABEL`。
+- [ ] `src/ui/style.rs`（或 `src/ui/style/todo.rs`）：§4.11 三个 token。
+- [ ] `src/ui/tooltip.rs`：Todo 按钮 tooltip 目标（`TooltipTarget::TodoButton`）。
+- [ ] `src/ui/mod.rs`：**预期无改动**——Todo 光标坐标走 `right_panel::render` 的返回值，
+      与 `prompt_cursor` 同一条链路（`src/ui/mod.rs:96`）；若实测被 tooltip 判定吞掉再补条件。
+- [ ] `src/layout.rs`：只改 `PROMPT_SELECT_ALL_WIDTH`(3→5) / `PROMPT_PIN_WIDTH`(3→7)
+      两个数值，**零新增行**；派生阈值随之变为 19/27/18/33（见 `design.md` §4.10 的表），
+      并确认「已知副作用」贴中记载的 `[dir]` 阈值上升确实发生、且行为符合预期。
+
+### 7. 服务层（`src/db/service.rs`）
+
+- [ ] `execute` 新增 4 个 `Effect` 分支（各 ≤ 6 行，超则抽 `db/service/todo.rs`）。
+- [ ] `Persistence::load_todos(&self, state: &mut AppState)`。
+- [ ] `src/main.rs:31` 附近追加 `persistence.load_todos(&mut state);`。
+- [ ] `Persistence::shutdown`：`commit_editing_prompt` 之后追加 `update::commit_todo_edit(state)`。
+
+### 8. 测试与文档
+
+- [ ] 补齐 §2 列出的全部用例并转绿；改写因语义变化而失效的既有用例
+      （`src/event/tests.rs:4980-5020`、`src/ui/tests.rs:1437-1441`、
+      `src/ui/right_panel/tests.rs` 中 Todo 空白体相关断言）。
+- [ ] 同步 `docs/standards/tui-design-requirements.md:25`（按 `design.md` §7 三点改写）
+      与工具栏文案段。
+- [ ] 回写本目录 `design.md` §9「实施记录（与设计的差异）」。
+
+### 9. 精确验证
+
+- [ ] `cargo fmt`
+- [ ] `cargo clippy --all-targets -- -D warnings`
+- [ ] `cargo test db::todo`、`cargo test db::migration`、`cargo test app::update::todo`、
+      `cargo test ui::right_panel`、`cargo test input::`、`cargo test event::`
+- [ ] `cargo test`（全量）
+- [ ] 交回用户 `cargo run` 人工验收 §5.3 的 7 条视觉要点（Agent 无法交互式验证 TUI）。
+
+## 评审与修复
+
+实施期自查发现并修掉的真缺陷（无并行 reviewer，全部由我自己在验证过程中发现）：
+
+1. **新建 todo 时屏幕空白**：编辑现场只渲染既有条目，新建没有行可画。加「幽灵行」（`render_rows` 的 `pending_new` 分支）。
+2. **点行后下标错位**：`select_todo_row` 先提交再按下标选中，而提交会让幽灵行消失、后续下标整体前移。改为先判「点的是不是正在编辑的那一行」。
+3. **`[pin]` 留下残影**：按钮宽度改为最宽态 7 后，`[pin]` 只写 5 列，后 2 列保留上一帧的 `n]`。`render_toolbar` 改为整格填充。
+4. **`restore` 造重复条目**：撤销槽被恢复两次会在列表里插出两份同 id 记录。改为按 id 去重。
+5. **按钮亮着却点不动**：渲染层的置灰判定与点击判定是两份代码。统一为 `update::todo_button_enabled`。
+6. **`set_viewport_rows` 恒返回 false**：只改了 scroll 就返回 false，视口变化不置脏。改为「rows 变了就返回 true」。
+7. **滚动条列被正文覆盖**：`write_string` 用帧右缘当上限，长条目会盖掉 thumb。改为 `write_string_in` 按列表右缘裁剪。
+
+
+## 完成记录
+
+- 分支：`feat/right-panel-todo`（worktree：`.worktrees/right-panel-todo`，基于 `dev` @ `8707aa7`）。**尚未合并**，等用户确认。
+- Schema：`SCHEMA_VERSION` 14 → **15**（新增全局 `todo` 表 + `idx_todo_position` 唯一索引）。
+- 新增文件：`src/db/todo.rs`(+tests)、`src/app/state/todo.rs`(+tests)、`src/app/update/todo.rs`(+tests)、
+  `src/ui/right_panel/todo.rs`(+tests)、`src/ui/text/todo.rs`(+tests)、`src/ui/style/todo.rs`。
+- 验证：`cargo fmt --check` 通过；`cargo clippy --all-targets -- -D warnings` 通过；
+  `cargo test` 全绿（lib **3433 passed / 0 failed / 2 ignored**，其余 15 个测试目标全 ok）。
+- 文件行数：`src/layout.rs` 保持 **999** 行（零新增行，只改 2 个常量值）；
+  `src/ui/text.rs` 1269、`src/ui/style.rs` 1010（新增代码已拆入子模块）、`src/db/service.rs` 1273。
+- 未做项：无。
+- 待人工验收（`cargo run`）：§5.3 的 10 条视觉要点，尤其是 `[pin]`/`[all]` 与旧图标的观感对比、
+  `[dir]` 从内宽 27 涨到 33 后「面板宽 29~34 时 `[dir]` 消失」这一已知副作用，
+  以及第二轮的底部统计块、双击进编辑与 `Tab` 切状态。
+
+## 第二轮（交互优化，按用户追加要求）
+
+用户追加：`Tab` 切状态、双击进入编辑（输入框与光标逻辑复用既有输入框）、列表与统计之间加分割线。
+
+- [x] `TodoKey::Tab`：列表态与编辑态均循环状态（编辑态切完立即登记 `SaveTodo`；新建态吞掉）。
+- [x] 双击进编辑：`AppState.todo_row_click` + `update::click_todo_row`（判定与选中同一入口），
+      窗口复用 `PROMPT_DOUBLE_CLICK_WINDOW`；双击正在编辑的行不打断草稿。
+- [x] 编辑行改为复用 `widgets::input::view`（按显示宽度滚动，宽字符占 2 列），
+      新建空输入显示 muted 占位 `new todo`。
+- [x] 底部统计块：`layout::prompt_body_rect` 公开 + `ui::prompt::render_rule` 泛化，
+      新增 `stats_divider_rect` / `stats_rect`；列表区与滚动条轨道同步扣掉 2 行；
+      工具栏右端的 `done/total` 计数撤除（避免与统计行重复）。
+- [x] 文案：`TODO_EDIT_PLACEHOLDER`、`TODO_STATS_*`；撤除 `TODO_COUNT_SEPARATOR`。
+- [x] 测试：行为层 11 条、渲染层 8 条、事件层 2 条、文案守卫 1 条。
+- [x] 变异验证：`stats_visible` 恒 false → 4 条渲染用例失败；双击分支改 `if false` → 2 条失败；
+      列表态 / 编辑态 `Tab` 各改 `false` → 对应用例失败；统计块不扣列表高度 → 事件用例失败；
+      统计行整行宽度闸门去掉 → 窄面板残句用例失败。
+- [x] 自查修掉：统计行原本逐段「放不下就跳过」，会让后面的短段顶到前面拼出
+      `total 4 · doing 1 · 2 50%` 这种残句。改成整行量宽、放不下整行不画（分割线保留）。
+- [x] 自查修掉（第一轮遗留缺陷）：幽灵行打开时点它下方的行会选错条目（点 b 选中 c）。
+      改为按显示下标锚定条目 id、提交后按 id 找回位置；幽灵行被提交的那一击同时作废
+      点击序列（否则后半击会落到上移后的另一条）。
+- [x] 文档：`design.md` §3.1/§3.2/§3.4/§5.1/§5.2/§5.3/§6/§7/§9 与
+      `docs/standards/tui-design-requirements.md:25` 同步。
+
+第二轮验证：`cargo fmt --check` 通过；`cargo clippy --all-targets -- -D warnings` 通过；
+`cargo test` 全绿（lib **3459 passed / 0 failed / 2 ignored**，其余 15 个测试目标全 ok）。
+文件行数：`src/layout.rs` 999（`prompt_body_rect` 去私有，零新增行）、
+`src/ui/right_panel/todo.rs` 502、`src/app/update/todo.rs` 530。
+
+## 第三轮（真机 bug + 统计块改版）
+
+用户追加：①在 todo 里输入时 IME 跑到 lx 输入框；期望光标/IME 落在被编辑的那一行；
+②点右侧容器就该是选中态，不该"只有点进输入框才算选中"；③统计与列表平分高度并加字符图表。
+
+- [x] **真 bug（渲染层）**：`render_rows` 逐行 `cursor = render_row(…)`，编辑行不在最后一行时
+      被后面的「无光标」行覆盖成 `None`，上层回落窗格光标 → IME 画在 lx 输入框。
+      改为 `cursor = cursor.or(…)` 累积；并用变异验证（逐行覆盖 → 用例失败）。
+- [x] **真 bug（焦点）**：`ui::right_panel::todo::render` 无条件交出硬件光标。
+      改为仅在 `todo_focused` 时交出（未聚焦时上层不该画光标）。
+- [x] **点击即选中**：新增 `update::focus_todo_from_click`，Todo 面板内任意位置（工具栏空白、
+      分割线、统计块、列表外空白、顶边框空白）点击都让容器进入选中态；不产生数据改动。
+- [x] **统计块改版**：与列表平分主体区（`(body - 1) / 2`，主体区 < 7 时不切分）；
+      块内三段 = 摘要行 / 三态竖向柱图（`█`，按计数缩放，非零至少 1 行）/ 轴标签行。
+      新增 `style::todo_bar_open/active/done`、`text::TODO_BAR_FILLED`、`TODO_STATS_OPEN_LABEL`。
+      撤除 `TODO_COUNT_SEPARATOR`（上一轮已由摘要行取代）。
+- [x] 测试：渲染层 +3（`edit_cursor_survives_later_rows`、`unfocused_panel_yields_no_hardware_cursor`、
+      柱图/平分几何），事件层 +1（`mouse_click_todo_border_blank_focuses_container`），
+      并把两条「点空白吞掉」用例改写成「焦点变化但不改数据」。
+- [x] 变异验证：逐行覆盖光标 → 失败；去掉未聚焦闸门 → 失败；去掉顶边框空白聚焦 → 失败。
+- [x] 文档：`design.md` §3.1/§3.4/§5.3/§9 与 `docs/standards/tui-design-requirements.md:25` 同步。
+
+第三轮验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
+`cargo test` 全绿（lib **3463 passed / 0 failed / 2 ignored**）。
+
+## 第四轮（容器焦点收敛）
+
+用户追加：主区与右侧容器会**同时**高亮（截图）；要求点哪个容器就只高亮并聚焦哪个容器，
+且输入框光标不得出现在别的容器里。
+
+**根因**：「谁持有焦点」由两个互不同步的 bool 表达，各渲染/路由点自己判：
+- `ui/panes.rs`：`*id == focus && !state.prompt_focused` —— 完全不看 `todo_focused`，
+  于是右侧容器持焦点时主区仍然描边强调色；
+- `ui/sidebar.rs`：边框硬编码 `style::border(false)`，侧栏根本没有"聚焦"概念；
+- `route()` 收 `prompt_focused` + `todo_focused` 两个 bool，调用方漏改即分裂。
+
+- [x] 新增 `FocusedContainer { Sidebar, Panes, Prompt, Todo }` + `AppState.focused`，
+      删除 `prompt_focused` / `todo_focused` 两个字段；读侧提供
+      `prompt_focused()` / `todo_focused()` / `sidebar_focused()` / `panes_focused()`。
+- [x] `input::route` 签名从 6 参收敛为 5 参（`focus: FocusedContainer`）；侧栏持焦点时全部吞掉。
+- [x] 侧栏：边框随 `sidebar_focused()` 描边；新增 `focus_sidebar()`；点侧栏内任意位置（条目、
+      Agents 分区、列表空白、边框）都让侧栏进入选中态（兜底分支必须排在所有侧栏控件之后，
+      否则会吃掉条目点击）。
+- [x] 主区：`panes.rs` 焦点判定改 `state.panes_focused()`；Agents 条目 `❯` 标记同源。
+- [x] `switch_workspace` 只在 **Prompt** 持焦点时交回主区：Todo 焦点按设计不随工作区变化，
+      侧栏刚点下去的也不该被抢走。
+- [x] 把 `focus_sidebar` / `focus_pane` 从 `pane.rs`（本就 1074 行、已超 1000 上限）拆到新模块
+      `src/app/update/focus.rs`（30 行）。
+- [x] 测试：`focusing_right_panel_releases_pane_highlight`、
+      `focusing_pane_releases_right_panel_highlight`、`focusing_sidebar_releases_other_containers`、
+      `sidebar_focus_swallows_all_keys`、`focused_container_is_mutually_exclusive`、
+      `only_focused_container_uses_accent_border`（渲染层：逐容器断言只有焦点容器是 Cyan 圆角）。
+- [x] 变异验证：`panes.rs` 改回 `!prompt_focused()` → 边框用例失败；
+      侧栏边框改回 `border(false)` → 边框用例失败。
+
+第四轮验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
+`cargo test` 全绿（lib **3469 passed / 0 failed / 2 ignored**）。
+
+## 第五轮（tab 焦点、Enter/Shift+Enter、工具栏分组）
+
+用户追加：①点右侧栏顶部 tab 后高亮跑回主区；②todo 里回车也进编辑、Shift+回车才新建；
+③prompt 工具栏 pin 与 all 之间有大间隔；todo 工具栏改左右两组、新建用 `+`。
+
+- [x] **tab 焦点**：`select_right_tab` 原来无条件把焦点退回主区，改为**直接聚焦目标面板**。
+      点 tab 本身就是「点了右侧容器」，焦点必须留在右栏。
+- [x] **Enter / Shift+Enter**：`TodoKey` 新增 `ShiftEnter`；列表态 `Enter` 编辑当前项
+      （空列表退化为新建）、`Shift+Enter` 其后新建；编辑态两者都提交（单行输入没有换行）。
+- [x] **prompt 工具栏**：标签改为**槽内右对齐**。`[pin]` 固定占 `[unpin]` 的 7 列、
+      自身只有 5 列，左对齐把 2 列余量甩到右侧，加 1 列间距 = 用户看到的 3 列间隙。
+- [x] **todo 工具栏**：分左右两组——左端恒为 `[+]`（宽 3、贴左边框、永不丢弃），
+      右端贴右缘依次 `[clear done]` `[del]` `[edit]`，从右往左丢弃；两组间至少 1 列空白。
+- [x] 测试：`enter_edits_current_row_and_shift_enter_creates`、`enter_on_empty_list_starts_new_todo`、
+      `shift_enter_while_editing_commits`、`switching_right_tab_keeps_focus_in_right_panel`（渲染层断言
+      右栏 Cyan / 主区非 Cyan）、`toolbar_puts_new_on_left_and_actions_on_right`、
+      `toolbar_drops_action_buttons_before_new`、`pin_label_is_right_aligned_inside_its_slot`。
+- [x] 变异验证：`select_right_tab` 改回退回主区 → 焦点用例失败；`Enter` 改回「其后新建」→ 用例失败；
+      todo 右侧组改为左对齐排布 → 用例失败；`[pin]` 改回左对齐 → 右对齐用例失败。
+- [x] 文档：`design.md` §3.2/§3.3/§9 与 `docs/standards/tui-design-requirements.md:25` 同步。
+
+第五轮验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
+`cargo test` 全绿（lib **3475 passed / 0 failed / 2 ignored**）。`src/layout.rs` 保持 1000 行。
+
+## 第六轮（评审修复）
+
+评审记录见 [review.md](review.md)。1 条 P0、5 条 P1、4 条 P2 已修并锁回归，
+P3（`style.rs` 超 1000 行）记录为债务未修。
+
+- [x] **P0 拖拽状态泄漏**：`todo_scroll_drag` 从未在 `mouse up` 释放 → 之后所有左键拖拽被劫持。
+- [x] **P1 点当前 tab 不聚焦**：`select_right_tab` 先聚焦再判早退。
+- [x] **P1 隐藏滚动条被点中**：`todo::scrollbar` 加 `right_tab`/`prompt_collapsed` 门控。
+- [x] **P1 悬停高亮错位**：新增 `todo::list_index` 做显示→列表换算，`todo_hover` 语义改列表下标。
+- [x] **P1 末尾幽灵行不可见**：新增 `TodoPanel::scroll_to_edit`，`set_viewport_rows` 上限计入幽灵槽位。
+- [x] **P1 超长文本进内存**：上限改 `pub`，在输入边界截停（逐字 + 粘贴），提交永不超长。
+- [x] **P2 切顶部标签不提交**：新增 `focus::focus_panes` 作唯一收口，7 处调用点改走它。
+- [x] **P2 侧栏粘贴穿透**：`handle_paste_event` 加 `sidebar_focused()` 分支。
+- [x] **P2 迁移注释被截断**：补回首行。
+- [x] **P2 文档未同步**：design.md §3.2 / §5.1 回写 tab 聚焦与打断矩阵。
+- [x] **额外**：`worktree_candidates_do_not_resurrect_mention_panel_on_todo` 用固定临时库路径，
+      跨分支/并发互踩（实测 `UnsupportedSchema`），改为进程+线程唯一路径并清理。
+- [x] 测试：+71 条（state 3 / update 5 / render 3 / event 4 / 输入上限 2 / 其余随口径调整）。
+- [x] 变异验证：13 处逐条确认「改回去用例转红」；两处最初未转红（假阳性）已改用例。
+
+第六轮验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
+`cargo test` 全绿（**3547 passed / 0 failed / 2 ignored**）。
+`src/layout.rs` 仍为 1000 行；`src/ui/right_panel/todo.rs` 714、`src/app/update/todo.rs` 571。

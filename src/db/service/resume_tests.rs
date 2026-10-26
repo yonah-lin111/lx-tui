@@ -156,7 +156,7 @@ fn resume_enter_through_key_route_binds_session() {
     let routed = crate::input::route(
         enter,
         alacritty_terminal::term::TermMode::empty(),
-        false,
+        crate::app::state::FocusedContainer::Panes,
         None,
         true,
     );

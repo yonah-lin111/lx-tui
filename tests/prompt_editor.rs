@@ -181,11 +181,11 @@ fn backspace_deletes_sole_task_marker_without_blank_placeholder() {
 fn clicking_terminal_pane_reads_back_focus_and_keeps_editing_target() {
     let mut state = AppState::demo();
     update::focus_prompt(&mut state);
-    assert!(state.prompt_focused);
+    assert!(state.prompt_focused());
 
     let pane = state.active_tab().layout.focus();
     update::focus_pane(&mut state, pane);
-    assert!(!state.prompt_focused);
+    assert!(!state.prompt_focused());
     assert_eq!(state.active_tab().layout.focus(), pane);
 }
 

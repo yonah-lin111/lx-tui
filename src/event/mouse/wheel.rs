@@ -264,7 +264,16 @@ pub(crate) fn handle_mouse_wheel(
     }
     if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
         if pane == state.prompt.id() {
-            // Todo 面板：滚轮不作用于隐藏的编辑器。
+            // Todo 面板：滚轮只滚列表视口（不动高亮、不聚焦）。
+            if state.right_tab == crate::app::state::RightTab::Todo && !state.prompt_collapsed {
+                if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                    && update::scroll_todo(state, direction)
+                {
+                    *dirty = true;
+                }
+                return;
+            }
+            // 折叠态容器：滚轮不作用于隐藏的编辑器。
             if !update::prompt_panel_active(state) {
                 return;
             }

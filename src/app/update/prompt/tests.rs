@@ -126,7 +126,7 @@ fn enter_on_item_opens_editor_and_escape_returns() {
         Some(PromptEditing::Item(12))
     );
     assert_eq!(state.prompt.text(), "nested content");
-    assert!(state.prompt_focused);
+    assert!(state.prompt_focused());
 
     // Esc 返回树并保持绑定清除。
     apply_editor(&mut state, EditorCommand::Escape);
@@ -783,7 +783,7 @@ fn edit_falls_back_to_new_temp_when_selection_is_not_item() {
         state.workspaces[0].prompt_panel.editing,
         Some(PromptEditing::Temp(_))
     ));
-    assert!(state.prompt_focused);
+    assert!(state.prompt_focused());
 
     // 空树同样回退新建 temp：清空全部条目后 [edit] 仍进入编辑视图。
     let mut state = AppState::demo();

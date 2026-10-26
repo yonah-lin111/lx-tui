@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::*;
 use crate::app::actions::LxInput;
+use crate::app::state::FocusedContainer;
 
 /// 构造一个按键事件。
 fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
@@ -18,7 +19,7 @@ fn ctrl_o_toggles_tool_detail() {
     let routed = route(
         key(KeyCode::Char('o'), KeyModifiers::CONTROL),
         alacritty_terminal::term::TermMode::empty(),
-        false,
+        FocusedContainer::Panes,
         None,
         true,
     );
@@ -29,14 +30,20 @@ fn ctrl_o_toggles_tool_detail() {
 fn alt_arrows_move_the_tool_selection() {
     let mode = alacritty_terminal::term::TermMode::empty();
     assert_eq!(
-        route(key(KeyCode::Up, KeyModifiers::ALT), mode, false, None, true),
+        route(
+            key(KeyCode::Up, KeyModifiers::ALT),
+            mode,
+            FocusedContainer::Panes,
+            None,
+            true
+        ),
         Some(Routed::Lx(LxInput::SelectPrevTool))
     );
     assert_eq!(
         route(
             key(KeyCode::Down, KeyModifiers::ALT),
             mode,
-            false,
+            FocusedContainer::Panes,
             None,
             true
         ),
@@ -51,7 +58,7 @@ fn plain_arrows_still_edit_the_draft() {
         route(
             key(KeyCode::Up, KeyModifiers::NONE),
             mode,
-            false,
+            FocusedContainer::Panes,
             None,
             true
         ),
@@ -67,7 +74,7 @@ fn existing_panels_keep_priority_over_the_new_chords() {
     let routed = route(
         key(KeyCode::Char('o'), KeyModifiers::CONTROL),
         mode,
-        false,
+        FocusedContainer::Panes,
         Some(crate::app::overlay::OverlayKind::Menu),
         true,
     );

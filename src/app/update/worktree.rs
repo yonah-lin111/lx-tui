@@ -306,7 +306,7 @@ pub(super) fn open_worktree_checkout(
         swap_display_prompt(state, from, child);
     }
     clear_selection(state);
-    state.prompt_focused = false;
+    super::focus::focus_panes(state);
     ensure_main_workspace(state, child);
 }
 

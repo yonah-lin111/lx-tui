@@ -256,6 +256,17 @@ pub enum Effect {
     },
     /// 停止该窗格当前在途/运行中的本地命令（双 Esc）。
     CancelUserShells { pane: crate::layout::PaneId },
+    // ===== todo（全局列表）=====
+    /// 写入一条（UPSERT：不存在则按 `position` 插入并顺移，存在则只改文本/状态）。
+    SaveTodo { record: crate::db::todo::TodoRecord },
+    /// 删除一条 todo。
+    DeleteTodo { id: String },
+    /// 删除某状态的全部 todo（`[clear done]`）。
+    DeleteTodosWithStatus { status: crate::db::todo::TodoStatus },
+    /// 恢复一批被删 todo（撤销）。
+    RestoreTodos {
+        records: Vec<crate::db::todo::TodoRecord>,
+    },
 }
 
 /// 撤销执行请求：目标身份、动作与回填所需的原文全部在发起时冻结。

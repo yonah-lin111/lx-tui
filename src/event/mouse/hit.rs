@@ -470,3 +470,26 @@ pub(crate) fn pane_toggle_button_at(
             .is_some_and(|target| target.kind == PaneKind::Terminal)
     })
 }
+
+/// Todo 滚动条按下：thumb 开始拖拽，轨道点击跳转；不改变焦点与高亮；返回是否命中。
+pub(crate) fn handle_todo_scrollbar_press(
+    state: &mut AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some(bar) = ui::right_panel::todo::scrollbar(view.prompt, state) else {
+        return false;
+    };
+    if !bar.track.contains((column, row).into()) {
+        return false;
+    }
+    match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+        Some(grab) => state.todo_scroll_drag = Some(grab),
+        None => {
+            let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+            update::set_todo_scroll(state, offset);
+        }
+    }
+    true
+}

@@ -22,9 +22,10 @@ use super::hit::{
     apply_block_button, apply_template_button, block_button_at, dismiss_lx_toast_outside,
     handle_agent_scrollbar_press, handle_lx_history_scrollbar_press,
     handle_lx_input_scrollbar_press, handle_prompt_scrollbar_press,
-    handle_terminal_scrollbar_press, handle_workspace_scrollbar_press, lx_toast_at,
-    mention_item_at, pane_at, pane_boundary_draggable, pane_content_inner, pane_toggle_button_at,
-    panel_item_at, prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
+    handle_terminal_scrollbar_press, handle_todo_scrollbar_press, handle_workspace_scrollbar_press,
+    lx_toast_at, mention_item_at, pane_at, pane_boundary_draggable, pane_content_inner,
+    pane_toggle_button_at, panel_item_at, prompt_boundary_hit, prompt_header_at, slash_item_at,
+    template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -211,6 +212,7 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
     } else if handle_workspace_scrollbar_press(state, view, mouse.column, mouse.row)
         || handle_prompt_scrollbar_press(state, view, mouse.column, mouse.row)
+        || handle_todo_scrollbar_press(state, view, mouse.column, mouse.row)
         || handle_agent_scrollbar_press(state, view, mouse.column, mouse.row)
     {
         *dirty = true;
@@ -229,7 +231,10 @@ pub(crate) fn handle_mouse_down_left(
         ensure_workspace_visible(state, view);
         *dirty = true;
     } else if let Some(index) = ui::workspace_item_at(view, state, mouse.column, mouse.row) {
+        // 点侧栏条目：侧栏成为焦点容器，同时切换工作区（切换本身会把焦点交回主区，
+        // 这里在切换之后再抢回，保证「点哪个容器就高亮哪个」）。
         update::switch_workspace(state, index);
+        update::focus_sidebar(state);
         ensure_workspace_visible(state, view);
         reveal_active_tab(state, view);
         update::begin_workspace_drag(state, index);
@@ -241,6 +246,12 @@ pub(crate) fn handle_mouse_down_left(
         ensure_workspace_visible(state, view);
         reveal_active_tab(state, view);
         *dirty = true;
+    } else if !state.sidebar_collapsed && view.sidebar.contains((mouse.column, mouse.row).into()) {
+        // 侧栏内其余位置（工作区列表空白、Agents 分区空白、边框）都让侧栏进入选中态。
+        // 必须排在所有侧栏控件之后：放前面会把条目点击整块吃掉。
+        if update::focus_sidebar(state) {
+            *dirty = true;
+        }
     } else if ui::swap_button_at(view, mouse.column, mouse.row) {
         // 交换按钮是控件：命中优先于分割线拖拽与面板点击；
         // 宽度按位置模型重置：右列取侧栏默认宽、左列占其余。
@@ -269,11 +280,38 @@ pub(crate) fn handle_mouse_down_left(
         && ui::right_panel::tab_row_at(view.prompt, mouse.column, mouse.row)
     {
         // 顶边框 tab 之外的空白属于容器控件区：吞掉，不聚焦编辑器。
+        // Todo 面板例外：点容器任意位置都应让容器进入选中态（用户口径）。
+        if state.right_tab == crate::app::state::RightTab::Todo
+            && update::focus_todo_from_click(state)
+        {
+            *dirty = true;
+        }
+    } else if state.right_tab == crate::app::state::RightTab::Todo
+        && !state.prompt_collapsed
+        && view.prompt.contains((mouse.column, mouse.row).into())
+    {
+        // Todo 面板：先按钮、再行、最后空白吞掉（顺序不可调换，
+        // 否则会先被下面的整块吞掉分支吃掉）。
+        let mut changed = false;
+        if let Some(button) = ui::right_panel::todo::button_at(view.prompt, mouse.column, mouse.row)
+        {
+            changed = update::apply_todo_button(state, button);
+        } else if let Some(index) =
+            ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
+        {
+            changed = update::click_todo_row(state, index, Instant::now());
+        }
+        // 容器内其余位置（工具栏空白 / 分割线 / 统计块 / 列表外空白）同样让容器进入
+        // 选中态，但不改数据、不打断编辑、不穿透到窗格。焦点高亮只由边框表达，
+        // 不再依赖"点进输入框"才算选中。
+        changed |= update::focus_todo_from_click(state);
+        if changed {
+            *dirty = true;
+        }
     } else if !update::prompt_panel_active(state)
         && view.prompt.contains((mouse.column, mouse.row).into())
     {
-        // Todo 面板（或折叠态容器）：按钮行/分割线/内容区一律吞掉，
-        // 不聚焦、不穿透到窗格。
+        // 折叠态容器：一律吞掉，不聚焦、不穿透到窗格。
     } else if let Some(index) = paste::paste_item_at(state, view, mouse.column, mouse.row) {
         update::select_paste(state, index);
         *dirty = true;

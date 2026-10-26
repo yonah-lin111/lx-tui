@@ -30,8 +30,8 @@ const PROMPT_TEMP_PROMPT_WIDTH: u16 = 5;
 /// 显示 `[tmp]`（右对齐）所需的最小内容区宽度（列）：不足时隐藏，避免与左侧模式按钮重叠。
 const PROMPT_TEMP_PROMPT_MIN_WIDTH: u16 =
     PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_TEMP_PROMPT_WIDTH + 1;
-/// `[*]` 标签宽度（列）。
-const PROMPT_SELECT_ALL_WIDTH: u16 = 3;
+/// `[all]` 标签宽度（列）。
+const PROMPT_SELECT_ALL_WIDTH: u16 = 5;
 /// `[*]` 与保存点之间的空档（列）。
 const PROMPT_SELECT_ALL_GAP: u16 = 1;
 /// 显示 `[*]` 所需的最小内容区宽度（列）：不足时只保留保存点；
@@ -45,8 +45,8 @@ const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = PROMPT_TOOLBAR_BUTTON_WIDTH
     + PROMPT_SELECT_ALL_WIDTH
     + PROMPT_SELECT_ALL_GAP
     + 1;
-/// 钉住按钮（`[◉]` / `[○]`）宽度（列）。
-const PROMPT_PIN_WIDTH: u16 = 3;
+/// 钉住按钮宽度（列）：按最宽态 `[unpin]` 算，`[pin]` 绘制时右补空格。
+const PROMPT_PIN_WIDTH: u16 = 7;
 /// 显示钉住按钮所需的最小内容区宽度（列）：编辑视图在 `[*]` 左侧、树视图在 `[tmp]` 左侧，
 /// 各自保证与左侧按钮组不重叠；不足时随右侧按钮一并隐藏。
 const PROMPT_PIN_MIN_WIDTH_EDITOR: u16 =
@@ -778,7 +778,7 @@ pub fn prompt_tree_scrollbar_rect(panel: Rect) -> Option<Rect> {
 
 /// prompt 内容区扣除顶部表头与附件条后的文本/滚动条区域；
 /// 高度不足时表头/附件条隐藏、退回全部内容区。
-fn prompt_body_rect(inner: Rect) -> Rect {
+pub fn prompt_body_rect(inner: Rect) -> Rect {
     if inner.height > PROMPT_HEADER_HEIGHT {
         Rect {
             y: inner.y + PROMPT_HEADER_HEIGHT,
@@ -898,6 +898,7 @@ pub fn prompt_toolbar_button_rect(
             if tree || inner.width < PROMPT_SELECT_ALL_MIN_WIDTH {
                 return None;
             }
+            // 右对齐到保存点左侧；`[pin]`/`[dir]` 依次贴它左边，整组等距相邻。
             Rect::new(
                 bar.right()
                     .saturating_sub(PROMPT_SELECT_ALL_WIDTH + PROMPT_SELECT_ALL_GAP + 1),

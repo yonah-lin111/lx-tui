@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod chat;
+pub mod todo;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -10,6 +11,8 @@ use crate::app::state::{AppState, LxEntry, PaneView, WorkspaceIdentity};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::detect::{AgentKind, AgentState};
 use crate::layout::PaneId;
+
+pub use todo::*;
 
 pub const SIDEBAR_TITLE: &str = "Workspaces";
 /// 侧栏下半分区标题。
@@ -86,15 +89,15 @@ pub const PROMPT_WORKTREE_PREFIX: &str = "wt:";
 /// prompt 工具栏按钮与保存状态点。
 pub const PROMPT_UNDO_LABEL: &str = "[←]";
 pub const PROMPT_REDO_LABEL: &str = "[→]";
-pub const PROMPT_SELECT_ALL_LABEL: &str = "[*]";
+pub const PROMPT_SELECT_ALL_LABEL: &str = "[all]";
 /// 条目保存状态点：已保存实心绿、未保存实心黄。
 pub const PROMPT_SAVE_DOT: &str = "●";
 /// 临时草稿保存状态点：空心（与空闲 agent 状态圆点一致），恒灰。
 pub const PROMPT_DRAFT_DOT: &str = "○";
-/// prompt 钉住按钮：未钉空心 `[○]`、已钉实心 `[◉]`（状态显示，动作见 tooltip；
-/// 与保存点/agent 状态圆点同符号系）。
-pub const PROMPT_UNPINNED_LABEL: &str = "[○]";
-pub const PROMPT_PINNED_LABEL: &str = "[◉]";
+/// prompt 钉住按钮：未钉 `[pin]`、已钉 `[unpin]`（英文单词而非图标：
+/// 状态圆点系已被保存点与 agent 状态占用，钉住改用文字后不再抢占同符号系）。
+pub const PROMPT_UNPINNED_LABEL: &str = "[pin]";
+pub const PROMPT_PINNED_LABEL: &str = "[unpin]";
 /// prompt 视图模式按钮：编辑视图显示 `[≡]`（切到列表）、树视图显示 `[/]`（切到编辑）。
 pub const PROMPT_MODE_LIST_LABEL: &str = "[≡]";
 pub const PROMPT_MODE_EDIT_LABEL: &str = "[/]";
@@ -951,6 +954,12 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PageMenuAdd => "add page",
         TooltipTarget::PageMenuDelete => "delete page",
         TooltipTarget::PromptFolders => "referenced folders",
+        TooltipTarget::TodoButton(button) => match button {
+            crate::app::tooltip::TodoButton::New => TODO_TOOLTIP_NEW,
+            crate::app::tooltip::TodoButton::Edit => TODO_TOOLTIP_EDIT,
+            crate::app::tooltip::TodoButton::Delete => TODO_TOOLTIP_DELETE,
+            crate::app::tooltip::TodoButton::ClearDone => TODO_TOOLTIP_CLEAR_DONE,
+        },
         TooltipTarget::ReferencedSearchCopyPath => "copy path",
         TooltipTarget::BlockButton { button, .. } => match button {
             BlockButtonKind::Fold => "fold/unfold block",

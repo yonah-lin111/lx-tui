@@ -8,6 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::actions::{Action, EditorCommand, LxInput, OverlayKey};
 use crate::app::overlay::OverlayKind;
+use crate::app::state::FocusedContainer;
 
 /// 路由结果。
 #[derive(Debug, PartialEq, Eq)]
@@ -26,20 +27,80 @@ pub enum Routed {
     CopyTemplateBlock,
     /// lx 页单行输入命令。
     Lx(LxInput),
+    /// todo 面板按键（原样翻译，语义由 `update::apply_todo_key` 按是否编辑中判定）。
+    Todo(TodoKey),
     /// 原样写入焦点窗格的字节。
     Pane(Vec<u8>),
+}
+
+/// todo 面板按键：**按键原样**，不做语义解释。
+///
+/// 「`Space` 是循环状态还是输入空格」「`Enter` 是插入新行还是提交」
+/// 全部由 `update::apply_todo_key` 按「是否正在编辑」判定，
+/// 输入层不感知应用状态（同 lx 输入「清空还是复制由 update 决定」的既有口径）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TodoKey {
+    Char(char),
+    /// 裸空格（不带修饰键）。
+    Space,
+    Enter,
+    /// Shift+Enter：列表态新建一条（与 `Enter` 的「编辑当前项」区分）。
+    ShiftEnter,
+    Esc,
+    Tab,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    /// Ctrl/Cmd+Z：撤销删除（无内容时吞掉）。
+    Undo,
+    /// Ctrl/Cmd+C：编辑态清空输入（列表态吞掉）。
+    Clear,
+}
+
+/// todo 按键映射：只做逐键翻译；未识别的键返回 None（由 `route` 吞掉）。
+fn todo_key(key: KeyEvent) -> Option<TodoKey> {
+    let modifiers = key.modifiers;
+    let ctrl = modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER);
+    let alt = modifiers.contains(KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(TodoKey::Undo),
+        KeyCode::Char('c' | 'C') if ctrl && !alt => Some(TodoKey::Clear),
+        KeyCode::Char(' ') if !ctrl && !alt => Some(TodoKey::Space),
+        KeyCode::Char(ch) if !ctrl && !alt => Some(TodoKey::Char(ch)),
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => Some(TodoKey::ShiftEnter),
+        KeyCode::Enter => Some(TodoKey::Enter),
+        KeyCode::Esc => Some(TodoKey::Esc),
+        KeyCode::Tab => Some(TodoKey::Tab),
+        KeyCode::Backspace => Some(TodoKey::Backspace),
+        KeyCode::Delete => Some(TodoKey::Delete),
+        KeyCode::Left if !ctrl && !alt => Some(TodoKey::Left),
+        KeyCode::Right if !ctrl && !alt => Some(TodoKey::Right),
+        KeyCode::Up => Some(TodoKey::Up),
+        KeyCode::Down => Some(TodoKey::Down),
+        KeyCode::Home => Some(TodoKey::Home),
+        KeyCode::End => Some(TodoKey::End),
+        _ => None,
+    }
 }
 
 /// 路由一次按键；Release 事件与无法编码的按键返回 None。
 ///
 /// `Ctrl+Q` 始终优先；浮层打开时只放行该浮层支持的键，其余吞掉；
-/// `prompt_focused` 为真时按键只进入编辑器：`Ctrl/Cmd+C` 复制选区（无选区全文）、
-/// `Ctrl/Cmd+Shift+C` 复制光标所在模板块/补充块正文，未映射的按键被吞掉，绝不写入 PTY；
-/// `pane_lx` 为真（活动窗格显示 lx 页）时按键进入 lx 单行输入框，未映射键吞掉，不写入隐藏终端。
+/// 否则按**唯一焦点源** `focus` 决定去向，同一时刻只有一个容器收键：
+/// - `Prompt`：按键只进入编辑器（`Ctrl/Cmd+C` 复制选区全文、`Ctrl/Cmd+Shift+C`
+///   复制光标所在模板块正文），未映射键吞掉，绝不写入 PTY；
+/// - `Todo`：按键只进入 todo 面板，未映射键吞掉；
+/// - `Panes`：`pane_lx` 为真时进入 lx 单行输入，否则编码写进焦点窗格的 PTY；
+/// - `Sidebar`：侧栏没有键盘交互，全部吞掉——绝不穿透到窗格。
 pub fn route(
     key: KeyEvent,
     mode: TermMode,
-    prompt_focused: bool,
+    focus: FocusedContainer,
     overlay: Option<OverlayKind>,
     pane_lx: bool,
 ) -> Option<Routed> {
@@ -52,7 +113,11 @@ pub fn route(
     if let Some(kind) = overlay {
         return overlay_key(key, kind).map(Routed::Overlay);
     }
-    if prompt_focused {
+    if focus == FocusedContainer::Sidebar {
+        // 侧栏只有鼠标交互：键盘一律吞掉，避免误写进别的容器的输入框。
+        return None;
+    }
+    if focus == FocusedContainer::Prompt {
         let copy_chord = matches!(key.code, KeyCode::Char('c' | 'C'))
             && (key.modifiers.contains(KeyModifiers::CONTROL)
                 || key.modifiers.contains(KeyModifiers::SUPER))
@@ -78,6 +143,10 @@ pub fn route(
                 None
             }
         };
+    }
+    if focus == FocusedContainer::Todo {
+        // todo 面板持焦点：未映射键一律吞掉（同 prompt 口径），绝不写进隐藏终端。
+        return todo_key(key).map(Routed::Todo);
     }
     if pane_lx {
         // 长按 Esc/Enter 的 Repeat 不推进撤销待命与二次确认，也不重复发送。
