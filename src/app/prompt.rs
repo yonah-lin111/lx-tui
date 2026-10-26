@@ -22,6 +22,8 @@ mod navigation;
 pub(crate) mod text;
 mod viewport;
 
+mod block_focus;
+
 pub use fold::FoldedBlock;
 
 use std::collections::BTreeSet;
@@ -90,6 +92,8 @@ pub struct Prompt {
     expanded_supplements: BTreeSet<usize>,
     /// 最近一次写入是否因落在折叠区内被拒绝（供上层提示，读取即清）。
     fold_blocked: bool,
+    /// 块聚焦：顶层 `&&&` 起始逻辑行；None = 普通视图（按工作区随草稿 swap）。
+    focus_block: Option<usize>,
 }
 
 /// 一个视觉行：所属逻辑行与文本字节范围（不含行尾换行）。
@@ -106,6 +110,7 @@ struct Snapshot {
     text: String,
     cursor: usize,
     expanded_supplements: BTreeSet<usize>,
+    focus_block: Option<usize>,
 }
 
 /// 编辑器完整历史状态：文本、光标、撤销/重做栈、已保存标记与折叠状态。
@@ -120,6 +125,7 @@ pub struct PromptHistory {
     redo: Vec<Snapshot>,
     is_saved: bool,
     expanded_supplements: BTreeSet<usize>,
+    focus_block: Option<usize>,
 }
 
 impl PromptHistory {
@@ -173,6 +179,7 @@ impl Prompt {
             autosave: None,
             expanded_supplements: BTreeSet::new(),
             fold_blocked: false,
+            focus_block: None,
         }
     }
 
@@ -304,6 +311,7 @@ impl Prompt {
             redo: self.redo.clone(),
             is_saved: self.is_saved,
             expanded_supplements: self.expanded_supplements.clone(),
+            focus_block: self.focus_block,
         }
     }
 
@@ -325,9 +333,11 @@ impl Prompt {
         self.is_saved = history.is_saved;
         self.autosave = None;
         self.expanded_supplements = history.expanded_supplements;
+        self.focus_block = history.focus_block;
         self.scroll = 0;
         self.normalize_fold_cursor();
         self.scroll_cursor_into_view();
+        self.reconcile_block_focus();
     }
 
     /// 同步内容区尺寸；光标保持在视口内。
@@ -807,6 +817,7 @@ impl Prompt {
             text: self.text.clone(),
             cursor: self.cursor,
             expanded_supplements: self.expanded_supplements.clone(),
+            focus_block: self.focus_block,
         }
     }
 
@@ -821,6 +832,7 @@ impl Prompt {
         self.text = snapshot.text;
         self.cursor = snapshot.cursor;
         self.expanded_supplements = snapshot.expanded_supplements;
+        self.focus_block = snapshot.focus_block;
         self.last_edit = None;
         self.settle();
     }
@@ -835,6 +847,12 @@ impl Prompt {
     /// 面板互斥收敛优先级：文件提及 > 字母快捷 > 斜杠命令 > 块命令；
     /// 高优先级面板打开时清空其余（粘贴二级面板不由编辑重算，单独由 `clear_panel` 取消）。
     fn settle(&mut self) {
+        self.settle_panels();
+        self.reconcile_block_focus();
+    }
+
+    /// 面板互斥收敛与滚动跟随；由 [`Self::settle`] 调用后统一做块聚焦重定位。
+    fn settle_panels(&mut self) {
         self.panel_suppressed = false;
         self.normalize_fold_cursor();
         self.scroll_cursor_into_view();

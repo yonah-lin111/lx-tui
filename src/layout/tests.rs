@@ -499,31 +499,68 @@ fn prompt_toolbar_tree_mode_shows_temp_prompt_only() {
 }
 
 #[test]
-fn prompt_toolbar_pin_sits_left_of_select_all_and_hides_when_narrow() {
+fn prompt_toolbar_select_all_sits_right_of_redo() {
+    let panel = Rect::new(0, 0, 40, 8);
+    let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
+    let redo =
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::Redo, false).expect("redo visible");
+    let select_all = prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false)
+        .expect("select all visible");
+    assert_eq!(select_all.x, redo.right() + 1, "[all] 紧贴 [→] 右侧");
+    assert_eq!(select_all.width, 5, "[all] 按钮宽度");
+    assert_eq!(
+        prompt_toolbar_button_at(panel, select_all.x, bar.y, false),
+        Some(PromptToolbarButton::SelectAll)
+    );
+}
+
+#[test]
+fn prompt_toolbar_block_focus_sits_left_of_save() {
+    let panel = Rect::new(0, 0, 40, 8);
+    let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
+    let block_focus = prompt_toolbar_button_rect(panel, PromptToolbarButton::BlockFocus, false)
+        .expect("block focus visible");
+    let save =
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::Save, false).expect("save visible");
+    assert_eq!(block_focus.right() + 1, save.x, "[⊞] 与保存点间隔 1 列");
+    assert_eq!(block_focus.width, 3, "[⊞] 按钮宽度");
+    assert_eq!(
+        prompt_toolbar_button_at(panel, block_focus.x, bar.y, false),
+        Some(PromptToolbarButton::BlockFocus)
+    );
+    // 树视图没有块聚焦按钮。
+    assert_eq!(
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::BlockFocus, true),
+        None
+    );
+}
+
+#[test]
+fn prompt_toolbar_pin_is_three_wide_left_of_block_focus() {
     let panel = Rect::new(0, 0, 40, 8);
     let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
     let pin =
         prompt_toolbar_button_rect(panel, PromptToolbarButton::Pin, false).expect("pin visible");
-    let select_all = prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false)
-        .expect("select all visible");
+    let block_focus = prompt_toolbar_button_rect(panel, PromptToolbarButton::BlockFocus, false)
+        .expect("block focus visible");
     assert_eq!(pin.y, bar.y, "与功能按钮同行");
-    assert_eq!(pin.width, PROMPT_PIN_WIDTH, "按最宽态 [unpin] 占位");
-    assert_eq!(select_all.x - pin.right(), 1, "紧邻 [all] 左侧、间隔 1 列");
+    assert_eq!(pin.width, 3, "[○] / [◉] 单字图标 3 列");
+    assert_eq!(pin.right() + 1, block_focus.x, "紧邻块聚焦按钮左侧");
     assert_eq!(
         prompt_toolbar_button_at(panel, pin.x, bar.y, false),
         Some(PromptToolbarButton::Pin)
     );
 
-    // 内宽 < `PROMPT_PIN_MIN_WIDTH_EDITOR`：钉住按钮随 [all] 一并隐藏。
-    assert_eq!(PROMPT_PIN_MIN_WIDTH_EDITOR, 27, "[unpin] 的推导阈值");
+    // 内宽 < 27：钉住按钮隐藏，块聚焦按钮仍在（隐藏顺序 pin → block → all）。
+    assert_eq!(PROMPT_PIN_MIN_WIDTH_EDITOR, 27, "pin 的推导阈值");
     let narrow = Rect::new(0, 0, PROMPT_PIN_MIN_WIDTH_EDITOR, 8);
     assert_eq!(
         prompt_toolbar_button_rect(narrow, PromptToolbarButton::Pin, false),
         None
     );
     assert!(
-        prompt_toolbar_button_rect(narrow, PromptToolbarButton::SelectAll, false).is_some(),
-        "窄屏时 [all] 仍在"
+        prompt_toolbar_button_rect(narrow, PromptToolbarButton::BlockFocus, false).is_some(),
+        "窄屏时块聚焦按钮仍在"
     );
 
     // 内宽 = 阈值：钉住按钮恢复显示。
@@ -532,14 +569,38 @@ fn prompt_toolbar_pin_sits_left_of_select_all_and_hides_when_narrow() {
         prompt_toolbar_button_rect(mid, PromptToolbarButton::Pin, false).is_some(),
         "内宽达到阈值时钉住按钮可见"
     );
+}
 
-    // 宽面板：钉住按钮紧邻 [all] 左侧、间隔 1 列。
-    let wide = Rect::new(0, 0, PROMPT_PIN_MIN_WIDTH_EDITOR + 2, 8);
-    let pin =
-        prompt_toolbar_button_rect(wide, PromptToolbarButton::Pin, false).expect("pin visible");
-    let select_all = prompt_toolbar_button_rect(wide, PromptToolbarButton::SelectAll, false)
-        .expect("select all visible");
-    assert_eq!(pin.x, select_all.x - PROMPT_PIN_WIDTH - 1, "不与 [*] 重叠");
+#[test]
+fn prompt_toolbar_block_focus_hides_between_all_and_pin() {
+    assert_eq!(PROMPT_SELECT_ALL_MIN_WIDTH, 19, "[all] 的推导阈值");
+    assert_eq!(PROMPT_BLOCK_FOCUS_MIN_WIDTH_EDITOR, 23, "[⊞] 的推导阈值");
+    // 内宽 22 < 23：块聚焦按钮隐藏，[all] 与保存点仍在。
+    let panel = Rect::new(0, 0, 22 + 2, 8);
+    assert_eq!(
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::BlockFocus, false),
+        None
+    );
+    assert!(
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false).is_some(),
+        "窄屏时 [all] 仍在"
+    );
+    // 内宽 23：块聚焦按钮恢复显示。
+    let panel = Rect::new(0, 0, PROMPT_BLOCK_FOCUS_MIN_WIDTH_EDITOR + 2, 8);
+    assert!(
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::BlockFocus, false).is_some(),
+        "内宽达到阈值时块聚焦按钮可见"
+    );
+    // 极端窄屏：三个开关各自按阈值隐藏，保存点恒在。
+    let narrow = Rect::new(0, 0, PROMPT_SELECT_ALL_MIN_WIDTH + 1, 8);
+    assert_eq!(
+        prompt_toolbar_button_rect(narrow, PromptToolbarButton::SelectAll, false),
+        None
+    );
+    assert!(
+        prompt_toolbar_button_rect(narrow, PromptToolbarButton::Save, false).is_some(),
+        "保存点恒在"
+    );
 }
 
 #[test]
@@ -562,8 +623,6 @@ fn prompt_toolbar_folders_sits_left_of_pin_in_editor_only() {
         prompt_toolbar_button_rect(panel, PromptToolbarButton::Folders, true),
         None
     );
-    // 内容区过窄（无法在左侧按钮组与右侧 Pin 之间放下）时隐藏；
-    // 阈值随 `[pin]`→`[unpin]` 变宽而上升，这里同样引用常量。
     assert_eq!(PROMPT_FOLDERS_MIN_WIDTH_EDITOR, 33, "[dir] 的推导阈值");
     let narrow = Rect::new(0, 0, PROMPT_FOLDERS_MIN_WIDTH_EDITOR, 8);
     assert_eq!(

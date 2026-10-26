@@ -2760,3 +2760,260 @@ fn slash_panel_offers_git_worktree_inside_supple_block() {
             .collect::<Vec<_>>()
     );
 }
+
+// ===== 块聚焦模式 =====
+
+const THREE_BLOCKS: &str = "intro\n\
+&&& a --start\n\
+{title: A}\n\
+body-a\n\
+&&& a --end\n\
+mid\n\
+&&& b --start\n\
+{title: B}\n\
+body-b\n\
+&&& b --end\n\
+outro";
+
+fn focus_prompt(text: &str) -> Prompt {
+    let mut editor = prompt(80, 20);
+    editor.set_text(text);
+    editor
+}
+
+fn line_start(text: &str, line: usize) -> usize {
+    text.split('\n')
+        .take(line)
+        .map(|segment| segment.len() + 1)
+        .sum()
+}
+
+#[test]
+fn enter_focus_prefers_cursor_block() {
+    let mut editor = focus_prompt(THREE_BLOCKS);
+    let cursor = editor.text().find("body-b").expect("body") + 2;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    assert_eq!(editor.focus_block, Some(6), "光标在块 B 内");
+    assert_eq!(editor.cursor(), cursor, "进入时保留块内光标");
+}
+
+#[test]
+fn enter_focus_falls_back_to_first_block() {
+    let mut editor = focus_prompt(THREE_BLOCKS);
+    let cursor = editor.text().find("intro").expect("intro");
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    assert_eq!(editor.focus_block, Some(1));
+    let brace = editor.text().find('}').expect("title end");
+    assert_eq!(editor.cursor(), brace, "光标落到标题值内");
+}
+
+#[test]
+fn enter_focus_returns_false_without_blocks() {
+    let mut editor = focus_prompt("plain text");
+    assert!(!editor.enter_block_focus());
+    assert_eq!(editor.focus_block, None);
+}
+
+#[test]
+fn adjacent_block_clamps_at_ends() {
+    let mut editor = focus_prompt(THREE_BLOCKS);
+    let cursor = editor.text().find("body-a").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    assert!(!editor.focus_adjacent_block(-1), "首块再往前钳制");
+    assert_eq!(editor.focus_block, Some(1));
+    assert!(editor.focus_adjacent_block(1));
+    assert_eq!(editor.focus_block, Some(6));
+    assert!(!editor.focus_adjacent_block(1), "末块再往后钳制");
+    assert_eq!(editor.focus_block, Some(6));
+}
+
+#[test]
+fn adjacent_block_skips_supple_and_fence() {
+    let text = "&&& a --start\nbody-a\n+++ supple --start\nsupple\n+++ supple --end\n\
+                ```\n&&& fake --start\n```\n&&& a --end\n\
+                &&& b --start\nbody-b\n&&& b --end";
+    let mut editor = focus_prompt(text);
+    let cursor = editor.text().find("body-a").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    assert!(editor.focus_adjacent_block(1));
+    assert_eq!(
+        editor.focus_block,
+        Some(9),
+        "只停在顶层 &&&，跳过 +++ 与围栏"
+    );
+}
+
+#[test]
+fn adjacent_block_includes_unclosed() {
+    let text = "&&& a --start\nbody-a\n&&& a --end\n&&& b --start\nbody-b";
+    let mut editor = focus_prompt(text);
+    let cursor = editor.text().find("body-a").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    assert!(editor.focus_adjacent_block(1));
+    assert_eq!(editor.focus_block, Some(3), "末尾未闭合块也算一块");
+}
+
+#[test]
+fn visual_rows_only_contains_focus_range() {
+    let mut editor = focus_prompt(THREE_BLOCKS);
+    let cursor = editor.text().find("body-a").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    let rows = editor.visual_rows();
+    assert!(!rows.is_empty());
+    for row in rows {
+        assert!((1..=4).contains(&row.line), "行 {} 在块 A 外", row.line);
+    }
+}
+
+#[test]
+fn cursor_cell_and_click_agree_under_focus() {
+    let mut editor = focus_prompt(THREE_BLOCKS);
+    let cursor = editor.text().find("body-a").expect("body") + 2;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    let (row, col) = editor.cursor_cell().expect("cursor visible");
+    editor.set_cursor_from_cell(row, col);
+    assert_eq!(editor.cursor(), cursor, "光标单元格与点击映射互为逆");
+}
+
+#[test]
+fn selection_bounds_clamped_to_focus_block() {
+    let mut editor = focus_prompt(THREE_BLOCKS);
+    let cursor = editor.text().find("body-a").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    let (from, to) = editor
+        .selection_bounds((0, 0), (u16::MAX, u16::MAX))
+        .expect("selection");
+    let selected = &editor.text()[from..to];
+    assert!(selected.starts_with("&&& a --start"), "{selected}");
+    assert!(selected.ends_with("&&& a --end"), "{selected}");
+    assert!(!selected.contains("intro"));
+    assert!(!selected.contains("mid"));
+    assert!(!selected.contains("body-b"));
+}
+
+#[test]
+fn empty_rows_queries_do_not_panic() {
+    let mut editor = focus_prompt(THREE_BLOCKS);
+    let cursor = editor.text().find("body-a").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    let start = line_start(editor.text(), 1);
+    assert!(editor.delete_template_block(1));
+    editor.focus_after_block_removed(1);
+    // 块删除后的同一帧：这些查询都必须能容忍空/失效视口。
+    let _ = editor.cursor_cell();
+    editor.set_cursor_from_cell(0, 0);
+    let _ = editor.selection_text((0, 0), (3, 3));
+    editor.scroll_to(usize::MAX);
+    let _ = editor.visual_rows();
+    let _ = start;
+}
+
+#[test]
+fn delete_current_block_focuses_next() {
+    let mut editor = focus_prompt(THREE_BLOCKS);
+    let cursor = editor.text().find("body-a").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    assert!(editor.delete_template_block(1));
+    editor.focus_after_block_removed(1);
+    assert_eq!(editor.focus_block, Some(2), "删除后的下一个块顶替了原行号");
+}
+
+#[test]
+fn delete_current_block_focuses_previous() {
+    let mut editor = focus_prompt(THREE_BLOCKS);
+    let cursor = editor.text().find("body-b").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    assert!(editor.delete_template_block(6));
+    editor.focus_after_block_removed(6);
+    assert_eq!(editor.focus_block, Some(1), "末块删除后回到上一块");
+}
+
+#[test]
+fn delete_last_block_exits_focus() {
+    let mut editor = focus_prompt("&&& only --start\nbody\n&&& only --end");
+    let cursor = editor.text().find("body").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    assert!(editor.delete_template_block(0));
+    editor.focus_after_block_removed(0);
+    assert_eq!(editor.focus_block, None);
+}
+
+#[test]
+fn undo_restores_block_focus() {
+    let mut editor = focus_prompt(THREE_BLOCKS);
+    let cursor = editor.text().find("body-a").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    assert!(editor.delete_template_block(1));
+    editor.focus_after_block_removed(1);
+    assert_eq!(editor.focus_block, Some(2));
+    editor.undo();
+    assert!(editor.text().contains("body-a"));
+    assert_eq!(editor.focus_block, Some(1), "撤销删除后原块重新聚焦");
+}
+
+#[test]
+fn edit_inside_block_keeps_focus_and_outside_exits() {
+    let mut editor = focus_prompt(THREE_BLOCKS);
+    let cursor = editor.text().find("body-a").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    editor.insert_char('!');
+    assert_eq!(editor.focus_block, Some(1), "块内编辑保持聚焦");
+
+    let outside = editor.text().find("outro").expect("outro") + 1;
+    editor.set_cursor_offset_for_test(outside);
+    editor.insert_char('?');
+    assert_eq!(editor.focus_block, None, "光标落到块外即退出");
+}
+
+#[test]
+fn focus_relocates_when_recorded_line_invalid() {
+    let mut editor = focus_prompt(THREE_BLOCKS);
+    editor.focus_block = Some(999);
+    let cursor = editor.text().find("body-b").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    editor.reconcile_block_focus();
+    assert_eq!(editor.focus_block, Some(6), "失效行按光标所在块重定位");
+}
+
+#[test]
+fn delete_current_block_focuses_adjacent_next_that_shifts_up() {
+    let text = "&&& a --start\nbody-a\n&&& a --end\n&&& b --start\nbody-b\n&&& b --end";
+    let mut editor = focus_prompt(text);
+    let cursor = editor.text().find("body-a").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    assert!(editor.delete_template_block(0));
+    editor.focus_after_block_removed(0);
+    assert_eq!(
+        editor.focus_block,
+        Some(0),
+        "紧邻的下一块顶到原起始行仍须聚焦"
+    );
+}
+
+#[test]
+fn clean_and_status_toggle_keep_focus_on_same_block() {
+    let mut editor = focus_prompt("&&& a --start\n{title: A}\n- \nbody\n&&& a --end");
+    let cursor = editor.text().find("body").expect("body") + 1;
+    editor.set_cursor_offset_for_test(cursor);
+    assert!(editor.enter_block_focus());
+    assert!(editor.clean_template_block(0));
+    assert_eq!(editor.focus_block, Some(0), "清理空项后仍在原块");
+    assert!(editor.toggle_template_status(0));
+    assert_eq!(editor.focus_block, Some(0), "状态轮转后仍在原块");
+    assert!(editor.block_focus_active());
+}

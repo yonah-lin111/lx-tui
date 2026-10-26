@@ -638,6 +638,8 @@ fn renders_toolbar_buttons_and_divider() {
         PromptMode::Editor,
         false,
         false,
+        false,
+        true,
     );
 
     let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar visible");
@@ -705,6 +707,8 @@ fn renders_toolbar_buttons_and_divider() {
         PromptMode::Editor,
         false,
         false,
+        false,
+        true,
     );
     assert_eq!(buf[(save_x, bar.y)].fg, Color::Green, "保存后绿点");
 
@@ -718,6 +722,8 @@ fn renders_toolbar_buttons_and_divider() {
         PromptMode::Editor,
         true,
         false,
+        false,
+        true,
     );
     assert_eq!(buf[(save_x, bar.y)].symbol(), text::PROMPT_DRAFT_DOT);
     assert_eq!(buf[(save_x, bar.y)].fg, Color::DarkGray, "草稿恒灰空心点");
@@ -746,6 +752,8 @@ fn divider_stays_plain_and_border_carries_the_title() {
         PromptMode::Editor,
         false,
         false,
+        false,
+        true,
     );
     let row = divider_row(&buf);
     assert_eq!(
@@ -761,7 +769,7 @@ fn divider_stays_plain_and_border_carries_the_title() {
 }
 
 #[test]
-fn toolbar_pin_renders_hollow_then_filled_left_of_select_all() {
+fn toolbar_pin_renders_hollow_then_filled_left_of_block_focus() {
     let panel = toolbar_panel();
     let editor = Prompt::new(PaneId::from_raw_for_test(1));
     let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar visible");
@@ -777,14 +785,14 @@ fn toolbar_pin_renders_hollow_then_filled_left_of_select_all() {
         false,
     )
     .expect("pin visible");
-    let select_all = crate::layout::prompt_toolbar_button_rect(
+    let block_focus = crate::layout::prompt_toolbar_button_rect(
         panel,
-        crate::layout::PromptToolbarButton::SelectAll,
+        crate::layout::PromptToolbarButton::BlockFocus,
         false,
     )
-    .expect("select all visible");
+    .expect("block focus visible");
     assert_eq!(pin.y, bar.y, "钉住按钮在功能按钮行");
-    assert_eq!(select_all.x - pin.right(), 1, "紧邻 [*] 左侧，间隔 1 列");
+    assert_eq!(pin.right() + 1, block_focus.x, "紧邻块聚焦按钮左侧");
 
     let mut buf = Buffer::empty(panel);
     render_header(
@@ -795,8 +803,10 @@ fn toolbar_pin_renders_hollow_then_filled_left_of_select_all() {
         PromptMode::Editor,
         false,
         false,
+        false,
+        true,
     );
-    assert_eq!(render_label(&buf, pin).trim(), text::PROMPT_UNPINNED_LABEL);
+    assert_eq!(render_label(&buf, pin), text::PROMPT_UNPINNED_LABEL);
 
     let mut buf = Buffer::empty(panel);
     render_header(
@@ -807,8 +817,10 @@ fn toolbar_pin_renders_hollow_then_filled_left_of_select_all() {
         PromptMode::Editor,
         false,
         true,
+        false,
+        true,
     );
-    assert_eq!(render_label(&buf, pin).trim(), text::PROMPT_PINNED_LABEL);
+    assert_eq!(render_label(&buf, pin), text::PROMPT_PINNED_LABEL);
 }
 
 #[test]
@@ -830,6 +842,8 @@ fn toolbar_folders_button_renders_left_of_pin_and_hides_in_tree() {
         PromptMode::Editor,
         false,
         false,
+        false,
+        true,
     );
     let label: String = (folders.x..folders.right())
         .map(|x| buf[(x, folders.y)].symbol())
@@ -846,6 +860,8 @@ fn toolbar_folders_button_renders_left_of_pin_and_hides_in_tree() {
         PromptMode::Tree,
         false,
         false,
+        false,
+        true,
     );
     let tree_folders = crate::layout::prompt_toolbar_button_rect(
         panel,
@@ -873,6 +889,8 @@ fn divider_follows_prompt_focus_style() {
         PromptMode::Editor,
         false,
         false,
+        false,
+        true,
     );
     for x in [panel.x, 5, panel.right() - 1] {
         let cell = &buf[(x, divider_y)];
@@ -889,6 +907,8 @@ fn divider_follows_prompt_focus_style() {
         PromptMode::Editor,
         false,
         false,
+        false,
+        true,
     );
     for x in [panel.x, 5, panel.right() - 1] {
         let cell = &buf[(x, divider_y)];
@@ -912,6 +932,8 @@ fn toolbar_hidden_when_prompt_too_short() {
         PromptMode::Editor,
         false,
         false,
+        false,
+        true,
     );
     assert_eq!(buf[(1, 1)].symbol(), " ", "内容区过矮不绘制工具栏");
     assert_eq!(buf[(2, 1)].symbol(), " ");
@@ -1728,10 +1750,9 @@ fn selection_reverse_keeps_inline_code_foreground() {
     );
 }
 
-/// 钉住按钮按最宽态占 7 列，`[pin]` 只有 5 列：标签必须**右对齐**，
-/// 否则余下 2 列甩到右侧，紧邻的 `[all]` 前会多出 3 列空档（用户报告的缺陷）。
+/// 钉住按钮恢复单字图标（3 列）：标签与槽位同宽，不需要左右补空格。
 #[test]
-fn pin_label_is_right_aligned_inside_its_slot() {
+fn pin_label_fills_its_three_column_slot() {
     let panel = Rect::new(0, 0, 46, 14);
     let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar");
     let pin = crate::layout::prompt_toolbar_button_rect(
@@ -1740,10 +1761,7 @@ fn pin_label_is_right_aligned_inside_its_slot() {
         false,
     )
     .expect("pin visible");
-    assert!(
-        pin.width > text::PROMPT_UNPINNED_LABEL.chars().count() as u16,
-        "前提：槽位比标签宽"
-    );
+    assert_eq!(pin.width, 3, "单字图标恒占 3 列");
 
     let editor = Prompt::new(PaneId::from_raw_for_test(1));
     let mut buf = Buffer::empty(panel);
@@ -1755,36 +1773,147 @@ fn pin_label_is_right_aligned_inside_its_slot() {
         PromptMode::Editor,
         false,
         false,
+        false,
+        true,
     );
     let rendered: String = (pin.x..pin.right())
         .map(|x| buf[(x, pin.y)].symbol())
         .collect();
-    assert_eq!(
-        rendered.trim(),
-        text::PROMPT_UNPINNED_LABEL,
-        "标签内容不变: {rendered:?}"
+    assert_eq!(rendered, text::PROMPT_UNPINNED_LABEL);
+    assert_eq!(bar.y, pin.y);
+}
+
+#[test]
+fn toolbar_block_focus_renders_all_then_one_and_greys_when_unavailable() {
+    let panel = toolbar_panel();
+    let editor = Prompt::new(PaneId::from_raw_for_test(1));
+    let block = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::BlockFocus,
+        false,
+    )
+    .expect("block focus visible");
+    let render_label = |buf: &Buffer, rect: Rect| -> String {
+        (rect.x..rect.right())
+            .map(|x| buf[(x, rect.y)].symbol())
+            .collect()
+    };
+
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        false,
+        false,
+        false,
+        true,
     );
-    assert!(
-        rendered.ends_with(text::PROMPT_UNPINNED_LABEL),
-        "标签必须贴槽位右缘（右对齐），实际 {rendered:?}"
+    assert_eq!(
+        render_label(&buf, block),
+        text::PROMPT_BLOCK_FOCUS_ALL_LABEL
+    );
+    assert_eq!(buf[(block.x, block.y)].fg, Color::Cyan);
+
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        false,
+        false,
+        true,
+        true,
+    );
+    assert_eq!(
+        render_label(&buf, block),
+        text::PROMPT_BLOCK_FOCUS_ONE_LABEL
     );
 
-    // 与 `[all]` 之间恰好 1 列间距。
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        false,
+        false,
+        false,
+        false,
+    );
+    assert_eq!(
+        render_label(&buf, block),
+        text::PROMPT_BLOCK_FOCUS_ALL_LABEL
+    );
+    assert!(
+        buf[(block.x, block.y)].modifier.contains(Modifier::DIM),
+        "无模板块时置灰"
+    );
+}
+
+#[test]
+fn toolbar_select_all_renders_right_of_redo() {
+    let panel = toolbar_panel();
+    let editor = Prompt::new(PaneId::from_raw_for_test(1));
+    let redo = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::Redo,
+        false,
+    )
+    .expect("redo visible");
     let select_all = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::SelectAll,
         false,
     )
-    .expect("all visible");
-    assert_eq!(
-        select_all.x.saturating_sub(pin.right()),
-        1,
-        "与 [all] 只隔 1 列"
+    .expect("select all visible");
+    assert_eq!(select_all.x, redo.right() + 1);
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        false,
+        false,
+        false,
+        true,
     );
+    let rendered: String = (select_all.x..select_all.right())
+        .map(|x| buf[(x, select_all.y)].symbol())
+        .collect();
+    assert_eq!(rendered, text::PROMPT_SELECT_ALL_LABEL);
+}
 
-    // 相邻格必须真的是空格，不是旧字形残留。
-    for x in pin.x..(pin.right() - text::PROMPT_UNPINNED_LABEL.chars().count() as u16) {
-        assert_eq!(buf[(x, pin.y)].symbol(), " ", "前导空白列 {x}");
-    }
-    assert_eq!(bar.y, pin.y);
+#[test]
+fn block_focus_renders_only_the_focused_block() {
+    let mut editor = prompt(
+        60,
+        10,
+        "before\n&&& a --start\n{title: Alpha}\ninside-a\n&&& a --end\n\
+         &&& b --start\ninside-b\n&&& b --end\nafter",
+    );
+    assert!(editor.enter_block_focus(), "光标在首块前的普通段落 → 首块");
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+    let rendered: String = (0..area.height)
+        .map(|y| {
+            (0..area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Alpha"), "{rendered}");
+    assert!(rendered.contains("inside-a"), "{rendered}");
+    assert!(!rendered.contains("inside-b"), "块外内容不渲染: {rendered}");
+    assert!(!rendered.contains("before"), "块外正文不渲染: {rendered}");
+    assert!(!rendered.contains("after"), "块外正文不渲染: {rendered}");
 }

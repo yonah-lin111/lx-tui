@@ -18,6 +18,8 @@ impl Prompt {
         );
         let scan = markdown::block_scan(&self.text);
         let lines: Vec<&str> = self.text.split('\n').collect();
+        // 块聚焦时只保留该块的逻辑行区间（含起止行）；范围失效时退回普通视图。
+        let focus = self.focused_block_range(&scan);
         let mut hidden = vec![false; lines.len()];
         for block in fold::folded_blocks_from(&scan, &self.text, &self.expanded_supplements) {
             for line in block.hidden_from_line..=block.end_line {
@@ -30,7 +32,9 @@ impl Prompt {
         let mut line_start = 0;
         for (line, segment) in lines.iter().enumerate() {
             let line_end = line_start + segment.len();
-            if hidden.get(line).copied().unwrap_or(false) {
+            // 聚焦块外的逻辑行整体跳过（软换行判定在块内照旧）。
+            let outside_focus = focus.is_some_and(|(start, end)| line < start || line > end);
+            if hidden.get(line).copied().unwrap_or(false) || outside_focus {
                 line_start = line_end + 1;
                 continue;
             }
@@ -71,6 +75,9 @@ impl Prompt {
             return None;
         }
         let rows = self.visual_rows();
+        if rows.is_empty() {
+            return None;
+        }
         let (row, col) = self.cursor_visual_in(&rows);
         let visible = row.checked_sub(self.scroll)?;
         if visible >= usize::from(self.height) {
@@ -185,6 +192,9 @@ impl Prompt {
     }
     /// 光标在视觉行中的索引与显示列（跨折行边界时归入下一视觉行）。
     pub(super) fn cursor_visual_in(&self, rows: &[VisualRow]) -> (usize, usize) {
+        if rows.is_empty() {
+            return (0, 0);
+        }
         for (index, row) in rows.iter().enumerate() {
             // 光标落在折叠区留下的空隙：归到其后首个可见行行首。
             if self.cursor < row.start {
@@ -217,6 +227,9 @@ impl Prompt {
     /// 视觉行索引（内容坐标）映射到文本字节偏移。
     fn content_offset_at(&self, index: usize, col: u16, after: bool) -> usize {
         let rows = self.visual_rows();
+        if rows.is_empty() {
+            return 0;
+        }
         let index = index.min(rows.len() - 1);
         let visual = rows[index];
         let col = col.saturating_sub(self.line_gutter(visual.line));
@@ -247,6 +260,10 @@ impl Prompt {
     /// 调整滚动量，保证光标所在视觉行可见；已在底部留白内滚动时不回拉。
     pub(super) fn scroll_cursor_into_view(&mut self) {
         let rows = self.visual_rows();
+        if rows.is_empty() {
+            self.scroll = 0;
+            return;
+        }
         let height = usize::from(self.height.max(1));
         let (row, _) = self.cursor_visual_in(&rows);
         if row < self.scroll {

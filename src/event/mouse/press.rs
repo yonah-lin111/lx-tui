@@ -358,6 +358,9 @@ pub(crate) fn handle_mouse_down_left(
             layout::PromptToolbarButton::Pin => {
                 update::toggle_prompt_pin(state);
             }
+            layout::PromptToolbarButton::BlockFocus if editor_view => {
+                update::toggle_prompt_block_focus(state);
+            }
             layout::PromptToolbarButton::Undo if editor_view => state.prompt.undo(),
             layout::PromptToolbarButton::Redo if editor_view => state.prompt.redo(),
             layout::PromptToolbarButton::SelectAll if editor_view => {

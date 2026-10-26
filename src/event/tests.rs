@@ -3173,6 +3173,51 @@ fn mouse_click_prompt_pin_toggles_pin() {
     assert!(dirty);
 }
 
+#[test]
+fn mouse_click_prompt_block_focus_roundtrips_without_text_change() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let text = "intro\n&&& a --start\n{title: A}\nbody-a\n&&& a --end\noutro";
+    state.prompt.set_text(text);
+    let cursor = state.prompt.text().find("body-a").expect("body") + 1;
+    state.prompt.set_cursor_offset_for_test(cursor);
+
+    let block_focus = toolbar_button(&geo, layout::PromptToolbarButton::BlockFocus);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            block_focus.x,
+            block_focus.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.prompt.block_focus_active(), "点击 [⊞] 进入块模式");
+    assert_eq!(state.prompt.text(), text, "进入模式不改正文");
+    assert!(dirty);
+
+    let exit = toolbar_button(&geo, layout::PromptToolbarButton::BlockFocus);
+    dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), exit.x, exit.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(!state.prompt.block_focus_active(), "再点 [⊡] 退出块模式");
+    assert_eq!(state.prompt.text(), text, "退出模式不改正文");
+    assert!(dirty);
+}
+
 /// 构造 prompt 工具栏测试场景：宽右栏、已同步几何。
 fn toolbar_geometry(state: &mut AppState) -> (Config, Geometry) {
     let config = Config::default();
@@ -3432,7 +3477,11 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
         &mut dirty,
     );
     handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), bar.x + 15, bar.y),
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            select_all.right() + 2,
+            bar.y,
+        ),
         &mut state,
         &mut sessions,
         &geo,

@@ -53,6 +53,8 @@ pub enum TooltipTarget {
     PromptSelectAll,
     PromptSave,
     PromptPin,
+    /// 编辑视图工具栏的块聚焦模式按钮。
+    PromptBlockFocus,
     /// 侧栏底边框左侧设置按钮。
     SidebarSettings,
     /// 页码菜单顶部边框的新建按钮。

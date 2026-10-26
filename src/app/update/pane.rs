@@ -887,6 +887,17 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
     for (id, rect) in pane_rects {
         if *id == state.prompt.id() {
             let (cols, rows) = layout::prompt_inner_size(*rect);
+            // 块聚焦按钮放不下时自动退出，避免窄到只能用键盘退出。
+            if state.prompt.block_focus_active()
+                && layout::prompt_toolbar_button_rect(
+                    *rect,
+                    layout::PromptToolbarButton::BlockFocus,
+                    false,
+                )
+                .is_none()
+            {
+                state.prompt.exit_block_focus();
+            }
             if state.prompt.size() != (cols, rows) {
                 clear_selection(state);
             }

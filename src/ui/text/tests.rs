@@ -234,12 +234,16 @@ fn prompt_button_icons_are_single_width_and_non_pua() {
 
     // 按钮标签形如 `[x]`，只允许两种形态，不得混写：
     // 1. 单个非 PUA 图标字符，严格 1 列宽；
-    // 2. 纯 `a-z` 英文单词（`[all]` / `[pin]` / `[unpin]` / `[dir]` / `[tmp]`）。
+    // 2. 纯 `a-z` 英文单词（`[all]` / `[dir]` / `[tmp]`）。
     for (name, label) in [
         ("PROMPT_UNDO_LABEL", PROMPT_UNDO_LABEL),
         ("PROMPT_REDO_LABEL", PROMPT_REDO_LABEL),
         ("PROMPT_MODE_LIST_LABEL", PROMPT_MODE_LIST_LABEL),
         ("PROMPT_MODE_EDIT_LABEL", PROMPT_MODE_EDIT_LABEL),
+        ("PROMPT_UNPINNED_LABEL", PROMPT_UNPINNED_LABEL),
+        ("PROMPT_PINNED_LABEL", PROMPT_PINNED_LABEL),
+        ("PROMPT_BLOCK_FOCUS_ALL_LABEL", PROMPT_BLOCK_FOCUS_ALL_LABEL),
+        ("PROMPT_BLOCK_FOCUS_ONE_LABEL", PROMPT_BLOCK_FOCUS_ONE_LABEL),
         ("TEMPLATE_BUTTON_COPY", TEMPLATE_BUTTON_COPY),
         ("TEMPLATE_BUTTON_CLEAN", TEMPLATE_BUTTON_CLEAN),
         ("TEMPLATE_BUTTON_DEL", TEMPLATE_BUTTON_DEL),
@@ -264,8 +268,6 @@ fn prompt_button_icons_are_single_width_and_non_pua() {
     // 单词形态：方括号内全部为小写 ASCII 字母，不含图标、不含空白。
     for (name, label) in [
         ("PROMPT_SELECT_ALL_LABEL", PROMPT_SELECT_ALL_LABEL),
-        ("PROMPT_UNPINNED_LABEL", PROMPT_UNPINNED_LABEL),
-        ("PROMPT_PINNED_LABEL", PROMPT_PINNED_LABEL),
         ("PROMPT_TEMP_PROMPT_LABEL", PROMPT_TEMP_PROMPT_LABEL),
         ("PROMPT_FOLDERS_LABEL", PROMPT_FOLDERS_LABEL),
     ] {

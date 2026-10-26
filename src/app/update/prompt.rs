@@ -234,6 +234,21 @@ fn select_tree_entry_row(state: &mut AppState, index: usize) {
     }
 }
 
+/// 工具栏块聚焦按钮：未进入则尝试进入（无模板块时 no-op），已进入则退出。
+pub fn toggle_prompt_block_focus(state: &mut AppState) -> bool {
+    if state.prompt.block_focus_active() {
+        state.prompt.exit_block_focus();
+        // 视口行集合切换后旧选区坐标失效，退出时一并清除。
+        super::clear_selection(state);
+        true
+    } else if state.prompt.enter_block_focus() {
+        super::clear_selection(state);
+        true
+    } else {
+        false
+    }
+}
+
 /// 工具栏模式按钮：树视图返回编辑（用户未显式改过选中时恢复进入列表前的编辑绑定），
 /// 编辑视图切回树。
 pub fn toggle_prompt_panel_mode(state: &mut AppState) {
@@ -480,6 +495,7 @@ fn load_editor_target(
             Some(stash.page) == page && stash.editing == editing && stash.history.text() == content
         })
         .map(|stash| stash.history);
+    state.prompt.exit_block_focus();
     match restored {
         Some(history) => state.prompt.restore_history(history),
         None => state.prompt.set_text(content),
@@ -540,6 +556,8 @@ pub fn open_temp_prompt(state: &mut AppState) -> bool {
     let id = workspace_state.prompt_panel.new_temp();
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Temp(id));
+    // 新草稿与旧目标的块聚焦行无关，避免后续正文恰好占用同一行时误入块模式。
+    state.prompt.exit_block_focus();
     state.prompt.set_text("");
     state.prompt_collapsed = false;
     super::focus_prompt(state);

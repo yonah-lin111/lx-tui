@@ -59,8 +59,8 @@ pub(crate) fn render_rule(panel: Rect, y: u16, buf: &mut Buffer, focused: bool) 
     }
 }
 
-/// 工具栏：模式切换按钮常显；钉住按钮在右侧 `[*]`/`[tmp]` 左侧；树视图追加 `[tmp]`；
-/// 编辑视图追加 undo/redo（不可用时置灰）、select all 与保存状态点（条目实心、草稿空心恒灰）。
+/// 工具栏：模式切换按钮常显；编辑视图左组为 `[≡] [←] [→] [all]`，
+/// 右组自右向左为 `● [⊞/⊡] [○/◉] [dir]`；树视图为 `[≡]` + `[tmp]` + `[○/◉]`。
 fn render_toolbar(
     panel: Rect,
     buf: &mut Buffer,
@@ -68,35 +68,32 @@ fn render_toolbar(
     mode: PromptMode,
     draft: bool,
     pinned: bool,
+    block_focus: bool,
+    block_focus_available: bool,
 ) {
     let mode_label = match mode {
         PromptMode::Editor => text::PROMPT_MODE_LIST_LABEL,
         PromptMode::Tree => text::PROMPT_MODE_EDIT_LABEL,
     };
     let tree = mode == PromptMode::Tree;
-    let mut buttons = vec![
-        (PromptToolbarButton::Mode, mode_label, style::accent()),
-        (
-            PromptToolbarButton::Folders,
-            text::PROMPT_FOLDERS_LABEL,
-            style::accent(),
-        ),
-        (
-            PromptToolbarButton::Pin,
-            if pinned {
-                text::PROMPT_PINNED_LABEL
-            } else {
-                text::PROMPT_UNPINNED_LABEL
-            },
-            style::accent(),
-        ),
-    ];
+    let mut buttons = vec![(PromptToolbarButton::Mode, mode_label, style::accent())];
     if tree {
-        buttons.push((
-            PromptToolbarButton::TempPrompt,
-            text::PROMPT_TEMP_PROMPT_LABEL,
-            style::accent(),
-        ));
+        buttons.extend([
+            (
+                PromptToolbarButton::Pin,
+                if pinned {
+                    text::PROMPT_PINNED_LABEL
+                } else {
+                    text::PROMPT_UNPINNED_LABEL
+                },
+                style::accent(),
+            ),
+            (
+                PromptToolbarButton::TempPrompt,
+                text::PROMPT_TEMP_PROMPT_LABEL,
+                style::accent(),
+            ),
+        ]);
     } else {
         buttons.extend([
             (
@@ -123,6 +120,33 @@ fn render_toolbar(
                 style::accent(),
             ),
             (
+                PromptToolbarButton::Folders,
+                text::PROMPT_FOLDERS_LABEL,
+                style::accent(),
+            ),
+            (
+                PromptToolbarButton::Pin,
+                if pinned {
+                    text::PROMPT_PINNED_LABEL
+                } else {
+                    text::PROMPT_UNPINNED_LABEL
+                },
+                style::accent(),
+            ),
+            (
+                PromptToolbarButton::BlockFocus,
+                if block_focus {
+                    text::PROMPT_BLOCK_FOCUS_ONE_LABEL
+                } else {
+                    text::PROMPT_BLOCK_FOCUS_ALL_LABEL
+                },
+                if block_focus_available {
+                    style::accent()
+                } else {
+                    style::muted()
+                },
+            ),
+            (
                 PromptToolbarButton::Save,
                 if draft {
                     text::PROMPT_DRAFT_DOT
@@ -141,8 +165,7 @@ fn render_toolbar(
         let Some(rect) = layout::prompt_toolbar_button_rect(panel, button, tree) else {
             continue;
         };
-        // 按矩形宽度整格填充：钉住按钮固定按最宽态 `[unpin]` 占位，`[pin]` 需要右补空格，
-        // 否则两态切换时相邻按钮会左右跳动（残留宽度的旧字形也必须被覆盖掉）。
+        // 整格重置：按钮槽位宽度固定，两态切换时不留旧字形残影。
         for x in rect.x..rect.right() {
             let Some(cell) = buf.cell_mut((x, rect.y)) else {
                 break;
@@ -151,17 +174,11 @@ fn render_toolbar(
             cell.set_char(' ');
             cell.set_style(button_style);
         }
-        // 标签**右对齐**：钉住按钮固定按最宽态 `[unpin]` 占 7 列，`[pin]` 只有 5 列。
-        // 左对齐会把余下 2 列甩到右侧，紧邻的 `[all]` 前就多出 3 列空档（用户报告的
-        // 「pin 与 all 之间有大间隔」）。右对齐把余量留在按钮左侧——那里本来就是
-        // 工具栏中段的弹性空白，看不出来，且宽度不变仍不会跳动。
-        let start = rect
-            .right()
-            .saturating_sub(u16::try_from(label.chars().count()).unwrap_or(u16::MAX));
+        // 标签左对齐；所有按钮两态同宽，无需再按槽宽补空格。
         for (offset, symbol) in label.chars().enumerate() {
-            let x = start + offset as u16;
-            if x < rect.x || x >= rect.right() {
-                continue;
+            let x = rect.x + offset as u16;
+            if x >= rect.right() {
+                break;
             }
             if let Some(cell) = buf.cell_mut((x, rect.y)) {
                 cell.set_char(symbol);

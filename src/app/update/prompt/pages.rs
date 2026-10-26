@@ -655,6 +655,7 @@ pub fn reload_editor_from_active_page(state: &mut AppState, workspace: usize) ->
     let Some(content) = content else {
         return false;
     };
+    state.prompt.exit_block_focus();
     state.prompt.set_text(&content);
     true
 }

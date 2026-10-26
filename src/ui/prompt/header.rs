@@ -332,6 +332,7 @@ pub fn page_control_at(
 /// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制。
 ///
 /// 分割线先画成空行；调用方随后用 `paint_title_row` 把标题/页控件覆盖上去。
+#[allow(clippy::too_many_arguments)]
 pub fn render_header(
     panel: Rect,
     buf: &mut Buffer,
@@ -340,12 +341,23 @@ pub fn render_header(
     mode: PromptMode,
     draft: bool,
     pinned: bool,
+    block_focus: bool,
+    block_focus_available: bool,
 ) {
     let Some(header) = crate::layout::prompt_header_rect(panel) else {
         return;
     };
     render_divider(panel, header, buf, focused);
-    render_toolbar(panel, buf, prompt, mode, draft, pinned);
+    render_toolbar(
+        panel,
+        buf,
+        prompt,
+        mode,
+        draft,
+        pinned,
+        block_focus,
+        block_focus_available,
+    );
 }
 
 /// 绘制页控件：`‹` / `›` 在边界处置灰；计数用边框标题色；控件区先清为空白。

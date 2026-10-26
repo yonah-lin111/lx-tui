@@ -304,7 +304,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     // 输入草稿内容后点保存点 → 文件夹选择器。
     app.send(b"hello draft");
     assert!(app.wait_for("hello draft"), "draft typed");
-    app.click_after(text::PROMPT_SELECT_ALL_LABEL, text::PROMPT_DRAFT_DOT);
+    app.click_after(text::PROMPT_BLOCK_FOCUS_ALL_LABEL, text::PROMPT_DRAFT_DOT);
     assert!(
         app.wait_for("Save prompt to folder"),
         "picker: \n{}",
@@ -388,7 +388,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     );
     app.send(b"second draft");
     assert!(app.wait_for("second draft"), "second draft typed");
-    app.click_after(text::PROMPT_SELECT_ALL_LABEL, text::PROMPT_DRAFT_DOT);
+    app.click_after(text::PROMPT_BLOCK_FOCUS_ALL_LABEL, text::PROMPT_DRAFT_DOT);
     assert!(app.wait_for("+ New folder"), "picker reopened");
     // 点击动作行 → 命名浮层；清空预填名后输入 notes，回车建库并恢复选择器（选中新文件夹）。
     app.click("+ New folder");
@@ -468,6 +468,50 @@ fn page_controls_create_switch_and_rename_via_real_mouse_and_keys() {
     assert!(
         app.wait_for("page one body"),
         "page one content kept: \n{}",
+        app.screen()
+    );
+}
+
+#[test]
+fn block_focus_survives_prompt_list_roundtrip_via_real_mouse() {
+    let app = spawn_trusted("block-focus-roundtrip");
+    assert!(
+        app.wait_for("Write your prompt"),
+        "app started: \n{}",
+        app.screen()
+    );
+    // 启动时焦点在主区；先点 prompt 文本区，确保粘贴进入编辑器而不是 lx 输入。
+    app.click("Write your prompt");
+    let body = "intro\n&&& a --start\n{title: A}\ninside-a\n&&& a --end\n\
+                &&& b --start\ninside-b\n&&& b --end\noutro";
+    app.send(format!("\x1b[200~{body}\x1b[201~").as_bytes());
+    assert!(app.wait_for("outro"), "text typed: \n{}", app.screen());
+
+    app.click(text::PROMPT_BLOCK_FOCUS_ALL_LABEL);
+    assert!(
+        app.wait_for(text::PROMPT_BLOCK_FOCUS_ONE_LABEL),
+        "进入块聚焦: \n{}",
+        app.screen()
+    );
+    assert!(app.wait_for("inside-a"), "当前块可见");
+    assert!(!app.screen().contains("inside-b"), "块外文本不渲染");
+
+    app.click(text::PROMPT_MODE_LIST_LABEL);
+    assert!(
+        app.wait_for(text::PROMPT_MODE_EDIT_LABEL),
+        "进入列表: \n{}",
+        app.screen()
+    );
+    app.click(text::PROMPT_MODE_EDIT_LABEL);
+    assert!(
+        app.wait_for(text::PROMPT_BLOCK_FOCUS_ONE_LABEL),
+        "返回编辑仍处于块聚焦: \n{}",
+        app.screen()
+    );
+    assert!(app.wait_for("inside-a"), "当前块仍可见");
+    assert!(
+        !app.screen().contains("inside-b"),
+        "列表往返后不退回全文: \n{}",
         app.screen()
     );
 }
