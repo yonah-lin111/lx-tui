@@ -379,3 +379,15 @@ fn main_surface_declares_control_tools() {
         assert!(json.contains(&format!("\"{name}\"")), "{name}");
     }
 }
+
+/// 摘要请求（`CompactSummary`）不声明任何工具——与子 agent 工具面互不影响。
+#[test]
+fn compact_summary_declares_no_tools() {
+    use crate::chat::events::RequestPurpose;
+    assert_eq!(RequestPurpose::CompactSummary.tools_surface(), None);
+    assert!(!RequestPurpose::CompactSummary.includes_tools());
+    assert_eq!(
+        RequestPurpose::Subagent(crate::chat::agent::AgentRole::Executor).tools_surface(),
+        Some(ToolSurface::Executor)
+    );
+}
