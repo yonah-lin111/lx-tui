@@ -134,6 +134,9 @@ impl Database {
                 now,
             ],
         )?;
+        // 子轮同样要建立文件 scope：executor 的写工具通过 recorder 提交 mutation，
+        // 没有 scope 会整批拒绝（`rewind unavailable`），子 agent 的改动就无法落盘。
+        super::rewind::begin_turn_scope(&transaction, &child_session_id, &user_message_id, now)?;
         let agent_id = new_external_id("sub");
         transaction.execute(
             r#"INSERT INTO agent_subagent

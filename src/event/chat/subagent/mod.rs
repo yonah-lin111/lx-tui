@@ -4,7 +4,6 @@
 //! 与下一轮注入共享同一闸门。子 turn 的消息模型由事件层持有（`SubagentHandle.chat`），
 //! 窗格关闭后仍能继续落库；UI 的 `SubagentRun.chat` 只是同一批增量的镜像。
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -61,8 +60,6 @@ pub(crate) struct SubagentHandle {
     pub status: &'static str,
     /// 启动时刻（UTC 毫秒）。
     pub started_at_ms: i64,
-    /// 去重后的改动路径。
-    pub changed_paths: HashSet<PathBuf>,
     /// 子会话消息模型（持久化来源；窗格关闭后仍存在）。
     pub chat: crate::app::state::LxChat,
     /// 子会话 DB 工作区键。
@@ -217,7 +214,6 @@ fn spawn(
         done: done_sender.clone(),
         status: STATUS_RUNNING,
         started_at_ms: committed.created_at_ms,
-        changed_paths: HashSet::new(),
         chat: child_chat,
         workspace: workspace.clone(),
     };

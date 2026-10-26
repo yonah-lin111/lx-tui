@@ -114,11 +114,6 @@ pub(crate) fn finish_child_tool(
                     handle
                         .chat
                         .settle_tool_result(&ticket.call_id, status, None, None, None);
-                if let ToolOutcome::Executed(result) = &outcome
-                    && let Some(path) = mutation_path(result)
-                {
-                    handle.changed_paths.insert(path);
-                }
             }
             let _ = reply.send(Ok(()));
             changed
@@ -180,13 +175,4 @@ fn tool_arguments(chat: &crate::app::state::LxChat, call_id: &str) -> Option<Str
             .tool(call_id)
             .map(|call| call.arguments_json.clone())
     })
-}
-
-/// 文件工具结果里的主路径（`changed_paths` 的近似来源；精确计数在 DB 结算时查）。
-fn mutation_path(result: &ToolExecutionResult) -> Option<PathBuf> {
-    match result {
-        ToolExecutionResult::Write { path, .. } => Some(path.clone()),
-        ToolExecutionResult::Read { .. } | ToolExecutionResult::Search { .. } => None,
-        _ => None,
-    }
 }

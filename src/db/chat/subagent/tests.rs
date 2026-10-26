@@ -331,6 +331,24 @@ fn undelivered_user_only_report_row_is_not_replayed() {
     assert!(!text.contains("subagent_report"), "{text}");
 }
 
+/// 子轮必须有自己的文件 scope：executor 的 mutation 依赖它，缺了会被整批拒绝。
+#[test]
+fn child_turn_has_a_file_scope() {
+    let fixture = Fixture::new("scope");
+    let parent = fixture.parent();
+    let committed = fixture.spawn(&parent, AgentRole::Executor, "fix it");
+    let state: String = fixture
+        .database
+        .connection()
+        .query_row(
+            "SELECT state FROM agent_turn_file_scope WHERE user_message_id = ?1",
+            params![committed.child_user_message_id],
+            |row| row.get(0),
+        )
+        .expect("scope row");
+    assert_eq!(state, "capturing");
+}
+
 #[test]
 fn tokens_do_not_leak_from_child_to_parent() {
     let fixture = Fixture::new("tokens");
