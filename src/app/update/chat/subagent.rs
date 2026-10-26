@@ -472,21 +472,6 @@ pub fn scroll_agents_detail(state: &mut AppState, pane: PaneId, delta: isize) ->
     true
 }
 
-/// 高亮切换（↑/↓），沿 `PanelWindow` 语义。
-pub fn move_selected_agent(state: &mut AppState, pane: PaneId, delta: isize) -> bool {
-    let len = state
-        .pane_anywhere(pane)
-        .map(|target| target.lx.agents.runs.len())
-        .unwrap_or(0);
-    let Some(page) = state
-        .pane_mut_anywhere(pane)
-        .and_then(|target| target.lx.task.as_mut())
-    else {
-        return false;
-    };
-    page.move_active_len(len, delta)
-}
-
 /// `^d`：停止高亮项 → `Effect::StopSubagent`。
 pub fn stop_selected_subagent(state: &mut AppState, pane: PaneId) -> bool {
     let agent_id = state

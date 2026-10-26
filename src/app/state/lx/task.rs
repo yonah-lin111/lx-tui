@@ -109,8 +109,6 @@ pub struct TaskPage {
     pub output_visible: usize,
     /// Agents 页签的窗口状态（与进程列表的 `window` 分开）。
     pub agents_window: PanelWindow,
-    /// 一次性定位请求：选中该 agent_id 后清空。
-    pub selected_agent: Option<String>,
     /// Agents 详情区滚动偏移（渲染回写）。
     pub agents_scroll: usize,
     /// Agents 详情区可见行数（事件循环在绘制前写入）。

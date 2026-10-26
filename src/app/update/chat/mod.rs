@@ -55,10 +55,10 @@ pub use session::{
     scroll_task_output, select_task_tab, set_task_output_scroll, stop_selected_process,
 };
 pub use subagent::{
-    apply_deltas as apply_subagent_deltas, move_selected_agent, on_report_committed,
-    on_subagent_delta, on_subagent_finished, on_subagent_loaded, on_subagent_report,
-    on_subagent_started, on_subagent_tool_pending, on_subagent_tool_running,
-    on_subagent_tool_settled, scroll_agents_detail, set_subagent_list, stop_selected_subagent,
+    apply_deltas as apply_subagent_deltas, on_report_committed, on_subagent_delta,
+    on_subagent_finished, on_subagent_loaded, on_subagent_report, on_subagent_started,
+    on_subagent_tool_pending, on_subagent_tool_running, on_subagent_tool_settled,
+    scroll_agents_detail, set_subagent_list, stop_selected_subagent,
 };
 pub use user_shell::{
     apply_user_shell_snapshot, cancel_user_shells, on_user_shell_begun, on_user_shell_cancelled,
