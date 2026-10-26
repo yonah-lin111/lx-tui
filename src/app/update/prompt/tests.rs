@@ -2567,13 +2567,62 @@ fn toggle_block_focus_button_roundtrip() {
 }
 
 #[test]
-fn focus_cleared_by_tree_roundtrip() {
+fn focus_survives_tree_roundtrip_for_same_target() {
     let mut state = state_with_focus();
-    assert!(state.prompt.block_focus_active());
+    let cursor = state.prompt.cursor();
     show_prompt_tree(&mut state);
-    assert!(!state.prompt.block_focus_active(), "列表往返不保留块模式");
+    assert!(
+        state.prompt.block_focus_active(),
+        "列表视图期间块聚焦随 EditorStash 暂存"
+    );
     toggle_prompt_panel_mode(&mut state);
-    assert!(!state.prompt.block_focus_active());
+    assert!(state.prompt.block_focus_active(), "返回同一目标恢复块聚焦");
+    assert_eq!(state.prompt.text(), FOCUS_BLOCKS);
+    assert_eq!(state.prompt.cursor(), cursor, "光标仍停在离开前位置");
+}
+
+#[test]
+fn esc_tree_roundtrip_keeps_block_focus() {
+    let mut state = state_with_focus();
+    apply_editor(&mut state, EditorCommand::Escape);
+    assert!(prompt_tree_mode(&state), "Esc 进入列表");
+    toggle_prompt_panel_mode(&mut state);
+    assert!(
+        state.prompt.block_focus_active(),
+        "Esc 往返与工具栏往返同语义"
+    );
+}
+
+#[test]
+fn opening_other_target_clears_block_focus() {
+    let mut state = state_with_focus();
+    let temp_id = match state.workspaces[0].prompt_panel.editing {
+        Some(PromptEditing::Temp(id)) => id,
+        other => panic!("temp bound: {other:?}"),
+    };
+    show_prompt_tree(&mut state);
+    assert!(edit_prompt_item(&mut state, 0, 10), "打开别的条目");
+    assert!(!state.prompt.block_focus_active(), "不同目标按普通视图重建");
+    assert!(edit_prompt_temp(&mut state, 0, temp_id), "再回原目标");
+    assert!(
+        !state.prompt.block_focus_active(),
+        "暂存已被打开别的目标消费，不再恢复"
+    );
+}
+
+#[test]
+fn new_temp_does_not_inherit_old_block_focus() {
+    let mut state = state_with_focus();
+    show_prompt_tree(&mut state);
+    assert!(open_temp_prompt(&mut state));
+    apply_editor(
+        &mut state,
+        EditorCommand::InsertText("intro\n&&& a --start\nbody\n&&& a --end".into()),
+    );
+    assert!(
+        !state.prompt.block_focus_active(),
+        "新草稿不得继承旧目标的聚焦行"
+    );
 }
 
 #[test]

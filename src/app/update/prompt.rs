@@ -173,7 +173,6 @@ pub fn apply_prompt_tree(
 pub fn show_prompt_tree(state: &mut AppState) {
     commit_editing_prompt(state);
     cancel_page_rename(state);
-    state.prompt.exit_block_focus();
     let index = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
     // 提交后再捕获编辑状态：正文此时与页一致，返回同一目标时据此保留撤销/重做与光标。
@@ -557,6 +556,8 @@ pub fn open_temp_prompt(state: &mut AppState) -> bool {
     let id = workspace_state.prompt_panel.new_temp();
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Temp(id));
+    // 新草稿与旧目标的块聚焦行无关，避免后续正文恰好占用同一行时误入块模式。
+    state.prompt.exit_block_focus();
     state.prompt.set_text("");
     state.prompt_collapsed = false;
     super::focus_prompt(state);

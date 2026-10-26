@@ -353,6 +353,8 @@ pub(crate) fn restore_prompt_view(state: &mut AppState, index: usize) {
         let id = workspace.prompt_panel.ensure_blank_temp();
         workspace.prompt_panel.editing = Some(PromptEditing::Temp(id));
     }
+    // 兜底空草稿与旧缓冲无绑定关系，块聚焦不得跨目标残留。
+    state.prompt.exit_block_focus();
     state.prompt.set_text("");
 }
 
