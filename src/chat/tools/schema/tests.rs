@@ -28,19 +28,35 @@ fn tool_order_and_names_are_fixed() {
 fn tools_for_filters_by_surface() {
     use crate::chat::agent::ToolSurface;
     use crate::chat::tools::{SUBAGENT_TOOL_NAMES, TOOL_NAMES};
-    let main: Vec<&str> = tools_for(ToolSurface::Main).iter().map(|s| s.name).collect();
+    let main: Vec<&str> = tools_for(ToolSurface::Main)
+        .iter()
+        .map(|s| s.name)
+        .collect();
     let expected: Vec<&str> = TOOL_NAMES
         .iter()
         .chain(SUBAGENT_TOOL_NAMES.iter())
         .copied()
         .collect();
     assert_eq!(main, expected);
-    let explorer: Vec<&str> = tools_for(ToolSurface::Explorer).iter().map(|s| s.name).collect();
+    let explorer: Vec<&str> = tools_for(ToolSurface::Explorer)
+        .iter()
+        .map(|s| s.name)
+        .collect();
     assert_eq!(explorer, vec!["read", "search"]);
-    let executor: Vec<&str> = tools_for(ToolSurface::Executor).iter().map(|s| s.name).collect();
+    let executor: Vec<&str> = tools_for(ToolSurface::Executor)
+        .iter()
+        .map(|s| s.name)
+        .collect();
     assert_eq!(
         executor,
-        vec!["read", "search", "edit", "write", "exec_command", "write_stdin"]
+        vec![
+            "read",
+            "search",
+            "edit",
+            "write",
+            "exec_command",
+            "write_stdin"
+        ]
     );
     for absent in ["ask", "update_plan", "spawn_agent"] {
         assert!(!executor.contains(&absent), "{absent}");
@@ -50,7 +66,9 @@ fn tools_for_filters_by_surface() {
 /// 新 schema：严格对象、required 与常量同源。
 #[test]
 fn subagent_schemas_are_strict_and_use_constants() {
-    use crate::chat::agent::{DEFAULT_WAIT_TIMEOUT_MS, MAX_TASK_CHARS, MAX_WAIT_TARGETS, MAX_WAIT_TIMEOUT_MS};
+    use crate::chat::agent::{
+        DEFAULT_WAIT_TIMEOUT_MS, MAX_TASK_CHARS, MAX_WAIT_TARGETS, MAX_WAIT_TIMEOUT_MS,
+    };
     let spec = |name: &str| {
         available_tools()
             .iter()
@@ -61,15 +79,24 @@ fn subagent_schemas_are_strict_and_use_constants() {
     let spawn = spec("spawn_agent");
     assert_eq!(spawn["additionalProperties"], false);
     assert_eq!(spawn["required"], serde_json::json!(["role", "task"]));
-    assert_eq!(spawn["properties"]["role"]["enum"], serde_json::json!(["explorer", "executor"]));
+    assert_eq!(
+        spawn["properties"]["role"]["enum"],
+        serde_json::json!(["explorer", "executor"])
+    );
     assert_eq!(spawn["properties"]["task"]["maxLength"], MAX_TASK_CHARS);
 
     let wait = spec("wait_agent");
     assert_eq!(wait["additionalProperties"], false);
     assert_eq!(wait["required"], serde_json::json!(["targets"]));
     assert_eq!(wait["properties"]["targets"]["maxItems"], MAX_WAIT_TARGETS);
-    assert_eq!(wait["properties"]["timeout_ms"]["default"], DEFAULT_WAIT_TIMEOUT_MS);
-    assert_eq!(wait["properties"]["timeout_ms"]["maximum"], MAX_WAIT_TIMEOUT_MS);
+    assert_eq!(
+        wait["properties"]["timeout_ms"]["default"],
+        DEFAULT_WAIT_TIMEOUT_MS
+    );
+    assert_eq!(
+        wait["properties"]["timeout_ms"]["maximum"],
+        MAX_WAIT_TIMEOUT_MS
+    );
 
     let close = spec("close_agent");
     assert_eq!(close["additionalProperties"], false);

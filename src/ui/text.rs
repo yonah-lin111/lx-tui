@@ -770,6 +770,8 @@ pub const LX_TASK_TAB_AGENTS: &str = "Agents";
 pub const LX_TASK_PROCESSES_EMPTY: &str = "no running processes";
 /// 子代理 tab 占位（本阶段尚无数据来源；后续在此显示 subagent 内容）。
 pub const LX_TASK_AGENTS_EMPTY: &str = "no subagents yet";
+/// Agents 详情区：历史 run 的消息流还没从库里读回来。
+pub const LX_TASK_AGENTS_LOADING: &str = "loading agent transcript…";
 /// 输出区空态：高亮任务还没有产出（或刚起步）。
 ///
 /// 必须显式占位而不是留白：面板下半区突然空着，会让人以为"输出丢了"。
@@ -809,8 +811,13 @@ pub const LX_TASK_HINTS_PROCESSES: [Hint; 4] = [
     hint("tabs", "←→"),
     hint("back", "esc"),
 ];
-/// 子代理 tab 的键位提示（`^d` / `↑↓` 无对象：预留 tab 恒空，故只留导航与退出）。
-pub const LX_TASK_HINTS_AGENTS: [Hint; 2] = [hint("tabs", "←→"), hint("back", "esc")];
+/// 子代理 tab 的键位提示（与进程列表同一套动作）。
+pub const LX_TASK_HINTS_AGENTS: [Hint; 4] = [
+    hint("select", "↑↓"),
+    hint("stop", "^d"),
+    hint("tabs", "←→"),
+    hint("back", "esc"),
+];
 /// 顶边右端的 tab 指示分隔符（`·`）。
 pub const LX_TASK_TAB_SEP: &str = " · ";
 /// 行尾的运行时长前缀（`running 1m 30s`）。

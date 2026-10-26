@@ -43,8 +43,8 @@ fn text_message(id: &str, role: &str, content: &str) -> ChatMessageView {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-            reports: Vec::new(),
-}
+        reports: Vec::new(),
+    }
 }
 
 fn entry(session_id: u64, command: &str, cwd: &str) -> ProcessEntry {

@@ -42,6 +42,8 @@ pub(crate) const STATS_SLOT_BLOCK: usize = usize::MAX - 2;
 pub(crate) const REWIND_SLOT_BLOCK: usize = usize::MAX - 3;
 /// 时间线里的 compact 检查点。
 pub(crate) const COMPACT_SLOT_BLOCK: usize = usize::MAX - 4;
+/// 消息内的子 agent 汇报块（一条消息可有多份，按序号排列）。
+pub(crate) const REPORT_SLOT_BLOCK: usize = usize::MAX - 5;
 
 /// 二级缓存项。
 #[derive(Debug)]
@@ -320,15 +322,8 @@ impl Fnv {
 /// 列表指纹：只读状态、O(步骤数)，覆盖一切影响行数或正文的字段。
 ///
 /// **不**包含：hover、loading 帧、跟随底部、视口位置、置顶抑制记忆、滚动位置。
-pub(crate) fn list_signature(lx: &Lx, width: u16) -> u64 {
-    list_signature_source(super::source::HistorySource::from(lx), width)
-}
-
 /// 数据源版本的列表指纹。
-pub(crate) fn list_signature_source(
-    source: super::source::HistorySource<'_>,
-    width: u16,
-) -> u64 {
+pub(crate) fn list_signature_source(source: super::source::HistorySource<'_>, width: u16) -> u64 {
     let mut hash = Fnv::new();
     hash.write_u16(width);
     hash.write_usize(source.messages.len());
@@ -351,6 +346,10 @@ pub(crate) fn list_signature_source(
             shell_signature(&mut hash, source, message, shell);
         } else {
             hash.write_u8(0);
+        }
+        hash.write_usize(message.reports.len());
+        for report in &message.reports {
+            report_signature(&mut hash, report);
         }
         hash.write_usize(message.steps.len());
         for (step_index, step) in message.steps.iter().enumerate() {
@@ -375,7 +374,11 @@ pub(crate) fn list_signature_source(
         hash.write_str(&checkpoint.summary);
         hash.write_u8(u8::from(checkpoint.active));
         hash.write_u8(u8::from(
-            source.compact.expanded.iter().any(|id| id == &checkpoint.id),
+            source
+                .compact
+                .expanded
+                .iter()
+                .any(|id| id == &checkpoint.id),
         ));
     }
     hash.finish()
@@ -444,7 +447,12 @@ fn step_signature(
 }
 
 /// 工具调用：身份、状态、折叠状态与详情中会改变行数的量。
-fn tool_signature(hash: &mut Fnv, source: super::source::HistorySource<'_>, message: &ChatMessageView, call: &ToolCallView) {
+fn tool_signature(
+    hash: &mut Fnv,
+    source: super::source::HistorySource<'_>,
+    message: &ChatMessageView,
+    call: &ToolCallView,
+) {
     hash.write_str(&call.call_id);
     hash.write_str(&call.name);
     hash.write_u8(tool_status_code(call.status));
@@ -636,6 +644,34 @@ pub(crate) fn shell_block_signature(
 ) -> u64 {
     let mut hash = Fnv::new();
     shell_signature(&mut hash, source, message, shell);
+    hash.finish()
+}
+
+/// 汇报块的列表指纹字段（展开状态另由块指纹承担）。
+fn report_signature(hash: &mut Fnv, report: &crate::app::state::SubagentReportView) {
+    hash.write_str(&report.agent_id);
+    hash.write_str(report.role.as_str());
+    hash.write_str(&report.status);
+    hash.write_usize(report.files_changed);
+    hash.write_i64(report.duration_ms.unwrap_or(-1));
+    hash.write_usize(report.body.len());
+    hash.write_edges(&report.body);
+}
+
+/// 汇报块指纹：身份、状态、计数、耗时与正文长度 + 展开状态。
+pub(crate) fn report_block_signature(
+    report: &crate::app::state::SubagentReportView,
+    expanded: bool,
+) -> u64 {
+    let mut hash = Fnv::new();
+    hash.write_str(&report.agent_id);
+    hash.write_str(report.role.as_str());
+    hash.write_str(&report.status);
+    hash.write_usize(report.files_changed);
+    hash.write_i64(report.duration_ms.unwrap_or(-1));
+    hash.write_usize(report.body.len());
+    hash.write_edges(&report.body);
+    hash.write_u8(u8::from(expanded));
     hash.finish()
 }
 

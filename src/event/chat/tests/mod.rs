@@ -697,5 +697,6 @@ mod guard;
 mod limits;
 mod process_tools;
 mod resume;
+mod subagent;
 mod user_shell;
 mod workspace;

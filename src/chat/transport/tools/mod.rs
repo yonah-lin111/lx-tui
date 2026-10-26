@@ -17,10 +17,10 @@
 
 use serde_json::{Value, json};
 
+use crate::chat::agent::ToolSurface;
 use crate::chat::events::{
     MAX_TOOL_ARGUMENTS_BYTES, ModelItem, TOOL_ARGUMENTS_INVALID_CODE, TOOL_ARGUMENTS_TOO_LARGE_CODE,
 };
-use crate::chat::agent::ToolSurface;
 use crate::chat::tools::tools_for;
 
 /// 供应商/兼容端点拒绝 `tools` 字段时的稳定错误码前缀。

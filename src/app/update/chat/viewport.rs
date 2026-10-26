@@ -183,6 +183,9 @@ pub fn resolve_task_output_visible(
 }
 
 /// 每轮把 Agents 详情区的可见行数与总行数落状态（翻页/滚动条几何用）。
+///
+/// 只在消息流变化后重量一次：历史正文的 markdown 排版是这里最贵的一步，
+/// 每帧重算会白白吃掉整帧预算。
 pub fn resolve_task_agents_visible(
     state: &mut AppState,
     rects: &[(PaneId, ratatui::layout::Rect)],
@@ -190,14 +193,32 @@ pub fn resolve_task_agents_visible(
     let mut changed = false;
     for (pane, rect) in rects {
         let inner = crate::layout::pane_inner_rect(*rect);
-        let Some((visible, total)) = state
+        let Some((needs_measure, visible)) = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
             .and_then(|target| {
-                crate::ui::main_content::lx::task_agents_rows(inner, &target.lx)
+                let page = target.lx.task.as_ref()?;
+                if page.tab != crate::app::state::TaskTab::Agents {
+                    return None;
+                }
+                let run = target.lx.agents.runs.get(page.agents_window.active)?;
+                Some((
+                    run.rows_dirty || run.total_rows == 0,
+                    usize::from(
+                        crate::ui::main_content::lx::task_output_inner(inner, &target.lx)?.height,
+                    ),
+                ))
             })
         else {
             continue;
+        };
+        let total = if needs_measure {
+            state
+                .pane_anywhere(*pane)
+                .and_then(|target| crate::ui::main_content::lx::task_agents_rows(inner, &target.lx))
+                .map(|(_, total)| total)
+        } else {
+            None
         };
         let Some(target) = state.pane_mut_anywhere(*pane) else {
             continue;
@@ -208,9 +229,11 @@ pub fn resolve_task_agents_visible(
         let Some(run) = target.lx.agents.runs.get_mut(page.agents_window.active) else {
             continue;
         };
-        if run.visible != visible || run.total_rows != total {
+        let total = total.unwrap_or(run.total_rows);
+        if run.visible != visible || run.total_rows != total || run.rows_dirty {
             run.visible = visible;
             run.total_rows = total;
+            run.rows_dirty = false;
             let max = total.saturating_sub(visible);
             run.scroll = if run.follow { max } else { run.scroll.min(max) };
             changed = true;
@@ -305,6 +328,20 @@ pub fn hover_lx_chat(state: &mut AppState, pane: PaneId, hover: Option<CardTarge
     true
 }
 
+/// 汇报块展开/折叠（槽位 `report:<agent_id>`，与工具卡片同一份展开状态）。
+fn toggle_report_card(
+    state: &mut AppState,
+    pane: PaneId,
+    message_id: &str,
+    agent_id: &str,
+) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let slot = format!("report:{agent_id}");
+    target.lx.chat.toggle_detail(message_id, &slot)
+}
+
 /// 点击卡片（未拖动）：切换该块的折叠状态。
 ///
 /// 用户要求「点击折叠内容后展开，点击展开内容后重新折叠」：整张卡片都是点击面，
@@ -328,5 +365,9 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
         CardTarget::Compact { checkpoint_id } => {
             super::compact::toggle_checkpoint(state, pane, &checkpoint_id)
         }
+        CardTarget::Report {
+            message_id,
+            agent_id,
+        } => toggle_report_card(state, pane, &message_id, &agent_id),
     }
 }

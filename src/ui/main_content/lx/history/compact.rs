@@ -8,7 +8,7 @@
 
 use ratatui::layout::Rect;
 
-use crate::app::state::{CompactNoticeView, Lx};
+use crate::app::state::CompactNoticeView;
 use crate::ui::style;
 use crate::ui::text;
 
@@ -86,9 +86,4 @@ pub(super) fn draw(
         }
         *row_index += 1;
     }
-}
-
-/// 该条目是否展开（渲染与命中共用）。
-pub(super) fn is_expanded(lx: &Lx, checkpoint_id: &str) -> bool {
-    lx.compact.is_expanded(checkpoint_id)
 }

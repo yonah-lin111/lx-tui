@@ -704,10 +704,18 @@ fn build(
     // `apply_task_page_input` 吞掉，只剩一个死画面。
     if let Some(page) = lx.task.as_ref() {
         if let Some(rect) = lay.task_output {
-            task::draw_output_container(&mut grid, rect, page);
+            if page.tab == crate::app::state::TaskTab::Agents {
+                if let Some(run) = lx.agents.runs.get(page.agents_window.active) {
+                    task::agents::draw_detail(&mut grid, rect, run, run.scroll, cache);
+                } else {
+                    task::draw_output_container(&mut grid, rect, page);
+                }
+            } else {
+                task::draw_output_container(&mut grid, rect, page);
+            }
         }
         if let Some(rect) = lay.task_list {
-            task::draw_list(&mut grid, rect, page);
+            task::draw_list(&mut grid, rect, page, &lx.agents);
         }
     } else if let Some(rect) = lay.ask {
         cursor = ask::draw(&mut grid, rect, area.height, lx, focused)
@@ -781,10 +789,18 @@ fn build_chat(
     // 后台任务面板：输出容器占原消息列表位置，item 列表仍在原输入框位置。
     if let Some(page) = lx.task.as_ref() {
         if let Some(rect) = lay.task_output {
-            task::draw_output_container(&mut grid, rect, page);
+            if page.tab == crate::app::state::TaskTab::Agents {
+                if let Some(run) = lx.agents.runs.get(page.agents_window.active) {
+                    task::agents::draw_detail(&mut grid, rect, run, run.scroll, cache);
+                } else {
+                    task::draw_output_container(&mut grid, rect, page);
+                }
+            } else {
+                task::draw_output_container(&mut grid, rect, page);
+            }
         }
         if let Some(rect) = lay.task_list {
-            task::draw_list(&mut grid, rect, page);
+            task::draw_list(&mut grid, rect, page, &lx.agents);
         }
     } else if let Some(rect) = lay.ask {
         cursor = ask::draw(&mut grid, rect, area.height, lx, focused)
@@ -860,6 +876,11 @@ pub fn history_wheel_region(area: Rect, lx: &Lx) -> Option<Rect> {
 pub fn task_output_rows(area: Rect, lx: &Lx) -> Option<usize> {
     let rect = layout(area, lx).task_output?;
     Some(task::output_rows(rect))
+}
+
+/// Agents 详情区矩形（内边距扣除后的可用区域）；不在该页返回 None。
+pub fn task_output_inner(area: Rect, lx: &Lx) -> Option<Rect> {
+    task::task_output_rect(area, lx)
 }
 
 /// Agents 详情区的 `(可见行数, 总行数)`；不在 Agents 页或无高亮项返回 None。

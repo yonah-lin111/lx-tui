@@ -32,8 +32,8 @@ fn user_message(id: &str, text: &str, sequence: i64) -> crate::app::state::ChatM
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-            reports: Vec::new(),
-}
+        reports: Vec::new(),
+    }
 }
 
 fn assistant_message(id: &str, sequence: i64) -> crate::app::state::ChatMessageView {
@@ -52,8 +52,8 @@ fn assistant_message(id: &str, sequence: i64) -> crate::app::state::ChatMessageV
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-            reports: Vec::new(),
-}
+        reports: Vec::new(),
+    }
 }
 
 fn rewound_state() -> (AppState, PaneId) {

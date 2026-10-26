@@ -120,7 +120,9 @@ fn parse_control_rejects_bad_arguments() {
     let arguments = json!({ "role": "executor", "task": task }).to_string();
     assert!(parse_control("spawn_agent", &arguments).is_some_and(|r| r.is_err()));
     // targets 超上限。
-    let targets: Vec<String> = (0..=MAX_WAIT_TARGETS).map(|index| format!("a{index}")).collect();
+    let targets: Vec<String> = (0..=MAX_WAIT_TARGETS)
+        .map(|index| format!("a{index}"))
+        .collect();
     let arguments = json!({ "targets": targets }).to_string();
     assert!(parse_control("wait_agent", &arguments).is_some_and(|r| r.is_err()));
     // timeout 钳制：0、负数与超大值。

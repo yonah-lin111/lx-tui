@@ -25,7 +25,7 @@ use crate::platform::EnvironmentFacts;
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
-pub const PROMPT_VERSION: &str = "lx-4";
+pub const PROMPT_VERSION: &str = "lx-5";
 
 /// 环境快照单字段最大字符数（转义前）。
 const MAX_FIELD_CHARS: usize = 240;
@@ -113,9 +113,38 @@ You are lx, a terminal coding agent working inside the user's workspace. You are
 - Do not paste large file contents or raw tool payloads back to the user; reference the path instead.
 - End with a brief, concrete next step when one is natural (run the app, commit, add tests). State clearly what you could not verify.
 
+# Subagents
+
+Three tools let you hand work to a subagent: `spawn_agent`, `wait_agent`, `close_agent`.
+Each subagent starts with a clean context. It sees only its role prompt, the environment
+snapshot, and the task you write — not this conversation.
+
+- `explorer` — read-only investigation. It has `read` and `search` and nothing else. Use it
+  for specific questions about the codebase: where a flow lives, who calls something, how a
+  module is wired.
+- `executor` — implementation with a boundary. It has the file and process tools, no `ask`,
+  no plan tool, and no ability to spawn agents. Use it for one well-defined change or fix.
+
+Delegate when the work is independent, has a clear boundary, and would otherwise fill your
+context with detail you do not need. Do not delegate a single-file change you can make in a
+couple of calls, anything that needs the user's input, or work you cannot describe precisely.
+
+Write the task with three things: the goal, the boundary (which files or modules belong to
+this agent), and the deliverable. A subagent that has to guess will guess wrong.
+
+Rules:
+- At most 3 subagents may run at once per conversation; a fourth call is rejected.
+- Subagents run in the same workspace and can see each other's edits. Always tell each one it
+  is not alone in the codebase and must not revert or overwrite changes it did not make.
+- You do not have to wait. Start a subagent, keep working, and call `wait_agent` when you need
+  the result — or let the report arrive on its own.
+- A report is short by design: the conclusion plus what it touched. The full trace stays in its
+  own session; do not ask for a replay.
+- `close_agent` stops a subagent and produces no report.
+
 # Tools
 
-You can call these tools: `read`, `search`, `edit`, `write`, `exec_command`, `write_stdin`, `update_plan`, and `ask`.
+You can call these tools: `read`, `search`, `edit`, `write`, `exec_command`, `write_stdin`, `update_plan`, `ask`, `spawn_agent`, `wait_agent`, and `close_agent`.
 - Every relative path resolves against the workspace root (the session working directory, fixed when the turn started); absolute paths are used as given.
 - `read` returns numbered lines plus a `file_version` token; `search` returns sorted path/line matches.
 - `edit` applies an exact context patch to one or more files; `write` replaces a whole file.
@@ -391,6 +420,37 @@ mod tests {
         );
     }
 
+    /// 子 agent 一节必须承诺真实存在的三个工具，且不引入与「自由活动」冲突的条款。
+    #[test]
+    fn prompt_documents_subagents_without_codex_conflicts() {
+        for needle in [
+            "# Subagents",
+            "`spawn_agent`",
+            "`wait_agent`",
+            "`close_agent`",
+            "`explorer`",
+            "`executor`",
+            "At most 3 subagents",
+        ] {
+            assert!(
+                LX_SYSTEM_PROMPT.contains(needle),
+                "提示缺少子 agent 规则 `{needle}`"
+            );
+        }
+        for forbidden in [
+            "wait for them before yielding",
+            "only role becomes to coordinate",
+        ] {
+            assert!(
+                !LX_SYSTEM_PROMPT.contains(forbidden),
+                "不得引入冲突条款 `{forbidden}`"
+            );
+        }
+        for name in crate::chat::tools::SUBAGENT_TOOL_NAMES {
+            assert!(LX_SYSTEM_PROMPT.contains(name), "工具清单必须含 {name}");
+        }
+    }
+
     /// 提示只包含 lx 自己的身份与真实可用工具；不得出现第三方品牌或整份系统指令。
     #[test]
     fn prompt_is_lx_specific_and_tool_scoped() {
@@ -419,7 +479,7 @@ mod tests {
                 "提示缺少 ask 规则 `{needle}`"
             );
         }
-        assert_eq!(PROMPT_VERSION, "lx-4");
+        assert_eq!(PROMPT_VERSION, "lx-5");
         assert!(
             LX_SYSTEM_PROMPT.contains("You can call these tools:")
                 && LX_SYSTEM_PROMPT.contains("`ask`"),

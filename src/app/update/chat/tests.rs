@@ -10,6 +10,7 @@ mod rewind;
 mod session;
 mod slash_panels;
 mod stop;
+mod subagent;
 mod task_page;
 mod timeline;
 mod user_shell;
@@ -793,8 +794,8 @@ fn append_stream_delta_merges_adjacent_same_kind() {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-            reports: Vec::new(),
-});
+        reports: Vec::new(),
+    });
     chat.append_stream_delta(PartKind::Text, "a", None);
     chat.append_stream_delta(PartKind::Text, "b", None);
     chat.append_stream_delta(PartKind::Reasoning, "r", None);
@@ -827,8 +828,8 @@ fn signature_metadata_binds_to_reasoning_part() {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-            reports: Vec::new(),
-});
+        reports: Vec::new(),
+    });
     chat.append_stream_delta(PartKind::Reasoning, "思考", None);
     // 空文本 + 签名元数据：绑定到相邻 reasoning part。
     chat.append_stream_delta(

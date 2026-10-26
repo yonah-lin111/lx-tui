@@ -254,7 +254,10 @@ impl Database {
                     parent_session_id: row.get(2)?,
                     spawn_message_id: row.get(3)?,
                     // 无效角色行由调用方过滤（杜绝伪造枚举值）。
-                    role: role.as_deref().and_then(AgentRole::parse).unwrap_or(AgentRole::Executor),
+                    role: role
+                        .as_deref()
+                        .and_then(AgentRole::parse)
+                        .unwrap_or(AgentRole::Executor),
                     status: row.get(5)?,
                     task_title: row.get(6)?,
                     created_at_ms: row.get(7)?,
@@ -303,7 +306,14 @@ impl Database {
                    (external_id, session_id, sequence, turn_index, role, status,
                     subagent_report_json, created_at_ms)
                VALUES (?1, ?2, ?3, ?4, 'user', 'complete', ?5, ?6)"#,
-            params![message_id, session_id, sequence, turn_index, report_json, now],
+            params![
+                message_id,
+                session_id,
+                sequence,
+                turn_index,
+                report_json,
+                now
+            ],
         )?;
         transaction.execute(
             r#"INSERT INTO agent_message_part
@@ -386,13 +396,7 @@ impl Database {
                 now,
             ],
         )?;
-        super::update_session_selection(
-            &transaction,
-            session_id,
-            &workspace_external,
-            model,
-            now,
-        )?;
+        super::update_session_selection(&transaction, session_id, &workspace_external, model, now)?;
         let revision = revision.saturating_add(1);
         transaction.execute(
             "UPDATE agent_session SET revision = ?1, updated_at_ms = ?2, last_message_at_ms = ?2 WHERE external_id = ?3",

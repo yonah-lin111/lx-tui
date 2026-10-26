@@ -52,8 +52,8 @@ fn text_message(id: &str, role: &str, content: &str) -> ChatMessageView {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-            reports: Vec::new(),
-}
+        reports: Vec::new(),
+    }
 }
 
 fn entry(session_id: u64, command: &str) -> ProcessEntry {
@@ -310,7 +310,10 @@ fn changing_selection_pins_output_to_the_tail() {
     page.output = (0..50).map(|index| format!("line {index}")).collect();
     page.output_visible = 10;
     page.output_scroll = 3;
-    assert!(page.move_active(&AgentsState::default(), 1), "高亮移到第二条");
+    assert!(
+        page.move_active(&AgentsState::default(), 1),
+        "高亮移到第二条"
+    );
     assert_eq!(page.output_scroll, 40, "换任务后输出贴尾部（最新输出）");
 }
 

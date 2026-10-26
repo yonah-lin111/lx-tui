@@ -16,12 +16,12 @@ pub use compact::{
     CompactRevert,
 };
 pub use process::{NewProcess, OutputSnapshot, ProcessFinish, ProcessRecord};
-pub use subagent::{ReportPayload, SubagentCommitted, SubagentRecord};
 pub use rewind::{
     FileAvailability, ImageRecord, ImageWrite, LatestTurn, NoticeRecord, ObservedWrite,
     OperationRecord, PathMutationWrite, PreparedTicket, RestorePath, RestorePlan, RewindCommit,
     RewindCommitted, TurnScopeRecord,
 };
+pub use subagent::{ReportPayload, SubagentCommitted, SubagentRecord};
 pub use tools::{
     INTERRUPTED_ERROR_CODE, MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_RESULT_BYTES, ToolCallRecord,
     ToolCallResult, ToolCallTicket, ToolTerminalStatus,

@@ -3,8 +3,8 @@
 //! 主窗格从 `&Lx` 构造，子 agent 详情从它自己的 `LxChat` + `LxCompact` 构造。
 //! 渲染层只读：不克隆 `LxChat`、不访问 DB、不做 IO。
 
-use crate::app::state::{ChatMessageView, CompactNoticeView, Lx, LxChat, LxCompact};
 use crate::app::state::RewindNoticeView;
+use crate::app::state::{ChatMessageView, CompactNoticeView, Lx, LxChat, LxCompact};
 
 /// 历史渲染的只读数据源。
 #[derive(Debug, Clone, Copy)]

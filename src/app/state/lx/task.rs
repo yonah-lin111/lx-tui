@@ -141,7 +141,10 @@ impl TaskPage {
     }
 
     /// 高亮当前的子 agent（`Agents` tab 且索引有效时）。
-    pub fn selected_agent<'a>(&self, agents: &'a AgentsState) -> Option<&'a super::agent::SubagentRun> {
+    pub fn selected_agent<'a>(
+        &self,
+        agents: &'a AgentsState,
+    ) -> Option<&'a super::agent::SubagentRun> {
         matches!(self.tab, TaskTab::Agents)
             .then(|| agents.runs.get(self.agents_window.active))
             .flatten()

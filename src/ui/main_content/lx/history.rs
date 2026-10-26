@@ -35,6 +35,7 @@ mod compact;
 mod layout;
 mod paint;
 mod render;
+pub(crate) mod report;
 mod rewind;
 mod rows;
 mod snapshot;
@@ -47,11 +48,12 @@ pub(crate) mod user_shell;
 pub(crate) use cache::{PaneCache, RenderCache};
 #[cfg(test)]
 pub(crate) use layout::layout;
-pub(crate) use render::render;
+pub(crate) use render::{render, render_source};
 
 pub use timeline::has_history;
 use tool::Folds;
 
+pub(crate) use report as report_block;
 pub(crate) use rows::{content_rect, rows_to_u16, tool_rows, visible_row, wrap};
 pub(crate) use stats::{format_duration, stats_line};
 
@@ -267,7 +269,11 @@ fn shell_folds(source: HistorySource<'_>, message_id: &str) -> Folds {
 }
 
 /// 一张工具卡片两块（主体 / 输出）的展开状态。
-fn folds_of(source: HistorySource<'_>, message_id: &str, call: &crate::app::state::ToolCallView) -> tool::Folds {
+fn folds_of(
+    source: HistorySource<'_>,
+    message_id: &str,
+    call: &crate::app::state::ToolCallView,
+) -> tool::Folds {
     tool::Folds {
         body: source.chat.detail_is_expanded(message_id, &call.call_id),
         output: source
@@ -357,6 +363,15 @@ pub(super) fn view_source(
 }
 
 /// 历史区滚动条几何（贴右缘一列；内容未溢出时为 None）。
+/// 只量总行数（一次性缓存）：`Agents` 详情区的滚动上限用。
+pub(crate) fn measure(width: u16, source: HistorySource<'_>) -> usize {
+    if width == 0 {
+        return 0;
+    }
+    let mut cache = PaneCache::default();
+    cache.snapshot_source(width, source).total_rows
+}
+
 pub(super) fn scrollbar(
     area: Rect,
     total: usize,

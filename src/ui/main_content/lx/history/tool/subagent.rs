@@ -114,7 +114,10 @@ fn expanded_lines(view: &SubagentDetailView, call: &ToolCallView) -> Vec<(Style,
                 lines.push((dim, format!("{} {agent_id}", text::agent::AGENT_ID_LABEL)));
             }
             if let Some(status) = &view.closed_status {
-                lines.push((param, format!("{} {status}", text::agent::PREVIOUS_STATUS_LABEL)));
+                lines.push((
+                    param,
+                    format!("{} {status}", text::agent::PREVIOUS_STATUS_LABEL),
+                ));
             }
         }
     }
@@ -205,7 +208,14 @@ pub(super) fn draw(
     )
     .then(|| text::tool_status_label(call.status).to_string());
     if let Some(y) = visible_row(rect, scroll, *row_index) {
-        let segments = header_with_verb(call, rect.width, loading_frame, animating, verb(&call.name), status);
+        let segments = header_with_verb(
+            call,
+            rect.width,
+            loading_frame,
+            animating,
+            verb(&call.name),
+            status,
+        );
         put_segments(grid, rect.x, y, rect.width, &segments);
     }
     *row_index += 1;
@@ -217,12 +227,96 @@ pub(super) fn draw(
     }
 }
 
-/// 卡片可由点击/键盘展开的区域（整块 Body）。
-pub(super) fn card_rows(expanded: bool, call: &ToolCallView, width: u16) -> usize {
-    rows(call, width, expanded)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::state::{SubagentDetailView, ToolCallView};
 
-/// 是否需要登记点击面。
-pub(super) fn clickable(call: &ToolCallView, width: u16) -> bool {
-    has_more(call, width)
+    fn call(name: &str, detail: SubagentDetailView) -> ToolCallView {
+        ToolCallView {
+            call_id: "call-1".into(),
+            name: name.into(),
+            position: 0,
+            arguments_json: "{}".into(),
+            status: ToolStatus::Completed,
+            summary: None,
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::Subagent(detail))),
+        }
+    }
+
+    fn spawn_view() -> SubagentDetailView {
+        SubagentDetailView {
+            role: Some(crate::chat::agent::AgentRole::Explorer),
+            task: Some("find the compact entry".into()),
+            agent_id: Some("sub-1".into()),
+            targets: Vec::new(),
+            timed_out: false,
+            agents: Vec::new(),
+            closed_status: None,
+        }
+    }
+
+    #[test]
+    fn zero_width_draws_nothing() {
+        let call = call("spawn_agent", spawn_view());
+        assert_eq!(rows(&call, 0, false), 0);
+        assert_eq!(rows(&call, 0, true), 0);
+    }
+
+    #[test]
+    fn collapsed_spawn_is_header_plus_one_line() {
+        let call = call("spawn_agent", spawn_view());
+        assert_eq!(rows(&call, 80, false), 2);
+        assert!(has_more(&call, 80), "展开能看到 task 全文与 agent_id");
+    }
+
+    #[test]
+    fn wide_characters_do_not_overflow() {
+        let mut view = spawn_view();
+        view.task = Some("查出 compact 的触发链在哪里".repeat(8));
+        let call = call("spawn_agent", view);
+        // 行数按宽度增长，但每行内容都按列裁剪（不 assert 具体行数，只验证不 panic）。
+        let narrow = rows(&call, 12, true);
+        let wide = rows(&call, 200, true);
+        assert!(narrow >= wide, "窄宽度需要更多物理行");
+        assert_eq!(rows(&call, 0, true), 0);
+    }
+
+    #[test]
+    fn wait_and_close_summaries_use_their_own_fields() {
+        let wait = call(
+            "wait_agent",
+            SubagentDetailView {
+                role: None,
+                task: None,
+                agent_id: None,
+                targets: vec!["sub-1".into()],
+                timed_out: true,
+                agents: vec![crate::chat::agent::AgentStatusView {
+                    agent_id: "sub-1".into(),
+                    role: crate::chat::agent::AgentRole::Explorer,
+                    status: "running".into(),
+                    report: None,
+                }],
+                closed_status: None,
+            },
+        );
+        assert_eq!(rows(&wait, 80, false), 2);
+        let close = call(
+            "close_agent",
+            SubagentDetailView {
+                role: None,
+                task: None,
+                agent_id: Some("sub-2".into()),
+                targets: Vec::new(),
+                timed_out: false,
+                agents: Vec::new(),
+                closed_status: Some("running".into()),
+            },
+        );
+        assert_eq!(rows(&close, 80, false), 2);
+        assert!(has_more(&close, 80), "展开能看到 agent_id 与关闭前状态");
+    }
 }

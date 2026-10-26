@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::chat::agent::AgentRole;
-use crate::db::chat::{ChatPart, ModelSnapshot, TurnOutcome};
 use crate::db::Database;
 use crate::db::chat::SESSION_PAGE_SIZE;
+use crate::db::chat::{ChatPart, ModelSnapshot, TurnOutcome};
 use rusqlite::params;
 
 /// 独立临时数据库 + 工作区。
@@ -156,7 +156,10 @@ fn begin_subagent_turn_writes_child_session_and_relation() {
     assert_eq!(records[0].agent_id, committed.agent_id);
     assert_eq!(records[0].role, AgentRole::Explorer);
     assert_eq!(records[0].status, "running");
-    assert_eq!(records[0].spawn_message_id.as_deref(), Some(spawn_message.as_str()));
+    assert_eq!(
+        records[0].spawn_message_id.as_deref(),
+        Some(spawn_message.as_str())
+    );
     assert_eq!(records[0].task_title, "find the compact entry");
 
     let messages = fixture
@@ -166,7 +169,10 @@ fn begin_subagent_turn_writes_child_session_and_relation() {
         .expect("child exists");
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].role, "user");
-    assert_eq!(messages[0].parts[0].content, "find the compact entry\nwith details");
+    assert_eq!(
+        messages[0].parts[0].content,
+        "find the compact entry\nwith details"
+    );
     assert_eq!(messages[1].status, "streaming");
 }
 
@@ -201,8 +207,7 @@ fn report_message_and_turn_replay_in_one_turn() {
         .expect("list")[0]
         .report_json
         .as_deref()
-        .map(crate::chat::agent::SubagentReportView::from_json)
-        .flatten()
+        .and_then(crate::chat::agent::SubagentReportView::from_json)
         .expect("report view");
     let envelope = crate::chat::agent::format_report_envelope(&view);
     let report_message = fixture
@@ -211,7 +216,12 @@ fn report_message_and_turn_replay_in_one_turn() {
         .expect("insert report");
     let turn = fixture
         .database
-        .begin_report_turn(fixture.workspace(), &parent, &report_message, &Fixture::model())
+        .begin_report_turn(
+            fixture.workspace(),
+            &parent,
+            &report_message,
+            &Fixture::model(),
+        )
         .expect("begin report turn");
 
     let messages = fixture
@@ -223,7 +233,10 @@ fn report_message_and_turn_replay_in_one_turn() {
         .iter()
         .find(|message| message.external_id == report_message)
         .expect("report row");
-    assert_eq!(report_row.subagent_reports.as_deref(), Some(view.to_json().as_str()));
+    assert_eq!(
+        report_row.subagent_reports.as_deref(),
+        Some(view.to_json().as_str())
+    );
     assert_eq!(report_row.turn_index, turn.turn_index);
     let assistant = messages
         .iter()
@@ -325,9 +338,7 @@ fn tokens_do_not_leak_from_child_to_parent() {
     let committed = fixture.spawn(&parent, AgentRole::Explorer, "look");
     fixture.finish_child(
         &committed,
-        TurnOutcome::Complete {
-            stop_reason: None,
-        },
+        TurnOutcome::Complete { stop_reason: None },
         None,
     );
     let parent_tokens = fixture
@@ -355,9 +366,7 @@ fn mark_report_delivered_is_idempotent_and_keeps_report() {
     let committed = fixture.spawn(&parent, AgentRole::Explorer, "look");
     fixture.finish_child(
         &committed,
-        TurnOutcome::Complete {
-            stop_reason: None,
-        },
+        TurnOutcome::Complete { stop_reason: None },
         Some(&report()),
     );
     let before = fixture
@@ -366,14 +375,18 @@ fn mark_report_delivered_is_idempotent_and_keeps_report() {
         .expect("list")[0]
         .report_json
         .clone();
-    assert!(fixture
-        .database
-        .mark_report_delivered(fixture.workspace(), &committed.agent_id)
-        .expect("first"));
-    assert!(!fixture
-        .database
-        .mark_report_delivered(fixture.workspace(), &committed.agent_id)
-        .expect("second"));
+    assert!(
+        fixture
+            .database
+            .mark_report_delivered(fixture.workspace(), &committed.agent_id)
+            .expect("first")
+    );
+    assert!(
+        !fixture
+            .database
+            .mark_report_delivered(fixture.workspace(), &committed.agent_id)
+            .expect("second")
+    );
     let record = fixture
         .database
         .list_subagents(fixture.workspace(), &parent)
@@ -381,11 +394,13 @@ fn mark_report_delivered_is_idempotent_and_keeps_report() {
         .clone();
     assert!(record.report_delivered);
     assert_eq!(record.report_json, before);
-    assert!(fixture
-        .database
-        .pending_subagent_reports(fixture.workspace(), &parent)
-        .expect("pending")
-        .is_empty());
+    assert!(
+        fixture
+            .database
+            .pending_subagent_reports(fixture.workspace(), &parent)
+            .expect("pending")
+            .is_empty()
+    );
 }
 
 #[test]

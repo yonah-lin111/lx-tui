@@ -152,7 +152,12 @@ pub(crate) fn output_scrollbar(
 }
 
 /// **item 列表**：仍在原输入框位置（顶边框 → tab 行 → 任务行）。
-pub(super) fn draw_list(grid: &mut super::grid::Grid, rect: Rect, page: &TaskPage) {
+pub(super) fn draw_list(
+    grid: &mut super::grid::Grid,
+    rect: Rect,
+    page: &TaskPage,
+    agents: &crate::app::state::AgentsState,
+) {
     if rect.width == 0 || rect.height < TOP_BORDER + TAB_ROW {
         return;
     }
@@ -219,8 +224,7 @@ pub(super) fn draw_list(grid: &mut super::grid::Grid, rect: Rect, page: &TaskPag
     }
     match page.tab {
         TaskTab::Processes => draw_processes(grid, list, page),
-        // 子代理 tab：本阶段是预留位，只给占位提示。
-        TaskTab::Agents => draw_placeholder(grid, list, text::LX_TASK_AGENTS_EMPTY),
+        TaskTab::Agents => agents::draw_list(grid, list, page, agents),
     }
 }
 
@@ -505,21 +509,27 @@ fn clip(value: &str, max: u16) -> String {
     out
 }
 
+pub(super) mod agents;
+
 #[cfg(test)]
 mod tests;
 
-/// Agents 详情区的 `(可见行数, 总行数)`；该页留在 UI 阶段实现（此处先给几何）。
-///
-/// 总行数暂取状态里的回写值：滚动上限在渲染阶段由历史快照写回同一字段。
-pub(super) fn agents_rows(
-    area: Rect,
-    lx: &crate::app::state::Lx,
-) -> Option<(usize, usize)> {
+/// 详情区（原历史矩形）的实际绘制区域；不在该页返回 None。
+pub(super) fn task_output_rect(area: Rect, lx: &crate::app::state::Lx) -> Option<Rect> {
+    let page = lx.task.as_ref()?;
+    if page.tab != TaskTab::Agents {
+        return None;
+    }
+    super::layout(area, lx).task_output
+}
+
+/// Agents 详情区的 `(可见行数, 总行数)`；不在该页或无高亮项返回 None。
+pub(super) fn agents_rows(area: Rect, lx: &crate::app::state::Lx) -> Option<(usize, usize)> {
     let page = lx.task.as_ref()?;
     if page.tab != TaskTab::Agents {
         return None;
     }
     let rect = super::layout(area, lx).task_output?;
     let run = lx.agents.runs.get(page.agents_window.active)?;
-    Some((usize::from(rect.height), run.total_rows))
+    Some((usize::from(rect.height), agents::detail_rows(rect, run)))
 }

@@ -34,9 +34,8 @@ pub(super) fn has_history_source(source: HistorySource<'_>) -> bool {
 ///
 /// 同序号不可能出现（DB 唯一分配），保险起见消息在前、其次提示、最后检查点。
 pub(super) fn timeline(source: HistorySource<'_>) -> Vec<TimelineEntry> {
-    let mut out = Vec::with_capacity(
-        source.messages.len() + source.notices.len() + source.checkpoints.len(),
-    );
+    let mut out =
+        Vec::with_capacity(source.messages.len() + source.notices.len() + source.checkpoints.len());
     let mut message = 0usize;
     let mut notice = 0usize;
     let mut checkpoint = 0usize;
@@ -46,10 +45,7 @@ pub(super) fn timeline(source: HistorySource<'_>) -> Vec<TimelineEntry> {
     {
         let next_message = source.messages.get(message).map(|item| item.sequence);
         let next_notice = source.notices.get(notice).map(|item| item.sequence);
-        let next_checkpoint = source
-            .checkpoints
-            .get(checkpoint)
-            .map(|item| item.sequence);
+        let next_checkpoint = source.checkpoints.get(checkpoint).map(|item| item.sequence);
         // 取三者中最小 sequence 的条目（相等时消息优先，其次提示，最后检查点）。
         let take_message = match (next_message, next_notice, next_checkpoint) {
             (None, None, None) => break,

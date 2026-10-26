@@ -141,7 +141,10 @@ pub enum SubagentOp {
     /// 派发一个子 agent。
     Spawn { role: AgentRole, task: String },
     /// 等待若干子 agent 结束（或超时）。
-    Wait { targets: Vec<String>, timeout_ms: u64 },
+    Wait {
+        targets: Vec<String>,
+        timeout_ms: u64,
+    },
     /// 停止一个子 agent（不产生报告）。
     Close { target: String },
 }
@@ -150,10 +153,7 @@ pub enum SubagentOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubagentOutcome {
     /// 已派发（不等待）。
-    Spawned {
-        agent_id: String,
-        role: AgentRole,
-    },
+    Spawned { agent_id: String, role: AgentRole },
     /// 等待结算；`report` 只在本次领取到报告时非空。
     Waited {
         timed_out: bool,
@@ -345,9 +345,8 @@ fn parse_spawn(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
         .get("role")
         .and_then(Value::as_str)
         .ok_or_else(|| ToolFailure::invalid("`role` must be \"explorer\" or \"executor\""))?;
-    let role = AgentRole::parse(role_text).ok_or_else(|| {
-        ToolFailure::invalid("`role` must be \"explorer\" or \"executor\"")
-    })?;
+    let role = AgentRole::parse(role_text)
+        .ok_or_else(|| ToolFailure::invalid("`role` must be \"explorer\" or \"executor\""))?;
     let task = object
         .get("task")
         .and_then(Value::as_str)
@@ -492,7 +491,11 @@ fn escape_attribute(text: &str) -> String {
 ///
 /// **不含**父会话的后台任务摘要与 plan：子 agent 只看到自己的任务。
 pub fn compose_subagent_prompt(role: AgentRole, environment: Option<&str>) -> String {
-    format!("{}\n\n{}\n", role.system_prompt(), environment.unwrap_or_default())
+    format!(
+        "{}\n\n{}\n",
+        role.system_prompt(),
+        environment.unwrap_or_default()
+    )
 }
 
 /// explorer 角色提示。

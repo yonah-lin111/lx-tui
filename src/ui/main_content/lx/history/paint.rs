@@ -42,6 +42,8 @@ pub(crate) enum BlockSource {
     Rewind { last: usize, count: usize },
     /// 时间线里的 compact 检查点。
     Compact { index: usize, expanded: bool },
+    /// 消息内的汇报块（第 `index` 份）。
+    Report { message_index: usize, index: usize },
     /// 与 `Lx` 无关的静态块（统计行）：样式已随绘制数据存好，绘制不需要回查状态。
     Plain,
 }
@@ -129,15 +131,36 @@ impl BlockPaint {
     ) {
         let viewport_end = scroll.saturating_add(usize::from(rect.height));
         match self {
-            Self::UserText { lines } => {
-                draw_user_text(grid, rect, history, source, scroll, start, viewport_end, lines)
-            }
-            Self::Markdown { lines } => {
-                draw_markdown(grid, rect, history, source, scroll, start, viewport_end, lines)
-            }
-            Self::Thinking { body } => {
-                draw_thinking(grid, rect, history, source, scroll, start, viewport_end, body)
-            }
+            Self::UserText { lines } => draw_user_text(
+                grid,
+                rect,
+                history,
+                source,
+                scroll,
+                start,
+                viewport_end,
+                lines,
+            ),
+            Self::Markdown { lines } => draw_markdown(
+                grid,
+                rect,
+                history,
+                source,
+                scroll,
+                start,
+                viewport_end,
+                lines,
+            ),
+            Self::Thinking { body } => draw_thinking(
+                grid,
+                rect,
+                history,
+                source,
+                scroll,
+                start,
+                viewport_end,
+                body,
+            ),
             Self::Static { lines, style } => {
                 for (offset, line) in lines.iter().enumerate().skip(scroll.saturating_sub(start)) {
                     let row = start.saturating_add(offset);
@@ -516,6 +539,29 @@ fn draw_legacy(
                 return;
             };
             super::compact::draw(grid, notice, 1, expanded, rect, scroll, &mut row);
+        }
+        BlockSource::Report {
+            message_index,
+            index,
+        } => {
+            let Some(message) = history.messages.get(message_index) else {
+                return;
+            };
+            let Some(report) = message.reports.get(index) else {
+                return;
+            };
+            let slot = format!("report:{}", report.agent_id);
+            let expanded = history.chat.detail_is_expanded(&message.id, &slot);
+            super::report_block::draw(
+                grid,
+                rect,
+                report,
+                scroll,
+                &mut row,
+                history.chat.loading_frame,
+                history.chat.status.streaming,
+                expanded,
+            );
         }
         // 静态块的绘制数据自带样式，没有需要回查的动态状态。
         BlockSource::Plain => {}

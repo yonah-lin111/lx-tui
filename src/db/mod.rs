@@ -274,6 +274,32 @@ impl Database {
         Self::open(&database_path(is_dev_environment(), linked_worktree)?)
     }
 
+    /// 迁移后的体检报告（版本、关键表行数、`integrity_check`）；仅供诊断工具使用。
+    pub fn migration_report(&self) -> Result<String> {
+        let version: i64 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let integrity: String = self
+            .conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        let mut out = format!("user_version={version}\nintegrity_check={integrity}\n");
+        for table in [
+            "agent_session",
+            "agent_message",
+            "agent_message_part",
+            "agent_tool_call",
+            "agent_subagent",
+        ] {
+            let count: i64 =
+                self.conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })?;
+            out.push_str(&format!("{table}={count}\n"));
+        }
+        Ok(out)
+    }
+
     /// 路径是否已信任（`is_trusted = 1`）。
     pub fn is_trusted(&self, path: &Path) -> Result<bool> {
         let trusted: i64 = self

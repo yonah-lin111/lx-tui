@@ -33,8 +33,8 @@ fn lx_with_messages(state: &mut AppState, count: usize) {
             output_tokens: None,
             cache_read_tokens: None,
             duration_ms: None,
-                    reports: Vec::new(),
-});
+            reports: Vec::new(),
+        });
     }
 }
 
@@ -166,8 +166,8 @@ fn toggle_lx_card_flips_the_pressed_block() {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-            reports: Vec::new(),
-}];
+        reports: Vec::new(),
+    }];
     assert!(
         !state
             .pane_anywhere(pane)
@@ -293,8 +293,8 @@ fn lx_view_message(role: &str, text: &str, index: usize) -> ChatMessageView {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-            reports: Vec::new(),
-}
+        reports: Vec::new(),
+    }
 }
 
 /// 焦点窗格置为 lx，并塞入一段会溢出的历史（两轮问答，正文各若干行）。

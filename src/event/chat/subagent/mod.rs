@@ -8,21 +8,25 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{oneshot, watch};
 
 use super::*;
+
+mod tools;
+
 use crate::app::state::lx::agent::{SubagentRun, seed_chat, seed_chat_model};
-use crate::app::state::{FrozenModel, RequestKey, RequestState, SubagentReportView};
+use crate::app::state::{RequestKey, RequestState, SubagentReportView};
 use crate::chat::agent::{
-    AgentRole, AgentStatusView, DEFAULT_WAIT_TIMEOUT_MS, FINISHED_CODE, LIMIT_REACHED_CODE,
-    MAX_CONCURRENT_SUBAGENTS, MAX_WAIT_TARGETS, NOT_FOUND_CODE, SubagentOp, SubagentOutcome,
-    compose_subagent_prompt, format_report_envelope,
+    AgentRole, AgentStatusView, FINISHED_CODE, LIMIT_REACHED_CODE, MAX_CONCURRENT_SUBAGENTS,
+    MAX_WAIT_TARGETS, NOT_FOUND_CODE, SubagentOp, SubagentOutcome, compose_subagent_prompt,
+    format_report_envelope,
 };
 use crate::chat::agent_loop::ModelContext;
 use crate::chat::events::{ChatRequest, ChatTurn, ModelItem, RequestPurpose, StopReason};
 use crate::db::chat::{ModelSnapshot, ReportPayload, SubagentRecord};
 use crate::event::AppEvent;
 use crate::layout::PaneId;
+pub(crate) use tools::{begin_child_tool, finish_child_tool};
 
 /// 运行中状态值。
 pub const STATUS_RUNNING: &str = "running";
@@ -59,8 +63,6 @@ pub(crate) struct SubagentHandle {
     pub started_at_ms: i64,
     /// 去重后的改动路径。
     pub changed_paths: HashSet<PathBuf>,
-    /// 结算后的报告正文（自动投递前暂存；DB 是最终来源）。
-    pub report: Option<String>,
     /// 子会话消息模型（持久化来源；窗格关闭后仍存在）。
     pub chat: crate::app::state::LxChat,
     /// 子会话 DB 工作区键。
@@ -95,7 +97,10 @@ pub(crate) fn handle_subagent_op(
             let _ = reply.send(result);
             changed
         }
-        SubagentOp::Wait { targets, timeout_ms } => {
+        SubagentOp::Wait {
+            targets,
+            timeout_ms,
+        } => {
             wait(streams, persistence, key, targets, timeout_ms, reply);
             false
         }
@@ -213,18 +218,18 @@ fn spawn(
         status: STATUS_RUNNING,
         started_at_ms: committed.created_at_ms,
         changed_paths: HashSet::new(),
-        report: None,
         chat: child_chat,
         workspace: workspace.clone(),
     };
     streams
         .cancels
         .insert(child_key.clone(), cancel_sender.clone());
-    streams.db_workspaces.insert(child_key.clone(), workspace.clone());
-    streams.subagents.insert(
-        committed.child_session_id.clone(),
-        handle,
-    );
+    streams
+        .db_workspaces
+        .insert(child_key.clone(), workspace.clone());
+    streams
+        .subagents
+        .insert(committed.child_session_id.clone(), handle);
     streams
         .frozen
         .insert(committed.child_session_id.clone(), frozen.clone());
@@ -535,11 +540,7 @@ pub(crate) fn handle_subagent_net_event(
         ChatNetEvent::Finished { key, reason, usage } => {
             // 终态结算需要 DB；回投事件循环（本函数有意不持有 `Persistence`）。
             if let Some(sender) = streams.event_sender.clone() {
-                let _ = sender.send(AppEvent::SubagentFinished {
-                    key,
-                    reason,
-                    usage,
-                });
+                let _ = sender.send(AppEvent::SubagentFinished { key, reason, usage });
             }
             false
         }
@@ -596,7 +597,11 @@ pub(crate) fn finish_subagent(
     {
         let body = report_body(&handle);
         let files_changed = database
-            .count_changed_paths(&handle.workspace, &key.session, &handle.child_user_message_id)
+            .count_changed_paths(
+                &handle.workspace,
+                &key.session,
+                &handle.child_user_message_id,
+            )
             .unwrap_or_default();
         let payload = ReportPayload {
             body: body.clone(),
@@ -661,9 +666,12 @@ pub(crate) fn finish_subagent(
                             .get(&key.session)
                             .and_then(|frozen| frozen.variant.clone()),
                     };
-                    if let Ok(committed) =
-                        database.begin_report_turn(&handle.workspace, &handle.parent.session, &message_id, &model)
-                    {
+                    if let Ok(committed) = database.begin_report_turn(
+                        &handle.workspace,
+                        &handle.parent.session,
+                        &message_id,
+                        &model,
+                    ) {
                         let _ = database.mark_report_delivered(&handle.workspace, &handle.agent_id);
                         let _ = update::on_report_committed(
                             state,
@@ -694,13 +702,7 @@ pub(crate) fn finish_subagent(
         }
     }
     // UI：终态 + 报告（窗格已关时忽略）。
-    let _ = update::on_subagent_finished(
-        state,
-        &key.session,
-        handle.status,
-        report_view,
-        usage,
-    );
+    let _ = update::on_subagent_finished(state, &key.session, handle.status, report_view, usage);
     // 完成通知先于句柄清理：`wait_agent` 的接收端由 handle 的 done 发出。
     let _ = handle.done.send(true);
     let cancel_key = RequestKey {
@@ -776,7 +778,10 @@ pub fn apply_subagent_effects(
     let mut changed = false;
     for effect in effects {
         match effect {
-            Effect::ListSubagents { pane, parent_session } => {
+            Effect::ListSubagents {
+                pane,
+                parent_session,
+            } => {
                 let Some(database) = persistence.database() else {
                     continue;
                 };
@@ -785,7 +790,8 @@ pub fn apply_subagent_effects(
                 };
                 match database.list_subagents(&workspace, &parent_session) {
                     Ok(records) => {
-                        changed |= update::set_subagent_list(state, pane, &parent_session, &records);
+                        changed |=
+                            update::set_subagent_list(state, pane, &parent_session, &records);
                     }
                     Err(error) => {
                         tracing::warn!(%error, "listing subagents failed");
@@ -863,23 +869,17 @@ pub(crate) fn pending_report_summary(
 }
 
 /// 运行中的子 agent 摘要（`runtime_context_summary` 追加段）。
-pub(crate) fn running_subagent_lines(
-    streams: &ChatStreams,
-    parent_session: &str,
-) -> Vec<String> {
+pub(crate) fn running_subagent_lines(streams: &ChatStreams, parent_session: &str) -> Vec<String> {
     let running: Vec<&SubagentHandle> = streams
         .subagents
         .values()
-        .filter(|handle| {
-            handle.parent.session == parent_session && handle.status == STATUS_RUNNING
-        })
+        .filter(|handle| handle.parent.session == parent_session && handle.status == STATUS_RUNNING)
         .collect();
     if running.is_empty() {
         return Vec::new();
     }
-    let mut lines = vec![
-        "[local runtime] running subagents (use wait_agent / close_agent):".to_string(),
-    ];
+    let mut lines =
+        vec!["[local runtime] running subagents (use wait_agent / close_agent):".to_string()];
     for handle in running.iter().take(MAX_CONCURRENT_SUBAGENTS) {
         let head: String = handle
             .task
@@ -896,190 +896,4 @@ pub(crate) fn running_subagent_lines(
         ));
     }
     lines
-}
-
-/// 默认等待超时（UI/诊断用；与 schema 同源）。
-pub const WAIT_DEFAULT: u64 = DEFAULT_WAIT_TIMEOUT_MS;
-
-/// 子轮 BeginTool：用句柄自证归属，不查窗格；pending → running 同步完成。
-pub(crate) fn begin_child_tool(
-    state: &mut AppState,
-    streams: &mut ChatStreams,
-    persistence: &Persistence,
-    key: RequestKey,
-    call: ReadyToolCall,
-    reply: oneshot::Sender<Result<ToolCallTicket, HostError>>,
-) -> bool {
-    let Some(workspace) = streams.db_workspaces.get(&key).cloned() else {
-        let _ = reply.send(Err(HostError::Cancelled));
-        return false;
-    };
-    let Some(handle) = streams.subagents.get(&key.session) else {
-        let _ = reply.send(Err(HostError::Cancelled));
-        return false;
-    };
-    let assistant_id = handle.child_assistant_id.clone();
-    // 时间线对齐：工具之前的 parts 先落库，DB 分配的 position 才与内存一致。
-    if let Some(position) = tool_position(&handle.chat, &assistant_id, &call.call_id) {
-        let parts = parts_before(&handle.chat, &assistant_id, position);
-        if let Err(error) = persistence.checkpoint_parts(&workspace, &assistant_id, &parts) {
-            tracing::warn!(
-                target: "lx::agent",
-                call_id = %call.call_id,
-                code = error.code(),
-                "child tool timeline sync failed"
-            );
-            let _ = reply.send(Err(HostError::Failed {
-                code: format!("{BEGIN_TOOL_FAILED_CODE} · {}", error.code()),
-            }));
-            return true;
-        }
-    }
-    let ticket = match persistence.begin_tool_call(
-        &workspace,
-        &key.session,
-        &assistant_id,
-        &call.call_id,
-        &call.name,
-        &call.arguments_json,
-    ) {
-        Ok(ticket) => ticket,
-        Err(error) => {
-            let _ = reply.send(Err(HostError::Failed {
-                code: format!("{BEGIN_TOOL_FAILED_CODE} · {}", error.code()),
-            }));
-            return true;
-        }
-    };
-    // 子轮没有「等一帧再执行」的必要：pending 与 running 同步推进后立即回执。
-    if let Some(handle) = streams.subagents.get_mut(&key.session) {
-        handle.chat.mark_tool_pending(&call.call_id);
-    }
-    let mut changed = update::on_subagent_tool_pending(state, &key.session, &call.call_id);
-    if let Err(error) = persistence.mark_tool_running(&workspace, &ticket) {
-        let _ = reply.send(Err(HostError::Failed {
-            code: format!("{RUNNING_TOOL_FAILED_CODE} · {}", error.code()),
-        }));
-        return changed;
-    }
-    if let Some(handle) = streams.subagents.get_mut(&key.session) {
-        handle.chat.mark_tool_running(&call.call_id);
-    }
-    changed |= update::on_subagent_tool_running(state, &key.session, &call.call_id);
-    let _ = reply.send(Ok(ticket));
-    changed
-}
-
-/// 子轮 FinishTool：真实结果落库 → 子消息模型与 UI 结算 → 回执。
-pub(crate) fn finish_child_tool(
-    state: &mut AppState,
-    streams: &mut ChatStreams,
-    persistence: &Persistence,
-    key: RequestKey,
-    ticket: &ToolCallTicket,
-    outcome: ToolOutcome,
-    reply: oneshot::Sender<Result<(), HostError>>,
-) -> bool {
-    let Some(workspace) = streams.db_workspaces.get(&key).cloned() else {
-        let _ = reply.send(Err(HostError::Cancelled));
-        return false;
-    };
-    let result = super::tool_calls::db_result_of(&outcome);
-    let settled_json = result.result_json.clone();
-    let arguments = streams
-        .subagents
-        .get(&key.session)
-        .and_then(|handle| tool_arguments(&handle.chat, &ticket.call_id));
-    let detail = super::tool_calls::detail_of(&outcome, settled_json.as_deref(), arguments.as_deref());
-    match persistence.finish_tool_call(&workspace, ticket, &result) {
-        Ok(()) => {
-            let (status, summary, error) = super::tool_calls::view_settlement(&outcome);
-            let mut changed = update::on_subagent_tool_settled(
-                state,
-                &key.session,
-                &ticket.call_id,
-                status,
-                summary,
-                settled_json,
-                error,
-                detail,
-            );
-            if let Some(handle) = streams.subagents.get_mut(&key.session) {
-                changed |= handle.chat.settle_tool_result(
-                    &ticket.call_id,
-                    status,
-                    None,
-                    None,
-                    None,
-                );
-                if let ToolOutcome::Executed(result) = &outcome
-                    && let Some(path) = mutation_path(result)
-                {
-                    handle.changed_paths.insert(path);
-                }
-            }
-            let _ = reply.send(Ok(()));
-            changed
-        }
-        Err(error) => {
-            tracing::warn!(
-                target: "lx::agent",
-                call_id = %ticket.call_id,
-                code = error.code(),
-                "child tool result persistence failed"
-            );
-            let _ = reply.send(Err(HostError::Failed {
-                code: format!("{FINISH_TOOL_FAILED_CODE} · {}", error.code()),
-            }));
-            false
-        }
-    }
-}
-
-/// 工具在子消息时间线里的位置（未找到返回 None）。
-fn tool_position(chat: &crate::app::state::LxChat, assistant_id: &str, call_id: &str) -> Option<i64> {
-    chat.messages
-        .iter()
-        .find(|message| message.id == assistant_id)
-        .and_then(|message| message.tool(call_id))
-        .map(|call| call.position)
-}
-
-/// 工具之前的 parts 快照（position 小于工具位置）。
-fn parts_before(
-    chat: &crate::app::state::LxChat,
-    assistant_id: &str,
-    position: i64,
-) -> Vec<crate::db::chat::ChatPart> {
-    chat.messages
-        .iter()
-        .find(|message| message.id == assistant_id)
-        .map(|message| {
-            crate::db::chat::chat_part_views(message.steps.iter().filter_map(|step| match step {
-                crate::app::state::AssistantStepView::Part { position: p, part }
-                    if *p < position =>
-                {
-                    Some((*p, part))
-                }
-                _ => None,
-            }))
-        })
-        .unwrap_or_default()
-}
-
-/// 子消息里某次调用的参数 JSON。
-fn tool_arguments(chat: &crate::app::state::LxChat, call_id: &str) -> Option<String> {
-    chat.messages
-        .iter()
-        .rev()
-        .find_map(|message| message.tool(call_id).map(|call| call.arguments_json.clone()))
-}
-
-/// 文件工具结果里的主路径（`changed_paths` 的近似来源；精确计数在 DB 结算时查）。
-fn mutation_path(result: &ToolExecutionResult) -> Option<PathBuf> {
-    match result {
-        ToolExecutionResult::Write { path, .. } => Some(path.clone()),
-        ToolExecutionResult::Read { .. } | ToolExecutionResult::Search { .. } => None,
-        _ => None,
-    }
 }

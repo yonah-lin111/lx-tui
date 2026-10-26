@@ -684,7 +684,12 @@ fn handle_app_event(
             reply,
         } => {
             chat::handle_subagent_wait_ready(
-                chat_streams, persistence, key, targets, timed_out, reply,
+                chat_streams,
+                persistence,
+                key,
+                targets,
+                timed_out,
+                reply,
             );
         }
         AppEvent::CompactFinished {

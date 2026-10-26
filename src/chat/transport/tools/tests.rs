@@ -360,7 +360,12 @@ fn every_wire_shape_respects_tool_surface() {
 fn explorer_surface_has_no_mutating_tools() {
     let tools = anthropic_tools(ToolSurface::Explorer);
     let json = tools.to_string();
-    for forbidden in ["\"edit\"", "\"write\"", "\"exec_command\"", "\"write_stdin\""] {
+    for forbidden in [
+        "\"edit\"",
+        "\"write\"",
+        "\"exec_command\"",
+        "\"write_stdin\"",
+    ] {
         assert!(!json.contains(forbidden), "{forbidden}");
     }
 }

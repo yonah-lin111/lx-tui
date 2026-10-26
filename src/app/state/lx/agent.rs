@@ -48,6 +48,8 @@ pub struct SubagentRun {
     pub visible: usize,
     /// 详情区总行数（事件循环在绘制前写入；翻页上限用）。
     pub total_rows: usize,
+    /// 消息流自上次量行数后是否变化（避免每帧重排 markdown）。
+    pub rows_dirty: bool,
     /// 是否跟随底部（用户上翻即停）。
     pub follow: bool,
 }
@@ -75,6 +77,7 @@ impl SubagentRun {
             scroll: 0,
             visible: 0,
             total_rows: 0,
+            rows_dirty: true,
             follow: true,
         }
     }

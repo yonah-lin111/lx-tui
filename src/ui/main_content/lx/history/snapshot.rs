@@ -15,14 +15,14 @@ use crate::ui::markdown_render;
 
 use super::cache::{
     BlockKey, PaneCache, SHELL_SLOT_BLOCK, compact_block_signature, group_block_signature,
-    notice_block_signature, part_block_signature, rewind_block_signature, shell_block_signature,
-    stats_block_signature,
+    notice_block_signature, part_block_signature, report_block_signature, rewind_block_signature,
+    shell_block_signature, stats_block_signature,
 };
 use super::paint::{BlockPaint, BlockSource, CardSpan};
 use super::source::HistorySource;
 use super::timeline::{TimelineEntry, timeline};
 use super::{
-    CardKind, Folds, MessageRows, compact, folds_of, notice, rewind, shell_folds,
+    CardKind, Folds, MessageRows, compact, folds_of, notice, report_block, rewind, shell_folds,
     should_register_card, stats_line, tool, tool_rows, user_shell, wrap,
 };
 
@@ -102,7 +102,11 @@ pub(crate) struct HistorySnapshot {
 }
 
 /// 构建快照。`width` 是历史内容列宽（已扣除滚动条预留列）。
-pub(crate) fn build(width: u16, source: HistorySource<'_>, cache: &mut PaneCache) -> HistorySnapshot {
+pub(crate) fn build(
+    width: u16,
+    source: HistorySource<'_>,
+    cache: &mut PaneCache,
+) -> HistorySnapshot {
     if width == 0 {
         return HistorySnapshot::default();
     }
@@ -292,13 +296,18 @@ impl Builder<'_> {
         let message = &source.messages[message_index];
         let start = self.rows;
         let mut blocks = Vec::new();
-        if let Some(shell) = &message.shell {
+        if !message.reports.is_empty() {
+            // 汇报行：不画用户气泡，逐条画汇报块（块间空行只在这里累加）。
+            self.reports(source, message_index, message, &mut blocks);
+        } else if let Some(shell) = &message.shell {
             self.shell(source, message_index, message, shell, start, &mut blocks);
         } else {
             self.steps(source, message_index, message, &mut blocks);
             self.tail(message_index, message, &mut blocks);
         }
-        let is_user = message.role == "user" && message.shell.is_none();
+        // 汇报行不是用户气泡：置顶行与用户底色据此跳过它。
+        let is_user =
+            message.role == "user" && message.shell.is_none() && message.reports.is_empty();
         self.snapshot.messages.push(MessageRows {
             start,
             end: self.rows,
@@ -310,6 +319,59 @@ impl Builder<'_> {
             kind: SnapEntryKind::Message(message_index),
             blocks,
         });
+    }
+
+    /// 汇报块：一条消息可有多份，逐条一个块。
+    fn reports(
+        &mut self,
+        source: HistorySource<'_>,
+        message_index: usize,
+        message: &crate::app::state::ChatMessageView,
+        blocks: &mut Vec<SnapBlock>,
+    ) {
+        let width = self.width;
+        for (index, report) in message.reports.iter().enumerate() {
+            if index > 0 {
+                self.spacer();
+            }
+            let slot = format!("report:{}", report.agent_id);
+            let expanded = source.chat.detail_is_expanded(&message.id, &slot);
+            let rows = report_block::rows(report, width, expanded);
+            let key = BlockKey {
+                message_index,
+                step_index: super::cache::REPORT_SLOT_BLOCK.saturating_sub(index),
+                width,
+                sig: report_block_signature(report, expanded),
+            };
+            let start = self.rows;
+            let block = self.block(
+                key,
+                BlockSource::Report {
+                    message_index,
+                    index,
+                },
+                start,
+                || BlockPaint::Legacy {
+                    rows,
+                    spans: Vec::new(),
+                },
+            );
+            let block_rows = block.rows;
+            if super::report_block::has_more(report, width) {
+                self.snapshot.cards.push(CardRegion {
+                    kind: CardKind::Report {
+                        message_id: message.id.clone(),
+                        agent_id: report.agent_id.clone(),
+                        expanded,
+                    },
+                    card_start: start,
+                    card_rows: block_rows,
+                    clickable: true,
+                });
+            }
+            blocks.push(block);
+            self.rows += block_rows;
+        }
     }
 
     /// 本地命令卡片（独立条目，不进入步骤时间线）。

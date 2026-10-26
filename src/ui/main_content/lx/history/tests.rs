@@ -59,8 +59,8 @@ fn message(role: &str, status: &str, parts: Vec<ChatPartView>) -> ChatMessageVie
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-            reports: Vec::new(),
-}
+        reports: Vec::new(),
+    }
 }
 
 fn text_part(content: &str) -> ChatPartView {

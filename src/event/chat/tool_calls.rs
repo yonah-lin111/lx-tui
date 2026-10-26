@@ -185,7 +185,13 @@ pub(crate) fn finish_tool(
 ) -> bool {
     if streams.subagents.contains_key(&key.session) {
         return super::subagent::finish_child_tool(
-            state, streams, persistence, key, ticket, outcome, reply,
+            state,
+            streams,
+            persistence,
+            key,
+            ticket,
+            outcome,
+            reply,
         );
     }
     let Some(workspace) = streams.db_workspaces.get(&key).cloned() else {
@@ -216,7 +222,11 @@ pub(crate) fn finish_tool(
                 state,
                 &key,
                 &ticket.call_id,
-                detail_of(&outcome, settled_result_json.as_deref(), arguments.as_deref()),
+                detail_of(
+                    &outcome,
+                    settled_result_json.as_deref(),
+                    arguments.as_deref(),
+                ),
             );
             // ②b1 进程工具结算后按**运行实例的真实状态**再校正一次。
             //
@@ -334,7 +344,21 @@ pub(crate) fn detail_of(
         | ToolExecutionResult::Failed { .. } => {
             crate::app::state::ToolDetailView::file_detail(result_json)
         }
-        // 子 agent 详情由 app 层从结果 JSON 解析（与历史恢复同一路径）。
+        // 子 agent：身份/目标来自参数，状态来自结果体（与历史重载同一路径）。
+        ToolExecutionResult::Subagent(outcome) => {
+            crate::app::state::SubagentDetailView::from_outcome_with_arguments(
+                &outcome.to_json(),
+                Some((
+                    match outcome.as_ref() {
+                        crate::chat::agent::SubagentOutcome::Spawned { .. } => "spawn_agent",
+                        crate::chat::agent::SubagentOutcome::Waited { .. } => "wait_agent",
+                        crate::chat::agent::SubagentOutcome::Closed { .. } => "close_agent",
+                    },
+                    arguments_json.unwrap_or("{}"),
+                )),
+            )
+            .map(crate::app::state::ToolDetailView::Subagent)
+        }
         _ => None,
     }
 }
@@ -406,11 +430,7 @@ pub(crate) fn view_summary(
 }
 
 /// 当前窗格消息里某次调用的参数 JSON（实时结算构造类型化详情用）。
-pub(crate) fn tool_arguments(
-    state: &AppState,
-    key: &RequestKey,
-    call_id: &str,
-) -> Option<String> {
+pub(crate) fn tool_arguments(state: &AppState, key: &RequestKey, call_id: &str) -> Option<String> {
     state
         .pane_anywhere(key.pane)?
         .lx
@@ -418,7 +438,11 @@ pub(crate) fn tool_arguments(
         .messages
         .iter()
         .rev()
-        .find_map(|message| message.tool(call_id).map(|call| call.arguments_json.clone()))
+        .find_map(|message| {
+            message
+                .tool(call_id)
+                .map(|call| call.arguments_json.clone())
+        })
 }
 
 /// 失败原因（给模型与 UI 的精简单行；不含文件内容与命令输出）。

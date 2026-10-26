@@ -1011,8 +1011,8 @@ fn chat_history_scrollbar_geometry_appears_when_overflowing() {
             output_tokens: None,
             cache_read_tokens: None,
             duration_ms: None,
-                    reports: Vec::new(),
-});
+            reports: Vec::new(),
+        });
     }
     lx.chat = chat;
     let bar = history_scrollbar(area, &lx, &mut PaneCache::default()).expect("溢出时有滚动条几何");
@@ -1054,8 +1054,8 @@ fn overflowing_history_draws_scrollbar_glyphs() {
             output_tokens: None,
             cache_read_tokens: None,
             duration_ms: None,
-                    reports: Vec::new(),
-});
+            reports: Vec::new(),
+        });
     }
     lx.chat = chat;
     let mut buf = Buffer::empty(area);
@@ -1116,8 +1116,8 @@ fn streaming_lx(streaming: bool, follow_bottom: bool) -> Lx {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-            reports: Vec::new(),
-});
+        reports: Vec::new(),
+    });
     chat.follow_bottom = follow_bottom;
     chat.status.streaming = streaming;
     chat.loading_frame = 0;
@@ -1312,8 +1312,8 @@ fn sticky_history_lx() -> Lx {
             output_tokens: None,
             cache_read_tokens: None,
             duration_ms: None,
-                    reports: Vec::new(),
-});
+            reports: Vec::new(),
+        });
     };
     push("user", "第一轮的问题");
     push("assistant", "A1\nA2\nA3\nA4\nA5");
@@ -1577,8 +1577,8 @@ fn code_block_renders_body_without_header_or_rules() {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-            reports: Vec::new(),
-});
+        reports: Vec::new(),
+    });
     lx.chat = chat;
 
     let mut buf = Buffer::empty(area);

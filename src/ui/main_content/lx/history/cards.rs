@@ -31,6 +31,12 @@ pub enum CardKind {
         checkpoint_id: String,
         expanded: bool,
     },
+    /// 子 agent 汇报块：整块可点击展开/折叠正文。
+    Report {
+        message_id: String,
+        agent_id: String,
+        expanded: bool,
+    },
 }
 
 /// 一个可折叠块的矩形。

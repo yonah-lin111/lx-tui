@@ -25,13 +25,7 @@ pub(crate) fn render(
     scroll: usize,
     cache: &mut PaneCache,
 ) -> usize {
-    render_source(
-        grid,
-        rect,
-        HistorySource::from(lx),
-        scroll,
-        cache,
-    )
+    render_source(grid, rect, HistorySource::from(lx), scroll, cache)
 }
 
 /// 数据源版本（主窗格与子 agent 详情共用）。

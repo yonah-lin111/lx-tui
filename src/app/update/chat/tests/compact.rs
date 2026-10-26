@@ -645,8 +645,8 @@ fn user_message_with_sequence(
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-            reports: Vec::new(),
-}
+        reports: Vec::new(),
+    }
 }
 
 /// 构造一条 assistant 消息视图（指定 sequence）。
@@ -666,8 +666,8 @@ fn assistant_message_with_sequence(id: &str, sequence: i64) -> crate::app::state
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-            reports: Vec::new(),
-}
+        reports: Vec::new(),
+    }
 }
 
 /// `^o` 在没有可展开工具卡片时切换最近的 compact 检查点。

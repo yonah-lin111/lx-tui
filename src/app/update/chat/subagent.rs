@@ -6,7 +6,7 @@
 
 use crate::app::state::{AppState, ChatMessageView, SubagentReportView, SubagentRun};
 use crate::app::update::chat::view::view_message_of;
-use crate::chat::events::{ChatDelta, PartKind, StopReason};
+use crate::chat::events::{ChatDelta, StopReason};
 use crate::db::chat::{ChatMessage, SubagentRecord, Usage};
 use crate::layout::PaneId;
 
@@ -16,15 +16,6 @@ fn pane_of_session(state: &AppState, child_session: &str) -> Option<PaneId> {
         state
             .pane_anywhere(*pane)
             .is_some_and(|target| target.lx.agents.by_session(child_session).is_some())
-    })
-}
-
-/// 找到持有该 agent 的窗格。
-fn pane_of_agent(state: &AppState, agent_id: &str) -> Option<PaneId> {
-    state.all_pane_ids().into_iter().find(|pane| {
-        state
-            .pane_anywhere(*pane)
-            .is_some_and(|target| target.lx.agents.by_agent(agent_id).is_some())
     })
 }
 
@@ -48,7 +39,11 @@ pub fn on_subagent_delta(state: &mut AppState, child_session: &str, deltas: &[Ch
     let Some(run) = target.lx.agents.by_session_mut(child_session) else {
         return false;
     };
-    apply_deltas(&mut run.chat, deltas)
+    let changed = apply_deltas(&mut run.chat, deltas);
+    if changed {
+        run.rows_dirty = true;
+    }
+    changed
 }
 
 /// 把一批增量应用到子 agent 的消息模型（与主聊天同一套方法）。
@@ -88,11 +83,7 @@ pub fn apply_deltas(chat: &mut crate::app::state::LxChat, deltas: &[ChatDelta]) 
 }
 
 /// 工具 pending（子会话）。
-pub fn on_subagent_tool_pending(
-    state: &mut AppState,
-    child_session: &str,
-    call_id: &str,
-) -> bool {
+pub fn on_subagent_tool_pending(state: &mut AppState, child_session: &str, call_id: &str) -> bool {
     let Some(pane) = pane_of_session(state, child_session) else {
         return false;
     };
@@ -106,11 +97,7 @@ pub fn on_subagent_tool_pending(
 }
 
 /// 工具 running（子会话）。
-pub fn on_subagent_tool_running(
-    state: &mut AppState,
-    child_session: &str,
-    call_id: &str,
-) -> bool {
+pub fn on_subagent_tool_running(state: &mut AppState, child_session: &str, call_id: &str) -> bool {
     let Some(pane) = pane_of_session(state, child_session) else {
         return false;
     };
@@ -146,6 +133,9 @@ pub fn on_subagent_tool_settled(
     let mut changed = run
         .chat
         .settle_tool_result(call_id, status, summary, result_json, error);
+    if changed {
+        run.rows_dirty = true;
+    }
     if let Some(call) = run
         .chat
         .messages
@@ -195,11 +185,7 @@ pub fn set_subagent_list(
                 }
             }
             None => {
-                target
-                    .lx
-                    .agents
-                    .runs
-                    .push(SubagentRun::from_record(record));
+                target.lx.agents.runs.push(SubagentRun::from_record(record));
                 changed = true;
             }
         }
@@ -235,6 +221,7 @@ pub fn on_subagent_loaded(
         .map(|message| view_message_of(message, &models))
         .collect();
     run.loaded = true;
+    run.rows_dirty = true;
     true
 }
 
@@ -263,6 +250,7 @@ pub fn on_subagent_finished(
         },
     };
     run.chat.close_stream(&reason);
+    run.rows_dirty = true;
     run.status = status.to_string();
     run.completed_at_ms = Some(crate::db::now_ms());
     run.input_tokens = usage.input;
