@@ -326,9 +326,10 @@ fn scrolling_the_agents_detail_stops_following() {
     update::on_subagent_started(&mut state, pane, started);
     {
         let target = state.pane_mut_anywhere(pane).expect("pane");
-        let mut page = crate::app::state::TaskPage::default();
-        page.tab = crate::app::state::TaskTab::Agents;
-        target.lx.task = Some(page);
+        target.lx.task = Some(crate::app::state::TaskPage {
+            tab: crate::app::state::TaskTab::Agents,
+            ..crate::app::state::TaskPage::default()
+        });
     }
     assert!(update::scroll_agents_detail(&mut state, pane, -20));
     let run = state
