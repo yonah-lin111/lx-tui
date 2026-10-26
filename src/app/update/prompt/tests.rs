@@ -2491,3 +2491,132 @@ fn close_workspace_clears_drag_scene() {
     assert!(state.prompt_drag.is_none(), "关工作区丢弃拖拽现场");
     assert_eq!(state.workspaces.len(), 1);
 }
+
+// ===== 块聚焦模式（update 层） =====
+
+const FOCUS_BLOCKS: &str = "intro\n\
+&&& a --start\n\
+{title: A}\n\
+body-a\n\
+&&& a --end\n\
+&&& b --start\n\
+{title: B}\n\
+body-b\n\
+&&& b --end\n\
+outro";
+
+fn state_with_focus() -> AppState {
+    let mut state = demo_state();
+    state.prompt.set_text(FOCUS_BLOCKS);
+    let cursor = state.prompt.text().find("body-a").expect("body") + 1;
+    state.prompt.set_cursor_offset_for_test(cursor);
+    assert!(toggle_prompt_block_focus(&mut state));
+    state
+}
+
+#[test]
+fn block_focus_nav_switches_blocks() {
+    let mut state = state_with_focus();
+    assert!(state.prompt.block_focus_active());
+    apply_editor(&mut state, EditorCommand::BlockNext { cmd: false });
+    let cursor_line = state.prompt.text()[..state.prompt.cursor()]
+        .matches('\n')
+        .count();
+    assert!(
+        state
+            .prompt
+            .text()
+            .split('\n')
+            .nth(cursor_line)
+            .is_some_and(|line| line.contains("title: B")),
+        "BlockNext 切到下一块并把光标落到标题值"
+    );
+    // 末块再往后吞掉，不改变光标。
+    let cursor = state.prompt.cursor();
+    apply_editor(&mut state, EditorCommand::BlockNext { cmd: false });
+    assert_eq!(state.prompt.cursor(), cursor);
+    assert!(state.prompt.block_focus_active());
+}
+
+#[test]
+fn ctrl_arrow_moves_by_word_outside_focus() {
+    let mut state = demo_state();
+    state.prompt.set_text("alpha beta");
+    state.prompt.set_cursor_offset_for_test(10);
+    apply_editor(&mut state, EditorCommand::BlockPrev { cmd: false });
+    assert_eq!(state.prompt.cursor(), 6, "普通视图 Ctrl+← 按词左移");
+}
+
+#[test]
+fn cmd_arrow_is_noop_outside_focus() {
+    let mut state = demo_state();
+    state.prompt.set_text("alpha beta");
+    state.prompt.set_cursor_offset_for_test(10);
+    apply_editor(&mut state, EditorCommand::BlockPrev { cmd: true });
+    assert_eq!(state.prompt.cursor(), 10, "普通视图 Cmd+← 吞掉");
+}
+
+#[test]
+fn toggle_block_focus_button_roundtrip() {
+    let mut state = state_with_focus();
+    let text = state.prompt.text().to_string();
+    assert!(toggle_prompt_block_focus(&mut state));
+    assert!(!state.prompt.block_focus_active());
+    assert_eq!(state.prompt.text(), text, "纯视图操作不改正文");
+    assert!(state.prompt.cursor_cell().is_some(), "退出后光标仍在视口内");
+}
+
+#[test]
+fn focus_cleared_by_tree_roundtrip() {
+    let mut state = state_with_focus();
+    assert!(state.prompt.block_focus_active());
+    show_prompt_tree(&mut state);
+    assert!(!state.prompt.block_focus_active(), "列表往返不保留块模式");
+    toggle_prompt_panel_mode(&mut state);
+    assert!(!state.prompt.block_focus_active());
+}
+
+#[test]
+fn focus_survives_todo_tab_roundtrip() {
+    use crate::app::state::RightTab;
+    let mut state = state_with_focus();
+    crate::app::update::select_right_tab(&mut state, RightTab::Todo);
+    assert!(state.prompt.block_focus_active());
+    crate::app::update::select_right_tab(&mut state, RightTab::Prompt);
+    assert!(state.prompt.block_focus_active());
+    assert_eq!(state.prompt.text(), FOCUS_BLOCKS);
+}
+
+#[test]
+fn focus_restored_per_workspace() {
+    let mut state = state_with_focus();
+    assert!(state.prompt.block_focus_active());
+    create_workspace(&mut state);
+    assert_eq!(state.active_workspace, 1);
+    assert!(!state.prompt.block_focus_active(), "新工作区默认普通视图");
+    switch_workspace(&mut state, 0);
+    assert!(state.prompt.block_focus_active(), "切回原工作区恢复块模式");
+}
+
+#[test]
+fn select_all_covers_only_focus_block() {
+    let mut state = state_with_focus();
+    state.select_all_prompt();
+    let selected = crate::app::update::prompt_selection_text(&state).expect("selection");
+    assert!(selected.starts_with("&&& a --start"), "{selected}");
+    assert!(selected.ends_with("&&& a --end"), "{selected}");
+    assert!(!selected.contains("intro"));
+    assert!(!selected.contains("body-b"));
+}
+
+#[test]
+fn narrow_resize_exits_block_focus() {
+    let mut state = state_with_focus();
+    let id = state.prompt.id();
+    let rect = ratatui::layout::Rect::new(0, 0, 80, 20);
+    crate::app::update::resize_panes(&mut state, &[(id, rect)]);
+    assert!(state.prompt.block_focus_active());
+    let narrow = ratatui::layout::Rect::new(0, 0, 20, 20);
+    crate::app::update::resize_panes(&mut state, &[(id, narrow)]);
+    assert!(!state.prompt.block_focus_active(), "宽度不足自动退出");
+}

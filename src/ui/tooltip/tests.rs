@@ -147,6 +147,16 @@ fn hits_prompt_toolbar_and_pin_but_not_when_collapsed() {
         target_at(&view, &state, &rects, SCREEN, pin.x, pin.y),
         Some(TooltipTarget::PromptPin)
     );
+    let block = layout::prompt_toolbar_button_rect(
+        view.prompt,
+        layout::PromptToolbarButton::BlockFocus,
+        false,
+    )
+    .expect("block focus button visible");
+    assert_eq!(
+        target_at(&view, &state, &rects, SCREEN, block.x, block.y),
+        Some(TooltipTarget::PromptBlockFocus)
+    );
 
     state.prompt_collapsed = true;
     let view = view_for(&state);
@@ -161,6 +171,7 @@ fn hits_prompt_toolbar_and_pin_but_not_when_collapsed() {
                     | TooltipTarget::PromptSelectAll
                     | TooltipTarget::PromptSave
                     | TooltipTarget::PromptPin
+                    | TooltipTarget::PromptBlockFocus
             )),
         "折叠后 prompt 按钮不参与命中"
     );
@@ -372,6 +383,19 @@ fn hint_flips_with_state() {
     assert_eq!(
         text::tooltip_hint(TooltipTarget::PromptPin, &state),
         "unpin prompt"
+    );
+    assert_eq!(
+        text::tooltip_hint(TooltipTarget::PromptBlockFocus, &state),
+        "focus template block"
+    );
+    state.prompt.set_text("&&& a --start\nbody\n&&& a --end");
+    state
+        .prompt
+        .set_cursor_offset_for_test(state.prompt.text().find("body").unwrap() + 1);
+    assert!(state.prompt.enter_block_focus());
+    assert_eq!(
+        text::tooltip_hint(TooltipTarget::PromptBlockFocus, &state),
+        "show all blocks"
     );
     assert_eq!(
         text::tooltip_hint(TooltipTarget::CollapseSidebar, &state),

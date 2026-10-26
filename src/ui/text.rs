@@ -94,10 +94,13 @@ pub const PROMPT_SELECT_ALL_LABEL: &str = "[all]";
 pub const PROMPT_SAVE_DOT: &str = "●";
 /// 临时草稿保存状态点：空心（与空闲 agent 状态圆点一致），恒灰。
 pub const PROMPT_DRAFT_DOT: &str = "○";
-/// prompt 钉住按钮：未钉 `[pin]`、已钉 `[unpin]`（英文单词而非图标：
-/// 状态圆点系已被保存点与 agent 状态占用，钉住改用文字后不再抢占同符号系）。
-pub const PROMPT_UNPINNED_LABEL: &str = "[pin]";
-pub const PROMPT_PINNED_LABEL: &str = "[unpin]";
+/// prompt 钉住按钮：未钉 `[○]`、已钉 `[◉]`（单字图标，两态同宽同址；
+/// 不再使用 `[pin]`/`[unpin]` 英文单词，避免 7 列占位与右对齐补空格）。
+pub const PROMPT_UNPINNED_LABEL: &str = "[○]";
+pub const PROMPT_PINNED_LABEL: &str = "[◉]";
+/// 块聚焦模式按钮：未进入 `[⊞]`（全部块）、已进入 `[⊡]`（聚焦单块）。
+pub const PROMPT_BLOCK_FOCUS_ALL_LABEL: &str = "[⊞]";
+pub const PROMPT_BLOCK_FOCUS_ONE_LABEL: &str = "[⊡]";
 /// prompt 视图模式按钮：编辑视图显示 `[≡]`（切到列表）、树视图显示 `[/]`（切到编辑）。
 pub const PROMPT_MODE_LIST_LABEL: &str = "[≡]";
 pub const PROMPT_MODE_EDIT_LABEL: &str = "[/]";
@@ -943,6 +946,8 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptSave => "mark saved",
         TooltipTarget::PromptPin if state.prompt_pinned.is_some() => "unpin prompt",
         TooltipTarget::PromptPin => "pin prompt",
+        TooltipTarget::PromptBlockFocus if state.prompt.block_focus_active() => "show all blocks",
+        TooltipTarget::PromptBlockFocus => "focus template block",
         TooltipTarget::SwapPromptSide => "swap prompt side",
         TooltipTarget::SidebarSettings => "open settings",
         TooltipTarget::TemplateButton { button, .. } => match button {

@@ -1694,7 +1694,7 @@ fn prompt_bottom_identity_degrades_before_hiding() {
 }
 
 #[test]
-fn prompt_pin_button_sits_left_of_select_all_and_tracks_state() {
+fn prompt_pin_button_sits_left_of_block_focus_and_tracks_state() {
     let mut state = AppState::demo();
     let view = view_for(&state);
     let bar = crate::layout::prompt_toolbar_rect(view.prompt).expect("toolbar visible");
@@ -1704,16 +1704,19 @@ fn prompt_pin_button_sits_left_of_select_all_and_tracks_state() {
         false,
     )
     .expect("pin visible");
-    let select_all = crate::layout::prompt_toolbar_button_rect(
+    let block_focus = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
-        crate::layout::PromptToolbarButton::SelectAll,
+        crate::layout::PromptToolbarButton::BlockFocus,
         false,
     )
-    .expect("select all visible");
-    // 按钮按最宽态（`[unpin]`）占位，`[pin]` 绘制时右补空格。
+    .expect("block focus visible");
     assert_eq!(pin.width, text::PROMPT_PINNED_LABEL.chars().count() as u16);
     assert_eq!(pin.y, bar.y, "位于功能按钮行");
-    assert_eq!(select_all.x - pin.right(), 1, "紧邻 [*] 左侧，间隔 1 列");
+    assert_eq!(
+        block_focus.x - pin.right(),
+        1,
+        "紧邻块聚焦按钮左侧，间隔 1 列"
+    );
     assert_eq!(
         crate::layout::prompt_toolbar_button_at(view.prompt, pin.x, pin.y, false),
         Some(crate::layout::PromptToolbarButton::Pin)

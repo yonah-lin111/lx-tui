@@ -304,7 +304,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     // 输入草稿内容后点保存点 → 文件夹选择器。
     app.send(b"hello draft");
     assert!(app.wait_for("hello draft"), "draft typed");
-    app.click_after(text::PROMPT_SELECT_ALL_LABEL, text::PROMPT_DRAFT_DOT);
+    app.click_after(text::PROMPT_BLOCK_FOCUS_ALL_LABEL, text::PROMPT_DRAFT_DOT);
     assert!(
         app.wait_for("Save prompt to folder"),
         "picker: \n{}",
@@ -388,7 +388,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     );
     app.send(b"second draft");
     assert!(app.wait_for("second draft"), "second draft typed");
-    app.click_after(text::PROMPT_SELECT_ALL_LABEL, text::PROMPT_DRAFT_DOT);
+    app.click_after(text::PROMPT_BLOCK_FOCUS_ALL_LABEL, text::PROMPT_DRAFT_DOT);
     assert!(app.wait_for("+ New folder"), "picker reopened");
     // 点击动作行 → 命名浮层；清空预填名后输入 notes，回车建库并恢复选择器（选中新文件夹）。
     app.click("+ New folder");

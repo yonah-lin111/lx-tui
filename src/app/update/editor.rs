@@ -94,6 +94,20 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
                 state.prompt.outdent();
             }
         }
+        EditorCommand::BlockPrev { cmd } => {
+            if state.prompt.block_focus_active() {
+                state.prompt.focus_adjacent_block(-1);
+            } else if !cmd {
+                state.prompt.move_word_backward();
+            }
+        }
+        EditorCommand::BlockNext { cmd } => {
+            if state.prompt.block_focus_active() {
+                state.prompt.focus_adjacent_block(1);
+            } else if !cmd {
+                state.prompt.move_word_forward();
+            }
+        }
         EditorCommand::Undo => state.prompt.undo(),
         EditorCommand::Redo => state.prompt.redo(),
         EditorCommand::Escape => {}
@@ -498,8 +512,16 @@ pub fn clean_template_block(state: &mut AppState, start_line: usize) -> bool {
 }
 
 /// 删除整个模板块（单步撤销）；返回是否产生变更。
+///
+/// 删除前处于块聚焦时，按「下一个 → 上一个 → 退出」接续聚焦；
+/// 删除过程中的 `settle()` 可能已按光标重定位，因此先捕获原模式再结算接续。
 pub fn delete_template_block(state: &mut AppState, start_line: usize) -> bool {
-    state.prompt.delete_template_block(start_line)
+    let focused = state.prompt.block_focus_active();
+    let deleted = state.prompt.delete_template_block(start_line);
+    if deleted && focused {
+        state.prompt.focus_after_block_removed(start_line);
+    }
+    deleted
 }
 
 /// 切换模板块状态 todo → in_progress → done（单步撤销）；返回是否产生变更。

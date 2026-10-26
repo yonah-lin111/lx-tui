@@ -239,12 +239,12 @@ fn prompt_focus_maps_readline_shortcuts() {
         (
             KeyCode::Left,
             KeyModifiers::CONTROL,
-            EditorCommand::WordLeft,
+            EditorCommand::BlockPrev { cmd: false },
         ),
         (
             KeyCode::Right,
             KeyModifiers::CONTROL,
-            EditorCommand::WordRight,
+            EditorCommand::BlockNext { cmd: false },
         ),
         (
             KeyCode::Char('b'),
@@ -273,6 +273,52 @@ fn prompt_focus_maps_readline_shortcuts() {
             route_prompt(code, modifiers),
             Some(Routed::Editor(command)),
             "{code:?}+{modifiers:?}"
+        );
+    }
+}
+
+#[test]
+fn ctrl_arrows_map_to_block_navigation() {
+    let route_prompt =
+        |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
+    assert_eq!(
+        route_prompt(KeyCode::Left, KeyModifiers::CONTROL),
+        Some(Routed::Editor(EditorCommand::BlockPrev { cmd: false }))
+    );
+    assert_eq!(
+        route_prompt(KeyCode::Right, KeyModifiers::CONTROL),
+        Some(Routed::Editor(EditorCommand::BlockNext { cmd: false }))
+    );
+}
+
+#[test]
+fn cmd_arrows_map_to_block_navigation() {
+    let route_prompt =
+        |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
+    assert_eq!(
+        route_prompt(KeyCode::Left, KeyModifiers::SUPER),
+        Some(Routed::Editor(EditorCommand::BlockPrev { cmd: true }))
+    );
+    assert_eq!(
+        route_prompt(KeyCode::Right, KeyModifiers::SUPER),
+        Some(Routed::Editor(EditorCommand::BlockNext { cmd: true }))
+    );
+}
+
+#[test]
+fn alt_word_motion_unaffected_by_block_navigation() {
+    let route_prompt =
+        |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
+    for (code, command) in [
+        (KeyCode::Left, EditorCommand::WordLeft),
+        (KeyCode::Right, EditorCommand::WordRight),
+        (KeyCode::Char('b'), EditorCommand::WordLeft),
+        (KeyCode::Char('f'), EditorCommand::WordRight),
+    ] {
+        assert_eq!(
+            route_prompt(code, KeyModifiers::ALT),
+            Some(Routed::Editor(command)),
+            "{code:?} 仍按词移动"
         );
     }
 }

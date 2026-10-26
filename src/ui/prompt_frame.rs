@@ -162,6 +162,10 @@ pub(crate) fn render_body(
         draft,
         page: page_header_data(page),
     };
+    let block_focus_available = crate::app::markdown::block_scan(state.prompt.text())
+        .spans
+        .iter()
+        .any(|span| span.kind == crate::app::markdown::BlockKind::Template);
     prompt::render_header(
         area,
         frame.buffer_mut(),
@@ -170,6 +174,8 @@ pub(crate) fn render_body(
         mode,
         draft,
         state.prompt_pinned.is_some(),
+        state.prompt.block_focus_active(),
+        block_focus_available,
     );
     if let Some(row) = title_row(area) {
         prompt::paint_title_row(frame.buffer_mut(), row, &page_data);

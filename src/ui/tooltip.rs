@@ -173,6 +173,10 @@ fn targets(
             ),
             (layout::PromptToolbarButton::Pin, TooltipTarget::PromptPin),
             (
+                layout::PromptToolbarButton::BlockFocus,
+                TooltipTarget::PromptBlockFocus,
+            ),
+            (
                 layout::PromptToolbarButton::TempPrompt,
                 TooltipTarget::PromptTempPrompt,
             ),

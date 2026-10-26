@@ -173,6 +173,7 @@ pub fn apply_prompt_tree(
 pub fn show_prompt_tree(state: &mut AppState) {
     commit_editing_prompt(state);
     cancel_page_rename(state);
+    state.prompt.exit_block_focus();
     let index = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
     // 提交后再捕获编辑状态：正文此时与页一致，返回同一目标时据此保留撤销/重做与光标。
@@ -231,6 +232,21 @@ fn select_tree_entry_row(state: &mut AppState, index: usize) {
                 select_prompt_temp(state, index, temp_id);
             }
         }
+    }
+}
+
+/// 工具栏块聚焦按钮：未进入则尝试进入（无模板块时 no-op），已进入则退出。
+pub fn toggle_prompt_block_focus(state: &mut AppState) -> bool {
+    if state.prompt.block_focus_active() {
+        state.prompt.exit_block_focus();
+        // 视口行集合切换后旧选区坐标失效，退出时一并清除。
+        super::clear_selection(state);
+        true
+    } else if state.prompt.enter_block_focus() {
+        super::clear_selection(state);
+        true
+    } else {
+        false
     }
 }
 
@@ -480,6 +496,7 @@ fn load_editor_target(
             Some(stash.page) == page && stash.editing == editing && stash.history.text() == content
         })
         .map(|stash| stash.history);
+    state.prompt.exit_block_focus();
     match restored {
         Some(history) => state.prompt.restore_history(history),
         None => state.prompt.set_text(content),

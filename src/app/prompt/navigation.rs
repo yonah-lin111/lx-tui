@@ -26,6 +26,10 @@ impl Prompt {
     pub fn move_up(&mut self) {
         self.break_group();
         let rows = self.visual_rows();
+        if rows.is_empty() {
+            self.settle();
+            return;
+        }
         let (index, col) = self.cursor_visual_in(&rows);
         if index == 0 {
             self.cursor = rows[0].start;
@@ -40,6 +44,10 @@ impl Prompt {
     pub fn move_down(&mut self) {
         self.break_group();
         let rows = self.visual_rows();
+        if rows.is_empty() {
+            self.settle();
+            return;
+        }
         let (index, col) = self.cursor_visual_in(&rows);
         if index + 1 >= rows.len() {
             self.cursor = rows[rows.len() - 1].end;
@@ -54,6 +62,10 @@ impl Prompt {
     pub fn move_home(&mut self) {
         self.break_group();
         let rows = self.visual_rows();
+        if rows.is_empty() {
+            self.settle();
+            return;
+        }
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = rows[index].start;
         self.settle();
@@ -63,6 +75,10 @@ impl Prompt {
     pub fn move_end(&mut self) {
         self.break_group();
         let rows = self.visual_rows();
+        if rows.is_empty() {
+            self.settle();
+            return;
+        }
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = rows[index].end;
         self.settle();

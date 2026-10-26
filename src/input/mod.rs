@@ -439,6 +439,8 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
     if modifiers.contains(KeyModifiers::SUPER) {
         return match key.code {
             KeyCode::Enter => Some(EditorCommand::NewlineBelow),
+            KeyCode::Left => Some(EditorCommand::BlockPrev { cmd: true }),
+            KeyCode::Right => Some(EditorCommand::BlockNext { cmd: true }),
             KeyCode::Char('z' | 'Z') if shift => Some(EditorCommand::Redo),
             KeyCode::Char('z' | 'Z') => Some(EditorCommand::Undo),
             KeyCode::Char('y' | 'Y') => Some(EditorCommand::Redo),
@@ -460,8 +462,8 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
         },
         (true, false, KeyCode::Backspace) => Some(EditorCommand::DeleteWordBackward),
         (true, false, KeyCode::Delete) => Some(EditorCommand::DeleteWordForward),
-        (true, false, KeyCode::Left) => Some(EditorCommand::WordLeft),
-        (true, false, KeyCode::Right) => Some(EditorCommand::WordRight),
+        (true, false, KeyCode::Left) => Some(EditorCommand::BlockPrev { cmd: false }),
+        (true, false, KeyCode::Right) => Some(EditorCommand::BlockNext { cmd: false }),
         (false, true, KeyCode::Char('b')) => Some(EditorCommand::WordLeft),
         (false, true, KeyCode::Char('f')) => Some(EditorCommand::WordRight),
         (false, true, KeyCode::Char('d')) => Some(EditorCommand::DeleteWordForward),
