@@ -267,6 +267,7 @@ pub fn on_subagent_report(
     pane: PaneId,
     message_id: &str,
     report: SubagentReportView,
+    envelope: String,
 ) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
@@ -298,6 +299,7 @@ pub fn on_subagent_report(
         .messages
         .last()
         .map_or(0, |message| message.turn_index + 1);
+    // 报告行是**内部 user 消息**：正文就是注入模型信封，UI 只画汇报块。
     target.lx.chat.messages.push(ChatMessageView {
         id: message_id.to_string(),
         sequence,
@@ -306,7 +308,17 @@ pub fn on_subagent_report(
         status: "complete".into(),
         turn_index,
         shell: None,
-        steps: Vec::new(),
+        steps: vec![crate::app::state::AssistantStepView::Part {
+            position: 0,
+            part: crate::app::state::ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: envelope,
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
         model_label: None,
         error_code: None,
         input_tokens: None,
@@ -324,6 +336,7 @@ pub fn on_report_committed(
     pane: PaneId,
     committed: &crate::db::chat::TurnCommitted,
     report: SubagentReportView,
+    envelope: String,
 ) -> bool {
     let models = state.models.clone();
     let Some(target) = state.pane_mut_anywhere(pane) else {
@@ -344,6 +357,19 @@ pub fn on_report_committed(
         if !message.reports.contains(&report) {
             message.reports.push(report);
         }
+        if message.text().is_empty() {
+            message.steps = vec![crate::app::state::AssistantStepView::Part {
+                position: 0,
+                part: crate::app::state::ChatPartView {
+                    kind: crate::chat::events::PartKind::Text,
+                    content: envelope,
+                    provider_metadata_json: None,
+                    started_at_ms: None,
+                    ended_at_ms: None,
+                    completed_at_ms: None,
+                },
+            }];
+        }
     } else {
         target.lx.chat.messages.push(ChatMessageView {
             id: committed.user_message_id.clone(),
@@ -353,7 +379,17 @@ pub fn on_report_committed(
             status: "complete".into(),
             turn_index: committed.turn_index,
             shell: None,
-            steps: Vec::new(),
+            steps: vec![crate::app::state::AssistantStepView::Part {
+                position: 0,
+                part: crate::app::state::ChatPartView {
+                    kind: crate::chat::events::PartKind::Text,
+                    content: envelope,
+                    provider_metadata_json: None,
+                    started_at_ms: None,
+                    ended_at_ms: None,
+                    completed_at_ms: None,
+                },
+            }],
             model_label: None,
             error_code: None,
             input_tokens: None,

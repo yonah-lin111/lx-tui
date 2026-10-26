@@ -641,6 +641,7 @@ pub(crate) fn finish_subagent(
                     handle.parent.pane,
                     &message_id,
                     view.clone(),
+                    envelope.clone(),
                 );
                 // 路径 A：父窗格存在且空闲 → 同一条报告行上起一轮。
                 if parent_idle(state, handle.parent.pane) {
@@ -678,6 +679,7 @@ pub(crate) fn finish_subagent(
                             handle.parent.pane,
                             &committed,
                             view.clone(),
+                            envelope,
                         );
                     }
                 }

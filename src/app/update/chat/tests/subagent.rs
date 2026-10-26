@@ -201,13 +201,15 @@ fn reports_attach_to_the_parent_message_once() {
         &mut state,
         pane,
         "msg-report",
-        report.clone()
+        report.clone(),
+        "<subagent_report/>".into(),
     ));
     assert!(!update::on_subagent_report(
         &mut state,
         pane,
         "msg-report",
-        report
+        report,
+        "<subagent_report/>".into(),
     ));
     let messages = &state.pane_anywhere(pane).expect("pane").lx.chat.messages;
     assert_eq!(messages[0].reports.len(), 1);
