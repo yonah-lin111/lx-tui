@@ -405,6 +405,7 @@ fn start_stream_fails_the_turn_when_draft_exceeds_context() {
     assert!(handle_net_event(
         &mut state,
         &mut streams,
+        &persistence,
         ChatNetEvent::Finished {
             key: key.clone(),
             reason: reason.clone(),

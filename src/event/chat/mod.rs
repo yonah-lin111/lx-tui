@@ -141,6 +141,11 @@ pub struct ChatStreams {
     pub(crate) subagents: HashMap<String, subagent::SubagentHandle>,
     /// spawn 时冻结的模型（父会话与子会话各登记一份）。
     pub(crate) frozen: HashMap<String, crate::app::state::FrozenModel>,
+    /// 本轮已并入运行时摘要、但还没确认投递的报告（key → agent ids）。
+    ///
+    /// 只有本轮成功结束才置 `report_delivered`：失败/取消的那一轮模型没吃到报告，
+    /// 下一轮要能重新注入。
+    pub(crate) injected_reports: HashMap<RequestKey, Vec<String>>,
 }
 
 /// 一次等待作答的提问：回执通道 + 归属用的 `call_id`。
@@ -725,13 +730,16 @@ fn start_stream(
         text.push_str(&subagent_lines.join("\n"));
         summary = Some(text);
     }
-    if let Some(reports) = subagent::pending_report_summary(persistence, &key, &session_key) {
-        let mut text = summary.unwrap_or_default();
-        if !text.is_empty() {
-            text.push_str("\n\n");
+    if let Some((text, agent_ids)) =
+        subagent::pending_report_summary(persistence, &key, &session_key)
+    {
+        let mut combined = summary.unwrap_or_default();
+        if !combined.is_empty() {
+            combined.push_str("\n\n");
         }
-        text.push_str(&reports);
-        summary = Some(text);
+        combined.push_str(&text);
+        summary = Some(combined);
+        streams.injected_reports.insert(key.clone(), agent_ids);
     }
     prepared.context = prepared.context.with_runtime_summary(summary);
     let transport = frozen.transport.clone();
@@ -908,6 +916,7 @@ fn report_turn(sender: mpsc::UnboundedSender<AppEvent>, key: RequestKey, summary
 pub fn handle_net_event(
     state: &mut AppState,
     streams: &mut ChatStreams,
+    persistence: &Persistence,
     event: ChatNetEvent,
 ) -> bool {
     // 子 agent 增量走独立分流：绝不进入主对话。
@@ -933,6 +942,16 @@ pub fn handle_net_event(
             update::on_stream_delta(state, &key, &deltas)
         }
         ChatNetEvent::Finished { key, reason, usage } => {
+            // 本轮成功结束才确认报告已投递（失败/取消的下一轮会重新注入）。
+            if matches!(reason, StopReason::Complete)
+                && let Some(agent_ids) = streams.injected_reports.remove(&key)
+                && let Some(workspace) = streams.db_workspaces.get(&key).cloned()
+                && let Some(database) = persistence.database()
+            {
+                for agent_id in agent_ids {
+                    let _ = database.mark_report_delivered(&workspace, &agent_id);
+                }
+            }
             // 清除在途取消句柄、checkpoint 与冻结工作区。
             streams.finish(&key);
             // 防御 sweep：流程走完时不应还剩面板；留下就是悬挂 sender。

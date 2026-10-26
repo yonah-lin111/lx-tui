@@ -400,6 +400,7 @@ async fn stale_generation_events_do_not_pollute_the_new_turn() {
         !handle_net_event(
             &mut state,
             &mut streams,
+            &persistence,
             ChatNetEvent::Delta {
                 key: stale.clone(),
                 deltas,

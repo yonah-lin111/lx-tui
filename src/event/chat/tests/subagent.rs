@@ -270,6 +270,7 @@ async fn child_delta_never_reaches_the_parent_conversation() {
     let changed = handle_net_event(
         &mut state,
         &mut streams,
+        &persistence,
         ChatNetEvent::Delta {
             key: RequestKey {
                 pane: key.pane,

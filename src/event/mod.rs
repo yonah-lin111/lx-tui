@@ -668,7 +668,7 @@ fn handle_app_event(
         },
         AppEvent::ChatNet(event) => {
             // 网络事件按 key 过滤后转 update；调用方随后统一置脏。
-            chat::handle_net_event(state, chat_streams, event);
+            chat::handle_net_event(state, chat_streams, persistence, event);
         }
         AppEvent::AgentHost(event) => {
             // 工具调用握手：DB 落库门槛 → 状态 → 回执 ticket（顺序不可交换）。

@@ -523,13 +523,19 @@ fn pump(
             }
         }
         AppEvent::ChatNet(ChatNetEvent::Delta { key, deltas }) => {
-            handle_net_event(state, streams, ChatNetEvent::Delta { key, deltas });
+            handle_net_event(
+                state,
+                streams,
+                persistence,
+                ChatNetEvent::Delta { key, deltas },
+            );
         }
         AppEvent::ChatNet(ChatNetEvent::Finished { key, reason, usage }) => {
             *finished = Some((reason.clone(), usage));
             handle_net_event(
                 state,
                 streams,
+                persistence,
                 ChatNetEvent::Finished { key, reason, usage },
             );
         }

@@ -873,11 +873,14 @@ fn workspace_for_pane(state: &AppState, pane: PaneId) -> Option<PathBuf> {
 }
 
 /// 下一轮注入：未投递报告的信封并入运行时摘要，并立即标记已投递。
+/// 未投递报告 →（注入文本，涉及的 agent id）。
+///
+/// **不在这里**置 `report_delivered`：本轮失败/取消时模型没吃到报告，下一次还得注入。
 pub(crate) fn pending_report_summary(
     persistence: &Persistence,
     key: &RequestKey,
     workspace: &std::path::Path,
-) -> Option<String> {
+) -> Option<(String, Vec<String>)> {
     let database = persistence.database()?;
     let pending = database
         .pending_subagent_reports(workspace, &key.session)
@@ -886,14 +889,15 @@ pub(crate) fn pending_report_summary(
         return None;
     }
     let mut lines = vec!["[local runtime] subagent reports:".to_string()];
+    let mut agent_ids = Vec::new();
     for (agent_id, report_json) in pending {
         let Some(view) = SubagentReportView::from_json(&report_json) else {
             continue;
         };
-        let _ = database.mark_report_delivered(workspace, &agent_id);
+        agent_ids.push(agent_id);
         lines.push(format_report_envelope(&view));
     }
-    (lines.len() > 1).then(|| lines.join("\n"))
+    (lines.len() > 1).then(|| (lines.join("\n"), agent_ids))
 }
 
 /// 运行中的子 agent 摘要（`runtime_context_summary` 追加段）。
