@@ -203,6 +203,8 @@ pub enum Effect {
         agent_id: String,
         child_session: String,
     },
+    /// 会话被删除：取消该会话下所有在册子 turn（DB 外键已级联清行）。
+    CancelSubagents { session_id: String },
     /// 停止高亮的 subagent（`^d`）。
     StopSubagent {
         pane: crate::layout::PaneId,

@@ -433,3 +433,42 @@ async fn escape_cancels_only_the_parent_turn() {
     assert_eq!(handle.status, crate::event::chat::subagent::STATUS_RUNNING);
     assert!(!*handle.cancel.borrow());
 }
+
+#[test]
+fn deleting_the_parent_session_cancels_live_children() {
+    let (fixture, _state, key, persistence, mut streams, parent) = fixture_with_parent();
+    // 手工登记一个在册句柄：子 turn 的接收端由测试自己持有，信号可确定性观测。
+    let (cancel, mut cancel_rx) = tokio::sync::watch::channel(false);
+    let (done, _done_rx) = tokio::sync::watch::channel(false);
+    streams.subagents.insert(
+        "sess-child".into(),
+        super::super::subagent::SubagentHandle {
+            parent: key.clone(),
+            agent_id: "sub-agent".into(),
+            child_session_id: "sess-child".into(),
+            child_assistant_id: "msg-child".into(),
+            child_user_message_id: "msg-user".into(),
+            role: AgentRole::Explorer,
+            task: "work".into(),
+            cancel,
+            done,
+            status: crate::event::chat::subagent::STATUS_RUNNING,
+            started_at_ms: 0,
+            chat: crate::app::state::LxChat::new(),
+            workspace: fixture.workspace().to_path_buf(),
+        },
+    );
+    assert!(
+        persistence
+            .database()
+            .expect("db")
+            .delete_chat_session(fixture.workspace(), &parent)
+            .is_ok()
+    );
+    assert!(crate::event::chat::subagent::cancel_for_session(
+        &mut streams,
+        &parent,
+    ));
+    assert!(cancel_rx.has_changed().expect("receiver alive"));
+    assert!(*cancel_rx.borrow_and_update(), "子 turn 收到取消信号");
+}

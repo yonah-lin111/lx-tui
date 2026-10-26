@@ -514,7 +514,8 @@ impl Persistence {
             // 与进程面板同一处置：持久化泵只记录并忽略。
             Effect::ListSubagents { .. }
             | Effect::LoadSubagentSession { .. }
-            | Effect::StopSubagent { .. } => {
+            | Effect::StopSubagent { .. }
+            | Effect::CancelSubagents { .. } => {
                 tracing::warn!(target: "lx::event", "subagent effect reached the persistence pump");
                 false
             }
@@ -1009,6 +1010,10 @@ impl Persistence {
                 // 并从已打开的 `/resume` 列表里就地移除该行。
                 if deleted.is_some() {
                     let mut changed = false;
+                    // 子树 turn 仍在跑：取消它们，否则会把结果写进已删除的子会话。
+                    state.effects.push(Effect::CancelSubagents {
+                        session_id: session_id.clone(),
+                    });
                     let panes: Vec<crate::layout::PaneId> = state.all_pane_ids();
                     for pane in panes {
                         changed |= update::on_session_deleted(state, pane, &session_id);
@@ -1269,6 +1274,7 @@ fn is_network_effect(effect: &Effect) -> bool {
             | Effect::ListSubagents { .. }
             | Effect::LoadSubagentSession { .. }
             | Effect::StopSubagent { .. }
+            | Effect::CancelSubagents { .. }
             | Effect::PrepareRewind { .. }
             | Effect::ExecuteRewind(_)
             | Effect::ExecuteCompact(_)

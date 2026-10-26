@@ -743,6 +743,31 @@ fn assistant_parts(
         .map(crate::db::chat::chat_message_part_views)
 }
 
+/// 会话被删除：取消该会话下所有在册子 turn（DB 外键会级联清行）。
+///
+/// 内存句柄不清理的话，子 turn 会继续跑并把结果写进已删除的子会话（写入失败），
+/// 面板里也会留下永远 running 的幽灵行。
+pub(crate) fn cancel_for_session(streams: &mut ChatStreams, session_id: &str) -> bool {
+    let mut cancelled = false;
+    let mut dead = Vec::new();
+    for (child, handle) in &streams.subagents {
+        if handle.parent.session == session_id || handle.child_session_id == session_id {
+            // `send` 在没有接收者时失败：子 turn 已经结束、只是终态还没回投，
+            // 句柄是幽灵，直接移除（否则面板里永远显示 running）。
+            if handle.cancel.send(true).is_ok() {
+                cancelled = true;
+            } else {
+                dead.push(child.clone());
+            }
+        }
+    }
+    for child in dead {
+        streams.subagents.remove(&child);
+        streams.frozen.remove(&child);
+    }
+    cancelled
+}
+
 /// 应用子 agent 效应（列表、懒加载、停止）。
 pub fn apply_subagent_effects(
     state: &mut AppState,
@@ -758,6 +783,7 @@ pub fn apply_subagent_effects(
                 Effect::ListSubagents { .. }
                     | Effect::LoadSubagentSession { .. }
                     | Effect::StopSubagent { .. }
+                    | Effect::CancelSubagents { .. }
             )
         })
         .cloned()
@@ -771,6 +797,7 @@ pub fn apply_subagent_effects(
             Effect::ListSubagents { .. }
                 | Effect::LoadSubagentSession { .. }
                 | Effect::StopSubagent { .. }
+                | Effect::CancelSubagents { .. }
         )
     });
     let mut changed = false;
@@ -828,6 +855,9 @@ pub fn apply_subagent_effects(
                 } else {
                     tracing::debug!(%agent_id, pane = pane.raw(), "subagent already finished");
                 }
+            }
+            Effect::CancelSubagents { session_id } => {
+                changed |= cancel_for_session(streams, &session_id);
             }
             _ => {}
         }
