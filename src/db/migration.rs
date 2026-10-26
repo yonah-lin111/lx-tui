@@ -644,7 +644,9 @@ impl Database {
             let transaction = self.conn.unchecked_transaction()?;
             transaction.execute_batch(SCHEMA_V14)?;
             ensure_no_foreign_key_violation(&transaction)?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            // 只推进到本分支的版本：后续分支失败时不能把库标成更高版本，
+            // 否则下次启动会跳过缺失的迁移（v15/v16 都依赖这一点）。
+            transaction.pragma_update(None, "user_version", 14)?;
             transaction.commit()?;
         }
         if version < 15 {
@@ -652,7 +654,7 @@ impl Database {
             let transaction = self.conn.unchecked_transaction()?;
             transaction.execute_batch(SCHEMA_V15_TODO)?;
             ensure_no_foreign_key_violation(&transaction)?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.pragma_update(None, "user_version", 15)?;
             transaction.commit()?;
         }
         if version < 16 {
@@ -718,7 +720,8 @@ impl Database {
                     .execute_batch("ALTER TABLE agent_message ADD COLUMN user_shell_json TEXT;")?;
             }
             ensure_no_foreign_key_violation(&transaction)?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            // 只推进到 13：后续分支失败时不能让库看起来已是当前版本。
+            transaction.pragma_update(None, "user_version", 13)?;
             transaction.commit()?;
             Ok(())
         })();
