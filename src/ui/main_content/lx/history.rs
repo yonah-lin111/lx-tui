@@ -219,6 +219,8 @@ pub struct HistoryLayout {
 }
 
 pub use sticky::StickyRow;
+mod source;
+pub(crate) use source::HistorySource;
 use sticky::sticky_candidate;
 
 pub(crate) use sticky::{render_sticky_prompt, sticky_rect, truncate_with_ellipsis};
@@ -253,22 +255,22 @@ fn should_register_card(call: &crate::app::state::ToolCallView, width: u16) -> b
 }
 
 /// 本地命令卡片两块（参数 / 输出）的展开状态。
-fn shell_folds(lx: &Lx, message_id: &str) -> Folds {
+fn shell_folds(source: HistorySource<'_>, message_id: &str) -> Folds {
     Folds {
-        body: lx
+        body: source
             .chat
             .section_is_expanded(message_id, SHELL_SLOT, CardSection::Body),
-        output: lx
+        output: source
             .chat
             .section_is_expanded(message_id, SHELL_SLOT, CardSection::Output),
     }
 }
 
 /// 一张工具卡片两块（主体 / 输出）的展开状态。
-fn folds_of(lx: &Lx, message_id: &str, call: &crate::app::state::ToolCallView) -> tool::Folds {
+fn folds_of(source: HistorySource<'_>, message_id: &str, call: &crate::app::state::ToolCallView) -> tool::Folds {
     tool::Folds {
-        body: lx.chat.detail_is_expanded(message_id, &call.call_id),
-        output: lx
+        body: source.chat.detail_is_expanded(message_id, &call.call_id),
+        output: source
             .chat
             .section_is_expanded(message_id, &call.call_id, CardSection::Output),
     }
@@ -283,16 +285,25 @@ fn folds_of(lx: &Lx, message_id: &str, call: &crate::app::state::ToolCallView) -
 ///    → 撤销让位、不画置顶行，并把"整块视口 + 顶行位置"记入记忆；
 /// 3. 非跟随时，若记忆与当前位置一致 → 直接跳过重判（沿用抑制，防让位/撤销抖动）。
 pub(super) fn view(area: Rect, lx: &Lx, cache: &mut PaneCache) -> HistoryView {
+    view_source(area, HistorySource::from(lx), cache)
+}
+
+/// 数据源版本（子 agent 详情复用）。
+pub(super) fn view_source(
+    area: Rect,
+    source: HistorySource<'_>,
+    cache: &mut PaneCache,
+) -> HistoryView {
     // 生产路径只要行数与消息区间：直接读快照，不构造每张卡片的 `CardHit`。
-    let snapshot = cache.snapshot(content_rect(area).width, lx);
+    let snapshot = cache.snapshot_source(content_rect(area).width, source);
     let total = snapshot.total_rows;
     let full_height = area.height;
     let scroll_for = |height: u16| -> usize {
         let max_top = total.saturating_sub(usize::from(height));
-        if lx.chat.follow_bottom {
+        if source.chat.follow_bottom {
             max_top
         } else {
-            lx.chat.history_scroll.min(max_top)
+            source.chat.history_scroll.min(max_top)
         }
     };
     let mut view = HistoryView {
@@ -316,16 +327,16 @@ pub(super) fn view(area: Rect, lx: &Lx, cache: &mut PaneCache) -> HistoryView {
         },
     );
     // 阅读态且位置未变：沿用抑制（本帧跳过重判）。
-    if !lx.chat.follow_bottom
-        && lx
+    if !source.chat.follow_bottom
+        && source
             .chat
             .suppressed_prompt_header
             .is_some_and(|remembered| Some(remembered) == position)
     {
-        view.suppressed = lx.chat.suppressed_prompt_header;
+        view.suppressed = source.chat.suppressed_prompt_header;
         return view;
     }
-    let Some(candidate) = sticky_candidate(&lx.chat.messages, &view.messages, view.scroll) else {
+    let Some(candidate) = sticky_candidate(source.messages, &view.messages, view.scroll) else {
         return view;
     };
     // 让位一行后重判（body 下移 1 行，置顶行占历史整区第 0 行）。
@@ -335,7 +346,7 @@ pub(super) fn view(area: Rect, lx: &Lx, cache: &mut PaneCache) -> HistoryView {
         ..area
     };
     let scroll_body = scroll_for(body.height);
-    if sticky_candidate(&lx.chat.messages, &view.messages, scroll_body).is_none() {
+    if sticky_candidate(source.messages, &view.messages, scroll_body).is_none() {
         view.suppressed = position;
         return view;
     }

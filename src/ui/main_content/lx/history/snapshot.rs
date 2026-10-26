@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use crate::app::state::{AssistantStepView, CardSection, Lx, UserShellView};
+use crate::app::state::{AssistantStepView, CardSection, UserShellView};
 use crate::ui::markdown_render;
 
 use super::cache::{
@@ -19,6 +19,7 @@ use super::cache::{
     stats_block_signature,
 };
 use super::paint::{BlockPaint, BlockSource, CardSpan};
+use super::source::HistorySource;
 use super::timeline::{TimelineEntry, timeline};
 use super::{
     CardKind, Folds, MessageRows, compact, folds_of, notice, rewind, shell_folds,
@@ -101,11 +102,11 @@ pub(crate) struct HistorySnapshot {
 }
 
 /// 构建快照。`width` 是历史内容列宽（已扣除滚动条预留列）。
-pub(crate) fn build(width: u16, lx: &Lx, cache: &mut PaneCache) -> HistorySnapshot {
+pub(crate) fn build(width: u16, source: HistorySource<'_>, cache: &mut PaneCache) -> HistorySnapshot {
     if width == 0 {
         return HistorySnapshot::default();
     }
-    let timeline = timeline(lx);
+    let timeline = timeline(source);
     let mut builder = Builder {
         cache,
         width,
@@ -119,9 +120,9 @@ pub(crate) fn build(width: u16, lx: &Lx, cache: &mut PaneCache) -> HistorySnapsh
         }
         entry_has_previous = true;
         match entry {
-            TimelineEntry::Notices { last, count } => builder.notices(lx, *last, *count),
-            TimelineEntry::Compact(index) => builder.compact(lx, *index),
-            TimelineEntry::Message(message_index) => builder.message(lx, *message_index),
+            TimelineEntry::Notices { last, count } => builder.notices(source, *last, *count),
+            TimelineEntry::Compact(index) => builder.compact(source, *index),
+            TimelineEntry::Message(message_index) => builder.message(source, *message_index),
         }
     }
     // 末尾留一行呼吸位（滚动到底部时不贴死）；归最后一条消息。
@@ -225,15 +226,15 @@ impl Builder<'_> {
     }
 
     /// 撤销提示条目（连续提示合并为一条）。
-    fn notices(&mut self, lx: &Lx, last: usize, count: usize) {
+    fn notices(&mut self, source: HistorySource<'_>, last: usize, count: usize) {
         let start = self.rows;
         let key = BlockKey {
             message_index: last,
             step_index: super::cache::REWIND_SLOT_BLOCK,
             width: self.width,
-            sig: rewind_block_signature(&lx.chat.notices[last], count),
+            sig: rewind_block_signature(&source.notices[last], count),
         };
-        let rows = rewind::rows(&lx.chat.notices[last], count, self.width);
+        let rows = rewind::rows(&source.notices[last], count, self.width);
         let block = self.block(key, BlockSource::Rewind { last, count }, start, || {
             BlockPaint::Legacy {
                 rows,
@@ -250,10 +251,10 @@ impl Builder<'_> {
     }
 
     /// compact 检查点条目。
-    fn compact(&mut self, lx: &Lx, index: usize) {
+    fn compact(&mut self, source: HistorySource<'_>, index: usize) {
         let start = self.rows;
-        let notice = &lx.compact.checkpoints[index];
-        let expanded = compact::is_expanded(lx, &notice.id);
+        let notice = &source.checkpoints[index];
+        let expanded = source.compact.is_expanded(&notice.id);
         let key = BlockKey {
             message_index: index,
             step_index: super::cache::COMPACT_SLOT_BLOCK,
@@ -287,14 +288,14 @@ impl Builder<'_> {
     }
 
     /// 一条消息（含本地命令卡片分支）。
-    fn message(&mut self, lx: &Lx, message_index: usize) {
-        let message = &lx.chat.messages[message_index];
+    fn message(&mut self, source: HistorySource<'_>, message_index: usize) {
+        let message = &source.messages[message_index];
         let start = self.rows;
         let mut blocks = Vec::new();
         if let Some(shell) = &message.shell {
-            self.shell(lx, message_index, message, shell, start, &mut blocks);
+            self.shell(source, message_index, message, shell, start, &mut blocks);
         } else {
-            self.steps(lx, message_index, message, &mut blocks);
+            self.steps(source, message_index, message, &mut blocks);
             self.tail(message_index, message, &mut blocks);
         }
         let is_user = message.role == "user" && message.shell.is_none();
@@ -314,27 +315,27 @@ impl Builder<'_> {
     /// 本地命令卡片（独立条目，不进入步骤时间线）。
     fn shell(
         &mut self,
-        lx: &Lx,
+        source: HistorySource<'_>,
         message_index: usize,
         message: &crate::app::state::ChatMessageView,
         shell: &UserShellView,
         entry_start: usize,
         blocks: &mut Vec<SnapBlock>,
     ) {
-        let folds = shell_folds(lx, &message.id);
+        let folds = shell_folds(source, &message.id);
         let key = BlockKey {
             message_index,
             step_index: SHELL_SLOT_BLOCK,
             width: self.width,
-            sig: shell_block_signature(lx, message, shell),
+            sig: shell_block_signature(source, message, shell),
         };
         let start = self.rows;
         let width = self.width;
         let rows = user_shell::rows(
             shell,
             width,
-            lx.chat.loading_frame,
-            lx.chat.status.streaming || shell.is_running(),
+            source.chat.loading_frame,
+            source.chat.status.streaming || shell.is_running(),
             folds,
         );
         let block = self.block(key, BlockSource::Shell { message_index }, start, || {
@@ -372,7 +373,7 @@ impl Builder<'_> {
     /// assistant/用户消息的步骤时间线（含合并组、工具卡片与 thinking 头部）。
     fn steps(
         &mut self,
-        lx: &Lx,
+        source: HistorySource<'_>,
         message_index: usize,
         message: &crate::app::state::ChatMessageView,
         blocks: &mut Vec<SnapBlock>,
@@ -385,7 +386,7 @@ impl Builder<'_> {
                 let group = tool::merge_group(&message.steps, step_index);
                 if group.len() > 1 {
                     if self.merge_group(
-                        lx,
+                        source,
                         message_index,
                         message,
                         &group,
@@ -400,7 +401,7 @@ impl Builder<'_> {
                 }
             }
             // 先取块（命中二级缓存时不再重排正文），行数**只**从 paint 取。
-            let mut block = self.build_step(lx, message_index, step_index, message, step);
+            let mut block = self.build_step(source, message_index, step_index, message, step);
             if block.rows == 0 {
                 step_index += 1;
                 continue; // 空正文块不占行，也不引入块间空行。
@@ -425,7 +426,7 @@ impl Builder<'_> {
                 AssistantStepView::Part { part, .. }
                     if part.kind == crate::chat::events::PartKind::Reasoning
             ) {
-                let expanded = lx.chat.reasoning_expanded(message_index, step_index);
+                let expanded = source.chat.reasoning_expanded(message_index, step_index);
                 self.snapshot
                     .thinking
                     .push((message_index, step_index, (block_start, 1)));
@@ -451,7 +452,7 @@ impl Builder<'_> {
     /// `start` 先给 0；调用方决定空行后再回填真实行号。
     fn build_step(
         &mut self,
-        lx: &Lx,
+        history: HistorySource<'_>,
         message_index: usize,
         step_index: usize,
         message: &crate::app::state::ChatMessageView,
@@ -461,16 +462,16 @@ impl Builder<'_> {
             message_index,
             step_index,
             width: self.width,
-            sig: part_block_signature(lx, message, message_index, step_index, step),
+            sig: part_block_signature(history, message, message_index, step_index, step),
         };
-        let source = BlockSource::Step {
+        let block_source = BlockSource::Step {
             message_index,
             step_index,
         };
         let width = self.width;
         let is_user = message.role == "user";
-        let expanded = lx.chat.reasoning_expanded(message_index, step_index);
-        self.block(key, source, 0, || match step {
+        let expanded = history.chat.reasoning_expanded(message_index, step_index);
+        self.block(key, block_source, 0, || match step {
             AssistantStepView::Part { part, .. } => match part.kind {
                 crate::chat::events::PartKind::Text if is_user => BlockPaint::UserText {
                     lines: wrap(&part.content, width.saturating_sub(super::USER_INDENT)),
@@ -493,7 +494,7 @@ impl Builder<'_> {
                 },
             },
             AssistantStepView::Tool { call, .. } => {
-                let folds = folds_of(lx, &message.id, call);
+                let folds = folds_of(history, &message.id, call);
                 let rows = tool_rows(call, width, folds);
                 legacy(rows, tool::card_regions(call, width, folds, rows), folds)
             }
@@ -536,7 +537,7 @@ impl Builder<'_> {
     /// 合并的文件工具组：一个块（标题行 + 各调用文件块）。
     fn merge_group(
         &mut self,
-        lx: &Lx,
+        source: HistorySource<'_>,
         message_index: usize,
         message: &crate::app::state::ChatMessageView,
         group: &[&crate::app::state::ToolCallView],
@@ -546,7 +547,7 @@ impl Builder<'_> {
     ) -> bool {
         let expanded: Vec<bool> = group
             .iter()
-            .map(|call| lx.chat.detail_is_expanded(&message.id, &call.call_id))
+            .map(|call| source.chat.detail_is_expanded(&message.id, &call.call_id))
             .collect();
         let group_rows = tool::group_rows(group, self.width, &expanded);
         if group_rows == 0 {
@@ -562,7 +563,7 @@ impl Builder<'_> {
             message_index,
             step_index: first_step,
             width: self.width,
-            sig: group_block_signature(lx, message, group, &expanded),
+            sig: group_block_signature(source, message, group, &expanded),
         };
         let width = self.width;
         let block = self.block(
