@@ -297,3 +297,19 @@ P3（`style.rs` 超 1000 行）记录为债务未修。
 第六轮验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
 `cargo test` 全绿（**3547 passed / 0 failed / 2 ignored**）。
 `src/layout.rs` 仍为 1000 行；`src/ui/right_panel/todo.rs` 714、`src/app/update/todo.rs` 571。
+
+## 合并
+
+- 合并进 `dev`（`merge --no-ff`，合并提交 `0cd9626`）。
+- 冲突 4 处，均为「两侧各自新增」而非互斥改动，按并集保留：
+  - `docs/standards/tui-design-requirements.md`：dev 侧新增的 prompt 列表拖拽/落点反显文案
+    与本分支的 Todo 面板文案合并进同一行条目（两段都保留，已核对无重复句）。
+  - `src/app/update/right_panel.rs`：`prompt_drag = None`（dev）与 `todo_hover = None`（本分支）都保留。
+  - `src/app/update/workspace.rs`：`state.prompt_focused = false` 已被 `FocusedContainer`
+    取代，保留本分支的 `commit_todo_edit` + 条件回焦，同时保留 dev 的 `prompt_drag = None`。
+  - `src/db/service.rs`：dev 新增 `db_result` 与本分支新增 `todo_write` 两个独立方法，都保留。
+- Schema：dev 基线 14 → 本分支 15（`v15` 只增 `todo` 表）。并行分支 `feat/lx-subagent`
+  当前为 **16**，其迁移块是 `if version < 16`，与本分支无版本号冲突；它已跳过 15，
+  合并时若先落地需确认 `v15` 不被跳过（按项目规范由后合并方顺延）。
+- 合并后验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
+  `cargo test` 全绿（**3591 passed / 0 failed / 2 ignored**，含 dev 侧全部用例）。
