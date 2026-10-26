@@ -13,6 +13,7 @@
 
 pub mod ask;
 pub mod compact;
+mod context_summary;
 mod file_snapshots;
 mod host;
 mod process_events;
@@ -97,6 +98,7 @@ use crate::db::service::Persistence;
 use crate::event::AppEvent;
 use crate::layout::PaneId;
 use crate::ui::text;
+use context_summary::{background_tasks, runtime_context_summary};
 
 /// checkpoint 落盘间隔与累计字节阈值（设计 5.3）。
 const CHECKPOINT_INTERVAL: Duration = Duration::from_millis(500);
@@ -789,86 +791,6 @@ fn start_stream(
     });
     true
 }
-
-/// 受管后台任务摘要（环境快照用）：只含 session id、状态、cwd 与命令首行。
-///
-/// 不包含完整命令行、输出或环境变量：环境快照写入模型上下文，必须最小化。
-fn background_tasks(
-    session_id: Option<&str>,
-    streams: &ChatStreams,
-) -> Vec<crate::chat::prompt::BackgroundTask> {
-    let Some(session_id) = session_id else {
-        return Vec::new();
-    };
-    let Some(runtime) = streams.runtimes.get(session_id) else {
-        return Vec::new();
-    };
-    runtime
-        .manager()
-        .snapshots()
-        .into_iter()
-        .filter(|snapshot| !snapshot.state.is_terminal() || snapshot.background_alive)
-        .map(|snapshot| crate::chat::prompt::BackgroundTask {
-            session_id: snapshot.session_id,
-            state: snapshot.state.as_str().to_string(),
-            cwd: snapshot.cwd,
-            command: snapshot
-                .command
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .chars()
-                .take(120)
-                .collect(),
-        })
-        .collect()
-}
-
-/// 本轮运行上下文摘要：存活进程（有界）与当前计划（有界）。
-///
-/// 它是**本地运行状态**，不是工具结果：不新增 call/result 对，也不触发新的模型请求。
-fn runtime_context_summary(
-    manager: &crate::chat::process::ProcessManager,
-    plan: &Option<crate::app::state::PlanSnapshotView>,
-) -> Option<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let running: Vec<crate::chat::process::ProcessSnapshot> = manager
-        .snapshots()
-        .into_iter()
-        .filter(|snapshot| !snapshot.state.is_terminal())
-        .take(MAX_CONTEXT_PROCESSES)
-        .collect();
-    if !running.is_empty() {
-        lines.push(
-            "[local runtime] running processes (use write_stdin with session_id):".to_string(),
-        );
-        for snapshot in running {
-            let command: String = snapshot.command.chars().take(120).collect();
-            lines.push(format!(
-                "- session_id={} cwd={} · {}",
-                snapshot.session_id, snapshot.cwd, command
-            ));
-        }
-    }
-    if let Some(plan) = plan
-        && !plan.is_empty()
-    {
-        lines.push("[local runtime] current plan:".to_string());
-        for (step, status) in plan.steps.iter().take(MAX_CONTEXT_PLAN_STEPS) {
-            let marker = text::agent::plan_marker(*status);
-            lines.push(format!("- {marker} {step}"));
-        }
-    }
-    if lines.is_empty() {
-        return None;
-    }
-    Some(lines.join("\n"))
-}
-
-/// 摘要里最多列出的运行进程数。
-const MAX_CONTEXT_PROCESSES: usize = 8;
-/// 摘要里最多列出的计划步骤数。
-const MAX_CONTEXT_PLAN_STEPS: usize = 16;
 
 /// 一轮的可执行快照：冻结的上下文 + 冻结的工作区根。
 ///
