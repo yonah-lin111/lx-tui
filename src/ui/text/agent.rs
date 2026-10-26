@@ -354,6 +354,21 @@ pub fn cwd_label(cwd: &str) -> String {
 
 /// `ask` 卡片动词。
 pub const VERB_TOOL_ASK: &str = "Ask";
+pub const VERB_TOOL_SPAWN_AGENT: &str = "Spawn agent";
+pub const VERB_TOOL_WAIT_AGENTS: &str = "Wait agents";
+pub const VERB_TOOL_CLOSE_AGENT: &str = "Close agent";
+/// 委派卡片：角色与任务首行之间的分隔。
+pub const SPAWN_ROLE_SEP: &str = " · ";
+/// `wait_agent` 摘要里的目标计数单位。
+pub const AGENTS_LABEL: &str = "agents";
+pub const WAIT_TIMED_OUT: &str = "timed out";
+pub const WAIT_SETTLED: &str = "settled";
+pub const AGENT_ID_LABEL: &str = "agent_id:";
+pub const WAIT_TARGETS_LABEL: &str = "targets:";
+pub const PREVIOUS_STATUS_LABEL: &str = "previous:";
+/// 汇报块状态词与元信息标签。
+pub const REPORT_FILES_CHANGED: &str = "files changed";
+pub const REPORT_LABEL: &str = "report";
 /// 面板标题：`ASK 1/2 · 布局`。
 pub const ASK_TITLE: &str = "ASK";
 pub const ASK_TITLE_SEP: &str = " · ";

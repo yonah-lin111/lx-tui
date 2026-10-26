@@ -21,6 +21,7 @@ pub mod compact;
 mod process;
 pub mod rewind;
 mod session;
+mod subagent;
 pub mod user_shell;
 mod view;
 mod viewport;
@@ -46,6 +47,12 @@ pub use rewind::{
     on_session_reloaded as on_rewind_session_reloaded, on_succeeded as on_rewind_succeeded,
     open_from_command as open_rewind_from_command, set_active as set_rewind_active,
 };
+pub use subagent::{
+    apply_deltas as apply_subagent_deltas, move_selected_agent, on_report_committed,
+    on_subagent_delta, on_subagent_finished, on_subagent_loaded, on_subagent_report,
+    on_subagent_started, on_subagent_tool_pending, on_subagent_tool_running,
+    on_subagent_tool_settled, scroll_agents_detail, set_subagent_list, stop_selected_subagent,
+};
 pub use session::{
     apply_models_changed, apply_slash_command, apply_slash_enter, close_task_page, delete_session,
     new_session, on_history_listed, on_process_listed, on_session_deleted, on_session_loaded,
@@ -61,7 +68,8 @@ pub use user_shell::{
 pub(crate) use view::view_message_of;
 pub use viewport::{
     hover_lx_chat, hover_lx_jump_bottom, jump_lx_history_bottom, jump_lx_history_to_prompt,
-    resolve_ask_preview_visible, resolve_task_output_visible, scroll_lx_history,
+    resolve_ask_preview_visible, resolve_task_agents_visible, resolve_task_output_visible,
+    scroll_lx_history,
     set_lx_history_scroll, toggle_lx_card,
 };
 pub(crate) use viewport::{resolve_lx_history, resolve_lx_rewind_center};
@@ -264,6 +272,7 @@ pub fn on_turn_committed(
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
+        reports: Vec::new(),
     });
     target.lx.chat.messages.push(ChatMessageView {
         sequence: committed.assistant_sequence,
@@ -280,6 +289,7 @@ pub fn on_turn_committed(
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
+        reports: Vec::new(),
     });
     target.lx.chat.follow_bottom = true;
     let key = RequestKey {

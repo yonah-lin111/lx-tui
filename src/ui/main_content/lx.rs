@@ -862,6 +862,11 @@ pub fn task_output_rows(area: Rect, lx: &Lx) -> Option<usize> {
     Some(task::output_rows(rect))
 }
 
+/// Agents 详情区的 `(可见行数, 总行数)`；不在 Agents 页或无高亮项返回 None。
+pub fn task_agents_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
+    task::agents_rows(area, lx)
+}
+
 /// `ask` 预览区的可见行数（滚动上限钳制用）；无面板或无预览区返回 None。
 ///
 /// 与渲染共用 [`ask::layout`] 的同一份几何，因此"能滚多远"与"画到哪停"是同一个数。

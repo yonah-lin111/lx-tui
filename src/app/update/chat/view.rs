@@ -44,6 +44,13 @@ pub fn view_message_of(message: &ChatMessage, models: &ModelsSnapshot) -> ChatMe
         duration_ms: message
             .completed_at_ms
             .map(|completed| completed.saturating_sub(message.created_at_ms).max(0)),
+        // 报告 JSON 损坏不应让整条消息渲染失败：按「没有报告」处理。
+        reports: message
+            .subagent_reports
+            .as_deref()
+            .and_then(crate::chat::agent::SubagentReportView::from_json)
+            .into_iter()
+            .collect(),
     }
 }
 
@@ -97,8 +104,20 @@ fn tool_view_of(tool: &ToolCallRecord) -> ToolCallView {
     // 详见 design §14.6。
     // 文件工具的差异详情与进程/计划同源：都从落库 JSON 解码；文件分支缺失时
     // `from_result_json` 返回 None，卡片沿用原两行摘要。
-    let detail = ToolDetailView::from_result_json(tool.result_json.as_deref())
-        .or_else(|| ToolDetailView::file_detail(tool.result_json.as_deref()));
+    let detail = if matches!(
+        tool.name.as_str(),
+        "spawn_agent" | "wait_agent" | "close_agent"
+    ) {
+        crate::app::state::SubagentDetailView::from_tool(
+            &tool.name,
+            &tool.arguments_json,
+            tool.result_json.as_deref(),
+        )
+        .map(ToolDetailView::Subagent)
+    } else {
+        ToolDetailView::from_result_json(tool.result_json.as_deref())
+            .or_else(|| ToolDetailView::file_detail(tool.result_json.as_deref()))
+    };
     if let Some(ToolDetailView::Command(view)) = detail.as_ref()
         && view.state.is_nonzero_exit()
     {

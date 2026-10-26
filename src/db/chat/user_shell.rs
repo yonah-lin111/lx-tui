@@ -326,6 +326,7 @@ impl super::Database {
                 created_at_ms: row.get(6)?,
                 completed_at_ms: row.get(7)?,
                 user_shell: json.as_deref().and_then(UserShellRecord::from_json),
+                subagent_reports: None,
                 parts: Vec::new(),
                 tools: Vec::new(),
             })

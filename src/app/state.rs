@@ -24,16 +24,17 @@ pub mod workspace;
 
 pub use lx::LxInputMode;
 pub use lx::{
-    AskAnsweredView, AskDetailView, AskEditor, AskHit, AskState, AskWheelZone, AssistantStepView,
-    CardSection, CardTarget, ChatMessageView, ChatPartView, CommandView, CompactNoticeView,
+    AgentsState, AskAnsweredView, AskDetailView, AskEditor, AskHit, AskState, AskWheelZone,
+    AssistantStepView, CardSection, CardTarget, ChatMessageView, ChatPartView, CommandView,
+    CompactNoticeView,
     DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, FrozenModel,
     HistoryEntry, HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat, LxCompact, LxEntry,
     ModelCandidate, ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, PendingShell,
     PlanSnapshotView, PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView,
     QueuedSubmission, RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView,
     RewindPanel, RewindTarget, RewindTargetKind, SHELL_SLOT, SlashCommand, SlashPanel,
-    SnapshotState, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary,
-    UserShellView,
+    SnapshotState, SubagentDetailView, SubagentReportView, SubagentRun, TaskPage, TaskTab,
+    ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};

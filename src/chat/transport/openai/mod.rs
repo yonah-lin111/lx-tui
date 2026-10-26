@@ -59,8 +59,8 @@ pub fn build(
         "stream_options": {"include_usage": true},
     });
     // 摘要请求不声明工具：模型无从发起调用，也不会把压缩结果写成工具调用。
-    if request.includes_tools() {
-        body["tools"] = openai_chat_tools();
+    if let Some(surface) = request.tools_surface() {
+        body["tools"] = openai_chat_tools(surface);
     }
     if let Some(params) = &request.variant_params {
         // 已知 variant 字段（reasoningEffort 等）映射为协议字段；不伪造等级。
@@ -78,7 +78,7 @@ pub fn build(
         url,
         headers: vec![("Authorization".into(), format!("Bearer {key}"))],
         body: serde_json::to_string(&body).map_err(|error| format!("encode body: {error}"))?,
-        tools_requested: request.includes_tools(),
+        tools_requested: request.tools_surface().is_some(),
     })
 }
 

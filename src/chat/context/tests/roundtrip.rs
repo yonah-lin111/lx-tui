@@ -72,7 +72,8 @@ fn view(
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-    }
+            reports: Vec::new(),
+}
 }
 
 /// 视图 → DB 记录 → `assemble`：call/result 与视图一致，position 保持。

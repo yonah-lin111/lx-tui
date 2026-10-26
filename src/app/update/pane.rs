@@ -993,6 +993,15 @@ fn task_output_delta(command: LxInput) -> Option<isize> {
     }
 }
 
+/// 当前 tab 的条目数（进程或子 agent）。
+fn task_active_len(state: &AppState, pane: PaneId) -> usize {
+    state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.task.as_ref().map(|page| (page, &target.lx.agents)))
+        .map(|(page, agents)| page.len(agents))
+        .unwrap_or(0)
+}
+
 fn apply_task_page_input(state: &mut AppState, pane: PaneId, command: LxInput) {
     // `PageUp`/`PageDown`：翻输出区（`↑`/`↓` 已经归任务列表高亮）。
     if let Some(delta) = task_output_delta(command) {
@@ -1015,20 +1024,23 @@ fn apply_task_page_input(state: &mut AppState, pane: PaneId, command: LxInput) {
         // 矩形，两者不可能同时可见，所以没有"切焦点"的中间态；草稿、光标、历史滚动
         // 本来就没被销毁，关掉即原样恢复。
         LxInput::Up => {
+            // 条目数先取好：随后要同时可变借窗格（`move_active_len` 不再借 `state`）。
+            let len = task_active_len(state, pane);
             let moved = state
                 .pane_mut_anywhere(pane)
                 .and_then(|target| target.lx.task.as_mut())
-                .is_some_and(|page| page.move_active(-1));
+                .is_some_and(|page| page.move_active_len(len, -1));
             if !moved {
                 super::chat::close_task_page(state, pane);
             }
         }
         LxInput::Down => {
+            let len = task_active_len(state, pane);
             if let Some(page) = state
                 .pane_mut_anywhere(pane)
                 .and_then(|target| target.lx.task.as_mut())
             {
-                page.move_active(1);
+                page.move_active_len(len, 1);
             }
         }
         // ←/→ 换 tab（对齐 opencode composer 的左右切 tab）。

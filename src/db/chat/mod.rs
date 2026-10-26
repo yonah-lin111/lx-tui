@@ -7,6 +7,7 @@
 mod compact;
 mod process;
 pub mod rewind;
+mod subagent;
 mod tools;
 mod user_shell;
 
@@ -15,6 +16,7 @@ pub use compact::{
     CompactRevert,
 };
 pub use process::{NewProcess, OutputSnapshot, ProcessFinish, ProcessRecord};
+pub use subagent::{ReportPayload, SubagentCommitted, SubagentRecord};
 pub use rewind::{
     FileAvailability, ImageRecord, ImageWrite, LatestTurn, NoticeRecord, ObservedWrite,
     OperationRecord, PathMutationWrite, PreparedTicket, RestorePath, RestorePlan, RewindCommit,
@@ -77,6 +79,8 @@ pub struct ChatMessage {
     pub completed_at_ms: Option<i64>,
     /// 本地命令的完整执行事实（仅 `kind == "user_shell"`）。
     pub user_shell: Option<UserShellRecord>,
+    /// 子 agent 汇报（仅报告行非空）；原始 `subagent_report_json`。
+    pub subagent_reports: Option<String>,
     /// 有序内容块（text / reasoning 交错保持原始顺序）。
     pub parts: Vec<ChatPart>,
     /// 该消息的工具调用（按 `(message_id, position)` 有序）；用户消息恒为空。
@@ -171,7 +175,7 @@ impl Database {
             r#"SELECT external_id, title, first_user_message, model_provider, model_id, variant,
                       status, updated_at_ms, last_message_at_ms, total_input_tokens, total_output_tokens
                FROM agent_session
-               WHERE workspace_id = ?1
+               WHERE workspace_id = ?1 AND source = 'native'
                ORDER BY updated_at_ms DESC, id DESC
                LIMIT ?2 OFFSET ?3"#,
         )?;
@@ -221,12 +225,13 @@ impl Database {
             r#"SELECT external_id, sequence, turn_index, role, status, model_provider, model_id,
                       variant, stop_reason, error_code, input_tokens, output_tokens,
                       cache_read_tokens, cache_write_tokens, created_at_ms, completed_at_ms,
-                      kind, user_shell_json
+                      kind, user_shell_json, subagent_report_json
                FROM agent_message WHERE session_id = ?1 ORDER BY sequence"#,
         )?;
         let mut messages: Vec<ChatMessage> = statement
             .query_map(params![session_id], |row| {
                 let json: Option<String> = row.get(17)?;
+                let subagent_reports: Option<String> = row.get(18)?;
                 Ok(ChatMessage {
                     external_id: row.get(0)?,
                     sequence: row.get(1)?,
@@ -246,6 +251,7 @@ impl Database {
                     created_at_ms: row.get(14)?,
                     completed_at_ms: row.get(15)?,
                     user_shell: json.as_deref().and_then(UserShellRecord::from_json),
+                    subagent_reports,
                     parts: Vec::new(),
                     tools: Vec::new(),
                 })
@@ -597,18 +603,36 @@ impl Database {
         Ok(())
     }
 
-    /// 删除会话：双条件校验后级联删除消息/parts/工具/子 Agent 关系。
+    /// 删除会话：双条件校验后级联删除消息/parts/工具/子 Agent 关系与子会话。
+    ///
+    /// 子会话的 `agent_session` 行没有指向父会话的外键（它属于同一 workspace），
+    /// 只删父行会留下孤儿子会话；这里在同一事务里先删子会话（连带关系行与消息）。
     pub fn delete_chat_session(&self, workspace: &Path, session_id: &str) -> Result<()> {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
-        let updated = self.conn.execute(
+        let transaction = self.conn.unchecked_transaction()?;
+        let children: Vec<String> = {
+            let mut statement = transaction.prepare(
+                "SELECT child_session_id FROM agent_subagent WHERE parent_session_id = ?1",
+            )?;
+            let rows = statement.query_map(params![session_id], |row| row.get(0))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for child in children {
+            transaction.execute(
+                "DELETE FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
+                params![child, workspace_external],
+            )?;
+        }
+        let updated = transaction.execute(
             "DELETE FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
             params![session_id, workspace_external],
         )?;
         if updated == 0 {
             return Err(DbError::SessionMissing);
         }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -899,6 +923,7 @@ pub fn chat_message_views_to_db(
             created_at_ms: 0,
             completed_at_ms: None,
             user_shell: message.shell.as_ref().map(user_shell_record_of),
+            subagent_reports: None,
             parts: chat_message_part_views(message),
             tools: chat_message_tool_views(message),
         })

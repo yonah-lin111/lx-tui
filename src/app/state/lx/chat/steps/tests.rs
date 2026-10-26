@@ -37,7 +37,8 @@ fn assistant() -> ChatMessageView {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-    }
+            reports: Vec::new(),
+}
 }
 
 #[test]

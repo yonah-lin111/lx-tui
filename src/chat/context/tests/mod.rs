@@ -43,6 +43,7 @@ fn message(
         created_at_ms: 0,
         completed_at_ms: None,
         user_shell: None,
+        subagent_reports: None,
         parts: vec![part(0, "text", text)],
         tools: Vec::new(),
     }

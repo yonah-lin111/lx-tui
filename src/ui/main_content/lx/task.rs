@@ -507,3 +507,19 @@ fn clip(value: &str, max: u16) -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// Agents 详情区的 `(可见行数, 总行数)`；该页留在 UI 阶段实现（此处先给几何）。
+///
+/// 总行数暂取状态里的回写值：滚动上限在渲染阶段由历史快照写回同一字段。
+pub(super) fn agents_rows(
+    area: Rect,
+    lx: &crate::app::state::Lx,
+) -> Option<(usize, usize)> {
+    let page = lx.task.as_ref()?;
+    if page.tab != TaskTab::Agents {
+        return None;
+    }
+    let rect = super::layout(area, lx).task_output?;
+    let run = lx.agents.runs.get(page.agents_window.active)?;
+    Some((usize::from(rect.height), run.total_rows))
+}

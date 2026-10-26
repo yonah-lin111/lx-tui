@@ -192,6 +192,22 @@ pub enum Effect {
         /// 模型见过的进程会话 ID。
         process_session_id: u64,
     },
+    /// 列出父会话的 subagent 元数据（打开 Agents 页签 / 刷新）。
+    ListSubagents {
+        pane: crate::layout::PaneId,
+        parent_session: String,
+    },
+    /// 懒加载某个 subagent 的完整消息流。
+    LoadSubagentSession {
+        pane: crate::layout::PaneId,
+        agent_id: String,
+        child_session: String,
+    },
+    /// 停止高亮的 subagent（`^d`）。
+    StopSubagent {
+        pane: crate::layout::PaneId,
+        agent_id: String,
+    },
     /// 加载单个会话及有序消息（恢复旧会话）。
     LoadChatSession {
         pane: crate::layout::PaneId,

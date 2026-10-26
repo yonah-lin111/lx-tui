@@ -567,7 +567,8 @@ impl ToolCallView {
             super::tool_view::ToolDetailView::Interaction(view) => Some(view.process_session_id),
             super::tool_view::ToolDetailView::Plan(_)
             | super::tool_view::ToolDetailView::File(_)
-            | super::tool_view::ToolDetailView::Ask(_) => None,
+            | super::tool_view::ToolDetailView::Ask(_)
+            | super::tool_view::ToolDetailView::Subagent(_) => None,
         }
     }
 
@@ -696,6 +697,8 @@ pub struct ChatMessageView {
     pub cache_read_tokens: Option<i64>,
     /// 该轮耗时（毫秒；未完成或时间戳缺失为 None）。
     pub duration_ms: Option<i64>,
+    /// 子 agent 汇报（仅报告行非空；损坏 JSON 按空集合处理）。
+    pub reports: Vec<crate::chat::agent::SubagentReportView>,
 }
 
 impl ChatMessageView {

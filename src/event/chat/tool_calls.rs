@@ -19,6 +19,10 @@ pub(crate) fn begin_tool(
     call: ReadyToolCall,
     reply: oneshot::Sender<Result<ToolCallTicket, HostError>>,
 ) -> bool {
+    // 子 agent 的握手不查窗格（决策 14）：子会话有自己的句柄与 assistant 锚点。
+    if streams.subagents.contains_key(&key.session) {
+        return super::subagent::begin_child_tool(state, streams, persistence, key, call, reply);
+    }
     // 归属校验：旧 generation / 窗格关闭 / 会话切换一律不执行文件 IO。
     let Some(assistant_id) = active_assistant_id(state, &key) else {
         let _ = reply.send(Err(HostError::Cancelled));
@@ -172,13 +176,18 @@ pub(crate) fn cancel_pending(
 /// FinishTool：真实结果原子落库 → 状态终态 + 摘要 → 回执。
 pub(crate) fn finish_tool(
     state: &mut AppState,
-    streams: &ChatStreams,
+    streams: &mut ChatStreams,
     persistence: &Persistence,
     key: RequestKey,
     ticket: &ToolCallTicket,
     outcome: ToolOutcome,
     reply: oneshot::Sender<Result<(), HostError>>,
 ) -> bool {
+    if streams.subagents.contains_key(&key.session) {
+        return super::subagent::finish_child_tool(
+            state, streams, persistence, key, ticket, outcome, reply,
+        );
+    }
     let Some(workspace) = streams.db_workspaces.get(&key).cloned() else {
         let _ = reply.send(Err(HostError::Cancelled));
         return false;
@@ -201,12 +210,13 @@ pub(crate) fn finish_tool(
                 result.result_json.clone(),
                 error,
             );
-            // ②b 类型化详情（进程/计划/文件）：与落库结果体同源，渲染层不解析 JSON。
+            // ②b 类型化详情（进程/计划/文件/子 agent）：与落库结果体同源。
+            let arguments = tool_arguments(state, &key, &ticket.call_id);
             changed |= update::settle_tool_detail(
                 state,
                 &key,
                 &ticket.call_id,
-                detail_of(&outcome, settled_result_json.as_deref()),
+                detail_of(&outcome, settled_result_json.as_deref(), arguments.as_deref()),
             );
             // ②b1 进程工具结算后按**运行实例的真实状态**再校正一次。
             //
@@ -301,9 +311,10 @@ fn register_process_record(
 ///
 /// 文件详情必须从**刚落库的 result_json** 解码（不是原始执行结果）：实时与历史
 /// 因此读的是同一份经过预算裁切的正文。
-fn detail_of(
+pub(crate) fn detail_of(
     outcome: &ToolOutcome,
     result_json: Option<&str>,
+    arguments_json: Option<&str>,
 ) -> Option<crate::app::state::ToolDetailView> {
     let ToolOutcome::Executed(execution) = outcome else {
         return None;
@@ -323,12 +334,13 @@ fn detail_of(
         | ToolExecutionResult::Failed { .. } => {
             crate::app::state::ToolDetailView::file_detail(result_json)
         }
+        // 子 agent 详情由 app 层从结果 JSON 解析（与历史恢复同一路径）。
         _ => None,
     }
 }
 
 /// 工具执行结局 → DB 结算记录（取消不带结果体，失败与成功都带规范化 JSON）。
-fn db_result_of(outcome: &ToolOutcome) -> ToolCallResult {
+pub(crate) fn db_result_of(outcome: &ToolOutcome) -> ToolCallResult {
     match outcome {
         ToolOutcome::Cancelled => ToolCallResult {
             status: ToolTerminalStatus::Cancelled,
@@ -348,7 +360,7 @@ fn db_result_of(outcome: &ToolOutcome) -> ToolCallResult {
 }
 
 /// 工具执行结局 → 视图状态 + 摘要 + 错误码。
-fn view_settlement(
+pub(crate) fn view_settlement(
     outcome: &ToolOutcome,
 ) -> (
     crate::app::state::ToolStatus,
@@ -391,6 +403,22 @@ pub(crate) fn view_summary(
         simplified: summary.simplified,
         omitted_files: summary.omitted_files,
     }
+}
+
+/// 当前窗格消息里某次调用的参数 JSON（实时结算构造类型化详情用）。
+pub(crate) fn tool_arguments(
+    state: &AppState,
+    key: &RequestKey,
+    call_id: &str,
+) -> Option<String> {
+    state
+        .pane_anywhere(key.pane)?
+        .lx
+        .chat
+        .messages
+        .iter()
+        .rev()
+        .find_map(|message| message.tool(call_id).map(|call| call.arguments_json.clone()))
 }
 
 /// 失败原因（给模型与 UI 的精简单行；不含文件内容与命令输出）。

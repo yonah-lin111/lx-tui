@@ -98,6 +98,21 @@ pub enum AppEvent {
     ///
     /// 事件层在 **DB 与状态都就绪后**才回执，因此 loop 拿到 ticket 才执行文件 IO。
     AgentHost(chat::AgentHostEvent),
+    /// 子 agent 轮次终态（需要 DB，回投事件循环结算）。
+    SubagentFinished {
+        key: crate::app::state::RequestKey,
+        reason: crate::chat::events::StopReason,
+        usage: crate::db::chat::Usage,
+    },
+    /// 子 agent `wait_agent` 到期：事件层读库结算并回执。
+    SubagentWaitReady {
+        key: crate::app::state::RequestKey,
+        targets: Vec<String>,
+        timed_out: bool,
+        reply: tokio::sync::oneshot::Sender<
+            Result<crate::chat::agent::SubagentOutcome, crate::chat::agent_loop::HostError>,
+        >,
+    },
     /// 会话运行实例被回收（切会话 / `/new` / 关窗格）后，其进程的终态快照。
     ///
     /// 停止发生在后台任务里，而 `Persistence` 不跨线程：终态必须回投事件层落库，
@@ -224,6 +239,7 @@ async fn run_loop(
     // 进程 UI 事件走独立通道：它们不携带请求代次，只按进程会话 ID 过滤归属。
     let (process_sender, mut process_receiver) = mpsc::unbounded_channel::<ProcessUiEvent>();
     chat_streams.set_process_sender(process_sender);
+    chat_streams.set_event_sender(sender.clone());
     commands::seed_git_requests(state);
 
     while !state.should_quit {
@@ -307,6 +323,10 @@ async fn run_loop(
         }
         // 后台任务页的列表与停止：进程句柄只在运行实例里，由事件层执行。
         if chat::apply_process_effects(state, &mut chat_streams) {
+            dirty = true;
+        }
+        // 子 agent 面板的列表、懒加载与停止。
+        if chat::apply_subagent_effects(state, &mut chat_streams, persistence) {
             dirty = true;
         }
         // 底部状态行的后台任务计数：与页面是否打开无关，每轮同步。
@@ -394,6 +414,8 @@ async fn run_loop(
             update::resolve_lx_history(state, &geometry.rects, &mut ui_cache);
             // 后台任务面板的输出可见行数：同上，供翻页与滚动条几何钳制。
             update::resolve_task_output_visible(state, &geometry.rects);
+            // Agents 详情区可见行数：与上一条同款。
+            update::resolve_task_agents_visible(state, &geometry.rects);
             // ask 预览区可见行数：同上，保证短预览滚不出空白。
             update::resolve_ask_preview_visible(state, &geometry.rects);
             // Todo 列表可见行数：本帧紧接着绘制，钳制结果直接生效，无需再置脏。
@@ -651,6 +673,19 @@ fn handle_app_event(
         AppEvent::AgentHost(event) => {
             // 工具调用握手：DB 落库门槛 → 状态 → 回执 ticket（顺序不可交换）。
             chat::handle_agent_host_event(state, chat_streams, persistence, event);
+        }
+        AppEvent::SubagentFinished { key, reason, usage } => {
+            chat::finish_subagent(state, chat_streams, persistence, key, reason, usage);
+        }
+        AppEvent::SubagentWaitReady {
+            key,
+            targets,
+            timed_out,
+            reply,
+        } => {
+            chat::handle_subagent_wait_ready(
+                chat_streams, persistence, key, targets, timed_out, reply,
+            );
         }
         AppEvent::CompactFinished {
             pane,

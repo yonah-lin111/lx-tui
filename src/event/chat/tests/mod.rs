@@ -484,6 +484,9 @@ fn pump(
                 AgentHostEvent::AskUser { .. } => {
                     // ask 的 UI 挂起与回执由后续阶段接入（本阶段事件层直接回取消）。
                 }
+                AgentHostEvent::Subagent { .. } => {
+                    // 子 agent 不在这些用例的覆盖范围（需要真实 DB 与运行时）。
+                }
                 AgentHostEvent::BeginTool { call, .. } => trace
                     .lock()
                     .expect("lock")

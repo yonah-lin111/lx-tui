@@ -61,6 +61,7 @@ pub fn format_for_model(result: &ToolExecutionResult) -> String {
         ToolExecutionResult::Process(result) => format_process(result),
         ToolExecutionResult::Plan(snapshot) => format_plan(snapshot),
         ToolExecutionResult::Ask { questions } => format_ask(questions),
+        ToolExecutionResult::Subagent(outcome) => format_subagent(outcome),
         ToolExecutionResult::Failed {
             code,
             message,
@@ -182,6 +183,45 @@ fn format_plan(snapshot: &crate::chat::plan::PlanSnapshot) -> String {
         text.push_str(&format!("note: {explanation}\n"));
     }
     text
+}
+
+/// 子 agent 控制工具的结果文本（模型可见，英文）。
+///
+/// 报告正文只在本次领取到时出现一次；`wait_agent` 超时不是错误。
+fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
+    use crate::chat::agent::SubagentOutcome;
+    match outcome {
+        SubagentOutcome::Spawned { agent_id, role } => format!(
+            "Spawned subagent `{agent_id}` ({}). It runs in the background; use `wait_agent` \
+             when you need its result.\n",
+            role.as_str()
+        ),
+        SubagentOutcome::Waited { timed_out, agents } => {
+            let mut text = format!("timed_out: {timed_out}\n");
+            for agent in agents {
+                text.push_str(&format!(
+                    "- agent_id={} role={} status={}\n",
+                    agent.agent_id,
+                    agent.role.as_str(),
+                    agent.status
+                ));
+                if let Some(report) = &agent.report {
+                    text.push_str("report:\n");
+                    text.push_str(report);
+                    if !report.ends_with('\n') {
+                        text.push('\n');
+                    }
+                }
+            }
+            text
+        }
+        SubagentOutcome::Closed {
+            agent_id,
+            previous_status,
+        } => format!(
+            "Closed subagent `{agent_id}` (was {previous_status}). It produced no report.\n"
+        ),
+    }
 }
 
 /// `ask` 的文本表示：与 codex 同构的 `{"answers":{"<id>":{"answers":[...]}}}`。
@@ -432,7 +472,8 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
         // 不塞进文件摘要里：摘要只描述“哪个文件、多少行”，进程/计划没有这个形状。
         ToolExecutionResult::Process(_)
         | ToolExecutionResult::Plan(_)
-        | ToolExecutionResult::Ask { .. } => ToolSummary::default(),
+        | ToolExecutionResult::Ask { .. }
+        | ToolExecutionResult::Subagent(_) => ToolSummary::default(),
     }
 }
 
@@ -520,6 +561,7 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
         } => file::failure_json(*code, message, changes),
         ToolExecutionResult::Process(result) => result.to_json(),
         ToolExecutionResult::Plan(snapshot) => snapshot.to_json(),
+        ToolExecutionResult::Subagent(outcome) => outcome.to_json(),
         ToolExecutionResult::Ask { questions } => json!({
             "tool": "ask",
             "questions": questions

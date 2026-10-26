@@ -366,6 +366,7 @@ mod tests {
             created_at_ms: 0,
             completed_at_ms: None,
             user_shell: None,
+            subagent_reports: None,
             parts: vec![ChatPart {
                 position: 0,
                 kind: "text".into(),

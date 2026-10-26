@@ -182,6 +182,43 @@ pub fn resolve_task_output_visible(
     changed
 }
 
+/// 每轮把 Agents 详情区的可见行数与总行数落状态（翻页/滚动条几何用）。
+pub fn resolve_task_agents_visible(
+    state: &mut AppState,
+    rects: &[(PaneId, ratatui::layout::Rect)],
+) -> bool {
+    let mut changed = false;
+    for (pane, rect) in rects {
+        let inner = crate::layout::pane_inner_rect(*rect);
+        let Some((visible, total)) = state
+            .pane_anywhere(*pane)
+            .filter(|target| target.view == crate::app::state::PaneView::Lx)
+            .and_then(|target| {
+                crate::ui::main_content::lx::task_agents_rows(inner, &target.lx)
+            })
+        else {
+            continue;
+        };
+        let Some(target) = state.pane_mut_anywhere(*pane) else {
+            continue;
+        };
+        let Some(page) = target.lx.task.as_mut() else {
+            continue;
+        };
+        let Some(run) = target.lx.agents.runs.get_mut(page.agents_window.active) else {
+            continue;
+        };
+        if run.visible != visible || run.total_rows != total {
+            run.visible = visible;
+            run.total_rows = total;
+            let max = total.saturating_sub(visible);
+            run.scroll = if run.follow { max } else { run.scroll.min(max) };
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// 每轮把 `ask` 预览区的可见行数落状态（滚动上限钳制用）。
 ///
 /// 与 [`resolve_task_output_visible`] 同款：渲染层只读，几何由事件循环在绘制前写入，

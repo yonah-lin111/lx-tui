@@ -655,6 +655,35 @@ impl Database {
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
         }
+        if version < 16 {
+            // 只加列：subagent 报告与报告行标记。不重建任何表；`column_exists` 守卫
+            // 让重复迁移幂等（旧库可能已被更早的二进制补过其中一列）。
+            let transaction = self.conn.unchecked_transaction()?;
+            for (table, column, ddl) in [
+                (
+                    "agent_subagent",
+                    "report_json",
+                    "ALTER TABLE agent_subagent ADD COLUMN report_json TEXT;",
+                ),
+                (
+                    "agent_subagent",
+                    "report_delivered",
+                    "ALTER TABLE agent_subagent ADD COLUMN report_delivered INTEGER NOT NULL DEFAULT 0;",
+                ),
+                (
+                    "agent_message",
+                    "subagent_report_json",
+                    "ALTER TABLE agent_message ADD COLUMN subagent_report_json TEXT;",
+                ),
+            ] {
+                if !column_exists(&transaction, table, column)? {
+                    transaction.execute_batch(ddl)?;
+                }
+            }
+            ensure_no_foreign_key_violation(&transaction)?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.commit()?;
+        }
         Ok(())
     }
 

@@ -56,7 +56,8 @@ fn message(role: &str, parts: Vec<ChatPartView>, turn: i64) -> ChatMessageView {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-    }
+            reports: Vec::new(),
+}
 }
 
 /// 一条足够长的历史：每轮"问题 + 思考 + 回答"，滚到底时视口里必有多块思考。

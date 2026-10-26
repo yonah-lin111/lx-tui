@@ -17,6 +17,7 @@ mod file_snapshots;
 mod host;
 mod process_events;
 pub mod rewind;
+mod subagent;
 pub mod runtime;
 mod timeline;
 mod tool_calls;
@@ -66,6 +67,9 @@ pub use host::{
     AgentHostEvent, BEGIN_TOOL_FAILED_CODE, FINISH_TOOL_FAILED_CODE, RUNNING_TOOL_FAILED_CODE,
 };
 pub use rewind::{RewindOutcome, apply_rewind_effects, handle_rewind_finished};
+pub(crate) use subagent::{
+    apply_subagent_effects, finish_subagent, handle_subagent_net_event, handle_subagent_wait_ready,
+};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -119,6 +123,8 @@ pub struct ChatStreams {
     pub(crate) runtimes: runtime::ProcessRuntimes,
     /// 进程 UI 事件通道（由事件循环在启动时注入）。
     process_sender: Option<mpsc::UnboundedSender<ProcessUiEvent>>,
+    /// 应用事件通道（子 agent 的异步等待与终态回投用）。
+    event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
     /// 每进程上次输出快照落库时刻（限流合并）。
     process_snapshot_at: HashMap<u64, std::time::Instant>,
     /// 在途本地命令（DB 预登记后、真实进程退出前）。
@@ -127,6 +133,10 @@ pub struct ChatStreams {
     pub(crate) user_shell_injected: HashMap<RequestKey, user_shell::ShellInjectionState>,
     /// 每轮最多一个挂起的 `ask` 提问（loop 串行）；回执通道的唯一持有者。
     pub(crate) asks: HashMap<RequestKey, PendingAsk>,
+    /// 子 agent 句柄：`child_session_id -> handle`。
+    pub(crate) subagents: HashMap<String, subagent::SubagentHandle>,
+    /// spawn 时冻结的模型（父会话与子会话各登记一份）。
+    pub(crate) frozen: HashMap<String, crate::app::state::FrozenModel>,
 }
 
 /// 一次等待作答的提问：回执通道 + 归属用的 `call_id`。
@@ -158,6 +168,11 @@ impl ChatStreams {
     /// 注入进程 UI 事件通道（由事件循环在启动时调用一次）。
     pub fn set_process_sender(&mut self, sender: mpsc::UnboundedSender<ProcessUiEvent>) {
         self.process_sender = Some(sender);
+    }
+
+    /// 注入应用事件通道（子 agent 的异步等待与终态回投用）。
+    pub fn set_event_sender(&mut self, sender: mpsc::UnboundedSender<AppEvent>) {
+        self.event_sender = Some(sender);
     }
 
     /// 该进程本次输出快照是否到落库时间（每进程最多一个待合并快照）。
@@ -236,6 +251,9 @@ impl ChatStreams {
         self.guards.remove(key);
         self.user_shell_injected.remove(key);
         self.pending_begins.retain(|pending| &pending.key != key);
+        // 子轮结束：句柄与冻结模型一起移除；主轮 key 不受影响（session 不同）。
+        self.subagents.remove(&key.session);
+        self.frozen.remove(&key.session);
         // 只丢弃该轮执行上下文；进程留给会话（正常结束一轮不清理服务）。
         self.runtimes
             .finish_turn(&key.session, &key.generation.to_string());
@@ -322,7 +340,7 @@ pub fn pump_chat_streams(
     for effect in effects {
         match effect {
             Effect::StartChatStream { key, assistant_id } => {
-                changed |= start_stream(state, streams, sender, key, assistant_id);
+                changed |= start_stream(state, streams, sender, persistence, key, assistant_id);
             }
             Effect::CancelChatStream { key } => {
                 // loop 在下一个检查点停止未开始的工具与后续采样。
@@ -448,6 +466,9 @@ fn reap_stale_streams(
     let stale: Vec<RequestKey> = streams
         .cancels
         .keys()
+        // 子 agent 的 key 没有对应的主窗格请求，但它有自己的句柄与生命周期；
+        // 不能被「窗格里没有这个在途 assistant」这条规则误杀。
+        .filter(|key| !streams.subagents.contains_key(&key.session))
         .filter(|key| active_assistant_id(state, key).is_none())
         .cloned()
         .collect();
@@ -760,6 +781,15 @@ fn reap_orphan_runtimes(
         .filter_map(|pane| state.pane_anywhere(pane))
         .filter_map(|pane| pane.lx.chat.session_id.clone())
         .collect();
+    // 运行中的子会话同样「有主」：否则它的一轮工具进程会被下一次 sweep 杀掉。
+    let mut bound = bound;
+    bound.extend(
+        streams
+            .subagents
+            .iter()
+            .filter(|(_, handle)| handle.status == subagent::STATUS_RUNNING)
+            .map(|(session, _)| session.clone()),
+    );
     let orphans: Vec<String> = streams
         .runtimes
         .sessions()
@@ -874,6 +904,7 @@ fn start_stream(
     state: &mut AppState,
     streams: &mut ChatStreams,
     sender: &mpsc::UnboundedSender<AppEvent>,
+    persistence: &Persistence,
     key: RequestKey,
     _assistant_id: String,
 ) -> bool {
@@ -978,6 +1009,8 @@ fn start_stream(
     streams
         .db_workspaces
         .insert(key.clone(), session_key.clone());
+    // spawn 时冻结的模型：父会话登记一份，子 agent 从这里取。
+    streams.frozen.insert(key.session.clone(), frozen.clone());
     // 运行实例：同一聊天会话跨轮复用同一进程管理器；本轮执行上下文独立。
     let turn_slot = key.session.clone();
     let Some(runtime) = streams.runtime_for(prepared.cwd.clone(), &turn_slot) else {
@@ -1002,7 +1035,7 @@ fn start_stream(
     };
     let recorder = file_snapshots::HostRecorderFactory::new(
         sender.clone(),
-        session_key,
+        session_key.clone(),
         key.session.clone(),
         user_message_id,
     );
@@ -1011,8 +1044,25 @@ fn start_stream(
     let executor = AgentTools::new(runtime.manager.clone(), turn)
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads);
-    // 本地运行上下文：存活进程清单 + 当前计划（有界，避免历史裁剪后模型忘记 session_id）。
-    let summary = runtime_context_summary(runtime.manager.as_ref(), &current_plan);
+    // 本地运行上下文：存活进程 + 当前计划 + 在册子 agent + 未投递报告。
+    let mut summary = runtime_context_summary(runtime.manager.as_ref(), &current_plan);
+    let subagent_lines = subagent::running_subagent_lines(streams, &key.session);
+    if !subagent_lines.is_empty() {
+        let mut text = summary.unwrap_or_default();
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&subagent_lines.join("\n"));
+        summary = Some(text);
+    }
+    if let Some(reports) = subagent::pending_report_summary(persistence, &key, &session_key) {
+        let mut text = summary.unwrap_or_default();
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(&reports);
+        summary = Some(text);
+    }
     prepared.context = prepared.context.with_runtime_summary(summary);
     let transport = frozen.transport.clone();
     let base_url = frozen.base_url.clone();
@@ -1190,6 +1240,12 @@ pub fn handle_net_event(
     streams: &mut ChatStreams,
     event: ChatNetEvent,
 ) -> bool {
+    // 子 agent 增量走独立分流：绝不进入主对话。
+    if let ChatNetEvent::Delta { key, .. } | ChatNetEvent::Finished { key, .. } = &event
+        && streams.subagents.contains_key(&key.session)
+    {
+        return handle_subagent_net_event(state, streams, event);
+    }
     match event {
         ChatNetEvent::Delta { key, deltas } => {
             // 累计字节：超过间隔或阈值时入队一次 checkpoint（合并写盘）。
@@ -1253,6 +1309,9 @@ pub fn handle_agent_host_event(
             let updates = user_shell::poll_updates(state, streams, persistence, &key);
             let _ = reply.send(updates);
             false
+        }
+        AgentHostEvent::Subagent { key, op, reply } => {
+            subagent::handle_subagent_op(state, streams, persistence, key, op, reply)
         }
     }
 }

@@ -186,6 +186,9 @@ async fn cancel_after_begin_ack_settles_cancelled_without_execution() {
                 AgentHostRequest::UserShellUpdates { reply } => {
                     let _ = reply.send(Vec::new());
                 }
+                AgentHostRequest::Subagent { reply, .. } => {
+                    let _ = reply.send(Err(HostError::Cancelled));
+                }
                 AgentHostRequest::BeginTool { call, reply } => {
                     self.trace
                         .lock()

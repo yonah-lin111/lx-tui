@@ -92,6 +92,9 @@ impl AgentHost for RecordingHost {
             AgentHostRequest::UserShellUpdates { reply } => {
                 let _ = reply.send(Vec::new());
             }
+            AgentHostRequest::Subagent { reply, .. } => {
+                let _ = reply.send(Err(HostError::Cancelled));
+            }
             AgentHostRequest::AskUser {
                 call_id,
                 questions,

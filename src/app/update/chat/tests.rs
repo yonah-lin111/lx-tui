@@ -617,6 +617,7 @@ fn session_loaded_rebuilds_view_and_selection() {
             turn_index: 0,
             kind: "chat".to_string(),
             user_shell: None,
+            subagent_reports: None,
             role: "user".into(),
             status: "complete".into(),
             model_provider: None,
@@ -647,6 +648,7 @@ fn session_loaded_rebuilds_view_and_selection() {
             turn_index: 0,
             kind: "chat".to_string(),
             user_shell: None,
+            subagent_reports: None,
             role: "assistant".into(),
             status: "interrupted".into(),
             model_provider: Some("p".into()),
@@ -791,7 +793,8 @@ fn append_stream_delta_merges_adjacent_same_kind() {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-    });
+            reports: Vec::new(),
+});
     chat.append_stream_delta(PartKind::Text, "a", None);
     chat.append_stream_delta(PartKind::Text, "b", None);
     chat.append_stream_delta(PartKind::Reasoning, "r", None);
@@ -824,7 +827,8 @@ fn signature_metadata_binds_to_reasoning_part() {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-    });
+            reports: Vec::new(),
+});
     chat.append_stream_delta(PartKind::Reasoning, "思考", None);
     // 空文本 + 签名元数据：绑定到相邻 reasoning part。
     chat.append_stream_delta(

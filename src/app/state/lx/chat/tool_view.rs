@@ -310,6 +310,129 @@ pub enum ToolDetailView {
     Plan(PlanSnapshotView),
     File(super::file_diff::FileDiffDetailView),
     Ask(AskDetailView),
+    Subagent(SubagentDetailView),
+}
+
+/// `spawn_agent` / `wait_agent` / `close_agent` 共用的详情（按 `name` 取标题）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentDetailView {
+    /// spawn 的角色。
+    pub role: Option<crate::chat::agent::AgentRole>,
+    /// spawn 的完整任务文本（展开显示）。
+    pub task: Option<String>,
+    /// spawn/close 的 agent id。
+    pub agent_id: Option<String>,
+    /// wait 的目标 id。
+    pub targets: Vec<String>,
+    /// wait 是否超时。
+    pub timed_out: bool,
+    /// wait 结算到的 agent 状态。
+    pub agents: Vec<crate::chat::agent::AgentStatusView>,
+    /// close 前的状态。
+    pub closed_status: Option<String>,
+}
+
+impl SubagentDetailView {
+    /// 由工具名 + 参数 + 落库结果 JSON 构造（实时结算与历史重载共用）。
+    pub fn from_tool(name: &str, arguments_json: &str, result_json: Option<&str>) -> Option<Self> {
+        let value: Value = serde_json::from_str(result_json?).ok()?;
+        Self::from_outcome_with_arguments(&value, Some((name, arguments_json)))
+    }
+
+    /// 由结果 JSON +（可选）调用参数构造。
+    pub fn from_outcome_with_arguments(
+        value: &Value,
+        arguments: Option<(&str, &str)>,
+    ) -> Option<Self> {
+        let mut view = Self::from_outcome_value(value)?;
+        let (name, arguments_json) =
+            arguments.or_else(|| Some((value.get("tool")?.as_str()?, "{}")))?;
+        if let Some(Ok(op)) = crate::chat::agent::parse_control(name, arguments_json) {
+            match op {
+                crate::chat::agent::SubagentOp::Spawn { role, task } => {
+                    view.role = Some(role);
+                    view.task = Some(task);
+                }
+                crate::chat::agent::SubagentOp::Wait { targets, .. } => {
+                    view.targets = targets;
+                }
+                crate::chat::agent::SubagentOp::Close { target } => {
+                    view.agent_id = Some(target);
+                }
+            }
+        }
+        Some(view)
+    }
+
+    /// 由落库结果 JSON 的形状构造（无参数侧信息）。
+    pub fn from_outcome_value(value: &Value) -> Option<Self> {
+        let mut view = Self {
+            role: None,
+            task: None,
+            agent_id: None,
+            targets: Vec::new(),
+            timed_out: false,
+            agents: Vec::new(),
+            closed_status: None,
+        };
+        match value.get("tool").and_then(Value::as_str)? {
+            "spawn_agent" => {
+                view.role = value
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .and_then(crate::chat::agent::AgentRole::parse);
+                view.agent_id = value
+                    .get("agent_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+            }
+            "wait_agent" => {
+                view.timed_out = value
+                    .get("timed_out")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if let Some(agents) = value.get("agents").and_then(Value::as_array) {
+                    for agent in agents {
+                        let Some(agent_id) = agent.get("agent_id").and_then(Value::as_str) else {
+                            continue;
+                        };
+                        let Some(role) = agent
+                            .get("role")
+                            .and_then(Value::as_str)
+                            .and_then(crate::chat::agent::AgentRole::parse)
+                        else {
+                            continue;
+                        };
+                        view.agents.push(crate::chat::agent::AgentStatusView {
+                            agent_id: agent_id.to_string(),
+                            role,
+                            status: agent
+                                .get("status")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            report: agent
+                                .get("report")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                        });
+                    }
+                }
+            }
+            "close_agent" => {
+                view.agent_id = value
+                    .get("agent_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                view.closed_status = value
+                    .get("previous_status")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+            }
+            _ => return None,
+        }
+        Some(view)
+    }
 }
 
 impl ToolDetailView {
@@ -437,6 +560,9 @@ impl ToolDetailView {
                 Some(Self::Plan(PlanSnapshotView::from_snapshot(&snapshot)))
             }
             "ask" => Some(Self::Ask(AskDetailView::from_value(&value)?)),
+            "spawn_agent" | "wait_agent" | "close_agent" => Some(Self::Subagent(
+                SubagentDetailView::from_outcome_value(&value)?,
+            )),
             _ => None,
         }
     }

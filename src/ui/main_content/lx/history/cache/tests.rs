@@ -48,7 +48,8 @@ fn message(id: &str, role: &str, status: &str, parts: Vec<ChatPartView>) -> Chat
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-    }
+            reports: Vec::new(),
+}
 }
 
 fn lx_with(messages: Vec<ChatMessageView>) -> Lx {

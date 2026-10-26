@@ -10,6 +10,7 @@
 
 use crate::ui::text;
 
+use super::agent::AgentsState;
 use super::slash::PanelWindow;
 
 /// 后台任务页的 tab（固定顺序，←/→ 轮转）。
@@ -61,14 +62,19 @@ impl ProcessEntry {
 
     /// 运行时长标签：`1m 30s` / `12s` / `2h 05m`（裸时长，前缀由调用方决定）。
     pub fn age_label(&self, now_ms: i64) -> String {
-        let seconds = self.elapsed_ms(now_ms) / 1_000;
-        if seconds < 60 {
-            format!("{seconds}s")
-        } else if seconds < 3_600 {
-            format!("{}m {:02}s", seconds / 60, seconds % 60)
-        } else {
-            format!("{}h {:02}m", seconds / 3_600, (seconds % 3_600) / 60)
-        }
+        age_label(self.elapsed_ms(now_ms))
+    }
+}
+
+/// 毫秒时长 → `12s` / `1m 30s` / `2h 05m`（进程与子 agent 共用一个口径）。
+pub(crate) fn age_label(elapsed_ms: i64) -> String {
+    let seconds = elapsed_ms / 1_000;
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3_600 {
+        format!("{}m {:02}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{}h {:02}m", seconds / 3_600, (seconds % 3_600) / 60)
     }
 }
 
@@ -101,20 +107,30 @@ pub struct TaskPage {
     /// 面板打开时历史区根本没画，因此**不**维护历史行数（那会白烧每帧一次
     /// markdown 排版，且没有任何读者）。
     pub output_visible: usize,
+    /// Agents 页签的窗口状态（与进程列表的 `window` 分开）。
+    pub agents_window: PanelWindow,
+    /// 一次性定位请求：选中该 agent_id 后清空。
+    pub selected_agent: Option<String>,
+    /// Agents 详情区滚动偏移（渲染回写）。
+    pub agents_scroll: usize,
+    /// Agents 详情区可见行数（事件循环在绘制前写入）。
+    pub agents_visible: usize,
+    /// 是否跟随 Agents 详情区底部（用户上翻即停）。
+    pub agents_follow: bool,
 }
 
 impl TaskPage {
-    /// 当前 tab 的条目数（`Agents` 阶段恒为 0：尚无数据来源）。
-    pub fn len(&self) -> usize {
+    /// 当前 tab 的条目数。
+    pub fn len(&self, agents: &AgentsState) -> usize {
         match self.tab {
             TaskTab::Processes => self.processes.len(),
-            TaskTab::Agents => 0,
+            TaskTab::Agents => agents.runs.len(),
         }
     }
 
     /// 当前 tab 是否没有条目。
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+    pub fn is_empty(&self, agents: &AgentsState) -> bool {
+        self.len(agents) == 0
     }
 
     /// 高亮当前的进程条目（`Processes` tab 且索引有效时）。
@@ -122,6 +138,35 @@ impl TaskPage {
         matches!(self.tab, TaskTab::Processes)
             .then(|| self.processes.get(self.window.active))
             .flatten()
+    }
+
+    /// 高亮当前的子 agent（`Agents` tab 且索引有效时）。
+    pub fn selected_agent<'a>(&self, agents: &'a AgentsState) -> Option<&'a super::agent::SubagentRun> {
+        matches!(self.tab, TaskTab::Agents)
+            .then(|| agents.runs.get(self.agents_window.active))
+            .flatten()
+    }
+
+    /// 当前 tab 的高亮窗口（进程 / 子 agent 各一份）。
+    fn active_window(&self) -> &PanelWindow {
+        match self.tab {
+            TaskTab::Processes => &self.window,
+            TaskTab::Agents => &self.agents_window,
+        }
+    }
+
+    /// 当前 tab 的高亮窗口（可变）。
+    fn active_window_mut(&mut self) -> &mut PanelWindow {
+        match self.tab {
+            TaskTab::Processes => &mut self.window,
+            TaskTab::Agents => &mut self.agents_window,
+        }
+    }
+
+    /// 按当前 tab 集合钳制高亮窗口。
+    pub fn clamp(&mut self, agents: &AgentsState) {
+        self.window.clamp(self.processes.len());
+        self.agents_window.clamp(agents.runs.len());
     }
 
     /// 切换 tab（←/→ 轮转），并钳制高亮。
@@ -159,21 +204,36 @@ impl TaskPage {
     /// 不循环是「↑ 在列表顶部回到输入框」的前提：面板要能分辨"上移成功"与
     /// "已经在顶部、无处可去"，后者才该退出面板。循环会把顶部再绕回底部，
     /// 用户永远退不出去。
-    pub fn move_active(&mut self, delta: isize) -> bool {
-        let len = self.len();
+    pub fn move_active(&mut self, agents: &AgentsState, delta: isize) -> bool {
+        let len = self.len(agents);
+        self.move_active_len(len, delta)
+    }
+
+    /// 已知条目数时移动高亮（避免在持有窗格可变借用时再借 `state`）。
+    pub fn move_active_len(&mut self, len: usize, delta: isize) -> bool {
         if len == 0 {
             return false;
         }
         let last = len - 1;
-        let next = (self.window.active as isize + delta).clamp(0, last as isize) as usize;
-        if next == self.window.active {
+        let active = self.active_window().active;
+        let next = (active as isize + delta).clamp(0, last as isize) as usize;
+        if next == active {
             return false;
         }
-        self.window.active = next;
-        self.window.anchor = next;
-        self.window.viewport = None;
-        // 换任务就把输出贴到尾部：用户点开/切到某条任务，关心的是它**最新**的输出。
-        self.pin_output_to_tail();
+        let tab = self.tab;
+        let window = self.active_window_mut();
+        window.active = next;
+        window.anchor = next;
+        window.viewport = None;
+        match tab {
+            // 换任务就把输出贴到尾部：用户点开/切到某条任务，关心的是它**最新**的输出。
+            TaskTab::Processes => self.pin_output_to_tail(),
+            // 子 agent 详情跟随最新消息，滚轮上翻后停跟。
+            TaskTab::Agents => {
+                self.agents_follow = true;
+                self.agents_scroll = usize::MAX;
+            }
+        }
         true
     }
 

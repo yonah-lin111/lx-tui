@@ -29,7 +29,8 @@ fn message_with(call: ToolCallView) -> ChatMessageView {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
-    }
+            reports: Vec::new(),
+}
 }
 
 /// 运行中的命令详情。

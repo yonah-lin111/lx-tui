@@ -20,7 +20,7 @@ pub use steps::{
 };
 pub use tool_view::{
     AskAnsweredView, AskDetailView, CommandView, InteractionAction, PlanSnapshotView, PlanStepView,
-    ProcessInteractionView, ProcessStateView, ToolDetailView,
+    ProcessInteractionView, ProcessStateView, SubagentDetailView, ToolDetailView,
 };
 
 /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。

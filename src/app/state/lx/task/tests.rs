@@ -1,5 +1,7 @@
 //! 后台任务页的状态模型：tab 轮转、高亮移动、列表替换与条目移除。
 
+use crate::app::state::lx::agent::AgentsState;
+
 use super::*;
 
 fn entry(session_id: u64) -> ProcessEntry {
@@ -23,8 +25,8 @@ fn page_with(count: u64) -> TaskPage {
 fn new_page_starts_on_the_processes_tab() {
     let page = TaskPage::default();
     assert_eq!(page.tab, TaskTab::Processes);
-    assert!(page.is_empty(), "初始没有进程");
-    assert_eq!(page.len(), 0);
+    assert!(page.is_empty(&AgentsState::default()), "初始没有进程");
+    assert_eq!(page.len(&AgentsState::default()), 0);
 }
 
 #[test]
@@ -44,8 +46,8 @@ fn agents_tab_is_empty_and_has_no_selection() {
     // 子代理 tab 本阶段是预留位：没有任何数据来源，长度恒为 0。
     let mut page = page_with(3);
     page.tab = TaskTab::Agents;
-    assert_eq!(page.len(), 0);
-    assert!(page.is_empty());
+    assert_eq!(page.len(&AgentsState::default()), 0);
+    assert!(page.is_empty(&AgentsState::default()));
     assert!(page.selected().is_none(), "预留 tab 没有可选项");
 }
 
@@ -63,17 +65,17 @@ fn move_active_stops_at_both_ends_and_reports_whether_it_moved() {
     // **不循环**是「↑ 在顶部回到输入框」的前提：面板要能分辨"上移成功"与
     // "已经在顶部、无处可去"，后者才该退出面板。
     let mut page = page_with(3);
-    assert!(!page.move_active(-1), "已在首项：上移不动，返回 false");
+    assert!(!page.move_active(&AgentsState::default(), -1), "已在首项：上移不动，返回 false");
     assert_eq!(page.window.active, 0);
-    assert!(page.move_active(1), "下移成功");
+    assert!(page.move_active(&AgentsState::default(), 1), "下移成功");
     assert_eq!(page.window.active, 1);
-    assert!(page.move_active(1), "再下移成功");
+    assert!(page.move_active(&AgentsState::default(), 1), "再下移成功");
     assert_eq!(page.window.active, 2, "钳在末项");
-    assert!(!page.move_active(1), "已在末项：下移不动，返回 false");
+    assert!(!page.move_active(&AgentsState::default(), 1), "已在末项：下移不动，返回 false");
 
     let mut empty = TaskPage::default();
-    assert!(!empty.move_active(1), "空列表不移动");
-    assert!(!empty.move_active(-1), "空列表不移动");
+    assert!(!empty.move_active(&AgentsState::default(), 1), "空列表不移动");
+    assert!(!empty.move_active(&AgentsState::default(), -1), "空列表不移动");
 }
 
 #[test]

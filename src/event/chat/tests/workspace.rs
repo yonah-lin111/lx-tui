@@ -42,6 +42,7 @@ async fn tool_pending_uses_session_workspace_not_execution_cwd() {
         &mut state,
         &mut streams,
         &sender,
+        &Persistence::without_database(),
         key.clone(),
         assistant_id
     ));

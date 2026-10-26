@@ -31,7 +31,7 @@ use crate::chat::events::{
     TOOL_ARGUMENTS_INVALID_CODE,
 };
 use crate::chat::tools::ask::{AskAnswers, AskQuestion};
-use crate::chat::tools::{self, ToolContext, ToolErrorCode, ToolExecutionResult};
+use crate::chat::tools::{self, ToolContext, ToolErrorCode, ToolExecutionResult, ToolFailure};
 use crate::chat::transport::tools::{TOOL_INPUT_TRUNCATED_CODE, TOOL_PROTOCOL_ERROR_CODE};
 use crate::db::chat::{ToolCallTicket, Usage};
 
@@ -128,6 +128,11 @@ pub enum AgentHostRequest {
     },
     /// 下一次采样前取已落库的本地命令结果（按提交序的连续终态前缀）。
     UserShellUpdates { reply: oneshot::Sender<Vec<String>> },
+    /// 子 agent 控制工具（spawn / wait / close）。
+    Subagent {
+        op: crate::chat::agent::SubagentOp,
+        reply: oneshot::Sender<Result<crate::chat::agent::SubagentOutcome, HostError>>,
+    },
 }
 
 /// loop 对事件层的依赖（持久化门槛 + 可见状态门槛）。
@@ -198,6 +203,24 @@ pub trait AgentHost: Send {
                 questions,
                 reply,
             });
+            match receiver.await {
+                Ok(result) => result,
+                Err(_) => Err(HostError::Cancelled),
+            }
+        }
+    }
+
+    /// 执行一次子 agent 控制操作；回执丢失（事件循环退出）等价于取消。
+    fn subagent(
+        &mut self,
+        op: crate::chat::agent::SubagentOp,
+    ) -> impl Future<Output = Result<crate::chat::agent::SubagentOutcome, HostError>> + Send
+    where
+        Self: Sized,
+    {
+        async move {
+            let (reply, receiver) = oneshot::channel();
+            self.send(AgentHostRequest::Subagent { op, reply });
             match receiver.await {
                 Ok(result) => result,
                 Err(_) => Err(HostError::Cancelled),
@@ -389,12 +412,22 @@ impl ModelContext {
             items: self.items.clone(),
             model: self.request.model.clone(),
             variant_params: self.request.variant_params.clone(),
-            purpose: crate::chat::events::RequestPurpose::Chat,
+            // 用途随轮次冻结：子 agent 的请求必须保持 `Subagent(role)`，
+            // 否则第二次采样会重新声明主工具面（模型就能越权 spawn）。
+            purpose: self.request.purpose,
             // 系统提示在 turn 创建时冻结（稳定提示 + 环境快照 + compact 摘要）。
             // 每次采样都必须原样复用：写成 None 会让 transport 现场重采集，
             // 丢摘要且同一轮看到不同环境。
             system_prompt: self.request.system_prompt.clone(),
         }
+    }
+
+    /// 本轮是否为子 agent（禁止递归控制工具）。
+    pub fn is_subagent(&self) -> bool {
+        matches!(
+            self.request.purpose,
+            crate::chat::events::RequestPurpose::Subagent(_)
+        )
     }
 
     /// 运行上下文摘要（诊断与测试用）。
@@ -557,7 +590,30 @@ where
             //
             // `ask` 不经过文件执行器：它把提问交给 UI 并**阻塞**等待作答，答案即工具结果。
             // 参数非法时整次拒绝、不打扰用户，按普通工具失败回给模型（轮次继续）。
-            let result = if call.name == crate::chat::tools::ask::ASK_TOOL {
+            let control = crate::chat::agent::parse_control(&call.name, &call.arguments_json);
+            let result = if let Some(parsed) = control {
+                // 子 agent 内禁止递归：即使模型伪造控制工具调用，也按工具级失败回给模型。
+                if context.is_subagent() {
+                    ToolFailure::new(ToolErrorCode::Io, crate::chat::agent::UNAVAILABLE_CODE)
+                        .into_result(Vec::new())
+                } else {
+                    match parsed {
+                        Err(failure) => failure.into_result(Vec::new()),
+                        Ok(op) => match host.subagent(op).await {
+                            Ok(outcome) => outcome.into_result(),
+                            Err(HostError::Cancelled) => {
+                                let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
+                                cancel_unstarted(&mut host, remaining).await;
+                                return TurnSummary::interrupted(usage);
+                            }
+                            // 并发超限 / 目标不存在：工具级失败，轮次继续。
+                            Err(HostError::Failed { code }) => {
+                                ToolFailure::new(ToolErrorCode::Io, code).into_result(Vec::new())
+                            }
+                        },
+                    }
+                }
+            } else if call.name == crate::chat::tools::ask::ASK_TOOL {
                 match crate::chat::tools::ask::parse_arguments(&call.arguments_json) {
                     Err(failure) => failure.into_result(Vec::new()),
                     Ok(questions) => {

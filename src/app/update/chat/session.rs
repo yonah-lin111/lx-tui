@@ -25,6 +25,7 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     target.lx.chat.reset_session_view();
+    target.lx.clear_agents();
     target.lx.compact.reset();
     target.lx.clear_rewind();
     refresh_lx_status(state, pane);
@@ -464,6 +465,7 @@ pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) 
     };
     if target.lx.chat.session_id.as_deref() == Some(session_id) {
         target.lx.chat.reset_session_view();
+        target.lx.clear_agents();
         return true;
     }
     false

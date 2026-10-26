@@ -6281,7 +6281,8 @@ fn lx_card_click_toggles_expansion_on_release() {
             output_tokens: None,
             cache_read_tokens: None,
             duration_ms: None,
-        });
+                    reports: Vec::new(),
+});
         chat.follow_bottom = true;
         target.lx.chat = chat;
     }

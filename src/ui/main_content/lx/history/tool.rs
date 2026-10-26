@@ -46,6 +46,7 @@ mod command;
 mod file_diff;
 mod file_summary;
 mod plan;
+mod subagent;
 
 #[cfg(test)]
 use file_summary::{detail_prefix, fallback_parse_count, reset_fallback_parse_count};
@@ -110,6 +111,9 @@ pub(super) fn rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
         }
         Some(crate::app::state::ToolDetailView::Plan(_)) => plan::rows(call, width, folds.body),
         Some(crate::app::state::ToolDetailView::Ask(_)) => ask::rows(call, width, folds.body),
+        Some(crate::app::state::ToolDetailView::Subagent(_)) => {
+            subagent::rows(call, width, folds.body)
+        }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::rows(&[call], width, &[folds.body])
         }
@@ -215,6 +219,19 @@ pub(super) fn draw_animated(
                 loading_frame,
                 animating,
                 folds.body,
+            );
+            return;
+        }
+        Some(crate::app::state::ToolDetailView::Subagent(_)) => {
+            subagent::draw(
+                grid,
+                rect,
+                scroll,
+                row_index,
+                call,
+                loading_frame,
+                folds.body,
+                animating,
             );
             return;
         }
@@ -408,6 +425,7 @@ pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
         Some(crate::app::state::ToolDetailView::Ask(_)) => {
             ask::rows(call, width, true) > ask::rows(call, width, false)
         }
+        Some(crate::app::state::ToolDetailView::Subagent(_)) => subagent::has_more(call, width),
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::has_more_content(call, width)
         }
@@ -491,6 +509,19 @@ pub(super) fn card_regions(
         Some(crate::app::state::ToolDetailView::Plan(_)) => Vec::new(),
         Some(crate::app::state::ToolDetailView::Ask(_)) => {
             // 整卡一个 Body 点击面：展开前后行数不变就不登记（点了也不会有变化）。
+            if !has_expandable_content(call, width) {
+                return Vec::new();
+            }
+            vec![CardRegion {
+                section: CardSection::Body,
+                card: RowSpan {
+                    offset: 0,
+                    rows: step_rows,
+                },
+                clickable: true,
+            }]
+        }
+        Some(crate::app::state::ToolDetailView::Subagent(_)) => {
             if !has_expandable_content(call, width) {
                 return Vec::new();
             }

@@ -138,13 +138,22 @@ impl PaneCache {
 
     /// 当前宽度与列表状态下的快照；指纹不变时直接复用同一个 `Arc`。
     pub(crate) fn snapshot(&mut self, width: u16, lx: &Lx) -> Arc<HistorySnapshot> {
-        let signature = list_signature(lx, width);
+        self.snapshot_source(width, super::source::HistorySource::from(lx))
+    }
+
+    /// 数据源版本（主窗格与子 agent 详情共用同一份缓存实现）。
+    pub(crate) fn snapshot_source(
+        &mut self,
+        width: u16,
+        source: super::source::HistorySource<'_>,
+    ) -> Arc<HistorySnapshot> {
+        let signature = list_signature_source(source, width);
         if let Some((cached, snapshot)) = &self.snapshot
             && *cached == signature
         {
             return Arc::clone(snapshot);
         }
-        let snapshot = Arc::new(snapshot::build(width, lx, self));
+        let snapshot = Arc::new(snapshot::build(width, source, self));
         self.builds = self.builds.saturating_add(1);
         self.snapshot = Some((signature, Arc::clone(&snapshot)));
         self.evict();
@@ -312,12 +321,20 @@ impl Fnv {
 ///
 /// **不**包含：hover、loading 帧、跟随底部、视口位置、置顶抑制记忆、滚动位置。
 pub(crate) fn list_signature(lx: &Lx, width: u16) -> u64 {
+    list_signature_source(super::source::HistorySource::from(lx), width)
+}
+
+/// 数据源版本的列表指纹。
+pub(crate) fn list_signature_source(
+    source: super::source::HistorySource<'_>,
+    width: u16,
+) -> u64 {
     let mut hash = Fnv::new();
     hash.write_u16(width);
-    hash.write_usize(lx.chat.messages.len());
-    hash.write_usize(lx.chat.notices.len());
-    hash.write_usize(lx.compact.checkpoints.len());
-    for (index, message) in lx.chat.messages.iter().enumerate() {
+    hash.write_usize(source.messages.len());
+    hash.write_usize(source.notices.len());
+    hash.write_usize(source.checkpoints.len());
+    for (index, message) in source.messages.iter().enumerate() {
         hash.write_usize(index);
         hash.write_str(&message.id);
         hash.write_i64(message.sequence);
@@ -331,24 +348,24 @@ pub(crate) fn list_signature(lx: &Lx, width: u16) -> u64 {
         hash.write_i64(message.cache_read_tokens.unwrap_or(-1));
         hash.write_i64(message.duration_ms.unwrap_or(-1));
         if let Some(shell) = &message.shell {
-            shell_signature(&mut hash, lx, message, shell);
+            shell_signature(&mut hash, source, message, shell);
         } else {
             hash.write_u8(0);
         }
         hash.write_usize(message.steps.len());
         for (step_index, step) in message.steps.iter().enumerate() {
             hash.write_usize(step_index);
-            step_signature(&mut hash, lx, message, index, step_index, step);
+            step_signature(&mut hash, source, message, index, step_index, step);
         }
     }
-    for notice in &lx.chat.notices {
+    for notice in source.notices {
         hash.write_str(&notice.id);
         hash.write_i64(notice.sequence);
         hash.write_str(&notice.kind);
         hash.write_usize(notice.restored_file_count);
         hash.write_u8(u8::from(notice.files_already_restored));
     }
-    for checkpoint in &lx.compact.checkpoints {
+    for checkpoint in source.checkpoints {
         hash.write_str(&checkpoint.id);
         hash.write_i64(checkpoint.sequence);
         hash.write_str(&checkpoint.model_label);
@@ -358,7 +375,7 @@ pub(crate) fn list_signature(lx: &Lx, width: u16) -> u64 {
         hash.write_str(&checkpoint.summary);
         hash.write_u8(u8::from(checkpoint.active));
         hash.write_u8(u8::from(
-            lx.compact.expanded.iter().any(|id| id == &checkpoint.id),
+            source.compact.expanded.iter().any(|id| id == &checkpoint.id),
         ));
     }
     hash.finish()
@@ -367,18 +384,18 @@ pub(crate) fn list_signature(lx: &Lx, width: u16) -> u64 {
 /// 本地命令卡片：正文与折叠状态影响行数。
 fn shell_signature(
     hash: &mut Fnv,
-    lx: &Lx,
+    source: super::source::HistorySource<'_>,
     message: &ChatMessageView,
     shell: &crate::app::state::UserShellView,
 ) {
     hash.write_u8(1);
     // 参数区/输出区各自独立折叠，必须进指纹。
-    hash.write_u8(u8::from(lx.chat.section_is_expanded(
+    hash.write_u8(u8::from(source.chat.section_is_expanded(
         &message.id,
         crate::app::state::SHELL_SLOT,
         CardSection::Body,
     )));
-    hash.write_u8(u8::from(lx.chat.section_is_expanded(
+    hash.write_u8(u8::from(source.chat.section_is_expanded(
         &message.id,
         crate::app::state::SHELL_SLOT,
         CardSection::Output,
@@ -397,7 +414,7 @@ fn shell_signature(
 /// 单个步骤：Part 覆盖正文长度与首尾字节；Tool 覆盖调用身份、状态、折叠与详情量。
 fn step_signature(
     hash: &mut Fnv,
-    lx: &Lx,
+    source: super::source::HistorySource<'_>,
     message: &ChatMessageView,
     message_index: usize,
     step_index: usize,
@@ -416,28 +433,28 @@ fn step_signature(
             hash.write_i64(part.ended_at_ms.unwrap_or(-1));
             hash.write_i64(part.completed_at_ms.unwrap_or(-1));
             hash.write_u8(u8::from(
-                lx.chat.reasoning_expanded(message_index, step_index),
+                source.chat.reasoning_expanded(message_index, step_index),
             ));
         }
         AssistantStepView::Tool { call, .. } => {
             hash.write_u8(1);
-            tool_signature(hash, lx, message, call);
+            tool_signature(hash, source, message, call);
         }
     }
 }
 
 /// 工具调用：身份、状态、折叠状态与详情中会改变行数的量。
-fn tool_signature(hash: &mut Fnv, lx: &Lx, message: &ChatMessageView, call: &ToolCallView) {
+fn tool_signature(hash: &mut Fnv, source: super::source::HistorySource<'_>, message: &ChatMessageView, call: &ToolCallView) {
     hash.write_str(&call.call_id);
     hash.write_str(&call.name);
     hash.write_u8(tool_status_code(call.status));
     // 折叠状态：参数区（Body）与输出区（Output）各自独立。
-    hash.write_u8(u8::from(lx.chat.section_is_expanded(
+    hash.write_u8(u8::from(source.chat.section_is_expanded(
         &message.id,
         &call.call_id,
         CardSection::Body,
     )));
-    hash.write_u8(u8::from(lx.chat.section_is_expanded(
+    hash.write_u8(u8::from(source.chat.section_is_expanded(
         &message.id,
         &call.call_id,
         CardSection::Output,
@@ -468,6 +485,16 @@ fn tool_signature(hash: &mut Fnv, lx: &Lx, message: &ChatMessageView, call: &Too
     hash.write_edges(&call.arguments_json);
     match call.detail.as_deref() {
         None => hash.write_u8(0),
+        Some(ToolDetailView::Subagent(view)) => {
+            hash.write_u8(7);
+            hash.write_u8(u8::from(view.role.is_some()));
+            hash.write_str(view.task.as_deref().unwrap_or(""));
+            hash.write_str(view.agent_id.as_deref().unwrap_or(""));
+            hash.write_usize(view.targets.len());
+            hash.write_u8(u8::from(view.timed_out));
+            hash.write_usize(view.agents.len());
+            hash.write_str(view.closed_status.as_deref().unwrap_or(""));
+        }
         Some(ToolDetailView::Command(view)) => {
             hash.write_u8(1);
             hash.write_str(&view.command);
@@ -573,20 +600,20 @@ fn tool_signature(hash: &mut Fnv, lx: &Lx, message: &ChatMessageView, call: &Too
 
 /// 单个步骤块的指纹（宽度由 [`BlockKey::width`] 承担，这里不含宽度）。
 pub(crate) fn part_block_signature(
-    lx: &Lx,
+    source: super::source::HistorySource<'_>,
     message: &ChatMessageView,
     message_index: usize,
     step_index: usize,
     step: &AssistantStepView,
 ) -> u64 {
     let mut hash = Fnv::new();
-    step_signature(&mut hash, lx, message, message_index, step_index, step);
+    step_signature(&mut hash, source, message, message_index, step_index, step);
     hash.finish()
 }
 
 /// 合并的文件工具组指纹：逐调用独立（含各自折叠状态）。
 pub(crate) fn group_block_signature(
-    lx: &Lx,
+    source: super::source::HistorySource<'_>,
     message: &ChatMessageView,
     group: &[&ToolCallView],
     expanded: &[bool],
@@ -595,7 +622,7 @@ pub(crate) fn group_block_signature(
     hash.write_usize(group.len());
     for (index, call) in group.iter().enumerate() {
         hash.write_usize(index);
-        tool_signature(&mut hash, lx, message, call);
+        tool_signature(&mut hash, source, message, call);
         hash.write_u8(u8::from(expanded.get(index).copied().unwrap_or(false)));
     }
     hash.finish()
@@ -603,12 +630,12 @@ pub(crate) fn group_block_signature(
 
 /// 本地命令卡片的指纹（不含宽度）。
 pub(crate) fn shell_block_signature(
-    lx: &Lx,
+    source: super::source::HistorySource<'_>,
     message: &ChatMessageView,
     shell: &crate::app::state::UserShellView,
 ) -> u64 {
     let mut hash = Fnv::new();
-    shell_signature(&mut hash, lx, message, shell);
+    shell_signature(&mut hash, source, message, shell);
     hash.finish()
 }
 
