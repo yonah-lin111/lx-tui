@@ -1,11 +1,8 @@
 //! 鼠标命中测试、几何辅助与滚动条抓取计算。
 
-use std::time::Instant;
-
 use ratatui::layout::Rect;
 
 use crate::app::state::{AppState, PaneKind, PaneView};
-use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::layout::{self, BoundaryHit, PaneId};
 use crate::ui;
@@ -381,30 +378,16 @@ pub(crate) fn dismiss_lx_toast_outside(
     crate::app::update::dismiss_lx_toast(state, pane)
 }
 
-/// 写系统剪贴板并在 prompt 锚点弹出成功/失败 toast。
-pub(crate) fn copy_with_toast(state: &mut AppState, text: &str) {
-    let anchor = Some(state.prompt.id());
-    copy_with_toast_at(state, text, anchor);
-}
-
-/// 写系统剪贴板并在**指定窗格**锚点弹出 toast（`None` 回落屏幕顶部居中）。
+/// 写系统剪贴板并统一在屏幕顶部居中反馈字符数。
 ///
-/// lx 历史里的代码块复制按钮用它把 toast 落在 main content 窗格内，
-/// 而不是跳到屏幕底部的 prompt —— 复制动作发生在哪儿，反馈就出现在哪儿。
-pub(crate) fn copy_with_toast_at(state: &mut AppState, text: &str, anchor: Option<PaneId>) {
-    let now = Instant::now();
-    let (kind, message) = if crate::platform::write_clipboard(text) {
-        // 普通复制是尽力而为：原生写入在后台启动、OSC 52 无确认，不宣称已落入系统剪贴板。
-        (ToastKind::Default, ui::text::TOAST_COPY_SENT)
-    } else {
+/// 复制不跟随 lx/prompt/窗格锚点：锚定容器过窄时 toast 会被截成半截，用户要求
+/// 所有复制反馈固定在顶部、显示完整正文。
+pub(crate) fn copy_with_toast(state: &mut AppState, text: &str) {
+    let success = crate::platform::write_clipboard(text);
+    if !success {
         tracing::warn!("clipboard write failed");
-        (ToastKind::Danger, ui::text::TOAST_COPY_FAILED)
-    };
-    update::show_toast_at(
-        state,
-        anchor,
-        Toast::new(kind, message, anchor, now).with_title(ui::text::TOAST_CLIPBOARD_TITLE),
-    );
+    }
+    update::show_copy_result(state, text.chars().count(), false, success);
 }
 
 /// 坐标是否落在 prompt 工具栏/分割线表头行（用于吞掉空白点击）。

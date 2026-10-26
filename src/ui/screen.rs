@@ -172,13 +172,107 @@ impl ScreenText {
         )
     }
 
-    /// 三击选中当前视觉行整行。
+    /// 三击选中当前视觉行：以最近的左右边框为界，不跨面板/表格列。
+    ///
+    /// 竖边框列不进入选区；纯横边框行（如 `├───┤`）返回空选区。边框上的标题
+    /// 与状态文字（`╭─ Prompt ─╮`、`╰ model … ─╯`）只取文字本身，不复制边框线。
     pub fn line_range(&self, point: ScreenPoint) -> (ScreenPoint, ScreenPoint) {
-        let width = self.width.saturating_sub(1);
-        (
-            ScreenPoint::new(point.row, 0),
-            ScreenPoint::new(point.row, width),
-        )
+        if point.row >= self.height || self.width == 0 {
+            return (point, point);
+        }
+        let left = (0..point.col.min(self.width))
+            .rev()
+            .find(|col| self.is_vertical_boundary(*col, point.row));
+        let right = (point.col.saturating_add(1).min(self.width)..self.width)
+            .find(|col| self.is_vertical_boundary(*col, point.row));
+        let start = left.map_or(0, |col| col.saturating_add(1));
+        let end = right.map_or(self.width.saturating_sub(1), |col| col.saturating_sub(1));
+        if start > end || end >= self.width {
+            return (point, point);
+        }
+
+        // 只有“首/尾非空白格是横边框”的行才按边框标题处理；普通内容行原样保留
+        // 选中范围内的可见空格与缩进。
+        let glyphs: Vec<(u16, char)> = (start..=end)
+            .filter_map(|col| self.char_at(col, point.row).map(|ch| (col, ch)))
+            .filter(|(_, ch)| !ch.is_whitespace())
+            .collect();
+        let border_row = glyphs.iter().any(|(_, ch)| is_horizontal_border(*ch))
+            && (glyphs
+                .first()
+                .is_some_and(|(_, ch)| is_horizontal_border(*ch))
+                || glyphs
+                    .last()
+                    .is_some_and(|(_, ch)| is_horizontal_border(*ch)));
+        if !border_row {
+            return (
+                ScreenPoint::new(point.row, start),
+                ScreenPoint::new(point.row, end),
+            );
+        }
+
+        // 边框行只取点击处的连续文字段；点到边框线本身不形成选区。
+        if self.char_at(point.col, point.row).is_some_and(is_box_glyph) {
+            return (point, point);
+        }
+        let mut text_start = point.col.clamp(start, end);
+        while text_start > start {
+            let previous = text_start - 1;
+            match self.char_at(previous, point.row) {
+                Some(ch) if !is_box_glyph(ch) => text_start = previous,
+                Some(_) => break,
+                None => text_start = previous,
+            }
+        }
+        let mut text_end = point.col.clamp(start, end);
+        while text_end < end {
+            let next = text_end + 1;
+            match self.char_at(next, point.row) {
+                Some(ch) if !is_box_glyph(ch) => text_end = next,
+                Some(_) => break,
+                None => text_end = next,
+            }
+        }
+        while text_start <= text_end
+            && self
+                .char_at(text_start, point.row)
+                .is_some_and(char::is_whitespace)
+        {
+            text_start = text_start.saturating_add(1);
+        }
+        while text_end >= text_start
+            && self
+                .char_at(text_end, point.row)
+                .is_some_and(char::is_whitespace)
+        {
+            text_end = text_end.saturating_sub(1);
+        }
+        if text_start > text_end {
+            (point, point)
+        } else {
+            (
+                ScreenPoint::new(point.row, text_start),
+                ScreenPoint::new(point.row, text_end),
+            )
+        }
+    }
+
+    /// 读取单字符格；宽字符续格与多字符 grapheme 不算边框。
+    fn char_at(&self, x: u16, y: u16) -> Option<char> {
+        let cell = self.cell(x, y)?;
+        if cell.width == 0 {
+            return None;
+        }
+        let mut chars = cell.symbol.chars();
+        match (chars.next(), chars.next()) {
+            (Some(ch), None) => Some(ch),
+            _ => None,
+        }
+    }
+
+    /// 该格是否具备左右分界意义（竖线、角、┬/┴/┼ 等；横线不算）。
+    fn is_vertical_boundary(&self, x: u16, y: u16) -> bool {
+        self.char_at(x, y).is_some_and(is_vertical_boundary)
     }
 
     /// 按单位扩展一次点击。
@@ -260,6 +354,40 @@ impl ScreenText {
         }
         (start, end.min(self.width.saturating_sub(1)))
     }
+}
+
+/// 具备左右分界意义的边框字形；横线不参与左右扫描，避免沿顶边框一路吞到屏幕边。
+fn is_vertical_boundary(ch: char) -> bool {
+    matches!(
+        ch,
+        '│' | '┃'
+            | '║'
+            | '╎'
+            | '╏'
+            | '╭'
+            | '╮'
+            | '╰'
+            | '╯'
+            | '┌'
+            | '┐'
+            | '└'
+            | '┘'
+            | '├'
+            | '┤'
+            | '┬'
+            | '┴'
+            | '┼'
+    )
+}
+
+/// 横边框线：用于识别边框行并从复制片段中剔除。
+fn is_horizontal_border(ch: char) -> bool {
+    matches!(ch, '─' | '━' | '═' | '┄' | '┈' | '╌' | '╍')
+}
+
+/// 任意制表/边框字形；边框行取标题文字时以它作为分隔。
+fn is_box_glyph(ch: char) -> bool {
+    is_vertical_boundary(ch) || is_horizontal_border(ch)
 }
 
 fn normalize(start: ScreenPoint, end: ScreenPoint) -> Option<(ScreenPoint, ScreenPoint)> {

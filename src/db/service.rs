@@ -785,20 +785,16 @@ impl Persistence {
                 changed |= self.reload_referenced(state, &key);
                 changed
             }
-            Effect::CopyToClipboard { text, anchor } => {
-                let now = Instant::now();
-                let (kind, message) = if crate::platform::write_clipboard(&text) {
-                    (ToastKind::Default, text::TOAST_COPY_SENT)
-                } else {
+            Effect::CopyToClipboard {
+                text: copied,
+                anchor: _,
+            } => {
+                let success = crate::platform::write_clipboard(&copied);
+                if !success {
                     tracing::warn!("clipboard write failed");
-                    (ToastKind::Danger, text::TOAST_COPY_FAILED)
-                };
-                // 锚在 lx 窗格时落该窗格自己的槽（不占用全局覆盖层）。
-                update::show_toast_at(
-                    state,
-                    anchor,
-                    Toast::new(kind, message, anchor, now).with_title(text::TOAST_CLIPBOARD_TITLE),
-                );
+                }
+                // 所有复制反馈统一走屏幕顶部居中的全局槽，显示本次字符数。
+                update::show_copy_result(state, copied.chars().count(), false, success);
                 true
             }
             // ===== lx 聊天（DB 效应；网络效应由事件层执行） =====

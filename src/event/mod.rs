@@ -811,32 +811,17 @@ fn handle_app_event(
             }
         }
         AppEvent::ClipboardWriteFinished { id, success } => {
+            let count = state
+                .pending_cut
+                .as_ref()
+                .filter(|pending| pending.id == id)
+                .map_or(0, |pending| pending.text.chars().count());
             if success {
-                if let Some(anchor) = update::finish_cut(state, id) {
-                    update::show_toast_at(
-                        state,
-                        anchor,
-                        crate::app::toast::Toast::new(
-                            crate::app::toast::ToastKind::Default,
-                            crate::ui::text::TOAST_COPIED,
-                            anchor,
-                            Instant::now(),
-                        )
-                        .with_title(crate::ui::text::TOAST_CLIPBOARD_TITLE),
-                    );
+                if update::finish_cut(state, id).is_some() {
+                    update::show_copy_result(state, count, true, true);
                 }
-            } else if let Some(anchor) = update::fail_cut(state, id) {
-                update::show_toast_at(
-                    state,
-                    anchor,
-                    crate::app::toast::Toast::new(
-                        crate::app::toast::ToastKind::Danger,
-                        crate::ui::text::TOAST_COPY_FAILED,
-                        anchor,
-                        Instant::now(),
-                    )
-                    .with_title(crate::ui::text::TOAST_CLIPBOARD_TITLE),
-                );
+            } else if update::fail_cut(state, id).is_some() {
+                update::show_copy_result(state, count, true, false);
             }
             *dirty = true;
         }

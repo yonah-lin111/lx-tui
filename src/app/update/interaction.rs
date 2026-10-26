@@ -5,9 +5,10 @@ use std::time::{Duration, Instant};
 use ratatui::layout::Rect;
 
 use crate::app::state::AppState;
-use crate::app::toast::Toast;
+use crate::app::toast::{Toast, ToastKind};
 use crate::app::tooltip::{Tooltip, TooltipTarget};
 use crate::layout::{BoundaryHit, PaneId};
+use crate::ui::text;
 
 use super::editor::prompt_item_editing;
 use super::prompt::commit_editing_prompt;
@@ -151,6 +152,22 @@ pub fn set_prompt_tree_hover(state: &mut AppState, hover: Option<usize>) -> bool
 /// 展示 toast；单条替换并重置倒计时。
 pub fn show_toast(state: &mut AppState, toast: Toast) {
     state.toast = Some(toast);
+}
+
+/// 复制 / 剪切反馈：统一落在屏幕顶部居中，并报告本次剪贴板文本的字符数。
+///
+/// 复制反馈不跟随 lx/prompt/窗格锚点，避免窄容器把正文截成半截；`confirmed`
+/// 只影响成功文案（剪切走原生写入确认，普通复制仍是尽力而为）。
+pub fn show_copy_result(state: &mut AppState, chars: usize, confirmed: bool, success: bool) {
+    let (kind, message) = match (success, confirmed) {
+        (true, true) => (ToastKind::Default, text::copied_message(chars)),
+        (true, false) => (ToastKind::Default, text::copy_sent_message(chars)),
+        (false, _) => (ToastKind::Danger, text::copy_failed_message(chars)),
+    };
+    show_toast(
+        state,
+        Toast::new(kind, message, None, Instant::now()).with_title(text::TOAST_CLIPBOARD_TITLE),
+    );
 }
 
 /// 在指定窗格**自己的** toast 槽展示反馈（单条替换并重置倒计时）。

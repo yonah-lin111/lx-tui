@@ -5140,3 +5140,28 @@ fn select_right_tab_same_tab_is_noop() {
     assert!(state.effects.is_empty(), "幂等：不产生任何 Effect");
     assert_eq!(state.right_tab, RightTab::Todo);
 }
+
+#[test]
+fn copy_feedback_is_top_center_and_reports_char_count() {
+    let mut state = AppState::demo();
+    show_copy_result(&mut state, 42, false, true);
+    let toast = state.toast.as_ref().expect("copy toast");
+    assert_eq!(toast.anchor, None, "复制反馈固定在屏幕顶部居中");
+    assert_eq!(
+        toast.title.as_deref(),
+        Some(crate::ui::text::TOAST_CLIPBOARD_TITLE)
+    );
+    assert!(toast.message.contains("Copy sent"), "{}", toast.message);
+    assert!(toast.message.contains("42 chars"), "{}", toast.message);
+
+    show_copy_result(&mut state, 1, true, true);
+    let toast = state.toast.as_ref().expect("cut toast");
+    assert!(toast.message.contains("Copied"), "{}", toast.message);
+    assert!(toast.message.contains("1 char"), "{}", toast.message);
+
+    show_copy_result(&mut state, 7, true, false);
+    let toast = state.toast.as_ref().expect("failed copy toast");
+    assert_eq!(toast.kind, ToastKind::Danger);
+    assert!(toast.message.contains("Copy failed"), "{}", toast.message);
+    assert!(toast.message.contains("7 chars"), "{}", toast.message);
+}

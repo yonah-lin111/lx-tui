@@ -634,7 +634,7 @@ fn error_toast_uses_red_border() {
         &mut state,
         Toast::new(
             ToastKind::Danger,
-            text::TOAST_COPY_FAILED,
+            text::copy_failed_message(3),
             Some(anchor),
             Instant::now(),
         ),

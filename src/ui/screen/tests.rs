@@ -72,3 +72,60 @@ fn word_range_uses_unicode_word_boundaries() {
         (ScreenPoint::new(0, 12), ScreenPoint::new(0, 15))
     );
 }
+
+#[test]
+fn line_range_stops_at_vertical_borders_between_panes() {
+    let screen =
+        ScreenText::from_buffer(&buffer(&["┌────┬────┐", "│left│right│", "└────┴────┘"], 12));
+    assert_eq!(
+        screen.line_range(ScreenPoint::new(1, 2)),
+        (ScreenPoint::new(1, 1), ScreenPoint::new(1, 4))
+    );
+    assert_eq!(
+        screen.line_range(ScreenPoint::new(1, 7)),
+        (ScreenPoint::new(1, 6), ScreenPoint::new(1, 10))
+    );
+    let left = screen.selection_cells(ScreenPoint::new(1, 1), ScreenPoint::new(1, 4));
+    assert_eq!(left.text(), "left");
+}
+
+#[test]
+fn line_range_keeps_border_titles_but_drops_border_only_rows() {
+    let line = "╭─ Prompt ─ Todo ─────╮";
+    let screen = ScreenText::from_buffer(&buffer(&[line], 24));
+    let prompt = line[..line.find("Prompt").expect("prompt title")]
+        .chars()
+        .count() as u16
+        + 2;
+    let todo = line[..line.find("Todo").expect("todo title")]
+        .chars()
+        .count() as u16
+        + 1;
+    let prompt_range = screen.line_range(ScreenPoint::new(0, prompt));
+    let todo_range = screen.line_range(ScreenPoint::new(0, todo));
+    assert_eq!(
+        screen
+            .selection_cells(prompt_range.0, prompt_range.1)
+            .text(),
+        "Prompt"
+    );
+    assert_eq!(
+        screen.selection_cells(todo_range.0, todo_range.1).text(),
+        "Todo"
+    );
+
+    let border = ScreenText::from_buffer(&buffer(&["├──────────┤"], 12));
+    let point = ScreenPoint::new(0, 5);
+    assert_eq!(border.line_range(point), (point, point));
+}
+
+#[test]
+fn line_range_keeps_padding_spaces_on_content_rows() {
+    let screen = ScreenText::from_buffer(&buffer(&["│  x  │"], 8));
+    assert_eq!(
+        screen.line_range(ScreenPoint::new(0, 3)),
+        (ScreenPoint::new(0, 1), ScreenPoint::new(0, 5))
+    );
+    let cells = screen.selection_cells(ScreenPoint::new(0, 1), ScreenPoint::new(0, 5));
+    assert_eq!(cells.text(), "  x  ");
+}

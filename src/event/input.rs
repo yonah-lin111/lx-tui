@@ -12,7 +12,7 @@ use crate::input::{self, GlobalEdit, Routed};
 use crate::layout::PaneId;
 use crate::pty::PtySession;
 
-use super::mouse::hit::copy_with_toast_at;
+use super::mouse::hit::copy_with_toast;
 use super::paste;
 use super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 
@@ -145,7 +145,7 @@ fn handle_global_edit(
         }
         GlobalEdit::Copy => {
             if let Some(selection) = update::copyable_selection(state, &geometry.rects, cache) {
-                copy_with_toast_at(state, &selection.text, selection.anchor);
+                copy_with_toast(state, &selection.text);
                 *dirty = true;
                 return true;
             }

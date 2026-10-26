@@ -207,3 +207,17 @@ fn clipboard_read_request_keeps_target_snapshot() {
     assert_eq!(target.focus, state.focus());
     assert!(!target.page_rename);
 }
+
+#[test]
+fn triple_click_line_selection_stops_at_box_borders() {
+    let mut state = AppState::demo();
+    let screen = screen(&["┌────┬────┐", "│left│right│", "└────┴────┘"], 12);
+    let now = Instant::now();
+    let point = ScreenPoint::new(1, 2);
+    // 同格 400 ms 内三击：字符 → 词 → 行。
+    begin_screen_selection(&mut state, &screen, point, now);
+    begin_screen_selection(&mut state, &screen, point, now + Duration::from_millis(80));
+    begin_screen_selection(&mut state, &screen, point, now + Duration::from_millis(160));
+    finish_screen_selection(&mut state);
+    assert_eq!(screen_selection_text(&state).as_deref(), Some("left"));
+}
