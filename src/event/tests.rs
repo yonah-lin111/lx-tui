@@ -4763,8 +4763,16 @@ fn worktree_candidates_do_not_resurrect_mention_panel_on_todo() {
     assert!(state.prompt.mention().is_none(), "切走即收起");
 
     // 相同候选到达（cache 不失效）——这正是复活的那条路径。
-    let untrusted =
-        Database::open(&std::env::temp_dir().join("lx-tui-wt-gate.db")).expect("open side db");
+    // 库路径必须**每次唯一**：固定路径会被并发测试与其他 worktree 反复打开，
+    // 一旦某个分支把 `SCHEMA_VERSION` 推进到更高值，这个文件就被写成高版本库，
+    // 低版本二进制再打开会直接 `UnsupportedSchema`（实测：v15 分支跑过之后，
+    // 另一侧再跑这条用例必挂）。用完即删。
+    let db_path = std::env::temp_dir().join(format!(
+        "lx-tui-wt-gate-{}-{:?}.db",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let untrusted = Database::open(&db_path).expect("open side db");
     let persistence = Persistence::with_database(untrusted);
     let mut streams = ChatStreams::default();
     let mut inflight = HashSet::new();
@@ -4785,6 +4793,8 @@ fn worktree_candidates_do_not_resurrect_mention_panel_on_todo() {
         state.prompt.mention().is_none(),
         "Todo 期间到达的 worktree 回调不得复活隐藏的提及面板"
     );
+    drop(persistence);
+    let _ = std::fs::remove_file(&db_path);
 }
 
 /// 容器顶边框上指定 tab 的矩形（按几何取，避免硬编码列）。
@@ -4869,9 +4879,12 @@ fn mouse_click_current_tab_commits_page_rename() {
 }
 
 #[test]
-fn mouse_click_current_tab_without_changes_is_not_dirty() {
+fn mouse_click_current_tab_focuses_panel_and_dirties() {
+    // 点 tab 就是「点了右侧容器」：即使 tab 没变、也没有重命名，
+    // 焦点从主区挪到右栏也是一次真实变化，必须置脏（否则边框高亮不刷新）。
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
+    assert!(state.panes_focused(), "前提：主区持焦点");
     let mut sessions = HashMap::new();
     let mut dirty = false;
     let prompt_tab = right_tab_rect(&geo, RightTab::Prompt);
@@ -4891,7 +4904,25 @@ fn mouse_click_current_tab_without_changes_is_not_dirty() {
     );
 
     assert_eq!(state.right_tab, RightTab::Prompt);
-    assert!(!dirty, "同 tab 且无重命名时不该白白重绘");
+    assert!(state.prompt_focused(), "点当前 tab 也要让右栏进入选中态");
+    assert!(dirty, "焦点变化必须置脏");
+
+    // 已经聚焦右栏后再点一次：这次真的没有任何变化，不该白白重绘。
+    dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            prompt_tab.x,
+            prompt_tab.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(!dirty, "同 tab 且已聚焦时不该白白重绘");
 }
 
 #[test]
@@ -6450,4 +6481,169 @@ fn focused_container_is_mutually_exclusive() {
         assert_eq!(flags.iter().filter(|flag| **flag).count(), 1, "{target:?}");
         assert_eq!(state.focus(), target);
     }
+}
+
+/// 释放 Todo 滚动条拖拽后必须清空抓取状态：否则之后所有左键拖拽都被 Todo 分支吞掉。
+#[test]
+fn todo_scrollbar_drag_releases_on_mouse_up() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let visible = crate::ui::right_panel::todo::visible_rows(geo.view.prompt);
+    state.todo.replace(
+        (0..visible + 8)
+            .map(|index| {
+                crate::db::todo::TodoRecord::new(
+                    format!("t{index}"),
+                    crate::db::todo::TodoStatus::Todo,
+                    i64::try_from(index).unwrap_or(i64::MAX),
+                )
+            })
+            .collect(),
+    );
+    state.todo.set_viewport_rows(visible);
+    let bar =
+        crate::ui::right_panel::todo::scrollbar(geo.view.prompt, &state).expect("前提：列表溢出");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            bar.thumb.x,
+            bar.thumb.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.todo_scroll_drag.is_some(), "前提：抓住了 thumb");
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            bar.thumb.x,
+            bar.thumb.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(
+        state.todo_scroll_drag.is_none(),
+        "松开必须释放抓取状态，否则后续所有拖拽被劫持"
+    );
+}
+
+/// Prompt tab 下点正文右缘不得滚动隐藏的 Todo 列表（两者共用最右一列）。
+#[test]
+fn prompt_gutter_click_does_not_scroll_hidden_todo() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    assert_eq!(state.right_tab, RightTab::Prompt, "前提：Prompt tab");
+    let visible = crate::ui::right_panel::todo::visible_rows(geo.view.prompt);
+    state.todo.replace(
+        (0..visible + 8)
+            .map(|index| {
+                crate::db::todo::TodoRecord::new(
+                    format!("t{index}"),
+                    crate::db::todo::TodoStatus::Todo,
+                    i64::try_from(index).unwrap_or(i64::MAX),
+                )
+            })
+            .collect(),
+    );
+    state.todo.set_viewport_rows(visible);
+    // 点 Todo 列表区最右列的最后一行：两面板的最右列重合（都是 inner.right()-1），
+    // 这一行只在 Todo 列表轨道内，能真正触发「隐藏滚动条被点中」的路径。
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let bar = Rect {
+        x: list.right(),
+        y: list.y,
+        width: 1,
+        height: list.height,
+    };
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            bar.x,
+            bar.bottom().saturating_sub(1),
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert_eq!(state.todo.scroll(), 0, "隐藏的 Todo 列表不得被滚动");
+    assert!(state.todo_scroll_drag.is_none(), "也不得开始 Todo 拖拽");
+}
+
+/// 侧栏持焦点时粘贴必须吞掉（与键盘路由同口径：绝不穿透到别的容器）。
+#[test]
+fn paste_while_sidebar_focused_is_swallowed() {
+    let mut state = demo_terminal();
+    assert!(crate::app::update::focus_sidebar(&mut state));
+    assert!(state.sidebar_focused(), "前提：侧栏持焦点");
+    let before = state.prompt.text().to_string();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    super::input::handle_paste_event("secret".into(), &mut state, &mut sessions, &mut dirty);
+
+    assert_eq!(state.prompt.text(), before, "不得写进 prompt");
+    assert!(!dirty, "无变化不置脏");
+}
+
+/// 悬停换算走真实入口：幽灵行打开时把鼠标移到 b 那一行，`todo_hover` 必须是 b 的**列表**下标。
+#[test]
+fn hover_below_ghost_row_stores_list_index() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    state.todo.replace(vec![
+        crate::db::todo::TodoRecord::new("a", crate::db::todo::TodoStatus::Todo, 0),
+        crate::db::todo::TodoRecord::new("b", crate::db::todo::TodoStatus::Todo, 1),
+        crate::db::todo::TodoRecord::new("c", crate::db::todo::TodoStatus::Todo, 2),
+    ]);
+    // 幽灵行插在 1：显示序列 a(0) / 幽灵(1) / b(2) / c(3)。
+    crate::app::update::begin_todo_edit(&mut state, crate::app::state::TodoEditTarget::After(0));
+    assert!(state.todo.is_editing(), "前提：幽灵行打开");
+
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, list.x + 3, list.y + 2),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert_eq!(
+        state.todo_hover,
+        Some(1),
+        "显示第 2 行是列表下标 1（b），不是显示下标 2（那会被渲染层当成 c）"
+    );
 }

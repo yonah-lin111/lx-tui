@@ -229,7 +229,10 @@ pub struct AppState {
     pub todo: TodoPanel,
     /// 拖拽 todo 滚动条 thumb 时相对顶部的抓取偏移。
     pub todo_scroll_drag: Option<u16>,
-    /// 鼠标悬停的 todo 可见行下标；None 表示未悬停。
+    /// 鼠标悬停的 todo **列表**下标（已扣掉幽灵行槽位）；None 表示未悬停。
+    ///
+    /// 用列表下标而非显示下标：渲染层按 `record_index` 比较，点击路径按条目 id 锚定，
+    /// 三者口径必须一致；显示下标的换算只在命中入口（`todo::list_index`）做一次。
     pub todo_hover: Option<usize>,
     /// todo 列表最近一次左键点击（显示行下标、时刻）；双击判定用。
     pub todo_row_click: Option<(usize, Instant)>,

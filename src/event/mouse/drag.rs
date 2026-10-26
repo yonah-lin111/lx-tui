@@ -319,6 +319,11 @@ pub(crate) fn handle_mouse_up_left(
     if state.prompt_scroll_drag.take().is_some() {
         return;
     }
+    // 漏掉这一条会让 drag 分支永久停在 Todo 滚动条上：之后拖分隔线、拖选区、
+    // 拖 lx 卡片全部被静默吞掉（只有再点一次 Todo 滚动条才能解除）。
+    if state.todo_scroll_drag.take().is_some() {
+        return;
+    }
     if state.task_scroll_drag.take().is_some() {
         return;
     }

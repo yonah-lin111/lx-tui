@@ -273,3 +273,27 @@
 
 第五轮验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
 `cargo test` 全绿（lib **3475 passed / 0 failed / 2 ignored**）。`src/layout.rs` 保持 1000 行。
+
+## 第六轮（评审修复）
+
+评审记录见 [review.md](review.md)。1 条 P0、5 条 P1、4 条 P2 已修并锁回归，
+P3（`style.rs` 超 1000 行）记录为债务未修。
+
+- [x] **P0 拖拽状态泄漏**：`todo_scroll_drag` 从未在 `mouse up` 释放 → 之后所有左键拖拽被劫持。
+- [x] **P1 点当前 tab 不聚焦**：`select_right_tab` 先聚焦再判早退。
+- [x] **P1 隐藏滚动条被点中**：`todo::scrollbar` 加 `right_tab`/`prompt_collapsed` 门控。
+- [x] **P1 悬停高亮错位**：新增 `todo::list_index` 做显示→列表换算，`todo_hover` 语义改列表下标。
+- [x] **P1 末尾幽灵行不可见**：新增 `TodoPanel::scroll_to_edit`，`set_viewport_rows` 上限计入幽灵槽位。
+- [x] **P1 超长文本进内存**：上限改 `pub`，在输入边界截停（逐字 + 粘贴），提交永不超长。
+- [x] **P2 切顶部标签不提交**：新增 `focus::focus_panes` 作唯一收口，7 处调用点改走它。
+- [x] **P2 侧栏粘贴穿透**：`handle_paste_event` 加 `sidebar_focused()` 分支。
+- [x] **P2 迁移注释被截断**：补回首行。
+- [x] **P2 文档未同步**：design.md §3.2 / §5.1 回写 tab 聚焦与打断矩阵。
+- [x] **额外**：`worktree_candidates_do_not_resurrect_mention_panel_on_todo` 用固定临时库路径，
+      跨分支/并发互踩（实测 `UnsupportedSchema`），改为进程+线程唯一路径并清理。
+- [x] 测试：+71 条（state 3 / update 5 / render 3 / event 4 / 输入上限 2 / 其余随口径调整）。
+- [x] 变异验证：13 处逐条确认「改回去用例转红」；两处最初未转红（假阳性）已改用例。
+
+第六轮验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
+`cargo test` 全绿（**3547 passed / 0 failed / 2 ignored**）。
+`src/layout.rs` 仍为 1000 行；`src/ui/right_panel/todo.rs` 714、`src/app/update/todo.rs` 571。

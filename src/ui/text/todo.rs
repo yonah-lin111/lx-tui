@@ -24,6 +24,8 @@ pub const TODO_STATS_PERCENT_SUFFIX: &str = "%";
 pub const TODO_BAR_FILLED: &str = "█";
 /// 写库失败提示。
 pub const TOAST_TODO_SAVE_FAILED: &str = "todo save failed";
+/// 文本超出上限提示（提交前拦下，条目不会进列表）。
+pub const TOAST_TODO_TOO_LONG: &str = "todo too long (max 500 chars)";
 
 /// 工具栏按钮 hover 提示。
 pub const TODO_TOOLTIP_NEW: &str = "new todo";

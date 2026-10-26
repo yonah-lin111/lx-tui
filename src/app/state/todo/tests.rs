@@ -197,3 +197,51 @@ fn restore_reinserts_by_position() {
     assert!(panel.take_undo().is_some());
     assert!(!panel.can_undo());
 }
+
+/// 编辑行滚入视口：列表溢出时在末尾新建，幽灵行槽位也必须落进视口。
+#[test]
+fn scroll_to_edit_reaches_ghost_slot() {
+    let mut panel = TodoPanel::new();
+    panel.set_viewport_rows(3);
+    panel.replace(
+        (0..10)
+            .map(|index| TodoRecord::new(format!("t{index}"), TodoStatus::Todo, index as i64))
+            .collect(),
+    );
+    assert_eq!(panel.scroll(), 0, "前提：视口贴顶");
+
+    // 追加（`at == len`）：幽灵行在列表之后，视口必须滚到能看见它。
+    panel.begin_edit(TodoEdit::new(None, String::new(), panel.len()));
+    assert!(panel.scroll_to_edit(), "必须发生位移");
+    assert_eq!(panel.scroll(), 8, "10 条 + 幽灵 1 行 - 视口 3 行");
+
+    // 视口变大时上限收缩：幽灵槽位仍有效，scroll 不该被钳到「无幽灵」的那种更小上限。
+    panel.set_viewport_rows(5);
+    assert_eq!(panel.scroll(), 6, "10 条 + 幽灵 1 行 - 视口 5 行");
+
+    // 取消编辑后幽灵槽位消失：再改可见行数时上限退回 len - rows。
+    assert!(panel.take_edit().is_some());
+    panel.set_viewport_rows(5);
+    assert_eq!(panel.scroll(), 6, "未钳制（6 仍在 len - rows 之内）");
+    panel.set_viewport_rows(9);
+    assert_eq!(panel.scroll(), 1, "无幽灵行时上限是 len - rows = 1");
+}
+
+/// 边界：给 1 行视口改可见行数，若编辑行已滚到最末，幽灵槽位仍要算进上限。
+#[test]
+fn set_viewport_rows_keeps_ghost_slot_in_range() {
+    let mut panel = TodoPanel::new();
+    panel.replace(
+        (0..4)
+            .map(|index| TodoRecord::new(format!("t{index}"), TodoStatus::Todo, index as i64))
+            .collect(),
+    );
+    panel.set_viewport_rows(4);
+    panel.begin_edit(TodoEdit::new(None, String::new(), 4));
+    assert!(panel.scroll_to_edit());
+    assert_eq!(panel.scroll(), 1, "4 条 + 幽灵 - 4 行 = 1");
+
+    // 视口从 4 缩到 5：幽灵槽位仍存在，scroll 不该被钳回去。
+    panel.set_viewport_rows(5);
+    assert_eq!(panel.scroll(), 0, "5 行能装下 5 个槽位");
+}

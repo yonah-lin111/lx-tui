@@ -6,8 +6,8 @@ use crate::app::overlay::{
     ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, NewWorkspace, Overlay, TextInput,
 };
 use crate::app::state::{
-    AppState, FocusedContainer, PaneKind, PaneView, Tab, Workspace, current_workspace_identity,
-    home_dir, unique_workspace_name, workspace_label,
+    AppState, PaneKind, PaneView, Tab, Workspace, current_workspace_identity, home_dir,
+    unique_workspace_name, workspace_label,
 };
 use crate::layout::PaneId;
 
@@ -120,7 +120,7 @@ pub fn create_workspace_with_cwd(state: &mut AppState, target_cwd: Option<PathBu
         request_git_refresh(state, cwd);
     }
     clear_selection(state);
-    state.set_focus(FocusedContainer::Panes);
+    super::focus::focus_panes(state);
 }
 
 /// 新建工作区（无指定路径，继承当前终端/工作区路径）。
@@ -148,7 +148,7 @@ pub fn create_terminal_in_workspace(state: &mut AppState, target: usize) {
         swap_display_prompt(state, from, target);
     }
     clear_selection(state);
-    state.set_focus(FocusedContainer::Panes);
+    super::focus::focus_panes(state);
 }
 
 /// 打开 Prompt 并绑定工作区路径：切换激活目标工作区，展开并聚焦；
@@ -313,7 +313,7 @@ pub fn switch_workspace(state: &mut AppState, index: usize) {
     // 只有 Prompt 持焦点时才交回主区：Todo 焦点按设计不随工作区变化，
     // 侧栏自己刚点的也不该被切换动作抢走。
     if state.prompt_focused() {
-        state.set_focus(FocusedContainer::Panes);
+        super::focus::focus_panes(state);
     }
     // Agents 列表随工作区切换：滚动与悬停复位，避免旧槽位错位。
     state.agent_scroll = 0;
@@ -326,7 +326,7 @@ pub fn create_tab(state: &mut AppState) {
     workspace.tabs.push(Tab::single_terminal());
     workspace.active_tab = workspace.tabs.len().saturating_sub(1);
     clear_selection(state);
-    state.set_focus(FocusedContainer::Panes);
+    super::focus::focus_panes(state);
 }
 
 /// 切换当前工作区的标签；越界忽略。
@@ -337,7 +337,7 @@ pub fn switch_tab(state: &mut AppState, index: usize) {
     }
     workspace.active_tab = index;
     clear_selection(state);
-    state.set_focus(FocusedContainer::Panes);
+    super::focus::focus_panes(state);
 }
 
 /// 标签栏滚动最大偏移；由调用方按当前几何计算并钳制。

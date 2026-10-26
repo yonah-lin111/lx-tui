@@ -185,9 +185,11 @@ pub fn button_at(panel: Rect, column: u16, row: u16) -> Option<TodoButton> {
     })
 }
 
-/// 行命中：返回列表下标（已加视口偏移）；落在列表区之外或越界时为 None。
+/// 行命中的**显示**下标（含幽灵行槽位）；落在列表区之外或越界时为 None。
 ///
 /// 新建编辑中的幽灵行也参与命中：点它等于点正在输入的那一行（不提交、不失焦）。
+/// 调用方拿到的下标与屏幕上第几行一一对应，换算成列表下标是调用方的事
+/// （见 [`list_index`]）——点击要按 id 锚定，悬停要按列表下标比较。
 pub fn row_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<usize> {
     let list = list_rect(panel);
     if !list.contains((column, row).into()) {
@@ -203,8 +205,29 @@ pub fn row_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<us
     (index < total).then_some(index)
 }
 
+/// 显示下标 → 列表下标；落在幽灵行上返回 None（它不是任何条目）。
+///
+/// 幽灵行占着它自己的显示槽位，其下方的既有条目在列表里都前移一位。
+pub fn list_index(state: &AppState, display: usize) -> Option<usize> {
+    let at = state
+        .todo
+        .editing()
+        .filter(|edit| edit.target.is_none())
+        .map(|edit| edit.at);
+    match at {
+        Some(at) if display == at => None,
+        Some(at) if display > at => (display - 1 < state.todo.len()).then_some(display - 1),
+        _ => (display < state.todo.len()).then_some(display),
+    }
+}
+
 /// 滚动条几何（无溢出时为 None）；轨道只覆盖列表区，不含底部统计块。
 pub fn scrollbar(panel: Rect, state: &AppState) -> Option<widgets::scrollbar::ScrollbarLayout> {
+    // 只在自己可见时存在：Todo 隐藏时这条几何与 prompt 正文共用最右一列，
+    // 不判 tab 会让「点 prompt 正文右缘」滚到看不见的 Todo 列表（也会让拖拽/命中错位）。
+    if state.right_tab != crate::app::state::RightTab::Todo || state.prompt_collapsed {
+        return None;
+    }
     let body = body_rect(panel);
     if body.width < 2 {
         return None;

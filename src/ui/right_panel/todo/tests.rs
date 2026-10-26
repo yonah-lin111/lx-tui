@@ -296,6 +296,8 @@ fn empty_list_shows_placeholder() {
 fn scrollbar_only_when_overflowing() {
     let area = panel(38);
     let mut state = AppState::demo();
+    // 滚动条只在 Todo 面板可见时存在（隐藏时它与 prompt 正文共用最右一列）。
+    state.right_tab = crate::app::state::RightTab::Todo;
     let visible = visible_rows(area);
     assert!(visible > 0, "测试面板必须有可见行");
 
@@ -486,6 +488,7 @@ fn empty_list_still_shows_zero_stats() {
 fn scrollbar_track_stops_above_stats() {
     let area = panel(38);
     let mut state = AppState::demo();
+    state.right_tab = crate::app::state::RightTab::Todo;
     let visible = visible_rows(area);
     state.todo.replace(records(visible.saturating_add(4)));
     let bar = scrollbar(area, &state).expect("溢出时出现滚动条");
@@ -665,4 +668,61 @@ fn unfocused_panel_yields_no_hardware_cursor() {
 
     let (_, cursor) = render_panel(&state, area);
     assert!(cursor.is_none(), "未聚焦时不能交出光标");
+}
+
+/// 悬停下标是**列表**下标：幽灵行打开时，悬停显示第 2 行必须高亮 b 而不是 c。
+#[test]
+fn hover_index_is_list_index_below_ghost_row() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    state.todo.replace(vec![
+        TodoRecord::new("a", TodoStatus::Todo, 0),
+        TodoRecord::new("b", TodoStatus::Todo, 1),
+        TodoRecord::new("c", TodoStatus::Todo, 2),
+    ]);
+    state.right_tab = crate::app::state::RightTab::Todo;
+    // 幽灵行插在 1：显示序列 a(0) / 幽灵(1) / b(2) / c(3)。
+    begin_edit(&mut state, TodoEdit::new(None, String::new(), 1));
+
+    // 命中入口的换算：显示下标 2 → 列表下标 1（b），幽灵行自身没有列表下标。
+    assert_eq!(list_index(&state, 0), Some(0));
+    assert_eq!(list_index(&state, 1), None, "幽灵行不是条目");
+    assert_eq!(list_index(&state, 2), Some(1), "显示第 2 行是列表里的 b");
+    assert_eq!(list_index(&state, 3), Some(2));
+    assert_eq!(list_index(&state, 4), None, "越界");
+
+    state.todo_hover = Some(1); // b
+    let (buffer, _) = render_panel(&state, area);
+    let list = list_rect(area);
+    let highlighted = |y: u16| buffer[(list.x, y)].bg != ratatui::style::Color::Reset;
+    assert!(highlighted(list.y + 2), "悬停 b 必须高亮 b（显示第 2 行）");
+    assert!(!highlighted(list.y + 3), "c 不该被高亮");
+}
+
+/// 隐藏的 Todo 面板不得提供滚动条几何：否则它与 prompt 正文共用最右一列，
+/// 「点 prompt 右缘」会滚到看不见的 Todo 列表。
+#[test]
+fn hidden_panel_has_no_scrollbar() {
+    let area = panel(38);
+    let mut state = AppState::demo();
+    assert_eq!(
+        state.right_tab,
+        crate::app::state::RightTab::Prompt,
+        "前提：Prompt"
+    );
+    let visible = visible_rows(area);
+    state.todo.replace(records(visible.saturating_add(5)));
+    assert!(
+        scrollbar(area, &state).is_none(),
+        "Prompt tab 下 Todo 滚动条不存在"
+    );
+
+    state.right_tab = crate::app::state::RightTab::Todo;
+    assert!(
+        scrollbar(area, &state).is_some(),
+        "切到 Todo 后才出现滚动条"
+    );
+
+    state.prompt_collapsed = true;
+    assert!(scrollbar(area, &state).is_none(), "容器折叠时也不存在");
 }

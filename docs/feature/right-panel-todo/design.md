@@ -246,7 +246,10 @@
 | 其余 | 吞掉，绝不写 PTY |
 
 **何时获得焦点**：左键点列表区任意行、工具栏按钮行为（按钮动作隐含聚焦）、
-点击分割线下方内容区。**不**因切换到 Todo tab 自动聚焦（对齐 `right-panel-tabs` 决策 #5）。
+点击分割线下方内容区、**点右侧容器的 tab（含点当前 tab）**。
+点 tab 就是「点了右侧容器」，焦点必须留在右栏——第六轮修正的正是「切了 tab 高亮跑回主区」。
+只有**程序性**切换（`create_tab` / `switch_tab` / `switch_workspace` 等）才把焦点交回主区，
+且必须走 `focus::focus_panes`（内部先提交 todo 编辑）。
 
 **焦点不变量**：`todo_focused ⇒ right_tab == Todo && !prompt_collapsed`；
 `prompt_focused ⇒ right_tab == Prompt`（既有不变量保持）。
@@ -845,14 +848,17 @@ pub fn todo_status_done() -> Style;
 | 编辑中按 `Esc` | 取消：新建消失、编辑恢复原文，不写库 |
 | 编辑中按 `Enter` | 提交：trim 后非空则写库；新建空输入不创建；编辑清空则删除该条 |
 | 编辑中点另一行 | 先提交，再选中该行 |
-| 编辑中切 tab | 提交 |
+| 编辑中切右侧容器 tab | 提交（`select_right_tab`） |
+| 编辑中切**顶部标签栏**标签 / 新建标签 | 提交（统一走 `focus::focus_panes`） |
 | 编辑中切工作区 | 提交 |
 | 编辑中按 `Tab` | 切换到下一状态并立即写库；**不**提交、**不**退出编辑（正文草稿保留） |
 | 编辑中双击同一行 | 不打断编辑（草稿保留，不重开输入框） |
 | 编辑中面板折叠（`Ctrl+B` 之类） | 提交，并清 `todo_focused` |
 | 编辑中程序退出 | 提交（`Persistence::shutdown` 前调用 `commit_todo_edit`） |
 | 编辑中库写失败 | 保留内存改动、toast `todo save failed`、编辑态已结束 |
-| `todo_focused` 时点终端窗格 | 提交编辑 + 失焦（`focus_pane`，`src/app/update/pane.rs:66-72`，补 `todo_focused = false` + `commit_todo_edit`） |
+| `todo_focused` 时点终端窗格 | 提交编辑 + 失焦（`focus::focus_pane` → `focus::focus_panes` 内含 `commit_todo_edit`） |
+| 编辑中输入超过 500 字符 | 输入边界即截停（逐字到上限停止、粘贴按余量裁剪），提交永不因超长失败 |
+| Todo 列表溢出时新建/编辑 | `begin_todo_edit` 调 `scroll_to_edit` 把编辑行（含幽灵槽位）滚进视口 |
 
 ### 5.2 降级矩阵
 

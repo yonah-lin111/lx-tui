@@ -13,7 +13,10 @@ use super::{Database, DbError, Result, new_external_id, now_ms};
 /// 单条 todo 文本的字符上限；与 lx-agent 的 `content: 1..500` 一致。
 ///
 /// 按**字符**而非字节计数：500 个汉字是 1500 字节，按字节判定会把中文拦在 167 字。
-const MAX_TODO_TEXT_CHARS: usize = 500;
+///
+/// 公开给 `app` 层：提交前就要按同一上限判定，否则超长文本会先落地到内存列表、
+/// 再被写库拒绝——用户看到「保存失败」但条目仍在列表里，重启即丢。
+pub const MAX_TODO_TEXT_CHARS: usize = 500;
 
 /// 重排位置时使用的临时偏移；所有行先移进该区间，再落回 `0..n`，
 /// 避免中途撞 `idx_todo_position` 唯一索引。

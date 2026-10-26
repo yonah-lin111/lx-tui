@@ -152,6 +152,11 @@ pub(crate) fn handle_paste_event(
     if state.overlay.is_some() {
         return;
     }
+    // 侧栏没有键盘交互（`input::route` 把它的按键全吞掉），粘贴必须同样吞掉：
+    // 否则焦点在侧栏时粘贴会落进别的容器的输入框。
+    if state.sidebar_focused() {
+        return;
+    }
     if state.todo_focused() {
         // 编辑态写入输入框；列表态吞掉，绝不写隐藏终端。
         if update::apply_todo_paste(state, &text) {

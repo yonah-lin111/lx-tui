@@ -200,6 +200,8 @@ pub fn begin_todo_edit(state: &mut AppState, target: TodoEditTarget) -> bool {
         }
     };
     state.todo.begin_edit(edit);
+    // 编辑行可能落在视口外（列表溢出时在末尾新建）：先滚过去，否则用户看不到输入位置。
+    state.todo.scroll_to_edit();
     state.set_focus(FocusedContainer::Todo);
     true
 }
@@ -280,15 +282,13 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
             let Some(input) = state.todo.edit_input_mut() else {
                 return false;
             };
-            input.insert_char(ch);
-            true
+            insert_bounded(input, ch)
         }
         TodoKey::Space => {
             let Some(input) = state.todo.edit_input_mut() else {
                 return false;
             };
-            input.insert_char(' ');
-            true
+            insert_bounded(input, ' ')
         }
         // `Tab` 切状态（对齐 lx-agent 行内编辑：Tab 循环状态、Enter 提交、Esc 取消）。
         TodoKey::Tab => cycle_editing_status(state),
@@ -365,11 +365,28 @@ fn apply_todo_command(state: &mut AppState, ch: char) -> bool {
 }
 
 /// 粘贴：编辑态写入输入框，列表态吞掉。
+///
+/// 超出上限时只写入能装下的部分（与逐字输入到上限后不再接受键的观感一致）：
+/// 上限是**存储**约束，放进来再由写库拒绝会让「条目在列表里但重启就没了」。
 pub fn apply_todo_paste(state: &mut AppState, text: &str) -> bool {
     let Some(input) = state.todo.edit_input_mut() else {
         return false;
     };
-    input.insert_str(text)
+    let room = crate::db::todo::MAX_TODO_TEXT_CHARS.saturating_sub(input.text().chars().count());
+    if room == 0 {
+        return false;
+    }
+    let clipped: String = text.chars().take(room).collect();
+    input.insert_str(&clipped)
+}
+
+/// 在输入框里插入一个字符；已达上限时吞掉（返回 false，不产生变化）。
+fn insert_bounded(input: &mut crate::app::overlay::TextInput, ch: char) -> bool {
+    if input.text().chars().count() >= crate::db::todo::MAX_TODO_TEXT_CHARS {
+        return false;
+    }
+    input.insert_char(ch);
+    true
 }
 
 /// 启动加载：整体替换列表并重置选中/视口/编辑/撤销槽。

@@ -530,6 +530,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_position ON todo(position);
 "#;
 
 impl Database {
+    /// 迁移到当前 Schema：建表与版本推进在同一事务中完成，幂等。
     ///
     /// 开发期的资产/附件表已随截图粘贴功能移除，老库中遗留的这些表不再被读写；
     /// 已有数据（工作区、提示词）原样保留。版本高于程序支持值时返回错误。

@@ -102,7 +102,13 @@ impl TodoPanel {
             return false;
         }
         self.rows = rows;
-        let max = self.items.len().saturating_sub(rows);
+        // 新建时幽灵行占一个额外槽位，视口上限要跟着放宽，否则下一帧会把
+        // `scroll_to_edit` 刚滚好的位置又钳回旧上限（末尾幽灵行重新掉出视口）。
+        let ghost = self
+            .editing
+            .as_ref()
+            .map_or(0, |edit| usize::from(edit.target.is_none()));
+        let max = (self.items.len() + ghost).saturating_sub(rows);
         if self.scroll > max {
             self.scroll = max;
         }
@@ -236,6 +242,37 @@ impl TodoPanel {
                 .saturating_add(direction.unsigned_abs())
                 .min(max)
         };
+        if next == self.scroll {
+            return false;
+        }
+        self.scroll = next;
+        true
+    }
+
+    /// 保证**编辑行**在视口内（含新建时的幽灵行槽位）。
+    ///
+    /// 编辑行不在视口里就没有任何可见输入位置：列表溢出时按 `a` 追加新条目，
+    /// 幽灵行落在 `len` 处，若不滚视口用户只会看到满屏旧条目、光标也交不出去。
+    pub fn scroll_to_edit(&mut self) -> bool {
+        let Some(edit) = self.editing.as_ref() else {
+            return false;
+        };
+        // 新建时幽灵行占一个额外槽位，视口上限要按 `len + 1` 算。
+        let ghost = usize::from(edit.target.is_none());
+        let target = edit.at.min(self.items.len() + ghost);
+        if self.rows == 0 {
+            return false;
+        }
+        let total = self.items.len() + ghost;
+        let max = total.saturating_sub(self.rows);
+        let next = if target < self.scroll {
+            target
+        } else if target >= self.scroll.saturating_add(self.rows) {
+            target.saturating_add(1).saturating_sub(self.rows)
+        } else {
+            self.scroll
+        };
+        let next = next.min(max);
         if next == self.scroll {
             return false;
         }

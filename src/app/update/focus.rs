@@ -20,10 +20,19 @@ pub fn focus_sidebar(state: &mut AppState) -> bool {
     state.set_focus(FocusedContainer::Sidebar)
 }
 
+/// 把焦点交回主区，并先提交进行中的 todo 编辑。
+///
+/// 这是「离开 Todo」的唯一收口：切标签、开新标签、切工作区、分屏、打开 worktree
+/// 等所有把焦点交给主区的路径都必须走这里。逐处手写 `set_focus(Panes)` 漏一处，
+/// 就会留下一个悬空的编辑现场（草稿既没提交也没取消，后续行为取决于中间做过什么）。
+pub fn focus_panes(state: &mut AppState) -> bool {
+    commit_todo_edit(state);
+    state.set_focus(FocusedContainer::Panes)
+}
+
 /// 点击终端窗格：焦点回到窗格，prompt 失焦并关闭块命令面板与页重命名输入。
 pub fn focus_pane(state: &mut AppState, id: PaneId) {
-    commit_todo_edit(state);
-    state.set_focus(FocusedContainer::Panes);
+    focus_panes(state);
     state.prompt.clear_panel();
     cancel_page_rename(state);
     state.active_tab_mut().layout.focus_pane(id);

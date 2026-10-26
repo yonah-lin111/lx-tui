@@ -165,13 +165,15 @@ fn switch_workspace_commits_edit_and_preserves_list() {
     assert!(set_todo_scroll(&mut state, 1));
     assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(2)));
     type_text(&mut state, "-edited");
+    // 进入编辑会把编辑行滚入视口（新口径），此处以**切换前**的视口为准。
+    let scroll = state.todo.scroll();
 
     crate::app::update::switch_workspace(&mut state, 0);
 
     assert!(!state.todo.is_editing(), "切工作区提交编辑");
     assert_eq!(texts(&state), ["a", "b", "c-edited"]);
     assert_eq!(state.todo.selected(), Some(2), "选中不随工作区变化");
-    assert_eq!(state.todo.scroll(), 1, "视口不随工作区变化");
+    assert_eq!(state.todo.scroll(), scroll, "视口不随工作区变化");
     assert!(state.todo_focused(), "焦点不随工作区变化");
 }
 
@@ -543,4 +545,90 @@ fn shift_enter_while_editing_commits() {
 
     assert!(!state.todo.is_editing(), "Shift+Enter 也提交");
     assert_eq!(texts(&state), ["seed-x"]);
+}
+
+/// 切顶部标签栏：编辑现场必须被提交，不能悬空。
+#[test]
+fn switching_top_tab_commits_todo_edit() {
+    let mut state = todo_state(&["seed"]);
+    assert!(apply_todo_key(&mut state, TodoKey::Enter));
+    type_text(&mut state, "-x");
+
+    crate::app::update::switch_tab(&mut state, 0);
+
+    assert!(!state.todo.is_editing(), "切标签必须提交编辑");
+    assert_eq!(texts(&state), ["seed-x"]);
+    assert_eq!(take_saved(&mut state), [TodoStatus::Todo], "提交要写库");
+    assert!(state.panes_focused(), "焦点回到主区");
+}
+
+/// 新建标签同样提交：`focus_panes` 是所有「交回主区」路径的唯一收口。
+#[test]
+fn creating_tab_commits_todo_edit() {
+    let mut state = todo_state(&["seed"]);
+    assert!(apply_todo_key(&mut state, TodoKey::Enter));
+    type_text(&mut state, "-y");
+
+    crate::app::update::create_tab(&mut state);
+
+    assert!(!state.todo.is_editing());
+    assert_eq!(texts(&state), ["seed-y"]);
+}
+
+/// 列表溢出时在末尾新建：编辑行必须滚进视口（否则用户看不到输入位置）。
+#[test]
+fn begin_edit_scrolls_ghost_row_into_view() {
+    let mut state = todo_state(&["a", "b", "c", "d", "e", "f", "g", "h"]);
+    state.todo.set_viewport_rows(3);
+    assert_eq!(state.todo.scroll(), 0, "前提：视口贴顶");
+
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::New));
+
+    assert_eq!(state.todo.scroll(), 6, "8 条 + 幽灵 1 行 - 视口 3 行");
+}
+
+/// 输入边界即存储上限：超长不得进内存列表（否则写库被拒、重启即丢）。
+#[test]
+fn typing_stops_at_storage_limit() {
+    let mut state = todo_state(&[]);
+    assert!(apply_todo_key(&mut state, TodoKey::Char('a')));
+    let limit = crate::db::todo::MAX_TODO_TEXT_CHARS;
+    type_text(&mut state, &"字".repeat(limit + 50));
+
+    let text = state
+        .todo
+        .editing()
+        .expect("仍在编辑")
+        .input
+        .text()
+        .to_string();
+    assert_eq!(text.chars().count(), limit, "逐字输入到上限即停");
+
+    assert!(commit_todo_edit(&mut state));
+    assert_eq!(
+        state.todo.items()[0].text.chars().count(),
+        limit,
+        "落库条目不会超过上限"
+    );
+}
+
+/// 粘贴按剩余空间裁剪，同样不会超出上限。
+#[test]
+fn paste_is_clipped_to_storage_limit() {
+    let mut state = todo_state(&[]);
+    assert!(apply_todo_key(&mut state, TodoKey::Char('a')));
+    let limit = crate::db::todo::MAX_TODO_TEXT_CHARS;
+    assert!(apply_todo_paste(&mut state, &"字".repeat(limit + 50)));
+
+    let text = state
+        .todo
+        .editing()
+        .expect("仍在编辑")
+        .input
+        .text()
+        .to_string();
+    assert_eq!(text.chars().count(), limit, "粘贴按剩余空间裁剪");
+
+    // 已经装满：再粘贴不产生变化，也不置脏。
+    assert!(!apply_todo_paste(&mut state, "more"));
 }

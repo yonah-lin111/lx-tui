@@ -247,7 +247,10 @@ pub(crate) fn handle_mouse_moved(
     {
         None
     } else {
+        // `row_at` 给的是**显示**下标；悬停状态与渲染层都用列表下标比较，
+        // 必须在这里换算一次，否则幽灵行打开时悬停会高亮到下一行。
         ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
+            .and_then(|display| ui::right_panel::todo::list_index(state, display))
     };
     if update::set_todo_hover(state, todo_hover) {
         *dirty = true;
