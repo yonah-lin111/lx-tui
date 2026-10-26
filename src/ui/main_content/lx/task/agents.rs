@@ -48,18 +48,16 @@ pub(crate) fn draw_detail(
         return 1;
     }
     let view = history::view_source(rect, source, cache);
-    let total = history::render_source(grid, view.body, source, view.scroll, cache);
-    if let Some(bar) = history::scrollbar(
-        view.body,
-        view.total_rows,
-        usize::from(view.body.height),
-        view.scroll,
-    ) {
+    let visible = usize::from(view.body.height);
+    let max = view.total_rows.saturating_sub(visible);
+    // 跟随底部时贴尾；用户上翻过（`follow == false`）就停在他看的位置。
+    let top = if run.follow { max } else { scroll.min(max) };
+    let total = history::render_source(grid, view.body, source, top, cache);
+    if let Some(bar) = history::scrollbar(view.body, view.total_rows, visible, top) {
         for y in bar.thumb.y..bar.thumb.bottom() {
             grid.set(bar.thumb.x, y, '▐', style::text());
         }
     }
-    let _ = scroll;
     total
 }
 
