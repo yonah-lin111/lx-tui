@@ -645,3 +645,69 @@ async fn unclosed_tool_input_fails_without_execution() {
 mod ask_turn;
 mod context;
 mod limits;
+
+/// 子 agent 上下文里伪造控制工具：必须按工具级失败回给模型，且不触发 host。
+#[tokio::test]
+async fn control_tool_is_rejected_inside_a_subagent_turn() {
+    use crate::chat::agent::{AgentRole, UNAVAILABLE_CODE};
+    use crate::chat::events::RequestPurpose;
+
+    let script = Script::new(
+        vec![
+            tool_calls(
+                &[(
+                    "call-control",
+                    "spawn_agent",
+                    r#"{"role":"explorer","task":"x"}"#,
+                    0,
+                )],
+                None,
+            ),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::new();
+    let (_cancel_sender, cancel) = watch::channel(false);
+    let mut request = ChatRequest {
+        turns: Vec::new(),
+        items: Vec::new(),
+        model: crate::db::chat::ModelSnapshot {
+            provider: "p".into(),
+            model: "m".into(),
+            variant: None,
+        },
+        variant_params: None,
+        purpose: RequestPurpose::Subagent(AgentRole::Explorer),
+        system_prompt: None,
+    };
+    request
+        .items
+        .push(ModelItem::UserText("investigate".into()));
+    let summary = run_agent_turn(
+        ModelContext::new(request, std::env::temp_dir()),
+        host.clone(),
+        RecordingExecutor::new(),
+        script.stream_one(),
+        cancel,
+    )
+    .await;
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    // 工具结果进入上下文：模型看到稳定错误码。
+    let items = script.items_of(1);
+    let text = format!("{items:?}");
+    assert!(text.contains(UNAVAILABLE_CODE), "{text}");
+    // 工具行仍然走完 begin/finish（失败结果要落库），但没有真正派发子 agent。
+    let trace = host.trace();
+    assert!(
+        trace
+            .iter()
+            .any(|item| matches!(item, HostTrace::Begin(id) if id == "call-control")),
+        "{trace:?}"
+    );
+    // 第二次采样仍是子 agent 工具面：用途随轮次冻结，不能回退成主工具面。
+    assert_eq!(
+        script.requests.lock().expect("lock")[1].purpose,
+        RequestPurpose::Subagent(AgentRole::Explorer)
+    );
+}
