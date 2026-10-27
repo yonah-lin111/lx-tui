@@ -378,7 +378,7 @@ fn prompt_focus_maps_history_and_indent_keys() {
 }
 
 #[test]
-fn global_edit_keys_reserve_ctrl_a_for_line_start() {
+fn global_edit_keys_leave_a_for_line_start() {
     use crate::input::{GlobalEdit, global_edit_key};
     for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
         assert_eq!(
@@ -415,19 +415,13 @@ fn global_edit_keys_reserve_ctrl_a_for_line_start() {
             KeyCode::Char('A'),
             KeyModifiers::CONTROL | KeyModifiers::SHIFT
         )),
-        Some(GlobalEdit::SelectAll)
-    );
-    assert_eq!(
-        global_edit_key(KeyEvent::new(
-            KeyCode::Char('a'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT
-        )),
-        Some(GlobalEdit::SelectAll)
+        None,
+        "全选快捷键已移除"
     );
     assert_eq!(
         global_edit_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER)),
-        Some(GlobalEdit::SelectAll),
-        "macOS 保留 Cmd+A 全选"
+        None,
+        "全选快捷键已移除"
     );
     assert_eq!(
         global_edit_key(KeyEvent::new(

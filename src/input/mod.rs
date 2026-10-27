@@ -32,33 +32,30 @@ pub enum Routed {
 /// 全局编辑快捷键：不依赖焦点容器，由事件层按当前可编辑目标分派。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlobalEdit {
-    SelectAll,
     Copy,
     Cut,
     Paste,
 }
 
-/// 识别全局编辑键。
+/// 识别全局编辑键（复制/剪切/粘贴）。
 ///
-/// 全选只接受 `Ctrl+Shift+A`（macOS 兼容 `Cmd+A`）；裸 `Ctrl+A` 留给输入框
-/// 跳到行首，终端里则原样转发给 PTY/readline。复制/剪切/粘贴不接受 Shift。
+/// `Ctrl+A/E` 由各输入框自行映射为行首/行尾；全局不再占用 `A`，终端里
+/// `Ctrl+A` 仍原样转发给 PTY/readline。复制/剪切/粘贴不接受 Shift。
 pub fn global_edit_key(key: KeyEvent) -> Option<GlobalEdit> {
     if key.kind == KeyEventKind::Release {
         return None;
     }
     let modifiers = key.modifiers;
-    let ctrl = modifiers.contains(KeyModifiers::CONTROL);
-    let super_key = modifiers.contains(KeyModifiers::SUPER);
-    let shift = modifiers.contains(KeyModifiers::SHIFT);
-    if (!ctrl && !super_key) || modifiers.contains(KeyModifiers::ALT) {
+    let mod_key =
+        modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER);
+    if !mod_key || modifiers.contains(KeyModifiers::ALT) || modifiers.contains(KeyModifiers::SHIFT)
+    {
         return None;
     }
     match key.code {
-        KeyCode::Char('a' | 'A') if super_key || (ctrl && shift) => Some(GlobalEdit::SelectAll),
-        KeyCode::Char('a' | 'A') => None,
-        KeyCode::Char('c' | 'C') if !shift => Some(GlobalEdit::Copy),
-        KeyCode::Char('x' | 'X') if !shift => Some(GlobalEdit::Cut),
-        KeyCode::Char('v' | 'V') if !shift => Some(GlobalEdit::Paste),
+        KeyCode::Char('c' | 'C') => Some(GlobalEdit::Copy),
+        KeyCode::Char('x' | 'X') => Some(GlobalEdit::Cut),
+        KeyCode::Char('v' | 'V') => Some(GlobalEdit::Paste),
         _ => None,
     }
 }
@@ -112,8 +109,12 @@ fn todo_key(key: KeyEvent) -> Option<TodoKey> {
         KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(TodoKey::Undo),
         KeyCode::Char('y' | 'Y') if ctrl && !alt => Some(TodoKey::Redo),
         KeyCode::Char('w' | 'W') if ctrl && !alt => Some(TodoKey::DeleteWordBackward),
-        KeyCode::Char('a' | 'A') if ctrl && !alt && !shift => Some(TodoKey::Home),
-        KeyCode::Char('e' | 'E') if ctrl && !alt && !shift => Some(TodoKey::End),
+        KeyCode::Char('a' | 'A') if modifiers.contains(KeyModifiers::CONTROL) && !alt && !shift => {
+            Some(TodoKey::Home)
+        }
+        KeyCode::Char('e' | 'E') if modifiers.contains(KeyModifiers::CONTROL) && !alt && !shift => {
+            Some(TodoKey::End)
+        }
         KeyCode::Char(' ') if !ctrl && !alt => Some(TodoKey::Space),
         KeyCode::Char(ch) if !ctrl && !alt => Some(TodoKey::Char(ch)),
         KeyCode::Enter if shift => Some(TodoKey::ShiftEnter),
@@ -211,8 +212,9 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
     }
     let mapped = match (ctrl, alt, key.code) {
         (true, false, KeyCode::Enter) => Some(LxInput::Newline),
+        (true, false, KeyCode::Char('a' | 'A')) if !shift => Some(LxInput::LineStart),
+        (true, false, KeyCode::Char('a' | 'A')) => None,
         (true, false, KeyCode::Char(ch)) => match ch {
-            'a' | 'A' => Some(LxInput::LineStart),
             'o' | 'O' => Some(LxInput::ToggleToolDetail),
             'u' | 'U' => Some(LxInput::DeleteToLineStart),
             'k' | 'K' => Some(LxInput::DeleteToLineEnd),
@@ -287,8 +289,12 @@ pub fn page_rename_key(key: KeyEvent) -> Option<OverlayKey> {
         KeyCode::Char('z' | 'Z') if ctrl && !alt && shift => Some(OverlayKey::Redo),
         KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(OverlayKey::Undo),
         KeyCode::Char('y' | 'Y') if ctrl && !alt => Some(OverlayKey::Redo),
-        KeyCode::Char('a' | 'A') if ctrl && !alt && !shift => Some(OverlayKey::Home),
-        KeyCode::Char('e' | 'E') if ctrl && !alt && !shift => Some(OverlayKey::End),
+        KeyCode::Char('a' | 'A') if modifiers.contains(KeyModifiers::CONTROL) && !alt && !shift => {
+            Some(OverlayKey::Home)
+        }
+        KeyCode::Char('e' | 'E') if modifiers.contains(KeyModifiers::CONTROL) && !alt && !shift => {
+            Some(OverlayKey::End)
+        }
         KeyCode::Backspace if ctrl || alt => Some(OverlayKey::DeleteWordBackward),
         KeyCode::Delete if ctrl || alt => Some(OverlayKey::DeleteWordForward),
         KeyCode::Left if ctrl || alt => Some(OverlayKey::WordLeft),
@@ -330,7 +336,11 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    if overlay_has_text_input(kind) && ctrl && !alt && !shift {
+    if overlay_has_text_input(kind)
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && !alt
+        && !shift
+    {
         match key.code {
             KeyCode::Char('a' | 'A') => return Some(OverlayKey::Home),
             KeyCode::Char('e' | 'E') => return Some(OverlayKey::End),
@@ -520,8 +530,9 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
     }
     let command = match (ctrl, alt, key.code) {
         (true, false, KeyCode::Enter) => Some(EditorCommand::NewlineBelow),
+        (true, false, KeyCode::Char('a' | 'A')) if !shift => Some(EditorCommand::LineStart),
+        (true, false, KeyCode::Char('a' | 'A')) => None,
         (true, false, KeyCode::Char(ch)) => match ch {
-            'a' | 'A' => Some(EditorCommand::LineStart),
             'u' | 'U' => Some(EditorCommand::DeleteToLineStart),
             'k' | 'K' => Some(EditorCommand::DeleteToLineEnd),
             'w' | 'W' => Some(EditorCommand::DeleteWordBackward),

@@ -134,15 +134,6 @@ fn handle_global_edit(
     let control_only = key.modifiers.contains(KeyModifiers::CONTROL)
         && !key.modifiers.contains(KeyModifiers::SUPER);
     match edit {
-        GlobalEdit::SelectAll => {
-            if terminal_pane {
-                return false;
-            }
-            if update::select_all_focused(state) {
-                *dirty = true;
-            }
-            true
-        }
         GlobalEdit::Copy => {
             if let Some(selection) = update::copyable_selection(state, &geometry.rects, cache) {
                 copy_with_toast(state, &selection.text);

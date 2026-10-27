@@ -6489,7 +6489,7 @@ fn lx_ctrl_c_copies_selection_without_clearing_input() {
 }
 
 #[test]
-fn ask_ctrl_shift_a_selects_all_and_ctrl_a_moves_to_line_start() {
+fn ask_ctrl_a_moves_to_line_start_without_select_all() {
     let config = Config::default();
     let (mut state, pane) = busy_ask_state();
     state.set_focus(crate::app::state::FocusedContainer::Panes);
@@ -6505,6 +6505,7 @@ fn ask_ctrl_shift_a_selects_all_and_ctrl_a_moves_to_line_start() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
+    // 全选快捷键已移除：Ctrl+Shift+A 不再产生选区。
     handle_terminal_event(
         TerminalEvent::Key(KeyEvent::new(
             KeyCode::Char('A'),
@@ -6522,13 +6523,8 @@ fn ask_ctrl_shift_a_selects_all_and_ctrl_a_moves_to_line_start() {
             .pane_anywhere(pane)
             .and_then(|pane| pane.lx.ask.as_ref())
             .expect("ask");
-        assert_eq!(
-            ask.editor()
-                .and_then(|editor| editor.selected_text())
-                .as_deref(),
-            Some("own words"),
-            "Ctrl+Shift+A 全选 ask 手写输入"
-        );
+        let editor = ask.editor().expect("editor");
+        assert!(editor.selection_range().is_none());
     }
 
     handle_terminal_event(
@@ -6545,7 +6541,7 @@ fn ask_ctrl_shift_a_selects_all_and_ctrl_a_moves_to_line_start() {
         .and_then(|pane| pane.lx.ask.as_ref())
         .expect("ask");
     let editor = ask.editor().expect("editor");
-    assert!(editor.selection_range().is_none(), "Ctrl+A 取消全选");
+    assert!(editor.selection_range().is_none());
     assert_eq!(editor.cursor(), 0, "Ctrl+A 跳到行首");
 }
 

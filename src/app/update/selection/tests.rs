@@ -223,55 +223,6 @@ fn triple_click_line_selection_stops_at_box_borders() {
 }
 
 #[test]
-fn select_all_focused_covers_overlay_todo_and_lx_inputs() {
-    let mut state = AppState::demo();
-    state.overlay = Some(Overlay::Rename(Rename {
-        target: RenameTarget::Workspace(0),
-        input: TextInput::new("overlay"),
-    }));
-    assert!(select_all_focused(&mut state));
-    let Some(Overlay::Rename(rename)) = state.overlay.as_ref() else {
-        panic!("rename overlay");
-    };
-    assert_eq!(rename.input.selected_text().as_deref(), Some("overlay"));
-
-    let mut state = AppState::demo();
-    state.todo.replace(vec![crate::db::todo::TodoRecord::new(
-        "todo item",
-        crate::db::todo::TodoStatus::Todo,
-        0,
-    )]);
-    assert!(crate::app::update::begin_todo_edit(
-        &mut state,
-        crate::app::state::TodoEditTarget::Current(0)
-    ));
-    assert!(select_all_focused(&mut state));
-    assert_eq!(
-        state
-            .todo
-            .editing()
-            .and_then(|edit| edit.input.selected_text())
-            .as_deref(),
-        Some("todo item")
-    );
-
-    let mut state = AppState::demo();
-    let pane = state.active_tab().layout.focus();
-    let target = state.pane_mut_anywhere(pane).expect("pane");
-    target.view = crate::app::state::PaneView::Lx;
-    target.lx.insert_str("lx draft");
-    state.set_focus(crate::app::state::FocusedContainer::Panes);
-    assert!(select_all_focused(&mut state));
-    assert_eq!(
-        state
-            .pane_anywhere(pane)
-            .and_then(|pane| pane.lx.selected_text())
-            .as_deref(),
-        Some("lx draft")
-    );
-}
-
-#[test]
 fn prompt_cursor_movement_clears_select_all() {
     let mut state = AppState::demo();
     crate::app::update::focus_prompt(&mut state);

@@ -141,65 +141,6 @@ pub(crate) fn copyable_selection(
 /// 剪切当前焦点下的可编辑选区；无选区或只读选区返回 None。
 ///
 /// 调用方必须先确认剪贴板写入成功再调用；本函数只负责删除并生成一条撤销记录。
-/// 全选当前焦点编辑器；无可编辑目标返回 false。
-pub fn select_all_focused(state: &mut AppState) -> bool {
-    if let Some(input) = super::dialog::active_text_input_mut(state) {
-        input.select_all();
-        return true;
-    }
-    if state.overlay.is_some() {
-        return false;
-    }
-    match state.focus() {
-        crate::app::state::FocusedContainer::Prompt => {
-            if prompt_tree_mode_active(state) {
-                return false;
-            }
-            state.select_all_prompt();
-            true
-        }
-        crate::app::state::FocusedContainer::Todo => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            input.select_all();
-            true
-        }
-        crate::app::state::FocusedContainer::Panes => {
-            let id = state.active_tab().layout.focus();
-            let Some(pane) = state.pane_mut_anywhere(id) else {
-                return false;
-            };
-            if pane.view != PaneView::Lx {
-                return false;
-            }
-            if pane.lx.task.is_some() {
-                // 后台任务页接管按键；不得全选被页面遮住的 lx 草稿。
-                return false;
-            }
-            if let Some(ask) = pane.lx.ask.as_mut() {
-                if !ask.editing {
-                    // 提问面板非编辑态接管按键，不能全选被面板遮住的 lx 草稿。
-                    return false;
-                }
-                let Some(editor) = ask.custom.get_mut(ask.current) else {
-                    return false;
-                };
-                editor.select_all();
-                return true;
-            }
-            pane.lx.select_all();
-            true
-        }
-        crate::app::state::FocusedContainer::Sidebar => false,
-    }
-}
-
-/// prompt 是否为树视图（搜索框不属于正文编辑器）。
-fn prompt_tree_mode_active(state: &AppState) -> bool {
-    super::prompt_tree_mode(state)
-}
-
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。
 pub(crate) const WHEEL_LINES: isize = 3;
 
