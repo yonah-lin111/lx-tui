@@ -317,15 +317,17 @@ pub(crate) fn handle_mouse_down_left(
         if let Some(button) = ui::right_panel::todo::button_at(view.prompt, mouse.column, mouse.row)
         {
             changed = update::apply_todo_button(state, button);
+        } else if let Some(index) =
+            ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
+        {
+            // Todo 条目保留自己的双击语义（进入行内编辑）；双击/三击不得转成
+            // 屏幕选词/选行，否则和条目编辑冲突。列表外空白仍允许屏幕选择。
+            changed = update::click_todo_row(state, index, Instant::now());
         } else if click != crate::app::selection::SelectionUnit::Character {
             update::focus_todo_from_click(state);
             update::begin_screen_selection_unit(state, screen_text, point, click);
             *dirty = true;
             return;
-        } else if let Some(index) =
-            ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
-        {
-            changed = update::click_todo_row(state, index, Instant::now());
         }
         // 容器内其余位置（工具栏空白 / 分割线 / 统计块 / 列表外空白）同样让容器进入
         // 选中态，但不改数据、不打断编辑、不穿透到窗格。焦点高亮只由边框表达，

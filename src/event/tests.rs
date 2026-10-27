@@ -5405,7 +5405,7 @@ fn mouse_click_todo_toolbar_button_runs_action() {
 }
 
 #[test]
-fn mouse_double_click_todo_row_selects_word_instead_of_editing() {
+fn mouse_double_click_todo_row_enters_edit_without_word_selection() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
     state.todo.replace(
@@ -5445,7 +5445,7 @@ fn mouse_double_click_todo_row_selects_word_instead_of_editing() {
     assert_eq!(state.todo.selected(), Some(2));
     assert!(!state.todo.is_editing(), "单击不进入编辑");
 
-    // 第二击（仍在判定窗口内）：按屏幕上看到的词选择，不再直接进入编辑。
+    // 第二击（仍在判定窗口内）：进入该行的行内编辑；条目禁止转成屏幕选词。
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -5459,12 +5459,67 @@ fn mouse_double_click_todo_row_selects_word_instead_of_editing() {
         &mut cache,
         &mut dirty,
     );
-    assert!(
-        !state.todo.is_editing(),
-        "双击文字格只选词，编辑走 Enter/工具栏"
+    let edit = state.todo.editing().expect("双击进入编辑");
+    assert_eq!(
+        edit.target.as_deref(),
+        Some(state.todo.items()[2].id.as_str())
     );
-    let selection = state.screen_selection.as_ref().expect("word selection");
-    assert_eq!(selection.unit(), crate::app::selection::SelectionUnit::Word);
+    assert_eq!(edit.input.text(), "item 2", "编辑现场带原文");
+    assert!(
+        state.screen_selection.is_none(),
+        "Todo 条目双击不得启动屏幕选词"
+    );
+    assert!(state.todo_focused());
+}
+
+#[test]
+fn mouse_triple_click_todo_row_does_not_start_line_selection() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    state.todo.replace(
+        (0..3)
+            .map(|index| {
+                crate::db::todo::TodoRecord::new(
+                    format!("item {index}"),
+                    crate::db::todo::TodoStatus::Todo,
+                    index,
+                )
+            })
+            .collect(),
+    );
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+
+    for _ in 0..3 {
+        handle_terminal_event(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                list.x + 1,
+                list.y + 2,
+            ),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+    }
+
+    assert!(
+        state.screen_selection.is_none(),
+        "Todo 条目三击不得启动屏幕选行"
+    );
+    assert!(
+        state.todo.is_editing(),
+        "第二击仍按 Todo 自己的双击进入编辑"
+    );
     assert!(state.todo_focused());
 }
 
