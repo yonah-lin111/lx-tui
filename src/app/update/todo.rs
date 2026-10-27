@@ -264,9 +264,18 @@ fn edit_todo_input(
     let Some(input) = state.todo.edit_input_mut() else {
         return false;
     };
-    let before = (input.text().to_string(), input.cursor());
+    let before = (
+        input.text().to_string(),
+        input.cursor(),
+        input.selection_range(),
+    );
     edit(input);
-    before != (input.text().to_string(), input.cursor())
+    before
+        != (
+            input.text().to_string(),
+            input.cursor(),
+            input.selection_range(),
+        )
 }
 
 /// 列表态按键。

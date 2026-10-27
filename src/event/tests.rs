@@ -6424,6 +6424,131 @@ fn lx_paste_cancels_rewind_arming() {
     assert_eq!(target.lx.input, "pasted");
 }
 
+#[test]
+fn lx_ctrl_c_clears_input_when_nothing_is_selected() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("focused pane");
+        target.view = PaneView::Lx;
+        target.lx.insert_str("draft");
+    }
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.input, "", "无选区 Ctrl+C 清空 lx 输入");
+    assert!(target.lx.selected_text().is_none());
+    assert!(dirty);
+}
+
+#[test]
+fn lx_ctrl_c_copies_selection_without_clearing_input() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("focused pane");
+        target.view = PaneView::Lx;
+        target.lx.insert_str("keep");
+        target.lx.select_all();
+    }
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.input, "keep", "有选区 Ctrl+C 只复制，不清空");
+    assert_eq!(target.lx.selected_text().as_deref(), Some("keep"));
+    assert!(state.toast.is_some(), "复制反馈");
+    assert!(dirty);
+}
+
+#[test]
+fn ask_ctrl_shift_a_selects_all_and_ctrl_a_moves_to_line_start() {
+    let config = Config::default();
+    let (mut state, pane) = busy_ask_state();
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
+    {
+        let ask = state
+            .pane_mut_anywhere(pane)
+            .and_then(|pane| pane.lx.ask.as_mut())
+            .expect("ask");
+        assert!(ask.begin_edit());
+        ask.editor_mut().expect("editor").insert_str("own words");
+    }
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(
+            KeyCode::Char('A'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        )),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    {
+        let ask = state
+            .pane_anywhere(pane)
+            .and_then(|pane| pane.lx.ask.as_ref())
+            .expect("ask");
+        assert_eq!(
+            ask.editor()
+                .and_then(|editor| editor.selected_text())
+                .as_deref(),
+            Some("own words"),
+            "Ctrl+Shift+A 全选 ask 手写输入"
+        );
+    }
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    let ask = state
+        .pane_anywhere(pane)
+        .and_then(|pane| pane.lx.ask.as_ref())
+        .expect("ask");
+    let editor = ask.editor().expect("editor");
+    assert!(editor.selection_range().is_none(), "Ctrl+A 取消全选");
+    assert_eq!(editor.cursor(), 0, "Ctrl+A 跳到行首");
+}
+
 // ===== ask 面板接线：点击吞掉、粘贴只进手写缓冲 =====
 
 /// 流中窗格 + 一道两选项的挂起提问（真实 request 路径会跑串行锁，这里直接构造，

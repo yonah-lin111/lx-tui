@@ -507,3 +507,32 @@ fn newline_replaces_selection_without_list_continuation() {
     assert_eq!(lx.input, "\n");
     assert_eq!(lx.cursor, 1);
 }
+
+#[test]
+fn cursor_navigation_clears_select_all_selection() {
+    let mut lx = Lx::new();
+    lx.insert_str("hello\nworld");
+
+    lx.select_all();
+    lx.move_left();
+    assert_eq!(lx.cursor, 0);
+    assert!(!lx.has_text_selection(), "左移折叠到选区起点");
+
+    lx.select_all();
+    lx.move_right();
+    assert_eq!(lx.cursor, lx.input.len());
+    assert!(!lx.has_text_selection(), "右移折叠到选区终点");
+
+    lx.select_all();
+    lx.home();
+    assert!(!lx.has_text_selection(), "Home 取消全选");
+
+    lx.select_all();
+    lx.word_left();
+    assert_eq!(lx.cursor, 0);
+    assert!(!lx.has_text_selection(), "按词左移折叠到选区起点");
+
+    lx.select_all();
+    lx.end();
+    assert!(!lx.has_text_selection(), "End 取消全选");
+}

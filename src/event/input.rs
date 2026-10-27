@@ -157,6 +157,18 @@ fn handle_global_edit(
             if matches!(state.overlay, Some(Overlay::ReferencedFolderMenu(_))) {
                 return false;
             }
+            // lx 页无文本选区时，Ctrl+C 是清空当前输入框（ask 编辑态清空手写缓冲；
+            // /resume 历史面板仍由 apply_lx_input 转成“复制会话 id”）。Cmd+C 不触发清空。
+            if control_only
+                && state.overlay.is_none()
+                && state.panes_focused()
+                && state
+                    .active_pane()
+                    .is_some_and(|pane| pane.view == PaneView::Lx)
+            {
+                update::apply_lx_input(state, crate::app::actions::LxInput::Clear);
+                *dirty = true;
+            }
             true
         }
         GlobalEdit::Cut => {

@@ -173,10 +173,18 @@ pub fn select_all_focused(state: &mut AppState) -> bool {
             if pane.view != PaneView::Lx {
                 return false;
             }
-            if let Some(ask) = pane.lx.ask.as_mut()
-                && ask.editing
-                && let Some(editor) = ask.custom.get_mut(ask.current)
-            {
+            if pane.lx.task.is_some() {
+                // 后台任务页接管按键；不得全选被页面遮住的 lx 草稿。
+                return false;
+            }
+            if let Some(ask) = pane.lx.ask.as_mut() {
+                if !ask.editing {
+                    // 提问面板非编辑态接管按键，不能全选被面板遮住的 lx 草稿。
+                    return false;
+                }
+                let Some(editor) = ask.custom.get_mut(ask.current) else {
+                    return false;
+                };
                 editor.select_all();
                 return true;
             }

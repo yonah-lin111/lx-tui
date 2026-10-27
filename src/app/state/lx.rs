@@ -449,40 +449,59 @@ impl Lx {
         }
     }
 
-    /// 光标左移一个字符。
+    /// 光标左移一个字符；有选区时折叠到选区起点（选区随光标移动取消）。
     pub fn move_left(&mut self) {
+        if let Some((start, _)) = self.text_selection_range() {
+            self.cursor = start;
+            self.text_anchor = None;
+            self.scroll_cursor_into_view();
+            self.refresh_panel();
+            return;
+        }
+        self.text_anchor = None;
         if let Some(prev) = self.input[..self.cursor].chars().next_back() {
             self.cursor -= prev.len_utf8();
             self.refresh_panel();
         }
     }
 
-    /// 光标右移一个字符。
+    /// 光标右移一个字符；有选区时折叠到选区终点（选区随光标移动取消）。
     pub fn move_right(&mut self) {
+        if let Some((_, end)) = self.text_selection_range() {
+            self.cursor = end;
+            self.text_anchor = None;
+            self.scroll_cursor_into_view();
+            self.refresh_panel();
+            return;
+        }
+        self.text_anchor = None;
         if let Some(next) = self.input[self.cursor..].chars().next() {
             self.cursor += next.len_utf8();
             self.refresh_panel();
         }
     }
 
-    /// 光标移到当前视觉行行首。
+    /// 光标移到当前视觉行行首；移动即取消输入框选区。
     pub fn home(&mut self) {
+        self.text_anchor = None;
         let rows = self.visual_rows();
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = rows[index].start;
         self.refresh_panel();
     }
 
-    /// 光标移到当前视觉行行尾。
+    /// 光标移到当前视觉行行尾；移动即取消输入框选区。
     pub fn end(&mut self) {
+        self.text_anchor = None;
         let rows = self.visual_rows();
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = rows[index].end;
         self.refresh_panel();
     }
 
-    /// 光标上移一个视觉行（保持显示列，越界钳到行尾）。
+    /// 光标上移一个视觉行（保持显示列，越界钳到行尾）；移动即取消输入框选区。
     pub fn move_up(&mut self) {
+        self.text_anchor = None;
         let rows = self.visual_rows();
         let (index, col) = self.cursor_visual_in(&rows);
         if index == 0 {
@@ -495,8 +514,9 @@ impl Lx {
         self.refresh_panel();
     }
 
-    /// 光标下移一个视觉行（保持显示列，越界钳到行尾）。
+    /// 光标下移一个视觉行（保持显示列，越界钳到行尾）；移动即取消输入框选区。
     pub fn move_down(&mut self) {
+        self.text_anchor = None;
         let rows = self.visual_rows();
         let (index, col) = self.cursor_visual_in(&rows);
         if index + 1 >= rows.len() {
@@ -601,14 +621,30 @@ impl Lx {
         self.refresh_panel();
     }
 
-    /// 光标左移一个词。
+    /// 光标左移一个词；有选区时折叠到选区起点。
     pub fn word_left(&mut self) {
+        if let Some((start, _)) = self.text_selection_range() {
+            self.cursor = start;
+            self.text_anchor = None;
+            self.scroll_cursor_into_view();
+            self.refresh_panel();
+            return;
+        }
+        self.text_anchor = None;
         self.cursor = text::word_start_before(&self.input, self.cursor);
         self.refresh_panel();
     }
 
-    /// 光标右移一个词。
+    /// 光标右移一个词；有选区时折叠到选区终点。
     pub fn word_right(&mut self) {
+        if let Some((_, end)) = self.text_selection_range() {
+            self.cursor = end;
+            self.text_anchor = None;
+            self.scroll_cursor_into_view();
+            self.refresh_panel();
+            return;
+        }
+        self.text_anchor = None;
         self.cursor = text::word_end_after(&self.input, self.cursor);
         self.refresh_panel();
     }

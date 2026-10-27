@@ -255,3 +255,22 @@ fn text_input_revision_tracks_edits_but_not_selection() {
     input.move_left();
     assert_eq!(input.revision(), after);
 }
+
+#[test]
+fn text_input_cursor_movement_collapses_select_all() {
+    let mut input = TextInput::new("hello");
+    input.select_all();
+    input.move_left();
+    assert_eq!(input.cursor(), 0);
+    assert!(!input.has_selection(), "左移折叠到选区起点并取消全选");
+
+    input.select_all();
+    input.move_right();
+    assert_eq!(input.cursor(), 5);
+    assert!(!input.has_selection(), "右移折叠到选区终点并取消全选");
+
+    input.select_all();
+    input.move_home();
+    assert_eq!(input.cursor(), 0);
+    assert!(!input.has_selection(), "Home 取消全选");
+}

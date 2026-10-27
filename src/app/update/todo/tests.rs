@@ -675,3 +675,22 @@ fn ctrl_a_and_backspace_replace_selection_within_max_length() {
     assert!(apply_todo_key(&mut state, TodoKey::Enter));
     assert_eq!(state.todo.items()[0].text.chars().count(), max);
 }
+
+#[test]
+fn ctrl_e_clears_select_all_even_when_cursor_stays_at_end() {
+    let mut state = todo_state(&["hello"]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
+    state.todo.edit_input_mut().expect("editing").select_all();
+    // Ctrl+E 映射到 End：光标本来就在末尾，但必须清掉全选高亮并触发重绘。
+    assert!(apply_todo_key(&mut state, TodoKey::End));
+    assert!(
+        state
+            .todo
+            .editing()
+            .expect("editing")
+            .input
+            .selection_range()
+            .is_none(),
+        "光标移动到行尾即取消全选"
+    );
+}

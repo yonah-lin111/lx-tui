@@ -52,6 +52,16 @@ fn ctrl_c_is_passed_to_pane() {
 }
 
 #[test]
+fn ctrl_a_is_passed_to_pane() {
+    let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+    assert_eq!(
+        route(key, TermMode::empty(), false),
+        Some(Routed::Pane(vec![0x01])),
+        "终端里的 Ctrl+A 仍是 readline 行首，不截获为全选"
+    );
+}
+
+#[test]
 fn ctrl_b_is_passed_to_pane() {
     let key = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
     assert_eq!(
@@ -212,6 +222,11 @@ fn prompt_focus_maps_readline_shortcuts() {
             EditorCommand::DeleteWordBackward,
         ),
         (
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL,
+            EditorCommand::LineStart,
+        ),
+        (
             KeyCode::Char('e'),
             KeyModifiers::CONTROL,
             EditorCommand::LineEnd,
@@ -363,14 +378,9 @@ fn prompt_focus_maps_history_and_indent_keys() {
 }
 
 #[test]
-fn global_edit_keys_are_mod_only() {
+fn global_edit_keys_reserve_ctrl_a_for_line_start() {
     use crate::input::{GlobalEdit, global_edit_key};
     for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
-        assert_eq!(
-            global_edit_key(KeyEvent::new(KeyCode::Char('a'), modifiers)),
-            Some(GlobalEdit::SelectAll),
-            "{modifiers:?}"
-        );
         assert_eq!(
             global_edit_key(KeyEvent::new(KeyCode::Char('c'), modifiers)),
             Some(GlobalEdit::Copy),
@@ -395,6 +405,30 @@ fn global_edit_keys_are_mod_only() {
             "复制键不加 Shift"
         );
     }
+    assert_eq!(
+        global_edit_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+        None,
+        "Ctrl+A 留给输入框行首"
+    );
+    assert_eq!(
+        global_edit_key(KeyEvent::new(
+            KeyCode::Char('A'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT
+        )),
+        Some(GlobalEdit::SelectAll)
+    );
+    assert_eq!(
+        global_edit_key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT
+        )),
+        Some(GlobalEdit::SelectAll)
+    );
+    assert_eq!(
+        global_edit_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER)),
+        Some(GlobalEdit::SelectAll),
+        "macOS 保留 Cmd+A 全选"
+    );
     assert_eq!(
         global_edit_key(KeyEvent::new(
             KeyCode::Char('c'),
@@ -549,6 +583,14 @@ fn referenced_input_routes_single_line_editing() {
     );
     // Ctrl/Cmd+C 由全局复制统一处理，不再是输入框清空。
     assert_eq!(route_input(KeyCode::Char('c'), KeyModifiers::CONTROL), None);
+    assert_eq!(
+        route_input(KeyCode::Char('a'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::Home))
+    );
+    assert_eq!(
+        route_input(KeyCode::Char('e'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::End))
+    );
     assert_eq!(
         route_input(KeyCode::Backspace, KeyModifiers::NONE),
         Some(Routed::Overlay(OverlayKey::Backspace))
@@ -730,7 +772,11 @@ fn rename_overlay_routes_editing_keys() {
     }
     assert_eq!(
         route_rename(KeyCode::Char('a'), KeyModifiers::CONTROL),
-        None
+        Some(Routed::Overlay(OverlayKey::Home))
+    );
+    assert_eq!(
+        route_rename(KeyCode::Char('e'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::End))
     );
     assert_eq!(route_rename(KeyCode::Up, KeyModifiers::NONE), None);
 }
@@ -867,7 +913,7 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
             true,
         )
     };
-    assert_eq!(ctrl('a'), None, "Ctrl+A 由全局全选处理");
+    assert_eq!(ctrl('a'), Some(Routed::Lx(LxInput::LineStart)));
     assert_eq!(ctrl('e'), Some(Routed::Lx(LxInput::LineEnd)));
     assert_eq!(ctrl('u'), Some(Routed::Lx(LxInput::DeleteToLineStart)));
     assert_eq!(ctrl('k'), Some(Routed::Lx(LxInput::DeleteToLineEnd)));
@@ -975,7 +1021,7 @@ fn worktree_open_overlay_routes_search_and_navigation_keys() {
             Some(OverlayKind::WorktreeOpen),
             false
         ),
-        None
+        Some(Routed::Overlay(OverlayKey::Home))
     );
 }
 
@@ -1100,9 +1146,32 @@ fn page_rename_key_maps_single_line_input_semantics() {
         None
     );
     assert_eq!(
+        page_rename_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+        Some(OverlayKey::Home)
+    );
+    assert_eq!(
+        page_rename_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)),
+        Some(OverlayKey::End)
+    );
+    assert_eq!(
         page_rename_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
         None,
         "Ctrl 组合不进入输入（Ctrl+Q 由上层退出）"
     );
     assert_eq!(page_rename_key(key(KeyCode::Tab)), None);
+}
+
+#[test]
+fn todo_focus_maps_ctrl_a_and_e_to_line_edges() {
+    let route_todo = |ch| {
+        super::route(
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL),
+            TermMode::empty(),
+            crate::app::state::FocusedContainer::Todo,
+            None,
+            false,
+        )
+    };
+    assert_eq!(route_todo('a'), Some(Routed::Todo(TodoKey::Home)));
+    assert_eq!(route_todo('e'), Some(Routed::Todo(TodoKey::End)));
 }

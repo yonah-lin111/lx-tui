@@ -233,4 +233,11 @@ fn ask_editor_select_all_replace_and_cut_share_lx_semantics() {
     assert_eq!(editor.text(), "");
     editor.undo();
     assert_eq!(editor.text(), "hello world");
+
+    editor.select_all();
+    editor.home();
+    assert!(editor.selection_range().is_none(), "Home 取消全选");
+    editor.select_all();
+    editor.end();
+    assert!(editor.selection_range().is_none(), "End 取消全选");
 }
