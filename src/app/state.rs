@@ -11,7 +11,7 @@ use super::effects::Effect;
 use super::overlay::{Overlay, OverlayKind};
 use super::prompt::{Prompt, PromptPanel};
 use super::referenced::ReferencedFolders;
-use super::selection::{ScreenClick, ScreenSelection, Selection, SelectionSource};
+use super::selection::{ScreenClick, ScreenPoint, ScreenSelection, Selection, SelectionSource};
 use super::toast::Toast;
 use super::tooltip::Tooltip;
 use super::trust::TrustResolution;
@@ -56,6 +56,30 @@ const DEFAULT_SIDEBAR_WIDTH: u16 = 24;
 pub enum AutoscrollDirection {
     Up,
     Down,
+}
+
+/// 等待松开鼠标后再执行的文字点击动作。
+///
+/// 普通左键拖动要能选字，但单击仍须执行原动作：按下时只登记动作并起选，
+/// 松开时若有位移则保留选区，无位移才把动作补执行。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingScreenAction {
+    /// 浮层内命中可点击文字行；动作由原浮层点击分发重放。
+    Overlay {
+        kind: OverlayKind,
+        column: u16,
+        row: u16,
+    },
+    /// ask 选项行；动作由 `apply_ask_click` 重放。
+    Ask { pane: PaneId, hit: AskHit },
+}
+
+/// 一次待定的文字点击：锚点、是否已拖动、松开时要补的动作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PendingScreenClick {
+    pub anchor: ScreenPoint,
+    pub dragged: bool,
+    pub action: PendingScreenAction,
 }
 
 /// 选区拖拽边缘自动滚动计划。
@@ -203,6 +227,8 @@ pub struct AppState {
     pub screen_selection: Option<ScreenSelection>,
     /// 屏幕选择点击计数现场（同格 400 ms，1→2→3→1）。
     pub screen_click: Option<ScreenClick>,
+    /// 正在等待松开的文字行点击；拖动则改为选区，不执行原动作。
+    pub(crate) pending_screen_click: Option<PendingScreenClick>,
     /// 剪贴板请求序号；异步回投按它匹配。
     pub next_clipboard_id: u64,
     /// 粘贴事件代次：终端 Paste 到达即递增，作废在途按键回退读取。
@@ -383,6 +409,7 @@ impl AppState {
             selection: None,
             screen_selection: None,
             screen_click: None,
+            pending_screen_click: None,
             next_clipboard_id: 1,
             clipboard_generation: 0,
             clipboard_requests: Vec::new(),

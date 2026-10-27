@@ -7,7 +7,9 @@ use crossterm::event::{KeyModifiers, MouseEvent};
 
 use crate::app::actions::Action;
 use crate::app::overlay::Overlay;
-use crate::app::state::{AppState, PaneKind, PaneView};
+use crate::app::state::{
+    AppState, AskHit, PaneKind, PaneView, PendingScreenAction, PendingScreenClick,
+};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::Config;
@@ -15,7 +17,7 @@ use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
 use crate::ui;
 
-use super::super::overlay::{handle_overlay_click, open_right_click_menu};
+use super::super::overlay::{OverlayHit, handle_overlay_click, open_right_click_menu, overlay_hit};
 use super::super::paste;
 use super::super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 use super::hit::{
@@ -108,6 +110,37 @@ pub(crate) fn handle_mouse_down_left(
                 return;
             }
         }
+        match overlay_hit(state, *screen, mouse.column, mouse.row) {
+            OverlayHit::Row => {
+                update::begin_screen_selection_unit(
+                    state,
+                    screen_text,
+                    point,
+                    crate::app::selection::SelectionUnit::Character,
+                );
+                let Some(kind) = state.overlay.as_ref().map(Overlay::kind) else {
+                    *dirty = true;
+                    return;
+                };
+                state.pending_screen_click = Some(PendingScreenClick {
+                    anchor: point,
+                    dragged: false,
+                    action: PendingScreenAction::Overlay {
+                        kind,
+                        column: mouse.column,
+                        row: mouse.row,
+                    },
+                });
+                *dirty = true;
+                return;
+            }
+            OverlayHit::Text => {
+                update::begin_screen_selection_unit(state, screen_text, point, click);
+                *dirty = true;
+                return;
+            }
+            OverlayHit::Control => {}
+        }
         let was_confirm = matches!(
             state.overlay,
             Some(Overlay::ConfirmClose(_) | Overlay::ConfirmSyncWorkspaceCwd(_))
@@ -131,11 +164,19 @@ pub(crate) fn handle_mouse_down_left(
     }
     if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config) {
         if toast.contains((mouse.column, mouse.row).into()) {
-            // 点击 toast 内部内容不关闭；仅右上角 [✕] 关闭。
+            // 仅右上角 [✕] 关闭；正文是可选只读文字，普通拖动直接起选。
             if ui::toast::close_button_at(toast, mouse.column, mouse.row) {
                 update::dismiss_toast(state);
                 *dirty = true;
+                return;
             }
+            update::begin_screen_selection(
+                state,
+                screen_text,
+                crate::app::selection::ScreenPoint::new(mouse.row, mouse.column),
+                Instant::now(),
+            );
+            *dirty = true;
             return;
         }
         // 点击 toast 之外：关闭 toast 后继续处理本次点击。
@@ -150,6 +191,13 @@ pub(crate) fn handle_mouse_down_left(
             *dirty = true;
             return;
         }
+        update::begin_screen_selection(
+            state,
+            screen_text,
+            crate::app::selection::ScreenPoint::new(mouse.row, mouse.column),
+            Instant::now(),
+        );
+        *dirty = true;
         return;
     }
     if dismiss_lx_toast_outside(rects, state, mouse.column, mouse.row) {
@@ -514,8 +562,26 @@ pub(crate) fn handle_mouse_down_left(
                         ))
                     });
                 if let Some(hit) = ask_hit {
-                    if let Some(hit) = hit {
-                        update::apply_ask_click(state, pane, hit);
+                    match hit {
+                        Some(hit @ (AskHit::Option(_) | AskHit::Other)) => {
+                            update::begin_screen_selection_unit(
+                                state,
+                                screen_text,
+                                point,
+                                crate::app::selection::SelectionUnit::Character,
+                            );
+                            state.pending_screen_click = Some(PendingScreenClick {
+                                anchor: point,
+                                dragged: false,
+                                action: PendingScreenAction::Ask { pane, hit },
+                            });
+                        }
+                        Some(hit @ (AskHit::Tab(_) | AskHit::Submit)) => {
+                            update::apply_ask_click(state, pane, hit);
+                        }
+                        None => {
+                            update::begin_screen_selection_unit(state, screen_text, point, click);
+                        }
                     }
                     *dirty = true;
                     return;
@@ -556,6 +622,16 @@ pub(crate) fn handle_mouse_down_left(
                             update::close_task_page(state, pane);
                         }
                     }
+                    *dirty = true;
+                    return;
+                }
+                // 后台任务页接管整个内容区：其余文字按最终画面选，不能再落到
+                // 被页面遮住的 lx 历史选区（那会选到错的或空的内容）。
+                if state
+                    .pane_anywhere(pane)
+                    .is_some_and(|target| target.lx.task.is_some())
+                {
+                    update::begin_screen_selection_unit(state, screen_text, point, click);
                     *dirty = true;
                     return;
                 }
@@ -704,6 +780,52 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
     } else {
         update::clear_selection(state);
+    }
+}
+
+/// 松开时补执行被延迟的文字行点击；调用方已确认没有拖动。
+pub(crate) fn apply_pending_screen_click(
+    state: &mut AppState,
+    action: PendingScreenAction,
+    sessions: &mut HashMap<PaneId, PtySession>,
+    geometry: &Geometry,
+    dirty: &mut bool,
+) {
+    match action {
+        PendingScreenAction::Overlay { kind, column, row } => {
+            if state.overlay.as_ref().map(Overlay::kind) != Some(kind) {
+                return;
+            }
+            let Geometry { screen, view, .. } = geometry;
+            let was_confirm = matches!(
+                state.overlay,
+                Some(Overlay::ConfirmClose(_) | Overlay::ConfirmSyncWorkspaceCwd(_))
+            );
+            let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
+            let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
+            let was_new_ws = matches!(
+                state.overlay,
+                Some(Overlay::NewWorkspace(_) | Overlay::TrustWorkspace(_))
+            );
+            if let Some((pane, bytes)) = handle_overlay_click(state, *screen, column, row) {
+                write_to_pane(sessions, pane, &bytes);
+                update::reset_pane_scroll(state, pane);
+            }
+            if was_confirm || was_menu || was_worktree || was_new_ws {
+                ensure_workspace_visible(state, view);
+            }
+            reveal_active_tab(state, view);
+            *dirty = true;
+        }
+        PendingScreenAction::Ask { pane, hit } => {
+            if state
+                .pane_anywhere(pane)
+                .is_some_and(|target| target.lx.ask.is_some())
+            {
+                update::apply_ask_click(state, pane, hit);
+                *dirty = true;
+            }
+        }
     }
 }
 

@@ -715,6 +715,36 @@ fn tick_clears_expired_toast_only() {
 }
 
 #[test]
+fn screen_selection_pauses_lx_toast_expiry() {
+    let mut state = demo_terminal();
+    let pane = state.active_tab().layout.focus();
+    state.active_tab_mut().pane_mut(pane).expect("pane").view = PaneView::Lx;
+    let now = Instant::now();
+    show_lx_toast(
+        &mut state,
+        pane,
+        Toast::new(ToastKind::Default, "lx toast", None, now),
+    );
+    state.screen_selection = Some(crate::app::selection::ScreenSelection::new(
+        crate::app::selection::ScreenPoint::new(0, 0),
+        crate::app::selection::SelectionUnit::Character,
+        crate::app::selection::SelectedCells::default(),
+    ));
+    assert_eq!(next_deadline(&state), None, "选区期间不安排 toast 唤醒");
+    tick(&mut state, now + TOAST_DURATION + Duration::from_secs(1));
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.toast.is_some(),
+        "选区存在期间 lx toast 不得过期"
+    );
+    clear_selection(&mut state);
+    tick(&mut state, now + TOAST_DURATION + Duration::from_secs(1));
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.toast.is_none(),
+        "清除选区后恢复过期"
+    );
+}
+
+#[test]
 fn toast_hover_suspends_expiry_until_pointer_leaves() {
     let mut state = demo_terminal();
     let now = Instant::now();

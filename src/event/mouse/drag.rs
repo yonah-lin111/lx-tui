@@ -230,6 +230,11 @@ pub(crate) fn handle_mouse_drag(
             mouse.row.min(geometry.screen.bottom().saturating_sub(1)),
             mouse.column.min(geometry.screen.right().saturating_sub(1)),
         );
+        if let Some(pending) = state.pending_screen_click.as_mut()
+            && point != pending.anchor
+        {
+            pending.dragged = true;
+        }
         update::drag_screen_selection(state, &geometry.screen_text, point);
         *dirty = true;
         return;
@@ -334,6 +339,32 @@ pub(crate) fn handle_mouse_up_left(
     }
     if state.referenced_menu_scroll_drag.take().is_some() {
         *dirty = true;
+        return;
+    }
+    // 延迟的文字行点击：没有位移才补执行原动作；拖动过则只收尾选区。
+    if let Some(pending) = state.pending_screen_click.take() {
+        let point = crate::app::selection::ScreenPoint::new(
+            mouse.row.min(geometry.screen.bottom().saturating_sub(1)),
+            mouse.column.min(geometry.screen.right().saturating_sub(1)),
+        );
+        let dragged = pending.dragged || point != pending.anchor;
+        if !dragged {
+            update::clear_selection(state);
+            *dirty = true;
+            super::press::apply_pending_screen_click(
+                state,
+                pending.action,
+                sessions,
+                geometry,
+                dirty,
+            );
+            return;
+        }
+        if state.screen_selection.is_some() {
+            update::drag_screen_selection(state, &geometry.screen_text, point);
+            update::finish_screen_selection(state);
+            *dirty = true;
+        }
         return;
     }
     // 屏幕选区：松开只结束拖动，不写剪贴板、不清高亮。

@@ -915,15 +915,20 @@ fn mouse_click_pane_menu_split_item_creates_pane() {
     };
     let menu_layout = ui::overlay::menu_layout(&state, geo.screen, menu);
     let item = menu_layout.item_rects[0];
-    handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), item.x + 1, item.y),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        handle_terminal_event(
+            mouse(kind, item.x + 1, item.y),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
 
     assert!(state.overlay.is_none());
     assert_eq!(state.active_tab().layout.pane_ids().len(), 2);
@@ -2624,15 +2629,20 @@ fn mouse_click_referenced_menu_row_selects_then_double_click_opens_search() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
     let row = referenced_menu_layout(&state, &geo).rows[1];
-    handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), row.x, row.y),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        handle_terminal_event(
+            mouse(kind, row.x, row.y),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
     // 单击只选中（与 prompt 列表一致）。
     assert!(
         matches!(state.overlay, Some(Overlay::ReferencedFolderMenu(_))),
@@ -2643,15 +2653,20 @@ fn mouse_click_referenced_menu_row_selects_then_double_click_opens_search() {
     };
     assert_eq!(menu.selected, 1, "单击选中该行");
     // 双击同一行才打开内容弹窗。
-    handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), row.x, row.y),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        handle_terminal_event(
+            mouse(kind, row.x, row.y),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
     let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref() else {
         panic!("双击打开搜索");
     };
@@ -2668,15 +2683,20 @@ fn mouse_click_referenced_menu_add_row_opens_input() {
     let rows = referenced_menu_layout(&state, &geo).rows;
     let add = rows.last().copied().expect("add row");
     // 动作项单击即打开路径输入（与草稿保存选择器一致）。
-    handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), add.x, add.y),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        handle_terminal_event(
+            mouse(kind, add.x, add.y),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
     assert!(
         matches!(state.overlay, Some(Overlay::ReferencedFolderInput(_))),
         "新建行打开路径输入"
@@ -6620,15 +6640,20 @@ fn ask_click_selects_option_and_does_not_reach_history() {
     let (column, row) = ask_option_point(&state, pane, &geo);
     let mut sessions = HashMap::new();
     let mut dirty = false;
-    handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), column, row),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        handle_terminal_event(
+            mouse(kind, column, row),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
     let ask = state
         .pane_anywhere(pane)
         .and_then(|pane| pane.lx.ask.as_ref())
@@ -7061,6 +7086,279 @@ fn hover_below_ghost_row_stores_list_index() {
         Some(1),
         "显示第 2 行是列表下标 1（b），不是显示下标 2（那会被渲染层当成 c）"
     );
+}
+
+#[test]
+fn plain_drag_selects_task_page_text_not_hidden_lx_history() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        target.lx.task = Some(crate::app::state::TaskPage {
+            tab: crate::app::state::TaskTab::Processes,
+            ..Default::default()
+        });
+    }
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
+    let mut geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let inner = layout::pane_inner_rect(
+        geo.rects
+            .iter()
+            .find(|(id, _)| *id == pane)
+            .map(|(_, rect)| *rect)
+            .expect("pane rect"),
+    );
+    let task =
+        ui::main_content::lx::task_rects(inner, &state.pane_anywhere(pane).expect("pane").lx)
+            .expect("task rects");
+    let mut buffer = ratatui::buffer::Buffer::empty(geo.screen);
+    buffer.set_string(
+        task.output.x + 1,
+        task.output.y + 1,
+        "task output text",
+        ratatui::style::Style::default(),
+    );
+    geo.screen_text = crate::ui::screen::ScreenText::from_buffer(&buffer);
+
+    let (column, row) = (task.output.x + 1, task.output.y + 1);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let column = if matches!(kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_)) {
+            column + 4
+        } else {
+            column
+        };
+        handle_terminal_event(
+            mouse(kind, column, row),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+
+    let mut cache = ui::RenderCache::default();
+    let copied = crate::app::update::copyable_selection(&state, &geo.rects, &mut cache)
+        .expect("task text selection");
+    assert!(copied.text.starts_with("task"), "复制的是任务页文字");
+    assert!(state.pane_anywhere(pane).expect("pane").lx.task.is_some());
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .selected_text()
+            .is_none(),
+        "任务页选字不得落到被遮住的 lx 历史"
+    );
+    assert!(dirty);
+}
+
+#[test]
+fn plain_drag_selects_ask_option_text_without_selecting_answer() {
+    let config = Config::default();
+    let (mut state, pane) = busy_ask_state();
+    let mut geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let (column, row) = ask_option_point(&state, pane, &geo);
+    let mut buffer = ratatui::buffer::Buffer::empty(geo.screen);
+    buffer.set_string(column, row, "option text", ratatui::style::Style::default());
+    geo.screen_text = crate::ui::screen::ScreenText::from_buffer(&buffer);
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let column = if matches!(kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_)) {
+            column + 5
+        } else {
+            column
+        };
+        handle_terminal_event(
+            mouse(kind, column, row),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+
+    let ask = state
+        .pane_anywhere(pane)
+        .and_then(|pane| pane.lx.ask.as_ref())
+        .expect("ask");
+    assert!(ask.selected[0].is_empty(), "拖动选字不得选中 ask 选项");
+    let mut cache = ui::RenderCache::default();
+    let copied = crate::app::update::copyable_selection(&state, &geo.rects, &mut cache)
+        .expect("ask text selection");
+    assert!(copied.text.starts_with("opti"));
+    assert!(dirty);
+}
+
+#[test]
+fn plain_drag_selects_overlay_row_text_without_activating() {
+    let mut state = referenced_menu_state();
+    let (config, mut geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let row = referenced_menu_layout(&state, &geo).rows[1];
+    let selected_before = match state.overlay.as_ref() {
+        Some(Overlay::ReferencedFolderMenu(menu)) => menu.selected,
+        _ => panic!("menu open"),
+    };
+    let mut buffer = ratatui::buffer::Buffer::empty(geo.screen);
+    buffer.set_string(row.x, row.y, "row text", ratatui::style::Style::default());
+    geo.screen_text = crate::ui::screen::ScreenText::from_buffer(&buffer);
+
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let column = if matches!(kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_)) {
+            row.x + 3
+        } else {
+            row.x
+        };
+        handle_terminal_event(
+            mouse(kind, column, row.y),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("拖动不得打开搜索或关闭菜单");
+    };
+    assert_eq!(menu.selected, selected_before, "拖动选字不得改选中行");
+    let mut cache = ui::RenderCache::default();
+    let copied = crate::app::update::copyable_selection(&state, &geo.rects, &mut cache)
+        .expect("overlay text selection");
+    assert!(copied.text.starts_with("row"));
+    assert!(dirty);
+}
+
+#[test]
+fn plain_drag_selects_overlay_readonly_text_without_dismissing() {
+    let mut state = referenced_menu_state();
+    let (config, mut geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let layout = referenced_menu_layout(&state, &geo);
+    let (column, row) = (layout.area.x + 2, layout.area.y);
+    let mut buffer = ratatui::buffer::Buffer::empty(geo.screen);
+    buffer.set_string(column, row, "title", ratatui::style::Style::default());
+    geo.screen_text = crate::ui::screen::ScreenText::from_buffer(&buffer);
+
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let column = if matches!(kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_)) {
+            column + 3
+        } else {
+            column
+        };
+        handle_terminal_event(
+            mouse(kind, column, row),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+
+    assert!(
+        matches!(state.overlay, Some(Overlay::ReferencedFolderMenu(_))),
+        "选只读文字不得关闭菜单"
+    );
+    let mut cache = ui::RenderCache::default();
+    let copied = crate::app::update::copyable_selection(&state, &geo.rects, &mut cache)
+        .expect("overlay read-only text selection");
+    assert!(copied.text.starts_with("tit"));
+    assert!(dirty);
+}
+
+#[test]
+fn plain_drag_selects_toast_text_and_pauses_expiry() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let now = Instant::now();
+    crate::app::update::show_toast(
+        &mut state,
+        Toast::new(ToastKind::Default, "toast text", None, now),
+    );
+    let mut geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let toast = ui::toast::rect(&state, &geo.view, &geo.rects, geo.screen, &config).expect("toast");
+    let mut buffer = ratatui::buffer::Buffer::empty(geo.screen);
+    buffer.set_string(
+        toast.x + 1,
+        toast.y + 1,
+        "toast text",
+        ratatui::style::Style::default(),
+    );
+    geo.screen_text = crate::ui::screen::ScreenText::from_buffer(&buffer);
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let column = if matches!(kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_)) {
+            toast.x + 5
+        } else {
+            toast.x + 2
+        };
+        handle_terminal_event(
+            mouse(kind, column, toast.y + 1),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+
+    let mut cache = ui::RenderCache::default();
+    let copied = crate::app::update::copyable_selection(&state, &geo.rects, &mut cache)
+        .expect("toast text selection");
+    assert!(copied.text.starts_with("toast"));
+    assert!(state.toast.is_some());
+    crate::app::update::tick(
+        &mut state,
+        now + crate::app::toast::TOAST_DURATION + Duration::from_secs(1),
+    );
+    assert!(state.toast.is_some(), "选区存在期间 toast 不得过期");
+    crate::app::update::clear_selection(&mut state);
+    crate::app::update::tick(
+        &mut state,
+        now + crate::app::toast::TOAST_DURATION + Duration::from_secs(1),
+    );
+    assert!(state.toast.is_none(), "清除选区后恢复过期");
+    assert!(dirty);
 }
 
 #[test]
