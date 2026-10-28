@@ -768,6 +768,21 @@ fn rename_overlay_routes_editing_keys() {
         Some(Routed::Overlay(OverlayKey::DeleteToLineEnd))
     );
     assert_eq!(
+        route_rename(KeyCode::Char('z'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::Undo))
+    );
+    assert_eq!(
+        route_rename(
+            KeyCode::Char('z'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT
+        ),
+        Some(Routed::Overlay(OverlayKey::Redo))
+    );
+    assert_eq!(
+        route_rename(KeyCode::Char('y'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::Redo))
+    );
+    assert_eq!(
         route_rename(KeyCode::Char('b'), KeyModifiers::CONTROL),
         None
     );

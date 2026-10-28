@@ -521,6 +521,28 @@ fn todo_edit_shortcuts_and_selection_lifecycle() {
     assert_eq!(state.todo.editing().unwrap().input.text(), "");
 }
 
+#[test]
+fn todo_undo_and_redo_editing_and_list_mode_swallowed() {
+    let mut state = todo_state(&["item"]);
+
+    // 列表态：按 Undo/Redo 直接吞掉，不再恢复已删待办项
+    assert!(!apply_todo_key(&mut state, TodoKey::Undo));
+    assert!(!apply_todo_key(&mut state, TodoKey::Redo));
+
+    // 编辑态：撤销打字与重做
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
+    apply_todo_key(&mut state, TodoKey::Char('!'));
+    assert_eq!(state.todo.editing().unwrap().input.text(), "item!");
+
+    // 撤销
+    assert!(apply_todo_key(&mut state, TodoKey::Undo));
+    assert_eq!(state.todo.editing().unwrap().input.text(), "item");
+
+    // 重做
+    assert!(apply_todo_key(&mut state, TodoKey::Redo));
+    assert_eq!(state.todo.editing().unwrap().input.text(), "item!");
+}
+
 /// 幽灵行打开时点未选中行之外的位置不再造成越界选中。
 #[test]
 fn click_beyond_list_with_ghost_is_ignored() {

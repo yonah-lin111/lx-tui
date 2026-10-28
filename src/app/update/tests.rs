@@ -3761,6 +3761,20 @@ fn overlay_shortcuts_and_selection_lifecycle() {
         Some(Overlay::Rename(r)) => assert_eq!(r.input.text(), ""),
         _ => panic!("rename expected"),
     }
+
+    // Ctrl+Z 撤销
+    apply_overlay_key(&mut state, OverlayKey::Undo);
+    match &state.overlay {
+        Some(Overlay::Rename(r)) => assert_eq!(r.input.text(), " title"),
+        _ => panic!("rename expected"),
+    }
+
+    // Ctrl+Shift+Z / Redo 重做
+    apply_overlay_key(&mut state, OverlayKey::Redo);
+    match &state.overlay {
+        Some(Overlay::Rename(r)) => assert_eq!(r.input.text(), ""),
+        _ => panic!("rename expected"),
+    }
 }
 
 #[test]

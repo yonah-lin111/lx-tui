@@ -153,6 +153,40 @@ fn text_input_shortcuts_delete_to_line_start_and_end() {
 }
 
 #[test]
+fn text_input_undo_and_redo_lifecycle() {
+    let mut input = TextInput::new("hello");
+    assert!(!input.undo());
+
+    input.insert_str(" world");
+    assert_eq!(input.text(), "hello world");
+
+    input.insert_char('!');
+    assert_eq!(input.text(), "hello world!");
+
+    // 撤销 '!'
+    assert!(input.undo());
+    assert_eq!(input.text(), "hello world");
+
+    // 撤销 " world"
+    assert!(input.undo());
+    assert_eq!(input.text(), "hello");
+
+    // 重做 " world"
+    assert!(input.redo());
+    assert_eq!(input.text(), "hello world");
+
+    // 重做 '!'
+    assert!(input.redo());
+    assert_eq!(input.text(), "hello world!");
+
+    // 清空与撤销
+    input.clear();
+    assert_eq!(input.text(), "");
+    assert!(input.undo());
+    assert_eq!(input.text(), "hello world!");
+}
+
+#[test]
 fn overlay_kind_reports_variant() {
     let menu = Overlay::Menu(Menu {
         anchor: (0, 0),

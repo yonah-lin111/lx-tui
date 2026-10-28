@@ -137,6 +137,12 @@ fn edit_input(state: &mut AppState, key: crate::app::actions::OverlayKey) {
         OverlayKey::End | OverlayKey::LineEnd => edit.input.move_end(),
         OverlayKey::DeleteToLineStart => edit.input.delete_to_line_start(),
         OverlayKey::DeleteToLineEnd => edit.input.delete_to_line_end(),
+        OverlayKey::Undo => {
+            edit.input.undo();
+        }
+        OverlayKey::Redo => {
+            edit.input.redo();
+        }
         _ => {}
     }
     // 编辑标题即退出删除确认：用户改变主意了。

@@ -533,12 +533,14 @@ impl WorktreeOpen {
     }
 }
 
-/// 单行文本输入：字符缓冲与字符索引光标（范围 `0..=字符数`），及可选选区锚点。
+/// 单行文本输入：字符缓冲与字符索引光标（范围 `0..=字符数`），可选选区锚点与撤销/重做栈。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextInput {
     text: String,
     cursor: usize,
     selection_anchor: Option<usize>,
+    undo_stack: Vec<(String, usize)>,
+    redo_stack: Vec<(String, usize)>,
 }
 
 impl TextInput {
@@ -550,7 +552,41 @@ impl TextInput {
             text,
             cursor,
             selection_anchor: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
+    }
+
+    /// 登记当前文本和光标到撤销栈（文本发生实质变动前调用）。
+    fn push_undo(&mut self) {
+        if self.undo_stack.last().map(|(t, _)| t.as_str()) != Some(&self.text) {
+            self.undo_stack.push((self.text.clone(), self.cursor));
+            self.redo_stack.clear();
+        }
+    }
+
+    /// 撤销上一次文本修改；成功返回 true。
+    pub fn undo(&mut self) -> bool {
+        let Some((prev_text, prev_cursor)) = self.undo_stack.pop() else {
+            return false;
+        };
+        self.redo_stack.push((self.text.clone(), self.cursor));
+        self.text = prev_text;
+        self.cursor = prev_cursor.min(self.text.chars().count());
+        self.selection_anchor = None;
+        true
+    }
+
+    /// 重做上一次撤销的文本修改；成功返回 true。
+    pub fn redo(&mut self) -> bool {
+        let Some((next_text, next_cursor)) = self.redo_stack.pop() else {
+            return false;
+        };
+        self.undo_stack.push((self.text.clone(), self.cursor));
+        self.text = next_text;
+        self.cursor = next_cursor.min(self.text.chars().count());
+        self.selection_anchor = None;
+        true
     }
 
     /// 当前文本。
@@ -671,6 +707,7 @@ impl TextInput {
 
     /// 在光标处插入字符（有选区时先替换选区）。
     pub fn insert_char(&mut self, ch: char) {
+        self.push_undo();
         self.delete_selected();
         let at = self.byte_offset(self.cursor);
         self.text.insert(at, ch);
@@ -694,6 +731,7 @@ impl TextInput {
         if cleaned.is_empty() {
             return false;
         }
+        self.push_undo();
         self.delete_selected();
         let at = self.byte_offset(self.cursor);
         self.text.insert_str(at, &cleaned);
@@ -703,6 +741,11 @@ impl TextInput {
 
     /// 清空文本并把光标移到开头，清除选区。
     pub fn clear(&mut self) {
+        if self.text.is_empty() {
+            self.selection_anchor = None;
+            return;
+        }
+        self.push_undo();
         self.text.clear();
         self.cursor = 0;
         self.selection_anchor = None;
@@ -710,12 +753,15 @@ impl TextInput {
 
     /// 删除光标前一个字符（有选区时删除整段选区）。
     pub fn backspace(&mut self) {
-        if self.delete_selected() {
+        if self.has_selection() {
+            self.push_undo();
+            self.delete_selected();
             return;
         }
         if self.cursor == 0 {
             return;
         }
+        self.push_undo();
         let start = self.byte_offset(self.cursor - 1);
         let end = self.byte_offset(self.cursor);
         self.text.replace_range(start..end, "");
@@ -724,12 +770,15 @@ impl TextInput {
 
     /// 删除光标处字符（有选区时删除整段选区）。
     pub fn delete(&mut self) {
-        if self.delete_selected() {
+        if self.has_selection() {
+            self.push_undo();
+            self.delete_selected();
             return;
         }
         if self.cursor >= self.text.chars().count() {
             return;
         }
+        self.push_undo();
         let start = self.byte_offset(self.cursor);
         let end = self.byte_offset(self.cursor + 1);
         self.text.replace_range(start..end, "");
@@ -737,12 +786,15 @@ impl TextInput {
 
     /// 删除光标到行首的内容（Ctrl+U；有选区时删除选区）。
     pub fn delete_to_line_start(&mut self) {
-        if self.delete_selected() {
+        if self.has_selection() {
+            self.push_undo();
+            self.delete_selected();
             return;
         }
         if self.cursor == 0 {
             return;
         }
+        self.push_undo();
         let end = self.byte_offset(self.cursor);
         self.text.replace_range(0..end, "");
         self.cursor = 0;
@@ -750,13 +802,16 @@ impl TextInput {
 
     /// 删除光标到行尾的内容（Ctrl+K；有选区时删除选区）。
     pub fn delete_to_line_end(&mut self) {
-        if self.delete_selected() {
+        if self.has_selection() {
+            self.push_undo();
+            self.delete_selected();
             return;
         }
         let total = self.text.chars().count();
         if self.cursor >= total {
             return;
         }
+        self.push_undo();
         let start = self.byte_offset(self.cursor);
         self.text.replace_range(start.., "");
     }

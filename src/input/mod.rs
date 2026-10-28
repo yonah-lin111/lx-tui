@@ -64,8 +64,10 @@ pub enum TodoKey {
     DeleteToLineStart,
     /// Ctrl+K：删除至行尾。
     DeleteToLineEnd,
-    /// Ctrl/Cmd+Z：撤销删除（无内容时吞掉）。
+    /// Ctrl/Cmd+Z：撤销文本编辑。
     Undo,
+    /// Ctrl+Shift+Z / Ctrl+Y：重做文本编辑。
+    Redo,
     /// Ctrl/Cmd+C：编辑态清空输入（列表态吞掉）。
     Clear,
 }
@@ -74,9 +76,12 @@ pub enum TodoKey {
 fn todo_key(key: KeyEvent) -> Option<TodoKey> {
     let modifiers = key.modifiers;
     let ctrl = modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER);
+    let shift = modifiers.contains(KeyModifiers::SHIFT);
     let alt = modifiers.contains(KeyModifiers::ALT);
     match key.code {
+        KeyCode::Char('z' | 'Z') if ctrl && shift && !alt => Some(TodoKey::Redo),
         KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(TodoKey::Undo),
+        KeyCode::Char('y' | 'Y') if ctrl && !alt => Some(TodoKey::Redo),
         KeyCode::Char('c' | 'C') if ctrl && !alt => Some(TodoKey::Clear),
         KeyCode::Char('a' | 'A') if ctrl && !alt => Some(TodoKey::LineStart),
         KeyCode::Char('e' | 'E') if ctrl && !alt => Some(TodoKey::LineEnd),
@@ -313,6 +318,9 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         OverlayKind::ReferencedFolderInput => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Char('z' | 'Z') if ctrl && shift => Some(OverlayKey::Redo),
+            KeyCode::Char('z' | 'Z') if ctrl => Some(OverlayKey::Undo),
+            KeyCode::Char('y' | 'Y') if ctrl => Some(OverlayKey::Redo),
             KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
             KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
             KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
@@ -364,6 +372,9 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         | OverlayKind::ResumeSessionEdit => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Char('z' | 'Z') if ctrl && shift => Some(OverlayKey::Redo),
+            KeyCode::Char('z' | 'Z') if ctrl => Some(OverlayKey::Undo),
+            KeyCode::Char('y' | 'Y') if ctrl => Some(OverlayKey::Redo),
             KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
             KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
             KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
@@ -385,6 +396,9 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
+            KeyCode::Char('z' | 'Z') if ctrl && shift => Some(OverlayKey::Redo),
+            KeyCode::Char('z' | 'Z') if ctrl => Some(OverlayKey::Undo),
+            KeyCode::Char('y' | 'Y') if ctrl => Some(OverlayKey::Redo),
             KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
             KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
             KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
@@ -404,6 +418,9 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
+            KeyCode::Char('z' | 'Z') if ctrl && shift => Some(OverlayKey::Redo),
+            KeyCode::Char('z' | 'Z') if ctrl => Some(OverlayKey::Undo),
+            KeyCode::Char('y' | 'Y') if ctrl => Some(OverlayKey::Redo),
             KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
             KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
             KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),

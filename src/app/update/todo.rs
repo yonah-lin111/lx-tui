@@ -308,8 +308,20 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
         }
         // `Tab` 切状态（对齐 lx-agent 行内编辑：Tab 循环状态、Enter 提交、Esc 取消）。
         TodoKey::Tab => cycle_editing_status(state),
-        // 编辑中不允许上下移动选中、不撤销删除：一律吞掉。
-        TodoKey::Up | TodoKey::Down | TodoKey::Undo => false,
+        TodoKey::Undo => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            input.undo()
+        }
+        TodoKey::Redo => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            input.redo()
+        }
+        // 编辑中不允许上下移动选中：吞掉。
+        TodoKey::Up | TodoKey::Down => false,
     }
 }
 
@@ -331,7 +343,8 @@ fn apply_todo_list_key(state: &mut AppState, key: TodoKey) -> bool {
             begin_todo_edit(state, TodoEditTarget::After(index))
         }
         TodoKey::Esc => blur_todo(state),
-        TodoKey::Undo => undo_todo_delete(state),
+        // 列表态完全移除/吞掉撤销与重做，不恢复已删除待办项。
+        TodoKey::Undo | TodoKey::Redo => false,
         TodoKey::Clear => false,
         TodoKey::Backspace
         | TodoKey::Delete

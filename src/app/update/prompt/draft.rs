@@ -164,7 +164,9 @@ pub fn apply_new_node_key(state: &mut AppState, key: OverlayKey) {
         | OverlayKey::LineStart
         | OverlayKey::LineEnd
         | OverlayKey::DeleteToLineStart
-        | OverlayKey::DeleteToLineEnd => {
+        | OverlayKey::DeleteToLineEnd
+        | OverlayKey::Undo
+        | OverlayKey::Redo => {
             let Some(Overlay::NewNode(dialog)) = state.overlay.as_mut() else {
                 return;
             };
@@ -180,6 +182,12 @@ pub fn apply_new_node_key(state: &mut AppState, key: OverlayKey) {
                 OverlayKey::End | OverlayKey::LineEnd => input.move_end(),
                 OverlayKey::DeleteToLineStart => input.delete_to_line_start(),
                 OverlayKey::DeleteToLineEnd => input.delete_to_line_end(),
+                OverlayKey::Undo => {
+                    input.undo();
+                }
+                OverlayKey::Redo => {
+                    input.redo();
+                }
                 _ => {}
             }
         }
@@ -216,7 +224,9 @@ pub fn apply_save_draft_key(state: &mut AppState, key: OverlayKey) {
         | OverlayKey::LineStart
         | OverlayKey::LineEnd
         | OverlayKey::DeleteToLineStart
-        | OverlayKey::DeleteToLineEnd => edit_save_draft_input(state, key),
+        | OverlayKey::DeleteToLineEnd
+        | OverlayKey::Undo
+        | OverlayKey::Redo => edit_save_draft_input(state, key),
         OverlayKey::EnterFolder
         | OverlayKey::Back
         | OverlayKey::Copy
@@ -243,6 +253,12 @@ fn edit_save_draft_input(state: &mut AppState, key: OverlayKey) {
         OverlayKey::End | OverlayKey::LineEnd => input.move_end(),
         OverlayKey::DeleteToLineStart => input.delete_to_line_start(),
         OverlayKey::DeleteToLineEnd => input.delete_to_line_end(),
+        OverlayKey::Undo => {
+            input.undo();
+        }
+        OverlayKey::Redo => {
+            input.redo();
+        }
         _ => {}
     }
 }

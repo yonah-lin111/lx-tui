@@ -34,6 +34,10 @@ pub enum OverlayKey {
     DeleteToLineStart,
     /// Ctrl+K：删除至行尾。
     DeleteToLineEnd,
+    /// Ctrl/Cmd+Z：撤销文本编辑。
+    Undo,
+    /// Ctrl+Shift+Z / Ctrl+Y：重做文本编辑。
+    Redo,
     /// PageUp / PageDown：UI 组件查看弹窗右侧预览翻页。
     PageUp,
     PageDown,

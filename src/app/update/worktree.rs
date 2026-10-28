@@ -214,6 +214,14 @@ pub fn apply_worktree_open_key(state: &mut AppState, key: OverlayKey) {
                     dialog.query.delete_to_line_end();
                     dialog.normalize_selection();
                 }
+                OverlayKey::Undo => {
+                    dialog.query.undo();
+                    dialog.normalize_selection();
+                }
+                OverlayKey::Redo => {
+                    dialog.query.redo();
+                    dialog.normalize_selection();
+                }
                 OverlayKey::Esc
                 | OverlayKey::Enter
                 | OverlayKey::EnterFolder
