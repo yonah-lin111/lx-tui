@@ -148,8 +148,9 @@ pub fn refer_trigger(text: &str, cursor: usize) -> Option<ReferTrigger> {
     if is_structural_line(text, line) {
         return None;
     }
-    // 补充块内部不提供引用候选（避免改写定义/结构行）。
-    if super::block_context(text, cursor) == super::BlockContext::Supple {
+    if let Some(block) = super::block_at(text, cursor)
+        && (block.role != super::BlockRole::Middle || block.separator)
+    {
         return None;
     }
     let infos = template_line_infos(text);
@@ -194,6 +195,11 @@ pub fn refer_trigger(text: &str, cursor: usize) -> Option<ReferTrigger> {
 pub fn refer_scope(text: &str, cursor: usize) -> Option<Vec<Range<usize>>> {
     let line = text[..cursor.min(text.len())].matches('\n').count();
     if is_structural_line(text, line) {
+        return None;
+    }
+    if let Some(block) = super::block_at(text, cursor)
+        && (block.role != super::BlockRole::Middle || block.separator)
+    {
         return None;
     }
     let infos = template_line_infos(text);
@@ -247,13 +253,18 @@ fn plain_segments(text: &str, infos: &[Option<TemplateLineInfo>]) -> Vec<Range<u
     segments
 }
 
-/// 结构元数据行（标题行、`{wt:}` 绑定行）：不属于模板块正文，不参与快捷匹配。
+/// 结构元数据行（标题行、`{wt:}` 绑定行、模板块与补充块起止行）：不属于正文，不参与快捷匹配。
 fn is_structural_line(text: &str, line: usize) -> bool {
     let Some((start, end)) = line_bounds(text, line) else {
         return false;
     };
     let content = &text[start..end];
-    super::is_title_line(content) || super::parse_worktree_line(content).is_some()
+    super::is_title_line(content)
+        || super::parse_worktree_line(content).is_some()
+        || super::parse_template_start_line(content).is_some()
+        || super::parse_template_end_line(content).is_some()
+        || super::parse_supple_start_line(content).is_some()
+        || super::parse_supple_end_line(content).is_some()
 }
 
 /// 逻辑行字节范围（不含换行）。
@@ -396,7 +407,16 @@ fn directory_entry(path: &str, entries: &[MentionEntry]) -> bool {
         .any(|entry| entry.is_directory && entry.path == path)
 }
 
-/// 原文去重后追加候选；order 取首次出现序。
+/// 候选规范化插入键（用于识别指向同一目标的重复项）。
+fn candidate_insertion_key(candidate: &ReferCandidate) -> String {
+    short_ref_marker(
+        &short_ref_candidate_name(candidate),
+        candidate.is_directory(),
+    )
+    .unwrap_or_else(|| candidate.text.clone())
+}
+
+/// 原文与目标短引用去重后追加候选；order 取首次出现序。
 fn push_unique(
     candidates: &mut Vec<ReferCandidate>,
     raw: &str,
@@ -404,17 +424,21 @@ fn push_unique(
     path: &str,
     tag: ReferTag,
 ) {
-    if candidates.iter().any(|candidate| candidate.text == raw) {
-        return;
-    }
-    let order = candidates.len();
-    candidates.push(ReferCandidate {
+    let candidate = ReferCandidate {
         text: raw.to_string(),
         name: name.to_string(),
         path: path.to_string(),
         tag,
-        order,
-    });
+        order: candidates.len(),
+    };
+    let key = candidate_insertion_key(&candidate);
+    if candidates
+        .iter()
+        .any(|existing| existing.text == raw || candidate_insertion_key(existing) == key)
+    {
+        return;
+    }
+    candidates.push(candidate);
 }
 
 /// 过滤、评分并按稳定顺序排序候选。

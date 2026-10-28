@@ -495,10 +495,12 @@ fn load_editor_target(
             Some(stash.page) == page && stash.editing == editing && stash.history.text() == content
         })
         .map(|stash| stash.history);
-    state.prompt.exit_block_focus();
     match restored {
         Some(history) => state.prompt.restore_history(history),
-        None => state.prompt.set_text(content),
+        None => {
+            state.prompt.exit_block_focus();
+            state.prompt.set_text(content);
+        }
     }
     state.prompt_collapsed = false;
     super::focus_prompt(state);

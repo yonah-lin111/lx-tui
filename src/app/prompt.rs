@@ -113,14 +113,15 @@ struct Snapshot {
     focus_block: Option<usize>,
 }
 
-/// 编辑器完整历史状态：文本、光标、撤销/重做栈、已保存标记与折叠状态。
+/// 编辑器完整历史状态：文本、光标、撤销/重做栈、已保存标记、折叠状态与滚动位置。
 ///
 /// 用于离开编辑视图（切到列表）时暂存、返回同一目标时整体恢复，
-/// 使撤销/重做记录与光标不因视图往返而丢失（修订号连续演进、不在此暂存）。
+/// 使撤销/重做记录、光标与滚动视口不因视图往返而丢失（修订号连续演进、不在此暂存）。
 #[derive(Debug, Clone)]
 pub struct PromptHistory {
     text: String,
     cursor: usize,
+    scroll: usize,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     is_saved: bool,
@@ -137,6 +138,11 @@ impl PromptHistory {
     /// 暂存时的光标字节偏移。
     pub fn cursor(&self) -> usize {
         self.cursor
+    }
+
+    /// 暂存时的首个可见视觉行索引。
+    pub fn scroll(&self) -> usize {
+        self.scroll
     }
 
     /// 是否存在可撤销的编辑。
@@ -307,6 +313,7 @@ impl Prompt {
         PromptHistory {
             text: self.text.clone(),
             cursor: self.cursor,
+            scroll: self.scroll,
             undo: self.undo.clone(),
             redo: self.redo.clone(),
             is_saved: self.is_saved,
@@ -315,7 +322,7 @@ impl Prompt {
         }
     }
 
-    /// 恢复暂存的编辑历史状态；文本、光标与撤销/重做栈整体换回。
+    /// 恢复暂存的编辑历史状态；文本、光标、视口滚动与撤销/重做栈整体换回。
     ///
     /// 调用方保证仅在目标身份与正文均一致时使用（否则应走 `set_text` 重建）。
     pub fn restore_history(&mut self, history: PromptHistory) {
@@ -334,7 +341,7 @@ impl Prompt {
         self.autosave = None;
         self.expanded_supplements = history.expanded_supplements;
         self.focus_block = history.focus_block;
-        self.scroll = 0;
+        self.scroll = history.scroll.min(self.max_scroll());
         self.normalize_fold_cursor();
         self.scroll_cursor_into_view();
         self.reconcile_block_focus();

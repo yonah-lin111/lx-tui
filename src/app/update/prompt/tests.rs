@@ -2669,3 +2669,78 @@ fn narrow_resize_exits_block_focus() {
     crate::app::update::resize_panes(&mut state, &[(id, narrow)]);
     assert!(!state.prompt.block_focus_active(), "宽度不足自动退出");
 }
+
+#[test]
+fn edit_position_and_scroll_preserved_when_switching_to_tree_and_back() {
+    let mut state = demo_state();
+    // 构造足够长的多行文本以支持滚动
+    let content = (0..50)
+        .map(|i| format!("line {i}: content for testing scroll preservation"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    // 编辑条目 10
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    state.prompt.resize(40, 10);
+    state.prompt.set_text(&content);
+
+    // 移动光标到第 9 行（约 450 字节处），设置视口滚动为 15（视口为 15..25 行，光标处于视口内）
+    state.prompt.set_cursor_offset(450);
+    state.prompt.scroll_to(15);
+    let cursor_before = state.prompt.cursor();
+    let scroll_before = state.prompt.scroll();
+    assert_eq!(scroll_before, 15);
+
+    // 1. 切到树视图（列表）
+    show_prompt_tree(&mut state);
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Tree);
+
+    // 2. 切回编辑视图（用户未改变选中，直接返回）
+    toggle_prompt_panel_mode(&mut state);
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(
+        state.prompt.cursor(),
+        cursor_before,
+        "光标位置在返回后保持不变"
+    );
+    assert_eq!(
+        state.prompt.scroll(),
+        scroll_before,
+        "视口滚动位置在返回后保持不变"
+    );
+
+    // 3. 再次切到树视图并在列表中显式重新选择当前条目打开
+    show_prompt_tree(&mut state);
+    let selected = state.workspaces[0].prompt_panel.selected;
+    assert!(open_prompt_row(&mut state, selected));
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(
+        state.prompt.cursor(),
+        cursor_before,
+        "重新打开当前条目同样恢复光标位置"
+    );
+    assert_eq!(
+        state.prompt.scroll(),
+        scroll_before,
+        "重新打开当前条目同样恢复滚动位置"
+    );
+}
+
+#[test]
+fn switching_to_different_item_in_tree_does_not_inherit_previous_scroll() {
+    let mut state = demo_state();
+    let content = (0..50)
+        .map(|i| format!("line {i}: item 10 content"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    state.prompt.resize(40, 10);
+    state.prompt.set_text(&content);
+    state.prompt.set_cursor_offset(800);
+    state.prompt.scroll_to(15);
+
+    show_prompt_tree(&mut state);
+
+    // 在列表中打开新建临时提示词（不同目标）
+    assert!(open_temp_prompt(&mut state));
+    assert_eq!(state.prompt.scroll(), 0, "新目标不继承旧目标的滚动位置");
+}
