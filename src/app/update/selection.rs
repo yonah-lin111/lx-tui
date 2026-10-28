@@ -183,7 +183,21 @@ pub fn begin_screen_selection_unit(
     point: crate::app::selection::ScreenPoint,
     unit: crate::app::selection::SelectionUnit,
 ) {
+    begin_screen_selection_unit_in(state, screen, point, unit, None);
+}
+
+/// 在指定可见内容区内开始屏幕选择；区域外的行/列不进入高亮与复制。
+pub fn begin_screen_selection_unit_in(
+    state: &mut AppState,
+    screen: &crate::ui::screen::ScreenText,
+    point: crate::app::selection::ScreenPoint,
+    unit: crate::app::selection::SelectionUnit,
+    region: Option<Rect>,
+) {
     clear_selection(state);
+    if region.is_some_and(|region| !region.contains((point.col, point.row).into())) {
+        return;
+    }
     let (start, end) = screen.unit_range(point, unit);
     // Word/Line 可能只覆盖一个非空白格：冻结该格并保留折叠范围，否则
     // `selection_cells(start, end)` 会把两个相同端点误判成空单击。
@@ -194,9 +208,10 @@ pub fn begin_screen_selection_unit(
             crate::app::selection::SelectedCells::default()
         }
     } else {
-        screen.selection_cells(start, end)
+        screen.selection_cells_in(start, end, region)
     };
     let mut selection = crate::app::selection::ScreenSelection::new(start, unit, frozen);
+    selection.set_region(region);
     selection.set_range(start, end);
     state.screen_selection = Some(selection);
 }
@@ -300,8 +315,22 @@ pub fn drag_screen_selection(
     };
     let base = selection.base();
     let unit = selection.unit();
+    let region = selection.region();
+    let point = region.map_or(point, |region| {
+        crate::app::selection::ScreenPoint::new(
+            point.row.clamp(region.y, region.bottom().saturating_sub(1)),
+            point.col.clamp(region.x, region.right().saturating_sub(1)),
+        )
+    });
     let (start, end) = screen.drag_range(base, point, unit);
-    let frozen = screen.selection_cells(start, end);
+    let frozen = if start == end
+        && unit != crate::app::selection::SelectionUnit::Character
+        && screen.selectable_cell(start)
+    {
+        screen.selection_cells_single(start)
+    } else {
+        screen.selection_cells_in(start, end, region)
+    };
     if let Some(selection) = state.screen_selection.as_mut() {
         selection.set_range(start, end);
         selection.set_frozen(frozen);

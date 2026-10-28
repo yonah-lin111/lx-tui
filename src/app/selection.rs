@@ -5,6 +5,8 @@
 
 use std::time::Instant;
 
+use ratatui::layout::Rect;
+
 use crate::layout::PaneId;
 
 /// 选区来源；复制反馈锚点与剪切资格按它分派。
@@ -110,6 +112,9 @@ pub struct ScreenSelection {
     dragging: bool,
     /// 当前画面是否还能找到冻结内容；找不到时不画高亮，但保留选区。
     visible: bool,
+    /// 选区允许覆盖的可见内容区；None 表示整屏。lx 历史/Agents 详情用
+    /// 该矩形排除输入框、任务列表等相邻容器。
+    region: Option<Rect>,
     frozen: SelectedCells,
 }
 
@@ -122,8 +127,18 @@ impl ScreenSelection {
             unit,
             dragging: true,
             visible: true,
+            region: None,
             frozen,
         }
+    }
+
+    /// 设置选区允许覆盖的可见内容区范围。
+    pub fn set_region(&mut self, region: Option<Rect>) {
+        self.region = region;
+    }
+
+    pub fn region(&self) -> Option<Rect> {
+        self.region
     }
 
     pub fn base(&self) -> ScreenPoint {

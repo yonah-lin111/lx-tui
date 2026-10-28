@@ -246,6 +246,27 @@ fn single_character_word_selection_is_not_empty() {
 }
 
 #[test]
+fn screen_selection_region_excludes_input_rows() {
+    let mut state = AppState::demo();
+    let screen = screen(&["history one", "history two", "input text"], 20);
+    let region = Rect::new(0, 0, 20, 2);
+    begin_screen_selection_unit_in(
+        &mut state,
+        &screen,
+        ScreenPoint::new(0, 0),
+        crate::app::selection::SelectionUnit::Character,
+        Some(region),
+    );
+    drag_screen_selection(&mut state, &screen, ScreenPoint::new(2, 10));
+    finish_screen_selection(&mut state);
+    assert_eq!(
+        screen_selection_text(&state).as_deref(),
+        Some("history one\nhistory two"),
+        "输入框行不得进入历史选区"
+    );
+}
+
+#[test]
 fn pending_screen_selection_uses_the_next_frame() {
     let mut state = AppState::demo();
     let before = screen(&["aaa", "bbb"], 5);

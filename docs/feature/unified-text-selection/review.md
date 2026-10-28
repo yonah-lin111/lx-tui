@@ -91,6 +91,14 @@
 - **验证**：新增 `stale_frozen_row_does_not_fall_back_to_full_width_highlight`。
 - **关键文件**：`src/ui/mod.rs`、`src/ui/tests.rs`。
 
+### P1-5 拖选越过 lx 历史/Agents 详情边界，连输入框也进入选区
+
+- **触发**：在后台任务面板（尤其 Agents 详情）或 lx 消息列表里按住拖动到下方输入框/任务列表；选区行跨过历史区，输入框区域也被反显和复制。
+- **错误原因**：屏幕选区只按整屏坐标和字形边框裁剪，没有把 **layout 给出的历史输出区**作为硬边界；`screen_selection` 的冻结行中间行仍可能铺到输入框所在行。普通 lx 拖选也把 pointer 钳到整个窗格，而不是历史内容区。
+- **修复**：为 `ScreenSelection` 增加 `region`，主历史绑定 `history_rect`，Agents 详情绑定 `task_output`；每行冻结时同时按 region 裁剪，拖动/自动滚动/滚轮回投都把端点钳在 region 内。普通 lx 历史拖动也按同一内容区钳制行坐标。
+- **验证**：新增 `screen_selection_region_excludes_input_rows`；`pending_screen_selection_uses_the_next_frame` 继续覆盖滚动后的区域裁剪。
+- **关键文件**：`src/app/selection.rs`、`src/app/update/selection.rs`、`src/ui/screen.rs`、`src/event/mouse/press.rs`、`src/event/mouse/drag.rs`、`src/event/mouse/hit.rs`。
+
 ### P2-1 终端双击/三击的 Down 不置脏
 
 - **触发**：在终端窗格双击/三击后暂时按住鼠标，不松开；高亮要等到 Up 才出现。
@@ -126,7 +134,7 @@
 
 - `cargo fmt --check`：通过。
 - `cargo clippy --all-targets -- -D warnings`：通过。
-- `cargo test`：当前 `dev` 全量 **3759 passed / 0 failed / 2 ignored**（含全部集成套件）。
+- `cargo test`：当前 `dev` 全量 **3760 passed / 0 failed / 2 ignored**（含全部集成套件）。
 - 新增/更新的关键回归用例：
   - `shift_click_keeps_overlay_close_button_priority`
   - `shift_drag_selects_screen_text_without_forwarding_to_pty`
@@ -143,6 +151,7 @@
   - `agents_detail_edge_drag_scrolls_subagent_transcript`
   - `pending_screen_selection_uses_the_next_frame`
   - `stale_frozen_row_does_not_fall_back_to_full_width_highlight`
+  - `screen_selection_region_excludes_input_rows`
   - `card_click_clears_existing_selection_and_toggles`
 
 ## 5. 未纳入本次修复的已知限制

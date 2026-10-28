@@ -25,9 +25,9 @@ use super::hit::{
     handle_agent_scrollbar_press, handle_lx_history_scrollbar_press,
     handle_lx_input_scrollbar_press, handle_prompt_scrollbar_press,
     handle_task_agents_scrollbar_press, handle_terminal_scrollbar_press,
-    handle_todo_scrollbar_press, handle_workspace_scrollbar_press, lx_toast_at, mention_item_at,
-    pane_at, pane_boundary_draggable, pane_content_inner, pane_toggle_button_at, panel_item_at,
-    prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
+    handle_todo_scrollbar_press, handle_workspace_scrollbar_press, lx_screen_region, lx_toast_at,
+    mention_item_at, pane_at, pane_boundary_draggable, pane_content_inner, pane_toggle_button_at,
+    panel_item_at, prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -602,6 +602,10 @@ pub(crate) fn handle_mouse_down_left(
                     return;
                 }
                 // 后台任务面板：左上角 tab 与右上角 `[esc]` 都可点击。
+                let task_list_region = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
+                    .map(|rects| rects.list);
                 let task_hit = state.pane_anywhere(pane).and_then(|target| {
                     target.lx.task.as_ref()?;
                     let rects = ui::main_content::lx::task_rects(inner, &target.lx)?;
@@ -658,11 +662,12 @@ pub(crate) fn handle_mouse_down_left(
                             update::close_task_page(state, pane);
                         }
                         ui::main_content::lx::task::TaskHit::Agent(index) => {
-                            update::begin_screen_selection_unit(
+                            update::begin_screen_selection_unit_in(
                                 state,
                                 screen_text,
                                 point,
                                 crate::app::selection::SelectionUnit::Character,
+                                task_list_region,
                             );
                             state.pending_screen_click = Some(PendingScreenClick {
                                 anchor: point,
@@ -687,15 +692,22 @@ pub(crate) fn handle_mouse_down_left(
                 if let Some(card) = agent_card {
                     update::focus_pane(state, pane);
                     if click != crate::app::selection::SelectionUnit::Character {
-                        update::begin_screen_selection_unit(state, screen_text, point, click);
+                        update::begin_screen_selection_unit_in(
+                            state,
+                            screen_text,
+                            point,
+                            click,
+                            lx_screen_region(state, pane, inner),
+                        );
                         *dirty = true;
                         return;
                     }
-                    update::begin_screen_selection_unit(
+                    update::begin_screen_selection_unit_in(
                         state,
                         screen_text,
                         point,
                         crate::app::selection::SelectionUnit::Character,
+                        lx_screen_region(state, pane, inner),
                     );
                     state.pending_screen_click = Some(PendingScreenClick {
                         anchor: point,
@@ -711,7 +723,13 @@ pub(crate) fn handle_mouse_down_left(
                     .pane_anywhere(pane)
                     .is_some_and(|target| target.lx.task.is_some())
                 {
-                    update::begin_screen_selection_unit(state, screen_text, point, click);
+                    update::begin_screen_selection_unit_in(
+                        state,
+                        screen_text,
+                        point,
+                        click,
+                        lx_screen_region(state, pane, inner),
+                    );
                     *dirty = true;
                     return;
                 }
@@ -770,7 +788,13 @@ pub(crate) fn handle_mouse_down_left(
                     return;
                 }
                 if click != crate::app::selection::SelectionUnit::Character {
-                    update::begin_screen_selection_unit(state, screen_text, point, click);
+                    update::begin_screen_selection_unit_in(
+                        state,
+                        screen_text,
+                        point,
+                        click,
+                        lx_screen_region(state, pane, inner),
+                    );
                     *dirty = true;
                     return;
                 }

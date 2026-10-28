@@ -15,7 +15,7 @@ use crate::pty::PtySession;
 use crate::ui;
 
 use super::super::session::Geometry;
-use super::hit::{lx_autoscroll_region, pane_at, pane_content_inner};
+use super::hit::{lx_autoscroll_region, lx_screen_region, pane_at, pane_content_inner};
 use super::wheel::forward_pane_mouse_event;
 
 /// 鼠标拖拽事件处理。
@@ -314,8 +314,9 @@ pub(crate) fn handle_mouse_drag(
         if inner.width == 0 || inner.height == 0 {
             return;
         }
-        let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
-        let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
+        let region = lx_screen_region(state, pane, inner).unwrap_or(inner);
+        let row = mouse.row.clamp(region.y, region.bottom() - 1) - inner.y;
+        let col = mouse.column.clamp(region.x, region.right() - 1) - inner.x;
         update::drag_lx_selection(state, pane, row, col);
         if let Some((target, area, total, visible)) =
             lx_autoscroll_region(state, pane, inner, cache)

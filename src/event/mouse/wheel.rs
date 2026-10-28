@@ -321,12 +321,13 @@ pub(crate) fn handle_mouse_wheel(
     // lx 历史 / Agents 详情拖选中滚轮：滚动视口并延伸选区；不能落到普通历史滚动，
     // 否则新内容滚进来了，选区终点却停在旧屏幕行。
     if let Some(direction) = vertical_wheel_direction(mouse.kind)
-        && let Some((pane, inner, target, _area, total, visible)) =
+        && let Some((pane, inner, target, area, total, visible)) =
             lx_selection_scroll_region(state, rects, mouse, cache)
         && update::wheel_lx_selection(
             state,
             pane,
             target,
+            area,
             inner,
             total,
             visible,

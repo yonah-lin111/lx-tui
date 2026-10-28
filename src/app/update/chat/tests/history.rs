@@ -134,10 +134,12 @@ fn lx_selection_wheel_scrolls_viewport_and_extends_selection() {
     crate::app::update::begin_lx_selection(&mut state, pane, 0, 0);
     crate::app::update::drag_lx_selection(&mut state, pane, 0, 5);
     let inner = Rect::new(0, 0, 40, 12);
+    let area = Rect::new(0, 0, 40, 6);
     assert!(crate::app::update::wheel_lx_selection(
         &mut state,
         pane,
         crate::app::state::LxAutoscrollTarget::History,
+        area,
         inner,
         20,
         6,

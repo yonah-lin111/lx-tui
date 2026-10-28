@@ -59,6 +59,7 @@ pub fn arm_lx_selection_autoscroll(
             target,
             direction,
             edge_scroll_lines(distance),
+            area,
             inner,
             total,
             visible,
@@ -84,6 +85,7 @@ pub fn wheel_lx_selection(
     state: &mut AppState,
     pane: PaneId,
     target: LxAutoscrollTarget,
+    area: Rect,
     inner: Rect,
     total: usize,
     visible: usize,
@@ -104,6 +106,7 @@ pub fn wheel_lx_selection(
         target,
         direction,
         WHEEL_LINES,
+        area,
         inner,
         total,
         visible,
@@ -136,6 +139,7 @@ pub(crate) fn tick_lx_selection_autoscroll(state: &mut AppState, now: Instant) -
         autoscroll.target,
         autoscroll.direction,
         1,
+        autoscroll.area,
         autoscroll.inner,
         autoscroll.total,
         autoscroll.visible,
@@ -158,6 +162,7 @@ fn lx_autoscroll_step(
     target: LxAutoscrollTarget,
     direction: AutoscrollDirection,
     lines: isize,
+    area: Rect,
     inner: Rect,
     total: usize,
     visible: usize,
@@ -202,8 +207,8 @@ fn lx_autoscroll_step(
         state.screen_selection_refresh = Some(mouse);
     }
     if state.lx_selection.is_some() {
-        let row = mouse.1.clamp(inner.y, inner.bottom().saturating_sub(1)) - inner.y;
-        let col = mouse.0.clamp(inner.x, inner.right().saturating_sub(1)) - inner.x;
+        let row = mouse.1.clamp(area.y, area.bottom().saturating_sub(1)) - inner.y;
+        let col = mouse.0.clamp(area.x, area.right().saturating_sub(1)) - inner.x;
         drag_lx_selection(state, pane, row, col);
     }
     true

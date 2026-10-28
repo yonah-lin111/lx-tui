@@ -355,6 +355,20 @@ pub(crate) fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockBut
     }
 }
 
+/// 屏幕选区在 lx 窗格内允许覆盖的内容区：主历史或 Agents 详情。
+///
+/// 输入框、任务列表与工具栏不在该矩形内，避免拖选越过历史边界。
+pub(crate) fn lx_screen_region(state: &AppState, pane: PaneId, inner: Rect) -> Option<Rect> {
+    let target = state.pane_anywhere(pane)?;
+    if target.view != PaneView::Lx {
+        return None;
+    }
+    if target.lx.task.is_some() {
+        return ui::main_content::lx::task_output_area(inner, &target.lx);
+    }
+    ui::main_content::lx::history_rect(inner, &target.lx)
+}
+
 /// lx 消息列表 / Agents 详情的拖选滚动区。
 ///
 /// 返回目标、边缘判断矩形与当前 `(总行数, 可视行数)`；主历史与子 agent

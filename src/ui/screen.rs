@@ -3,6 +3,7 @@
 //! 只读取已渲染 Buffer，不修改状态、不执行 IO；宽字符续格不重复输出。
 
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::selection::{FrozenRow, ScreenPoint, SelectedCell, SelectedCells, SelectionUnit};
@@ -84,6 +85,16 @@ impl ScreenText {
 
     /// 冻结 `start..=end` 覆盖的画面片段；按屏幕阅读顺序，端点包含。
     pub fn selection_cells(&self, start: ScreenPoint, end: ScreenPoint) -> SelectedCells {
+        self.selection_cells_in(start, end, None)
+    }
+
+    /// 与 [`Self::selection_cells`] 相同，但把每行裁剪到 `region` 内。
+    pub fn selection_cells_in(
+        &self,
+        start: ScreenPoint,
+        end: ScreenPoint,
+        region: Option<Rect>,
+    ) -> SelectedCells {
         let Some((start, end)) = normalize(start, end) else {
             return SelectedCells::default();
         };
@@ -92,6 +103,9 @@ impl ScreenText {
         }
         let mut rows = Vec::new();
         for row in start.row..=end.row {
+            if region.is_some_and(|region| row < region.y || row >= region.bottom()) {
+                continue;
+            }
             let (col_start, col_end) = if start.row == end.row {
                 (start.col, end.col)
             } else if row == start.row {
@@ -130,6 +144,14 @@ impl ScreenText {
                     self.trim_row_end(row, left, right)
                         .unwrap_or(left.saturating_sub(1)),
                 )
+            };
+            let (col_start, col_end) = if let Some(region) = region {
+                (
+                    col_start.max(region.x),
+                    col_end.min(region.right().saturating_sub(1)),
+                )
+            } else {
+                (col_start, col_end)
             };
             let full = self.row_text(row).unwrap_or_default();
             if col_start > col_end {

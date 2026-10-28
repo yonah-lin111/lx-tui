@@ -876,6 +876,14 @@ pub fn task_output_inner(area: Rect, lx: &Lx) -> Option<Rect> {
     task::task_output_rect(area, lx)
 }
 
+/// 后台任务面板输出区（Agents 详情或 Processes 输出）的矩形；未打开返回 None。
+///
+/// 屏幕选区用它排除输入框与任务列表，不进入被面板遮住的区域。
+pub(crate) fn task_output_area(area: Rect, lx: &Lx) -> Option<Rect> {
+    lx.task.as_ref()?;
+    layout(area, lx).task_output
+}
+
 /// Agents 详情区的 `(可见行数, 总行数)`；不在 Agents 页或无高亮项返回 None。
 pub fn task_agents_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
     task::agents_rows(area, lx)
