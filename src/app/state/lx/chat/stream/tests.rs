@@ -23,6 +23,7 @@ fn streaming_chat() -> LxChat {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
+        reports: Vec::new(),
     });
     chat
 }

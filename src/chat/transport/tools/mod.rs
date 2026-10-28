@@ -17,10 +17,11 @@
 
 use serde_json::{Value, json};
 
+use crate::chat::agent::ToolSurface;
 use crate::chat::events::{
     MAX_TOOL_ARGUMENTS_BYTES, ModelItem, TOOL_ARGUMENTS_INVALID_CODE, TOOL_ARGUMENTS_TOO_LARGE_CODE,
 };
-use crate::chat::tools::available_tools;
+use crate::chat::tools::tools_for;
 
 /// 供应商/兼容端点拒绝 `tools` 字段时的稳定错误码前缀。
 ///
@@ -43,9 +44,9 @@ pub(crate) fn protocol_error(detail: impl std::fmt::Display) -> String {
 ///
 /// wire 形状（Chat Completions 请求体的 `tools`）：
 /// `[{"type":"function","function":{"name","description","parameters"}}]`。
-pub(crate) fn openai_chat_tools() -> Value {
+pub(crate) fn openai_chat_tools(surface: ToolSurface) -> Value {
     Value::Array(
-        available_tools()
+        tools_for(surface)
             .iter()
             .map(|tool| {
                 json!({
@@ -64,9 +65,9 @@ pub(crate) fn openai_chat_tools() -> Value {
 /// OpenAI Responses 的 `tools` 字段（函数项是**扁平**的，不套 `function`）。
 ///
 /// wire 形状：`[{"type":"function","name","description","parameters"}]`。
-pub(crate) fn openai_responses_tools() -> Value {
+pub(crate) fn openai_responses_tools(surface: ToolSurface) -> Value {
     Value::Array(
-        available_tools()
+        tools_for(surface)
             .iter()
             .map(|tool| {
                 json!({
@@ -81,9 +82,9 @@ pub(crate) fn openai_responses_tools() -> Value {
 }
 
 /// Anthropic Messages 的 `tools` 字段：`[{"name","description","input_schema"}]`。
-pub(crate) fn anthropic_tools() -> Value {
+pub(crate) fn anthropic_tools(surface: ToolSurface) -> Value {
     Value::Array(
-        available_tools()
+        tools_for(surface)
             .iter()
             .map(|tool| {
                 json!({
@@ -97,8 +98,8 @@ pub(crate) fn anthropic_tools() -> Value {
 }
 
 /// Gemini 的 `tools` 字段：`[{"functionDeclarations":[{name,description,parameters}]}]`。
-pub(crate) fn google_tools() -> Value {
-    let declarations: Vec<Value> = available_tools()
+pub(crate) fn google_tools(surface: ToolSurface) -> Value {
+    let declarations: Vec<Value> = tools_for(surface)
         .iter()
         .map(|tool| {
             json!({

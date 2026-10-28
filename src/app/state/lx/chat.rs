@@ -20,7 +20,8 @@ pub use steps::{
 };
 pub use tool_view::{
     AskAnsweredView, AskDetailView, CommandView, InteractionAction, PlanSnapshotView, PlanStepView,
-    ProcessInteractionView, ProcessStateView, ToolDetailView,
+    ProcessInteractionView, ProcessStateView, SearchDetailView, SearchMatchView,
+    SubagentDetailView, ToolDetailView,
 };
 
 /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
@@ -313,6 +314,15 @@ pub enum CardTarget {
     },
     /// compact 检查点条目（按检查点 ID 定位；默认折叠）。
     Compact { checkpoint_id: String },
+    /// 子 agent 汇报块（按消息 ID + agent ID 定位；槽位 `report:<agent_id>`）。
+    Report {
+        message_id: String,
+        agent_id: String,
+        /// 点击的是 `… N more lines`：追加固定一批正文；false 时折叠整块。
+        more: bool,
+    },
+    /// 子 agent 卡片里的 agent 链接：打开 Agents 面板并定位。
+    OpenAgent { agent_id: String },
 }
 
 /// 卡片内可独立折叠的区域。
@@ -388,6 +398,11 @@ pub struct LxChat {
     /// Esc 停止待命时刻：流中首次按 Esc 只待命并显示提示，窗口内再按一次才真正停止
     /// （对齐 opencode 的双击停止）；超时或流结束清除。
     pub stop_armed_at: Option<std::time::Instant>,
+    /// 主轮是否被用户显式停止（Esc 双击）。
+    ///
+    /// 停止后常驻后台的子 agent 不撑输入框上方 loading；它们仍在底边框计数。
+    /// 下一次用户发送或自动报告轮开始时清为 false。
+    pub main_stopped: bool,
     /// 置顶行抑制记忆（跨帧状态，唯一必须落库到 app 侧的部分）；见 [`StickySuppression`]。
     /// 由事件循环每轮 `resolve_lx_history` 写入，渲染层只读（渲染不改状态）；
     /// "要钉哪条消息"本身是纯函数结果，渲染/命中各自现算，不存第二份真相。
@@ -399,6 +414,9 @@ pub struct LxChat {
     /// `slot` 是工具调用的 call_id（本地命令卡片固定为 [`SHELL_SLOT`]）；
     /// 命令卡片的参数与输出各占一条记录，互不影响。
     pub detail_expanded: Vec<(String, String, CardSection, bool)>,
+    /// 子 agent 汇报块已追加的展开批次：每批固定行数，点 `… N more lines` 递增。
+    /// 键与汇报块展开状态同口径 `(message_id, "report:<agent_id>")`。
+    pub report_expand_steps: Vec<(String, String, usize)>,
     /// 键盘选中的可展开工具卡片：(message_id, call_id)；None 表示未选中。
     pub selected_tool: Option<(String, String)>,
     /// 键盘选中的 compact 检查点（没有工具卡片时 Alt+↑/↓ 的切换目标）。
@@ -441,8 +459,10 @@ impl LxChat {
             turn_elapsed_ms: None,
             jump_bottom_hover: false,
             stop_armed_at: None,
+            main_stopped: false,
             suppressed_prompt_header: None,
             detail_expanded: Vec::new(),
+            report_expand_steps: Vec::new(),
             selected_tool: None,
             selected_compact: None,
             plan: None,
@@ -466,9 +486,11 @@ impl LxChat {
         self.thinking_toggled.clear();
         self.turn_started_at_ms = None;
         self.turn_elapsed_ms = None;
+        self.main_stopped = false;
         self.history_scroll = 0;
         self.viewport_top = None;
         self.detail_expanded.clear();
+        self.report_expand_steps.clear();
         self.hover = None;
         self.selected_tool = None;
         self.selected_compact = None;
@@ -557,15 +579,33 @@ impl LxChat {
         self.toggle_section(message_id, slot, CardSection::Body)
     }
 
-    /// 该思考块是否被鼠标悬停（压暗 → 恢复品红的判据）。
-    pub fn thinking_is_hovered(&self, message_index: usize, step_index: usize) -> bool {
-        matches!(
-            self.hover,
-            Some(CardTarget::Thinking {
-                message_index: hovered_message,
-                step_index: hovered_step,
-            }) if hovered_message == message_index && hovered_step == step_index
-        )
+    /// 汇报块已追加的展开批次数（0 表示首次展开的固定窗口）。
+    pub fn report_expand_steps(&self, message_id: &str, slot: &str) -> usize {
+        self.report_expand_steps
+            .iter()
+            .find(|(message, key, _)| message == message_id && key == slot)
+            .map_or(0, |(_, _, steps)| *steps)
+    }
+
+    /// 点 `… N more lines`：汇报块再追加固定一批正文，返回新的批次数。
+    pub fn expand_report_more(&mut self, message_id: &str, slot: &str) -> usize {
+        if let Some(existing) = self
+            .report_expand_steps
+            .iter_mut()
+            .find(|(message, key, _)| message == message_id && key == slot)
+        {
+            existing.2 = existing.2.saturating_add(1);
+            return existing.2;
+        }
+        self.report_expand_steps
+            .push((message_id.to_string(), slot.to_string(), 1));
+        1
+    }
+
+    /// 收起汇报块时清空追加批次；下次展开从第一批重新开始。
+    pub fn clear_report_expand(&mut self, message_id: &str, slot: &str) {
+        self.report_expand_steps
+            .retain(|(message, key, _)| message != message_id || key != slot);
     }
 
     /// thinking 块是否展开：**默认折叠**（生成中也不自动展开），只有用户显式点击头部或

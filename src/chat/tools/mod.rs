@@ -30,6 +30,7 @@ mod read;
 mod read_version;
 mod schema;
 mod search;
+mod subagent;
 mod text;
 mod types;
 mod write;
@@ -59,10 +60,11 @@ pub use read_version::{
     registry as read_registry, require_missing as require_new_target,
     require_read_version as require_version,
 };
-pub use schema::available_tools;
+pub use schema::{available_tools, tools_for};
 pub use types::{
-    FileChange, FileChangeKind, ReadKind, SearchMatch, TOOL_NAMES, ToolContext, ToolErrorCode,
-    ToolExecutionResult, ToolFailure, ToolResultPublic, ToolSpec, ToolSummary,
+    FileChange, FileChangeKind, ReadKind, SUBAGENT_TOOL_NAMES, SearchMatch, TOOL_NAMES,
+    ToolContext, ToolErrorCode, ToolExecutionResult, ToolFailure, ToolResultPublic, ToolSpec,
+    ToolSummary,
 };
 
 use types::ToolResult;

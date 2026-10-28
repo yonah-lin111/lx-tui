@@ -1,14 +1,16 @@
 //! 共用工具请求定义与参数缓冲测试（离线：不访问任何真实 API）。
 
+use crate::chat::agent::ToolSurface;
 use serde_json::{Value, json};
 
 use super::*;
 use crate::chat::events::{ModelItem, TOOL_ARGUMENTS_TOO_LARGE_CODE};
+use crate::chat::tools::available_tools;
 
 /// 四种 wire 形状都必须与 `available_tools()` 一一对应，且 schema 逐字一致。
 #[test]
 fn chat_tools_wrap_function_and_match_schema() {
-    let tools = openai_chat_tools();
+    let tools = openai_chat_tools(ToolSurface::Main);
     let tools = tools.as_array().expect("array");
     assert_eq!(tools.len(), available_tools().len());
     for (wire, spec) in tools.iter().zip(available_tools()) {
@@ -21,7 +23,7 @@ fn chat_tools_wrap_function_and_match_schema() {
 
 #[test]
 fn responses_tools_are_flat() {
-    for (wire, spec) in openai_responses_tools()
+    for (wire, spec) in openai_responses_tools(ToolSurface::Main)
         .as_array()
         .expect("array")
         .iter()
@@ -37,7 +39,7 @@ fn responses_tools_are_flat() {
 
 #[test]
 fn anthropic_tools_use_input_schema() {
-    for (wire, spec) in anthropic_tools()
+    for (wire, spec) in anthropic_tools(ToolSurface::Main)
         .as_array()
         .expect("array")
         .iter()
@@ -51,7 +53,7 @@ fn anthropic_tools_use_input_schema() {
 
 #[test]
 fn google_tools_use_function_declarations() {
-    let tools = google_tools();
+    let tools = google_tools(ToolSurface::Main);
     let declarations = tools[0]["functionDeclarations"]
         .as_array()
         .expect("declarations");
@@ -250,10 +252,16 @@ fn history_blocks_reject_non_object_arguments() {
 /// 四种 wire 形状的名称集合必须等于四工具（防止漏发或错名）。
 #[test]
 fn all_wire_shapes_expose_the_tool_names() {
-    let expected: Vec<&str> = available_tools().iter().map(|spec| spec.name).collect();
-    assert_eq!(expected, crate::chat::tools::TOOL_NAMES.to_vec());
+    let expected: Vec<&str> = ToolSurface::Main.names().to_vec();
+    assert_eq!(
+        expected,
+        available_tools()
+            .iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>()
+    );
 
-    let chat: Vec<String> = openai_chat_tools()
+    let chat: Vec<String> = openai_chat_tools(ToolSurface::Main)
         .as_array()
         .expect("array")
         .iter()
@@ -264,19 +272,19 @@ fn all_wire_shapes_expose_the_tool_names() {
                 .to_string()
         })
         .collect();
-    let responses: Vec<String> = openai_responses_tools()
+    let responses: Vec<String> = openai_responses_tools(ToolSurface::Main)
         .as_array()
         .expect("array")
         .iter()
         .map(|tool| tool["name"].as_str().unwrap_or_default().to_string())
         .collect();
-    let anthropic: Vec<String> = anthropic_tools()
+    let anthropic: Vec<String> = anthropic_tools(ToolSurface::Main)
         .as_array()
         .expect("array")
         .iter()
         .map(|tool| tool["name"].as_str().unwrap_or_default().to_string())
         .collect();
-    let google: Vec<String> = google_tools()[0]["functionDeclarations"]
+    let google: Vec<String> = google_tools(ToolSurface::Main)[0]["functionDeclarations"]
         .as_array()
         .expect("declarations")
         .iter()
@@ -301,4 +309,85 @@ fn emitted_schemas_keep_additional_properties_false() {
             spec.name
         );
     }
+}
+
+/// 四协议 × 三工具面：名称集合与数量逐字一致。
+#[test]
+fn every_wire_shape_respects_tool_surface() {
+    let surfaces = [
+        ToolSurface::Main,
+        ToolSurface::Explorer,
+        ToolSurface::Executor,
+    ];
+    for surface in surfaces {
+        let expected: Vec<String> = surface
+            .names()
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
+        let names = |tools: &Value| -> Vec<String> {
+            tools
+                .as_array()
+                .expect("array")
+                .iter()
+                .map(|tool| {
+                    tool.get("function")
+                        .and_then(|function| function.get("name"))
+                        .or_else(|| tool.get("name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                })
+                .collect()
+        };
+        assert_eq!(names(&openai_chat_tools(surface)), expected, "{surface:?}");
+        assert_eq!(
+            names(&openai_responses_tools(surface)),
+            expected,
+            "{surface:?}"
+        );
+        assert_eq!(names(&anthropic_tools(surface)), expected, "{surface:?}");
+        assert_eq!(
+            names(&google_tools(surface)[0]["functionDeclarations"]),
+            expected,
+            "{surface:?}"
+        );
+    }
+}
+
+/// explorer 的工具面里不存在任何写工具 schema。
+#[test]
+fn explorer_surface_has_no_mutating_tools() {
+    let tools = anthropic_tools(ToolSurface::Explorer);
+    let json = tools.to_string();
+    for forbidden in [
+        "\"edit\"",
+        "\"write\"",
+        "\"exec_command\"",
+        "\"write_stdin\"",
+    ] {
+        assert!(!json.contains(forbidden), "{forbidden}");
+    }
+}
+
+/// 主工具面声明三个控制工具。
+#[test]
+fn main_surface_declares_control_tools() {
+    let tools = anthropic_tools(ToolSurface::Main);
+    let json = tools.to_string();
+    for name in crate::chat::tools::SUBAGENT_TOOL_NAMES {
+        assert!(json.contains(&format!("\"{name}\"")), "{name}");
+    }
+}
+
+/// 摘要请求（`CompactSummary`）不声明任何工具——与子 agent 工具面互不影响。
+#[test]
+fn compact_summary_declares_no_tools() {
+    use crate::chat::events::RequestPurpose;
+    assert_eq!(RequestPurpose::CompactSummary.tools_surface(), None);
+    assert!(!RequestPurpose::CompactSummary.includes_tools());
+    assert_eq!(
+        RequestPurpose::Subagent(crate::chat::agent::AgentRole::Executor).tools_surface(),
+        Some(ToolSurface::Executor)
+    );
 }

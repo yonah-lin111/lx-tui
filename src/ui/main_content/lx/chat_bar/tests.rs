@@ -82,6 +82,7 @@ fn assistant(id: &str, status: &str, steps: Vec<AssistantStepView>) -> ChatMessa
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
+        reports: Vec::new(),
     }
 }
 

@@ -59,6 +59,7 @@ fn message(role: &str, status: &str, parts: Vec<ChatPartView>) -> ChatMessageVie
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
+        reports: Vec::new(),
     }
 }
 
@@ -480,6 +481,236 @@ fn stats_line_row_is_counted_in_layout() {
     assert_eq!(layout.total_rows, 4);
 }
 
+/// 后面还有可见报告批次时，这轮只是中间态：统计行留给报告回答。
+#[test]
+fn stats_line_is_hidden_before_a_visible_report_batch() {
+    let mut assistant = message("assistant", "complete", vec![text_part("等待返回")]);
+    assistant.input_tokens = Some(47_000);
+    assistant.output_tokens = Some(2_300);
+    assistant.duration_ms = Some(252_000);
+    let mut report_row = message("user", "complete", Vec::new());
+    report_row.turn_index = assistant.turn_index;
+    report_row.reports = vec![report("sub-1", "host flow", "completed")];
+    let lx = lx_with(vec![assistant, report_row]);
+    // 正文 1 + 消息间空行 1 + 汇报块 3 + 呼吸位 1 = 6；统计行被隐藏。
+    let area = Rect::new(0, 0, 80, 20);
+    let mut cache = cache();
+    assert_eq!(layout(area, &lx, &mut cache).total_rows, 6);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let rendered: String = (0..6).map(|row| row_text(&buf, area, row)).collect();
+    assert!(
+        !rendered.contains("47k in"),
+        "报告链路中间轮不能先出统计行：{rendered:?}"
+    );
+}
+
+/// 汇报之后真正收尾的 assistant 仍然显示统计行。
+#[test]
+fn stats_line_returns_after_the_last_report() {
+    let mut report_row = message("user", "complete", Vec::new());
+    report_row.reports = vec![crate::chat::agent::SubagentReportView {
+        agent_id: "sub-1".into(),
+        title: "host flow".into(),
+        role: crate::chat::agent::AgentRole::Explorer,
+        status: "completed".into(),
+        files_changed: 0,
+        duration_ms: Some(1_000),
+        body: "done".into(),
+        delivered_at_ms: 1,
+    }];
+    let mut assistant = message("assistant", "complete", vec![text_part("总结")]);
+    assistant.input_tokens = Some(100);
+    assistant.output_tokens = Some(20);
+    assistant.duration_ms = Some(1_000);
+    let lx = lx_with(vec![report_row, assistant]);
+    // 汇报块 3 + 消息间空行 1 + 正文 1 + 块间空行 1 + 统计 1 + 末尾呼吸位 1 = 8。
+    let area = Rect::new(0, 0, 80, 20);
+    let mut cache = cache();
+    assert_eq!(layout(area, &lx, &mut cache).total_rows, 8);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let rendered: String = (0..8).map(|row| row_text(&buf, area, row)).collect();
+    assert!(
+        !rendered.contains("Agent completed"),
+        "报告后已有 assistant 收尾时不再补结束行：{rendered:?}"
+    );
+}
+
+fn report(agent_id: &str, title: &str, status: &str) -> crate::chat::agent::SubagentReportView {
+    crate::chat::agent::SubagentReportView {
+        agent_id: agent_id.into(),
+        title: title.into(),
+        role: crate::chat::agent::AgentRole::Explorer,
+        status: status.into(),
+        files_changed: 0,
+        duration_ms: Some(1_000),
+        body: "done".into(),
+        delivered_at_ms: 1,
+    }
+}
+
+#[test]
+fn report_batch_cards_render_before_the_assistant_answer() {
+    let mut reports = message("user", "complete", Vec::new());
+    reports.turn_index = 0;
+    reports.reports = vec![
+        report("sub-1", "host flow", "completed"),
+        report("sub-2", "cancel path", "completed"),
+    ];
+    let mut assistant = message("assistant", "complete", vec![text_part("汇总")]);
+    assistant.turn_index = 0;
+    assistant.input_tokens = Some(100);
+    assistant.output_tokens = Some(20);
+    assistant.duration_ms = Some(1_000);
+    let lx = lx_with(vec![reports, assistant]);
+    let area = Rect::new(0, 0, 80, 30);
+    let mut cache = cache();
+    let total = layout(area, &lx, &mut cache).total_rows;
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let rendered: String = (0..total)
+        .map(|row| row_text(&buf, area, u16::try_from(row).expect("row fits")))
+        .collect();
+    let first_card = rendered.find("Subagent report").expect("report card");
+    let answer = rendered.find("汇总").expect("assistant answer");
+    let stats = rendered.find("100 in").expect("stats line");
+    assert!(first_card < answer, "报告卡必须在回答之前：{rendered:?}");
+    assert!(answer < stats, "统计行属于报告轮回答：{rendered:?}");
+}
+
+#[test]
+fn legacy_wait_report_rows_without_assistant_are_hidden() {
+    let mut assistant = message("assistant", "complete", vec![text_part("最终总结")]);
+    assistant.turn_index = 0;
+    assistant.input_tokens = Some(47_000);
+    assistant.output_tokens = Some(2_300);
+    assistant.duration_ms = Some(252_000);
+    let mut legacy = message("user", "complete", Vec::new());
+    legacy.turn_index = 1;
+    legacy.reports = vec![report("sub-1", "host flow", "completed")];
+    let lx = lx_with(vec![assistant, legacy]);
+    let area = Rect::new(0, 0, 80, 20);
+    // 正文 1 + 空行 1 + 统计 1 + 呼吸位 1；legacy 报告不占行也不挡统计。
+    assert_eq!(layout(area, &lx, &mut cache()).total_rows, 4);
+    // 隐藏 legacy 行不能压缩消息索引：sticky/居中/命中仍按原始下标查。
+    let snapshot = cache().snapshot(80, &lx);
+    assert_eq!(snapshot.messages.len(), 2);
+    assert_eq!(snapshot.messages[1].start, 0);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let rendered: String = (0..4).map(|row| row_text(&buf, area, row)).collect();
+    assert!(!rendered.contains("Subagent report"), "{rendered:?}");
+    assert!(
+        rendered.contains("47k in"),
+        "legacy 报告不能挡住宿主统计：{rendered:?}"
+    );
+}
+
+/// 多轮报告链路：运行中全隐藏；全部结束后只留最后一个 assistant 的统计。
+#[test]
+fn stats_follow_the_final_assistant_of_a_report_chain() {
+    let mut main = message("assistant", "complete", vec![text_part("主轮")]);
+    main.turn_index = 0;
+    main.input_tokens = Some(100);
+    main.output_tokens = Some(20);
+    main.duration_ms = Some(1_000);
+    let mut report1 = message("user", "complete", Vec::new());
+    report1.turn_index = 1;
+    report1.reports = vec![report("sub-1", "first", "completed")];
+    let mut answer1 = message("assistant", "complete", vec![text_part("报告轮一")]);
+    answer1.turn_index = 1;
+    answer1.input_tokens = Some(100);
+    answer1.output_tokens = Some(20);
+    answer1.duration_ms = Some(1_000);
+    let mut report2 = message("user", "complete", Vec::new());
+    report2.turn_index = 2;
+    report2.reports = vec![report("sub-2", "second", "completed")];
+    let mut answer2 = message("assistant", "complete", vec![text_part("报告轮二")]);
+    answer2.turn_index = 2;
+    answer2.input_tokens = Some(100);
+    answer2.output_tokens = Some(20);
+    answer2.duration_ms = Some(1_000);
+    let mut lx = lx_with(vec![main, report1, answer1, report2, answer2]);
+    lx.agents
+        .runs
+        .push(crate::app::state::SubagentRun::from_record(
+            &crate::db::chat::SubagentRecord {
+                agent_id: "sub-3".into(),
+                child_session_id: "child".into(),
+                parent_session_id: "parent".into(),
+                spawn_message_id: None,
+                role: crate::chat::agent::AgentRole::Explorer,
+                status: "running".into(),
+                title: "third".into(),
+                created_at_ms: 0,
+                completed_at_ms: None,
+                report_json: None,
+                report_delivered: false,
+            },
+        ));
+    let area = Rect::new(0, 0, 80, 60);
+    let mut cache = cache();
+    let total = layout(area, &lx, &mut cache).total_rows;
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let rendered: String = (0..total)
+        .map(|row| row_text(&buf, area, u16::try_from(row).expect("row fits")))
+        .collect();
+    assert!(
+        !rendered.contains("100 in"),
+        "子 agent 运行中不能收尾：{rendered:?}"
+    );
+    lx.agents.runs[0].status = "completed".into();
+    let total = layout(area, &lx, &mut cache).total_rows;
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let rendered: String = (0..total)
+        .map(|row| row_text(&buf, area, u16::try_from(row).expect("row fits")))
+        .collect();
+    assert_eq!(
+        rendered.matches("100 in").count(),
+        1,
+        "只在报告链最后一个 assistant 显示统计：{rendered:?}"
+    );
+}
+
+/// 子 agent 仍在运行时，任何中间 assistant 都不显示统计行：任务还没收尾。
+#[test]
+fn stats_line_is_hidden_while_a_subagent_is_running() {
+    let mut assistant = message("assistant", "complete", vec![text_part("等待返回")]);
+    assistant.input_tokens = Some(100);
+    assistant.output_tokens = Some(20);
+    assistant.duration_ms = Some(1_000);
+    let mut lx = lx_with(vec![assistant]);
+    lx.agents
+        .runs
+        .push(crate::app::state::SubagentRun::from_record(
+            &crate::db::chat::SubagentRecord {
+                agent_id: "sub-1".into(),
+                child_session_id: "child".into(),
+                parent_session_id: "parent".into(),
+                spawn_message_id: None,
+                role: crate::chat::agent::AgentRole::Explorer,
+                status: "running".into(),
+                title: "host flow".into(),
+                created_at_ms: 0,
+                completed_at_ms: None,
+                report_json: None,
+                report_delivered: false,
+            },
+        ));
+    let area = Rect::new(0, 0, 80, 20);
+    // 正文 1 + 末尾呼吸位 1；统计行被隐藏。
+    assert_eq!(layout(area, &lx, &mut cache()).total_rows, 2);
+    lx.agents.runs[0].status = "completed".into();
+    assert_eq!(
+        layout(area, &lx, &mut cache()).total_rows,
+        4,
+        "最后一个子 agent 结束后统计行才出现"
+    );
+}
+
 #[test]
 fn streaming_assistant_has_no_stats_line() {
     let mut streaming = message("assistant", "streaming", vec![text_part("部分")]);
@@ -518,7 +749,7 @@ fn thinking_header_uses_step_dot_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
     // 折叠态用**浅粉 182**（用户要求「没展开时不要灰色，用浅一点的粉色」），
-    // 展开与悬停才升为亮粉 218。
+    // 只有展开才升为亮粉 218；悬停不改变颜色。
     let header = &buf[(0, 0)];
     assert_eq!(header.fg, Color::Indexed(182), "折叠态方块浅粉");
     assert!(
@@ -528,19 +759,19 @@ fn thinking_header_uses_step_dot_and_becomes_thought() {
     let label = &buf[(2, 0)];
     assert_eq!(label.fg, Color::Indexed(182), "折叠态文案浅粉");
     assert!(!label.modifier.contains(Modifier::BOLD), "文案不加粗");
-    // 悬停整块：方块与文案恢复品红 218。
+    // 悬停整块：颜色不变化（只有展开才升亮粉）。
     streaming.chat.hover = Some(crate::app::state::CardTarget::Thinking {
         message_index: 0,
         step_index: 0,
     });
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
-    assert_eq!(buf[(0, 0)].fg, Color::Indexed(218), "悬停方块恢复品红");
+    assert_eq!(buf[(0, 0)].fg, Color::Indexed(182), "悬停方块仍为折叠浅粉");
     assert!(
         buf[(0, 0)].modifier.contains(Modifier::BOLD),
-        "悬停时方块加粗（生成中的原色）"
+        "悬停不影响生成中的呼吸加粗"
     );
-    assert_eq!(buf[(2, 0)].fg, Color::Indexed(218), "悬停文案恢复品红");
+    assert_eq!(buf[(2, 0)].fg, Color::Indexed(182), "悬停文案仍为折叠浅粉");
     streaming.chat.hover = None;
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);

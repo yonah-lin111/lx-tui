@@ -22,10 +22,10 @@ use super::hit::{
     apply_block_button, apply_template_button, block_button_at, dismiss_lx_toast_outside,
     handle_agent_scrollbar_press, handle_lx_history_scrollbar_press,
     handle_lx_input_scrollbar_press, handle_prompt_scrollbar_press,
-    handle_terminal_scrollbar_press, handle_todo_scrollbar_press, handle_workspace_scrollbar_press,
-    lx_toast_at, mention_item_at, pane_at, pane_boundary_draggable, pane_content_inner,
-    pane_toggle_button_at, panel_item_at, prompt_boundary_hit, prompt_header_at, slash_item_at,
-    template_button_at,
+    handle_task_agents_scrollbar_press, handle_terminal_scrollbar_press,
+    handle_todo_scrollbar_press, handle_workspace_scrollbar_press, lx_toast_at, mention_item_at,
+    pane_at, pane_boundary_draggable, pane_content_inner, pane_toggle_button_at, panel_item_at,
+    prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -494,13 +494,21 @@ pub(crate) fn handle_mouse_down_left(
                 let task_hit = state.pane_anywhere(pane).and_then(|target| {
                     target.lx.task.as_ref()?;
                     let rects = ui::main_content::lx::task_rects(inner, &target.lx)?;
-                    ui::main_content::lx::task::hit(rects.list, mouse.column, mouse.row)
+                    let page = target.lx.task.as_ref()?;
+                    ui::main_content::lx::task::hit(
+                        rects.list,
+                        page,
+                        &target.lx.agents,
+                        mouse.column,
+                        mouse.row,
+                    )
                 });
                 // 输出容器的滚动条：thumb 开始拖拽，轨道点击跳转。
                 if let Some(rects) = state
                     .pane_anywhere(pane)
                     .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
                     && let Some(page) = state.pane_anywhere(pane).and_then(|t| t.lx.task.as_ref())
+                    && page.tab == crate::app::state::TaskTab::Processes
                     && let Some(bar) =
                         ui::main_content::lx::task::output_scrollbar(rects.output, page)
                     && bar.track.contains((mouse.column, mouse.row).into())
@@ -517,6 +525,19 @@ pub(crate) fn handle_mouse_down_left(
                     *dirty = true;
                     return;
                 }
+                // Agents 详情滚动条：与主历史同一套拖拽/轨道点击。
+                if handle_task_agents_scrollbar_press(
+                    state,
+                    pane,
+                    inner,
+                    mouse.column,
+                    mouse.row,
+                    cache,
+                ) {
+                    update::focus_pane(state, pane);
+                    *dirty = true;
+                    return;
+                }
                 if let Some(hit) = task_hit {
                     match hit {
                         ui::main_content::lx::task::TaskHit::Tab(index) => {
@@ -525,7 +546,26 @@ pub(crate) fn handle_mouse_down_left(
                         ui::main_content::lx::task::TaskHit::Close => {
                             update::close_task_page(state, pane);
                         }
+                        ui::main_content::lx::task::TaskHit::Agent(index) => {
+                            update::select_task_agent(state, pane, index);
+                        }
                     }
+                    *dirty = true;
+                    return;
+                }
+                // Agents 详情区：工具 / 思考 / compact / 汇报块点击切换折叠。
+                let agent_card = state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::task_agents_card_target_at(
+                        inner,
+                        &target.lx,
+                        mouse.column,
+                        mouse.row,
+                        cache.pane(pane),
+                    )
+                });
+                if let Some(card) = agent_card {
+                    update::toggle_agent_card(state, pane, card);
+                    update::focus_pane(state, pane);
                     *dirty = true;
                     return;
                 }

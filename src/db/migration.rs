@@ -644,13 +644,57 @@ impl Database {
             let transaction = self.conn.unchecked_transaction()?;
             transaction.execute_batch(SCHEMA_V14)?;
             ensure_no_foreign_key_violation(&transaction)?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            // 只推进到本分支的版本：后续分支失败时不能把库标成更高版本，
+            // 否则下次启动会跳过缺失的迁移（v15/v16 都依赖这一点）。
+            transaction.pragma_update(None, "user_version", 14)?;
             transaction.commit()?;
         }
         if version < 15 {
             // 只增表：全局 todo 列表，不触碰既有数据，失败整体回滚（版本不推进）。
             let transaction = self.conn.unchecked_transaction()?;
             transaction.execute_batch(SCHEMA_V15_TODO)?;
+            ensure_no_foreign_key_violation(&transaction)?;
+            transaction.pragma_update(None, "user_version", 15)?;
+            transaction.commit()?;
+        }
+        if version < 16 {
+            // 只加列：subagent 报告与报告行标记。不重建任何表；`column_exists` 守卫
+            // 让重复迁移幂等（旧库可能已被更早的二进制补过其中一列）。
+            let transaction = self.conn.unchecked_transaction()?;
+            for (table, column, ddl) in [
+                (
+                    "agent_subagent",
+                    "report_json",
+                    "ALTER TABLE agent_subagent ADD COLUMN report_json TEXT;",
+                ),
+                (
+                    "agent_subagent",
+                    "report_delivered",
+                    "ALTER TABLE agent_subagent ADD COLUMN report_delivered INTEGER NOT NULL DEFAULT 0;",
+                ),
+                (
+                    "agent_message",
+                    "subagent_report_json",
+                    "ALTER TABLE agent_message ADD COLUMN subagent_report_json TEXT;",
+                ),
+            ] {
+                if !column_exists(&transaction, table, column)? {
+                    transaction.execute_batch(ddl)?;
+                }
+            }
+            ensure_no_foreign_key_violation(&transaction)?;
+            // 只推进到本分支版本，v17 仍需执行（不能直接写 SCHEMA_VERSION）。
+            transaction.pragma_update(None, "user_version", 16)?;
+            transaction.commit()?;
+        }
+        if version < 17 {
+            // 只加列：subagent 的短标题。旧记录留空，UI 不拿 task 首行冒充标题。
+            let transaction = self.conn.unchecked_transaction()?;
+            if !column_exists(&transaction, "agent_subagent", "title")? {
+                transaction.execute_batch(
+                    "ALTER TABLE agent_subagent ADD COLUMN title TEXT NOT NULL DEFAULT '';",
+                )?;
+            }
             ensure_no_foreign_key_violation(&transaction)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -689,7 +733,8 @@ impl Database {
                     .execute_batch("ALTER TABLE agent_message ADD COLUMN user_shell_json TEXT;")?;
             }
             ensure_no_foreign_key_violation(&transaction)?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            // 只推进到 13：后续分支失败时不能让库看起来已是当前版本。
+            transaction.pragma_update(None, "user_version", 13)?;
             transaction.commit()?;
             Ok(())
         })();

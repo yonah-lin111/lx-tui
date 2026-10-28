@@ -422,7 +422,10 @@ async fn request_body_carries_tools_and_system_prompt() {
         .iter()
         .map(|tool| tool["function"]["name"].as_str().unwrap_or_default())
         .collect();
-    assert_eq!(names, crate::chat::tools::TOOL_NAMES.to_vec());
+    assert_eq!(
+        names,
+        crate::chat::agent::ToolSurface::Main.names().to_vec()
+    );
 }
 
 /// 取消发生在工具参数中途：保留已收增量、只产出一个终态、绝不产生可执行调用。

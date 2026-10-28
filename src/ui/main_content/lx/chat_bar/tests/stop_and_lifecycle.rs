@@ -57,6 +57,7 @@ fn ended_turn_hides_the_loading_row() {
     let mut lx = streaming_lx("a1", vec![reasoning_step(0, true)]);
     assert!(visible(&lx), "流中可见");
     lx.chat.status.streaming = false;
+    lx.chat.request = RequestState::Idle;
     assert!(!visible(&lx), "空闲且跟随底部：整行消失");
     // 面板打开时同样不显示（沿用原生命周期，不新增加载入口）。
     let mut lx = streaming_lx("a1", vec![text_step("答")]);

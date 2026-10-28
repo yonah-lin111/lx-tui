@@ -51,6 +51,20 @@ fn completed_or_cleared_plan_falls_back_to_stage() {
     assert!(!row.contains("做完的"), "{row:?}");
 }
 
+/// wait_agent 运行中必须显示等待子 agent 的 loading，而不是 Running tools。
+#[test]
+fn running_wait_agent_shows_waiting_agents() {
+    let mut step = tool_step(0, ToolStatus::Running);
+    if let AssistantStepView::Tool { call, .. } = &mut step {
+        call.name = "wait_agent".into();
+    }
+    let lx = streaming_lx("a1", vec![step]);
+    let (grid, bar) = draw_bar(&lx, 48);
+    let row = row_text(&grid, bar);
+    assert!(row.contains(text::chat::WAITING_AGENTS_LABEL), "{row:?}");
+    assert!(!row.contains(text::chat::RUNNING_TOOLS_LABEL), "{row:?}");
+}
+
 /// A03：无计划，当前 tool 为 Pending 或 Running → Running tools。
 #[test]
 fn pending_and_running_tools_show_running_tools() {

@@ -92,6 +92,9 @@ impl AgentHost for RecordingHost {
             AgentHostRequest::UserShellUpdates { reply } => {
                 let _ = reply.send(Vec::new());
             }
+            AgentHostRequest::Subagent { reply, .. } => {
+                let _ = reply.send(Err(HostError::Cancelled));
+            }
             AgentHostRequest::AskUser {
                 call_id,
                 questions,
@@ -642,3 +645,122 @@ async fn unclosed_tool_input_fails_without_execution() {
 mod ask_turn;
 mod context;
 mod limits;
+
+/// 子 agent 上下文里伪造控制工具：必须按工具级失败回给模型，且不触发 host。
+#[tokio::test]
+async fn control_tool_is_rejected_inside_a_subagent_turn() {
+    use crate::chat::agent::{AgentRole, UNAVAILABLE_CODE};
+    use crate::chat::events::RequestPurpose;
+
+    let script = Script::new(
+        vec![
+            tool_calls(
+                &[(
+                    "call-control",
+                    "spawn_agent",
+                    r#"{"role":"explorer","task":"x"}"#,
+                    0,
+                )],
+                None,
+            ),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::new();
+    let (_cancel_sender, cancel) = watch::channel(false);
+    let mut request = ChatRequest {
+        turns: Vec::new(),
+        items: Vec::new(),
+        model: crate::db::chat::ModelSnapshot {
+            provider: "p".into(),
+            model: "m".into(),
+            variant: None,
+        },
+        variant_params: None,
+        purpose: RequestPurpose::Subagent(AgentRole::Explorer),
+        system_prompt: None,
+    };
+    request
+        .items
+        .push(ModelItem::UserText("investigate".into()));
+    let summary = run_agent_turn(
+        ModelContext::new(request, std::env::temp_dir()),
+        host.clone(),
+        RecordingExecutor::new(),
+        script.stream_one(),
+        cancel,
+    )
+    .await;
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    // 工具结果进入上下文：模型看到稳定错误码。
+    let items = script.items_of(1);
+    let text = format!("{items:?}");
+    assert!(text.contains(UNAVAILABLE_CODE), "{text}");
+    // 工具行仍然走完 begin/finish（失败结果要落库），但没有真正派发子 agent。
+    let trace = host.trace();
+    assert!(
+        trace
+            .iter()
+            .any(|item| matches!(item, HostTrace::Begin(id) if id == "call-control")),
+        "{trace:?}"
+    );
+    // 第二次采样仍是子 agent 工具面：用途随轮次冻结，不能回退成主工具面。
+    assert_eq!(
+        script.requests.lock().expect("lock")[1].purpose,
+        RequestPurpose::Subagent(AgentRole::Explorer)
+    );
+}
+
+/// explorer 幻觉出 write：执行层必须拒绝，不能因为 schema 没声明就默认安全。
+#[tokio::test]
+async fn tools_outside_the_role_surface_are_never_executed() {
+    use crate::chat::agent::{AgentRole, UNAVAILABLE_CODE};
+    use crate::chat::events::RequestPurpose;
+
+    let script = Script::new(
+        vec![
+            tool_calls(
+                &[(
+                    "call-write",
+                    "write",
+                    r#"{"path":"should-not-exist.txt","content":"x"}"#,
+                    0,
+                )],
+                None,
+            ),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::new();
+    let executor = RecordingExecutor::new();
+    let executed = executor.executed.clone();
+    let (_cancel_sender, cancel) = watch::channel(false);
+    let request = ChatRequest {
+        turns: Vec::new(),
+        items: vec![ModelItem::UserText("investigate".into())],
+        model: crate::db::chat::ModelSnapshot {
+            provider: "p".into(),
+            model: "m".into(),
+            variant: None,
+        },
+        variant_params: None,
+        purpose: RequestPurpose::Subagent(AgentRole::Explorer),
+        system_prompt: None,
+    };
+    let summary = run_agent_turn(
+        ModelContext::new(request, std::env::temp_dir()),
+        host,
+        executor,
+        script.stream_one(),
+        cancel,
+    )
+    .await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert!(executed.lock().expect("lock").is_empty(), "不得执行 write");
+    let items = script.items_of(1);
+    let text = format!("{items:?}");
+    assert!(text.contains(UNAVAILABLE_CODE), "{text}");
+}

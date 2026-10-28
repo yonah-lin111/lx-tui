@@ -8,11 +8,12 @@
 //! `app::update::chat::show_lx_hint`），这一行不再承载临时提示。
 //!
 //! **loading 文案**：由 [`activity_label`] 只读派生——会话计划有 `in_progress` 步骤时
-//! 显示该步骤原文，否则按当前 assistant 的真实阶段显示 `Thinking...` /
-//! `Running tools...` / `Working...`。文案带**从左到右的扫描高亮**：窗口外的字符用
-//! 次要色（dim），3 字符宽的窗口内用当前帧色（按 Native 标签的 4 档渐变
-//! `218 → 182 → 153 → 117` 循环，每 `LOADING_FRAME_INTERVAL` 换一档），走出末尾后
-//! 从左侧重新进入。
+//! 显示该步骤原文；否则按当前 assistant 的真实阶段显示 `Thinking...` /
+//! `Running tools...` / `Waiting for agents...` / `Working...`。`wait_agent` 的
+//! Pending/Running 工具优先显示等待子 agent，而不是泛化的 Running tools。
+//! 文案带**从左到右的扫描高亮**：窗口外的字符用次要色（dim），3 字符宽的窗口内
+//! 用当前帧色（按 Native 标签的 4 档渐变 `218 → 182 → 153 → 117` 循环，每
+//! `LOADING_FRAME_INTERVAL` 换一档），走出末尾后从左侧重新进入。
 //!
 //! **统计优先**：括号里的统计先占位（`(3s · ↓320 tok)`，静态 dim、不参与扫描），
 //! 文字只用剩余宽度并在尾部加 `…`；因此长 todo 永远不会挤掉耗时/token。统计自身
@@ -51,12 +52,26 @@ pub(super) fn visible(lx: &Lx) -> bool {
     loading_visible(lx) || !lx.chat.follow_bottom
 }
 
-/// 是否需要画 loading 段：流中（含本地命令之外的模型轮次）或 `/compact` 正在执行。
+/// 是否需要画 loading 段：主轮次在途（提交/流式/收尾）或 `/compact` 正在执行。
 ///
 /// 压缩期间聊天请求是空闲的（没有 assistant 流），但它同样是一个要等几秒以上的
 /// 后台动作；用户要求这一行必须给出可见反馈，因此与流中同档显示。
+///
+/// **后台任务 / 子 agent 单独运行**时，只要主 agent 不是被用户显式停止，
+/// 就继续显示等待 loading；用户按 Esc 停止主 agent 后不再显示（它们仍在底边框计数）。
 fn loading_visible(lx: &Lx) -> bool {
-    lx.chat.status.streaming || lx.compact.is_running()
+    if lx.compact.is_running() {
+        return true;
+    }
+    if lx.chat.main_stopped {
+        return false;
+    }
+    lx.chat.status.streaming || lx.chat.request.is_busy() || has_running_agents(lx)
+}
+
+/// 本会话仍有子 agent 在跑。
+fn has_running_agents(lx: &Lx) -> bool {
+    lx.agents.runs.iter().any(|run| run.is_running())
 }
 
 /// 是否需要画「回到底部」控件（上滚未跟随底部、有历史、面板未打开）。
@@ -110,6 +125,8 @@ enum ActivityLabel<'a> {
     Thinking,
     /// 当前 assistant 有 Pending/Running 工具。
     RunningTools,
+    /// 子 agent 仍在后台运行（主轮次可能已经 idle）。
+    WaitingAgents,
     /// 阶段不明确或尚未开始。
     Working,
 }
@@ -122,6 +139,7 @@ impl ActivityLabel<'_> {
             Self::Todo(todo) => todo,
             Self::Thinking => text::chat::THINKING_LABEL,
             Self::RunningTools => text::chat::RUNNING_TOOLS_LABEL,
+            Self::WaitingAgents => text::chat::WAITING_AGENTS_LABEL,
             Self::Working => text::chat::LOADING_LABEL,
         }
     }
@@ -142,13 +160,26 @@ fn activity_label<'a>(lx: &'a Lx, plan_text: Option<&'a str>) -> ActivityLabel<'
         return ActivityLabel::Todo(todo);
     }
     let Some(message) = current_streaming_message(&lx.chat) else {
-        return ActivityLabel::Working;
+        return if has_running_agents(lx) {
+            ActivityLabel::WaitingAgents
+        } else {
+            ActivityLabel::Working
+        };
     };
+    if message.tools().any(|call| {
+        matches!(call.status, ToolStatus::Pending | ToolStatus::Running)
+            && call.name == "wait_agent"
+    }) {
+        return ActivityLabel::WaitingAgents;
+    }
     if message
         .tools()
         .any(|call| matches!(call.status, ToolStatus::Pending | ToolStatus::Running))
     {
         return ActivityLabel::RunningTools;
+    }
+    if has_running_agents(lx) {
+        return ActivityLabel::WaitingAgents;
     }
     match message.steps.last() {
         Some(AssistantStepView::Part { part, .. }) if part.reasoning_open() => {
@@ -249,8 +280,11 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     // 输出 token 都是上一轮的陈旧值，必须整段不显示（`None`）。
     let stats = if lx.compact.is_running() {
         text::chat::stream_stats_label(lx.compact.elapsed_ms, None)
-    } else {
+    } else if lx.chat.status.streaming {
         text::chat::stream_stats_label(lx.chat.turn_elapsed_ms, lx.chat.stream_output_tokens())
+    } else {
+        // 主轮次 idle、只剩子 agent 在跑：上一轮的耗时/token 不能冒充本轮等待。
+        None
     };
     // 压缩不能被 Esc 打断（关掉当前轮次也一样）：待命提示只在真正的流中出现。
     let stop_armed = !lx.compact.is_running() && lx.chat.stop_armed_at.is_some();

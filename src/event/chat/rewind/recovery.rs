@@ -16,6 +16,14 @@ use super::restore::{apply_image, raw_from_record, verify_identity};
 
 /// 启动入口：扫描并恢复所有可取得 guard 的会话。
 pub fn recover_startup(database: &Database) {
+    // 子 agent 先于普通会话恢复：运行中的子 turn 一律取消，绝不重跑。
+    match database.recover_running_subagents() {
+        Ok(recovered) if recovered > 0 => {
+            tracing::info!(recovered, "cancelled unfinished subagents");
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "recovering subagents failed"),
+    }
     let sessions = match database.sessions_needing_recovery() {
         Ok(sessions) => sessions,
         Err(error) => {

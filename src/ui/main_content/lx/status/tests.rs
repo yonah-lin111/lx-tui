@@ -1,4 +1,5 @@
-//! 状态测试：`模型名 · 当前用量(百分比)`（**不带 `context:` 前缀、不显示供应商**）、
+//! 状态测试：上下文右侧运行指标（后台任务 / 子 agent，圆点分隔）、
+//! `模型名 · 当前用量(百分比)`（**不带 `context:` 前缀、不显示供应商**）、
 //! 显示与隐藏（无消耗整段隐藏）、窄宽度降级（丢上下文占用）、
 //! 模型名硬切不省略号、底边线保留（均绘制在窗格底边框上）。
 
@@ -157,7 +158,7 @@ fn model_name_uses_entry_label_gradient() {
     let inner = pane(rect);
     let mut buf = Buffer::empty(rect);
     render(&mut buf, inner, &lx);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
     let row = lay.label.y;
     let first = &buf[(lay.label.x, row)];
     assert_eq!(first.symbol(), "m");
@@ -200,15 +201,15 @@ fn narrow_drops_context_keeps_model() {
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(100), Some(50), true));
     // 宽：上下文占用 + 供应商。
     let inner = Rect::new(0, 0, 40, 3);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
     assert!(lay.context.width > 0, "40 列显示上下文占用");
     let inner = Rect::new(0, 0, 23, 3);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
     assert!(lay.context.width > 0, "23 列仍保留上下文占用");
     assert!(lay.label.width > 0, "保留模型名区");
     // 更窄：连上下文占用（7 列 `50(50%)`）也放不下时只留模型名（仍硬切保留）。
     let inner = Rect::new(0, 0, 10, 3);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
     assert_eq!(lay.context.width, 0, "更窄时丢弃上下文占用");
     assert!(lay.label.width > 0, "仍保留模型名区");
 }
@@ -238,7 +239,7 @@ fn wide_status_on_border_with_provider_and_context() {
         true,
     ));
     let inner = Rect::new(0, 0, 80, 3);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
     assert_eq!(lay.area.height, 1);
     assert_eq!(lay.area.y, inner.bottom(), "绘制在边框行");
     let line = render_border(&lx, 80);
@@ -260,7 +261,12 @@ fn no_stop_button_on_border() {
 #[test]
 fn tiny_inner_yields_no_status() {
     let lx = lx_with_status(status(Some("M"), Some("P"), None, None, false));
-    let lay = layout(Rect::new(0, 0, 7, 3), &lx.chat.status, lx.background_tasks);
+    let lay = layout(
+        Rect::new(0, 0, 7, 3),
+        &lx.chat.status,
+        lx.background_tasks,
+        0,
+    );
     assert_eq!(lay.area.height, 0);
 }
 
@@ -281,12 +287,39 @@ fn long_model_name_is_hard_cut_without_ellipsis() {
     );
 }
 
-// ===== 后台任务计数指标（输入框底部、用量右侧）=====
+// ===== 运行指标（输入框底部：后台任务 / 子 agent，贴上下文右侧）=====
 
-/// 设置计数后取底边框整行文本。
+/// 设置后台任务计数后取底边框整行文本。
 fn border_with_tasks(count: usize, width: u16) -> String {
+    border_with_runs(count, 0, width)
+}
+
+/// 一个 running 子 agent 的展示记录。
+fn running_subagent(id: &str) -> crate::app::state::SubagentRun {
+    crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+        agent_id: id.into(),
+        child_session_id: format!("sess-{id}"),
+        parent_session_id: "sess-parent".into(),
+        spawn_message_id: None,
+        role: crate::chat::agent::AgentRole::Explorer,
+        status: "running".into(),
+        title: "investigate".into(),
+        created_at_ms: 0,
+        completed_at_ms: None,
+        report_json: None,
+        report_delivered: false,
+    })
+}
+
+/// 设置后台任务与子 agent 计数后取底边框整行文本。
+fn border_with_runs(tasks: usize, subagents: usize, width: u16) -> String {
     let mut lx = lx_with_status(status(Some("M"), Some("P"), Some(1_000), Some(500), false));
-    lx.background_tasks = count;
+    lx.background_tasks = tasks;
+    for index in 0..subagents {
+        lx.agents
+            .runs
+            .push(running_subagent(&format!("sub-{index}")));
+    }
     render_border(&lx, width)
 }
 
@@ -306,19 +339,35 @@ fn task_count_uses_singular_and_plural() {
 }
 
 #[test]
-fn task_count_sits_at_the_right_end_of_the_border() {
-    // 指标贴右端（用量在左侧），两者之间留底边线。
+fn task_count_sits_right_of_context() {
+    // 指标贴在上下文占用右侧，右端只剩底边线。
     let line = border_with_tasks(3, 60);
-    // 右端角字符内侧保留 1 列底边线（与左侧 `╰ ` 对称）。
     assert!(
-        line.trim_end().ends_with("3 processes─╯"),
-        "指标贴右端：{line}"
+        line.starts_with("╰ M · 500(50%) · 3 processes"),
+        "指标贴上下文右侧：{line}"
     );
-    assert!(line.contains("500(50%)"), "左侧用量仍在：{line}");
-    // 用量在指标左边。
-    let used = line.find("500(50%)").expect("用量");
     let tasks = line.find("3 processes").expect("指标");
-    assert!(used < tasks, "用量在指标之前：{line}");
+    let used = line.find("500(50%)").expect("用量");
+    assert!(used < tasks, "指标在用量之后：{line}");
+    assert!(line.trim_end().ends_with("─╯"), "右端只剩底边线：{line}");
+}
+
+#[test]
+fn subagent_count_sits_next_to_task_count_right_of_context() {
+    let line = border_with_runs(2, 1, 80);
+    assert!(
+        line.starts_with("╰ M · 500(50%) · 2 processes · 1 subagent"),
+        "后台任务与子 agent 用圆点分隔贴上下文右侧：{line}"
+    );
+}
+
+#[test]
+fn subagent_count_shows_without_background_tasks() {
+    let line = border_with_runs(0, 2, 80);
+    assert!(
+        line.starts_with("╰ M · 500(50%) · 2 subagents"),
+        "没有后台任务时也显示子 agent：{line}"
+    );
 }
 
 #[test]
@@ -421,14 +470,14 @@ fn narrow_drops_context_before_variant() {
     let lx = lx_with_status(st);
     // 14 列内容区：`M · high` 放得下，` · 500(50%)` 放不下。
     let inner = Rect::new(0, 0, 14, 3);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
     assert!(lay.variant.width > 0, "思考等级保留");
     assert_eq!(lay.context.width, 0, "上下文占用先被丢弃");
     assert!(lay.label.width > 0, "模型名仍在");
 
     // 更窄：连思考等级也放不下（`M · high` 需 8 列，可用只有 5）。
     let inner = Rect::new(0, 0, 9, 3);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
     assert_eq!(lay.variant.width, 0, "更窄时丢弃思考等级");
     assert!(lay.label.width > 0, "模型名仍在");
 }

@@ -4,6 +4,7 @@ use crate::app::markdown::{BlockPanel, block_commands, block_insertion, block_tr
 use crate::app::paste::{PasteAction, PasteCandidate, PastePanel};
 use crate::app::prompt::{list, text};
 
+pub mod agent;
 pub mod ask;
 pub mod chat;
 pub mod compact;
@@ -18,6 +19,7 @@ use history::HistoryBrowse;
 pub(crate) use history::HistoryMove;
 pub use shell::LxInputMode;
 
+pub use agent::{AgentsState, SubagentReportView, SubagentRun};
 pub use ask::{AskEditor, AskHit, AskState, AskWheelZone};
 pub use chat::SHELL_SLOT;
 pub use chat::{
@@ -25,8 +27,8 @@ pub use chat::{
     ChatPartView, CommandView, DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView,
     FileDiffView, FrozenModel, InputHintLevel, InteractionAction, LxChat, ModelsSnapshot,
     PendingShell, PlanSnapshotView, PlanStepView, ProcessInteractionView, ProcessStateView,
-    QueuedSubmission, RequestKey, RequestState, ToolCallView, ToolDetailView, ToolStatus,
-    ToolSummary, UserShellView,
+    QueuedSubmission, RequestKey, RequestState, SearchDetailView, SearchMatchView,
+    SubagentDetailView, ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
 };
 pub use compact::{CompactNoticeView, LxCompact};
 pub use mention::{LxMention, LxMentionView};
@@ -84,6 +86,8 @@ pub struct Lx {
     pub slash: Option<super::lx::SlashPanel>,
     /// 聊天会话状态：会话引用、历史视图与请求状态机。
     pub chat: LxChat,
+    /// 本窗格派发的子 agent 展示态（面板关闭时依然保留）。
+    pub agents: AgentsState,
     /// 最新轮次撤销：待命、目标选择、动作面板与执行中。
     pub rewind: LxRewind,
     /// 上下文压缩：检查点、展开状态与执行中标记（只读视图，IO 在事件层）。
@@ -182,6 +186,7 @@ impl Lx {
             mention: LxMention::default(),
             slash: None,
             chat: LxChat::new(),
+            agents: AgentsState::default(),
             rewind: LxRewind::default(),
             compact: LxCompact::default(),
             toast: None,
@@ -193,6 +198,11 @@ impl Lx {
             redo: Vec::new(),
             history: HistoryBrowse::default(),
         }
+    }
+
+    /// 清空子 agent 展示态（会话切换/新建时随会话一起复位）。
+    pub fn clear_agents(&mut self) {
+        self.agents = AgentsState::default();
     }
 
     /// 清除撤销状态，并关闭 `/rewind` 动作面板（渲染与 Enter 判定都以 `slash` 为准，

@@ -70,8 +70,8 @@ pub fn build(
         "stream": true,
     });
     // 摘要请求不声明工具（无工具就无从发起调用）。
-    if request.includes_tools() {
-        body["tools"] = anthropic_tools();
+    if let Some(surface) = request.tools_surface() {
+        body["tools"] = anthropic_tools(surface);
     }
     if let Some(params) = &request.variant_params {
         // thinking 预算：thinkingBudget（token 数）映射为协议 thinking 结构。
@@ -93,7 +93,7 @@ pub fn build(
             ("anthropic-version".into(), API_VERSION.into()),
         ],
         body: serde_json::to_string(&body).map_err(|error| format!("encode body: {error}"))?,
-        tools_requested: request.includes_tools(),
+        tools_requested: request.tools_surface().is_some(),
     })
 }
 

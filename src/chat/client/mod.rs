@@ -243,29 +243,39 @@ async fn stream_once(
     };
     let mut builder = client
         .post(&built.url)
-        .header("Accept", "text/event-stream")
-        .timeout(idle_timeout.max(FIRST_BYTE_TIMEOUT));
+        .header("Accept", "text/event-stream");
     for (name, value) in &built.headers {
         builder = builder.header(name.as_str(), value.as_str());
     }
+    // 首字节也按空闲超时处理（不是整请求总时长）：大上下文预填充可能长时间没有
+    // 任何 SSE 字节，但一旦开始流式输出，持续产出不应被一个固定总时长杀掉。
+    let first_byte_timeout = idle_timeout.max(FIRST_BYTE_TIMEOUT);
     let response = tokio::select! {
-        response = builder
-            .header("Content-Type", "application/json")
-            .body(built.body.clone())
-            .send() => match response {
-                Ok(response) => response,
-                Err(error) => return StopReason::Failed { code: request_error_code(&error) },
-            },
+        response = tokio::time::timeout(
+            first_byte_timeout,
+            builder
+                .header("Content-Type", "application/json")
+                .body(built.body.clone())
+                .send(),
+        ) => match response {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => return StopReason::Failed { code: request_error_code(&error) },
+            Err(_) => {
+                return StopReason::Failed {
+                    code: "timeout".into(),
+                };
+            }
+        },
         _ = wait_cancel(cancel) => return StopReason::Cancelled,
     };
     let status = response.status();
     if !status.is_success() {
         // 读取错误体用于诊断，但只取截断/脱敏后的一段说明（设计允许：错误体经裁剪
         // 后可进入 UI/DB，且不得含密钥——Key 只在 header）。
-        let detail = response
-            .text()
+        let detail = tokio::time::timeout(idle_timeout, response.text())
             .await
             .ok()
+            .and_then(Result::ok)
             .map(|body| sanitize_error_detail(&body))
             .filter(|detail| !detail.is_empty());
         return StopReason::Failed {
@@ -282,9 +292,9 @@ async fn stream_once(
     use tokio_stream::StreamExt;
     loop {
         let chunk = tokio::select! {
-            chunk = stream.next() => match chunk {
-                Some(Ok(bytes)) => bytes,
-                Some(Err(error)) => {
+            chunk = tokio::time::timeout(idle_timeout, stream.next()) => match chunk {
+                Ok(Some(Ok(bytes))) => bytes,
+                Ok(Some(Err(error))) => {
                     return finalize_partial(
                         decoder.as_mut(),
                         deltas,
@@ -294,7 +304,17 @@ async fn stream_once(
                         on_delta,
                     );
                 }
-                None => break,
+                Ok(None) => break,
+                Err(_) => {
+                    return finalize_partial(
+                        decoder.as_mut(),
+                        deltas,
+                        StopReason::Failed {
+                            code: "timeout".into(),
+                        },
+                        on_delta,
+                    );
+                }
             },
             _ = wait_cancel(cancel) => {
                 return finalize_partial(

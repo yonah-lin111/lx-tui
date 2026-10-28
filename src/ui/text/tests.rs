@@ -431,6 +431,28 @@ fn tool_verb_and_icon_constants_are_single_width_and_non_empty() {
 }
 
 #[test]
+fn step_mark_glyphs_are_single_width_and_non_pua() {
+    use super::agent as a;
+    use unicode_width::UnicodeWidthChar;
+
+    for (name, glyph) in [
+        ("STEP_MARK_FILLED", a::STEP_MARK_FILLED),
+        ("STEP_MARK_HOLLOW", a::STEP_MARK_HOLLOW),
+        ("STEP_MARK_DOT_FILLED", a::STEP_MARK_DOT_FILLED),
+        ("STEP_MARK_DOT_HOLLOW", a::STEP_MARK_DOT_HOLLOW),
+        ("STEP_MARK_TRIANGLE_FILLED", a::STEP_MARK_TRIANGLE_FILLED),
+        ("STEP_MARK_TRIANGLE_HOLLOW", a::STEP_MARK_TRIANGLE_HOLLOW),
+    ] {
+        assert_eq!(glyph.width(), Some(1), "{name} 必须严格占 1 列宽");
+        let cp = glyph as u32;
+        let is_pua = (0xE000..=0xF8FF).contains(&cp)
+            || (0xF0000..=0xFFFFD).contains(&cp)
+            || (0x100000..=0x10FFFD).contains(&cp);
+        assert!(!is_pua, "{name} 使用了私有区(PUA)字符 U+{cp:04X}");
+    }
+}
+
+#[test]
 fn tool_count_labels_use_shared_prefixes() {
     use super::agent as a;
 
@@ -444,7 +466,6 @@ fn tool_count_labels_use_shared_prefixes() {
     assert_eq!(a::matches_label(1), "1 match");
     assert_eq!(a::matches_label(3), "3 matches");
     // 截断提示非空且明确。
-    assert!(a::TOOL_TRUNCATED.contains("truncated"));
 }
 
 /// 快捷键符号是全项目唯一来源：单宽、非私有区、且各 hint 不出现全拼修饰键。

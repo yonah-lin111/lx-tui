@@ -12,6 +12,7 @@ fn checkpoint(sequence: i64, active: bool) -> crate::app::state::CompactNoticeVi
         end_sequence: sequence.saturating_sub(1),
         summary: "Condensed context for the earlier work.".into(),
         active,
+        auto: false,
     }
 }
 

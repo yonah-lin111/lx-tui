@@ -9,6 +9,8 @@ use ratatui::layout::Rect;
 
 use crate::app::state::Lx;
 
+use super::source::HistorySource;
+
 use super::cache::{BlockKey, PaneCache};
 use super::content_rect;
 
@@ -23,11 +25,22 @@ pub(crate) fn render(
     scroll: usize,
     cache: &mut PaneCache,
 ) -> usize {
+    render_source(grid, rect, HistorySource::from(lx), scroll, cache)
+}
+
+/// 数据源版本（主窗格与子 agent 详情共用）。
+pub(crate) fn render_source(
+    grid: &mut super::Grid,
+    rect: Rect,
+    source: HistorySource<'_>,
+    scroll: usize,
+    cache: &mut PaneCache,
+) -> usize {
     if rect.width == 0 || rect.height == 0 {
         return 0;
     }
     let content = content_rect(rect);
-    let snapshot = cache.snapshot(content.width, lx);
+    let snapshot = cache.snapshot_source(content.width, source);
     let viewport_end = scroll.saturating_add(usize::from(rect.height));
     let mut used: Vec<BlockKey> = Vec::new();
     for entry in &snapshot.entries {
@@ -43,7 +56,7 @@ pub(crate) fn render(
             used.push(block.key);
             block
                 .paint
-                .draw(grid, content, scroll, block.start, lx, block.source);
+                .draw(grid, content, scroll, block.start, source, block.source);
         }
     }
     // 视口内真正画过的块刷新 LRU；快照重建本身不算使用。

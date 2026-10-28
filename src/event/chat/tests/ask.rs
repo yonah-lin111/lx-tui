@@ -287,6 +287,7 @@ fn stream_finish_sweeps_the_pending_ask() {
     let changed = handle_net_event(
         &mut state,
         &mut streams,
+        &Persistence::without_database(),
         ChatNetEvent::Finished {
             key: key.clone(),
             reason: StopReason::Cancelled,

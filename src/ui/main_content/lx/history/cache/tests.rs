@@ -48,6 +48,7 @@ fn message(id: &str, role: &str, status: &str, parts: Vec<ChatPartView>) -> Chat
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
+        reports: Vec::new(),
     }
 }
 
@@ -72,6 +73,81 @@ fn same_state_reuses_snapshot() {
     assert!(
         std::sync::Arc::ptr_eq(&first, &second),
         "命中时返回同一个 Arc"
+    );
+}
+
+/// 汇报块展开必须进列表指纹，否则快照不重建、绘制按新状态溢出到下一块。
+#[test]
+fn report_expansion_rebuilds_only_the_clicked_block() {
+    let report = |agent: &str, title: &str| crate::chat::agent::SubagentReportView {
+        agent_id: agent.into(),
+        title: title.into(),
+        role: crate::chat::agent::AgentRole::Explorer,
+        status: "completed".into(),
+        files_changed: 0,
+        duration_ms: Some(1_000),
+        body: "line one\nline two\nline three\nline four".into(),
+        delivered_at_ms: 1,
+    };
+    let mut row = message("report-row", "user", "complete", Vec::new());
+    row.reports = vec![report("r1", "first"), report("r2", "second")];
+    let answer = message("answer", "assistant", "complete", Vec::new());
+    let mut lx = lx_with(vec![row, answer]);
+    let mut cache = PaneCache::default();
+    let before = cache.snapshot(40, &lx).total_rows;
+    lx.chat.toggle_detail("report-row", "report:r1");
+    let snapshot = cache.snapshot(40, &lx);
+    assert!(snapshot.total_rows > before, "展开后必须重建快照并增加行数");
+    assert!(cache.builds() >= 2, "列表指纹必须因展开状态变化");
+    assert!(lx.chat.detail_is_expanded("report-row", "report:r1"));
+    assert!(
+        !lx.chat.detail_is_expanded("report-row", "report:r2"),
+        "只展开被点中的汇报"
+    );
+}
+
+/// 回归：点 `… N more lines` 追加批次后必须重新量行。
+///
+/// 列表指纹只带展开状态、漏了 `report_expand_steps`：追加一批后快照仍返回旧几何，
+/// 绘制却按新批次数多写 24 行，后面的块被覆盖，表现为正文重叠。
+#[test]
+fn report_more_expansion_rebuilds_snapshot_geometry() {
+    let body = (0..60)
+        .map(|index| format!("line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut row = message("report-row", "user", "complete", Vec::new());
+    row.reports.push(crate::chat::agent::SubagentReportView {
+        agent_id: "r1".into(),
+        title: "report".into(),
+        role: crate::chat::agent::AgentRole::Explorer,
+        status: "completed".into(),
+        files_changed: 0,
+        duration_ms: Some(1_000),
+        body,
+        delivered_at_ms: 1,
+    });
+    let answer = message("answer", "assistant", "complete", vec![text_part("tail")]);
+    let mut lx = lx_with(vec![row, answer]);
+    assert!(lx.chat.toggle_detail("report-row", "report:r1"));
+
+    let mut cache = PaneCache::default();
+    let before = cache.snapshot(60, &lx);
+    let before_total = before.total_rows;
+    let before_answer = before.messages[1].start;
+
+    lx.chat.expand_report_more("report-row", "report:r1");
+    let after = cache.snapshot(60, &lx);
+
+    assert_eq!(
+        after.total_rows,
+        before_total + 24,
+        "追加一批后总行数必须增加，不能复用旧快照"
+    );
+    assert_eq!(
+        after.messages[1].start,
+        before_answer + 24,
+        "后续消息必须整体下移，不能被汇报正文覆盖"
     );
 }
 

@@ -23,8 +23,7 @@ use tokio::sync::{mpsc, watch};
 use super::*;
 use crate::app::state::{AppState, RequestState, ToolStatus};
 use crate::chat::agent_loop::{
-    FileTools, HostError, MAX_MODEL_STEPS, MAX_TOOL_CALLS, ReadyToolCall, STEP_LIMIT_CODE,
-    TOOL_CALL_LIMIT_CODE, ToolExecutor, TurnOutcome, TurnSummary,
+    FileTools, HostError, ReadyToolCall, ToolExecutor, TurnOutcome, TurnSummary,
 };
 use crate::chat::client::StreamOutcome;
 use crate::chat::events::{ModelItem, ModelStepStop, PartDelta, PartKind};
@@ -484,6 +483,9 @@ fn pump(
                 AgentHostEvent::AskUser { .. } => {
                     // ask 的 UI 挂起与回执由后续阶段接入（本阶段事件层直接回取消）。
                 }
+                AgentHostEvent::Subagent { .. } => {
+                    // 子 agent 不在这些用例的覆盖范围（需要真实 DB 与运行时）。
+                }
                 AgentHostEvent::BeginTool { call, .. } => trace
                     .lock()
                     .expect("lock")
@@ -520,13 +522,19 @@ fn pump(
             }
         }
         AppEvent::ChatNet(ChatNetEvent::Delta { key, deltas }) => {
-            handle_net_event(state, streams, ChatNetEvent::Delta { key, deltas });
+            handle_net_event(
+                state,
+                streams,
+                persistence,
+                ChatNetEvent::Delta { key, deltas },
+            );
         }
         AppEvent::ChatNet(ChatNetEvent::Finished { key, reason, usage }) => {
             *finished = Some((reason.clone(), usage));
             handle_net_event(
                 state,
                 streams,
+                persistence,
                 ChatNetEvent::Finished { key, reason, usage },
             );
         }
@@ -694,5 +702,6 @@ mod guard;
 mod limits;
 mod process_tools;
 mod resume;
+mod subagent;
 mod user_shell;
 mod workspace;

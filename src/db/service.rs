@@ -510,6 +510,15 @@ impl Persistence {
     /// 执行单条效应；返回状态是否有变化。
     fn execute(&mut self, state: &mut AppState, effect: Effect) -> bool {
         match effect {
+            // 子 agent 效应由事件层直接执行（需要 `ChatStreams` 里的句柄），
+            // 与进程面板同一处置：持久化泵只记录并忽略。
+            Effect::ListSubagents { .. }
+            | Effect::LoadSubagentSession { .. }
+            | Effect::CancelSubagents { .. }
+            | Effect::DrainSubagentReports { .. } => {
+                tracing::warn!(target: "lx::event", "subagent effect reached the persistence pump");
+                false
+            }
             Effect::CheckTrust {
                 path,
                 root,
@@ -950,9 +959,11 @@ impl Persistence {
                 let checkpoints_changed =
                     update::set_compact_checkpoints(state, pane, &checkpoints);
                 // 会话视图建好之后再按进程记录校正（需要卡片已存在）。
+                let drains = update::request_report_drain_if_idle(state, pane);
                 update::reconcile_process_records(state, pane, &processes)
                     | changed
                     | checkpoints_changed
+                    | drains
             }
             Effect::RenameChatSession {
                 workspace,
@@ -1001,6 +1012,11 @@ impl Persistence {
                 // 并从已打开的 `/resume` 列表里就地移除该行。
                 if deleted.is_some() {
                     let mut changed = false;
+                    // 子树 turn 仍在跑：取消它们，否则会把结果写进已删除的子会话。
+                    state.effects.push(Effect::CancelSubagents {
+                        session_id: session_id.clone(),
+                        agent_id: None,
+                    });
                     let panes: Vec<crate::layout::PaneId> = state.all_pane_ids();
                     for pane in panes {
                         changed |= update::on_session_deleted(state, pane, &session_id);
@@ -1258,6 +1274,10 @@ fn is_network_effect(effect: &Effect) -> bool {
             // 进程效应与网络效应同一处置：持久化泵不碰，交给事件层。
             | Effect::ListSessionProcesses { .. }
             | Effect::StopSessionProcess { .. }
+            | Effect::ListSubagents { .. }
+            | Effect::LoadSubagentSession { .. }
+            | Effect::CancelSubagents { .. }
+            | Effect::DrainSubagentReports { .. }
             | Effect::PrepareRewind { .. }
             | Effect::ExecuteRewind(_)
             | Effect::ExecuteCompact(_)

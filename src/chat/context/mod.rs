@@ -680,7 +680,7 @@ fn item_tokens(item: &ModelItem) -> u64 {
 }
 
 /// 估算 token 数（保守：4 字符 = 1 token）。
-fn estimate_tokens(text: &str) -> usize {
+pub(crate) fn estimate_tokens(text: &str) -> usize {
     text.chars().count().div_ceil(CHARS_PER_TOKEN)
 }
 

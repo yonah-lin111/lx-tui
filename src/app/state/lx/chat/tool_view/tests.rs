@@ -237,3 +237,26 @@ fn ask_view_keeps_empty_answers() {
     assert!(view.questions[0].answers.is_empty());
     assert_eq!(view.questions[0].header, "h");
 }
+
+#[test]
+fn search_result_json_restores_match_lines() {
+    let json = r#"{
+        "tool": "search",
+        "matches": [
+            {"path": "src/foo.rs", "line": 12, "text": "pub fn render() {}", "line_truncated": false},
+            {"path": "src/bar.rs", "line": 7, "text": "render", "line_truncated": true}
+        ],
+        "truncated": true,
+        "files_scanned": 2
+    }"#;
+    let Some(ToolDetailView::Search(view)) = ToolDetailView::from_result_json(Some(json)) else {
+        panic!("search detail");
+    };
+    assert_eq!(view.matches.len(), 2);
+    assert_eq!(view.matches[0].path, "src/foo.rs");
+    assert_eq!(view.matches[0].line, 12);
+    assert_eq!(view.matches[0].text, "pub fn render() {}");
+    assert!(view.matches[1].line_truncated);
+    assert!(view.truncated);
+    assert_eq!(view.files_scanned, 2);
+}

@@ -58,8 +58,10 @@ pub const WRITE_ADD: &str = "+18";
 // 的方块承担，不再使用按工具区分的类型图标。
 
 /// 聊天历史每个 assistant 步骤左侧的状态标记：
-/// **工具调用用方块**（`■`/`□`），**正文与思考用圆点**（`●`/`○`）——
-/// 方块代表「一次真实动作」，圆点代表「一段文字数据」。
+/// **工具调用用方块**（`■`/`□`），**正文与思考用圆点**（`●`/`○`），
+/// **子 agent 主动汇报用上三角**（`▲`/`△`）。
+/// 方块代表「一次真实动作」，圆点代表「一段文字数据」，上三角代表「从子 agent
+/// 回到主 agent 的汇报」——汇报不是主 agent 发起的工具调用，所以不复用方块。
 ///
 /// 运行中两帧呼吸，终态静止；呼吸相位每 [`STEP_BREATH_TICKS`] 个 loading 帧翻转一次
 /// （loading 帧 100ms → 约 400ms 一相，是“呼吸”而非闪烁）。
@@ -67,6 +69,8 @@ pub const STEP_MARK_FILLED: char = '■';
 pub const STEP_MARK_HOLLOW: char = '□';
 pub const STEP_MARK_DOT_FILLED: char = '●';
 pub const STEP_MARK_DOT_HOLLOW: char = '○';
+pub const STEP_MARK_TRIANGLE_FILLED: char = '▲';
+pub const STEP_MARK_TRIANGLE_HOLLOW: char = '△';
 pub const STEP_BREATH_TICKS: usize = 4;
 
 /// 真实工具步骤行的固定动词（设计 §10：`Read` / `Search` / `Edit` / `Write`）。
@@ -82,8 +86,8 @@ pub const VERB_TOOL_WRITE: &str = "Write";
 pub const TOOL_DIFF_ADD_PREFIX: &str = "+";
 pub const TOOL_DIFF_REMOVE_PREFIX: &str = "-";
 
-/// 内容被截断的显式提示（追加在计数末尾，不与计数同色）。
-pub const TOOL_TRUNCATED: &str = "…[truncated]";
+/// `search` 截断提示：不内联到摘要行，展开后单独显示在下方。
+pub const SEARCH_TRUNCATED: &str = "results truncated";
 
 /// `edit` 部分成功的尾部标记：本次补丁里有 hunk 应用后内容与原文相同（无实际变更）。
 pub const TOOL_PARTIAL: &str = "partial";
@@ -354,6 +358,31 @@ pub fn cwd_label(cwd: &str) -> String {
 
 /// `ask` 卡片动词。
 pub const VERB_TOOL_ASK: &str = "Ask";
+pub const VERB_TOOL_SPAWN_AGENT: &str = "Spawn agent";
+pub const VERB_TOOL_WAIT_AGENTS: &str = "Wait agents";
+pub const VERB_TOOL_CLOSE_AGENT: &str = "Close agent";
+/// 子 agent 主动汇报块的标题（工具卡片格式）。
+pub const VERB_TOOL_SUBAGENT_REPORT: &str = "Subagent report";
+/// 委派卡片：角色与任务首行之间的分隔。
+pub const SPAWN_ROLE_SEP: &str = " · ";
+/// `wait_agent` 摘要里的目标计数单位。
+pub const AGENTS_LABEL: &str = "agents";
+pub const WAIT_TIMED_OUT: &str = "timed out";
+/// 全部等待时的单行标签。
+pub const WAIT_ALL: &str = "All";
+/// wait 条件：等待本会话全部子 agent。
+pub const WAIT_SCOPE_ALL: &str = "all";
+/// wait 条件：等待任意一个目标结束。
+pub const WAIT_SCOPE_ANY: &str = "any";
+/// wait 条件：显式目标计数（单数 / 复数）。
+pub const WAIT_TARGET_ONE: &str = "1 target";
+pub const WAIT_TARGETS_SUFFIX: &str = "targets";
+/// wait 条件：`wait_for=all` 会越过单次 timeout 继续等到全部结束。
+pub const WAIT_UNTIL_DONE: &str = "until done";
+/// 展开态报告正文段落标签。
+pub const WAIT_REPORT: &str = "Report";
+pub const AGENT_ID_LABEL: &str = "agent_id:";
+pub const PREVIOUS_STATUS_LABEL: &str = "previous:";
 /// 面板标题：`ASK 1/2 · 布局`。
 pub const ASK_TITLE: &str = "ASK";
 pub const ASK_TITLE_SEP: &str = " · ";

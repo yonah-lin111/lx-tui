@@ -23,6 +23,11 @@ pub struct CompactNoticeView {
     pub summary: String,
     /// 是否仍生效；已撤销的条目保留在时间线上但明确标记。
     pub active: bool,
+    /// 是否由子 agent 运行时自动压缩产生。
+    ///
+    /// 自动压缩不写数据库，也没有真实的消息 sequence 范围；渲染层据此把范围行
+    /// 换成 `auto · this run`，避免显示伪造的 `sequence 0–0`。
+    pub auto: bool,
 }
 
 impl CompactNoticeView {
@@ -37,6 +42,28 @@ impl CompactNoticeView {
             end_sequence: record.end_sequence,
             summary: record.summary_text.clone(),
             active: record.is_active(),
+            auto: false,
+        }
+    }
+
+    /// 子 agent 运行时自动压缩的检查点视图。
+    pub fn from_auto(
+        id: String,
+        sequence: i64,
+        model_label: String,
+        summary: String,
+        created_at_ms: i64,
+    ) -> Self {
+        Self {
+            id,
+            sequence,
+            model_label,
+            created_at_ms,
+            start_sequence: 0,
+            end_sequence: 0,
+            summary,
+            active: true,
+            auto: true,
         }
     }
 

@@ -2,6 +2,22 @@
 
 use super::*;
 
+/// 构造只有一个汇报块的历史（正文 `body` 折行后足够长时才有更多提示）。
+fn lx_with_report(body: &str) -> Lx {
+    let mut message = message("assistant", "complete", Vec::new());
+    message.reports.push(crate::app::state::SubagentReportView {
+        agent_id: "sub-1".into(),
+        title: "report".into(),
+        role: crate::chat::agent::AgentRole::Explorer,
+        status: "completed".into(),
+        files_changed: 1,
+        duration_ms: Some(1_000),
+        body: body.into(),
+        delivered_at_ms: 1,
+    });
+    lx_with(vec![message])
+}
+
 /// 构造一个已结束的命令卡片。
 fn finished_command(command: &str, output: &str) -> crate::app::state::ToolCallView {
     use crate::app::state::{
@@ -222,9 +238,10 @@ fn every_block_is_separated_by_a_blank_row() {
     }
 }
 
-/// 圆点给文字（正文 / 思考 / 通知），方块只给工具调用；终态（含取消）一律实心。
+/// 圆点给文字（正文 / 思考 / 通知），方块只给工具调用，上三角只给子 agent 汇报；
+/// 终态（含取消）一律实心。
 #[test]
-fn step_marks_use_dots_for_text_and_squares_for_tools() {
+fn step_marks_use_dots_squares_and_report_triangles() {
     use crate::ui::text;
     for kind in [super::StepKind::Body, super::StepKind::Thinking] {
         assert_eq!(
@@ -248,6 +265,186 @@ fn step_marks_use_dots_for_text_and_squares_for_tools() {
         super::StepMark::Cancelled.glyph(super::StepKind::Tool, 0, false),
         text::agent::STEP_MARK_FILLED,
         "工具调用取消态也是实心方块"
+    );
+    assert_eq!(
+        super::StepMark::Done.glyph(super::StepKind::Report, 0, false),
+        text::agent::STEP_MARK_TRIANGLE_FILLED,
+        "子 agent 汇报完成态必须是上三角"
+    );
+    assert_eq!(
+        super::StepMark::Cancelled.glyph(super::StepKind::Report, 0, false),
+        text::agent::STEP_MARK_TRIANGLE_FILLED,
+        "子 agent 汇报取消态也是实心上三角"
+    );
+}
+
+/// 回归：spawn/wait 卡片里的 agent 链接必须压过整卡折叠面。
+///
+/// 快照按注册顺序取第一个命中的区域；整卡折叠面先登记时会永久吞掉链接行，
+/// 子 agent 结束后最想打开详情的那一下反而只会把卡片收起。
+#[test]
+fn agent_link_wins_over_the_whole_card_fold_region() {
+    use crate::app::state::{
+        CardTarget, SubagentDetailView, SubagentReportView, ToolDetailView, ToolStatus,
+    };
+    use crate::chat::agent::WaitMode;
+    use crate::ui::main_content::lx::history::CardKind;
+
+    let report = SubagentReportView {
+        agent_id: "sub-1".into(),
+        title: "report".into(),
+        role: crate::chat::agent::AgentRole::Explorer,
+        status: "completed".into(),
+        files_changed: 0,
+        duration_ms: Some(1_000),
+        body: "line one\nline two\nline three\nline four".into(),
+        delivered_at_ms: 1,
+    };
+    let mut call = finished_command("ignored", "");
+    call.name = "spawn_agent".into();
+    call.status = ToolStatus::Completed;
+    call.summary = None;
+    call.detail = Some(Box::new(ToolDetailView::Subagent(SubagentDetailView {
+        role: Some(crate::chat::agent::AgentRole::Explorer),
+        title: Some("report".into()),
+        task: Some("investigate".into()),
+        agent_id: Some("sub-1".into()),
+        agent_status: Some("completed".into()),
+        targets: Vec::new(),
+        all: false,
+        mode: WaitMode::All,
+        timeout_ms: None,
+        timed_out: false,
+        agents: Vec::new(),
+        report: Some(report),
+        closed_status: None,
+    })));
+    let lx = lx_with_command(call);
+    let area = Rect::new(0, 0, 80, 40);
+    let mut cache = PaneCache::default();
+    let view = crate::ui::main_content::lx::history_view(area, &lx, &mut cache).expect("view");
+    let width = super::content_rect(view.body).width;
+    let (start, agent_id) = cache
+        .snapshot(width, &lx)
+        .cards
+        .iter()
+        .find_map(|card| match &card.kind {
+            CardKind::AgentLink { agent_id } => Some((card.card_start, agent_id.clone())),
+            _ => None,
+        })
+        .expect("spawn card has an agent link");
+    let row = view
+        .body
+        .y
+        .saturating_add(super::rows_to_u16(start.saturating_sub(view.scroll)));
+    assert!(row < view.body.bottom(), "链接行必须在视口内");
+    assert_eq!(
+        crate::ui::main_content::lx::card_target_at(
+            area,
+            &lx,
+            view.body.x.saturating_add(2),
+            row,
+            &mut cache,
+        ),
+        Some(CardTarget::OpenAgent { agent_id }),
+        "点击链接行必须打开 Agents，而不是命中整卡折叠面"
+    );
+}
+
+#[test]
+fn report_more_hint_is_a_separate_click_target() {
+    use crate::app::state::CardTarget;
+    use crate::ui::main_content::lx::history::CardKind;
+
+    let body = (0..60)
+        .map(|index| format!("line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut lx = lx_with_report(&body);
+    assert!(lx.chat.toggle_detail("assistant-1", "report:sub-1"));
+    let area = Rect::new(0, 0, 60, 80);
+    let mut cache = PaneCache::default();
+    let width = super::content_rect(area).width;
+    let snapshot = cache.snapshot(width, &lx);
+    let more = snapshot
+        .cards
+        .iter()
+        .find(|card| matches!(&card.kind, CardKind::Report { more: true, .. }))
+        .expect("expanded report has a more hint");
+    let view = crate::ui::main_content::lx::history_view(area, &lx, &mut cache).expect("view");
+    let row = view.body.y.saturating_add(super::rows_to_u16(
+        more.card_start.saturating_sub(view.scroll),
+    ));
+    assert_eq!(
+        crate::ui::main_content::lx::card_target_at(area, &lx, view.body.x + 2, row, &mut cache),
+        Some(CardTarget::Report {
+            message_id: "assistant-1".into(),
+            agent_id: "sub-1".into(),
+            more: true,
+        })
+    );
+
+    // 提示行上方的正文仍命中整块（点击收起），不会误触「再展开一批」。
+    let whole = snapshot
+        .cards
+        .iter()
+        .find(|card| matches!(&card.kind, CardKind::Report { more: false, .. }))
+        .expect("whole report click target");
+    let whole_row = view.body.y.saturating_add(super::rows_to_u16(
+        whole.card_start.saturating_sub(view.scroll),
+    ));
+    assert_eq!(
+        crate::ui::main_content::lx::card_target_at(
+            area,
+            &lx,
+            view.body.x + 2,
+            whole_row,
+            &mut cache,
+        ),
+        Some(CardTarget::Report {
+            message_id: "assistant-1".into(),
+            agent_id: "sub-1".into(),
+            more: false,
+        })
+    );
+}
+
+#[test]
+fn search_result_lines_are_part_of_copyable_history_text() {
+    use crate::app::state::{
+        SearchDetailView, SearchMatchView, ToolDetailView, ToolStatus, ToolSummary,
+    };
+
+    let mut call = finished_command("ignored", "");
+    call.name = "search".into();
+    call.status = ToolStatus::Completed;
+    call.summary = Some(Box::new(ToolSummary {
+        path: Some("src".into()),
+        pattern: Some("render".into()),
+        matches: Some(1),
+        ..ToolSummary::default()
+    }));
+    call.detail = Some(Box::new(ToolDetailView::Search(SearchDetailView {
+        matches: vec![SearchMatchView {
+            path: "src/foo.rs".into(),
+            line: 12,
+            text: "pub fn render() {}".into(),
+            line_truncated: false,
+        }],
+        truncated: false,
+        files_scanned: 1,
+    })));
+    let lx = lx_with_command(call);
+    let area = Rect::new(0, 0, 100, 20);
+    let copied = crate::ui::main_content::lx::copy_text(
+        area,
+        &lx,
+        ((0, 0), (19, 99)),
+        &mut PaneCache::default(),
+    );
+    assert!(
+        copied.contains("src/foo.rs:12: pub fn render() {}"),
+        "{copied}"
     );
 }
 

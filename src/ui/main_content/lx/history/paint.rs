@@ -9,7 +9,9 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::state::{AssistantStepView, CardSection, ChatMessageView, Lx, ToolCallView};
+use crate::app::state::{AssistantStepView, CardSection, ChatMessageView, ToolCallView};
+
+use super::source::HistorySource;
 use crate::ui::markdown_render::MdLine;
 use crate::ui::style;
 
@@ -40,6 +42,8 @@ pub(crate) enum BlockSource {
     Rewind { last: usize, count: usize },
     /// 时间线里的 compact 检查点。
     Compact { index: usize, expanded: bool },
+    /// 消息内的汇报块（第 `index` 份）。
+    Report { message_index: usize, index: usize },
     /// 与 `Lx` 无关的静态块（统计行）：样式已随绘制数据存好，绘制不需要回查状态。
     Plain,
 }
@@ -122,20 +126,41 @@ impl BlockPaint {
         rect: Rect,
         scroll: usize,
         start: usize,
-        lx: &Lx,
+        history: HistorySource<'_>,
         source: BlockSource,
     ) {
         let viewport_end = scroll.saturating_add(usize::from(rect.height));
         match self {
-            Self::UserText { lines } => {
-                draw_user_text(grid, rect, lx, source, scroll, start, viewport_end, lines)
-            }
-            Self::Markdown { lines } => {
-                draw_markdown(grid, rect, lx, source, scroll, start, viewport_end, lines)
-            }
-            Self::Thinking { body } => {
-                draw_thinking(grid, rect, lx, source, scroll, start, viewport_end, body)
-            }
+            Self::UserText { lines } => draw_user_text(
+                grid,
+                rect,
+                history,
+                source,
+                scroll,
+                start,
+                viewport_end,
+                lines,
+            ),
+            Self::Markdown { lines } => draw_markdown(
+                grid,
+                rect,
+                history,
+                source,
+                scroll,
+                start,
+                viewport_end,
+                lines,
+            ),
+            Self::Thinking { body } => draw_thinking(
+                grid,
+                rect,
+                history,
+                source,
+                scroll,
+                start,
+                viewport_end,
+                body,
+            ),
             Self::Static { lines, style } => {
                 for (offset, line) in lines.iter().enumerate().skip(scroll.saturating_sub(start)) {
                     let row = start.saturating_add(offset);
@@ -147,7 +172,7 @@ impl BlockPaint {
                     }
                 }
             }
-            Self::Legacy { .. } => draw_legacy(grid, rect, lx, source, scroll, start),
+            Self::Legacy { .. } => draw_legacy(grid, rect, history, source, scroll, start),
         }
     }
 }
@@ -176,7 +201,7 @@ fn thinking_duration(part: &crate::app::state::ChatPartView) -> Option<i64> {
 
 /// 消息与步骤 part（正文 / thinking）。
 fn step_of(
-    lx: &Lx,
+    history: HistorySource<'_>,
     source: BlockSource,
 ) -> Option<(&ChatMessageView, &crate::app::state::ChatPartView)> {
     let BlockSource::Step {
@@ -186,7 +211,7 @@ fn step_of(
     else {
         return None;
     };
-    let message = lx.chat.messages.get(message_index)?;
+    let message = history.messages.get(message_index)?;
     match message.steps.get(step_index)? {
         AssistantStepView::Part { part, .. } => Some((message, part)),
         AssistantStepView::Tool { .. } => None,
@@ -194,7 +219,7 @@ fn step_of(
 }
 
 /// 合并组的调用列表（单调用时长度为 1）。
-fn calls_of(lx: &Lx, source: BlockSource) -> Vec<&ToolCallView> {
+fn calls_of(history: HistorySource<'_>, source: BlockSource) -> Vec<&ToolCallView> {
     let (message_index, first_step, count) = match source {
         BlockSource::Step {
             message_index,
@@ -207,7 +232,7 @@ fn calls_of(lx: &Lx, source: BlockSource) -> Vec<&ToolCallView> {
         } => (message_index, first_step, count),
         _ => return Vec::new(),
     };
-    let Some(message) = lx.chat.messages.get(message_index) else {
+    let Some(message) = history.messages.get(message_index) else {
         return Vec::new();
     };
     (0..count)
@@ -219,18 +244,18 @@ fn calls_of(lx: &Lx, source: BlockSource) -> Vec<&ToolCallView> {
 }
 
 /// 工具的两块折叠状态（绘制时按当前状态重算，不进缓存键）。
-fn folds_at(lx: &Lx, message_index: usize, call: &ToolCallView) -> Folds {
-    let Some(message) = lx.chat.messages.get(message_index) else {
+fn folds_at(history: HistorySource<'_>, message_index: usize, call: &ToolCallView) -> Folds {
+    let Some(message) = history.messages.get(message_index) else {
         return Folds::default();
     };
-    super::folds_of(lx, &message.id, call)
+    super::folds_of(history, &message.id, call)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn draw_user_text(
     grid: &mut Grid,
     rect: Rect,
-    lx: &Lx,
+    history: HistorySource<'_>,
     source: BlockSource,
     scroll: usize,
     start: usize,
@@ -240,15 +265,10 @@ fn draw_user_text(
     let BlockSource::Step { message_index, .. } = source else {
         return;
     };
-    let Some(message) = lx.chat.messages.get(message_index) else {
+    let Some(message) = history.messages.get(message_index) else {
         return;
     };
-    let selected = lx
-        .rewind
-        .selected
-        .as_ref()
-        .map(|target| target.user_message_id.as_str())
-        == Some(message.id.as_str());
+    let selected = history.selected_user_message == Some(message.id.as_str());
     let bg = if selected {
         style::chat_user_target_bg()
     } else {
@@ -282,7 +302,7 @@ fn draw_user_text(
 fn draw_markdown(
     grid: &mut Grid,
     rect: Rect,
-    lx: &Lx,
+    history: HistorySource<'_>,
     source: BlockSource,
     scroll: usize,
     start: usize,
@@ -296,7 +316,7 @@ fn draw_markdown(
     else {
         return;
     };
-    let Some(message) = lx.chat.messages.get(message_index) else {
+    let Some(message) = history.messages.get(message_index) else {
         return;
     };
     // 正文块也是步骤：消息仍在流式且它是最后一步 → 标记呼吸，否则静态。
@@ -319,10 +339,10 @@ fn draw_markdown(
                 y,
                 mark.glyph(
                     StepKind::Body,
-                    lx.chat.loading_frame,
-                    lx.chat.status.streaming,
+                    history.chat.loading_frame,
+                    history.chat.status.streaming,
                 ),
-                mark.style(StepKind::Body, false, false),
+                mark.style(StepKind::Body, false),
             );
         }
         let mut cx = rect
@@ -346,14 +366,14 @@ fn draw_markdown(
 fn draw_thinking(
     grid: &mut Grid,
     rect: Rect,
-    lx: &Lx,
+    history: HistorySource<'_>,
     source: BlockSource,
     scroll: usize,
     start: usize,
     viewport_end: usize,
     body: &[MdLine],
 ) {
-    let Some((_, part)) = step_of(lx, source) else {
+    let Some((_, part)) = step_of(history, source) else {
         return;
     };
     let BlockSource::Step {
@@ -363,9 +383,8 @@ fn draw_thinking(
     else {
         return;
     };
-    let streaming = lx.chat.reasoning_streaming(message_index, step_index);
-    let hovered = lx.chat.thinking_is_hovered(message_index, step_index);
-    let expanded = lx.chat.reasoning_expanded(message_index, step_index);
+    let streaming = history.chat.reasoning_streaming(message_index, step_index);
+    let expanded = history.chat.reasoning_expanded(message_index, step_index);
     let mark = if streaming {
         StepMark::Running
     } else {
@@ -375,16 +394,16 @@ fn draw_thinking(
         && let Some(y) = visible_row(rect, scroll, start)
     {
         // 生成中：`Thinking`；完成后：`Thought · 6.3s`。
-        let header_style = StepKind::Thinking.label(streaming, expanded, hovered);
+        let header_style = StepKind::Thinking.label(streaming, expanded);
         grid.put_char(
             rect.x,
             y,
             mark.glyph(
                 StepKind::Thinking,
-                lx.chat.loading_frame,
-                lx.chat.status.streaming,
+                history.chat.loading_frame,
+                history.chat.status.streaming,
             ),
-            mark.style(StepKind::Thinking, expanded, hovered),
+            mark.style(StepKind::Thinking, expanded),
         );
         let x = rect.x.saturating_add(STEP_GUTTER);
         let limit = rect.right();
@@ -438,7 +457,7 @@ fn draw_thinking(
 fn draw_legacy(
     grid: &mut Grid,
     rect: Rect,
-    lx: &Lx,
+    history: HistorySource<'_>,
     source: BlockSource,
     scroll: usize,
     start: usize,
@@ -446,13 +465,13 @@ fn draw_legacy(
     let mut row = start;
     match source {
         BlockSource::Group { message_index, .. } => {
-            let calls = calls_of(lx, source);
+            let calls = calls_of(history, source);
             if calls.is_empty() {
                 return;
             }
             let expanded: Vec<bool> = calls
                 .iter()
-                .map(|call| folds_at(lx, message_index, call).body)
+                .map(|call| folds_at(history, message_index, call).body)
                 .collect();
             tool::group_draw_animated(
                 grid,
@@ -460,13 +479,13 @@ fn draw_legacy(
                 scroll,
                 &mut row,
                 &calls,
-                lx.chat.loading_frame,
+                history.chat.loading_frame,
                 &expanded,
-                lx.chat.status.streaming,
+                history.chat.status.streaming,
             );
         }
         BlockSource::Step { message_index, .. } => {
-            let calls = calls_of(lx, source);
+            let calls = calls_of(history, source);
             let Some(call) = calls.first() else {
                 return;
             };
@@ -476,13 +495,13 @@ fn draw_legacy(
                 scroll,
                 &mut row,
                 call,
-                lx.chat.loading_frame,
-                folds_at(lx, message_index, call),
-                lx.chat.status.streaming,
+                history.chat.loading_frame,
+                folds_at(history, message_index, call),
+                history.chat.status.streaming,
             );
         }
         BlockSource::Shell { message_index } => {
-            let Some(message) = lx.chat.messages.get(message_index) else {
+            let Some(message) = history.messages.get(message_index) else {
                 return;
             };
             let Some(shell) = message.shell.as_ref() else {
@@ -494,13 +513,13 @@ fn draw_legacy(
                 scroll,
                 &mut row,
                 shell,
-                lx.chat.loading_frame,
-                lx.chat.status.streaming || shell.is_running(),
-                super::shell_folds(lx, &message.id),
+                history.chat.loading_frame,
+                history.chat.status.streaming || shell.is_running(),
+                super::shell_folds(history, &message.id),
             );
         }
         BlockSource::Notice { message_index } => {
-            let Some(message) = lx.chat.messages.get(message_index) else {
+            let Some(message) = history.messages.get(message_index) else {
                 return;
             };
             let Some(notice) = super::notice(message) else {
@@ -509,16 +528,41 @@ fn draw_legacy(
             super::notice::draw(grid, &notice, rect, scroll, &mut row);
         }
         BlockSource::Rewind { last, count } => {
-            let Some(notice) = lx.chat.notices.get(last) else {
+            let Some(notice) = history.chat.notices.get(last) else {
                 return;
             };
             super::rewind::draw(grid, notice, count, rect, scroll, &mut row);
         }
         BlockSource::Compact { index, expanded } => {
-            let Some(notice) = lx.compact.checkpoints.get(index) else {
+            let Some(notice) = history.compact.checkpoints.get(index) else {
                 return;
             };
             super::compact::draw(grid, notice, 1, expanded, rect, scroll, &mut row);
+        }
+        BlockSource::Report {
+            message_index,
+            index,
+        } => {
+            let Some(message) = history.messages.get(message_index) else {
+                return;
+            };
+            let Some(report) = message.reports.get(index) else {
+                return;
+            };
+            let slot = format!("report:{}", report.agent_id);
+            let expanded = history.chat.detail_is_expanded(&message.id, &slot);
+            let more_steps = history.chat.report_expand_steps(&message.id, &slot);
+            super::report_block::draw(
+                grid,
+                rect,
+                report,
+                scroll,
+                &mut row,
+                history.chat.loading_frame,
+                history.chat.status.streaming,
+                expanded,
+                more_steps,
+            );
         }
         // 静态块的绘制数据自带样式，没有需要回查的动态状态。
         BlockSource::Plain => {}

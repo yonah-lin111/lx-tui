@@ -13,6 +13,7 @@ fn checkpoint(id: &str, sequence: i64, active: bool) -> CompactNoticeView {
         end_sequence: sequence.saturating_sub(1),
         summary: "sum".into(),
         active,
+        auto: false,
     }
 }
 

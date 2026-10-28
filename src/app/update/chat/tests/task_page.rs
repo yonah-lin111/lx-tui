@@ -344,11 +344,126 @@ fn page_keys_scroll_the_message_list_without_moving_the_highlight() {
 }
 
 #[test]
+fn page_keys_scroll_the_agents_detail_on_the_agents_tab() {
+    let (mut state, pane) = state_with_session("");
+    open_with_processes(&mut state, pane);
+    let mut run = crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+        agent_id: "a1".into(),
+        child_session_id: "s1".into(),
+        parent_session_id: "sess-1".into(),
+        spawn_message_id: None,
+        role: crate::chat::agent::AgentRole::Explorer,
+        status: "running".into(),
+        title: "investigate".into(),
+        created_at_ms: 0,
+        completed_at_ms: None,
+        report_json: None,
+        report_delivered: false,
+    });
+    run.visible = 10;
+    run.total_rows = 100;
+    run.scroll = 90;
+    run.follow = true;
+    crate::app::update::on_subagent_started(&mut state, pane, run);
+    if let Some(page) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.task.as_mut())
+    {
+        page.tab = TaskTab::Agents;
+    }
+    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::PageUp);
+    let run = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_session("s1")
+        .expect("run");
+    assert_eq!(run.scroll, 80);
+    assert!(!run.follow, "上翻详情后停止跟随");
+}
+
+#[test]
 fn escape_closes_the_page_and_returns_to_the_lx_page() {
     let (mut state, pane) = state_with_session("");
     open_with_processes(&mut state, pane);
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Escape);
     assert!(state.pane_anywhere(pane).unwrap().lx.task.is_none());
+}
+
+#[test]
+fn ctrl_d_on_agents_tab_stops_the_selected_subagent() {
+    let (mut state, pane) = state_with_session("");
+    assert!(open_task_page(&mut state, pane));
+    state
+        .pane_mut_anywhere(pane)
+        .unwrap()
+        .lx
+        .task
+        .as_mut()
+        .unwrap()
+        .tab = TaskTab::Agents;
+    let run =
+        crate::app::state::lx::agent::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+            agent_id: "sub-a".into(),
+            child_session_id: "sess-a".into(),
+            parent_session_id: "sess-1".into(),
+            spawn_message_id: None,
+            role: crate::chat::agent::AgentRole::Explorer,
+            status: "running".into(),
+            title: "investigate".into(),
+            created_at_ms: 0,
+            completed_at_ms: None,
+            report_json: None,
+            report_delivered: false,
+        });
+    assert!(crate::app::update::on_subagent_started(
+        &mut state, pane, run
+    ));
+    let second =
+        crate::app::state::lx::agent::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+            agent_id: "sub-b".into(),
+            child_session_id: "sess-b".into(),
+            parent_session_id: "sess-1".into(),
+            spawn_message_id: None,
+            role: crate::chat::agent::AgentRole::Executor,
+            status: "running".into(),
+            title: "second".into(),
+            created_at_ms: 0,
+            completed_at_ms: None,
+            report_json: None,
+            report_delivered: false,
+        });
+    assert!(crate::app::update::on_subagent_started(
+        &mut state, pane, second
+    ));
+    state
+        .pane_mut_anywhere(pane)
+        .unwrap()
+        .lx
+        .task
+        .as_mut()
+        .unwrap()
+        .agents_window
+        .active = 1;
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::StopProcess);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::CancelSubagents { session_id, agent_id }
+                if session_id == "sess-1" && agent_id.as_deref() == Some("sub-b")
+        )),
+        "Agents 面板 ^d 只停选中的子 agent：{:?}",
+        state.effects
+    );
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::StopSessionProcess { .. }
+        )),
+        "不能误停后台进程"
+    );
 }
 
 #[test]

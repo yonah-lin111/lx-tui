@@ -64,6 +64,12 @@ pub enum AgentHostEvent {
         key: RequestKey,
         reply: oneshot::Sender<Vec<String>>,
     },
+    /// 子 agent 控制操作（spawn / wait / close）。
+    Subagent {
+        key: RequestKey,
+        op: crate::chat::agent::SubagentOp,
+        reply: oneshot::Sender<Result<crate::chat::agent::SubagentOutcome, HostError>>,
+    },
 }
 
 /// [`AgentHost`] 的生产实现：把请求转投事件循环并等待回执。
@@ -73,6 +79,13 @@ pub(crate) struct EventHost {
 }
 
 impl AgentHost for EventHost {
+    fn notify_auto_compact(&mut self, notice: &crate::chat::compact::AutoCompactNotice) {
+        let _ = self.sender.send(AppEvent::SubagentAutoCompact {
+            key: self.key.clone(),
+            notice: notice.clone(),
+        });
+    }
+
     fn send(&mut self, request: AgentHostRequest) {
         let event = match request {
             AgentHostRequest::BeginTool { call, reply } => AgentHostEvent::BeginTool {
@@ -103,6 +116,11 @@ impl AgentHost for EventHost {
             // mutation 请求不经 `EventHost`（由文件 recorder 直接投递）。
             AgentHostRequest::UserShellUpdates { reply } => AgentHostEvent::UserShellUpdates {
                 key: self.key.clone(),
+                reply,
+            },
+            AgentHostRequest::Subagent { op, reply } => AgentHostEvent::Subagent {
+                key: self.key.clone(),
+                op,
                 reply,
             },
         };

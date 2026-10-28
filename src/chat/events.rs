@@ -172,12 +172,23 @@ pub enum RequestPurpose {
     Chat,
     /// 上下文压缩的摘要请求（专用系统提示、无工具）。
     CompactSummary,
+    /// 子 agent 轮次：工具面由角色决定（explorer 只读）。
+    Subagent(crate::chat::agent::AgentRole),
 }
 
 impl RequestPurpose {
-    /// 该用途的请求是否声明工具。
+    /// 工具面：None = 不声明工具（摘要请求）。
+    pub fn tools_surface(self) -> Option<crate::chat::agent::ToolSurface> {
+        match self {
+            Self::Chat => Some(crate::chat::agent::ToolSurface::Main),
+            Self::Subagent(role) => Some(crate::chat::agent::ToolSurface::from_role(role)),
+            Self::CompactSummary => None,
+        }
+    }
+
+    /// 该用途的请求是否声明工具（等价于 `tools_surface().is_some()`）。
     pub fn includes_tools(self) -> bool {
-        matches!(self, Self::Chat)
+        self.tools_surface().is_some()
     }
 }
 
@@ -203,9 +214,14 @@ pub struct ChatRequest {
 }
 
 impl ChatRequest {
+    /// 本次请求的工具面（摘要请求为 None）。
+    pub fn tools_surface(&self) -> Option<crate::chat::agent::ToolSurface> {
+        self.purpose.tools_surface()
+    }
+
     /// 是否声明工具（摘要请求为 false）。
     pub fn includes_tools(&self) -> bool {
-        self.purpose.includes_tools()
+        self.tools_surface().is_some()
     }
 
     /// 本次请求要发送的系统提示文本：请求覆写优先，否则用稳定提示。

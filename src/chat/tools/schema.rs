@@ -22,7 +22,7 @@ use crate::chat::process::{
 };
 
 /// 固定工具表：顺序即给模型的呈现顺序。
-static TOOLS: [ToolSpec; 8] = [
+static TOOLS: [ToolSpec; 11] = [
     ToolSpec::new(
         "read",
         "Read a UTF-8 text file, or list a directory. \
@@ -120,11 +120,22 @@ static TOOLS: [ToolSpec; 8] = [
          is `{\"answers\":{\"<id>\":{\"answers\":[...]}}}`. Do not ask permission questions.",
         ask_parameters,
     ),
+    super::subagent::spawn_agent_spec(),
+    super::subagent::wait_agent_spec(),
+    super::subagent::close_agent_spec(),
 ];
 
-/// 全部可用工具规格（固定八个）。
+/// 全部可用工具规格（固定十一个）。
 pub fn available_tools() -> &'static [ToolSpec] {
     &TOOLS
+}
+
+/// 按工具面过滤：顺序跟随 [`TOOLS`]，集合等于 `surface.names()`。
+pub fn tools_for(surface: crate::chat::agent::ToolSurface) -> Vec<&'static ToolSpec> {
+    TOOLS
+        .iter()
+        .filter(|spec| surface.names().contains(&spec.name))
+        .collect()
 }
 
 /// `read` 参数 schema。

@@ -13,16 +13,22 @@
 
 pub mod ask;
 pub mod compact;
+mod context_summary;
 mod file_snapshots;
 mod host;
 mod process_events;
+mod process_page;
 pub mod rewind;
 pub mod runtime;
+mod subagent;
 mod timeline;
 mod tool_calls;
 pub mod user_shell;
 
 pub use process_events::{handle_process_event, persist_terminal_snapshots};
+pub use process_page::{
+    apply_process_effects, refresh_open_task_pages, sync_background_task_counts, tick_task_pages,
+};
 pub use user_shell::pump_user_shells;
 // 工具握手与时间线辅助的实现在子模块；本模块保留唯一入口。
 #[cfg(test)]
@@ -66,6 +72,9 @@ pub use host::{
     AgentHostEvent, BEGIN_TOOL_FAILED_CODE, FINISH_TOOL_FAILED_CODE, RUNNING_TOOL_FAILED_CODE,
 };
 pub use rewind::{RewindOutcome, apply_rewind_effects, handle_rewind_finished};
+pub(crate) use subagent::{
+    apply_subagent_effects, finish_subagent, handle_subagent_net_event, handle_subagent_wait_ready,
+};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -89,6 +98,7 @@ use crate::db::service::Persistence;
 use crate::event::AppEvent;
 use crate::layout::PaneId;
 use crate::ui::text;
+use context_summary::{background_tasks, runtime_context_summary};
 
 /// checkpoint 落盘间隔与累计字节阈值（设计 5.3）。
 const CHECKPOINT_INTERVAL: Duration = Duration::from_millis(500);
@@ -119,6 +129,8 @@ pub struct ChatStreams {
     pub(crate) runtimes: runtime::ProcessRuntimes,
     /// 进程 UI 事件通道（由事件循环在启动时注入）。
     process_sender: Option<mpsc::UnboundedSender<ProcessUiEvent>>,
+    /// 应用事件通道（子 agent 的异步等待与终态回投用）。
+    event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
     /// 每进程上次输出快照落库时刻（限流合并）。
     process_snapshot_at: HashMap<u64, std::time::Instant>,
     /// 在途本地命令（DB 预登记后、真实进程退出前）。
@@ -127,6 +139,10 @@ pub struct ChatStreams {
     pub(crate) user_shell_injected: HashMap<RequestKey, user_shell::ShellInjectionState>,
     /// 每轮最多一个挂起的 `ask` 提问（loop 串行）；回执通道的唯一持有者。
     pub(crate) asks: HashMap<RequestKey, PendingAsk>,
+    /// 子 agent 句柄：`child_session_id -> handle`。
+    pub(crate) subagents: HashMap<String, subagent::SubagentHandle>,
+    /// spawn 时冻结的模型（父会话与子会话各登记一份）。
+    pub(crate) frozen: HashMap<String, crate::app::state::FrozenModel>,
 }
 
 /// 一次等待作答的提问：回执通道 + 归属用的 `call_id`。
@@ -158,6 +174,11 @@ impl ChatStreams {
     /// 注入进程 UI 事件通道（由事件循环在启动时调用一次）。
     pub fn set_process_sender(&mut self, sender: mpsc::UnboundedSender<ProcessUiEvent>) {
         self.process_sender = Some(sender);
+    }
+
+    /// 注入应用事件通道（子 agent 的异步等待与终态回投用）。
+    pub fn set_event_sender(&mut self, sender: mpsc::UnboundedSender<AppEvent>) {
+        self.event_sender = Some(sender);
     }
 
     /// 该进程本次输出快照是否到落库时间（每进程最多一个待合并快照）。
@@ -200,6 +221,7 @@ impl ChatStreams {
     /// `cancelled`（**不执行**文件 IO），回执通道保持可用以便它完成该结算。
     /// 挂起的 `ask` 在这里被唤醒为 `Err(Cancelled)`，否则 loop 会永久阻塞在作答上。
     fn cancel(&mut self, key: &RequestKey) -> bool {
+        // Esc 只停主轮；子 agent 不级联取消（用户可在 Agents 面板按选中项停止）。
         // 挂起提问先唤醒：它没有「下一检查点」，不唤醒就永远等不到。
         let woke = self.wake_ask(key);
         let Some(cancel) = self.cancels.get(key) else {
@@ -236,6 +258,9 @@ impl ChatStreams {
         self.guards.remove(key);
         self.user_shell_injected.remove(key);
         self.pending_begins.retain(|pending| &pending.key != key);
+        // 子轮结束：句柄与冻结模型一起移除；主轮 key 不受影响（session 不同）。
+        self.subagents.remove(&key.session);
+        self.frozen.remove(&key.session);
         // 只丢弃该轮执行上下文；进程留给会话（正常结束一轮不清理服务）。
         self.runtimes
             .finish_turn(&key.session, &key.generation.to_string());
@@ -293,7 +318,7 @@ pub fn pump_chat_streams(
     // 会话切换、`/new`、窗格关闭：在途轮次不再归属于任何可见请求 → 取消。
     let mut changed = reap_stale_streams(state, streams, persistence);
     // 已不再被任何窗格绑定的会话运行实例：停止其全部进程、释放句柄，并把终态回投落库。
-    changed |= reap_orphan_runtimes(state, streams, sender);
+    changed |= process_page::reap_orphan_runtimes(state, streams, sender);
     let effects: Vec<Effect> = state
         .effects
         .iter()
@@ -322,7 +347,7 @@ pub fn pump_chat_streams(
     for effect in effects {
         match effect {
             Effect::StartChatStream { key, assistant_id } => {
-                changed |= start_stream(state, streams, sender, key, assistant_id);
+                changed |= start_stream(state, streams, sender, persistence, key, assistant_id);
             }
             Effect::CancelChatStream { key } => {
                 // loop 在下一个检查点停止未开始的工具与后续采样。
@@ -448,6 +473,9 @@ fn reap_stale_streams(
     let stale: Vec<RequestKey> = streams
         .cancels
         .keys()
+        // 子 agent 的 key 没有对应的主窗格请求，但它有自己的句柄与生命周期；
+        // 不能被「窗格里没有这个在途 assistant」这条规则误杀。
+        .filter(|key| !streams.subagents.contains_key(&key.session))
         .filter(|key| active_assistant_id(state, key).is_none())
         .cloned()
         .collect();
@@ -465,331 +493,6 @@ fn reap_stale_streams(
         stop_turn_processes(streams, &key);
     }
     changed | ask::sweep_orphans(state, streams)
-}
-
-/// 执行进程类效应（后台任务页的列表与停止）。
-///
-/// 与 `pump_chat_streams` 同一处置方式：从 `state.effects` 取出自己关心的效应执行，
-/// 其余的留给持久化泵/网络泵。进程句柄只在事件层的运行实例里，所以这两件事只能
-/// 在这里做——`app/` 与 `db/` 都碰不到进程。
-///
-/// 返回是否产生状态变化。
-pub fn apply_process_effects(state: &mut AppState, streams: &mut ChatStreams) -> bool {
-    let effects: Vec<Effect> = state
-        .effects
-        .iter()
-        .filter(|effect| {
-            matches!(
-                effect,
-                Effect::ListSessionProcesses { .. } | Effect::StopSessionProcess { .. }
-            )
-        })
-        .cloned()
-        .collect();
-    if effects.is_empty() {
-        return false;
-    }
-    state.effects.retain(|effect| {
-        !matches!(
-            effect,
-            Effect::ListSessionProcesses { .. } | Effect::StopSessionProcess { .. }
-        )
-    });
-    let mut changed = false;
-    for effect in effects {
-        match effect {
-            Effect::ListSessionProcesses { pane } => {
-                changed |= list_session_processes(state, streams, pane);
-            }
-            Effect::StopSessionProcess {
-                pane,
-                process_session_id,
-            } => {
-                stop_session_process(state, streams, pane, process_session_id);
-                changed = true;
-            }
-            _ => {}
-        }
-    }
-    changed
-}
-
-/// 把每个 lx 窗格的会话后台任务数同步到底部状态行指标。
-///
-/// 每轮循环都算（`running_count` 只是一次加锁 + 计数），这样无论用户是否打开
-/// 后台任务页，都能随时看到"还有几个服务在跑"——这正是此前"忘了清理"的根因：
-/// 进程一直活着，界面上却没有任何痕迹。
-///
-/// 返回是否有窗格的计数发生变化（用于置脏重绘）。
-pub fn sync_background_task_counts(state: &mut AppState, streams: &ChatStreams) -> bool {
-    let mut changed = false;
-    for pane in state.all_pane_ids() {
-        let Some(target) = state.pane_anywhere(pane) else {
-            continue;
-        };
-        let count = target
-            .lx
-            .chat
-            .session_id
-            .as_deref()
-            .and_then(|session_id| streams.runtimes.get(session_id))
-            .map(|runtime| runtime.manager().running_count())
-            .unwrap_or(0);
-        let Some(target) = state.pane_mut_anywhere(pane) else {
-            continue;
-        };
-        if target.lx.background_tasks != count {
-            target.lx.background_tasks = count;
-            changed = true;
-        }
-    }
-    changed
-}
-
-/// 面板打开时每轮重新拉取一次进程列表。
-///
-/// `ListSessionProcesses` 原来只在 `open_task_page` 时发一次——面板**打开之后**
-/// 才启动的进程永远进不了列表（用户报的"启动任务后没有在面板中显示"）。
-///
-/// 改成每轮嗅探：只要某窗格的面板开着且绑定了会话，就发一次列表请求。列表回投
-/// 是幂等的（`set_processes` 按内容比较），无变化不会置脏，因此不会引起重绘风暴。
-///
-/// 返回是否新压入了请求（供调用方判断要不要多跑一轮效应泵）。
-pub fn refresh_open_task_pages(state: &mut AppState) -> bool {
-    let mut requested = false;
-    for pane in state.all_pane_ids() {
-        let Some(target) = state.pane_anywhere(pane) else {
-            continue;
-        };
-        if target.lx.task.is_none() || target.lx.chat.session_id.is_none() {
-            continue;
-        }
-        state
-            .effects
-            .push(crate::app::effects::Effect::ListSessionProcesses { pane });
-        requested = true;
-    }
-    requested
-}
-
-/// 后台任务面板的运行时长节拍：把各面板的 `now_ms` 推到当前时刻。
-///
-/// 面板每行右侧显示 `running 1m 30s`，而它是 `now_ms - started_at_ms` 现算的。
-/// `now_ms` 原来只在**列表回投**时更新——进程不变就再也不会变，时长会冻住
-/// （用户报的"时间不更新"）。
-///
-/// 每轮循环调一次（一次 `now_ms()` + 几个比较，成本可忽略）；只在面板打开时
-/// 才追高 `now_ms`，返回值用于置脏重绘。按秒对齐，避免每帧都重绘。
-pub fn tick_task_pages(state: &mut AppState) -> bool {
-    let now = crate::db::now_ms();
-    let mut changed = false;
-    for pane in state.all_pane_ids() {
-        let Some(target) = state.pane_mut_anywhere(pane) else {
-            continue;
-        };
-        let Some(page) = target.lx.task.as_mut() else {
-            continue;
-        };
-        // 同一秒内不重绘：时长显示精度是秒。
-        if now.saturating_sub(page.now_ms) >= 1_000 {
-            page.now_ms = now;
-            changed = true;
-        }
-    }
-    changed
-}
-
-/// 列出某窗格所绑会话仍在运行的进程，回投给后台任务页的进程 tab。
-///
-/// 两条准入条件（任一成立即列出）：
-///
-/// 1. 进程本身还没到终态（`starting`/`running`）；
-/// 2. **shell 已退出，但它拉起的后台作业还活着**（`background_alive`）。
-///
-/// 第 2 条是必须的：`nohup bash task.sh &` 之后 shell 立刻退出，用户的服务却还在
-/// 跑。只看 `state` 会把它过滤掉，面板显示「no running processes」而任务明明活着
-/// ——这正是用户报的情形（进程组仍存活，组长 shell 已退出）。
-///
-/// 已彻底结束（终态且组内无成员）的进程不列：没有可停的东西，列出来只会让用户
-/// 以为还有服务在跑。窗格没有绑定会话（空白草稿）时回投空列表。
-///
-/// 会话切换后页面可能还开着：此时回投的是新会话的进程，页面据此整体翻新。
-fn list_session_processes(state: &mut AppState, streams: &ChatStreams, pane: PaneId) -> bool {
-    let Some(session_id) = state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.chat.session_id.clone())
-    else {
-        return update::on_process_listed(state, pane, Vec::new());
-    };
-    let snapshots: Vec<crate::chat::process::ProcessSnapshot> = streams
-        .runtimes
-        .get(&session_id)
-        .map(|runtime| runtime.manager().snapshots())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|snapshot| !snapshot.state.is_terminal() || snapshot.background_alive)
-        .collect();
-    // 高亮任务的输出尾部：与列表同一次回投，保证"上面选谁、下面看谁"永远同步。
-    // `app/` 不持有进程句柄，所以输出也必须由这里切好行交过去。
-    let active = state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.task.as_ref())
-        .and_then(|page| page.selected().map(|process| process.session_id));
-    let output = active
-        .and_then(|session| {
-            snapshots
-                .iter()
-                .find(|snapshot| snapshot.session_id == session)
-        })
-        .map(|snapshot| process_output_lines(&snapshot.tail))
-        .unwrap_or_default();
-    let entries = snapshots
-        .into_iter()
-        .map(|snapshot| crate::app::state::ProcessEntry {
-            session_id: snapshot.session_id,
-            command: snapshot.command,
-            cwd: snapshot.cwd,
-            tty: snapshot.tty,
-            started_at_ms: snapshot.started_at_ms,
-        })
-        .collect();
-    let listed = update::on_process_listed(state, pane, entries);
-    let shown = update::on_task_output(state, pane, output);
-    listed || shown
-}
-
-/// 进程输出尾部 → 展示行（保留中间空行；末尾换行不额外占行）。
-///
-/// 面板输出区**不做软换行**（终端日志按行读，换行会让行数与滚动错位），
-/// 超宽由渲染层硬切，因此这里只需要按 `\n` 切分。
-fn process_output_lines(tail: &str) -> Vec<String> {
-    if tail.is_empty() {
-        return Vec::new();
-    }
-    let mut lines: Vec<String> = tail
-        .split('\n')
-        .map(|line| line.trim_end_matches('\r').to_string())
-        .collect();
-    if lines.last().is_some_and(String::is_empty) {
-        lines.pop();
-    }
-    lines
-}
-
-/// 停止后台任务页选中的进程，并给出结果反馈。
-///
-/// 停止是异步的（真实退出码只能由 `wait` 得到）；这里不阻塞事件循环。
-fn stop_session_process(
-    state: &mut AppState,
-    streams: &ChatStreams,
-    pane: PaneId,
-    process_session_id: u64,
-) {
-    let session_id = state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.chat.session_id.clone());
-    let manager = session_id
-        .as_deref()
-        .and_then(|session_id| streams.runtimes.get(session_id))
-        .map(|runtime| runtime.manager().clone());
-    let Some(manager) = manager else {
-        // 会话运行实例已经不在（刚切会话/刚退出）：页面上还挂着这一行，
-        // 不能静默失败，否则用户会以为按了没生效。
-        //
-        // 用 toast 而不是 hint 行：这一页已经把输入框换成了控制面板。
-        // 反馈落在该窗格自己的 toast 槽里（lx 页内），不占用全局覆盖层。
-        update::show_lx_toast(
-            state,
-            pane,
-            crate::app::toast::Toast::new(
-                crate::app::toast::ToastKind::Danger,
-                crate::ui::text::LX_TASK_STOP_FAILED,
-                Some(pane),
-                std::time::Instant::now(),
-            ),
-        );
-        return;
-    };
-    tokio::spawn(async move {
-        match manager.stop(process_session_id).await {
-            Ok(_) => {}
-            Err(error) => {
-                tracing::warn!(
-                    target: "lx::process",
-                    process_session_id,
-                    code = error.code,
-                    "stopping a background process failed"
-                );
-            }
-        }
-    });
-    // 停止是异步的，但"按了就要有反馈"。
-    //
-    // 这里只确认"已发出停止请求"；真正的结果由进程终态事件驱动列表刷新。
-    // 用 Info 而不是 Error：这是用户主动要求的动作，不是出错。
-    update::show_lx_toast(
-        state,
-        pane,
-        crate::app::toast::Toast::new(
-            crate::app::toast::ToastKind::Default,
-            crate::ui::text::LX_TASK_STOPPED,
-            Some(pane),
-            std::time::Instant::now(),
-        ),
-    );
-}
-
-/// 回收不再被任何窗格绑定的会话运行实例（`/new`、切换会话、关窗格）。
-///
-/// 只移除运行实例并**异步停止**其进程：事件循环不阻塞等待，回执由后台任务完成。
-///
-/// 停止完成后把可获取的终态快照经 [`AppEvent::ProcessesReaped`] 回投事件层落库。
-/// 设计 §8 要求「关闭旧运行实例，清理其进程**并记录终态**」——只杀不记，库里会
-/// 永远留着 `running` 行：重开该会话时卡片按记录判活显示 Running，而后台任务面板
-/// 读的是内存运行实例（已随会话回收而空），两处对同一件事给出相反答案。
-///
-/// 返回是否回收了运行实例（后台任务计数随之变化，调用方需要重绘）。
-fn reap_orphan_runtimes(
-    state: &AppState,
-    streams: &mut ChatStreams,
-    sender: &mpsc::UnboundedSender<AppEvent>,
-) -> bool {
-    let bound: Vec<String> = state
-        .all_pane_ids()
-        .into_iter()
-        .filter_map(|pane| state.pane_anywhere(pane))
-        .filter_map(|pane| pane.lx.chat.session_id.clone())
-        .collect();
-    let orphans: Vec<String> = streams
-        .runtimes
-        .sessions()
-        .into_iter()
-        .filter(|session| !bound.contains(session))
-        .collect();
-    let mut reaped = false;
-    for session in orphans {
-        if let Some(runtime) = streams.runtimes.take(&session) {
-            reaped = true;
-            let manager = runtime.manager.clone();
-            let workspace = manager.owner().workspace.clone();
-            let epoch = runtime.epoch.clone();
-            let sender = sender.clone();
-            tokio::spawn(async move {
-                manager.shutdown().await;
-                // 停止之后才读快照：此时才是真正的终态（Stopped / Interrupted）。
-                let snapshots = manager.snapshots();
-                if snapshots.is_empty() {
-                    return;
-                }
-                let _ = sender.send(AppEvent::ProcessesReaped {
-                    workspace,
-                    epoch,
-                    snapshots,
-                });
-            });
-        }
-    }
-    reaped
 }
 
 /// 该 request key 仍是窗格的在途流时，返回本轮 assistant 消息 id。
@@ -874,9 +577,30 @@ fn start_stream(
     state: &mut AppState,
     streams: &mut ChatStreams,
     sender: &mpsc::UnboundedSender<AppEvent>,
+    _persistence: &Persistence,
     key: RequestKey,
-    _assistant_id: String,
+    assistant_id: String,
 ) -> bool {
+    // 效应可能在 session 切换/新会话生效之后才被泵到：key 必须仍对应当前窗格的
+    // 在途请求与 assistant 占位。否则会把新会话的消息装配到旧 session（或反过来）。
+    let live = state.pane_anywhere(key.pane).is_some_and(|pane| {
+        pane.lx.chat.session_id.as_deref() == Some(key.session.as_str())
+            && matches!(
+                &pane.lx.chat.request,
+                RequestState::Streaming {
+                    key: active,
+                    assistant_id: active_assistant,
+                } if active == &key && active_assistant == &assistant_id
+            )
+            && pane.lx.chat.messages.iter().any(|message| {
+                message.id == assistant_id
+                    && message.role == "assistant"
+                    && message.status == "streaming"
+            })
+    });
+    if !live {
+        return false;
+    }
     // 已有同 key 在途流：不重复启动。
     if streams.cancels.contains_key(&key) {
         return false;
@@ -978,6 +702,8 @@ fn start_stream(
     streams
         .db_workspaces
         .insert(key.clone(), session_key.clone());
+    // spawn 时冻结的模型：父会话登记一份，子 agent 从这里取。
+    streams.frozen.insert(key.session.clone(), frozen.clone());
     // 运行实例：同一聊天会话跨轮复用同一进程管理器；本轮执行上下文独立。
     let turn_slot = key.session.clone();
     let Some(runtime) = streams.runtime_for(prepared.cwd.clone(), &turn_slot) else {
@@ -1002,7 +728,7 @@ fn start_stream(
     };
     let recorder = file_snapshots::HostRecorderFactory::new(
         sender.clone(),
-        session_key,
+        session_key.clone(),
         key.session.clone(),
         user_message_id,
     );
@@ -1011,8 +737,17 @@ fn start_stream(
     let executor = AgentTools::new(runtime.manager.clone(), turn)
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads);
-    // 本地运行上下文：存活进程清单 + 当前计划（有界，避免历史裁剪后模型忘记 session_id）。
-    let summary = runtime_context_summary(runtime.manager.as_ref(), &current_plan);
+    // 本地运行上下文：存活进程 + 当前计划 + 在册子 agent + 未投递报告。
+    let mut summary = runtime_context_summary(runtime.manager.as_ref(), &current_plan);
+    let subagent_lines = subagent::running_subagent_lines(streams, &key.session);
+    if !subagent_lines.is_empty() {
+        let mut text = summary.unwrap_or_default();
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&subagent_lines.join("\n"));
+        summary = Some(text);
+    }
     prepared.context = prepared.context.with_runtime_summary(summary);
     let transport = frozen.transport.clone();
     let base_url = frozen.base_url.clone();
@@ -1062,86 +797,6 @@ fn start_stream(
     true
 }
 
-/// 受管后台任务摘要（环境快照用）：只含 session id、状态、cwd 与命令首行。
-///
-/// 不包含完整命令行、输出或环境变量：环境快照写入模型上下文，必须最小化。
-fn background_tasks(
-    session_id: Option<&str>,
-    streams: &ChatStreams,
-) -> Vec<crate::chat::prompt::BackgroundTask> {
-    let Some(session_id) = session_id else {
-        return Vec::new();
-    };
-    let Some(runtime) = streams.runtimes.get(session_id) else {
-        return Vec::new();
-    };
-    runtime
-        .manager()
-        .snapshots()
-        .into_iter()
-        .filter(|snapshot| !snapshot.state.is_terminal() || snapshot.background_alive)
-        .map(|snapshot| crate::chat::prompt::BackgroundTask {
-            session_id: snapshot.session_id,
-            state: snapshot.state.as_str().to_string(),
-            cwd: snapshot.cwd,
-            command: snapshot
-                .command
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .chars()
-                .take(120)
-                .collect(),
-        })
-        .collect()
-}
-
-/// 本轮运行上下文摘要：存活进程（有界）与当前计划（有界）。
-///
-/// 它是**本地运行状态**，不是工具结果：不新增 call/result 对，也不触发新的模型请求。
-fn runtime_context_summary(
-    manager: &crate::chat::process::ProcessManager,
-    plan: &Option<crate::app::state::PlanSnapshotView>,
-) -> Option<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let running: Vec<crate::chat::process::ProcessSnapshot> = manager
-        .snapshots()
-        .into_iter()
-        .filter(|snapshot| !snapshot.state.is_terminal())
-        .take(MAX_CONTEXT_PROCESSES)
-        .collect();
-    if !running.is_empty() {
-        lines.push(
-            "[local runtime] running processes (use write_stdin with session_id):".to_string(),
-        );
-        for snapshot in running {
-            let command: String = snapshot.command.chars().take(120).collect();
-            lines.push(format!(
-                "- session_id={} cwd={} · {}",
-                snapshot.session_id, snapshot.cwd, command
-            ));
-        }
-    }
-    if let Some(plan) = plan
-        && !plan.is_empty()
-    {
-        lines.push("[local runtime] current plan:".to_string());
-        for (step, status) in plan.steps.iter().take(MAX_CONTEXT_PLAN_STEPS) {
-            let marker = text::agent::plan_marker(*status);
-            lines.push(format!("- {marker} {step}"));
-        }
-    }
-    if lines.is_empty() {
-        return None;
-    }
-    Some(lines.join("\n"))
-}
-
-/// 摘要里最多列出的运行进程数。
-const MAX_CONTEXT_PROCESSES: usize = 8;
-/// 摘要里最多列出的计划步骤数。
-const MAX_CONTEXT_PLAN_STEPS: usize = 16;
-
 /// 一轮的可执行快照：冻结的上下文 + 冻结的工作区根。
 ///
 /// 与 spawn 分离，使测试能用假 transport 直接驱动同一 agent turn（不经真实 HTTP）。
@@ -1188,8 +843,15 @@ fn report_turn(sender: mpsc::UnboundedSender<AppEvent>, key: RequestKey, summary
 pub fn handle_net_event(
     state: &mut AppState,
     streams: &mut ChatStreams,
+    _persistence: &Persistence,
     event: ChatNetEvent,
 ) -> bool {
+    // 子 agent 增量走独立分流：绝不进入主对话。
+    if let ChatNetEvent::Delta { key, .. } | ChatNetEvent::Finished { key, .. } = &event
+        && streams.subagents.contains_key(&key.session)
+    {
+        return handle_subagent_net_event(state, streams, event);
+    }
     match event {
         ChatNetEvent::Delta { key, deltas } => {
             // 累计字节：超过间隔或阈值时入队一次 checkpoint（合并写盘）。
@@ -1253,6 +915,9 @@ pub fn handle_agent_host_event(
             let updates = user_shell::poll_updates(state, streams, persistence, &key);
             let _ = reply.send(updates);
             false
+        }
+        AgentHostEvent::Subagent { key, op, reply } => {
+            subagent::handle_subagent_op(state, streams, persistence, key, op, reply)
         }
     }
 }

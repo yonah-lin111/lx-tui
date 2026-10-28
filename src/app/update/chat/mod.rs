@@ -21,6 +21,7 @@ pub mod compact;
 mod process;
 pub mod rewind;
 mod session;
+mod subagent;
 pub mod user_shell;
 mod view;
 mod viewport;
@@ -53,6 +54,13 @@ pub use session::{
     open_task_page_at, persist_default_model, rename_session, resume_session, scroll_task_list,
     scroll_task_output, select_task_tab, set_task_output_scroll, stop_selected_process,
 };
+pub use subagent::{
+    apply_deltas as apply_subagent_deltas, on_report_batch_committed, on_subagent_auto_compact,
+    on_subagent_delta, on_subagent_finished, on_subagent_loaded, on_subagent_started,
+    on_subagent_tool_pending, on_subagent_tool_running, on_subagent_tool_settled, open_agent_page,
+    refresh_subagent_cards, scroll_agents_detail, select_task_agent, set_subagent_list,
+    set_task_agents_scroll, stop_selected_subagent, toggle_agent_card,
+};
 pub use user_shell::{
     apply_user_shell_snapshot, cancel_user_shells, on_user_shell_begun, on_user_shell_cancelled,
     on_user_shell_rejected, on_user_shell_spawn_failed, on_user_shell_spawned,
@@ -61,8 +69,8 @@ pub use user_shell::{
 pub(crate) use view::view_message_of;
 pub use viewport::{
     hover_lx_chat, hover_lx_jump_bottom, jump_lx_history_bottom, jump_lx_history_to_prompt,
-    resolve_ask_preview_visible, resolve_task_output_visible, scroll_lx_history,
-    set_lx_history_scroll, toggle_lx_card,
+    resolve_ask_preview_visible, resolve_task_agents_visible, resolve_task_output_visible,
+    scroll_lx_history, set_lx_history_scroll, toggle_lx_card,
 };
 pub(crate) use viewport::{resolve_lx_history, resolve_lx_rewind_center};
 
@@ -164,6 +172,7 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
     };
     target.lx.clear_rewind();
     target.lx.chat.generation_counter = generation;
+    target.lx.chat.main_stopped = false;
     target.lx.chat.request = RequestState::Committing {
         generation,
         draft: draft.clone(),
@@ -232,6 +241,7 @@ pub fn on_turn_committed(
     // 展示：user 消息 + streaming assistant 占位。
     target.lx.chat.session_id = Some(committed.session_id.clone());
     target.lx.chat.turn_started_at_ms = Some(committed.created_at_ms);
+    target.lx.chat.main_stopped = false;
     // 本轮模型展示名：发送时冻结的选择（设置页缺失时回退 provider/model）。
     let model_label = target
         .lx
@@ -264,6 +274,7 @@ pub fn on_turn_committed(
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
+        reports: Vec::new(),
     });
     target.lx.chat.messages.push(ChatMessageView {
         sequence: committed.assistant_sequence,
@@ -280,6 +291,7 @@ pub fn on_turn_committed(
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
+        reports: Vec::new(),
     });
     target.lx.chat.follow_bottom = true;
     let key = RequestKey {
@@ -390,6 +402,7 @@ pub fn on_stream_delta(state: &mut AppState, key: &RequestKey, deltas: &[ChatDel
     }
     if changed {
         refresh_lx_status(state, key.pane);
+        changed |= subagent::refresh_subagent_cards(state, key.pane);
     }
     changed
 }
@@ -455,6 +468,9 @@ pub fn on_stream_finished(
         message.cache_read_tokens = usage.cache_read;
         message.duration_ms = duration_ms;
     }
+    if matches!(reason, StopReason::Cancelled) {
+        target.lx.chat.main_stopped = true;
+    }
     target.lx.chat.request = RequestState::Finishing {
         key: key.clone(),
         reason: reason.clone(),
@@ -498,6 +514,8 @@ pub fn on_finish_ack(state: &mut AppState, key: &RequestKey, success: bool) -> b
         target.lx.chat.request = RequestState::Idle;
         // 模型轮次结束后按 FIFO 分派排队项（忙时 Tab 排队的 shell 在这里开始）。
         user_shell::on_user_shell_terminal(state, key.pane);
+        // 没有用户提交占位时，才允许后台报告自动起轮。用户输入优先。
+        request_report_drain_if_idle(state, key.pane);
     } else {
         // Finishing（保存失败）：保留内存 partial，不能伪装成可恢复历史。
         show_lx_hint(
@@ -508,6 +526,30 @@ pub fn on_finish_ack(state: &mut AppState, key: &RequestKey, success: bool) -> b
         );
     }
     refresh_lx_status(state, key.pane);
+    true
+}
+
+/// 空闲且没有用户排队提交时，请求后台报告 drain。
+///
+/// 同一窗格只挂一个 effect；用户输入优先的判定与事件层 `parent_idle` 保持一致。
+pub(crate) fn request_report_drain_if_idle(state: &mut AppState, pane: PaneId) -> bool {
+    let ready = state.pane_anywhere(pane).is_some_and(|target| {
+        matches!(target.lx.chat.request, RequestState::Idle) && target.lx.chat.queue.is_empty()
+    });
+    if !ready
+        || state.effects.iter().any(|effect| {
+            matches!(
+                effect,
+                crate::app::effects::Effect::DrainSubagentReports { pane: queued }
+                    if *queued == pane
+            )
+        })
+    {
+        return false;
+    }
+    state
+        .effects
+        .push(crate::app::effects::Effect::DrainSubagentReports { pane });
     true
 }
 
@@ -562,6 +604,7 @@ pub fn stop_stream(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.chat.stop_armed_at = None;
     match target.lx.chat.request.clone() {
         RequestState::Streaming { key, .. } => {
+            target.lx.chat.main_stopped = true;
             state
                 .effects
                 .push(crate::app::effects::Effect::CancelChatStream { key });
@@ -569,6 +612,7 @@ pub fn stop_stream(state: &mut AppState, pane: PaneId) -> bool {
         }
         RequestState::Committing { generation, .. } => {
             // 等 DB ack 后直接落 interrupted（不发 HTTP）：标记待取消。
+            target.lx.chat.main_stopped = true;
             state
                 .effects
                 .push(crate::app::effects::Effect::CancelChatCommit { pane, generation });
@@ -858,9 +902,15 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
         if target.view != crate::app::state::PaneView::Lx {
             continue;
         }
-        let streaming = target.lx.chat.status.streaming || target.lx.chat.has_running_shell();
+        let streaming = target.lx.chat.status.streaming
+            || target.lx.chat.request.is_busy()
+            || target.lx.chat.has_running_shell();
         let compacting = target.lx.compact.is_running();
-        if !streaming && !compacting {
+        // 仍有子 agent 在跑：推进同一套 loading 帧，供 Agents 详情步骤动画，
+        // 以及主轮自然结束后的“Waiting for agents...”等待行；用户显式停止主轮后
+        // 等待行隐藏，但详情动画仍继续。
+        let agents_running = target.lx.agents.runs.iter().any(|run| run.is_running());
+        if !streaming && !compacting && !agents_running {
             continue;
         }
         // 压缩耗时：摘要请求没有任何流式输出，这一行只有计时能证明它还在跑。
@@ -890,6 +940,14 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
         }
         // 扫描帧两种场景共用：压缩中的文案同样有扫描高亮。
         target.lx.chat.loading_frame = target.lx.chat.loading_frame.wrapping_add(1);
+        if agents_running {
+            let frame = target.lx.chat.loading_frame;
+            for run in &mut target.lx.agents.runs {
+                if run.is_running() {
+                    run.chat.loading_frame = frame;
+                }
+            }
+        }
         changed = true;
     }
     changed

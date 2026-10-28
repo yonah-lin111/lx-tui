@@ -18,6 +18,9 @@ pub const TOOL_NAMES: [&str; 8] = [
     "ask",
 ];
 
+/// 三个 subagent 控制工具（顺序即 `TOOLS` 中的顺序）。
+pub const SUBAGENT_TOOL_NAMES: [&str; 3] = ["spawn_agent", "wait_agent", "close_agent"];
+
 /// 工具执行上下文：相对路径的基准目录是**发送时冻结**的工作区 cwd。
 ///
 /// 执行层从不读取进程 cwd，也不因后续 `cd`/切换窗格改变基准；绝对路径原样使用。
@@ -259,6 +262,10 @@ pub enum ToolExecutionResult {
         /// 按题目顺序的作答记录。
         questions: Vec<super::ask::AnsweredQuestion>,
     },
+    /// 子 agent 控制工具（`spawn_agent` / `wait_agent` / `close_agent`）的结果。
+    ///
+    /// 装箱：报告正文最大 8 KiB，内联会把每个 `ToolExecutionResult` 都撑大。
+    Subagent(Box<crate::chat::agent::SubagentOutcome>),
     /// 失败；`changes` 保留多文件补丁中**已经提交**的变更，绝不谎报整体回滚。
     Failed {
         code: ToolErrorCode,

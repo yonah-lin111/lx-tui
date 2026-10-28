@@ -152,7 +152,12 @@ pub(crate) fn output_scrollbar(
 }
 
 /// **item 列表**：仍在原输入框位置（顶边框 → tab 行 → 任务行）。
-pub(super) fn draw_list(grid: &mut super::grid::Grid, rect: Rect, page: &TaskPage) {
+pub(super) fn draw_list(
+    grid: &mut super::grid::Grid,
+    rect: Rect,
+    page: &TaskPage,
+    agents: &crate::app::state::AgentsState,
+) {
     if rect.width == 0 || rect.height < TOP_BORDER + TAB_ROW {
         return;
     }
@@ -219,8 +224,25 @@ pub(super) fn draw_list(grid: &mut super::grid::Grid, rect: Rect, page: &TaskPag
     }
     match page.tab {
         TaskTab::Processes => draw_processes(grid, list, page),
-        // 子代理 tab：本阶段是预留位，只给占位提示。
-        TaskTab::Agents => draw_placeholder(grid, list, text::LX_TASK_AGENTS_EMPTY),
+        TaskTab::Agents => agents::draw_list(grid, list, page, agents),
+    }
+}
+
+/// Agents 详情区：有高亮项时画子 agent 消息流，否则回退到进程输出容器。
+pub(super) fn draw_agents_detail(
+    grid: &mut super::grid::Grid,
+    rect: Rect,
+    lx: &crate::app::state::Lx,
+    cache: &mut crate::ui::PaneCache,
+) {
+    let Some(page) = lx.task.as_ref() else {
+        return;
+    };
+    match lx.agents.runs.get(page.agents_window.active) {
+        Some(run) => {
+            let _ = agents::draw_detail(grid, rect, run, run.scroll, lx.chat.loading_frame, cache);
+        }
+        None => draw_output_container(grid, rect, page),
     }
 }
 
@@ -283,6 +305,8 @@ pub(crate) enum TaskHit {
     Tab(usize),
     /// 右上角的 `[esc]`：关闭面板。
     Close,
+    /// Agents 页签的某个子 agent 条目（0 基索引）。
+    Agent(usize),
 }
 
 /// tab 行各段几何：`(tab 索引/标签的起始列, 宽度)` + `[esc]` 矩形。
@@ -312,7 +336,13 @@ fn tab_row_rects(rect: Rect) -> (Vec<(usize, u16, u16)>, Option<Rect>) {
 ///
 /// 输出容器不再有边框与自己的 `[close esc]`（用户要求移除多余横线），因此那一侧
 /// 没有可点区域；`esc` 键仍可关闭面板。
-pub(crate) fn hit(rect: Rect, column: u16, row: u16) -> Option<TaskHit> {
+pub(crate) fn hit(
+    rect: Rect,
+    page: &TaskPage,
+    agents: &crate::app::state::AgentsState,
+    column: u16,
+    row: u16,
+) -> Option<TaskHit> {
     if rect.width == 0 || rect.height < TOP_BORDER + TAB_ROW {
         return None;
     }
@@ -322,12 +352,21 @@ pub(crate) fn hit(rect: Rect, column: u16, row: u16) -> Option<TaskHit> {
     {
         return Some(TaskHit::Close);
     }
-    tabs.iter()
-        .find(|(_, x, width)| {
-            let right = x.saturating_add(*width);
-            row == rect.y.saturating_add(TOP_BORDER) && column >= *x && column < right
-        })
-        .map(|(index, _, _)| TaskHit::Tab(*index))
+    if let Some((index, _, _)) = tabs.iter().find(|(_, x, width)| {
+        let right = x.saturating_add(*width);
+        row == rect.y.saturating_add(TOP_BORDER) && column >= *x && column < right
+    }) {
+        return Some(TaskHit::Tab(*index));
+    }
+    // item 行：进程列表走原逻辑，Agents 列表按同一套窗口起点命中。
+    let list_y = rect.y.saturating_add(TOP_BORDER + TAB_ROW);
+    if page.tab != TaskTab::Agents || row < list_y {
+        return None;
+    }
+    let visible = usize::from(rect.height.saturating_sub(TOP_BORDER + TAB_ROW));
+    let start = agents::window_start(page, agents, visible);
+    let index = start.saturating_add(usize::from(row.saturating_sub(list_y)));
+    (index < agents.runs.len()).then_some(TaskHit::Agent(index))
 }
 
 /// 进程列表：每行 `❯ 命令 · cwd · running 12s`，行尾右对齐时长。
@@ -505,5 +544,27 @@ fn clip(value: &str, max: u16) -> String {
     out
 }
 
+pub(super) mod agents;
+
 #[cfg(test)]
 mod tests;
+
+/// 详情区（原历史矩形）的实际绘制区域；不在该页返回 None。
+pub(super) fn task_output_rect(area: Rect, lx: &crate::app::state::Lx) -> Option<Rect> {
+    let page = lx.task.as_ref()?;
+    if page.tab != TaskTab::Agents {
+        return None;
+    }
+    super::layout(area, lx).task_output
+}
+
+/// Agents 详情区的 `(可见行数, 总行数)`；不在该页或无高亮项返回 None。
+pub(super) fn agents_rows(area: Rect, lx: &crate::app::state::Lx) -> Option<(usize, usize)> {
+    let page = lx.task.as_ref()?;
+    if page.tab != TaskTab::Agents {
+        return None;
+    }
+    let rect = super::layout(area, lx).task_output?;
+    let run = lx.agents.runs.get(page.agents_window.active)?;
+    Some((usize::from(rect.height), agents::detail_rows(rect, run)))
+}

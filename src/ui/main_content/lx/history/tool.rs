@@ -17,7 +17,7 @@
 //!   前缀（行数仍算 2）。
 //!
 //! **行数口径只有一个来源**：基本文件工具恒为 2（宽度 0 时为 0），第二行**单行
-//! 绝不换行**；带差异正文的文件卡片、进程卡片与计划卡片各有自己的行数函数
+//! 绝不换行**；`search` 有命中详情时额外增加可复制的命中行；带差异正文的文件卡片、进程卡片与计划卡片各有自己的行数函数
 //! （[`rows`] 分派），但 `history::layout`、`history::render`、置顶用户行与滚动条
 //! 全都复用同一份口径。超宽时按「参数内的次要段（`search` 的 `in path`、长路径尾段）→ 次要计数按优先级
 //! 丢弃 → 错误尾部省略 → 丢参数」依次让位，`└─` 前缀始终可辨。`search` 的 pattern
@@ -46,6 +46,8 @@ mod command;
 mod file_diff;
 mod file_summary;
 mod plan;
+mod search;
+mod subagent;
 
 #[cfg(test)]
 use file_summary::{detail_prefix, fallback_parse_count, reset_fallback_parse_count};
@@ -110,6 +112,12 @@ pub(super) fn rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
         }
         Some(crate::app::state::ToolDetailView::Plan(_)) => plan::rows(call, width, folds.body),
         Some(crate::app::state::ToolDetailView::Ask(_)) => ask::rows(call, width, folds.body),
+        Some(crate::app::state::ToolDetailView::Subagent(_)) => {
+            subagent::rows(call, width, folds.body)
+        }
+        Some(crate::app::state::ToolDetailView::Search(view)) => {
+            search::rows(call, view, width, folds.body)
+        }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::rows(&[call], width, &[folds.body])
         }
@@ -215,6 +223,33 @@ pub(super) fn draw_animated(
                 loading_frame,
                 animating,
                 folds.body,
+            );
+            return;
+        }
+        Some(crate::app::state::ToolDetailView::Subagent(_)) => {
+            subagent::draw(
+                grid,
+                rect,
+                scroll,
+                row_index,
+                call,
+                loading_frame,
+                folds.body,
+                animating,
+            );
+            return;
+        }
+        Some(crate::app::state::ToolDetailView::Search(view)) => {
+            search::draw(
+                grid,
+                rect,
+                scroll,
+                row_index,
+                call,
+                view,
+                loading_frame,
+                folds.body,
+                animating,
             );
             return;
         }
@@ -408,6 +443,10 @@ pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
         Some(crate::app::state::ToolDetailView::Ask(_)) => {
             ask::rows(call, width, true) > ask::rows(call, width, false)
         }
+        Some(crate::app::state::ToolDetailView::Subagent(_)) => subagent::has_more(call, width),
+        Some(crate::app::state::ToolDetailView::Search(view)) => {
+            search::has_more(call, view, width)
+        }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::has_more_content(call, width)
         }
@@ -415,6 +454,14 @@ pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
             file_summary::detail_content_rows(call, width, true)
                 > file_summary::detail_content_rows(call, width, false)
         }
+    }
+}
+
+/// 子 agent 卡片里的 agent 链接（相对步骤块首的行偏移）。
+pub(super) fn agent_links(call: &ToolCallView, width: u16) -> Vec<(usize, String)> {
+    match call.detail.as_deref() {
+        Some(crate::app::state::ToolDetailView::Subagent(_)) => subagent::agent_links(call, width),
+        _ => Vec::new(),
     }
 }
 
@@ -491,6 +538,20 @@ pub(super) fn card_regions(
         Some(crate::app::state::ToolDetailView::Plan(_)) => Vec::new(),
         Some(crate::app::state::ToolDetailView::Ask(_)) => {
             // 整卡一个 Body 点击面：展开前后行数不变就不登记（点了也不会有变化）。
+            if !has_expandable_content(call, width) {
+                return Vec::new();
+            }
+            vec![CardRegion {
+                section: CardSection::Body,
+                card: RowSpan {
+                    offset: 0,
+                    rows: step_rows,
+                },
+                clickable: true,
+            }]
+        }
+        Some(crate::app::state::ToolDetailView::Subagent(_))
+        | Some(crate::app::state::ToolDetailView::Search(_)) => {
             if !has_expandable_content(call, width) {
                 return Vec::new();
             }
@@ -623,7 +684,7 @@ fn lead(call: &ToolCallView, loading_frame: usize, animating: bool) -> Segment {
     };
     Segment::new(
         mark.segment(StepKind::Tool, loading_frame, animating),
-        mark.style(StepKind::Tool, false, false),
+        mark.style(StepKind::Tool, false),
     )
 }
 
@@ -753,7 +814,7 @@ pub(super) fn header_with_mark(
     };
     let lead = paint(Segment::new(
         mark.segment(StepKind::Tool, loading_frame, animating),
-        mark.style(StepKind::Tool, false, false),
+        mark.style(StepKind::Tool, false),
     ));
     if segments_cols(std::slice::from_ref(&lead)) > limit {
         return vec![lead];

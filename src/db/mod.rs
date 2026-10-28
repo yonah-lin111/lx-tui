@@ -23,7 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 17;
 
 /// 当前 Schema 版本（测试断言用；不暴露可变入口）。
 #[cfg(test)]
@@ -272,6 +272,32 @@ impl Database {
             return Self::open(Path::new(&overridden));
         }
         Self::open(&database_path(is_dev_environment(), linked_worktree)?)
+    }
+
+    /// 迁移后的体检报告（版本、关键表行数、`integrity_check`）；仅供诊断工具使用。
+    pub fn migration_report(&self) -> Result<String> {
+        let version: i64 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let integrity: String = self
+            .conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        let mut out = format!("user_version={version}\nintegrity_check={integrity}\n");
+        for table in [
+            "agent_session",
+            "agent_message",
+            "agent_message_part",
+            "agent_tool_call",
+            "agent_subagent",
+        ] {
+            let count: i64 =
+                self.conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })?;
+            out.push_str(&format!("{table}={count}\n"));
+        }
+        Ok(out)
     }
 
     /// 路径是否已信任（`is_trusted = 1`）。

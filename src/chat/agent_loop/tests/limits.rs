@@ -1,13 +1,14 @@
 //! 限额、取消与 usage 累加的编排测试（与 `tests.rs` 共用同一套可控 host/executor）。
 
 use super::*;
+use crate::chat::events::RequestPurpose;
 
-/// 步数上限：每步都要求工具，达到 MAX_MODEL_STEPS 时以稳定错误码失败。
+/// 步数不设上限：越过旧的 24 步硬上限后仍能正常收尾（对齐 codex）。
 #[tokio::test]
-async fn step_limit_fails_with_stable_code() {
-    let fixture = Fixture::new("step-limit");
+async fn steps_are_not_capped_at_the_old_limit() {
+    let fixture = Fixture::new("many-steps");
     let read_args = r#"{"path":"."}"#.to_string();
-    let steps: Vec<Vec<ChatDelta>> = (0..MAX_MODEL_STEPS)
+    let mut steps: Vec<Vec<ChatDelta>> = (0..30)
         .map(|index| {
             tool_calls(
                 &[(format!("c{index}").as_str(), "read", &read_args, 0)],
@@ -15,6 +16,7 @@ async fn step_limit_fails_with_stable_code() {
             )
         })
         .collect();
+    steps.push(final_response("done", None));
     let script = Script::new(steps, StopReason::Complete);
     let host = RecordingHost::new();
     let executor = RecordingExecutor::new();
@@ -26,49 +28,8 @@ async fn step_limit_fails_with_stable_code() {
         no_cancel(),
     )
     .await;
-    assert_eq!(
-        summary.outcome,
-        TurnOutcome::Failed {
-            code: STEP_LIMIT_CODE.into()
-        }
-    );
-    // 最后一步只剩采样机会、没有下一步：整批不执行。
-    assert_eq!(script.request_count(), MAX_MODEL_STEPS);
-}
-
-/// 工具调用上限：一批调用超出配额时整批不执行（不做半批）。
-#[tokio::test]
-async fn tool_call_limit_fails_before_any_execution() {
-    let fixture = Fixture::new("call-limit");
-    let search_args = r#"{"pattern":"x"}"#.to_string();
-    let ids: Vec<String> = (0..=MAX_TOOL_CALLS)
-        .map(|index| format!("c{index}"))
-        .collect();
-    let calls: Vec<(&str, &str, &str, usize)> = ids
-        .iter()
-        .enumerate()
-        .map(|(ordinal, call_id)| (call_id.as_str(), "search", search_args.as_str(), ordinal))
-        .collect();
-    let script = Script::new(vec![tool_calls(&calls, None)], StopReason::Complete);
-    let host = RecordingHost::new();
-    let executor = RecordingExecutor::new();
-    let executed = executor.executed.clone();
-    let summary = run_agent_turn(
-        context(fixture.path()),
-        host.clone(),
-        executor,
-        script.stream_one(),
-        no_cancel(),
-    )
-    .await;
-    assert_eq!(
-        summary.outcome,
-        TurnOutcome::Failed {
-            code: TOOL_CALL_LIMIT_CODE.into()
-        }
-    );
-    assert!(executed.lock().expect("lock").is_empty());
-    assert!(host.trace().is_empty());
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert_eq!(script.request_count(), 31);
 }
 
 /// usage 跨采样累加；未知保持 None（不写 0 冒充真实值）。
@@ -185,6 +146,9 @@ async fn cancel_after_begin_ack_settles_cancelled_without_execution() {
             match request {
                 AgentHostRequest::UserShellUpdates { reply } => {
                     let _ = reply.send(Vec::new());
+                }
+                AgentHostRequest::Subagent { reply, .. } => {
+                    let _ = reply.send(Err(HostError::Cancelled));
                 }
                 AgentHostRequest::BeginTool { call, reply } => {
                     self.trace
@@ -482,6 +446,70 @@ async fn concurrent_overlap_is_impossible_by_construction() {
     .await;
     assert_eq!(summary.outcome, TurnOutcome::Complete);
     assert_eq!(state.lock().expect("lock").1, 1, "最大并发必须为 1");
+}
+
+/// 子 agent 达到上下文阈值：先发一次无工具的摘要请求，再带着摘要继续。
+#[tokio::test]
+async fn subagent_auto_compacts_when_context_reaches_limit() {
+    let fixture = Fixture::new("auto-compact");
+    let read_args = r#"{"path":"."}"#.to_string();
+    let script = Script::new(
+        vec![
+            tool_calls(&[("c1", "read", &read_args, 0)], None),
+            final_response("summary of the read", None),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let mut request = ChatRequest {
+        turns: Vec::new(),
+        items: Vec::new(),
+        model: crate::db::chat::ModelSnapshot {
+            provider: "p".into(),
+            model: "m".into(),
+            variant: None,
+        },
+        variant_params: None,
+        purpose: RequestPurpose::Subagent(crate::chat::agent::AgentRole::Explorer),
+        system_prompt: Some("explorer prompt".into()),
+    };
+    request
+        .items
+        .push(ModelItem::UserText("investigate".into()));
+    let context = ModelContext::new(request, fixture.path()).with_context_limit(Some(1));
+    let summary = run_agent_turn(
+        context,
+        RecordingHost::new(),
+        RecordingExecutor::new(),
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert_eq!(script.request_count(), 3, "工具步 + 摘要 + 收尾");
+    let purposes: Vec<RequestPurpose> = script
+        .requests
+        .lock()
+        .expect("lock")
+        .iter()
+        .map(|request| request.purpose)
+        .collect();
+    assert_eq!(
+        purposes,
+        vec![
+            RequestPurpose::Subagent(crate::chat::agent::AgentRole::Explorer),
+            RequestPurpose::CompactSummary,
+            RequestPurpose::Subagent(crate::chat::agent::AgentRole::Explorer),
+        ]
+    );
+    let prompts = script.system_prompts();
+    assert!(
+        prompts[2]
+            .as_deref()
+            .unwrap_or_default()
+            .contains("<compact_summary>"),
+        "摘要必须进入下一次采样的系统段：{prompts:?}"
+    );
 }
 
 /// 脚本化 stream 必须在超时内完成（防止测试悬挂）。

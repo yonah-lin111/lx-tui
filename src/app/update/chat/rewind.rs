@@ -514,6 +514,7 @@ pub fn on_session_reloaded(
     target.lx.chat.revision = u64::try_from(revision).unwrap_or(0);
     target.lx.chat.thinking_toggled.clear();
     target.lx.chat.detail_expanded.clear();
+    target.lx.chat.report_expand_steps.clear();
     target.lx.chat.selected_tool = None;
     target.lx.chat.selected_compact = None;
     target.lx.chat.hover = None;

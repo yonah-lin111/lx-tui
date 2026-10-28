@@ -309,6 +309,7 @@ fn oversized_draft_is_flagged_by_the_production_assembler() {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
+        reports: Vec::new(),
     }];
     let mut frozen = crate::app::state::FrozenModel::resolve(
         &state.models,
@@ -404,6 +405,7 @@ fn start_stream_fails_the_turn_when_draft_exceeds_context() {
     assert!(handle_net_event(
         &mut state,
         &mut streams,
+        &persistence,
         ChatNetEvent::Finished {
             key: key.clone(),
             reason: reason.clone(),

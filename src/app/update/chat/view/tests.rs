@@ -40,6 +40,7 @@ fn message(parts: Vec<ChatPart>, tools: Vec<ToolCallRecord>) -> ChatMessage {
         turn_index: 0,
         kind: "chat".to_string(),
         user_shell: None,
+        subagent_reports: None,
         role: "assistant".into(),
         status: "complete".into(),
         model_provider: None,

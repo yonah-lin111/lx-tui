@@ -55,7 +55,7 @@ impl NoticeTitle {
 
     /// 通知标记样式：状态色（红/黄）优先，与角色无关。
     fn mark_style(self) -> Style {
-        self.mark().style(StepKind::Body, false, false)
+        self.mark().style(StepKind::Body, false)
     }
 
     /// 标题文案样式（不含行首标记：标记自带状态色）。

@@ -10,6 +10,7 @@ mod rewind;
 mod session;
 mod slash_panels;
 mod stop;
+mod subagent;
 mod task_page;
 mod timeline;
 mod user_shell;
@@ -110,7 +111,12 @@ fn committed(session: &str) -> TurnCommitted {
 fn enter_starts_committing_and_second_enter_is_ignored() {
     let mut state = ready_state("你好");
     let pane = focus_pane(&state);
+    state.pane_mut_anywhere(pane).unwrap().lx.chat.main_stopped = true;
     assert!(try_send(&mut state, pane), "首次发送受理");
+    assert!(
+        !state.pane_anywhere(pane).unwrap().lx.chat.main_stopped,
+        "新轮开始清除主轮停止标记"
+    );
     // Committing 期间重复 Enter 不再入队。
     assert!(!try_send(&mut state, pane), "流中/提交中 Enter 忽略");
     // 恰好一条 BeginChatTurn 效应。
@@ -294,6 +300,14 @@ fn finish_moves_to_finishing_then_idle_with_usage() {
         state.pane_anywhere(pane).unwrap().lx.chat.request,
         RequestState::Idle
     ));
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::DrainSubagentReports { pane: effect_pane }
+                if *effect_pane == pane
+        )),
+        "空闲收尾必须请求报告 drain"
+    );
 }
 
 #[test]
@@ -617,6 +631,7 @@ fn session_loaded_rebuilds_view_and_selection() {
             turn_index: 0,
             kind: "chat".to_string(),
             user_shell: None,
+            subagent_reports: None,
             role: "user".into(),
             status: "complete".into(),
             model_provider: None,
@@ -647,6 +662,7 @@ fn session_loaded_rebuilds_view_and_selection() {
             turn_index: 0,
             kind: "chat".to_string(),
             user_shell: None,
+            subagent_reports: None,
             role: "assistant".into(),
             status: "interrupted".into(),
             model_provider: Some("p".into()),
@@ -791,6 +807,7 @@ fn append_stream_delta_merges_adjacent_same_kind() {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
+        reports: Vec::new(),
     });
     chat.append_stream_delta(PartKind::Text, "a", None);
     chat.append_stream_delta(PartKind::Text, "b", None);
@@ -824,6 +841,7 @@ fn signature_metadata_binds_to_reasoning_part() {
         output_tokens: None,
         cache_read_tokens: None,
         duration_ms: None,
+        reports: Vec::new(),
     });
     chat.append_stream_delta(PartKind::Reasoning, "思考", None);
     // 空文本 + 签名元数据：绑定到相邻 reasoning part。

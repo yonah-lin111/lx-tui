@@ -41,6 +41,22 @@ Include:
 
 Be concise, structured, and focused on helping the next LLM seamlessly continue the work.";
 
+/// 子 agent 运行中自动压缩的通知（UI 复用手动压缩的检查点组件）。
+///
+/// 只携带展示所需的事实：摘要正文与实际模型；覆盖范围由运行中的时间线推导，
+/// 不写数据库（自动压缩只服务于当前子轮，子轮结束后原始消息仍完整保留）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoCompactNotice {
+    /// 摘要模型展示名（当前轮的 model id）。
+    pub model_label: String,
+    /// 校验通过的摘要正文。
+    pub summary: String,
+    /// 触发时的估算 token 数。
+    pub estimated_tokens: u64,
+    /// 生效的上下文上限（配置值或回退值）。
+    pub context_limit: u64,
+}
+
 /// 一个待压缩区间：消息、覆盖的 sequence 范围与渲染后的转写文本。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactInput {
@@ -279,20 +295,41 @@ pub fn summary_request(
     model: &ModelSnapshot,
     variant_params: Option<serde_json::Value>,
 ) -> ChatRequest {
-    let mut user = String::new();
-    user.push_str("<transcript>\n");
-    user.push_str(&input.transcript);
-    user.push_str("</transcript>\n\n");
-    user.push_str(&format!(
-        "Compress the transcript above. Cover message sequence {}..{} ({} message(s)).",
+    summary_request_from_transcript(
+        &input.transcript,
         input.start_sequence,
         input.end_sequence,
-        input.messages.len()
+        input.messages.len(),
+        input.omitted_turns,
+        model,
+        variant_params,
+    )
+}
+
+/// 从已经渲染好的转写构造摘要请求。
+///
+/// 手动压缩与子 agent 运行时自动压缩共用同一条请求形状；`message_count` 只用于
+/// 让模型知道覆盖规模，`omitted_turns` 必须如实标注被输入上限丢掉的最老轮次。
+pub fn summary_request_from_transcript(
+    transcript: &str,
+    start_sequence: i64,
+    end_sequence: i64,
+    message_count: usize,
+    omitted_turns: usize,
+    model: &ModelSnapshot,
+    variant_params: Option<serde_json::Value>,
+) -> ChatRequest {
+    let mut user = String::new();
+    user.push_str("<transcript>\n");
+    user.push_str(transcript);
+    user.push_str("</transcript>\n\n");
+    user.push_str(&format!(
+        "Compress the transcript above. Cover message sequence {start_sequence}..{end_sequence} \
+         ({message_count} message(s))."
     ));
-    if input.omitted_turns > 0 {
+    if omitted_turns > 0 {
         user.push_str(&format!(
-            " {} older turn(s) were omitted from the transcript because of the input limit.",
-            input.omitted_turns
+            " {omitted_turns} older turn(s) were omitted from the transcript because of the input limit."
         ));
     }
     // 系统段是 codex 的压缩提示词（通用口径），lx 侧对摘要内容的硬要求放这里：
@@ -366,6 +403,7 @@ mod tests {
             created_at_ms: 0,
             completed_at_ms: None,
             user_shell: None,
+            subagent_reports: None,
             parts: vec![ChatPart {
                 position: 0,
                 kind: "text".into(),

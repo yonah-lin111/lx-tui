@@ -98,15 +98,9 @@ fn stop_stream_clears_armed_state() {
     let (mut state, pane, _key) = streaming_state("sess-esc-clear");
     state.pane_mut_anywhere(pane).unwrap().lx.chat.stop_armed_at = Some(std::time::Instant::now());
     assert!(stop_stream(&mut state, pane));
-    assert!(
-        state
-            .pane_anywhere(pane)
-            .unwrap()
-            .lx
-            .chat
-            .stop_armed_at
-            .is_none()
-    );
+    let target = state.pane_anywhere(pane).unwrap();
+    assert!(target.lx.chat.stop_armed_at.is_none());
+    assert!(target.lx.chat.main_stopped, "显式停止主轮后标记 stopped");
 }
 
 #[test]
