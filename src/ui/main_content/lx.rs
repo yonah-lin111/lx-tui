@@ -21,7 +21,7 @@ mod input;
 mod mention;
 mod selection;
 
-pub(crate) use ask::rect as ask_rect;
+pub(crate) use ask::{ask_editor_cell_at, rect as ask_rect};
 pub(crate) use mention::{item_at as mention_item_at, layout as mention_layout};
 pub use selection::copy_text;
 pub(crate) use selection::{content_geom, unit_cell_range};

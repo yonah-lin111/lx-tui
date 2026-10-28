@@ -56,6 +56,14 @@ pub enum TodoKey {
     Down,
     Home,
     End,
+    /// Ctrl+A：移到行首。
+    LineStart,
+    /// Ctrl+E：移到行尾。
+    LineEnd,
+    /// Ctrl+U：删除至行首。
+    DeleteToLineStart,
+    /// Ctrl+K：删除至行尾。
+    DeleteToLineEnd,
     /// Ctrl/Cmd+Z：撤销删除（无内容时吞掉）。
     Undo,
     /// Ctrl/Cmd+C：编辑态清空输入（列表态吞掉）。
@@ -70,6 +78,10 @@ fn todo_key(key: KeyEvent) -> Option<TodoKey> {
     match key.code {
         KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(TodoKey::Undo),
         KeyCode::Char('c' | 'C') if ctrl && !alt => Some(TodoKey::Clear),
+        KeyCode::Char('a' | 'A') if ctrl && !alt => Some(TodoKey::LineStart),
+        KeyCode::Char('e' | 'E') if ctrl && !alt => Some(TodoKey::LineEnd),
+        KeyCode::Char('u' | 'U') if ctrl && !alt => Some(TodoKey::DeleteToLineStart),
+        KeyCode::Char('k' | 'K') if ctrl && !alt => Some(TodoKey::DeleteToLineEnd),
         KeyCode::Char(' ') if !ctrl && !alt => Some(TodoKey::Space),
         KeyCode::Char(ch) if !ctrl && !alt => Some(TodoKey::Char(ch)),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => Some(TodoKey::ShiftEnter),
@@ -269,6 +281,10 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let ctrl = key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
+        && !key.modifiers.contains(KeyModifiers::ALT);
     match kind {
         OverlayKind::Menu | OverlayKind::PageMenu => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
@@ -285,20 +301,8 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Down => Some(OverlayKey::Down),
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Delete => Some(OverlayKey::Remove),
-            KeyCode::Char('c' | 'C')
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
-            {
-                Some(OverlayKey::Copy)
-            }
-            KeyCode::Char('d' | 'D')
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
-            {
-                Some(OverlayKey::Remove)
-            }
+            KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Copy),
+            KeyCode::Char('d' | 'D') if ctrl => Some(OverlayKey::Remove),
             _ => None,
         },
         OverlayKind::ReferencedFolderDelete => match key.code {
@@ -309,9 +313,11 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         OverlayKind::ReferencedFolderInput => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
-            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(OverlayKey::Clear)
-            }
+            KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
+            KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
+            KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
+            KeyCode::Char('u' | 'U') if ctrl => Some(OverlayKey::DeleteToLineStart),
+            KeyCode::Char('k' | 'K') if ctrl => Some(OverlayKey::DeleteToLineEnd),
             KeyCode::Backspace => Some(OverlayKey::Backspace),
             KeyCode::Delete => Some(OverlayKey::Delete),
             KeyCode::Left if plain => Some(OverlayKey::Left),
@@ -328,21 +334,13 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
             // Ctrl/Cmd+Z：回退上层搜索范围（终端支持 kitty 协议时 Cmd 组合可达）。
-            KeyCode::Char('z' | 'Z')
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
-            {
-                Some(OverlayKey::Back)
-            }
+            KeyCode::Char('z' | 'Z') if ctrl => Some(OverlayKey::Back),
             // Ctrl/Cmd+C：沿用参考面板语义复制高亮项引用（单行搜索框不另设选区模型）。
-            KeyCode::Char('c' | 'C')
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
-            {
-                Some(OverlayKey::Copy)
-            }
+            KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Copy),
+            KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
+            KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
+            KeyCode::Char('u' | 'U') if ctrl => Some(OverlayKey::DeleteToLineStart),
+            KeyCode::Char('k' | 'K') if ctrl => Some(OverlayKey::DeleteToLineEnd),
             KeyCode::Backspace => Some(OverlayKey::Backspace),
             KeyCode::Delete => Some(OverlayKey::Delete),
             KeyCode::Left if plain => Some(OverlayKey::Left),
@@ -366,13 +364,13 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         | OverlayKind::ResumeSessionEdit => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
-            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(OverlayKey::Clear)
-            }
+            KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
+            KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
+            KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
+            KeyCode::Char('u' | 'U') if ctrl => Some(OverlayKey::DeleteToLineStart),
+            KeyCode::Char('k' | 'K') if ctrl => Some(OverlayKey::DeleteToLineEnd),
             // `^D` 进入删除确认 / 确认删除（`/resume` 编辑模态）。
-            KeyCode::Char('d' | 'D') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(OverlayKey::Remove)
-            }
+            KeyCode::Char('d' | 'D') if ctrl => Some(OverlayKey::Remove),
             KeyCode::Backspace => Some(OverlayKey::Backspace),
             KeyCode::Delete => Some(OverlayKey::Delete),
             KeyCode::Left if plain => Some(OverlayKey::Left),
@@ -387,9 +385,11 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
-            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(OverlayKey::Clear)
-            }
+            KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
+            KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
+            KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
+            KeyCode::Char('u' | 'U') if ctrl => Some(OverlayKey::DeleteToLineStart),
+            KeyCode::Char('k' | 'K') if ctrl => Some(OverlayKey::DeleteToLineEnd),
             KeyCode::Backspace => Some(OverlayKey::Backspace),
             KeyCode::Delete => Some(OverlayKey::Delete),
             KeyCode::Left if plain => Some(OverlayKey::Left),
@@ -404,9 +404,11 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
-            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(OverlayKey::Clear)
-            }
+            KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
+            KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
+            KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
+            KeyCode::Char('u' | 'U') if ctrl => Some(OverlayKey::DeleteToLineStart),
+            KeyCode::Char('k' | 'K') if ctrl => Some(OverlayKey::DeleteToLineEnd),
             KeyCode::Backspace => Some(OverlayKey::Backspace),
             KeyCode::Delete => Some(OverlayKey::Delete),
             KeyCode::Left if plain => Some(OverlayKey::Left),

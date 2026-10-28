@@ -224,6 +224,7 @@ pub fn render_referenced_search(
         layout.query,
         search.query.text(),
         search.query.cursor(),
+        search.query.selection(),
         Some(text::REFERENCED_SEARCH_PLACEHOLDER),
     );
     // 列表或状态提示。

@@ -426,7 +426,11 @@ pub fn apply_page_rename_key(state: &mut AppState, key: OverlayKey) {
         | OverlayKey::Left
         | OverlayKey::Right
         | OverlayKey::Home
-        | OverlayKey::End => edit_page_rename_input(state, key),
+        | OverlayKey::End
+        | OverlayKey::LineStart
+        | OverlayKey::LineEnd
+        | OverlayKey::DeleteToLineStart
+        | OverlayKey::DeleteToLineEnd => edit_page_rename_input(state, key),
         OverlayKey::Up
         | OverlayKey::Down
         | OverlayKey::EnterFolder
@@ -456,8 +460,10 @@ fn edit_page_rename_input(state: &mut AppState, key: OverlayKey) {
         OverlayKey::Delete => input.delete(),
         OverlayKey::Left => input.move_left(),
         OverlayKey::Right => input.move_right(),
-        OverlayKey::Home => input.move_home(),
-        OverlayKey::End => input.move_end(),
+        OverlayKey::Home | OverlayKey::LineStart => input.move_home(),
+        OverlayKey::End | OverlayKey::LineEnd => input.move_end(),
+        OverlayKey::DeleteToLineStart => input.delete_to_line_start(),
+        OverlayKey::DeleteToLineEnd => input.delete_to_line_end(),
         _ => {}
     }
 }

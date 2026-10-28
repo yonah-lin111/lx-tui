@@ -5,10 +5,11 @@ use std::collections::HashMap;
 use alacritty_terminal::term::TermMode;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use crate::app::actions::OverlayKey;
 use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneView};
 use crate::app::update;
-use crate::input::{self, Routed};
+use crate::input::{self, Routed, TodoKey};
 use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
 use crate::ui;
@@ -77,6 +78,15 @@ pub(crate) fn handle_key_event(
             *dirty = true;
         }
         Routed::Overlay(key) => {
+            if key == OverlayKey::Clear
+                && let Some(text) = overlay_selected_text(state)
+            {
+                if !text.trim().is_empty() {
+                    copy_with_toast(state, &text);
+                }
+                *dirty = true;
+                return;
+            }
             let was_confirm = matches!(
                 state.overlay,
                 Some(Overlay::ConfirmClose(_) | Overlay::ConfirmSyncWorkspaceCwd(_))
@@ -135,6 +145,18 @@ pub(crate) fn handle_key_event(
             }
         }
         Routed::Todo(code) => {
+            if code == TodoKey::Clear
+                && let Some(text) = state
+                    .todo
+                    .edit_input_mut()
+                    .and_then(|inp| inp.selected_text())
+            {
+                if !text.trim().is_empty() {
+                    copy_with_toast(state, &text);
+                }
+                *dirty = true;
+                return;
+            }
             if update::apply_todo_key(state, code) {
                 *dirty = true;
             }
@@ -265,7 +287,15 @@ fn copy_lx_selection(
     if let Some(text) = state
         .pane_anywhere(pane)
         .filter(|target| target.view == PaneView::Lx)
-        .and_then(|target| target.lx.selected_text())
+        .and_then(|target| {
+            if let Some(ask) = target.lx.ask.as_ref()
+                && ask.editing
+            {
+                ask.editor().and_then(|ed| ed.selected_text())
+            } else {
+                target.lx.selected_text()
+            }
+        })
     {
         if !text.trim().is_empty() {
             copy_with_toast(state, &text);
@@ -293,4 +323,19 @@ fn copy_lx_selection(
         copy_with_toast(state, &text);
     }
     true
+}
+
+/// 读取当前浮层单行输入框中被选中的文本。
+fn overlay_selected_text(state: &AppState) -> Option<String> {
+    match state.overlay.as_ref()? {
+        Overlay::Rename(r) => r.input.selected_text(),
+        Overlay::NewWorkspace(ws) => ws.input.selected_text(),
+        Overlay::NewNode(n) => n.name.selected_text(),
+        Overlay::SaveDraft(d) => d.name.selected_text(),
+        Overlay::WorktreeOpen(w) => w.query.selected_text(),
+        Overlay::ReferencedFolderInput(i) => i.input.selected_text(),
+        Overlay::ReferencedFolderSearch(s) => s.query.selected_text(),
+        Overlay::ResumeSessionEdit(r) => r.input.selected_text(),
+        _ => None,
+    }
 }

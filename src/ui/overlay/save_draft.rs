@@ -150,6 +150,7 @@ pub(crate) fn render_save_draft(
         Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
         dialog.name.text(),
         dialog.name.cursor(),
+        dialog.name.selection(),
         None,
     );
     // 分割线。

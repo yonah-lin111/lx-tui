@@ -357,6 +357,7 @@ pub(crate) fn render_rename(
         Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
         rename.input.text(),
         rename.input.cursor(),
+        rename.input.selection(),
         Some(text::RENAME_PLACEHOLDER),
     )
 }
@@ -391,6 +392,7 @@ pub(crate) fn render_new_workspace(
         Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
         new_ws.input.text(),
         new_ws.input.cursor(),
+        new_ws.input.selection(),
         Some(text::NEW_WORKSPACE_PLACEHOLDER),
     )
 }
@@ -429,6 +431,7 @@ pub(crate) fn render_new_node(
         Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
         node.name.text(),
         node.name.cursor(),
+        node.name.selection(),
         Some(placeholder),
     )
 }
@@ -693,17 +696,19 @@ pub(crate) fn render_resume_session_edit(
         Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
         edit.input.text(),
         edit.input.cursor(),
+        edit.input.selection(),
         Some(text::RESUME_EDIT_PLACEHOLDER),
     )
 }
 
-/// 模态输入行：左侧 `> ` 前缀（与 prompt 列表搜索框同图标）+ 单行输入；
+/// 模态输入行：左侧 `> ` 前缀（与 prompt 列表搜索框同图标）+ 单行输入（支持选区反色）；
 /// 返回硬件光标位置；宽度放不下前缀时输入区为空、不显示光标。
 pub(crate) fn render_input(
     frame: &mut Frame<'_>,
     area: Rect,
     text: &str,
     cursor: usize,
+    selection: Option<(usize, usize)>,
     placeholder: Option<&str>,
 ) -> Option<(u16, u16)> {
     let prefix = format!("{} ", text::INPUT_PREFIX_ICON);
@@ -716,7 +721,7 @@ pub(crate) fn render_input(
             ..area
         },
     );
-    widgets::input::render(
+    widgets::input::render_with_selection(
         frame,
         Rect {
             x: area.x.saturating_add(prefix_width),
@@ -726,6 +731,7 @@ pub(crate) fn render_input(
         },
         text,
         cursor,
+        selection,
         placeholder,
     )
 }

@@ -214,3 +214,32 @@ fn answer_editing_never_touches_the_prompt_draft() {
     assert_eq!(lx.input, draft);
     assert_eq!(lx.cursor, cursor);
 }
+
+#[test]
+fn ask_editor_selection_and_editing() {
+    let mut editor = AskEditor::new();
+    editor.insert_str("custom answer");
+    assert_eq!(editor.text(), "custom answer");
+
+    // 选区
+    editor.begin_text_selection(0, 7);
+    editor.drag_text_selection(0, 13);
+    assert!(editor.has_text_selection());
+    assert_eq!(editor.selected_text().as_deref(), Some("answer"));
+
+    // 键入替换
+    editor.insert_char('!');
+    assert_eq!(editor.text(), "custom !");
+    assert!(!editor.has_text_selection());
+
+    // 快捷键: delete_to_line_end
+    editor.home();
+    editor.move_right(); // 光标在 1
+    editor.delete_to_line_end();
+    assert_eq!(editor.text(), "c");
+
+    // delete_to_line_start
+    editor.insert_str("omplete");
+    editor.delete_to_line_start();
+    assert_eq!(editor.text(), "");
+}

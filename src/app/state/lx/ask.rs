@@ -551,6 +551,7 @@ impl AskEditor {
     }
 
     pub fn insert_char(&mut self, ch: char) {
+        self.delete_selected();
         if self.can_insert(ch.len_utf8()) {
             self.0.insert_char(ch);
         }
@@ -561,6 +562,7 @@ impl AskEditor {
     /// 判定与写入必须看同一份文本，否则 `\t`（展开为两空格）这类字符会让
     /// 「预检通过、实际超限」。
     pub fn insert_str(&mut self, text: &str) -> bool {
+        self.delete_selected();
         let sanitized = crate::app::prompt::text::sanitize(text);
         if !self.can_insert(sanitized.len()) {
             return false;
@@ -570,6 +572,7 @@ impl AskEditor {
     }
 
     pub fn newline(&mut self) {
+        self.delete_selected();
         // `Lx::plain` 的换行恒为 1 字节（不续写列表标记），预算是精确的。
         if self.can_insert(1) {
             self.0.newline();
@@ -577,71 +580,148 @@ impl AskEditor {
     }
 
     pub fn backspace(&mut self) {
+        if self.delete_selected() {
+            return;
+        }
         self.0.backspace();
     }
 
     pub fn delete(&mut self) {
+        if self.delete_selected() {
+            return;
+        }
         self.0.delete();
     }
 
     pub fn move_left(&mut self) {
+        self.clear_text_selection();
         self.0.move_left();
     }
 
     pub fn move_right(&mut self) {
+        self.clear_text_selection();
         self.0.move_right();
     }
 
     pub fn move_up(&mut self) {
+        self.clear_text_selection();
         self.0.move_up();
     }
 
     pub fn move_down(&mut self) {
+        self.clear_text_selection();
         self.0.move_down();
     }
 
     pub fn home(&mut self) {
+        self.clear_text_selection();
         self.0.home();
     }
 
     pub fn end(&mut self) {
+        self.clear_text_selection();
         self.0.end();
     }
 
     pub fn word_left(&mut self) {
+        self.clear_text_selection();
         self.0.word_left();
     }
 
     pub fn word_right(&mut self) {
+        self.clear_text_selection();
         self.0.word_right();
     }
 
     pub fn delete_to_line_start(&mut self) {
+        if self.delete_selected() {
+            return;
+        }
         self.0.delete_to_line_start();
     }
 
     pub fn delete_to_line_end(&mut self) {
+        if self.delete_selected() {
+            return;
+        }
         self.0.delete_to_line_end();
     }
 
     pub fn delete_word_backward(&mut self) {
+        if self.delete_selected() {
+            return;
+        }
         self.0.delete_word_backward();
     }
 
     pub fn delete_word_forward(&mut self) {
+        if self.delete_selected() {
+            return;
+        }
         self.0.delete_word_forward();
     }
 
     pub fn undo(&mut self) {
+        self.clear_text_selection();
         self.0.undo();
     }
 
     pub fn redo(&mut self) {
+        self.clear_text_selection();
         self.0.redo();
     }
 
     pub fn clear(&mut self) {
+        self.clear_text_selection();
         self.0.clear();
+    }
+
+    /// 在指定视觉行/内容列开始输入框文本选择。
+    pub fn begin_text_selection(&mut self, row: usize, col: u16) {
+        self.0.begin_text_selection(row, col);
+    }
+
+    /// 按连续点击次数（1=单字、2=选词、3=全选/选行）在指定视觉行/内容列开始文本选择。
+    pub fn begin_text_selection_with_clicks(&mut self, row: usize, col: u16, clicks: u8) {
+        self.0.begin_text_selection_with_clicks(row, col, clicks);
+    }
+
+    /// 拖拽扩展文本选区。
+    pub fn drag_text_selection(&mut self, row: usize, col: u16) {
+        self.0.drag_text_selection(row, col);
+    }
+
+    /// 清除输入框文本选区。
+    pub fn clear_text_selection(&mut self) {
+        self.0.clear_text_selection();
+    }
+
+    /// 是否存在选区。
+    pub fn has_text_selection(&self) -> bool {
+        self.0.has_text_selection()
+    }
+
+    /// 选区字节范围 `[start, end)`；空选区返回 None。
+    pub fn text_selection_range(&self) -> Option<(usize, usize)> {
+        self.0.text_selection_range()
+    }
+
+    /// 取选中文本；空选区返回 None。
+    pub fn selected_text(&self) -> Option<String> {
+        self.0.selected_text()
+    }
+
+    /// 删除选中的文本区间；返回是否实际删除了选区。
+    pub fn delete_selected(&mut self) -> bool {
+        let Some((start, end)) = self.0.text_selection_range() else {
+            self.0.clear_text_selection();
+            return false;
+        };
+        self.0.input.replace_range(start..end, "");
+        self.0.cursor = start;
+        self.0.clear_text_selection();
+        self.0.scroll_cursor_into_view();
+        true
     }
 }
 

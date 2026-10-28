@@ -488,6 +488,39 @@ fn double_click_ghost_row_keeps_draft() {
     assert_eq!(edit.input.text(), "draft", "草稿保留");
 }
 
+#[test]
+fn todo_edit_shortcuts_and_selection_lifecycle() {
+    let mut state = todo_state(&["hello world"]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
+
+    // Ctrl+A / LineStart 移至句首
+    assert!(apply_todo_key(&mut state, TodoKey::LineStart));
+    assert_eq!(state.todo.edit_input_mut().unwrap().cursor(), 0);
+
+    // Ctrl+E / LineEnd 移至句末
+    assert!(apply_todo_key(&mut state, TodoKey::LineEnd));
+    assert_eq!(state.todo.edit_input_mut().unwrap().cursor(), 11);
+
+    // 选区与退格
+    state.todo.edit_input_mut().unwrap().begin_selection(6);
+    state.todo.edit_input_mut().unwrap().drag_selection(11);
+    assert_eq!(
+        state
+            .todo
+            .edit_input_mut()
+            .unwrap()
+            .selected_text()
+            .as_deref(),
+        Some("world")
+    );
+    assert!(apply_todo_key(&mut state, TodoKey::Backspace));
+    assert_eq!(state.todo.editing().unwrap().input.text(), "hello ");
+
+    // Ctrl+U 删至行首
+    assert!(apply_todo_key(&mut state, TodoKey::DeleteToLineStart));
+    assert_eq!(state.todo.editing().unwrap().input.text(), "");
+}
+
 /// 幽灵行打开时点未选中行之外的位置不再造成越界选中。
 #[test]
 fn click_beyond_list_with_ghost_is_ignored() {

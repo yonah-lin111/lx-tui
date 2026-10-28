@@ -262,7 +262,7 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
             input.move_right();
             input.cursor() != before
         }
-        TodoKey::Home => {
+        TodoKey::Home | TodoKey::LineStart => {
             let Some(input) = state.todo.edit_input_mut() else {
                 return false;
             };
@@ -270,13 +270,29 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
             input.move_home();
             input.cursor() != before
         }
-        TodoKey::End => {
+        TodoKey::End | TodoKey::LineEnd => {
             let Some(input) = state.todo.edit_input_mut() else {
                 return false;
             };
             let before = input.cursor();
             input.move_end();
             input.cursor() != before
+        }
+        TodoKey::DeleteToLineStart => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            let before = input.text().len();
+            input.delete_to_line_start();
+            input.text().len() != before
+        }
+        TodoKey::DeleteToLineEnd => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            let before = input.text().len();
+            input.delete_to_line_end();
+            input.text().len() != before
         }
         TodoKey::Char(ch) => {
             let Some(input) = state.todo.edit_input_mut() else {
@@ -322,7 +338,11 @@ fn apply_todo_list_key(state: &mut AppState, key: TodoKey) -> bool {
         | TodoKey::Left
         | TodoKey::Right
         | TodoKey::Home
-        | TodoKey::End => false,
+        | TodoKey::End
+        | TodoKey::LineStart
+        | TodoKey::LineEnd
+        | TodoKey::DeleteToLineStart
+        | TodoKey::DeleteToLineEnd => false,
         TodoKey::Char(ch) => apply_todo_command(state, ch),
     }
 }

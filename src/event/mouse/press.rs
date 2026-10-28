@@ -293,7 +293,22 @@ pub(crate) fn handle_mouse_down_left(
         // Todo 面板：先按钮、再行、最后空白吞掉（顺序不可调换，
         // 否则会先被下面的整块吞掉分支吃掉）。
         let mut changed = false;
-        if let Some(button) = ui::right_panel::todo::button_at(view.prompt, mouse.column, mouse.row)
+        if let Some(char_idx) =
+            ui::right_panel::todo::edit_input_char_at(view.prompt, state, mouse.column, mouse.row)
+        {
+            let clicks = crate::app::selection::next_click_count(
+                &mut state.selection_click,
+                mouse.column,
+                mouse.row,
+                Instant::now(),
+            );
+            if let Some(input) = state.todo.edit_input_mut() {
+                input.begin_selection_with_clicks(char_idx, clicks);
+                state.todo_input_drag = true;
+                changed = true;
+            }
+        } else if let Some(button) =
+            ui::right_panel::todo::button_at(view.prompt, mouse.column, mouse.row)
         {
             changed = update::apply_todo_button(state, button);
         } else if let Some(index) =
@@ -476,6 +491,33 @@ pub(crate) fn handle_mouse_down_left(
                 // 后台任务页打开时 ask 面板**不可见**（task 与 ask 共用输入框矩形，
                 // 绘制由 task 接管）：此时绝不能命中隐藏面板，否则点任务列表会
                 // 静默改一个看不见的答案，而列表本身永远点不动。
+                if let Some(target) = state
+                    .pane_anywhere(pane)
+                    .filter(|target| target.lx.task.is_none())
+                    && target.lx.ask.as_ref().is_some_and(|ask| ask.editing)
+                    && let Some((visual_row, col)) = ui::main_content::lx::ask_editor_cell_at(
+                        inner,
+                        &target.lx,
+                        mouse.column,
+                        mouse.row,
+                    )
+                {
+                    let clicks = crate::app::selection::next_click_count(
+                        &mut state.selection_click,
+                        mouse.column,
+                        mouse.row,
+                        Instant::now(),
+                    );
+                    if let Some(target_mut) = state.pane_mut_anywhere(pane)
+                        && let Some(ask_mut) = target_mut.lx.ask.as_mut()
+                        && let Some(editor) = ask_mut.editor_mut()
+                    {
+                        editor.begin_text_selection_with_clicks(visual_row, col, clicks);
+                        state.ask_input_drag = Some(pane);
+                    }
+                    *dirty = true;
+                    return;
+                }
                 let ask_hit = state
                     .pane_anywhere(pane)
                     .filter(|target| target.lx.task.is_none())

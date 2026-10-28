@@ -753,6 +753,22 @@ fn rename_overlay_routes_editing_keys() {
     }
     assert_eq!(
         route_rename(KeyCode::Char('a'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::LineStart))
+    );
+    assert_eq!(
+        route_rename(KeyCode::Char('e'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::LineEnd))
+    );
+    assert_eq!(
+        route_rename(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::DeleteToLineStart))
+    );
+    assert_eq!(
+        route_rename(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::DeleteToLineEnd))
+    );
+    assert_eq!(
+        route_rename(KeyCode::Char('b'), KeyModifiers::CONTROL),
         None
     );
     assert_eq!(route_rename(KeyCode::Up, KeyModifiers::NONE), None);
@@ -993,6 +1009,17 @@ fn worktree_open_overlay_routes_search_and_navigation_keys() {
     assert_eq!(
         super::route(
             ctrl,
+            TermMode::empty(),
+            crate::app::state::FocusedContainer::Panes,
+            Some(OverlayKind::WorktreeOpen),
+            false
+        ),
+        Some(Routed::Overlay(OverlayKey::LineStart))
+    );
+    let ctrl_b = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
+    assert_eq!(
+        super::route(
+            ctrl_b,
             TermMode::empty(),
             crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::WorktreeOpen),

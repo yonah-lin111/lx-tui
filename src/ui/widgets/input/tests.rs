@@ -94,3 +94,36 @@ fn non_empty_text_suppresses_placeholder() {
     assert!(!line.contains("hint"), "line={line:?}");
     assert!(!buffer[(0, 0)].modifier.contains(Modifier::DIM));
 }
+
+#[test]
+fn char_index_at_col_computes_exact_char_index() {
+    let text = "hello 中文 world";
+    assert_eq!(char_index_at_col(text, 0, 30, 0), 0);
+    assert_eq!(char_index_at_col(text, 0, 30, 4), 4);
+    assert_eq!(char_index_at_col(text, 0, 30, 6), 6); // '中' 的位置
+    assert_eq!(char_index_at_col(text, 0, 30, 7), 6); // '中' 的第二半列仍算 '中'
+    assert_eq!(char_index_at_col(text, 0, 30, 8), 7); // '文'
+}
+
+#[test]
+fn render_with_selection_highlights_reversed() {
+    let mut terminal = Terminal::new(TestBackend::new(20, 1)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| {
+        render_with_selection(
+            frame,
+            Rect::new(0, 0, 20, 1),
+            "abcdef",
+            3,
+            Some((2, 4)), // "cd"
+            None,
+        );
+    }) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    assert!(!buffer[(0, 0)].modifier.contains(Modifier::REVERSED)); // 'a'
+    assert!(!buffer[(1, 0)].modifier.contains(Modifier::REVERSED)); // 'b'
+    assert!(buffer[(2, 0)].modifier.contains(Modifier::REVERSED)); // 'c'
+    assert!(buffer[(3, 0)].modifier.contains(Modifier::REVERSED)); // 'd'
+    assert!(!buffer[(4, 0)].modifier.contains(Modifier::REVERSED)); // 'e'
+}

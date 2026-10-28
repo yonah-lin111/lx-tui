@@ -78,6 +78,7 @@ pub fn render_referenced_input(
         Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
         input.input.text(),
         input.input.cursor(),
+        input.input.selection(),
         Some(text::REFERENCED_INPUT_PLACEHOLDER),
     );
     if let Some(error) = input.error {

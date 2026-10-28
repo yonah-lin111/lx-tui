@@ -26,6 +26,14 @@ pub enum OverlayKey {
     Right,
     Home,
     End,
+    /// Ctrl+A：移到行首。
+    LineStart,
+    /// Ctrl+E：移到行尾。
+    LineEnd,
+    /// Ctrl+U：删除至行首。
+    DeleteToLineStart,
+    /// Ctrl+K：删除至行尾。
+    DeleteToLineEnd,
     /// PageUp / PageDown：UI 组件查看弹窗右侧预览翻页。
     PageUp,
     PageDown,

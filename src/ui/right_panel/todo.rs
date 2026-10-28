@@ -221,6 +221,41 @@ pub fn list_index(state: &AppState, display: usize) -> Option<usize> {
     }
 }
 
+/// 若鼠标落在正在编辑的 Todo 文本输入框内，返回其字符索引。
+pub fn edit_input_char_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<usize> {
+    let edit = state.todo.editing()?;
+    let list = list_rect(panel);
+    if !list.contains((column, row).into()) {
+        return None;
+    }
+    let display_idx = match &edit.target {
+        None => edit.at,
+        Some(id) => state.todo.items().iter().position(|item| item.id == *id)?,
+    };
+    let scroll = state.todo.scroll();
+    if display_idx < scroll {
+        return None;
+    }
+    let offset = display_idx - scroll;
+    let y = list.y.checked_add(u16::try_from(offset).ok()?)?;
+    if row != y {
+        return None;
+    }
+    let status_x = list.x.saturating_add(MARKER_WIDTH).saturating_add(1);
+    let text_x = status_x.saturating_add(STATUS_WIDTH).saturating_add(1);
+    if column < text_x || column >= list.right() {
+        return None;
+    }
+    let width = usize::from(list.right().saturating_sub(text_x));
+    let rel_col = column.saturating_sub(text_x);
+    Some(widgets::input::char_index_at_col(
+        edit.input.text(),
+        edit.input.cursor(),
+        width,
+        rel_col,
+    ))
+}
+
 /// 滚动条几何（无溢出时为 None）；轨道只覆盖列表区，不含底部统计块。
 pub fn scrollbar(panel: Rect, state: &AppState) -> Option<widgets::scrollbar::ScrollbarLayout> {
     // 只在自己可见时存在：Todo 隐藏时这条几何与 prompt 正文共用最右一列，
@@ -663,11 +698,33 @@ fn render_edit_row(
     let text = edit.input.text();
     let input = widgets::input::view(text, edit.input.cursor(), width);
     // 新建时没有原文可参照，占位是唯一的「这里能打字」提示；编辑既有条目不加占位。
-    let (visible, input_style) = match text.is_empty() {
-        true if edit.target.is_none() => (text::TODO_EDIT_PLACEHOLDER, style::muted()),
-        _ => (input.visible, style::text()),
-    };
-    write_string_in(buf, list, text_x, y, visible, input_style);
+    if text.is_empty() && edit.target.is_none() {
+        write_string_in(
+            buf,
+            list,
+            text_x,
+            y,
+            text::TODO_EDIT_PLACEHOLDER,
+            style::muted(),
+        );
+    } else {
+        let spans = widgets::input::build_styled_spans(
+            input.visible,
+            input.start_char,
+            edit.input.selection(),
+        );
+        let mut cur_x = text_x;
+        for span in spans {
+            if cur_x >= list.right() {
+                break;
+            }
+            write_string_in(buf, list, cur_x, y, &span.content, span.style);
+            let span_width =
+                u16::try_from(unicode_width::UnicodeWidthStr::width(span.content.as_ref()))
+                    .unwrap_or(0);
+            cur_x = cur_x.saturating_add(span_width);
+        }
+    }
     Some((
         text_x
             .saturating_add(input.cursor_col)
