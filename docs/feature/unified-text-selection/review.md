@@ -75,6 +75,14 @@
 - **验证**：新增 `single_character_word_selection_is_not_empty`。
 - **关键文件**：`src/app/selection.rs`、`src/app/update/selection.rs`、`src/ui/screen.rs`。
 
+### P1-3 lx 消息列表 / Agents 详情拖选没有边缘滚动与滚轮延伸
+
+- **触发**：在 lx 主聊天历史或后台任务页 Agents 详情中按住拖动文字，把指针停在内容区上/下边缘；视口不滚，选区也不继续增长。拖选中直接滚轮时，内容滚动了但选区终点仍停在旧屏幕行。
+- **错误原因**：屏幕选区与 lx 历史选区各自维护，但自动滚动只接到 prompt/terminal 的 `selection_autoscroll`；lx 的 `lx_selection` 和 `screen_selection` 既没有目标区域/总行数登记，也没有在滚动后平移端点。subagent 详情使用屏幕选区，同样没有接入。
+- **修复**：新增 `LxSelectionAutoscroll`，按 lx 历史或 Agents 详情登记目标、内容区、总行数/可视行数；`tick` 在边缘滚动后按实际滚动行数平移选区端点，滚轮走同一路径。屏幕选区滚完后等下一次最终画面取样再重算冻结块，避免用旧画面取词。
+- **验证**：新增 `lx_selection_edge_autoscroll_moves_history_and_extends_selection`、`lx_selection_wheel_scrolls_viewport_and_extends_selection`、`agents_detail_edge_drag_scrolls_subagent_transcript`。
+- **关键文件**：`src/app/update/selection.rs`、`src/app/update/interaction.rs`、`src/event/mouse/drag.rs`、`src/event/mouse/wheel.rs`、`src/event/mouse/hit.rs`、`src/ui/main_content/lx.rs`。
+
 ### P2-1 终端双击/三击的 Down 不置脏
 
 - **触发**：在终端窗格双击/三击后暂时按住鼠标，不松开；高亮要等到 Up 才出现。
@@ -90,19 +98,27 @@
 - **修复**：注释改为 250 ms。
 - **关键文件**：`src/app/update/selection.rs`。
 
+### P2-3 折叠卡片有选区时仍要求第二次点击
+
+- **触发**：卡片内容有选中高亮时点击卡片；第一次只清选区，必须再点一次才折叠/展开。
+- **错误原因**：上一轮为保护选区加入了 `had_card_selection` 早退分支，把一次点击拆成两次；这与用户期望的“点到卡片就切换”冲突。
+- **修复**：删除该早退；点击仍先清旧选区，同一次点击继续进入延迟折叠。普通拖动仍只选字，不折叠。
+- **验证**：`card_click_clears_existing_selection_and_toggles`。
+- **关键文件**：`src/event/mouse/press.rs`、`src/event/tests.rs`。
+
 ## 3. 已核对但未列入缺陷的部分
 
 - **选区保留/清除**：松开不复制、不清选区；`Ctrl+C` 后高亮仍在；点击其他位置清除；滚动后按冻结完整行重定位，原文消失时隐藏高亮但保留可复制 payload。
 - **宽字符**：取样与冻结均跳过续格；端点落在续格时回首格；复制只输出一次。
 - **容器边界**：跨行长按拖动按起止点容器边界裁剪；首末行不越界；竖边框、纯横边框行和 `▐` 滚动条不进入整行复制。
 - **异步粘贴/剪切**：粘贴目标带焦点、窗格、浮层与修订号快照；终端 Paste 提升 generation 取消按键回退；剪切只有原生写入确认且文本/修订未变才删除。
-- **lx-subagent 兼容**：Agents 列表行、详情卡片与滚动条走同一套屏幕选择/延迟点击；折叠卡片 250 ms 延迟、双击/三击取消、已有选区时第一次点击只清选区。
+- **lx-subagent 兼容**：Agents 列表行、详情卡片与滚动条走同一套屏幕选择/延迟点击；折叠卡片 250 ms 延迟、双击/三击取消、已有选区时点击先清选区，同一次点击仍切换；详情区和主历史一样支持边缘滚动选字。
 
 ## 4. 验证
 
 - `cargo fmt --check`：通过。
 - `cargo clippy --all-targets -- -D warnings`：通过。
-- `cargo test`：当前 `dev` 全量 **3754 passed / 0 failed / 2 ignored**（含全部集成套件）。
+- `cargo test`：当前 `dev` 全量 **3758 passed / 0 failed / 2 ignored**（含全部集成套件）。
 - 新增/更新的关键回归用例：
   - `shift_click_keeps_overlay_close_button_priority`
   - `shift_drag_selects_screen_text_without_forwarding_to_pty`
@@ -114,6 +130,11 @@
   - `prompt_word_selection_uses_local_editing_selection`
   - `prompt_triple_click_selects_full_wrapped_logical_line`
   - `single_character_word_selection_is_not_empty`
+  - `lx_selection_edge_autoscroll_moves_history_and_extends_selection`
+  - `lx_selection_wheel_scrolls_viewport_and_extends_selection`
+  - `agents_detail_edge_drag_scrolls_subagent_transcript`
+  - `pending_screen_selection_uses_the_next_frame`
+  - `card_click_clears_existing_selection_and_toggles`
 
 ## 5. 未纳入本次修复的已知限制
 

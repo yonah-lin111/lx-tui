@@ -116,6 +116,32 @@ pub struct SelectionAutoscroll {
     pub next_at: Instant,
 }
 
+/// lx 消息列表 / Agents 详情拖选时的边缘滚动目标。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LxAutoscrollTarget {
+    /// lx 主聊天历史。
+    History,
+    /// 后台任务页 Agents 详情中的子 agent transcript。
+    AgentsDetail,
+}
+
+/// lx 消息列表拖选边缘自动滚动计划。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LxSelectionAutoscroll {
+    pub pane: PaneId,
+    pub target: LxAutoscrollTarget,
+    pub direction: AutoscrollDirection,
+    /// 边缘判断用内容区（历史区或 Agents 详情区）。
+    pub area: Rect,
+    /// 选择坐标换算用窗格内容区。
+    pub inner: Rect,
+    /// 历史/详情当前总行数与可视行数；tick 在事件层之外据此滚动。
+    pub total: usize,
+    pub visible: usize,
+    pub mouse: (u16, u16),
+    pub next_at: Instant,
+}
+
 /// 右侧统一容器的当前面板。
 ///
 /// 纯视图偏好：不落库、不写配置，启动恒为 `Prompt`（与 `prompt_left` 同级）。
@@ -273,6 +299,10 @@ pub struct AppState {
     pub lx_card_press: Option<(PaneId, crate::app::state::CardTarget)>,
     /// 选区拖拽边缘自动滚动计划；None 表示未激活。
     pub selection_autoscroll: Option<SelectionAutoscroll>,
+    /// lx 历史 / Agents 详情拖选边缘自动滚动计划。
+    pub lx_selection_autoscroll: Option<LxSelectionAutoscroll>,
+    /// 滚动后当前帧已变，等下一次最终画面取样再刷新屏幕选区终点。
+    pub(crate) screen_selection_refresh: Option<(u16, u16)>,
     pub resizing_prompt: bool,
     pub prompt_hover: bool,
     pub prompt_collapsed: bool,
@@ -445,6 +475,8 @@ impl AppState {
             lx_input_drag: None,
             lx_card_press: None,
             selection_autoscroll: None,
+            lx_selection_autoscroll: None,
+            screen_selection_refresh: None,
             resizing_prompt: false,
             prompt_hover: false,
             prompt_collapsed: false,

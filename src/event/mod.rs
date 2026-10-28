@@ -459,6 +459,10 @@ async fn run_loop(
             if update::refresh_screen_selection(state, &geometry.screen_text) {
                 dirty = true;
             }
+            // lx 拖选滚动后，新一帧的内容已经可见：用它刷新屏幕选区终点。
+            if update::apply_pending_screen_selection(state, &geometry.screen_text) {
+                dirty = true;
+            }
             last_draw = Instant::now();
             // 工具调用 loading 已绘制：推进 pending → running 并回执 ticket，
             // loop 此刻才被允许执行文件 IO（不靠 sleep 保证可见性）。

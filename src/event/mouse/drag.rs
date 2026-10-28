@@ -15,7 +15,7 @@ use crate::pty::PtySession;
 use crate::ui;
 
 use super::super::session::Geometry;
-use super::hit::{pane_at, pane_content_inner};
+use super::hit::{lx_autoscroll_region, pane_at, pane_content_inner};
 use super::wheel::forward_pane_mouse_event;
 
 /// 鼠标拖拽事件处理。
@@ -256,6 +256,24 @@ pub(crate) fn handle_mouse_drag(
             pending.dragged = true;
         }
         update::drag_screen_selection(state, &geometry.screen_text, point);
+        if let Some((pane, inner)) = lx_pane_for_point(state, rects, point)
+            && let Some((target, area, total, visible)) =
+                lx_autoscroll_region(state, pane, inner, cache)
+        {
+            update::arm_lx_selection_autoscroll(
+                state,
+                pane,
+                target,
+                area,
+                inner,
+                total,
+                visible,
+                (mouse.column, mouse.row),
+                Instant::now(),
+            );
+        } else {
+            state.lx_selection_autoscroll = None;
+        }
         *dirty = true;
         return;
     }
@@ -299,6 +317,23 @@ pub(crate) fn handle_mouse_drag(
         let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
         let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
         update::drag_lx_selection(state, pane, row, col);
+        if let Some((target, area, total, visible)) =
+            lx_autoscroll_region(state, pane, inner, cache)
+        {
+            update::arm_lx_selection_autoscroll(
+                state,
+                pane,
+                target,
+                area,
+                inner,
+                total,
+                visible,
+                (mouse.column, mouse.row),
+                Instant::now(),
+            );
+        } else {
+            state.lx_selection_autoscroll = None;
+        }
         *dirty = true;
         return;
     }
@@ -338,6 +373,32 @@ pub(crate) fn handle_mouse_drag(
         Instant::now(),
     );
     *dirty = true;
+}
+
+/// 屏幕选区所在 lx 窗格：优先鼠标下的窗格，越出屏幕时回退到选区起点。
+fn lx_pane_for_point(
+    state: &AppState,
+    rects: &[(PaneId, ratatui::layout::Rect)],
+    point: crate::app::selection::ScreenPoint,
+) -> Option<(PaneId, ratatui::layout::Rect)> {
+    if let Some((pane, inner)) = pane_at(rects, point.col, point.row)
+        && state
+            .pane_anywhere(pane)
+            .is_some_and(|target| target.view == crate::app::state::PaneView::Lx)
+    {
+        return Some((pane, inner));
+    }
+    let anchor = state.screen_selection.as_ref()?.range()?.0;
+    rects.iter().find_map(|(pane, rect)| {
+        let inner = layout::pane_inner_rect(*rect);
+        if !inner.contains((anchor.col, anchor.row).into()) {
+            return None;
+        }
+        state
+            .pane_anywhere(*pane)
+            .is_some_and(|target| target.view == crate::app::state::PaneView::Lx)
+            .then_some((*pane, inner))
+    })
 }
 
 /// 鼠标左键释放事件处理。

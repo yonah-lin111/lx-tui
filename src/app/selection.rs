@@ -152,6 +152,22 @@ impl ScreenSelection {
         self.dragging = true;
     }
 
+    /// 内容滚动后按行平移端点，保持锚点仍指向同一内容。
+    ///
+    /// 调用方随后会等下一帧最终画面重新冻结选区；这里只先移动视觉端点。
+    pub fn shift_rows(&mut self, delta: i32) {
+        let shift = |row: u16| -> u16 {
+            if delta < 0 {
+                row.saturating_sub(delta.unsigned_abs() as u16)
+            } else {
+                row.saturating_add(delta as u16)
+            }
+        };
+        self.base.row = shift(self.base.row);
+        self.anchor.row = shift(self.anchor.row);
+        self.cursor.row = shift(self.cursor.row);
+    }
+
     /// 按新画面重新定位（滚动/缩放后）；保留冻结 payload。
     pub fn remap(&mut self, anchor: ScreenPoint, cursor: ScreenPoint) {
         self.base = anchor;
@@ -290,6 +306,12 @@ impl Selection {
     /// 扩展到新的拖动点。
     pub fn drag(&mut self, row: i32, col: u16) {
         self.cursor = (row, col);
+    }
+
+    /// 内容滚动后按行平移端点，保持锚点仍指向同一内容。
+    pub fn shift_rows(&mut self, delta: i32) {
+        self.anchor.0 = self.anchor.0.saturating_add(delta);
+        self.cursor.0 = self.cursor.0.saturating_add(delta);
     }
 
     /// 鼠标松开：结束拖动，选区保留。

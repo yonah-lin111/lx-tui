@@ -13,7 +13,7 @@ use crate::ui::text;
 
 use super::editor::prompt_item_editing;
 use super::prompt::commit_editing_prompt;
-use super::selection::{clear_selection, tick_selection_autoscroll};
+use super::selection::{clear_selection, tick_lx_selection_autoscroll, tick_selection_autoscroll};
 
 /// prompt 自动保存静置时长：条目编辑停止输入约 800ms 后提交落库。
 const PROMPT_AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
@@ -354,10 +354,11 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
         .is_some_and(|tooltip| tooltip.reveal(now));
     let saved = tick_prompt_autosave(state, now);
     let scrolled = tick_selection_autoscroll(state, now);
+    let lx_scrolled = tick_lx_selection_autoscroll(state, now);
     let toggled = tick_card_toggle(state, now);
     // `/resume` 面板停留期间刷新"现在"，相对时间随之自然推进。
     let retimed = tick_slash_panel_clock(state);
-    expired || lx_expired || revealed || saved || scrolled || toggled || retimed
+    expired || lx_expired || revealed || saved || scrolled || lx_scrolled || toggled || retimed
 }
 
 /// 刷新打开中的 `/resume` 面板时间戳；返回是否有面板需要重绘。
@@ -422,7 +423,14 @@ pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let tooltip = state.tooltip.as_ref().and_then(Tooltip::next_deadline);
     let autoscroll = state
         .selection_autoscroll
-        .map(|autoscroll| autoscroll.next_at);
+        .map(|autoscroll| autoscroll.next_at)
+        .into_iter()
+        .chain(
+            state
+                .lx_selection_autoscroll
+                .map(|autoscroll| autoscroll.next_at),
+        )
+        .min();
     let autosave = prompt_item_editing(state)
         .then(|| state.prompt.autosave_deadline(PROMPT_AUTOSAVE_DELAY))
         .flatten();

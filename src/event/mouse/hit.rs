@@ -2,7 +2,7 @@
 
 use ratatui::layout::Rect;
 
-use crate::app::state::{AppState, PaneKind, PaneView};
+use crate::app::state::{AppState, LxAutoscrollTarget, PaneKind, PaneView};
 use crate::app::update;
 use crate::layout::{self, BoundaryHit, PaneId};
 use crate::ui;
@@ -353,6 +353,35 @@ pub(crate) fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockBut
         }
         _ => {}
     }
+}
+
+/// lx 消息列表 / Agents 详情的拖选滚动区。
+///
+/// 返回目标、边缘判断矩形与当前 `(总行数, 可视行数)`；主历史与子 agent
+/// 详情共用同一入口，避免事件层与绘制层各算一套行数。
+pub(crate) fn lx_autoscroll_region(
+    state: &AppState,
+    pane: PaneId,
+    inner: Rect,
+    cache: &mut ui::RenderCache,
+) -> Option<(LxAutoscrollTarget, Rect, usize, usize)> {
+    let target = state.pane_anywhere(pane)?;
+    if target.view != PaneView::Lx {
+        return None;
+    }
+    if let Some(page) = target.lx.task.as_ref()
+        && page.tab == crate::app::state::TaskTab::Agents
+    {
+        let area = ui::main_content::lx::task_output_inner(inner, &target.lx)?;
+        let (visible, total) = ui::main_content::lx::task_agents_rows(inner, &target.lx)?;
+        return Some((LxAutoscrollTarget::AgentsDetail, area, total, visible));
+    }
+    if target.lx.task.is_some() {
+        return None;
+    }
+    let area = ui::main_content::lx::history_rect(inner, &target.lx)?;
+    let (total, visible) = ui::main_content::lx::history_rows(inner, &target.lx, cache.pane(pane))?;
+    Some((LxAutoscrollTarget::History, area, total, visible))
 }
 
 /// 命中某个 lx 窗格的 toast 盒：返回（窗格，盒矩形）。

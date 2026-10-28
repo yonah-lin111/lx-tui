@@ -6561,7 +6561,7 @@ fn lx_card_double_click_cancels_pending_toggle() {
 }
 
 #[test]
-fn card_click_clears_existing_selection_before_toggling() {
+fn card_click_clears_existing_selection_and_toggles() {
     let (mut state, config, geo, pane, column, row) = lx_card_fixture();
     let mut selection = crate::app::selection::ScreenSelection::new(
         crate::app::selection::ScreenPoint::new(0, 0),
@@ -6576,7 +6576,7 @@ fn card_click_clears_existing_selection_before_toggling() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    // 第一次点击：只取消高亮，不登记卡片折叠。
+    // 旧行为：点击先清选区，同一次点击仍进入延迟折叠。
     for kind in [
         MouseEventKind::Down(MouseButton::Left),
         MouseEventKind::Up(MouseButton::Left),
@@ -6591,34 +6591,11 @@ fn card_click_clears_existing_selection_before_toggling() {
             &mut dirty,
         );
     }
-    assert!(state.screen_selection.is_none(), "第一次点击必须清除选区");
-    assert!(state.pending_card_toggle.is_none(), "第一次点击不得折叠");
+    assert!(state.screen_selection.is_none(), "点击必须清除选区");
     assert!(
-        !state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .chat
-            .detail_is_expanded("m-param", "call-param"),
-        "第一次点击不得改变卡片"
+        state.pending_card_toggle.is_some(),
+        "同一次点击应登记延迟折叠"
     );
-
-    // 第二次点击：选区已空，重新按单击进入延迟折叠。
-    for kind in [
-        MouseEventKind::Down(MouseButton::Left),
-        MouseEventKind::Up(MouseButton::Left),
-    ] {
-        handle_terminal_event(
-            mouse(kind, column, row),
-            &mut state,
-            &mut sessions,
-            &geo,
-            &config,
-            &mut ui::RenderCache::default(),
-            &mut dirty,
-        );
-    }
-    assert!(state.pending_card_toggle.is_some(), "第二次点击应登记折叠");
     let deadline = state
         .pending_card_toggle
         .as_ref()
@@ -6632,7 +6609,7 @@ fn card_click_clears_existing_selection_before_toggling() {
             .lx
             .chat
             .detail_is_expanded("m-param", "call-param"),
-        "第二次点击在延迟后应展开"
+        "点击在延迟后应展开"
     );
 }
 
@@ -7825,6 +7802,81 @@ fn plain_drag_selects_agent_row_text_without_switching_agent() {
             .active,
         1
     );
+}
+
+#[test]
+fn agents_detail_edge_drag_scrolls_subagent_transcript() {
+    let config = Config::default();
+    let (mut state, pane) = agents_task_state();
+    {
+        let run = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .runs
+            .get_mut(0)
+            .expect("agent run");
+        run.visible = 5;
+        run.total_rows = 50;
+        run.scroll = 0;
+        run.follow = false;
+    }
+    let mut geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let inner = layout::pane_inner_rect(
+        geo.rects
+            .iter()
+            .find(|(id, _)| *id == pane)
+            .map(|(_, rect)| *rect)
+            .expect("pane rect"),
+    );
+    let output =
+        ui::main_content::lx::task_rects(inner, &state.pane_anywhere(pane).expect("pane").lx)
+            .expect("task rects")
+            .output;
+    let mut buffer = ratatui::buffer::Buffer::empty(geo.screen);
+    buffer.set_string(
+        output.x + 1,
+        output.y + 1,
+        "agent detail line",
+        ratatui::style::Style::default(),
+    );
+    geo.screen_text = crate::ui::screen::ScreenText::from_buffer(&buffer);
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+    ] {
+        let row = if matches!(kind, MouseEventKind::Down(_)) {
+            output.y + 1
+        } else {
+            output.bottom().saturating_sub(1)
+        };
+        handle_terminal_event(
+            mouse(kind, output.x + 1, row),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+    let autoscroll = state
+        .lx_selection_autoscroll
+        .expect("agents detail autoscroll armed");
+    assert_eq!(
+        autoscroll.target,
+        crate::app::state::LxAutoscrollTarget::AgentsDetail
+    );
+    assert!(crate::app::update::tick_lx_selection_autoscroll(
+        &mut state,
+        autoscroll.next_at + std::time::Duration::from_millis(1),
+    ));
+    let run = &state.pane_anywhere(pane).expect("pane").lx.agents.runs[0];
+    assert!(run.scroll > 0, "子 agent 详情应向下滚动");
 }
 
 #[test]

@@ -322,6 +322,8 @@ pub fn finish_screen_selection(state: &mut AppState) {
     } else {
         state.screen_selection = None;
     }
+    state.screen_selection_refresh = None;
+    state.lx_selection_autoscroll = None;
 }
 
 /// 每帧按冻结内容重定位屏幕选区；找不到内容时隐藏高亮但保留选区。
@@ -389,7 +391,7 @@ pub fn finish_lx_selection(state: &mut AppState) -> Option<Selection> {
         .lx_selection
         .as_ref()
         .is_some_and(|selection| selection.range().is_some());
-    if keep {
+    let finished = if keep {
         if let Some(selection) = state.lx_selection.as_mut() {
             selection.finish();
         }
@@ -397,12 +399,15 @@ pub fn finish_lx_selection(state: &mut AppState) -> Option<Selection> {
     } else {
         state.lx_selection = None;
         None
-    }
+    };
+    state.lx_selection_autoscroll = None;
+    finished
 }
 
 /// 清除 lx 页选区。
 pub fn clear_lx_selection(state: &mut AppState) {
     state.lx_selection = None;
+    state.lx_selection_autoscroll = None;
 }
 
 /// 在 lx 输入框内开始文本选择（视觉行、内容列）；光标落到该单元格。
@@ -523,6 +528,8 @@ pub fn clear_selection(state: &mut AppState) {
     state.pending_screen_click = None;
     state.pending_card_toggle = None;
     state.selection_autoscroll = None;
+    state.lx_selection_autoscroll = None;
+    state.screen_selection_refresh = None;
     state.lx_selection = None;
     state.lx_card_press = None;
     state.lx_scroll_drag = None;
@@ -603,6 +610,8 @@ pub fn arm_selection_autoscroll(
 /// 停止边缘自动滚动。
 pub fn stop_selection_autoscroll(state: &mut AppState) {
     state.selection_autoscroll = None;
+    state.lx_selection_autoscroll = None;
+    state.screen_selection_refresh = None;
 }
 
 /// 自动滚动到点后补一步；返回是否产生变化。
@@ -745,6 +754,12 @@ pub(crate) fn prompt_selection_bounds(state: &AppState) -> Option<(usize, usize)
     let (start, end) = prompt_selection_range(state)?;
     state.prompt.selection_bounds(start, end)
 }
+
+mod autoscroll;
+pub(crate) use autoscroll::tick_lx_selection_autoscroll;
+pub use autoscroll::{
+    apply_pending_screen_selection, arm_lx_selection_autoscroll, wheel_lx_selection,
+};
 
 #[cfg(test)]
 mod tests;

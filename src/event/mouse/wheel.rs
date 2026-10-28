@@ -16,7 +16,8 @@ use alacritty_terminal::term::TermMode;
 
 use super::super::session::{Geometry, write_to_pane};
 use super::hit::{
-    block_panel_layout, mention_panel_layout, pane_at, pane_content_inner, slash_panel_layout,
+    block_panel_layout, lx_autoscroll_region, mention_panel_layout, pane_at, pane_content_inner,
+    slash_panel_layout,
 };
 
 /// 每次滚轮滚动的视觉行数（与 prompt 视口一致）。
@@ -159,6 +160,61 @@ pub(crate) fn forward_pane_mouse_event(
     true
 }
 
+/// 拖选中的 lx 消息区 / Agents 详情滚动目标。
+fn lx_selection_scroll_region(
+    state: &AppState,
+    rects: &[(PaneId, Rect)],
+    mouse: &MouseEvent,
+    cache: &mut ui::RenderCache,
+) -> Option<(
+    PaneId,
+    Rect,
+    crate::app::state::LxAutoscrollTarget,
+    Rect,
+    usize,
+    usize,
+)> {
+    if let Some(selection) = state.lx_selection
+        && selection.is_dragging()
+    {
+        let pane = selection.pane();
+        let inner = rects
+            .iter()
+            .find(|(id, _)| *id == pane)
+            .map(|(_, rect)| layout::pane_inner_rect(*rect))?;
+        let (target, area, total, visible) = lx_autoscroll_region(state, pane, inner, cache)?;
+        return Some((pane, inner, target, area, total, visible));
+    }
+    if !state
+        .screen_selection
+        .as_ref()
+        .is_some_and(|selection| selection.is_dragging())
+    {
+        return None;
+    }
+    let (pane, inner) = if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row)
+        && state
+            .pane_anywhere(pane)
+            .is_some_and(|target| target.view == PaneView::Lx)
+    {
+        (pane, inner)
+    } else {
+        let anchor = state.screen_selection.as_ref()?.range()?.0;
+        rects.iter().find_map(|(pane, rect)| {
+            let inner = layout::pane_inner_rect(*rect);
+            if !inner.contains((anchor.col, anchor.row).into()) {
+                return None;
+            }
+            state
+                .pane_anywhere(*pane)
+                .is_some_and(|target| target.view == PaneView::Lx)
+                .then_some((*pane, inner))
+        })?
+    };
+    let (target, area, total, visible) = lx_autoscroll_region(state, pane, inner, cache)?;
+    Some((pane, inner, target, area, total, visible))
+}
+
 /// 滚轮事件统一处理。
 pub(crate) fn handle_mouse_wheel(
     mouse: &MouseEvent,
@@ -258,6 +314,25 @@ pub(crate) fn handle_mouse_wheel(
     // 终端拖拽选区优先于鼠标上报：滚动选区所在窗格并延伸选区。
     if let Some(pane) = state.terminal_selection
         && scroll_selection_wheel(state, pane, rects, mouse)
+    {
+        *dirty = true;
+        return;
+    }
+    // lx 历史 / Agents 详情拖选中滚轮：滚动视口并延伸选区；不能落到普通历史滚动，
+    // 否则新内容滚进来了，选区终点却停在旧屏幕行。
+    if let Some(direction) = vertical_wheel_direction(mouse.kind)
+        && let Some((pane, inner, target, _area, total, visible)) =
+            lx_selection_scroll_region(state, rects, mouse, cache)
+        && update::wheel_lx_selection(
+            state,
+            pane,
+            target,
+            inner,
+            total,
+            visible,
+            direction,
+            (mouse.column, mouse.row),
+        )
     {
         *dirty = true;
         return;

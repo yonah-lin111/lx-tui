@@ -246,6 +246,33 @@ fn single_character_word_selection_is_not_empty() {
 }
 
 #[test]
+fn pending_screen_selection_uses_the_next_frame() {
+    let mut state = AppState::demo();
+    let before = screen(&["aaa", "bbb"], 5);
+    begin_screen_selection_unit(
+        &mut state,
+        &before,
+        ScreenPoint::new(0, 0),
+        crate::app::selection::SelectionUnit::Character,
+    );
+    drag_screen_selection(&mut state, &before, ScreenPoint::new(0, 2));
+    state
+        .screen_selection
+        .as_mut()
+        .expect("selection")
+        .shift_rows(-1);
+    state.screen_selection_refresh = Some((1, 2));
+    let after = screen(&["aaa", "bbb"], 5);
+    assert!(apply_pending_screen_selection(&mut state, &after));
+    assert!(state.screen_selection_refresh.is_none());
+    assert_eq!(
+        screen_selection_text(&state).as_deref(),
+        Some("aaa\nbbb"),
+        "刷新必须使用滚动后的新画面"
+    );
+}
+
+#[test]
 fn prompt_word_selection_uses_local_editing_selection() {
     let mut state = AppState::demo();
     state.prompt.resize(20, 5);
