@@ -2,6 +2,7 @@
 //!
 //! 覆盖 legacy `\x03`、kitty 协议 `CSI 99;5u`（ctrl+c）与 `CSI 99;9u`（super+c）：
 //! 拖选 prompt 文本后按键应触发 `Copy sent` toast；松开不自动复制。
+//! 另覆盖 `CSI 99;10u`（Cmd+Shift+C）复制光标所在模板块正文。
 //! 原生剪贴板写入经临时 PATH 中的 pbcopy 桩拦截，避免污染真实剪贴板。
 
 #![cfg(unix)]
@@ -261,7 +262,7 @@ fn kitty_super_c_copies_prompt_selection() {
 }
 
 #[test]
-fn cmd_shift_c_is_no_longer_a_template_copy_shortcut() {
+fn cmd_shift_c_copies_template_block_without_title() {
     let stub = PbcopyStub::new();
     let app = App::spawn(&stub);
     app.send(&press(PROMPT_X, PROMPT_Y));
@@ -278,14 +279,13 @@ fn cmd_shift_c_is_no_longer_a_template_copy_shortcut() {
     );
     // kitty 键盘协议：CSI 99;10u = 'c' + shift + super（Cmd+Shift+C）。
     app.send(b"\x1b[99;10u");
-    std::thread::sleep(Duration::from_millis(500));
     assert!(
-        stub.copied(Duration::from_millis(200)).is_none(),
-        "Cmd+Shift+C 不再复制模板块"
-    );
-    assert!(
-        !app.screen().contains("Copy sent") && !app.screen().contains("Copied to clipboard"),
-        "不再触发复制 toast:\n{}",
+        app.wait_for("Copy sent", Duration::from_secs(3)),
+        "Cmd+Shift+C 应复制模板块并触发 toast:\n{}",
         app.screen()
     );
+    let copied = stub
+        .copied(Duration::from_secs(3))
+        .expect("pbcopy 收到内容");
+    assert_eq!(copied, "# Add Requirement", "复制内容不含标题占位行与空项");
 }

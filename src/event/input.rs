@@ -134,6 +134,20 @@ fn handle_global_edit(
     let control_only = key.modifiers.contains(KeyModifiers::CONTROL)
         && !key.modifiers.contains(KeyModifiers::SUPER);
     match edit {
+        GlobalEdit::CopyTemplateBlock => {
+            // 只有 prompt 编辑器拥有模板块语义；浮层/页重命名打开时不能穿透到底层。
+            if state.overlay.is_some()
+                || update::page_rename_active(state)
+                || !state.prompt_focused()
+            {
+                return false;
+            }
+            if let Some(text) = update::copy_template_block_at_cursor(state) {
+                copy_with_toast(state, &text);
+                *dirty = true;
+            }
+            true
+        }
         GlobalEdit::Copy => {
             if let Some(selection) = update::copyable_selection(state, &geometry.rects, cache) {
                 copy_with_toast(state, &selection.text);

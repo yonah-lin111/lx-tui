@@ -447,8 +447,8 @@ fn global_edit_keys_leave_a_for_line_start() {
                 KeyCode::Char('c'),
                 modifiers | KeyModifiers::SHIFT
             )),
-            None,
-            "复制键不加 Shift"
+            Some(GlobalEdit::CopyTemplateBlock),
+            "Shift+C 复制 prompt 模板块正文"
         );
     }
     assert_eq!(
@@ -475,6 +475,14 @@ fn global_edit_keys_leave_a_for_line_start() {
             KeyModifiers::CONTROL | KeyModifiers::ALT
         )),
         None
+    );
+    assert_eq!(
+        global_edit_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT
+        )),
+        None,
+        "Alt+Shift+C 不复制模板块"
     );
     // 复制/剪切不再由焦点路由产生。
     assert_eq!(

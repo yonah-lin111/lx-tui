@@ -33,6 +33,8 @@ pub enum Routed {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlobalEdit {
     Copy,
+    /// Ctrl/Cmd+Shift+C：复制 prompt 光标所在模板块或补充块正文。
+    CopyTemplateBlock,
     Cut,
     Paste,
 }
@@ -40,7 +42,8 @@ pub enum GlobalEdit {
 /// 识别全局编辑键（复制/剪切/粘贴）。
 ///
 /// `Ctrl+A/E` 由各输入框自行映射为行首/行尾；全局不再占用 `A`，终端里
-/// `Ctrl+A` 仍原样转发给 PTY/readline。复制/剪切/粘贴不接受 Shift。
+/// `Ctrl+A` 仍原样转发给 PTY/readline。剪切/粘贴不接受 Shift；复制只有
+/// `Ctrl/Cmd+Shift+C` 例外，用于 prompt 模板块正文，不复制普通选区。
 pub fn global_edit_key(key: KeyEvent) -> Option<GlobalEdit> {
     if key.kind == KeyEventKind::Release {
         return None;
@@ -48,14 +51,15 @@ pub fn global_edit_key(key: KeyEvent) -> Option<GlobalEdit> {
     let modifiers = key.modifiers;
     let mod_key =
         modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER);
-    if !mod_key || modifiers.contains(KeyModifiers::ALT) || modifiers.contains(KeyModifiers::SHIFT)
-    {
+    let shift = modifiers.contains(KeyModifiers::SHIFT);
+    if !mod_key || modifiers.contains(KeyModifiers::ALT) {
         return None;
     }
     match key.code {
+        KeyCode::Char('c' | 'C') if shift => Some(GlobalEdit::CopyTemplateBlock),
         KeyCode::Char('c' | 'C') => Some(GlobalEdit::Copy),
-        KeyCode::Char('x' | 'X') => Some(GlobalEdit::Cut),
-        KeyCode::Char('v' | 'V') => Some(GlobalEdit::Paste),
+        KeyCode::Char('x' | 'X') if !shift => Some(GlobalEdit::Cut),
+        KeyCode::Char('v' | 'V') if !shift => Some(GlobalEdit::Paste),
         _ => None,
     }
 }
