@@ -288,8 +288,16 @@ pub fn edit_referenced_search(state: &mut AppState, key: crate::app::actions::Ov
     let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_mut() else {
         return false;
     };
-    if !search.query.apply_key(key) {
-        return false;
+    match key {
+        crate::app::actions::OverlayKey::Char(ch) => search.query.insert_char(ch),
+        crate::app::actions::OverlayKey::Clear => search.query.clear(),
+        crate::app::actions::OverlayKey::Backspace => search.query.backspace(),
+        crate::app::actions::OverlayKey::Delete => search.query.delete(),
+        crate::app::actions::OverlayKey::Left => search.query.move_left(),
+        crate::app::actions::OverlayKey::Right => search.query.move_right(),
+        crate::app::actions::OverlayKey::Home => search.query.move_home(),
+        crate::app::actions::OverlayKey::End => search.query.move_end(),
+        _ => return false,
     }
     let query = search.query.text().to_string();
     search.refilter(&query);

@@ -340,7 +340,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         app.screen()
     );
 
-    // 输入即过滤：命中保持可见，无命中显示占位；Esc 清空恢复，再 Esc 返回编辑视图。
+    // 输入即过滤：命中保持可见，无命中显示占位；Ctrl+C 清空恢复，Esc 返回编辑视图。
     app.send(b"new");
     app.settle();
     assert!(app.screen().contains("• New prompt"), "match visible");
@@ -350,8 +350,8 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         "no matches: \n{}",
         app.screen()
     );
-    app.send(b"\x1b");
-    assert!(app.wait_for("• New prompt"), "esc clears filter");
+    app.send(b"\x03");
+    assert!(app.wait_for("• New prompt"), "ctrl+c clears filter");
     app.send(b"\x1b");
     assert!(
         app.wait_for(text::PROMPT_UNDO_LABEL),

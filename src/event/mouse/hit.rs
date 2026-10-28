@@ -1,8 +1,11 @@
 //! 鼠标命中测试、几何辅助与滚动条抓取计算。
 
+use std::time::Instant;
+
 use ratatui::layout::Rect;
 
-use crate::app::state::{AppState, LxAutoscrollTarget, PaneKind, PaneView};
+use crate::app::state::{AppState, PaneKind, PaneView};
+use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::layout::{self, BoundaryHit, PaneId};
 use crate::ui;
@@ -355,49 +358,6 @@ pub(crate) fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockBut
     }
 }
 
-/// 屏幕选区在 lx 窗格内允许覆盖的内容区：主历史或 Agents 详情。
-///
-/// 输入框、任务列表与工具栏不在该矩形内，避免拖选越过历史边界。
-pub(crate) fn lx_screen_region(state: &AppState, pane: PaneId, inner: Rect) -> Option<Rect> {
-    let target = state.pane_anywhere(pane)?;
-    if target.view != PaneView::Lx {
-        return None;
-    }
-    if target.lx.task.is_some() {
-        return ui::main_content::lx::task_output_area(inner, &target.lx);
-    }
-    ui::main_content::lx::history_rect(inner, &target.lx)
-}
-
-/// lx 消息列表 / Agents 详情的拖选滚动区。
-///
-/// 返回目标、边缘判断矩形与当前 `(总行数, 可视行数)`；主历史与子 agent
-/// 详情共用同一入口，避免事件层与绘制层各算一套行数。
-pub(crate) fn lx_autoscroll_region(
-    state: &AppState,
-    pane: PaneId,
-    inner: Rect,
-    cache: &mut ui::RenderCache,
-) -> Option<(LxAutoscrollTarget, Rect, usize, usize)> {
-    let target = state.pane_anywhere(pane)?;
-    if target.view != PaneView::Lx {
-        return None;
-    }
-    if let Some(page) = target.lx.task.as_ref()
-        && page.tab == crate::app::state::TaskTab::Agents
-    {
-        let area = ui::main_content::lx::task_output_inner(inner, &target.lx)?;
-        let (visible, total) = ui::main_content::lx::task_agents_rows(inner, &target.lx)?;
-        return Some((LxAutoscrollTarget::AgentsDetail, area, total, visible));
-    }
-    if target.lx.task.is_some() {
-        return None;
-    }
-    let area = ui::main_content::lx::history_rect(inner, &target.lx)?;
-    let (total, visible) = ui::main_content::lx::history_rows(inner, &target.lx, cache.pane(pane))?;
-    Some((LxAutoscrollTarget::History, area, total, visible))
-}
-
 /// 命中某个 lx 窗格的 toast 盒：返回（窗格，盒矩形）。
 ///
 /// 每个 lx 窗格至多一条 toast；命中区与绘制共用 `ui::main_content::lx::toast_rect`。
@@ -448,16 +408,29 @@ pub(crate) fn dismiss_lx_toast_outside(
     crate::app::update::dismiss_lx_toast(state, pane)
 }
 
-/// 写系统剪贴板并统一在屏幕顶部居中反馈字符数。
-///
-/// 复制不跟随 lx/prompt/窗格锚点：锚定容器过窄时 toast 会被截成半截，用户要求
-/// 所有复制反馈固定在顶部、显示完整正文。
+/// 写系统剪贴板并在 prompt 锚点弹出成功/失败 toast。
 pub(crate) fn copy_with_toast(state: &mut AppState, text: &str) {
-    let success = crate::platform::write_clipboard(text);
-    if !success {
+    let anchor = Some(state.prompt.id());
+    copy_with_toast_at(state, text, anchor);
+}
+
+/// 写系统剪贴板并在**指定窗格**锚点弹出 toast（`None` 回落屏幕顶部居中）。
+///
+/// lx 历史里的代码块复制按钮用它把 toast 落在 main content 窗格内，
+/// 而不是跳到屏幕底部的 prompt —— 复制动作发生在哪儿，反馈就出现在哪儿。
+pub(crate) fn copy_with_toast_at(state: &mut AppState, text: &str, anchor: Option<PaneId>) {
+    let now = Instant::now();
+    let (kind, message) = if crate::platform::write_clipboard(text) {
+        (ToastKind::Default, ui::text::TOAST_COPIED)
+    } else {
         tracing::warn!("clipboard write failed");
-    }
-    update::show_copy_result(state, text.chars().count(), false, success);
+        (ToastKind::Danger, ui::text::TOAST_COPY_FAILED)
+    };
+    update::show_toast_at(
+        state,
+        anchor,
+        Toast::new(kind, message, anchor, now).with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+    );
 }
 
 /// 坐标是否落在 prompt 工具栏/分割线表头行（用于吞掉空白点击）。

@@ -533,44 +533,19 @@ impl WorktreeOpen {
     }
 }
 
-/// 单行文本输入：字符缓冲、字符索引光标、文本选区与有界撤销历史。
+/// 单行文本输入：字符缓冲与字符索引光标（范围 `0..=字符数`）。
 #[derive(Debug)]
 pub struct TextInput {
     text: String,
-    /// 光标字符索引（范围 `0..=字符数`）。
     cursor: usize,
-    /// 选区锚点字符索引；与光标相同或为 None 表示无选区。
-    anchor: Option<usize>,
-    /// 内容修订号：任何文本改动递增，撤销/重做也递增（不回落）。
-    revision: u64,
-    undo: Vec<TextInputSnapshot>,
-    redo: Vec<TextInputSnapshot>,
 }
-
-/// 单行输入的一份快照：文本、光标与选区锚点。
-#[derive(Debug, Clone)]
-struct TextInputSnapshot {
-    text: String,
-    cursor: usize,
-    anchor: Option<usize>,
-}
-
-/// 单行输入撤销历史上限。
-const TEXT_INPUT_HISTORY_LIMIT: usize = 200;
 
 impl TextInput {
     /// 构造输入并预填文本，光标落在末尾。
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let cursor = text.chars().count();
-        Self {
-            text,
-            cursor,
-            anchor: None,
-            revision: 0,
-            undo: Vec::new(),
-            redo: Vec::new(),
-        }
+        Self { text, cursor }
     }
 
     /// 当前文本。
@@ -583,54 +558,11 @@ impl TextInput {
         self.cursor
     }
 
-    /// 内容修订号；剪切回执按它确认编辑器未被改动。
-    pub fn revision(&self) -> u64 {
-        self.revision
-    }
-
-    /// 选区字符范围 `[start, end)`；无选区或空选区返回 None。
-    pub fn selection_range(&self) -> Option<(usize, usize)> {
-        let anchor = self.anchor?;
-        let (start, end) = if anchor <= self.cursor {
-            (anchor, self.cursor)
-        } else {
-            (self.cursor, anchor)
-        };
-        (start < end).then_some((start, end))
-    }
-
-    /// 是否存在非空选区。
-    pub fn has_selection(&self) -> bool {
-        self.selection_range().is_some()
-    }
-
-    /// 当前选中文本；无选区返回 None。
-    pub fn selected_text(&self) -> Option<String> {
-        self.selection_range().map(|(start, end)| {
-            self.text[self.byte_offset(start)..self.byte_offset(end)].to_string()
-        })
-    }
-
-    /// 全选当前输入。
-    pub fn select_all(&mut self) {
-        let end = self.text.chars().count();
-        if end == 0 {
-            self.anchor = None;
-            self.cursor = 0;
-            return;
-        }
-        self.anchor = Some(0);
-        self.cursor = end;
-    }
-
-    /// 清除选区（光标不动）。
-    pub fn clear_selection(&mut self) {
-        self.anchor = None;
-    }
-
-    /// 在光标处插入字符；有选区时替换选区。
+    /// 在光标处插入字符。
     pub fn insert_char(&mut self, ch: char) {
-        self.replace_selection(&ch.to_string());
+        let at = self.byte_offset(self.cursor);
+        self.text.insert(at, ch);
+        self.cursor += 1;
     }
 
     /// 在光标处插入一段文本（单行语义：换行与制表符替换为空格）；
@@ -650,116 +582,46 @@ impl TextInput {
         if cleaned.is_empty() {
             return false;
         }
-        self.replace_selection(&cleaned)
-    }
-
-    /// 用 `insert` 替换当前选区（无选区时在光标处插入）；返回是否产生改动。
-    fn replace_selection(&mut self, insert: &str) -> bool {
-        if insert.is_empty() {
-            return false;
-        }
-        self.snapshot();
-        let at = match self.selection_range() {
-            Some((start, end)) => {
-                let (from, to) = (self.byte_offset(start), self.byte_offset(end));
-                self.text.replace_range(from..to, insert);
-                start
-            }
-            None => {
-                let at = self.byte_offset(self.cursor);
-                self.text.insert_str(at, insert);
-                self.cursor
-            }
-        };
-        self.cursor = at + insert.chars().count();
-        self.anchor = None;
-        self.touch();
+        let at = self.byte_offset(self.cursor);
+        self.text.insert_str(at, &cleaned);
+        self.cursor += cleaned.chars().count();
         true
     }
 
-    /// 清空文本并把光标移到开头（一次可撤销编辑）。
+    /// 清空文本并把光标移到开头。
     pub fn clear(&mut self) {
-        if self.text.is_empty() {
-            return;
-        }
-        self.snapshot();
         self.text.clear();
         self.cursor = 0;
-        self.anchor = None;
-        self.touch();
     }
 
-    /// 删除光标前一个字符；有选区时删除整个选区。
+    /// 删除光标前一个字符。
     pub fn backspace(&mut self) {
-        if self.delete_selection() {
-            return;
-        }
         if self.cursor == 0 {
             return;
         }
-        self.snapshot();
         let start = self.byte_offset(self.cursor - 1);
         let end = self.byte_offset(self.cursor);
         self.text.replace_range(start..end, "");
         self.cursor -= 1;
-        self.touch();
     }
 
-    /// 删除光标处字符；有选区时删除整个选区。
+    /// 删除光标处字符。
     pub fn delete(&mut self) {
-        if self.delete_selection() {
-            return;
-        }
         if self.cursor >= self.text.chars().count() {
             return;
         }
-        self.snapshot();
         let start = self.byte_offset(self.cursor);
         let end = self.byte_offset(self.cursor + 1);
         self.text.replace_range(start..end, "");
-        self.touch();
     }
 
-    /// 删除当前选区；无选区返回 false。
-    pub fn delete_selection(&mut self) -> bool {
-        let Some((start, end)) = self.selection_range() else {
-            return false;
-        };
-        self.snapshot();
-        let (from, to) = (self.byte_offset(start), self.byte_offset(end));
-        self.text.replace_range(from..to, "");
-        self.cursor = start;
-        self.anchor = None;
-        self.touch();
-        true
-    }
-
-    /// 剪切当前选区：返回选中文本；无选区返回 None。
-    pub fn cut_selection(&mut self) -> Option<String> {
-        let text = self.selected_text()?;
-        self.delete_selection();
-        Some(text)
-    }
-
-    /// 光标左移；有选区时折叠到选区起点。
+    /// 光标左移。
     pub fn move_left(&mut self) {
-        if let Some((start, _)) = self.selection_range() {
-            self.cursor = start;
-            self.anchor = None;
-            return;
-        }
-        self.anchor = None;
         self.cursor = self.cursor.saturating_sub(1);
     }
 
-    /// 光标右移；有选区时折叠到选区终点。
+    /// 光标右移。
     pub fn move_right(&mut self) {
-        if let Some((_, end)) = self.selection_range() {
-            self.cursor = end;
-            self.anchor = None;
-            return;
-        }
-        self.anchor = None;
         if self.cursor < self.text.chars().count() {
             self.cursor += 1;
         }
@@ -767,139 +629,12 @@ impl TextInput {
 
     /// 光标移到开头。
     pub fn move_home(&mut self) {
-        self.anchor = None;
         self.cursor = 0;
     }
 
     /// 光标移到末尾。
     pub fn move_end(&mut self) {
-        self.anchor = None;
         self.cursor = self.text.chars().count();
-    }
-
-    /// 向左移动一个词。
-    pub fn move_word_left(&mut self) {
-        self.anchor = None;
-        let byte = self.byte_offset(self.cursor);
-        let target = crate::app::prompt::text::word_start_before(&self.text, byte);
-        self.cursor = self.text[..target].chars().count();
-    }
-
-    /// 向右移动一个词。
-    pub fn move_word_right(&mut self) {
-        self.anchor = None;
-        let byte = self.byte_offset(self.cursor);
-        let target = crate::app::prompt::text::word_end_after(&self.text, byte);
-        self.cursor = self.text[..target].chars().count();
-    }
-
-    /// 向前删除一个词；有选区时优先删除选区。
-    pub fn delete_word_backward(&mut self) {
-        if self.delete_selection() {
-            return;
-        }
-        let cursor = self.byte_offset(self.cursor);
-        let start = crate::app::prompt::text::word_start_before(&self.text, cursor);
-        if start >= cursor {
-            return;
-        }
-        self.snapshot();
-        self.text.replace_range(start..cursor, "");
-        self.cursor = self.text[..start].chars().count();
-        self.touch();
-    }
-
-    /// 向后删除一个词；有选区时优先删除选区。
-    pub fn delete_word_forward(&mut self) {
-        if self.delete_selection() {
-            return;
-        }
-        let cursor = self.byte_offset(self.cursor);
-        let end = crate::app::prompt::text::word_end_after(&self.text, cursor);
-        if end <= cursor {
-            return;
-        }
-        self.snapshot();
-        self.text.replace_range(cursor..end, "");
-        self.touch();
-    }
-
-    /// 撤销一次文本编辑；无历史返回 false。
-    pub fn undo(&mut self) -> bool {
-        let Some(snapshot) = self.undo.pop() else {
-            return false;
-        };
-        self.redo.push(self.snapshot_state());
-        self.restore(snapshot);
-        true
-    }
-
-    /// 重做一次文本编辑；无历史返回 false。
-    pub fn redo(&mut self) -> bool {
-        let Some(snapshot) = self.redo.pop() else {
-            return false;
-        };
-        self.undo.push(self.snapshot_state());
-        self.restore(snapshot);
-        true
-    }
-
-    /// 记录一次编辑前的快照并清空重做栈。
-    fn snapshot(&mut self) {
-        if self.undo.len() == TEXT_INPUT_HISTORY_LIMIT {
-            self.undo.remove(0);
-        }
-        self.undo.push(self.snapshot_state());
-        self.redo.clear();
-    }
-
-    fn snapshot_state(&self) -> TextInputSnapshot {
-        TextInputSnapshot {
-            text: self.text.clone(),
-            cursor: self.cursor,
-            anchor: self.anchor,
-        }
-    }
-
-    fn restore(&mut self, snapshot: TextInputSnapshot) {
-        self.text = snapshot.text;
-        self.cursor = snapshot.cursor.min(self.text.chars().count());
-        self.anchor = snapshot
-            .anchor
-            .filter(|anchor| *anchor <= self.text.chars().count());
-        self.revision = self.revision.saturating_add(1);
-    }
-
-    fn touch(&mut self) {
-        self.revision = self.revision.saturating_add(1);
-    }
-
-    /// 应用一个单行输入编辑键；非编辑键返回 false。
-    pub fn apply_key(&mut self, key: crate::app::actions::OverlayKey) -> bool {
-        use crate::app::actions::OverlayKey;
-        let before = (self.text.clone(), self.cursor, self.anchor);
-        match key {
-            OverlayKey::Char(ch) => self.insert_char(ch),
-            OverlayKey::Clear => self.clear(),
-            OverlayKey::Backspace => self.backspace(),
-            OverlayKey::Delete => self.delete(),
-            OverlayKey::Left => self.move_left(),
-            OverlayKey::Right => self.move_right(),
-            OverlayKey::Home => self.move_home(),
-            OverlayKey::End => self.move_end(),
-            OverlayKey::WordLeft => self.move_word_left(),
-            OverlayKey::WordRight => self.move_word_right(),
-            OverlayKey::DeleteWordBackward => self.delete_word_backward(),
-            OverlayKey::DeleteWordForward => self.delete_word_forward(),
-            OverlayKey::Undo => {
-                return self.undo();
-            }
-            OverlayKey::Redo => {
-                return self.redo();
-            }
-            _ => return false,
-        }
-        before != (self.text.clone(), self.cursor, self.anchor)
     }
 
     /// 字符索引到字节偏移；越界返回文本长度。

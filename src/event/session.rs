@@ -29,8 +29,6 @@ pub(crate) struct Geometry {
     pub(crate) screen: Rect,
     pub(crate) rects: Vec<(PaneId, Rect)>,
     pub(crate) view: ui::layout::ViewLayout,
-    /// 最近一帧的最终可见文本；鼠标文字选择与复制读它。
-    pub(crate) screen_text: crate::ui::screen::ScreenText,
 }
 
 /// 当前终端尺寸下活动标签的窗格几何（含 prompt 栏）与屏幕区域划分。
@@ -72,7 +70,6 @@ pub(crate) fn current_geometry(
         screen,
         rects,
         view,
-        screen_text: crate::ui::screen::ScreenText::default(),
     })
 }
 

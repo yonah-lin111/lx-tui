@@ -337,11 +337,8 @@ pub fn copy_text(
     range: ((i32, u16), (i32, u16)),
     cache: &mut PaneCache,
 ) -> String {
-    let ((start_row, start_col), (end_row, end_col)) = range;
-    if start_row == end_row && start_col == end_col {
-        return String::new();
-    }
     let (grid, _, _) = build(area, lx, false, cache);
+    let ((start_row, start_col), (end_row, end_col)) = range;
     let mut lines: Vec<String> = Vec::new();
     for row in start_row.max(0)..=end_row.max(0) {
         if row >= i32::from(area.height) {
@@ -364,7 +361,10 @@ pub fn copy_text(
                 line.push(ch);
             }
         }
-        lines.push(line);
+        lines.push(line.trim_end().to_string());
+    }
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
     }
     lines.join("\n")
 }
@@ -874,14 +874,6 @@ pub fn task_output_rows(area: Rect, lx: &Lx) -> Option<usize> {
 /// Agents 详情区矩形（内边距扣除后的可用区域）；不在该页返回 None。
 pub fn task_output_inner(area: Rect, lx: &Lx) -> Option<Rect> {
     task::task_output_rect(area, lx)
-}
-
-/// 后台任务面板输出区（Agents 详情或 Processes 输出）的矩形；未打开返回 None。
-///
-/// 屏幕选区用它排除输入框与任务列表，不进入被面板遮住的区域。
-pub(crate) fn task_output_area(area: Rect, lx: &Lx) -> Option<Rect> {
-    lx.task.as_ref()?;
-    layout(area, lx).task_output
 }
 
 /// Agents 详情区的 `(可见行数, 总行数)`；不在 Agents 页或无高亮项返回 None。

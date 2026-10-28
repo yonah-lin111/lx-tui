@@ -4,397 +4,15 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
-use crate::app::selection::{Selection, SelectionSource};
-use crate::app::state::{AppState, AutoscrollDirection, PaneKind, PaneView, SelectionAutoscroll};
+use crate::app::selection::Selection;
+use crate::app::state::{AppState, AutoscrollDirection, PaneKind, SelectionAutoscroll};
 use crate::layout::PaneId;
 
 use super::editor::place_prompt_cursor;
 use super::pane::scroll_pane_lines;
 
-/// 一次可复制选区：文本、反馈锚点与来源（决定清选区/剪切语义）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CopiedSelection {
-    pub text: String,
-    /// lx 窗格的反馈落该窗格自己的 toast；其余为全局 toast。
-    pub anchor: Option<PaneId>,
-    pub source: SelectionSource,
-}
-
-/// 当前焦点下可复制的选区；无选区返回 None。
-///
-/// 浮层与页重命名是模态，优先于底层编辑器。复制只取真实选区，不回退全文。
-pub(crate) fn copyable_selection(
-    state: &AppState,
-    rects: &[(PaneId, ratatui::layout::Rect)],
-    cache: &mut crate::ui::RenderCache,
-) -> Option<CopiedSelection> {
-    if let Some(text) = screen_selection_text(state) {
-        // 选区起点落在 lx 窗格时，反馈仍落该窗格自己的 toast。
-        let anchor = state.screen_selection.as_ref().and_then(|selection| {
-            let point = selection.range()?.0;
-            rects
-                .iter()
-                .find(|(_, rect)| rect.contains((point.col, point.row).into()))
-                .map(|(pane, _)| *pane)
-                .filter(|pane| {
-                    state
-                        .pane_anywhere(*pane)
-                        .is_some_and(|pane| pane.view == PaneView::Lx)
-                })
-        });
-        return Some(CopiedSelection {
-            text,
-            anchor,
-            source: SelectionSource::Screen,
-        });
-    }
-    if let Some(text) =
-        super::dialog::active_text_input(state).and_then(|input| input.selected_text())
-    {
-        return Some(CopiedSelection {
-            text,
-            anchor: None,
-            source: if state.overlay.is_none() && super::page_rename_active(state) {
-                SelectionSource::PageRename
-            } else {
-                SelectionSource::OverlayText
-            },
-        });
-    }
-    // 模态浮层遮住底层：非可编辑浮层不复制底下的 prompt/todo/终端选区。
-    if state.overlay.is_some() {
-        return None;
-    }
-    match state.focus() {
-        crate::app::state::FocusedContainer::Prompt => {
-            let text = prompt_selection_text(state)?;
-            Some(CopiedSelection {
-                text,
-                anchor: Some(state.prompt.id()),
-                source: SelectionSource::Prompt,
-            })
-        }
-        crate::app::state::FocusedContainer::Todo => {
-            let text = state
-                .todo
-                .editing()
-                .and_then(|edit| edit.input.selected_text())?;
-            Some(CopiedSelection {
-                text,
-                anchor: None,
-                source: SelectionSource::Todo,
-            })
-        }
-        crate::app::state::FocusedContainer::Sidebar => None,
-        crate::app::state::FocusedContainer::Panes => {
-            let id = state.active_tab().layout.focus();
-            let pane = state.pane_anywhere(id)?;
-            if pane.view == PaneView::Lx {
-                if let Some(ask) = pane.lx.ask.as_ref()
-                    && ask.editing
-                    && let Some(editor) = ask.custom.get(ask.current)
-                    && let Some(text) = editor.selected_text()
-                {
-                    return Some(CopiedSelection {
-                        text,
-                        anchor: Some(id),
-                        source: SelectionSource::Ask(id),
-                    });
-                }
-                if let Some(text) = pane.lx.selected_text() {
-                    return Some(CopiedSelection {
-                        text,
-                        anchor: Some(id),
-                        source: SelectionSource::LxInput(id),
-                    });
-                }
-                let selection = state.lx_selection?;
-                let area = rects
-                    .iter()
-                    .find(|(pane, _)| *pane == id)
-                    .map(|(_, rect)| crate::layout::pane_inner_rect(*rect))?;
-                let text = crate::ui::main_content::lx::copy_text(
-                    area,
-                    &pane.lx,
-                    selection.range()?,
-                    cache.pane(id),
-                );
-                return Some(CopiedSelection {
-                    text,
-                    anchor: Some(id),
-                    source: SelectionSource::Lx(id),
-                });
-            }
-            if state.terminal_selection == Some(id) {
-                let text = pane.terminal.selection_text()?;
-                return Some(CopiedSelection {
-                    text,
-                    anchor: Some(id),
-                    source: SelectionSource::Terminal(id),
-                });
-            }
-            None
-        }
-    }
-}
-
-/// 剪切当前焦点下的可编辑选区；无选区或只读选区返回 None。
-///
-/// 调用方必须先确认剪贴板写入成功再调用；本函数只负责删除并生成一条撤销记录。
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。
 pub(crate) const WHEEL_LINES: isize = 3;
-
-/// 在最终画面上开始一次屏幕选择；单击/双击/三击按 250 ms 同格计数。
-pub fn begin_screen_selection(
-    state: &mut AppState,
-    screen: &crate::ui::screen::ScreenText,
-    point: crate::app::selection::ScreenPoint,
-    now: Instant,
-) {
-    let unit = click_unit(state, point, now);
-    begin_screen_selection_unit(state, screen, point, unit);
-}
-
-/// 记录一次点击计数并返回本次应使用的选择单位。
-pub fn click_unit(
-    state: &mut AppState,
-    point: crate::app::selection::ScreenPoint,
-    now: Instant,
-) -> crate::app::selection::SelectionUnit {
-    match state.screen_click.as_mut() {
-        Some(click) => click.next(point, now),
-        None => {
-            let mut click = crate::app::selection::ScreenClick {
-                point,
-                at: now,
-                count: 0,
-            };
-            let unit = click.next(point, now);
-            state.screen_click = Some(click);
-            unit
-        }
-    }
-}
-
-/// 用已确定的单位开始屏幕选择（调用方已更新点击计数）。
-pub fn begin_screen_selection_unit(
-    state: &mut AppState,
-    screen: &crate::ui::screen::ScreenText,
-    point: crate::app::selection::ScreenPoint,
-    unit: crate::app::selection::SelectionUnit,
-) {
-    begin_screen_selection_unit_in(state, screen, point, unit, None);
-}
-
-/// 在指定可见内容区内开始屏幕选择；区域外的行/列不进入高亮与复制。
-pub fn begin_screen_selection_unit_in(
-    state: &mut AppState,
-    screen: &crate::ui::screen::ScreenText,
-    point: crate::app::selection::ScreenPoint,
-    unit: crate::app::selection::SelectionUnit,
-    region: Option<Rect>,
-) {
-    clear_selection(state);
-    if region.is_some_and(|region| !region.contains((point.col, point.row).into())) {
-        return;
-    }
-    let (start, end) = screen.unit_range(point, unit);
-    // Word/Line 可能只覆盖一个非空白格：冻结该格并保留折叠范围，否则
-    // `selection_cells(start, end)` 会把两个相同端点误判成空单击。
-    let frozen = if start == end && unit != crate::app::selection::SelectionUnit::Character {
-        if screen.selectable_cell(start) {
-            screen.selection_cells_single(start)
-        } else {
-            crate::app::selection::SelectedCells::default()
-        }
-    } else {
-        screen.selection_cells_in(start, end, region)
-    };
-    let mut selection = crate::app::selection::ScreenSelection::new(start, unit, frozen);
-    selection.set_region(region);
-    selection.set_range(start, end);
-    state.screen_selection = Some(selection);
-}
-
-/// 把 prompt 内的屏幕双击/三击选区同步成编辑器本地选区。
-///
-/// 屏幕选区用于只读文字；prompt 是可编辑目标，若继续只保留屏幕选区，
-/// 输入/粘贴/剪切不会替换词或行。这里把最终屏幕坐标换回 prompt 的内容
-/// 视觉行/列，并交给原有 `Selection` 模型。
-pub fn begin_prompt_screen_selection(
-    state: &mut AppState,
-    screen: &crate::ui::screen::ScreenText,
-    point: crate::app::selection::ScreenPoint,
-    unit: crate::app::selection::SelectionUnit,
-    inner: ratatui::layout::Rect,
-) -> bool {
-    if unit == crate::app::selection::SelectionUnit::Character
-        || inner.width == 0
-        || inner.height == 0
-    {
-        return false;
-    }
-    // 三击按 prompt 的真实逻辑行选：软折行只影响视觉行，不切断整行。
-    if unit == crate::app::selection::SelectionUnit::Line {
-        let Some(row) = point.row.checked_sub(inner.y) else {
-            return false;
-        };
-        let Some(content_row) = state.prompt.scroll().checked_add(usize::from(row)) else {
-            return false;
-        };
-        let rows = state.prompt.visual_rows();
-        let Some(logical_line) = rows.get(content_row).map(|row| row.line) else {
-            return false;
-        };
-        let Some(first) = rows.iter().position(|row| row.line == logical_line) else {
-            return false;
-        };
-        let Some(last) = rows.iter().rposition(|row| row.line == logical_line) else {
-            return false;
-        };
-        let (Ok(first), Ok(last)) = (u16::try_from(first), u16::try_from(last)) else {
-            return false;
-        };
-        let start = (first, 0);
-        let end = (last, u16::MAX);
-        if state.prompt.selection_bounds(start, end).is_none() {
-            return false;
-        }
-        clear_selection(state);
-        let mut selection =
-            crate::app::selection::Selection::begin(state.prompt.id(), i32::from(start.0), start.1);
-        selection.drag(i32::from(end.0), end.1);
-        state.selection = Some(selection);
-        return true;
-    }
-    let (start, mut end) = screen.unit_range(point, unit);
-    if start == end && screen.selectable_cell(start) {
-        // 单字符词：本地选区终点取该字符之后；屏幕端仍是折叠点。
-        end = crate::app::selection::ScreenPoint::new(end.row, end.col.saturating_add(1));
-    }
-    let to_cell = |point: crate::app::selection::ScreenPoint| {
-        let row = point.row.checked_sub(inner.y)?;
-        let col = point.col.checked_sub(inner.x)?;
-        let content_row = state
-            .prompt
-            .scroll()
-            .checked_add(usize::from(row))
-            .and_then(|row| u16::try_from(row).ok())?;
-        Some((content_row, col))
-    };
-    let (Some((start_row, start_col)), Some((end_row, end_col))) = (to_cell(start), to_cell(end))
-    else {
-        return false;
-    };
-    if state
-        .prompt
-        .selection_bounds((start_row, start_col), (end_row, end_col))
-        .is_none()
-    {
-        return false;
-    }
-    clear_selection(state);
-    let mut selection =
-        crate::app::selection::Selection::begin(state.prompt.id(), i32::from(start_row), start_col);
-    selection.drag(i32::from(end_row), end_col);
-    if selection.range().is_none() {
-        return false;
-    }
-    state.selection = Some(selection);
-    true
-}
-
-/// 拖动扩展屏幕选区；初始词/行单位随拖动保留。
-pub fn drag_screen_selection(
-    state: &mut AppState,
-    screen: &crate::ui::screen::ScreenText,
-    point: crate::app::selection::ScreenPoint,
-) {
-    let Some(selection) = state.screen_selection.as_ref() else {
-        return;
-    };
-    let base = selection.base();
-    let unit = selection.unit();
-    let region = selection.region();
-    let point = region.map_or(point, |region| {
-        crate::app::selection::ScreenPoint::new(
-            point.row.clamp(region.y, region.bottom().saturating_sub(1)),
-            point.col.clamp(region.x, region.right().saturating_sub(1)),
-        )
-    });
-    let (start, end) = screen.drag_range(base, point, unit);
-    let frozen = if start == end
-        && unit != crate::app::selection::SelectionUnit::Character
-        && screen.selectable_cell(start)
-    {
-        screen.selection_cells_single(start)
-    } else {
-        screen.selection_cells_in(start, end, region)
-    };
-    if let Some(selection) = state.screen_selection.as_mut() {
-        selection.set_range(start, end);
-        selection.set_frozen(frozen);
-        selection.set_visible(true);
-    }
-}
-
-/// 松开屏幕选择：只结束拖动；空选区清除。高亮与冻结 payload 保留。
-pub fn finish_screen_selection(state: &mut AppState) {
-    let keep = state
-        .screen_selection
-        .as_ref()
-        .is_some_and(|selection| selection.range().is_some());
-    if keep {
-        if let Some(selection) = state.screen_selection.as_mut() {
-            selection.finish();
-        }
-    } else {
-        state.screen_selection = None;
-    }
-    state.screen_selection_refresh = None;
-    state.lx_selection_autoscroll = None;
-}
-
-/// 每帧按冻结内容重定位屏幕选区；找不到内容时隐藏高亮但保留选区。
-pub fn refresh_screen_selection(
-    state: &mut AppState,
-    screen: &crate::ui::screen::ScreenText,
-) -> bool {
-    let Some(selection) = state.screen_selection.as_ref() else {
-        return false;
-    };
-    if selection.is_dragging() {
-        return false;
-    }
-    let (anchor, cursor, visible) = (selection.anchor(), selection.cursor(), selection.visible());
-    match screen.reanchor(selection.frozen()) {
-        Some((start, end)) => {
-            if (start, end) == (anchor, cursor) && visible {
-                return false;
-            }
-            if let Some(selection) = state.screen_selection.as_mut() {
-                selection.remap(start, end);
-            }
-            true
-        }
-        None => {
-            if !visible {
-                return false;
-            }
-            if let Some(selection) = state.screen_selection.as_mut() {
-                selection.set_visible(false);
-            }
-            true
-        }
-    }
-}
-
-/// 屏幕选区文本；无选区或空 payload 返回 None。
-pub fn screen_selection_text(state: &AppState) -> Option<String> {
-    let selection = state.screen_selection.as_ref()?;
-    let text = selection.frozen().text();
-    (!text.is_empty()).then_some(text)
-}
 
 /// 边缘自动滚动每步的间隔。
 pub(crate) const AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);
@@ -414,29 +32,14 @@ pub fn drag_lx_selection(state: &mut AppState, id: PaneId, row: u16, col: u16) {
     }
 }
 
-/// 结束 lx 页拖动但保留选区；空选区（未拖出范围）直接清除。
-pub fn finish_lx_selection(state: &mut AppState) -> Option<Selection> {
-    let keep = state
-        .lx_selection
-        .as_ref()
-        .is_some_and(|selection| selection.range().is_some());
-    let finished = if keep {
-        if let Some(selection) = state.lx_selection.as_mut() {
-            selection.finish();
-        }
-        state.lx_selection
-    } else {
-        state.lx_selection = None;
-        None
-    };
-    state.lx_selection_autoscroll = None;
-    finished
+/// 取走 lx 页选区（结束拖动）；无选区返回 None。
+pub fn take_lx_selection(state: &mut AppState) -> Option<Selection> {
+    state.lx_selection.take()
 }
 
 /// 清除 lx 页选区。
 pub fn clear_lx_selection(state: &mut AppState) {
     state.lx_selection = None;
-    state.lx_selection_autoscroll = None;
 }
 
 /// 在 lx 输入框内开始文本选择（视觉行、内容列）；光标落到该单元格。
@@ -458,23 +61,18 @@ pub fn drag_lx_input_selection(state: &mut AppState, id: PaneId, row: usize, col
     }
 }
 
-/// 结束 lx 输入框拖动但保留选区；空选区清除锚点。
-pub fn finish_lx_input_selection(state: &mut AppState) -> Option<(PaneId, String)> {
+/// 结束 lx 输入框选区并取走选中文本；空选区或未拖拽返回 None，锚点总是清除。
+pub fn take_lx_input_selection(state: &mut AppState) -> Option<(PaneId, String)> {
     let id = state.lx_input_drag.take()?;
     let pane = state.pane_mut_anywhere(id)?;
-    match pane.lx.selected_text() {
-        Some(text) => Some((id, text)),
-        None => {
-            pane.lx.clear_text_selection();
-            None
-        }
-    }
+    let text = pane.lx.selected_text();
+    pane.lx.clear_text_selection();
+    text.map(|text| (id, text))
 }
 
 /// 在 prompt 开始一次文本选择；与右栏拖拽、终端选区互斥。
 pub fn begin_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
     state.resizing_prompt = false;
-    state.screen_selection = None;
     clear_terminal_selection(state);
     state.selection_autoscroll = None;
     let row = selection_content_row(state, pane, row);
@@ -503,7 +101,6 @@ fn selection_content_row(state: &AppState, pane: PaneId, row: u16) -> i32 {
 /// 在终端窗格开始拖拽选择；选区存于仿真器，随输出滚动钉在内容上。
 pub fn begin_terminal_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
     state.selection = None;
-    state.screen_selection = None;
     state.selection_autoscroll = None;
     clear_terminal_selection(state);
     let started = state.pane_mut_anywhere(pane).is_some_and(|target| {
@@ -526,19 +123,19 @@ pub fn drag_terminal_selection(state: &mut AppState, pane: PaneId, row: u16, col
     }
 }
 
-/// 结束终端拖动但保留选区；返回当前选中文本（空选区返回 None）。
+/// 结束终端选区并提取文本；空选区返回 None。
 pub fn finish_terminal_selection(state: &mut AppState, pane: PaneId) -> Option<String> {
+    state.terminal_selection = None;
     state.selection_autoscroll = None;
-    let target = state.pane_anywhere(pane)?;
+    let target = state.pane_mut_anywhere(pane)?;
     if target.kind != PaneKind::Terminal {
-        state.terminal_selection = None;
         return None;
     }
-    let text = target.terminal.selection_text();
-    if text.is_none() {
-        state.terminal_selection = None;
-    }
-    text
+    // 全空白选区没有可复制的内容，与空选区一样不产生文本。
+    target
+        .terminal
+        .take_selection_text()
+        .filter(|text| !text.trim().is_empty())
 }
 
 /// 放弃进行中的终端选区（清空仿真器高亮）。
@@ -553,12 +150,7 @@ pub fn clear_terminal_selection(state: &mut AppState) {
 /// 清除 prompt、终端、lx 页与 lx 输入框选区以及输入框滚动条拖拽。
 pub fn clear_selection(state: &mut AppState) {
     state.selection = None;
-    state.screen_selection = None;
-    state.pending_screen_click = None;
-    state.pending_card_toggle = None;
     state.selection_autoscroll = None;
-    state.lx_selection_autoscroll = None;
-    state.screen_selection_refresh = None;
     state.lx_selection = None;
     state.lx_card_press = None;
     state.lx_scroll_drag = None;
@@ -639,8 +231,6 @@ pub fn arm_selection_autoscroll(
 /// 停止边缘自动滚动。
 pub fn stop_selection_autoscroll(state: &mut AppState) {
     state.selection_autoscroll = None;
-    state.lx_selection_autoscroll = None;
-    state.screen_selection_refresh = None;
 }
 
 /// 自动滚动到点后补一步；返回是否产生变化。
@@ -759,9 +349,12 @@ pub fn prompt_selection_text(state: &AppState) -> Option<String> {
     state.prompt.selection_text(start, end)
 }
 
-/// prompt 复制文本：只复制真实选区；无选区返回 None（不再回退全文）。
+/// prompt 复制文本：优先选区；无选区时复制全文；无内容返回 None。
 pub fn prompt_copy_text(state: &AppState) -> Option<String> {
-    prompt_selection_text(state)
+    if let Some(text) = prompt_selection_text(state) {
+        return Some(text);
+    }
+    (!state.prompt.text().is_empty()).then(|| state.prompt.text().to_string())
 }
 
 /// prompt 选区对应的内容行列范围；选区不在 prompt 或为空时返回 None。
@@ -783,12 +376,3 @@ pub(crate) fn prompt_selection_bounds(state: &AppState) -> Option<(usize, usize)
     let (start, end) = prompt_selection_range(state)?;
     state.prompt.selection_bounds(start, end)
 }
-
-mod autoscroll;
-pub(crate) use autoscroll::tick_lx_selection_autoscroll;
-pub use autoscroll::{
-    apply_pending_screen_selection, arm_lx_selection_autoscroll, wheel_lx_selection,
-};
-
-#[cfg(test)]
-mod tests;

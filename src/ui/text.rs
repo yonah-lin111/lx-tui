@@ -432,7 +432,7 @@ pub const WORKTREE_STATUS_ROOT: &str = "root";
 /// 模态底部按钮：名称在前、快捷键在后。
 pub const BUTTON_SAVE: &str = "[save ↵]";
 pub const BUTTON_CREATE: &str = "[create ↵]";
-pub const BUTTON_CLEAR: &str = "[clear]";
+pub const BUTTON_CLEAR: &str = "[clear ^c]";
 pub const BUTTON_CANCEL: &str = "[cancel esc]";
 pub const BUTTON_CONFIRM: &str = "[confirm ↵]";
 /// `/resume` 会话编辑模态的删除与二次确认按钮。
@@ -525,28 +525,9 @@ pub const EXIT_LABEL: &str = "[EXIT]";
 
 /// 复制反馈 toast。
 pub const TOAST_COPIED: &str = "Copied to clipboard";
-pub const TOAST_PASTE_FAILED: &str = "Paste failed";
+pub const TOAST_COPY_FAILED: &str = "Copy failed";
 /// 复制反馈 toast 的边框标题。
 pub const TOAST_CLIPBOARD_TITLE: &str = "Clipboard";
-
-/// 复制成功但只完成尽力而为的写入（OSC 52 无回执，原生工具在后台执行）。
-pub fn copy_sent_message(chars: usize) -> String {
-    format!("Copy sent · {chars} {}", char_unit(chars))
-}
-
-/// 剪切确认写入成功后复制到剪贴板的字符数。
-pub fn copied_message(chars: usize) -> String {
-    format!("Copied {chars} {}", char_unit(chars))
-}
-
-/// 复制/剪切写入失败时仍报告本次试图复制的字符数。
-pub fn copy_failed_message(chars: usize) -> String {
-    format!("Copy failed · {chars} {}", char_unit(chars))
-}
-
-fn char_unit(chars: usize) -> &'static str {
-    if chars == 1 { "char" } else { "chars" }
-}
 /// 工作区反馈 toast 的边框标题。
 pub const TOAST_WORKSPACE_TITLE: &str = "Workspace";
 /// 工作区路径不存在。
@@ -1076,7 +1057,7 @@ pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
 /// 写入落在折叠补充块内被拒绝时的提示。
 pub const SUPPLE_FOLD_BLOCKED: &str = "Folded supplement; unfold to edit";
 
-/// @ 面板底边快捷键提示：进入目录 `Shift+Enter` / 回退上一级 `Ctrl+Z`（`^z` 沿用 `^` 修饰键记法）。
+/// @ 面板底边快捷键提示：进入目录 `Shift+Enter` / 回退上一级 `Ctrl+Z`（`^z` 沿用 `[clear ^c]` 记法）。
 pub const MENTION_PANEL_FOOTER: &str = "[open ⇧↵] [back ^z]";
 
 /// lx 输入框 `@` 提及面板：标题与状态行文案（与 prompt 面板同一套外观）。

@@ -355,7 +355,10 @@ fn mention_panel_footer_symbols_are_single_width_and_non_pua() {
             "{name} 使用了私有区(PUA)字符 U+{cp:04X}，主流终端会乱码"
         );
     }
-    assert!(MENTION_PANEL_FOOTER.contains("^z"), "回退提示沿用 ^z 记法");
+    assert!(
+        MENTION_PANEL_FOOTER.contains("^z"),
+        "回退提示沿用 [clear ^c] 的 ^z 记法"
+    );
 }
 
 #[test]
@@ -526,7 +529,7 @@ fn action_words_stay_spelled_out_while_keys_use_symbols() {
         assert!(!hint.to_lowercase().contains("enter"), "不用全拼: {hint}");
     }
     // Ctrl 组合沿用 `^` 记法（已是全项目统一且终端圈通用）。
-    assert!(BUTTON_CLEAR.contains("clear"));
+    assert!(BUTTON_CLEAR.contains("^c"));
     assert!(BUTTON_DELETE.contains("^d"));
     assert!(MENTION_PANEL_FOOTER.contains("^z"));
     // Cmd 只用一个字形，且与 web 图标不重名混淆：`⌘` 就是 `key::CMD`。

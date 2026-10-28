@@ -3,13 +3,11 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crossterm::event::{KeyModifiers, MouseEvent};
+use crossterm::event::MouseEvent;
 
 use crate::app::actions::Action;
 use crate::app::overlay::Overlay;
-use crate::app::state::{
-    AppState, AskHit, PaneKind, PaneView, PendingScreenAction, PendingScreenClick,
-};
+use crate::app::state::{AppState, PaneKind, PaneView};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::Config;
@@ -17,7 +15,7 @@ use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
 use crate::ui;
 
-use super::super::overlay::{OverlayHit, handle_overlay_click, open_right_click_menu, overlay_hit};
+use super::super::overlay::{handle_overlay_click, open_right_click_menu};
 use super::super::paste;
 use super::super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 use super::hit::{
@@ -25,9 +23,9 @@ use super::hit::{
     handle_agent_scrollbar_press, handle_lx_history_scrollbar_press,
     handle_lx_input_scrollbar_press, handle_prompt_scrollbar_press,
     handle_task_agents_scrollbar_press, handle_terminal_scrollbar_press,
-    handle_todo_scrollbar_press, handle_workspace_scrollbar_press, lx_screen_region, lx_toast_at,
-    mention_item_at, pane_at, pane_boundary_draggable, pane_content_inner, pane_toggle_button_at,
-    panel_item_at, prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
+    handle_todo_scrollbar_press, handle_workspace_scrollbar_press, lx_toast_at, mention_item_at,
+    pane_at, pane_boundary_draggable, pane_content_inner, pane_toggle_button_at, panel_item_at,
+    prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -46,7 +44,6 @@ pub(crate) fn handle_mouse_down_left(
         screen,
         rects,
         view,
-        screen_text,
     } = geometry;
     if update::clear_tooltip(state) {
         *dirty = true;
@@ -54,17 +51,6 @@ pub(crate) fn handle_mouse_down_left(
     // 新的一次按下意味着上一轮 Down→Up 已经结束：指针在拖动中移出窗口会丢掉 Up，
     // 残留现场若被这次无关的 Up 消费，会按旧行号误点（如点工具栏却折叠了树里的文件夹）。
     state.prompt_drag = None;
-    // Shift+拖动在终端鼠标上报模式下强制走屏幕选择；侧栏文字也允许 Shift
-    // 选择。两者都必须排在浮层、tab、关闭按钮、滚动条等控件命中之后。
-    let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
-    // 新的一次普通点击清除所有旧选区；只有确实清掉了东西才需要重绘。
-    let had_screen_selection = state.screen_selection.is_some();
-    update::clear_selection(state);
-    if had_screen_selection {
-        *dirty = true;
-    }
-    let point = crate::app::selection::ScreenPoint::new(mouse.row, mouse.column);
-    let click = update::click_unit(state, point, Instant::now());
     if state.overlay.is_some() {
         // 引用文件夹搜索弹窗的滚动条独立于模态点击：命中轨道/thumb 时滚动视口后再走浮层点击。
         if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref()
@@ -101,37 +87,6 @@ pub(crate) fn handle_mouse_down_left(
                 return;
             }
         }
-        match overlay_hit(state, *screen, mouse.column, mouse.row) {
-            OverlayHit::Row => {
-                update::begin_screen_selection_unit(
-                    state,
-                    screen_text,
-                    point,
-                    crate::app::selection::SelectionUnit::Character,
-                );
-                let Some(kind) = state.overlay.as_ref().map(Overlay::kind) else {
-                    *dirty = true;
-                    return;
-                };
-                state.pending_screen_click = Some(PendingScreenClick {
-                    anchor: point,
-                    dragged: false,
-                    action: PendingScreenAction::Overlay {
-                        kind,
-                        column: mouse.column,
-                        row: mouse.row,
-                    },
-                });
-                *dirty = true;
-                return;
-            }
-            OverlayHit::Text => {
-                update::begin_screen_selection_unit(state, screen_text, point, click);
-                *dirty = true;
-                return;
-            }
-            OverlayHit::Control => {}
-        }
         let was_confirm = matches!(
             state.overlay,
             Some(Overlay::ConfirmClose(_) | Overlay::ConfirmSyncWorkspaceCwd(_))
@@ -155,19 +110,11 @@ pub(crate) fn handle_mouse_down_left(
     }
     if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config) {
         if toast.contains((mouse.column, mouse.row).into()) {
-            // 仅右上角 [✕] 关闭；正文是可选只读文字，普通拖动直接起选。
+            // 点击 toast 内部内容不关闭；仅右上角 [✕] 关闭。
             if ui::toast::close_button_at(toast, mouse.column, mouse.row) {
                 update::dismiss_toast(state);
                 *dirty = true;
-                return;
             }
-            update::begin_screen_selection(
-                state,
-                screen_text,
-                crate::app::selection::ScreenPoint::new(mouse.row, mouse.column),
-                Instant::now(),
-            );
-            *dirty = true;
             return;
         }
         // 点击 toast 之外：关闭 toast 后继续处理本次点击。
@@ -182,13 +129,6 @@ pub(crate) fn handle_mouse_down_left(
             *dirty = true;
             return;
         }
-        update::begin_screen_selection(
-            state,
-            screen_text,
-            crate::app::selection::ScreenPoint::new(mouse.row, mouse.column),
-            Instant::now(),
-        );
-        *dirty = true;
         return;
     }
     if dismiss_lx_toast_outside(rects, state, mouse.column, mouse.row) {
@@ -276,17 +216,6 @@ pub(crate) fn handle_mouse_down_left(
         || handle_agent_scrollbar_press(state, view, mouse.column, mouse.row)
     {
         *dirty = true;
-    } else if shift
-        && !state.sidebar_collapsed
-        && view.sidebar.contains((mouse.column, mouse.row).into())
-        && !ui::add_workspace_button(view)
-            .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
-        && ui::workspace_group_toggle_at(view, state, mouse.column, mouse.row).is_none()
-    {
-        // 侧栏的文字（含工作区/agent 行）在 Shift 下走只读选择；新增工作区
-        // 按钮、分组箭头、滚动条、折叠按钮等控件仍按各自语义优先。
-        update::begin_screen_selection_unit(state, screen_text, point, click);
-        *dirty = true;
     } else if let Some(pane) = ui::agent_item_at(view, state, mouse.column, mouse.row) {
         if update::focus_agent_pane(state, pane) {
             ensure_workspace_visible(state, view);
@@ -370,14 +299,7 @@ pub(crate) fn handle_mouse_down_left(
         } else if let Some(index) =
             ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
         {
-            // Todo 条目保留自己的双击语义（进入行内编辑）；双击/三击不得转成
-            // 屏幕选词/选行，否则和条目编辑冲突。列表外空白仍允许屏幕选择。
             changed = update::click_todo_row(state, index, Instant::now());
-        } else if click != crate::app::selection::SelectionUnit::Character {
-            update::focus_todo_from_click(state);
-            update::begin_screen_selection_unit(state, screen_text, point, click);
-            *dirty = true;
-            return;
         }
         // 容器内其余位置（工具栏空白 / 分割线 / 统计块 / 列表外空白）同样让容器进入
         // 选中态，但不改数据、不打断编辑、不穿透到窗格。焦点高亮只由边框表达，
@@ -524,21 +446,6 @@ pub(crate) fn handle_mouse_down_left(
                     update::begin_prompt_drag(state, index);
                 }
             } else {
-                // 双击/三击文字格：prompt 的编辑选区必须同步回编辑器，
-                // 否则输入/剪切不会替换选中的词/行；只读表面继续用屏幕选区。
-                if click != crate::app::selection::SelectionUnit::Character {
-                    if !update::begin_prompt_screen_selection(
-                        state,
-                        screen_text,
-                        point,
-                        click,
-                        inner,
-                    ) {
-                        update::begin_screen_selection_unit(state, screen_text, point, click);
-                    }
-                    *dirty = true;
-                    return;
-                }
                 // 底部虚拟空占位只聚焦编辑器，不把光标移到不存在的文本行。
                 if !state.prompt.row_in_padding(row) {
                     update::place_prompt_cursor(state, row, col);
@@ -577,35 +484,13 @@ pub(crate) fn handle_mouse_down_left(
                         ))
                     });
                 if let Some(hit) = ask_hit {
-                    match hit {
-                        Some(hit @ (AskHit::Option(_) | AskHit::Other)) => {
-                            update::begin_screen_selection_unit(
-                                state,
-                                screen_text,
-                                point,
-                                crate::app::selection::SelectionUnit::Character,
-                            );
-                            state.pending_screen_click = Some(PendingScreenClick {
-                                anchor: point,
-                                dragged: false,
-                                action: PendingScreenAction::Ask { pane, hit },
-                            });
-                        }
-                        Some(hit @ (AskHit::Tab(_) | AskHit::Submit)) => {
-                            update::apply_ask_click(state, pane, hit);
-                        }
-                        None => {
-                            update::begin_screen_selection_unit(state, screen_text, point, click);
-                        }
+                    if let Some(hit) = hit {
+                        update::apply_ask_click(state, pane, hit);
                     }
                     *dirty = true;
                     return;
                 }
                 // 后台任务面板：左上角 tab 与右上角 `[esc]` 都可点击。
-                let task_list_region = state
-                    .pane_anywhere(pane)
-                    .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
-                    .map(|rects| rects.list);
                 let task_hit = state.pane_anywhere(pane).and_then(|target| {
                     target.lx.task.as_ref()?;
                     let rects = ui::main_content::lx::task_rects(inner, &target.lx)?;
@@ -662,18 +547,7 @@ pub(crate) fn handle_mouse_down_left(
                             update::close_task_page(state, pane);
                         }
                         ui::main_content::lx::task::TaskHit::Agent(index) => {
-                            update::begin_screen_selection_unit_in(
-                                state,
-                                screen_text,
-                                point,
-                                crate::app::selection::SelectionUnit::Character,
-                                task_list_region,
-                            );
-                            state.pending_screen_click = Some(PendingScreenClick {
-                                anchor: point,
-                                dragged: false,
-                                action: PendingScreenAction::TaskAgent { pane, index },
-                            });
+                            update::select_task_agent(state, pane, index);
                         }
                     }
                     *dirty = true;
@@ -690,46 +564,8 @@ pub(crate) fn handle_mouse_down_left(
                     )
                 });
                 if let Some(card) = agent_card {
+                    update::toggle_agent_card(state, pane, card);
                     update::focus_pane(state, pane);
-                    if click != crate::app::selection::SelectionUnit::Character {
-                        update::begin_screen_selection_unit_in(
-                            state,
-                            screen_text,
-                            point,
-                            click,
-                            lx_screen_region(state, pane, inner),
-                        );
-                        *dirty = true;
-                        return;
-                    }
-                    update::begin_screen_selection_unit_in(
-                        state,
-                        screen_text,
-                        point,
-                        crate::app::selection::SelectionUnit::Character,
-                        lx_screen_region(state, pane, inner),
-                    );
-                    state.pending_screen_click = Some(PendingScreenClick {
-                        anchor: point,
-                        dragged: false,
-                        action: PendingScreenAction::AgentCard { pane, target: card },
-                    });
-                    *dirty = true;
-                    return;
-                }
-                // 后台任务页接管整个内容区：其余文字按最终画面选，不能再落到
-                // 被页面遮住的 lx 历史选区（那会选到错的或空的内容）。
-                if state
-                    .pane_anywhere(pane)
-                    .is_some_and(|target| target.lx.task.is_some())
-                {
-                    update::begin_screen_selection_unit_in(
-                        state,
-                        screen_text,
-                        point,
-                        click,
-                        lx_screen_region(state, pane, inner),
-                    );
                     *dirty = true;
                     return;
                 }
@@ -784,17 +620,6 @@ pub(crate) fn handle_mouse_down_left(
                 });
                 if let Some(index) = slash_hit {
                     update::select_lx_slash(state, pane, index);
-                    *dirty = true;
-                    return;
-                }
-                if click != crate::app::selection::SelectionUnit::Character {
-                    update::begin_screen_selection_unit_in(
-                        state,
-                        screen_text,
-                        point,
-                        click,
-                        lx_screen_region(state, pane, inner),
-                    );
                     *dirty = true;
                     return;
                 }
@@ -854,19 +679,6 @@ pub(crate) fn handle_mouse_down_left(
                 *dirty = true;
             } else {
                 update::focus_pane(state, pane);
-                if shift {
-                    update::begin_screen_selection_unit(state, screen_text, point, click);
-                    *dirty = true;
-                    return;
-                }
-                let mouse_reporting = state.pane_anywhere(pane).is_some_and(|target| {
-                    target.terminal.wheel_routing() == crate::terminal::WheelRouting::MouseReport
-                });
-                if click != crate::app::selection::SelectionUnit::Character && !mouse_reporting {
-                    update::begin_screen_selection_unit(state, screen_text, point, click);
-                    *dirty = true;
-                    return;
-                }
                 // 应用在鼠标上报模式时按键归它自己（对齐 herdr）：转发并按它的
                 // 选区逻辑处理，不启动本地选区。
                 if forward_pane_mouse_event(state, sessions, pane, inner, mouse) {
@@ -879,92 +691,8 @@ pub(crate) fn handle_mouse_down_left(
         } else {
             update::clear_selection(state);
         }
-    } else if screen_text.cell(mouse.column, mouse.row).is_some() {
-        // 未被任何控件消费的文字格：开始屏幕选择（普通拖动也能选静态文字）。
-        update::begin_screen_selection(
-            state,
-            screen_text,
-            crate::app::selection::ScreenPoint::new(mouse.row, mouse.column),
-            Instant::now(),
-        );
-        *dirty = true;
     } else {
         update::clear_selection(state);
-    }
-}
-
-/// 松开时补执行被延迟的文字行点击；调用方已确认没有拖动。
-pub(crate) fn apply_pending_screen_click(
-    state: &mut AppState,
-    action: PendingScreenAction,
-    sessions: &mut HashMap<PaneId, PtySession>,
-    geometry: &Geometry,
-    dirty: &mut bool,
-) {
-    match action {
-        PendingScreenAction::Overlay { kind, column, row } => {
-            if state.overlay.as_ref().map(Overlay::kind) != Some(kind) {
-                return;
-            }
-            let Geometry { screen, view, .. } = geometry;
-            let was_confirm = matches!(
-                state.overlay,
-                Some(Overlay::ConfirmClose(_) | Overlay::ConfirmSyncWorkspaceCwd(_))
-            );
-            let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
-            let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
-            let was_new_ws = matches!(
-                state.overlay,
-                Some(Overlay::NewWorkspace(_) | Overlay::TrustWorkspace(_))
-            );
-            if let Some((pane, bytes)) = handle_overlay_click(state, *screen, column, row) {
-                write_to_pane(sessions, pane, &bytes);
-                update::reset_pane_scroll(state, pane);
-            }
-            if was_confirm || was_menu || was_worktree || was_new_ws {
-                ensure_workspace_visible(state, view);
-            }
-            reveal_active_tab(state, view);
-            *dirty = true;
-        }
-        PendingScreenAction::Ask { pane, hit } => {
-            if state
-                .pane_anywhere(pane)
-                .is_some_and(|target| target.lx.ask.is_some())
-            {
-                update::apply_ask_click(state, pane, hit);
-                *dirty = true;
-            }
-        }
-        PendingScreenAction::TaskAgent { pane, index } => {
-            if state.pane_anywhere(pane).is_some_and(|target| {
-                target.lx.task.as_ref().is_some_and(|page| {
-                    page.tab == crate::app::state::TaskTab::Agents
-                        && target.lx.agents.runs.get(index).is_some()
-                })
-            }) {
-                update::select_task_agent(state, pane, index);
-                *dirty = true;
-            }
-        }
-        PendingScreenAction::AgentCard { pane, target } => {
-            if state.pane_anywhere(pane).is_some_and(|state| {
-                state
-                    .lx
-                    .task
-                    .as_ref()
-                    .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents)
-            }) {
-                update::schedule_card_toggle(
-                    state,
-                    pane,
-                    target,
-                    crate::app::state::CardToggleSurface::AgentDetail,
-                    std::time::Instant::now(),
-                );
-                *dirty = true;
-            }
-        }
     }
 }
 

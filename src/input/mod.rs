@@ -19,49 +19,18 @@ pub enum Routed {
     Editor(EditorCommand),
     /// 浮层按键。
     Overlay(OverlayKey),
+    /// 复制 prompt 选区（无选区为全文）到系统剪贴板。
+    Copy,
     /// 立即保存 prompt（Ctrl/Cmd+S）：条目落库；临时提示词走保存选择器。
     SavePrompt,
+    /// 复制光标所在模板块/补充块正文到系统剪贴板。
+    CopyTemplateBlock,
     /// lx 页单行输入命令。
     Lx(LxInput),
     /// todo 面板按键（原样翻译，语义由 `update::apply_todo_key` 按是否编辑中判定）。
     Todo(TodoKey),
     /// 原样写入焦点窗格的字节。
     Pane(Vec<u8>),
-}
-
-/// 全局编辑快捷键：不依赖焦点容器，由事件层按当前可编辑目标分派。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GlobalEdit {
-    Copy,
-    /// Ctrl/Cmd+Shift+C：复制 prompt 光标所在模板块或补充块正文。
-    CopyTemplateBlock,
-    Cut,
-    Paste,
-}
-
-/// 识别全局编辑键（复制/剪切/粘贴）。
-///
-/// `Ctrl+A/E` 由各输入框自行映射为行首/行尾；全局不再占用 `A`，终端里
-/// `Ctrl+A` 仍原样转发给 PTY/readline。剪切/粘贴不接受 Shift；复制只有
-/// `Ctrl/Cmd+Shift+C` 例外，用于 prompt 模板块正文，不复制普通选区。
-pub fn global_edit_key(key: KeyEvent) -> Option<GlobalEdit> {
-    if key.kind == KeyEventKind::Release {
-        return None;
-    }
-    let modifiers = key.modifiers;
-    let mod_key =
-        modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER);
-    let shift = modifiers.contains(KeyModifiers::SHIFT);
-    if !mod_key || modifiers.contains(KeyModifiers::ALT) {
-        return None;
-    }
-    match key.code {
-        KeyCode::Char('c' | 'C') if shift => Some(GlobalEdit::CopyTemplateBlock),
-        KeyCode::Char('c' | 'C') => Some(GlobalEdit::Copy),
-        KeyCode::Char('x' | 'X') if !shift => Some(GlobalEdit::Cut),
-        KeyCode::Char('v' | 'V') if !shift => Some(GlobalEdit::Paste),
-        _ => None,
-    }
 }
 
 /// todo 面板按键：**按键原样**，不做语义解释。
@@ -87,18 +56,10 @@ pub enum TodoKey {
     Down,
     Home,
     End,
-    /// Ctrl/Cmd+Z：编辑态撤销文本，列表态撤销删除。
+    /// Ctrl/Cmd+Z：撤销删除（无内容时吞掉）。
     Undo,
-    /// Ctrl/Cmd+Shift+Z、Ctrl+Y：编辑态重做文本（列表态吞掉）。
-    Redo,
-    /// Ctrl/Alt+←：按词左移。
-    WordLeft,
-    /// Ctrl/Alt+→：按词右移。
-    WordRight,
-    /// Ctrl/Alt+Backspace、Ctrl+W：向前删词。
-    DeleteWordBackward,
-    /// Ctrl/Alt+Delete：向后删词。
-    DeleteWordForward,
+    /// Ctrl/Cmd+C：编辑态清空输入（列表态吞掉）。
+    Clear,
 }
 
 /// todo 按键映射：只做逐键翻译；未识别的键返回 None（由 `route` 吞掉）。
@@ -106,33 +67,19 @@ fn todo_key(key: KeyEvent) -> Option<TodoKey> {
     let modifiers = key.modifiers;
     let ctrl = modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER);
     let alt = modifiers.contains(KeyModifiers::ALT);
-    let shift = modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
-        // todo 列表态用 Ctrl+Z 撤销删除；编辑态由 update 层改为撤销文本。
-        KeyCode::Char('z' | 'Z') if ctrl && !alt && shift => Some(TodoKey::Redo),
         KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(TodoKey::Undo),
-        KeyCode::Char('y' | 'Y') if ctrl && !alt => Some(TodoKey::Redo),
-        KeyCode::Char('w' | 'W') if ctrl && !alt => Some(TodoKey::DeleteWordBackward),
-        KeyCode::Char('a' | 'A') if modifiers.contains(KeyModifiers::CONTROL) && !alt && !shift => {
-            Some(TodoKey::Home)
-        }
-        KeyCode::Char('e' | 'E') if modifiers.contains(KeyModifiers::CONTROL) && !alt && !shift => {
-            Some(TodoKey::End)
-        }
+        KeyCode::Char('c' | 'C') if ctrl && !alt => Some(TodoKey::Clear),
         KeyCode::Char(' ') if !ctrl && !alt => Some(TodoKey::Space),
         KeyCode::Char(ch) if !ctrl && !alt => Some(TodoKey::Char(ch)),
-        KeyCode::Enter if shift => Some(TodoKey::ShiftEnter),
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => Some(TodoKey::ShiftEnter),
         KeyCode::Enter => Some(TodoKey::Enter),
         KeyCode::Esc => Some(TodoKey::Esc),
         KeyCode::Tab => Some(TodoKey::Tab),
-        KeyCode::Backspace if ctrl || alt => Some(TodoKey::DeleteWordBackward),
-        KeyCode::Delete if ctrl || alt => Some(TodoKey::DeleteWordForward),
         KeyCode::Backspace => Some(TodoKey::Backspace),
         KeyCode::Delete => Some(TodoKey::Delete),
-        KeyCode::Left if ctrl || alt => Some(TodoKey::WordLeft),
-        KeyCode::Right if ctrl || alt => Some(TodoKey::WordRight),
-        KeyCode::Left => Some(TodoKey::Left),
-        KeyCode::Right => Some(TodoKey::Right),
+        KeyCode::Left if !ctrl && !alt => Some(TodoKey::Left),
+        KeyCode::Right if !ctrl && !alt => Some(TodoKey::Right),
         KeyCode::Up => Some(TodoKey::Up),
         KeyCode::Down => Some(TodoKey::Down),
         KeyCode::Home => Some(TodoKey::Home),
@@ -145,7 +92,8 @@ fn todo_key(key: KeyEvent) -> Option<TodoKey> {
 ///
 /// `Ctrl+Q` 始终优先；浮层打开时只放行该浮层支持的键，其余吞掉；
 /// 否则按**唯一焦点源** `focus` 决定去向，同一时刻只有一个容器收键：
-/// - `Prompt`：按键只进入编辑器，未映射键吞掉，绝不写入 PTY；
+/// - `Prompt`：按键只进入编辑器（`Ctrl/Cmd+C` 复制选区全文、`Ctrl/Cmd+Shift+C`
+///   复制光标所在模板块正文），未映射键吞掉，绝不写入 PTY；
 /// - `Todo`：按键只进入 todo 面板，未映射键吞掉；
 /// - `Panes`：`pane_lx` 为真时进入 lx 单行输入，否则编码写进焦点窗格的 PTY；
 /// - `Sidebar`：侧栏没有键盘交互，全部吞掉——绝不穿透到窗格。
@@ -170,6 +118,16 @@ pub fn route(
         return None;
     }
     if focus == FocusedContainer::Prompt {
+        let copy_chord = matches!(key.code, KeyCode::Char('c' | 'C'))
+            && (key.modifiers.contains(KeyModifiers::CONTROL)
+                || key.modifiers.contains(KeyModifiers::SUPER))
+            && !key.modifiers.contains(KeyModifiers::ALT);
+        if copy_chord {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                return Some(Routed::CopyTemplateBlock);
+            }
+            return Some(Routed::Copy);
+        }
         let save_chord = matches!(key.code, KeyCode::Char('s' | 'S'))
             && (key.modifiers.contains(KeyModifiers::CONTROL)
                 || key.modifiers.contains(KeyModifiers::SUPER))
@@ -211,20 +169,23 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
             KeyCode::Char('z' | 'Z') if shift => Some(LxInput::Redo),
             KeyCode::Char('z' | 'Z') => Some(LxInput::Undo),
             KeyCode::Char('y' | 'Y') => Some(LxInput::Redo),
+            // Cmd+C 与 Ctrl+C 落到同一命令：是否「清空」还是「复制」由 update 层按
+            // 当前面板决定，输入层不感知状态。
+            KeyCode::Char('c' | 'C') => Some(LxInput::Clear),
             _ => None,
         };
     }
     let mapped = match (ctrl, alt, key.code) {
         (true, false, KeyCode::Enter) => Some(LxInput::Newline),
-        (true, false, KeyCode::Char('a' | 'A')) if !shift => Some(LxInput::LineStart),
-        (true, false, KeyCode::Char('a' | 'A')) => None,
         (true, false, KeyCode::Char(ch)) => match ch {
             'o' | 'O' => Some(LxInput::ToggleToolDetail),
             'u' | 'U' => Some(LxInput::DeleteToLineStart),
             'k' | 'K' => Some(LxInput::DeleteToLineEnd),
             'w' | 'W' => Some(LxInput::DeleteWordBackward),
+            'a' | 'A' => Some(LxInput::LineStart),
             'e' | 'E' => Some(LxInput::LineEnd),
             'd' | 'D' => Some(LxInput::StopProcess),
+            'c' | 'C' => Some(LxInput::Clear),
             't' | 'T' => Some(LxInput::ToggleThinking),
             'z' | '-' => Some(LxInput::Undo),
             'Z' | 'y' | 'Y' | '.' => Some(LxInput::Redo),
@@ -277,32 +238,19 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
     }
 }
 
-/// 页重命名输入键映射：Enter/Esc 结束、单行编辑键；其余返回 None（吞掉）。
+/// 页重命名输入键映射：Enter/Esc 结束、单行编辑键、Ctrl+C 清空；其余返回 None（吞掉）。
 ///
 /// 与重命名浮层同一套语义，但不依赖 `Overlay`（页重命名是标题行内联输入）。
 pub fn page_rename_key(key: KeyEvent) -> Option<OverlayKey> {
-    let modifiers = key.modifiers;
-    let ctrl = modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER);
-    let alt = modifiers.contains(KeyModifiers::ALT);
-    let shift = modifiers.contains(KeyModifiers::SHIFT);
-    let plain =
-        !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
+    let plain = !key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
     match key.code {
         KeyCode::Esc => Some(OverlayKey::Esc),
         KeyCode::Enter => Some(OverlayKey::Enter),
-        KeyCode::Char('z' | 'Z') if ctrl && !alt && shift => Some(OverlayKey::Redo),
-        KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(OverlayKey::Undo),
-        KeyCode::Char('y' | 'Y') if ctrl && !alt => Some(OverlayKey::Redo),
-        KeyCode::Char('a' | 'A') if modifiers.contains(KeyModifiers::CONTROL) && !alt && !shift => {
-            Some(OverlayKey::Home)
+        KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(OverlayKey::Clear)
         }
-        KeyCode::Char('e' | 'E') if modifiers.contains(KeyModifiers::CONTROL) && !alt && !shift => {
-            Some(OverlayKey::End)
-        }
-        KeyCode::Backspace if ctrl || alt => Some(OverlayKey::DeleteWordBackward),
-        KeyCode::Delete if ctrl || alt => Some(OverlayKey::DeleteWordForward),
-        KeyCode::Left if ctrl || alt => Some(OverlayKey::WordLeft),
-        KeyCode::Right if ctrl || alt => Some(OverlayKey::WordRight),
         KeyCode::Backspace => Some(OverlayKey::Backspace),
         KeyCode::Delete => Some(OverlayKey::Delete),
         KeyCode::Left if plain => Some(OverlayKey::Left),
@@ -314,43 +262,13 @@ pub fn page_rename_key(key: KeyEvent) -> Option<OverlayKey> {
     }
 }
 
-/// 该浮层是否持有可编辑的单行输入框（决定 Ctrl+A/E 是否映射为行首/行尾）。
-fn overlay_has_text_input(kind: OverlayKind) -> bool {
-    matches!(
-        kind,
-        OverlayKind::Rename
-            | OverlayKind::NewWorkspace
-            | OverlayKind::WorktreeOpen
-            | OverlayKind::NewNode
-            | OverlayKind::SaveDraft
-            | OverlayKind::ReferencedFolderInput
-            | OverlayKind::ReferencedFolderSearch
-            | OverlayKind::ResumeSessionEdit
-    )
-}
-
 /// 浮层按键映射：只放行该浮层支持的键，其余返回 None（吞掉）。
 fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
     // Super/Cmd 组合同样视为非纯文本输入（终端支持 kitty 协议时可达）。
     let plain = !key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
-    let ctrl = key
-        .modifiers
-        .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    if overlay_has_text_input(kind)
-        && key.modifiers.contains(KeyModifiers::CONTROL)
-        && !alt
-        && !shift
-    {
-        match key.code {
-            KeyCode::Char('a' | 'A') => return Some(OverlayKey::Home),
-            KeyCode::Char('e' | 'E') => return Some(OverlayKey::End),
-            _ => {}
-        }
-    }
     match kind {
         OverlayKind::Menu | OverlayKind::PageMenu => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
@@ -391,13 +309,9 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         OverlayKind::ReferencedFolderInput => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
-            KeyCode::Char('z' | 'Z') if ctrl && !alt && shift => Some(OverlayKey::Redo),
-            KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(OverlayKey::Undo),
-            KeyCode::Char('y' | 'Y') if ctrl && !alt => Some(OverlayKey::Redo),
-            KeyCode::Backspace if ctrl || alt => Some(OverlayKey::DeleteWordBackward),
-            KeyCode::Delete if ctrl || alt => Some(OverlayKey::DeleteWordForward),
-            KeyCode::Left if ctrl || alt => Some(OverlayKey::WordLeft),
-            KeyCode::Right if ctrl || alt => Some(OverlayKey::WordRight),
+            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Clear)
+            }
             KeyCode::Backspace => Some(OverlayKey::Backspace),
             KeyCode::Delete => Some(OverlayKey::Delete),
             KeyCode::Left if plain => Some(OverlayKey::Left),
@@ -413,13 +327,22 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
-            KeyCode::Char('z' | 'Z') if ctrl && !alt && shift => Some(OverlayKey::Redo),
-            KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(OverlayKey::Undo),
-            KeyCode::Char('y' | 'Y') if ctrl && !alt => Some(OverlayKey::Redo),
-            KeyCode::Backspace if ctrl || alt => Some(OverlayKey::DeleteWordBackward),
-            KeyCode::Delete if ctrl || alt => Some(OverlayKey::DeleteWordForward),
-            KeyCode::Left if ctrl || alt => Some(OverlayKey::WordLeft),
-            KeyCode::Right if ctrl || alt => Some(OverlayKey::WordRight),
+            // Ctrl/Cmd+Z：回退上层搜索范围（终端支持 kitty 协议时 Cmd 组合可达）。
+            KeyCode::Char('z' | 'Z')
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
+            {
+                Some(OverlayKey::Back)
+            }
+            // Ctrl/Cmd+C：沿用参考面板语义复制高亮项引用（单行搜索框不另设选区模型）。
+            KeyCode::Char('c' | 'C')
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
+            {
+                Some(OverlayKey::Copy)
+            }
             KeyCode::Backspace => Some(OverlayKey::Backspace),
             KeyCode::Delete => Some(OverlayKey::Delete),
             KeyCode::Left if plain => Some(OverlayKey::Left),
@@ -443,15 +366,13 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         | OverlayKind::ResumeSessionEdit => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Clear)
+            }
             // `^D` 进入删除确认 / 确认删除（`/resume` 编辑模态）。
-            KeyCode::Char('d' | 'D') if ctrl && !alt && !shift => Some(OverlayKey::Remove),
-            KeyCode::Char('z' | 'Z') if ctrl && !alt && shift => Some(OverlayKey::Redo),
-            KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(OverlayKey::Undo),
-            KeyCode::Char('y' | 'Y') if ctrl && !alt => Some(OverlayKey::Redo),
-            KeyCode::Backspace if ctrl || alt => Some(OverlayKey::DeleteWordBackward),
-            KeyCode::Delete if ctrl || alt => Some(OverlayKey::DeleteWordForward),
-            KeyCode::Left if ctrl || alt => Some(OverlayKey::WordLeft),
-            KeyCode::Right if ctrl || alt => Some(OverlayKey::WordRight),
+            KeyCode::Char('d' | 'D') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Remove)
+            }
             KeyCode::Backspace => Some(OverlayKey::Backspace),
             KeyCode::Delete => Some(OverlayKey::Delete),
             KeyCode::Left if plain => Some(OverlayKey::Left),
@@ -466,13 +387,9 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
-            KeyCode::Char('z' | 'Z') if ctrl && !alt && shift => Some(OverlayKey::Redo),
-            KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(OverlayKey::Undo),
-            KeyCode::Char('y' | 'Y') if ctrl && !alt => Some(OverlayKey::Redo),
-            KeyCode::Backspace if ctrl || alt => Some(OverlayKey::DeleteWordBackward),
-            KeyCode::Delete if ctrl || alt => Some(OverlayKey::DeleteWordForward),
-            KeyCode::Left if ctrl || alt => Some(OverlayKey::WordLeft),
-            KeyCode::Right if ctrl || alt => Some(OverlayKey::WordRight),
+            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Clear)
+            }
             KeyCode::Backspace => Some(OverlayKey::Backspace),
             KeyCode::Delete => Some(OverlayKey::Delete),
             KeyCode::Left if plain => Some(OverlayKey::Left),
@@ -487,13 +404,9 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
-            KeyCode::Char('z' | 'Z') if ctrl && !alt && shift => Some(OverlayKey::Redo),
-            KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(OverlayKey::Undo),
-            KeyCode::Char('y' | 'Y') if ctrl && !alt => Some(OverlayKey::Redo),
-            KeyCode::Backspace if ctrl || alt => Some(OverlayKey::DeleteWordBackward),
-            KeyCode::Delete if ctrl || alt => Some(OverlayKey::DeleteWordForward),
-            KeyCode::Left if ctrl || alt => Some(OverlayKey::WordLeft),
-            KeyCode::Right if ctrl || alt => Some(OverlayKey::WordRight),
+            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Clear)
+            }
             KeyCode::Backspace => Some(OverlayKey::Backspace),
             KeyCode::Delete => Some(OverlayKey::Delete),
             KeyCode::Left if plain => Some(OverlayKey::Left),
@@ -536,12 +449,11 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
     }
     let command = match (ctrl, alt, key.code) {
         (true, false, KeyCode::Enter) => Some(EditorCommand::NewlineBelow),
-        (true, false, KeyCode::Char('a' | 'A')) if !shift => Some(EditorCommand::LineStart),
-        (true, false, KeyCode::Char('a' | 'A')) => None,
         (true, false, KeyCode::Char(ch)) => match ch {
             'u' | 'U' => Some(EditorCommand::DeleteToLineStart),
             'k' | 'K' => Some(EditorCommand::DeleteToLineEnd),
             'w' | 'W' => Some(EditorCommand::DeleteWordBackward),
+            'a' | 'A' => Some(EditorCommand::LineStart),
             'e' | 'E' => Some(EditorCommand::LineEnd),
             'd' | 'D' => Some(EditorCommand::Delete),
             'z' | '-' => Some(EditorCommand::Undo),

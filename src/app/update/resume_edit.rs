@@ -122,10 +122,21 @@ pub fn apply_resume_session_edit_key(
 
 /// 编辑单行标题（与重命名浮层同一套文本编辑语义）。
 fn edit_input(state: &mut AppState, key: crate::app::actions::OverlayKey) {
+    use crate::app::actions::OverlayKey;
     let Some(Overlay::ResumeSessionEdit(edit)) = state.overlay.as_mut() else {
         return;
     };
-    edit.input.apply_key(key);
+    match key {
+        OverlayKey::Char(ch) => edit.input.insert_char(ch),
+        OverlayKey::Clear => edit.input.clear(),
+        OverlayKey::Backspace => edit.input.backspace(),
+        OverlayKey::Delete => edit.input.delete(),
+        OverlayKey::Left => edit.input.move_left(),
+        OverlayKey::Right => edit.input.move_right(),
+        OverlayKey::Home => edit.input.move_home(),
+        OverlayKey::End => edit.input.move_end(),
+        _ => {}
+    }
     // 编辑标题即退出删除确认：用户改变主意了。
     edit.confirming_delete = false;
     edit.hint = None;

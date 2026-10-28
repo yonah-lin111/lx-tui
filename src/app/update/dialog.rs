@@ -74,13 +74,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             | OverlayKey::Left
             | OverlayKey::Right
             | OverlayKey::Home
-            | OverlayKey::End
-            | OverlayKey::Undo
-            | OverlayKey::Redo
-            | OverlayKey::WordLeft
-            | OverlayKey::WordRight
-            | OverlayKey::DeleteWordBackward
-            | OverlayKey::DeleteWordForward => super::edit_referenced_input(state, key),
+            | OverlayKey::End => super::edit_referenced_input(state, key),
             _ => {}
         }
         return None;
@@ -114,13 +108,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             | OverlayKey::Left
             | OverlayKey::Right
             | OverlayKey::Home
-            | OverlayKey::End
-            | OverlayKey::Undo
-            | OverlayKey::Redo
-            | OverlayKey::WordLeft
-            | OverlayKey::WordRight
-            | OverlayKey::DeleteWordBackward
-            | OverlayKey::DeleteWordForward => {
+            | OverlayKey::End => {
                 super::edit_referenced_search(state, key);
             }
             OverlayKey::Remove | OverlayKey::PageUp | OverlayKey::PageDown => {}
@@ -243,34 +231,6 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             edit_text_input(state, TextInput::move_end);
             None
         }
-        OverlayKey::Undo => {
-            edit_text_input(state, |input| {
-                input.undo();
-            });
-            None
-        }
-        OverlayKey::Redo => {
-            edit_text_input(state, |input| {
-                input.redo();
-            });
-            None
-        }
-        OverlayKey::WordLeft => {
-            edit_text_input(state, TextInput::move_word_left);
-            None
-        }
-        OverlayKey::WordRight => {
-            edit_text_input(state, TextInput::move_word_right);
-            None
-        }
-        OverlayKey::DeleteWordBackward => {
-            edit_text_input(state, TextInput::delete_word_backward);
-            None
-        }
-        OverlayKey::DeleteWordForward => {
-            edit_text_input(state, TextInput::delete_word_forward);
-            None
-        }
         // 引用文件夹浮层已在上方分支消费；此处不会到达。
         OverlayKey::EnterFolder
         | OverlayKey::Back
@@ -283,67 +243,10 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
 
 /// 对单行输入类浮层（重命名、新建工作区路径）执行一次编辑；其他浮层忽略。
 fn edit_text_input(state: &mut AppState, edit: impl FnOnce(&mut TextInput)) {
-    if let Some(input) = active_text_input_mut(state) {
-        edit(input);
-    }
-}
-
-/// 当前可编辑的单行输入：页重命名优先，其次是持有 `TextInput` 的浮层。
-pub(crate) fn active_text_input(state: &AppState) -> Option<&TextInput> {
-    if state.overlay.is_none() && super::page_rename_active(state) {
-        return state
-            .workspaces
-            .get(state.prompt_workspace())
-            .and_then(|workspace| workspace.prompt_panel.page_rename())
-            .map(|rename| &rename.input);
-    }
-    match state.overlay.as_ref()? {
-        Overlay::Rename(rename) => Some(&rename.input),
-        Overlay::NewWorkspace(new_ws) => Some(&new_ws.input),
-        Overlay::WorktreeOpen(dialog) => Some(&dialog.query),
-        Overlay::NewNode(dialog) => Some(&dialog.name),
-        Overlay::SaveDraft(dialog) => Some(&dialog.name),
-        Overlay::ReferencedFolderInput(input) => Some(&input.input),
-        Overlay::ReferencedFolderSearch(search) => Some(&search.query),
-        Overlay::ResumeSessionEdit(edit) => Some(&edit.input),
-        Overlay::Menu(_)
-        | Overlay::ConfirmClose(_)
-        | Overlay::ConfirmSwitchCwd(_)
-        | Overlay::ConfirmSyncWorkspaceCwd(_)
-        | Overlay::TrustWorkspace(_)
-        | Overlay::PageMenu(_)
-        | Overlay::ReferencedFolderMenu(_)
-        | Overlay::ReferencedFolderDelete(_) => None,
-    }
-}
-
-/// 当前可编辑单行输入的可变引用；规则同 [`active_text_input`]。
-pub(crate) fn active_text_input_mut(state: &mut AppState) -> Option<&mut TextInput> {
-    if state.overlay.is_none() && super::page_rename_active(state) {
-        let workspace = state.prompt_workspace();
-        return state
-            .workspaces
-            .get_mut(workspace)
-            .and_then(|workspace| workspace.prompt_panel.page_rename_mut())
-            .map(|rename| &mut rename.input);
-    }
-    match state.overlay.as_mut()? {
-        Overlay::Rename(rename) => Some(&mut rename.input),
-        Overlay::NewWorkspace(new_ws) => Some(&mut new_ws.input),
-        Overlay::WorktreeOpen(dialog) => Some(&mut dialog.query),
-        Overlay::NewNode(dialog) => Some(&mut dialog.name),
-        Overlay::SaveDraft(dialog) => Some(&mut dialog.name),
-        Overlay::ReferencedFolderInput(input) => Some(&mut input.input),
-        Overlay::ReferencedFolderSearch(search) => Some(&mut search.query),
-        Overlay::ResumeSessionEdit(edit) => Some(&mut edit.input),
-        Overlay::Menu(_)
-        | Overlay::ConfirmClose(_)
-        | Overlay::ConfirmSwitchCwd(_)
-        | Overlay::ConfirmSyncWorkspaceCwd(_)
-        | Overlay::TrustWorkspace(_)
-        | Overlay::PageMenu(_)
-        | Overlay::ReferencedFolderMenu(_)
-        | Overlay::ReferencedFolderDelete(_) => None,
+    match state.overlay.as_mut() {
+        Some(Overlay::Rename(rename)) => edit(&mut rename.input),
+        Some(Overlay::NewWorkspace(new_ws)) => edit(&mut new_ws.input),
+        _ => {}
     }
 }
 

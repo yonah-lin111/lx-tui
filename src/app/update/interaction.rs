@@ -4,16 +4,14 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
-use crate::app::selection::MULTI_CLICK_WINDOW;
-use crate::app::state::{AppState, CardTarget, CardToggleSurface, PendingCardToggle};
-use crate::app::toast::{Toast, ToastKind};
+use crate::app::state::AppState;
+use crate::app::toast::Toast;
 use crate::app::tooltip::{Tooltip, TooltipTarget};
 use crate::layout::{BoundaryHit, PaneId};
-use crate::ui::text;
 
 use super::editor::prompt_item_editing;
 use super::prompt::commit_editing_prompt;
-use super::selection::{clear_selection, tick_lx_selection_autoscroll, tick_selection_autoscroll};
+use super::selection::{clear_selection, tick_selection_autoscroll};
 
 /// prompt 自动保存静置时长：条目编辑停止输入约 800ms 后提交落库。
 const PROMPT_AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
@@ -155,22 +153,6 @@ pub fn show_toast(state: &mut AppState, toast: Toast) {
     state.toast = Some(toast);
 }
 
-/// 复制 / 剪切反馈：统一落在屏幕顶部居中，并报告本次剪贴板文本的字符数。
-///
-/// 复制反馈不跟随 lx/prompt/窗格锚点，避免窄容器把正文截成半截；`confirmed`
-/// 只影响成功文案（剪切走原生写入确认，普通复制仍是尽力而为）。
-pub fn show_copy_result(state: &mut AppState, chars: usize, confirmed: bool, success: bool) {
-    let (kind, message) = match (success, confirmed) {
-        (true, true) => (ToastKind::Default, text::copied_message(chars)),
-        (true, false) => (ToastKind::Default, text::copy_sent_message(chars)),
-        (false, _) => (ToastKind::Danger, text::copy_failed_message(chars)),
-    };
-    show_toast(
-        state,
-        Toast::new(kind, message, None, Instant::now()).with_title(text::TOAST_CLIPBOARD_TITLE),
-    );
-}
-
 /// 在指定窗格**自己的** toast 槽展示反馈（单条替换并重置倒计时）。
 ///
 /// lx 页的反馈必须停在触发它的窗格里（见 `AppState.toast` 与 `Lx.toast` 的注释）：
@@ -298,67 +280,26 @@ pub fn clear_tooltip(state: &mut AppState) -> bool {
     state.tooltip.take().is_some()
 }
 
-/// 单击卡片后延迟切换折叠：给同格双击/三击留出取消窗口。
-pub fn schedule_card_toggle(
-    state: &mut AppState,
-    pane: PaneId,
-    target: CardTarget,
-    surface: CardToggleSurface,
-    now: Instant,
-) {
-    state.pending_card_toggle = Some(PendingCardToggle {
-        pane,
-        target,
-        surface,
-        deadline: now + MULTI_CLICK_WINDOW,
-    });
-}
-
-/// 到点才执行待定折叠；提前返回 false，保持 pending 不丢失。
-fn tick_card_toggle(state: &mut AppState, now: Instant) -> bool {
-    let Some(pending) = state.pending_card_toggle.take() else {
-        return false;
-    };
-    if now < pending.deadline {
-        state.pending_card_toggle = Some(pending);
-        return false;
-    }
-    match pending.surface {
-        CardToggleSurface::LxHistory => super::toggle_lx_card(state, pending.pane, pending.target),
-        CardToggleSurface::AgentDetail => {
-            super::toggle_agent_card(state, pending.pane, pending.target)
-        }
-    }
-}
-
 /// 清除已过期的 toast、提升到时的 tooltip、推进拖选边缘自动滚动；返回是否发生变化。
 pub fn tick(state: &mut AppState, now: Instant) -> bool {
-    // 可见屏幕选区存在时暂停所有 toast 过期：用户正在读/选的内容不得中途消失。
-    let paused = state
-        .screen_selection
+    let expired = state
+        .toast
         .as_ref()
-        .is_some_and(|selection| selection.visible());
-    let expired = !paused
-        && state
-            .toast
-            .as_ref()
-            .is_some_and(|toast| toast.is_expired(now));
+        .is_some_and(|toast| toast.is_expired(now));
     if expired {
         state.toast = None;
     }
     // 窗格内的 lx 反馈与全局 toast 同一套到期语义（hover 期间不过期）。
-    let lx_expired = !paused && expire_lx_toasts(state, now);
+    let lx_expired = expire_lx_toasts(state, now);
     let revealed = state
         .tooltip
         .as_mut()
         .is_some_and(|tooltip| tooltip.reveal(now));
     let saved = tick_prompt_autosave(state, now);
     let scrolled = tick_selection_autoscroll(state, now);
-    let lx_scrolled = tick_lx_selection_autoscroll(state, now);
-    let toggled = tick_card_toggle(state, now);
     // `/resume` 面板停留期间刷新"现在"，相对时间随之自然推进。
     let retimed = tick_slash_panel_clock(state);
-    expired || lx_expired || revealed || saved || scrolled || lx_scrolled || toggled || retimed
+    expired || lx_expired || revealed || saved || scrolled || retimed
 }
 
 /// 刷新打开中的 `/resume` 面板时间戳；返回是否有面板需要重绘。
@@ -398,47 +339,26 @@ fn tick_prompt_autosave(state: &mut AppState, now: Instant) -> bool {
     true
 }
 
-/// 最近一次定时到期时间（toast 消失、tooltip 显示、自动滚动、prompt 自动保存
-/// 或卡片延迟折叠）；事件循环据此安排唤醒。
+/// 最近一次定时到期时间（toast 消失、tooltip 显示、自动滚动或 prompt 自动保存）；
+/// 事件循环据此安排唤醒。
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
-    let paused = state
-        .screen_selection
-        .as_ref()
-        .is_some_and(|selection| selection.visible());
-    let toast = (!paused)
-        .then(|| state.toast.as_ref().and_then(Toast::next_deadline))
-        .flatten();
+    let toast = state.toast.as_ref().and_then(Toast::next_deadline);
     // 窗格内的 lx 反馈同样需要唤醒：否则没人 tick，提示会一直挂在屏幕上。
-    let lx_toast = (!paused)
-        .then(|| {
-            state
-                .all_pane_ids()
-                .into_iter()
-                .filter_map(|pane| state.pane_anywhere(pane))
-                .filter_map(|target| target.lx.toast.as_ref())
-                .filter_map(Toast::next_deadline)
-                .min()
-        })
-        .flatten();
+    let lx_toast = state
+        .all_pane_ids()
+        .into_iter()
+        .filter_map(|pane| state.pane_anywhere(pane))
+        .filter_map(|target| target.lx.toast.as_ref())
+        .filter_map(Toast::next_deadline)
+        .min();
     let tooltip = state.tooltip.as_ref().and_then(Tooltip::next_deadline);
     let autoscroll = state
         .selection_autoscroll
-        .map(|autoscroll| autoscroll.next_at)
-        .into_iter()
-        .chain(
-            state
-                .lx_selection_autoscroll
-                .map(|autoscroll| autoscroll.next_at),
-        )
-        .min();
+        .map(|autoscroll| autoscroll.next_at);
     let autosave = prompt_item_editing(state)
         .then(|| state.prompt.autosave_deadline(PROMPT_AUTOSAVE_DELAY))
         .flatten();
-    let card_toggle = state
-        .pending_card_toggle
-        .as_ref()
-        .map(|pending| pending.deadline);
-    [toast, lx_toast, tooltip, autoscroll, autosave, card_toggle]
+    [toast, lx_toast, tooltip, autoscroll, autosave]
         .into_iter()
         .flatten()
         .min()

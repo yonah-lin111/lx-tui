@@ -26,18 +26,6 @@ pub enum OverlayKey {
     Right,
     Home,
     End,
-    /// Ctrl/Cmd+Z：撤销单行输入编辑。
-    Undo,
-    /// Ctrl/Cmd+Shift+Z、Ctrl+Y：重做单行输入编辑。
-    Redo,
-    /// Ctrl/Alt+←：按词左移。
-    WordLeft,
-    /// Ctrl/Alt+→：按词右移。
-    WordRight,
-    /// Ctrl/Alt+Backspace、Ctrl+W：向前删词。
-    DeleteWordBackward,
-    /// Ctrl/Alt+Delete：向后删词。
-    DeleteWordForward,
     /// PageUp / PageDown：UI 组件查看弹窗右侧预览翻页。
     PageUp,
     PageDown,

@@ -8,10 +8,10 @@ use ratatui::layout::Rect;
 use crate::layout::{BoundaryHit, PaneId};
 
 use super::effects::Effect;
-use super::overlay::{Overlay, OverlayKind};
+use super::overlay::Overlay;
 use super::prompt::{Prompt, PromptPanel};
 use super::referenced::ReferencedFolders;
-use super::selection::{ScreenClick, ScreenPoint, ScreenSelection, Selection, SelectionSource};
+use super::selection::Selection;
 use super::toast::Toast;
 use super::tooltip::Tooltip;
 use super::trust::TrustResolution;
@@ -59,50 +59,6 @@ pub enum AutoscrollDirection {
     Down,
 }
 
-/// 等待松开鼠标后再执行的文字点击动作。
-///
-/// 普通左键拖动要能选字，但单击仍须执行原动作：按下时只登记动作并起选，
-/// 松开时若有位移则保留选区，无位移才把动作补执行。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PendingScreenAction {
-    /// 浮层内命中可点击文字行；动作由原浮层点击分发重放。
-    Overlay {
-        kind: OverlayKind,
-        column: u16,
-        row: u16,
-    },
-    /// ask 选项行；动作由 `apply_ask_click` 重放。
-    Ask { pane: PaneId, hit: AskHit },
-    /// Agents 页签的 agent 列表行；动作由 `select_task_agent` 重放。
-    TaskAgent { pane: PaneId, index: usize },
-    /// Agents 详情区的可折叠卡片；动作由 `toggle_agent_card` 重放。
-    AgentCard { pane: PaneId, target: CardTarget },
-}
-
-/// 一次待定的文字点击：锚点、是否已拖动、松开时要补的动作。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PendingScreenClick {
-    pub anchor: ScreenPoint,
-    pub dragged: bool,
-    pub action: PendingScreenAction,
-}
-
-/// 折叠卡片来源：主历史与 Agents 详情共用同一套延迟点击。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CardToggleSurface {
-    LxHistory,
-    AgentDetail,
-}
-
-/// 单击卡片后延迟执行的折叠动作；双击/三击在新一次按下时取消。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PendingCardToggle {
-    pub pane: PaneId,
-    pub target: CardTarget,
-    pub surface: CardToggleSurface,
-    pub deadline: Instant,
-}
-
 /// 选区拖拽边缘自动滚动计划。
 ///
 /// 鼠标停在（或越出）窗格上下边缘时登记；`inner` 与 `mouse` 为登记时的几何快照，
@@ -113,32 +69,6 @@ pub struct SelectionAutoscroll {
     pub direction: AutoscrollDirection,
     pub mouse: (u16, u16),
     pub inner: Rect,
-    pub next_at: Instant,
-}
-
-/// lx 消息列表 / Agents 详情拖选时的边缘滚动目标。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LxAutoscrollTarget {
-    /// lx 主聊天历史。
-    History,
-    /// 后台任务页 Agents 详情中的子 agent transcript。
-    AgentsDetail,
-}
-
-/// lx 消息列表拖选边缘自动滚动计划。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LxSelectionAutoscroll {
-    pub pane: PaneId,
-    pub target: LxAutoscrollTarget,
-    pub direction: AutoscrollDirection,
-    /// 边缘判断用内容区（历史区或 Agents 详情区）。
-    pub area: Rect,
-    /// 选择坐标换算用窗格内容区。
-    pub inner: Rect,
-    /// 历史/详情当前总行数与可视行数；tick 在事件层之外据此滚动。
-    pub total: usize,
-    pub visible: usize,
-    pub mouse: (u16, u16),
     pub next_at: Instant,
 }
 
@@ -213,42 +143,6 @@ pub enum FocusedContainer {
     Todo,
 }
 
-/// 异步粘贴的目标快照：回投时焦点/浮层/修订号任一变化即丢弃。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PasteTarget {
-    pub focus: FocusedContainer,
-    pub pane: Option<PaneId>,
-    pub overlay: Option<OverlayKind>,
-    pub page_rename: bool,
-    /// 目标编辑器内容修订号；非编辑器为 0。
-    pub revision: u64,
-}
-
-/// 交给事件循环执行的剪贴板请求；后者只负责 spawn_blocking，不阻塞主循环。
-#[derive(Debug)]
-pub enum ClipboardRequest {
-    Read {
-        id: u64,
-        target: PasteTarget,
-        /// 发起时的粘贴代次；终端 Paste 到达后递增，旧回退读取作废。
-        generation: u64,
-    },
-    Write {
-        id: u64,
-        text: String,
-    },
-}
-
-/// 等待原生剪贴板写入结果的剪切事务。
-#[derive(Debug, Clone)]
-pub struct PendingCut {
-    pub id: u64,
-    pub text: String,
-    pub source: SelectionSource,
-    pub revision: u64,
-    pub anchor: Option<PaneId>,
-}
-
 /// prompt 面板为全局右栏，显示激活（或钉住）工作区的草稿。
 #[derive(Debug)]
 pub struct AppState {
@@ -270,22 +164,6 @@ pub struct AppState {
     pub tooltip: Option<Tooltip>,
     /// prompt 等编辑器的视口选区。
     pub selection: Option<Selection>,
-    /// 最终画面通用选区：覆盖侧栏、标签栏、边框、弹窗与静态文字。
-    pub screen_selection: Option<ScreenSelection>,
-    /// 屏幕选择点击计数现场（同格 400 ms，1→2→3→1）。
-    pub screen_click: Option<ScreenClick>,
-    /// 正在等待松开的文字行点击；拖动则改为选区，不执行原动作。
-    pub(crate) pending_screen_click: Option<PendingScreenClick>,
-    /// 单击卡片后的延迟折叠；同格双击/三击会取消它。
-    pub(crate) pending_card_toggle: Option<PendingCardToggle>,
-    /// 剪贴板请求序号；异步回投按它匹配。
-    pub next_clipboard_id: u64,
-    /// 粘贴事件代次：终端 Paste 到达即递增，作废在途按键回退读取。
-    pub clipboard_generation: u64,
-    /// 待事件循环取走的剪贴板请求。
-    pub clipboard_requests: Vec<ClipboardRequest>,
-    /// 等待写入确认的剪切事务。
-    pub pending_cut: Option<PendingCut>,
     /// 正在拖拽选择的终端窗格；选中内容存于仿真器内部（内容坐标）。
     pub terminal_selection: Option<PaneId>,
     /// lx 页文本选区（内容坐标）；松开鼠标时复制并清除。
@@ -299,10 +177,6 @@ pub struct AppState {
     pub lx_card_press: Option<(PaneId, crate::app::state::CardTarget)>,
     /// 选区拖拽边缘自动滚动计划；None 表示未激活。
     pub selection_autoscroll: Option<SelectionAutoscroll>,
-    /// lx 历史 / Agents 详情拖选边缘自动滚动计划。
-    pub lx_selection_autoscroll: Option<LxSelectionAutoscroll>,
-    /// 滚动后当前帧已变，等下一次最终画面取样再刷新屏幕选区终点。
-    pub(crate) screen_selection_refresh: Option<(u16, u16)>,
     pub resizing_prompt: bool,
     pub prompt_hover: bool,
     pub prompt_collapsed: bool,
@@ -462,21 +336,11 @@ impl AppState {
             toast: None,
             tooltip: None,
             selection: None,
-            screen_selection: None,
-            screen_click: None,
-            pending_screen_click: None,
-            pending_card_toggle: None,
-            next_clipboard_id: 1,
-            clipboard_generation: 0,
-            clipboard_requests: Vec::new(),
-            pending_cut: None,
             terminal_selection: None,
             lx_selection: None,
             lx_input_drag: None,
             lx_card_press: None,
             selection_autoscroll: None,
-            lx_selection_autoscroll: None,
-            screen_selection_refresh: None,
             resizing_prompt: false,
             prompt_hover: false,
             prompt_collapsed: false,

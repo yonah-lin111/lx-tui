@@ -186,24 +186,26 @@ pub fn apply_worktree_open_key(state: &mut AppState, key: OverlayKey) {
             match key {
                 OverlayKey::Up => dialog.select_previous(),
                 OverlayKey::Down => dialog.select_next(),
-                OverlayKey::Char(_)
-                | OverlayKey::Clear
-                | OverlayKey::Backspace
-                | OverlayKey::Delete
-                | OverlayKey::Left
-                | OverlayKey::Right
-                | OverlayKey::Home
-                | OverlayKey::End
-                | OverlayKey::Undo
-                | OverlayKey::Redo
-                | OverlayKey::WordLeft
-                | OverlayKey::WordRight
-                | OverlayKey::DeleteWordBackward
-                | OverlayKey::DeleteWordForward => {
-                    if dialog.query.apply_key(key) {
-                        dialog.normalize_selection();
-                    }
+                OverlayKey::Char(ch) => {
+                    dialog.query.insert_char(ch);
+                    dialog.normalize_selection();
                 }
+                OverlayKey::Clear => {
+                    dialog.query.clear();
+                    dialog.normalize_selection();
+                }
+                OverlayKey::Backspace => {
+                    dialog.query.backspace();
+                    dialog.normalize_selection();
+                }
+                OverlayKey::Delete => {
+                    dialog.query.delete();
+                    dialog.normalize_selection();
+                }
+                OverlayKey::Left => dialog.query.move_left(),
+                OverlayKey::Right => dialog.query.move_right(),
+                OverlayKey::Home => dialog.query.move_home(),
+                OverlayKey::End => dialog.query.move_end(),
                 OverlayKey::Esc
                 | OverlayKey::Enter
                 | OverlayKey::EnterFolder
@@ -337,16 +339,6 @@ fn open_workspace_for_checkout(state: &AppState, path: &Path) -> Option<usize> {
             .is_some_and(|git| git.checkout_path == path)
             || workspace.cwd.as_deref() == Some(path)
     })
-}
-
-/// 粘贴后重新钳制 worktree 查询框的选中项。
-pub fn normalize_worktree_selection(state: &mut AppState) -> bool {
-    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_mut() else {
-        return false;
-    };
-    let before = dialog.selected;
-    dialog.normalize_selection();
-    dialog.selected != before
 }
 
 #[cfg(test)]

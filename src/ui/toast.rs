@@ -5,7 +5,6 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
@@ -98,7 +97,7 @@ pub fn render(
     let width = usize::from(inner.width);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            text::truncate_to_width(&toast.message, width),
+            text::ellipsize(&toast.message, width),
             style::text(),
         )))
         .alignment(Alignment::Center),
@@ -138,7 +137,7 @@ fn box_size(toast: &Toast) -> (u16, u16) {
         .as_deref()
         .into_iter()
         .chain(std::iter::once(toast.message.as_str()))
-        .map(|line| line.width())
+        .map(|line| line.chars().count())
         .max()
         .unwrap_or_default();
     let width = u16::try_from(text.saturating_add(4)).unwrap_or(u16::MAX);

@@ -8,33 +8,24 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneView};
 use crate::app::update;
-use crate::input::{self, GlobalEdit, Routed};
+use crate::input::{self, Routed};
 use crate::layout::PaneId;
 use crate::pty::PtySession;
+use crate::ui::layout::ViewLayout;
 
 use super::mouse::hit::copy_with_toast;
 use super::paste;
-use super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
+use super::session::{ensure_workspace_visible, reveal_active_tab, write_to_pane};
 
 /// 处理终端按键事件。
 pub(crate) fn handle_key_event(
     key: KeyEvent,
     state: &mut AppState,
     sessions: &mut HashMap<PaneId, PtySession>,
-    geometry: &Geometry,
-    cache: &mut crate::ui::RenderCache,
+    view: &ViewLayout,
     dirty: &mut bool,
 ) {
     if key.kind == KeyEventKind::Release {
-        return;
-    }
-    let view = &geometry.view;
-
-    // 全局编辑快捷键先于焦点分流：有选区的复制、可编辑目标的剪切/粘贴/全选。
-    // 返回 false 表示应继续按焦点路由（终端 PTY 的 Ctrl+C / Ctrl+V / Ctrl+A）。
-    if let Some(edit) = input::global_edit_key(key)
-        && handle_global_edit(edit, key, state, geometry, cache, dirty)
-    {
         return;
     }
 
@@ -84,16 +75,9 @@ pub(crate) fn handle_key_event(
                 state.overlay,
                 Some(Overlay::NewWorkspace(_) | Overlay::TrustWorkspace(_))
             );
-            let overlay_before = state.overlay.as_ref().map(Overlay::kind);
             if let Some((pane, bytes)) = update::apply_overlay_key(state, key) {
                 write_to_pane(sessions, pane, &bytes);
                 update::reset_pane_scroll(state, pane);
-            }
-            if overlay_before.is_some()
-                && state.overlay.as_ref().map(Overlay::kind) != overlay_before
-            {
-                // 模态关闭或替换：底层/旧浮层的屏幕选区不再属于当前画面。
-                update::clear_selection(state);
             }
             if was_confirm || was_menu || was_worktree || was_new_ws {
                 ensure_workspace_visible(state, view);
@@ -104,6 +88,22 @@ pub(crate) fn handle_key_event(
         Routed::SavePrompt => {
             update::save_prompt_shortcut(state);
             *dirty = true;
+        }
+        Routed::Copy => {
+            if update::prompt_tree_mode(state) {
+                // 树视图 Ctrl+C 与模态输入框一致：清空搜索过滤。
+                update::clear_prompt_search(state);
+                *dirty = true;
+            } else if let Some(text) = update::prompt_copy_text(state) {
+                copy_with_toast(state, &text);
+                *dirty = true;
+            }
+        }
+        Routed::CopyTemplateBlock => {
+            if let Some(text) = update::copy_template_block_at_cursor(state) {
+                copy_with_toast(state, &text);
+                *dirty = true;
+            }
         }
         Routed::Pane(bytes) => {
             let id = state.active_tab().layout.focus();
@@ -123,108 +123,6 @@ pub(crate) fn handle_key_event(
     }
 }
 
-/// 全局编辑快捷键分派；返回 true 表示已消费，false 交给焦点路由（终端 PTY）。
-fn handle_global_edit(
-    edit: GlobalEdit,
-    key: KeyEvent,
-    state: &mut AppState,
-    geometry: &Geometry,
-    cache: &mut crate::ui::RenderCache,
-    dirty: &mut bool,
-) -> bool {
-    let terminal_pane = state.overlay.is_none()
-        && !update::page_rename_active(state)
-        && state.panes_focused()
-        && state
-            .active_pane()
-            .is_some_and(|pane| pane.view != PaneView::Lx);
-    let control_only = key.modifiers.contains(KeyModifiers::CONTROL)
-        && !key.modifiers.contains(KeyModifiers::SUPER);
-    match edit {
-        GlobalEdit::CopyTemplateBlock => {
-            // 只有 prompt 编辑器拥有模板块语义；浮层/页重命名打开时不能穿透到底层。
-            if state.overlay.is_some()
-                || update::page_rename_active(state)
-                || !state.prompt_focused()
-            {
-                return false;
-            }
-            if let Some(text) = update::copy_template_block_at_cursor(state) {
-                copy_with_toast(state, &text);
-                *dirty = true;
-            }
-            true
-        }
-        GlobalEdit::Copy => {
-            if let Some(selection) = update::copyable_selection(state, &geometry.rects, cache) {
-                copy_with_toast(state, &selection.text);
-                *dirty = true;
-                return true;
-            }
-            if terminal_pane {
-                // 无本地选区：Ctrl+C 原样进 PTY；Cmd+C 没有可复制内容，吞掉。
-                return !control_only;
-            }
-            // 引用文件夹目录弹窗的 Ctrl+C 是显式“复制引用”，交给浮层路由。
-            if matches!(state.overlay, Some(Overlay::ReferencedFolderMenu(_))) {
-                return false;
-            }
-            // prompt 树视图的搜索框沿用单行输入语义：无选区 Ctrl+C 清空过滤词。
-            if state.prompt_focused() && update::prompt_tree_mode(state) {
-                if update::apply_prompt_search(state, &crate::app::actions::EditorCommand::Escape) {
-                    *dirty = true;
-                }
-                return true;
-            }
-            // todo 行内编辑的 Ctrl+C 清空输入框；列表态仍吞掉，不误删条目。
-            if control_only && state.todo_focused() {
-                let changed = state.todo.edit_input_mut().is_some_and(|input| {
-                    let had_text = !input.text().is_empty();
-                    input.clear();
-                    had_text
-                });
-                if changed {
-                    *dirty = true;
-                }
-                return true;
-            }
-            // lx 页无文本选区时，Ctrl+C 是清空当前输入框（ask 编辑态清空手写缓冲；
-            // /resume 历史面板仍由 apply_lx_input 转成“复制会话 id”）。Cmd+C 不触发清空。
-            if control_only
-                && state.overlay.is_none()
-                && state.panes_focused()
-                && state
-                    .active_pane()
-                    .is_some_and(|pane| pane.view == PaneView::Lx)
-            {
-                update::apply_lx_input(state, crate::app::actions::LxInput::Clear);
-                *dirty = true;
-            }
-            true
-        }
-        GlobalEdit::Cut => {
-            if terminal_pane {
-                return false;
-            }
-            if update::request_cut(state) {
-                *dirty = true;
-            }
-            true
-        }
-        GlobalEdit::Paste => {
-            if terminal_pane && control_only {
-                // Ctrl+V 是 shell/readline 的 literal-next，不抢。
-                return false;
-            }
-            // 只登记请求；事件循环在阻塞线程读取剪贴板并校验目标快照后回投。
-            if update::request_paste(state) {
-                *dirty = true;
-            }
-            true
-        }
-    }
-}
-
 /// 处理终端粘贴事件。
 pub(crate) fn handle_paste_event(
     text: String,
@@ -232,39 +130,26 @@ pub(crate) fn handle_paste_event(
     sessions: &mut HashMap<PaneId, PtySession>,
     dirty: &mut bool,
 ) {
-    // 页重命名输入：粘贴进入行内单行输入，不穿透到底层。
-    if state.overlay.is_none() && state.prompt_focused() && update::page_rename_active(state) {
-        if let Some(input) = update::active_text_input_mut(state)
-            && input.insert_str(&text)
-        {
-            *dirty = true;
-        }
-        return;
-    }
-    // 浮层内的单行输入统一走同一个粘贴入口；浮层打开时绝不穿透到底层。
-    if state.overlay.is_some() {
-        if matches!(
-            state.overlay,
-            Some(Overlay::ReferencedFolderSearch(_) | Overlay::WorktreeOpen(_))
-        ) {
-            // 搜索框插入后需要重新过滤，worktree 查询框需要重新钳制高亮。
-            if let Some(input) = update::active_text_input_mut(state)
-                && input.insert_str(&text)
-            {
-                if matches!(state.overlay, Some(Overlay::ReferencedFolderSearch(_))) {
-                    update::refresh_referenced_search(state);
-                } else {
-                    update::normalize_worktree_selection(state);
-                }
+    // 引用文件夹输入/搜索弹窗：粘贴进入对应单行输入框，不穿透到底层。
+    if let Some(overlay) = state.overlay.as_mut() {
+        match overlay {
+            Overlay::ReferencedFolderInput(input) => {
+                input.input.insert_str(&text);
                 *dirty = true;
+                return;
             }
-            return;
+            Overlay::ReferencedFolderSearch(search) => {
+                if search.query.insert_str(&text) {
+                    update::refresh_referenced_search(state);
+                    *dirty = true;
+                }
+                return;
+            }
+            _ => {}
         }
-        if let Some(input) = update::active_text_input_mut(state)
-            && input.insert_str(&text)
-        {
-            *dirty = true;
-        }
+    }
+    // 浮层打开时粘贴吞掉，不穿透到底层终端（与键盘过滤一致）。
+    if state.overlay.is_some() {
         return;
     }
     // 侧栏没有键盘交互（`input::route` 把它的按键全吞掉），粘贴必须同样吞掉：

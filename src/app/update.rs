@@ -1,7 +1,6 @@
 //! 行为到状态的转换；几何信息由事件循环传入，保证逻辑纯且可测。
 
 mod chat;
-mod clipboard;
 mod dialog;
 mod editor;
 mod focus;
@@ -20,7 +19,6 @@ mod workspace_list;
 mod worktree;
 
 pub use chat::*;
-pub use clipboard::*;
 pub use dialog::*;
 pub use editor::*;
 pub use focus::*;
@@ -38,8 +36,8 @@ pub use workspace::*;
 pub use workspace_list::*;
 pub use worktree::{
     apply_git_refresh, apply_worktree_list, apply_worktree_open_key, commit_worktree_open,
-    normalize_worktree_selection, open_worktree_dialog, request_git_refresh,
-    set_worktree_open_selection, take_git_requests, toggle_workspace_group, worktree_candidates,
+    open_worktree_dialog, request_git_refresh, set_worktree_open_selection, take_git_requests,
+    toggle_workspace_group, worktree_candidates,
 };
 
 use super::actions::Action;

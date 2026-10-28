@@ -69,11 +69,11 @@ fn extracts_multi_line_range() {
     term.feed(b"abc\r\ndef");
     assert_eq!(
         extract(&mut term, (0, 0), (1, 2)).as_deref(),
-        Some("abc                 \ndef")
+        Some("abc\ndef")
     );
     assert_eq!(
         extract(&mut term, (1, 2), (0, 0)).as_deref(),
-        Some("abc                 \ndef")
+        Some("abc\ndef")
     );
 }
 
@@ -97,7 +97,7 @@ fn selection_rotates_with_output_scroll() {
     term.feed(b"tail\r\n");
     assert_eq!(
         term.take_selection_text().as_deref(),
-        Some("l08 "),
+        Some("l08"),
         "selection must stay pinned to its content"
     );
 }
@@ -159,7 +159,7 @@ fn selection_extracts_scrolled_back_content() {
     }
     // 滚回两行后视口首行是 l06，按视口坐标选择提取的仍是屏幕上看到的内容。
     assert!(term.scroll_display(2));
-    assert_eq!(extract(&mut term, (0, 0), (0, 3)).as_deref(), Some("l06 "));
+    assert_eq!(extract(&mut term, (0, 0), (0, 3)).as_deref(), Some("l06"));
 }
 
 #[test]

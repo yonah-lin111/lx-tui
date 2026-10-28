@@ -168,42 +168,6 @@ pub fn write_clipboard(text: &str) -> bool {
     osc52 || native
 }
 
-/// 读取系统剪贴板文本；平台工具缺失、超时或非 UTF-8 时返回 None。
-///
-/// 调用方必须放在后台线程执行，不得阻塞事件循环。
-pub fn read_clipboard() -> Option<String> {
-    #[cfg(target_os = "macos")]
-    let text = run_with_stdout("pbpaste", &[]);
-    #[cfg(windows)]
-    let text = run_with_stdout(
-        "powershell.exe",
-        &[
-            "-NonInteractive",
-            "-NoProfile",
-            "-Command",
-            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Clipboard -Raw",
-        ],
-    );
-    #[cfg(target_os = "linux")]
-    let text = [
-        ("wl-paste", &[][..]),
-        ("xclip", &["-selection", "clipboard", "-o"][..]),
-        ("xsel", &["--clipboard", "--output"][..]),
-    ]
-    .iter()
-    .find_map(|(program, args)| run_with_stdout(program, args));
-    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
-    let text = None;
-    text
-}
-
-/// 可确认的原生剪贴板写入：仅当平台工具成功退出时返回 true。
-///
-/// 不发送 OSC 52（没有终端确认）；调用方必须放在后台线程，写入成功后才能删除原文。
-pub fn write_clipboard_confirmed(text: &str) -> bool {
-    native_copy(text)
-}
-
 /// 默认 shell：Unix 取 `$SHELL`，Windows 取 `%COMSPEC%`。
 pub fn default_shell() -> String {
     #[cfg(windows)]
@@ -882,49 +846,6 @@ fn native_copy(text: &str) -> bool {
         false
     };
     copied
-}
-
-/// 执行平台剪贴板读取命令并返回 UTF-8 输出；超时或失败返回 None。
-fn run_with_stdout(program: &str, args: &[&str]) -> Option<String> {
-    use std::process::{Command, Stdio};
-
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buffer = Vec::new();
-        stdout.read_to_end(&mut buffer).ok().map(|_| buffer)
-    });
-    let deadline = Instant::now() + NATIVE_COPY_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    };
-    let output = reader.join().ok()??;
-    status
-        .success()
-        .then(|| String::from_utf8(output).ok())
-        .flatten()
 }
 
 /// 以 stdin 传入文本执行复制命令；超时或失败返回 false。

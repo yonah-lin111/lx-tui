@@ -230,8 +230,8 @@ fn typing_in_tree_mode_filters_like_modal_input_and_ctrl_c_clears() {
     apply_editor(&mut state, EditorCommand::End);
     apply_editor(&mut state, EditorCommand::Backspace);
     assert_eq!(state.workspaces[0].prompt_panel.search.text(), "este");
-    // 第一次 Esc 清空过滤词并留在列表；第二次 Esc 返回编辑视图。
-    apply_editor(&mut state, EditorCommand::Escape);
+    // Ctrl+C 清空过滤词并留在列表；Esc 返回编辑视图。
+    assert!(clear_prompt_search(&mut state));
     assert!(state.workspaces[0].prompt_panel.search.text().is_empty());
     assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 7);
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Tree);

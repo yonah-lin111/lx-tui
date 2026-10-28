@@ -547,45 +547,7 @@ impl AskEditor {
     /// 传入的必须是**净化后**的字节数：`Lx::insert_str` 内部会把 `\t` 展开成两个
     /// 空格、丢弃控制字符，按原始输入判长会让上限翻倍。
     pub fn can_insert(&self, bytes: usize) -> bool {
-        let selected = self
-            .0
-            .text_selection_range()
-            .map_or(0, |(start, end)| end - start);
-        self.text()
-            .len()
-            .saturating_sub(selected)
-            .saturating_add(bytes)
-            <= MAX_ASK_CUSTOM_BYTES
-    }
-
-    /// 内容修订号；剪切回执按它确认编辑器未被改动。
-    pub fn revision(&self) -> u64 {
-        self.0.revision()
-    }
-
-    /// 当前选区字节范围；无选区返回 None。
-    pub fn selection_range(&self) -> Option<(usize, usize)> {
-        self.0.text_selection_range()
-    }
-
-    /// 当前选中文本；无选区返回 None。
-    pub fn selected_text(&self) -> Option<String> {
-        self.0.selected_text()
-    }
-
-    /// 全选。
-    pub fn select_all(&mut self) {
-        self.0.select_all();
-    }
-
-    /// 删除选区；无选区返回 false。
-    pub fn delete_selection(&mut self) -> bool {
-        self.0.delete_selection()
-    }
-
-    /// 剪切选区：返回选中文本。
-    pub fn cut_selection(&mut self) -> Option<String> {
-        self.0.cut_selection()
+        self.text().len().saturating_add(bytes) <= MAX_ASK_CUSTOM_BYTES
     }
 
     pub fn insert_char(&mut self, ch: char) {

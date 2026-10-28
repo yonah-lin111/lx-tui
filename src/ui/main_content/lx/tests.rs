@@ -419,12 +419,7 @@ fn copy_text_keeps_wide_chars_once() {
         ((row, MARGIN), (row, area.width - 1)),
         &mut PaneCache::default(),
     );
-    assert!(text.starts_with("> 你谁"), "{text:?}");
-    assert_eq!(
-        crate::app::prompt::text::display_width(&text),
-        usize::from(area.width - crate::layout::LX_INPUT_MARGIN),
-        "{text:?}"
-    );
+    assert_eq!(text, "> 你谁");
 }
 
 #[test]

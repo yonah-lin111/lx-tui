@@ -8,6 +8,7 @@ use ratatui::layout::Direction;
 
 use crate::app::overlay::Overlay;
 use crate::app::state::AppState;
+use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::Config;
 use crate::layout::{self, PaneId};
@@ -15,7 +16,7 @@ use crate::pty::PtySession;
 use crate::ui;
 
 use super::super::session::Geometry;
-use super::hit::{lx_autoscroll_region, lx_screen_region, pane_at, pane_content_inner};
+use super::hit::{pane_at, pane_content_inner};
 use super::wheel::forward_pane_mouse_event;
 
 /// 鼠标拖拽事件处理。
@@ -240,43 +241,6 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
-    // 屏幕选择优先于窗格转发与组件选区：Shift+拖动与静态文字拖动都走这里。
-    if state
-        .screen_selection
-        .as_ref()
-        .is_some_and(|selection| selection.is_dragging())
-    {
-        let point = crate::app::selection::ScreenPoint::new(
-            mouse.row.min(geometry.screen.bottom().saturating_sub(1)),
-            mouse.column.min(geometry.screen.right().saturating_sub(1)),
-        );
-        if let Some(pending) = state.pending_screen_click.as_mut()
-            && point != pending.anchor
-        {
-            pending.dragged = true;
-        }
-        update::drag_screen_selection(state, &geometry.screen_text, point);
-        if let Some((pane, inner)) = lx_pane_for_point(state, rects, point)
-            && let Some((target, area, total, visible)) =
-                lx_autoscroll_region(state, pane, inner, cache)
-        {
-            update::arm_lx_selection_autoscroll(
-                state,
-                pane,
-                target,
-                area,
-                inner,
-                total,
-                visible,
-                (mouse.column, mouse.row),
-                Instant::now(),
-            );
-        } else {
-            state.lx_selection_autoscroll = None;
-        }
-        *dirty = true;
-        return;
-    }
     // 没有本地选区时，鼠标上报模式的应用自己处理拖拽（对齐 herdr）。
     if state.terminal_selection.is_none()
         && state.selection.is_none()
@@ -314,27 +278,9 @@ pub(crate) fn handle_mouse_drag(
         if inner.width == 0 || inner.height == 0 {
             return;
         }
-        let region = lx_screen_region(state, pane, inner).unwrap_or(inner);
-        let row = mouse.row.clamp(region.y, region.bottom() - 1) - inner.y;
-        let col = mouse.column.clamp(region.x, region.right() - 1) - inner.x;
+        let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
+        let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
         update::drag_lx_selection(state, pane, row, col);
-        if let Some((target, area, total, visible)) =
-            lx_autoscroll_region(state, pane, inner, cache)
-        {
-            update::arm_lx_selection_autoscroll(
-                state,
-                pane,
-                target,
-                area,
-                inner,
-                total,
-                visible,
-                (mouse.column, mouse.row),
-                Instant::now(),
-            );
-        } else {
-            state.lx_selection_autoscroll = None;
-        }
         *dirty = true;
         return;
     }
@@ -376,39 +322,13 @@ pub(crate) fn handle_mouse_drag(
     *dirty = true;
 }
 
-/// 屏幕选区所在 lx 窗格：优先鼠标下的窗格，越出屏幕时回退到选区起点。
-fn lx_pane_for_point(
-    state: &AppState,
-    rects: &[(PaneId, ratatui::layout::Rect)],
-    point: crate::app::selection::ScreenPoint,
-) -> Option<(PaneId, ratatui::layout::Rect)> {
-    if let Some((pane, inner)) = pane_at(rects, point.col, point.row)
-        && state
-            .pane_anywhere(pane)
-            .is_some_and(|target| target.view == crate::app::state::PaneView::Lx)
-    {
-        return Some((pane, inner));
-    }
-    let anchor = state.screen_selection.as_ref()?.range()?.0;
-    rects.iter().find_map(|(pane, rect)| {
-        let inner = layout::pane_inner_rect(*rect);
-        if !inner.contains((anchor.col, anchor.row).into()) {
-            return None;
-        }
-        state
-            .pane_anywhere(*pane)
-            .is_some_and(|target| target.view == crate::app::state::PaneView::Lx)
-            .then_some((*pane, inner))
-    })
-}
-
 /// 鼠标左键释放事件处理。
 pub(crate) fn handle_mouse_up_left(
     mouse: &MouseEvent,
     state: &mut AppState,
     sessions: &mut HashMap<PaneId, PtySession>,
     geometry: &Geometry,
-    _cache: &mut ui::RenderCache,
+    cache: &mut ui::RenderCache,
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
@@ -420,42 +340,6 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     if state.referenced_menu_scroll_drag.take().is_some() {
-        *dirty = true;
-        return;
-    }
-    // 延迟的文字行点击：没有位移才补执行原动作；拖动过则只收尾选区。
-    if let Some(pending) = state.pending_screen_click.take() {
-        let point = crate::app::selection::ScreenPoint::new(
-            mouse.row.min(geometry.screen.bottom().saturating_sub(1)),
-            mouse.column.min(geometry.screen.right().saturating_sub(1)),
-        );
-        let dragged = pending.dragged || point != pending.anchor;
-        if !dragged {
-            update::clear_selection(state);
-            *dirty = true;
-            super::press::apply_pending_screen_click(
-                state,
-                pending.action,
-                sessions,
-                geometry,
-                dirty,
-            );
-            return;
-        }
-        if state.screen_selection.is_some() {
-            update::drag_screen_selection(state, &geometry.screen_text, point);
-            update::finish_screen_selection(state);
-            *dirty = true;
-        }
-        return;
-    }
-    // 屏幕选区：松开只结束拖动，不写剪贴板、不清高亮。
-    if state
-        .screen_selection
-        .as_ref()
-        .is_some_and(|selection| selection.is_dragging())
-    {
-        update::finish_screen_selection(state);
         *dirty = true;
         return;
     }
@@ -537,40 +421,110 @@ pub(crate) fn handle_mouse_up_left(
         .selection
         .is_some_and(|selection| selection.pane() == state.prompt.id())
     {
-        // 松开只结束拖动；高亮保留，复制由 Ctrl/Cmd+C 触发。
         update::end_selection_drag(state);
         *dirty = true;
         return;
     }
-    if let Some(pane) = state.terminal_selection {
-        // 松开只结束拖动；终端仿真器选区继续保留供复制。
-        update::finish_terminal_selection(state, pane);
-        *dirty = true;
-        return;
-    }
-    // lx 输入框：松开保留选区，空选区清除锚点。
-    if update::finish_lx_input_selection(state).is_some() {
-        *dirty = true;
-        return;
-    }
-    // lx 页：有选区时只结束拖动；没有拖出范围才是点击（折叠卡片）。
-    // 拖过哪怕一列就是选区，绝不顺手收起卡片。
-    let selection = update::finish_lx_selection(state);
-    let mut clicked_card = None;
-    if selection.and_then(|selection| selection.range()).is_none()
-        && let Some(pressed) = card_press
+    if let Some(pane) = state.terminal_selection
+        && let Some(text) = update::finish_terminal_selection(state, pane)
     {
+        let now = Instant::now();
+        if crate::platform::write_clipboard(&text) {
+            update::show_toast(
+                state,
+                Toast::new(ToastKind::Default, ui::text::TOAST_COPIED, Some(pane), now)
+                    .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+            );
+        } else {
+            tracing::warn!("clipboard write failed");
+            update::show_toast(
+                state,
+                Toast::new(
+                    ToastKind::Danger,
+                    ui::text::TOAST_COPY_FAILED,
+                    Some(pane),
+                    now,
+                )
+                .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+            );
+        }
+    }
+    // lx 输入框选区松开：复制选中文本（空选区不复制）。
+    if let Some((pane, text)) = update::take_lx_input_selection(state) {
+        if !text.trim().is_empty() {
+            let now = Instant::now();
+            if crate::platform::write_clipboard(&text) {
+                update::show_lx_toast(
+                    state,
+                    pane,
+                    Toast::new(ToastKind::Default, ui::text::TOAST_COPIED, Some(pane), now)
+                        .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+                );
+            } else {
+                tracing::warn!("clipboard write failed");
+                update::show_lx_toast(
+                    state,
+                    pane,
+                    Toast::new(
+                        ToastKind::Danger,
+                        ui::text::TOAST_COPY_FAILED,
+                        Some(pane),
+                        now,
+                    )
+                    .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+                );
+            }
+        }
+        *dirty = true;
+        return;
+    }
+    // lx 页选区松开：复制选中文本（空选区不复制）。
+    // 按下时落在展开卡片正文上、且**没有拖出选区** → 这次是点击，折叠该块；
+    // 拖过哪怕一列就是复制，绝不折叠（长按选中正文不能顺手把卡片收起来）。
+    let selection = update::take_lx_selection(state);
+    let mut clicked_card = None;
+    if let Some(selection) = selection
+        && let Some(range) = selection.range()
+    {
+        let pane = selection.pane();
+        let area = rects
+            .iter()
+            .find(|(id, _)| *id == pane)
+            .map(|(_, rect)| layout::pane_inner_rect(*rect));
+        if let Some((area, target)) = area.zip(state.pane_anywhere(pane)) {
+            // 复用该窗格的常驻缓存：这一帧刚画过历史，快照与绘制数据全命中。
+            let text = ui::main_content::lx::copy_text(area, &target.lx, range, cache.pane(pane));
+            if !text.trim().is_empty() {
+                let now = Instant::now();
+                if crate::platform::write_clipboard(&text) {
+                    update::show_lx_toast(
+                        state,
+                        pane,
+                        Toast::new(ToastKind::Default, ui::text::TOAST_COPIED, Some(pane), now)
+                            .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+                    );
+                } else {
+                    tracing::warn!("clipboard write failed");
+                    update::show_lx_toast(
+                        state,
+                        pane,
+                        Toast::new(
+                            ToastKind::Danger,
+                            ui::text::TOAST_COPY_FAILED,
+                            Some(pane),
+                            now,
+                        )
+                        .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+                    );
+                }
+            }
+        }
+    } else if let Some(pressed) = card_press {
         clicked_card = Some(pressed);
-        update::clear_selection(state);
     }
     if let Some((pane, card)) = clicked_card {
-        update::schedule_card_toggle(
-            state,
-            pane,
-            card,
-            crate::app::state::CardToggleSurface::LxHistory,
-            Instant::now(),
-        );
+        update::toggle_lx_card(state, pane, card);
     }
+    update::clear_selection(state);
     *dirty = true;
 }
