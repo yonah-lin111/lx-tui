@@ -29,7 +29,7 @@ pub(crate) fn handle_overlay_click(
     {
         let text_x = area.x.saturating_add(2);
         let text_w = area.width.saturating_sub(2);
-        if row == area.y && column >= text_x && column < area.right() {
+        if row == area.y && column >= area.x && column < area.right() {
             let rel_col = column.saturating_sub(text_x);
             let char_idx = ui::widgets::input::char_index_at_col(
                 input.text(),

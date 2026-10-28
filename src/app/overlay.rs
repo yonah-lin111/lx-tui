@@ -708,7 +708,13 @@ impl TextInput {
     /// 在光标处插入字符（有选区时先替换选区）。
     pub fn insert_char(&mut self, ch: char) {
         self.push_undo();
-        self.delete_selected();
+        if let Some((start, end)) = self.selection() {
+            let start_byte = self.byte_offset(start);
+            let end_byte = self.byte_offset(end);
+            self.text.replace_range(start_byte..end_byte, "");
+            self.cursor = start;
+            self.selection_anchor = None;
+        }
         let at = self.byte_offset(self.cursor);
         self.text.insert(at, ch);
         self.cursor += 1;
@@ -732,7 +738,13 @@ impl TextInput {
             return false;
         }
         self.push_undo();
-        self.delete_selected();
+        if let Some((start, end)) = self.selection() {
+            let start_byte = self.byte_offset(start);
+            let end_byte = self.byte_offset(end);
+            self.text.replace_range(start_byte..end_byte, "");
+            self.cursor = start;
+            self.selection_anchor = None;
+        }
         let at = self.byte_offset(self.cursor);
         self.text.insert_str(at, &cleaned);
         self.cursor += cleaned.chars().count();

@@ -405,7 +405,9 @@ pub fn apply_todo_paste(state: &mut AppState, text: &str) -> bool {
     let Some(input) = state.todo.edit_input_mut() else {
         return false;
     };
-    let room = crate::db::todo::MAX_TODO_TEXT_CHARS.saturating_sub(input.text().chars().count());
+    let selected_len = input.selection().map_or(0, |(s, e)| e.saturating_sub(s));
+    let remaining_chars = input.text().chars().count().saturating_sub(selected_len);
+    let room = crate::db::todo::MAX_TODO_TEXT_CHARS.saturating_sub(remaining_chars);
     if room == 0 {
         return false;
     }
@@ -415,7 +417,9 @@ pub fn apply_todo_paste(state: &mut AppState, text: &str) -> bool {
 
 /// 在输入框里插入一个字符；已达上限时吞掉（返回 false，不产生变化）。
 fn insert_bounded(input: &mut crate::app::overlay::TextInput, ch: char) -> bool {
-    if input.text().chars().count() >= crate::db::todo::MAX_TODO_TEXT_CHARS {
+    let selected_len = input.selection().map_or(0, |(s, e)| e.saturating_sub(s));
+    let remaining_chars = input.text().chars().count().saturating_sub(selected_len);
+    if remaining_chars >= crate::db::todo::MAX_TODO_TEXT_CHARS {
         return false;
     }
     input.insert_char(ch);

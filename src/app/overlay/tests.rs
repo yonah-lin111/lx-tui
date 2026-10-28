@@ -187,6 +187,18 @@ fn text_input_undo_and_redo_lifecycle() {
 }
 
 #[test]
+fn text_input_selection_replace_is_single_undo_step() {
+    let mut input = TextInput::new("hello world");
+    input.set_selection(6, 11);
+    input.insert_char('!');
+    assert_eq!(input.text(), "hello !");
+
+    // 撤销一步直接还原选区被替换前的 "hello world"
+    assert!(input.undo());
+    assert_eq!(input.text(), "hello world");
+}
+
+#[test]
 fn overlay_kind_reports_variant() {
     let menu = Overlay::Menu(Menu {
         anchor: (0, 0),

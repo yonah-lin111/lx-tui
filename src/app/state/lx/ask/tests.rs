@@ -243,3 +243,33 @@ fn ask_editor_selection_and_editing() {
     editor.delete_to_line_start();
     assert_eq!(editor.text(), "");
 }
+
+#[test]
+fn ask_editor_selection_overflow_preserves_text_and_undo() {
+    let mut editor = AskEditor::new();
+    let text = "a".repeat(MAX_ASK_CUSTOM_BYTES);
+    assert!(editor.insert_str(&text));
+    assert_eq!(editor.text().len(), MAX_ASK_CUSTOM_BYTES);
+
+    // 选中前 10 字节，尝试粘贴 20 字节（总长将超出上限）
+    editor.begin_text_selection(0, 0);
+    editor.drag_text_selection(0, 10);
+    assert!(editor.has_text_selection());
+    let overflow = "b".repeat(20);
+    assert!(!editor.insert_str(&overflow), "超限必须整次拒绝");
+    assert_eq!(
+        editor.text().len(),
+        MAX_ASK_CUSTOM_BYTES,
+        "超限拒绝后原选区文字必须完好保留"
+    );
+
+    // 粘贴 10 字节正好替换
+    let exact = "b".repeat(10);
+    assert!(editor.insert_str(&exact));
+    assert_eq!(editor.text().len(), MAX_ASK_CUSTOM_BYTES);
+    assert!(editor.text().starts_with("bbbbbbbbbb"));
+
+    // 撤销一步恢复原状
+    editor.undo();
+    assert!(editor.text().starts_with("aaaaaaaaaa"));
+}

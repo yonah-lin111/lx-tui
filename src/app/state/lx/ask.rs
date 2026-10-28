@@ -547,14 +547,36 @@ impl AskEditor {
     /// 传入的必须是**净化后**的字节数：`Lx::insert_str` 内部会把 `\t` 展开成两个
     /// 空格、丢弃控制字符，按原始输入判长会让上限翻倍。
     pub fn can_insert(&self, bytes: usize) -> bool {
-        self.text().len().saturating_add(bytes) <= MAX_ASK_CUSTOM_BYTES
+        self.can_replace(bytes)
+    }
+
+    /// 判定在替换当前可能存在的选区后，是否仍在字节上限内。
+    pub fn can_replace(&self, bytes: usize) -> bool {
+        let selected_bytes = self
+            .text_selection_range()
+            .map_or(0, |(s, e)| e.saturating_sub(s));
+        self.text()
+            .len()
+            .saturating_sub(selected_bytes)
+            .saturating_add(bytes)
+            <= MAX_ASK_CUSTOM_BYTES
     }
 
     pub fn insert_char(&mut self, ch: char) {
-        self.delete_selected();
-        if self.can_insert(ch.len_utf8()) {
-            self.0.insert_char(ch);
+        let ch_len = ch.len_utf8();
+        if !self.can_replace(ch_len) {
+            return;
         }
+        let selection = self.0.text_selection_range();
+        self.0.snapshot();
+        if let Some((start, end)) = selection {
+            self.0.input.replace_range(start..end, "");
+            self.0.cursor = start;
+        }
+        self.0.input.insert(self.0.cursor, ch);
+        self.0.cursor += ch_len;
+        self.0.touch();
+        self.0.scroll_cursor_into_view();
     }
 
     /// 粘贴：先按与写入完全相同的净化规则算长度，再决定是否写入。
@@ -562,21 +584,41 @@ impl AskEditor {
     /// 判定与写入必须看同一份文本，否则 `\t`（展开为两空格）这类字符会让
     /// 「预检通过、实际超限」。
     pub fn insert_str(&mut self, text: &str) -> bool {
-        self.delete_selected();
         let sanitized = crate::app::prompt::text::sanitize(text);
-        if !self.can_insert(sanitized.len()) {
+        if sanitized.is_empty() {
             return false;
         }
-        self.0.insert_str(&sanitized);
+        let sanitized_len = sanitized.len();
+        if !self.can_replace(sanitized_len) {
+            return false;
+        }
+        let selection = self.0.text_selection_range();
+        self.0.snapshot();
+        if let Some((start, end)) = selection {
+            self.0.input.replace_range(start..end, "");
+            self.0.cursor = start;
+        }
+        self.0.input.insert_str(self.0.cursor, &sanitized);
+        self.0.cursor += sanitized_len;
+        self.0.touch();
+        self.0.scroll_cursor_into_view();
         true
     }
 
     pub fn newline(&mut self) {
-        self.delete_selected();
-        // `Lx::plain` 的换行恒为 1 字节（不续写列表标记），预算是精确的。
-        if self.can_insert(1) {
-            self.0.newline();
+        if !self.can_replace(1) {
+            return;
         }
+        let selection = self.0.text_selection_range();
+        self.0.snapshot();
+        if let Some((start, end)) = selection {
+            self.0.input.replace_range(start..end, "");
+            self.0.cursor = start;
+        }
+        self.0.input.insert(self.0.cursor, '\n');
+        self.0.cursor += 1;
+        self.0.touch();
+        self.0.scroll_cursor_into_view();
     }
 
     pub fn backspace(&mut self) {
@@ -717,9 +759,11 @@ impl AskEditor {
             self.0.clear_text_selection();
             return false;
         };
+        self.0.snapshot();
         self.0.input.replace_range(start..end, "");
         self.0.cursor = start;
         self.0.clear_text_selection();
+        self.0.touch();
         self.0.scroll_cursor_into_view();
         true
     }

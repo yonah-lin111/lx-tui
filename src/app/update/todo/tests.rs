@@ -543,6 +543,26 @@ fn todo_undo_and_redo_editing_and_list_mode_swallowed() {
     assert_eq!(state.todo.editing().unwrap().input.text(), "item!");
 }
 
+#[test]
+fn todo_replace_at_max_limit_with_selection() {
+    let mut state = todo_state(&[]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::New));
+    let max_text = "a".repeat(crate::db::todo::MAX_TODO_TEXT_CHARS);
+    assert!(apply_todo_paste(&mut state, &max_text));
+
+    // 选中最后 5 个字符，插入 1 个字符替换
+    state.todo.edit_input_mut().unwrap().set_selection(
+        crate::db::todo::MAX_TODO_TEXT_CHARS - 5,
+        crate::db::todo::MAX_TODO_TEXT_CHARS,
+    );
+    assert!(apply_todo_key(&mut state, TodoKey::Char('b')));
+    assert_eq!(
+        state.todo.editing().unwrap().input.text().chars().count(),
+        crate::db::todo::MAX_TODO_TEXT_CHARS - 4
+    );
+    assert!(state.todo.editing().unwrap().input.text().ends_with('b'));
+}
+
 /// 幽灵行打开时点未选中行之外的位置不再造成越界选中。
 #[test]
 fn click_beyond_list_with_ghost_is_ignored() {
