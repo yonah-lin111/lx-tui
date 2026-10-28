@@ -50,6 +50,11 @@ impl ReferTag {
             Self::ShortImage => "ref-image",
         }
     }
+
+    /// 候选是否为 `@ref/` 短引用形式。
+    pub fn is_short_ref(self) -> bool {
+        matches!(self, Self::ShortRef | Self::ShortFolder | Self::ShortImage)
+    }
 }
 
 /// 快捷候选：完整原文（确认时整体替换触发词）、匹配名称/路径与类型标签。
@@ -407,13 +412,47 @@ fn directory_entry(path: &str, entries: &[MentionEntry]) -> bool {
         .any(|entry| entry.is_directory && entry.path == path)
 }
 
-/// 候选规范化插入键（用于识别指向同一目标的重复项）。
-fn candidate_insertion_key(candidate: &ReferCandidate) -> String {
-    short_ref_marker(
-        &short_ref_candidate_name(candidate),
-        candidate.is_directory(),
-    )
-    .unwrap_or_else(|| candidate.text.clone())
+/// 判定两个候选是否指向同一目标的重复项：
+/// 1. 原文完全一致；
+/// 2. 文件夹/文件类型必须匹配；
+/// 3. 完整路径完全一致；
+/// 4. 其中一个是 `@ref/` 短引用且另一个是完整路径时，若完整路径派生的短名与短引用的正文一致，判定为同一目标的别名重复；
+/// 5. 两个完整路径若存在尾随包含关系（如绝对路径与相对路径）且短名一致，判定为重复。
+///
+/// 注意：两个末两段同名但不同根目录的独立文件（如 `@a/src/index.ts` 与 `@b/src/index.ts`）互不影响，均保留。
+fn is_duplicate(a: &ReferCandidate, b: &ReferCandidate) -> bool {
+    if a.text == b.text {
+        return true;
+    }
+    if a.is_directory() != b.is_directory() {
+        return false;
+    }
+    if a.path == b.path {
+        return true;
+    }
+    let a_is_short = a.tag.is_short_ref();
+    let b_is_short = b.tag.is_short_ref();
+    if a_is_short != b_is_short {
+        let (short_cand, full_cand) = if a_is_short { (a, b) } else { (b, a) };
+        if let Some(short_name) = super::short_ref_name(&full_cand.path) {
+            let short_body = short_cand.path.trim_end_matches(['/', '\\']);
+            let normalized_full = short_name.trim_end_matches(['/', '\\']);
+            if short_body == normalized_full {
+                return true;
+            }
+        }
+    } else if !a_is_short && !b_is_short {
+        let a_norm = a.path.trim_end_matches(['/', '\\']);
+        let b_norm = b.path.trim_end_matches(['/', '\\']);
+        if a_norm.ends_with(b_norm) || b_norm.ends_with(a_norm) {
+            let sa = super::short_ref_name(a_norm);
+            let sb = super::short_ref_name(b_norm);
+            if sa.is_some() && sa == sb {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// 原文与目标短引用去重后追加候选；order 取首次出现序。
@@ -431,10 +470,9 @@ fn push_unique(
         tag,
         order: candidates.len(),
     };
-    let key = candidate_insertion_key(&candidate);
     if candidates
         .iter()
-        .any(|existing| existing.text == raw || candidate_insertion_key(existing) == key)
+        .any(|existing| is_duplicate(existing, &candidate))
     {
         return;
     }

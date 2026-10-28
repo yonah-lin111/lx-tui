@@ -395,3 +395,19 @@ fn candidates_keep_distinct_when_folder_and_file_share_stem() {
         "同名但类型不同（文件夹 vs 文件）各自保留"
     );
 }
+
+#[test]
+fn candidates_keep_different_files_with_same_tail_segments() {
+    // 两个不同包下的 index.ts 文件，末两段均为 src/index.ts，但它们是不同的独立文件，绝不能误去重
+    let text = "@packages/a/src/index.ts @packages/b/src/index.ts ind";
+    let cursor = text.len();
+    let trigger = refer_trigger(text, cursor).expect("trigger");
+    let scope = refer_scope(text, cursor).expect("scope");
+    let candidates = refer_candidates(text, &scope, &trigger.range, &[]);
+    let texts: Vec<&str> = candidates.iter().map(|item| item.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        vec!["@packages/a/src/index.ts", "@packages/b/src/index.ts"],
+        "不同路径的独立文件即使末两段相同也必须全部保留"
+    );
+}

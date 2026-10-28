@@ -341,10 +341,10 @@ impl Prompt {
         self.autosave = None;
         self.expanded_supplements = history.expanded_supplements;
         self.focus_block = history.focus_block;
-        self.scroll = history.scroll.min(self.max_scroll());
         self.normalize_fold_cursor();
-        self.scroll_cursor_into_view();
         self.reconcile_block_focus();
+        self.scroll = history.scroll.min(self.max_scroll());
+        self.scroll_cursor_into_view();
     }
 
     /// 同步内容区尺寸；光标保持在视口内。
