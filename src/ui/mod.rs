@@ -157,8 +157,10 @@ fn paint_screen_selection(frame: &mut Frame<'_>, state: &AppState) {
     // 冻结行已按容器边界裁好：中间行不能再用 0..屏宽，否则长按拖选
     // 会在经过的每一行把侧栏、lx 与 prompt 一起反显。
     let frozen = selection.frozen();
-    let expected_rows = usize::from(end_row.saturating_sub(start.row)) + 1;
-    if frozen.rows.len() == expected_rows && !frozen.rows.is_empty() {
+    // 有冻结行时只按冻结跨度绘制；滚动后的下一帧可能尚未重算新行，
+    // 这时少画/沿用旧行是可接受的，绝不能退回“整行铺满屏幕”的兜底，
+    // 否则每次自动滚动都会闪出一条全局高亮。
+    if !frozen.rows.is_empty() {
         for (offset, row) in frozen.rows.iter().enumerate() {
             let y = start.row.saturating_add(offset as u16);
             if y > end_row || row.cells.is_empty() {

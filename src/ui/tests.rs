@@ -3453,6 +3453,65 @@ fn screen_selection_highlight_respects_container_columns() {
 }
 
 #[test]
+fn stale_frozen_row_does_not_fall_back_to_full_width_highlight() {
+    use crate::app::selection::{
+        FrozenRow, ScreenPoint, ScreenSelection, SelectedCell, SelectedCells, SelectionUnit,
+    };
+    let mut state = AppState::demo();
+    let config = Config::default();
+    let view = view_for(&state);
+    let rects = crate::layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+        config.min_pane_height,
+    );
+    let (_, rect) = rects.first().copied().expect("pane rect");
+    let inner = crate::layout::pane_inner_rect(rect);
+    let start = ScreenPoint::new(inner.y + 2, inner.x + 2);
+    let end = ScreenPoint::new(inner.y + 4, inner.x + 4);
+    let frozen = SelectedCells {
+        rows: vec![FrozenRow {
+            full: "selection".into(),
+            start_col: inner.x + 2,
+            end_col: inner.x + 4,
+            cells: vec![SelectedCell {
+                symbol: "s".into(),
+                width: 1,
+            }],
+        }],
+        start: Some(start),
+        end: Some(start),
+    };
+    let mut selection = ScreenSelection::new(start, SelectionUnit::Character, frozen);
+    selection.set_range(start, end);
+    state.screen_selection = Some(selection);
+
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    let mut cache = RenderCache::default();
+    terminal
+        .draw(|frame| {
+            render_cached(frame, &state, &config, &mut cache);
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let row = inner.y + 4;
+    assert!(
+        !buffer[(2, row)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "冻结行缺失时不得退回整行反显"
+    );
+    assert!(
+        !buffer[(view.prompt.x + 2, row)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "冻结行缺失时不得铺到 prompt"
+    );
+}
+
+#[test]
 fn screen_selection_highlight_is_painted_over_final_frame() {
     use crate::app::selection::{ScreenPoint, ScreenSelection, SelectionUnit};
     let mut state = AppState::demo();

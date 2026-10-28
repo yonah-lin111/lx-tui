@@ -83,6 +83,14 @@
 - **验证**：新增 `lx_selection_edge_autoscroll_moves_history_and_extends_selection`、`lx_selection_wheel_scrolls_viewport_and_extends_selection`、`agents_detail_edge_drag_scrolls_subagent_transcript`。
 - **关键文件**：`src/app/update/selection.rs`、`src/app/update/interaction.rs`、`src/event/mouse/drag.rs`、`src/event/mouse/wheel.rs`、`src/event/mouse/hit.rs`、`src/ui/main_content/lx.rs`。
 
+### P1-4 自动滚动时冻结行尚未更新，重绘退回整行/全局高亮
+
+- **触发**：在 lx 历史或 Agents 详情拖选并滚动，尤其选区起点靠近顶部、滚动后端点行数变化时；高亮会在滚动帧闪出整行，甚至跨容器。
+- **错误原因**：滚动后先平移了选区端点，新的冻结行要等下一帧最终画面取样后才重建；`paint_screen_selection` 在冻结行数与当前范围行数不一致时直接走旧的整行兜底，导致自动滚动每步都可能闪出全宽反显。
+- **修复**：只要存在冻结行，就只按冻结跨度绘制；行数暂时少/多时宁可少画一帧，也不退回整行兜底。空冻结块仍保留给测试/旧路径。
+- **验证**：新增 `stale_frozen_row_does_not_fall_back_to_full_width_highlight`。
+- **关键文件**：`src/ui/mod.rs`、`src/ui/tests.rs`。
+
 ### P2-1 终端双击/三击的 Down 不置脏
 
 - **触发**：在终端窗格双击/三击后暂时按住鼠标，不松开；高亮要等到 Up 才出现。
@@ -118,7 +126,7 @@
 
 - `cargo fmt --check`：通过。
 - `cargo clippy --all-targets -- -D warnings`：通过。
-- `cargo test`：当前 `dev` 全量 **3758 passed / 0 failed / 2 ignored**（含全部集成套件）。
+- `cargo test`：当前 `dev` 全量 **3759 passed / 0 failed / 2 ignored**（含全部集成套件）。
 - 新增/更新的关键回归用例：
   - `shift_click_keeps_overlay_close_button_priority`
   - `shift_drag_selects_screen_text_without_forwarding_to_pty`
@@ -134,6 +142,7 @@
   - `lx_selection_wheel_scrolls_viewport_and_extends_selection`
   - `agents_detail_edge_drag_scrolls_subagent_transcript`
   - `pending_screen_selection_uses_the_next_frame`
+  - `stale_frozen_row_does_not_fall_back_to_full_width_highlight`
   - `card_click_clears_existing_selection_and_toggles`
 
 ## 5. 未纳入本次修复的已知限制
