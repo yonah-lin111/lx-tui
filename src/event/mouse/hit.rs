@@ -410,11 +410,6 @@ pub(crate) fn dismiss_lx_toast_outside(
 
 /// 写系统剪贴板并在全局屏幕顶部居中弹出成功/失败 toast。
 pub(crate) fn copy_with_toast(state: &mut AppState, text: &str) {
-    copy_with_toast_at(state, text, None);
-}
-
-/// 写系统剪贴板并在全局屏幕顶部居中弹出 toast（复制反馈统一使用 `anchor = None`）。
-pub(crate) fn copy_with_toast_at(state: &mut AppState, text: &str, _anchor: Option<PaneId>) {
     let now = Instant::now();
     let (kind, message) = if crate::platform::write_clipboard(text) {
         (ToastKind::Default, ui::text::toast_copied(text))

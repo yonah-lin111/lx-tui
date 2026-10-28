@@ -13,7 +13,7 @@ use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
 use crate::ui;
 
-use super::mouse::hit::{copy_with_toast, copy_with_toast_at};
+use super::mouse::hit::copy_with_toast;
 use super::paste;
 use super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 
@@ -290,7 +290,7 @@ fn copy_lx_selection(
     }
     let text = ui::main_content::lx::copy_text(area, &target.lx, range, cache.pane(pane));
     if !text.trim().is_empty() {
-        copy_with_toast_at(state, &text, Some(pane));
+        copy_with_toast(state, &text);
     }
     true
 }
