@@ -144,7 +144,7 @@ pub(crate) fn copyable_selection(
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。
 pub(crate) const WHEEL_LINES: isize = 3;
 
-/// 在最终画面上开始一次屏幕选择；单击/双击/三击按 400 ms 同格计数。
+/// 在最终画面上开始一次屏幕选择；单击/双击/三击按 250 ms 同格计数。
 pub fn begin_screen_selection(
     state: &mut AppState,
     screen: &crate::ui::screen::ScreenText,
@@ -185,10 +185,108 @@ pub fn begin_screen_selection_unit(
 ) {
     clear_selection(state);
     let (start, end) = screen.unit_range(point, unit);
-    let frozen = screen.selection_cells(start, end);
+    // Word/Line 可能只覆盖一个非空白格：冻结该格并保留折叠范围，否则
+    // `selection_cells(start, end)` 会把两个相同端点误判成空单击。
+    let frozen = if start == end && unit != crate::app::selection::SelectionUnit::Character {
+        if screen.selectable_cell(start) {
+            screen.selection_cells_single(start)
+        } else {
+            crate::app::selection::SelectedCells::default()
+        }
+    } else {
+        screen.selection_cells(start, end)
+    };
     let mut selection = crate::app::selection::ScreenSelection::new(start, unit, frozen);
     selection.set_range(start, end);
     state.screen_selection = Some(selection);
+}
+
+/// 把 prompt 内的屏幕双击/三击选区同步成编辑器本地选区。
+///
+/// 屏幕选区用于只读文字；prompt 是可编辑目标，若继续只保留屏幕选区，
+/// 输入/粘贴/剪切不会替换词或行。这里把最终屏幕坐标换回 prompt 的内容
+/// 视觉行/列，并交给原有 `Selection` 模型。
+pub fn begin_prompt_screen_selection(
+    state: &mut AppState,
+    screen: &crate::ui::screen::ScreenText,
+    point: crate::app::selection::ScreenPoint,
+    unit: crate::app::selection::SelectionUnit,
+    inner: ratatui::layout::Rect,
+) -> bool {
+    if unit == crate::app::selection::SelectionUnit::Character
+        || inner.width == 0
+        || inner.height == 0
+    {
+        return false;
+    }
+    // 三击按 prompt 的真实逻辑行选：软折行只影响视觉行，不切断整行。
+    if unit == crate::app::selection::SelectionUnit::Line {
+        let Some(row) = point.row.checked_sub(inner.y) else {
+            return false;
+        };
+        let Some(content_row) = state.prompt.scroll().checked_add(usize::from(row)) else {
+            return false;
+        };
+        let rows = state.prompt.visual_rows();
+        let Some(logical_line) = rows.get(content_row).map(|row| row.line) else {
+            return false;
+        };
+        let Some(first) = rows.iter().position(|row| row.line == logical_line) else {
+            return false;
+        };
+        let Some(last) = rows.iter().rposition(|row| row.line == logical_line) else {
+            return false;
+        };
+        let (Ok(first), Ok(last)) = (u16::try_from(first), u16::try_from(last)) else {
+            return false;
+        };
+        let start = (first, 0);
+        let end = (last, u16::MAX);
+        if state.prompt.selection_bounds(start, end).is_none() {
+            return false;
+        }
+        clear_selection(state);
+        let mut selection =
+            crate::app::selection::Selection::begin(state.prompt.id(), i32::from(start.0), start.1);
+        selection.drag(i32::from(end.0), end.1);
+        state.selection = Some(selection);
+        return true;
+    }
+    let (start, mut end) = screen.unit_range(point, unit);
+    if start == end && screen.selectable_cell(start) {
+        // 单字符词：本地选区终点取该字符之后；屏幕端仍是折叠点。
+        end = crate::app::selection::ScreenPoint::new(end.row, end.col.saturating_add(1));
+    }
+    let to_cell = |point: crate::app::selection::ScreenPoint| {
+        let row = point.row.checked_sub(inner.y)?;
+        let col = point.col.checked_sub(inner.x)?;
+        let content_row = state
+            .prompt
+            .scroll()
+            .checked_add(usize::from(row))
+            .and_then(|row| u16::try_from(row).ok())?;
+        Some((content_row, col))
+    };
+    let (Some((start_row, start_col)), Some((end_row, end_col))) = (to_cell(start), to_cell(end))
+    else {
+        return false;
+    };
+    if state
+        .prompt
+        .selection_bounds((start_row, start_col), (end_row, end_col))
+        .is_none()
+    {
+        return false;
+    }
+    clear_selection(state);
+    let mut selection =
+        crate::app::selection::Selection::begin(state.prompt.id(), i32::from(start_row), start_col);
+    selection.drag(i32::from(end_row), end_col);
+    if selection.range().is_none() {
+        return false;
+    }
+    state.selection = Some(selection);
+    true
 }
 
 /// 拖动扩展屏幕选区；初始词/行单位随拖动保留。

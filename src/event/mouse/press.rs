@@ -54,18 +54,9 @@ pub(crate) fn handle_mouse_down_left(
     // 新的一次按下意味着上一轮 Down→Up 已经结束：指针在拖动中移出窗口会丢掉 Up，
     // 残留现场若被这次无关的 Up 消费，会按旧行号误点（如点工具栏却折叠了树里的文件夹）。
     state.prompt_drag = None;
-    // Shift+拖动是跨区域的屏幕文字选择：优先于终端鼠标上报与普通控件拖动。
+    // Shift+拖动在终端鼠标上报模式下强制走屏幕选择；侧栏文字也允许 Shift
+    // 选择。两者都必须排在浮层、tab、关闭按钮、滚动条等控件命中之后。
     let shift = mouse.modifiers.contains(KeyModifiers::SHIFT);
-    if shift && screen_text.cell(mouse.column, mouse.row).is_some() {
-        update::begin_screen_selection(
-            state,
-            screen_text,
-            crate::app::selection::ScreenPoint::new(mouse.row, mouse.column),
-            Instant::now(),
-        );
-        *dirty = true;
-        return;
-    }
     // 新的一次普通点击清除所有旧选区；只有确实清掉了东西才需要重绘。
     let had_screen_selection = state.screen_selection.is_some();
     // 卡片内容有选中高亮时，第一次点击只取消选中，不切换折叠。
@@ -286,6 +277,17 @@ pub(crate) fn handle_mouse_down_left(
         || handle_todo_scrollbar_press(state, view, mouse.column, mouse.row)
         || handle_agent_scrollbar_press(state, view, mouse.column, mouse.row)
     {
+        *dirty = true;
+    } else if shift
+        && !state.sidebar_collapsed
+        && view.sidebar.contains((mouse.column, mouse.row).into())
+        && !ui::add_workspace_button(view)
+            .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
+        && ui::workspace_group_toggle_at(view, state, mouse.column, mouse.row).is_none()
+    {
+        // 侧栏的文字（含工作区/agent 行）在 Shift 下走只读选择；新增工作区
+        // 按钮、分组箭头、滚动条、折叠按钮等控件仍按各自语义优先。
+        update::begin_screen_selection_unit(state, screen_text, point, click);
         *dirty = true;
     } else if let Some(pane) = ui::agent_item_at(view, state, mouse.column, mouse.row) {
         if update::focus_agent_pane(state, pane) {
@@ -524,9 +526,19 @@ pub(crate) fn handle_mouse_down_left(
                     update::begin_prompt_drag(state, index);
                 }
             } else {
-                // 双击/三击文字格：按屏幕词/行选择；编辑仍走 Enter 或工具栏。
+                // 双击/三击文字格：prompt 的编辑选区必须同步回编辑器，
+                // 否则输入/剪切不会替换选中的词/行；只读表面继续用屏幕选区。
                 if click != crate::app::selection::SelectionUnit::Character {
-                    update::begin_screen_selection_unit(state, screen_text, point, click);
+                    if !update::begin_prompt_screen_selection(
+                        state,
+                        screen_text,
+                        point,
+                        click,
+                        inner,
+                    ) {
+                        update::begin_screen_selection_unit(state, screen_text, point, click);
+                    }
+                    *dirty = true;
                     return;
                 }
                 // 底部虚拟空占位只聚焦编辑器，不把光标移到不存在的文本行。
@@ -830,11 +842,17 @@ pub(crate) fn handle_mouse_down_left(
                 *dirty = true;
             } else {
                 update::focus_pane(state, pane);
+                if shift {
+                    update::begin_screen_selection_unit(state, screen_text, point, click);
+                    *dirty = true;
+                    return;
+                }
                 let mouse_reporting = state.pane_anywhere(pane).is_some_and(|target| {
                     target.terminal.wheel_routing() == crate::terminal::WheelRouting::MouseReport
                 });
                 if click != crate::app::selection::SelectionUnit::Character && !mouse_reporting {
                     update::begin_screen_selection_unit(state, screen_text, point, click);
+                    *dirty = true;
                     return;
                 }
                 // 应用在鼠标上报模式时按键归它自己（对齐 herdr）：转发并按它的

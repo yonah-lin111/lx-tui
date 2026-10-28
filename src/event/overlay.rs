@@ -438,6 +438,8 @@ pub(crate) fn open_right_click_menu(
     column: u16,
     row: u16,
 ) -> bool {
+    // 右键菜单是新的模态动作：旧屏幕选区不能留在菜单下面继续被复制/反显。
+    update::clear_selection(state);
     let tab_bar = ui::tab_bar::layout(view, state.active_workspace(), state.tab_scroll);
     if let Some(index) = ui::tab_bar::tab_at(&tab_bar, column, row) {
         update::open_tab_menu(state, index, (column, row));

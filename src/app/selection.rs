@@ -186,8 +186,12 @@ impl ScreenSelection {
     }
 
     /// 规范化后的屏幕范围 `(start, end)`；无范围返回 None。
+    ///
+    /// Word/Line 单位可能只覆盖一个非空白格，此时 anchor 与 cursor 相同，
+    /// 但冻结内容非空，仍应保留为有效选区；Character 单击的冻结内容为空，
+    /// 仍按无选区处理。
     pub fn range(&self) -> Option<(ScreenPoint, ScreenPoint)> {
-        if self.anchor == self.cursor {
+        if self.anchor == self.cursor && self.frozen.is_empty() {
             return None;
         }
         Some(if self.anchor <= self.cursor {

@@ -167,6 +167,42 @@ impl ScreenText {
         }
     }
 
+    /// 冻结单个可选中格；用于 Word/Line 只覆盖一个非空白格的折叠范围。
+    pub fn selection_cells_single(&self, point: ScreenPoint) -> SelectedCells {
+        if point.row >= self.height || point.col >= self.width {
+            return SelectedCells::default();
+        }
+        let (start_col, end_col) = self.widen_columns(point.row, point.col, point.col);
+        let full = self.row_text(point.row).unwrap_or_default();
+        let mut cells = Vec::new();
+        for col in start_col..=end_col {
+            if let Some(cell) = self.cell(col, point.row)
+                && cell.width > 0
+            {
+                cells.push(SelectedCell {
+                    symbol: cell.symbol.clone(),
+                    width: cell.width,
+                });
+            }
+        }
+        SelectedCells {
+            rows: vec![FrozenRow {
+                full,
+                start_col,
+                end_col,
+                cells,
+            }],
+            start: Some(ScreenPoint::new(point.row, start_col)),
+            end: Some(ScreenPoint::new(point.row, end_col)),
+        }
+    }
+
+    /// 该格是否可以形成非空文字选区（Word/Line 的折叠端点用）。
+    pub fn selectable_cell(&self, point: ScreenPoint) -> bool {
+        self.cell(point.col, point.row)
+            .is_some_and(|cell| cell.width > 0 && cell.symbol.chars().any(|ch| !ch.is_whitespace()))
+    }
+
     /// 双击选词：命中词字符时取连续词；否则取该单格。
     pub fn word_range(&self, point: ScreenPoint) -> (ScreenPoint, ScreenPoint) {
         let text = self.row_text(point.row).unwrap_or_default();

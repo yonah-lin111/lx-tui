@@ -223,6 +223,91 @@ fn triple_click_line_selection_stops_at_box_borders() {
 }
 
 #[test]
+fn single_character_word_selection_is_not_empty() {
+    let mut state = AppState::demo();
+    let screen = screen(&["a"], 5);
+    let point = ScreenPoint::new(0, 0);
+    begin_screen_selection_unit(
+        &mut state,
+        &screen,
+        point,
+        crate::app::selection::SelectionUnit::Word,
+    );
+    finish_screen_selection(&mut state);
+    assert_eq!(screen_selection_text(&state).as_deref(), Some("a"));
+    assert!(
+        state
+            .screen_selection
+            .as_ref()
+            .and_then(|selection| selection.range())
+            .is_some(),
+        "单字符词仍应保留折叠范围"
+    );
+}
+
+#[test]
+fn prompt_word_selection_uses_local_editing_selection() {
+    let mut state = AppState::demo();
+    state.prompt.resize(20, 5);
+    state.prompt.set_text("hello world");
+    let screen = screen(&["hello world"], 20);
+    let point = ScreenPoint::new(0, 6);
+    assert!(begin_prompt_screen_selection(
+        &mut state,
+        &screen,
+        point,
+        crate::app::selection::SelectionUnit::Word,
+        Rect::new(0, 0, 20, 1),
+    ));
+    assert!(
+        state.screen_selection.is_none(),
+        "prompt 不保留只读屏幕选区"
+    );
+    assert_eq!(prompt_copy_text(&state).as_deref(), Some("world"));
+    crate::app::update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertChar('X'),
+    );
+    assert_eq!(state.prompt.text(), "hello X", "输入应替换选中的词");
+}
+
+#[test]
+fn prompt_triple_click_selects_full_wrapped_logical_line() {
+    let mut state = AppState::demo();
+    state.prompt.resize(5, 5);
+    state.prompt.set_text("hello world");
+    let screen = screen(&["hello", "world"], 5);
+    assert!(begin_prompt_screen_selection(
+        &mut state,
+        &screen,
+        ScreenPoint::new(0, 1),
+        crate::app::selection::SelectionUnit::Line,
+        Rect::new(0, 0, 5, 2),
+    ));
+    assert_eq!(
+        prompt_copy_text(&state).as_deref(),
+        Some("hello world"),
+        "三击应覆盖同一逻辑行的全部软折行"
+    );
+}
+
+#[test]
+fn prompt_single_character_line_selection_is_editable() {
+    let mut state = AppState::demo();
+    state.prompt.resize(20, 3);
+    state.prompt.set_text("a");
+    let screen = screen(&["a"], 5);
+    assert!(begin_prompt_screen_selection(
+        &mut state,
+        &screen,
+        ScreenPoint::new(0, 0),
+        crate::app::selection::SelectionUnit::Line,
+        Rect::new(0, 0, 5, 1),
+    ));
+    assert_eq!(prompt_copy_text(&state).as_deref(), Some("a"));
+}
+
+#[test]
 fn prompt_cursor_movement_clears_select_all() {
     let mut state = AppState::demo();
     crate::app::update::focus_prompt(&mut state);

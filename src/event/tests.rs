@@ -6654,6 +6654,176 @@ fn lx_paste_cancels_rewind_arming() {
 }
 
 #[test]
+fn right_click_menu_clears_screen_selection_before_opening() {
+    use crate::app::selection::{ScreenPoint, ScreenSelection, SelectionUnit};
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.screen_selection = Some(ScreenSelection::new(
+        ScreenPoint::new(0, 0),
+        SelectionUnit::Character,
+        crate::app::selection::SelectedCells::default(),
+    ));
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let (_, rect) = geo.rects.first().copied().expect("pane rect");
+    let inner = layout::pane_inner_rect(rect);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        TerminalEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: inner.x + 1,
+            row: inner.y + 1,
+            modifiers: KeyModifiers::empty(),
+        }),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(state.screen_selection.is_none(), "右键打开菜单必须清旧选区");
+    assert!(matches!(state.overlay, Some(Overlay::Menu(_))));
+}
+
+#[test]
+fn closing_overlay_clears_screen_selection() {
+    use crate::app::selection::{ScreenPoint, ScreenSelection, SelectionUnit};
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::Rename(crate::app::overlay::Rename {
+        target: crate::app::overlay::RenameTarget::Workspace(0),
+        input: crate::app::overlay::TextInput::new("name"),
+    }));
+    state.screen_selection = Some(ScreenSelection::new(
+        ScreenPoint::new(0, 0),
+        SelectionUnit::Character,
+        crate::app::selection::SelectedCells::default(),
+    ));
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(state.overlay.is_none());
+    assert!(state.screen_selection.is_none(), "浮层关闭后旧选区必须清除");
+}
+
+#[test]
+fn shift_click_keeps_overlay_close_button_priority() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let screen = Rect::new(0, 0, 120, 30);
+    let shell = ui::overlay::rename_shell(screen).expect("rename shell");
+    let close = ui::widgets::modal::close_button_rect(shell.area).expect("close button");
+    state.overlay = Some(Overlay::Rename(crate::app::overlay::Rename {
+        target: crate::app::overlay::RenameTarget::Workspace(0),
+        input: crate::app::overlay::TextInput::new("name"),
+    }));
+    let geo = geometry(&state, &config, screen);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        TerminalEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: close.x,
+            row: close.y,
+            modifiers: KeyModifiers::SHIFT,
+        }),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(state.overlay.is_none(), "Shift 不得绕过关闭按钮");
+    assert!(state.screen_selection.is_none(), "关闭按钮不得起选");
+}
+
+#[test]
+fn ctrl_c_clears_prompt_tree_search() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    update::show_prompt_tree(&mut state);
+    update::focus_prompt(&mut state);
+    for ch in "nested".chars() {
+        update::apply_editor(
+            &mut state,
+            crate::app::actions::EditorCommand::InsertChar(ch),
+        );
+    }
+    assert_eq!(state.prompt_owner().prompt_panel.search.text(), "nested");
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert_eq!(state.prompt_owner().prompt_panel.search.text(), "");
+    assert!(dirty);
+}
+
+#[test]
+fn ctrl_c_clears_todo_editing_input() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    assert!(update::begin_todo_edit(
+        &mut state,
+        crate::app::state::TodoEditTarget::New,
+    ));
+    assert!(update::apply_todo_key(
+        &mut state,
+        crate::input::TodoKey::Char('a')
+    ));
+    assert_eq!(
+        state.todo.edit_input_mut().map(|edit| edit.text()),
+        Some("a")
+    );
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert_eq!(
+        state.todo.edit_input_mut().map(|edit| edit.text()),
+        Some("")
+    );
+    assert!(state.todo.is_editing(), "清空不等于退出编辑");
+    assert!(dirty);
+}
+
+#[test]
 fn lx_ctrl_c_clears_input_when_nothing_is_selected() {
     let config = Config::default();
     let mut state = AppState::demo();

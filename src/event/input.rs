@@ -84,9 +84,16 @@ pub(crate) fn handle_key_event(
                 state.overlay,
                 Some(Overlay::NewWorkspace(_) | Overlay::TrustWorkspace(_))
             );
+            let overlay_before = state.overlay.as_ref().map(Overlay::kind);
             if let Some((pane, bytes)) = update::apply_overlay_key(state, key) {
                 write_to_pane(sessions, pane, &bytes);
                 update::reset_pane_scroll(state, pane);
+            }
+            if overlay_before.is_some()
+                && state.overlay.as_ref().map(Overlay::kind) != overlay_before
+            {
+                // 模态关闭或替换：底层/旧浮层的屏幕选区不再属于当前画面。
+                update::clear_selection(state);
             }
             if was_confirm || was_menu || was_worktree || was_new_ws {
                 ensure_workspace_visible(state, view);
@@ -161,6 +168,25 @@ fn handle_global_edit(
             // 引用文件夹目录弹窗的 Ctrl+C 是显式“复制引用”，交给浮层路由。
             if matches!(state.overlay, Some(Overlay::ReferencedFolderMenu(_))) {
                 return false;
+            }
+            // prompt 树视图的搜索框沿用单行输入语义：无选区 Ctrl+C 清空过滤词。
+            if state.prompt_focused() && update::prompt_tree_mode(state) {
+                if update::apply_prompt_search(state, &crate::app::actions::EditorCommand::Escape) {
+                    *dirty = true;
+                }
+                return true;
+            }
+            // todo 行内编辑的 Ctrl+C 清空输入框；列表态仍吞掉，不误删条目。
+            if control_only && state.todo_focused() {
+                let changed = state.todo.edit_input_mut().is_some_and(|input| {
+                    let had_text = !input.text().is_empty();
+                    input.clear();
+                    had_text
+                });
+                if changed {
+                    *dirty = true;
+                }
+                return true;
             }
             // lx 页无文本选区时，Ctrl+C 是清空当前输入框（ask 编辑态清空手写缓冲；
             // /resume 历史面板仍由 apply_lx_input 转成“复制会话 id”）。Cmd+C 不触发清空。
