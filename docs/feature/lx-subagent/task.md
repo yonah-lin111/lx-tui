@@ -26,7 +26,7 @@
 - [ ] 常量：`MAX_CONCURRENT_SUBAGENTS = 3`、`MAX_WAIT_TARGETS = 8`、`DEFAULT_WAIT_TIMEOUT_MS = 300_000`、`MAX_WAIT_TIMEOUT_MS = 3_600_000`、`MAX_REPORT_BYTES = 8 * 1024`、`MAX_TASK_CHARS = 8_000`
 - [ ] 稳定错误码：`LIMIT_REACHED_CODE` / `NOT_FOUND_CODE` / `FINISHED_CODE` / `UNAVAILABLE_CODE`
 - [ ] `SubagentOp` + `parse_control(name, json) -> Option<Result<SubagentOp, ToolFailure>>`
-      （白名单字段；`task` 非空 ≤8000；`targets` 1..=8；`timeout_ms` 钳到 `[1, 300000]`）
+      （白名单字段；`task` 非空 ≤8000；`targets` 1..=8；`timeout_ms` 钳到 `[1, 3_600_000]`）
 - [ ] `SubagentOutcome` / `AgentStatusView` + `into_result()` / `to_json()` / `from_json()`
 - [ ] `format_report_envelope(&SubagentReportView) -> String`（XML 包裹 + 转义；风格对齐 `context::format_user_shell`，`chat/context/mod.rs:388`）
 - [ ] 角色提示常量 `EXPLORER_PROMPT` / `EXECUTOR_PROMPT`（design §7.2 / §7.3 原文）

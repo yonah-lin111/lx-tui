@@ -112,8 +112,8 @@ pub const MAX_CONCURRENT_SUBAGENTS: usize = 3;
 /// 单次 `wait_agent` 的目标数上限。
 pub const MAX_WAIT_TARGETS: usize = 8;
 /// `wait_agent` 默认 / 上限超时（毫秒，decision 21）。
-pub const DEFAULT_WAIT_TIMEOUT_MS: u64 = 60_000;
-pub const MAX_WAIT_TIMEOUT_MS: u64 = 300_000;
+pub const DEFAULT_WAIT_TIMEOUT_MS: u64 = 300_000;
+pub const MAX_WAIT_TIMEOUT_MS: u64 = 3_600_000;
 /// 报告正文上限（decision 16）。
 pub const MAX_REPORT_BYTES: usize = 8 * 1024;
 /// `spawn_agent` 的 task 文本上限。
@@ -469,7 +469,7 @@ pub const SUBAGENT_TOOL_NAMES: [&str; 3] = ["spawn_agent", "wait_agent", "close_
   "required":["targets"],
   "properties": {
     "targets": {"type":"array","minItems":1,"maxItems":8,"items":{"type":"string"}},
-    "timeout_ms": {"type":"integer","minimum":1,"maximum":300000,"default":60000} } }
+    "timeout_ms": {"type":"integer","minimum":1,"maximum":3600000,"default":300000} } }
 
 // close_agent
 { "type":"object", "additionalProperties": false,
