@@ -614,3 +614,10 @@ fn workspace_identity_spans_degrade_in_order() {
     // 连省略号都放不下：不绘制。
     assert!(workspace_identity_spans(&identity, 1).is_none());
 }
+
+#[test]
+fn toast_copied_counts_unicode_characters_and_pluralizes() {
+    assert_eq!(toast_copied("a"), "Copied 1 char");
+    assert_eq!(toast_copied("hello"), "Copied 5 chars");
+    assert_eq!(toast_copied("你好"), "Copied 2 chars");
+}

@@ -4174,6 +4174,11 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
         Some(Some(crate::ui::text::TOAST_CLIPBOARD_TITLE)),
         "复制反馈沿用剪贴板 toast"
     );
+    assert_eq!(
+        state.toast.as_ref().map(|toast| toast.message.as_str()),
+        Some("Copied 9 chars"),
+        "复制反馈显示复制的字符数（`- keep me` 共 9 字符）"
+    );
 }
 
 #[test]
@@ -6568,7 +6573,7 @@ fn lx_history_selection_waits_for_copy_shortcut_and_follows_wheel_scroll() {
         "松开后滚轮滚动不丢失选区"
     );
 
-    // 3. 按下 Ctrl+C 复制：弹出 lx 页内 toast、保留选区高亮、不清空底部输入框草稿。
+    // 3. 按下 Ctrl+C 复制：弹出全局 toast 并显示复制字符数、保留选区高亮、不清空底部输入框草稿。
     handle_terminal_event(
         TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
         &mut state,
@@ -6583,7 +6588,21 @@ fn lx_history_selection_waits_for_copy_shortcut_and_follows_wheel_scroll() {
         lx.input, "keep my draft",
         "有选区时按 Ctrl+C 不清空输入框草稿"
     );
-    assert!(lx.toast.is_some(), "按 Ctrl+C 后弹出 lx 页内复制 toast");
+    assert!(lx.toast.is_none(), "复制反馈不再写入 lx 页内 toast");
+    let toast = state
+        .toast
+        .as_ref()
+        .expect("按 Ctrl+C 后弹出全局复制 toast");
+    assert_eq!(toast.anchor, Some(pane), "全局复制 toast 锚定当前窗格");
+    assert_eq!(
+        toast.title.as_deref(),
+        Some(crate::ui::text::TOAST_CLIPBOARD_TITLE)
+    );
+    assert!(
+        toast.message.starts_with("Copied ") && toast.message.ends_with(" chars"),
+        "显示复制字符数：{}",
+        toast.message
+    );
     assert!(state.lx_selection.is_some(), "复制后选区高亮继续保留");
 }
 
@@ -6681,9 +6700,15 @@ fn lx_task_output_and_agents_detail_selection_scroll_and_copy() {
         &mut cache,
         &mut dirty,
     );
+    let toast = state
+        .toast
+        .as_ref()
+        .expect("后台管理页按 Ctrl+C 触发全局复制 toast");
+    assert_eq!(toast.anchor, Some(pane));
     assert!(
-        state.pane_anywhere(pane).expect("pane").lx.toast.is_some(),
-        "后台管理页按 Ctrl+C 触发复制 toast"
+        toast.message.starts_with("Copied ") && toast.message.ends_with(" chars"),
+        "显示复制字符数：{}",
+        toast.message
     );
 
     // 切换到 Agents 页签：旧选区自动清除；在可折叠卡片上拖拽只选字不折叠，单击才折叠。

@@ -528,6 +528,20 @@ pub const TOAST_COPIED: &str = "Copied to clipboard";
 pub const TOAST_COPY_FAILED: &str = "Copy failed";
 /// 复制反馈 toast 的边框标题。
 pub const TOAST_CLIPBOARD_TITLE: &str = "Clipboard";
+
+/// 复制成功反馈文案：`Copied 1 char` / `Copied N chars`（按 Unicode 字符数计）。
+pub fn toast_copied(text: &str) -> String {
+    toast_copied_chars(text.chars().count())
+}
+
+/// 按字符数生成复制成功反馈文案。
+pub fn toast_copied_chars(count: usize) -> String {
+    if count == 1 {
+        "Copied 1 char".to_string()
+    } else {
+        format!("Copied {count} chars")
+    }
+}
 /// 工作区反馈 toast 的边框标题。
 pub const TOAST_WORKSPACE_TITLE: &str = "Workspace";
 /// 工作区路径不存在。

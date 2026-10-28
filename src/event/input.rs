@@ -7,14 +7,13 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneView};
-use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::input::{self, Routed};
 use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
 use crate::ui;
 
-use super::mouse::hit::copy_with_toast;
+use super::mouse::hit::{copy_with_toast, copy_with_toast_at};
 use super::paste;
 use super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 
@@ -214,7 +213,7 @@ pub(crate) fn handle_paste_event(
     *dirty = true;
 }
 
-/// 复制焦点 lx 窗格的主内容区选区文本并弹出页内 Toast；选区保留，无选区返回 false。
+/// 复制焦点 lx 窗格的主内容区选区文本并弹出全局 Toast；选区保留，无选区返回 false。
 fn copy_lx_selection(
     state: &mut AppState,
     rects: &[(PaneId, ratatui::layout::Rect)],
@@ -248,28 +247,7 @@ fn copy_lx_selection(
     }
     let text = ui::main_content::lx::copy_text(area, &target.lx, range, cache.pane(pane));
     if !text.trim().is_empty() {
-        let now = std::time::Instant::now();
-        if crate::platform::write_clipboard(&text) {
-            update::show_lx_toast(
-                state,
-                pane,
-                Toast::new(ToastKind::Default, ui::text::TOAST_COPIED, Some(pane), now)
-                    .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
-            );
-        } else {
-            tracing::warn!("clipboard write failed");
-            update::show_lx_toast(
-                state,
-                pane,
-                Toast::new(
-                    ToastKind::Danger,
-                    ui::text::TOAST_COPY_FAILED,
-                    Some(pane),
-                    now,
-                )
-                .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
-            );
-        }
+        copy_with_toast_at(state, &text, Some(pane));
     }
     true
 }

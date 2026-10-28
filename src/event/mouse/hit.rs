@@ -414,21 +414,17 @@ pub(crate) fn copy_with_toast(state: &mut AppState, text: &str) {
     copy_with_toast_at(state, text, anchor);
 }
 
-/// 写系统剪贴板并在**指定窗格**锚点弹出 toast（`None` 回落屏幕顶部居中）。
-///
-/// lx 历史里的代码块复制按钮用它把 toast 落在 main content 窗格内，
-/// 而不是跳到屏幕底部的 prompt —— 复制动作发生在哪儿，反馈就出现在哪儿。
+/// 写系统剪贴板并在**指定窗格**锚点弹出全局 toast（`None` 回落屏幕顶部居中）。
 pub(crate) fn copy_with_toast_at(state: &mut AppState, text: &str, anchor: Option<PaneId>) {
     let now = Instant::now();
     let (kind, message) = if crate::platform::write_clipboard(text) {
-        (ToastKind::Default, ui::text::TOAST_COPIED)
+        (ToastKind::Default, ui::text::toast_copied(text))
     } else {
         tracing::warn!("clipboard write failed");
-        (ToastKind::Danger, ui::text::TOAST_COPY_FAILED)
+        (ToastKind::Danger, ui::text::TOAST_COPY_FAILED.to_string())
     };
-    update::show_toast_at(
+    update::show_toast(
         state,
-        anchor,
         Toast::new(kind, message, anchor, now).with_title(ui::text::TOAST_CLIPBOARD_TITLE),
     );
 }

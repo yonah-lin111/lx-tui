@@ -226,7 +226,7 @@ fn ctrl_c_copies_prompt_selection() {
     app.select_prompt_text("hello world");
     app.send(b"\x03");
     assert!(
-        app.wait_for("Copied to clipboard", Duration::from_secs(3)),
+        app.wait_for("Copied 11 chars", Duration::from_secs(3)),
         "ctrl+c 应触发复制 toast：\n{}",
         app.screen()
     );
@@ -240,7 +240,7 @@ fn kitty_ctrl_c_copies_prompt_selection() {
     // kitty 键盘协议：CSI 99;5u = 'c' + ctrl。
     app.send(b"\x1b[99;5u");
     assert!(
-        app.wait_for("Copied to clipboard", Duration::from_secs(3)),
+        app.wait_for("Copied 11 chars", Duration::from_secs(3)),
         "kitty ctrl+c 应触发复制 toast：\n{}",
         app.screen()
     );
@@ -254,7 +254,7 @@ fn kitty_super_c_copies_prompt_selection() {
     // kitty 键盘协议：CSI 99;9u = 'c' + super（Ghostty 对 Cmd+C 的编码）。
     app.send(b"\x1b[99;9u");
     assert!(
-        app.wait_for("Copied to clipboard", Duration::from_secs(3)),
+        app.wait_for("Copied 11 chars", Duration::from_secs(3)),
         "cmd+c 应触发复制 toast：\n{}",
         app.screen()
     );
@@ -279,7 +279,7 @@ fn cmd_shift_c_copies_template_block_without_title() {
     // kitty 键盘协议：CSI 99;10u = 'c' + shift + super（Cmd+Shift+C）。
     app.send(b"\x1b[99;10u");
     assert!(
-        app.wait_for("Copied to clipboard", Duration::from_secs(3)),
+        app.wait_for("Copied 17 chars", Duration::from_secs(3)),
         "cmd+shift+c 应触发复制 toast：\n{}",
         app.screen()
     );

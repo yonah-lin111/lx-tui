@@ -797,15 +797,14 @@ impl Persistence {
             Effect::CopyToClipboard { text, anchor } => {
                 let now = Instant::now();
                 let (kind, message) = if crate::platform::write_clipboard(&text) {
-                    (ToastKind::Default, text::TOAST_COPIED)
+                    (ToastKind::Default, text::toast_copied(&text))
                 } else {
                     tracing::warn!("clipboard write failed");
-                    (ToastKind::Danger, text::TOAST_COPY_FAILED)
+                    (ToastKind::Danger, text::TOAST_COPY_FAILED.to_string())
                 };
-                // 锚在 lx 窗格时落该窗格自己的槽（不占用全局覆盖层）。
-                update::show_toast_at(
+                // 全部剪贴板复制反馈统一走全局 toast（锚定触发容器顶边框）。
+                update::show_toast(
                     state,
-                    anchor,
                     Toast::new(kind, message, anchor, now).with_title(text::TOAST_CLIPBOARD_TITLE),
                 );
                 true

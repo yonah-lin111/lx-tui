@@ -8,7 +8,6 @@ use ratatui::layout::Direction;
 
 use crate::app::overlay::Overlay;
 use crate::app::state::AppState;
-use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::Config;
 use crate::layout::{self, PaneId};
@@ -16,7 +15,7 @@ use crate::pty::PtySession;
 use crate::ui;
 
 use super::super::session::Geometry;
-use super::hit::{pane_at, pane_content_inner};
+use super::hit::{copy_with_toast_at, pane_at, pane_content_inner};
 use super::wheel::forward_pane_mouse_event;
 
 /// 鼠标拖拽事件处理。
@@ -432,52 +431,12 @@ pub(crate) fn handle_mouse_up_left(
     if let Some(pane) = state.terminal_selection
         && let Some(text) = update::finish_terminal_selection(state, pane)
     {
-        let now = Instant::now();
-        if crate::platform::write_clipboard(&text) {
-            update::show_toast(
-                state,
-                Toast::new(ToastKind::Default, ui::text::TOAST_COPIED, Some(pane), now)
-                    .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
-            );
-        } else {
-            tracing::warn!("clipboard write failed");
-            update::show_toast(
-                state,
-                Toast::new(
-                    ToastKind::Danger,
-                    ui::text::TOAST_COPY_FAILED,
-                    Some(pane),
-                    now,
-                )
-                .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
-            );
-        }
+        copy_with_toast_at(state, &text, Some(pane));
     }
     // lx 输入框选区松开：复制选中文本（空选区不复制）。
     if let Some((pane, text)) = update::take_lx_input_selection(state) {
         if !text.trim().is_empty() {
-            let now = Instant::now();
-            if crate::platform::write_clipboard(&text) {
-                update::show_lx_toast(
-                    state,
-                    pane,
-                    Toast::new(ToastKind::Default, ui::text::TOAST_COPIED, Some(pane), now)
-                        .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
-                );
-            } else {
-                tracing::warn!("clipboard write failed");
-                update::show_lx_toast(
-                    state,
-                    pane,
-                    Toast::new(
-                        ToastKind::Danger,
-                        ui::text::TOAST_COPY_FAILED,
-                        Some(pane),
-                        now,
-                    )
-                    .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
-                );
-            }
+            copy_with_toast_at(state, &text, Some(pane));
         }
         *dirty = true;
         return;
