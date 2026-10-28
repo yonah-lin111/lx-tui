@@ -5,9 +5,10 @@ use std::time::{Duration, Instant};
 use ratatui::layout::Rect;
 
 use crate::app::state::AppState;
-use crate::app::toast::Toast;
+use crate::app::toast::{Toast, ToastKind};
 use crate::app::tooltip::{Tooltip, TooltipTarget};
 use crate::layout::{BoundaryHit, PaneId};
+use crate::ui::text;
 
 use super::editor::prompt_item_editing;
 use super::prompt::commit_editing_prompt;
@@ -153,6 +154,22 @@ pub fn show_toast(state: &mut AppState, toast: Toast) {
     state.toast = Some(toast);
 }
 
+/// 复制 / 剪切反馈：统一落在屏幕顶部居中，并报告本次剪贴板文本的字符数。
+///
+/// 复制反馈不跟随 lx/prompt/窗格锚点，避免窄容器把正文截成半截；`confirmed`
+/// 只影响成功文案（剪切走原生写入确认，普通复制仍是尽力而为）。
+pub fn show_copy_result(state: &mut AppState, chars: usize, confirmed: bool, success: bool) {
+    let (kind, message) = match (success, confirmed) {
+        (true, true) => (ToastKind::Default, text::copied_message(chars)),
+        (true, false) => (ToastKind::Default, text::copy_sent_message(chars)),
+        (false, _) => (ToastKind::Danger, text::copy_failed_message(chars)),
+    };
+    show_toast(
+        state,
+        Toast::new(kind, message, None, Instant::now()).with_title(text::TOAST_CLIPBOARD_TITLE),
+    );
+}
+
 /// 在指定窗格**自己的** toast 槽展示反馈（单条替换并重置倒计时）。
 ///
 /// lx 页的反馈必须停在触发它的窗格里（见 `AppState.toast` 与 `Lx.toast` 的注释）：
@@ -282,15 +299,21 @@ pub fn clear_tooltip(state: &mut AppState) -> bool {
 
 /// 清除已过期的 toast、提升到时的 tooltip、推进拖选边缘自动滚动；返回是否发生变化。
 pub fn tick(state: &mut AppState, now: Instant) -> bool {
-    let expired = state
-        .toast
+    // 可见屏幕选区存在时暂停所有 toast 过期：用户正在读/选的内容不得中途消失。
+    let paused = state
+        .screen_selection
         .as_ref()
-        .is_some_and(|toast| toast.is_expired(now));
+        .is_some_and(|selection| selection.visible());
+    let expired = !paused
+        && state
+            .toast
+            .as_ref()
+            .is_some_and(|toast| toast.is_expired(now));
     if expired {
         state.toast = None;
     }
     // 窗格内的 lx 反馈与全局 toast 同一套到期语义（hover 期间不过期）。
-    let lx_expired = expire_lx_toasts(state, now);
+    let lx_expired = !paused && expire_lx_toasts(state, now);
     let revealed = state
         .tooltip
         .as_mut()
@@ -342,15 +365,25 @@ fn tick_prompt_autosave(state: &mut AppState, now: Instant) -> bool {
 /// 最近一次定时到期时间（toast 消失、tooltip 显示、自动滚动或 prompt 自动保存）；
 /// 事件循环据此安排唤醒。
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
-    let toast = state.toast.as_ref().and_then(Toast::next_deadline);
+    let paused = state
+        .screen_selection
+        .as_ref()
+        .is_some_and(|selection| selection.visible());
+    let toast = (!paused)
+        .then(|| state.toast.as_ref().and_then(Toast::next_deadline))
+        .flatten();
     // 窗格内的 lx 反馈同样需要唤醒：否则没人 tick，提示会一直挂在屏幕上。
-    let lx_toast = state
-        .all_pane_ids()
-        .into_iter()
-        .filter_map(|pane| state.pane_anywhere(pane))
-        .filter_map(|target| target.lx.toast.as_ref())
-        .filter_map(Toast::next_deadline)
-        .min();
+    let lx_toast = (!paused)
+        .then(|| {
+            state
+                .all_pane_ids()
+                .into_iter()
+                .filter_map(|pane| state.pane_anywhere(pane))
+                .filter_map(|target| target.lx.toast.as_ref())
+                .filter_map(Toast::next_deadline)
+                .min()
+        })
+        .flatten();
     let tooltip = state.tooltip.as_ref().and_then(Tooltip::next_deadline);
     let autoscroll = state
         .selection_autoscroll

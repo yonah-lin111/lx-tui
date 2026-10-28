@@ -123,7 +123,9 @@
 
 - `cargo fmt`：通过。
 - `cargo clippy --all-targets -- -D warnings`：通过。
-- `cargo test`：合并后 `dev` 全量 **3686 passed / 0 failed / 2 ignored**（含全部集成套件）。
+- `cargo test`：与 unified-text-selection 合并后 `dev` 全量 **3737 passed / 0 failed / 2 ignored**（含全部集成套件）。
+- 与统一文本选择兼容：Agents 列表行支持拖动选字，未位移单击仍切换 agent；详情正文可拖动选字，
+  可折叠卡片同样拖动选字、未位移单击才切换折叠；Agents 详情滚动条、页签与 `[close esc]` 保持控件优先。
 - 新增/更新的回归用例：
   - `report_more_expansion_rebuilds_snapshot_geometry`
   - `agent_link_wins_over_the_whole_card_fold_region`

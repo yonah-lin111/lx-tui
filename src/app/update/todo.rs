@@ -220,64 +220,19 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
         // 单行输入：`Enter` 与 `Shift+Enter` 都提交（Shift 只用于**列表态**的新建）。
         TodoKey::Enter | TodoKey::ShiftEnter => commit_todo_edit(state),
         TodoKey::Esc => cancel_todo_edit(state),
-        TodoKey::Clear => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            if input.text().is_empty() {
-                return false;
-            }
-            input.clear();
-            true
-        }
-        TodoKey::Backspace => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before = input.cursor();
-            input.backspace();
-            input.cursor() != before
-        }
-        TodoKey::Delete => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before = input.text().chars().count();
-            input.delete();
-            input.text().chars().count() != before
-        }
-        TodoKey::Left => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before = input.cursor();
-            input.move_left();
-            input.cursor() != before
-        }
-        TodoKey::Right => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before = input.cursor();
-            input.move_right();
-            input.cursor() != before
-        }
-        TodoKey::Home => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before = input.cursor();
-            input.move_home();
-            input.cursor() != before
-        }
-        TodoKey::End => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before = input.cursor();
-            input.move_end();
-            input.cursor() != before
-        }
+        TodoKey::Backspace => edit_todo_input(state, |input| input.backspace()),
+        TodoKey::Delete => edit_todo_input(state, |input| input.delete()),
+        TodoKey::Left => edit_todo_input(state, |input| input.move_left()),
+        TodoKey::Right => edit_todo_input(state, |input| input.move_right()),
+        TodoKey::Home => edit_todo_input(state, |input| input.move_home()),
+        TodoKey::End => edit_todo_input(state, |input| input.move_end()),
+        TodoKey::Redo => edit_todo_input(state, |input| {
+            input.redo();
+        }),
+        TodoKey::WordLeft => edit_todo_input(state, |input| input.move_word_left()),
+        TodoKey::WordRight => edit_todo_input(state, |input| input.move_word_right()),
+        TodoKey::DeleteWordBackward => edit_todo_input(state, |input| input.delete_word_backward()),
+        TodoKey::DeleteWordForward => edit_todo_input(state, |input| input.delete_word_forward()),
         TodoKey::Char(ch) => {
             let Some(input) = state.todo.edit_input_mut() else {
                 return false;
@@ -292,9 +247,35 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
         }
         // `Tab` 切状态（对齐 lx-agent 行内编辑：Tab 循环状态、Enter 提交、Esc 取消）。
         TodoKey::Tab => cycle_editing_status(state),
-        // 编辑中不允许上下移动选中、不撤销删除：一律吞掉。
-        TodoKey::Up | TodoKey::Down | TodoKey::Undo => false,
+        // 编辑态的 Ctrl+Z 撤销文本，不触碰列表删除撤销槽。
+        TodoKey::Undo => edit_todo_input(state, |input| {
+            input.undo();
+        }),
+        // 编辑中不允许上下移动选中：一律吞掉。
+        TodoKey::Up | TodoKey::Down => false,
     }
+}
+
+/// 在 todo 编辑输入上执行一次编辑；返回文本/光标/选区是否变化。
+fn edit_todo_input(
+    state: &mut AppState,
+    edit: impl FnOnce(&mut crate::app::overlay::TextInput),
+) -> bool {
+    let Some(input) = state.todo.edit_input_mut() else {
+        return false;
+    };
+    let before = (
+        input.text().to_string(),
+        input.cursor(),
+        input.selection_range(),
+    );
+    edit(input);
+    before
+        != (
+            input.text().to_string(),
+            input.cursor(),
+            input.selection_range(),
+        )
 }
 
 /// 列表态按键。
@@ -316,8 +297,12 @@ fn apply_todo_list_key(state: &mut AppState, key: TodoKey) -> bool {
         }
         TodoKey::Esc => blur_todo(state),
         TodoKey::Undo => undo_todo_delete(state),
-        TodoKey::Clear => false,
-        TodoKey::Backspace
+        TodoKey::Redo
+        | TodoKey::WordLeft
+        | TodoKey::WordRight
+        | TodoKey::DeleteWordBackward
+        | TodoKey::DeleteWordForward
+        | TodoKey::Backspace
         | TodoKey::Delete
         | TodoKey::Left
         | TodoKey::Right
@@ -372,21 +357,31 @@ pub fn apply_todo_paste(state: &mut AppState, text: &str) -> bool {
     let Some(input) = state.todo.edit_input_mut() else {
         return false;
     };
-    let room = crate::db::todo::MAX_TODO_TEXT_CHARS.saturating_sub(input.text().chars().count());
+    let room = effective_room(input);
     if room == 0 {
         return false;
     }
-    let clipped: String = text.chars().take(room).collect();
+    let sanitized = crate::app::prompt::text::sanitize(text);
+    let clipped: String = sanitized.chars().take(room).collect();
     input.insert_str(&clipped)
 }
 
-/// 在输入框里插入一个字符；已达上限时吞掉（返回 false，不产生变化）。
+/// 在输入框里插入一个字符；净化后超限时吞掉（返回 false，不产生变化）。
 fn insert_bounded(input: &mut crate::app::overlay::TextInput, ch: char) -> bool {
-    if input.text().chars().count() >= crate::db::todo::MAX_TODO_TEXT_CHARS {
+    if effective_room(input) == 0 {
         return false;
     }
     input.insert_char(ch);
     true
+}
+
+/// 替换当前选区后还能写入的字符数。
+fn effective_room(input: &crate::app::overlay::TextInput) -> usize {
+    let selected = input
+        .selection_range()
+        .map_or(0, |(start, end)| end - start);
+    crate::db::todo::MAX_TODO_TEXT_CHARS
+        .saturating_sub(input.text().chars().count().saturating_sub(selected))
 }
 
 /// 启动加载：整体替换列表并重置选中/视口/编辑/撤销槽。

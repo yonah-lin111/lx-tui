@@ -222,11 +222,6 @@ pub fn apply_prompt_search(state: &mut AppState, command: &EditorCommand) -> boo
     true
 }
 
-/// 清空显示中树视图的搜索词（Ctrl+C 清空语义）；返回是否被消费。
-pub fn clear_prompt_search(state: &mut AppState) -> bool {
-    apply_prompt_search(state, &EditorCommand::Escape)
-}
-
 /// 滚动树视口；越界钳制；返回是否变化。
 pub fn scroll_prompt_tree(state: &mut AppState, direction: isize, visible: usize) -> bool {
     let index = state.prompt_workspace();

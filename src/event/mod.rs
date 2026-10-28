@@ -7,6 +7,7 @@ pub(crate) mod input;
 pub(crate) mod mouse;
 pub(crate) mod overlay;
 mod paste;
+mod pump;
 pub(crate) mod session;
 mod trust;
 
@@ -175,6 +176,18 @@ pub enum AppEvent {
         message_id: String,
         code: String,
     },
+    /// 按键回退读取系统剪贴板的结果；目标变化或终端 Paste 已到达时丢弃。
+    ClipboardRead {
+        id: u64,
+        target: crate::app::state::PasteTarget,
+        generation: u64,
+        result: Option<String>,
+    },
+    /// 可确认的原生剪贴板写入结果；成功后才执行待定剪切的删除。
+    ClipboardWriteFinished {
+        id: u64,
+        success: bool,
+    },
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -237,6 +250,8 @@ async fn run_loop(
     let mut last_rects: Vec<(PaneId, Rect)> = Vec::new();
     // UI 渲染缓存：跨帧复用历史几何快照；按窗格隔离，窗格集合变化时清理。
     let mut ui_cache = ui::RenderCache::default();
+    // 最近一帧最终可见文本：未重绘的循环继续用上一帧做鼠标选择。
+    let mut last_screen = ui::screen::ScreenText::default();
     // PTY 输出后的 cwd 去抖检查时刻；空闲时不设置、不轮询。
     let mut cwd_check: Option<Instant> = None;
     // PTY 输出后的 Agent 去抖扫描时刻；与 cwd 检查同窗口合并。
@@ -369,9 +384,11 @@ async fn run_loop(
         if update::sync_all_lx_mention_roots(state) {
             dirty = true;
         }
-        pump_lx_mention_scan(state, &sender);
+        pump::pump_lx_mention_scan(state, &sender);
+        pump::pump_clipboard_requests(state, &sender);
         git::pump_git_queries(state, &sender, &mut git_inflight);
-        let geometry = session::current_geometry(tui, state, &config)?;
+        let mut geometry = session::current_geometry(tui, state, &config)?;
+        geometry.screen_text = std::mem::take(&mut last_screen);
         // 工具调用 loading 门槛按「窗格本帧是否可见」决定是否等一帧；每帧都刷新，
         // 避免首帧（几何未变化）误判为不可见而跳过渲染门槛。
         chat_streams.set_visible_panes(&geometry.rects);
@@ -430,8 +447,18 @@ async fn run_loop(
             // Todo 列表可见行数：本帧紧接着绘制，钳制结果直接生效，无需再置脏。
             update::resolve_todo_viewport(state, geometry.view.prompt);
             ui_cache.begin_frame();
-            tui.draw(|frame| ui::render_cached(frame, state, &config, &mut ui_cache))?;
+            let mut sampled = None;
+            tui.draw(|frame| {
+                sampled = Some(ui::render_cached(frame, state, &config, &mut ui_cache));
+            })?;
+            if let Some(screen) = sampled {
+                geometry.screen_text = screen;
+            }
             dirty = false;
+            // 按冻结内容重定位屏幕选区：滚动/缩放后还能画在原文上；内容消失则隐藏高亮。
+            if update::refresh_screen_selection(state, &geometry.screen_text) {
+                dirty = true;
+            }
             last_draw = Instant::now();
             // 工具调用 loading 已绘制：推进 pending → running 并回执 ticket，
             // loop 此刻才被允许执行文件 IO（不靠 sleep 保证可见性）。
@@ -471,11 +498,12 @@ async fn run_loop(
                         &mut ui_cache,
                         &mut dirty,
                     );
-                    pump_mention_scan(state, &sender);
-                    pump_lx_mention_scan(state, &sender);
-                    pump_prompt_worktree(state, &sender, &mut git_inflight);
+                    pump::pump_mention_scan(state, &sender);
+                    pump::pump_lx_mention_scan(state, &sender);
+                    pump::pump_prompt_worktree(state, &sender, &mut git_inflight);
+                    pump::pump_clipboard_requests(state, &sender);
                     git::pump_git_queries(state, &sender, &mut git_inflight);
-                    pump_referenced_requests(state, &sender);
+                    pump::pump_referenced_requests(state, &sender);
                 }
                 Some(Err(error)) => return Err(error),
                 None => break,
@@ -499,6 +527,7 @@ async fn run_loop(
                         &mut git_inflight,
                         &mut chat_streams,
                         persistence,
+                        &mut dirty,
                     );
                     while let Ok(message) = receiver.try_recv() {
                         handle_app_event(
@@ -508,6 +537,7 @@ async fn run_loop(
                             &mut git_inflight,
                             &mut chat_streams,
                             persistence,
+                            &mut dirty,
                         );
                     }
                     // 输出后安排一次去抖检查；窗口内合并，空闲不轮询。
@@ -518,6 +548,8 @@ async fn run_loop(
             }
             () = tokio::time::sleep(wait) => {}
         }
+        // 下一轮没有重绘时继续使用这一帧的画面文本。
+        last_screen = std::mem::take(&mut geometry.screen_text);
     }
 
     for session in sessions.values_mut() {
@@ -600,9 +632,11 @@ fn handle_terminal_event(
 ) {
     match event {
         TerminalEvent::Key(key) => {
-            input::handle_key_event(key, state, sessions, &geometry.view, dirty);
+            input::handle_key_event(key, state, sessions, geometry, cache, dirty);
         }
         TerminalEvent::Paste(text) => {
+            // 终端 Paste 已到达：作废仍在等待的按键回退读取，优先使用终端给出的内容。
+            state.clipboard_generation = state.clipboard_generation.saturating_add(1);
             input::handle_paste_event(text, state, sessions, dirty);
         }
         TerminalEvent::Mouse(mouse) => {
@@ -619,6 +653,7 @@ fn handle_app_event(
     git_inflight: &mut HashSet<PathBuf>,
     chat_streams: &mut chat::ChatStreams,
     persistence: &Persistence,
+    dirty: &mut bool,
 ) {
     match message {
         AppEvent::PaneOutput(id, bytes) => {
@@ -804,6 +839,52 @@ fn handle_app_event(
                 &code,
             );
         }
+        AppEvent::ClipboardRead {
+            id: _,
+            target,
+            generation,
+            result,
+        } => {
+            // 终端 Paste 已到达或目标焦点/修订号变化：丢弃这次按键回退结果。
+            if state.clipboard_generation != generation
+                || !update::paste_target_matches(state, &target)
+            {
+                return;
+            }
+            match result {
+                Some(text) => input::handle_paste_event(text, state, sessions, dirty),
+                None => {
+                    let anchor = target.pane;
+                    update::show_toast_at(
+                        state,
+                        anchor,
+                        crate::app::toast::Toast::new(
+                            crate::app::toast::ToastKind::Danger,
+                            crate::ui::text::TOAST_PASTE_FAILED,
+                            anchor,
+                            Instant::now(),
+                        )
+                        .with_title(crate::ui::text::TOAST_CLIPBOARD_TITLE),
+                    );
+                    *dirty = true;
+                }
+            }
+        }
+        AppEvent::ClipboardWriteFinished { id, success } => {
+            let count = state
+                .pending_cut
+                .as_ref()
+                .filter(|pending| pending.id == id)
+                .map_or(0, |pending| pending.text.chars().count());
+            if success {
+                if update::finish_cut(state, id).is_some() {
+                    update::show_copy_result(state, count, true, true);
+                }
+            } else if update::fail_cut(state, id).is_some() {
+                update::show_copy_result(state, count, true, false);
+            }
+            *dirty = true;
+        }
         AppEvent::PromptWorktreeListed {
             repo_root,
             candidates,
@@ -832,156 +913,6 @@ fn handle_app_event(
             }
         }
     }
-}
-
-/// @ 提及面板需要缓存且无在途扫描时，发起后台扫描并把结果投递回主循环。
-///
-/// prompt 未聚焦时不扫描；扫描失败按空结果处理（面板保持隐藏）。
-fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
-    if !state.prompt_focused() {
-        return;
-    }
-    let prompt = state.prompt.id();
-    let Some((generation, root)) = state.prompt.take_mention_scan_request() else {
-        return;
-    };
-    let sender = sender.clone();
-    tokio::task::spawn_blocking(move || {
-        let entries = crate::files::scan(&root);
-        let _ = sender.send(AppEvent::MentionScanned {
-            prompt,
-            generation,
-            entries,
-        });
-    });
-}
-
-/// lx `@` 面板需要扫描的窗格：取走请求并在后台按根扫描，结果携窗格、代号与根回投。
-///
-/// 只为当前处于 lx 视图、有有效 `@` 触发且无缓存/在途的窗格发起；同一根在 pane 内缓存。
-fn pump_lx_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
-    for (pane, generation, root) in update::take_lx_mention_scan_requests(state) {
-        let sender = sender.clone();
-        let scan_root = root.clone();
-        tokio::task::spawn_blocking(move || {
-            let entries = crate::files::scan(&scan_root);
-            let _ = sender.send(AppEvent::LxMentionScanned {
-                pane,
-                generation,
-                root,
-                entries,
-            });
-        });
-    }
-}
-
-/// prompt 模板块的 worktree 绑定：选择器打开或块内绑定未解析时发起后台查询。
-/// `inflight` 记录在途仓库根，避免同一仓库重复发起。
-fn pump_prompt_worktree(
-    state: &mut AppState,
-    sender: &mpsc::UnboundedSender<AppEvent>,
-    inflight: &mut HashSet<PathBuf>,
-) {
-    if !update::prompt_panel_active(state) {
-        return;
-    }
-    let chooser = state.prompt.worktree_chooser_open();
-    let repo = if chooser {
-        state.prompt.take_worktree_refresh()
-    } else {
-        state.prompt.take_worktree_request()
-    };
-    let Some(repo) = repo else {
-        return;
-    };
-    if !inflight.insert(repo.clone()) {
-        return;
-    }
-    let sender = sender.clone();
-    tokio::task::spawn_blocking(move || {
-        let (candidates, failed) = match crate::git::list_worktrees(&repo) {
-            Some(list) => (update::worktree_candidates(list.entries), false),
-            None => (Vec::new(), true),
-        };
-        let _ = sender.send(AppEvent::PromptWorktreeListed {
-            repo_root: repo,
-            candidates,
-            failed,
-        });
-    });
-}
-
-/// 引用文件夹后台请求：扫描目录内容或校验新增路径；结果按请求代号投递回主循环。
-///
-/// 请求由 `app` 层登记（打开弹窗/进入目录/提交输入），此处取走并在阻塞线程执行，
-/// 绝不在事件循环或渲染路径同步遍历目录。路径校验需要判重，故读取当时的项目快照。
-fn pump_referenced_requests(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
-    if state.referenced_requests.is_empty() {
-        return;
-    }
-    let requests = std::mem::take(&mut state.referenced_requests);
-    let known: Vec<PathBuf> = state
-        .referenced
-        .folders
-        .iter()
-        .map(|folder| folder.path.clone())
-        .collect();
-    for request in requests {
-        let sender = sender.clone();
-        let known = known.clone();
-        match request {
-            crate::app::referenced::ReferencedRequest::Scan { id, root, .. } => {
-                tokio::task::spawn_blocking(move || {
-                    let outcome = crate::files::scan_referenced(&root).map_err(|_| ());
-                    let _ = sender.send(AppEvent::ReferencedScanned { id, outcome });
-                });
-            }
-            crate::app::referenced::ReferencedRequest::ValidateAdd { id, input } => {
-                tokio::task::spawn_blocking(move || {
-                    let outcome = validate_referenced_path(&input, &known);
-                    let _ = sender.send(AppEvent::ReferencedValidated { id, outcome });
-                });
-            }
-        }
-    }
-}
-
-/// 后台校验新增路径：绝对路径、存在、目录类型、引用可表达性与规范化去重。
-///
-/// 返回规范化路径或明确的失败原因；规范化后与快照重复时以 `Duplicate` 报告
-/// （调用方回投时携带 duplicate 标记，避免在同一响应里既给成功又给重复）。
-fn validate_referenced_path(
-    input: &str,
-    known: &[PathBuf],
-) -> Result<PathBuf, crate::app::referenced::PathValidation> {
-    use crate::app::referenced::PathValidation;
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return Err(PathValidation::Empty);
-    }
-    let path = std::path::Path::new(trimmed);
-    if !path.is_absolute() {
-        return Err(PathValidation::NotAbsolute);
-    }
-    if !path.exists() {
-        return Err(PathValidation::NotFound);
-    }
-    if !path.is_dir() {
-        return Err(PathValidation::NotDirectory);
-    }
-    if path.to_str().is_none() {
-        return Err(PathValidation::NotRepresentable);
-    }
-    let Some(canonical) = std::fs::canonicalize(path).ok() else {
-        return Err(PathValidation::NotFound);
-    };
-    if !crate::app::markdown::reference_representable(&canonical.to_string_lossy()) {
-        return Err(PathValidation::NotRepresentable);
-    }
-    if known.contains(&canonical) {
-        return Err(PathValidation::Duplicate);
-    }
-    Ok(canonical)
 }
 
 #[cfg(test)]

@@ -110,7 +110,7 @@ fn editing_cleared_text_deletes_item() {
     assert!(state.todo.select(1));
     assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(1)));
 
-    assert!(apply_todo_key(&mut state, TodoKey::Clear));
+    state.todo.edit_input_mut().expect("editing").clear();
     assert_eq!(state.todo.editing().expect("editing").input.text(), "");
     assert!(apply_todo_key(&mut state, TodoKey::Enter));
 
@@ -631,4 +631,66 @@ fn paste_is_clipped_to_storage_limit() {
 
     // 已经装满：再粘贴不产生变化，也不置脏。
     assert!(!apply_todo_paste(&mut state, "more"));
+}
+
+#[test]
+fn editing_undo_reverses_text_not_list_delete() {
+    let mut state = todo_state(&["keep", "drop"]);
+    assert!(state.todo.select(1));
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(1)));
+    let input = state.todo.edit_input_mut().expect("editing");
+    input.select_all();
+    input.insert_char('X');
+    assert_eq!(input.text(), "X");
+    assert!(apply_todo_key(&mut state, TodoKey::Undo));
+    assert_eq!(
+        state.todo.editing().expect("editing").input.text(),
+        "drop",
+        "编辑态 Ctrl+Z 撤销文本，不撤销列表删除"
+    );
+    assert_eq!(texts(&state), ["keep", "drop"]);
+}
+
+#[test]
+fn ctrl_a_and_backspace_replace_selection_within_max_length() {
+    let mut state = todo_state(&["hello"]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
+    state.todo.edit_input_mut().expect("editing").select_all();
+    let max = crate::db::todo::MAX_TODO_TEXT_CHARS;
+    // 全选替换可以写满上限，不因原文本占位被提前拒绝。
+    let replacement = "x".repeat(max);
+    assert!(apply_todo_paste(&mut state, &replacement));
+    assert_eq!(
+        state
+            .todo
+            .editing()
+            .expect("editing")
+            .input
+            .text()
+            .chars()
+            .count(),
+        max
+    );
+    assert!(!apply_todo_paste(&mut state, "y"), "达到上限后拒绝继续写入");
+    assert!(apply_todo_key(&mut state, TodoKey::Enter));
+    assert_eq!(state.todo.items()[0].text.chars().count(), max);
+}
+
+#[test]
+fn ctrl_e_clears_select_all_even_when_cursor_stays_at_end() {
+    let mut state = todo_state(&["hello"]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
+    state.todo.edit_input_mut().expect("editing").select_all();
+    // Ctrl+E 映射到 End：光标本来就在末尾，但必须清掉全选高亮并触发重绘。
+    assert!(apply_todo_key(&mut state, TodoKey::End));
+    assert!(
+        state
+            .todo
+            .editing()
+            .expect("editing")
+            .input
+            .selection_range()
+            .is_none(),
+        "光标移动到行尾即取消全选"
+    );
 }

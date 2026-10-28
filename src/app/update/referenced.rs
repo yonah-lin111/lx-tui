@@ -176,7 +176,7 @@ pub fn apply_referenced_validation_error(
     true
 }
 
-/// 清空路径输入弹窗（Ctrl+C / `[clear]`），并清除既有错误提示。
+/// 清空路径输入弹窗（`[clear]` 按钮），并清除既有错误提示。
 pub fn clear_referenced_input(state: &mut AppState) {
     if let Some(Overlay::ReferencedFolderInput(input)) = state.overlay.as_mut() {
         input.input.clear();
@@ -194,18 +194,7 @@ pub fn edit_referenced_input(state: &mut AppState, key: crate::app::actions::Ove
 
 /// 单行输入的通用编辑键分发。
 fn edit_text_input(input: &mut TextInput, key: crate::app::actions::OverlayKey) {
-    use crate::app::actions::OverlayKey;
-    match key {
-        OverlayKey::Char(ch) => input.insert_char(ch),
-        OverlayKey::Clear => input.clear(),
-        OverlayKey::Backspace => input.backspace(),
-        OverlayKey::Delete => input.delete(),
-        OverlayKey::Left => input.move_left(),
-        OverlayKey::Right => input.move_right(),
-        OverlayKey::Home => input.move_home(),
-        OverlayKey::End => input.move_end(),
-        _ => {}
-    }
+    input.apply_key(key);
 }
 
 /// 引用文件夹菜单点击/键盘选中项：移动 `❯` 选中标记；越界忽略；返回是否变化。

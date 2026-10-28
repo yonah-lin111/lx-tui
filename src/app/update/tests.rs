@@ -290,19 +290,28 @@ fn terminal_selection_finish_extracts_text() {
         finish_terminal_selection(&mut state, logs).as_deref(),
         Some("hello")
     );
+    assert_eq!(
+        state.terminal_selection,
+        Some(logs),
+        "松开后选区保留供 Ctrl+C 复制"
+    );
+    clear_selection(&mut state);
     assert!(state.terminal_selection.is_none());
 }
 
 #[test]
-fn terminal_selection_finish_ignores_whitespace_only() {
+fn terminal_selection_finish_keeps_space_only_text() {
     let mut state = AppState::demo();
     create_tab(&mut state);
     let logs = state.workspaces[0].tabs[1].layout.pane_ids()[0];
-    // 空终端只有空格：拖一块空白选区不应产生可复制文本。
+    // 全空格选区仍是有效选择：复制得到对应空格，不用 trim 判空。
     begin_terminal_selection(&mut state, logs, 0, 0);
     drag_terminal_selection(&mut state, logs, 0, 4);
-    assert_eq!(finish_terminal_selection(&mut state, logs), None);
-    assert!(state.terminal_selection.is_none());
+    assert_eq!(
+        finish_terminal_selection(&mut state, logs).as_deref(),
+        Some("     ")
+    );
+    clear_selection(&mut state);
 }
 
 /// 填满终端回滚历史。
@@ -703,6 +712,36 @@ fn tick_clears_expired_toast_only() {
     assert!(tick(&mut state, now + TOAST_DURATION));
     assert!(state.toast.is_none());
     assert!(!tick(&mut state, now + TOAST_DURATION));
+}
+
+#[test]
+fn screen_selection_pauses_lx_toast_expiry() {
+    let mut state = demo_terminal();
+    let pane = state.active_tab().layout.focus();
+    state.active_tab_mut().pane_mut(pane).expect("pane").view = PaneView::Lx;
+    let now = Instant::now();
+    show_lx_toast(
+        &mut state,
+        pane,
+        Toast::new(ToastKind::Default, "lx toast", None, now),
+    );
+    state.screen_selection = Some(crate::app::selection::ScreenSelection::new(
+        crate::app::selection::ScreenPoint::new(0, 0),
+        crate::app::selection::SelectionUnit::Character,
+        crate::app::selection::SelectedCells::default(),
+    ));
+    assert_eq!(next_deadline(&state), None, "选区期间不安排 toast 唤醒");
+    tick(&mut state, now + TOAST_DURATION + Duration::from_secs(1));
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.toast.is_some(),
+        "选区存在期间 lx toast 不得过期"
+    );
+    clear_selection(&mut state);
+    tick(&mut state, now + TOAST_DURATION + Duration::from_secs(1));
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.toast.is_none(),
+        "清除选区后恢复过期"
+    );
 }
 
 #[test]
@@ -3533,18 +3572,14 @@ fn slash_panel_keys_are_consumed_before_editing() {
 }
 
 #[test]
-fn prompt_copy_text_prefers_selection_then_full_text() {
+fn prompt_copy_text_requires_selection() {
     let mut state = AppState::demo();
     state.prompt.resize(40, 8);
     focus_prompt(&mut state);
     assert_eq!(prompt_copy_text(&state), None, "空 prompt 无复制内容");
 
     apply_editor(&mut state, EditorCommand::InsertText("hello world".into()));
-    assert_eq!(
-        prompt_copy_text(&state).as_deref(),
-        Some("hello world"),
-        "无选区复制全文"
-    );
+    assert_eq!(prompt_copy_text(&state), None, "无选区不再复制全文");
 
     let prompt = state.prompt.id();
     begin_selection(&mut state, prompt, 0, 0);
@@ -3993,19 +4028,15 @@ fn lx_entry_and_selection_roundtrip() {
 
     begin_lx_selection(&mut state, pane, 1, 2);
     drag_lx_selection(&mut state, pane, 3, 4);
-    let selection = take_lx_selection(&mut state).expect("selection");
+    let selection = finish_lx_selection(&mut state).expect("selection");
     assert_eq!(selection.pane(), pane);
     assert_eq!(selection.range(), Some(((1, 2), (3, 4))));
-    assert!(state.lx_selection.is_none(), "取走后清空");
+    assert!(state.lx_selection.is_some(), "松开后高亮保留");
 
-    // 未拖动（空选区）范围为 None。
+    // 未拖动（空选区）范围为 None，直接清除。
     begin_lx_selection(&mut state, pane, 2, 2);
-    assert!(
-        take_lx_selection(&mut state)
-            .expect("selection")
-            .range()
-            .is_none()
-    );
+    assert!(finish_lx_selection(&mut state).is_none());
+    assert!(state.lx_selection.is_none());
 }
 
 #[test]
@@ -4096,15 +4127,16 @@ fn lx_input_selection_roundtrip() {
         Some("ell")
     );
     assert_eq!(
-        take_lx_input_selection(&mut state).map(|(_, text)| text),
+        finish_lx_input_selection(&mut state).map(|(_, text)| text),
         Some("ell".to_string())
     );
     assert!(
-        !state
+        state
             .pane_anywhere(pane)
             .expect("pane")
             .lx
-            .has_text_selection()
+            .has_text_selection(),
+        "松开后选区保留"
     );
     assert!(state.lx_input_drag.is_none());
 }
@@ -5137,4 +5169,29 @@ fn select_right_tab_same_tab_is_noop() {
     assert!(!select_right_tab(&mut state, RightTab::Todo), "已是 Todo");
     assert!(state.effects.is_empty(), "幂等：不产生任何 Effect");
     assert_eq!(state.right_tab, RightTab::Todo);
+}
+
+#[test]
+fn copy_feedback_is_top_center_and_reports_char_count() {
+    let mut state = AppState::demo();
+    show_copy_result(&mut state, 42, false, true);
+    let toast = state.toast.as_ref().expect("copy toast");
+    assert_eq!(toast.anchor, None, "复制反馈固定在屏幕顶部居中");
+    assert_eq!(
+        toast.title.as_deref(),
+        Some(crate::ui::text::TOAST_CLIPBOARD_TITLE)
+    );
+    assert!(toast.message.contains("Copy sent"), "{}", toast.message);
+    assert!(toast.message.contains("42 chars"), "{}", toast.message);
+
+    show_copy_result(&mut state, 1, true, true);
+    let toast = state.toast.as_ref().expect("cut toast");
+    assert!(toast.message.contains("Copied"), "{}", toast.message);
+    assert!(toast.message.contains("1 char"), "{}", toast.message);
+
+    show_copy_result(&mut state, 7, true, false);
+    let toast = state.toast.as_ref().expect("failed copy toast");
+    assert_eq!(toast.kind, ToastKind::Danger);
+    assert!(toast.message.contains("Copy failed"), "{}", toast.message);
+    assert!(toast.message.contains("7 chars"), "{}", toast.message);
 }

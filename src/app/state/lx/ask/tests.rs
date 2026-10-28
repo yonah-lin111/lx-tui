@@ -214,3 +214,30 @@ fn answer_editing_never_touches_the_prompt_draft() {
     assert_eq!(lx.input, draft);
     assert_eq!(lx.cursor, cursor);
 }
+
+#[test]
+fn ask_editor_select_all_replace_and_cut_share_lx_semantics() {
+    let mut editor = AskEditor::new();
+    editor.insert_str("hello world");
+    editor.select_all();
+    assert_eq!(editor.selected_text().as_deref(), Some("hello world"));
+
+    // 替换选区按净长度检查上限，不受原文本长度阻塞。
+    editor.insert_char('x');
+    assert_eq!(editor.text(), "x");
+    editor.undo();
+    assert_eq!(editor.text(), "hello world");
+
+    editor.select_all();
+    assert_eq!(editor.cut_selection().as_deref(), Some("hello world"));
+    assert_eq!(editor.text(), "");
+    editor.undo();
+    assert_eq!(editor.text(), "hello world");
+
+    editor.select_all();
+    editor.home();
+    assert!(editor.selection_range().is_none(), "Home 取消全选");
+    editor.select_all();
+    editor.end();
+    assert!(editor.selection_range().is_none(), "End 取消全选");
+}

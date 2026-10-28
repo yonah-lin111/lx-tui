@@ -295,3 +295,35 @@ fn warning_toast_paints_yellow_border_and_title() {
         .count();
     assert!(yellow > 0, "warning 的边框/标题变黄");
 }
+
+#[test]
+fn copy_toast_renders_full_count_at_screen_top_center() {
+    let mut state = AppState::demo();
+    update::show_copy_result(&mut state, 1234, false, true);
+    let message = text::copy_sent_message(1234);
+    let view = view_for(&state);
+    let rects = pane_rects(&state, &view);
+    let screen = Rect::new(0, 0, 100, 24);
+    let area = rect(&state, &view, &rects, screen, &Config::default()).expect("toast area");
+    assert_eq!(area.y, 1, "复制反馈固定屏幕顶部居中");
+    assert_eq!(area.x, (screen.width - area.width) / 2);
+
+    let mut terminal =
+        Terminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    terminal
+        .draw(|frame| crate::ui::render(frame, &state, &Config::default()))
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let body: String = (area.y + 1..area.bottom().saturating_sub(1))
+        .map(|y| {
+            (area.x + 1..area.right().saturating_sub(1))
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        body.contains(&message),
+        "toast body must contain the full copy message: {body:?}"
+    );
+}

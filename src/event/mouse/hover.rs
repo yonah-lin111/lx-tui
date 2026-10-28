@@ -49,6 +49,7 @@ pub(crate) fn handle_mouse_moved(
         screen,
         rects,
         view,
+        ..
     } = geometry;
     // 浮层打开时悬停只服务菜单高亮，不触碰底层 hover 状态。
     if state.overlay.is_some() {

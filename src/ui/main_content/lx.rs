@@ -337,8 +337,11 @@ pub fn copy_text(
     range: ((i32, u16), (i32, u16)),
     cache: &mut PaneCache,
 ) -> String {
-    let (grid, _, _) = build(area, lx, false, cache);
     let ((start_row, start_col), (end_row, end_col)) = range;
+    if start_row == end_row && start_col == end_col {
+        return String::new();
+    }
+    let (grid, _, _) = build(area, lx, false, cache);
     let mut lines: Vec<String> = Vec::new();
     for row in start_row.max(0)..=end_row.max(0) {
         if row >= i32::from(area.height) {
@@ -361,10 +364,7 @@ pub fn copy_text(
                 line.push(ch);
             }
         }
-        lines.push(line.trim_end().to_string());
-    }
-    while lines.last().is_some_and(String::is_empty) {
-        lines.pop();
+        lines.push(line);
     }
     lines.join("\n")
 }

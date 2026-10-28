@@ -248,7 +248,16 @@ fn route_prompt_tree(state: &mut AppState, command: &EditorCommand) {
             activate_prompt_row(state);
         }
         EditorCommand::Escape => {
-            toggle_prompt_panel_mode(state);
+            // 搜索词非空时先清空过滤，再按一次才返回编辑视图（与文档一致）。
+            let has_search = state
+                .workspaces
+                .get(state.prompt_workspace())
+                .is_some_and(|workspace| !workspace.prompt_panel.search.text().is_empty());
+            if has_search {
+                apply_prompt_search(state, &EditorCommand::Escape);
+            } else {
+                toggle_prompt_panel_mode(state);
+            }
         }
         _ => {
             apply_prompt_search(state, command);

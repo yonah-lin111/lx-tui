@@ -426,7 +426,13 @@ pub fn apply_page_rename_key(state: &mut AppState, key: OverlayKey) {
         | OverlayKey::Left
         | OverlayKey::Right
         | OverlayKey::Home
-        | OverlayKey::End => edit_page_rename_input(state, key),
+        | OverlayKey::End
+        | OverlayKey::Undo
+        | OverlayKey::Redo
+        | OverlayKey::WordLeft
+        | OverlayKey::WordRight
+        | OverlayKey::DeleteWordBackward
+        | OverlayKey::DeleteWordForward => edit_page_rename_input(state, key),
         OverlayKey::Up
         | OverlayKey::Down
         | OverlayKey::EnterFolder
@@ -448,18 +454,7 @@ fn edit_page_rename_input(state: &mut AppState, key: OverlayKey) {
     else {
         return;
     };
-    let input = &mut rename.input;
-    match key {
-        OverlayKey::Char(ch) => input.insert_char(ch),
-        OverlayKey::Clear => input.clear(),
-        OverlayKey::Backspace => input.backspace(),
-        OverlayKey::Delete => input.delete(),
-        OverlayKey::Left => input.move_left(),
-        OverlayKey::Right => input.move_right(),
-        OverlayKey::Home => input.move_home(),
-        OverlayKey::End => input.move_end(),
-        _ => {}
-    }
+    rename.input.apply_key(key);
 }
 
 /// 取消页重命名输入态（保留旧名）。
