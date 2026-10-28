@@ -23,14 +23,14 @@ fn screen_text_preserves_spaces_borders_and_wide_chars() {
     assert_eq!(screen.row_text(1).as_deref(), Some("└─ x  "));
 
     let cells = screen.selection_cells(ScreenPoint::new(0, 0), ScreenPoint::new(1, 5));
-    assert_eq!(cells.text(), "a你 b \n└─ x  ");
+    assert_eq!(cells.text(), "a你 b\n└─ x  ");
     assert_eq!(
         cells.rows[0]
             .cells
             .iter()
             .map(|c| c.width)
             .collect::<Vec<_>>(),
-        vec![1, 2, 1, 1, 1]
+        vec![1, 2, 1, 1]
     );
 }
 
@@ -52,7 +52,7 @@ fn selection_freezes_visible_text_only() {
 fn reanchor_finds_scrolled_rows() {
     let before = ScreenText::from_buffer(&buffer(&["head", "alpha", "beta", "tail"], 8));
     let cells = before.selection_cells(ScreenPoint::new(1, 0), ScreenPoint::new(2, 3));
-    assert_eq!(cells.text(), "alpha   \nbeta");
+    assert_eq!(cells.text(), "alpha\nbeta");
 
     let after = ScreenText::from_buffer(&buffer(&["new", "head", "alpha", "beta", "tail"], 8));
     let (start, end) = after.reanchor(&cells).expect("rows still visible");
@@ -144,6 +144,22 @@ fn line_range_without_right_border_stops_at_last_non_space() {
             .text(),
         "❯ Read /src"
     );
+}
+
+#[test]
+fn multi_row_selection_is_clipped_to_container_columns() {
+    let line = "│side│left │right│";
+    let screen = ScreenText::from_buffer(&buffer(&[line, line, line], 18));
+    assert_eq!(
+        screen.line_range(ScreenPoint::new(1, 7)),
+        (ScreenPoint::new(1, 6), ScreenPoint::new(1, 9))
+    );
+    let cells = screen.selection_cells(ScreenPoint::new(0, 7), ScreenPoint::new(2, 9));
+    assert_eq!(cells.text(), "eft\nleft\nleft");
+    for row in &cells.rows {
+        assert!(row.start_col >= 6, "不得越过左侧容器边界：{row:?}");
+        assert!(row.end_col <= 10, "不得越过右侧容器边界：{row:?}");
+    }
 }
 
 #[test]

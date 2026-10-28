@@ -68,6 +68,8 @@ pub(crate) fn handle_mouse_down_left(
     }
     // 新的一次普通点击清除所有旧选区；只有确实清掉了东西才需要重绘。
     let had_screen_selection = state.screen_selection.is_some();
+    // 卡片内容有选中高亮时，第一次点击只取消选中，不切换折叠。
+    let had_card_selection = state.screen_selection.is_some() || state.lx_selection.is_some();
     update::clear_selection(state);
     if had_screen_selection {
         *dirty = true;
@@ -674,6 +676,11 @@ pub(crate) fn handle_mouse_down_left(
                 });
                 if let Some(card) = agent_card {
                     update::focus_pane(state, pane);
+                    if had_card_selection {
+                        state.screen_click = None;
+                        *dirty = true;
+                        return;
+                    }
                     if click != crate::app::selection::SelectionUnit::Character {
                         update::begin_screen_selection_unit(state, screen_text, point, click);
                         *dirty = true;
@@ -809,6 +816,11 @@ pub(crate) fn handle_mouse_down_left(
                             cache.pane(pane),
                         )
                     });
+                    if target.is_some() && had_card_selection {
+                        state.screen_click = None;
+                        *dirty = true;
+                        return;
+                    }
                     update::begin_lx_selection(state, pane, row, col);
                     state.lx_card_press = target.map(|card| (pane, card));
                 }

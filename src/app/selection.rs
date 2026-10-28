@@ -210,9 +210,9 @@ impl ScreenSelection {
 }
 
 /// 同格多击判定窗口；折叠卡片延迟也复用它，保证双击/三击先于折叠生效。
-pub(crate) const MULTI_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(400);
+pub(crate) const MULTI_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// 点击计数现场：同一格、400 ms 内 1→2→3→1。
+/// 点击计数现场：同一格、250 ms 内 1→2→3→1。
 #[derive(Debug, Clone, Copy)]
 pub struct ScreenClick {
     pub point: ScreenPoint,

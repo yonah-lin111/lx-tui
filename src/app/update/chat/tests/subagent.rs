@@ -537,7 +537,7 @@ fn agent_card_toggle_waits_for_click_window_and_cancels() {
         now,
     );
     assert!(state.pending_card_toggle.is_some());
-    assert!(!update::tick(&mut state, now + Duration::from_millis(399)));
+    assert!(!update::tick(&mut state, now + Duration::from_millis(249)));
     assert!(
         !state
             .pane_anywhere(pane)
@@ -554,7 +554,7 @@ fn agent_card_toggle_waits_for_click_window_and_cancels() {
     // 新一次按下会清选区；同一路径必须取消待定折叠。
     update::clear_selection(&mut state);
     assert!(state.pending_card_toggle.is_none());
-    update::tick(&mut state, now + Duration::from_millis(400));
+    update::tick(&mut state, now + Duration::from_millis(250));
     assert!(
         !state
             .pane_anywhere(pane)
@@ -575,7 +575,7 @@ fn agent_card_toggle_waits_for_click_window_and_cancels() {
         CardToggleSurface::AgentDetail,
         now,
     );
-    assert!(update::tick(&mut state, now + Duration::from_millis(400)));
+    assert!(update::tick(&mut state, now + Duration::from_millis(250)));
     assert!(
         state
             .pane_anywhere(pane)

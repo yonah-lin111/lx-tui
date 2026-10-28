@@ -6560,6 +6560,82 @@ fn lx_card_double_click_cancels_pending_toggle() {
     assert_eq!(copied.text, "Read");
 }
 
+#[test]
+fn card_click_clears_existing_selection_before_toggling() {
+    let (mut state, config, geo, pane, column, row) = lx_card_fixture();
+    let mut selection = crate::app::selection::ScreenSelection::new(
+        crate::app::selection::ScreenPoint::new(0, 0),
+        crate::app::selection::SelectionUnit::Character,
+        crate::app::selection::SelectedCells::default(),
+    );
+    selection.set_range(
+        crate::app::selection::ScreenPoint::new(0, 0),
+        crate::app::selection::ScreenPoint::new(0, 3),
+    );
+    state.screen_selection = Some(selection);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 第一次点击：只取消高亮，不登记卡片折叠。
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        handle_terminal_event(
+            mouse(kind, column, row),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+    assert!(state.screen_selection.is_none(), "第一次点击必须清除选区");
+    assert!(state.pending_card_toggle.is_none(), "第一次点击不得折叠");
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .detail_is_expanded("m-param", "call-param"),
+        "第一次点击不得改变卡片"
+    );
+
+    // 第二次点击：选区已空，重新按单击进入延迟折叠。
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        handle_terminal_event(
+            mouse(kind, column, row),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+    assert!(state.pending_card_toggle.is_some(), "第二次点击应登记折叠");
+    let deadline = state
+        .pending_card_toggle
+        .as_ref()
+        .expect("pending")
+        .deadline;
+    crate::app::update::tick(&mut state, deadline);
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .detail_is_expanded("m-param", "call-param"),
+        "第二次点击在延迟后应展开"
+    );
+}
+
 /// 粘贴也是编辑：必须让双 Esc 的待命失效，避免带草稿选中后回填覆盖。
 #[test]
 fn lx_paste_cancels_rewind_arming() {

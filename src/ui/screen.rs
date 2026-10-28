@@ -95,14 +95,53 @@ impl ScreenText {
             let (col_start, col_end) = if start.row == end.row {
                 (start.col, end.col)
             } else if row == start.row {
-                (start.col, self.width.saturating_sub(1))
+                // 首行只延伸到按下点所在容器右边界；末行从终点所在容器左边界
+                // 开始。中间行取起止点跨越的容器段，不能直接铺满整个屏幕。
+                let right = self
+                    .container_right_shared(row, start.col, start.row)
+                    .map(|col| col.saturating_sub(1))
+                    .unwrap_or_else(|| self.width.saturating_sub(1));
+                let end = self.trim_row_end(row, start.col, right);
+                (start.col, end.unwrap_or(start.col.saturating_sub(1)))
             } else if row == end.row {
-                (0, end.col)
+                let left = self
+                    .container_left_shared(row, end.col, start.row)
+                    .map(|col| col.saturating_add(1))
+                    .unwrap_or(0);
+                (left, end.col)
             } else {
-                (0, self.width.saturating_sub(1))
+                let low = start.col.min(end.col);
+                let high = start.col.max(end.col);
+                let (left_ref, right_ref) = if start.col <= end.col {
+                    (start.row, end.row)
+                } else {
+                    (end.row, start.row)
+                };
+                let left = self
+                    .container_left_shared(row, low, left_ref)
+                    .map(|col| col.saturating_add(1))
+                    .unwrap_or(0);
+                let right = self
+                    .container_right_shared(row, high, right_ref)
+                    .map(|col| col.saturating_sub(1))
+                    .unwrap_or_else(|| self.width.saturating_sub(1));
+                (
+                    left,
+                    self.trim_row_end(row, left, right)
+                        .unwrap_or(left.saturating_sub(1)),
+                )
             };
-            let (col_start, col_end) = self.widen_columns(row, col_start, col_end);
             let full = self.row_text(row).unwrap_or_default();
+            if col_start > col_end {
+                rows.push(FrozenRow {
+                    full,
+                    start_col: col_start,
+                    end_col: col_start,
+                    cells: Vec::new(),
+                });
+                continue;
+            }
+            let (col_start, col_end) = self.widen_columns(row, col_start, col_end);
             let mut cells = Vec::new();
             for col in col_start..=col_end {
                 if let Some(cell) = self.cell(col, row)
@@ -170,6 +209,41 @@ impl ScreenText {
             ScreenPoint::new(point.row, start_col),
             ScreenPoint::new(point.row, end_col),
         )
+    }
+
+    /// 行内最后一个非空白列；全空白返回 None。
+    fn trim_row_end(&self, row: u16, start: u16, end: u16) -> Option<u16> {
+        if start > end || end >= self.width {
+            return None;
+        }
+        let mut col = end;
+        loop {
+            if self.char_at(col, row).is_some_and(|ch| !ch.is_whitespace()) {
+                return Some(col);
+            }
+            if col == start {
+                return None;
+            }
+            col -= 1;
+        }
+    }
+
+    /// 两行共有的、位于 `col` 左侧最近的竖边界。
+    ///
+    /// 只认跨行都存在的边界，避免把卡片树里的单行 `└─` 误当成容器边界。
+    fn container_left_shared(&self, row: u16, col: u16, reference: u16) -> Option<u16> {
+        (0..=col.min(self.width.saturating_sub(1)))
+            .rev()
+            .find(|col| {
+                self.is_vertical_boundary(*col, row) && self.is_vertical_boundary(*col, reference)
+            })
+    }
+
+    /// 两行共有的、位于 `col` 右侧最近的竖边界。
+    fn container_right_shared(&self, row: u16, col: u16, reference: u16) -> Option<u16> {
+        (col.min(self.width.saturating_sub(1))..self.width).find(|col| {
+            self.is_vertical_boundary(*col, row) && self.is_vertical_boundary(*col, reference)
+        })
     }
 
     /// 三击选中当前视觉行：以最近的左右边框为界，不跨面板/表格列。

@@ -154,6 +154,29 @@ fn paint_screen_selection(frame: &mut Frame<'_>, state: &AppState) {
     };
     let area = frame.area();
     let end_row = end.row.min(area.bottom().saturating_sub(1));
+    // 冻结行已按容器边界裁好：中间行不能再用 0..屏宽，否则长按拖选
+    // 会在经过的每一行把侧栏、lx 与 prompt 一起反显。
+    let frozen = selection.frozen();
+    let expected_rows = usize::from(end_row.saturating_sub(start.row)) + 1;
+    if frozen.rows.len() == expected_rows && !frozen.rows.is_empty() {
+        for (offset, row) in frozen.rows.iter().enumerate() {
+            let y = start.row.saturating_add(offset as u16);
+            if y > end_row || row.cells.is_empty() {
+                continue;
+            }
+            let col_start = row.start_col.min(area.right().saturating_sub(1));
+            let col_end = row.end_col.min(area.right().saturating_sub(1));
+            if col_start > col_end {
+                continue;
+            }
+            for col in col_start..=col_end {
+                if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
+                    cell.modifier |= ratatui::style::Modifier::REVERSED;
+                }
+            }
+        }
+        return;
+    }
     for row in start.row..=end_row {
         let (col_start, col_end) = if start.row == end.row {
             (start.col, end.col)

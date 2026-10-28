@@ -3385,6 +3385,74 @@ fn switching_right_tab_keeps_focus_in_right_panel() {
 }
 
 #[test]
+fn screen_selection_highlight_respects_container_columns() {
+    use crate::app::selection::{
+        FrozenRow, ScreenPoint, ScreenSelection, SelectedCell, SelectedCells, SelectionUnit,
+    };
+    let mut state = AppState::demo();
+    let config = Config::default();
+    let view = view_for(&state);
+    let rects = crate::layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+        config.min_pane_height,
+    );
+    let (_, rect) = rects.first().copied().expect("pane rect");
+    let inner = crate::layout::pane_inner_rect(rect);
+    let start = ScreenPoint::new(inner.y + 2, inner.x + 2);
+    let end = ScreenPoint::new(inner.y + 4, inner.x + 4);
+    let rows = (0..=2)
+        .map(|_| FrozenRow {
+            full: "selection".into(),
+            start_col: inner.x + 2,
+            end_col: inner.x + 4,
+            cells: vec![SelectedCell {
+                symbol: "s".into(),
+                width: 1,
+            }],
+        })
+        .collect();
+    let frozen = SelectedCells {
+        rows,
+        start: Some(start),
+        end: Some(end),
+    };
+    let mut selection = ScreenSelection::new(start, SelectionUnit::Character, frozen);
+    selection.set_range(start, end);
+    state.screen_selection = Some(selection);
+
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    let mut cache = RenderCache::default();
+    terminal
+        .draw(|frame| {
+            render_cached(frame, &state, &config, &mut cache);
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let row = inner.y + 3;
+    assert!(
+        buffer[(inner.x + 2, row)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "content inside the pane must be highlighted"
+    );
+    assert!(
+        !buffer[(2, row)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "selection must not spill into the sidebar"
+    );
+    assert!(
+        !buffer[(view.prompt.x + 2, row)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "selection must not spill into the prompt"
+    );
+}
+
+#[test]
 fn screen_selection_highlight_is_painted_over_final_frame() {
     use crate::app::selection::{ScreenPoint, ScreenSelection, SelectionUnit};
     let mut state = AppState::demo();

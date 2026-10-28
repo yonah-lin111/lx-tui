@@ -34,7 +34,7 @@ fn screen_selection_keeps_highlight_after_release() {
     assert!(state.screen_selection.is_some(), "松开不复制也不清选区");
     assert_eq!(
         screen_selection_text(&state).as_deref(),
-        Some("hello     \nworld")
+        Some("hello\nworld")
     );
     assert_eq!(
         state.screen_selection.as_ref().and_then(|s| s.range()),
@@ -214,7 +214,7 @@ fn triple_click_line_selection_stops_at_box_borders() {
     let screen = screen(&["┌────┬────┐", "│left│right│", "└────┴────┘"], 12);
     let now = Instant::now();
     let point = ScreenPoint::new(1, 2);
-    // 同格 400 ms 内三击：字符 → 词 → 行。
+    // 同格 250 ms 内三击：字符 → 词 → 行。
     begin_screen_selection(&mut state, &screen, point, now);
     begin_screen_selection(&mut state, &screen, point, now + Duration::from_millis(80));
     begin_screen_selection(&mut state, &screen, point, now + Duration::from_millis(160));
