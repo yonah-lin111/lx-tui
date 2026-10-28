@@ -674,6 +674,11 @@ pub(crate) fn handle_mouse_down_left(
                 });
                 if let Some(card) = agent_card {
                     update::focus_pane(state, pane);
+                    if click != crate::app::selection::SelectionUnit::Character {
+                        update::begin_screen_selection_unit(state, screen_text, point, click);
+                        *dirty = true;
+                        return;
+                    }
                     update::begin_screen_selection_unit(
                         state,
                         screen_text,
@@ -908,7 +913,13 @@ pub(crate) fn apply_pending_screen_click(
                     .as_ref()
                     .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents)
             }) {
-                update::toggle_agent_card(state, pane, target);
+                update::schedule_card_toggle(
+                    state,
+                    pane,
+                    target,
+                    crate::app::state::CardToggleSurface::AgentDetail,
+                    std::time::Instant::now(),
+                );
                 *dirty = true;
             }
         }

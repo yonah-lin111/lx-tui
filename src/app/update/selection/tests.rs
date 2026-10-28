@@ -72,7 +72,7 @@ fn screen_selection_double_click_selects_word_and_triple_selects_row() {
     finish_screen_selection(&mut state);
     assert_eq!(
         screen_selection_text(&state).as_deref(),
-        Some("hello-world         ")
+        Some("hello-world")
     );
 }
 

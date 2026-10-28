@@ -174,8 +174,9 @@ impl ScreenText {
 
     /// 三击选中当前视觉行：以最近的左右边框为界，不跨面板/表格列。
     ///
-    /// 竖边框列不进入选区；纯横边框行（如 `├───┤`）返回空选区。边框上的标题
-    /// 与状态文字（`╭─ Prompt ─╮`、`╰ model … ─╯`）只取文字本身，不复制边框线。
+    /// 普通内容行保留行首缩进、裁掉行尾填充空白；空白行不形成选区。竖边框列
+    /// 不进入选区；纯横边框行（如 `├───┤`）返回空选区。边框上的标题与状态文字
+    /// （`╭─ Prompt ─╮`、`╰ model … ─╯`）只取文字本身，不复制边框线。
     pub fn line_range(&self, point: ScreenPoint) -> (ScreenPoint, ScreenPoint) {
         if point.row >= self.height || self.width == 0 {
             return (point, point);
@@ -191,8 +192,8 @@ impl ScreenText {
             return (point, point);
         }
 
-        // 只有“首/尾非空白格是横边框”的行才按边框标题处理；普通内容行原样保留
-        // 选中范围内的可见空格与缩进。
+        // 只有“首/尾非空白格是横边框”的行才按边框标题处理；普通内容行保
+        // 留行首缩进并裁掉行尾填充空白。
         let glyphs: Vec<(u16, char)> = (start..=end)
             .filter_map(|col| self.char_at(col, point.row).map(|ch| (col, ch)))
             .filter(|(_, ch)| !ch.is_whitespace())
@@ -205,9 +206,22 @@ impl ScreenText {
                     .last()
                     .is_some_and(|(_, ch)| is_horizontal_border(*ch)));
         if !border_row {
+            // 普通内容行保留行首缩进，但裁掉行尾填充空白：后台任务输出/弹窗
+            // 内部没有右侧竖边框，若一直选到容器右缘会把整行填充一起复制。
+            let mut text_end = end;
+            while text_end >= start
+                && self
+                    .char_at(text_end, point.row)
+                    .is_some_and(char::is_whitespace)
+            {
+                if text_end == start {
+                    return (point, point);
+                }
+                text_end -= 1;
+            }
             return (
                 ScreenPoint::new(point.row, start),
-                ScreenPoint::new(point.row, end),
+                ScreenPoint::new(point.row, text_end),
             );
         }
 
@@ -270,7 +284,7 @@ impl ScreenText {
         }
     }
 
-    /// 该格是否具备左右分界意义（竖线、角、┬/┴/┼ 等；横线不算）。
+    /// 该格是否具备左右分界意义（竖线、角、┬/┴/┼、滚动条 thumb `▐` 等；横线不算）。
     fn is_vertical_boundary(&self, x: u16, y: u16) -> bool {
         self.char_at(x, y).is_some_and(is_vertical_boundary)
     }
@@ -377,6 +391,7 @@ fn is_vertical_boundary(ch: char) -> bool {
             | '┬'
             | '┴'
             | '┼'
+            | '▐'
     )
 }
 

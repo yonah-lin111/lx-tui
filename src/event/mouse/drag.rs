@@ -502,7 +502,13 @@ pub(crate) fn handle_mouse_up_left(
         update::clear_selection(state);
     }
     if let Some((pane, card)) = clicked_card {
-        update::toggle_lx_card(state, pane, card);
+        update::schedule_card_toggle(
+            state,
+            pane,
+            card,
+            crate::app::state::CardToggleSurface::LxHistory,
+            Instant::now(),
+        );
     }
     *dirty = true;
 }

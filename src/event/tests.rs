@@ -6361,12 +6361,8 @@ fn lx_mention_wheel_scrolls_panel_not_input() {
     );
 }
 
-/// 回归：lx 卡片「按下 → 松开（未拖拽）」必须真的切换折叠。
-///
-/// 真实 bug：`begin_lx_selection` 内部先 `clear_selection`（会把 `lx_card_press` 清空），
-/// 早期代码先记 press 再 begin，等于记了个寂寞——每次松开都被当成拖拽，卡片永远展不开。
-#[test]
-fn lx_card_click_toggles_expansion_on_release() {
+/// 构造带一个可展开工具卡片的 lx 状态，返回卡片点击点。
+fn lx_card_fixture() -> (AppState, Config, Geometry, crate::layout::PaneId, u16, u16) {
     let config = Config::default();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -6433,6 +6429,16 @@ fn lx_card_click_toggles_expansion_on_release() {
             .expect("可展开卡片")
     };
     let (column, row) = (inner.x + 3, card.card.y);
+    (state, config, geo, pane, column, row)
+}
+
+/// 回归：lx 卡片「按下 → 松开（未拖拽）」必须切换折叠，但延迟到多击窗口之后。
+///
+/// 真实 bug：`begin_lx_selection` 内部先 `clear_selection`（会把 `lx_card_press` 清空），
+/// 早期代码先记 press 再 begin，等于记了个寂寞——每次松开都被当成拖拽，卡片永远展不开。
+#[test]
+fn lx_card_click_toggles_expansion_on_release() {
+    let (mut state, config, geo, pane, column, row) = lx_card_fixture();
     assert!(
         !state
             .pane_anywhere(pane)
@@ -6467,14 +6473,91 @@ fn lx_card_click_toggles_expansion_on_release() {
         &mut dirty,
     );
     assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .detail_is_expanded("m-param", "call-param"),
+        "松开后先进入延迟窗口，不能立刻折叠/展开"
+    );
+    let deadline = crate::app::update::next_deadline(&state).expect("待定折叠到期时间");
+    assert!(
+        crate::app::update::tick(&mut state, deadline),
+        "延迟到期才执行折叠"
+    );
+    assert!(
         state
             .pane_anywhere(pane)
             .expect("pane")
             .lx
             .chat
             .detail_is_expanded("m-param", "call-param"),
-        "未拖拽的点击必须展开卡片"
+        "未拖拽的单击必须在延迟后展开卡片"
     );
+}
+
+#[test]
+fn lx_card_double_click_cancels_pending_toggle() {
+    let (mut state, config, mut geo, pane, column, row) = lx_card_fixture();
+    let mut buffer = ratatui::buffer::Buffer::empty(geo.screen);
+    buffer.set_string(column, row, "Read source", ratatui::style::Style::default());
+    geo.screen_text = crate::ui::screen::ScreenText::from_buffer(&buffer);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        handle_terminal_event(
+            mouse(kind, column, row),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+    assert!(
+        state.pending_card_toggle.is_some(),
+        "第一次单击应登记延迟折叠"
+    );
+    let deadline = state
+        .pending_card_toggle
+        .as_ref()
+        .expect("pending")
+        .deadline;
+    // 同格快速第二次点击：取消待定折叠，只进入双击选词路径。
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        handle_terminal_event(
+            mouse(kind, column, row),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+    assert!(state.pending_card_toggle.is_none(), "双击必须取消待定折叠");
+    crate::app::update::tick(&mut state, deadline);
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .detail_is_expanded("m-param", "call-param"),
+        "双击不得折叠/展开卡片"
+    );
+    let mut cache = crate::ui::RenderCache::default();
+    let copied = crate::app::update::copyable_selection(&state, &geo.rects, &mut cache)
+        .expect("双击应保留选词");
+    assert_eq!(copied.text, "Read");
 }
 
 /// 粘贴也是编辑：必须让双 Esc 的待命失效，避免带草稿选中后回填覆盖。

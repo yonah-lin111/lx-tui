@@ -423,6 +423,7 @@ pub fn clear_selection(state: &mut AppState) {
     state.selection = None;
     state.screen_selection = None;
     state.pending_screen_click = None;
+    state.pending_card_toggle = None;
     state.selection_autoscroll = None;
     state.lx_selection = None;
     state.lx_card_press = None;

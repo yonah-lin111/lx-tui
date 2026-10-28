@@ -120,12 +120,46 @@ fn line_range_keeps_border_titles_but_drops_border_only_rows() {
 }
 
 #[test]
-fn line_range_keeps_padding_spaces_on_content_rows() {
+fn line_range_keeps_leading_indent_and_trims_trailing_padding() {
     let screen = ScreenText::from_buffer(&buffer(&["│  x  │"], 8));
     assert_eq!(
         screen.line_range(ScreenPoint::new(0, 3)),
-        (ScreenPoint::new(0, 1), ScreenPoint::new(0, 5))
+        (ScreenPoint::new(0, 1), ScreenPoint::new(0, 3))
     );
-    let cells = screen.selection_cells(ScreenPoint::new(0, 1), ScreenPoint::new(0, 5));
-    assert_eq!(cells.text(), "  x  ");
+    let cells = screen.selection_cells(ScreenPoint::new(0, 1), ScreenPoint::new(0, 3));
+    assert_eq!(cells.text(), "  x");
+}
+
+#[test]
+fn line_range_without_right_border_stops_at_last_non_space() {
+    // 后台任务输出/弹窗正文没有右侧竖边框：不能一直选到容器右缘。
+    let screen = ScreenText::from_buffer(&buffer(&["❯ Read /src   "], 24));
+    assert_eq!(
+        screen.line_range(ScreenPoint::new(0, 4)),
+        (ScreenPoint::new(0, 0), ScreenPoint::new(0, 10))
+    );
+    assert_eq!(
+        screen
+            .selection_cells(ScreenPoint::new(0, 0), ScreenPoint::new(0, 10))
+            .text(),
+        "❯ Read /src"
+    );
+}
+
+#[test]
+fn line_range_stops_before_right_scrollbar_thumb() {
+    let screen = ScreenText::from_buffer(&buffer(&["Read /src   ▐ "], 16));
+    assert_eq!(
+        screen.line_range(ScreenPoint::new(0, 5)),
+        (ScreenPoint::new(0, 0), ScreenPoint::new(0, 8))
+    );
+    let cells = screen.selection_cells(ScreenPoint::new(0, 0), ScreenPoint::new(0, 8));
+    assert_eq!(cells.text(), "Read /src");
+}
+
+#[test]
+fn line_range_on_blank_row_makes_no_selection() {
+    let screen = ScreenText::from_buffer(&buffer(&["        "], 8));
+    let point = ScreenPoint::new(0, 3);
+    assert_eq!(screen.line_range(point), (point, point));
 }

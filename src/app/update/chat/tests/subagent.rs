@@ -489,6 +489,108 @@ fn auto_compact_notice_becomes_a_checkpoint_and_toggles() {
 }
 
 #[test]
+fn agent_card_toggle_waits_for_click_window_and_cancels() {
+    use crate::app::state::{CardTarget, CardToggleSurface, TaskPage, TaskTab};
+    use std::time::{Duration, Instant};
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let mut started = run("sess-a", "sub-a", AgentRole::Explorer);
+    seed_chat(&mut started, key(pane, "sess-a"), "msg-a");
+    update::on_subagent_started(&mut state, pane, started);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.task = Some(TaskPage {
+            tab: TaskTab::Agents,
+            ..TaskPage::default()
+        });
+    }
+    let notice = crate::chat::compact::AutoCompactNotice {
+        model_label: "m".into(),
+        summary: "handoff".into(),
+        estimated_tokens: 190_000,
+        context_limit: 200_000,
+    };
+    assert!(update::on_subagent_auto_compact(
+        &mut state, "sess-a", &notice
+    ));
+    let id = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_session("sess-a")
+        .expect("run")
+        .compact
+        .checkpoints[0]
+        .id
+        .clone();
+    let target = CardTarget::Compact {
+        checkpoint_id: id.clone(),
+    };
+    let now = Instant::now();
+    update::schedule_card_toggle(
+        &mut state,
+        pane,
+        target.clone(),
+        CardToggleSurface::AgentDetail,
+        now,
+    );
+    assert!(state.pending_card_toggle.is_some());
+    assert!(!update::tick(&mut state, now + Duration::from_millis(399)));
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .by_session("sess-a")
+            .expect("run")
+            .compact
+            .is_expanded(&id),
+        "延迟窗口内不得切换"
+    );
+
+    // 新一次按下会清选区；同一路径必须取消待定折叠。
+    update::clear_selection(&mut state);
+    assert!(state.pending_card_toggle.is_none());
+    update::tick(&mut state, now + Duration::from_millis(400));
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .by_session("sess-a")
+            .expect("run")
+            .compact
+            .is_expanded(&id),
+        "取消后不得在到期时切换"
+    );
+
+    update::schedule_card_toggle(
+        &mut state,
+        pane,
+        target,
+        CardToggleSurface::AgentDetail,
+        now,
+    );
+    assert!(update::tick(&mut state, now + Duration::from_millis(400)));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .by_session("sess-a")
+            .expect("run")
+            .compact
+            .is_expanded(&id),
+        "未取消的单击在到期后切换"
+    );
+}
+
+#[test]
 fn selecting_an_agents_row_follows_the_detail_tail() {
     use crate::app::state::{TaskPage, TaskTab};
     let mut state = AppState::demo();

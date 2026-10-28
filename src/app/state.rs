@@ -87,6 +87,22 @@ pub(crate) struct PendingScreenClick {
     pub action: PendingScreenAction,
 }
 
+/// 折叠卡片来源：主历史与 Agents 详情共用同一套延迟点击。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardToggleSurface {
+    LxHistory,
+    AgentDetail,
+}
+
+/// 单击卡片后延迟执行的折叠动作；双击/三击在新一次按下时取消。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingCardToggle {
+    pub pane: PaneId,
+    pub target: CardTarget,
+    pub surface: CardToggleSurface,
+    pub deadline: Instant,
+}
+
 /// 选区拖拽边缘自动滚动计划。
 ///
 /// 鼠标停在（或越出）窗格上下边缘时登记；`inner` 与 `mouse` 为登记时的几何快照，
@@ -234,6 +250,8 @@ pub struct AppState {
     pub screen_click: Option<ScreenClick>,
     /// 正在等待松开的文字行点击；拖动则改为选区，不执行原动作。
     pub(crate) pending_screen_click: Option<PendingScreenClick>,
+    /// 单击卡片后的延迟折叠；同格双击/三击会取消它。
+    pub(crate) pending_card_toggle: Option<PendingCardToggle>,
     /// 剪贴板请求序号；异步回投按它匹配。
     pub next_clipboard_id: u64,
     /// 粘贴事件代次：终端 Paste 到达即递增，作废在途按键回退读取。
@@ -417,6 +435,7 @@ impl AppState {
             screen_selection: None,
             screen_click: None,
             pending_screen_click: None,
+            pending_card_toggle: None,
             next_clipboard_id: 1,
             clipboard_generation: 0,
             clipboard_requests: Vec::new(),
