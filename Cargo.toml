@@ -22,6 +22,9 @@ ignore = "0.4.33"
 # 显式声明后可直接使用其 Unicode 感知与大小写不敏感匹配，不新增任何外部 crate。
 regex = "1.13"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+arboard = { version = "3", default-features = false, features = ["image-data"] }
+
 
 # 流式聊天 HTTPS 请求：rustls TLS，禁默认 native-tls，启用流式响应与 gzip。
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "gzip", "json"] }

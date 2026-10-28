@@ -349,6 +349,121 @@ fn history_same_text_does_not_push_undo_step() {
 }
 
 #[test]
+fn add_draft_image_and_caps_at_four() {
+    let mut lx = Lx::new();
+    for i in 0..4 {
+        let processed = crate::platform::ProcessedImage {
+            source_name: format!("img{i}.png"),
+            source_path: None,
+            mime: "image/png".into(),
+            width: 100,
+            height: 100,
+            bytes: vec![1, 2, 3],
+            original_byte_count: 3,
+        };
+        assert!(lx.add_draft_image(processed));
+    }
+    assert_eq!(lx.draft_images.len(), 4);
+
+    // 第五张被拒绝
+    let fifth = crate::platform::ProcessedImage {
+        source_name: "fifth.png".into(),
+        source_path: None,
+        mime: "image/png".into(),
+        width: 100,
+        height: 100,
+        bytes: vec![5],
+        original_byte_count: 1,
+    };
+    assert!(!lx.add_draft_image(fifth));
+    assert_eq!(lx.draft_images.len(), 4);
+}
+
+#[test]
+fn undo_redo_restores_draft_images_with_text() {
+    let mut lx = Lx::new();
+    lx.insert_str("before image");
+    let processed = crate::platform::ProcessedImage {
+        source_name: "img.png".into(),
+        source_path: None,
+        mime: "image/png".into(),
+        width: 50,
+        height: 50,
+        bytes: vec![10],
+        original_byte_count: 1,
+    };
+    lx.add_draft_image(processed);
+    assert_eq!(lx.draft_images.len(), 1);
+
+    lx.insert_str(" after image");
+    assert_eq!(lx.input, "before image after image");
+
+    // 撤销打字
+    lx.undo();
+    assert_eq!(lx.input, "before image");
+    assert_eq!(lx.draft_images.len(), 1);
+
+    // 撤销附图
+    lx.undo();
+    assert_eq!(lx.draft_images.len(), 0);
+
+    // 重做附图
+    lx.redo();
+    assert_eq!(lx.draft_images.len(), 1);
+
+    // 重做打字
+    lx.redo();
+    assert_eq!(lx.input, "before image after image");
+}
+
+#[test]
+fn remove_draft_image_is_undoable() {
+    let mut lx = Lx::new();
+    let processed = crate::platform::ProcessedImage {
+        source_name: "img.png".into(),
+        source_path: None,
+        mime: "image/png".into(),
+        width: 50,
+        height: 50,
+        bytes: vec![10],
+        original_byte_count: 1,
+    };
+    lx.add_draft_image(processed);
+    assert_eq!(lx.draft_images.len(), 1);
+
+    assert!(lx.remove_draft_image(0));
+    assert_eq!(lx.draft_images.len(), 0);
+
+    lx.undo();
+    assert_eq!(lx.draft_images.len(), 1);
+}
+
+#[test]
+fn clear_cleans_draft_images_and_text() {
+    let mut lx = Lx::new();
+    lx.insert_str("text");
+    let processed = crate::platform::ProcessedImage {
+        source_name: "img.png".into(),
+        source_path: None,
+        mime: "image/png".into(),
+        width: 50,
+        height: 50,
+        bytes: vec![10],
+        original_byte_count: 1,
+    };
+    lx.add_draft_image(processed);
+
+    lx.clear();
+    assert_eq!(lx.input, "");
+    assert_eq!(lx.draft_images.len(), 0);
+
+    // 撤销清空能完整恢复文本与图片
+    lx.undo();
+    assert_eq!(lx.input, "text");
+    assert_eq!(lx.draft_images.len(), 1);
+}
+
+#[test]
 fn leading_fullwidth_bang_enters_shell_and_strips_prefix() {
     let mut lx = Lx::new();
     lx.insert_str("  ！pwd");

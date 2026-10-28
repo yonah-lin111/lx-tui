@@ -137,6 +137,15 @@ pub struct ChatTurn {
     pub reasoning_metadata: Option<String>,
 }
 
+/// 提交给模型的图片载荷（多协议共用）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelImage {
+    /// 图片 MIME 类型（如 `image/png`、`image/jpeg`）。
+    pub mime: String,
+    /// 经过缩放与规范化后的图片二进制。
+    pub bytes: std::sync::Arc<Vec<u8>>,
+}
+
 /// 结构化模型历史项：工具化路径的请求表示（`turns` 只承载旧纯文本行为）。
 ///
 /// `ChatTurn { role, text }` 无法表达 tool call / tool result 的成对结构；
@@ -145,6 +154,11 @@ pub struct ChatTurn {
 pub enum ModelItem {
     /// 用户输入文本。
     UserText(String),
+    /// 用户输入多模态内容（正文 + 图片）。
+    UserContent {
+        text: String,
+        images: Vec<ModelImage>,
+    },
     /// assistant 可见正文（reasoning 不回传）。
     AssistantText(String),
     /// assistant 发起的一次工具调用；`input` 已解析为 JSON 值。

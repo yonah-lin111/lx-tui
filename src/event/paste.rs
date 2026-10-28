@@ -45,6 +45,7 @@ pub(super) fn handle_lx_paste(state: &mut AppState, text: String) -> bool {
     if text.is_empty() {
         return false;
     }
+    let pane_id = state.active_tab().layout.focus();
     let Some(pane) = state.active_pane_mut() else {
         return false;
     };
@@ -65,6 +66,37 @@ pub(super) fn handle_lx_paste(state: &mut AppState, text: String) -> bool {
     if let Some(paths) = crate::platform::parse_path_text(&text)
         && let Some(candidates) = candidates_from_paths(&paths)
     {
+        // 仅图片路径候选直接成为草稿附件；文件夹、普通文件及混合候选仍遵循现有引用/路径面板。
+        if candidates
+            .iter()
+            .all(|c| c.kind == PasteCandidateKind::Image)
+        {
+            let mut any_added = false;
+            let mut errors = Vec::new();
+            for candidate in candidates {
+                match crate::platform::load_and_process_image_file(&candidate.path) {
+                    Ok(processed) => {
+                        if pane.lx.add_draft_image(processed) {
+                            any_added = true;
+                        } else {
+                            errors.push(crate::platform::ImagePrepareError::TooManyImages);
+                        }
+                    }
+                    Err(err) => {
+                        errors.push(err);
+                    }
+                }
+            }
+            if let Some(err) = errors.into_iter().next() {
+                pane.lx.toast = Some(crate::app::toast::Toast::new(
+                    crate::app::toast::ToastKind::Warning,
+                    crate::ui::text::chat::image_error_message(&err),
+                    Some(pane_id),
+                    std::time::Instant::now(),
+                ));
+            }
+            return any_added;
+        }
         return pane.lx.paste_open(candidates);
     }
     pane.lx.insert_str(&text);

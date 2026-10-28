@@ -292,6 +292,7 @@ fn report_message_and_turn_replay_in_one_turn() {
     let assembly = crate::chat::context::assemble(&crate::chat::context::AssemblyInput {
         messages: &messages,
         draft: "next question",
+        draft_attachments: &[],
         model: &Fixture::model(),
         context_limit: None,
         output_limit: None,

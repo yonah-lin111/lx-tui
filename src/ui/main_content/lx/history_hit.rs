@@ -367,5 +367,8 @@ fn target_of(kind: &history::CardKind) -> CardTarget {
         history::CardKind::AgentLink { agent_id } => CardTarget::OpenAgent {
             agent_id: agent_id.clone(),
         },
+        history::CardKind::UserMessage { message_id, .. } => CardTarget::UserMessage {
+            message_id: message_id.clone(),
+        },
     }
 }

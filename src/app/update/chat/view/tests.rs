@@ -56,6 +56,7 @@ fn message(parts: Vec<ChatPart>, tools: Vec<ToolCallRecord>) -> ChatMessage {
         completed_at_ms: None,
         parts,
         tools,
+        attachments: Vec::new(),
     }
 }
 

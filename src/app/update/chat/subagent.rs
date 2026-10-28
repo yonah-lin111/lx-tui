@@ -504,6 +504,9 @@ pub fn toggle_agent_card(state: &mut AppState, pane: PaneId, target: CardTarget)
         }
         // 已在函数入口处理；此处只为穷尽匹配。
         CardTarget::OpenAgent { .. } => false,
+        CardTarget::UserMessage { message_id } => {
+            run.chat.toggle_user_message_expanded(&message_id)
+        }
     };
     if changed {
         run.rows_dirty = true;
@@ -688,6 +691,7 @@ pub fn on_report_batch_committed(
         cache_read_tokens: None,
         duration_ms: None,
         reports,
+        attachments: Vec::new(),
     });
     let model_label = target
         .lx
@@ -710,6 +714,7 @@ pub fn on_report_batch_committed(
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     });
     target.lx.chat.follow_bottom = true;
     // 报告轮也需要独立代次：迟到增量/取消按 key 精确匹配。

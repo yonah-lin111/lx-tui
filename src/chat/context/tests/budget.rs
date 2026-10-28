@@ -133,6 +133,7 @@ fn shrink_once_removes_oldest_turn_in_both_views() {
             item_start: 0,
             item_end: 4,
         }],
+        item_image_attachments: Vec::new(),
     };
     let once = shrink_once(&single).expect("还剩一轮完整轮次可收缩");
     assert_eq!(
@@ -146,6 +147,7 @@ fn shrink_once_removes_oldest_turn_in_both_views() {
         draft_exceeds: false,
         system_prompt: String::new(),
         groups: Vec::new(),
+        item_image_attachments: Vec::new(),
     };
     assert!(shrink_once(&last).is_none(), "只剩当前消息时不可收缩");
 }
@@ -192,6 +194,7 @@ fn shrink_once_refuses_without_complete_turn() {
         draft_exceeds: false,
         system_prompt: String::new(),
         groups: Vec::new(),
+        item_image_attachments: Vec::new(),
     };
     assert!(shrink_once(&assembly).is_none());
 }

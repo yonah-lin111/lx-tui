@@ -172,6 +172,7 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
             // Cmd+C 与 Ctrl+C 落到同一命令：是否「清空」还是「复制」由 update 层按
             // 当前面板决定，输入层不感知状态。
             KeyCode::Char('c' | 'C') => Some(LxInput::Clear),
+            KeyCode::Char('v' | 'V') => Some(LxInput::PasteImage),
             _ => None,
         };
     }
@@ -186,11 +187,13 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
             'e' | 'E' => Some(LxInput::LineEnd),
             'd' | 'D' => Some(LxInput::StopProcess),
             'c' | 'C' => Some(LxInput::Clear),
+            'v' | 'V' => Some(LxInput::PasteImage),
             't' | 'T' => Some(LxInput::ToggleThinking),
             'z' | '-' => Some(LxInput::Undo),
             'Z' | 'y' | 'Y' | '.' => Some(LxInput::Redo),
             _ => None,
         },
+        (true, true, KeyCode::Char('v' | 'V')) => Some(LxInput::PasteImage),
         (true, false, KeyCode::Backspace) => Some(LxInput::DeleteWordBackward),
         (true, false, KeyCode::Delete) => Some(LxInput::DeleteWordForward),
         (true, false, KeyCode::Left) => Some(LxInput::WordLeft),

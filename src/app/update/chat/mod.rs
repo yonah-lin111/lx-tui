@@ -96,6 +96,8 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         }
         let entry = target.lx.entry;
         let draft = target.lx.input.trim().to_string();
+        let raw_input = target.lx.input.clone();
+        let draft_images = target.lx.draft_images.clone();
         // 压缩进行中同样不能发送：检查点提交会整体替换上下文指针。
         // 会话级：同一会话的其它 pane 在压缩/跑轮次时，本 pane 的发送会推进 revision，
         // 让那次压缩在 commit 阶段失败。
@@ -114,9 +116,18 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         let selection = target.lx.chat.effective_selection(&state.models);
         let session_id = target.lx.chat.session_id.clone();
         let generation = next_generation(state, pane);
-        (entry, draft, busy, selection, session_id, generation)
+        (
+            entry,
+            draft,
+            raw_input,
+            draft_images,
+            busy,
+            selection,
+            session_id,
+            generation,
+        )
     };
-    let (entry, draft, busy, selection, session_id, generation) = context;
+    let (entry, draft, raw_input, draft_images, busy, selection, session_id, generation) = context;
     // 只有 Native Agent 发送；Hybrid/Automation 显示不可用提示。
     if entry != crate::app::state::LxEntry::Native {
         show_lx_hint(
@@ -127,7 +138,7 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         );
         return true;
     }
-    if draft.is_empty() || busy {
+    if (draft.is_empty() && draft_images.is_empty()) || busy {
         // 流中 Enter 不入队、不造消息。
         return false;
     }
@@ -167,6 +178,14 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         );
         return true;
     };
+    let prepared = match crate::chat::prepare_user_message(&workspace, &raw_input, &draft_images) {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            let msg = crate::ui::text::chat::image_error_message(&err);
+            show_lx_hint(state, pane, InputHintLevel::Warning, msg);
+            return true;
+        }
+    };
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -185,6 +204,7 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
             workspace,
             session_id,
             draft,
+            attachments: prepared.attachments,
             model: ModelSnapshot {
                 provider: frozen.provider.clone(),
                 model: frozen.model.clone(),
@@ -221,8 +241,9 @@ pub fn on_turn_committed(
         }
     };
     // 记录到全局 prompt 历史：DB ack 已确认这一轮真正入库，才值得留在历史里。
+    // 只有无附件的纯文本草稿才记录，带附件轮次不向纯文本历史记录（避免 ↑ 召回缺图草稿）。
     // 内存先记录（`↑` 立即可用），持久化走独立效应；两者互不阻塞。
-    if state.prompt_history.record(&frozen_draft) {
+    if committed.attachments.is_empty() && state.prompt_history.record(&frozen_draft) {
         state
             .effects
             .push(crate::app::effects::Effect::RecordPromptHistory {
@@ -275,6 +296,7 @@ pub fn on_turn_committed(
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: committed.attachments.clone(),
     });
     target.lx.chat.messages.push(ChatMessageView {
         sequence: committed.assistant_sequence,
@@ -292,6 +314,7 @@ pub fn on_turn_committed(
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     });
     target.lx.chat.follow_bottom = true;
     let key = RequestKey {

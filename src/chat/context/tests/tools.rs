@@ -445,6 +445,7 @@ fn cross_provider_history_replays_normalized_fields_only() {
     let assembly = assemble(&AssemblyInput {
         messages: &history,
         draft: "继续",
+        draft_attachments: &[],
         model: &ModelSnapshot {
             provider: "google".into(),
             model: "gemini".into(),

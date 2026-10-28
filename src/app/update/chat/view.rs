@@ -50,6 +50,7 @@ pub fn view_message_of(message: &ChatMessage, models: &ModelsSnapshot) -> ChatMe
             .as_deref()
             .map(crate::chat::agent::reports_from_json)
             .unwrap_or_default(),
+        attachments: message.attachments.clone(),
     }
 }
 

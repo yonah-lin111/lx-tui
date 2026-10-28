@@ -34,6 +34,7 @@ fn lx_with_messages(state: &mut AppState, count: usize) {
             cache_read_tokens: None,
             duration_ms: None,
             reports: Vec::new(),
+            attachments: Vec::new(),
         });
     }
 }
@@ -167,6 +168,7 @@ fn toggle_lx_card_flips_the_pressed_block() {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }];
     assert!(
         !state
@@ -225,6 +227,7 @@ fn report_more_click_adds_a_batch_and_whole_click_collapses() {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     };
     message.reports.push(crate::app::state::SubagentReportView {
         agent_id: "sub-1".into(),
@@ -353,6 +356,7 @@ fn lx_view_message(role: &str, text: &str, index: usize) -> ChatMessageView {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 

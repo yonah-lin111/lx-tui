@@ -529,6 +529,33 @@ CREATE TABLE IF NOT EXISTS todo (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_position ON todo(position);
 "#;
 
+/// v18：消息附件（文件/文件夹/图片可见引用与图片副本）。
+const SCHEMA_V18: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_message_attachment (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    message_id TEXT NOT NULL REFERENCES agent_message(external_id) ON DELETE CASCADE,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    kind TEXT NOT NULL CHECK (kind IN ('file', 'folder', 'image')),
+    label TEXT NOT NULL,
+    marker_start INTEGER,
+    marker_end INTEGER,
+    source_path TEXT,
+    mime TEXT,
+    width INTEGER,
+    height INTEGER,
+    image_bytes BLOB,
+    UNIQUE(message_id, position),
+    CHECK ((marker_start IS NULL AND marker_end IS NULL) OR
+           (marker_start >= 0 AND marker_end > marker_start)),
+    CHECK (kind <> 'image' OR
+           (mime IN ('image/png', 'image/jpeg') AND image_bytes IS NOT NULL
+            AND width > 0 AND height > 0))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_message_attachment_message
+    ON agent_message_attachment(message_id, position);
+"#;
+
 impl Database {
     /// 迁移到当前 Schema：建表与版本推进在同一事务中完成，幂等。
     ///
@@ -695,6 +722,14 @@ impl Database {
                     "ALTER TABLE agent_subagent ADD COLUMN title TEXT NOT NULL DEFAULT '';",
                 )?;
             }
+            ensure_no_foreign_key_violation(&transaction)?;
+            transaction.pragma_update(None, "user_version", 17)?;
+            transaction.commit()?;
+        }
+        if version < 18 {
+            // 只增表：消息附件（可见引用与图片副本）。
+            let transaction = self.conn.unchecked_transaction()?;
+            transaction.execute_batch(SCHEMA_V18)?;
             ensure_no_foreign_key_violation(&transaction)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;

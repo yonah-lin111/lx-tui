@@ -329,6 +329,7 @@ impl super::Database {
                 subagent_reports: None,
                 parts: Vec::new(),
                 tools: Vec::new(),
+                attachments: Vec::new(),
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()

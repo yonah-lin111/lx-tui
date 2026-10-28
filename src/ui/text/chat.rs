@@ -98,6 +98,29 @@ pub const UNKNOWN_COMMAND_HINT: &str = " · try /model";
 /// 未知命令提示里命令名的最大展示字符数。
 pub const UNKNOWN_COMMAND_SAMPLE: usize = 24;
 
+/// 仅图片消息的单行预览占位文本。
+pub fn image_message_preview(count: usize) -> &'static str {
+    if count <= 1 { "[Image]" } else { "[Images]" }
+}
+
+/// 图片准备与加载错误的用户可见提示文案。
+pub fn image_error_message(err: &crate::platform::ImagePrepareError) -> &'static str {
+    match err {
+        crate::platform::ImagePrepareError::FileNotFound => "Image file not found",
+        crate::platform::ImagePrepareError::NotAnImage => "Unsupported or invalid image format",
+        crate::platform::ImagePrepareError::SingleTooLarge => "Image exceeds 20 MiB limit",
+        crate::platform::ImagePrepareError::TooManyImages => "Maximum 4 images per message",
+        crate::platform::ImagePrepareError::TotalTooLarge => "Total images exceed 40 MiB limit",
+        crate::platform::ImagePrepareError::DecodeFailed => "Failed to decode image",
+        crate::platform::ImagePrepareError::EncodeFailed => "Failed to encode image",
+        crate::platform::ImagePrepareError::DimensionTooLarge => {
+            "Image dimensions exceed pixel limit"
+        }
+        crate::platform::ImagePrepareError::ClipboardUnavailable => "Clipboard unavailable",
+        crate::platform::ImagePrepareError::IoError => "IO error reading image",
+    }
+}
+
 /// 拼一条「未知命令」提示，**极简**：`Unknown command /foo · try /model`。
 ///
 /// 命令名按字符取样后截断（不做宽字符半写），并去掉首尾空白；过长时附 `…`。

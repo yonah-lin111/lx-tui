@@ -404,6 +404,7 @@ mod tests {
             completed_at_ms: None,
             user_shell: None,
             subagent_reports: None,
+            attachments: Vec::new(),
             parts: vec![ChatPart {
                 position: 0,
                 kind: "text".into(),

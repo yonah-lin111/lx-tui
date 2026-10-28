@@ -380,6 +380,12 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
             more,
         } => toggle_report_card(state, pane, &message_id, &agent_id, more),
         CardTarget::OpenAgent { agent_id } => super::open_agent_page(state, pane, &agent_id),
+        CardTarget::UserMessage { message_id } => {
+            let Some(target) = state.pane_mut_anywhere(pane) else {
+                return false;
+            };
+            target.lx.chat.toggle_user_message_expanded(&message_id)
+        }
     };
     if changed {
         crate::app::update::clear_lx_selection_for(state, pane);

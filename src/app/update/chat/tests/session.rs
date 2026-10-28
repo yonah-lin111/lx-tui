@@ -39,6 +39,7 @@ fn session_loaded_restores_context_usage_and_stats() {
                 completed_at_ms: None,
             }],
             tools: Vec::new(),
+            attachments: Vec::new(),
         },
         crate::db::chat::ChatMessage {
             external_id: "a1".into(),
@@ -70,6 +71,7 @@ fn session_loaded_restores_context_usage_and_stats() {
                 completed_at_ms: None,
             }],
             tools: Vec::new(),
+            attachments: Vec::new(),
         },
     ];
     assert!(on_session_loaded(

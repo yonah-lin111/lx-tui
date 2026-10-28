@@ -33,6 +33,7 @@ fn user_message(id: &str, text: &str, sequence: i64) -> crate::app::state::ChatM
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 
@@ -53,6 +54,7 @@ fn assistant_message(id: &str, sequence: i64) -> crate::app::state::ChatMessageV
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 

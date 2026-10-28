@@ -140,7 +140,14 @@ pub enum Effect {
         workspace: PathBuf,
         session_id: Option<String>,
         draft: String,
+        attachments: Vec<crate::db::chat::MessageAttachmentInput>,
         model: crate::db::chat::ModelSnapshot,
+    },
+    /// 读取系统剪贴板中的图片并附加到草稿。
+    ReadClipboardImage {
+        pane: crate::layout::PaneId,
+        generation: u64,
+        revision: u64,
     },
     /// 启动网络流：按冻结模型快照与装配上下文执行，结果按 key 回投。
     StartChatStream {

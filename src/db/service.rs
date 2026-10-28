@@ -274,6 +274,17 @@ impl Persistence {
         })
     }
 
+    /// 读取某会话中指定附件的图片 BLOB。
+    pub fn load_image_payloads(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        attachment_ids: &[&str],
+    ) -> super::Result<std::collections::HashMap<String, Vec<u8>>> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.load_image_payloads(workspace, session_id, attachment_ids)
+    }
+
     /// 记录一次工具调用的 pending 行并返回执行票据（事务提交后才返回）。
     ///
     /// 「结果落库」「pending 落库」这类**必须区分成功/失败**的写操作不经
@@ -816,6 +827,7 @@ impl Persistence {
                 workspace,
                 session_id,
                 draft,
+                attachments,
                 model,
             } => {
                 // 未完成的撤销（尤其 recovery_required）必须先处理，否则新轮次会叠在
@@ -838,8 +850,15 @@ impl Persistence {
                     );
                     return true;
                 }
-                let committed = self
-                    .with_db(|db| db.begin_turn(&workspace, session_id.as_deref(), &draft, &model));
+                let committed = self.with_db(|db| {
+                    db.begin_turn_with_attachments(
+                        &workspace,
+                        session_id.as_deref(),
+                        &draft,
+                        &attachments,
+                        &model,
+                    )
+                });
                 match committed {
                     Some(committed) => {
                         update::on_turn_committed(state, pane, generation, &committed)
@@ -1107,6 +1126,7 @@ impl Persistence {
                 tracing::warn!("user shell effect reached persistence pump");
                 false
             }
+            Effect::ReadClipboardImage { .. } => false,
         }
     }
 

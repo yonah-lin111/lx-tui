@@ -117,6 +117,28 @@ fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
                     json!({"type": "text", "text": text}),
                 );
             }
+            HistoryBlock::UserContent { text, images } => {
+                use base64::Engine;
+                if !text.is_empty() {
+                    push_block(&mut messages, "user", json!({"type": "text", "text": text}));
+                }
+                for img in images {
+                    let b64 =
+                        base64::engine::general_purpose::STANDARD.encode(img.bytes.as_slice());
+                    push_block(
+                        &mut messages,
+                        "user",
+                        json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": img.mime,
+                                "data": b64,
+                            }
+                        }),
+                    );
+                }
+            }
             HistoryBlock::ToolCall {
                 call_id,
                 name,

@@ -80,6 +80,7 @@ impl ModelContext {
 fn item_chars(item: &ModelItem) -> usize {
     match item {
         ModelItem::UserText(text) | ModelItem::AssistantText(text) => text.chars().count(),
+        ModelItem::UserContent { text, .. } => text.chars().count(),
         ModelItem::AssistantToolCall { name, input, .. } => {
             name.chars().count()
                 + serde_json::to_string(input)
@@ -94,6 +95,7 @@ fn item_chars(item: &ModelItem) -> usize {
 fn render_item_for_compact(item: &ModelItem) -> String {
     match item {
         ModelItem::UserText(text) => format!("### User\n{text}\n\n"),
+        ModelItem::UserContent { text, .. } => format!("### User\n{text}\n\n"),
         ModelItem::AssistantText(text) => format!("### Assistant\n{text}\n\n"),
         ModelItem::AssistantToolCall {
             call_id,

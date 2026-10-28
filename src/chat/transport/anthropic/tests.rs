@@ -795,3 +795,31 @@ fn compact_request_omits_tools_and_overrides_the_system_prompt() {
     let prompt = serde_json::to_string(&body).expect("json");
     assert!(prompt.contains("COMPACT INSTRUCTIONS"), "系统提示被覆写");
 }
+
+#[test]
+fn multimodal_user_content_encodes_text_and_image_source() {
+    let mut req = request();
+    req.turns = Vec::new();
+    let image_bytes = vec![4, 5, 6];
+    req.items = vec![ModelItem::UserContent {
+        text: "Analyze image".into(),
+        images: vec![crate::chat::events::ModelImage {
+            mime: "image/jpeg".into(),
+            bytes: std::sync::Arc::new(image_bytes),
+        }],
+    }];
+    let body = body_of(&req);
+    let messages = body["messages"].as_array().expect("messages");
+    let user_msg = messages
+        .iter()
+        .find(|m| m["role"] == "user" && m["content"].is_array())
+        .expect("user message with array content");
+    let content = user_msg["content"].as_array().expect("content");
+    assert_eq!(content.len(), 2);
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[0]["text"], "Analyze image");
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[1]["source"]["type"], "base64");
+    assert_eq!(content[1]["source"]["media_type"], "image/jpeg");
+    assert!(!content[1]["source"]["data"].as_str().unwrap().is_empty());
+}

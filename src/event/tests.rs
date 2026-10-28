@@ -1719,6 +1719,7 @@ fn lx_view_content_click_focuses_and_starts_selection() {
                 cache_read_tokens: None,
                 duration_ms: None,
                 reports: Vec::new(),
+                attachments: Vec::new(),
             });
     }
     crate::app::update::focus_prompt(&mut state);
@@ -6374,6 +6375,7 @@ fn lx_card_click_toggles_expansion_on_release() {
             cache_read_tokens: None,
             duration_ms: None,
             reports: Vec::new(),
+            attachments: Vec::new(),
         });
         chat.follow_bottom = true;
         target.lx.chat = chat;
@@ -6482,6 +6484,7 @@ fn lx_history_selection_waits_for_copy_shortcut_and_follows_wheel_scroll() {
                     cache_read_tokens: None,
                     duration_ms: None,
                     reports: Vec::new(),
+                    attachments: Vec::new(),
                 });
         }
         target.lx.chat.follow_bottom = false;
@@ -6763,6 +6766,7 @@ fn lx_task_output_and_agents_detail_selection_scroll_and_copy() {
             cache_read_tokens: None,
             duration_ms: None,
             reports: Vec::new(),
+            attachments: Vec::new(),
         });
         target.lx.agents.runs.push(run);
     }
@@ -6884,6 +6888,7 @@ fn lx_task_output_and_agents_detail_selection_scroll_and_copy() {
                 cache_read_tokens: None,
                 duration_ms: None,
                 reports: Vec::new(),
+                attachments: Vec::new(),
             });
         }
         run.follow = false;
@@ -7099,6 +7104,7 @@ fn double_and_triple_click_select_word_and_line_across_all_views() {
                 cache_read_tokens: None,
                 duration_ms: None,
                 reports: Vec::new(),
+                attachments: Vec::new(),
             });
     }
     update::resize_panes(&mut state, &geo.rects);

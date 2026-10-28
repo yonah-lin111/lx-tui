@@ -572,6 +572,21 @@ pub fn markdown_refer_image() -> Style {
         .add_modifier(Modifier::UNDERLINED)
 }
 
+/// 用户消息下方的文件引用树分支标签色（无下划线）。
+pub fn user_ref_file() -> Style {
+    Style::default().fg(Color::LightGreen)
+}
+
+/// 用户消息下方的文件夹引用树分支标签色（无下划线）。
+pub fn user_ref_folder() -> Style {
+    Style::default().fg(Color::Indexed(208))
+}
+
+/// 用户消息下方的图片引用树分支标签色（无下划线）。
+pub fn user_ref_image() -> Style {
+    Style::default().fg(Color::LightMagenta)
+}
+
 /// `@ref/末两段` 短引用：柔紫（Indexed 141）加粗、无下划线。
 ///
 /// 与既有引用色（绿 / 橙 / 亮品红）和 `@` 提及黄都不重样；`&&&` 命令名与 `+++` 边框用的是

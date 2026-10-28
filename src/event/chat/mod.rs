@@ -25,6 +25,7 @@ mod timeline;
 mod tool_calls;
 pub mod user_shell;
 
+use crate::chat::ModelItem;
 pub use process_events::{handle_process_event, persist_terminal_snapshots};
 pub use process_page::{
     apply_process_effects, refresh_open_task_pages, sync_background_task_counts, tick_task_pages,
@@ -33,7 +34,7 @@ pub use user_shell::pump_user_shells;
 // 工具握手与时间线辅助的实现在子模块；本模块保留唯一入口。
 #[cfg(test)]
 pub(crate) use timeline::latest_user_draft_for_test;
-pub(crate) use timeline::{chat_part_views_to_db, latest_user_draft, schedule_checkpoint};
+pub(crate) use timeline::{chat_part_views_to_db, schedule_checkpoint};
 #[cfg(test)]
 pub(crate) use tool_calls::view_summary;
 pub(crate) use tool_calls::{begin_tool, finish_tool, flush_pending_tool_begins};
@@ -528,7 +529,7 @@ pub(crate) fn assemble_turn_request(
     compact: Option<&context::CompactContext>,
     environment: Option<&str>,
 ) -> AssembledTurn {
-    let draft = latest_user_draft(messages);
+    let (draft, draft_attachments) = timeline::latest_user_draft_and_attachments(messages);
     let db_messages = chat_part_views_to_db(messages);
     let model = crate::db::chat::ModelSnapshot {
         provider: frozen.provider.clone(),
@@ -538,6 +539,7 @@ pub(crate) fn assemble_turn_request(
     let assembly = context::assemble(&AssemblyInput {
         messages: &db_messages,
         draft: &draft,
+        draft_attachments: &draft_attachments,
         model: &model,
         context_limit: frozen.context_limit,
         output_limit: frozen.output_limit,
@@ -557,6 +559,7 @@ pub(crate) fn assemble_turn_request(
         },
         omitted_turns: assembly.omitted_turns,
         draft_exceeds: assembly.draft_exceeds,
+        item_image_attachments: assembly.item_image_attachments,
     }
 }
 
@@ -567,6 +570,8 @@ pub(crate) struct AssembledTurn {
     pub omitted_turns: usize,
     /// 当前用户消息单独超限：调用方报错，**不截断**用户输入。
     pub draft_exceeds: bool,
+    /// 选中的每个 UserContent 步骤对应的图片附件 (id, mime) 列表。
+    pub item_image_attachments: Vec<(usize, Vec<(String, String)>)>,
 }
 
 /// 当前用户消息超出模型上下文预算时的稳定错误码（调用方报错，不截断输入）。
@@ -577,7 +582,7 @@ fn start_stream(
     state: &mut AppState,
     streams: &mut ChatStreams,
     sender: &mpsc::UnboundedSender<AppEvent>,
-    _persistence: &Persistence,
+    persistence: &Persistence,
     key: RequestKey,
     assistant_id: String,
 ) -> bool {
@@ -664,7 +669,52 @@ fn start_stream(
         fail_turn(sender, key, DRAFT_EXCEEDS_CONTEXT_CODE);
         return true;
     }
-    let request = assembled.request;
+    let mut request = assembled.request;
+    // 如果请求中包含图片，从 DB 按需加载选中 BLOB 并装配 ModelImage；缺失或损坏报错并停止 HTTP
+    if !assembled.item_image_attachments.is_empty() {
+        let mut all_ids: Vec<&str> = Vec::new();
+        for (_, atts) in &assembled.item_image_attachments {
+            for (id, _) in atts {
+                all_ids.push(id.as_str());
+            }
+        }
+        all_ids.sort();
+        all_ids.dedup();
+
+        let db_workspace = state.chat_session_key_for_pane(key.pane).or_else(|| {
+            state
+                .active_workspace()
+                .repo_key()
+                .map(std::path::Path::to_path_buf)
+        });
+        let Some(ws) = db_workspace else {
+            fail_turn(sender, key, "workspace missing");
+            return true;
+        };
+
+        let payloads = match persistence.load_image_payloads(&ws, &key.session, &all_ids) {
+            Ok(map) => map,
+            Err(_) => {
+                fail_turn(sender, key, "image payload unavailable");
+                return true;
+            }
+        };
+
+        for (item_idx, atts) in &assembled.item_image_attachments {
+            if let Some(ModelItem::UserContent { images, .. }) = request.items.get_mut(*item_idx) {
+                for (id, mime) in atts {
+                    let Some(bytes) = payloads.get(id) else {
+                        fail_turn(sender, key, "image payload unavailable");
+                        return true;
+                    };
+                    images.push(crate::chat::events::ModelImage {
+                        mime: mime.clone(),
+                        bytes: std::sync::Arc::new(bytes.clone()),
+                    });
+                }
+            }
+        }
+    }
     // 冻结工作区根：本轮所有工具的相对路径都以它为准（后续切换窗格不影响）。
     let Some(workspace) = state.workspace_cwd_for_pane(key.pane) else {
         fail_turn(sender, key, "workspace path unavailable");

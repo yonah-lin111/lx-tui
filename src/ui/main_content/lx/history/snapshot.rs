@@ -18,7 +18,7 @@ use super::cache::{
     notice_block_signature, part_block_signature, report_block_signature, rewind_block_signature,
     shell_block_signature, stats_block_signature,
 };
-use super::paint::{BlockPaint, BlockSource, CardSpan};
+use super::paint::{BlockPaint, BlockSource, CardSpan, UserRefLine};
 use super::source::{HistorySource, is_legacy_report_row};
 use super::timeline::{TimelineEntry, timeline};
 use super::{
@@ -572,11 +572,52 @@ impl Builder<'_> {
         let width = self.width;
         let is_user = message.role == "user";
         let expanded = history.chat.reasoning_expanded(message_index, step_index);
-        self.block(key, block_source, 0, || match step {
+        let user_expanded = history.chat.user_message_expanded(&message.id);
+        let start = self.rows;
+        let snap_block = self.block(key, block_source, 0, || match step {
             AssistantStepView::Part { part, .. } => match part.kind {
-                crate::chat::events::PartKind::Text if is_user => BlockPaint::UserText {
-                    lines: wrap(&part.content, width.saturating_sub(super::USER_INDENT)),
-                },
+                crate::chat::events::PartKind::Text if is_user => {
+                    let display_text = crate::chat::strip_references_for_display(
+                        &part.content,
+                        &message.attachments,
+                    );
+                    let display_text = if display_text.is_empty() && !message.attachments.is_empty()
+                    {
+                        crate::ui::text::chat::image_message_preview(message.attachments.len())
+                            .to_string()
+                    } else {
+                        display_text
+                    };
+                    let wrapped = wrap(&display_text, width.saturating_sub(super::USER_INDENT));
+                    let (text_lines, fold_hint) = if wrapped.len() > 5 {
+                        if user_expanded {
+                            (wrapped, Some("less lines".to_string()))
+                        } else {
+                            let remaining = wrapped.len() - 5;
+                            (
+                                wrapped[..5].to_vec(),
+                                Some(format!("… {remaining} more lines")),
+                            )
+                        }
+                    } else {
+                        (wrapped, None)
+                    };
+                    let ref_lines = message
+                        .attachments
+                        .iter()
+                        .enumerate()
+                        .map(|(i, att)| UserRefLine {
+                            is_last: i + 1 == message.attachments.len(),
+                            kind: att.kind,
+                            label: att.label.clone(),
+                        })
+                        .collect();
+                    BlockPaint::UserText {
+                        text_lines,
+                        fold_hint,
+                        ref_lines,
+                    }
+                }
                 crate::chat::events::PartKind::Text => BlockPaint::Markdown {
                     lines: markdown_render::render_wrapped(
                         &part.content,
@@ -599,7 +640,32 @@ impl Builder<'_> {
                 let rows = tool_rows(call, width, folds);
                 legacy(rows, tool::card_regions(call, width, folds, rows), folds)
             }
-        })
+        });
+
+        if is_user && let AssistantStepView::Part { part, .. } = step {
+            let display_text =
+                crate::chat::strip_references_for_display(&part.content, &message.attachments);
+            let display_text = if display_text.is_empty() && !message.attachments.is_empty() {
+                crate::ui::text::chat::image_message_preview(message.attachments.len()).to_string()
+            } else {
+                display_text
+            };
+            let wrapped_len = wrap(&display_text, width.saturating_sub(super::USER_INDENT)).len();
+            if wrapped_len > 5 {
+                let hint_offset = if user_expanded { wrapped_len } else { 5 };
+                self.snapshot.cards.push(CardRegion {
+                    kind: CardKind::UserMessage {
+                        message_id: message.id.clone(),
+                        expanded: user_expanded,
+                    },
+                    card_start: start.saturating_add(hint_offset),
+                    card_rows: 1,
+                    clickable: true,
+                });
+            }
+        }
+
+        snap_block
     }
 
     /// 命令卡片的点击面（参数区 / 输出区各自独立）。

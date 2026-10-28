@@ -1013,3 +1013,54 @@ fn compact_request_omits_tools_and_overrides_the_system_prompt() {
     assert_eq!(body["messages"][0]["content"], "COMPACT INSTRUCTIONS");
     assert!(!built.tools_requested);
 }
+
+#[test]
+fn multimodal_user_content_encodes_image_url_and_text() {
+    let mut req = request();
+    req.turns = Vec::new();
+    let image_bytes = vec![1, 2, 3, 4, 5];
+    req.items = vec![ModelItem::UserContent {
+        text: "Please inspect this".into(),
+        images: vec![crate::chat::events::ModelImage {
+            mime: "image/png".into(),
+            bytes: std::sync::Arc::new(image_bytes),
+        }],
+    }];
+    let body = body_of(&req);
+    let messages = body["messages"].as_array().expect("messages");
+    let user_msg = messages
+        .iter()
+        .find(|m| m["role"] == "user" && m["content"].is_array())
+        .expect("user msg with array content");
+    let parts = user_msg["content"].as_array().expect("parts");
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0]["type"], "text");
+    assert_eq!(parts[0]["text"], "Please inspect this");
+    assert_eq!(parts[1]["type"], "image_url");
+    let url = parts[1]["image_url"]["url"].as_str().expect("url");
+    assert!(url.starts_with("data:image/png;base64,"));
+}
+
+#[test]
+fn image_only_user_content_omits_empty_text() {
+    let mut req = request();
+    req.turns = Vec::new();
+    req.items = vec![ModelItem::UserContent {
+        text: String::new(),
+        images: vec![crate::chat::events::ModelImage {
+            mime: "image/jpeg".into(),
+            bytes: std::sync::Arc::new(vec![9, 8, 7]),
+        }],
+    }];
+    let body = body_of(&req);
+    let messages = body["messages"].as_array().expect("messages");
+    let user_msg = messages
+        .iter()
+        .find(|m| m["role"] == "user" && m["content"].is_array())
+        .expect("user msg");
+    let parts = user_msg["content"].as_array().expect("parts");
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0]["type"], "image_url");
+    let url = parts[0]["image_url"]["url"].as_str().expect("url");
+    assert!(url.starts_with("data:image/jpeg;base64,"));
+}

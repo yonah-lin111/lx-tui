@@ -118,6 +118,26 @@ fn contents_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
             HistoryBlock::Text { role, text } => {
                 push_parts(&mut contents, google_role(role), json!({"text": text}));
             }
+            HistoryBlock::UserContent { text, images } => {
+                use base64::Engine;
+                if !text.is_empty() {
+                    push_parts(&mut contents, "user", json!({"text": text}));
+                }
+                for img in images {
+                    let b64 =
+                        base64::engine::general_purpose::STANDARD.encode(img.bytes.as_slice());
+                    push_parts(
+                        &mut contents,
+                        "user",
+                        json!({
+                            "inlineData": {
+                                "mimeType": img.mime,
+                                "data": b64,
+                            }
+                        }),
+                    );
+                }
+            }
             HistoryBlock::ToolCall {
                 call_id: _,
                 name,

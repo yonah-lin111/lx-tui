@@ -317,6 +317,18 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::Enter => {
             super::chat::try_send(state, pane_id);
         }
+        // Ctrl+V / Ctrl+Alt+V 读取剪贴板图片
+        LxInput::PasteImage if !lx.shell_mode() => {
+            let generation = lx.chat.generation_counter;
+            let revision = lx.revision();
+            state
+                .effects
+                .push(crate::app::effects::Effect::ReadClipboardImage {
+                    pane: pane_id,
+                    generation,
+                    revision,
+                });
+        }
         // 无面板：空 Shell 模式且无活动任务时 Esc 退出模式；否则走停止待命。
         LxInput::Escape => {
             let idle_shell = state.pane_anywhere(pane_id).is_some_and(|target| {

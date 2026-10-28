@@ -142,6 +142,11 @@ impl Role {
 pub(crate) enum HistoryBlock {
     /// 纯文本（user 或 assistant 可见正文）。
     Text { role: Role, text: String },
+    /// 用户多模态内容（文本 + 图片）。
+    UserContent {
+        text: String,
+        images: Vec<crate::chat::events::ModelImage>,
+    },
     /// assistant 发起的一次工具调用（`input` 已解析为 JSON 值）。
     ToolCall {
         call_id: String,
@@ -169,6 +174,10 @@ pub(crate) fn history_blocks(items: &[ModelItem]) -> Result<Vec<HistoryBlock>, S
             ModelItem::UserText(text) => blocks.push(HistoryBlock::Text {
                 role: Role::User,
                 text: text.clone(),
+            }),
+            ModelItem::UserContent { text, images } => blocks.push(HistoryBlock::UserContent {
+                text: text.clone(),
+                images: images.clone(),
             }),
             ModelItem::AssistantText(text) => blocks.push(HistoryBlock::Text {
                 role: Role::Assistant,

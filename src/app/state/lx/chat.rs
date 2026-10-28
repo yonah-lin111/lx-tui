@@ -323,6 +323,8 @@ pub enum CardTarget {
     },
     /// 子 agent 卡片里的 agent 链接：打开 Agents 面板并定位。
     OpenAgent { agent_id: String },
+    /// 用户消息正文折叠/展开（按稳定消息 ID 定位）。
+    UserMessage { message_id: String },
 }
 
 /// 卡片内可独立折叠的区域。
@@ -414,6 +416,8 @@ pub struct LxChat {
     /// `slot` 是工具调用的 call_id（本地命令卡片固定为 [`SHELL_SLOT`]）；
     /// 命令卡片的参数与输出各占一条记录，互不影响。
     pub detail_expanded: Vec<(String, String, CardSection, bool)>,
+    /// 用户消息正文展开状态（按 message ID 记录，默认折叠）。
+    pub expanded_user_messages: std::collections::HashSet<String>,
     /// 子 agent 汇报块已追加的展开批次：每批固定行数，点 `… N more lines` 递增。
     /// 键与汇报块展开状态同口径 `(message_id, "report:<agent_id>")`。
     pub report_expand_steps: Vec<(String, String, usize)>,
@@ -462,6 +466,7 @@ impl LxChat {
             main_stopped: false,
             suppressed_prompt_header: None,
             detail_expanded: Vec::new(),
+            expanded_user_messages: std::collections::HashSet::new(),
             report_expand_steps: Vec::new(),
             selected_tool: None,
             selected_compact: None,
@@ -498,6 +503,22 @@ impl LxChat {
         // 会话解绑：未执行的命令与排队项不得漂移到新会话执行。
         self.pending_shells.clear();
         self.queue.clear();
+        self.expanded_user_messages.clear();
+    }
+
+    /// 用户消息是否处于展开状态。
+    pub fn user_message_expanded(&self, message_id: &str) -> bool {
+        self.expanded_user_messages.contains(message_id)
+    }
+
+    /// 切换用户消息展开状态；返回是否改变。
+    pub fn toggle_user_message_expanded(&mut self, message_id: &str) -> bool {
+        if self.expanded_user_messages.contains(message_id) {
+            self.expanded_user_messages.remove(message_id);
+        } else {
+            self.expanded_user_messages.insert(message_id.to_string());
+        }
+        true
     }
 
     /// 是否仍有本地命令在途（已提交待 spawn 或消息仍显示运行中）。

@@ -646,6 +646,7 @@ fn user_message_with_sequence(
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 
@@ -667,6 +668,7 @@ fn assistant_message_with_sequence(id: &str, sequence: i64) -> crate::app::state
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 

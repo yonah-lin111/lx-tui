@@ -133,13 +133,17 @@ pub fn queue_chat_while_shell_runs(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     }
     let draft = target.lx.input.trim().to_string();
-    if draft.is_empty() {
+    let draft_images = target.lx.draft_images.clone();
+    if draft.is_empty() && draft_images.is_empty() {
         return false;
     }
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    target.lx.chat.queue.push(QueuedSubmission::Chat { draft });
+    target.lx.chat.queue.push(QueuedSubmission::Chat {
+        draft,
+        draft_images,
+    });
     target.lx.clear();
     true
 }
@@ -219,6 +223,7 @@ pub fn on_user_shell_begun(
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     });
     target.lx.chat.follow_bottom = true;
     true
@@ -378,9 +383,13 @@ fn drain_queue(state: &mut AppState, pane: PaneId) -> bool {
             }
             submit(state, pane, Some(cwd));
         }
-        QueuedSubmission::Chat { draft } => {
+        QueuedSubmission::Chat {
+            draft,
+            draft_images,
+        } => {
             if let Some(target) = state.pane_mut_anywhere(pane) {
                 target.lx.import_full_text(&draft);
+                target.lx.draft_images = draft_images;
             }
             super::try_send(state, pane);
         }

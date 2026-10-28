@@ -125,6 +125,8 @@ pub struct Lx {
     undo: Vec<LxSnapshot>,
     /// 重做历史。
     redo: Vec<LxSnapshot>,
+    /// 当前草稿已准备好的图片附件列表。
+    pub draft_images: Vec<crate::chat::DraftImageAttachment>,
     /// 已发送 prompt 的历史浏览态（游标 + 进入浏览前的草稿）。
     history: HistoryBrowse,
 }
@@ -144,12 +146,13 @@ struct LxPaste {
     redo: Vec<LxSnapshot>,
 }
 
-/// lx 输入缓冲的一份快照（文本 + 光标 + 模式），供撤销/重做。
+/// lx 输入缓冲的一份快照（文本 + 光标 + 模式 + 图片草稿），供撤销/重做。
 #[derive(Debug, Clone)]
 struct LxSnapshot {
     text: String,
     cursor: usize,
     mode: LxInputMode,
+    draft_images: Vec<crate::chat::DraftImageAttachment>,
 }
 
 /// 撤销历史上限。
@@ -200,6 +203,7 @@ impl Lx {
             background_tasks: 0,
             undo: Vec::new(),
             redo: Vec::new(),
+            draft_images: Vec::new(),
             history: HistoryBrowse::default(),
         }
     }
@@ -492,6 +496,7 @@ impl Lx {
             text: self.input.clone(),
             cursor: self.cursor,
             mode: self.input_mode,
+            draft_images: self.draft_images.clone(),
         });
         self.redo.clear();
         self.touch();
@@ -815,25 +820,55 @@ impl Lx {
         }
     }
 
-    /// 清空输入框内容；空 Shell 模式也可借此退出。
+    /// 清空输入框内容与图片草稿；空 Shell 模式也可借此退出。
     pub fn clear(&mut self) {
-        if self.input.is_empty() && self.input_mode == LxInputMode::Chat {
+        if self.input.is_empty()
+            && self.input_mode == LxInputMode::Chat
+            && self.draft_images.is_empty()
+        {
             return;
         }
         self.snapshot();
         self.input.clear();
         self.cursor = 0;
         self.input_mode = LxInputMode::Chat;
+        self.draft_images.clear();
         self.refresh_panel();
     }
 
-    /// 撤销一步（恢复正文、光标与模式；修订号继续前进）。
+    /// 向草稿添加一张图片；上限 4 张。返回是否添加成功。
+    pub fn add_draft_image(&mut self, image: crate::platform::ProcessedImage) -> bool {
+        if self.draft_images.len() >= crate::platform::MAX_ATTACHED_IMAGES {
+            return false;
+        }
+        self.snapshot();
+        let id = format!("draft-img-{}", self.draft_images.len() + 1);
+        self.draft_images
+            .push(crate::chat::DraftImageAttachment { id, image });
+        self.touch();
+        true
+    }
+
+    /// 删除指定下标的草稿图片。
+    pub fn remove_draft_image(&mut self, index: usize) -> bool {
+        if index < self.draft_images.len() {
+            self.snapshot();
+            self.draft_images.remove(index);
+            self.touch();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 撤销一步（恢复正文、光标、模式与图片草稿；修订号继续前进）。
     pub fn undo(&mut self) {
         if let Some(snapshot) = self.undo.pop() {
             let current = LxSnapshot {
                 text: std::mem::replace(&mut self.input, snapshot.text),
                 cursor: self.cursor,
                 mode: self.input_mode,
+                draft_images: std::mem::replace(&mut self.draft_images, snapshot.draft_images),
             };
             self.redo.push(current);
             self.cursor = snapshot.cursor.min(self.input.len());
@@ -843,13 +878,14 @@ impl Lx {
         }
     }
 
-    /// 重做一步（恢复正文、光标与模式；修订号继续前进）。
+    /// 重做一步（恢复正文、光标、模式与图片草稿；修订号继续前进）。
     pub fn redo(&mut self) {
         if let Some(snapshot) = self.redo.pop() {
             let current = LxSnapshot {
                 text: std::mem::replace(&mut self.input, snapshot.text),
                 cursor: self.cursor,
                 mode: self.input_mode,
+                draft_images: std::mem::replace(&mut self.draft_images, snapshot.draft_images),
             };
             self.undo.push(current);
             self.cursor = snapshot.cursor.min(self.input.len());

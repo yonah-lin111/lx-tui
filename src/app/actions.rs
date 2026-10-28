@@ -83,6 +83,8 @@ pub enum LxInput {
     PrevStep,
     /// Enter：md 面板打开时采纳高亮候选；否则预留给发送（当前不动作）。
     Enter,
+    /// Ctrl+V / Ctrl+Alt+V / Cmd+V：读取剪贴板图片并附加到草稿。
+    PasteImage,
     /// Esc：关闭 md 面板；无面板且在流中时停止生成。
     Escape,
     /// Ctrl+T：切换最近 thinking 块展开/折叠。

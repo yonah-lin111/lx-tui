@@ -30,6 +30,7 @@ fn message_with(call: ToolCallView) -> ChatMessageView {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 

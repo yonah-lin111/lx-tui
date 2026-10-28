@@ -439,6 +439,7 @@ async fn queued_user_chat_wins_before_report_drain() {
             .queue
             .push(crate::app::state::QueuedSubmission::Chat {
                 draft: "user first".into(),
+                draft_images: Vec::new(),
             });
     }
     assert!(

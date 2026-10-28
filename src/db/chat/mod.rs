@@ -4,12 +4,15 @@
 //! `sequence` 只在持有写事务时读取递增，配合 worker 串行化保证同 session 单调。
 //! `checkpoint`/`finish` 以 `status='streaming'` 条件更新，迟到事件不能覆盖终态。
 
+pub mod attachment;
 mod compact;
 mod process;
 pub mod rewind;
 mod subagent;
 mod tools;
 mod user_shell;
+
+pub use attachment::{MessageAttachmentInput, MessageAttachmentKind, MessageAttachmentMeta};
 
 pub use compact::{
     COMPACT_ACTIVE, COMPACT_REVERTED, CompactCheckpoint, CompactCommit, CompactCommitted,
@@ -85,6 +88,8 @@ pub struct ChatMessage {
     pub parts: Vec<ChatPart>,
     /// 该消息的工具调用（按 `(message_id, position)` 有序）；用户消息恒为空。
     pub tools: Vec<ToolCallRecord>,
+    /// 该消息的附件元数据（按 `(message_id, position)` 有序；仅用户消息非空）。
+    pub attachments: Vec<MessageAttachmentMeta>,
 }
 
 /// 一条消息内的一个内容块。
@@ -118,6 +123,8 @@ pub struct TurnCommitted {
     pub revision: i64,
     /// 本轮落库时刻（两个消息与 session 共用），用于在线计算本轮耗时。
     pub created_at_ms: i64,
+    /// 用户消息写入的附件元数据列表。
+    pub attachments: Vec<MessageAttachmentMeta>,
 }
 
 /// 发送一轮时的模型快照（写入 assistant message 与 session 选择三列）。
@@ -254,6 +261,7 @@ impl Database {
                     subagent_reports,
                     parts: Vec::new(),
                     tools: Vec::new(),
+                    attachments: Vec::new(),
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -301,12 +309,17 @@ impl Database {
                 .or_default()
                 .push(tool);
         }
+        let mut attachments_by_message =
+            attachment::load_attachments_by_session(&self.conn, session_id)?;
         for message in &mut messages {
             if let Some(parts) = by_message.remove(&message.external_id) {
                 message.parts = parts;
             }
             if let Some(tools) = tools_by_message.remove(&message.external_id) {
                 message.tools = tools;
+            }
+            if let Some(attachments) = attachments_by_message.remove(&message.external_id) {
+                message.attachments = attachments;
             }
         }
         Ok(Some(messages))
@@ -323,7 +336,22 @@ impl Database {
         user_text: &str,
         model: &ModelSnapshot,
     ) -> Result<TurnCommitted> {
-        if user_text.trim().is_empty() {
+        self.begin_turn_with_attachments(workspace, existing_session, user_text, &[], model)
+    }
+
+    /// 开启一轮（支持附件）：同事务写入 user message、attachments、text part 与 streaming assistant；
+    /// 首轮（`existing_session` 为 None）先建 session。
+    ///
+    /// 文本与附件均为空时才拒绝；纯图片草稿正常建轮。
+    pub fn begin_turn_with_attachments(
+        &self,
+        workspace: &Path,
+        existing_session: Option<&str>,
+        user_text: &str,
+        attachments: &[MessageAttachmentInput],
+        model: &ModelSnapshot,
+    ) -> Result<TurnCommitted> {
+        if user_text.trim().is_empty() && attachments.is_empty() {
             return Err(DbError::InvalidDraft);
         }
         if user_text.len() > MAX_MESSAGE_BYTES {
@@ -372,7 +400,16 @@ impl Database {
             }
             None => {
                 let session_id = new_external_id("sess");
-                let title = single_line_preview(user_text, 60);
+                let title = if user_text.trim().is_empty() {
+                    crate::ui::text::chat::image_message_preview(attachments.len()).to_string()
+                } else {
+                    single_line_preview(user_text, 60)
+                };
+                let preview = if user_text.trim().is_empty() {
+                    crate::ui::text::chat::image_message_preview(attachments.len()).to_string()
+                } else {
+                    single_line_preview(user_text, PREVIEW_CHARS)
+                };
                 transaction.execute(
                     r#"INSERT INTO agent_session
                            (external_id, workspace_id, source, title, first_user_message,
@@ -384,7 +421,7 @@ impl Database {
                         session_id,
                         workspace_external,
                         title,
-                        single_line_preview(user_text, PREVIEW_CHARS),
+                        preview,
                         model.provider,
                         model.model,
                         model.variant,
@@ -407,6 +444,8 @@ impl Database {
                VALUES (?1, ?2, 0, 'text', ?3, ?4)"#,
             params![new_external_id("part"), user_message_id, user_text, now],
         )?;
+        let attachment_metas =
+            attachment::insert_attachments(&transaction, &user_message_id, attachments)?;
         let assistant_message_id = new_external_id("msg");
         transaction.execute(
             r#"INSERT INTO agent_message
@@ -445,7 +484,21 @@ impl Database {
             assistant_sequence: next_sequence + 1,
             revision,
             created_at_ms: now,
+            attachments: attachment_metas,
         })
+    }
+
+    /// 读取指定会话中的图片附件真实 BLOB。
+    pub fn load_image_payloads(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        attachment_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, Vec<u8>>> {
+        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
+            return Err(DbError::WorkspaceMissing);
+        };
+        attachment::load_image_payloads(&self.conn, &workspace_external, session_id, attachment_ids)
     }
 
     /// 流式 checkpoint：用完整 parts 快照幂等覆盖 streaming assistant 的内容。
@@ -926,6 +979,7 @@ pub fn chat_message_views_to_db(
             subagent_reports: None,
             parts: chat_message_part_views(message),
             tools: chat_message_tool_views(message),
+            attachments: message.attachments.clone(),
         })
         .collect()
 }
