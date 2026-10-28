@@ -428,15 +428,15 @@ pub(crate) fn handle_mouse_up_left(
         *dirty = true;
         return;
     }
-    if let Some(pane) = state.terminal_selection
-        && let Some(text) = update::finish_terminal_selection(state, pane)
-    {
-        copy_with_toast_at(state, &text, Some(pane));
+    // 终端选区松开：对齐 prompt / lx，非空选区保留高亮供 Ctrl/Cmd+C 复制，空选区清除。
+    if update::end_terminal_selection_drag(state) {
+        *dirty = true;
+        return;
     }
     // lx 输入框选区松开：复制选中文本（空选区不复制）。
-    if let Some((pane, text)) = update::take_lx_input_selection(state) {
+    if let Some((_pane, text)) = update::take_lx_input_selection(state) {
         if !text.trim().is_empty() {
-            copy_with_toast_at(state, &text, Some(pane));
+            copy_with_toast_at(state, &text, None);
         }
         *dirty = true;
         return;

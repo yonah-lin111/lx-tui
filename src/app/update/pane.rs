@@ -9,7 +9,7 @@ use crate::app::state::{AppState, Lx, PaneKind, PaneView};
 use crate::detect::PaneAgentSnapshot;
 use crate::layout::{self, PaneId};
 
-use super::selection::{WHEEL_LINES, clear_selection, clear_terminal_selection};
+use super::selection::{WHEEL_LINES, clear_selection};
 
 mod task_page;
 
@@ -789,7 +789,10 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
     super::selection::clear_lx_selection_for(state, id);
     if view == PaneView::Lx {
         if state.terminal_selection == Some(id) {
-            clear_terminal_selection(state);
+            state.terminal_selection = None;
+        }
+        if let Some(pane) = state.pane_mut_anywhere(id) {
+            pane.terminal.clear_selection();
         }
         if state
             .terminal_scroll_drag
@@ -840,6 +843,10 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
             }
             if (old_size.cols, old_size.rows) != (cols, rows) {
                 super::selection::clear_lx_selection_for(state, *id);
+                if state.terminal_selection == Some(*id) {
+                    state.terminal_selection = None;
+                    state.selection_autoscroll = None;
+                }
             }
         }
     }

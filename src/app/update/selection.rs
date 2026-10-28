@@ -135,9 +135,7 @@ fn selection_content_row(state: &AppState, pane: PaneId, row: u16) -> i32 {
 
 /// 在终端窗格开始拖拽选择；选区存于仿真器，随输出滚动钉在内容上。
 pub fn begin_terminal_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
-    state.selection = None;
-    state.selection_autoscroll = None;
-    clear_terminal_selection(state);
+    clear_selection(state);
     let started = state.pane_mut_anywhere(pane).is_some_and(|target| {
         if target.kind != PaneKind::Terminal {
             return false;
@@ -158,6 +156,30 @@ pub fn drag_terminal_selection(state: &mut AppState, pane: PaneId, row: u16, col
     }
 }
 
+/// 松开鼠标：结束终端选区拖拽；非空选区保留在仿真器中供 Ctrl/Cmd+C 复制，
+/// 空选区或全空白选区直接清除；返回原本是否处于终端选区拖拽中。
+pub fn end_terminal_selection_drag(state: &mut AppState) -> bool {
+    let Some(pane) = state.terminal_selection.take() else {
+        return false;
+    };
+    state.selection_autoscroll = None;
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && target.terminal.selection_text().is_none()
+    {
+        target.terminal.clear_selection();
+    }
+    true
+}
+
+/// 读取终端窗格当前保留的选区文本（保留高亮，供 Ctrl/Cmd+C 复制）；无有效选区返回 None。
+pub fn terminal_selection_text(state: &AppState, pane: PaneId) -> Option<String> {
+    let target = state.pane_anywhere(pane)?;
+    if target.kind != PaneKind::Terminal {
+        return None;
+    }
+    target.terminal.selection_text()
+}
+
 /// 结束终端选区并提取文本；空选区返回 None。
 pub fn finish_terminal_selection(state: &mut AppState, pane: PaneId) -> Option<String> {
     state.terminal_selection = None;
@@ -173,12 +195,17 @@ pub fn finish_terminal_selection(state: &mut AppState, pane: PaneId) -> Option<S
         .filter(|text| !text.trim().is_empty())
 }
 
-/// 放弃进行中的终端选区（清空仿真器高亮）。
+/// 清除终端选区（含拖拽中与松开后保留的仿真器高亮）。
 pub fn clear_terminal_selection(state: &mut AppState) {
-    if let Some(pane) = state.terminal_selection.take()
-        && let Some(target) = state.pane_mut_anywhere(pane)
-    {
-        target.terminal.clear_selection();
+    state.terminal_selection = None;
+    for workspace in &mut state.workspaces {
+        for tab in &mut workspace.tabs {
+            for id in tab.layout.pane_ids() {
+                if let Some(target) = tab.pane_mut(id) {
+                    target.terminal.clear_selection();
+                }
+            }
+        }
     }
 }
 

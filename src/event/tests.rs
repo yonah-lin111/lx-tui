@@ -6593,7 +6593,10 @@ fn lx_history_selection_waits_for_copy_shortcut_and_follows_wheel_scroll() {
         .toast
         .as_ref()
         .expect("按 Ctrl+C 后弹出全局复制 toast");
-    assert_eq!(toast.anchor, Some(pane), "全局复制 toast 锚定当前窗格");
+    assert_eq!(
+        toast.anchor, None,
+        "全局复制 toast 固定在屏幕顶部居中（anchor = None）"
+    );
     assert_eq!(
         toast.title.as_deref(),
         Some(crate::ui::text::TOAST_CLIPBOARD_TITLE)
@@ -6704,7 +6707,7 @@ fn lx_task_output_and_agents_detail_selection_scroll_and_copy() {
         .toast
         .as_ref()
         .expect("后台管理页按 Ctrl+C 触发全局复制 toast");
-    assert_eq!(toast.anchor, Some(pane));
+    assert_eq!(toast.anchor, None, "全局复制 toast 固定在屏幕顶部居中");
     assert!(
         toast.message.starts_with("Copied ") && toast.message.ends_with(" chars"),
         "显示复制字符数：{}",
@@ -6934,6 +6937,124 @@ fn lx_task_output_and_agents_detail_selection_scroll_and_copy() {
         state.lx_selection.and_then(|sel| sel.range()),
         Some(((0, 0), (3, 6))),
         "Agents 详情边拖边滚后，选区锚点钉在第 0 行、终点延伸到第 3 行"
+    );
+}
+
+#[test]
+fn terminal_selection_retains_on_mouse_up_scrolls_and_copies_on_ctrl_c() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 20));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("terminal pane");
+        for idx in 0..35 {
+            target
+                .terminal
+                .feed(format!("term-line-{idx:02}\r\n").as_bytes());
+        }
+    }
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+
+    // 1. 终端窗格拖拽选择后松开左键：不自动复制，保留仿真器选区高亮。
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), inner.x, inner.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            inner.x + 11,
+            inner.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(MouseEventKind::Up(MouseButton::Left), inner.x + 11, inner.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state.terminal_selection.is_none(),
+        "松开鼠标后结束终端选区拖拽态"
+    );
+    assert!(state.toast.is_none(), "松开鼠标不自动触发复制 toast");
+    assert_eq!(
+        update::terminal_selection_text(&state, pane)
+            .as_deref()
+            .map(str::len),
+        Some(12),
+        "松开鼠标后终端选区保留在仿真器中"
+    );
+
+    // 2. 松开鼠标后滚轮向上回滚：选区不延伸、不清除，随内容行一起保留。
+    let selected_before = update::terminal_selection_text(&state, pane).expect("selected");
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollUp, inner.x + 5, inner.y + 3),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(
+        update::terminal_selection_text(&state, pane).as_deref(),
+        Some(selected_before.as_str()),
+        "松开后滚轮滚动不改变已选中的终端内容文本"
+    );
+
+    // 3. 按下 Ctrl+C 复制：弹出全局顶部居中 toast（anchor = None）并显示复制字符数，选区继续保留。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    let toast = state
+        .toast
+        .as_ref()
+        .expect("终端选区按 Ctrl+C 弹出全局复制 toast");
+    assert_eq!(toast.anchor, None, "全局复制 toast 固定在屏幕顶部居中");
+    assert_eq!(toast.message, "Copied 12 chars");
+    assert!(
+        update::terminal_selection_text(&state, pane).is_some(),
+        "复制后终端选区高亮继续保留"
+    );
+
+    // 4. 在终端输入普通按键：自动清除终端选区。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        update::terminal_selection_text(&state, pane).is_none(),
+        "终端输入其它按键后自动清除选区"
     );
 }
 

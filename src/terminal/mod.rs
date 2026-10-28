@@ -164,6 +164,7 @@ impl Terminal {
         if size != self.size {
             self.size = size;
             self.term.resize(size);
+            self.term.selection = None;
         }
     }
 
@@ -297,6 +298,13 @@ impl Terminal {
             selection.update(point, Side::Right);
             selection.include_all();
         }
+    }
+
+    /// 读取当前选区文本（保留选区高亮）；空选区或全空白选区返回 None。
+    pub fn selection_text(&self) -> Option<String> {
+        self.term
+            .selection_to_string()
+            .filter(|text| !text.trim().is_empty())
     }
 
     /// 提取并清空选区文本；宽字符与换行交给仿真器处理。

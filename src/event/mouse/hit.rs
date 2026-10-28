@@ -408,14 +408,13 @@ pub(crate) fn dismiss_lx_toast_outside(
     crate::app::update::dismiss_lx_toast(state, pane)
 }
 
-/// 写系统剪贴板并在 prompt 锚点弹出成功/失败 toast。
+/// 写系统剪贴板并在全局屏幕顶部居中弹出成功/失败 toast。
 pub(crate) fn copy_with_toast(state: &mut AppState, text: &str) {
-    let anchor = Some(state.prompt.id());
-    copy_with_toast_at(state, text, anchor);
+    copy_with_toast_at(state, text, None);
 }
 
-/// 写系统剪贴板并在**指定窗格**锚点弹出全局 toast（`None` 回落屏幕顶部居中）。
-pub(crate) fn copy_with_toast_at(state: &mut AppState, text: &str, anchor: Option<PaneId>) {
+/// 写系统剪贴板并在全局屏幕顶部居中弹出 toast（复制反馈统一使用 `anchor = None`）。
+pub(crate) fn copy_with_toast_at(state: &mut AppState, text: &str, _anchor: Option<PaneId>) {
     let now = Instant::now();
     let (kind, message) = if crate::platform::write_clipboard(text) {
         (ToastKind::Default, ui::text::toast_copied(text))
@@ -425,7 +424,7 @@ pub(crate) fn copy_with_toast_at(state: &mut AppState, text: &str, anchor: Optio
     };
     update::show_toast(
         state,
-        Toast::new(kind, message, anchor, now).with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+        Toast::new(kind, message, None, now).with_title(ui::text::TOAST_CLIPBOARD_TITLE),
     );
 }
 

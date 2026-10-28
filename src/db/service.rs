@@ -794,7 +794,7 @@ impl Persistence {
                 changed |= self.reload_referenced(state, &key);
                 changed
             }
-            Effect::CopyToClipboard { text, anchor } => {
+            Effect::CopyToClipboard { text, anchor: _ } => {
                 let now = Instant::now();
                 let (kind, message) = if crate::platform::write_clipboard(&text) {
                     (ToastKind::Default, text::toast_copied(&text))
@@ -802,10 +802,10 @@ impl Persistence {
                     tracing::warn!("clipboard write failed");
                     (ToastKind::Danger, text::TOAST_COPY_FAILED.to_string())
                 };
-                // 全部剪贴板复制反馈统一走全局 toast（锚定触发容器顶边框）。
+                // 全部剪贴板复制反馈统一走全局屏幕顶部居中 toast（anchor = None）。
                 update::show_toast(
                     state,
-                    Toast::new(kind, message, anchor, now).with_title(text::TOAST_CLIPBOARD_TITLE),
+                    Toast::new(kind, message, None, now).with_title(text::TOAST_CLIPBOARD_TITLE),
                 );
                 true
             }

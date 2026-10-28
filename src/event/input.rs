@@ -53,6 +53,16 @@ pub(crate) fn handle_key_event(
     let pane_lx = state
         .active_pane()
         .is_some_and(|pane| pane.view == PaneView::Lx);
+    // 终端窗格有保留选区时，Ctrl/Cmd+C 优先复制选区并保留高亮，不向 PTY 发送 ^C。
+    if overlay.is_none()
+        && state.focus() == crate::app::state::FocusedContainer::Panes
+        && !pane_lx
+        && is_copy_chord(key)
+        && copy_terminal_selection(state)
+    {
+        *dirty = true;
+        return;
+    }
     let Some(routed) = input::route(key, mode, state.focus(), overlay, pane_lx) else {
         return;
     };
@@ -109,6 +119,7 @@ pub(crate) fn handle_key_event(
         }
         Routed::Pane(bytes) => {
             let id = state.active_tab().layout.focus();
+            update::clear_terminal_selection(state);
             write_to_pane(sessions, id, &bytes);
             update::reset_pane_scroll(state, id);
             *dirty = true;
@@ -200,6 +211,7 @@ pub(crate) fn handle_paste_event(
         return;
     }
     let id = state.active_tab().layout.focus();
+    update::clear_terminal_selection(state);
     let bracketed = state
         .active_pane()
         .is_some_and(|pane| pane.terminal.mode().contains(TermMode::BRACKETED_PASTE));
@@ -211,6 +223,26 @@ pub(crate) fn handle_paste_event(
     write_to_pane(sessions, id, &payload);
     update::reset_pane_scroll(state, id);
     *dirty = true;
+}
+
+/// 是否为 Ctrl+C / Cmd+C 复制快捷键（不含 Alt / Shift）。
+fn is_copy_chord(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('c' | 'C'))
+        && (key.modifiers.contains(KeyModifiers::CONTROL)
+            || key.modifiers.contains(KeyModifiers::SUPER))
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT)
+}
+
+/// 复制焦点终端窗格的选区文本并弹出全局顶部居中 Toast；选区保留，无选区返回 false。
+fn copy_terminal_selection(state: &mut AppState) -> bool {
+    let pane = state.active_tab().layout.focus();
+    let Some(text) = update::terminal_selection_text(state, pane) else {
+        return false;
+    };
+    copy_with_toast(state, &text);
+    true
 }
 
 /// 复制焦点 lx 窗格的主内容区选区文本并弹出全局 Toast；选区保留，无选区返回 false。
