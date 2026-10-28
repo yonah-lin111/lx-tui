@@ -130,6 +130,8 @@ pub struct CommandView {
     pub cwd: String,
     pub tty: bool,
     pub state: ProcessStateView,
+    /// 本次调用已停住的耗时（毫秒）；运行中或旧记录为 None。
+    pub duration_ms: Option<u64>,
     /// 尾部输出窗口（最近 [`COMMAND_PREVIEW_LINES`] 行；变化检测用，不直接渲染）。
     pub output_preview: Vec<String>,
     /// 是否还有更多保留输出（展开可见）。
@@ -178,6 +180,8 @@ pub struct ProcessInteractionView {
     pub output: String,
     pub state: ProcessStateView,
     pub exit_code: Option<i32>,
+    /// 本次调用已停住的耗时（毫秒）；旧记录缺失为 None。
+    pub duration_ms: Option<u64>,
     pub truncated: bool,
     pub dropped_bytes: u64,
 }
@@ -576,6 +580,7 @@ impl ToolDetailView {
                 cwd: result.cwd.clone(),
                 tty: result.tty,
                 state,
+                duration_ms: Some(result.wall_time_ms),
                 output_preview: preview_lines(&result.output),
                 truncated: result.truncated,
                 dropped_bytes: result.dropped_bytes,
@@ -599,6 +604,7 @@ impl ToolDetailView {
                     output: result.output.clone(),
                     state,
                     exit_code: result.exit_code,
+                    duration_ms: Some(result.wall_time_ms),
                     truncated: result.truncated,
                     dropped_bytes: result.dropped_bytes,
                 })
@@ -620,6 +626,7 @@ impl ToolDetailView {
                     .to_string(),
                 tty: value.get("tty").and_then(Value::as_bool).unwrap_or(false),
                 state: state_view_of(&value),
+                duration_ms: wall_time_ms(&value),
                 output_preview: preview_lines(
                     value.get("output").and_then(Value::as_str).unwrap_or(""),
                 ),
@@ -675,6 +682,7 @@ impl ToolDetailView {
                         .get("exit_code")
                         .and_then(Value::as_i64)
                         .and_then(|code| i32::try_from(code).ok()),
+                    duration_ms: wall_time_ms(&value),
                     truncated: value
                         .get("truncated")
                         .and_then(Value::as_bool)
@@ -727,6 +735,15 @@ fn state_view_of(value: &Value) -> ProcessStateView {
         Some("failed") => ProcessStateView::Failed,
         _ => ProcessStateView::Interrupted,
     }
+}
+
+/// 结果 JSON 的 `wall_time_seconds` → 毫秒（旧记录缺失为 None）。
+fn wall_time_ms(value: &Value) -> Option<u64> {
+    value
+        .get("wall_time_seconds")
+        .and_then(Value::as_f64)
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+        .map(|seconds| (seconds * 1_000.0).round() as u64)
 }
 
 /// 尾部输出预览：最近 [`COMMAND_PREVIEW_LINES`] 个非末尾空行。

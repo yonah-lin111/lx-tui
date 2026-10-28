@@ -28,6 +28,7 @@ fn command_message(call_id: &str, session_id: u64) -> ChatMessageView {
                 command: "while true; do echo heartbeat; done".into(),
                 cwd: "/workspace/lx".into(),
                 tty: false,
+                duration_ms: None,
                 state: ProcessStateView::Running,
                 output_preview: Vec::new(),
                 truncated: false,
@@ -246,8 +247,8 @@ fn running_process_card_is_clickable_without_an_open_row() {
     let cards =
         crate::ui::main_content::lx::history::layout(view.body, &lx, &mut PaneCache::default())
             .cards;
-    // 参数区与引导行各自可点，行为都是打开后台任务面板。
-    assert_eq!(cards.len(), 2, "运行中的卡片必须可点");
+    // 整张卡片一个点击面：打开后台任务面板。
+    assert_eq!(cards.len(), 1, "运行中的卡片必须可点");
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let text = super::buffer_text(&buf);
@@ -366,13 +367,14 @@ fn folded_thinking_and_long_param_are_clickable() {
             position: 0,
             call: ToolCallView {
                 call_id: "call-param".into(),
-                name: "read".into(),
+                name: "write".into(),
                 position: 0,
                 arguments_json: String::new(),
                 status: ToolStatus::Completed,
                 summary: Some(Box::new(crate::app::state::ToolSummary {
                     path: Some(long),
-                    range: Some((1, 9)),
+                    added: Some(12),
+                    removed: Some(4),
                     ..Default::default()
                 })),
                 error: None,

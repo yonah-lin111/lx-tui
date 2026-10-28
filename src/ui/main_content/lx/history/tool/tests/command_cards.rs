@@ -31,6 +31,7 @@ fn running_command(output: &str) -> ToolCallView {
             command: "cargo test chat::tools".into(),
             cwd: "/workspace/lx".into(),
             tty: false,
+            duration_ms: None,
             state: ProcessStateView::Running,
             output_preview: Vec::new(),
             truncated: false,
@@ -66,6 +67,7 @@ fn interaction(output: &str, input: Option<&str>) -> ToolCallView {
                 output: output.to_string(),
                 state: ProcessStateView::Running,
                 exit_code: None,
+                duration_ms: None,
                 truncated: false,
                 dropped_bytes: 0,
             },
@@ -165,7 +167,7 @@ fn running_command_card_shows_only_the_command_and_guide() {
         text.contains(crate::ui::text::agent::TASK_OPEN_GUIDE),
         "末行给出打开面板的引导：{text}"
     );
-    assert_eq!(text.lines().count(), 3, "标题 + 命令 + 引导：{text}");
+    assert_eq!(text.lines().count(), 3, "标题 + 命令 + 引导续行：{text}");
 }
 
 #[test]
@@ -194,19 +196,23 @@ fn command_without_output_has_no_placeholder() {
 }
 
 #[test]
-fn interaction_card_distinguishes_verbs_and_hides_io() {
-    // 动词仍按动作区分（Read output / Send input），但 stdin 与输出都不再上卡片。
+fn interaction_card_distinguishes_verbs_and_shows_the_saved_output() {
+    // 动词按动作区分（Read command output / Send input），本次调用保存的输出可见。
     let (read, _) = render(&interaction("later output\n", None), 60, false);
-    assert!(read.contains("Read output"), "空写是 Read output：{read}");
-    assert!(!read.contains("later output"), "输出只在面板里看：{read}");
+    assert!(
+        read.contains(text::agent::VERB_READ_OUTPUT),
+        "空写是 Read command output：{read}"
+    );
+    assert!(read.contains("later output"), "本次输出是调用结果：{read}");
 
     let (send, _) = render(&interaction("", Some("yes\\n")), 60, false);
     assert!(send.contains("Send input"), "非空写是 Send input：{send}");
-    assert!(!send.contains("stdin:"), "输入预览不再上卡片：{send}");
+    assert!(send.contains("yes\\n"), "输入预览显示在卡片上：{send}");
+    assert!(!send.contains("stdin:"), "不额外加 stdin 前缀：{send}");
     for text in [read, send] {
         assert!(
-            !text.lines().any(|line| line.trim_end().ends_with(" open")),
-            "交互卡片也没有 open 入口行：{text}"
+            !text.contains(crate::ui::text::agent::TASK_OPEN_GUIDE),
+            "交互卡片没有面板引导：{text}"
         );
     }
 }
@@ -293,14 +299,10 @@ fn failed_exit_is_visible_on_the_card() {
 fn header_shows_status_inline_and_has_no_corner_details_marker() {
     let call = running_command("out\n");
     let (folded, _) = render(&call, 60, false);
-    // 状态紧贴动词、以 ` · ` 分隔，且**不在行尾**（右上角已没有 [details]）。
-    assert!(
-        folded.contains(&format!(
-            "Run command{}Running",
-            text::LX_CHAT_TOOL_STATUS_SEP
-        )),
-        "状态紧跟动词：{folded}"
-    );
+    // 状态紧贴动词、以 ` · ` 分隔（右上角已没有 [details]）。
+    let title = folded.lines().next().unwrap_or("");
+    assert!(title.contains("Run command"), "{folded}");
+    assert!(title.contains("Running"), "状态在标题右侧：{folded}");
     assert!(
         !folded.contains(text::agent::FILE_DIFF_COLLAPSE),
         "进程卡片没有展开态，不该出现 collapse：{folded}"
@@ -309,7 +311,10 @@ fn header_shows_status_inline_and_has_no_corner_details_marker() {
     let (narrow, _) = render(&call, 14, false);
     assert!(narrow.contains('■'), "极窄保留方块：{narrow:?}");
     assert!(narrow.contains("Run"), "极窄保留动词：{narrow:?}");
-    assert!(!narrow.contains("Running"), "极窄整项丢弃状态：{narrow:?}");
+    assert!(
+        !narrow.lines().next().unwrap_or("").contains("Running"),
+        "极窄整段丢弃状态：{narrow:?}"
+    );
 }
 
 #[test]
@@ -321,18 +326,18 @@ fn running_card_guide_is_not_wrapped_by_the_tree() {
     assert!(lines[0].starts_with('■'), "首行是标题：{text}");
     assert!(
         lines[1].starts_with(text::agent::TREE_LEAF),
-        "命令行是参数区的收口行：{text}"
+        "命令是唯一节点：{text}"
     );
     assert!(
         lines.last().is_some_and(|line| {
             line.starts_with(text::agent::TREE_PAD) && line.contains(text::agent::TASK_OPEN_GUIDE)
         }),
-        "引导行只缩进、不画连接符：{text}"
+        "引导是命令节点的续行：{text}"
     );
     assert_eq!(
         text.matches(text::agent::TREE_LEAF).count(),
         1,
-        "整张卡片只有一根树干：{text}"
+        "整张卡片只有一个收口：{text}"
     );
 }
 
@@ -351,33 +356,39 @@ fn leaf_closes_the_params_block_and_output_is_not_wrapped() {
     let (text, _) = render(&running_command(output), 60, false);
     let lines: Vec<&str> = text.lines().collect();
     assert!(lines[0].starts_with('■'), "第 1 行是标题：{text}");
-    // 参数区收口：命令只有一行，它就是 `└─`。
+    // 运行中命令是唯一节点，引导是它的续行。
     assert!(
         lines[1].starts_with(text::agent::TREE_LEAF),
-        "参数区最后一行收口：{text}"
+        "命令是唯一节点：{text}"
     );
-    // 输出/引导区块不画树：只用等宽空白对齐到内容列。
-    for line in &lines[2..] {
+    // 输出也走同一棵树：每行都有等宽前缀，最后一行收口。
+    for line in &lines[1..] {
         assert!(
-            line.starts_with(text::agent::TREE_PAD),
-            "输出区不被 `│` / `└─` 包裹：{line:?}"
+            [
+                text::agent::TREE_BRANCH,
+                text::agent::TREE_BAR,
+                text::agent::TREE_LEAF,
+                text::agent::TREE_PAD,
+            ]
+            .iter()
+            .any(|prefix| line.starts_with(prefix)),
+            "树体行必须有连接符：{line:?}"
         );
     }
     assert_eq!(
         text.matches(text::agent::TREE_LEAF).count(),
         1,
-        "整张卡片只有一根树干：{text}"
+        "整张卡片只有一个收口：{text}"
     );
 }
 
 #[test]
-fn tree_never_mixes_branch_symbols() {
-    // 用户反馈：一段输出里同时混 `├─` / `│` / `└─` 比原来更花。
-    // 卡片只用两种连接符：中间行 `│`、末行 `└─`，不出现 `├─`。
-    let (text, _) = render(&running_command("out\nsecond\n"), 60, false);
+fn tree_uses_branch_bar_and_leaf_on_aligned_columns() {
+    // 命令 + 输出两个节点：命令 `├─`、输出首行 `└─`、输出续行空白。
+    let (text, _) = render(&interaction("out\nsecond\n", None), 60, false);
     assert!(
-        !text.contains(text::agent::TREE_BRANCH),
-        "不应再出现 `├─`：{text}"
+        text.contains(text::agent::TREE_BRANCH),
+        "多节点卡片必须有分支连接符：{text}"
     );
     // `│` 与 `└` 落在同一列，树干连成一条线。
     let bar_col = text::agent::TREE_BAR
@@ -398,25 +409,22 @@ fn tree_prefixes_are_equal_width_so_content_stays_aligned() {
         );
     }
     let (text, _) = render(&running_command("out\n"), 60, false);
-    let content_columns: Vec<usize> = text
-        .lines()
-        .skip(1)
-        .map(|line| {
-            let prefix = [
-                text::agent::TREE_LEAF,
-                text::agent::TREE_BAR,
-                text::agent::TREE_PAD,
-            ]
+    let prefixes = [
+        text::agent::TREE_BRANCH,
+        text::agent::TREE_BAR,
+        text::agent::TREE_LEAF,
+        text::agent::TREE_PAD,
+    ];
+    for line in text.lines().skip(1) {
+        let prefix = prefixes
             .into_iter()
             .find(|prefix| line.starts_with(prefix))
-            .unwrap_or(text::agent::TREE_PAD);
-            line.strip_prefix(prefix).map(str::len).unwrap_or(0)
-        })
-        .collect();
-    assert!(
-        content_columns.iter().all(|cols| *cols > 0),
-        "每行都有正文：{text}"
-    );
+            .unwrap_or_else(|| panic!("树体行缺少连接符：{line:?}"));
+        assert!(
+            !line.strip_prefix(prefix).unwrap_or("").is_empty(),
+            "每行都有正文：{text}"
+        );
+    }
 }
 
 #[test]
@@ -443,22 +451,25 @@ fn command_line_has_a_shell_prompt_marker() {
 }
 
 #[test]
-fn interaction_card_keeps_only_the_command_row() {
-    // 树体只剩命令：stdin 预览与输出都在面板里看；不再有 `open` 入口行。
+fn interaction_card_keeps_the_command_and_saved_output_rows() {
+    // `write_stdin` 是调用快照：命令、状态与本次输出各成一个节点。
     let (text, _) = render(&interaction("new line\n", Some("yes\\n")), 60, false);
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 2, "标题 + 命令：{text}");
     let command_line = lines
         .iter()
         .position(|line| line.contains("cargo test chat::tools"))
         .expect("命令在树体首行");
     assert!(command_line > 0, "命令在标题行之下：{text}");
     assert!(
-        lines[command_line].starts_with(text::agent::TREE_LEAF),
-        "命令行用直角收口：{text}"
+        lines[command_line].starts_with(text::agent::TREE_BRANCH),
+        "命令是中间节点：{text}"
     );
-    assert!(!text.contains("stdin:"), "stdin 预览不再上卡片：{text}");
-    assert!(!text.contains("new line"), "输出不再上卡片：{text}");
+    assert!(!text.contains("stdin:"), "stdin 预览不上卡片：{text}");
+    assert!(text.contains("new line"), "本次输出是调用结果：{text}");
+    assert!(
+        !text.contains(crate::ui::text::agent::TASK_OPEN_GUIDE),
+        "没有面板引导：{text}"
+    );
     assert!(
         !text.lines().any(|line| line.trim_end().ends_with(" open")),
         "没有 open 入口行：{text}"
@@ -473,17 +484,18 @@ fn plan_steps_use_the_tree_and_leaf_lands_on_the_explanation() {
     ]);
     let (text, _) = render(&call, 60, false);
     let lines: Vec<&str> = text.lines().collect();
+    assert!(lines[0].contains("1/2 completed"), "完成计数在标题：{text}");
     assert!(
-        lines[1].starts_with(text::agent::TREE_BAR) && lines[1].contains("[x] one"),
-        "步骤是中间行：{text}"
+        lines[1].starts_with(text::agent::TREE_LEAF) && lines[1].contains("[x] one"),
+        "步骤块首行收口：{text}"
     );
     assert!(
-        lines[2].starts_with(text::agent::TREE_BAR) && lines[2].contains("[ ] two"),
-        "有解释时步骤不收口：{text}"
+        lines[2].starts_with(text::agent::TREE_PAD) && lines[2].contains("[ ] two"),
+        "步骤续行左对齐：{text}"
     );
     assert!(
-        lines[3].starts_with(text::agent::TREE_LEAF) && lines[3].contains("checking behavior"),
-        "解释行收口：{text}"
+        lines[3].starts_with(text::agent::TREE_PAD) && lines[3].contains("checking behavior"),
+        "解释行左对齐：{text}"
     );
     // 没有解释时，最后一条步骤自己收口（树干照样只有一根）。
     let mut without = call.clone();
@@ -493,8 +505,8 @@ fn plan_steps_use_the_tree_and_leaf_lands_on_the_explanation() {
     let (text, _) = render(&without, 60, false);
     let lines: Vec<&str> = text.lines().collect();
     assert!(
-        lines[lines.len() - 1].starts_with(text::agent::TREE_LEAF),
-        "无解释时最后一条步骤收口：{text}"
+        lines[1].starts_with(text::agent::TREE_LEAF),
+        "无解释时步骤块首行收口：{text}"
     );
     assert_eq!(text.matches(text::agent::TREE_LEAF).count(), 1, "{text}");
 }
@@ -633,17 +645,12 @@ fn running_card_shows_status_without_elapsed_time() {
     // 用户要求：移除消息列表里的时长，只留状态词；时长改由后台任务面板定时刷新。
     let call = running_command("out\n");
     let (text, _) = render(&call, 80, false);
-    assert!(text.contains("Running"), "状态词仍然可见：{text}");
-    // 状态紧跟动词，但不拼接任何时长（`Running · 12s` 这类形态）。
     assert!(
-        text.contains(&format!(
-            "Run command{}Running",
-            text::LX_CHAT_TOOL_STATUS_SEP
-        )),
-        "状态以 · 分隔后紧跟动词：{text}"
+        text.lines().next().unwrap_or("").contains("Running"),
+        "状态在标题右侧：{text}"
     );
     assert!(!text.contains("Running ·"), "状态后不得再跟时长：{text}");
-    assert!(!text.contains("12s"), "不应出现时长：{text}");
+    assert!(!text.contains("12s"), "运行中不出现时长：{text}");
 }
 
 #[test]
@@ -681,10 +688,10 @@ fn finished_process_card_has_no_guide_and_no_ellipsis() {
     );
     assert!(text.contains("out"), "终态保留输出预览：{text}");
     assert!(
-        text.lines()
-            .last()
-            .is_some_and(|line| line.starts_with(text::agent::TREE_PAD)),
-        "输出区不画树、只用空白对齐：{text}"
+        text.lines().last().is_some_and(|line| {
+            line.starts_with(text::agent::TREE_LEAF) || line.starts_with(text::agent::TREE_PAD)
+        }),
+        "输出走同一棵树并收口：{text}"
     );
 }
 

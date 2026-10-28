@@ -438,6 +438,7 @@ pub(crate) fn view_summary(
         removed: summary.removed,
         matches: summary.matches,
         pattern: summary.pattern.clone(),
+        read_kind: summary.read_kind,
         read_lines: summary.read_lines,
         total_lines: summary.total_lines,
         truncated: summary.truncated,

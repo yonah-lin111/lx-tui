@@ -82,6 +82,7 @@ fn command_step(position: i64) -> AssistantStepView {
                 command: "cargo test --lib history".into(),
                 cwd: "/repo".into(),
                 tty: false,
+                duration_ms: None,
                 state: ProcessStateView::Exited { code: Some(0) },
                 output_preview: Vec::new(),
                 truncated: false,

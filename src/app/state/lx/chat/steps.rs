@@ -117,13 +117,18 @@ pub struct ToolSummary {
     pub added: Option<usize>,
     /// 删除行数。
     pub removed: Option<usize>,
-    /// 命中条目数（`search` 命中数 / 目录读取的条目数）。
+    /// 命中条目数（**只用于 `search`**；目录读取的条目数不再冒充命中数）。
     pub matches: Option<usize>,
     /// `search` 的搜索模式（**只来自调用参数**，结果体里没有）。
     ///
     /// 它是搜索行唯一有意义的「对什么搜」，没有它界面只剩一个「3 matches」的裸计数；
     /// 因此必须进摘要、并在结算/重载两条路径上都不被覆盖丢失。
     pub pattern: Option<String>,
+    /// `read` 的结果种类（文件 / 目录）。
+    ///
+    /// **只来自结果体**（`to_summary` 的 `kind` 字段 / 落库 JSON 的 `"kind"`）；
+    /// pending/running 或旧历史为 None，标题回退为 `Read`，绝不按路径猜。
+    pub read_kind: Option<crate::chat::tools::ReadKind>,
     /// `read` **实际读到的行数**（`end_line - start_line + 1`，只来自结果体）。
     ///
     /// 与 [`Self::total_lines`]（文件总行数 / 目录条目数）是两件不同的事：UI 的
@@ -158,6 +163,7 @@ impl Default for ToolSummary {
             removed: None,
             matches: None,
             pattern: None,
+            read_kind: None,
             read_lines: None,
             total_lines: None,
             truncated: false,
@@ -253,13 +259,14 @@ impl ToolSummary {
                 .filter(|path| !path.is_empty())
                 .map(truncate_summary);
         }
-        // `read` 的区间与「实际读到的行数」**只以结果体为准**（参数侧只是兜底，
+        // `read` 的区间、实际行数与目标种类**只以结果体为准**（参数侧只是兜底，
         // 见 `from_arguments`）：结果体给了 `kind` 就按它的区间口径改写——
         // 空文件（`start_line == 0`）与目录读取（`start_line` 是条目序号）都没有行区间。
         // 这里必须清掉参数侧推导值，否则重载路径清空、实时路径留着，两条路不一致。
         let kind = value.get("kind").and_then(serde_json::Value::as_str);
         match kind {
             Some("file") => {
+                self.read_kind = Some(crate::chat::tools::ReadKind::File);
                 let start = number("start_line").unwrap_or(0);
                 let end = number("end_line").unwrap_or(0);
                 if start > 0 {
@@ -271,15 +278,11 @@ impl ToolSummary {
                 }
             }
             Some("directory") => {
+                self.read_kind = Some(crate::chat::tools::ReadKind::Directory);
                 self.range = None;
                 self.read_lines = None;
-                // 条目数在结果体里叫 `total_lines`（没有 `matches` 数组），
-                // 映射到 `matches`，与 `to_summary` 的口径一致。
-                if self.matches.is_none()
-                    && let Some(entries) = number("total_lines")
-                {
-                    self.matches = Some(entries);
-                }
+                // 目录条目数**不再映射成 `matches`**：那是搜索命中数的字段，
+                // UI 也不显示目录条目数（只有路径）。
             }
             _ => {}
         }
@@ -424,6 +427,10 @@ impl ToolSummary {
         if result.matches.is_some() {
             self.matches = result.matches;
         }
+        // `read` 的种类是结果侧事实：结果给出了就覆盖参数侧（参数侧恒为 None）。
+        if result.read_kind.is_some() {
+            self.read_kind = result.read_kind;
+        }
         if result.added.is_some() {
             self.added = result.added;
         }
@@ -457,6 +464,7 @@ impl ToolSummary {
             && self.removed.is_none()
             && self.matches.is_none()
             && self.pattern.is_none()
+            && self.read_kind.is_none()
             && self.read_lines.is_none()
             && self.total_lines.is_none()
             && !self.truncated

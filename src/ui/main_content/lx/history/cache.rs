@@ -485,6 +485,11 @@ fn tool_signature(
         hash.write_usize(summary.removed.unwrap_or(usize::MAX));
         hash.write_usize(summary.matches.unwrap_or(usize::MAX));
         hash.write_str(summary.pattern.as_deref().unwrap_or(""));
+        hash.write_u8(match summary.read_kind {
+            None => 0,
+            Some(crate::chat::tools::ReadKind::File) => 1,
+            Some(crate::chat::tools::ReadKind::Directory) => 2,
+        });
         hash.write_usize(summary.read_lines.unwrap_or(usize::MAX));
         hash.write_usize(summary.total_lines.unwrap_or(usize::MAX));
         hash.write_u8(u8::from(summary.truncated));
@@ -553,6 +558,7 @@ fn tool_signature(
             hash.write_edges(&view.output_tail);
             hash.write_i64(view.started_at_ms.unwrap_or(-1));
             hash.write_i64(view.ended_at_ms.unwrap_or(-1));
+            hash.write_u64(view.duration_ms.unwrap_or(u64::MAX));
             hash.write_u64(view.process_session_id.unwrap_or(u64::MAX));
         }
         Some(ToolDetailView::Interaction(view)) => {
@@ -565,6 +571,7 @@ fn tool_signature(
             hash.write_edges(&view.output);
             process_state_signature(hash, view.state);
             hash.write_i64(view.exit_code.map_or(-1, i64::from));
+            hash.write_u64(view.duration_ms.unwrap_or(u64::MAX));
             hash.write_u8(u8::from(view.truncated));
             hash.write_u64(view.dropped_bytes);
         }
@@ -666,23 +673,6 @@ pub(crate) fn part_block_signature(
 ) -> u64 {
     let mut hash = Fnv::new();
     step_signature(&mut hash, source, message, message_index, step_index, step);
-    hash.finish()
-}
-
-/// 合并的文件工具组指纹：逐调用独立（含各自折叠状态）。
-pub(crate) fn group_block_signature(
-    source: super::source::HistorySource<'_>,
-    message: &ChatMessageView,
-    group: &[&ToolCallView],
-    expanded: &[bool],
-) -> u64 {
-    let mut hash = Fnv::new();
-    hash.write_usize(group.len());
-    for (index, call) in group.iter().enumerate() {
-        hash.write_usize(index);
-        tool_signature(&mut hash, source, message, call);
-        hash.write_u8(u8::from(expanded.get(index).copied().unwrap_or(false)));
-    }
     hash.finish()
 }
 

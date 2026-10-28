@@ -188,6 +188,7 @@ fn toggling_tool_detail_while_following_keeps_the_viewport() {
             command: "cargo test".into(),
             cwd: "/workspace".into(),
             tty: false,
+            duration_ms: None,
             state: ProcessStateView::Running,
             output_preview: Vec::new(),
             truncated: false,

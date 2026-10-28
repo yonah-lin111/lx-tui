@@ -1,55 +1,45 @@
-//! `exec_command` / `write_stdin` 卡片：标题 + 折行的命令（+ 终态输出）。
+//! `exec_command` / `write_stdin` 卡片：标题状态 + 命令 + 已保存输出。
 //!
 //! ```text
-//! ■ Run command · Exited 0
-//!   │  $ cargo test                 ← 参数区：折叠 2 行，展开更多（可独立折叠）
-//!   │  test result: ok. 24 passed   ← 输出区：首 3 + 尾 2 行预览（可独立折叠）
-//!   └─ … 18 more lines              ← 输出区自己的省略提示
+//! ■ Run command · Exited 0 · 241ms
+//!   ├─ $ cargo test
+//!   └─ test one ... ok
+//!      … 18 more lines
 //! ```
 //!
-//! - **两个可独立折叠的区域**：命令参数与命令输出各自有展开状态，
-//!   点其中一块不会连带另一块；折叠态一律 dim，**展开升为终端默认前景**，
-//!   两块同一口径（没有整行灰底，也不随鼠标悬停变色）；
-//! - **长任务（进程仍存活）只给一行引导**：命令 + `  └─ open task panel · live output`，
-//!   消息列表不铺任何输出——完整实时输出在后台任务面板里。整卡点击打开面板并定位
-//!   该进程；
-//! - **标题行**沿用文件工具同一套 `■ 动词` 语法；方块颜色/呼吸表达状态，
-//!   状态文字用 ` · ` 分隔紧跟在动词右侧；窄屏整项丢弃状态、再收敛动词；
-//! - **命令折行**：`$ 命令` 按可用列宽软换行，折叠态最多 2 个物理行、展开态铺开
-//!   全部（上限与普通工具详情一致）；输出同样按列宽折行并受同一份行预算约束；
-//! - `write_stdin` 保留「标题 + 命令」快照，不铺本次输出；
+//! - **标题右侧**放进程状态与耗时（`Exited 0 · 241ms` / `Running`），不再占树体行；
+//! - 命令参数与输出各是一块：命令是首节点，输出正文是最后一个多行节点（首行 `└─`，
+//!   其余行左对齐）；两个折叠块共用同一套连接符，不重复 `├─`/`└─`；
+//! - **长任务（进程仍存活）只给一行引导**：命令 + `open task panel · live output`，
+//!   消息列表不铺实时输出；整卡点击打开面板并定位该进程；
+//! - 执行阶段已截断（`truncated` / `dropped_bytes`）另列事实行，不混进
+//!   `… N more lines` 的 UI 省略数；
 //! - 卡片只读快照：不解析 JSON、不读进程、不读数据库。
 
+use std::borrow::Cow;
+
 use ratatui::layout::Rect;
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::{
-    CardSection, CommandView, ProcessStateView, ToolCallView, ToolDetailView, ToolStatus,
+    InteractionAction, ProcessStateView, ToolCallView, ToolDetailView, ToolStatus,
 };
 use crate::ui::{style, text};
 
 use super::super::{Grid, StepMark, visible_row, wrap};
 use super::file_summary::{DETAIL_MAX_ROWS, DETAIL_PREVIEW_ROWS};
-use super::{
-    Folds, TREE_COLS, header_with_verb, mark_of, output_style, param_lines, put_segments,
-    single_line, title_rows, truncate_with_ellipsis,
-};
+use super::tree::{self, Node, Preview, Section};
+use super::{Folds, Segment, header_with_verb, mark_of, output_style, single_line, title_rows};
 
 /// 单行取样上限（限住每帧成本）。
 const SAMPLE_CHARS: usize = 512;
-/// 终态折叠预览的物理行：首 [`OUTPUT_PREVIEW_HEAD`] + 尾 [`OUTPUT_PREVIEW_TAIL`]，
-/// 与本地命令卡片同一口径（中间的省略由末行 `… N more lines` 说明）。
+/// 终态折叠预览的物理行：首 [`OUTPUT_PREVIEW_HEAD`] + 尾 [`OUTPUT_PREVIEW_TAIL`]。
 const OUTPUT_PREVIEW_HEAD: usize = 3;
 const OUTPUT_PREVIEW_TAIL: usize = 2;
-/// 树体行首连接符两侧的缩进（与 [`TREE_COLS`] 同口径：`  │  ` = 2 + 1 + 2）。
-const TREE_INDENT: usize = 2;
 
-/// 树体两块的行数（标题之外）。
+/// 树体两块的行数（标题之外）：命令参数与「输入 + 输出」块。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct Blocks {
-    /// 命令参数。
     pub(super) params: usize,
-    /// 输出（运行中只有一行引导）。
     pub(super) output: usize,
 }
 
@@ -67,38 +57,20 @@ pub(super) fn blocks(call: &ToolCallView, width: u16, folds: Folds) -> Blocks {
     if width == 0 {
         return Blocks::default();
     }
-    match call.detail.as_deref() {
-        Some(ToolDetailView::Command(view)) => Blocks {
-            params: command_body(&view.command, width, folds.body).len(),
-            output: if view.state.is_running() {
-                // 长任务：只有一行「open task panel · live output」。
-                1
-            } else {
-                finished_output(view, width, folds.output).len()
-            },
-        },
-        Some(ToolDetailView::Interaction(view)) => Blocks {
-            params: command_body(&view.command, width, folds.body).len(),
-            output: 0,
-        },
-        _ => Blocks::default(),
+    let (params, output) = sections(call, width, folds);
+    Blocks {
+        params: tree::layout(&params, width).rows.len(),
+        output: tree::layout(&output, width).rows.len(),
     }
 }
 
-/// 命令参数区展开后是否**真的多出内容**（不能多时点击不登记）。
+/// 命令参数区展开后是否**真的多出内容**。
 pub(super) fn params_expandable(call: &ToolCallView, width: u16) -> bool {
     if width == 0 {
         return false;
     }
-    let command = match call.detail.as_deref() {
-        Some(ToolDetailView::Command(view)) => &view.command,
-        Some(ToolDetailView::Interaction(view)) => &view.command,
-        _ => return false,
-    };
-    // 只比**内容行**：折叠态的 `… N more lines` 提示行是折叠的一部分，不是内容。
-    // 用总行数比会漏判——展开只比预览多一行时，两边总行数相等（提示行换成了正文），
-    // 卡片却写着「还有 N 行」，点了没反应。
-    command_body(command, width, true).len() > DETAIL_PREVIEW_ROWS
+    // 折叠态（preview）才有隐藏行；`false` 表示展开，不能用来判定可展开。
+    tree::layout(&[param_section(call, true)], width).hidden > 0
 }
 
 /// 输出区展开后是否**真的多出内容**。
@@ -106,117 +78,206 @@ pub(super) fn output_expandable(call: &ToolCallView, width: u16) -> bool {
     if width == 0 {
         return false;
     }
-    let Some(ToolDetailView::Command(view)) = call.detail.as_deref() else {
-        return false;
-    };
-    if view.state.is_running() {
-        return false;
-    }
-    // 同上：折叠预览末尾的「… N more lines」不算内容。输出恰好比预览多 1 行时，
-    // 折叠态是「首 3 + 尾 2 + 提示行」= 6 行，展开态也是 6 行，按总行数比会判成不可展开。
-    let rows = output_lines(&view.output_tail, output_width(width)).len();
-    rows.min(DETAIL_MAX_ROWS) > rows.min(OUTPUT_PREVIEW_HEAD + OUTPUT_PREVIEW_TAIL)
+    let (_, output) = sections(call, width, Folds::default());
+    output_section_hidden(&output, width)
 }
 
-/// 整张卡片的树体（未加连接符）：命令参数、输出（或运行中的引导行）。
-///
-/// 与 [`draw`]、[`rows`]、[`blocks`] 共用同一份构造：行数口径只有一个来源。
-fn body_rows(call: &ToolCallView, width: u16, folds: Folds) -> Vec<BodyRow> {
-    match call.detail.as_deref() {
-        Some(ToolDetailView::Command(view)) => {
-            let mut out = command_body(&view.command, width, folds.body);
-            if view.state.is_running() {
-                out.push(guide_row());
-            } else {
-                out.extend(finished_output(view, width, folds.output));
-            }
-            out
+fn output_section_hidden(sections: &[Section], width: u16) -> bool {
+    sections.iter().any(|section| {
+        !section.nodes.is_empty() && tree::layout(std::slice::from_ref(section), width).hidden > 0
+    })
+}
+
+/// 取出命令文本（`exec_command` 与 `write_stdin` 共用）。
+fn command_of(call: &ToolCallView) -> Option<&str> {
+    match call.detail.as_deref()? {
+        ToolDetailView::Command(view) => Some(view.command.as_str()),
+        ToolDetailView::Interaction(view) => Some(view.command.as_str()),
+        _ => None,
+    }
+}
+
+/// 标题右侧状态：`Exited 0 · 241ms` / `Running` / `Interrupted · 302ms`。
+fn title_status(state: ProcessStateView, duration_ms: Option<u64>) -> String {
+    let mut parts = Vec::new();
+    if state.is_running() {
+        parts.push(text::agent::proc_state_label(state).to_string());
+    } else {
+        parts.push(text::agent::proc_exit_label(state));
+        if let Some(duration) = duration_ms {
+            parts.push(text::agent::duration_label(duration));
         }
-        Some(ToolDetailView::Interaction(view)) => command_body(&view.command, width, folds.body),
-        _ => Vec::new(),
     }
+    parts.join(text::LX_CHAT_TOOL_STATUS_SEP)
 }
 
-/// 命令参数区（`$ 命令`）：恒为浅黄，不随 hover / 展开变色。
-fn command_body(command: &str, width: u16, expanded: bool) -> Vec<BodyRow> {
-    // 已带提示符就不重复（调用方可能传入完整命令行）。
+/// 命令参数块：`$ 命令`；运行中把引导语作为同一节点的续行。
+fn param_section(call: &ToolCallView, folded: bool) -> Section {
+    let Some(command) = command_of(call) else {
+        return Section::new(Vec::new(), None);
+    };
     let text = if command.starts_with(text::agent::COMMAND_PROMPT_PREFIX) {
         command.to_string()
     } else {
         format!("{}{command}", text::agent::COMMAND_PROMPT_PREFIX)
     };
-    param_lines(&text, width, expanded)
-        .into_iter()
-        .map(|line| BodyRow {
-            text: line.text,
-            style: line.style,
-            sample: SAMPLE_CHARS,
-            section: CardSection::Body,
-        })
-        .collect()
+    // 命令是用户/模型给出的单个字段：折行与省略都由 tree 统一算，保证
+    // `… N more lines` 与展开后的真实行数一致。
+    let text = single_line(&text, SAMPLE_CHARS * DETAIL_MAX_ROWS);
+    let mut lines = vec![vec![Segment::new(text, style::chat_tool_param())]];
+    if let Some(ToolDetailView::Command(view)) = call.detail.as_deref()
+        && view.state.is_running()
+    {
+        lines.push(vec![Segment::new(
+            text::agent::TASK_OPEN_GUIDE,
+            output_style(false),
+        )]);
+    }
+    Section::new(
+        vec![Node::block(lines)],
+        folded.then(|| Preview::head(DETAIL_PREVIEW_ROWS)),
+    )
 }
 
-/// 终态输出：折叠态首 [`OUTPUT_PREVIEW_HEAD`] + 尾 [`OUTPUT_PREVIEW_TAIL`] 行 + 省略行；
-/// 展开态铺开已保存输出（上限 [`DETAIL_MAX_ROWS`]）。
-fn finished_output(view: &CommandView, width: u16, expanded: bool) -> Vec<BodyRow> {
-    let rows = output_lines(&view.output_tail, output_width(width));
-    if rows.is_empty() {
-        return Vec::new();
+/// 输出块：已保存输出按列宽折行，整块是一个多行节点；折叠首尾预览。
+fn output_section(
+    output: &str,
+    width: u16,
+    folded: bool,
+    truncated: bool,
+    dropped: u64,
+) -> Option<Section> {
+    let body_width = tree::content_width(width);
+    let mut lines: Vec<Vec<Segment>> =
+        output_lines(output, u16::try_from(body_width).unwrap_or(u16::MAX))
+            .into_iter()
+            .map(|line| vec![Segment::new(line, output_style(!folded))])
+            .collect();
+    if truncated {
+        lines.push(vec![Segment::new(
+            text::agent::OUTPUT_LIMITED,
+            style::agent_warn(),
+        )]);
     }
-    let style = output_style(expanded);
-    let visible = if expanded {
-        rows.len().min(DETAIL_MAX_ROWS)
-    } else if rows.len() <= OUTPUT_PREVIEW_HEAD + OUTPUT_PREVIEW_TAIL {
-        rows.len()
-    } else {
-        OUTPUT_PREVIEW_HEAD + OUTPUT_PREVIEW_TAIL
-    };
-    let mut out: Vec<BodyRow> = Vec::with_capacity(visible + 1);
-    for index in 0..visible {
-        let text = if !expanded && index >= OUTPUT_PREVIEW_HEAD {
-            // 折叠预览的尾部：接在首部之后，跳过中间被省略的行。
-            rows[rows.len() - (visible - index)].clone()
-        } else {
-            rows[index].clone()
-        };
-        out.push(BodyRow {
-            text,
-            style,
-            sample: SAMPLE_CHARS,
-            section: CardSection::Output,
-        });
+    if dropped > 0 {
+        lines.push(vec![Segment::new(
+            text::agent::dropped_bytes_label(dropped),
+            style::agent_warn(),
+        )]);
     }
-    // 折叠态末尾写省略行数：它是「还能展开」的唯一文案，与折叠输出同档。
-    let shown = if expanded { rows.len() } else { visible };
-    if !expanded && rows.len() > shown {
-        out.push(BodyRow {
-            text: text::agent::file_diff_more_lines(rows.len() - shown),
-            style: output_style(false),
-            sample: SAMPLE_CHARS,
-            section: CardSection::Output,
-        });
+    if lines.is_empty() {
+        return None;
+    }
+    Some(Section::new(
+        vec![Node::block(lines)],
+        folded.then(|| Preview::head_tail(OUTPUT_PREVIEW_HEAD, OUTPUT_PREVIEW_TAIL)),
+    ))
+}
+
+/// 输入预览的转义还原（`preview_input` 只转义控制字符）：用于判断输出是否只是回显。
+fn unescape_input(preview: &str) -> String {
+    let mut out = String::with_capacity(preview.len());
+    let mut chars = preview.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('\\') => out.push('\\'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
     }
     out
 }
 
-/// 运行中的引导行：长任务只留这一行，点卡片打开后台任务面板看完整实时输出。
-fn guide_row() -> BodyRow {
-    BodyRow {
-        text: text::agent::TASK_OPEN_GUIDE.to_string(),
-        style: output_style(false),
-        sample: SAMPLE_CHARS,
-        section: CardSection::Output,
+/// 去掉输出里对输入的原样回显：`cat` 这类 TTY 会同时给出 input 与 echo。
+///
+/// 只删除**逐行完全相同**的回显；输入以后的真实响应仍然保留。返回空串表示整段
+/// 输出都只是回显，调用方不再生成输出节点。
+fn without_echoed_input(input_preview: &str, output: &str) -> String {
+    let input = unescape_input(input_preview);
+    let echoes: Vec<&str> = input
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if echoes.is_empty() {
+        return output.to_string();
     }
+    let mut kept = Vec::new();
+    for line in output.lines() {
+        if echoes.contains(&line.trim_end()) {
+            continue;
+        }
+        kept.push(line);
+    }
+    kept.join("\n")
 }
 
-/// 输出正文可用列数（与命令行共用树体前缀让位）。
-fn output_width(width: u16) -> u16 {
-    width
-        .saturating_sub(u16::try_from(TREE_COLS).unwrap_or(u16::MAX))
-        .max(1)
+/// 卡片的两块（参数 / 输入+输出），与 [`draw`] 共用。
+fn sections(call: &ToolCallView, width: u16, folds: Folds) -> (Vec<Section>, Vec<Section>) {
+    let params = vec![param_section(call, !folds.body)];
+    let mut output = Vec::new();
+    match call.detail.as_deref() {
+        Some(ToolDetailView::Command(view)) => {
+            if !view.state.is_running()
+                && let Some(section) = output_section(
+                    &view.output_tail,
+                    width,
+                    !folds.output,
+                    view.truncated,
+                    view.dropped_bytes,
+                )
+            {
+                output.push(section);
+            }
+        }
+        Some(ToolDetailView::Interaction(view)) => {
+            let input = if view.action == InteractionAction::SendInput {
+                view.input_preview
+                    .as_deref()
+                    .filter(|input| !input.is_empty())
+            } else {
+                None
+            };
+            if let Some(input) = input {
+                output.push(Section::new(
+                    vec![Node::text(
+                        single_line(input, SAMPLE_CHARS * DETAIL_MAX_ROWS),
+                        output_style(folds.output),
+                    )],
+                    (!folds.output)
+                        .then(|| Preview::head_tail(OUTPUT_PREVIEW_HEAD, OUTPUT_PREVIEW_TAIL)),
+                ));
+            }
+            let body: Cow<'_, str> = match input {
+                Some(input) => Cow::Owned(without_echoed_input(input, &view.output)),
+                None => Cow::Borrowed(view.output.as_str()),
+            };
+            if let Some(section) = output_section(
+                &body,
+                width,
+                !folds.output,
+                view.truncated,
+                view.dropped_bytes,
+            ) {
+                output.push(section);
+            }
+        }
+        _ => {}
+    }
+    (params, output)
 }
 
-/// 输出按列宽折行（末尾空行不占位）。
+/// 输出正文按列宽折行（末尾空行不占位）。
 fn output_lines(output: &str, width: u16) -> Vec<String> {
     if output.is_empty() {
         return Vec::new();
@@ -228,26 +289,13 @@ fn output_lines(output: &str, width: u16) -> Vec<String> {
             rows.push(String::new());
             continue;
         }
-        rows.extend(wrap(line, width));
+        let line = super::sample_output_line(line);
+        rows.extend(wrap(&line, width));
     }
     while rows.last().is_some_and(String::is_empty) {
         rows.pop();
     }
     rows
-}
-
-/// 树体的一行：**未加连接符**的内容 + 着色档位 + 所属区块。
-///
-/// 连接符由 [`draw_body`] 统一补：参数区内部用 `  │  `、参数区最后一行收口
-/// `  └─ `；**输出区不画连接符**（只用等宽空白对齐），即 `└─` 只包裹参数部分。
-#[derive(Clone)]
-struct BodyRow {
-    text: String,
-    style: ratatui::style::Style,
-    /// 单行化后的取样上限（命令可能很长）。
-    sample: usize,
-    /// 该行属于哪一块：参数区收口，输出区不画树。
-    section: CardSection,
 }
 
 /// 绘制命令或交互卡片；推进的行数必须与 [`rows`] 严格相等。
@@ -263,42 +311,17 @@ pub(super) fn draw(
     animating: bool,
 ) {
     if rect.width == 0 {
-        // 宽度 0：与 [`rows`] 一致地不占行（外层布局已跳过该块）。
         return;
     }
-    match call.detail.as_deref() {
+    let (verb, state, duration) = match call.detail.as_deref() {
         Some(ToolDetailView::Command(view)) => {
-            let status = process_status(view.state);
-            let mark = process_mark(call, view.state, loading_frame);
-            draw_title(
-                grid,
-                rect,
-                scroll,
-                row_index,
-                call,
-                loading_frame,
-                animating,
-                text::agent::VERB_EXEC_COMMAND,
-                status,
-                mark,
-            );
+            (text::agent::VERB_EXEC_COMMAND, view.state, view.duration_ms)
         }
-        Some(ToolDetailView::Interaction(view)) => {
-            let status = process_status(view.state);
-            let mark = process_mark(call, view.state, loading_frame);
-            draw_title(
-                grid,
-                rect,
-                scroll,
-                row_index,
-                call,
-                loading_frame,
-                animating,
-                text::agent::interaction_verb(view.action),
-                status,
-                mark,
-            );
-        }
+        Some(ToolDetailView::Interaction(view)) => (
+            text::agent::interaction_verb(view.action),
+            view.state,
+            view.duration_ms,
+        ),
         _ => {
             if let Some(y) = visible_row(rect, scroll, *row_index) {
                 let status = plain_status_label(call.status);
@@ -310,25 +333,44 @@ pub(super) fn draw(
                     text::agent::VERB_EXEC_COMMAND,
                     status,
                 );
-                put_segments(grid, rect.x, y, rect.width, &segments);
+                super::put_segments(grid, rect.x, y, rect.width, &segments);
             }
             *row_index += 1;
             return;
         }
+    };
+    let mark = match call.detail.as_deref() {
+        Some(ToolDetailView::Command(_)) | Some(ToolDetailView::Interaction(_)) => {
+            process_mark(call, state, loading_frame)
+        }
+        _ => mark_of(call.status, loading_frame),
+    };
+    if let Some(y) = visible_row(rect, scroll, *row_index) {
+        let segments = super::header_with_mark(
+            call,
+            rect.width,
+            loading_frame,
+            animating,
+            verb,
+            Some(title_status(state, duration)),
+            mark,
+        );
+        super::put_segments(grid, rect.x, y, rect.width, &segments);
     }
-    draw_body(
+    *row_index += 1;
+    let (params, output) = sections(call, rect.width, folds);
+    let mut all = params;
+    all.extend(output);
+    tree::draw(
         grid,
         rect,
         scroll,
         row_index,
-        &body_rows(call, rect.width, folds),
+        &tree::layout(&all, rect.width).rows,
     );
 }
 
-/// 进程存活时标题的橙色档位（决策 1：橙 = 还在跑，绿 = 停了）。
-///
-/// 判据是**进程状态**而不是工具的结算状态：命令交回后台后工具已 `Completed`，
-/// 但进程仍在跑，此时必须继续显示橙色。
+/// 进程存活时标题的橙色档位（橙 = 还在跑，绿 = 停了）。
 fn process_mark(call: &ToolCallView, state: ProcessStateView, loading_frame: usize) -> StepMark {
     if state.is_running() && call.status != ToolStatus::Failed {
         StepMark::Alive
@@ -337,103 +379,396 @@ fn process_mark(call: &ToolCallView, state: ProcessStateView, loading_frame: usi
     }
 }
 
-/// 标题行（`■ 动词 · 状态`）；推进 1 行。
-#[allow(clippy::too_many_arguments)]
-fn draw_title(
-    grid: &mut Grid,
-    rect: Rect,
-    scroll: usize,
-    row_index: &mut usize,
-    call: &ToolCallView,
-    loading_frame: usize,
-    animating: bool,
-    verb: &str,
-    status: Option<String>,
-    mark: StepMark,
-) {
-    if let Some(y) = visible_row(rect, scroll, *row_index) {
-        let segments = super::header_with_mark(
-            call,
-            rect.width,
-            loading_frame,
-            animating,
-            verb,
-            status,
-            mark,
-        );
-        put_segments(grid, rect.x, y, rect.width, &segments);
-    }
-    *row_index += 1;
-}
-
-/// 绘制树体：参数区内部 `  │  `、参数区最后一行 `  └─ `，输出区只留等宽空白。
-///
-/// `└─` 只包裹**参数部分**（与文件工具的 `└─ 详情` 同口径）；输出内容是正文，
-/// 继续缩进在参数之下的内容列，但不画连接符。推进的行数 = `body.len()`。
-fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, body: &[BodyRow]) {
-    let limit = usize::from(rect.width);
-    // 参数区的最后一行收口；没有参数行时整段都不画树。
-    let params_last = body
-        .iter()
-        .rposition(|row| row.section == CardSection::Body);
-    let content_x = rect
-        .x
-        .saturating_add(u16::try_from(TREE_COLS).unwrap_or(u16::MAX));
-    for (index, row) in body.iter().enumerate() {
-        if let Some(y) = visible_row(rect, scroll, *row_index) {
-            // 连接符：`  │  ` / `  └─ `。`│` 与 `└` 落在同一列，树干连成一条线。
-            let bar_style = style::chat_notice_connector();
-            let indent = u16::try_from(TREE_INDENT).unwrap_or(0);
-            let bar = match params_last {
-                Some(last) if index < last => Some(text::agent::MARKER_TREE_BAR),
-                Some(last) if index == last => Some(text::agent::MARKER_TREE_LEAF),
-                _ => None,
-            };
-            if let Some(marker) = bar {
-                grid.put_clipped(rect.x, y, &" ".repeat(TREE_INDENT), bar_style, rect.width);
-                grid.put_clipped(
-                    rect.x.saturating_add(indent),
-                    y,
-                    marker,
-                    bar_style,
-                    rect.width.saturating_sub(indent),
-                );
-            }
-            let content_cols = limit.saturating_sub(TREE_COLS);
-            let single = single_line(&row.text, row.sample);
-            let content = if single.width() <= content_cols {
-                single
-            } else {
-                truncate_with_ellipsis(&single, content_cols)
-            };
-            grid.put_clipped(
-                content_x,
-                y,
-                &content,
-                row.style,
-                rect.width
-                    .saturating_sub(u16::try_from(TREE_COLS).unwrap_or(u16::MAX)),
-            );
-        }
-        *row_index += 1;
-    }
-}
-
-/// 进程状态文案：`Running` / `Exited 0` / `exit 2`。
-///
-/// **不显示运行时长**。时长只在后台任务面板里给（那里会定时刷新），因为：
-///
-/// 1. 消息列表是历史记录，一张卡片的时长每帧都在变会让整段历史"活起来"，
-///    滚动与复制时都不稳定；
-/// 2. 时长属于"现在还有几个服务在跑、各自跑了多久"这件事，面板才是回答它的地方。
-fn process_status(state: ProcessStateView) -> Option<String> {
-    Some(text::agent::proc_exit_label(state))
-}
-
 /// 没有类型化详情时的状态词（例如只有失败错误的卡片）。
 fn plain_status_label(status: ToolStatus) -> Option<String> {
     match status {
         ToolStatus::Completed | ToolStatus::Failed => None,
         other => Some(text::tool_status_label(other).to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::state::{
+        CommandView, InteractionAction, ProcessInteractionView, ProcessStateView, ToolDetailView,
+    };
+
+    pub(super) fn command_call(
+        state: ProcessStateView,
+        output: &str,
+        duration_ms: Option<u64>,
+    ) -> ToolCallView {
+        ToolCallView {
+            call_id: "call-1".into(),
+            name: "exec_command".into(),
+            position: 0,
+            arguments_json: "{}".into(),
+            status: ToolStatus::Completed,
+            summary: None,
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::Command(CommandView {
+                process_session_id: Some(1),
+                command: "cargo test".into(),
+                cwd: "/w".into(),
+                tty: false,
+                state,
+                duration_ms,
+                output_preview: Vec::new(),
+                truncated: false,
+                dropped_bytes: 0,
+                output_tail: output.to_string(),
+                started_at_ms: None,
+                ended_at_ms: None,
+            }))),
+        }
+    }
+
+    #[test]
+    fn finished_command_is_a_tree_with_status_duration_and_output() {
+        let call = command_call(
+            ProcessStateView::Exited { code: Some(2) },
+            "boom\n",
+            Some(1_200),
+        );
+        let text = flat(&call, 60, Folds::default());
+        let title = text.lines().next().unwrap_or("");
+        assert!(title.contains("Run command"), "{text}");
+        assert!(title.contains("exit 2"), "状态在标题右侧：{text}");
+        assert!(title.contains("1.2s"), "耗时在标题右侧：{text}");
+        assert!(text.contains("$ cargo test"), "{text}");
+        assert!(text.contains("boom"), "{text}");
+    }
+
+    #[test]
+    fn running_command_hides_output_and_points_at_the_panel() {
+        let output: String = (0..20).map(|n| format!("line {n}\n")).collect();
+        let mut call = command_call(ProcessStateView::Running, &output, None);
+        call.status = ToolStatus::Running;
+        let text = flat(&call, 60, Folds::default());
+        assert!(text.contains("Running"), "{text}");
+        assert!(text.contains(text::agent::TASK_OPEN_GUIDE), "{text}");
+        assert!(!text.contains("line 0"), "{text}");
+        assert!(!text.contains("more lines"), "{text}");
+    }
+
+    #[test]
+    fn interaction_shows_saved_output_and_status() {
+        let call = ToolCallView {
+            call_id: "call-2".into(),
+            name: "write_stdin".into(),
+            position: 0,
+            arguments_json: "{}".into(),
+            status: ToolStatus::Completed,
+            summary: None,
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::Interaction(
+                ProcessInteractionView {
+                    action: InteractionAction::ReadOutput,
+                    process_session_id: 1,
+                    command: "cargo test".into(),
+                    input_preview: None,
+                    output: "late output\n".into(),
+                    state: ProcessStateView::Running,
+                    exit_code: None,
+                    duration_ms: None,
+                    truncated: false,
+                    dropped_bytes: 0,
+                },
+            ))),
+        };
+        let text = flat(&call, 60, Folds::default());
+        assert!(text.contains(text::agent::VERB_READ_OUTPUT), "{text}");
+        assert!(text.contains("Running"), "{text}");
+        assert!(text.contains("late output"), "{text}");
+        assert!(text.contains("$ cargo test"), "{text}");
+    }
+
+    #[test]
+    fn output_preview_keeps_head_tail_and_counts_hidden_rows() {
+        let output: String = (0..20).map(|n| format!("line {n}\n")).collect();
+        let call = command_call(ProcessStateView::Exited { code: Some(0) }, &output, None);
+        let text = flat(&call, 40, Folds::default());
+        assert!(
+            text.contains("line 0") && text.contains("line 19"),
+            "{text}"
+        );
+        assert!(text.contains("more lines"), "{text}");
+        assert!(output_expandable(&call, 40));
+        assert!(
+            !output_expandable(&call, 40)
+                || rows(&call, 40, folds(true)) > rows(&call, 40, folds(false))
+        );
+    }
+
+    /// 参数与输出各是一个节点：命令首行 `├─`、输出首行 `└─`，输出其余行左对齐。
+    #[test]
+    fn folded_blocks_use_per_node_connectors() {
+        let output: String = (0..20).map(|n| format!("line {n}\n")).collect();
+        let mut call = command_call(ProcessStateView::Exited { code: Some(0) }, &output, None);
+        if let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
+            view.command = format!("echo {}", "y".repeat(300));
+        }
+        for expanded in [false, true] {
+            let text = flat(
+                &call,
+                60,
+                Folds {
+                    body: expanded,
+                    output: expanded,
+                },
+            );
+            let rows: Vec<&str> = text.lines().collect();
+            assert!(rows.len() > 4, "{text}");
+            assert!(
+                rows[1].starts_with(text::agent::TREE_BRANCH),
+                "折叠 {expanded}：命令首行是分支：{text}"
+            );
+            let output_row = rows
+                .iter()
+                .position(|line| line.contains("line 0"))
+                .unwrap_or_else(|| panic!("缺少输出首行：{text}"));
+            assert!(
+                rows[output_row].starts_with(text::agent::TREE_LEAF),
+                "折叠 {expanded}：输出首行收口：{text}"
+            );
+            assert!(
+                rows[output_row + 1..]
+                    .iter()
+                    .all(|line| line.starts_with(text::agent::TREE_PAD)),
+                "折叠 {expanded}：输出续行左对齐：{text}"
+            );
+            assert_eq!(
+                text.matches(text::agent::TREE_BRANCH).count(),
+                1,
+                "折叠 {expanded}：命令只占一个分支符：{text}"
+            );
+            assert_eq!(
+                text.matches(text::agent::TREE_LEAF).count(),
+                1,
+                "折叠 {expanded}：输出只占一个收口符：{text}"
+            );
+        }
+    }
+
+    /// `Send input`：标题给状态，正文是命令 + 输入（输入是最后一个节点）。
+    #[test]
+    fn send_input_shows_the_input_after_the_command() {
+        let call = ToolCallView {
+            call_id: "call-3".into(),
+            name: "write_stdin".into(),
+            position: 0,
+            arguments_json: "{}".into(),
+            status: ToolStatus::Running,
+            summary: None,
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::Interaction(
+                ProcessInteractionView {
+                    action: InteractionAction::SendInput,
+                    process_session_id: 1,
+                    command: "bc".into(),
+                    input_preview: Some("2+3*4\\n".into()),
+                    output: String::new(),
+                    state: ProcessStateView::Running,
+                    exit_code: None,
+                    duration_ms: None,
+                    truncated: false,
+                    dropped_bytes: 0,
+                },
+            ))),
+        };
+        let text = flat(&call, 60, Folds::default());
+        let rows: Vec<&str> = text.lines().collect();
+        assert!(rows[0].contains("Send input"), "{text}");
+        assert!(rows[0].contains("Running"), "{text}");
+        assert!(rows[1].contains("$ bc"), "{text}");
+        assert!(rows[1].starts_with(text::agent::TREE_BRANCH), "{text}");
+        assert!(rows[2].contains("2+3*4"), "{text}");
+        assert!(rows[2].starts_with(text::agent::TREE_LEAF), "{text}");
+        let input_style = |expanded: bool| {
+            let (_, output) = sections(
+                &call,
+                60,
+                Folds {
+                    body: false,
+                    output: expanded,
+                },
+            );
+            tree::layout(&output, 60).rows[0].segments[0].style
+        };
+        assert_eq!(input_style(false), style::muted(), "默认折叠态是灰色");
+        assert_eq!(input_style(true), style::text(), "展开后是默认前景色");
+    }
+
+    /// TTY 回显与输入相同：只显示输入，不重复输出。
+    #[test]
+    fn send_input_does_not_repeat_the_echoed_input() {
+        let call = ToolCallView {
+            call_id: "call-4".into(),
+            name: "write_stdin".into(),
+            position: 0,
+            arguments_json: "{}".into(),
+            status: ToolStatus::Completed,
+            summary: None,
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::Interaction(
+                ProcessInteractionView {
+                    action: InteractionAction::SendInput,
+                    process_session_id: 1,
+                    command: "cat".into(),
+                    input_preview: Some("hello\\n".into()),
+                    output: "hello\n".into(),
+                    state: ProcessStateView::Interrupted,
+                    exit_code: None,
+                    duration_ms: Some(1_500),
+                    truncated: false,
+                    dropped_bytes: 0,
+                },
+            ))),
+        };
+        let text = flat(&call, 60, Folds::default());
+        let title = text.lines().next().unwrap_or("");
+        assert!(title.contains("Send input"), "{text}");
+        assert!(
+            title.contains("Interrupted") && title.contains("1.5s"),
+            "{text}"
+        );
+        assert_eq!(
+            text.matches("hello").count(),
+            1,
+            "回显与输入只保留一份：{text}"
+        );
+        assert!(text.contains("hello\\n"), "保留输入预览：{text}");
+    }
+
+    /// 回显之后还有真实响应：删掉回显行，保留响应。
+    #[test]
+    fn send_input_keeps_only_the_response_after_the_echo() {
+        let call = ToolCallView {
+            call_id: "call-5".into(),
+            name: "write_stdin".into(),
+            position: 0,
+            arguments_json: "{}".into(),
+            status: ToolStatus::Completed,
+            summary: None,
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::Interaction(
+                ProcessInteractionView {
+                    action: InteractionAction::SendInput,
+                    process_session_id: 1,
+                    command: "cat".into(),
+                    input_preview: Some("hello\\n".into()),
+                    output: "hello\nworld\n".into(),
+                    state: ProcessStateView::Running,
+                    exit_code: None,
+                    duration_ms: None,
+                    truncated: false,
+                    dropped_bytes: 0,
+                },
+            ))),
+        };
+        let text = flat(&call, 60, Folds::default());
+        assert_eq!(text.matches("hello").count(), 1, "回显不重复：{text}");
+        assert!(text.contains("world"), "后续响应仍显示：{text}");
+    }
+
+    #[test]
+    fn truncation_facts_are_separate_nodes() {
+        let mut call = command_call(ProcessStateView::Exited { code: Some(0) }, "tail\n", None);
+        if let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
+            view.truncated = true;
+            view.dropped_bytes = 512;
+        }
+        let text = flat(&call, 60, Folds::default());
+        assert!(text.contains(text::agent::OUTPUT_LIMITED), "{text}");
+        assert!(text.contains("earlier bytes dropped"), "{text}");
+    }
+
+    #[test]
+    fn params_and_output_fold_independently() {
+        let output: String = (0..20).map(|n| format!("line {n}\n")).collect();
+        let mut call = command_call(ProcessStateView::Exited { code: Some(0) }, &output, None);
+        if let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
+            view.command = format!("echo {}", "y".repeat(200));
+        }
+        let folded = rows(&call, 40, Folds::default());
+        let params = rows(
+            &call,
+            40,
+            Folds {
+                body: true,
+                output: false,
+            },
+        );
+        let out = rows(
+            &call,
+            40,
+            Folds {
+                body: false,
+                output: true,
+            },
+        );
+        assert!(params > folded);
+        assert!(out > folded);
+        assert_ne!(params, out);
+    }
+
+    fn folds(expanded: bool) -> Folds {
+        Folds {
+            body: expanded,
+            output: expanded,
+        }
+    }
+
+    pub(super) fn flat(call: &ToolCallView, width: u16, folds: Folds) -> String {
+        let rect = Rect::new(0, 0, width, 80);
+        let mut grid = Grid::new(rect);
+        let mut row = 0;
+        draw(&mut grid, rect, 0, &mut row, call, 0, folds, false);
+        assert_eq!(row, rows(call, width, folds));
+        let mut text = String::new();
+        for y in 0..u16::try_from(row).unwrap_or(0) {
+            for x in 0..width {
+                text.push(grid.cell(x, y).ch);
+            }
+            text.push('\n');
+        }
+        text
+    }
+}
+
+#[cfg(test)]
+mod line_bound_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_single_output_line_is_sampled_with_an_ellipsis() {
+        let line = "x".repeat(super::super::MAX_OUTPUT_LINE_CHARS + 100);
+        let call = command_call(
+            ProcessStateView::Exited { code: Some(0) },
+            &format!("{line}\n"),
+            None,
+        );
+        let total = rows(&call, 80, Folds::default());
+        assert!(total <= 200, "单行输出必须有界：{total} 行");
+        let text = flat(&call, 80, Folds::default());
+        assert!(text.contains('…'), "截断必须显式标出：{text}");
+    }
+
+    fn command_call(
+        state: ProcessStateView,
+        output: &str,
+        duration_ms: Option<u64>,
+    ) -> ToolCallView {
+        super::tests::command_call(state, output, duration_ms)
+    }
+
+    pub(super) fn flat(call: &ToolCallView, width: u16, folds: Folds) -> String {
+        super::tests::flat(call, width, folds)
     }
 }

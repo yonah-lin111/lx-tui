@@ -28,12 +28,6 @@ pub(crate) enum BlockSource {
         message_index: usize,
         step_index: usize,
     },
-    /// 合并的文件工具组（连续同种调用）。
-    Group {
-        message_index: usize,
-        first_step: usize,
-        count: usize,
-    },
     /// 本地命令卡片（整条消息一个块）。
     Shell { message_index: usize },
     /// 消息底部通知。
@@ -218,29 +212,22 @@ fn step_of(
     }
 }
 
-/// 合并组的调用列表（单调用时长度为 1）。
+/// 单个工具块对应的调用（非工具块返回空）。
 fn calls_of(history: HistorySource<'_>, source: BlockSource) -> Vec<&ToolCallView> {
-    let (message_index, first_step, count) = match source {
-        BlockSource::Step {
-            message_index,
-            step_index,
-        } => (message_index, step_index, 1),
-        BlockSource::Group {
-            message_index,
-            first_step,
-            count,
-        } => (message_index, first_step, count),
-        _ => return Vec::new(),
+    let BlockSource::Step {
+        message_index,
+        step_index,
+    } = source
+    else {
+        return Vec::new();
     };
     let Some(message) = history.messages.get(message_index) else {
         return Vec::new();
     };
-    (0..count)
-        .filter_map(|offset| match message.steps.get(first_step + offset)? {
-            AssistantStepView::Tool { call, .. } => Some(call),
-            AssistantStepView::Part { .. } => None,
-        })
-        .collect()
+    match message.steps.get(step_index) {
+        Some(AssistantStepView::Tool { call, .. }) => vec![call],
+        _ => Vec::new(),
+    }
 }
 
 /// 工具的两块折叠状态（绘制时按当前状态重算，不进缓存键）。
@@ -424,6 +411,8 @@ fn draw_thinking(
             grid.put_clipped(x, y, &label, header_style, limit.saturating_sub(x));
         }
     }
+    let tree = super::thinking_tree(rect.width);
+    let body_indent = super::thinking_body_indent(rect.width);
     for (offset, line) in body.iter().enumerate() {
         let row = start.saturating_add(1).saturating_add(offset);
         if row < scroll {
@@ -435,9 +424,22 @@ fn draw_thinking(
         let Some(y) = visible_row(rect, scroll, row) else {
             continue;
         };
+        if tree && offset == 0 {
+            let connector = crate::ui::text::agent::TREE_LEAF;
+            let available = rect
+                .width
+                .min(u16::try_from(connector.chars().count()).unwrap_or(u16::MAX));
+            grid.put_clipped(
+                rect.x,
+                y,
+                connector,
+                style::chat_notice_connector(),
+                available,
+            );
+        }
         let mut cx = rect
             .x
-            .saturating_add(STEP_GUTTER)
+            .saturating_add(body_indent)
             .saturating_add(line.indent);
         for (value, span_style) in &line.spans {
             let cell_style = span_style.patch(style::muted());
@@ -464,26 +466,6 @@ fn draw_legacy(
 ) {
     let mut row = start;
     match source {
-        BlockSource::Group { message_index, .. } => {
-            let calls = calls_of(history, source);
-            if calls.is_empty() {
-                return;
-            }
-            let expanded: Vec<bool> = calls
-                .iter()
-                .map(|call| folds_at(history, message_index, call).body)
-                .collect();
-            tool::group_draw_animated(
-                grid,
-                rect,
-                scroll,
-                &mut row,
-                &calls,
-                history.chat.loading_frame,
-                &expanded,
-                history.chat.status.streaming,
-            );
-        }
         BlockSource::Step { message_index, .. } => {
             let calls = calls_of(history, source);
             let Some(call) = calls.first() else {

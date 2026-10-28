@@ -6350,7 +6350,7 @@ fn lx_card_click_toggles_expansion_on_release() {
                 position: 0,
                 call: crate::app::state::ToolCallView {
                     call_id: "call-param".into(),
-                    name: "read".into(),
+                    name: "write".into(),
                     position: 0,
                     arguments_json: String::new(),
                     status: crate::app::state::ToolStatus::Completed,
@@ -6359,7 +6359,8 @@ fn lx_card_click_toggles_expansion_on_release() {
                         path: Some(
                             "src/some/really/deeply/nested/path/that/keeps/going/mod.rs".repeat(3),
                         ),
-                        range: Some((1, 9)),
+                        added: Some(12),
+                        removed: Some(4),
                         ..Default::default()
                     })),
                     error: None,

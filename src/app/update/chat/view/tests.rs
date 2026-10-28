@@ -241,6 +241,7 @@ fn map_summary(summary: &crate::chat::tools::ToolSummary) -> ToolSummary {
         removed: summary.removed,
         matches: summary.matches,
         pattern: summary.pattern.clone(),
+        read_kind: summary.read_kind,
         read_lines: summary.read_lines,
         total_lines: summary.total_lines,
         truncated: summary.truncated,
@@ -282,14 +283,20 @@ fn reload_keeps_read_range_without_offset() {
     assert_eq!(summary.read_lines, Some(40), "实际读到的行数来自结果体");
 }
 
-/// P1-1：目录读取的条目数在结果体里叫 `total_lines`，必须映射成 `matches`。
+/// 目录读取：重载必须还原 `read_kind`，条目数**不得**伪装成 `matches`。
 #[test]
-fn reload_keeps_directory_entry_count() {
+fn reload_keeps_directory_kind_without_matches() {
     let summary = reload_from_json(
         r#"{"path":"src"}"#,
         r#"{"tool":"read","path":"/w/src","kind":"directory","content":"[file] a\n[file] b\n","start_line":1,"end_line":2,"next_offset":null,"truncated":false,"total_lines":2}"#,
     );
-    assert_eq!(summary.matches, Some(2), "目录条目数映射成 matches");
+    assert_eq!(
+        summary.read_kind,
+        Some(crate::chat::tools::ReadKind::Directory),
+        "目录种类来自结果体"
+    );
+    assert_eq!(summary.matches, None, "目录条目数不是搜索命中数");
+    assert_eq!(summary.total_lines, Some(2), "条目数仍保留在 total_lines");
     assert_eq!(summary.range, None, "目录读取没有行区间");
     assert_eq!(summary.read_lines, None, "目录读取没有「读到的行数」");
 }

@@ -1,120 +1,77 @@
-//! `search` 工具卡片：标题 + 摘要 + 可复制、可展开的命中行列表。
+//! `search` 工具卡片：标题 + 摘要节点 + 可复制、可展开的命中行。
 //!
 //! ```text
-//! ■ Search
-//!   └─ "pattern" in src · 3 matches
-//!      src/foo.rs:12: matching line
-//!      src/bar.rs:5: another line
+//! ■ Search · 3 matches
+//!   ├─ "pattern" in src
+//!   └─ src/foo.rs:12: matching line
+//!      src/bar.rs:7: another line
 //!      … 8 more lines
 //! ```
 //!
-//! 命中行就是普通网格文本（缩进 5 列），因此历史区的拖拽选区/Ctrl+C
-//! 与命令输出完全同源，不需要单独的复制按钮或剪贴板分支。
+//! - 摘要字段（pattern/scope、命中数、结果级截断）与命中行都走同一套树体；
+//! - 命中行就是普通网格文本，历史区的拖拽选区/Ctrl+C 与命令输出同源；
+//! - 合成的行尾 `…[truncated]` 不进入可见行：超长行只由 `line_truncated`
+//!   元数据追加一个 `…`，不伪造成正文；
+//! - 结果级 `truncated` 是**执行事实**，单列节点，不混入预览省略行数。
 
 use ratatui::layout::Rect;
+#[cfg(test)]
 use ratatui::style::Style;
 
 use crate::app::state::{SearchDetailView, ToolCallView};
 use crate::ui::{style, text};
 
 use super::super::{Grid, visible_row};
-use super::{Segment, TEXT_SAMPLE_CHARS, header_with_verb, put_segments, single_line, wrap_spans};
+use super::file_summary;
+use super::tree::{self, Node, Preview, Section};
+use super::{Segment, TEXT_SAMPLE_CHARS, header_with_verb, put_segments, single_line};
 
-/// 折叠态摘要最多显示的行数。
-const SUMMARY_PREVIEW_ROWS: usize = 2;
-/// 折叠态命中行最多显示的行数。
+/// 折叠态命中行最多显示的物理行数。
 const MATCH_PREVIEW_ROWS: usize = 2;
-/// 命中行缩进（与 `  └─ ` 的前缀等宽）。
-const MATCH_INDENT: usize = 5;
 
-/// 搜索卡片的全部物理行（标题行除外），折叠/展开共用同一份布局。
+/// 搜索卡片的全部物理行（标题行除外）。
 struct SearchLayout {
-    rows: Vec<Vec<Segment>>,
-    /// 展开后的全部内容行数（不含折叠提示行）。
-    content_rows: usize,
-    /// 折叠态实际展示的内容行数。
-    preview_rows: usize,
+    layout: tree::Layout,
 }
 
-/// 摘要详情：复用普通文件工具的 `└─` 详情排版。
-fn summary_rows(call: &ToolCallView, width: u16) -> Vec<Vec<Segment>> {
-    super::file_summary::detail(call, width, true)
-}
-
-/// 单条命中行：`path:line: text`，按列宽折行并保持续行缩进。
-fn match_rows(view: &SearchDetailView, width: u16) -> Vec<Vec<Segment>> {
-    let body_width = usize::from(width).saturating_sub(MATCH_INDENT).max(1);
-    let mut rows = Vec::new();
-    for hit in &view.matches {
-        let path = single_line(&hit.path, TEXT_SAMPLE_CHARS);
-        let raw = single_line(&hit.text, TEXT_SAMPLE_CHARS);
-        let body = raw
-            .strip_suffix("…[truncated]")
-            .map(str::trim_end)
-            .unwrap_or(raw.as_str())
-            .to_string();
-        let mut spans = vec![
-            Segment::new(format!("{path}:{}: ", hit.line), style::agent_step_detail()),
-            Segment::new(body, style::text()),
-        ];
-        if hit.line_truncated {
-            spans.push(Segment::new(" …", style::agent_step_detail()));
-        }
-        for line in wrap_spans(&spans, body_width) {
-            let mut row = vec![Segment::new(" ".repeat(MATCH_INDENT), Style::default())];
-            row.extend(line);
-            rows.push(row);
-        }
+fn hit_line(hit: &crate::app::state::SearchMatchView) -> Vec<Segment> {
+    let path = single_line(&hit.path, TEXT_SAMPLE_CHARS);
+    let raw = single_line(&hit.text, TEXT_SAMPLE_CHARS);
+    let body = raw
+        .strip_suffix("…[truncated]")
+        .map(str::trim_end)
+        .unwrap_or(raw.as_str())
+        .to_string();
+    let mut spans = vec![
+        Segment::new(format!("{path}:{}: ", hit.line), style::agent_step_detail()),
+        Segment::new(body, style::text()),
+    ];
+    if hit.line_truncated {
+        spans.push(Segment::new(" …", style::agent_step_detail()));
     }
-    rows
+    spans
 }
 
-/// 结果级截断提示：不内联到摘要行，放在命中列表末尾。
-fn truncated_row(view: &SearchDetailView) -> Option<Vec<Segment>> {
-    view.truncated.then(|| {
-        vec![Segment::new(
-            format!("{}results truncated", " ".repeat(MATCH_INDENT)),
-            style::agent_warn(),
-        )]
-    })
-}
-
-/// 组装折叠/展开两种形态。
 fn layout(
     call: &ToolCallView,
     view: &SearchDetailView,
     width: u16,
     expanded: bool,
 ) -> SearchLayout {
-    let summary = summary_rows(call, width);
-    let summary_len = summary.len();
-    let matches = match_rows(view, width);
-    let match_len = matches.len();
-    let mut all = summary;
-    all.extend(matches);
-    if let Some(note) = truncated_row(view) {
-        all.push(note);
+    let summary = file_summary::nodes(call);
+    let mut sections = Vec::new();
+    if !summary.is_empty() {
+        sections.push(Section::fixed(summary));
     }
-    let preview_rows = summary_len.min(SUMMARY_PREVIEW_ROWS) + match_len.min(MATCH_PREVIEW_ROWS);
-    let content_rows = all.len();
-    let mut rows = if expanded {
-        all
-    } else {
-        all.into_iter().take(preview_rows).collect()
-    };
-    if !expanded && content_rows > preview_rows {
-        let hint = text::agent::file_diff_more_lines(content_rows - preview_rows);
-        if hint.len() <= usize::from(width).saturating_sub(MATCH_INDENT) {
-            rows.push(vec![Segment::new(
-                format!("{}{hint}", " ".repeat(MATCH_INDENT)),
-                style::agent_step_detail(),
-            )]);
-        }
+    let hits: Vec<Vec<Segment>> = view.matches.iter().map(hit_line).collect();
+    if !hits.is_empty() {
+        sections.push(Section::new(
+            vec![Node::block(hits)],
+            (!expanded).then(|| Preview::head(MATCH_PREVIEW_ROWS)),
+        ));
     }
     SearchLayout {
-        rows,
-        content_rows,
-        preview_rows,
+        layout: tree::layout(&sections, width),
     }
 }
 
@@ -128,7 +85,7 @@ pub(super) fn rows(
     if width == 0 {
         return 0;
     }
-    1 + layout(call, view, width, expanded).rows.len()
+    1 + layout(call, view, width, expanded).layout.rows.len()
 }
 
 /// 展开后是否真的多出内容（决定是否登记点击面）。
@@ -136,8 +93,7 @@ pub(super) fn has_more(call: &ToolCallView, view: &SearchDetailView, width: u16)
     if width == 0 {
         return false;
     }
-    let layout = layout(call, view, width, false);
-    layout.content_rows > layout.preview_rows
+    layout(call, view, width, false).layout.hidden > 0
 }
 
 /// 绘制搜索卡片；推进行数必须与 [`rows`] 严格相等。
@@ -157,23 +113,48 @@ pub(super) fn draw(
         return;
     }
     if let Some(y) = visible_row(rect, scroll, *row_index) {
+        let summary = call.summary.as_deref();
+        let matches = summary
+            .and_then(|summary| summary.matches)
+            .or_else(|| (!view.matches.is_empty()).then_some(view.matches.len()));
+        let mut parts = Vec::new();
+        if let Some(matches) = matches {
+            parts.push(text::agent::matches_label(matches));
+        }
+        if view.truncated || summary.is_some_and(|summary| summary.truncated) {
+            parts.push(text::agent::SEARCH_TRUNCATED.to_string());
+        }
+        let status = (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP));
         let segments = header_with_verb(
             call,
             rect.width,
             loading_frame,
             animating,
             text::agent::VERB_TOOL_SEARCH,
-            None,
+            status,
         );
         put_segments(grid, rect.x, y, rect.width, &segments);
     }
     *row_index += 1;
-    for segments in layout(call, view, rect.width, expanded).rows {
-        if let Some(y) = visible_row(rect, scroll, *row_index) {
-            put_segments(grid, rect.x, y, rect.width, &segments);
-        }
-        *row_index += 1;
-    }
+    tree::draw(
+        grid,
+        rect,
+        scroll,
+        row_index,
+        &layout(call, view, rect.width, expanded).layout.rows,
+    );
+}
+
+/// 命中行的样式在网格里读取（测试用）。
+#[cfg(test)]
+fn row_style(layout: &SearchLayout, needle: &str) -> Option<Style> {
+    layout
+        .layout
+        .rows
+        .iter()
+        .flat_map(|row| row.segments.iter())
+        .find(|segment| segment.text.contains(needle))
+        .map(|segment| segment.style)
 }
 
 #[cfg(test)]
@@ -239,6 +220,7 @@ mod tests {
             for x in 0..width {
                 text.push(grid.cell(x, y as u16).ch);
             }
+            text.push('\n');
         }
         text
     }
@@ -258,6 +240,10 @@ mod tests {
         );
         assert!(folded.contains("more line"), "{folded}");
         assert!(!folded.contains("…[truncated]"), "不内联截断标记：{folded}");
+        assert!(
+            folded.contains("results truncated"),
+            "结果级截断事实：{folded}"
+        );
         assert!(has_more(&call, &view, 80));
     }
 
@@ -276,18 +262,83 @@ mod tests {
             !expanded.contains("more line"),
             "全部展开后没有提示：{expanded}"
         );
-        assert!(
-            !has_more(&call, &view, 100)
-                || rows(&call, &view, 100, true) > rows(&call, &view, 100, false)
-        );
+    }
+
+    #[test]
+    fn zero_matches_is_a_valid_result() {
+        let mut call = call();
+        call.summary = Some(Box::new(ToolSummary {
+            path: Some("src".into()),
+            pattern: Some("nothing".into()),
+            matches: Some(0),
+            ..ToolSummary::default()
+        }));
+        let view = SearchDetailView {
+            matches: Vec::new(),
+            truncated: false,
+            files_scanned: 3,
+        };
+        let text = text_of(&call, &view, 60, false);
+        assert!(text.contains("0 matches"), "{text}");
+        assert!(!has_more(&call, &view, 60));
     }
 
     #[test]
     fn search_match_text_is_grid_text_for_copy() {
-        // 命中行已进入普通网格；历史区 copy_text 按网格取词，不依赖额外剪贴板路径。
         let call = call();
         let view = view();
         let text = text_of(&call, &view, 80, true);
         assert!(text.contains("pub fn render"), "{text}");
+        assert_eq!(
+            row_style(&layout(&call, &view, 80, true), "pub fn render"),
+            Some(style::text())
+        );
+    }
+
+    #[test]
+    fn long_match_wraps_under_a_hit_block_and_keeps_count_exact() {
+        let mut call = call();
+        call.summary = Some(Box::new(ToolSummary {
+            path: Some("src".into()),
+            pattern: Some("x".into()),
+            matches: Some(1),
+            ..ToolSummary::default()
+        }));
+        let view = SearchDetailView {
+            matches: vec![SearchMatchView {
+                path: "src/a.rs".into(),
+                line: 1,
+                text: "y".repeat(120),
+                line_truncated: false,
+            }],
+            truncated: false,
+            files_scanned: 1,
+        };
+        let folded = layout(&call, &view, 40, false);
+        let text: Vec<String> = folded
+            .layout
+            .segments()
+            .iter()
+            .map(|row| row.iter().map(|s| s.text.as_str()).collect())
+            .collect();
+        assert!(
+            text[0].contains("Search") || text[0].contains('"'),
+            "{text:?}"
+        );
+        assert!(
+            text.iter()
+                .any(|line| line.contains("src/a.rs:1") && line.starts_with(text::agent::TREE_LEAF)),
+            "命中块首行收口：{text:?}"
+        );
+        assert!(
+            text.iter()
+                .skip(2)
+                .all(|line| line.starts_with(text::agent::TREE_PAD)),
+            "命中续行与省略提示左对齐：{text:?}"
+        );
+        assert!(folded.layout.hidden > 0, "折叠态只展示前 2 个物理行");
+        assert!(has_more(&call, &view, 40), "长命中行必须可以展开");
+        let expanded = layout(&call, &view, 40, true);
+        assert_eq!(expanded.layout.hidden, 0, "展开后没有隐藏行");
     }
 }

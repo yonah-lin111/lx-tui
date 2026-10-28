@@ -492,13 +492,13 @@ fn stats_line_is_hidden_before_a_visible_report_batch() {
     report_row.turn_index = assistant.turn_index;
     report_row.reports = vec![report("sub-1", "host flow", "completed")];
     let lx = lx_with(vec![assistant, report_row]);
-    // 正文 1 + 消息间空行 1 + 汇报块 3 + 呼吸位 1 = 6；统计行被隐藏。
+    // 正文 1 + 消息间空行 1 + 汇报块 4 + 呼吸位 1 = 7；统计行被隐藏。
     let area = Rect::new(0, 0, 80, 20);
     let mut cache = cache();
-    assert_eq!(layout(area, &lx, &mut cache).total_rows, 6);
+    assert_eq!(layout(area, &lx, &mut cache).total_rows, 7);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
-    let rendered: String = (0..6).map(|row| row_text(&buf, area, row)).collect();
+    let rendered: String = (0..7).map(|row| row_text(&buf, area, row)).collect();
     assert!(
         !rendered.contains("47k in"),
         "报告链路中间轮不能先出统计行：{rendered:?}"
@@ -524,13 +524,13 @@ fn stats_line_returns_after_the_last_report() {
     assistant.output_tokens = Some(20);
     assistant.duration_ms = Some(1_000);
     let lx = lx_with(vec![report_row, assistant]);
-    // 汇报块 3 + 消息间空行 1 + 正文 1 + 块间空行 1 + 统计 1 + 末尾呼吸位 1 = 8。
+    // 汇报块 4 + 消息间空行 1 + 正文 1 + 块间空行 1 + 统计 1 + 末尾呼吸位 1 = 9。
     let area = Rect::new(0, 0, 80, 20);
     let mut cache = cache();
-    assert_eq!(layout(area, &lx, &mut cache).total_rows, 8);
+    assert_eq!(layout(area, &lx, &mut cache).total_rows, 9);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
-    let rendered: String = (0..8).map(|row| row_text(&buf, area, row)).collect();
+    let rendered: String = (0..9).map(|row| row_text(&buf, area, row)).collect();
     assert!(
         !rendered.contains("Agent completed"),
         "报告后已有 assistant 收尾时不再补结束行：{rendered:?}"
@@ -852,7 +852,7 @@ fn thinking_header_uses_step_dot_and_becomes_thought() {
         "展开后头部不变（折叠标记已移除）：{line0}"
     );
     let line1 = row_text(&buf, area, 1);
-    assert!(line1.starts_with("  旧思考"), "正文缩进对齐方块：{line1}");
+    assert!(line1.starts_with("  └─ 旧思考"), "正文带树体收口：{line1}");
     assert!(!line0.contains("Thinking"), "不再是 Thinking：{line0}");
 }
 

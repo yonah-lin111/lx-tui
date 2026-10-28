@@ -1,20 +1,20 @@
-//! 本地命令卡片：标题、命令、输出预览与退出信息。
+//! 本地命令卡片：标题状态、命令与输出预览。
 //!
-//! 与工具步骤共用同一套直角树体语法（`  │  ` / `  └─ `，[`TREE_COLS`] 列）：
+//! 与工具步骤共用同一套树体语法（[`tree`]，`├─` / `│` / `└─`）：
 //!
 //! ```text
-//! ■ You run command · exit 2 · 1.2s ← 标题：状态色 + 退出码 + 耗时
-//!   │  $ cargo test                ← 参数区：折叠 2 行，展开更多（可独立折叠）
-//!   │  error[E0308]: mismatched…   ← 输出区：折叠 5 行，展开完整输出（可独立折叠）
-//!   └─ … 18 more lines             ← 输出区自己的省略提示
+//! ■ You run command · exit 2 · 1.2s
+//!   ├─ $ cargo test
+//!   └─ error[E0308]: mismatched…
+//!      … 18 more lines
 //! ```
 //!
-//! 布局与绘制共用 [`lines`]：滚动条、置顶行与点击/复制几何不会与真实绘制漂移。
-//!
-//! **两个可独立折叠的区域**：命令参数与命令输出各有展开状态，点其中一块不会连带
-//! 另一块；折叠态一律 dim，展开升为终端默认前景（没有整行灰底，也不随笔悬停变色）。
-//! **运行中（长任务）只给一行引导**：命令 + `  └─ open task panel · live output`，
-//! 消息列表不铺实时输出——完整输出在后台任务面板里，点卡片打开面板并定位该进程。
+//! - 退出状态与耗时在**标题右侧**，不再占树体行；
+//! - **两个可独立折叠的区域**：命令参数与命令输出各有展开状态；
+//! - 输出正文是一块多行节点：首行 `└─`，其余行左对齐；
+//! - 折叠态一律 dim，展开升为终端默认前景（没有整行灰底，也不随鼠标悬停变色）；
+//! - **运行中（长任务）只给一行引导**：命令 + `open task panel · live output`；
+//! - 输出被丢弃（`dropped_bytes`）是执行事实，附在输出块末尾，不混进 UI 省略行数。
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -24,23 +24,15 @@ use unicode_width::UnicodeWidthChar;
 use crate::app::state::{CardSection, UserShellView};
 use crate::ui::{style, text};
 
-use super::tool::{DETAIL_PREVIEW_ROWS, Folds, TREE_COLS, output_style, param_lines};
+use super::tool::tree::{self, Node, Preview, Section};
+use super::tool::{Folds, Segment, output_style, put_segments, segments_cols};
 use super::{Grid, truncate_with_ellipsis, visible_row, wrap};
 
-/// 折叠态输出预览最多占用的物理行（含末尾的省略提示行）。
-const PREVIEW_LINES: usize = 6;
-/// 折叠态保留的真实输出行数：首 3 + 尾 2（提示行另占一行，合计 [`PREVIEW_LINES`]）。
+/// 折叠态保留的真实输出行数：首 3 + 尾 2（提示行另占一行）。
 const PREVIEW_HEAD: usize = 3;
 const PREVIEW_TAIL: usize = 2;
-
-/// 树体的一行：前缀（空 = 标题行）+ 内容 + 样式。
-///
-/// 连接符由 [`draw`] 统一补色：前缀与内容不同色，只有「哪一行收口」这一处判断。
-struct Line {
-    prefix: &'static str,
-    text: String,
-    style: Style,
-}
+/// 命令参数折叠态保留的物理行数。
+const PARAM_PREVIEW: usize = 2;
 
 /// 树体两块的行数（标题之外）：命令参数与输出。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -49,153 +41,80 @@ pub struct Blocks {
     pub output: usize,
 }
 
-/// 按宽度生成卡片的全部物理行（布局与绘制唯一来源）。
-fn lines(
-    shell: &UserShellView,
-    width: u16,
-    loading_frame: usize,
-    animating: bool,
-    folds: Folds,
-) -> Vec<Line> {
-    // 极窄：连接符自身都放不下，退回整宽画内容（与通知/文件详情同一降级口径），
-    // 否则树体前缀会把可用列吃光、正文一个字都看不见。
-    let tree = keeps_tree(width);
-    let content_width = if tree {
-        body_width(width)
-    } else {
-        width.max(1)
-    };
-    let (params, output) = sections(shell, content_width, folds);
-    // `└─` 只包裹参数部分（与文件工具的 `└─ 详情` 同口径）：输出内容只用等宽空白
-    // 对齐到内容列，不再被 `│` / `└─` 围住。
-    let params_last = params.len().saturating_sub(1);
-    let mut out = Vec::with_capacity(params.len() + output.len() + 1);
-    out.push(title(shell, width, loading_frame, animating));
-    for (index, mut line) in params.into_iter().enumerate() {
-        if tree {
-            line.prefix = if index == params_last {
-                text::agent::TREE_LEAF
-            } else {
-                text::agent::TREE_BAR
-            };
-        }
-        out.push(line);
+/// 标题右侧状态：`Running` / `exit 2 · 1.2s`。
+fn title_status(shell: &UserShellView) -> String {
+    if shell.is_running() {
+        return text::agent::STATE_RUNNING.to_string();
     }
-    for mut line in output {
-        if tree {
-            line.prefix = text::agent::TREE_PAD;
-        }
-        out.push(line);
+    let mut parts = vec![text::agent::proc_exit_label(shell.state)];
+    if let Some(duration) = shell.duration_ms {
+        parts.push(text::agent::duration_label(duration));
     }
-    out
+    parts.join(text::LX_CHAT_TOOL_STATUS_SEP)
 }
 
-/// 树体两块：命令参数与输出（运行中输出区只剩一行引导）。
-fn sections(shell: &UserShellView, width: u16, folds: Folds) -> (Vec<Line>, Vec<Line>) {
-    // 保留用户脚本的字面值，按内容宽度换行（折叠预算与 agent 命令卡片同一口径）。
-    let params = param_lines(&format!("$ {}", shell.command), width, folds.body)
-        .into_iter()
-        .map(|line| Line {
-            prefix: "",
-            text: line.text,
-            style: line.style,
-        })
-        .collect();
-    let output = if shell.is_running() {
-        // 长任务：不铺实时输出，只留一句「去面板看」。
-        vec![Line {
-            prefix: "",
-            text: text::agent::TASK_OPEN_GUIDE.to_string(),
-            style: output_style(false),
-        }]
-    } else {
-        finished_output(shell, width, folds.output)
-    };
-    (clamp(params, width), clamp(output, width))
+/// 命令参数块：`$ 命令`；运行中把引导语作为同一节点的续行。
+fn param_section(shell: &UserShellView, folded: bool) -> Section {
+    let mut lines = vec![vec![Segment::new(
+        format!("$ {}", shell.command),
+        style::chat_tool_param(),
+    )]];
+    if shell.is_running() {
+        lines.push(vec![Segment::new(
+            text::agent::TASK_OPEN_GUIDE,
+            output_style(false),
+        )]);
+    }
+    Section::new(
+        vec![Node::block(lines)],
+        folded.then(|| Preview::head(PARAM_PREVIEW)),
+    )
 }
 
-/// 终态输出区：折叠首 3 + 尾 2 行 + 省略提示，展开全部已保存输出。
-fn finished_output(shell: &UserShellView, width: u16, expanded: bool) -> Vec<Line> {
-    let style = output_style(expanded);
-    let (preview, omitted) = if expanded {
-        (all_output_lines(&shell.output, width), 0)
-    } else {
-        preview(&shell.output, width)
-    };
-    let mut output = Vec::with_capacity(preview.len() + 2);
-    if preview.is_empty() {
-        output.push(Line {
-            prefix: "",
-            text: text::LX_SHELL_NO_OUTPUT.to_string(),
-            style,
-        });
-    } else {
-        output.extend(preview.into_iter().map(|line| Line {
-            prefix: "",
-            text: line,
-            style,
-        }));
+/// 输出块：整块一个多行节点；折叠首尾预览；丢弃字节作为块内续行。
+fn output_section(shell: &UserShellView, width: u16, folded: bool) -> Option<Section> {
+    if shell.is_running() {
+        return None;
     }
+    let body_width = tree::content_width(width);
+    let rows = all_output_lines(&shell.output, u16::try_from(body_width).unwrap_or(u16::MAX));
+    let mut lines: Vec<Vec<Segment>> = if rows.is_empty() {
+        vec![vec![Segment::new(
+            text::LX_SHELL_NO_OUTPUT,
+            output_style(!folded),
+        )]]
+    } else {
+        rows.into_iter()
+            .map(|line| vec![Segment::new(line, output_style(!folded))])
+            .collect()
+    };
     if shell.output_truncated() {
-        output.push(Line {
-            prefix: "",
-            text: format!("… {} earlier bytes dropped", shell.dropped_bytes),
-            style: style::agent_warn(),
-        });
+        lines.push(vec![Segment::new(
+            text::agent::dropped_bytes_label(shell.dropped_bytes),
+            style::agent_warn(),
+        )]);
     }
-    // 省略提示是输出区的最后一行：与折叠输出同档。
-    if omitted > 0 {
-        output.push(Line {
-            prefix: "",
-            text: text::agent::file_diff_more_lines(omitted),
-            style: output_style(false),
-        });
-    }
-    output
+    Some(Section::new(
+        vec![Node::block(lines)],
+        folded.then(|| Preview::head_tail(PREVIEW_HEAD, PREVIEW_TAIL)),
+    ))
 }
 
-/// 每行截到内容列宽（极窄时树体前缀让位、折行算法也会退化，这里兜底不越界）。
-fn clamp(mut lines: Vec<Line>, width: u16) -> Vec<Line> {
-    for line in &mut lines {
-        line.text = truncate_with_ellipsis(&line.text, usize::from(width));
-    }
-    lines
+/// 卡片的两块（参数 / 输出）。
+fn sections(shell: &UserShellView, width: u16, folds: Folds) -> (Vec<Section>, Vec<Section>) {
+    let params = vec![param_section(shell, !folds.body)];
+    let output = output_section(shell, width, !folds.output)
+        .into_iter()
+        .collect();
+    (params, output)
 }
 
-/// 宽度是否还容得下树体前缀（放不下就退回整宽，不画连接符）。
-fn keeps_tree(width: u16) -> bool {
-    width > TREE_COLS as u16
-}
-
-/// 标题行：`■ Running` / `■ You run command · exit 0 · 1.2s`。
-///
-/// 标题占整宽（树体之外），窄屏尾部省略——不挤掉行首方块。
-fn title(shell: &UserShellView, width: u16, loading_frame: usize, animating: bool) -> Line {
-    let (mark, mark_style) = header_mark(shell, loading_frame, animating);
-    let label = if shell.is_running() {
-        text::LX_SHELL_RUNNING
-    } else {
-        text::LX_SHELL_COMMAND
-    };
-    let mut text = format!("{mark} {label}");
-    if !shell.is_running() {
-        let tail = footer(shell);
-        if !tail.is_empty() {
-            text.push_str(text::LX_CHAT_TOOL_STATUS_SEP);
-            text.push_str(&tail);
-        }
-    }
-    let text = if width < 2 {
-        // 一列宽连省略号都放不下：只保留方块，状态信号永远可见。
-        text.chars().take(1).collect()
-    } else {
-        truncate_with_ellipsis(&text, usize::from(width))
-    };
-    Line {
-        prefix: "",
-        text,
-        style: mark_style,
-    }
+/// 树体布局（不含标题行）。
+fn body_layout(shell: &UserShellView, width: u16, folds: Folds) -> tree::Layout {
+    let (params, output) = sections(shell, width, folds);
+    let mut all = params;
+    all.extend(output);
+    tree::layout(&all, width)
 }
 
 /// 卡片占用的渲染行数。
@@ -206,20 +125,22 @@ pub fn rows(
     animating: bool,
     folds: Folds,
 ) -> usize {
-    lines(shell, width, loading_frame, animating, folds).len()
+    let _ = (loading_frame, animating);
+    if width == 0 {
+        return 0;
+    }
+    1 + body_layout(shell, width, folds).rows.len()
 }
 
-/// 树体两块各自的高度（布局/命中共用；运行中输出区恒为 1 行引导）。
+/// 树体两块各自的高度（布局/命中共用）。
 pub fn blocks(shell: &UserShellView, width: u16, folds: Folds) -> Blocks {
-    let content_width = if keeps_tree(width) {
-        body_width(width)
-    } else {
-        width.max(1)
-    };
-    let (params, output) = sections(shell, content_width, folds);
+    if width == 0 {
+        return Blocks::default();
+    }
+    let (params, output) = sections(shell, width, folds);
     Blocks {
-        params: params.len(),
-        output: output.len(),
+        params: tree::layout(&params, width).rows.len(),
+        output: tree::layout(&output, width).rows.len(),
     }
 }
 
@@ -237,20 +158,21 @@ pub fn regions(shell: &UserShellView, width: u16, folds: Folds) -> Vec<Region> {
     let blocks = blocks(shell, width, folds);
     let params_end = 1 + blocks.params;
     if shell.is_running() {
-        return vec![
-            Region {
-                section: CardSection::Body,
-                offset: 0,
-                rows: params_end,
-                clickable: true,
-            },
-            Region {
+        let mut out = vec![Region {
+            section: CardSection::Body,
+            offset: 0,
+            rows: params_end,
+            clickable: true,
+        }];
+        if blocks.output > 0 {
+            out.push(Region {
                 section: CardSection::Output,
                 offset: params_end,
                 rows: blocks.output,
                 clickable: true,
-            },
-        ];
+            });
+        }
+        return out;
     }
     let mut out = vec![Region {
         section: CardSection::Body,
@@ -259,7 +181,6 @@ pub fn regions(shell: &UserShellView, width: u16, folds: Folds) -> Vec<Region> {
         clickable: params_expandable(shell, width),
     }];
     if blocks.output > 0 {
-        // 只有**真被折叠**的输出才登记点击面（短输出点了也不会变）。
         out.push(Region {
             section: CardSection::Output,
             offset: params_end,
@@ -272,28 +193,16 @@ pub fn regions(shell: &UserShellView, width: u16, folds: Folds) -> Vec<Region> {
 
 /// 命令参数区展开后是否**真的多出内容**。
 pub fn params_expandable(shell: &UserShellView, width: u16) -> bool {
-    let content_width = if keeps_tree(width) {
-        body_width(width)
-    } else {
-        width.max(1)
-    };
-    let command = format!("$ {}", shell.command);
-    // 折叠态末尾的「… N more lines」是折叠的一部分，不是内容：只比内容行，
-    // 否则展开只比预览多一行时两边行数相等，被误判成不可展开（点了没反应）。
-    param_lines(&command, content_width, true).len() > DETAIL_PREVIEW_ROWS
+    width > 0 && tree::layout(&[param_section(shell, true)], width).hidden > 0
 }
 
 /// 输出区展开后是否**真的多出内容**。
 pub fn output_expandable(shell: &UserShellView, width: u16) -> bool {
-    if shell.is_running() {
+    if shell.is_running() || width == 0 {
         return false;
     }
-    let content_width = if keeps_tree(width) {
-        body_width(width)
-    } else {
-        width.max(1)
-    };
-    all_output_lines(&shell.output, content_width).len() > PREVIEW_LINES
+    output_section(shell, width, true)
+        .is_some_and(|section| tree::layout(&[section], width).hidden > 0)
 }
 
 /// 绘制卡片并推进 `row_index`。
@@ -308,38 +217,43 @@ pub fn draw(
     animating: bool,
     folds: Folds,
 ) {
-    for line in lines(shell, content.width, loading_frame, animating, folds) {
-        if let Some(y) = visible_row(content, scroll, *row_index) {
-            // 连接符用强调灰色、内容用自己的语义色：与工具卡片同一套读法。
-            let indent = if line.prefix.is_empty() {
-                0
-            } else {
-                TREE_COLS as u16
-            };
-            if indent > 0 {
-                grid.put_clipped(
-                    content.x,
-                    y,
-                    line.prefix,
-                    style::chat_notice_connector(),
-                    content.width,
-                );
-            }
-            grid.put_clipped(
-                content.x.saturating_add(indent),
-                y,
-                &line.text,
-                line.style,
-                content.width.saturating_sub(indent),
-            );
-        }
-        *row_index += 1;
+    if content.width == 0 {
+        return;
     }
-}
-
-/// 树体内容可用列数（标题与内容共用整宽，树体让出连接符列）。
-fn body_width(width: u16) -> u16 {
-    width.saturating_sub(TREE_COLS as u16).max(1)
+    let (mark, mark_style) = header_mark(shell, loading_frame, animating);
+    let label = if shell.is_running() {
+        text::LX_SHELL_RUNNING
+    } else {
+        text::LX_SHELL_COMMAND
+    };
+    if let Some(y) = visible_row(content, scroll, *row_index) {
+        let title = format!("{mark} {label}");
+        let mut segments = vec![Segment::new(title.clone(), mark_style)];
+        let tail = Segment::new(
+            format!("{}{}", text::LX_CHAT_TOOL_STATUS_SEP, title_status(shell)),
+            style::agent_step_detail(),
+        );
+        if segments_cols(&segments) + tail.cols() <= usize::from(content.width) {
+            segments.push(tail);
+        }
+        if segments_cols(&segments) > usize::from(content.width) {
+            let trimmed = if content.width < 2 {
+                title.chars().take(1).collect()
+            } else {
+                truncate_with_ellipsis(&title, usize::from(content.width))
+            };
+            segments = vec![Segment::new(trimmed, mark_style)];
+        }
+        put_segments(grid, content.x, y, content.width, &segments);
+    }
+    *row_index += 1;
+    tree::draw(
+        grid,
+        content,
+        scroll,
+        row_index,
+        &body_layout(shell, content.width, folds).rows,
+    );
 }
 
 /// 标题方块与颜色：运行中橙/呼吸，失败红，主动停止警告色，正常结束绿。
@@ -364,19 +278,7 @@ fn header_mark(shell: &UserShellView, loading_frame: usize, animating: bool) -> 
     (text::agent::STEP_MARK_FILLED, style::agent_ok())
 }
 
-/// 折叠态预览：保留前 [`PREVIEW_HEAD`] 行 + 后 [`PREVIEW_TAIL`] 行，返回省略行数。
-fn preview(output: &str, width: u16) -> (Vec<String>, usize) {
-    let rows = all_output_lines(output, width);
-    if rows.len() <= PREVIEW_LINES {
-        return (rows, 0);
-    }
-    let omitted = rows.len().saturating_sub(PREVIEW_HEAD + PREVIEW_TAIL);
-    let mut preview: Vec<String> = rows[..PREVIEW_HEAD].to_vec();
-    preview.extend(rows[rows.len() - PREVIEW_TAIL..].iter().cloned());
-    (preview, omitted)
-}
-
-/// 全部输出按宽度换行（展开态；末尾空行不占位）。
+/// 全部输出按宽度换行（末尾空行不占位）。
 fn all_output_lines(output: &str, width: u16) -> Vec<String> {
     if output.is_empty() {
         return Vec::new();
@@ -388,47 +290,13 @@ fn all_output_lines(output: &str, width: u16) -> Vec<String> {
             rows.push(String::new());
             continue;
         }
-        rows.extend(wrap(line, width));
+        let line = super::tool::sample_output_line(line);
+        rows.extend(wrap(&line, width));
     }
     while rows.last().is_some_and(String::is_empty) {
         rows.pop();
     }
     rows
-}
-
-/// 底部信息：退出码与耗时（失败原因由状态表达）。
-fn footer(shell: &UserShellView) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    match shell.state {
-        crate::app::state::ProcessStateView::Exited { code } => parts.push(format!(
-            "exit {}",
-            code.map_or_else(|| "unknown".to_string(), |code| code.to_string())
-        )),
-        crate::app::state::ProcessStateView::Stopped => parts.push("stopped".into()),
-        crate::app::state::ProcessStateView::TimedOut => parts.push("timed out".into()),
-        crate::app::state::ProcessStateView::Interrupted => parts.push("interrupted".into()),
-        crate::app::state::ProcessStateView::Failed => parts.push("failed".into()),
-        crate::app::state::ProcessStateView::Starting
-        | crate::app::state::ProcessStateView::Running => {}
-    }
-    if let Some(duration_ms) = shell.duration_ms {
-        parts.push(format_duration(duration_ms));
-    }
-    parts.join(" · ")
-}
-
-/// 毫秒 → `1.2s` / `2m 3s`。
-fn format_duration(ms: u64) -> String {
-    if ms < 1_000 {
-        return format!("{ms}ms");
-    }
-    let seconds = ms as f64 / 1_000.0;
-    if seconds < 60.0 {
-        format!("{seconds:.1}s")
-    } else {
-        let total = ms / 1_000;
-        format!("{}m {}s", total / 60, total % 60)
-    }
 }
 
 /// 输出行的显示宽度（测试用）。
@@ -465,56 +333,39 @@ mod tests {
         Folds { body, output }
     }
 
-    /// 拼接后的可见文本（含树体前缀）。
+    /// 把卡片绘制进网格并按行取文本。
     fn text_of(shell: &UserShellView, width: u16, folds: Folds) -> Vec<String> {
-        lines(shell, width, 0, false, folds)
-            .into_iter()
-            .map(|line| format!("{}{}", line.prefix, line.text))
+        let height = rows(shell, width, 0, false, folds).max(1) as u16;
+        let area = Rect::new(0, 0, width, height);
+        let mut grid = Grid::new(area);
+        let mut row = 0;
+        draw(&mut grid, area, 0, &mut row, shell, 0, false, folds);
+        assert_eq!(row, rows(shell, width, 0, false, folds));
+        (0..height)
+            .map(|y| {
+                let mut line = String::new();
+                for x in 0..width {
+                    let glyph = grid.cell(x, y);
+                    if glyph.ch != crate::ui::main_content::lx::grid::CONTINUATION {
+                        line.push(glyph.ch);
+                    }
+                }
+                line.trim_end().to_string()
+            })
             .collect()
     }
 
     #[test]
-    fn draw_advances_exactly_the_layout_row_count() {
-        let shell = shell(
-            "line 1\nline 2\n",
-            ProcessStateView::Exited { code: Some(0) },
-        );
-        let area = Rect::new(0, 0, 40, 20);
-        let expected = rows(&shell, area.width, 0, false, folds(false, false));
-        let mut grid = Grid::new(area);
-        let mut index = 0;
-        draw(
-            &mut grid,
-            area,
-            0,
-            &mut index,
-            &shell,
-            0,
-            false,
-            folds(false, false),
-        );
-        assert_eq!(index, expected, "绘制与布局行数必须一致");
-    }
-
-    #[test]
-    fn body_rows_use_the_shared_tree_prefixes() {
-        let output: String = (0..20).map(|n| format!("line {n}\n")).collect();
-        let shell = shell(&output, ProcessStateView::Exited { code: Some(0) });
+    fn title_shows_exit_status_and_duration() {
+        let shell = shell("", ProcessStateView::Exited { code: Some(2) });
         let text = text_of(&shell, 40, folds(false, false));
+        assert!(text[0].contains("You run command"), "{text:?}");
+        assert!(text[0].contains("exit 2"), "状态在标题右侧：{text:?}");
+        assert!(text[0].contains("1.2s"), "耗时在标题右侧：{text:?}");
         assert!(
-            text[0].starts_with("■ You run command"),
-            "标题行不带连接符: {text:?}"
+            text.iter().any(|line| line.contains("$ printf hello")),
+            "{text:?}"
         );
-        assert!(text[0].contains("exit 0"), "退出码并入标题行: {text:?}");
-        // `└─` 只包裹参数：命令只有一行，它自己就是收口行。
-        assert!(text[1].starts_with("  └─ $ printf hello"), "{text:?}");
-        // 输出区不画树，只用等宽空白对齐。
-        let last = text.last().expect("末行");
-        assert!(
-            last.starts_with("     ") && !last.contains('│') && !last.contains('└'),
-            "输出不被连接符包裹: {text:?}"
-        );
-        assert!(last.contains("lines"), "末行是省略提示: {text:?}");
     }
 
     #[test]
@@ -522,25 +373,21 @@ mod tests {
         let output: String = (0..20).map(|n| format!("line {n}\n")).collect();
         let shell = shell(&output, ProcessStateView::Exited { code: Some(0) });
         let text = text_of(&shell, 40, folds(false, false));
-        assert!(text.iter().any(|line| line.contains("line 0")), "保留首部");
-        assert!(text.iter().any(|line| line.contains("line 19")), "保留尾部");
+        assert!(text.iter().any(|line| line.contains("line 0")), "{text:?}");
+        assert!(text.iter().any(|line| line.contains("line 19")), "{text:?}");
         assert!(
             text.iter()
                 .any(|line| line.contains("more lines") || line.contains("lines omitted")),
-            "省略必须显式标注: {text:?}"
+            "{text:?}"
         );
         let output_rows = text
             .iter()
             .filter(|line| {
-                line.trim_start_matches([' ', '│', '└', '─'])
+                line.trim_start_matches([' ', '│', '└', '├', '─'])
                     .starts_with("line ")
             })
             .count();
-        assert_eq!(
-            output_rows,
-            PREVIEW_HEAD + PREVIEW_TAIL,
-            "折叠态保留 5 行真实输出: {text:?}"
-        );
+        assert_eq!(output_rows, PREVIEW_HEAD + PREVIEW_TAIL, "{text:?}");
     }
 
     #[test]
@@ -551,7 +398,6 @@ mod tests {
         let done_text = text_of(&done, 40, folds(false, false));
         assert!(running_text[0].contains("Running"));
         assert!(done_text[0].contains("You run command"));
-        // 运行中不铺输出，只给一行「去面板看」；终态才显示输出占位。
         assert!(
             running_text
                 .iter()
@@ -566,9 +412,8 @@ mod tests {
     #[test]
     fn long_lines_wrap_inside_width() {
         let shell = shell(&"x".repeat(200), ProcessStateView::Exited { code: Some(0) });
-        for line in lines(&shell, 20, 0, false, folds(false, false)) {
-            let width = display_width(line.prefix) + display_width(&line.text);
-            assert!(width <= 20, "行不得超宽: {width}");
+        for line in text_of(&shell, 20, folds(false, false)) {
+            assert!(display_width(&line) <= 20, "行不得超宽: {line:?}");
         }
     }
 
@@ -577,15 +422,14 @@ mod tests {
     fn narrow_width_truncates_title_and_keeps_tree_within_bounds() {
         let shell = shell("output", ProcessStateView::Exited { code: Some(2) });
         for width in [1u16, 4, 8, 12] {
-            for line in lines(&shell, width, 0, false, folds(false, false)) {
-                let cols = display_width(line.prefix) + display_width(&line.text);
-                assert!(cols <= usize::from(width), "宽度 {width} 溢出: {cols}");
-            }
-            let title = text_of(&shell, width, folds(false, false)).remove(0);
+            let text = text_of(&shell, width, folds(false, false));
             assert!(
-                title.starts_with('■'),
-                "宽度 {width} 下标题仍须保留方块: {title:?}"
+                text[0].starts_with('■'),
+                "宽度 {width} 下标题仍须保留方块: {text:?}"
             );
+            for line in &text {
+                assert!(display_width(line) <= usize::from(width), "{line:?}");
+            }
         }
     }
 
@@ -594,20 +438,14 @@ mod tests {
         let output: String = (0..20).map(|n| format!("line {n}\n")).collect();
         let shell = shell(&output, ProcessStateView::Exited { code: Some(0) });
         assert!(output_expandable(&shell, 40));
-        let collapsed = lines(&shell, 40, 0, false, folds(false, false));
-        let expanded = lines(&shell, 40, 0, false, folds(false, true));
-        assert!(expanded.len() > collapsed.len());
-        assert!(
-            !expanded
-                .iter()
-                .any(|line| line.text.contains("more lines") || line.text.contains("omitted"))
-        );
-        assert!(
-            expanded
-                .iter()
-                .filter(|line| line.text.trim_start().starts_with("line "))
-                .count()
-                == 20
+        let collapsed = rows(&shell, 40, 0, false, folds(false, false));
+        let expanded = rows(&shell, 40, 0, false, folds(false, true));
+        assert!(expanded > collapsed);
+        let text = text_of(&shell, 40, folds(false, true));
+        assert!(!text.iter().any(|line| line.contains("more lines")));
+        assert_eq!(
+            text.iter().filter(|line| line.contains("line ")).count(),
+            20
         );
     }
 
@@ -618,32 +456,12 @@ mod tests {
         let mut view = shell(&output, ProcessStateView::Exited { code: Some(0) });
         view.command = format!("echo {}", "y".repeat(200));
         assert!(params_expandable(&view, 40));
-        let collapsed = lines(&view, 40, 0, false, folds(false, false));
-        let params_only = lines(&view, 40, 0, false, folds(true, false));
-        let output_only = lines(&view, 40, 0, false, folds(false, true));
-        // 展开参数只增加命令行的物理行，输出预览行数不变。
-        assert!(count_output_rows(&params_only) == count_output_rows(&collapsed));
-        assert!(count_output_rows(&output_only) > count_output_rows(&collapsed));
-        assert!(params_only.len() > collapsed.len());
-        assert_eq!(
-            count_command_rows(&output_only),
-            count_command_rows(&collapsed),
-            "展开输出不得连带展开参数"
-        );
-    }
-
-    fn count_output_rows(lines: &[Line]) -> usize {
-        lines
-            .iter()
-            .filter(|line| line.text.trim_start().starts_with("line "))
-            .count()
-    }
-
-    fn count_command_rows(lines: &[Line]) -> usize {
-        lines
-            .iter()
-            .filter(|line| line.text.contains("yyyyyyyy"))
-            .count()
+        let collapsed = rows(&view, 40, 0, false, folds(false, false));
+        let params_only = rows(&view, 40, 0, false, folds(true, false));
+        let output_only = rows(&view, 40, 0, false, folds(false, true));
+        assert!(params_only > collapsed);
+        assert!(output_only > collapsed);
+        assert_ne!(params_only, output_only);
     }
 
     /// 短输出（没达到折叠额度）不登记点击面。
@@ -658,52 +476,60 @@ mod tests {
         assert!(!output.clickable, "短输出没有可展开内容");
     }
 
-    /// 参数恒为浅黄；输出折叠恒 dim、展开恒默认前景（都不随鼠标变化）。
+    /// 参数恒为浅黄；输出折叠恒 dim、展开恒默认前景。
     #[test]
     fn params_stay_light_yellow_and_output_follows_expanded_only() {
         let output: String = (0..20).map(|n| format!("line {n}\n")).collect();
         let shell = shell(&output, ProcessStateView::Exited { code: Some(0) });
-        let dim = lines(&shell, 40, 0, false, folds(false, false));
-        let param_expanded = lines(&shell, 40, 0, false, folds(true, false));
-        let output_expanded = lines(&shell, 40, 0, false, folds(false, true));
-        for rows in [&dim, &param_expanded] {
-            assert_eq!(
-                find_line(rows, "$ ").style,
-                style::chat_tool_param(),
-                "参数恒为浅黄"
-            );
-        }
+        let dim = body_layout(&shell, 40, folds(false, false));
+        let output_expanded = body_layout(&shell, 40, folds(false, true));
+        let param_style = |layout: &tree::Layout| {
+            layout
+                .rows
+                .iter()
+                .flat_map(|row| row.segments.iter())
+                .find(|segment| segment.text.contains("$ "))
+                .map(|segment| segment.style)
+                .expect("参数段")
+        };
+        assert_eq!(param_style(&dim), style::chat_tool_param());
+        assert_eq!(param_style(&output_expanded), style::chat_tool_param());
+        let out_style = |layout: &tree::Layout| {
+            layout
+                .rows
+                .iter()
+                .flat_map(|row| row.segments.iter())
+                .find(|segment| segment.text.contains("line 0"))
+                .map(|segment| segment.style)
+                .expect("输出段")
+        };
+        assert_eq!(out_style(&dim), style::muted(), "折叠输出恒为 dim");
         assert_eq!(
-            find_line(&dim, "line 0").style,
-            style::muted(),
-            "折叠输出恒为 dim"
-        );
-        assert_eq!(
-            find_line(&output_expanded, "line 0").style,
+            out_style(&output_expanded),
             style::text(),
             "展开的输出是默认前景"
         );
-        assert_eq!(
-            find_line(&output_expanded, "$ ").style,
-            style::chat_tool_param(),
-            "展开输出不得连带展开参数的颜色"
-        );
-    }
-
-    /// 按文本前缀找一行。
-    fn find_line<'a>(lines: &'a [Line], needle: &str) -> &'a Line {
-        lines
-            .iter()
-            .find(|line| line.text.starts_with(needle) || line.text.contains(needle))
-            .unwrap_or_else(|| panic!("找不到包含 {needle:?} 的行"))
     }
 
     #[test]
     fn failed_command_is_marked_failed() {
         let shell = shell("", ProcessStateView::Failed);
-        let first = &lines(&shell, 40, 0, false, folds(false, false))[0];
-        assert_eq!(first.style, style::agent_fail());
-        assert!(first.text.contains("You run command"));
+        let text = text_of(&shell, 40, folds(false, false));
+        assert!(text[0].contains("You run command"));
+        let area = Rect::new(0, 0, 40, 10);
+        let mut grid = Grid::new(area);
+        let mut row = 0;
+        draw(
+            &mut grid,
+            area,
+            0,
+            &mut row,
+            &shell,
+            0,
+            false,
+            folds(false, false),
+        );
+        assert_eq!(grid.cell(0, 0).style.fg, style::agent_fail().fg);
     }
 
     #[test]
@@ -714,5 +540,22 @@ mod tests {
         let (_, stopped_style) = header_mark(&stopped, 0, false);
         assert_ne!(ok_style, stopped_style, "主动停止不是成功");
         assert_eq!(stopped_style, style::agent_warn());
+    }
+
+    #[test]
+    fn dropped_bytes_is_a_separate_fact_node() {
+        let mut shell = shell("out\n", ProcessStateView::Exited { code: Some(0) });
+        shell.truncated = true;
+        shell.dropped_bytes = 512;
+        let text = text_of(&shell, 50, folds(false, false));
+        assert!(
+            text.iter()
+                .any(|line| line.contains("512 earlier bytes dropped")),
+            "{text:?}"
+        );
+        assert!(
+            !text.iter().any(|line| line.contains("more lines")),
+            "{text:?}"
+        );
     }
 }

@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! ▲ Subagent report · completed
-//!   └─ explorer · compact 的触发点
+//!   ├─ explorer · compact 的触发点
+//!   └─ Report:
 //!      report body preview line 1
 //!      report body preview line 2
 //!      … 8 more lines
@@ -153,9 +154,10 @@ pub(super) fn measure(
     };
     let shown = all.len().min(cap);
     let remaining = all.len().saturating_sub(shown);
-    let hint_row = (expanded && remaining > 0).then_some(2 + shown);
+    let body_label = usize::from(!all.is_empty());
+    let hint_row = (expanded && remaining > 0).then_some(2 + body_label + shown);
     Measure {
-        rows: 2 + shown + usize::from(remaining > 0),
+        rows: 2 + body_label + shown + usize::from(remaining > 0),
         hint_row,
         has_more: all.len() > REPORT_PREVIEW_ROWS,
     }
@@ -198,16 +200,19 @@ pub(super) fn draw(
     }
     *row += 1;
 
-    // `└─ agent名 · title`：默认前景；只占一行，超宽按列裁剪。
-    let mut detail = vec![
-        Segment::new(
-            text::agent::TREE_LEAF.to_string(),
-            style::chat_notice_connector(),
-        ),
-        Segment::new(agent_line(report), style::text()),
-    ];
+    // `├─ agent名 · title`：后面还有 Report 正文时用分支，否则收口。
+    let body = body_view(report, rect.width, expanded, more_steps);
     let line = agent_line(report);
-    let room = usize::from(rect.width).saturating_sub(text::agent::TREE_LEAF.width());
+    let connector = if body.lines.is_empty() {
+        text::agent::TREE_LEAF
+    } else {
+        text::agent::TREE_BRANCH
+    };
+    let mut detail = vec![
+        Segment::new(connector, style::chat_notice_connector()),
+        Segment::new(line.clone(), style::text()),
+    ];
+    let room = usize::from(rect.width).saturating_sub(connector.width());
     if line.width() > room {
         detail[1] = Segment::new(
             crate::ui::text::truncate_to_width(&line, room),
@@ -219,7 +224,20 @@ pub(super) fn draw(
     }
     *row += 1;
 
-    let body = body_view(report, rect.width, expanded, more_steps);
+    if !body.lines.is_empty() {
+        let label = vec![
+            Segment::new(
+                text::agent::TREE_LEAF.to_string(),
+                style::chat_notice_connector(),
+            ),
+            Segment::new(text::agent::REPORT_LABEL, style::chat_tool_param()),
+        ];
+        if let Some(y) = visible_row(rect, scroll, *row) {
+            put_segments(grid, rect.x, y, rect.width, &label);
+        }
+        *row += 1;
+    }
+
     let body_style = if expanded {
         style::text()
     } else {
@@ -279,10 +297,10 @@ mod tests {
         let report = report("line one\nline two\nline three\nline four");
         assert_eq!(
             rows(&report, 60, false, 0),
-            5,
-            "标题 + 链接 + 2 行 + 剩余行"
+            6,
+            "标题 + 链接 + Report + 2 行 + 剩余行"
         );
-        assert!(rows(&report, 60, true, 0) > 5);
+        assert!(rows(&report, 60, true, 0) > 6);
         assert!(has_more(&report, 60));
     }
 
@@ -298,18 +316,18 @@ mod tests {
             None,
             "折叠态没有更多点击面"
         );
-        assert_eq!(hint_row(&report, 60, true, 0), Some(26), "首批 24 行");
-        assert_eq!(rows(&report, 60, true, 0), 27);
-        assert_eq!(hint_row(&report, 60, true, 1), Some(50), "第二批再 24 行");
-        assert_eq!(rows(&report, 60, true, 1), 51);
+        assert_eq!(hint_row(&report, 60, true, 0), Some(27), "首批 24 行");
+        assert_eq!(rows(&report, 60, true, 0), 28);
+        assert_eq!(hint_row(&report, 60, true, 1), Some(51), "第二批再 24 行");
+        assert_eq!(rows(&report, 60, true, 1), 52);
         assert_eq!(hint_row(&report, 60, true, 2), None, "全部展开后提示消失");
-        assert_eq!(rows(&report, 60, true, 2), 62);
+        assert_eq!(rows(&report, 60, true, 2), 63);
     }
 
     #[test]
     fn short_body_has_no_remainder_hint() {
         let report = report("line one");
-        assert_eq!(rows(&report, 60, false, 0), 3);
+        assert_eq!(rows(&report, 60, false, 0), 4);
         assert!(!has_more(&report, 60));
     }
 

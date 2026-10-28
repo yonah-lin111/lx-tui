@@ -37,6 +37,7 @@ fn finished_command(command: &str, output: &str) -> crate::app::state::ToolCallV
             command: command.into(),
             cwd: "/workspace/lx".into(),
             tty: false,
+            duration_ms: None,
             state: ProcessStateView::Exited { code: Some(0) },
             output_preview: Vec::new(),
             truncated: false,
