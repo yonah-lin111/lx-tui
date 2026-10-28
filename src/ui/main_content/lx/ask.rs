@@ -257,6 +257,41 @@ pub(super) fn hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<AskHit> 
         })
 }
 
+/// 命中手写输入框单元格 `(visual_row, content_col)`；未处于编辑态或未落在编辑区返回 None。
+pub(crate) fn ask_editor_cell_at(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+) -> Option<(usize, u16)> {
+    let ask = lx.ask.as_ref()?;
+    if !ask.editing {
+        return None;
+    }
+    let rect = rect(area, lx)?;
+    let lay = AskLayout::compute(rect, area.height, ask);
+    let editor_rect = lay.editor?;
+    if column < editor_rect.x || column >= editor_rect.right() {
+        return None;
+    }
+    let content_top = editor_rect.y.saturating_add(1);
+    let content_bottom = content_top.saturating_add(lay.editor_visible as u16);
+    if row < content_top || row >= content_bottom {
+        return None;
+    }
+    let editor = ask.editor()?;
+    let (cursor_row, _) = editor.cursor_visual();
+    let visible = lay.editor_visible;
+    let start = if visible > 0 && cursor_row >= visible {
+        cursor_row + 1 - visible
+    } else {
+        0
+    };
+    let visual_row = start + usize::from(row.saturating_sub(content_top));
+    let content_col = column.saturating_sub(editor_rect.x);
+    Some((visual_row, content_col))
+}
+
 /// 选项列表的 `(窗口起点, 总行数, 可视行数)`；面板未激活或无列表区返回 None。
 ///
 /// 与渲染共用 [`AskLayout::compute`] 的同一份几何，因此滚轮的基准与绘制永远一致。
@@ -624,17 +659,38 @@ fn draw_editor(
     };
     let content_x = editor_rect.x;
     let content_w = editor.width().max(1).min(editor_rect.width.max(1));
+    let selection = editor.text_selection_range();
     for (index, line) in rows.iter().skip(start).take(visible).enumerate() {
         let Some(segment) = text.get(line.start..line.end) else {
             break;
         };
-        grid.put_clipped(
-            content_x,
-            editor_rect.y.saturating_add(1).saturating_add(index as u16),
-            segment,
-            style::text(),
-            content_w,
-        );
+        let y = editor_rect.y.saturating_add(1).saturating_add(index as u16);
+        if let Some((sel_start, sel_end)) = selection {
+            let mut cx = content_x;
+            for (offset, ch) in segment.char_indices() {
+                let abs_offset = line.start + offset;
+                let ch_width =
+                    u16::try_from(unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
+                        .unwrap_or(0);
+                if ch_width == 0 {
+                    continue;
+                }
+                if cx.saturating_add(ch_width) > content_x.saturating_add(content_w) {
+                    break;
+                }
+                let mut cell_style = style::text();
+                if abs_offset >= sel_start && abs_offset < sel_end {
+                    cell_style = cell_style.add_modifier(ratatui::style::Modifier::REVERSED);
+                }
+                grid.set(cx, y, ch, cell_style);
+                for dx in 1..ch_width {
+                    grid.set(cx.saturating_add(dx), y, ' ', cell_style);
+                }
+                cx = cx.saturating_add(ch_width);
+            }
+        } else {
+            grid.put_clipped(content_x, y, segment, style::text(), content_w);
+        }
     }
     if !focused || visible == 0 {
         return None;

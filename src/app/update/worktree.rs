@@ -204,8 +204,24 @@ pub fn apply_worktree_open_key(state: &mut AppState, key: OverlayKey) {
                 }
                 OverlayKey::Left => dialog.query.move_left(),
                 OverlayKey::Right => dialog.query.move_right(),
-                OverlayKey::Home => dialog.query.move_home(),
-                OverlayKey::End => dialog.query.move_end(),
+                OverlayKey::Home | OverlayKey::LineStart => dialog.query.move_home(),
+                OverlayKey::End | OverlayKey::LineEnd => dialog.query.move_end(),
+                OverlayKey::DeleteToLineStart => {
+                    dialog.query.delete_to_line_start();
+                    dialog.normalize_selection();
+                }
+                OverlayKey::DeleteToLineEnd => {
+                    dialog.query.delete_to_line_end();
+                    dialog.normalize_selection();
+                }
+                OverlayKey::Undo => {
+                    dialog.query.undo();
+                    dialog.normalize_selection();
+                }
+                OverlayKey::Redo => {
+                    dialog.query.redo();
+                    dialog.normalize_selection();
+                }
                 OverlayKey::Esc
                 | OverlayKey::Enter
                 | OverlayKey::EnterFolder

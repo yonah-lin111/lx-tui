@@ -57,6 +57,148 @@ fn text_input_movement_clamps_at_bounds() {
 }
 
 #[test]
+fn text_input_selection_lifecycle_and_editing() {
+    let mut input = TextInput::new("hello world");
+    assert!(!input.has_selection());
+    assert_eq!(input.selected_text(), None);
+
+    // 拖拽选中 "world"
+    input.begin_selection(6);
+    input.drag_selection(11);
+    assert!(input.has_selection());
+    assert_eq!(input.selection(), Some((6, 11)));
+    assert_eq!(input.selected_text().as_deref(), Some("world"));
+
+    // 键入替换
+    input.insert_char('!');
+    assert_eq!(input.text(), "hello !");
+    assert_eq!(input.cursor(), 7);
+    assert!(!input.has_selection());
+
+    // 选中并退格删除
+    input.begin_selection(0);
+    input.drag_selection(5);
+    assert_eq!(input.selected_text().as_deref(), Some("hello"));
+    input.backspace();
+    assert_eq!(input.text(), " !");
+    assert_eq!(input.cursor(), 0);
+    assert!(!input.has_selection());
+
+    // 选中并方向键折叠
+    let mut input = TextInput::new("abcdef");
+    input.set_selection(2, 4);
+    assert_eq!(input.selected_text().as_deref(), Some("cd"));
+    input.move_left();
+    assert!(!input.has_selection());
+    assert_eq!(input.cursor(), 2);
+
+    input.set_selection(2, 4);
+    input.move_right();
+    assert!(!input.has_selection());
+    assert_eq!(input.cursor(), 4);
+}
+
+#[test]
+fn text_input_selection_clicks_word_and_all() {
+    let mut input = TextInput::new("foo bar_baz 123");
+    // 双击选词
+    input.begin_selection_with_clicks(5, 2);
+    assert_eq!(input.selected_text().as_deref(), Some("bar_baz"));
+
+    // 三击全选
+    input.begin_selection_with_clicks(1, 3);
+    assert_eq!(input.selected_text().as_deref(), Some("foo bar_baz 123"));
+}
+
+#[test]
+fn text_input_shortcuts_delete_to_line_start_and_end() {
+    let mut input = TextInput::new("git commit -m fix");
+    // 光标在 "commit" 前
+    input.set_selection(0, 0);
+    input.move_home();
+    input.insert_str("test ");
+    // test git commit -m fix
+    // 移到中间
+    input.set_selection(0, 0);
+    input.clear_selection();
+    for _ in 0..input.text().chars().count() {
+        input.move_left();
+    }
+    for _ in 0..5 {
+        input.move_right();
+    }
+    assert_eq!(input.cursor(), 5);
+
+    // Ctrl+K 删至行尾
+    input.delete_to_line_end();
+    assert_eq!(input.text(), "test ");
+    assert_eq!(input.cursor(), 5);
+
+    // Ctrl+U 删至行首
+    input.delete_to_line_start();
+    assert_eq!(input.text(), "");
+    assert_eq!(input.cursor(), 0);
+
+    // move_home / move_end
+    input.insert_str("hello");
+    input.move_home();
+    assert_eq!(input.cursor(), 0);
+    input.move_end();
+    assert_eq!(input.cursor(), 5);
+
+    // clear
+    input.clear();
+    assert_eq!(input.text(), "");
+    assert_eq!(input.cursor(), 0);
+}
+
+#[test]
+fn text_input_undo_and_redo_lifecycle() {
+    let mut input = TextInput::new("hello");
+    assert!(!input.undo());
+
+    input.insert_str(" world");
+    assert_eq!(input.text(), "hello world");
+
+    input.insert_char('!');
+    assert_eq!(input.text(), "hello world!");
+
+    // 撤销 '!'
+    assert!(input.undo());
+    assert_eq!(input.text(), "hello world");
+
+    // 撤销 " world"
+    assert!(input.undo());
+    assert_eq!(input.text(), "hello");
+
+    // 重做 " world"
+    assert!(input.redo());
+    assert_eq!(input.text(), "hello world");
+
+    // 重做 '!'
+    assert!(input.redo());
+    assert_eq!(input.text(), "hello world!");
+
+    // 清空与撤销
+    input.clear();
+    assert_eq!(input.text(), "");
+    assert!(input.undo());
+    assert_eq!(input.text(), "hello world!");
+}
+
+#[test]
+fn text_input_selection_replace_is_single_undo_step() {
+    let mut input = TextInput::new("hello world");
+    input.set_selection(6, 11);
+    input.insert_char('!');
+    assert_eq!(input.text(), "hello !");
+
+    // 撤销一步直接还原选区被替换前的 "hello world"
+    assert!(input.undo());
+    assert_eq!(input.text(), "hello world");
+}
+
+#[test]
 fn overlay_kind_reports_variant() {
     let menu = Overlay::Menu(Menu {
         anchor: (0, 0),

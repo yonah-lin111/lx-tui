@@ -170,6 +170,12 @@ pub struct AppState {
     pub lx_selection: Option<Selection>,
     /// 正在拖拽选择的 lx 输入框所在窗格；选区锚点存于该窗格的 `Lx` 内。
     pub lx_input_drag: Option<PaneId>,
+    /// 正在拖拽选择的浮层单行输入框。
+    pub overlay_input_drag: bool,
+    /// 正在拖拽选择的 Todo 编辑输入框。
+    pub todo_input_drag: bool,
+    /// 正在拖拽选择的 Ask 手写答案输入框所在窗格。
+    pub ask_input_drag: Option<PaneId>,
     /// 按下时落在**已展开卡片正文**上的目标：松开若未拖动（无选区范围）即折叠该块。
     ///
     /// 与 `lx_selection` 并行存在——按下正文既开始选区（允许长按拖拽复制），
@@ -341,6 +347,9 @@ impl AppState {
             terminal_selection: None,
             lx_selection: None,
             lx_input_drag: None,
+            overlay_input_drag: false,
+            todo_input_drag: false,
+            ask_input_drag: None,
             lx_card_press: None,
             selection_click: None,
             selection_autoscroll: None,

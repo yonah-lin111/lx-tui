@@ -488,6 +488,81 @@ fn double_click_ghost_row_keeps_draft() {
     assert_eq!(edit.input.text(), "draft", "草稿保留");
 }
 
+#[test]
+fn todo_edit_shortcuts_and_selection_lifecycle() {
+    let mut state = todo_state(&["hello world"]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
+
+    // Ctrl+A / LineStart 移至句首
+    assert!(apply_todo_key(&mut state, TodoKey::LineStart));
+    assert_eq!(state.todo.edit_input_mut().unwrap().cursor(), 0);
+
+    // Ctrl+E / LineEnd 移至句末
+    assert!(apply_todo_key(&mut state, TodoKey::LineEnd));
+    assert_eq!(state.todo.edit_input_mut().unwrap().cursor(), 11);
+
+    // 选区与退格
+    state.todo.edit_input_mut().unwrap().begin_selection(6);
+    state.todo.edit_input_mut().unwrap().drag_selection(11);
+    assert_eq!(
+        state
+            .todo
+            .edit_input_mut()
+            .unwrap()
+            .selected_text()
+            .as_deref(),
+        Some("world")
+    );
+    assert!(apply_todo_key(&mut state, TodoKey::Backspace));
+    assert_eq!(state.todo.editing().unwrap().input.text(), "hello ");
+
+    // Ctrl+U 删至行首
+    assert!(apply_todo_key(&mut state, TodoKey::DeleteToLineStart));
+    assert_eq!(state.todo.editing().unwrap().input.text(), "");
+}
+
+#[test]
+fn todo_undo_and_redo_editing_and_list_mode_swallowed() {
+    let mut state = todo_state(&["item"]);
+
+    // 列表态：按 Undo/Redo 直接吞掉，不再恢复已删待办项
+    assert!(!apply_todo_key(&mut state, TodoKey::Undo));
+    assert!(!apply_todo_key(&mut state, TodoKey::Redo));
+
+    // 编辑态：撤销打字与重做
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
+    apply_todo_key(&mut state, TodoKey::Char('!'));
+    assert_eq!(state.todo.editing().unwrap().input.text(), "item!");
+
+    // 撤销
+    assert!(apply_todo_key(&mut state, TodoKey::Undo));
+    assert_eq!(state.todo.editing().unwrap().input.text(), "item");
+
+    // 重做
+    assert!(apply_todo_key(&mut state, TodoKey::Redo));
+    assert_eq!(state.todo.editing().unwrap().input.text(), "item!");
+}
+
+#[test]
+fn todo_replace_at_max_limit_with_selection() {
+    let mut state = todo_state(&[]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::New));
+    let max_text = "a".repeat(crate::db::todo::MAX_TODO_TEXT_CHARS);
+    assert!(apply_todo_paste(&mut state, &max_text));
+
+    // 选中最后 5 个字符，插入 1 个字符替换
+    state.todo.edit_input_mut().unwrap().set_selection(
+        crate::db::todo::MAX_TODO_TEXT_CHARS - 5,
+        crate::db::todo::MAX_TODO_TEXT_CHARS,
+    );
+    assert!(apply_todo_key(&mut state, TodoKey::Char('b')));
+    assert_eq!(
+        state.todo.editing().unwrap().input.text().chars().count(),
+        crate::db::todo::MAX_TODO_TEXT_CHARS - 4
+    );
+    assert!(state.todo.editing().unwrap().input.text().ends_with('b'));
+}
+
 /// 幽灵行打开时点未选中行之外的位置不再造成越界选中。
 #[test]
 fn click_beyond_list_with_ghost_is_ignored() {

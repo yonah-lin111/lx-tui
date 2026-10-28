@@ -112,6 +112,7 @@ pub(super) fn render_worktree_open(
         search_area,
         dialog.query.text(),
         dialog.query.cursor(),
+        dialog.query.selection(),
         Some(text::WORKTREE_OPEN_FILTER),
     );
     let separator_area = Rect::new(

@@ -262,7 +262,7 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
             input.move_right();
             input.cursor() != before
         }
-        TodoKey::Home => {
+        TodoKey::Home | TodoKey::LineStart => {
             let Some(input) = state.todo.edit_input_mut() else {
                 return false;
             };
@@ -270,13 +270,29 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
             input.move_home();
             input.cursor() != before
         }
-        TodoKey::End => {
+        TodoKey::End | TodoKey::LineEnd => {
             let Some(input) = state.todo.edit_input_mut() else {
                 return false;
             };
             let before = input.cursor();
             input.move_end();
             input.cursor() != before
+        }
+        TodoKey::DeleteToLineStart => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            let before = input.text().len();
+            input.delete_to_line_start();
+            input.text().len() != before
+        }
+        TodoKey::DeleteToLineEnd => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            let before = input.text().len();
+            input.delete_to_line_end();
+            input.text().len() != before
         }
         TodoKey::Char(ch) => {
             let Some(input) = state.todo.edit_input_mut() else {
@@ -292,8 +308,20 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
         }
         // `Tab` 切状态（对齐 lx-agent 行内编辑：Tab 循环状态、Enter 提交、Esc 取消）。
         TodoKey::Tab => cycle_editing_status(state),
-        // 编辑中不允许上下移动选中、不撤销删除：一律吞掉。
-        TodoKey::Up | TodoKey::Down | TodoKey::Undo => false,
+        TodoKey::Undo => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            input.undo()
+        }
+        TodoKey::Redo => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            input.redo()
+        }
+        // 编辑中不允许上下移动选中：吞掉。
+        TodoKey::Up | TodoKey::Down => false,
     }
 }
 
@@ -315,14 +343,19 @@ fn apply_todo_list_key(state: &mut AppState, key: TodoKey) -> bool {
             begin_todo_edit(state, TodoEditTarget::After(index))
         }
         TodoKey::Esc => blur_todo(state),
-        TodoKey::Undo => undo_todo_delete(state),
+        // 列表态完全移除/吞掉撤销与重做，不恢复已删除待办项。
+        TodoKey::Undo | TodoKey::Redo => false,
         TodoKey::Clear => false,
         TodoKey::Backspace
         | TodoKey::Delete
         | TodoKey::Left
         | TodoKey::Right
         | TodoKey::Home
-        | TodoKey::End => false,
+        | TodoKey::End
+        | TodoKey::LineStart
+        | TodoKey::LineEnd
+        | TodoKey::DeleteToLineStart
+        | TodoKey::DeleteToLineEnd => false,
         TodoKey::Char(ch) => apply_todo_command(state, ch),
     }
 }
@@ -372,7 +405,9 @@ pub fn apply_todo_paste(state: &mut AppState, text: &str) -> bool {
     let Some(input) = state.todo.edit_input_mut() else {
         return false;
     };
-    let room = crate::db::todo::MAX_TODO_TEXT_CHARS.saturating_sub(input.text().chars().count());
+    let selected_len = input.selection().map_or(0, |(s, e)| e.saturating_sub(s));
+    let remaining_chars = input.text().chars().count().saturating_sub(selected_len);
+    let room = crate::db::todo::MAX_TODO_TEXT_CHARS.saturating_sub(remaining_chars);
     if room == 0 {
         return false;
     }
@@ -382,7 +417,9 @@ pub fn apply_todo_paste(state: &mut AppState, text: &str) -> bool {
 
 /// 在输入框里插入一个字符；已达上限时吞掉（返回 false，不产生变化）。
 fn insert_bounded(input: &mut crate::app::overlay::TextInput, ch: char) -> bool {
-    if input.text().chars().count() >= crate::db::todo::MAX_TODO_TEXT_CHARS {
+    let selected_len = input.selection().map_or(0, |(s, e)| e.saturating_sub(s));
+    let remaining_chars = input.text().chars().count().saturating_sub(selected_len);
+    if remaining_chars >= crate::db::todo::MAX_TODO_TEXT_CHARS {
         return false;
     }
     input.insert_char(ch);

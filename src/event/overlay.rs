@@ -24,6 +24,30 @@ pub(crate) fn handle_overlay_click(
     column: u16,
     row: u16,
 ) -> Option<(PaneId, Vec<u8>)> {
+    if let Some(overlay) = state.overlay.as_mut()
+        && let Some((area, input)) = overlay_input_hit_mut(screen, overlay)
+    {
+        let text_x = area.x.saturating_add(2);
+        let text_w = area.width.saturating_sub(2);
+        if row == area.y && column >= area.x && column < area.right() {
+            let rel_col = column.saturating_sub(text_x);
+            let char_idx = ui::widgets::input::char_index_at_col(
+                input.text(),
+                input.cursor(),
+                usize::from(text_w),
+                rel_col,
+            );
+            let clicks = crate::app::selection::next_click_count(
+                &mut state.selection_click,
+                column,
+                row,
+                Instant::now(),
+            );
+            input.begin_selection_with_clicks(char_idx, clicks);
+            state.overlay_input_drag = true;
+            return None;
+        }
+    }
     match state.overlay.as_ref() {
         Some(Overlay::PageMenu(menu)) => {
             let layout = ui::overlay::page_menu_layout(state, screen, menu);
@@ -400,6 +424,69 @@ pub(crate) fn handle_overlay_click(
             }
         }
         None => None,
+    }
+}
+
+/// 获取当前浮层中的单行输入区域与其可变引用。
+pub(crate) fn overlay_input_hit_mut(
+    screen: Rect,
+    overlay: &mut Overlay,
+) -> Option<(Rect, &mut crate::app::overlay::TextInput)> {
+    match overlay {
+        Overlay::Rename(r) => {
+            let shell = ui::overlay::rename_shell(screen)?;
+            Some((
+                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+                &mut r.input,
+            ))
+        }
+        Overlay::NewWorkspace(ws) => {
+            let shell = ui::overlay::new_workspace_shell(screen)?;
+            Some((
+                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+                &mut ws.input,
+            ))
+        }
+        Overlay::NewNode(n) => {
+            let shell = ui::overlay::new_node_shell(screen)?;
+            Some((
+                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+                &mut n.name,
+            ))
+        }
+        Overlay::SaveDraft(d) => {
+            let shell = ui::overlay::save_draft_shell(screen, d.entries.len())?;
+            Some((
+                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+                &mut d.name,
+            ))
+        }
+        Overlay::WorktreeOpen(w) => {
+            let shell = ui::overlay::worktree_dialog_shell(screen, w.entries.len())?;
+            Some((
+                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+                &mut w.query,
+            ))
+        }
+        Overlay::ReferencedFolderInput(i) => {
+            let shell = ui::overlay::referenced_input_shell(screen)?;
+            Some((
+                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+                &mut i.input,
+            ))
+        }
+        Overlay::ReferencedFolderSearch(s) => {
+            let layout = ui::overlay::referenced_search_layout(screen, s)?;
+            Some((layout.query, &mut s.query))
+        }
+        Overlay::ResumeSessionEdit(r) => {
+            let shell = ui::overlay::resume_edit_shell(screen)?;
+            Some((
+                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+                &mut r.input,
+            ))
+        }
+        _ => None,
     }
 }
 

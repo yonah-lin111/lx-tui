@@ -3716,6 +3716,68 @@ fn overlay_key_new_workspace_editing_and_lifecycle() {
 }
 
 #[test]
+fn overlay_shortcuts_and_selection_lifecycle() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::Rename(Rename {
+        target: RenameTarget::Workspace(0),
+        input: TextInput::new("initial title"),
+    }));
+
+    // Ctrl+A / LineStart
+    apply_overlay_key(&mut state, OverlayKey::LineStart);
+    match &state.overlay {
+        Some(Overlay::Rename(r)) => assert_eq!(r.input.cursor(), 0),
+        _ => panic!("rename expected"),
+    }
+
+    // Ctrl+E / LineEnd
+    apply_overlay_key(&mut state, OverlayKey::LineEnd);
+    match &state.overlay {
+        Some(Overlay::Rename(r)) => assert_eq!(r.input.cursor(), 13),
+        _ => panic!("rename expected"),
+    }
+
+    // 选区替换
+    if let Some(Overlay::Rename(r)) = state.overlay.as_mut() {
+        r.input.set_selection(0, 7); // "initial"
+    }
+    apply_overlay_key(&mut state, OverlayKey::Char('n'));
+    match &state.overlay {
+        Some(Overlay::Rename(r)) => assert_eq!(r.input.text(), "n title"),
+        _ => panic!("rename expected"),
+    }
+
+    // Ctrl+U 删至行首（此时光标在 'n' 之后为 1，删掉 'n' 剩下 " title"）
+    apply_overlay_key(&mut state, OverlayKey::DeleteToLineStart);
+    match &state.overlay {
+        Some(Overlay::Rename(r)) => assert_eq!(r.input.text(), " title"),
+        _ => panic!("rename expected"),
+    }
+
+    // Ctrl+E 移至行尾后再 Ctrl+U 整行被删
+    apply_overlay_key(&mut state, OverlayKey::LineEnd);
+    apply_overlay_key(&mut state, OverlayKey::DeleteToLineStart);
+    match &state.overlay {
+        Some(Overlay::Rename(r)) => assert_eq!(r.input.text(), ""),
+        _ => panic!("rename expected"),
+    }
+
+    // Ctrl+Z 撤销
+    apply_overlay_key(&mut state, OverlayKey::Undo);
+    match &state.overlay {
+        Some(Overlay::Rename(r)) => assert_eq!(r.input.text(), " title"),
+        _ => panic!("rename expected"),
+    }
+
+    // Ctrl+Shift+Z / Redo 重做
+    apply_overlay_key(&mut state, OverlayKey::Redo);
+    match &state.overlay {
+        Some(Overlay::Rename(r)) => assert_eq!(r.input.text(), ""),
+        _ => panic!("rename expected"),
+    }
+}
+
+#[test]
 fn update_pane_agent_mounts_updates_and_clears() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();

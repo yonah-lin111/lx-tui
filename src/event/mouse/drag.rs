@@ -29,6 +29,24 @@ pub(crate) fn handle_mouse_drag(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
+    if state.overlay_input_drag
+        && let Some(overlay) = state.overlay.as_mut()
+        && let Some((area, input)) =
+            super::super::overlay::overlay_input_hit_mut(geometry.screen, overlay)
+    {
+        let text_x = area.x.saturating_add(2);
+        let text_w = area.width.saturating_sub(2);
+        let rel_col = mouse.column.saturating_sub(text_x);
+        let char_idx = ui::widgets::input::char_index_at_col(
+            input.text(),
+            input.cursor(),
+            usize::from(text_w),
+            rel_col,
+        );
+        input.drag_selection(char_idx);
+        *dirty = true;
+        return;
+    }
     if let Some(grab) = state.referenced_search_scroll_drag {
         if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref()
             && let Some(layout) = ui::overlay::referenced_search_layout(geometry.screen, search)
@@ -253,6 +271,32 @@ pub(crate) fn handle_mouse_drag(
         *dirty = true;
         return;
     }
+    if state.todo_input_drag
+        && let Some(char_idx) =
+            ui::right_panel::todo::edit_input_char_at(view.prompt, state, mouse.column, mouse.row)
+        && let Some(input) = state.todo.edit_input_mut()
+    {
+        input.drag_selection(char_idx);
+        *dirty = true;
+        return;
+    }
+    if let Some(pane) = state.ask_input_drag {
+        let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
+            return;
+        };
+        let inner = layout::pane_inner_rect(*rect);
+        if let Some(target) = state.pane_anywhere(pane)
+            && let Some((visual_row, col)) =
+                ui::main_content::lx::ask_editor_cell_at(inner, &target.lx, mouse.column, mouse.row)
+            && let Some(target_mut) = state.pane_mut_anywhere(pane)
+            && let Some(ask_mut) = target_mut.lx.ask.as_mut()
+            && let Some(editor) = ask_mut.editor_mut()
+        {
+            editor.drag_text_selection(visual_row, col);
+            *dirty = true;
+        }
+        return;
+    }
     // lx 输入框文本拖拽：焦点跟到鼠标所在单元格（超出则钳到输入内容区）。
     if let Some(pane) = state.lx_input_drag {
         let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
@@ -370,6 +414,18 @@ pub(crate) fn handle_mouse_up_left(
         *dirty = true;
         return;
     }
+    if state.overlay_input_drag {
+        state.overlay_input_drag = false;
+        if let Some(overlay) = state.overlay.as_mut()
+            && let Some((_, input)) =
+                super::super::overlay::overlay_input_hit_mut(geometry.screen, overlay)
+            && !input.has_selection()
+        {
+            input.clear_selection();
+        }
+        *dirty = true;
+        return;
+    }
     if state.overlay.is_some() {
         return;
     }
@@ -441,6 +497,27 @@ pub(crate) fn handle_mouse_up_left(
     }
     // 终端选区松开：对齐 prompt / lx，非空选区保留高亮供 Ctrl/Cmd+C 复制，空选区清除。
     if update::end_terminal_selection_drag(state) {
+        *dirty = true;
+        return;
+    }
+    if state.todo_input_drag {
+        state.todo_input_drag = false;
+        if let Some(input) = state.todo.edit_input_mut()
+            && !input.has_selection()
+        {
+            input.clear_selection();
+        }
+        *dirty = true;
+        return;
+    }
+    if let Some(pane) = state.ask_input_drag.take() {
+        if let Some(target) = state.pane_mut_anywhere(pane)
+            && let Some(ask) = target.lx.ask.as_mut()
+            && let Some(editor) = ask.editor_mut()
+            && !editor.has_text_selection()
+        {
+            editor.clear_text_selection();
+        }
         *dirty = true;
         return;
     }

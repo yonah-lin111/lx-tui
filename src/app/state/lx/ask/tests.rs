@@ -214,3 +214,62 @@ fn answer_editing_never_touches_the_prompt_draft() {
     assert_eq!(lx.input, draft);
     assert_eq!(lx.cursor, cursor);
 }
+
+#[test]
+fn ask_editor_selection_and_editing() {
+    let mut editor = AskEditor::new();
+    editor.insert_str("custom answer");
+    assert_eq!(editor.text(), "custom answer");
+
+    // 选区
+    editor.begin_text_selection(0, 7);
+    editor.drag_text_selection(0, 13);
+    assert!(editor.has_text_selection());
+    assert_eq!(editor.selected_text().as_deref(), Some("answer"));
+
+    // 键入替换
+    editor.insert_char('!');
+    assert_eq!(editor.text(), "custom !");
+    assert!(!editor.has_text_selection());
+
+    // 快捷键: delete_to_line_end
+    editor.home();
+    editor.move_right(); // 光标在 1
+    editor.delete_to_line_end();
+    assert_eq!(editor.text(), "c");
+
+    // delete_to_line_start
+    editor.insert_str("omplete");
+    editor.delete_to_line_start();
+    assert_eq!(editor.text(), "");
+}
+
+#[test]
+fn ask_editor_selection_overflow_preserves_text_and_undo() {
+    let mut editor = AskEditor::new();
+    let text = "a".repeat(MAX_ASK_CUSTOM_BYTES);
+    assert!(editor.insert_str(&text));
+    assert_eq!(editor.text().len(), MAX_ASK_CUSTOM_BYTES);
+
+    // 选中前 10 字节，尝试粘贴 20 字节（总长将超出上限）
+    editor.begin_text_selection(0, 0);
+    editor.drag_text_selection(0, 10);
+    assert!(editor.has_text_selection());
+    let overflow = "b".repeat(20);
+    assert!(!editor.insert_str(&overflow), "超限必须整次拒绝");
+    assert_eq!(
+        editor.text().len(),
+        MAX_ASK_CUSTOM_BYTES,
+        "超限拒绝后原选区文字必须完好保留"
+    );
+
+    // 粘贴 10 字节正好替换
+    let exact = "b".repeat(10);
+    assert!(editor.insert_str(&exact));
+    assert_eq!(editor.text().len(), MAX_ASK_CUSTOM_BYTES);
+    assert!(editor.text().starts_with("bbbbbbbbbb"));
+
+    // 撤销一步恢复原状
+    editor.undo();
+    assert!(editor.text().starts_with("aaaaaaaaaa"));
+}

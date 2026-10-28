@@ -202,8 +202,16 @@ fn edit_text_input(input: &mut TextInput, key: crate::app::actions::OverlayKey) 
         OverlayKey::Delete => input.delete(),
         OverlayKey::Left => input.move_left(),
         OverlayKey::Right => input.move_right(),
-        OverlayKey::Home => input.move_home(),
-        OverlayKey::End => input.move_end(),
+        OverlayKey::Home | OverlayKey::LineStart => input.move_home(),
+        OverlayKey::End | OverlayKey::LineEnd => input.move_end(),
+        OverlayKey::DeleteToLineStart => input.delete_to_line_start(),
+        OverlayKey::DeleteToLineEnd => input.delete_to_line_end(),
+        OverlayKey::Undo => {
+            input.undo();
+        }
+        OverlayKey::Redo => {
+            input.redo();
+        }
         _ => {}
     }
 }

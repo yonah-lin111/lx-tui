@@ -108,7 +108,13 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             | OverlayKey::Left
             | OverlayKey::Right
             | OverlayKey::Home
-            | OverlayKey::End => {
+            | OverlayKey::End
+            | OverlayKey::LineStart
+            | OverlayKey::LineEnd
+            | OverlayKey::DeleteToLineStart
+            | OverlayKey::DeleteToLineEnd
+            | OverlayKey::Undo
+            | OverlayKey::Redo => {
                 super::edit_referenced_search(state, key);
             }
             OverlayKey::Remove | OverlayKey::PageUp | OverlayKey::PageDown => {}
@@ -223,12 +229,32 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             edit_text_input(state, TextInput::move_right);
             None
         }
-        OverlayKey::Home => {
+        OverlayKey::Home | OverlayKey::LineStart => {
             edit_text_input(state, TextInput::move_home);
             None
         }
-        OverlayKey::End => {
+        OverlayKey::End | OverlayKey::LineEnd => {
             edit_text_input(state, TextInput::move_end);
+            None
+        }
+        OverlayKey::DeleteToLineStart => {
+            edit_text_input(state, TextInput::delete_to_line_start);
+            None
+        }
+        OverlayKey::DeleteToLineEnd => {
+            edit_text_input(state, TextInput::delete_to_line_end);
+            None
+        }
+        OverlayKey::Undo => {
+            edit_text_input(state, |input| {
+                input.undo();
+            });
+            None
+        }
+        OverlayKey::Redo => {
+            edit_text_input(state, |input| {
+                input.redo();
+            });
             None
         }
         // 引用文件夹浮层已在上方分支消费；此处不会到达。

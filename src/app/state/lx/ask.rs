@@ -547,13 +547,36 @@ impl AskEditor {
     /// 传入的必须是**净化后**的字节数：`Lx::insert_str` 内部会把 `\t` 展开成两个
     /// 空格、丢弃控制字符，按原始输入判长会让上限翻倍。
     pub fn can_insert(&self, bytes: usize) -> bool {
-        self.text().len().saturating_add(bytes) <= MAX_ASK_CUSTOM_BYTES
+        self.can_replace(bytes)
+    }
+
+    /// 判定在替换当前可能存在的选区后，是否仍在字节上限内。
+    pub fn can_replace(&self, bytes: usize) -> bool {
+        let selected_bytes = self
+            .text_selection_range()
+            .map_or(0, |(s, e)| e.saturating_sub(s));
+        self.text()
+            .len()
+            .saturating_sub(selected_bytes)
+            .saturating_add(bytes)
+            <= MAX_ASK_CUSTOM_BYTES
     }
 
     pub fn insert_char(&mut self, ch: char) {
-        if self.can_insert(ch.len_utf8()) {
-            self.0.insert_char(ch);
+        let ch_len = ch.len_utf8();
+        if !self.can_replace(ch_len) {
+            return;
         }
+        let selection = self.0.text_selection_range();
+        self.0.snapshot();
+        if let Some((start, end)) = selection {
+            self.0.input.replace_range(start..end, "");
+            self.0.cursor = start;
+        }
+        self.0.input.insert(self.0.cursor, ch);
+        self.0.cursor += ch_len;
+        self.0.touch();
+        self.0.scroll_cursor_into_view();
     }
 
     /// 粘贴：先按与写入完全相同的净化规则算长度，再决定是否写入。
@@ -562,86 +585,187 @@ impl AskEditor {
     /// 「预检通过、实际超限」。
     pub fn insert_str(&mut self, text: &str) -> bool {
         let sanitized = crate::app::prompt::text::sanitize(text);
-        if !self.can_insert(sanitized.len()) {
+        if sanitized.is_empty() {
             return false;
         }
-        self.0.insert_str(&sanitized);
+        let sanitized_len = sanitized.len();
+        if !self.can_replace(sanitized_len) {
+            return false;
+        }
+        let selection = self.0.text_selection_range();
+        self.0.snapshot();
+        if let Some((start, end)) = selection {
+            self.0.input.replace_range(start..end, "");
+            self.0.cursor = start;
+        }
+        self.0.input.insert_str(self.0.cursor, &sanitized);
+        self.0.cursor += sanitized_len;
+        self.0.touch();
+        self.0.scroll_cursor_into_view();
         true
     }
 
     pub fn newline(&mut self) {
-        // `Lx::plain` 的换行恒为 1 字节（不续写列表标记），预算是精确的。
-        if self.can_insert(1) {
-            self.0.newline();
+        if !self.can_replace(1) {
+            return;
         }
+        let selection = self.0.text_selection_range();
+        self.0.snapshot();
+        if let Some((start, end)) = selection {
+            self.0.input.replace_range(start..end, "");
+            self.0.cursor = start;
+        }
+        self.0.input.insert(self.0.cursor, '\n');
+        self.0.cursor += 1;
+        self.0.touch();
+        self.0.scroll_cursor_into_view();
     }
 
     pub fn backspace(&mut self) {
+        if self.delete_selected() {
+            return;
+        }
         self.0.backspace();
     }
 
     pub fn delete(&mut self) {
+        if self.delete_selected() {
+            return;
+        }
         self.0.delete();
     }
 
     pub fn move_left(&mut self) {
+        self.clear_text_selection();
         self.0.move_left();
     }
 
     pub fn move_right(&mut self) {
+        self.clear_text_selection();
         self.0.move_right();
     }
 
     pub fn move_up(&mut self) {
+        self.clear_text_selection();
         self.0.move_up();
     }
 
     pub fn move_down(&mut self) {
+        self.clear_text_selection();
         self.0.move_down();
     }
 
     pub fn home(&mut self) {
+        self.clear_text_selection();
         self.0.home();
     }
 
     pub fn end(&mut self) {
+        self.clear_text_selection();
         self.0.end();
     }
 
     pub fn word_left(&mut self) {
+        self.clear_text_selection();
         self.0.word_left();
     }
 
     pub fn word_right(&mut self) {
+        self.clear_text_selection();
         self.0.word_right();
     }
 
     pub fn delete_to_line_start(&mut self) {
+        if self.delete_selected() {
+            return;
+        }
         self.0.delete_to_line_start();
     }
 
     pub fn delete_to_line_end(&mut self) {
+        if self.delete_selected() {
+            return;
+        }
         self.0.delete_to_line_end();
     }
 
     pub fn delete_word_backward(&mut self) {
+        if self.delete_selected() {
+            return;
+        }
         self.0.delete_word_backward();
     }
 
     pub fn delete_word_forward(&mut self) {
+        if self.delete_selected() {
+            return;
+        }
         self.0.delete_word_forward();
     }
 
     pub fn undo(&mut self) {
+        self.clear_text_selection();
         self.0.undo();
     }
 
     pub fn redo(&mut self) {
+        self.clear_text_selection();
         self.0.redo();
     }
 
     pub fn clear(&mut self) {
+        self.clear_text_selection();
         self.0.clear();
+    }
+
+    /// 在指定视觉行/内容列开始输入框文本选择。
+    pub fn begin_text_selection(&mut self, row: usize, col: u16) {
+        self.0.begin_text_selection(row, col);
+    }
+
+    /// 按连续点击次数（1=单字、2=选词、3=全选/选行）在指定视觉行/内容列开始文本选择。
+    pub fn begin_text_selection_with_clicks(&mut self, row: usize, col: u16, clicks: u8) {
+        self.0.begin_text_selection_with_clicks(row, col, clicks);
+    }
+
+    /// 拖拽扩展文本选区。
+    pub fn drag_text_selection(&mut self, row: usize, col: u16) {
+        self.0.drag_text_selection(row, col);
+    }
+
+    /// 清除输入框文本选区。
+    pub fn clear_text_selection(&mut self) {
+        self.0.clear_text_selection();
+    }
+
+    /// 是否存在选区。
+    pub fn has_text_selection(&self) -> bool {
+        self.0.has_text_selection()
+    }
+
+    /// 选区字节范围 `[start, end)`；空选区返回 None。
+    pub fn text_selection_range(&self) -> Option<(usize, usize)> {
+        self.0.text_selection_range()
+    }
+
+    /// 取选中文本；空选区返回 None。
+    pub fn selected_text(&self) -> Option<String> {
+        self.0.selected_text()
+    }
+
+    /// 删除选中的文本区间；返回是否实际删除了选区。
+    pub fn delete_selected(&mut self) -> bool {
+        let Some((start, end)) = self.0.text_selection_range() else {
+            self.0.clear_text_selection();
+            return false;
+        };
+        self.0.snapshot();
+        self.0.input.replace_range(start..end, "");
+        self.0.cursor = start;
+        self.0.clear_text_selection();
+        self.0.touch();
+        self.0.scroll_cursor_into_view();
+        true
     }
 }
 
