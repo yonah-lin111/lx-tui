@@ -17,22 +17,40 @@ pub(crate) const WHEEL_LINES: isize = 3;
 /// 边缘自动滚动每步的间隔。
 pub(crate) const AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);
 
-/// 在 lx 页开始一次文本选择（内容行、列相对内容区左上角）。
-pub fn begin_lx_selection(state: &mut AppState, id: PaneId, row: u16, col: u16) {
+/// 在 lx 主内容区开始一次文本选择（内容行、正文列坐标）。
+pub fn begin_lx_selection(state: &mut AppState, id: PaneId, row: i32, col: u16) {
     clear_selection(state);
-    state.lx_selection = Some(Selection::begin(id, i32::from(row), col));
+    state.lx_selection = Some(Selection::begin(id, row, col));
 }
 
-/// 扩展 lx 页选区；窗格不一致时忽略。
-pub fn drag_lx_selection(state: &mut AppState, id: PaneId, row: u16, col: u16) {
+/// 扩展 lx 主内容区选区（内容行、正文列坐标）；窗格不一致时忽略。
+pub fn drag_lx_selection(state: &mut AppState, id: PaneId, row: i32, col: u16) {
     if let Some(selection) = state.lx_selection.as_mut()
         && selection.pane() == id
     {
-        selection.drag(i32::from(row), col);
+        selection.drag(row, col);
     }
 }
 
-/// 取走 lx 页选区（结束拖动）；无选区返回 None。
+/// 松开鼠标：结束 lx 主内容区选区拖动；非空选区保留供 Ctrl/Cmd+C 复制，空选区直接清除。
+/// 返回是否存在保留下来的非空选区。
+pub fn end_lx_selection_drag(state: &mut AppState) -> bool {
+    let keep = state
+        .lx_selection
+        .as_ref()
+        .is_some_and(|selection| selection.range().is_some());
+    if keep {
+        if let Some(selection) = state.lx_selection.as_mut() {
+            selection.finish();
+        }
+        true
+    } else {
+        state.lx_selection = None;
+        false
+    }
+}
+
+/// 取走 lx 页选区；无选区返回 None。
 pub fn take_lx_selection(state: &mut AppState) -> Option<Selection> {
     state.lx_selection.take()
 }
@@ -40,6 +58,23 @@ pub fn take_lx_selection(state: &mut AppState) -> Option<Selection> {
 /// 清除 lx 页选区。
 pub fn clear_lx_selection(state: &mut AppState) {
     state.lx_selection = None;
+}
+
+/// 清除指定窗格上的 lx 选区与卡片按下记录。
+pub fn clear_lx_selection_for(state: &mut AppState, id: PaneId) {
+    if state
+        .lx_selection
+        .is_some_and(|selection| selection.pane() == id)
+    {
+        state.lx_selection = None;
+    }
+    if state
+        .lx_card_press
+        .as_ref()
+        .is_some_and(|(pane, _)| *pane == id)
+    {
+        state.lx_card_press = None;
+    }
 }
 
 /// 在 lx 输入框内开始文本选择（视觉行、内容列）；光标落到该单元格。

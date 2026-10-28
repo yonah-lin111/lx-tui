@@ -57,6 +57,62 @@ pub(crate) fn scroll_selection_wheel(
     true
 }
 
+/// lx 主内容区拖拽选区中滚轮：滚动活动容器视口并把选区终点延伸到鼠标所在的新内容行。
+fn wheel_lx_selection(
+    state: &mut AppState,
+    pane: PaneId,
+    rects: &[(PaneId, Rect)],
+    direction: isize,
+    mouse: &MouseEvent,
+    cache: &mut ui::RenderCache,
+) -> bool {
+    let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
+        return false;
+    };
+    let inner = layout::pane_inner_rect(*rect);
+    if inner.width == 0 || inner.height == 0 {
+        return false;
+    }
+    let Some(has_task) = state
+        .pane_anywhere(pane)
+        .filter(|target| target.view == PaneView::Lx)
+        .map(|target| target.lx.task.is_some())
+    else {
+        return false;
+    };
+    let moved = if has_task {
+        update::resolve_task_output_visible(state, rects);
+        update::resolve_task_agents_visible(state, rects);
+        let agents_tab = state
+            .pane_anywhere(pane)
+            .and_then(|target| target.lx.task.as_ref())
+            .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
+        if agents_tab {
+            update::scroll_agents_detail(state, pane, direction)
+        } else {
+            update::scroll_task_output(state, pane, direction.saturating_mul(WHEEL_LINES))
+        }
+    } else if let Some((total, visible)) = state
+        .pane_anywhere(pane)
+        .and_then(|target| ui::main_content::lx::history_rows(inner, &target.lx, cache.pane(pane)))
+    {
+        update::scroll_lx_history(state, pane, direction, total, visible)
+    } else {
+        false
+    };
+    if !moved {
+        return false;
+    }
+    if let Some(geom) = state
+        .pane_anywhere(pane)
+        .and_then(|target| ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane)))
+    {
+        let (content_row, col) = geom.cell(mouse.column, mouse.row);
+        update::drag_lx_selection(state, pane, content_row, col);
+    }
+    true
+}
+
 /// 按终端模式把滚轮交给窗格：转发鼠标上报、备用屏方向键或本地回滚。
 ///
 /// 前两种由应用接管滚动，本地视口吸回底部；返回事件是否被消费（需要重绘）。
@@ -255,6 +311,18 @@ pub(crate) fn handle_mouse_wheel(
         }
         return;
     }
+    // lx 主内容区拖拽选区：滚轮滚动对应容器视口，锚点钉在原内容行上，终点延伸到鼠标所在内容行。
+    if let Some(selection) = state.lx_selection
+        && selection.is_dragging()
+    {
+        if let Some(direction) = vertical_wheel_direction(mouse.kind) {
+            let pane = selection.pane();
+            if wheel_lx_selection(state, pane, rects, direction, mouse, cache) {
+                *dirty = true;
+            }
+        }
+        return;
+    }
     // 终端拖拽选区优先于鼠标上报：滚动选区所在窗格并延伸选区。
     if let Some(pane) = state.terminal_selection
         && scroll_selection_wheel(state, pane, rects, mouse)
@@ -310,11 +378,13 @@ pub(crate) fn handle_mouse_wheel(
             }
             // 后台任务面板的输出容器：滚轮滚动输出视口（不穿透到下方 item 列表）。
             if let Some(direction) = vertical_wheel_direction(mouse.kind)
-                && let Some(rects) = state
+                && let Some(task_rects) = state
                     .pane_anywhere(pane)
                     .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
-                && rects.output.contains((mouse.column, mouse.row).into())
+                && task_rects.output.contains((mouse.column, mouse.row).into())
             {
+                update::resolve_task_output_visible(state, rects);
+                update::resolve_task_agents_visible(state, rects);
                 let agents_tab = state
                     .pane_anywhere(pane)
                     .and_then(|target| target.lx.task.as_ref())

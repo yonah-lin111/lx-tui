@@ -856,6 +856,7 @@ pub fn toggle_thinking_at(
         return false;
     };
     target.lx.chat.toggle_reasoning(message_index, step_index);
+    crate::app::update::clear_lx_selection_for(state, pane);
     true
 }
 
@@ -884,6 +885,7 @@ pub fn toggle_latest_thinking(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     target.lx.chat.toggle_reasoning(message_index, step_index);
+    crate::app::update::clear_lx_selection_for(state, pane);
     true
 }
 

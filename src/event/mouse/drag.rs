@@ -244,7 +244,9 @@ pub(crate) fn handle_mouse_drag(
     // 没有本地选区时，鼠标上报模式的应用自己处理拖拽（对齐 herdr）。
     if state.terminal_selection.is_none()
         && state.selection.is_none()
-        && state.lx_selection.is_none()
+        && state
+            .lx_selection
+            .is_none_or(|selection| !selection.is_dragging())
         && state.lx_input_drag.is_none()
         && let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row)
         && forward_pane_mouse_event(state, sessions, pane, inner, mouse)
@@ -268,20 +270,22 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
-    // lx 页选区拖拽：终点更新到鼠标位置的内容坐标。
-    if let Some(selection) = state.lx_selection {
+    // lx 主内容区选区拖拽：终点更新到鼠标所在的内容行与正文列坐标。
+    if let Some(selection) = state.lx_selection
+        && selection.is_dragging()
+    {
         let pane = selection.pane();
         let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
             return;
         };
-        let inner = pane_content_inner(state, view, pane, layout::pane_inner_rect(*rect));
-        if inner.width == 0 || inner.height == 0 {
-            return;
+        let inner = layout::pane_inner_rect(*rect);
+        if let Some(geom) = state.pane_anywhere(pane).and_then(|target| {
+            ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane))
+        }) {
+            let (content_row, col) = geom.cell(mouse.column, mouse.row);
+            update::drag_lx_selection(state, pane, content_row, col);
+            *dirty = true;
         }
-        let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
-        let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
-        update::drag_lx_selection(state, pane, row, col);
-        *dirty = true;
         return;
     }
     // 终端拖拽选区：把终点更新到鼠标位置的内容；prompt 选区同时移动编辑器光标。
@@ -478,52 +482,23 @@ pub(crate) fn handle_mouse_up_left(
         *dirty = true;
         return;
     }
-    // lx 页选区松开：复制选中文本（空选区不复制）。
-    // 按下时落在展开卡片正文上、且**没有拖出选区** → 这次是点击，折叠该块；
-    // 拖过哪怕一列就是复制，绝不折叠（长按选中正文不能顺手把卡片收起来）。
-    let selection = update::take_lx_selection(state);
-    let mut clicked_card = None;
-    if let Some(selection) = selection
-        && let Some(range) = selection.range()
-    {
-        let pane = selection.pane();
-        let area = rects
-            .iter()
-            .find(|(id, _)| *id == pane)
-            .map(|(_, rect)| layout::pane_inner_rect(*rect));
-        if let Some((area, target)) = area.zip(state.pane_anywhere(pane)) {
-            // 复用该窗格的常驻缓存：这一帧刚画过历史，快照与绘制数据全命中。
-            let text = ui::main_content::lx::copy_text(area, &target.lx, range, cache.pane(pane));
-            if !text.trim().is_empty() {
-                let now = Instant::now();
-                if crate::platform::write_clipboard(&text) {
-                    update::show_lx_toast(
-                        state,
-                        pane,
-                        Toast::new(ToastKind::Default, ui::text::TOAST_COPIED, Some(pane), now)
-                            .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
-                    );
-                } else {
-                    tracing::warn!("clipboard write failed");
-                    update::show_lx_toast(
-                        state,
-                        pane,
-                        Toast::new(
-                            ToastKind::Danger,
-                            ui::text::TOAST_COPY_FAILED,
-                            Some(pane),
-                            now,
-                        )
-                        .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
-                    );
-                }
-            }
-        }
-    } else if let Some(pressed) = card_press {
-        clicked_card = Some(pressed);
+    // lx 主内容区选区松开：对齐 prompt 编辑器，非空选区保留高亮供 Ctrl/Cmd+C 复制；
+    // 未拖出选区范围时，若按下落在可折叠卡片上则作为单击切换折叠（主消息列表与 Agents 详情共用）。
+    let _ = cache;
+    if update::end_lx_selection_drag(state) {
+        *dirty = true;
+        return;
     }
-    if let Some((pane, card)) = clicked_card {
-        update::toggle_lx_card(state, pane, card);
+    if let Some((pane, card)) = card_press {
+        let agents_tab = state
+            .pane_anywhere(pane)
+            .and_then(|target| target.lx.task.as_ref())
+            .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
+        if agents_tab {
+            update::toggle_agent_card(state, pane, card);
+        } else {
+            update::toggle_lx_card(state, pane, card);
+        }
     }
     update::clear_selection(state);
     *dirty = true;

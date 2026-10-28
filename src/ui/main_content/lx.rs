@@ -5,7 +5,7 @@
 
 use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::markdown::BlockPanel;
@@ -19,9 +19,12 @@ use crate::ui::{style, text};
 mod ask;
 mod input;
 mod mention;
+mod selection;
 
 pub(crate) use ask::rect as ask_rect;
 pub(crate) use mention::{item_at as mention_item_at, layout as mention_layout};
+pub(crate) use selection::content_geom;
+pub use selection::copy_text;
 
 pub(crate) mod brand;
 pub(crate) mod chat_bar;
@@ -92,14 +95,15 @@ pub fn render(
                     continue;
                 }
                 cell.set_char(glyph.ch);
-                let mut cell_style = glyph.style;
-                if selection.is_some_and(|sel| sel.contains(i32::from(dy), dx)) {
-                    cell_style = cell_style.add_modifier(Modifier::REVERSED);
-                }
-                cell.set_style(cell_style);
+                cell.set_style(glyph.style);
                 cell.set_diff_option(CellDiffOption::None);
             }
         }
+    }
+    if let Some(sel) = selection
+        && let Some(geom) = selection::content_geom(area, lx, cache)
+    {
+        selection::paint_selection(buf, geom, sel);
     }
     render_input_scrollbar(area, buf, lx);
     // 置顶用户消息行：表现层，blit 之后直写 Buffer（不进网格 → 不参与复制与选区）。
@@ -324,49 +328,6 @@ fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
     };
     let panel_area = Rect::new(content_x, area.y, content_w, region_h);
     command_panel::render(panel_area, buf, &view);
-}
-
-/// 提取选区文本（内容行、列相对内容区左上角）；空选区返回空串。
-///
-/// `cache` 由调用方给（事件循环传该窗格的常驻缓存）：拖动选区松开时才复制，此时
-/// 历史刚被这一帧画过，快照与绘制数据全部命中——临时建一个 `PaneCache` 会让整段
-/// 历史重新排版，并且在 `frame = 0` 下连淘汰都跑不起来（`last_frame < frame` 恒假）。
-pub fn copy_text(
-    area: Rect,
-    lx: &Lx,
-    range: ((i32, u16), (i32, u16)),
-    cache: &mut PaneCache,
-) -> String {
-    let (grid, _, _) = build(area, lx, false, cache);
-    let ((start_row, start_col), (end_row, end_col)) = range;
-    let mut lines: Vec<String> = Vec::new();
-    for row in start_row.max(0)..=end_row.max(0) {
-        if row >= i32::from(area.height) {
-            break;
-        }
-        let y = area.y + row as u16;
-        let (col0, col1) = if start_row == end_row {
-            (start_col, end_col)
-        } else if row == start_row {
-            (start_col, area.width.saturating_sub(1))
-        } else if row == end_row {
-            (0, end_col)
-        } else {
-            (0, area.width.saturating_sub(1))
-        };
-        let mut line = String::new();
-        for col in col0..=col1.min(area.width.saturating_sub(1)) {
-            let ch = grid.cell(area.x + col, y).ch;
-            if ch != CONTINUATION {
-                line.push(ch);
-            }
-        }
-        lines.push(line.trim_end().to_string());
-    }
-    while lines.last().is_some_and(String::is_empty) {
-        lines.pop();
-    }
-    lines.join("\n")
 }
 
 /// 命中测试：坐标落在某个入口标签内则返回该入口。

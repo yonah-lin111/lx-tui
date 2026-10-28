@@ -72,34 +72,39 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
                 .pane_mut_anywhere(pane)
                 .and_then(|target| target.lx.task.as_mut())
                 .is_some_and(|page| page.move_active_len(len, -1));
-            if !moved {
+            if moved {
+                crate::app::update::clear_lx_selection_for(state, pane);
+            } else {
                 chat::close_task_page(state, pane);
             }
         }
         LxInput::Down => {
             let len = task_active_len(state, pane);
-            if let Some(page) = state
+            let moved = state
                 .pane_mut_anywhere(pane)
                 .and_then(|target| target.lx.task.as_mut())
-            {
-                page.move_active_len(len, 1);
+                .is_some_and(|page| page.move_active_len(len, 1));
+            if moved {
+                crate::app::update::clear_lx_selection_for(state, pane);
             }
         }
         // ←/→ 换 tab（对齐 opencode composer 的左右切 tab）。
         LxInput::Left => {
-            if let Some(page) = state
+            let cycled = state
                 .pane_mut_anywhere(pane)
                 .and_then(|target| target.lx.task.as_mut())
-            {
-                page.cycle_tab(-1);
+                .is_some_and(|page| page.cycle_tab(-1));
+            if cycled {
+                crate::app::update::clear_lx_selection_for(state, pane);
             }
         }
         LxInput::Right => {
-            if let Some(page) = state
+            let cycled = state
                 .pane_mut_anywhere(pane)
                 .and_then(|target| target.lx.task.as_mut())
-            {
-                page.cycle_tab(1);
+                .is_some_and(|page| page.cycle_tab(1));
+            if cycled {
+                crate::app::update::clear_lx_selection_for(state, pane);
             }
         }
         // `^d` 停止高亮进程 / 子 agent（对齐 opencode `composer.shell.kill`）。

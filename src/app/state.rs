@@ -166,7 +166,7 @@ pub struct AppState {
     pub selection: Option<Selection>,
     /// 正在拖拽选择的终端窗格；选中内容存于仿真器内部（内容坐标）。
     pub terminal_selection: Option<PaneId>,
-    /// lx 页文本选区（内容坐标）；松开鼠标时复制并清除。
+    /// lx 主内容区（主消息列表与后台管理主内容区）文本选区（内容行、正文列坐标）；松开保留供 Ctrl/Cmd+C 复制。
     pub lx_selection: Option<Selection>,
     /// 正在拖拽选择的 lx 输入框所在窗格；选区锚点存于该窗格的 `Lx` 内。
     pub lx_input_drag: Option<PaneId>,

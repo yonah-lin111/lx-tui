@@ -553,22 +553,6 @@ pub(crate) fn handle_mouse_down_left(
                     *dirty = true;
                     return;
                 }
-                // Agents 详情区：工具 / 思考 / compact / 汇报块点击切换折叠。
-                let agent_card = state.pane_anywhere(pane).and_then(|target| {
-                    ui::main_content::lx::task_agents_card_target_at(
-                        inner,
-                        &target.lx,
-                        mouse.column,
-                        mouse.row,
-                        cache.pane(pane),
-                    )
-                });
-                if let Some(card) = agent_card {
-                    update::toggle_agent_card(state, pane, card);
-                    update::focus_pane(state, pane);
-                    *dirty = true;
-                    return;
-                }
                 let mention_hit = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::mention_item_at(
                         inner,
@@ -623,6 +607,20 @@ pub(crate) fn handle_mouse_down_left(
                     *dirty = true;
                     return;
                 }
+                if handle_lx_input_scrollbar_press(state, pane, inner, mouse.column, mouse.row)
+                    || handle_lx_history_scrollbar_press(
+                        state,
+                        pane,
+                        inner,
+                        mouse.column,
+                        mouse.row,
+                        cache,
+                    )
+                {
+                    // 滚动条按下：只移动视口，不清除已有主内容区选区。
+                    *dirty = true;
+                    return;
+                }
                 let entry = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::entry_hit(inner, &target.lx, mouse.column, mouse.row)
                 });
@@ -637,40 +635,41 @@ pub(crate) fn handle_mouse_down_left(
                     .map(|geom| geom.cell(mouse.column, mouse.row))
                 {
                     update::begin_lx_input_selection(state, pane, visual_row, col);
-                } else if handle_lx_input_scrollbar_press(
-                    state,
-                    pane,
-                    inner,
-                    mouse.column,
-                    mouse.row,
-                ) {
-                    // 滚动条按下：已处理。
-                } else if handle_lx_history_scrollbar_press(
-                    state,
-                    pane,
-                    inner,
-                    mouse.column,
-                    mouse.row,
-                    cache,
-                ) {
-                    // 历史滚动条按下：已处理。
-                } else {
-                    // 展开卡片正文：既开始选区（允许拖拽复制整段），又记录「可能是一次
-                    // 点击」。松开时若没有拖出范围，就当作点击折叠该块。
+                } else if let Some((content_row, content_col, target)) =
+                    state.pane_anywhere(pane).and_then(|target| {
+                        let pane_cache = cache.pane(pane);
+                        let geom =
+                            ui::main_content::lx::content_geom(inner, &target.lx, pane_cache)?;
+                        if !geom.contains(mouse.column, mouse.row) {
+                            return None;
+                        }
+                        let (content_row, content_col) = geom.cell(mouse.column, mouse.row);
+                        let card = if target.lx.task.is_some() {
+                            ui::main_content::lx::task_agents_card_target_at(
+                                inner,
+                                &target.lx,
+                                mouse.column,
+                                mouse.row,
+                                pane_cache,
+                            )
+                        } else {
+                            ui::main_content::lx::card_target_at(
+                                inner,
+                                &target.lx,
+                                mouse.column,
+                                mouse.row,
+                                pane_cache,
+                            )
+                        };
+                        Some((content_row, content_col, card))
+                    })
+                {
+                    // 主消息列表与后台管理主内容区：按下开始内容坐标选区，同时记录卡片点击候选；
+                    // 松开时若未拖出范围才当作单击折叠/展开卡片，拖出选区则保留高亮等待复制。
                     //
-                    // **顺序不能反**：`begin_lx_selection` 内部先 `clear_selection`，
-                    // 而 `clear_selection` 会把 `lx_card_press` 置空。先记后清等于没记，
-                    // 于是每次松开都被当成拖拽、卡片永远展不开（真实 bug）。
-                    let target = state.pane_anywhere(pane).and_then(|target| {
-                        ui::main_content::lx::card_target_at(
-                            inner,
-                            &target.lx,
-                            mouse.column,
-                            mouse.row,
-                            cache.pane(pane),
-                        )
-                    });
-                    update::begin_lx_selection(state, pane, row, col);
+                    // **顺序不能反**：`begin_lx_selection` 内部先 `clear_selection`（会清空
+                    // `lx_card_press`），必须先 `begin_lx_selection` 再写 `lx_card_press`。
+                    update::begin_lx_selection(state, pane, content_row, content_col);
                     state.lx_card_press = target.map(|card| (pane, card));
                 }
                 *dirty = true;

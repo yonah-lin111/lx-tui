@@ -28,6 +28,7 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.clear_agents();
     target.lx.compact.reset();
     target.lx.clear_rewind();
+    crate::app::update::clear_lx_selection_for(state, pane);
     refresh_lx_status(state, pane);
     true
 }
@@ -112,8 +113,12 @@ pub fn open_task_page(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     }
     // 已在面板上：再次进入只刷新列表，不重置 tab 与高亮。
-    if target.lx.task.is_none() {
+    let freshly_opened = target.lx.task.is_none();
+    if freshly_opened {
         target.lx.task = Some(crate::app::state::TaskPage::default());
+    }
+    if freshly_opened {
+        crate::app::update::clear_lx_selection_for(state, pane);
     }
     state
         .effects
@@ -152,6 +157,7 @@ pub fn close_task_page(state: &mut AppState, pane: PaneId) -> bool {
         // （窗格分割线、选区、prompt 滚动条）都被输出区滚动条那一支吞掉。
         state.task_scroll_drag = None;
         state.task_agents_scroll_drag = None;
+        crate::app::update::clear_lx_selection_for(state, pane);
     }
     closed
 }
@@ -167,7 +173,11 @@ pub fn select_task_tab(state: &mut AppState, pane: PaneId, position: usize) -> b
     let Some(page) = target.lx.task.as_mut() else {
         return false;
     };
-    page.select_tab(tab)
+    let changed = page.select_tab(tab);
+    if changed {
+        crate::app::update::clear_lx_selection_for(state, pane);
+    }
+    changed
 }
 
 /// 后台进程列表回投：填充后台任务页的进程 tab。
@@ -443,6 +453,7 @@ pub fn on_session_loaded_full(
     super::restore_plan(state, pane, &restored_messages);
     // 历史会话：spawn 卡片的状态可从已加载的汇报行回填。
     super::subagent::refresh_subagent_cards(state, pane);
+    crate::app::update::clear_lx_selection_for(state, pane);
     true
 }
 
@@ -491,6 +502,7 @@ pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) 
     if target.lx.chat.session_id.as_deref() == Some(session_id) {
         target.lx.chat.reset_session_view();
         target.lx.clear_agents();
+        crate::app::update::clear_lx_selection_for(state, pane);
         return true;
     }
     false

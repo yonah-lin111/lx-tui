@@ -72,6 +72,14 @@ pub fn set_lx_scroll(state: &mut AppState, id: PaneId, offset: usize) -> bool {
 /// 无面板时 `↑`/`↓` 先尝试历史切换（光标在文首/文末才接管），否则回落光标移动。
 pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
     let pane_id = state.active_tab().layout.focus();
+    // 主内容区存在非空选区时，Ctrl/Cmd+C 只负责复制选区（由事件层处理），不清空输入框草稿。
+    if command == LxInput::Clear
+        && state
+            .lx_selection
+            .is_some_and(|sel| sel.pane() == pane_id && sel.range().is_some())
+    {
+        return;
+    }
     // 后台任务页是窗格内的第二个页面：整页接管按键，不回落到输入框。
     if state
         .pane_anywhere(pane_id)
@@ -379,119 +387,34 @@ pub(crate) trait TextEdit {
     fn clear(&mut self);
 }
 
-impl TextEdit for Lx {
-    fn insert_char(&mut self, ch: char) {
-        Lx::insert_char(self, ch);
-    }
-    fn newline(&mut self) {
-        Lx::newline(self);
-    }
-    fn backspace(&mut self) {
-        Lx::backspace(self);
-    }
-    fn delete(&mut self) {
-        Lx::delete(self);
-    }
-    fn move_left(&mut self) {
-        Lx::move_left(self);
-    }
-    fn move_right(&mut self) {
-        Lx::move_right(self);
-    }
-    fn move_up(&mut self) {
-        Lx::move_up(self);
-    }
-    fn home(&mut self) {
-        Lx::home(self);
-    }
-    fn end(&mut self) {
-        Lx::end(self);
-    }
-    fn word_left(&mut self) {
-        Lx::word_left(self);
-    }
-    fn word_right(&mut self) {
-        Lx::word_right(self);
-    }
-    fn delete_to_line_start(&mut self) {
-        Lx::delete_to_line_start(self);
-    }
-    fn delete_to_line_end(&mut self) {
-        Lx::delete_to_line_end(self);
-    }
-    fn delete_word_backward(&mut self) {
-        Lx::delete_word_backward(self);
-    }
-    fn delete_word_forward(&mut self) {
-        Lx::delete_word_forward(self);
-    }
-    fn undo(&mut self) {
-        Lx::undo(self);
-    }
-    fn redo(&mut self) {
-        Lx::redo(self);
-    }
-    fn clear(&mut self) {
-        Lx::clear(self);
-    }
+macro_rules! impl_text_edit {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl TextEdit for $ty {
+                fn insert_char(&mut self, ch: char) { <$ty>::insert_char(self, ch); }
+                fn newline(&mut self) { <$ty>::newline(self); }
+                fn backspace(&mut self) { <$ty>::backspace(self); }
+                fn delete(&mut self) { <$ty>::delete(self); }
+                fn move_left(&mut self) { <$ty>::move_left(self); }
+                fn move_right(&mut self) { <$ty>::move_right(self); }
+                fn move_up(&mut self) { <$ty>::move_up(self); }
+                fn home(&mut self) { <$ty>::home(self); }
+                fn end(&mut self) { <$ty>::end(self); }
+                fn word_left(&mut self) { <$ty>::word_left(self); }
+                fn word_right(&mut self) { <$ty>::word_right(self); }
+                fn delete_to_line_start(&mut self) { <$ty>::delete_to_line_start(self); }
+                fn delete_to_line_end(&mut self) { <$ty>::delete_to_line_end(self); }
+                fn delete_word_backward(&mut self) { <$ty>::delete_word_backward(self); }
+                fn delete_word_forward(&mut self) { <$ty>::delete_word_forward(self); }
+                fn undo(&mut self) { <$ty>::undo(self); }
+                fn redo(&mut self) { <$ty>::redo(self); }
+                fn clear(&mut self) { <$ty>::clear(self); }
+            }
+        )+
+    };
 }
 
-impl TextEdit for crate::app::state::AskEditor {
-    fn insert_char(&mut self, ch: char) {
-        crate::app::state::AskEditor::insert_char(self, ch);
-    }
-    fn newline(&mut self) {
-        crate::app::state::AskEditor::newline(self);
-    }
-    fn backspace(&mut self) {
-        crate::app::state::AskEditor::backspace(self);
-    }
-    fn delete(&mut self) {
-        crate::app::state::AskEditor::delete(self);
-    }
-    fn move_left(&mut self) {
-        crate::app::state::AskEditor::move_left(self);
-    }
-    fn move_right(&mut self) {
-        crate::app::state::AskEditor::move_right(self);
-    }
-    fn move_up(&mut self) {
-        crate::app::state::AskEditor::move_up(self);
-    }
-    fn home(&mut self) {
-        crate::app::state::AskEditor::home(self);
-    }
-    fn end(&mut self) {
-        crate::app::state::AskEditor::end(self);
-    }
-    fn word_left(&mut self) {
-        crate::app::state::AskEditor::word_left(self);
-    }
-    fn word_right(&mut self) {
-        crate::app::state::AskEditor::word_right(self);
-    }
-    fn delete_to_line_start(&mut self) {
-        crate::app::state::AskEditor::delete_to_line_start(self);
-    }
-    fn delete_to_line_end(&mut self) {
-        crate::app::state::AskEditor::delete_to_line_end(self);
-    }
-    fn delete_word_backward(&mut self) {
-        crate::app::state::AskEditor::delete_word_backward(self);
-    }
-    fn delete_word_forward(&mut self) {
-        crate::app::state::AskEditor::delete_word_forward(self);
-    }
-    fn undo(&mut self) {
-        crate::app::state::AskEditor::undo(self);
-    }
-    fn redo(&mut self) {
-        crate::app::state::AskEditor::redo(self);
-    }
-    fn clear(&mut self) {
-        crate::app::state::AskEditor::clear(self);
-    }
-}
+impl_text_edit!(Lx, crate::app::state::AskEditor);
 
 /// 纯文本编辑分派（不含面板/发送/停止语义）；返回是否改写了文本。
 ///
@@ -863,6 +786,7 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
     }) else {
         return false;
     };
+    super::selection::clear_lx_selection_for(state, id);
     if view == PaneView::Lx {
         if state.terminal_selection == Some(id) {
             clear_terminal_selection(state);
@@ -906,12 +830,16 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
             state.prompt.resize(cols, rows);
         } else if let Some(pane) = state.pane_mut_anywhere(*id) {
             let (cols, rows) = layout::pane_inner_size(*rect);
+            let old_size = pane.terminal.size();
             pane.terminal.resize(cols, rows);
             let (lx_cols, lx_rows) = layout::lx_input_size(*rect);
             pane.lx.resize(lx_cols, lx_rows);
             if let Some(ask) = pane.lx.ask.as_mut() {
                 let (width, rows) = layout::lx_ask_editor_size(*rect);
                 ask.resize_editor(width, rows);
+            }
+            if (old_size.cols, old_size.rows) != (cols, rows) {
+                super::selection::clear_lx_selection_for(state, *id);
             }
         }
     }

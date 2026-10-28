@@ -373,6 +373,9 @@ pub fn open_agent_page(state: &mut AppState, pane: PaneId, agent_id: &str) -> bo
             pane,
             parent_session: session,
         });
+    if opened {
+        crate::app::update::clear_lx_selection_for(state, pane);
+    }
     opened
 }
 
@@ -422,6 +425,7 @@ pub fn select_task_agent(state: &mut AppState, pane: PaneId, index: usize) -> bo
         run.follow = true;
         run.scroll = usize::MAX;
     }
+    crate::app::update::clear_lx_selection_for(state, pane);
     true
 }
 
@@ -503,6 +507,7 @@ pub fn toggle_agent_card(state: &mut AppState, pane: PaneId, target: CardTarget)
     };
     if changed {
         run.rows_dirty = true;
+        crate::app::update::clear_lx_selection_for(state, pane);
     }
     changed
 }
@@ -749,11 +754,12 @@ pub fn scroll_agents_detail(state: &mut AppState, pane: PaneId, delta: isize) ->
     };
     let visible = run.visible.max(1);
     let max = run.total_rows.saturating_sub(visible);
-    let current = run.scroll.min(max);
+    let current = if run.follow { max } else { run.scroll.min(max) };
     let next = (current as isize)
         .saturating_add(delta)
         .clamp(0, max as isize) as usize;
-    if next == run.scroll {
+    let moved = next != current || (run.follow && next < max);
+    if !moved {
         return false;
     }
     run.scroll = next;

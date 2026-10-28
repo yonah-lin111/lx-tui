@@ -7,24 +7,27 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneView};
+use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::input::{self, Routed};
-use crate::layout::PaneId;
+use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
-use crate::ui::layout::ViewLayout;
+use crate::ui;
 
 use super::mouse::hit::copy_with_toast;
 use super::paste;
-use super::session::{ensure_workspace_visible, reveal_active_tab, write_to_pane};
+use super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 
 /// 处理终端按键事件。
 pub(crate) fn handle_key_event(
     key: KeyEvent,
     state: &mut AppState,
     sessions: &mut HashMap<PaneId, PtySession>,
-    view: &ViewLayout,
+    geometry: &Geometry,
+    cache: &mut ui::RenderCache,
     dirty: &mut bool,
 ) {
+    let view = &geometry.view;
     if key.kind == KeyEventKind::Release {
         return;
     }
@@ -112,8 +115,14 @@ pub(crate) fn handle_key_event(
             *dirty = true;
         }
         Routed::Lx(command) => {
-            update::apply_lx_input(state, command);
-            *dirty = true;
+            if command == crate::app::actions::LxInput::Clear
+                && copy_lx_selection(state, &geometry.rects, cache)
+            {
+                *dirty = true;
+            } else {
+                update::apply_lx_input(state, command);
+                *dirty = true;
+            }
         }
         Routed::Todo(code) => {
             if update::apply_todo_key(state, code) {
@@ -203,4 +212,64 @@ pub(crate) fn handle_paste_event(
     write_to_pane(sessions, id, &payload);
     update::reset_pane_scroll(state, id);
     *dirty = true;
+}
+
+/// 复制焦点 lx 窗格的主内容区选区文本并弹出页内 Toast；选区保留，无选区返回 false。
+fn copy_lx_selection(
+    state: &mut AppState,
+    rects: &[(PaneId, ratatui::layout::Rect)],
+    cache: &mut ui::RenderCache,
+) -> bool {
+    let pane = state.active_tab().layout.focus();
+    // `/resume` 历史面板打开时 Ctrl/Cmd+C 归会话 ID 复制，不走主内容区选区复制。
+    if state.pane_anywhere(pane).is_some_and(|target| {
+        matches!(
+            target.lx.slash,
+            Some(crate::app::state::SlashPanel::History(_))
+        )
+    }) {
+        return false;
+    }
+    let Some(selection) = state.lx_selection.filter(|sel| sel.pane() == pane) else {
+        return false;
+    };
+    let Some(range) = selection.range() else {
+        return false;
+    };
+    let area = rects
+        .iter()
+        .find(|(id, _)| *id == pane)
+        .map(|(_, rect)| layout::pane_inner_rect(*rect));
+    let Some((area, target)) = area.zip(state.pane_anywhere(pane)) else {
+        return false;
+    };
+    if target.view != PaneView::Lx {
+        return false;
+    }
+    let text = ui::main_content::lx::copy_text(area, &target.lx, range, cache.pane(pane));
+    if !text.trim().is_empty() {
+        let now = std::time::Instant::now();
+        if crate::platform::write_clipboard(&text) {
+            update::show_lx_toast(
+                state,
+                pane,
+                Toast::new(ToastKind::Default, ui::text::TOAST_COPIED, Some(pane), now)
+                    .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+            );
+        } else {
+            tracing::warn!("clipboard write failed");
+            update::show_lx_toast(
+                state,
+                pane,
+                Toast::new(
+                    ToastKind::Danger,
+                    ui::text::TOAST_COPY_FAILED,
+                    Some(pane),
+                    now,
+                )
+                .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+            );
+        }
+    }
+    true
 }

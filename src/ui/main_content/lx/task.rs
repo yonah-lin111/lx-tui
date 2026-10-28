@@ -94,23 +94,7 @@ pub(super) fn draw_output_container(grid: &mut super::grid::Grid, rect: Rect, pa
     let width = output_content_width(rect);
     let body = Rect::new(rect.x, rect.y, width, rect.height);
     let visible = usize::from(body.height);
-    if page.output.is_empty() {
-        draw_placeholder(grid, body, text::LX_TASK_OUTPUT_EMPTY);
-    } else {
-        let start = page.output_scroll.min(page.output.len());
-        for (offset, line) in page.output.iter().skip(start).take(visible).enumerate() {
-            let y = body.y + u16::try_from(offset).unwrap_or(0);
-            let text_line = clip(line, width);
-            put_grid(
-                grid,
-                body.x,
-                y,
-                &text_line,
-                style::agent_step_detail(),
-                body.right(),
-            );
-        }
-    }
+    draw_output_rows(grid, body, page, page.output_scroll);
     // 滚动条：贴输出容器最右一列，只在内容溢出时画 thumb。
     //
     // 组件只操作 ratatui `Buffer`，而 lx 页画在自己的 `Grid` 上：这里按同一份
@@ -126,6 +110,41 @@ pub(super) fn draw_output_container(grid: &mut super::grid::Grid, rect: Rect, pa
         for y in bar.thumb.y..bar.thumb.bottom() {
             grid.put_char(bar.thumb.x, y, THUMB_CHAR, style::text());
         }
+    }
+}
+
+/// 把输出容器的正文（不含右侧滚动条列）从 `start` 行起画进 `body` 区域。
+///
+/// 正常绘制（[`draw_output_container`]）与跨屏选区取词（`selection::copy_text`）共用，
+/// 保证宽字符裁剪与空态占位同源，且绝不把滚动条画进取词网格。
+pub(super) fn draw_output_rows(
+    grid: &mut super::grid::Grid,
+    body: Rect,
+    page: &TaskPage,
+    start: usize,
+) {
+    if body.width == 0 || body.height == 0 {
+        return;
+    }
+    let visible = usize::from(body.height);
+    if page.output.is_empty() {
+        if start == 0 {
+            draw_placeholder(grid, body, text::LX_TASK_OUTPUT_EMPTY);
+        }
+        return;
+    }
+    let clamped = start.min(page.output.len());
+    for (offset, line) in page.output.iter().skip(clamped).take(visible).enumerate() {
+        let y = body.y + u16::try_from(offset).unwrap_or(0);
+        let text_line = clip(line, body.width);
+        put_grid(
+            grid,
+            body.x,
+            y,
+            &text_line,
+            style::agent_step_detail(),
+            body.right(),
+        );
     }
 }
 

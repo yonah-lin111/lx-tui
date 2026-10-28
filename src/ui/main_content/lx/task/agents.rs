@@ -35,33 +35,7 @@ pub(crate) fn draw_detail(
     }
     let source = HistorySource::from_chat(&run.chat, &run.compact);
     if run.chat.messages.is_empty() {
-        if run.loaded {
-            grid.put_clipped(
-                rect.x,
-                rect.y,
-                text::LX_TASK_AGENTS_EMPTY,
-                style::muted(),
-                rect.width,
-            );
-        } else {
-            // 历史 run 的消息流还在读库：用与主历史相同的呼吸圆点表达 loading。
-            let mark = crate::ui::main_content::lx::history::StepMark::Running;
-            let mark_text = format!("{} ", mark.glyph(StepKind::Body, loading_frame, true));
-            grid.put_clipped(
-                rect.x,
-                rect.y,
-                &mark_text,
-                style::chat_step_mark_running_body(),
-                rect.width,
-            );
-            grid.put_clipped(
-                rect.x.saturating_add(2),
-                rect.y,
-                text::LX_TASK_AGENTS_LOADING,
-                style::muted(),
-                rect.width,
-            );
-        }
+        draw_empty_detail(grid, rect, run, loading_frame);
         return 1;
     }
     let view = history::view_source_plain(rect, source, cache);
@@ -76,6 +50,42 @@ pub(crate) fn draw_detail(
         }
     }
     total
+}
+
+/// 空消息流（已加载为空或尚在懒加载）时的单行提示绘制（绘制与取词共用）。
+pub(crate) fn draw_empty_detail(
+    grid: &mut Grid,
+    rect: Rect,
+    run: &SubagentRun,
+    loading_frame: usize,
+) {
+    if run.loaded {
+        grid.put_clipped(
+            rect.x,
+            rect.y,
+            text::LX_TASK_AGENTS_EMPTY,
+            style::muted(),
+            rect.width,
+        );
+    } else {
+        // 历史 run 的消息流还在读库：用与主历史相同的呼吸圆点表达 loading。
+        let mark = crate::ui::main_content::lx::history::StepMark::Running;
+        let mark_text = format!("{} ", mark.glyph(StepKind::Body, loading_frame, true));
+        grid.put_clipped(
+            rect.x,
+            rect.y,
+            &mark_text,
+            style::chat_step_mark_running_body(),
+            rect.width,
+        );
+        grid.put_clipped(
+            rect.x.saturating_add(2),
+            rect.y,
+            text::LX_TASK_AGENTS_LOADING,
+            style::muted(),
+            rect.width,
+        );
+    }
 }
 
 /// 详情区行数（`resolve_task_agents_visible` 用）。

@@ -600,7 +600,7 @@ fn handle_terminal_event(
 ) {
     match event {
         TerminalEvent::Key(key) => {
-            input::handle_key_event(key, state, sessions, &geometry.view, dirty);
+            input::handle_key_event(key, state, sessions, geometry, cache, dirty);
         }
         TerminalEvent::Paste(text) => {
             input::handle_paste_event(text, state, sessions, dirty);

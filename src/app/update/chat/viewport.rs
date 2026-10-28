@@ -357,7 +357,7 @@ fn toggle_report_card(
 /// 不再有单独的动作按钮，也没有 hover 高亮。与键盘入口（`^o` / `^t`）共用同一份
 /// 展开状态与视口锚定实现。
 pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) -> bool {
-    match target {
+    let changed = match target {
         CardTarget::Tool {
             message_id,
             call_id,
@@ -380,5 +380,9 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
             more,
         } => toggle_report_card(state, pane, &message_id, &agent_id, more),
         CardTarget::OpenAgent { agent_id } => super::open_agent_page(state, pane, &agent_id),
+    };
+    if changed {
+        crate::app::update::clear_lx_selection_for(state, pane);
     }
+    changed
 }

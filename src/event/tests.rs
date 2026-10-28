@@ -1687,12 +1687,50 @@ fn lx_view_content_click_focuses_and_starts_selection() {
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
     let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target
+            .lx
+            .chat
+            .messages
+            .push(crate::app::state::ChatMessageView {
+                sequence: 0,
+                id: "m0".into(),
+                role: "user".into(),
+                status: "complete".into(),
+                turn_index: 0,
+                kind: "chat".into(),
+                shell: None,
+                steps: vec![crate::app::state::AssistantStepView::Part {
+                    position: 0,
+                    part: crate::app::state::ChatPartView {
+                        kind: crate::chat::events::PartKind::Text,
+                        content: "hello history".into(),
+                        provider_metadata_json: None,
+                        started_at_ms: None,
+                        ended_at_ms: None,
+                        completed_at_ms: None,
+                    },
+                }],
+                model_label: None,
+                error_code: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                duration_ms: None,
+                reports: Vec::new(),
+            });
+    }
     crate::app::update::focus_prompt(&mut state);
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
     handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), inner.x, inner.y),
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x + 2,
+            inner.y,
+        ),
         &mut state,
         &mut sessions,
         &geo,
@@ -1706,7 +1744,7 @@ fn lx_view_content_click_focuses_and_starts_selection() {
     assert!(state.selection.is_none(), "lx 视图不启动 prompt 选区");
     assert!(
         state.lx_selection.is_some(),
-        "lx 视图内容区按下开始整页选区"
+        "lx 视图主消息列表按下开始内容选区"
     );
 }
 
@@ -6394,6 +6432,483 @@ fn lx_card_click_toggles_expansion_on_release() {
             .chat
             .detail_is_expanded("m-param", "call-param"),
         "未拖拽的点击必须展开卡片"
+    );
+}
+
+#[test]
+fn lx_history_selection_waits_for_copy_shortcut_and_follows_wheel_scroll() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 18));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        target.lx.insert_str("keep my draft");
+        for index in 0..20 {
+            target
+                .lx
+                .chat
+                .messages
+                .push(crate::app::state::ChatMessageView {
+                    sequence: index,
+                    id: format!("m-{index}"),
+                    role: "user".into(),
+                    status: "complete".into(),
+                    turn_index: index,
+                    kind: "chat".into(),
+                    shell: None,
+                    steps: vec![crate::app::state::AssistantStepView::Part {
+                        position: 0,
+                        part: crate::app::state::ChatPartView {
+                            kind: crate::chat::events::PartKind::Text,
+                            content: format!("history-line-{index:02}"),
+                            provider_metadata_json: None,
+                            started_at_ms: None,
+                            ended_at_ms: None,
+                            completed_at_ms: None,
+                        },
+                    }],
+                    model_label: None,
+                    error_code: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_read_tokens: None,
+                    duration_ms: None,
+                    reports: Vec::new(),
+                });
+        }
+        target.lx.chat.follow_bottom = false;
+        target.lx.chat.history_scroll = 0;
+    }
+    let mut cache = ui::RenderCache::default();
+    let geom = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane)).expect("geom")
+    };
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 1. 按下首行（内容第 0 行），按住左键向下滚轮 2 次，再拖拽到可视区第 2 行后松开。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            geom.rect.x,
+            geom.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, geom.rect.x + 4, geom.rect.y + 2),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            geom.rect.x + 15,
+            geom.rect.y + 2,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            geom.rect.x + 15,
+            geom.rect.y + 2,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+
+    let selection = state.lx_selection.expect("松开鼠标后保留选区");
+    assert!(!selection.is_dragging(), "松开后结束拖拽态");
+    assert_eq!(
+        selection.range(),
+        Some(((0, 0), (4, 15))),
+        "锚点钉在内容第 0 行，终点随两次滚轮延伸到内容第 4 行"
+    );
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.toast.is_none(),
+        "松开鼠标不直接触发复制 toast"
+    );
+
+    // 2. 松开鼠标后继续滚轮滚动：选区不被清除，仍钉在原内容行范围上。
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, geom.rect.x + 4, geom.rect.y + 2),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(
+        state.lx_selection.and_then(|sel| sel.range()),
+        Some(((0, 0), (4, 15))),
+        "松开后滚轮滚动不丢失选区"
+    );
+
+    // 3. 按下 Ctrl+C 复制：弹出 lx 页内 toast、保留选区高亮、不清空底部输入框草稿。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(
+        lx.input, "keep my draft",
+        "有选区时按 Ctrl+C 不清空输入框草稿"
+    );
+    assert!(lx.toast.is_some(), "按 Ctrl+C 后弹出 lx 页内复制 toast");
+    assert!(state.lx_selection.is_some(), "复制后选区高亮继续保留");
+}
+
+#[test]
+fn lx_task_output_and_agents_detail_selection_scroll_and_copy() {
+    use crate::app::state::{ProcessEntry, TaskPage, TaskTab};
+
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 22));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        let mut page = TaskPage::default();
+        page.set_processes(
+            vec![ProcessEntry {
+                session_id: 1,
+                command: "cargo test".into(),
+                cwd: "/w".into(),
+                tty: false,
+                started_at_ms: 0,
+            }],
+            0,
+        );
+        page.output = (0..30).map(|idx| format!("proc-out-{idx:02}")).collect();
+        page.output_scroll = 0;
+        target.lx.task = Some(page);
+    }
+    let mut cache = ui::RenderCache::default();
+    let geom = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane)).expect("geom")
+    };
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // Processes 输出区：按下第 0 行 → 滚轮下滚（每次 3 行）→ 松开保留选区 → Ctrl+C 复制。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            geom.rect.x,
+            geom.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            geom.rect.x + 10,
+            geom.rect.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            geom.rect.x + 10,
+            geom.rect.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    let selection = state.lx_selection.expect("进程输出选区保留");
+    assert_eq!(
+        selection.range(),
+        Some(((0, 0), (4, 10))),
+        "滚轮滚动 3 行后，视口第 1 行对应内容第 4 行"
+    );
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.toast.is_none(),
+        "松开鼠标不自动复制"
+    );
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.toast.is_some(),
+        "后台管理页按 Ctrl+C 触发复制 toast"
+    );
+
+    // 切换到 Agents 页签：旧选区自动清除；在可折叠卡片上拖拽只选字不折叠，单击才折叠。
+    assert!(update::select_task_tab(&mut state, pane, 1));
+    assert!(state.lx_selection.is_none(), "切换后台 Tab 清除旧选区");
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        if let Some(page) = target.lx.task.as_mut() {
+            page.tab = TaskTab::Agents;
+        }
+        let mut run =
+            crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+                agent_id: "sub-1".into(),
+                child_session_id: "sess-1".into(),
+                parent_session_id: "parent".into(),
+                spawn_message_id: None,
+                role: crate::chat::agent::AgentRole::Explorer,
+                status: "completed".into(),
+                title: "explore".into(),
+                created_at_ms: 0,
+                completed_at_ms: Some(100),
+                report_json: None,
+                report_delivered: false,
+            });
+        run.loaded = true;
+        run.chat.messages.push(crate::app::state::ChatMessageView {
+            sequence: 0,
+            id: "am-0".into(),
+            role: "assistant".into(),
+            status: "complete".into(),
+            turn_index: 0,
+            kind: "chat".into(),
+            shell: None,
+            steps: vec![crate::app::state::AssistantStepView::Part {
+                position: 0,
+                part: crate::app::state::ChatPartView {
+                    kind: crate::chat::events::PartKind::Reasoning,
+                    content: "thinking body".into(),
+                    provider_metadata_json: None,
+                    started_at_ms: Some(0),
+                    ended_at_ms: Some(1000),
+                    completed_at_ms: Some(1000),
+                },
+            }],
+            model_label: None,
+            error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
+            reports: Vec::new(),
+        });
+        target.lx.agents.runs.push(run);
+    }
+    let agent_geom = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane)).expect("agent geom")
+    };
+    // 在 Agents 详情的 thinking 卡片行上拖拽：只选中文字，不展开思考块。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            agent_geom.rect.x + 2,
+            agent_geom.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            agent_geom.rect.x + 8,
+            agent_geom.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            agent_geom.rect.x + 8,
+            agent_geom.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        !state.pane_anywhere(pane).expect("pane").lx.agents.runs[0]
+            .chat
+            .reasoning_expanded(0, 0),
+        "在 Agents 卡片上拖拽选字不得误触展开"
+    );
+    assert!(state.lx_selection.is_some(), "拖拽后保留 Agents 详情选区");
+
+    // 原地单击（无拖拽）：切换折叠状态并清除选区。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            agent_geom.rect.x + 2,
+            agent_geom.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            agent_geom.rect.x + 2,
+            agent_geom.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.agents.runs[0]
+            .chat
+            .reasoning_expanded(0, 0),
+        "原地单击 Agents 卡片切换展开"
+    );
+    assert!(state.lx_selection.is_none(), "单击后不保留空选区");
+
+    // Agents 详情区跨屏滚轮拖选：给子 agent 塞入多条消息使其可滚动，验证边拖边滚延伸内容行坐标。
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        let run = &mut target.lx.agents.runs[0];
+        for idx in 1..20 {
+            run.chat.messages.push(crate::app::state::ChatMessageView {
+                sequence: idx,
+                id: format!("am-{idx}"),
+                role: "assistant".into(),
+                status: "complete".into(),
+                turn_index: idx,
+                kind: "chat".into(),
+                shell: None,
+                steps: vec![crate::app::state::AssistantStepView::Part {
+                    position: 0,
+                    part: crate::app::state::ChatPartView {
+                        kind: crate::chat::events::PartKind::Text,
+                        content: format!("agent-line-{idx:02}"),
+                        provider_metadata_json: None,
+                        started_at_ms: None,
+                        ended_at_ms: None,
+                        completed_at_ms: None,
+                    },
+                }],
+                model_label: None,
+                error_code: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                duration_ms: None,
+                reports: Vec::new(),
+            });
+        }
+        run.follow = false;
+        run.scroll = 0;
+        run.rows_dirty = true;
+    }
+    let agent_geom = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane)).expect("agent geom")
+    };
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            agent_geom.rect.x,
+            agent_geom.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            agent_geom.rect.x + 6,
+            agent_geom.rect.y + 2,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            agent_geom.rect.x + 6,
+            agent_geom.rect.y + 2,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(
+        state.lx_selection.and_then(|sel| sel.range()),
+        Some(((0, 0), (3, 6))),
+        "Agents 详情边拖边滚后，选区锚点钉在第 0 行、终点延伸到第 3 行"
     );
 }
 
