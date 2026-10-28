@@ -1,8 +1,8 @@
 # lx-subagent 功能评审
 
-状态：**评审完成，P0~P2 列出的缺陷已修复**（2026-10-28）
+状态：**评审完成，P0~P2 列出的缺陷已修复；功能已合并到 `dev`，worktree 与分支已移除**（2026-10-28）
 
-范围：worktree `.worktrees/lx-subagent`，分支 `feat/lx-subagent`；包含相对 `dev` 的提交与当前未提交改动。
+范围：`feat/lx-subagent` 相对 `dev` 的全部改动；合并后以 `dev` 当前树为准。
 
 方法：codegraph 结构定位 → 逐条阅读 agent loop / event / app / UI / DB 实现 → 用新增回归测试锁定失败场景。只记录能给出触发条件与根因的问题，不收录纯风格意见。
 
@@ -123,7 +123,7 @@
 
 - `cargo fmt`：通过。
 - `cargo clippy --all-targets -- -D warnings`：通过。
-- `cargo test`：**3646 passed / 0 failed / 2 ignored**（含全部集成套件）。
+- `cargo test`：合并后 `dev` 全量 **3686 passed / 0 failed / 2 ignored**（含全部集成套件）。
 - 新增/更新的回归用例：
   - `report_more_expansion_rebuilds_snapshot_geometry`
   - `agent_link_wins_over_the_whole_card_fold_region`

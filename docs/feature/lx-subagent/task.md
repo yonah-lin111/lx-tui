@@ -1,6 +1,7 @@
 # lx Subagent（explorer / executor）— 执行任务
 
-> 状态：**等待用户审核 `design.md`**。本清单是执行顺序，不是提议。
+> 状态：**实现完成并合并到 `dev`（2026-10-28）；评审与缺陷修复见 [review.md](review.md)**。
+> 本清单保留原始执行计划与历史 checkbox，不作为当前完成度声明。
 > 规则：生产代码禁止 `unwrap()/expect()`；用户可见文案集中在 `ui/text.rs`；模型可见文本一律英文；
 > 生产代码单文件 ≤1000 行（测试文件不受限）；每节**先写测试再写实现**。
 > 每节完成后按影响范围跑 `cargo fmt` + `cargo clippy --all-targets -- -D warnings` + `cargo test`。

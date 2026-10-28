@@ -1,8 +1,8 @@
 # lx Subagent（explorer / executor）— 设计
 
-- 分支：`feat/lx-subagent`（独立 worktree `.worktrees/lx-subagent` + 隔离开发库）
-- 基线：`dev` @ `3a2642e`
-- 状态：**设计已按 31 轮 Grill Me 结论重写，等待用户审核**；未写任何生产代码
+- 分支：`feat/lx-subagent`（功能已完成并合并回 `dev`；独立 worktree 与分支已移除）
+- 基线：功能分支基于 `dev @ 3a2642e`，合并提交见 `dev` 历史
+- 状态：**已实现并合并到 `dev`（2026-10-28）；评审与缺陷修复见 [review.md](review.md)**
 - 参考：`codex-main` 的 `agent/role.rs`、`tools/handlers/multi_agents*`；Claude Code 的 `Task` 工具语义
 
 ## 0. 旧版作废说明（核实后的事实纠正）
@@ -72,7 +72,7 @@
 | 28 | 面板列表 | 一条 SQL 联查 `agent_subagent JOIN agent_session`；消息流选中才加载 |
 | 29 | 列表上限 | 保留该会话全部 subagent，不设上限、不自动清理 |
 | 30 | 运行上下文 | 在册 subagent 摘要并入 `runtime_context_summary`（最多 3 条），避免历史裁剪后丢失 `agent_id` |
-| 31 | Git | 独立 worktree + 分支 `feat/lx-subagent` |
+| 31 | Git | 独立 worktree + 分支 `feat/lx-subagent`；功能完成后已合并回 `dev`，worktree/分支已移除 |
 | 32 | 统计行 | 统计行是任务收尾信息：本会话仍有子 agent 在跑，或后面还有可见报告批次时，中间 assistant 都不显示；最后一个子 agent/报告结束后的 assistant 才显示 |
 | 33 | 状态提示 | 主轮在途（含 `wait_agent` 调用）与报告 drain/自动轮期间显示输入框上方 loading；主轮自然结束但后台任务/子 agent 仍在跑时保留输入框上方 loading；**用户显式停止主轮后**不显示 loading，改在上下文占用右侧显示 `N process · N subagents`；用户排队输入优先 |
 
