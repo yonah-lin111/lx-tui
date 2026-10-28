@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
-use crate::app::selection::Selection;
+use crate::app::selection::{Selection, SelectionUnit};
 use crate::app::state::{AppState, AutoscrollDirection, PaneKind, SelectionAutoscroll};
 use crate::layout::PaneId;
 
@@ -19,16 +19,37 @@ pub(crate) const AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);
 
 /// 在 lx 主内容区开始一次文本选择（内容行、正文列坐标）。
 pub fn begin_lx_selection(state: &mut AppState, id: PaneId, row: i32, col: u16) {
+    begin_lx_selection_range(state, id, (row, col), (row, col), SelectionUnit::Character);
+}
+
+/// 按选区粒度（单字 / 双击选词 / 三击选行）在 lx 主内容区开始一次文本选择。
+pub fn begin_lx_selection_range(
+    state: &mut AppState,
+    id: PaneId,
+    start: (i32, u16),
+    end: (i32, u16),
+    unit: SelectionUnit,
+) {
     clear_selection(state);
-    state.lx_selection = Some(Selection::begin(id, row, col));
+    state.lx_selection = Some(Selection::begin_range(id, start, end, unit));
 }
 
 /// 扩展 lx 主内容区选区（内容行、正文列坐标）；窗格不一致时忽略。
 pub fn drag_lx_selection(state: &mut AppState, id: PaneId, row: i32, col: u16) {
+    drag_lx_selection_range(state, id, (row, col), (row, col));
+}
+
+/// 按粒度区间扩展 lx 主内容区选区；窗格不一致时忽略。
+pub fn drag_lx_selection_range(
+    state: &mut AppState,
+    id: PaneId,
+    start: (i32, u16),
+    end: (i32, u16),
+) {
     if let Some(selection) = state.lx_selection.as_mut()
         && selection.pane() == id
     {
-        selection.drag(row, col);
+        selection.drag_range(start, end);
     }
 }
 
@@ -79,9 +100,20 @@ pub fn clear_lx_selection_for(state: &mut AppState, id: PaneId) {
 
 /// 在 lx 输入框内开始文本选择（视觉行、内容列）；光标落到该单元格。
 pub fn begin_lx_input_selection(state: &mut AppState, id: PaneId, row: usize, col: u16) {
+    begin_lx_input_selection_with_clicks(state, id, row, col, 1);
+}
+
+/// 按连续点击次数（1=单字、2=选词、3=选逻辑行）在 lx 输入框开始文本选择。
+pub fn begin_lx_input_selection_with_clicks(
+    state: &mut AppState,
+    id: PaneId,
+    row: usize,
+    col: u16,
+    clicks: u8,
+) {
     clear_selection(state);
     if let Some(pane) = state.pane_mut_anywhere(id) {
-        pane.lx.begin_text_selection(row, col);
+        pane.lx.begin_text_selection_with_clicks(row, col, clicks);
         state.lx_input_drag = Some(id);
     }
 }
@@ -96,6 +128,20 @@ pub fn drag_lx_input_selection(state: &mut AppState, id: PaneId, row: usize, col
     }
 }
 
+/// 松开鼠标：结束 lx 输入框选区拖动；非空选区保留在输入框中供 Ctrl/Cmd+C 复制，
+/// 空选区直接清除；返回原本是否处于 lx 输入框选区拖动中。
+pub fn end_lx_input_selection_drag(state: &mut AppState) -> bool {
+    let Some(id) = state.lx_input_drag.take() else {
+        return false;
+    };
+    if let Some(pane) = state.pane_mut_anywhere(id)
+        && pane.lx.text_selection_range().is_none()
+    {
+        pane.lx.clear_text_selection();
+    }
+    true
+}
+
 /// 结束 lx 输入框选区并取走选中文本；空选区或未拖拽返回 None，锚点总是清除。
 pub fn take_lx_input_selection(state: &mut AppState) -> Option<(PaneId, String)> {
     let id = state.lx_input_drag.take()?;
@@ -107,20 +153,58 @@ pub fn take_lx_input_selection(state: &mut AppState) -> Option<(PaneId, String)>
 
 /// 在 prompt 开始一次文本选择；与右栏拖拽、终端选区互斥。
 pub fn begin_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
+    begin_selection_with_clicks(state, pane, row, col, 1);
+}
+
+/// 按连续点击次数（1=单字、2=选词、3=选逻辑行）在 prompt 开始文本选择。
+pub fn begin_selection_with_clicks(
+    state: &mut AppState,
+    pane: PaneId,
+    row: u16,
+    col: u16,
+    clicks: u8,
+) {
     state.resizing_prompt = false;
-    clear_terminal_selection(state);
-    state.selection_autoscroll = None;
-    let row = selection_content_row(state, pane, row);
-    state.selection = Some(Selection::begin(pane, row, col));
+    clear_selection(state);
+    let content_row = selection_content_row(state, pane, row);
+    let unit = SelectionUnit::from_clicks(clicks);
+    if pane == state.prompt.id() && unit != SelectionUnit::Character {
+        let ((start, end), (_start_byte, end_byte)) = state.prompt.unit_cell_range(
+            usize::try_from(content_row.max(0)).unwrap_or(0),
+            col,
+            unit,
+        );
+        state.selection = Some(Selection::begin_range(pane, start, end, unit));
+        state.prompt.set_cursor_offset(end_byte);
+    } else {
+        state.selection = Some(Selection::begin(pane, content_row, col));
+    }
 }
 
 /// 扩展当前 prompt 选区；窗格不一致时忽略。
 pub fn drag_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
-    let row = selection_content_row(state, pane, row);
-    if let Some(selection) = state.selection.as_mut()
-        && selection.pane() == pane
-    {
-        selection.drag(row, col);
+    let content_row = selection_content_row(state, pane, row);
+    let Some(selection) = state.selection.filter(|sel| sel.pane() == pane) else {
+        return;
+    };
+    let unit = selection.unit();
+    if pane == state.prompt.id() && unit != SelectionUnit::Character {
+        let ((start, end), (start_byte, end_byte)) = state.prompt.unit_cell_range(
+            usize::try_from(content_row.max(0)).unwrap_or(0),
+            col,
+            unit,
+        );
+        let origin_start = selection.origin().0;
+        if let Some(sel) = state.selection.as_mut() {
+            sel.drag_range(start, end);
+        }
+        state.prompt.set_cursor_offset(if start < origin_start {
+            start_byte
+        } else {
+            end_byte
+        });
+    } else if let Some(sel) = state.selection.as_mut() {
+        sel.drag(content_row, col);
     }
 }
 
@@ -135,12 +219,25 @@ fn selection_content_row(state: &AppState, pane: PaneId, row: u16) -> i32 {
 
 /// 在终端窗格开始拖拽选择；选区存于仿真器，随输出滚动钉在内容上。
 pub fn begin_terminal_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
+    begin_terminal_selection_with_clicks(state, pane, row, col, 1);
+}
+
+/// 按连续点击次数（1=单字、2=选词、3=选行）在终端窗格开始选择。
+pub fn begin_terminal_selection_with_clicks(
+    state: &mut AppState,
+    pane: PaneId,
+    row: u16,
+    col: u16,
+    clicks: u8,
+) {
     clear_selection(state);
     let started = state.pane_mut_anywhere(pane).is_some_and(|target| {
         if target.kind != PaneKind::Terminal {
             return false;
         }
-        target.terminal.start_selection(row, col);
+        target
+            .terminal
+            .start_selection_with_clicks(row, col, clicks);
         true
     });
     state.terminal_selection = started.then_some(pane);
@@ -218,10 +315,15 @@ pub fn clear_selection(state: &mut AppState) {
     state.lx_scroll_drag = None;
     state.lx_history_scroll_drag = None;
     state.task_agents_scroll_drag = None;
-    if let Some(pane) = state.lx_input_drag.take()
-        && let Some(target) = state.pane_mut_anywhere(pane)
-    {
-        target.lx.clear_text_selection();
+    state.lx_input_drag = None;
+    for workspace in &mut state.workspaces {
+        for tab in &mut workspace.tabs {
+            for id in tab.layout.pane_ids() {
+                if let Some(target) = tab.pane_mut(id) {
+                    target.lx.clear_text_selection();
+                }
+            }
+        }
     }
     clear_terminal_selection(state);
 }
@@ -362,8 +464,13 @@ fn autoscroll_step(
     if terminal {
         drag_terminal_selection(state, pane, row, col);
     } else {
+        if state
+            .selection
+            .is_none_or(|sel| sel.unit() == SelectionUnit::Character)
+        {
+            place_prompt_cursor(state, row, col);
+        }
         drag_selection(state, pane, row, col);
-        place_prompt_cursor(state, row, col);
     }
     true
 }
@@ -400,15 +507,25 @@ pub fn wheel_prompt_selection(state: &mut AppState, direction: isize, row: u16, 
         return false;
     }
     let prompt = state.prompt.id();
+    if state
+        .selection
+        .is_none_or(|sel| sel.unit() == SelectionUnit::Character)
+    {
+        place_prompt_cursor(state, row, col);
+    }
     drag_selection(state, prompt, row, col);
-    place_prompt_cursor(state, row, col);
     true
 }
 
 /// prompt 选区文本（保留选区，供 Ctrl/Cmd+C 复制）；空选区返回 None。
 pub fn prompt_selection_text(state: &AppState) -> Option<String> {
     let (start, end) = prompt_selection_range(state)?;
-    state.prompt.selection_text(start, end)
+    let allow_single_cell = state
+        .selection
+        .is_some_and(|sel| sel.unit() != SelectionUnit::Character);
+    state
+        .prompt
+        .selection_text_with(start, end, allow_single_cell)
 }
 
 /// prompt 复制文本：优先选区；无选区时复制全文；无内容返回 None。
@@ -436,5 +553,10 @@ pub(crate) fn prompt_selection_range(state: &AppState) -> Option<((u16, u16), (u
 /// prompt 选区对应的字节范围；选区不在 prompt 或为空时返回 None。
 pub(crate) fn prompt_selection_bounds(state: &AppState) -> Option<(usize, usize)> {
     let (start, end) = prompt_selection_range(state)?;
-    state.prompt.selection_bounds(start, end)
+    let allow_single_cell = state
+        .selection
+        .is_some_and(|sel| sel.unit() != SelectionUnit::Character);
+    state
+        .prompt
+        .selection_bounds_with(start, end, allow_single_cell)
 }

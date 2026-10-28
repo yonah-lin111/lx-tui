@@ -23,8 +23,8 @@ mod selection;
 
 pub(crate) use ask::rect as ask_rect;
 pub(crate) use mention::{item_at as mention_item_at, layout as mention_layout};
-pub(crate) use selection::content_geom;
 pub use selection::copy_text;
+pub(crate) use selection::{content_geom, unit_cell_range};
 
 pub(crate) mod brand;
 pub(crate) mod chat_bar;

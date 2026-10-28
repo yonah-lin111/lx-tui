@@ -7058,6 +7058,289 @@ fn terminal_selection_retains_on_mouse_up_scrolls_and_copies_on_ctrl_c() {
     );
 }
 
+#[test]
+fn double_and_triple_click_select_word_and_line_across_all_views() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        target.lx.insert_str("alpha beta_gamma delta");
+        target
+            .lx
+            .chat
+            .messages
+            .push(crate::app::state::ChatMessageView {
+                sequence: 0,
+                id: "m0".into(),
+                role: "assistant".into(),
+                status: "complete".into(),
+                turn_index: 0,
+                kind: "chat".into(),
+                shell: None,
+                steps: vec![crate::app::state::AssistantStepView::Part {
+                    position: 0,
+                    part: crate::app::state::ChatPartView {
+                        kind: crate::chat::events::PartKind::Text,
+                        content: "firstWord secondWord thirdWord".into(),
+                        provider_metadata_json: None,
+                        started_at_ms: None,
+                        ended_at_ms: None,
+                        completed_at_ms: None,
+                    },
+                }],
+                model_label: None,
+                error_code: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                duration_ms: None,
+                reports: Vec::new(),
+            });
+    }
+    update::resize_panes(&mut state, &geo.rects);
+    state.prompt.set_text("prompt_one prompt_two\nsecond_line");
+
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+
+    // 1. lx 主内容区：双击选中 "second_word"，三击选中整行。
+    let hist_geom = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane)).expect("hist geom")
+    };
+    let word_x = hist_geom.rect.x + 15;
+    let word_y = hist_geom.rect.y;
+    for _ in 0..2 {
+        handle_terminal_event(
+            mouse(MouseEventKind::Down(MouseButton::Left), word_x, word_y),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+        handle_terminal_event(
+            mouse(MouseEventKind::Up(MouseButton::Left), word_x, word_y),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+    }
+    let range = state
+        .lx_selection
+        .and_then(|sel| sel.range())
+        .expect("双击历史消息选中词");
+    let copied_word = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::copy_text(inner, &target.lx, range, cache.pane(pane))
+    };
+    assert_eq!(copied_word, "secondWord");
+
+    // 第 3 击选中整行。
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), word_x, word_y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(MouseEventKind::Up(MouseButton::Left), word_x, word_y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    let line_range = state
+        .lx_selection
+        .and_then(|sel| sel.range())
+        .expect("三击历史消息选中整行");
+    let copied_line = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::copy_text(inner, &target.lx, line_range, cache.pane(pane))
+    };
+    assert!(
+        copied_line.contains("firstWord secondWord thirdWord"),
+        "三击复制整行：{copied_line}"
+    );
+
+    // 2. lx 底部输入框：双击选中 "beta_gamma"，松开后保留高亮，Ctrl+C 复制且不清空草稿。
+    let input_geom = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::input_geom(inner, &target.lx).expect("input geom")
+    };
+    let (ix, iy) = input_geom.text_origin();
+    for _ in 0..2 {
+        handle_terminal_event(
+            mouse(MouseEventKind::Down(MouseButton::Left), ix + 8, iy),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+        handle_terminal_event(
+            mouse(MouseEventKind::Up(MouseButton::Left), ix + 8, iy),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+    }
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|t| t.lx.selected_text())
+            .as_deref(),
+        Some("beta_gamma"),
+        "双击 lx 输入框选中词并保留高亮"
+    );
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(
+        state.toast.as_ref().map(|t| t.message.as_str()),
+        Some("Copied 10 chars")
+    );
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.input,
+        "alpha beta_gamma delta",
+        "输入框有选区时按 Ctrl+C 不清空草稿"
+    );
+
+    // 3. 右侧 Prompt 编辑器：双击选词、三击选整逻辑行。
+    let prompt_area = super::paste::prompt_text_area(&geo.view);
+    let px = prompt_area.x + 12;
+    let py = prompt_area.y;
+    for _ in 0..2 {
+        handle_terminal_event(
+            mouse(MouseEventKind::Down(MouseButton::Left), px, py),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+        handle_terminal_event(
+            mouse(MouseEventKind::Up(MouseButton::Left), px, py),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+    }
+    assert_eq!(
+        update::prompt_selection_text(&state).as_deref(),
+        Some("prompt_two"),
+        "双击 Prompt 选中单词"
+    );
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), px, py),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(MouseEventKind::Up(MouseButton::Left), px, py),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(
+        update::prompt_selection_text(&state).as_deref(),
+        Some("prompt_one prompt_two"),
+        "三击 Prompt 选中整条逻辑行"
+    );
+
+    // 4. 终端窗格：双击选词、三击选整行。
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Terminal;
+        target.terminal.feed(b"term_alpha term_beta\r\n");
+    }
+    let tx = inner.x + 12;
+    let ty = inner.y;
+    for _ in 0..2 {
+        handle_terminal_event(
+            mouse(MouseEventKind::Down(MouseButton::Left), tx, ty),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+        handle_terminal_event(
+            mouse(MouseEventKind::Up(MouseButton::Left), tx, ty),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+    }
+    assert_eq!(
+        update::terminal_selection_text(&state, pane).as_deref(),
+        Some("term_beta"),
+        "双击终端窗格选中词"
+    );
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), tx, ty),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(MouseEventKind::Up(MouseButton::Left), tx, ty),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(
+        update::terminal_selection_text(&state, pane).as_deref(),
+        Some("term_alpha term_beta\n"),
+        "三击终端窗格选中整行"
+    );
+}
+
 /// 粘贴也是编辑：必须让双 Esc 的待命失效，避免带草稿选中后回填覆盖。
 #[test]
 fn lx_paste_cancels_rewind_arming() {

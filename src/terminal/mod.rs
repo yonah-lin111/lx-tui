@@ -284,8 +284,22 @@ impl Terminal {
     ///
     /// 选区由仿真器按内容坐标持有：输出滚动时由其随内容旋转，滚回历史不改变锚点。
     pub fn start_selection(&mut self, row: u16, col: u16) {
+        self.start_selection_with_clicks(row, col, 1);
+    }
+
+    /// 按连续点击次数（1=单字 `Simple`、2=按词 `Semantic`、3=按行 `Lines`）开始选区。
+    pub fn start_selection_with_clicks(&mut self, row: u16, col: u16, clicks: u8) {
+        let kind = match clicks {
+            2 => SelectionType::Semantic,
+            3 => SelectionType::Lines,
+            _ => SelectionType::Simple,
+        };
         let point = self.viewport_point(row, col);
-        self.term.selection = Some(TermSelection::new(SelectionType::Simple, point, Side::Left));
+        let mut selection = TermSelection::new(kind, point, Side::Left);
+        if clicks >= 2 {
+            selection.include_all();
+        }
+        self.term.selection = Some(selection);
     }
 
     /// 更新选区终点（视口 0 基行列）；无选区时忽略。

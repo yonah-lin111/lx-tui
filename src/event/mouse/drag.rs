@@ -15,7 +15,7 @@ use crate::pty::PtySession;
 use crate::ui;
 
 use super::super::session::Geometry;
-use super::hit::{copy_with_toast_at, pane_at, pane_content_inner};
+use super::hit::{pane_at, pane_content_inner};
 use super::wheel::forward_pane_mouse_event;
 
 /// 鼠标拖拽事件处理。
@@ -269,20 +269,28 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
-    // lx 主内容区选区拖拽：终点更新到鼠标所在的内容行与正文列坐标。
+    // lx 主内容区选区拖拽：按当前选区粒度更新终点到鼠标所在的内容行与正文列坐标。
     if let Some(selection) = state.lx_selection
         && selection.is_dragging()
     {
         let pane = selection.pane();
+        let unit = selection.unit();
         let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
             return;
         };
         let inner = layout::pane_inner_rect(*rect);
-        if let Some(geom) = state.pane_anywhere(pane).and_then(|target| {
-            ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane))
+        if let Some((start, end)) = state.pane_anywhere(pane).and_then(|target| {
+            let geom = ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane))?;
+            let cell = geom.cell(mouse.column, mouse.row);
+            Some(ui::main_content::lx::unit_cell_range(
+                inner,
+                &target.lx,
+                cell,
+                unit,
+                cache.pane(pane),
+            ))
         }) {
-            let (content_row, col) = geom.cell(mouse.column, mouse.row);
-            update::drag_lx_selection(state, pane, content_row, col);
+            update::drag_lx_selection_range(state, pane, start, end);
             *dirty = true;
         }
         return;
@@ -312,6 +320,9 @@ pub(crate) fn handle_mouse_drag(
     if pane == state.prompt.id()
         && update::prompt_panel_active(state)
         && !state.prompt.row_in_padding(row)
+        && state
+            .selection
+            .is_none_or(|sel| sel.unit() == crate::app::selection::SelectionUnit::Character)
     {
         update::place_prompt_cursor(state, row, col);
     }
@@ -433,11 +444,8 @@ pub(crate) fn handle_mouse_up_left(
         *dirty = true;
         return;
     }
-    // lx 输入框选区松开：复制选中文本（空选区不复制）。
-    if let Some((_pane, text)) = update::take_lx_input_selection(state) {
-        if !text.trim().is_empty() {
-            copy_with_toast_at(state, &text, None);
-        }
+    // lx 输入框选区松开：对齐 prompt / lx 主内容区，非空选区保留高亮供 Ctrl/Cmd+C 复制。
+    if update::end_lx_input_selection_drag(state) {
         *dirty = true;
         return;
     }

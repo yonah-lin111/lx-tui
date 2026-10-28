@@ -245,14 +245,15 @@ fn copy_terminal_selection(state: &mut AppState) -> bool {
     true
 }
 
-/// 复制焦点 lx 窗格的主内容区选区文本并弹出全局 Toast；选区保留，无选区返回 false。
+/// 复制焦点 lx 窗格的底部输入框选区或主内容区选区文本并弹出全局顶部居中 Toast；
+/// 选区保留，无选区返回 false。
 fn copy_lx_selection(
     state: &mut AppState,
     rects: &[(PaneId, ratatui::layout::Rect)],
     cache: &mut ui::RenderCache,
 ) -> bool {
     let pane = state.active_tab().layout.focus();
-    // `/resume` 历史面板打开时 Ctrl/Cmd+C 归会话 ID 复制，不走主内容区选区复制。
+    // `/resume` 历史面板打开时 Ctrl/Cmd+C 归会话 ID 复制，不走选区复制。
     if state.pane_anywhere(pane).is_some_and(|target| {
         matches!(
             target.lx.slash,
@@ -260,6 +261,16 @@ fn copy_lx_selection(
         )
     }) {
         return false;
+    }
+    if let Some(text) = state
+        .pane_anywhere(pane)
+        .filter(|target| target.view == PaneView::Lx)
+        .and_then(|target| target.lx.selected_text())
+    {
+        if !text.trim().is_empty() {
+            copy_with_toast(state, &text);
+        }
+        return true;
     }
     let Some(selection) = state.lx_selection.filter(|sel| sel.pane() == pane) else {
         return false;

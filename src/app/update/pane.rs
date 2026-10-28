@@ -72,11 +72,18 @@ pub fn set_lx_scroll(state: &mut AppState, id: PaneId, offset: usize) -> bool {
 /// 无面板时 `↑`/`↓` 先尝试历史切换（光标在文首/文末才接管），否则回落光标移动。
 pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
     let pane_id = state.active_tab().layout.focus();
-    // 主内容区存在非空选区时，Ctrl/Cmd+C 只负责复制选区（由事件层处理），不清空输入框草稿。
+    // 主内容区或底部输入框存在非空选区（且非 /resume 历史面板）时，
+    // Ctrl/Cmd+C 只负责复制选区（由事件层处理），不清空输入框草稿。
     if command == LxInput::Clear
-        && state
-            .lx_selection
-            .is_some_and(|sel| sel.pane() == pane_id && sel.range().is_some())
+        && state.pane_anywhere(pane_id).is_some_and(|pane| {
+            !matches!(
+                pane.lx.slash,
+                Some(super::super::state::SlashPanel::History(_))
+            ) && (pane.lx.text_selection_range().is_some()
+                || state
+                    .lx_selection
+                    .is_some_and(|sel| sel.pane() == pane_id && sel.range().is_some()))
+        })
     {
         return;
     }

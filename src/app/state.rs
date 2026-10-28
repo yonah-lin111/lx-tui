@@ -175,6 +175,8 @@ pub struct AppState {
     /// 与 `lx_selection` 并行存在——按下正文既开始选区（允许长按拖拽复制），
     /// 又记录"这可能是一次点击"。是否折叠由松开时的选区范围决定（拖动过就不折叠）。
     pub lx_card_press: Option<(PaneId, crate::app::state::CardTarget)>,
+    /// 文本选区多击计数现场 `(最近按下时刻, 屏幕列, 屏幕行, 点击次数 1..=3)`。
+    pub selection_click: Option<(Instant, u16, u16, u8)>,
     /// 选区拖拽边缘自动滚动计划；None 表示未激活。
     pub selection_autoscroll: Option<SelectionAutoscroll>,
     pub resizing_prompt: bool,
@@ -340,6 +342,7 @@ impl AppState {
             lx_selection: None,
             lx_input_drag: None,
             lx_card_press: None,
+            selection_click: None,
             selection_autoscroll: None,
             resizing_prompt: false,
             prompt_hover: false,

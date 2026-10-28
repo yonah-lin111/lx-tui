@@ -448,8 +448,16 @@ pub(crate) fn handle_mouse_down_left(
             } else {
                 // 底部虚拟空占位只聚焦编辑器，不把光标移到不存在的文本行。
                 if !state.prompt.row_in_padding(row) {
-                    update::place_prompt_cursor(state, row, col);
-                    update::begin_selection(state, pane, row, col);
+                    let clicks = crate::app::selection::next_click_count(
+                        &mut state.selection_click,
+                        mouse.column,
+                        mouse.row,
+                        Instant::now(),
+                    );
+                    if clicks == 1 {
+                        update::place_prompt_cursor(state, row, col);
+                    }
+                    update::begin_selection_with_clicks(state, pane, row, col, clicks);
                 }
             }
             *dirty = true;
@@ -634,7 +642,15 @@ pub(crate) fn handle_mouse_down_left(
                     .filter(|geom| geom.contains(mouse.column, mouse.row))
                     .map(|geom| geom.cell(mouse.column, mouse.row))
                 {
-                    update::begin_lx_input_selection(state, pane, visual_row, col);
+                    let clicks = crate::app::selection::next_click_count(
+                        &mut state.selection_click,
+                        mouse.column,
+                        mouse.row,
+                        Instant::now(),
+                    );
+                    update::begin_lx_input_selection_with_clicks(
+                        state, pane, visual_row, col, clicks,
+                    );
                 } else if let Some((content_row, content_col, target)) =
                     state.pane_anywhere(pane).and_then(|target| {
                         let pane_cache = cache.pane(pane);
@@ -664,13 +680,37 @@ pub(crate) fn handle_mouse_down_left(
                         Some((content_row, content_col, card))
                     })
                 {
-                    // 主消息列表与后台管理主内容区：按下开始内容坐标选区，同时记录卡片点击候选；
-                    // 松开时若未拖出范围才当作单击折叠/展开卡片，拖出选区则保留高亮等待复制。
+                    // 主消息列表与后台管理主内容区：可折叠卡片保持单击折叠/长按拖选语义；
+                    // 普通正文行支持双击选词、三击选行。
                     //
-                    // **顺序不能反**：`begin_lx_selection` 内部先 `clear_selection`（会清空
-                    // `lx_card_press`），必须先 `begin_lx_selection` 再写 `lx_card_press`。
-                    update::begin_lx_selection(state, pane, content_row, content_col);
-                    state.lx_card_press = target.map(|card| (pane, card));
+                    // **顺序不能反**：`begin_lx_selection*` 内部先 `clear_selection`（会清空
+                    // `lx_card_press`），必须先开始选区再写 `lx_card_press`。
+                    if target.is_some() {
+                        state.selection_click = None;
+                        update::begin_lx_selection(state, pane, content_row, content_col);
+                        state.lx_card_press = target.map(|card| (pane, card));
+                    } else {
+                        let clicks = crate::app::selection::next_click_count(
+                            &mut state.selection_click,
+                            mouse.column,
+                            mouse.row,
+                            Instant::now(),
+                        );
+                        let unit = crate::app::selection::SelectionUnit::from_clicks(clicks);
+                        let (start, end) = state
+                            .pane_anywhere(pane)
+                            .map(|pane_target| {
+                                ui::main_content::lx::unit_cell_range(
+                                    inner,
+                                    &pane_target.lx,
+                                    (content_row, content_col),
+                                    unit,
+                                    cache.pane(pane),
+                                )
+                            })
+                            .unwrap_or(((content_row, content_col), (content_row, content_col)));
+                        update::begin_lx_selection_range(state, pane, start, end, unit);
+                    }
                 }
                 *dirty = true;
             } else if handle_terminal_scrollbar_press(state, pane, inner, mouse.column, mouse.row) {
@@ -683,7 +723,13 @@ pub(crate) fn handle_mouse_down_left(
                 if forward_pane_mouse_event(state, sessions, pane, inner, mouse) {
                     update::clear_selection(state);
                 } else {
-                    update::begin_terminal_selection(state, pane, row, col);
+                    let clicks = crate::app::selection::next_click_count(
+                        &mut state.selection_click,
+                        mouse.column,
+                        mouse.row,
+                        Instant::now(),
+                    );
+                    update::begin_terminal_selection_with_clicks(state, pane, row, col, clicks);
                 }
                 *dirty = true;
             }

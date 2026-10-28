@@ -77,3 +77,57 @@ fn full_selection_with_zero_extent_has_no_range() {
     assert_eq!(selection.range(), None);
     assert!(!selection.contains(0, 0));
 }
+
+#[test]
+fn click_count_cycles_within_window_and_resets_outside_or_moved() {
+    let mut last = None;
+    let t0 = Instant::now();
+    assert_eq!(next_click_count(&mut last, 5, 3, t0), 1);
+    assert_eq!(
+        next_click_count(&mut last, 5, 3, t0 + Duration::from_millis(120)),
+        2
+    );
+    assert_eq!(
+        next_click_count(&mut last, 5, 3, t0 + Duration::from_millis(240)),
+        3
+    );
+    assert_eq!(
+        next_click_count(&mut last, 5, 3, t0 + Duration::from_millis(360)),
+        1,
+        "第 4 击循环回 1"
+    );
+    assert_eq!(
+        next_click_count(&mut last, 6, 3, t0 + Duration::from_millis(400)),
+        1,
+        "坐标改变重置为 1"
+    );
+    assert_eq!(
+        next_click_count(
+            &mut last,
+            6,
+            3,
+            t0 + Duration::from_millis(400) + SELECTION_CLICK_WINDOW
+        ),
+        1,
+        "超过 400ms 重置为 1"
+    );
+}
+
+#[test]
+fn selection_unit_byte_range_and_drag_range_expand_by_word_and_line() {
+    let text = "hello foo_bar_123 你好世界\nsecond line";
+    let (w0, w1) = SelectionUnit::Word.byte_range(text, 8);
+    assert_eq!(&text[w0..w1], "foo_bar_123");
+    let cjk_offset = text.find('好').expect("cjk");
+    let (c0, c1) = SelectionUnit::Word.byte_range(text, cjk_offset);
+    assert_eq!(&text[c0..c1], "你好世界");
+    let (l0, l1) = SelectionUnit::Line.byte_range(text, 8);
+    assert_eq!(&text[l0..l1], "hello foo_bar_123 你好世界");
+
+    let pane = PaneId::from_raw_for_test(1);
+    let mut word_sel = Selection::begin_range(pane, (0, 6), (0, 16), SelectionUnit::Word);
+    assert_eq!(word_sel.range(), Some(((0, 6), (0, 16))));
+    // 向左拖拽到首词：保留初始词右端点 (0, 16)，左端点扩到 (0, 0)。
+    word_sel.drag_range((0, 0), (0, 4));
+    assert_eq!(word_sel.range(), Some(((0, 0), (0, 16))));
+}

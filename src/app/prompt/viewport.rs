@@ -7,6 +7,9 @@ use super::super::markdown;
 use super::fold;
 use super::{Prompt, VisualRow, char_width, display_width};
 
+/// 多击选词/选行返回的（单元格闭区间，字节半开区间）。
+pub type UnitCellSpan = (((i32, u16), (i32, u16)), (usize, usize));
+
 impl Prompt {
     /// 按内容宽度软换行得到的可见视觉行；块行扣除左右边框槽后再换行，
     /// 折叠补充块的隐藏行整体跳过。
@@ -132,9 +135,103 @@ impl Prompt {
         self.cursor = self.viewport_offset((row, col), false);
         self.settle();
     }
+    /// 直接将光标设置到指定字节偏移（多击选词/选行时同步光标）。
+    pub fn set_cursor_offset(&mut self, offset: usize) {
+        self.break_group();
+        self.cursor = self.text.floor_char_boundary(offset.min(self.text.len()));
+        self.settle();
+    }
+    /// 按选区粒度（单字 / 词 / 逻辑行）计算内容行坐标下的单元格闭区间与字节范围。
+    pub fn unit_cell_range(
+        &self,
+        content_row: usize,
+        col: u16,
+        unit: crate::app::selection::SelectionUnit,
+    ) -> UnitCellSpan {
+        use crate::app::selection::SelectionUnit;
+        let rows = self.visual_rows();
+        let row_i32 = i32::try_from(content_row).unwrap_or(0);
+        if rows.is_empty() || unit == SelectionUnit::Character {
+            let pos = self.content_offset_at(content_row, col, false);
+            return (((row_i32, col), (row_i32, col)), (pos, pos));
+        }
+        let index = content_row.min(rows.len() - 1);
+        match unit {
+            SelectionUnit::Character => unreachable!(),
+            SelectionUnit::Line => {
+                let target_line = rows[index].line;
+                let first_row = rows
+                    .iter()
+                    .position(|r| r.line == target_line)
+                    .unwrap_or(index);
+                let last_row = rows
+                    .iter()
+                    .rposition(|r| r.line == target_line)
+                    .unwrap_or(index);
+                let start_byte = rows[first_row].start;
+                let end_byte = rows[last_row].end;
+                let max_col = self.width.saturating_sub(1);
+                (
+                    (
+                        (i32::try_from(first_row).unwrap_or(0), 0),
+                        (i32::try_from(last_row).unwrap_or(0), max_col),
+                    ),
+                    (start_byte, end_byte),
+                )
+            }
+            SelectionUnit::Word => {
+                let pos = self.content_offset_at(index, col, false);
+                let (start_byte, end_byte) = unit.byte_range(&self.text, pos);
+                if start_byte >= end_byte {
+                    return (((row_i32, col), (row_i32, col)), (start_byte, end_byte));
+                }
+                let start_idx = rows
+                    .iter()
+                    .position(|r| r.start <= start_byte && start_byte < r.end)
+                    .unwrap_or(index);
+                let start_gutter = self.line_gutter(rows[start_idx].line);
+                let start_col = start_gutter.saturating_add(display_width(
+                    &self.text[rows[start_idx].start..start_byte],
+                ) as u16);
+                let last_char_byte =
+                    super::text::prev_boundary(&self.text, end_byte).max(start_byte);
+                let end_idx = rows
+                    .iter()
+                    .position(|r| r.start <= last_char_byte && last_char_byte < r.end)
+                    .unwrap_or(start_idx);
+                let end_gutter = self.line_gutter(rows[end_idx].line);
+                let ch_width = self.text[last_char_byte..]
+                    .chars()
+                    .next()
+                    .map_or(1, char_width)
+                    .max(1) as u16;
+                let end_col = end_gutter
+                    .saturating_add(
+                        display_width(&self.text[rows[end_idx].start..last_char_byte]) as u16,
+                    )
+                    .saturating_add(ch_width - 1);
+                (
+                    (
+                        (i32::try_from(start_idx).unwrap_or(0), start_col),
+                        (i32::try_from(end_idx).unwrap_or(0), end_col),
+                    ),
+                    (start_byte, end_byte),
+                )
+            }
+        }
+    }
     /// 选区（内容行坐标，端点包含）对应的字节范围；空选区或选中内容为空时返回 None。
     pub fn selection_bounds(&self, start: (u16, u16), end: (u16, u16)) -> Option<(usize, usize)> {
-        if start == end {
+        self.selection_bounds_with(start, end, false)
+    }
+    /// 选区对应的字节范围；`allow_single_cell` 为真时允许双击选中的单列词。
+    pub fn selection_bounds_with(
+        &self,
+        start: (u16, u16),
+        end: (u16, u16),
+        allow_single_cell: bool,
+    ) -> Option<(usize, usize)> {
+        if !allow_single_cell && start == end {
             return None;
         }
         let (first, last) = if start <= end {
@@ -148,7 +245,16 @@ impl Prompt {
     }
     /// 取选区文本（内容行坐标，端点包含）；只拼接可见行，折叠区不产出文字。
     pub fn selection_text(&self, start: (u16, u16), end: (u16, u16)) -> Option<String> {
-        if start == end {
+        self.selection_text_with(start, end, false)
+    }
+    /// 取选区文本；`allow_single_cell` 为真时允许双击选中的单列词。
+    pub fn selection_text_with(
+        &self,
+        start: (u16, u16),
+        end: (u16, u16),
+        allow_single_cell: bool,
+    ) -> Option<String> {
+        if !allow_single_cell && start == end {
             return None;
         }
         let (first, last) = if start <= end {

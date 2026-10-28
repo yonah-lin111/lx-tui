@@ -9,7 +9,7 @@ use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
-use crate::app::selection::Selection;
+use crate::app::selection::{Selection, SelectionUnit, char_class};
 use crate::app::state::{Lx, TaskTab};
 
 use super::grid::{CONTINUATION, Grid};
@@ -132,6 +132,68 @@ pub(super) fn paint_selection(buf: &mut Buffer, geom: ContentGeom, selection: &S
     }
 }
 
+/// 按选区粒度（单字 / 词 / 行）在主内容区计算 `cell` 所在词或行的列闭区间。
+pub(crate) fn unit_cell_range(
+    area: Rect,
+    lx: &Lx,
+    cell: (i32, u16),
+    unit: SelectionUnit,
+    cache: &mut PaneCache,
+) -> ((i32, u16), (i32, u16)) {
+    if unit == SelectionUnit::Character {
+        return (cell, cell);
+    }
+    let Some(geom) = content_geom(area, lx, cache) else {
+        return (cell, cell);
+    };
+    if geom.rect.width == 0 || geom.total_rows == 0 {
+        return (cell, cell);
+    }
+    let max_col = geom.rect.width - 1;
+    match unit {
+        SelectionUnit::Character => (cell, cell),
+        SelectionUnit::Line => ((cell.0, 0), (cell.0, max_col)),
+        SelectionUnit::Word => {
+            let row = usize::try_from(cell.0.max(0))
+                .unwrap_or(0)
+                .min(geom.total_rows - 1);
+            let chunk_rect = Rect::new(0, 0, geom.rect.width, 1);
+            let mut grid = Grid::new(chunk_rect);
+            render_chunk(&mut grid, chunk_rect, lx, row, cache);
+            let mut tokens: Vec<(u16, u16, crate::app::selection::CharClass)> =
+                Vec::with_capacity(usize::from(geom.rect.width));
+            for x in 0..geom.rect.width {
+                let ch = grid.cell(x, 0).ch;
+                if ch == CONTINUATION {
+                    if let Some(last) = tokens.last_mut() {
+                        last.1 = x;
+                    }
+                } else {
+                    tokens.push((x, x, char_class(ch)));
+                }
+            }
+            if tokens.is_empty() {
+                return (cell, cell);
+            }
+            let target_col = cell.1.min(max_col);
+            let idx = tokens
+                .iter()
+                .position(|(start, end, _)| *start <= target_col && target_col <= *end)
+                .unwrap_or(tokens.len() - 1);
+            let target_class = tokens[idx].2;
+            let mut left = idx;
+            while left > 0 && tokens[left - 1].2 == target_class {
+                left -= 1;
+            }
+            let mut right = idx;
+            while right + 1 < tokens.len() && tokens[right + 1].2 == target_class {
+                right += 1;
+            }
+            ((cell.0, tokens[left].0), (cell.0, tokens[right].1))
+        }
+    }
+}
+
 /// 提取主内容区选区文本（内容行坐标、正文列坐标）；空选区返回空串。
 ///
 /// 按内容行区间分段渲染到仅含正文列的网格（不含滚动条槽），因此：
@@ -148,9 +210,6 @@ pub fn copy_text(
     } else {
         (range.1, range.0)
     };
-    if start == end {
-        return String::new();
-    }
     let Some(geom) = content_geom(area, lx, cache) else {
         return String::new();
     };

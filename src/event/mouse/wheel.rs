@@ -103,12 +103,23 @@ fn wheel_lx_selection(
     if !moved {
         return false;
     }
-    if let Some(geom) = state
-        .pane_anywhere(pane)
-        .and_then(|target| ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane)))
-    {
-        let (content_row, col) = geom.cell(mouse.column, mouse.row);
-        update::drag_lx_selection(state, pane, content_row, col);
+    let unit = state
+        .lx_selection
+        .map_or(crate::app::selection::SelectionUnit::Character, |sel| {
+            sel.unit()
+        });
+    if let Some((start, end)) = state.pane_anywhere(pane).and_then(|target| {
+        let geom = ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane))?;
+        let cell = geom.cell(mouse.column, mouse.row);
+        Some(ui::main_content::lx::unit_cell_range(
+            inner,
+            &target.lx,
+            cell,
+            unit,
+            cache.pane(pane),
+        ))
+    }) {
+        update::drag_lx_selection_range(state, pane, start, end);
     }
     true
 }
