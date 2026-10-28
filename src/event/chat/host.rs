@@ -79,6 +79,13 @@ pub(crate) struct EventHost {
 }
 
 impl AgentHost for EventHost {
+    fn notify_auto_compact(&mut self, notice: &crate::chat::compact::AutoCompactNotice) {
+        let _ = self.sender.send(AppEvent::SubagentAutoCompact {
+            key: self.key.clone(),
+            notice: notice.clone(),
+        });
+    }
+
     fn send(&mut self, request: AgentHostRequest) {
         let event = match request {
             AgentHostRequest::BeginTool { call, reply } => AgentHostEvent::BeginTool {

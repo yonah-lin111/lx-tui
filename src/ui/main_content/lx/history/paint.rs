@@ -342,7 +342,7 @@ fn draw_markdown(
                     history.chat.loading_frame,
                     history.chat.status.streaming,
                 ),
-                mark.style(StepKind::Body, false, false),
+                mark.style(StepKind::Body, false),
             );
         }
         let mut cx = rect
@@ -384,7 +384,6 @@ fn draw_thinking(
         return;
     };
     let streaming = history.chat.reasoning_streaming(message_index, step_index);
-    let hovered = history.chat.thinking_is_hovered(message_index, step_index);
     let expanded = history.chat.reasoning_expanded(message_index, step_index);
     let mark = if streaming {
         StepMark::Running
@@ -395,7 +394,7 @@ fn draw_thinking(
         && let Some(y) = visible_row(rect, scroll, start)
     {
         // 生成中：`Thinking`；完成后：`Thought · 6.3s`。
-        let header_style = StepKind::Thinking.label(streaming, expanded, hovered);
+        let header_style = StepKind::Thinking.label(streaming, expanded);
         grid.put_char(
             rect.x,
             y,
@@ -404,7 +403,7 @@ fn draw_thinking(
                 history.chat.loading_frame,
                 history.chat.status.streaming,
             ),
-            mark.style(StepKind::Thinking, expanded, hovered),
+            mark.style(StepKind::Thinking, expanded),
         );
         let x = rect.x.saturating_add(STEP_GUTTER);
         let limit = rect.right();
@@ -552,6 +551,7 @@ fn draw_legacy(
             };
             let slot = format!("report:{}", report.agent_id);
             let expanded = history.chat.detail_is_expanded(&message.id, &slot);
+            let more_steps = history.chat.report_expand_steps(&message.id, &slot);
             super::report_block::draw(
                 grid,
                 rect,
@@ -561,6 +561,7 @@ fn draw_legacy(
                 history.chat.loading_frame,
                 history.chat.status.streaming,
                 expanded,
+                more_steps,
             );
         }
         // 静态块的绘制数据自带样式，没有需要回查的动态状态。

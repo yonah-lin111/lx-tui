@@ -85,6 +85,26 @@ fn tool_step_occupies_two_rows_and_renders_summary() {
     assert!(squeezed.contains("3-7"), "行范围可见：{painted}");
 }
 
+/// Agents 详情没有置顶 prompt：plain 视图不得预留一行，否则首行空白且滚动差一行。
+#[test]
+fn plain_history_view_never_reserves_a_sticky_row() {
+    let body = (0..20)
+        .map(|index| format!("body line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut lx = lx_with(vec![
+        message("user", "complete", vec![text_part("prompt")]),
+        message("assistant", "complete", vec![text_part(&body)]),
+    ]);
+    lx.chat.follow_bottom = false;
+    lx.chat.history_scroll = 2;
+    let area = Rect::new(0, 0, 40, 8);
+    let source = crate::ui::main_content::lx::history::HistorySource::from(&lx);
+    let plain = view_source_plain(area, source, &mut cache());
+    assert_eq!(plain.body, area, "Agents 详情不能给置顶行让位");
+    assert!(plain.sticky.is_none(), "Agents 详情不画置顶行");
+}
+
 /// 仅工具步骤的消息也占行（不会因“没有 text part”而整条消失）。
 #[test]
 fn tool_only_message_still_occupies_rows() {

@@ -20,9 +20,13 @@ pub struct SubagentRun {
     pub agent_id: String,
     /// 子会话 external id（delta/工具回投的定位键）。
     pub child_session_id: String,
+    /// 父会话 external id：切会话后拒绝迟到回投把旧 run 塞进新会话。
+    pub parent_session_id: String,
     /// 角色。
     pub role: AgentRole,
-    /// 任务原文（面板与详情标题）。
+    /// 面向用户的短标题（列表与卡片标题）；旧记录可能为空。
+    pub title: String,
+    /// 任务原文（只用于 live 种子消息；历史从 DB 消息流加载）。
     pub task: String,
     /// `running` / `completed` / `failed` / `cancelled`。
     pub status: String,
@@ -60,8 +64,11 @@ impl SubagentRun {
         Self {
             agent_id: record.agent_id.clone(),
             child_session_id: record.child_session_id.clone(),
+            parent_session_id: record.parent_session_id.clone(),
             role: record.role,
-            task: record.task_title.clone(),
+            title: record.title.clone(),
+            // 旧记录没有单独 title；这里不拿 task 首行冒充标题，保持为空。
+            task: record.title.clone(),
             status: record.status.clone(),
             started_at_ms: record.created_at_ms,
             completed_at_ms: record.completed_at_ms,
@@ -93,9 +100,13 @@ impl SubagentRun {
         self.status == "running"
     }
 
-    /// 任务首行（列表行显示）。
-    pub fn task_head(&self) -> &str {
-        self.task.lines().next().unwrap_or_default()
+    /// 列表标题；旧记录没有单独标题时为空（不显示 task 提示词）。
+    pub fn display_title(&self) -> &str {
+        if self.title.is_empty() {
+            ""
+        } else {
+            self.title.as_str()
+        }
     }
 }
 
@@ -171,6 +182,9 @@ pub fn seed_chat_model(
         key,
         assistant_id: assistant_id.to_string(),
     };
+    // 子 agent 详情也走同一套步骤渲染：没有 status.streaming，运行中的步骤标记
+    // 会被当成终态而不呼吸。终态由 `on_subagent_finished` 复位。
+    chat.status.streaming = true;
 }
 
 /// 面板数据：本窗格的 subagent 集合（面板关闭时依然保留）。
@@ -208,5 +222,10 @@ impl AgentsState {
     /// 是否为空。
     pub fn is_empty(&self) -> bool {
         self.runs.is_empty()
+    }
+
+    /// 仍在运行的子 agent 数（底边框运行指标）。
+    pub fn running_count(&self) -> usize {
+        self.runs.iter().filter(|run| run.is_running()).count()
     }
 }

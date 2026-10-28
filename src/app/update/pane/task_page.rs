@@ -41,7 +41,13 @@ fn task_active_len(state: &AppState, pane: PaneId) -> usize {
 pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command: LxInput) {
     // `PageUp`/`PageDown`：翻输出区（`↑`/`↓` 已经归任务列表高亮）。
     if let Some(delta) = task_output_delta(command) {
-        if let Some(page) = state
+        let agents_tab = state
+            .pane_anywhere(pane)
+            .and_then(|target| target.lx.task.as_ref())
+            .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
+        if agents_tab {
+            chat::scroll_agents_detail(state, pane, delta);
+        } else if let Some(page) = state
             .pane_mut_anywhere(pane)
             .and_then(|target| target.lx.task.as_mut())
         {
@@ -96,13 +102,21 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
                 page.cycle_tab(1);
             }
         }
-        // `^d` 停止高亮进程（对齐 opencode `composer.shell.kill`）。
+        // `^d` 停止高亮进程 / 子 agent（对齐 opencode `composer.shell.kill`）。
         //
         // 只认 `StopProcess`（仅 Ctrl+D 映射）：裸 `Delete` 键在编辑器语义里是
         // 「向后删一个字符」，面板里把它当停止用会让用户「想删一行」时
         // SIGTERM 掉一个正在跑的服务，且不可撤销。
         LxInput::StopProcess => {
-            chat::stop_selected_process(state, pane);
+            let agents_tab = state
+                .pane_anywhere(pane)
+                .and_then(|target| target.lx.task.as_ref())
+                .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
+            if agents_tab {
+                chat::stop_selected_subagent(state, pane);
+            } else {
+                chat::stop_selected_process(state, pane);
+            }
         }
         // 其余键不属于面板：吞掉，不落到草稿。
         _ => {}

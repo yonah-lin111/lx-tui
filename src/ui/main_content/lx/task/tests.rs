@@ -548,11 +548,13 @@ fn narrow_pane_drops_whole_hints_instead_of_truncating() {
 #[test]
 fn clicking_a_tab_hits_it() {
     let rect = Rect::new(0, 10, 70, 8);
+    let page = TaskPage::default();
+    let agents = crate::app::state::AgentsState::default();
     // tab 行 = rect.y + TOP_BORDER。
     let tab_y = rect.y + TOP_BORDER;
     // 第一个 tab 标签首字符。
     assert_eq!(
-        hit(rect, rect.x, tab_y),
+        hit(rect, &page, &agents, rect.x, tab_y),
         Some(TaskHit::Tab(0)),
         "点第一个 tab"
     );
@@ -561,20 +563,102 @@ fn clicking_a_tab_hits_it() {
     let first_w = u16::try_from(TaskTab::Processes.label().width()).unwrap();
     let agents_x = rect.x + first_w + sep;
     assert_eq!(
-        hit(rect, agents_x, tab_y),
+        hit(rect, &page, &agents, agents_x, tab_y),
         Some(TaskHit::Tab(1)),
         "点第二个 tab"
     );
 }
 
 #[test]
+fn clicking_an_agents_row_selects_it_with_the_scroll_offset() {
+    let rect = Rect::new(0, 10, 70, 8);
+    let mut page = TaskPage {
+        tab: TaskTab::Agents,
+        ..TaskPage::default()
+    };
+    let agents = crate::app::state::AgentsState {
+        runs: (0..8)
+            .map(|index| {
+                crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+                    agent_id: format!("a{index}"),
+                    child_session_id: format!("s{index}"),
+                    parent_session_id: "p".into(),
+                    spawn_message_id: None,
+                    role: crate::chat::agent::AgentRole::Explorer,
+                    status: "running".into(),
+                    title: format!("task {index}"),
+                    created_at_ms: 0,
+                    completed_at_ms: None,
+                    report_json: None,
+                    report_delivered: false,
+                })
+            })
+            .collect(),
+    };
+    let list_y = rect.y + TOP_BORDER + TAB_ROW;
+    assert_eq!(
+        hit(rect, &page, &agents, rect.x, list_y + 1),
+        Some(TaskHit::Agent(1))
+    );
+    // 滚轮把视口推到 2 后，第一行对应第 3 条。
+    assert!(page.scroll_agents_window(
+        2,
+        usize::from(rect.height - TOP_BORDER - TAB_ROW),
+        agents.runs.len()
+    ));
+    assert_eq!(
+        hit(rect, &page, &agents, rect.x, list_y),
+        Some(TaskHit::Agent(2))
+    );
+}
+
+#[test]
+fn agents_list_uses_the_title_not_the_task_prompt() {
+    let mut lx = lx_with_messages();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        ..TaskPage::default()
+    });
+    let mut run = crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+        agent_id: "a1".into(),
+        child_session_id: "s1".into(),
+        parent_session_id: "p".into(),
+        spawn_message_id: None,
+        role: crate::chat::agent::AgentRole::Explorer,
+        status: "running".into(),
+        title: "AgentHost request flow".into(),
+        created_at_ms: 0,
+        completed_at_ms: None,
+        report_json: None,
+        report_delivered: false,
+    });
+    run.task = "Investigate every branch of the prompt and never show this sentence".into();
+    lx.agents.runs.push(run);
+    let lines = render_lines(&lx, 70, 20);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("AgentHost request flow")),
+        "列表显示短标题"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("Investigate every branch")),
+        "列表不得显示 task 提示词"
+    );
+}
+
+#[test]
 fn clicking_esc_hits_close() {
     let rect = Rect::new(0, 10, 70, 8);
+    let page = TaskPage::default();
+    let agents = crate::app::state::AgentsState::default();
     let tab_y = rect.y + TOP_BORDER;
     let esc_w = u16::try_from(text::LX_TASK_CLOSE.label().width()).unwrap();
     let esc_x = rect.right() - esc_w;
     assert_eq!(
-        hit(rect, esc_x, tab_y),
+        hit(rect, &page, &agents, esc_x, tab_y),
         Some(TaskHit::Close),
         "点 [close esc] 关闭"
     );
@@ -583,10 +667,16 @@ fn clicking_esc_hits_close() {
 #[test]
 fn clicking_elsewhere_in_the_panel_misses() {
     let rect = Rect::new(0, 10, 70, 8);
+    let page = TaskPage::default();
+    let agents = crate::app::state::AgentsState::default();
     // 列表区 / 顶边框 / 面板之外都不该命中 tab 或 esc。
-    assert_eq!(hit(rect, rect.x, rect.y), None, "顶边框不命中");
     assert_eq!(
-        hit(rect, rect.x, rect.y + TOP_BORDER + 1),
+        hit(rect, &page, &agents, rect.x, rect.y),
+        None,
+        "顶边框不命中"
+    );
+    assert_eq!(
+        hit(rect, &page, &agents, rect.x, rect.y + TOP_BORDER + 1),
         None,
         "列表区不命中"
     );

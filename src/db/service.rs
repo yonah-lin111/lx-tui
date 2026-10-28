@@ -514,8 +514,8 @@ impl Persistence {
             // 与进程面板同一处置：持久化泵只记录并忽略。
             Effect::ListSubagents { .. }
             | Effect::LoadSubagentSession { .. }
-            | Effect::StopSubagent { .. }
-            | Effect::CancelSubagents { .. } => {
+            | Effect::CancelSubagents { .. }
+            | Effect::DrainSubagentReports { .. } => {
                 tracing::warn!(target: "lx::event", "subagent effect reached the persistence pump");
                 false
             }
@@ -959,9 +959,11 @@ impl Persistence {
                 let checkpoints_changed =
                     update::set_compact_checkpoints(state, pane, &checkpoints);
                 // 会话视图建好之后再按进程记录校正（需要卡片已存在）。
+                let drains = update::request_report_drain_if_idle(state, pane);
                 update::reconcile_process_records(state, pane, &processes)
                     | changed
                     | checkpoints_changed
+                    | drains
             }
             Effect::RenameChatSession {
                 workspace,
@@ -1013,6 +1015,7 @@ impl Persistence {
                     // 子树 turn 仍在跑：取消它们，否则会把结果写进已删除的子会话。
                     state.effects.push(Effect::CancelSubagents {
                         session_id: session_id.clone(),
+                        agent_id: None,
                     });
                     let panes: Vec<crate::layout::PaneId> = state.all_pane_ids();
                     for pane in panes {
@@ -1273,8 +1276,8 @@ fn is_network_effect(effect: &Effect) -> bool {
             | Effect::StopSessionProcess { .. }
             | Effect::ListSubagents { .. }
             | Effect::LoadSubagentSession { .. }
-            | Effect::StopSubagent { .. }
             | Effect::CancelSubagents { .. }
+            | Effect::DrainSubagentReports { .. }
             | Effect::PrepareRewind { .. }
             | Effect::ExecuteRewind(_)
             | Effect::ExecuteCompact(_)

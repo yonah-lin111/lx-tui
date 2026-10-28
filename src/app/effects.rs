@@ -203,13 +203,14 @@ pub enum Effect {
         agent_id: String,
         child_session: String,
     },
-    /// 会话被删除：取消该会话下所有在册子 turn（DB 外键已级联清行）。
-    CancelSubagents { session_id: String },
-    /// 停止高亮的 subagent（`^d`）。
-    StopSubagent {
-        pane: crate::layout::PaneId,
-        agent_id: String,
+    /// 取消该会话下的子 turn：`agent_id` 为 Some 时只停选中的那一个，
+    /// None 时停全部（会话删除共用）。
+    CancelSubagents {
+        session_id: String,
+        agent_id: Option<String>,
     },
+    /// 父轮次结束后尝试把未投递报告合并成自动轮；用户输入优先。
+    DrainSubagentReports { pane: crate::layout::PaneId },
     /// 加载单个会话及有序消息（恢复旧会话）。
     LoadChatSession {
         pane: crate::layout::PaneId,

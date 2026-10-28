@@ -300,9 +300,11 @@ impl AskDetailView {
     }
 }
 
-/// 工具详情视图：进程/计划/提问走各自快照，文件工具走**已解码的差异**。
+/// 工具详情视图：进程/计划/提问走各自快照，文件工具走**已解码的差异**，
+/// `search` 走可复制的命中行。
 ///
-/// 文件分支与摘要并存：摘要回答"哪个文件、多少行"，详情回答"哪几行变成什么"。
+/// 文件分支与摘要并存：摘要回答"哪个文件、多少行"，详情回答"哪几行变成什么"；
+/// `search` 的摘要回答搜了什么/命中多少，详情回答具体命中行。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolDetailView {
     Command(CommandView),
@@ -311,6 +313,62 @@ pub enum ToolDetailView {
     File(super::file_diff::FileDiffDetailView),
     Ask(AskDetailView),
     Subagent(SubagentDetailView),
+    Search(SearchDetailView),
+}
+
+/// `search` 的单条命中：文件、1-based 行号与命中行文本。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchMatchView {
+    pub path: String,
+    pub line: usize,
+    pub text: String,
+    /// 该行是否因超长被搜索层截断（末尾补 `…` 提示）。
+    pub line_truncated: bool,
+}
+
+/// `search` 的结果详情：命中行列表与结果级截断标记。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchDetailView {
+    pub matches: Vec<SearchMatchView>,
+    pub truncated: bool,
+    pub files_scanned: usize,
+}
+
+impl SearchDetailView {
+    /// 由落库结果 JSON 还原；不是 search 结果或缺少 `matches` 数组时返回 None。
+    pub fn from_value(value: &Value) -> Option<Self> {
+        if value.get("tool").and_then(Value::as_str)? != "search" {
+            return None;
+        }
+        let entries = value.get("matches")?.as_array()?;
+        let mut matches = Vec::with_capacity(entries.len());
+        for entry in entries {
+            matches.push(SearchMatchView {
+                path: entry.get("path")?.as_str()?.to_string(),
+                line: usize::try_from(entry.get("line")?.as_u64()?).ok()?,
+                text: entry
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                line_truncated: entry
+                    .get("line_truncated")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            });
+        }
+        Some(Self {
+            matches,
+            truncated: value
+                .get("truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            files_scanned: value
+                .get("files_scanned")
+                .and_then(Value::as_u64)
+                .map_or(0, |count| usize::try_from(count).unwrap_or(usize::MAX)),
+        })
+    }
 }
 
 /// `spawn_agent` / `wait_agent` / `close_agent` 共用的详情（按 `name` 取标题）。
@@ -318,21 +376,82 @@ pub enum ToolDetailView {
 pub struct SubagentDetailView {
     /// spawn 的角色。
     pub role: Option<crate::chat::agent::AgentRole>,
-    /// spawn 的完整任务文本（展开显示）。
+    /// spawn 的短标题（卡片标题；不是 task 原文）。
+    pub title: Option<String>,
+    /// spawn 的完整任务文本（只保留在状态里；卡片不再显示提示词）。
     pub task: Option<String>,
     /// spawn/close 的 agent id。
     pub agent_id: Option<String>,
-    /// wait 的目标 id。
+    /// spawn 对应子 agent 的实时/历史状态（不由工具调用状态代替）。
+    pub agent_status: Option<String>,
+    /// wait 的目标 id；为空表示等待本会话全部子 agent。
     pub targets: Vec<String>,
+    /// wait 是否以全部子 agent 为目标。
+    pub all: bool,
+    /// wait 的完成条件。
+    pub mode: crate::chat::agent::WaitMode,
+    /// wait 调用配置的等待超时（毫秒）；旧记录/结果回放可能缺失。
+    pub timeout_ms: Option<u64>,
     /// wait 是否超时。
     pub timed_out: bool,
     /// wait 结算到的 agent 状态。
     pub agents: Vec<crate::chat::agent::AgentStatusView>,
+    /// spawn 卡片展开时显示的子 agent 最终报告。
+    pub report: Option<crate::chat::agent::SubagentReportView>,
     /// close 前的状态。
     pub closed_status: Option<String>,
 }
 
 impl SubagentDetailView {
+    /// 只由参数构造：工具已收到完整参数、结果还没回来时也要显示卡片树体。
+    pub fn from_arguments(name: &str, arguments_json: &str) -> Option<Self> {
+        let op = crate::chat::agent::parse_control(name, arguments_json)?.ok()?;
+        let mut view = Self::empty();
+        view.apply_op(op);
+        Some(view)
+    }
+
+    fn empty() -> Self {
+        Self {
+            role: None,
+            title: None,
+            task: None,
+            agent_id: None,
+            agent_status: None,
+            targets: Vec::new(),
+            all: false,
+            mode: crate::chat::agent::WaitMode::All,
+            timeout_ms: None,
+            timed_out: false,
+            agents: Vec::new(),
+            report: None,
+            closed_status: None,
+        }
+    }
+
+    fn apply_op(&mut self, op: crate::chat::agent::SubagentOp) {
+        match op {
+            crate::chat::agent::SubagentOp::Spawn { role, title, task } => {
+                self.role = Some(role);
+                self.title = Some(title);
+                self.task = Some(task);
+            }
+            crate::chat::agent::SubagentOp::Wait {
+                targets,
+                mode,
+                timeout_ms,
+            } => {
+                self.all = targets.is_empty();
+                self.targets = targets;
+                self.mode = mode;
+                self.timeout_ms = Some(timeout_ms);
+            }
+            crate::chat::agent::SubagentOp::Close { target } => {
+                self.agent_id = Some(target);
+            }
+        }
+    }
+
     /// 由工具名 + 参数 + 落库结果 JSON 构造（实时结算与历史重载共用）。
     pub fn from_tool(name: &str, arguments_json: &str, result_json: Option<&str>) -> Option<Self> {
         let value: Value = serde_json::from_str(result_json?).ok()?;
@@ -348,18 +467,7 @@ impl SubagentDetailView {
         let (name, arguments_json) =
             arguments.or_else(|| Some((value.get("tool")?.as_str()?, "{}")))?;
         if let Some(Ok(op)) = crate::chat::agent::parse_control(name, arguments_json) {
-            match op {
-                crate::chat::agent::SubagentOp::Spawn { role, task } => {
-                    view.role = Some(role);
-                    view.task = Some(task);
-                }
-                crate::chat::agent::SubagentOp::Wait { targets, .. } => {
-                    view.targets = targets;
-                }
-                crate::chat::agent::SubagentOp::Close { target } => {
-                    view.agent_id = Some(target);
-                }
-            }
+            view.apply_op(op);
         }
         Some(view)
     }
@@ -368,11 +476,17 @@ impl SubagentDetailView {
     pub fn from_outcome_value(value: &Value) -> Option<Self> {
         let mut view = Self {
             role: None,
+            title: None,
             task: None,
             agent_id: None,
+            agent_status: None,
             targets: Vec::new(),
+            all: false,
+            mode: crate::chat::agent::WaitMode::All,
+            timeout_ms: None,
             timed_out: false,
             agents: Vec::new(),
+            report: None,
             closed_status: None,
         };
         match value.get("tool").and_then(Value::as_str)? {
@@ -381,6 +495,10 @@ impl SubagentDetailView {
                     .get("role")
                     .and_then(Value::as_str)
                     .and_then(crate::chat::agent::AgentRole::parse);
+                view.title = value
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 view.agent_id = value
                     .get("agent_id")
                     .and_then(Value::as_str)
@@ -391,6 +509,13 @@ impl SubagentDetailView {
                     .get("timed_out")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                view.all = value.get("all").and_then(Value::as_bool).unwrap_or(false);
+                view.mode = crate::chat::agent::WaitMode::parse(
+                    value
+                        .get("wait_for")
+                        .and_then(Value::as_str)
+                        .unwrap_or("all"),
+                );
                 if let Some(agents) = value.get("agents").and_then(Value::as_array) {
                     for agent in agents {
                         let Some(agent_id) = agent.get("agent_id").and_then(Value::as_str) else {
@@ -405,6 +530,11 @@ impl SubagentDetailView {
                         };
                         view.agents.push(crate::chat::agent::AgentStatusView {
                             agent_id: agent_id.to_string(),
+                            title: agent
+                                .get("title")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
                             role,
                             status: agent
                                 .get("status")
@@ -563,6 +693,7 @@ impl ToolDetailView {
             "spawn_agent" | "wait_agent" | "close_agent" => Some(Self::Subagent(
                 SubagentDetailView::from_outcome_value(&value)?,
             )),
+            "search" => Some(Self::Search(SearchDetailView::from_value(&value)?)),
             _ => None,
         }
     }

@@ -23,8 +23,7 @@ use tokio::sync::{mpsc, watch};
 use super::*;
 use crate::app::state::{AppState, RequestState, ToolStatus};
 use crate::chat::agent_loop::{
-    FileTools, HostError, MAX_MODEL_STEPS, MAX_TOOL_CALLS, ReadyToolCall, STEP_LIMIT_CODE,
-    TOOL_CALL_LIMIT_CODE, ToolExecutor, TurnOutcome, TurnSummary,
+    FileTools, HostError, ReadyToolCall, ToolExecutor, TurnOutcome, TurnSummary,
 };
 use crate::chat::client::StreamOutcome;
 use crate::chat::events::{ModelItem, ModelStepStop, PartDelta, PartKind};

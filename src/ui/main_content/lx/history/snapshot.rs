@@ -19,7 +19,7 @@ use super::cache::{
     shell_block_signature, stats_block_signature,
 };
 use super::paint::{BlockPaint, BlockSource, CardSpan};
-use super::source::HistorySource;
+use super::source::{HistorySource, is_legacy_report_row};
 use super::timeline::{TimelineEntry, timeline};
 use super::{
     CardKind, Folds, MessageRows, compact, folds_of, notice, report_block, rewind, shell_folds,
@@ -114,7 +114,19 @@ pub(crate) fn build(
     let mut builder = Builder {
         cache,
         width,
-        snapshot: HistorySnapshot::default(),
+        snapshot: HistorySnapshot {
+            // 消息索引必须与 `source.messages` 对齐（sticky/居中/命中都按原下标）；
+            // 旧 wait 残留被 timeline 跳过，这里先补零行占位。
+            messages: vec![
+                MessageRows {
+                    start: 0,
+                    end: 0,
+                    is_user: false,
+                };
+                source.messages.len()
+            ],
+            ..HistorySnapshot::default()
+        },
         rows: 0,
     };
     let mut entry_has_previous = false;
@@ -129,11 +141,11 @@ pub(crate) fn build(
             TimelineEntry::Message(message_index) => builder.message(source, *message_index),
         }
     }
-    // 末尾留一行呼吸位（滚动到底部时不贴死）；归最后一条消息。
+    // 末尾留一行呼吸位（滚动到底部时不贴死）；归最后一条**实际渲染**的消息。
     if !timeline.is_empty() {
         builder.rows += 1;
-        if matches!(timeline.last(), Some(TimelineEntry::Message(_)))
-            && let Some(last) = builder.snapshot.messages.last_mut()
+        if let Some(TimelineEntry::Message(index)) = timeline.last()
+            && let Some(last) = builder.snapshot.messages.get_mut(*index)
         {
             last.end = builder.rows;
         }
@@ -303,16 +315,16 @@ impl Builder<'_> {
             self.shell(source, message_index, message, shell, start, &mut blocks);
         } else {
             self.steps(source, message_index, message, &mut blocks);
-            self.tail(message_index, message, &mut blocks);
+            self.tail(source, message_index, message, &mut blocks);
         }
         // 汇报行不是用户气泡：置顶行与用户底色据此跳过它。
         let is_user =
             message.role == "user" && message.shell.is_none() && message.reports.is_empty();
-        self.snapshot.messages.push(MessageRows {
+        self.snapshot.messages[message_index] = MessageRows {
             start,
             end: self.rows,
             is_user,
-        });
+        };
         self.snapshot.entries.push(SnapEntry {
             start,
             end: self.rows,
@@ -336,12 +348,14 @@ impl Builder<'_> {
             }
             let slot = format!("report:{}", report.agent_id);
             let expanded = source.chat.detail_is_expanded(&message.id, &slot);
-            let rows = report_block::rows(report, width, expanded);
+            let more_steps = source.chat.report_expand_steps(&message.id, &slot);
+            let metrics = report_block::measure(report, width, expanded, more_steps);
+            let rows = metrics.rows;
             let key = BlockKey {
                 message_index,
                 step_index: super::cache::REPORT_SLOT_BLOCK.saturating_sub(index),
                 width,
-                sig: report_block_signature(report, expanded),
+                sig: report_block_signature(report, expanded, more_steps),
             };
             let start = self.rows;
             let block = self.block(
@@ -357,12 +371,27 @@ impl Builder<'_> {
                 },
             );
             let block_rows = block.rows;
-            if super::report_block::has_more(report, width) {
+            // 提示行单独登记在整块之前：命中查找取第一条，先命中「再展开一批」。
+            if let Some(offset) = metrics.hint_row {
                 self.snapshot.cards.push(CardRegion {
                     kind: CardKind::Report {
                         message_id: message.id.clone(),
                         agent_id: report.agent_id.clone(),
                         expanded,
+                        more: true,
+                    },
+                    card_start: start.saturating_add(offset),
+                    card_rows: 1,
+                    clickable: true,
+                });
+            }
+            if metrics.has_more {
+                self.snapshot.cards.push(CardRegion {
+                    kind: CardKind::Report {
+                        message_id: message.id.clone(),
+                        agent_id: report.agent_id.clone(),
+                        expanded,
+                        more: false,
                     },
                     card_start: start,
                     card_rows: block_rows,
@@ -475,6 +504,16 @@ impl Builder<'_> {
             block.start = self.rows;
             let block_start = self.rows;
             if let AssistantStepView::Tool { call, .. } = step {
+                // 链接行必须**先于**整卡折叠面登记：命中取第一条重叠区域，整卡面
+                // 覆盖链接行会把打开 Agents 的点击永久吞掉。
+                for (offset, agent_id) in tool::agent_links(call, self.width) {
+                    self.snapshot.cards.push(CardRegion {
+                        kind: CardKind::AgentLink { agent_id },
+                        card_start: block_start.saturating_add(offset),
+                        card_rows: 1,
+                        clickable: true,
+                    });
+                }
                 self.tool_cards(
                     message,
                     call,
@@ -665,6 +704,7 @@ impl Builder<'_> {
     /// 消息底部通知与统计行。
     fn tail(
         &mut self,
+        source: HistorySource<'_>,
         message_index: usize,
         message: &crate::app::state::ChatMessageView,
         blocks: &mut Vec<SnapBlock>,
@@ -692,7 +732,19 @@ impl Builder<'_> {
             self.rows += block.rows;
             blocks.push(block);
         }
-        if let Some(line) = stats_line(message) {
+        // 统计行是任务收尾信息，不是每条中间 assistant 的用量条：
+        // - 子 agent 仍在跑时，任何中间 assistant（主轮或报告自动轮）都不能先收尾；
+        // - 下一条是**可见**报告时，这轮只是报告链路中间态，统计留给报告回答；
+        // - 旧 wait 残留报告（同轮无 assistant）已隐藏，不能再挡住宿主统计。
+        let followed_by_report = source
+            .messages
+            .get(message_index.saturating_add(1))
+            .is_some_and(|next| {
+                !next.reports.is_empty()
+                    && !is_legacy_report_row(source.messages, message_index.saturating_add(1))
+            });
+        let stats_ready = !source.subagents_running && !followed_by_report;
+        if stats_ready && let Some(line) = stats_line(message) {
             if has_previous {
                 self.spacer();
             }

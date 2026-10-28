@@ -269,7 +269,7 @@ fn model_transport_overrides_and_parse() {
 #[test]
 fn stream_idle_timeout_defaults_and_custom() {
     let settings = AiSettings::empty();
-    assert_eq!(settings.idle_timeout_ms(), 60_000);
+    assert_eq!(settings.idle_timeout_ms(), 300_000);
     let mut settings = sample_settings();
     settings.stream_idle_timeout_ms = Some(5_000);
     assert_eq!(settings.idle_timeout_ms(), 5_000);

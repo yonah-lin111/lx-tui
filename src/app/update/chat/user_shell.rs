@@ -348,7 +348,9 @@ pub fn on_user_shell_terminal(state: &mut AppState, pane: PaneId) -> bool {
     {
         target.lx.chat.stop_armed_at = None;
     }
-    drain_queue(state, pane)
+    let drained = drain_queue(state, pane);
+    let requested = super::request_report_drain_if_idle(state, pane);
+    drained || requested
 }
 
 /// 分派队首提交；模型忙或仍有命令在跑时停止。

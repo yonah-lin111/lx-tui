@@ -79,6 +79,7 @@ async fn spawn_explorer(
         key,
         SubagentOp::Spawn {
             role: AgentRole::Explorer,
+            title: "test title".into(),
             task: task.into(),
         },
     )
@@ -88,6 +89,77 @@ async fn spawn_explorer(
         SubagentOutcome::Spawned { agent_id, .. } => agent_id,
         other => panic!("expected spawned, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn main_cancel_releases_wait_but_keeps_child_running() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "wait me").await;
+    let child_cancel = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("child handle")
+        .cancel
+        .subscribe();
+    let (cancel, _cancel_rx) = tokio::sync::watch::channel(false);
+    streams.cancels.insert(key.clone(), cancel);
+    let (reply, receiver) = tokio::sync::oneshot::channel();
+    crate::event::chat::subagent::handle_subagent_op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        key.clone(),
+        SubagentOp::Wait {
+            targets: vec![agent_id.clone()],
+            mode: crate::chat::agent::WaitMode::All,
+            timeout_ms: 60_000,
+        },
+        reply,
+    );
+    assert!(streams.cancel(&key));
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), receiver)
+        .await
+        .expect("wait reply after cancel")
+        .expect("reply channel");
+    assert!(
+        matches!(result, Err(HostError::Cancelled)),
+        "主轮 Esc 释放 wait 回执：{result:?}"
+    );
+    assert!(!*child_cancel.borrow(), "子 agent 本身继续运行");
+    assert!(
+        streams
+            .subagents
+            .values()
+            .any(|handle| handle.agent_id == agent_id),
+        "句柄仍在册"
+    );
+}
+
+#[tokio::test]
+async fn main_cancel_keeps_children_running() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let first = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first").await;
+    let second = spawn_explorer(&mut state, &mut streams, &persistence, &key, "second").await;
+    let first_cancel = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == first)
+        .expect("first handle")
+        .cancel
+        .subscribe();
+    let second_cancel = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == second)
+        .expect("second handle")
+        .cancel
+        .subscribe();
+    let (cancel, _cancel_rx) = tokio::sync::watch::channel(false);
+    streams.cancels.insert(key.clone(), cancel);
+    assert!(streams.cancel(&key));
+    assert!(!*first_cancel.borrow());
+    assert!(!*second_cancel.borrow());
 }
 
 #[tokio::test]
@@ -110,6 +182,7 @@ async fn fourth_spawn_is_rejected_and_earlier_runs_stay_running() {
         &key,
         SubagentOp::Spawn {
             role: AgentRole::Executor,
+            title: "too many".into(),
             task: "one too many".into(),
         },
     )
@@ -138,6 +211,7 @@ async fn wait_claims_the_report_exactly_once() {
     // 等价于 `finish_subagent` 的 DB 效果：agent 行 completed + report_json。
     let report = crate::chat::agent::SubagentReportView {
         agent_id: agent_id.clone(),
+        title: "test title".into(),
         role: AgentRole::Explorer,
         status: "completed".into(),
         files_changed: 1,
@@ -173,13 +247,16 @@ async fn wait_claims_the_report_exactly_once() {
             key,
             SubagentOp::Wait {
                 targets: vec![agent_id.to_string()],
+                mode: crate::chat::agent::WaitMode::All,
                 timeout_ms: 1_000,
             },
         )
         .await
         .expect("wait");
         match outcome {
-            SubagentOutcome::Waited { timed_out, agents } => (timed_out, agents),
+            SubagentOutcome::Waited {
+                timed_out, agents, ..
+            } => (timed_out, agents),
             other => panic!("expected waited, got {other:?}"),
         }
     }
@@ -194,6 +271,328 @@ async fn wait_claims_the_report_exactly_once() {
         .list_subagents(fixture.workspace(), &parent)
         .expect("list");
     assert!(records[0].report_delivered);
+    assert!(
+        state
+            .pane_anywhere(key.pane)
+            .expect("pane")
+            .lx
+            .chat
+            .messages
+            .iter()
+            .all(|message| message.reports.is_empty()),
+        "wait 消费的报告只进工具结果，不插消息行"
+    );
+}
+
+#[tokio::test]
+async fn idle_parent_batches_pending_reports_into_one_turn() {
+    let (fixture, mut state, key, persistence, mut streams, parent) = fixture_with_parent();
+    let first = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first").await;
+    let second = spawn_explorer(&mut state, &mut streams, &persistence, &key, "second").await;
+    for (agent_id, body) in [(&first, "first answer"), (&second, "second answer")] {
+        let report = crate::chat::agent::SubagentReportView {
+            agent_id: agent_id.clone(),
+            title: format!("title {agent_id}"),
+            role: AgentRole::Explorer,
+            status: "completed".into(),
+            files_changed: 0,
+            duration_ms: Some(20),
+            body: body.into(),
+            delivered_at_ms: 1,
+        };
+        persistence
+            .database()
+            .expect("db")
+            .connection()
+            .execute(
+                "UPDATE agent_subagent SET status = 'completed', report_json = ?1 \
+                 WHERE external_id = ?2",
+                rusqlite::params![report.to_json(), agent_id],
+            )
+            .expect("update report");
+    }
+    {
+        let target = state.pane_mut_anywhere(key.pane).expect("pane");
+        target.lx.chat.request = crate::app::state::RequestState::Idle;
+        target.lx.chat.status.streaming = false;
+        target.lx.chat.queue.clear();
+    }
+    let before = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .len();
+    assert!(crate::event::chat::subagent::drain_reports(
+        &mut state,
+        &persistence,
+        key.pane
+    ));
+    {
+        let target = state.pane_anywhere(key.pane).expect("pane");
+        let messages = &target.lx.chat.messages;
+        assert_eq!(messages.len(), before + 2, "一条报告消息 + 一个 assistant");
+        let reports = &messages[before];
+        assert_eq!(reports.reports.len(), 2, "多个报告合并进同一张大卡消息");
+        assert_eq!(messages[before + 1].role, "assistant");
+        assert_eq!(messages[before + 1].status, "streaming");
+        assert!(matches!(
+            target.lx.chat.request,
+            crate::app::state::RequestState::Streaming { .. }
+        ));
+        assert!(target.lx.chat.status.streaming);
+    }
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::StartChatStream { .. }))
+    );
+    let records = persistence
+        .database()
+        .expect("db")
+        .list_subagents(fixture.workspace(), &parent)
+        .expect("list");
+    assert!(records.iter().all(|record| record.report_delivered));
+}
+
+#[tokio::test]
+async fn idle_parent_finish_starts_report_batch_immediately() {
+    let (fixture, mut state, key, persistence, mut streams, parent) = fixture_with_parent();
+    let agent_id =
+        spawn_explorer(&mut state, &mut streams, &persistence, &key, "investigate").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .map(|handle| handle.child_session_id.clone())
+        .expect("child");
+    {
+        let target = state.pane_mut_anywhere(key.pane).expect("pane");
+        target.lx.chat.request = crate::app::state::RequestState::Idle;
+        target.lx.chat.status.streaming = false;
+        target.lx.chat.queue.clear();
+    }
+    let before = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .len();
+    assert!(crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        crate::app::state::RequestKey {
+            pane: key.pane,
+            session: child_session,
+            generation: key.generation,
+        },
+        crate::chat::events::StopReason::Complete,
+        crate::db::chat::Usage::default(),
+    ));
+    let target = state.pane_anywhere(key.pane).expect("pane");
+    assert_eq!(target.lx.chat.messages.len(), before + 2);
+    assert_eq!(target.lx.chat.messages[before].reports.len(), 1);
+    assert_eq!(target.lx.chat.messages[before + 1].status, "streaming");
+    let records = persistence
+        .database()
+        .expect("db")
+        .list_subagents(fixture.workspace(), &parent)
+        .expect("list");
+    assert!(records[0].report_delivered);
+}
+
+#[tokio::test]
+async fn queued_user_chat_wins_before_report_drain() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first").await;
+    let report = crate::chat::agent::SubagentReportView {
+        agent_id: agent_id.clone(),
+        title: "title".into(),
+        role: AgentRole::Explorer,
+        status: "completed".into(),
+        files_changed: 0,
+        duration_ms: Some(20),
+        body: "answer".into(),
+        delivered_at_ms: 1,
+    };
+    persistence
+        .database()
+        .expect("db")
+        .connection()
+        .execute(
+            "UPDATE agent_subagent SET status = 'completed', report_json = ?1 \
+             WHERE external_id = ?2",
+            rusqlite::params![report.to_json(), agent_id],
+        )
+        .expect("update report");
+    {
+        let target = state.pane_mut_anywhere(key.pane).expect("pane");
+        target.lx.chat.request = crate::app::state::RequestState::Idle;
+        target.lx.chat.status.streaming = false;
+        target
+            .lx
+            .chat
+            .queue
+            .push(crate::app::state::QueuedSubmission::Chat {
+                draft: "user first".into(),
+            });
+    }
+    assert!(
+        !crate::event::chat::subagent::drain_reports(&mut state, &persistence, key.pane),
+        "用户排队输入优先，报告延后"
+    );
+}
+
+#[tokio::test]
+async fn wait_all_without_targets_returns_all_records() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let outcome = op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::Wait {
+            targets: Vec::new(),
+            mode: crate::chat::agent::WaitMode::All,
+            timeout_ms: 10,
+        },
+    )
+    .await
+    .expect("wait all");
+    let SubagentOutcome::Waited {
+        timed_out,
+        agents,
+        all,
+        mode,
+    } = outcome
+    else {
+        panic!("expected waited");
+    };
+    assert!(!timed_out);
+    assert!(agents.is_empty());
+    assert!(all);
+    assert_eq!(mode, crate::chat::agent::WaitMode::All);
+}
+
+#[tokio::test]
+async fn wait_any_returns_immediately_when_a_target_already_finished() {
+    let (fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let first = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first").await;
+    let second = spawn_explorer(&mut state, &mut streams, &persistence, &key, "second").await;
+    let first_child = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == first)
+        .map(|handle| handle.child_session_id.clone())
+        .expect("first child");
+    assert!(crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        crate::app::state::RequestKey {
+            pane: key.pane,
+            session: first_child,
+            generation: key.generation,
+        },
+        crate::chat::events::StopReason::Complete,
+        crate::db::chat::Usage::default(),
+    ));
+    assert_eq!(
+        persistence
+            .database()
+            .expect("db")
+            .list_subagents(fixture.workspace(), &key.session)
+            .expect("list")
+            .iter()
+            .find(|record| record.agent_id == first)
+            .map(|record| record.status.as_str()),
+        Some("completed")
+    );
+    let outcome = op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::Wait {
+            targets: vec![first.clone(), second.clone()],
+            mode: crate::chat::agent::WaitMode::Any,
+            timeout_ms: 5_000,
+        },
+    )
+    .await
+    .expect("wait any");
+    let SubagentOutcome::Waited {
+        timed_out,
+        agents,
+        mode,
+        ..
+    } = outcome
+    else {
+        panic!("expected waited");
+    };
+    assert!(!timed_out, "已有目标完成，不应等到超时");
+    assert_eq!(mode, crate::chat::agent::WaitMode::Any);
+    assert_eq!(agents.len(), 2);
+    assert_eq!(
+        agents
+            .iter()
+            .find(|agent| agent.agent_id == first)
+            .map(|agent| agent.status.as_str()),
+        Some("completed")
+    );
+    assert_eq!(
+        agents
+            .iter()
+            .find(|agent| agent.agent_id == second)
+            .map(|agent| agent.status.as_str()),
+        Some("running")
+    );
+}
+
+#[tokio::test]
+async fn wait_all_auto_continues_instead_of_returning_timeout() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        "still running",
+    )
+    .await;
+    let (reply, mut receiver) = tokio::sync::oneshot::channel();
+    let changed = crate::event::chat::subagent::handle_subagent_wait_ready(
+        &mut streams,
+        &persistence,
+        key.clone(),
+        Vec::new(),
+        true,
+        true,
+        crate::chat::agent::WaitMode::All,
+        10,
+        true,
+        reply,
+    );
+    assert!(!changed);
+    assert!(
+        receiver.try_recv().is_err(),
+        "目标仍在跑：auto wait 不得把 timeout 交回模型"
+    );
+    assert_eq!(
+        state
+            .pane_anywhere(key.pane)
+            .expect("pane")
+            .lx
+            .agents
+            .by_agent(&agent_id)
+            .expect("agent")
+            .status,
+        "running"
+    );
 }
 
 #[tokio::test]
@@ -206,6 +605,7 @@ async fn wait_rejects_unknown_targets() {
         &key,
         SubagentOp::Wait {
             targets: vec!["sub-nope".into()],
+            mode: crate::chat::agent::WaitMode::All,
             timeout_ms: 10,
         },
     )
@@ -435,6 +835,34 @@ async fn escape_cancels_only_the_parent_turn() {
     assert!(!*handle.cancel.borrow());
 }
 
+#[tokio::test]
+async fn selected_cancel_only_stops_the_target_child() {
+    let (_fixture, mut state, key, persistence, mut streams, parent) = fixture_with_parent();
+    let first = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first").await;
+    let second = spawn_explorer(&mut state, &mut streams, &persistence, &key, "second").await;
+    let first_cancel = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == first)
+        .expect("first handle")
+        .cancel
+        .subscribe();
+    let second_cancel = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == second)
+        .expect("second handle")
+        .cancel
+        .subscribe();
+    assert!(crate::event::chat::subagent::cancel_for_session(
+        &mut streams,
+        &parent,
+        Some(&first),
+    ));
+    assert!(*first_cancel.borrow(), "选中的子 agent 收到取消");
+    assert!(!*second_cancel.borrow(), "其他 running 子 agent 继续");
+}
+
 #[test]
 fn deleting_the_parent_session_cancels_live_children() {
     let (fixture, _state, key, persistence, mut streams, parent) = fixture_with_parent();
@@ -450,6 +878,7 @@ fn deleting_the_parent_session_cancels_live_children() {
             child_assistant_id: "msg-child".into(),
             child_user_message_id: "msg-user".into(),
             role: AgentRole::Explorer,
+            title: "work".into(),
             task: "work".into(),
             cancel,
             done,
@@ -469,6 +898,7 @@ fn deleting_the_parent_session_cancels_live_children() {
     assert!(crate::event::chat::subagent::cancel_for_session(
         &mut streams,
         &parent,
+        None,
     ));
     assert!(cancel_rx.has_changed().expect("receiver alive"));
     assert!(*cancel_rx.borrow_and_update(), "子 turn 收到取消信号");
@@ -487,10 +917,20 @@ fn wait_timeout_is_not_an_error_and_carries_no_report() {
             "slow",
         ));
     // 到期结算：仍在跑的目标只报告状态，不带正文、不写错误。
-    let outcome =
-        crate::event::chat::subagent::settle_wait(&streams, &persistence, &key, &[agent_id], true)
-            .expect("settled");
-    let SubagentOutcome::Waited { timed_out, agents } = outcome else {
+    let outcome = crate::event::chat::subagent::settle_wait(
+        &mut streams,
+        &persistence,
+        &key,
+        &[agent_id],
+        true,
+        false,
+        crate::chat::agent::WaitMode::All,
+    )
+    .expect("settled");
+    let SubagentOutcome::Waited {
+        timed_out, agents, ..
+    } = outcome
+    else {
         panic!("expected waited");
     };
     assert!(timed_out);

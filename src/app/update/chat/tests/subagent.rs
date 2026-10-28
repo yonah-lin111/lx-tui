@@ -15,7 +15,7 @@ fn run(child_session: &str, agent_id: &str, role: AgentRole) -> SubagentRun {
         spawn_message_id: None,
         role,
         status: "running".into(),
-        task_title: "investigate".into(),
+        title: "investigate".into(),
         created_at_ms: 1_000,
         completed_at_ms: None,
         report_json: None,
@@ -82,12 +82,13 @@ fn set_subagent_list_is_idempotent_and_keeps_local_runs() {
         spawn_message_id: None,
         role: AgentRole::Explorer,
         status: "completed".into(),
-        task_title: "investigate".into(),
+        title: "investigate".into(),
         created_at_ms: 1_000,
         completed_at_ms: Some(2_000),
         report_json: Some(
             SubagentReportView {
                 agent_id: "sub-a".into(),
+                title: "test title".into(),
                 role: AgentRole::Explorer,
                 status: "completed".into(),
                 files_changed: 1,
@@ -161,61 +162,6 @@ fn loaded_transcript_only_fills_unloaded_runs() {
 }
 
 #[test]
-fn reports_attach_to_the_parent_message_once() {
-    let mut state = AppState::demo();
-    let pane = state.active_tab().layout.focus();
-    {
-        let target = state.pane_mut_anywhere(pane).expect("pane");
-        target
-            .lx
-            .chat
-            .messages
-            .push(crate::app::state::ChatMessageView {
-                id: "msg-report".into(),
-                sequence: 0,
-                kind: "chat".into(),
-                role: "user".into(),
-                status: "complete".into(),
-                turn_index: 0,
-                shell: None,
-                steps: Vec::new(),
-                model_label: None,
-                error_code: None,
-                input_tokens: None,
-                output_tokens: None,
-                cache_read_tokens: None,
-                duration_ms: None,
-                reports: Vec::new(),
-            });
-    }
-    let report = SubagentReportView {
-        agent_id: "sub-1".into(),
-        role: AgentRole::Explorer,
-        status: "completed".into(),
-        files_changed: 2,
-        duration_ms: Some(1_400),
-        body: "found it".into(),
-        delivered_at_ms: 1,
-    };
-    assert!(update::on_subagent_report(
-        &mut state,
-        pane,
-        "msg-report",
-        report.clone(),
-        "<subagent_report/>".into(),
-    ));
-    assert!(!update::on_subagent_report(
-        &mut state,
-        pane,
-        "msg-report",
-        report,
-        "<subagent_report/>".into(),
-    ));
-    let messages = &state.pane_anywhere(pane).expect("pane").lx.chat.messages;
-    assert_eq!(messages[0].reports.len(), 1);
-}
-
-#[test]
 fn corrupted_report_json_decodes_to_empty_reports() {
     let view = crate::app::update::chat::view_message_of(
         &crate::db::chat::ChatMessage {
@@ -247,6 +193,124 @@ fn corrupted_report_json_decodes_to_empty_reports() {
 }
 
 #[test]
+fn stop_selected_subagent_requests_only_that_agent() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some("sess-parent".into());
+    }
+    update::on_subagent_started(
+        &mut state,
+        pane,
+        run("sess-a", "sub-a", AgentRole::Explorer),
+    );
+    update::on_subagent_started(
+        &mut state,
+        pane,
+        run("sess-b", "sub-b", AgentRole::Executor),
+    );
+    assert!(update::open_agent_page(&mut state, pane, "sub-b"));
+    state.effects.clear();
+    assert!(update::stop_selected_subagent(&mut state, pane));
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        crate::app::effects::Effect::CancelSubagents { session_id, agent_id }
+            if session_id == "sess-parent" && agent_id.as_deref() == Some("sub-b")
+    )));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .toast
+            .as_ref()
+            .is_some_and(|toast| toast.message.contains('1')),
+        "提示只停一个"
+    );
+}
+
+#[test]
+fn loading_another_session_clears_agents_and_resets_gates() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some("sess-a".into());
+        target.lx.chat.main_stopped = true;
+        target.lx.chat.stop_armed_at = Some(std::time::Instant::now());
+    }
+    update::on_subagent_started(
+        &mut state,
+        pane,
+        run("sess-a", "sub-a", AgentRole::Explorer),
+    );
+    assert!(update::on_session_loaded_full(
+        &mut state,
+        pane,
+        "sess-b",
+        &[],
+        &[],
+        0,
+        None,
+    ));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.chat.session_id.as_deref(), Some("sess-b"));
+    assert!(target.lx.agents.is_empty(), "切会话必须清掉上一会话的 run");
+    assert!(!target.lx.chat.main_stopped, "切会话重置报告闸门");
+    assert!(target.lx.chat.stop_armed_at.is_none());
+}
+
+#[test]
+fn stale_subagent_replies_are_ignored_by_session() {
+    use crate::db::chat::SubagentRecord;
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-b".into());
+    let record = SubagentRecord {
+        agent_id: "sub-a".into(),
+        child_session_id: "sess-a".into(),
+        parent_session_id: "sess-a-parent".into(),
+        spawn_message_id: None,
+        role: AgentRole::Explorer,
+        status: "running".into(),
+        title: "old".into(),
+        created_at_ms: 1_000,
+        completed_at_ms: None,
+        report_json: None,
+        report_delivered: false,
+    };
+    assert!(!update::set_subagent_list(
+        &mut state,
+        pane,
+        "sess-a-parent",
+        std::slice::from_ref(&record),
+    ));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .is_empty(),
+        "旧会话列表不能污染新会话"
+    );
+
+    let mut old = SubagentRun::from_record(&record);
+    old.parent_session_id = "sess-a-parent".into();
+    assert!(
+        !update::on_subagent_started(&mut state, pane, old),
+        "旧会话 spawn 回执不能污染新会话"
+    );
+}
+
+#[test]
 fn new_session_clears_agents() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
@@ -272,6 +336,35 @@ fn new_session_clears_agents() {
             .agents
             .is_empty()
     );
+}
+
+#[test]
+fn opening_an_agent_link_opens_the_agents_page_and_selects_it() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = crate::app::state::PaneView::Lx;
+        target.lx.chat.session_id = Some("sess-parent".into());
+    }
+    assert!(update::on_subagent_started(
+        &mut state,
+        pane,
+        run("sess-a", "sub-a", AgentRole::Explorer)
+    ));
+    assert!(update::open_agent_page(&mut state, pane, "sub-a"));
+    let target = state.pane_anywhere(pane).expect("pane");
+    let page = target.lx.task.as_ref().expect("agents page");
+    assert_eq!(page.tab, crate::app::state::TaskTab::Agents);
+    assert_eq!(page.agents_window.active, 0);
+    assert_eq!(
+        target.lx.agents.runs[0].agent_id, "sub-a",
+        "定位到被点击的 agent"
+    );
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        crate::app::effects::Effect::ListSubagents { pane: p, .. } if *p == pane
+    )));
 }
 
 #[test]
@@ -344,6 +437,158 @@ fn scrolling_the_agents_detail_stops_following() {
 }
 
 #[test]
+fn auto_compact_notice_becomes_a_checkpoint_and_toggles() {
+    use crate::app::state::{CardTarget, TaskPage, TaskTab};
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let mut started = run("sess-a", "sub-a", AgentRole::Explorer);
+    seed_chat(&mut started, key(pane, "sess-a"), "msg-a");
+    update::on_subagent_started(&mut state, pane, started);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.task = Some(TaskPage {
+            tab: TaskTab::Agents,
+            ..TaskPage::default()
+        });
+    }
+    let notice = crate::chat::compact::AutoCompactNotice {
+        model_label: "m".into(),
+        summary: "handoff".into(),
+        estimated_tokens: 190_000,
+        context_limit: 200_000,
+    };
+    assert!(update::on_subagent_auto_compact(
+        &mut state, "sess-a", &notice
+    ));
+    let run = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_session("sess-a")
+        .expect("run");
+    assert_eq!(run.compact.checkpoints.len(), 1);
+    assert!(run.compact.checkpoints[0].auto);
+    assert_eq!(run.compact.checkpoints[0].summary, "handoff");
+    let id = run.compact.checkpoints[0].id.clone();
+    assert!(update::toggle_agent_card(
+        &mut state,
+        pane,
+        CardTarget::Compact {
+            checkpoint_id: id.clone()
+        },
+    ));
+    let run = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_session("sess-a")
+        .expect("run");
+    assert!(run.compact.is_expanded(&id));
+}
+
+#[test]
+fn selecting_an_agents_row_follows_the_detail_tail() {
+    use crate::app::state::{TaskPage, TaskTab};
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let mut first = run("sess-a", "sub-a", AgentRole::Explorer);
+    first.follow = false;
+    first.scroll = 3;
+    update::on_subagent_started(&mut state, pane, first);
+    update::on_subagent_started(
+        &mut state,
+        pane,
+        run("sess-b", "sub-b", AgentRole::Executor),
+    );
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.task = Some(TaskPage {
+            tab: TaskTab::Agents,
+            ..TaskPage::default()
+        });
+    }
+    assert!(update::select_task_agent(&mut state, pane, 0));
+    let target = state.pane_anywhere(pane).expect("pane");
+    let page = target.lx.task.as_ref().expect("task");
+    assert_eq!(page.agents_window.active, 0);
+    let run = target.lx.agents.by_session("sess-a").expect("run");
+    assert!(run.follow);
+    assert_eq!(run.scroll, usize::MAX);
+}
+
+#[test]
+fn agents_page_advances_subagent_loading_frames() {
+    use crate::app::state::{TaskPage, TaskTab};
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    update::on_subagent_started(
+        &mut state,
+        pane,
+        run("sess-a", "sub-a", AgentRole::Explorer),
+    );
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.task = Some(TaskPage {
+            tab: TaskTab::Agents,
+            ..TaskPage::default()
+        });
+    }
+    assert!(update::advance_lx_loading(&mut state));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.chat.loading_frame > 0);
+    assert!(
+        target.lx.agents.runs[0].chat.loading_frame > 0,
+        "详情步骤标记使用同一帧呼吸"
+    );
+}
+
+#[test]
+fn agents_scrollbar_offset_updates_follow_at_bottom() {
+    use crate::app::state::{TaskPage, TaskTab};
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    update::on_subagent_started(
+        &mut state,
+        pane,
+        run("sess-a", "sub-a", AgentRole::Explorer),
+    );
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.task = Some(TaskPage {
+            tab: TaskTab::Agents,
+            ..TaskPage::default()
+        });
+        let run = &mut target.lx.agents.runs[0];
+        run.visible = 10;
+        run.total_rows = 100;
+    }
+    assert!(update::set_task_agents_scroll(&mut state, pane, 20));
+    let run = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .runs
+        .first()
+        .expect("run");
+    assert_eq!(run.scroll, 20);
+    assert!(!run.follow);
+    assert!(update::set_task_agents_scroll(&mut state, pane, 90));
+    let run = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .runs
+        .first()
+        .expect("run");
+    assert_eq!(run.scroll, 90);
+    assert!(run.follow, "贴底恢复跟随");
+}
+
+#[test]
 fn finished_run_records_status_and_tokens() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
@@ -366,4 +611,14 @@ fn finished_run_records_status_and_tokens() {
     assert_eq!(run.status, "completed");
     assert_eq!(run.input_tokens, Some(7));
     assert_eq!(run.output_tokens, Some(3));
+    assert!(!run.chat.status.streaming, "终态停止步骤呼吸");
+    let message = run
+        .chat
+        .messages
+        .iter()
+        .find(|message| message.role == "assistant")
+        .expect("assistant");
+    assert_eq!(message.status, "complete", "统计行只在终态消息上出现");
+    assert_eq!(message.input_tokens, Some(7));
+    assert_eq!(message.output_tokens, Some(3));
 }

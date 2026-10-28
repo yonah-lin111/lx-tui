@@ -191,12 +191,18 @@ fn format_plan(snapshot: &crate::chat::plan::PlanSnapshot) -> String {
 fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
     use crate::chat::agent::SubagentOutcome;
     match outcome {
-        SubagentOutcome::Spawned { agent_id, role } => format!(
-            "Spawned subagent `{agent_id}` ({}). It runs in the background; use `wait_agent` \
-             when you need its result.\n",
+        SubagentOutcome::Spawned {
+            agent_id,
+            role,
+            title,
+        } => format!(
+            "Spawned subagent `{agent_id}` ({}) titled `{title}`. It runs in the background; \
+             use `wait_agent` when you need its result.\n",
             role.as_str()
         ),
-        SubagentOutcome::Waited { timed_out, agents } => {
+        SubagentOutcome::Waited {
+            timed_out, agents, ..
+        } => {
             let mut text = format!("timed_out: {timed_out}\n");
             for agent in agents {
                 text.push_str(&format!(

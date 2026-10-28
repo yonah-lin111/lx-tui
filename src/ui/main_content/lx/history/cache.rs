@@ -326,6 +326,8 @@ impl Fnv {
 pub(crate) fn list_signature_source(source: super::source::HistorySource<'_>, width: u16) -> u64 {
     let mut hash = Fnv::new();
     hash.write_u16(width);
+    // 统计行是否可见取决于「是否仍有子 agent 在跑」；状态变化不经过消息本身。
+    hash.write_u8(u8::from(source.subagents_running));
     hash.write_usize(source.messages.len());
     hash.write_usize(source.notices.len());
     hash.write_usize(source.checkpoints.len());
@@ -350,6 +352,11 @@ pub(crate) fn list_signature_source(source: super::source::HistorySource<'_>, wi
         hash.write_usize(message.reports.len());
         for report in &message.reports {
             report_signature(&mut hash, report);
+            let slot = format!("report:{}", report.agent_id);
+            // 汇报块的展开状态与已追加批次都会改变行数；漏进列表指纹会让快照
+            // 停留在旧几何，而绘制按新状态多写行，正文就会溢出/盖住后面的块。
+            hash.write_u8(u8::from(source.chat.detail_is_expanded(&message.id, &slot)));
+            hash.write_usize(source.chat.report_expand_steps(&message.id, &slot));
         }
         hash.write_usize(message.steps.len());
         for (step_index, step) in message.steps.iter().enumerate() {
@@ -373,6 +380,7 @@ pub(crate) fn list_signature_source(source: super::source::HistorySource<'_>, wi
         hash.write_i64(checkpoint.end_sequence);
         hash.write_str(&checkpoint.summary);
         hash.write_u8(u8::from(checkpoint.active));
+        hash.write_u8(u8::from(checkpoint.auto));
         hash.write_u8(u8::from(
             source
                 .compact
@@ -496,11 +504,41 @@ fn tool_signature(
         Some(ToolDetailView::Subagent(view)) => {
             hash.write_u8(7);
             hash.write_u8(u8::from(view.role.is_some()));
+            hash.write_str(view.title.as_deref().unwrap_or(""));
             hash.write_str(view.task.as_deref().unwrap_or(""));
             hash.write_str(view.agent_id.as_deref().unwrap_or(""));
+            hash.write_str(view.agent_status.as_deref().unwrap_or(""));
             hash.write_usize(view.targets.len());
+            for target in &view.targets {
+                hash.write_str(target);
+            }
+            hash.write_u8(u8::from(view.all));
+            hash.write_str(view.mode.as_str());
+            hash.write_u64(view.timeout_ms.unwrap_or(0));
             hash.write_u8(u8::from(view.timed_out));
             hash.write_usize(view.agents.len());
+            for agent in &view.agents {
+                hash.write_str(&agent.agent_id);
+                hash.write_str(&agent.title);
+                hash.write_str(agent.role.as_str());
+                hash.write_str(&agent.status);
+                if let Some(report) = &agent.report {
+                    hash.write_u8(1);
+                    hash.write_str(report);
+                } else {
+                    hash.write_u8(0);
+                }
+            }
+            if let Some(report) = &view.report {
+                hash.write_u8(1);
+                hash.write_str(&report.agent_id);
+                hash.write_str(&report.title);
+                hash.write_str(report.role.as_str());
+                hash.write_str(&report.status);
+                hash.write_str(&report.body);
+            } else {
+                hash.write_u8(0);
+            }
             hash.write_str(view.closed_status.as_deref().unwrap_or(""));
         }
         Some(ToolDetailView::Command(view)) => {
@@ -551,6 +589,18 @@ fn tool_signature(
                 for answer in &question.answers {
                     hash.write_str(answer);
                 }
+            }
+        }
+        Some(ToolDetailView::Search(view)) => {
+            hash.write_u8(8);
+            hash.write_u8(u8::from(view.truncated));
+            hash.write_usize(view.files_scanned);
+            hash.write_usize(view.matches.len());
+            for hit in &view.matches {
+                hash.write_str(&hit.path);
+                hash.write_usize(hit.line);
+                hash.write_str(&hit.text);
+                hash.write_u8(u8::from(hit.line_truncated));
             }
         }
         Some(ToolDetailView::File(view)) => {
@@ -650,6 +700,7 @@ pub(crate) fn shell_block_signature(
 /// 汇报块的列表指纹字段（展开状态另由块指纹承担）。
 fn report_signature(hash: &mut Fnv, report: &crate::app::state::SubagentReportView) {
     hash.write_str(&report.agent_id);
+    hash.write_str(&report.title);
     hash.write_str(report.role.as_str());
     hash.write_str(&report.status);
     hash.write_usize(report.files_changed);
@@ -662,9 +713,11 @@ fn report_signature(hash: &mut Fnv, report: &crate::app::state::SubagentReportVi
 pub(crate) fn report_block_signature(
     report: &crate::app::state::SubagentReportView,
     expanded: bool,
+    more_steps: usize,
 ) -> u64 {
     let mut hash = Fnv::new();
     hash.write_str(&report.agent_id);
+    hash.write_str(&report.title);
     hash.write_str(report.role.as_str());
     hash.write_str(&report.status);
     hash.write_usize(report.files_changed);
@@ -672,6 +725,7 @@ pub(crate) fn report_block_signature(
     hash.write_usize(report.body.len());
     hash.write_edges(&report.body);
     hash.write_u8(u8::from(expanded));
+    hash.write_usize(more_steps);
     hash.finish()
 }
 

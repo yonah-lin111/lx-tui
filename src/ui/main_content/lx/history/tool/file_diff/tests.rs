@@ -626,7 +626,7 @@ fn expanded_body_is_grey_except_the_file_header_and_diff_lines() {
 
 /// diff 卡的折叠内容**不随鼠标悬停提亮**：同一次绘制里路径、正文与提示行都恒色。
 ///
-/// 悬停面已经取消（只有 thinking 块保留 hover），所以这里断言折叠态的三处样式
+/// 悬停面已经取消（thinking 块也不再因 hover 变色），所以这里断言折叠态的三处样式
 /// 都是固定档位，且「剩余行数」提示行恒为 dim。
 #[test]
 fn file_diff_folded_content_never_lifts() {

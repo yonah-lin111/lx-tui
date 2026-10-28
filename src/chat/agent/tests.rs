@@ -74,10 +74,11 @@ fn parse_control_accepts_valid_arguments() {
     assert_eq!(
         parse_control(
             "spawn_agent",
-            r#"{"role":"explorer","task":"find the compact entry"}"#
+            r#"{"role":"explorer","title":"compact entry","task":"find the compact entry"}"#
         ),
         Some(Ok(SubagentOp::Spawn {
             role: AgentRole::Explorer,
+            title: "compact entry".into(),
             task: "find the compact entry".into(),
         }))
     );
@@ -85,6 +86,7 @@ fn parse_control_accepts_valid_arguments() {
         parse_control("wait_agent", r#"{"targets":["sub-1","sub-2"]}"#),
         Some(Ok(SubagentOp::Wait {
             targets: vec!["sub-1".into(), "sub-2".into()],
+            mode: WaitMode::All,
             timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
         }))
     );
@@ -99,10 +101,38 @@ fn parse_control_accepts_valid_arguments() {
 }
 
 #[test]
+fn parse_wait_supports_all_and_any_modes() {
+    assert_eq!(
+        parse_control("wait_agent", "{}"),
+        Some(Ok(SubagentOp::Wait {
+            targets: Vec::new(),
+            mode: WaitMode::All,
+            timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
+        }))
+    );
+    assert_eq!(
+        parse_control("wait_agent", r#"{"wait_for":"any"}"#),
+        Some(Ok(SubagentOp::Wait {
+            targets: Vec::new(),
+            mode: WaitMode::Any,
+            timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
+        }))
+    );
+    assert_eq!(
+        parse_control("wait_agent", r#"{"targets":["sub-1"],"wait_for":"any"}"#),
+        Some(Ok(SubagentOp::Wait {
+            targets: vec!["sub-1".into()],
+            mode: WaitMode::Any,
+            timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
+        }))
+    );
+}
+
+#[test]
 fn parse_control_rejects_bad_arguments() {
     // 缺字段。
     assert!(parse_control("spawn_agent", r#"{"role":"explorer"}"#).is_some_and(|r| r.is_err()));
-    assert!(parse_control("wait_agent", "{}").is_some_and(|r| r.is_err()));
+    assert!(parse_control("wait_agent", r#"{"wait_for":"some"}"#).is_some_and(|r| r.is_err()));
     // 多余字段。
     assert!(
         parse_control("spawn_agent", r#"{"role":"explorer","task":"x","extra":1}"#)
@@ -130,6 +160,7 @@ fn parse_control_rejects_bad_arguments() {
         parse_control("wait_agent", r#"{"targets":["a"],"timeout_ms":0}"#),
         Some(Ok(SubagentOp::Wait {
             targets: vec!["a".into()],
+            mode: WaitMode::All,
             timeout_ms: 1,
         }))
     );
@@ -137,13 +168,19 @@ fn parse_control_rejects_bad_arguments() {
         parse_control("wait_agent", r#"{"targets":["a"],"timeout_ms":-5}"#),
         Some(Ok(SubagentOp::Wait {
             targets: vec!["a".into()],
+            mode: WaitMode::All,
             timeout_ms: 1,
         }))
     );
+    let oversized = format!(
+        r#"{{"targets":["a"],"timeout_ms":{}}}"#,
+        MAX_WAIT_TIMEOUT_MS + 1
+    );
     assert_eq!(
-        parse_control("wait_agent", r#"{"targets":["a"],"timeout_ms":999999}"#),
+        parse_control("wait_agent", &oversized),
         Some(Ok(SubagentOp::Wait {
             targets: vec!["a".into()],
+            mode: WaitMode::All,
             timeout_ms: MAX_WAIT_TIMEOUT_MS,
         }))
     );
@@ -155,23 +192,28 @@ fn outcome_json_roundtrips() {
         SubagentOutcome::Spawned {
             agent_id: "sub-1".into(),
             role: AgentRole::Executor,
+            title: "fix it".into(),
         },
         SubagentOutcome::Waited {
             timed_out: true,
             agents: vec![
                 AgentStatusView {
                     agent_id: "sub-1".into(),
+                    title: "compact entry".into(),
                     role: AgentRole::Explorer,
                     status: "completed".into(),
                     report: Some("found it".into()),
                 },
                 AgentStatusView {
                     agent_id: "sub-2".into(),
+                    title: "fix tests".into(),
                     role: AgentRole::Executor,
                     status: "running".into(),
                     report: None,
                 },
             ],
+            all: false,
+            mode: WaitMode::All,
         },
         SubagentOutcome::Closed {
             agent_id: "sub-3".into(),
@@ -189,6 +231,7 @@ fn outcome_json_roundtrips() {
 fn report_envelope_escapes_and_truncates() {
     let report = SubagentReportView {
         agent_id: "sub-<1>".into(),
+        title: "test title".into(),
         role: AgentRole::Explorer,
         status: "completed".into(),
         files_changed: 2,
@@ -208,6 +251,7 @@ fn report_envelope_escapes_and_truncates() {
     // 控制字符被剥离，正文超限截断并显式标注。
     let report = SubagentReportView {
         agent_id: "sub-1".into(),
+        title: "test title".into(),
         role: AgentRole::Executor,
         status: "failed".into(),
         files_changed: 0,
@@ -225,6 +269,7 @@ fn report_envelope_escapes_and_truncates() {
 fn report_view_json_roundtrips_and_rejects_garbage() {
     let report = SubagentReportView {
         agent_id: "sub-1".into(),
+        title: "test title".into(),
         role: AgentRole::Executor,
         status: "completed".into(),
         files_changed: 3,
@@ -233,9 +278,17 @@ fn report_view_json_roundtrips_and_rejects_garbage() {
         delivered_at_ms: 42,
     };
     let text = report.to_json();
-    assert_eq!(SubagentReportView::from_json(&text), Some(report));
+    assert_eq!(SubagentReportView::from_json(&text), Some(report.clone()));
     assert_eq!(SubagentReportView::from_json("{"), None);
     assert_eq!(SubagentReportView::from_json("{}"), None);
+
+    let batch = reports_to_json(&[report.clone(), report]);
+    let decoded = reports_from_json(&batch);
+    assert_eq!(decoded.len(), 2);
+    assert_eq!(decoded[0].agent_id, "sub-1");
+    // 旧版单对象 JSON 仍可读。
+    assert_eq!(reports_from_json(&text).len(), 1);
+    assert!(reports_from_json("{").is_empty());
 }
 
 #[test]

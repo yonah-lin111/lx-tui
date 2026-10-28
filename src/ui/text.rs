@@ -734,6 +734,8 @@ pub const LX_COMPACT_ACTION_RESTORE: &str = "Restore the context before this che
 pub const LX_COMPACT_NOTICE_TITLE: &str = "-- Context compacted --";
 /// 展开态的范围标签。
 pub const LX_COMPACT_RANGE_LABEL: &str = "covered";
+/// 子 agent 运行时自动压缩的范围文案（没有真实消息 sequence）。
+pub const LX_COMPACT_AUTO_RANGE: &str = "auto · this run";
 
 /// 检查点条目标题：连续多条合并时带数量（`-- Context compacted x2 --`）。
 pub fn compact_notice_title(count: usize) -> String {
@@ -768,7 +770,7 @@ pub const LX_TASK_TAB_PROCESSES: &str = "Processes";
 pub const LX_TASK_TAB_AGENTS: &str = "Agents";
 /// 进程 tab 空态。
 pub const LX_TASK_PROCESSES_EMPTY: &str = "no running processes";
-/// 子代理 tab 占位（本阶段尚无数据来源；后续在此显示 subagent 内容）。
+/// 子代理 tab 空态（当前会话没有派发过 subagent）。
 pub const LX_TASK_AGENTS_EMPTY: &str = "no subagents yet";
 /// Agents 详情区：历史 run 的消息流还没从库里读回来。
 pub const LX_TASK_AGENTS_LOADING: &str = "loading agent transcript…";
@@ -814,7 +816,7 @@ pub const LX_TASK_HINTS_PROCESSES: [Hint; 4] = [
 /// 子代理 tab 的键位提示（与进程列表同一套动作）。
 pub const LX_TASK_HINTS_AGENTS: [Hint; 4] = [
     hint("select", "↑↓"),
-    hint("stop", "^d"),
+    hint("stop all", "^d"),
     hint("tabs", "←→"),
     hint("back", "esc"),
 ];
@@ -823,7 +825,7 @@ pub const LX_TASK_TAB_SEP: &str = " · ";
 /// 行尾的运行时长前缀（`running 1m 30s`）。
 pub const LX_TASK_AGE_PREFIX: &str = "running ";
 
-/// 输入框底边框右端的后台任务计数指标：`1 process` / `3 processes`。
+/// 输入框底边框左端的后台任务计数指标：`1 process` / `3 processes`。
 ///
 /// 与 opencode 的 `N shell` 同一口径：数量为 0 时整段不渲染；单复数随数量变化。
 pub fn lx_task_count_label(count: usize) -> String {
@@ -836,8 +838,26 @@ pub fn lx_task_count_label(count: usize) -> String {
 pub const LX_TASK_COUNT_NOUN_ONE: &str = "process";
 pub const LX_TASK_COUNT_NOUN_MANY: &str = "processes";
 
+/// 输入框底边框左端的运行中子 agent 计数指标：`1 subagent` / `3 subagents`。
+pub fn lx_subagent_count_label(count: usize) -> String {
+    if count == 1 {
+        format!("1 {}", LX_SUBAGENT_COUNT_NOUN_ONE)
+    } else {
+        format!("{count} {}", LX_SUBAGENT_COUNT_NOUN_MANY)
+    }
+}
+pub const LX_SUBAGENT_COUNT_NOUN_ONE: &str = "subagent";
+pub const LX_SUBAGENT_COUNT_NOUN_MANY: &str = "subagents";
+
 /// 停止一个后台进程后的提示。
 pub const LX_TASK_STOPPED: &str = "Stopped 1 background process";
+/// Agents 面板高亮项已结束（^d 不会误停别的子 agent）。
+pub const LX_TASK_SELECTED_AGENT_NOT_RUNNING: &str = "Selected subagent is not running";
+/// Agents 面板停止选中子 agent 的提示。
+pub fn stopping_subagents(count: usize) -> String {
+    let noun = if count == 1 { "subagent" } else { "subagents" };
+    format!("Stopping {count} {noun}")
+}
 /// 停止失败（进程已退出、运行实例已销毁等）。
 pub const LX_TASK_STOP_FAILED: &str = "Failed to stop the process";
 

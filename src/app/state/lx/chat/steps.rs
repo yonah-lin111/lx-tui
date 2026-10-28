@@ -545,6 +545,17 @@ impl ToolCallView {
             return false;
         }
         self.summary = Some(Box::new(ToolSummary::from_arguments(&self.arguments_json)));
+        if matches!(
+            self.name.as_str(),
+            "spawn_agent" | "wait_agent" | "close_agent"
+        ) {
+            self.detail = super::tool_view::SubagentDetailView::from_arguments(
+                &self.name,
+                &self.arguments_json,
+            )
+            .map(super::tool_view::ToolDetailView::Subagent)
+            .map(Box::new);
+        }
         self.status = ToolStatus::Pending;
         true
     }
@@ -568,7 +579,8 @@ impl ToolCallView {
             super::tool_view::ToolDetailView::Plan(_)
             | super::tool_view::ToolDetailView::File(_)
             | super::tool_view::ToolDetailView::Ask(_)
-            | super::tool_view::ToolDetailView::Subagent(_) => None,
+            | super::tool_view::ToolDetailView::Subagent(_)
+            | super::tool_view::ToolDetailView::Search(_) => None,
         }
     }
 

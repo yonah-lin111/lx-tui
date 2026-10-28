@@ -6,6 +6,44 @@
 use super::*;
 use tokio::sync::oneshot;
 
+/// 迟到的 `StartChatStream` 不能跨会话启动：切换后旧 key 必须被丢弃。
+#[tokio::test]
+async fn stale_start_after_session_switch_is_dropped() {
+    let fixture = Fixture::new("stale-start");
+    let (mut state, key, _persistence, _session) = streaming_state(&fixture);
+    let assistant_id = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .last()
+        .expect("assistant placeholder")
+        .id
+        .clone();
+    state
+        .pane_mut_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("another-session".into());
+
+    let mut streams = ChatStreams::default();
+    let (sender, _receiver) = mpsc::unbounded_channel();
+    assert!(
+        !start_stream(
+            &mut state,
+            &mut streams,
+            &sender,
+            &Persistence::without_database(),
+            key,
+            assistant_id,
+        ),
+        "session 已切走，旧 StartChatStream 必须丢弃"
+    );
+    assert!(streams.cancels.is_empty(), "不得为旧 key 注册取消句柄");
+}
+
 #[tokio::test]
 async fn tool_pending_uses_session_workspace_not_execution_cwd() {
     let fixture = Fixture::new("workspace-key");

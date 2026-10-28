@@ -115,6 +115,24 @@ pub(crate) fn finish_child_tool(
                         .chat
                         .settle_tool_result(&ticket.call_id, status, None, None, None);
             }
+            // 与主轮同口径：结算后按真实运行实例校正卡片，并登记进程记录供历史恢复。
+            if let ToolOutcome::Executed(ToolExecutionResult::Process(process)) = &outcome {
+                if let Some(runtime) = streams.runtimes.get(&key.session)
+                    && let Some(snapshot) = runtime.manager().snapshot(process.session_id)
+                {
+                    changed |= update::apply_process_snapshot(state, process.session_id, &snapshot);
+                }
+                if process.kind == crate::chat::process::ProcessResultKind::ExecCommand {
+                    super::tool_calls::register_process_record(
+                        streams,
+                        persistence,
+                        &workspace,
+                        &key,
+                        &ticket.call_id,
+                        process.session_id,
+                    );
+                }
+            }
             let _ = reply.send(Ok(()));
             changed
         }

@@ -13,8 +13,11 @@ use serde::{Deserialize, Serialize};
 
 use super::{ConfigError, user_data_root};
 
-/// 默认流式空闲超时（毫秒），对齐 lx-agent。
-pub const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 60_000;
+/// 默认流式空闲超时（毫秒），对齐 codex 的 5 分钟。
+///
+/// 60s 对大上下文预填充和慢供应商太短：最新子 agent session 里就有一次
+/// 685k input tokens 的预填充被 60s 空闲超时直接杀掉（`error_code=timeout`）。
+pub const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 
 /// 供应商传输协议。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

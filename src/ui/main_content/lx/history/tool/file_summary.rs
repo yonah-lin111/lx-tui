@@ -54,8 +54,8 @@ impl Detail {
     }
 }
 
-/// 主参数：摘要里的路径（或 `search` 的搜索范围）；只显示摘要，
-/// **绝不**铺文件内容或命中正文。
+/// 主参数：摘要里的路径（或 `search` 的搜索范围）；只显示摘要行，
+/// **绝不**在这里铺文件内容或命中正文（`search` 命中行由 `search.rs` 详情视图负责）。
 ///
 /// 摘要（`ToolSummary`：参数派生 + 结果体补全）是常规唯一来源；**只有摘要答不出
 /// 需要的字段时**才懒回退解析 `arguments_json`（见 [`needs_argument_fallback`]），
@@ -229,8 +229,8 @@ struct Extra {
 const PRIORITY_COUNT: u8 = 1;
 /// 行范围（`read` 的键信息）保留得比命中数久。
 const PRIORITY_RANGE: u8 = 2;
-/// 截断提示（必须显式告知用户）最后才隐藏的次要信息。
-const PRIORITY_TRUNCATED: u8 = 3;
+/// `partial` 提示最后才隐藏的次要信息。
+const PRIORITY_PARTIAL: u8 = 3;
 
 /// 次要信息（显示顺序：行范围 + 实际行数 → 命中数 → 增删计数 → `partial` → 截断提示）。
 ///
@@ -316,28 +316,20 @@ fn extras(call: &ToolCallView, has_param: bool) -> Vec<Extra> {
                 }));
                 has_lead = true;
             }
-            // 部分成功：本次补丁里有 hunk 应用后内容没变，与截断提示同档显式告知，
+            // 部分成功：本次补丁里有 hunk 应用后内容没变，作为最后的次要信息显式告知，
             // 否则模型看到的 `partial: true` 在 UI 上完全消失（review P3-10）。
             if summary.partial {
                 push!(
                     text::agent::TOOL_PARTIAL,
                     style::agent_step_detail(),
-                    PRIORITY_TRUNCATED,
+                    PRIORITY_PARTIAL,
                 );
             }
         }
         Kind::Other => {}
     }
-    if summary.truncated {
-        let lead = if has_lead { sep } else { "" };
-        out.push(Extra {
-            segment: Segment::new(
-                format!("{lead}{}", text::agent::TOOL_TRUNCATED),
-                style::agent_warn(),
-            ),
-            priority: PRIORITY_TRUNCATED,
-        });
-    }
+    // 最后一个分支之后不再拼接；显式读一次，避免 `has_lead` 的末次赋值告警。
+    let _ = has_lead;
     out
 }
 

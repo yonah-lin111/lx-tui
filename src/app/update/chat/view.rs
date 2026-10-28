@@ -48,9 +48,8 @@ pub fn view_message_of(message: &ChatMessage, models: &ModelsSnapshot) -> ChatMe
         reports: message
             .subagent_reports
             .as_deref()
-            .and_then(crate::chat::agent::SubagentReportView::from_json)
-            .into_iter()
-            .collect(),
+            .map(crate::chat::agent::reports_from_json)
+            .unwrap_or_default(),
     }
 }
 

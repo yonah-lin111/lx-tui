@@ -38,7 +38,8 @@ pub(crate) use history::{PaneCache, RenderCache};
 use history_hit::chat_geometry_is_live;
 pub(crate) use history_hit::{
     LxChatHit, card_target_at, chat_hit, fold_target_at, history_center_target, history_rows,
-    history_scrollbar, history_view, sticky_prompt_jump,
+    history_scrollbar, history_view, sticky_prompt_jump, task_agents_card_target_at,
+    task_agents_scrollbar,
 };
 pub(crate) use slash::{item_at as slash_item_at, layout as slash_layout};
 
@@ -705,11 +706,7 @@ fn build(
     if let Some(page) = lx.task.as_ref() {
         if let Some(rect) = lay.task_output {
             if page.tab == crate::app::state::TaskTab::Agents {
-                if let Some(run) = lx.agents.runs.get(page.agents_window.active) {
-                    task::agents::draw_detail(&mut grid, rect, run, run.scroll, cache);
-                } else {
-                    task::draw_output_container(&mut grid, rect, page);
-                }
+                task::draw_agents_detail(&mut grid, rect, lx, cache);
             } else {
                 task::draw_output_container(&mut grid, rect, page);
             }
@@ -790,11 +787,7 @@ fn build_chat(
     if let Some(page) = lx.task.as_ref() {
         if let Some(rect) = lay.task_output {
             if page.tab == crate::app::state::TaskTab::Agents {
-                if let Some(run) = lx.agents.runs.get(page.agents_window.active) {
-                    task::agents::draw_detail(&mut grid, rect, run, run.scroll, cache);
-                } else {
-                    task::draw_output_container(&mut grid, rect, page);
-                }
+                task::draw_agents_detail(&mut grid, rect, lx, cache);
             } else {
                 task::draw_output_container(&mut grid, rect, page);
             }

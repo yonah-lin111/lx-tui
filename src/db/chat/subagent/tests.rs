@@ -73,7 +73,15 @@ impl Fixture {
 
     fn spawn(&self, parent: &str, role: AgentRole, task: &str) -> SubagentCommitted {
         self.database
-            .begin_subagent_turn(self.workspace(), parent, role, task, &Self::model(), None)
+            .begin_subagent_turn(
+                self.workspace(),
+                parent,
+                role,
+                task.lines().next().unwrap_or(task),
+                task,
+                &Self::model(),
+                None,
+            )
             .expect("begin subagent")
     }
 
@@ -119,6 +127,7 @@ fn part(position: i64, text: &str) -> ChatPart {
 
 fn report() -> ReportPayload {
     ReportPayload {
+        title: "compact entry".into(),
         body: "found the entry point".into(),
         files_changed: 2,
         duration_ms: Some(1_200),
@@ -140,6 +149,7 @@ fn begin_subagent_turn_writes_child_session_and_relation() {
             fixture.workspace(),
             &parent,
             AgentRole::Explorer,
+            "find the compact entry",
             "find the compact entry\nwith details",
             &Fixture::model(),
             Some(&spawn_message),
@@ -160,7 +170,7 @@ fn begin_subagent_turn_writes_child_session_and_relation() {
         records[0].spawn_message_id.as_deref(),
         Some(spawn_message.as_str())
     );
-    assert_eq!(records[0].task_title, "find the compact entry");
+    assert_eq!(records[0].title, "find the compact entry");
 
     let messages = fixture
         .database
@@ -209,20 +219,26 @@ fn report_message_and_turn_replay_in_one_turn() {
         .as_deref()
         .and_then(crate::chat::agent::SubagentReportView::from_json)
         .expect("report view");
-    let envelope = crate::chat::agent::format_report_envelope(&view);
-    let report_message = fixture
-        .database
-        .insert_report_message(fixture.workspace(), &parent, &envelope, &view.to_json())
-        .expect("insert report");
+    let reports = vec![view];
+    let envelope = format!(
+        "[local runtime] subagent reports:\n{}",
+        reports
+            .iter()
+            .map(crate::chat::agent::format_report_envelope)
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    );
     let turn = fixture
         .database
-        .begin_report_turn(
+        .begin_report_batch(
             fixture.workspace(),
             &parent,
-            &report_message,
+            &envelope,
+            &crate::chat::agent::reports_to_json(&reports),
+            std::slice::from_ref(&committed.agent_id),
             &Fixture::model(),
         )
-        .expect("begin report turn");
+        .expect("begin report batch");
 
     let messages = fixture
         .database
@@ -231,13 +247,24 @@ fn report_message_and_turn_replay_in_one_turn() {
         .expect("parent");
     let report_row = messages
         .iter()
-        .find(|message| message.external_id == report_message)
+        .find(|message| message.external_id == turn.user_message_id)
         .expect("report row");
-    assert_eq!(
-        report_row.subagent_reports.as_deref(),
-        Some(view.to_json().as_str())
-    );
+    let stored = report_row
+        .subagent_reports
+        .as_deref()
+        .expect("reports json");
+    let parsed = crate::chat::agent::reports_from_json(stored);
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].agent_id, committed.agent_id);
     assert_eq!(report_row.turn_index, turn.turn_index);
+    assert!(
+        fixture
+            .database
+            .list_subagents(fixture.workspace(), &parent)
+            .expect("list")[0]
+            .report_delivered,
+        "批次提交即视为已投递，失败重试不会重复生成卡片"
+    );
     let assistant = messages
         .iter()
         .find(|message| message.external_id == turn.assistant_message_id)
@@ -275,60 +302,6 @@ fn report_message_and_turn_replay_in_one_turn() {
     let text = format!("{:?}", assembly.request.items);
     assert!(text.contains("subagent_report"), "{text}");
     assert!(text.contains("report received"), "{text}");
-}
-
-#[test]
-fn undelivered_user_only_report_row_is_not_replayed() {
-    let fixture = Fixture::new("pending");
-    let parent = fixture.parent();
-    let committed = fixture.spawn(&parent, AgentRole::Executor, "fix it");
-    fixture.finish_child(
-        &committed,
-        TurnOutcome::Failed {
-            error_code: "boom".into(),
-        },
-        Some(&report()),
-    );
-    let view = crate::chat::agent::SubagentReportView {
-        agent_id: committed.agent_id.clone(),
-        role: AgentRole::Executor,
-        status: "failed".into(),
-        files_changed: 2,
-        duration_ms: Some(1_200),
-        body: "failed".into(),
-        delivered_at_ms: 0,
-    };
-    let message = fixture
-        .database
-        .insert_report_message(
-            fixture.workspace(),
-            &parent,
-            &crate::chat::agent::format_report_envelope(&view),
-            &view.to_json(),
-        )
-        .expect("insert report");
-    let messages = fixture
-        .database
-        .load_chat_session(fixture.workspace(), &parent)
-        .expect("load")
-        .expect("parent");
-    assert!(
-        messages
-            .iter()
-            .any(|row| row.external_id == message && row.status == "complete")
-    );
-    let assembly = crate::chat::context::assemble(&crate::chat::context::AssemblyInput {
-        messages: &messages,
-        draft: "next question",
-        model: &Fixture::model(),
-        context_limit: None,
-        output_limit: None,
-        variant_params: None,
-        compact: None,
-        environment: None,
-    });
-    let text = format!("{:?}", assembly.request.items);
-    assert!(!text.contains("subagent_report"), "{text}");
 }
 
 /// 子轮必须有自己的文件 scope：executor 的 mutation 依赖它，缺了会被整批拒绝。
@@ -503,6 +476,7 @@ fn v15_upgrade_adds_columns_and_keeps_data() {
         .execute_batch(
             "ALTER TABLE agent_subagent DROP COLUMN report_json;
              ALTER TABLE agent_subagent DROP COLUMN report_delivered;
+             ALTER TABLE agent_subagent DROP COLUMN title;
              ALTER TABLE agent_message DROP COLUMN subagent_report_json;
              PRAGMA user_version = 15;",
         )
@@ -522,6 +496,7 @@ fn v15_upgrade_adds_columns_and_keeps_data() {
     let records = database.list_subagents(&workspace, &parent).expect("list");
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].agent_id, committed.agent_id);
+    assert_eq!(records[0].title, "", "旧记录不回填 task 首行");
     let integrity: String = database
         .connection()
         .query_row("PRAGMA integrity_check", [], |row| row.get(0))

@@ -313,6 +313,64 @@ fn background_output_updates_the_original_card_only() {
     assert!(!apply_process_output(&mut state, 8, "call-2", other));
 }
 
+/// 子 agent transcript 里的命令卡也必须接收后台输出/退出事件。
+#[test]
+fn background_output_updates_subagent_command_card() {
+    use crate::app::state::lx::agent::SubagentRun;
+    use crate::db::chat::SubagentRecord;
+
+    let (mut state, pane) = state_with_command(11);
+    let mut call = ToolCallView::new("child-call", "exec_command", 0);
+    call.status = ToolStatus::Running;
+    call.detail = Some(Box::new(command_detail(12)));
+    let mut run = SubagentRun::from_record(&SubagentRecord {
+        agent_id: "sub-child".into(),
+        child_session_id: "sess-child".into(),
+        parent_session_id: "sess-parent".into(),
+        spawn_message_id: None,
+        role: crate::chat::agent::AgentRole::Executor,
+        status: "running".into(),
+        title: "child".into(),
+        created_at_ms: 1_000,
+        completed_at_ms: None,
+        report_json: None,
+        report_delivered: false,
+    });
+    run.chat.messages = vec![message_with(call)];
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .runs
+        .push(run);
+
+    let snapshot = ProcessSnapshot {
+        session_id: 12,
+        command: "cargo test".into(),
+        cwd: "/workspace".into(),
+        tty: false,
+        state: ProcessState::Running,
+        exit_code: None,
+        tail: "child output\n".into(),
+        output_start: 0,
+        output_end: 0,
+        dropped_bytes: 0,
+        started_at_ms: 1_000,
+        ended_at_ms: None,
+        origin_call_id: "child-call".into(),
+        background_alive: false,
+    };
+    assert!(apply_process_output(&mut state, 12, "child-call", snapshot));
+    let run = &state.pane_anywhere(pane).expect("pane").lx.agents.runs[0];
+    let call = run.chat.messages[0].tool("child-call").expect("child tool");
+    let Some(ToolDetailView::Command(view)) = call.detail.as_deref() else {
+        panic!("expected child command view");
+    };
+    assert_eq!(view.output_preview, vec!["child output"]);
+    assert_eq!(view.output_tail, "child output\n");
+}
+
 #[test]
 fn non_zero_exit_updates_state_without_flagging_a_failure() {
     let (mut state, pane) = state_with_command(9);

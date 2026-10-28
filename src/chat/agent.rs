@@ -118,13 +118,18 @@ pub const MAX_CONCURRENT_SUBAGENTS: usize = 3;
 /// 单次 `wait_agent` 的目标数上限。
 pub const MAX_WAIT_TARGETS: usize = 8;
 /// `wait_agent` 默认超时（毫秒）。
-pub const DEFAULT_WAIT_TIMEOUT_MS: u64 = 60_000;
-/// `wait_agent` 超时上限（毫秒）。
-pub const MAX_WAIT_TIMEOUT_MS: u64 = 300_000;
+///
+/// 子 agent 的完整调查通常要几分钟，60s 会让父轮次在目标仍在运行时提前收尾；
+/// 与 codex 的“prefer longer waits (minutes)”一致，默认给 5 分钟。
+pub const DEFAULT_WAIT_TIMEOUT_MS: u64 = 300_000;
+/// `wait_agent` 超时上限（毫秒），对齐 codex 的 1 小时硬上限。
+pub const MAX_WAIT_TIMEOUT_MS: u64 = 3_600_000;
 /// 报告正文上限（字节）。
 pub const MAX_REPORT_BYTES: usize = 8 * 1024;
 /// `spawn_agent` 的 task 文本上限（字符）。
 pub const MAX_TASK_CHARS: usize = 8_000;
+/// `spawn_agent` 的短标题上限（字符）。标题给人和父消息卡片看，不是任务提示词。
+pub const MAX_TITLE_CHARS: usize = 80;
 
 /// 并发超限的稳定错误码。
 pub const LIMIT_REACHED_CODE: &str = "subagent concurrency limit reached";
@@ -135,14 +140,48 @@ pub const FINISHED_CODE: &str = "subagent already finished";
 /// 子 agent 内禁止控制工具的稳定错误码。
 pub const UNAVAILABLE_CODE: &str = "subagent tools unavailable";
 
+/// `wait_agent` 的完成条件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitMode {
+    /// 等全部目标结束（默认）。
+    All,
+    /// 任意一个目标结束就返回。
+    Any,
+}
+
+impl WaitMode {
+    /// 稳定 JSON 值。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Any => "any",
+        }
+    }
+
+    /// 由稳定 JSON 值还原；未知值回退 `All`（兼容旧参数）。
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "any" => Self::Any,
+            _ => Self::All,
+        }
+    }
+}
+
 /// 三个控制工具之一；由 loop 转投事件层执行（与 `ask` 同一分支位置）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubagentOp {
     /// 派发一个子 agent。
-    Spawn { role: AgentRole, task: String },
-    /// 等待若干子 agent 结束（或超时）。
+    Spawn {
+        role: AgentRole,
+        /// 面向用户的短标题（不是 task 原文）。
+        title: String,
+        task: String,
+    },
+    /// 等待子 agent 结束（或超时）。`targets` 为空表示等待本会话全部
+    /// 子 agent；`mode` 决定等全部还是任意一个。
     Wait {
         targets: Vec<String>,
+        mode: WaitMode,
         timeout_ms: u64,
     },
     /// 停止一个子 agent（不产生报告）。
@@ -153,11 +192,19 @@ pub enum SubagentOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubagentOutcome {
     /// 已派发（不等待）。
-    Spawned { agent_id: String, role: AgentRole },
+    Spawned {
+        agent_id: String,
+        role: AgentRole,
+        title: String,
+    },
     /// 等待结算；`report` 只在本次领取到报告时非空。
     Waited {
         timed_out: bool,
         agents: Vec<AgentStatusView>,
+        /// 本次是否以「全部子 agent」为目标（targets 为空）。
+        all: bool,
+        /// 全部等待或任意一个完成。
+        mode: WaitMode,
     },
     /// 已停止；不产生报告。
     Closed {
@@ -171,6 +218,8 @@ pub enum SubagentOutcome {
 pub struct AgentStatusView {
     /// 稳定 agent id。
     pub agent_id: String,
+    /// 面向用户的短标题；旧记录可能为空。
+    pub title: String,
     /// 角色。
     pub role: AgentRole,
     /// `running` / `completed` / `failed` / `cancelled`。
@@ -183,18 +232,31 @@ impl SubagentOutcome {
     /// 结果序列化（UI 详情、历史恢复、模型回执同源）。
     pub fn to_json(&self) -> Value {
         match self {
-            Self::Spawned { agent_id, role } => json!({
+            Self::Spawned {
+                agent_id,
+                role,
+                title,
+            } => json!({
                 "tool": "spawn_agent",
                 "agent_id": agent_id,
                 "role": role.as_str(),
+                "title": title,
             }),
-            Self::Waited { timed_out, agents } => json!({
+            Self::Waited {
+                timed_out,
+                agents,
+                all,
+                mode,
+            } => json!({
                 "tool": "wait_agent",
                 "timed_out": timed_out,
+                "all": all,
+                "wait_for": mode.as_str(),
                 "agents": agents
                     .iter()
                     .map(|agent| json!({
                         "agent_id": agent.agent_id,
+                        "title": agent.title,
                         "role": agent.role.as_str(),
                         "status": agent.status,
                         "report": agent.report,
@@ -218,6 +280,11 @@ impl SubagentOutcome {
             "spawn_agent" => Some(Self::Spawned {
                 agent_id: value.get("agent_id")?.as_str()?.to_string(),
                 role: AgentRole::parse(value.get("role")?.as_str()?)?,
+                title: value
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
             }),
             "wait_agent" => {
                 let agents = value.get("agents")?.as_array()?;
@@ -225,6 +292,11 @@ impl SubagentOutcome {
                 for agent in agents {
                     parsed.push(AgentStatusView {
                         agent_id: agent.get("agent_id")?.as_str()?.to_string(),
+                        title: agent
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
                         role: AgentRole::parse(agent.get("role")?.as_str()?)?,
                         status: agent.get("status")?.as_str()?.to_string(),
                         report: agent
@@ -236,6 +308,13 @@ impl SubagentOutcome {
                 Some(Self::Waited {
                     timed_out: value.get("timed_out")?.as_bool()?,
                     agents: parsed,
+                    all: value.get("all").and_then(Value::as_bool).unwrap_or(false),
+                    mode: WaitMode::parse(
+                        value
+                            .get("wait_for")
+                            .and_then(Value::as_str)
+                            .unwrap_or("all"),
+                    ),
                 })
             }
             "close_agent" => Some(Self::Closed {
@@ -257,6 +336,8 @@ impl SubagentOutcome {
 pub struct SubagentReportView {
     /// 稳定 agent id。
     pub agent_id: String,
+    /// 面向用户的短标题；旧记录为空。
+    pub title: String,
     /// 角色。
     pub role: AgentRole,
     /// `completed` / `failed` / `cancelled`。
@@ -272,10 +353,15 @@ pub struct SubagentReportView {
 }
 
 impl SubagentReportView {
-    /// 落库 JSON（`agent_subagent.report_json` 与消息 `subagent_report_json` 共用）。
+    /// 落库 JSON（`agent_subagent.report_json` 共用；消息侧批量存数组）。
     pub fn to_json(&self) -> String {
+        self.to_value().to_string()
+    }
+
+    fn to_value(&self) -> Value {
         json!({
             "agent_id": self.agent_id,
+            "title": self.title,
             "role": self.role.as_str(),
             "status": self.status,
             "files_changed": self.files_changed,
@@ -283,14 +369,22 @@ impl SubagentReportView {
             "body": self.body,
             "delivered_at_ms": self.delivered_at_ms,
         })
-        .to_string()
     }
 
-    /// 从落库 JSON 还原；损坏返回 None。
+    /// 从落库 JSON 还原单条报告；损坏返回 None。
     pub fn from_json(text: &str) -> Option<Self> {
         let value: Value = serde_json::from_str(text).ok()?;
+        Self::from_value(&value)
+    }
+
+    fn from_value(value: &Value) -> Option<Self> {
         Some(Self {
             agent_id: value.get("agent_id")?.as_str()?.to_string(),
+            title: value
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
             role: AgentRole::parse(value.get("role")?.as_str()?)?,
             status: value.get("status")?.as_str()?.to_string(),
             files_changed: value
@@ -307,6 +401,26 @@ impl SubagentReportView {
     }
 }
 
+/// 消息 `subagent_report_json` 反序列化：新格式为数组，旧格式为单对象。
+pub fn reports_from_json(text: &str) -> Vec<SubagentReportView> {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .filter_map(SubagentReportView::from_value)
+            .collect(),
+        Value::Object(_) => SubagentReportView::from_value(&value).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// 批量报告落库 JSON：统一存数组，单条也走数组。
+pub fn reports_to_json(reports: &[SubagentReportView]) -> String {
+    Value::Array(reports.iter().map(SubagentReportView::to_value).collect()).to_string()
+}
+
 /// 注入父会话的报告文本：纯文本 + XML 包裹 + 元字符转义。
 pub fn format_report_envelope(report: &SubagentReportView) -> String {
     let body = truncate_report_body(&sanitize_control(&report.body));
@@ -315,8 +429,9 @@ pub fn format_report_envelope(report: &SubagentReportView) -> String {
         .map(|value| format!("{value}"))
         .unwrap_or_else(|| "unknown".to_string());
     format!(
-        "<subagent_report agent_id=\"{}\" role=\"{}\" status=\"{}\" files_changed=\"{}\" duration_ms=\"{}\">\n{}\n</subagent_report>",
+        "<subagent_report agent_id=\"{}\" title=\"{}\" role=\"{}\" status=\"{}\" files_changed=\"{}\" duration_ms=\"{}\">\n{}\n</subagent_report>",
         escape_attribute(&report.agent_id),
+        escape_attribute(&report.title),
         report.role.as_str(),
         escape_attribute(&report.status),
         report.files_changed,
@@ -340,13 +455,30 @@ pub fn parse_control(name: &str, arguments_json: &str) -> Option<Result<Subagent
 /// `spawn_agent` 的参数解析。
 fn parse_spawn(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
     let object = object_of(arguments_json)?;
-    reject_unknown(&object, &["role", "task"])?;
+    reject_unknown(&object, &["role", "title", "task"])?;
     let role_text = object
         .get("role")
         .and_then(Value::as_str)
         .ok_or_else(|| ToolFailure::invalid("`role` must be \"explorer\" or \"executor\""))?;
     let role = AgentRole::parse(role_text)
         .ok_or_else(|| ToolFailure::invalid("`role` must be \"explorer\" or \"executor\""))?;
+    // 旧会话的 spawn 参数没有 title：执行层容忍缺失（历史卡片照常显示 task），
+    // schema 仍要求新调用提供；非空校验只在字段存在时执行。
+    let title = object
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if title.chars().count() > MAX_TITLE_CHARS {
+        return Err(ToolFailure::new(
+            ToolErrorCode::TooLarge,
+            format!("`title` must be at most {MAX_TITLE_CHARS} characters"),
+        ));
+    }
     let task = object
         .get("task")
         .and_then(Value::as_str)
@@ -361,32 +493,55 @@ fn parse_spawn(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
             format!("`task` must be at most {MAX_TASK_CHARS} characters"),
         ));
     }
-    Ok(SubagentOp::Spawn { role, task })
+    Ok(SubagentOp::Spawn { role, title, task })
 }
 
 /// `wait_agent` 的参数解析。
+///
+/// `targets` 可省略/为空：表示等待本会话全部子 agent。`wait_for` 默认 `all`，
+/// `any` 表示任意一个结束就返回。
 fn parse_wait(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
     let object = object_of(arguments_json)?;
-    reject_unknown(&object, &["targets", "timeout_ms"])?;
-    let targets = object
-        .get("targets")
-        .and_then(Value::as_array)
-        .ok_or_else(|| ToolFailure::invalid("`targets` must be an array of agent ids"))?;
-    if targets.is_empty() || targets.len() > MAX_WAIT_TARGETS {
-        return Err(ToolFailure::invalid(format!(
-            "`targets` must contain 1 to {MAX_WAIT_TARGETS} agent ids"
-        )));
-    }
-    let mut parsed = Vec::with_capacity(targets.len());
-    for target in targets {
-        let target = target
-            .as_str()
-            .ok_or_else(|| ToolFailure::invalid("`targets` must contain only strings"))?;
-        if target.trim().is_empty() {
-            return Err(ToolFailure::invalid("`targets` must not contain empty ids"));
+    reject_unknown(&object, &["targets", "wait_for", "timeout_ms"])?;
+    let mut parsed = Vec::new();
+    if let Some(targets) = object.get("targets").filter(|value| !value.is_null()) {
+        let targets = targets
+            .as_array()
+            .ok_or_else(|| ToolFailure::invalid("`targets` must be an array of agent ids"))?;
+        if targets.len() > MAX_WAIT_TARGETS {
+            return Err(ToolFailure::invalid(format!(
+                "`targets` must contain at most {MAX_WAIT_TARGETS} agent ids"
+            )));
         }
-        parsed.push(target.to_string());
+        for target in targets {
+            let target = target
+                .as_str()
+                .ok_or_else(|| ToolFailure::invalid("`targets` must contain only strings"))?;
+            if target.trim().is_empty() {
+                return Err(ToolFailure::invalid("`targets` must not contain empty ids"));
+            }
+            if !parsed.iter().any(|item: &String| item == target) {
+                parsed.push(target.to_string());
+            }
+        }
     }
+    let mode = match object.get("wait_for") {
+        None | Some(Value::Null) => WaitMode::All,
+        Some(value) => {
+            let text = value
+                .as_str()
+                .ok_or_else(|| ToolFailure::invalid("`wait_for` must be \"all\" or \"any\""))?;
+            match text {
+                "all" => WaitMode::All,
+                "any" => WaitMode::Any,
+                _ => {
+                    return Err(ToolFailure::invalid(
+                        "`wait_for` must be \"all\" or \"any\"",
+                    ));
+                }
+            }
+        }
+    };
     let timeout_ms = match object.get("timeout_ms") {
         None | Some(Value::Null) => DEFAULT_WAIT_TIMEOUT_MS,
         Some(value) => {
@@ -398,6 +553,7 @@ fn parse_wait(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
     };
     Ok(SubagentOp::Wait {
         targets: parsed,
+        mode,
         timeout_ms: timeout_ms.clamp(1, MAX_WAIT_TIMEOUT_MS),
     })
 }

@@ -73,15 +73,18 @@ pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
 /// assistant 步骤左侧状态标记的语义状态（思考 / 工具调用 / 正文块共用）。
 ///
 /// 字形按 [`StepKind`] 分派（见 [`Self::glyph`]）：文字数据（正文 / 思考 / 通知）为
-/// 圆点 `●`/`○`，只有工具调用为方块 `■`/`□`。运行中为实心/空心两帧呼吸（相位由
-/// `LxChat::loading_frame` 决定，约 400ms 一相）；终态一律停为**实心**标记、仅以颜色
-/// 区分：失败（红）、中断（黄）。取消不再特殊化：标记与动词同用角色色（用户要求
-/// 「方块和 title 统一」，空心/白色方块都会显得这张卡是另一种状态）。
+/// 圆点 `●`/`○`，工具调用为方块 `■`/`□`，子 agent 主动汇报为上三角 `▲`/`△`。
+/// 运行中为实心/空心两帧呼吸（相位由 `LxChat::loading_frame` 决定，约 400ms 一相）；
+/// 终态一律停为**实心**标记、仅以颜色区分：失败（红）、中断（黄）。取消不再特殊化：
+/// 标记与动词同用角色色（用户要求「方块和 title 统一」，空心/白色方块都会显得这张卡
+/// 是另一种状态）。
 ///
-/// **颜色由「角色」决定，不只看状态**（用户要求区分三类步骤）：
+/// **颜色由「角色」决定，不只看状态**（用户要求区分四类步骤）：
 /// - [`StepKind::Body`]（正文块）：**终端默认前景**——圆点跟正文同色，不额外抢眼；
-/// - [`StepKind::Thinking`]（思考块）：折叠浅粉 `Indexed 182`、展开/悬停亮粉 `Indexed 218`；
-/// - [`StepKind::Tool`]（工具调用）：翡翠绿 `Indexed 42`。
+/// - [`StepKind::Thinking`]（思考块）：折叠浅粉 `Indexed 182`、展开亮粉 `Indexed 218`
+///   （鼠标悬停不改变颜色）；
+/// - [`StepKind::Tool`]（工具调用）：翡翠绿 `Indexed 42`；
+/// - [`StepKind::Report`]（子 agent 汇报）：沿用工具档颜色，仅字形改为上三角。
 ///
 /// 失败 / 中断是**跨角色的语义状态**，一律覆盖角色色（红 / 黄），保证「出问题了」
 /// 比「是哪类步骤」更先被看到；取消不是错误，沿用角色色，只由详情行的 `cancelled` 说明。
@@ -114,10 +117,12 @@ impl StepMark {
             }
             Self::Done | Self::Failed | Self::Interrupted | Self::Cancelled => true,
         };
-        // 文字数据（正文 / 思考 / 通知）用圆点，只有工具调用用方块。
+        // 文字数据用圆点、工具调用用方块、子 agent 汇报用上三角。
         match (kind, filled) {
             (StepKind::Tool, true) => text::agent::STEP_MARK_FILLED,
             (StepKind::Tool, false) => text::agent::STEP_MARK_HOLLOW,
+            (StepKind::Report, true) => text::agent::STEP_MARK_TRIANGLE_FILLED,
+            (StepKind::Report, false) => text::agent::STEP_MARK_TRIANGLE_HOLLOW,
             (_, true) => text::agent::STEP_MARK_DOT_FILLED,
             (_, false) => text::agent::STEP_MARK_DOT_HOLLOW,
         }
@@ -125,17 +130,17 @@ impl StepMark {
 
     /// 标记样式：先看状态（失败/中断/取消跨角色覆盖），否则按角色取色。
     ///
-    /// `expanded` / `hovered` 只对思考块有意义（折叠浅粉 → 展开/悬停亮粉）；
-    /// 其余角色忽略它们。
-    pub(super) fn style(self, kind: StepKind, expanded: bool, hovered: bool) -> Style {
+    /// `expanded` 只对思考块有意义（折叠浅粉 → 展开亮粉）；其余角色忽略它。
+    /// 鼠标悬停不再影响颜色。
+    pub(super) fn style(self, kind: StepKind, expanded: bool) -> Style {
         match self {
             Self::Failed => style::agent_fail(),
             Self::Interrupted => style::agent_warn(),
             // 取消不是错误态：方块与动词统一用角色色（工具行 = 工具绿）。
-            Self::Cancelled => kind.style_done(expanded, hovered),
-            Self::Running => kind.style_running(expanded, hovered),
+            Self::Cancelled => kind.style_done(expanded),
+            Self::Running => kind.style_running(expanded),
             Self::Alive => style::chat_step_mark_alive(),
-            Self::Done => kind.style_done(expanded, hovered),
+            Self::Done => kind.style_done(expanded),
         }
     }
 
@@ -148,10 +153,12 @@ impl StepMark {
 
 /// 步骤的**类别**：决定运行中 / 已完成时的标记与文案用什么颜色与字形。
 ///
-/// 三类的分工（用户要求「正文用默认前景、thinking 用别的颜色」）：
+/// 四类的分工：
 /// - `Body` 用终端默认前景 → 圆点与正文本就同色，视觉上不打断阅读；
 /// - `Thinking` 用粉色（折叠 182 / 展开 218）→ 一眼看出「这段是模型的内心活动」；
-/// - `Tool` 用翡翠绿 → 一眼看出「这段是真实动作」，且与 markdown 的 GitHub 色域不相交。
+/// - `Tool` 用翡翠绿 → 一眼看出「这段是真实动作」，且与 markdown 的 GitHub 色域不相交；
+/// - `Report` 沿用工具档颜色，但字形用上三角 → 一眼看出「子 agent 主动汇报」，
+///   与主 agent 自己发起的工具调用区分开。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StepKind {
     /// 正文块（assistant 的可见回答）。
@@ -160,38 +167,40 @@ pub(super) enum StepKind {
     Thinking,
     /// 工具调用行。
     Tool,
+    /// 子 agent 主动汇报块。
+    Report,
 }
 
 impl StepKind {
-    /// 运行中（含呼吸）的样式。`expanded` / `hovered` 只影响思考块。
-    fn style_running(self, expanded: bool, hovered: bool) -> Style {
+    /// 运行中（含呼吸）的样式。`expanded` 只影响思考块。
+    fn style_running(self, expanded: bool) -> Style {
         match self {
             Self::Body => style::chat_step_mark_running_body(),
-            Self::Thinking => style::chat_step_mark_running_thinking(expanded, hovered),
+            Self::Thinking => style::chat_step_mark_running_thinking(expanded),
             // 运行中的工具统一橙黄（与 `Alive` 同档）：用户要求"所有正在运行中的
             // tool 的方块和 title 统一为黄色，完成才显示绿色"。
-            Self::Tool => style::chat_step_mark_alive(),
+            Self::Tool | Self::Report => style::chat_step_mark_alive(),
         }
     }
 
     /// 已完成（静止）的样式。
-    fn style_done(self, expanded: bool, hovered: bool) -> Style {
+    fn style_done(self, expanded: bool) -> Style {
         match self {
             Self::Body => style::chat_step_mark_done_body(),
-            Self::Thinking => style::chat_step_mark_done_thinking(expanded, hovered),
-            Self::Tool => style::chat_step_mark_done(),
+            Self::Thinking => style::chat_step_mark_done_thinking(expanded),
+            Self::Tool | Self::Report => style::chat_step_mark_done(),
         }
     }
 
-    /// 该角色的头部文案样式（运行中 / 已完成）。`expanded` / `hovered` 只影响思考块。
-    pub(super) fn label(self, running: bool, expanded: bool, hovered: bool) -> Style {
+    /// 该角色的头部文案样式（运行中 / 已完成）。`expanded` 只影响思考块。
+    pub(super) fn label(self, running: bool, expanded: bool) -> Style {
         match (self, running) {
             (Self::Body, true) => style::chat_step_label_running_body(),
             (Self::Body, false) => style::chat_step_label_done_body(),
-            (Self::Thinking, true) => style::chat_step_label_running_thinking(expanded, hovered),
-            (Self::Thinking, false) => style::chat_step_label_done_thinking(expanded, hovered),
-            (Self::Tool, true) => style::chat_step_label_running(),
-            (Self::Tool, false) => style::chat_step_label_done(),
+            (Self::Thinking, true) => style::chat_step_label_running_thinking(expanded),
+            (Self::Thinking, false) => style::chat_step_label_done_thinking(expanded),
+            (Self::Tool | Self::Report, true) => style::chat_step_label_running(),
+            (Self::Tool | Self::Report, false) => style::chat_step_label_done(),
         }
     }
 }
@@ -300,6 +309,27 @@ pub(super) fn view_source(
     source: HistorySource<'_>,
     cache: &mut PaneCache,
 ) -> HistoryView {
+    view_source_inner(area, source, cache, true)
+}
+
+/// 不计算置顶行的数据源视图：Agents 详情只画 transcript，没有置顶 prompt。
+///
+/// 若继续走 [`view_source`]，会为一条根本不会绘制的置顶行预留 1 行，造成首行空白、
+/// 可见行数与滚动上限各差 1 行。
+pub(super) fn view_source_plain(
+    area: Rect,
+    source: HistorySource<'_>,
+    cache: &mut PaneCache,
+) -> HistoryView {
+    view_source_inner(area, source, cache, false)
+}
+
+fn view_source_inner(
+    area: Rect,
+    source: HistorySource<'_>,
+    cache: &mut PaneCache,
+    allow_sticky: bool,
+) -> HistoryView {
     // 生产路径只要行数与消息区间：直接读快照，不构造每张卡片的 `CardHit`。
     let snapshot = cache.snapshot_source(content_rect(area).width, source);
     let total = snapshot.total_rows;
@@ -321,6 +351,9 @@ pub(super) fn view_source(
         sticky: None,
         suppressed: None,
     };
+    if !allow_sticky {
+        return view;
+    }
     if total == 0 || full_height < sticky::MIN_HEIGHT || area.width < sticky::MIN_WIDTH {
         return view;
     }

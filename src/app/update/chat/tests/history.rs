@@ -204,6 +204,65 @@ fn toggle_lx_card_flips_the_pressed_block() {
 }
 
 #[test]
+fn report_more_click_adds_a_batch_and_whole_click_collapses() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.view = crate::app::state::PaneView::Lx;
+    let mut message = ChatMessageView {
+        sequence: 0,
+        id: "m-report".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
+        steps: Vec::new(),
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+        reports: Vec::new(),
+    };
+    message.reports.push(crate::app::state::SubagentReportView {
+        agent_id: "sub-1".into(),
+        title: "report".into(),
+        role: crate::chat::agent::AgentRole::Explorer,
+        status: "completed".into(),
+        files_changed: 0,
+        duration_ms: Some(1_000),
+        body: (0..60)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        delivered_at_ms: 1,
+    });
+    target.lx.chat.messages = vec![message];
+    assert!(target.lx.chat.toggle_detail("m-report", "report:sub-1"));
+    let more = CardTarget::Report {
+        message_id: "m-report".into(),
+        agent_id: "sub-1".into(),
+        more: true,
+    };
+    assert!(toggle_lx_card(&mut state, pane, more));
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert!(chat.detail_is_expanded("m-report", "report:sub-1"));
+    assert_eq!(chat.report_expand_steps("m-report", "report:sub-1"), 1);
+
+    let whole = CardTarget::Report {
+        message_id: "m-report".into(),
+        agent_id: "sub-1".into(),
+        more: false,
+    };
+    assert!(toggle_lx_card(&mut state, pane, whole));
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert!(!chat.detail_is_expanded("m-report", "report:sub-1"));
+    assert_eq!(chat.report_expand_steps("m-report", "report:sub-1"), 0);
+}
+
+#[test]
 fn advance_lx_loading_only_when_streaming() {
     let mut state = AppState::demo();
     lx_with_messages(&mut state, 1);

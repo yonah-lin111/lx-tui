@@ -711,3 +711,56 @@ async fn control_tool_is_rejected_inside_a_subagent_turn() {
         RequestPurpose::Subagent(AgentRole::Explorer)
     );
 }
+
+/// explorer 幻觉出 write：执行层必须拒绝，不能因为 schema 没声明就默认安全。
+#[tokio::test]
+async fn tools_outside_the_role_surface_are_never_executed() {
+    use crate::chat::agent::{AgentRole, UNAVAILABLE_CODE};
+    use crate::chat::events::RequestPurpose;
+
+    let script = Script::new(
+        vec![
+            tool_calls(
+                &[(
+                    "call-write",
+                    "write",
+                    r#"{"path":"should-not-exist.txt","content":"x"}"#,
+                    0,
+                )],
+                None,
+            ),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::new();
+    let executor = RecordingExecutor::new();
+    let executed = executor.executed.clone();
+    let (_cancel_sender, cancel) = watch::channel(false);
+    let request = ChatRequest {
+        turns: Vec::new(),
+        items: vec![ModelItem::UserText("investigate".into())],
+        model: crate::db::chat::ModelSnapshot {
+            provider: "p".into(),
+            model: "m".into(),
+            variant: None,
+        },
+        variant_params: None,
+        purpose: RequestPurpose::Subagent(AgentRole::Explorer),
+        system_prompt: None,
+    };
+    let summary = run_agent_turn(
+        ModelContext::new(request, std::env::temp_dir()),
+        host,
+        executor,
+        script.stream_one(),
+        cancel,
+    )
+    .await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert!(executed.lock().expect("lock").is_empty(), "不得执行 write");
+    let items = script.items_of(1);
+    let text = format!("{items:?}");
+    assert!(text.contains(UNAVAILABLE_CODE), "{text}");
+}

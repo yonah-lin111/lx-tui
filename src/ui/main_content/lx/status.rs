@@ -1,17 +1,19 @@
-//! 聊天状态：模型名 · 思考等级 · 上下文占用，绘制在**窗格底边框**上。
+//! 聊天状态：运行指标 + 模型名 · 思考等级 · 上下文占用，绘制在**窗格底边框**上。
 //!
 //! 输入框保留自己的上下 `─` 分割线；状态数据**覆盖**在 main content 的底边框（`╰──╯`）上：
 //! 只改写文字落到的单元格，其余底边线保留为 `─`（边框始终可见）。
-//! 左侧 ` 模型名 · 上下文占用 `（模型名用入口标签同款粉→蓝渐变，上下文占用用次要信息色；
-//! 形如 `258.7k(26%)`——**不带 `context:` 前缀**，紧跟模型名之后即语义明确）。
+//! 左端先画运行指标（后台任务 / 子 agent，形如 `1 process · 2 subagents`），
+//! 再画 ` 模型名 · 思考等级 · 上下文占用 `（模型名用入口标签同款粉→蓝渐变，
+//! 上下文占用用次要信息色；形如 `258.7k(26%)`——**不带 `context:` 前缀**，
+//! 紧跟模型名之后即语义明确）。
 //! 思考等级（variant 原始 key，如 `high`）紧跟模型名之后，**加粗黄字**（对齐
 //! opencode 的 `theme.text.feedback.warning.base` + BOLD），分隔符仍用次要信息色；
 //! 模型无 variants 时整段不显示。
 //! 供应商名不再显示（对用户无信息量，位置让给上下文占用）。
 //! 用量取最近一次同模型请求的分子、百分比 = 用量 / 模型上限（四舍五入），夹到 100%；
 //! **未知用量、未知上限或零消耗整段隐藏**。
-//! 宽度不足时依次丢弃上下文占用、丢弃思考等级、再硬切模型名（不使用省略号），
-//! 始终保留模型名。
+//! 宽度不足时依次丢弃上下文占用、丢弃思考等级、再硬切模型名（不使用省略号）；
+//! 运行指标优先于模型名保留。
 //! 停止生成不再有按钮：流中按 `Esc`（单击待命提示、双击停止，对齐 opencode）。
 //! 两端角字符保留，各控件矩形由同一布局函数派生。
 
@@ -24,50 +26,53 @@ use crate::app::state::Lx;
 use crate::app::state::lx::chat::ChatStatus;
 use crate::ui::{style, text};
 
-/// 左侧模型名至少保留的列数（右侧块取舍基准）。
-const MIN_MODEL: u16 = 6;
 /// 各段之间的空档（列）。
 const GAP: u16 = 1;
 /// 底边框两端角内侧各留的空白列。
 const EDGE_PAD: u16 = 1;
 
-/// 底边框状态布局：绘制行（零高表示空间不足不绘制）、上下文占用、
-/// 左侧模型 · 上下文可用矩形，以及右端的后台任务计数指标块。
+/// 底边框状态布局：绘制行（零高表示空间不足不绘制）、左端运行指标、
+/// 模型 · 上下文可用矩形。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct StatusLayout {
     /// 状态绘制行（窗格底边框）；`height == 0` 表示不绘制。
     pub area: Rect,
+    /// 左端运行指标矩形（零宽表示没有运行中的后台任务/子 agent）。
+    pub activity: Rect,
     /// 思考等级文字矩形（零宽表示已隐藏）；紧跟模型名之后。
     pub variant: Rect,
     /// 上下文占用文字矩形（零宽表示已隐藏）；紧跟思考等级之后。
     pub context: Rect,
-    /// 左侧模型 · 上下文可用矩形。
+    /// 模型 · 思考等级 · 上下文可用矩形（运行指标之后）。
     pub label: Rect,
     /// 模型名实际绘制宽度（由布局的降级链得出，渲染必须用同一值，不得重算）。
     pub model_width: u16,
-    /// 右端后台任务计数指标矩形（零宽表示不显示）。
-    pub block: Rect,
 }
 
 /// 空间不足时的空布局。
 fn hidden(left: u16, y: u16) -> StatusLayout {
     StatusLayout {
         area: Rect::new(left, y, 0, 0),
+        activity: Rect::new(left, y, 0, 1),
         variant: Rect::new(left, y, 0, 1),
         context: Rect::new(left, y, 0, 1),
         label: Rect::new(left, y, 0, 1),
         model_width: 0,
-        block: Rect::new(left, y, 0, 1),
     }
 }
 
 /// 计算底边框状态布局；`inner` 为窗格内容区（边框行 = `inner.bottom()`，
 /// 可写区间为两端角内侧，角字符保留）。
 ///
-/// 左段是 `模型 · 上下文占用`；右段是后台任务计数指标（`1 process`），
-/// 为 0 时整段不渲染（对齐 opencode 的 `N shell`）。两段互不重叠：左侧可用宽度
-/// 先扣掉指标宽度，再决定上下文占用是否还放得下。
-pub(super) fn layout(inner: Rect, status: &ChatStatus, tasks: usize) -> StatusLayout {
+/// 左段先放 `模型 · 思考等级 · 上下文占用`，运行指标（后台任务 / 子 agent）
+/// 紧凑贴在其右侧；运行指标为 0 时整段不占位。模型名在剩余宽度内硬切，
+/// 可选字段按单一降级链取舍。
+pub(super) fn layout(
+    inner: Rect,
+    status: &ChatStatus,
+    tasks: usize,
+    subagents: usize,
+) -> StatusLayout {
     let y = inner.bottom();
     let left = inner.x.saturating_add(EDGE_PAD);
     // 可写列区间 `[left, end)`（右端避让角字符）。
@@ -75,20 +80,17 @@ pub(super) fn layout(inner: Rect, status: &ChatStatus, tasks: usize) -> StatusLa
     if inner.width < 8 || end <= left {
         return hidden(left, y);
     }
-    let task_w = task_text(tasks)
+    let space = end.saturating_sub(left);
+    // 运行指标贴在模型/上下文右侧，因此先从可用宽度里给它和分隔符留位。
+    let activity = activity_text(tasks, subagents, space);
+    let activity_w = activity
         .as_ref()
         .map_or(0, |value| u16::try_from(value.width()).unwrap_or(u16::MAX));
-    // 指标贴右端；留一格空档与左侧文字分开。
-    //
-    // 阈值必须按**真实可写宽度**比较：`inner.width` 还含左右各 `EDGE_PAD` 的内缩，
-    // 直接拿它比会宽出 3 列，于是「状态栏认为放得下」而实际模型名被压成 0 列。
-    let keep_tasks = task_w > 0
-        && end.saturating_sub(left) > task_w.saturating_add(GAP).saturating_add(MIN_MODEL);
-    let avail = end.saturating_sub(left).saturating_sub(if keep_tasks {
-        task_w.saturating_add(GAP)
+    let content_budget = if activity_w > 0 {
+        space.saturating_sub(activity_w).saturating_sub(sep_w())
     } else {
-        0
-    });
+        space
+    };
     // 左段自左向右依次是：模型名 · 思考等级 · 上下文占用。
     //
     // 取舍用**单一降级链**算：模型名先按「什么都不显示」裁剪，再依次尝试
@@ -97,12 +99,14 @@ pub(super) fn layout(inner: Rect, status: &ChatStatus, tasks: usize) -> StatusLa
     // 也不会出现字段被判放不下、模型名却仍被它占位压窄的错位。
     let ctx_w = field_width(context_text(status));
     let variant_w = field_width(variant_text(status));
-    let model_only = model_width(status, avail);
+    let model_only = model_width(status, content_budget);
     let mut chosen = (false, false, model_only);
-    if ctx_w > 0 && model_only.saturating_add(sep_w()).saturating_add(ctx_w) <= avail {
+    if ctx_w > 0 && model_only.saturating_add(sep_w()).saturating_add(ctx_w) <= content_budget {
         chosen = (false, true, model_only);
     }
-    if variant_w > 0 && model_only.saturating_add(sep_w()).saturating_add(variant_w) <= avail {
+    if variant_w > 0
+        && model_only.saturating_add(sep_w()).saturating_add(variant_w) <= content_budget
+    {
         chosen = (true, false, model_only);
     }
     if ctx_w > 0 && variant_w > 0 {
@@ -112,7 +116,7 @@ pub(super) fn layout(inner: Rect, status: &ChatStatus, tasks: usize) -> StatusLa
             .saturating_add(variant_w)
             .saturating_add(sep_w())
             .saturating_add(ctx_w);
-        if need <= avail {
+        if need <= content_budget {
             chosen = (true, true, model_only);
         }
     }
@@ -132,8 +136,31 @@ pub(super) fn layout(inner: Rect, status: &ChatStatus, tasks: usize) -> StatusLa
     } else {
         left
     };
+    let content_w = drawn_model
+        .saturating_add(if keep_variant {
+            sep_w().saturating_add(variant_w)
+        } else {
+            0
+        })
+        .saturating_add(if keep_ctx {
+            sep_w().saturating_add(ctx_w)
+        } else {
+            0
+        });
+    let activity_x =
+        left.saturating_add(content_w)
+            .saturating_add(if activity_w > 0 && content_w > 0 {
+                sep_w()
+            } else {
+                0
+            });
     StatusLayout {
         area: Rect::new(inner.x, y, inner.width, 1),
+        activity: if activity_w > 0 {
+            Rect::new(activity_x, y, activity_w, 1)
+        } else {
+            Rect::new(left, y, 0, 1)
+        },
         variant: if keep_variant {
             Rect::new(variant_x, y, variant_w, 1)
         } else {
@@ -144,13 +171,8 @@ pub(super) fn layout(inner: Rect, status: &ChatStatus, tasks: usize) -> StatusLa
         } else {
             Rect::new(left, y, 0, 1)
         },
-        label: Rect::new(left, y, avail, 1),
+        label: Rect::new(left, y, content_budget, 1),
         model_width: drawn_model,
-        block: if keep_tasks {
-            Rect::new(end.saturating_sub(task_w), y, task_w, 1)
-        } else {
-            Rect::new(end, y, 0, 1)
-        },
     }
 }
 
@@ -191,25 +213,49 @@ fn variant_text(status: &ChatStatus) -> Option<String> {
 /// 在窗格底边框行上覆盖绘制状态（两端角与未被覆盖的底边线保留为 `─`）。
 pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
     let status = &lx.chat.status;
-    let lay = layout(inner, status, lx.background_tasks);
+    let lay = layout(
+        inner,
+        status,
+        lx.background_tasks,
+        lx.agents.running_count(),
+    );
     if lay.area.height == 0 {
         return;
     }
     let y = lay.area.y;
-    // 左端角内侧留 1 列空格（`╰ model…`），右端块内留白清为空格（`…72% ╯`）；
-    // 其余底边线保留 `─`（边框始终可见）。
-    for x in inner.x..lay.label.x {
+    // 左端角内侧留 1 列空格（`╰ `）；其余底边线保留 `─`（边框始终可见）。
+    for x in inner.x..inner.x.saturating_add(EDGE_PAD) {
         if let Some(cell) = buf.cell_mut((x, y)) {
             cell.reset();
             cell.set_char(' ');
             cell.set_style(Style::default());
         }
     }
-    for x in lay.block.x..lay.block.right() {
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.reset();
-            cell.set_char(' ');
-            cell.set_style(Style::default());
+    // 运行指标：`1 process · 2 subagents`，紧凑贴在模型/上下文右侧。
+    if lay.activity.width > 0 {
+        if let Some(activity) = activity_text(
+            lx.background_tasks,
+            lx.agents.running_count(),
+            lay.activity.width,
+        ) {
+            put(
+                buf,
+                lay.activity.x,
+                y,
+                &activity,
+                style::chat_provider(),
+                lay.activity.right(),
+            );
+        }
+        if lay.activity.x > lay.label.x {
+            put(
+                buf,
+                lay.activity.x.saturating_sub(sep_w()),
+                y,
+                text::LX_CHAT_MODEL_SEP,
+                style::chat_provider(),
+                lay.activity.x,
+            );
         }
     }
     // 供应商已移除；上下文占用紧跟模型名（`模型名 · 258.7k(26%)`）。
@@ -223,7 +269,10 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
     // 模型名宽度直接取布局的结论（`model_width`），不在这里重算——
     // 重算必然与降级链的判断分叉，导致「布局判放不下、渲染却画出来」的错位。
     // 有省略提示时再让出它的位置，避免提示压住模型名。
-    let notice_reserve = if notice_w > 0 && notice_w.saturating_add(GAP) < lay.label.width {
+    let notice_reserve = if lay.activity.width == 0
+        && notice_w > 0
+        && notice_w.saturating_add(GAP) < lay.label.width
+    {
         notice_w.saturating_add(GAP)
     } else {
         0
@@ -256,32 +305,42 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
         let value = format!("{}{context}", text::LX_CHAT_MODEL_SEP);
         put(buf, x, y, &value, style::chat_provider(), limit);
     }
-    if let Some(notice) = notice.filter(|_| notice_w < lay.label.width) {
-        put(
-            buf,
-            lay.label.right().saturating_sub(notice_w),
-            y,
-            &notice,
-            style::muted(),
-            lay.label.right(),
-        );
-    }
-    // 右端：后台任务计数（`1 process`）。为 0 时整段不画，留给底边线。
-    if let Some(tasks) = task_text(lx.background_tasks) {
-        put(
-            buf,
-            lay.block.x,
-            y,
-            &tasks,
-            style::chat_provider(),
-            lay.block.right(),
-        );
+    let end = inner.right().saturating_sub(EDGE_PAD);
+    let notice_x = end.saturating_sub(notice_w);
+    let notice_left = if lay.activity.width > 0 {
+        lay.activity.right().saturating_add(GAP)
+    } else {
+        lay.label.x
+    };
+    if let Some(notice) = notice.filter(|_| notice_w > 0 && notice_x >= notice_left) {
+        put(buf, notice_x, y, &notice, style::muted(), end);
     }
 }
 
-/// 后台任务计数指标文字：`1 process` / `3 processes`；为 0 时 None（整段隐藏）。
-fn task_text(count: usize) -> Option<String> {
-    (count > 0).then(|| text::lx_task_count_label(count))
+/// 运行指标文字：`1 process · 2 subagents`；都为零时 None（整段隐藏）。
+///
+/// 宽度不足时按后台任务、子 agent 的顺序尽量保留能放下的段；
+/// 单段都放不下才整段隐藏，绝不画出半截宽字符。
+fn activity_text(tasks: usize, subagents: usize, available: u16) -> Option<String> {
+    let candidates = [
+        (tasks > 0).then(|| text::lx_task_count_label(tasks)),
+        (subagents > 0).then(|| text::lx_subagent_count_label(subagents)),
+    ];
+    let mut out = String::new();
+    let mut width = 0u16;
+    for label in candidates.into_iter().flatten() {
+        let extra = if out.is_empty() {
+            label
+        } else {
+            format!("{}{label}", text::LX_CHAT_MODEL_SEP)
+        };
+        let extra_w = u16::try_from(extra.width()).unwrap_or(u16::MAX);
+        if width.saturating_add(extra_w) <= available {
+            out.push_str(&extra);
+            width = width.saturating_add(extra_w);
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// 上下文占用文字（`当前用量(百分比)`，用量用一位小数的 token 短格式）；

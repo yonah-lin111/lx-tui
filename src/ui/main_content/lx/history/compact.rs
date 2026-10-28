@@ -46,7 +46,12 @@ pub(super) fn description(notice: &CompactNoticeView) -> String {
 
 /// 展开后的覆盖范围行。
 fn range_line(notice: &CompactNoticeView) -> String {
-    format!("{} {}", text::LX_COMPACT_RANGE_LABEL, notice.range_label())
+    let range = if notice.auto {
+        text::LX_COMPACT_AUTO_RANGE.to_string()
+    } else {
+        notice.range_label()
+    };
+    format!("{} {range}", text::LX_COMPACT_RANGE_LABEL)
 }
 
 /// 绘制提示并推进内容行号；`count` 为合并的连续提示数。

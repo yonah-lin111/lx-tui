@@ -1,162 +1,255 @@
-//! 汇报块：子 agent 结束后在主消息流里显示的**文字块**（圆点 `●`，不是工具卡片）。
-//!
-//! 数据来自 `ChatMessageView.reports`；同一条内部 user 消息里的所有汇报各成一块，
-//! 块间空行由 `snapshot` 累加。折叠恒 2 行：
+//! 汇报块：子 agent 结束后在主消息流里显示的**工具卡片**。
 //!
 //! ```text
-//! ● explorer · completed · 2 files changed · 14.2s
-//!   └─ compact 的触发点在 src/chat/context/mod.rs:167 …
+//! ▲ Subagent report · completed
+//!   └─ explorer · compact 的触发点
+//!      report body preview line 1
+//!      report body preview line 2
+//!      … 8 more lines
 //! ```
 //!
-//! 展开用 markdown 渲染正文（与 assistant 正文同一套排版）。展开状态复用
-//! `LxChat::detail_expanded`，槽位 `report:<agent_id>`。
+//! 数据来自 `ChatMessageView.reports`；同一条内部 user 消息里的所有汇报各成一块。
+//! 折叠预览固定 2 行灰色正文，展开用默认前景；点击整块切换展开状态，槽位
+//! `report:<agent_id>`。
 
 use ratatui::layout::Rect;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::SubagentReportView;
-use crate::ui::markdown_render::{self, MdLine};
+use crate::ui::markdown_render;
 use crate::ui::{style, text};
 
 use super::super::Grid;
-use super::{STEP_GUTTER, StepKind, StepMark, visible_row, wrap};
+use super::{StepKind, StepMark, visible_row};
+use crate::ui::main_content::lx::history::tool::{Segment, put_segments, segments_cols};
 
-/// 汇报块展开后的正文行上限（避免超长报告撑爆滚动几何）。
-const REPORT_MAX_ROWS: usize = 24;
+/// 汇报块**每次展开**追加的正文行数；展开上限按固定批次递增，
+/// `… N more lines` 点击一次只追加一批（避免一次把整段报告铺满历史）。
+const REPORT_EXPAND_ROWS: usize = 24;
 /// 折叠态正文预览行数。
-const REPORT_PREVIEW_ROWS: usize = 1;
+const REPORT_PREVIEW_ROWS: usize = 2;
+/// 树体正文缩进（与 `└─` 前缀等宽）。
+const BODY_INDENT: &str = "     ";
 
-/// 汇总行：`role · status · N files changed · duration`。
-fn summary_line(report: &SubagentReportView) -> String {
-    let mut parts = vec![report.role.as_str().to_string(), report.status.clone()];
-    if report.files_changed > 0 {
-        parts.push(format!(
-            "{} {}",
-            report.files_changed,
-            text::agent::REPORT_FILES_CHANGED
-        ));
+/// 汇报状态 → 标题方块。
+fn report_mark(status: &str) -> StepMark {
+    match status {
+        "failed" => StepMark::Failed,
+        "cancelled" => StepMark::Cancelled,
+        _ => StepMark::Done,
     }
-    if let Some(duration) = report.duration_ms {
-        parts.push(super::format_duration(duration));
-    }
-    parts.join(text::LX_CHAT_TOOL_STATUS_SEP)
 }
 
-/// 正文行（markdown 或纯文本回退）。
-fn body_lines(report: &SubagentReportView, width: u16) -> Vec<MdLine> {
-    markdown_render::render_wrapped(&report.body, width.saturating_sub(STEP_GUTTER))
+/// 标题动词颜色：失败红、取消黄，其余工具绿。
+fn verb_style(status: &str) -> ratatui::style::Style {
+    match status {
+        "failed" => style::agent_fail(),
+        "cancelled" => style::agent_warn(),
+        _ => style::chat_tool_verb(),
+    }
 }
 
-/// 内容正文的物理行数上限内的行。
-fn visible_body(report: &SubagentReportView, width: u16, expanded: bool) -> Vec<MdLine> {
-    let mut lines = body_lines(report, width);
+/// `agent名 · title`（不显示 task 提示词）。
+fn agent_line(report: &SubagentReportView) -> String {
+    let role = report.role.as_str();
+    if report.title.is_empty() {
+        role.to_string()
+    } else {
+        format!("{role}{}{}", text::agent::SPAWN_ROLE_SEP, report.title)
+    }
+}
+
+/// 正文的物理行（markdown 已按宽度折行）。
+fn body_lines(report: &SubagentReportView, width: u16) -> Vec<String> {
+    let body_width = width.saturating_sub(BODY_INDENT.len() as u16).max(1);
+    markdown_render::render_wrapped(&report.body, body_width)
+        .into_iter()
+        .map(|line| {
+            let mut text = " ".repeat(usize::from(line.indent));
+            for (value, _) in line.spans {
+                text.push_str(&value);
+            }
+            text
+        })
+        .collect()
+}
+
+/// 当前折叠态/展开态实际显示的正文行与剩余行数。
+struct BodyView {
+    lines: Vec<String>,
+    remaining: usize,
+}
+
+fn body_view(
+    report: &SubagentReportView,
+    width: u16,
+    expanded: bool,
+    more_steps: usize,
+) -> BodyView {
+    let all = body_lines(report, width);
     let cap = if expanded {
-        REPORT_MAX_ROWS
+        REPORT_EXPAND_ROWS.saturating_mul(more_steps.saturating_add(1))
     } else {
         REPORT_PREVIEW_ROWS
     };
-    lines.truncate(cap);
-    lines
+    let shown = all.len().min(cap);
+    BodyView {
+        remaining: all.len().saturating_sub(shown),
+        lines: all.into_iter().take(shown).collect(),
+    }
+}
+
+/// 汇报块一次排版的结果：行数、提示行偏移与是否还能展开。
+///
+/// 快照构建原先分别调用 `rows` / `hint_row` / `has_more`，同一份 markdown 会被
+/// 排版三次；这里一次算完，避免汇报较多的会话每次增量都重复全量折行。
+pub(super) struct Measure {
+    pub(super) rows: usize,
+    pub(super) hint_row: Option<usize>,
+    pub(super) has_more: bool,
 }
 
 /// 汇报块的行数（宽度 0 时为 0）。
-pub(super) fn rows(report: &SubagentReportView, width: u16, expanded: bool) -> usize {
+#[cfg(test)]
+pub(super) fn rows(
+    report: &SubagentReportView,
+    width: u16,
+    expanded: bool,
+    more_steps: usize,
+) -> usize {
+    measure(report, width, expanded, more_steps).rows
+}
+
+/// `… N more lines` 在块内的相对行号；没有剩余或折叠态返回 None。
+/// 供快照把这个提示行单独登记成「再展开一批」的点击面。
+#[cfg(test)]
+pub(super) fn hint_row(
+    report: &SubagentReportView,
+    width: u16,
+    expanded: bool,
+    more_steps: usize,
+) -> Option<usize> {
+    measure(report, width, expanded, more_steps).hint_row
+}
+
+pub(super) fn measure(
+    report: &SubagentReportView,
+    width: u16,
+    expanded: bool,
+    more_steps: usize,
+) -> Measure {
     if width == 0 {
-        return 0;
+        return Measure {
+            rows: 0,
+            hint_row: None,
+            has_more: false,
+        };
     }
-    // 汇总行（可能换行）+ 正文行。
-    let summary = wrap(&summary_line(report), width.saturating_sub(STEP_GUTTER));
-    let body = visible_body(report, width, expanded);
-    1 + summary.len().saturating_sub(1) + body.len().max(1)
+    let all = body_lines(report, width);
+    let cap = if expanded {
+        REPORT_EXPAND_ROWS.saturating_mul(more_steps.saturating_add(1))
+    } else {
+        REPORT_PREVIEW_ROWS
+    };
+    let shown = all.len().min(cap);
+    let remaining = all.len().saturating_sub(shown);
+    let hint_row = (expanded && remaining > 0).then_some(2 + shown);
+    Measure {
+        rows: 2 + shown + usize::from(remaining > 0),
+        hint_row,
+        has_more: all.len() > REPORT_PREVIEW_ROWS,
+    }
 }
 
 /// 绘制汇报块；推进行数必须与 [`rows`] 严格相等。
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw(
     grid: &mut Grid,
     rect: Rect,
     report: &SubagentReportView,
     scroll: usize,
     row: &mut usize,
-    loading_frame: usize,
-    animating: bool,
+    _loading_frame: usize,
+    _animating: bool,
     expanded: bool,
+    more_steps: usize,
 ) {
     if rect.width == 0 {
         return;
     }
-    let mark = match report.status.as_str() {
-        "failed" => StepMark::Failed,
-        "cancelled" => StepMark::Cancelled,
-        _ => StepMark::Done,
+    let mark = report_mark(&report.status);
+    let mut header = vec![
+        Segment::new(
+            mark.segment(StepKind::Report, 0, false),
+            mark.style(StepKind::Report, false),
+        ),
+        Segment::new(
+            format!("{} ", text::agent::VERB_TOOL_SUBAGENT_REPORT),
+            verb_style(&report.status),
+        ),
+    ];
+    let status = format!("{}{}", text::LX_CHAT_TOOL_STATUS_SEP, report.status);
+    let status_segment = Segment::new(status, style::agent_step_detail());
+    if segments_cols(&header) + status_segment.cols() <= usize::from(rect.width) {
+        header.push(status_segment);
+    }
+    if let Some(y) = visible_row(rect, scroll, *row) {
+        put_segments(grid, rect.x, y, rect.width, &header);
+    }
+    *row += 1;
+
+    // `└─ agent名 · title`：默认前景；只占一行，超宽按列裁剪。
+    let mut detail = vec![
+        Segment::new(
+            text::agent::TREE_LEAF.to_string(),
+            style::chat_notice_connector(),
+        ),
+        Segment::new(agent_line(report), style::text()),
+    ];
+    let line = agent_line(report);
+    let room = usize::from(rect.width).saturating_sub(text::agent::TREE_LEAF.width());
+    if line.width() > room {
+        detail[1] = Segment::new(
+            crate::ui::text::truncate_to_width(&line, room),
+            style::text(),
+        );
+    }
+    if let Some(y) = visible_row(rect, scroll, *row) {
+        put_segments(grid, rect.x, y, rect.width, &detail);
+    }
+    *row += 1;
+
+    let body = body_view(report, rect.width, expanded, more_steps);
+    let body_style = if expanded {
+        style::text()
+    } else {
+        style::agent_step_detail()
     };
-    let summary = wrap(
-        &summary_line(report),
-        rect.width.saturating_sub(STEP_GUTTER),
-    );
-    // 汇总行：首行带圆点，续行缩进。
-    for (index, line) in summary.iter().enumerate() {
+    let body_x = rect
+        .x
+        .saturating_add(u16::try_from(BODY_INDENT.len()).unwrap_or(5));
+    let body_width = rect
+        .width
+        .saturating_sub(u16::try_from(BODY_INDENT.len()).unwrap_or(5));
+    for line in &body.lines {
         if let Some(y) = visible_row(rect, scroll, *row) {
-            if index == 0 {
-                grid.put_char(
-                    rect.x,
-                    y,
-                    mark.glyph(StepKind::Body, loading_frame, animating),
-                    mark.style(StepKind::Body, false, false),
-                );
-            }
-            grid.put_clipped(
-                rect.x.saturating_add(STEP_GUTTER),
-                y,
-                line,
-                style::text(),
-                rect.width.saturating_sub(STEP_GUTTER),
-            );
+            grid.put_clipped(body_x, y, line, body_style, body_width);
         }
         *row += 1;
     }
-    // 正文：`└─` 前缀 + 预览/展开内容。
-    let body = visible_body(report, rect.width, expanded);
-    let prefix = format!("{} ", text::agent::MARKER_TREE_LEAF);
-    let prefix_cols = prefix
-        .chars()
-        .map(|ch| ch.width().unwrap_or(1))
-        .sum::<usize>();
-    for (index, line) in body.iter().enumerate() {
+    if body.remaining > 0 {
         if let Some(y) = visible_row(rect, scroll, *row) {
-            if index == 0 {
-                grid.put(
-                    rect.x,
-                    y,
-                    &format!("  {prefix}"),
-                    style::agent_step_detail(),
-                );
-            }
-            let mut cx = rect
-                .x
-                .saturating_add(STEP_GUTTER)
-                .saturating_add(u16::try_from(prefix_cols).unwrap_or(2))
-                .saturating_add(line.indent);
-            for (value, span_style) in &line.spans {
-                for ch in value.chars() {
-                    let cell = ch.width().unwrap_or(1).max(1) as u16;
-                    if cx.saturating_add(cell) > rect.right() {
-                        break;
-                    }
-                    grid.put_char(cx, y, ch, *span_style);
-                    cx = cx.saturating_add(cell);
-                }
-            }
+            let hint = text::agent::file_diff_more_lines(body.remaining);
+            grid.put_clipped(body_x, y, &hint, style::agent_step_detail(), body_width);
         }
-        *row += 1;
-    }
-    if body.is_empty() {
         *row += 1;
     }
 }
 
-/// 正文是否还能展开（展开前后行数不同）。
+/// 正文是否还能展开（超过 2 行预览）。
+#[cfg(test)]
 pub(super) fn has_more(report: &SubagentReportView, width: u16) -> bool {
-    rows(report, width, true) > rows(report, width, false)
+    measure(report, width, false, 0).has_more
 }
 
 #[cfg(test)]
@@ -166,6 +259,7 @@ mod tests {
     fn report(body: &str) -> SubagentReportView {
         SubagentReportView {
             agent_id: "sub-1".into(),
+            title: "test title".into(),
             role: crate::chat::agent::AgentRole::Explorer,
             status: "completed".into(),
             files_changed: 2,
@@ -177,26 +271,84 @@ mod tests {
 
     #[test]
     fn zero_width_has_no_rows() {
-        assert_eq!(rows(&report("body"), 0, false), 0);
+        assert_eq!(rows(&report("body"), 0, false, 0), 0);
     }
 
     #[test]
-    fn collapsed_is_two_lines_and_expand_adds_body() {
+    fn collapsed_preview_is_two_lines_and_shows_remainder() {
+        let report = report("line one\nline two\nline three\nline four");
+        assert_eq!(
+            rows(&report, 60, false, 0),
+            5,
+            "标题 + 链接 + 2 行 + 剩余行"
+        );
+        assert!(rows(&report, 60, true, 0) > 5);
+        assert!(has_more(&report, 60));
+    }
+
+    #[test]
+    fn expanded_report_expands_in_fixed_batches() {
+        let body = (0..60)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let report = report(&body);
+        assert_eq!(
+            hint_row(&report, 60, false, 0),
+            None,
+            "折叠态没有更多点击面"
+        );
+        assert_eq!(hint_row(&report, 60, true, 0), Some(26), "首批 24 行");
+        assert_eq!(rows(&report, 60, true, 0), 27);
+        assert_eq!(hint_row(&report, 60, true, 1), Some(50), "第二批再 24 行");
+        assert_eq!(rows(&report, 60, true, 1), 51);
+        assert_eq!(hint_row(&report, 60, true, 2), None, "全部展开后提示消失");
+        assert_eq!(rows(&report, 60, true, 2), 62);
+    }
+
+    #[test]
+    fn short_body_has_no_remainder_hint() {
+        let report = report("line one");
+        assert_eq!(rows(&report, 60, false, 0), 3);
+        assert!(!has_more(&report, 60));
+    }
+
+    #[test]
+    fn empty_body_is_title_and_link_only() {
+        assert_eq!(rows(&report(""), 60, false, 0), 2);
+    }
+
+    #[test]
+    fn summary_uses_the_subagent_title() {
+        let line = agent_line(&report("body"));
+        assert!(
+            line.contains("test title"),
+            "汇报头必须带自己的标题：{line}"
+        );
+        assert!(!line.contains("任务提示词"), "{line}");
+    }
+
+    #[test]
+    fn renders_as_a_report_card_with_triangle_title() {
         let report = report("line one\nline two\nline three");
-        assert_eq!(rows(&report, 80, false), 2);
-        assert!(rows(&report, 80, true) > 2);
-        assert!(has_more(&report, 80));
-    }
-
-    #[test]
-    fn empty_body_still_renders_two_rows() {
-        let report = report("");
-        assert_eq!(rows(&report, 80, false), 2);
-    }
-
-    #[test]
-    fn narrow_width_wraps_the_summary() {
-        let report = report("body");
-        assert!(rows(&report, 8, false) > 2, "汇总行在窄宽度折行");
+        let area = Rect::new(0, 0, 60, 20);
+        let mut grid = Grid::new(area);
+        let mut row = 0;
+        draw(&mut grid, area, &report, 0, &mut row, 0, false, false, 0);
+        let text: String = (0..60).map(|x| grid.cell(x, 0).ch).collect();
+        assert!(
+            text.contains(text::agent::VERB_TOOL_SUBAGENT_REPORT),
+            "{text}"
+        );
+        assert!(
+            text.contains(text::agent::STEP_MARK_TRIANGLE_FILLED),
+            "{text}"
+        );
+        assert!(
+            !text.contains(text::agent::STEP_MARK_FILLED),
+            "汇报块不再使用工具方块：{text}"
+        );
+        let detail: String = (0..60).map(|x| grid.cell(x, 1).ch).collect();
+        assert!(detail.contains("explorer · test title"), "{detail}");
     }
 }

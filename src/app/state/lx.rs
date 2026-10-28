@@ -27,8 +27,8 @@ pub use chat::{
     ChatPartView, CommandView, DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView,
     FileDiffView, FrozenModel, InputHintLevel, InteractionAction, LxChat, ModelsSnapshot,
     PendingShell, PlanSnapshotView, PlanStepView, ProcessInteractionView, ProcessStateView,
-    QueuedSubmission, RequestKey, RequestState, SubagentDetailView, ToolCallView, ToolDetailView,
-    ToolStatus, ToolSummary, UserShellView,
+    QueuedSubmission, RequestKey, RequestState, SearchDetailView, SearchMatchView,
+    SubagentDetailView, ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
 };
 pub use compact::{CompactNoticeView, LxCompact};
 pub use mention::{LxMention, LxMentionView};

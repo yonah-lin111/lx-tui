@@ -17,7 +17,8 @@
 //!   -> 按 ordinal 逐个：host.begin_tool(ack=DB pending + 可见 pending + running)
 //!      -> executor.execute（后台阻塞 IO）-> host.finish_tool(ack=结果落库 + 状态终态)
 //!   -> 结果加入本轮上下文 -> 下一次采样
-//! 无工具的 Final -> Complete；其他 -> Failed；步数/调用数到上限 -> Failed(稳定错误码)
+//! 无工具的 Final -> Complete；其他 -> Failed。步数/调用数不设上限（对齐 codex）；
+//! 子 agent 在上下文达到阈值时自动压缩，避免无限执行把上下文撑爆。
 //! ```
 
 use std::future::Future;
@@ -26,6 +27,7 @@ use std::path::{Path, PathBuf};
 use tokio::sync::{oneshot, watch};
 
 use crate::chat::client::StreamOutcome;
+use crate::chat::compact::AutoCompactNotice;
 use crate::chat::events::{
     ChatDelta, ChatRequest, ModelItem, ModelStepStop, PartKind, StopReason,
     TOOL_ARGUMENTS_INVALID_CODE,
@@ -35,24 +37,21 @@ use crate::chat::tools::{self, ToolContext, ToolErrorCode, ToolExecutionResult, 
 use crate::chat::transport::tools::{TOOL_INPUT_TRUNCATED_CODE, TOOL_PROTOCOL_ERROR_CODE};
 use crate::db::chat::{ToolCallTicket, Usage};
 
+mod auto_compact;
 mod executor;
+
+use auto_compact::maybe_auto_compact;
 
 #[cfg(test)]
 mod tests;
 
 pub use executor::{AgentTools, TurnExecution, plan_snapshot_of};
 
-/// 单轮最多采样次数（资源保护，不是路径限制）。
-pub const MAX_MODEL_STEPS: usize = 24;
+/// 自动压缩触发线：上下文达到上限的 90% 时压缩。
+pub const AUTO_COMPACT_PERCENT: u64 = 90;
 
-/// 单轮最多工具调用数（跨多次采样累计）。
-pub const MAX_TOOL_CALLS: usize = 64;
-
-/// 模型步数用尽时的稳定错误码。
-pub const STEP_LIMIT_CODE: &str = "agent step limit reached";
-
-/// 工具调用数用尽时的稳定错误码。
-pub const TOOL_CALL_LIMIT_CODE: &str = "agent tool call limit reached";
+/// 模型未配置 `limit.context` 时的保守回退上限（token）。
+pub const FALLBACK_CONTEXT_LIMIT_TOKENS: u64 = 200_000;
 
 /// 响应要求工具、但结束原因或内容不自洽（协议层问题）。
 pub const UNEXPECTED_STOP_CODE: &str = "unexpected model stop";
@@ -241,6 +240,11 @@ pub trait AgentHost: Send {
             receiver.await.unwrap_or_default()
         }
     }
+
+    /// 子 agent 完成一次运行时自动压缩：事件层据此更新面板里的 compact 条目。
+    ///
+    /// 默认空实现（测试 host 不需要 UI）；生产 host 发一条纯数据事件即可。
+    fn notify_auto_compact(&mut self, _notice: &AutoCompactNotice) {}
 }
 
 /// 工具执行入口：生产实现走 `spawn_blocking`；测试可注入可控执行器。
@@ -373,6 +377,10 @@ pub struct ModelContext {
     /// 它不是工具结果，也不伪装成新的调用：只在第一次采样时并入用户消息末尾，
     /// 避免历史裁剪后模型忘记 `session_id` 或把已完成的计划当成当前计划。
     runtime_summary: Option<String>,
+    /// 模型上下文上限（token）；None 时用 [`FALLBACK_CONTEXT_LIMIT_TOKENS`]。
+    context_limit: Option<u64>,
+    /// 运行时自动压缩生成的摘要；非空时注入系统提示，替代被丢掉的旧 items。
+    compact_summary: Option<String>,
 }
 
 impl ModelContext {
@@ -384,12 +392,20 @@ impl ModelContext {
             items,
             cwd: cwd.into(),
             runtime_summary: None,
+            context_limit: None,
+            compact_summary: None,
         }
     }
 
     /// 附加本地运行上下文摘要（存活进程与当前计划的有界快照）。
     pub fn with_runtime_summary(mut self, summary: Option<String>) -> Self {
         self.runtime_summary = summary;
+        self
+    }
+
+    /// 设置模型上下文上限；未设置时使用回退值。
+    pub fn with_context_limit(mut self, limit: Option<u64>) -> Self {
+        self.context_limit = limit.filter(|value| *value > 0);
         self
     }
 
@@ -407,6 +423,14 @@ impl ModelContext {
     ///
     /// 运行上下文摘要只在**第一次**采样时并入（后续采样已包含在 items 里）。
     fn next_request(&self) -> ChatRequest {
+        // 自动压缩的摘要放在系统段：与手动 compact 的注入位置一致，不伪造
+        // user/assistant 消息；原始任务仍作为 items 的第一条保留。
+        let system_prompt = self.request.system_prompt.as_ref().map(|base| {
+            self.compact_summary.as_ref().map_or_else(
+                || base.clone(),
+                |summary| format!("{base}\n\n{}", compact_summary_prompt(summary)),
+            )
+        });
         ChatRequest {
             turns: self.request.turns.clone(),
             items: self.items.clone(),
@@ -418,7 +442,7 @@ impl ModelContext {
             // 系统提示在 turn 创建时冻结（稳定提示 + 环境快照 + compact 摘要）。
             // 每次采样都必须原样复用：写成 None 会让 transport 现场重采集，
             // 丢摘要且同一轮看到不同环境。
-            system_prompt: self.request.system_prompt.clone(),
+            system_prompt,
         }
     }
 
@@ -500,6 +524,15 @@ impl ModelContext {
     }
 }
 
+/// 自动压缩摘要的系统段包裹（与手动 compact 的 `<compact_summary>` 同形）。
+fn compact_summary_prompt(summary: &str) -> String {
+    format!(
+        "<compact_summary>\nThis is a summary of earlier work in this subagent run that was \
+         compacted automatically. Treat it as established context, not as a new request.\n\n\
+         {summary}\n</compact_summary>"
+    )
+}
+
 /// 执行一轮 agent 任务：多步采样 + 串行工具调度。
 ///
 /// `stream_one` 只执行**一次**模型流并返回其全部增量与结束原因（生产实现为
@@ -521,14 +554,23 @@ where
     let mut context = context;
     context.absorb_runtime_summary();
     let mut usage = Usage::default();
-    let mut total_calls = 0_usize;
-    for step in 0..MAX_MODEL_STEPS {
+    // 不设步数/调用数上限：子 agent 靠自动压缩控制上下文，主会话靠用户停止与
+    // `/compact`。这里只保留取消与协议错误两类终止条件。
+    loop {
         if *cancel.borrow() {
             return TurnSummary::interrupted(usage);
         }
         // 每次采样前吸收已落库的本地命令结果；不额外触发模型请求。
         for text in host.user_shell_updates().await {
             context.push_user_context(text);
+        }
+        // 工具批次已全部结算：此时压缩不会切断 call/result 对。
+        if let Err(error) = maybe_auto_compact(&mut context, &mut host, &stream_one, &cancel).await
+        {
+            return match error {
+                HostError::Cancelled => TurnSummary::interrupted(usage),
+                HostError::Failed { code } => TurnSummary::failed(code, usage),
+            };
         }
         let outcome = stream_one(context.next_request(), cancel.clone()).await;
         add_usage(&mut usage, &outcome.deltas);
@@ -557,14 +599,6 @@ where
         if stop != Some(ModelStepStop::ToolCalls) {
             return TurnSummary::failed(UNEXPECTED_STOP_CODE, usage);
         }
-        // 已经没有下一次采样机会 / 工具调用配额不足：整批都不执行（不做半批）。
-        if step + 1 >= MAX_MODEL_STEPS {
-            return TurnSummary::failed(STEP_LIMIT_CODE, usage);
-        }
-        if total_calls.saturating_add(calls.len()) > MAX_TOOL_CALLS {
-            return TurnSummary::failed(TOOL_CALL_LIMIT_CODE, usage);
-        }
-        total_calls = total_calls.saturating_add(calls.len());
         // 同一响应内**串行**执行，顺序即供应商 ordinal；前一结果对后一调用可见。
         let mut remaining = calls.into_iter();
         while let Some(call) = remaining.next() {
@@ -588,10 +622,17 @@ where
             }
             // 门槛二：running 已推进（事件层在 ack 内完成），此后才允许文件 IO。
             //
-            // `ask` 不经过文件执行器：它把提问交给 UI 并**阻塞**等待作答，答案即工具结果。
-            // 参数非法时整次拒绝、不打扰用户，按普通工具失败回给模型（轮次继续）。
+            // 执行层不信任模型：即使供应商/模型幻觉出未声明工具，也不能越过本角色的
+            // 工具面执行文件、进程或递归控制工具。失败结果仍走 begin/finish 落库。
+            let allowed = context
+                .request
+                .tools_surface()
+                .is_some_and(|surface| surface.names().contains(&call.name.as_str()));
             let control = crate::chat::agent::parse_control(&call.name, &call.arguments_json);
-            let result = if let Some(parsed) = control {
+            let result = if !allowed {
+                ToolFailure::new(ToolErrorCode::Io, crate::chat::agent::UNAVAILABLE_CODE)
+                    .into_result(Vec::new())
+            } else if let Some(parsed) = control {
                 // 子 agent 内禁止递归：即使模型伪造控制工具调用，也按工具级失败回给模型。
                 if context.is_subagent() {
                     ToolFailure::new(ToolErrorCode::Io, crate::chat::agent::UNAVAILABLE_CODE)
@@ -661,7 +702,6 @@ where
             context.push_tool_result(&call.call_id, content, is_error);
         }
     }
-    TurnSummary::failed(STEP_LIMIT_CODE, usage)
 }
 
 /// 取消时把**尚未开始**的调用记为 `cancelled`（pending → cancelled），绝不执行文件 IO。

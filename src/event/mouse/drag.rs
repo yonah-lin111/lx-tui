@@ -78,6 +78,26 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if let Some((pane, grab)) = state.task_agents_scroll_drag {
+        // Agents 详情滚动条：与主历史滚动条同一套 thumb 几何。
+        let bar = rects
+            .iter()
+            .find(|(id, _)| *id == pane)
+            .and_then(|(_, rect)| {
+                let inner = layout::pane_inner_rect(*rect);
+                state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::task_agents_scrollbar(inner, &target.lx, cache.pane(pane))
+                })
+            });
+        let Some(bar) = bar else {
+            return;
+        };
+        let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+        if update::set_task_agents_scroll(state, pane, offset) {
+            *dirty = true;
+        }
+        return;
+    }
     if let Some(grab) = state.prompt_scroll_drag {
         let Some(bar) = ui::prompt_scrollbar(view, state) else {
             return;
@@ -351,6 +371,9 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     if state.task_scroll_drag.take().is_some() {
+        return;
+    }
+    if state.task_agents_scroll_drag.take().is_some() {
         return;
     }
     if state.agent_scroll_drag.take().is_some() {

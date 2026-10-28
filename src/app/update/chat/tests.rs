@@ -111,7 +111,12 @@ fn committed(session: &str) -> TurnCommitted {
 fn enter_starts_committing_and_second_enter_is_ignored() {
     let mut state = ready_state("你好");
     let pane = focus_pane(&state);
+    state.pane_mut_anywhere(pane).unwrap().lx.chat.main_stopped = true;
     assert!(try_send(&mut state, pane), "首次发送受理");
+    assert!(
+        !state.pane_anywhere(pane).unwrap().lx.chat.main_stopped,
+        "新轮开始清除主轮停止标记"
+    );
     // Committing 期间重复 Enter 不再入队。
     assert!(!try_send(&mut state, pane), "流中/提交中 Enter 忽略");
     // 恰好一条 BeginChatTurn 效应。
@@ -295,6 +300,14 @@ fn finish_moves_to_finishing_then_idle_with_usage() {
         state.pane_anywhere(pane).unwrap().lx.chat.request,
         RequestState::Idle
     ));
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::DrainSubagentReports { pane: effect_pane }
+                if *effect_pane == pane
+        )),
+        "空闲收尾必须请求报告 drain"
+    );
 }
 
 #[test]

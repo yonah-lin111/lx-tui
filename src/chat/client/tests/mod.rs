@@ -87,6 +87,41 @@ async fn spawn_mock(
     (format!("http://127.0.0.1:{port}"), handle)
 }
 
+/// 启动按脚本缓慢输出的 mock server：`(延迟, 原始响应块)` 依次写出。
+///
+/// 用于验证超时是**逐 chunk 空闲**而不是整请求总时长。
+async fn spawn_slow_stream(
+    steps: Vec<(Duration, String)>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let handle = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut buffer = [0_u8; 4096];
+        let _ = stream.read(&mut buffer).await.expect("read request");
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
+            )
+            .await
+            .expect("write headers");
+        for (delay, body) in steps {
+            tokio::time::sleep(delay).await;
+            let bytes = body.as_bytes();
+            stream
+                .write_all(format!("{:X}\r\n", bytes.len()).as_bytes())
+                .await
+                .expect("write chunk size");
+            stream.write_all(bytes).await.expect("write chunk");
+            stream.write_all(b"\r\n").await.expect("write chunk end");
+            stream.flush().await.expect("flush");
+        }
+        let _ = stream.write_all(b"0\r\n\r\n").await;
+        let _ = stream.shutdown().await;
+    });
+    (format!("http://127.0.0.1:{port}"), handle)
+}
+
 /// 测试请求（两轮完整上下文）。
 fn request() -> ChatRequest {
     ChatRequest {
@@ -123,6 +158,68 @@ fn request() -> ChatRequest {
 /// `changed()` 立即返回，被 select 当作取消。
 fn no_cancel() -> (watch::Sender<bool>, watch::Receiver<bool>) {
     watch::channel(false)
+}
+
+/// 空闲超时按 chunk 计算：总时长超过超时线，但每个 chunk 的间隔都低于它 → 完成。
+#[tokio::test]
+async fn idle_timeout_does_not_kill_a_continuously_streaming_response() {
+    let frame = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n".to_string();
+    let steps = vec![
+        (Duration::from_millis(60), frame.clone()),
+        (Duration::from_millis(60), frame.clone()),
+        (Duration::from_millis(60), frame.clone()),
+        (Duration::from_millis(60), frame),
+        (Duration::from_millis(60), "data: [DONE]\n\n".to_string()),
+    ];
+    let (base, server) = spawn_slow_stream(steps).await;
+    let (_cancel_sender, cancel) = no_cancel();
+    let outcome = run_stream(
+        "openai-compatible",
+        &format!("{base}/v1"),
+        Some("test-key"),
+        Duration::from_millis(100),
+        request(),
+        cancel,
+        |_| {},
+    )
+    .await;
+    server.await.expect("server");
+    assert_eq!(outcome.stop, StopReason::Complete);
+}
+
+/// 已经产出内容后停止发 chunk：超过空闲线即按 timeout 收尾（不再重试）。
+#[tokio::test]
+async fn idle_timeout_stops_a_stalled_stream_after_partial_output() {
+    let steps = vec![
+        (
+            Duration::from_millis(10),
+            "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n".to_string(),
+        ),
+        (Duration::from_secs(5), "data: [DONE]\n\n".to_string()),
+    ];
+    let (base, server) = spawn_slow_stream(steps).await;
+    let (_cancel_sender, cancel) = no_cancel();
+    let outcome = run_stream(
+        "openai-compatible",
+        &format!("{base}/v1"),
+        Some("test-key"),
+        Duration::from_millis(100),
+        request(),
+        cancel,
+        |_| {},
+    )
+    .await;
+    server.abort();
+    assert_eq!(
+        outcome.stop,
+        StopReason::Failed {
+            code: "timeout".into()
+        }
+    );
+    assert!(outcome.deltas.iter().any(|delta| matches!(
+        delta,
+        ChatDelta::Part(part) if part.kind == PartKind::Text && part.text == "x"
+    )));
 }
 
 #[tokio::test]

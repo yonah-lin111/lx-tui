@@ -315,7 +315,17 @@ pub(crate) fn handle_mouse_wheel(
                     .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
                 && rects.output.contains((mouse.column, mouse.row).into())
             {
-                if update::scroll_task_output(state, pane, direction.saturating_mul(WHEEL_LINES)) {
+                let agents_tab = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| target.lx.task.as_ref())
+                    .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
+                // Agents 详情按主聊天历史的步长（1 行/格）；进程输出沿用 3 行。
+                let changed = if agents_tab {
+                    update::scroll_agents_detail(state, pane, direction)
+                } else {
+                    update::scroll_task_output(state, pane, direction.saturating_mul(WHEEL_LINES))
+                };
+                if changed {
                     *dirty = true;
                 }
                 return;

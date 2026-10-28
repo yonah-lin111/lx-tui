@@ -27,6 +27,7 @@ pub(crate) fn draw_detail(
     rect: Rect,
     run: &SubagentRun,
     scroll: usize,
+    loading_frame: usize,
     cache: &mut crate::ui::PaneCache,
 ) -> usize {
     if rect.width == 0 || rect.height == 0 {
@@ -34,20 +35,36 @@ pub(crate) fn draw_detail(
     }
     let source = HistorySource::from_chat(&run.chat, &run.compact);
     if run.chat.messages.is_empty() {
-        grid.put_clipped(
-            rect.x,
-            rect.y,
-            if run.loaded {
-                text::LX_TASK_AGENTS_EMPTY
-            } else {
-                text::LX_TASK_AGENTS_LOADING
-            },
-            style::muted(),
-            rect.width,
-        );
+        if run.loaded {
+            grid.put_clipped(
+                rect.x,
+                rect.y,
+                text::LX_TASK_AGENTS_EMPTY,
+                style::muted(),
+                rect.width,
+            );
+        } else {
+            // 历史 run 的消息流还在读库：用与主历史相同的呼吸圆点表达 loading。
+            let mark = crate::ui::main_content::lx::history::StepMark::Running;
+            let mark_text = format!("{} ", mark.glyph(StepKind::Body, loading_frame, true));
+            grid.put_clipped(
+                rect.x,
+                rect.y,
+                &mark_text,
+                style::chat_step_mark_running_body(),
+                rect.width,
+            );
+            grid.put_clipped(
+                rect.x.saturating_add(2),
+                rect.y,
+                text::LX_TASK_AGENTS_LOADING,
+                style::muted(),
+                rect.width,
+            );
+        }
         return 1;
     }
-    let view = history::view_source(rect, source, cache);
+    let view = history::view_source_plain(rect, source, cache);
     let visible = usize::from(view.body.height);
     let max = view.total_rows.saturating_sub(visible);
     // 跟随底部时贴尾；用户上翻过（`follow == false`）就停在他看的位置。
@@ -122,8 +139,9 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
                 _ => crate::ui::main_content::lx::history::StepMark::Done,
             }
         };
-        let mark_text = format!("{} ", mark.glyph(StepKind::Tool, 0, run.is_running()));
-        let mark_style = mark.style(StepKind::Tool, false, false);
+        // 列表标记保持静态：运行状态由文字与状态色表达，闪烁只留给详情里的步骤。
+        let mark_text = format!("{} ", mark.glyph(StepKind::Tool, 0, false));
+        let mark_style = mark.style(StepKind::Tool, false);
         let mark_w = u16::try_from(mark_text.width()).unwrap_or(2);
         grid.put_clipped(row_x, y, &mark_text, mark_style, row_w);
         let mut x = row_x.saturating_add(mark_w);
@@ -160,15 +178,16 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         let age_right = x.saturating_add(age_w);
         grid.put_clipped(x, y, &age, style::agent_step_detail(), age_right);
         x = age_right.saturating_add(CELL_GAP);
-        let head = run.task_head();
-        if x < list.right() {
-            grid.put_clipped(x, y, head, row_style, list.right());
+        // 只显示短标题；绝不把 task 提示词塞进列表（旧记录没有标题则留空）。
+        let title = run.display_title();
+        if x < list.right() && !title.is_empty() {
+            grid.put_clipped(x, y, title, row_style, list.right());
         }
     }
 }
 
 /// 列表窗口起点（与进程列表同口径）。
-fn window_start(page: &TaskPage, agents: &AgentsState, visible: usize) -> usize {
+pub(super) fn window_start(page: &TaskPage, agents: &AgentsState, visible: usize) -> usize {
     let len = agents.runs.len();
     if visible == 0 || len <= visible {
         return 0;

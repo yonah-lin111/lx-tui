@@ -131,6 +131,8 @@ couple of calls, anything that needs the user's input, or work you cannot descri
 
 Write the task with three things: the goal, the boundary (which files or modules belong to
 this agent), and the deliverable. A subagent that has to guess will guess wrong.
+Always pass a short human-readable `title` (3–8 words) separate from the task. It is what
+the user sees in the subagent card and the Agents list; never paste the task prompt there.
 
 Rules:
 - At most 3 subagents may run at once per conversation; a fourth call is rejected.
@@ -138,6 +140,11 @@ Rules:
   is not alone in the codebase and must not revert or overwrite changes it did not make.
 - You do not have to wait. Start a subagent, keep working, and call `wait_agent` when you need
   the result — or let the report arrive on its own.
+- `wait_agent` without `targets` waits for every subagent in this conversation. Use
+  `wait_for: \"any\"` when you only need the first result; the default waits for all.
+- Prefer long waits (minutes) over short polling. `wait_for: \"all\"` keeps waiting for
+  running agents instead of ending the turn early. `wait_for: \"any\"` may still return a
+  timeout while other agents run; wait again instead of ending the turn.
 - A report is short by design: the conclusion plus what it touched. The full trace stays in its
   own session; do not ask for a replay.
 - `close_agent` stops a subagent and produces no report.

@@ -334,12 +334,21 @@ fn toggle_report_card(
     pane: PaneId,
     message_id: &str,
     agent_id: &str,
+    more: bool,
 ) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
     let slot = format!("report:{agent_id}");
-    target.lx.chat.toggle_detail(message_id, &slot)
+    if more {
+        target.lx.chat.expand_report_more(message_id, &slot);
+        return true;
+    }
+    let expanded = target.lx.chat.toggle_detail(message_id, &slot);
+    if !expanded {
+        target.lx.chat.clear_report_expand(message_id, &slot);
+    }
+    true
 }
 
 /// 点击卡片（未拖动）：切换该块的折叠状态。
@@ -368,6 +377,8 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
         CardTarget::Report {
             message_id,
             agent_id,
-        } => toggle_report_card(state, pane, &message_id, &agent_id),
+            more,
+        } => toggle_report_card(state, pane, &message_id, &agent_id, more),
+        CardTarget::OpenAgent { agent_id } => super::open_agent_page(state, pane, &agent_id),
     }
 }

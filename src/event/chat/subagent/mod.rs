@@ -1,7 +1,7 @@
 //! 子 agent 生命周期：spawn 落库与子 turn、增量分流、工具握手、wait/close、报告投递。
 //!
-//! 报告恰好一次：`agent_subagent.report_delivered` 是唯一判据，自动投递、`wait_agent`
-//! 与下一轮注入共享同一闸门。子 turn 的消息模型由事件层持有（`SubagentHandle.chat`），
+//! 报告恰好一次：`agent_subagent.report_delivered` 是唯一判据，后台自动轮与
+//! `wait_agent` 共享同一闸门。子 turn 的消息模型由事件层持有（`SubagentHandle.chat`），
 //! 窗格关闭后仍能继续落库；UI 的 `SubagentRun.chat` 只是同一批增量的镜像。
 
 use std::path::PathBuf;
@@ -12,13 +12,18 @@ use tokio::sync::{oneshot, watch};
 use super::*;
 
 mod tools;
+mod wait;
+
+pub(crate) use wait::handle_subagent_wait_ready;
+#[cfg(test)]
+pub(crate) use wait::settle_wait;
 
 use crate::app::state::lx::agent::{SubagentRun, seed_chat, seed_chat_model};
 use crate::app::state::{RequestKey, RequestState, SubagentReportView};
 use crate::chat::agent::{
-    AgentRole, AgentStatusView, FINISHED_CODE, LIMIT_REACHED_CODE, MAX_CONCURRENT_SUBAGENTS,
-    MAX_WAIT_TARGETS, NOT_FOUND_CODE, SubagentOp, SubagentOutcome, compose_subagent_prompt,
-    format_report_envelope,
+    AgentRole, FINISHED_CODE, LIMIT_REACHED_CODE, MAX_CONCURRENT_SUBAGENTS, NOT_FOUND_CODE,
+    SubagentOp, SubagentOutcome, WaitMode, compose_subagent_prompt, format_report_envelope,
+    reports_to_json,
 };
 use crate::chat::agent_loop::ModelContext;
 use crate::chat::events::{ChatRequest, ChatTurn, ModelItem, RequestPurpose, StopReason};
@@ -50,6 +55,8 @@ pub(crate) struct SubagentHandle {
     pub child_user_message_id: String,
     /// 角色。
     pub role: AgentRole,
+    /// 面向用户的短标题。
+    pub title: String,
     /// 任务原文。
     pub task: String,
     /// 取消通道；close / 会话删除 / 退出时发送。
@@ -76,8 +83,8 @@ pub(crate) fn handle_subagent_op(
     reply: oneshot::Sender<Result<SubagentOutcome, HostError>>,
 ) -> bool {
     match op {
-        SubagentOp::Spawn { role, task } => {
-            let changed = spawn(state, streams, persistence, &key, role, &task);
+        SubagentOp::Spawn { role, title, task } => {
+            let changed = spawn(state, streams, persistence, &key, role, &title, &task);
             match changed {
                 Ok(outcome) => {
                     let _ = reply.send(Ok(outcome));
@@ -96,9 +103,24 @@ pub(crate) fn handle_subagent_op(
         }
         SubagentOp::Wait {
             targets,
+            mode,
             timeout_ms,
         } => {
-            wait(streams, persistence, key, targets, timeout_ms, reply);
+            let all = targets.is_empty();
+            // `wait_for=all` 一次调用就是“等到目标全部结束”：超时只作为内部
+            // 重检周期，绝不把 timeout 交回模型提前结束本轮。`any` 仍按超时返回。
+            let auto_continue = mode == WaitMode::All;
+            wait::wait(
+                streams,
+                persistence,
+                key,
+                targets,
+                all,
+                mode,
+                timeout_ms,
+                auto_continue,
+                reply,
+            );
             false
         }
     }
@@ -111,6 +133,7 @@ fn spawn(
     persistence: &Persistence,
     key: &RequestKey,
     role: AgentRole,
+    title: &str,
     task: &str,
 ) -> Result<SubagentOutcome, String> {
     let Some(sender) = streams.event_sender.clone() else {
@@ -146,6 +169,7 @@ fn spawn(
             &workspace,
             &parent_session,
             role,
+            title,
             task,
             &model,
             spawn_message_id.as_deref(),
@@ -158,13 +182,15 @@ fn spawn(
         spawn_message_id,
         role,
         status: STATUS_RUNNING.to_string(),
-        task_title: task.lines().next().unwrap_or_default().to_string(),
+        title: title.to_string(),
         created_at_ms: committed.created_at_ms,
         completed_at_ms: None,
         report_json: None,
         report_delivered: false,
     };
     let mut run = SubagentRun::from_record(&record);
+    // 列表用短标题；子会话种子消息必须保存完整 task（历史重载时由 DB 提供）。
+    run.task = task.to_string();
     let child_key = RequestKey {
         pane: key.pane,
         session: committed.child_session_id.clone(),
@@ -209,6 +235,7 @@ fn spawn(
         child_assistant_id: committed.child_assistant_id.clone(),
         child_user_message_id: committed.child_user_message_id.clone(),
         role,
+        title: title.to_string(),
         task: task.to_string(),
         cancel: cancel_sender.clone(),
         done: done_sender.clone(),
@@ -246,7 +273,7 @@ fn spawn(
         purpose: RequestPurpose::Subagent(role),
         system_prompt: Some(system_prompt),
     };
-    let context = ModelContext::new(request, cwd);
+    let context = ModelContext::new(request, cwd).with_context_limit(frozen.context_limit);
     let reads = crate::chat::tools::read_registry(&committed.child_session_id);
     let recorder = super::file_snapshots::HostRecorderFactory::new(
         net_sender.clone(),
@@ -285,6 +312,9 @@ fn spawn(
             let transport = transport.clone();
             let base_url = base_url.clone();
             let api_key = api_key.clone();
+            // 自动压缩的摘要请求不能把摘要正文当成普通增量回投：否则摘要会
+            // 被画进子 agent 时间线并参与 checkpoint。普通采样照旧实时回投。
+            let emit = request.purpose != RequestPurpose::CompactSummary;
             async move {
                 crate::chat::client::run_stream(
                     &transport,
@@ -294,10 +324,12 @@ fn spawn(
                     request,
                     cancel,
                     move |deltas| {
-                        let _ = sender.send(AppEvent::ChatNet(ChatNetEvent::Delta {
-                            key: key.clone(),
-                            deltas: deltas.to_vec(),
-                        }));
+                        if emit {
+                            let _ = sender.send(AppEvent::ChatNet(ChatNetEvent::Delta {
+                                key: key.clone(),
+                                deltas: deltas.to_vec(),
+                            }));
+                        }
                     },
                 )
                 .await
@@ -322,6 +354,7 @@ fn spawn(
     Ok(SubagentOutcome::Spawned {
         agent_id: committed.agent_id,
         role,
+        title: title.to_string(),
     })
 }
 
@@ -356,149 +389,6 @@ fn close(
         agent_id: target.to_string(),
         previous_status: previous,
     })
-}
-
-/// wait：等全部目标结束或超时；结果由事件层读库结算。
-fn wait(
-    streams: &mut ChatStreams,
-    persistence: &Persistence,
-    key: RequestKey,
-    targets: Vec<String>,
-    timeout_ms: u64,
-    reply: oneshot::Sender<Result<SubagentOutcome, HostError>>,
-) {
-    let Some(sender) = streams.event_sender.clone() else {
-        let _ = reply.send(Err(HostError::Failed {
-            code: "subagent event channel unavailable".into(),
-        }));
-        return;
-    };
-    let mut unique: Vec<String> = Vec::new();
-    for target in targets {
-        if !unique.contains(&target) {
-            unique.push(target);
-        }
-    }
-    if unique.is_empty() || unique.len() > MAX_WAIT_TARGETS {
-        let _ = reply.send(Err(HostError::Failed {
-            code: "invalid wait targets".into(),
-        }));
-        return;
-    }
-    // 校验：目标必须属于本父会话（在册句柄或 DB 记录）。
-    let parent = key.session.clone();
-    let records = persistence
-        .database()
-        .and_then(|database| {
-            streams
-                .db_workspaces
-                .get(&key)
-                .and_then(|workspace| database.list_subagents(workspace, &parent).ok())
-        })
-        .unwrap_or_default();
-    let known = |agent_id: &str| {
-        streams
-            .subagents
-            .values()
-            .any(|handle| handle.agent_id == agent_id && handle.parent.session == parent)
-            || records.iter().any(|record| record.agent_id == agent_id)
-    };
-    if unique.iter().any(|target| !known(target)) {
-        let _ = reply.send(Err(HostError::Failed {
-            code: NOT_FOUND_CODE.to_string(),
-        }));
-        return;
-    }
-    // 收集运行中句柄的完成接收端；全部已结束则立刻结算。
-    let mut receivers = Vec::new();
-    for agent_id in &unique {
-        if let Some(handle) = streams
-            .subagents
-            .values()
-            .find(|handle| handle.agent_id == *agent_id && handle.status == STATUS_RUNNING)
-        {
-            receivers.push(handle.done.subscribe());
-        }
-    }
-    if receivers.is_empty() {
-        let outcome = settle_wait(streams, persistence, &key, &unique, false);
-        let _ = reply.send(outcome);
-        return;
-    }
-    let timeout = Duration::from_millis(timeout_ms.min(crate::chat::agent::MAX_WAIT_TIMEOUT_MS));
-    tokio::spawn(async move {
-        let timed_out = tokio::time::timeout(timeout, async {
-            for mut receiver in receivers {
-                if *receiver.borrow() {
-                    continue;
-                }
-                while receiver.changed().await.is_ok() {
-                    if *receiver.borrow() {
-                        break;
-                    }
-                }
-            }
-        })
-        .await
-        .is_err();
-        let _ = sender.send(AppEvent::SubagentWaitReady {
-            key,
-            targets: unique,
-            timed_out,
-            reply,
-        });
-    });
-}
-
-/// 等待到期后的结算：读 DB 状态与未投递报告，领取正文（恰好一次）。
-pub(crate) fn settle_wait(
-    streams: &ChatStreams,
-    persistence: &Persistence,
-    key: &RequestKey,
-    targets: &[String],
-    timed_out: bool,
-) -> Result<SubagentOutcome, HostError> {
-    let Some(database) = persistence.database() else {
-        return Err(HostError::Failed {
-            code: "subagent persistence unavailable".into(),
-        });
-    };
-    let Some(workspace) = streams.db_workspaces.get(key) else {
-        return Err(HostError::Failed {
-            code: NOT_FOUND_CODE.to_string(),
-        });
-    };
-    let records = database
-        .list_subagents(workspace, &key.session)
-        .map_err(|error| HostError::Failed {
-            code: error.code().to_string(),
-        })?;
-    let mut agents = Vec::new();
-    for target in targets {
-        let Some(record) = records.iter().find(|record| &record.agent_id == target) else {
-            continue;
-        };
-        let mut report = None;
-        if matches!(record.status.as_str(), STATUS_COMPLETED | STATUS_FAILED)
-            && !record.report_delivered
-            && let Some(view) = record
-                .report_json
-                .as_deref()
-                .and_then(SubagentReportView::from_json)
-            && database
-                .mark_report_delivered(workspace, target)
-                .unwrap_or(false)
-        {
-            report = Some(view.body);
-        }
-        agents.push(AgentStatusView {
-            agent_id: record.agent_id.clone(),
-            role: record.role,
-            status: record.status.clone(),
-            report,
-        });
-    }
-    Ok(SubagentOutcome::Waited { timed_out, agents })
 }
 
 /// 子 turn 的网络事件分流（`Delta` / `Finished`）。
@@ -543,21 +433,7 @@ pub(crate) fn handle_subagent_net_event(
     }
 }
 
-/// 等待到期事件：在事件循环内读库结算并回执。
-pub fn handle_subagent_wait_ready(
-    streams: &ChatStreams,
-    persistence: &Persistence,
-    key: RequestKey,
-    targets: Vec<String>,
-    timed_out: bool,
-    reply: oneshot::Sender<Result<SubagentOutcome, HostError>>,
-) -> bool {
-    let outcome = settle_wait(streams, persistence, &key, &targets, timed_out);
-    let _ = reply.send(outcome);
-    false
-}
-
-/// 子 turn 终态：落库、报告行、UI 更新、自动投递与句柄清理。
+/// 子 turn 终态：落库、UI 更新、空闲时自动报告批次与句柄清理。
 pub(crate) fn finish_subagent(
     state: &mut AppState,
     streams: &mut ChatStreams,
@@ -600,6 +476,7 @@ pub(crate) fn finish_subagent(
             )
             .unwrap_or_default();
         let payload = ReportPayload {
+            title: handle.title.clone(),
             body: body.clone(),
             files_changed,
             duration_ms,
@@ -617,6 +494,7 @@ pub(crate) fn finish_subagent(
         }
         let view = SubagentReportView {
             agent_id: handle.agent_id.clone(),
+            title: handle.title.clone(),
             role: handle.role,
             status: handle.status.to_string(),
             files_changed,
@@ -624,66 +502,6 @@ pub(crate) fn finish_subagent(
             body,
             delivered_at_ms: crate::db::now_ms(),
         };
-        let envelope = format_report_envelope(&view);
-        match database.insert_report_message(
-            &handle.workspace,
-            &handle.parent.session,
-            &envelope,
-            &view.to_json(),
-        ) {
-            Ok(message_id) => {
-                let _ = update::on_subagent_report(
-                    state,
-                    handle.parent.pane,
-                    &message_id,
-                    view.clone(),
-                    envelope.clone(),
-                );
-                // 路径 A：父窗格存在且空闲 → 同一条报告行上起一轮。
-                if parent_idle(state, handle.parent.pane) {
-                    let model = ModelSnapshot {
-                        provider: streams
-                            .frozen
-                            .get(&key.session)
-                            .map(|frozen| frozen.provider.clone())
-                            .unwrap_or_else(|| {
-                                state
-                                    .models
-                                    .default_selection()
-                                    .map(|selection| selection.provider.clone())
-                                    .unwrap_or_default()
-                            }),
-                        model: streams
-                            .frozen
-                            .get(&key.session)
-                            .map(|frozen| frozen.model.clone())
-                            .unwrap_or_default(),
-                        variant: streams
-                            .frozen
-                            .get(&key.session)
-                            .and_then(|frozen| frozen.variant.clone()),
-                    };
-                    if let Ok(committed) = database.begin_report_turn(
-                        &handle.workspace,
-                        &handle.parent.session,
-                        &message_id,
-                        &model,
-                    ) {
-                        let _ = database.mark_report_delivered(&handle.workspace, &handle.agent_id);
-                        let _ = update::on_report_committed(
-                            state,
-                            handle.parent.pane,
-                            &committed,
-                            view.clone(),
-                            envelope,
-                        );
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::warn!(%error, agent_id = %handle.agent_id, "subagent report not saved");
-            }
-        }
         report_view = Some(view);
     } else if let Some(database) = persistence.database() {
         // 取消/关闭：不生成报告，只封口子 assistant 与 agent 行。
@@ -701,6 +519,8 @@ pub(crate) fn finish_subagent(
     }
     // UI：终态 + 报告（窗格已关时忽略）。
     let _ = update::on_subagent_finished(state, &key.session, handle.status, report_view, usage);
+    // 运行中的等待卡片同步刷新目标状态（黄/绿方块）。
+    update::refresh_subagent_cards(state, handle.parent.pane);
     // 完成通知先于句柄清理：`wait_agent` 的接收端由 handle 的 done 发出。
     let _ = handle.done.send(true);
     let cancel_key = RequestKey {
@@ -709,6 +529,8 @@ pub(crate) fn finish_subagent(
         generation: handle.parent.generation,
     };
     streams.finish(&cancel_key);
+    // 父窗格空闲时立即起报告批次；忙时留到本轮结束后的 idle 再 drain。
+    let _ = drain_reports(state, persistence, handle.parent.pane);
     true
 }
 
@@ -717,6 +539,95 @@ fn parent_idle(state: &AppState, pane: PaneId) -> bool {
     state.pane_anywhere(pane).is_some_and(|target| {
         matches!(target.lx.chat.request, RequestState::Idle) && target.lx.chat.queue.is_empty()
     })
+}
+
+/// 把当前所有未投递报告合并成一条报告消息 + 一个自动 assistant 回合。
+///
+/// 用户输入优先：父窗格非 Idle、有排队提交时不启动；用户显式停止主轮后也不
+/// 自动起轮（避免后台完成把主 agent 叫醒），报告留在 `agent_subagent` 里，等
+/// 下一次用户轮或重新进入 idle 后再 drain。
+pub(crate) fn drain_reports(state: &mut AppState, persistence: &Persistence, pane: PaneId) -> bool {
+    // 用户显式停止主轮后不自动起报告轮：子 agent 可以继续跑，报告留在库里，
+    // 等下一次用户消息（或用户主动操作）再 drain，避免被后台完成“叫醒”。
+    if state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.chat.main_stopped)
+    {
+        return false;
+    }
+    if !parent_idle(state, pane) {
+        return false;
+    }
+    let Some(target) = state.pane_anywhere(pane) else {
+        return false;
+    };
+    let Some(session_id) = target.lx.chat.session_id.clone() else {
+        return false;
+    };
+    let Some(workspace) = state.chat_session_key_for_pane(pane) else {
+        return false;
+    };
+    let Some(selection) = target
+        .lx
+        .chat
+        .effective_selection(&state.models)
+        .or_else(|| state.models.default_selection())
+    else {
+        return false;
+    };
+    let Some(database) = persistence.database() else {
+        return false;
+    };
+    let pending = match database.pending_subagent_reports(&workspace, &session_id) {
+        Ok(pending) => pending,
+        Err(error) => {
+            tracing::warn!(%error, "pending subagent reports unavailable");
+            return false;
+        }
+    };
+    let mut agent_ids = Vec::with_capacity(pending.len());
+    let mut reports = Vec::with_capacity(pending.len());
+    for (agent_id, report_json) in pending {
+        let Some(report) = SubagentReportView::from_json(&report_json) else {
+            tracing::warn!(%agent_id, "subagent report JSON invalid");
+            let _ = database.mark_report_delivered(&workspace, &agent_id);
+            continue;
+        };
+        agent_ids.push(agent_id);
+        reports.push(report);
+    }
+    if reports.is_empty() {
+        return false;
+    }
+    let envelope = format!(
+        "[local runtime] subagent reports:\n{}",
+        reports
+            .iter()
+            .map(format_report_envelope)
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    );
+    let reports_json = reports_to_json(&reports);
+    let model = ModelSnapshot {
+        provider: selection.provider,
+        model: selection.model,
+        variant: selection.variant,
+    };
+    let committed = match database.begin_report_batch(
+        &workspace,
+        &session_id,
+        &envelope,
+        &reports_json,
+        &agent_ids,
+        &model,
+    ) {
+        Ok(committed) => committed,
+        Err(error) => {
+            tracing::warn!(%error, "subagent report batch not started");
+            return false;
+        }
+    };
+    update::on_report_batch_committed(state, pane, &committed, reports)
 }
 
 /// 报告正文：子会话最后一条 assistant 的正文，超限截断。
@@ -747,11 +658,20 @@ fn assistant_parts(
 ///
 /// 内存句柄不清理的话，子 turn 会继续跑并把结果写进已删除的子会话（写入失败），
 /// 面板里也会留下永远 running 的幽灵行。
-pub(crate) fn cancel_for_session(streams: &mut ChatStreams, session_id: &str) -> bool {
+pub(crate) fn cancel_for_session(
+    streams: &mut ChatStreams,
+    session_id: &str,
+    agent_id: Option<&str>,
+) -> bool {
     let mut cancelled = false;
     let mut dead = Vec::new();
     for (child, handle) in &streams.subagents {
-        if handle.parent.session == session_id || handle.child_session_id == session_id {
+        let selected = agent_id.is_none_or(|target| handle.agent_id == target);
+        let belongs = match agent_id {
+            Some(_) => handle.parent.session == session_id,
+            None => handle.parent.session == session_id || handle.child_session_id == session_id,
+        };
+        if selected && belongs {
             // `send` 在没有接收者时失败：子 turn 已经结束、只是终态还没回投，
             // 句柄是幽灵，直接移除（否则面板里永远显示 running）。
             if handle.cancel.send(true).is_ok() {
@@ -782,8 +702,8 @@ pub fn apply_subagent_effects(
                 effect,
                 Effect::ListSubagents { .. }
                     | Effect::LoadSubagentSession { .. }
-                    | Effect::StopSubagent { .. }
                     | Effect::CancelSubagents { .. }
+                    | Effect::DrainSubagentReports { .. }
             )
         })
         .cloned()
@@ -796,8 +716,8 @@ pub fn apply_subagent_effects(
             effect,
             Effect::ListSubagents { .. }
                 | Effect::LoadSubagentSession { .. }
-                | Effect::StopSubagent { .. }
                 | Effect::CancelSubagents { .. }
+                | Effect::DrainSubagentReports { .. }
         )
     });
     let mut changed = false;
@@ -844,20 +764,14 @@ pub fn apply_subagent_effects(
                     }
                 }
             }
-            Effect::StopSubagent { pane, agent_id } => {
-                if let Some(handle) = streams
-                    .subagents
-                    .values()
-                    .find(|handle| handle.agent_id == agent_id)
-                {
-                    let _ = handle.cancel.send(true);
-                    changed = true;
-                } else {
-                    tracing::debug!(%agent_id, pane = pane.raw(), "subagent already finished");
-                }
+            Effect::CancelSubagents {
+                session_id,
+                agent_id,
+            } => {
+                changed |= cancel_for_session(streams, &session_id, agent_id.as_deref());
             }
-            Effect::CancelSubagents { session_id } => {
-                changed |= cancel_for_session(streams, &session_id);
+            Effect::DrainSubagentReports { pane } => {
+                changed |= drain_reports(state, persistence, pane);
             }
             _ => {}
         }
@@ -870,34 +784,6 @@ fn workspace_for_pane(state: &AppState, pane: PaneId) -> Option<PathBuf> {
     state
         .chat_session_key_for_pane(pane)
         .or_else(|| state.workspace_cwd_for_pane(pane))
-}
-
-/// 下一轮注入：未投递报告的信封并入运行时摘要，并立即标记已投递。
-/// 未投递报告 →（注入文本，涉及的 agent id）。
-///
-/// **不在这里**置 `report_delivered`：本轮失败/取消时模型没吃到报告，下一次还得注入。
-pub(crate) fn pending_report_summary(
-    persistence: &Persistence,
-    key: &RequestKey,
-    workspace: &std::path::Path,
-) -> Option<(String, Vec<String>)> {
-    let database = persistence.database()?;
-    let pending = database
-        .pending_subagent_reports(workspace, &key.session)
-        .ok()?;
-    if pending.is_empty() {
-        return None;
-    }
-    let mut lines = vec!["[local runtime] subagent reports:".to_string()];
-    let mut agent_ids = Vec::new();
-    for (agent_id, report_json) in pending {
-        let Some(view) = SubagentReportView::from_json(&report_json) else {
-            continue;
-        };
-        agent_ids.push(agent_id);
-        lines.push(format_report_envelope(&view));
-    }
-    (lines.len() > 1).then(|| (lines.join("\n"), agent_ids))
 }
 
 /// 运行中的子 agent 摘要（`runtime_context_summary` 追加段）。

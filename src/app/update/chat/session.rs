@@ -151,6 +151,7 @@ pub fn close_task_page(state: &mut AppState, pane: PaneId) -> bool {
         // 清掉拖拽抓取标记：面板没了还留着 grab，会让后续**所有**拖拽事件
         // （窗格分割线、选区、prompt 滚动条）都被输出区滚动条那一支吞掉。
         state.task_scroll_drag = None;
+        state.task_agents_scroll_drag = None;
     }
     closed
 }
@@ -208,14 +209,24 @@ pub fn on_task_output(state: &mut AppState, pane: PaneId, output: Vec<String>) -
 
 /// 滚动后台任务面板的 item 列表视口（鼠标滚轮）；返回视口是否移动。
 pub fn scroll_task_list(state: &mut AppState, pane: PaneId, delta: isize) -> bool {
-    let Some(page) = state
-        .pane_mut_anywhere(pane)
-        .and_then(|target| target.lx.task.as_mut())
-    else {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let agents_len = target.lx.agents.runs.len();
+    let Some(page) = target.lx.task.as_mut() else {
         return false;
     };
     // 可见行数与渲染的 `list` 矩形一致：`LIST_MAX` 是固定高度。
-    page.scroll_window(delta, crate::ui::main_content::lx::task::LIST_MAX)
+    match page.tab {
+        crate::app::state::TaskTab::Processes => {
+            page.scroll_window(delta, crate::ui::main_content::lx::task::LIST_MAX)
+        }
+        crate::app::state::TaskTab::Agents => page.scroll_agents_window(
+            delta,
+            crate::ui::main_content::lx::task::LIST_MAX,
+            agents_len,
+        ),
+    }
 }
 
 /// 直接设置输出视口顶部偏移（滚动条轨道点击/thumb 拖拽）；返回是否变化。
@@ -368,6 +379,17 @@ pub fn on_session_loaded_full(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    let session_changed = target.lx.chat.session_id.as_deref() != Some(session_id);
+    if session_changed {
+        // Agents 面板属于会话：不清理会把上一会话的 run、计数和 ^d 目标带过来。
+        target.lx.clear_agents();
+        target.lx.chat.main_stopped = false;
+        target.lx.chat.stop_armed_at = None;
+        if let Some(page) = target.lx.task.as_mut() {
+            page.agents_window = Default::default();
+            page.agents_focus = None;
+        }
+    }
     target.lx.chat.session_id = Some(session_id.to_string());
     // 切会话：先清空 compact 状态（检查点列表随后由加载回执回填）。
     target.lx.compact.reset();
@@ -410,6 +432,7 @@ pub fn on_session_loaded_full(
     target.lx.chat.turn_elapsed_ms = None;
     // 展开状态与键盘选择按稳定 ID 定位；切会话后默认折叠、不选中任何卡片。
     target.lx.chat.detail_expanded.clear();
+    target.lx.chat.report_expand_steps.clear();
     target.lx.chat.selected_tool = None;
     target.lx.chat.selected_compact = None;
     target.lx.chat.plan = None;
@@ -418,6 +441,8 @@ pub fn on_session_loaded_full(
     let restored_messages = target.lx.chat.messages.clone();
     refresh_lx_status(state, pane);
     super::restore_plan(state, pane, &restored_messages);
+    // 历史会话：spawn 卡片的状态可从已加载的汇报行回填。
+    super::subagent::refresh_subagent_cards(state, pane);
     true
 }
 

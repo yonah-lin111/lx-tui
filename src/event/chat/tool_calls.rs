@@ -293,7 +293,7 @@ pub(crate) fn finish_tool(
 /// 把新建进程的起始记录写入 `agent_process`（工具已结算成功后才登记）。
 ///
 /// 进程仍在运行时由后台事件继续合并输出快照；登记失败只记日志，不影响工具结果。
-fn register_process_record(
+pub(super) fn register_process_record(
     streams: &ChatStreams,
     persistence: &Persistence,
     workspace: &std::path::Path,
@@ -335,6 +335,25 @@ pub(crate) fn detail_of(
         }
         ToolExecutionResult::Plan(snapshot) => Some(crate::app::state::ToolDetailView::Plan(
             crate::app::state::PlanSnapshotView::from_snapshot(snapshot),
+        )),
+        ToolExecutionResult::Search {
+            matches,
+            truncated,
+            files_scanned,
+        } => Some(crate::app::state::ToolDetailView::Search(
+            crate::app::state::SearchDetailView {
+                matches: matches
+                    .iter()
+                    .map(|hit| crate::app::state::SearchMatchView {
+                        path: hit.path.display().to_string(),
+                        line: hit.line,
+                        text: hit.text.clone(),
+                        line_truncated: hit.line_truncated,
+                    })
+                    .collect(),
+                truncated: *truncated,
+                files_scanned: *files_scanned,
+            },
         )),
         ToolExecutionResult::Ask { questions } => Some(crate::app::state::ToolDetailView::Ask(
             crate::app::state::AskDetailView::from_answered(questions),

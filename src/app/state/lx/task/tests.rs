@@ -43,12 +43,12 @@ fn cycle_tab_wraps_both_directions() {
 
 #[test]
 fn agents_tab_is_empty_and_has_no_selection() {
-    // 子代理 tab 本阶段是预留位：没有任何数据来源，长度恒为 0。
+    // 没有派发过 subagent 时，Agents tab 长度为 0。
     let mut page = page_with(3);
     page.tab = TaskTab::Agents;
     assert_eq!(page.len(&AgentsState::default()), 0);
     assert!(page.is_empty(&AgentsState::default()));
-    assert!(page.selected().is_none(), "预留 tab 没有可选项");
+    assert!(page.selected().is_none(), "空 Agents tab 没有可选项");
 }
 
 #[test]
@@ -88,6 +88,18 @@ fn move_active_stops_at_both_ends_and_reports_whether_it_moved() {
         !empty.move_active(&AgentsState::default(), -1),
         "空列表不移动"
     );
+}
+
+#[test]
+fn agents_window_scrolls_independently_from_processes() {
+    let mut page = page_with(3);
+    // Agents 列表有 10 条、可见 6 行：滚轮只动 agents_window。
+    assert!(page.scroll_agents_window(3, 6, 10));
+    assert_eq!(page.agents_window.viewport, Some(3));
+    assert_eq!(page.window.viewport, None, "进程窗口不受影响");
+    assert!(page.scroll_agents_window(100, 6, 10));
+    assert_eq!(page.agents_window.viewport, Some(4), "钳到最大起点");
+    assert!(!page.scroll_agents_window(1, 6, 10), "已到底不再移动");
 }
 
 #[test]

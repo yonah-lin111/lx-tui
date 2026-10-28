@@ -30,20 +30,31 @@ pub fn settle_tool_detail(
     call_id: &str,
     detail: Option<crate::app::state::ToolDetailView>,
 ) -> bool {
-    let Some(target) = state.pane_mut_anywhere(key.pane) else {
-        return false;
+    let is_subagent = matches!(
+        &detail,
+        Some(crate::app::state::ToolDetailView::Subagent(_))
+    );
+    let changed = {
+        let Some(target) = state.pane_mut_anywhere(key.pane) else {
+            return false;
+        };
+        let Some(message) = target.lx.chat.streaming_message_mut() else {
+            return false;
+        };
+        let Some(call) = message.tool_mut(call_id) else {
+            return false;
+        };
+        if call.detail.as_deref() == detail.as_ref() {
+            return false;
+        }
+        call.detail = detail.map(Box::new);
+        true
     };
-    let Some(message) = target.lx.chat.streaming_message_mut() else {
-        return false;
-    };
-    let Some(call) = message.tool_mut(call_id) else {
-        return false;
-    };
-    if call.detail.as_deref() == detail.as_ref() {
-        return false;
+    if changed && is_subagent {
+        // spawn 的结果只带来 agent_id；标题状态必须再从 run 回填。
+        super::subagent::refresh_subagent_cards(state, key.pane);
     }
-    call.detail = detail.map(Box::new);
-    true
+    changed
 }
 
 /// 遍历所有窗格里**全部**消息的工具卡片。
@@ -66,6 +77,21 @@ fn for_each_tool_mut(
                 continue;
             };
             changed |= visit(call);
+        }
+        // 子 agent 的 transcript 也是同一套历史模型：后台进程事件必须同时落到
+        // Agents 详情里的卡片，否则命令结束后仍永久显示 Running。
+        for run in &mut target.lx.agents.runs {
+            let mut run_changed = false;
+            for message in &mut run.chat.messages {
+                let Some(call) = message.tool_mut(call_id) else {
+                    continue;
+                };
+                run_changed |= visit(call);
+            }
+            if run_changed {
+                run.rows_dirty = true;
+                changed = true;
+            }
         }
     }
     changed
@@ -219,6 +245,30 @@ pub fn apply_interaction_exit(
                 changed = true;
             }
         }
+        for run in &mut target.lx.agents.runs {
+            let mut run_changed = false;
+            for message in &mut run.chat.messages {
+                for step in &mut message.steps {
+                    let crate::app::state::AssistantStepView::Tool { call, .. } = step else {
+                        continue;
+                    };
+                    let Some(crate::app::state::ToolDetailView::Interaction(view)) =
+                        call.detail.as_deref_mut()
+                    else {
+                        continue;
+                    };
+                    if view.process_session_id != session_id || view.state.is_terminal() {
+                        continue;
+                    }
+                    view.state = next;
+                    run_changed = true;
+                }
+            }
+            if run_changed {
+                run.rows_dirty = true;
+                changed = true;
+            }
+        }
     }
     if changed {
         for pane in state.all_pane_ids() {
@@ -276,6 +326,44 @@ pub fn apply_process_snapshot(
                     }
                     _ => {}
                 }
+            }
+        }
+        for run in &mut target.lx.agents.runs {
+            let mut run_changed = false;
+            for message in &mut run.chat.messages {
+                for step in &mut message.steps {
+                    let crate::app::state::AssistantStepView::Tool { call, .. } = step else {
+                        continue;
+                    };
+                    match call.detail.as_deref_mut() {
+                        Some(crate::app::state::ToolDetailView::Command(view)) => {
+                            if view.process_session_id != Some(process_session_id)
+                                || view.state == next
+                            {
+                                continue;
+                            }
+                            view.state = next;
+                            run_changed = true;
+                        }
+                        Some(crate::app::state::ToolDetailView::Interaction(view)) => {
+                            if view.process_session_id != process_session_id || view.state == next {
+                                continue;
+                            }
+                            view.state = next;
+                            if let Some(code) = snapshot.exit_code
+                                && view.exit_code.is_none()
+                            {
+                                view.exit_code = Some(code);
+                            }
+                            run_changed = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if run_changed {
+                run.rows_dirty = true;
+                changed = true;
             }
         }
     }

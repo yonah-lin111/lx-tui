@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::ToolSpec;
 use crate::chat::agent::{
-    DEFAULT_WAIT_TIMEOUT_MS, MAX_TASK_CHARS, MAX_WAIT_TARGETS, MAX_WAIT_TIMEOUT_MS,
+    DEFAULT_WAIT_TIMEOUT_MS, MAX_TASK_CHARS, MAX_TITLE_CHARS, MAX_WAIT_TARGETS, MAX_WAIT_TIMEOUT_MS,
 };
 
 /// `spawn_agent` 规格。
@@ -17,10 +17,11 @@ pub(crate) const fn spawn_agent_spec() -> ToolSpec {
         "Delegate one well-defined task to a subagent that starts with a clean context. \
          `explorer` (read-only `read`/`search`) investigates a specific question about the \
          codebase; `executor` (file and process tools, no `ask`, no plan tool) makes one \
-         bounded change or fix. Write the task as goal + boundary (files/modules owned by \
-         this agent) + deliverable. The call returns an `agent_id` immediately; the subagent \
-         runs in the background and you can keep working. At most 3 subagents may run at \
-         once per conversation.",
+         bounded change or fix. Always give it a short human-readable `title` (for cards \
+         and the Agents list) plus the full `task`: goal + boundary (files/modules owned \
+         by this agent) + deliverable. The call returns an `agent_id` immediately; the \
+         subagent runs in the background and you can keep working. At most 3 subagents may \
+         run at once per conversation.",
         spawn_parameters,
     )
 }
@@ -29,10 +30,13 @@ pub(crate) const fn spawn_agent_spec() -> ToolSpec {
 pub(crate) const fn wait_agent_spec() -> ToolSpec {
     ToolSpec::new(
         "wait_agent",
-        "Wait until every listed subagent finishes or the timeout expires, whichever comes \
-         first. Returns each agent's status and, the first time it is settled, its final \
-         report. A timeout is not an error: `timed_out: true` means some agents are still \
-         running and you can wait again later.",
+        "Wait for subagents. Omit `targets` or pass an empty array to wait for every \
+         subagent in this conversation; pass ids for one or more specific agents. \
+         `wait_for=all` (default) keeps waiting until all targets finish; the timeout is \
+         only an internal recheck interval, so the call does not end the turn early. \
+         `wait_for=any` returns as soon as one target finishes or the timeout expires. \
+         Returns each agent's status and, the first time it is settled, its final report. \
+         A timeout is not an error.",
         wait_parameters,
     )
 }
@@ -52,12 +56,18 @@ fn spawn_parameters() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["role", "task"],
+        "required": ["role", "title", "task"],
         "properties": {
             "role": {
                 "type": "string",
                 "enum": ["explorer", "executor"],
                 "description": "Subagent role: read-only investigation or bounded implementation.",
+            },
+            "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_TITLE_CHARS,
+                "description": "Short human-readable title for cards and the Agents list; not the task prompt.",
             },
             "task": {
                 "type": "string",
@@ -74,21 +84,26 @@ fn wait_parameters() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["targets"],
+        "required": [],
         "properties": {
             "targets": {
                 "type": "array",
-                "minItems": 1,
                 "maxItems": MAX_WAIT_TARGETS,
                 "items": { "type": "string" },
-                "description": "Agent ids returned by spawn_agent.",
+                "description": "Agent ids returned by spawn_agent, or omit/empty to wait for every subagent in this conversation.",
+            },
+            "wait_for": {
+                "type": "string",
+                "enum": ["all", "any"],
+                "default": "all",
+                "description": "Wait for all targets to finish, or return as soon as any one finishes.",
             },
             "timeout_ms": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": MAX_WAIT_TIMEOUT_MS,
                 "default": DEFAULT_WAIT_TIMEOUT_MS,
-                "description": "Maximum time to wait in milliseconds.",
+                "description": "Maximum time to wait in milliseconds. Prefer minutes; subagent work often takes several minutes.",
             },
         },
     })

@@ -78,7 +78,14 @@ fn subagent_schemas_are_strict_and_use_constants() {
     };
     let spawn = spec("spawn_agent");
     assert_eq!(spawn["additionalProperties"], false);
-    assert_eq!(spawn["required"], serde_json::json!(["role", "task"]));
+    assert_eq!(
+        spawn["required"],
+        serde_json::json!(["role", "title", "task"])
+    );
+    assert_eq!(
+        spawn["properties"]["title"]["maxLength"],
+        crate::chat::agent::MAX_TITLE_CHARS
+    );
     assert_eq!(
         spawn["properties"]["role"]["enum"],
         serde_json::json!(["explorer", "executor"])
@@ -87,8 +94,13 @@ fn subagent_schemas_are_strict_and_use_constants() {
 
     let wait = spec("wait_agent");
     assert_eq!(wait["additionalProperties"], false);
-    assert_eq!(wait["required"], serde_json::json!(["targets"]));
+    assert_eq!(wait["required"], serde_json::json!([]));
     assert_eq!(wait["properties"]["targets"]["maxItems"], MAX_WAIT_TARGETS);
+    assert_eq!(
+        wait["properties"]["wait_for"]["enum"],
+        serde_json::json!(["all", "any"])
+    );
+    assert_eq!(wait["properties"]["wait_for"]["default"], "all");
     assert_eq!(
         wait["properties"]["timeout_ms"]["default"],
         DEFAULT_WAIT_TIMEOUT_MS

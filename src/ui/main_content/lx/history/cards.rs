@@ -4,7 +4,7 @@ use ratatui::layout::Rect;
 
 use crate::app::state::CardSection;
 
-/// 可交互块：工具卡片或思考块。
+/// 可交互块：折叠卡片或 agent 链接。
 ///
 /// `expanded` 是布局时算出的展开状态；折叠判定在鼠标松开时做，不在按下时做。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,7 +36,11 @@ pub enum CardKind {
         message_id: String,
         agent_id: String,
         expanded: bool,
+        /// 是否是 `… N more lines` 提示行（点击追加一批，而不是折叠整块）。
+        more: bool,
     },
+    /// 子 agent 卡片内的 agent 链接（不是折叠块）：点击打开 Agents 面板。
+    AgentLink { agent_id: String },
 }
 
 /// 一个可折叠块的矩形。

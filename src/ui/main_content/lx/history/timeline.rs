@@ -5,7 +5,7 @@
 
 use crate::app::state::Lx;
 
-use super::source::HistorySource;
+use super::source::{HistorySource, is_legacy_report_row};
 
 /// 历史时间线条目：真实消息、独立撤销提示与 compact 检查点。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +43,10 @@ pub(super) fn timeline(source: HistorySource<'_>) -> Vec<TimelineEntry> {
         || notice < source.notices.len()
         || checkpoint < source.checkpoints.len()
     {
+        // 旧版 wait 残留：没有同轮 assistant 的报告 user 消息不进入时间线。
+        while message < source.messages.len() && is_legacy_report_row(source.messages, message) {
+            message += 1;
+        }
         let next_message = source.messages.get(message).map(|item| item.sequence);
         let next_notice = source.notices.get(notice).map(|item| item.sequence);
         let next_checkpoint = source.checkpoints.get(checkpoint).map(|item| item.sequence);

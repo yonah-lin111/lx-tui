@@ -27,8 +27,8 @@ pub struct SubagentRecord {
     pub role: AgentRole,
     /// `pending` / `running` / `completed` / `failed` / `cancelled`。
     pub status: String,
-    /// 子会话标题（= task 首行）。
-    pub task_title: String,
+    /// 面向用户的短标题；v17 之前的旧记录为空。
+    pub title: String,
     /// 创建时刻（UTC 毫秒）。
     pub created_at_ms: i64,
     /// 完成时刻（未结束为 None）。
@@ -57,6 +57,8 @@ pub struct SubagentCommitted {
 /// 报告正文与尾巴（DB 在此组装成 [`SubagentReportView`] 的 JSON）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReportPayload {
+    /// 面向用户的短标题。
+    pub title: String,
     /// 已按上限截断的正文。
     pub body: String,
     /// 去重后的改动文件数。
@@ -72,11 +74,16 @@ impl Database {
         workspace: &Path,
         parent_session: &str,
         role: AgentRole,
+        title: &str,
         task: &str,
         model: &ModelSnapshot,
         spawn_message_id: Option<&str>,
     ) -> Result<SubagentCommitted> {
         if task.trim().is_empty() {
+            return Err(DbError::InvalidDraft);
+        }
+        let title = super::single_line_preview(title.trim(), 80);
+        if title.is_empty() {
             return Err(DbError::InvalidDraft);
         }
         let workspace_external = self
@@ -86,8 +93,6 @@ impl Database {
         let transaction = self.conn.unchecked_transaction()?;
         ensure_session_owned(&transaction, parent_session, &workspace_external)?;
         let child_session_id = new_external_id("sess");
-        // 标题 = task 首行（多行任务只取第一行，面板列表靠它辨识目标）。
-        let title = super::single_line_preview(task.lines().next().unwrap_or_default(), 60);
         transaction.execute(
             r#"INSERT INTO agent_session
                    (external_id, workspace_id, source, title, first_user_message,
@@ -97,7 +102,7 @@ impl Database {
             params![
                 child_session_id,
                 workspace_external,
-                title,
+                &title,
                 super::single_line_preview(task, super::PREVIEW_CHARS),
                 model.provider,
                 model.model,
@@ -141,9 +146,9 @@ impl Database {
         transaction.execute(
             r#"INSERT INTO agent_subagent
                    (external_id, parent_session_id, child_session_id, spawn_message_id,
-                    status, role, model_provider, model_id, variant,
+                    status, role, model_provider, model_id, variant, title,
                     created_at_ms, updated_at_ms)
-               VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, ?8, ?9, ?9)"#,
+               VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, ?8, ?9, ?10, ?10)"#,
             params![
                 agent_id,
                 parent_session,
@@ -153,6 +158,7 @@ impl Database {
                 model.provider,
                 model.model,
                 model.variant,
+                title,
                 now,
             ],
         )?;
@@ -209,6 +215,7 @@ impl Database {
         let report_json = report.map(|payload| {
             SubagentReportView {
                 agent_id: agent_id.to_string(),
+                title: payload.title.clone(),
                 role,
                 status: status.to_string(),
                 files_changed: payload.files_changed,
@@ -240,7 +247,7 @@ impl Database {
         };
         let mut statement = self.conn.prepare(
             r#"SELECT a.external_id, a.child_session_id, a.parent_session_id, a.spawn_message_id,
-                      a.role, a.status, s.title, a.created_at_ms, a.completed_at_ms,
+                      a.role, a.status, a.title, a.created_at_ms, a.completed_at_ms,
                       a.report_json, a.report_delivered
                FROM agent_subagent a
                JOIN agent_session s ON s.external_id = a.child_session_id
@@ -262,7 +269,7 @@ impl Database {
                         .and_then(AgentRole::parse)
                         .unwrap_or(AgentRole::Executor),
                     status: row.get(5)?,
-                    task_title: row.get(6)?,
+                    title: row.get(6)?,
                     created_at_ms: row.get(7)?,
                     completed_at_ms: row.get(8)?,
                     report_json: row.get(9)?,
@@ -281,63 +288,17 @@ impl Database {
         Ok(records)
     }
 
-    /// 报告行：写一条 user 消息（带 `subagent_report_json`），不建 assistant。
-    pub fn insert_report_message(
+    /// 后台报告批量：一条 user 报告消息（数组 JSON）+ 同轮 assistant。
+    ///
+    /// 报告在消息提交事务内标记已投递：消息本身已经是可回放的上下文，失败重试
+    /// 不应再生成第二份卡片。`agent_ids` 必须与 `reports_json` 一一对应。
+    pub fn begin_report_batch(
         &self,
         workspace: &Path,
         session_id: &str,
         envelope: &str,
-        report_json: &str,
-    ) -> Result<String> {
-        let workspace_external = self
-            .workspace_external_id(workspace)?
-            .ok_or(DbError::WorkspaceMissing)?;
-        let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
-        ensure_session_owned(&transaction, session_id, &workspace_external)?;
-        let (sequence, turn_index): (i64, i64) = transaction.query_row(
-            r#"SELECT
-                   COALESCE(MAX(sequence) + 1, 0),
-                   COALESCE(MAX(turn_index) + 1, 0)
-               FROM agent_message WHERE session_id = ?1"#,
-            params![session_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        let message_id = new_external_id("msg");
-        transaction.execute(
-            r#"INSERT INTO agent_message
-                   (external_id, session_id, sequence, turn_index, role, status,
-                    subagent_report_json, created_at_ms)
-               VALUES (?1, ?2, ?3, ?4, 'user', 'complete', ?5, ?6)"#,
-            params![
-                message_id,
-                session_id,
-                sequence,
-                turn_index,
-                report_json,
-                now
-            ],
-        )?;
-        transaction.execute(
-            r#"INSERT INTO agent_message_part
-                   (external_id, message_id, position, kind, content, created_at_ms)
-               VALUES (?1, ?2, 0, 'text', ?3, ?4)"#,
-            params![new_external_id("part"), message_id, envelope, now],
-        )?;
-        transaction.execute(
-            "UPDATE agent_session SET updated_at_ms = ?1, last_message_at_ms = ?1 WHERE external_id = ?2",
-            params![now, session_id],
-        )?;
-        transaction.commit()?;
-        Ok(message_id)
-    }
-
-    /// 给已有报告行补 assistant 并起一轮（报告行 `turn_index` 复用）。
-    pub fn begin_report_turn(
-        &self,
-        workspace: &Path,
-        session_id: &str,
-        report_message_id: &str,
+        reports_json: &str,
+        agent_ids: &[String],
         model: &ModelSnapshot,
     ) -> Result<TurnCommitted> {
         let workspace_external = self
@@ -346,43 +307,41 @@ impl Database {
         let now = now_ms();
         let transaction = self.conn.unchecked_transaction()?;
         ensure_session_owned(&transaction, session_id, &workspace_external)?;
-        let report: Option<(i64, i64, String)> = transaction
-            .query_row(
-                r#"SELECT sequence, turn_index, status
-                   FROM agent_message
-                   WHERE external_id = ?1 AND session_id = ?2 AND role = 'user'
-                     AND subagent_report_json IS NOT NULL"#,
-                params![report_message_id, session_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()?;
-        let Some((user_sequence, turn_index, status)) = report else {
-            return Err(DbError::SessionMissing);
-        };
-        if status != "complete" {
-            return Err(DbError::MessageNotStreaming);
-        }
-        let existing: Option<i64> = transaction
-            .query_row(
-                "SELECT 1 FROM agent_message WHERE session_id = ?1 AND turn_index = ?2 AND role = 'assistant'",
-                params![session_id, turn_index],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if existing.is_some() {
-            return Err(DbError::MessageNotStreaming);
-        }
-        let next_sequence: i64 = transaction.query_row(
-            "SELECT COALESCE(MAX(sequence) + 1, 0) FROM agent_message WHERE session_id = ?1",
+        let (user_sequence, turn_index): (i64, i64) = transaction.query_row(
+            r#"SELECT COALESCE(MAX(sequence) + 1, 0),
+                      COALESCE(MAX(turn_index) + 1, 0)
+               FROM agent_message WHERE session_id = ?1"#,
             params![session_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        let user_message_id = new_external_id("msg");
+        let assistant_message_id = new_external_id("msg");
+        let assistant_sequence = user_sequence.saturating_add(1);
         let revision: i64 = transaction.query_row(
             "SELECT revision FROM agent_session WHERE external_id = ?1",
             params![session_id],
             |row| row.get(0),
         )?;
-        let assistant_message_id = new_external_id("msg");
+        transaction.execute(
+            r#"INSERT INTO agent_message
+                   (external_id, session_id, sequence, turn_index, role, status,
+                    subagent_report_json, created_at_ms)
+               VALUES (?1, ?2, ?3, ?4, 'user', 'complete', ?5, ?6)"#,
+            params![
+                user_message_id,
+                session_id,
+                user_sequence,
+                turn_index,
+                reports_json,
+                now
+            ],
+        )?;
+        transaction.execute(
+            r#"INSERT INTO agent_message_part
+                   (external_id, message_id, position, kind, content, created_at_ms)
+               VALUES (?1, ?2, 0, 'text', ?3, ?4)"#,
+            params![new_external_id("part"), user_message_id, envelope, now],
+        )?;
         transaction.execute(
             r#"INSERT INTO agent_message
                    (external_id, session_id, sequence, turn_index, role, status,
@@ -391,14 +350,22 @@ impl Database {
             params![
                 assistant_message_id,
                 session_id,
-                next_sequence,
+                assistant_sequence,
                 turn_index,
                 model.provider,
                 model.model,
                 model.variant,
-                now,
+                now
             ],
         )?;
+        for agent_id in agent_ids {
+            transaction.execute(
+                r#"UPDATE agent_subagent SET report_delivered = 1, updated_at_ms = ?1
+                   WHERE external_id = ?2 AND parent_session_id = ?3
+                     AND report_delivered = 0"#,
+                params![now, agent_id, session_id],
+            )?;
+        }
         super::update_session_selection(&transaction, session_id, &workspace_external, model, now)?;
         let revision = revision.saturating_add(1);
         transaction.execute(
@@ -408,11 +375,11 @@ impl Database {
         transaction.commit()?;
         Ok(TurnCommitted {
             session_id: session_id.to_string(),
-            user_message_id: report_message_id.to_string(),
+            user_message_id,
             assistant_message_id,
             turn_index,
             user_sequence,
-            assistant_sequence: next_sequence,
+            assistant_sequence,
             revision,
             created_at_ms: now,
         })
@@ -434,7 +401,7 @@ impl Database {
         Ok(updated > 0)
     }
 
-    /// 未投递的报告（启动后下一轮注入用）：`(agent_id, report_json)`。
+    /// 未投递的报告（后台自动轮 / `wait_agent` 共用）：`(agent_id, report_json)`。
     pub fn pending_subagent_reports(
         &self,
         workspace: &Path,

@@ -1163,6 +1163,86 @@ fn idle_following_hides_chat_bar() {
     );
 }
 
+/// 主轮自然结束、后台子 agent 仍在跑：继续显示 waiting loading，并在底边框计数。
+#[test]
+fn idle_main_with_running_subagent_shows_loading_and_counts() {
+    let lx = lx_with_running_subagent(false);
+    let rect = Rect::new(0, 0, 60, 17);
+    let area = crate::layout::pane_inner_rect(rect);
+    assert!(
+        layout(area, &lx).chat_bar.is_some(),
+        "主轮自然结束后，子 agent 运行中仍显示 loading"
+    );
+    let text = render_with_border(area, rect, &lx);
+    assert!(
+        text.contains(text::chat::WAITING_AGENTS_LABEL),
+        "显示等待子 agent 文案：{text}"
+    );
+    assert!(
+        text.contains("1 process · 1 subagent"),
+        "运行指标在底边框显示：{text}"
+    );
+}
+
+/// 用户显式停止主轮后、后台子 agent 仍在跑：不显示 loading，只在底边框计数。
+#[test]
+fn stopped_main_with_running_subagent_shows_only_counts() {
+    let lx = lx_with_running_subagent(true);
+    let rect = Rect::new(0, 0, 60, 17);
+    let area = crate::layout::pane_inner_rect(rect);
+    assert!(
+        layout(area, &lx).chat_bar.is_none(),
+        "主轮被用户停止后，子 agent 运行中也不再显示 loading"
+    );
+    let text = render_with_border(area, rect, &lx);
+    assert!(
+        !text.contains(text::chat::WAITING_AGENTS_LABEL),
+        "不显示等待子 agent 的 loading：{text}"
+    );
+    assert!(
+        text.contains("1 process · 1 subagent"),
+        "运行指标仍在底边框显示：{text}"
+    );
+}
+
+/// 构造一个主轮 idle、带 1 个后台任务和 1 个 running 子 agent 的 lx。
+fn lx_with_running_subagent(main_stopped: bool) -> Lx {
+    let mut lx = streaming_lx(false, true);
+    lx.background_tasks = 1;
+    lx.chat.main_stopped = main_stopped;
+    lx.agents
+        .runs
+        .push(crate::app::state::SubagentRun::from_record(
+            &crate::db::chat::SubagentRecord {
+                agent_id: "sub-a".into(),
+                child_session_id: "sess-a".into(),
+                parent_session_id: "parent".into(),
+                spawn_message_id: None,
+                role: crate::chat::agent::AgentRole::Explorer,
+                status: "running".into(),
+                title: "investigate".into(),
+                created_at_ms: 0,
+                completed_at_ms: None,
+                report_json: None,
+                report_delivered: false,
+            },
+        ));
+    lx
+}
+
+/// 窗格内容区 + 底边框行预铺 `─` 后渲染，返回整个缓冲区文本。
+fn render_with_border(area: Rect, rect: Rect, lx: &Lx) -> String {
+    let mut buf = Buffer::empty(rect);
+    let row = area.bottom();
+    for x in rect.x..rect.right() {
+        if let Some(cell) = buf.cell_mut((x, row)) {
+            cell.set_char('─');
+        }
+    }
+    let _ = render(area, &mut buf, lx, false, None, &mut PaneCache::default());
+    buffer_text(&buf)
+}
+
 /// `/compact` 期间：输入框上方那一行出现「压缩中」并带本次压缩耗时。
 #[test]
 fn compacting_shows_loading_bar_above_input() {

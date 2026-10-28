@@ -5,19 +5,19 @@ use super::*;
 // ===== 2. 各工具特有的次要信息 =====
 
 #[test]
-fn search_shows_match_count_and_never_the_match_body() {
+fn search_shows_match_count_without_inline_truncation_marker() {
     let mut summary = search_summary();
     summary.truncated = true;
     let call = tool_call("search", ToolStatus::Completed, Some(summary), None);
     let painted = detail_text(&call, 100);
     assert!(painted.contains("3 matches"), "命中数：{painted}");
     assert!(
-        painted.contains(text::agent::TOOL_TRUNCATED),
-        "截断显式告知：{painted}"
+        !painted.contains("…[truncated]"),
+        "截断提示不得内联到摘要行：{painted}"
     );
-    // 命中正文（结果体）绝不进历史行。
+    // 命中正文由 `search` 详情视图展示，不再由通用摘要行展示。
     for needle in ["src/ui/style.rs:12:", "pub fn text()", "fn render"] {
-        assert!(!painted.contains(needle), "不应铺开命中正文：{painted}");
+        assert!(!painted.contains(needle), "摘要行不铺命中正文：{painted}");
     }
 
     // 单复数：1 用 `match`。
@@ -377,9 +377,9 @@ fn multi_file_edit_has_no_orphan_separator() {
     assert!(!body.contains("  "), "详情里不得出现两个连续空格：{body:?}");
 }
 
-/// 只有 `truncated` 时同样不能出现孤立分隔符：`└─ …[truncated]`。
+/// 截断不再作为工具卡片的行尾文案；摘要为空时只留 `└─`，不出现孤立分隔符或标记。
 #[test]
-fn truncated_only_has_no_orphan_separator() {
+fn truncated_only_leaves_no_orphan_separator_or_marker() {
     let call = tool_call(
         "read",
         ToolStatus::Completed,
@@ -391,11 +391,8 @@ fn truncated_only_has_no_orphan_separator() {
     );
     let detail = detail_text(&call, 80);
     let prefix = format!("  {} ", text::agent::MARKER_TREE_LEAF);
-    assert_eq!(
-        detail,
-        format!("{prefix}{}", text::agent::TOOL_TRUNCATED),
-        "只有截断提示时无前导 `· `：{detail:?}"
-    );
+    assert_eq!(detail, prefix, "不再显示截断标记：{detail:?}");
+    assert!(!detail.contains("truncated"), "{detail:?}");
 }
 
 // ===== 详情行折叠：默认最多 2 行，超出可展开 =====

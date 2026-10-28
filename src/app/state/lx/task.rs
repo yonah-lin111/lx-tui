@@ -1,12 +1,12 @@
-//! lx 页的后台任务页面：在**窗格内**整页显示本会话的后台进程与（预留的）子代理。
+//! lx 页的后台任务页面：在**窗格内**整页显示本会话的后台进程与子 agent。
 //!
 //! 与浮层（`app::overlay`）不同，这里是窗格自己的第二个页面：进入它不覆盖屏幕，
 //! 也不销毁 lx 页状态——`pane.lx` 的会话、消息、草稿、滚动位置全部原样保留，
 //! 退出页面即可回到离开时的样子。因此「打开后台任务」不需要保存/恢复任何东西。
 //!
 //! 页面结构对齐 opencode 的 composer 多 tab：顶部一条 tab（`Processes` / `Agents`），
-//! 主体是当前 tab 的列表，底部一行键位提示。`Agents` 目前是预留位（后续显示 subagent），
-//! 列表为空并给出占位提示。
+//! 主体是当前 tab 的列表，底部一行键位提示。`Agents` 上半区是选中子 agent 的完整
+//! 消息流（复用主历史渲染与折叠），下半区是列表（滚动/点击切换）。
 
 use crate::ui::text;
 
@@ -19,7 +19,7 @@ pub enum TaskTab {
     /// 后台进程列表。
     #[default]
     Processes,
-    /// 子代理列表；本阶段为预留位（尚无数据来源）。
+    /// 子代理列表（运行时记录 + 历史记录）。
     Agents,
 }
 
@@ -109,6 +109,8 @@ pub struct TaskPage {
     pub output_visible: usize,
     /// Agents 页签的窗口状态（与进程列表的 `window` 分开）。
     pub agents_window: PanelWindow,
+    /// 一次性的 agent 定位请求（点击卡片链接时写入；列表回投后消费）。
+    pub agents_focus: Option<String>,
     /// Agents 详情区滚动偏移（渲染回写）。
     pub agents_scroll: usize,
     /// 是否跟随 Agents 详情区底部（用户上翻即停）。
@@ -295,23 +297,12 @@ impl TaskPage {
     /// 列表滚轮：移动显式视口起点（`visible` 为当前可见行数）；返回是否移动。
     pub fn scroll_window(&mut self, delta: isize, visible: usize) -> bool {
         let len = self.processes.len();
-        if len == 0 || visible == 0 {
-            return false;
-        }
-        let max = len.saturating_sub(visible);
-        let current = self.window.viewport.unwrap_or_else(|| {
-            // 没有显式视口时以高亮为准（与渲染的 `window_start` 同口径）。
-            let active = self.window.active.min(len - 1);
-            active.saturating_sub(visible - 1).min(max)
-        });
-        let next = (current as isize)
-            .saturating_add(delta)
-            .clamp(0, max as isize) as usize;
-        if next == current && self.window.viewport.is_some() {
-            return false;
-        }
-        self.window.viewport = Some(next);
-        true
+        scroll_window(&mut self.window, len, delta, visible)
+    }
+
+    /// Agents 列表滚轮：与进程列表同一套窗口语义（高亮可滚出视口）。
+    pub fn scroll_agents_window(&mut self, delta: isize, visible: usize, len: usize) -> bool {
+        scroll_window(&mut self.agents_window, len, delta, visible)
     }
 
     /// 翻动输出区（负数向上）；返回视口是否移动。
@@ -378,6 +369,27 @@ impl TaskPage {
         self.window.clamp(self.processes.len());
         true
     }
+}
+
+/// 滚轮移动任意列表的显式视口（进程与 Agents 共用）。
+fn scroll_window(window: &mut PanelWindow, len: usize, delta: isize, visible: usize) -> bool {
+    if len == 0 || visible == 0 {
+        return false;
+    }
+    let max = len.saturating_sub(visible);
+    let current = window.viewport.unwrap_or_else(|| {
+        // 没有显式视口时以高亮为准（与渲染的 `window_start` 同口径）。
+        let active = window.active.min(len - 1);
+        active.saturating_sub(visible - 1).min(max)
+    });
+    let next = (current as isize)
+        .saturating_add(delta)
+        .clamp(0, max as isize) as usize;
+    if next == current && window.viewport.is_some() {
+        return false;
+    }
+    window.viewport = Some(next);
+    true
 }
 
 #[cfg(test)]

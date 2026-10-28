@@ -522,31 +522,27 @@ fn step_roles_use_distinct_colors() {
     );
 
     // 思考：**折叠态浅粉 182**（用户要求「没展开时不要灰色，用浅一点的粉色」）、
-    // 展开与悬停亮粉 218；工具：翡翠绿 42。
-    for (label, folded, expanded, hovered) in [
+    // 展开亮粉 218；鼠标悬停不再改变颜色。工具：翡翠绿 42。
+    for (label, folded, expanded) in [
         (
             "思考方块",
-            chat_step_mark_running_thinking(false, false),
-            chat_step_mark_running_thinking(true, false),
-            chat_step_mark_running_thinking(false, true),
+            chat_step_mark_running_thinking(false),
+            chat_step_mark_running_thinking(true),
         ),
         (
             "思考方块完成",
-            chat_step_mark_done_thinking(false, false),
-            chat_step_mark_done_thinking(true, false),
-            chat_step_mark_done_thinking(false, true),
+            chat_step_mark_done_thinking(false),
+            chat_step_mark_done_thinking(true),
         ),
         (
             "思考标题运行中",
-            chat_step_label_running_thinking(false, false),
-            chat_step_label_running_thinking(true, false),
-            chat_step_label_running_thinking(false, true),
+            chat_step_label_running_thinking(false),
+            chat_step_label_running_thinking(true),
         ),
         (
             "思考标题完成",
-            chat_step_label_done_thinking(false, false),
-            chat_step_label_done_thinking(true, false),
-            chat_step_label_done_thinking(false, true),
+            chat_step_label_done_thinking(false),
+            chat_step_label_done_thinking(true),
         ),
     ] {
         assert_eq!(folded.fg, Some(Color::Indexed(182)), "{label}折叠态用浅粉");
@@ -556,7 +552,6 @@ fn step_roles_use_distinct_colors() {
             Some(Color::Indexed(218)),
             "{label}展开态升为亮粉"
         );
-        assert_eq!(hovered.fg, Some(Color::Indexed(218)), "{label}悬停升为亮粉");
     }
     assert_eq!(
         chat_step_mark_running().fg,
@@ -565,7 +560,7 @@ fn step_roles_use_distinct_colors() {
     );
 
     // 两个有色角色互不同色，且都不与正文的默认前景重合。
-    let thinking = chat_step_mark_done_thinking(true, false).fg;
+    let thinking = chat_step_mark_done_thinking(true).fg;
     let tool = chat_step_mark_done().fg;
     let body = chat_step_mark_done_body().fg;
     assert_ne!(thinking, tool, "思考与工具的方块必须不同色");

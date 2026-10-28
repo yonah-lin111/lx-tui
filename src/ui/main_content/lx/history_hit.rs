@@ -12,6 +12,7 @@ use crate::ui::widgets::scrollbar;
 use super::chat_bar;
 use super::history;
 use super::history_rect;
+use super::task;
 use crate::ui::PaneCache;
 
 /// lx 页聊天命中结果。
@@ -158,6 +159,56 @@ pub fn chat_hit(
     None
 }
 
+/// 在任意历史数据源上做块命中（主聊天与子 agent 详情共用）。
+///
+/// `body` 是内容区矩形（已扣滚动条列），`scroll` 是内容行顶部偏移。调用方必须
+/// 用与绘制同一份 `HistorySource` 与滚动口径，否则命中会与画面错位。
+pub(crate) fn card_at_source(
+    body: Rect,
+    scroll: usize,
+    source: history::HistorySource<'_>,
+    column: u16,
+    row: u16,
+    cache: &mut PaneCache,
+) -> Option<history::CardHit> {
+    if !body.contains((column, row).into()) {
+        return None;
+    }
+    let width = history::content_rect(body).width;
+    let snapshot = cache.snapshot_source(width, source);
+    let content_row = scroll.saturating_add(usize::from(row.saturating_sub(body.y)));
+    let region = snapshot.cards.iter().find(|region| {
+        content_row >= region.card_start
+            && content_row < region.card_start.saturating_add(region.card_rows)
+    })?;
+    // 与 `layout(body, ...)` 同一套矩形口径：内容行 0 落在 body 顶。
+    //
+    // 裁剪必须在 **usize** 空间完成：`card_start` 是内容行绝对下标，直接交给
+    // `rows_to_u16` 会在 65535 行处饱和，长历史（10 万行）里所有卡片都"落在视口外"，
+    // 点击被静默丢弃。先裁出可见区间，再把**已裁剪的相对偏移**转 u16。
+    let clip = |start: usize, rows: usize| -> Option<Rect> {
+        let first = start.max(scroll);
+        let last = start
+            .saturating_add(rows)
+            .min(scroll.saturating_add(usize::from(body.height)));
+        (last > first).then(|| {
+            Rect::new(
+                body.x,
+                body.y.saturating_add(history::rows_to_u16(first - scroll)),
+                width,
+                history::rows_to_u16(last - first),
+            )
+        })
+    };
+    let card = clip(region.card_start, region.card_rows)?;
+    let hit = history::CardHit {
+        kind: region.kind.clone(),
+        card,
+        clickable: region.clickable,
+    };
+    card.contains((column, row).into()).then_some(hit)
+}
+
 /// 鼠标下的可交互块（工具卡片 / 思考块）的整块屏幕矩形。
 ///
 /// 点击展开与思考块的悬停高亮都从这一个入口取几何：命中区与渲染共用同一份
@@ -173,46 +224,71 @@ pub fn card_at(
         return None;
     }
     let view = history_view(area, lx, cache)?;
-    if !view.body.contains((column, row).into()) {
+    card_at_source(
+        view.body,
+        view.scroll,
+        history::HistorySource::from(lx),
+        column,
+        row,
+        cache,
+    )
+}
+
+/// Agents 详情区指针下的可折叠块（工具 / 思考 / compact / 汇报）。
+///
+/// 与绘制共用 `HistorySource` 与 `run.scroll` 口径；只在 Agents 页且高亮项存在时生效。
+pub(crate) fn task_agents_card_target_at(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+    cache: &mut PaneCache,
+) -> Option<CardTarget> {
+    let page = lx.task.as_ref()?;
+    if page.tab != crate::app::state::TaskTab::Agents {
         return None;
     }
-    let width = history::content_rect(view.body).width;
-    let snapshot = cache.snapshot(width, lx);
-    let content_row = view
-        .scroll
-        .saturating_add(usize::from(row.saturating_sub(view.body.y)));
-    let region = snapshot.cards.iter().find(|region| {
-        content_row >= region.card_start
-            && content_row < region.card_start.saturating_add(region.card_rows)
-    })?;
-    // 与 `layout(view.body, ...)` 同一套矩形口径：内容行 0 落在 body 顶。
-    //
-    // 裁剪必须在 **usize** 空间完成：`card_start` 是内容行绝对下标，直接交给
-    // `rows_to_u16` 会在 65535 行处饱和，长历史（10 万行）里所有卡片都"落在视口外"，
-    // 点击被静默丢弃。先裁出可见区间，再把**已裁剪的相对偏移**转 u16。
-    let clip = |start: usize, rows: usize| -> Option<Rect> {
-        let first = start.max(view.scroll);
-        let last = start
-            .saturating_add(rows)
-            .min(view.scroll.saturating_add(usize::from(view.body.height)));
-        (last > first).then(|| {
-            Rect::new(
-                view.body.x,
-                view.body
-                    .y
-                    .saturating_add(history::rows_to_u16(first - view.scroll)),
-                width,
-                history::rows_to_u16(last - first),
-            )
-        })
-    };
-    let card = clip(region.card_start, region.card_rows)?;
-    let hit = history::CardHit {
-        kind: region.kind.clone(),
-        card,
-        clickable: region.clickable,
-    };
-    card.contains((column, row).into()).then_some(hit)
+    let rect = task::task_output_rect(area, lx)?;
+    let run = lx.agents.runs.get(page.agents_window.active)?;
+    let source = history::HistorySource::from_chat(&run.chat, &run.compact);
+    let view = history::view_source_plain(rect, source, cache);
+    let visible = usize::from(view.body.height);
+    let max = view.total_rows.saturating_sub(visible);
+    let top = if run.follow { max } else { run.scroll.min(max) };
+    card_target_at_source(view.body, top, source, column, row, cache)
+}
+
+/// Agents 详情区的滚动条几何（与主历史同款：贴右缘、拖拽/轨道点击共用）。
+pub(crate) fn task_agents_scrollbar(
+    area: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+) -> Option<scrollbar::ScrollbarLayout> {
+    let page = lx.task.as_ref()?;
+    if page.tab != crate::app::state::TaskTab::Agents {
+        return None;
+    }
+    let rect = task::task_output_rect(area, lx)?;
+    let run = lx.agents.runs.get(page.agents_window.active)?;
+    let source = history::HistorySource::from_chat(&run.chat, &run.compact);
+    let view = history::view_source_plain(rect, source, cache);
+    let visible = usize::from(view.body.height);
+    let max = view.total_rows.saturating_sub(visible);
+    let top = if run.follow { max } else { run.scroll.min(max) };
+    history::scrollbar(view.body, view.total_rows, visible, top)
+}
+
+/// 任意数据源上的可折叠目标（子 agent 详情复用）。
+pub(crate) fn card_target_at_source(
+    body: Rect,
+    scroll: usize,
+    source: history::HistorySource<'_>,
+    column: u16,
+    row: u16,
+    cache: &mut PaneCache,
+) -> Option<CardTarget> {
+    let hit = card_at_source(body, scroll, source, column, row, cache)?;
+    hit.clickable.then(|| target_of(&hit.kind))
 }
 
 /// 指针下的**可折叠内容**：按下时记录目标，松开未拖动即切换折叠。
@@ -281,9 +357,14 @@ fn target_of(kind: &history::CardKind) -> CardTarget {
         history::CardKind::Report {
             message_id,
             agent_id,
+            more,
             ..
         } => CardTarget::Report {
             message_id: message_id.clone(),
+            agent_id: agent_id.clone(),
+            more: *more,
+        },
+        history::CardKind::AgentLink { agent_id } => CardTarget::OpenAgent {
             agent_id: agent_id.clone(),
         },
     }
