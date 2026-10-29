@@ -1,6 +1,6 @@
 # lx 输入框命令面板样式重设计与 `@` 面板双 Tab — 代码评审报告 (Code Review)
 
-> 评审范围：`.worktrees/lx-command-panel-style`（分支 `feat/lx-command-panel-style`）
+> 评审范围：`.worktrees/lx-command-panel-style`（分支 `feat/lx-command-panel-style`，已合入 `dev`）
 >
 > 检索与分析工具：`codegraph`（调用链与影响面分析）、`codebase-memory-mcp`（变更爆炸半径与全量符号检索）
 >
@@ -8,6 +8,8 @@
 > - **P0**：功能性缺陷 / 交互穿透与状态失步 Bug（直接影响用户点击行为与面板实时刷新）
 > - **P1**：布局遮挡 / 视口与几何边界计算偏差（影响窄窗格显示、过滤体验与组件通用性）
 > - **P2**：死代码清理与规范文档同步（移除废弃常量、更新设计规范文档）
+>
+> 结论：P0 / P1 / P2 全部已修复，回归测试已补齐；`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全绿。
 
 ---
 
