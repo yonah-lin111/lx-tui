@@ -268,9 +268,8 @@ impl Prompt {
         }
         let first_row = usize::from(first.0).min(rows.len() - 1);
         let last_row = usize::from(last.0).min(rows.len() - 1);
-        let mut out = String::new();
+        let mut lines: Vec<String> = Vec::new();
         let mut previous_line = None;
-        let mut copied = false;
         for (offset, row) in rows[first_row..=last_row].iter().enumerate() {
             let index = first_row + offset;
             let slice = &self.text[row.start..row.end];
@@ -284,17 +283,20 @@ impl Prompt {
             } else {
                 row.end
             };
-            if from >= to {
-                continue;
+            if previous_line != Some(row.line) {
+                lines.push(String::new());
+                previous_line = Some(row.line);
             }
-            if previous_line.is_some_and(|line| line != row.line) {
-                out.push('\n');
+            if from < to
+                && let Some(current) = lines.last_mut()
+            {
+                current.push_str(&self.text[from..to]);
             }
-            out.push_str(&self.text[from..to]);
-            previous_line = Some(row.line);
-            copied = true;
         }
-        (copied && !out.is_empty()).then_some(out)
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        (!lines.is_empty()).then(|| lines.join("\n"))
     }
     /// 光标在视觉行中的索引与显示列（跨折行边界时归入下一视觉行）。
     pub(super) fn cursor_visual_in(&self, rows: &[VisualRow]) -> (usize, usize) {

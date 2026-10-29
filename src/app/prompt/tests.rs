@@ -215,6 +215,21 @@ fn selection_spans_wrapped_rows_and_wide_chars() {
 }
 
 #[test]
+fn selection_preserves_inner_blank_lines_and_trims_trailing_empty_lines() {
+    let mut prompt = prompt(20, 6);
+    prompt.insert_str("first\n\n\nsecond\n\n");
+    assert_eq!(
+        prompt.selection_text((0, 0), (5, 10)).as_deref(),
+        Some("first\n\n\nsecond")
+    );
+    assert_eq!(
+        prompt.selection_text((4, 0), (5, 10)),
+        None,
+        "仅选中尾部空行不产出复制内容"
+    );
+}
+
+#[test]
 fn replace_range_swaps_selection_and_undo_restores_it() {
     let mut prompt = prompt(20, 3);
     prompt.insert_str("hello world");
