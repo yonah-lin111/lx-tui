@@ -7,7 +7,6 @@ use ratatui::layout::Rect;
 
 use crate::app::state::Lx;
 use crate::ui::text;
-#[cfg(test)]
 use crate::ui::widgets::command_panel::PanelLayout;
 use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView, PanelPlacement};
 
@@ -34,6 +33,7 @@ impl ReferRow {
 struct ReferData {
     rows: Vec<ReferRow>,
     active: usize,
+    viewport: Option<usize>,
 }
 
 impl ReferData {
@@ -43,7 +43,6 @@ impl ReferData {
 }
 
 /// 快捷面板纯几何。
-#[cfg(test)]
 pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
     let input = super::input_rect(area, lx)?;
     let data = panel_data(lx)?;
@@ -99,6 +98,7 @@ fn panel_data(lx: &Lx) -> Option<ReferData> {
             })
             .collect(),
         active: panel.active(),
+        viewport: panel.viewport(),
     })
 }
 
@@ -116,7 +116,7 @@ fn view<'a>(
         active: data.active,
         current: None,
         window_anchor: Some(data.active),
-        window_start: None,
+        window_start: data.viewport,
         anchor_row: above,
         max_height: Some(cap),
         title: Some(text::REFER_PANEL_TITLE),

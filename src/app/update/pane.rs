@@ -792,6 +792,13 @@ pub fn select_lx_refer(state: &mut AppState, id: PaneId, index: usize) -> bool {
     pane.lx.refer_confirm()
 }
 
+/// 滚轮在快捷引用面板上滚动候选视口；`base` 为当前窗口起点，高亮不动。
+pub fn scroll_lx_refer(state: &mut AppState, id: PaneId, delta: isize, base: usize) -> bool {
+    state
+        .pane_mut_anywhere(id)
+        .is_some_and(|pane| pane.lx.refer_scroll(delta, base))
+}
+
 /// 鼠标悬停 `/` 命令面板条目：更新高亮（窗口不滚动）；返回是否变化。
 pub fn hover_lx_slash(state: &mut AppState, id: PaneId, index: usize) -> bool {
     state

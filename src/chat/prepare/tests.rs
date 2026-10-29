@@ -196,3 +196,27 @@ fn prepare_parses_ref_content_and_keeps_in_display_text() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn prepare_resolves_deep_nested_ref_content_via_workspace_scan() {
+    let dir = temp_dir("nested-ref");
+    let deep_dir = dir.join("src").join("ui").join("nested");
+    std::fs::create_dir_all(&deep_dir).expect("create deep dir");
+    std::fs::write(deep_dir.join("code.rs"), "fn deep() {}").expect("write code");
+
+    // 末两段为 nested/code.rs
+    let text = "Look at @[ref-content]/nested/code.rs please";
+    let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
+    assert_eq!(prepared.attachments.len(), 1);
+    assert_eq!(
+        prepared.attachments[0].label,
+        "@[ref-content]/nested/code.rs"
+    );
+    assert_eq!(
+        prepared.attachments[0].source_path.as_deref(),
+        Some("src/ui/nested/code.rs"),
+        "source_path 必须正确恢复为完整相对路径"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

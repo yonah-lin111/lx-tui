@@ -7,8 +7,8 @@
 //! 确认时统一插入 `@[ref-content]/<相对路径> `。
 
 use crate::app::markdown::{
-    ReferCandidate, ReferPanel, ReferTag, filter_refer_candidates, refer_candidates,
-    refer_insertion, refer_trigger,
+    ReferCandidate, ReferPanel, ReferTag, filter_refer_candidates, is_refer_duplicate,
+    refer_candidates, refer_insertion, refer_trigger,
 };
 
 use super::Lx;
@@ -41,7 +41,7 @@ impl Lx {
             &self.input,
             std::slice::from_ref(&scope),
             &trigger.range,
-            &[],
+            self.mention.entries(),
         );
 
         // 2. 从会话历史提取用户发送过的提及与附件
@@ -61,11 +61,16 @@ impl Lx {
                 tag,
                 order: candidates.len(),
             };
-            // 避免与输入框已有的重复
-            if !candidates
+            // 查重：若已有指向同一目标的候选，升级为全相对路径；若无则追加
+            if let Some(pos) = candidates
                 .iter()
-                .any(|c| c.path == candidate.path && c.is_directory() == candidate.is_directory())
+                .position(|c| is_refer_duplicate(c, &candidate))
             {
+                if candidate.path.len() > candidates[pos].path.len() {
+                    candidates[pos].path = candidate.path;
+                    candidates[pos].text = candidate.text;
+                }
+            } else {
                 candidates.push(candidate);
             }
         }
@@ -76,6 +81,14 @@ impl Lx {
             return;
         }
         self.refer = Some(ReferPanel::new(trigger, filtered));
+    }
+
+    /// 滚轮滚动快捷面板视口；返回是否移动。
+    pub fn refer_scroll(&mut self, delta: isize, base: usize) -> bool {
+        let Some(panel) = self.refer.as_mut() else {
+            return false;
+        };
+        panel.scroll_viewport(delta, base)
     }
 
     /// 面板打开时按偏移循环移动高亮；返回是否消费该按键。

@@ -126,3 +126,65 @@ fn refer_escape_closes_and_suppresses_until_cursor_move() {
     lx.move_left();
     assert!(!lx.refer_suppressed);
 }
+
+#[test]
+fn refer_escape_suppressed_recovers_on_backspace() {
+    let mut lx = Lx::new();
+    lx.chat
+        .messages
+        .push(user_message("test", Some(("src/main.rs", false))));
+    lx.insert_char('m');
+    lx.insert_char('a');
+    lx.insert_char('i');
+    assert!(lx.refer_panel().is_some());
+
+    assert!(lx.refer_escape());
+    assert!(lx.refer_panel().is_none());
+    assert!(lx.refer_suppressed);
+
+    // 按退格键删除字符解除压制并重新激活面板
+    lx.backspace();
+    assert!(!lx.refer_suppressed);
+    assert!(lx.refer_panel().is_some());
+}
+
+#[test]
+fn refer_panel_upgrades_short_path_when_history_has_full_path() {
+    let mut lx = Lx::new();
+    // 历史中有完整路径
+    lx.chat.messages.push(user_message(
+        "history",
+        Some(("src/ui/main_content/lx/refer.rs", false)),
+    ));
+    // 输入框中先出现了末两段形式的快捷引用
+    lx.insert_str("@[ref-content]/lx/refer.rs ");
+    // 用户再次输入 ref 触发
+    lx.insert_char('r');
+    lx.insert_char('e');
+
+    let panel = lx.refer_panel().expect("panel open");
+    // 应当成功去重，且 path 升级为全相对路径
+    assert_eq!(panel.items().len(), 1);
+    assert_eq!(panel.items()[0].path, "src/ui/main_content/lx/refer.rs");
+}
+
+#[test]
+fn refer_scroll_moves_viewport() {
+    let mut lx = Lx::new();
+    // 塞入多个历史项
+    for i in 0..10 {
+        let name = format!("src/file_{i}.rs");
+        lx.chat
+            .messages
+            .push(user_message("msg", Some((&name, false))));
+    }
+    lx.insert_char('f');
+    lx.insert_char('i');
+
+    let panel = lx.refer_panel().expect("panel open");
+    assert_eq!(panel.items().len(), 10);
+    assert_eq!(panel.viewport(), None);
+
+    assert!(lx.refer_scroll(3, 0));
+    assert_eq!(lx.refer_panel().unwrap().viewport(), Some(3));
+}

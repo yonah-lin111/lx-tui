@@ -571,6 +571,7 @@ impl Lx {
     /// 光标紧跟 `@路径 ` 提及之后的空白、且提及面板未打开时，一次删净整块提及
     /// （对齐 prompt 的 `mention_deletion_range` 语义）；面板打开时按普通退格编辑查询。
     pub fn backspace(&mut self) {
+        self.refer_suppressed = false;
         // Shell 正文起点退格：退出模式并保留正文（不再吞字符）；压一次快照，
         // 使 undo 能恢复模式与正文。
         if self.input_mode == LxInputMode::Shell && self.cursor == 0 {
@@ -612,6 +613,7 @@ impl Lx {
 
     /// 删除光标处字符。
     pub fn delete(&mut self) {
+        self.refer_suppressed = false;
         if self.cursor < self.input.len() {
             self.snapshot();
             self.input.remove(self.cursor);
@@ -779,18 +781,21 @@ impl Lx {
 
     /// 光标左移一个词。
     pub fn word_left(&mut self) {
+        self.refer_suppressed = false;
         self.cursor = text::word_start_before(&self.input, self.cursor);
         self.refresh_panel();
     }
 
     /// 光标右移一个词。
     pub fn word_right(&mut self) {
+        self.refer_suppressed = false;
         self.cursor = text::word_end_after(&self.input, self.cursor);
         self.refresh_panel();
     }
 
     /// 删除光标到逻辑行首；光标已在行首时删除前一个换行（与上一行合并）。
     pub fn delete_to_line_start(&mut self) {
+        self.refer_suppressed = false;
         if self.cursor == 0 {
             return;
         }
@@ -809,6 +814,7 @@ impl Lx {
 
     /// 删除光标到逻辑行尾。
     pub fn delete_to_line_end(&mut self) {
+        self.refer_suppressed = false;
         let end = text::line_end(&self.input, self.cursor);
         if self.cursor < end {
             self.snapshot();
@@ -819,6 +825,7 @@ impl Lx {
 
     /// 向前删除一个词。
     pub fn delete_word_backward(&mut self) {
+        self.refer_suppressed = false;
         let start = text::word_start_before(&self.input, self.cursor);
         if start < self.cursor {
             self.snapshot();
@@ -832,6 +839,7 @@ impl Lx {
     /// 光标**不动**（readline M-d 语义）：被删区间在光标之后，删完光标位置仍然合法。
     /// 曾经把光标设成删除前的 `end`，缓冲区缩短后光标越界，下一次编辑直接 panic。
     pub fn delete_word_forward(&mut self) {
+        self.refer_suppressed = false;
         let end = text::word_end_after(&self.input, self.cursor);
         if self.cursor < end {
             self.snapshot();
@@ -841,6 +849,7 @@ impl Lx {
 
     /// 清空输入框内容；空 Shell 模式也可借此退出。
     pub fn clear(&mut self) {
+        self.refer_suppressed = false;
         if self.input.is_empty() && self.input_mode == LxInputMode::Chat {
             return;
         }
@@ -853,6 +862,7 @@ impl Lx {
 
     /// 撤销一步（恢复正文、光标与模式；修订号继续前进）。
     pub fn undo(&mut self) {
+        self.refer_suppressed = false;
         if let Some(snapshot) = self.undo.pop() {
             let current = LxSnapshot {
                 text: std::mem::replace(&mut self.input, snapshot.text),
@@ -869,6 +879,7 @@ impl Lx {
 
     /// 重做一步（恢复正文、光标与模式；修订号继续前进）。
     pub fn redo(&mut self) {
+        self.refer_suppressed = false;
         if let Some(snapshot) = self.redo.pop() {
             let current = LxSnapshot {
                 text: std::mem::replace(&mut self.input, snapshot.text),

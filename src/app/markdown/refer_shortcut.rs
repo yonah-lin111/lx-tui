@@ -88,6 +88,7 @@ pub struct ReferPanel {
     trigger: ReferTrigger,
     items: Vec<ReferCandidate>,
     active: usize,
+    viewport: Option<usize>,
 }
 
 impl ReferPanel {
@@ -97,6 +98,7 @@ impl ReferPanel {
             trigger,
             items,
             active: 0,
+            viewport: None,
         }
     }
 
@@ -115,6 +117,11 @@ impl ReferPanel {
         self.active
     }
 
+    /// 滚轮显式视口起点。
+    pub fn viewport(&self) -> Option<usize> {
+        self.viewport
+    }
+
     /// 当前高亮候选。
     pub fn active_candidate(&self) -> Option<&ReferCandidate> {
         self.items.get(self.active)
@@ -125,10 +132,20 @@ impl ReferPanel {
         self.active = index.min(self.items.len().saturating_sub(1));
     }
 
-    /// 按偏移循环移动高亮。
+    /// 按偏移循环移动高亮；清除显式视口。
     pub fn move_active(&mut self, delta: isize) {
         let len = self.items.len() as isize;
         self.active = (self.active as isize + delta).rem_euclid(len) as usize;
+        self.viewport = None;
+    }
+
+    /// 滚轮滚动可见窗口：显式视口从 `base` 起偏移并钳制（不循环），高亮不动。
+    pub fn scroll_viewport(&mut self, delta: isize, base: usize) -> bool {
+        let max = self.items.len().saturating_sub(1) as isize;
+        let next = (base.min(max as usize) as isize + delta).clamp(0, max) as usize;
+        let changed = next != base;
+        self.viewport = Some(next);
+        changed
     }
 }
 
@@ -449,7 +466,7 @@ fn directory_entry(path: &str, entries: &[MentionEntry]) -> bool {
 /// 5. 两个完整路径若存在尾随包含关系（如绝对路径与相对路径）且短名一致，判定为重复。
 ///
 /// 注意：两个末两段同名但不同根目录的独立文件（如 `@a/src/index.ts` 与 `@b/src/index.ts`）互不影响，均保留。
-fn is_duplicate(a: &ReferCandidate, b: &ReferCandidate) -> bool {
+pub fn is_refer_duplicate(a: &ReferCandidate, b: &ReferCandidate) -> bool {
     if a.text == b.text {
         return true;
     }
@@ -501,7 +518,7 @@ fn push_unique(
     };
     if candidates
         .iter()
-        .any(|existing| is_duplicate(existing, &candidate))
+        .any(|existing| is_refer_duplicate(existing, &candidate))
     {
         return;
     }

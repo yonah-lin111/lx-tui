@@ -387,6 +387,18 @@ pub(crate) fn handle_mouse_wheel(
                 }
                 return;
             }
+            // lx 页：快捷引用面板候选视口优先于输入框滚动。
+            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                && let Some(bar) = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::refer_layout(inner, &target.lx))
+                && bar.rect.contains((mouse.column, mouse.row).into())
+            {
+                if update::scroll_lx_refer(state, pane, direction, bar.start) {
+                    *dirty = true;
+                }
+                return;
+            }
             // 后台任务面板的输出容器：滚轮滚动输出视口（不穿透到下方 item 列表）。
             if let Some(direction) = vertical_wheel_direction(mouse.kind)
                 && let Some(task_rects) = state

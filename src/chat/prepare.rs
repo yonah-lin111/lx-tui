@@ -227,9 +227,13 @@ pub fn prepare_user_message(
         let token_text =
             &raw_text[range.start + crate::app::markdown::REF_CONTENT_PREFIX.len()..range.end];
         let trimmed_token = token_text.trim_end_matches('/');
-        let resolved = resolve_reference_path(workspace_root, trimmed_token);
 
-        if let Ok(metadata) = std::fs::metadata(&resolved) {
+        if let Some((resolved, relative_path)) =
+            resolve_ref_content_target(workspace_root, trimmed_token, &attachments)
+        {
+            let Ok(metadata) = std::fs::metadata(&resolved) else {
+                continue;
+            };
             let mut end = range.end;
             if raw_text[end..].starts_with(' ') {
                 end += 1;
@@ -243,7 +247,7 @@ pub fn prepare_user_message(
                     label: full_label,
                     marker_start: Some(range.start),
                     marker_end: Some(end),
-                    source_path: Some(trimmed_token.to_string()),
+                    source_path: Some(relative_path),
                     mime: None,
                     width: None,
                     height: None,
@@ -267,7 +271,7 @@ pub fn prepare_user_message(
                     label: full_label,
                     marker_start: Some(range.start),
                     marker_end: Some(end),
-                    source_path: Some(trimmed_token.to_string()),
+                    source_path: Some(relative_path),
                     mime: None,
                     width: None,
                     height: None,
@@ -421,6 +425,49 @@ fn resolve_reference_path(workspace_root: &Path, path_str: &str) -> PathBuf {
     } else {
         workspace_root.join(path)
     }
+}
+
+/// 解析快捷引用对应的物理路径：
+/// 1. 若 workspace_root.join(token) 直接存在，返回该路径与 token；
+/// 2. 若当前消息中已有其它附件的 source_path 以后缀匹配 token，使用该完整路径；
+/// 3. 若工作区中存在后缀匹配 `/{token}` 或 `== token` 的条目，使用工作区扫描找到的完整相对路径。
+fn resolve_ref_content_target(
+    workspace_root: &Path,
+    trimmed_token: &str,
+    existing_attachments: &[MessageAttachmentInput],
+) -> Option<(PathBuf, String)> {
+    let direct = resolve_reference_path(workspace_root, trimmed_token);
+    if std::fs::metadata(&direct).is_ok() {
+        return Some((direct, trimmed_token.to_string()));
+    }
+
+    // 尝试在已有的附件中匹配
+    for att in existing_attachments {
+        if let Some(src) = &att.source_path {
+            let normalized = src.trim_matches('/');
+            if normalized == trimmed_token || normalized.ends_with(&format!("/{trimmed_token}")) {
+                let resolved = resolve_reference_path(workspace_root, normalized);
+                if std::fs::metadata(&resolved).is_ok() {
+                    return Some((resolved, normalized.to_string()));
+                }
+            }
+        }
+    }
+
+    // 扫描工作区匹配后缀
+    let entries = crate::files::scan(workspace_root);
+    let token_suffix = format!("/{trimmed_token}");
+    if let Some(entry) = entries
+        .iter()
+        .find(|e| e.path == trimmed_token || e.path.ends_with(&token_suffix))
+    {
+        let resolved = workspace_root.join(&entry.path);
+        if std::fs::metadata(&resolved).is_ok() {
+            return Some((resolved, entry.path.clone()));
+        }
+    }
+
+    None
 }
 
 /// 移除展示用正文中的有效引用标记，并清理多余空白。
