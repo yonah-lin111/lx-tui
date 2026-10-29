@@ -7364,6 +7364,40 @@ fn lx_paste_cancels_rewind_arming() {
     assert_eq!(target.lx.input, "pasted");
 }
 
+#[test]
+fn lx_paste_image_path_opens_panel_and_confirms_refer_image() {
+    let dir = std::env::temp_dir().join(format!("lx-paste-img-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let img_path = dir.join("PixPin_2026-10-29_09-52-07.png");
+    let img: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
+        image::ImageBuffer::from_pixel(2, 2, image::Rgba([1, 2, 3, 255]));
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("png");
+    std::fs::write(&img_path, &png).expect("write");
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state.pane_mut_anywhere(pane).expect("pane").view = PaneView::Lx;
+
+    let path_str = img_path.to_string_lossy().into_owned();
+    assert!(paste::handle_lx_paste(&mut state, path_str.clone()));
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    assert!(
+        target.lx.paste_panel().is_some(),
+        "粘贴有路径的图片必须弹出二级面板"
+    );
+    assert!(
+        target
+            .lx
+            .paste_confirm(crate::app::prompt::PasteAction::Reference)
+    );
+    assert_eq!(target.lx.input, format!("@[refer-image]({path_str}) "));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ===== ask 面板接线：点击吞掉、粘贴只进手写缓冲 =====
 
 /// 流中窗格 + 一道两选项的挂起提问（真实 request 路径会跑串行锁，这里直接构造，

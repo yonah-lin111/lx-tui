@@ -112,7 +112,10 @@ pub fn parse_references_in(text: &str, from: usize, to: usize) -> Vec<ParsedRefe
     let mut index = from;
     while let Some(offset) = text[index..to].find(REFER_PREFIX) {
         let at = index + offset;
-        if super::open_fence(&text[..at]).is_some() {
+        let line_start = text[..at].rfind('\n').map_or(0, |idx| idx + 1);
+        if super::open_fence(&text[..at]).is_some()
+            || super::inline_code_open(&text[line_start..at])
+        {
             index = at + REFER_PREFIX.len();
             continue;
         }

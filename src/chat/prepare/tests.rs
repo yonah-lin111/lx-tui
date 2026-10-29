@@ -149,3 +149,19 @@ fn strip_references_cleans_display_text() {
     let stripped = strip_references_for_display(text, &metas);
     assert_eq!(stripped, "Please review and carefully.");
 }
+
+#[test]
+fn prepare_sorts_attachments_by_marker_order_and_skips_inline_code() {
+    let dir = temp_dir("order-and-code");
+    std::fs::write(dir.join("early.rs"), "fn a() {}").expect("write early");
+    std::fs::write(dir.join("late.rs"), "fn b() {}").expect("write late");
+
+    // `@early.rs` 在文本前面，`@[refer-file](late.rs)` 在后面，且行内反引号里的 `@early.rs` 应被跳过
+    let text = "先看 @early.rs 再看 `@early.rs` 最后看 @[refer-file](late.rs) ";
+    let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
+    assert_eq!(prepared.attachments.len(), 2);
+    assert_eq!(prepared.attachments[0].label, "early.rs");
+    assert_eq!(prepared.attachments[1].label, "late.rs");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

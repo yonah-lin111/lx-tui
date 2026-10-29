@@ -82,23 +82,24 @@ pub fn prepare_user_message(
         Ok(())
     };
 
-    // 1. 处理直接草稿附件（剪贴板图片等）
+    // 1. 处理直接草稿附件（测试或预准备附件）
     for draft in draft_images {
         add_unique_image(draft.image.clone())?;
+        let source_path = draft
+            .image
+            .source_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| draft.image.source_name.clone());
         attachments.push(MessageAttachmentInput {
             kind: MessageAttachmentKind::Image,
             label: draft.image.source_name.clone(),
             marker_start: None,
             marker_end: None,
-            source_path: draft
-                .image
-                .source_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned()),
+            source_path: Some(source_path),
             mime: Some(draft.image.mime.clone()),
             width: Some(draft.image.width),
             height: Some(draft.image.height),
-            image_bytes: Some(draft.image.bytes.clone()),
         });
     }
 
@@ -123,7 +124,6 @@ pub fn prepare_user_message(
                     mime: None,
                     width: None,
                     height: None,
-                    image_bytes: None,
                 });
             }
             ReferKind::File => {
@@ -136,7 +136,6 @@ pub fn prepare_user_message(
                     mime: None,
                     width: None,
                     height: None,
-                    image_bytes: None,
                 });
             }
             ReferKind::Image => {
@@ -148,11 +147,10 @@ pub fn prepare_user_message(
                     label: reference.path.clone(),
                     marker_start: Some(range_start),
                     marker_end: Some(range_end),
-                    source_path: Some(reference.path.clone()),
+                    source_path: Some(resolved.to_string_lossy().into_owned()),
                     mime: Some(processed.mime),
                     width: Some(processed.width),
                     height: Some(processed.height),
-                    image_bytes: Some(processed.bytes),
                 });
             }
         }
@@ -188,7 +186,6 @@ pub fn prepare_user_message(
                     mime: None,
                     width: None,
                     height: None,
-                    image_bytes: None,
                 });
             } else if sniff_image_file(&resolved) {
                 let processed = load_and_process_image_file(&resolved)?;
@@ -198,11 +195,10 @@ pub fn prepare_user_message(
                     label: token_text.to_string(),
                     marker_start: Some(range.start),
                     marker_end: Some(end),
-                    source_path: Some(token_text.to_string()),
+                    source_path: Some(resolved.to_string_lossy().into_owned()),
                     mime: Some(processed.mime),
                     width: Some(processed.width),
                     height: Some(processed.height),
-                    image_bytes: Some(processed.bytes),
                 });
             } else {
                 attachments.push(MessageAttachmentInput {
@@ -214,7 +210,6 @@ pub fn prepare_user_message(
                     mime: None,
                     width: None,
                     height: None,
-                    image_bytes: None,
                 });
             }
         }
@@ -229,6 +224,11 @@ pub fn prepare_user_message(
         let matches: Vec<&MessageAttachmentInput> = attachments
             .iter()
             .filter(|att| {
+                if let Some(name) = crate::app::markdown::short_ref_name(&att.label)
+                    && name == short_name
+                {
+                    return true;
+                }
                 if let Some(src) = &att.source_path
                     && let Some(name) = crate::app::markdown::short_ref_name(src)
                 {
@@ -254,10 +254,12 @@ pub fn prepare_user_message(
                 mime: matched.mime.clone(),
                 width: matched.width,
                 height: matched.height,
-                image_bytes: matched.image_bytes.clone(),
             });
         }
     }
+
+    // 按在输入文本中的起始位置排序，使引用树与文本出现顺序严格一致
+    attachments.sort_by_key(|att| att.marker_start.unwrap_or(0));
 
     let model_images = unique_images
         .into_iter()
@@ -339,17 +341,15 @@ fn parse_short_ref_tokens(text: &str) -> Vec<(usize, usize, String)> {
     result
 }
 
-/// 判定位置是否在代码围栏内部。
+/// 判定位置是否在代码围栏或行内代码反引号保护区内。
 fn inside_code_fence(text: &str, pos: usize) -> bool {
-    let prefix = &text[..pos.min(text.len())];
-    let mut open = false;
-    for line in prefix.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            open = !open;
-        }
+    let pos = pos.min(text.len());
+    let prefix = &text[..pos];
+    if crate::app::markdown::open_fence(prefix).is_some() {
+        return true;
     }
-    open
+    let line_start = prefix.rfind('\n').map_or(0, |idx| idx + 1);
+    crate::app::markdown::inline_code_open(&text[line_start..pos])
 }
 
 /// 路径解析：若为相对路径，按工作区根解析。
@@ -367,9 +367,33 @@ pub fn strip_references_for_display(
     raw_text: &str,
     attachments: &[crate::db::chat::MessageAttachmentMeta],
 ) -> String {
-    let mut ranges: Vec<(usize, usize)> = attachments
-        .iter()
-        .filter_map(|att| att.marker_start.zip(att.marker_end))
+    strip_marker_ranges(
+        raw_text,
+        attachments
+            .iter()
+            .filter_map(|att| att.marker_start.zip(att.marker_end)),
+    )
+}
+
+/// 移除尚未落库的附件输入对应的引用标记，供生成会话标题/预览与空正文回退使用。
+pub fn strip_references_from_inputs(
+    raw_text: &str,
+    attachments: &[crate::db::chat::MessageAttachmentInput],
+) -> String {
+    strip_marker_ranges(
+        raw_text,
+        attachments
+            .iter()
+            .filter_map(|att| att.marker_start.zip(att.marker_end)),
+    )
+}
+
+fn strip_marker_ranges(
+    raw_text: &str,
+    marker_ranges: impl IntoIterator<Item = (usize, usize)>,
+) -> String {
+    let mut ranges: Vec<(usize, usize)> = marker_ranges
+        .into_iter()
         .filter(|(s, e)| {
             *s < *e
                 && *e <= raw_text.len()

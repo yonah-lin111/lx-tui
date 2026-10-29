@@ -25,16 +25,16 @@ use crate::chat::process::{
 static TOOLS: [ToolSpec; 11] = [
     ToolSpec::new(
         "read",
-        "Read a UTF-8 text file, or list a directory. \
-         Returns numbered lines as `{line}: {text}` with 1-based line numbers plus a \
+        "Read a UTF-8 text file, view an image file (PNG, JPEG, GIF, WebP, BMP, TIFF), or list a directory. \
+         For text files, returns numbered lines as `{line}: {text}` with 1-based line numbers plus a \
          `file_version` token; pass that token as `read_version` (write) or in \
          `read_versions` (edit) when you modify the file — writes to files you have not \
          read in this session, or that changed since the read, are rejected. \
+         For image files, attaches the decoded image directly to the conversation so you can inspect it visually. \
          `offset` is a 1-based first line (omitted = start at line 1) and `limit` caps \
          the number of returned lines. Long output is truncated explicitly and reports \
-         `next_offset` so you can continue reading. A single file larger than 16 MiB is \
-         rejected with a `too_large` error (the limit applies to the bytes read into \
-         memory, not to the returned lines); use `search` to locate the content first.",
+         `next_offset` so you can continue reading. A single text file larger than 16 MiB (or image larger than 20 MiB) is \
+         rejected with a `too_large` error; use `search` to locate text content first.",
         read_parameters,
     ),
     ToolSpec::new(

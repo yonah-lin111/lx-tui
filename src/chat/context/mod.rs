@@ -105,6 +105,14 @@ fn escape_summary_attr(text: &str) -> String {
         .collect()
 }
 
+/// 装配结果中单个图片附件的引用描述。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemImageAttachment {
+    pub id: String,
+    pub mime: String,
+    pub label: String,
+}
+
 /// 装配结果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Assembly {
@@ -123,8 +131,8 @@ pub struct Assembly {
     /// 摘要放在系统段而非伪造 user/assistant 消息：design §3.3 的上下文顺序就是
     /// system → environment → compact summary → 检查点之后的消息。
     pub system_prompt: String,
-    /// 选中的每个 UserContent 步骤对应的图片附件 (id, mime) 列表。
-    pub item_image_attachments: Vec<(usize, Vec<(String, String)>)>,
+    /// 选中的每个 UserContent 步骤对应的图片附件列表。
+    pub item_image_attachments: Vec<(usize, Vec<ItemImageAttachment>)>,
 }
 
 /// 一个可回放组在两条视图中的区间（`end` 不含）。
@@ -183,12 +191,19 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         .cloned()
         .collect();
     let planned = plan_turns(&retained);
-    let draft_image_tokens = (input
-        .draft_attachments
-        .iter()
-        .filter(|att| att.kind == crate::db::chat::MessageAttachmentKind::Image)
-        .count() as u64)
-        * 1600;
+    let draft_image_tokens = {
+        let mut unique_sources = std::collections::HashSet::new();
+        let mut count = 0u64;
+        for att in input.draft_attachments {
+            if att.kind == crate::db::chat::MessageAttachmentKind::Image {
+                let key = att.source_path.as_deref().unwrap_or(&att.label);
+                if unique_sources.insert(key) {
+                    count += 1;
+                }
+            }
+        }
+        count * 1600
+    };
     let draft_tokens = (estimate_tokens(input.draft) as u64).saturating_add(draft_image_tokens);
     let output_reserve = input.output_limit.unwrap_or(0).min(8192);
     let budget = input.context_limit.map(|context| {
@@ -215,7 +230,7 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
     let mut turns: Vec<ChatTurn> = Vec::with_capacity(kept.len() * 2 + 1);
     let mut items: Vec<ModelItem> = Vec::new();
     let mut groups = Vec::with_capacity(kept.len());
-    let mut item_image_attachments: Vec<(usize, Vec<(String, String)>)> = Vec::new();
+    let mut item_image_attachments: Vec<(usize, Vec<ItemImageAttachment>)> = Vec::new();
     for turn in &kept {
         let turn_start = turns.len();
         let item_start = items.len();
@@ -240,11 +255,10 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
             let att_ids = turn
                 .user_images
                 .iter()
-                .map(|a| {
-                    (
-                        a.id.clone(),
-                        a.mime.clone().unwrap_or_else(|| "image/png".into()),
-                    )
+                .map(|a| ItemImageAttachment {
+                    id: a.id.clone(),
+                    mime: a.mime.clone().unwrap_or_else(|| "image/png".into()),
+                    label: a.label.clone(),
                 })
                 .collect();
             item_image_attachments.push((item_idx, att_ids));
@@ -279,11 +293,10 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         let item_idx = items.len();
         let att_ids = draft_images
             .iter()
-            .map(|a| {
-                (
-                    a.id.clone(),
-                    a.mime.clone().unwrap_or_else(|| "image/png".into()),
-                )
+            .map(|a| ItemImageAttachment {
+                id: a.id.clone(),
+                mime: a.mime.clone().unwrap_or_else(|| "image/png".into()),
+                label: a.label.clone(),
             })
             .collect();
         item_image_attachments.push((item_idx, att_ids));
@@ -416,7 +429,14 @@ fn plan_turn(user: &ChatMessage, assistant: &ChatMessage) -> PlannedTurn {
         .cloned()
         .collect();
     let mut tokens = estimate_tokens(&user_text) as u64;
-    tokens = tokens.saturating_add((user_images.len() as u64) * 1600);
+    let unique_img_count = {
+        let mut seen = std::collections::HashSet::new();
+        user_images
+            .iter()
+            .filter(|att| seen.insert(att.source_path.as_deref().unwrap_or(&att.label)))
+            .count() as u64
+    };
+    tokens = tokens.saturating_add(unique_img_count * 1600);
     for item in &items {
         tokens = tokens.saturating_add(item_tokens(item));
     }

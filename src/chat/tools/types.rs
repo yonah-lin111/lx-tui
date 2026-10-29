@@ -27,12 +27,24 @@ pub const SUBAGENT_TOOL_NAMES: [&str; 3] = ["spawn_agent", "wait_agent", "close_
 ///
 /// `reads` 是本会话的读版本登记表（读后版本保护）。生产入口必须注入；没有登记表时
 /// 写工具一律拒绝修改已有文件（宁可要求重读，也不放行无版本写入）。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ToolContext {
     /// 工作区根（冻结快照）。
     pub cwd: PathBuf,
     /// 会话级读版本登记表。
     pub reads: Option<std::sync::Arc<super::read_version::ReadRegistry>>,
+    /// 当前模型是否支持图像输入（`false` 时 `read` 拒绝读取图片文件）。
+    pub supports_image_input: bool,
+}
+
+impl Default for ToolContext {
+    fn default() -> Self {
+        Self {
+            cwd: PathBuf::new(),
+            reads: None,
+            supports_image_input: true,
+        }
+    }
 }
 
 impl PartialEq for ToolContext {
@@ -45,11 +57,12 @@ impl PartialEq for ToolContext {
 impl Eq for ToolContext {}
 
 impl ToolContext {
-    /// 以工作区根构造上下文（不带读版本登记表）。
+    /// 以工作区根构造上下文（不带读版本登记表，默认允许读图供单元测试使用）。
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
         Self {
             cwd: cwd.into(),
             reads: None,
+            supports_image_input: true,
         }
     }
 
@@ -58,15 +71,23 @@ impl ToolContext {
         self.reads = Some(reads);
         self
     }
+
+    /// 设置当前模型是否支持图像输入（生产执行器按 `FrozenModel` 注入）。
+    pub fn with_image_support(mut self, supports: bool) -> Self {
+        self.supports_image_input = supports;
+        self
+    }
 }
 
-/// `read` 的结果种类：普通文件内容或目录列表（目录内容为每行一个条目）。
+/// `read` 的结果种类：普通文件内容、目录列表或图片文件。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadKind {
     /// 文本文件内容。
     File,
     /// 目录条目列表（`[dir]` / `[file]` 前缀）。
     Directory,
+    /// 图片文件（自动缩放/编码后作为多模态图像注入模型上下文）。
+    Image,
 }
 
 /// 工具错误码：稳定英文标识，用于回传模型、落库与追踪，不是用户可见文案。

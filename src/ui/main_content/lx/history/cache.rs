@@ -453,6 +453,8 @@ fn step_signature(
                     hash.write_u8(att.kind as u8);
                     hash.write_edges(&att.label);
                     hash.write_i64(att.position);
+                    hash.write_usize(att.marker_start.unwrap_or(usize::MAX));
+                    hash.write_usize(att.marker_end.unwrap_or(usize::MAX));
                 }
             }
         }

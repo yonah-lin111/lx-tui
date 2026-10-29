@@ -118,6 +118,17 @@ pub struct ModelConfig {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+impl ModelConfig {
+    /// 该模型是否声明支持图像输入（`modalities.input` 数组包含 `"image"`）。
+    pub fn supports_image_input(&self) -> bool {
+        self.modalities
+            .as_ref()
+            .and_then(|m| m.get("input"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|inputs| inputs.iter().any(|v| v.as_str() == Some("image")))
+    }
+}
+
 /// 模型上下文/输出上限。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelLimit {

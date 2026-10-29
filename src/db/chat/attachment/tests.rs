@@ -26,6 +26,18 @@ fn test_model() -> ModelSnapshot {
 #[test]
 fn begin_turn_with_attachments_and_load_metadata() {
     let (db, workspace) = temp_db("begin_turn_att");
+    let img_path = workspace.join("test.png");
+    let img: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
+        image::ImageBuffer::from_pixel(4, 4, image::Rgba([10, 20, 30, 255]));
+    let mut png_bytes = Vec::new();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut png_bytes),
+        image::ImageFormat::Png,
+    )
+    .expect("encode png");
+    std::fs::write(&img_path, &png_bytes).expect("write test png");
+    let img_path_str = img_path.to_string_lossy().into_owned();
+
     let attachments = vec![
         MessageAttachmentInput {
             kind: MessageAttachmentKind::File,
@@ -36,18 +48,16 @@ fn begin_turn_with_attachments_and_load_metadata() {
             mime: None,
             width: None,
             height: None,
-            image_bytes: None,
         },
         MessageAttachmentInput {
             kind: MessageAttachmentKind::Image,
             label: "test.png".into(),
-            marker_start: None,
-            marker_end: None,
-            source_path: Some("/tmp/test.png".into()),
+            marker_start: Some(16),
+            marker_end: Some(40),
+            source_path: Some(img_path_str.clone()),
             mime: Some("image/png".into()),
-            width: Some(100),
-            height: Some(50),
-            image_bytes: Some(vec![1, 2, 3, 4, 5]),
+            width: Some(4),
+            height: Some(4),
         },
     ];
 
@@ -82,15 +92,26 @@ fn begin_turn_with_attachments_and_load_metadata() {
     assert_eq!(att1.position, 1);
     assert_eq!(att1.kind, MessageAttachmentKind::Image);
     assert_eq!(att1.label, "test.png");
+    let archived_path = att1.source_path.as_deref().expect("archived path");
+    assert!(
+        archived_path.contains(&format!("/images/{}/", committed.session_id)),
+        "图片应归档在 ~/.lx-t[-dev]/images/<session_id>/ 下: {archived_path}"
+    );
     assert_eq!(att1.mime.as_deref(), Some("image/png"));
-    assert_eq!(att1.width, Some(100));
-    assert_eq!(att1.height, Some(50));
+    assert_eq!(att1.width, Some(4));
+    assert_eq!(att1.height, Some(4));
 
-    // 校验 load_image_payloads
+    // 删除原始桌面/工作区图片后，仍可从 ~/.lx-t[-dev]/images/<session_id>/ 归档副本读取
+    std::fs::remove_file(&img_path).expect("remove original image");
+    let refs = db.referenced_attachment_paths().expect("referenced paths");
+    assert!(refs.contains(archived_path));
+
     let payloads = db
         .load_image_payloads(&workspace, &committed.session_id, &[&att1.id])
-        .expect("load payloads");
-    assert_eq!(payloads.get(&att1.id), Some(&vec![1, 2, 3, 4, 5]));
+        .expect("load payloads after original deleted");
+    assert!(payloads.get(&att1.id).is_some_and(|b| !b.is_empty()));
+
+    let _ = std::fs::remove_file(archived_path);
 
     // 跨 session 读取或查不存在的附件应报错
     let cross = db.load_image_payloads(&workspace, "other_sess", &[&att1.id]);
@@ -103,13 +124,12 @@ fn image_only_turn_accepted() {
     let attachments = vec![MessageAttachmentInput {
         kind: MessageAttachmentKind::Image,
         label: "screenshot.png".into(),
-        marker_start: None,
-        marker_end: None,
-        source_path: None,
+        marker_start: Some(0),
+        marker_end: Some(32),
+        source_path: Some("/tmp/screenshot.png".into()),
         mime: Some("image/png".into()),
         width: Some(200),
         height: Some(100),
-        image_bytes: Some(vec![10, 20, 30]),
     }];
 
     let committed = db
@@ -140,13 +160,12 @@ fn cascade_delete_cleans_attachments() {
     let attachments = vec![MessageAttachmentInput {
         kind: MessageAttachmentKind::Image,
         label: "img.png".into(),
-        marker_start: None,
-        marker_end: None,
-        source_path: None,
+        marker_start: Some(0),
+        marker_end: Some(25),
+        source_path: Some("/tmp/img.png".into()),
         mime: Some("image/png".into()),
         width: Some(50),
         height: Some(50),
-        image_bytes: Some(vec![42]),
     }];
 
     let committed = db

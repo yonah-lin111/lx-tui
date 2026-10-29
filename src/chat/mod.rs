@@ -29,4 +29,5 @@ pub use events::{
 };
 pub use prepare::{
     DraftImageAttachment, PreparedUserMessage, prepare_user_message, strip_references_for_display,
+    strip_references_from_inputs,
 };

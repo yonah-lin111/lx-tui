@@ -529,7 +529,7 @@ CREATE TABLE IF NOT EXISTS todo (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_position ON todo(position);
 "#;
 
-/// v18：消息附件（文件/文件夹/图片可见引用与图片副本）。
+/// v18：消息附件（文件/文件夹/图片可见引用元数据，图片本体存本地路径）。
 const SCHEMA_V18: &str = r#"
 CREATE TABLE IF NOT EXISTS agent_message_attachment (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -544,12 +544,11 @@ CREATE TABLE IF NOT EXISTS agent_message_attachment (
     mime TEXT,
     width INTEGER,
     height INTEGER,
-    image_bytes BLOB,
     UNIQUE(message_id, position),
     CHECK ((marker_start IS NULL AND marker_end IS NULL) OR
            (marker_start >= 0 AND marker_end > marker_start)),
     CHECK (kind <> 'image' OR
-           (mime IN ('image/png', 'image/jpeg') AND image_bytes IS NOT NULL
+           (mime IN ('image/png', 'image/jpeg') AND source_path IS NOT NULL
             AND width > 0 AND height > 0))
 );
 CREATE INDEX IF NOT EXISTS idx_agent_message_attachment_message
@@ -727,12 +726,26 @@ impl Database {
             transaction.commit()?;
         }
         if version < 18 {
-            // 只增表：消息附件（可见引用与图片副本）。
+            // 只增表：消息附件（可见引用元数据，图片本体存本地路径）。
             let transaction = self.conn.unchecked_transaction()?;
             transaction.execute_batch(SCHEMA_V18)?;
             ensure_no_foreign_key_violation(&transaction)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
+        }
+        // v18 开发库兼容：若已建含 `image_bytes` BLOB 列的旧版附件表，重建为仅存路径的当前结构。
+        if column_exists(&self.conn, "agent_message_attachment", "image_bytes")? {
+            self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+            let result = (|| -> Result<()> {
+                let transaction = self.conn.unchecked_transaction()?;
+                transaction.execute_batch("DROP TABLE IF EXISTS agent_message_attachment;")?;
+                transaction.execute_batch(SCHEMA_V18)?;
+                ensure_no_foreign_key_violation(&transaction)?;
+                transaction.commit()?;
+                Ok(())
+            })();
+            self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            result?;
         }
         Ok(())
     }

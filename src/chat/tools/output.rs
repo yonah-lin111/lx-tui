@@ -259,6 +259,13 @@ fn format_read(
 ) -> String {
     let mut text = String::new();
     match kind {
+        ReadKind::Image => {
+            text.push_str(content);
+            if !content.ends_with('\n') {
+                text.push('\n');
+            }
+            return text;
+        }
         ReadKind::Directory => {
             text.push_str(&format!(
                 "Listed {} entries in directory {}\n",
@@ -414,7 +421,7 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
                 read_lines: file_range
                     .map(|(start, end)| end.saturating_sub(start).saturating_add(1)),
                 matches: (*kind == ReadKind::Directory).then_some(*total_lines),
-                total_lines: Some(*total_lines),
+                total_lines: (*kind != ReadKind::Image).then_some(*total_lines),
                 truncated: *truncated,
                 ..ToolSummary::default()
             }
@@ -525,6 +532,7 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
             "kind": match kind {
                 ReadKind::File => "file",
                 ReadKind::Directory => "directory",
+                ReadKind::Image => "image",
             },
             "content": content,
             "start_line": start_line,

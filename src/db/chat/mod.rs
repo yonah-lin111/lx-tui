@@ -400,15 +400,39 @@ impl Database {
             }
             None => {
                 let session_id = new_external_id("sess");
-                let title = if user_text.trim().is_empty() {
-                    crate::ui::text::chat::image_message_preview(attachments.len()).to_string()
+                let display_text =
+                    crate::chat::strip_references_from_inputs(user_text, attachments);
+                let title = if display_text.is_empty() {
+                    let image_count = attachments
+                        .iter()
+                        .filter(|att| att.kind == MessageAttachmentKind::Image)
+                        .count();
+                    if image_count > 0 {
+                        crate::ui::text::chat::image_message_preview(image_count).to_string()
+                    } else {
+                        attachments.first().map_or_else(
+                            || single_line_preview(user_text, 60),
+                            |att| att.label.clone(),
+                        )
+                    }
                 } else {
-                    single_line_preview(user_text, 60)
+                    single_line_preview(&display_text, 60)
                 };
-                let preview = if user_text.trim().is_empty() {
-                    crate::ui::text::chat::image_message_preview(attachments.len()).to_string()
+                let preview = if display_text.is_empty() {
+                    let image_count = attachments
+                        .iter()
+                        .filter(|att| att.kind == MessageAttachmentKind::Image)
+                        .count();
+                    if image_count > 0 {
+                        crate::ui::text::chat::image_message_preview(image_count).to_string()
+                    } else {
+                        attachments.first().map_or_else(
+                            || single_line_preview(user_text, PREVIEW_CHARS),
+                            |att| att.label.clone(),
+                        )
+                    }
                 } else {
-                    single_line_preview(user_text, PREVIEW_CHARS)
+                    single_line_preview(&display_text, PREVIEW_CHARS)
                 };
                 transaction.execute(
                     r#"INSERT INTO agent_session
@@ -444,8 +468,12 @@ impl Database {
                VALUES (?1, ?2, 0, 'text', ?3, ?4)"#,
             params![new_external_id("part"), user_message_id, user_text, now],
         )?;
-        let attachment_metas =
-            attachment::insert_attachments(&transaction, &user_message_id, attachments)?;
+        let attachment_metas = attachment::insert_attachments(
+            &transaction,
+            &session_id,
+            &user_message_id,
+            attachments,
+        )?;
         let assistant_message_id = new_external_id("msg");
         transaction.execute(
             r#"INSERT INTO agent_message
@@ -488,7 +516,7 @@ impl Database {
         })
     }
 
-    /// 读取指定会话中的图片附件真实 BLOB。
+    /// 读取指定会话中的图片附件真实字节（从本地存储路径加载处理）。
     pub fn load_image_payloads(
         &self,
         workspace: &Path,
@@ -499,6 +527,11 @@ impl Database {
             return Err(DbError::WorkspaceMissing);
         };
         attachment::load_image_payloads(&self.conn, &workspace_external, session_id, attachment_ids)
+    }
+
+    /// 读取所有仍被数据库附件引用的本地文件路径集合。
+    pub fn referenced_attachment_paths(&self) -> Result<std::collections::HashSet<String>> {
+        attachment::load_referenced_attachment_paths(&self.conn)
     }
 
     /// 流式 checkpoint：用完整 parts 快照幂等覆盖 streaming assistant 的内容。
@@ -686,6 +719,7 @@ impl Database {
             return Err(DbError::SessionMissing);
         }
         transaction.commit()?;
+        crate::platform::remove_session_images(session_id);
         Ok(())
     }
 

@@ -117,6 +117,9 @@ pub fn image_error_message(err: &crate::platform::ImagePrepareError) -> &'static
             "Image dimensions exceed pixel limit"
         }
         crate::platform::ImagePrepareError::ClipboardUnavailable => "Clipboard unavailable",
+        crate::platform::ImagePrepareError::ImageUnsupportedByModel => {
+            "Current model does not support image input"
+        }
         crate::platform::ImagePrepareError::IoError => "IO error reading image",
     }
 }

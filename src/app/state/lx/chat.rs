@@ -148,6 +148,15 @@ impl ModelsSnapshot {
     pub fn idle_timeout_ms(&self) -> u64 {
         self.settings.idle_timeout_ms()
     }
+
+    /// 该模型选择是否支持图像输入（严格按 `modalities.input` 含 `"image"` 判定）。
+    pub fn supports_image_input_of(&self, selection: &ModelSelection) -> bool {
+        self.settings
+            .providers
+            .get(&selection.provider)
+            .and_then(|provider| provider.models.get(&selection.model))
+            .is_some_and(crate::config::ai::ModelConfig::supports_image_input)
+    }
 }
 
 /// 一轮请求的归属键：窗格 + 会话 + 代次。
@@ -177,6 +186,8 @@ pub struct FrozenModel {
     pub variant_params: Option<serde_json::Value>,
     /// 流式空闲超时毫秒。
     pub idle_timeout_ms: u64,
+    /// 该模型是否支持图像输入模态。
+    pub supports_image_input: bool,
 }
 
 impl FrozenModel {
@@ -185,6 +196,7 @@ impl FrozenModel {
         let transport = models.transport_of(selection)?;
         let (base_url, api_key) = models.endpoint_of(selection)?;
         let (context_limit, output_limit) = models.limits_of(selection);
+        let supports_image_input = models.supports_image_input_of(selection);
         Some(Self {
             provider: selection.provider.clone(),
             model: selection.model.clone(),
@@ -196,6 +208,7 @@ impl FrozenModel {
             output_limit,
             variant_params: models.variant_params_of(selection),
             idle_timeout_ms: models.idle_timeout_ms(),
+            supports_image_input,
         })
     }
 }

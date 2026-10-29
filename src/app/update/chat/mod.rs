@@ -96,8 +96,6 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         }
         let entry = target.lx.entry;
         let draft = target.lx.input.trim().to_string();
-        let raw_input = target.lx.input.clone();
-        let draft_images = target.lx.draft_images.clone();
         // 压缩进行中同样不能发送：检查点提交会整体替换上下文指针。
         // 会话级：同一会话的其它 pane 在压缩/跑轮次时，本 pane 的发送会推进 revision，
         // 让那次压缩在 commit 阶段失败。
@@ -116,18 +114,9 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         let selection = target.lx.chat.effective_selection(&state.models);
         let session_id = target.lx.chat.session_id.clone();
         let generation = next_generation(state, pane);
-        (
-            entry,
-            draft,
-            raw_input,
-            draft_images,
-            busy,
-            selection,
-            session_id,
-            generation,
-        )
+        (entry, draft, busy, selection, session_id, generation)
     };
-    let (entry, draft, raw_input, draft_images, busy, selection, session_id, generation) = context;
+    let (entry, draft, busy, selection, session_id, generation) = context;
     // 只有 Native Agent 发送；Hybrid/Automation 显示不可用提示。
     if entry != crate::app::state::LxEntry::Native {
         show_lx_hint(
@@ -138,7 +127,7 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         );
         return true;
     }
-    if (draft.is_empty() && draft_images.is_empty()) || busy {
+    if draft.is_empty() || busy {
         // 流中 Enter 不入队、不造消息。
         return false;
     }
@@ -178,7 +167,10 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         );
         return true;
     };
-    let prepared = match crate::chat::prepare_user_message(&workspace, &raw_input, &draft_images) {
+    let reference_root = state
+        .workspace_cwd_for_pane(pane)
+        .unwrap_or_else(|| workspace.clone());
+    let prepared = match crate::chat::prepare_user_message(&reference_root, &draft, &[]) {
         Ok(prepared) => prepared,
         Err(err) => {
             let msg = crate::ui::text::chat::image_error_message(&err);
@@ -186,6 +178,13 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
             return true;
         }
     };
+    if !prepared.model_images.is_empty() && !frozen.supports_image_input {
+        let msg = crate::ui::text::chat::image_error_message(
+            &crate::platform::ImagePrepareError::ImageUnsupportedByModel,
+        );
+        show_lx_hint(state, pane, InputHintLevel::Warning, msg);
+        return true;
+    }
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };

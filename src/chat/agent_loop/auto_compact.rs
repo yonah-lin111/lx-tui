@@ -66,7 +66,7 @@ impl ModelContext {
         let task = self
             .items
             .iter()
-            .find(|item| matches!(item, ModelItem::UserText(_)))
+            .find(|item| matches!(item, ModelItem::UserText(_) | ModelItem::UserContent { .. }))
             .cloned();
         self.items.clear();
         if let Some(task) = task {
@@ -80,7 +80,7 @@ impl ModelContext {
 fn item_chars(item: &ModelItem) -> usize {
     match item {
         ModelItem::UserText(text) | ModelItem::AssistantText(text) => text.chars().count(),
-        ModelItem::UserContent { text, .. } => text.chars().count(),
+        ModelItem::UserContent { text, images } => text.chars().count() + images.len() * 6400,
         ModelItem::AssistantToolCall { name, input, .. } => {
             name.chars().count()
                 + serde_json::to_string(input)

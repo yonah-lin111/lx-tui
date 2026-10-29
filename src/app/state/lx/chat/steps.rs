@@ -281,6 +281,10 @@ impl ToolSummary {
                     self.matches = Some(entries);
                 }
             }
+            Some("image") => {
+                self.range = None;
+                self.read_lines = None;
+            }
             _ => {}
         }
         // `search` 结果体带 matches 数组；命中数就是它的长度。

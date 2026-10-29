@@ -57,6 +57,9 @@ impl Persistence {
         let path = default_database_path(linked_worktree);
         match Database::open_default(linked_worktree) {
             Ok(db) => {
+                if let Ok(referenced) = db.referenced_attachment_paths() {
+                    crate::platform::prune_default_session_images(&referenced);
+                }
                 // 遗留流的恢复由启动装配层按 session guard 执行（见 event::recover_startup）。
                 Self { db: Some(db), path }
             }
@@ -1126,7 +1129,6 @@ impl Persistence {
                 tracing::warn!("user shell effect reached persistence pump");
                 false
             }
-            Effect::ReadClipboardImage { .. } => false,
         }
     }
 

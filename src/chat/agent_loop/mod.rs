@@ -464,7 +464,9 @@ impl ModelContext {
         let Some(summary) = self.runtime_summary.take() else {
             return;
         };
-        let Some(ModelItem::UserText(text)) = self.items.last_mut() else {
+        let Some(ModelItem::UserText(text) | ModelItem::UserContent { text, .. }) =
+            self.items.last_mut()
+        else {
             // 末尾不是用户消息（理论上不会发生）：不伪造位置，直接放弃摘要。
             return;
         };
@@ -521,6 +523,11 @@ impl ModelContext {
             content: crate::chat::context::truncate_result_for_replay(&content),
             is_error,
         });
+    }
+
+    /// 追加一条由工具（如 `read` 图片）读取出的多模态用户消息。
+    fn push_user_image(&mut self, text: String, images: Vec<crate::chat::events::ModelImage>) {
+        self.items.push(ModelItem::UserContent { text, images });
     }
 }
 
@@ -690,6 +697,24 @@ where
             };
             let content = tools::format_for_model(&result);
             let is_error = result.is_failure();
+            let image_from_read = match &result {
+                ToolExecutionResult::Read {
+                    path,
+                    kind: crate::chat::tools::ReadKind::Image,
+                    ..
+                } => crate::platform::load_and_process_image_file(path)
+                    .ok()
+                    .map(|img| {
+                        (
+                            path.display().to_string(),
+                            crate::chat::events::ModelImage {
+                                mime: img.mime,
+                                bytes: std::sync::Arc::new(img.bytes),
+                            },
+                        )
+                    }),
+                _ => None,
+            };
             // 结果必须先落库再进入上下文；落库失败即停止本轮，**不重试写入**。
             match host
                 .finish_tool(ticket, ToolOutcome::Executed(result))
@@ -700,6 +725,10 @@ where
                 Err(HostError::Failed { code }) => return TurnSummary::failed(code, usage),
             }
             context.push_tool_result(&call.call_id, content, is_error);
+            if let Some((path_str, model_image)) = image_from_read {
+                context
+                    .push_user_image(format!("Image read from `{path_str}`:"), vec![model_image]);
+            }
         }
     }
 }

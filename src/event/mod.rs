@@ -141,16 +141,6 @@ pub enum AppEvent {
         operation_id: String,
         outcome: chat::compact::CompactOutcome,
     },
-    /// 剪贴板图片异步读取回执。
-    LxClipboardImageRead {
-        pane: PaneId,
-        generation: u64,
-        revision: u64,
-        result: Result<
-            Option<crate::platform::ClipboardImagePayload>,
-            crate::platform::ImagePrepareError,
-        >,
-    },
     /// compact 撤销的后台执行结果（只切检查点状态与指针）。
     CompactReverted {
         pane: PaneId,
@@ -350,9 +340,6 @@ async fn run_loop(
         }
         // 底部状态行的后台任务计数：与页面是否打开无关，每轮同步。
         if chat::sync_background_task_counts(state, &chat_streams) {
-            dirty = true;
-        }
-        if pump_lx_clipboard_image(state, &sender) {
             dirty = true;
         }
         // 面板打开期间每轮刷新进程列表：打开之后才启动的进程也要能出现。
@@ -785,45 +772,6 @@ fn handle_app_event(
             chat::persist_terminal_snapshots(persistence, &workspace, &epoch, &snapshots);
             chat::user_shell::persist_reaped(persistence, &mut chat_streams.user_shell, &snapshots);
         }
-        AppEvent::LxClipboardImageRead {
-            pane,
-            generation,
-            revision,
-            result,
-        } => {
-            let Some(target) = state.pane_mut_anywhere(pane) else {
-                return;
-            };
-            if target.view != crate::app::state::PaneView::Lx {
-                return;
-            }
-            if target.lx.chat.generation_counter != generation || target.lx.revision() != revision {
-                return;
-            }
-            match result {
-                Ok(Some(payload)) => {
-                    if !target.lx.add_draft_image(payload.image) {
-                        target.lx.toast = Some(crate::app::toast::Toast::new(
-                            crate::app::toast::ToastKind::Warning,
-                            crate::ui::text::chat::image_error_message(
-                                &crate::platform::ImagePrepareError::TooManyImages,
-                            ),
-                            Some(pane),
-                            std::time::Instant::now(),
-                        ));
-                    }
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    target.lx.toast = Some(crate::app::toast::Toast::new(
-                        crate::app::toast::ToastKind::Warning,
-                        crate::ui::text::chat::image_error_message(&err),
-                        Some(pane),
-                        std::time::Instant::now(),
-                    ));
-                }
-            }
-        }
         AppEvent::UserShellSpawned {
             pane,
             generation,
@@ -925,37 +873,6 @@ fn pump_lx_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<App
             });
         });
     }
-}
-
-fn pump_lx_clipboard_image(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) -> bool {
-    let mut requests = Vec::new();
-    state.effects.retain(|effect| match effect {
-        crate::app::effects::Effect::ReadClipboardImage {
-            pane,
-            generation,
-            revision,
-        } => {
-            requests.push((*pane, *generation, *revision));
-            false
-        }
-        _ => true,
-    });
-    if requests.is_empty() {
-        return false;
-    }
-    for (pane, generation, revision) in requests {
-        let sender = sender.clone();
-        tokio::task::spawn_blocking(move || {
-            let result = crate::platform::read_clipboard_image();
-            let _ = sender.send(AppEvent::LxClipboardImageRead {
-                pane,
-                generation,
-                revision,
-                result,
-            });
-        });
-    }
-    true
 }
 
 /// prompt 模板块的 worktree 绑定：选择器打开或块内绑定未解析时发起后台查询。

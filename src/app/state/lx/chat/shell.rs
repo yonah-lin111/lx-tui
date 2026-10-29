@@ -86,10 +86,7 @@ pub enum QueuedSubmission {
     /// shell 命令：保存完整序列化文本与冻结执行目录。
     Shell { full_text: String, cwd: PathBuf },
     /// 普通聊天草稿：等独立 shell 结束后再走正常发送校验。
-    Chat {
-        draft: String,
-        draft_images: Vec<crate::chat::DraftImageAttachment>,
-    },
+    Chat { draft: String },
 }
 
 #[cfg(test)]

@@ -570,8 +570,8 @@ pub(crate) struct AssembledTurn {
     pub omitted_turns: usize,
     /// 当前用户消息单独超限：调用方报错，**不截断**用户输入。
     pub draft_exceeds: bool,
-    /// 选中的每个 UserContent 步骤对应的图片附件 (id, mime) 列表。
-    pub item_image_attachments: Vec<(usize, Vec<(String, String)>)>,
+    /// 选中的每个 UserContent 步骤对应的图片附件列表。
+    pub item_image_attachments: Vec<(usize, Vec<context::ItemImageAttachment>)>,
 }
 
 /// 当前用户消息超出模型上下文预算时的稳定错误码（调用方报错，不截断输入）。
@@ -670,17 +670,9 @@ fn start_stream(
         return true;
     }
     let mut request = assembled.request;
-    // 如果请求中包含图片，从 DB 按需加载选中 BLOB 并装配 ModelImage；缺失或损坏报错并停止 HTTP
+    // 如果请求中包含图片，按需从本地路径加载图片字节并装配 ModelImage：
+    // 当前正在发送的轮次若缺图严格报错拦截；历史已发送轮次若外部图片被用户事后删除则仅跳过该历史图片。
     if !assembled.item_image_attachments.is_empty() {
-        let mut all_ids: Vec<&str> = Vec::new();
-        for (_, atts) in &assembled.item_image_attachments {
-            for (id, _) in atts {
-                all_ids.push(id.as_str());
-            }
-        }
-        all_ids.sort();
-        all_ids.dedup();
-
         let db_workspace = state.chat_session_key_for_pane(key.pane).or_else(|| {
             state
                 .active_workspace()
@@ -692,25 +684,66 @@ fn start_stream(
             return true;
         };
 
-        let payloads = match persistence.load_image_payloads(&ws, &key.session, &all_ids) {
-            Ok(map) => map,
-            Err(_) => {
-                fail_turn(sender, key, "image payload unavailable");
-                return true;
-            }
-        };
-
+        let total_items = request.items.len();
         for (item_idx, atts) in &assembled.item_image_attachments {
-            if let Some(ModelItem::UserContent { images, .. }) = request.items.get_mut(*item_idx) {
-                for (id, mime) in atts {
-                    let Some(bytes) = payloads.get(id) else {
-                        fail_turn(sender, key, "image payload unavailable");
-                        return true;
-                    };
-                    images.push(crate::chat::events::ModelImage {
-                        mime: mime.clone(),
-                        bytes: std::sync::Arc::new(bytes.clone()),
-                    });
+            let is_current_turn = *item_idx + 1 == total_items;
+            // 若会话中途切换到了不支持图像输入的模型（参考 OpenCode `unsupportedParts`），
+            // 历史轮次中的图片替换为显式错误文本并降级为 UserText，避免请求被纯文本模型拒绝。
+            if !frozen.supports_image_input {
+                if is_current_turn {
+                    fail_turn(sender, key, "current model does not support image input");
+                    return true;
+                }
+                if let Some(ModelItem::UserContent { text, .. }) = request.items.get_mut(*item_idx)
+                {
+                    let mut replaced = std::mem::take(text);
+                    for att in atts {
+                        if !replaced.is_empty() {
+                            replaced.push('\n');
+                        }
+                        replaced.push_str(&format!(
+                            "ERROR: Cannot read \"{}\" (this model does not support image input). Inform the user.",
+                            att.label
+                        ));
+                    }
+                    request.items[*item_idx] = ModelItem::UserText(replaced);
+                }
+                continue;
+            }
+            let mut loaded_images: Vec<crate::chat::events::ModelImage> = Vec::new();
+            for att in atts {
+                match persistence.load_image_payloads(&ws, &key.session, &[att.id.as_str()]) {
+                    Ok(mut map) => {
+                        if let Some(bytes) = map.remove(&att.id) {
+                            if !loaded_images
+                                .iter()
+                                .any(|existing| existing.bytes.as_slice() == bytes.as_slice())
+                            {
+                                loaded_images.push(crate::chat::events::ModelImage {
+                                    mime: att.mime.clone(),
+                                    bytes: std::sync::Arc::new(bytes),
+                                });
+                            }
+                        } else if is_current_turn {
+                            fail_turn(sender, key, "image payload unavailable");
+                            return true;
+                        }
+                    }
+                    Err(_) => {
+                        if is_current_turn {
+                            fail_turn(sender, key, "image payload unavailable");
+                            return true;
+                        }
+                    }
+                }
+            }
+            if let Some(item) = request.items.get_mut(*item_idx) {
+                if loaded_images.is_empty() && !is_current_turn {
+                    if let ModelItem::UserContent { text, .. } = item {
+                        *item = ModelItem::UserText(std::mem::take(text));
+                    }
+                } else if let ModelItem::UserContent { images, .. } = item {
+                    *images = loaded_images;
                 }
             }
         }
@@ -786,7 +819,8 @@ fn start_stream(
     let reads = crate::chat::tools::read_registry(&key.session);
     let executor = AgentTools::new(runtime.manager.clone(), turn)
         .with_recorder(std::sync::Arc::new(recorder))
-        .with_reads(reads);
+        .with_reads(reads)
+        .with_image_support(frozen.supports_image_input);
     // 本地运行上下文：存活进程 + 当前计划 + 在册子 agent + 未投递报告。
     let mut summary = runtime_context_summary(runtime.manager.as_ref(), &current_plan);
     let subagent_lines = subagent::running_subagent_lines(streams, &key.session);

@@ -286,7 +286,6 @@ fn double_escape_stops_shell_only_runs() {
         .queue
         .push(QueuedSubmission::Chat {
             draft: "next".into(),
-            draft_images: Vec::new(),
         });
     assert!(chat::escape_stop(&mut state, pane), "第一次只待命");
     assert!(

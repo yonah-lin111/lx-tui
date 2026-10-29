@@ -583,12 +583,24 @@ impl Builder<'_> {
                     );
                     let display_text = if display_text.is_empty() && !message.attachments.is_empty()
                     {
-                        crate::ui::text::chat::image_message_preview(message.attachments.len())
-                            .to_string()
+                        let image_count = message
+                            .attachments
+                            .iter()
+                            .filter(|att| att.kind == crate::db::chat::MessageAttachmentKind::Image)
+                            .count();
+                        if image_count > 0 {
+                            crate::ui::text::chat::image_message_preview(image_count).to_string()
+                        } else {
+                            display_text
+                        }
                     } else {
                         display_text
                     };
-                    let wrapped = wrap(&display_text, width.saturating_sub(super::USER_INDENT));
+                    let wrapped = if display_text.is_empty() {
+                        Vec::new()
+                    } else {
+                        wrap(&display_text, width.saturating_sub(super::USER_INDENT))
+                    };
                     let (text_lines, fold_hint) = if wrapped.len() > 5 {
                         if user_expanded {
                             (wrapped, Some("less lines".to_string()))
@@ -642,27 +654,23 @@ impl Builder<'_> {
             }
         });
 
-        if is_user && let AssistantStepView::Part { part, .. } = step {
-            let display_text =
-                crate::chat::strip_references_for_display(&part.content, &message.attachments);
-            let display_text = if display_text.is_empty() && !message.attachments.is_empty() {
-                crate::ui::text::chat::image_message_preview(message.attachments.len()).to_string()
-            } else {
-                display_text
-            };
-            let wrapped_len = wrap(&display_text, width.saturating_sub(super::USER_INDENT)).len();
-            if wrapped_len > 5 {
-                let hint_offset = if user_expanded { wrapped_len } else { 5 };
-                self.snapshot.cards.push(CardRegion {
-                    kind: CardKind::UserMessage {
-                        message_id: message.id.clone(),
-                        expanded: user_expanded,
-                    },
-                    card_start: start.saturating_add(hint_offset),
-                    card_rows: 1,
-                    clickable: true,
-                });
-            }
+        if is_user
+            && let BlockPaint::UserText {
+                text_lines,
+                fold_hint: Some(_),
+                ..
+            } = snap_block.paint.as_ref()
+        {
+            let hint_offset = text_lines.len();
+            self.snapshot.cards.push(CardRegion {
+                kind: CardKind::UserMessage {
+                    message_id: message.id.clone(),
+                    expanded: user_expanded,
+                },
+                card_start: start.saturating_add(hint_offset),
+                card_rows: 1,
+                clickable: true,
+            });
         }
 
         snap_block

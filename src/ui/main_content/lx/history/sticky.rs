@@ -50,11 +50,30 @@ pub(super) fn sticky_candidate(
         .find(|candidate| rows[*candidate].is_user && sticky_text(&messages[*candidate]).is_some())
 }
 
-/// 置顶行摘要：该用户消息首个正文块的前 512 字符 → 控制字符转空格 → 空白折叠为单行；
-/// 无正文或全空白返回 None（该条不钉）。
+/// 置顶行摘要：剥离有效引用标记后的用户消息首个正文块的前 512 字符 → 控制字符转空格 → 空白折叠为单行；
+/// 若剥离后无文本但包含图片/文件引用，回退为图片占位文案或首个引用名；全空白返回 None（该条不钉）。
 pub(super) fn sticky_text(message: &crate::app::state::ChatMessageView) -> Option<String> {
     let part = message.text_parts().next()?;
-    let sample: String = part.content.chars().take(SAMPLE_CHARS).collect();
+    let stripped = crate::chat::strip_references_for_display(&part.content, &message.attachments);
+    let display = if stripped.is_empty() && !message.attachments.is_empty() {
+        let image_count = message
+            .attachments
+            .iter()
+            .filter(|att| att.kind == crate::db::chat::MessageAttachmentKind::Image)
+            .count();
+        if image_count > 0 {
+            crate::ui::text::chat::image_message_preview(image_count).to_string()
+        } else {
+            message
+                .attachments
+                .first()
+                .map(|att| att.label.clone())
+                .unwrap_or_default()
+        }
+    } else {
+        stripped
+    };
+    let sample: String = display.chars().take(SAMPLE_CHARS).collect();
     let single: String = sample
         .chars()
         .map(|ch| if ch.is_control() { ' ' } else { ch })

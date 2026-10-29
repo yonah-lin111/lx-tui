@@ -321,6 +321,7 @@ fn notices_are_not_part_of_model_assembly() {
         output_limit: Some(4_096),
         variant_params: None,
         idle_timeout_ms: 30_000,
+        supports_image_input: true,
     };
     let assembled =
         crate::event::chat::assemble_turn_request(&target.lx.chat.messages, &frozen, None, None);
