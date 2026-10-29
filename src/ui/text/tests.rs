@@ -267,8 +267,8 @@ fn prompt_button_icons_are_single_width_and_non_pua() {
             .unwrap_or_else(|| panic!("{name} 必须形如 [word]: {label:?}"));
         assert!(!inner.is_empty(), "{name} 单词不得为空");
         assert!(
-            inner.chars().all(|ch| ch.is_ascii_lowercase()),
-            "{name} 单词只能含 a-z，不得混入图标或大写: {label:?}"
+            inner.chars().all(|ch| ch.is_ascii_alphabetic()),
+            "{name} 单词只能含英文字母，不得混入图标或特殊符号: {label:?}"
         );
         assert!(
             label.chars().filter(|ch| *ch == '[').count() == 1

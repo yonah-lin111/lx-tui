@@ -8,9 +8,9 @@ pub use header::*;
 
 use self::panels::render_panels;
 pub use self::panels::{
-    mention_item_at, mention_layout, mention_panel_rect, panel_item_at, panel_layout, panel_rect,
-    paste_item_at, paste_layout, paste_panel_rect, refer_item_at, refer_layout, refer_panel_rect,
-    slash_item_at, slash_layout, slash_panel_rect,
+    mention_item_at, mention_layout, mention_panel_rect, mention_tab_at, panel_item_at,
+    panel_layout, panel_rect, paste_item_at, paste_layout, paste_panel_rect, refer_item_at,
+    refer_layout, refer_panel_rect, slash_item_at, slash_layout, slash_panel_rect,
 };
 
 use ratatui::buffer::{Buffer, CellDiffOption};

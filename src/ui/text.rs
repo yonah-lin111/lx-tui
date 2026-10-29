@@ -111,7 +111,7 @@ pub const PROMPT_TREE_SEARCH_PLACEHOLDER: &str = "search prompts…";
 /// 树视图 `[tmp]`：新建临时提示词编辑视图（仅内存、不入库）。
 pub const PROMPT_TEMP_PROMPT_LABEL: &str = "[tmp]";
 /// 编辑视图引用文件夹按钮：打开引用文件夹菜单。
-pub const PROMPT_FOLDERS_LABEL: &str = "[dir]";
+pub const PROMPT_FOLDERS_LABEL: &str = "[refDir]";
 
 /// 引用文件夹弹窗文案。
 pub const MENU_TITLE_REFERENCED_FOLDERS: &str = "Folders";
@@ -1002,6 +1002,9 @@ pub const MENU_TITLE_PROMPT_TREE: &str = "Prompts";
 /// 浮层命令面板顶边左侧标题：markdown 块命令 / 文件提及 / 斜杠命令 / worktree 选择器。
 pub const BLOCK_PANEL_TITLE: &str = "Commands";
 pub const MENTION_PANEL_TITLE: &str = "@Command";
+pub const MENTION_TAB_FILES: &str = "Files";
+pub const MENTION_TAB_REF_DIR: &str = "refDir";
+pub const MENTION_REF_DIR_EMPTY: &str = "(无匹配的引用文件夹)";
 pub const SLASH_PANEL_TITLE: &str = "/Command";
 pub const WORKTREE_PANEL_TITLE: &str = "Worktrees";
 
@@ -1047,6 +1050,8 @@ pub const SUPPLE_FOLD_BLOCKED: &str = "Folded supplement; unfold to edit";
 
 /// @ 面板底边快捷键提示：进入目录 `Shift+Enter` / 回退上一级 `Ctrl+Z`（`^z` 沿用 `[clear ^c]` 记法）。
 pub const MENTION_PANEL_FOOTER: &str = "[open ⇧↵] [back ^z]";
+pub const MENTION_FOOTER_FILES: &str = "←→ tab · ↑↓ select · ↵ confirm · ⇧↵ enter · esc cancel";
+pub const MENTION_FOOTER_REF_DIR: &str = "←→ tab · ↑↓ select · ↵ insert · esc cancel";
 
 /// lx 输入框 `@` 提及面板：标题与状态行文案（与 prompt 面板同一套外观）。
 pub const LX_MENTION_PANEL_TITLE: &str = "@Command";

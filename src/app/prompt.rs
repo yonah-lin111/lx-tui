@@ -25,6 +25,7 @@ mod viewport;
 mod block_focus;
 
 pub use fold::FoldedBlock;
+pub use mention::MentionTab;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -525,6 +526,54 @@ impl Prompt {
     /// 提及面板（选择器或文件候选）是否可见。
     pub fn mention_active(&self) -> bool {
         self.mention.view_open()
+    }
+
+    /// 提及面板当前活跃 Tab。
+    pub fn mention_tab(&self) -> MentionTab {
+        self.mention.tab()
+    }
+
+    /// 提及面板切换 Tab：左右切换；未打开返回 false。
+    pub fn mention_switch_tab(&mut self, delta: isize) -> bool {
+        self.mention.switch_tab(delta)
+    }
+
+    /// 提及面板直接设置 Tab。
+    pub fn mention_set_tab(&mut self, tab: MentionTab) -> bool {
+        self.mention.set_tab(tab)
+    }
+
+    /// 同步引用文件夹快照。
+    pub fn sync_referenced_folders(
+        &mut self,
+        folders: &[crate::app::referenced::ReferencedFolder],
+    ) {
+        self.mention.sync_referenced_folders(folders);
+    }
+
+    /// refDir 高亮索引。
+    pub fn mention_ref_active(&self) -> usize {
+        self.mention.ref_active()
+    }
+
+    /// refDir 窗口锚点。
+    pub fn mention_ref_anchor(&self) -> usize {
+        self.mention.ref_anchor()
+    }
+
+    /// refDir 显式视口。
+    pub fn mention_ref_viewport(&self) -> Option<usize> {
+        self.mention.ref_viewport()
+    }
+
+    /// 过滤后的引用文件夹列表。
+    pub fn mention_filtered_ref_folders(&self) -> Vec<&crate::app::referenced::ReferencedFolder> {
+        self.mention.filtered_ref_folders()
+    }
+
+    /// 当前提及触发信息。
+    pub fn mention_trigger(&self) -> Option<&markdown::MentionTrigger> {
+        self.mention.trigger()
     }
 
     /// 提及面板标题后缀：绑定 linked worktree 且已选定取根时为 `main` / `wt`。

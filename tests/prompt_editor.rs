@@ -250,6 +250,41 @@ fn mention_panel_renders_and_confirms_insertion() {
 }
 
 #[test]
+fn mention_panel_ref_dir_tab_keyboard_switching_and_insert() {
+    let (mut state, config, view) = ready_state();
+    state.referenced.folders = vec![lx_tui::app::referenced::ReferencedFolder {
+        id: 1,
+        path: std::path::PathBuf::from("/test/my-ref-dir"),
+    }];
+    update::focus_prompt(&mut state);
+    update::apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    update::apply_editor(&mut state, EditorCommand::InsertChar('r'));
+    update::apply_editor(&mut state, EditorCommand::InsertChar('e'));
+    update::apply_editor(&mut state, EditorCommand::InsertChar('f'));
+
+    // Switch to refDir with Right key
+    update::apply_editor(&mut state, EditorCommand::Right);
+    assert_eq!(
+        state.prompt.mention_tab(),
+        lx_tui::app::prompt::MentionTab::RefDir
+    );
+
+    // Verify it is drawn and visible
+    let inner = layout::prompt_text_rect(view.prompt);
+    let panel = ui::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
+    let terminal = draw(&state, &config);
+    let buffer = terminal.backend().buffer();
+    let top: String = (panel.rect.x..panel.rect.right())
+        .map(|x| buffer[(x, panel.rect.y)].symbol())
+        .collect();
+    assert!(top.contains(ui::text::MENTION_TAB_REF_DIR), "{top}");
+
+    // Enter confirms insertion
+    update::apply_editor(&mut state, EditorCommand::Newline);
+    assert_eq!(state.prompt.text(), "@[refer-folder](/test/my-ref-dir) ");
+}
+
+#[test]
 fn mention_panel_wheel_scrolls_viewport_and_keeps_active() {
     let (mut state, config, view) = ready_state();
     update::focus_prompt(&mut state);
@@ -346,9 +381,10 @@ fn mention_panel_folder_navigation_flow() {
     let bottom: String = (panel.rect.x..panel.rect.right())
         .map(|x| buffer[(x, panel.rect.bottom() - 1)].symbol())
         .collect();
-    assert!(top.contains(ui::text::MENTION_PANEL_TITLE), "{top}");
+    assert!(top.contains(ui::text::MENTION_TAB_FILES), "{top}");
+    assert!(top.contains(ui::text::MENTION_TAB_REF_DIR), "{top}");
     assert!(top.contains(" src "), "{top}");
-    assert!(bottom.contains(ui::text::MENTION_PANEL_FOOTER), "{bottom}");
+    assert!(bottom.contains("tab"), "{bottom}");
 
     // Ctrl/Cmd+Z 撤销进入，回退到根，候选恢复全量。
     update::apply_editor(&mut state, EditorCommand::Undo);

@@ -422,7 +422,7 @@ fn mention_panel_asks_root_choice_then_titles_with_choice() {
     let painted: String = buf.content.iter().map(|cell| cell.symbol()).collect();
     assert!(painted.contains("app.rs"), "{painted}");
     assert!(
-        painted.contains("@Command-[wt]"),
+        painted.contains("Files") && painted.contains("wt"),
         "标题带取根标识: {painted}"
     );
 
@@ -448,11 +448,8 @@ fn mention_panel_asks_root_choice_then_titles_with_choice() {
     render(area, &mut buf, &plain, None);
     let painted: String = buf.content.iter().map(|cell| cell.symbol()).collect();
     assert!(painted.contains("app.rs"), "{painted}");
-    assert!(painted.contains("@Command"), "{painted}");
-    assert!(
-        !painted.contains("@Command-["),
-        "未绑定无标题后缀: {painted}"
-    );
+    assert!(painted.contains("Files"), "{painted}");
+    assert!(!painted.contains("wt"), "未绑定无标题后缀: {painted}");
 }
 
 #[test]
@@ -530,11 +527,9 @@ fn mention_panel_renders_title_folder_name_and_footer() {
     let root_bottom: String = (0..area.width)
         .map(|x| buf[(x, root_rect.bottom() - 1)].symbol())
         .collect();
-    assert!(root_top.contains(text::MENTION_PANEL_TITLE), "{root_top}");
-    assert!(
-        root_bottom.contains(text::MENTION_PANEL_FOOTER),
-        "{root_bottom}"
-    );
+    assert!(root_top.contains(text::MENTION_TAB_FILES), "{root_top}");
+    assert!(root_top.contains(text::MENTION_TAB_REF_DIR), "{root_top}");
+    assert!(root_bottom.contains("tab"), "{root_bottom}");
 
     // 进入 src：右上显示目录名，底边提示保持。
     assert!(editor.mention_enter_folder());
@@ -545,9 +540,9 @@ fn mention_panel_renders_title_folder_name_and_footer() {
     let bottom: String = (0..area.width)
         .map(|x| buf[(x, rect.bottom() - 1)].symbol())
         .collect();
-    assert!(top.contains(text::MENTION_PANEL_TITLE), "{top}");
+    assert!(top.contains(text::MENTION_TAB_FILES), "{top}");
     assert!(top.contains(" src "), "{top}");
-    assert!(bottom.contains(text::MENTION_PANEL_FOOTER), "{bottom}");
+    assert!(bottom.contains("tab"), "{bottom}");
 }
 
 #[test]

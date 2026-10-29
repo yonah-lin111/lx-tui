@@ -199,6 +199,7 @@ fn view<'a>(
         anchor_row: above,
         max_height: Some(cap),
         title: Some(title),
+        tabs: None,
         right_title,
         footer: Some(footer),
         width: Some(input.width),

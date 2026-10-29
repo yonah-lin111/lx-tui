@@ -211,14 +211,19 @@ fn route_slash_panel(state: &mut AppState, command: &EditorCommand) -> bool {
     }
 }
 
-/// 文件提及面板打开时的按键优先：上下选择、回车确认、Esc 关闭；返回是否消费。
+/// 文件提及面板打开时的按键优先：上下选择、左右切 Tab、回车确认、Esc 关闭；返回是否消费。
 ///
 /// `Shift+Enter` 在面板打开时由面板接管（高亮非目录或无子项目录 no-op）；面板未打开时
 /// 回落为 `NewlineBelow`。目录回退不设专用键，走编辑器撤销（进入目录是一次可撤销编辑）。
 fn route_mention_panel(state: &mut AppState, command: &EditorCommand) -> bool {
+    state
+        .prompt
+        .sync_referenced_folders(&state.referenced.folders);
     match command {
         EditorCommand::Up => state.prompt.mention_move(-1),
         EditorCommand::Down => state.prompt.mention_move(1),
+        EditorCommand::Left => state.prompt.mention_switch_tab(-1),
+        EditorCommand::Right => state.prompt.mention_switch_tab(1),
         EditorCommand::Newline => state.prompt.mention_confirm(),
         EditorCommand::Escape => state.prompt.mention_escape(),
         EditorCommand::EnterFolder => {
@@ -444,6 +449,16 @@ pub fn select_paste(state: &mut AppState, index: usize) {
     if let Some(action) = crate::app::prompt::PasteAction::ALL.get(index).copied() {
         state.prompt.paste_confirm(action);
     }
+}
+
+/// 鼠标点击提及面板顶部 Tab：切换当前 Tab。
+pub fn switch_mention_tab(state: &mut AppState, tab: usize) {
+    let tab = if tab == 0 {
+        crate::app::prompt::MentionTab::Files
+    } else {
+        crate::app::prompt::MentionTab::RefDir
+    };
+    state.prompt.mention_set_tab(tab);
 }
 
 /// 鼠标点选提及条目：确认插入。

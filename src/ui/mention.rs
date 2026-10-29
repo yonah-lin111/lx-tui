@@ -72,3 +72,17 @@ pub fn file_row(entry: &MentionEntry, detail_width: usize) -> MentionRow {
         detail,
     }
 }
+
+/// 构造引用文件夹条目展示：第一行目录图标 + 目录名 `/`，第二行 `└─ 绝对路径`。
+pub fn folder_row(name: &str, path: &str, detail_width: usize) -> MentionRow {
+    let label = format!("{name}/");
+    let prefix = format!("{} ", text::WORKSPACE_TREE_LAST);
+    let path_width = detail_width.saturating_sub(prefix.width());
+    let detail = format!("{prefix}{}", text::ellipsize_middle(path, path_width));
+    MentionRow {
+        icon: text::MENTION_DIR_ICON,
+        is_directory: true,
+        label,
+        detail,
+    }
+}

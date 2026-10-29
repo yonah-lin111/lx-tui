@@ -612,7 +612,7 @@ fn prompt_toolbar_folders_sits_left_of_pin_in_editor_only() {
     let pin =
         prompt_toolbar_button_rect(panel, PromptToolbarButton::Pin, false).expect("pin visible");
     assert_eq!(folders.y, bar.y);
-    assert_eq!(folders.width, 5);
+    assert_eq!(folders.width, 8);
     assert_eq!(pin.x - folders.right(), 1, "紧邻钉住按钮左侧、间隔 1 列");
     assert_eq!(
         prompt_toolbar_button_at(panel, folders.x, bar.y, false),
@@ -623,7 +623,7 @@ fn prompt_toolbar_folders_sits_left_of_pin_in_editor_only() {
         prompt_toolbar_button_rect(panel, PromptToolbarButton::Folders, true),
         None
     );
-    assert_eq!(PROMPT_FOLDERS_MIN_WIDTH_EDITOR, 33, "[dir] 的推导阈值");
+    assert_eq!(PROMPT_FOLDERS_MIN_WIDTH_EDITOR, 36, "[refDir] 的推导阈值");
     let narrow = Rect::new(0, 0, PROMPT_FOLDERS_MIN_WIDTH_EDITOR, 8);
     assert_eq!(
         prompt_toolbar_button_rect(narrow, PromptToolbarButton::Folders, false),

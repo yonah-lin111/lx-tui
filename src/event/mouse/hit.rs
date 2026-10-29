@@ -208,6 +208,17 @@ pub(crate) fn mention_item_at(
     ui::prompt::mention_item_at(&state.prompt, area, column, row)
 }
 
+/// 提及面板顶边框 Tab 命中：返回 Tab 索引；面板未打开或未命中返回 None。
+pub(crate) fn mention_tab_at(
+    state: &AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let area = paste::prompt_text_area(view);
+    ui::prompt::mention_tab_at(&state.prompt, area, column, row)
+}
+
 /// 提及面板布局；用于滚轮命中与视口滚动。
 pub(crate) fn mention_panel_layout(
     state: &AppState,
