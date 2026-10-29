@@ -54,9 +54,20 @@ fn user_visible_labels_are_clean_ascii() {
         CONFIRM_DELETE_PAGE_TITLE,
         RENAME_PROMPT_TITLE,
         RENAME_FOLDER_TITLE,
+        MENTION_PANEL_TITLE,
+        MENTION_TAB_FILES,
+        MENTION_TAB_REF_DIR,
+        MENTION_REF_DIR_EMPTY,
+        LX_MENTION_PANEL_TITLE,
+        LX_MENTION_LOADING,
+        LX_MENTION_EMPTY,
     ] {
         assert!(!label.is_empty(), "文案不得为空");
         assert!(!label.contains('\u{fffd}'), "文案禁止替换字符: {label}");
+        assert!(
+            label.chars().all(|ch| ch.width().unwrap_or(0) <= 1),
+            "TUI 文案统一为英文与单宽符号，不得含中文或宽字符: {label:?}"
+        );
     }
     assert_eq!(
         confirm_delete_page_question("Page 1"),

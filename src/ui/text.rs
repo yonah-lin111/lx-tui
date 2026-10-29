@@ -1006,7 +1006,7 @@ pub const BLOCK_PANEL_TITLE: &str = "Commands";
 pub const MENTION_PANEL_TITLE: &str = "@Command";
 pub const MENTION_TAB_FILES: &str = "Files";
 pub const MENTION_TAB_REF_DIR: &str = "refDir";
-pub const MENTION_REF_DIR_EMPTY: &str = "(无匹配的引用文件夹)";
+pub const MENTION_REF_DIR_EMPTY: &str = "no matching folders";
 pub const SLASH_PANEL_TITLE: &str = "/Command";
 pub const WORKTREE_PANEL_TITLE: &str = "Worktrees";
 
