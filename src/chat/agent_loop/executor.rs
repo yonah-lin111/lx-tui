@@ -171,7 +171,11 @@ impl AgentTools {
     }
 
     /// MCP 工具：按冻结快照反查 server / 原始工具名并调用。
-    async fn execute_mcp(&self, call: &ReadyToolCall) -> ToolExecutionResult {
+    async fn execute_mcp(
+        &self,
+        call: &ReadyToolCall,
+        cancel: tokio::sync::watch::Receiver<bool>,
+    ) -> ToolExecutionResult {
         let Some(runtime) = &self.mcp else {
             return crate::chat::tools::ToolFailure::new(
                 crate::chat::tools::ToolErrorCode::UnknownTool,
@@ -195,9 +199,7 @@ impl AgentTools {
                 .into_result(Vec::new());
             }
         };
-        // Esc 取消由 agent loop 的 select 丢弃整个工具 future；这里保持通道存活，
-        // 让调用本身按 manager 的超时结算。
-        let (_tx, cancel) = tokio::sync::watch::channel(false);
+        let started = std::time::Instant::now();
         let outcome = runtime
             .manager
             .call_tool(
@@ -208,7 +210,8 @@ impl AgentTools {
                 cancel,
             )
             .await;
-        mcp_outcome_result(entry.server, entry.raw_name, outcome)
+        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        mcp_outcome_result(entry.server, entry.raw_name, outcome, Some(duration_ms))
     }
 
     /// resources 三工具：参数解析后交给共享连接管理器。
@@ -256,12 +259,12 @@ impl AgentTools {
                 };
                 runtime
                     .manager
-                    .read_resource(&runtime.snapshot, server, uri)
+                    .read_resource(&runtime.snapshot, &self.session_id, server, uri)
                     .await
             }
         };
         let label = server.unwrap_or("all servers").to_string();
-        mcp_outcome_result(label, call.name.clone(), outcome)
+        mcp_outcome_result(label, call.name.clone(), outcome, None)
     }
 
     /// 文件工具：在阻塞线程池执行，并注入本次调用的 recorder。
@@ -403,6 +406,23 @@ impl ToolExecutor for AgentTools {
         self.run(cwd, call, Some(ticket)).await
     }
 
+    async fn execute_mcp_cancellable(
+        &self,
+        _cwd: &Path,
+        call: &ReadyToolCall,
+        cancel: tokio::sync::watch::Receiver<bool>,
+    ) -> Option<ToolExecutionResult> {
+        if !crate::mcp::is_mcp_tool(&call.name) {
+            return None;
+        }
+        let result = self.execute_mcp(call, cancel).await;
+        if !call.name.is_empty() {
+            let mut turn = self.turn.lock().await;
+            turn.observe(&call.name, &result);
+        }
+        Some(result)
+    }
+
     fn supports_image_input(&self) -> bool {
         self.supports_image_input
     }
@@ -420,7 +440,11 @@ impl AgentTools {
                 self.execute_process(cwd, &call.name, &call.arguments_json, &call.call_id)
                     .await
             }
-            name if crate::mcp::is_mcp_tool(name) => self.execute_mcp(call).await,
+            name if crate::mcp::is_mcp_tool(name) => {
+                // 无取消信号的测试入口：通道永不取消，由 manager 超时兜底。
+                let (_tx, cancel) = tokio::sync::watch::channel(false);
+                self.execute_mcp(call, cancel).await
+            }
             "list_resources" | "list_resource_templates" | "read_resource" => {
                 self.execute_mcp_resource(call).await
             }
@@ -453,6 +477,7 @@ fn mcp_outcome_result(
     server: String,
     tool: String,
     outcome: crate::mcp::McpCallOutcome,
+    duration_ms: Option<u64>,
 ) -> ToolExecutionResult {
     use crate::chat::tools::{ArchivedImage, McpToolResult, ToolErrorCode, ToolFailure};
     use crate::mcp::McpFailureKind;
@@ -476,6 +501,7 @@ fn mcp_outcome_result(
                 })
                 .collect(),
             images_omitted,
+            duration_ms,
             truncated,
         })),
         crate::mcp::McpCallOutcome::Failure { kind, text } => {

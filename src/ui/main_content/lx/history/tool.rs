@@ -33,6 +33,7 @@ mod ask;
 mod command;
 mod file_diff;
 mod file_summary;
+mod mcp;
 mod plan;
 mod search;
 mod subagent;
@@ -107,6 +108,7 @@ pub(super) fn rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
         Some(crate::app::state::ToolDetailView::Search(view)) => {
             search::rows(call, view, width, folds.body)
         }
+        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp::rows(view, width, folds.body),
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::rows(call, width, folds.body)
         }
@@ -249,6 +251,20 @@ pub(super) fn draw_animated(
             );
             return;
         }
+        Some(crate::app::state::ToolDetailView::Mcp(view)) => {
+            mcp::draw(
+                grid,
+                rect,
+                scroll,
+                row_index,
+                call,
+                view,
+                loading_frame,
+                folds.body,
+                animating,
+            );
+            return;
+        }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::draw(
                 grid,
@@ -320,6 +336,7 @@ pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
         Some(crate::app::state::ToolDetailView::Search(view)) => {
             search::has_more(call, view, width)
         }
+        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp::has_more(view, width),
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::has_more_content(call, width)
         }
@@ -397,7 +414,8 @@ pub(super) fn card_regions(
         Some(crate::app::state::ToolDetailView::Plan(_))
         | Some(crate::app::state::ToolDetailView::Ask(_)) => Vec::new(),
         Some(crate::app::state::ToolDetailView::Subagent(_))
-        | Some(crate::app::state::ToolDetailView::Search(_)) => {
+        | Some(crate::app::state::ToolDetailView::Search(_))
+        | Some(crate::app::state::ToolDetailView::Mcp(_)) => {
             if !has_expandable_content(call, width) {
                 return Vec::new();
             }

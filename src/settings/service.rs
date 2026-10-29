@@ -5,8 +5,10 @@
 //! 与 `config` 的存储函数。浏览器启动由 `src/platform/` 负责。
 
 mod handlers;
+mod mcp;
 mod models;
 mod page;
+mod skills;
 
 #[cfg(test)]
 mod tests;
@@ -27,6 +29,26 @@ use crate::config::Config;
 
 pub use handlers::{CommandView, Request, Response};
 
+/// TUI 推送给设置页的已打开项目。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectView {
+    /// 作用域目录名（`user` 或 `<目录名>-<哈希>`）。
+    pub scope: String,
+    pub root: std::path::PathBuf,
+    pub name: String,
+    pub trusted: bool,
+}
+
+/// TUI 推送的 MCP 运行状态快照。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpStatusView {
+    pub project: std::path::PathBuf,
+    pub server: String,
+    /// `starting` / `ready` / `failed` / `needs_login` / `disabled`。
+    pub status: String,
+    pub error: Option<String>,
+}
+
 /// Web 设置页产生的事件：由事件循环消费。
 #[derive(Debug)]
 pub enum SettingsEvent {
@@ -36,6 +58,14 @@ pub enum SettingsEvent {
     CommandsChanged,
     /// 模型配置已保存；携带合并后的新配置快照。
     ModelsChanged(Box<crate::config::ai::AiSettings>),
+    /// MCP 配置发生增删改：事件层重新合并并预热。
+    McpChanged,
+    /// 设置页要求强制重启某个 server（所有打开的项目）。
+    McpRestart { server: String },
+    /// OAuth 登录/登出完成：凭据 revision 变化，需要重连。
+    McpCredentialsChanged,
+    /// skill 内容或启停状态变化：失效缓存并刷新 `/` 面板。
+    SkillsChanged,
 }
 
 /// 服务共享状态：token、事件发送端、命令快照与关闭标记。
@@ -50,6 +80,14 @@ pub struct ServiceState {
     port: u16,
     /// 命令快照（由 TUI 推送）。
     commands: std::sync::Mutex<Vec<CommandView>>,
+    /// 已打开项目（由 TUI 推送；scope → root 的唯一来源）。
+    projects: std::sync::Mutex<Vec<ProjectView>>,
+    /// MCP 运行状态快照（由 TUI 推送）。
+    mcp_status: std::sync::Mutex<Vec<McpStatusView>>,
+    /// 进行中的 OAuth 授权（state 一次性，10 分钟过期）。
+    oauth: tokio::sync::Mutex<
+        std::collections::HashMap<String, crate::mcp::oauth::PendingAuthorization>,
+    >,
     shutdown: AtomicBool,
 }
 
@@ -99,6 +137,69 @@ impl ServiceState {
             .lock()
             .map(|slot| slot.clone())
             .unwrap_or_default()
+    }
+
+    /// 已打开项目副本。
+    pub fn projects(&self) -> Vec<ProjectView> {
+        self.projects
+            .lock()
+            .map(|slot| slot.clone())
+            .unwrap_or_default()
+    }
+
+    /// 替换项目列表；返回是否真的变化（调用方据此避免重复推送）。
+    pub fn set_projects(&self, projects: Vec<ProjectView>) -> bool {
+        let Ok(mut slot) = self.projects.lock() else {
+            return false;
+        };
+        if *slot == projects {
+            return false;
+        }
+        *slot = projects;
+        true
+    }
+
+    /// MCP 状态快照副本。
+    pub fn mcp_status(&self) -> Vec<McpStatusView> {
+        self.mcp_status
+            .lock()
+            .map(|slot| slot.clone())
+            .unwrap_or_default()
+    }
+
+    /// 替换 MCP 状态快照；返回是否真的变化。
+    pub fn set_mcp_status(&self, statuses: Vec<McpStatusView>) -> bool {
+        let Ok(mut slot) = self.mcp_status.lock() else {
+            return false;
+        };
+        if *slot == statuses {
+            return false;
+        }
+        *slot = statuses;
+        true
+    }
+
+    /// OAuth 授权表（设置服务内部使用）。
+    pub(crate) fn oauth(
+        &self,
+    ) -> &tokio::sync::Mutex<
+        std::collections::HashMap<String, crate::mcp::oauth::PendingAuthorization>,
+    > {
+        &self.oauth
+    }
+
+    /// 按 scope 找项目根；`user` 返回 None（调用方按用户作用域处理）。
+    pub fn project_for_scope(&self, scope: &str) -> Option<ProjectView> {
+        self.projects()
+            .into_iter()
+            .find(|project| project.scope == scope)
+    }
+
+    /// 按路径找项目（MCP 状态推送用）。
+    pub fn project_for_root(&self, root: &std::path::Path) -> Option<ProjectView> {
+        self.projects()
+            .into_iter()
+            .find(|project| project.root == root)
     }
 }
 
@@ -150,6 +251,9 @@ impl SettingsService {
             user_root,
             port,
             commands: std::sync::Mutex::new(Vec::new()),
+            projects: std::sync::Mutex::new(Vec::new()),
+            mcp_status: std::sync::Mutex::new(Vec::new()),
+            oauth: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             shutdown: AtomicBool::new(false),
         });
         let accept_state = state.clone();
@@ -188,6 +292,16 @@ impl SettingsService {
         if let Ok(mut slot) = self.state.commands.lock() {
             *slot = commands.to_vec();
         }
+    }
+
+    /// 推送已打开项目列表；返回是否变化。
+    pub fn set_projects(&self, projects: Vec<ProjectView>) -> bool {
+        self.state.set_projects(projects)
+    }
+
+    /// 推送 MCP 运行状态快照；返回是否变化。
+    pub fn set_mcp_status(&self, statuses: Vec<McpStatusView>) -> bool {
+        self.state.set_mcp_status(statuses)
     }
 
     /// 用最新 User 命令替换快照中的 User 部分（Project 部分保留）。

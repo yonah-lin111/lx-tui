@@ -21,14 +21,16 @@ function api(path, options) {
 }
 
 function showTab(name) {
-  const tabs = {general: 'tab-general', commands: 'tab-commands', models: 'tab-models'};
-  const views = {general: 'view-general', commands: 'view-commands', models: 'view-models'};
+  const tabs = {general: 'tab-general', commands: 'tab-commands', models: 'tab-models', mcp: 'tab-mcp', skills: 'tab-skills'};
+  const views = {general: 'view-general', commands: 'view-commands', models: 'view-models', mcp: 'view-mcp', skills: 'view-skills'};
   for (const key of Object.keys(tabs)) {
     const active = key === name;
     document.getElementById(tabs[key]).classList.toggle('active', active);
     document.getElementById(views[key]).classList.toggle('hidden', !active);
   }
   if (name === 'models' && modelsDraft === null) { loadModels(); }
+  if (name === 'mcp' && (typeof mcpState === 'undefined' || mcpState === null)) { loadMcp(); }
+  if (name === 'skills' && (typeof skillsState === 'undefined' || skillsState === null)) { loadSkills(); }
   refreshActionBars();
 }
 

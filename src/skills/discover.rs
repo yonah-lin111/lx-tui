@@ -157,6 +157,99 @@ fn scan_root(
     found
 }
 
+/// 目录与 `SKILL.md` 的 mtime 签名（只 stat，不读正文）。
+///
+/// 缓存键由调用方补充禁用集合与子 agent 标记；这里只覆盖会影响发现结果的
+/// 文件系统事实。目录 mtime 捕捉新增/删除/重命名，文件 mtime+长度捕捉编辑。
+pub fn catalog_signature(
+    user_root: &Path,
+    user_agents_root: &Path,
+    project: Option<&ProjectSkillRoots>,
+) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    let mut mix = |bytes: &[u8]| {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    let mut roots: Vec<(PathBuf, bool)> = Vec::new();
+    if let Some(project) = project {
+        if let Some(root) = &project.lx {
+            roots.push((root.clone(), false));
+        }
+        if let Some(root) = &project.agents {
+            roots.push((root.clone(), false));
+        }
+    }
+    roots.push((user_root.to_path_buf(), true));
+    roots.push((user_agents_root.to_path_buf(), false));
+    for (root, skip_projects) in roots {
+        mix(root.to_string_lossy().as_bytes());
+        hash_root_signature(&root, skip_projects, &mut mix);
+    }
+    hash
+}
+
+fn hash_root_signature(root: &Path, skip_projects: bool, mix: &mut impl FnMut(&[u8])) {
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    let mut stack: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 1)];
+    let mut dirs = 0usize;
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > MAX_DEPTH || dirs > MAX_DIRS_PER_ROOT {
+            continue;
+        }
+        dirs += 1;
+        let canonical = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        if !visited.insert(canonical) {
+            continue;
+        }
+        if let Ok(meta) = std::fs::metadata(&dir) {
+            mix(dir.to_string_lossy().as_bytes());
+            mix_modified(&meta, mix);
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut children: Vec<(PathBuf, usize)> = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if !meta.is_dir() {
+                if entry.file_name() == "SKILL.md" {
+                    mix(path.to_string_lossy().as_bytes());
+                    mix_modified(&meta, mix);
+                    mix(&meta.len().to_le_bytes());
+                }
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if name.starts_with('.') || (skip_projects && depth == 1 && name == "projects") {
+                continue;
+            }
+            children.push((path, depth + 1));
+        }
+        children.sort_by(|left, right| left.0.cmp(&right.0));
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
+    }
+}
+
+fn mix_modified(meta: &std::fs::Metadata, mix: &mut impl FnMut(&[u8])) {
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    mix(&modified.to_le_bytes());
+}
+
 #[cfg(test)]
 mod tests;
 

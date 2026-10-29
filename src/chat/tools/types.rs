@@ -417,6 +417,8 @@ pub struct McpToolResult {
     pub text: String,
     pub images: Vec<ArchivedImage>,
     pub images_omitted: usize,
+    /// 调用耗时（毫秒；卡片状态行用）。
+    pub duration_ms: Option<u64>,
     pub truncated: bool,
 }
 

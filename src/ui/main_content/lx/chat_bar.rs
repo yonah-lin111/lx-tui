@@ -119,6 +119,8 @@ fn jump_rect(bar: Rect) -> Option<Rect> {
 enum ActivityLabel<'a> {
     /// `/compact` 正在执行：摘要请求没有流式输出，优先级最高（此时聊天必然空闲）。
     Compacting,
+    /// 首轮 MCP server 启动进度。
+    McpStartup(usize, usize),
     /// 当前计划里第一个 `in_progress` 步骤的（已净化的）原文。
     Todo(&'a str),
     /// 当前 assistant 最后一步是开放思考块。
@@ -132,15 +134,16 @@ enum ActivityLabel<'a> {
 }
 
 impl ActivityLabel<'_> {
-    /// 实际显示的文字；英文短语来自 `ui::text::chat`，不在此硬编码。
-    fn text(&self) -> &str {
+    /// 实际显示的文字；固定短语来自 `ui::text`，不在此硬编码。
+    fn text(&self) -> String {
         match self {
-            Self::Compacting => text::chat::COMPACTING_LABEL,
-            Self::Todo(todo) => todo,
-            Self::Thinking => text::chat::THINKING_LABEL,
-            Self::RunningTools => text::chat::RUNNING_TOOLS_LABEL,
-            Self::WaitingAgents => text::chat::WAITING_AGENTS_LABEL,
-            Self::Working => text::chat::LOADING_LABEL,
+            Self::Compacting => text::chat::COMPACTING_LABEL.to_string(),
+            Self::McpStartup(done, total) => text::mcp::startup_label(*done, *total),
+            Self::Todo(todo) => (*todo).to_string(),
+            Self::Thinking => text::chat::THINKING_LABEL.to_string(),
+            Self::RunningTools => text::chat::RUNNING_TOOLS_LABEL.to_string(),
+            Self::WaitingAgents => text::chat::WAITING_AGENTS_LABEL.to_string(),
+            Self::Working => text::chat::LOADING_LABEL.to_string(),
         }
     }
 }
@@ -155,6 +158,9 @@ impl ActivityLabel<'_> {
 fn activity_label<'a>(lx: &'a Lx, plan_text: Option<&'a str>) -> ActivityLabel<'a> {
     if lx.compact.is_running() {
         return ActivityLabel::Compacting;
+    }
+    if let Some((done, total)) = lx.mcp_startup {
+        return ActivityLabel::McpStartup(done, total);
     }
     if let Some(todo) = plan_text {
         return ActivityLabel::Todo(todo);
@@ -293,7 +299,7 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
         bar,
         lx.chat.loading_frame,
         stop_armed,
-        label.text(),
+        &label.text(),
         stats.as_deref(),
     );
 }

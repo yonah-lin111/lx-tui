@@ -121,3 +121,22 @@ fn symlink_cycles_are_not_followed_forever() {
     );
     let _ = std::fs::remove_dir_all(base);
 }
+
+#[test]
+fn catalog_signature_tracks_added_and_edited_skills() {
+    let base = temp_dir("signature");
+    let user = base.join("user");
+    let agents = base.join("agents");
+    std::fs::create_dir_all(&user).expect("user");
+    let first = catalog_signature(&user, &agents, None);
+    skill(&user, "demo");
+    let second = catalog_signature(&user, &agents, None);
+    assert_ne!(first, second, "new SKILL.md changes the signature");
+    let path = user.join("demo").join("SKILL.md");
+    let mut text = std::fs::read_to_string(&path).expect("read");
+    text.push_str("\nmore text\n");
+    std::fs::write(&path, text).expect("write");
+    let third = catalog_signature(&user, &agents, None);
+    assert_ne!(second, third, "edited SKILL.md changes the signature");
+    let _ = std::fs::remove_dir_all(base);
+}

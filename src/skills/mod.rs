@@ -10,10 +10,12 @@ pub mod store;
 
 use std::path::PathBuf;
 
-pub use discover::{ProjectSkillRoots, discover};
+pub use discover::{ProjectSkillRoots, catalog_signature, discover};
 pub use parse::{ParsedSkill, load_skill_body, parse_skill};
-pub use render::{render_catalog, render_injection, render_replay_line};
-pub use store::{delete_skill, read_skill, serialize_skill, write_skill};
+pub use render::{
+    render_catalog, render_catalog_with_omitted, render_injection, render_replay_line,
+};
+pub use store::{delete_skill, read_skill, read_skill_at, serialize_skill, write_skill};
 
 /// `SKILL.md` 读取上限（256 KiB）。
 pub const MAX_SKILL_FILE_BYTES: usize = 256 * 1024;

@@ -166,7 +166,11 @@ pub fn convert_result(result: &rmcp::model::CallToolResult, session_id: &str) ->
     }
 }
 
-fn archive_image(data: &str, mime: &str, session_id: &str) -> Result<ArchivedImage, String> {
+pub(crate) fn archive_image(
+    data: &str,
+    mime: &str,
+    session_id: &str,
+) -> Result<ArchivedImage, String> {
     let bytes = BASE64
         .decode(data)
         .map_err(|error| format!("invalid base64: {error}"))?;
@@ -191,7 +195,7 @@ fn extension(mime: &str) -> &'static str {
     }
 }
 
-fn decoded_len(data: &str) -> usize {
+pub(crate) fn decoded_len(data: &str) -> usize {
     BASE64.decode(data).map(|bytes| bytes.len()).unwrap_or(0)
 }
 

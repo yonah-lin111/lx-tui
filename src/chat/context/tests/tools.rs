@@ -705,3 +705,37 @@ fn non_file_result_replays_verbatim() {
         .expect("result present");
     assert_eq!(content, r#"{"tool":"read","content":"1: fn main() {}"}"#);
 }
+
+/// 工具图片文件缺失：跳过字节但保留一行英文占位，模型仍知道结果里本来有图。
+#[test]
+fn missing_tool_image_replay_adds_placeholder() {
+    let mut history = vec![
+        message("u", 0, 0, "user", "complete", "截个图"),
+        message("a", 1, 0, "assistant", "complete", "调用工具"),
+    ];
+    history[1].tools = vec![tool(
+        1,
+        "call_img",
+        "mcp__browser__screenshot",
+        "completed",
+        "{}",
+        Some(
+            r#"{"kind":"mcp","server":"browser","tool":"screenshot","text":"ok","truncated":false,"images":[{"path":"/nonexistent/lx-tool-image.png","mime":"image/png","width":10,"height":10}],"images_omitted":0}"#,
+        ),
+        None,
+    )];
+    let assembly = assemble_unbounded(&history, "继续");
+    let (content, images) = assembly
+        .request
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ModelItem::ToolResult {
+                content, images, ..
+            } => Some((content.as_str(), images.len())),
+            _ => None,
+        })
+        .expect("result present");
+    assert!(content.contains("[image no longer available]"), "{content}");
+    assert_eq!(images, 0);
+}

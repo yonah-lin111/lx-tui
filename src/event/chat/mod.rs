@@ -21,7 +21,7 @@ mod process_events;
 mod process_page;
 pub mod rewind;
 mod runtime;
-mod skills;
+pub(crate) mod skills;
 mod subagent;
 mod timeline;
 mod tool_calls;
@@ -630,7 +630,7 @@ fn start_stream(
     // 在途请求持有启动时快照，设置页中途保存不影响本轮）。
     // 必须走 `effective_selection`：它会把模型默认思考等级（variant）补上，
     // 否则「未显式选等级」的窗格请求不会带思考参数（reasoning 恒为空）。
-    let (frozen, assembled, current_plan, mcp_snapshot) = {
+    let (frozen, assembled, current_plan, mcp_snapshot, skill_omitted) = {
         let Some(pane) = state.pane_anywhere(key.pane) else {
             return false;
         };
@@ -664,35 +664,46 @@ fn start_stream(
             &background_tasks(pane.lx.chat.session_id.as_deref(), streams),
         );
         // skill 目录与 MCP 快照在 turn 起点冻结：本轮所有采样复用同一份。
-        let skills = skills::catalog_prompt(persistence, workspace_root.as_deref());
+        // 配置根取仓库主 checkout（同一仓库的 worktree 共用 MCP/skill 项目配置），
+        // 执行 cwd 仍是 workspace_root（worktree 本身）。
+        let config_root = state
+            .chat_session_key_for_pane(key.pane)
+            .or_else(|| workspace_root.clone());
+        let (skills, skill_omitted) =
+            skills::catalog_prompt(persistence, config_root.as_deref(), false);
         let (draft_text, _) = timeline::latest_user_draft_and_attachments(&pane.lx.chat.messages);
         let skill_blocks = skills::reference_blocks(&draft_text);
-        let mcp_snapshot = mcp::snapshot_for_turn(persistence, workspace_root.as_deref());
+        let mcp_snapshot = mcp::snapshot_for_turn(persistence, config_root.as_deref());
+        let mcp_prompt = mcp_snapshot.instructions_prompt();
         let mut assembled = assemble_turn_request(
             &pane.lx.chat.messages,
             &frozen,
             compact.as_ref(),
             Some(&environment),
             skills.as_deref(),
-            None,
+            mcp_prompt.as_deref(),
             &skill_blocks,
         );
         assembled.request.tools = std::sync::Arc::new(crate::chat::tools::turn_tools(
             crate::chat::agent::ToolSurface::Main,
             &mcp_snapshot,
         ));
-        if let Some(section) = mcp_snapshot.instructions_prompt() {
-            let prompt = assembled
-                .request
-                .system_prompt
-                .get_or_insert_with(crate::chat::prompt::system_prompt);
-            prompt.push_str("\n\n");
-            prompt.push_str(&section);
-        }
         // 计划快照先克隆：运行上下文摘要要在后面的可变借用窗外拼装。
         let current_plan = pane.lx.chat.plan.clone();
-        (frozen, assembled, current_plan, mcp_snapshot)
+        (frozen, assembled, current_plan, mcp_snapshot, skill_omitted)
     };
+    if skill_omitted > 0 {
+        update::show_lx_toast(
+            state,
+            key.pane,
+            Toast::new(
+                ToastKind::Warning,
+                text::skills::catalog_omitted(skill_omitted),
+                Some(key.pane),
+                Instant::now(),
+            ),
+        );
+    }
     // 省略提示（一次性显示）。
     if assembled.omitted_turns > 0
         && let Some(pane) = state.pane_mut_anywhere(key.pane)

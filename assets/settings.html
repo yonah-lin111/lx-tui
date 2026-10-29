@@ -12,6 +12,8 @@
   <button id="tab-general" class="active" onclick="showTab('general')">General</button>
   <button id="tab-commands" onclick="showTab('commands')">Commands</button>
   <button id="tab-models" onclick="showTab('models')">Models</button>
+  <button id="tab-mcp" onclick="showTab('mcp')">MCP</button>
+  <button id="tab-skills" onclick="showTab('skills')">Skills</button>
 </nav>
 <div class="side-resizer" id="side-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
 <main>
@@ -201,8 +203,210 @@
       </section>
     </div>
   </section>
+
+  <section id="view-mcp" class="view hidden">
+    <div class="view-head">
+      <h2>MCP</h2>
+      <div id="actions-mcp" class="view-actions"></div>
+    </div>
+    <div class="models-toolbar">
+      <button class="ghost" onclick="loadMcp()">Reload</button>
+      <span class="status" id="mcp-status">Loading…</span>
+    </div>
+    <div class="models-grid">
+      <nav class="models-nav" aria-label="MCP servers">
+        <div id="mcp-list" class="provider-list"></div>
+        <button id="new-mcp-row" type="button" class="nav-item new" onclick="newMcpServer()">
+          <span class="nav-slash">+</span>
+          <span class="nav-name">New server</span>
+        </button>
+      </nav>
+      <div class="models-resizer" role="separator" aria-orientation="vertical"></div>
+      <section class="editor-card">
+        <div id="mcp-empty" class="editor-empty">
+          <p>Select a server to edit.</p>
+          <button class="primary" onclick="newMcpServer()">New server</button>
+        </div>
+        <div id="mcp-editor" class="hidden">
+          <div class="editor-head">
+            <h3 id="mcp-legend">Edit server</h3>
+            <div class="actions">
+              <button class="ghost" onclick="hideMcpEditor()">Cancel</button>
+              <button class="danger" onclick="deleteMcpServer()">Delete</button>
+            </div>
+          </div>
+          <div class="editor-body">
+            <fieldset>
+              <div class="field-grid">
+                <div>
+                  <label for="mcp-name">Name</label>
+                  <input id="mcp-name" type="text" placeholder="github">
+                </div>
+                <div>
+                  <label>Scope</label>
+                  <div id="mcp-scope-host" class="select-host"></div>
+                </div>
+                <div>
+                  <label>Transport</label>
+                  <div id="mcp-transport-host" class="select-host"></div>
+                </div>
+                <div class="field-wide">
+                  <label class="field-hint"><input id="mcp-enabled" type="checkbox"> Enabled</label>
+                </div>
+              </div>
+            </fieldset>
+            <fieldset id="mcp-stdio-fields">
+              <legend>stdio</legend>
+              <div class="field-grid">
+                <div class="field-wide">
+                  <label for="mcp-command">Command</label>
+                  <input id="mcp-command" type="text" placeholder="npx">
+                </div>
+                <div class="field-wide">
+                  <label for="mcp-args">Args (one per line)</label>
+                  <textarea id="mcp-args" rows="3"></textarea>
+                </div>
+                <div class="field-wide">
+                  <label for="mcp-cwd">Cwd (optional, relative to project)</label>
+                  <input id="mcp-cwd" type="text">
+                </div>
+                <div class="field-wide">
+                  <label for="mcp-env-vars">Env vars to pass through (one per line)</label>
+                  <textarea id="mcp-env-vars" rows="2"></textarea>
+                </div>
+                <div class="field-wide">
+                  <label for="mcp-env">Env overrides (KEY=VALUE per line)</label>
+                  <textarea id="mcp-env" rows="2"></textarea>
+                </div>
+              </div>
+            </fieldset>
+            <fieldset id="mcp-http-fields" class="hidden">
+              <legend>http</legend>
+              <div class="field-grid">
+                <div class="field-wide">
+                  <label for="mcp-url">URL</label>
+                  <input id="mcp-url" type="text" placeholder="mcp.example.com/mcp">
+                </div>
+                <div>
+                  <label>Auth</label>
+                  <div id="mcp-auth-host" class="select-host"></div>
+                </div>
+                <div class="field-wide" id="mcp-bearer-token-row">
+                  <label for="mcp-bearer-token">Bearer token</label>
+                  <input id="mcp-bearer-token" type="password" autocomplete="off" placeholder="leave empty to keep the current value">
+                </div>
+                <div class="field-wide hidden" id="mcp-bearer-env-row">
+                  <label for="mcp-bearer-env">Bearer token env var</label>
+                  <input id="mcp-bearer-env" type="text" placeholder="GITHUB_TOKEN">
+                </div>
+                <div class="field-wide">
+                  <label for="mcp-headers">Headers (Name=Value per line)</label>
+                  <textarea id="mcp-headers" rows="2"></textarea>
+                </div>
+                <div class="field-wide">
+                  <label for="mcp-env-headers">Env headers (Name=ENV_VAR per line)</label>
+                  <textarea id="mcp-env-headers" rows="2"></textarea>
+                </div>
+                <div class="field-wide hidden" id="mcp-oauth-fields">
+                  <label for="mcp-scopes">Scopes (space separated)</label>
+                  <input id="mcp-scopes" type="text">
+                  <label for="mcp-client-id">Client ID (optional)</label>
+                  <input id="mcp-client-id" type="text">
+                  <label for="mcp-client-secret">Client secret (optional)</label>
+                  <input id="mcp-client-secret" type="password" autocomplete="off" placeholder="leave empty to keep the current value">
+                  <div class="actions">
+                    <button class="ghost" onclick="mcpLogin()">Login</button>
+                    <button class="ghost" onclick="mcpLogout()">Logout</button>
+                  </div>
+                </div>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>Tools</legend>
+              <div id="mcp-tools" class="model-list"><p class="field-hint">Test the connection to list tools.</p></div>
+            </fieldset>
+            <div class="actions">
+              <button class="ghost" onclick="mcpProbe()">Test connection</button>
+              <button class="ghost" onclick="mcpRestart()">Restart</button>
+              <button class="primary" onclick="saveMcpServer()">Save</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <section id="view-skills" class="view hidden">
+    <div class="view-head">
+      <h2>Skills</h2>
+      <div id="actions-skills" class="view-actions"></div>
+    </div>
+    <div class="models-toolbar">
+      <button class="ghost" onclick="loadSkills()">Reload</button>
+      <span class="status" id="skills-status">Loading…</span>
+    </div>
+    <div class="models-grid">
+      <nav class="models-nav" aria-label="Skills">
+        <div id="skill-list" class="provider-list"></div>
+        <button id="new-skill-row" type="button" class="nav-item new" onclick="newSkill()">
+          <span class="nav-slash">+</span>
+          <span class="nav-name">New skill</span>
+        </button>
+      </nav>
+      <div class="models-resizer" role="separator" aria-orientation="vertical"></div>
+      <section class="editor-card">
+        <div id="skill-empty" class="editor-empty">
+          <p>Select a skill to edit.</p>
+          <button class="primary" onclick="newSkill()">New skill</button>
+        </div>
+        <div id="skill-editor" class="hidden">
+          <div class="editor-head">
+            <h3 id="skill-legend">Edit skill</h3>
+            <div class="actions">
+              <button class="ghost" onclick="hideSkillEditor()">Cancel</button>
+              <button class="danger" onclick="deleteSkill()">Delete</button>
+            </div>
+          </div>
+          <div class="editor-body">
+            <fieldset>
+              <div class="field-grid">
+                <div>
+                  <label for="skill-name">Name</label>
+                  <input id="skill-name" type="text" placeholder="release-checklist">
+                </div>
+                <div>
+                  <label>Scope</label>
+                  <div id="skill-scope-host" class="select-host"></div>
+                </div>
+                <div class="field-wide">
+                  <label for="skill-path">Path</label>
+                  <input id="skill-path" type="text" readonly>
+                </div>
+                <div class="field-wide">
+                  <label class="field-hint"><input id="skill-enabled" type="checkbox" onchange="toggleSkillEnabled()"> Enabled</label>
+                </div>
+                <div class="field-wide">
+                  <label for="skill-description">Description</label>
+                  <input id="skill-description" type="text">
+                </div>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>Body</legend>
+              <textarea id="skill-body" rows="14"></textarea>
+            </fieldset>
+            <div class="actions">
+              <button class="primary" onclick="saveSkill()">Save</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
 </main>
 <script src="/settings.js"></script>
 <script src="/settings_models.js"></script>
+<script src="/settings_mcp.js"></script>
+<script src="/settings_skills.js"></script>
 </body>
 </html>

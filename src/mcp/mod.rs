@@ -4,6 +4,7 @@
 
 pub mod manager;
 pub mod naming;
+pub mod oauth;
 pub mod result;
 pub mod schema;
 

@@ -318,6 +318,159 @@ pub enum ToolDetailView {
     Ask(AskDetailView),
     Subagent(SubagentDetailView),
     Search(SearchDetailView),
+    Mcp(McpDetailView),
+}
+
+/// MCP 工具结果里的已归档图片（只展示元数据，不读字节）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpImageView {
+    pub path: String,
+    pub mime: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// MCP 工具卡片详情：参数与结果的有限行窗口。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpDetailView {
+    pub server: String,
+    pub tool: String,
+    /// 折叠标题里的第一个字符串参数（单行、最多 60 字符）。
+    pub summary: Option<String>,
+    /// 格式化后的参数行（最多 20 行）。
+    pub arguments: Vec<String>,
+    pub arguments_more: usize,
+    /// 结果文本行（最多 20 行）。
+    pub result: Vec<String>,
+    pub result_more: usize,
+    pub images: Vec<McpImageView>,
+    pub images_omitted: usize,
+    /// 调用耗时（毫秒）；旧记录可能缺失。
+    pub duration_ms: Option<u64>,
+}
+
+impl McpDetailView {
+    /// 历史重载：结果体（落库 JSON）+ 调用参数。
+    pub fn from_parts(result_json: Option<&str>, arguments_json: &str) -> Option<Self> {
+        let value: Value = serde_json::from_str(result_json?).ok()?;
+        if value.get("kind").and_then(Value::as_str)? != "mcp" {
+            return None;
+        }
+        let server = value.get("server")?.as_str()?.to_string();
+        let tool = value.get("tool")?.as_str()?.to_string();
+        let text = value.get("text").and_then(Value::as_str).unwrap_or("");
+        let images = value
+            .get("images")
+            .and_then(Value::as_array)
+            .map(|images| {
+                images
+                    .iter()
+                    .filter_map(|image| {
+                        Some(McpImageView {
+                            path: image.get("path")?.as_str()?.to_string(),
+                            mime: image
+                                .get("mime")
+                                .and_then(Value::as_str)
+                                .unwrap_or("image/png")
+                                .to_string(),
+                            width: image.get("width")?.as_u64().unwrap_or(0) as u32,
+                            height: image.get("height")?.as_u64().unwrap_or(0) as u32,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(Self {
+            server,
+            tool,
+            summary: argument_summary_of(arguments_json),
+            arguments: argument_lines(arguments_json),
+            arguments_more: argument_more(arguments_json),
+            result: text_lines(text),
+            result_more: text_more(text),
+            images,
+            images_omitted: value
+                .get("images_omitted")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize,
+            duration_ms: value.get("duration_ms").and_then(Value::as_u64),
+        })
+    }
+
+    /// 实时结算：直接由执行结果构造（与落库 JSON 同一口径）。
+    pub fn from_result(result: &crate::chat::tools::McpToolResult, arguments_json: &str) -> Self {
+        Self {
+            server: result.server.clone(),
+            tool: result.tool.clone(),
+            summary: argument_summary_of(arguments_json),
+            arguments: argument_lines(arguments_json),
+            arguments_more: argument_more(arguments_json),
+            result: text_lines(&result.text),
+            result_more: text_more(&result.text),
+            images: result
+                .images
+                .iter()
+                .map(|image| McpImageView {
+                    path: image.path.display().to_string(),
+                    mime: image.mime.clone(),
+                    width: image.width,
+                    height: image.height,
+                })
+                .collect(),
+            images_omitted: result.images_omitted,
+            duration_ms: result.duration_ms,
+        }
+    }
+
+    /// 折叠标题里的参数摘要。
+    pub fn argument_summary(&self) -> Option<String> {
+        self.summary.clone()
+    }
+}
+
+/// 第一个字符串参数（单行、最多 60 字符）。
+fn argument_summary_of(arguments_json: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(arguments_json).ok()?;
+    let object = value.as_object()?;
+    for value in object.values() {
+        let Some(text) = value.as_str() else {
+            continue;
+        };
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !text.is_empty() {
+            return Some(text.chars().take(60).collect());
+        }
+    }
+    None
+}
+
+/// 参数 JSON 格式化行（最多 20 行）。
+fn argument_lines(arguments_json: &str) -> Vec<String> {
+    let value: Value = serde_json::from_str(arguments_json).unwrap_or(Value::Null);
+    let text = if value.is_null() {
+        arguments_json.to_string()
+    } else {
+        serde_json::to_string_pretty(&value).unwrap_or_else(|_| arguments_json.to_string())
+    };
+    text.lines().take(20).map(str::to_string).collect()
+}
+
+fn argument_more(arguments_json: &str) -> usize {
+    let value: Value = serde_json::from_str(arguments_json).unwrap_or(Value::Null);
+    let text = if value.is_null() {
+        arguments_json.to_string()
+    } else {
+        serde_json::to_string_pretty(&value).unwrap_or_else(|_| arguments_json.to_string())
+    };
+    text.lines().count().saturating_sub(20)
+}
+
+fn text_lines(text: &str) -> Vec<String> {
+    text.lines().take(20).map(str::to_string).collect()
+}
+
+fn text_more(text: &str) -> usize {
+    text.lines().count().saturating_sub(20)
 }
 
 /// `search` 的单条命中：文件、1-based 行号与命中行文本。
@@ -702,9 +855,19 @@ impl ToolDetailView {
         }
     }
 
+    /// 工具结果 + 调用参数（MCP 卡片需要两者；其余工具只看结果体）。
+    pub fn from_tool(result_json: Option<&str>, arguments_json: &str) -> Option<Self> {
+        McpDetailView::from_parts(result_json, arguments_json)
+            .map(Self::Mcp)
+            .or_else(|| Self::from_result_json(result_json))
+    }
+
     /// 由落库结果 JSON 还原（历史重载路径；形状不符返回 None）。
     pub fn from_result_json(result_json: Option<&str>) -> Option<Self> {
         let value: Value = serde_json::from_str(result_json?).ok()?;
+        if value.get("kind").and_then(Value::as_str) == Some("mcp") {
+            return McpDetailView::from_parts(Some(result_json?), "").map(Self::Mcp);
+        }
         match value.get("tool").and_then(Value::as_str)? {
             "exec_command" => Some(Self::Command(CommandView {
                 process_session_id: value.get("session_id").and_then(Value::as_u64),

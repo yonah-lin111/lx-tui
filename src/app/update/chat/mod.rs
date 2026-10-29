@@ -188,6 +188,15 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
     if let Some(warning) = prepared.warnings.first() {
         show_lx_hint(state, pane, InputHintLevel::Warning, warning);
     }
+    if let Some(notice) = prepared.skill_notices.first() {
+        let message = match notice {
+            crate::chat::prepare::SkillNotice::Truncated { name } => text::skills::truncated(name),
+            crate::chat::prepare::SkillNotice::LoadFailed { name, reason } => {
+                text::skills::read_failed(name, reason)
+            }
+        };
+        show_lx_hint(state, pane, InputHintLevel::Warning, message);
+    }
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };

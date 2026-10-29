@@ -26,8 +26,10 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 
 
 # 流式聊天 HTTPS 请求：rustls TLS，禁默认 native-tls，启用流式响应与 gzip。
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "gzip", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "gzip", "json", "form"] }
 similar = "2.7"
+# OAuth PKCE（S256）：只用于对 verifier 做 SHA-256，已在依赖树中复用。
+sha2 = "0.10"
 rmcp = { version = "3.8.0", default-features = false, features = [
     "client",
     "transport-child-process",

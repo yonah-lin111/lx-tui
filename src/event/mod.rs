@@ -29,15 +29,18 @@ use tokio_stream::StreamExt;
 
 use crate::app::markdown::MentionEntry;
 use crate::app::state::{AppState, WorkspaceGit};
+use crate::app::toast::Toast;
 use crate::app::update;
 use crate::chat::process::ProcessUiEvent;
 use crate::config::Config;
 use crate::db::service::Persistence;
 use crate::layout::PaneId;
+use crate::mcp::{McpEvent, ServerStatus};
 use crate::pty::PtySession;
-use crate::settings::service::{SettingsEvent, SettingsService};
+use crate::settings::service::{McpStatusView, SettingsEvent, SettingsService};
 use crate::tui::Tui;
 use crate::ui;
+use crate::ui::text;
 
 /// 应用级事件：后台任务（PTY 读线程、提及扫描与 git 查询）经此汇入主循环。
 #[derive(Debug)]
@@ -181,6 +184,20 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 /// 空闲等待：只由输入或 PTY 输出唤醒。
 const IDLE_WAIT: Duration = Duration::from_secs(3600);
 
+/// 某个项目根下的全部 lx 窗格（MCP 反馈按项目落到对应窗格）。
+fn panes_for_project(state: &AppState, project: &std::path::Path) -> Vec<PaneId> {
+    let mut panes = Vec::new();
+    for workspace in &state.workspaces {
+        if workspace.repo_key().is_none_or(|root| root != project) {
+            continue;
+        }
+        for tab in &workspace.tabs {
+            panes.extend(tab.layout.pane_ids());
+        }
+    }
+    panes
+}
+
 /// lx loading 转轮每帧间隔（对齐 codex motion.rs 的 100ms）。
 const LOADING_FRAME_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -220,10 +237,23 @@ async fn run_loop(
         }
     };
     state.settings_available = settings_service.is_some();
+    // MCP 状态事件：设置页状态点、lx 页 toast 与启动进度。
+    let (mcp_sender, mut mcp_receiver) = mpsc::unbounded_channel::<McpEvent>();
+    crate::mcp::global_manager().set_events(mcp_sender);
+    // 按 (项目, server) 汇总的状态；toast 去重用同一键 + 错误文本。
+    let mut mcp_statuses: std::collections::BTreeMap<(PathBuf, String), McpStatusView> =
+        std::collections::BTreeMap::new();
+    let mut mcp_toasted: HashSet<(PathBuf, String, String)> = HashSet::new();
+    // 启动时把设置页项目表推给服务（同样逻辑在每轮循环里做增量比较）。
+    if let Some(service) = settings_service.as_ref() {
+        service.set_projects(chat::mcp::project_views(state, persistence));
+    }
     // 模型配置：启动加载（首次已由 main 导入）；加载后刷新状态行。
     load_models_snapshot(state);
     // 自定义命令重载触发：启动、切换显示工作区与设置页写入后。
     let mut commands_reload = true;
+    // skill 目录缓存刷新触发：启动、切换显示工作区与设置页写入后。
+    let mut skills_reload = true;
     let mut last_prompt_workspace = state.prompt_workspace();
     initialize_layout_widths(tui, state, &config)?;
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
@@ -253,6 +283,10 @@ async fn run_loop(
     while !state.should_quit {
         // 会话按状态对齐：新建工作区的窗格在此启动，被移除工作区的会话在此终止。
         session::reconcile_sessions(state, &mut sessions, &sender);
+        // 设置页项目表：工作区打开/关闭/信任变化都可能改变 scope 映射。
+        if let Some(service) = settings_service.as_ref() {
+            service.set_projects(chat::mcp::project_views(state, persistence));
+        }
         // 设置页事件：保存的配置与命令变更在事件循环内应用。
         while let Ok(event) = settings_receiver.try_recv() {
             match event {
@@ -263,8 +297,105 @@ async fn run_loop(
                     // 下一轮发送才用新配置。
                     update::apply_models_changed(state, &settings);
                 }
+                SettingsEvent::McpChanged => {
+                    let roots = chat::mcp::project_roots(state);
+                    chat::mcp::prewarm_projects(persistence, &roots);
+                }
+                SettingsEvent::McpRestart { server } => {
+                    let roots = chat::mcp::project_roots(state);
+                    chat::mcp::restart_projects(persistence, &roots, Some(&server));
+                }
+                SettingsEvent::McpCredentialsChanged => {
+                    crate::mcp::global_manager().bump_credentials();
+                    let roots = chat::mcp::project_roots(state);
+                    chat::mcp::prewarm_projects(persistence, &roots);
+                }
+                SettingsEvent::SkillsChanged => {
+                    chat::skills::invalidate_skill_cache();
+                    skills_reload = true;
+                }
             }
             dirty = true;
+        }
+        // MCP 运行事件：状态快照、启动进度与失败/登录提示。
+        while let Ok(event) = mcp_receiver.try_recv() {
+            match event {
+                McpEvent::Status {
+                    project,
+                    server,
+                    status,
+                } => {
+                    let (label, error) = match &status {
+                        ServerStatus::Disabled => ("disabled", None),
+                        ServerStatus::Starting => ("starting", None),
+                        ServerStatus::Ready { .. } => ("ready", None),
+                        ServerStatus::Failed { error } => ("failed", Some(error.clone())),
+                        ServerStatus::NeedsLogin => ("needs_login", None),
+                    };
+                    mcp_statuses.insert(
+                        (project.clone(), server.clone()),
+                        McpStatusView {
+                            project: project.clone(),
+                            server: server.clone(),
+                            status: label.into(),
+                            error: error.clone(),
+                        },
+                    );
+                    let notice = match &status {
+                        ServerStatus::Failed { error } => Some((
+                            text::mcp::start_failed(&server, error),
+                            error.clone(),
+                            crate::app::toast::ToastKind::Danger,
+                        )),
+                        ServerStatus::NeedsLogin => Some((
+                            text::mcp::needs_login(&server),
+                            "needs_login".to_string(),
+                            crate::app::toast::ToastKind::Warning,
+                        )),
+                        _ => None,
+                    };
+                    if let Some((message, key, kind)) = notice
+                        && mcp_toasted.insert((project.clone(), server.clone(), key))
+                    {
+                        let panes = panes_for_project(state, &project);
+                        for pane in panes {
+                            update::show_lx_toast(
+                                state,
+                                pane,
+                                Toast::new(kind, message.clone(), Some(pane), Instant::now()),
+                            );
+                        }
+                    }
+                    if let Some(service) = settings_service.as_ref() {
+                        service.set_mcp_status(mcp_statuses.values().cloned().collect());
+                    }
+                    dirty = true;
+                }
+                McpEvent::StartupProgress {
+                    project,
+                    done,
+                    total,
+                } => {
+                    let complete = done >= total && total > 0;
+                    for workspace in &mut state.workspaces {
+                        let matches = workspace
+                            .repo_key()
+                            .is_some_and(|root| root == project.as_path());
+                        if !matches {
+                            continue;
+                        }
+                        for tab in &mut workspace.tabs {
+                            let ids = tab.layout.pane_ids();
+                            for id in ids {
+                                if let Some(pane) = tab.pane_mut(id) {
+                                    pane.lx.mcp_startup = (!complete).then_some((done, total));
+                                }
+                            }
+                        }
+                    }
+                    dirty = true;
+                }
+            }
         }
         // 设置图标点击：请求打开浏览器（后台执行，不阻塞事件循环）。
         if state.settings_open_requested {
@@ -288,6 +419,7 @@ async fn run_loop(
         if prompt_workspace != last_prompt_workspace {
             last_prompt_workspace = prompt_workspace;
             commands_reload = true;
+            skills_reload = true;
         }
         let repo_changed = commands::sync_prompt_repo(state);
         if commands::reload_custom_commands(state, commands_reload) || repo_changed {
@@ -298,6 +430,14 @@ async fn run_loop(
             }
         }
         commands_reload = false;
+        if skills_reload {
+            skills_reload = false;
+            let root = state
+                .prompt_owner()
+                .repo_key()
+                .map(std::path::Path::to_path_buf);
+            let _ = chat::skills::catalog_prompt(persistence, root.as_deref(), false);
+        }
         // 撤销效应先取走：预检同步、执行转后台；持久化泵不再看到它们。
         if chat::apply_rewind_effects(state, &sender, persistence) {
             dirty = true;
@@ -549,6 +689,12 @@ async fn run_loop(
             }
         }
     }
+    // MCP 子进程随退出关闭：先取消，2 秒兜底后整组 SIGKILL（见 manager::shutdown）。
+    let _ = tokio::time::timeout(
+        Duration::from_secs(3),
+        crate::mcp::global_manager().shutdown(),
+    )
+    .await;
     // 设置服务随 TUI 退出关闭，避免回环端口悬挂。
     if let Some(service) = settings_service.as_ref() {
         service.shutdown();

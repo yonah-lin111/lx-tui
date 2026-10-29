@@ -665,6 +665,7 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
             "tool": result.tool,
             "text": result.text,
             "truncated": result.truncated,
+            "duration_ms": result.duration_ms,
             "images": result.images.iter().map(|image| json!({
                 "path": image.path.display().to_string(),
                 "mime": image.mime,

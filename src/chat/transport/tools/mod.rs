@@ -508,3 +508,62 @@ impl ToolCallBuffer {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod wire_snapshot {
+    use super::*;
+    use crate::chat::events::{ChatRequest, ChatTurn};
+
+    fn request() -> ChatRequest {
+        ChatRequest {
+            turns: vec![ChatTurn {
+                role: "user".into(),
+                text: "hi".into(),
+                reasoning_metadata: None,
+            }],
+            items: Vec::new(),
+            model: crate::db::chat::ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+            variant_params: None,
+            purpose: crate::chat::events::RequestPurpose::Chat,
+            system_prompt: Some("system".into()),
+            tools: std::sync::Arc::new(vec![ToolDecl {
+                name: "read".into(),
+                description: "Read a file".into(),
+                parameters: serde_json::json!({"type": "object", "properties": {}}),
+            }]),
+        }
+    }
+
+    /// 无图片请求的逐字节回归样本：任何 transport 改动都必须保持这些 body 不变。
+    #[test]
+    fn no_image_wire_bytes_are_stable() {
+        let request = request();
+        let anthropic =
+            crate::chat::transport::anthropic::build("", Some("key"), &request).expect("a");
+        assert_eq!(
+            anthropic.body,
+            r#"{"max_tokens":8192,"messages":[{"content":"hi","role":"user"}],"model":"m","stream":true,"system":"system","tools":[{"description":"Read a file","input_schema":{"properties":{},"type":"object"},"name":"read"}]}"#
+        );
+        let responses =
+            crate::chat::transport::responses::build("", Some("key"), &request).expect("r");
+        assert_eq!(
+            responses.body,
+            r#"{"input":[{"content":"hi","role":"user"}],"instructions":"system","model":"m","stream":true,"tools":[{"description":"Read a file","name":"read","parameters":{"properties":{},"type":"object"},"type":"function"}]}"#
+        );
+        let openai =
+            crate::chat::transport::openai::build("", Some("key"), &request, false).expect("o");
+        assert_eq!(
+            openai.body,
+            r#"{"messages":[{"content":"system","role":"system"},{"content":"hi","role":"user"}],"model":"m","stream":true,"stream_options":{"include_usage":true},"tools":[{"function":{"description":"Read a file","name":"read","parameters":{"properties":{},"type":"object"}},"type":"function"}]}"#
+        );
+        let google = crate::chat::transport::google::build("", Some("key"), &request).expect("g");
+        assert_eq!(
+            google.body,
+            r#"{"contents":[{"parts":[{"text":"hi"}],"role":"user"}],"systemInstruction":{"parts":[{"text":"system"}]},"tools":[{"functionDeclarations":[{"description":"Read a file","name":"read","parameters":{"properties":{},"type":"object"}}]}]}"#
+        );
+    }
+}

@@ -767,3 +767,63 @@ async fn tools_outside_the_role_surface_are_never_executed() {
     let text = format!("{items:?}");
     assert!(text.contains(UNAVAILABLE_CODE), "{text}");
 }
+
+/// MCP 取消结果：不走普通工具失败，而是按用户取消结算整轮。
+struct CancellingMcpExecutor;
+
+impl ToolExecutor for CancellingMcpExecutor {
+    async fn execute(&self, _cwd: &Path, _call: &ReadyToolCall) -> ToolExecutionResult {
+        panic!("mcp calls must use the cancellable entry");
+    }
+
+    async fn execute_mcp_cancellable(
+        &self,
+        _cwd: &Path,
+        _call: &ReadyToolCall,
+        _cancel: watch::Receiver<bool>,
+    ) -> Option<ToolExecutionResult> {
+        Some(ToolExecutionResult::Failed {
+            code: crate::chat::tools::ToolErrorCode::Cancelled,
+            message: "mcp call cancelled".into(),
+            changes: Vec::new(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn mcp_cancelled_result_settles_as_cancelled_and_stops_the_turn() {
+    let fixture = Fixture::new("mcp-cancel");
+    let args = "{}".to_string();
+    let script = Script::new(
+        vec![tool_calls(
+            &[("call_mcp", "mcp__x__tool", &args, 0)],
+            Some((2, 1)),
+        )],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::new();
+    let mut ctx = context(fixture.path());
+    ctx.request.tools = std::sync::Arc::new(vec![crate::chat::tools::ToolDecl {
+        name: "mcp__x__tool".into(),
+        description: "mcp".into(),
+        parameters: serde_json::json!({"type": "object", "properties": {}}),
+    }]);
+    let summary = run_agent_turn(
+        ctx,
+        host.clone(),
+        CancellingMcpExecutor,
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+    assert_eq!(summary.outcome, TurnOutcome::Interrupted);
+    assert_eq!(script.request_count(), 1, "取消后不再采样");
+    assert_eq!(
+        host.trace(),
+        vec![
+            HostTrace::Begin("call_mcp".into()),
+            HostTrace::Finish("call_mcp".into(), true),
+        ],
+        "取消按 cancelled 结算，不写工具结果"
+    );
+}

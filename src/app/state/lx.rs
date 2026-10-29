@@ -30,10 +30,11 @@ pub use chat::SHELL_SLOT;
 pub use chat::{
     AskAnsweredView, AskDetailView, AssistantStepView, CardSection, CardTarget, ChatMessageView,
     ChatPartView, CommandView, DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView,
-    FileDiffView, FrozenModel, InputHintLevel, InteractionAction, LxChat, ModelsSnapshot,
-    PendingShell, PlanSnapshotView, PlanStepView, ProcessInteractionView, ProcessStateView,
-    QueuedSubmission, RequestKey, RequestState, SearchDetailView, SearchMatchView,
-    SubagentDetailView, ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
+    FileDiffView, FrozenModel, InputHintLevel, InteractionAction, LxChat, McpDetailView,
+    McpImageView, ModelsSnapshot, PendingShell, PlanSnapshotView, PlanStepView,
+    ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey, RequestState,
+    SearchDetailView, SearchMatchView, SubagentDetailView, ToolCallView, ToolDetailView,
+    ToolStatus, ToolSummary, UserShellView,
 };
 pub use compact::{CompactNoticeView, LxCompact};
 pub use mention::{LxMention, LxMentionView};
@@ -126,6 +127,8 @@ pub struct Lx {
     /// 由事件循环按运行实例刷新，与页面是否打开无关——用户不打开后台任务页也要
     /// 能看见"还有几个服务在跑"，否则忘了清理就是这样发生的。
     pub background_tasks: usize,
+    /// 首轮 MCP 启动进度 `(已完成, 总数)`；None 表示没有在启动的 server。
+    pub mcp_startup: Option<(usize, usize)>,
     /// 撤销历史（上限 `LX_HISTORY_LIMIT`）。
     undo: Vec<LxSnapshot>,
     /// 重做历史。
@@ -205,6 +208,7 @@ impl Lx {
             ask: None,
             plain,
             background_tasks: 0,
+            mcp_startup: None,
             undo: Vec::new(),
             redo: Vec::new(),
             history: HistoryBrowse::default(),

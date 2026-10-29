@@ -58,6 +58,10 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(html.contains("view-models"), "models view container");
     assert!(html.contains("provider-list"), "provider list container");
     assert!(html.contains("prov-api-key"), "api key input present");
+    assert!(html.contains("MCP"), "mcp tab present");
+    assert!(html.contains("view-mcp"), "mcp view container");
+    assert!(html.contains("Skills"), "skills tab present");
+    assert!(html.contains("view-skills"), "skills view container");
     assert!(
         html.contains("type=\"password\""),
         "api key input masked by default"
@@ -106,16 +110,31 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         assert!(models_js_body.contains(entry), "models js entry: {entry}");
     }
     assert!(
-        !models_js_body.contains("fetch-candidates').innerHTML"),
+        !models_js_body.contains(".innerHTML"),
         "no innerHTML for dynamic data"
     );
 
-    // 四份资源均无外部引用。
+    let mcp_js = request(port, &get("/settings_mcp.js")).await;
+    assert_eq!(status(&mcp_js), 200);
+    let mcp_js_body = body(&mcp_js);
+    for entry in ["loadMcp", "saveMcpServer", "mcpProbe", "/api/mcp/"] {
+        assert!(mcp_js_body.contains(entry), "mcp js entry: {entry}");
+    }
+    let skills_js = request(port, &get("/settings_skills.js")).await;
+    assert_eq!(status(&skills_js), 200);
+    let skills_js_body = body(&skills_js);
+    for entry in ["loadSkills", "saveSkill", "/api/skills"] {
+        assert!(skills_js_body.contains(entry), "skills js entry: {entry}");
+    }
+
+    // 六份资源均无外部引用。
     for (name, text) in [
         ("html", html),
         ("css", body(&css)),
         ("js", js_body),
         ("models_js", models_js_body),
+        ("mcp_js", mcp_js_body),
+        ("skills_js", skills_js_body),
     ] {
         assert!(
             !text.contains("https://"),
@@ -742,5 +761,197 @@ async fn agent_block_supple_type_round_trips_over_http() {
     )
     .await;
     assert_eq!(status(&bad), 422, "{bad}");
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn mcp_api_desensitizes_tokens_and_keeps_existing_secret() {
+    let (service, _events, _dir) = start("mcp-api").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let root = service.user_root_for_tests();
+    let project_root = root.join("project");
+    std::fs::create_dir_all(&project_root).expect("project");
+    service.set_projects(vec![ProjectView {
+        scope: crate::platform::path_text::scope_dir_name(&project_root).expect("scope"),
+        root: project_root,
+        name: "project".into(),
+        trusted: true,
+    }]);
+    let config_dir = root.join("config");
+    std::fs::create_dir_all(&config_dir).expect("config dir");
+    std::fs::write(
+        config_dir.join("mcp.json"),
+        r#"{"mcp":{"servers":{"github":{"enabled":true,"transport":"http","url":"https://mcp.example/mcp","auth":"bearer","bearer_token":"secret-token"}}}}"#,
+    )
+    .expect("write mcp");
+
+    let response = request(port, &get(&format!("/api/mcp?token={token}"))).await;
+    assert_eq!(status(&response), 200, "{response}");
+    let body = body(&response);
+    assert!(
+        !body.contains("secret-token"),
+        "token must not be returned: {body}"
+    );
+    assert!(
+        body.contains("\"bearer_token\":true"),
+        "secret flag: {body}"
+    );
+    assert!(body.contains("\"scope\":\"user\""), "scope: {body}");
+
+    // 空串表示保留原 token。
+    let put = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/mcp/user/github?token={token}"),
+            r#"{"enabled":true,"transport":"http","url":"https://mcp.example/mcp","auth":"bearer","bearer_token":""}"#,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&put), 200, "{put}");
+    let saved = std::fs::read_to_string(config_dir.join("mcp.json")).expect("read mcp");
+    assert!(saved.contains("secret-token"), "token kept: {saved}");
+
+    // 切到 auth=none 时必须清掉旧的 bearer 字段，否则校验会报二选一冲突。
+    let switch = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/mcp/user/github?token={token}"),
+            r#"{"enabled":true,"transport":"http","url":"https://mcp.example/mcp","auth":"none"}"#,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&switch), 200, "{switch}");
+    let saved = std::fs::read_to_string(config_dir.join("mcp.json")).expect("read mcp");
+    assert!(!saved.contains("secret-token"), "token cleared: {saved}");
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn mcp_project_scope_requires_trust_and_known_scope() {
+    let (service, _events, _dir) = start("mcp-scope").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let root = service.user_root_for_tests();
+    let project_root = root.join("untrusted");
+    std::fs::create_dir_all(&project_root).expect("project");
+    let scope = crate::platform::path_text::scope_dir_name(&project_root).expect("scope");
+    service.set_projects(vec![ProjectView {
+        scope: scope.clone(),
+        root: project_root,
+        name: "project".into(),
+        trusted: false,
+    }]);
+    let put = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/mcp/{scope}/x?token={token}"),
+            r#"{"enabled":true,"transport":"stdio","command":"true"}"#,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&put), 403, "{put}");
+
+    let unknown = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/mcp/nope/x?token={token}"),
+            r#"{"enabled":true,"transport":"stdio","command":"true"}"#,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&unknown), 404, "{unknown}");
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn skills_api_lists_creates_disables_and_deletes() {
+    let (service, _events, _dir) = start("skills-api").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let root = service.user_root_for_tests();
+
+    let put = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/skills/user/demo?token={token}"),
+            r##"{"description":"Do demo things","body":"# Demo\n"}"##,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&put), 200, "{put}");
+    let path = root.join("skills").join("demo").join("SKILL.md");
+    assert!(path.is_file(), "skill written");
+
+    let list = request(port, &get(&format!("/api/skills?token={token}"))).await;
+    assert_eq!(status(&list), 200, "{list}");
+    let listing = body(&list);
+    assert!(listing.contains("\"name\":\"demo\""), "{listing}");
+    assert!(listing.contains("\"editable\":true"), "{listing}");
+
+    let canonical = std::fs::canonicalize(&path).expect("canonical");
+    let disabled = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/skills/enabled?token={token}"),
+            &format!("{{\"path\":\"{}\",\"enabled\":false}}", canonical.display()),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&disabled), 200, "{disabled}");
+    let config = std::fs::read_to_string(root.join("config").join("skills.json")).expect("config");
+    assert!(config.contains("demo"), "{config}");
+
+    let detail = request(
+        port,
+        &get(&format!(
+            "/api/skills/detail?path={}&token={token}",
+            canonical.display()
+        )),
+    )
+    .await;
+    assert_eq!(status(&detail), 200, "{detail}");
+    assert!(body(&detail).contains("# Demo"), "{detail}");
+
+    let delete = request(
+        port,
+        &write(
+            "DELETE",
+            &format!("/api/skills/user/demo?token={token}"),
+            "{}",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&delete), 200, "{delete}");
+    assert!(!path.exists(), "skill deleted");
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn oauth_callback_rejects_unknown_state_without_token() {
+    let (service, _events, _dir) = start("oauth-callback").await;
+    let response = request(
+        service.port(),
+        &get("/mcp/oauth/callback?code=abc&state=unknown"),
+    )
+    .await;
+    assert_eq!(status(&response), 400, "{response}");
+    assert!(
+        body(&response).contains("state expired or invalid"),
+        "{response}"
+    );
     service.shutdown();
 }

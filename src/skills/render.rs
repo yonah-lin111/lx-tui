@@ -29,12 +29,20 @@ fn render_policy(subagent: bool) -> String {
 
 /// 渲染系统提示的 skill 目录段；没有可用 skill 时返回 None。
 pub fn render_catalog(entries: &[SkillEntry], subagent: bool) -> Option<String> {
+    render_catalog_with_omitted(entries, subagent).0
+}
+
+/// 同 [`render_catalog`]，额外返回因预算被整行省略的 skill 数量（toast 用）。
+pub fn render_catalog_with_omitted(
+    entries: &[SkillEntry],
+    subagent: bool,
+) -> (Option<String>, usize) {
     let visible: Vec<&SkillEntry> = entries
         .iter()
         .filter(|entry| entry.enabled && entry.shadowed_by.is_none())
         .collect();
     if visible.is_empty() {
-        return None;
+        return (None, 0);
     }
     let policy = render_policy(subagent);
     let fixed = format!("{HEADER}\n{INTRO}\n{AVAILABLE}\n") + &policy;
@@ -70,7 +78,7 @@ pub fn render_catalog(entries: &[SkillEntry], subagent: bool) -> Option<String> 
         );
     }
     body.push_str(&policy);
-    Some(body.trim_end().to_string())
+    (Some(body.trim_end().to_string()), omitted)
 }
 
 /// `<skill>` 注入块；返回 `(block, truncated)`。

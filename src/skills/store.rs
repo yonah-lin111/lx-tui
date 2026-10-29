@@ -15,6 +15,19 @@ pub fn read_skill(root: &Path, name: &str) -> Result<(String, String, String), S
     Ok((parsed.name, parsed.description, body))
 }
 
+/// 读取任意已发现 `SKILL.md` 的 name/description/正文（设置页只读预览）。
+pub fn read_skill_at(path: &Path) -> Result<(String, String, String), String> {
+    let dir_name = path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .unwrap_or("skill");
+    let text = super::parse::load_skill_body(path)?;
+    let parsed = super::parse::parse_skill(&text, dir_name)?;
+    let body = strip_frontmatter(&text).unwrap_or_default();
+    Ok((parsed.name, parsed.description, body))
+}
+
 /// 生成 `SKILL.md` 文本（frontmatter + 正文）。
 pub fn serialize_skill(name: &str, description: &str, body: &str) -> Result<String, String> {
     validate_name(name)?;

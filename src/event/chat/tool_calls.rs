@@ -371,6 +371,9 @@ pub(crate) fn detail_of(
             )
             .map(crate::app::state::ToolDetailView::Subagent)
         }
+        ToolExecutionResult::Mcp(result) => Some(crate::app::state::ToolDetailView::Mcp(
+            crate::app::state::McpDetailView::from_result(result, arguments_json.unwrap_or("{}")),
+        )),
         _ => None,
     }
 }

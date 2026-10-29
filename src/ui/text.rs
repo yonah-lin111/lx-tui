@@ -2,6 +2,8 @@
 
 pub mod agent;
 pub mod chat;
+pub mod mcp;
+pub mod skills;
 pub mod todo;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};

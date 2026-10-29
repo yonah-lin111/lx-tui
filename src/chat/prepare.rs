@@ -20,6 +20,15 @@ pub struct DraftImageAttachment {
     pub image: ProcessedImage,
 }
 
+/// skill 引用读取失败或超限的结构化提示（渲染层据此弹窗格内 toast）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillNotice {
+    /// 注入正文超过 8000 字节，已被截断。
+    Truncated { name: String },
+    /// 读取失败。
+    LoadFailed { name: String, reason: String },
+}
+
 /// 准备完成的用户消息。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedUserMessage {
@@ -31,6 +40,8 @@ pub struct PreparedUserMessage {
     pub model_images: Vec<ModelImage>,
     /// skill 引用读取失败或截断的提示（不阻止发送）。
     pub warnings: Vec<String>,
+    /// skill 提示的结构化形式（toast 文案）。
+    pub skill_notices: Vec<SkillNotice>,
 }
 
 /// 准备一条用户消息。
@@ -53,6 +64,7 @@ pub fn prepare_user_message(
     let mut attachments: Vec<MessageAttachmentInput> = Vec::new();
     let mut unique_images: Vec<ProcessedImage> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
+    let mut skill_notices: Vec<SkillNotice> = Vec::new();
     let mut total_original_bytes: usize = 0;
 
     // 已处理的文本区间，避免重复命中
@@ -143,6 +155,12 @@ pub fn prepare_user_message(
             }
             ReferKind::Skill => {
                 let path = Path::new(&reference.path);
+                let name = path
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("skill")
+                    .to_string();
                 match crate::skills::load_skill_body(path) {
                     Ok(body) if body.len() > crate::skills::MAX_SKILL_INJECTION_BYTES => {
                         warnings.push(format!(
@@ -150,21 +168,23 @@ pub fn prepare_user_message(
                             reference.path,
                             crate::skills::MAX_SKILL_INJECTION_BYTES
                         ));
+                        skill_notices.push(SkillNotice::Truncated { name: name.clone() });
                     }
                     Ok(_) => {}
-                    Err(error) => warnings.push(format!(
-                        "skill \"{}\" could not be loaded: {error}",
-                        reference.path
-                    )),
+                    Err(error) => {
+                        warnings.push(format!(
+                            "skill \"{}\" could not be loaded: {error}",
+                            reference.path
+                        ));
+                        skill_notices.push(SkillNotice::LoadFailed {
+                            name: name.clone(),
+                            reason: error,
+                        });
+                    }
                 }
                 attachments.push(MessageAttachmentInput {
                     kind: MessageAttachmentKind::Skill,
-                    label: path
-                        .parent()
-                        .and_then(Path::file_name)
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("skill")
-                        .to_string(),
+                    label: name,
                     marker_start: Some(range_start),
                     marker_end: Some(range_end),
                     source_path: Some(reference.path.clone()),
@@ -374,6 +394,7 @@ pub fn prepare_user_message(
         attachments,
         model_images,
         warnings,
+        skill_notices,
     })
 }
 

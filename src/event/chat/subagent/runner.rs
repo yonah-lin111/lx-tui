@@ -517,8 +517,8 @@ pub(crate) fn schedule_next_queued_input_with_done(
         Some(&cwd),
         &[],
     );
-    let skills = super::super::skills::catalog_prompt(persistence, Some(&cwd));
-    let mcp_snapshot = super::super::mcp::snapshot_for_turn(persistence, Some(&cwd));
+    let (skills, _) = super::super::skills::catalog_prompt(persistence, Some(workspace), true);
+    let mcp_snapshot = super::super::mcp::snapshot_for_turn(persistence, Some(workspace));
     if let Err(err) = assemble_child_context(
         database,
         workspace,
@@ -621,8 +621,8 @@ fn launch_child_turn(
         Some(cwd),
         &[],
     );
-    let skills = super::super::skills::catalog_prompt(persistence, Some(cwd));
-    let mcp_snapshot = super::super::mcp::snapshot_for_turn(persistence, Some(cwd));
+    let (skills, _) = super::super::skills::catalog_prompt(persistence, Some(workspace), true);
+    let mcp_snapshot = super::super::mcp::snapshot_for_turn(persistence, Some(workspace));
     let context = assemble_child_context(
         database,
         workspace,

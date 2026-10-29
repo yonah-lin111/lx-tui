@@ -222,6 +222,11 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
             body: body.to_string(),
         };
     }
+    // OAuth 回调由浏览器从授权服务器跳回，无法携带 capability token；
+    // 一次性 state 本身就是防伪凭据（校验在回调处理内部完成）。
+    if request.method == "GET" && request.path == "/mcp/oauth/callback" {
+        return super::mcp::oauth_callback(request, state).await;
+    }
     if !token_ok(request, state) {
         return Response::error(403, "invalid token");
     }
@@ -242,6 +247,8 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
         }
         ("GET", "/api/commands") => commands_json(state),
         (_, path) if path.starts_with("/api/models/") => models::route(request, state).await,
+        (_, path) if path.starts_with("/api/mcp") => super::mcp::route(request, state).await,
+        (_, path) if path.starts_with("/api/skills") => super::skills::route(request, state).await,
         _ => Response::error(404, "not found"),
     }
 }

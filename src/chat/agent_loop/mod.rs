@@ -292,6 +292,22 @@ pub trait ToolExecutor: Send + Sync {
         self.execute(cwd, call)
     }
 
+    /// 可取消的 MCP 调用；非 MCP 工具返回 None，由调用方走通用执行入口。
+    ///
+    /// Esc 取消必须直达 `notifications/cancelled`，不能只丢弃 future 让 server
+    /// 继续执行副作用。
+    fn execute_mcp_cancellable(
+        &self,
+        _cwd: &Path,
+        _call: &ReadyToolCall,
+        _cancel: watch::Receiver<bool>,
+    ) -> impl Future<Output = Option<ToolExecutionResult>> + Send
+    where
+        Self: Sized,
+    {
+        async { None }
+    }
+
     /// 当前模型是否支持图片输入；测试执行器默认支持。
     fn supports_image_input(&self) -> bool {
         true
@@ -784,11 +800,22 @@ where
                         }
                     }
                 }
+            } else if let Some(result) = executor
+                .execute_mcp_cancellable(context.cwd(), &call, cancel.clone())
+                .await
+            {
+                result
             } else {
                 executor
                     .execute_tracked(context.cwd(), &call, &ticket)
                     .await
             };
+            // MCP 取消不是工具结果：按用户取消结算，不再采样。
+            if result.error_code() == Some(ToolErrorCode::Cancelled) {
+                let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
+                cancel_unstarted(&mut host, remaining).await;
+                return TurnSummary::interrupted(usage);
+            }
             let mut content = tools::format_for_model(&result);
             let is_error = result.is_failure();
             let mut tool_images = tool_result_images(&result);

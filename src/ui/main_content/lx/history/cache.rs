@@ -518,6 +518,21 @@ fn tool_signature(
     hash.write_edges(&call.arguments_json);
     match call.detail.as_deref() {
         None => hash.write_u8(0),
+        Some(ToolDetailView::Mcp(view)) => {
+            hash.write_u8(8);
+            hash.write_str(&view.server);
+            hash.write_str(&view.tool);
+            hash.write_str(&view.result.join("\n"));
+            hash.write_usize(view.result_more);
+            hash.write_usize(view.arguments_more);
+            hash.write_usize(
+                view.duration_ms
+                    .map(|duration| duration as usize)
+                    .unwrap_or(0),
+            );
+            hash.write_usize(view.images.len());
+            hash.write_usize(view.images_omitted);
+        }
         Some(ToolDetailView::Subagent(view)) => {
             hash.write_u8(7);
             hash.write_str(view.role.map_or("", |role| role.as_str()));

@@ -112,7 +112,7 @@ fn tool_view_of(tool: &ToolCallRecord) -> ToolCallView {
         )
         .map(ToolDetailView::Subagent)
     } else {
-        ToolDetailView::from_result_json(tool.result_json.as_deref())
+        ToolDetailView::from_tool(tool.result_json.as_deref(), &tool.arguments_json)
             .or_else(|| ToolDetailView::file_detail(tool.result_json.as_deref()))
     };
     if let Some(ToolDetailView::Command(view)) = detail.as_ref()

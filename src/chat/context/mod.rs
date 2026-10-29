@@ -541,12 +541,15 @@ fn strip_all_tool_images(planned: &mut [PlannedTurn]) {
     }
 }
 
-/// 从落库结果 JSON 取回工具图片字节；文件缺失时跳过（不中断回放）。
-fn replay_tool_images(result_json: Option<&str>) -> Vec<crate::chat::events::ModelImage> {
+/// 从落库结果 JSON 取回工具图片字节；返回 `(可加载图片, 文件缺失张数)`。
+///
+/// 缺失文件不中断回放，由调用方在工具结果末尾追加 `[image no longer available]`，
+/// 让模型知道结果里本来有图、只是字节已不可用。
+fn replay_tool_images(result_json: Option<&str>) -> (Vec<crate::chat::events::ModelImage>, usize) {
     let Some(value) =
         result_json.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
     else {
-        return Vec::new();
+        return (Vec::new(), 0);
     };
     let mut entries: Vec<&serde_json::Value> = Vec::new();
     if let Some(images) = value.get("images").and_then(serde_json::Value::as_array) {
@@ -555,21 +558,25 @@ fn replay_tool_images(result_json: Option<&str>) -> Vec<crate::chat::events::Mod
     if let Some(image) = value.get("image").filter(|image| image.is_object()) {
         entries.push(image);
     }
-    entries
-        .into_iter()
-        .filter_map(|image| {
-            let path = image.get("path").and_then(serde_json::Value::as_str)?;
-            let mime = image
-                .get("mime")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("image/png");
-            let bytes = std::fs::read(path).ok()?;
-            Some(crate::chat::events::ModelImage {
+    let mut images = Vec::new();
+    let mut missing = 0usize;
+    for image in entries {
+        let Some(path) = image.get("path").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let mime = image
+            .get("mime")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("image/png");
+        match std::fs::read(path) {
+            Ok(bytes) => images.push(crate::chat::events::ModelImage {
                 mime: mime.to_string(),
                 bytes: std::sync::Arc::new(bytes),
-            })
-        })
-        .collect()
+            }),
+            Err(_) => missing = missing.saturating_add(1),
+        }
+    }
+    (images, missing)
 }
 
 /// 一条本地命令组：只有终态记录可回放；格式化文本是唯一事实来源。
@@ -854,6 +861,11 @@ fn replay_pair(tool: &ToolCallRecord) -> Option<(ModelItem, ModelItem)> {
         }
     };
     let call_id = tool.call_id.clone();
+    let (images, missing) = replay_tool_images(tool.result_json.as_deref());
+    let mut content = truncate_result_for_replay(&content);
+    for _ in 0..missing {
+        content.push_str("\n[image no longer available]");
+    }
     Some((
         ModelItem::AssistantToolCall {
             call_id: call_id.clone(),
@@ -862,9 +874,9 @@ fn replay_pair(tool: &ToolCallRecord) -> Option<(ModelItem, ModelItem)> {
         },
         ModelItem::ToolResult {
             call_id,
-            content: truncate_result_for_replay(&content),
+            content,
             is_error,
-            images: replay_tool_images(tool.result_json.as_deref()),
+            images,
         },
     ))
 }
