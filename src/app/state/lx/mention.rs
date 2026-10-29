@@ -79,18 +79,19 @@ impl LxMention {
         self.ref_viewport
     }
 
-    /// 同步引用文件夹快照。
+    /// 同步引用文件夹快照；内容变化时重算面板并返回 true。
     pub fn sync_referenced_folders(
         &mut self,
         folders: &[crate::app::referenced::ReferencedFolder],
         text: &str,
         cursor: usize,
-    ) {
+    ) -> bool {
         if self.referenced_folders == folders {
-            return;
+            return false;
         }
         self.referenced_folders = folders.to_vec();
         self.refresh(text, cursor);
+        true
     }
 
     /// 获取基于当前触发词过滤后的引用文件夹列表。
@@ -272,13 +273,18 @@ impl LxMention {
             self.ref_active = 0;
             self.ref_anchor = 0;
             self.ref_viewport = None;
+        } else if self.trigger.as_ref().map(|t| t.query.as_str()) != Some(trigger.query.as_str()) {
+            self.ref_viewport = None;
         }
         self.trigger = Some(trigger.clone());
         let filtered_count = self.filtered_ref_folders().len();
-        if self.ref_active >= filtered_count {
+        if filtered_count == 0 {
             self.ref_active = 0;
             self.ref_anchor = 0;
             self.ref_viewport = None;
+        } else if self.ref_active >= filtered_count {
+            self.ref_active = filtered_count - 1;
+            self.ref_anchor = self.ref_active;
         }
         if self.ref_viewport.is_some_and(|vp| vp >= filtered_count) {
             self.ref_viewport = None;

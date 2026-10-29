@@ -705,16 +705,16 @@ pub fn lx_mention_root_for_pane(state: &AppState, id: PaneId) -> Option<std::pat
         .or_else(|| state.workspace_cwd_for_pane(id))
 }
 
-/// 为指定窗格同步 `@` 提及扫描根与引用文件夹快照；根变化返回 true（供置脏）。
+/// 为指定窗格同步 `@` 提及扫描根与引用文件夹快照；任一变化返回 true（供置脏）。
 pub fn sync_lx_mention_root(state: &mut AppState, id: PaneId) -> bool {
     let root = lx_mention_root_for_pane(state, id);
     let project = state.project_root_for_pane(id);
     let referenced = state.referenced.folders.clone();
     state.pane_mut_anywhere(id).is_some_and(|pane| {
-        pane.lx.sync_referenced_folders(&referenced);
+        let ref_changed = pane.lx.sync_referenced_folders(&referenced);
         let mention = pane.lx.set_mention_root(root);
         let project = pane.lx.set_project_root(project);
-        mention || project
+        ref_changed || mention || project
     })
 }
 
@@ -770,9 +770,28 @@ pub fn apply_lx_mention_entries(
 
 /// 鼠标悬停 `@` 提及候选：更新高亮（窗口不滚动）；返回是否变化。
 pub fn hover_lx_mention(state: &mut AppState, id: PaneId, index: usize) -> bool {
+    let referenced = state.referenced.folders.clone();
+    state.pane_mut_anywhere(id).is_some_and(|pane| {
+        pane.lx.sync_referenced_folders(&referenced);
+        pane.lx.mention_set_active(index)
+    })
+}
+
+/// 鼠标悬停 `lx` 路径粘贴面板操作项：仅接受可用项；返回是否变化。
+pub fn hover_lx_paste(state: &mut AppState, id: PaneId, index: usize) -> bool {
     state
         .pane_mut_anywhere(id)
-        .is_some_and(|pane| pane.lx.mention_set_active(index))
+        .is_some_and(|pane| pane.lx.paste_set_active(index))
+}
+
+/// 鼠标点选 `lx` 路径粘贴面板操作项：按该项确认；返回是否消费。
+pub fn select_lx_paste(state: &mut AppState, id: PaneId, index: usize) -> bool {
+    let Some(action) = crate::app::paste::PasteAction::ALL.get(index).copied() else {
+        return false;
+    };
+    state
+        .pane_mut_anywhere(id)
+        .is_some_and(|pane| pane.lx.paste_confirm(action))
 }
 
 /// 鼠标点击 `@` 提及面板顶部 Tab：切换当前 Tab；返回是否变化。
@@ -791,9 +810,11 @@ pub fn switch_lx_mention_tab(state: &mut AppState, id: PaneId, tab: usize) -> bo
 
 /// 鼠标点选 `@` 提及候选：设置高亮并按 `Enter` 规则采纳；返回是否消费。
 pub fn select_lx_mention(state: &mut AppState, id: PaneId, index: usize) -> bool {
+    let referenced = state.referenced.folders.clone();
     let Some(pane) = state.pane_mut_anywhere(id) else {
         return false;
     };
+    pane.lx.sync_referenced_folders(&referenced);
     if !pane.lx.mention_set_active(index) && !pane.lx.mention_open() {
         return false;
     }

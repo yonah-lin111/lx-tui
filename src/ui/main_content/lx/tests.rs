@@ -1167,10 +1167,9 @@ fn slash_panel_renders_ascii_only() {
             }
         }
     }
-    // 文案常量不得含双宽字符（含右对齐来源标签与底边提示）；命令描述须为纯 ASCII。
+    // 文案常量不得含双宽字符（含右对齐来源标签）；命令描述须为纯 ASCII。
     for text in [
         crate::ui::text::LX_SLASH_PANEL_TITLE,
-        crate::ui::text::LX_SLASH_PANEL_FOOTER,
         crate::ui::text::LX_MODEL_PANEL_TITLE,
         crate::ui::text::LX_HISTORY_PANEL_TITLE,
         crate::ui::text::LX_CHAT_NO_MODEL,

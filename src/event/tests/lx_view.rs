@@ -1300,3 +1300,55 @@ fn lx_mention_left_right_keys_and_mouse_switch_tabs_and_insert_ref_folder() {
         "@[refer-folder](/Users/yonah/projects/codex-main) "
     );
 }
+
+#[test]
+fn lx_command_panel_non_item_clicks_do_not_penetrate_to_underlying_entries() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    // 空候选（显示 no matches 状态行，非交互行）：面板位于欢迎页入口区上方或重叠处。
+    seed_lx_mention(&mut state, "@nomatch", Vec::new());
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let (_, rect) = geo
+        .rects
+        .iter()
+        .find(|(id, _)| *id == pane)
+        .copied()
+        .expect("pane rect");
+    let inner = crate::layout::pane_inner_rect(rect);
+    let panel =
+        ui::main_content::lx::mention_layout(inner, &state.pane_anywhere(pane).expect("pane").lx)
+            .expect("empty mention panel");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 点击面板顶栏横线右端空白或空态占位行：由浮层吞掉，不开启整页文本选区。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            panel.rect.right() - 2,
+            panel.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.lx_selection.is_none(), "点击面板顶栏不启动底层选区");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            panel.content.x + 2,
+            panel.content.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.lx_selection.is_none(), "点击面板空态行不启动底层选区");
+}

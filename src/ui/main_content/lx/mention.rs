@@ -204,7 +204,7 @@ fn view<'a>(
         window_start: data.viewport,
         anchor_row: above,
         max_height: Some(cap),
-        title: Some(text::LX_MENTION_PANEL_TITLE),
+        title: None,
         tabs: Some(&data.tabs),
         right_title: data.scope.as_deref(),
         footer: None,

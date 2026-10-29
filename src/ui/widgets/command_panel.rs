@@ -210,19 +210,12 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
         Some(tabs) if !tabs.is_empty() => {
             let mut out = Vec::with_capacity(tabs.len());
             let mut x = rect.x.saturating_add(2);
-            let right_limit = match view.right_title {
-                Some(t) => rect.right().saturating_sub(
-                    u16::try_from(UnicodeWidthStr::width(t))
-                        .unwrap_or(0)
-                        .saturating_add(3),
-                ),
-                None => rect.right().saturating_sub(1),
-            };
+            let right_limit = rect.right().saturating_sub(1);
             for tab in tabs {
                 let width = u16::try_from(UnicodeWidthStr::width(tab.label))
                     .unwrap_or(u16::MAX)
                     .saturating_add(2);
-                if x.saturating_add(width) >= right_limit {
+                if x.saturating_add(width) > right_limit {
                     break;
                 }
                 out.push(Rect::new(x, rect.y, width, 1));
@@ -249,7 +242,7 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
     clear::render_buffer(buf, layout.rect);
     let has_tabs = view.tabs.is_some_and(|tabs| !tabs.is_empty());
     if view.borderless {
-        render_top_rule(buf, layout.rect, view, has_tabs);
+        render_top_rule(buf, &layout, view, has_tabs);
     } else {
         let mut block = Block::bordered()
             .border_type(BorderType::Rounded)
@@ -308,14 +301,28 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
 }
 
 /// 绘制无边框命令面板的顶部蓝色横线及内嵌标题/右侧状态。
-fn render_top_rule(buf: &mut Buffer, rect: Rect, view: &CommandPanelView<'_>, has_tabs: bool) {
+///
+/// 左侧 `tabs` 或 `title` 优先排布；右侧 `right_title` 仅在左侧内容之后至少留出 1 列 `─`
+/// 分隔线时绘制（超宽时按剩余空间截断，仍放不下则省略），绝不覆盖左侧标题或 Tab。
+fn render_top_rule(
+    buf: &mut Buffer,
+    layout: &PanelLayout,
+    view: &CommandPanelView<'_>,
+    has_tabs: bool,
+) {
+    let rect = layout.rect;
     for x in rect.x..rect.right() {
         if let Some(cell) = buf.cell_mut((x, rect.y)) {
             cell.set_char('─');
             cell.set_style(style::accent());
         }
     }
-    if !has_tabs && let Some(title) = view.title {
+    let mut left_end = rect.x;
+    if has_tabs {
+        if let Some(last_tab) = layout.tabs.last() {
+            left_end = last_tab.right();
+        }
+    } else if let Some(title) = view.title {
         let text = format!(" {title} ");
         let x = rect.x.saturating_add(1);
         let max_w = usize::from(rect.right().saturating_sub(1).saturating_sub(x));
@@ -323,15 +330,22 @@ fn render_top_rule(buf: &mut Buffer, rect: Rect, view: &CommandPanelView<'_>, ha
             let draw_w = u16::try_from(text.width().min(max_w)).unwrap_or(u16::MAX);
             buf.set_style(Rect::new(x, rect.y, draw_w, 1), Style::reset());
             buf.set_stringn(x, rect.y, &text, max_w, style::muted());
+            left_end = x.saturating_add(draw_w);
         }
     }
     if let Some(right_title) = view.right_title {
-        let text = format!(" {right_title} ");
-        let text_w = u16::try_from(text.width()).unwrap_or(u16::MAX);
-        if rect.width > text_w.saturating_add(2) {
-            let x = rect.right().saturating_sub(1).saturating_sub(text_w);
-            buf.set_style(Rect::new(x, rect.y, text_w, 1), Style::reset());
-            buf.set_stringn(x, rect.y, &text, usize::from(text_w), style::muted());
+        let right_edge = rect.right().saturating_sub(1);
+        let min_x = left_end.saturating_add(1);
+        let avail = usize::from(right_edge.saturating_sub(min_x));
+        if avail >= 3 {
+            let clipped = text::truncate_to_width(right_title, avail.saturating_sub(2));
+            let text = format!(" {clipped} ");
+            let text_w = u16::try_from(text.width()).unwrap_or(u16::MAX);
+            if text_w <= right_edge.saturating_sub(min_x) {
+                let x = right_edge.saturating_sub(text_w);
+                buf.set_style(Rect::new(x, rect.y, text_w, 1), Style::reset());
+                buf.set_stringn(x, rect.y, &text, usize::from(text_w), style::muted());
+            }
         }
     }
 }
@@ -441,12 +455,17 @@ fn panel_width(available: u16, view: &CommandPanelView<'_>) -> u16 {
                 + view.right_title.map_or(0, |title| title.width() + 2)
         }
     };
-    let footer = view.footer.map_or(0, |footer| footer.width() + 2);
+    let footer = if view.borderless {
+        0
+    } else {
+        view.footer.map_or(0, |footer| footer.width() + 2)
+    };
+    let frame_pad = if view.borderless { 0 } else { 4 };
     let content = content
         .max(tabs_header)
         .max(footer)
         .min(usize::from(available));
-    ((content + 4) as u16).min(available).max(MIN_WIDTH)
+    ((content + frame_pad) as u16).min(available).max(MIN_WIDTH)
 }
 
 /// 显式视口起点的最大值：再靠后窗口就填不满预算（底部留白），钳到贴底窗口。

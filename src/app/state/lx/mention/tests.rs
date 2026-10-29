@@ -415,4 +415,12 @@ fn mention_ref_dir_navigation_and_scroll_viewport() {
     assert!(lx.mention_scroll(1, 0));
     assert_eq!(lx.mention().ref_viewport(), Some(1));
     assert_eq!(lx.mention().ref_active(), 0, "滚轮不改高亮");
+
+    // 修改查询词时重置 ref_viewport，且当结果缩减到 1 项时将高亮钳制到末项。
+    lx.mention_set_active(1);
+    for ch in "agent".chars() {
+        lx.insert_char(ch);
+    }
+    assert_eq!(lx.mention().ref_viewport(), None, "查询词变化重置滚轮视口");
+    assert_eq!(lx.mention().ref_active(), 0, "越界高亮钳制到末项");
 }

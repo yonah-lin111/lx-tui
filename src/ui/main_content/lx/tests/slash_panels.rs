@@ -303,25 +303,13 @@ fn history_panel_renders_top_rule_without_bottom_border_or_footer() {
         "顶栏显示标题: {all}"
     );
     assert!(
-        !all.contains(crate::ui::text::LX_HISTORY_PANEL_FOOTER),
+        !all.contains("[close esc]"),
         "无边框面板不绘制底边提示行: {all}"
     );
     assert_eq!(
         panel.rect.height, 3,
         "1 行顶部蓝色横线 + 2 条历史记录 = 3 行高"
     );
-}
-
-#[test]
-fn history_panel_symbols_match_mention_panel() {
-    // 与 @ 面板同一套符号：`⇧↵` 与 `^z` 记法，不出现 shift/ctrl 全拼。
-    let footer = crate::ui::text::LX_HISTORY_PANEL_FOOTER;
-    assert!(footer.contains(crate::ui::text::key::SHIFT));
-    assert!(footer.contains(crate::ui::text::key::ENTER));
-    assert!(!footer.contains("shift"), "不用全拼 shift: {footer}");
-    assert!(!footer.contains("ctrl"), "不用全拼 ctrl: {footer}");
-    // 与 @ 面板尾部的 3 行对比：两个面板的 `⇧↵` 写法完全一致。
-    assert!(crate::ui::text::MENTION_PANEL_FOOTER.contains("⇧↵"));
 }
 
 #[test]
@@ -336,10 +324,7 @@ fn model_panel_renders_top_rule_without_bottom_border() {
         all.contains(crate::ui::text::LX_MODEL_PANEL_TITLE),
         "顶栏显示 Model 标题: {all}"
     );
-    assert!(
-        !all.contains(crate::ui::text::LX_SLASH_PANEL_FOOTER),
-        "无底边提示行: {all}"
-    );
+    assert!(!all.contains("[close esc]"), "无底边提示行: {all}");
     assert_eq!(
         panel.rect.height, 4,
         "1 行顶部蓝色横线 + 3 个模型候选 = 4 行高"

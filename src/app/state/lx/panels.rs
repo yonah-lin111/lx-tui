@@ -188,13 +188,20 @@ impl Lx {
         self.mention.set_tab(tab, &self.input, self.cursor)
     }
 
-    /// 同步引用文件夹快照。
+    /// 同步引用文件夹快照；内容变化时返回 true。
     pub fn sync_referenced_folders(
         &mut self,
         folders: &[crate::app::referenced::ReferencedFolder],
-    ) {
+    ) -> bool {
         self.mention
-            .sync_referenced_folders(folders, &self.input, self.cursor);
+            .sync_referenced_folders(folders, &self.input, self.cursor)
+    }
+
+    /// 鼠标悬停粘贴面板操作项：仅接受可用项；返回是否变化。
+    pub fn paste_set_active(&mut self, index: usize) -> bool {
+        self.paste
+            .as_mut()
+            .is_some_and(|paste| paste.panel.set_active(index))
     }
 
     /// 当前路径粘贴参照面板。

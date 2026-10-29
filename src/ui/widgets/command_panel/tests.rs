@@ -646,3 +646,53 @@ fn borderless_overlap_active_and_current_uses_default_marker_and_blue_label() {
     assert_eq!(buf[(2, row_y)].symbol(), "c");
     assert_eq!(buf[(2, row_y)].fg, Color::Cyan);
 }
+
+#[test]
+fn borderless_narrow_top_rule_keeps_tabs_and_never_overwrites_title_with_right_title() {
+    let area = Rect::new(0, 0, 24, 6);
+    let items = inline(&[("item1", "desc")]);
+    let tabs = [
+        PanelTab {
+            label: "Files",
+            active: true,
+        },
+        PanelTab {
+            label: "refDir",
+            active: false,
+        },
+    ];
+    // 即使 right_title 很长，左侧两个 Tab 仍完整保留。
+    let v_tabs = CommandPanelView {
+        items: &items,
+        active: 0,
+        anchor_row: 4,
+        width: Some(24),
+        placement: PanelPlacement::Above,
+        borderless: true,
+        tabs: Some(&tabs),
+        right_title: Some("very-long-directory-name"),
+        ..Default::default()
+    };
+    let l = layout(area, &v_tabs).expect("layout");
+    assert_eq!(l.tabs.len(), 2, "长目录名不得挤丢左侧 Tab");
+
+    // 窄宽度下带 title 与长 right_title：左侧标题不得被覆盖。
+    let mut buf = Buffer::empty(area);
+    let v_title = CommandPanelView {
+        items: &items,
+        active: 0,
+        anchor_row: 4,
+        width: Some(24),
+        placement: PanelPlacement::Above,
+        borderless: true,
+        title: Some("Rewind"),
+        right_title: Some("Files changed by edit/write only"),
+        ..Default::default()
+    };
+    let rect = render(area, &mut buf, &v_title).expect("renders");
+    let top = row_text(&buf, area, rect.y);
+    assert!(
+        top.contains(" Rewind "),
+        "左侧标题不得被右侧说明覆盖: {top:?}"
+    );
+}
