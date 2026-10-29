@@ -49,6 +49,7 @@ fn message(id: &str, role: &str, status: &str, parts: Vec<ChatPartView>) -> Chat
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 

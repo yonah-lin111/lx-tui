@@ -57,6 +57,7 @@ fn message(role: &str, parts: Vec<ChatPartView>, turn: i64) -> ChatMessageView {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 

@@ -73,8 +73,9 @@ lx-tui/
     pty/                        PTY 会话：spawn / 读写 / 尺寸 / 终止
     git/                        git 查询：worktree 列表的执行与解析（唯一执行 git 命令的模块）
     db/                         SQLite 持久层：工作区信任、提示词/文件夹、聊天会话 CRUD（唯一使用 rusqlite 的模块）
-      migration.rs              Schema 迁移（v4~v9）：建表、表重建、数据回填与 `user_version` 推进
+      migration.rs              Schema 迁移（v4~v18）：建表、表重建、数据回填与 `user_version` 推进
       chat.rs                   聊天会话/消息/内容块读写与按序加载
+      chat/attachment.rs        消息附件（文件/文件夹/图片引用元数据与会话归档图片路径）读写与按需加载
       chat/tools.rs             工具调用 CRUD、时间线位置分配、按会话加载与启动恢复
       chat/process.rs           会话进程元数据（agent_process）：登记、输出快照合并、
                                 终态提交（revision 单调）、按会话批量加载与启动恢复
@@ -91,7 +92,8 @@ lx-tui/
                                 会话进程管理器（chat/process/：pipe 与 PTY spawn、双流 drain、
                                 有界输出缓冲与安全文本化、stdin、等待窗口、停止与 reap）；
                                 计划契约（chat/plan.rs：全量替换、最多一个 in_progress、快照 JSON）
-      events.rs                 统一纯数据事件（ChatDelta/PartKind/StopReason）
+      events.rs                 统一纯数据事件（ChatDelta/PartKind/StopReason/ModelImage/ModelItem）
+      prepare.rs                用户消息发送前准备：引用解析（@[refer-*]/@path/@ref/）、本地图片校验/去重与限额
       sse.rs                    可增量喂入的 SSE 帧解析器
       thinking.rs               <think>/<thinking> 跨 chunk 标签状态机
       transport.rs              按 transport 构造请求与解码器（openai/openai-responses/anthropic/google）
@@ -106,7 +108,7 @@ lx-tui/
       tools/text.rs             文本编解码：BOM/换行保留、行切分与行 diff 计数
       tools/diff.rs             结构化行差异：hunks/真实行号/精确增删计数、上下文半径 1、
                                 超限输入的线性简化脚本与生成预算（纯计算，不读写文件）
-      tools/read.rs             read：带行号内容、目录列表、截断与 next_offset
+      tools/read.rs             read：带行号内容、目录列表、本地图片读取（按模型模态门控）、截断与 next_offset
       tools/search.rs           search：ignore 遍历、正则/字面量、include glob、上限与超时
       tools/patch.rs            Codex 风格补丁纯解析模型（Add/Update/Delete/Move）
       tools/edit.rs             edit：补丁规划（路径校验）与逐个提交，多文件部分成功如实报告
@@ -123,7 +125,7 @@ lx-tui/
       commands.rs               自定义命令 Markdown 文件的读写
       service.rs                回环 HTTP 服务：静态设置页、JSON API 与事件投递（路由 async，禁止在运行时内再建运行时）
       service/models.rs         模型设置 API：GET 脱敏 / PUT 原子保存 / POST 远端发现（发现直接 await，不 block_on）
-    platform/                   OS 专属实现（剪贴板、鼠标捕获与指针形状、默认 shell、进程 cwd、打开浏览器、文件/目录权限、原子文件替换）
+    platform/                   OS 专属实现（剪贴板、会话图片归档与 30 天 GC、鼠标捕获与指针形状、默认 shell、进程 cwd、打开浏览器、文件/目录权限、原子文件替换）
   tests/                        集成测试
   scripts/                      开发与维护脚本，按需创建
   assets/                       浏览器前端资源（HTML/CSS/JS），经 include_str! 嵌入二进制

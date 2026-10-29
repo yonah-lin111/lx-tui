@@ -283,7 +283,8 @@ fn spawn(
     );
     let executor = AgentTools::new(manager, turn)
         .with_recorder(std::sync::Arc::new(recorder))
-        .with_reads(reads);
+        .with_reads(reads)
+        .with_image_support(frozen.supports_image_input);
     let transport = frozen.transport.clone();
     let base_url = frozen.base_url.clone();
     let api_key = frozen.api_key.clone();

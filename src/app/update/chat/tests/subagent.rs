@@ -150,6 +150,7 @@ fn loaded_transcript_only_fills_unloaded_runs() {
         subagent_reports: None,
         parts: Vec::new(),
         tools: Vec::new(),
+        attachments: Vec::new(),
     }];
     assert!(update::on_subagent_loaded(
         &mut state, pane, "sub-h", &messages
@@ -186,6 +187,7 @@ fn corrupted_report_json_decodes_to_empty_reports() {
             subagent_reports: Some("{not json".into()),
             parts: Vec::new(),
             tools: Vec::new(),
+            attachments: Vec::new(),
         },
         &ModelsSnapshot::default(),
     );

@@ -65,11 +65,23 @@ pub(crate) struct CardSpan {
     pub clickable: bool,
 }
 
+/// 用户消息下方单条引用树分支。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UserRefLine {
+    pub is_last: bool,
+    pub kind: crate::db::chat::MessageAttachmentKind,
+    pub label: String,
+}
+
 /// 一个块的绘制数据。
 #[derive(Debug)]
 pub(crate) enum BlockPaint {
-    /// 用户正文：软换行后的纯文本行（不含 `> ` 前缀与底色）。
-    UserText { lines: Vec<String> },
+    /// 用户正文：软换行后的纯文本行、折叠提示与引用树。
+    UserText {
+        text_lines: Vec<String>,
+        fold_hint: Option<String>,
+        ref_lines: Vec<UserRefLine>,
+    },
     /// 助手正文：markdown 渲染后的行。
     Markdown { lines: Vec<MdLine> },
     /// thinking：头部之外只有正文行（折叠时为空；头部文案在绘制时算）。
@@ -84,7 +96,11 @@ impl BlockPaint {
     /// 该块占用的内容行数（与绘制推进行数严格相等）。
     pub(crate) fn rows(&self) -> usize {
         match self {
-            Self::UserText { lines } => lines.len(),
+            Self::UserText {
+                text_lines,
+                fold_hint,
+                ref_lines,
+            } => text_lines.len() + (fold_hint.is_some() as usize) + ref_lines.len(),
             Self::Markdown { lines } => lines.len(),
             Self::Thinking { body } => 1 + body.len(),
             Self::Static { lines, .. } => lines.len(),
@@ -106,9 +122,16 @@ impl BlockPaint {
     /// 近似字节数（只用于 LRU 记账，不追求精确）。
     pub(crate) fn bytes(&self) -> usize {
         match self {
-            Self::UserText { lines } | Self::Static { lines, .. } => {
-                lines.iter().map(|line| line.len() + 24).sum::<usize>()
+            Self::UserText {
+                text_lines,
+                fold_hint,
+                ref_lines,
+            } => {
+                text_lines.iter().map(|line| line.len() + 24).sum::<usize>()
+                    + fold_hint.as_ref().map_or(0, |h| h.len() + 24)
+                    + ref_lines.iter().map(|r| r.label.len() + 24).sum::<usize>()
             }
+            Self::Static { lines, .. } => lines.iter().map(|line| line.len() + 24).sum::<usize>(),
             Self::Markdown { lines } => md_bytes(lines),
             Self::Thinking { body } => md_bytes(body),
             // 旧路径没有缓存正文，不占二级缓存预算（行数已在一级快照里）；
@@ -131,7 +154,11 @@ impl BlockPaint {
     ) {
         let viewport_end = scroll.saturating_add(usize::from(rect.height));
         match self {
-            Self::UserText { lines } => draw_user_text(
+            Self::UserText {
+                text_lines,
+                fold_hint,
+                ref_lines,
+            } => draw_user_text(
                 grid,
                 rect,
                 history,
@@ -139,7 +166,9 @@ impl BlockPaint {
                 scroll,
                 start,
                 viewport_end,
-                lines,
+                text_lines,
+                fold_hint.as_deref(),
+                ref_lines,
             ),
             Self::Markdown { lines } => draw_markdown(
                 grid,
@@ -260,7 +289,9 @@ fn draw_user_text(
     scroll: usize,
     start: usize,
     viewport_end: usize,
-    lines: &[String],
+    text_lines: &[String],
+    fold_hint: Option<&str>,
+    ref_lines: &[UserRefLine],
 ) {
     let BlockSource::Step { message_index, .. } = source else {
         return;
@@ -274,18 +305,19 @@ fn draw_user_text(
     } else {
         style::chat_user_bg()
     };
-    for (offset, line) in lines.iter().enumerate().skip(scroll.saturating_sub(start)) {
-        let row = start.saturating_add(offset);
-        if row >= viewport_end {
-            break;
+    let mut current_row = start;
+
+    for (offset, line) in text_lines.iter().enumerate() {
+        let row = current_row;
+        current_row += 1;
+        if row < scroll || row >= viewport_end {
+            continue;
         }
         let Some(y) = visible_row(rect, scroll, row) else {
             continue;
         };
-        // 整块底色覆盖整个内容列（含 `> ` 前缀列）。
         grid.background_row(rect.x, y, rect.width, bg);
         if offset == 0 {
-            // 图标用输入框同款强调色，并叠加同底色。
             grid.put(rect.x, y, USER_PREFIX, style::accent().patch(bg));
         }
         grid.put_clipped(
@@ -294,6 +326,53 @@ fn draw_user_text(
             line,
             bg,
             rect.width.saturating_sub(USER_INDENT),
+        );
+    }
+
+    if let Some(hint) = fold_hint {
+        let row = current_row;
+        current_row += 1;
+        if row >= scroll
+            && row < viewport_end
+            && let Some(y) = visible_row(rect, scroll, row)
+        {
+            grid.background_row(rect.x, y, rect.width, bg);
+            grid.put_clipped(
+                rect.x.saturating_add(USER_INDENT),
+                y,
+                hint,
+                style::muted().patch(bg),
+                rect.width.saturating_sub(USER_INDENT),
+            );
+        }
+    }
+
+    for ref_line in ref_lines {
+        let row = current_row;
+        current_row += 1;
+        if row < scroll || row >= viewport_end {
+            continue;
+        }
+        let Some(y) = visible_row(rect, scroll, row) else {
+            continue;
+        };
+        let connector = if ref_line.is_last {
+            "  └─ "
+        } else {
+            "  ├─ "
+        };
+        grid.put(rect.x, y, connector, Style::default());
+        let label_style = match ref_line.kind {
+            crate::db::chat::MessageAttachmentKind::File => style::user_ref_file(),
+            crate::db::chat::MessageAttachmentKind::Folder => style::user_ref_folder(),
+            crate::db::chat::MessageAttachmentKind::Image => style::user_ref_image(),
+        };
+        grid.put_clipped(
+            rect.x.saturating_add(USER_INDENT + 3),
+            y,
+            &ref_line.label,
+            label_style,
+            rect.width.saturating_sub(USER_INDENT + 3),
         );
     }
 }

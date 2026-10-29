@@ -310,6 +310,7 @@ fn oversized_draft_is_flagged_by_the_production_assembler() {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }];
     let mut frozen = crate::app::state::FrozenModel::resolve(
         &state.models,

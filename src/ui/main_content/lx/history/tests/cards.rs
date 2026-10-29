@@ -469,6 +469,9 @@ fn card_hit_survives_history_longer_than_u16() {
             vec![reasoning_part("长历史里的思考块"), text_part("回答")],
         ),
     ]);
+    lx.chat
+        .expanded_user_messages
+        .insert(lx.chat.messages[0].id.clone());
     let area = Rect::new(0, 0, 40, 20);
     let mut cache = PaneCache::default();
     // 先按跟随底部取一次视图，确定内容宽度；快照随后可复用。

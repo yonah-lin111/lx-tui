@@ -446,6 +446,17 @@ fn step_signature(
             hash.write_u8(u8::from(
                 source.chat.reasoning_expanded(message_index, step_index),
             ));
+            if message.role == "user" {
+                hash.write_u8(u8::from(source.chat.user_message_expanded(&message.id)));
+                hash.write_usize(message.attachments.len());
+                for att in &message.attachments {
+                    hash.write_u8(att.kind as u8);
+                    hash.write_edges(&att.label);
+                    hash.write_i64(att.position);
+                    hash.write_usize(att.marker_start.unwrap_or(usize::MAX));
+                    hash.write_usize(att.marker_end.unwrap_or(usize::MAX));
+                }
+            }
         }
         AssistantStepView::Tool { call, .. } => {
             hash.write_u8(1);

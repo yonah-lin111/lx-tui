@@ -41,6 +41,8 @@ pub enum CardKind {
     },
     /// 子 agent 卡片内的 agent 链接（不是折叠块）：点击打开 Agents 面板。
     AgentLink { agent_id: String },
+    /// 用户消息正文折叠块（按稳定消息 ID 定位）。
+    UserMessage { message_id: String, expanded: bool },
 }
 
 /// 一个可折叠块的矩形。

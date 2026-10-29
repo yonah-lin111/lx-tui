@@ -46,6 +46,7 @@ fn message(
         subagent_reports: None,
         parts: vec![part(0, "text", text)],
         tools: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 
@@ -100,6 +101,7 @@ fn assemble_unbounded(messages: &[ChatMessage], draft: &str) -> Assembly {
     assemble(&AssemblyInput {
         messages,
         draft,
+        draft_attachments: &[],
         model: &model(),
         context_limit: None,
         output_limit: None,
@@ -114,6 +116,7 @@ fn assemble_with_limit(messages: &[ChatMessage], draft: &str, limit: u64, output
     assemble(&AssemblyInput {
         messages,
         draft,
+        draft_attachments: &[],
         model: &model(),
         context_limit: Some(limit),
         output_limit: Some(output),
@@ -166,6 +169,7 @@ fn item_views(items: &[ModelItem]) -> Vec<ItemView> {
         .iter()
         .map(|item| match item {
             ModelItem::UserText(text) => ItemView::User(text.clone()),
+            ModelItem::UserContent { text, .. } => ItemView::User(text.clone()),
             ModelItem::AssistantText(text) => ItemView::Assistant(text.clone()),
             ModelItem::AssistantToolCall { call_id, name, .. } => {
                 ItemView::Call(call_id.clone(), name.clone())
@@ -196,7 +200,9 @@ fn assert_no_orphan_results(items: &[ModelItem]) {
                 );
                 results.push(call_id.as_str());
             }
-            ModelItem::UserText(_) | ModelItem::AssistantText(_) => {}
+            ModelItem::UserText(_)
+            | ModelItem::UserContent { .. }
+            | ModelItem::AssistantText(_) => {}
         }
     }
     assert_eq!(calls.len(), results.len(), "每个调用恰有一个结果");

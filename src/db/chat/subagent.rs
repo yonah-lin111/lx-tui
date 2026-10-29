@@ -382,6 +382,7 @@ impl Database {
             assistant_sequence,
             revision,
             created_at_ms: now,
+            attachments: Vec::new(),
         })
     }
 

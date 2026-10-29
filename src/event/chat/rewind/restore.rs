@@ -155,6 +155,13 @@ fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> Rewind
         }
     }
     let restored_files = restored.as_ref().map_or(0, |finished| finished.count);
+    let message_attachments = if request.action.fills_draft() {
+        database
+            .load_message_attachments(&request.target_user_message_id)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let commit = RewindCommit {
         operation_id: request.operation_id.clone(),
         session_id: request.session_id.clone(),
@@ -174,11 +181,16 @@ fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> Rewind
                 None,
             );
             let _ = database.prune_orphan_images(&request.session_id);
+            let user_text = if request.action.fills_draft() {
+                rewrite_missing_image_refs(workspace, &committed.user_text, &message_attachments)
+            } else {
+                committed.user_text
+            };
             RewindOutcome::Succeeded {
                 action: request.action,
                 restored_files,
                 already_restored,
-                user_text: committed.user_text,
+                user_text,
                 deleted: request.action.deletes_conversation(),
                 session_deleted: committed.session_deleted,
             }
@@ -444,6 +456,63 @@ fn failed_unavailable() -> RewindOutcome {
 
 fn failed(message: String) -> RewindOutcome {
     RewindOutcome::Failed { message }
+}
+
+/// Rewind 回填草稿前刷新受管图片 mtime；若桌面等外部原图已被删除，自动将标记改写为 `~/.lx-t[-dev]/images/<session_id>/` 下的归档路径。
+fn rewrite_missing_image_refs(
+    workspace: &Path,
+    raw_text: &str,
+    attachments: &[crate::db::chat::MessageAttachmentMeta],
+) -> String {
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+    for att in attachments {
+        if att.kind != crate::db::chat::MessageAttachmentKind::Image {
+            continue;
+        }
+        let Some(ref managed_str) = att.source_path else {
+            continue;
+        };
+        let managed_path = Path::new(managed_str);
+        crate::platform::touch_session_image_if_managed(managed_path);
+        if !managed_path.is_file() {
+            continue;
+        }
+        let original_path = {
+            let p = Path::new(&att.label);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                workspace.join(p)
+            }
+        };
+        if original_path.is_file() {
+            continue;
+        }
+        if let (Some(start), Some(end)) = (att.marker_start, att.marker_end)
+            && start < end
+            && end <= raw_text.len()
+            && raw_text.is_char_boundary(start)
+            && raw_text.is_char_boundary(end)
+            && let Some(mut replacement) = crate::app::markdown::format_reference(
+                crate::app::markdown::ReferKind::Image,
+                managed_path,
+            )
+        {
+            if raw_text[start..end].ends_with(' ') {
+                replacement.push(' ');
+            }
+            replacements.push((start, end, replacement));
+        }
+    }
+    if replacements.is_empty() {
+        return raw_text.to_string();
+    }
+    replacements.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
+    let mut out = raw_text.to_string();
+    for (start, end, replacement) in replacements {
+        out.replace_range(start..end, &replacement);
+    }
+    out
 }
 
 #[cfg(test)]

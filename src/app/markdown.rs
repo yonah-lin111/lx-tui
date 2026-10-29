@@ -653,7 +653,7 @@ fn continues_previous(text: &str, line_start_at: usize, kind: BlockTriggerKind) 
 }
 
 /// 前文未闭合的围栏（标记字符与长度）；无则 None。
-fn open_fence(text: &str) -> Option<(u8, usize)> {
+pub(crate) fn open_fence(text: &str) -> Option<(u8, usize)> {
     let mut open: Option<(u8, usize)> = None;
     for line in text.lines() {
         let trimmed = line.trim_start_matches(' ');
@@ -677,6 +677,30 @@ fn open_fence(text: &str) -> Option<(u8, usize)> {
         };
     }
     open
+}
+
+/// 单行前缀内是否存在未闭合的行内反引号代码段。
+pub(crate) fn inline_code_open(line_prefix: &str) -> bool {
+    let bytes = line_prefix.as_bytes();
+    let mut i = 0;
+    let mut open_ticks: Option<usize> = None;
+    while i < bytes.len() {
+        if bytes[i] == b'`' {
+            let start = i;
+            while i < bytes.len() && bytes[i] == b'`' {
+                i += 1;
+            }
+            let count = i - start;
+            match open_ticks {
+                None => open_ticks = Some(count),
+                Some(n) if n == count => open_ticks = None,
+                Some(_) => {}
+            }
+        } else {
+            i += 1;
+        }
+    }
+    open_ticks.is_some()
 }
 
 /// 所在逻辑行的起始字节偏移。

@@ -692,3 +692,30 @@ fn compact_request_omits_tools_and_overrides_the_system_prompt() {
     let prompt = serde_json::to_string(&body).expect("json");
     assert!(prompt.contains("COMPACT INSTRUCTIONS"), "系统提示被覆写");
 }
+
+#[test]
+fn multimodal_user_content_encodes_input_text_and_input_image() {
+    let mut req = request();
+    req.turns = Vec::new();
+    let image_bytes = vec![1, 2, 3];
+    req.items = vec![ModelItem::UserContent {
+        text: "Examine this".into(),
+        images: vec![crate::chat::events::ModelImage {
+            mime: "image/png".into(),
+            bytes: std::sync::Arc::new(image_bytes),
+        }],
+    }];
+    let body = body_of(&req);
+    let input = body["input"].as_array().expect("input");
+    let user_item = input
+        .iter()
+        .find(|item| item["role"] == "user" && item["content"].is_array())
+        .expect("user item with array content");
+    let content = user_item["content"].as_array().expect("content parts");
+    assert_eq!(content.len(), 2);
+    assert_eq!(content[0]["type"], "input_text");
+    assert_eq!(content[0]["text"], "Examine this");
+    assert_eq!(content[1]["type"], "input_image");
+    let url = content[1]["image_url"].as_str().expect("image_url");
+    assert!(url.starts_with("data:image/png;base64,"));
+}

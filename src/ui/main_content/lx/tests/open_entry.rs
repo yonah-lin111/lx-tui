@@ -54,6 +54,7 @@ fn command_message(call_id: &str, session_id: u64) -> ChatMessageView {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 
@@ -142,6 +143,7 @@ fn file_message(call_id: &str) -> ChatMessageView {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 
@@ -327,6 +329,7 @@ fn folded_thinking_and_long_param_are_clickable() {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }];
     lx.chat.follow_bottom = true;
     let view = history_view(area, &lx, &mut PaneCache::default()).expect("历史区");
@@ -387,6 +390,7 @@ fn folded_thinking_and_long_param_are_clickable() {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }];
     lx.chat.follow_bottom = true;
     let view = history_view(area, &lx, &mut PaneCache::default()).expect("历史区");

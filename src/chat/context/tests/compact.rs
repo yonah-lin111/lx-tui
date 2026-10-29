@@ -23,6 +23,7 @@ fn assemble_with(
     assemble(&AssemblyInput {
         messages,
         draft,
+        draft_attachments: &[],
         model: &model(),
         context_limit: None,
         output_limit: None,

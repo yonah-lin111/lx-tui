@@ -25,6 +25,7 @@ mod timeline;
 mod tool_calls;
 pub mod user_shell;
 
+use crate::chat::ModelItem;
 pub use process_events::{handle_process_event, persist_terminal_snapshots};
 pub use process_page::{
     apply_process_effects, refresh_open_task_pages, sync_background_task_counts, tick_task_pages,
@@ -33,7 +34,7 @@ pub use user_shell::pump_user_shells;
 // 工具握手与时间线辅助的实现在子模块；本模块保留唯一入口。
 #[cfg(test)]
 pub(crate) use timeline::latest_user_draft_for_test;
-pub(crate) use timeline::{chat_part_views_to_db, latest_user_draft, schedule_checkpoint};
+pub(crate) use timeline::{chat_part_views_to_db, schedule_checkpoint};
 #[cfg(test)]
 pub(crate) use tool_calls::view_summary;
 pub(crate) use tool_calls::{begin_tool, finish_tool, flush_pending_tool_begins};
@@ -528,7 +529,7 @@ pub(crate) fn assemble_turn_request(
     compact: Option<&context::CompactContext>,
     environment: Option<&str>,
 ) -> AssembledTurn {
-    let draft = latest_user_draft(messages);
+    let (draft, draft_attachments) = timeline::latest_user_draft_and_attachments(messages);
     let db_messages = chat_part_views_to_db(messages);
     let model = crate::db::chat::ModelSnapshot {
         provider: frozen.provider.clone(),
@@ -538,6 +539,7 @@ pub(crate) fn assemble_turn_request(
     let assembly = context::assemble(&AssemblyInput {
         messages: &db_messages,
         draft: &draft,
+        draft_attachments: &draft_attachments,
         model: &model,
         context_limit: frozen.context_limit,
         output_limit: frozen.output_limit,
@@ -557,6 +559,7 @@ pub(crate) fn assemble_turn_request(
         },
         omitted_turns: assembly.omitted_turns,
         draft_exceeds: assembly.draft_exceeds,
+        item_image_attachments: assembly.item_image_attachments,
     }
 }
 
@@ -567,6 +570,8 @@ pub(crate) struct AssembledTurn {
     pub omitted_turns: usize,
     /// 当前用户消息单独超限：调用方报错，**不截断**用户输入。
     pub draft_exceeds: bool,
+    /// 选中的每个 UserContent 步骤对应的图片附件列表。
+    pub item_image_attachments: Vec<(usize, Vec<context::ItemImageAttachment>)>,
 }
 
 /// 当前用户消息超出模型上下文预算时的稳定错误码（调用方报错，不截断输入）。
@@ -577,7 +582,7 @@ fn start_stream(
     state: &mut AppState,
     streams: &mut ChatStreams,
     sender: &mpsc::UnboundedSender<AppEvent>,
-    _persistence: &Persistence,
+    persistence: &Persistence,
     key: RequestKey,
     assistant_id: String,
 ) -> bool {
@@ -664,7 +669,85 @@ fn start_stream(
         fail_turn(sender, key, DRAFT_EXCEEDS_CONTEXT_CODE);
         return true;
     }
-    let request = assembled.request;
+    let mut request = assembled.request;
+    // 如果请求中包含图片，按需从本地路径加载图片字节并装配 ModelImage：
+    // 当前正在发送的轮次若缺图严格报错拦截；历史已发送轮次若外部图片被用户事后删除则仅跳过该历史图片。
+    if !assembled.item_image_attachments.is_empty() {
+        let db_workspace = state.chat_session_key_for_pane(key.pane).or_else(|| {
+            state
+                .active_workspace()
+                .repo_key()
+                .map(std::path::Path::to_path_buf)
+        });
+        let Some(ws) = db_workspace else {
+            fail_turn(sender, key, "workspace missing");
+            return true;
+        };
+
+        let total_items = request.items.len();
+        for (item_idx, atts) in &assembled.item_image_attachments {
+            let is_current_turn = *item_idx + 1 == total_items;
+            // 若会话中途切换到了不支持图像输入的模型（参考 OpenCode `unsupportedParts`），
+            // 历史轮次中的图片替换为显式错误文本并降级为 UserText，避免请求被纯文本模型拒绝。
+            if !frozen.supports_image_input {
+                if is_current_turn {
+                    fail_turn(sender, key, "current model does not support image input");
+                    return true;
+                }
+                if let Some(ModelItem::UserContent { text, .. }) = request.items.get_mut(*item_idx)
+                {
+                    let mut replaced = std::mem::take(text);
+                    for att in atts {
+                        if !replaced.is_empty() {
+                            replaced.push('\n');
+                        }
+                        replaced.push_str(&format!(
+                            "ERROR: Cannot read \"{}\" (this model does not support image input). Inform the user.",
+                            att.label
+                        ));
+                    }
+                    request.items[*item_idx] = ModelItem::UserText(replaced);
+                }
+                continue;
+            }
+            let mut loaded_images: Vec<crate::chat::events::ModelImage> = Vec::new();
+            for att in atts {
+                match persistence.load_image_payloads(&ws, &key.session, &[att.id.as_str()]) {
+                    Ok(mut map) => {
+                        if let Some(bytes) = map.remove(&att.id) {
+                            if !loaded_images
+                                .iter()
+                                .any(|existing| existing.bytes.as_slice() == bytes.as_slice())
+                            {
+                                loaded_images.push(crate::chat::events::ModelImage {
+                                    mime: att.mime.clone(),
+                                    bytes: std::sync::Arc::new(bytes),
+                                });
+                            }
+                        } else if is_current_turn {
+                            fail_turn(sender, key, "image payload unavailable");
+                            return true;
+                        }
+                    }
+                    Err(_) => {
+                        if is_current_turn {
+                            fail_turn(sender, key, "image payload unavailable");
+                            return true;
+                        }
+                    }
+                }
+            }
+            if let Some(item) = request.items.get_mut(*item_idx) {
+                if loaded_images.is_empty() && !is_current_turn {
+                    if let ModelItem::UserContent { text, .. } = item {
+                        *item = ModelItem::UserText(std::mem::take(text));
+                    }
+                } else if let ModelItem::UserContent { images, .. } = item {
+                    *images = loaded_images;
+                }
+            }
+        }
+    }
     // 冻结工作区根：本轮所有工具的相对路径都以它为准（后续切换窗格不影响）。
     let Some(workspace) = state.workspace_cwd_for_pane(key.pane) else {
         fail_turn(sender, key, "workspace path unavailable");
@@ -736,7 +819,8 @@ fn start_stream(
     let reads = crate::chat::tools::read_registry(&key.session);
     let executor = AgentTools::new(runtime.manager.clone(), turn)
         .with_recorder(std::sync::Arc::new(recorder))
-        .with_reads(reads);
+        .with_reads(reads)
+        .with_image_support(frozen.supports_image_input);
     // 本地运行上下文：存活进程 + 当前计划 + 在册子 agent + 未投递报告。
     let mut summary = runtime_context_summary(runtime.manager.as_ref(), &current_plan);
     let subagent_lines = subagent::running_subagent_lines(streams, &key.session);

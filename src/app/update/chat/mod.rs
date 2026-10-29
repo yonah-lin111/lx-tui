@@ -167,6 +167,24 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         );
         return true;
     };
+    let reference_root = state
+        .workspace_cwd_for_pane(pane)
+        .unwrap_or_else(|| workspace.clone());
+    let prepared = match crate::chat::prepare_user_message(&reference_root, &draft, &[]) {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            let msg = crate::ui::text::chat::image_error_message(&err);
+            show_lx_hint(state, pane, InputHintLevel::Warning, msg);
+            return true;
+        }
+    };
+    if !prepared.model_images.is_empty() && !frozen.supports_image_input {
+        let msg = crate::ui::text::chat::image_error_message(
+            &crate::platform::ImagePrepareError::ImageUnsupportedByModel,
+        );
+        show_lx_hint(state, pane, InputHintLevel::Warning, msg);
+        return true;
+    }
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -185,6 +203,7 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
             workspace,
             session_id,
             draft,
+            attachments: prepared.attachments,
             model: ModelSnapshot {
                 provider: frozen.provider.clone(),
                 model: frozen.model.clone(),
@@ -221,8 +240,9 @@ pub fn on_turn_committed(
         }
     };
     // 记录到全局 prompt 历史：DB ack 已确认这一轮真正入库，才值得留在历史里。
+    // 只有无附件的纯文本草稿才记录，带附件轮次不向纯文本历史记录（避免 ↑ 召回缺图草稿）。
     // 内存先记录（`↑` 立即可用），持久化走独立效应；两者互不阻塞。
-    if state.prompt_history.record(&frozen_draft) {
+    if committed.attachments.is_empty() && state.prompt_history.record(&frozen_draft) {
         state
             .effects
             .push(crate::app::effects::Effect::RecordPromptHistory {
@@ -275,6 +295,7 @@ pub fn on_turn_committed(
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: committed.attachments.clone(),
     });
     target.lx.chat.messages.push(ChatMessageView {
         sequence: committed.assistant_sequence,
@@ -292,6 +313,7 @@ pub fn on_turn_committed(
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     });
     target.lx.chat.follow_bottom = true;
     let key = RequestKey {

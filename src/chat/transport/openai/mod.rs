@@ -106,6 +106,30 @@ fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
             HistoryBlock::Text { role, text } => {
                 messages.push(json!({"role": role.as_str(), "content": text}));
             }
+            HistoryBlock::UserContent { text, images } => {
+                use base64::Engine;
+                let mut content_parts: Vec<Value> = Vec::new();
+                if !text.is_empty() {
+                    content_parts.push(json!({
+                        "type": "text",
+                        "text": text,
+                    }));
+                }
+                for img in images {
+                    let b64 =
+                        base64::engine::general_purpose::STANDARD.encode(img.bytes.as_slice());
+                    content_parts.push(json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!("data:{};base64,{}", img.mime, b64)
+                        }
+                    }));
+                }
+                messages.push(json!({
+                    "role": "user",
+                    "content": content_parts,
+                }));
+            }
             HistoryBlock::ToolCall {
                 call_id,
                 name,

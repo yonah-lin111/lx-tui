@@ -438,6 +438,83 @@ fn unreachable_message_without_snapshot_can_only_delete_conversation() {
     assert!(matches!(outcome, RewindOutcome::Succeeded { .. }));
 }
 
+#[test]
+fn rewind_rewrites_deleted_desktop_image_to_session_archived_copy() {
+    let (database, workspace, _db_path) = fixture("rewind-img-fallback");
+    let desktop_img = workspace.join("Desktop_PixPin.png");
+    let img: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
+        image::ImageBuffer::from_pixel(4, 4, image::Rgba([9, 8, 7, 255]));
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("png");
+    std::fs::write(&desktop_img, &png).expect("write desktop img");
+
+    let desktop_str = desktop_img.to_string_lossy().into_owned();
+    let user_text = format!("请分析 @[refer-image]({desktop_str}) 布局");
+    let prepared = crate::chat::prepare_user_message(&workspace, &user_text, &[]).expect("prepare");
+
+    let turn = database
+        .begin_turn_with_attachments(
+            &workspace,
+            None,
+            &user_text,
+            &prepared.attachments,
+            &ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+        )
+        .expect("begin turn");
+    database
+        .finish(
+            &workspace,
+            &turn.assistant_message_id,
+            &[],
+            &TurnOutcome::Interrupted,
+            Usage::default(),
+        )
+        .expect("finish");
+
+    let archived_path = turn.attachments[0]
+        .source_path
+        .clone()
+        .expect("archived path");
+    assert!(archived_path.contains(&format!("/images/{}/", turn.session_id)));
+
+    // 模拟用户清理了桌面原图后执行 rewind
+    std::fs::remove_file(&desktop_img).expect("remove desktop image");
+    let outcome = run(
+        &database,
+        &workspace,
+        &RewindRequest {
+            operation_id: "op-img-rewind".into(),
+            user_text: user_text.clone(),
+            ..request(&turn, &workspace, RewindAction::DeleteOnly)
+        },
+    );
+    match outcome {
+        RewindOutcome::Succeeded {
+            user_text: rewound_text,
+            ..
+        } => {
+            assert_eq!(
+                rewound_text,
+                format!("请分析 @[refer-image]({archived_path}) 布局"),
+                "桌面原图被删后，Rewind 回填文本应自动替换为受管归档路径"
+            );
+            // 回填后的草稿可再次通过 prepare_user_message 校验发送
+            assert!(
+                crate::chat::prepare_user_message(&workspace, &rewound_text, &[]).is_ok(),
+                "回填后的文本必须可直接再次发送"
+            );
+        }
+        other => panic!("expected Succeeded, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_file(&archived_path);
+}
+
 /// 会话 cwd 在主 checkout，实际目标在 linked worktree：只恢复实际目标路径。
 #[test]
 fn restores_actual_linked_worktree_target_only() {

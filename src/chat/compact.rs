@@ -217,8 +217,13 @@ fn render_group(group: &[ChatMessage]) -> String {
         match message.role.as_str() {
             "user" => {
                 text.push_str("### User\n");
-                text.push_str(&body);
-                text.push('\n');
+                if !body.trim().is_empty() {
+                    text.push_str(&body);
+                    text.push('\n');
+                }
+                for att in &message.attachments {
+                    text.push_str(&format!("- [{}] {}\n", att.kind.as_str(), att.label));
+                }
             }
             "assistant" => {
                 text.push_str("### Assistant\n");
@@ -404,6 +409,7 @@ mod tests {
             completed_at_ms: None,
             user_shell: None,
             subagent_reports: None,
+            attachments: Vec::new(),
             parts: vec![ChatPart {
                 position: 0,
                 kind: "text".into(),

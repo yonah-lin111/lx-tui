@@ -804,3 +804,28 @@ fn compact_request_omits_tools_and_overrides_the_system_prompt() {
     let prompt = serde_json::to_string(&body).expect("json");
     assert!(prompt.contains("COMPACT INSTRUCTIONS"), "系统提示被覆写");
 }
+
+#[test]
+fn multimodal_user_content_encodes_text_and_inline_data() {
+    let mut req = request();
+    req.turns = Vec::new();
+    let image_bytes = vec![7, 8, 9];
+    req.items = vec![ModelItem::UserContent {
+        text: "Examine graphic".into(),
+        images: vec![crate::chat::events::ModelImage {
+            mime: "image/png".into(),
+            bytes: std::sync::Arc::new(image_bytes),
+        }],
+    }];
+    let body = body_of(&req);
+    let contents = body["contents"].as_array().expect("contents");
+    let user_content = contents
+        .iter()
+        .rfind(|c| c["role"] == "user")
+        .expect("user content");
+    let parts = user_content["parts"].as_array().expect("parts");
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0]["text"], "Examine graphic");
+    assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
+    assert!(!parts[1]["inlineData"]["data"].as_str().unwrap().is_empty());
+}

@@ -436,6 +436,7 @@ fn copy_text_keeps_wide_chars_once() {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     });
     lx.chat = chat;
     let text = copy_text(
@@ -479,6 +480,7 @@ fn copy_text_excludes_scrollbar_and_extracts_offscreen_rows() {
             cache_read_tokens: None,
             duration_ms: None,
             reports: Vec::new(),
+            attachments: Vec::new(),
         });
     }
     chat.follow_bottom = true;
@@ -528,6 +530,7 @@ fn selection_highlight_tracks_content_scroll_and_skips_scrollbar() {
             cache_read_tokens: None,
             duration_ms: None,
             reports: Vec::new(),
+            attachments: Vec::new(),
         });
     }
     chat.follow_bottom = false;
@@ -650,6 +653,7 @@ fn task_output_and_agents_copy_text_across_scroll_without_scrollbar() {
             cache_read_tokens: None,
             duration_ms: None,
             reports: Vec::new(),
+            attachments: Vec::new(),
         });
     }
     lx.agents.runs.push(run);
@@ -1258,6 +1262,7 @@ fn chat_history_scrollbar_geometry_appears_when_overflowing() {
             cache_read_tokens: None,
             duration_ms: None,
             reports: Vec::new(),
+            attachments: Vec::new(),
         });
     }
     lx.chat = chat;
@@ -1301,6 +1306,7 @@ fn overflowing_history_draws_scrollbar_glyphs() {
             cache_read_tokens: None,
             duration_ms: None,
             reports: Vec::new(),
+            attachments: Vec::new(),
         });
     }
     lx.chat = chat;
@@ -1363,6 +1369,7 @@ fn streaming_lx(streaming: bool, follow_bottom: bool) -> Lx {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     });
     chat.follow_bottom = follow_bottom;
     chat.status.streaming = streaming;
@@ -1639,6 +1646,7 @@ fn sticky_history_lx() -> Lx {
             cache_read_tokens: None,
             duration_ms: None,
             reports: Vec::new(),
+            attachments: Vec::new(),
         });
     };
     push("user", "第一轮的问题");
@@ -1904,6 +1912,7 @@ fn code_block_renders_body_without_header_or_rules() {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     });
     lx.chat = chat;
 

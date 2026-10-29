@@ -104,6 +104,7 @@ fn committed(session: &str) -> TurnCommitted {
         assistant_message_id: format!("{session}-a"),
         turn_index: 0,
         created_at_ms: 1_000,
+        attachments: Vec::new(),
     }
 }
 
@@ -655,6 +656,7 @@ fn session_loaded_rebuilds_view_and_selection() {
                 completed_at_ms: None,
             }],
             tools: Vec::new(),
+            attachments: Vec::new(),
         },
         crate::db::chat::ChatMessage {
             external_id: "a1".into(),
@@ -686,6 +688,7 @@ fn session_loaded_rebuilds_view_and_selection() {
                 completed_at_ms: None,
             }],
             tools: Vec::new(),
+            attachments: Vec::new(),
         },
     ];
     assert!(on_session_loaded(
@@ -808,6 +811,7 @@ fn append_stream_delta_merges_adjacent_same_kind() {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     });
     chat.append_stream_delta(PartKind::Text, "a", None);
     chat.append_stream_delta(PartKind::Text, "b", None);
@@ -842,6 +846,7 @@ fn signature_metadata_binds_to_reasoning_part() {
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     });
     chat.append_stream_delta(PartKind::Reasoning, "思考", None);
     // 空文本 + 签名元数据：绑定到相邻 reasoning part。

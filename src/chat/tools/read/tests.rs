@@ -359,3 +359,62 @@ fn human_size_formats_readably() {
     assert_eq!(super::human_size(1536), "1.5 KB");
     assert_eq!(super::human_size(900), "900 bytes");
 }
+
+/// `read` 工具直接读取本地图片文件时，返回 `ReadKind::Image` 与图片元信息（不报 binary 错误）。
+#[test]
+fn read_tool_supports_local_image_files() {
+    let fixture = Fixture::new("read-image");
+    let img: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
+        image::ImageBuffer::from_pixel(12, 8, image::Rgba([10, 20, 30, 255]));
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("write png");
+    fixture.write_bytes("shot.png", &png);
+
+    let result = execute(&fixture.ctx(), "read", r#"{"path":"shot.png"}"#);
+    match &result {
+        ToolExecutionResult::Read {
+            kind,
+            content,
+            start_line,
+            end_line,
+            ..
+        } => {
+            assert_eq!(*kind, super::super::ReadKind::Image);
+            assert!(content.contains("image/png"));
+            assert!(content.contains("12x8 px"));
+            assert_eq!((*start_line, *end_line), (0, 0));
+        }
+        other => panic!("expected Read(Image), got {other:?}"),
+    }
+
+    let formatted = crate::chat::tools::format_for_model(&result);
+    assert!(formatted.contains("Read image"));
+    assert!(formatted.contains("12x8 px"));
+}
+
+/// `read` 工具读到图片但当前模型不支持图像输入时的拒绝提示（对齐 OpenCode `unsupportedMedia`）。
+#[test]
+fn read_tool_rejects_image_when_model_does_not_support_image_input() {
+    let fixture = Fixture::new("read-image-unsupported");
+    let img: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
+        image::ImageBuffer::from_pixel(8, 8, image::Rgba([1, 2, 3, 255]));
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("write png");
+    fixture.write_bytes("diagram.png", &png);
+
+    let ctx = fixture.ctx().with_image_support(false);
+    let result = execute(&ctx, "read", r#"{"path":"diagram.png"}"#);
+    match &result {
+        ToolExecutionResult::Failed { code, message, .. } => {
+            assert_eq!(*code, ToolErrorCode::Binary);
+            assert!(
+                message.contains("this model does not support image input"),
+                "message: {message}"
+            );
+            assert!(message.contains("Inform the user"), "message: {message}");
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}

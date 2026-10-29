@@ -33,6 +33,7 @@ fn user_message(id: &str, text: &str, sequence: i64) -> crate::app::state::ChatM
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 
@@ -53,6 +54,7 @@ fn assistant_message(id: &str, sequence: i64) -> crate::app::state::ChatMessageV
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 
@@ -319,6 +321,7 @@ fn notices_are_not_part_of_model_assembly() {
         output_limit: Some(4_096),
         variant_params: None,
         idle_timeout_ms: 30_000,
+        supports_image_input: true,
     };
     let assembled =
         crate::event::chat::assemble_turn_request(&target.lx.chat.messages, &frozen, None, None);

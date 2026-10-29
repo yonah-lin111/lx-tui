@@ -140,6 +140,7 @@ pub enum Effect {
         workspace: PathBuf,
         session_id: Option<String>,
         draft: String,
+        attachments: Vec<crate::db::chat::MessageAttachmentInput>,
         model: crate::db::chat::ModelSnapshot,
     },
     /// 启动网络流：按冻结模型快照与装配上下文执行，结果按 key 回投。

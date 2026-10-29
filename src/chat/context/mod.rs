@@ -44,6 +44,8 @@ pub struct AssemblyInput<'a> {
     pub messages: &'a [ChatMessage],
     /// 本轮用户文本（尚未落库，请求构造时并入末尾）。
     pub draft: &'a str,
+    /// 本轮用户图片附件（当前轮发送）。
+    pub draft_attachments: &'a [crate::db::chat::MessageAttachmentMeta],
     /// 本轮模型快照（provider/model/variant）。
     pub model: &'a ModelSnapshot,
     /// 模型上下文上限；None 时不裁剪（按完整历史发送）。
@@ -103,6 +105,14 @@ fn escape_summary_attr(text: &str) -> String {
         .collect()
 }
 
+/// 装配结果中单个图片附件的引用描述。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemImageAttachment {
+    pub id: String,
+    pub mime: String,
+    pub label: String,
+}
+
 /// 装配结果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Assembly {
@@ -121,6 +131,8 @@ pub struct Assembly {
     /// 摘要放在系统段而非伪造 user/assistant 消息：design §3.3 的上下文顺序就是
     /// system → environment → compact summary → 检查点之后的消息。
     pub system_prompt: String,
+    /// 选中的每个 UserContent 步骤对应的图片附件列表。
+    pub item_image_attachments: Vec<(usize, Vec<ItemImageAttachment>)>,
 }
 
 /// 一个可回放组在两条视图中的区间（`end` 不含）。
@@ -157,6 +169,8 @@ struct PlannedTurn {
     items: Vec<ModelItem>,
     /// 该组估算 token（user 正文 + 上述全部 items）。
     tokens: u64,
+    /// 该轮包含的图片附件元数据。
+    user_images: Vec<crate::db::chat::MessageAttachmentMeta>,
 }
 
 /// 装配上下文。
@@ -177,7 +191,20 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         .cloned()
         .collect();
     let planned = plan_turns(&retained);
-    let draft_tokens = estimate_tokens(input.draft);
+    let draft_image_tokens = {
+        let mut unique_sources = std::collections::HashSet::new();
+        let mut count = 0u64;
+        for att in input.draft_attachments {
+            if att.kind == crate::db::chat::MessageAttachmentKind::Image {
+                let key = att.source_path.as_deref().unwrap_or(&att.label);
+                if unique_sources.insert(key) {
+                    count += 1;
+                }
+            }
+        }
+        count * 1600
+    };
+    let draft_tokens = (estimate_tokens(input.draft) as u64).saturating_add(draft_image_tokens);
     let output_reserve = input.output_limit.unwrap_or(0).min(8192);
     let budget = input.context_limit.map(|context| {
         context
@@ -187,7 +214,7 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
     });
     // 从近到远纳入，直到预算耗尽；整轮为最小单位（丢一轮即丢该轮全部 items）。
     let mut kept: Vec<&PlannedTurn> = Vec::new();
-    let mut used = draft_tokens as u64;
+    let mut used = draft_tokens;
     for turn in planned.iter().rev() {
         if let Some(budget) = budget
             && used.saturating_add(turn.tokens) > budget
@@ -203,6 +230,7 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
     let mut turns: Vec<ChatTurn> = Vec::with_capacity(kept.len() * 2 + 1);
     let mut items: Vec<ModelItem> = Vec::new();
     let mut groups = Vec::with_capacity(kept.len());
+    let mut item_image_attachments: Vec<(usize, Vec<ItemImageAttachment>)> = Vec::new();
     for turn in &kept {
         let turn_start = turns.len();
         let item_start = items.len();
@@ -220,7 +248,25 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
                 reasoning_metadata: None,
             });
         }
-        items.push(ModelItem::UserText(turn.user_text.clone()));
+        if turn.user_images.is_empty() {
+            items.push(ModelItem::UserText(turn.user_text.clone()));
+        } else {
+            let item_idx = items.len();
+            let att_ids = turn
+                .user_images
+                .iter()
+                .map(|a| ItemImageAttachment {
+                    id: a.id.clone(),
+                    mime: a.mime.clone().unwrap_or_else(|| "image/png".into()),
+                    label: a.label.clone(),
+                })
+                .collect();
+            item_image_attachments.push((item_idx, att_ids));
+            items.push(ModelItem::UserContent {
+                text: turn.user_text.clone(),
+                images: Vec::new(),
+            });
+        }
         items.extend(turn.items.iter().cloned());
         groups.push(ContextGroup {
             turn_start,
@@ -230,13 +276,35 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         });
     }
     // 当前用户消息必须保留（不因预算截断用户输入）。
-    let draft_exceeds = budget.is_some_and(|budget| draft_tokens as u64 > budget);
+    let draft_exceeds = budget.is_some_and(|budget| draft_tokens > budget);
     turns.push(ChatTurn {
         role: "user".into(),
         text: input.draft.to_string(),
         reasoning_metadata: None,
     });
-    items.push(ModelItem::UserText(input.draft.to_string()));
+    let draft_images: Vec<&crate::db::chat::MessageAttachmentMeta> = input
+        .draft_attachments
+        .iter()
+        .filter(|att| att.kind == crate::db::chat::MessageAttachmentKind::Image)
+        .collect();
+    if draft_images.is_empty() {
+        items.push(ModelItem::UserText(input.draft.to_string()));
+    } else {
+        let item_idx = items.len();
+        let att_ids = draft_images
+            .iter()
+            .map(|a| ItemImageAttachment {
+                id: a.id.clone(),
+                mime: a.mime.clone().unwrap_or_else(|| "image/png".into()),
+                label: a.label.clone(),
+            })
+            .collect();
+        item_image_attachments.push((item_idx, att_ids));
+        items.push(ModelItem::UserContent {
+            text: input.draft.to_string(),
+            images: Vec::new(),
+        });
+    }
     let system_prompt = crate::chat::prompt::compose_system_prompt(
         input.environment,
         input.compact.map(CompactContext::as_prompt).as_deref(),
@@ -255,6 +323,7 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         draft_exceeds,
         groups,
         system_prompt,
+        item_image_attachments,
     }
 }
 
@@ -353,7 +422,21 @@ fn plan_turn(user: &ChatMessage, assistant: &ChatMessage) -> PlannedTurn {
     let user_text = message_text_of(user);
     let assistant_text = message_text_of(assistant);
     let items = assistant_items(assistant);
+    let user_images: Vec<crate::db::chat::MessageAttachmentMeta> = user
+        .attachments
+        .iter()
+        .filter(|att| att.kind == crate::db::chat::MessageAttachmentKind::Image)
+        .cloned()
+        .collect();
     let mut tokens = estimate_tokens(&user_text) as u64;
+    let unique_img_count = {
+        let mut seen = std::collections::HashSet::new();
+        user_images
+            .iter()
+            .filter(|att| seen.insert(att.source_path.as_deref().unwrap_or(&att.label)))
+            .count() as u64
+    };
+    tokens = tokens.saturating_add(unique_img_count * 1600);
     for item in &items {
         tokens = tokens.saturating_add(item_tokens(item));
     }
@@ -362,6 +445,7 @@ fn plan_turn(user: &ChatMessage, assistant: &ChatMessage) -> PlannedTurn {
         assistant_text: Some(assistant_text),
         items,
         tokens,
+        user_images,
     }
 }
 
@@ -378,6 +462,7 @@ fn plan_user_shell(message: &ChatMessage) -> Option<PlannedTurn> {
         user_text: text,
         assistant_text: None,
         items: Vec::new(),
+        user_images: Vec::new(),
     })
 }
 
@@ -664,6 +749,9 @@ fn replay_pair(tool: &ToolCallRecord) -> Option<(ModelItem, ModelItem)> {
 fn item_tokens(item: &ModelItem) -> u64 {
     match item {
         ModelItem::UserText(text) | ModelItem::AssistantText(text) => estimate_tokens(text) as u64,
+        ModelItem::UserContent { text, images } => {
+            (estimate_tokens(text) as u64) + (images.len() as u64) * 1600
+        }
         ModelItem::AssistantToolCall {
             call_id,
             name,

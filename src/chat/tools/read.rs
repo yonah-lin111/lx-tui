@@ -71,6 +71,18 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExe
             format!("{} is not a regular file", path::display(&target)),
         ));
     }
+    if crate::platform::sniff_image_file(&target) {
+        if !ctx.supports_image_input {
+            return Err(ToolFailure::new(
+                ToolErrorCode::Binary,
+                format!(
+                    "ERROR: Cannot read \"{}\" (this model does not support image input). Inform the user.",
+                    path::display(&target)
+                ),
+            ));
+        }
+        return read_image(&target, metadata.len());
+    }
     read_file(
         ctx,
         &target,
@@ -79,6 +91,53 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExe
         limit,
         &InputCaps::default(),
     )
+}
+
+/// 读取并校验本地图片文件（上限 20 MiB，自动按最长边 2048px 缩放编码）。
+fn read_image(target: &Path, len: u64) -> ToolResult<ToolExecutionResult> {
+    if len > crate::platform::MAX_IMAGE_RAW_BYTES as u64 {
+        return Err(ToolFailure::new(
+            ToolErrorCode::TooLarge,
+            format!(
+                "{} is {}, larger than the {} image read limit",
+                path::display(target),
+                human_size(len),
+                human_size(crate::platform::MAX_IMAGE_RAW_BYTES as u64),
+            ),
+        ));
+    }
+    let processed =
+        crate::platform::load_and_process_image_file(target).map_err(|err| match err {
+            crate::platform::ImagePrepareError::SingleTooLarge => ToolFailure::new(
+                ToolErrorCode::TooLarge,
+                format!("{} exceeds the 20 MiB image limit", path::display(target)),
+            ),
+            _ => ToolFailure::new(
+                ToolErrorCode::Binary,
+                format!(
+                    "failed to decode image {}: {}",
+                    path::display(target),
+                    err.code()
+                ),
+            ),
+        })?;
+    Ok(ToolExecutionResult::Read {
+        path: target.to_path_buf(),
+        kind: ReadKind::Image,
+        content: format!(
+            "Read image {} ({}, {}x{} px)",
+            path::display(target),
+            processed.mime,
+            processed.width,
+            processed.height
+        ),
+        start_line: 0,
+        end_line: 0,
+        next_offset: None,
+        truncated: false,
+        total_lines: 0,
+        version: None,
+    })
 }
 
 /// 读取文本文件的一段。

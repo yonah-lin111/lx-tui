@@ -86,12 +86,19 @@ pub(crate) fn latest_user_draft_for_test(
     latest_user_draft(messages)
 }
 
+#[allow(dead_code)]
 pub(crate) fn latest_user_draft(messages: &[crate::app::state::ChatMessageView]) -> String {
+    latest_user_draft_and_attachments(messages).0
+}
+
+pub(crate) fn latest_user_draft_and_attachments(
+    messages: &[crate::app::state::ChatMessageView],
+) -> (String, Vec<crate::db::chat::MessageAttachmentMeta>) {
     messages
         .iter()
         .rev()
         .find(|message| message.role == "user" && !message.is_user_shell())
-        .map(|message| message.text())
+        .map(|message| (message.text(), message.attachments.clone()))
         .unwrap_or_default()
 }
 

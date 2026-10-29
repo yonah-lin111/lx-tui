@@ -93,6 +93,8 @@ pub struct AgentTools {
     recorder: Option<Arc<dyn MutationRecorderFactory>>,
     /// 会话级读版本登记表（读后版本保护）；生产入口必注入。
     reads: Option<Arc<crate::chat::tools::ReadRegistry>>,
+    /// 当前模型是否支持图像输入模态。
+    supports_image_input: bool,
     /// rtk 后端（外部优先，缺失时内置过滤）；随执行器复用检测结果。
     rtk: Rtk,
 }
@@ -115,6 +117,7 @@ impl AgentTools {
             plan_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             recorder: None,
             reads: None,
+            supports_image_input: true,
             rtk: Rtk::detect(),
         }
     }
@@ -131,6 +134,12 @@ impl AgentTools {
         self
     }
 
+    /// 注入当前模型是否支持图像输入（生产路径按 `FrozenModel` 设置）。
+    pub fn with_image_support(mut self, supports: bool) -> Self {
+        self.supports_image_input = supports;
+        self
+    }
+
     /// 文件工具：在阻塞线程池执行，并注入本次调用的 recorder。
     async fn execute_file(
         &self,
@@ -138,7 +147,8 @@ impl AgentTools {
         call: &ReadyToolCall,
         ticket: &ToolCallTicket,
     ) -> ToolExecutionResult {
-        let mut context = crate::chat::tools::ToolContext::new(cwd.to_path_buf());
+        let mut context = crate::chat::tools::ToolContext::new(cwd.to_path_buf())
+            .with_image_support(self.supports_image_input);
         if let Some(reads) = self.reads.as_ref() {
             context = context.with_reads(Arc::clone(reads));
         }

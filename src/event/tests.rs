@@ -1719,6 +1719,7 @@ fn lx_view_content_click_focuses_and_starts_selection() {
                 cache_read_tokens: None,
                 duration_ms: None,
                 reports: Vec::new(),
+                attachments: Vec::new(),
             });
     }
     crate::app::update::focus_prompt(&mut state);
@@ -6374,6 +6375,7 @@ fn lx_card_click_toggles_expansion_on_release() {
             cache_read_tokens: None,
             duration_ms: None,
             reports: Vec::new(),
+            attachments: Vec::new(),
         });
         chat.follow_bottom = true;
         target.lx.chat = chat;
@@ -6482,6 +6484,7 @@ fn lx_history_selection_waits_for_copy_shortcut_and_follows_wheel_scroll() {
                     cache_read_tokens: None,
                     duration_ms: None,
                     reports: Vec::new(),
+                    attachments: Vec::new(),
                 });
         }
         target.lx.chat.follow_bottom = false;
@@ -6763,6 +6766,7 @@ fn lx_task_output_and_agents_detail_selection_scroll_and_copy() {
             cache_read_tokens: None,
             duration_ms: None,
             reports: Vec::new(),
+            attachments: Vec::new(),
         });
         target.lx.agents.runs.push(run);
     }
@@ -6884,6 +6888,7 @@ fn lx_task_output_and_agents_detail_selection_scroll_and_copy() {
                 cache_read_tokens: None,
                 duration_ms: None,
                 reports: Vec::new(),
+                attachments: Vec::new(),
             });
         }
         run.follow = false;
@@ -7099,6 +7104,7 @@ fn double_and_triple_click_select_word_and_line_across_all_views() {
                 cache_read_tokens: None,
                 duration_ms: None,
                 reports: Vec::new(),
+                attachments: Vec::new(),
             });
     }
     update::resize_panes(&mut state, &geo.rects);
@@ -7356,6 +7362,40 @@ fn lx_paste_cancels_rewind_arming() {
     let target = state.pane_anywhere(pane).expect("pane");
     assert!(target.lx.rewind.armed_at.is_none(), "粘贴必须清除撤销待命");
     assert_eq!(target.lx.input, "pasted");
+}
+
+#[test]
+fn lx_paste_image_path_opens_panel_and_confirms_refer_image() {
+    let dir = std::env::temp_dir().join(format!("lx-paste-img-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let img_path = dir.join("PixPin_2026-10-29_09-52-07.png");
+    let img: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
+        image::ImageBuffer::from_pixel(2, 2, image::Rgba([1, 2, 3, 255]));
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("png");
+    std::fs::write(&img_path, &png).expect("write");
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state.pane_mut_anywhere(pane).expect("pane").view = PaneView::Lx;
+
+    let path_str = img_path.to_string_lossy().into_owned();
+    assert!(paste::handle_lx_paste(&mut state, path_str.clone()));
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    assert!(
+        target.lx.paste_panel().is_some(),
+        "粘贴有路径的图片必须弹出二级面板"
+    );
+    assert!(
+        target
+            .lx
+            .paste_confirm(crate::app::prompt::PasteAction::Reference)
+    );
+    assert_eq!(target.lx.input, format!("@[refer-image]({path_str}) "));
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ===== ask 面板接线：点击吞掉、粘贴只进手写缓冲 =====

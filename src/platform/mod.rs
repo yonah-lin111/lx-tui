@@ -17,6 +17,16 @@ pub use environment::{
 
 mod lock;
 pub use lock::{FileGuard, PathGuards, lock_paths, try_lock_named, try_lock_session};
+
+mod clipboard_image;
+pub use clipboard_image::{
+    IMAGE_RETENTION_SECS, ImagePrepareError, MAX_ATTACHED_IMAGES, MAX_IMAGE_DIMENSION,
+    MAX_IMAGE_RAW_BYTES, MAX_TOTAL_IMAGE_RAW_BYTES, ProcessedImage, archive_session_image,
+    archive_session_image_in, load_and_process_image_file, process_image_bytes,
+    prune_default_session_images, prune_session_images_in, remove_session_images,
+    session_images_root_dir, touch_session_image_if_managed,
+};
+
 mod raw_image;
 pub use raw_image::{
     RawImage, RawKind, VERSION_PREFIX, exists as entry_exists, hard_link_count, read as read_raw,

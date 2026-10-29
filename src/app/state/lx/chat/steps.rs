@@ -281,6 +281,10 @@ impl ToolSummary {
                     self.matches = Some(entries);
                 }
             }
+            Some("image") => {
+                self.range = None;
+                self.read_lines = None;
+            }
             _ => {}
         }
         // `search` 结果体带 matches 数组；命中数就是它的长度。
@@ -711,6 +715,8 @@ pub struct ChatMessageView {
     pub duration_ms: Option<i64>,
     /// 子 agent 汇报（仅报告行非空；损坏 JSON 按空集合处理）。
     pub reports: Vec<crate::chat::agent::SubagentReportView>,
+    /// 用户消息的附件元数据列表（仅用户消息有效）。
+    pub attachments: Vec<crate::db::chat::MessageAttachmentMeta>,
 }
 
 impl ChatMessageView {

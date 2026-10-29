@@ -380,6 +380,7 @@ fn session_loaded_merges_parts_and_tools_by_position() {
                 completed_at_ms: None,
             }],
             tools: Vec::new(),
+            attachments: Vec::new(),
         },
         crate::db::chat::ChatMessage {
             external_id: "a1".into(),
@@ -434,6 +435,7 @@ fn session_loaded_merges_parts_and_tools_by_position() {
                 completed_at_ms: Some(20),
                 duration_ms: Some(10),
             }],
+            attachments: Vec::new(),
         },
     ];
     assert!(on_session_loaded(

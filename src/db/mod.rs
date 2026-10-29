@@ -23,7 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
 
 /// 当前 Schema 版本（测试断言用；不暴露可变入口）。
 #[cfg(test)]
@@ -99,6 +99,8 @@ pub enum DbError {
     RewindConflict,
     /// 读后版本保护拒绝：修改已有文件缺 token，或 token 与快照内容不一致。
     StaleRead,
+    /// 附件或图片数据缺失/损坏。
+    AttachmentMissing,
 }
 
 impl fmt::Display for DbError {
@@ -143,6 +145,7 @@ impl fmt::Display for DbError {
             Self::OperationMissing => write!(formatter, "rewind operation missing"),
             Self::RewindConflict => write!(formatter, "rewind conflict"),
             Self::StaleRead => write!(formatter, "stale file version"),
+            Self::AttachmentMissing => write!(formatter, "attachment missing"),
         }
     }
 }
@@ -185,6 +188,7 @@ impl DbError {
             Self::OperationMissing => "operation missing",
             Self::RewindConflict => "rewind conflict",
             Self::StaleRead => "stale read",
+            Self::AttachmentMissing => "attachment missing",
         }
     }
 }

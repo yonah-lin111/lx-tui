@@ -219,6 +219,7 @@ pub fn on_user_shell_begun(
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
+        attachments: Vec::new(),
     });
     target.lx.chat.follow_bottom = true;
     true
