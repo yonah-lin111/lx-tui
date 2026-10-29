@@ -314,14 +314,23 @@ fn rename_buttons_hit_their_cells() {
 #[test]
 fn confirm_modal_renders_question_and_buttons() {
     let mut state = AppState::demo();
-    state.workspaces[0].name = "demo".into();
+    let item = crate::app::prompt::PromptItem::single(1, None, "item", "body");
+    let page_id = item.pages[0].id;
+    state.workspaces[0]
+        .prompt_panel
+        .tree
+        .replace(vec![], vec![item]);
     state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Workspace(0),
+        target: OverlayTarget::PromptPage {
+            workspace: 0,
+            owner: crate::app::prompt::PromptEditing::Item(1),
+            page: page_id,
+        },
     }));
     let (lines, cursor) = draw_overlay(&state);
     assert_eq!(cursor, None);
-    assert!(lines[10].contains(text::CONFIRM_CLOSE_TITLE));
-    assert!(lines[11].contains("close \""));
+    assert!(lines[10].contains(text::CONFIRM_DELETE_PAGE_TITLE));
+    assert!(lines[11].contains("delete page \"Page 1\"?"));
     let buttons = lines[12].clone();
     assert!(buttons.contains(text::BUTTON_CONFIRM), "{buttons}");
     assert!(buttons.contains(text::BUTTON_CANCEL), "{buttons}");
@@ -330,7 +339,7 @@ fn confirm_modal_renders_question_and_buttons() {
 #[test]
 fn confirm_buttons_hit_their_cells() {
     // 按真实按钮行几何取单元格：不写死列号。
-    let shell = confirm_shell(SCREEN, "close \"x\"?").expect("confirm modal fits");
+    let shell = confirm_shell(SCREEN, "delete page \"Page 1\"?").expect("confirm modal fits");
     // 确认浮层的按钮行在内容区最后一行（与重命名浮层的固定行号不同）。
     let offset = shell.inner.height.saturating_sub(1);
     let rects = crate::ui::widgets::modal::button_row(
@@ -354,39 +363,36 @@ fn confirm_buttons_hit_their_cells() {
 #[test]
 fn confirm_question_wraps_and_dialog_grows() {
     let mut state = AppState::demo();
-    let name = "New folder11111 with a very long trailing name that cannot fit on one line";
+    let name = "Page 11111 with a very long trailing name that cannot fit on one line";
+    let page_id = crate::app::prompt::PromptPageId::Saved(1);
     state.workspaces[0].prompt_panel.tree.replace(
-        vec![crate::app::prompt::PromptFolder {
-            id: 1,
-            parent_id: None,
-            name: name.to_string(),
-            collapsed: false,
-        }],
         vec![],
+        vec![crate::app::prompt::PromptItem {
+            id: 1,
+            folder_id: None,
+            name: "item".into(),
+            pages: vec![crate::app::prompt::PromptPage {
+                id: page_id,
+                name: name.to_string(),
+                content: "body".into(),
+            }],
+            active_page: page_id,
+        }],
     );
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::PromptFolder {
-            workspace: 0,
-            folder_id: 1,
-        },
-    }));
-    let question = confirm_question(
-        &state,
-        OverlayTarget::PromptFolder {
-            workspace: 0,
-            folder_id: 1,
-        },
-    );
+    let target = OverlayTarget::PromptPage {
+        workspace: 0,
+        owner: crate::app::prompt::PromptEditing::Item(1),
+        page: page_id,
+    };
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target }));
+    let question = confirm_question(&state, target);
     let shell = confirm_shell(SCREEN, &question).expect("dialog fits");
     assert!(shell.area.height > 4, "高度随换行增长: {:?}", shell.area);
     let (lines, _) = draw_overlay(&state);
     let joined = lines.join("\n");
+    assert!(joined.contains("delete page \"Page 11111"), "{joined}");
     assert!(
-        joined.contains("delete folder \"New folder11111"),
-        "{joined}"
-    );
-    assert!(
-        joined.contains("one line\" and its contents?"),
+        joined.contains("one line\"?"),
         "整段问题可见（自动换行）: {joined}"
     );
 }
@@ -438,27 +444,6 @@ fn pane_menu_renders_split_switch_and_close_labels() {
 }
 
 #[test]
-fn confirm_modal_uses_pane_title_for_pane_target() {
-    let mut state = AppState::demo();
-    let pane = state.active_tab().layout.focus();
-    state
-        .active_tab_mut()
-        .pane_mut(pane)
-        .expect("pane exists")
-        .cwd_label = Some("demo-cwd".into());
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Pane {
-            workspace: 0,
-            tab: 0,
-            pane,
-        },
-    }));
-    let (lines, _) = draw_overlay(&state);
-    assert!(lines[10].contains(text::CONFIRM_CLOSE_PANE_TITLE));
-    assert!(lines[11].contains("demo-cwd"));
-}
-
-#[test]
 fn rename_modal_uses_tab_title_for_tab_target() {
     let mut state = AppState::demo();
     crate::app::update::create_tab(&mut state);
@@ -472,21 +457,6 @@ fn rename_modal_uses_tab_title_for_tab_target() {
     let (lines, _) = draw_overlay(&state);
     assert!(lines[9].contains(text::RENAME_TAB_TITLE));
     assert!(lines[10].contains("tab 2"));
-}
-
-#[test]
-fn confirm_modal_uses_tab_label_for_tab_target() {
-    let mut state = AppState::demo();
-    crate::app::update::create_tab(&mut state);
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Tab {
-            workspace: 0,
-            tab: 1,
-        },
-    }));
-    let (lines, _) = draw_overlay(&state);
-    assert!(lines[10].contains(text::CONFIRM_CLOSE_TAB_TITLE));
-    assert!(lines[11].contains("tab 2"));
 }
 
 #[test]

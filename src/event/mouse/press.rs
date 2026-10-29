@@ -87,8 +87,13 @@ pub(crate) fn handle_mouse_down_left(
                 return;
             }
         }
-        let was_confirm = matches!(state.overlay, Some(Overlay::ConfirmClose(_)));
         let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
+        let menu_item_clicked = if let Some(Overlay::Menu(menu)) = state.overlay.as_ref() {
+            let layout = ui::overlay::menu_layout(state, *screen, menu);
+            ui::widgets::menu::item_at(&layout, mouse.column, mouse.row).is_some()
+        } else {
+            false
+        };
         let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
         let was_new_ws = matches!(
             state.overlay,
@@ -98,10 +103,13 @@ pub(crate) fn handle_mouse_down_left(
             write_to_pane(sessions, pane, &bytes);
             update::reset_pane_scroll(state, pane);
         }
-        if was_confirm || was_menu || was_worktree || was_new_ws {
+        let menu_stays_open = matches!(state.overlay, Some(Overlay::Menu(_)));
+        if (menu_item_clicked && !menu_stays_open) || was_worktree || was_new_ws {
             ensure_workspace_visible(state, view);
+            reveal_active_tab(state, view);
+        } else if !was_menu {
+            reveal_active_tab(state, view);
         }
-        reveal_active_tab(state, view);
         *dirty = true;
         return;
     }

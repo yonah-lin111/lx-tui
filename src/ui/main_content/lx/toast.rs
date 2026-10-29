@@ -199,7 +199,7 @@ fn put(buf: &mut Buffer, x: u16, y: u16, ch: char, style: ratatui::style::Style)
     }
 }
 
-/// 边框语义色：与全局 toast 完全一致（默认强调色 / 警告黄 / 危险红）。
+/// 边框语义色：与全局 toast 完全一致（薰衣草紫 / 琥珀金橙 / 珊瑚玫红，不与主色调 Cyan 重叠）。
 fn border_style(kind: ToastKind) -> ratatui::style::Style {
     crate::ui::toast::border_style(kind)
 }

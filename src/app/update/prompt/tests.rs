@@ -1529,9 +1529,15 @@ fn closing_displayed_workspace_commits_pre_paste_edits_without_placeholder() {
     create_workspace(&mut state);
     assert_eq!(state.prompt_workspace(), 0);
     state.effects.clear();
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Workspace(0),
-    }));
+    crate::app::update::open_workspace_menu(&mut state, 0, (0, 0));
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.selected = menu
+            .commands
+            .iter()
+            .position(|c| *c == MenuCommand::CloseWorkspace)
+            .expect("close command");
+    }
+    crate::app::update::activate_menu(&mut state);
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
     assert_eq!(state.workspaces.len(), 1);
     let content = saved_content(&state);

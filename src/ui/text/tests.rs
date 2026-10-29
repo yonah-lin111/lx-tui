@@ -51,18 +51,16 @@ fn user_visible_labels_are_clean_ascii() {
         MENU_TITLE_PROMPT,
         MENU_TITLE_FOLDER,
         MENU_TITLE_PROMPT_TREE,
-        CONFIRM_DELETE_PROMPT_TITLE,
-        CONFIRM_DELETE_FOLDER_TITLE,
+        CONFIRM_DELETE_PAGE_TITLE,
         RENAME_PROMPT_TITLE,
         RENAME_FOLDER_TITLE,
     ] {
         assert!(!label.is_empty(), "文案不得为空");
         assert!(!label.contains('\u{fffd}'), "文案禁止替换字符: {label}");
     }
-    assert_eq!(confirm_delete_question("draft"), "delete \"draft\"?");
     assert_eq!(
-        confirm_delete_folder_question("ideas"),
-        "delete folder \"ideas\" and its contents?"
+        confirm_delete_page_question("Page 1"),
+        "delete page \"Page 1\"?"
     );
 }
 

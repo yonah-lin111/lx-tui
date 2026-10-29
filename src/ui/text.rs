@@ -393,11 +393,6 @@ pub const RENAME_PLACEHOLDER: &str = "new name";
 /// new workspace 路径输入为空时的输入说明占位。
 pub const NEW_WORKSPACE_PLACEHOLDER: &str = "path to directory";
 pub const RENAME_TAB_TITLE: &str = "Rename tab";
-pub const CONFIRM_CLOSE_TITLE: &str = "Close workspace";
-pub const CONFIRM_CLOSE_TAB_TITLE: &str = "Close tab";
-pub const CONFIRM_CLOSE_PANE_TITLE: &str = "Close pane";
-pub const CONFIRM_DELETE_PROMPT_TITLE: &str = "Delete prompt";
-pub const CONFIRM_DELETE_FOLDER_TITLE: &str = "Delete folder";
 
 /// 信任工作区模态：标题、问题与按钮。
 pub const TRUST_WORKSPACE_TITLE: &str = "Trust workspace";
@@ -446,21 +441,6 @@ pub const BUTTON_CONFIRM_DELETE: &str = "[confirm del ↵]";
 /// 共用同一字符，一致性由 `text::tests` 的回归测试钉住。
 pub const MODAL_CLOSE: &str = "[✕]";
 pub const BUTTON_OPEN: &str = "[open ↵]";
-
-/// 关闭确认问题文案。
-pub fn confirm_close_question(name: &str) -> String {
-    format!("close \"{name}\"?")
-}
-
-/// 删除提示词确认问题文案。
-pub fn confirm_delete_question(name: &str) -> String {
-    format!("delete \"{name}\"?")
-}
-
-/// 删除文件夹确认问题文案：提示级联影响范围。
-pub fn confirm_delete_folder_question(name: &str) -> String {
-    format!("delete folder \"{name}\" and its contents?")
-}
 
 /// 删除提示词页确认问题文案。
 pub fn confirm_delete_page_question(name: &str) -> String {

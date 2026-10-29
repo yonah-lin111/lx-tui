@@ -620,7 +620,11 @@ fn toast_over_prompt_search_hides_hardware_cursor() {
 fn modal_without_input_hides_prompt_hardware_cursor() {
     let mut state = focused_tree_state();
     state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Workspace(0),
+        target: OverlayTarget::PromptPage {
+            workspace: 0,
+            owner: crate::app::prompt::PromptEditing::Item(1),
+            page: crate::app::prompt::PromptPageId::Saved(1),
+        },
     }));
     let (visible, _) = render_cursor(&state);
     assert!(!visible, "模态接管后 prompt 搜索框硬件光标隐藏");

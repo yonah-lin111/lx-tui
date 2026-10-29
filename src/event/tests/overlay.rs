@@ -508,6 +508,113 @@ fn mouse_click_close_tab_menu_item_twice_closes_tab_inline() {
 }
 
 #[test]
+fn hover_in_widened_confirm_region_clears_hover_when_menu_shrinks_back() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/target"));
+    let pane = state.active_tab().layout.focus();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    crate::app::update::open_pane_menu(&mut state, pane, (10, 5));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let (initial_right, switch_idx) = {
+        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+            panic!("pane menu open");
+        };
+        let initial = ui::overlay::menu_layout(&state, geo.screen, menu);
+        let switch_idx = menu
+            .commands
+            .iter()
+            .position(|c| *c == crate::app::overlay::MenuCommand::SwitchToWorkspaceCwd)
+            .expect("switch command");
+        (initial.area.right(), switch_idx)
+    };
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.selected = switch_idx;
+        menu.confirming = true;
+    }
+    state.menu_hover = true;
+    let (wide_right, row0_y) = {
+        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+            panic!("pane menu open");
+        };
+        let wide = ui::overlay::menu_layout(&state, geo.screen, menu);
+        (wide.item_rects[0].right(), wide.item_rects[0].y)
+    };
+    assert!(
+        wide_right > initial_right,
+        "确认态使菜单宽度向右拓宽: initial_right={initial_right}, wide_right={wide_right}"
+    );
+
+    // 鼠标移到第 0 行的拓宽列区（在确认态拓宽框内，但在常规宽度框外）。
+    let col_in_expanded_zone = initial_right;
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, col_in_expanded_zone, row0_y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu remains open");
+    };
+    assert_ne!(menu.selected, switch_idx);
+    assert!(!menu.confirming, "切换菜单项后复位 confirming");
+    assert!(
+        !state.menu_hover,
+        "菜单缩回后鼠标位于新菜单框外，不得残留虚假的 menu_hover 高亮"
+    );
+}
+
+#[test]
+fn first_click_on_confirm_item_does_not_yank_sidebar_scroll_to_active_workspace() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    for _ in 0..15 {
+        crate::app::update::create_workspace(&mut state);
+    }
+    crate::app::update::switch_workspace(&mut state, 0);
+    // 手工把侧栏滚到下方（查看非当前激活的工作区 #15），并打开 #15 的右键菜单。
+    state.workspace_scroll = 10;
+    crate::app::update::open_workspace_menu(&mut state, 15, (5, 10));
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 14));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let close_rect = {
+        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+            panic!("workspace menu open");
+        };
+        *ui::overlay::menu_layout(&state, geo.screen, menu)
+            .item_rects
+            .last()
+            .expect("close item")
+    };
+
+    // 第一次点击 Close：仅进入菜单行内确认态，不得把侧栏滚动条强行拉回 active_workspace(0)。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            close_rect.x + 1,
+            close_rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(
+        state.workspace_scroll, 10,
+        "首次点击进入行内确认态时不得重置侧栏滚动位置"
+    );
+}
+
+#[test]
 fn mouse_leaving_overlay_menu_clears_hover_feedback() {
     let config = Config::default();
     let mut state = demo_terminal();
