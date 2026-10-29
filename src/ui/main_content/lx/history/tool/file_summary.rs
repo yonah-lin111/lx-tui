@@ -1,14 +1,14 @@
 //! 文件工具摘要树体：参数、计数与截断事实各自成节点。
 //!
 //! ```text
-//! ■ Read · dir · 12 files
+//! ■ Read · folder · 12 files
 //!   └─ /project/src
 //!
 //! ■ Search · 3 matches · results truncated
 //!   └─ "package.json|Cargo.toml" in /project
 //! ```
 //!
-//! `read` 的种类与目录条目数在标题右侧（`Read · file` / `Read · dir · 12 files`），
+//! `read` 的种类与目录条目数在标题右侧（`Read · file` / `Read · image` / `Read · folder · 12 files`），
 //! 树体只放路径与执行事实；`search` 的命中数也在标题右侧。
 //!
 //! - 独立字段之间不再用 ` · ` 拼接：每个字段是一个 [`tree::Node`]；
@@ -207,10 +207,11 @@ pub(super) fn title_status(call: &ToolCallView) -> Option<String> {
     }
 }
 
-/// `read` 结果种类：`file` / `dir · 12 files`。
+/// `read` 结果种类：`file` / `image` / `folder · 12 files`。
 fn read_kind_status(summary: &ToolSummary) -> Option<String> {
     match summary.read_kind? {
-        ReadKind::File | ReadKind::Image => Some(text::agent::READ_KIND_FILE.to_string()),
+        ReadKind::File => Some(text::agent::READ_KIND_FILE.to_string()),
+        ReadKind::Image => Some(text::agent::READ_KIND_IMAGE.to_string()),
         ReadKind::Directory => {
             let mut status = text::agent::READ_KIND_DIR.to_string();
             if let Some(count) = summary.total_lines {

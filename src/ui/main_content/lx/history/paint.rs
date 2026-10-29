@@ -344,22 +344,40 @@ fn draw_user_text(
             continue;
         };
         let connector = if ref_line.is_last {
-            "  └─ "
+            crate::ui::text::agent::TREE_LEAF
         } else {
-            "  ├─ "
+            crate::ui::text::agent::TREE_BRANCH
         };
-        grid.put(rect.x, y, connector, Style::default());
-        let label_style = match ref_line.kind {
-            crate::db::chat::MessageAttachmentKind::File => style::user_ref_file(),
-            crate::db::chat::MessageAttachmentKind::Folder => style::user_ref_folder(),
-            crate::db::chat::MessageAttachmentKind::Image => style::user_ref_image(),
+        let (kind_prefix, label_style) = match ref_line.kind {
+            crate::db::chat::MessageAttachmentKind::File => (
+                crate::ui::text::agent::USER_REF_FILE_PREFIX,
+                style::user_ref_file(),
+            ),
+            crate::db::chat::MessageAttachmentKind::Folder => (
+                crate::ui::text::agent::USER_REF_FOLDER_PREFIX,
+                style::user_ref_folder(),
+            ),
+            crate::db::chat::MessageAttachmentKind::Image => (
+                crate::ui::text::agent::USER_REF_IMAGE_PREFIX,
+                style::user_ref_image(),
+            ),
         };
+        let conn_cols = USER_INDENT + 3;
+        let prefix_cols = conn_cols + kind_prefix.len() as u16;
+        grid.put_clipped(rect.x, y, connector, Style::default(), rect.width);
         grid.put_clipped(
-            rect.x.saturating_add(USER_INDENT + 3),
+            rect.x.saturating_add(conn_cols),
+            y,
+            kind_prefix,
+            Style::default(),
+            rect.width.saturating_sub(conn_cols),
+        );
+        grid.put_clipped(
+            rect.x.saturating_add(prefix_cols),
             y,
             &ref_line.label,
             label_style,
-            rect.width.saturating_sub(USER_INDENT + 3),
+            rect.width.saturating_sub(prefix_cols),
         );
     }
 }

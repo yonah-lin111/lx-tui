@@ -66,7 +66,7 @@
 ### 7.1 结构
 
 - `tree.rs` 按**逻辑节点**分配连接符：多行节点（输出 / diff / 计划步骤 / 问答对 / 报告）只在首行画 `├─`/`└─`，节点内部续行画 `│` 或空白；折叠提示是续行，不单独收口。`rows` / `draw` / 点击面 / agent 链接共用同一份 `Layout`。
-- 标题右侧统一承载状态：进程 `Exited 0 · 241ms` / `Running`，`read` 的 `file` / `dir · N files`，`search` 的 `N matches · results truncated`，`plan` 的 `N/M completed`，`wait` 的调用条件，`spawn` 的子 agent 状态。
+- 标题右侧统一承载状态：进程 `Exited 0 · 241ms` / `Running`，`read` 的 `file` / `image` / `folder · N files`，`search` 的 `N matches · results truncated`，`plan` 的 `N/M completed`，`wait` 的调用条件，`spawn` 的子 agent 状态。
 - `read` 树体只显示路径；`edit/write` 路径与 `(+N -N)` 同节点，diff 正文是多行节点；`ask` 直接使用 `Q1: <题干>`（灰色）与 `A1: <答案>`（默认前景色），不显示弹窗短标签 `header`；`Thought` 与 `Subagent report` 也使用首行 `└─`、正文左对齐，`Report:` 标签颜色与报告正文一致。
 - 当前项目路径相对化（对齐 Codex `display_path_for`）：工具卡片中的路径若位于当前项目根目录下，自动剥离项目根前缀显示为相对路径（如 `.worktrees/tool-message-tree`、`src/main.rs`），非当前项目的外部路径保持完整路径。
 - 连续文件工具**不再合并**：每个调用独立卡片（独立标题、独立点击面），块间保留一行空行。
@@ -76,7 +76,7 @@
 
 1. **`write_stdin` 显示本次保存的输出与输入预览**：命令是首节点；`Send input` 的非空输入作为下一节点显示（遵循折叠态灰、展开态默认前景），输出中与输入匹配的单次 TTY 回显会被剔除，避免同一行出现两次。
 2. **`exec_command` 的耗时**：`CommandView.duration_ms` / `ProcessInteractionView.duration_ms` 取自 `wall_time_ms`，重载解析 `wall_time_seconds`；只在非运行态进标题。
-3. **`read` 不再显示行范围**：按用户最新格式，标题只给 `file` / `dir · N files`（兼容 `ReadKind::Image`），路径在树体；目录条目数来自结果体 `total_lines`。
+3. **`read` 不再显示行范围**：按用户最新格式，标题只给 `file` / `image` / `folder · N files`，路径在树体；目录条目数来自结果体 `total_lines`。
 4. **文件摘要展开不设 24 行上限**：摘要字段本身已按 512 字符/字段取样，展开显示全部已保存摘要；`DETAIL_MAX_ROWS` 仅继续服务命令参数取样预算。
 5. **`wait_agent` 的调用条件留在标题右侧**：`2 targets` / `all` / `until done` 用 ` · ` 拼在 `■ Wait agents` 之后，树体只列目标与报告。
 6. **输出单行有 8K 字符取样上限**（超出补 `…`）：这是渲染热路径的有界保护，不是执行截断；`read`/命令的 `output limited`、`search` 的 `results truncated`（标题右侧）、`dropped bytes` 仍独立表达。

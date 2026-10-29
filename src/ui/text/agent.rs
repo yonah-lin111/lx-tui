@@ -96,9 +96,15 @@ pub const TOOL_PARTIAL: &str = "partial";
 pub const TOOL_MATCH_ONE: &str = "match";
 pub const TOOL_MATCH_MANY: &str = "matches";
 
-/// `read` 结果种类（只来自结果体，不按路径猜）：`file` / `dir`。
+/// `read` 结果种类（只来自结果体，不按路径猜）：`file` / `folder` / `image`。
 pub const READ_KIND_FILE: &str = "file";
-pub const READ_KIND_DIR: &str = "dir";
+pub const READ_KIND_DIR: &str = "folder";
+pub const READ_KIND_IMAGE: &str = "image";
+
+/// 用户消息下方引用树分支的类型前缀（冒号后跟引用名）。
+pub const USER_REF_FILE_PREFIX: &str = "File: ";
+pub const USER_REF_FOLDER_PREFIX: &str = "Folder: ";
+pub const USER_REF_IMAGE_PREFIX: &str = "Image: ";
 
 /// 目录读取的条目数：`12 files` / `1 file`。
 pub fn read_dir_count(count: usize) -> String {

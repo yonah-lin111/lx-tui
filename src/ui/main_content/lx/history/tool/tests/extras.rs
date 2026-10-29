@@ -45,7 +45,7 @@ fn read_file_shows_kind_in_title_and_path_in_body() {
     assert!(!detail.contains("1000"), "不显示文件总行数：{detail}");
 }
 
-/// 目录 `read`：标题 `Read · dir · 18 files`，树体只有路径。
+/// 目录 `read`：标题 `Read · folder · 18 files`，树体只有路径。
 #[test]
 fn read_directory_shows_count_in_title_and_path_in_body() {
     let call = read_call(
@@ -63,6 +63,22 @@ fn read_directory_shows_count_in_title_and_path_in_body() {
     let detail = detail_text(&call, 80);
     assert!(detail.contains("/project/src"), "{detail}");
     assert!(!detail.contains("18"), "{detail}");
+}
+
+/// 图片 `read`：标题 `Read · image`，树体显示路径。
+#[test]
+fn read_image_shows_image_kind_in_title_and_path_in_body() {
+    let call = read_call(
+        Some(ReadKind::Image),
+        ToolSummary {
+            path: Some("assets/diagram.png".into()),
+            ..ToolSummary::default()
+        },
+    );
+    let header = header_text(&call, 80);
+    assert!(header.contains(text::agent::VERB_TOOL_READ), "{header}");
+    assert!(header.contains(text::agent::READ_KIND_IMAGE), "{header}");
+    assert!(detail_text(&call, 80).contains("assets/diagram.png"));
 }
 
 /// 旧历史没有 `kind`：标题保持 `Read`，路径仍在树体。
