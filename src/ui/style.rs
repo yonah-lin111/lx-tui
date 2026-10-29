@@ -95,6 +95,27 @@ pub fn overlay_selection() -> Style {
         .bg(Color::Indexed(240))
 }
 
+/// 右键菜单项行内待确认态：深红底（Indexed 160）配亮白字（Indexed 255）加粗，对齐 lx-agent 的 dangerActive。
+pub fn menu_confirm() -> Style {
+    Style::default()
+        .fg(Color::Indexed(255))
+        .bg(Color::Indexed(160))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Toast 提示框三档专属色（边框、顶边标题与右上角 `[✕]` 关闭按钮共用）：
+/// 刻意避开项目主色调 `Cyan`、聊天步骤翡翠绿 `Indexed(42)` 与思考品红 `Indexed(218)`，
+/// 确保无背景色的 Toast 在任何面板/窗格边框旁都层次分明、不撞色。
+pub fn toast_border(kind: crate::app::toast::ToastKind) -> Style {
+    use crate::app::toast::ToastKind;
+    let color = match kind {
+        ToastKind::Default => Color::Indexed(141),
+        ToastKind::Warning => Color::Indexed(214),
+        ToastKind::Danger => Color::Indexed(204),
+    };
+    Style::default().fg(color)
+}
+
 /// 右侧容器顶边框标签页的激活项：深青蓝实心块（Indexed 24）+ 近白字 + 加粗。
 ///
 /// 刻意**不复用** [`selected_item`]：那一套是顶部标签栏的"青底黑字"，

@@ -91,7 +91,7 @@ fn titled_toast_keeps_three_rows_and_fits_title() {
 }
 
 #[test]
-fn toast_paints_overlay_panel_background() {
+fn toast_has_transparent_background_after_clearing_underlying_cells() {
     let mut state = AppState::demo();
     show(&mut state, None);
     let view = view_for(&state);
@@ -105,21 +105,13 @@ fn toast_paints_overlay_panel_background() {
         panic!("draw failed: {error}");
     }
     let buffer = terminal.backend().buffer().clone();
-    assert_eq!(
-        buffer[(area.x, area.y)].bg,
-        ratatui::style::Color::Indexed(236)
-    );
-    assert_eq!(
-        buffer[(area.x + 1, area.y + 1)].bg,
-        ratatui::style::Color::Indexed(236)
-    );
-    // 整块面板不透明：边框、正文与关闭按钮的所有单元格都铺浮层底色。
+    // 移除背景颜色：边框、正文与关闭按钮的所有单元格均保持终端默认透明底色 Color::Reset。
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
             assert_eq!(
                 buffer[(x, y)].bg,
-                ratatui::style::Color::Indexed(236),
-                "toast 单元格 ({x},{y}) 透出底层"
+                ratatui::style::Color::Reset,
+                "toast 单元格 ({x},{y}) 不得铺设背景色"
             );
         }
     }
@@ -232,32 +224,41 @@ fn toast_renders_close_button_and_hit_test() {
     assert_eq!(label, text::MODAL_CLOSE);
 }
 
-/// 三档语义色：default 强调青、warning 黄、danger 红；**边框与标题同色**。
+/// 三档专属边框色：default 薰衣草紫(141)、warning 琥珀金橙(214)、danger 珊瑚玫红(204)；
+/// 边框、标题与关闭按钮同色，且不与项目主色调 Cyan 重叠。
 #[test]
 fn kinds_drive_border_and_title_colors() {
-    assert_eq!(border_style(ToastKind::Default), style::accent());
-    assert_eq!(border_style(ToastKind::Warning).fg, Some(Color::Yellow));
-    assert_eq!(border_style(ToastKind::Danger), style::error());
-
-    // 标题：默认档沿用边框标题样式（青灰），warning/danger 与边框同色。
-    assert_eq!(title_style(ToastKind::Default), style::border_title());
-    assert_eq!(title_style(ToastKind::Warning).fg, Some(Color::Yellow));
-    assert_eq!(title_style(ToastKind::Danger).fg, Some(Color::Red));
+    use ratatui::style::Color;
     assert_eq!(
-        title_style(ToastKind::Warning).fg,
+        border_style(ToastKind::Default).fg,
+        Some(Color::Indexed(141))
+    );
+    assert_eq!(
         border_style(ToastKind::Warning).fg,
-        "warning 的边框与标题同色"
+        Some(Color::Indexed(214))
     );
     assert_eq!(
-        title_style(ToastKind::Danger).fg,
         border_style(ToastKind::Danger).fg,
-        "danger 的边框与标题同色"
+        Some(Color::Indexed(204))
     );
+    for kind in [ToastKind::Default, ToastKind::Warning, ToastKind::Danger] {
+        assert_ne!(
+            border_style(kind).fg,
+            Some(Color::Cyan),
+            "{kind:?} 边框色不得与项目主色调 Cyan 重叠"
+        );
+        assert_eq!(
+            title_style(kind),
+            border_style(kind),
+            "{kind:?} 的边框与标题同色"
+        );
+    }
 }
 
-/// 渲染：warning toast 的边框与标题都落黄色单元格。
+/// 渲染：warning toast 的边框、标题与关闭按钮都落琥珀金橙（Indexed 214）单元格。
 #[test]
-fn warning_toast_paints_yellow_border_and_title() {
+fn warning_toast_paints_amber_border_and_title() {
+    use ratatui::style::Color;
     let mut state = AppState::demo();
     let pane = state.prompt.id();
     update::show_toast(
@@ -289,9 +290,11 @@ fn warning_toast_paints_yellow_border_and_title() {
         })
         .expect("draw");
     let buffer = terminal.backend().buffer();
-    // 顶边框与标题里的字符都应是黄色。
-    let yellow = (area.x..area.right())
-        .filter(|x| buffer[(*x, area.y)].fg == Color::Yellow)
-        .count();
-    assert!(yellow > 0, "warning 的边框/标题变黄");
+    for x in area.x..area.right() {
+        assert_eq!(
+            buffer[(x, area.y)].fg,
+            Color::Indexed(214),
+            "warning 顶边框、标题与关闭按钮均使用琥珀金橙 Indexed(214)"
+        );
+    }
 }

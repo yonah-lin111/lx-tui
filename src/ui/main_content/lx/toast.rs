@@ -79,27 +79,17 @@ pub(crate) fn rect(area: Rect, toast: &Toast) -> Option<Rect> {
 
 /// 绘制 toast 盒；返回绘制出的矩形（供调用方隐藏被覆盖的硬件光标）。
 ///
-/// 先清底再写边框，整块不透明：lx 页的历史正文、代码块底色不会被透出来。
+/// 先清底擦除底层字符（重置为终端默认透明背景，不再填充背景色），再写边框、标题、关闭按钮与正文。
 pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> {
     let box_area = rect(area, toast)?;
     clear::render_buffer(buf, box_area);
-    // 清底后整块铺浮层底色（与全局 toast 同一个 `overlay_panel`）。
-    let base = style::overlay_panel();
-    for y in box_area.top()..box_area.bottom() {
-        for x in box_area.left()..box_area.right() {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_char(' ');
-                cell.set_style(base);
-            }
-        }
-    }
     draw_border(buf, box_area, toast.kind);
     if let Some(title) = toast.title.as_deref() {
         draw_title(buf, box_area, title, toast.kind);
     }
-    // 右上角关闭按钮：与全局 toast 同款 `[✕]`，点击命中走 `close_button_at`。
+    // 右上角关闭按钮：与全局 toast 同款 `[✕]`、同档边框色，点击命中走 `close_button_at`。
     if let Some(button) = crate::ui::widgets::modal::close_button_rect(box_area) {
-        let style = style::accent();
+        let style = border_style(toast.kind);
         for (index, ch) in text::MODAL_CLOSE.chars().enumerate() {
             let x = button
                 .x
@@ -209,7 +199,7 @@ fn put(buf: &mut Buffer, x: u16, y: u16, ch: char, style: ratatui::style::Style)
     }
 }
 
-/// 边框语义色：与全局 toast 完全一致（默认强调色 / 警告黄 / 危险红）。
+/// 边框语义色：与全局 toast 完全一致（薰衣草紫 / 琥珀金橙 / 珊瑚玫红，不与主色调 Cyan 重叠）。
 fn border_style(kind: ToastKind) -> ratatui::style::Style {
     crate::ui::toast::border_style(kind)
 }

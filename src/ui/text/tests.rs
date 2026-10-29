@@ -51,18 +51,16 @@ fn user_visible_labels_are_clean_ascii() {
         MENU_TITLE_PROMPT,
         MENU_TITLE_FOLDER,
         MENU_TITLE_PROMPT_TREE,
-        CONFIRM_DELETE_PROMPT_TITLE,
-        CONFIRM_DELETE_FOLDER_TITLE,
+        CONFIRM_DELETE_PAGE_TITLE,
         RENAME_PROMPT_TITLE,
         RENAME_FOLDER_TITLE,
     ] {
         assert!(!label.is_empty(), "文案不得为空");
         assert!(!label.contains('\u{fffd}'), "文案禁止替换字符: {label}");
     }
-    assert_eq!(confirm_delete_question("draft"), "delete \"draft\"?");
     assert_eq!(
-        confirm_delete_folder_question("ideas"),
-        "delete folder \"ideas\" and its contents?"
+        confirm_delete_page_question("Page 1"),
+        "delete page \"Page 1\"?"
     );
 }
 
@@ -126,22 +124,6 @@ fn block_command_text_covers_all_commands() {
 }
 
 #[test]
-fn confirm_switch_cwd_question_wraps_path_in_quotes() {
-    assert_eq!(
-        confirm_switch_cwd_question("/tmp/project"),
-        "switch cwd to \"/tmp/project\"?"
-    );
-}
-
-#[test]
-fn confirm_sync_ws_cwd_question_keeps_full_path() {
-    assert_eq!(
-        confirm_sync_ws_cwd_question("/tmp/project"),
-        "switch workspace path to \"/tmp/project\"?"
-    );
-}
-
-#[test]
 fn wrap_breaks_at_spaces_within_display_width() {
     assert_eq!(
         wrap("delete folder \"New folder\" and its contents?", 38),
@@ -164,8 +146,16 @@ fn workspace_menu_copy_is_ws_abbreviated_english() {
     assert_eq!(MENU_OPEN_PROMPT, "Open prompt");
     assert_eq!(MENU_SWITCH_TO_WORKSPACE_CWD, "Switch to ws path");
     assert_eq!(MENU_SYNC_WS_TO_TERMINAL_CWD, "Sync ws to terminal path");
-    assert_eq!(CONFIRM_SWITCH_CWD_TITLE, "Switch to ws path");
-    assert_eq!(CONFIRM_SYNC_WS_CWD_TITLE, "Sync ws to terminal path");
+    assert_eq!(MENU_CONFIRM_CLOSE, "Confirm close");
+    assert_eq!(MENU_CONFIRM_DELETE, "Confirm delete");
+    assert_eq!(
+        MENU_CONFIRM_SWITCH_TO_WORKSPACE_CWD,
+        "Confirm switch to ws path"
+    );
+    assert_eq!(
+        MENU_CONFIRM_SYNC_WS_TO_TERMINAL_CWD,
+        "Confirm sync ws to terminal path"
+    );
 }
 
 #[test]

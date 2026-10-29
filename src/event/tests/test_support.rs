@@ -150,26 +150,6 @@ pub(crate) fn right_tab_rect(geo: &Geometry, tab: RightTab) -> Rect {
         .expect("right tab visible")
 }
 
-/// 切换路径确认浮层的确认按钮矩形。
-pub(crate) fn confirm_switch_button(
-    state: &mut AppState,
-    path: &str,
-    confirm: bool,
-) -> (Rect, Geometry) {
-    let config = Config::default();
-    let geo = geometry(state, &config, Rect::new(0, 0, 120, 30));
-    let shell = ui::overlay::confirm_switch_cwd_shell(geo.screen, std::path::Path::new(path))
-        .expect("dialog fits");
-    let buttons = ui::widgets::modal::button_row(
-        shell.inner,
-        &[ui::text::BUTTON_CONFIRM, ui::text::BUTTON_CANCEL],
-        2,
-        1,
-    );
-    let index = usize::from(!confirm);
-    (buttons[index], geo)
-}
-
 /// 目标窗格内容区矩形。
 pub(crate) fn pane_inner(geo: &Geometry, pane: PaneId) -> Rect {
     let (_, rect) = geo

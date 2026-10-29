@@ -18,14 +18,14 @@ pub fn open_trust_dialog(state: &mut AppState, path: PathBuf, trigger: TrustTrig
     state.overlay = Some(Overlay::TrustWorkspace(TrustWorkspace { path, trigger }));
 }
 
-/// 信任通过：执行触发场景的续作（新建工作区、打开 worktree 或进入同步确认）。
+/// 信任通过：执行触发场景的续作（新建工作区、打开 worktree 或直接同步工作区路径）。
 pub fn resume_trust(state: &mut AppState, trigger: TrustTrigger) {
     match trigger {
         TrustTrigger::CreateWorkspace { cwd } => {
             super::create_workspace_with_cwd(state, Some(cwd));
         }
         TrustTrigger::SyncWorkspaceCwd { workspace, pane } => {
-            super::open_confirm_sync_workspace_cwd(state, workspace, pane);
+            super::sync_workspace_cwd(state, workspace, pane);
         }
         TrustTrigger::OpenWorktree {
             entry,

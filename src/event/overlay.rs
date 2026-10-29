@@ -70,7 +70,7 @@ pub(crate) fn handle_overlay_click(
             match ui::widgets::menu::item_at(&layout, column, row) {
                 Some(index) => {
                     update::set_menu_selection(state, index);
-                    update::activate_menu(state);
+                    return update::activate_menu(state);
                 }
                 // 点击菜单内部空白保持打开；仅点击菜单之外关闭。
                 None => {
@@ -130,48 +130,6 @@ pub(crate) fn handle_overlay_click(
         Some(Overlay::ConfirmClose(confirm)) => {
             let question = ui::overlay::confirm_question(state, confirm.target);
             let Some(shell) = ui::overlay::confirm_shell(screen, &question) else {
-                update::close_overlay(state);
-                return None;
-            };
-            if modal_dismissed(state, &shell, column, row) {
-                return None;
-            }
-            match ui::overlay::confirm_button_at(&shell, column, row) {
-                Some(ui::overlay::ConfirmButton::Confirm) => {
-                    update::apply_overlay_key(state, OverlayKey::Enter)
-                }
-                Some(ui::overlay::ConfirmButton::Cancel) => {
-                    update::close_overlay(state);
-                    None
-                }
-                // 内部空白：保持打开。
-                None => None,
-            }
-        }
-        Some(Overlay::ConfirmSwitchCwd(confirm)) => {
-            let path = confirm.path.clone();
-            let Some(shell) = ui::overlay::confirm_switch_cwd_shell(screen, &path) else {
-                update::close_overlay(state);
-                return None;
-            };
-            if modal_dismissed(state, &shell, column, row) {
-                return None;
-            }
-            match ui::overlay::confirm_button_at(&shell, column, row) {
-                Some(ui::overlay::ConfirmButton::Confirm) => {
-                    update::apply_overlay_key(state, OverlayKey::Enter)
-                }
-                Some(ui::overlay::ConfirmButton::Cancel) => {
-                    update::close_overlay(state);
-                    None
-                }
-                // 内部空白：保持打开。
-                None => None,
-            }
-        }
-        Some(Overlay::ConfirmSyncWorkspaceCwd(confirm)) => {
-            let path = confirm.path.clone();
-            let Some(shell) = ui::overlay::confirm_sync_workspace_cwd_shell(screen, &path) else {
                 update::close_overlay(state);
                 return None;
             };

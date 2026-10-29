@@ -58,6 +58,17 @@ pub(crate) fn handle_mouse_moved(
                 if update::set_menu_selection(state, index) {
                     *dirty = true;
                 }
+                // 若切换条目复位了 confirming 导致菜单宽度收缩，需重新校验收缩后的布局
+                // 是否仍包含鼠标位置；若菜单已从指针下方缩走，立即清除悬停高亮。
+                if let Some(Overlay::Menu(updated)) = state.overlay.as_ref() {
+                    let updated_layout = ui::overlay::menu_layout(state, *screen, updated);
+                    if ui::widgets::menu::item_at(&updated_layout, mouse.column, mouse.row)
+                        .is_none()
+                        && update::clear_menu_hover(state)
+                    {
+                        *dirty = true;
+                    }
+                }
             } else if !layout.area.contains((mouse.column, mouse.row).into())
                 && update::clear_menu_hover(state)
             {

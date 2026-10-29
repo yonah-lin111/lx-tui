@@ -15,13 +15,10 @@ use super::interaction::show_toast;
 use super::menu::{activate_menu, close_overlay, move_menu_selection};
 use super::prompt::{
     activate_page_menu_row, apply_new_node_key, apply_save_draft_key, commit_prompt_rename,
-    confirm_delete_page, delete_prompt_folder, delete_prompt_item,
+    confirm_delete_page,
 };
 use super::trust::apply_trust_decision;
-use super::workspace::{
-    close_pane, close_tab, close_workspace, confirm_switch_cwd, confirm_sync_workspace_cwd,
-    create_workspace_with_cwd, parse_workspace_path,
-};
+use super::workspace::{create_workspace_with_cwd, parse_workspace_path};
 use super::worktree::apply_worktree_open_key;
 
 /// 浮层按键分派；输入层已按浮层种类过滤。
@@ -167,10 +164,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             None
         }
         OverlayKey::Enter => match state.overlay.as_ref().map(Overlay::kind) {
-            Some(OverlayKind::Menu) => {
-                activate_menu(state);
-                None
-            }
+            Some(OverlayKind::Menu) => activate_menu(state),
             Some(OverlayKind::Rename) => {
                 commit_rename(state);
                 None
@@ -185,11 +179,6 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             }
             Some(OverlayKind::PageMenu) => {
                 activate_page_menu_row(state);
-                None
-            }
-            Some(OverlayKind::ConfirmSwitchCwd) => confirm_switch_cwd(state),
-            Some(OverlayKind::ConfirmSyncWorkspaceCwd) => {
-                confirm_sync_workspace_cwd(state);
                 None
             }
             Some(
@@ -348,35 +337,17 @@ fn commit_rename(state: &mut AppState) {
     state.overlay = None;
 }
 
-/// 确认关闭目标：工作区、标签或窗格；工作区与标签都至少保留一个。
+/// 确认删除非空提示词页（工作区、标签、窗格与提示词树节点的关闭/删除已全部由右键菜单行内确认执行）。
 fn confirm_close(state: &mut AppState) {
     let Some(Overlay::ConfirmClose(confirm)) = state.overlay.take() else {
         return;
     };
-    match confirm.target {
-        OverlayTarget::Workspace(target) => close_workspace(state, target),
-        OverlayTarget::Tab { workspace, tab } => close_tab(state, workspace, tab),
-        OverlayTarget::Pane {
-            workspace,
-            tab,
-            pane,
-        } => close_pane(state, workspace, tab, pane),
-        OverlayTarget::PromptFolder {
-            workspace,
-            folder_id,
-        } => delete_prompt_folder(state, workspace, folder_id),
-        OverlayTarget::PromptItem { workspace, item_id } => {
-            delete_prompt_item(state, workspace, item_id);
-        }
-        OverlayTarget::PromptPage {
-            workspace,
-            owner,
-            page,
-        } => {
-            confirm_delete_page(state, workspace, owner, page);
-        }
-        OverlayTarget::TempPrompt { .. } => {}
-        OverlayTarget::PromptTree { .. } => {}
-        OverlayTarget::WorkspaceList => {}
+    if let OverlayTarget::PromptPage {
+        workspace,
+        owner,
+        page,
+    } = confirm.target
+    {
+        confirm_delete_page(state, workspace, owner, page);
     }
 }

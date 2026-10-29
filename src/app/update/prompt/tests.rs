@@ -334,6 +334,7 @@ fn item_menu_lists_commands_and_dispatches_copy_delete() {
         },
         commands: vec![MenuCommand::CopyPromptContent],
         selected: 0,
+        confirming: false,
     }));
     crate::app::update::activate_menu(&mut state);
     assert!(state.effects.iter().any(|effect| matches!(
@@ -341,7 +342,7 @@ fn item_menu_lists_commands_and_dispatches_copy_delete() {
         Effect::CopyToClipboard { text, .. } if text == "nested content"
     )));
 
-    // 删除命令 → 确认浮层；确认后级联删除。
+    // 删除命令 → 第一次触发进入菜单行内待确认态，第二次触发直接删除。
     state.overlay = Some(Overlay::Menu(crate::app::overlay::Menu {
         anchor: (5, 5),
         target: OverlayTarget::PromptItem {
@@ -350,10 +351,17 @@ fn item_menu_lists_commands_and_dispatches_copy_delete() {
         },
         commands: vec![MenuCommand::DeletePrompt],
         selected: 0,
+        confirming: false,
     }));
     crate::app::update::activate_menu(&mut state);
-    assert!(matches!(state.overlay, Some(Overlay::ConfirmClose(_))));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu stays open in inline confirm state");
+    };
+    assert!(menu.confirming);
+    assert!(state.workspaces[0].prompt_panel.tree.item(12).is_some());
+
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    assert!(state.overlay.is_none());
     assert!(state.workspaces[0].prompt_panel.tree.item(12).is_none());
     assert!(
         state
@@ -389,6 +397,7 @@ fn background_and_folder_commands_queue_creation_effects() {
         target: OverlayTarget::PromptTree { workspace: 0 },
         commands: vec![MenuCommand::NewPrompt, MenuCommand::NewFolder],
         selected: 0,
+        confirming: false,
     }));
     crate::app::update::activate_menu(&mut state);
     // 菜单打开命名浮层（提示词）：输入名称后回车登记创建效应。
@@ -416,6 +425,7 @@ fn background_and_folder_commands_queue_creation_effects() {
         },
         commands: vec![MenuCommand::NewFolder],
         selected: 0,
+        confirming: false,
     }));
     crate::app::update::activate_menu(&mut state);
     // 菜单打开命名浮层：输入名称后回车登记创建效应。
@@ -985,6 +995,7 @@ fn temp_menu_lists_commands_and_deletes_immediately() {
         },
         commands: vec![MenuCommand::CopyPromptContent],
         selected: 0,
+        confirming: false,
     }));
     crate::app::update::activate_menu(&mut state);
     assert!(state.effects.iter().any(|effect| matches!(
@@ -1001,6 +1012,7 @@ fn temp_menu_lists_commands_and_deletes_immediately() {
         },
         commands: vec![MenuCommand::DeleteTemp],
         selected: 0,
+        confirming: false,
     }));
     crate::app::update::activate_menu(&mut state);
     assert!(state.overlay.is_none(), "删除不经确认浮层");
@@ -1517,9 +1529,15 @@ fn closing_displayed_workspace_commits_pre_paste_edits_without_placeholder() {
     create_workspace(&mut state);
     assert_eq!(state.prompt_workspace(), 0);
     state.effects.clear();
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Workspace(0),
-    }));
+    crate::app::update::open_workspace_menu(&mut state, 0, (0, 0));
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.selected = menu
+            .commands
+            .iter()
+            .position(|c| *c == MenuCommand::CloseWorkspace)
+            .expect("close command");
+    }
+    crate::app::update::activate_menu(&mut state);
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
     assert_eq!(state.workspaces.len(), 1);
     let content = saved_content(&state);

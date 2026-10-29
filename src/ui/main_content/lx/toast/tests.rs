@@ -77,9 +77,9 @@ fn box_is_centered_below_the_top_edge() {
     assert_eq!(rect.x, area.x + (area.width - rect.width) / 2);
 }
 
-/// 绘制：整块铺浮层底色（不透明）、边框取语义色、`[✕]` 在右上角。
+/// 绘制：移除背景色（保持默认透明底色 Color::Reset）、边框与 `[✕]` 取专属语义色。
 #[test]
-fn draw_paints_opaque_panel_and_close_button() {
+fn draw_clears_background_and_paints_dedicated_border_and_close_button() {
     let area = area(40, 10);
     let toast = toast(
         ToastKind::Danger,
@@ -97,23 +97,27 @@ fn draw_paints_opaque_panel_and_close_button() {
         for x in box_area.left()..box_area.right() {
             assert_eq!(
                 buffer[(x, y)].bg,
-                ratatui::style::Color::Indexed(236),
-                "toast 单元格 ({x},{y}) 透出底层"
+                ratatui::style::Color::Reset,
+                "toast 单元格 ({x},{y}) 不得铺设背景色"
             );
         }
     }
-    // 边框红色（danger）。
+    // 边框珊瑚玫红（danger = Indexed 204）。
     assert_eq!(
         Some(buffer[(box_area.x, box_area.y)].fg),
-        crate::ui::style::error().fg
+        crate::ui::style::toast_border(ToastKind::Danger).fg
     );
-    // 关闭按钮在右上角。
+    // 关闭按钮在右上角且与边框同色。
     let close = crate::ui::widgets::modal::close_button_rect(box_area).expect("button");
     assert!(close_button_at(box_area, close.x, close.y));
     let label: String = (close.x..close.right())
         .map(|x| buffer[(x, close.y)].symbol())
         .collect();
     assert_eq!(label, text::MODAL_CLOSE);
+    assert_eq!(
+        Some(buffer[(close.x, close.y)].fg),
+        crate::ui::style::toast_border(ToastKind::Danger).fg
+    );
 }
 
 /// 三档语义色与全局 toast 完全一致（复用同一套样式函数）。

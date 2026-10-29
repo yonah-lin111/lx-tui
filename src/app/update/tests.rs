@@ -1021,17 +1021,31 @@ fn activate_menu_rename_opens_prefilled_input() {
 }
 
 #[test]
-fn activate_menu_close_opens_confirmation() {
+fn activate_menu_close_arms_inline_confirm_and_second_activate_closes() {
     let mut state = AppState::demo();
     create_workspace(&mut state);
     open_workspace_menu(&mut state, 1, (0, 0));
     select_menu_command(&mut state, MenuCommand::CloseWorkspace);
     activate_menu(&mut state);
-    assert_eq!(
-        state.overlay.as_ref().map(Overlay::kind),
-        Some(OverlayKind::ConfirmClose)
-    );
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu should stay open in inline confirm state");
+    };
+    assert!(menu.confirming);
     assert_eq!(state.workspaces.len(), 2);
+
+    // 切换到其他菜单项时自动复位 confirming。
+    move_menu_selection(&mut state, -1);
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu still open");
+    };
+    assert!(!menu.confirming);
+
+    // 重新选中 Close：第一次触发进入确认态，第二次触发真正关闭工作区。
+    select_menu_command(&mut state, MenuCommand::CloseWorkspace);
+    activate_menu(&mut state);
+    activate_menu(&mut state);
+    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces.len(), 1);
 }
 
 #[test]
@@ -1055,12 +1069,13 @@ fn overlay_esc_closes_and_enter_dispatches() {
     open_workspace_menu(&mut state, 0, (0, 0));
     select_menu_command(&mut state, MenuCommand::CloseWorkspace);
     apply_overlay_key(&mut state, OverlayKey::Enter);
-    assert_eq!(
-        state.overlay.as_ref().map(Overlay::kind),
-        Some(OverlayKind::ConfirmClose)
-    );
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu stays open for inline confirmation");
+    };
+    assert!(menu.confirming);
     apply_overlay_key(&mut state, OverlayKey::Esc);
     assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces.len(), 2);
 }
 
 #[test]
@@ -1108,32 +1123,36 @@ fn rename_overlay_rejects_empty_name() {
 }
 
 #[test]
-fn confirm_close_removes_workspace_and_keeps_active_identity() {
+fn inline_confirm_close_removes_workspace_and_keeps_active_identity() {
     let mut state = AppState::demo();
     create_workspace(&mut state);
     create_workspace(&mut state);
     let active_name = state.active_workspace().name.clone();
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Workspace(0),
-    }));
+    open_workspace_menu(&mut state, 0, (0, 0));
+    select_menu_command(&mut state, MenuCommand::CloseWorkspace);
+    activate_menu(&mut state);
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(state.workspaces.len(), 2);
     assert_eq!(state.active_workspace().name, active_name);
     assert_eq!(state.active_workspace, 1);
 
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Workspace(1),
-    }));
+    open_workspace_menu(&mut state, 1, (0, 0));
+    select_menu_command(&mut state, MenuCommand::CloseWorkspace);
+    activate_menu(&mut state);
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(state.workspaces.len(), 1);
     assert_eq!(state.active_workspace, 0);
 }
 
 #[test]
-fn confirm_close_refuses_last_workspace() {
+fn close_workspace_refuses_last_workspace() {
     let mut state = AppState::demo();
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor: (0, 0),
         target: OverlayTarget::Workspace(0),
+        commands: vec![MenuCommand::CloseWorkspace],
+        selected: 0,
+        confirming: true,
     }));
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(state.workspaces.len(), 1);
@@ -1356,9 +1375,9 @@ fn close_pinned_workspace_releases_pin() {
     toggle_prompt_pin(&mut state);
     assert_eq!(state.prompt_pinned, Some(1));
 
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Workspace(1),
-    }));
+    open_workspace_menu(&mut state, 1, (0, 0));
+    select_menu_command(&mut state, MenuCommand::CloseWorkspace);
+    activate_menu(&mut state);
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(state.workspaces.len(), 1);
     assert_eq!(state.prompt_pinned, None, "被钉工作区关闭即释放");
@@ -1375,9 +1394,9 @@ fn close_workspace_before_pin_remaps_pin_index() {
     toggle_prompt_pin(&mut state);
     assert_eq!(state.prompt_pinned, Some(2));
 
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Workspace(1),
-    }));
+    open_workspace_menu(&mut state, 1, (0, 0));
+    select_menu_command(&mut state, MenuCommand::CloseWorkspace);
+    activate_menu(&mut state);
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(state.prompt_pinned, Some(1), "钉住索引随前移重映射");
     assert_eq!(state.prompt_workspace(), 1);
@@ -1861,40 +1880,38 @@ fn rename_tab_overlay_commits_custom_name() {
 }
 
 #[test]
-fn confirm_close_tab_removes_and_keeps_active_identity() {
+fn inline_confirm_close_tab_removes_and_keeps_active_identity() {
     let mut state = AppState::demo();
     create_tab(&mut state);
     create_tab(&mut state);
     assert_eq!(state.active_workspace().active_tab, 2);
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Tab {
-            workspace: 0,
-            tab: 0,
-        },
-    }));
+    open_tab_menu(&mut state, 0, (0, 0));
+    select_menu_command(&mut state, MenuCommand::CloseTab);
+    activate_menu(&mut state);
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(state.active_workspace().tabs.len(), 2);
     assert_eq!(state.active_workspace().active_tab, 1);
 
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Tab {
-            workspace: 0,
-            tab: 1,
-        },
-    }));
+    open_tab_menu(&mut state, 1, (0, 0));
+    select_menu_command(&mut state, MenuCommand::CloseTab);
+    activate_menu(&mut state);
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(state.active_workspace().tabs.len(), 1);
     assert_eq!(state.active_workspace().active_tab, 0);
 }
 
 #[test]
-fn confirm_close_refuses_last_tab() {
+fn close_tab_refuses_last_tab() {
     let mut state = AppState::demo();
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor: (0, 0),
         target: OverlayTarget::Tab {
             workspace: 0,
             tab: 0,
         },
+        commands: vec![MenuCommand::CloseTab],
+        selected: 0,
+        confirming: true,
     }));
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(state.active_workspace().tabs.len(), 1);
@@ -2030,24 +2047,21 @@ fn activate_menu_switch_toggles_only_target_pane() {
 }
 
 #[test]
-fn activate_menu_close_pane_opens_confirmation() {
+fn activate_menu_close_pane_arms_inline_confirm_then_closes_pane() {
     let (mut state, _, second) = demo_two_panes();
     open_pane_menu(&mut state, second, (0, 0));
     select_menu_command(&mut state, MenuCommand::ClosePane);
     activate_menu(&mut state);
 
-    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
-        panic!("confirm close overlay expected");
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu stays open for inline confirmation");
     };
-    assert_eq!(
-        confirm.target,
-        OverlayTarget::Pane {
-            workspace: 0,
-            tab: 0,
-            pane: second
-        }
-    );
+    assert!(menu.confirming);
     assert_eq!(state.active_tab().layout.pane_ids().len(), 2);
+
+    activate_menu(&mut state);
+    assert!(state.overlay.is_none());
+    assert_eq!(state.active_tab().layout.pane_ids().len(), 1);
 }
 
 #[test]
@@ -2147,16 +2161,12 @@ fn open_pane_menu_hides_copy_path_when_both_pane_and_ws_cwd_are_none() {
 }
 
 #[test]
-fn confirm_close_pane_removes_and_focuses_sibling() {
+fn inline_confirm_close_pane_removes_and_focuses_sibling() {
     let (mut state, first, second) = demo_two_panes();
     assert_eq!(state.active_tab().layout.focus(), second);
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Pane {
-            workspace: 0,
-            tab: 0,
-            pane: second,
-        },
-    }));
+    open_pane_menu(&mut state, second, (0, 0));
+    select_menu_command(&mut state, MenuCommand::ClosePane);
+    activate_menu(&mut state);
     apply_overlay_key(&mut state, OverlayKey::Enter);
 
     assert!(state.overlay.is_none());
@@ -2166,15 +2176,19 @@ fn confirm_close_pane_removes_and_focuses_sibling() {
 }
 
 #[test]
-fn confirm_close_pane_refuses_last_pane() {
+fn close_pane_refuses_last_pane() {
     let mut state = AppState::demo();
     let only = state.active_tab().layout.focus();
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor: (0, 0),
         target: OverlayTarget::Pane {
             workspace: 0,
             tab: 0,
             pane: only,
         },
+        commands: vec![MenuCommand::ClosePane],
+        selected: 0,
+        confirming: true,
     }));
     apply_overlay_key(&mut state, OverlayKey::Enter);
 
@@ -2183,7 +2197,7 @@ fn confirm_close_pane_refuses_last_pane() {
 }
 
 #[test]
-fn confirm_close_pane_clears_transient_state_for_removed_pane() {
+fn inline_confirm_close_pane_clears_transient_state_for_removed_pane() {
     let (mut state, _, second) = demo_two_panes();
     state.terminal_selection = Some(second);
     state.terminal_scroll_drag = Some((second, 3));
@@ -2194,13 +2208,9 @@ fn confirm_close_pane_clears_transient_state_for_removed_pane() {
         inner: Rect::new(0, 0, 10, 5),
         next_at: Instant::now(),
     });
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Pane {
-            workspace: 0,
-            tab: 0,
-            pane: second,
-        },
-    }));
+    open_pane_menu(&mut state, second, (0, 0));
+    select_menu_command(&mut state, MenuCommand::ClosePane);
+    activate_menu(&mut state);
     apply_overlay_key(&mut state, OverlayKey::Enter);
 
     assert!(state.terminal_selection.is_none());
@@ -2341,20 +2351,17 @@ fn activate_menu_open_prompt_from_pane_menu_binds_pane_cwd() {
 }
 
 #[test]
-fn switch_to_ws_path_opens_confirm_and_returns_cd_command() {
+fn switch_to_ws_path_arms_inline_confirm_and_returns_cd_command_on_second_activate() {
     let (mut state, _, pane) = demo_two_panes();
     state.workspaces[0].cwd = Some(PathBuf::from("/tmp/ws path"));
     open_pane_menu(&mut state, pane, (0, 0));
     select_menu_command(&mut state, MenuCommand::SwitchToWorkspaceCwd);
-    activate_menu(&mut state);
+    assert_eq!(activate_menu(&mut state), None);
 
-    let Some(Overlay::ConfirmSwitchCwd(confirm)) = state.overlay.as_ref() else {
-        panic!("confirm switch cwd overlay expected");
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu stays open in inline confirm state");
     };
-    assert_eq!(confirm.workspace, 0);
-    assert_eq!(confirm.tab, 0);
-    assert_eq!(confirm.pane, pane);
-    assert_eq!(confirm.path, PathBuf::from("/tmp/ws path"));
+    assert!(menu.confirming);
 
     let action = apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(action, Some((pane, b"cd \"/tmp/ws path\"\n".to_vec())));
@@ -2364,12 +2371,10 @@ fn switch_to_ws_path_opens_confirm_and_returns_cd_command() {
 #[test]
 fn switch_to_ws_path_cancel_returns_no_command() {
     let (mut state, _, pane) = demo_two_panes();
-    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
-        workspace: 0,
-        tab: 0,
-        pane,
-        path: PathBuf::from("/tmp/ws"),
-    }));
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/ws"));
+    open_pane_menu(&mut state, pane, (0, 0));
+    select_menu_command(&mut state, MenuCommand::SwitchToWorkspaceCwd);
+    assert_eq!(activate_menu(&mut state), None);
 
     assert_eq!(apply_overlay_key(&mut state, OverlayKey::Esc), None);
     assert!(state.overlay.is_none());
@@ -2378,12 +2383,10 @@ fn switch_to_ws_path_cancel_returns_no_command() {
 #[test]
 fn switch_cwd_command_escapes_shell_specials() {
     let (mut state, _, pane) = demo_two_panes();
-    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
-        workspace: 0,
-        tab: 0,
-        pane,
-        path: PathBuf::from("/tmp/a\"b$c\\d`e"),
-    }));
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/a\"b$c\\d`e"));
+    open_pane_menu(&mut state, pane, (0, 0));
+    select_menu_command(&mut state, MenuCommand::SwitchToWorkspaceCwd);
+    assert_eq!(activate_menu(&mut state), None);
 
     let Some((target, bytes)) = apply_overlay_key(&mut state, OverlayKey::Enter) else {
         panic!("cd command expected");
@@ -2396,12 +2399,18 @@ fn switch_cwd_command_escapes_shell_specials() {
 #[test]
 fn switch_cwd_confirm_with_missing_pane_returns_none() {
     let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/ws"));
     let pane = state.active_tab().layout.focus();
-    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
-        workspace: 0,
-        tab: 9,
-        pane,
-        path: PathBuf::from("/tmp/ws"),
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor: (0, 0),
+        target: OverlayTarget::Pane {
+            workspace: 0,
+            tab: 9,
+            pane,
+        },
+        commands: vec![MenuCommand::SwitchToWorkspaceCwd],
+        selected: 0,
+        confirming: true,
     }));
 
     assert_eq!(apply_overlay_key(&mut state, OverlayKey::Enter), None);
@@ -2476,7 +2485,7 @@ fn open_pane_menu_hides_sync_ws_when_cwd_matches_or_missing_or_lx() {
 }
 
 #[test]
-fn sync_ws_path_opens_confirm_and_updates_all_state_on_enter() {
+fn sync_ws_path_arms_inline_confirm_and_updates_all_state_after_trust() {
     let (mut state, _, pane) = demo_two_panes();
     state.workspaces[0].cwd = Some(PathBuf::from("/tmp/old-ws"));
     state.workspaces[0].name = "old-ws".to_string();
@@ -2496,8 +2505,17 @@ fn sync_ws_path_opens_confirm_and_updates_all_state_on_enter() {
 
     open_pane_menu(&mut state, pane, (0, 0));
     select_menu_command(&mut state, MenuCommand::SyncWorkspaceToTerminalCwd);
+    // 第一次触发：菜单保持打开并进入行内确认态，尚未发送 CheckTrust。
     activate_menu(&mut state);
-    // 同步触发前先做信任检查：未信任会弹信任浮层，此处直接以已信任结果续作。
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu stays open for inline confirmation");
+    };
+    assert!(menu.confirming);
+    assert!(state.effects.is_empty());
+
+    // 第二次触发：关闭菜单并发送信任检查，信任通过后直接完成同步。
+    activate_menu(&mut state);
+    assert!(state.overlay.is_none());
     let checked = state
         .effects
         .iter()
@@ -2513,15 +2531,6 @@ fn sync_ws_path_opens_confirm_and_updates_all_state_on_enter() {
     assert_eq!(checked.0, PathBuf::from("/tmp/new-term"));
     assert!(checked.1.is_none(), "同步路径的仓库归属由事件层后台解析");
     resume_trust(&mut state, checked.2);
-
-    let Some(Overlay::ConfirmSyncWorkspaceCwd(confirm)) = state.overlay.as_ref() else {
-        panic!("confirm sync ws cwd overlay expected");
-    };
-    assert_eq!(confirm.workspace, 0);
-    assert_eq!(confirm.pane, pane);
-    assert_eq!(confirm.path, PathBuf::from("/tmp/new-term"));
-
-    assert_eq!(apply_overlay_key(&mut state, OverlayKey::Enter), None);
     assert!(state.overlay.is_none());
 
     let ws = &state.workspaces[0];
@@ -2538,14 +2547,11 @@ fn sync_ws_path_preserves_manual_name() {
     state.workspaces[0].cwd = Some(PathBuf::from("/tmp/old-ws"));
     state.workspaces[0].name = "MyCustomWorkspace".to_string();
     state.workspaces[0].name_is_manual = true;
+    let pane_state = state.pane_mut_anywhere(pane).expect("pane exists");
+    pane_state.view = PaneView::Terminal;
+    pane_state.cwd = Some(PathBuf::from("/tmp/new-term"));
 
-    state.overlay = Some(Overlay::ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd {
-        workspace: 0,
-        pane,
-        path: PathBuf::from("/tmp/new-term"),
-    }));
-
-    apply_overlay_key(&mut state, OverlayKey::Enter);
+    sync_workspace_cwd(&mut state, 0, pane);
     let ws = &state.workspaces[0];
     assert_eq!(ws.cwd, Some(PathBuf::from("/tmp/new-term")));
     assert_eq!(ws.name, "MyCustomWorkspace");
@@ -2555,12 +2561,13 @@ fn sync_ws_path_preserves_manual_name() {
 fn sync_ws_path_cancel_escapes_without_changes() {
     let (mut state, _, pane) = demo_two_panes();
     state.workspaces[0].cwd = Some(PathBuf::from("/tmp/old-ws"));
-    state.overlay = Some(Overlay::ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd {
-        workspace: 0,
-        pane,
-        path: PathBuf::from("/tmp/new-term"),
-    }));
+    let pane_state = state.pane_mut_anywhere(pane).expect("pane exists");
+    pane_state.view = PaneView::Terminal;
+    pane_state.cwd = Some(PathBuf::from("/tmp/new-term"));
 
+    open_pane_menu(&mut state, pane, (0, 0));
+    select_menu_command(&mut state, MenuCommand::SyncWorkspaceToTerminalCwd);
+    activate_menu(&mut state);
     assert_eq!(apply_overlay_key(&mut state, OverlayKey::Esc), None);
     assert!(state.overlay.is_none());
     assert_eq!(state.workspaces[0].cwd, Some(PathBuf::from("/tmp/old-ws")));

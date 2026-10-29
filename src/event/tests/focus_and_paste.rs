@@ -104,7 +104,11 @@ fn event_input_paste_overlay_and_prompt_routing() {
 
     // 1. 浮层打开时：粘贴被吞掉，dirty 保持 false。
     state.overlay = Some(Overlay::ConfirmClose(crate::app::overlay::ConfirmClose {
-        target: crate::app::overlay::OverlayTarget::Workspace(0),
+        target: crate::app::overlay::OverlayTarget::PromptPage {
+            workspace: 0,
+            owner: crate::app::prompt::PromptEditing::Item(1),
+            page: crate::app::prompt::PromptPageId::Saved(1),
+        },
     }));
 
     handle_terminal_event(

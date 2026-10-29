@@ -67,37 +67,76 @@ pub(crate) fn menu_title(state: &AppState, menu: &Menu) -> String {
     }
 }
 
-/// 菜单命令到文案的映射；文案集中在 `ui/text.rs`。
+/// 菜单命令到文案的映射；当选中项处于 `confirming` 状态时切换为行内确认文案。
 pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
     menu.commands
         .iter()
-        .map(|command| match command {
-            MenuCommand::NewTab => text::MENU_NEW_TAB,
-            MenuCommand::NewTerminal => text::MENU_NEW_TERMINAL,
-            MenuCommand::NewWorkspace => text::MENU_NEW_WORKSPACE,
-            MenuCommand::RenameWorkspace => text::MENU_RENAME_WORKSPACE,
-            MenuCommand::OpenWorktree => text::MENU_OPEN_WORKTREE,
-            MenuCommand::OpenPrompt => text::MENU_OPEN_PROMPT,
-            MenuCommand::CloseWorkspace => text::MENU_CLOSE_WORKSPACE,
-            MenuCommand::RenameTab => text::MENU_RENAME_TAB,
-            MenuCommand::CloseTab => text::MENU_CLOSE_TAB,
-            MenuCommand::SplitRight => text::MENU_SPLIT_RIGHT,
-            MenuCommand::SplitDown => text::MENU_SPLIT_DOWN,
-            MenuCommand::SwitchToTerminal => text::MENU_SWITCH_TO_TERMINAL,
-            MenuCommand::SwitchToLx => text::MENU_SWITCH_TO_LX,
-            MenuCommand::SwitchToWorkspaceCwd => text::MENU_SWITCH_TO_WORKSPACE_CWD,
-            MenuCommand::SyncWorkspaceToTerminalCwd => text::MENU_SYNC_WS_TO_TERMINAL_CWD,
-            MenuCommand::ClosePane => text::MENU_CLOSE_PANE,
-            MenuCommand::NewPrompt => text::MENU_PROMPT_NEW_PROMPT,
-            MenuCommand::NewFolder => text::MENU_PROMPT_NEW_FOLDER,
-            MenuCommand::NewSubFolder => text::MENU_PROMPT_NEW_SUBFOLDER,
-            MenuCommand::RenameFolder | MenuCommand::RenamePrompt => text::MENU_PROMPT_RENAME,
-            MenuCommand::DeleteFolder | MenuCommand::DeletePrompt | MenuCommand::DeleteTemp => {
-                text::MENU_PROMPT_DELETE
+        .enumerate()
+        .map(|(index, command)| {
+            let confirming = menu.confirming && menu.selected == index;
+            match command {
+                MenuCommand::NewTab => text::MENU_NEW_TAB,
+                MenuCommand::NewTerminal => text::MENU_NEW_TERMINAL,
+                MenuCommand::NewWorkspace => text::MENU_NEW_WORKSPACE,
+                MenuCommand::RenameWorkspace => text::MENU_RENAME_WORKSPACE,
+                MenuCommand::OpenWorktree => text::MENU_OPEN_WORKTREE,
+                MenuCommand::OpenPrompt => text::MENU_OPEN_PROMPT,
+                MenuCommand::CloseWorkspace => {
+                    if confirming {
+                        text::MENU_CONFIRM_CLOSE
+                    } else {
+                        text::MENU_CLOSE_WORKSPACE
+                    }
+                }
+                MenuCommand::RenameTab => text::MENU_RENAME_TAB,
+                MenuCommand::CloseTab => {
+                    if confirming {
+                        text::MENU_CONFIRM_CLOSE
+                    } else {
+                        text::MENU_CLOSE_TAB
+                    }
+                }
+                MenuCommand::SplitRight => text::MENU_SPLIT_RIGHT,
+                MenuCommand::SplitDown => text::MENU_SPLIT_DOWN,
+                MenuCommand::SwitchToTerminal => text::MENU_SWITCH_TO_TERMINAL,
+                MenuCommand::SwitchToLx => text::MENU_SWITCH_TO_LX,
+                MenuCommand::SwitchToWorkspaceCwd => {
+                    if confirming {
+                        text::MENU_CONFIRM_SWITCH_TO_WORKSPACE_CWD
+                    } else {
+                        text::MENU_SWITCH_TO_WORKSPACE_CWD
+                    }
+                }
+                MenuCommand::SyncWorkspaceToTerminalCwd => {
+                    if confirming {
+                        text::MENU_CONFIRM_SYNC_WS_TO_TERMINAL_CWD
+                    } else {
+                        text::MENU_SYNC_WS_TO_TERMINAL_CWD
+                    }
+                }
+                MenuCommand::ClosePane => {
+                    if confirming {
+                        text::MENU_CONFIRM_CLOSE
+                    } else {
+                        text::MENU_CLOSE_PANE
+                    }
+                }
+                MenuCommand::NewPrompt => text::MENU_PROMPT_NEW_PROMPT,
+                MenuCommand::NewFolder => text::MENU_PROMPT_NEW_FOLDER,
+                MenuCommand::NewSubFolder => text::MENU_PROMPT_NEW_SUBFOLDER,
+                MenuCommand::RenameFolder | MenuCommand::RenamePrompt => text::MENU_PROMPT_RENAME,
+                MenuCommand::DeleteFolder | MenuCommand::DeletePrompt => {
+                    if confirming {
+                        text::MENU_CONFIRM_DELETE
+                    } else {
+                        text::MENU_PROMPT_DELETE
+                    }
+                }
+                MenuCommand::DeleteTemp => text::MENU_PROMPT_DELETE,
+                MenuCommand::EditPrompt => text::MENU_PROMPT_EDIT,
+                MenuCommand::CopyPromptContent => text::MENU_PROMPT_COPY,
+                MenuCommand::CopyPath => text::MENU_COPY_PATH,
             }
-            MenuCommand::EditPrompt => text::MENU_PROMPT_EDIT,
-            MenuCommand::CopyPromptContent => text::MENU_PROMPT_COPY,
-            MenuCommand::CopyPath => text::MENU_COPY_PATH,
         })
         .collect()
 }

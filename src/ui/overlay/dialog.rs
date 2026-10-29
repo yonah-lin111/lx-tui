@@ -1,23 +1,19 @@
 //! 模态输入与确认对话框几何、命中与渲染。
 
-use std::path::Path;
-
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::{
-    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, NewNode, NewNodeKind, NewWorkspace,
-    OverlayTarget, Rename, RenameTarget,
+    ConfirmClose, NewNode, NewNodeKind, NewWorkspace, OverlayTarget, Rename, RenameTarget,
 };
-use crate::app::state::{AppState, tab_label};
+use crate::app::state::AppState;
 use crate::app::trust::TrustWorkspace;
 use crate::ui::widgets;
 use crate::ui::{style, text};
 
-use super::menu::{prompt_folder_name, prompt_item_name, prompt_page_name};
+use super::menu::prompt_page_name;
 
 /// 重命名浮层尺寸（列，行）：输入行、空行与按钮行。
 const RENAME_WIDTH: u16 = 40;
@@ -116,29 +112,6 @@ fn confirm_shell_for(
 /// 关闭/删除确认浮层几何：固定宽度，问题按内容自动换行。
 pub fn confirm_shell(screen: Rect, question: &str) -> Option<widgets::modal::ModalShell> {
     confirm_shell_for(screen, question, CONFIRM_WIDTH)
-}
-
-/// 路径确认浮层宽度：随问题完整展开，超出屏幕时夹取（再由换行承接）。
-fn path_confirm_width(screen: Rect, question: &str) -> u16 {
-    u16::try_from(question.width().saturating_add(2))
-        .unwrap_or(u16::MAX)
-        .max(CONFIRM_WIDTH)
-        .min(screen.width)
-}
-
-/// 切换工作区路径确认浮层几何：宽度随问题完整展开，超出屏幕时换行。
-pub fn confirm_switch_cwd_shell(screen: Rect, path: &Path) -> Option<widgets::modal::ModalShell> {
-    let question = text::confirm_switch_cwd_question(&path.display().to_string());
-    confirm_shell_for(screen, &question, path_confirm_width(screen, &question))
-}
-
-/// 同步当前工作区路径确认浮层几何：宽度随完整问题展开，超出屏幕时换行。
-pub fn confirm_sync_workspace_cwd_shell(
-    screen: Rect,
-    path: &Path,
-) -> Option<widgets::modal::ModalShell> {
-    let question = text::confirm_sync_ws_cwd_question(&path.display().to_string());
-    confirm_shell_for(screen, &question, path_confirm_width(screen, &question))
 }
 
 /// 命中重命名按钮。
@@ -256,57 +229,9 @@ fn rename_title(target: RenameTarget) -> &'static str {
     }
 }
 
-/// 关闭确认浮层标题与目标名：按目标种类分派。
+/// 确认浮层标题与目标名（供页码菜单删除非空页使用）。
 fn confirm_text(state: &AppState, target: OverlayTarget) -> (&'static str, String) {
     match target {
-        OverlayTarget::Workspace(index) => (
-            text::CONFIRM_CLOSE_TITLE,
-            state
-                .workspaces
-                .get(index)
-                .map(|workspace| workspace.name.clone())
-                .unwrap_or_default(),
-        ),
-        OverlayTarget::Tab { workspace, tab } => {
-            let name = state
-                .workspaces
-                .get(workspace)
-                .and_then(|workspace| workspace.tabs.get(tab))
-                .map(|tab_state| tab_label(tab, tab_state.name.as_deref()))
-                .unwrap_or_default();
-            (text::CONFIRM_CLOSE_TAB_TITLE, name)
-        }
-        OverlayTarget::Pane {
-            workspace,
-            tab,
-            pane,
-        } => {
-            let name = state
-                .workspaces
-                .get(workspace)
-                .and_then(|workspace| workspace.tabs.get(tab))
-                .and_then(|tab_state| tab_state.pane(pane))
-                .map(|pane_state| {
-                    text::pane_title(
-                        pane,
-                        pane_state.terminal.title(),
-                        pane_state.cwd_label.as_deref(),
-                    )
-                })
-                .unwrap_or_default();
-            (text::CONFIRM_CLOSE_PANE_TITLE, name)
-        }
-        OverlayTarget::PromptFolder {
-            workspace,
-            folder_id,
-        } => (
-            text::CONFIRM_DELETE_FOLDER_TITLE,
-            prompt_folder_name(state, workspace, folder_id).unwrap_or_default(),
-        ),
-        OverlayTarget::PromptItem { workspace, item_id } => (
-            text::CONFIRM_DELETE_PROMPT_TITLE,
-            prompt_item_name(state, workspace, item_id).unwrap_or_default(),
-        ),
         OverlayTarget::PromptPage {
             workspace,
             owner,
@@ -315,21 +240,14 @@ fn confirm_text(state: &AppState, target: OverlayTarget) -> (&'static str, Strin
             text::CONFIRM_DELETE_PAGE_TITLE,
             prompt_page_name(state, workspace, owner, page).unwrap_or_default(),
         ),
-        OverlayTarget::TempPrompt { .. } => (text::CONFIRM_CLOSE_TITLE, String::new()),
-        OverlayTarget::PromptTree { .. } => (text::CONFIRM_CLOSE_TITLE, String::new()),
-        OverlayTarget::WorkspaceList => (text::CONFIRM_CLOSE_TITLE, String::new()),
+        _ => (text::CONFIRM_DELETE_PAGE_TITLE, String::new()),
     }
 }
 
-/// 关闭/删除确认浮层的问题文案。
+/// 确认浮层的问题文案。
 pub fn confirm_question(state: &AppState, target: OverlayTarget) -> String {
     let (_, name) = confirm_text(state, target);
-    match target {
-        OverlayTarget::PromptFolder { .. } => text::confirm_delete_folder_question(&name),
-        OverlayTarget::PromptItem { .. } => text::confirm_delete_question(&name),
-        OverlayTarget::PromptPage { .. } => text::confirm_delete_page_question(&name),
-        _ => text::confirm_close_question(&name),
-    }
+    text::confirm_delete_page_question(&name)
 }
 
 /// 重命名浮层：单行输入 + 底部按钮；输入视口与光标由公共单行输入组件承担。
@@ -449,32 +367,6 @@ pub(crate) fn render_confirm(
     };
     let (title, _) = confirm_text(state, confirm.target);
     render_confirm_dialog(frame, &shell, title, &question);
-}
-
-/// 切换工作区路径确认浮层：完整展示目标路径与底部按钮。
-pub(crate) fn render_confirm_switch_cwd(
-    frame: &mut Frame<'_>,
-    screen: Rect,
-    confirm: &ConfirmSwitchCwd,
-) {
-    let Some(shell) = confirm_switch_cwd_shell(screen, &confirm.path) else {
-        return;
-    };
-    let question = text::confirm_switch_cwd_question(&confirm.path.display().to_string());
-    render_confirm_dialog(frame, &shell, text::CONFIRM_SWITCH_CWD_TITLE, &question);
-}
-
-/// 同步当前工作区路径确认浮层：展示目标路径（超出截断）与底部按钮。
-pub(crate) fn render_confirm_sync_workspace_cwd(
-    frame: &mut Frame<'_>,
-    screen: Rect,
-    confirm: &ConfirmSyncWorkspaceCwd,
-) {
-    let question = text::confirm_sync_ws_cwd_question(&confirm.path.display().to_string());
-    let Some(shell) = confirm_sync_workspace_cwd_shell(screen, &confirm.path) else {
-        return;
-    };
-    render_confirm_dialog(frame, &shell, text::CONFIRM_SYNC_WS_CWD_TITLE, &question);
 }
 
 /// 引用文件夹删除确认浮层：展示待删目录名与底部按钮。

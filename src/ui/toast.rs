@@ -2,7 +2,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
@@ -70,10 +70,10 @@ pub fn render(
     let area = rect(state, view, pane_rects, screen, config)?;
     let toast = state.toast.as_ref()?;
     clear::render(frame, area);
+    let border = border_style(toast.kind);
     let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(border_style(toast.kind))
-        .style(style::overlay_panel());
+        .border_style(border);
     if let Some(title) = toast.title.as_deref() {
         block = block.title(Span::styled(
             format!(
@@ -87,7 +87,7 @@ pub fn render(
     frame.render_widget(block, area);
     if let Some(rect) = crate::ui::widgets::modal::close_button_rect(area) {
         frame.render_widget(
-            Paragraph::new(Span::styled(text::MODAL_CLOSE, style::accent())),
+            Paragraph::new(Span::styled(text::MODAL_CLOSE, border)),
             rect,
         );
     }
@@ -111,23 +111,14 @@ pub fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
     crate::ui::widgets::modal::close_button_at(area, column, row)
 }
 
-/// 边框语义色：默认强调色、警告黄、危险红。
+/// 边框语义色：三档独立 256 色（薰衣草紫 / 琥珀金橙 / 珊瑚玫红），不与项目主色调 Cyan 重叠。
 pub(crate) fn border_style(kind: ToastKind) -> Style {
-    match kind {
-        ToastKind::Default => style::accent(),
-        ToastKind::Warning => Style::default().fg(Color::Yellow),
-        ToastKind::Danger => style::error(),
-    }
+    style::toast_border(kind)
 }
 
-/// 标题语义色：与边框同色（用户要求「warning/danger 的**边框和 title** 分别改黄/红」），
-/// 默认档仍用边框标题的青色灰字。
+/// 标题语义色：与该档边框保持同色。
 pub(crate) fn title_style(kind: ToastKind) -> Style {
-    match kind {
-        ToastKind::Default => style::border_title(),
-        ToastKind::Warning => Style::default().fg(Color::Yellow),
-        ToastKind::Danger => style::error(),
-    }
+    style::toast_border(kind)
 }
 
 /// 盒尺寸：正文最长行与边框标题各自加边框与内边距取宽；高度固定三行。

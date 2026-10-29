@@ -39,7 +39,7 @@ fn state_with_cwd(cwd: &Path) -> AppState {
     state
 }
 
-/// 执行一次菜单命令（打开对应目标菜单后激活指定项）。
+/// 执行一次菜单命令（打开对应目标菜单后激活指定项；需行内二次确认的命令自动触发第二次确认）。
 fn run_menu_command(state: &mut AppState, target: OverlayTarget, command: MenuCommand) {
     let anchor = (0, 0);
     match target {
@@ -62,6 +62,13 @@ fn run_menu_command(state: &mut AppState, target: OverlayTarget, command: MenuCo
         .expect("command listed");
     menu.selected = index;
     update::activate_menu(state);
+    if command.requires_confirm() {
+        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+            panic!("menu stays open for inline confirmation");
+        };
+        assert!(menu.confirming);
+        update::activate_menu(state);
+    }
 }
 
 /// 渲染一帧，确保树视图可正常绘制（无 panic）。
@@ -306,6 +313,49 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
         reader.list_prompts(&workspace_b).expect("list b").len(),
         1,
         "b 工作区独立保存"
+    );
+
+    // 11. 右键菜单行内二次确认删除提示词与文件夹并持久化落库。
+    run_menu_command(
+        &mut reloaded,
+        OverlayTarget::PromptItem {
+            workspace: 0,
+            item_id: prompt_id,
+        },
+        MenuCommand::DeletePrompt,
+    );
+    service.pump(&mut reloaded);
+    assert!(
+        reloaded
+            .active_workspace()
+            .prompt_panel
+            .tree
+            .items()
+            .is_empty()
+    );
+    assert!(
+        reader
+            .list_prompts(&workspace_a)
+            .expect("list a")
+            .is_empty()
+    );
+
+    run_menu_command(
+        &mut reloaded,
+        OverlayTarget::PromptFolder {
+            workspace: 0,
+            folder_id: root_folder,
+        },
+        MenuCommand::DeleteFolder,
+    );
+    service.pump(&mut reloaded);
+    assert!(
+        reloaded
+            .active_workspace()
+            .prompt_panel
+            .tree
+            .folders()
+            .is_empty()
     );
 }
 

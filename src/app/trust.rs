@@ -13,7 +13,7 @@ use crate::layout::PaneId;
 pub enum TrustTrigger {
     /// 新建工作区：信任后创建，拒绝则取消创建并提示。
     CreateWorkspace { cwd: PathBuf },
-    /// 终端右键同步工作区路径：信任后进入同步确认，拒绝则取消并提示。
+    /// 终端右键同步工作区路径：菜单内已二次确认，信任后直接执行同步，拒绝则取消并提示。
     SyncWorkspaceCwd { workspace: usize, pane: PaneId },
     /// 打开 worktree 条目：信任后创建其工作区（必要时自动补开主 checkout），拒绝则取消并提示。
     OpenWorktree {

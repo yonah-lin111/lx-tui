@@ -87,10 +87,6 @@ pub(crate) fn handle_key_event(
                 *dirty = true;
                 return;
             }
-            let was_confirm = matches!(
-                state.overlay,
-                Some(Overlay::ConfirmClose(_) | Overlay::ConfirmSyncWorkspaceCwd(_))
-            );
             let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
             let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
             let was_new_ws = matches!(
@@ -101,7 +97,10 @@ pub(crate) fn handle_key_event(
                 write_to_pane(sessions, pane, &bytes);
                 update::reset_pane_scroll(state, pane);
             }
-            if was_confirm || was_menu || was_worktree || was_new_ws {
+            let menu_stays_open = matches!(state.overlay, Some(Overlay::Menu(_)));
+            if key == OverlayKey::Enter
+                && ((was_menu && !menu_stays_open) || was_worktree || was_new_ws)
+            {
                 ensure_workspace_visible(state, view);
                 reveal_active_tab(state, view);
             }

@@ -687,28 +687,6 @@ fn confirm_overlay_routes_enter_and_esc_only() {
 }
 
 #[test]
-fn confirm_switch_cwd_overlay_routes_enter_and_esc_only() {
-    let route_confirm = |code| {
-        super::route(
-            key(code),
-            TermMode::empty(),
-            crate::app::state::FocusedContainer::Panes,
-            Some(OverlayKind::ConfirmSwitchCwd),
-            false,
-        )
-    };
-    assert_eq!(
-        route_confirm(KeyCode::Enter),
-        Some(Routed::Overlay(OverlayKey::Enter))
-    );
-    assert_eq!(
-        route_confirm(KeyCode::Esc),
-        Some(Routed::Overlay(OverlayKey::Esc))
-    );
-    assert_eq!(route_confirm(KeyCode::Char('n')), None);
-}
-
-#[test]
 fn rename_overlay_routes_editing_keys() {
     let route_rename = |code, modifiers| {
         super::route(
