@@ -15,8 +15,6 @@ pub use trust::startup_trust;
 #[cfg(test)]
 pub(crate) use overlay::handle_overlay_click;
 #[cfg(test)]
-pub(crate) use session::Geometry;
-#[cfg(test)]
 pub(crate) use session::poll_active_agents;
 
 use std::collections::{HashMap, HashSet};

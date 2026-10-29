@@ -9,6 +9,8 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
 
+use super::test_support::mouse;
+use super::test_support::*;
 use super::*;
 use crate::app::update;
 use crate::ui::text;
