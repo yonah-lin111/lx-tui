@@ -120,6 +120,7 @@ fn view<'a>(
         anchor_row: above,
         max_height: Some(cap),
         title: Some(text::REFER_PANEL_TITLE),
+        tabs: None,
         right_title: None,
         footer: None,
         width: Some(input.width),
