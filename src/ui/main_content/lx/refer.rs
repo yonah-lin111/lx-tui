@@ -10,7 +10,7 @@ use crate::ui::text;
 use crate::ui::widgets::command_panel::PanelLayout;
 use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView, PanelPlacement};
 
-use super::mention::{MAX_POPUP_ROWS, PANEL_BORDER_ROWS};
+use super::mention::{MAX_POPUP_ROWS, PANEL_BORDER_ROWS, PANEL_FOOTER_ROWS};
 
 /// 快捷面板单条渲染数据。
 struct ReferRow {
@@ -110,7 +110,11 @@ fn view<'a>(
     area: Rect,
 ) -> CommandPanelView<'a> {
     let above = input.y.saturating_sub(area.y);
-    let cap = above.min(MAX_POPUP_ROWS.saturating_add(PANEL_BORDER_ROWS));
+    let cap = above.min(
+        MAX_POPUP_ROWS
+            .saturating_add(PANEL_BORDER_ROWS)
+            .saturating_add(PANEL_FOOTER_ROWS),
+    );
     CommandPanelView {
         items,
         active: data.active,
@@ -122,7 +126,7 @@ fn view<'a>(
         title: Some(text::REFER_PANEL_TITLE),
         tabs: None,
         right_title: None,
-        footer: None,
+        footer: Some(text::LX_REFER_PANEL_FOOTER),
         width: Some(input.width),
         placement: PanelPlacement::Above,
         borderless: true,

@@ -624,11 +624,22 @@ pub const LX_CHAT_STATS_CACHE_SUFFIX: &str = " cached";
 pub const LX_CHAT_STATS_SPEED_SUFFIX: &str = " tok/s";
 /// `/` 命令面板标题。
 pub const LX_SLASH_PANEL_TITLE: &str = "/Command";
+/// `/` 命令面板底边快捷键提示（无边框面板里的单行 muted 提示）。
+pub const LX_SLASH_PANEL_FOOTER: &str = "[select ↑↓] [open ↵] [close esc]";
+/// 路径粘贴面板底边快捷键提示。
+pub const LX_PASTE_PANEL_FOOTER: &str = "[select ↑↓] [confirm ↵] [cancel esc]";
+/// 快捷引用面板底边快捷键提示。
+pub const LX_REFER_PANEL_FOOTER: &str = "[select ↑↓] [insert ↵] [close esc]";
+/// `@` 面板按 Tab 区分的底边快捷键提示。
+pub const LX_MENTION_FOOTER_FILES: &str = "[tabs ←→] [select ↑↓] [insert ↵] [enter ⇧↵] [close esc]";
+pub const LX_MENTION_FOOTER_REF_DIR: &str = "[tabs ←→] [select ↑↓] [insert ↵] [close esc]";
 
 // ===== 最新轮次撤销 =====
 
 /// 撤销动作面板标题。
 pub const LX_REWIND_PANEL_TITLE: &str = "Rewind";
+/// 撤销动作面板底边快捷键提示。
+pub const LX_REWIND_PANEL_FOOTER: &str = "[select ↑↓] [open ↵] [back esc]";
 /// 第一次 Esc 后的待命提示（toast，不写历史）。
 pub const LX_REWIND_ARMED_HINT: &str = "Press esc again to rewind";
 /// 面板范围说明。
@@ -744,6 +755,8 @@ pub const LX_RESUME_COMMAND_DESC: &str = "Resume a previous session in this work
 /// `/resume` 历史面板标题与空态。
 pub const LX_HISTORY_PANEL_TITLE: &str = "Resume";
 pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
+/// `/resume` 历史面板底边快捷键提示（`⇧↵` 打开会话编辑模态、`^c` 复制会话 id）。
+pub const LX_HISTORY_PANEL_FOOTER: &str = "[select ↑↓] [open ↵] [copy ^c] [edit ⇧↵] [close esc]";
 /// `/model` 面板标题。
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
 pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";

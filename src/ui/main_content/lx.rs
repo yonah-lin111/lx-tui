@@ -337,7 +337,7 @@ fn paste_view<'a>(
         max_height: None,
         title: Some(text::PASTE_PANEL_TITLE),
         right_title: None,
-        footer: None,
+        footer: Some(text::LX_PASTE_PANEL_FOOTER),
         width: Some(panel_area.width),
         placement: command_panel::PanelPlacement::Above,
         borderless: true,

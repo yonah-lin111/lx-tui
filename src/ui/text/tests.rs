@@ -60,6 +60,13 @@ fn user_visible_labels_are_clean_ascii() {
         MENTION_REF_DIR_EMPTY,
         LX_MENTION_LOADING,
         LX_MENTION_EMPTY,
+        LX_SLASH_PANEL_FOOTER,
+        LX_HISTORY_PANEL_FOOTER,
+        LX_REWIND_PANEL_FOOTER,
+        LX_PASTE_PANEL_FOOTER,
+        LX_REFER_PANEL_FOOTER,
+        LX_MENTION_FOOTER_FILES,
+        LX_MENTION_FOOTER_REF_DIR,
     ] {
         assert!(!label.is_empty(), "文案不得为空");
         assert!(!label.contains('\u{fffd}'), "文案禁止替换字符: {label}");
@@ -491,9 +498,14 @@ fn shortcut_symbols_are_single_width_non_pua_and_used_consistently() {
 
     // 所有面向用户的快捷键提示：修饰键与"要按的键"一律用符号，不出现全拼。
     for (name, hint) in [
+        ("slash panel", LX_SLASH_PANEL_FOOTER),
+        ("history panel", LX_HISTORY_PANEL_FOOTER),
+        ("rewind panel", LX_REWIND_PANEL_FOOTER),
+        ("paste panel", LX_PASTE_PANEL_FOOTER),
+        ("refer panel", LX_REFER_PANEL_FOOTER),
+        ("mention files", LX_MENTION_FOOTER_FILES),
+        ("mention refDir", LX_MENTION_FOOTER_REF_DIR),
         ("resume edit confirm", RESUME_EDIT_CONFIRM_HINT),
-        ("mention files footer", MENTION_FOOTER_FILES),
-        ("mention refDir footer", MENTION_FOOTER_REF_DIR),
         ("referenced menu", REFERENCED_MENU_FOOTER),
         ("referenced search", REFERENCED_SEARCH_FOOTER),
         ("trust console", TRUST_CONSOLE_FOOTER),
@@ -505,9 +517,12 @@ fn shortcut_symbols_are_single_width_non_pua_and_used_consistently() {
                 "{name} 提示出现全拼 `{forbidden}`（应用符号）: {hint}"
             );
         }
-        // `[功能 键]` 提示中的按键用 `↵`（`MENTION_FOOTER_FILES` 中 `⇧↵ enter` 是进入文件夹动作名）。
-        if name != "mention files footer" && lower.contains("enter") {
-            panic!("{name} 提示出现全拼 `enter`（应用 ↵）: {hint}");
+        // `[功能 键]` 提示中的按键用 `↵`；`enter` 只允许作为动作名出现在 `[enter ⇧↵]` 里。
+        if lower.contains("enter") {
+            assert!(
+                hint.contains(&format!("[enter {}", key::SHIFT)),
+                "{name} 提示出现未用符号的 enter: {hint}"
+            );
         }
     }
 }

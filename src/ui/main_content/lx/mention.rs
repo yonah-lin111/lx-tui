@@ -18,6 +18,8 @@ use crate::ui::widgets::command_panel::{
 pub(crate) const MAX_POPUP_ROWS: u16 = 8;
 /// 面板顶部分割线占用的行数（顶部单条蓝色横线，无底边框）。
 pub(super) const PANEL_BORDER_ROWS: u16 = 1;
+/// 面板底部快捷键提示占用的行数（无边框单行 muted 提示）。
+pub(super) const PANEL_FOOTER_ROWS: u16 = 1;
 
 /// 提及面板条目文本：候选文件/目录（双行）或状态行（单行）。
 enum PanelRow {
@@ -195,7 +197,11 @@ fn view<'a>(
     area: Rect,
 ) -> CommandPanelView<'a> {
     let above = input.y.saturating_sub(area.y);
-    let cap = above.min(MAX_POPUP_ROWS.saturating_add(PANEL_BORDER_ROWS));
+    let cap = above.min(
+        MAX_POPUP_ROWS
+            .saturating_add(PANEL_BORDER_ROWS)
+            .saturating_add(PANEL_FOOTER_ROWS),
+    );
     CommandPanelView {
         items,
         active: data.active,
@@ -207,7 +213,11 @@ fn view<'a>(
         title: None,
         tabs: Some(&data.tabs),
         right_title: data.scope.as_deref(),
-        footer: None,
+        footer: Some(if data.tabs[0].active {
+            text::LX_MENTION_FOOTER_FILES
+        } else {
+            text::LX_MENTION_FOOTER_REF_DIR
+        }),
         width: Some(input.width),
         placement: PanelPlacement::Above,
         borderless: true,

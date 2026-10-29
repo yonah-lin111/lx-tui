@@ -648,6 +648,65 @@ fn borderless_overlap_active_and_current_uses_default_marker_and_blue_label() {
 }
 
 #[test]
+fn borderless_panel_footer_row_adds_one_line_without_border() {
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    let items = inline(&[("/compact", "Summarize")]);
+    let v = CommandPanelView {
+        items: &items,
+        active: 0,
+        anchor_row: 6,
+        width: Some(40),
+        placement: PanelPlacement::Above,
+        borderless: true,
+        footer: Some("[select ↑↓] [open ↵] [close esc]"),
+        ..Default::default()
+    };
+    let rect = render(area, &mut buf, &v).expect("renders");
+    // 1 top rule + 1 item + 1 footer row = 3 rows
+    assert_eq!(rect, Rect::new(0, 3, 40, 3));
+    let footer_row = rect.bottom() - 1;
+    let footer = row_text(&buf, area, footer_row);
+    assert!(
+        footer.starts_with("[select ↑↓] [open ↵] [close esc]"),
+        "底边提示从面板左缘开始: {footer:?}"
+    );
+    assert!(!footer.contains('─'), "底边提示行不画分割线: {footer:?}");
+    assert!(
+        !footer.contains('│') && !footer.contains('╰') && !footer.contains('╯'),
+        "底边提示行不画边框: {footer:?}"
+    );
+    // 无边框面板没有背景色。
+    for y in rect.y..rect.bottom() {
+        for x in rect.x..rect.right() {
+            assert_eq!(buf[(x, y)].bg, Color::Reset);
+        }
+    }
+}
+
+#[test]
+fn borderless_panel_without_footer_keeps_height() {
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    let items = inline(&[("/compact", "Summarize")]);
+    let v = CommandPanelView {
+        items: &items,
+        active: 0,
+        anchor_row: 6,
+        width: Some(40),
+        placement: PanelPlacement::Above,
+        borderless: true,
+        ..Default::default()
+    };
+    let rect = render(area, &mut buf, &v).expect("renders");
+    assert_eq!(
+        rect,
+        Rect::new(0, 4, 40, 2),
+        "无 footer 时只占顶线 + 内容行"
+    );
+}
+
+#[test]
 fn borderless_narrow_top_rule_keeps_tabs_and_never_overwrites_title_with_right_title() {
     let area = Rect::new(0, 0, 24, 6);
     let items = inline(&[("item1", "desc")]);

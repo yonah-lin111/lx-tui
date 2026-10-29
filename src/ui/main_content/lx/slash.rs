@@ -168,8 +168,12 @@ fn view<'a>(
     area: Rect,
 ) -> CommandPanelView<'a> {
     use crate::app::state::{ModelPickerStage, SlashPanel};
-    let (title, window) = match panel {
-        SlashPanel::Commands { window, .. } => (text::LX_SLASH_PANEL_TITLE, *window),
+    let (title, window, footer) = match panel {
+        SlashPanel::Commands { window, .. } => (
+            text::LX_SLASH_PANEL_TITLE,
+            *window,
+            text::LX_SLASH_PANEL_FOOTER,
+        ),
         SlashPanel::Model(picker) => (
             if matches!(picker.stage, ModelPickerStage::Models) {
                 text::LX_MODEL_PANEL_TITLE
@@ -177,14 +181,27 @@ fn view<'a>(
                 text::LX_MODEL_VARIANT_PANEL_TITLE
             },
             picker.window,
+            text::LX_SLASH_PANEL_FOOTER,
         ),
-        SlashPanel::History(history) => (text::LX_HISTORY_PANEL_TITLE, history.window),
-        SlashPanel::Rewind(panel) => (text::LX_REWIND_PANEL_TITLE, panel.window),
+        SlashPanel::History(history) => (
+            text::LX_HISTORY_PANEL_TITLE,
+            history.window,
+            text::LX_HISTORY_PANEL_FOOTER,
+        ),
+        SlashPanel::Rewind(panel) => (
+            text::LX_REWIND_PANEL_TITLE,
+            panel.window,
+            text::LX_REWIND_PANEL_FOOTER,
+        ),
     };
     // 撤销面板顶边右侧固定说明恢复范围；窄面板由渲染侧裁剪。
     let right_title = matches!(panel, SlashPanel::Rewind(_)).then_some(text::LX_REWIND_SCOPE);
     let above = input.y.saturating_sub(area.y);
-    let cap = above.min(mention::MAX_POPUP_ROWS.saturating_add(mention::PANEL_BORDER_ROWS));
+    let cap = above.min(
+        mention::MAX_POPUP_ROWS
+            .saturating_add(mention::PANEL_BORDER_ROWS)
+            .saturating_add(mention::PANEL_FOOTER_ROWS),
+    );
     CommandPanelView {
         items,
         active: window.active,
@@ -197,7 +214,7 @@ fn view<'a>(
         title: Some(title),
         tabs: None,
         right_title,
-        footer: None,
+        footer: Some(footer),
         width: Some(input.width),
         placement: PanelPlacement::Above,
         borderless: true,

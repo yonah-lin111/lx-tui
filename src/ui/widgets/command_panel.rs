@@ -124,12 +124,14 @@ pub struct PanelLayout {
 
 /// 计算面板布局；空间不足或没有可见条目时返回 None。
 pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
+    // 无边框面板：顶部 1 行分割线 + 底部可选 1 行快捷键提示；有边框面板：上下边框各 1 行。
+    let footer_rows: u16 = u16::from(view.borderless && view.footer.is_some());
+    let frame_rows: u16 = if view.borderless { 1 + footer_rows } else { 2 };
     let min_height = if view.borderless {
-        MIN_BORDERLESS_HEIGHT
+        MIN_BORDERLESS_HEIGHT + footer_rows
     } else {
         MIN_HEIGHT
     };
-    let frame_rows: u16 = if view.borderless { 1 } else { 2 };
     if view.items.is_empty() || area.width < MIN_WIDTH || area.height < min_height {
         return None;
     }
@@ -188,7 +190,7 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
     };
     let rect = Rect::new(area.x, y, width, height);
     let inner = if view.borderless {
-        borderless_inner_rect(rect)
+        borderless_inner_rect(rect, footer_rows)
     } else {
         inner_rect(rect)
     };
@@ -289,6 +291,11 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
         }
     }
     render_items(buf, &layout, view);
+    if view.borderless
+        && let Some(footer) = view.footer
+    {
+        render_borderless_footer(buf, layout.rect, footer);
+    }
     if let Some(scrollbar) = layout.scrollbar.as_ref() {
         if view.borderless {
             scrollbar::render_buffer(buf, scrollbar);
@@ -298,6 +305,13 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
         }
     }
     Some(layout.rect)
+}
+
+/// 绘制无边框命令面板底部的快捷键提示行（无边框、无分割线，muted 单行，超宽截断）。
+fn render_borderless_footer(buf: &mut Buffer, rect: Rect, footer: &str) {
+    let y = rect.bottom().saturating_sub(1);
+    let text = text::truncate_to_width(footer, usize::from(rect.width));
+    buf.set_stringn(rect.x, y, &text, usize::from(rect.width), style::muted());
 }
 
 /// 绘制无边框命令面板的顶部蓝色横线及内嵌标题/右侧状态。
@@ -455,11 +469,10 @@ fn panel_width(available: u16, view: &CommandPanelView<'_>) -> u16 {
                 + view.right_title.map_or(0, |title| title.width() + 2)
         }
     };
-    let footer = if view.borderless {
-        0
-    } else {
-        view.footer.map_or(0, |footer| footer.width() + 2)
-    };
+    // 底边提示：有边框面板带两侧包裹空格；无边框面板直接从面板左缘绘制单行提示。
+    let footer = view.footer.map_or(0, |footer| {
+        footer.width() + if view.borderless { 0 } else { 2 }
+    });
     let frame_pad = if view.borderless { 0 } else { 4 };
     let content = content
         .max(tabs_header)
@@ -708,13 +721,13 @@ fn inner_rect(rect: Rect) -> Rect {
     )
 }
 
-/// 无边框面板内容区矩形：仅扣除顶部一行分割线，左右与底部不留边框。
-fn borderless_inner_rect(rect: Rect) -> Rect {
+/// 无边框面板内容区矩形：扣除顶部一行分割线与底部可选快捷键提示行，左右不留边框。
+fn borderless_inner_rect(rect: Rect, footer_rows: u16) -> Rect {
     Rect::new(
         rect.x,
         rect.y.saturating_add(1),
         rect.width,
-        rect.height.saturating_sub(1),
+        rect.height.saturating_sub(1).saturating_sub(footer_rows),
     )
 }
 

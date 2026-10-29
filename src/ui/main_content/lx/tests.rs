@@ -950,7 +950,7 @@ fn mention_panel_renders_cjk_candidate_without_overflow() {
 
 #[test]
 fn mention_panel_height_capped_at_max_popup_rows() {
-    // 内容区很高：候选很多，面板内容行仍夹到 MAX_POPUP_ROWS（8）+ 顶部横线 1 行。
+    // 内容区很高：候选很多，面板内容行仍夹到 MAX_POPUP_ROWS（8）+ 顶部横线 1 行 + 底边提示 1 行。
     let area = Rect::new(0, 0, 60, 60);
     let entries: Vec<MentionEntry> = (0..100)
         .map(|index| MentionEntry {
@@ -962,8 +962,8 @@ fn mention_panel_height_capped_at_max_popup_rows() {
     let panel = mention::layout(area, &lx).expect("panel");
     assert_eq!(
         panel.rect.height,
-        mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS,
-        "高度对齐 codex 的 MAX_POPUP_ROWS + 顶部横线"
+        mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS,
+        "高度对齐 codex 的 MAX_POPUP_ROWS + 顶部横线 + 底边提示"
     );
     assert!(panel.scrollbar.is_some(), "超出上限时出现滚动条");
 }
@@ -979,9 +979,35 @@ fn mention_panel_height_follows_content_when_few_rows() {
     let lx = mention_lx(entries);
     let panel = mention::layout(area, &lx).expect("panel");
     assert!(
-        panel.rect.height < mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS,
+        panel.rect.height
+            < mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS,
         "少量候选按内容高度收缩: {}",
         panel.rect.height
+    );
+}
+
+#[test]
+fn mention_panel_footer_lists_shortcut_hints_without_border() {
+    let area = Rect::new(0, 0, 80, 24);
+    let lx = mention_lx(vec![MentionEntry {
+        path: "src/main.rs".into(),
+        is_directory: false,
+    }]);
+    let panel = mention::layout(area, &lx).expect("panel");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    // 底部最后一行是快捷键提示（无边框、无分割线）。
+    let footer_row = panel.rect.bottom() - 1;
+    let footer: String = (panel.rect.x..panel.rect.right())
+        .map(|x| buf[(x, footer_row)].symbol())
+        .collect();
+    assert!(
+        footer.contains("[tabs ←→]") && footer.contains("[close esc]"),
+        "底边显示快捷键提示: {footer:?}"
+    );
+    assert!(
+        !footer.contains('─') && !footer.contains('│'),
+        "底边提示行不画边框或分割线: {footer:?}"
     );
 }
 
@@ -1167,9 +1193,10 @@ fn slash_panel_renders_ascii_only() {
             }
         }
     }
-    // 文案常量不得含双宽字符（含右对齐来源标签）；命令描述须为纯 ASCII。
+    // 文案常量不得含双宽字符（含右对齐来源标签与底边提示）；命令描述须为纯 ASCII。
     for text in [
         crate::ui::text::LX_SLASH_PANEL_TITLE,
+        crate::ui::text::LX_SLASH_PANEL_FOOTER,
         crate::ui::text::LX_MODEL_PANEL_TITLE,
         crate::ui::text::LX_HISTORY_PANEL_TITLE,
         crate::ui::text::LX_CHAT_NO_MODEL,

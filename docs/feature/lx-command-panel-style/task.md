@@ -8,6 +8,7 @@
 - [x] 无边框面板内容区仅扣除顶部分割线 1 行；`panel_width` 不再计入边框开销。
 - [x] 条目常驻 `❯ ` 标记列：`active` 用默认字体色，`current` 主名称蓝色、非 `active` 时 `❯` 蓝色，重合时 `❯` 默认色 + 名称蓝色。
 - [x] 顶栏左侧 `tabs`/`title` 优先排布，右侧 `right_title` 保留 1 列间隔、超宽截断或省略。
+- [x] 底部独立一行显示快捷键提示（无边框、无分割线，muted 单行、超宽截断），`@`、`/`、`/model`、`/resume`、`/rewind`、快捷引用与路径粘贴面板均已接入。
 - [x] `LxMention` 增加 `Files` / `refDir` Tab 状态、引用文件夹快照、`ref_active` / `ref_anchor` / `ref_viewport` 与触发区间。
 - [x] `@` 面板 `←`/`→` 方向键循环切换 Tab（面板可见时），鼠标点击 Tab 同语义。
 - [x] `refDir` 过滤、导航、滚轮视口与 `@[refer-folder](路径) ` 插入。
