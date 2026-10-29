@@ -352,3 +352,75 @@ fn backspace_while_panel_open_edits_query() {
     lx.backspace();
     assert_eq!(lx.input, "@mai", "面板打开时退格编辑查询");
 }
+
+fn dummy_ref_folders() -> Vec<crate::app::referenced::ReferencedFolder> {
+    vec![
+        crate::app::referenced::ReferencedFolder {
+            id: 1,
+            path: std::path::PathBuf::from("/Users/yonah/projects/herdr-master"),
+        },
+        crate::app::referenced::ReferencedFolder {
+            id: 2,
+            path: std::path::PathBuf::from("/Users/yonah/projects/lx-agent"),
+        },
+    ]
+}
+
+#[test]
+fn mention_tab_switches_and_confirms_ref_dir() {
+    let mut lx = ready("@agent", entries());
+    lx.sync_referenced_folders(&dummy_ref_folders());
+    // `@agent` 在 Files 下无匹配，但面板仍处于可见态（Empty），允许切到 refDir。
+    assert_eq!(
+        lx.mention().view(&lx.input, lx.cursor),
+        LxMentionView::Empty
+    );
+    assert!(lx.mention_visible());
+    assert_eq!(lx.mention_tab(), MentionTab::Files);
+
+    // 切到 refDir
+    assert!(lx.mention_switch_tab(1));
+    assert_eq!(lx.mention_tab(), MentionTab::RefDir);
+    assert!(lx.mention_open(), "refDir 下有匹配项，面板可交互");
+    assert_eq!(lx.mention().filtered_ref_folders().len(), 1);
+    assert!(
+        !lx.mention_enter_folder(),
+        "refDir 下 Shift+Enter 不进入目录"
+    );
+
+    // 确认插入 @[refer-folder](...)
+    assert!(lx.mention_confirm());
+    assert_eq!(lx.input, "@[refer-folder](/Users/yonah/projects/lx-agent) ");
+    assert!(!lx.mention_visible(), "确认后关闭面板");
+    assert_eq!(
+        lx.mention_tab(),
+        MentionTab::Files,
+        "会话结束后复位回 Files"
+    );
+}
+
+#[test]
+fn mention_ref_dir_navigation_and_scroll_viewport() {
+    let mut lx = ready("@", entries());
+    lx.sync_referenced_folders(&dummy_ref_folders());
+    assert!(lx.mention_switch_tab(-1));
+    assert_eq!(lx.mention_tab(), MentionTab::RefDir);
+    assert_eq!(lx.mention().ref_active(), 0);
+
+    assert!(lx.mention_move(1));
+    assert_eq!(lx.mention().ref_active(), 1);
+    assert!(lx.mention_move(1));
+    assert_eq!(lx.mention().ref_active(), 0, "循环回到首项");
+
+    assert!(lx.mention_scroll(1, 0));
+    assert_eq!(lx.mention().ref_viewport(), Some(1));
+    assert_eq!(lx.mention().ref_active(), 0, "滚轮不改高亮");
+
+    // 修改查询词时重置 ref_viewport，且当结果缩减到 1 项时将高亮钳制到末项。
+    lx.mention_set_active(1);
+    for ch in "agent".chars() {
+        lx.insert_char(ch);
+    }
+    assert_eq!(lx.mention().ref_viewport(), None, "查询词变化重置滚轮视口");
+    assert_eq!(lx.mention().ref_active(), 0, "越界高亮钳制到末项");
+}

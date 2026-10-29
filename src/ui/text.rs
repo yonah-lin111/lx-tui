@@ -624,15 +624,11 @@ pub const LX_CHAT_STATS_CACHE_SUFFIX: &str = " cached";
 pub const LX_CHAT_STATS_SPEED_SUFFIX: &str = " tok/s";
 /// `/` 命令面板标题。
 pub const LX_SLASH_PANEL_TITLE: &str = "/Command";
-/// `/` 命令面板底边提示（与 `@` 提及面板同款）。
-pub const LX_SLASH_PANEL_FOOTER: &str = "[select ↵] [close esc]";
 
 // ===== 最新轮次撤销 =====
 
 /// 撤销动作面板标题。
 pub const LX_REWIND_PANEL_TITLE: &str = "Rewind";
-/// 撤销动作面板底边提示（第二次 Enter 才执行）。
-pub const LX_REWIND_PANEL_FOOTER: &str = "[select ↵] [back esc]";
 /// 第一次 Esc 后的待命提示（toast，不写历史）。
 pub const LX_REWIND_ARMED_HINT: &str = "Press esc again to rewind";
 /// 面板范围说明。
@@ -748,9 +744,6 @@ pub const LX_RESUME_COMMAND_DESC: &str = "Resume a previous session in this work
 /// `/resume` 历史面板标题与空态。
 pub const LX_HISTORY_PANEL_TITLE: &str = "Resume";
 pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
-/// `/resume` 历史面板底边提示：`⇧↵` 打开会话编辑模态（与 `@` 面板同符号写法），
-/// `^c` 复制高亮会话 id（Ctrl/Cmd+C 同一键位，记法与本项目其它 `[copy ^c]` 一致）。
-pub const LX_HISTORY_PANEL_FOOTER: &str = "[select ↵] [copy ^c] [edit ⇧↵] [close esc]";
 /// `/model` 面板标题。
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
 pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
@@ -1015,7 +1008,7 @@ pub const BLOCK_PANEL_TITLE: &str = "Commands";
 pub const MENTION_PANEL_TITLE: &str = "@Command";
 pub const MENTION_TAB_FILES: &str = "Files";
 pub const MENTION_TAB_REF_DIR: &str = "refDir";
-pub const MENTION_REF_DIR_EMPTY: &str = "(无匹配的引用文件夹)";
+pub const MENTION_REF_DIR_EMPTY: &str = "no matching folders";
 pub const SLASH_PANEL_TITLE: &str = "/Command";
 pub const WORKTREE_PANEL_TITLE: &str = "Worktrees";
 
@@ -1059,13 +1052,11 @@ pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
 /// 写入落在折叠补充块内被拒绝时的提示。
 pub const SUPPLE_FOLD_BLOCKED: &str = "Folded supplement; unfold to edit";
 
-/// @ 面板底边快捷键提示：进入目录 `Shift+Enter` / 回退上一级 `Ctrl+Z`（`^z` 沿用 `[clear ^c]` 记法）。
-pub const MENTION_PANEL_FOOTER: &str = "[open ⇧↵] [back ^z]";
+/// @ 面板底边快捷键提示（Prompt 右栏带边框面板使用）。
 pub const MENTION_FOOTER_FILES: &str = "←→ tab · ↑↓ select · ↵ confirm · ⇧↵ enter · esc cancel";
 pub const MENTION_FOOTER_REF_DIR: &str = "←→ tab · ↑↓ select · ↵ insert · esc cancel";
 
-/// lx 输入框 `@` 提及面板：标题与状态行文案（与 prompt 面板同一套外观）。
-pub const LX_MENTION_PANEL_TITLE: &str = "@Command";
+/// `@` 提及面板状态行文案（Prompt 与 lx 面板共用）。
 pub const LX_MENTION_LOADING: &str = "scanning…";
 pub const LX_MENTION_EMPTY: &str = "no matches";
 

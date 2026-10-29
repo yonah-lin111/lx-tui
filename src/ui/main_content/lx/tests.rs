@@ -823,13 +823,13 @@ fn mention_panel_absent_without_trigger() {
 
 #[test]
 fn mention_layout_hidden_when_not_enough_room_above_input() {
-    // 输入框贴近内容区顶部：上方放不下边框 + 一行，不绘制（不移动输入框）。
-    let area = Rect::new(0, 0, 40, 5);
+    // 输入框贴近内容区顶部：上方放不下顶部分割线 + 一行，不绘制（不移动输入框）。
+    let area = Rect::new(0, 0, 40, 4);
     let mut lx = mention_lx(vec![MentionEntry {
         path: "file.rs".into(),
         is_directory: false,
     }]);
-    // 输入框内容框至少 3 行，此时上方仅 2 行：放不下面板（需 3 行）。
+    // 输入框内容框至少 3 行，此时上方仅 1 行：放不下面板（需至少 2 行）。
     let input = layout(area, &lx).input;
     if let Some(input) = input {
         assert!(mention::layout(area, &lx).is_none(), "空间不足不绘制面板");
@@ -866,7 +866,7 @@ fn mention_item_hit_matches_visible_candidate() {
 }
 
 #[test]
-fn mention_panel_renders_title_and_directory_rows() {
+fn mention_panel_renders_tabs_and_directory_rows() {
     let area = Rect::new(0, 0, 80, 24);
     let entries = vec![
         MentionEntry {
@@ -882,7 +882,8 @@ fn mention_panel_renders_title_and_directory_rows() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
-    assert!(text.contains("@Command"), "面板标题可见: {text}");
+    assert!(text.contains("Files"), "顶部 Files Tab 可见: {text}");
+    assert!(text.contains("refDir"), "顶部 refDir Tab 可见: {text}");
     assert!(text.contains("src/"), "目录以 / 结尾展示: {text}");
     assert!(text.contains("main.rs"), "文件候选可见: {text}");
 }
@@ -949,7 +950,7 @@ fn mention_panel_renders_cjk_candidate_without_overflow() {
 
 #[test]
 fn mention_panel_height_capped_at_max_popup_rows() {
-    // 内容区很高：候选很多，面板内容行仍夹到 MAX_POPUP_ROWS（8）+ 边框 2 行。
+    // 内容区很高：候选很多，面板内容行仍夹到 MAX_POPUP_ROWS（8）+ 顶部横线 1 行。
     let area = Rect::new(0, 0, 60, 60);
     let entries: Vec<MentionEntry> = (0..100)
         .map(|index| MentionEntry {
@@ -961,8 +962,8 @@ fn mention_panel_height_capped_at_max_popup_rows() {
     let panel = mention::layout(area, &lx).expect("panel");
     assert_eq!(
         panel.rect.height,
-        mention::MAX_POPUP_ROWS + 2,
-        "高度对齐 codex 的 MAX_POPUP_ROWS + 边框"
+        mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS,
+        "高度对齐 codex 的 MAX_POPUP_ROWS + 顶部横线"
     );
     assert!(panel.scrollbar.is_some(), "超出上限时出现滚动条");
 }
@@ -978,7 +979,7 @@ fn mention_panel_height_follows_content_when_few_rows() {
     let lx = mention_lx(entries);
     let panel = mention::layout(area, &lx).expect("panel");
     assert!(
-        panel.rect.height < mention::MAX_POPUP_ROWS + 2,
+        panel.rect.height < mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS,
         "少量候选按内容高度收缩: {}",
         panel.rect.height
     );
@@ -1166,10 +1167,9 @@ fn slash_panel_renders_ascii_only() {
             }
         }
     }
-    // 文案常量不得含双宽字符（含右对齐来源标签与底边提示）；命令描述须为纯 ASCII。
+    // 文案常量不得含双宽字符（含右对齐来源标签）；命令描述须为纯 ASCII。
     for text in [
         crate::ui::text::LX_SLASH_PANEL_TITLE,
-        crate::ui::text::LX_SLASH_PANEL_FOOTER,
         crate::ui::text::LX_MODEL_PANEL_TITLE,
         crate::ui::text::LX_HISTORY_PANEL_TITLE,
         crate::ui::text::LX_CHAT_NO_MODEL,

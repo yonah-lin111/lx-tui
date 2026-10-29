@@ -25,7 +25,7 @@ impl Lx {
         }
         self.mention.unsuppress();
         self.mention.refresh(&self.input, self.cursor);
-        if self.mention.is_open() {
+        if self.mention.is_open() || self.mention_visible() {
             self.panel = None;
             self.refer = None;
         } else if self.slash.is_some() || self.paste.is_some() {
@@ -171,6 +171,37 @@ impl Lx {
     /// 提及面板当前是否可见（含扫描中/无匹配状态行）；决定 Shift+Enter 是否吞键。
     pub fn mention_visible(&self) -> bool {
         self.mention.view(&self.input, self.cursor) != LxMentionView::Hidden
+    }
+
+    /// 提及面板当前活跃 Tab。
+    pub fn mention_tab(&self) -> crate::app::prompt::MentionTab {
+        self.mention.tab()
+    }
+
+    /// 提及面板切换 Tab：左右循环切换；面板不可见返回 false。
+    pub fn mention_switch_tab(&mut self, delta: isize) -> bool {
+        self.mention.switch_tab(delta, &self.input, self.cursor)
+    }
+
+    /// 提及面板直接设置 Tab。
+    pub fn mention_set_tab(&mut self, tab: crate::app::prompt::MentionTab) -> bool {
+        self.mention.set_tab(tab, &self.input, self.cursor)
+    }
+
+    /// 同步引用文件夹快照；内容变化时返回 true。
+    pub fn sync_referenced_folders(
+        &mut self,
+        folders: &[crate::app::referenced::ReferencedFolder],
+    ) -> bool {
+        self.mention
+            .sync_referenced_folders(folders, &self.input, self.cursor)
+    }
+
+    /// 鼠标悬停粘贴面板操作项：仅接受可用项；返回是否变化。
+    pub fn paste_set_active(&mut self, index: usize) -> bool {
+        self.paste
+            .as_mut()
+            .is_some_and(|paste| paste.panel.set_active(index))
     }
 
     /// 当前路径粘贴参照面板。

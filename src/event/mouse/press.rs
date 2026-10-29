@@ -611,6 +611,22 @@ pub(crate) fn handle_mouse_down_left(
                     *dirty = true;
                     return;
                 }
+                let paste_hit = state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::paste_item_at(inner, &target.lx, mouse.column, mouse.row)
+                });
+                if let Some(index) = paste_hit {
+                    update::select_lx_paste(state, pane, index);
+                    *dirty = true;
+                    return;
+                }
+                let mention_tab_hit = state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::mention_tab_at(inner, &target.lx, mouse.column, mouse.row)
+                });
+                if let Some(tab) = mention_tab_hit {
+                    update::switch_lx_mention_tab(state, pane, tab);
+                    *dirty = true;
+                    return;
+                }
                 let mention_hit = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::mention_item_at(
                         inner,
@@ -629,6 +645,28 @@ pub(crate) fn handle_mouse_down_left(
                 });
                 if let Some(index) = refer_hit {
                     update::select_lx_refer(state, pane, index);
+                    *dirty = true;
+                    return;
+                }
+                // `/` 命令面板候选：优先于聊天控件、点选输入框与整页选区（与 `@` 面板一致）。
+                let slash_hit = state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::slash_item_at(inner, &target.lx, mouse.column, mouse.row)
+                });
+                if let Some(index) = slash_hit {
+                    update::select_lx_slash(state, pane, index);
+                    *dirty = true;
+                    return;
+                }
+                // 浮层边界拦截：点击落在任一已打开命令面板矩形内（如顶栏蓝色横线、
+                // 空态占位行或滚动条列）时直接吞掉，绝不穿透到底层入口、历史或文本选区。
+                if state.pane_anywhere(pane).is_some_and(|target| {
+                    ui::main_content::lx::command_panel_contains(
+                        inner,
+                        &target.lx,
+                        mouse.column,
+                        mouse.row,
+                    )
+                }) {
                     *dirty = true;
                     return;
                 }
@@ -661,15 +699,6 @@ pub(crate) fn handle_mouse_down_left(
                         }
                     }
                     update::clear_lx_selection(state);
-                    *dirty = true;
-                    return;
-                }
-                // `/` 命令面板候选：优先于点选输入框与整页选区（与 `@` 面板一致）。
-                let slash_hit = state.pane_anywhere(pane).and_then(|target| {
-                    ui::main_content::lx::slash_item_at(inner, &target.lx, mouse.column, mouse.row)
-                });
-                if let Some(index) = slash_hit {
-                    update::select_lx_slash(state, pane, index);
                     *dirty = true;
                     return;
                 }
