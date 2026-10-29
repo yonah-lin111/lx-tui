@@ -350,11 +350,12 @@ pub const MENU_PAGE_NEW: &str = "[add]";
 pub const MENU_PAGE_DELETE: &str = "[del]";
 pub const MENU_TITLE_PAGES: &str = "Pages";
 
-/// 模板块状态计数分隔符：`n|m|x`。
+/// 模板块状态计数分隔符：`|`。
 const TEMPLATE_COUNT_SEPARATOR: &str = "|";
 
-/// 模板块状态计数段：`n|m|x`（todo / run / done 顺序，仅统计闭合顶层 `&&&`）。
+/// 模板块状态计数段：`  n|  m|  x`（todo / run / done 顺序，仅统计闭合顶层 `&&&`）。
 ///
+/// 各数字固定 3 列右对齐（不足 3 位左侧补空格，超过 999 封顶为 999）；
 /// 数字段带对应状态（用于分色），分隔符段为 None（用于弱化）；
 /// 三态合计为 0 时返回空，调用方据此整组省略。页码菜单与提示词列表共用。
 pub fn template_count_segments(counts: &TemplateCounts) -> Vec<(String, Option<TemplateStatus>)> {
@@ -373,7 +374,8 @@ pub fn template_count_segments(counts: &TemplateCounts) -> Vec<(String, Option<T
         if index > 0 {
             segments.push((TEMPLATE_COUNT_SEPARATOR.to_string(), None));
         }
-        segments.push((count.to_string(), Some(status)));
+        let clamped = count.min(999);
+        segments.push((format!("{clamped:>3}"), Some(status)));
     }
     segments
 }

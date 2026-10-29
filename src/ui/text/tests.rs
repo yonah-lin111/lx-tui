@@ -610,3 +610,65 @@ fn toast_copied_counts_unicode_characters_and_pluralizes() {
     assert_eq!(toast_copied("hello"), "Copied 5 chars");
     assert_eq!(toast_copied("你好"), "Copied 2 chars");
 }
+
+#[test]
+fn template_count_segments_aligns_three_digits_and_clamps() {
+    use crate::app::markdown::{TemplateCounts, TemplateStatus};
+
+    // 全零（无统计）返回空，整组省略
+    assert!(template_count_segments(&TemplateCounts::default()).is_empty());
+
+    // 个位数：左侧补 2 空格
+    let single = TemplateCounts {
+        todo: 1,
+        in_progress: 2,
+        done: 3,
+    };
+    let segments = template_count_segments(&single);
+    assert_eq!(
+        segments,
+        vec![
+            ("  1".to_string(), Some(TemplateStatus::Todo)),
+            ("|".to_string(), None),
+            ("  2".to_string(), Some(TemplateStatus::InProgress)),
+            ("|".to_string(), None),
+            ("  3".to_string(), Some(TemplateStatus::Done)),
+        ]
+    );
+
+    // 两位数与三位数：左侧补相应空格
+    let mixed = TemplateCounts {
+        todo: 10,
+        in_progress: 0,
+        done: 100,
+    };
+    let segments = template_count_segments(&mixed);
+    assert_eq!(
+        segments,
+        vec![
+            (" 10".to_string(), Some(TemplateStatus::Todo)),
+            ("|".to_string(), None),
+            ("  0".to_string(), Some(TemplateStatus::InProgress)),
+            ("|".to_string(), None),
+            ("100".to_string(), Some(TemplateStatus::Done)),
+        ]
+    );
+
+    // 超过 999 封顶为 999
+    let overflow = TemplateCounts {
+        todo: 1234,
+        in_progress: 999,
+        done: 0,
+    };
+    let segments = template_count_segments(&overflow);
+    assert_eq!(
+        segments,
+        vec![
+            ("999".to_string(), Some(TemplateStatus::Todo)),
+            ("|".to_string(), None),
+            ("999".to_string(), Some(TemplateStatus::InProgress)),
+            ("|".to_string(), None),
+            ("  0".to_string(), Some(TemplateStatus::Done)),
+        ]
+    );
+}

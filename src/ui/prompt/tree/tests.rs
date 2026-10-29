@@ -588,8 +588,8 @@ fn item_row_summarizes_template_counts_across_pages() {
     render(area, &mut buf, &panel, false, None, None);
     // 行序（绝对行 = 搜索行 0 + 分割线 1 + 列表行）：tmp:、default、saved:、item。
     let row = row_text(&buf, area, 5);
-    // 跨页合计 `n|m|x`（todo/run/done），与页码菜单同格式。
-    assert!(row.contains("1|1|0"), "跨页计数: {row}");
+    // 跨页合计 `  n|  m|  x`（todo/run/done），支持 3 位数右对齐格式。
+    assert!(row.contains("  1|  1|  0"), "跨页计数: {row}");
     assert!(!row.contains("[todo"), "不再使用旧计数标签: {row}");
     assert!(row.starts_with("  • alpha"), "{row}");
     // 数字按状态分色：run 黄、done 绿，分隔符弱化。
@@ -600,15 +600,60 @@ fn item_row_summarizes_template_counts_across_pages() {
         ratatui::style::Color::Green,
         "done 计数绿"
     );
-    assert_eq!(buf[(end - 2, 5)].symbol(), "|");
-    assert_eq!(buf[(end - 3, 5)].symbol(), "1");
+    assert_eq!(buf[(end - 2, 5)].symbol(), " ");
+    assert_eq!(buf[(end - 3, 5)].symbol(), " ");
+    assert_eq!(buf[(end - 4, 5)].symbol(), "|");
+    assert_eq!(buf[(end - 5, 5)].symbol(), "1");
     assert_eq!(
-        buf[(end - 3, 5)].fg,
+        buf[(end - 5, 5)].fg,
         ratatui::style::Color::Yellow,
         "run 计数黄"
     );
+    assert_eq!(buf[(end - 6, 5)].symbol(), " ");
+    assert_eq!(buf[(end - 7, 5)].symbol(), " ");
+    assert_eq!(buf[(end - 8, 5)].symbol(), "|");
+    assert_eq!(buf[(end - 9, 5)].symbol(), "1", "todo 计数在组首");
+    assert_eq!(buf[(end - 10, 5)].symbol(), " ");
+    assert_eq!(buf[(end - 11, 5)].symbol(), " ");
+}
+
+#[test]
+fn item_rows_with_different_digit_counts_align_vertical_bars() {
+    let mut item1 = item(1, None, "one_digit");
+    item1.pages[0].content = "&&& a --start\n&&& a --end".into(); // todo: 1
+
+    let mut item2 = item(2, None, "two_digits");
+    let mut content2 = String::new();
+    for _ in 0..10 {
+        content2.push_str("&&& a --start\n&&& a --end\n");
+    }
+    for _ in 0..20 {
+        content2.push_str("&&& b --start\n&&& b --end done\n");
+    }
+    item2.pages[0].content = content2;
+
+    let item3 = item(3, None, "zero_count");
+
+    let mut panel = PromptPanel::new();
+    panel.tree.replace(vec![], vec![item1, item2, item3]);
+    let area = Rect::new(0, 0, 50, 8);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &panel, false, None, None);
+
+    let row1 = row_text(&buf, area, 5);
+    let row2 = row_text(&buf, area, 6);
+    let row3 = row_text(&buf, area, 7);
+
+    assert!(row1.contains("  1|  0|  0"), "1 位数格式: {row1}");
+    assert!(row2.contains(" 10|  0| 20"), "2 位数格式: {row2}");
+    assert!(!row3.contains('|'), "无统计时不显示: {row3}");
+
+    let end = area.right();
+    // 两个条目的竖线必须严格落在完全相同的位置 (end - 4 和 end - 8)
     assert_eq!(buf[(end - 4, 5)].symbol(), "|");
-    assert_eq!(buf[(end - 5, 5)].symbol(), "1", "todo 计数在组首");
+    assert_eq!(buf[(end - 4, 6)].symbol(), "|");
+    assert_eq!(buf[(end - 8, 5)].symbol(), "|");
+    assert_eq!(buf[(end - 8, 6)].symbol(), "|");
 }
 
 #[test]

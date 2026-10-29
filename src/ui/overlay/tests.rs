@@ -1491,9 +1491,9 @@ fn page_menu_renders_border_chips_single_line_pages_and_current_marker() {
     assert!(body.contains(text::MENU_TITLE_PAGES), "{body}");
     assert!(body.contains("Page 1"), "{body}");
     assert!(body.contains("Notes"), "{body}");
-    // 单行页项：名称与 `n|m|x` 计数同行，数字带状态色。
-    assert!(body.contains("1|0|0"), "逐页 todo 计数: {body}");
-    assert!(body.contains("0|0|1"), "逐页 done 计数: {body}");
+    // 单行页项：名称与 `  n|  m|  x` 计数同行，数字带状态色。
+    assert!(body.contains("  1|  0|  0"), "逐页 todo 计数: {body}");
+    assert!(body.contains("  0|  0|  1"), "逐页 done 计数: {body}");
     assert!(!body.contains("todo 1"), "不再使用旧计数标签: {body}");
 
     let Some(Overlay::PageMenu(menu)) = &state.overlay else {

@@ -319,7 +319,7 @@ fn paint_row(
             };
             x = paint_text(buf, x, y, text::PROMPT_TREE_ITEM_ICON, muted, area.right());
             x = paint_text(buf, x, y, " ", base, area.right());
-            // 右侧段：各页模板块计数合计 `n|m|x`（数字按状态分色、分隔符弱化、
+            // 右侧段：各页模板块计数合计 `  n|  m|  x`（数字按状态分色、分隔符弱化、
             // 三态全零整组省略）；放不下整组时整体省略，名称最后截断。
             let segments = text::template_count_segments(&item.template_counts());
             let group_width = segments
