@@ -21,6 +21,7 @@
   3. `list_agents` 返回当前父会话下的 `agent_id`、`role`、`title`、`status`、`queued_count`。
   4. `wait_agent` 正常等待子轮结束并恰好一次领取首轮报告正文。
 
+sess-18e2fc4560183970-2
 ---
 
 ## 验证项 2：运行中持久排队、插队中断与排队取消（贯通 `send_input` + `interrupt` + `cancel_agent_input` + 多轮报告）
@@ -42,6 +43,7 @@
   2. `cancel_agent_input` 将第 2 条 `queued` 输入转为 `cancelled`（重复调用幂等），队列剩余数减少。
   3. `send_input(interrupt=true)` 取消当前正在运行的第 1 轮（保留已有输出但**不生成**第 1 轮完成报告），封口后优先执行插队任务，再继续执行剩余的第 1 条普通排队任务；两个正常完成的子轮各自生成独立报告。
 
+sess-18e2fc7719dcef00-6b
 ---
 
 ## 验证项 3：终态/跨重启显式恢复与缺图阻断自愈（贯通 `resume_agent` + `blocked` 阻断 + 自动压缩检查点回放）
@@ -61,3 +63,5 @@
   1. 终态或重启后未调用 `resume_agent` 直接 `send_input` 明确报错 `subagent is not active; call resume_agent first`，且重启不会自动偷跑任何子 agent。
   2. `resume_agent` 成功后恢复原 `child_session_id` 的历史消息与持久化压缩检查点（按 `system -> environment -> compact summary -> 后续历史` 顺序装配），后续 `send_input` 在同一子会话下继续追加轮次。
   3. 归档图片丢失或篡改时，队首输入保持 `queued` 并标记 `error_code="image_missing"`，对外与 UI 投影为 `blocked`，不降级为纯文本、不越过队首；通过 `cancel_agent_input` 取消后即可继续正常发送。
+
+sess-18e2fca47da19bd0-4de
