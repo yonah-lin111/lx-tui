@@ -17,6 +17,7 @@ pub use file_diff::{DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailVi
 pub use shell::{PendingShell, QueuedSubmission, UserShellView};
 pub use steps::{
     AssistantStepView, ChatMessageView, ChatPartView, ToolCallView, ToolStatus, ToolSummary,
+    relativize_project_path,
 };
 pub use tool_view::{
     AskAnsweredView, AskDetailView, CommandView, InteractionAction, PlanSnapshotView, PlanStepView,
@@ -444,6 +445,8 @@ pub struct LxChat {
     pub pending_shells: Vec<PendingShell>,
     /// 忙时排队、空闲后按 FIFO 分派的提交（只保存在内存，重启不执行）。
     pub queue: Vec<QueuedSubmission>,
+    /// 当前所属项目根目录（用于剥离工具卡片里的当前项目绝对路径前缀）。
+    pub project_root: Option<std::path::PathBuf>,
 }
 
 impl Default for LxChat {
@@ -486,7 +489,25 @@ impl LxChat {
             plan: None,
             pending_shells: Vec::new(),
             queue: Vec::new(),
+            project_root: None,
         }
+    }
+
+    /// 同步当前项目根目录，并将消息中的工具展示路径收短为相对路径。
+    pub fn set_project_root(&mut self, root: Option<std::path::PathBuf>) -> bool {
+        let switched_root = self.project_root.is_some() && self.project_root != root;
+        let mut changed = self.project_root != root;
+        self.project_root = root;
+        if let Some(root) = self.project_root.as_deref() {
+            for message in &mut self.messages {
+                changed |= if switched_root {
+                    message.rebuild_paths(root)
+                } else {
+                    message.relativize_paths(root)
+                };
+            }
+        }
+        changed
     }
 
     /// 复位**会话级**展示状态（`/new`、会话删除、切换到别的会话共用）。

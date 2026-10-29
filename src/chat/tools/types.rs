@@ -409,10 +409,12 @@ pub struct ToolSummary {
     pub range: Option<(usize, usize)>,
     pub added: Option<usize>,
     pub removed: Option<usize>,
-    /// 命中条目数（`search` 命中数 / 目录读取的条目数）。
+    /// 命中条目数（**只用于 `search`**；目录读取的条目数不再冒充命中数）。
     pub matches: Option<usize>,
     /// `search` 的搜索模式：结果体不带它，由调用参数提取后带入摘要。
     pub pattern: Option<String>,
+    /// `read` 的结果种类（文件 / 目录）；未结算或旧记录为 None。
+    pub read_kind: Option<ReadKind>,
     /// `read` **实际读到的行数**（`end_line - start_line + 1`），UI 的 `(N lines)` 只用它。
     pub read_lines: Option<usize>,
     /// 文件总行数（目录读取时为条目数）；**不是**本次读到的行数。
@@ -439,6 +441,7 @@ impl Default for ToolSummary {
             removed: None,
             matches: None,
             pattern: None,
+            read_kind: None,
             read_lines: None,
             total_lines: None,
             truncated: false,

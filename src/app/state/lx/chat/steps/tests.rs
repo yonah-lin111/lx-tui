@@ -188,3 +188,68 @@ fn accept_arguments_marks_pending_or_reports_invalid() {
     assert_eq!(broken.status, ToolStatus::Failed);
     assert_eq!(broken.error.as_deref(), Some("bad"));
 }
+
+#[test]
+fn relativize_project_path_strips_current_project_prefix_and_keeps_external_paths() {
+    let root = std::path::Path::new("/Users/yonah/projects/agent/lx-tui");
+    assert_eq!(
+        relativize_project_path(
+            "/Users/yonah/projects/agent/lx-tui/.worktrees/tool-message-tree",
+            root
+        ),
+        ".worktrees/tool-message-tree"
+    );
+    assert_eq!(
+        relativize_project_path(
+            "/Users/yonah/projects/agent/lx-tui/.worktrees/tool-message-tree/AGENTS.md",
+            root
+        ),
+        ".worktrees/tool-message-tree/AGENTS.md"
+    );
+    assert_eq!(
+        relativize_project_path("/Users/yonah/projects/agent/lx-tui", root),
+        "."
+    );
+    assert_eq!(
+        relativize_project_path("/Users/yonah/Desktop/lx_tool_demo.txt", root),
+        "/Users/yonah/Desktop/lx_tool_demo.txt"
+    );
+    assert_eq!(relativize_project_path("src/main.rs", root), "src/main.rs");
+    assert_eq!(
+        relativize_project_path("./src/main.rs", root),
+        "src/main.rs"
+    );
+    assert_eq!(relativize_project_path("./", root), ".");
+
+    // 当项目根从 worktree 子目录切换为主仓库根时，rebuild_paths 从原始 JSON 恢复并重算。
+    let mut call = ToolCallView {
+        call_id: "c-wt".into(),
+        name: "read".into(),
+        position: 0,
+        arguments_json:
+            r#"{"path":"/Users/yonah/projects/agent/lx-tui/.worktrees/tool-message-tree/AGENTS.md"}"#
+                .into(),
+        status: ToolStatus::Completed,
+        summary: Some(Box::new(ToolSummary {
+            path: Some(
+                "/Users/yonah/projects/agent/lx-tui/.worktrees/tool-message-tree/AGENTS.md".into(),
+            ),
+            ..ToolSummary::default()
+        })),
+        error: None,
+        result_json: None,
+        detail: None,
+    };
+    let wt =
+        std::path::Path::new("/Users/yonah/projects/agent/lx-tui/.worktrees/tool-message-tree");
+    assert!(call.relativize_paths(wt));
+    assert_eq!(
+        call.summary.as_ref().and_then(|s| s.path.as_deref()),
+        Some("AGENTS.md")
+    );
+    assert!(call.rebuild_paths(root));
+    assert_eq!(
+        call.summary.as_ref().and_then(|s| s.path.as_deref()),
+        Some(".worktrees/tool-message-tree/AGENTS.md")
+    );
+}

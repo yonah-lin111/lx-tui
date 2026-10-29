@@ -163,15 +163,16 @@ fn summaries_hold_only_metadata() {
     assert_eq!(summary.added, None);
     assert!(!format!("{summary:?}").contains("secret"));
 
-    // 目录读取：条目数映射成 matches，且没有行区间。
+    // 目录读取：种类进 read_kind，条目数**不得**伪装成 matches。
     let directory = to_summary(&execute(&ctx, "read", r#"{"path":"."}"#));
     assert_eq!(directory.range, None, "目录读取没有行区间");
     assert_eq!(directory.read_lines, None, "目录读取没有「读到的行数」");
     assert_eq!(
-        directory.matches, directory.total_lines,
-        "目录条目数同时进 matches 与 total_lines"
+        directory.read_kind,
+        Some(crate::chat::tools::ReadKind::Directory)
     );
-    assert!(directory.matches.is_some_and(|entries| entries > 0));
+    assert_eq!(directory.matches, None, "目录条目数不是搜索命中数");
+    assert!(directory.total_lines.is_some_and(|entries| entries > 0));
 
     let write = execute(&ctx, "write", r#"{"path":"b.txt","content":"x\ny\n"}"#);
     let summary = to_summary(&write);
@@ -363,6 +364,7 @@ fn to_app_summary(summary: &super::super::types::ToolSummary) -> AppToolSummary 
         removed: summary.removed,
         matches: summary.matches,
         pattern: summary.pattern.clone(),
+        read_kind: summary.read_kind,
         read_lines: summary.read_lines,
         total_lines: summary.total_lines,
         truncated: summary.truncated,

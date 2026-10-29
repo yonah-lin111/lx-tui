@@ -362,9 +362,13 @@ pub fn on_turn_failed(state: &mut AppState, pane: PaneId, generation: u64) -> bo
 /// 整轮终态 `Finished` 由 `on_stream_finished` 处理，这里只做增量与响应收尾；
 /// 旧 generation / 其它窗格的事件在状态机校验处被丢弃（不回写任何状态）。
 pub fn on_stream_delta(state: &mut AppState, key: &RequestKey, deltas: &[ChatDelta]) -> bool {
+    let project_root = state.project_root_for_pane(key.pane);
     let Some(target) = state.pane_mut_anywhere(key.pane) else {
         return false;
     };
+    if project_root.is_some() {
+        target.lx.chat.project_root.clone_from(&project_root);
+    }
     if !matches!(
         &target.lx.chat.request,
         RequestState::Streaming {
@@ -650,9 +654,13 @@ pub fn stop_stream(state: &mut AppState, pane: PaneId) -> bool {
 /// 一致）；会话切换/窗格关闭/旧 generation 一律忽略，调用方据此拒绝执行文件 IO。
 /// 返回是否产生状态变化（供事件层安排下一帧渲染）。
 pub fn on_tool_pending(state: &mut AppState, key: &RequestKey, call_id: &str) -> bool {
+    let project_root = state.project_root_for_pane(key.pane);
     let Some(target) = state.pane_mut_anywhere(key.pane) else {
         return false;
     };
+    if project_root.is_some() {
+        target.lx.chat.project_root.clone_from(&project_root);
+    }
     if !matches!(
         &target.lx.chat.request,
         RequestState::Streaming { key: active, .. } if active == key
@@ -701,9 +709,13 @@ pub fn on_tool_settled(
     result_json: Option<String>,
     error: Option<String>,
 ) -> bool {
+    let project_root = state.project_root_for_pane(key.pane);
     let Some(target) = state.pane_mut_anywhere(key.pane) else {
         return false;
     };
+    if project_root.is_some() {
+        target.lx.chat.project_root.clone_from(&project_root);
+    }
     if !matches!(
         &target.lx.chat.request,
         RequestState::Streaming { key: active, .. } if active == key

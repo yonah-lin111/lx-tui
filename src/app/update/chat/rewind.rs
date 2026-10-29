@@ -497,6 +497,7 @@ pub fn on_session_reloaded(
     revision: i64,
 ) -> bool {
     let models = state.models.clone();
+    let project_root = state.project_root_for_pane(pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -507,6 +508,7 @@ pub fn on_session_reloaded(
         .iter()
         .map(|message| super::view::view_message_of(message, &models))
         .collect();
+    target.lx.set_project_root(project_root);
     target.lx.chat.notices = notices
         .iter()
         .map(crate::app::state::RewindNoticeView::from_record)

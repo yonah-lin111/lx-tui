@@ -672,6 +672,7 @@ fn view_summary_maps_every_field() {
         removed: Some(1),
         matches: Some(2),
         pattern: Some("fn render".into()),
+        read_kind: Some(crate::chat::tools::ReadKind::File),
         read_lines: Some(29),
         total_lines: Some(1000),
         truncated: true,

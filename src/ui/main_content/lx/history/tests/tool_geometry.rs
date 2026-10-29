@@ -191,8 +191,8 @@ fn narrow_and_short_viewports_never_panic_with_tools() {
 
 #[test]
 fn tool_steps_occupy_a_header_plus_one_or_two_detail_rows() {
-    // 工具步骤 = 1 行标题 + 1~2 行详情（`  └─ …`，长参数折行、最多 2 行）。
-    // 行数与状态无关；布局与渲染必须一致。
+    // 工具步骤 = 1 行标题 + 1~4 行详情（路径/范围/错误/取消各成节点，
+    // 折叠态最多 2 行内容 + 1 行省略提示）。布局与渲染必须一致。
     for status in [
         ToolStatus::InputStreaming,
         ToolStatus::Pending,
@@ -207,7 +207,7 @@ fn tool_steps_occupy_a_header_plus_one_or_two_detail_rows() {
         let lx = lx_with(vec![message]);
         let area = Rect::new(0, 0, 40, 10);
         let computed = layout(area, &lx, &mut cache());
-        // 标题 1 + 详情 1~2 + 收尾呼吸行 1。
+        // `read`：标题 1 + 路径 1 +（错误/取消 0~1 行）+ 呼吸 1。
         assert!(
             (3..=4).contains(&computed.total_rows),
             "{status:?} 应为 3~4 行，实际 {}",
@@ -245,11 +245,11 @@ fn consecutive_tool_steps_have_a_blank_line_between_them() {
     let lx = lx_with(vec![message]);
     let area = Rect::new(0, 0, 60, 14);
     let computed = layout(area, &lx, &mut cache());
-    // 3 个工具 × 2 行 + 2 个块间空行 + 消息间呼吸行 1 = 9。
+    // completed 2（标题+路径）+ failed 2（标题+错误）+ running 2（标题+路径）
+    // + 2 个块间空行 + 呼吸 1 = 9。
     assert_eq!(computed.total_rows, 9, "连续工具之间各留一行空行");
     assert_eq!(render_rows(area, &lx, 0), 9);
 
-    // 渲染出来应当是 `■` / `└─` / 空行 交替。
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let rows: Vec<String> = (0..9).map(|row| row_text(&buf, area, row)).collect();
@@ -258,21 +258,25 @@ fn consecutive_tool_steps_have_a_blank_line_between_them() {
         "第 1 行是标题：{rows:?}"
     );
     assert!(
-        rows[1]
-            .trim_start()
-            .starts_with(text::agent::MARKER_TREE_LEAF),
-        "第 2 行是详情：{rows:?}"
+        rows[1].contains("src/ui/style.rs"),
+        "第 2 行是路径：{rows:?}"
     );
     assert!(rows[2].trim().is_empty(), "第 3 行是空行：{rows:?}");
     assert!(
         rows[3].starts_with(text::agent::STEP_MARK_FILLED),
-        "第 4 行是下一个标题：{rows:?}"
+        "第 4 行是失败工具标题：{rows:?}"
     );
+    assert!(rows[4].contains("boom"), "第 5 行是错误详情：{rows:?}");
     assert!(rows[5].trim().is_empty(), "第 6 行是空行：{rows:?}");
     assert!(
         rows[6].starts_with(text::agent::STEP_MARK_FILLED),
-        "第 7 行是第三个标题：{rows:?}"
+        "第 7 行是运行中工具标题：{rows:?}"
     );
+    assert!(
+        rows[7].contains("src/ui/style.rs"),
+        "第 8 行是路径：{rows:?}"
+    );
+    assert!(rows[8].trim().is_empty(), "第 9 行是呼吸空行：{rows:?}");
 }
 
 /// 工具与正文之间的空行仍在（异构块保留空行）。
@@ -283,7 +287,7 @@ fn tool_and_text_still_have_a_blank_line_between_them() {
     let lx = lx_with(vec![message]);
     let area = Rect::new(0, 0, 60, 12);
     let computed = layout(area, &lx, &mut cache());
-    // 正文 1 + 空行 1 + 工具 2 + 呼吸行 1 = 5。
+    // 正文 1 + 空行 1 + read 2（标题+路径）+ 呼吸行 1 = 5。
     assert_eq!(computed.total_rows, 5, "异构块之间保留空行");
     assert_eq!(render_rows(area, &lx, 0), 5);
 }
@@ -468,98 +472,50 @@ fn card_hits(lx: &Lx, area: Rect) -> usize {
         .count()
 }
 
-/// 连续 `edit` 共用一行合并标题，但**每个调用各自一块**：各自一份整卡命中区与
-/// 各自的展开入口，展开互不影响；同组的 `write` 同理，`edit` 与 `write` 不共享标题。
+/// 连续文件工具**不再合并**：每个调用各自一张卡、一个空行、一个独立点击面。
 #[test]
-fn consecutive_file_tools_share_one_header_but_expand_independently() {
-    let area = Rect::new(0, 0, 60, 20);
-
-    let build = |names: [&str; 2]| {
-        let mut message = message("assistant", "complete", Vec::new());
-        message
-            .steps
-            .push(file_step(1, "call-a", names[0], ToolStatus::Completed));
-        message
-            .steps
-            .push(file_step(2, "call-b", names[1], ToolStatus::Completed));
-        lx_with(vec![message])
-    };
-
-    let merged = build(["edit", "edit"]);
-    let merged_layout = layout(area, &merged, &mut cache());
+fn consecutive_file_tools_are_separate_cards() {
+    let area = Rect::new(0, 0, 60, 24);
+    let mut message = message("assistant", "complete", Vec::new());
+    message
+        .steps
+        .push(file_step(1, "call-a", "edit", ToolStatus::Completed));
+    message
+        .steps
+        .push(file_step(2, "call-b", "edit", ToolStatus::Completed));
+    let lx = lx_with(vec![message.clone()]);
+    let computed = layout(area, &lx, &mut cache());
+    assert_eq!(card_hits(&lx, area), 2, "两个调用各一张卡");
+    assert_eq!(render_rows(area, &lx, 0), computed.total_rows);
+    let text = rendered_text(&lx, area);
     assert_eq!(
-        render_rows(area, &merged, 0),
-        merged_layout.total_rows,
-        "合并卡布局与渲染行数一致"
-    );
-    assert_eq!(
-        card_hits(&merged, area),
+        text.matches(text::agent::VERB_TOOL_EDIT).count(),
         2,
-        "两个连续 edit 各自一块：两块独立的点击面"
+        "每张卡都有自己的标题：{text}"
     );
-
-    // `write` 同为文件工具：连续 `write` 也合并。
-    let writes = build(["write", "write"]);
-    assert_eq!(
-        card_hits(&writes, area),
-        2,
-        "连续 write 同样共用标题、各自一块"
-    );
-    assert_eq!(
-        render_rows(area, &writes, 0),
-        layout(area, &writes, &mut cache()).total_rows
-    );
-
-    // 合并卡内**恰好一个**空行：两块之间的分隔行。
+    assert!(!text.contains("2 files"), "不再出现合并标题：{text}");
     let mut buf = Buffer::empty(area);
-    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &merged, 0);
-    let total = merged_layout.total_rows;
-    let blanks: Vec<usize> = (1..total - 1)
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let blanks: Vec<usize> = (1..computed.total_rows - 1)
         .filter(|row| {
             row_text(&buf, area, u16::try_from(*row).unwrap_or(u16::MAX))
                 .trim()
                 .is_empty()
         })
         .collect();
-    assert_eq!(blanks.len(), 1, "两块之间只隔一行空行：{blanks:?}");
-    let next = row_text(&buf, area, u16::try_from(blanks[0] + 1).unwrap_or(u16::MAX));
-    assert!(
-        next.contains("file2"),
-        "空行之后紧跟第二块的文件头：{next:?}"
-    );
+    assert_eq!(blanks.len(), 1, "两张卡之间只隔一行空行：{blanks:?}");
 
-    // 展开只作用于被点的那一个调用；另一块保持折叠。
-    //
-    // 断言的是**内容差异**而不是总行数：折叠态末尾多一行「剩余行数」提示，展开后这行
-    // 消失、内容行铺开，两边总行数可以相等甚至反向，行数不是这个交互的判据。
-    let mut expanded = build(["edit", "edit"]);
+    // 点第一张卡只展开第一张。
+    let mut expanded = lx_with(vec![message.clone()]);
     assert!(expanded.chat.toggle_detail("assistant-1", "call-a"));
     let expanded_layout = layout(area, &expanded, &mut cache());
     assert_eq!(render_rows(area, &expanded, 0), expanded_layout.total_rows);
-    let folded_text = rendered_text(&merged, area);
-    let expanded_text = rendered_text(&expanded, area);
-    assert!(
-        folded_text.matches("more line").count() == 2,
-        "折叠态两块各一行剩余行数：{folded_text}"
-    );
-    assert!(
-        expanded_text.matches("more line").count() == 1,
-        "展开后只剩另一块的提示：{expanded_text}"
-    );
-    assert_eq!(render_rows(area, &expanded, 0), expanded_layout.total_rows);
-    assert_eq!(card_hits(&expanded, area), 2, "展开态仍是两块");
-
-    // 同种动词才合并：edit + write 各自成卡，行数更多。
-    let split = build(["edit", "write"]);
-    let split_layout = layout(area, &split, &mut cache());
-    assert_eq!(card_hits(&split, area), 2, "不同动词不合并");
-    assert!(split_layout.total_rows > merged_layout.total_rows);
-    assert_eq!(render_rows(area, &split, 0), split_layout.total_rows);
+    assert_eq!(card_hits(&expanded, area), 2, "展开后仍是两张卡");
 }
 
 /// 正文步骤打断即分组：`edit` → 正文 → `edit` 是两张卡。
 #[test]
-fn a_part_step_breaks_the_merge() {
+fn a_part_step_separates_two_file_cards() {
     let mut message = message("assistant", "complete", vec![text_part("中间说一句")]);
     message.steps = vec![
         file_step(1, "call-a", "edit", ToolStatus::Completed),

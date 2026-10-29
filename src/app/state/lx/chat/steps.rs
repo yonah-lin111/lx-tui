@@ -117,13 +117,18 @@ pub struct ToolSummary {
     pub added: Option<usize>,
     /// 删除行数。
     pub removed: Option<usize>,
-    /// 命中条目数（`search` 命中数 / 目录读取的条目数）。
+    /// 命中条目数（**只用于 `search`**；目录读取的条目数不再冒充命中数）。
     pub matches: Option<usize>,
     /// `search` 的搜索模式（**只来自调用参数**，结果体里没有）。
     ///
     /// 它是搜索行唯一有意义的「对什么搜」，没有它界面只剩一个「3 matches」的裸计数；
     /// 因此必须进摘要、并在结算/重载两条路径上都不被覆盖丢失。
     pub pattern: Option<String>,
+    /// `read` 的结果种类（文件 / 目录）。
+    ///
+    /// **只来自结果体**（`to_summary` 的 `kind` 字段 / 落库 JSON 的 `"kind"`）；
+    /// pending/running 或旧历史为 None，标题回退为 `Read`，绝不按路径猜。
+    pub read_kind: Option<crate::chat::tools::ReadKind>,
     /// `read` **实际读到的行数**（`end_line - start_line + 1`，只来自结果体）。
     ///
     /// 与 [`Self::total_lines`]（文件总行数 / 目录条目数）是两件不同的事：UI 的
@@ -158,6 +163,7 @@ impl Default for ToolSummary {
             removed: None,
             matches: None,
             pattern: None,
+            read_kind: None,
             read_lines: None,
             total_lines: None,
             truncated: false,
@@ -253,13 +259,14 @@ impl ToolSummary {
                 .filter(|path| !path.is_empty())
                 .map(truncate_summary);
         }
-        // `read` 的区间与「实际读到的行数」**只以结果体为准**（参数侧只是兜底，
+        // `read` 的区间、实际行数与目标种类**只以结果体为准**（参数侧只是兜底，
         // 见 `from_arguments`）：结果体给了 `kind` 就按它的区间口径改写——
         // 空文件（`start_line == 0`）与目录读取（`start_line` 是条目序号）都没有行区间。
         // 这里必须清掉参数侧推导值，否则重载路径清空、实时路径留着，两条路不一致。
         let kind = value.get("kind").and_then(serde_json::Value::as_str);
         match kind {
             Some("file") => {
+                self.read_kind = Some(crate::chat::tools::ReadKind::File);
                 let start = number("start_line").unwrap_or(0);
                 let end = number("end_line").unwrap_or(0);
                 if start > 0 {
@@ -271,17 +278,14 @@ impl ToolSummary {
                 }
             }
             Some("directory") => {
+                self.read_kind = Some(crate::chat::tools::ReadKind::Directory);
                 self.range = None;
                 self.read_lines = None;
-                // 条目数在结果体里叫 `total_lines`（没有 `matches` 数组），
-                // 映射到 `matches`，与 `to_summary` 的口径一致。
-                if self.matches.is_none()
-                    && let Some(entries) = number("total_lines")
-                {
-                    self.matches = Some(entries);
-                }
+                // 目录条目数**不再映射成 `matches`**：那是搜索命中数的字段，
+                // UI 也不显示目录条目数（只有路径）。
             }
             Some("image") => {
+                self.read_kind = Some(crate::chat::tools::ReadKind::Image);
                 self.range = None;
                 self.read_lines = None;
             }
@@ -428,6 +432,10 @@ impl ToolSummary {
         if result.matches.is_some() {
             self.matches = result.matches;
         }
+        // `read` 的种类是结果侧事实：结果给出了就覆盖参数侧（参数侧恒为 None）。
+        if result.read_kind.is_some() {
+            self.read_kind = result.read_kind;
+        }
         if result.added.is_some() {
             self.added = result.added;
         }
@@ -461,6 +469,7 @@ impl ToolSummary {
             && self.removed.is_none()
             && self.matches.is_none()
             && self.pattern.is_none()
+            && self.read_kind.is_none()
             && self.read_lines.is_none()
             && self.total_lines.is_none()
             && !self.truncated
@@ -636,6 +645,111 @@ impl ToolCallView {
         self.status = status;
         self.error = error;
     }
+
+    /// 将工具卡片展示路径（摘要路径、文件差异路径、搜索命中路径）收短为相对当前项目根目录 `project_root` 的路径。
+    ///
+    /// 非当前项目下的路径保持完整路径（参考 codex `display_path_for`）。
+    pub fn relativize_paths(&mut self, project_root: &std::path::Path) -> bool {
+        let mut changed = false;
+        if let Some(summary) = self.summary.as_deref_mut()
+            && let Some(path) = summary.path.as_mut()
+        {
+            let next = relativize_project_path(path, project_root);
+            if *path != next {
+                *path = next;
+                changed = true;
+            }
+        }
+        match self.detail.as_deref_mut() {
+            Some(super::tool_view::ToolDetailView::File(view)) => {
+                for file in &mut view.files {
+                    let next = relativize_project_path(&file.path, project_root);
+                    if file.path != next {
+                        file.path = next;
+                        changed = true;
+                    }
+                    if let Some(to) = file.to.as_mut() {
+                        let next = relativize_project_path(to, project_root);
+                        if *to != next {
+                            *to = next;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            Some(super::tool_view::ToolDetailView::Search(view)) => {
+                for hit in &mut view.matches {
+                    let next = relativize_project_path(&hit.path, project_root);
+                    if hit.path != next {
+                        hit.path = next;
+                        changed = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        changed
+    }
+    /// 当项目根目录从旧值切换到新值时，先从原始 `arguments_json` / `result_json` 还原未剥离的路径，
+    /// 再按新的 `project_root` 重新计算相对路径，避免原地覆盖导致的前缀丢失。
+    pub fn rebuild_paths(&mut self, project_root: &std::path::Path) -> bool {
+        if let Some(summary) = self.summary.as_deref_mut() {
+            let restored = ToolSummary::from_arguments(&self.arguments_json)
+                .absorb_result_json(self.result_json.as_deref());
+            if restored.path.is_some() {
+                summary.path = restored.path;
+            }
+        }
+        if let Some(result_json) = self.result_json.as_deref() {
+            match self.detail.as_deref() {
+                Some(super::tool_view::ToolDetailView::File(_)) => {
+                    if let Some(detail) =
+                        super::tool_view::ToolDetailView::file_detail(Some(result_json))
+                    {
+                        self.detail = Some(Box::new(detail));
+                    }
+                }
+                Some(super::tool_view::ToolDetailView::Search(_)) => {
+                    if let Some(detail) =
+                        super::tool_view::ToolDetailView::from_result_json(Some(result_json))
+                    {
+                        self.detail = Some(Box::new(detail));
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.relativize_paths(project_root)
+    }
+}
+
+/// 将路径收短为相对当前项目根目录 `project_root` 的路径（参考 codex `display_path_for`）：
+/// - 已是相对路径 → 剥离冗余前导 `./` 后返回；
+/// - 位于 `project_root` 下 → 剥离项目根前缀（恰等于项目根时返回 `.`）；
+/// - 不在当前项目下 → 保持完整路径。
+pub fn relativize_project_path(raw: &str, project_root: &std::path::Path) -> String {
+    let path = std::path::Path::new(raw);
+    if path.is_relative() {
+        let mut trimmed = raw;
+        while let Some(rest) = trimmed.strip_prefix("./") {
+            trimmed = rest;
+        }
+        return if trimmed.is_empty() {
+            ".".to_string()
+        } else {
+            trimmed.to_string()
+        };
+    }
+    if project_root.as_os_str().is_empty() {
+        return raw.to_string();
+    }
+    if let Ok(stripped) = path.strip_prefix(project_root) {
+        if stripped.as_os_str().is_empty() {
+            return ".".to_string();
+        }
+        return stripped.display().to_string();
+    }
+    raw.to_string()
 }
 
 /// assistant 时间线中的一个步骤：内容块或工具调用（按 `position` 唯一有序）。
@@ -810,6 +924,28 @@ impl ChatMessageView {
             Some(AssistantStepView::Tool { call, .. }) => Some(call),
             _ => None,
         }
+    }
+
+    /// 将本条消息内所有工具步骤的展示路径收短为相对 `project_root` 的路径。
+    pub fn relativize_paths(&mut self, project_root: &std::path::Path) -> bool {
+        let mut changed = false;
+        for step in &mut self.steps {
+            if let AssistantStepView::Tool { call, .. } = step {
+                changed |= call.relativize_paths(project_root);
+            }
+        }
+        changed
+    }
+
+    /// 项目根从旧值切换到新值时，先从原始 JSON 还原再按新根重算相对路径。
+    pub fn rebuild_paths(&mut self, project_root: &std::path::Path) -> bool {
+        let mut changed = false;
+        for step in &mut self.steps {
+            if let AssistantStepView::Tool { call, .. } = step {
+                changed |= call.rebuild_paths(project_root);
+            }
+        }
+        changed
     }
 }
 

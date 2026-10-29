@@ -7,9 +7,8 @@ use super::*;
 /// 第 1 行只有「方块 + 动词」：**没有任何状态文字**（`done` 已删除）。
 #[test]
 fn header_is_only_square_and_verb_without_status_text() {
-    let cases: [(&str, ToolSummary, &str); 4] = [
-        ("read", read_summary(), text::agent::VERB_TOOL_READ),
-        ("search", search_summary(), text::agent::VERB_TOOL_SEARCH),
+    // `read` 的路径/范围在标题右侧（与 wait agent 同读法），这里只守无状态的三种工具。
+    let cases: [(&str, ToolSummary, &str); 2] = [
         ("edit", edit_summary(), text::agent::VERB_TOOL_EDIT),
         ("write", write_summary(), text::agent::VERB_TOOL_WRITE),
     ];
@@ -101,18 +100,22 @@ fn completed_and_failed_never_show_status_words_on_any_line() {
     );
 }
 
-/// 第 2 行恒以 `  └─ ` 起头（缩进 2 列 + 连接符 + 空格），与通知组件同口径。
+/// 树体首节点以 `├─` 起头、最后节点以 `└─` 收口，连接符同通知组件同色。
 #[test]
-fn detail_line_starts_with_tree_leaf_prefix() {
-    let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
-    let prefix = format!("  {} ", text::agent::MARKER_TREE_LEAF);
+fn detail_nodes_use_branch_and_leaf_prefixes() {
+    let mut summary = read_summary();
+    summary.truncated = true;
+    let call = tool_call("read", ToolStatus::Completed, Some(summary), None);
     let painted = detail_text(&call, 80);
-    assert!(painted.starts_with(&prefix), "第 2 行前缀：{painted:?}");
-    // 连接符本身用通知同款灰色 + 加粗。
+    let rows: Vec<&str> = painted.split('\n').collect();
+    assert_eq!(rows.len(), 2, "路径 + 输出受限：{painted:?}");
+    assert!(rows[0].starts_with(text::agent::TREE_BRANCH), "{painted:?}");
+    assert!(rows[1].starts_with(text::agent::TREE_LEAF), "{painted:?}");
     let segments = detail_segments(&call, 80);
     assert_eq!(
-        segments[0].0, prefix,
-        "首段必须是完整前缀（缩进+连接符+空格）"
+        segments[0].0,
+        text::agent::TREE_BRANCH,
+        "首段必须是完整节点前缀"
     );
     assert_eq!(
         segments[0].1,
@@ -124,20 +127,14 @@ fn detail_line_starts_with_tree_leaf_prefix() {
 /// 第 2 行的参数：路径金黄下划线、行范围 dim、增删绿/红。
 #[test]
 fn detail_line_carries_params_with_their_own_colors() {
-    let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
-    let segments = detail_segments(&call, 80);
+    let write = tool_call("write", ToolStatus::Completed, Some(write_summary()), None);
+    let segments = detail_segments(&write, 80);
     let path = segments
         .iter()
-        .find(|(text, _)| text == "src/ui/style.rs")
+        .find(|(text, _)| text.contains("docs/notes.md"))
         .cloned()
         .expect("路径段");
     assert_eq!(path.1, style::chat_tool_param(), "路径用默认字体色");
-    let range = segments
-        .iter()
-        .find(|(text, _)| text.contains("12-40"))
-        .cloned()
-        .expect("行范围段");
-    assert_eq!(range.1, style::chat_tool_range(), "行范围 dim");
 
     // edit 的增删计数。
     let edit = tool_call("edit", ToolStatus::Completed, Some(edit_summary()), None);
@@ -274,14 +271,15 @@ fn cancelled_uses_filled_square_and_puts_the_word_in_the_detail_line() {
         "取消时动词与方块同色"
     );
     assert!(
-        detail_line.contains(text::LX_CHAT_TOOL_CANCELLED),
-        "第 2 行显示 cancelled：{detail_line:?}"
+        detail_content_flat(&call, 80).contains(text::LX_CHAT_TOOL_CANCELLED),
+        "树体显示 cancelled：{detail_line:?}"
     );
-    let segment = detail_segments(&call, 80)
+    let segment = file_summary::detail(&call, 80, true)
         .into_iter()
-        .find(|(text, _)| text.contains(text::LX_CHAT_TOOL_CANCELLED))
+        .flatten()
+        .find(|segment| segment.text.contains(text::LX_CHAT_TOOL_CANCELLED))
         .expect("兜底段");
-    assert_eq!(segment.1, style::agent_step_detail(), "兜底词 dim");
+    assert_eq!(segment.style, style::agent_step_detail(), "兜底词 dim");
 }
 
 /// 没有参数可展示的进行中状态：第 2 行用 dim 状态词兜底，永不为空。
@@ -307,13 +305,9 @@ fn open_states_without_params_fall_back_to_a_status_word() {
             "{status:?} 兜底同样带连接符：{detail:?}"
         );
     }
-    // 完成态没有兜底：`done` 已删除，第二行留空。
+    // 完成态没有兜底：`done` 已删除，`read` 的路径/范围又在标题里，树体为空。
     let done = tool_call("read", ToolStatus::Completed, None, None);
-    assert_eq!(
-        detail_text(&done, 80),
-        format!("  {} ", text::agent::MARKER_TREE_LEAF),
-        "完成态无摘要时第 2 行留空（不显示 done）"
-    );
+    assert_eq!(detail_text(&done, 80), "", "完成态无摘要时没有树体行");
 }
 
 /// 方块呼吸：运行中两帧交替，终态静态。
@@ -354,8 +348,7 @@ fn step_square_breathes_while_open_and_stays_static_when_settled() {
 /// 完成态：静态翡翠绿方块 + 动词，不出现 braille 转轮。
 #[test]
 fn completed_tool_has_square_and_verb() {
-    let cases: [(&str, ToolSummary, &str); 4] = [
-        ("read", read_summary(), text::agent::VERB_TOOL_READ),
+    let cases: [(&str, ToolSummary, &str); 3] = [
         ("search", search_summary(), text::agent::VERB_TOOL_SEARCH),
         ("edit", edit_summary(), text::agent::VERB_TOOL_EDIT),
         ("write", write_summary(), text::agent::VERB_TOOL_WRITE),
@@ -377,9 +370,15 @@ fn completed_tool_has_square_and_verb() {
         // 标题行 = `■ <动词>`：只有方块与固定动词。
         let expected = format!("{} {verb}", text::agent::STEP_MARK_FILLED);
         assert!(
-            header_line.trim_end() == expected,
-            "{name} 标题行为 `{expected}`：{header_line:?}"
+            header_line.trim_end().starts_with(&expected),
+            "{name} 标题行以 `{expected}` 起头：{header_line:?}"
         );
+        if name == "search" {
+            assert!(
+                header_line.contains(text::agent::matches_label(3).as_str()),
+                "search 把命中数放标题右侧：{header_line:?}"
+            );
+        }
         // 不再有步骤图标：方块后直接是动词（类型图标只在 `[UI]` 查看器样例里）。
         for icon in [
             text::agent::ICON_READ,

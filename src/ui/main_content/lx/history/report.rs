@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! ▲ Subagent report · completed
-//!   └─ explorer · compact 的触发点
+//!   ├─ explorer · compact 的触发点
+//!   └─ Report:
 //!      report body preview line 1
 //!      report body preview line 2
 //!      … 8 more lines
@@ -59,9 +60,15 @@ fn agent_line(report: &SubagentReportView) -> String {
     }
 }
 
+/// 极窄宽度下让出树体缩进，保证 `body_lines` 与 `draw` 的可用列宽恒一致。
+fn body_indent(width: u16) -> u16 {
+    let indent = u16::try_from(BODY_INDENT.len()).unwrap_or(5);
+    if width > indent { indent } else { 0 }
+}
+
 /// 正文的物理行（markdown 已按宽度折行）。
 fn body_lines(report: &SubagentReportView, width: u16) -> Vec<String> {
-    let body_width = width.saturating_sub(BODY_INDENT.len() as u16).max(1);
+    let body_width = width.saturating_sub(body_indent(width)).max(1);
     markdown_render::render_wrapped(&report.body, body_width)
         .into_iter()
         .map(|line| {
@@ -153,9 +160,10 @@ pub(super) fn measure(
     };
     let shown = all.len().min(cap);
     let remaining = all.len().saturating_sub(shown);
-    let hint_row = (expanded && remaining > 0).then_some(2 + shown);
+    let body_label = usize::from(!all.is_empty());
+    let hint_row = (expanded && remaining > 0).then_some(2 + body_label + shown);
     Measure {
-        rows: 2 + shown + usize::from(remaining > 0),
+        rows: 2 + body_label + shown + usize::from(remaining > 0),
         hint_row,
         has_more: all.len() > REPORT_PREVIEW_ROWS,
     }
@@ -198,16 +206,19 @@ pub(super) fn draw(
     }
     *row += 1;
 
-    // `└─ agent名 · title`：默认前景；只占一行，超宽按列裁剪。
-    let mut detail = vec![
-        Segment::new(
-            text::agent::TREE_LEAF.to_string(),
-            style::chat_notice_connector(),
-        ),
-        Segment::new(agent_line(report), style::text()),
-    ];
+    // `├─ agent名 · title`：后面还有 Report 正文时用分支，否则收口。
+    let body = body_view(report, rect.width, expanded, more_steps);
     let line = agent_line(report);
-    let room = usize::from(rect.width).saturating_sub(text::agent::TREE_LEAF.width());
+    let connector = if body.lines.is_empty() {
+        text::agent::TREE_LEAF
+    } else {
+        text::agent::TREE_BRANCH
+    };
+    let mut detail = vec![
+        Segment::new(connector, style::chat_notice_connector()),
+        Segment::new(line.clone(), style::text()),
+    ];
+    let room = usize::from(rect.width).saturating_sub(connector.width());
     if line.width() > room {
         detail[1] = Segment::new(
             crate::ui::text::truncate_to_width(&line, room),
@@ -219,18 +230,28 @@ pub(super) fn draw(
     }
     *row += 1;
 
-    let body = body_view(report, rect.width, expanded, more_steps);
     let body_style = if expanded {
         style::text()
     } else {
         style::agent_step_detail()
     };
-    let body_x = rect
-        .x
-        .saturating_add(u16::try_from(BODY_INDENT.len()).unwrap_or(5));
-    let body_width = rect
-        .width
-        .saturating_sub(u16::try_from(BODY_INDENT.len()).unwrap_or(5));
+    if !body.lines.is_empty() {
+        let label = vec![
+            Segment::new(
+                text::agent::TREE_LEAF.to_string(),
+                style::chat_notice_connector(),
+            ),
+            Segment::new(text::agent::REPORT_LABEL, body_style),
+        ];
+        if let Some(y) = visible_row(rect, scroll, *row) {
+            put_segments(grid, rect.x, y, rect.width, &label);
+        }
+        *row += 1;
+    }
+
+    let indent = body_indent(rect.width);
+    let body_x = rect.x.saturating_add(indent);
+    let body_width = rect.width.saturating_sub(indent);
     for line in &body.lines {
         if let Some(y) = visible_row(rect, scroll, *row) {
             grid.put_clipped(body_x, y, line, body_style, body_width);
@@ -279,10 +300,10 @@ mod tests {
         let report = report("line one\nline two\nline three\nline four");
         assert_eq!(
             rows(&report, 60, false, 0),
-            5,
-            "标题 + 链接 + 2 行 + 剩余行"
+            6,
+            "标题 + 链接 + Report + 2 行 + 剩余行"
         );
-        assert!(rows(&report, 60, true, 0) > 5);
+        assert!(rows(&report, 60, true, 0) > 6);
         assert!(has_more(&report, 60));
     }
 
@@ -298,18 +319,18 @@ mod tests {
             None,
             "折叠态没有更多点击面"
         );
-        assert_eq!(hint_row(&report, 60, true, 0), Some(26), "首批 24 行");
-        assert_eq!(rows(&report, 60, true, 0), 27);
-        assert_eq!(hint_row(&report, 60, true, 1), Some(50), "第二批再 24 行");
-        assert_eq!(rows(&report, 60, true, 1), 51);
+        assert_eq!(hint_row(&report, 60, true, 0), Some(27), "首批 24 行");
+        assert_eq!(rows(&report, 60, true, 0), 28);
+        assert_eq!(hint_row(&report, 60, true, 1), Some(51), "第二批再 24 行");
+        assert_eq!(rows(&report, 60, true, 1), 52);
         assert_eq!(hint_row(&report, 60, true, 2), None, "全部展开后提示消失");
-        assert_eq!(rows(&report, 60, true, 2), 62);
+        assert_eq!(rows(&report, 60, true, 2), 63);
     }
 
     #[test]
     fn short_body_has_no_remainder_hint() {
         let report = report("line one");
-        assert_eq!(rows(&report, 60, false, 0), 3);
+        assert_eq!(rows(&report, 60, false, 0), 4);
         assert!(!has_more(&report, 60));
     }
 
@@ -350,5 +371,47 @@ mod tests {
         );
         let detail: String = (0..60).map(|x| grid.cell(x, 1).ch).collect();
         assert!(detail.contains("explorer · test title"), "{detail}");
+        // `Report:` 标签颜色与正文内容保持一致（折叠态灰、展开态默认前景），不加额外参数色。
+        assert_eq!(grid.cell(5, 2).style, grid.cell(5, 3).style);
+        assert_eq!(grid.cell(5, 2).style, style::agent_step_detail());
+        let mut expanded_grid = Grid::new(area);
+        let mut expanded_row = 0;
+        draw(
+            &mut expanded_grid,
+            area,
+            &report,
+            0,
+            &mut expanded_row,
+            0,
+            false,
+            true,
+            0,
+        );
+        assert_eq!(
+            expanded_grid.cell(5, 2).style,
+            expanded_grid.cell(5, 3).style
+        );
+        assert_eq!(expanded_grid.cell(5, 2).style, style::text());
+        // 极窄宽度（<= 5 列）让出缩进，正文仍写进网格且行数与 measure 一致。
+        let narrow_area = Rect::new(0, 0, 4, 20);
+        let mut narrow_grid = Grid::new(narrow_area);
+        let mut narrow_row = 0;
+        draw(
+            &mut narrow_grid,
+            narrow_area,
+            &report,
+            0,
+            &mut narrow_row,
+            0,
+            false,
+            false,
+            0,
+        );
+        assert_eq!(narrow_row, rows(&report, 4, false, 0));
+        let narrow_body: String = (0..4).map(|x| narrow_grid.cell(x, 3).ch).collect();
+        assert!(
+            !narrow_body.trim().is_empty(),
+            "极窄宽度正文可见：{narrow_body:?}"
+        );
     }
 }

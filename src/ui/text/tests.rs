@@ -461,7 +461,6 @@ fn tool_count_labels_use_shared_prefixes() {
     assert_eq!(a::added_label(18), a::WRITE_ADD);
     assert_eq!(a::removed_label(4), a::EDIT_DIFF_DEL);
     // 行范围与命中数（含单复数）。
-    assert_eq!(a::range_label(12, 40), "12-40");
     assert_eq!(a::matches_label(0), "0 matches");
     assert_eq!(a::matches_label(1), "1 match");
     assert_eq!(a::matches_label(3), "3 matches");

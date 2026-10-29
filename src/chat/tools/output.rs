@@ -420,7 +420,9 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
                 range: file_range,
                 read_lines: file_range
                     .map(|(start, end)| end.saturating_sub(start).saturating_add(1)),
-                matches: (*kind == ReadKind::Directory).then_some(*total_lines),
+                // 目录条目数**不是搜索命中数**：`matches` 只属于 `search`。
+                matches: None,
+                read_kind: Some(*kind),
                 total_lines: (*kind != ReadKind::Image).then_some(*total_lines),
                 truncated: *truncated,
                 ..ToolSummary::default()

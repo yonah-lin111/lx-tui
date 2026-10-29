@@ -21,7 +21,7 @@ pub const MARKER_TREE_BAR: &str = "│";
 /// 工具卡片树形体（与 prompt list 同一套直角语法）。
 ///
 /// 三条前缀**等宽 5 列**，内容一律从第 5 列起，与文件工具详情行的
-/// [`detail prefix`](crate::ui::main_content::lx::history::tool::detail_prefix) 完全对齐：
+/// [`TREE_LEAF`] 的 5 列前缀完全对齐：
 ///
 /// ```text
 ///   ├─ $ cargo test
@@ -96,16 +96,18 @@ pub const TOOL_PARTIAL: &str = "partial";
 pub const TOOL_MATCH_ONE: &str = "match";
 pub const TOOL_MATCH_MANY: &str = "matches";
 
-/// `read` 行范围：`12-40`（起止均为 1-based 闭区间）。
-pub fn range_label(start: usize, end: usize) -> String {
-    format!("{start}-{end}")
+/// `read` 结果种类（只来自结果体，不按路径猜）：`file` / `dir`。
+pub const READ_KIND_FILE: &str = "file";
+pub const READ_KIND_DIR: &str = "dir";
+
+/// 目录读取的条目数：`12 files` / `1 file`。
+pub fn read_dir_count(count: usize) -> String {
+    let suffix = if count == 1 { "file" } else { "files" };
+    format!("{count} {suffix}")
 }
 
-/// `read` 实际读到的行数：`(31 lines)` / `(1 line)`；与区间并列显示在括号里。
-pub fn lines_label(count: usize) -> String {
-    let suffix = if count == 1 { "line" } else { "lines" };
-    format!("({count} {suffix})")
-}
+/// 结果/输出在执行或存储阶段已被限制：只能说明"不全"，不编造省略行数。
+pub const OUTPUT_LIMITED: &str = "output limited";
 
 /// `search` 的搜索模式：加引号，便于与路径区分（`"测试"`）。
 pub fn pattern_label(pattern: &str) -> String {
@@ -136,15 +138,6 @@ pub fn added_label(count: usize) -> String {
 /// 删除行数：`-4`。
 pub fn removed_label(count: usize) -> String {
     format!("{TOOL_DIFF_REMOVE_PREFIX}{count}")
-}
-
-/// 合并卡标题里的文件数：`1 file` / `3 files`。
-///
-/// 只出现在**连续同种文件调用的合并卡**上：单次调用的标题仍是裸动词，不写 `1 file`
-/// ——那会把最常见的单文件改动也说成汇总，白占标题宽度。
-pub fn tool_files_label(count: usize) -> String {
-    let suffix = if count == 1 { "file" } else { "files" };
-    format!("{count} {suffix}")
 }
 
 /// markdown 渲染器识别的代码块语言标记（代码块头部 `language: xxx` 的取值）。
@@ -199,7 +192,7 @@ use crate::app::state::{InteractionAction, ProcessStateView};
 /// `exec_command` 卡片动词。
 pub const VERB_EXEC_COMMAND: &str = "Run command";
 /// `write_stdin` 卡片动词（按动作区分）。
-pub const VERB_READ_OUTPUT: &str = "Read output";
+pub const VERB_READ_OUTPUT: &str = "Read command output";
 pub const VERB_SEND_INPUT: &str = "Send input";
 pub const VERB_STOP_COMMAND: &str = "Stop command";
 /// `update_plan` 卡片动词。
@@ -240,6 +233,27 @@ pub const STATE_FAILED: &str = "Failed";
 
 /// 树体命令行的提示符前缀（`$ cargo test`）。
 pub const COMMAND_PROMPT_PREFIX: &str = "$ ";
+
+/// 消息列表里的耗时：`1.2s` / `2m 3s` / `850ms`（只用已停住的时长）。
+pub fn duration_label(ms: u64) -> String {
+    if ms < 1_000 {
+        return format!("{ms}ms");
+    }
+    let seconds = ms as f64 / 1_000.0;
+    if seconds < 60.0 {
+        format!("{seconds:.1}s")
+    } else {
+        let total = ms / 1_000;
+        format!("{}m {}s", total / 60, total % 60)
+    }
+}
+
+/// 更早的输出已被丢弃：`… 512 earlier bytes dropped`。
+///
+/// 这是**执行阶段**的事实，不是 UI 折叠；不参与"还能展开多少行"的计算。
+pub fn dropped_bytes_label(bytes: u64) -> String {
+    format!("… {bytes} earlier bytes dropped")
+}
 
 /// cwd 次要信息前缀。
 pub const CWD_PREFIX: &str = "cwd:";
@@ -381,6 +395,8 @@ pub const WAIT_TARGETS_SUFFIX: &str = "targets";
 pub const WAIT_UNTIL_DONE: &str = "until done";
 /// 展开态报告正文段落标签。
 pub const WAIT_REPORT: &str = "Report";
+/// 汇报块正文标题（工具卡片语法，单独一条 `└─`）。
+pub const REPORT_LABEL: &str = "Report:";
 pub const AGENT_ID_LABEL: &str = "agent_id:";
 pub const PREVIOUS_STATUS_LABEL: &str = "previous:";
 /// 面板标题：`ASK 1/2 · 布局`。
@@ -414,6 +430,16 @@ pub const ASK_NO_ANSWER: &str = "(no answer)";
 pub fn ask_question_count(count: usize) -> String {
     let suffix = if count == 1 { "question" } else { "questions" };
     format!("{count} {suffix}")
+}
+
+/// 问答对的题号前缀（1-based）：`Q1: `。
+pub fn ask_question_prefix(index: usize) -> String {
+    format!("Q{}: ", index.saturating_add(1))
+}
+
+/// 问答对的答案前缀（1-based）：`A1: `。
+pub fn ask_answer_prefix(index: usize) -> String {
+    format!("A{}: ", index.saturating_add(1))
 }
 
 /// 面板标题位置：`1/2`。

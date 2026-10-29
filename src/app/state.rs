@@ -508,6 +508,21 @@ impl AppState {
             .map(Path::to_path_buf)
     }
 
+    /// 窗格所属项目的根目录：优先取 git 主仓库根（`repo_key`），若 git 尚未刷新且路径位于
+    /// `<repo>/.worktrees/...` 下则剥离 `.worktrees/...` 回退到项目主根。
+    pub fn project_root_for_pane(&self, id: PaneId) -> Option<PathBuf> {
+        let root = self.chat_session_key_for_pane(id)?;
+        for ancestor in root.ancestors() {
+            if ancestor.file_name().and_then(|name| name.to_str()) == Some(".worktrees")
+                && let Some(repo_root) = ancestor.parent()
+                && !repo_root.as_os_str().is_empty()
+            {
+                return Some(repo_root.to_path_buf());
+            }
+        }
+        Some(root)
+    }
+
     /// 指定窗格上的选区。
     pub fn selection_for(&self, pane: PaneId) -> Option<&Selection> {
         self.selection

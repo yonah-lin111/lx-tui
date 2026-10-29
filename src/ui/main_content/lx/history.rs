@@ -65,6 +65,18 @@ const USER_INDENT: u16 = 2;
 /// 内容（头部文案、续行、展开的思考正文、markdown 正文）一律缩进到该列之后，
 /// 与用户消息的 `> ` 缩进同宽。
 pub(super) const STEP_GUTTER: u16 = 2;
+/// 思考正文是否画树体前缀（与工具卡片同一套 `  └─ ` 语法）。
+pub(super) fn thinking_tree(width: u16) -> bool {
+    usize::from(width) > tool::TREE_COLS
+}
+/// 思考正文内容列：画树时整块左移到 `  └─ ` 之后，否则沿用步骤缩进。
+pub(super) fn thinking_body_indent(width: u16) -> u16 {
+    if thinking_tree(width) {
+        u16::try_from(tool::TREE_COLS).unwrap_or(u16::MAX)
+    } else {
+        STEP_GUTTER
+    }
+}
 /// 头部文案与思考耗时之间的分隔（`Thought · 6.3s`）。
 const THINKING_DURATION_SEP: &str = " · ";
 /// 历史区右侧滚动条预留列数。
@@ -255,14 +267,6 @@ pub struct HistoryView {
     pub sticky: Option<usize>,
     /// 本帧要写回状态的新记忆（[`crate::app::state::lx::chat::StickySuppression`]）。
     pub suppressed: Option<crate::app::state::lx::chat::StickySuppression>,
-}
-
-/// 合并卡里某一块是否登记成可点击面：只有**内容能展开**才登记。
-///
-/// 合并组只含文件差异卡片；展开前后行数不变时点了也不会有任何变化，
-/// 登记只会制造「看得见点不动」的错觉。
-fn should_register_card(call: &crate::app::state::ToolCallView, width: u16) -> bool {
-    tool::has_expandable_content(call, width)
 }
 
 /// 本地命令卡片两块（参数 / 输出）的展开状态。

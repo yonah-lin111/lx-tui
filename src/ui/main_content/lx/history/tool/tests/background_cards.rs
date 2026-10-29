@@ -34,6 +34,7 @@ fn command_call(state: ProcessStateView, status: ToolStatus, output: &str) -> To
             command: "while true; do echo heartbeat; sleep 10; done".into(),
             cwd: "/workspace/lx".into(),
             tty: false,
+            duration_ms: None,
             state,
             output_preview: Vec::new(),
             truncated: false,
@@ -65,6 +66,7 @@ fn interaction_call(state: ProcessStateView, status: ToolStatus) -> ToolCallView
                 output: "heartbeat\n".into(),
                 state,
                 exit_code: None,
+                duration_ms: None,
                 truncated: false,
                 dropped_bytes: 0,
             },
@@ -128,6 +130,23 @@ fn render_text(call: &ToolCallView, width: u16) -> String {
 
 /// 命令行（树体中段 y = 1）里**命令正文**的样式：跳到 `$ ` 提示符之后取色，
 /// 跳过树干的 `│` 连接符（那是 dim 灰，不属于命令正文）。
+/// 找到第一行包含 `needle` 的行号（跳过宽字符占位格）。
+fn row_of_text(grid: &Grid, width: u16, height: u16, needle: &str) -> Option<u16> {
+    for y in 0..height {
+        let mut line = String::new();
+        for x in 0..width {
+            let glyph = grid.cell(x, y);
+            if glyph.ch != crate::ui::main_content::lx::grid::CONTINUATION {
+                line.push(glyph.ch);
+            }
+        }
+        if line.contains(needle) {
+            return Some(y);
+        }
+    }
+    None
+}
+
 fn command_row_style(grid: &Grid, width: u16) -> Option<ratatui::style::Style> {
     let mut seen_prompt = false;
     for x in 0..width {
@@ -324,17 +343,18 @@ fn running_command_card_shows_only_the_panel_guide() {
     let text = render_text(&call, 70);
     let lines: Vec<&str> = text.lines().collect();
     assert!(lines[0].contains("Run command"), "第 1 行标题：{text}");
+    assert!(lines[0].contains("Running"), "状态在标题右侧：{text}");
     assert!(lines[1].contains("while true"), "第 2 行是命令原文：{text}");
     assert!(
         lines[1].starts_with(text::agent::TREE_LEAF),
-        "命令是参数区的收口行：{text}"
+        "命令是唯一节点：{text}"
     );
     // 长任务不在消息列表铺输出：命令 + 一行引导，实时日志去面板看。
     assert!(
         !text.contains("heartbeat 1"),
         "运行中不渲染任何输出：{text}"
     );
-    assert_eq!(lines.len(), 3, "标题 + 命令 + 引导：{text}");
+    assert_eq!(lines.len(), 3, "标题 + 命令 + 引导续行：{text}");
     assert!(
         lines
             .last()
@@ -345,7 +365,7 @@ fn running_command_card_shows_only_the_panel_guide() {
         lines
             .last()
             .is_some_and(|line| line.starts_with(text::agent::TREE_PAD)),
-        "引导行只缩进、不画连接符：{text}"
+        "引导是命令节点的续行：{text}"
     );
 }
 
@@ -410,10 +430,9 @@ fn interaction_card_wraps_its_command_too() {
         "交互卡片没有整卡引导：{text}"
     );
     assert!(
-        !text
-            .lines()
+        text.lines()
             .any(|line| line.contains("heartbeat") && !line.contains("echo")),
-        "不渲染调用快照之外的输出：{text}"
+        "本次调用保存的输出可见：{text}"
     );
 }
 
@@ -494,14 +513,38 @@ fn params_section_keeps_its_hint_and_click_face() {
     assert!(text.contains("more line"), "折叠态给剩余行数：{text}");
 }
 
-/// 参数区的 `… N more lines` 提示行与参数同色（不是 meta 灰）。
+/// 参数区的 `… N more lines` 提示行是 dim 注脚（不是参数正文）。
 #[test]
-fn params_more_lines_hint_uses_the_param_color() {
-    let command = format!("$ {{ {} }}", "echo 项目概览; ".repeat(20));
-    let lines = tool::param_lines(&command, 40, false);
-    let hint = lines.last().expect("折叠态必须有提示行");
+fn params_more_lines_hint_is_a_dim_note() {
+    let mut call = command_call(
+        ProcessStateView::Exited { code: Some(0) },
+        ToolStatus::Completed,
+        "",
+    );
+    if let Some(crate::app::state::ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
+        view.command = format!("$ {{ {} }}", "echo 项目概览; ".repeat(40));
+    }
+    let layout = tool::tree::layout(
+        &[tool::tree::Section::new(
+            vec![tool::tree::Node::text(
+                format!("$ {}", "x".repeat(60)),
+                style::chat_tool_param(),
+            )],
+            Some(tool::tree::Preview::head(1)),
+        )],
+        20,
+    );
+    assert!(layout.hidden > 0);
+    let hint = layout
+        .rows
+        .last()
+        .and_then(|row| row.segments.first())
+        .expect("折叠态必须有提示行");
     assert!(hint.text.contains("more line"), "{:?}", hint.text);
-    assert_eq!(hint.style, style::chat_tool_param(), "提示行与参数同色");
+    assert_eq!(hint.style, style::agent_step_detail(), "提示行是 dim 注脚");
+    // 真实卡片同样给出提示。
+    let text = render_text(&call, 40);
+    assert!(text.contains("more line"), "{text}");
 }
 
 /// 短输出（没达到折叠额度）没有折叠内容区，也不登记点击面。
@@ -540,7 +583,8 @@ fn params_stay_light_yellow_and_output_lifts_independently() {
         Some(style::chat_tool_param()),
         "折叠态命令是浅黄"
     );
-    let first_output = 2; // 标题 + 1 行命令。
+    let height = tool::rows(&call, 60, folds(false)).max(1) as u16;
+    let first_output = row_of_text(&folded, 60, height, "heartbeat 0").expect("输出首行");
     let content_col = 5; // 树体前缀占前 5 列，正文从第 5 列起。
     assert_eq!(
         folded.cell(content_col, first_output).style,

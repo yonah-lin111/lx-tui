@@ -10,20 +10,20 @@
 
 use std::sync::Arc;
 
-use crate::app::state::{AssistantStepView, CardSection, UserShellView};
+use crate::app::state::{AssistantStepView, UserShellView};
 use crate::ui::markdown_render;
 
 use super::cache::{
-    BlockKey, PaneCache, SHELL_SLOT_BLOCK, compact_block_signature, group_block_signature,
-    notice_block_signature, part_block_signature, report_block_signature, rewind_block_signature,
-    shell_block_signature, stats_block_signature,
+    BlockKey, PaneCache, SHELL_SLOT_BLOCK, compact_block_signature, notice_block_signature,
+    part_block_signature, report_block_signature, rewind_block_signature, shell_block_signature,
+    stats_block_signature,
 };
 use super::paint::{BlockPaint, BlockSource, CardSpan, UserRefLine};
 use super::source::{HistorySource, is_legacy_report_row};
 use super::timeline::{TimelineEntry, timeline};
 use super::{
     CardKind, Folds, MessageRows, compact, folds_of, notice, report_block, rewind, shell_folds,
-    should_register_card, stats_line, tool, tool_rows, user_shell, wrap,
+    stats_line, tool, tool_rows, user_shell, wrap,
 };
 
 /// 时间线条目类别（与 [`TimelineEntry`] 一一对应，但可跨帧独立持有）。
@@ -174,33 +174,6 @@ fn legacy(
             })
             .collect(),
     }
-}
-
-/// 合并文件工具组的点击面几何（组内每个可展开的调用一个整块区域）。
-fn group_spans(
-    group: &[&crate::app::state::ToolCallView],
-    width: u16,
-    expanded: &[bool],
-) -> Vec<CardSpan> {
-    let mut out = Vec::with_capacity(group.len());
-    for (index, block) in tool::group_blocks(group, width, expanded)
-        .iter()
-        .enumerate()
-    {
-        let call = group[index];
-        if !should_register_card(call, width) {
-            continue;
-        }
-        out.push(CardSpan {
-            call: index,
-            section: CardSection::Body,
-            expanded: expanded.get(index).copied().unwrap_or(false),
-            offset: block.start,
-            rows: block.len,
-            clickable: true,
-        });
-    }
-    out
 }
 
 /// 快照构建中的可变累加器。
@@ -472,25 +445,6 @@ impl Builder<'_> {
         let mut has_previous = false;
         let mut step_index = 0usize;
         while let Some(step) = message.steps.get(step_index) {
-            // 同种文件工具的连续调用共用一行合并标题，但每个调用各自独立成块。
-            if let AssistantStepView::Tool { .. } = step {
-                let group = tool::merge_group(&message.steps, step_index);
-                if group.len() > 1 {
-                    if self.merge_group(
-                        source,
-                        message_index,
-                        message,
-                        &group,
-                        step_index,
-                        has_previous,
-                        blocks,
-                    ) {
-                        has_previous = true;
-                    }
-                    step_index += group.len();
-                    continue;
-                }
-            }
             // 先取块（命中二级缓存时不再重排正文），行数**只**从 paint 取。
             let mut block = self.build_step(source, message_index, step_index, message, step);
             if block.rows == 0 {
@@ -707,72 +661,6 @@ impl Builder<'_> {
                 clickable: span.clickable,
             });
         }
-    }
-
-    /// 合并的文件工具组：一个块（标题行 + 各调用文件块）。
-    fn merge_group(
-        &mut self,
-        source: HistorySource<'_>,
-        message_index: usize,
-        message: &crate::app::state::ChatMessageView,
-        group: &[&crate::app::state::ToolCallView],
-        first_step: usize,
-        has_previous: bool,
-        blocks: &mut Vec<SnapBlock>,
-    ) -> bool {
-        let expanded: Vec<bool> = group
-            .iter()
-            .map(|call| source.chat.detail_is_expanded(&message.id, &call.call_id))
-            .collect();
-        let group_rows = tool::group_rows(group, self.width, &expanded);
-        if group_rows == 0 {
-            return false;
-        }
-        // 与单块同口径：合并组也是消息内的一个块，前面有块就空一行
-        // （否则正文下面直接顶着 `▣ Write 2 files`，两段粘成一片）。
-        if has_previous {
-            self.spacer();
-        }
-        let block_start = self.rows;
-        let key = BlockKey {
-            message_index,
-            step_index: first_step,
-            width: self.width,
-            sig: group_block_signature(source, message, group, &expanded),
-        };
-        let width = self.width;
-        let block = self.block(
-            key,
-            BlockSource::Group {
-                message_index,
-                first_step,
-                count: group.len(),
-            },
-            block_start,
-            || BlockPaint::Legacy {
-                rows: group_rows,
-                spans: group_spans(group, width, &expanded),
-            },
-        );
-        for span in block.paint.card_spans() {
-            let Some(call) = group.get(span.call) else {
-                continue;
-            };
-            self.snapshot.cards.push(CardRegion {
-                kind: CardKind::Tool {
-                    message_id: message.id.clone(),
-                    call_id: call.call_id.clone(),
-                    section: span.section,
-                    expanded: span.expanded,
-                },
-                card_start: block_start + span.offset,
-                card_rows: span.rows,
-                clickable: span.clickable,
-            });
-        }
-        blocks.push(block);
-        self.rows += group_rows;
-        true
     }
 
     /// 消息底部通知与统计行。

@@ -676,9 +676,12 @@ pub fn lx_mention_root_for_pane(state: &AppState, id: PaneId) -> Option<std::pat
 /// 为指定窗格同步 `@` 提及扫描根；根变化返回 true（供置脏）。
 pub fn sync_lx_mention_root(state: &mut AppState, id: PaneId) -> bool {
     let root = lx_mention_root_for_pane(state, id);
-    state
-        .pane_mut_anywhere(id)
-        .is_some_and(|pane| pane.lx.set_mention_root(root))
+    let project = state.project_root_for_pane(id);
+    state.pane_mut_anywhere(id).is_some_and(|pane| {
+        let mention = pane.lx.set_mention_root(root);
+        let project = pane.lx.set_project_root(project);
+        mention || project
+    })
 }
 
 /// 为全部 lx 视图窗格同步 `@` 提及扫描根；任一根变化返回 true。

@@ -541,6 +541,7 @@ fn tool_card_geometry_is_cached_with_the_block() {
                 command: "cargo test --lib history".into(),
                 cwd: "/repo".into(),
                 tty: false,
+                duration_ms: None,
                 state: crate::app::state::ProcessStateView::Exited { code: Some(0) },
                 output_preview: Vec::new(),
                 truncated: false,

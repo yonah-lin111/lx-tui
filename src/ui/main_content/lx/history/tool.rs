@@ -1,31 +1,21 @@
-//! 工具步骤渲染：基本形态是**两行**「`■ 动词` + `  └─ 详情`」（对齐消息底部通知的语法）。
-//!
-//! 语法与 [`super::super::notice`] 完全一致，同一块历史里只有一套步骤读法：
+//! 工具步骤渲染：标题（方块 + 动词 + 右侧状态）与树体内容。
 //!
 //! ```text
-//! ■ Read                        ← 第 1 行：方块 + 动词（翡翠绿），**不显示任何状态文字**
-//!   └─ src/ui/style.rs · 12-40  ← 第 2 行：`└─` 连接符 + 参数/计数/兜底状态词
+//! ■ Run command · Exited 0 · 241ms
+//!   ├─ $ cargo test
+//!   └─ test one ... ok
+//!      … 18 more lines
 //! ```
 //!
-//! - **第 1 行只回答「哪个工具」**：方块（运行中 `■`/`□` 两帧呼吸、终态静态）+
-//!   固定动词。完成态没有 `done` 之类尾巴——方块静止本身就是「做完了」。
-//! - **第 2 行回答「对什么做了什么 / 出了什么事」**：参数（默认前景色）、
-//!   次要计数（行范围 dim、命中数 dim、增删绿红、截断提示黄）。失败时**只放错误
-//!   文案**（路径等信息 `failure_text` 已带），不再铺任何参数；中断同理；
-//!   没有参数可展示的瞬间（`receiving input` / `pending` / `running` / `cancelled`）
-//!   用 dim 的状态词兜底。**完成态没有兜底**：没有任何摘要时第 2 行只有 `└─`
-//!   前缀（行数仍算 2）。
-//!
-//! **行数口径只有一个来源**：基本文件工具恒为 2（宽度 0 时为 0），第二行**单行
-//! 绝不换行**；`search` 有命中详情时额外增加可复制的命中行；带差异正文的文件卡片、进程卡片与计划卡片各有自己的行数函数
-//! （[`rows`] 分派），但 `history::layout`、`history::render`、置顶用户行与滚动条
-//! 全都复用同一份口径。超宽时按「参数内的次要段（`search` 的 `in path`、长路径尾段）→ 次要计数按优先级
-//! 丢弃 → 错误尾部省略 → 丢参数」依次让位，`└─` 前缀始终可辨。`search` 的 pattern
-//! 是这一行唯一必须保住的信息，**绝不中间省略**（只在它单独都放不下时尾部省略）。
-//!
-//! 参数一律取自 [`ToolCallView::summary`]（参数派生 + 结果体补全，见
-//! `ToolSummary::from_arguments` / `absorb_result_json`）；只有摘要缺字段时才回退解析
-//! `arguments_json`，渲染热路径不做常规 JSON 解析。
+//! - **标题右侧**回答「这次调用什么状态」：进程退出码/耗时、`read` 的种类与目录条目数、
+//!   `search` 的命中数、`plan` 的完成计数、委派卡片的调用条件；失败/中断只保留错误详情。
+//! - **树体**回答「对什么做了什么」：一个节点是一段内容（命令、路径、命中、步骤块、
+//!   问答对、diff 正文），首行画 `├─`/`└─`，同一节点的续行左对齐或画 `│`。
+//! - 每个工具调用是独立卡片，块之间空一行；连续文件工具**不再合并**标题。
+//! - 参数/输出各自可独立折叠（[`Folds`]），折叠提示只是续行，不单独收口。
+//! - 参数一律取自 [`ToolCallView::summary`]（参数派生 + 结果体补全，见
+//!   `ToolSummary::from_arguments` / `absorb_result_json`）；只有摘要缺字段时才回退解析
+//!   `arguments_json`，渲染热路径不做常规 JSON 解析。
 //!
 //! 纯渲染：只读 [`ToolCallView`]，只写 lx 页网格；不执行 IO、不改状态、不 `unwrap`。
 
@@ -33,13 +23,11 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::state::{AssistantStepView, CardSection, ToolCallView, ToolStatus};
+use crate::app::state::{CardSection, ToolCallView, ToolStatus};
 use crate::ui::{style, text};
 
 use super::super::Grid;
 use super::{StepKind, StepMark, truncate_with_ellipsis, visible_row};
-
-pub(super) use file_summary::{DETAIL_MAX_ROWS, DETAIL_PREVIEW_ROWS};
 
 mod ask;
 mod command;
@@ -48,9 +36,10 @@ mod file_summary;
 mod plan;
 mod search;
 mod subagent;
+pub(crate) mod tree;
 
 #[cfg(test)]
-use file_summary::{detail_prefix, fallback_parse_count, reset_fallback_parse_count};
+use file_summary::{fallback_parse_count, reset_fallback_parse_count};
 
 /// 树形前缀列数（`  │  ` 与 `  └─ ` 等宽，都是 5 列）；命令/交互/计划卡片共用。
 pub(super) const TREE_COLS: usize = 5;
@@ -119,7 +108,7 @@ pub(super) fn rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
             search::rows(call, view, width, folds.body)
         }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
-            file_diff::rows(&[call], width, &[folds.body])
+            file_diff::rows(call, width, folds.body)
         }
         Some(crate::app::state::ToolDetailView::File(_)) | None => {
             HEADER_ROWS + file_summary::detail_rows(call, width, folds.body)
@@ -130,20 +119,27 @@ pub(super) fn rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
 /// 标题行行数。
 const HEADER_ROWS: usize = 1;
 
-/// 参数可用的最小显示列数；低于它就把参数整段省略（避免只剩一个省略号）。
-pub(super) const MIN_PARAM_COLS: usize = 6;
-/// `search` 的 pattern 只需保留「至少一个模式字符 + 省略号」——它是这一行唯一必须
-/// 保住的信息，因此门槛比路径低（review P2-7：窄宽度也必须看得出在搜什么）。
-/// 门槛取 5 列（两列引号 + 一个宽字符 + `…`），再窄就整段不画，不留一个裸引号。
-pub(super) const MIN_PATTERN_COLS: usize = 5;
 /// 回退解析参数 JSON 的**体积门槛**：参数还在流式接收（还没有摘要）时，只对这么大的
 /// 参数体做兜底解析。多文件 `edit` 的 patch 最坏 1 MiB，每帧解析会白烧 CPU（P3-4）；
 /// 而路径/patch 目标都在参数开头，小体积足够撑起「先看到一点」的体验。
 pub(super) const MAX_FALLBACK_PARSE_BYTES: usize = 8 * 1024;
-/// 错误原因的最小显示列数；低于它整段省略（同理不放半个省略号）。
-pub(super) const MIN_REASON_COLS: usize = 8;
 /// 参数 / 工具名 / 错误原因的字符取样上限（限住超长串的每帧成本）。
 pub(super) const TEXT_SAMPLE_CHARS: usize = 512;
+/// 单条输出行的字符上限：超长单行先取样再折行，避免每帧在渲染热路径展开巨量文本。
+/// 截断处显式补 `…`，不静默吞掉内容。
+pub(super) const MAX_OUTPUT_LINE_CHARS: usize = 8 * 1024;
+
+/// 输出单行取样（超过上限按字符截断并补 `…`，不按字节切）。
+pub(super) fn sample_output_line(line: &str) -> String {
+    match line.char_indices().nth(MAX_OUTPUT_LINE_CHARS) {
+        Some((index, _)) => {
+            let mut text = line[..index].to_string();
+            text.push('…');
+            text
+        }
+        None => line.to_string(),
+    }
+}
 
 /// 绘制工具步骤并推进内容行号；推进的行数与 [`rows`] 严格相等。
 ///
@@ -259,9 +255,9 @@ pub(super) fn draw_animated(
                 rect,
                 scroll,
                 row_index,
-                &[call],
+                call,
                 loading_frame,
-                &[folds.body],
+                folds.body,
                 animating,
             );
             return;
@@ -291,35 +287,6 @@ pub(super) fn title_rows() -> usize {
     HEADER_ROWS
 }
 
-/// 从 `steps[start]` 起收集可合并的文件工具组（含起点）；不合并时返回空。
-///
-/// 合并条件是**同一工具名**（`edit` 并 `edit`、`write` 并 `write`）且两边都是有
-/// 差异正文的文件卡片。`edit` 与 `write` 是两个不同的动词，不并——标题只能写一个
-/// 动词，混并会把 `write` 说成 `Edit`。组内没有正文步骤可插：一旦被 part 打断就
-/// 是两组。
-///
-/// 返回空的两种情况（不是文件卡片 / 已是单元素）由调用方按单调用原路径处理，
-/// 因此这里不区分「不可合并」与「只有一个」。
-pub(super) fn merge_group(steps: &[AssistantStepView], start: usize) -> Vec<&ToolCallView> {
-    let Some(AssistantStepView::Tool { call, .. }) = steps.get(start) else {
-        return Vec::new();
-    };
-    if !file_diff::is_card(call) {
-        return Vec::new();
-    }
-    let mut group = vec![call];
-    for step in &steps[start + 1..] {
-        let AssistantStepView::Tool { call: next, .. } = step else {
-            break;
-        };
-        if next.name != call.name || !file_diff::is_card(next) {
-            break;
-        }
-        group.push(next);
-    }
-    group
-}
-
 /// 输出区的文字档位：折叠 = dim；展开 = 终端默认前景。
 ///
 /// 只有**输出正文**随展开态变化；参数/路径恒为浅黄（[`style::chat_tool_param`]）。
@@ -333,95 +300,6 @@ pub(super) fn output_style(expanded: bool) -> Style {
     }
 }
 
-/// 命令参数区折行后的一行（文本 + 着色档位）。
-pub(super) struct ParamLine {
-    pub(super) text: String,
-    pub(super) style: Style,
-}
-
-/// 命令参数区折行：折叠 [DETAIL_PREVIEW_ROWS] 行、展开 [DETAIL_MAX_ROWS] 行，
-/// 截断补 `…`，折叠态末尾单独一行写剩余行数。
-///
-/// agent 命令卡片与本地命令卡片共用：两个参数区必须同一口径（折行预算与截断），
-/// 否则同样长度的一句话在两处显示成不同的样子。参数恒为浅黄，不随 hover/展开变色。
-pub(super) fn param_lines(text: &str, width: u16, expanded: bool) -> Vec<ParamLine> {
-    let style = style::chat_tool_param();
-    let available = usize::from(width.saturating_sub(TREE_COLS as u16));
-    if available < MIN_PARAM_COLS {
-        return vec![ParamLine {
-            text: text.to_string(),
-            style,
-        }];
-    }
-    let budget = if expanded {
-        DETAIL_MAX_ROWS
-    } else {
-        DETAIL_PREVIEW_ROWS
-    };
-    // 组装按「可用列 × 行预算」放宽，让长命令真正折行而不是一路压成省略号。
-    let safe = single_line(
-        text,
-        TEXT_SAMPLE_CHARS
-            .saturating_mul(budget)
-            .max(TEXT_SAMPLE_CHARS),
-    );
-    let chars: Vec<char> = safe.chars().collect();
-    let mut out: Vec<ParamLine> = Vec::new();
-    let mut start = 0usize;
-    while start < chars.len() && out.len() < budget {
-        let mut col = 0usize;
-        let mut end = start;
-        while end < chars.len() {
-            let cell = chars[end].width().unwrap_or(1).max(1);
-            if col + cell > available {
-                break;
-            }
-            col += cell;
-            end += 1;
-        }
-        if end == start {
-            end = start + 1;
-        }
-        let mut row: String = chars[start..end].iter().collect();
-        // 末行仍有内容没画完：补 `…`（截断标记不占新行）。
-        if end < chars.len() && out.len() + 1 == budget {
-            while row.width() + 1 > available && !row.is_empty() {
-                row.pop();
-            }
-            row.push('…');
-        }
-        out.push(ParamLine {
-            text: row.trim_end().to_string(),
-            style,
-        });
-        start = end;
-    }
-    if out.is_empty() {
-        out.push(ParamLine {
-            text: String::new(),
-            style,
-        });
-    }
-    // 折叠态末尾单独一行写剩余行数（展开后消失）；不占折叠额度。
-    // 提示行属于参数区，与参数同一档颜色（不是 meta 信息）。
-    // 窄到放不下整句就不画，避免半截提示。
-    if !expanded && start < chars.len() {
-        let hint =
-            text::agent::file_diff_more_lines(estimate_remaining_lines(&chars[start..], available));
-        if hint.width() <= available {
-            out.push(ParamLine { text: hint, style });
-        }
-    }
-    out
-}
-
-/// 剩余内容还能折成几行（只用于提示文案，按整列硬切估算即可）。
-fn estimate_remaining_lines(rest: &[char], available: usize) -> usize {
-    let width = available.max(1);
-    let cols: usize = rest.iter().map(|ch| ch.width().unwrap_or(1).max(1)).sum();
-    cols.div_ceil(width).max(1)
-}
-
 /// 该调用的内容是否**能靠展开看到更多**（不能时不登记点击面）。
 ///
 /// 判据必须是**内容行**的比较，而不是 `rows()`：折叠态末尾有一行「剩余行数」提示，
@@ -432,17 +310,12 @@ pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
         return false;
     }
     match call.detail.as_deref() {
-        Some(crate::app::state::ToolDetailView::Command(_)) => {
+        Some(crate::app::state::ToolDetailView::Command(_))
+        | Some(crate::app::state::ToolDetailView::Interaction(_)) => {
             command::params_expandable(call, width) || command::output_expandable(call, width)
         }
-        Some(crate::app::state::ToolDetailView::Interaction(_)) => {
-            command::params_expandable(call, width)
-        }
-        Some(crate::app::state::ToolDetailView::Plan(_)) => false,
-        // `ask` 折叠态只有 `header · answers`；题干最多 500 字，展开才看得全。
-        Some(crate::app::state::ToolDetailView::Ask(_)) => {
-            ask::rows(call, width, true) > ask::rows(call, width, false)
-        }
+        Some(crate::app::state::ToolDetailView::Plan(_))
+        | Some(crate::app::state::ToolDetailView::Ask(_)) => false,
         Some(crate::app::state::ToolDetailView::Subagent(_)) => subagent::has_more(call, width),
         Some(crate::app::state::ToolDetailView::Search(view)) => {
             search::has_more(call, view, width)
@@ -465,6 +338,29 @@ pub(super) fn agent_links(call: &ToolCallView, width: u16) -> Vec<(usize, String
     }
 }
 
+/// 命令/交互卡片的点击面：参数区与输入/输出区各自独立折叠。
+fn command_regions(call: &ToolCallView, width: u16, blocks: command::Blocks) -> Vec<CardRegion> {
+    let mut regions = vec![CardRegion {
+        section: CardSection::Body,
+        card: RowSpan {
+            offset: HEADER_ROWS,
+            rows: blocks.params,
+        },
+        clickable: command::params_expandable(call, width),
+    }];
+    if blocks.output > 0 {
+        regions.push(CardRegion {
+            section: CardSection::Output,
+            card: RowSpan {
+                offset: HEADER_ROWS + blocks.params,
+                rows: blocks.output,
+            },
+            clickable: command::output_expandable(call, width),
+        });
+    }
+    regions
+}
+
 /// 卡片的可交互区域（几何相对步骤块首）。
 ///
 /// 命令卡片把「命令参数」与「输出」拆成两块：各自的点击面与折叠状态互不影响，
@@ -482,74 +378,24 @@ pub(super) fn card_regions(
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(view)) => {
             let blocks = command::blocks(call, width, folds);
-            let params = RowSpan {
-                offset: HEADER_ROWS,
-                rows: blocks.params,
-            };
-            let guide = RowSpan {
-                offset: HEADER_ROWS + blocks.params,
-                rows: blocks.output,
-            };
             if view.state.is_running() {
-                // 长任务：参数整段与引导行都是「打开面板」的点击面。
-                return vec![
-                    CardRegion {
-                        section: CardSection::Body,
-                        card: RowSpan {
-                            offset: 0,
-                            rows: HEADER_ROWS + blocks.params,
-                        },
-                        clickable: true,
+                // 长任务：整卡都是「打开后台任务面板」的点击面。
+                return vec![CardRegion {
+                    section: CardSection::Body,
+                    card: RowSpan {
+                        offset: 0,
+                        rows: HEADER_ROWS + blocks.params + blocks.output,
                     },
-                    CardRegion {
-                        section: CardSection::Output,
-                        card: guide,
-                        clickable: true,
-                    },
-                ];
+                    clickable: true,
+                }];
             }
-            let mut regions = vec![CardRegion {
-                section: CardSection::Body,
-                card: params,
-                clickable: command::params_expandable(call, width),
-            }];
-            if blocks.output > 0 {
-                // 只有**真被折叠**的输出（比预览多）才登记点击面：短输出点了也不会变。
-                let expandable = command::output_expandable(call, width);
-                regions.push(CardRegion {
-                    section: CardSection::Output,
-                    card: guide,
-                    clickable: expandable,
-                });
-            }
-            regions
+            command_regions(call, width, blocks)
         }
         Some(crate::app::state::ToolDetailView::Interaction(_)) => {
-            let params = RowSpan {
-                offset: HEADER_ROWS,
-                rows: step_rows.saturating_sub(HEADER_ROWS),
-            };
-            vec![CardRegion {
-                section: CardSection::Body,
-                card: params,
-                clickable: command::params_expandable(call, width),
-            }]
+            command_regions(call, width, command::blocks(call, width, folds))
         }
-        Some(crate::app::state::ToolDetailView::Plan(_)) => Vec::new(),
-        Some(crate::app::state::ToolDetailView::Ask(_)) => {
-            // 整卡一个 Body 点击面：展开前后行数不变就不登记（点了也不会有变化）。
-            if !has_expandable_content(call, width) {
-                return Vec::new();
-            }
-            vec![CardRegion {
-                section: CardSection::Body,
-                card: RowSpan {
-                    offset: 0,
-                    rows: step_rows,
-                },
-                clickable: true,
-            }]
-        }
+        Some(crate::app::state::ToolDetailView::Plan(_))
+        | Some(crate::app::state::ToolDetailView::Ask(_)) => Vec::new(),
         Some(crate::app::state::ToolDetailView::Subagent(_))
         | Some(crate::app::state::ToolDetailView::Search(_)) => {
             if !has_expandable_content(call, width) {
@@ -581,49 +427,11 @@ pub(super) fn card_regions(
     }
 }
 
-/// 合并卡行数；`expanded` 与 `calls` 一一对应（逐调用独立）。
-pub(super) fn group_rows(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> usize {
-    file_diff::rows(calls, width, expanded)
-}
-
-/// 合并卡逐调用的块几何（行区间）。
-pub(super) fn group_blocks(
-    calls: &[&ToolCallView],
-    width: u16,
-    expanded: &[bool],
-) -> Vec<file_diff::Block> {
-    file_diff::blocks(calls, width, expanded)
-}
-
-/// 绘制合并卡；推进行数与 [`group_rows`] 严格相等。
-#[allow(clippy::too_many_arguments)]
-pub(super) fn group_draw_animated(
-    grid: &mut Grid,
-    rect: Rect,
-    scroll: usize,
-    row_index: &mut usize,
-    calls: &[&ToolCallView],
-    loading_frame: usize,
-    expanded: &[bool],
-    animating: bool,
-) {
-    file_diff::draw(
-        grid,
-        rect,
-        scroll,
-        row_index,
-        calls,
-        loading_frame,
-        expanded,
-        animating,
-    );
-}
-
 /// 行内一段着色文本。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Segment {
-    text: String,
-    style: Style,
+pub(crate) struct Segment {
+    pub(crate) text: String,
+    pub(crate) style: Style,
 }
 
 impl Segment {
@@ -670,88 +478,34 @@ impl Kind {
 
 // ===== 第 1 行：`■ 动词` =====
 
-/// 行首方块标记：与思考 / 正文块共用同款步骤标记（运行中两帧呼吸、终态静态；
-/// 颜色区分完成 / 失败 / 中断 / 取消）。
-///
-/// 行首标记是**最窄档唯一保留的状态信号**，因此每个状态都要能一眼区分。
-fn lead(call: &ToolCallView, loading_frame: usize, animating: bool) -> Segment {
-    let mark = match call.status {
-        ToolStatus::Failed => StepMark::Failed,
-        ToolStatus::Interrupted => StepMark::Interrupted,
-        ToolStatus::Cancelled => StepMark::Cancelled,
-        ToolStatus::Completed => StepMark::Done,
-        ToolStatus::InputStreaming | ToolStatus::Pending | ToolStatus::Running => StepMark::Running,
-    };
-    Segment::new(
-        mark.segment(StepKind::Tool, loading_frame, animating),
-        mark.style(StepKind::Tool, false),
-    )
-}
-
 /// 固定动词（卡片 title 主体）：运行中橙黄、已完成翡翠绿。
 ///
 /// 用户要求「方块颜色和工具 title 统一为黄色」：动词必须与方块同色，
 /// 否则一张卡片两种颜色。
-fn verb(call: &ToolCallView, running: bool) -> Segment {
+fn verb_label(call: &ToolCallView) -> String {
     use text::agent as a;
-    let label = match Kind::of(&call.name) {
+    match Kind::of(&call.name) {
         Kind::Read => a::VERB_TOOL_READ.to_string(),
         Kind::Search => a::VERB_TOOL_SEARCH.to_string(),
         Kind::Edit => a::VERB_TOOL_EDIT.to_string(),
         Kind::Write => a::VERB_TOOL_WRITE.to_string(),
         Kind::Other => single_line(&call.name, TEXT_SAMPLE_CHARS),
-    };
-    Segment::new(
-        format!("{label} "),
-        if running {
-            style::chat_tool_verb_running()
-        } else {
-            style::chat_tool_verb()
-        },
-    )
+    }
 }
 
-/// 组装第 1 行（`■ 动词`）：无状态文字、无参数、无计数。
+/// 组装第 1 行（`■ 动词 · 状态`）：状态紧跟动词，与进程/委派卡片同一读法。
 ///
-/// 失败时整行红（方块 + 动词），中断整行黄——对应「左侧卡片和工具 title 变红」。
+/// 失败/中断整行红/黄；`read`/`search` 的种类、条目数与命中数由
+/// [`file_summary::title_status`] 提供。
 fn header(call: &ToolCallView, width: u16, loading_frame: usize, animating: bool) -> Vec<Segment> {
-    let limit = usize::from(width);
-    // 终态整行同色（方块 + 动词）：失败红、中断黄。取消不是错误态，保持工具色
-    // （方块与 title 统一；详情行的 `cancelled` 已经说明它没有产出结果）。
-    let tint = match call.status {
-        ToolStatus::Failed => Some(style::agent_fail()),
-        ToolStatus::Interrupted => Some(style::agent_warn()),
-        _ => None,
-    };
-    let paint = |segment: Segment| match tint {
-        Some(tint) => Segment::new(segment.text, tint),
-        None => segment,
-    };
-    let lead = paint(lead(call, loading_frame, animating));
-    let running = matches!(
-        call.status,
-        ToolStatus::InputStreaming | ToolStatus::Pending | ToolStatus::Running
-    );
-    let verb = paint(verb(call, running));
-    // 极窄时只留方块（写 buffer 时仍按列裁剪，绝不越界）。
-    if segments_cols(std::slice::from_ref(&lead)) > limit {
-        return vec![lead];
-    }
-    let mut segments = vec![lead, verb];
-    while segments_cols(&segments) > limit {
-        if segments.len() == 1 {
-            break;
-        }
-        // 动词整段放不下：尾部省略到剩余列数。
-        let remaining = limit.saturating_sub(segments[0].cols());
-        let text = truncate_with_ellipsis(&segments[1].text, remaining);
-        if text.is_empty() {
-            segments.truncate(1);
-        } else {
-            segments[1] = Segment::new(text, segments[1].style);
-        }
-    }
-    segments
+    header_with_verb(
+        call,
+        width,
+        loading_frame,
+        animating,
+        &verb_label(call),
+        file_summary::title_status(call),
+    )
 }
 
 // ===== 第 2 行：`  └─ 详情` =====
