@@ -213,10 +213,8 @@ fn target_node(view: &SubagentDetailView, agent_id: &str) -> Node {
 
 /// 展开态报告：`Report:` + markdown 正文，整块一个多行节点。
 fn report_node(body: &str, width: u16) -> Node {
-    let mut lines: Vec<Vec<Segment>> = vec![vec![Segment::new(
-        text::agent::REPORT_LABEL,
-        style::chat_tool_param(),
-    )]];
+    let mut lines: Vec<Vec<Segment>> =
+        vec![vec![Segment::new(text::agent::REPORT_LABEL, style::text())]];
     for line in markdown_render::render_wrapped(
         body,
         u16::try_from(tree::content_width(width)).unwrap_or(1),

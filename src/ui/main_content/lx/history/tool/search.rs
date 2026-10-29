@@ -113,18 +113,25 @@ pub(super) fn draw(
         return;
     }
     if let Some(y) = visible_row(rect, scroll, *row_index) {
-        let summary = call.summary.as_deref();
-        let matches = summary
-            .and_then(|summary| summary.matches)
-            .or_else(|| (!view.matches.is_empty()).then_some(view.matches.len()));
-        let mut parts = Vec::new();
-        if let Some(matches) = matches {
-            parts.push(text::agent::matches_label(matches));
-        }
-        if view.truncated || summary.is_some_and(|summary| summary.truncated) {
-            parts.push(text::agent::SEARCH_TRUNCATED.to_string());
-        }
-        let status = (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP));
+        let status = if matches!(
+            call.status,
+            crate::app::state::ToolStatus::Failed | crate::app::state::ToolStatus::Interrupted
+        ) {
+            None
+        } else {
+            let summary = call.summary.as_deref();
+            let matches = summary
+                .and_then(|summary| summary.matches)
+                .or_else(|| (!view.matches.is_empty()).then_some(view.matches.len()));
+            let mut parts = Vec::new();
+            if let Some(matches) = matches {
+                parts.push(text::agent::matches_label(matches));
+            }
+            if view.truncated || summary.is_some_and(|summary| summary.truncated) {
+                parts.push(text::agent::SEARCH_TRUNCATED.to_string());
+            }
+            (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP))
+        };
         let segments = header_with_verb(
             call,
             rect.width,
@@ -340,5 +347,11 @@ mod tests {
         assert!(has_more(&call, &view, 40), "长命中行必须可以展开");
         let expanded = layout(&call, &view, 40, true);
         assert_eq!(expanded.layout.hidden, 0, "展开后没有隐藏行");
+        // 失败/中断态标题不拼命中计数与截断状态。
+        call.status = ToolStatus::Failed;
+        call.error = Some("search failed".into());
+        let failed = text_of(&call, &view, 80, false);
+        let title = failed.lines().next().unwrap_or("");
+        assert!(!title.contains("match"), "失败标题不带命中数：{title}");
     }
 }

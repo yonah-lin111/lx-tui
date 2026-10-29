@@ -272,7 +272,7 @@ fn file_header(file: &FileChangeView, connector: &str, width: u16) -> Vec<Segmen
         )]
     };
     let counts_cols: usize = counts.iter().map(Segment::cols).sum();
-    let room = limit.saturating_sub(used + 1);
+    let room = limit.saturating_sub(used);
     if room == 0 {
         return segments;
     }
@@ -282,7 +282,6 @@ fn file_header(file: &FileChangeView, connector: &str, width: u16) -> Vec<Segmen
     let path_room = if keep_counts { with_counts } else { room };
     let path = text::ellipsize_middle(&path, path_room);
     if !path.is_empty() {
-        segments.push(Segment::new(" ", style::text()));
         segments.push(Segment::new(path, style::chat_tool_param()));
     }
     if keep_counts {

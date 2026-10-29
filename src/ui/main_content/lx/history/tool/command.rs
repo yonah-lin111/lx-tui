@@ -174,10 +174,14 @@ fn output_section(
     ))
 }
 
-/// 输入预览的转义还原（`preview_input` 只转义控制字符）：用于判断输出是否只是回显。
-fn unescape_input(preview: &str) -> String {
-    let mut out = String::with_capacity(preview.len());
-    let mut chars = preview.chars();
+/// 输入预览的转义还原（`preview_input` 转义 `\\`/`\n`/`\r`/`\t`/`\u{hex}` 并在超长时追加 `…`）。
+fn unescape_input(preview: &str) -> (String, bool) {
+    let (body, truncated) = match preview.strip_suffix('…') {
+        Some(prefix) => (prefix, true),
+        None => (preview, false),
+    };
+    let mut out = String::with_capacity(body.len());
+    let mut chars = body.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch != '\\' {
             out.push(ch);
@@ -188,6 +192,22 @@ fn unescape_input(preview: &str) -> String {
             Some('r') => out.push('\r'),
             Some('t') => out.push('\t'),
             Some('\\') => out.push('\\'),
+            Some('u') if chars.peek() == Some(&'{') => {
+                let _ = chars.next();
+                let mut hex = String::new();
+                while let Some(&digit) = chars.peek() {
+                    let _ = chars.next();
+                    if digit == '}' {
+                        break;
+                    }
+                    hex.push(digit);
+                }
+                if let Ok(code) = u32::from_str_radix(&hex, 16)
+                    && let Some(decoded) = char::from_u32(code)
+                {
+                    out.push(decoded);
+                }
+            }
             Some(other) => {
                 out.push('\\');
                 out.push(other);
@@ -195,26 +215,37 @@ fn unescape_input(preview: &str) -> String {
             None => out.push('\\'),
         }
     }
-    out
+    (out, truncated)
 }
 
-/// 去掉输出里对输入的原样回显：`cat` 这类 TTY 会同时给出 input 与 echo。
+/// 去掉输出里对输入的单次原样回显：`cat` 这类进程会同时给出 input 与 echo。
 ///
-/// 只删除**逐行完全相同**的回显；输入以后的真实响应仍然保留。返回空串表示整段
-/// 输出都只是回显，调用方不再生成输出节点。
+/// 每条输入行最多按序消费一次回显（若预览末行被 `…` 截断则按前缀匹配一次）；
+/// 回显之后的真实响应（含再次输出同文内容）仍然保留。
 fn without_echoed_input(input_preview: &str, output: &str) -> String {
-    let input = unescape_input(input_preview);
-    let echoes: Vec<&str> = input
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| !line.is_empty())
+    let (input, truncated) = unescape_input(input_preview);
+    let raw_lines: Vec<&str> = input.lines().collect();
+    let last_index = raw_lines.len().saturating_sub(1);
+    let mut pending: Vec<(&str, bool)> = raw_lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| (line.trim_end(), truncated && index == last_index))
+        .filter(|(line, _)| !line.is_empty())
         .collect();
-    if echoes.is_empty() {
+    if pending.is_empty() {
         return output.to_string();
     }
     let mut kept = Vec::new();
     for line in output.lines() {
-        if echoes.contains(&line.trim_end()) {
+        let trimmed = line.trim_end();
+        if let Some(pos) = pending.iter().position(|(echo, prefix_match)| {
+            if *prefix_match {
+                trimmed.starts_with(echo)
+            } else {
+                trimmed == *echo
+            }
+        }) {
+            pending.remove(pos);
             continue;
         }
         kept.push(line);
@@ -716,6 +747,44 @@ mod tests {
         assert!(params > folded);
         assert!(out > folded);
         assert_ne!(params, out);
+    }
+
+    #[test]
+    fn interaction_with_long_output_and_echo_dedupe_behaves_consistently() {
+        let long_output: String = (0..10).map(|n| format!("line {n}\n")).collect();
+        let call = ToolCallView {
+            call_id: "call-int-expand".into(),
+            name: "write_stdin".into(),
+            position: 0,
+            arguments_json: "{}".into(),
+            status: ToolStatus::Completed,
+            summary: None,
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::Interaction(
+                ProcessInteractionView {
+                    action: InteractionAction::ReadOutput,
+                    process_session_id: 1,
+                    command: "cat".into(),
+                    input_preview: None,
+                    output: long_output,
+                    state: ProcessStateView::Running,
+                    exit_code: None,
+                    duration_ms: None,
+                    truncated: false,
+                    dropped_bytes: 0,
+                },
+            ))),
+        };
+        assert!(
+            super::super::has_expandable_content(&call, 60),
+            "长输出的 write_stdin 必须判定为可展开"
+        );
+        // 单行输入只消费一次回显：若输出里出现两次相同行（回显 + 真实输出），保留第二次。
+        assert_eq!(without_echoed_input("hello\\n", "hello\nhello\n"), "hello");
+        // 控制字符转义 `\u{3}` 与截断省略号 `…` 还原。
+        assert_eq!(without_echoed_input("ab\\u{3}\\n", "ab\u{3}\nok\n"), "ok");
+        assert_eq!(without_echoed_input("prefix…", "prefix_full_line\n"), "");
     }
 
     fn folds(expanded: bool) -> Folds {

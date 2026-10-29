@@ -310,17 +310,12 @@ pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
         return false;
     }
     match call.detail.as_deref() {
-        Some(crate::app::state::ToolDetailView::Command(_)) => {
+        Some(crate::app::state::ToolDetailView::Command(_))
+        | Some(crate::app::state::ToolDetailView::Interaction(_)) => {
             command::params_expandable(call, width) || command::output_expandable(call, width)
         }
-        Some(crate::app::state::ToolDetailView::Interaction(_)) => {
-            command::params_expandable(call, width)
-        }
-        Some(crate::app::state::ToolDetailView::Plan(_)) => false,
-        // `ask` 折叠态只有 `header · answers`；题干最多 500 字，展开才看得全。
-        Some(crate::app::state::ToolDetailView::Ask(_)) => {
-            ask::rows(call, width, true) > ask::rows(call, width, false)
-        }
+        Some(crate::app::state::ToolDetailView::Plan(_))
+        | Some(crate::app::state::ToolDetailView::Ask(_)) => false,
         Some(crate::app::state::ToolDetailView::Subagent(_)) => subagent::has_more(call, width),
         Some(crate::app::state::ToolDetailView::Search(view)) => {
             search::has_more(call, view, width)
@@ -399,21 +394,8 @@ pub(super) fn card_regions(
         Some(crate::app::state::ToolDetailView::Interaction(_)) => {
             command_regions(call, width, command::blocks(call, width, folds))
         }
-        Some(crate::app::state::ToolDetailView::Plan(_)) => Vec::new(),
-        Some(crate::app::state::ToolDetailView::Ask(_)) => {
-            // 整卡一个 Body 点击面：展开前后行数不变就不登记（点了也不会有变化）。
-            if !has_expandable_content(call, width) {
-                return Vec::new();
-            }
-            vec![CardRegion {
-                section: CardSection::Body,
-                card: RowSpan {
-                    offset: 0,
-                    rows: step_rows,
-                },
-                clickable: true,
-            }]
-        }
+        Some(crate::app::state::ToolDetailView::Plan(_))
+        | Some(crate::app::state::ToolDetailView::Ask(_)) => Vec::new(),
         Some(crate::app::state::ToolDetailView::Subagent(_))
         | Some(crate::app::state::ToolDetailView::Search(_)) => {
             if !has_expandable_content(call, width) {

@@ -165,6 +165,7 @@ impl LxChat {
         if arguments_json.len() > MAX_TOOL_ARGUMENTS_BYTES {
             return self.tool_fail(call_id, TOOL_ARGUMENTS_TOO_LARGE_CODE);
         }
+        let root = self.project_root.clone();
         let Some(message) = self.streaming_message_mut() else {
             return false;
         };
@@ -178,6 +179,8 @@ impl LxChat {
         let accepted = call.accept_arguments(arguments_json.to_string());
         if !accepted {
             call.fail(TOOL_ARGUMENTS_INVALID_CODE);
+        } else if let Some(root) = root.as_deref() {
+            call.relativize_paths(root);
         }
         true
     }
@@ -202,6 +205,7 @@ impl LxChat {
     /// 参数已完整接收但与 `ToolInputEnded` 存在竞态时（例如响应收尾先转 Pending），
     /// 本方法补齐一次；已经是 `Pending` 时幂等返回 false，不伪造其他转移。
     pub fn mark_tool_pending(&mut self, call_id: &str) -> bool {
+        let root = self.project_root.clone();
         let Some(message) = self.streaming_message_mut() else {
             return false;
         };
@@ -214,6 +218,8 @@ impl LxChat {
                 let accepted = call.accept_arguments(arguments);
                 if !accepted {
                     call.fail(TOOL_ARGUMENTS_INVALID_CODE);
+                } else if let Some(root) = root.as_deref() {
+                    call.relativize_paths(root);
                 }
                 true
             }
@@ -268,6 +274,7 @@ impl LxChat {
         if !status.is_terminal() {
             return false;
         }
+        let root = self.project_root.clone();
         let Some(message) = self.streaming_message_mut() else {
             return false;
         };
@@ -287,6 +294,9 @@ impl LxChat {
             // 与重载路径同口径：空摘要不挂到步骤上，否则会画出一个孤立的空 `└─`。
             call.summary = (!merged.is_empty()).then_some(Box::new(merged));
         }
+        if let Some(root) = root.as_deref() {
+            call.relativize_paths(root);
+        }
         if result_json.is_some() {
             call.result_json = result_json;
         }
@@ -297,11 +307,12 @@ impl LxChat {
     /// 不结束消息、不产生工具结果。
     pub fn finish_response(&mut self, stop: ModelStepStop) -> bool {
         let now = crate::db::now_ms();
+        let root = self.project_root.clone();
         let Some(message) = self.streaming_message_mut() else {
             return false;
         };
         let mut changed = close_open_reasoning(message, now);
-        changed |= settle_streaming_tools(message);
+        changed |= settle_streaming_tools(message, root.as_deref());
         tracing::trace!(target: "lx::chat", ?stop, "model response finished");
         changed
     }
@@ -314,6 +325,7 @@ impl LxChat {
     pub fn close_stream(&mut self, reason: &crate::chat::events::StopReason) -> bool {
         use crate::chat::events::StopReason;
         let now = crate::db::now_ms();
+        let root = self.project_root.clone();
         let Some(message) = self.streaming_message_mut() else {
             return false;
         };
@@ -323,7 +335,7 @@ impl LxChat {
             StopReason::Cancelled => OpenToolOutcome::Cancelled,
             StopReason::Failed { .. } => OpenToolOutcome::Interrupted,
         };
-        changed |= settle_open_tools(message, outcome);
+        changed |= settle_open_tools(message, outcome, root.as_deref());
         changed
     }
 }
@@ -340,7 +352,10 @@ fn close_open_reasoning(message: &mut ChatMessageView, now: i64) -> bool {
 /// 把仍处在 `InputStreaming` 的工具收尾为 `Pending`（参数完整）或 `Failed`（参数非法）。
 ///
 /// 响应结束时参数流本应已闭合；未闭合说明协议截断，记失败而不执行。
-fn settle_streaming_tools(message: &mut ChatMessageView) -> bool {
+fn settle_streaming_tools(
+    message: &mut ChatMessageView,
+    project_root: Option<&std::path::Path>,
+) -> bool {
     let mut changed = false;
     for step in &mut message.steps {
         let Some(call) = step.tool_mut() else {
@@ -352,6 +367,8 @@ fn settle_streaming_tools(message: &mut ChatMessageView) -> bool {
         let accepted = take_arguments(call);
         if !accepted {
             call.fail(TOOL_ARGUMENTS_INVALID_CODE);
+        } else if let Some(root) = project_root {
+            call.relativize_paths(root);
         }
         changed = true;
     }
@@ -365,7 +382,11 @@ fn take_arguments(call: &mut ToolCallView) -> bool {
 }
 
 /// 整轮结束时把未终态工具标为取消/中断（不写结果体）。
-fn settle_open_tools(message: &mut ChatMessageView, outcome: OpenToolOutcome) -> bool {
+fn settle_open_tools(
+    message: &mut ChatMessageView,
+    outcome: OpenToolOutcome,
+    project_root: Option<&std::path::Path>,
+) -> bool {
     let (status, error) = match outcome {
         OpenToolOutcome::Cancelled => (ToolStatus::Cancelled, None),
         OpenToolOutcome::Interrupted => (
@@ -383,6 +404,9 @@ fn settle_open_tools(message: &mut ChatMessageView, outcome: OpenToolOutcome) ->
         }
         if call.summary.is_none() && !call.arguments_json.is_empty() {
             call.summary = Some(Box::new(ToolSummary::from_arguments(&call.arguments_json)));
+        }
+        if let Some(root) = project_root {
+            call.relativize_paths(root);
         }
         call.settle(status, error.clone());
         changed = true;

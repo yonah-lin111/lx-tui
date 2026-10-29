@@ -262,6 +262,57 @@ fn tool_history_is_encoded_as_call_and_tool_message() {
     assert_eq!(result["content"], "1: fn main() {}");
 }
 
+/// 同一步的前导文本（preamble）与多个工具调用合并进同一条 assistant 消息，
+/// 不拆成“只有前言、没有 tool_calls”的孤立 assistant 消息。
+#[test]
+fn preamble_and_tool_calls_merge_into_single_assistant_message() {
+    let mut req = request();
+    req.turns = Vec::new();
+    req.items = vec![
+        ModelItem::UserText("读两个文件".into()),
+        ModelItem::AssistantText("我先读一下这两个文件。".into()),
+        ModelItem::AssistantToolCall {
+            call_id: "call_a".into(),
+            name: "read".into(),
+            input: json!({"path": "src/a.rs"}),
+        },
+        ModelItem::AssistantToolCall {
+            call_id: "call_b".into(),
+            name: "read".into(),
+            input: json!({"path": "src/b.rs"}),
+        },
+        ModelItem::ToolResult {
+            call_id: "call_a".into(),
+            content: "1: a".into(),
+            is_error: false,
+        },
+        ModelItem::ToolResult {
+            call_id: "call_b".into(),
+            content: "1: b".into(),
+            is_error: false,
+        },
+    ];
+    let body = body_of(&req);
+    let messages = body["messages"].as_array().expect("messages");
+    let base = system_rule_prefix(&body) + 1;
+    assert_eq!(
+        messages.len(),
+        base + 4,
+        "user + 1 条合并 assistant + 2 条 tool"
+    );
+    let assistant = &messages[base + 1];
+    assert_eq!(assistant["role"], "assistant");
+    assert_eq!(assistant["content"], "我先读一下这两个文件。");
+    let calls = assistant["tool_calls"].as_array().expect("tool_calls");
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["id"], "call_a");
+    assert_eq!(calls[1]["id"], "call_b");
+    assert_eq!(messages[base + 2]["role"], "tool");
+    assert_eq!(messages[base + 2]["tool_call_id"], "call_a");
+    assert_eq!(messages[base + 3]["role"], "tool");
+    assert_eq!(messages[base + 3]["tool_call_id"], "call_b");
+}
+
 #[test]
 fn no_variant_sends_no_reasoning_field() {
     assert!(body_of(&request()).get("reasoning_effort").is_none());

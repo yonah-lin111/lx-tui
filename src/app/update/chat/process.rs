@@ -34,10 +34,15 @@ pub fn settle_tool_detail(
         &detail,
         Some(crate::app::state::ToolDetailView::Subagent(_))
     );
+    let project_root = state.project_root_for_pane(key.pane);
     let changed = {
         let Some(target) = state.pane_mut_anywhere(key.pane) else {
             return false;
         };
+        if project_root.is_some() {
+            target.lx.chat.project_root.clone_from(&project_root);
+        }
+        let root = target.lx.chat.project_root.clone();
         let Some(message) = target.lx.chat.streaming_message_mut() else {
             return false;
         };
@@ -48,6 +53,9 @@ pub fn settle_tool_detail(
             return false;
         }
         call.detail = detail.map(Box::new);
+        if let Some(root) = root.as_deref() {
+            call.relativize_paths(root);
+        }
         true
     };
     if changed && is_subagent {

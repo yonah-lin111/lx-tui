@@ -172,20 +172,16 @@ pub(crate) fn layout(sections: &[Section], width: u16) -> Layout {
         struct Line {
             segments: Vec<Segment>,
             node: usize,
-            first: bool,
         }
         let mut lines: Vec<Line> = Vec::new();
         for (index, node) in section.nodes.iter().enumerate() {
             let node_index = next_node + index;
-            let mut first = true;
             for logical in &node.lines {
                 for spans in wrap_spans(logical, body) {
                     lines.push(Line {
                         segments: spans,
                         node: node_index,
-                        first,
                     });
-                    first = false;
                 }
             }
         }
@@ -212,7 +208,8 @@ pub(crate) fn layout(sections: &[Section], width: u16) -> Layout {
         let mut last_visible: Option<usize> = None;
         for &index in &visible {
             let line = &lines[index];
-            if line.first && !seen.contains(&line.node) {
+            let first = !seen.contains(&line.node);
+            if first {
                 seen.push(line.node);
                 node_rows.push(rows.len());
             }
@@ -221,7 +218,7 @@ pub(crate) fn layout(sections: &[Section], width: u16) -> Layout {
                 prefix: "",
                 segments: line.segments.clone(),
                 node: Some(line.node),
-                first: line.first,
+                first,
             });
         }
         if section_hidden > 0 {
@@ -368,5 +365,20 @@ mod tests {
         let layout = layout(&sections, 40);
         assert_eq!(layout.rows.len(), 1);
         assert_eq!(layout.rows[0].prefix, text::agent::TREE_LEAF);
+    }
+
+    #[test]
+    fn tail_slice_marks_first_visible_line_of_wrapped_node() {
+        let tail_block = Node::block(vec![
+            vec![Segment::new("hidden head of tail node", style::text())],
+            vec![Segment::new("visible tail line", style::text())],
+        ]);
+        let sections = vec![Section::new(
+            vec![node("first"), tail_block],
+            Some(Preview::head_tail(1, 1)),
+        )];
+        let layout = layout(&sections, 40);
+        assert_eq!(layout.node_rows, vec![0, 1]);
+        assert_eq!(layout.rows[1].prefix, text::agent::TREE_LEAF);
     }
 }

@@ -640,6 +640,111 @@ impl ToolCallView {
         self.status = status;
         self.error = error;
     }
+
+    /// 将工具卡片展示路径（摘要路径、文件差异路径、搜索命中路径）收短为相对当前项目根目录 `project_root` 的路径。
+    ///
+    /// 非当前项目下的路径保持完整路径（参考 codex `display_path_for`）。
+    pub fn relativize_paths(&mut self, project_root: &std::path::Path) -> bool {
+        let mut changed = false;
+        if let Some(summary) = self.summary.as_deref_mut()
+            && let Some(path) = summary.path.as_mut()
+        {
+            let next = relativize_project_path(path, project_root);
+            if *path != next {
+                *path = next;
+                changed = true;
+            }
+        }
+        match self.detail.as_deref_mut() {
+            Some(super::tool_view::ToolDetailView::File(view)) => {
+                for file in &mut view.files {
+                    let next = relativize_project_path(&file.path, project_root);
+                    if file.path != next {
+                        file.path = next;
+                        changed = true;
+                    }
+                    if let Some(to) = file.to.as_mut() {
+                        let next = relativize_project_path(to, project_root);
+                        if *to != next {
+                            *to = next;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            Some(super::tool_view::ToolDetailView::Search(view)) => {
+                for hit in &mut view.matches {
+                    let next = relativize_project_path(&hit.path, project_root);
+                    if hit.path != next {
+                        hit.path = next;
+                        changed = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        changed
+    }
+    /// 当项目根目录从旧值切换到新值时，先从原始 `arguments_json` / `result_json` 还原未剥离的路径，
+    /// 再按新的 `project_root` 重新计算相对路径，避免原地覆盖导致的前缀丢失。
+    pub fn rebuild_paths(&mut self, project_root: &std::path::Path) -> bool {
+        if let Some(summary) = self.summary.as_deref_mut() {
+            let restored = ToolSummary::from_arguments(&self.arguments_json)
+                .absorb_result_json(self.result_json.as_deref());
+            if restored.path.is_some() {
+                summary.path = restored.path;
+            }
+        }
+        if let Some(result_json) = self.result_json.as_deref() {
+            match self.detail.as_deref() {
+                Some(super::tool_view::ToolDetailView::File(_)) => {
+                    if let Some(detail) =
+                        super::tool_view::ToolDetailView::file_detail(Some(result_json))
+                    {
+                        self.detail = Some(Box::new(detail));
+                    }
+                }
+                Some(super::tool_view::ToolDetailView::Search(_)) => {
+                    if let Some(detail) =
+                        super::tool_view::ToolDetailView::from_result_json(Some(result_json))
+                    {
+                        self.detail = Some(Box::new(detail));
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.relativize_paths(project_root)
+    }
+}
+
+/// 将路径收短为相对当前项目根目录 `project_root` 的路径（参考 codex `display_path_for`）：
+/// - 已是相对路径 → 剥离冗余前导 `./` 后返回；
+/// - 位于 `project_root` 下 → 剥离项目根前缀（恰等于项目根时返回 `.`）；
+/// - 不在当前项目下 → 保持完整路径。
+pub fn relativize_project_path(raw: &str, project_root: &std::path::Path) -> String {
+    let path = std::path::Path::new(raw);
+    if path.is_relative() {
+        let mut trimmed = raw;
+        while let Some(rest) = trimmed.strip_prefix("./") {
+            trimmed = rest;
+        }
+        return if trimmed.is_empty() {
+            ".".to_string()
+        } else {
+            trimmed.to_string()
+        };
+    }
+    if project_root.as_os_str().is_empty() {
+        return raw.to_string();
+    }
+    if let Ok(stripped) = path.strip_prefix(project_root) {
+        if stripped.as_os_str().is_empty() {
+            return ".".to_string();
+        }
+        return stripped.display().to_string();
+    }
+    raw.to_string()
 }
 
 /// assistant 时间线中的一个步骤：内容块或工具调用（按 `position` 唯一有序）。
@@ -812,6 +917,28 @@ impl ChatMessageView {
             Some(AssistantStepView::Tool { call, .. }) => Some(call),
             _ => None,
         }
+    }
+
+    /// 将本条消息内所有工具步骤的展示路径收短为相对 `project_root` 的路径。
+    pub fn relativize_paths(&mut self, project_root: &std::path::Path) -> bool {
+        let mut changed = false;
+        for step in &mut self.steps {
+            if let AssistantStepView::Tool { call, .. } = step {
+                changed |= call.relativize_paths(project_root);
+            }
+        }
+        changed
+    }
+
+    /// 项目根从旧值切换到新值时，先从原始 JSON 还原再按新根重算相对路径。
+    pub fn rebuild_paths(&mut self, project_root: &std::path::Path) -> bool {
+        let mut changed = false;
+        for step in &mut self.steps {
+            if let AssistantStepView::Tool { call, .. } = step {
+                changed |= call.rebuild_paths(project_root);
+            }
+        }
+        changed
     }
 }
 

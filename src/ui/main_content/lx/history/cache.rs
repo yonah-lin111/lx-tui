@@ -508,7 +508,7 @@ fn tool_signature(
         None => hash.write_u8(0),
         Some(ToolDetailView::Subagent(view)) => {
             hash.write_u8(7);
-            hash.write_u8(u8::from(view.role.is_some()));
+            hash.write_str(view.role.map_or("", |role| role.as_str()));
             hash.write_str(view.title.as_deref().unwrap_or(""));
             hash.write_str(view.task.as_deref().unwrap_or(""));
             hash.write_str(view.agent_id.as_deref().unwrap_or(""));

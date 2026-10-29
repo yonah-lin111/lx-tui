@@ -25,7 +25,8 @@ fn pane_of_session(state: &AppState, child_session: &str) -> Option<PaneId> {
 }
 
 /// spawn 回执：把一个运行记录插入窗格。
-pub fn on_subagent_started(state: &mut AppState, pane: PaneId, run: SubagentRun) -> bool {
+pub fn on_subagent_started(state: &mut AppState, pane: PaneId, mut run: SubagentRun) -> bool {
+    let project_root = state.project_root_for_pane(pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -39,6 +40,7 @@ pub fn on_subagent_started(state: &mut AppState, pane: PaneId, run: SubagentRun)
     {
         return false;
     }
+    run.chat.set_project_root(project_root);
     target.lx.agents.runs.push(run);
     true
 }
@@ -48,12 +50,16 @@ pub fn on_subagent_delta(state: &mut AppState, child_session: &str, deltas: &[Ch
     let Some(pane) = pane_of_session(state, child_session) else {
         return false;
     };
+    let project_root = state.project_root_for_pane(pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
     let Some(run) = target.lx.agents.by_session_mut(child_session) else {
         return false;
     };
+    if project_root.is_some() {
+        run.chat.project_root.clone_from(&project_root);
+    }
     let changed = apply_deltas(&mut run.chat, deltas);
     if changed {
         run.rows_dirty = true;
@@ -260,12 +266,17 @@ pub fn on_subagent_tool_settled(
     let Some(pane) = pane_of_session(state, child_session) else {
         return false;
     };
+    let project_root = state.project_root_for_pane(pane);
     let Some(run) = state
         .pane_mut_anywhere(pane)
         .and_then(|target| target.lx.agents.by_session_mut(child_session))
     else {
         return false;
     };
+    if project_root.is_some() {
+        run.chat.project_root.clone_from(&project_root);
+    }
+    let root = run.chat.project_root.clone();
     let mut changed = run
         .chat
         .settle_tool_result(call_id, status, summary, result_json, error);
@@ -282,6 +293,9 @@ pub fn on_subagent_tool_settled(
         && call.detail.as_deref() != detail.as_ref()
     {
         call.detail = detail.map(Box::new);
+        if let Some(root) = root.as_deref() {
+            call.relativize_paths(root);
+        }
         changed = true;
     }
     changed
@@ -559,6 +573,7 @@ pub fn on_subagent_loaded(
     messages: &[ChatMessage],
 ) -> bool {
     let models = state.models.clone();
+    let project_root = state.project_root_for_pane(pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -572,6 +587,7 @@ pub fn on_subagent_loaded(
         .iter()
         .map(|message| view_message_of(message, &models))
         .collect();
+    run.chat.set_project_root(project_root);
     run.loaded = true;
     run.rows_dirty = true;
     true

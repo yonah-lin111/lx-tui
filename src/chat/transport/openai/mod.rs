@@ -112,18 +112,32 @@ fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
                 input,
             } => {
                 // assistant 的 tool_calls 消息：`arguments` 是 **JSON 字符串**（只序列化一次）。
-                messages.push(json!({
-                    "role": "assistant",
-                    "content": Value::Null,
-                    "tool_calls": [{
-                        "id": call_id,
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "arguments": arguments_string(&input)?,
-                        }
-                    }]
-                }));
+                // 同一步的前导文本（preamble）与连续 tool_calls 合并进同一条 assistant 消息，
+                // 避免历史里出现“只有一句前言、没有 tool_calls 就结束”的孤立 assistant 消息，
+                // 诱导模型在后续步骤输出前言后直接以 finish_reason=stop 提前结束回合。
+                let call = json!({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": arguments_string(&input)?,
+                    }
+                });
+                if let Some(last) = messages.last_mut().filter(|message| {
+                    message.get("role").and_then(Value::as_str) == Some("assistant")
+                }) {
+                    if let Some(calls) = last.get_mut("tool_calls").and_then(Value::as_array_mut) {
+                        calls.push(call);
+                    } else if let Some(object) = last.as_object_mut() {
+                        object.insert("tool_calls".into(), json!([call]));
+                    }
+                } else {
+                    messages.push(json!({
+                        "role": "assistant",
+                        "content": Value::Null,
+                        "tool_calls": [call],
+                    }));
+                }
             }
             HistoryBlock::ToolResult {
                 call_id, content, ..

@@ -74,6 +74,18 @@ impl Lx {
         self.mention.set_root(root, &self.input, self.cursor)
     }
 
+    /// 同步当前项目根目录（主会话与子 agent 详情区共用），将工具卡片内的当前项目路径收短为相对路径。
+    pub fn set_project_root(&mut self, root: Option<std::path::PathBuf>) -> bool {
+        let mut changed = self.chat.set_project_root(root.clone());
+        for run in &mut self.agents.runs {
+            if run.chat.set_project_root(root.clone()) {
+                run.rows_dirty = true;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// 需要新扫描时返回（代号，扫描根）；仅事件层调用。
     pub fn take_mention_scan_request(&mut self) -> Option<(u64, std::path::PathBuf)> {
         self.mention.take_scan_request(&self.input, self.cursor)

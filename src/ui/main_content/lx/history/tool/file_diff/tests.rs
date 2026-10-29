@@ -148,6 +148,11 @@ fn style_at(call: &ToolCallView, width: u16, expanded: bool, x: u16, y: u16) -> 
 fn folded_card_shows_remaining_lines_below_the_content() {
     let call = tool_call("edit", detail_of(vec![(long_diff(), 5, 5)]));
     let lines = render(&call, 80, false).0;
+    assert!(
+        lines[1].starts_with(&format!("{}/tmp/file0.rs", text::agent::TREE_BRANCH)),
+        "连接符与路径之间只有一个空格：{}",
+        lines[1]
+    );
     let joined = lines.join("\n");
     assert!(
         joined.contains("more line"),
