@@ -69,6 +69,8 @@ pub struct AssemblyInput<'a> {
     pub mcp: Option<&'a str>,
     /// 用户点名的 skill 全文块（只注入当前轮，不落库）。
     pub skill_blocks: &'a [String],
+    /// 当前模型是否支持图片输入；false 时工具图片降级为文本占位。
+    pub supports_image_input: bool,
 }
 
 /// 装配用的 compact 摘要（从持久化检查点投影而来）。
@@ -196,7 +198,11 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         .filter(|message| message.sequence > start_after)
         .cloned()
         .collect();
-    let planned = plan_turns(&retained);
+    let mut planned = plan_turns(&retained);
+    strip_old_tool_images(&mut planned);
+    if !input.supports_image_input {
+        strip_all_tool_images(&mut planned);
+    }
     let draft_image_tokens = {
         let mut unique_sources = std::collections::HashSet::new();
         let mut count = 0u64;
@@ -459,25 +465,111 @@ fn plan_turn(user: &ChatMessage, assistant: &ChatMessage) -> PlannedTurn {
         .filter(|att| att.kind == crate::db::chat::MessageAttachmentKind::Image)
         .cloned()
         .collect();
-    let mut tokens = estimate_tokens(&user_text) as u64;
+    let turn = PlannedTurn {
+        user_text,
+        assistant_text: Some(assistant_text),
+        items,
+        tokens: 0,
+        user_images,
+    };
+    let tokens = planned_tokens(&turn);
+    PlannedTurn { tokens, ..turn }
+}
+
+/// 一轮的 token 估算（user 图片与工具图片各 +1600）。
+fn planned_tokens(turn: &PlannedTurn) -> u64 {
     let unique_img_count = {
         let mut seen = std::collections::HashSet::new();
-        user_images
+        turn.user_images
             .iter()
             .filter(|att| seen.insert(att.source_path.as_deref().unwrap_or(&att.label)))
             .count() as u64
     };
-    tokens = tokens.saturating_add(unique_img_count * 1600);
-    for item in &items {
-        tokens = tokens.saturating_add(item_tokens(item));
+    turn.items.iter().fold(
+        (estimate_tokens(&turn.user_text) as u64).saturating_add(unique_img_count * 1600),
+        |total, item| total.saturating_add(item_tokens(item)),
+    )
+}
+
+/// 只保留最近 3 个含工具图片的轮次；更早轮次的图片换成一行占位。
+fn strip_old_tool_images(planned: &mut [PlannedTurn]) {
+    let mut rounds = 0usize;
+    for turn in planned.iter_mut().rev() {
+        let has_images = turn.items.iter().any(|item| {
+            matches!(
+                item,
+                ModelItem::ToolResult { images, .. } if !images.is_empty()
+            )
+        });
+        if !has_images {
+            continue;
+        }
+        rounds = rounds.saturating_add(1);
+        if rounds <= 3 {
+            continue;
+        }
+        for item in &mut turn.items {
+            if let ModelItem::ToolResult {
+                content, images, ..
+            } = item
+                && !images.is_empty()
+            {
+                images.clear();
+                content.push_str(
+                    "\n[image from an earlier tool result omitted; call the tool again if needed]",
+                );
+            }
+        }
+        turn.tokens = planned_tokens(turn);
     }
-    PlannedTurn {
-        user_text,
-        assistant_text: Some(assistant_text),
-        items,
-        tokens,
-        user_images,
+}
+
+/// 模型不支持图片：清空全部工具图片并追加一行英文占位。
+fn strip_all_tool_images(planned: &mut [PlannedTurn]) {
+    for turn in planned {
+        for item in &mut turn.items {
+            if let ModelItem::ToolResult {
+                content, images, ..
+            } = item
+                && !images.is_empty()
+            {
+                images.clear();
+                content.push_str("\n[image omitted: this model does not support image input]");
+            }
+        }
+        turn.tokens = planned_tokens(turn);
     }
+}
+
+/// 从落库结果 JSON 取回工具图片字节；文件缺失时跳过（不中断回放）。
+fn replay_tool_images(result_json: Option<&str>) -> Vec<crate::chat::events::ModelImage> {
+    let Some(value) =
+        result_json.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+    else {
+        return Vec::new();
+    };
+    let mut entries: Vec<&serde_json::Value> = Vec::new();
+    if let Some(images) = value.get("images").and_then(serde_json::Value::as_array) {
+        entries.extend(images);
+    }
+    if let Some(image) = value.get("image").filter(|image| image.is_object()) {
+        entries.push(image);
+    }
+    entries
+        .into_iter()
+        .filter_map(|image| {
+            let path = image.get("path").and_then(serde_json::Value::as_str)?;
+            let mime = image
+                .get("mime")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("image/png");
+            let bytes = std::fs::read(path).ok()?;
+            Some(crate::chat::events::ModelImage {
+                mime: mime.to_string(),
+                bytes: std::sync::Arc::new(bytes),
+            })
+        })
+        .collect()
 }
 
 /// 一条本地命令组：只有终态记录可回放；格式化文本是唯一事实来源。
@@ -772,6 +864,7 @@ fn replay_pair(tool: &ToolCallRecord) -> Option<(ModelItem, ModelItem)> {
             call_id,
             content: truncate_result_for_replay(&content),
             is_error,
+            images: replay_tool_images(tool.result_json.as_deref()),
         },
     ))
 }
@@ -793,8 +886,14 @@ fn item_tokens(item: &ModelItem) -> u64 {
             (estimate_tokens(call_id) + estimate_tokens(name) + estimate_tokens(&arguments)) as u64
         }
         ModelItem::ToolResult {
-            call_id, content, ..
-        } => (estimate_tokens(call_id) + estimate_tokens(content)) as u64,
+            call_id,
+            content,
+            images,
+            ..
+        } => {
+            (estimate_tokens(call_id) + estimate_tokens(content)) as u64
+                + (images.len() as u64) * 1600
+        }
     }
 }
 
@@ -812,4 +911,64 @@ fn message_text_of(message: &ChatMessage) -> String {
         .map(|part| part.content.as_str())
         .collect::<Vec<_>>()
         .join("")
+}
+
+#[cfg(test)]
+mod tool_image_replay_tests {
+    use super::*;
+
+    fn turn_with_image(label: &str) -> PlannedTurn {
+        PlannedTurn {
+            user_text: label.into(),
+            assistant_text: None,
+            items: vec![ModelItem::ToolResult {
+                call_id: label.into(),
+                content: format!("result {label}"),
+                is_error: false,
+                images: vec![crate::chat::events::ModelImage {
+                    mime: "image/png".into(),
+                    bytes: std::sync::Arc::new(vec![1]),
+                }],
+            }],
+            tokens: 0,
+            user_images: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn only_the_latest_three_image_rounds_keep_images() {
+        let mut planned: Vec<PlannedTurn> = (0..4)
+            .map(|index| turn_with_image(&format!("r{index}")))
+            .collect();
+        strip_old_tool_images(&mut planned);
+        let first = match &planned[0].items[0] {
+            ModelItem::ToolResult {
+                images, content, ..
+            } => (images.len(), content.clone()),
+            _ => panic!("expected tool result"),
+        };
+        assert!(first.0 == 0);
+        assert!(first.1.contains("earlier tool result omitted"));
+        for turn in &planned[1..] {
+            match &turn.items[0] {
+                ModelItem::ToolResult { images, .. } => assert_eq!(images.len(), 1),
+                _ => panic!("expected tool result"),
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_models_strip_every_tool_image() {
+        let mut planned = vec![turn_with_image("a")];
+        strip_all_tool_images(&mut planned);
+        match &planned[0].items[0] {
+            ModelItem::ToolResult {
+                images, content, ..
+            } => {
+                assert!(images.is_empty());
+                assert!(content.contains("does not support image input"));
+            }
+            _ => panic!("expected tool result"),
+        }
+    }
 }

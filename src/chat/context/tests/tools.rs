@@ -459,6 +459,7 @@ fn cross_provider_history_replays_normalized_fields_only() {
         skills: None,
         mcp: None,
         skill_blocks: &[],
+        supports_image_input: true,
     });
     assert_eq!(
         item_views(&assembly.request.items),

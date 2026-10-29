@@ -57,6 +57,7 @@ fn tool_request() -> ChatRequest {
             call_id: "call_a".into(),
             content: "1: fn main() {}".into(),
             is_error: false,
+            images: Vec::new(),
         },
     ];
     req
@@ -286,11 +287,13 @@ fn preamble_and_tool_calls_merge_into_single_assistant_message() {
             call_id: "call_a".into(),
             content: "1: a".into(),
             is_error: false,
+            images: Vec::new(),
         },
         ModelItem::ToolResult {
             call_id: "call_b".into(),
             content: "1: b".into(),
             is_error: false,
+            images: Vec::new(),
         },
     ];
     let body = body_of(&req);
@@ -1116,4 +1119,52 @@ fn image_only_user_content_omits_empty_text() {
     assert_eq!(parts[0]["type"], "image_url");
     let url = parts[0]["image_url"]["url"].as_str().expect("url");
     assert!(url.starts_with("data:image/jpeg;base64,"));
+}
+
+#[test]
+fn tool_result_images_flush_as_one_user_media_message() {
+    let mut req = request();
+    req.turns = Vec::new();
+    let image = || crate::chat::events::ModelImage {
+        mime: "image/png".into(),
+        bytes: std::sync::Arc::new(vec![1, 2, 3]),
+    };
+    req.items = vec![
+        ModelItem::UserText("look".into()),
+        ModelItem::AssistantToolCall {
+            call_id: "a".into(),
+            name: "mcp__x__a".into(),
+            input: json!({}),
+        },
+        ModelItem::AssistantToolCall {
+            call_id: "b".into(),
+            name: "mcp__x__b".into(),
+            input: json!({}),
+        },
+        ModelItem::ToolResult {
+            call_id: "a".into(),
+            content: String::new(),
+            is_error: false,
+            images: vec![image()],
+        },
+        ModelItem::ToolResult {
+            call_id: "b".into(),
+            content: "ok".into(),
+            is_error: false,
+            images: vec![image()],
+        },
+    ];
+    let body = body_of(&req);
+    let messages = body["messages"].as_array().expect("messages");
+    let media: Vec<_> = messages
+        .iter()
+        .filter(|message| {
+            message["role"] == "user"
+                && message["content"]
+                    .as_array()
+                    .is_some_and(|parts| parts.iter().any(|part| part["type"] == "image_url"))
+        })
+        .collect();
+    assert_eq!(media.len(), 1, "连续 tool 结果只补一条用户媒体消息");
+    assert_eq!(messages.last().expect("last")["role"], "user");
 }

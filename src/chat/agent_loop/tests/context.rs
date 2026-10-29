@@ -23,6 +23,7 @@ fn context_with_history(cwd: &Path) -> ModelContext {
                     call_id: "call_history".into(),
                     content: "old content".into(),
                     is_error: false,
+                    images: Vec::new(),
                 },
                 ModelItem::AssistantText("历史答后".into()),
                 ModelItem::UserText("本轮问".into()),
@@ -204,11 +205,12 @@ async fn current_turn_truncates_oversized_tool_result() {
 fn push_tool_result_uses_the_same_replay_limit() {
     let mut context = context_helper();
     let oversized = "y".repeat(MAX_TOOL_RESULT_REPLAY_BYTES + 1);
-    context.push_tool_result("call_x", oversized, false);
+    context.push_tool_result("call_x", oversized, false, Vec::new());
     let ModelItem::ToolResult {
         content,
         call_id,
         is_error,
+        ..
     } = context.items().last().cloned().expect("result appended")
     else {
         panic!("expected tool result item");

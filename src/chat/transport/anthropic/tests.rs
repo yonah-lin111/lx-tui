@@ -64,6 +64,7 @@ fn tool_request() -> ChatRequest {
             call_id: "toolu_a".into(),
             content: "1: fn main() {}".into(),
             is_error: false,
+            images: Vec::new(),
         },
         ModelItem::AssistantToolCall {
             call_id: "toolu_b".into(),
@@ -74,6 +75,7 @@ fn tool_request() -> ChatRequest {
             call_id: "toolu_b".into(),
             content: "permission_denied".into(),
             is_error: true,
+            images: Vec::new(),
         },
     ];
     req
@@ -824,4 +826,37 @@ fn multimodal_user_content_encodes_text_and_image_source() {
     assert_eq!(content[1]["source"]["type"], "base64");
     assert_eq!(content[1]["source"]["media_type"], "image/jpeg");
     assert!(!content[1]["source"]["data"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn tool_result_images_are_encoded_as_blocks() {
+    let mut req = request();
+    req.turns = Vec::new();
+    req.items = vec![
+        ModelItem::UserText("look".into()),
+        ModelItem::AssistantToolCall {
+            call_id: "call_img".into(),
+            name: "mcp__x__screenshot".into(),
+            input: json!({}),
+        },
+        ModelItem::ToolResult {
+            call_id: "call_img".into(),
+            content: "ok".into(),
+            is_error: false,
+            images: vec![crate::chat::events::ModelImage {
+                mime: "image/png".into(),
+                bytes: std::sync::Arc::new(vec![1, 2, 3]),
+            }],
+        },
+    ];
+    let body = body_of(&req);
+    let message = body["messages"]
+        .as_array()
+        .expect("messages")
+        .last()
+        .expect("last");
+    let blocks = message["content"].as_array().expect("blocks");
+    assert_eq!(blocks[0]["type"], "tool_result");
+    assert_eq!(blocks[0]["content"][1]["type"], "image");
+    assert_eq!(blocks[0]["content"][1]["source"]["media_type"], "image/png");
 }

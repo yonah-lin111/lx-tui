@@ -164,13 +164,34 @@ fn input_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
                 }));
             }
             HistoryBlock::ToolResult {
-                call_id, content, ..
+                call_id,
+                content,
+                images,
+                ..
             } => {
-                // 函数调用结果输入项：只用 call_id 关联，不重复 name。
+                // 函数调用结果输入项：只用 call_id 关联，不重复 name；
+                // 有图片时 output 改为 input_text + input_image 数组。
+                let output = if images.is_empty() {
+                    json!(content)
+                } else {
+                    use base64::Engine as _;
+                    let mut parts = vec![json!({"type": "input_text", "text": content})];
+                    parts.extend(images.iter().map(|image| {
+                        json!({
+                            "type": "input_image",
+                            "image_url": format!(
+                                "data:{};base64,{}",
+                                image.mime,
+                                base64::engine::general_purpose::STANDARD.encode(image.bytes.as_slice())
+                            ),
+                        })
+                    }));
+                    Value::Array(parts)
+                };
                 input.push(json!({
                     "type": "function_call_output",
                     "call_id": call_id,
-                    "output": content,
+                    "output": output,
                 }));
             }
         }

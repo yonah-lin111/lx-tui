@@ -111,6 +111,7 @@ fn assemble_unbounded(messages: &[ChatMessage], draft: &str) -> Assembly {
         skills: None,
         mcp: None,
         skill_blocks: &[],
+        supports_image_input: true,
     })
 }
 
@@ -129,6 +130,7 @@ fn assemble_with_limit(messages: &[ChatMessage], draft: &str, limit: u64, output
         skills: None,
         mcp: None,
         skill_blocks: &[],
+        supports_image_input: true,
     })
 }
 

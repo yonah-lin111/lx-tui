@@ -172,6 +172,8 @@ pub enum ModelItem {
         call_id: String,
         content: String,
         is_error: bool,
+        /// 工具返回的图片（已加载字节）；历史裁剪后可能为空。
+        images: Vec<ModelImage>,
     },
 }
 

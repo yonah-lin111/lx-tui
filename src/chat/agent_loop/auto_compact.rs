@@ -158,6 +158,7 @@ fn render_item_for_compact(item: &ModelItem) -> String {
             call_id,
             content,
             is_error,
+            ..
         } => format!(
             "### Tool result ({call_id}, error={is_error})\n{}\n\n",
             crate::chat::context::truncate_result_for_replay(content)

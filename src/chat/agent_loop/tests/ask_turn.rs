@@ -49,6 +49,7 @@ async fn ask_answers_become_tool_result_for_next_request() {
                 call_id,
                 content,
                 is_error,
+                ..
             } if call_id == "c1" => Some((content, is_error)),
             _ => None,
         })

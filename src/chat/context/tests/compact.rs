@@ -33,6 +33,7 @@ fn assemble_with(
         skills: None,
         mcp: None,
         skill_blocks: &[],
+        supports_image_input: true,
     })
 }
 

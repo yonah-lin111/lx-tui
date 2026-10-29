@@ -57,6 +57,7 @@ fn tool_request() -> ChatRequest {
             call_id: "gemini-7-0-0-read".into(),
             content: "1: fn main() {}".into(),
             is_error: false,
+            images: Vec::new(),
         },
         ModelItem::AssistantToolCall {
             call_id: "gemini-7-0-1-write".into(),
@@ -67,6 +68,7 @@ fn tool_request() -> ChatRequest {
             call_id: "gemini-7-0-1-write".into(),
             content: "permission_denied".into(),
             is_error: true,
+            images: Vec::new(),
         },
     ];
     req
@@ -263,6 +265,7 @@ fn synthesized_call_ids_never_reach_the_wire() {
         call_id: "gemini-42-0-0-read".into(),
         content: "1: fn main() {}".into(),
         is_error: false,
+        images: Vec::new(),
     };
     let body = body_of(&req);
     let contents = body["contents"].as_array().expect("contents");
@@ -830,4 +833,39 @@ fn multimodal_user_content_encodes_text_and_inline_data() {
     assert_eq!(parts[0]["text"], "Examine graphic");
     assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
     assert!(!parts[1]["inlineData"]["data"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn tool_result_images_use_function_response_parts() {
+    let mut req = request();
+    req.turns = Vec::new();
+    req.items = vec![
+        ModelItem::UserText("look".into()),
+        ModelItem::AssistantToolCall {
+            call_id: "call_img".into(),
+            name: "mcp__x__screenshot".into(),
+            input: json!({}),
+        },
+        ModelItem::ToolResult {
+            call_id: "call_img".into(),
+            content: "ok".into(),
+            is_error: false,
+            images: vec![crate::chat::events::ModelImage {
+                mime: "image/png".into(),
+                bytes: std::sync::Arc::new(vec![1, 2, 3]),
+            }],
+        },
+    ];
+    let body = body_of(&req);
+    let part = body["contents"]
+        .as_array()
+        .expect("contents")
+        .iter()
+        .flat_map(|content| content["parts"].as_array().expect("parts"))
+        .find(|part| part["functionResponse"].is_object())
+        .expect("function response");
+    assert_eq!(
+        part["functionResponse"]["parts"][0]["inlineData"]["mimeType"],
+        "image/png"
+    );
 }

@@ -207,6 +207,7 @@ fn history_blocks_preserve_order_and_pairs() {
             call_id: "c1".into(),
             content: "1: x".into(),
             is_error: false,
+            images: Vec::new(),
         },
         ModelItem::AssistantText("读完了".into()),
     ];
@@ -233,6 +234,7 @@ fn history_blocks_reject_orphan_result() {
         call_id: "missing".into(),
         content: "x".into(),
         is_error: false,
+        images: Vec::new(),
     }];
     let error = history_blocks(&items).expect_err("orphan rejected");
     assert!(error.contains("without a preceding call"), "{error}");

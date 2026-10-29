@@ -344,6 +344,7 @@ fn file_read_result(
         truncated: end_line < total_lines,
         total_lines,
         version: None,
+        image: None,
     }
 }
 
@@ -359,6 +360,7 @@ fn directory_read_result(path: &str, entries: usize) -> crate::chat::tools::Tool
         truncated: false,
         total_lines: entries,
         version: None,
+        image: None,
     }
 }
 

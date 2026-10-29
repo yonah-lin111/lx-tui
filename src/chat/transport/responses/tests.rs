@@ -51,6 +51,7 @@ fn tool_request() -> ChatRequest {
             call_id: "call_a".into(),
             content: "1: fn main() {}".into(),
             is_error: false,
+            images: Vec::new(),
         },
     ];
     req
@@ -720,4 +721,41 @@ fn multimodal_user_content_encodes_input_text_and_input_image() {
     assert_eq!(content[1]["type"], "input_image");
     let url = content[1]["image_url"].as_str().expect("image_url");
     assert!(url.starts_with("data:image/png;base64,"));
+}
+
+#[test]
+fn tool_result_images_are_encoded_as_input_image_parts() {
+    let mut req = request();
+    req.turns = Vec::new();
+    req.items = vec![
+        ModelItem::UserText("look".into()),
+        ModelItem::AssistantToolCall {
+            call_id: "call_img".into(),
+            name: "mcp__x__screenshot".into(),
+            input: json!({}),
+        },
+        ModelItem::ToolResult {
+            call_id: "call_img".into(),
+            content: "ok".into(),
+            is_error: false,
+            images: vec![crate::chat::events::ModelImage {
+                mime: "image/png".into(),
+                bytes: std::sync::Arc::new(vec![1, 2, 3]),
+            }],
+        },
+    ];
+    let body = body_of(&req);
+    let output = body["input"]
+        .as_array()
+        .expect("input")
+        .iter()
+        .find(|item| item["type"] == "function_call_output")
+        .expect("output item");
+    assert_eq!(output["output"][0]["type"], "input_text");
+    assert_eq!(output["output"][1]["type"], "input_image");
+    assert!(
+        output["output"][1]["image_url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("data:image/png;base64,"))
+    );
 }

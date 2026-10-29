@@ -22,6 +22,7 @@ pub fn format_for_model(result: &ToolExecutionResult) -> String {
             path,
             kind,
             content,
+            image: _,
             start_line,
             end_line,
             next_offset,
@@ -470,6 +471,7 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
         ToolExecutionResult::Read {
             path,
             kind,
+            image: _,
             start_line,
             end_line,
             truncated,
@@ -552,8 +554,12 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
         ToolExecutionResult::Process(_)
         | ToolExecutionResult::Plan(_)
         | ToolExecutionResult::Ask { .. }
-        | ToolExecutionResult::Subagent(_)
-        | ToolExecutionResult::Mcp(_) => ToolSummary::default(),
+        | ToolExecutionResult::Subagent(_) => ToolSummary::default(),
+        ToolExecutionResult::Mcp(result) => ToolSummary {
+            path: Some(format!("{} · {}", result.server, result.tool)),
+            truncated: result.truncated,
+            ..ToolSummary::default()
+        },
         ToolExecutionResult::CurrentTime { current_time } => ToolSummary {
             path: Some(current_time.clone()),
             ..ToolSummary::default()
@@ -591,6 +597,7 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
             path,
             kind,
             content,
+            image,
             start_line,
             end_line,
             next_offset,
@@ -612,6 +619,7 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
             "truncated": truncated,
             "total_lines": total_lines,
             "file_version": version,
+            "image": image,
         }),
         ToolExecutionResult::Search {
             matches,

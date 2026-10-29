@@ -81,7 +81,7 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExe
                 ),
             ));
         }
-        return read_image(&target, metadata.len());
+        return read_image(ctx, &target, metadata.len());
     }
     read_file(
         ctx,
@@ -94,7 +94,7 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExe
 }
 
 /// 读取并校验本地图片文件（上限 20 MiB，自动按最长边 2048px 缩放编码）。
-fn read_image(target: &Path, len: u64) -> ToolResult<ToolExecutionResult> {
+fn read_image(ctx: &ToolContext, target: &Path, len: u64) -> ToolResult<ToolExecutionResult> {
     if len > crate::platform::MAX_IMAGE_RAW_BYTES as u64 {
         return Err(ToolFailure::new(
             ToolErrorCode::TooLarge,
@@ -121,6 +121,18 @@ fn read_image(target: &Path, len: u64) -> ToolResult<ToolExecutionResult> {
                 ),
             ),
         })?;
+    let image = if ctx.session_id.is_empty() {
+        None
+    } else {
+        crate::platform::archive_processed_image(&ctx.session_id, &processed)
+            .ok()
+            .map(|archived| crate::chat::tools::ArchivedImage {
+                path: archived.archive_path,
+                mime: archived.mime,
+                width: archived.width,
+                height: archived.height,
+            })
+    };
     Ok(ToolExecutionResult::Read {
         path: target.to_path_buf(),
         kind: ReadKind::Image,
@@ -137,6 +149,7 @@ fn read_image(target: &Path, len: u64) -> ToolResult<ToolExecutionResult> {
         truncated: false,
         total_lines: 0,
         version: None,
+        image,
     })
 }
 
@@ -196,6 +209,7 @@ fn read_file(
             truncated: false,
             total_lines: 0,
             version,
+            image: None,
         });
     }
     if offset > total_lines {
@@ -235,6 +249,7 @@ fn read_file(
         truncated: next_offset.is_some() || line_truncated,
         total_lines,
         version,
+        image: None,
     })
 }
 
@@ -318,6 +333,7 @@ fn read_directory(
             truncated: entries_truncated,
             total_lines: 0,
             version: None,
+            image: None,
         });
     }
     if offset > total_lines {
@@ -355,6 +371,7 @@ fn read_directory(
         total_lines,
         // 目录不是写入目标，不产生版本 token。
         version: None,
+        image: None,
     })
 }
 

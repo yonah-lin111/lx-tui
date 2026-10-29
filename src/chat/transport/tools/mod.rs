@@ -159,6 +159,7 @@ pub(crate) enum HistoryBlock {
         name: String,
         content: String,
         is_error: bool,
+        images: Vec<crate::chat::events::ModelImage>,
     },
 }
 
@@ -205,6 +206,7 @@ pub(crate) fn history_blocks(items: &[ModelItem]) -> Result<Vec<HistoryBlock>, S
                 call_id,
                 content,
                 is_error,
+                images,
             } => {
                 // 结果必须能对应到之前出现过的同 call_id 调用（禁止 orphan result），
                 // 并解析出工具名供 Gemini 的 functionResponse 使用。
@@ -222,6 +224,7 @@ pub(crate) fn history_blocks(items: &[ModelItem]) -> Result<Vec<HistoryBlock>, S
                 blocks.push(HistoryBlock::ToolResult {
                     call_id: call_id.clone(),
                     name,
+                    images: images.clone(),
                     content: content.clone(),
                     is_error: *is_error,
                 });

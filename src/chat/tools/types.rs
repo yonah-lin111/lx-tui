@@ -46,6 +46,8 @@ pub struct ToolContext {
     pub supports_image_input: bool,
     /// 可注入的确定性 UTC Unix 秒数（仅测试使用；生产为 `None` 即读取系统实时时钟）。
     pub clock_override_secs: Option<i64>,
+    /// 会话 id：工具结果图片归档目录；空表示不归档（测试）。
+    pub session_id: String,
 }
 
 impl Default for ToolContext {
@@ -55,6 +57,7 @@ impl Default for ToolContext {
             reads: None,
             supports_image_input: true,
             clock_override_secs: None,
+            session_id: String::new(),
         }
     }
 }
@@ -76,12 +79,19 @@ impl ToolContext {
             reads: None,
             supports_image_input: true,
             clock_override_secs: None,
+            session_id: String::new(),
         }
     }
 
     /// 注入会话级读版本登记表（生产执行器必须调用）。
     pub fn with_reads(mut self, reads: std::sync::Arc<super::read_version::ReadRegistry>) -> Self {
         self.reads = Some(reads);
+        self
+    }
+
+    /// 注入会话 id（工具结果图片归档目录）。
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = session_id.into();
         self
     }
 
@@ -271,6 +281,8 @@ pub enum ToolExecutionResult {
         total_lines: usize,
         /// 读后版本 token（仅普通文件；目录为 None）。写工具要求携带它。
         version: Option<String>,
+        /// 图片读取的归档元数据（仅 `ReadKind::Image`；归档失败为 None）。
+        image: Option<ArchivedImage>,
     },
     /// 搜索成功。
     Search {

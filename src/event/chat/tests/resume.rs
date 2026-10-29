@@ -263,7 +263,7 @@ async fn resume_then_continue_replays_completed_pairs_and_skips_interrupted() {
     assert!(
         matches!(
             items.get(call_at + 1),
-            Some(ModelItem::ToolResult { call_id, is_error: false, content })
+            Some(ModelItem::ToolResult { call_id, is_error: false, content, .. })
                 if call_id == "call_seed" && content.contains("seeded content")
         ),
         "实际请求里调用后面紧跟同 call_id 的结果: {:?}",

@@ -157,6 +157,7 @@ fn contents_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
                 name,
                 content,
                 is_error,
+                images,
             } => {
                 // user functionResponse part：`response` 包装携带结构化结果。
                 // 失败结果用 `error` 键显式标注（不与成功结果混淆）。
@@ -165,15 +166,72 @@ fn contents_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
                 } else {
                     json!({"result": content})
                 };
-                push_parts(
-                    &mut contents,
-                    "user",
-                    json!({"functionResponse": {"name": name, "response": response}}),
-                );
+                if images.is_empty() {
+                    push_parts(
+                        &mut contents,
+                        "user",
+                        json!({"functionResponse": {"name": name, "response": response}}),
+                    );
+                } else if legacy_tool_media_model(&request.model.model) {
+                    // Gemini 1/2 不认 functionResponse.parts：先回结果，再补一条 user 媒体消息。
+                    push_parts(
+                        &mut contents,
+                        "user",
+                        json!({"functionResponse": {"name": name, "response": response}}),
+                    );
+                    push_parts(
+                        &mut contents,
+                        "user",
+                        json!({"text": "Attached media from tool result:"}),
+                    );
+                    for image in images {
+                        use base64::Engine as _;
+                        push_parts(
+                            &mut contents,
+                            "user",
+                            json!({
+                                "inlineData": {
+                                    "mimeType": image.mime,
+                                    "data": base64::engine::general_purpose::STANDARD.encode(image.bytes.as_slice()),
+                                }
+                            }),
+                        );
+                    }
+                } else {
+                    use base64::Engine as _;
+                    let parts: Vec<Value> = images
+                        .iter()
+                        .map(|image| {
+                            json!({
+                                "inlineData": {
+                                    "mimeType": image.mime,
+                                    "data": base64::engine::general_purpose::STANDARD.encode(image.bytes.as_slice()),
+                                }
+                            })
+                        })
+                        .collect();
+                    push_parts(
+                        &mut contents,
+                        "user",
+                        json!({
+                            "functionResponse": {
+                                "name": name,
+                                "response": response,
+                                "parts": parts,
+                            }
+                        }),
+                    );
+                }
             }
         }
     }
     Ok(contents)
+}
+
+/// Gemini 1/2 不支持 `functionResponse.parts`，工具图片改走后补 user 消息。
+fn legacy_tool_media_model(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    model.starts_with("gemini-1") || model.starts_with("gemini-2")
 }
 
 /// 历史角色映射：Gemini 用 `model` 表示 assistant。

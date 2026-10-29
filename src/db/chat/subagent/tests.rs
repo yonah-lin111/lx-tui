@@ -302,6 +302,7 @@ fn report_message_and_turn_replay_in_one_turn() {
         skills: None,
         mcp: None,
         skill_blocks: &[],
+        supports_image_input: true,
     });
     let text = format!("{:?}", assembly.request.items);
     assert!(text.contains("subagent_report"), "{text}");

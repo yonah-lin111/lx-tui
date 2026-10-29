@@ -161,9 +161,28 @@ fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
                 call_id,
                 content,
                 is_error,
+                images,
                 ..
             } => {
-                // 工具结果进 user 消息（Anthropic 只有 user/assistant 两种角色）。
+                // 工具结果进 user 消息（Anthropic 只有 user/assistant 两种角色）；
+                // 有图片时 content 改为 text + image 块数组。
+                let content = if images.is_empty() {
+                    json!(content)
+                } else {
+                    use base64::Engine as _;
+                    let mut blocks = vec![json!({"type": "text", "text": content})];
+                    blocks.extend(images.iter().map(|image| {
+                        json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": image.mime,
+                                "data": base64::engine::general_purpose::STANDARD.encode(image.bytes.as_slice()),
+                            }
+                        })
+                    }));
+                    Value::Array(blocks)
+                };
                 push_block(
                     &mut messages,
                     "user",

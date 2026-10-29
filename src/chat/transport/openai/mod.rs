@@ -102,12 +102,15 @@ fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
         );
         return Ok(messages);
     }
+    let mut pending_media: Vec<crate::chat::events::ModelImage> = Vec::new();
     for block in history_blocks(&request.items)? {
         match block {
             HistoryBlock::Text { role, text } => {
+                flush_tool_media(&mut messages, &mut pending_media);
                 messages.push(json!({"role": role.as_str(), "content": text}));
             }
             HistoryBlock::UserContent { text, images } => {
+                flush_tool_media(&mut messages, &mut pending_media);
                 use base64::Engine;
                 let mut content_parts: Vec<Value> = Vec::new();
                 if !text.is_empty() {
@@ -145,6 +148,7 @@ fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
                 name,
                 input,
             } => {
+                flush_tool_media(&mut messages, &mut pending_media);
                 // assistant 的 tool_calls 消息：`arguments` 是 **JSON 字符串**（只序列化一次）。
                 // 同一步的前导文本（preamble）与连续 tool_calls 合并进同一条 assistant 消息，
                 // 避免历史里出现“只有一句前言、没有 tool_calls 就结束”的孤立 assistant 消息，
@@ -174,18 +178,51 @@ fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
                 }
             }
             HistoryBlock::ToolResult {
-                call_id, content, ..
+                call_id,
+                content,
+                images,
+                ..
             } => {
                 // role=tool + tool_call_id；失败结果同样作为 content 回传（wire 无 is_error 字段）。
+                // 图片不能放进 tool 消息：先暂存，连续 tool 消息结束后补一条 user 媒体消息。
+                let content = if content.is_empty() && !images.is_empty() {
+                    "See attached image."
+                } else {
+                    content.as_str()
+                };
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call_id,
                     "content": content,
                 }));
+                pending_media.extend(images);
             }
         }
     }
+    flush_tool_media(&mut messages, &mut pending_media);
     Ok(messages)
+}
+
+/// 连续 tool 消息之后补一条 user 媒体消息（Chat Completions 不支持工具结果内嵌图片）。
+fn flush_tool_media(messages: &mut Vec<Value>, pending: &mut Vec<crate::chat::events::ModelImage>) {
+    if pending.is_empty() {
+        return;
+    }
+    use base64::Engine;
+    let mut parts = vec![json!({"type": "text", "text": "Attached media from tool result:"})];
+    for image in pending.drain(..) {
+        parts.push(json!({
+            "type": "image_url",
+            "image_url": {
+                "url": format!(
+                    "data:{};base64,{}",
+                    image.mime,
+                    base64::engine::general_purpose::STANDARD.encode(image.bytes.as_slice())
+                )
+            }
+        }));
+    }
+    messages.push(json!({"role": "user", "content": parts}));
 }
 
 /// Chat Completions SSE 解码器。

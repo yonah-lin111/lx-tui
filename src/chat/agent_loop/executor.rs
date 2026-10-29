@@ -153,6 +153,11 @@ impl AgentTools {
         self
     }
 
+    /// 当前模型是否支持图片输入。
+    pub fn supports_image_input(&self) -> bool {
+        self.supports_image_input
+    }
+
     /// 注入本轮 MCP 管理器、冻结快照与会话 id（图片归档目录）。
     pub fn with_mcp(
         mut self,
@@ -267,7 +272,8 @@ impl AgentTools {
         ticket: &ToolCallTicket,
     ) -> ToolExecutionResult {
         let mut context = crate::chat::tools::ToolContext::new(cwd.to_path_buf())
-            .with_image_support(self.supports_image_input);
+            .with_image_support(self.supports_image_input)
+            .with_session_id(self.session_id.clone());
         if let Some(reads) = self.reads.as_ref() {
             context = context.with_reads(Arc::clone(reads));
         }
@@ -395,6 +401,10 @@ impl ToolExecutor for AgentTools {
         ticket: &ToolCallTicket,
     ) -> ToolExecutionResult {
         self.run(cwd, call, Some(ticket)).await
+    }
+
+    fn supports_image_input(&self) -> bool {
+        self.supports_image_input
     }
 }
 

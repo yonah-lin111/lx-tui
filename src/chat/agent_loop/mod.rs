@@ -291,6 +291,11 @@ pub trait ToolExecutor: Send + Sync {
     {
         self.execute(cwd, call)
     }
+
+    /// 当前模型是否支持图片输入；测试执行器默认支持。
+    fn supports_image_input(&self) -> bool {
+        true
+    }
 }
 
 /// 生产执行器：文件工具是阻塞 IO，必须放入阻塞线程池。
@@ -570,18 +575,41 @@ impl ModelContext {
     ///
     /// 回放侧单条结果上限与历史装配同一口径（[`MAX_TOOL_RESULT_REPLAY_BYTES`]）：
     /// 超限截断并显式标记，不静默省略；落库结果体本身不变。
-    fn push_tool_result(&mut self, call_id: &str, content: String, is_error: bool) {
+    fn push_tool_result(
+        &mut self,
+        call_id: &str,
+        content: String,
+        is_error: bool,
+        images: Vec<crate::chat::events::ModelImage>,
+    ) {
         self.items.push(ModelItem::ToolResult {
             call_id: call_id.to_string(),
             content: crate::chat::context::truncate_result_for_replay(&content),
             is_error,
+            images,
         });
     }
+}
 
-    /// 追加一条由工具（如 `read` 图片）读取出的多模态用户消息。
-    fn push_user_image(&mut self, text: String, images: Vec<crate::chat::events::ModelImage>) {
-        self.items.push(ModelItem::UserContent { text, images });
-    }
+/// 取工具结果的图片字节（归档路径缺失或读失败时跳过，不阻断工具结果）。
+fn tool_result_images(result: &ToolExecutionResult) -> Vec<crate::chat::events::ModelImage> {
+    let archived: Vec<&crate::chat::tools::ArchivedImage> = match result {
+        ToolExecutionResult::Mcp(mcp) => mcp.images.iter().collect(),
+        ToolExecutionResult::Read {
+            image: Some(image), ..
+        } => vec![image],
+        _ => Vec::new(),
+    };
+    archived
+        .into_iter()
+        .filter_map(|image| {
+            let bytes = std::fs::read(&image.path).ok()?;
+            Some(crate::chat::events::ModelImage {
+                mime: image.mime.clone(),
+                bytes: std::sync::Arc::new(bytes),
+            })
+        })
+        .collect()
 }
 
 /// 自动压缩摘要的系统段包裹（与手动 compact 的 `<compact_summary>` 同形）。
@@ -761,26 +789,13 @@ where
                     .execute_tracked(context.cwd(), &call, &ticket)
                     .await
             };
-            let content = tools::format_for_model(&result);
+            let mut content = tools::format_for_model(&result);
             let is_error = result.is_failure();
-            let image_from_read = match &result {
-                ToolExecutionResult::Read {
-                    path,
-                    kind: crate::chat::tools::ReadKind::Image,
-                    ..
-                } => crate::platform::load_and_process_image_file(path)
-                    .ok()
-                    .map(|img| {
-                        (
-                            path.display().to_string(),
-                            crate::chat::events::ModelImage {
-                                mime: img.mime,
-                                bytes: std::sync::Arc::new(img.bytes),
-                            },
-                        )
-                    }),
-                _ => None,
-            };
+            let mut tool_images = tool_result_images(&result);
+            if !executor.supports_image_input() && !tool_images.is_empty() {
+                tool_images.clear();
+                content.push_str("\n[image omitted: this model does not support image input]");
+            }
             // 结果必须先落库再进入上下文；落库失败即停止本轮，**不重试写入**。
             match host
                 .finish_tool(ticket, ToolOutcome::Executed(result))
@@ -790,11 +805,7 @@ where
                 Err(HostError::Cancelled) => return TurnSummary::interrupted(usage),
                 Err(HostError::Failed { code }) => return TurnSummary::failed(code, usage),
             }
-            context.push_tool_result(&call.call_id, content, is_error);
-            if let Some((path_str, model_image)) = image_from_read {
-                context
-                    .push_user_image(format!("Image read from `{path_str}`:"), vec![model_image]);
-            }
+            context.push_tool_result(&call.call_id, content, is_error, tool_images);
         }
     }
 }

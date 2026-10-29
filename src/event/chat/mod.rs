@@ -559,6 +559,7 @@ pub(crate) fn assemble_turn_request(
         skills,
         mcp,
         skill_blocks,
+        supports_image_input: frozen.supports_image_input,
     });
     AssembledTurn {
         request: ChatRequest {
