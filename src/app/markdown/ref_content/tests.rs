@@ -6,6 +6,14 @@ fn format_ref_content_handles_file_and_folder() {
         format_ref_content("src/main.rs", false),
         "@[ref-content]/src/main.rs"
     );
+    assert_eq!(
+        format_ref_content("a/b/c/main.rs", false),
+        "@[ref-content]/c/main.rs"
+    );
+    assert_eq!(
+        format_ref_content("/Users/yonah/projects/agent/lx-agent", true),
+        "@[ref-content]/agent/lx-agent/"
+    );
     assert_eq!(format_ref_content("src/ui", true), "@[ref-content]/src/ui/");
     assert_eq!(
         format_ref_content("/src/ui/", true),

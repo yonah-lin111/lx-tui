@@ -236,7 +236,7 @@ fn insertion_uses_ref_content_with_trailing_space() {
         tag: ReferTag::File,
         order: 0,
     };
-    assert_eq!(refer_insertion(&candidate), "@[ref-content]/a/b/abc.md ");
+    assert_eq!(refer_insertion(&candidate), "@[ref-content]/b/abc.md ");
 
     let folder = ReferCandidate {
         text: "@[refer-folder](/x/y/z)".to_string(),
@@ -247,8 +247,8 @@ fn insertion_uses_ref_content_with_trailing_space() {
     };
     assert_eq!(
         refer_insertion(&folder),
-        "@[ref-content]/x/y/z/ ",
-        "文件夹带尾斜杠"
+        "@[ref-content]/y/z/ ",
+        "文件夹带尾斜杠且保留末两段"
     );
 
     let single = ReferCandidate {
@@ -380,7 +380,7 @@ fn candidates_dedupe_when_mention_and_short_ref_refer_to_same_folder() {
     );
     assert_eq!(
         refer_insertion(&filtered[0]),
-        "@[ref-content]/docs/feature/prompt-per-workspace/ ",
+        "@[ref-content]/feature/prompt-per-workspace/ ",
         "确认插入结果仍为规范快捷引用"
     );
 }

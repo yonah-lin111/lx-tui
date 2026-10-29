@@ -376,3 +376,18 @@ fn short_ref_tokens_are_one_highlight() {
         ]
     );
 }
+
+#[test]
+fn ref_content_tokens_are_one_highlight() {
+    assert_eq!(
+        kinds("see @[ref-content]/agent/lx-agent/ and @[ref-content]/src/main.rs"),
+        vec![
+            (TokenKind::RefContent, "@[ref-content]/agent/lx-agent/"),
+            (TokenKind::RefContent, "@[ref-content]/src/main.rs"),
+        ]
+    );
+    assert_eq!(
+        kinds("see @[ref-content]/a/b.md."),
+        vec![(TokenKind::RefContent, "@[ref-content]/a/b.md")]
+    );
+}

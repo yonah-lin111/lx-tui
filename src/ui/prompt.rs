@@ -815,6 +815,7 @@ pub(crate) fn token_style(kind: TokenKind) -> Style {
         TokenKind::ReferFolder => style::markdown_refer_folder(),
         TokenKind::ReferImage => style::markdown_refer_image(),
         TokenKind::ShortRef => style::markdown_short_ref(),
+        TokenKind::RefContent => style::markdown_ref_content(),
     }
 }
 

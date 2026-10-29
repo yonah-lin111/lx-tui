@@ -2691,8 +2691,8 @@ fn refer_shortcut_directory_candidate_keeps_trailing_slash() {
     assert!(prompt.refer_confirm());
     assert_eq!(
         prompt.text(),
-        "@[refer-folder](/Users/yonah/projects/agent/lx-agent) 仓库\n@[ref-content]/Users/yonah/projects/agent/lx-agent/ ",
-        "文件夹快捷引用带尾斜杠"
+        "@[refer-folder](/Users/yonah/projects/agent/lx-agent) 仓库\n@[ref-content]/agent/lx-agent/ ",
+        "文件夹快捷引用带尾斜杠且保留末两段"
     );
 }
 

@@ -65,8 +65,8 @@ fn selecting_candidate_inserts_last_two_segments() {
         state
             .prompt
             .text()
-            .ends_with("@[ref-content]/docs/feature/lx-at-mention/design.md "),
-        "确认后插入完整相对路径快捷引用: {}",
+            .ends_with("@[ref-content]/lx-at-mention/design.md "),
+        "确认后插入末两段快捷引用: {}",
         state.prompt.text()
     );
 }
@@ -87,7 +87,7 @@ fn directory_candidate_inserts_slash_suffixed_short_name() {
         state
             .prompt
             .text()
-            .ends_with("@[ref-content]/Users/yonah/projects/agent/lx-agent/ "),
+            .ends_with("@[ref-content]/agent/lx-agent/ "),
         "目录快捷引用带尾斜杠: {}",
         state.prompt.text()
     );
@@ -122,6 +122,30 @@ fn short_ref_is_highlighted_distinctly() {
     assert_eq!(mention.fg, Color::Yellow, "普通提及仍是黄");
     assert!(mention.modifier.contains(Modifier::UNDERLINED));
     assert_ne!(short.fg, mention.fg, "两种 @ 一眼可分");
+}
+
+/// ref-content 快捷引用有独立高亮颜色：柔紫（Indexed 141）加粗。
+#[test]
+fn ref_content_is_highlighted_distinctly() {
+    let (mut state, config, view) = ready_state();
+    update::focus_prompt(&mut state);
+    state.prompt.set_text("@[ref-content]/a/b.md @src/main.rs");
+    let mut terminal =
+        Terminal::new(TestBackend::new(120, 24)).expect("test backend is infallible");
+    terminal
+        .draw(|frame| ui::render(frame, &state, &config))
+        .expect("draw succeeds");
+
+    let buffer = terminal.backend().buffer();
+    let text = layout::prompt_text_rect(view.prompt);
+    let ref_content = &buffer[(text.x, text.y)];
+    assert_eq!(ref_content.symbol(), "@");
+    assert_eq!(ref_content.fg, Color::Indexed(141), "快捷引用柔紫");
+    assert!(
+        ref_content.modifier.contains(Modifier::BOLD),
+        "快捷引用加粗"
+    );
+    assert!(!ref_content.modifier.contains(Modifier::UNDERLINED));
 }
 
 /// 再输入同名片段时，已有的短引用也能被面板重新选中。

@@ -587,6 +587,13 @@ pub fn user_ref_image() -> Style {
     Style::default().fg(Color::LightMagenta)
 }
 
+/// `@[ref-content]/...` 快捷引用：柔紫（Indexed 141）加粗、无下划线。
+pub fn markdown_ref_content() -> Style {
+    Style::default()
+        .fg(Color::Indexed(141))
+        .add_modifier(Modifier::BOLD)
+}
+
 /// `@ref/末两段` 短引用：柔紫（Indexed 141）加粗、无下划线。
 ///
 /// 与既有引用色（绿 / 橙 / 亮品红）和 `@` 提及黄都不重样；`&&&` 命令名与 `+++` 边框用的是

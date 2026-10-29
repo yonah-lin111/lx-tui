@@ -10,14 +10,26 @@ use super::{is_mention_query_char, open_fence};
 /// 快捷引用的固定前缀。
 pub const REF_CONTENT_PREFIX: &str = "@[ref-content]/";
 
-/// 格式化为快捷引用标记：`@[ref-content]/<path>`，文件夹补尾 `/`。
+/// 格式化为快捷引用标记：`@[ref-content]/<path>`，默认保留最后两个 `/` 的内容（末两段），文件夹补尾 `/`。
 pub fn format_ref_content(path: &str, is_directory: bool) -> String {
-    let trimmed = path.trim_matches('/');
+    let name = super::short_ref_name(path).unwrap_or_else(|| path.trim_matches('/').to_string());
     if is_directory {
-        format!("{REF_CONTENT_PREFIX}{trimmed}/")
+        format!("{REF_CONTENT_PREFIX}{name}/")
     } else {
-        format!("{REF_CONTENT_PREFIX}{trimmed}")
+        format!("{REF_CONTENT_PREFIX}{name}")
     }
+}
+
+/// 快捷引用正文长度（从 `body_start` 起）：供高亮与解析共用同一套边界规则。
+pub fn ref_content_body_len(text: &str, body_start: usize) -> usize {
+    let mut end = body_start;
+    for ch in text[body_start..].chars() {
+        if !is_ref_content_body_char(ch) {
+            break;
+        }
+        end += ch.len_utf8();
+    }
+    ref_content_body_end(text, body_start, end) - body_start
 }
 
 /// 快捷引用整块删除范围：光标紧跟其后空白时返回（起点..光标），供 Backspace 一次删净。
