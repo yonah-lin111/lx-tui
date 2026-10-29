@@ -230,6 +230,39 @@ fn selection_preserves_inner_blank_lines_and_trims_trailing_empty_lines() {
 }
 
 #[test]
+fn selection_preserves_leading_indentation_and_accounts_for_block_gutter() {
+    // 普通缩进行：从首个非空白字符（col 2 的 `-`）开始拖选，保留首行前导缩进。
+    let mut plain = prompt(30, 5);
+    plain.insert_str("  - first\n\n    - second");
+    assert_eq!(
+        plain.selection_text((0, 2), (2, 15)).as_deref(),
+        Some("  - first\n\n    - second")
+    );
+    // 选区从行中非空白字符之后（col 4 的 `f`）开始时，按真实起点截取，不强加前缀。
+    assert_eq!(
+        plain.selection_text((0, 4), (0, 8)).as_deref(),
+        Some("first")
+    );
+    // 双击选词（allow_single_cell = true）不吞入行首缩进。
+    assert_eq!(
+        plain.selection_text_with((0, 4), (0, 8), true).as_deref(),
+        Some("first")
+    );
+
+    // 模板块内（左边框占 2 列）：从块内正文起点（col 2）或首个非空白字符（col 4）拖选均保留缩进。
+    let mut block = prompt(40, 6);
+    block.set_text("&&& addTemplate --start\n  - item1\n\n    - item2\n&&& addTemplate --end");
+    assert_eq!(
+        block.selection_text((1, 2), (3, 15)).as_deref(),
+        Some("  - item1\n\n    - item2")
+    );
+    assert_eq!(
+        block.selection_text((1, 4), (3, 15)).as_deref(),
+        Some("  - item1\n\n    - item2")
+    );
+}
+
+#[test]
 fn replace_range_swaps_selection_and_undo_restores_it() {
     let mut prompt = prompt(20, 3);
     prompt.insert_str("hello world");

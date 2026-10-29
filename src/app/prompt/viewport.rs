@@ -272,14 +272,23 @@ impl Prompt {
         let mut previous_line = None;
         for (offset, row) in rows[first_row..=last_row].iter().enumerate() {
             let index = first_row + offset;
+            let gutter = self.line_gutter(row.line);
             let slice = &self.text[row.start..row.end];
             let from = if index == first_row {
-                row.start + column_offset(slice, first.1)
+                let col_offset = column_offset(slice, first.1.saturating_sub(gutter));
+                if !allow_single_cell
+                    && col_offset < slice.len()
+                    && slice[..col_offset].bytes().all(|byte| byte == b' ')
+                {
+                    row.start
+                } else {
+                    row.start + col_offset
+                }
             } else {
                 row.start
             };
             let to = if index == last_row {
-                row.start + column_offset_inclusive(slice, last.1)
+                row.start + column_offset_inclusive(slice, last.1.saturating_sub(gutter))
             } else {
                 row.end
             };

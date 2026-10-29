@@ -186,7 +186,7 @@ fn history_roundtrip_keeps_expansion() {
 #[test]
 fn selection_text_skips_folded_content() {
     let prompt = prompt(TASK);
-    let copied = prompt.selection_text((0, 0), (3, 3));
+    let copied = prompt.selection_text((0, 0), (3, 5));
     assert_eq!(
         copied.as_deref(),
         Some("&&& x --start\n+++ supplement --start\n{title: Review}\n&&& ")
