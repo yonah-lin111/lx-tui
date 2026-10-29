@@ -1,6 +1,6 @@
 # Codex 内置 Agent Tool 补齐设计
 
-状态：待用户审核；本文获确认前不修改生产代码。参考仓库固定为 `/Users/yonah/projects/agent/codex-main`，目标仓库为本项目当前 checkout。本文记录 2026-10-29 已确认的需求边界及拟采用的实现契约。
+状态：已完成（2026-10-29 实施并通过评审与端到端验证，见同目录 `task.md`、`verification.md`、`review.md`）。参考仓库固定为 `/Users/yonah/projects/agent/codex-main`，目标仓库为本项目当前 checkout。本文记录已确认的需求边界及实现契约。
 
 ## 1. 目标和边界
 
