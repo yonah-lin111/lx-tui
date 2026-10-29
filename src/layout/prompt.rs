@@ -51,8 +51,8 @@ pub(crate) const PROMPT_PIN_MIN_WIDTH_EDITOR: u16 =
     PROMPT_BLOCK_FOCUS_MIN_WIDTH_EDITOR + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
 pub(crate) const PROMPT_PIN_MIN_WIDTH_TREE: u16 =
     PROMPT_TEMP_PROMPT_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
-/// 引用文件夹按钮（`[dir]`）宽度（列）；仅编辑视图显示、位于钉住按钮左侧。
-pub const PROMPT_FOLDERS_WIDTH: u16 = 5;
+/// 引用文件夹按钮（`[refDir]`）宽度（列）；仅编辑视图显示、位于钉住按钮左侧。
+pub const PROMPT_FOLDERS_WIDTH: u16 = 8;
 /// 显示引用文件夹按钮所需的最小内容区宽度（列）：在钉住按钮左侧再让出宽度与间距。
 pub(crate) const PROMPT_FOLDERS_MIN_WIDTH_EDITOR: u16 =
     PROMPT_PIN_MIN_WIDTH_EDITOR + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_FOLDERS_WIDTH;

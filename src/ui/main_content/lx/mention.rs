@@ -159,6 +159,7 @@ fn view<'a>(
         anchor_row: above,
         max_height: Some(cap),
         title: Some(text::LX_MENTION_PANEL_TITLE),
+        tabs: None,
         right_title: data.scope.as_deref(),
         footer: data.interactive.then_some(text::MENTION_PANEL_FOOTER),
         width: Some(input.width),

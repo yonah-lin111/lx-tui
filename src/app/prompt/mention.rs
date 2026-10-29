@@ -13,6 +13,39 @@ use super::super::markdown::{
     resolve_binding,
 };
 
+/// @ 面板取根选择：绑定 linked worktree 时先选主 checkout 或绑定 checkout。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MentionRootChoice {
+    Main,
+    Worktree,
+}
+
+/// @ 命令面板顶栏 Tab。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MentionTab {
+    #[default]
+    Files,
+    RefDir,
+}
+
+impl MentionTab {
+    pub const ALL: [Self; 2] = [Self::Files, Self::RefDir];
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Files => Self::RefDir,
+            Self::RefDir => Self::Files,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Files => Self::RefDir,
+            Self::RefDir => Self::Files,
+        }
+    }
+}
+
 /// 文件提及面板状态：面板、扫描根、缓存、在途代号、高亮与 worktree 绑定。
 #[derive(Debug, Default)]
 pub struct MentionState {
@@ -38,13 +71,18 @@ pub struct MentionState {
     chooser: Option<usize>,
     /// 选择取根时的块绑定签名；绑定变化时选择复位。
     choice_binding: Option<(usize, String)>,
-}
-
-/// @ 面板取根选择：绑定 linked worktree 时先选主 checkout 或绑定 checkout。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MentionRootChoice {
-    Main,
-    Worktree,
+    /// 当前活跃 Tab：Files 或 refDir。
+    tab: MentionTab,
+    /// 引用文件夹列表快照（由上层同步注入）。
+    referenced_folders: Vec<crate::app::referenced::ReferencedFolder>,
+    /// refDir 列表的高亮索引。
+    ref_active: usize,
+    /// refDir 列表的窗口锚点索引。
+    ref_anchor: usize,
+    /// refDir 显式视口起点。
+    ref_viewport: Option<usize>,
+    /// 当前触发区间与查询词。
+    trigger: Option<markdown::MentionTrigger>,
 }
 
 impl MentionRootChoice {
@@ -71,9 +109,116 @@ impl MentionState {
         self.chooser
     }
 
+    /// 当前活跃 Tab。
+    pub fn tab(&self) -> MentionTab {
+        self.tab
+    }
+
+    /// 当前触发信息。
+    pub fn trigger(&self) -> Option<&markdown::MentionTrigger> {
+        self.trigger.as_ref()
+    }
+
+    /// refDir 高亮索引。
+    pub fn ref_active(&self) -> usize {
+        self.ref_active
+    }
+
+    /// refDir 窗口锚点。
+    pub fn ref_anchor(&self) -> usize {
+        self.ref_anchor
+    }
+
+    /// refDir 显式视口。
+    pub fn ref_viewport(&self) -> Option<usize> {
+        self.ref_viewport
+    }
+
+    /// 同步引用文件夹快照。
+    pub fn sync_referenced_folders(
+        &mut self,
+        folders: &[crate::app::referenced::ReferencedFolder],
+    ) {
+        self.referenced_folders = folders.to_vec();
+    }
+
+    /// 获取基于当前触发词过滤后的引用文件夹列表。
+    pub fn filtered_ref_folders(&self) -> Vec<&crate::app::referenced::ReferencedFolder> {
+        let query = self
+            .trigger
+            .as_ref()
+            .map(|t| t.query.as_str())
+            .unwrap_or("");
+        if query.is_empty() {
+            return self.referenced_folders.iter().collect();
+        }
+        let query_lower = query.to_lowercase();
+        self.referenced_folders
+            .iter()
+            .filter(|folder| {
+                folder.display_name().to_lowercase().contains(&query_lower)
+                    || folder
+                        .path
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .contains(&query_lower)
+            })
+            .collect()
+    }
+
+    /// 扫描是否在途且尚未取得缓存。
+    pub fn is_loading(&self) -> bool {
+        self.pending && self.cache.is_none()
+    }
+
+    /// 切换 Tab：循环左右切换；未处于可见状态返回 false。
+    pub fn switch_tab(&mut self, delta: isize) -> bool {
+        if !self.view_open() {
+            return false;
+        }
+        let next = if delta > 0 {
+            self.tab.next()
+        } else {
+            self.tab.prev()
+        };
+        if next == self.tab {
+            return false;
+        }
+        self.tab = next;
+        self.ref_active = 0;
+        self.ref_anchor = 0;
+        self.ref_viewport = None;
+        true
+    }
+
+    /// 直接设置活跃 Tab。
+    pub fn set_tab(&mut self, tab: MentionTab) -> bool {
+        if !self.view_open() || self.tab == tab {
+            return false;
+        }
+        self.tab = tab;
+        self.ref_active = 0;
+        self.ref_anchor = 0;
+        self.ref_viewport = None;
+        true
+    }
+
+    /// 会话结束：状态复位。
+    fn reset_session(&mut self) {
+        self.panel = None;
+        self.chooser = None;
+        self.choice = None;
+        self.choice_binding = None;
+        self.trigger = None;
+        self.tab = MentionTab::Files;
+        self.ref_active = 0;
+        self.ref_anchor = 0;
+        self.ref_viewport = None;
+    }
+
     /// 选择器或文件面板是否可见。
     pub fn view_open(&self) -> bool {
-        self.chooser.is_some() || self.panel.is_some()
+        self.trigger.is_some() && !self.suppressed
     }
 
     /// 面板标题后缀：绑定 linked worktree 且已选定取根时为 `main` / `wt`。
@@ -234,6 +379,17 @@ impl MentionState {
 
     /// 按偏移循环移动高亮；面板未打开返回 false。
     pub fn move_active(&mut self, delta: isize) -> bool {
+        if self.tab == MentionTab::RefDir {
+            let count = self.filtered_ref_folders().len();
+            if count == 0 {
+                return false;
+            }
+            let next = (self.ref_active as isize + delta).rem_euclid(count as isize) as usize;
+            self.ref_active = next;
+            self.ref_anchor = next;
+            self.ref_viewport = None;
+            return true;
+        }
         if let Some(active) = self.chooser {
             let next = (active as isize + delta).rem_euclid(2) as usize;
             self.chooser = Some(next);
@@ -250,6 +406,14 @@ impl MentionState {
 
     /// 设置高亮索引；面板未打开、索引越界或未变化返回 false。
     pub fn set_active(&mut self, index: usize) -> bool {
+        if self.tab == MentionTab::RefDir {
+            let count = self.filtered_ref_folders().len();
+            if index >= count || self.ref_active == index {
+                return false;
+            }
+            self.ref_active = index;
+            return true;
+        }
         if let Some(active) = self.chooser {
             if index >= MentionRootChoice::ALL.len() || index == active {
                 return false;
@@ -270,6 +434,20 @@ impl MentionState {
     /// 滚轮滚动可见窗口：显式视口从 `base` 起偏移、越界钳制不循环；高亮不动；
     /// 面板未打开或视口未移动返回 false。
     pub fn scroll_viewport(&mut self, delta: isize, base: usize) -> bool {
+        if self.tab == MentionTab::RefDir {
+            let count = self.filtered_ref_folders().len();
+            if count == 0 {
+                return false;
+            }
+            let current = self.ref_viewport.unwrap_or(base);
+            let next = (current as isize + delta).max(0) as usize;
+            let clamped = next.min(count.saturating_sub(1));
+            if self.ref_viewport == Some(clamped) {
+                return false;
+            }
+            self.ref_viewport = Some(clamped);
+            return true;
+        }
         match self.panel.as_mut() {
             Some(panel) => panel.scroll_viewport(delta, base),
             None => false,
@@ -278,6 +456,23 @@ impl MentionState {
 
     /// 确认高亮条目：关闭面板并返回替换区间与插入文本；未打开或区间越界返回 None。
     pub fn confirm(&mut self, text_len: usize) -> Option<(Range<usize>, String)> {
+        if self.tab == MentionTab::RefDir {
+            let trigger = self.trigger.as_ref()?;
+            if trigger.from > trigger.to || trigger.to > text_len {
+                return None;
+            }
+            let filtered = self.filtered_ref_folders();
+            let folder = filtered.get(self.ref_active)?;
+            let range = trigger.from..trigger.to;
+            let ref_text = crate::app::markdown::format_reference(
+                crate::app::markdown::ReferKind::Folder,
+                &folder.path,
+            )
+            .unwrap_or_else(|| format!("@[refer-folder]({})", folder.path.display()));
+            let insertion = format!("{ref_text} ");
+            self.reset_session();
+            return Some((range, insertion));
+        }
         let panel = self.panel.as_ref()?;
         let trigger = panel.trigger();
         if trigger.from > trigger.to || trigger.to > text_len {
@@ -286,10 +481,7 @@ impl MentionState {
         let entry = panel.items().get(panel.active())?.clone();
         let range = trigger.from..trigger.to;
         let insertion = markdown::mention_insertion(&entry);
-        self.panel = None;
-        // 会话结束：取根选择复位，下次 `@` 重新询问。
-        self.choice = None;
-        self.choice_binding = None;
+        self.reset_session();
         Some((range, insertion))
     }
 
@@ -297,6 +489,9 @@ impl MentionState {
     ///
     /// 高亮项不是目录、目录无缓存后代（进入后将无候选）、触发区间越界时返回 None。
     pub fn enter_folder(&self, text_len: usize) -> Option<(Range<usize>, String)> {
+        if self.tab == MentionTab::RefDir {
+            return None;
+        }
         let panel = self.panel.as_ref()?;
         let entry = panel.items().get(panel.active())?;
         if !entry.is_directory || !self.has_children(&entry.path) {
@@ -322,10 +517,7 @@ impl MentionState {
         if !self.view_open() {
             return false;
         }
-        self.panel = None;
-        self.chooser = None;
-        self.choice = None;
-        self.choice_binding = None;
+        self.reset_session();
         true
     }
 
@@ -336,10 +528,7 @@ impl MentionState {
 
     /// 失焦或折叠时清空面板并作废在途结果。
     pub fn clear(&mut self) {
-        self.panel = None;
-        self.chooser = None;
-        self.choice = None;
-        self.choice_binding = None;
+        self.reset_session();
         self.pending = false;
         self.generation = self.generation.wrapping_add(1);
     }
@@ -413,16 +602,24 @@ impl MentionState {
         if self.suppressed {
             self.panel = None;
             self.chooser = None;
+            self.trigger = None;
             return;
         }
         let Some(trigger) = markdown::mention_trigger(text, cursor) else {
             // 触发消失即会话结束：取根选择复位。
-            self.panel = None;
-            self.chooser = None;
-            self.choice = None;
-            self.choice_binding = None;
+            self.reset_session();
             return;
         };
+        self.trigger = Some(trigger.clone());
+        let filtered_count = self.filtered_ref_folders().len();
+        if self.ref_active >= filtered_count {
+            self.ref_active = 0;
+            self.ref_anchor = 0;
+            self.ref_viewport = None;
+        }
+        if self.ref_viewport.is_some_and(|vp| vp >= filtered_count) {
+            self.ref_viewport = None;
+        }
         // 绑定签名变化（换块、改分支、脱离块）才复位取根选择；签名随会话记录，
         // 同一会话内的重算不得复位：事件层每次按键都会先同步根并走到这里，
         // 否则选择器高亮每次都被打回 main（键盘选 wt 按回车写成 main）。
@@ -464,3 +661,6 @@ impl MentionState {
         self.panel = Some(MentionPanel::new(trigger, items, active));
     }
 }
+
+#[cfg(test)]
+mod tests;

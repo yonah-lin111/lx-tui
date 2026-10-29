@@ -43,6 +43,13 @@ pub enum CommandItem<'a> {
     },
 }
 
+/// 顶边边框 Tab 标签页。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PanelTab<'a> {
+    pub label: &'a str,
+    pub active: bool,
+}
+
 /// 面板相对锚点行的放置偏好。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PanelPlacement {
@@ -83,6 +90,8 @@ pub struct CommandPanelView<'a> {
     pub max_height: Option<u16>,
     /// 顶边左侧标题。
     pub title: Option<&'a str>,
+    /// 顶边 Tab 标签页组；若提供，优先于 title 绘制。
+    pub tabs: Option<&'a [PanelTab<'a>]>,
     /// 顶边右侧状态文案（如当前目录名）。
     pub right_title: Option<&'a str>,
     /// 底边左侧快捷键提示。
@@ -94,7 +103,7 @@ pub struct CommandPanelView<'a> {
 }
 
 /// 面板布局：面板矩形、条目内容区、滚动条、首个可见条目与可见条目数。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PanelLayout {
     pub rect: Rect,
     pub inner: Rect,
@@ -103,6 +112,7 @@ pub struct PanelLayout {
     pub scrollbar: Option<ScrollbarLayout>,
     pub start: usize,
     pub visible: usize,
+    pub tabs: Vec<Rect>,
 }
 
 /// 计算面板布局；空间不足或没有可见条目时返回 None。
@@ -179,6 +189,32 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
         ),
         None => inner,
     };
+    let tabs = match view.tabs {
+        Some(tabs) if !tabs.is_empty() => {
+            let mut out = Vec::with_capacity(tabs.len());
+            let mut x = rect.x.saturating_add(2);
+            let right_limit = match view.right_title {
+                Some(t) => rect.right().saturating_sub(
+                    u16::try_from(UnicodeWidthStr::width(t))
+                        .unwrap_or(0)
+                        .saturating_add(3),
+                ),
+                None => rect.right().saturating_sub(1),
+            };
+            for tab in tabs {
+                let width = u16::try_from(UnicodeWidthStr::width(tab.label))
+                    .unwrap_or(u16::MAX)
+                    .saturating_add(2);
+                if x.saturating_add(width) >= right_limit {
+                    break;
+                }
+                out.push(Rect::new(x, rect.y, width, 1));
+                x = x.saturating_add(width).saturating_add(1);
+            }
+            out
+        }
+        _ => Vec::new(),
+    };
     Some(PanelLayout {
         rect,
         inner,
@@ -186,6 +222,7 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
         scrollbar,
         start,
         visible,
+        tabs,
     })
 }
 
@@ -197,7 +234,8 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
         .border_type(BorderType::Rounded)
         .border_style(style::muted())
         .style(style::overlay_panel());
-    if let Some(title) = view.title {
+    let has_tabs = view.tabs.is_some_and(|tabs| !tabs.is_empty());
+    if !has_tabs && let Some(title) = view.title {
         block = block.title_top(Line::from(Span::styled(
             format!(" {title} "),
             style::muted(),
@@ -216,12 +254,40 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
         )));
     }
     block.render(layout.rect, buf);
+    if let Some(tabs) = view.tabs {
+        for (i, tab_rect) in layout.tabs.iter().enumerate() {
+            if let Some(tab) = tabs.get(i) {
+                let tab_style = if tab.active {
+                    style::right_tab_active()
+                } else {
+                    style::muted()
+                };
+                let text = format!(" {} ", tab.label);
+                buf.set_style(*tab_rect, Style::reset());
+                buf.set_stringn(
+                    tab_rect.x,
+                    tab_rect.y,
+                    &text,
+                    usize::from(tab_rect.width),
+                    tab_style,
+                );
+            }
+        }
+    }
     render_items(buf, &layout, view);
     if let Some(scrollbar) = layout.scrollbar.as_ref() {
         // 命令面板是浮层：滚动条沿用面板底色，不透明。
         scrollbar::render_buffer_with_base(buf, scrollbar, style::overlay_panel());
     }
     Some(layout.rect)
+}
+
+/// 命中面板顶边框 Tab：返回 Tab 索引；未命中返回 None。
+pub fn tab_at(layout: &PanelLayout, column: u16, row: u16) -> Option<usize> {
+    layout
+        .tabs
+        .iter()
+        .position(|rect| rect.contains(Position::new(column, row)))
 }
 
 /// 命中面板内某条目：返回条目索引；未命中返回 None。
@@ -310,10 +376,22 @@ fn panel_width(available: u16, view: &CommandPanelView<'_>) -> u16 {
         _ => (marker + label + COLUMN_GAP + preview + tag).max(marker + label.max(detail) + tag),
     };
     // 标题与提示自带的包裹空格随文案宽度计入；最终宽度还需容纳两侧边框。
-    let header = view.title.map_or(0, |title| title.width() + 2)
-        + view.right_title.map_or(0, |title| title.width() + 2);
+    let tabs_header = match view.tabs {
+        Some(tabs) if !tabs.is_empty() => {
+            let total_tabs: usize = tabs.iter().map(|t| t.label.width() + 2).sum();
+            let separators = tabs.len().saturating_sub(1);
+            total_tabs + separators + view.right_title.map_or(0, |title| title.width() + 2)
+        }
+        _ => {
+            view.title.map_or(0, |title| title.width() + 2)
+                + view.right_title.map_or(0, |title| title.width() + 2)
+        }
+    };
     let footer = view.footer.map_or(0, |footer| footer.width() + 2);
-    let content = content.max(header).max(footer).min(usize::from(available));
+    let content = content
+        .max(tabs_header)
+        .max(footer)
+        .min(usize::from(available));
     ((content + 4) as u16).min(available).max(MIN_WIDTH)
 }
 

@@ -391,9 +391,18 @@ pub fn mention_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
     command_panel::layout(area, &mention_view(&items, &data, area.height / 2))
 }
 
+/// 提及面板顶边框 Tab 命中：返回被点中的 Tab 索引；面板未打开或未命中返回 None。
+pub fn mention_tab_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
+    let layout = mention_layout(prompt, area)?;
+    command_panel::tab_at(&layout, column, row)
+}
+
 /// 提及面板命中：返回被点中的条目索引；面板未打开或未命中返回 None。
 pub fn mention_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
     let data = mention_panel_data(prompt, area.width)?;
+    if matches!(data.rows.first(), Some(MentionRowText::Empty(_))) {
+        return None;
+    }
     let items = data.items();
     let layout = command_panel::layout(area, &mention_view(&items, &data, area.height / 2))?;
     command_panel::item_at(&layout, &items, column, row)
@@ -404,18 +413,24 @@ pub fn mention_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
     mention_layout(prompt, area).map(|layout| layout.rect)
 }
 
-/// 提及面板条目：文件候选（图标 + 文件名 + 父目录明细）或取根选择（单行）。
+/// 提及面板条目：文件候选（图标 + 文件名 + 父目录明细）、取根选择（单行）或空状态（单行置灰）。
 enum MentionRowText {
     File(crate::ui::mention::MentionRow),
     Choice { label: &'static str },
+    Empty(&'static str),
 }
 
 impl MentionRowText {
-    /// 组装条目视图：文件双行展示（目录按目录色），取根选择单行。
+    /// 组装条目视图：文件双行展示（目录按目录色），取根选择单行，空状态置灰单行。
     fn item(&self) -> CommandItem<'_> {
         match self {
             Self::File(row) => row.item(),
             Self::Choice { label } => CommandItem::Inline {
+                label,
+                preview: "",
+                tag: "",
+            },
+            Self::Empty(label) => CommandItem::Inline {
                 label,
                 preview: "",
                 tag: "",
@@ -437,6 +452,9 @@ struct MentionPanelData {
     title: String,
     /// 取根选择器：两项单行、不显示目录导航页脚。
     chooser: bool,
+    tab: crate::app::prompt::MentionTab,
+    tabs: [command_panel::PanelTab<'static>; 2],
+    root_label: Option<&'static str>,
 }
 
 impl MentionPanelData {
@@ -449,6 +467,18 @@ impl MentionPanelData {
 /// 提及面板渲染数据；面板未打开或光标滚出视口返回 None。
 fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
     let (anchor_row, _) = prompt.cursor_cell()?;
+    let detail_width = usize::from(width).saturating_sub(MENTION_DETAIL_MARGIN);
+    let tab = prompt.mention_tab();
+    let tabs = [
+        command_panel::PanelTab {
+            label: text::MENTION_TAB_FILES,
+            active: tab == crate::app::prompt::MentionTab::Files,
+        },
+        command_panel::PanelTab {
+            label: text::MENTION_TAB_REF_DIR,
+            active: tab == crate::app::prompt::MentionTab::RefDir,
+        },
+    ];
     if let Some(active) = prompt.mention_chooser() {
         return Some(MentionPanelData {
             rows: crate::app::prompt::MentionRootChoice::ALL
@@ -464,24 +494,96 @@ fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
             scope: None,
             title: text::MENTION_PANEL_TITLE.to_string(),
             chooser: true,
+            tab,
+            tabs,
+            root_label: None,
         });
     }
-    let panel = prompt.mention()?;
-    let detail_width = usize::from(width).saturating_sub(MENTION_DETAIL_MARGIN);
-    Some(MentionPanelData {
-        rows: panel
-            .items()
-            .iter()
-            .map(|entry| mention_row_text(entry, detail_width))
-            .collect(),
-        active: panel.active(),
-        anchor: panel.anchor(),
-        viewport: panel.viewport(),
-        anchor_row,
-        scope: panel.scope_name().map(str::to_string),
-        title: mention_title(prompt),
-        chooser: false,
-    })
+    match tab {
+        crate::app::prompt::MentionTab::Files => {
+            if let Some(panel) = prompt.mention() {
+                Some(MentionPanelData {
+                    rows: panel
+                        .items()
+                        .iter()
+                        .map(|entry| mention_row_text(entry, detail_width))
+                        .collect(),
+                    active: panel.active(),
+                    anchor: panel.anchor(),
+                    viewport: panel.viewport(),
+                    anchor_row,
+                    scope: panel.scope_name().map(str::to_string),
+                    title: mention_title(prompt),
+                    chooser: false,
+                    tab,
+                    tabs,
+                    root_label: prompt.mention_root_label(),
+                })
+            } else if prompt.mention_active() {
+                let empty_label = if prompt.mention_loading() {
+                    text::LX_MENTION_LOADING
+                } else {
+                    text::LX_MENTION_EMPTY
+                };
+                Some(MentionPanelData {
+                    rows: vec![MentionRowText::Empty(empty_label)],
+                    active: 0,
+                    anchor: 0,
+                    viewport: None,
+                    anchor_row,
+                    scope: None,
+                    title: mention_title(prompt),
+                    chooser: false,
+                    tab,
+                    tabs,
+                    root_label: prompt.mention_root_label(),
+                })
+            } else {
+                None
+            }
+        }
+        crate::app::prompt::MentionTab::RefDir => {
+            if !prompt.mention_active() {
+                return None;
+            }
+            let filtered = prompt.mention_filtered_ref_folders();
+            let rows = if filtered.is_empty() {
+                vec![MentionRowText::Empty(text::MENTION_REF_DIR_EMPTY)]
+            } else {
+                filtered
+                    .iter()
+                    .map(|folder| ref_folder_row_text(folder, detail_width))
+                    .collect()
+            };
+            Some(MentionPanelData {
+                rows,
+                active: prompt.mention_ref_active(),
+                anchor: prompt.mention_ref_anchor(),
+                viewport: prompt.mention_ref_viewport(),
+                anchor_row,
+                scope: None,
+                title: text::MENTION_TAB_REF_DIR.to_string(),
+                chooser: false,
+                tab,
+                tabs,
+                root_label: None,
+            })
+        }
+    }
+}
+
+/// 构造引用文件夹条目展示。
+fn ref_folder_row_text(
+    folder: &crate::app::referenced::ReferencedFolder,
+    detail_width: usize,
+) -> MentionRowText {
+    let name = folder.display_name();
+    let path_str = folder.path.display().to_string();
+    MentionRowText::File(crate::ui::mention::folder_row(
+        &name,
+        &path_str,
+        detail_width,
+    ))
 }
 
 /// 提及面板标题：绑定 linked worktree 且已选定取根时追加 `-[main]` / `-[wt]`。
@@ -494,12 +596,20 @@ fn mention_title(prompt: &Prompt) -> String {
 
 /// 提及面板视图：最大高度取容器（prompt 内容区）的一半；显式视口优先于窗口锚点。
 ///
-/// 顶边左侧为 `Files` 标题，右侧为当前目录名（未进入文件夹时不显示），底边为目录导航快捷键。
+/// 顶边为 Tab 标签页，右侧为当前目录名（未进入文件夹时不显示），底边为动态快捷键提示。
 fn mention_view<'a>(
     items: &'a [CommandItem<'a>],
     data: &'a MentionPanelData,
     max_height: u16,
 ) -> CommandPanelView<'a> {
+    let footer = if data.chooser {
+        None
+    } else if data.tab == crate::app::prompt::MentionTab::Files {
+        Some(text::MENTION_FOOTER_FILES)
+    } else {
+        Some(text::MENTION_FOOTER_REF_DIR)
+    };
+    let right_title = data.scope.as_deref().or(data.root_label);
     CommandPanelView {
         current: None,
         items,
@@ -509,8 +619,9 @@ fn mention_view<'a>(
         anchor_row: data.anchor_row,
         max_height: Some(max_height),
         title: Some(data.title.as_str()),
-        right_title: data.scope.as_deref(),
-        footer: (!data.chooser).then_some(text::MENTION_PANEL_FOOTER),
+        tabs: (!data.chooser).then_some(&data.tabs[..]),
+        right_title,
+        footer,
         ..Default::default()
     }
 }
@@ -521,3 +632,6 @@ fn mention_view<'a>(
 fn mention_row_text(entry: &MentionEntry, detail_width: usize) -> MentionRowText {
     MentionRowText::File(crate::ui::mention::file_row(entry, detail_width))
 }
+
+#[cfg(test)]
+mod tests;

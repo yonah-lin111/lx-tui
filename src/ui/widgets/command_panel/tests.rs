@@ -537,3 +537,44 @@ fn clamps_titles_when_area_is_narrow() {
 
     assert_eq!(rect.width, 12, "宽度钳到可用区域且不 panic");
 }
+
+#[test]
+fn layout_and_hit_test_tabs() {
+    let area = Rect::new(0, 0, 60, 10);
+    let items = inline(&[("item1", "desc1")]);
+    let tabs = [
+        PanelTab {
+            label: "Files",
+            active: true,
+        },
+        PanelTab {
+            label: "refDir",
+            active: false,
+        },
+    ];
+    let mut v = view(&items, 0, 0, None);
+    v.tabs = Some(&tabs);
+
+    let l = layout(area, &v).expect("layout");
+    assert_eq!(l.tabs.len(), 2);
+    // Tab 0 starts at rect.x + 2, width = 5 + 2 = 7 (" Files ")
+    assert_eq!(l.tabs[0].x, l.rect.x + 2);
+    assert_eq!(l.tabs[0].width, 7);
+    assert_eq!(l.tabs[0].y, l.rect.y);
+
+    // Tab 1 starts at rect.x + 2 + 7 + 1 = rect.x + 10, width = 6 + 2 = 8 (" refDir ")
+    assert_eq!(l.tabs[1].x, l.rect.x + 10);
+    assert_eq!(l.tabs[1].width, 8);
+    assert_eq!(l.tabs[1].y, l.rect.y);
+
+    assert_eq!(tab_at(&l, l.tabs[0].x, l.rect.y), Some(0));
+    assert_eq!(tab_at(&l, l.tabs[0].right() - 1, l.rect.y), Some(0));
+    assert_eq!(tab_at(&l, l.tabs[1].x, l.rect.y), Some(1));
+    assert_eq!(tab_at(&l, l.tabs[1].right() - 1, l.rect.y), Some(1));
+    assert_eq!(tab_at(&l, l.tabs[0].right(), l.rect.y), None); // separator column
+    assert_eq!(tab_at(&l, l.rect.x, l.rect.y), None); // corner
+    assert_eq!(tab_at(&l, l.tabs[0].x, l.rect.y + 1), None); // inside content
+
+    let mut buf = Buffer::empty(area);
+    assert!(render(area, &mut buf, &v).is_some());
+}
