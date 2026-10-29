@@ -23,7 +23,7 @@ fn mention_tab_switching_cycles_between_files_and_ref_dir() {
     let mut state = MentionState::default();
     state.sync_referenced_folders(&dummy_folders());
     state.refresh("@", 1);
-    assert!(state.session_active());
+    assert!(state.view_open());
     assert_eq!(state.tab(), MentionTab::Files);
 
     // Right switches to refDir
@@ -132,4 +132,56 @@ fn ref_dir_navigation_moves_and_clamps() {
     assert_eq!(state.ref_active(), 0);
     assert!(!state.set_active(0), "相同索引不设值");
     assert!(!state.set_active(5), "越界不设值");
+}
+
+#[test]
+fn files_empty_matches_keeps_view_open_allowing_tab_switch() {
+    let mut state = MentionState::default();
+    state.sync_referenced_folders(&dummy_folders());
+    state.apply_entries(
+        0,
+        vec![MentionEntry {
+            path: "src/main.rs".into(),
+            is_directory: false,
+        }],
+        "@",
+        1,
+    );
+
+    // Filter with "agent" -> 0 matches in Files
+    state.refresh("@agent", 6);
+    assert!(state.panel().is_none(), "Files 内无匹配条目");
+    assert!(state.view_open(), "有缓存且会话激活时保持可视，允许切 Tab");
+
+    // Can still switch to refDir and find the matching referenced folder
+    assert!(state.switch_tab(1));
+    assert_eq!(state.tab(), MentionTab::RefDir);
+    assert_eq!(state.filtered_ref_folders().len(), 1);
+    assert_eq!(state.filtered_ref_folders()[0].id, 2);
+}
+
+#[test]
+fn inactive_mention_does_not_switch_tab() {
+    let mut state = MentionState::default();
+    state.refresh("plain text", 10);
+    assert!(!state.view_open());
+    assert!(!state.switch_tab(1), "非提及状态拒绝切 Tab");
+    assert!(!state.set_tab(MentionTab::RefDir), "非提及状态拒绝设 Tab");
+}
+
+#[test]
+fn ref_dir_viewport_clamps_on_query_narrowing() {
+    let mut state = MentionState::default();
+    state.sync_referenced_folders(&dummy_folders());
+    state.refresh("@", 1);
+    assert!(state.switch_tab(1));
+
+    // Scroll viewport to 1
+    assert!(state.scroll_viewport(1, 0));
+    assert_eq!(state.ref_viewport(), Some(1));
+
+    // Narrow query so count becomes 1 -> viewport resets safely
+    state.refresh("@herdr", 6);
+    assert_eq!(state.filtered_ref_folders().len(), 1);
+    assert_eq!(state.ref_viewport(), None, "条目缩减时视口安全复位");
 }

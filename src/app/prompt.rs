@@ -528,6 +528,11 @@ impl Prompt {
         self.mention.view_open()
     }
 
+    /// 提及文件扫描是否在途中。
+    pub fn mention_loading(&self) -> bool {
+        self.mention.is_loading()
+    }
+
     /// 提及面板当前活跃 Tab。
     pub fn mention_tab(&self) -> MentionTab {
         self.mention.tab()

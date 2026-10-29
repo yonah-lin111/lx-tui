@@ -166,14 +166,14 @@ impl MentionState {
             .collect()
     }
 
-    /// 提及触发会话是否处于激活中（光标处有 `@` 触发且未被 Esc 压制）。
-    pub fn session_active(&self) -> bool {
-        self.trigger.is_some() && !self.suppressed
+    /// 扫描是否在途且尚未取得缓存。
+    pub fn is_loading(&self) -> bool {
+        self.pending && self.cache.is_none()
     }
 
-    /// 切换 Tab：循环左右切换；未处于激活会话返回 false。
+    /// 切换 Tab：循环左右切换；未处于可见状态返回 false。
     pub fn switch_tab(&mut self, delta: isize) -> bool {
-        if !self.session_active() {
+        if !self.view_open() {
             return false;
         }
         let next = if delta > 0 {
@@ -193,7 +193,7 @@ impl MentionState {
 
     /// 直接设置活跃 Tab。
     pub fn set_tab(&mut self, tab: MentionTab) -> bool {
-        if !self.session_active() || self.tab == tab {
+        if !self.view_open() || self.tab == tab {
             return false;
         }
         self.tab = tab;
@@ -218,13 +218,7 @@ impl MentionState {
 
     /// 选择器或文件面板是否可见。
     pub fn view_open(&self) -> bool {
-        if self.suppressed {
-            return false;
-        }
-        match self.tab {
-            MentionTab::Files => self.chooser.is_some() || self.panel.is_some(),
-            MentionTab::RefDir => self.trigger.is_some(),
-        }
+        self.trigger.is_some() && !self.suppressed
     }
 
     /// 面板标题后缀：绑定 linked worktree 且已选定取根时为 `main` / `wt`。
@@ -621,6 +615,9 @@ impl MentionState {
         if self.ref_active >= filtered_count {
             self.ref_active = 0;
             self.ref_anchor = 0;
+            self.ref_viewport = None;
+        }
+        if self.ref_viewport.is_some_and(|vp| vp >= filtered_count) {
             self.ref_viewport = None;
         }
         // 绑定签名变化（换块、改分支、脱离块）才复位取根选择；签名随会话记录，

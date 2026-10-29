@@ -285,6 +285,23 @@ fn mention_panel_ref_dir_tab_keyboard_switching_and_insert() {
 }
 
 #[test]
+fn p0_cursor_left_right_works_when_mention_panel_is_not_active() {
+    let (mut state, _, _) = ready_state();
+    update::focus_prompt(&mut state);
+    update::apply_editor(&mut state, EditorCommand::InsertChar('a'));
+    update::apply_editor(&mut state, EditorCommand::InsertChar('b'));
+    assert_eq!(state.prompt.cursor(), 2);
+
+    // Left moves cursor to 1
+    update::apply_editor(&mut state, EditorCommand::Left);
+    assert_eq!(state.prompt.cursor(), 1);
+
+    // Right moves cursor back to 2
+    update::apply_editor(&mut state, EditorCommand::Right);
+    assert_eq!(state.prompt.cursor(), 2);
+}
+
+#[test]
 fn mention_panel_wheel_scrolls_viewport_and_keeps_active() {
     let (mut state, config, view) = ready_state();
     update::focus_prompt(&mut state);

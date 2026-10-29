@@ -219,6 +219,9 @@ fn route_mention_panel(state: &mut AppState, command: &EditorCommand) -> bool {
     state
         .prompt
         .sync_referenced_folders(&state.referenced.folders);
+    if !state.prompt.mention_active() {
+        return false;
+    }
     match command {
         EditorCommand::Up => state.prompt.mention_move(-1),
         EditorCommand::Down => state.prompt.mention_move(1),
@@ -227,9 +230,6 @@ fn route_mention_panel(state: &mut AppState, command: &EditorCommand) -> bool {
         EditorCommand::Newline => state.prompt.mention_confirm(),
         EditorCommand::Escape => state.prompt.mention_escape(),
         EditorCommand::EnterFolder => {
-            if !state.prompt.mention_active() {
-                return false;
-            }
             state.prompt.mention_enter_folder();
             true
         }

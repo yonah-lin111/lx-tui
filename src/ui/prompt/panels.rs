@@ -501,24 +501,46 @@ fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
     }
     match tab {
         crate::app::prompt::MentionTab::Files => {
-            let panel = prompt.mention()?;
-            Some(MentionPanelData {
-                rows: panel
-                    .items()
-                    .iter()
-                    .map(|entry| mention_row_text(entry, detail_width))
-                    .collect(),
-                active: panel.active(),
-                anchor: panel.anchor(),
-                viewport: panel.viewport(),
-                anchor_row,
-                scope: panel.scope_name().map(str::to_string),
-                title: mention_title(prompt),
-                chooser: false,
-                tab,
-                tabs,
-                root_label: prompt.mention_root_label(),
-            })
+            if let Some(panel) = prompt.mention() {
+                Some(MentionPanelData {
+                    rows: panel
+                        .items()
+                        .iter()
+                        .map(|entry| mention_row_text(entry, detail_width))
+                        .collect(),
+                    active: panel.active(),
+                    anchor: panel.anchor(),
+                    viewport: panel.viewport(),
+                    anchor_row,
+                    scope: panel.scope_name().map(str::to_string),
+                    title: mention_title(prompt),
+                    chooser: false,
+                    tab,
+                    tabs,
+                    root_label: prompt.mention_root_label(),
+                })
+            } else if prompt.mention_active() {
+                let empty_label = if prompt.mention_loading() {
+                    text::LX_MENTION_LOADING
+                } else {
+                    text::LX_MENTION_EMPTY
+                };
+                Some(MentionPanelData {
+                    rows: vec![MentionRowText::Empty(empty_label)],
+                    active: 0,
+                    anchor: 0,
+                    viewport: None,
+                    anchor_row,
+                    scope: None,
+                    title: mention_title(prompt),
+                    chooser: false,
+                    tab,
+                    tabs,
+                    root_label: prompt.mention_root_label(),
+                })
+            } else {
+                None
+            }
         }
         crate::app::prompt::MentionTab::RefDir => {
             if !prompt.mention_active() {
