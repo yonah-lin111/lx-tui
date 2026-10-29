@@ -225,12 +225,28 @@ pub struct ChatRequest {
     ///
     /// 摘要请求用它携带压缩专用提示，并且**不再**叠加 turn 环境快照（摘要不需要）。
     pub system_prompt: Option<String>,
+    /// 本轮冻结的工具声明（内置 + MCP + resources）；摘要请求为空。
+    ///
+    /// 生产路径必须填这一份；空列表时 transport 回退到内置工具面（仅测试便捷，
+    /// 生产请求不会留空）。`Arc` 让同一 turn 的多次采样只 clone 指针。
+    pub tools: std::sync::Arc<Vec<crate::chat::tools::ToolDecl>>,
 }
 
 impl ChatRequest {
     /// 本次请求的工具面（摘要请求为 None）。
     pub fn tools_surface(&self) -> Option<crate::chat::agent::ToolSurface> {
         self.purpose.tools_surface()
+    }
+
+    /// transport 实际声明的工具列表：冻结快照优先，空列表回退到内置工具面。
+    pub fn declared_tools(&self) -> std::borrow::Cow<'_, [crate::chat::tools::ToolDecl]> {
+        if !self.tools.is_empty() {
+            return std::borrow::Cow::Borrowed(self.tools.as_slice());
+        }
+        match self.tools_surface() {
+            Some(surface) => std::borrow::Cow::Owned(crate::chat::tools::builtin_tools(surface)),
+            None => std::borrow::Cow::Borrowed(&[]),
+        }
     }
 
     /// 是否声明工具（摘要请求为 false）。

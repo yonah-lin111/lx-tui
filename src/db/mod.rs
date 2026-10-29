@@ -11,6 +11,7 @@
 
 pub mod chat;
 pub mod history;
+mod image_migration;
 mod migration;
 pub mod service;
 pub mod todo;
@@ -23,7 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 19;
+const SCHEMA_VERSION: i64 = 20;
 
 /// 当前 Schema 版本（测试断言用；不暴露可变入口）。
 #[cfg(test)]
@@ -886,40 +887,9 @@ pub fn database_path(is_dev: bool, linked_worktree: Option<&Path>) -> Result<Pat
     Ok(dir.join("lx.db"))
 }
 
-/// 作用域目录名：清洗后的 worktree 目录名 + 路径哈希（同名目录不互相覆盖）。
+/// 作用域目录名：与项目级 MCP / skill 目录共用同一实现。
 fn worktree_scope_for(root: &Path) -> Option<String> {
-    let name = root.file_name()?.to_str().map(scope_name)?;
-    Some(format!("{name}-{:08x}", path_hash(root) as u32))
-}
-
-/// 目录名清洗：保留 ASCII 字母数字与 `-_.`，其余替换为 `-`；空结果回退 `worktree`。
-fn scope_name(raw: &str) -> String {
-    let name: String = raw
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let name = name.trim_matches('.');
-    if name.is_empty() {
-        "worktree".to_string()
-    } else {
-        name.to_string()
-    }
-}
-
-/// FNV-1a 64 位；作用域只需稳定，不用于安全判定。
-fn path_hash(path: &Path) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in path.to_string_lossy().as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
+    crate::platform::path_text::scope_dir_name(root)
 }
 
 /// 环境判定：`LX_TUI_ENV` / `LX_ENV` 约定值优先，缺省回退 debug 门控。

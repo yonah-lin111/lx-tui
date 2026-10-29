@@ -57,6 +57,7 @@ fn refer_token(kind: markdown::ReferKind) -> TokenKind {
         markdown::ReferKind::File => TokenKind::ReferFile,
         markdown::ReferKind::Folder => TokenKind::ReferFolder,
         markdown::ReferKind::Image => TokenKind::ReferImage,
+        markdown::ReferKind::Skill => TokenKind::ReferFile,
     }
 }
 

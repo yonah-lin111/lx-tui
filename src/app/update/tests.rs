@@ -4804,7 +4804,11 @@ fn lx_slash_panel_opens_filters_and_closes_on_slash_delete() {
     let pane = state.active_pane().expect("pane");
     match pane.lx.slash.as_ref() {
         Some(SlashPanel::Commands { items, .. }) => {
-            assert_eq!(items, &vec![SlashCommand::Model], "模糊过滤命中 /model");
+            assert_eq!(
+                items,
+                &vec![crate::app::state::SlashEntry::Command(SlashCommand::Model)],
+                "模糊过滤命中 /model"
+            );
         }
         other => panic!("expected commands panel, got {other:?}"),
     }
@@ -4863,7 +4867,9 @@ fn lx_slash_alias_opens_target_command() {
         Some(SlashPanel::Commands { items, .. }) => {
             assert_eq!(
                 items.first(),
-                Some(&SlashCommand::Resume),
+                Some(&crate::app::state::SlashEntry::Command(
+                    SlashCommand::Resume
+                )),
                 "别名命中 /resume"
             );
         }

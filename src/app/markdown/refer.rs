@@ -9,6 +9,8 @@ pub enum ReferKind {
     File,
     Folder,
     Image,
+    /// 用户显式点名的 skill（`@[refer-skill](<SKILL.md 绝对路径>)`）。
+    Skill,
 }
 
 impl ReferKind {
@@ -18,6 +20,7 @@ impl ReferKind {
             Self::File => "file",
             Self::Folder => "folder",
             Self::Image => "image",
+            Self::Skill => "skill",
         }
     }
 
@@ -27,6 +30,7 @@ impl ReferKind {
             "file" => Some(Self::File),
             "folder" => Some(Self::Folder),
             "image" => Some(Self::Image),
+            "skill" => Some(Self::Skill),
             _ => None,
         }
     }

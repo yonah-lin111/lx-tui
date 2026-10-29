@@ -469,11 +469,20 @@ fn prompts_have_no_cjk_and_are_composed() {
     for role in AgentRole::ALL {
         assert!(!has_cjk(role.system_prompt()));
     }
-    let prompt = compose_subagent_prompt(AgentRole::Explorer, Some("<env/>"));
+    let prompt = compose_subagent_prompt(
+        AgentRole::Explorer,
+        crate::chat::prompt::PromptParts {
+            environment: Some("<env/>"),
+            ..crate::chat::prompt::PromptParts::default()
+        },
+    );
     assert!(prompt.starts_with("You are an explorer"));
     assert!(prompt.ends_with("<env/>\n"));
     assert_eq!(
-        compose_subagent_prompt(AgentRole::Executor, None),
+        compose_subagent_prompt(
+            AgentRole::Executor,
+            crate::chat::prompt::PromptParts::default(),
+        ),
         format!("{}\n\n\n", EXECUTOR_PROMPT)
     );
 }

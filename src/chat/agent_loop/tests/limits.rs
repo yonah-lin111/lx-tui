@@ -472,6 +472,7 @@ async fn subagent_auto_compacts_when_context_reaches_limit() {
         variant_params: None,
         purpose: RequestPurpose::Subagent(crate::chat::agent::AgentRole::Explorer),
         system_prompt: Some("explorer prompt".into()),
+        tools: std::sync::Arc::new(Vec::new()),
     };
     request
         .items
@@ -540,6 +541,7 @@ async fn p0_multi_turn_subagent_auto_compact_preserves_current_turn_user_prompt(
         variant_params: None,
         purpose: RequestPurpose::Subagent(crate::chat::agent::AgentRole::Explorer),
         system_prompt: Some("explorer".into()),
+        tools: std::sync::Arc::new(Vec::new()),
     };
     request.turns.push(crate::chat::events::ChatTurn {
         role: "user".into(),

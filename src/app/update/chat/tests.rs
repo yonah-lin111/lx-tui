@@ -969,7 +969,10 @@ fn slash_click_selects_row() {
 fn seed_slash_commands(state: &mut AppState, pane: PaneId) {
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.slash = Some(SlashPanel::Commands {
-            items: crate::app::state::SlashCommand::ALL.to_vec(),
+            items: crate::app::state::SlashCommand::ALL
+                .into_iter()
+                .map(crate::app::state::SlashEntry::Command)
+                .collect(),
             window: crate::app::state::lx::slash::PanelWindow::new(0),
         });
     }

@@ -76,8 +76,9 @@ pub fn build(
         "stream": true,
     });
     // 摘要请求不声明工具（无工具就无从发起调用）。
-    if let Some(surface) = request.tools_surface() {
-        body["tools"] = openai_responses_tools(surface);
+    let tool_decls = request.declared_tools();
+    if !tool_decls.is_empty() {
+        body["tools"] = openai_responses_tools(&tool_decls);
     }
     if let Some(params) = &request.variant_params {
         let mut reasoning = serde_json::Map::new();
@@ -98,7 +99,7 @@ pub fn build(
         url,
         headers: vec![("Authorization".into(), format!("Bearer {key}"))],
         body: serde_json::to_string(&body).map_err(|error| format!("encode body: {error}"))?,
-        tools_requested: request.tools_surface().is_some(),
+        tools_requested: !tool_decls.is_empty(),
     })
 }
 

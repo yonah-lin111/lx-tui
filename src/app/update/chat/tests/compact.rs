@@ -393,7 +393,9 @@ fn slash_compact_is_accepted_without_typing() {
     state.pane_mut_anywhere(pane).expect("pane").lx.cursor = "/compact".len();
     state.pane_mut_anywhere(pane).expect("pane").lx.slash =
         Some(crate::app::state::SlashPanel::Commands {
-            items: vec![crate::app::state::SlashCommand::Compact],
+            items: vec![crate::app::state::SlashEntry::Command(
+                crate::app::state::SlashCommand::Compact,
+            )],
             window: crate::app::state::PanelWindow::new(0),
         });
     apply_lx_input(&mut state, LxInput::Enter);

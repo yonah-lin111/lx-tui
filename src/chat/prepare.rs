@@ -29,6 +29,8 @@ pub struct PreparedUserMessage {
     pub attachments: Vec<MessageAttachmentInput>,
     /// 准备提供给模型的去重图片列表。
     pub model_images: Vec<ModelImage>,
+    /// skill 引用读取失败或截断的提示（不阻止发送）。
+    pub warnings: Vec<String>,
 }
 
 /// 准备一条用户消息。
@@ -50,6 +52,7 @@ pub fn prepare_user_message(
 
     let mut attachments: Vec<MessageAttachmentInput> = Vec::new();
     let mut unique_images: Vec<ProcessedImage> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
     let mut total_original_bytes: usize = 0;
 
     // 已处理的文本区间，避免重复命中
@@ -130,6 +133,38 @@ pub fn prepare_user_message(
                 attachments.push(MessageAttachmentInput {
                     kind: MessageAttachmentKind::File,
                     label: reference.path.clone(),
+                    marker_start: Some(range_start),
+                    marker_end: Some(range_end),
+                    source_path: Some(reference.path.clone()),
+                    mime: None,
+                    width: None,
+                    height: None,
+                });
+            }
+            ReferKind::Skill => {
+                let path = Path::new(&reference.path);
+                match crate::skills::load_skill_body(path) {
+                    Ok(body) if body.len() > crate::skills::MAX_SKILL_INJECTION_BYTES => {
+                        warnings.push(format!(
+                            "skill \"{}\" exceeds {} bytes; the injected copy is truncated",
+                            reference.path,
+                            crate::skills::MAX_SKILL_INJECTION_BYTES
+                        ));
+                    }
+                    Ok(_) => {}
+                    Err(error) => warnings.push(format!(
+                        "skill \"{}\" could not be loaded: {error}",
+                        reference.path
+                    )),
+                }
+                attachments.push(MessageAttachmentInput {
+                    kind: MessageAttachmentKind::Skill,
+                    label: path
+                        .parent()
+                        .and_then(Path::file_name)
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("skill")
+                        .to_string(),
                     marker_start: Some(range_start),
                     marker_end: Some(range_end),
                     source_path: Some(reference.path.clone()),
@@ -338,6 +373,7 @@ pub fn prepare_user_message(
         raw_text: raw_text.to_string(),
         attachments,
         model_images,
+        warnings,
     })
 }
 

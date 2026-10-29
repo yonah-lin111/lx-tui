@@ -35,6 +35,7 @@ fn context_with_history(cwd: &Path) -> ModelContext {
             variant_params: None,
             purpose: crate::chat::events::RequestPurpose::Chat,
             system_prompt: None,
+            tools: std::sync::Arc::new(Vec::new()),
         },
         cwd.to_path_buf(),
     )
@@ -120,6 +121,7 @@ async fn frozen_system_prompt_is_reused_by_every_sampling() {
         variant_params: None,
         purpose: crate::chat::events::RequestPurpose::Chat,
         system_prompt: Some("FROZEN PROMPT WITH COMPACT SUMMARY".into()),
+        tools: std::sync::Arc::new(Vec::new()),
     };
     request.turns.push(crate::chat::events::ChatTurn {
         role: "user".into(),
@@ -231,6 +233,7 @@ fn context_helper() -> ModelContext {
             variant_params: None,
             purpose: crate::chat::events::RequestPurpose::Chat,
             system_prompt: None,
+            tools: std::sync::Arc::new(Vec::new()),
         },
         std::env::temp_dir(),
     )

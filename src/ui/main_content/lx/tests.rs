@@ -1010,7 +1010,10 @@ use crate::app::state::{ModelCandidate, ModelPickerStage, SlashCommand, SlashPan
 fn slash_commands_lx(active: usize) -> Lx {
     let mut lx = Lx::new();
     lx.slash = Some(SlashPanel::Commands {
-        items: SlashCommand::ALL.to_vec(),
+        items: SlashCommand::ALL
+            .into_iter()
+            .map(crate::app::state::SlashEntry::Command)
+            .collect(),
         window: PanelWindow::new(active),
     });
     lx

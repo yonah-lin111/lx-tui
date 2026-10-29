@@ -105,6 +105,7 @@ pub const READ_KIND_IMAGE: &str = "image";
 pub const USER_REF_FILE_PREFIX: &str = "File: ";
 pub const USER_REF_FOLDER_PREFIX: &str = "Folder: ";
 pub const USER_REF_IMAGE_PREFIX: &str = "Image: ";
+pub const USER_REF_SKILL_PREFIX: &str = "Skill: ";
 
 /// 目录读取的条目数：`12 files` / `1 file`。
 pub fn read_dir_count(count: usize) -> String {

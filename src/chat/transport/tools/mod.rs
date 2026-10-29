@@ -17,11 +17,10 @@
 
 use serde_json::{Value, json};
 
-use crate::chat::agent::ToolSurface;
 use crate::chat::events::{
     MAX_TOOL_ARGUMENTS_BYTES, ModelItem, TOOL_ARGUMENTS_INVALID_CODE, TOOL_ARGUMENTS_TOO_LARGE_CODE,
 };
-use crate::chat::tools::tools_for;
+use crate::chat::tools::ToolDecl;
 
 /// 供应商/兼容端点拒绝 `tools` 字段时的稳定错误码前缀。
 ///
@@ -44,9 +43,9 @@ pub(crate) fn protocol_error(detail: impl std::fmt::Display) -> String {
 ///
 /// wire 形状（Chat Completions 请求体的 `tools`）：
 /// `[{"type":"function","function":{"name","description","parameters"}}]`。
-pub(crate) fn openai_chat_tools(surface: ToolSurface) -> Value {
+pub(crate) fn openai_chat_tools(tools: &[ToolDecl]) -> Value {
     Value::Array(
-        tools_for(surface)
+        tools
             .iter()
             .map(|tool| {
                 json!({
@@ -54,7 +53,7 @@ pub(crate) fn openai_chat_tools(surface: ToolSurface) -> Value {
                     "function": {
                         "name": tool.name,
                         "description": tool.description,
-                        "parameters": tool.parameters(),
+                        "parameters": tool.parameters,
                     }
                 })
             })
@@ -65,16 +64,16 @@ pub(crate) fn openai_chat_tools(surface: ToolSurface) -> Value {
 /// OpenAI Responses 的 `tools` 字段（函数项是**扁平**的，不套 `function`）。
 ///
 /// wire 形状：`[{"type":"function","name","description","parameters"}]`。
-pub(crate) fn openai_responses_tools(surface: ToolSurface) -> Value {
+pub(crate) fn openai_responses_tools(tools: &[ToolDecl]) -> Value {
     Value::Array(
-        tools_for(surface)
+        tools
             .iter()
             .map(|tool| {
                 json!({
                     "type": "function",
                     "name": tool.name,
                     "description": tool.description,
-                    "parameters": tool.parameters(),
+                    "parameters": tool.parameters,
                 })
             })
             .collect(),
@@ -82,15 +81,15 @@ pub(crate) fn openai_responses_tools(surface: ToolSurface) -> Value {
 }
 
 /// Anthropic Messages 的 `tools` 字段：`[{"name","description","input_schema"}]`。
-pub(crate) fn anthropic_tools(surface: ToolSurface) -> Value {
+pub(crate) fn anthropic_tools(tools: &[ToolDecl]) -> Value {
     Value::Array(
-        tools_for(surface)
+        tools
             .iter()
             .map(|tool| {
                 json!({
                     "name": tool.name,
                     "description": tool.description,
-                    "input_schema": tool.parameters(),
+                    "input_schema": tool.parameters,
                 })
             })
             .collect(),
@@ -98,14 +97,14 @@ pub(crate) fn anthropic_tools(surface: ToolSurface) -> Value {
 }
 
 /// Gemini 的 `tools` 字段：`[{"functionDeclarations":[{name,description,parameters}]}]`。
-pub(crate) fn google_tools(surface: ToolSurface) -> Value {
-    let declarations: Vec<Value> = tools_for(surface)
+pub(crate) fn google_tools(tools: &[ToolDecl]) -> Value {
+    let declarations: Vec<Value> = tools
         .iter()
         .map(|tool| {
             json!({
                 "name": tool.name,
                 "description": tool.description,
-                "parameters": tool.parameters(),
+                "parameters": tool.parameters,
             })
         })
         .collect();

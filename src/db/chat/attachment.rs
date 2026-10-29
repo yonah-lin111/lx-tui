@@ -11,6 +11,8 @@ pub enum MessageAttachmentKind {
     File,
     Folder,
     Image,
+    /// 用户显式点名的 skill（正文只在当轮注入，历史只回放摘要行）。
+    Skill,
 }
 
 impl MessageAttachmentKind {
@@ -19,6 +21,7 @@ impl MessageAttachmentKind {
             Self::File => "file",
             Self::Folder => "folder",
             Self::Image => "image",
+            Self::Skill => "skill",
         }
     }
 
@@ -27,6 +30,7 @@ impl MessageAttachmentKind {
             "file" => Some(Self::File),
             "folder" => Some(Self::Folder),
             "image" => Some(Self::Image),
+            "skill" => Some(Self::Skill),
             _ => None,
         }
     }
@@ -239,7 +243,8 @@ pub fn load_image_payloads(
     Ok(map)
 }
 
-/// 查询数据库中所有仍被消息附件或子 agent 输入项引用的本地文件路径集合（供启动时图片归档 GC 使用）。
+/// 查询数据库中所有仍被消息附件、子 agent 输入项或工具结果引用的本地图片路径集合
+/// （供启动时图片归档 GC 使用）。
 pub fn load_referenced_attachment_paths(
     conn: &Connection,
 ) -> Result<std::collections::HashSet<String>> {
@@ -253,7 +258,48 @@ pub fn load_referenced_attachment_paths(
     for row in rows {
         set.insert(row?);
     }
+    // 工具结果图片只存路径（`result_json` 的 `images[].path` / `image.path`）；
+    // 不纳入引用集合会让 30 天 GC 误删历史工具图片。
+    let mut stmt = conn.prepare_cached(
+        r#"SELECT result_json FROM agent_tool_call
+           WHERE result_json IS NOT NULL
+             AND (result_json LIKE '%"images"%' OR result_json LIKE '%"image":%')"#,
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&row?) else {
+            continue;
+        };
+        collect_tool_image_paths(&value, &mut set);
+    }
     Ok(set)
+}
+
+/// 递归收集工具结果 JSON 里的图片归档路径。
+fn collect_tool_image_paths(
+    value: &serde_json::Value,
+    set: &mut std::collections::HashSet<String>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(path) = map.get("path").and_then(serde_json::Value::as_str) {
+                // 工具结果里的 path 既可能是被读文件的源路径，也可能是归档路径；
+                // 两者都加入引用集合只会延长文件保留期，不会误删。
+                set.insert(path.to_string());
+            }
+            for (key, child) in map {
+                if matches!(key.as_str(), "images" | "image") {
+                    collect_tool_image_paths(child, set);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_tool_image_paths(item, set);
+            }
+        }
+        _ => {}
+    }
 }
 
 impl crate::db::Database {

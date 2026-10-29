@@ -480,7 +480,7 @@ fn rewind_rewrites_deleted_desktop_image_to_session_archived_copy() {
         .source_path
         .clone()
         .expect("archived path");
-    assert!(archived_path.contains(&format!("/images/{}/", turn.session_id)));
+    assert!(archived_path.contains(&format!("/session/{}/image/", turn.session_id)));
 
     // 模拟用户清理了桌面原图后执行 rewind
     std::fs::remove_file(&desktop_img).expect("remove desktop image");

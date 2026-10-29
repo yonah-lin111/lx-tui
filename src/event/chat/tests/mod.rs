@@ -338,6 +338,7 @@ where
             variant_params: None,
             purpose: crate::chat::events::RequestPurpose::Chat,
             system_prompt: None,
+            tools: std::sync::Arc::new(Vec::new()),
         },
     )
     .await

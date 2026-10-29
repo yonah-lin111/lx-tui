@@ -10,7 +10,7 @@ use crate::chat::tools::available_tools;
 /// 四种 wire 形状都必须与 `available_tools()` 一一对应，且 schema 逐字一致。
 #[test]
 fn chat_tools_wrap_function_and_match_schema() {
-    let tools = openai_chat_tools(ToolSurface::Main);
+    let tools = openai_chat_tools(&crate::chat::tools::builtin_tools(ToolSurface::Main));
     let tools = tools.as_array().expect("array");
     assert_eq!(tools.len(), available_tools().len());
     for (wire, spec) in tools.iter().zip(available_tools()) {
@@ -23,11 +23,12 @@ fn chat_tools_wrap_function_and_match_schema() {
 
 #[test]
 fn responses_tools_are_flat() {
-    for (wire, spec) in openai_responses_tools(ToolSurface::Main)
-        .as_array()
-        .expect("array")
-        .iter()
-        .zip(available_tools())
+    for (wire, spec) in
+        openai_responses_tools(&crate::chat::tools::builtin_tools(ToolSurface::Main))
+            .as_array()
+            .expect("array")
+            .iter()
+            .zip(available_tools())
     {
         assert_eq!(wire["type"], "function");
         // Responses 是扁平形状：name/description 在顶层，没有 function 包装。
@@ -39,7 +40,7 @@ fn responses_tools_are_flat() {
 
 #[test]
 fn anthropic_tools_use_input_schema() {
-    for (wire, spec) in anthropic_tools(ToolSurface::Main)
+    for (wire, spec) in anthropic_tools(&crate::chat::tools::builtin_tools(ToolSurface::Main))
         .as_array()
         .expect("array")
         .iter()
@@ -53,7 +54,7 @@ fn anthropic_tools_use_input_schema() {
 
 #[test]
 fn google_tools_use_function_declarations() {
-    let tools = google_tools(ToolSurface::Main);
+    let tools = google_tools(&crate::chat::tools::builtin_tools(ToolSurface::Main));
     let declarations = tools[0]["functionDeclarations"]
         .as_array()
         .expect("declarations");
@@ -261,30 +262,34 @@ fn all_wire_shapes_expose_the_tool_names() {
             .collect::<Vec<_>>()
     );
 
-    let chat: Vec<String> = openai_chat_tools(ToolSurface::Main)
-        .as_array()
-        .expect("array")
-        .iter()
-        .map(|tool| {
-            tool["function"]["name"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string()
-        })
-        .collect();
-    let responses: Vec<String> = openai_responses_tools(ToolSurface::Main)
-        .as_array()
-        .expect("array")
-        .iter()
-        .map(|tool| tool["name"].as_str().unwrap_or_default().to_string())
-        .collect();
-    let anthropic: Vec<String> = anthropic_tools(ToolSurface::Main)
-        .as_array()
-        .expect("array")
-        .iter()
-        .map(|tool| tool["name"].as_str().unwrap_or_default().to_string())
-        .collect();
-    let google: Vec<String> = google_tools(ToolSurface::Main)[0]["functionDeclarations"]
+    let chat: Vec<String> =
+        openai_chat_tools(&crate::chat::tools::builtin_tools(ToolSurface::Main))
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|tool| {
+                tool["function"]["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect();
+    let responses: Vec<String> =
+        openai_responses_tools(&crate::chat::tools::builtin_tools(ToolSurface::Main))
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap_or_default().to_string())
+            .collect();
+    let anthropic: Vec<String> =
+        anthropic_tools(&crate::chat::tools::builtin_tools(ToolSurface::Main))
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap_or_default().to_string())
+            .collect();
+    let google: Vec<String> = google_tools(&crate::chat::tools::builtin_tools(ToolSurface::Main))
+        [0]["functionDeclarations"]
         .as_array()
         .expect("declarations")
         .iter()
@@ -340,15 +345,31 @@ fn every_wire_shape_respects_tool_surface() {
                 })
                 .collect()
         };
-        assert_eq!(names(&openai_chat_tools(surface)), expected, "{surface:?}");
         assert_eq!(
-            names(&openai_responses_tools(surface)),
+            names(&openai_chat_tools(&crate::chat::tools::builtin_tools(
+                surface
+            ))),
             expected,
             "{surface:?}"
         );
-        assert_eq!(names(&anthropic_tools(surface)), expected, "{surface:?}");
         assert_eq!(
-            names(&google_tools(surface)[0]["functionDeclarations"]),
+            names(&openai_responses_tools(&crate::chat::tools::builtin_tools(
+                surface
+            ))),
+            expected,
+            "{surface:?}"
+        );
+        assert_eq!(
+            names(&anthropic_tools(&crate::chat::tools::builtin_tools(
+                surface
+            ))),
+            expected,
+            "{surface:?}"
+        );
+        assert_eq!(
+            names(
+                &google_tools(&crate::chat::tools::builtin_tools(surface))[0]["functionDeclarations"]
+            ),
             expected,
             "{surface:?}"
         );
@@ -358,7 +379,7 @@ fn every_wire_shape_respects_tool_surface() {
 /// explorer 的工具面里不存在任何写工具 schema。
 #[test]
 fn explorer_surface_has_no_mutating_tools() {
-    let tools = anthropic_tools(ToolSurface::Explorer);
+    let tools = anthropic_tools(&crate::chat::tools::builtin_tools(ToolSurface::Explorer));
     let json = tools.to_string();
     for forbidden in [
         "\"edit\"",
@@ -373,7 +394,7 @@ fn explorer_surface_has_no_mutating_tools() {
 /// 主工具面声明三个控制工具。
 #[test]
 fn main_surface_declares_control_tools() {
-    let tools = anthropic_tools(ToolSurface::Main);
+    let tools = anthropic_tools(&crate::chat::tools::builtin_tools(ToolSurface::Main));
     let json = tools.to_string();
     for name in crate::chat::tools::SUBAGENT_TOOL_NAMES {
         assert!(json.contains(&format!("\"{name}\"")), "{name}");
@@ -426,6 +447,7 @@ fn all_four_transports_preserve_interleaved_user_content_order() {
         variant_params: None,
         purpose: RequestPurpose::Subagent(crate::chat::agent::AgentRole::Explorer),
         system_prompt: Some("explorer".into()),
+        tools: std::sync::Arc::new(Vec::new()),
     };
 
     for (transport, img_marker) in [

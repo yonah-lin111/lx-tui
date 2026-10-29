@@ -63,6 +63,12 @@ pub struct AssemblyInput<'a> {
     ///
     /// 生产路径由事件层在 turn 创建时冻结一次，本轮所有采样复用同一份。
     pub environment: Option<&'a str>,
+    /// 本 turn 冻结的 skill 目录段；None 时省略。
+    pub skills: Option<&'a str>,
+    /// 本 turn 冻结的 MCP server 说明段；None 时省略。
+    pub mcp: Option<&'a str>,
+    /// 用户点名的 skill 全文块（只注入当前轮，不落库）。
+    pub skill_blocks: &'a [String],
 }
 
 /// 装配用的 compact 摘要（从持久化检查点投影而来）。
@@ -305,10 +311,16 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
             images: Vec::new(),
         });
     }
-    let system_prompt = crate::chat::prompt::compose_system_prompt(
-        input.environment,
-        input.compact.map(CompactContext::as_prompt).as_deref(),
-    );
+    for block in input.skill_blocks {
+        items.push(ModelItem::UserText(block.clone()));
+    }
+    let system_prompt =
+        crate::chat::prompt::compose_system_prompt(crate::chat::prompt::PromptParts {
+            environment: input.environment,
+            skills: input.skills,
+            mcp: input.mcp,
+            compact: input.compact.map(CompactContext::as_prompt).as_deref(),
+        });
     Assembly {
         request: ChatRequest {
             turns,
@@ -318,6 +330,10 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
             purpose: crate::chat::events::RequestPurpose::Chat,
             // 冻结的系统提示随请求走：四类 transport 都编码它，不再各自现场采集环境。
             system_prompt: Some(system_prompt.clone()),
+            // 主会话本轮冻结的内置工具；MCP 工具由事件层装配后替换。
+            tools: std::sync::Arc::new(crate::chat::tools::builtin_tools(
+                crate::chat::agent::ToolSurface::Main,
+            )),
         },
         omitted_turns,
         draft_exceeds,
@@ -351,8 +367,9 @@ pub fn shrink_once(assembly: &Assembly) -> Option<ChatRequest> {
         model: request.model.clone(),
         variant_params: request.variant_params.clone(),
         purpose: request.purpose,
-        // 收缩只丢旧轮次：冻结的系统提示（含环境快照与 compact 摘要）必须原样保留。
+        // 收缩只丢旧轮次：冻结的系统提示（含环境快照与 compact 摘要）与工具必须原样保留。
         system_prompt: request.system_prompt.clone(),
+        tools: request.tools.clone(),
     })
 }
 
@@ -419,7 +436,21 @@ fn plan_turns(messages: &[ChatMessage]) -> Vec<PlannedTurn> {
 
 /// 展开单轮：user 正文 + assistant 有序步骤 + token 估算。
 fn plan_turn(user: &ChatMessage, assistant: &ChatMessage) -> PlannedTurn {
-    let user_text = message_text_of(user);
+    let mut user_text = message_text_of(user);
+    // skill 只在当轮注入全文；历史回放给一行来源摘要，不重新读文件。
+    for attachment in user
+        .attachments
+        .iter()
+        .filter(|att| att.kind == crate::db::chat::MessageAttachmentKind::Skill)
+    {
+        if let Some(path) = attachment.source_path.as_deref() {
+            user_text.push('\n');
+            user_text.push_str(&crate::skills::render_replay_line(
+                &attachment.label,
+                std::path::Path::new(path),
+            ));
+        }
+    }
     let assistant_text = message_text_of(assistant);
     let items = assistant_items(assistant);
     let user_images: Vec<crate::db::chat::MessageAttachmentMeta> = user

@@ -200,6 +200,9 @@ async fn resume_then_continue_replays_completed_pairs_and_skips_interrupted() {
         &frozen,
         None,
         None,
+        None,
+        None,
+        &[],
     );
     assert!(
         !assembled.draft_exceeds,
@@ -325,7 +328,7 @@ fn oversized_draft_is_flagged_by_the_production_assembler() {
     .expect("frozen model");
     // 上下文上限调到远小于草稿估算值。
     frozen.context_limit = Some(2_000);
-    let assembled = super::assemble_turn_request(&messages, &frozen, None, None);
+    let assembled = super::assemble_turn_request(&messages, &frozen, None, None, None, None, &[]);
     assert!(
         assembled.draft_exceeds,
         "当前用户消息超预算必须被标记（不截断用户输入）"

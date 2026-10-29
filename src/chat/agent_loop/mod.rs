@@ -479,6 +479,8 @@ impl ModelContext {
             // 每次采样都必须原样复用：写成 None 会让 transport 现场重采集，
             // 丢摘要且同一轮看到不同环境。
             system_prompt,
+            // 工具快照随轮次冻结：同一 turn 的后续采样不会看到新启动的 MCP 工具。
+            tools: self.request.tools.clone(),
         }
     }
 
@@ -682,10 +684,20 @@ where
             //
             // 执行层不信任模型：即使供应商/模型幻觉出未声明工具，也不能越过本角色的
             // 工具面执行文件、进程或递归控制工具。失败结果仍走 begin/finish 落库。
-            let allowed = context
-                .request
-                .tools_surface()
-                .is_some_and(|surface| surface.names().contains(&call.name.as_str()));
+            // 唯一权威是本轮冻结的工具声明：内置白名单 + MCP + resources 都已在里面。
+            let allowed = if context.request.tools.is_empty() {
+                // 测试与旧调用路径未注入冻结快照时，回退到角色白名单。
+                context
+                    .request
+                    .tools_surface()
+                    .is_some_and(|surface| surface.names().contains(&call.name.as_str()))
+            } else {
+                context
+                    .request
+                    .tools
+                    .iter()
+                    .any(|decl| decl.name == call.name)
+            };
             let control = crate::chat::agent::parse_control(&call.name, &call.arguments_json);
             let result = if !allowed {
                 ToolFailure::new(ToolErrorCode::Io, crate::chat::agent::UNAVAILABLE_CODE)

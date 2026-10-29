@@ -97,6 +97,17 @@ pub struct AgentTools {
     supports_image_input: bool,
     /// rtk 后端（外部优先，缺失时内置过滤）；随执行器复用检测结果。
     rtk: Rtk,
+    /// 本轮的 MCP 管理器与冻结快照；None = 本轮没有 MCP。
+    mcp: Option<McpRuntime>,
+    /// 会话 id：工具结果图片归档目录。
+    session_id: String,
+}
+
+/// 本轮 MCP 依赖。
+#[derive(Clone)]
+struct McpRuntime {
+    manager: Arc<crate::mcp::McpManager>,
+    snapshot: Arc<crate::mcp::McpToolSnapshot>,
 }
 
 impl std::fmt::Debug for AgentTools {
@@ -119,6 +130,8 @@ impl AgentTools {
             reads: None,
             supports_image_input: true,
             rtk: Rtk::detect(),
+            mcp: None,
+            session_id: String::new(),
         }
     }
 
@@ -138,6 +151,112 @@ impl AgentTools {
     pub fn with_image_support(mut self, supports: bool) -> Self {
         self.supports_image_input = supports;
         self
+    }
+
+    /// 注入本轮 MCP 管理器、冻结快照与会话 id（图片归档目录）。
+    pub fn with_mcp(
+        mut self,
+        manager: Arc<crate::mcp::McpManager>,
+        snapshot: Arc<crate::mcp::McpToolSnapshot>,
+        session_id: String,
+    ) -> Self {
+        self.mcp = Some(McpRuntime { manager, snapshot });
+        self.session_id = session_id;
+        self
+    }
+
+    /// MCP 工具：按冻结快照反查 server / 原始工具名并调用。
+    async fn execute_mcp(&self, call: &ReadyToolCall) -> ToolExecutionResult {
+        let Some(runtime) = &self.mcp else {
+            return crate::chat::tools::ToolFailure::new(
+                crate::chat::tools::ToolErrorCode::UnknownTool,
+                "mcp tools are not available in this turn",
+            )
+            .into_result(Vec::new());
+        };
+        let Some(entry) = runtime.snapshot.tool(&call.name).cloned() else {
+            return crate::chat::tools::ToolFailure::new(
+                crate::chat::tools::ToolErrorCode::UnknownTool,
+                format!("mcp tool no longer available: {}", call.name),
+            )
+            .into_result(Vec::new());
+        };
+        let arguments = match serde_json::from_str::<serde_json::Value>(&call.arguments_json) {
+            Ok(value) => value,
+            Err(error) => {
+                return crate::chat::tools::ToolFailure::invalid(format!(
+                    "arguments are not valid JSON: {error}"
+                ))
+                .into_result(Vec::new());
+            }
+        };
+        // Esc 取消由 agent loop 的 select 丢弃整个工具 future；这里保持通道存活，
+        // 让调用本身按 manager 的超时结算。
+        let (_tx, cancel) = tokio::sync::watch::channel(false);
+        let outcome = runtime
+            .manager
+            .call_tool(
+                &runtime.snapshot,
+                &self.session_id,
+                &call.name,
+                arguments,
+                cancel,
+            )
+            .await;
+        mcp_outcome_result(entry.server, entry.raw_name, outcome)
+    }
+
+    /// resources 三工具：参数解析后交给共享连接管理器。
+    async fn execute_mcp_resource(&self, call: &ReadyToolCall) -> ToolExecutionResult {
+        let Some(runtime) = &self.mcp else {
+            return crate::chat::tools::ToolFailure::new(
+                crate::chat::tools::ToolErrorCode::UnknownTool,
+                "mcp resources are not available in this turn",
+            )
+            .into_result(Vec::new());
+        };
+        let arguments = match serde_json::from_str::<serde_json::Value>(&call.arguments_json) {
+            Ok(value) => value,
+            Err(error) => {
+                return crate::chat::tools::ToolFailure::invalid(format!(
+                    "arguments are not valid JSON: {error}"
+                ))
+                .into_result(Vec::new());
+            }
+        };
+        let server = arguments.get("server").and_then(serde_json::Value::as_str);
+        let cursor = arguments.get("cursor").and_then(serde_json::Value::as_str);
+        let outcome = match call.name.as_str() {
+            "list_resources" => {
+                runtime
+                    .manager
+                    .list_resources(&runtime.snapshot, server, cursor)
+                    .await
+            }
+            "list_resource_templates" => {
+                runtime
+                    .manager
+                    .list_resource_templates(&runtime.snapshot, server, cursor)
+                    .await
+            }
+            _ => {
+                let (Some(server), Some(uri)) = (
+                    server,
+                    arguments.get("uri").and_then(serde_json::Value::as_str),
+                ) else {
+                    return crate::chat::tools::ToolFailure::invalid(
+                        "read_resource needs string `server` and `uri`",
+                    )
+                    .into_result(Vec::new());
+                };
+                runtime
+                    .manager
+                    .read_resource(&runtime.snapshot, server, uri)
+                    .await
+            }
+        };
+        let label = server.unwrap_or("all servers").to_string();
+        mcp_outcome_result(label, call.name.clone(), outcome)
     }
 
     /// 文件工具：在阻塞线程池执行，并注入本次调用的 recorder。
@@ -291,6 +410,10 @@ impl AgentTools {
                 self.execute_process(cwd, &call.name, &call.arguments_json, &call.call_id)
                     .await
             }
+            name if crate::mcp::is_mcp_tool(name) => self.execute_mcp(call).await,
+            "list_resources" | "list_resource_templates" | "read_resource" => {
+                self.execute_mcp_resource(call).await
+            }
             "update_plan" => {
                 // 修订号先取号后校验：校验失败不消耗可观察的提交（顶层不落库）。
                 let next = self
@@ -312,6 +435,53 @@ impl AgentTools {
             turn.observe(&call.name, &result);
         }
         result
+    }
+}
+
+/// MCP 结果 → 执行层结果。
+fn mcp_outcome_result(
+    server: String,
+    tool: String,
+    outcome: crate::mcp::McpCallOutcome,
+) -> ToolExecutionResult {
+    use crate::chat::tools::{ArchivedImage, McpToolResult, ToolErrorCode, ToolFailure};
+    use crate::mcp::McpFailureKind;
+    match outcome {
+        crate::mcp::McpCallOutcome::Success {
+            text,
+            images,
+            images_omitted,
+            truncated,
+        } => ToolExecutionResult::Mcp(Box::new(McpToolResult {
+            server,
+            tool,
+            text,
+            images: images
+                .into_iter()
+                .map(|image| ArchivedImage {
+                    path: image.path,
+                    mime: image.mime,
+                    width: image.width,
+                    height: image.height,
+                })
+                .collect(),
+            images_omitted,
+            truncated,
+        })),
+        crate::mcp::McpCallOutcome::Failure { kind, text } => {
+            let code = match kind {
+                McpFailureKind::Timeout => ToolErrorCode::Timeout,
+                McpFailureKind::InvalidArguments => ToolErrorCode::InvalidArguments,
+                McpFailureKind::ToolMissing => ToolErrorCode::UnknownTool,
+                McpFailureKind::AuthRequired
+                | McpFailureKind::ToolError
+                | McpFailureKind::Server => ToolErrorCode::McpError,
+            };
+            ToolFailure::new(code, text).into_result(Vec::new())
+        }
+        crate::mcp::McpCallOutcome::Cancelled => {
+            ToolFailure::new(ToolErrorCode::Cancelled, "mcp call cancelled").into_result(Vec::new())
+        }
     }
 }
 

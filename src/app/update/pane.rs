@@ -576,8 +576,11 @@ fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
         }
         return;
     };
-    // `/` 前缀或更具体前缀：仅命令候选面板实时过滤。
-    let matching = super::super::state::lx::slash::SlashPanel::commands_matching(&query);
+    // `/` 前缀或更具体前缀：命令与 skill 候选实时过滤。
+    let matching = super::super::state::lx::slash::SlashPanel::command_entries(
+        &query,
+        &crate::skills::cached_entries(),
+    );
     if let Some(target) = state.pane_mut_anywhere(pane) {
         if matching.is_empty() {
             if matches!(
@@ -621,7 +624,7 @@ fn refresh_slash_filter(state: &mut AppState, pane: PaneId) {
 /// 采纳 `/` 命令候选：消费整条命令文本（不写入草稿或 DB）。
 pub fn accept_slash_command(state: &mut AppState, pane: PaneId) -> bool {
     // 只读取出候选与输入，避免在调用 update 函数时仍持有窗格可变借用。
-    let Some((command, input, cursor)) = state.pane_anywhere(pane).and_then(|target| {
+    let Some((entry, input, cursor)) = state.pane_anywhere(pane).and_then(|target| {
         let Some(super::super::state::SlashPanel::Commands { items, window }) =
             target.lx.slash.clone()
         else {
@@ -629,13 +632,42 @@ pub fn accept_slash_command(state: &mut AppState, pane: PaneId) -> bool {
         };
         items
             .get(window.active)
-            .copied()
-            .map(|command| (command, target.lx.input.clone(), target.lx.cursor))
+            .cloned()
+            .map(|entry| (entry, target.lx.input.clone(), target.lx.cursor))
     }) else {
         if let Some(target) = state.pane_mut_anywhere(pane) {
             target.lx.slash = None;
         }
         return false;
+    };
+    // skill 候选：把整行 `/query` 替换为引用块；分组标题不执行任何动作。
+    let command = match entry {
+        super::super::state::SlashEntry::Command(command) => command,
+        super::super::state::SlashEntry::Skill { path, .. } => {
+            let Some(reference) = crate::app::markdown::format_reference(
+                crate::app::markdown::ReferKind::Skill,
+                &path,
+            ) else {
+                return false;
+            };
+            let line_start = input[..cursor].rfind('\n').map_or(0, |offset| offset + 1);
+            if let Some(target) = state.pane_mut_anywhere(pane) {
+                let replacement = format!("{reference} ");
+                target
+                    .lx
+                    .input
+                    .replace_range(line_start..cursor, &replacement);
+                target.lx.cursor = line_start + replacement.len();
+                target.lx.slash = None;
+            }
+            return true;
+        }
+        super::super::state::SlashEntry::Header(_) => {
+            if let Some(target) = state.pane_mut_anywhere(pane) {
+                target.lx.slash = None;
+            }
+            return false;
+        }
     };
     // 撤销命令必须独立占满输入：夹带正文/多行/参数/光标前后残留时拒绝并保留草稿。
     if command == super::super::state::SlashCommand::Rewind {

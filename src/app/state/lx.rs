@@ -43,7 +43,7 @@ pub use rewind::{
 };
 pub use slash::{
     HistoryEntry, HistoryPanel, ModelCandidate, ModelPicker, ModelPickerStage, PanelWindow,
-    SlashCommand, SlashPanel,
+    SlashCommand, SlashEntry, SlashPanel,
 };
 pub use task::{ProcessEntry, TaskPage, TaskTab};
 

@@ -66,6 +66,26 @@ impl Default for PanelWindow {
     }
 }
 
+/// `/` 面板的一条候选：命令、不可选分组标题或 skill。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlashEntry {
+    Command(SlashCommand),
+    /// 不可选分组标题（`Skills`）；键盘与鼠标都跳过。
+    Header(&'static str),
+    Skill {
+        name: String,
+        description: String,
+        path: std::path::PathBuf,
+    },
+}
+
+impl SlashEntry {
+    /// 分组标题不可选。
+    pub fn selectable(&self) -> bool {
+        !matches!(self, Self::Header(_))
+    }
+}
+
 /// 保留命令。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlashCommand {
@@ -436,7 +456,7 @@ fn best_score(targets: &[&str], query: &str) -> Option<u32> {
 pub enum SlashPanel {
     /// 命令候选列表（输入 `/` 后过滤）。
     Commands {
-        items: Vec<SlashCommand>,
+        items: Vec<SlashEntry>,
         window: PanelWindow,
     },
     /// `/model` 两级选择。
@@ -453,6 +473,43 @@ impl SlashPanel {
     /// `query` 为 `/` 之后输入（可含前导 `/`）。空查询返回全部（保持固定顺序）。
     /// 别名（如 `/session`→`resume`、`/clear`→`new`）按精确/前缀/子串命中同一命令
     /// （不做子序列匹配，避免 `/r` 之类误命中）。
+    /// 命令候选 + skill 候选（命令在前，`Skills` 标题后接按名称过滤的 skill）。
+    pub fn command_entries(query: &str, skills: &[crate::skills::SkillEntry]) -> Vec<SlashEntry> {
+        let commands = Self::commands_matching(query);
+        let mut entries: Vec<SlashEntry> = commands.into_iter().map(SlashEntry::Command).collect();
+        let query = query.trim_start_matches('/').to_lowercase();
+        let mut matched: Vec<(u32, &crate::skills::SkillEntry)> = skills
+            .iter()
+            .filter(|skill| skill.enabled && skill.shadowed_by.is_none())
+            .filter_map(|skill| {
+                command_score(&skill.name.to_lowercase(), &query).map(|score| (score, skill))
+            })
+            .collect();
+        matched.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then_with(|| left.1.name.cmp(&right.1.name))
+        });
+        if !matched.is_empty() {
+            entries.push(SlashEntry::Header("Skills"));
+            entries.extend(matched.into_iter().map(|(_, skill)| SlashEntry::Skill {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                path: skill.path.clone(),
+            }));
+        }
+        entries
+    }
+
+    /// 高亮项（命令面板）。
+    pub fn active_command_entry(&self) -> Option<&SlashEntry> {
+        match self {
+            Self::Commands { items, window } => items.get(window.active),
+            _ => None,
+        }
+    }
+
     pub fn commands_matching(query: &str) -> Vec<SlashCommand> {
         let query = query.trim_start_matches('/').to_lowercase();
         let mut scored: Vec<(u32, usize, SlashCommand)> = SlashCommand::ALL
@@ -538,6 +595,19 @@ impl SlashPanel {
         let len = self.item_count();
         if len == 0 {
             return false;
+        }
+        if let Self::Commands { items, window } = self {
+            let mut index = window.active;
+            for _ in 0..len {
+                index = (index as isize + delta).rem_euclid(len as isize) as usize;
+                if items.get(index).is_some_and(SlashEntry::selectable) {
+                    break;
+                }
+            }
+            window.active = index;
+            window.anchor = index;
+            window.viewport = None;
+            return true;
         }
         let mut window = self.window();
         window.move_active(delta, len);

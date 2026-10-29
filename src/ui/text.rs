@@ -1021,6 +1021,7 @@ pub const WORKTREE_PANEL_TITLE: &str = "Worktrees";
 
 /// 斜杠命令面板右侧来源标签（不含方括号）。
 pub const SLASH_TAG_BUILTIN: &str = "Built-in";
+pub const SLASH_TAG_SKILL: &str = "Skill";
 pub const SLASH_TAG_USER: &str = "User";
 pub const SLASH_TAG_PROJECT: &str = "Project";
 pub const SLASH_TAG_GIT: &str = "Git";

@@ -456,6 +456,9 @@ fn cross_provider_history_replays_normalized_fields_only() {
         variant_params: None,
         compact: None,
         environment: None,
+        skills: None,
+        mcp: None,
+        skill_blocks: &[],
     });
     assert_eq!(
         item_views(&assembly.request.items),

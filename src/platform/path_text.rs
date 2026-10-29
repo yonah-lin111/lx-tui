@@ -9,6 +9,50 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
+/// 作用域目录名：清洗后的目录名 + 路径哈希（同名目录不互相覆盖）。
+///
+/// 开发库隔离目录、项目级 MCP 配置与项目级 skill 目录共用这一份命名，
+/// 保证同一项目在所有作用域里的目录名一致。
+pub fn scope_dir_name(root: &Path) -> Option<String> {
+    let name = root.file_name()?.to_str().map(scope_name)?;
+    Some(format!("{name}-{:08x}", path_hash(root) as u32))
+}
+
+/// 目录名清洗：保留 ASCII 字母数字与 `-_.`，其余替换为 `-`；空结果回退 `worktree`。
+pub fn scope_name(raw: &str) -> String {
+    let name: String = raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let name = name.trim_matches('.');
+    if name.is_empty() {
+        "worktree".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// FNV-1a 64 位；作用域与内容指纹只需稳定，不用于安全判定。
+pub fn path_hash(path: &Path) -> u64 {
+    bytes_hash(path.to_string_lossy().as_bytes())
+}
+
+/// 字节级 FNV-1a 64 位。
+pub fn bytes_hash(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 /// 非 UTF-8 路径的标记前缀（U+001F 控制字符 + 固定 ASCII 标记）。
 const TAG: &str = "\u{1f}lx-b64:";
 

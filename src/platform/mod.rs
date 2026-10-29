@@ -16,6 +16,9 @@ pub use environment::{
     local_time_label, network_available, os_name, timezone_name,
 };
 
+mod mcp_process;
+pub use mcp_process::mcp_command;
+
 mod lock;
 pub use lock::{FileGuard, PathGuards, lock_paths, try_lock_named, try_lock_session};
 
@@ -26,7 +29,7 @@ pub use clipboard_image::{
     archive_processed_image, archive_processed_image_in, archive_session_image,
     archive_session_image_in, load_and_process_image_file, process_data_url_image,
     process_image_bytes, prune_default_session_images, prune_session_images_in,
-    remove_session_images, session_images_root_dir, touch_session_image_if_managed,
+    remove_session_images, session_image_dir, sessions_root_dir, touch_session_image_if_managed,
     verify_archived_image, verify_archived_image_in,
 };
 
@@ -56,7 +59,7 @@ pub fn dev_environment() -> bool {
 mod paste_path;
 pub use paste_path::{parse_path_text, resolve_pasted_path, sniff_image_file};
 
-mod path_text;
+pub mod path_text;
 pub use path_text::{decode_path, encode_path, path_anchor, verify_path_chain};
 
 /// 收紧文件权限到仅所有者可读写（Unix 0600；Windows no-op）。

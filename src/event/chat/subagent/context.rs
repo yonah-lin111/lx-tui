@@ -221,6 +221,8 @@ pub(super) fn assemble_child_context(
     current_user_message_id: &str,
     role: AgentRole,
     environment: &str,
+    skills: Option<&str>,
+    mcp: &crate::mcp::McpToolSnapshot,
     cwd: &Path,
     model: &ModelSnapshot,
     variant_params: Option<serde_json::Value>,
@@ -303,7 +305,16 @@ pub(super) fn assemble_child_context(
     });
     items.extend(current_model_items);
 
-    let system_prompt = compose_subagent_prompt(role, Some(environment));
+    let mcp_prompt = mcp.instructions_prompt();
+    let system_prompt = compose_subagent_prompt(
+        role,
+        crate::chat::prompt::PromptParts {
+            environment: Some(environment),
+            skills,
+            mcp: mcp_prompt.as_deref(),
+            compact: None,
+        },
+    );
     let request = ChatRequest {
         turns,
         items,
@@ -311,6 +322,10 @@ pub(super) fn assemble_child_context(
         variant_params,
         purpose: RequestPurpose::Subagent(role),
         system_prompt: Some(system_prompt),
+        tools: std::sync::Arc::new(crate::chat::tools::turn_tools(
+            crate::chat::agent::ToolSurface::from_role(role),
+            mcp,
+        )),
     };
     Ok(ModelContext::new(request, cwd.to_path_buf())
         .with_context_limit(context_limit)

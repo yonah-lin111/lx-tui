@@ -189,6 +189,7 @@ fn shrink_once_refuses_without_complete_turn() {
             variant_params: None,
             purpose: crate::chat::events::RequestPurpose::Chat,
             system_prompt: None,
+            tools: std::sync::Arc::new(Vec::new()),
         },
         omitted_turns: 0,
         draft_exceeds: false,

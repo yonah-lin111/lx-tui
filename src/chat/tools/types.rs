@@ -160,6 +160,10 @@ pub enum ToolErrorCode {
     PlanInvalid,
     /// 读后版本保护拒绝：没读过、读取后文件变化、或新文件目标已存在。
     StaleRead,
+    /// MCP 工具或 resources 工具调用失败。
+    McpError,
+    /// 用户取消（MCP 调用 / 等待中的外部请求）。
+    Cancelled,
 }
 
 impl ToolErrorCode {
@@ -190,6 +194,8 @@ impl ToolErrorCode {
             Self::StdinFailed => "stdin_failed",
             Self::PlanInvalid => "plan_invalid",
             Self::StaleRead => "stale_read",
+            Self::McpError => "mcp_error",
+            Self::Cancelled => "cancelled",
         }
     }
 }
@@ -308,6 +314,8 @@ pub enum ToolExecutionResult {
     Subagent(Box<crate::chat::agent::SubagentOutcome>),
     /// 实时 UTC 时钟读取结果（`YYYY-MM-DD HH:MM:SS UTC`）。
     CurrentTime { current_time: String },
+    /// MCP 工具或 resources 工具的结果（文本 + 已归档图片）。
+    Mcp(Box<McpToolResult>),
     /// 失败；`changes` 保留多文件补丁中**已经提交**的变更，绝不谎报整体回滚。
     Failed {
         code: ToolErrorCode,
@@ -380,6 +388,26 @@ impl ToolFailure {
     }
 }
 
+/// 已归档的工具图片元数据（字节只在组装请求时按路径加载）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ArchivedImage {
+    pub path: PathBuf,
+    pub mime: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// MCP 工具结果：已拼接文本 + 图片元数据 + 截断标志。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpToolResult {
+    pub server: String,
+    pub tool: String,
+    pub text: String,
+    pub images: Vec<ArchivedImage>,
+    pub images_omitted: usize,
+    pub truncated: bool,
+}
+
 /// 执行层内部结果别名。
 pub(crate) type ToolResult<T> = Result<T, ToolFailure>;
 
@@ -415,6 +443,27 @@ impl ToolSpec {
     /// 参数 JSON Schema（`type: object`、`additionalProperties: false`）。
     pub fn parameters(&self) -> serde_json::Value {
         (self.parameters)()
+    }
+}
+
+/// 拥有所有权的工具声明（transport 的唯一输入）。
+///
+/// 内置工具由 [`ToolSpec`] 转换而来；MCP 与 resources 工具在 turn 起点直接构造。
+/// 每轮冻结后放进 `ChatRequest.tools`，同一 turn 的所有采样共用同一份字节。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolDecl {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+impl From<&ToolSpec> for ToolDecl {
+    fn from(spec: &ToolSpec) -> Self {
+        Self {
+            name: spec.name.to_string(),
+            description: spec.description.to_string(),
+            parameters: spec.parameters(),
+        }
     }
 }
 

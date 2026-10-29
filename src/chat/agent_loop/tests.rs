@@ -369,6 +369,7 @@ fn context(cwd: &Path) -> ModelContext {
             variant_params: None,
             purpose: crate::chat::events::RequestPurpose::Chat,
             system_prompt: None,
+            tools: std::sync::Arc::new(Vec::new()),
         },
         cwd.to_path_buf(),
     )
@@ -680,6 +681,7 @@ async fn control_tool_is_rejected_inside_a_subagent_turn() {
         variant_params: None,
         purpose: RequestPurpose::Subagent(AgentRole::Explorer),
         system_prompt: None,
+        tools: std::sync::Arc::new(Vec::new()),
     };
     request
         .items
@@ -748,6 +750,7 @@ async fn tools_outside_the_role_surface_are_never_executed() {
         variant_params: None,
         purpose: RequestPurpose::Subagent(AgentRole::Explorer),
         system_prompt: None,
+        tools: std::sync::Arc::new(Vec::new()),
     };
     let summary = run_agent_turn(
         ModelContext::new(request, std::env::temp_dir()),

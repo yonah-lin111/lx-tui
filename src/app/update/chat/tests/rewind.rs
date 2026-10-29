@@ -323,8 +323,15 @@ fn notices_are_not_part_of_model_assembly() {
         idle_timeout_ms: 30_000,
         supports_image_input: true,
     };
-    let assembled =
-        crate::event::chat::assemble_turn_request(&target.lx.chat.messages, &frozen, None, None);
+    let assembled = crate::event::chat::assemble_turn_request(
+        &target.lx.chat.messages,
+        &frozen,
+        None,
+        None,
+        None,
+        None,
+        &[],
+    );
     let debug = format!("{:?}", assembled.request.items);
     assert!(debug.contains("原文"));
     assert!(!debug.contains("revert_and_delete"));
@@ -339,7 +346,7 @@ fn slash_command_accepts_standalone_line_and_opens_panel() {
         target.lx.input = "/rewind".into();
         target.lx.cursor = target.lx.input.len();
         target.lx.slash = Some(SlashPanel::Commands {
-            items: vec![SlashCommand::Rewind],
+            items: vec![crate::app::state::SlashEntry::Command(SlashCommand::Rewind)],
             window: crate::app::state::PanelWindow::new(0),
         });
     }
@@ -364,7 +371,7 @@ fn slash_command_with_other_text_is_rejected_and_draft_kept() {
         target.lx.input = draft.into();
         target.lx.cursor = target.lx.input.len();
         target.lx.slash = Some(SlashPanel::Commands {
-            items: vec![SlashCommand::Rewind],
+            items: vec![crate::app::state::SlashEntry::Command(SlashCommand::Rewind)],
             window: crate::app::state::PanelWindow::new(0),
         });
     }

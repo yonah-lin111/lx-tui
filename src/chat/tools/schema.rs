@@ -148,6 +148,74 @@ pub fn tools_for(surface: crate::chat::agent::ToolSurface) -> Vec<&'static ToolS
         .collect()
 }
 
+/// 内置工具的本轮声明（顺序跟随 [`TOOLS`]）。
+pub fn builtin_tools(surface: crate::chat::agent::ToolSurface) -> Vec<super::types::ToolDecl> {
+    tools_for(surface)
+        .into_iter()
+        .map(super::types::ToolDecl::from)
+        .collect()
+}
+
+/// resources 三个工具的内置声明（仅在有 server 声明 resources capability 时加入）。
+pub fn resource_tools() -> Vec<super::types::ToolDecl> {
+    vec![
+        super::types::ToolDecl {
+            name: "list_resources".into(),
+            description: "List data resources exposed by connected MCP servers (for example database schemas or documents). Only covers MCP servers; use `read` / `search` for local files. Omit `server` to list every server; pass `cursor` from a previous page to continue.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string", "description": "Configured server name; omit for all servers."},
+                    "cursor": {"type": "string", "description": "Cursor from a previous page."}
+                },
+                "additionalProperties": false
+            }),
+        },
+        super::types::ToolDecl {
+            name: "list_resource_templates".into(),
+            description: "List parameterized resource URI templates exposed by connected MCP servers. Fill a template's parameters to build a `uri`, then call `read_resource`. Only covers MCP servers.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string", "description": "Configured server name; omit for all servers."},
+                    "cursor": {"type": "string", "description": "Cursor from a previous page."}
+                },
+                "additionalProperties": false
+            }),
+        },
+        super::types::ToolDecl {
+            name: "read_resource".into(),
+            description: "Read one resource exposed by a connected MCP server. `server` is the configured server name and `uri` comes from `list_resources` or a filled-in template. Local files must use `read`.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string"},
+                    "uri": {"type": "string"}
+                },
+                "required": ["server", "uri"],
+                "additionalProperties": false
+            }),
+        },
+    ]
+}
+
+/// 一轮的完整工具声明：内置（按 surface 白名单）→ MCP（按 server/tool 排序）→ resources。
+pub fn turn_tools(
+    surface: crate::chat::agent::ToolSurface,
+    mcp: &crate::mcp::McpToolSnapshot,
+) -> Vec<super::types::ToolDecl> {
+    let mut decls = builtin_tools(surface);
+    decls.extend(mcp.tools().iter().map(|tool| super::types::ToolDecl {
+        name: tool.qualified.clone(),
+        description: tool.description.clone(),
+        parameters: tool.parameters.clone(),
+    }));
+    if mcp.has_resources() {
+        decls.extend(resource_tools());
+    }
+    decls
+}
+
 /// `read` 参数 schema。
 fn read_parameters() -> Value {
     json!({

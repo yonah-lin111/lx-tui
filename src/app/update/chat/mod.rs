@@ -185,6 +185,9 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         show_lx_hint(state, pane, InputHintLevel::Warning, msg);
         return true;
     }
+    if let Some(warning) = prepared.warnings.first() {
+        show_lx_hint(state, pane, InputHintLevel::Warning, warning);
+    }
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };

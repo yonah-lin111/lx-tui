@@ -57,6 +57,7 @@ impl Persistence {
         let path = default_database_path(linked_worktree);
         match Database::open_default(linked_worktree) {
             Ok(db) => {
+                crate::db::image_migration::migrate_legacy_session_images(&db);
                 if let Ok(referenced) = db.referenced_attachment_paths() {
                     crate::platform::prune_default_session_images(&referenced);
                 }

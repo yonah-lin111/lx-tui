@@ -569,9 +569,12 @@ fn worktree_scope_is_readable_and_path_specific() {
 
 #[test]
 fn worktree_scope_sanitizes_directory_names() {
-    assert_eq!(scope_name("feature/x y"), "feature-x-y");
-    assert_eq!(scope_name(".."), "worktree");
-    assert!(scope_name("lx-rewind").starts_with("lx-rewind"));
+    assert_eq!(
+        crate::platform::path_text::scope_name("feature/x y"),
+        "feature-x-y"
+    );
+    assert_eq!(crate::platform::path_text::scope_name(".."), "worktree");
+    assert!(crate::platform::path_text::scope_name("lx-rewind").starts_with("lx-rewind"));
 }
 
 // ===== 迁移与 Schema =====

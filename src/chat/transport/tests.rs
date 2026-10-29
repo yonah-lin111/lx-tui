@@ -132,7 +132,10 @@ fn prompt_stays_within_the_proxy_limit_after_adding_environment() {
     // 环境快照会追加在提示末尾，因此永远落在 tail；首段仍必须落在安全线内。
     let facts = crate::platform::EnvironmentFacts::capture();
     let environment = crate::chat::prompt::environment_snapshot(&facts, None, None, &[]);
-    let prompt = crate::chat::prompt::compose_system_prompt(Some(&environment), None);
+    let prompt = crate::chat::prompt::compose_system_prompt(crate::chat::prompt::PromptParts {
+        environment: Some(&environment),
+        ..crate::chat::prompt::PromptParts::default()
+    });
     let parts = SystemPromptParts::split(&prompt);
     assert!(units(&parts.head) <= MAX_SYSTEM_MESSAGE_UNITS);
     assert!(

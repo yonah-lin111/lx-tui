@@ -25,7 +25,7 @@ use crate::platform::EnvironmentFacts;
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
-pub const PROMPT_VERSION: &str = "lx-6";
+pub const PROMPT_VERSION: &str = "lx-7";
 
 /// 环境快照单字段最大字符数（转义前）。
 const MAX_FIELD_CHARS: usize = 240;
@@ -378,20 +378,55 @@ fn escape_field(text: &str) -> String {
     out
 }
 
-/// 组装完整系统提示：稳定身份/工具段 + 后台任务语义 +（可选）冻结环境快照 +
-/// （可选）compact 摘要。
+/// 系统提示的可选段落；顺序固定：environment → skills → mcp → compact。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PromptParts<'a> {
+    /// 本 turn 冻结的环境快照；None 时现场采集一次（测试与旧调用路径）。
+    pub environment: Option<&'a str>,
+    /// skill 目录段（`## Skills`）；None 时省略。
+    pub skills: Option<&'a str>,
+    /// MCP server 说明段（`## MCP servers`）；None 时省略。
+    pub mcp: Option<&'a str>,
+    /// 当前生效的 compact 摘要；None 时省略。
+    pub compact: Option<&'a str>,
+}
+
+impl PromptParts<'_> {
+    /// 环境 + skills + mcp 三段的拼接（子 agent 与主 agent 共用）。
+    pub fn render_tail(&self) -> String {
+        self.render_tail_with(true)
+    }
+
+    /// 子 agent 不现场采集环境：None 就是「没有环境快照」。
+    pub fn render_tail_with(&self, capture_environment: bool) -> String {
+        let environment = self.environment.map(str::to_string).unwrap_or_else(|| {
+            if !capture_environment {
+                return String::new();
+            }
+            let facts = EnvironmentFacts::capture();
+            environment_snapshot(&facts, None, None, &[])
+        });
+        let mut prompt = environment;
+        for section in [self.skills, self.mcp] {
+            if let Some(section) = section.filter(|text| !text.trim().is_empty()) {
+                prompt.push_str("\n\n");
+                prompt.push_str(section);
+            }
+        }
+        prompt
+    }
+}
+
+/// 组装完整系统提示：稳定身份/工具段 + 冻结段落 + 后台任务语义 + compact 摘要。
 ///
-/// 顺序对齐 design §3.3：`system prompt → environment snapshot → compact summary`。
-/// `environment` 为本 turn 冻结的快照；None 时现场采集一次（测试与旧调用路径），
-/// 但生产路径必须传入冻结值，避免同一轮两次采样看到不同的环境。
-/// `compact` 为当前生效检查点的结构化摘要；None 时不注入任何压缩段落。
-pub fn compose_system_prompt(environment: Option<&str>, compact: Option<&str>) -> String {
-    let environment = environment.map(str::to_string).unwrap_or_else(|| {
-        let facts = EnvironmentFacts::capture();
-        environment_snapshot(&facts, None, None, &[])
-    });
-    let mut prompt = format!("{LX_SYSTEM_PROMPT}\n\n{environment}\n\n{LX_BACKGROUND_NOTE}");
-    if let Some(compact) = compact.filter(|text| !text.trim().is_empty()) {
+/// 顺序：`system prompt → environment → skills → mcp → background note → compact`。
+/// 生产路径必须传入冻结值，避免同一轮两次采样看到不同的环境或 skill 目录。
+pub fn compose_system_prompt(parts: PromptParts<'_>) -> String {
+    let mut prompt = format!(
+        "{LX_SYSTEM_PROMPT}\n\n{}\n\n{LX_BACKGROUND_NOTE}",
+        parts.render_tail()
+    );
+    if let Some(compact) = parts.compact.filter(|text| !text.trim().is_empty()) {
         prompt.push_str("\n\n");
         prompt.push_str(compact);
     }
@@ -400,12 +435,15 @@ pub fn compose_system_prompt(environment: Option<&str>, compact: Option<&str>) -
 
 /// 兼容入口：不携带 compact 摘要时组装提示。
 pub fn system_prompt_with(environment: Option<&str>) -> String {
-    compose_system_prompt(environment, None)
+    compose_system_prompt(PromptParts {
+        environment,
+        ..PromptParts::default()
+    })
 }
 
 /// 兼容入口：不携带 turn 上下文时现场采集环境快照。
 pub fn system_prompt() -> String {
-    compose_system_prompt(None, None)
+    compose_system_prompt(PromptParts::default())
 }
 
 #[cfg(test)]
@@ -500,7 +538,7 @@ mod tests {
                 "提示缺少 ask 规则 `{needle}`"
             );
         }
-        assert_eq!(PROMPT_VERSION, "lx-6");
+        assert_eq!(PROMPT_VERSION, "lx-7");
         assert!(
             LX_SYSTEM_PROMPT.contains("You can call these tools:")
                 && LX_SYSTEM_PROMPT.contains("`ask`"),
@@ -748,5 +786,26 @@ mod tests {
         );
         assert!(snapshot.contains("<truncated omitted=\"12\"/>"));
         assert!(snapshot.contains('…'));
+    }
+}
+
+#[cfg(test)]
+mod prompt_parts_tests {
+    use super::*;
+
+    #[test]
+    fn prompt_parts_follow_the_frozen_order() {
+        let prompt = compose_system_prompt(PromptParts {
+            environment: Some("<env/>"),
+            skills: Some("## Skills\n- pdf: read"),
+            mcp: Some("## MCP servers\n### github"),
+            compact: Some("<compact_summary/>"),
+        });
+        let env = prompt.find("<env/>").expect("env");
+        let skills = prompt.find("## Skills").expect("skills");
+        let mcp = prompt.find("## MCP servers").expect("mcp");
+        let background = prompt.find(LX_BACKGROUND_NOTE).expect("background");
+        let compact = prompt.find("<compact_summary/>").expect("compact");
+        assert!(env < skills && skills < mcp && mcp < background && background < compact);
     }
 }

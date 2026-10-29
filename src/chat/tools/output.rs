@@ -62,6 +62,25 @@ pub fn format_for_model(result: &ToolExecutionResult) -> String {
         ToolExecutionResult::Plan(snapshot) => format_plan(snapshot),
         ToolExecutionResult::Ask { questions } => format_ask(questions),
         ToolExecutionResult::Subagent(outcome) => format_subagent(outcome),
+        ToolExecutionResult::Mcp(result) => {
+            let mut text = result.text.clone();
+            for image in &result.images {
+                text.push_str(&format!(
+                    "\n[image attached: {} {}x{}]",
+                    image.mime, image.width, image.height
+                ));
+            }
+            if result.images_omitted > 0 {
+                text.push_str(&format!(
+                    "\n[{} more image(s) omitted]",
+                    result.images_omitted
+                ));
+            }
+            if result.truncated {
+                text.push_str("\n[truncated]");
+            }
+            text
+        }
         ToolExecutionResult::CurrentTime { current_time } => {
             format!("current_time: {current_time}\n")
         }
@@ -533,7 +552,8 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
         ToolExecutionResult::Process(_)
         | ToolExecutionResult::Plan(_)
         | ToolExecutionResult::Ask { .. }
-        | ToolExecutionResult::Subagent(_) => ToolSummary::default(),
+        | ToolExecutionResult::Subagent(_)
+        | ToolExecutionResult::Mcp(_) => ToolSummary::default(),
         ToolExecutionResult::CurrentTime { current_time } => ToolSummary {
             path: Some(current_time.clone()),
             ..ToolSummary::default()
@@ -630,6 +650,20 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
         ToolExecutionResult::CurrentTime { current_time } => json!({
             "tool": "curr_time",
             "current_time": current_time,
+        }),
+        ToolExecutionResult::Mcp(result) => json!({
+            "kind": "mcp",
+            "server": result.server,
+            "tool": result.tool,
+            "text": result.text,
+            "truncated": result.truncated,
+            "images": result.images.iter().map(|image| json!({
+                "path": image.path.display().to_string(),
+                "mime": image.mime,
+                "width": image.width,
+                "height": image.height,
+            })).collect::<Vec<_>>(),
+            "images_omitted": result.images_omitted,
         }),
         ToolExecutionResult::Ask { questions } => json!({
             "tool": "ask",

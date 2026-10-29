@@ -4,6 +4,8 @@
 //! 缺失字段取默认值，未知键忽略，非法已知值由 `validate` 拒绝并返回错误。
 
 pub mod ai;
+pub mod mcp;
+pub mod skills;
 
 use std::fmt;
 use std::path::{Path, PathBuf};

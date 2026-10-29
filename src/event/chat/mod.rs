@@ -16,10 +16,12 @@ pub mod compact;
 mod context_summary;
 mod file_snapshots;
 mod host;
+pub mod mcp;
 mod process_events;
 mod process_page;
 pub mod rewind;
-pub mod runtime;
+mod runtime;
+mod skills;
 mod subagent;
 mod timeline;
 mod tool_calls;
@@ -533,6 +535,9 @@ pub(crate) fn assemble_turn_request(
     frozen: &crate::app::state::FrozenModel,
     compact: Option<&context::CompactContext>,
     environment: Option<&str>,
+    skills: Option<&str>,
+    mcp: Option<&str>,
+    skill_blocks: &[String],
 ) -> AssembledTurn {
     let (draft, draft_attachments) = timeline::latest_user_draft_and_attachments(messages);
     let db_messages = chat_part_views_to_db(messages);
@@ -551,6 +556,9 @@ pub(crate) fn assemble_turn_request(
         variant_params: frozen.variant_params.clone(),
         compact,
         environment,
+        skills,
+        mcp,
+        skill_blocks,
     });
     AssembledTurn {
         request: ChatRequest {
@@ -561,6 +569,7 @@ pub(crate) fn assemble_turn_request(
             purpose: crate::chat::events::RequestPurpose::Chat,
             // 装配出的系统提示已包含冻结环境与 compact 摘要：请求不再现场采集。
             system_prompt: Some(assembly.system_prompt),
+            tools: assembly.request.tools,
         },
         omitted_turns: assembly.omitted_turns,
         draft_exceeds: assembly.draft_exceeds,
@@ -620,7 +629,7 @@ fn start_stream(
     // 在途请求持有启动时快照，设置页中途保存不影响本轮）。
     // 必须走 `effective_selection`：它会把模型默认思考等级（variant）补上，
     // 否则「未显式选等级」的窗格请求不会带思考参数（reasoning 恒为空）。
-    let (frozen, assembled, current_plan) = {
+    let (frozen, assembled, current_plan, mcp_snapshot) = {
         let Some(pane) = state.pane_anywhere(key.pane) else {
             return false;
         };
@@ -653,15 +662,35 @@ fn start_stream(
             workspace_root.as_deref(),
             &background_tasks(pane.lx.chat.session_id.as_deref(), streams),
         );
-        let assembled = assemble_turn_request(
+        // skill 目录与 MCP 快照在 turn 起点冻结：本轮所有采样复用同一份。
+        let skills = skills::catalog_prompt(persistence, workspace_root.as_deref());
+        let (draft_text, _) = timeline::latest_user_draft_and_attachments(&pane.lx.chat.messages);
+        let skill_blocks = skills::reference_blocks(&draft_text);
+        let mcp_snapshot = mcp::snapshot_for_turn(persistence, workspace_root.as_deref());
+        let mut assembled = assemble_turn_request(
             &pane.lx.chat.messages,
             &frozen,
             compact.as_ref(),
             Some(&environment),
+            skills.as_deref(),
+            None,
+            &skill_blocks,
         );
+        assembled.request.tools = std::sync::Arc::new(crate::chat::tools::turn_tools(
+            crate::chat::agent::ToolSurface::Main,
+            &mcp_snapshot,
+        ));
+        if let Some(section) = mcp_snapshot.instructions_prompt() {
+            let prompt = assembled
+                .request
+                .system_prompt
+                .get_or_insert_with(crate::chat::prompt::system_prompt);
+            prompt.push_str("\n\n");
+            prompt.push_str(&section);
+        }
         // 计划快照先克隆：运行上下文摘要要在后面的可变借用窗外拼装。
         let current_plan = pane.lx.chat.plan.clone();
-        (frozen, assembled, current_plan)
+        (frozen, assembled, current_plan, mcp_snapshot)
     };
     // 省略提示（一次性显示）。
     if assembled.omitted_turns > 0
@@ -825,7 +854,12 @@ fn start_stream(
     let executor = AgentTools::new(runtime.manager.clone(), turn)
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads)
-        .with_image_support(frozen.supports_image_input);
+        .with_image_support(frozen.supports_image_input)
+        .with_mcp(
+            crate::mcp::global_manager().clone(),
+            mcp_snapshot,
+            key.session.clone(),
+        );
     // 本地运行上下文：存活进程 + 当前计划 + 在册子 agent + 未投递报告。
     let mut summary = runtime_context_summary(runtime.manager.as_ref(), &current_plan);
     let subagent_lines = subagent::running_subagent_lines(streams, &key.session);

@@ -720,11 +720,14 @@ fn escape_attribute(text: &str) -> String {
 /// 子 agent 系统提示：角色提示 + 环境快照。
 ///
 /// **不含**父会话的后台任务摘要与 plan：子 agent 只看到自己的任务。
-pub fn compose_subagent_prompt(role: AgentRole, environment: Option<&str>) -> String {
+pub fn compose_subagent_prompt(
+    role: AgentRole,
+    parts: crate::chat::prompt::PromptParts<'_>,
+) -> String {
     format!(
         "{}\n\n{}\n",
         role.system_prompt(),
-        environment.unwrap_or_default()
+        parts.render_tail_with(false)
     )
 }
 

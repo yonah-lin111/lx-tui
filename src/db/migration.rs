@@ -604,6 +604,44 @@ CREATE INDEX IF NOT EXISTS idx_subagent_report_pending
     ON agent_subagent_report(agent_id, delivered_at_ms, completed_at_ms);
 "#;
 
+/// v20：附件表增加 `skill` kind（CHECK 约束无法 ALTER，必须整表重建）。
+const SCHEMA_V20_ATTACHMENT: &str = r#"
+CREATE TABLE agent_message_attachment_v20 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    message_id TEXT NOT NULL REFERENCES agent_message(external_id) ON DELETE CASCADE,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    kind TEXT NOT NULL CHECK (kind IN ('file', 'folder', 'image', 'skill')),
+    label TEXT NOT NULL,
+    marker_start INTEGER,
+    marker_end INTEGER,
+    source_path TEXT,
+    mime TEXT,
+    width INTEGER,
+    height INTEGER,
+    UNIQUE(message_id, position),
+    CHECK ((marker_start IS NULL AND marker_end IS NULL) OR
+           (marker_start >= 0 AND marker_end > marker_start)),
+    CHECK (kind <> 'image' OR
+           (mime IN ('image/png', 'image/jpeg') AND source_path IS NOT NULL
+            AND width > 0 AND height > 0))
+);
+
+INSERT INTO agent_message_attachment_v20
+    (id, external_id, message_id, position, kind, label, marker_start, marker_end,
+     source_path, mime, width, height)
+    SELECT id, external_id, message_id, position, kind, label, marker_start, marker_end,
+           source_path, mime, width, height
+    FROM agent_message_attachment;
+
+DROP TABLE agent_message_attachment;
+
+ALTER TABLE agent_message_attachment_v20 RENAME TO agent_message_attachment;
+
+CREATE INDEX IF NOT EXISTS idx_agent_message_attachment_message
+    ON agent_message_attachment(message_id, position);
+"#;
+
 impl Database {
     /// 迁移到当前 Schema：建表与版本推进在同一事务中完成，幂等。
     ///
@@ -835,10 +873,45 @@ impl Database {
                 return Err(DbError::ForeignKeyViolation);
             }
             ensure_no_foreign_key_violation(&transaction)?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            // 只推进到 19：v20 整表重建失败时不能把库标成已升级。
+            transaction.pragma_update(None, "user_version", 19)?;
             transaction.commit()?;
         }
+        if version < 20 {
+            self.rebuild_attachment_with_skill_kind()?;
+        }
         Ok(())
+    }
+
+    /// v20：重建消息附件表，加入 `skill` kind。
+    ///
+    /// 关闭外键后重建（`DROP TABLE` 在打开外键时会级联删除消息），
+    /// 行数与索引在事务内校验，失败不推进版本。
+    fn rebuild_attachment_with_skill_kind(&mut self) -> Result<()> {
+        self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+        let result = (|| -> Result<()> {
+            let transaction = self.conn.unchecked_transaction()?;
+            let before: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM agent_message_attachment",
+                [],
+                |row| row.get(0),
+            )?;
+            transaction.execute_batch(SCHEMA_V20_ATTACHMENT)?;
+            let after: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM agent_message_attachment",
+                [],
+                |row| row.get(0),
+            )?;
+            if before != after {
+                return Err(DbError::ForeignKeyViolation);
+            }
+            ensure_no_foreign_key_violation(&transaction)?;
+            transaction.pragma_update(None, "user_version", 20)?;
+            transaction.commit()?;
+            Ok(())
+        })();
+        self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        result
     }
 
     /// v13：会话模型三列可空 + 消息 kind/命令 JSON。

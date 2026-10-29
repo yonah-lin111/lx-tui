@@ -25,6 +25,7 @@ fn request() -> ChatRequest {
         variant_params: None,
         purpose: crate::chat::events::RequestPurpose::Chat,
         system_prompt: None,
+        tools: std::sync::Arc::new(Vec::new()),
     }
 }
 
@@ -784,6 +785,7 @@ fn compact_request_omits_tools_and_overrides_the_system_prompt() {
         variant_params: None,
         purpose: crate::chat::events::RequestPurpose::CompactSummary,
         system_prompt: Some("COMPACT INSTRUCTIONS".into()),
+        tools: std::sync::Arc::new(Vec::new()),
     };
     let built = super::build("https://api.example.invalid", Some("key"), &request).expect("build");
     let body: serde_json::Value = serde_json::from_str(&built.body).expect("json");

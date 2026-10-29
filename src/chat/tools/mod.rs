@@ -60,11 +60,11 @@ pub use read_version::{
     registry as read_registry, require_missing as require_new_target,
     require_read_version as require_version,
 };
-pub use schema::{available_tools, tools_for};
+pub use schema::{available_tools, builtin_tools, resource_tools, tools_for, turn_tools};
 pub use types::{
-    FileChange, FileChangeKind, ReadKind, SUBAGENT_TOOL_NAMES, SearchMatch, TOOL_NAMES,
-    ToolContext, ToolErrorCode, ToolExecutionResult, ToolFailure, ToolResultPublic, ToolSpec,
-    ToolSummary,
+    ArchivedImage, FileChange, FileChangeKind, McpToolResult, ReadKind, SUBAGENT_TOOL_NAMES,
+    SearchMatch, TOOL_NAMES, ToolContext, ToolDecl, ToolErrorCode, ToolExecutionResult,
+    ToolFailure, ToolResultPublic, ToolSpec, ToolSummary,
 };
 
 use types::ToolResult;

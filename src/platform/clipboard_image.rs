@@ -1,6 +1,7 @@
-//! 本地图像处理与会话图片归档：尺寸校验、等比缩放、重编码与 `~/.lx-t[-dev]/images/<session_id>/` 持久化。
+//! 本地图像处理与会话图片归档：尺寸校验、等比缩放、重编码与
+//! `~/.lx-t[-dev]/session/<session_id>/image/` 持久化。
 //!
-//! 仅支持本地图片文件（不读取系统剪贴板位图）；发送时归档至 `~/.lx-t[-dev]/images/<session_id>/`，
+//! 仅支持本地图片文件（不读取系统剪贴板位图）；发送与工具结果归档到会话目录，
 //! 防止桌面等外部原图被清理后无法 `rewind` 或历史回放。自动清理周期对齐 Claude Code（默认 30 天）。
 
 use std::io::Cursor;
@@ -104,8 +105,8 @@ pub struct ArchivedSessionImage {
     pub bytes: Vec<u8>,
 }
 
-/// 会话图片归档根目录：生产 `~/.lx-t/images`，开发 `~/.lx-t-dev/images`。
-pub fn session_images_root_dir() -> Result<PathBuf, ImagePrepareError> {
+/// 会话数据根目录：生产 `~/.lx-t/session`，开发 `~/.lx-t-dev/session`。
+pub fn sessions_root_dir() -> Result<PathBuf, ImagePrepareError> {
     let home = std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
         .map(PathBuf::from)
@@ -115,7 +116,12 @@ pub fn session_images_root_dir() -> Result<PathBuf, ImagePrepareError> {
     } else {
         ".lx-t"
     };
-    Ok(home.join(root).join("images"))
+    Ok(home.join(root).join("session"))
+}
+
+/// 单个会话的图片目录：`<sessions_root>/<session_id>/image/`。
+pub fn session_image_dir(sessions_root: &Path, session_id: &str) -> PathBuf {
+    sessions_root.join(session_id).join("image")
 }
 
 /// FNV-1a 64 位哈希（用于同会话内图片内容去重命名）。
@@ -154,13 +160,14 @@ fn sanitize_filename(name: &str, mime: &str) -> String {
     format!("{final_stem}.{ext}")
 }
 
-/// 将本地图片处理后归档到 `<images_root>/<session_id>/<hash>-<filename>`；若已存在则复用并刷新 mtime。
+/// 将本地图片处理后归档到 `<sessions_root>/<session_id>/image/<hash>-<filename>`；
+/// 若已存在则复用并刷新 mtime。
 pub fn archive_session_image_in(
-    images_root: &Path,
+    sessions_root: &Path,
     session_id: &str,
     source_path: &Path,
 ) -> Result<PathBuf, ImagePrepareError> {
-    let session_dir = images_root.join(session_id);
+    let session_dir = session_image_dir(sessions_root, session_id);
     if source_path.starts_with(&session_dir) && source_path.is_file() {
         touch_file_mtime(source_path);
         return Ok(source_path.to_path_buf());
@@ -168,7 +175,7 @@ pub fn archive_session_image_in(
 
     let processed = load_and_process_image_file(source_path)?;
     std::fs::create_dir_all(&session_dir).map_err(|_| ImagePrepareError::IoError)?;
-    let _ = super::restrict_dir_permissions(images_root);
+    let _ = super::restrict_dir_permissions(sessions_root);
     let _ = super::restrict_dir_permissions(&session_dir);
 
     let hash_hex = format!("{:016x}", fnv1a_hash(&processed.bytes));
@@ -184,25 +191,29 @@ pub fn archive_session_image_in(
     Ok(target)
 }
 
-/// 将本地图片归档到默认 `~/.lx-t[-dev]/images/<session_id>/` 目录。
+/// 将本地图片归档到默认会话图片目录。
 pub fn archive_session_image(
     session_id: &str,
     source_path: &Path,
 ) -> Result<PathBuf, ImagePrepareError> {
-    let root = session_images_root_dir()?;
+    let root = sessions_root_dir()?;
     archive_session_image_in(&root, session_id, source_path)
 }
 
-/// 删除某会话已归档的图片子目录 `~/.lx-t[-dev]/images/<session_id>/`（用户主动删除会话时调用）。
+/// 删除某会话已归档的图片目录 `.../session/<session_id>/image/`（用户主动删除会话时调用）。
+///
+/// 只删除图片目录，再尝试删除空的会话目录：会话目录以后可能放别的数据。
 pub fn remove_session_images(session_id: &str) {
     if session_id.is_empty() || session_id.contains(['/', '\\', '.']) {
         return;
     }
-    if let Ok(root) = session_images_root_dir() {
-        let dir = root.join(session_id);
+    if let Ok(root) = sessions_root_dir() {
+        let session_root = root.join(session_id);
+        let dir = session_image_dir(&root, session_id);
         if dir.is_dir() {
             let _ = std::fs::remove_dir_all(dir);
         }
+        let _ = std::fs::remove_dir(&session_root);
     }
 }
 
@@ -213,27 +224,21 @@ fn touch_file_mtime(path: &Path) {
     }
 }
 
-/// 若路径位于受管的 `~/.lx-t[-dev]/images/` 目录内，刷新其修改时间（供 Rewind 时延长保留期）。
+/// 若路径位于受管的会话图片根内，刷新其修改时间（供 Rewind 时延长保留期）。
 pub fn touch_session_image_if_managed(path: &Path) {
-    let is_managed = if let Ok(dir) = session_images_root_dir() {
-        path.starts_with(&dir)
-    } else {
-        false
-    } || path
-        .components()
-        .any(|c| matches!(c.as_os_str().to_str(), Some(".lx-t") | Some(".lx-t-dev")));
+    let is_managed = sessions_root_dir().is_ok_and(|dir| path.starts_with(dir));
     if is_managed && path.is_file() {
         touch_file_mtime(path);
     }
 }
 
-/// 清理指定 `images_root` 下各 `<session_id>` 子目录中未被任何会话引用且超过保留期 `max_age` 的图片文件。
+/// 清理指定会话根下各 `<session_id>/image/` 中未被引用且超过保留期的图片。
 pub fn prune_session_images_in(
-    images_root: &Path,
+    sessions_root: &Path,
     referenced_paths: &std::collections::HashSet<String>,
     max_age: std::time::Duration,
 ) -> usize {
-    let Ok(session_dirs) = std::fs::read_dir(images_root) else {
+    let Ok(session_dirs) = std::fs::read_dir(sessions_root) else {
         return 0;
     };
     let referenced_keys: std::collections::HashSet<String> = referenced_paths
@@ -256,7 +261,8 @@ pub fn prune_session_images_in(
         if !session_path.is_dir() {
             continue;
         }
-        let Ok(files) = std::fs::read_dir(&session_path) else {
+        let image_path = session_path.join("image");
+        let Ok(files) = std::fs::read_dir(&image_path) else {
             continue;
         };
         for entry in files.flatten() {
@@ -287,7 +293,13 @@ pub fn prune_session_images_in(
                 removed += 1;
             }
         }
-        // 若子目录已空，顺手清理空目录
+        // 空 image/ 与空会话目录一并清理。
+        if std::fs::read_dir(&image_path)
+            .ok()
+            .is_some_and(|mut it| it.next().is_none())
+        {
+            let _ = std::fs::remove_dir(&image_path);
+        }
         if std::fs::read_dir(&session_path)
             .ok()
             .is_some_and(|mut it| it.next().is_none())
@@ -298,9 +310,9 @@ pub fn prune_session_images_in(
     removed
 }
 
-/// 启动时清理默认 `~/.lx-t[-dev]/images/` 目录下的过期（30 天）未引用图片。
+/// 启动时清理默认会话根下的过期（30 天）未引用图片。
 pub fn prune_default_session_images(referenced_paths: &std::collections::HashSet<String>) -> usize {
-    let Ok(dir) = session_images_root_dir() else {
+    let Ok(dir) = sessions_root_dir() else {
         return 0;
     };
     prune_session_images_in(
@@ -440,19 +452,19 @@ pub fn process_image_bytes(
     Ok(result)
 }
 
-/// 将已处理的图片严格归档到 `<images_root>/<session_id>/<hash>-<filename>`，
+/// 将已处理的图片严格归档到 `<sessions_root>/<session_id>/image/<hash>-<filename>`，
 /// 并在落盘后回读校验存在性、可读性、尺寸、MIME 与内容摘要。
 pub fn archive_processed_image_in(
-    images_root: &Path,
+    sessions_root: &Path,
     session_id: &str,
     processed: &ProcessedImage,
 ) -> Result<ArchivedSessionImage, ImagePrepareError> {
     if session_id.is_empty() || session_id.contains(['/', '\\', '.']) {
         return Err(ImagePrepareError::IoError);
     }
-    let session_dir = images_root.join(session_id);
+    let session_dir = session_image_dir(sessions_root, session_id);
     std::fs::create_dir_all(&session_dir).map_err(|_| ImagePrepareError::IoError)?;
-    let _ = super::restrict_dir_permissions(images_root);
+    let _ = super::restrict_dir_permissions(sessions_root);
     let _ = super::restrict_dir_permissions(&session_dir);
 
     let hash_hex = format!("{:016x}", fnv1a_hash(&processed.bytes));
@@ -470,7 +482,7 @@ pub fn archive_processed_image_in(
         touch_file_mtime(&target);
     }
     let verified = verify_archived_image_in(
-        images_root,
+        sessions_root,
         session_id,
         &target,
         &processed.mime,
@@ -489,18 +501,18 @@ pub fn archive_processed_image_in(
     })
 }
 
-/// 将已处理图片严格归档到默认 `~/.lx-t[-dev]/images/<session_id>/` 目录。
+/// 将已处理图片严格归档到默认会话图片目录。
 pub fn archive_processed_image(
     session_id: &str,
     processed: &ProcessedImage,
 ) -> Result<ArchivedSessionImage, ImagePrepareError> {
-    let root = session_images_root_dir()?;
+    let root = sessions_root_dir()?;
     archive_processed_image_in(&root, session_id, processed)
 }
 
-/// 校验归档图片位于 `<images_root>/<session_id>/` 内，且可读、格式/尺寸/摘要与记录一致。
+/// 校验归档图片位于 `<sessions_root>/<session_id>/image/` 内，且可读、格式/尺寸/摘要与记录一致。
 pub fn verify_archived_image_in(
-    images_root: &Path,
+    sessions_root: &Path,
     session_id: &str,
     archive_path: &Path,
     expected_mime: &str,
@@ -523,7 +535,7 @@ pub fn verify_archived_image_in(
     {
         return Err(ImagePrepareError::FileNotFound);
     }
-    let session_dir = images_root.join(session_id);
+    let session_dir = session_image_dir(sessions_root, session_id);
     let in_session_dir = archive_path.starts_with(&session_dir) || {
         match (
             std::fs::canonicalize(&session_dir),
@@ -581,7 +593,7 @@ pub fn verify_archived_image(
     expected_width: u32,
     expected_height: u32,
 ) -> Result<Vec<u8>, ImagePrepareError> {
-    let root = session_images_root_dir()?;
+    let root = sessions_root_dir()?;
     verify_archived_image_in(
         &root,
         session_id,

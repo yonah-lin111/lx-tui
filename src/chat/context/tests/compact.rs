@@ -30,6 +30,9 @@ fn assemble_with(
         variant_params: None,
         compact,
         environment: None,
+        skills: None,
+        mcp: None,
+        skill_blocks: &[],
     })
 }
 
@@ -103,6 +106,9 @@ fn compact_summary_escapes_the_model_attribute() {
 /// 空摘要不注入：避免系统提示里出现空段落。
 #[test]
 fn empty_summary_is_not_injected() {
-    let prompt = crate::chat::prompt::compose_system_prompt(None, Some("   "));
+    let prompt = crate::chat::prompt::compose_system_prompt(crate::chat::prompt::PromptParts {
+        compact: Some("   "),
+        ..crate::chat::prompt::PromptParts::default()
+    });
     assert!(!prompt.contains("<compact_summary"));
 }

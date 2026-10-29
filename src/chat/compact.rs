@@ -366,6 +366,7 @@ pub fn summary_request_from_transcript(
         variant_params,
         purpose: crate::chat::events::RequestPurpose::CompactSummary,
         system_prompt: Some(COMPACT_SYSTEM_PROMPT.to_string()),
+        tools: std::sync::Arc::new(Vec::new()),
     }
 }
 

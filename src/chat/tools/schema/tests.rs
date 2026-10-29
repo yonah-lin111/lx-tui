@@ -292,3 +292,21 @@ fn ask_schema_is_strict_and_documents_limits() {
             .contains(&crate::chat::tools::ask::MAX_ASK_HEADER_CHARS.to_string())
     );
 }
+
+#[test]
+fn turn_tools_falls_back_to_builtin_and_resources_are_named() {
+    use crate::chat::agent::ToolSurface;
+    let snapshot = crate::mcp::McpToolSnapshot::default();
+    assert_eq!(
+        super::turn_tools(ToolSurface::Explorer, &snapshot),
+        super::builtin_tools(ToolSurface::Explorer)
+    );
+    let names: Vec<String> = super::resource_tools()
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect();
+    assert_eq!(
+        names,
+        ["list_resources", "list_resource_templates", "read_resource"]
+    );
+}

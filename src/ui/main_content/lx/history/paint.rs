@@ -361,6 +361,10 @@ fn draw_user_text(
                 crate::ui::text::agent::USER_REF_IMAGE_PREFIX,
                 style::user_ref_image(),
             ),
+            crate::db::chat::MessageAttachmentKind::Skill => (
+                crate::ui::text::agent::USER_REF_SKILL_PREFIX,
+                style::user_ref_file(),
+            ),
         };
         let conn_cols = USER_INDENT + 3;
         let prefix_cols = conn_cols + kind_prefix.len() as u16;

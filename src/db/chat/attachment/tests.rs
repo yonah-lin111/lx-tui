@@ -94,14 +94,14 @@ fn begin_turn_with_attachments_and_load_metadata() {
     assert_eq!(att1.label, "test.png");
     let archived_path = att1.source_path.as_deref().expect("archived path");
     assert!(
-        archived_path.contains(&format!("/images/{}/", committed.session_id)),
-        "图片应归档在 ~/.lx-t[-dev]/images/<session_id>/ 下: {archived_path}"
+        archived_path.contains(&format!("/session/{}/image/", committed.session_id)),
+        "图片应归档在 ~/.lx-t[-dev]/session/<session_id>/image/ 下: {archived_path}"
     );
     assert_eq!(att1.mime.as_deref(), Some("image/png"));
     assert_eq!(att1.width, Some(4));
     assert_eq!(att1.height, Some(4));
 
-    // 删除原始桌面/工作区图片后，仍可从 ~/.lx-t[-dev]/images/<session_id>/ 归档副本读取
+    // 删除原始桌面/工作区图片后，仍可从 ~/.lx-t[-dev]/session/<session_id>/image/ 归档副本读取
     std::fs::remove_file(&img_path).expect("remove original image");
     let refs = db.referenced_attachment_paths().expect("referenced paths");
     assert!(refs.contains(archived_path));
@@ -218,4 +218,34 @@ fn v18_schema_integrity_and_foreign_keys() {
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))
         .expect("integrity");
     assert_eq!(integrity, "ok");
+}
+
+#[test]
+fn skill_attachments_are_accepted_and_loaded() {
+    let (db, workspace) = temp_db("skill_kind");
+    let attachments = vec![MessageAttachmentInput {
+        kind: MessageAttachmentKind::Skill,
+        label: "release-checklist".into(),
+        marker_start: Some(0),
+        marker_end: Some(20),
+        source_path: Some("/skills/release-checklist/SKILL.md".into()),
+        mime: None,
+        width: None,
+        height: None,
+    }];
+    let committed = db
+        .begin_turn_with_attachments(
+            &workspace,
+            None,
+            "cut a release",
+            &attachments,
+            &test_model(),
+        )
+        .expect("skill attachment accepted");
+    assert_eq!(SCHEMA_VERSION, 20);
+    let meta = db
+        .load_message_attachments(&committed.user_message_id)
+        .expect("attachments");
+    assert_eq!(meta[0].kind, MessageAttachmentKind::Skill);
+    assert_eq!(meta[0].label, "release-checklist");
 }

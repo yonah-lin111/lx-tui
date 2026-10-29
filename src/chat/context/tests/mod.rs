@@ -108,6 +108,9 @@ fn assemble_unbounded(messages: &[ChatMessage], draft: &str) -> Assembly {
         variant_params: None,
         compact: None,
         environment: None,
+        skills: None,
+        mcp: None,
+        skill_blocks: &[],
     })
 }
 
@@ -123,6 +126,9 @@ fn assemble_with_limit(messages: &[ChatMessage], draft: &str, limit: u64, output
         variant_params: None,
         compact: None,
         environment: None,
+        skills: None,
+        mcp: None,
+        skill_blocks: &[],
     })
 }
 

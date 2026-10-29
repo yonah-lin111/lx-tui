@@ -517,6 +517,8 @@ pub(crate) fn schedule_next_queued_input_with_done(
         Some(&cwd),
         &[],
     );
+    let skills = super::super::skills::catalog_prompt(persistence, Some(&cwd));
+    let mcp_snapshot = super::super::mcp::snapshot_for_turn(persistence, Some(&cwd));
     if let Err(err) = assemble_child_context(
         database,
         workspace,
@@ -526,6 +528,8 @@ pub(crate) fn schedule_next_queued_input_with_done(
         "",
         record.role,
         &environment,
+        skills.as_deref(),
+        &mcp_snapshot,
         &cwd,
         &model,
         frozen.variant_params.clone(),
@@ -617,6 +621,8 @@ fn launch_child_turn(
         Some(cwd),
         &[],
     );
+    let skills = super::super::skills::catalog_prompt(persistence, Some(cwd));
+    let mcp_snapshot = super::super::mcp::snapshot_for_turn(persistence, Some(cwd));
     let context = assemble_child_context(
         database,
         workspace,
@@ -626,6 +632,8 @@ fn launch_child_turn(
         child_user_message_id,
         record.role,
         &environment,
+        skills.as_deref(),
+        &mcp_snapshot,
         cwd,
         &model,
         frozen.variant_params.clone(),
@@ -755,7 +763,12 @@ fn launch_child_turn(
     let executor = AgentTools::new(manager, turn)
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads)
-        .with_image_support(frozen.supports_image_input);
+        .with_image_support(frozen.supports_image_input)
+        .with_mcp(
+            crate::mcp::global_manager().clone(),
+            mcp_snapshot,
+            record.child_session_id.clone(),
+        );
     let transport = frozen.transport.clone();
     let base_url = frozen.base_url.clone();
     let api_key = frozen.api_key.clone();

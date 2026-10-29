@@ -829,6 +829,8 @@ async fn auto_compact_persists_checkpoint_and_replays_in_subsequent_turn() {
         "msg-next",
         AgentRole::Explorer,
         "<environment_context/>",
+        None,
+        &crate::mcp::McpToolSnapshot::default(),
         fixture.workspace(),
         &model,
         None,

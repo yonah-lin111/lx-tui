@@ -299,6 +299,9 @@ fn report_message_and_turn_replay_in_one_turn() {
         variant_params: None,
         compact: None,
         environment: None,
+        skills: None,
+        mcp: None,
+        skill_blocks: &[],
     });
     let text = format!("{:?}", assembly.request.items);
     assert!(text.contains("subagent_report"), "{text}");
@@ -549,7 +552,7 @@ fn v18_upgrade_migrates_legacy_reports_and_creates_queue_tables() {
         .connection()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("version");
-    assert_eq!(version, 19);
+    assert_eq!(version, 20);
 
     let pending = database
         .pending_reports(&workspace, &parent)
@@ -779,7 +782,7 @@ fn queued_input_images_are_included_in_referenced_attachment_paths() {
 }
 
 #[test]
-fn dev_database_copy_migrates_to_v19_and_passes_integrity_check() {
+fn dev_database_copy_migrates_to_current_version_and_passes_integrity_check() {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return;
     };
@@ -818,7 +821,7 @@ fn dev_database_copy_migrates_to_v19_and_passes_integrity_check() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("user_version");
-    assert_eq!(version, 19);
+    assert_eq!(version, 20);
 
     let after_sessions: i64 = migrated
         .connection()

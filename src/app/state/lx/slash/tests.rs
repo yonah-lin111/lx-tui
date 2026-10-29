@@ -123,7 +123,10 @@ fn history_panel_reports_current_session() {
 #[test]
 fn commands_panel_has_no_current_item() {
     let panel = SlashPanel::Commands {
-        items: vec![SlashCommand::Model, SlashCommand::Resume],
+        items: vec![
+            SlashEntry::Command(SlashCommand::Model),
+            SlashEntry::Command(SlashCommand::Resume),
+        ],
         window: PanelWindow::new(0),
     };
     assert_eq!(panel.current_index(), None, "命令候选没有已生效项");
@@ -373,5 +376,49 @@ fn model_picker_active_candidate_maps_view_index_to_real_index() {
     assert_eq!(
         picker.active_candidate().map(|c| c.model_name.as_str()),
         Some("deepseek")
+    );
+}
+
+#[test]
+fn skill_entries_follow_commands_and_headers_are_not_selectable() {
+    let skill = crate::skills::SkillEntry {
+        name: "pdf".into(),
+        description: "Read PDF files.".into(),
+        path: std::path::PathBuf::from("/skills/pdf/SKILL.md"),
+        scope: crate::skills::SkillScope::User,
+        source: crate::skills::SkillSource::Lx,
+        enabled: true,
+        shadowed_by: None,
+    };
+    let entries = SlashPanel::command_entries("/pdf", std::slice::from_ref(&skill));
+    assert!(matches!(
+        entries.first(),
+        Some(SlashEntry::Header("Skills"))
+    ));
+    assert!(entries.iter().any(|entry| matches!(
+        entry,
+        SlashEntry::Skill { name, .. } if name == "pdf"
+    )));
+    let mut panel = SlashPanel::Commands {
+        items: entries,
+        window: PanelWindow::default(),
+    };
+    // 高亮从标题开始移动时必须跳过标题。
+    panel.move_active(1);
+    assert!(
+        panel
+            .active_command_entry()
+            .is_some_and(SlashEntry::selectable)
+    );
+    let all = SlashPanel::command_entries("/", &[skill]);
+    let mut panel = SlashPanel::Commands {
+        items: all,
+        window: PanelWindow::default(),
+    };
+    panel.move_active(-1);
+    assert!(
+        panel
+            .active_command_entry()
+            .is_some_and(SlashEntry::selectable)
     );
 }

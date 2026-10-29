@@ -70,8 +70,9 @@ pub fn build(
         "stream": true,
     });
     // 摘要请求不声明工具（无工具就无从发起调用）。
-    if let Some(surface) = request.tools_surface() {
-        body["tools"] = anthropic_tools(surface);
+    let tool_decls = request.declared_tools();
+    if !tool_decls.is_empty() {
+        body["tools"] = anthropic_tools(&tool_decls);
     }
     if let Some(params) = &request.variant_params {
         // thinking 预算：thinkingBudget（token 数）映射为协议 thinking 结构。

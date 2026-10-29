@@ -32,9 +32,9 @@ pub use lx::{
     PanelWindow, PendingShell, PlanSnapshotView, PlanStepView, ProcessEntry,
     ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey, RequestState,
     RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindTarget, RewindTargetKind,
-    SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand, SlashPanel, SnapshotState,
-    SubagentDetailView, SubagentReportView, SubagentRun, TaskPage, TaskTab, ToolCallView,
-    ToolDetailView, ToolStatus, ToolSummary, UserShellView,
+    SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand, SlashEntry, SlashPanel,
+    SnapshotState, SubagentDetailView, SubagentReportView, SubagentRun, TaskPage, TaskTab,
+    ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
