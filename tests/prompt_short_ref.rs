@@ -65,8 +65,8 @@ fn selecting_candidate_inserts_last_two_segments() {
         state
             .prompt
             .text()
-            .ends_with("@ref/lx-at-mention/design.md "),
-        "确认后插入末两段短名: {}",
+            .ends_with("@[ref-content]/docs/feature/lx-at-mention/design.md "),
+        "确认后插入完整相对路径快捷引用: {}",
         state.prompt.text()
     );
 }
@@ -84,8 +84,11 @@ fn directory_candidate_inserts_slash_suffixed_short_name() {
     assert!(state.prompt.refer_panel().is_some(), "目录候选可匹配");
     update::apply_editor(&mut state, EditorCommand::Newline);
     assert!(
-        state.prompt.text().ends_with("@ref/agent/lx-agent/ "),
-        "目录短名带尾斜杠: {}",
+        state
+            .prompt
+            .text()
+            .ends_with("@[ref-content]/Users/yonah/projects/agent/lx-agent/ "),
+        "目录快捷引用带尾斜杠: {}",
         state.prompt.text()
     );
     assert!(
@@ -137,8 +140,8 @@ fn existing_short_ref_is_offered_again() {
         state
             .prompt
             .text()
-            .ends_with("@ref/lx-at-mention/design.md "),
-        "重复确认同一短引用不会变成别的形状: {}",
+            .ends_with("@[ref-content]/lx-at-mention/design.md "),
+        "重复确认同一短引用转换为标准快捷引用: {}",
         state.prompt.text()
     );
 }
@@ -152,4 +155,15 @@ fn backspace_deletes_short_ref_as_one_block() {
     type_text(&mut state, "");
     update::apply_editor(&mut state, EditorCommand::Backspace);
     assert_eq!(state.prompt.text(), "见 ", "整块删除");
+}
+
+/// Backspace 把整段 ref-content 快捷引用（含尾随空白）一次删净。
+#[test]
+fn backspace_deletes_ref_content_as_one_block() {
+    let (mut state, _config, _view) = ready_state();
+    update::focus_prompt(&mut state);
+    state.prompt.set_text("见 @[ref-content]/src/main.rs ");
+    type_text(&mut state, "");
+    update::apply_editor(&mut state, EditorCommand::Backspace);
+    assert_eq!(state.prompt.text(), "见 ", "整块删除 ref-content");
 }

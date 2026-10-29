@@ -215,6 +215,67 @@ pub fn prepare_user_message(
         }
     }
 
+    // 3.5. 解析 `@[ref-content]/` 快捷引用
+    for range in crate::app::markdown::ref_content_ranges(raw_text) {
+        if claimed_ranges
+            .iter()
+            .any(|(s, e)| range.start < *e && range.end > *s)
+        {
+            continue;
+        }
+
+        let token_text =
+            &raw_text[range.start + crate::app::markdown::REF_CONTENT_PREFIX.len()..range.end];
+        let trimmed_token = token_text.trim_end_matches('/');
+        let resolved = resolve_reference_path(workspace_root, trimmed_token);
+
+        if let Ok(metadata) = std::fs::metadata(&resolved) {
+            let mut end = range.end;
+            if raw_text[end..].starts_with(' ') {
+                end += 1;
+            }
+            claimed_ranges.push((range.start, end));
+
+            let full_label = format!("{}{token_text}", crate::app::markdown::REF_CONTENT_PREFIX);
+            if metadata.is_dir() {
+                attachments.push(MessageAttachmentInput {
+                    kind: MessageAttachmentKind::Folder,
+                    label: full_label,
+                    marker_start: Some(range.start),
+                    marker_end: Some(end),
+                    source_path: Some(trimmed_token.to_string()),
+                    mime: None,
+                    width: None,
+                    height: None,
+                });
+            } else if sniff_image_file(&resolved) {
+                let processed = load_and_process_image_file(&resolved)?;
+                add_unique_image(processed.clone())?;
+                attachments.push(MessageAttachmentInput {
+                    kind: MessageAttachmentKind::Image,
+                    label: full_label,
+                    marker_start: Some(range.start),
+                    marker_end: Some(end),
+                    source_path: Some(resolved.to_string_lossy().into_owned()),
+                    mime: Some(processed.mime),
+                    width: Some(processed.width),
+                    height: Some(processed.height),
+                });
+            } else {
+                attachments.push(MessageAttachmentInput {
+                    kind: MessageAttachmentKind::File,
+                    label: full_label,
+                    marker_start: Some(range.start),
+                    marker_end: Some(end),
+                    source_path: Some(trimmed_token.to_string()),
+                    mime: None,
+                    width: None,
+                    height: None,
+                });
+            }
+        }
+    }
+
     // 4. 解析 `@ref/` 短引用
     for (start, end, short_name) in parse_short_ref_tokens(raw_text) {
         if claimed_ranges.iter().any(|(s, e)| start < *e && end > *s) {
@@ -363,6 +424,7 @@ fn resolve_reference_path(workspace_root: &Path, path_str: &str) -> PathBuf {
 }
 
 /// 移除展示用正文中的有效引用标记，并清理多余空白。
+/// 快捷引用（`@[ref-content]/`）保留在正文中，不被剥离。
 pub fn strip_references_for_display(
     raw_text: &str,
     attachments: &[crate::db::chat::MessageAttachmentMeta],
@@ -371,11 +433,16 @@ pub fn strip_references_for_display(
         raw_text,
         attachments
             .iter()
+            .filter(|att| {
+                !att.label
+                    .starts_with(crate::app::markdown::REF_CONTENT_PREFIX)
+            })
             .filter_map(|att| att.marker_start.zip(att.marker_end)),
     )
 }
 
 /// 移除尚未落库的附件输入对应的引用标记，供生成会话标题/预览与空正文回退使用。
+/// 快捷引用（`@[ref-content]/`）同样保留在正文中。
 pub fn strip_references_from_inputs(
     raw_text: &str,
     attachments: &[crate::db::chat::MessageAttachmentInput],
@@ -384,6 +451,10 @@ pub fn strip_references_from_inputs(
         raw_text,
         attachments
             .iter()
+            .filter(|att| {
+                !att.label
+                    .starts_with(crate::app::markdown::REF_CONTENT_PREFIX)
+            })
             .filter_map(|att| att.marker_start.zip(att.marker_end)),
     )
 }

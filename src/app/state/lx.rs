@@ -14,6 +14,7 @@ pub mod compact;
 mod history;
 pub mod mention;
 mod panels;
+pub mod refer;
 pub mod rewind;
 pub mod shell;
 pub mod slash;
@@ -86,6 +87,10 @@ pub struct Lx {
     paste: Option<LxPaste>,
     /// `@` 文件提及面板：扫描根、缓存与候选；与块面板/粘贴面板互斥。
     mention: LxMention,
+    /// 字母快捷输入面板（由正文已出现的引用与会话历史生成候选）。
+    pub refer: Option<crate::app::markdown::ReferPanel>,
+    /// 快捷面板压制标记：Esc 关闭或确认插入后，等待下一次编辑/移动再重算。
+    pub refer_suppressed: bool,
     /// `/` 命令面板（model/resume/new）；与块面板/粘贴/提及面板互斥。
     pub slash: Option<super::lx::SlashPanel>,
     /// 聊天会话状态：会话引用、历史视图与请求状态机。
@@ -188,6 +193,8 @@ impl Lx {
             panel: None,
             paste: None,
             mention: LxMention::default(),
+            refer: None,
+            refer_suppressed: false,
             slash: None,
             chat: LxChat::new(),
             agents: AgentsState::default(),
@@ -499,6 +506,7 @@ impl Lx {
 
     /// 在光标处插入一个字符。
     pub fn insert_char(&mut self, ch: char) {
+        self.refer_suppressed = false;
         self.snapshot();
         self.input.insert(self.cursor, ch);
         self.cursor += ch.len_utf8();
@@ -575,8 +583,18 @@ impl Lx {
             return;
         }
         if !self.mention.is_open()
+            && self.refer.is_none()
             && let Some(range) =
-                crate::app::markdown::mention_deletion_range(&self.input, self.cursor)
+                crate::app::markdown::ref_content_deletion_range(&self.input, self.cursor)
+                    .or_else(|| {
+                        crate::app::markdown::mention_deletion_range(&self.input, self.cursor)
+                    })
+                    .or_else(|| {
+                        crate::app::markdown::reference_deletion_range(&self.input, self.cursor)
+                    })
+                    .or_else(|| {
+                        crate::app::markdown::short_ref_deletion_range(&self.input, self.cursor)
+                    })
         {
             self.snapshot();
             self.cursor = range.start;
@@ -603,6 +621,7 @@ impl Lx {
 
     /// 光标左移一个字符。
     pub fn move_left(&mut self) {
+        self.refer_suppressed = false;
         if let Some(prev) = self.input[..self.cursor].chars().next_back() {
             self.cursor -= prev.len_utf8();
             self.refresh_panel();
@@ -611,6 +630,7 @@ impl Lx {
 
     /// 光标右移一个字符。
     pub fn move_right(&mut self) {
+        self.refer_suppressed = false;
         if let Some(next) = self.input[self.cursor..].chars().next() {
             self.cursor += next.len_utf8();
             self.refresh_panel();
@@ -619,6 +639,7 @@ impl Lx {
 
     /// 光标移到当前视觉行行首。
     pub fn home(&mut self) {
+        self.refer_suppressed = false;
         let rows = self.visual_rows();
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = rows[index].start;
@@ -627,6 +648,7 @@ impl Lx {
 
     /// 光标移到当前视觉行行尾。
     pub fn end(&mut self) {
+        self.refer_suppressed = false;
         let rows = self.visual_rows();
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = rows[index].end;
@@ -635,6 +657,7 @@ impl Lx {
 
     /// 光标上移一个视觉行（保持显示列，越界钳到行尾）。
     pub fn move_up(&mut self) {
+        self.refer_suppressed = false;
         let rows = self.visual_rows();
         let (index, col) = self.cursor_visual_in(&rows);
         if index == 0 {
@@ -649,6 +672,7 @@ impl Lx {
 
     /// 光标下移一个视觉行（保持显示列，越界钳到行尾）。
     pub fn move_down(&mut self) {
+        self.refer_suppressed = false;
         let rows = self.visual_rows();
         let (index, col) = self.cursor_visual_in(&rows);
         if index + 1 >= rows.len() {

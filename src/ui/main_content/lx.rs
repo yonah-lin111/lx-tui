@@ -19,10 +19,12 @@ use crate::ui::{style, text};
 mod ask;
 mod input;
 mod mention;
+mod refer;
 mod selection;
 
 pub(crate) use ask::{ask_editor_cell_at, rect as ask_rect};
 pub(crate) use mention::{item_at as mention_item_at, layout as mention_layout};
+pub(crate) use refer::item_at as refer_item_at;
 pub use selection::copy_text;
 pub(crate) use selection::{content_geom, unit_cell_range};
 
@@ -121,6 +123,7 @@ pub fn render(
     // 提及面板浮于基础内容之上、贴输入框上沿；与粘贴面板互斥。
     mention::render(area, buf, lx);
     render_paste_panel(area, buf, lx);
+    refer::render(area, buf, lx);
     render_slash_panel(area, buf, lx);
     // 本页 toast 最后画：盖住历史、输入框与上述所有浮层，但**只在窗格内容区内**。
     // 全局 toast 覆盖层不再承载 lx 反馈（见 `app::state::Lx::toast`）。

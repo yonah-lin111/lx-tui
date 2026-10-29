@@ -3943,12 +3943,71 @@ fn refer_panel_routes_keys_before_slash_and_edits() {
     assert!(state.prompt.refer_panel().is_some());
     apply_editor(&mut state, EditorCommand::Newline);
     assert!(
-        state.prompt.text().ends_with("@ref/abc "),
-        "回车确认快捷候选并插入短格式: {}",
+        state.prompt.text().ends_with("@[ref-content]/abc "),
+        "回车确认快捷候选并插入快捷格式: {}",
         state.prompt.text()
     );
     state.prompt.undo();
     assert!(state.prompt.text().ends_with("\nac"), "单步撤销回触发词");
+}
+
+#[test]
+fn lx_refer_panel_triggers_confirms_and_quick_deletes() {
+    let mut state = AppState::demo();
+    if let Some(pane) = state.active_pane_mut() {
+        pane.lx
+            .chat
+            .messages
+            .push(crate::app::state::ChatMessageView {
+                sequence: 0,
+                id: "msg1".into(),
+                role: "user".into(),
+                status: "complete".into(),
+                turn_index: 0,
+                kind: "chat".into(),
+                shell: None,
+                steps: Vec::new(),
+                model_label: None,
+                error_code: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                duration_ms: None,
+                reports: Vec::new(),
+                attachments: vec![crate::db::chat::MessageAttachmentMeta {
+                    id: "att".into(),
+                    position: 0,
+                    kind: crate::db::chat::MessageAttachmentKind::File,
+                    label: "src/main.rs".into(),
+                    marker_start: None,
+                    marker_end: None,
+                    source_path: Some("src/main.rs".into()),
+                    mime: None,
+                    width: None,
+                    height: None,
+                }],
+            });
+    }
+
+    apply_lx_input(&mut state, LxInput::Char('m'));
+    apply_lx_input(&mut state, LxInput::Char('a'));
+    assert!(
+        state
+            .active_pane()
+            .expect("pane")
+            .lx
+            .refer_panel()
+            .is_some()
+    );
+
+    apply_lx_input(&mut state, LxInput::Enter);
+    let pane = state.active_pane().expect("pane");
+    assert_eq!(pane.lx.input, "@[ref-content]/src/main.rs ");
+    assert!(pane.lx.refer_panel().is_none());
+
+    // 快捷删除：空格后按退格，整块删除
+    apply_lx_input(&mut state, LxInput::Backspace);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "");
 }
 
 #[test]

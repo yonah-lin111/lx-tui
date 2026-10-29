@@ -165,3 +165,34 @@ fn prepare_sorts_attachments_by_marker_order_and_skips_inline_code() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn prepare_parses_ref_content_and_keeps_in_display_text() {
+    let dir = temp_dir("ref-content");
+    std::fs::write(dir.join("test.rs"), "fn hello() {}").expect("write test");
+
+    let text = "Check @[ref-content]/test.rs now";
+    let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
+    assert_eq!(prepared.attachments.len(), 1);
+    assert_eq!(prepared.attachments[0].label, "@[ref-content]/test.rs");
+    assert_eq!(prepared.attachments[0].kind, MessageAttachmentKind::File);
+
+    let metas = vec![crate::db::chat::MessageAttachmentMeta {
+        id: "1".into(),
+        position: 0,
+        kind: MessageAttachmentKind::File,
+        label: "@[ref-content]/test.rs".into(),
+        marker_start: prepared.attachments[0].marker_start,
+        marker_end: prepared.attachments[0].marker_end,
+        source_path: Some("test.rs".into()),
+        mime: None,
+        width: None,
+        height: None,
+    }];
+
+    // 快捷引用不从展示文本中被剥离
+    let display_text = strip_references_for_display(text, &metas);
+    assert_eq!(display_text, "Check @[ref-content]/test.rs now");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

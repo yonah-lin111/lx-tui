@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use super::{
     MentionEntry, ParsedReference, ReferKind, TemplateLineInfo, TemplateLineRole, parse_references,
-    parse_references_in, short_ref_marker, short_ref_name, template_line_infos,
+    parse_references_in, template_line_infos,
 };
 
 /// 候选展示条数上限。
@@ -295,8 +295,9 @@ pub fn refer_candidates(
     trigger: &Range<usize>,
     entries: &[MentionEntry],
 ) -> Vec<ReferCandidate> {
-    /// 一条来源：`@ref/` 短引用、`@` 提及的整段区间或完整的引用标记。
+    /// 一条来源：`@[ref-content]/` 引用、`@ref/` 短引用、`@` 提及的整段区间或完整的引用标记。
     enum Source<'a> {
+        RefContent(Range<usize>),
         Short(Range<usize>),
         Mention(Range<usize>),
         Reference(&'a ParsedReference),
@@ -312,16 +313,23 @@ pub fn refer_candidates(
         .into_iter()
         .filter(|reference| in_scope(&reference.range))
         .collect();
+    let ref_content_ranges: Vec<Range<usize>> = super::ref_content_ranges(text)
+        .into_iter()
+        .filter(|range| in_scope(range))
+        .collect();
     let short_ranges: Vec<Range<usize>> = super::short_ref_ranges(text)
         .into_iter()
         .filter(|range| in_scope(range))
         .collect();
-    // 短引用区间从提及区间里剔除，避免同一个 `@` 被算两次。
+    // 短引用与 ref-content 区间从提及区间里剔除，避免同一个 `@` 被算两次。
     let mut sources: Vec<(usize, Source<'_>)> = super::mention_token_ranges(text)
         .into_iter()
         .filter(|range| {
             in_scope(range)
                 && !overlaps(range)
+                && !ref_content_ranges
+                    .iter()
+                    .any(|rc| rc.start <= range.start && range.end <= rc.end)
                 && !short_ranges
                     .iter()
                     .any(|short| short.start <= range.start && range.end <= short.end)
@@ -335,6 +343,12 @@ pub fn refer_candidates(
             .map(|reference| (reference.range.start, Source::Reference(reference))),
     );
     sources.extend(
+        ref_content_ranges
+            .into_iter()
+            .filter(|range| !overlaps(range))
+            .map(|range| (range.start, Source::RefContent(range))),
+    );
+    sources.extend(
         short_ranges
             .into_iter()
             .filter(|range| !overlaps(range))
@@ -344,6 +358,21 @@ pub fn refer_candidates(
     let mut candidates: Vec<ReferCandidate> = Vec::new();
     for (_, source) in sources {
         match source {
+            Source::RefContent(range) => {
+                let raw = &text[range];
+                let Some(body) = raw.strip_prefix(super::REF_CONTENT_PREFIX) else {
+                    continue;
+                };
+                let folder = body.ends_with('/');
+                let path = body.trim_end_matches('/');
+                let name = path.rsplit('/').next().unwrap_or(path).to_string();
+                let tag = if folder {
+                    ReferTag::Folder
+                } else {
+                    ReferTag::File
+                };
+                push_unique(&mut candidates, raw, &name, path, tag);
+            }
             Source::Mention(range) => {
                 let raw = &text[range];
                 let (path, folder) = match raw.strip_prefix('@') {
@@ -552,22 +581,10 @@ fn subsequence_span(haystack: &str, needle: &str) -> Option<u32> {
     None
 }
 
-/// 确认替换文本：候选短名加尾随空格，便于继续输入。
-///
-/// 插入的是 `@ref/末两段` 短格式（见 [`super::short_ref`]），不是候选完整原文——
-/// 完整路径在文档里已有登记，短名只是同一片段内的简称。短名无法生成时回退完整原文。
+/// 确认替换文本：候选统一插入 @[ref-content]/<相对路径> 加尾随空格，便于继续输入。
 pub fn refer_insertion(candidate: &ReferCandidate) -> String {
-    let insertion = short_ref_marker(
-        &short_ref_candidate_name(candidate),
-        candidate.is_directory(),
-    )
-    .unwrap_or_else(|| candidate.text.clone());
+    let insertion = super::format_ref_content(&candidate.path, candidate.is_directory());
     format!("{insertion} ")
-}
-
-/// 候选的短名：取路径末两段（引用与提及都按候选 `path` 计算）。
-fn short_ref_candidate_name(candidate: &ReferCandidate) -> String {
-    short_ref_name(&candidate.path).unwrap_or_else(|| candidate.name.clone())
 }
 
 #[cfg(test)]

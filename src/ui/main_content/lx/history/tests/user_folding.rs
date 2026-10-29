@@ -194,3 +194,41 @@ fn user_message_renders_reference_tree_without_user_background() {
     assert_eq!(label3_cell.ch, 'e');
     assert_eq!(label3_cell.style.fg, Some(Color::LightMagenta));
 }
+
+#[test]
+fn user_message_filters_ref_content_from_reference_tree_at_bottom() {
+    let mut msg = user_msg_with_text("u1", "Check this: @[ref-content]/src/ui/");
+    msg.attachments = vec![
+        MessageAttachmentMeta {
+            id: "att-1".into(),
+            position: 0,
+            kind: MessageAttachmentKind::File,
+            label: "src/main.rs".into(),
+            marker_start: None,
+            marker_end: None,
+            source_path: Some("src/main.rs".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+        MessageAttachmentMeta {
+            id: "att-2".into(),
+            position: 1,
+            kind: MessageAttachmentKind::Folder,
+            label: "@[ref-content]/src/ui/".into(),
+            marker_start: Some(12),
+            marker_end: Some(37),
+            source_path: Some("src/ui".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+    ];
+
+    let lx = lx_with(vec![msg]);
+    let mut cache = cache();
+    let snap = cache.snapshot(60, &lx);
+
+    // 正文 1 行（保留 @[ref-content]/src/ui/）+ 仅 1 行常规附件（src/main.rs），过滤掉 ref-content = 总共 2 行
+    assert_eq!(snap.entries[0].blocks[0].rows, 2);
+}

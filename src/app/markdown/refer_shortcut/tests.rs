@@ -228,7 +228,7 @@ fn panel_wraps_highlight() {
 }
 
 #[test]
-fn insertion_uses_short_ref_with_trailing_space() {
+fn insertion_uses_ref_content_with_trailing_space() {
     let candidate = ReferCandidate {
         text: "@abc".to_string(),
         name: "abc".to_string(),
@@ -236,7 +236,7 @@ fn insertion_uses_short_ref_with_trailing_space() {
         tag: ReferTag::File,
         order: 0,
     };
-    assert_eq!(refer_insertion(&candidate), "@ref/b/abc.md ");
+    assert_eq!(refer_insertion(&candidate), "@[ref-content]/a/b/abc.md ");
 
     let folder = ReferCandidate {
         text: "@[refer-folder](/x/y/z)".to_string(),
@@ -245,7 +245,11 @@ fn insertion_uses_short_ref_with_trailing_space() {
         tag: ReferTag::Refer(ReferKind::Folder),
         order: 0,
     };
-    assert_eq!(refer_insertion(&folder), "@ref/y/z/ ", "文件夹带尾斜杠");
+    assert_eq!(
+        refer_insertion(&folder),
+        "@[ref-content]/x/y/z/ ",
+        "文件夹带尾斜杠"
+    );
 
     let single = ReferCandidate {
         text: "@main.rs".to_string(),
@@ -256,8 +260,8 @@ fn insertion_uses_short_ref_with_trailing_space() {
     };
     assert_eq!(
         refer_insertion(&single),
-        "@ref/main.rs ",
-        "单段路径也能短化"
+        "@[ref-content]/main.rs ",
+        "单段路径也使用完整相对路径"
     );
 }
 
@@ -376,8 +380,8 @@ fn candidates_dedupe_when_mention_and_short_ref_refer_to_same_folder() {
     );
     assert_eq!(
         refer_insertion(&filtered[0]),
-        "@ref/feature/prompt-per-workspace/ ",
-        "确认插入结果仍为规范短引用"
+        "@[ref-content]/docs/feature/prompt-per-workspace/ ",
+        "确认插入结果仍为规范快捷引用"
     );
 }
 

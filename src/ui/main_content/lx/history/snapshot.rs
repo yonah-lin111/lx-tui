@@ -568,12 +568,19 @@ impl Builder<'_> {
                     } else {
                         (wrapped, None)
                     };
-                    let ref_lines = message
+                    let display_attachments: Vec<_> = message
                         .attachments
+                        .iter()
+                        .filter(|att| {
+                            !att.label
+                                .starts_with(crate::app::markdown::REF_CONTENT_PREFIX)
+                        })
+                        .collect();
+                    let ref_lines = display_attachments
                         .iter()
                         .enumerate()
                         .map(|(i, att)| UserRefLine {
-                            is_last: i + 1 == message.attachments.len(),
+                            is_last: i + 1 == display_attachments.len(),
                             kind: att.kind,
                             label: att.label.clone(),
                         })

@@ -616,6 +616,14 @@ pub(crate) fn handle_mouse_down_left(
                     *dirty = true;
                     return;
                 }
+                let refer_hit = state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::refer_item_at(inner, &target.lx, mouse.column, mouse.row)
+                });
+                if let Some(index) = refer_hit {
+                    update::select_lx_refer(state, pane, index);
+                    *dirty = true;
+                    return;
+                }
                 // 聊天控件：thinking 折叠头部 / 停止按钮 / 历史入口。
                 let chat_hit = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::chat_hit(
