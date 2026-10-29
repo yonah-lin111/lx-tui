@@ -550,7 +550,7 @@ fn sanitize_control(text: &str) -> String {
 /// - 其他工具状态（pending/running/cancelled/interrupted）→ 不产生任何 item。
 ///
 /// 不变量：结果必须紧邻其调用，且任何文本都不得插进这一对之间（禁止 orphan result）。
-fn assistant_items(message: &ChatMessage) -> Vec<ModelItem> {
+pub(crate) fn assistant_items(message: &ChatMessage) -> Vec<ModelItem> {
     /// 合并后的时间线步骤（借用消息内的 part / tool）。
     enum Step<'a> {
         Part(&'a crate::db::chat::ChatPart),

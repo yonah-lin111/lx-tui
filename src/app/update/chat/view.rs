@@ -104,10 +104,7 @@ fn tool_view_of(tool: &ToolCallRecord) -> ToolCallView {
     // 详见 design §14.6。
     // 文件工具的差异详情与进程/计划同源：都从落库 JSON 解码；文件分支缺失时
     // `from_result_json` 返回 None，卡片沿用原两行摘要。
-    let detail = if matches!(
-        tool.name.as_str(),
-        "spawn_agent" | "wait_agent" | "close_agent"
-    ) {
+    let detail = if crate::chat::tools::SUBAGENT_TOOL_NAMES.contains(&tool.name.as_str()) {
         crate::app::state::SubagentDetailView::from_tool(
             &tool.name,
             &tool.arguments_json,

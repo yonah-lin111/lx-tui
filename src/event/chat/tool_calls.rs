@@ -367,14 +367,7 @@ pub(crate) fn detail_of(
         ToolExecutionResult::Subagent(outcome) => {
             crate::app::state::SubagentDetailView::from_outcome_with_arguments(
                 &outcome.to_json(),
-                Some((
-                    match outcome.as_ref() {
-                        crate::chat::agent::SubagentOutcome::Spawned { .. } => "spawn_agent",
-                        crate::chat::agent::SubagentOutcome::Waited { .. } => "wait_agent",
-                        crate::chat::agent::SubagentOutcome::Closed { .. } => "close_agent",
-                    },
-                    arguments_json.unwrap_or("{}"),
-                )),
+                Some((outcome.tool_name(), arguments_json.unwrap_or("{}"))),
             )
             .map(crate::app::state::ToolDetailView::Subagent)
         }

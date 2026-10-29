@@ -16,9 +16,14 @@ fn tool_order_and_names_are_fixed() {
             "write_stdin",
             "update_plan",
             "ask",
+            "curr_time",
             "spawn_agent",
+            "send_input",
+            "resume_agent",
             "wait_agent",
-            "close_agent"
+            "close_agent",
+            "list_agents",
+            "cancel_agent_input",
         ]
     );
 }
@@ -78,10 +83,7 @@ fn subagent_schemas_are_strict_and_use_constants() {
     };
     let spawn = spec("spawn_agent");
     assert_eq!(spawn["additionalProperties"], false);
-    assert_eq!(
-        spawn["required"],
-        serde_json::json!(["role", "title", "task"])
-    );
+    assert_eq!(spawn["required"], serde_json::json!(["role", "title"]));
     assert_eq!(
         spawn["properties"]["title"]["maxLength"],
         crate::chat::agent::MAX_TITLE_CHARS
@@ -91,6 +93,7 @@ fn subagent_schemas_are_strict_and_use_constants() {
         serde_json::json!(["explorer", "executor"])
     );
     assert_eq!(spawn["properties"]["task"]["maxLength"], MAX_TASK_CHARS);
+    assert!(spawn["properties"]["items"].is_object());
 
     let wait = spec("wait_agent");
     assert_eq!(wait["additionalProperties"], false);

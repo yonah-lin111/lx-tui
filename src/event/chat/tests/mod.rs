@@ -41,13 +41,13 @@ use crate::db::service::Persistence;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// 一次测试的独立临时目录（DB 与工作区都在里面）；drop 时递归删除。
-struct Fixture {
+pub(super) struct Fixture {
     root: PathBuf,
     workspace: PathBuf,
 }
 
 impl Fixture {
-    fn new(label: &str) -> Self {
+    pub(super) fn new(label: &str) -> Self {
         let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "lx-agent-e2e-{}-{label}-{sequence}",
@@ -63,7 +63,7 @@ impl Fixture {
         self.root.join("lx.db")
     }
 
-    fn workspace(&self) -> &Path {
+    pub(super) fn workspace(&self) -> &Path {
         &self.workspace
     }
 
@@ -142,7 +142,7 @@ fn models_with() -> crate::app::state::ModelsSnapshot {
 /// 走完「按下 Enter + DB ack」：状态进入 Streaming，并登记事件层要求的冻结工作区。
 ///
 /// 返回（状态，request key，持久化服务，DB 生成的会话 id）。
-fn streaming_state(fixture: &Fixture) -> (AppState, RequestKey, Persistence, String) {
+pub(super) fn streaming_state(fixture: &Fixture) -> (AppState, RequestKey, Persistence, String) {
     let database = fixture.database();
     let mut state = AppState::demo();
     state.active_workspace_mut().cwd = Some(fixture.workspace().to_path_buf());

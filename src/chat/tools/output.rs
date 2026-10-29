@@ -62,6 +62,9 @@ pub fn format_for_model(result: &ToolExecutionResult) -> String {
         ToolExecutionResult::Plan(snapshot) => format_plan(snapshot),
         ToolExecutionResult::Ask { questions } => format_ask(questions),
         ToolExecutionResult::Subagent(outcome) => format_subagent(outcome),
+        ToolExecutionResult::CurrentTime { current_time } => {
+            format!("current_time: {current_time}\n")
+        }
         ToolExecutionResult::Failed {
             code,
             message,
@@ -200,6 +203,23 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
              use `wait_agent` when you need its result.\n",
             role.as_str()
         ),
+        SubagentOutcome::InputAccepted {
+            submission_id,
+            agent_id,
+            status,
+            queued_count,
+            interrupt,
+        } => format!(
+            "Accepted input `{submission_id}` for subagent `{agent_id}` \
+             (status={status}, queued_count={queued_count}, interrupt={interrupt}).\n"
+        ),
+        SubagentOutcome::Resumed {
+            agent_id,
+            status,
+            queued_count,
+        } => format!(
+            "Resumed subagent `{agent_id}` (status={status}, queued_count={queued_count}).\n"
+        ),
         SubagentOutcome::Waited {
             timed_out, agents, ..
         } => {
@@ -226,6 +246,31 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
             previous_status,
         } => format!(
             "Closed subagent `{agent_id}` (was {previous_status}). It produced no report.\n"
+        ),
+        SubagentOutcome::Listed { agents } => {
+            if agents.is_empty() {
+                return "agents: (none)\n".to_string();
+            }
+            let mut text = format!("agents: {}\n", agents.len());
+            for agent in agents {
+                text.push_str(&format!(
+                    "- agent_id={} role={} status={} queued_count={} title={:?}\n",
+                    agent.agent_id,
+                    agent.role.as_str(),
+                    agent.status,
+                    agent.queued_count,
+                    agent.title
+                ));
+            }
+            text
+        }
+        SubagentOutcome::InputCancelled {
+            submission_id,
+            agent_id,
+            status,
+            queued_count,
+        } => format!(
+            "submission_id={submission_id} agent_id={agent_id} status={status} queued_count={queued_count}\n"
         ),
     }
 }
@@ -489,6 +534,10 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
         | ToolExecutionResult::Plan(_)
         | ToolExecutionResult::Ask { .. }
         | ToolExecutionResult::Subagent(_) => ToolSummary::default(),
+        ToolExecutionResult::CurrentTime { current_time } => ToolSummary {
+            path: Some(current_time.clone()),
+            ..ToolSummary::default()
+        },
     }
 }
 
@@ -578,6 +627,10 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
         ToolExecutionResult::Process(result) => result.to_json(),
         ToolExecutionResult::Plan(snapshot) => snapshot.to_json(),
         ToolExecutionResult::Subagent(outcome) => outcome.to_json(),
+        ToolExecutionResult::CurrentTime { current_time } => json!({
+            "tool": "curr_time",
+            "current_time": current_time,
+        }),
         ToolExecutionResult::Ask { questions } => json!({
             "tool": "ask",
             "questions": questions

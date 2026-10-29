@@ -133,3 +133,96 @@ fn archive_session_image_stores_under_session_id_and_prunes_after_30_days() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn data_url_and_strict_archive_verify_roundtrip_and_tamper_detection() {
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!(
+        "lx-strict-archive-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let images_root = dir.join("images");
+    std::fs::create_dir_all(&images_root).expect("images root");
+
+    let png = create_test_png(24, 16);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+    let data_url = format!("data:image/png;base64,{b64}");
+
+    let processed = process_data_url_image(&data_url, 0).expect("valid data url");
+    assert_eq!(processed.mime, "image/png");
+    assert_eq!(processed.width, 24);
+    assert_eq!(processed.height, 16);
+
+    // 伪装 MIME（文本内容挂 image/png 头）必须被真实格式检测拒绝
+    let fake_b64 = base64::engine::general_purpose::STANDARD.encode(b"not a real png image");
+    let fake_url = format!("data:image/png;base64,{fake_b64}");
+    assert_eq!(
+        process_data_url_image(&fake_url, 0).unwrap_err(),
+        ImagePrepareError::NotAnImage
+    );
+
+    // 非图像 MIME 拒绝
+    let text_url = format!("data:text/plain;base64,{b64}");
+    assert_eq!(
+        process_data_url_image(&text_url, 0).unwrap_err(),
+        ImagePrepareError::NotAnImage
+    );
+
+    // 严格归档并校验
+    let archived =
+        archive_processed_image_in(&images_root, "sess-child-1", &processed).expect("archive");
+    assert!(
+        archived
+            .archive_path
+            .starts_with(images_root.join("sess-child-1"))
+    );
+    let verified = verify_archived_image_in(
+        &images_root,
+        "sess-child-1",
+        &archived.archive_path,
+        &archived.mime,
+        &archived.content_hash,
+        archived.width,
+        archived.height,
+    )
+    .expect("verify ok");
+    assert_eq!(verified, archived.bytes);
+
+    // 跨会话目录路径拒绝
+    assert!(
+        verify_archived_image_in(
+            &images_root,
+            "sess-other",
+            &archived.archive_path,
+            &archived.mime,
+            &archived.content_hash,
+            archived.width,
+            archived.height,
+        )
+        .is_err()
+    );
+
+    // 篡改归档文件内容（摘要不符）必须拒绝
+    let other_png = create_test_png(24, 16);
+    let mut tampered = other_png;
+    tampered.push(0);
+    std::fs::write(&archived.archive_path, &tampered).expect("tamper");
+    assert!(
+        verify_archived_image_in(
+            &images_root,
+            "sess-child-1",
+            &archived.archive_path,
+            &archived.mime,
+            &archived.content_hash,
+            archived.width,
+            archived.height,
+        )
+        .is_err()
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

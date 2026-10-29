@@ -28,8 +28,10 @@ pub struct SubagentRun {
     pub title: String,
     /// 任务原文（只用于 live 种子消息；历史从 DB 消息流加载）。
     pub task: String,
-    /// `running` / `completed` / `failed` / `cancelled`。
+    /// `running` / `idle` / `blocked` / `completed` / `failed` / `cancelled` / `interrupted`。
     pub status: String,
+    /// 当前未处理的排队输入数。
+    pub queued_count: usize,
     /// 启动时刻（UTC 毫秒）。
     pub started_at_ms: i64,
     /// 结束时刻（运行中为 None）。
@@ -70,6 +72,7 @@ impl SubagentRun {
             // 旧记录没有单独 title；这里不拿 task 首行冒充标题，保持为空。
             task: record.title.clone(),
             status: record.status.clone(),
+            queued_count: 0,
             started_at_ms: record.created_at_ms,
             completed_at_ms: record.completed_at_ms,
             chat: LxChat::new(),

@@ -127,8 +127,9 @@ pub enum AgentHostRequest {
     },
     /// 下一次采样前取已落库的本地命令结果（按提交序的连续终态前缀）。
     UserShellUpdates { reply: oneshot::Sender<Vec<String>> },
-    /// 子 agent 控制工具（spawn / wait / close）。
+    /// 子 agent 控制工具（spawn / send_input / resume / wait / close / list / cancel_input）。
     Subagent {
+        call_id: Option<String>,
         op: crate::chat::agent::SubagentOp,
         reply: oneshot::Sender<Result<crate::chat::agent::SubagentOutcome, HostError>>,
     },
@@ -217,9 +218,21 @@ pub trait AgentHost: Send {
     where
         Self: Sized,
     {
+        self.subagent_with_call(None, op)
+    }
+
+    /// 携带外层工具 `call_id` 执行子 agent 控制操作（用于入队幂等去重键）。
+    fn subagent_with_call(
+        &mut self,
+        call_id: Option<String>,
+        op: crate::chat::agent::SubagentOp,
+    ) -> impl Future<Output = Result<crate::chat::agent::SubagentOutcome, HostError>> + Send
+    where
+        Self: Sized,
+    {
         async move {
             let (reply, receiver) = oneshot::channel();
-            self.send(AgentHostRequest::Subagent { op, reply });
+            self.send(AgentHostRequest::Subagent { call_id, op, reply });
             match receiver.await {
                 Ok(result) => result,
                 Err(_) => Err(HostError::Cancelled),
@@ -241,10 +254,19 @@ pub trait AgentHost: Send {
         }
     }
 
-    /// 子 agent 完成一次运行时自动压缩：事件层据此更新面板里的 compact 条目。
+    /// 子 agent 完成一次运行时自动压缩：事件层持久化检查点并更新面板里的 compact 条目。
     ///
-    /// 默认空实现（测试 host 不需要 UI）；生产 host 发一条纯数据事件即可。
-    fn notify_auto_compact(&mut self, _notice: &AutoCompactNotice) {}
+    /// 默认空实现直接返回 `Ok(())`（无 DB 的单元测试 host 不需要持久化）；
+    /// 生产 host 等待事件层完成 DB 检查点写入后才允许丢弃旧 items。
+    fn notify_auto_compact(
+        &mut self,
+        _notice: &AutoCompactNotice,
+    ) -> impl Future<Output = Result<(), HostError>> + Send
+    where
+        Self: Sized,
+    {
+        async { Ok(()) }
+    }
 }
 
 /// 工具执行入口：生产实现走 `spawn_blocking`；测试可注入可控执行器。
@@ -379,8 +401,10 @@ pub struct ModelContext {
     runtime_summary: Option<String>,
     /// 模型上下文上限（token）；None 时用 [`FALLBACK_CONTEXT_LIMIT_TOKENS`]。
     context_limit: Option<u64>,
-    /// 运行时自动压缩生成的摘要；非空时注入系统提示，替代被丢掉的旧 items。
+    /// 运行时自动压缩或持久化检查点恢复的摘要；非空时注入系统提示，替代被丢掉的旧 items。
     compact_summary: Option<String>,
+    /// 上一次自动压缩失败时的 items 数量（避免同一批 items 压缩失败后死循环重试）。
+    last_failed_compact_items: Option<usize>,
 }
 
 impl ModelContext {
@@ -394,6 +418,7 @@ impl ModelContext {
             runtime_summary: None,
             context_limit: None,
             compact_summary: None,
+            last_failed_compact_items: None,
         }
     }
 
@@ -407,6 +432,17 @@ impl ModelContext {
     pub fn with_context_limit(mut self, limit: Option<u64>) -> Self {
         self.context_limit = limit.filter(|value| *value > 0);
         self
+    }
+
+    /// 注入已持久化的自动压缩摘要检查点（子 agent 多轮恢复时使用）。
+    pub fn with_compact_summary(mut self, summary: Option<String>) -> Self {
+        self.compact_summary = summary.filter(|text| !text.trim().is_empty());
+        self
+    }
+
+    /// 当前生效的压缩摘要（测试与诊断用）。
+    pub fn compact_summary(&self) -> Option<&str> {
+        self.compact_summary.as_deref()
     }
 
     /// 冻结的工作区根。
@@ -464,14 +500,29 @@ impl ModelContext {
         let Some(summary) = self.runtime_summary.take() else {
             return;
         };
-        let Some(ModelItem::UserText(text) | ModelItem::UserContent { text, .. }) =
-            self.items.last_mut()
-        else {
-            // 末尾不是用户消息（理论上不会发生）：不伪造位置，直接放弃摘要。
-            return;
-        };
-        text.push_str("\n\n");
-        text.push_str(&summary);
+        match self.items.last_mut() {
+            Some(ModelItem::UserText(text)) => {
+                if !text.is_empty() {
+                    text.push_str("\n\n");
+                }
+                text.push_str(&summary);
+            }
+            Some(ModelItem::UserContent { text, images }) if images.is_empty() => {
+                if !text.is_empty() {
+                    text.push_str("\n\n");
+                }
+                text.push_str(&summary);
+            }
+            Some(ModelItem::UserContent { .. }) => {
+                self.items.push(ModelItem::UserContent {
+                    text: summary,
+                    images: Vec::new(),
+                });
+            }
+            _ => {
+                // 末尾不是用户消息（理论上不会发生）：不伪造位置，直接放弃摘要。
+            }
+        }
     }
 
     /// 追加一次模型响应：可见正文（若有）按出现顺序合并为一条 assistant 文本，
@@ -647,7 +698,10 @@ where
                 } else {
                     match parsed {
                         Err(failure) => failure.into_result(Vec::new()),
-                        Ok(op) => match host.subagent(op).await {
+                        Ok(op) => match host
+                            .subagent_with_call(Some(call.call_id.clone()), op)
+                            .await
+                        {
                             Ok(outcome) => outcome.into_result(),
                             Err(HostError::Cancelled) => {
                                 let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;

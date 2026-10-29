@@ -505,3 +505,351 @@ fn v15_upgrade_adds_columns_and_keeps_data() {
     assert_eq!(integrity, "ok");
     cleanup(root);
 }
+
+#[test]
+fn v18_upgrade_migrates_legacy_reports_and_creates_queue_tables() {
+    let fixture = Fixture::new("v18-upgrade");
+    let parent = fixture.parent();
+    let first = fixture.spawn(&parent, AgentRole::Explorer, "first task");
+    let second = fixture.spawn(&parent, AgentRole::Executor, "second task");
+    fixture.finish_child(
+        &first,
+        TurnOutcome::Complete { stop_reason: None },
+        Some(&report()),
+    );
+    fixture.finish_child(
+        &second,
+        TurnOutcome::Complete { stop_reason: None },
+        Some(&report()),
+    );
+    fixture
+        .database
+        .mark_report_delivered(fixture.workspace(), &first.agent_id)
+        .expect("mark first delivered");
+    // 模拟 v18 库：删掉 v19 新增三表并回退 user_version = 18。
+    fixture
+        .database
+        .connection()
+        .execute_batch(
+            "DROP TABLE agent_subagent_input_item;
+             DROP TABLE agent_subagent_input;
+             DROP TABLE agent_subagent_report;
+             PRAGMA user_version = 18;",
+        )
+        .expect("downgrade to v18");
+    let Fixture {
+        root,
+        workspace,
+        database,
+    } = fixture;
+    drop(database);
+
+    let database = Database::open(&root.join("lx.db")).expect("reopen v18");
+    let version: i64 = database
+        .connection()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    assert_eq!(version, 19);
+
+    let pending = database
+        .pending_reports(&workspace, &parent)
+        .expect("pending reports");
+    assert_eq!(
+        pending.len(),
+        1,
+        "已投递的 legacy 报告不得重复进入 pending，未投递的保留"
+    );
+    assert_eq!(pending[0].agent_id, second.agent_id);
+    cleanup(root);
+}
+
+#[test]
+fn enqueue_claim_cancel_and_interrupt_priority_ordering() {
+    let fixture = Fixture::new("queue-order");
+    let parent = fixture.parent();
+    let committed = fixture.spawn(&parent, AgentRole::Executor, "initial task");
+    fixture.finish_child(
+        &committed,
+        TurnOutcome::Complete { stop_reason: None },
+        Some(&report()),
+    );
+
+    // 同一 dedupe_key 重复提交幂等，只生成一条输入记录
+    let items_a = vec![PersistedInputItem::Text {
+        text: "normal 1".into(),
+    }];
+    let first = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "dedupe-1",
+            Some("call-1"),
+            None,
+            &items_a,
+            false,
+        )
+        .expect("enqueue 1");
+    assert!(first.created);
+    assert_eq!(first.queued_count, 1);
+
+    let duplicate = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "dedupe-1",
+            Some("call-1"),
+            None,
+            &items_a,
+            false,
+        )
+        .expect("enqueue dup");
+    assert!(!duplicate.created);
+    assert_eq!(duplicate.submission_id, first.submission_id);
+    assert_eq!(duplicate.queued_count, 1);
+
+    // 普通排队 #2
+    let second = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "dedupe-2",
+            Some("call-2"),
+            None,
+            &[PersistedInputItem::Text {
+                text: "normal 2".into(),
+            }],
+            false,
+        )
+        .expect("enqueue 2");
+    assert_eq!(second.queued_count, 2);
+
+    // 连续两条 interrupt=true 输入：按提交序排在普通队列之前
+    let int_1 = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "dedupe-int-1",
+            Some("call-3"),
+            None,
+            &[PersistedInputItem::Text {
+                text: "interrupt 1".into(),
+            }],
+            true,
+        )
+        .expect("enqueue int 1");
+    let int_2 = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "dedupe-int-2",
+            Some("call-4"),
+            None,
+            &[PersistedInputItem::Text {
+                text: "interrupt 2".into(),
+            }],
+            true,
+        )
+        .expect("enqueue int 2");
+    assert_eq!(int_2.queued_count, 4);
+
+    // 取消 second（queued -> cancelled），重复取消幂等
+    let (_, status, remaining) = fixture
+        .database
+        .cancel_input(fixture.workspace(), &parent, &second.submission_id)
+        .expect("cancel")
+        .expect("found");
+    assert_eq!(status, "cancelled");
+    assert_eq!(remaining, 3);
+    let (_, status_again, _) = fixture
+        .database
+        .cancel_input(fixture.workspace(), &parent, &second.submission_id)
+        .expect("cancel again")
+        .expect("found");
+    assert_eq!(status_again, "cancelled");
+
+    // 依次取队首并认领：顺序必须是 int_1 -> int_2 -> first
+    for expected_id in [
+        &int_1.submission_id,
+        &int_2.submission_id,
+        &first.submission_id,
+    ] {
+        let head = fixture
+            .database
+            .next_queued_input(fixture.workspace(), &parent, &committed.agent_id)
+            .expect("next")
+            .expect("some");
+        assert_eq!(&head.submission_id, expected_id);
+        let claimed = fixture
+            .database
+            .claim_input(
+                fixture.workspace(),
+                &parent,
+                &committed.agent_id,
+                &head.submission_id,
+                &Fixture::model(),
+            )
+            .expect("claim");
+        // running 状态下调用 cancel_input 不回滚，返回当前状态 running
+        let (_, running_status, _) = fixture
+            .database
+            .cancel_input(fixture.workspace(), &parent, &claimed.submission_id)
+            .expect("cancel running")
+            .expect("found");
+        assert_eq!(running_status, "running");
+
+        fixture
+            .database
+            .finish_subagent_turn(
+                fixture.workspace(),
+                &committed.agent_id,
+                &claimed.child_assistant_id,
+                &[part(0, "turn done")],
+                &TurnOutcome::Complete { stop_reason: None },
+                Usage::default(),
+                Some(&report()),
+            )
+            .expect("finish turn");
+    }
+    assert!(
+        fixture
+            .database
+            .next_queued_input(fixture.workspace(), &parent, &committed.agent_id)
+            .expect("empty")
+            .is_none()
+    );
+    // 4 轮完成共生成 4 条独立报告
+    let reports = fixture
+        .database
+        .pending_reports(fixture.workspace(), &parent)
+        .expect("pending reports");
+    assert_eq!(reports.len(), 4);
+    cleanup(fixture.root);
+}
+
+#[test]
+fn queued_input_images_are_included_in_referenced_attachment_paths() {
+    let fixture = Fixture::new("ref-paths");
+    let parent = fixture.parent();
+    let committed = fixture.spawn(&parent, AgentRole::Explorer, "look");
+    let archive_path = "/tmp/lx-test-archived-subagent-img.png".to_string();
+    fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "dedupe-img",
+            Some("call-img"),
+            None,
+            &[
+                PersistedInputItem::Text {
+                    text: "check this".into(),
+                },
+                PersistedInputItem::Image {
+                    label: "bug.png".into(),
+                    archive_path: archive_path.clone(),
+                    mime: "image/png".into(),
+                    content_hash: "0123456789abcdef".into(),
+                    width: 16,
+                    height: 16,
+                },
+            ],
+            false,
+        )
+        .expect("enqueue image");
+    let referenced = fixture
+        .database
+        .referenced_attachment_paths()
+        .expect("referenced");
+    assert!(
+        referenced.contains(&archive_path),
+        "未处理队列中的归档图片必须纳入 GC 引用集"
+    );
+    cleanup(fixture.root);
+}
+
+#[test]
+fn dev_database_copy_migrates_to_v19_and_passes_integrity_check() {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return;
+    };
+    let dev_db = home.join(".lx-t-dev/db/lx.db");
+    if !dev_db.is_file() {
+        return;
+    }
+    let temp_dir = std::env::temp_dir().join(format!(
+        "lx-dev-db-copy-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&temp_dir).expect("temp dir");
+    let copy_path = temp_dir.join("lx.db");
+    std::fs::copy(&dev_db, &copy_path).expect("copy dev db");
+
+    let before_counts: (i64, i64, i64) = {
+        let raw = rusqlite::Connection::open(&copy_path).expect("open raw copy");
+        let sessions: i64 = raw
+            .query_row("SELECT COUNT(*) FROM agent_session", [], |r| r.get(0))
+            .unwrap_or(0);
+        let messages: i64 = raw
+            .query_row("SELECT COUNT(*) FROM agent_message", [], |r| r.get(0))
+            .unwrap_or(0);
+        let subagents: i64 = raw
+            .query_row("SELECT COUNT(*) FROM agent_subagent", [], |r| r.get(0))
+            .unwrap_or(0);
+        (sessions, messages, subagents)
+    };
+
+    let migrated = Database::open(&copy_path).expect("migrate dev db copy");
+    let version: i64 = migrated
+        .connection()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .expect("user_version");
+    assert_eq!(version, 19);
+
+    let after_sessions: i64 = migrated
+        .connection()
+        .query_row("SELECT COUNT(*) FROM agent_session", [], |r| r.get(0))
+        .expect("sessions");
+    let after_messages: i64 = migrated
+        .connection()
+        .query_row("SELECT COUNT(*) FROM agent_message", [], |r| r.get(0))
+        .expect("messages");
+    let after_subagents: i64 = migrated
+        .connection()
+        .query_row("SELECT COUNT(*) FROM agent_subagent", [], |r| r.get(0))
+        .expect("subagents");
+    assert_eq!(
+        (after_sessions, after_messages, after_subagents),
+        before_counts
+    );
+
+    let integrity: String = migrated
+        .connection()
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .expect("integrity_check");
+    assert_eq!(integrity, "ok");
+    let fk_violations: i64 = migrated
+        .connection()
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .expect("fk check");
+    assert_eq!(fk_violations, 0);
+
+    drop(migrated);
+    cleanup(temp_dir);
+}

@@ -25,7 +25,7 @@ use crate::platform::EnvironmentFacts;
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
-pub const PROMPT_VERSION: &str = "lx-5";
+pub const PROMPT_VERSION: &str = "lx-6";
 
 /// 环境快照单字段最大字符数（转义前）。
 const MAX_FIELD_CHARS: usize = 240;
@@ -115,9 +115,10 @@ You are lx, a terminal coding agent working inside the user's workspace. You are
 
 # Subagents
 
-Three tools let you hand work to a subagent: `spawn_agent`, `wait_agent`, `close_agent`.
+Seven tools let you coordinate subagents: `spawn_agent`, `send_input`, `resume_agent`,
+`wait_agent`, `close_agent`, `list_agents`, and `cancel_agent_input`.
 Each subagent starts with a clean context. It sees only its role prompt, the environment
-snapshot, and the task you write — not this conversation.
+snapshot, and the task or ordered `items` you send — not this conversation.
 
 - `explorer` — read-only investigation. It has `read` and `search` and nothing else. Use it
   for specific questions about the codebase: where a flow lives, who calls something, how a
@@ -133,6 +134,9 @@ Write the task with three things: the goal, the boundary (which files or modules
 this agent), and the deliverable. A subagent that has to guess will guess wrong.
 Always pass a short human-readable `title` (3–8 words) separate from the task. It is what
 the user sees in the subagent card and the Agents list; never paste the task prompt there.
+Both `spawn_agent` and `send_input` accept either a plain text field (`task` / `message`) or
+an ordered `items` array of `text`, `local_image`, and inline `data:image/...;base64,...`
+`image` entries (mutually exclusive).
 
 Rules:
 - At most 3 subagents may run at once per conversation; a fourth call is rejected.
@@ -140,6 +144,15 @@ Rules:
   is not alone in the codebase and must not revert or overwrite changes it did not make.
 - You do not have to wait. Start a subagent, keep working, and call `wait_agent` when you need
   the result — or let the report arrive on its own.
+- Use `send_input` to send follow-up instructions to an active subagent (`interrupt: false`
+  queues the input after the current turn; `interrupt: true` cancels the current turn, saves
+  its partial output, and runs the new input first).
+- When a subagent finishes its turn with an empty queue, fails, is closed, or after a restart,
+  call `resume_agent` before sending new input with `send_input`. Use `list_agents` to inspect
+  available `agent_id`s, statuses, and queued counts.
+- If a queued input's archived image is missing or corrupted on replay, the input pauses in
+  `blocked` status instead of silently dropping the image; use `cancel_agent_input` with its
+  `submission_id` to cancel it and resend a valid image.
 - `wait_agent` without `targets` waits for every subagent in this conversation. Use
   `wait_for: \"any\"` when you only need the first result; the default waits for all.
 - Prefer long waits (minutes) over short polling. `wait_for: \"all\"` keeps waiting for
@@ -147,17 +160,18 @@ Rules:
   timeout while other agents run; wait again instead of ending the turn.
 - A report is short by design: the conclusion plus what it touched. The full trace stays in its
   own session; do not ask for a replay.
-- `close_agent` stops a subagent and produces no report.
+- `close_agent` stops a running or idle subagent and produces no report for an interrupted turn.
 
 # Tools
 
-You can call these tools: `read`, `search`, `edit`, `write`, `exec_command`, `write_stdin`, `update_plan`, `ask`, `spawn_agent`, `wait_agent`, and `close_agent`.
+You can call these tools: `read`, `search`, `edit`, `write`, `exec_command`, `write_stdin`, `update_plan`, `ask`, `curr_time`, `spawn_agent`, `send_input`, `resume_agent`, `wait_agent`, `close_agent`, `list_agents`, and `cancel_agent_input`.
 - Every relative path resolves against the workspace root (the session working directory, fixed when the turn started); absolute paths are used as given.
 - `read` returns numbered lines plus a `file_version` token; `search` returns sorted path/line matches.
 - `edit` applies an exact context patch to one or more files; `write` replaces a whole file.
 - `exec_command` runs a shell command without an approval prompt. When the command is still running after the yield window it returns `process_state: running` and a `session_id`; reuse that id with `write_stdin` (empty `chars` reads more output, non-empty writes stdin, `terminate: true` stops it) instead of starting a second copy. `tty: true` uses a dedicated pseudo terminal.
 - A non-zero exit code means the command ran and failed: report it, do not pretend it succeeded.
 - `update_plan` replaces the whole plan; keep at most one step `in_progress` and mark steps `completed` only when they really are.
+- `curr_time` returns the real-time UTC clock (`YYYY-MM-DD HH:MM:SS UTC`).
 
 ## Shell commands
 
@@ -486,7 +500,7 @@ mod tests {
                 "提示缺少 ask 规则 `{needle}`"
             );
         }
-        assert_eq!(PROMPT_VERSION, "lx-5");
+        assert_eq!(PROMPT_VERSION, "lx-6");
         assert!(
             LX_SYSTEM_PROMPT.contains("You can call these tools:")
                 && LX_SYSTEM_PROMPT.contains("`ask`"),

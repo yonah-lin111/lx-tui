@@ -81,6 +81,7 @@ async fn spawn_explorer(
             role: AgentRole::Explorer,
             title: "test title".into(),
             task: task.into(),
+            items: Vec::new(),
         },
     )
     .await
@@ -184,6 +185,7 @@ async fn fourth_spawn_is_rejected_and_earlier_runs_stay_running() {
             role: AgentRole::Executor,
             title: "too many".into(),
             task: "one too many".into(),
+            items: Vec::new(),
         },
     )
     .await

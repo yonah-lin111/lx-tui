@@ -22,7 +22,7 @@ use crate::chat::process::{
 };
 
 /// 固定工具表：顺序即给模型的呈现顺序。
-static TOOLS: [ToolSpec; 11] = [
+static TOOLS: [ToolSpec; 16] = [
     ToolSpec::new(
         "read",
         "Read a UTF-8 text file, view an image file (PNG, JPEG, GIF, WebP, BMP, TIFF), or list a directory. \
@@ -120,12 +120,22 @@ static TOOLS: [ToolSpec; 11] = [
          is `{\"answers\":{\"<id>\":{\"answers\":[...]}}}`. Do not ask permission questions.",
         ask_parameters,
     ),
+    ToolSpec::new(
+        "curr_time",
+        "Return the current real-time UTC clock in `YYYY-MM-DD HH:MM:SS UTC` format. \
+         Takes an empty JSON object `{}`.",
+        curr_time_parameters,
+    ),
     super::subagent::spawn_agent_spec(),
+    super::subagent::send_input_spec(),
+    super::subagent::resume_agent_spec(),
     super::subagent::wait_agent_spec(),
     super::subagent::close_agent_spec(),
+    super::subagent::list_agents_spec(),
+    super::subagent::cancel_agent_input_spec(),
 ];
 
-/// 全部可用工具规格（固定十一个）。
+/// 全部可用工具规格（固定十六个）。
 pub fn available_tools() -> &'static [ToolSpec] {
     &TOOLS
 }
@@ -433,6 +443,16 @@ fn ask_parameters() -> Value {
             }
         },
         "required": ["questions"],
+        "additionalProperties": false
+    })
+}
+
+/// `curr_time` 参数 schema（严格空对象）。
+fn curr_time_parameters() -> Value {
+    json!({
+        "type": "object",
+        "properties": {},
+        "required": [],
         "additionalProperties": false
     })
 }

@@ -239,12 +239,14 @@ pub fn load_image_payloads(
     Ok(map)
 }
 
-/// 查询数据库中所有仍被消息附件引用的本地文件路径集合（供启动时剪贴板目录 GC 使用）。
+/// 查询数据库中所有仍被消息附件或子 agent 输入项引用的本地文件路径集合（供启动时图片归档 GC 使用）。
 pub fn load_referenced_attachment_paths(
     conn: &Connection,
 ) -> Result<std::collections::HashSet<String>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT DISTINCT source_path FROM agent_message_attachment WHERE source_path IS NOT NULL",
+        r#"SELECT DISTINCT source_path FROM agent_message_attachment WHERE source_path IS NOT NULL
+           UNION
+           SELECT DISTINCT archive_path FROM agent_subagent_input_item WHERE archive_path IS NOT NULL"#,
     )?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     let mut set = std::collections::HashSet::new();

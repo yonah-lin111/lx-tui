@@ -512,6 +512,59 @@ async fn subagent_auto_compacts_when_context_reaches_limit() {
     );
 }
 
+/// 多轮子 agent 在第 2 轮触发自动压缩时，必须保留第 2 轮（当前轮）的用户消息，不得退回第 1 轮。
+#[tokio::test]
+async fn p0_multi_turn_subagent_auto_compact_preserves_current_turn_user_prompt() {
+    let fixture = Fixture::new("auto-compact-multiturn");
+    let read_args = r#"{"path":"."}"#.to_string();
+    let script = Script::new(
+        vec![
+            tool_calls(&[("c1", "read", &read_args, 0)], None),
+            final_response("summary of turn 1 and read", None),
+            final_response("turn 2 answer", None),
+        ],
+        StopReason::Complete,
+    );
+    let mut request = ChatRequest {
+        turns: Vec::new(),
+        items: vec![
+            ModelItem::UserText("OLD_TURN_1_TASK".into()),
+            ModelItem::AssistantText("turn 1 report".into()),
+            ModelItem::UserText("CURRENT_TURN_2_FOLLOW_UP".into()),
+        ],
+        model: crate::db::chat::ModelSnapshot {
+            provider: "p".into(),
+            model: "m".into(),
+            variant: None,
+        },
+        variant_params: None,
+        purpose: RequestPurpose::Subagent(crate::chat::agent::AgentRole::Explorer),
+        system_prompt: Some("explorer".into()),
+    };
+    request.turns.push(crate::chat::events::ChatTurn {
+        role: "user".into(),
+        text: "CURRENT_TURN_2_FOLLOW_UP".into(),
+        reasoning_metadata: None,
+    });
+    let ctx = ModelContext::new(request, fixture.path()).with_context_limit(Some(20));
+    let summary = run_agent_turn(
+        ctx,
+        RecordingHost::new(),
+        RecordingExecutor::new(),
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    let requests = script.requests.lock().expect("lock");
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[2].items,
+        vec![ModelItem::UserText("CURRENT_TURN_2_FOLLOW_UP".into())],
+        "压缩后必须保留当前轮 send_input 的用户任务，而非第 1 轮旧任务"
+    );
+}
+
 /// 脚本化 stream 必须在超时内完成（防止测试悬挂）。
 #[tokio::test]
 async fn scripted_turn_returns_within_timeout() {

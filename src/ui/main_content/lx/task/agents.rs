@@ -145,6 +145,9 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         } else {
             match run.status.as_str() {
                 "failed" => crate::ui::main_content::lx::history::StepMark::Failed,
+                "blocked" | "interrupted" => {
+                    crate::ui::main_content::lx::history::StepMark::Interrupted
+                }
                 "cancelled" => crate::ui::main_content::lx::history::StepMark::Cancelled,
                 _ => crate::ui::main_content::lx::history::StepMark::Done,
             }
@@ -161,7 +164,8 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         let role_w = u16::try_from(run.role.as_str().width())
             .unwrap_or(0)
             .max(ROLE_MIN);
-        let status_w = u16::try_from(run.status.width())
+        let status_label = text::agent_status_with_queue(&run.status, run.queued_count);
+        let status_w = u16::try_from(status_label.width())
             .unwrap_or(0)
             .max(STATUS_MIN);
         let fixed = role_w
@@ -179,11 +183,11 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         x = role_right.saturating_add(CELL_GAP);
         let status_right = x.saturating_add(status_w);
         let status_style = match run.status.as_str() {
-            "running" => style::agent_warn(),
+            "running" | "blocked" | "interrupted" => style::agent_warn(),
             "failed" => style::agent_fail(),
             _ => style::agent_step_detail(),
         };
-        grid.put_clipped(x, y, &run.status, status_style, status_right);
+        grid.put_clipped(x, y, &status_label, status_style, status_right);
         x = status_right.saturating_add(CELL_GAP);
         let age_right = x.saturating_add(age_w);
         grid.put_clipped(x, y, &age, style::agent_step_detail(), age_right);

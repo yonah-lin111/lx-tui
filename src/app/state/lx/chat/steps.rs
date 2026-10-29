@@ -255,6 +255,7 @@ impl ToolSummary {
         if self.path.is_none() {
             self.path = value
                 .get("path")
+                .or_else(|| value.get("current_time"))
                 .and_then(|path| path.as_str())
                 .filter(|path| !path.is_empty())
                 .map(truncate_summary);
@@ -558,10 +559,7 @@ impl ToolCallView {
             return false;
         }
         self.summary = Some(Box::new(ToolSummary::from_arguments(&self.arguments_json)));
-        if matches!(
-            self.name.as_str(),
-            "spawn_agent" | "wait_agent" | "close_agent"
-        ) {
+        if crate::chat::tools::SUBAGENT_TOOL_NAMES.contains(&self.name.as_str()) {
             self.detail = super::tool_view::SubagentDetailView::from_arguments(
                 &self.name,
                 &self.arguments_json,

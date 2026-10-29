@@ -31,8 +31,12 @@ use super::{
 fn verb(name: &str) -> &'static str {
     match name {
         "spawn_agent" => text::agent::VERB_TOOL_SPAWN_AGENT,
+        "send_input" => text::agent::VERB_TOOL_SEND_INPUT,
+        "resume_agent" => text::agent::VERB_TOOL_RESUME_AGENT,
         "wait_agent" => text::agent::VERB_TOOL_WAIT_AGENTS,
         "close_agent" => text::agent::VERB_TOOL_CLOSE_AGENT,
+        "list_agents" => text::agent::VERB_TOOL_LIST_AGENTS,
+        "cancel_agent_input" => text::agent::VERB_TOOL_CANCEL_AGENT_INPUT,
         _ => text::agent::VERB_TOOL_SPAWN_AGENT,
     }
 }
@@ -280,8 +284,22 @@ fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
                 }
             }
         }
+        "list_agents" => {
+            if view.agents.is_empty() {
+                built.nodes.push(Node::text(
+                    text::LX_TASK_AGENTS_EMPTY,
+                    style::agent_step_detail(),
+                ));
+            } else {
+                for agent in &view.agents {
+                    let index = built.nodes.len();
+                    built.nodes.push(target_node(view, &agent.agent_id));
+                    built.links.push((index, agent.agent_id.clone()));
+                }
+            }
+        }
         _ => {
-            // close：目标行 + 之前的状态（不再把两者挤进同一行）。
+            // close / send_input / resume_agent / cancel_agent_input：目标行 + 状态。
             let target = if view.role.is_some() || view.title.is_some() {
                 agent_line(view)
             } else {
@@ -358,10 +376,10 @@ fn agent_mark(view: &SubagentDetailView, call: &ToolCallView, loading_frame: usi
     }
 }
 
-/// 标题状态：spawn 显示子 agent 状态；wait 显示调用条件；close 无。
+/// 标题状态：spawn/send_input/resume/cancel_agent_input 显示状态；wait 显示调用条件；close 无。
 fn header_status(call: &ToolCallView, view: &SubagentDetailView) -> Option<String> {
     match call.name.as_str() {
-        "spawn_agent" => Some(
+        "spawn_agent" | "send_input" | "resume_agent" | "cancel_agent_input" => Some(
             view.agent_status
                 .clone()
                 .unwrap_or_else(|| text::tool_status_label(call.status).to_string()),

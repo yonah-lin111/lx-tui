@@ -378,9 +378,14 @@ pub fn cwd_label(cwd: &str) -> String {
 
 /// `ask` 卡片动词。
 pub const VERB_TOOL_ASK: &str = "Ask";
+pub const VERB_TOOL_CURR_TIME: &str = "Current time";
 pub const VERB_TOOL_SPAWN_AGENT: &str = "Spawn agent";
+pub const VERB_TOOL_SEND_INPUT: &str = "Send agent input";
+pub const VERB_TOOL_RESUME_AGENT: &str = "Resume agent";
 pub const VERB_TOOL_WAIT_AGENTS: &str = "Wait agents";
 pub const VERB_TOOL_CLOSE_AGENT: &str = "Close agent";
+pub const VERB_TOOL_LIST_AGENTS: &str = "List agents";
+pub const VERB_TOOL_CANCEL_AGENT_INPUT: &str = "Cancel agent input";
 /// 子 agent 主动汇报块的标题（工具卡片格式）。
 pub const VERB_TOOL_SUBAGENT_REPORT: &str = "Subagent report";
 /// 委派卡片：角色与任务首行之间的分隔。

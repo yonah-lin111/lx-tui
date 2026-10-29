@@ -219,31 +219,50 @@ pub(crate) fn settle_wait(
         .map_err(|error| HostError::Failed {
             code: error.code().to_string(),
         })?;
+    let pending = database
+        .pending_reports(workspace, &key.session)
+        .unwrap_or_default();
+    let queue_states = database
+        .subagent_queue_states(workspace, &key.session)
+        .unwrap_or_default();
     let mut agents = Vec::new();
+    let mut claimed_report_ids = Vec::new();
     for target in targets {
         let Some(record) = records.iter().find(|record| &record.agent_id == target) else {
             continue;
         };
-        let mut report = None;
-        if matches!(record.status.as_str(), STATUS_COMPLETED | STATUS_FAILED)
-            && !record.report_delivered
-            && let Some(view) = record
-                .report_json
-                .as_deref()
-                .and_then(SubagentReportView::from_json)
-            && database
-                .mark_report_delivered(workspace, target)
-                .unwrap_or(false)
-        {
-            report = Some(view.body);
+        let is_running = streams
+            .subagents
+            .values()
+            .any(|h| h.agent_id == *target && h.status == STATUS_RUNNING);
+        let mut report_bodies = Vec::new();
+        if !is_running {
+            for item in pending.iter().filter(|r| &r.agent_id == target) {
+                if let Some(view) =
+                    crate::app::state::SubagentReportView::from_json(&item.report_json)
+                {
+                    report_bodies.push(view.body);
+                    claimed_report_ids.push(item.report_id.clone());
+                }
+            }
         }
+        let report = if report_bodies.is_empty() {
+            None
+        } else {
+            Some(report_bodies.join("\n\n"))
+        };
+        let status = super::projected_agent_status(streams, record, queue_states.get(target));
         agents.push(AgentStatusView {
             agent_id: record.agent_id.clone(),
             title: record.title.clone(),
             role: record.role,
-            status: record.status.clone(),
+            status,
             report,
         });
+    }
+    if !claimed_report_ids.is_empty() {
+        let _ =
+            database.mark_reports_delivered_in_batch(workspace, &key.session, &claimed_report_ids);
     }
     Ok(SubagentOutcome::Waited {
         timed_out,
@@ -277,9 +296,25 @@ pub(crate) fn handle_subagent_wait_ready(
             && handle.status == STATUS_RUNNING
             && (all || targets.iter().any(|target| target == &handle.agent_id))
     });
-    if auto_continue && still_running && !reply.is_closed() {
+    let any_target_finished = !targets.is_empty()
+        && targets.iter().any(|target| {
+            !streams.subagents.values().any(|handle| {
+                handle.parent.session == parent
+                    && handle.agent_id == *target
+                    && handle.status == STATUS_RUNNING
+            })
+        });
+    if !reply.is_closed()
+        && ((auto_continue && still_running)
+            || (mode == WaitMode::Any && !timed_out && still_running && !any_target_finished))
+    {
         // all 模式把 timeout 当作内部重检周期；0/1ms 会把事件循环打成忙轮询。
         // 保留最小 500ms 间隔，any 模式的上限语义不受影响。
+        let next_timeout = if auto_continue {
+            timeout_ms.max(500)
+        } else {
+            timeout_ms
+        };
         wait(
             streams,
             persistence,
@@ -287,8 +322,8 @@ pub(crate) fn handle_subagent_wait_ready(
             if all { Vec::new() } else { targets },
             all,
             mode,
-            timeout_ms.max(500),
-            true,
+            next_timeout,
+            auto_continue,
             reply,
         );
         return false;

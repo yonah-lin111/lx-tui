@@ -135,10 +135,19 @@ fn input_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
                         "image_url": format!("data:{};base64,{}", img.mime, b64),
                     }));
                 }
-                input.push(json!({
-                    "role": "user",
-                    "content": content_parts,
-                }));
+                if let Some(existing) = input
+                    .last_mut()
+                    .filter(|msg| msg.get("role").and_then(Value::as_str) == Some("user"))
+                    .and_then(|msg| msg.get_mut("content"))
+                    .and_then(Value::as_array_mut)
+                {
+                    existing.extend(content_parts);
+                } else {
+                    input.push(json!({
+                        "role": "user",
+                        "content": content_parts,
+                    }));
+                }
             }
             HistoryBlock::ToolCall {
                 call_id,

@@ -64,9 +64,10 @@ pub enum AgentHostEvent {
         key: RequestKey,
         reply: oneshot::Sender<Vec<String>>,
     },
-    /// 子 agent 控制操作（spawn / wait / close）。
+    /// 子 agent 控制操作（spawn / send_input / resume / wait / close / list / cancel_input）。
     Subagent {
         key: RequestKey,
+        call_id: Option<String>,
         op: crate::chat::agent::SubagentOp,
         reply: oneshot::Sender<Result<crate::chat::agent::SubagentOutcome, HostError>>,
     },
@@ -79,11 +80,25 @@ pub(crate) struct EventHost {
 }
 
 impl AgentHost for EventHost {
-    fn notify_auto_compact(&mut self, notice: &crate::chat::compact::AutoCompactNotice) {
-        let _ = self.sender.send(AppEvent::SubagentAutoCompact {
-            key: self.key.clone(),
-            notice: notice.clone(),
-        });
+    fn notify_auto_compact(
+        &mut self,
+        notice: &crate::chat::compact::AutoCompactNotice,
+    ) -> impl std::future::Future<Output = Result<(), HostError>> + Send {
+        let sender = self.sender.clone();
+        let key = self.key.clone();
+        let notice = notice.clone();
+        async move {
+            let (reply, receiver) = oneshot::channel();
+            let _ = sender.send(AppEvent::SubagentAutoCompact {
+                key,
+                notice,
+                reply: Some(reply),
+            });
+            match receiver.await {
+                Ok(result) => result,
+                Err(_) => Err(HostError::Cancelled),
+            }
+        }
     }
 
     fn send(&mut self, request: AgentHostRequest) {
@@ -118,8 +133,9 @@ impl AgentHost for EventHost {
                 key: self.key.clone(),
                 reply,
             },
-            AgentHostRequest::Subagent { op, reply } => AgentHostEvent::Subagent {
+            AgentHostRequest::Subagent { call_id, op, reply } => AgentHostEvent::Subagent {
                 key: self.key.clone(),
+                call_id,
                 op,
                 reply,
             },

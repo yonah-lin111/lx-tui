@@ -435,10 +435,26 @@ impl SubagentDetailView {
 
     fn apply_op(&mut self, op: crate::chat::agent::SubagentOp) {
         match op {
-            crate::chat::agent::SubagentOp::Spawn { role, title, task } => {
+            crate::chat::agent::SubagentOp::Spawn {
+                role, title, task, ..
+            } => {
                 self.role = Some(role);
                 self.title = Some(title);
                 self.task = Some(task);
+            }
+            crate::chat::agent::SubagentOp::SendInput {
+                target,
+                items,
+                interrupt,
+            } => {
+                self.agent_id = Some(target);
+                self.task = Some(crate::chat::agent::joined_input_text(&items));
+                if interrupt && self.agent_status.is_none() {
+                    self.agent_status = Some("interrupt".into());
+                }
+            }
+            crate::chat::agent::SubagentOp::Resume { id } => {
+                self.agent_id = Some(id);
             }
             crate::chat::agent::SubagentOp::Wait {
                 targets,
@@ -452,6 +468,10 @@ impl SubagentDetailView {
             }
             crate::chat::agent::SubagentOp::Close { target } => {
                 self.agent_id = Some(target);
+            }
+            crate::chat::agent::SubagentOp::List => {}
+            crate::chat::agent::SubagentOp::CancelInput { submission_id } => {
+                self.agent_id = Some(submission_id);
             }
         }
     }
@@ -560,6 +580,76 @@ impl SubagentDetailView {
                     .map(str::to_string);
                 view.closed_status = value
                     .get("previous_status")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+            }
+            "send_input" | "resume_agent" => {
+                view.agent_id = value
+                    .get("agent_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let status = value
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let queued = value
+                    .get("queued_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                if !status.is_empty() {
+                    view.agent_status = Some(if queued > 0 {
+                        format!("{status} · {queued} queued")
+                    } else {
+                        status.to_string()
+                    });
+                }
+            }
+            "list_agents" => {
+                if let Some(agents) = value.get("agents").and_then(Value::as_array) {
+                    for agent in agents {
+                        let Some(agent_id) = agent.get("agent_id").and_then(Value::as_str) else {
+                            continue;
+                        };
+                        let Some(role) = agent
+                            .get("role")
+                            .and_then(Value::as_str)
+                            .and_then(crate::chat::agent::AgentRole::parse)
+                        else {
+                            continue;
+                        };
+                        let status = agent
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let queued = agent
+                            .get("queued_count")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        view.agents.push(crate::chat::agent::AgentStatusView {
+                            agent_id: agent_id.to_string(),
+                            title: agent
+                                .get("title")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            role,
+                            status: if queued > 0 {
+                                format!("{status} · {queued} queued")
+                            } else {
+                                status.to_string()
+                            },
+                            report: None,
+                        });
+                    }
+                }
+            }
+            "cancel_agent_input" => {
+                view.agent_id = value
+                    .get("submission_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                view.agent_status = value
+                    .get("status")
                     .and_then(Value::as_str)
                     .map(str::to_string);
             }
@@ -698,7 +788,8 @@ impl ToolDetailView {
                 Some(Self::Plan(PlanSnapshotView::from_snapshot(&snapshot)))
             }
             "ask" => Some(Self::Ask(AskDetailView::from_value(&value)?)),
-            "spawn_agent" | "wait_agent" | "close_agent" => Some(Self::Subagent(
+            "spawn_agent" | "send_input" | "resume_agent" | "wait_agent" | "close_agent"
+            | "list_agents" | "cancel_agent_input" => Some(Self::Subagent(
                 SubagentDetailView::from_outcome_value(&value)?,
             )),
             "search" => Some(Self::Search(SearchDetailView::from_value(&value)?)),
