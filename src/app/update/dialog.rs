@@ -19,8 +19,7 @@ use super::prompt::{
 };
 use super::trust::apply_trust_decision;
 use super::workspace::{
-    close_pane, close_tab, close_workspace, confirm_switch_cwd, confirm_sync_workspace_cwd,
-    create_workspace_with_cwd, parse_workspace_path,
+    close_pane, close_tab, close_workspace, create_workspace_with_cwd, parse_workspace_path,
 };
 use super::worktree::apply_worktree_open_key;
 
@@ -167,10 +166,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             None
         }
         OverlayKey::Enter => match state.overlay.as_ref().map(Overlay::kind) {
-            Some(OverlayKind::Menu) => {
-                activate_menu(state);
-                None
-            }
+            Some(OverlayKind::Menu) => activate_menu(state),
             Some(OverlayKind::Rename) => {
                 commit_rename(state);
                 None
@@ -185,11 +181,6 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             }
             Some(OverlayKind::PageMenu) => {
                 activate_page_menu_row(state);
-                None
-            }
-            Some(OverlayKind::ConfirmSwitchCwd) => confirm_switch_cwd(state),
-            Some(OverlayKind::ConfirmSyncWorkspaceCwd) => {
-                confirm_sync_workspace_cwd(state);
                 None
             }
             Some(

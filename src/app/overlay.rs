@@ -14,8 +14,6 @@ pub enum OverlayKind {
     Menu,
     Rename,
     ConfirmClose,
-    ConfirmSwitchCwd,
-    ConfirmSyncWorkspaceCwd,
     NewWorkspace,
     WorktreeOpen,
     TrustWorkspace,
@@ -40,8 +38,6 @@ pub enum Overlay {
     Menu(Menu),
     Rename(Rename),
     ConfirmClose(ConfirmClose),
-    ConfirmSwitchCwd(ConfirmSwitchCwd),
-    ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd),
     NewWorkspace(NewWorkspace),
     WorktreeOpen(WorktreeOpen),
     TrustWorkspace(TrustWorkspace),
@@ -63,8 +59,6 @@ impl Overlay {
             Self::Menu(_) => OverlayKind::Menu,
             Self::Rename(_) => OverlayKind::Rename,
             Self::ConfirmClose(_) => OverlayKind::ConfirmClose,
-            Self::ConfirmSwitchCwd(_) => OverlayKind::ConfirmSwitchCwd,
-            Self::ConfirmSyncWorkspaceCwd(_) => OverlayKind::ConfirmSyncWorkspaceCwd,
             Self::NewWorkspace(_) => OverlayKind::NewWorkspace,
             Self::WorktreeOpen(_) => OverlayKind::WorktreeOpen,
             Self::TrustWorkspace(_) => OverlayKind::TrustWorkspace,
@@ -263,13 +257,15 @@ pub enum SaveDraftEntry {
     AddFolder,
 }
 
-/// 右键菜单：锚点、目标、命令列表与高亮项索引。
+/// 右键菜单：锚点、目标、命令列表、高亮项索引与当前项行内二次确认态。
 #[derive(Debug)]
 pub struct Menu {
     pub anchor: (u16, u16),
     pub target: OverlayTarget,
     pub commands: Vec<MenuCommand>,
     pub selected: usize,
+    /// 当前选中项（`selected`）是否已进入第一次点击/回车后的行内待确认状态。
+    pub confirming: bool,
 }
 
 /// 菜单与关闭确认作用目标：工作区、工作区内的标签或标签内的窗格，以及提示词树节点。
@@ -347,6 +343,22 @@ pub enum MenuCommand {
     CopyPath,
 }
 
+impl MenuCommand {
+    /// 该命令是否需要在右键菜单行内进行二次确认。
+    pub fn requires_confirm(self) -> bool {
+        matches!(
+            self,
+            Self::CloseWorkspace
+                | Self::CloseTab
+                | Self::ClosePane
+                | Self::DeleteFolder
+                | Self::DeletePrompt
+                | Self::SwitchToWorkspaceCwd
+                | Self::SyncWorkspaceToTerminalCwd
+        )
+    }
+}
+
 /// 重命名作用目标：工作区、标签或提示词树节点；窗格不可重命名，因此不在此枚举内。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameTarget {
@@ -367,23 +379,6 @@ pub struct Rename {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfirmClose {
     pub target: OverlayTarget,
-}
-
-/// 切换工作区路径确认浮层：目标窗格与要写入的目标路径。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfirmSwitchCwd {
-    pub workspace: usize,
-    pub tab: usize,
-    pub pane: PaneId,
-    pub path: PathBuf,
-}
-
-/// 切换当前工作区路径到终端路径确认浮层：目标工作区、目标窗格与要设置的终端路径。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfirmSyncWorkspaceCwd {
-    pub workspace: usize,
-    pub pane: PaneId,
-    pub path: PathBuf,
 }
 
 /// 新建工作区浮层：单行路径输入。

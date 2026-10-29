@@ -205,7 +205,7 @@ fn refuse_on_sync_cancels_with_toast() {
 }
 
 #[test]
-fn grant_on_sync_opens_confirm_dialog() {
+fn grant_on_sync_immediately_syncs_workspace_cwd() {
     let path = workspace_dir("sync-grant");
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
@@ -215,14 +215,15 @@ fn grant_on_sync_opens_confirm_dialog() {
     }
     open_trust_dialog(
         &mut state,
-        path,
+        path.clone(),
         TrustTrigger::SyncWorkspaceCwd { workspace: 0, pane },
     );
     apply_overlay_key(&mut state, OverlayKey::Enter);
-    assert!(matches!(
-        state.overlay,
-        Some(Overlay::ConfirmSyncWorkspaceCwd(_))
-    ));
+    assert!(
+        state.overlay.is_none(),
+        "菜单内已二次确认，信任通过后直接同步、不再弹二次确认浮层"
+    );
+    assert_eq!(state.workspaces[0].cwd.as_ref(), Some(&path));
     assert!(
         state
             .effects

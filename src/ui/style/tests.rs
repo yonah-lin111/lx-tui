@@ -105,6 +105,26 @@ fn overlay_selection_uses_contrast_surface_without_reversed() {
 }
 
 #[test]
+fn menu_confirm_and_toast_border_styles_are_distinct_from_primary_cyan() {
+    use crate::app::toast::ToastKind;
+    let confirm = menu_confirm();
+    assert_eq!(confirm.fg, Some(Color::Indexed(255)));
+    assert_eq!(confirm.bg, Some(Color::Indexed(160)));
+    assert!(confirm.add_modifier.contains(Modifier::BOLD));
+
+    let default_b = toast_border(ToastKind::Default);
+    let warn_b = toast_border(ToastKind::Warning);
+    let danger_b = toast_border(ToastKind::Danger);
+    assert_eq!(default_b.fg, Some(Color::Indexed(141)));
+    assert_eq!(warn_b.fg, Some(Color::Indexed(214)));
+    assert_eq!(danger_b.fg, Some(Color::Indexed(204)));
+    for s in [default_b, warn_b, danger_b] {
+        assert_ne!(s.fg, accent().fg, "toast 边框不得与主色调 Cyan 重叠");
+        assert_eq!(s.bg, None, "toast 边框不自带背景色");
+    }
+}
+
+#[test]
 fn model_label_style_runs_the_entry_gradient_and_is_bold() {
     let first = model_label_style(0, 5);
     let last = model_label_style(4, 5);

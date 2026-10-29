@@ -205,6 +205,7 @@ fn overlay_kind_reports_variant() {
         target: OverlayTarget::Workspace(0),
         commands: vec![MenuCommand::RenameWorkspace],
         selected: 0,
+        confirming: false,
     });
     assert_eq!(menu.kind(), OverlayKind::Menu);
     let rename = Overlay::Rename(Rename {
@@ -219,19 +220,6 @@ fn overlay_kind_reports_variant() {
         },
     });
     assert_eq!(confirm.kind(), OverlayKind::ConfirmClose);
-    let switch_cwd = Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
-        workspace: 0,
-        tab: 0,
-        pane: PaneId::alloc(),
-        path: PathBuf::from("/tmp/ws"),
-    });
-    assert_eq!(switch_cwd.kind(), OverlayKind::ConfirmSwitchCwd);
-    let sync_cwd = Overlay::ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd {
-        workspace: 0,
-        pane: PaneId::alloc(),
-        path: PathBuf::from("/tmp/terminal"),
-    });
-    assert_eq!(sync_cwd.kind(), OverlayKind::ConfirmSyncWorkspaceCwd);
     let new_ws = Overlay::NewWorkspace(NewWorkspace {
         input: TextInput::new(""),
     });
@@ -338,4 +326,49 @@ fn worktree_dialog_normalizes_and_moves_selection_over_filtered_entries() {
     assert_eq!(dialog.selected_entry_index(), Some(2));
     dialog.select_next();
     assert_eq!(dialog.selected_entry_index(), Some(2));
+}
+
+#[test]
+fn menu_command_requires_confirm_for_destructive_and_cwd_actions() {
+    for cmd in [
+        MenuCommand::CloseWorkspace,
+        MenuCommand::CloseTab,
+        MenuCommand::ClosePane,
+        MenuCommand::DeleteFolder,
+        MenuCommand::DeletePrompt,
+        MenuCommand::SwitchToWorkspaceCwd,
+        MenuCommand::SyncWorkspaceToTerminalCwd,
+    ] {
+        assert!(
+            cmd.requires_confirm(),
+            "{cmd:?} should require inline confirm"
+        );
+    }
+    for cmd in [
+        MenuCommand::NewTab,
+        MenuCommand::NewTerminal,
+        MenuCommand::NewWorkspace,
+        MenuCommand::RenameWorkspace,
+        MenuCommand::OpenWorktree,
+        MenuCommand::OpenPrompt,
+        MenuCommand::RenameTab,
+        MenuCommand::SplitRight,
+        MenuCommand::SplitDown,
+        MenuCommand::SwitchToTerminal,
+        MenuCommand::SwitchToLx,
+        MenuCommand::NewPrompt,
+        MenuCommand::NewFolder,
+        MenuCommand::NewSubFolder,
+        MenuCommand::RenameFolder,
+        MenuCommand::RenamePrompt,
+        MenuCommand::DeleteTemp,
+        MenuCommand::EditPrompt,
+        MenuCommand::CopyPromptContent,
+        MenuCommand::CopyPath,
+    ] {
+        assert!(
+            !cmd.requires_confirm(),
+            "{cmd:?} should execute immediately without inline confirm"
+        );
+    }
 }

@@ -24,7 +24,7 @@ pub use worktree::{
 
 #[cfg(test)]
 pub(crate) use dialog::{
-    BUTTON_GAP, CONFIRM_WIDTH, NEW_NODE_BUTTONS, NEW_WORKSPACE_BUTTON_ROW, NEW_WORKSPACE_BUTTONS,
+    BUTTON_GAP, NEW_NODE_BUTTONS, NEW_WORKSPACE_BUTTON_ROW, NEW_WORKSPACE_BUTTONS,
     RENAME_BUTTON_ROW, TRUST_BUTTON_ROW, TRUST_BUTTONS,
 };
 #[cfg(test)]
@@ -52,7 +52,10 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
             let title = menu::menu_title(state, menu_state);
             let layout = widgets::menu::layout(screen, menu_state.anchor, &title, &labels);
             let selected = state.menu_hover.then_some(menu_state.selected);
-            widgets::menu::render(frame, &layout, &title, &labels, selected);
+            let confirming = menu_state.confirming.then_some(menu_state.selected);
+            widgets::menu::render_with_confirm(
+                frame, &layout, &title, &labels, selected, confirming,
+            );
             None
         }
         Overlay::Rename(rename) => dialog::render_rename(frame, screen, rename),
@@ -60,14 +63,6 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
         Overlay::NewWorkspace(new_ws) => dialog::render_new_workspace(frame, screen, new_ws),
         Overlay::ConfirmClose(confirm) => {
             dialog::render_confirm(frame, screen, state, confirm);
-            None
-        }
-        Overlay::ConfirmSwitchCwd(confirm) => {
-            dialog::render_confirm_switch_cwd(frame, screen, confirm);
-            None
-        }
-        Overlay::ConfirmSyncWorkspaceCwd(confirm) => {
-            dialog::render_confirm_sync_workspace_cwd(frame, screen, confirm);
             None
         }
         Overlay::WorktreeOpen(dialog) => render_worktree_open(frame, screen, dialog),

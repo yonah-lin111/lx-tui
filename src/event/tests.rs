@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::app::overlay::{ConfirmSwitchCwd, Overlay};
+use crate::app::overlay::Overlay;
 use crate::app::prompt::{PasteCandidateKind, PromptMode, PromptRowKind};
 use crate::app::state::{PaneView, RightTab};
 use crate::app::toast::{Toast, ToastKind};

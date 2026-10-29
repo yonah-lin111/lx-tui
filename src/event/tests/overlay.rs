@@ -368,58 +368,132 @@ fn mouse_click_pane_menu_split_item_creates_pane() {
 }
 
 #[test]
-fn confirm_switch_cwd_click_confirm_returns_cd_command() {
+fn switch_cwd_menu_item_first_click_arms_confirm_second_click_returns_cd_command() {
+    let config = Config::default();
     let mut state = demo_terminal();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/target"));
     let pane = state.active_tab().layout.focus();
-    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
-        workspace: 0,
-        tab: 0,
-        pane,
-        path: PathBuf::from("/tmp/target"),
-    }));
-    let (button, geo) = confirm_switch_button(&mut state, "/tmp/target", true);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    crate::app::update::open_pane_menu(&mut state, pane, (10, 5));
 
-    let action = handle_overlay_click(&mut state, geo.screen, button.x, button.y);
+    let index = {
+        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+            panic!("pane menu expected");
+        };
+        menu.commands
+            .iter()
+            .position(|cmd| *cmd == crate::app::overlay::MenuCommand::SwitchToWorkspaceCwd)
+            .expect("switch to ws path offered")
+    };
+    let item = {
+        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+            panic!("pane menu expected");
+        };
+        ui::overlay::menu_layout(&state, geo.screen, menu).item_rects[index]
+    };
 
-    assert_eq!(action, Some((pane, b"cd \"/tmp/target\"\n".to_vec())));
+    // 第一次点击：不关闭菜单、不返回命令，切换为行内待确认态。
+    let first = handle_overlay_click(&mut state, geo.screen, item.x + 1, item.y);
+    assert_eq!(first, None);
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu stays open for inline confirmation");
+    };
+    assert!(menu.confirming);
+    assert_eq!(menu.selected, index);
+
+    // 第二次点击同一项：关闭菜单并返回写入窗格的 cd 命令。
+    let item2 = ui::overlay::menu_layout(&state, geo.screen, menu).item_rects[index];
+    let second = handle_overlay_click(&mut state, geo.screen, item2.x + 1, item2.y);
+    assert_eq!(second, Some((pane, b"cd \"/tmp/target\"\n".to_vec())));
     assert!(state.overlay.is_none());
 }
 
 #[test]
-fn confirm_switch_cwd_click_cancel_closes_without_command() {
+fn switch_cwd_menu_item_click_outside_cancels_without_command() {
+    let config = Config::default();
     let mut state = demo_terminal();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/target"));
     let pane = state.active_tab().layout.focus();
-    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
-        workspace: 0,
-        tab: 0,
-        pane,
-        path: PathBuf::from("/tmp/target"),
-    }));
-    let (button, geo) = confirm_switch_button(&mut state, "/tmp/target", false);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    crate::app::update::open_pane_menu(&mut state, pane, (10, 5));
 
-    let action = handle_overlay_click(&mut state, geo.screen, button.x, button.y);
+    let index = {
+        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+            panic!("pane menu expected");
+        };
+        menu.commands
+            .iter()
+            .position(|cmd| *cmd == crate::app::overlay::MenuCommand::SwitchToWorkspaceCwd)
+            .expect("switch to ws path offered")
+    };
+    let item = {
+        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+            panic!("pane menu expected");
+        };
+        ui::overlay::menu_layout(&state, geo.screen, menu).item_rects[index]
+    };
 
+    assert_eq!(
+        handle_overlay_click(&mut state, geo.screen, item.x + 1, item.y),
+        None
+    );
+    assert!(state.overlay.is_some());
+
+    // 点击菜单外空白关闭菜单，不产生 cd 命令。
+    let action = handle_overlay_click(&mut state, geo.screen, 0, 0);
     assert_eq!(action, None);
     assert!(state.overlay.is_none());
 }
 
 #[test]
-fn mouse_click_confirm_switch_cwd_closes_overlay() {
+fn mouse_click_close_tab_menu_item_twice_closes_tab_inline() {
     let config = Config::default();
     let mut state = demo_terminal();
-    let pane = state.active_tab().layout.focus();
-    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
-        workspace: 0,
-        tab: 0,
-        pane,
-        path: PathBuf::from("/tmp/target"),
-    }));
-    let (button, geo) = confirm_switch_button(&mut state, "/tmp/target", true);
+    crate::app::update::create_tab(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    crate::app::update::open_tab_menu(&mut state, 0, (10, 5));
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
+    let close_rect = {
+        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+            panic!("tab menu open");
+        };
+        let layout = ui::overlay::menu_layout(&state, geo.screen, menu);
+        *layout.item_rects.last().expect("close item")
+    };
+
+    // 第一次点击：进入行内待确认态，标签尚未关闭。
     handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), button.x, button.y),
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            close_rect.x + 1,
+            close_rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(state.active_workspace().tabs.len(), 2);
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu remains open in confirming state");
+    };
+    assert!(menu.confirming);
+
+    // 第二次点击：真正关闭标签并收起菜单。
+    let close_rect2 = *ui::overlay::menu_layout(&state, geo.screen, menu)
+        .item_rects
+        .last()
+        .expect("confirm close item");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            close_rect2.x + 1,
+            close_rect2.y,
+        ),
         &mut state,
         &mut sessions,
         &geo,
@@ -429,6 +503,7 @@ fn mouse_click_confirm_switch_cwd_closes_overlay() {
     );
 
     assert!(state.overlay.is_none());
+    assert_eq!(state.active_workspace().tabs.len(), 1);
     assert!(dirty);
 }
 

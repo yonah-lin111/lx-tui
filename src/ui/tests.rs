@@ -627,7 +627,7 @@ fn modal_without_input_hides_prompt_hardware_cursor() {
 }
 
 #[test]
-fn error_toast_uses_red_border() {
+fn error_toast_uses_danger_coral_border() {
     let mut state = AppState::demo();
     let anchor = state.prompt.id();
     update::show_toast(
@@ -661,7 +661,10 @@ fn error_toast_uses_red_border() {
         panic!("draw failed: {error}");
     }
     let buffer = terminal.backend().buffer().clone();
-    assert_eq!(buffer[(area.x, area.y)].fg, ratatui::style::Color::Red);
+    assert_eq!(
+        buffer[(area.x, area.y)].fg,
+        ratatui::style::Color::Indexed(204)
+    );
 }
 
 #[test]
@@ -2512,25 +2515,6 @@ fn focused_pane_title_uses_soft_blue_style() {
 #[test]
 fn overlay_border_titles_use_soft_blue_style() {
     let screen = Rect::new(0, 0, 100, 24);
-    let config = Config::default();
-
-    // toast 顶边框标题。
-    let mut state = AppState::demo();
-    update::show_toast(
-        &mut state,
-        Toast::new(ToastKind::Default, text::TOAST_COPIED, None, Instant::now())
-            .with_title("Clipboard"),
-    );
-    let view = view_for(&state);
-    let rects = crate::layout::pane_rects(
-        &state.active_tab().layout,
-        view.panes,
-        config.min_pane_width,
-        config.min_pane_height,
-    );
-    let area = toast::rect(&state, &view, &rects, screen, &config).expect("toast visible");
-    let buffer = render_buffer(&state);
-    assert_overlay_title(&buffer, area);
 
     // 右键菜单顶边框标题。
     let mut state = AppState::demo();

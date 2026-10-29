@@ -68,13 +68,25 @@ pub fn item_at(layout: &MenuLayout, column: u16, row: u16) -> Option<usize> {
         .position(|rect| rect.contains((column, row).into()))
 }
 
-/// 渲染菜单：清底、强调色边框与标题、逐项文本；选中项反显。
+/// 渲染菜单：清底、强调色边框与标题、逐项文本；选中项使用悬停高亮，待确认项使用危险红底高亮。
 pub fn render(
     frame: &mut Frame<'_>,
     layout: &MenuLayout,
     title: &str,
     labels: &[&str],
     selected: Option<usize>,
+) {
+    render_with_confirm(frame, layout, title, labels, selected, None);
+}
+
+/// 渲染菜单（支持指定某一项处于行内二次确认态）。
+pub fn render_with_confirm(
+    frame: &mut Frame<'_>,
+    layout: &MenuLayout,
+    title: &str,
+    labels: &[&str],
+    selected: Option<usize>,
+    confirming: Option<usize>,
 ) {
     clear::render(frame, layout.area);
     let mut block = Block::bordered()
@@ -94,7 +106,9 @@ pub fn render(
         let Some(rect) = layout.item_rects.get(index) else {
             continue;
         };
-        let item_style = if selected == Some(index) {
+        let item_style = if confirming == Some(index) {
+            style::menu_confirm()
+        } else if selected == Some(index) {
             style::overlay_selection()
         } else {
             style::text()
@@ -106,7 +120,7 @@ pub fn render(
             text::ellipsize(label, width)
         };
         let line = Line::from(Span::styled(rendered, item_style));
-        // 行级样式让选中项整行反显，而不是只反显文字。
+        // 行级样式让选中项或待确认项整行铺满底色。
         frame.render_widget(Paragraph::new(line).style(item_style), *rect);
     }
 }

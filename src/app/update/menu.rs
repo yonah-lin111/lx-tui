@@ -4,7 +4,7 @@ use ratatui::layout::Direction;
 
 use crate::app::effects::Effect;
 use crate::app::overlay::{
-    ConfirmClose, Menu, MenuCommand, Overlay, OverlayTarget, Rename, RenameTarget, TextInput,
+    Menu, MenuCommand, Overlay, OverlayTarget, Rename, RenameTarget, TextInput,
 };
 use crate::app::state::{AppState, PaneView, tab_label};
 use crate::app::trust::TrustTrigger;
@@ -12,14 +12,15 @@ use crate::layout::PaneId;
 
 use super::pane::toggle_pane_view;
 use super::prompt::{
-    copy_prompt_content, copy_prompt_temp_content, delete_prompt_temp, edit_prompt_item,
-    edit_prompt_temp, move_page_menu_selection, open_new_folder, open_new_prompt,
-    open_prompt_rename,
+    copy_prompt_content, copy_prompt_temp_content, delete_prompt_folder, delete_prompt_item,
+    delete_prompt_temp, edit_prompt_item, edit_prompt_temp, move_page_menu_selection,
+    open_new_folder, open_new_prompt, open_prompt_rename,
 };
 use super::selection::clear_selection;
 use super::workspace::{
-    create_tab, create_terminal_in_workspace, open_confirm_switch_cwd, open_new_workspace_dialog,
-    open_prompt_for_pane, open_prompt_for_workspace,
+    close_pane, close_tab, close_workspace, create_tab, create_terminal_in_workspace,
+    open_new_workspace_dialog, open_prompt_for_pane, open_prompt_for_workspace,
+    switch_to_workspace_cwd,
 };
 use super::worktree::open_worktree_dialog;
 
@@ -57,6 +58,7 @@ pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u1
         target: OverlayTarget::Workspace(target),
         commands,
         selected: 0,
+        confirming: false,
     }));
 }
 
@@ -70,6 +72,7 @@ pub fn open_workspace_list_menu(state: &mut AppState, anchor: (u16, u16)) {
         target: OverlayTarget::WorkspaceList,
         commands: vec![MenuCommand::NewWorkspace],
         selected: 0,
+        confirming: false,
     }));
 }
 
@@ -95,6 +98,7 @@ pub fn open_tab_menu(state: &mut AppState, tab: usize, anchor: (u16, u16)) {
         },
         commands,
         selected: 0,
+        confirming: false,
     }));
 }
 
@@ -159,6 +163,7 @@ pub fn open_pane_menu(state: &mut AppState, pane: PaneId, anchor: (u16, u16)) {
         },
         commands,
         selected: 0,
+        confirming: false,
     }));
 }
 
@@ -180,7 +185,11 @@ pub fn move_menu_selection(state: &mut AppState, step: isize) {
         return;
     }
     let len = menu.commands.len() as isize;
-    menu.selected = (menu.selected as isize + step).rem_euclid(len) as usize;
+    let next = (menu.selected as isize + step).rem_euclid(len) as usize;
+    if next != menu.selected {
+        menu.confirming = false;
+    }
+    menu.selected = next;
     // 键盘移动同样显示高亮反馈。
     state.menu_hover = true;
 }
@@ -193,7 +202,11 @@ pub fn set_menu_selection(state: &mut AppState, index: usize) -> bool {
     if index >= menu.commands.len() {
         return false;
     }
-    let changed = menu.selected != index || !state.menu_hover;
+    let selection_changed = menu.selected != index;
+    if selection_changed {
+        menu.confirming = false;
+    }
+    let changed = selection_changed || !state.menu_hover;
     menu.selected = index;
     state.menu_hover = true;
     changed
@@ -208,10 +221,22 @@ pub fn clear_menu_hover(state: &mut AppState) -> bool {
     true
 }
 
-/// 执行菜单当前项：新建立即生效；重命名打开输入浮层，关闭打开确认浮层。
-pub fn activate_menu(state: &mut AppState) {
+/// 执行菜单当前项：
+/// - 需二次确认的命令在首次触发时仅切换当前项为 `confirming = true` 并保持菜单打开；
+/// - 再次触发（或无需确认的命令首次触发）时关闭菜单并立即执行动作。
+pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut()
+        && let Some(command) = menu.commands.get(menu.selected).copied()
+        && command.requires_confirm()
+        && !menu.confirming
+    {
+        menu.confirming = true;
+        state.menu_hover = true;
+        return None;
+    }
+
     let Some(Overlay::Menu(menu)) = state.overlay.take() else {
-        return;
+        return None;
     };
     match (menu.commands.get(menu.selected), menu.target) {
         (Some(MenuCommand::NewTab), OverlayTarget::Tab { .. }) => create_tab(state),
@@ -235,7 +260,7 @@ pub fn activate_menu(state: &mut AppState) {
                 pane,
             },
         ) => {
-            open_confirm_switch_cwd(state, workspace, tab, pane);
+            return switch_to_workspace_cwd(state, workspace, tab, pane);
         }
         (
             Some(MenuCommand::SyncWorkspaceToTerminalCwd),
@@ -243,8 +268,7 @@ pub fn activate_menu(state: &mut AppState) {
                 workspace, pane, ..
             },
         ) => {
-            // 同步触发前做信任检查：未信任弹信任浮层，信任后进入二次确认。
-            // 仓库归属未知（root: None），未命中快速判定时由事件层后台解析。
+            // 已在菜单内完成二次确认：触发信任检查，信任通过后直接执行同步。
             if let Some(path) = state
                 .workspaces
                 .get(workspace)
@@ -259,9 +283,7 @@ pub fn activate_menu(state: &mut AppState) {
             }
         }
         (Some(MenuCommand::RenameWorkspace), OverlayTarget::Workspace(target)) => {
-            let Some(workspace) = state.workspaces.get(target) else {
-                return;
-            };
+            let workspace = state.workspaces.get(target)?;
             state.overlay = Some(Overlay::Rename(Rename {
                 target: RenameTarget::Workspace(target),
                 input: TextInput::new(workspace.name.clone()),
@@ -270,29 +292,22 @@ pub fn activate_menu(state: &mut AppState) {
         (Some(MenuCommand::OpenWorktree), OverlayTarget::Workspace(target)) => {
             open_worktree_dialog(state, target);
         }
-        (Some(MenuCommand::CloseWorkspace), OverlayTarget::Workspace(_)) => {
-            state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-                target: menu.target,
-            }));
+        (Some(MenuCommand::CloseWorkspace), OverlayTarget::Workspace(target)) => {
+            close_workspace(state, target);
         }
         (Some(MenuCommand::RenameTab), OverlayTarget::Tab { workspace, tab }) => {
-            let Some(label) = state
+            let label = state
                 .workspaces
                 .get(workspace)
                 .and_then(|workspace| workspace.tabs.get(tab))
-                .map(|tab_state| tab_label(tab, tab_state.name.as_deref()))
-            else {
-                return;
-            };
+                .map(|tab_state| tab_label(tab, tab_state.name.as_deref()))?;
             state.overlay = Some(Overlay::Rename(Rename {
                 target: RenameTarget::Tab { workspace, tab },
                 input: TextInput::new(label),
             }));
         }
-        (Some(MenuCommand::CloseTab), OverlayTarget::Tab { .. }) => {
-            state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-                target: menu.target,
-            }));
+        (Some(MenuCommand::CloseTab), OverlayTarget::Tab { workspace, tab }) => {
+            close_tab(state, workspace, tab);
         }
         (
             Some(MenuCommand::SplitRight),
@@ -320,10 +335,15 @@ pub fn activate_menu(state: &mut AppState) {
         ) => {
             toggle_pane_view(state, pane);
         }
-        (Some(MenuCommand::ClosePane), OverlayTarget::Pane { .. }) => {
-            state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-                target: menu.target,
-            }));
+        (
+            Some(MenuCommand::ClosePane),
+            OverlayTarget::Pane {
+                workspace,
+                tab,
+                pane,
+            },
+        ) => {
+            close_pane(state, workspace, tab, pane);
         }
         (Some(MenuCommand::NewPrompt), OverlayTarget::PromptFolder { folder_id, .. }) => {
             open_new_prompt(state, Some(folder_id));
@@ -355,11 +375,17 @@ pub fn activate_menu(state: &mut AppState) {
                 },
             );
         }
-        (Some(MenuCommand::DeleteFolder), OverlayTarget::PromptFolder { .. })
-        | (Some(MenuCommand::DeletePrompt), OverlayTarget::PromptItem { .. }) => {
-            state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-                target: menu.target,
-            }));
+        (
+            Some(MenuCommand::DeleteFolder),
+            OverlayTarget::PromptFolder {
+                workspace,
+                folder_id,
+            },
+        ) => {
+            delete_prompt_folder(state, workspace, folder_id);
+        }
+        (Some(MenuCommand::DeletePrompt), OverlayTarget::PromptItem { workspace, item_id }) => {
+            delete_prompt_item(state, workspace, item_id);
         }
         (Some(MenuCommand::EditPrompt), OverlayTarget::PromptItem { workspace, item_id }) => {
             edit_prompt_item(state, workspace, item_id);
@@ -421,6 +447,7 @@ pub fn activate_menu(state: &mut AppState) {
         }
         _ => {}
     }
+    None
 }
 
 /// 在目标窗格处按方向分割并聚焦新窗格；新窗格继承源窗格视图。

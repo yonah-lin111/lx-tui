@@ -126,22 +126,6 @@ fn block_command_text_covers_all_commands() {
 }
 
 #[test]
-fn confirm_switch_cwd_question_wraps_path_in_quotes() {
-    assert_eq!(
-        confirm_switch_cwd_question("/tmp/project"),
-        "switch cwd to \"/tmp/project\"?"
-    );
-}
-
-#[test]
-fn confirm_sync_ws_cwd_question_keeps_full_path() {
-    assert_eq!(
-        confirm_sync_ws_cwd_question("/tmp/project"),
-        "switch workspace path to \"/tmp/project\"?"
-    );
-}
-
-#[test]
 fn wrap_breaks_at_spaces_within_display_width() {
     assert_eq!(
         wrap("delete folder \"New folder\" and its contents?", 38),
@@ -164,8 +148,16 @@ fn workspace_menu_copy_is_ws_abbreviated_english() {
     assert_eq!(MENU_OPEN_PROMPT, "Open prompt");
     assert_eq!(MENU_SWITCH_TO_WORKSPACE_CWD, "Switch to ws path");
     assert_eq!(MENU_SYNC_WS_TO_TERMINAL_CWD, "Sync ws to terminal path");
-    assert_eq!(CONFIRM_SWITCH_CWD_TITLE, "Switch to ws path");
-    assert_eq!(CONFIRM_SYNC_WS_CWD_TITLE, "Sync ws to terminal path");
+    assert_eq!(MENU_CONFIRM_CLOSE, "Confirm close");
+    assert_eq!(MENU_CONFIRM_DELETE, "Confirm delete");
+    assert_eq!(
+        MENU_CONFIRM_SWITCH_TO_WORKSPACE_CWD,
+        "Confirm switch to ws path"
+    );
+    assert_eq!(
+        MENU_CONFIRM_SYNC_WS_TO_TERMINAL_CWD,
+        "Confirm sync ws to terminal path"
+    );
 }
 
 #[test]

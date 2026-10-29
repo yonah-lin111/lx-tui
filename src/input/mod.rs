@@ -358,10 +358,7 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
             _ => None,
         },
-        OverlayKind::ConfirmClose
-        | OverlayKind::ConfirmSwitchCwd
-        | OverlayKind::ConfirmSyncWorkspaceCwd
-        | OverlayKind::TrustWorkspace => match key.code {
+        OverlayKind::ConfirmClose | OverlayKind::TrustWorkspace => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
             _ => None,

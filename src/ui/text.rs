@@ -325,6 +325,12 @@ pub const MENU_PROMPT_EDIT: &str = "Edit";
 pub const MENU_PROMPT_RENAME: &str = "Rename";
 pub const MENU_PROMPT_COPY: &str = "Copy content";
 pub const MENU_PROMPT_DELETE: &str = "Delete";
+
+/// 右键菜单项行内二次确认文案。
+pub const MENU_CONFIRM_CLOSE: &str = "Confirm close";
+pub const MENU_CONFIRM_DELETE: &str = "Confirm delete";
+pub const MENU_CONFIRM_SWITCH_TO_WORKSPACE_CWD: &str = "Confirm switch to ws path";
+pub const MENU_CONFIRM_SYNC_WS_TO_TERMINAL_CWD: &str = "Confirm sync ws to terminal path";
 /// 标题行的页切换箭头（区别于折叠 `◀`/`▶` 与撤销/重做 `←`/`→`）。
 pub const PROMPT_PAGE_PREV: &str = "‹";
 pub const PROMPT_PAGE_NEXT: &str = "›";
@@ -392,8 +398,6 @@ pub const CONFIRM_CLOSE_TAB_TITLE: &str = "Close tab";
 pub const CONFIRM_CLOSE_PANE_TITLE: &str = "Close pane";
 pub const CONFIRM_DELETE_PROMPT_TITLE: &str = "Delete prompt";
 pub const CONFIRM_DELETE_FOLDER_TITLE: &str = "Delete folder";
-pub const CONFIRM_SWITCH_CWD_TITLE: &str = "Switch to ws path";
-pub const CONFIRM_SYNC_WS_CWD_TITLE: &str = "Sync ws to terminal path";
 
 /// 信任工作区模态：标题、问题与按钮。
 pub const TRUST_WORKSPACE_TITLE: &str = "Trust workspace";
@@ -461,16 +465,6 @@ pub fn confirm_delete_folder_question(name: &str) -> String {
 /// 删除提示词页确认问题文案。
 pub fn confirm_delete_page_question(name: &str) -> String {
     format!("delete page \"{name}\"?")
-}
-
-/// 切换工作区路径确认问题文案。
-pub fn confirm_switch_cwd_question(path: &str) -> String {
-    format!("switch cwd to \"{path}\"?")
-}
-
-/// 同步当前工作区路径到终端路径的二次确认问题。
-pub fn confirm_sync_ws_cwd_question(path: &str) -> String {
-    format!("switch workspace path to \"{path}\"?")
 }
 
 /// 按显示宽度换行：优先在空白处断行，超宽单词按字符硬断（宽字符占两列）；

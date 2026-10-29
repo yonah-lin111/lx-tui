@@ -2,9 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::app::overlay::{
-    ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, NewWorkspace, Overlay, TextInput,
-};
+use crate::app::overlay::{NewWorkspace, Overlay, TextInput};
 use crate::app::state::{
     AppState, PaneKind, PaneView, Tab, Workspace, current_workspace_identity, home_dir,
     unique_workspace_name, workspace_label,
@@ -181,28 +179,6 @@ pub fn open_prompt_for_pane(state: &mut AppState, pane: PaneId) {
     focus_prompt(state);
 }
 
-/// 打开切换工作区路径的二次确认浮层；工作区无固定路径时忽略。
-pub(crate) fn open_confirm_switch_cwd(
-    state: &mut AppState,
-    workspace: usize,
-    tab: usize,
-    pane: PaneId,
-) {
-    let Some(path) = state
-        .workspaces
-        .get(workspace)
-        .and_then(|workspace| workspace.cwd.clone())
-    else {
-        return;
-    };
-    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
-        workspace,
-        tab,
-        pane,
-        path,
-    }));
-}
-
 /// 切换工作区路径的 shell 命令：双引号包裹并转义 `\`、`"`、`$` 与反引号，杜绝命令注入。
 pub(crate) fn switch_cwd_command(path: &Path) -> Vec<u8> {
     let mut command = String::from("cd \"");
@@ -216,28 +192,24 @@ pub(crate) fn switch_cwd_command(path: &Path) -> Vec<u8> {
     command.into_bytes()
 }
 
-/// 确认切换工作区路径：关闭浮层并返回写入目标窗格的 `cd` 命令；
-/// 目标窗格已不存在或非终端时返回 None。
-pub(crate) fn confirm_switch_cwd(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
-    let Some(Overlay::ConfirmSwitchCwd(confirm)) = state.overlay.take() else {
-        return None;
-    };
-    let pane = state
-        .workspaces
-        .get(confirm.workspace)?
-        .tabs
-        .get(confirm.tab)?
-        .pane(confirm.pane)?;
-    (pane.kind == PaneKind::Terminal).then(|| (confirm.pane, switch_cwd_command(&confirm.path)))
+/// 切换终端窗格到工作区固定路径：返回写入目标窗格的 `cd` 命令；
+/// 工作区无固定路径、目标窗格已不存在或非终端时返回 None。
+pub(crate) fn switch_to_workspace_cwd(
+    state: &AppState,
+    workspace: usize,
+    tab: usize,
+    pane: PaneId,
+) -> Option<(PaneId, Vec<u8>)> {
+    let ws = state.workspaces.get(workspace)?;
+    let path = ws.cwd.as_deref()?;
+    let pane_state = ws.tabs.get(tab)?.pane(pane)?;
+    (pane_state.kind == PaneKind::Terminal).then(|| (pane, switch_cwd_command(path)))
 }
 
-/// 打开同步当前工作区路径到终端路径的二次确认浮层；终端无有效路径时忽略。
-pub(crate) fn open_confirm_sync_workspace_cwd(
-    state: &mut AppState,
-    workspace: usize,
-    pane: PaneId,
-) {
-    let Some(path) = state
+/// 同步当前工作区路径到终端路径：更新工作区 cwd、自动命名与 git 查询，
+/// 并同步活跃 prompt 根目录；终端无有效路径时忽略。
+pub(crate) fn sync_workspace_cwd(state: &mut AppState, workspace: usize, pane: PaneId) {
+    let Some(new_cwd) = state
         .workspaces
         .get(workspace)
         .and_then(|ws| ws.tabs.iter().find_map(|t| t.pane(pane)))
@@ -245,21 +217,7 @@ pub(crate) fn open_confirm_sync_workspace_cwd(
     else {
         return;
     };
-    state.overlay = Some(Overlay::ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd {
-        workspace,
-        pane,
-        path,
-    }));
-}
-
-/// 确认同步当前工作区路径到终端路径：关闭浮层，更新工作区 cwd、自动命名与 git 查询，
-/// 并同步活跃 prompt 根目录。
-pub(crate) fn confirm_sync_workspace_cwd(state: &mut AppState) {
-    let Some(Overlay::ConfirmSyncWorkspaceCwd(confirm)) = state.overlay.take() else {
-        return;
-    };
-    let new_cwd = confirm.path;
-    let target_ws = confirm.workspace;
+    let target_ws = workspace;
     let name_is_manual = state
         .workspaces
         .get(target_ws)

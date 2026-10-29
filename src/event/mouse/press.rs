@@ -87,10 +87,7 @@ pub(crate) fn handle_mouse_down_left(
                 return;
             }
         }
-        let was_confirm = matches!(
-            state.overlay,
-            Some(Overlay::ConfirmClose(_) | Overlay::ConfirmSyncWorkspaceCwd(_))
-        );
+        let was_confirm = matches!(state.overlay, Some(Overlay::ConfirmClose(_)));
         let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
         let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
         let was_new_ws = matches!(

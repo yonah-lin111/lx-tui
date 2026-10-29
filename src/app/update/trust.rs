@@ -25,7 +25,7 @@ pub fn resume_trust(state: &mut AppState, trigger: TrustTrigger) {
             super::create_workspace_with_cwd(state, Some(cwd));
         }
         TrustTrigger::SyncWorkspaceCwd { workspace, pane } => {
-            super::open_confirm_sync_workspace_cwd(state, workspace, pane);
+            super::sync_workspace_cwd(state, workspace, pane);
         }
         TrustTrigger::OpenWorktree {
             entry,

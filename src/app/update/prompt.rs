@@ -669,6 +669,7 @@ pub fn open_prompt_item_menu(state: &mut AppState, item_id: i64, anchor: (u16, u
         target: OverlayTarget::PromptItem { workspace, item_id },
         commands,
         selected: 0,
+        confirming: false,
     }));
 }
 
@@ -693,6 +694,7 @@ pub fn open_prompt_temp_menu(state: &mut AppState, temp_id: u64, anchor: (u16, u
             MenuCommand::DeleteTemp,
         ],
         selected: 0,
+        confirming: false,
     }));
 }
 
@@ -720,6 +722,7 @@ pub fn open_prompt_folder_menu(state: &mut AppState, folder_id: i64, anchor: (u1
         },
         commands,
         selected: 0,
+        confirming: false,
     }));
 }
 
@@ -731,6 +734,7 @@ pub fn open_prompt_tree_menu(state: &mut AppState, anchor: (u16, u16)) {
         target: OverlayTarget::PromptTree { workspace },
         commands: vec![MenuCommand::NewPrompt, MenuCommand::NewFolder],
         selected: 0,
+        confirming: false,
     }));
 }
 
