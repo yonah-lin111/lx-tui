@@ -198,6 +198,28 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
     if mention_visible && command == LxInput::EnterFolder {
         return;
     }
+    // 快捷引用面板优先于斜杠面板：仅接管导航、采纳与关闭；其它编辑键继续走编辑并重算触发。
+    if lx.refer_active() {
+        match command {
+            LxInput::Up => {
+                lx.refer_move(-1);
+                return;
+            }
+            LxInput::Down => {
+                lx.refer_move(1);
+                return;
+            }
+            LxInput::Tab | LxInput::Enter => {
+                lx.refer_confirm();
+                return;
+            }
+            LxInput::Escape => {
+                lx.refer_escape();
+                return;
+            }
+            _ => {}
+        }
+    }
     // `/` 命令面板：与 `@` 提及面板一致的交互——仅接管导航、采纳与关闭，
     // 其余编辑键**继续走下方编辑分支并重算面板**，因此可以删除 `/`（触发消失即关闭）
     // 或继续输入做模糊过滤。Model/Resume/History 二级面板仍吞掉编辑键（其内容不由草稿驱动）。
@@ -750,6 +772,31 @@ pub fn scroll_lx_mention(state: &mut AppState, id: PaneId, delta: isize, base: u
     state
         .pane_mut_anywhere(id)
         .is_some_and(|pane| pane.lx.mention_scroll(delta, base))
+}
+
+/// 鼠标悬停快捷引用面板条目：更新高亮（窗口不滚动）；返回是否变化。
+pub fn hover_lx_refer(state: &mut AppState, id: PaneId, index: usize) -> bool {
+    state
+        .pane_mut_anywhere(id)
+        .is_some_and(|pane| pane.lx.refer_set_active(index))
+}
+
+/// 鼠标点选快捷引用候选：设置高亮并采纳；返回是否消费。
+pub fn select_lx_refer(state: &mut AppState, id: PaneId, index: usize) -> bool {
+    let Some(pane) = state.pane_mut_anywhere(id) else {
+        return false;
+    };
+    if !pane.lx.refer_set_active(index) && !pane.lx.refer_active() {
+        return false;
+    }
+    pane.lx.refer_confirm()
+}
+
+/// 滚轮在快捷引用面板上滚动候选视口；`base` 为当前窗口起点，高亮不动。
+pub fn scroll_lx_refer(state: &mut AppState, id: PaneId, delta: isize, base: usize) -> bool {
+    state
+        .pane_mut_anywhere(id)
+        .is_some_and(|pane| pane.lx.refer_scroll(delta, base))
 }
 
 /// 鼠标悬停 `/` 命令面板条目：更新高亮（窗口不滚动）；返回是否变化。

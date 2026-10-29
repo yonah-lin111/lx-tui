@@ -414,7 +414,8 @@ impl Prompt {
             return;
         }
         if self.mention.panel().is_none()
-            && let Some(range) = markdown::mention_deletion_range(&self.text, self.cursor)
+            && let Some(range) = markdown::ref_content_deletion_range(&self.text, self.cursor)
+                .or_else(|| markdown::mention_deletion_range(&self.text, self.cursor))
                 .or_else(|| markdown::reference_deletion_range(&self.text, self.cursor))
                 .or_else(|| markdown::short_ref_deletion_range(&self.text, self.cursor))
         {

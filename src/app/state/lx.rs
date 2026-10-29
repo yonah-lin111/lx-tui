@@ -14,6 +14,7 @@ pub mod compact;
 mod history;
 pub mod mention;
 mod panels;
+pub mod refer;
 pub mod rewind;
 pub mod shell;
 pub mod slash;
@@ -86,6 +87,10 @@ pub struct Lx {
     paste: Option<LxPaste>,
     /// `@` 文件提及面板：扫描根、缓存与候选；与块面板/粘贴面板互斥。
     mention: LxMention,
+    /// 字母快捷输入面板（由正文已出现的引用与会话历史生成候选）。
+    pub refer: Option<crate::app::markdown::ReferPanel>,
+    /// 快捷面板压制标记：Esc 关闭或确认插入后，等待下一次编辑/移动再重算。
+    pub refer_suppressed: bool,
     /// `/` 命令面板（model/resume/new）；与块面板/粘贴/提及面板互斥。
     pub slash: Option<super::lx::SlashPanel>,
     /// 聊天会话状态：会话引用、历史视图与请求状态机。
@@ -188,6 +193,8 @@ impl Lx {
             panel: None,
             paste: None,
             mention: LxMention::default(),
+            refer: None,
+            refer_suppressed: false,
             slash: None,
             chat: LxChat::new(),
             agents: AgentsState::default(),
@@ -499,6 +506,7 @@ impl Lx {
 
     /// 在光标处插入一个字符。
     pub fn insert_char(&mut self, ch: char) {
+        self.refer_suppressed = false;
         self.snapshot();
         self.input.insert(self.cursor, ch);
         self.cursor += ch.len_utf8();
@@ -563,6 +571,7 @@ impl Lx {
     /// 光标紧跟 `@路径 ` 提及之后的空白、且提及面板未打开时，一次删净整块提及
     /// （对齐 prompt 的 `mention_deletion_range` 语义）；面板打开时按普通退格编辑查询。
     pub fn backspace(&mut self) {
+        self.refer_suppressed = false;
         // Shell 正文起点退格：退出模式并保留正文（不再吞字符）；压一次快照，
         // 使 undo 能恢复模式与正文。
         if self.input_mode == LxInputMode::Shell && self.cursor == 0 {
@@ -575,8 +584,18 @@ impl Lx {
             return;
         }
         if !self.mention.is_open()
+            && self.refer.is_none()
             && let Some(range) =
-                crate::app::markdown::mention_deletion_range(&self.input, self.cursor)
+                crate::app::markdown::ref_content_deletion_range(&self.input, self.cursor)
+                    .or_else(|| {
+                        crate::app::markdown::mention_deletion_range(&self.input, self.cursor)
+                    })
+                    .or_else(|| {
+                        crate::app::markdown::reference_deletion_range(&self.input, self.cursor)
+                    })
+                    .or_else(|| {
+                        crate::app::markdown::short_ref_deletion_range(&self.input, self.cursor)
+                    })
         {
             self.snapshot();
             self.cursor = range.start;
@@ -594,6 +613,7 @@ impl Lx {
 
     /// 删除光标处字符。
     pub fn delete(&mut self) {
+        self.refer_suppressed = false;
         if self.cursor < self.input.len() {
             self.snapshot();
             self.input.remove(self.cursor);
@@ -603,6 +623,7 @@ impl Lx {
 
     /// 光标左移一个字符。
     pub fn move_left(&mut self) {
+        self.refer_suppressed = false;
         if let Some(prev) = self.input[..self.cursor].chars().next_back() {
             self.cursor -= prev.len_utf8();
             self.refresh_panel();
@@ -611,6 +632,7 @@ impl Lx {
 
     /// 光标右移一个字符。
     pub fn move_right(&mut self) {
+        self.refer_suppressed = false;
         if let Some(next) = self.input[self.cursor..].chars().next() {
             self.cursor += next.len_utf8();
             self.refresh_panel();
@@ -619,6 +641,7 @@ impl Lx {
 
     /// 光标移到当前视觉行行首。
     pub fn home(&mut self) {
+        self.refer_suppressed = false;
         let rows = self.visual_rows();
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = rows[index].start;
@@ -627,6 +650,7 @@ impl Lx {
 
     /// 光标移到当前视觉行行尾。
     pub fn end(&mut self) {
+        self.refer_suppressed = false;
         let rows = self.visual_rows();
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = rows[index].end;
@@ -635,6 +659,7 @@ impl Lx {
 
     /// 光标上移一个视觉行（保持显示列，越界钳到行尾）。
     pub fn move_up(&mut self) {
+        self.refer_suppressed = false;
         let rows = self.visual_rows();
         let (index, col) = self.cursor_visual_in(&rows);
         if index == 0 {
@@ -649,6 +674,7 @@ impl Lx {
 
     /// 光标下移一个视觉行（保持显示列，越界钳到行尾）。
     pub fn move_down(&mut self) {
+        self.refer_suppressed = false;
         let rows = self.visual_rows();
         let (index, col) = self.cursor_visual_in(&rows);
         if index + 1 >= rows.len() {
@@ -755,18 +781,21 @@ impl Lx {
 
     /// 光标左移一个词。
     pub fn word_left(&mut self) {
+        self.refer_suppressed = false;
         self.cursor = text::word_start_before(&self.input, self.cursor);
         self.refresh_panel();
     }
 
     /// 光标右移一个词。
     pub fn word_right(&mut self) {
+        self.refer_suppressed = false;
         self.cursor = text::word_end_after(&self.input, self.cursor);
         self.refresh_panel();
     }
 
     /// 删除光标到逻辑行首；光标已在行首时删除前一个换行（与上一行合并）。
     pub fn delete_to_line_start(&mut self) {
+        self.refer_suppressed = false;
         if self.cursor == 0 {
             return;
         }
@@ -785,6 +814,7 @@ impl Lx {
 
     /// 删除光标到逻辑行尾。
     pub fn delete_to_line_end(&mut self) {
+        self.refer_suppressed = false;
         let end = text::line_end(&self.input, self.cursor);
         if self.cursor < end {
             self.snapshot();
@@ -795,6 +825,7 @@ impl Lx {
 
     /// 向前删除一个词。
     pub fn delete_word_backward(&mut self) {
+        self.refer_suppressed = false;
         let start = text::word_start_before(&self.input, self.cursor);
         if start < self.cursor {
             self.snapshot();
@@ -808,6 +839,7 @@ impl Lx {
     /// 光标**不动**（readline M-d 语义）：被删区间在光标之后，删完光标位置仍然合法。
     /// 曾经把光标设成删除前的 `end`，缓冲区缩短后光标越界，下一次编辑直接 panic。
     pub fn delete_word_forward(&mut self) {
+        self.refer_suppressed = false;
         let end = text::word_end_after(&self.input, self.cursor);
         if self.cursor < end {
             self.snapshot();
@@ -817,6 +849,7 @@ impl Lx {
 
     /// 清空输入框内容；空 Shell 模式也可借此退出。
     pub fn clear(&mut self) {
+        self.refer_suppressed = false;
         if self.input.is_empty() && self.input_mode == LxInputMode::Chat {
             return;
         }
@@ -829,6 +862,7 @@ impl Lx {
 
     /// 撤销一步（恢复正文、光标与模式；修订号继续前进）。
     pub fn undo(&mut self) {
+        self.refer_suppressed = false;
         if let Some(snapshot) = self.undo.pop() {
             let current = LxSnapshot {
                 text: std::mem::replace(&mut self.input, snapshot.text),
@@ -845,6 +879,7 @@ impl Lx {
 
     /// 重做一步（恢复正文、光标与模式；修订号继续前进）。
     pub fn redo(&mut self) {
+        self.refer_suppressed = false;
         if let Some(snapshot) = self.redo.pop() {
             let current = LxSnapshot {
                 text: std::mem::replace(&mut self.input, snapshot.text),

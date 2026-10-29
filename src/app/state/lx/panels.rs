@@ -13,11 +13,12 @@ impl Lx {
     /// 编辑或移动光标后调用；同时清除输入框文本选区、解除提及面板的压制，按当前文本与根重新评估。
     pub fn refresh_panel(&mut self) {
         self.text_selection = None;
-        // Shell 正文按原始脚本编辑：不弹 Markdown / 提及 / 斜杠 / 路径参照面板。
+        // Shell 正文按原始脚本编辑：不弹 Markdown / 提及 / 斜杠 / 路径参照 / 快捷引用面板。
         if self.input_mode == LxInputMode::Shell {
             self.panel = None;
             self.slash = None;
             self.paste = None;
+            self.refer = None;
             self.mention.suppress();
             self.scroll_cursor_into_view();
             return;
@@ -26,11 +27,19 @@ impl Lx {
         self.mention.refresh(&self.input, self.cursor);
         if self.mention.is_open() {
             self.panel = None;
+            self.refer = None;
+        } else if self.slash.is_some() || self.paste.is_some() {
+            self.refer = None;
         } else {
-            self.panel = block_trigger(&self.input, self.cursor).map(|trigger| {
-                let items = block_commands(trigger.kind);
-                BlockPanel::new(trigger, items, 0)
-            });
+            self.refresh_refer_panel();
+            if self.refer.is_some() {
+                self.panel = None;
+            } else {
+                self.panel = block_trigger(&self.input, self.cursor).map(|trigger| {
+                    let items = block_commands(trigger.kind);
+                    BlockPanel::new(trigger, items, 0)
+                });
+            }
         }
         self.scroll_cursor_into_view();
     }

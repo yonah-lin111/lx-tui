@@ -835,4 +835,41 @@ impl LxChat {
                 .filter(|message| message.role == "assistant" && message.status == "streaming"),
         }
     }
+
+    /// 提取当前会话中用户历史消息发送过的所有文件及引用路径（按最近使用逆序去重）。
+    /// 返回 `(相对路径, 是否目录)`。
+    pub fn user_history_reference_paths(&self) -> Vec<(String, bool)> {
+        let mut seen = std::collections::HashSet::new();
+        let mut results = Vec::new();
+
+        for msg in self.messages.iter().rev() {
+            if msg.role != "user" {
+                continue;
+            }
+            // 1. 从 attachments 提取
+            for att in &msg.attachments {
+                let path = att.source_path.as_deref().unwrap_or(&att.label);
+                let trimmed = path.trim_matches('/');
+                if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
+                    let is_dir = att.kind == crate::db::chat::MessageAttachmentKind::Folder;
+                    results.push((trimmed.to_string(), is_dir));
+                }
+            }
+            // 2. 从正文中提取显式 @ 提及与 @[ref-content]/
+            for step in &msg.steps {
+                if let AssistantStepView::Part { part, .. } = step
+                    && part.kind == crate::chat::events::PartKind::Text
+                {
+                    for (path, is_dir) in crate::app::markdown::extract_mention_paths(&part.content)
+                    {
+                        let trimmed = path.trim_matches('/');
+                        if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
+                            results.push((trimmed.to_string(), is_dir));
+                        }
+                    }
+                }
+            }
+        }
+        results
+    }
 }

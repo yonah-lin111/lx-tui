@@ -253,3 +253,59 @@ fn relativize_project_path_strips_current_project_prefix_and_keeps_external_path
         Some(".worktrees/tool-message-tree/AGENTS.md")
     );
 }
+
+#[test]
+fn user_history_reference_paths_extracts_attachments_and_mentions_from_user_messages_only() {
+    let mut chat = super::super::LxChat::new();
+
+    // 1. 用户消息 1：包含附件 main.rs 与正文 @src/lib.rs
+    let mut msg1 = assistant();
+    msg1.role = "user".into();
+    msg1.attachments
+        .push(crate::db::chat::MessageAttachmentMeta {
+            id: "att1".into(),
+            position: 0,
+            kind: crate::db::chat::MessageAttachmentKind::File,
+            label: "src/main.rs".into(),
+            marker_start: None,
+            marker_end: None,
+            source_path: Some("src/main.rs".into()),
+            mime: None,
+            width: None,
+            height: None,
+        });
+    msg1.steps.push(AssistantStepView::Part {
+        position: 0,
+        part: text("请查看 @src/lib.rs 和目录 @src/ui/"),
+    });
+    chat.messages.push(msg1);
+
+    // 2. Assistant 消息：包含 @src/ignored.rs，应被忽略
+    let mut msg2 = assistant();
+    msg2.role = "assistant".into();
+    msg2.steps.push(AssistantStepView::Part {
+        position: 0,
+        part: text("我已经修改了 @src/ignored.rs"),
+    });
+    chat.messages.push(msg2);
+
+    // 3. 用户消息 2：包含 @[ref-content]/docs/readme.md
+    let mut msg3 = assistant();
+    msg3.role = "user".into();
+    msg3.steps.push(AssistantStepView::Part {
+        position: 0,
+        part: text("再看 @[ref-content]/docs/readme.md 以及已有的 @src/main.rs"),
+    });
+    chat.messages.push(msg3);
+
+    let paths = chat.user_history_reference_paths();
+    assert_eq!(
+        paths,
+        vec![
+            ("docs/readme.md".to_string(), false),
+            ("src/main.rs".to_string(), false),
+            ("src/lib.rs".to_string(), false),
+            ("src/ui".to_string(), true),
+        ]
+    );
+}

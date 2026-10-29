@@ -47,6 +47,8 @@ pub enum TokenKind {
     ReferImage,
     /// `@ref/末两段` 短引用（文件 / 文件夹 / 图片由形状推断，统一一种样式）。
     ShortRef,
+    /// `@[ref-content]/...` 快捷引用。
+    RefContent,
 }
 
 /// 引用类型 → 高亮分类。
@@ -426,6 +428,16 @@ fn scan_inline(line: &str, base: usize, tokens: &mut Vec<Token>) {
             );
             index += close + 2;
             continue;
+        }
+        // 快捷引用 `@[ref-content]/…` 先于 `@` 提及判定：整段（含前缀）统一着色。
+        if rest.starts_with(markdown::REF_CONTENT_PREFIX) {
+            let prefix = markdown::REF_CONTENT_PREFIX.len();
+            let body = markdown::ref_content_body_len(line, index + prefix);
+            if body > 0 {
+                push(tokens, index..index + prefix + body, TokenKind::RefContent);
+                index += prefix + body;
+                continue;
+            }
         }
         // 短引用 `@ref/…` 先于 `@` 提及判定：整段（含前缀）统一着色。
         if rest.starts_with(markdown::SHORT_REF_PREFIX) {

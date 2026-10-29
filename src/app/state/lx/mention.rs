@@ -51,6 +51,11 @@ impl LxMention {
         self.panel.is_some()
     }
 
+    /// 扫描条目缓存（若已有）；无缓存返回空切片。
+    pub fn entries(&self) -> &[MentionEntry] {
+        self.cache.as_deref().unwrap_or_default()
+    }
+
     /// 当前有效扫描根；无根时为 None。
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
