@@ -8,7 +8,7 @@ use tokio::sync::watch;
 
 use super::context::{assemble_child_context, prepare_input_items};
 use super::*;
-use crate::app::state::lx::agent::{SubagentRun, seed_chat, seed_chat_model};
+use crate::app::state::lx::agent::{SubagentRun, seed_chat_model};
 use crate::app::state::{RequestKey, RequestState};
 use crate::chat::agent::{
     AgentRole, IMAGE_MISSING_CODE, LIMIT_REACHED_CODE, MAX_CONCURRENT_SUBAGENTS, NOT_ACTIVE_CODE,
@@ -154,6 +154,7 @@ pub(super) fn spawn(
         &task_text,
         &persisted_items,
         true,
+        None,
     )?;
 
     Ok(SubagentOutcome::Spawned {
@@ -195,6 +196,18 @@ pub(super) fn send_input(
     let is_resumed = streams.resumed_subagents.contains(target);
     if !is_running && !is_resumed {
         return Err(NOT_ACTIVE_CODE.to_string());
+    }
+
+    // P1-1：非运行态（idle）下入库前先校验队首未阻断且存在可用并发槽，避免入库后再报错遗留孤儿 queued 项。
+    if !is_running {
+        if let Ok(Some(head)) = database.next_queued_input(&workspace, &parent_session, target)
+            && let Some(code) = head.error_code
+        {
+            return Err(format!("subagent input blocked: {code}"));
+        }
+        if running_count_for_parent(streams, &parent_session) >= MAX_CONCURRENT_SUBAGENTS {
+            return Err(LIMIT_REACHED_CODE.to_string());
+        }
     }
 
     let frozen = streams
@@ -348,6 +361,12 @@ pub(super) fn resume(
         });
     }
 
+    if queued_count > 0
+        && running_count_for_parent(streams, &parent_session) >= MAX_CONCURRENT_SUBAGENTS
+    {
+        return Err(LIMIT_REACHED_CODE.to_string());
+    }
+
     database
         .recover_subagent_for_resume(&workspace, &parent_session, agent_id)
         .map_err(|err| err.code().to_string())?;
@@ -418,6 +437,27 @@ pub(crate) fn schedule_next_queued_input(
     parent_key: &RequestKey,
     workspace: &Path,
     agent_id: &str,
+) -> Result<Option<crate::db::chat::ClaimedSubagentTurn>, String> {
+    schedule_next_queued_input_with_done(
+        state,
+        streams,
+        persistence,
+        parent_key,
+        workspace,
+        agent_id,
+        None,
+    )
+}
+
+/// 若该 agent 空闲且队首有可执行的 `queued` 输入，校验图片与历史并认领启动下一轮（可复用上一轮 `done` 通道）。
+pub(crate) fn schedule_next_queued_input_with_done(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+    parent_key: &RequestKey,
+    workspace: &Path,
+    agent_id: &str,
+    reused_done: Option<watch::Sender<bool>>,
 ) -> Result<Option<crate::db::chat::ClaimedSubagentTurn>, String> {
     let parent_session = parent_key.session.clone();
     if streams
@@ -534,6 +574,7 @@ pub(crate) fn schedule_next_queued_input(
         &task_text,
         &claimed.items,
         false,
+        reused_done,
     )?;
 
     Ok(Some(claimed))
@@ -556,6 +597,7 @@ fn launch_child_turn(
     task_text: &str,
     items: &[PersistedInputItem],
     is_new_agent: bool,
+    reused_done: Option<watch::Sender<bool>>,
 ) -> Result<(), String> {
     let sender = streams
         .event_sender
@@ -599,14 +641,16 @@ fn launch_child_turn(
         generation: parent_key.generation,
     };
 
-    let existing_messages = if !is_new_agent {
-        database
-            .load_chat_session(workspace, &record.child_session_id)
-            .ok()
-            .flatten()
-    } else {
-        None
-    };
+    let existing_messages = database
+        .load_chat_session(workspace, &record.child_session_id)
+        .ok()
+        .flatten();
+    let existing_checkpoints: Vec<crate::app::state::CompactNoticeView> = database
+        .compact_checkpoints(workspace, &record.child_session_id)
+        .unwrap_or_default()
+        .iter()
+        .map(crate::app::state::CompactNoticeView::from_record)
+        .collect();
     let models_snapshot = state.models.clone();
     let build_child_chat = || {
         let mut chat = crate::app::state::LxChat::new();
@@ -639,7 +683,9 @@ fn launch_child_turn(
         let mut run = SubagentRun::from_record(record);
         run.task = task_text.to_string();
         run.status = STATUS_RUNNING.to_string();
-        seed_chat(&mut run, child_key.clone(), child_assistant_id);
+        run.chat = ui_chat;
+        run.compact.replace(existing_checkpoints);
+        run.loaded = true;
         update::on_subagent_started(state, parent_key.pane, run);
     } else if let Some(pane) = state.pane_mut_anywhere(parent_key.pane) {
         if let Some(run) = pane.lx.agents.by_agent_mut(&record.agent_id) {
@@ -648,6 +694,7 @@ fn launch_child_turn(
             run.started_at_ms = started_at_ms;
             run.task = task_text.to_string();
             run.chat = ui_chat;
+            run.compact.replace(existing_checkpoints);
             run.loaded = true;
             run.rows_dirty = true;
         } else {
@@ -656,13 +703,14 @@ fn launch_child_turn(
             run.started_at_ms = started_at_ms;
             run.task = task_text.to_string();
             run.chat = ui_chat;
+            run.compact.replace(existing_checkpoints);
             run.loaded = true;
             pane.lx.agents.runs.push(run);
         }
     }
 
     let (cancel_sender, cancel) = watch::channel(false);
-    let (done_sender, _done) = watch::channel(false);
+    let done_sender = reused_done.unwrap_or_else(|| watch::channel(false).0);
     let (manager, turn) = match streams.runtime_for(cwd.to_path_buf(), &record.child_session_id) {
         Some(runtime) => (
             runtime.manager.clone(),

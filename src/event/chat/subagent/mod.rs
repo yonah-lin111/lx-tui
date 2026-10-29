@@ -378,11 +378,24 @@ fn cancel_input(
         .map_err(|error| HostError::Failed {
             code: error.code().to_string(),
         })?;
-    let Some((agent_id, status, queued_count)) = outcome else {
+    let Some((agent_id, status, mut queued_count)) = outcome else {
         return Err(HostError::Failed {
             code: INPUT_NOT_FOUND_CODE.to_string(),
         });
     };
+    if status == STATUS_CANCELLED
+        && streams.resumed_subagents.contains(&agent_id)
+        && let Ok(Some(claimed)) = runner::schedule_next_queued_input(
+            state,
+            streams,
+            persistence,
+            key,
+            &workspace,
+            &agent_id,
+        )
+    {
+        queued_count = claimed.queued_remaining;
+    }
     runner::sync_agent_ui_queue(
         state,
         streams,
@@ -567,7 +580,20 @@ pub fn apply_subagent_effects(
                 };
                 match database.load_chat_session(&workspace, &child_session) {
                     Ok(Some(messages)) => {
+                        let checkpoints: Vec<crate::app::state::CompactNoticeView> = database
+                            .compact_checkpoints(&workspace, &child_session)
+                            .unwrap_or_default()
+                            .iter()
+                            .map(crate::app::state::CompactNoticeView::from_record)
+                            .collect();
                         changed |= update::on_subagent_loaded(state, pane, &agent_id, &messages);
+                        if !checkpoints.is_empty()
+                            && let Some(target) = state.pane_mut_anywhere(pane)
+                            && let Some(run) = target.lx.agents.by_agent_mut(&agent_id)
+                        {
+                            run.compact.replace(checkpoints);
+                            run.rows_dirty = true;
+                        }
                     }
                     Ok(None) => {}
                     Err(error) => {

@@ -63,59 +63,65 @@ impl ModelContext {
         (body, omitted)
     }
 
-    /// 应用一次自动压缩：保留首轮或当前最新用户任务，丢弃旧 items，摘要进系统段。
+    /// 应用一次自动压缩：保留当前轮最新用户任务（最后一段连续 User 项），丢弃旧 items，摘要进系统段。
     fn apply_auto_compact(&mut self, summary: String) {
-        let leading_user: Vec<ModelItem> = self
-            .items
-            .iter()
-            .take_while(|item| {
-                matches!(item, ModelItem::UserText(_) | ModelItem::UserContent { .. })
-            })
-            .cloned()
-            .collect();
-        let fallback_user = if leading_user.is_empty() {
-            self.items
-                .iter()
-                .find(|item| matches!(item, ModelItem::UserText(_) | ModelItem::UserContent { .. }))
-                .cloned()
-                .into_iter()
-                .collect()
-        } else {
-            leading_user
+        let kept_user = match last_user_run_range(&self.items) {
+            Some((start, end)) => self.items[start..end].to_vec(),
+            None => Vec::new(),
         };
-        self.items = fallback_user;
+        self.items = kept_user;
         self.compact_summary = Some(summary);
         self.last_failed_compact_items = None;
     }
 
-    /// 自动压缩失败时的降级收缩：保留未压缩历史与当前任务，从最旧的已完成步骤起整组裁剪至预算内。
+    /// 自动压缩失败时的降级收缩：严格保护当前轮用户任务段，优先从最旧的历史轮次/步骤成对裁剪至预算内。
     pub(crate) fn shrink_uncompressed_to_budget(&mut self, budget_tokens: u64) {
-        let leading_count = self
-            .items
-            .iter()
-            .take_while(|item| {
-                matches!(item, ModelItem::UserText(_) | ModelItem::UserContent { .. })
-            })
-            .count()
-            .max(1);
-        while self.items.len() > leading_count && self.estimated_tokens() > budget_tokens {
-            let remove_at = leading_count;
-            if remove_at >= self.items.len() {
+        while self.estimated_tokens() > budget_tokens {
+            let Some((cur_start, cur_end)) = last_user_run_range(&self.items) else {
                 break;
-            }
-            // 若是 AssistantToolCall，必须连同其紧随的同 call_id ToolResult 成对移除，防止 orphan result。
-            if let ModelItem::AssistantToolCall { call_id, .. } = &self.items[remove_at] {
-                let id = call_id.clone();
-                self.items.remove(remove_at);
-                if let Some(pos) = self.items[remove_at..].iter().position(
-                    |item| matches!(item, ModelItem::ToolResult { call_id: cid, .. } if cid == &id),
-                ) {
-                    self.items.remove(remove_at + pos);
-                }
+            };
+            let remove_at = if cur_start > 0 {
+                0
+            } else if cur_end < self.items.len() {
+                cur_end
             } else {
-                self.items.remove(remove_at);
-            }
+                break;
+            };
+            remove_item_or_pair(&mut self.items, remove_at);
         }
+    }
+}
+
+/// 判断是否为 User 消息项。
+fn is_user_item(item: &ModelItem) -> bool {
+    matches!(item, ModelItem::UserText(_) | ModelItem::UserContent { .. })
+}
+
+/// 定位 `items` 中最后一段连续 User 项的半开区间 `(start, end)`（即当前轮用户输入）。
+fn last_user_run_range(items: &[ModelItem]) -> Option<(usize, usize)> {
+    let last_idx = items.iter().rposition(is_user_item)?;
+    let mut start_idx = last_idx;
+    while start_idx > 0 && is_user_item(&items[start_idx - 1]) {
+        start_idx -= 1;
+    }
+    Some((start_idx, last_idx + 1))
+}
+
+/// 移除 `remove_at` 处的条目；若是 `AssistantToolCall` 则同步移除对应的 `ToolResult`，防止孤立结果。
+fn remove_item_or_pair(items: &mut Vec<ModelItem>, remove_at: usize) {
+    if remove_at >= items.len() {
+        return;
+    }
+    if let ModelItem::AssistantToolCall { call_id, .. } = &items[remove_at] {
+        let id = call_id.clone();
+        items.remove(remove_at);
+        if let Some(pos) = items[remove_at..].iter().position(
+            |item| matches!(item, ModelItem::ToolResult { call_id: cid, .. } if cid == &id),
+        ) {
+            items.remove(remove_at + pos);
+        }
+    } else {
+        items.remove(remove_at);
     }
 }
 

@@ -956,3 +956,203 @@ async fn wait_agent_does_not_mistake_previous_completed_turn_for_current_running
         "第 2 轮仍在运行时，wait_agent 必须等待当前活动轮而非立即返回上一轮完成"
     );
 }
+
+#[tokio::test]
+async fn p0_wait_any_does_not_wake_early_between_queued_turns_and_p1_cancel_unblocks_next_item() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = setup_parent();
+    let SubagentOutcome::Spawned { agent_id, .. } = run_op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        Some("c-spawn-p0"),
+        SubagentOp::Spawn {
+            role: AgentRole::Explorer,
+            title: "Queue transition".into(),
+            task: "turn 1".into(),
+            items: Vec::new(),
+        },
+    )
+    .await
+    .expect("spawn") else {
+        panic!("expected spawned");
+    };
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|h| h.agent_id == agent_id)
+        .map(|h| h.child_session_id.clone())
+        .expect("child");
+
+    // 排入第 2 轮输入
+    run_op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        Some("c-send-q2"),
+        SubagentOp::SendInput {
+            target: agent_id.clone(),
+            items: vec![SubagentInputItem::Text {
+                text: "turn 2".into(),
+            }],
+            interrupt: false,
+        },
+    )
+    .await
+    .expect("queue turn 2");
+
+    // 获取第 1 轮句柄上的 done receiver（模拟 wait_for=any 正在订阅）
+    let done_rx = streams
+        .subagents
+        .get(&child_session)
+        .expect("handle 1")
+        .done
+        .subscribe();
+
+    // 第 1 轮完成并立即接续启动第 2 轮（continued == true）：done 通道必须复用且不触发完成信号
+    finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session.clone(),
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    assert!(
+        !*done_rx.borrow(),
+        "第 1 轮接续启动第 2 轮时，done 不得提前置为 true"
+    );
+    assert!(
+        done_rx.has_changed().is_ok(),
+        "第 1 轮切换第 2 轮时，done 通道必须保持存活不关闭"
+    );
+
+    // 第 2 轮完成且队列已空（!continued）：此时 done 才置为 true
+    finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session.clone(),
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    assert!(*done_rx.borrow(), "队列全部消费完毕后 done 置为 true");
+}
+
+#[tokio::test]
+async fn p1_send_input_to_idle_agent_at_concurrency_limit_does_not_leave_orphan_row() {
+    let (fixture, mut state, key, persistence, mut streams, _parent) = setup_parent();
+    // 先创建 1 个子 agent 并让其完成、再 resume 到 idle
+    let SubagentOutcome::Spawned {
+        agent_id: idle_agent,
+        ..
+    } = run_op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        Some("c-idle-spawn"),
+        SubagentOp::Spawn {
+            role: AgentRole::Explorer,
+            title: "Idle target".into(),
+            task: "turn 1".into(),
+            items: Vec::new(),
+        },
+    )
+    .await
+    .expect("spawn idle")
+    else {
+        panic!("expected spawned");
+    };
+    let idle_child = streams
+        .subagents
+        .values()
+        .find(|h| h.agent_id == idle_agent)
+        .map(|h| h.child_session_id.clone())
+        .expect("child");
+    finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: idle_child,
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    run_op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        Some("c-idle-resume"),
+        SubagentOp::Resume {
+            id: idle_agent.clone(),
+        },
+    )
+    .await
+    .expect("resume idle");
+
+    // 再启动 3 个并发运行中的子 agent 占满 MAX_CONCURRENT_SUBAGENTS
+    for idx in 0..crate::chat::agent::MAX_CONCURRENT_SUBAGENTS {
+        run_op(
+            &mut state,
+            &mut streams,
+            &persistence,
+            &key,
+            Some(&format!("c-busy-{idx}")),
+            SubagentOp::Spawn {
+                role: AgentRole::Explorer,
+                title: format!("Busy {idx}"),
+                task: "work".into(),
+                items: Vec::new(),
+            },
+        )
+        .await
+        .expect("spawn busy");
+    }
+
+    // 此时向 idle_agent 发送 send_input：必须返回 LIMIT_REACHED_CODE，且不留孤儿 queued 记录
+    let err = run_op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        Some("c-send-over-limit"),
+        SubagentOp::SendInput {
+            target: idle_agent.clone(),
+            items: vec![SubagentInputItem::Text {
+                text: "should not persist".into(),
+            }],
+            interrupt: false,
+        },
+    )
+    .await
+    .expect_err("must reject when concurrency full");
+    assert_eq!(
+        err,
+        HostError::Failed {
+            code: crate::chat::agent::LIMIT_REACHED_CODE.to_string()
+        }
+    );
+    let next = persistence
+        .database()
+        .expect("db")
+        .next_queued_input(fixture.workspace(), &key.session, &idle_agent)
+        .expect("query next");
+    assert!(
+        next.is_none(),
+        "并发受阻报错时不得在数据库遗留孤儿 queued 项"
+    );
+}

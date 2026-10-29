@@ -18,7 +18,7 @@ use crate::chat::agent::{
 use crate::chat::agent_loop::ModelContext;
 use crate::chat::events::{ChatRequest, ChatTurn, ModelImage, ModelItem, RequestPurpose};
 use crate::db::Database;
-use crate::db::chat::{ChatMessage, ModelSnapshot, PersistedInputItem, ToolCallRecord};
+use crate::db::chat::{ChatMessage, ModelSnapshot, PersistedInputItem};
 use crate::platform::{
     MAX_ATTACHED_IMAGES, MAX_TOTAL_IMAGE_RAW_BYTES, archive_processed_image,
     load_and_process_image_file, process_data_url_image, verify_archived_image,
@@ -253,12 +253,7 @@ pub(super) fn assemble_child_context(
         .filter(|msg| msg.sequence > start_after && msg.external_id != current_user_message_id)
         .collect();
 
-    let planned = plan_child_historical_turns(
-        child_session_id,
-        supports_image_input,
-        &retained,
-        &turn_items_map,
-    )?;
+    let planned = plan_child_historical_turns(&retained, &turn_items_map);
 
     let output_reserve = output_limit.unwrap_or(0).min(8192);
     let budget = context_limit.map(|limit| {
@@ -284,6 +279,10 @@ pub(super) fn assemble_child_context(
     let mut turns = Vec::with_capacity(kept.len() * 2 + 1);
     let mut items = Vec::new();
     for turn in kept {
+        let user_items = match turn.stored_user_items {
+            Some(stored) => replay_persisted_items(child_session_id, supports_image_input, stored)?,
+            None => vec![ModelItem::UserText(turn.user_text.clone())],
+        };
         turns.push(ChatTurn {
             role: "user".into(),
             text: turn.user_text.clone(),
@@ -294,7 +293,7 @@ pub(super) fn assemble_child_context(
             text: turn.assistant_text.clone(),
             reasoning_metadata: None,
         });
-        items.extend(turn.user_items.iter().cloned());
+        items.extend(user_items);
         items.extend(turn.assistant_items.iter().cloned());
     }
     turns.push(ChatTurn {
@@ -318,20 +317,18 @@ pub(super) fn assemble_child_context(
         .with_compact_summary(compact_summary))
 }
 
-struct PlannedChildTurn {
+struct PlannedChildTurn<'a> {
     user_text: String,
     assistant_text: String,
-    user_items: Vec<ModelItem>,
+    stored_user_items: Option<&'a [PersistedInputItem]>,
     assistant_items: Vec<ModelItem>,
     tokens: u64,
 }
 
-fn plan_child_historical_turns(
-    child_session_id: &str,
-    supports_image_input: bool,
+fn plan_child_historical_turns<'a>(
     messages: &[&ChatMessage],
-    turn_items_map: &HashMap<String, Vec<PersistedInputItem>>,
-) -> Result<Vec<PlannedChildTurn>, String> {
+    turn_items_map: &'a HashMap<String, Vec<PersistedInputItem>>,
+) -> Vec<PlannedChildTurn<'a>> {
     let mut planned = Vec::new();
     let mut index = 0;
     while index < messages.len() {
@@ -354,24 +351,23 @@ fn plan_child_historical_turns(
             continue;
         }
         let user_text = message_text(user);
-        let user_items = if let Some(stored) = turn_items_map.get(&user.external_id) {
-            replay_persisted_items(child_session_id, supports_image_input, stored)?
-        } else {
-            vec![ModelItem::UserText(user_text.clone())]
+        let stored_user_items = turn_items_map.get(&user.external_id).map(Vec::as_slice);
+        let user_tokens = match stored_user_items {
+            Some(stored) => estimate_persisted_items_tokens(stored),
+            None => crate::chat::context::estimate_tokens(&user_text) as u64,
         };
         let assistant_text = message_text(assistant);
-        let assistant_items = build_assistant_items(assistant);
-        let tokens = estimate_items_tokens(&user_items)
-            .saturating_add(estimate_items_tokens(&assistant_items));
+        let assistant_items = crate::chat::context::assistant_items(assistant);
+        let tokens = user_tokens.saturating_add(estimate_items_tokens(&assistant_items));
         planned.push(PlannedChildTurn {
             user_text,
             assistant_text,
-            user_items,
+            stored_user_items,
             assistant_items,
             tokens,
         });
     }
-    Ok(planned)
+    planned
 }
 
 fn message_text(message: &ChatMessage) -> String {
@@ -384,76 +380,16 @@ fn message_text(message: &ChatMessage) -> String {
         .join("")
 }
 
-fn build_assistant_items(message: &ChatMessage) -> Vec<ModelItem> {
-    enum Step<'a> {
-        Part(&'a crate::db::chat::ChatPart),
-        Tool(&'a ToolCallRecord),
+fn estimate_persisted_items_tokens(items: &[PersistedInputItem]) -> u64 {
+    let mut tokens = 0u64;
+    for item in items {
+        let step = match item {
+            PersistedInputItem::Text { text } => crate::chat::context::estimate_tokens(text) as u64,
+            PersistedInputItem::Image { .. } => 1600,
+        };
+        tokens = tokens.saturating_add(step);
     }
-    let mut steps: Vec<(i64, Step<'_>)> = message
-        .parts
-        .iter()
-        .map(|part| (part.position, Step::Part(part)))
-        .chain(
-            message
-                .tools
-                .iter()
-                .map(|tool| (tool.position, Step::Tool(tool))),
-        )
-        .collect();
-    steps.sort_by_key(|(pos, _)| *pos);
-    let mut items = Vec::new();
-    let mut text = String::new();
-    for (_, step) in steps {
-        match step {
-            Step::Part(part) => {
-                if part.kind == "text" {
-                    text.push_str(&part.content);
-                }
-            }
-            Step::Tool(tool) => {
-                let is_error = match tool.status.as_str() {
-                    "completed" => false,
-                    "failed" => true,
-                    _ => continue,
-                };
-                let Ok(input) = serde_json::from_str::<serde_json::Value>(&tool.arguments_json)
-                else {
-                    continue;
-                };
-                if !input.is_object() {
-                    continue;
-                }
-                let content = match (
-                    is_error,
-                    tool.error_text.as_deref(),
-                    tool.result_json.as_deref(),
-                ) {
-                    (true, Some(err), _) if !err.is_empty() => err.to_string(),
-                    (_, _, Some(res)) if !res.is_empty() => res.to_string(),
-                    _ => continue,
-                };
-                if !text.is_empty() {
-                    items.push(ModelItem::AssistantText(std::mem::take(&mut text)));
-                }
-                items.push(ModelItem::AssistantToolCall {
-                    call_id: tool.call_id.clone(),
-                    name: tool.name.clone(),
-                    input,
-                });
-                items.push(ModelItem::ToolResult {
-                    call_id: tool.call_id.clone(),
-                    content: crate::chat::context::truncate_result_for_replay(&content),
-                    is_error,
-                });
-            }
-        }
-    }
-    if !text.is_empty() {
-        items.push(ModelItem::AssistantText(text));
-    } else if items.is_empty() {
-        items.push(ModelItem::AssistantText(String::new()));
-    }
-    items
+    tokens
 }
 
 fn estimate_items_tokens(items: &[ModelItem]) -> u64 {

@@ -251,17 +251,7 @@ pub(crate) fn settle_wait(
         } else {
             Some(report_bodies.join("\n\n"))
         };
-        let status = if is_running {
-            STATUS_RUNNING.to_string()
-        } else if queue_states
-            .get(target)
-            .and_then(|q| q.head_error_code.as_ref())
-            .is_some()
-        {
-            super::STATUS_BLOCKED.to_string()
-        } else {
-            record.status.clone()
-        };
+        let status = super::projected_agent_status(streams, record, queue_states.get(target));
         agents.push(AgentStatusView {
             agent_id: record.agent_id.clone(),
             title: record.title.clone(),
@@ -306,9 +296,25 @@ pub(crate) fn handle_subagent_wait_ready(
             && handle.status == STATUS_RUNNING
             && (all || targets.iter().any(|target| target == &handle.agent_id))
     });
-    if auto_continue && still_running && !reply.is_closed() {
+    let any_target_finished = !targets.is_empty()
+        && targets.iter().any(|target| {
+            !streams.subagents.values().any(|handle| {
+                handle.parent.session == parent
+                    && handle.agent_id == *target
+                    && handle.status == STATUS_RUNNING
+            })
+        });
+    if !reply.is_closed()
+        && ((auto_continue && still_running)
+            || (mode == WaitMode::Any && !timed_out && still_running && !any_target_finished))
+    {
         // all 模式把 timeout 当作内部重检周期；0/1ms 会把事件循环打成忙轮询。
         // 保留最小 500ms 间隔，any 模式的上限语义不受影响。
+        let next_timeout = if auto_continue {
+            timeout_ms.max(500)
+        } else {
+            timeout_ms
+        };
         wait(
             streams,
             persistence,
@@ -316,8 +322,8 @@ pub(crate) fn handle_subagent_wait_ready(
             if all { Vec::new() } else { targets },
             all,
             mode,
-            timeout_ms.max(500),
-            true,
+            next_timeout,
+            auto_continue,
             reply,
         );
         return false;

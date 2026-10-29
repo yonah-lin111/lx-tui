@@ -2,7 +2,7 @@
 
 use tokio::sync::oneshot;
 
-use super::runner::{schedule_next_queued_input, sync_agent_ui_queue};
+use super::runner::{schedule_next_queued_input_with_done, sync_agent_ui_queue};
 use super::*;
 use crate::app::state::{RequestKey, RequestState, SubagentReportView};
 use crate::chat::agent::{format_report_envelope, reports_to_json};
@@ -121,13 +121,14 @@ pub(crate) fn finish_subagent(
     match &reason {
         StopReason::Complete => {
             if streams.resumed_subagents.contains(&handle.agent_id) {
-                match schedule_next_queued_input(
+                match schedule_next_queued_input_with_done(
                     state,
                     streams,
                     persistence,
                     &handle.parent,
                     &handle.workspace,
                     &handle.agent_id,
+                    Some(handle.done.clone()),
                 ) {
                     Ok(Some(_)) => {
                         continued = true;
@@ -147,13 +148,14 @@ pub(crate) fn finish_subagent(
         StopReason::Cancelled => {
             if was_interrupted_by_input {
                 streams.resumed_subagents.insert(handle.agent_id.clone());
-                if let Ok(Some(_)) = schedule_next_queued_input(
+                if let Ok(Some(_)) = schedule_next_queued_input_with_done(
                     state,
                     streams,
                     persistence,
                     &handle.parent,
                     &handle.workspace,
                     &handle.agent_id,
+                    Some(handle.done.clone()),
                 ) {
                     continued = true;
                 }
@@ -172,10 +174,10 @@ pub(crate) fn finish_subagent(
         &handle.parent.session,
     );
     update::refresh_subagent_cards(state, handle.parent.pane);
-    if !continued || !matches!(reason, StopReason::Cancelled) {
+    if !continued {
         let _ = handle.done.send(true);
+        let _ = drain_reports(state, persistence, handle.parent.pane);
     }
-    let _ = drain_reports(state, persistence, handle.parent.pane);
     true
 }
 
