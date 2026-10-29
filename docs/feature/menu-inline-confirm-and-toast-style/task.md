@@ -83,3 +83,14 @@
   - `rtk cargo fmt --check` 通过
   - `rtk cargo clippy --all-targets -- -D warnings` 0 warnings 通过
   - 针对受影响模块执行精准测试校验全部通过
+
+---
+
+## 阶段五：Code Review 审查、P0–P2 修复与合并清理（已完成）
+
+- [x] 结合 `codegraph` 与 `codebase-memory-mcp` 进行全量审查并输出 `docs/feature/menu-inline-confirm-and-toast-style/review.md`
+- [x] **P0 修复**（`src/event/mouse/hover.rs`）：修复鼠标在确认态拓宽区域内悬停切换条目时，因菜单宽度收缩导致指针落在收缩后菜单外却残留 `menu_hover = true` 假高亮及点击落空的竞态问题，并新增回归测试 `hover_in_widened_confirm_region_clears_hover_when_menu_shrinks_back`
+- [x] **P1-1 修复**（`src/event/input.rs`、`src/event/mouse/press.rs`）：收紧 `ensure_workspace_visible` 与 `reveal_active_tab` 触发守卫，仅在右键菜单命令真正完成二次确认提交并关闭菜单时触发，避免首次点击进入确认态或 `↑/↓` 导航时强行回滚侧栏/标签栏视口，并新增回归测试 `first_click_on_confirm_item_does_not_yank_sidebar_scroll_to_active_workspace`
+- [x] **P1-2 修复**（`src/app/update/dialog.rs`、`src/ui/overlay/dialog.rs`、`src/ui/text.rs`、测试集）：清理 `ConfirmClose` 中已迁移至右键菜单行内确认的 5 类死分支及 8 个废弃文案常量/函数，将全部相关单测与 `tests/prompt_management.rs` 集成测试对齐至真实行内二次确认路径
+- [x] **P2 修复**（`src/ui/main_content/lx/toast.rs`、`src/app/trust.rs`、`src/app/update/trust.rs`）：同步更新残留的旧配色与旧弹窗流程文档注释
+- [x] 合并分支 `feat/menu-inline-confirm-and-toast-style` 至主工作区 `dev`，清理 `.worktrees/menu-inline-confirm-and-toast-style` 工作区、分支及隔离数据库

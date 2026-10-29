@@ -1,6 +1,6 @@
 # 右键菜单行内二次确认与 Toast 样式重设计 — 详细设计方案
 
-> 状态：已按 Grill Me 确认边界并在 `.worktrees/menu-inline-confirm-and-toast-style` 完成实施与校验。
+> 状态：已完成实现、Code Review（P0–P2 修复）与校验，合并入 `dev` 主工作区。
 >
 > 参考实现：`@[refer-folder](/Users/yonah/projects/agent/lx-agent)`（`LxMenuItem.tsx`、`ProjectNavigationMenu.tsx`、`SkillFileMenu.tsx`、`ChatHistoryPanel.tsx`）
 >
@@ -104,11 +104,11 @@ Menu { selected: i, confirming: true }
 
 ## 4. 模块级详细设计与关键代码
 
-### 4.1 浮层状态模型（`src/app/overlay.rs`）
+### 4.1 浮层状态模型（`src/app/overlay.rs`、`src/app/update/dialog.rs`、`src/ui/overlay/dialog.rs`）
 
-1. **精简 `OverlayKind` 与 `Overlay`**：
+1. **精简 `OverlayKind`、`Overlay` 与 `ConfirmClose` 分支**：
    - 移除不再使用的 `ConfirmSwitchCwd` 与 `ConfirmSyncWorkspaceCwd` 枚举变体及对应结构体。
-   - 保留 `ConfirmClose` 仅供页码菜单顶栏 `[del]` 非空页删除（`OverlayTarget::PromptPage`）使用。
+   - 保留 `ConfirmClose` 仅供页码菜单顶栏 `[del]` 非空页删除（`OverlayTarget::PromptPage`）使用，并清理 `confirm_close` / `confirm_text` / `confirm_question` 及 `src/ui/text.rs` 中针对工作区、标签、窗格、提示词文件夹与条目的死分支和冗余常量。
 2. **`Menu` 结构体新增 `confirming: bool` 字段**：
    - 表示当前选中项（`menu.selected`）是否正处于第一次点击/回车后的“行内待确认态”。
 3. **`MenuCommand::requires_confirm(self) -> bool` 方法**：
