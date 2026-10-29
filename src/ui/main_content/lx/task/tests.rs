@@ -682,3 +682,59 @@ fn clicking_elsewhere_in_the_panel_misses() {
         "列表区不命中"
     );
 }
+
+#[test]
+fn agents_list_renders_queued_counts_and_projected_statuses_without_overlap() {
+    let mut lx = lx_with_messages();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        ..TaskPage::default()
+    });
+    for (idx, (status, queued, title)) in [
+        (
+            "running",
+            2usize,
+            "Long running investigation title that wraps or clips cleanly",
+        ),
+        ("blocked", 1usize, "Blocked on missing image"),
+        ("idle", 0usize, "Resumed idle agent"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut run =
+            crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+                agent_id: format!("sub-very-long-identifier-{idx}"),
+                child_session_id: format!("sess-{idx}"),
+                parent_session_id: "p".into(),
+                spawn_message_id: None,
+                role: crate::chat::agent::AgentRole::Explorer,
+                status: status.into(),
+                title: title.into(),
+                created_at_ms: 0,
+                completed_at_ms: Some(1_000),
+                report_json: None,
+                report_delivered: false,
+            });
+        run.queued_count = queued;
+        lx.agents.runs.push(run);
+    }
+    let wide = render_lines(&lx, 80, 20);
+    assert!(
+        wide.iter().any(|line| line.contains("running (+2q)")),
+        "显示 running 与排队计数：{wide:?}"
+    );
+    assert!(
+        wide.iter().any(|line| line.contains("blocked (+1q)")),
+        "显示 blocked 与排队计数：{wide:?}"
+    );
+    assert!(
+        wide.iter().any(|line| line.contains("idle")),
+        "显示 idle 状态：{wide:?}"
+    );
+    // 窄窗降级：不越界、不将状态和标题叠在同一列
+    let narrow = render_lines(&lx, 18, 12);
+    for line in &narrow {
+        assert!(line.chars().count() <= 18);
+    }
+}

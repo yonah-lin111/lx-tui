@@ -866,6 +866,15 @@ pub fn lx_subagent_count_label(count: usize) -> String {
 pub const LX_SUBAGENT_COUNT_NOUN_ONE: &str = "subagent";
 pub const LX_SUBAGENT_COUNT_NOUN_MANY: &str = "subagents";
 
+/// Agents 面板列表行的状态文案（含排队输入数时追加 ` (+Nq)`）。
+pub fn agent_status_with_queue(status: &str, queued_count: usize) -> String {
+    if queued_count > 0 {
+        format!("{status} (+{queued_count}q)")
+    } else {
+        status.to_string()
+    }
+}
+
 /// 停止一个后台进程后的提示。
 pub const LX_TASK_STOPPED: &str = "Stopped 1 background process";
 /// Agents 面板高亮项已结束（^d 不会误停别的子 agent）。

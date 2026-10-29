@@ -41,9 +41,14 @@ fn tool_surfaces_are_exact() {
             "write_stdin",
             "update_plan",
             "ask",
+            "curr_time",
             "spawn_agent",
+            "send_input",
+            "resume_agent",
             "wait_agent",
             "close_agent",
+            "list_agents",
+            "cancel_agent_input",
         ]
     );
     assert_eq!(ToolSurface::Explorer.names(), &["read", "search"]);
@@ -80,6 +85,9 @@ fn parse_control_accepts_valid_arguments() {
             role: AgentRole::Explorer,
             title: "compact entry".into(),
             task: "find the compact entry".into(),
+            items: vec![SubagentInputItem::Text {
+                text: "find the compact entry".into(),
+            }],
         }))
     );
     assert_eq!(
@@ -219,12 +227,177 @@ fn outcome_json_roundtrips() {
             agent_id: "sub-3".into(),
             previous_status: "running".into(),
         },
+        SubagentOutcome::InputAccepted {
+            submission_id: "input-1".into(),
+            agent_id: "sub-1".into(),
+            status: "queued".into(),
+            queued_count: 2,
+            interrupt: true,
+        },
+        SubagentOutcome::Resumed {
+            agent_id: "sub-1".into(),
+            status: "idle".into(),
+            queued_count: 0,
+        },
+        SubagentOutcome::Listed {
+            agents: vec![AgentListItemView {
+                agent_id: "sub-1".into(),
+                role: AgentRole::Explorer,
+                title: "inspect".into(),
+                status: "idle".into(),
+                queued_count: 1,
+            }],
+        },
+        SubagentOutcome::InputCancelled {
+            submission_id: "input-1".into(),
+            agent_id: "sub-1".into(),
+            status: "cancelled".into(),
+            queued_count: 0,
+        },
     ];
     for outcome in cases {
         let json = outcome.to_json();
         assert_eq!(SubagentOutcome::from_json(&json), Some(outcome));
     }
     assert_eq!(SubagentOutcome::from_json(&json!({"tool": "read"})), None);
+}
+
+#[test]
+fn parse_control_handles_new_codex_tools_and_items_contract() {
+    // spawn_agent with ordered items (text + local_image + data URL image)
+    let spawn_items = parse_control(
+        "spawn_agent",
+        r#"{
+            "role": "explorer",
+            "title": "Inspect screenshot",
+            "items": [
+                {"type": "text", "text": "Part 1"},
+                {"type": "local_image", "path": "shots/bug.png"},
+                {"type": "text", "text": "Part 2"},
+                {"type": "image", "image_url": "data:image/png;base64,iVBORw0KGgo="}
+            ]
+        }"#,
+    );
+    assert_eq!(
+        spawn_items,
+        Some(Ok(SubagentOp::Spawn {
+            role: AgentRole::Explorer,
+            title: "Inspect screenshot".into(),
+            task: "Part 1\nPart 2".into(),
+            items: vec![
+                SubagentInputItem::Text {
+                    text: "Part 1".into()
+                },
+                SubagentInputItem::LocalImage {
+                    path: "shots/bug.png".into()
+                },
+                SubagentInputItem::Text {
+                    text: "Part 2".into()
+                },
+                SubagentInputItem::Image {
+                    image_url: "data:image/png;base64,iVBORw0KGgo=".into()
+                },
+            ],
+        }))
+    );
+
+    // send_input with message or items and interrupt
+    assert_eq!(
+        parse_control(
+            "send_input",
+            r#"{"target":"sub_1","message":"continue","interrupt":true}"#
+        ),
+        Some(Ok(SubagentOp::SendInput {
+            target: "sub_1".into(),
+            items: vec![SubagentInputItem::Text {
+                text: "continue".into()
+            }],
+            interrupt: true,
+        }))
+    );
+    assert_eq!(
+        parse_control("resume_agent", r#"{"id":"sub_1"}"#),
+        Some(Ok(SubagentOp::Resume { id: "sub_1".into() }))
+    );
+    assert_eq!(
+        parse_control("list_agents", "{}"),
+        Some(Ok(SubagentOp::List))
+    );
+    assert_eq!(
+        parse_control("cancel_agent_input", r#"{"submission_id":"input_1"}"#),
+        Some(Ok(SubagentOp::CancelInput {
+            submission_id: "input_1".into()
+        }))
+    );
+
+    // Reject task+items or message+items together, empty items, unknown fields, remote URLs, non-image data URLs, unsupported types
+    for (tool, bad) in [
+        (
+            "spawn_agent",
+            r#"{"role":"explorer","title":"t","task":"a","items":[{"type":"text","text":"b"}]}"#,
+        ),
+        (
+            "spawn_agent",
+            r#"{"role":"explorer","title":"t","items":[]}"#,
+        ),
+        (
+            "spawn_agent",
+            r#"{"role":"explorer","title":"   ","task":"a"}"#,
+        ),
+        (
+            "send_input",
+            r#"{"target":"sub_1","message":"a","items":[{"type":"text","text":"b"}]}"#,
+        ),
+        ("send_input", r#"{"target":"sub_1"}"#),
+        ("send_input", r#"{"target":"sub_1","items":[]}"#),
+        (
+            "send_input",
+            r#"{"target":"sub_1","items":[{"type":"image","image_url":"https://example.com/a.png"}]}"#,
+        ),
+        (
+            "send_input",
+            r#"{"target":"sub_1","items":[{"type":"local_image","path":"http://example.com/a.png"}]}"#,
+        ),
+        (
+            "send_input",
+            r#"{"target":"sub_1","items":[{"type":"image","image_url":"data:text/plain;base64,aGVsbG8="}]}"#,
+        ),
+        (
+            "send_input",
+            r#"{"target":"sub_1","items":[{"type":"audio","path":"a.wav"}]}"#,
+        ),
+        (
+            "send_input",
+            r#"{"target":"sub_1","items":[{"type":"skill","name":"x"}]}"#,
+        ),
+        (
+            "send_input",
+            r#"{"target":"sub_1","items":[{"type":"text","text":"x","extra":1}]}"#,
+        ),
+        ("resume_agent", r#"{"id":""}"#),
+        ("resume_agent", r#"{"id":"sub_1","extra":true}"#),
+        ("list_agents", r#"{"filter":"running"}"#),
+        ("cancel_agent_input", r#"{"submission_id":"  "}"#),
+        (
+            "cancel_agent_input",
+            r#"{"submission_id":"in_1","force":true}"#,
+        ),
+    ] {
+        assert!(
+            parse_control(tool, bad).is_some_and(|r| r.is_err()),
+            "{tool} must reject {bad}"
+        );
+    }
+
+    // Reject > 1 MiB arguments JSON
+    let huge = format!(
+        r#"{{"target":"sub_1","message":"{}"}}"#,
+        "a".repeat(crate::chat::events::MAX_TOOL_ARGUMENTS_BYTES + 10)
+    );
+    let err = parse_control("send_input", &huge)
+        .expect("control")
+        .expect_err("too large");
+    assert_eq!(err.code, crate::chat::tools::ToolErrorCode::TooLarge);
 }
 
 #[test]

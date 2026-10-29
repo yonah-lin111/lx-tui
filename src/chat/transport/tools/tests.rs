@@ -391,3 +391,58 @@ fn compact_summary_declares_no_tools() {
         Some(ToolSurface::Executor)
     );
 }
+
+/// 四类协议均保持交错 `UserContent`（文本 → 图片 → 文本）的原始顺序。
+#[test]
+fn all_four_transports_preserve_interleaved_user_content_order() {
+    use crate::chat::events::{ChatRequest, ModelImage, ModelItem, RequestPurpose};
+    use crate::chat::transport::build_request;
+    use std::sync::Arc;
+
+    let req = ChatRequest {
+        turns: Vec::new(),
+        items: vec![
+            ModelItem::UserContent {
+                text: "BEFORE_IMAGE_MARKER".into(),
+                images: Vec::new(),
+            },
+            ModelItem::UserContent {
+                text: String::new(),
+                images: vec![ModelImage {
+                    mime: "image/png".into(),
+                    bytes: Arc::new(vec![137, 80, 78, 71]),
+                }],
+            },
+            ModelItem::UserContent {
+                text: "AFTER_IMAGE_MARKER".into(),
+                images: Vec::new(),
+            },
+        ],
+        model: crate::db::chat::ModelSnapshot {
+            provider: "p".into(),
+            model: "m".into(),
+            variant: None,
+        },
+        variant_params: None,
+        purpose: RequestPurpose::Subagent(crate::chat::agent::AgentRole::Explorer),
+        system_prompt: Some("explorer".into()),
+    };
+
+    for (transport, img_marker) in [
+        ("openai", "image_url"),
+        ("openai-responses", "input_image"),
+        ("anthropic", "media_type"),
+        ("google", "inlineData"),
+    ] {
+        let built =
+            build_request(transport, "https://example.com/v1", Some("k"), &req).expect(transport);
+        let pos_before = built.body.find("BEFORE_IMAGE_MARKER").expect("before");
+        let pos_img = built.body.find(img_marker).expect("image");
+        let pos_after = built.body.find("AFTER_IMAGE_MARKER").expect("after");
+        assert!(
+            pos_before < pos_img && pos_img < pos_after,
+            "{transport} must preserve text -> image -> text order: {}",
+            built.body
+        );
+    }
+}

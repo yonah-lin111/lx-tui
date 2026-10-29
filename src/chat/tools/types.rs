@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 /// 稳定工具名清单（错误消息、系统提示与测试共用一份，不各写一遍）。
-pub const TOOL_NAMES: [&str; 8] = [
+pub const TOOL_NAMES: [&str; 9] = [
     "read",
     "search",
     "edit",
@@ -16,10 +16,19 @@ pub const TOOL_NAMES: [&str; 8] = [
     "write_stdin",
     "update_plan",
     "ask",
+    "curr_time",
 ];
 
-/// 三个 subagent 控制工具（顺序即 `TOOLS` 中的顺序）。
-pub const SUBAGENT_TOOL_NAMES: [&str; 3] = ["spawn_agent", "wait_agent", "close_agent"];
+/// 七个 subagent 控制工具（顺序即 `TOOLS` 中的顺序）。
+pub const SUBAGENT_TOOL_NAMES: [&str; 7] = [
+    "spawn_agent",
+    "send_input",
+    "resume_agent",
+    "wait_agent",
+    "close_agent",
+    "list_agents",
+    "cancel_agent_input",
+];
 
 /// 工具执行上下文：相对路径的基准目录是**发送时冻结**的工作区 cwd。
 ///
@@ -35,6 +44,8 @@ pub struct ToolContext {
     pub reads: Option<std::sync::Arc<super::read_version::ReadRegistry>>,
     /// 当前模型是否支持图像输入（`false` 时 `read` 拒绝读取图片文件）。
     pub supports_image_input: bool,
+    /// 可注入的确定性 UTC Unix 秒数（仅测试使用；生产为 `None` 即读取系统实时时钟）。
+    pub clock_override_secs: Option<i64>,
 }
 
 impl Default for ToolContext {
@@ -43,6 +54,7 @@ impl Default for ToolContext {
             cwd: PathBuf::new(),
             reads: None,
             supports_image_input: true,
+            clock_override_secs: None,
         }
     }
 }
@@ -63,6 +75,7 @@ impl ToolContext {
             cwd: cwd.into(),
             reads: None,
             supports_image_input: true,
+            clock_override_secs: None,
         }
     }
 
@@ -75,6 +88,12 @@ impl ToolContext {
     /// 设置当前模型是否支持图像输入（生产执行器按 `FrozenModel` 注入）。
     pub fn with_image_support(mut self, supports: bool) -> Self {
         self.supports_image_input = supports;
+        self
+    }
+
+    /// 注入确定性 UTC 秒数（测试 `curr_time` 用）。
+    pub fn with_clock_secs(mut self, secs: i64) -> Self {
+        self.clock_override_secs = Some(secs);
         self
     }
 }
@@ -283,10 +302,12 @@ pub enum ToolExecutionResult {
         /// 按题目顺序的作答记录。
         questions: Vec<super::ask::AnsweredQuestion>,
     },
-    /// 子 agent 控制工具（`spawn_agent` / `wait_agent` / `close_agent`）的结果。
+    /// 子 agent 控制工具的结果。
     ///
     /// 装箱：报告正文最大 8 KiB，内联会把每个 `ToolExecutionResult` 都撑大。
     Subagent(Box<crate::chat::agent::SubagentOutcome>),
+    /// 实时 UTC 时钟读取结果（`YYYY-MM-DD HH:MM:SS UTC`）。
+    CurrentTime { current_time: String },
     /// 失败；`changes` 保留多文件补丁中**已经提交**的变更，绝不谎报整体回滚。
     Failed {
         code: ToolErrorCode,

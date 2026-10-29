@@ -102,10 +102,11 @@ pub enum AppEvent {
         reason: crate::chat::events::StopReason,
         usage: crate::db::chat::Usage,
     },
-    /// 子 agent 运行时自动压缩完成：把摘要作为 compact 检查点挂到子 agent 面板。
+    /// 子 agent 运行时自动压缩完成：把摘要作为 compact 检查点写入 DB 并挂到子 agent 面板。
     SubagentAutoCompact {
         key: crate::app::state::RequestKey,
         notice: crate::chat::compact::AutoCompactNotice,
+        reply: Option<tokio::sync::oneshot::Sender<Result<(), crate::chat::agent_loop::HostError>>>,
     },
     /// 子 agent `wait_agent` 到期：事件层读库结算并回执。
     SubagentWaitReady {
@@ -684,8 +685,15 @@ fn handle_app_event(
         AppEvent::SubagentFinished { key, reason, usage } => {
             chat::finish_subagent(state, chat_streams, persistence, key, reason, usage);
         }
-        AppEvent::SubagentAutoCompact { key, notice } => {
-            update::on_subagent_auto_compact(state, &key.session, &notice);
+        AppEvent::SubagentAutoCompact { key, notice, reply } => {
+            chat::handle_subagent_auto_compact(
+                state,
+                chat_streams,
+                persistence,
+                &key,
+                &notice,
+                reply,
+            );
         }
         AppEvent::SubagentWaitReady {
             key,

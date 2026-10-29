@@ -555,6 +555,55 @@ CREATE INDEX IF NOT EXISTS idx_agent_message_attachment_message
     ON agent_message_attachment(message_id, position);
 "#;
 
+/// v19：子 agent 输入队列、有序输入项与逐轮报告表。
+const SCHEMA_V19: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_subagent_input (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    agent_id TEXT NOT NULL REFERENCES agent_subagent(external_id) ON DELETE CASCADE,
+    dedupe_key TEXT NOT NULL UNIQUE,
+    parent_call_id TEXT,
+    parent_message_id TEXT REFERENCES agent_message(external_id) ON DELETE SET NULL,
+    position INTEGER NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed','interrupted','cancelled')),
+    child_user_message_id TEXT REFERENCES agent_message(external_id) ON DELETE SET NULL,
+    created_at_ms INTEGER NOT NULL,
+    started_at_ms INTEGER,
+    completed_at_ms INTEGER,
+    error_code TEXT,
+    UNIQUE(agent_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_subagent_input_next
+    ON agent_subagent_input(agent_id, status, priority DESC, position);
+
+CREATE TABLE IF NOT EXISTS agent_subagent_input_item (
+    input_id TEXT NOT NULL REFERENCES agent_subagent_input(external_id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('text','image')),
+    text_content TEXT,
+    label TEXT,
+    archive_path TEXT,
+    mime TEXT,
+    content_hash TEXT,
+    width INTEGER,
+    height INTEGER,
+    PRIMARY KEY(input_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS agent_subagent_report (
+    external_id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL REFERENCES agent_subagent(external_id) ON DELETE CASCADE,
+    child_user_message_id TEXT REFERENCES agent_message(external_id) ON DELETE SET NULL,
+    status TEXT NOT NULL CHECK (status IN ('completed','failed')),
+    report_json TEXT NOT NULL,
+    completed_at_ms INTEGER NOT NULL,
+    delivered_at_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_subagent_report_pending
+    ON agent_subagent_report(agent_id, delivered_at_ms, completed_at_ms);
+"#;
+
 impl Database {
     /// 迁移到当前 Schema：建表与版本推进在同一事务中完成，幂等。
     ///
@@ -730,7 +779,7 @@ impl Database {
             let transaction = self.conn.unchecked_transaction()?;
             transaction.execute_batch(SCHEMA_V18)?;
             ensure_no_foreign_key_violation(&transaction)?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.pragma_update(None, "user_version", 18)?;
             transaction.commit()?;
         }
         // v18 开发库兼容：若已建含 `image_bytes` BLOB 列的旧版附件表，重建为仅存路径的当前结构。
@@ -746,6 +795,48 @@ impl Database {
             })();
             self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
             result?;
+        }
+        if version < 19 {
+            // 只增表 + 旧单条报告数据迁移：不重建旧表。
+            let transaction = self.conn.unchecked_transaction()?;
+            transaction.execute_batch(SCHEMA_V19)?;
+            let legacy_count: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM agent_subagent WHERE report_json IS NOT NULL AND report_json <> ''",
+                [],
+                |row| row.get(0),
+            )?;
+            transaction.execute(
+                r#"INSERT OR IGNORE INTO agent_subagent_report
+                       (external_id, agent_id, child_user_message_id, status, report_json,
+                        completed_at_ms, delivered_at_ms)
+                   SELECT
+                       'rep-legacy-' || a.external_id,
+                       a.external_id,
+                       (SELECT m.external_id FROM agent_message m
+                        WHERE m.session_id = a.child_session_id AND m.role = 'user'
+                        ORDER BY m.sequence DESC LIMIT 1),
+                       CASE WHEN a.status = 'failed' THEN 'failed' ELSE 'completed' END,
+                       a.report_json,
+                       COALESCE(a.completed_at_ms, a.updated_at_ms, a.created_at_ms),
+                       CASE WHEN a.report_delivered <> 0
+                            THEN COALESCE(a.completed_at_ms, a.updated_at_ms, a.created_at_ms)
+                            ELSE NULL
+                       END
+                   FROM agent_subagent a
+                   WHERE a.report_json IS NOT NULL AND a.report_json <> ''"#,
+                [],
+            )?;
+            let migrated_count: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM agent_subagent_report WHERE external_id LIKE 'rep-legacy-%'",
+                [],
+                |row| row.get(0),
+            )?;
+            if migrated_count < legacy_count {
+                return Err(DbError::ForeignKeyViolation);
+            }
+            ensure_no_foreign_key_violation(&transaction)?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.commit()?;
         }
         Ok(())
     }

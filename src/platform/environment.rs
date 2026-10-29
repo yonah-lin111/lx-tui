@@ -149,6 +149,24 @@ pub fn local_time_label(ms: i64) -> String {
     )
 }
 
+/// 给定 Unix 秒数格式化为 `YYYY-MM-DD HH:MM:SS UTC`（纯函数，测试可注入确定性秒数）。
+pub fn format_utc_timestamp_secs(secs: i64) -> String {
+    let days = secs.div_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let seconds_of_day = secs.rem_euclid(86_400);
+    let hour = seconds_of_day / 3600;
+    let minute = (seconds_of_day % 3600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} UTC")
+}
+
+/// 读取当前实时 UTC 时间（`YYYY-MM-DD HH:MM:SS UTC`）；系统时钟不可用时返回 None。
+pub fn current_utc_timestamp() -> Option<String> {
+    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
+    let secs = i64::try_from(elapsed.as_secs()).ok()?;
+    Some(format_utc_timestamp_secs(secs))
+}
+
 /// UTC 兜底日期与时间（平台不支持本地时间时使用，绝不编造时区）。
 fn utc_datetime() -> (String, String) {
     let secs = SystemTime::now()

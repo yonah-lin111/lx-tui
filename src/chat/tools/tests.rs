@@ -285,3 +285,90 @@ fn oversized_arguments_are_rejected() {
     assert_eq!(expect_failure(&result), ToolErrorCode::TooLarge);
     assert!(!fixture.exists("a.txt"));
 }
+
+/// `curr_time` 返回实时或注入的精确 UTC 格式，拒绝任何未知字段。
+#[test]
+fn curr_time_returns_exact_utc_format_and_rejects_extra_fields() {
+    let fixture = Fixture::new("curr-time");
+    // 2026-10-29 08:15:30 UTC = 1_793_261_730
+    let ctx = fixture.ctx().with_clock_secs(1_793_261_730);
+    let result = execute(&ctx, "curr_time", "{}");
+    assert!(!result.is_failure());
+    assert_eq!(
+        format_for_model(&result),
+        "current_time: 2026-10-29 08:15:30 UTC\n"
+    );
+    let summary = to_summary(&result);
+    assert_eq!(summary.path.as_deref(), Some("2026-10-29 08:15:30 UTC"));
+    let json_text = to_result_json(&result).expect("json");
+    let json_val: serde_json::Value = serde_json::from_str(&json_text).expect("parse");
+    assert_eq!(json_val["tool"], "curr_time");
+    assert_eq!(json_val["current_time"], "2026-10-29 08:15:30 UTC");
+
+    // 实时时钟格式校验
+    let live = execute(&fixture.ctx(), "curr_time", "{}");
+    let live_text = format_for_model(&live);
+    assert!(live_text.starts_with("current_time: 20"));
+    assert!(live_text.ends_with(" UTC\n"));
+
+    // 非空对象或非对象一律拒绝
+    for bad in [r#"{"tz":"UTC"}"#, "[]", r#"{"format":"iso"}"#] {
+        let failed = execute(&ctx, "curr_time", bad);
+        assert_eq!(
+            expect_failure(&failed),
+            ToolErrorCode::InvalidArguments,
+            "curr_time must reject {bad}"
+        );
+    }
+}
+
+/// 跨工具校验：schema 声明的属性与执行层白名单校验严格一致。
+#[test]
+fn schema_declarations_match_execution_layer_validation() {
+    let fixture = Fixture::new("schema-exec-consistency");
+    let ctx = fixture.ctx();
+    for spec in available_tools() {
+        let params = spec.parameters();
+        let props = params["properties"].as_object().expect("properties object");
+        // 往每个工具塞入一个未在 schema.properties 中声明的字段，执行层或 parse_control 必须拒绝
+        let mut payload = serde_json::Map::new();
+        payload.insert("__undeclared_field__".into(), serde_json::json!(1));
+        let raw = serde_json::Value::Object(payload).to_string();
+        if let Some(control) = crate::chat::agent::parse_control(spec.name, &raw) {
+            let err = control.expect_err("control tool must reject undeclared field");
+            assert_eq!(
+                err.code,
+                ToolErrorCode::InvalidArguments,
+                "tool {} failed with wrong code",
+                spec.name
+            );
+            // 同时确认 schema 声明过的每个字段名在 parse_control 中不会被判为 `unknown field`
+            for declared_key in props.keys() {
+                let mut single = serde_json::Map::new();
+                single.insert(declared_key.clone(), serde_json::Value::Null);
+                let single_raw = serde_json::Value::Object(single).to_string();
+                if let Some(Err(failure)) =
+                    crate::chat::agent::parse_control(spec.name, &single_raw)
+                {
+                    assert!(
+                        !failure.message.contains("unknown field"),
+                        "tool {} rejected its own declared property `{declared_key}` as unknown: {}",
+                        spec.name,
+                        failure.message
+                    );
+                }
+            }
+        } else if matches!(
+            spec.name,
+            "read" | "search" | "edit" | "write" | "curr_time"
+        ) {
+            let res = execute(&ctx, spec.name, &raw);
+            assert_eq!(
+                expect_failure(&res),
+                ToolErrorCode::InvalidArguments,
+                "tool {} must reject undeclared field",
+                spec.name
+            );
+        }
+    }
+}

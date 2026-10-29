@@ -85,6 +85,25 @@ pub struct ProcessedImage {
     pub original_byte_count: usize,
 }
 
+/// 严格归档后的会话图片元数据（已写入受管目录并通过回读摘要校验）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchivedSessionImage {
+    /// 展示标签（不含 base64 正文）。
+    pub label: String,
+    /// 受管归档文件的绝对路径（位于 `<images_root>/<session_id>/` 内）。
+    pub archive_path: PathBuf,
+    /// 最终编码 MIME（`image/png` 或 `image/jpeg`）。
+    pub mime: String,
+    /// 最终编码字节的 16 位十六进制 FNV-1a 摘要。
+    pub content_hash: String,
+    /// 宽度（像素）。
+    pub width: u32,
+    /// 高度（像素）。
+    pub height: u32,
+    /// 最终编码字节（供立即启动的子轮直接使用）。
+    pub bytes: Vec<u8>,
+}
+
 /// 会话图片归档根目录：生产 `~/.lx-t/images`，开发 `~/.lx-t-dev/images`。
 pub fn session_images_root_dir() -> Result<PathBuf, ImagePrepareError> {
     let home = std::env::var_os("HOME")
@@ -421,7 +440,208 @@ pub fn process_image_bytes(
     Ok(result)
 }
 
-/// 读取本地文件并处理成图片对象。
+/// 将已处理的图片严格归档到 `<images_root>/<session_id>/<hash>-<filename>`，
+/// 并在落盘后回读校验存在性、可读性、尺寸、MIME 与内容摘要。
+pub fn archive_processed_image_in(
+    images_root: &Path,
+    session_id: &str,
+    processed: &ProcessedImage,
+) -> Result<ArchivedSessionImage, ImagePrepareError> {
+    if session_id.is_empty() || session_id.contains(['/', '\\', '.']) {
+        return Err(ImagePrepareError::IoError);
+    }
+    let session_dir = images_root.join(session_id);
+    std::fs::create_dir_all(&session_dir).map_err(|_| ImagePrepareError::IoError)?;
+    let _ = super::restrict_dir_permissions(images_root);
+    let _ = super::restrict_dir_permissions(&session_dir);
+
+    let hash_hex = format!("{:016x}", fnv1a_hash(&processed.bytes));
+    let safe_name = sanitize_filename(&processed.source_name, &processed.mime);
+    let target = session_dir.join(format!("{hash_hex}-{safe_name}"));
+    let need_write = match std::fs::read(&target) {
+        Ok(existing) => format!("{:016x}", fnv1a_hash(&existing)) != hash_hex,
+        Err(_) => true,
+    };
+    if need_write {
+        super::write_file_atomic(&target, &processed.bytes)
+            .map_err(|_| ImagePrepareError::IoError)?;
+        let _ = super::restrict_file_permissions(&target);
+    } else {
+        touch_file_mtime(&target);
+    }
+    let verified = verify_archived_image_in(
+        images_root,
+        session_id,
+        &target,
+        &processed.mime,
+        &hash_hex,
+        processed.width,
+        processed.height,
+    )?;
+    Ok(ArchivedSessionImage {
+        label: safe_name,
+        archive_path: target,
+        mime: processed.mime.clone(),
+        content_hash: hash_hex,
+        width: processed.width,
+        height: processed.height,
+        bytes: verified,
+    })
+}
+
+/// 将已处理图片严格归档到默认 `~/.lx-t[-dev]/images/<session_id>/` 目录。
+pub fn archive_processed_image(
+    session_id: &str,
+    processed: &ProcessedImage,
+) -> Result<ArchivedSessionImage, ImagePrepareError> {
+    let root = session_images_root_dir()?;
+    archive_processed_image_in(&root, session_id, processed)
+}
+
+/// 校验归档图片位于 `<images_root>/<session_id>/` 内，且可读、格式/尺寸/摘要与记录一致。
+pub fn verify_archived_image_in(
+    images_root: &Path,
+    session_id: &str,
+    archive_path: &Path,
+    expected_mime: &str,
+    expected_hash: &str,
+    expected_width: u32,
+    expected_height: u32,
+) -> Result<Vec<u8>, ImagePrepareError> {
+    if session_id.is_empty()
+        || session_id.contains(['/', '\\', '.'])
+        || expected_hash.is_empty()
+        || !matches!(expected_mime, "image/png" | "image/jpeg")
+        || expected_width == 0
+        || expected_height == 0
+    {
+        return Err(ImagePrepareError::NotAnImage);
+    }
+    if archive_path
+        .components()
+        .any(|comp| matches!(comp, std::path::Component::ParentDir))
+    {
+        return Err(ImagePrepareError::FileNotFound);
+    }
+    let session_dir = images_root.join(session_id);
+    let in_session_dir = archive_path.starts_with(&session_dir) || {
+        match (
+            std::fs::canonicalize(&session_dir),
+            std::fs::canonicalize(archive_path),
+        ) {
+            (Ok(canon_dir), Ok(canon_file)) => canon_file.starts_with(&canon_dir),
+            _ => false,
+        }
+    };
+    if !in_session_dir {
+        return Err(ImagePrepareError::FileNotFound);
+    }
+    let meta = std::fs::metadata(archive_path).map_err(|err| match err.kind() {
+        std::io::ErrorKind::NotFound => ImagePrepareError::FileNotFound,
+        _ => ImagePrepareError::IoError,
+    })?;
+    if !meta.is_file() {
+        return Err(ImagePrepareError::FileNotFound);
+    }
+    if meta.len() > MAX_IMAGE_RAW_BYTES as u64 {
+        return Err(ImagePrepareError::SingleTooLarge);
+    }
+    let bytes = std::fs::read(archive_path).map_err(|_| ImagePrepareError::IoError)?;
+    let actual_hash = format!("{:016x}", fnv1a_hash(&bytes));
+    if actual_hash != expected_hash {
+        return Err(ImagePrepareError::DecodeFailed);
+    }
+    let format = image::guess_format(&bytes).map_err(|_| ImagePrepareError::NotAnImage)?;
+    let actual_mime = match format {
+        ImageFormat::Png => "image/png",
+        ImageFormat::Jpeg => "image/jpeg",
+        _ => return Err(ImagePrepareError::NotAnImage),
+    };
+    if actual_mime != expected_mime {
+        return Err(ImagePrepareError::DecodeFailed);
+    }
+    let (w, h) = {
+        let decoder = ImageReader::with_format(Cursor::new(&bytes), format)
+            .into_decoder()
+            .map_err(|_| ImagePrepareError::DecodeFailed)?;
+        decoder.dimensions()
+    };
+    if w != expected_width || h != expected_height {
+        return Err(ImagePrepareError::DecodeFailed);
+    }
+    Ok(bytes)
+}
+
+/// 在默认会话图片归档根目录下校验归档图片。
+pub fn verify_archived_image(
+    session_id: &str,
+    archive_path: &Path,
+    expected_mime: &str,
+    expected_hash: &str,
+    expected_width: u32,
+    expected_height: u32,
+) -> Result<Vec<u8>, ImagePrepareError> {
+    let root = session_images_root_dir()?;
+    verify_archived_image_in(
+        &root,
+        session_id,
+        archive_path,
+        expected_mime,
+        expected_hash,
+        expected_width,
+        expected_height,
+    )
+}
+
+/// 解析并处理内联 `data:image/<format>;base64,<payload>` URL。
+pub fn process_data_url_image(
+    data_url: &str,
+    index: usize,
+) -> Result<ProcessedImage, ImagePrepareError> {
+    use base64::Engine;
+    let trimmed = data_url.trim();
+    if trimmed.len() > MAX_IMAGE_RAW_BYTES.saturating_mul(2) {
+        return Err(ImagePrepareError::SingleTooLarge);
+    }
+    let Some(rest) = trimmed
+        .strip_prefix("data:")
+        .or_else(|| trimmed.strip_prefix("DATA:"))
+    else {
+        return Err(ImagePrepareError::NotAnImage);
+    };
+    let Some((header, payload)) = rest.split_once(',') else {
+        return Err(ImagePrepareError::NotAnImage);
+    };
+    let header_lower = header.trim().to_ascii_lowercase();
+    let Some(media_type) = header_lower.strip_suffix(";base64") else {
+        return Err(ImagePrepareError::NotAnImage);
+    };
+    let media_type = media_type.split(';').next().unwrap_or_default().trim();
+    if !media_type.starts_with("image/") || media_type.len() <= "image/".len() {
+        return Err(ImagePrepareError::NotAnImage);
+    }
+    let clean_payload: String = payload
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect();
+    if clean_payload.is_empty() {
+        return Err(ImagePrepareError::NotAnImage);
+    }
+    // 解码前字节上限检查（每 4 个 base64 字符最多 3 字节）。
+    if (clean_payload.len() / 4).saturating_mul(3) > MAX_IMAGE_RAW_BYTES {
+        return Err(ImagePrepareError::SingleTooLarge);
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(clean_payload.as_bytes())
+        .map_err(|_| ImagePrepareError::DecodeFailed)?;
+    if decoded.is_empty() {
+        return Err(ImagePrepareError::NotAnImage);
+    }
+    let name = format!("inline-image-{}", index.saturating_add(1));
+    process_image_bytes(&decoded, &name, None)
+}
+
+///读取本地文件并处理成图片对象。
 pub fn load_and_process_image_file(path: &Path) -> Result<ProcessedImage, ImagePrepareError> {
     let metadata = std::fs::metadata(path).map_err(|err| match err.kind() {
         std::io::ErrorKind::NotFound => ImagePrepareError::FileNotFound,

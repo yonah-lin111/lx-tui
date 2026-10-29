@@ -12,7 +12,8 @@ pub use atomic_write::{rename_over, write_file_atomic};
 
 mod environment;
 pub use environment::{
-    EnvironmentFacts, local_datetime, local_time_label, network_available, os_name, timezone_name,
+    EnvironmentFacts, current_utc_timestamp, format_utc_timestamp_secs, local_datetime,
+    local_time_label, network_available, os_name, timezone_name,
 };
 
 mod lock;
@@ -20,11 +21,13 @@ pub use lock::{FileGuard, PathGuards, lock_paths, try_lock_named, try_lock_sessi
 
 mod clipboard_image;
 pub use clipboard_image::{
-    IMAGE_RETENTION_SECS, ImagePrepareError, MAX_ATTACHED_IMAGES, MAX_IMAGE_DIMENSION,
-    MAX_IMAGE_RAW_BYTES, MAX_TOTAL_IMAGE_RAW_BYTES, ProcessedImage, archive_session_image,
-    archive_session_image_in, load_and_process_image_file, process_image_bytes,
-    prune_default_session_images, prune_session_images_in, remove_session_images,
-    session_images_root_dir, touch_session_image_if_managed,
+    ArchivedSessionImage, IMAGE_RETENTION_SECS, ImagePrepareError, MAX_ATTACHED_IMAGES,
+    MAX_IMAGE_DIMENSION, MAX_IMAGE_RAW_BYTES, MAX_TOTAL_IMAGE_RAW_BYTES, ProcessedImage,
+    archive_processed_image, archive_processed_image_in, archive_session_image,
+    archive_session_image_in, load_and_process_image_file, process_data_url_image,
+    process_image_bytes, prune_default_session_images, prune_session_images_in,
+    remove_session_images, session_images_root_dir, touch_session_image_if_managed,
+    verify_archived_image, verify_archived_image_in,
 };
 
 mod raw_image;

@@ -489,6 +489,7 @@ fn verb_label(call: &ToolCallView) -> String {
         Kind::Search => a::VERB_TOOL_SEARCH.to_string(),
         Kind::Edit => a::VERB_TOOL_EDIT.to_string(),
         Kind::Write => a::VERB_TOOL_WRITE.to_string(),
+        Kind::Other if call.name == "curr_time" => a::VERB_TOOL_CURR_TIME.to_string(),
         Kind::Other => single_line(&call.name, TEXT_SAMPLE_CHARS),
     }
 }

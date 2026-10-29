@@ -24,7 +24,10 @@ pub use rewind::{
     OperationRecord, PathMutationWrite, PreparedTicket, RestorePath, RestorePlan, RewindCommit,
     RewindCommitted, TurnScopeRecord,
 };
-pub use subagent::{ReportPayload, SubagentCommitted, SubagentRecord};
+pub use subagent::{
+    ClaimedSubagentTurn, EnqueuedInput, PersistedInputItem, ReportPayload, SubagentCommitted,
+    SubagentInputRecord, SubagentQueueState, SubagentRecord, SubagentReportRecord,
+};
 pub use tools::{
     INTERRUPTED_ERROR_CODE, MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_RESULT_BYTES, ToolCallRecord,
     ToolCallResult, ToolCallTicket, ToolTerminalStatus,
@@ -705,7 +708,7 @@ impl Database {
             let rows = statement.query_map(params![session_id], |row| row.get(0))?;
             rows.collect::<std::result::Result<Vec<_>, _>>()?
         };
-        for child in children {
+        for child in &children {
             transaction.execute(
                 "DELETE FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
                 params![child, workspace_external],
@@ -719,6 +722,9 @@ impl Database {
             return Err(DbError::SessionMissing);
         }
         transaction.commit()?;
+        for child in &children {
+            crate::platform::remove_session_images(child);
+        }
         crate::platform::remove_session_images(session_id);
         Ok(())
     }

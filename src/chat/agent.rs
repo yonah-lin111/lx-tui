@@ -6,7 +6,10 @@
 
 use serde_json::{Value, json};
 
-use crate::chat::tools::{ToolErrorCode, ToolExecutionResult, ToolFailure};
+use crate::chat::tools::ToolExecutionResult;
+
+mod parse;
+pub use parse::parse_control;
 
 #[cfg(test)]
 mod tests;
@@ -67,7 +70,7 @@ pub enum ToolSurface {
 }
 
 /// 主 agent 工具名（顺序即呈现顺序）。
-const MAIN_TOOLS: [&str; 11] = [
+const MAIN_TOOLS: [&str; 16] = [
     "read",
     "search",
     "edit",
@@ -76,9 +79,14 @@ const MAIN_TOOLS: [&str; 11] = [
     "write_stdin",
     "update_plan",
     "ask",
+    "curr_time",
     "spawn_agent",
+    "send_input",
+    "resume_agent",
     "wait_agent",
     "close_agent",
+    "list_agents",
+    "cancel_agent_input",
 ];
 
 /// explorer 工具名。
@@ -130,6 +138,8 @@ pub const MAX_REPORT_BYTES: usize = 8 * 1024;
 pub const MAX_TASK_CHARS: usize = 8_000;
 /// `spawn_agent` 的短标题上限（字符）。标题给人和父消息卡片看，不是任务提示词。
 pub const MAX_TITLE_CHARS: usize = 80;
+/// 单次 `spawn_agent` / `send_input` 的结构化 `items` 条目上限。
+pub const MAX_INPUT_ITEMS: usize = 32;
 
 /// 并发超限的稳定错误码。
 pub const LIMIT_REACHED_CODE: &str = "subagent concurrency limit reached";
@@ -137,6 +147,12 @@ pub const LIMIT_REACHED_CODE: &str = "subagent concurrency limit reached";
 pub const NOT_FOUND_CODE: &str = "subagent not found";
 /// 目标已结束的稳定错误码。
 pub const FINISHED_CODE: &str = "subagent already finished";
+/// 目标未恢复（终态或重启后需先 `resume_agent`）的稳定错误码。
+pub const NOT_ACTIVE_CODE: &str = "subagent is not active; call resume_agent first";
+/// 排队输入不存在的稳定错误码。
+pub const INPUT_NOT_FOUND_CODE: &str = "subagent input not found";
+/// 归档图片丢失或校验失败的稳定错误码。
+pub const IMAGE_MISSING_CODE: &str = "image_missing";
 /// 子 agent 内禁止控制工具的稳定错误码。
 pub const UNAVAILABLE_CODE: &str = "subagent tools unavailable";
 
@@ -167,7 +183,53 @@ impl WaitMode {
     }
 }
 
-/// 三个控制工具之一；由 loop 转投事件层执行（与 `ask` 同一分支位置）。
+/// 子 agent 结构化输入项（保持原始出现顺序，文本与图片可交错）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubagentInputItem {
+    /// 纯文本段落：`{"type":"text","text":"..."}`。
+    Text { text: String },
+    /// 本地图片路径：`{"type":"local_image","path":"..."}`（相对路径以父轮冻结 cwd 解析）。
+    LocalImage { path: String },
+    /// 内联 data URL 图片：`{"type":"image","image_url":"data:image/...;base64,..."}`。
+    Image { image_url: String },
+}
+
+/// 将结构化输入项中的文本合并为可读任务摘要；纯图片输入回退为 `"[image]"`。
+pub fn joined_input_text(items: &[SubagentInputItem]) -> String {
+    let mut parts = Vec::new();
+    let mut image_count = 0usize;
+    for item in items {
+        match item {
+            SubagentInputItem::Text { text } => {
+                if !text.is_empty() {
+                    parts.push(text.as_str());
+                }
+            }
+            SubagentInputItem::LocalImage { .. } | SubagentInputItem::Image { .. } => {
+                image_count = image_count.saturating_add(1);
+            }
+        }
+    }
+    if !parts.is_empty() {
+        parts.join("\n")
+    } else if image_count > 0 {
+        format!("[{image_count} image(s)]")
+    } else {
+        String::new()
+    }
+}
+
+/// `list_agents` 的单条子 agent 概览（不含完整消息流或报告正文）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentListItemView {
+    pub agent_id: String,
+    pub role: AgentRole,
+    pub title: String,
+    pub status: String,
+    pub queued_count: usize,
+}
+
+/// 子 agent 控制工具操作；由 loop 转投事件层执行（与 `ask` 同一分支位置）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubagentOp {
     /// 派发一个子 agent。
@@ -176,7 +238,17 @@ pub enum SubagentOp {
         /// 面向用户的短标题（不是 task 原文）。
         title: String,
         task: String,
+        /// 有序结构化输入项（旧 `task` 参数走单条 `Text`）。
+        items: Vec<SubagentInputItem>,
     },
+    /// 向已恢复或运行中的子 agent 发送输入（持久排队或插队中断当前轮）。
+    SendInput {
+        target: String,
+        items: Vec<SubagentInputItem>,
+        interrupt: bool,
+    },
+    /// 显式恢复终态或重启后的子 agent。
+    Resume { id: String },
     /// 等待子 agent 结束（或超时）。`targets` 为空表示等待本会话全部
     /// 子 agent；`mode` 决定等全部还是任意一个。
     Wait {
@@ -186,6 +258,10 @@ pub enum SubagentOp {
     },
     /// 停止一个子 agent（不产生报告）。
     Close { target: String },
+    /// 列出当前父会话下的全部子 agent 状态与排队计数。
+    List,
+    /// 取消一条尚未开始的排队输入。
+    CancelInput { submission_id: String },
 }
 
 /// 操作结果：工具结果 JSON 与 UI 详情共用的唯一来源。
@@ -196,6 +272,20 @@ pub enum SubagentOutcome {
         agent_id: String,
         role: AgentRole,
         title: String,
+    },
+    /// 输入已持久接收并入队（或立即启动）。
+    InputAccepted {
+        submission_id: String,
+        agent_id: String,
+        status: String,
+        queued_count: usize,
+        interrupt: bool,
+    },
+    /// 子 agent 已显式恢复。
+    Resumed {
+        agent_id: String,
+        status: String,
+        queued_count: usize,
     },
     /// 等待结算；`report` 只在本次领取到报告时非空。
     Waited {
@@ -210,6 +300,15 @@ pub enum SubagentOutcome {
     Closed {
         agent_id: String,
         previous_status: String,
+    },
+    /// 当前父会话下的子 agent 列表。
+    Listed { agents: Vec<AgentListItemView> },
+    /// 排队输入取消结果（仅 queued 转为 cancelled；running/done 返回现状）。
+    InputCancelled {
+        submission_id: String,
+        agent_id: String,
+        status: String,
+        queued_count: usize,
     },
 }
 
@@ -229,6 +328,19 @@ pub struct AgentStatusView {
 }
 
 impl SubagentOutcome {
+    /// 结果对应的稳定工具名。
+    pub const fn tool_name(&self) -> &'static str {
+        match self {
+            Self::Spawned { .. } => "spawn_agent",
+            Self::InputAccepted { .. } => "send_input",
+            Self::Resumed { .. } => "resume_agent",
+            Self::Waited { .. } => "wait_agent",
+            Self::Closed { .. } => "close_agent",
+            Self::Listed { .. } => "list_agents",
+            Self::InputCancelled { .. } => "cancel_agent_input",
+        }
+    }
+
     /// 结果序列化（UI 详情、历史恢复、模型回执同源）。
     pub fn to_json(&self) -> Value {
         match self {
@@ -241,6 +353,30 @@ impl SubagentOutcome {
                 "agent_id": agent_id,
                 "role": role.as_str(),
                 "title": title,
+            }),
+            Self::InputAccepted {
+                submission_id,
+                agent_id,
+                status,
+                queued_count,
+                interrupt,
+            } => json!({
+                "tool": "send_input",
+                "submission_id": submission_id,
+                "agent_id": agent_id,
+                "status": status,
+                "queued_count": queued_count,
+                "interrupt": interrupt,
+            }),
+            Self::Resumed {
+                agent_id,
+                status,
+                queued_count,
+            } => json!({
+                "tool": "resume_agent",
+                "agent_id": agent_id,
+                "status": status,
+                "queued_count": queued_count,
             }),
             Self::Waited {
                 timed_out,
@@ -271,6 +407,31 @@ impl SubagentOutcome {
                 "agent_id": agent_id,
                 "previous_status": previous_status,
             }),
+            Self::Listed { agents } => json!({
+                "tool": "list_agents",
+                "agents": agents
+                    .iter()
+                    .map(|agent| json!({
+                        "agent_id": agent.agent_id,
+                        "role": agent.role.as_str(),
+                        "title": agent.title,
+                        "status": agent.status,
+                        "queued_count": agent.queued_count,
+                    }))
+                    .collect::<Vec<_>>(),
+            }),
+            Self::InputCancelled {
+                submission_id,
+                agent_id,
+                status,
+                queued_count,
+            } => json!({
+                "tool": "cancel_agent_input",
+                "submission_id": submission_id,
+                "agent_id": agent_id,
+                "status": status,
+                "queued_count": queued_count,
+            }),
         }
     }
 
@@ -285,6 +446,33 @@ impl SubagentOutcome {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
+            }),
+            "send_input" => Some(Self::InputAccepted {
+                submission_id: value.get("submission_id")?.as_str()?.to_string(),
+                agent_id: value.get("agent_id")?.as_str()?.to_string(),
+                status: value.get("status")?.as_str()?.to_string(),
+                queued_count: usize::try_from(
+                    value
+                        .get("queued_count")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                )
+                .unwrap_or(0),
+                interrupt: value
+                    .get("interrupt")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            }),
+            "resume_agent" => Some(Self::Resumed {
+                agent_id: value.get("agent_id")?.as_str()?.to_string(),
+                status: value.get("status")?.as_str()?.to_string(),
+                queued_count: usize::try_from(
+                    value
+                        .get("queued_count")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                )
+                .unwrap_or(0),
             }),
             "wait_agent" => {
                 let agents = value.get("agents")?.as_array()?;
@@ -320,6 +508,46 @@ impl SubagentOutcome {
             "close_agent" => Some(Self::Closed {
                 agent_id: value.get("agent_id")?.as_str()?.to_string(),
                 previous_status: value.get("previous_status")?.as_str()?.to_string(),
+            }),
+            "list_agents" => {
+                let entries = value.get("agents")?.as_array()?;
+                let mut agents = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    agents.push(AgentListItemView {
+                        agent_id: entry.get("agent_id")?.as_str()?.to_string(),
+                        role: AgentRole::parse(entry.get("role")?.as_str()?)?,
+                        title: entry
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        status: entry.get("status")?.as_str()?.to_string(),
+                        queued_count: usize::try_from(
+                            entry
+                                .get("queued_count")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0),
+                        )
+                        .unwrap_or(0),
+                    });
+                }
+                Some(Self::Listed { agents })
+            }
+            "cancel_agent_input" => Some(Self::InputCancelled {
+                submission_id: value.get("submission_id")?.as_str()?.to_string(),
+                agent_id: value
+                    .get("agent_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                status: value.get("status")?.as_str()?.to_string(),
+                queued_count: usize::try_from(
+                    value
+                        .get("queued_count")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                )
+                .unwrap_or(0),
             }),
             _ => None,
         }
@@ -438,160 +666,6 @@ pub fn format_report_envelope(report: &SubagentReportView) -> String {
         duration,
         escape_text(&body),
     )
-}
-
-/// 三个控制工具之一；非控制工具返回 None，参数非法返回 Err。
-///
-/// 只接受白名单字段（多余字段直接拒绝）：schema 是给模型看的，执行层不信任它。
-pub fn parse_control(name: &str, arguments_json: &str) -> Option<Result<SubagentOp, ToolFailure>> {
-    match name {
-        "spawn_agent" => Some(parse_spawn(arguments_json)),
-        "wait_agent" => Some(parse_wait(arguments_json)),
-        "close_agent" => Some(parse_close(arguments_json)),
-        _ => None,
-    }
-}
-
-/// `spawn_agent` 的参数解析。
-fn parse_spawn(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
-    let object = object_of(arguments_json)?;
-    reject_unknown(&object, &["role", "title", "task"])?;
-    let role_text = object
-        .get("role")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ToolFailure::invalid("`role` must be \"explorer\" or \"executor\""))?;
-    let role = AgentRole::parse(role_text)
-        .ok_or_else(|| ToolFailure::invalid("`role` must be \"explorer\" or \"executor\""))?;
-    // 旧会话的 spawn 参数没有 title：执行层容忍缺失（历史卡片照常显示 task），
-    // schema 仍要求新调用提供；非空校验只在字段存在时执行。
-    let title = object
-        .get("title")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if title.chars().count() > MAX_TITLE_CHARS {
-        return Err(ToolFailure::new(
-            ToolErrorCode::TooLarge,
-            format!("`title` must be at most {MAX_TITLE_CHARS} characters"),
-        ));
-    }
-    let task = object
-        .get("task")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ToolFailure::invalid("`task` must be a string"))?
-        .to_string();
-    if task.trim().is_empty() {
-        return Err(ToolFailure::invalid("`task` must not be empty"));
-    }
-    if task.chars().count() > MAX_TASK_CHARS {
-        return Err(ToolFailure::new(
-            ToolErrorCode::TooLarge,
-            format!("`task` must be at most {MAX_TASK_CHARS} characters"),
-        ));
-    }
-    Ok(SubagentOp::Spawn { role, title, task })
-}
-
-/// `wait_agent` 的参数解析。
-///
-/// `targets` 可省略/为空：表示等待本会话全部子 agent。`wait_for` 默认 `all`，
-/// `any` 表示任意一个结束就返回。
-fn parse_wait(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
-    let object = object_of(arguments_json)?;
-    reject_unknown(&object, &["targets", "wait_for", "timeout_ms"])?;
-    let mut parsed = Vec::new();
-    if let Some(targets) = object.get("targets").filter(|value| !value.is_null()) {
-        let targets = targets
-            .as_array()
-            .ok_or_else(|| ToolFailure::invalid("`targets` must be an array of agent ids"))?;
-        if targets.len() > MAX_WAIT_TARGETS {
-            return Err(ToolFailure::invalid(format!(
-                "`targets` must contain at most {MAX_WAIT_TARGETS} agent ids"
-            )));
-        }
-        for target in targets {
-            let target = target
-                .as_str()
-                .ok_or_else(|| ToolFailure::invalid("`targets` must contain only strings"))?;
-            if target.trim().is_empty() {
-                return Err(ToolFailure::invalid("`targets` must not contain empty ids"));
-            }
-            if !parsed.iter().any(|item: &String| item == target) {
-                parsed.push(target.to_string());
-            }
-        }
-    }
-    let mode = match object.get("wait_for") {
-        None | Some(Value::Null) => WaitMode::All,
-        Some(value) => {
-            let text = value
-                .as_str()
-                .ok_or_else(|| ToolFailure::invalid("`wait_for` must be \"all\" or \"any\""))?;
-            match text {
-                "all" => WaitMode::All,
-                "any" => WaitMode::Any,
-                _ => {
-                    return Err(ToolFailure::invalid(
-                        "`wait_for` must be \"all\" or \"any\"",
-                    ));
-                }
-            }
-        }
-    };
-    let timeout_ms = match object.get("timeout_ms") {
-        None | Some(Value::Null) => DEFAULT_WAIT_TIMEOUT_MS,
-        Some(value) => {
-            let raw = value
-                .as_i64()
-                .ok_or_else(|| ToolFailure::invalid("`timeout_ms` must be an integer"))?;
-            raw.clamp(1, MAX_WAIT_TIMEOUT_MS as i64) as u64
-        }
-    };
-    Ok(SubagentOp::Wait {
-        targets: parsed,
-        mode,
-        timeout_ms: timeout_ms.clamp(1, MAX_WAIT_TIMEOUT_MS),
-    })
-}
-
-/// `close_agent` 的参数解析。
-fn parse_close(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
-    let object = object_of(arguments_json)?;
-    reject_unknown(&object, &["target"])?;
-    let target = object
-        .get("target")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ToolFailure::invalid("`target` must be a string"))?
-        .to_string();
-    if target.trim().is_empty() {
-        return Err(ToolFailure::invalid("`target` must not be empty"));
-    }
-    Ok(SubagentOp::Close { target })
-}
-
-/// 参数体必须是 JSON 对象。
-fn object_of(arguments_json: &str) -> Result<serde_json::Map<String, Value>, ToolFailure> {
-    serde_json::from_str::<Value>(arguments_json)
-        .ok()
-        .and_then(|value| value.as_object().cloned())
-        .ok_or_else(|| ToolFailure::invalid("arguments must be a JSON object"))
-}
-
-/// 拒绝白名单外的字段（只报字段名，不回显参数全文）。
-fn reject_unknown(
-    object: &serde_json::Map<String, Value>,
-    allowed: &[&str],
-) -> Result<(), ToolFailure> {
-    for key in object.keys() {
-        if !allowed.contains(&key.as_str()) {
-            return Err(ToolFailure::invalid(format!("unknown field: `{key}`")));
-        }
-    }
-    Ok(())
 }
 
 /// 报告正文截断（按字节上限，且不切断 UTF-8 字符）。

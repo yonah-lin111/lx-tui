@@ -153,6 +153,7 @@ pub fn execute_with(
         // `edit` 自带已提交变更累积，失败时需把部分成功一并返回。
         "edit" => edit::run_with(ctx, arguments_json, recorder),
         "write" => write::run_with(ctx, arguments_json, recorder),
+        "curr_time" => wrap(run_curr_time(ctx, arguments_json)),
         // 需要长期进程句柄/会话状态：本入口不执行，返回明确的错误而不是静默成功。
         "exec_command" | "write_stdin" | "update_plan" | ASK_TOOL => ToolFailure::new(
             ToolErrorCode::UnknownTool,
@@ -180,4 +181,15 @@ fn wrap(result: ToolResult<ToolExecutionResult>) -> ToolExecutionResult {
         Ok(value) => value,
         Err(failure) => failure.into_result(Vec::new()),
     }
+}
+
+/// 执行 `curr_time`：参数必须严格为空对象 `{}`，取实时 UTC 时钟（或测试注入时钟）。
+fn run_curr_time(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExecutionResult> {
+    let _ = args::Args::parse(arguments_json, &[])?;
+    let current_time = match ctx.clock_override_secs {
+        Some(secs) => Some(crate::platform::format_utc_timestamp_secs(secs)),
+        None => crate::platform::current_utc_timestamp(),
+    }
+    .ok_or_else(|| ToolFailure::new(ToolErrorCode::Io, "system clock unavailable"))?;
+    Ok(ToolExecutionResult::CurrentTime { current_time })
 }

@@ -125,10 +125,19 @@ fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
                         }
                     }));
                 }
-                messages.push(json!({
-                    "role": "user",
-                    "content": content_parts,
-                }));
+                if let Some(existing) = messages
+                    .last_mut()
+                    .filter(|msg| msg.get("role").and_then(Value::as_str) == Some("user"))
+                    .and_then(|msg| msg.get_mut("content"))
+                    .and_then(Value::as_array_mut)
+                {
+                    existing.extend(content_parts);
+                } else {
+                    messages.push(json!({
+                        "role": "user",
+                        "content": content_parts,
+                    }));
+                }
             }
             HistoryBlock::ToolCall {
                 call_id,

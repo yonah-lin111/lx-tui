@@ -74,7 +74,8 @@ pub use host::{
 };
 pub use rewind::{RewindOutcome, apply_rewind_effects, handle_rewind_finished};
 pub(crate) use subagent::{
-    apply_subagent_effects, finish_subagent, handle_subagent_net_event, handle_subagent_wait_ready,
+    apply_subagent_effects, finish_subagent, handle_subagent_auto_compact,
+    handle_subagent_net_event, handle_subagent_wait_ready,
 };
 
 use std::collections::HashMap;
@@ -142,6 +143,10 @@ pub struct ChatStreams {
     pub(crate) asks: HashMap<RequestKey, PendingAsk>,
     /// 子 agent 句柄：`child_session_id -> handle`。
     pub(crate) subagents: HashMap<String, subagent::SubagentHandle>,
+    /// 已显式恢复（或刚 spawn 处于活动生命周期）的子 agent ID 集合（`agent_id`）。
+    pub(crate) resumed_subagents: std::collections::HashSet<String>,
+    /// 因 `send_input(interrupt=true)` 正在中断当前轮、封口后需立即消费新输入的 `agent_id` 集合。
+    pub(crate) interrupted_subagents: std::collections::HashSet<String>,
     /// spawn 时冻结的模型（父会话与子会话各登记一份）。
     pub(crate) frozen: HashMap<String, crate::app::state::FrozenModel>,
 }
@@ -1000,8 +1005,19 @@ pub fn handle_agent_host_event(
             let _ = reply.send(updates);
             false
         }
-        AgentHostEvent::Subagent { key, op, reply } => {
-            subagent::handle_subagent_op(state, streams, persistence, key, op, reply)
-        }
+        AgentHostEvent::Subagent {
+            key,
+            call_id,
+            op,
+            reply,
+        } => subagent::handle_subagent_op_with_call(
+            state,
+            streams,
+            persistence,
+            key,
+            call_id.as_deref(),
+            op,
+            reply,
+        ),
     }
 }
