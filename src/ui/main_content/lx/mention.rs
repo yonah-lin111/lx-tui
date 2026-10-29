@@ -18,8 +18,8 @@ use crate::ui::widgets::command_panel::{
 pub(crate) const MAX_POPUP_ROWS: u16 = 8;
 /// 面板顶部分割线占用的行数（顶部单条蓝色横线，无底边框）。
 pub(super) const PANEL_BORDER_ROWS: u16 = 1;
-/// 面板底部快捷键提示占用的行数（无边框单行 muted 提示）。
-pub(super) const PANEL_FOOTER_ROWS: u16 = 1;
+/// 面板底部快捷键提示块占用的行数（1 行空行间隔 + 1 行提示）。
+pub(super) const PANEL_FOOTER_ROWS: u16 = 2;
 
 /// 提及面板条目文本：候选文件/目录（双行）或状态行（单行）。
 enum PanelRow {

@@ -315,8 +315,8 @@ fn history_panel_renders_top_rule_and_borderless_footer() {
         lines[footer_row]
     );
     assert_eq!(
-        panel.rect.height, 4,
-        "1 行顶部蓝色横线 + 2 条历史记录 + 1 行底边提示 = 4 行高"
+        panel.rect.height, 5,
+        "1 行顶部蓝色横线 + 2 条历史记录 + 空行与底边提示 2 行 = 5 行高"
     );
 }
 
@@ -340,8 +340,8 @@ fn model_panel_renders_top_rule_and_borderless_footer() {
         lines[footer_row]
     );
     assert_eq!(
-        panel.rect.height, 5,
-        "1 行顶部蓝色横线 + 3 个模型候选 + 1 行底边提示 = 5 行高"
+        panel.rect.height, 6,
+        "1 行顶部蓝色横线 + 3 个模型候选 + 空行与底边提示 2 行 = 6 行高"
     );
 }
 

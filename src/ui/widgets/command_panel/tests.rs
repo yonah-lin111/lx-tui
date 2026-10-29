@@ -648,7 +648,7 @@ fn borderless_overlap_active_and_current_uses_default_marker_and_blue_label() {
 }
 
 #[test]
-fn borderless_panel_footer_row_adds_one_line_without_border() {
+fn borderless_panel_footer_row_adds_spacer_and_hint_without_border() {
     let area = Rect::new(0, 0, 40, 10);
     let mut buf = Buffer::empty(area);
     let items = inline(&[("/compact", "Summarize")]);
@@ -663,8 +663,11 @@ fn borderless_panel_footer_row_adds_one_line_without_border() {
         ..Default::default()
     };
     let rect = render(area, &mut buf, &v).expect("renders");
-    // 1 top rule + 1 item + 1 footer row = 3 rows
-    assert_eq!(rect, Rect::new(0, 3, 40, 3));
+    // 1 top rule + 1 item + 1 spacer + 1 footer = 4 rows
+    assert_eq!(rect, Rect::new(0, 2, 40, 4));
+    // 内容与提示之间空一行。
+    let spacer = row_text(&buf, area, rect.bottom() - 2);
+    assert_eq!(spacer.trim(), "", "内容与提示之间留一行空行: {spacer:?}");
     let footer_row = rect.bottom() - 1;
     let footer = row_text(&buf, area, footer_row);
     assert!(

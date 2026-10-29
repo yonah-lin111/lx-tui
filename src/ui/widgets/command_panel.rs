@@ -17,6 +17,8 @@ const MIN_WIDTH: u16 = 3;
 const MIN_HEIGHT: u16 = 3;
 /// 无边框面板最小高度（1 行顶部分割线 + 1 行内容）。
 const MIN_BORDERLESS_HEIGHT: u16 = 2;
+/// 无边框面板底部提示块的行数：1 行空行间隔 + 1 行快捷键提示。
+const FOOTER_BLOCK_ROWS: u16 = 2;
 
 /// 名称列与预览列之间的间距（列）。
 const COLUMN_GAP: usize = 1;
@@ -124,8 +126,12 @@ pub struct PanelLayout {
 
 /// 计算面板布局；空间不足或没有可见条目时返回 None。
 pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
-    // 无边框面板：顶部 1 行分割线 + 底部可选 1 行快捷键提示；有边框面板：上下边框各 1 行。
-    let footer_rows: u16 = u16::from(view.borderless && view.footer.is_some());
+    // 无边框面板：顶部 1 行分割线 + 底部「1 行空行间隔 + 1 行快捷键提示」；有边框面板：上下边框各 1 行。
+    let footer_rows: u16 = if view.borderless && view.footer.is_some() {
+        FOOTER_BLOCK_ROWS
+    } else {
+        0
+    };
     let frame_rows: u16 = if view.borderless { 1 + footer_rows } else { 2 };
     let min_height = if view.borderless {
         MIN_BORDERLESS_HEIGHT + footer_rows
@@ -307,7 +313,7 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
     Some(layout.rect)
 }
 
-/// 绘制无边框命令面板底部的快捷键提示行（无边框、无分割线，muted 单行，超宽截断）。
+/// 绘制无边框命令面板底部的快捷键提示行（上方留 1 行空行间隔，无边框、无分割线，muted 单行，超宽截断）。
 fn render_borderless_footer(buf: &mut Buffer, rect: Rect, footer: &str) {
     let y = rect.bottom().saturating_sub(1);
     let text = text::truncate_to_width(footer, usize::from(rect.width));

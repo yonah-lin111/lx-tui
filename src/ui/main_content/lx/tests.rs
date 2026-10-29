@@ -963,7 +963,7 @@ fn mention_panel_height_capped_at_max_popup_rows() {
     assert_eq!(
         panel.rect.height,
         mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS,
-        "高度对齐 codex 的 MAX_POPUP_ROWS + 顶部横线 + 底边提示"
+        "高度对齐 codex 的 MAX_POPUP_ROWS + 顶部横线 + 底边空行与提示"
     );
     assert!(panel.scrollbar.is_some(), "超出上限时出现滚动条");
 }
