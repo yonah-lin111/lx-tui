@@ -578,3 +578,71 @@ fn layout_and_hit_test_tabs() {
     let mut buf = Buffer::empty(area);
     assert!(render(area, &mut buf, &v).is_some());
 }
+
+#[test]
+fn borderless_panel_renders_top_blue_rule_and_no_background_or_side_borders() {
+    let area = Rect::new(0, 0, 30, 8);
+    let mut buf = Buffer::empty(area);
+    let items = inline(&[("/compact", "Summarize"), ("/model", "Switch")]);
+    let v = CommandPanelView {
+        items: &items,
+        active: 0,
+        current: Some(1),
+        anchor_row: 5,
+        width: Some(30),
+        placement: PanelPlacement::Above,
+        borderless: true,
+        title: Some("/Command"),
+        ..Default::default()
+    };
+    let rect = render(area, &mut buf, &v).expect("borderless renders");
+    // 1 top rule + 2 items = 3 rows, placed directly above anchor_row = 5 -> y = 2..5
+    assert_eq!(rect, Rect::new(0, 2, 30, 3));
+    assert_eq!(buf[(0, 2)].symbol(), "─");
+    assert_eq!(buf[(0, 2)].fg, Color::Cyan);
+    assert_eq!(buf[(29, 2)].symbol(), "─");
+    assert_eq!(buf[(29, 2)].fg, Color::Cyan);
+
+    // No overlay background anywhere
+    for y in rect.y..rect.bottom() {
+        for x in rect.x..rect.right() {
+            assert_eq!(buf[(x, y)].bg, Color::Reset);
+        }
+    }
+
+    // Row 0 (active=0, current=Some(1)): `❯` in default color (Reset), label in default color
+    assert_eq!(buf[(0, 3)].symbol(), "❯");
+    assert_eq!(buf[(0, 3)].fg, Color::Reset);
+    assert_eq!(buf[(2, 3)].symbol(), "/");
+    assert_eq!(buf[(2, 3)].fg, Color::Reset);
+
+    // Row 1 (active=0, current=Some(1)): `❯` in Cyan, label in Cyan
+    assert_eq!(buf[(0, 4)].symbol(), "❯");
+    assert_eq!(buf[(0, 4)].fg, Color::Cyan);
+    assert_eq!(buf[(2, 4)].symbol(), "/");
+    assert_eq!(buf[(2, 4)].fg, Color::Cyan);
+}
+
+#[test]
+fn borderless_overlap_active_and_current_uses_default_marker_and_blue_label() {
+    let area = Rect::new(0, 0, 30, 8);
+    let mut buf = Buffer::empty(area);
+    let items = inline(&[("claude-4", "Anthropic")]);
+    let v = CommandPanelView {
+        items: &items,
+        active: 0,
+        current: Some(0),
+        anchor_row: 4,
+        width: Some(30),
+        placement: PanelPlacement::Above,
+        borderless: true,
+        ..Default::default()
+    };
+    let rect = render(area, &mut buf, &v).expect("renders");
+    let row_y = rect.y + 1;
+    // `❯` is default color (indicating active selection), label is Cyan (indicating current model)
+    assert_eq!(buf[(0, row_y)].symbol(), "❯");
+    assert_eq!(buf[(0, row_y)].fg, Color::Reset);
+    assert_eq!(buf[(2, row_y)].symbol(), "c");
+    assert_eq!(buf[(2, row_y)].fg, Color::Cyan);
+}

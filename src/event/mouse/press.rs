@@ -611,6 +611,14 @@ pub(crate) fn handle_mouse_down_left(
                     *dirty = true;
                     return;
                 }
+                let mention_tab_hit = state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::mention_tab_at(inner, &target.lx, mouse.column, mouse.row)
+                });
+                if let Some(tab) = mention_tab_hit {
+                    update::switch_lx_mention_tab(state, pane, tab);
+                    *dirty = true;
+                    return;
+                }
                 let mention_hit = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::mention_item_at(
                         inner,

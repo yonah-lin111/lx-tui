@@ -242,6 +242,18 @@ pub(crate) fn lx_pane_at(
         .map(|_| (pane, inner))
 }
 
+/// lx `@` 提及面板命中：返回 (窗格, 条目索引)；未命中返回 None。
+pub(crate) fn lx_mention_item_at(
+    state: &AppState,
+    rects: &[(PaneId, Rect)],
+    column: u16,
+    row: u16,
+) -> Option<(PaneId, usize)> {
+    let (pane, inner) = lx_pane_at(state, rects, column, row)?;
+    let target = state.pane_anywhere(pane)?;
+    ui::main_content::lx::mention_item_at(inner, &target.lx, column, row).map(|index| (pane, index))
+}
+
 /// lx 快捷引用面板命中：返回 (窗格, 条目索引)；未命中返回 None。
 pub(crate) fn lx_refer_item_at(
     state: &AppState,

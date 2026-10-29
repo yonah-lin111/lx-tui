@@ -23,7 +23,9 @@ mod refer;
 mod selection;
 
 pub(crate) use ask::{ask_editor_cell_at, rect as ask_rect};
-pub(crate) use mention::{item_at as mention_item_at, layout as mention_layout};
+pub(crate) use mention::{
+    item_at as mention_item_at, layout as mention_layout, tab_at as mention_tab_at,
+};
 pub(crate) use refer::{item_at as refer_item_at, layout as refer_layout};
 pub use selection::copy_text;
 pub(crate) use selection::{content_geom, unit_cell_range};
@@ -290,7 +292,7 @@ fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
     let content_x = area.x + margin;
     let content_w = area.width.saturating_sub(margin.saturating_mul(2));
     let region_h = input.y.saturating_sub(area.y);
-    if region_h < 3 {
+    if region_h < 2 {
         return;
     }
     let count = text::paste_item_count(panel.candidates.len());
@@ -327,6 +329,9 @@ fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
         title: Some(text::PASTE_PANEL_TITLE),
         right_title: None,
         footer: None,
+        width: Some(content_w),
+        placement: command_panel::PanelPlacement::Above,
+        borderless: true,
         ..Default::default()
     };
     let panel_area = Rect::new(content_x, area.y, content_w, region_h);

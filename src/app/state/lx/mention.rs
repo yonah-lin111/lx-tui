@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::app::markdown::{
     self, MentionEntry, MentionPanel, filter_mentions, mention_insertion, mention_trigger,
 };
+pub use crate::app::prompt::MentionTab;
 
 /// 提及面板可用视图：无触发/无根、扫描中、无匹配或候选列表。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,7 +24,7 @@ pub enum LxMentionView {
     Items,
 }
 
-/// lx 提及面板状态：扫描根、缓存、在途代号、过滤面板与压制标记。
+/// lx 提及面板状态：扫描根、缓存、在途代号、过滤面板、Tab 与压制标记。
 #[derive(Debug, Default)]
 pub struct LxMention {
     /// 当前有效扫描根（`pane.cwd` 优先，回退工作区 cwd）；None 表示无可扫描根。
@@ -38,6 +39,18 @@ pub struct LxMention {
     panel: Option<MentionPanel>,
     /// Esc/确认后压制自动重开，直到下一次编辑或根变化。
     suppressed: bool,
+    /// 当前活跃 Tab：Files 或 refDir。
+    tab: MentionTab,
+    /// 引用文件夹列表快照（由上层同步注入）。
+    referenced_folders: Vec<crate::app::referenced::ReferencedFolder>,
+    /// refDir 列表的高亮索引。
+    ref_active: usize,
+    /// refDir 列表的窗口锚点索引。
+    ref_anchor: usize,
+    /// refDir 显式视口起点。
+    ref_viewport: Option<usize>,
+    /// 当前触发区间与查询词。
+    trigger: Option<markdown::MentionTrigger>,
 }
 
 impl LxMention {
@@ -46,9 +59,116 @@ impl LxMention {
         self.panel.as_ref()
     }
 
-    /// 候选面板是否可见（有可采纳条目）。
+    /// 当前活跃 Tab。
+    pub fn tab(&self) -> MentionTab {
+        self.tab
+    }
+
+    /// refDir 高亮索引。
+    pub fn ref_active(&self) -> usize {
+        self.ref_active
+    }
+
+    /// refDir 窗口锚点。
+    pub fn ref_anchor(&self) -> usize {
+        self.ref_anchor
+    }
+
+    /// refDir 显式视口。
+    pub fn ref_viewport(&self) -> Option<usize> {
+        self.ref_viewport
+    }
+
+    /// 同步引用文件夹快照。
+    pub fn sync_referenced_folders(
+        &mut self,
+        folders: &[crate::app::referenced::ReferencedFolder],
+        text: &str,
+        cursor: usize,
+    ) {
+        if self.referenced_folders == folders {
+            return;
+        }
+        self.referenced_folders = folders.to_vec();
+        self.refresh(text, cursor);
+    }
+
+    /// 获取基于当前触发词过滤后的引用文件夹列表。
+    pub fn filtered_ref_folders(&self) -> Vec<&crate::app::referenced::ReferencedFolder> {
+        let query = self
+            .trigger
+            .as_ref()
+            .map(|t| t.query.as_str())
+            .unwrap_or("");
+        if query.is_empty() {
+            return self.referenced_folders.iter().collect();
+        }
+        let query_lower = query.to_lowercase();
+        self.referenced_folders
+            .iter()
+            .filter(|folder| {
+                folder.display_name().to_lowercase().contains(&query_lower)
+                    || folder
+                        .path
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .contains(&query_lower)
+            })
+            .collect()
+    }
+
+    /// 切换 Tab：循环左右切换；未处于可见状态返回 false。
+    pub fn switch_tab(&mut self, delta: isize, text: &str, cursor: usize) -> bool {
+        if self.view(text, cursor) == LxMentionView::Hidden {
+            return false;
+        }
+        let next = if delta > 0 {
+            self.tab.next()
+        } else {
+            self.tab.prev()
+        };
+        if next == self.tab {
+            return false;
+        }
+        self.tab = next;
+        self.ref_active = 0;
+        self.ref_anchor = 0;
+        self.ref_viewport = None;
+        true
+    }
+
+    /// 直接设置活跃 Tab。
+    pub fn set_tab(&mut self, tab: MentionTab, text: &str, cursor: usize) -> bool {
+        if self.view(text, cursor) == LxMentionView::Hidden || self.tab == tab {
+            return false;
+        }
+        self.tab = tab;
+        self.ref_active = 0;
+        self.ref_anchor = 0;
+        self.ref_viewport = None;
+        true
+    }
+
+    /// 会话结束：状态复位。
+    fn reset_session(&mut self) {
+        self.panel = None;
+        self.trigger = None;
+        self.tab = MentionTab::Files;
+        self.ref_active = 0;
+        self.ref_anchor = 0;
+        self.ref_viewport = None;
+    }
+
+    /// 候选面板是否可见（当前活跃 Tab 有可采纳条目）。
     pub fn is_open(&self) -> bool {
-        self.panel.is_some()
+        match self.tab {
+            MentionTab::Files => self.panel.is_some(),
+            MentionTab::RefDir => {
+                self.trigger.is_some()
+                    && !self.suppressed
+                    && !self.filtered_ref_folders().is_empty()
+            }
+        }
     }
 
     /// 扫描条目缓存（若已有）；无缓存返回空切片。
@@ -63,19 +183,32 @@ impl LxMention {
 
     /// 面板视图种类；`text`/`cursor` 为当前输入缓冲与光标。
     pub fn view(&self, text: &str, cursor: usize) -> LxMentionView {
-        if self.panel.is_some() {
-            return LxMentionView::Items;
-        }
-        if self.suppressed || self.root.is_none() {
+        if self.suppressed || mention_trigger(text, cursor).is_none() {
             return LxMentionView::Hidden;
         }
-        if mention_trigger(text, cursor).is_none() {
+        if self.root.is_none()
+            && self.referenced_folders.is_empty()
+            && self.tab == MentionTab::Files
+        {
             return LxMentionView::Hidden;
         }
-        if self.cache.is_some() {
-            LxMentionView::Empty
-        } else {
-            LxMentionView::Loading
+        match self.tab {
+            MentionTab::Files => {
+                if self.panel.is_some() {
+                    LxMentionView::Items
+                } else if self.cache.is_some() || self.root.is_none() {
+                    LxMentionView::Empty
+                } else {
+                    LxMentionView::Loading
+                }
+            }
+            MentionTab::RefDir => {
+                if self.filtered_ref_folders().is_empty() {
+                    LxMentionView::Empty
+                } else {
+                    LxMentionView::Items
+                }
+            }
         }
     }
 
@@ -127,13 +260,29 @@ impl LxMention {
     /// 按当前文本、光标与缓存重算面板；压制时保持关闭。
     pub fn refresh(&mut self, text: &str, cursor: usize) {
         if self.suppressed {
-            self.panel = None;
+            self.reset_session();
             return;
         }
         let Some(trigger) = mention_trigger(text, cursor) else {
-            self.panel = None;
+            self.reset_session();
             return;
         };
+        if self.trigger.as_ref().map(|t| t.from) != Some(trigger.from) {
+            self.tab = MentionTab::Files;
+            self.ref_active = 0;
+            self.ref_anchor = 0;
+            self.ref_viewport = None;
+        }
+        self.trigger = Some(trigger.clone());
+        let filtered_count = self.filtered_ref_folders().len();
+        if self.ref_active >= filtered_count {
+            self.ref_active = 0;
+            self.ref_anchor = 0;
+            self.ref_viewport = None;
+        }
+        if self.ref_viewport.is_some_and(|vp| vp >= filtered_count) {
+            self.ref_viewport = None;
+        }
         let Some(cache) = self.cache.as_ref() else {
             self.panel = None;
             return;
@@ -157,6 +306,17 @@ impl LxMention {
 
     /// 键盘或悬停移动高亮；面板未打开返回 false。
     pub fn move_active(&mut self, delta: isize) -> bool {
+        if self.tab == MentionTab::RefDir {
+            let count = self.filtered_ref_folders().len();
+            if count == 0 {
+                return false;
+            }
+            let next = (self.ref_active as isize + delta).rem_euclid(count as isize) as usize;
+            self.ref_active = next;
+            self.ref_anchor = next;
+            self.ref_viewport = None;
+            return true;
+        }
         match self.panel.as_mut() {
             Some(panel) => {
                 panel.move_active(delta);
@@ -168,6 +328,14 @@ impl LxMention {
 
     /// 直接设置高亮索引；面板未打开、越界或未变化返回 false。
     pub fn set_active(&mut self, index: usize) -> bool {
+        if self.tab == MentionTab::RefDir {
+            let count = self.filtered_ref_folders().len();
+            if index >= count || self.ref_active == index {
+                return false;
+            }
+            self.ref_active = index;
+            return true;
+        }
         let Some(panel) = self.panel.as_mut() else {
             return false;
         };
@@ -180,6 +348,20 @@ impl LxMention {
 
     /// 滚轮滚动可见窗口：`base` 为当前窗口起点，高亮不动；返回是否移动。
     pub fn scroll_viewport(&mut self, delta: isize, base: usize) -> bool {
+        if self.tab == MentionTab::RefDir {
+            let count = self.filtered_ref_folders().len();
+            if count == 0 {
+                return false;
+            }
+            let current = self.ref_viewport.unwrap_or(base);
+            let next = (current as isize + delta).max(0) as usize;
+            let clamped = next.min(count.saturating_sub(1));
+            if self.ref_viewport == Some(clamped) {
+                return false;
+            }
+            self.ref_viewport = Some(clamped);
+            return true;
+        }
         match self.panel.as_mut() {
             Some(panel) => panel.scroll_viewport(delta, base),
             None => false,
@@ -188,6 +370,24 @@ impl LxMention {
 
     /// 确认高亮条目：关闭面板、进入压制，返回替换区间与插入文本；无面板或越界返回 None。
     pub fn confirm(&mut self, text_len: usize) -> Option<(Range<usize>, String)> {
+        if self.tab == MentionTab::RefDir {
+            let trigger = self.trigger.as_ref()?;
+            if trigger.from > trigger.to || trigger.to > text_len {
+                return None;
+            }
+            let filtered = self.filtered_ref_folders();
+            let folder = filtered.get(self.ref_active)?;
+            let range = trigger.from..trigger.to;
+            let ref_text = crate::app::markdown::format_reference(
+                crate::app::markdown::ReferKind::Folder,
+                &folder.path,
+            )
+            .unwrap_or_else(|| format!("@[refer-folder]({})", folder.path.display()));
+            let insertion = format!("{ref_text} ");
+            self.reset_session();
+            self.suppressed = true;
+            return Some((range, insertion));
+        }
         let panel = self.panel.as_ref()?;
         let trigger = panel.trigger();
         if trigger.from > trigger.to || trigger.to > text_len {
@@ -196,7 +396,7 @@ impl LxMention {
         let entry = panel.items().get(panel.active())?.clone();
         let range = trigger.from..trigger.to;
         let insertion = mention_insertion(&entry);
-        self.panel = None;
+        self.reset_session();
         self.suppressed = true;
         Some((range, insertion))
     }
@@ -205,6 +405,9 @@ impl LxMention {
     ///
     /// 高亮非目录、目录无缓存后代或区间越界时返回 None。
     pub fn enter_folder(&self, text_len: usize) -> Option<(Range<usize>, String)> {
+        if self.tab == MentionTab::RefDir {
+            return None;
+        }
         let panel = self.panel.as_ref()?;
         let entry = panel.items().get(panel.active())?;
         if !entry.is_directory || !self.has_children(&entry.path) {
@@ -227,14 +430,19 @@ impl LxMention {
 
     /// 关闭面板且不改文本、进入压制；面板未打开返回 false。
     pub fn escape(&mut self) -> bool {
-        let open = self.panel.is_some();
+        let open = self.panel.is_some()
+            || (self.trigger.is_some()
+                && !self.suppressed
+                && (self.root.is_some()
+                    || !self.referenced_folders.is_empty()
+                    || self.tab == MentionTab::RefDir));
         self.suppress();
         open
     }
 
     /// 关闭面板并压制自动重开（粘贴等场景）；保留缓存与在途标记以便后续复用。
     pub fn suppress(&mut self) {
-        self.panel = None;
+        self.reset_session();
         self.suppressed = true;
     }
 

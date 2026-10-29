@@ -135,6 +135,7 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         }
         LxHistoryRoute::None => {}
     }
+    let referenced_folders = state.referenced.folders.clone();
     let Some(pane) = state.active_pane_mut() else {
         return;
     };
@@ -142,6 +143,7 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         return;
     }
     let lx = &mut pane.lx;
+    lx.sync_referenced_folders(&referenced_folders);
     // 路径粘贴参照面板优先：与 md 块面板互斥；面板打开时其余按键按面板策略吞掉。
     if lx.paste_panel().is_some() {
         match command {
@@ -166,8 +168,29 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         }
         return;
     }
-    // `@` 提及面板次优先：仅接管导航、采纳、进入目录与关闭；其它编辑键继续走编辑并重算触发。
+    // `@` 提及面板次优先：仅接管导航、左右切 Tab、采纳、进入目录与关闭；其它编辑键继续走编辑并重算触发。
     let mention_visible = lx.mention_visible();
+    if mention_visible {
+        match command {
+            LxInput::Left => {
+                lx.mention_switch_tab(-1);
+                return;
+            }
+            LxInput::Right => {
+                lx.mention_switch_tab(1);
+                return;
+            }
+            LxInput::Escape => {
+                lx.mention_escape();
+                return;
+            }
+            LxInput::EnterFolder => {
+                lx.mention_enter_folder();
+                return;
+            }
+            _ => {}
+        }
+    }
     if lx.mention_open() {
         match command {
             LxInput::Up => {
@@ -182,21 +205,8 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                 lx.mention_confirm();
                 return;
             }
-            LxInput::Escape => {
-                lx.mention_escape();
-                return;
-            }
-            // Shift+Enter 由下方 mention_visible 分支统一处理。
-            LxInput::EnterFolder => {
-                lx.mention_enter_folder();
-                return;
-            }
             _ => {}
         }
-    }
-    // 面板可见（含扫描中/无匹配）时 Shift+Enter 吞键：不进入目录也不换行。
-    if mention_visible && command == LxInput::EnterFolder {
-        return;
     }
     // 快捷引用面板优先于斜杠面板：仅接管导航、采纳与关闭；其它编辑键继续走编辑并重算触发。
     if lx.refer_active() {
@@ -695,11 +705,13 @@ pub fn lx_mention_root_for_pane(state: &AppState, id: PaneId) -> Option<std::pat
         .or_else(|| state.workspace_cwd_for_pane(id))
 }
 
-/// 为指定窗格同步 `@` 提及扫描根；根变化返回 true（供置脏）。
+/// 为指定窗格同步 `@` 提及扫描根与引用文件夹快照；根变化返回 true（供置脏）。
 pub fn sync_lx_mention_root(state: &mut AppState, id: PaneId) -> bool {
     let root = lx_mention_root_for_pane(state, id);
     let project = state.project_root_for_pane(id);
+    let referenced = state.referenced.folders.clone();
     state.pane_mut_anywhere(id).is_some_and(|pane| {
+        pane.lx.sync_referenced_folders(&referenced);
         let mention = pane.lx.set_mention_root(root);
         let project = pane.lx.set_project_root(project);
         mention || project
@@ -754,6 +766,27 @@ pub fn apply_lx_mention_entries(
     if let Some(pane) = state.pane_mut_anywhere(id) {
         pane.lx.apply_mention_entries(generation, root, entries);
     }
+}
+
+/// 鼠标悬停 `@` 提及候选：更新高亮（窗口不滚动）；返回是否变化。
+pub fn hover_lx_mention(state: &mut AppState, id: PaneId, index: usize) -> bool {
+    state
+        .pane_mut_anywhere(id)
+        .is_some_and(|pane| pane.lx.mention_set_active(index))
+}
+
+/// 鼠标点击 `@` 提及面板顶部 Tab：切换当前 Tab；返回是否变化。
+pub fn switch_lx_mention_tab(state: &mut AppState, id: PaneId, tab: usize) -> bool {
+    let tab = if tab == 0 {
+        crate::app::prompt::MentionTab::Files
+    } else {
+        crate::app::prompt::MentionTab::RefDir
+    };
+    let referenced = state.referenced.folders.clone();
+    state.pane_mut_anywhere(id).is_some_and(|pane| {
+        pane.lx.sync_referenced_folders(&referenced);
+        pane.lx.mention_set_tab(tab)
+    })
 }
 
 /// 鼠标点选 `@` 提及候选：设置高亮并按 `Enter` 规则采纳；返回是否消费。

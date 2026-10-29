@@ -125,6 +125,8 @@ fn view<'a>(
         footer: None,
         width: Some(input.width),
         placement: PanelPlacement::Above,
+        borderless: true,
+        hide_active_marker: false,
     }
 }
 

@@ -18,7 +18,7 @@ use crate::ui;
 use super::super::paste;
 use super::super::session::Geometry;
 use super::hit::{
-    lx_refer_item_at, lx_slash_item_at, lx_toast_at, mention_item_at, pane_at,
+    lx_mention_item_at, lx_refer_item_at, lx_slash_item_at, lx_toast_at, mention_item_at, pane_at,
     pane_boundary_draggable, pane_content_inner, panel_item_at, prompt_boundary_hit, slash_item_at,
 };
 use super::wheel::forward_pane_mouse_event;
@@ -155,6 +155,15 @@ pub(crate) fn handle_mouse_moved(
     }
     if let Some(index) = mention_item_at(state, view, mouse.column, mouse.row) {
         if update::hover_mention(state, index) {
+            *dirty = true;
+        }
+        if update::clear_tooltip(state) {
+            *dirty = true;
+        }
+        return;
+    }
+    if let Some((pane, index)) = lx_mention_item_at(state, rects, mouse.column, mouse.row) {
+        if update::hover_lx_mention(state, pane, index) {
             *dirty = true;
         }
         if update::clear_tooltip(state) {
