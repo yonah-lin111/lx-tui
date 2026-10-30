@@ -157,9 +157,19 @@ pub(super) fn draw_inventory(grid: &mut Grid, rect: Rect, counts: StartupCounts)
     } else {
         rect.x + rect.width.saturating_sub(width) / 2
     };
+    let mut remaining = usize::from(rect.width);
     for (value, value_style) in segments {
+        if remaining == 0 {
+            break;
+        }
+        let value = text::truncate_to_width(&value, remaining);
+        if value.is_empty() {
+            break;
+        }
         grid.put(x, rect.y, &value, value_style);
-        x = x.saturating_add(u16::try_from(value.width()).unwrap_or(u16::MAX));
+        let used = value.width().min(remaining);
+        x = x.saturating_add(u16::try_from(used).unwrap_or(u16::MAX));
+        remaining = remaining.saturating_sub(used);
     }
 }
 

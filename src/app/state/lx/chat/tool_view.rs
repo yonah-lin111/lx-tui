@@ -335,7 +335,7 @@ pub struct McpImageView {
 pub struct McpDetailView {
     pub server: String,
     pub tool: String,
-    /// 折叠标题里的第一个字符串参数（单行、最多 60 字符）。
+    /// 历史参数摘要（保留供旧数据/兼容；卡片不再在标题下重复展示）。
     pub summary: Option<String>,
     /// 格式化后的参数行（最多 20 行）。
     pub arguments: Vec<String>,
