@@ -137,9 +137,9 @@ fn mouse_interacts_with_slash_panel() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    // 悬停第 2 项：只改高亮。
+    // 悬停第 2 项：只改高亮（内容区从 panel.content.y 开始）。
     handle_terminal_event(
-        mouse(MouseEventKind::Moved, rect.x + 2, rect.y + 2),
+        mouse(MouseEventKind::Moved, rect.x + 2, panel.content.y + 1),
         &mut state,
         &mut sessions,
         &geo,
@@ -157,7 +157,7 @@ fn mouse_interacts_with_slash_panel() {
         mouse(
             MouseEventKind::Down(MouseButton::Left),
             rect.x + 2,
-            rect.y + 1,
+            panel.content.y,
         ),
         &mut state,
         &mut sessions,

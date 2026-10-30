@@ -477,10 +477,10 @@ fn panel_is_taller_than_five_list_rows() {
 // ===== 键位提示：`[功能 键]` 语法 + tab/esc 可点击 =====
 
 #[test]
-fn hints_use_action_then_key_inside_brackets() {
-    // 用户要求：`[功能名称 快捷键]` —— 功能在前、键在后，方括号包整条。
-    assert_eq!(text::hint("select", "↑↓").label(), "[select ↑↓]");
-    assert_eq!(text::LX_TASK_CLOSE.label(), "[close esc]");
+fn hints_use_key_then_action_inside_brackets() {
+    // 统一快捷键格式：`[符号 功能]` —— 符号在前、功能在后，方括号包整条。
+    assert_eq!(text::hint("select", "↑↓").label(), "[↑↓ select]");
+    assert_eq!(text::LX_TASK_CLOSE.label(), "[esc close]");
     let labels: Vec<String> = text::LX_TASK_HINTS_PROCESSES
         .iter()
         .map(|hint| hint.label())
@@ -488,10 +488,10 @@ fn hints_use_action_then_key_inside_brackets() {
     assert_eq!(
         labels,
         vec![
-            "[select ↑↓]".to_string(),
-            "[stop ^d]".to_string(),
-            "[tabs ←→]".to_string(),
-            "[back esc]".to_string(),
+            "[↑↓ select]".to_string(),
+            "[^d stop]".to_string(),
+            "[←→ tabs]".to_string(),
+            "[esc back]".to_string(),
         ],
         "进程 tab 的四项提示"
     );
@@ -507,8 +507,8 @@ fn close_button_uses_the_same_action_key_syntax() {
         .find(|line| line.contains(TaskTab::Processes.label()))
         .expect("tab 行");
     assert!(
-        tab_row.contains("[close esc]"),
-        "右上角是 [close esc]：{tab_row}"
+        tab_row.contains("[esc close]"),
+        "右上角是 [esc close]：{tab_row}"
     );
 }
 

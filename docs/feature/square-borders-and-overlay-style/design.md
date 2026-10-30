@@ -434,6 +434,20 @@ fn borderless_inner_rect(rect: Rect, footer_rows: u16) -> Rect {
 6. **`src/ui/tooltip.rs`**：
    - `clear::render(frame, area)` 清底后，`Block::bordered()` 移除 `.style(style::overlay_panel())`。
 
+### 4.4 浮层顶栏框与底栏框（`┌──┐ / │ Title │ / ├──┤` 与 `├──┤ / │ footer │ / └──┘`）
+
+除 `lx` 输入框上方的无边框命令面板外，所有有 `title` 或底部快捷键/按钮的浮层（右键菜单、页码菜单、引用文件夹菜单/搜索弹窗、居中模态弹窗、全局与 `lx` 窗格内 Toast、Tooltip、Prompt 有边框命令面板、`lx` Markdown 块面板）：
+- **顶栏框**：当存在顶部 `title`（或 `tabs`）时，顶部由 `┌───┐`（`y`）+ `│ Title ... [✕] │`（`y + 1`）+ `├───┤`（`y + 2`）构成，内容区从 `y + 3` 开始。
+- **底栏框**：当存在底部 `footer` 或模态按钮行时，底部由 `├───┤`（`bottom - 3`）+ `│ footer / buttons │`（`bottom - 2`）+ `└───┘`（`bottom - 1`）构成。
+
+### 4.5 统一快捷键文案格式与移除 Prompt 模板块/补充块背景色
+
+1. **快捷键显示格式统一**：
+   - 纯文本底栏说明：`符号 功能 · 符号 功能`（如 `↑↓ select · ↵ confirm · esc cancel`、`↵ open · ^c copy · ^d del · esc close`）。
+   - 可点击带快捷键按钮：`[符号 功能]`（如 `[↵ save]`、`[^c clear]`、`[esc cancel]`、`[↑↓ select]`）。
+2. **移除 Prompt 模板块与补充块整行背景色**：
+   - `src/ui/prompt.rs` 移除 `paint_block_background` 调用，模板块（`&&&`）与补充块（`%%%`）仅保留状态色直角边框与语法高亮，保持透明底色，彻底消除弹出透明浮层时切穿深色块造成的透明破洞。
+
 ---
 
 ## 5. 影响面与测试验证计划

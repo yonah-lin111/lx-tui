@@ -56,9 +56,9 @@ fn renders_ref_dir_tab_and_switches_view() {
         .is_some()
     );
 
-    // Top border contains tabs
+    // Header row (rect.y + 1) contains tabs
     let top: String = (0..area.width)
-        .map(|x| buf[(x, layout.rect.y)].symbol())
+        .map(|x| buf[(x, layout.rect.y + 1)].symbol())
         .collect();
     assert!(top.contains(text::MENTION_TAB_FILES), "{top}");
     assert!(top.contains(text::MENTION_TAB_REF_DIR), "{top}");
@@ -69,9 +69,9 @@ fn renders_ref_dir_tab_and_switches_view() {
     assert!(content.contains("lx-agent/"), "{content}");
     assert!(content.contains("└─ "), "{content}");
 
-    // Footer shows refDir specific hint (no enter folder)
+    // Footer bar (rect.bottom() - 2) shows refDir specific hint (no enter folder)
     let bottom: String = (0..area.width)
-        .map(|x| buf[(x, layout.rect.bottom() - 1)].symbol())
+        .map(|x| buf[(x, layout.rect.bottom() - 2)].symbol())
         .collect();
     assert!(bottom.contains(text::MENTION_FOOTER_REF_DIR), "{bottom}");
     assert!(!bottom.contains("enter"), "{bottom}");
@@ -87,18 +87,18 @@ fn mention_tab_at_hits_tabs() {
     let layout = mention_layout(&editor, area).expect("mention layout");
     assert_eq!(layout.tabs.len(), 4);
 
-    // Hit tab 0 (Files), 1 (refDir), 2 (Skills), 3 (MCP)
+    // Hit tab 0 (Files), 1 (refDir), 2 (Skills), 3 (MCP) on header row (rect.y + 1)
     for idx in 0..4 {
         let tab_x = layout.tabs[idx].x;
         assert_eq!(
-            mention_tab_at(&editor, area, tab_x, layout.rect.y),
+            mention_tab_at(&editor, area, tab_x, layout.rect.y + 1),
             Some(idx)
         );
     }
 
-    // Outside tabs on the border row returns None
+    // Outside tabs on the header row returns None
     assert_eq!(
-        mention_tab_at(&editor, area, layout.rect.x, layout.rect.y),
+        mention_tab_at(&editor, area, layout.rect.x, layout.rect.y + 1),
         None
     );
 }

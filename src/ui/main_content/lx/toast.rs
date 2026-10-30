@@ -36,34 +36,39 @@ const MIN_HEIGHT: u16 = 3;
 ///
 /// 水平居中、贴在内容区顶边下方一行（与全局 toast 的容器内位置一致）；宽度按正文
 /// 与标题的显示列收缩，但**不超过内容区宽度**，高度按折行结果增长（上限
-/// [`MAX_BODY_ROWS`] + 边框）。
+/// [`MAX_BODY_ROWS`] + 边框，有标题时额外加 2 行顶栏框）。
 pub(crate) fn rect(area: Rect, toast: &Toast) -> Option<Rect> {
-    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+    let header_extra: u16 = if toast.title.is_some() { 2 } else { 0 };
+    let min_h = MIN_HEIGHT.saturating_add(header_extra);
+    if area.width < MIN_WIDTH || area.height < min_h {
         return None;
     }
     let max_width = area.width.saturating_sub(MARGIN.saturating_mul(2));
     if max_width < MIN_WIDTH {
         return None;
     }
-    let wanted = toast
+    let title_w = toast
         .title
         .as_deref()
-        .into_iter()
-        .chain(std::iter::once(toast.message.as_str()))
-        .map(|line| u16::try_from(line.width()).unwrap_or(u16::MAX))
-        .max()
-        .unwrap_or_default()
-        .saturating_add(FRAME);
+        .map(|line| {
+            u16::try_from(line.width())
+                .unwrap_or(u16::MAX)
+                .saturating_add(4)
+        })
+        .unwrap_or_default();
+    let msg_w = u16::try_from(toast.message.width()).unwrap_or(u16::MAX);
+    let wanted = msg_w.max(title_w).saturating_add(FRAME);
     let width = wanted.clamp(MIN_WIDTH, max_width);
-    // 正文宽度必须与 `draw` 完全一致：盒内去掉左右边框与内边距。
     let body_width = usize::from(width.saturating_sub(FRAME)).max(1);
     let rows = text::wrap(&toast.message, body_width).len();
     let rows = u16::try_from(rows).unwrap_or(u16::MAX).min(MAX_BODY_ROWS);
-    let height = rows.saturating_add(2).min(area.height);
-    if height < MIN_HEIGHT {
+    let height = rows
+        .saturating_add(2)
+        .saturating_add(header_extra)
+        .min(area.height);
+    if height < min_h {
         return None;
     }
-    // 贴顶边下方一行；空间不足时向上夹到内容区底边之内，绝不压窗格边框。
     let y = area
         .y
         .saturating_add(1)
@@ -79,30 +84,48 @@ pub(crate) fn rect(area: Rect, toast: &Toast) -> Option<Rect> {
 
 /// 绘制 toast 盒；返回绘制出的矩形（供调用方隐藏被覆盖的硬件光标）。
 ///
-/// 先清底擦除底层字符（重置为终端默认透明背景，不再填充背景色），再写边框、标题、关闭按钮与正文。
+/// 先清底擦除底层字符（重置为终端默认透明背景，不再填充背景色），再写边框、标题栏框、关闭按钮与正文。
 pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> {
     let box_area = rect(area, toast)?;
     clear::render_buffer(buf, box_area);
     draw_border(buf, box_area, toast.kind);
-    if let Some(title) = toast.title.as_deref() {
+    let has_title = toast.title.is_some() && box_area.height >= 5;
+    if let Some(title) = toast.title.as_deref()
+        && has_title
+    {
         draw_title(buf, box_area, title, toast.kind);
+        crate::ui::widgets::menu::draw_horizontal_divider(
+            buf,
+            box_area,
+            box_area.y + 2,
+            border_style(toast.kind),
+        );
     }
-    // 右上角关闭按钮：与全局 toast 同款 `[✕]`、同档边框色，点击命中走 `close_button_at`。
-    if let Some(button) = crate::ui::widgets::modal::close_button_rect(box_area) {
+    let close_y = if has_title {
+        box_area.y.saturating_add(1)
+    } else {
+        box_area.y
+    };
+    if box_area.width >= 10 {
         let style = border_style(toast.kind);
         buf.set_stringn(
-            button.x,
-            button.y,
+            box_area.right().saturating_sub(4),
+            close_y,
             text::MODAL_CLOSE,
-            usize::from(button.width),
+            3,
             style,
         );
     }
+    let body_top = if has_title {
+        box_area.y.saturating_add(3)
+    } else {
+        box_area.y.saturating_add(1)
+    };
     let body_area = Rect::new(
         box_area.x + 1,
-        box_area.y + 1,
+        body_top,
         box_area.width.saturating_sub(2),
-        box_area.height.saturating_sub(2),
+        box_area.bottom().saturating_sub(1).saturating_sub(body_top),
     );
     if body_area.width == 0 || body_area.height == 0 {
         return Some(box_area);
@@ -150,15 +173,15 @@ fn draw_border(buf: &mut Buffer, area: Rect, kind: ToastKind) {
     put(buf, right, bottom, '┘', border);
 }
 
-/// 顶边标题：` <title> `；宽度不足时省略，不侵占右侧关闭按钮。
+/// 顶栏标题：` <title> `（位于 `area.y + 1`）；宽度不足时省略，不侵占右侧关闭按钮。
 fn draw_title(buf: &mut Buffer, area: Rect, title: &str, kind: ToastKind) {
-    let reserved = crate::ui::widgets::modal::close_button_rect(area)
-        .map(|_| {
-            u16::try_from(text::MODAL_CLOSE.width())
-                .unwrap_or(0)
-                .saturating_add(2)
-        })
-        .unwrap_or_default();
+    let reserved = if area.width >= 10 {
+        u16::try_from(text::MODAL_CLOSE.width())
+            .unwrap_or(0)
+            .saturating_add(2)
+    } else {
+        0
+    };
     let available = area.width.saturating_sub(2).saturating_sub(reserved);
     if available < 4 {
         return;
@@ -170,16 +193,23 @@ fn draw_title(buf: &mut Buffer, area: Rect, title: &str, kind: ToastKind) {
     let style = title_style(kind);
     buf.set_stringn(
         area.x.saturating_add(1),
-        area.y,
+        area.y.saturating_add(1),
         &label,
         usize::from(available),
         style,
     );
 }
 
-/// 命中右上角关闭按钮（`[✕]` 与全局 toast 同款、同位置）。
+/// 命中右上角关闭按钮（`[✕]` 与全局 toast 同款、支持无标题 `area.y` 与有标题 `area.y + 1`）。
 pub(crate) fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
-    crate::ui::widgets::modal::close_button_at(area, column, row)
+    if area.width < 10 {
+        return false;
+    }
+    let x = area.right().saturating_sub(4);
+    let y_top = Rect::new(x, area.y, 3, 1);
+    let y_bar = Rect::new(x, area.y.saturating_add(1), 3, 1);
+    y_top.contains((column, row).into())
+        || (area.height >= 5 && y_bar.contains((column, row).into()))
 }
 
 /// 写一个单元格（越界忽略）。

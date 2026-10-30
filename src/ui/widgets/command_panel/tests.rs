@@ -465,7 +465,7 @@ fn renders_scrollbar_when_overflowing() {
 
 #[test]
 fn renders_titles_and_footer_on_border() {
-    let area = Rect::new(0, 0, 40, 8);
+    let area = Rect::new(0, 0, 40, 10);
     let mut buf = Buffer::empty(area);
     let items = stacked(&[("app.rs", "src")]);
     let rect = render(
@@ -475,28 +475,30 @@ fn renders_titles_and_footer_on_border() {
             &items,
             Some("Files"),
             Some("src"),
-            Some("[open ⇧↵] [back ^z]"),
+            Some("⇧↵ open · ^z back"),
         ),
     )
     .expect("panel renders");
 
-    let top = row_text(&buf, area, rect.y);
-    assert!(top.contains(" Files "), "{top}");
-    assert!(top.contains(" src "), "{top}");
+    let top = row_text(&buf, area, rect.y + 1);
+    assert!(top.contains("Files"), "{top}");
+    assert!(top.contains("src"), "{top}");
     assert!(
-        top.find(" Files ").expect("left title") < top.find(" src ").expect("right title"),
+        top.find("Files").expect("left title") < top.find("src").expect("right title"),
         "左侧标题在右标题之前：{top}"
     );
-    let bottom = row_text(&buf, area, rect.bottom() - 1);
-    assert!(bottom.contains("[open ⇧↵] [back ^z]"), "{bottom}");
+    assert_eq!(buf[(rect.x, rect.y + 2)].symbol(), "├");
+    assert_eq!(buf[(rect.x, rect.bottom() - 3)].symbol(), "├");
+    let bottom = row_text(&buf, area, rect.bottom() - 2);
+    assert!(bottom.contains("⇧↵ open · ^z back"), "{bottom}");
 }
 
 #[test]
 fn panel_width_covers_footer_and_titles() {
     use unicode_width::UnicodeWidthStr;
 
-    let area = Rect::new(0, 0, 60, 8);
-    let footer = "[open ⇧↵] [back ^z]";
+    let area = Rect::new(0, 0, 60, 10);
+    let footer = "⇧↵ open · ^z back";
     let items = stacked(&[("a.rs", "s")]);
     let plain = layout(area, &view(&items, 0, 0, None)).expect("plain layout");
     let titled = layout(
@@ -516,7 +518,7 @@ fn panel_width_covers_footer_and_titles() {
 
 #[test]
 fn clamps_titles_when_area_is_narrow() {
-    let area = Rect::new(0, 0, 12, 6);
+    let area = Rect::new(0, 0, 12, 10);
     let mut buf = Buffer::empty(area);
     let items = stacked(&[("a.rs", "s")]);
     let rect = render(
@@ -526,7 +528,7 @@ fn clamps_titles_when_area_is_narrow() {
             &items,
             Some("Files"),
             Some("very-long-directory"),
-            Some("[open ⇧↵] [back ^z]"),
+            Some("⇧↵ open · ^z back"),
         ),
     )
     .expect("panel renders");
@@ -556,20 +558,20 @@ fn layout_and_hit_test_tabs() {
     // Tab 0 starts at rect.x + 2, width = 5 + 2 = 7 (" Files ")
     assert_eq!(l.tabs[0].x, l.rect.x + 2);
     assert_eq!(l.tabs[0].width, 7);
-    assert_eq!(l.tabs[0].y, l.rect.y);
+    assert_eq!(l.tabs[0].y, l.rect.y + 1);
 
     // Tab 1 starts at rect.x + 2 + 7 + 1 = rect.x + 10, width = 6 + 2 = 8 (" refDir ")
     assert_eq!(l.tabs[1].x, l.rect.x + 10);
     assert_eq!(l.tabs[1].width, 8);
-    assert_eq!(l.tabs[1].y, l.rect.y);
+    assert_eq!(l.tabs[1].y, l.rect.y + 1);
 
-    assert_eq!(tab_at(&l, l.tabs[0].x, l.rect.y), Some(0));
-    assert_eq!(tab_at(&l, l.tabs[0].right() - 1, l.rect.y), Some(0));
-    assert_eq!(tab_at(&l, l.tabs[1].x, l.rect.y), Some(1));
-    assert_eq!(tab_at(&l, l.tabs[1].right() - 1, l.rect.y), Some(1));
-    assert_eq!(tab_at(&l, l.tabs[0].right(), l.rect.y), None); // separator column
-    assert_eq!(tab_at(&l, l.rect.x, l.rect.y), None); // corner
-    assert_eq!(tab_at(&l, l.tabs[0].x, l.rect.y + 1), None); // inside content
+    assert_eq!(tab_at(&l, l.tabs[0].x, l.rect.y + 1), Some(0));
+    assert_eq!(tab_at(&l, l.tabs[0].right() - 1, l.rect.y + 1), Some(0));
+    assert_eq!(tab_at(&l, l.tabs[1].x, l.rect.y + 1), Some(1));
+    assert_eq!(tab_at(&l, l.tabs[1].right() - 1, l.rect.y + 1), Some(1));
+    assert_eq!(tab_at(&l, l.tabs[0].right(), l.rect.y + 1), None); // separator column
+    assert_eq!(tab_at(&l, l.rect.x, l.rect.y + 1), None); // border
+    assert_eq!(tab_at(&l, l.tabs[0].x, l.rect.y + 2), None); // divider row
 
     let mut buf = Buffer::empty(area);
     assert!(render(area, &mut buf, &v).is_some());

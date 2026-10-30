@@ -72,24 +72,40 @@ pub fn render(
     let toast = state.toast.as_ref()?;
     clear::render(frame, area);
     let border = border_style(toast.kind);
-    let mut block = Block::bordered().border_style(border);
-    if let Some(title) = toast.title.as_deref() {
-        block = block.title(Span::styled(
-            format!(
-                " {} ",
-                text::truncate_to_width(title, usize::from(area.width.saturating_sub(2)))
-            ),
-            title_style(toast.kind),
-        ));
-    }
-    let inner = block.inner(area);
+    let block = Block::bordered().border_style(border);
     frame.render_widget(block, area);
-    if let Some(rect) = crate::ui::widgets::modal::close_button_rect(area) {
+    let has_title = toast.title.is_some() && area.height >= 5;
+    if let Some(title) = toast.title.as_deref()
+        && has_title
+    {
+        let title_max = usize::from(area.width.saturating_sub(8));
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                text::truncate_to_width(title, title_max),
+                title_style(toast.kind),
+            )),
+            Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), 1),
+        );
+        crate::ui::widgets::menu::draw_horizontal_divider(
+            frame.buffer_mut(),
+            area,
+            area.y + 2,
+            border,
+        );
+    }
+    if let Some(rect) = close_button_rect_for(area, has_title) {
         frame.render_widget(
             Paragraph::new(Span::styled(text::MODAL_CLOSE, border)),
             rect,
         );
     }
+    let body_y = if has_title { area.y + 3 } else { area.y + 1 };
+    let inner = Rect::new(
+        area.x + 1,
+        body_y,
+        area.width.saturating_sub(2),
+        area.bottom().saturating_sub(1).saturating_sub(body_y),
+    );
     if inner.width == 0 || inner.height == 0 {
         return Some(area);
     }
@@ -105,9 +121,22 @@ pub fn render(
     Some(area)
 }
 
+/// 右上角关闭按钮矩形：有标题栏时落在标题栏行（`area.y + 1`），无标题时落在顶边框（`area.y`）。
+fn close_button_rect_for(area: Rect, has_title: bool) -> Option<Rect> {
+    let y = if has_title { area.y + 1 } else { area.y };
+    (area.width >= 10 && y < area.bottom()).then_some(Rect::new(
+        area.right().saturating_sub(4),
+        y,
+        3,
+        1,
+    ))
+}
+
 /// 命中 toast 右上角关闭按钮。
 pub fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
-    crate::ui::widgets::modal::close_button_at(area, column, row)
+    let has_title = area.height >= 5;
+    close_button_rect_for(area, has_title).is_some_and(|rect| rect.contains((column, row).into()))
+        || crate::ui::widgets::modal::close_button_at(area, column, row)
 }
 
 /// 边框语义色：三档独立 256 色（薰衣草紫 / 琥珀金橙 / 珊瑚玫红），不与项目主色调 Cyan 重叠。
@@ -120,18 +149,18 @@ pub(crate) fn title_style(kind: ToastKind) -> Style {
     style::toast_border(kind)
 }
 
-/// 盒尺寸：正文最长行与边框标题各自按显示列宽加边框与内边距取宽；高度固定三行。
+/// 盒尺寸：正文最长行与边框标题各自按显示列宽加边框与内边距取宽；有标题时含顶栏框共 5 行，无标题 3 行。
 fn box_size(toast: &Toast) -> (u16, u16) {
-    let text = toast
+    let msg_w = toast.message.width();
+    let title_w = toast
         .title
         .as_deref()
-        .into_iter()
-        .chain(std::iter::once(toast.message.as_str()))
-        .map(UnicodeWidthStr::width)
-        .max()
+        .map(|t| t.width().saturating_add(4))
         .unwrap_or_default();
+    let text = msg_w.max(title_w);
     let width = u16::try_from(text.saturating_add(4)).unwrap_or(u16::MAX);
-    (width, 3)
+    let height = if toast.title.is_some() { 5 } else { 3 };
+    (width, height)
 }
 
 #[cfg(test)]

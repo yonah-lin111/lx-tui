@@ -1078,7 +1078,7 @@ fn mention_panel_footer_lists_shortcut_hints_without_border() {
         .map(|x| buf[(x, footer_row)].symbol())
         .collect();
     assert!(
-        footer.contains("[tabs ←→]") && footer.contains("[close esc]"),
+        footer.contains("←→ tabs") && footer.contains("esc close"),
         "底边显示快捷键提示: {footer:?}"
     );
     assert!(

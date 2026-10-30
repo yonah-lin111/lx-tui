@@ -5,9 +5,8 @@
 //! 末行为 `+ add folder…` 动作项，底边为快捷键提示。
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::Span;
 use ratatui::widgets::Block;
 use unicode_width::UnicodeWidthStr;
 
@@ -50,7 +49,23 @@ pub fn referenced_menu_layout(screen: Rect, menu: &ReferencedFolderMenu) -> Refe
     let x = screen.x + (screen.width - width) / 2;
     let y = screen.y + (screen.height - height) / 2;
     let area = Rect::new(x, y, width, height);
-    let inner = Block::bordered().inner(area);
+    // 扣除顶栏框（3 行：顶边 + 标题行 + 分割线）与底栏框（3 行：分割线 + 底栏提示 + 底边）。
+    let list_top = if area.height >= 7 {
+        area.y.saturating_add(3)
+    } else {
+        area.y.saturating_add(1)
+    };
+    let list_bottom = if area.height >= 7 {
+        area.bottom().saturating_sub(3)
+    } else {
+        area.bottom().saturating_sub(1)
+    };
+    let inner = Rect::new(
+        area.x.saturating_add(1),
+        list_top,
+        area.width.saturating_sub(2),
+        list_bottom.saturating_sub(list_top),
+    );
     let total = menu.rows.len();
     let visible = usize::from(inner.height);
     // 列表区固定预留右缘 1 列为滚动条槽（与 prompt 列表一致）。
@@ -116,14 +131,27 @@ pub fn referenced_menu_row_at(
 pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &ReferencedFolderMenu) {
     let layout = referenced_menu_layout(screen, menu);
     clear::render(frame, layout.area);
-    let block = Block::bordered()
-        .border_style(style::accent())
-        .title_alignment(Alignment::Left)
-        .title(Span::styled(
-            format!(" {} ", text::MENU_TITLE_REFERENCED_FOLDERS),
-            style::border_title(),
-        ));
+    let block = Block::bordered().border_style(style::accent());
     frame.render_widget(block, layout.area);
+    if layout.area.height >= 7 && layout.area.width >= 4 {
+        paint_text(
+            frame,
+            Rect::new(
+                layout.area.x + 2,
+                layout.area.y + 1,
+                layout.area.width.saturating_sub(4),
+                1,
+            ),
+            text::MENU_TITLE_REFERENCED_FOLDERS,
+            style::border_title(),
+        );
+        widgets::menu::draw_horizontal_divider(
+            frame.buffer_mut(),
+            layout.area,
+            layout.area.y + 2,
+            style::accent(),
+        );
+    }
     for (offset, rect) in layout.rows.iter().enumerate() {
         let Some(row) = menu.rows.get(layout.start + offset) else {
             continue;
@@ -149,14 +177,26 @@ pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &Refere
     }
 }
 
-/// 渲染目录弹窗底边快捷键提示（贴底边，覆盖边框上）。
+/// 渲染目录弹窗底栏快捷键提示（带上方 `├───┤` 分割线，位于底栏框内）。
 pub fn render_referenced_menu_footer(
     frame: &mut Frame<'_>,
     screen: Rect,
     menu: &ReferencedFolderMenu,
 ) {
     let layout = referenced_menu_layout(screen, menu);
-    let y = layout.area.bottom().saturating_sub(1);
+    if layout.area.height >= 7 {
+        widgets::menu::draw_horizontal_divider(
+            frame.buffer_mut(),
+            layout.area,
+            layout.area.bottom().saturating_sub(3),
+            style::accent(),
+        );
+    }
+    let y = if layout.area.height >= 7 {
+        layout.area.bottom().saturating_sub(2)
+    } else {
+        layout.area.bottom().saturating_sub(1)
+    };
     paint_text(
         frame,
         Rect::new(layout.area.x + 2, y, layout.area.width.saturating_sub(4), 1),

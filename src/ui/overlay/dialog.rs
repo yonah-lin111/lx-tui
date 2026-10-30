@@ -15,29 +15,29 @@ use crate::ui::{style, text};
 
 use super::menu::prompt_page_name;
 
-/// 重命名浮层尺寸（列，行）：输入行、空行与按钮行。
+/// 重命名浮层尺寸（列，行）：顶栏框 3 行 + 输入行 + 提示/空行 + 底栏框 3 行。
 const RENAME_WIDTH: u16 = 40;
-const RENAME_HEIGHT: u16 = 5;
-/// 新建节点浮层尺寸（列，行）：输入行、空行与按钮行（容纳三个按钮）。
+const RENAME_HEIGHT: u16 = 8;
+/// 新建节点浮层尺寸（列，行）：顶栏框 3 行 + 输入行 + 空行 + 底栏框 3 行（容纳三个按钮）。
 const NEW_NODE_WIDTH: u16 = 42;
-const NEW_NODE_HEIGHT: u16 = 5;
-/// 新建工作区浮层尺寸（列，行）：输入行、空行与按钮行。
+const NEW_NODE_HEIGHT: u16 = 8;
+/// 新建工作区浮层尺寸（列，行）：顶栏框 3 行 + 输入行 + 空行 + 底栏框 3 行。
 const NEW_WORKSPACE_WIDTH: u16 = 44;
-const NEW_WORKSPACE_HEIGHT: u16 = 5;
-/// 关闭确认浮层最小宽度（列）；高度 = 问题换行行数 + 按钮行 + 上下边框。
+const NEW_WORKSPACE_HEIGHT: u16 = 8;
+/// 关闭确认浮层最小宽度（列）；高度 = 问题换行行数 + 顶栏框 3 行 + 底栏框 3 行。
 pub(crate) const CONFIRM_WIDTH: u16 = 40;
-/// 信任浮层尺寸（列，行）：问题行、路径行、空行与按钮行。
+/// 信任浮层尺寸（列，行）：顶栏框 3 行 + 问题行 + 路径行 + 底栏框 3 行。
 const TRUST_WIDTH: u16 = 52;
-const TRUST_HEIGHT: u16 = 6;
+const TRUST_HEIGHT: u16 = 8;
 /// 按钮间距与所在内容行。
 pub(crate) const BUTTON_GAP: u16 = 2;
-pub(crate) const RENAME_BUTTON_ROW: u16 = 2;
-pub(crate) const NEW_WORKSPACE_BUTTON_ROW: u16 = 2;
+pub(crate) const RENAME_BUTTON_ROW: u16 = 3;
+pub(crate) const NEW_WORKSPACE_BUTTON_ROW: u16 = 3;
 
 const RENAME_BUTTONS: [&str; 3] = [text::BUTTON_SAVE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
 /// `/resume` 会话编辑模态尺寸与按钮组（编辑态 3 个、确认删除态 2 个）。
 const RESUME_EDIT_WIDTH: u16 = 48;
-const RESUME_EDIT_HEIGHT: u16 = 5;
+const RESUME_EDIT_HEIGHT: u16 = 8;
 const RESUME_EDIT_BUTTONS: [&str; 3] =
     [text::BUTTON_SAVE, text::BUTTON_DELETE, text::BUTTON_CANCEL];
 const RESUME_EDIT_CONFIRM_BUTTONS: [&str; 2] = [text::BUTTON_CONFIRM_DELETE, text::BUTTON_CANCEL];
@@ -104,7 +104,7 @@ fn confirm_shell_for(
     let lines = text::wrap(question, inner_width).len().max(1);
     let height = u16::try_from(lines)
         .unwrap_or(u16::MAX)
-        .saturating_add(3)
+        .saturating_add(6)
         .min(screen.height);
     widgets::modal::layout(screen, width, height)
 }
@@ -440,7 +440,7 @@ fn render_confirm_dialog(
     }
     let width = usize::from(shell.inner.width);
     let lines = text::wrap(question, width);
-    let max_rows = usize::from(shell.inner.height.saturating_sub(1));
+    let max_rows = usize::from(shell.inner.height.saturating_sub(2)).max(1);
     for (index, line) in lines.iter().take(max_rows).enumerate() {
         let clipped = lines.len() > max_rows && index + 1 == max_rows;
         let visible = if clipped {

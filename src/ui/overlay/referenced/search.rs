@@ -4,9 +4,9 @@
 //! 次行 `└─ ` 父目录地址）；进入子目录后顶边右端显示当前文件夹；底边为快捷键提示。
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::{Line, Span};
+use ratatui::text::Span;
 use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
@@ -72,7 +72,22 @@ pub fn referenced_search_layout(
     let x = screen.x + (screen.width - width) / 2;
     let y = screen.y + (screen.height - height) / 2;
     let area = Rect::new(x, y, width, height);
-    let inner = Block::bordered().inner(area);
+    let content_top = if area.height >= 10 {
+        area.y.saturating_add(3)
+    } else {
+        area.y.saturating_add(1)
+    };
+    let content_bottom = if area.height >= 10 {
+        area.bottom().saturating_sub(3)
+    } else {
+        area.bottom().saturating_sub(1)
+    };
+    let inner = Rect::new(
+        area.x.saturating_add(1),
+        content_top,
+        area.width.saturating_sub(2),
+        content_bottom.saturating_sub(content_top),
+    );
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
@@ -164,25 +179,53 @@ pub fn render_referenced_search(
 ) -> Option<(u16, u16)> {
     let layout = referenced_search_layout(screen, search)?;
     widgets::clear::render(frame, layout.area);
-    let mut block = Block::bordered()
-        .border_style(style::accent())
-        .title(Span::styled(
-            format!(" {} ", text::REFERENCED_SEARCH_TITLE),
+    let block = Block::bordered().border_style(style::accent());
+    frame.render_widget(block, layout.area);
+    let header_y = if layout.area.height >= 10 {
+        layout.area.y + 1
+    } else {
+        layout.area.y
+    };
+    if layout.area.width >= 4 {
+        paint_text(
+            frame,
+            Rect::new(
+                layout.area.x + 2,
+                header_y,
+                layout.area.width.saturating_sub(4),
+                1,
+            ),
+            text::REFERENCED_SEARCH_TITLE,
             style::border_title(),
-        ));
-    // 进入子目录后顶边右端显示当前文件夹名。
-    if let Some(scope) = search_scope_name(search) {
-        let available = usize::from(layout.area.width.saturating_sub(2))
-            .saturating_sub(text::REFERENCED_SEARCH_TITLE.width() + 4);
-        block = block.title_top(
-            Line::from(Span::styled(
-                format!(" {} ", text::truncate_to_width(&scope, available)),
-                style::border_title(),
-            ))
-            .alignment(Alignment::Right),
+        );
+        if let Some(scope) = search_scope_name(search) {
+            let available = usize::from(layout.area.width.saturating_sub(4))
+                .saturating_sub(text::REFERENCED_SEARCH_TITLE.width() + 2);
+            let clipped = text::truncate_to_width(&scope, available);
+            let scope_w = u16::try_from(clipped.width()).unwrap_or(0);
+            if scope_w > 0 && scope_w <= layout.area.width.saturating_sub(4) {
+                paint_text(
+                    frame,
+                    Rect::new(
+                        layout.area.right().saturating_sub(2 + scope_w),
+                        header_y,
+                        scope_w,
+                        1,
+                    ),
+                    &clipped,
+                    style::border_title(),
+                );
+            }
+        }
+    }
+    if layout.area.height >= 10 {
+        widgets::menu::draw_horizontal_divider(
+            frame.buffer_mut(),
+            layout.area,
+            layout.area.y + 2,
+            style::accent(),
         );
     }
-    frame.render_widget(block, layout.area);
     // 顶部范围路径 + 右端原始路径复制按钮；截断提示紧贴复制按钮左侧（始终可见）。
     let truncated = search
         .truncated
@@ -347,7 +390,7 @@ fn referenced_entry_address(entry: &ReferencedEntry, width: usize) -> String {
     format!("{prefix}{}", text::ellipsize_middle(&parent, available))
 }
 
-/// 渲染内容搜索弹窗底边快捷键提示（贴底边，覆盖边框上）。
+/// 渲染内容搜索弹窗底栏快捷键提示（带上方 `├───┤` 分割线，位于底栏框内）。
 pub fn render_referenced_search_footer(
     frame: &mut Frame<'_>,
     screen: Rect,
@@ -356,7 +399,19 @@ pub fn render_referenced_search_footer(
     let Some(layout) = referenced_search_layout(screen, search) else {
         return;
     };
-    let y = layout.area.bottom().saturating_sub(1);
+    if layout.area.height >= 10 {
+        widgets::menu::draw_horizontal_divider(
+            frame.buffer_mut(),
+            layout.area,
+            layout.area.bottom().saturating_sub(3),
+            style::accent(),
+        );
+    }
+    let y = if layout.area.height >= 10 {
+        layout.area.bottom().saturating_sub(2)
+    } else {
+        layout.area.bottom().saturating_sub(1)
+    };
     paint_text(
         frame,
         Rect::new(layout.area.x + 2, y, layout.area.width.saturating_sub(4), 1),

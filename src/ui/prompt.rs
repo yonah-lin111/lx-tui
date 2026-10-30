@@ -211,7 +211,6 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         offset += line.len() + 1;
     }
     let scroll = prompt.scroll().min(rows.len().saturating_sub(1));
-    let mut block_rows = Vec::new();
     let mut separator_rows = Vec::new();
     for (index, row) in rows
         .iter()
@@ -256,7 +255,6 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
                 painted,
                 buttons_start,
             );
-            block_rows.push((y, info.kind, info.status));
             if first && last && info.separator {
                 separator_rows.push((y, info.kind, info.status));
             }
@@ -264,9 +262,6 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
     }
     render_block_buttons(buf, area, prompt);
     render_template_buttons(buf, area, prompt);
-    for (y, kind, status) in block_rows {
-        paint_block_background(buf, area, y, kind, status);
-    }
     for (y, kind, status) in separator_rows {
         paint_block_separator(buf, area, y, kind, status);
     }
@@ -644,28 +639,6 @@ fn paint_block_separator(
         if let Some(cell) = buf.cell_mut((x, y)) {
             cell.set_char(symbol);
             cell.set_style(border);
-        }
-    }
-}
-
-/// 块整行底色：按块类型铺暗色底；选区反显格跳过。
-fn paint_block_background(
-    buf: &mut Buffer,
-    area: Rect,
-    y: u16,
-    kind: BlockKind,
-    status: TemplateStatus,
-) {
-    let bg = match kind {
-        BlockKind::Template => style::template_block_bg(status),
-        BlockKind::Supple => style::supple_block_bg(),
-    };
-    for x in area.x..area.right() {
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            if cell.modifier.contains(Modifier::REVERSED) {
-                continue;
-            }
-            cell.set_style(bg);
         }
     }
 }

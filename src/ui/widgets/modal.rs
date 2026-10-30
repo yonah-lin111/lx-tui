@@ -16,6 +16,9 @@ pub struct ModalShell {
 }
 
 /// 居中模态几何；屏幕放不下（宽 < 4 或高 < 3）返回 None。
+///
+/// 当高度充裕（≥ 6 行）时，顶部预留 3 行顶栏框（`┌──┐` + `│ Title [✕] │` + `├──┤`），
+/// `inner` 从 `area.y + 3` 起算。
 pub fn layout(screen: Rect, width: u16, height: u16) -> Option<ModalShell> {
     let width = width.min(screen.width);
     let height = height.min(screen.height);
@@ -28,19 +31,61 @@ pub fn layout(screen: Rect, width: u16, height: u16) -> Option<ModalShell> {
         width,
         height,
     );
-    let inner = Block::bordered().inner(area);
+    let inner = if area.height >= 6 {
+        Rect::new(
+            area.x.saturating_add(1),
+            area.y.saturating_add(3),
+            area.width.saturating_sub(2),
+            area.height.saturating_sub(4),
+        )
+    } else {
+        Block::bordered().inner(area)
+    };
     Some(ModalShell { area, inner })
 }
 
-/// 渲染清底、强调色边框、标题与右上角关闭按钮；内容由调用方绘制在 `shell.inner`。
+/// 渲染清底、强调色边框、顶栏标题框、右上角关闭按钮与底栏按钮框分割线；内容由调用方绘制在 `shell.inner`。
 pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
     clear::render(frame, shell.area);
-    // 标题为关闭按钮预留右上角空间，避免重叠。
     let title = text::ellipsize(title, usize::from(shell.area.width.saturating_sub(7)));
-    let block = Block::bordered()
-        .border_style(style::accent())
-        .title(Span::styled(format!(" {title} "), style::border_title()));
+    let block = Block::bordered().border_style(style::accent());
     frame.render_widget(block, shell.area);
+    if shell.area.height >= 6 && shell.area.width >= 4 {
+        frame.render_widget(
+            Paragraph::new(Span::styled(title, style::border_title())),
+            Rect::new(
+                shell.area.x + 2,
+                shell.area.y + 1,
+                shell.area.width.saturating_sub(4),
+                1,
+            ),
+        );
+        crate::ui::widgets::menu::draw_horizontal_divider(
+            frame.buffer_mut(),
+            shell.area,
+            shell.area.y + 2,
+            style::accent(),
+        );
+        // 底栏按钮行上方的分割线（按钮行位于 `shell.area.bottom() - 2`）。
+        if shell.inner.height >= 3 {
+            crate::ui::widgets::menu::draw_horizontal_divider(
+                frame.buffer_mut(),
+                shell.area,
+                shell.area.bottom().saturating_sub(3),
+                style::accent(),
+            );
+        }
+    } else if shell.area.width >= 4 {
+        frame.render_widget(
+            Paragraph::new(Span::styled(format!(" {title} "), style::border_title())),
+            Rect::new(
+                shell.area.x + 1,
+                shell.area.y,
+                shell.area.width.saturating_sub(2),
+                1,
+            ),
+        );
+    }
     if let Some(rect) = close_button_rect(shell.area) {
         frame.render_widget(
             Paragraph::new(Span::styled(text::MODAL_CLOSE, style::accent())),
@@ -49,14 +94,30 @@ pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
     }
 }
 
-/// 右上角关闭按钮矩形（顶边框 `[✕]`，3 列）；区域过窄（< 10 列）时 None。
+/// 右上角关闭按钮矩形（`[✕]`，3 列）；高度 ≥ 6 时位于顶栏框内（`area.y + 1`），否则位于 `area.y`。
 pub fn close_button_rect(area: Rect) -> Option<Rect> {
-    (area.width >= 10).then_some(Rect::new(area.right().saturating_sub(4), area.y, 3, 1))
+    let y = if area.height >= 6 {
+        area.y.saturating_add(1)
+    } else {
+        area.y
+    };
+    (area.width >= 10 && y < area.bottom()).then_some(Rect::new(
+        area.right().saturating_sub(4),
+        y,
+        3,
+        1,
+    ))
 }
 
 /// 命中右上角关闭按钮。
 pub fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
-    close_button_rect(area).is_some_and(|rect| rect.contains((column, row).into()))
+    if area.width < 10 {
+        return false;
+    }
+    let x = area.right().saturating_sub(4);
+    Rect::new(x, area.y, 3, 1).contains((column, row).into())
+        || (area.height >= 6
+            && Rect::new(x, area.y.saturating_add(1), 3, 1).contains((column, row).into()))
 }
 
 /// 按钮行：按标签宽度水平居中排布；`row_offset` 为相对内容区顶部的行号。

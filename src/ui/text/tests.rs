@@ -517,10 +517,10 @@ fn shortcut_symbols_are_single_width_non_pua_and_used_consistently() {
                 "{name} 提示出现全拼 `{forbidden}`（应用符号）: {hint}"
             );
         }
-        // `[功能 键]` 提示中的按键用 `↵`；`enter` 只允许作为动作名出现在 `[enter ⇧↵]` 里。
+        // `符号 功能` 提示中的按键用 `↵`；`enter` 只允许作为动作名出现在 `⇧↵ enter` 里。
         if lower.contains("enter") {
             assert!(
-                hint.contains(&format!("[enter {}", key::SHIFT)),
+                hint.contains(&format!("{}{} enter", key::SHIFT, key::ENTER)),
                 "{name} 提示出现未用符号的 enter: {hint}"
             );
         }

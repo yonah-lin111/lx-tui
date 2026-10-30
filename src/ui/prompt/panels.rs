@@ -67,7 +67,7 @@ fn paste_view<'a>(items: &'a [CommandItem<'a>], data: &PastePanelData) -> Comman
         max_height: None,
         title: Some(text::PASTE_PANEL_TITLE),
         right_title: None,
-        footer: None,
+        footer: Some(text::LX_PASTE_PANEL_FOOTER),
         ..Default::default()
     }
 }
@@ -130,7 +130,7 @@ fn refer_view<'a>(items: &'a [CommandItem<'a>], data: &ReferPanelData) -> Comman
         max_height: None,
         title: Some(text::REFER_PANEL_TITLE),
         right_title: None,
-        footer: None,
+        footer: Some(text::COMMAND_PANEL_FOOTER),
         ..Default::default()
     }
 }
@@ -238,7 +238,7 @@ fn block_view<'a>(items: &'a [CommandItem<'a>], data: &BlockPanelData) -> Comman
         max_height: None,
         title: Some(text::BLOCK_PANEL_TITLE),
         right_title: None,
-        footer: None,
+        footer: Some(text::COMMAND_PANEL_FOOTER),
         ..Default::default()
     }
 }
@@ -359,7 +359,7 @@ fn slash_view<'a>(items: &'a [CommandItem<'a>], data: &'a SlashPanelData) -> Com
             text::SLASH_PANEL_TITLE
         }),
         right_title: None,
-        footer: None,
+        footer: Some(text::COMMAND_PANEL_FOOTER),
         ..Default::default()
     }
 }
@@ -677,7 +677,7 @@ fn mention_view<'a>(
     max_height: u16,
 ) -> CommandPanelView<'a> {
     let footer = if data.chooser {
-        None
+        Some(text::COMMAND_PANEL_FOOTER)
     } else if data.tab == crate::app::prompt::MentionTab::Files {
         Some(text::MENTION_FOOTER_FILES)
     } else {

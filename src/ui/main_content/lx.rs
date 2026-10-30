@@ -575,7 +575,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let panel_base = out.chat_bar.map_or(input.y, |bar| bar.y);
     if let Some(panel) = lx.panel.as_ref() {
         let rows = panel.items().len();
-        let panel_h = u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(2);
+        let panel_h = u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(6);
         let panel_w = panel_width(panel, content_w);
         if panel_base >= area.y + panel_h + SECTION_GAP {
             out.panel = Some(Rect::new(content_x, panel_base - panel_h, panel_w, panel_h));
@@ -669,7 +669,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     out
 }
 
-/// md 面板宽度：最宽条目（标签 + 预览）+ 边框与内边距，夹取到内容区宽度。
+/// md 面板宽度：最宽条目（标签 + 预览）与底栏提示取大 + 边框与内边距，夹取到内容区宽度。
 fn panel_width(panel: &BlockPanel, content_w: u16) -> u16 {
     let inner = panel
         .items()
@@ -679,7 +679,9 @@ fn panel_width(panel: &BlockPanel, content_w: u16) -> u16 {
             label.width() + 2 + preview.width()
         })
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(text::COMMAND_PANEL_FOOTER.width())
+        .max(text::LX_BLOCK_PANEL_TITLE.width());
     u16::try_from(inner + 4).unwrap_or(u16::MAX).min(content_w)
 }
 
@@ -943,17 +945,18 @@ pub fn ask_list_window(area: Rect, lx: &Lx) -> Option<(usize, usize, usize)> {
     ask::list_window(area, lx)
 }
 
-/// md 格式面板：直角边框 + 标题 + 候选行（标签与预览，高亮项 accent）。
+/// md 格式面板：直角边框 + 顶栏标题框 + 候选行（标签与预览，高亮项 accent）+ 底栏快捷键框。
 fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
     draw_box(grid, rect, style::muted());
     grid.put(
         rect.x + 2,
-        rect.y,
+        rect.y + 1,
         text::LX_BLOCK_PANEL_TITLE,
         style::muted(),
     );
+    draw_box_divider(grid, rect, rect.y + 2, style::muted());
     for (index, id) in panel.items().iter().enumerate() {
-        let y = rect.y + 1 + index as u16;
+        let y = rect.y + 3 + index as u16;
         let (label, preview) = text::block_command_text(*id);
         let active = index == panel.active();
         let label_style = if active {
@@ -964,6 +967,26 @@ fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
         grid.put(rect.x + 2, y, &label, label_style);
         let preview_x = rect.x + 2 + u16::try_from(label.width()).unwrap_or(0) + 2;
         grid.put(preview_x, y, &preview, style::muted());
+    }
+    draw_box_divider(grid, rect, rect.bottom() - 3, style::muted());
+    grid.put(
+        rect.x + 2,
+        rect.bottom() - 2,
+        text::COMMAND_PANEL_FOOTER,
+        style::muted(),
+    );
+}
+
+/// 在网格矩形内绘制一条横向分割线 `├───┤`。
+fn draw_box_divider(grid: &mut Grid, rect: Rect, y: u16, border: Style) {
+    if rect.width < 2 || y <= rect.y || y >= rect.bottom() - 1 {
+        return;
+    }
+    let right = rect.right() - 1;
+    grid.set(rect.x, y, '├', border);
+    grid.set(right, y, '┤', border);
+    for x in rect.x + 1..right {
+        grid.set(x, y, '─', border);
     }
 }
 

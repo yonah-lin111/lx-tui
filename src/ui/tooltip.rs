@@ -58,17 +58,34 @@ pub fn render(
     let hint = text::tooltip_hint(tooltip.target, state);
     let area = rect(screen, anchor, title, hint)?;
     clear::render(frame, area);
-    let block = Block::bordered()
-        .border_style(style::muted())
-        .title(Span::styled(
-            format!(
-                " {} ",
-                text::ellipsize(title, usize::from(area.width.saturating_sub(2)))
-            ),
-            style::border_title(),
-        ));
-    let inner = block.inner(area);
+    let block = Block::bordered().border_style(style::muted());
     frame.render_widget(block, area);
+    if area.height >= 5 && area.width >= 4 {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                text::ellipsize(title, usize::from(area.width.saturating_sub(4))),
+                style::border_title(),
+            )),
+            Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), 1),
+        );
+        crate::ui::widgets::menu::draw_horizontal_divider(
+            frame.buffer_mut(),
+            area,
+            area.y + 2,
+            style::muted(),
+        );
+    }
+    let body_y = if area.height >= 5 {
+        area.y + 3
+    } else {
+        area.y + 1
+    };
+    let inner = Rect::new(
+        area.x + 1,
+        body_y,
+        area.width.saturating_sub(2),
+        area.bottom().saturating_sub(1).saturating_sub(body_y),
+    );
     if inner.width == 0 || inner.height == 0 {
         return Some(area);
     }
@@ -246,7 +263,7 @@ fn rect(screen: Rect, anchor: Rect, title: &str, hint: &str) -> Option<Rect> {
     if width == 0 {
         return None;
     }
-    let height = 3.min(screen.height);
+    let height = 5.min(screen.height);
     let below = anchor.y.saturating_add(1);
     let y = if below.saturating_add(height) <= screen.bottom() {
         below

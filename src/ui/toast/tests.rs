@@ -66,7 +66,7 @@ fn anchored_toast_centers_below_container_top_border() {
 }
 
 #[test]
-fn titled_toast_keeps_three_rows_and_fits_title() {
+fn titled_toast_keeps_five_rows_and_fits_title() {
     let mut state = AppState::demo();
     update::show_toast(
         &mut state,
@@ -83,7 +83,7 @@ fn titled_toast_keeps_three_rows_and_fits_title() {
         &Config::default(),
     )
     .expect("toast area is resolvable");
-    assert_eq!(rect.height, 3);
+    assert_eq!(rect.height, 5);
     assert_eq!(
         usize::from(rect.width),
         text::TOAST_COPIED.chars().count() + 4

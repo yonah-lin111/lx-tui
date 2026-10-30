@@ -74,4 +74,10 @@
 
 - [x] 更新单元测试与集成测试中的圆角字符断言、无边框面板高度与顶线行号断言、浮层透明背景断言及 `settings.css` 样式断言
 - [x] 同步更新 `docs/standards/tui-design-requirements.md`
-- [x] 执行 `rtk cargo fmt --check`、`rtk cargo clippy --all-targets -- -D warnings` 与受影响模块 `rtk cargo test` 校验
+## 阶段六：补充需求（顶栏/底栏框、快捷键格式统一、移除模板块底色）
+
+- [x] 为模态弹窗、右键菜单、页码菜单、引用文件夹弹窗、Toast、Tooltip、Prompt 命令面板与 `lx` md 块面板添加带 `├───┤` 分割线的顶栏框与底栏框
+- [x] 将所有快捷键文案统一为 `符号 功能`（纯文本底栏用 ` · ` 分隔，可点击按钮保留 `[符号 功能]`）
+- [x] 移除 `src/ui/prompt.rs` 中模板块/补充块的整行背景色渲染 `paint_block_background`
+- [x] 更新并补充对应测试，完成 `cargo fmt`、`cargo clippy`、`cargo test` 与 git commit
+

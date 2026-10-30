@@ -548,11 +548,18 @@ fn toast_renders_title_and_message() {
         .with_title("Clipboard"),
     );
     let lines = render_lines(&state);
-    let title_line = lines
+    let title_idx = lines
         .iter()
-        .find(|line| line.contains("Clipboard"))
+        .position(|line| line.contains("Clipboard"))
         .expect("toast title is visible");
-    assert!(title_line.contains('┌'), "title must sit on the top border");
+    assert!(
+        lines[title_idx - 1].contains('┌'),
+        "top border is above title row"
+    );
+    assert!(
+        lines[title_idx + 1].contains('├'),
+        "header divider is below title row"
+    );
     assert!(lines.iter().any(|line| line.contains(text::TOAST_COPIED)));
 }
 
@@ -2473,9 +2480,9 @@ fn pane_border_agent_label_absent_without_agent() {
     );
 }
 
-/// 浮层顶边框标题单元格：淡蓝色（Cyan + dim）、非粗体，保持透明底色。
+/// 浮层顶栏标题单元格：淡蓝色（Cyan + dim）、非粗体，保持透明底色。
 fn assert_overlay_title(buffer: &ratatui::buffer::Buffer, area: Rect) {
-    let cell = &buffer[(area.x + 1, area.y)];
+    let cell = &buffer[(area.x + 2, area.y + 1)];
     assert!(
         cell.modifier.contains(ratatui::style::Modifier::DIM),
         "边框标题必须 dim: {cell:?}"

@@ -24,15 +24,15 @@ pub enum SaveDraftButton {
 /// 选择器按钮标签（保存 / 取消）。
 pub(crate) const SAVE_DRAFT_BUTTONS: [&str; 2] = [text::BUTTON_SAVE, text::BUTTON_CANCEL];
 
-/// 草稿保存选择器几何：名称输入 + 分割线 + 条目单行 + 按钮行。
+/// 草稿保存选择器几何：顶栏框 + 名称输入 + 分割线 + 条目单行 + 底栏框与按钮行。
 pub fn save_draft_shell(screen: Rect, entry_count: usize) -> Option<widgets::modal::ModalShell> {
-    let height = (entry_count as u16).saturating_add(6).clamp(8, 30);
+    let height = (entry_count as u16).saturating_add(9).clamp(11, 30);
     widgets::modal::layout(screen, SAVE_DRAFT_WIDTH, height)
 }
 
-/// 选择器可视条目数（扣除名称、分割线与按钮行）。
+/// 选择器可视条目数（扣除名称、分割线、底栏分割线与按钮行）。
 pub fn save_draft_max_rows(shell: &widgets::modal::ModalShell) -> usize {
-    usize::from(shell.inner.height.saturating_sub(3))
+    usize::from(shell.inner.height.saturating_sub(4))
 }
 
 /// 列表窗口起始条目位置：让选中项落在窗口内。

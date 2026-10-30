@@ -1,7 +1,9 @@
 //! 菜单组件：锚点定位、项渲染与命中；不依赖应用领域数据。
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthStr;
@@ -23,21 +25,20 @@ pub struct MenuLayout {
 
 /// 按锚点、标题与标签计算菜单几何；锚点与尺寸均夹取到屏幕内。
 ///
-/// 宽度按终端显示列（`UnicodeWidthStr::width`）计算，宽字符与中文不再误判为窄；
-/// 仅在超出屏幕宽度时兜底钳制。
+/// 有标题时顶部占 3 行（`┌──┐` + `│ Title │` + `├──┤`），无标题占 1 行顶边。
 pub fn layout(screen: Rect, anchor: (u16, u16), title: &str, labels: &[&str]) -> MenuLayout {
     let max_label = labels
         .iter()
         .map(|label| label.width())
         .max()
         .unwrap_or_default();
-    // 边框标题以 ` title ` 占位，加减两角。
     let max_title = title.width().saturating_add(4);
     let width = u16::try_from(max_label.saturating_add(HORIZONTAL_PADDING).max(max_title))
         .unwrap_or(u16::MAX)
         .max(MIN_WIDTH)
         .min(screen.width);
-    let height = u16::try_from(labels.len().saturating_add(2))
+    let header_rows: usize = if title.is_empty() { 1 } else { 3 };
+    let height = u16::try_from(labels.len().saturating_add(header_rows + 1))
         .unwrap_or(u16::MAX)
         .min(screen.height);
     let x = anchor
@@ -47,11 +48,12 @@ pub fn layout(screen: Rect, anchor: (u16, u16), title: &str, labels: &[&str]) ->
         .1
         .clamp(screen.y, screen.y + screen.height.saturating_sub(height));
     let area = Rect::new(x, y, width, height);
+    let item_top = area.y.saturating_add(header_rows as u16);
     let item_rects = (0..labels.len() as u16)
         .map(|index| {
             Rect::new(
                 area.x + 1,
-                area.y + 1 + index,
+                item_top + index,
                 area.width.saturating_sub(2),
                 1,
             )
@@ -68,7 +70,7 @@ pub fn item_at(layout: &MenuLayout, column: u16, row: u16) -> Option<usize> {
         .position(|rect| rect.contains((column, row).into()))
 }
 
-/// 渲染菜单：清底、强调色边框与标题、逐项文本；选中项使用悬停高亮，待确认项使用危险红底高亮。
+/// 渲染菜单：清底、强调色边框与顶栏标题框、逐项文本；选中项使用悬停高亮，待确认项使用危险红底高亮。
 pub fn render(
     frame: &mut Frame<'_>,
     layout: &MenuLayout,
@@ -89,20 +91,38 @@ pub fn render_with_confirm(
     confirming: Option<usize>,
 ) {
     clear::render(frame, layout.area);
-    let mut block = Block::bordered().border_style(style::accent());
-    if !title.is_empty() {
-        let max_title = usize::from(layout.area.width.saturating_sub(2));
-        block = block.title(Span::styled(
-            format!(" {} ", text::ellipsize(title, max_title)),
-            style::border_title(),
-        ));
-    }
+    let block = Block::bordered().border_style(style::accent());
     frame.render_widget(block, layout.area);
+    if !title.is_empty() && layout.area.height >= 4 && layout.area.width >= 4 {
+        let max_title = usize::from(layout.area.width.saturating_sub(4));
+        let title_rect = Rect::new(
+            layout.area.x + 2,
+            layout.area.y + 1,
+            layout.area.width.saturating_sub(4),
+            1,
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                text::ellipsize(title, max_title),
+                style::border_title(),
+            )),
+            title_rect,
+        );
+        draw_horizontal_divider(
+            frame.buffer_mut(),
+            layout.area,
+            layout.area.y + 2,
+            style::accent(),
+        );
+    }
     let width = usize::from(layout.area.width.saturating_sub(2));
     for (index, label) in labels.iter().enumerate() {
         let Some(rect) = layout.item_rects.get(index) else {
             continue;
         };
+        if rect.y >= layout.area.bottom().saturating_sub(1) {
+            continue;
+        }
         let item_style = if confirming == Some(index) {
             style::menu_confirm()
         } else if selected == Some(index) {
@@ -110,15 +130,34 @@ pub fn render_with_confirm(
         } else {
             style::text()
         };
-        // 几何按显示宽度计算，宽度充裕时完整渲染；仅在钳到窄屏时截断。
         let rendered = if label.width() <= width {
             (*label).to_string()
         } else {
             text::ellipsize(label, width)
         };
         let line = Line::from(Span::styled(rendered, item_style));
-        // 行级样式让选中项或待确认项整行铺满底色。
         frame.render_widget(Paragraph::new(line).style(item_style), *rect);
+    }
+}
+
+/// 在浮层内绘制一条与左右外框衔接的横向分割线 `├───┤`。
+pub(crate) fn draw_horizontal_divider(buf: &mut Buffer, area: Rect, y: u16, border_style: Style) {
+    if area.width < 2 || y <= area.y || y >= area.bottom().saturating_sub(1) {
+        return;
+    }
+    let right = area.right().saturating_sub(1);
+    for x in area.x..=right {
+        let ch = if x == area.x {
+            '├'
+        } else if x == right {
+            '┤'
+        } else {
+            '─'
+        };
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.set_char(ch);
+            cell.set_style(border_style);
+        }
     }
 }
 
