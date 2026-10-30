@@ -453,7 +453,7 @@ struct MentionPanelData {
     /// 取根选择器：两项单行、不显示目录导航页脚。
     chooser: bool,
     tab: crate::app::prompt::MentionTab,
-    tabs: [command_panel::PanelTab<'static>; 2],
+    tabs: [command_panel::PanelTab<'static>; 4],
     root_label: Option<&'static str>,
 }
 
@@ -477,6 +477,14 @@ fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
         command_panel::PanelTab {
             label: text::MENTION_TAB_REF_DIR,
             active: tab == crate::app::prompt::MentionTab::RefDir,
+        },
+        command_panel::PanelTab {
+            label: text::MENTION_TAB_SKILLS,
+            active: tab == crate::app::prompt::MentionTab::Skills,
+        },
+        command_panel::PanelTab {
+            label: text::MENTION_TAB_MCP,
+            active: tab == crate::app::prompt::MentionTab::Mcp,
         },
     ];
     if let Some(active) = prompt.mention_chooser() {
@@ -563,6 +571,72 @@ fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
                 anchor_row,
                 scope: None,
                 title: text::MENTION_TAB_REF_DIR.to_string(),
+                chooser: false,
+                tab,
+                tabs,
+                root_label: None,
+            })
+        }
+        crate::app::prompt::MentionTab::Skills => {
+            if !prompt.mention_active() {
+                return None;
+            }
+            let filtered = prompt.mention_filtered_skills();
+            let rows = if filtered.is_empty() {
+                vec![MentionRowText::Empty(text::MENTION_SKILLS_EMPTY)]
+            } else {
+                filtered
+                    .iter()
+                    .map(|skill| {
+                        MentionRowText::File(crate::ui::mention::skill_row(
+                            &skill.name,
+                            &skill.description,
+                            detail_width,
+                        ))
+                    })
+                    .collect()
+            };
+            Some(MentionPanelData {
+                rows,
+                active: prompt.mention_ref_active(),
+                anchor: prompt.mention_ref_anchor(),
+                viewport: prompt.mention_ref_viewport(),
+                anchor_row,
+                scope: None,
+                title: text::MENTION_TAB_SKILLS.to_string(),
+                chooser: false,
+                tab,
+                tabs,
+                root_label: None,
+            })
+        }
+        crate::app::prompt::MentionTab::Mcp => {
+            if !prompt.mention_active() {
+                return None;
+            }
+            let filtered = prompt.mention_filtered_mcp_servers();
+            let rows = if filtered.is_empty() {
+                vec![MentionRowText::Empty(text::MENTION_MCP_EMPTY)]
+            } else {
+                filtered
+                    .iter()
+                    .map(|server| {
+                        MentionRowText::File(crate::ui::mention::mcp_row(
+                            &server.name,
+                            &server.detail,
+                            detail_width,
+                        ))
+                    })
+                    .collect()
+            };
+            Some(MentionPanelData {
+                rows,
+                active: prompt.mention_ref_active(),
+                anchor: prompt.mention_ref_anchor(),
+                viewport: prompt.mention_ref_viewport(),
+                anchor_row,
+                scope: None,
+                title: text::MENTION_TAB_MCP.to_string(),
                 chooser: false,
                 tab,
                 tabs,

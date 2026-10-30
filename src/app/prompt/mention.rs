@@ -26,22 +26,49 @@ pub enum MentionTab {
     #[default]
     Files,
     RefDir,
+    Skills,
+    Mcp,
 }
 
 impl MentionTab {
-    pub const ALL: [Self; 2] = [Self::Files, Self::RefDir];
+    pub const ALL: [Self; 4] = [Self::Files, Self::RefDir, Self::Skills, Self::Mcp];
+
+    /// 由顶栏 Tab 下标（0..4）解析。
+    pub fn from_index(index: usize) -> Option<Self> {
+        Self::ALL.get(index).copied()
+    }
 
     pub fn next(self) -> Self {
         match self {
             Self::Files => Self::RefDir,
-            Self::RefDir => Self::Files,
+            Self::RefDir => Self::Skills,
+            Self::Skills => Self::Mcp,
+            Self::Mcp => Self::Files,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Files => Self::RefDir,
+            Self::Files => Self::Mcp,
             Self::RefDir => Self::Files,
+            Self::Skills => Self::RefDir,
+            Self::Mcp => Self::Skills,
+        }
+    }
+}
+
+/// `@` 面板 `MCP` Tab 的候选条目（纯数据，由事件层按生效配置同步）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpMentionEntry {
+    pub name: String,
+    pub detail: String,
+}
+
+impl McpMentionEntry {
+    pub fn new(name: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            detail: detail.into(),
         }
     }
 }
@@ -71,15 +98,19 @@ pub struct MentionState {
     chooser: Option<usize>,
     /// 选择取根时的块绑定签名；绑定变化时选择复位。
     choice_binding: Option<(usize, String)>,
-    /// 当前活跃 Tab：Files 或 refDir。
+    /// 当前活跃 Tab：Files / refDir / Skills / MCP。
     tab: MentionTab,
     /// 引用文件夹列表快照（由上层同步注入）。
     referenced_folders: Vec<crate::app::referenced::ReferencedFolder>,
-    /// refDir 列表的高亮索引。
+    /// 当前可用 skill 列表快照（由上层同步注入）。
+    skills: Vec<crate::skills::SkillEntry>,
+    /// 当前可用 MCP server 列表快照（由上层同步注入）。
+    mcp_servers: Vec<McpMentionEntry>,
+    /// 非 Files Tab（refDir / Skills / MCP）列表的高亮索引。
     ref_active: usize,
-    /// refDir 列表的窗口锚点索引。
+    /// 非 Files Tab 列表的窗口锚点索引。
     ref_anchor: usize,
-    /// refDir 显式视口起点。
+    /// 非 Files Tab 显式视口起点。
     ref_viewport: Option<usize>,
     /// 当前触发区间与查询词。
     trigger: Option<markdown::MentionTrigger>,
@@ -142,6 +173,16 @@ impl MentionState {
         self.referenced_folders = folders.to_vec();
     }
 
+    /// 同步 skill 快照。
+    pub fn set_skills(&mut self, skills: Vec<crate::skills::SkillEntry>) {
+        self.skills = skills;
+    }
+
+    /// 同步 MCP server 快照。
+    pub fn set_mcp_servers(&mut self, servers: Vec<McpMentionEntry>) {
+        self.mcp_servers = servers;
+    }
+
     /// 获取基于当前触发词过滤后的引用文件夹列表。
     pub fn filtered_ref_folders(&self) -> Vec<&crate::app::referenced::ReferencedFolder> {
         let query = self
@@ -164,6 +205,52 @@ impl MentionState {
                         .contains(&query_lower)
             })
             .collect()
+    }
+
+    /// 获取基于当前触发词过滤后的已启用 skill 列表。
+    pub fn filtered_skills(&self) -> Vec<&crate::skills::SkillEntry> {
+        let query = self
+            .trigger
+            .as_ref()
+            .map(|t| t.query.as_str())
+            .unwrap_or("");
+        let query_lower = query.to_lowercase();
+        self.skills
+            .iter()
+            .filter(|skill| skill.enabled && skill.shadowed_by.is_none())
+            .filter(|skill| {
+                query_lower.is_empty()
+                    || skill.name.to_lowercase().contains(&query_lower)
+                    || skill.description.to_lowercase().contains(&query_lower)
+            })
+            .collect()
+    }
+
+    /// 获取基于当前触发词过滤后的 MCP server 列表。
+    pub fn filtered_mcp_servers(&self) -> Vec<&McpMentionEntry> {
+        let query = self
+            .trigger
+            .as_ref()
+            .map(|t| t.query.as_str())
+            .unwrap_or("");
+        let query_lower = query.to_lowercase();
+        self.mcp_servers
+            .iter()
+            .filter(|server| {
+                query_lower.is_empty()
+                    || server.name.to_lowercase().contains(&query_lower)
+                    || server.detail.to_lowercase().contains(&query_lower)
+            })
+            .collect()
+    }
+
+    fn secondary_count(&self) -> usize {
+        match self.tab {
+            MentionTab::Files => 0,
+            MentionTab::RefDir => self.filtered_ref_folders().len(),
+            MentionTab::Skills => self.filtered_skills().len(),
+            MentionTab::Mcp => self.filtered_mcp_servers().len(),
+        }
     }
 
     /// 扫描是否在途且尚未取得缓存。
@@ -379,8 +466,8 @@ impl MentionState {
 
     /// 按偏移循环移动高亮；面板未打开返回 false。
     pub fn move_active(&mut self, delta: isize) -> bool {
-        if self.tab == MentionTab::RefDir {
-            let count = self.filtered_ref_folders().len();
+        if self.tab != MentionTab::Files {
+            let count = self.secondary_count();
             if count == 0 {
                 return false;
             }
@@ -406,8 +493,8 @@ impl MentionState {
 
     /// 设置高亮索引；面板未打开、索引越界或未变化返回 false。
     pub fn set_active(&mut self, index: usize) -> bool {
-        if self.tab == MentionTab::RefDir {
-            let count = self.filtered_ref_folders().len();
+        if self.tab != MentionTab::Files {
+            let count = self.secondary_count();
             if index >= count || self.ref_active == index {
                 return false;
             }
@@ -434,8 +521,8 @@ impl MentionState {
     /// 滚轮滚动可见窗口：显式视口从 `base` 起偏移、越界钳制不循环；高亮不动；
     /// 面板未打开或视口未移动返回 false。
     pub fn scroll_viewport(&mut self, delta: isize, base: usize) -> bool {
-        if self.tab == MentionTab::RefDir {
-            let count = self.filtered_ref_folders().len();
+        if self.tab != MentionTab::Files {
+            let count = self.secondary_count();
             if count == 0 {
                 return false;
             }
@@ -456,19 +543,39 @@ impl MentionState {
 
     /// 确认高亮条目：关闭面板并返回替换区间与插入文本；未打开或区间越界返回 None。
     pub fn confirm(&mut self, text_len: usize) -> Option<(Range<usize>, String)> {
-        if self.tab == MentionTab::RefDir {
+        if self.tab != MentionTab::Files {
             let trigger = self.trigger.as_ref()?;
             if trigger.from > trigger.to || trigger.to > text_len {
                 return None;
             }
-            let filtered = self.filtered_ref_folders();
-            let folder = filtered.get(self.ref_active)?;
             let range = trigger.from..trigger.to;
-            let ref_text = crate::app::markdown::format_reference(
-                crate::app::markdown::ReferKind::Folder,
-                &folder.path,
-            )
-            .unwrap_or_else(|| format!("@[refer-folder]({})", folder.path.display()));
+            let ref_text = match self.tab {
+                MentionTab::RefDir => {
+                    let folder = *self.filtered_ref_folders().get(self.ref_active)?;
+                    crate::app::markdown::format_reference(
+                        crate::app::markdown::ReferKind::Folder,
+                        &folder.path,
+                    )
+                    .unwrap_or_else(|| format!("@[refer-folder]({})", folder.path.display()))
+                }
+                MentionTab::Skills => {
+                    let skill = *self.filtered_skills().get(self.ref_active)?;
+                    crate::app::markdown::format_reference(
+                        crate::app::markdown::ReferKind::Skill,
+                        &skill.path,
+                    )
+                    .unwrap_or_else(|| format!("@[refer-skill]({})", skill.path.display()))
+                }
+                MentionTab::Mcp => {
+                    let server = *self.filtered_mcp_servers().get(self.ref_active)?;
+                    crate::app::markdown::format_reference(
+                        crate::app::markdown::ReferKind::Mcp,
+                        std::path::Path::new(&server.name),
+                    )
+                    .unwrap_or_else(|| format!("@[refer-mcp]({})", server.name))
+                }
+                MentionTab::Files => unreachable!(),
+            };
             let insertion = format!("{ref_text} ");
             self.reset_session();
             return Some((range, insertion));
@@ -489,7 +596,7 @@ impl MentionState {
     ///
     /// 高亮项不是目录、目录无缓存后代（进入后将无候选）、触发区间越界时返回 None。
     pub fn enter_folder(&self, text_len: usize) -> Option<(Range<usize>, String)> {
-        if self.tab == MentionTab::RefDir {
+        if self.tab != MentionTab::Files {
             return None;
         }
         let panel = self.panel.as_ref()?;
@@ -611,7 +718,7 @@ impl MentionState {
             return;
         };
         self.trigger = Some(trigger.clone());
-        let filtered_count = self.filtered_ref_folders().len();
+        let filtered_count = self.secondary_count();
         if self.ref_active >= filtered_count {
             self.ref_active = 0;
             self.ref_anchor = 0;

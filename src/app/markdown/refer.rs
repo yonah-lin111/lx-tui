@@ -11,6 +11,8 @@ pub enum ReferKind {
     Image,
     /// 用户显式点名的 skill（`@[refer-skill](<SKILL.md 绝对路径>)`）。
     Skill,
+    /// 用户显式点名的 MCP server（`@[refer-mcp](<server_name>)`）。
+    Mcp,
 }
 
 impl ReferKind {
@@ -21,6 +23,7 @@ impl ReferKind {
             Self::Folder => "folder",
             Self::Image => "image",
             Self::Skill => "skill",
+            Self::Mcp => "mcp",
         }
     }
 
@@ -31,6 +34,7 @@ impl ReferKind {
             "folder" => Some(Self::Folder),
             "image" => Some(Self::Image),
             "skill" => Some(Self::Skill),
+            "mcp" => Some(Self::Mcp),
             _ => None,
         }
     }

@@ -1,8 +1,8 @@
 # lx MCP 与 Skills — 功能评审（Review）
 
-> 审查对象：worktree `.worktrees/lx-mcp-skills`，分支 `feat/lx-mcp-skills`（相对 `dev` 基线 `e9cf47d6`）。
+> 审查对象：`feat/lx-mcp-skills`（相对 `dev` 基线 `e9cf47d6`，现已合并入 `dev`）。
 > 关联文档：[design.md](design.md)、[task.md](task.md)、[verification.md](verification.md)。
-> 状态：**评审完成，P0 ~ P2 全部缺陷已修复并通过回归验证**（2026-10-30）。
+> 状态：**评审完成，P0 ~ P2 全部缺陷已修复，功能已合并到 `dev`，worktree 与分支已清理**（2026-10-30）。
 
 ## 0. 评审结论
 

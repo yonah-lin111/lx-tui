@@ -1,6 +1,6 @@
 # lx MCP 与 Skills — 设计
 
-> 状态：**已实现并完成评审修复（未合并）**（2026-10-30）。
+> 状态：**已实现并合并入 `dev`**（2026-10-30）。
 > 参考实现：`/Users/yonah/projects/agent/codex-main/codex-rs`（`codex-mcp/`、`rmcp-client/`、`ext/skills/`、
 > `skills/`、`core/src/tools/handlers/mcp*.rs`），工具结果图片的分协议处理参考
 > `/Users/yonah/projects/agent/opencode-dev/packages/ai/src/protocols/`。
@@ -27,8 +27,8 @@
 | `ai.json` 原子保存 + `0600` + 私有目录 `0700` 已有实现 | `src/config/ai/mod.rs:374-405` | `mcp.json` / `skills.json` / `credentials.json` 照抄同一套 |
 | 设置服务是全局单例，`/api/state` 固定 `project_available:false`，project 作用域写请求 403 | `src/settings/service/handlers.rs:290,380` | 项目级 MCP/skill 改为集中存储在 lx-t 目录后，设置页可编辑（§7.3） |
 | 设置页左侧 3 个 tab：General / Commands / Models，JS 分文件、`page.rs` 按路由提供 | `assets/settings.html:10-15`、`src/settings/service/page.rs` | 新增 MCP / Skills 两个 tab 与 `settings_mcp.js` / `settings_skills.js` |
-| 引用块语法 `@[refer-<kind>](<path>)`，`ReferKind::{File, Folder, Image}` | `src/app/markdown/refer.rs:8-33` | 新增 `ReferKind::Skill` |
-| `@` 提及面板按窗格 cwd 展示文件/目录候选 | `src/app/state/lx/mention.rs` | skill 候选归入 `@` 面板（排在文件候选之前），`/` 面板只保留内置命令 |
+| 引用块语法 `@[refer-<kind>](<path>)`，`ReferKind::{File, Folder, Image}` | `src/app/markdown/refer.rs:8-33` | 新增 `ReferKind::Skill` 与 `ReferKind::Mcp` |
+| `@` 提及面板顶栏支持多 Tab（`Files` / `refDir`） | `src/app/prompt/mention.rs`、`src/app/state/lx/mention.rs` | 扩展为 `Files` / `refDir` / `Skills` / `MCP` 四 Tab，支持 `←`/`→` 与点击切换 |
 | 独立进程组与整组终止已有 `platform::terminate_process_group` | `src/platform/mod.rs:329-360` | MCP stdio 子进程复用 |
 | Cargo 依赖里没有任何 MCP crate；reqwest 0.13（rustls） | `Cargo.toml` | 新增 `rmcp`（官方 Rust SDK） |
 
@@ -88,7 +88,7 @@
 | 22 | 用户级 `~/.lx-t[-dev]/config/mcp.json`；项目级 `~/.lx-t[-dev]/config/mcp/projects/<目录名>-<路径哈希>.json`（文件内记 `project_root` 校验）；仓库内不放配置 |
 | 23 | skill 发现：用户级 `~/.lx-t[-dev]/skills/` + `~/.agents/skills/`；项目级 `~/.lx-t[-dev]/skills/projects/<目录名>-<路径哈希>/` + 已信任工作区的 `<项目根>/.agents/skills/`；不做内置；最深 6 层、跳过隐藏目录；`SKILL.md` 文件名大小写不敏感（兼容 `skill.md`）；同名优先级 项目级 > 用户级，lx-t 目录 > `.agents` |
 | 24 | skill 目录注入系统提示（环境快照之后），turn 冻结，上限 8000 字符；模型用 `read` 读取；`PROMPT_VERSION` → `lx-7` |
-| 25 | `@` 提及面板展示已启用 skill 候选（`◆ name` + `Skill · description`，排在文件候选之前）→ 插入 `@[refer-skill](<SKILL.md 绝对路径>)` 引用块 → 发送时注入全文（`<skill>` 包装，单个 ≤8000 字节，超限截断 + pane 内英文 toast）；`/` 面板只放内置命令；不做 `$name` |
+| 25 | `@` 提及面板（lx 输入框与右侧 Prompt 编辑器共用）顶栏扩展为 `Files` / `refDir` / `Skills` / `MCP` 四个 Tab，支持键盘 `←`/`→` 循环切换与鼠标点击切换；`Files` Tab 纯净展示文件与目录；`Skills` Tab 展示已启用 skill（`◆ name` + `Skill · description`），选中插入 `@[refer-skill](<SKILL.md 绝对路径>) ` 并当轮注入 `<skill>` 全文（≤8000 字节，超限截断 + pane 内英文 toast）；`MCP` Tab 展示当前工作区已启用 MCP server（`◆ name` + `MCP · transport`），选中插入 `@[refer-mcp](<server_name>) `（作为编辑器纯文本引用语法糖，支持高亮、快捷引用与整块退格删除）；`/` 面板只放内置命令；不做 `$name` |
 | 26 | skill 全文只在当轮注入；附件表新增 kind `skill`（v20 迁移）；回放只给一行 `[skill <name> was loaded from <path> in this turn]` |
 | 27 | Skills tab：左列表右详情；lx-t 目录 skill 可新建/编辑/删除，`.agents` 只读且**默认关闭**（手动勾选后写入 `config/skills.json` 的 `enabled` 白名单；lx 来源仍走 `disabled` 黑名单）；MCP/Skills 统一使用右上角操作条（移除内联 Save 按钮，支持跨 tab 一键保存全部脏视图并在脏 tab 左侧显示黄点） |
 | 28 | 子 agent 注入同一份 skill 目录（启动时冻结），可自行 `read`；主 agent 在 task 里点名 skill；用户点名注入的全文不自动转发 |

@@ -1,18 +1,18 @@
-//! `@` 提及条目展示构造：目录/文件图标、名称与父目录明细。
+//! `@` 提及条目展示构造：目录/文件图标、名称与父目录明细，以及 Skills / MCP 条目。
 //!
 //! prompt 与 lx 的提及面板共用同一套条目外观；这里只做纯数据到
 //! `CommandItem` 的映射，不读取状态、不计算几何。
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::markdown::{MentionEntry, skill_mention_name};
+use crate::app::markdown::MentionEntry;
 use crate::ui::text;
 use crate::ui::widgets::command_panel::CommandItem;
 
 /// 父目录明细相对面板宽度的留白（图标列 + 两边框 + 左侧内边距）。
 pub const MENTION_DETAIL_MARGIN: usize = 5;
 
-/// 提及条目的展示行：文件/目录（图标 + 名称 + 父目录明细）。
+/// 提及条目的展示行：文件/目录/skill/MCP（图标 + 名称 + 次行明细）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MentionRow {
     icon: &'static str,
@@ -23,7 +23,7 @@ pub struct MentionRow {
 }
 
 impl MentionRow {
-    /// 组装命令面板条目：目录、文件与 skill 分色。
+    /// 组装命令面板条目：目录、文件与 skill/MCP 分色。
     pub fn item(&self) -> CommandItem<'_> {
         let (icon_style, label_style) = if self.is_skill {
             let skill = crate::ui::style::chat_tool_param();
@@ -48,9 +48,6 @@ impl MentionRow {
 ///
 /// 父目录超出可用宽度时按显示列中间截断（保留路径首尾）。
 pub fn file_row(entry: &MentionEntry, detail_width: usize) -> MentionRow {
-    if let Some(name) = skill_mention_name(&entry.path) {
-        return skill_row(name, detail_width);
-    }
     let (directory, name) = entry
         .path
         .rsplit_once('/')
@@ -82,17 +79,12 @@ pub fn file_row(entry: &MentionEntry, detail_width: usize) -> MentionRow {
 }
 
 /// 构造 skill 条目展示：`◆ name` + `Skill · description`。
-pub fn skill_row(name: &str, detail_width: usize) -> MentionRow {
-    let description = crate::skills::cached_entries()
-        .into_iter()
-        .find(|skill| skill.name == name)
-        .map(|skill| skill.description)
-        .unwrap_or_default();
+pub fn skill_row(name: &str, description: &str, detail_width: usize) -> MentionRow {
     let detail = if description.is_empty() {
         text::MENTION_SKILL_LABEL.to_string()
     } else {
         format!(
-            "{} {} {}",
+            "{}{}{}",
             text::MENTION_SKILL_LABEL,
             text::LX_CHAT_TOOL_STATUS_SEP,
             description
@@ -104,6 +96,27 @@ pub fn skill_row(name: &str, detail_width: usize) -> MentionRow {
         is_skill: true,
         label: name.to_string(),
         detail: text::truncate_to_width(&detail, detail_width),
+    }
+}
+
+/// 构造 MCP server 条目展示：`◆ name` + `MCP · detail`。
+pub fn mcp_row(name: &str, detail: &str, detail_width: usize) -> MentionRow {
+    let detail_text = if detail.is_empty() {
+        text::MENTION_MCP_LABEL.to_string()
+    } else {
+        format!(
+            "{}{}{}",
+            text::MENTION_MCP_LABEL,
+            text::LX_CHAT_TOOL_STATUS_SEP,
+            detail
+        )
+    };
+    MentionRow {
+        icon: text::MENTION_SKILL_ICON,
+        is_directory: false,
+        is_skill: true,
+        label: name.to_string(),
+        detail: text::truncate_to_width(&detail_text, detail_width),
     }
 }
 

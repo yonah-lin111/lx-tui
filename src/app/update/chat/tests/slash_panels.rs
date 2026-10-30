@@ -903,3 +903,181 @@ fn escape_from_variant_stage_shows_full_list_after_input_cleared() {
     assert!(picker.filter.is_empty(), "过滤词已被清空");
     assert_eq!(picker.filtered.len(), total, "退回后显示全部模型");
 }
+
+#[test]
+fn selecting_rename_from_slash_panel_echoes_command_with_trailing_space() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    for ch in "/ren".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    assert!(
+        matches!(
+            state.pane_anywhere(pane).and_then(|t| t.lx.slash.as_ref()),
+            Some(SlashPanel::Commands { .. })
+        ),
+        "输入 /ren 打开命令面板"
+    );
+
+    crate::app::update::apply_lx_input(&mut state, LxInput::Enter);
+
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(lx.slash.is_none(), "采纳 /rename 后关闭命令面板");
+    assert_eq!(lx.input, "/rename ", "回显 `/rename `（带末尾空格）");
+    assert_eq!(lx.cursor, 8, "光标停在末尾空格后");
+    assert_eq!(
+        crate::app::state::lx::slash::active_argument_hint(&lx.input),
+        Some(crate::ui::text::LX_RENAME_ARG_HINT),
+        "此时激活 [name] 参数说明"
+    );
+
+    // 退格删掉末尾空格：回到 `/rename` 并重开命令候选面板。
+    crate::app::update::apply_lx_input(&mut state, LxInput::Backspace);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(lx.input, "/rename");
+    assert!(
+        matches!(lx.slash, Some(SlashPanel::Commands { .. })),
+        "删掉空格后重新打开命令候选面板"
+    );
+}
+
+#[test]
+fn rename_enter_without_argument_shows_toast_and_keeps_echo_prefix() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-1".into());
+    for ch in "/rename ".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+
+    crate::app::update::apply_lx_input(&mut state, LxInput::Enter);
+
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(lx.input, "/rename ", "未填参数回车保留 `/rename `");
+    assert_eq!(
+        lx.toast.as_ref().map(|toast| toast.message.as_str()),
+        Some(crate::ui::text::LX_RENAME_EMPTY_NAME),
+        "弹出空参数警告 toast"
+    );
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::RenameChatSession { .. }
+                | crate::app::effects::Effect::BeginChatTurn { .. }
+        )),
+        "空参数不触发改名也不发送聊天消息"
+    );
+}
+
+#[test]
+fn rename_enter_without_active_session_warns_and_clears_input() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    for ch in "/rename New Session".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+
+    crate::app::update::apply_lx_input(&mut state, LxInput::Enter);
+
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(lx.input.is_empty(), "无会话时清空输入");
+    assert_eq!(
+        lx.toast.as_ref().map(|toast| toast.message.as_str()),
+        Some(crate::ui::text::LX_RENAME_NO_SESSION),
+        "提示当前无活跃会话"
+    );
+}
+
+#[test]
+fn rename_enter_with_argument_queues_rename_effect_and_clears_input() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-1".into());
+    for ch in "/rename   My Custom Title  ".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+
+    crate::app::update::apply_lx_input(&mut state, LxInput::Enter);
+
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(lx.input.is_empty(), "提交改名后清空输入框");
+    assert_eq!(
+        lx.toast.as_ref().map(|toast| toast.message.as_str()),
+        Some("Renamed to \"My Custom Title\""),
+        "弹出改名成功 toast"
+    );
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::RenameChatSession {
+                session_id,
+                title,
+                ..
+            } if session_id == "sess-1" && title == "My Custom Title"
+        )),
+        "入队 RenameChatSession 效应: {:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn title_alias_submits_rename_and_panel_echo_supports_undo() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-1".into());
+    for ch in "/ren".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    let rev_before = state.pane_anywhere(pane).expect("pane").lx.revision();
+    crate::app::update::apply_lx_input(&mut state, LxInput::Enter);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(lx.input, "/rename ");
+    assert!(lx.revision() > rev_before, "采纳回显必须推进 revision");
+
+    // 撤销一步：恢复回显前的 `/ren`。
+    crate::app::update::apply_lx_input(&mut state, LxInput::Undo);
+    assert_eq!(state.pane_anywhere(pane).expect("pane").lx.input, "/ren");
+
+    // 直接手敲别名 `/title 别名标题` 并回车：同样走重命名逻辑，不作为聊天消息发送。
+    state.pane_mut_anywhere(pane).expect("pane").lx.clear();
+    for ch in "/title 别名标题".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    crate::app::update::apply_lx_input(&mut state, LxInput::Enter);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::RenameChatSession {
+                session_id,
+                title,
+                ..
+            } if session_id == "sess-1" && title == "别名标题"
+        )),
+        "别名 `/title` 直接提交也必须触发会话重命名"
+    );
+}

@@ -1,17 +1,15 @@
 # lx MCP 与 Skills — 执行任务
 
-> 状态：**已完成并完成评审修复（未合并）**。依据 [design.md](design.md)，代码评审见 [review.md](review.md)，验证步骤见 [verification.md](verification.md)。
-> 阶段顺序：P1 → P2 → P3 → P4 → P5 → P6 → Review 修复（P0–P2）。每阶段以对应的定向测试和验收条件收口，再进入下一阶段。
+> 状态：**已完成并合并入 `dev`（worktree 与分支已清理）**。依据 [design.md](design.md)，代码评审见 [review.md](review.md)，验证步骤见 [verification.md](verification.md)。
+> 阶段顺序：P1 → P2 → P3 → P4 → P5 → P6 → Review 修复（P0–P2）→ 四 Tab `@` 面板与合并收口。每阶段以对应的定向测试和验收条件收口，再进入下一阶段。
 >
-> **当前进度**（2026-10-30，worktree `.worktrees/lx-mcp-skills`，分支 `feat/lx-mcp-skills`）：
-> - 已提交：`d4416ea`、`0bc0f19`、`b097cbf`（OAuth/设置页/取消/TUI 卡片与进度/缓存/集成测试）、`b9b9168`（`SKILL.md` 大小写兼容）、`15aa057`（设置页滚动/MCP 卡片格式与斜体提示）、`91ad3d4`（启动即装载、首页计数、skill 移入 @ 面板、工具树独立折叠）、`4f77408`（MCP 卡片点击面边界测试）、`9ecd262`（首页计数窄窗格裁切）、`017bdc7`（skill 缓存清理）、`2feb3ee`（首页计数下移、多窗格项目级计数、`.agents` 默认关闭、设置页统一保存与 tab 黄点）、`d02e04d`（配置变更清理已移除 MCP server 计数）、`8cf99e2`（首页计数上方间距改为 1 行）。
-> - 已完成：P1–P5 全部功能、P6 集成用例与真实开发库副本迁移复核，以及 [review.md](review.md) 中 P0–P2 全部评审问题的代码修复与回归测试。
-> - MCP：stdio/HTTP 客户端、OAuth 登录/刷新重连、启动进度、工具与 resources 三工具统一 `notifications/cancelled` + 超时保护、JSON-RPC 业务错误与传输断开区分处理、resources 图片归档、`tools/list_changed` 即时刷新 `snapshot_cache`、失败/登录 pane 内英文 toast。
-> - Skills：mtime 失效缓存、多工作区与 `GitRefreshed` 仓库根变化自动重扫、`.agents` 默认关闭（`enabled` 白名单）、目录预算与注入截断/读取失败 pane 内英文 toast。
+> **当前进度**（2026-10-30，已合并入 `dev`）：
+> - 已完成：P1–P5 全部功能、P6 集成用例与真实开发库副本迁移复核、[review.md](review.md) 中 P0–P2 全部评审问题修复，以及 `@` 面板 `Files` / `refDir` / `Skills` / `MCP` 四 Tab 与 `@[refer-mcp](<server_name>)` 语法支持。
+> - MCP：stdio/HTTP 客户端、OAuth 登录/刷新重连、启动进度、工具与 resources 三工具统一 `notifications/cancelled` + 超时保护、JSON-RPC 业务错误与传输断开区分处理、resources 图片归档、`tools/list_changed` 即时刷新 `snapshot_cache`、失败/登录 pane 内英文 toast、`@` 面板 `MCP` Tab 与 `@[refer-mcp](<server_name>)`。
+> - Skills：mtime 失效缓存、多工作区与 `GitRefreshed` 仓库根变化自动重扫、`.agents` 默认关闭（`enabled` 白名单）、目录预算与注入截断/读取失败 pane 内英文 toast、`@` 面板 `Skills` Tab 与 `@[refer-skill](<path>)`。
 > - 设置页：`/api/mcp`、`/api/skills`、OAuth callback、`settings_mcp.js`、`settings_skills.js`，右上角统一跨 tab 保存、脏 tab 黄点、自定义超时保留、只读 `.agents` 保护与下拉菜单 DOM 回收。
 > - TUI：MCP 类型化卡片（运行中/成功/失败/中断统一结构，参数与结果独立折叠，`^o` 快捷键切换卡片展开）、首页 agent 模式下方空 1 行显示 `mcp · skills` 计数、pane 内 toast、explorer MCP 只读约束。
-> - 验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（3898 lib tests + 集成测试）与 `node --check` 全部通过；真实 v19 开发库副本迁移到 v20 后 `integrity_check=ok`、`foreign_key_check` 为空、附件行数 2→2。
-> - **尚未合并**（用户要求先完成实现，不要合并）。
+> - 验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（3916 lib tests + 集成测试）与 `node --check` 全部通过；真实 v19 开发库副本迁移到 v20 后 `integrity_check=ok`、`foreign_key_check` 为空、附件行数 2→2。
 
 ## 0. 开工门槛
 
@@ -53,7 +51,7 @@
 - [x] 实现四个发现根、信任门控、最深 6 层/每根 2000 目录上限、隐藏目录跳过、符号链接环检测、同名优先级与 shadowed、`.agents` 默认禁用（`enabled` 白名单）与 `lx` 按 canonical 路径禁用；扫描在后台，按目录和 `SKILL.md` mtime 失效缓存；多工作区及 `GitRefreshed` 仓库根归位后自动补扫。
 - [x] 实现 `SKILL.md` 有界解析（256 KiB、frontmatter 标量与块标量、description 必填、name 校验、大小写不敏感文件名兼容）；错误进入目录错误列表，不阻断其他 skill。编辑仅允许 lx 自有根，服务端生成 frontmatter。
 - [x] 实现英文 skill 目录渲染：8000 字符预算、description 截断/整行省略、主/子 agent 使用说明不同；与环境快照一起在 turn 起点冻结。调整提示组合顺序并递增到**当前基线之后**的版本（`PROMPT_VERSION = "lx-7"`），守住 12/16 KiB 与单条 system 2000 UTF-16 码元限制。
-- [x] `@` 提及面板加入已启用 skill 候选（排在文件候选之前），选中插入 `@[refer-skill](<绝对路径>)`；`/` 面板只保留内置命令；扩展引用解析、显示、快速删除。发送时全文只注入当轮，单个 8000 字节截断并给窗格内英文 toast；读取失败不阻止发送，历史只回放摘要行。
+- [x] `@` 提及面板（lx 输入框与右侧 Prompt 编辑器）扩展为 `Files` / `refDir` / `Skills` / `MCP` 四 Tab，支持键盘 `←`/`→` 与鼠标点击切换：`Files` 纯净展示文件/目录，`Skills` 选中插入 `@[refer-skill](<绝对路径>) `，`MCP` 选中插入 `@[refer-mcp](<server_name>) `；`/` 面板只保留内置命令；扩展引用解析、显示、快速删除。发送时 skill 全文只注入当轮，单个 8000 字节截断并给窗格内英文 toast；读取失败不阻止发送，历史只回放摘要行。
 - [x] 定向验证：解析失败、四根优先级/信任/禁用/环、目录预算、提示顺序与英文约束、面板过滤与导航、引用注入/截断/失败和附件 kind。
 
 ## P5. 主/子 agent 接线、设置页与 TUI

@@ -1196,3 +1196,159 @@ fn ask_paste_only_enters_the_custom_buffer() {
         "编辑态粘贴进入手写缓冲"
     );
 }
+
+#[test]
+fn lx_mention_left_right_keys_and_mouse_switch_tabs_and_insert_ref_folder() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    seed_lx_mention(
+        &mut state,
+        "@",
+        vec![crate::app::markdown::MentionEntry {
+            path: "main.rs".into(),
+            is_directory: false,
+        }],
+    );
+    state.referenced.folders = vec![crate::app::referenced::ReferencedFolder {
+        id: 1,
+        path: std::path::PathBuf::from("/Users/yonah/projects/codex-main"),
+    }];
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 按 Right 方向键切到 refDir Tab（不移动输入框光标）。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(dirty);
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.mention_tab(),
+        crate::app::prompt::MentionTab::RefDir
+    );
+
+    // 鼠标点击 Files Tab 切回 Files。
+    let (_, rect) = geo
+        .rects
+        .iter()
+        .find(|(id, _)| *id == pane)
+        .copied()
+        .expect("pane rect");
+    let inner = crate::layout::pane_inner_rect(rect);
+    let panel =
+        ui::main_content::lx::mention_layout(inner, &state.pane_anywhere(pane).expect("pane").lx)
+            .expect("mention panel");
+    dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            panel.tabs[0].x,
+            panel.tabs[0].y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(dirty);
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.mention_tab(),
+        crate::app::prompt::MentionTab::Files
+    );
+
+    // 鼠标点击 refDir Tab 切到 refDir，再按 Enter 确认插入引用文件夹。
+    let panel =
+        ui::main_content::lx::mention_layout(inner, &state.pane_anywhere(pane).expect("pane").lx)
+            .expect("mention panel in Files tab");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            panel.tabs[1].x,
+            panel.tabs[1].y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.mention_tab(),
+        crate::app::prompt::MentionTab::RefDir
+    );
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.input,
+        "@[refer-folder](/Users/yonah/projects/codex-main) "
+    );
+}
+
+#[test]
+fn lx_command_panel_non_item_clicks_do_not_penetrate_to_underlying_entries() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    // 空候选（显示 no matches 状态行，非交互行）：面板位于欢迎页入口区上方或重叠处。
+    seed_lx_mention(&mut state, "@nomatch", Vec::new());
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let (_, rect) = geo
+        .rects
+        .iter()
+        .find(|(id, _)| *id == pane)
+        .copied()
+        .expect("pane rect");
+    let inner = crate::layout::pane_inner_rect(rect);
+    let panel =
+        ui::main_content::lx::mention_layout(inner, &state.pane_anywhere(pane).expect("pane").lx)
+            .expect("empty mention panel");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 点击面板顶栏横线右端空白或空态占位行：由浮层吞掉，不开启整页文本选区。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            panel.rect.right() - 2,
+            panel.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.lx_selection.is_none(), "点击面板顶栏不启动底层选区");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            panel.content.x + 2,
+            panel.content.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.lx_selection.is_none(), "点击面板空态行不启动底层选区");
+}

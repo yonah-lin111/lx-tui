@@ -19,23 +19,28 @@ fn dummy_folders() -> Vec<ReferencedFolder> {
 }
 
 #[test]
-fn mention_tab_switching_cycles_between_files_and_ref_dir() {
+fn mention_tab_switching_cycles_across_all_four_tabs() {
     let mut state = MentionState::default();
     state.sync_referenced_folders(&dummy_folders());
     state.refresh("@", 1);
     assert!(state.view_open());
     assert_eq!(state.tab(), MentionTab::Files);
 
-    // Right switches to refDir
+    // Right cycles Files -> RefDir -> Skills -> Mcp -> Files
     assert!(state.switch_tab(1));
     assert_eq!(state.tab(), MentionTab::RefDir);
-    assert!(state.view_open());
-
-    // Right wraps back to Files
+    assert!(state.switch_tab(1));
+    assert_eq!(state.tab(), MentionTab::Skills);
+    assert!(state.switch_tab(1));
+    assert_eq!(state.tab(), MentionTab::Mcp);
     assert!(state.switch_tab(1));
     assert_eq!(state.tab(), MentionTab::Files);
 
-    // Left wraps to refDir
+    // Left wraps to Mcp -> Skills -> RefDir
+    assert!(state.switch_tab(-1));
+    assert_eq!(state.tab(), MentionTab::Mcp);
+    assert!(state.switch_tab(-1));
+    assert_eq!(state.tab(), MentionTab::Skills);
     assert!(state.switch_tab(-1));
     assert_eq!(state.tab(), MentionTab::RefDir);
 
@@ -43,6 +48,43 @@ fn mention_tab_switching_cycles_between_files_and_ref_dir() {
     assert!(state.set_tab(MentionTab::Files));
     assert_eq!(state.tab(), MentionTab::Files);
     assert!(!state.set_tab(MentionTab::Files), "相同 tab 不重复切换");
+}
+
+#[test]
+fn skills_and_mcp_tabs_filter_and_insert_references() {
+    let mut state = MentionState::default();
+    state.set_skills(vec![crate::skills::SkillEntry {
+        name: "release-checklist".into(),
+        description: "Release steps".into(),
+        path: PathBuf::from("/skills/release-checklist/SKILL.md"),
+        scope: crate::skills::SkillScope::User,
+        source: crate::skills::SkillSource::Lx,
+        enabled: true,
+        shadowed_by: None,
+    }]);
+    state.set_mcp_servers(vec![McpMentionEntry::new(
+        "codegraph",
+        "stdio · codegraph serve --mcp",
+    )]);
+
+    let text = "use @rel";
+    state.refresh(text, text.len());
+    assert!(state.set_tab(MentionTab::Skills));
+    assert_eq!(state.filtered_skills().len(), 1);
+    let (range, insertion) = state.confirm(text.len()).expect("skill confirm");
+    assert_eq!(&text[range], "@rel");
+    assert_eq!(
+        insertion,
+        "@[refer-skill](/skills/release-checklist/SKILL.md) "
+    );
+
+    let text = "query @code";
+    state.refresh(text, text.len());
+    assert!(state.set_tab(MentionTab::Mcp));
+    assert_eq!(state.filtered_mcp_servers().len(), 1);
+    let (range, insertion) = state.confirm(text.len()).expect("mcp confirm");
+    assert_eq!(&text[range], "@code");
+    assert_eq!(insertion, "@[refer-mcp](codegraph) ");
 }
 
 #[test]

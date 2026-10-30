@@ -46,6 +46,7 @@ impl ReferTag {
             Self::Refer(ReferKind::Folder) => "refer-folder",
             Self::Refer(ReferKind::Image) => "refer-image",
             Self::Refer(ReferKind::Skill) => "refer-skill",
+            Self::Refer(ReferKind::Mcp) => "refer-mcp",
             Self::ShortRef => "ref-file",
             Self::ShortFolder => "ref-folder",
             Self::ShortImage => "ref-image",

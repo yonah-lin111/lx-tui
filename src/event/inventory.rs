@@ -168,18 +168,27 @@ pub(crate) fn drain_mcp_events(
     changed
 }
 
-/// 启动（或首次打开工作区）时按配置初始化 MCP 计数并后台预热。
+/// 启动（或首次打开工作区）时按配置初始化 MCP 计数与 `@` 面板候选并后台预热。
 pub(crate) fn initialize_mcp(state: &mut AppState, persistence: &Persistence, roots: &[PathBuf]) {
     for root in roots {
+        let effective = super::chat::mcp::effective_for_root(persistence, root);
+        let mentions: Vec<crate::app::prompt::McpMentionEntry> = effective
+            .iter()
+            .filter(|server| server.config.enabled)
+            .map(|server| {
+                crate::app::prompt::McpMentionEntry::new(
+                    server.name.clone(),
+                    server.config.summary(),
+                )
+            })
+            .collect();
+        apply_mcp_mentions(state, root, &mentions);
         // 已有项目保留状态：新开工作区只补齐新根，避免把已就绪的旧项目重置成
         // loading 后因为没有新的启动事件而永远卡住。
         if state.mcp_inventory.contains_key(root) {
             continue;
         }
-        let total = super::chat::mcp::effective_for_root(persistence, root)
-            .iter()
-            .filter(|server| server.config.enabled)
-            .count();
+        let total = mentions.len();
         state.mcp_inventory.insert(
             root.clone(),
             StartupCount {
@@ -191,6 +200,32 @@ pub(crate) fn initialize_mcp(state: &mut AppState, persistence: &Persistence, ro
         );
     }
     super::chat::mcp::prewarm_projects(persistence, roots);
+}
+
+fn apply_mcp_mentions(
+    state: &mut AppState,
+    root: &Path,
+    mentions: &[crate::app::prompt::McpMentionEntry],
+) {
+    let prompt_root = state
+        .prompt_owner()
+        .repo_key()
+        .map(std::path::Path::to_path_buf);
+    if prompt_root.as_deref() == Some(root) {
+        state.prompt.set_mention_mcp_servers(mentions.to_vec());
+    }
+    for workspace in &mut state.workspaces {
+        if workspace.repo_key() != Some(root) {
+            continue;
+        }
+        for tab in &mut workspace.tabs {
+            for id in tab.layout.pane_ids() {
+                if let Some(pane) = tab.pane_mut(id) {
+                    pane.lx.set_mention_mcp_servers(mentions.to_vec());
+                }
+            }
+        }
+    }
 }
 
 /// 配置变化后清掉已移除 server 的旧状态，避免下一次事件把准备计数又加回来。
@@ -211,13 +246,22 @@ pub(crate) fn prune_mcp_statuses(
     statuses.retain(|key, _| known.contains(key));
 }
 
-/// 配置变化后刷新总数：保留已结算的 ready/error，只为新增 server 打开 loading。
+/// 配置变化后刷新总数与 `@` 面板候选：保留已结算的 ready/error，只为新增 server 打开 loading。
 pub(crate) fn refresh_mcp(state: &mut AppState, persistence: &Persistence, roots: &[PathBuf]) {
     for root in roots {
-        let total = super::chat::mcp::effective_for_root(persistence, root)
+        let effective = super::chat::mcp::effective_for_root(persistence, root);
+        let mentions: Vec<crate::app::prompt::McpMentionEntry> = effective
             .iter()
             .filter(|server| server.config.enabled)
-            .count();
+            .map(|server| {
+                crate::app::prompt::McpMentionEntry::new(
+                    server.name.clone(),
+                    server.config.summary(),
+                )
+            })
+            .collect();
+        apply_mcp_mentions(state, root, &mentions);
+        let total = mentions.len();
         let current = state.mcp_inventory.get(root).copied().unwrap_or_default();
         let errors = current.errors.min(total);
         let ready = current.ready.min(total.saturating_sub(errors));
@@ -322,7 +366,7 @@ pub(crate) fn spawn_skills_preload(
     }
 }
 
-/// 写入后台扫描结果，并把 skill 候选复制到同一工作区的窗格。
+/// 写入后台扫描结果，并把 skill 候选复制到同一工作区的窗格与右侧 Prompt。
 pub(crate) fn apply_skills_loaded(
     state: &mut AppState,
     root: Option<PathBuf>,
@@ -339,6 +383,14 @@ pub(crate) fn apply_skills_loaded(
             loading: false,
         },
     );
+    if state
+        .prompt_owner()
+        .repo_key()
+        .map(std::path::Path::to_path_buf)
+        == root
+    {
+        state.prompt.set_mention_skills(entries.to_vec());
+    }
     for workspace in &mut state.workspaces {
         if workspace.repo_key().map(std::path::Path::to_path_buf) != root {
             continue;
@@ -351,6 +403,27 @@ pub(crate) fn apply_skills_loaded(
             }
         }
     }
+}
+
+/// 当右侧 Prompt 切换所属工作区时，同步该工作区的 MCP `@` 面板候选。
+pub(crate) fn sync_prompt_mcp_mentions(state: &mut AppState, persistence: &Persistence) {
+    let Some(root) = state
+        .prompt_owner()
+        .repo_key()
+        .map(std::path::Path::to_path_buf)
+    else {
+        state.prompt.set_mention_mcp_servers(Vec::new());
+        return;
+    };
+    let mentions: Vec<crate::app::prompt::McpMentionEntry> =
+        super::chat::mcp::effective_for_root(persistence, &root)
+            .into_iter()
+            .filter(|server| server.config.enabled)
+            .map(|server| {
+                crate::app::prompt::McpMentionEntry::new(server.name, server.config.summary())
+            })
+            .collect();
+    state.prompt.set_mention_mcp_servers(mentions);
 }
 
 #[cfg(test)]

@@ -337,6 +337,7 @@ async fn run_loop(
             last_prompt_workspace = prompt_workspace;
             commands_reload = true;
             skills_reload = true;
+            inventory::sync_prompt_mcp_mentions(state, persistence);
         }
         let repo_changed = commands::sync_prompt_repo(state);
         if commands::reload_custom_commands(state, commands_reload) || repo_changed {

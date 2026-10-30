@@ -30,6 +30,20 @@ fn format_reference_matches_syntax() {
     assert_eq!(marker.as_deref(), Some("@[refer-folder](/tmp/dir)"));
     let marker = format_reference(ReferKind::Image, Path::new("/tmp/a(1).png"));
     assert_eq!(marker.as_deref(), Some("@[refer-image](/tmp/a\\(1\\).png)"));
+    let marker = format_reference(ReferKind::Skill, Path::new("/skills/pdf/SKILL.md"));
+    assert_eq!(
+        marker.as_deref(),
+        Some("@[refer-skill](/skills/pdf/SKILL.md)")
+    );
+    let marker = format_reference(ReferKind::Mcp, Path::new("codegraph"));
+    assert_eq!(marker.as_deref(), Some("@[refer-mcp](codegraph)"));
+    let parsed =
+        parse_references("use @[refer-mcp](codegraph) and @[refer-skill](/skills/pdf/SKILL.md)");
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].kind, ReferKind::Mcp);
+    assert_eq!(parsed[0].path, "codegraph");
+    assert_eq!(parsed[1].kind, ReferKind::Skill);
+    assert_eq!(parsed[1].path, "/skills/pdf/SKILL.md");
 }
 
 #[test]

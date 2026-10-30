@@ -22,8 +22,8 @@
 
 补充定稿（实现后确认）：
 
-- **面板标题**：lx `@` 面板顶边左侧为 `@Command`（`text::LX_MENTION_PANEL_TITLE`），与 prompt 提及面板同名（后者已由 `Files` 改为 `@Command`）；进入目录后顶边右侧显示该目录末段名。
-- **面板高度**：对齐 codex — 内容行先夹到 `MAX_POPUP_ROWS`(8)、再加边框 2 行，并与输入框上方可用行数取小；空间不足时不挤压输入框。扫描中/无匹配用固定尺寸状态行（`scanning…` / `no matches`）。
+- **面板标题与 Tab**：lx `@` 面板改为无边框透明样式，顶部仅一条蓝色 `─` 横线，内嵌 `Files` / `refDir` 双 Tab（`←`/`→` 方向键与鼠标点击切换，默认 `Files`）；进入目录后顶边右侧显示该目录末段名，`refDir` Tab 的条目来自项目引用文件夹列表。详见 `docs/feature/lx-command-panel-style/design.md`。
+- **面板高度**：对齐 codex — 内容行先夹到 `MAX_POPUP_ROWS`(8)、再加顶部分割线 1 行，并与输入框上方可用行数取小；空间不足时不挤压输入框。扫描中/无匹配用固定尺寸状态行（`scanning…` / `no matches`）。
 - **快捷删除**：光标紧跟 `@路径 ` 尾随空白且面板未打开时，`Backspace` 一次删净整段提及（复用 `markdown::mention_deletion_range`，与 prompt 同语义、一步可撤销）；面板打开时按普通退格编辑查询。
 
 `@` 语法、候选排序、扫描忽略策略和相对路径插入格式优先复用 lx 现有 prompt 的能力；面板位置、输入框等宽与高度上限借鉴 codex-main。codex-main 当前 `FileSearchPopup` 对单独 `@` 显示提示，且候选主要是文件；D3/D4 明确要求 lx 在这里采用本项目 prompt 的文件/目录行为。

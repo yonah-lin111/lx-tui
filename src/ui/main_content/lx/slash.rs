@@ -152,6 +152,16 @@ pub(super) fn history_time_labels(panel: &crate::app::state::SlashPanel) -> Vec<
     }
 }
 
+/// 面板当前是否仅渲染不可选的空态占位行。
+fn is_placeholder(panel: &crate::app::state::SlashPanel) -> bool {
+    match panel {
+        crate::app::state::SlashPanel::Model(p) => p.stage_len() == 0 || p.is_filter_empty(),
+        crate::app::state::SlashPanel::History(h) => h.entries.is_empty() || h.is_filter_empty(),
+        crate::app::state::SlashPanel::Commands { .. } => false,
+        crate::app::state::SlashPanel::Rewind(_) => false,
+    }
+}
+
 /// `/` 命令面板视图：与 `@` 面板同款宽度/放置/高度口径，窗口取自面板状态。
 fn view<'a>(
     items: &'a [CommandItem<'a>],
@@ -175,7 +185,6 @@ fn view<'a>(
             picker.window,
             text::LX_SLASH_PANEL_FOOTER,
         ),
-        // `/resume` 额外提示 `Shift+Enter` 打开会话编辑模态（`⇧↵` 与 `@` 面板同符号）。
         SlashPanel::History(history) => (
             text::LX_HISTORY_PANEL_TITLE,
             history.window,
@@ -190,7 +199,11 @@ fn view<'a>(
     // 撤销面板顶边右侧固定说明恢复范围；窄面板由渲染侧裁剪。
     let right_title = matches!(panel, SlashPanel::Rewind(_)).then_some(text::LX_REWIND_SCOPE);
     let above = input.y.saturating_sub(area.y);
-    let cap = above.min(mention::MAX_POPUP_ROWS.saturating_add(mention::PANEL_BORDER_ROWS));
+    let cap = above.min(
+        mention::MAX_POPUP_ROWS
+            .saturating_add(mention::PANEL_BORDER_ROWS)
+            .saturating_add(mention::PANEL_FOOTER_ROWS),
+    );
     CommandPanelView {
         items,
         active: window.active,
@@ -206,6 +219,8 @@ fn view<'a>(
         footer: Some(footer),
         width: Some(input.width),
         placement: PanelPlacement::Above,
+        borderless: true,
+        hide_active_marker: is_placeholder(panel),
     }
 }
 
@@ -227,13 +242,7 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
 pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
     let panel = lx.slash.as_ref()?;
     // 空态占位行不可选（真无数据，或过滤后无命中）。
-    let placeholder = match panel {
-        crate::app::state::SlashPanel::Model(p) => p.stage_len() == 0 || p.is_filter_empty(),
-        crate::app::state::SlashPanel::History(h) => h.entries.is_empty() || h.is_filter_empty(),
-        crate::app::state::SlashPanel::Commands { .. } => false,
-        crate::app::state::SlashPanel::Rewind(_) => false,
-    };
-    if placeholder {
+    if is_placeholder(panel) {
         return None;
     }
     let input = super::input_rect(area, lx)?;

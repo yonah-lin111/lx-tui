@@ -85,21 +85,16 @@ fn mention_tab_at_hits_tabs() {
     editor.mention_switch_tab(1); // open refDir so it is visible
 
     let layout = mention_layout(&editor, area).expect("mention layout");
-    assert_eq!(layout.tabs.len(), 2);
+    assert_eq!(layout.tabs.len(), 4);
 
-    // Hit tab 0 (Files)
-    let tab0_x = layout.tabs[0].x;
-    assert_eq!(
-        mention_tab_at(&editor, area, tab0_x, layout.rect.y),
-        Some(0)
-    );
-
-    // Hit tab 1 (refDir)
-    let tab1_x = layout.tabs[1].x;
-    assert_eq!(
-        mention_tab_at(&editor, area, tab1_x, layout.rect.y),
-        Some(1)
-    );
+    // Hit tab 0 (Files), 1 (refDir), 2 (Skills), 3 (MCP)
+    for idx in 0..4 {
+        let tab_x = layout.tabs[idx].x;
+        assert_eq!(
+            mention_tab_at(&editor, area, tab_x, layout.rect.y),
+            Some(idx)
+        );
+    }
 
     // Outside tabs on the border row returns None
     assert_eq!(

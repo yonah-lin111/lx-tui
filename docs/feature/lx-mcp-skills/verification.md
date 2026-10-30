@@ -169,7 +169,11 @@ description: Steps to cut a release of lx-tui.
 
 - 设置页按 `User · lx`、`User · .agents (read-only)`、`Project · lx` 分组；`lx` 来源可增删改，`.agents` 只读（保存/删除禁用）；写接口只落在 lx 自有根，不存在指向 `.agents` 正文的写路由，启停仍可通过 `/api/skills/enabled` 修改。
 - `.agents` 来源 skill 默认 `enabled=false`，不进入系统提示目录与 `@` 面板；设置页手动勾选后写入 `config/skills.json` 的 `enabled`，重新扫描后加载。`lx` 来源仍按 `disabled` 列表启停。
-- `@` 面板以 `◆ name` + `Skill · description` 展示 skill（排在文件候选之前），确认后插入 `@[refer-skill](<绝对路径>)`；`/` 面板不再出现 skill。
+- `@` 面板顶栏包含 `Files` / `refDir` / `Skills` / `MCP` 四个 Tab（lx 输入框与右侧 Prompt 编辑器一致），支持 `←`/`→` 左右键循环切换与鼠标点击切换：
+  - `Files` Tab 仅展示工作区文件与目录；
+  - `Skills` Tab 以 `◆ name` + `Skill · description` 展示已启用 skill，确认后插入 `@[refer-skill](<绝对路径>) `；
+  - `MCP` Tab 以 `◆ name` + `MCP · transport` 展示已启用 MCP server，确认后插入 `@[refer-mcp](<server_name>) `；
+  - `/` 面板只展示内置命令，不再出现 skill。
 - 发送时正文以 `<skill>…</skill>` 只注入当轮；附件 kind 为 `skill`；历史只回放 `[skill <name> was loaded from <path> in this turn]`。
 - `SKILL.md` 文件名大小写不敏感：`skill.md` 也能被发现；设置页读取/保存/删除沿用实际文件名，不会额外生成第二个 `SKILL.md`。
 - 编辑 `SKILL.md` 后下一轮目录生效（mtime 签名变化，命中缓存时只做 stat）。
@@ -276,4 +280,4 @@ node --check assets/settings_skills.js
 
 - 自动化验证全部通过；`opencode.json` → `~/.lx-t-dev/config/mcp.json` 的 4 个 stdio server 已实际解析/校验通过，真实开发库副本迁移、MCP stdio 生命周期、OAuth mock、设置页 API、TUI 卡片/进度/取消均有测试或可复现命令覆盖。
 - 未自动验证：设置页与 TUI 的实际视觉、鼠标点击区域和真实第三方 OAuth 服务器行为；需按 V1/V2/V3 的“人工确认”步骤运行 `cargo run` / 浏览器复核。
-- 本分支**尚未合并**。
+- 本分支已合并入 `dev`，`.worktrees/lx-mcp-skills` 工作区、隔离开发库与 `feat/lx-mcp-skills` 分支已移除。

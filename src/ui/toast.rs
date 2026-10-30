@@ -5,6 +5,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
@@ -78,7 +79,7 @@ pub fn render(
         block = block.title(Span::styled(
             format!(
                 " {} ",
-                text::ellipsize(title, usize::from(area.width.saturating_sub(2)))
+                text::truncate_to_width(title, usize::from(area.width.saturating_sub(2)))
             ),
             title_style(toast.kind),
         ));
@@ -97,7 +98,7 @@ pub fn render(
     let width = usize::from(inner.width);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            text::ellipsize(&toast.message, width),
+            text::truncate_to_width(&toast.message, width),
             style::text(),
         )))
         .alignment(Alignment::Center),
@@ -121,14 +122,14 @@ pub(crate) fn title_style(kind: ToastKind) -> Style {
     style::toast_border(kind)
 }
 
-/// 盒尺寸：正文最长行与边框标题各自加边框与内边距取宽；高度固定三行。
+/// 盒尺寸：正文最长行与边框标题各自按显示列宽加边框与内边距取宽；高度固定三行。
 fn box_size(toast: &Toast) -> (u16, u16) {
     let text = toast
         .title
         .as_deref()
         .into_iter()
         .chain(std::iter::once(toast.message.as_str()))
-        .map(|line| line.chars().count())
+        .map(UnicodeWidthStr::width)
         .max()
         .unwrap_or_default();
     let width = u16::try_from(text.saturating_add(4)).unwrap_or(u16::MAX);

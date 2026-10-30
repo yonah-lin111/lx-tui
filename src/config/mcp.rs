@@ -257,6 +257,20 @@ impl McpServerConfig {
     pub fn tool_timeout_sec(&self) -> u64 {
         self.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT_SEC)
     }
+
+    /// 简短传输说明（供 `@` 面板 MCP Tab 次行展示）。
+    pub fn summary(&self) -> String {
+        match &self.transport {
+            McpTransportConfig::Stdio { command, args, .. } => {
+                if args.is_empty() {
+                    format!("stdio · {command}")
+                } else {
+                    format!("stdio · {command} {}", args.join(" "))
+                }
+            }
+            McpTransportConfig::Http { url, .. } => format!("http · {url}"),
+        }
+    }
 }
 
 /// server 名规则：1-32 个 `[A-Za-z0-9_-]`，且不含 `__`。

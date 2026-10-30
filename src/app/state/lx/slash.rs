@@ -85,16 +85,19 @@ pub enum SlashCommand {
     Rewind,
     /// `/compact`：把增量历史压缩成可撤销的检查点。
     Compact,
+    /// `/rename`（别名 `/title`）：重命名当前会话。
+    Rename,
 }
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 5] = [
+    pub const ALL: [SlashCommand; 6] = [
         SlashCommand::Model,
         SlashCommand::Resume,
         SlashCommand::New,
         SlashCommand::Rewind,
         SlashCommand::Compact,
+        SlashCommand::Rename,
     ];
 
     /// 命令名（不含 `/`）。
@@ -105,6 +108,7 @@ impl SlashCommand {
             Self::New => "new",
             Self::Rewind => "rewind",
             Self::Compact => "compact",
+            Self::Rename => "rename",
         }
     }
 
@@ -116,6 +120,7 @@ impl SlashCommand {
             Self::New => &["clear"],
             Self::Rewind => &["undo"],
             Self::Compact => &["summarize"],
+            Self::Rename => &["title"],
         }
     }
 
@@ -127,6 +132,7 @@ impl SlashCommand {
             Self::New => "/new",
             Self::Rewind => "/rewind",
             Self::Compact => "/compact",
+            Self::Rename => "/rename",
         }
     }
 
@@ -138,12 +144,29 @@ impl SlashCommand {
             Self::New => "Start a fresh blank session",
             Self::Rewind => "Undo the latest turn (files and conversation)",
             Self::Compact => crate::ui::text::LX_COMPACT_COMMAND_DESC,
+            Self::Rename => crate::ui::text::LX_RENAME_COMMAND_DESC,
         }
     }
 
     /// 面板右对齐来源标签（内置命令）。
     pub fn tag(self) -> &'static str {
         crate::ui::text::SLASH_TAG_BUILTIN
+    }
+
+    /// 命令采纳后回显到输入框的带空格前缀（仅带参命令返回 `Some`）。
+    pub fn echo_prefix(self) -> Option<&'static str> {
+        match self {
+            Self::Rename => Some("/rename "),
+            _ => None,
+        }
+    }
+
+    /// 输入框处于等待参数态时的灰色参数说明（如 `[name]`）。
+    pub fn argument_hint(self) -> Option<&'static str> {
+        match self {
+            Self::Rename => Some(crate::ui::text::LX_RENAME_ARG_HINT),
+            _ => None,
+        }
     }
 }
 
@@ -659,11 +682,50 @@ pub fn slash_trigger(input: &str, cursor: usize) -> Option<String> {
     // 命令面板只在行首命令位置：当前光标所在行的前缀（含换行前内容）。
     let line_start = before.rfind('\n').map_or(0, |offset| offset + 1);
     let line_prefix = &input[line_start..cursor];
-    // 行首必须是 `/`（无前导文本）。
-    if !line_prefix.starts_with('/') {
+    // 行首必须是 `/`（无前导文本），且命令词内部不含空白（输入空格即进入命令参数区，关闭候选面板）。
+    if !line_prefix.starts_with('/') || line_prefix.contains(char::is_whitespace) {
         return None;
     }
     Some(line_prefix.to_string())
+}
+
+/// 当输入框全文处于某带参命令的「已回显命令 + 尾随空格、尚无有效参数」状态时，
+/// 返回应当紧跟渲染的灰色参数说明文案（如 `"[name]"`）。
+///
+/// 兼容主名（`/rename `）与别名（`/title `）。
+pub fn active_argument_hint(input: &str) -> Option<&'static str> {
+    if input.contains('\n') || input.contains('\r') {
+        return None;
+    }
+    let trimmed = input.trim_start_matches([' ', '\t']);
+    let line = trimmed.strip_prefix('/')?;
+    let is_rename = std::iter::once(SlashCommand::Rename.name())
+        .chain(SlashCommand::Rename.aliases().iter().copied())
+        .any(|keyword| {
+            line.strip_prefix(keyword)
+                .is_some_and(|rest| rest.starts_with(' ') && rest.trim().is_empty())
+        });
+    is_rename.then(|| SlashCommand::Rename.argument_hint())?
+}
+
+/// 解析单行 `/rename`（或别名 `/title`）命令输入；
+/// 若匹配，返回命令后的参数切片（已去除首尾空白，可能为空串 `""`）。
+pub fn parse_rename_command(input: &str) -> Option<&str> {
+    let trimmed = input.trim_start_matches([' ', '\t']);
+    if trimmed.contains('\n') || trimmed.contains('\r') {
+        return None;
+    }
+    let line = trimmed.strip_prefix('/')?;
+    for keyword in std::iter::once(SlashCommand::Rename.name())
+        .chain(SlashCommand::Rename.aliases().iter().copied())
+    {
+        if let Some(rest) = line.strip_prefix(keyword)
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            return Some(rest.trim());
+        }
+    }
+    None
 }
 
 #[cfg(test)]

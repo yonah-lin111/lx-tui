@@ -83,41 +83,98 @@ fn model_panel_marks_current_model_with_marker() {
 }
 
 #[test]
-fn model_panel_without_current_model_has_no_marker() {
+fn model_panel_without_current_model_marks_active_with_default_color() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = model_panel_lx(None);
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let lines = buffer_lines(&buf, area);
-    assert!(
-        lines
-            .iter()
-            .all(|line| !line.contains(text::CURRENT_ITEM_MARKER)),
-        "无当前项时不画标记: {lines:?}"
-    );
-}
-
-#[test]
-fn model_panel_marker_cell_carries_selection_background() {
-    // 当前项与键盘高亮同一行：底色存在、标记也在，互不覆盖。
-    let area = Rect::new(0, 0, 80, 24);
-    let lx = model_panel_lx(Some(1));
-    let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
-    let mut found = false;
+    let marked: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.contains(text::CURRENT_ITEM_MARKER))
+        .collect();
+    assert_eq!(marked.len(), 1, "正在选择的项带 ❯ 标记: {lines:?}");
+    assert!(marked[0].contains("model-0"), "{:?}", marked[0]);
     for y in 0..area.height {
         for x in 0..area.width {
             if buf[(x, y)].symbol() == text::CURRENT_ITEM_MARKER {
-                // ratatui 的 Cell 用 `Color::Reset` 表示未设背景。
-                let expected = style::overlay_selection()
-                    .bg
-                    .unwrap_or(ratatui::style::Color::Reset);
-                assert_eq!(buf[(x, y)].bg, expected, "标记格带选中底色");
-                found = true;
+                assert_eq!(
+                    buf[(x, y)].fg,
+                    ratatui::style::Color::Reset,
+                    "正在选择项的 ❯ 使用默认字体颜色"
+                );
             }
         }
     }
-    assert!(found, "当前行应带 `❯` 标记");
+}
+
+#[test]
+fn model_panel_has_transparent_background_and_blue_top_rule_and_selected_model() {
+    // 无背景色、顶部单条蓝色横线；当前模型标为蓝色，光标移开时旧模型保留蓝色 ❯ + 蓝色名称，
+    // 新焦点行显示默认色 ❯ + 默认色名称。
+    let area = Rect::new(0, 0, 80, 24);
+    let mut lx = model_panel_lx(Some(0));
+    if let Some(SlashPanel::Model(picker)) = lx.slash.as_mut() {
+        picker.window.active = 1;
+        picker.window.anchor = 1;
+    }
+    let panel = slash_layout(area, &lx).expect("slash layout");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
+
+    // 顶部首行左起为蓝色 `─` 横线，无圆角边框字符。
+    assert_eq!(buf[(panel.rect.x, panel.rect.y)].symbol(), "─");
+    assert_eq!(
+        buf[(panel.rect.x, panel.rect.y)].fg,
+        ratatui::style::Color::Cyan,
+        "顶部横线为蓝色"
+    );
+    for y in panel.rect.y..panel.rect.bottom() {
+        for x in panel.rect.x..panel.rect.right() {
+            assert_ne!(
+                buf[(x, y)].bg,
+                ratatui::style::Color::Indexed(236),
+                "移除面板背景色"
+            );
+            assert_ne!(
+                buf[(x, y)].bg,
+                ratatui::style::Color::Indexed(240),
+                "移除条目选中背景色"
+            );
+        }
+    }
+    // 第 0 行是当前生效模型（current=0, active=1）：蓝色 ❯ + 蓝色名称。
+    let row0 = panel.content.y;
+    assert_eq!(
+        buf[(panel.content.x, row0)].symbol(),
+        text::CURRENT_ITEM_MARKER
+    );
+    assert_eq!(
+        buf[(panel.content.x, row0)].fg,
+        ratatui::style::Color::Cyan,
+        "已选中模型的 ❯ 为蓝色"
+    );
+    assert_eq!(
+        buf[(panel.content.x + 2, row0)].fg,
+        ratatui::style::Color::Cyan,
+        "已选中模型的名称为蓝色"
+    );
+    // 第 1 行是正在选择的模型（active=1, current=0）：默认颜色 ❯ + 默认颜色名称。
+    let row1 = panel.content.y + 1;
+    assert_eq!(
+        buf[(panel.content.x, row1)].symbol(),
+        text::CURRENT_ITEM_MARKER
+    );
+    assert_eq!(
+        buf[(panel.content.x, row1)].fg,
+        ratatui::style::Color::Reset,
+        "正在选择的项 ❯ 为默认颜色"
+    );
+    assert_eq!(
+        buf[(panel.content.x + 2, row1)].fg,
+        ratatui::style::Color::Reset,
+        "正在选择的非当前模型名称为默认颜色"
+    );
 }
 
 #[test]
@@ -234,45 +291,170 @@ fn slash_panel_scrollbar_has_no_track_border() {
 }
 
 #[test]
-fn history_panel_footer_documents_shift_enter_edit() {
-    // `/resume` 底边必须出现 `⇧↵`（与 @ 面板同符号），否则用户无从发现编辑模态；
-    // 也必须出现 `^c`，否则用户无从发现复制会话 id 的快捷键。
+fn history_panel_renders_top_rule_and_borderless_footer() {
     let area = Rect::new(0, 0, 100, 24);
     let lx = history_panel_lx();
+    let panel = slash_layout(area, &lx).expect("history layout");
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
-    let all = buffer_lines(&buf, area).join("\n");
+    let lines = buffer_lines(&buf, area);
+    let all = lines.join("\n");
     assert!(
-        all.contains(crate::ui::text::LX_HISTORY_PANEL_FOOTER),
-        "底边显示完整提示: {all}"
+        all.contains(crate::ui::text::LX_HISTORY_PANEL_TITLE),
+        "顶栏显示标题: {all}"
     );
-    assert!(all.contains("⇧↵"), "使用 ⇧↵ 符号: {all}");
-    assert!(all.contains("[copy ^c]"), "底边提示复制快捷键: {all}");
+    let footer_row = usize::from(panel.rect.bottom() - 1);
+    assert!(
+        lines[footer_row].contains(crate::ui::text::LX_HISTORY_PANEL_FOOTER),
+        "底边显示快捷键提示: {:?}",
+        lines[footer_row]
+    );
+    assert!(
+        !lines[footer_row].contains('─') && !lines[footer_row].contains('│'),
+        "底边提示行无边框: {:?}",
+        lines[footer_row]
+    );
+    assert_eq!(
+        panel.rect.height, 5,
+        "1 行顶部蓝色横线 + 2 条历史记录 + 空行与底边提示 2 行 = 5 行高"
+    );
 }
 
 #[test]
-fn history_panel_footer_symbols_match_mention_panel() {
-    // 与 @ 面板同一套符号：`⇧↵` 与 `^z` 记法，不出现 shift/ctrl 全拼。
-    let footer = crate::ui::text::LX_HISTORY_PANEL_FOOTER;
-    assert!(footer.contains(crate::ui::text::key::SHIFT));
-    assert!(footer.contains(crate::ui::text::key::ENTER));
-    assert!(!footer.contains("shift"), "不用全拼 shift: {footer}");
-    assert!(!footer.contains("ctrl"), "不用全拼 ctrl: {footer}");
-    // 与 @ 面板尾部的 3 行对比：两个面板的 `⇧↵` 写法完全一致。
-    assert!(crate::ui::text::MENTION_PANEL_FOOTER.contains("⇧↵"));
-}
-
-#[test]
-fn model_panel_footer_stays_without_edit_hint() {
-    // `/model` 没有编辑模态，底边保持通用提示（不放 `⇧↵`）。
+fn model_panel_renders_top_rule_and_borderless_footer() {
     let area = Rect::new(0, 0, 100, 24);
     let lx = model_panel_lx(Some(0));
+    let panel = slash_layout(area, &lx).expect("model layout");
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
-    let all = buffer_lines(&buf, area).join("\n");
+    let lines = buffer_lines(&buf, area);
+    let all = lines.join("\n");
     assert!(
-        all.contains(crate::ui::text::LX_SLASH_PANEL_FOOTER),
-        "{all}"
+        all.contains(crate::ui::text::LX_MODEL_PANEL_TITLE),
+        "顶栏显示 Model 标题: {all}"
     );
-    assert!(!all.contains("⇧↵"), "model 面板不放编辑提示: {all}");
+    let footer_row = usize::from(panel.rect.bottom() - 1);
+    assert!(
+        lines[footer_row].contains(crate::ui::text::LX_SLASH_PANEL_FOOTER),
+        "底边显示快捷键提示: {:?}",
+        lines[footer_row]
+    );
+    assert_eq!(
+        panel.rect.height, 6,
+        "1 行顶部蓝色横线 + 3 个模型候选 + 空行与底边提示 2 行 = 6 行高"
+    );
+}
+
+#[test]
+fn mention_panel_tabs_render_and_hit_test_in_lx() {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut lx = mention_lx(vec![MentionEntry {
+        path: "src/main.rs".into(),
+        is_directory: false,
+    }]);
+    lx.sync_referenced_folders(&[crate::app::referenced::ReferencedFolder {
+        id: 1,
+        path: std::path::PathBuf::from("/Users/yonah/projects/codex-main"),
+    }]);
+    lx.set_mention_skills(vec![crate::skills::SkillEntry {
+        name: "release-checklist".into(),
+        description: "Release steps".into(),
+        path: std::path::PathBuf::from("/skills/release-checklist/SKILL.md"),
+        scope: crate::skills::SkillScope::User,
+        source: crate::skills::SkillSource::Lx,
+        enabled: true,
+        shadowed_by: None,
+    }]);
+    lx.set_mention_mcp_servers(vec![crate::app::prompt::McpMentionEntry::new(
+        "codegraph",
+        "stdio · codegraph serve --mcp",
+    )]);
+    let panel = mention::layout(area, &lx).expect("mention layout");
+    assert_eq!(
+        panel.tabs.len(),
+        4,
+        "顶栏包含 Files / refDir / Skills / MCP 四个 Tab"
+    );
+    for idx in 0..4 {
+        assert_eq!(
+            mention_tab_at(area, &lx, panel.tabs[idx].x, panel.tabs[idx].y),
+            Some(idx)
+        );
+    }
+
+    // 切到 refDir 后渲染出引用文件夹条目，且顶边为蓝色横线、无背景色。
+    assert!(lx.mention_switch_tab(1));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let all = buffer_lines(&buf, area).join("\n");
+    assert!(all.contains("codex-main/"), "refDir 条目可见: {all}");
+    assert_eq!(
+        buf[(panel.rect.x, panel.rect.y)].fg,
+        ratatui::style::Color::Cyan,
+        "提及面板顶边为蓝色横线"
+    );
+
+    // 切到 Skills Tab 渲染 skill 条目。
+    assert!(lx.mention_switch_tab(1));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let all = buffer_lines(&buf, area).join("\n");
+    assert!(all.contains("release-checklist"), "Skills 条目可见: {all}");
+    assert!(
+        all.contains("Skill · Release steps"),
+        "Skills 描述可见: {all}"
+    );
+
+    // 切到 MCP Tab 渲染 MCP server 条目。
+    assert!(lx.mention_switch_tab(1));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let all = buffer_lines(&buf, area).join("\n");
+    assert!(all.contains("codegraph"), "MCP 条目可见: {all}");
+    assert!(
+        all.contains("MCP · stdio · codegraph serve --mcp"),
+        "MCP 描述可见: {all}"
+    );
+}
+
+#[test]
+fn rename_input_renders_muted_argument_hint_until_user_types_argument() {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut lx = Lx::new();
+    lx.input = "/rename ".into();
+    lx.cursor = lx.input.len();
+
+    let mut buf = Buffer::empty(area);
+    let cursor = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    assert!(cursor.is_some(), "聚焦时返回光标坐标");
+
+    let lines = buffer_lines(&buf, area);
+    let input_row = (0..area.height)
+        .find(|y| lines[usize::from(*y)].contains("/rename"))
+        .expect("input row");
+    assert!(
+        lines[usize::from(input_row)].contains("/rename  [name]"),
+        "输入框在 `/rename ` 后显示 `[name]` 参数说明: {:?}",
+        lines[usize::from(input_row)]
+    );
+    let bracket_x = (0..area.width)
+        .find(|x| buf[(*x, input_row)].symbol() == "[")
+        .expect("`[name]` 起始列");
+    assert_eq!(
+        buf[(bracket_x, input_row)].fg,
+        crate::ui::style::muted().fg.unwrap_or_default(),
+        "`[name]` 必须为灰色 muted 字体"
+    );
+
+    // 用户输入参数字符后，`[name]` 立即消失。
+    lx.input = "/rename demo".into();
+    lx.cursor = lx.input.len();
+    let mut buf2 = Buffer::empty(area);
+    let _ = render(area, &mut buf2, &lx, true, None, &mut PaneCache::default());
+    let lines2 = buffer_lines(&buf2, area);
+    assert!(
+        !lines2[usize::from(input_row)].contains("[name]"),
+        "输入参数后不再显示 `[name]`: {:?}",
+        lines2[usize::from(input_row)]
+    );
 }

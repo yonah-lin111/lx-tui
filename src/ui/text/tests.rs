@@ -54,9 +54,26 @@ fn user_visible_labels_are_clean_ascii() {
         CONFIRM_DELETE_PAGE_TITLE,
         RENAME_PROMPT_TITLE,
         RENAME_FOLDER_TITLE,
+        MENTION_PANEL_TITLE,
+        MENTION_TAB_FILES,
+        MENTION_TAB_REF_DIR,
+        MENTION_REF_DIR_EMPTY,
+        LX_MENTION_LOADING,
+        LX_MENTION_EMPTY,
+        LX_SLASH_PANEL_FOOTER,
+        LX_HISTORY_PANEL_FOOTER,
+        LX_REWIND_PANEL_FOOTER,
+        LX_PASTE_PANEL_FOOTER,
+        LX_REFER_PANEL_FOOTER,
+        LX_MENTION_FOOTER_FILES,
+        LX_MENTION_FOOTER_REF_DIR,
     ] {
         assert!(!label.is_empty(), "文案不得为空");
         assert!(!label.contains('\u{fffd}'), "文案禁止替换字符: {label}");
+        assert!(
+            label.chars().all(|ch| ch.width().unwrap_or(0) <= 1),
+            "TUI 文案统一为英文与单宽符号，不得含中文或宽字符: {label:?}"
+        );
     }
     assert_eq!(
         confirm_delete_page_question("Page 1"),
@@ -332,7 +349,7 @@ fn mention_panel_footer_symbols_are_single_width_and_non_pua() {
 
     for (name, symbol) in [("Shift", '⇧'), ("Return", '↵')] {
         assert!(
-            MENTION_PANEL_FOOTER.contains(symbol),
+            MENTION_FOOTER_FILES.contains(symbol),
             "底边提示缺少 {name} 符号"
         );
         assert_eq!(symbol.width(), Some(1), "{name} 符号必须严格占用 1 列宽");
@@ -346,7 +363,7 @@ fn mention_panel_footer_symbols_are_single_width_and_non_pua() {
         );
     }
     assert!(
-        MENTION_PANEL_FOOTER.contains("^z"),
+        REFERENCED_SEARCH_FOOTER.contains("^z"),
         "回退提示沿用 [clear ^c] 的 ^z 记法"
     );
 }
@@ -483,8 +500,12 @@ fn shortcut_symbols_are_single_width_non_pua_and_used_consistently() {
     for (name, hint) in [
         ("slash panel", LX_SLASH_PANEL_FOOTER),
         ("history panel", LX_HISTORY_PANEL_FOOTER),
+        ("rewind panel", LX_REWIND_PANEL_FOOTER),
+        ("paste panel", LX_PASTE_PANEL_FOOTER),
+        ("refer panel", LX_REFER_PANEL_FOOTER),
+        ("mention files", LX_MENTION_FOOTER_FILES),
+        ("mention refDir", LX_MENTION_FOOTER_REF_DIR),
         ("resume edit confirm", RESUME_EDIT_CONFIRM_HINT),
-        ("mention panel", MENTION_PANEL_FOOTER),
         ("referenced menu", REFERENCED_MENU_FOOTER),
         ("referenced search", REFERENCED_SEARCH_FOOTER),
         ("trust console", TRUST_CONSOLE_FOOTER),
@@ -496,9 +517,12 @@ fn shortcut_symbols_are_single_width_non_pua_and_used_consistently() {
                 "{name} 提示出现全拼 `{forbidden}`（应用符号）: {hint}"
             );
         }
-        // `enter` 作为按键提示时也用 `↵`；`esc` 保留全拼（规则允许）。
+        // `[功能 键]` 提示中的按键用 `↵`；`enter` 只允许作为动作名出现在 `[enter ⇧↵]` 里。
         if lower.contains("enter") {
-            panic!("{name} 提示出现全拼 `enter`（应用 ↵）: {hint}");
+            assert!(
+                hint.contains(&format!("[enter {}", key::SHIFT)),
+                "{name} 提示出现未用符号的 enter: {hint}"
+            );
         }
     }
 }
@@ -520,7 +544,7 @@ fn action_words_stay_spelled_out_while_keys_use_symbols() {
     // Ctrl 组合沿用 `^` 记法（已是全项目统一且终端圈通用）。
     assert!(BUTTON_CLEAR.contains("^c"));
     assert!(BUTTON_DELETE.contains("^d"));
-    assert!(MENTION_PANEL_FOOTER.contains("^z"));
+    assert!(REFERENCED_SEARCH_FOOTER.contains("^z"));
     // Cmd 只用一个字形，且与 web 图标不重名混淆：`⌘` 就是 `key::CMD`。
     assert_eq!(key::CMD, "⌘");
 }

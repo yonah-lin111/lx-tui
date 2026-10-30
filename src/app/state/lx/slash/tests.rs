@@ -378,3 +378,48 @@ fn model_picker_active_candidate_maps_view_index_to_real_index() {
         Some("deepseek")
     );
 }
+
+#[test]
+fn slash_trigger_closes_after_whitespace_and_argument_hint_follows_rename() {
+    assert_eq!(slash_trigger("/rename", 7), Some("/rename".to_string()));
+    assert_eq!(
+        slash_trigger("/rename ", 8),
+        None,
+        "命令后输入空格进入参数区，不再触发命令候选面板"
+    );
+    assert_eq!(
+        active_argument_hint("/rename "),
+        Some(crate::ui::text::LX_RENAME_ARG_HINT),
+        "刚回显 `/rename ` 时显示灰色 [name] 提示"
+    );
+    assert_eq!(
+        active_argument_hint("/rename   "),
+        Some(crate::ui::text::LX_RENAME_ARG_HINT),
+        "仅含空白时仍显示 [name] 提示"
+    );
+    assert_eq!(
+        active_argument_hint("/rename"),
+        None,
+        "未带空格时还在命令候选阶段，不显示参数提示"
+    );
+    assert_eq!(
+        active_argument_hint("/rename my-session"),
+        None,
+        "已输入参数字符后隐藏 [name] 提示"
+    );
+    assert_eq!(
+        active_argument_hint("/rename \nsecond"),
+        None,
+        "多行不显示参数提示"
+    );
+    assert_eq!(
+        active_argument_hint("/title "),
+        Some(crate::ui::text::LX_RENAME_ARG_HINT),
+        "别名 `/title ` 同样显示 [name] 提示"
+    );
+    assert_eq!(parse_rename_command("/rename"), Some(""));
+    assert_eq!(parse_rename_command("/rename   "), Some(""));
+    assert_eq!(parse_rename_command("/rename 询问用户"), Some("询问用户"));
+    assert_eq!(parse_rename_command("/title 新标题"), Some("新标题"));
+    assert_eq!(parse_rename_command("/renamefoo"), None);
+}

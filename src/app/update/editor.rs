@@ -453,12 +453,9 @@ pub fn select_paste(state: &mut AppState, index: usize) {
 
 /// 鼠标点击提及面板顶部 Tab：切换当前 Tab。
 pub fn switch_mention_tab(state: &mut AppState, tab: usize) {
-    let tab = if tab == 0 {
-        crate::app::prompt::MentionTab::Files
-    } else {
-        crate::app::prompt::MentionTab::RefDir
-    };
-    state.prompt.mention_set_tab(tab);
+    if let Some(tab) = crate::app::prompt::MentionTab::from_index(tab) {
+        state.prompt.mention_set_tab(tab);
+    }
 }
 
 /// 鼠标点选提及条目：确认插入。

@@ -170,13 +170,43 @@ fn skill(name: &str, path: &str) -> crate::skills::SkillEntry {
 }
 
 #[test]
-fn skill_candidates_open_from_mention_panel_and_insert_reference() {
+fn skill_and_mcp_candidates_switch_via_tabs_and_insert_references() {
     let mut lx = ready("@pd", entries());
     lx.set_mention_skills(vec![skill("pdf", "/skills/pdf/SKILL.md")]);
-    let panel = lx.mention().panel().expect("skill candidate");
-    assert_eq!(panel.items().len(), 1);
-    assert_eq!(panel.items()[0].path, "skill:pdf");
+    lx.set_mention_mcp_servers(vec![McpMentionEntry::new(
+        "codegraph",
+        "stdio · codegraph serve --mcp",
+    )]);
+    // Files Tab 纯净展示文件/目录，`@pd` 在 Files 下无匹配。
+    assert!(lx.mention().panel().is_none());
+    assert_eq!(lx.mention_tab(), MentionTab::Files);
+    assert!(lx.mention_visible());
+
+    // 按右键两次：Files -> RefDir -> Skills
+    assert!(lx.mention_switch_tab(1));
+    assert_eq!(lx.mention_tab(), MentionTab::RefDir);
+    assert!(lx.mention_switch_tab(1));
+    assert_eq!(lx.mention_tab(), MentionTab::Skills);
+    assert!(lx.mention_open());
+    assert_eq!(lx.mention().filtered_skills().len(), 1);
     assert!(lx.mention_confirm());
+    assert_eq!(lx.input, "@[refer-skill](/skills/pdf/SKILL.md) ");
+
+    // 再次输入 `@code`，按左键直接切到最后一个 Tab（MCP），选中插入 `@[refer-mcp](codegraph) `
+    for ch in "@code".chars() {
+        lx.insert_char(ch);
+    }
+    assert!(lx.mention_switch_tab(-1));
+    assert_eq!(lx.mention_tab(), MentionTab::Mcp);
+    assert!(lx.mention_open());
+    assert_eq!(lx.mention().filtered_mcp_servers().len(), 1);
+    assert!(lx.mention_confirm());
+    assert_eq!(
+        lx.input,
+        "@[refer-skill](/skills/pdf/SKILL.md) @[refer-mcp](codegraph) "
+    );
+    // 退格一次原子删除整块 `@[refer-mcp](codegraph) `
+    lx.backspace();
     assert_eq!(lx.input, "@[refer-skill](/skills/pdf/SKILL.md) ");
 }
 
@@ -374,4 +404,76 @@ fn backspace_while_panel_open_edits_query() {
     assert!(lx.mention_open());
     lx.backspace();
     assert_eq!(lx.input, "@mai", "面板打开时退格编辑查询");
+}
+
+fn dummy_ref_folders() -> Vec<crate::app::referenced::ReferencedFolder> {
+    vec![
+        crate::app::referenced::ReferencedFolder {
+            id: 1,
+            path: std::path::PathBuf::from("/Users/yonah/projects/herdr-master"),
+        },
+        crate::app::referenced::ReferencedFolder {
+            id: 2,
+            path: std::path::PathBuf::from("/Users/yonah/projects/lx-agent"),
+        },
+    ]
+}
+
+#[test]
+fn mention_tab_switches_and_confirms_ref_dir() {
+    let mut lx = ready("@agent", entries());
+    lx.sync_referenced_folders(&dummy_ref_folders());
+    // `@agent` 在 Files 下无匹配，但面板仍处于可见态（Empty），允许切到 refDir。
+    assert_eq!(
+        lx.mention().view(&lx.input, lx.cursor),
+        LxMentionView::Empty
+    );
+    assert!(lx.mention_visible());
+    assert_eq!(lx.mention_tab(), MentionTab::Files);
+
+    // 切到 refDir
+    assert!(lx.mention_switch_tab(1));
+    assert_eq!(lx.mention_tab(), MentionTab::RefDir);
+    assert!(lx.mention_open(), "refDir 下有匹配项，面板可交互");
+    assert_eq!(lx.mention().filtered_ref_folders().len(), 1);
+    assert!(
+        !lx.mention_enter_folder(),
+        "refDir 下 Shift+Enter 不进入目录"
+    );
+
+    // 确认插入 @[refer-folder](...)
+    assert!(lx.mention_confirm());
+    assert_eq!(lx.input, "@[refer-folder](/Users/yonah/projects/lx-agent) ");
+    assert!(!lx.mention_visible(), "确认后关闭面板");
+    assert_eq!(
+        lx.mention_tab(),
+        MentionTab::Files,
+        "会话结束后复位回 Files"
+    );
+}
+
+#[test]
+fn mention_ref_dir_navigation_and_scroll_viewport() {
+    let mut lx = ready("@", entries());
+    lx.sync_referenced_folders(&dummy_ref_folders());
+    assert!(lx.mention_switch_tab(1));
+    assert_eq!(lx.mention_tab(), MentionTab::RefDir);
+    assert_eq!(lx.mention().ref_active(), 0);
+
+    assert!(lx.mention_move(1));
+    assert_eq!(lx.mention().ref_active(), 1);
+    assert!(lx.mention_move(1));
+    assert_eq!(lx.mention().ref_active(), 0, "循环回到首项");
+
+    assert!(lx.mention_scroll(1, 0));
+    assert_eq!(lx.mention().ref_viewport(), Some(1));
+    assert_eq!(lx.mention().ref_active(), 0, "滚轮不改高亮");
+
+    // 修改查询词时重置 ref_viewport，且当结果缩减到 1 项时将高亮钳制到末项。
+    lx.mention_set_active(1);
+    for ch in "agent".chars() {
+        lx.insert_char(ch);
+    }
+    assert_eq!(lx.mention().ref_viewport(), None, "查询词变化重置滚轮视口");
+    assert_eq!(lx.mention().ref_active(), 0, "越界高亮钳制到末项");
 }

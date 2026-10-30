@@ -1,4 +1,4 @@
-//! lx 输入框 `@` 文件提及面板状态：有效根、扫描缓存、异步代号、过滤面板与压制。
+//! lx 输入框 `@` 提及面板状态：有效根、扫描缓存、异步代号、过滤面板、四 Tab（Files/refDir/Skills/MCP）与压制。
 //!
 //! 纯状态：不扫描文件、不发任务、不读进程；有效根由事件层从 `pane.cwd` 或工作区 cwd
 //! 计算后传入。候选始终相对本次扫描根，根变化即作废旧候选与在途结果。
@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::app::markdown::{
     self, MentionEntry, MentionPanel, filter_mentions, mention_insertion, mention_trigger,
 };
+pub use crate::app::prompt::{McpMentionEntry, MentionTab};
 
 /// 提及面板可用视图：无触发/无根、扫描中、无匹配或候选列表。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,7 +24,7 @@ pub enum LxMentionView {
     Items,
 }
 
-/// lx 提及面板状态：扫描根、缓存、在途代号、过滤面板与压制标记。
+/// lx 提及面板状态：扫描根、缓存、在途代号、过滤面板、Tab 与压制标记。
 #[derive(Debug, Default)]
 pub struct LxMention {
     /// 当前有效扫描根（`pane.cwd` 优先，回退工作区 cwd）；None 表示无可扫描根。
@@ -32,6 +33,8 @@ pub struct LxMention {
     cache: Option<Vec<MentionEntry>>,
     /// 当前可用 skill；由事件层在 skill 目录扫描完成后写入。
     skills: Vec<crate::skills::SkillEntry>,
+    /// 当前可用 MCP server；由事件层在 MCP 配置初始化/刷新后写入。
+    mcp_servers: Vec<McpMentionEntry>,
     /// 扫描代号：根变化或新一轮扫描递增，用于丢弃过期回执。
     generation: u64,
     /// 扫描是否在途。
@@ -40,6 +43,18 @@ pub struct LxMention {
     panel: Option<MentionPanel>,
     /// Esc/确认后压制自动重开，直到下一次编辑或根变化。
     suppressed: bool,
+    /// 当前活跃 Tab：Files / refDir / Skills / MCP。
+    tab: MentionTab,
+    /// 引用文件夹列表快照（由上层同步注入）。
+    referenced_folders: Vec<crate::app::referenced::ReferencedFolder>,
+    /// 非 Files Tab（refDir / Skills / MCP）列表的高亮索引。
+    ref_active: usize,
+    /// 非 Files Tab 列表的窗口锚点索引。
+    ref_anchor: usize,
+    /// 非 Files Tab 显式视口起点。
+    ref_viewport: Option<usize>,
+    /// 当前触发区间与查询词。
+    trigger: Option<markdown::MentionTrigger>,
 }
 
 impl LxMention {
@@ -48,9 +63,161 @@ impl LxMention {
         self.panel.as_ref()
     }
 
-    /// 候选面板是否可见（有可采纳条目）。
+    /// 当前活跃 Tab。
+    pub fn tab(&self) -> MentionTab {
+        self.tab
+    }
+
+    /// 非 Files Tab 的高亮索引。
+    pub fn ref_active(&self) -> usize {
+        self.ref_active
+    }
+
+    /// 非 Files Tab 的窗口锚点。
+    pub fn ref_anchor(&self) -> usize {
+        self.ref_anchor
+    }
+
+    /// 非 Files Tab 的显式视口。
+    pub fn ref_viewport(&self) -> Option<usize> {
+        self.ref_viewport
+    }
+
+    /// 同步引用文件夹快照；内容变化时重算面板并返回 true。
+    pub fn sync_referenced_folders(
+        &mut self,
+        folders: &[crate::app::referenced::ReferencedFolder],
+        text: &str,
+        cursor: usize,
+    ) -> bool {
+        if self.referenced_folders == folders {
+            return false;
+        }
+        self.referenced_folders = folders.to_vec();
+        self.refresh(text, cursor);
+        true
+    }
+
+    /// 获取基于当前触发词过滤后的引用文件夹列表。
+    pub fn filtered_ref_folders(&self) -> Vec<&crate::app::referenced::ReferencedFolder> {
+        let query = self
+            .trigger
+            .as_ref()
+            .map(|t| t.query.as_str())
+            .unwrap_or("");
+        if query.is_empty() {
+            return self.referenced_folders.iter().collect();
+        }
+        let query_lower = query.to_lowercase();
+        self.referenced_folders
+            .iter()
+            .filter(|folder| {
+                folder.display_name().to_lowercase().contains(&query_lower)
+                    || folder
+                        .path
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .contains(&query_lower)
+            })
+            .collect()
+    }
+
+    /// 获取基于当前触发词过滤后的已启用 skill 列表。
+    pub fn filtered_skills(&self) -> Vec<&crate::skills::SkillEntry> {
+        let query = self
+            .trigger
+            .as_ref()
+            .map(|t| t.query.as_str())
+            .unwrap_or("");
+        let query_lower = query.to_lowercase();
+        self.skills
+            .iter()
+            .filter(|skill| skill.enabled && skill.shadowed_by.is_none())
+            .filter(|skill| {
+                query_lower.is_empty()
+                    || skill.name.to_lowercase().contains(&query_lower)
+                    || skill.description.to_lowercase().contains(&query_lower)
+            })
+            .collect()
+    }
+
+    /// 获取基于当前触发词过滤后的 MCP server 列表。
+    pub fn filtered_mcp_servers(&self) -> Vec<&McpMentionEntry> {
+        let query = self
+            .trigger
+            .as_ref()
+            .map(|t| t.query.as_str())
+            .unwrap_or("");
+        let query_lower = query.to_lowercase();
+        self.mcp_servers
+            .iter()
+            .filter(|server| {
+                query_lower.is_empty()
+                    || server.name.to_lowercase().contains(&query_lower)
+                    || server.detail.to_lowercase().contains(&query_lower)
+            })
+            .collect()
+    }
+
+    fn secondary_count(&self) -> usize {
+        match self.tab {
+            MentionTab::Files => 0,
+            MentionTab::RefDir => self.filtered_ref_folders().len(),
+            MentionTab::Skills => self.filtered_skills().len(),
+            MentionTab::Mcp => self.filtered_mcp_servers().len(),
+        }
+    }
+
+    /// 切换 Tab：循环左右切换；未处于可见状态返回 false。
+    pub fn switch_tab(&mut self, delta: isize, text: &str, cursor: usize) -> bool {
+        if self.view(text, cursor) == LxMentionView::Hidden {
+            return false;
+        }
+        let next = if delta > 0 {
+            self.tab.next()
+        } else {
+            self.tab.prev()
+        };
+        if next == self.tab {
+            return false;
+        }
+        self.tab = next;
+        self.ref_active = 0;
+        self.ref_anchor = 0;
+        self.ref_viewport = None;
+        true
+    }
+
+    /// 直接设置活跃 Tab。
+    pub fn set_tab(&mut self, tab: MentionTab, text: &str, cursor: usize) -> bool {
+        if self.view(text, cursor) == LxMentionView::Hidden || self.tab == tab {
+            return false;
+        }
+        self.tab = tab;
+        self.ref_active = 0;
+        self.ref_anchor = 0;
+        self.ref_viewport = None;
+        true
+    }
+
+    /// 会话结束：状态复位。
+    fn reset_session(&mut self) {
+        self.panel = None;
+        self.trigger = None;
+        self.tab = MentionTab::Files;
+        self.ref_active = 0;
+        self.ref_anchor = 0;
+        self.ref_viewport = None;
+    }
+
+    /// 候选面板是否可见（当前活跃 Tab 有可采纳条目）。
     pub fn is_open(&self) -> bool {
-        self.panel.is_some()
+        match self.tab {
+            MentionTab::Files => self.panel.is_some(),
+            MentionTab::RefDir | MentionTab::Skills | MentionTab::Mcp => {
+                self.trigger.is_some() && !self.suppressed && self.secondary_count() > 0
+            }
+        }
     }
 
     /// 扫描条目缓存（若已有）；无缓存返回空切片。
@@ -65,19 +232,34 @@ impl LxMention {
 
     /// 面板视图种类；`text`/`cursor` 为当前输入缓冲与光标。
     pub fn view(&self, text: &str, cursor: usize) -> LxMentionView {
-        if self.panel.is_some() {
-            return LxMentionView::Items;
-        }
-        if self.suppressed || self.root.is_none() {
+        if self.suppressed || mention_trigger(text, cursor).is_none() {
             return LxMentionView::Hidden;
         }
-        if mention_trigger(text, cursor).is_none() {
+        if self.root.is_none()
+            && self.referenced_folders.is_empty()
+            && self.skills.is_empty()
+            && self.mcp_servers.is_empty()
+            && self.tab == MentionTab::Files
+        {
             return LxMentionView::Hidden;
         }
-        if self.cache.is_some() {
-            LxMentionView::Empty
-        } else {
-            LxMentionView::Loading
+        match self.tab {
+            MentionTab::Files => {
+                if self.panel.is_some() {
+                    LxMentionView::Items
+                } else if self.cache.is_some() || self.root.is_none() {
+                    LxMentionView::Empty
+                } else {
+                    LxMentionView::Loading
+                }
+            }
+            MentionTab::RefDir | MentionTab::Skills | MentionTab::Mcp => {
+                if self.secondary_count() == 0 {
+                    LxMentionView::Empty
+                } else {
+                    LxMentionView::Items
+                }
+            }
         }
     }
 
@@ -129,18 +311,39 @@ impl LxMention {
     /// 按当前文本、光标与缓存重算面板；压制时保持关闭。
     pub fn refresh(&mut self, text: &str, cursor: usize) {
         if self.suppressed {
-            self.panel = None;
+            self.reset_session();
             return;
         }
         let Some(trigger) = mention_trigger(text, cursor) else {
+            self.reset_session();
+            return;
+        };
+        if self.trigger.as_ref().map(|t| t.from) != Some(trigger.from) {
+            self.tab = MentionTab::Files;
+            self.ref_active = 0;
+            self.ref_anchor = 0;
+            self.ref_viewport = None;
+        } else if self.trigger.as_ref().map(|t| t.query.as_str()) != Some(trigger.query.as_str()) {
+            self.ref_viewport = None;
+        }
+        self.trigger = Some(trigger.clone());
+        let filtered_count = self.secondary_count();
+        if filtered_count == 0 {
+            self.ref_active = 0;
+            self.ref_anchor = 0;
+            self.ref_viewport = None;
+        } else if self.ref_active >= filtered_count {
+            self.ref_active = filtered_count - 1;
+            self.ref_anchor = self.ref_active;
+        }
+        if self.ref_viewport.is_some_and(|vp| vp >= filtered_count) {
+            self.ref_viewport = None;
+        }
+        let Some(cache) = self.cache.as_ref() else {
             self.panel = None;
             return;
         };
-        let mut items = self.skill_mentions(&trigger.query);
-        if let Some(cache) = self.cache.as_ref() {
-            items.extend(filter_mentions(cache, &trigger.query));
-        }
-        items.truncate(markdown::MENTION_LIMIT);
+        let items = filter_mentions(cache, &trigger.query);
         if items.is_empty() {
             self.panel = None;
             return;
@@ -159,6 +362,17 @@ impl LxMention {
 
     /// 键盘或悬停移动高亮；面板未打开返回 false。
     pub fn move_active(&mut self, delta: isize) -> bool {
+        if self.tab != MentionTab::Files {
+            let count = self.secondary_count();
+            if count == 0 {
+                return false;
+            }
+            let next = (self.ref_active as isize + delta).rem_euclid(count as isize) as usize;
+            self.ref_active = next;
+            self.ref_anchor = next;
+            self.ref_viewport = None;
+            return true;
+        }
         match self.panel.as_mut() {
             Some(panel) => {
                 panel.move_active(delta);
@@ -170,6 +384,14 @@ impl LxMention {
 
     /// 直接设置高亮索引；面板未打开、越界或未变化返回 false。
     pub fn set_active(&mut self, index: usize) -> bool {
+        if self.tab != MentionTab::Files {
+            let count = self.secondary_count();
+            if index >= count || self.ref_active == index {
+                return false;
+            }
+            self.ref_active = index;
+            return true;
+        }
         let Some(panel) = self.panel.as_mut() else {
             return false;
         };
@@ -182,6 +404,20 @@ impl LxMention {
 
     /// 滚轮滚动可见窗口：`base` 为当前窗口起点，高亮不动；返回是否移动。
     pub fn scroll_viewport(&mut self, delta: isize, base: usize) -> bool {
+        if self.tab != MentionTab::Files {
+            let count = self.secondary_count();
+            if count == 0 {
+                return false;
+            }
+            let current = self.ref_viewport.unwrap_or(base);
+            let next = (current as isize + delta).max(0) as usize;
+            let clamped = next.min(count.saturating_sub(1));
+            if self.ref_viewport == Some(clamped) {
+                return false;
+            }
+            self.ref_viewport = Some(clamped);
+            return true;
+        }
         match self.panel.as_mut() {
             Some(panel) => panel.scroll_viewport(delta, base),
             None => false,
@@ -190,6 +426,44 @@ impl LxMention {
 
     /// 确认高亮条目：关闭面板、进入压制，返回替换区间与插入文本；无面板或越界返回 None。
     pub fn confirm(&mut self, text_len: usize) -> Option<(Range<usize>, String)> {
+        if self.tab != MentionTab::Files {
+            let trigger = self.trigger.as_ref()?;
+            if trigger.from > trigger.to || trigger.to > text_len {
+                return None;
+            }
+            let range = trigger.from..trigger.to;
+            let ref_text = match self.tab {
+                MentionTab::RefDir => {
+                    let folder = *self.filtered_ref_folders().get(self.ref_active)?;
+                    crate::app::markdown::format_reference(
+                        crate::app::markdown::ReferKind::Folder,
+                        &folder.path,
+                    )
+                    .unwrap_or_else(|| format!("@[refer-folder]({})", folder.path.display()))
+                }
+                MentionTab::Skills => {
+                    let skill = *self.filtered_skills().get(self.ref_active)?;
+                    crate::app::markdown::format_reference(
+                        crate::app::markdown::ReferKind::Skill,
+                        &skill.path,
+                    )
+                    .unwrap_or_else(|| format!("@[refer-skill]({})", skill.path.display()))
+                }
+                MentionTab::Mcp => {
+                    let server = *self.filtered_mcp_servers().get(self.ref_active)?;
+                    crate::app::markdown::format_reference(
+                        crate::app::markdown::ReferKind::Mcp,
+                        Path::new(&server.name),
+                    )
+                    .unwrap_or_else(|| format!("@[refer-mcp]({})", server.name))
+                }
+                MentionTab::Files => unreachable!(),
+            };
+            let insertion = format!("{ref_text} ");
+            self.reset_session();
+            self.suppressed = true;
+            return Some((range, insertion));
+        }
         let panel = self.panel.as_ref()?;
         let trigger = panel.trigger();
         if trigger.from > trigger.to || trigger.to > text_len {
@@ -197,19 +471,8 @@ impl LxMention {
         }
         let entry = panel.items().get(panel.active())?.clone();
         let range = trigger.from..trigger.to;
-        let insertion = if let Some(name) = markdown::skill_mention_name(&entry.path) {
-            self.skills
-                .iter()
-                .find(|skill| skill.name == name)
-                .and_then(|skill| {
-                    markdown::format_reference(markdown::ReferKind::Skill, &skill.path)
-                })
-                .map(|reference| format!("{reference} "))
-                .unwrap_or_else(|| mention_insertion(&entry))
-        } else {
-            mention_insertion(&entry)
-        };
-        self.panel = None;
+        let insertion = mention_insertion(&entry);
+        self.reset_session();
         self.suppressed = true;
         Some((range, insertion))
     }
@@ -218,6 +481,9 @@ impl LxMention {
     ///
     /// 高亮非目录、目录无缓存后代或区间越界时返回 None。
     pub fn enter_folder(&self, text_len: usize) -> Option<(Range<usize>, String)> {
+        if self.tab != MentionTab::Files {
+            return None;
+        }
         let panel = self.panel.as_ref()?;
         let entry = panel.items().get(panel.active())?;
         if !entry.is_directory || !self.has_children(&entry.path) {
@@ -240,14 +506,21 @@ impl LxMention {
 
     /// 关闭面板且不改文本、进入压制；面板未打开返回 false。
     pub fn escape(&mut self) -> bool {
-        let open = self.panel.is_some();
+        let open = self.panel.is_some()
+            || (self.trigger.is_some()
+                && !self.suppressed
+                && (self.root.is_some()
+                    || !self.referenced_folders.is_empty()
+                    || !self.skills.is_empty()
+                    || !self.mcp_servers.is_empty()
+                    || self.tab != MentionTab::Files));
         self.suppress();
         open
     }
 
     /// 关闭面板并压制自动重开（粘贴等场景）；保留缓存与在途标记以便后续复用。
     pub fn suppress(&mut self) {
-        self.panel = None;
+        self.reset_session();
         self.suppressed = true;
     }
 
@@ -274,15 +547,15 @@ impl LxMention {
         self.refresh(text, cursor);
     }
 
-    /// `@` 面板的 skill 候选：启用且未被同名项目 skill 覆盖的条目。
-    fn skill_mentions(&self, query: &str) -> Vec<MentionEntry> {
-        let entries: Vec<MentionEntry> = self
-            .skills
-            .iter()
-            .filter(|skill| skill.enabled && skill.shadowed_by.is_none())
-            .map(|skill| markdown::skill_mention_entry(&skill.name))
-            .collect();
-        filter_mentions(&entries, query)
+    /// 当前可用 MCP server 快照；分割窗格时复制给新窗格。
+    pub fn mcp_servers(&self) -> &[McpMentionEntry] {
+        &self.mcp_servers
+    }
+
+    /// 写入当前可用 MCP server；有打开的 `@` 面板时立即重算候选。
+    pub fn set_mcp_servers(&mut self, servers: Vec<McpMentionEntry>, text: &str, cursor: usize) {
+        self.mcp_servers = servers;
+        self.refresh(text, cursor);
     }
 }
 

@@ -23,7 +23,9 @@ mod refer;
 mod selection;
 
 pub(crate) use ask::{ask_editor_cell_at, rect as ask_rect};
-pub(crate) use mention::{item_at as mention_item_at, layout as mention_layout};
+pub(crate) use mention::{
+    item_at as mention_item_at, layout as mention_layout, tab_at as mention_tab_at,
+};
 pub(crate) use refer::{item_at as refer_item_at, layout as refer_layout};
 pub use selection::copy_text;
 pub(crate) use selection::{content_geom, unit_cell_range};
@@ -278,20 +280,23 @@ pub(crate) fn input_scrollbar(area: Rect, lx: &Lx) -> Option<scrollbar::Scrollba
     )
 }
 
-/// 绘制路径粘贴参照面板：锚定输入框上沿、复用命令面板渲染（只读状态）。
-fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
-    let Some(panel) = lx.paste_panel() else {
-        return;
-    };
-    let Some(input) = layout(area, lx).input else {
-        return;
-    };
+/// `lx` 路径粘贴面板渲染数据。
+struct PastePanelData {
+    area: Rect,
+    rows: Vec<(String, String)>,
+    active: usize,
+}
+
+/// 构造粘贴面板的条目列表与可用区域；面板未打开或空间不足返回 None。
+fn paste_panel_rows(area: Rect, lx: &Lx) -> Option<PastePanelData> {
+    let panel = lx.paste_panel()?;
+    let input = layout(area, lx).input?;
     let margin: u16 = if area.width >= 24 { MARGIN } else { 0 };
     let content_x = area.x + margin;
     let content_w = area.width.saturating_sub(margin.saturating_mul(2));
     let region_h = input.y.saturating_sub(area.y);
-    if region_h < 3 {
-        return;
+    if region_h < 2 {
+        return None;
     }
     let count = text::paste_item_count(panel.candidates.len());
     let rows: Vec<(String, String)> = PasteAction::ALL
@@ -308,7 +313,43 @@ fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
             PasteAction::Path => (text::PASTE_ACTION_PATH.to_string(), count.clone()),
         })
         .collect();
-    let items: Vec<CommandItem<'_>> = rows
+    let panel_area = Rect::new(content_x, area.y, content_w, region_h);
+    Some(PastePanelData {
+        area: panel_area,
+        rows,
+        active: panel.active(),
+    })
+}
+
+/// 组装粘贴面板视图。
+fn paste_view<'a>(
+    items: &'a [CommandItem<'a>],
+    active: usize,
+    panel_area: Rect,
+) -> CommandPanelView<'a> {
+    CommandPanelView {
+        items,
+        active,
+        current: None,
+        window_anchor: Some(active),
+        window_start: None,
+        anchor_row: panel_area.height,
+        max_height: None,
+        title: Some(text::PASTE_PANEL_TITLE),
+        right_title: None,
+        footer: Some(text::LX_PASTE_PANEL_FOOTER),
+        width: Some(panel_area.width),
+        placement: command_panel::PanelPlacement::Above,
+        borderless: true,
+        ..Default::default()
+    }
+}
+
+/// `lx` 路径粘贴面板布局；面板未打开或空间不足返回 None。
+pub(crate) fn paste_layout(area: Rect, lx: &Lx) -> Option<command_panel::PanelLayout> {
+    let data = paste_panel_rows(area, lx)?;
+    let items: Vec<CommandItem<'_>> = data
+        .rows
         .iter()
         .map(|(label, preview)| CommandItem::Inline {
             label,
@@ -316,21 +357,52 @@ fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
             tag: "",
         })
         .collect();
-    let view = CommandPanelView {
-        items: &items,
-        active: panel.active(),
-        current: None,
-        window_anchor: Some(panel.active()),
-        window_start: None,
-        anchor_row: region_h,
-        max_height: None,
-        title: Some(text::PASTE_PANEL_TITLE),
-        right_title: None,
-        footer: None,
-        ..Default::default()
+    command_panel::layout(data.area, &paste_view(&items, data.active, data.area))
+}
+
+/// `lx` 路径粘贴面板条目命中：返回被点中的操作索引；未打开或未命中返回 None。
+pub(crate) fn paste_item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
+    let data = paste_panel_rows(area, lx)?;
+    let items: Vec<CommandItem<'_>> = data
+        .rows
+        .iter()
+        .map(|(label, preview)| CommandItem::Inline {
+            label,
+            preview,
+            tag: "",
+        })
+        .collect();
+    let layout = command_panel::layout(data.area, &paste_view(&items, data.active, data.area))?;
+    command_panel::item_at(&layout, &items, column, row)
+}
+
+/// 坐标是否落在任意已打开的 `lx` 输入框命令面板（粘贴 / `@` 提及 / 快捷引用 / `/` 斜杠）矩形内。
+///
+/// 浮层打开期间，落在面板顶栏横线、空状态占位行或滚动条列上的点击必须由浮层拦截吞掉，
+/// 严禁穿透到底层欢迎页入口、历史卡片或文本选区。
+pub(crate) fn command_panel_contains(area: Rect, lx: &Lx, column: u16, row: u16) -> bool {
+    let pos = (column, row).into();
+    paste_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
+        || mention_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
+        || refer_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
+        || slash_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
+}
+
+/// 绘制路径粘贴参照面板：锚定输入框上沿、复用命令面板渲染（只读状态）。
+fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
+    let Some(data) = paste_panel_rows(area, lx) else {
+        return;
     };
-    let panel_area = Rect::new(content_x, area.y, content_w, region_h);
-    command_panel::render(panel_area, buf, &view);
+    let items: Vec<CommandItem<'_>> = data
+        .rows
+        .iter()
+        .map(|(label, preview)| CommandItem::Inline {
+            label,
+            preview,
+            tag: "",
+        })
+        .collect();
+    command_panel::render(data.area, buf, &paste_view(&items, data.active, data.area));
 }
 
 /// 命中测试：坐标落在某个入口标签内则返回该入口。

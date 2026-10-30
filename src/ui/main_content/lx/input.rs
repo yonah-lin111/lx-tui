@@ -131,6 +131,26 @@ pub(super) fn draw(
             usize::from(content_w),
         );
         grid.put(content_x, text_top, &placeholder, style::muted());
+    } else if !shell
+        && scroll == 0
+        && rows.len() == 1
+        && let Some(hint) = crate::app::state::lx::slash::active_argument_hint(&lx.input)
+    {
+        // 在命令词（如 `/rename`）与 `[name]` 之间保持至少 2 列间距（1 列尾随空格 + 1 列光标/间隔）。
+        let cmd_width = display_width(lx.input.trim());
+        let min_offset = cmd_width.saturating_add(2);
+        let offset = display_width(&lx.input).max(min_offset);
+        let offset_u16 = u16::try_from(offset).unwrap_or(u16::MAX);
+        if offset_u16 < content_w {
+            let avail = usize::from(content_w - offset_u16);
+            let placeholder = text::truncate_to_width(hint, avail);
+            grid.put(
+                content_x.saturating_add(offset_u16),
+                text_top,
+                &placeholder,
+                style::muted(),
+            );
+        }
     }
     cursor
 }

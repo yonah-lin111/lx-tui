@@ -193,6 +193,9 @@ pub fn prepare_user_message(
                     height: None,
                 });
             }
+            ReferKind::Mcp => {
+                // MCP 引用为编辑器纯文本语法糖（已记入 claimed_ranges），随正文原样发送。
+            }
             ReferKind::Image => {
                 let resolved = resolve_reference_path(workspace_root, &reference.path);
                 let processed = load_and_process_image_file(&resolved)?;

@@ -82,6 +82,10 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
     if user_shell::try_submit_user_shell(state, pane) {
         return true;
     }
+    // `/rename` 是纯元数据更新，同样早于入口/模型/busy 检查。
+    if session::try_submit_rename_command(state, pane) {
+        return true;
+    }
     // 仅本地命令在跑：普通聊天冻结入队，等结果落库后再发送。
     if user_shell::queue_chat_while_shell_runs(state, pane) {
         return true;

@@ -25,7 +25,7 @@ mod viewport;
 mod block_focus;
 
 pub use fold::FoldedBlock;
-pub use mention::MentionTab;
+pub use mention::{McpMentionEntry, MentionTab};
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -555,6 +555,28 @@ impl Prompt {
         folders: &[crate::app::referenced::ReferencedFolder],
     ) {
         self.mention.sync_referenced_folders(folders);
+    }
+
+    /// 同步 `@` 面板的 skill 列表快照。
+    pub fn set_mention_skills(&mut self, skills: Vec<crate::skills::SkillEntry>) {
+        self.mention.set_skills(skills);
+        self.mention.refresh(&self.text, self.cursor);
+    }
+
+    /// 同步 `@` 面板的 MCP server 列表快照。
+    pub fn set_mention_mcp_servers(&mut self, servers: Vec<McpMentionEntry>) {
+        self.mention.set_mcp_servers(servers);
+        self.mention.refresh(&self.text, self.cursor);
+    }
+
+    /// 获取过滤后的已启用 skill 列表。
+    pub fn mention_filtered_skills(&self) -> Vec<&crate::skills::SkillEntry> {
+        self.mention.filtered_skills()
+    }
+
+    /// 获取过滤后的 MCP server 列表。
+    pub fn mention_filtered_mcp_servers(&self) -> Vec<&McpMentionEntry> {
+        self.mention.filtered_mcp_servers()
     }
 
     /// refDir 高亮索引。
