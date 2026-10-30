@@ -135,11 +135,11 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
         || view.tabs.is_some_and(|tabs| !tabs.is_empty());
     let has_footer = view.footer.is_some();
     // 无边框面板：顶部「1 行空行间隔 + 1 行分割线」+ 底部「1 行空行间隔 + 1 行快捷键提示」；
-    // 有边框面板：有标题时顶部占 2 行（`┌──┐` + `│ Title │`），有底栏时底部占 3 行（`├──┤` + `│ footer │` + `└──┘`）。
+    // 有边框面板：有标题时顶部占 3 行（`┌──┐` + `│ Title ─── │` + `├──┤`），有底栏时底部占 3 行（`├──┤` + `│ footer │` + `└──┘`）。
     let top_rows: u16 = if view.borderless {
         TOP_BLOCK_ROWS
     } else if has_header {
-        2
+        3
     } else {
         1
     };
@@ -374,6 +374,7 @@ fn render_bordered_header(
         rule_to,
         style::muted(),
     );
+    crate::ui::widgets::modal::paint_divider(buf, rect, rect.y.saturating_add(2), style::muted());
 }
 
 /// 绘制有边框命令面板的底栏（上方 `├───┤` 分割线 + `│ footer │`）。

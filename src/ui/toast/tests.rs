@@ -66,7 +66,7 @@ fn anchored_toast_centers_below_container_top_border() {
 }
 
 #[test]
-fn titled_toast_keeps_four_rows_and_fits_title() {
+fn titled_toast_keeps_five_rows_and_fits_title() {
     let mut state = AppState::demo();
     update::show_toast(
         &mut state,
@@ -83,7 +83,7 @@ fn titled_toast_keeps_four_rows_and_fits_title() {
         &Config::default(),
     )
     .expect("toast area is resolvable");
-    assert_eq!(rect.height, 4);
+    assert_eq!(rect.height, 5);
     assert_eq!(
         usize::from(rect.width),
         text::TOAST_COPIED.chars().count() + 4
@@ -119,8 +119,8 @@ fn titled_toast_keeps_side_borders_on_the_title_row() {
     assert_eq!(buffer[(area.right() - 1, area.y + 1)].symbol(), "│");
     assert_eq!(
         buffer[(area.x, area.y + 2)].symbol(),
-        "│",
-        "标题行下方仍是竖边框，不画 ├──┤ 分割线"
+        "├",
+        "标题行下方是 ├──┤ 分割线"
     );
     assert_eq!(
         buffer[(area.x, area.y + 2)].bg,

@@ -575,7 +575,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let panel_base = out.chat_bar.map_or(input.y, |bar| bar.y);
     if let Some(panel) = lx.panel.as_ref() {
         let rows = panel.items().len();
-        let panel_h = u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(5);
+        let panel_h = u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(6);
         let panel_w = panel_width(panel, content_w);
         if panel_base >= area.y + panel_h + SECTION_GAP {
             out.panel = Some(Rect::new(content_x, panel_base - panel_h, panel_w, panel_h));
@@ -960,8 +960,15 @@ fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
     for x in rule_from..rule_to {
         grid.set(x, rect.y + 1, '─', style::muted());
     }
+    // 标题行下方的分割线（`├───┤`）。
+    let header_divider = rect.y + 2;
+    grid.set(rect.x, header_divider, '├', style::muted());
+    grid.set(rect.right() - 1, header_divider, '┤', style::muted());
+    for x in rect.x + 1..rect.right() - 1 {
+        grid.set(x, header_divider, '─', style::muted());
+    }
     for (index, id) in panel.items().iter().enumerate() {
-        let y = rect.y + 2 + index as u16;
+        let y = rect.y + 3 + index as u16;
         let (label, preview) = text::block_command_text(*id);
         let active = index == panel.active();
         let label_style = if active {

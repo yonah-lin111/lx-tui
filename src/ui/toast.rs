@@ -74,7 +74,7 @@ pub fn render(
     let border = border_style(toast.kind);
     let block = Block::bordered().border_style(border);
     frame.render_widget(block, area);
-    let has_title = toast.title.is_some() && area.height >= 4;
+    let has_title = toast.title.is_some() && area.height >= 5;
     if let Some(title) = toast.title.as_deref()
         && has_title
     {
@@ -100,6 +100,7 @@ pub fn render(
             to,
             border,
         );
+        crate::ui::widgets::modal::paint_divider(frame.buffer_mut(), area, area.y + 2, border);
     }
     if let Some(rect) = close_button_rect_for(area, has_title) {
         frame.render_widget(
@@ -107,7 +108,7 @@ pub fn render(
             rect,
         );
     }
-    let body_y = if has_title { area.y + 2 } else { area.y + 1 };
+    let body_y = if has_title { area.y + 3 } else { area.y + 1 };
     let inner = Rect::new(
         area.x + 1,
         body_y,
@@ -167,7 +168,7 @@ fn box_size(toast: &Toast) -> (u16, u16) {
         .unwrap_or_default();
     let text = msg_w.max(title_w);
     let width = u16::try_from(text.saturating_add(4)).unwrap_or(u16::MAX);
-    let height = if toast.title.is_some() { 4 } else { 3 };
+    let height = if toast.title.is_some() { 5 } else { 3 };
     (width, height)
 }
 

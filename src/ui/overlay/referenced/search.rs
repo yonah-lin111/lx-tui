@@ -66,18 +66,18 @@ pub fn referenced_search_layout(
     let width = SEARCH_WIDTH.min(screen.width);
     // 高度固定（顶部范围行 + 搜索行 + 双行候选列表 + 上下边框），不随候选数量伸缩。
     let height = SEARCH_HEIGHT.min(screen.height);
-    if width < 8 || height < 8 {
+    if width < 8 || height < 10 {
         return None;
     }
     let x = screen.x + (screen.width - width) / 2;
     let y = screen.y + (screen.height - height) / 2;
     let area = Rect::new(x, y, width, height);
-    // 顶部 2 行（顶边 + 标题行）；底部 3 行（分割线 + 快捷键行 + 底边）。
+    // 顶部 3 行（顶边 + 标题行 + 分割线）；底部 3 行（分割线 + 快捷键行 + 底边）。
     let inner = Rect::new(
         area.x.saturating_add(1),
-        area.y.saturating_add(2),
+        area.y.saturating_add(3),
         area.width.saturating_sub(2),
-        area.height.saturating_sub(5),
+        area.height.saturating_sub(6),
     );
     if inner.width == 0 || inner.height == 0 {
         return None;
@@ -214,6 +214,12 @@ pub fn render_referenced_search(
                 .saturating_add(title_w)
                 .saturating_add(1),
             rule_to,
+            style::accent(),
+        );
+        crate::ui::widgets::modal::paint_divider(
+            frame.buffer_mut(),
+            layout.area,
+            layout.area.y + 2,
             style::accent(),
         );
     }

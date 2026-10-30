@@ -23,7 +23,7 @@ pub struct MenuLayout {
 
 /// 按锚点、标题与标签计算菜单几何；锚点与尺寸均夹取到屏幕内。
 ///
-/// 有标题时顶部占 2 行（`┌──┐` + `│ Title │`），无标题占 1 行顶边。
+/// 有标题时顶部占 3 行（`┌──┐` + `│ Title ─── │` + `├──┤`），无标题占 1 行顶边。
 pub fn layout(screen: Rect, anchor: (u16, u16), title: &str, labels: &[&str]) -> MenuLayout {
     let max_label = labels
         .iter()
@@ -35,7 +35,7 @@ pub fn layout(screen: Rect, anchor: (u16, u16), title: &str, labels: &[&str]) ->
         .unwrap_or(u16::MAX)
         .max(MIN_WIDTH)
         .min(screen.width);
-    let header_rows: usize = if title.is_empty() { 1 } else { 2 };
+    let header_rows: usize = if title.is_empty() { 1 } else { 3 };
     let height = u16::try_from(labels.len().saturating_add(header_rows + 1))
         .unwrap_or(u16::MAX)
         .min(screen.height);
@@ -116,6 +116,12 @@ pub fn render_with_confirm(
                 .saturating_add(title_w)
                 .saturating_add(1),
             layout.area.right().saturating_sub(2),
+            style::accent(),
+        );
+        crate::ui::widgets::modal::paint_divider(
+            frame.buffer_mut(),
+            layout.area,
+            layout.area.y + 2,
             style::accent(),
         );
     }

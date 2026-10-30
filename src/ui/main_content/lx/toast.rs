@@ -38,7 +38,7 @@ const MIN_HEIGHT: u16 = 3;
 /// 与标题的显示列收缩，但**不超过内容区宽度**，高度按折行结果增长（上限
 /// [`MAX_BODY_ROWS`] + 边框，有标题时额外加 1 行标题行）。
 pub(crate) fn rect(area: Rect, toast: &Toast) -> Option<Rect> {
-    let header_extra: u16 = if toast.title.is_some() { 1 } else { 0 };
+    let header_extra: u16 = if toast.title.is_some() { 2 } else { 0 };
     let min_h = MIN_HEIGHT.saturating_add(header_extra);
     if area.width < MIN_WIDTH || area.height < min_h {
         return None;
@@ -90,7 +90,7 @@ pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> 
     clear::render_buffer(buf, box_area);
     draw_border(buf, box_area, toast.kind);
     let close_x = box_area.width.saturating_sub(5);
-    let has_title = toast.title.is_some() && box_area.height >= 4;
+    let has_title = toast.title.is_some() && box_area.height >= 5;
     if let Some(title) = toast.title.as_deref()
         && has_title
     {
@@ -106,6 +106,12 @@ pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> 
             box_area.y + 1,
             title_end.saturating_add(1),
             to,
+            border_style(toast.kind),
+        );
+        crate::ui::widgets::modal::paint_divider(
+            buf,
+            box_area,
+            box_area.y + 2,
             border_style(toast.kind),
         );
     }
@@ -125,7 +131,7 @@ pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> 
         );
     }
     let body_top = if has_title {
-        box_area.y.saturating_add(2)
+        box_area.y.saturating_add(3)
     } else {
         box_area.y.saturating_add(1)
     };
@@ -221,7 +227,7 @@ pub(crate) fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
     let y_top = Rect::new(x, area.y, 3, 1);
     let y_bar = Rect::new(x, area.y.saturating_add(1), 3, 1);
     y_top.contains((column, row).into())
-        || (area.height >= 4 && y_bar.contains((column, row).into()))
+        || (area.height >= 5 && y_bar.contains((column, row).into()))
 }
 
 /// 写一个单元格（越界忽略）。

@@ -12,8 +12,8 @@ use super::dialog::{BUTTON_GAP, render_buttons, render_input};
 
 /// worktree 对话框宽度与高度范围（行）：条目两行一条 + 搜索/分隔/按钮与顶底栏框。
 const WORKTREE_DIALOG_WIDTH: u16 = 56;
-const WORKTREE_DIALOG_MIN_HEIGHT: u16 = 11;
-const WORKTREE_DIALOG_MAX_HEIGHT: u16 = 21;
+const WORKTREE_DIALOG_MIN_HEIGHT: u16 = 12;
+const WORKTREE_DIALOG_MAX_HEIGHT: u16 = 22;
 const WORKTREE_DIALOG_BUTTONS: [&str; 2] = [text::BUTTON_OPEN, text::BUTTON_CANCEL];
 
 /// worktree 对话框按钮。
@@ -30,7 +30,7 @@ pub fn worktree_dialog_shell(
 ) -> Option<widgets::modal::ModalShell> {
     let rows = entry_count.max(1).saturating_mul(2) as u16;
     let height = rows
-        .saturating_add(8)
+        .saturating_add(9)
         .clamp(WORKTREE_DIALOG_MIN_HEIGHT, WORKTREE_DIALOG_MAX_HEIGHT);
     widgets::modal::layout(screen, WORKTREE_DIALOG_WIDTH, height)
 }

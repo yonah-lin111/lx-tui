@@ -26,7 +26,7 @@ pub(crate) const SAVE_DRAFT_BUTTONS: [&str; 2] = [text::BUTTON_SAVE, text::BUTTO
 
 /// 草稿保存选择器几何：顶栏 2 行 + 名称输入 + 分割线 + 条目单行 + 底栏 3 行与按钮行。
 pub fn save_draft_shell(screen: Rect, entry_count: usize) -> Option<widgets::modal::ModalShell> {
-    let height = (entry_count as u16).saturating_add(8).clamp(10, 30);
+    let height = (entry_count as u16).saturating_add(9).clamp(11, 30);
     widgets::modal::layout(screen, SAVE_DRAFT_WIDTH, height)
 }
 

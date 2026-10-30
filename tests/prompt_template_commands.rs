@@ -83,8 +83,8 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     }
     let panel = ui::prompt::slash_layout(&state.prompt, area).expect("slash panel opens");
     assert_eq!(
-        panel.rect.height, 6,
-        "查询 add 命中 add（标题行 + 内容 1 + 底栏 3 + 顶边）"
+        panel.rect.height, 7,
+        "查询 add 命中 add（顶栏 3 + 内容 1 + 底栏 3）"
     );
     assert_eq!(
         state.prompt.slash_panel().map(|panel| panel.items().len()),
@@ -216,7 +216,7 @@ fn slash_panel_shows_all_candidates_for_bare_slash() {
     update::apply_editor(&mut state, EditorCommand::InsertChar('/'));
     let panel = ui::prompt::slash_layout(&state.prompt, area).expect("slash panel opens");
     assert_eq!(
-        panel.rect.height, 10,
+        panel.rect.height, 11,
         "空查询展示全部 5 个候选 + 标题行、底栏与上下边框"
     );
     let terminal = draw(&state, &config);

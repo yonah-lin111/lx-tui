@@ -65,7 +65,7 @@ fn render_draws_border_and_title() {
         buffer[(shell.inner.x, shell.inner.y)].bg,
         ratatui::style::Color::Reset
     );
-    // 标题独占顶边框内的第一行，左右仍是竖边框；下一行是空行而非分割线。
+    // 标题独占顶边框内的第一行，左右仍是竖边框；下一行是 ├──┤ 分割线。
     let title_row: String = (shell.area.x..shell.area.right())
         .map(|x| buffer[(x, shell.area.y + 1)].symbol())
         .collect();
@@ -79,7 +79,7 @@ fn render_draws_border_and_title() {
         buffer[(shell.area.right() - 1, shell.area.y + 1)].symbol(),
         "│"
     );
-    assert_eq!(buffer[(shell.area.x, shell.area.y + 2)].symbol(), "│");
+    assert_eq!(buffer[(shell.area.x, shell.area.y + 2)].symbol(), "├");
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn tiny_modal_keeps_title_off_the_border() {
 
 #[test]
 fn button_row_centers_buttons_with_gap() {
-    let shell = layout(SCREEN, 40, 6).expect("modal fits");
+    let shell = layout(SCREEN, 40, 7).expect("modal fits");
     let labels = ["[save enter]", "[clear ^c]", "[cancel esc]"];
     let rects = button_row(shell.inner, &labels, 2, 2);
     assert_eq!(rects.len(), 3);

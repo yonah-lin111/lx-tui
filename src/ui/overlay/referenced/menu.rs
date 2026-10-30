@@ -49,9 +49,9 @@ pub fn referenced_menu_layout(screen: Rect, menu: &ReferencedFolderMenu) -> Refe
     let x = screen.x + (screen.width - width) / 2;
     let y = screen.y + (screen.height - height) / 2;
     let area = Rect::new(x, y, width, height);
-    // 扣除顶栏（2 行：顶边 + 标题行）与底栏（3 行：分割线 + 底栏提示 + 底边）。
+    // 扣除顶栏（3 行：顶边 + 标题行 + 分割线）与底栏（3 行：分割线 + 底栏提示 + 底边）。
     let list_top = if area.height >= 7 {
-        area.y.saturating_add(2)
+        area.y.saturating_add(3)
     } else {
         area.y.saturating_add(1)
     };
@@ -158,6 +158,12 @@ pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &Refere
                 .saturating_add(title_w)
                 .saturating_add(1),
             layout.area.right().saturating_sub(2),
+            style::accent(),
+        );
+        crate::ui::widgets::modal::paint_divider(
+            frame.buffer_mut(),
+            layout.area,
+            layout.area.y + 2,
             style::accent(),
         );
     }
