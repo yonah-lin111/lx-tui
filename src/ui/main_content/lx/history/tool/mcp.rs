@@ -284,6 +284,9 @@ mod tests {
         assert_eq!(regions.len(), 2, "args and result have separate regions");
         assert_eq!(regions[0].section, crate::app::state::CardSection::Body);
         assert_eq!(regions[1].section, crate::app::state::CardSection::Output);
+        for region in &regions {
+            assert!(region.card.offset + region.card.rows <= total);
+        }
         let expanded = layout(
             &view,
             100,
