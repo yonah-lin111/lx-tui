@@ -180,7 +180,7 @@ fn wide_page_renders_brand_entries_and_input() {
 }
 
 #[test]
-fn resource_counts_sit_two_blank_rows_below_entries() {
+fn resource_counts_sit_one_blank_row_below_entries() {
     let area = Rect::new(0, 0, 100, 60);
     let lx = Lx::new();
     let lay = layout(area, &lx);
@@ -191,7 +191,7 @@ fn resource_counts_sit_two_blank_rows_below_entries() {
         .max()
         .expect("entries");
     let inventory = lay.inventory.expect("inventory row");
-    assert_eq!(inventory.y, last_y + 4, "label + underline + 2 blank rows");
+    assert_eq!(inventory.y, last_y + 3, "label + underline + 1 blank row");
 }
 
 #[test]
