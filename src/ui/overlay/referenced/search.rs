@@ -218,14 +218,6 @@ pub fn render_referenced_search(
             }
         }
     }
-    if layout.area.height >= 10 {
-        widgets::menu::draw_horizontal_divider(
-            frame.buffer_mut(),
-            layout.area,
-            layout.area.y + 2,
-            style::accent(),
-        );
-    }
     // 顶部范围路径 + 右端原始路径复制按钮；截断提示紧贴复制按钮左侧（始终可见）。
     let truncated = search
         .truncated
@@ -390,7 +382,7 @@ fn referenced_entry_address(entry: &ReferencedEntry, width: usize) -> String {
     format!("{prefix}{}", text::ellipsize_middle(&parent, available))
 }
 
-/// 渲染内容搜索弹窗底栏快捷键提示（带上方 `├───┤` 分割线，位于底栏框内）。
+/// 渲染内容搜索弹窗底栏快捷键提示（位于底边上方一行，左右边框保留）。
 pub fn render_referenced_search_footer(
     frame: &mut Frame<'_>,
     screen: Rect,
@@ -399,14 +391,6 @@ pub fn render_referenced_search_footer(
     let Some(layout) = referenced_search_layout(screen, search) else {
         return;
     };
-    if layout.area.height >= 10 {
-        widgets::menu::draw_horizontal_divider(
-            frame.buffer_mut(),
-            layout.area,
-            layout.area.bottom().saturating_sub(3),
-            style::accent(),
-        );
-    }
     let y = if layout.area.height >= 10 {
         layout.area.bottom().saturating_sub(2)
     } else {

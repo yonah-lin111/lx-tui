@@ -223,7 +223,8 @@ fn render_skips_until_visible_then_paints_panel_and_hint() {
     assert!(crate::app::update::tick(&mut state, now + TOOLTIP_DELAY));
     let buffer = render_buffer(&state);
     assert_eq!(buffer[(area.x, area.y)].symbol(), "┌");
-    assert_eq!(buffer[(area.x, area.y + 2)].symbol(), "├");
+    assert_eq!(buffer[(area.x, area.y + 2)].symbol(), "│");
+    assert_eq!(buffer[(area.right() - 1, area.y + 1)].symbol(), "│");
     assert_eq!(buffer[(area.x, area.y)].bg, Color::Reset);
     assert_eq!(buffer[(area.x + 1, area.y + 1)].bg, Color::Reset);
     let top: String = (area.x..area.right())

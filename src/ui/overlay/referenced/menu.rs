@@ -145,12 +145,6 @@ pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &Refere
             text::MENU_TITLE_REFERENCED_FOLDERS,
             style::border_title(),
         );
-        widgets::menu::draw_horizontal_divider(
-            frame.buffer_mut(),
-            layout.area,
-            layout.area.y + 2,
-            style::accent(),
-        );
     }
     for (offset, rect) in layout.rows.iter().enumerate() {
         let Some(row) = menu.rows.get(layout.start + offset) else {
@@ -177,21 +171,13 @@ pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &Refere
     }
 }
 
-/// 渲染目录弹窗底栏快捷键提示（带上方 `├───┤` 分割线，位于底栏框内）。
+/// 渲染目录弹窗底栏快捷键提示（位于底边上方一行，左右边框保留）。
 pub fn render_referenced_menu_footer(
     frame: &mut Frame<'_>,
     screen: Rect,
     menu: &ReferencedFolderMenu,
 ) {
     let layout = referenced_menu_layout(screen, menu);
-    if layout.area.height >= 7 {
-        widgets::menu::draw_horizontal_divider(
-            frame.buffer_mut(),
-            layout.area,
-            layout.area.bottom().saturating_sub(3),
-            style::accent(),
-        );
-    }
     let y = if layout.area.height >= 7 {
         layout.area.bottom().saturating_sub(2)
     } else {

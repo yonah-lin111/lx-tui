@@ -91,6 +91,37 @@ fn titled_toast_keeps_five_rows_and_fits_title() {
 }
 
 #[test]
+fn titled_toast_keeps_side_borders_on_the_title_row() {
+    let mut state = AppState::demo();
+    update::show_toast(
+        &mut state,
+        Toast::new(ToastKind::Default, text::TOAST_COPIED, None, Instant::now())
+            .with_title(text::TOAST_CLIPBOARD_TITLE),
+    );
+    let view = view_for(&state);
+    let rects = pane_rects(&state, &view);
+    let config = Config::default();
+    let area = rect(&state, &view, &rects, Rect::new(0, 0, 100, 24), &config)
+        .expect("toast area is resolvable");
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).expect("backend");
+    terminal
+        .draw(|frame| crate::ui::render(frame, &state, &config))
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[(area.x, area.y + 1)].symbol(), "│");
+    assert_eq!(buffer[(area.right() - 1, area.y + 1)].symbol(), "│");
+    assert_eq!(
+        buffer[(area.x, area.y + 2)].symbol(),
+        "│",
+        "标题行下方仍是竖边框，不画 ├──┤ 分割线"
+    );
+    assert_eq!(
+        buffer[(area.x, area.y + 2)].bg,
+        ratatui::style::Color::Reset
+    );
+}
+
+#[test]
 fn toast_has_transparent_background_after_clearing_underlying_cells() {
     let mut state = AppState::demo();
     show(&mut state, None);

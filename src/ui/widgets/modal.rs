@@ -44,7 +44,8 @@ pub fn layout(screen: Rect, width: u16, height: u16) -> Option<ModalShell> {
     Some(ModalShell { area, inner })
 }
 
-/// 渲染清底、强调色边框、顶栏标题框、右上角关闭按钮与底栏按钮框分割线；内容由调用方绘制在 `shell.inner`。
+/// 渲染清底、强调色边框、顶栏标题行与右上角关闭按钮；标题行保留左右边框，
+/// 上方空一行后接内容；内容由调用方绘制在 `shell.inner`。
 pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
     clear::render(frame, shell.area);
     let title = text::ellipsize(title, usize::from(shell.area.width.saturating_sub(7)));
@@ -57,31 +58,6 @@ pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
                 shell.area.x + 2,
                 shell.area.y + 1,
                 shell.area.width.saturating_sub(4),
-                1,
-            ),
-        );
-        crate::ui::widgets::menu::draw_horizontal_divider(
-            frame.buffer_mut(),
-            shell.area,
-            shell.area.y + 2,
-            style::accent(),
-        );
-        // 底栏按钮行上方的分割线（按钮行位于 `shell.area.bottom() - 2`）。
-        if shell.inner.height >= 3 {
-            crate::ui::widgets::menu::draw_horizontal_divider(
-                frame.buffer_mut(),
-                shell.area,
-                shell.area.bottom().saturating_sub(3),
-                style::accent(),
-            );
-        }
-    } else if shell.area.width >= 4 {
-        frame.render_widget(
-            Paragraph::new(Span::styled(format!(" {title} "), style::border_title())),
-            Rect::new(
-                shell.area.x + 1,
-                shell.area.y,
-                shell.area.width.saturating_sub(2),
                 1,
             ),
         );

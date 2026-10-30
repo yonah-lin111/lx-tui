@@ -94,12 +94,6 @@ pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> 
         && has_title
     {
         draw_title(buf, box_area, title, toast.kind);
-        crate::ui::widgets::menu::draw_horizontal_divider(
-            buf,
-            box_area,
-            box_area.y + 2,
-            border_style(toast.kind),
-        );
     }
     let close_y = if has_title {
         box_area.y.saturating_add(1)

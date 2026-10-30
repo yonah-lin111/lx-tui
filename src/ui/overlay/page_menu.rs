@@ -221,12 +221,6 @@ pub(super) fn render_page_menu(
             text::MENU_TITLE_PAGES,
             style::border_title(),
         );
-        crate::ui::widgets::menu::draw_horizontal_divider(
-            frame.buffer_mut(),
-            layout.area,
-            layout.area.y + 2,
-            style::accent(),
-        );
     }
     let last = menu.rows.len().saturating_sub(1);
     let delete_enabled = matches!(

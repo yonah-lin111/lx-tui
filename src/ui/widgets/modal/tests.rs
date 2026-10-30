@@ -41,7 +41,7 @@ fn layout_rejects_screen_too_small() {
 
 #[test]
 fn render_draws_border_and_title() {
-    let shell = layout(SCREEN, 40, 3).expect("modal fits");
+    let shell = layout(SCREEN, 40, 8).expect("modal fits");
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| render(frame, &shell, "Rename workspace")) {
         panic!("draw failed: {error}");
@@ -65,10 +65,34 @@ fn render_draws_border_and_title() {
         buffer[(shell.inner.x, shell.inner.y)].bg,
         ratatui::style::Color::Reset
     );
+    // 标题独占顶边框内的第一行，左右仍是竖边框；下一行是空行而非分割线。
     let title_row: String = (shell.area.x..shell.area.right())
+        .map(|x| buffer[(x, shell.area.y + 1)].symbol())
+        .collect();
+    assert!(title_row.contains("Rename workspace"), "{title_row}");
+    assert_eq!(buffer[(shell.area.x, shell.area.y + 1)].symbol(), "│");
+    assert_eq!(
+        buffer[(shell.area.right() - 1, shell.area.y + 1)].symbol(),
+        "│"
+    );
+    assert_eq!(buffer[(shell.area.x, shell.area.y + 2)].symbol(), "│");
+}
+
+#[test]
+fn tiny_modal_keeps_title_off_the_border() {
+    let shell = layout(SCREEN, 40, 3).expect("modal fits");
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
+    terminal
+        .draw(|frame| render(frame, &shell, "Rename workspace"))
+        .expect("draw");
+    let buffer = terminal.backend().buffer().clone();
+    let top: String = (shell.area.x..shell.area.right())
         .map(|x| buffer[(x, shell.area.y)].symbol())
         .collect();
-    assert!(title_row.contains(" Rename workspace "));
+    assert!(
+        !top.contains("Rename workspace"),
+        "标题不得压在外框上: {top}"
+    );
 }
 
 #[test]

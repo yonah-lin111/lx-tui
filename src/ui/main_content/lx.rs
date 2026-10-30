@@ -945,7 +945,7 @@ pub fn ask_list_window(area: Rect, lx: &Lx) -> Option<(usize, usize, usize)> {
     ask::list_window(area, lx)
 }
 
-/// md 格式面板：直角边框 + 顶栏标题框 + 候选行（标签与预览，高亮项 accent）+ 底栏快捷键框。
+/// md 格式面板：直角边框 + 顶栏标题行 + 候选行（标签与预览，高亮项 accent）+ 底栏快捷键行。
 fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
     draw_box(grid, rect, style::muted());
     grid.put(
@@ -954,7 +954,6 @@ fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
         text::LX_BLOCK_PANEL_TITLE,
         style::muted(),
     );
-    draw_box_divider(grid, rect, rect.y + 2, style::muted());
     for (index, id) in panel.items().iter().enumerate() {
         let y = rect.y + 3 + index as u16;
         let (label, preview) = text::block_command_text(*id);
@@ -968,26 +967,12 @@ fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
         let preview_x = rect.x + 2 + u16::try_from(label.width()).unwrap_or(0) + 2;
         grid.put(preview_x, y, &preview, style::muted());
     }
-    draw_box_divider(grid, rect, rect.bottom() - 3, style::muted());
     grid.put(
         rect.x + 2,
         rect.bottom() - 2,
         text::COMMAND_PANEL_FOOTER,
         style::muted(),
     );
-}
-
-/// 在网格矩形内绘制一条横向分割线 `├───┤`。
-fn draw_box_divider(grid: &mut Grid, rect: Rect, y: u16, border: Style) {
-    if rect.width < 2 || y <= rect.y || y >= rect.bottom() - 1 {
-        return;
-    }
-    let right = rect.right() - 1;
-    grid.set(rect.x, y, '├', border);
-    grid.set(right, y, '┤', border);
-    for x in rect.x + 1..right {
-        grid.set(x, y, '─', border);
-    }
 }
 
 /// 直角细线边框与内部清底（md 面板用）。

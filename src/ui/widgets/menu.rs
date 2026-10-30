@@ -1,9 +1,7 @@
 //! 菜单组件：锚点定位、项渲染与命中；不依赖应用领域数据。
 
 use ratatui::Frame;
-use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthStr;
@@ -108,12 +106,6 @@ pub fn render_with_confirm(
             )),
             title_rect,
         );
-        draw_horizontal_divider(
-            frame.buffer_mut(),
-            layout.area,
-            layout.area.y + 2,
-            style::accent(),
-        );
     }
     let width = usize::from(layout.area.width.saturating_sub(2));
     for (index, label) in labels.iter().enumerate() {
@@ -137,27 +129,6 @@ pub fn render_with_confirm(
         };
         let line = Line::from(Span::styled(rendered, item_style));
         frame.render_widget(Paragraph::new(line).style(item_style), *rect);
-    }
-}
-
-/// 在浮层内绘制一条与左右外框衔接的横向分割线 `├───┤`。
-pub(crate) fn draw_horizontal_divider(buf: &mut Buffer, area: Rect, y: u16, border_style: Style) {
-    if area.width < 2 || y <= area.y || y >= area.bottom().saturating_sub(1) {
-        return;
-    }
-    let right = area.right().saturating_sub(1);
-    for x in area.x..=right {
-        let ch = if x == area.x {
-            '├'
-        } else if x == right {
-            '┤'
-        } else {
-            '─'
-        };
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.set_char(ch);
-            cell.set_style(border_style);
-        }
     }
 }
 

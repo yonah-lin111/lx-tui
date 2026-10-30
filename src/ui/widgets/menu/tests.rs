@@ -109,8 +109,8 @@ fn render_draws_border_title_labels_and_overlay_selection() {
     let text_at = |x: u16, y: u16| buffer[(x, y)].symbol().to_string();
     assert_eq!(text_at(menu.area.x, menu.area.y), "┌");
     assert_eq!(text_at(menu.area.right() - 1, menu.area.y), "┐");
-    assert_eq!(text_at(menu.area.x, menu.area.y + 2), "├");
-    assert_eq!(text_at(menu.area.right() - 1, menu.area.y + 2), "┤");
+    assert_eq!(text_at(menu.area.x, menu.area.y + 2), "│");
+    assert_eq!(text_at(menu.area.right() - 1, menu.area.y + 2), "│");
     assert_eq!(text_at(menu.area.x, menu.area.bottom() - 1), "└");
     assert_eq!(text_at(menu.area.right() - 1, menu.area.bottom() - 1), "┘");
     let title_row: String = (menu.area.x..menu.area.right())

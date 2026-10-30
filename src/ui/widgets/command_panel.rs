@@ -364,22 +364,10 @@ fn render_bordered_header(
             }
         }
     }
-    crate::ui::widgets::menu::draw_horizontal_divider(
-        buf,
-        rect,
-        rect.y.saturating_add(2),
-        style::muted(),
-    );
 }
 
-/// 绘制有边框命令面板的底栏框（上方 `├───┤` 分割线 + `│ footer │`）。
+/// 绘制有边框命令面板的底栏行（`│ footer │`，左侧边框与右侧留白保留，无分割线）。
 fn render_bordered_footer(buf: &mut Buffer, rect: Rect, footer: &str) {
-    crate::ui::widgets::menu::draw_horizontal_divider(
-        buf,
-        rect,
-        rect.bottom().saturating_sub(3),
-        style::muted(),
-    );
     let y = rect.bottom().saturating_sub(2);
     let max_w = usize::from(rect.width.saturating_sub(4));
     if max_w > 0 {

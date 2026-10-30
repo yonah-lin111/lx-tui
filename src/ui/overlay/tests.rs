@@ -128,7 +128,12 @@ fn menu_renders_target_name_in_border_title() {
     let (lines, _) = draw_overlay(&state);
     assert!(lines[5].contains('┌'), "top border={:?}", lines[5]);
     assert!(lines[6].contains("demo"), "title row={:?}", lines[6]);
-    assert!(lines[7].contains('├'), "divider row={:?}", lines[7]);
+    assert!(
+        lines[6].contains('│') && !lines[7].contains('├'),
+        "title row keeps side borders and has no divider: {:?} / {:?}",
+        lines[6],
+        lines[7]
+    );
 }
 
 #[test]

@@ -556,9 +556,13 @@ fn toast_renders_title_and_message() {
         lines[title_idx - 1].contains('┌'),
         "top border is above title row"
     );
+    // 标题行不再是边框内嵌，而是独立一行；正文字样出现在其下方。
     assert!(
-        lines[title_idx + 1].contains('├'),
-        "header divider is below title row"
+        lines
+            .iter()
+            .skip(title_idx + 1)
+            .any(|line| line.contains(text::TOAST_COPIED)),
+        "message renders below the title row"
     );
     assert!(lines.iter().any(|line| line.contains(text::TOAST_COPIED)));
 }

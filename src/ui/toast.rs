@@ -86,12 +86,6 @@ pub fn render(
             )),
             Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), 1),
         );
-        crate::ui::widgets::menu::draw_horizontal_divider(
-            frame.buffer_mut(),
-            area,
-            area.y + 2,
-            border,
-        );
     }
     if let Some(rect) = close_button_rect_for(area, has_title) {
         frame.render_widget(
