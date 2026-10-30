@@ -1,7 +1,8 @@
 # `/rename` 会话重命名命令与内联参数说明：执行任务清单
 
-- 状态：**已完成（分支 `feat/lx-slash-rename`，待用户确认合并）**
+- 状态：**已完成并通过 Code Review 修复（分支 `feat/lx-slash-rename`，见 `review.md`）**
 - 关联设计：`docs/feature/lx-slash-rename/design.md`
+- 关联评审：`docs/feature/lx-slash-rename/review.md`
 - 工作区：`.worktrees/lx-slash-rename`
 
 ---
@@ -95,3 +96,19 @@
      - `rtk cargo fmt --check`（或 `cargo fmt`）
      - `rtk cargo clippy --all-targets -- -D warnings`
      - `rtk cargo test`（针对受影响模块精确执行验证）
+
+---
+
+## Task 6：Code Review 问题修复（P0 - P2，详见 `review.md`）
+
+- [x] **[P0-1] 修复 Toast 中文宽字符渲染截断**（`src/ui/main_content/lx/toast.rs`、`src/ui/toast.rs`）：
+  - 将 `line.chars().enumerate()` 步长 1 写入改为 `buf.set_stringn` 按显示宽度写入，修复 `/rename 询问用户` 只显示一半汉字的问题；
+  - `box_size` 改用 `UnicodeWidthStr::width`，截断改用 `text::truncate_to_width`；
+  - 新增 `wide_cjk_characters_advance_by_display_width_without_clipping` 回归测试。
+- [x] **[P0-2] 修复手敲别名 `/title <name>` 提交未走重命名分支**（`src/app/state/lx/slash.rs`、`src/app/update/chat/session.rs`）：
+  - 新增 `parse_rename_command` 统一识别 `/rename` 与别名 `/title`，`active_argument_hint` 同步支持 `/title `；
+  - 新增 `title_alias_submits_rename_and_panel_echo_supports_undo` 单元测试。
+- [x] **[P1-1] 修复采纳 `/rename` 回显时绕过 `Lx::replace_input` 状态机**（`src/app/update/pane.rs`、`src/app/update/chat/session.rs`、`src/app/state/lx.rs`）：
+  - 统一使用 `target.lx.replace_input(prefix)` 记录 Undo 快照、推进 `revision`、清理残留子面板并滚动光标入视口。
+- [x] **[P2-1] 修复极窄窗格软换行及别名下的 `[name]` 偏移计算**（`src/ui/main_content/lx/input.rs`）：
+  - 增加 `rows.len() == 1` 守卫，并按 `display_width(lx.input.trim()) + 2` 动态计算 `[name]` 起始列。

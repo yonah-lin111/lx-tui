@@ -662,15 +662,41 @@ pub fn slash_trigger(input: &str, cursor: usize) -> Option<String> {
 
 /// 当输入框全文处于某带参命令的「已回显命令 + 尾随空格、尚无有效参数」状态时，
 /// 返回应当紧跟渲染的灰色参数说明文案（如 `"[name]"`）。
+///
+/// 兼容主名（`/rename `）与别名（`/title `）。
 pub fn active_argument_hint(input: &str) -> Option<&'static str> {
     if input.contains('\n') || input.contains('\r') {
         return None;
     }
-    let rest = input.strip_prefix(SlashCommand::Rename.text())?;
-    if !rest.starts_with(' ') || !rest.trim().is_empty() {
+    let trimmed = input.trim_start_matches([' ', '\t']);
+    let line = trimmed.strip_prefix('/')?;
+    let is_rename = std::iter::once(SlashCommand::Rename.name())
+        .chain(SlashCommand::Rename.aliases().iter().copied())
+        .any(|keyword| {
+            line.strip_prefix(keyword)
+                .is_some_and(|rest| rest.starts_with(' ') && rest.trim().is_empty())
+        });
+    is_rename.then(|| SlashCommand::Rename.argument_hint())?
+}
+
+/// 解析单行 `/rename`（或别名 `/title`）命令输入；
+/// 若匹配，返回命令后的参数切片（已去除首尾空白，可能为空串 `""`）。
+pub fn parse_rename_command(input: &str) -> Option<&str> {
+    let trimmed = input.trim_start_matches([' ', '\t']);
+    if trimmed.contains('\n') || trimmed.contains('\r') {
         return None;
     }
-    SlashCommand::Rename.argument_hint()
+    let line = trimmed.strip_prefix('/')?;
+    for keyword in std::iter::once(SlashCommand::Rename.name())
+        .chain(SlashCommand::Rename.aliases().iter().copied())
+    {
+        if let Some(rest) = line.strip_prefix(keyword)
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            return Some(rest.trim());
+        }
+    }
+    None
 }
 
 #[cfg(test)]

@@ -1,8 +1,8 @@
 # `/rename` 会话重命名命令与内联参数说明：设计方案
 
-> 状态：**用户已通过 Grill Me 逐项确认全部边界**（见 §2），待审核后执行。
+> 状态：**已实施并通过 Code Review 修复全部 P0-P2 问题**（见 `review.md`）。
 >
-> 任务范围：在 `src/ui/main_content/lx/` 聊天输入框与 `src/app/` 状态/更新层新增 `/rename` 命令，支持命令面板选择回显 `"/rename "`、输入框内联灰色不可编辑参数说明 `[name]`、空参拦截与会话重命名持久化。
+> 任务范围：在 `src/ui/main_content/lx/` 聊天输入框与 `src/app/` 状态/更新层新增 `/rename` 命令，支持命令面板选择回显 `"/rename "`、输入框内联灰色不可编辑参数说明 `[name]`、空参拦截、会话重命名持久化及中文宽字符 Toast 完整渲染。
 
 ---
 
@@ -430,7 +430,7 @@ if !shell
    - `src/app/update/chat/session.rs`：当前约 720 行，新增约 60 行，保持在 1000 行上限内。
    - `src/ui/main_content/lx/input.rs`：当前 196 行，新增约 20 行。
    - `src/ui/text.rs`：当前约 1150 行（历史已略超，新增纯常量 5 行，动态拼串放在 `src/ui/text/chat.rs`）。
-3. **既有测试影响**：
-   - `SlashCommand::ALL` 从 5 项变为 6 项，检查 `src/app/state/lx/slash/tests.rs` 及 `src/app/update/chat/tests/slash_panels.rs` 中是否有断言 `SlashCommand::ALL.len() == 5` 的测试并同步更新。
-   - `slash_trigger` 在包含空格时返回 `None`，验证不影响任何既有无参命令（既有命令名均不含空格）。
-$: 0
+3. **existing tests & Toast CJK 宽字符渲染修复（`src/ui/main_content/lx/toast.rs` & `src/ui/toast.rs`）**：
+   - `SlashCommand::ALL` 从 5 项变为 6 项，同步更新 `src/app/update/tests.rs` 中的前缀匹配断言。
+   - `lx/toast.rs` 原先用 `line.chars().enumerate()`（按字符步长 1）写入 `Buffer`，导致中文等占 2 列的宽字符（如 `/rename 询问用户`）右半格被覆盖并被 Ratatui `Buffer::diff` 跳过；统一改为 `buf.set_stringn` 按 Unicode 显示列宽推进，并使用 `text::truncate_to_width` 处理溢出省略。
+   - `accept_slash_command` 与 `try_submit_rename_command` 统一通过 `Lx::replace_input` 回显 `"/rename "`（维护撤销栈、`revision` 与视口滚动），并抽取 `parse_rename_command` 同时支持 `/rename` 与别名 `/title` 直接提交。

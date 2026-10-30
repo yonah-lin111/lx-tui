@@ -668,10 +668,7 @@ pub fn accept_slash_command(state: &mut AppState, pane: PaneId) -> bool {
             return true;
         }
         if let Some(target) = state.pane_mut_anywhere(pane) {
-            target.lx.input.clear();
-            target.lx.input.push_str(prefix);
-            target.lx.cursor = prefix.len();
-            target.lx.clear_text_selection();
+            target.lx.replace_input(prefix);
             target.lx.slash = None;
         }
         return true;

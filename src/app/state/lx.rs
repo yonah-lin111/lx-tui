@@ -756,6 +756,7 @@ impl Lx {
         self.paste = None;
         self.mention.suppress();
         self.end_history_browse();
+        self.scroll_cursor_into_view();
         self.refresh_panel();
     }
 

@@ -133,14 +133,12 @@ pub(super) fn draw(
         grid.put(content_x, text_top, &placeholder, style::muted());
     } else if !shell
         && scroll == 0
+        && rows.len() == 1
         && let Some(hint) = crate::app::state::lx::slash::active_argument_hint(&lx.input)
     {
-        // `/rename ` 占 8 列（含 1 个尾随空格，光标停在第 8 列）；
-        // 在光标右侧再留 1 列间距（与 `/rename` 共隔 2 列），绘制只读灰色参数说明 `[name]`。
-        let min_offset = crate::app::state::SlashCommand::Rename
-            .text()
-            .len()
-            .saturating_add(2);
+        // 在命令词（如 `/rename`）与 `[name]` 之间保持至少 2 列间距（1 列尾随空格 + 1 列光标/间隔）。
+        let cmd_width = display_width(lx.input.trim());
+        let min_offset = cmd_width.saturating_add(2);
         let offset = display_width(&lx.input).max(min_offset);
         let offset_u16 = u16::try_from(offset).unwrap_or(u16::MAX);
         if offset_u16 < content_w {

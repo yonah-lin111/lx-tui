@@ -719,10 +719,7 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
             if let Some(target) = state.pane_mut_anywhere(pane)
                 && let Some(prefix) = command.echo_prefix()
             {
-                target.lx.input.clear();
-                target.lx.input.push_str(prefix);
-                target.lx.cursor = prefix.len();
-                target.lx.clear_text_selection();
+                target.lx.replace_input(prefix);
                 target.lx.slash = None;
                 return true;
             }
@@ -731,7 +728,7 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
     }
 }
 
-/// 尝试将当前输入框草稿作为 `/rename` 命令提交。
+/// 尝试将当前输入框草稿作为 `/rename`（或别名 `/title`）命令提交。
 ///
 /// 返回 `true` 表示草稿是 `/rename` 命令（无论成功改名还是因空参/无会话被拦截），
 /// 调用方 `try_send` 应立即返回，绝不将其作为普通消息发给模型。
@@ -744,26 +741,20 @@ pub fn try_submit_rename_command(state: &mut AppState, pane: PaneId) -> bool {
     }) else {
         return false;
     };
-    let trimmed_start = input.trim_start_matches([' ', '\t']);
-    if trimmed_start.contains('\n') || trimmed_start.contains('\r') {
-        return false;
-    }
-    let Some(rest) = trimmed_start.strip_prefix(SlashCommand::Rename.text()) else {
+    let Some(title) = crate::app::state::lx::slash::parse_rename_command(&input) else {
         return false;
     };
-    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
-        return false;
-    }
-    let title = rest.trim();
     if title.is_empty() {
         // 用户未输入参数直接回车：保持 `/rename ` 回显与 `[name]` 提示，弹 Toast 提醒。
         if let Some(target) = state.pane_mut_anywhere(pane)
             && let Some(prefix) = SlashCommand::Rename.echo_prefix()
         {
-            target.lx.input.clear();
-            target.lx.input.push_str(prefix);
-            target.lx.cursor = prefix.len();
-            target.lx.clear_text_selection();
+            if target.lx.input != prefix {
+                target.lx.replace_input(prefix);
+            } else {
+                target.lx.cursor = prefix.len();
+                target.lx.clear_text_selection();
+            }
             target.lx.slash = None;
         }
         show_lx_hint(

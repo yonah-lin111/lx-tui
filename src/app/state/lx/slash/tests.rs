@@ -409,4 +409,14 @@ fn slash_trigger_closes_after_whitespace_and_argument_hint_follows_rename() {
         None,
         "多行不显示参数提示"
     );
+    assert_eq!(
+        active_argument_hint("/title "),
+        Some(crate::ui::text::LX_RENAME_ARG_HINT),
+        "别名 `/title ` 同样显示 [name] 提示"
+    );
+    assert_eq!(parse_rename_command("/rename"), Some(""));
+    assert_eq!(parse_rename_command("/rename   "), Some(""));
+    assert_eq!(parse_rename_command("/rename 询问用户"), Some("询问用户"));
+    assert_eq!(parse_rename_command("/title 新标题"), Some("新标题"));
+    assert_eq!(parse_rename_command("/renamefoo"), None);
 }

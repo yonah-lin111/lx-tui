@@ -1037,3 +1037,47 @@ fn rename_enter_with_argument_queues_rename_effect_and_clears_input() {
         state.effects
     );
 }
+
+#[test]
+fn title_alias_submits_rename_and_panel_echo_supports_undo() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-1".into());
+    for ch in "/ren".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    let rev_before = state.pane_anywhere(pane).expect("pane").lx.revision();
+    crate::app::update::apply_lx_input(&mut state, LxInput::Enter);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(lx.input, "/rename ");
+    assert!(lx.revision() > rev_before, "采纳回显必须推进 revision");
+
+    // 撤销一步：恢复回显前的 `/ren`。
+    crate::app::update::apply_lx_input(&mut state, LxInput::Undo);
+    assert_eq!(state.pane_anywhere(pane).expect("pane").lx.input, "/ren");
+
+    // 直接手敲别名 `/title 别名标题` 并回车：同样走重命名逻辑，不作为聊天消息发送。
+    state.pane_mut_anywhere(pane).expect("pane").lx.clear();
+    for ch in "/title 别名标题".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    crate::app::update::apply_lx_input(&mut state, LxInput::Enter);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::RenameChatSession {
+                session_id,
+                title,
+                ..
+            } if session_id == "sess-1" && title == "别名标题"
+        )),
+        "别名 `/title` 直接提交也必须触发会话重命名"
+    );
+}
