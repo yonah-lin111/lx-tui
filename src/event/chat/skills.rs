@@ -48,7 +48,7 @@ impl PreloadJob {
             .filter(|entry| entry.enabled && entry.shadowed_by.is_none())
             .count();
         let errors = cached.errors;
-        crate::skills::set_cached_summary(cached.entries.clone(), errors);
+        crate::skills::set_cached_entries(cached.entries.clone());
         if let Ok(mut map) = cache().lock() {
             map.insert(self.job.key.clone(), cached);
         }
@@ -104,7 +104,7 @@ pub(crate) fn catalog_prompt(
     if let Some(cached) = guard.as_ref().and_then(|cached| cached.get(&key))
         && cached.signature == job.signature
     {
-        crate::skills::set_cached_summary(cached.entries.clone(), cached.errors);
+        crate::skills::set_cached_entries(cached.entries.clone());
         // 目录未变化：省略提示已经在那次刷新时弹过，不每轮重复。
         return (cached.prompt.clone(), 0);
     }
@@ -118,7 +118,7 @@ pub(crate) fn catalog_prompt(
         if let Ok(cached) = cache().lock()
             && let Some(cached) = cached.get(&key)
         {
-            crate::skills::set_cached_summary(cached.entries.clone(), cached.errors);
+            crate::skills::set_cached_entries(cached.entries.clone());
             return (cached.prompt.clone(), cached.omitted);
         }
         return (None, 0);
@@ -126,7 +126,7 @@ pub(crate) fn catalog_prompt(
     // 首次扫描：结果必须在本轮可用，直接同步执行（目录数量有硬上限）。
     let cached = scan(&job);
     let result = (cached.prompt.clone(), cached.omitted);
-    crate::skills::set_cached_summary(cached.entries.clone(), cached.errors);
+    crate::skills::set_cached_entries(cached.entries.clone());
     if let Ok(mut cached_map) = cache().lock() {
         cached_map.insert(key, cached);
     }
