@@ -54,6 +54,14 @@ fn disabled_set(root: &Path) -> HashSet<PathBuf> {
         .unwrap_or_default()
 }
 
+fn enabled_set(root: &Path) -> HashSet<PathBuf> {
+    skills_config::load_skills(&skills_config_path(root))
+        .ok()
+        .flatten()
+        .map(|file| file.enabled_set().into_iter().collect())
+        .unwrap_or_default()
+}
+
 fn empty_root() -> &'static Path {
     Path::new("/nonexistent/lx-skills")
 }
@@ -65,6 +73,7 @@ fn list_skills(state: &ServiceState) -> Response {
         Err(error) => return Response::error(500, &error),
     };
     let disabled = disabled_set(&root);
+    let enabled = enabled_set(&root);
     let user_root = user_skills_root(&root);
     let user_agents =
         skills_config::user_agents_skills_root().unwrap_or_else(|_| root.join("agents-skills"));
@@ -72,7 +81,7 @@ fn list_skills(state: &ServiceState) -> Response {
     let mut errors: Vec<(PathBuf, String)> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
 
-    let user = discover(&user_root, &user_agents, None, &disabled);
+    let user = discover(&user_root, &user_agents, None, &disabled, &enabled);
     for entry in user.entries {
         if seen.insert(entry.path.clone()) {
             entries.push(entry);
@@ -96,7 +105,13 @@ fn list_skills(state: &ServiceState) -> Response {
             lx: Some(lx),
             agents: Some(agents),
         };
-        let catalog = discover(empty_root(), empty_root(), Some(&roots), &disabled);
+        let catalog = discover(
+            empty_root(),
+            empty_root(),
+            Some(&roots),
+            &disabled,
+            &enabled,
+        );
         for entry in catalog.entries {
             if seen.insert(entry.path.clone()) {
                 entries.push(entry);
@@ -292,18 +307,43 @@ fn set_enabled(request: &Request, state: &ServiceState) -> Response {
         Err(error) => return Response::error(500, &error.to_string()),
     };
     let canonical = std::fs::canonicalize(&path).unwrap_or(path);
-    if !enabled {
+    let agents = path_is_agents_skill(state, &canonical);
+    if enabled {
+        file.skills.disabled.retain(|entry| entry != &canonical);
+        if agents && !file.skills.enabled.contains(&canonical) {
+            file.skills.enabled.push(canonical);
+        }
+    } else {
+        file.skills.enabled.retain(|entry| entry != &canonical);
         if !file.skills.disabled.contains(&canonical) {
             file.skills.disabled.push(canonical);
         }
-    } else {
-        file.skills.disabled.retain(|entry| entry != &canonical);
     }
     if let Err(error) = skills_config::save_skills(&config_path, &file) {
         return Response::error(500, &error.to_string());
     }
     let _ = state.sender().send(SettingsEvent::SkillsChanged);
     Response::json(200, "{\"ok\":true}")
+}
+
+/// 是否为 `.agents` 来源（用户级或项目级）；这类 skill 默认关闭，需显式启用。
+fn path_is_agents_skill(state: &ServiceState, canonical: &Path) -> bool {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(user_agents) = skills_config::user_agents_skills_root() {
+        roots.push(user_agents);
+    }
+    for project in state.projects() {
+        if !project.trusted {
+            continue;
+        }
+        roots.push(skills_config::project_agents_skills_root(&project.root));
+    }
+    roots.iter().any(|candidate| {
+        canonical.starts_with(candidate)
+            || std::fs::canonicalize(candidate)
+                .map(|candidate| canonical.starts_with(candidate))
+                .unwrap_or(false)
+    })
 }
 
 /// 只允许禁用系统实际发现的 `SKILL.md`（不能借 API 写任意路径）。

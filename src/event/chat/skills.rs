@@ -21,6 +21,7 @@ struct CacheKey {
     user_agents: PathBuf,
     project: Option<(PathBuf, PathBuf)>,
     disabled: Vec<PathBuf>,
+    enabled: Vec<PathBuf>,
     subagent: bool,
 }
 
@@ -39,8 +40,8 @@ pub(crate) struct PreloadJob {
 }
 
 impl PreloadJob {
-    /// 执行同步扫描；返回 `(工作区根, skill 数, 解析错误数)`。
-    pub(crate) fn run(self) -> (Option<PathBuf>, usize, usize) {
+    /// 执行同步扫描；返回 `(工作区根, skill 数, 解析错误数, 条目)`。
+    pub(crate) fn run(self) -> (Option<PathBuf>, usize, usize, Vec<SkillEntry>) {
         let cached = scan(&self.job);
         let total = cached
             .entries
@@ -48,11 +49,12 @@ impl PreloadJob {
             .filter(|entry| entry.enabled && entry.shadowed_by.is_none())
             .count();
         let errors = cached.errors;
-        crate::skills::set_cached_entries(cached.entries.clone());
+        let entries = cached.entries.clone();
+        crate::skills::set_cached_entries(entries.clone());
         if let Ok(mut map) = cache().lock() {
             map.insert(self.job.key.clone(), cached);
         }
-        (self.root, total, errors)
+        (self.root, total, errors, entries)
     }
 }
 
@@ -74,6 +76,7 @@ struct ScanJob {
     user_agents: PathBuf,
     project: Option<ProjectSkillRoots>,
     disabled: std::collections::HashSet<PathBuf>,
+    enabled: std::collections::HashSet<PathBuf>,
     signature: u64,
     subagent: bool,
 }
@@ -138,13 +141,15 @@ fn build_job(
     workspace_root: Option<&Path>,
     subagent: bool,
 ) -> Option<ScanJob> {
-    let disabled: Vec<PathBuf> = skills_config::skills_config_path()
+    let (disabled, enabled): (Vec<PathBuf>, Vec<PathBuf>) = skills_config::skills_config_path()
         .ok()
         .and_then(|path| skills_config::load_skills(&path).ok().flatten())
         .map(|file| {
-            let mut paths: Vec<PathBuf> = file.disabled_set().into_iter().collect();
-            paths.sort();
-            paths
+            let mut disabled: Vec<PathBuf> = file.disabled_set().into_iter().collect();
+            disabled.sort();
+            let mut enabled: Vec<PathBuf> = file.enabled_set().into_iter().collect();
+            enabled.sort();
+            (disabled, enabled)
         })
         .unwrap_or_default();
     let user_root = skills_config::user_skills_root().ok()?;
@@ -169,6 +174,7 @@ fn build_job(
                 .map(|(lx, agents)| (lx.clone(), agents.clone()))
         }),
         disabled: disabled.clone(),
+        enabled: enabled.clone(),
         subagent,
     };
     let signature = catalog_signature(&user_root, &user_agents, project.as_ref());
@@ -178,6 +184,7 @@ fn build_job(
         user_agents,
         project,
         disabled: disabled.into_iter().collect(),
+        enabled: enabled.into_iter().collect(),
         signature,
         subagent,
     })
@@ -189,6 +196,7 @@ fn scan(job: &ScanJob) -> CachedCatalog {
         &job.user_agents,
         job.project.as_ref(),
         &job.disabled,
+        &job.enabled,
     );
     let (prompt, omitted) = render_catalog_with_omitted(&catalog.entries, job.subagent);
     CachedCatalog {

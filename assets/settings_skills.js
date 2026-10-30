@@ -3,6 +3,8 @@
 let skillsState = null;
 let skillsSelected = null;
 let skillsNew = false;
+let skillBaseline = null;
+let skillScopeSelect = null;
 
 function loadSkills() {
   const status = document.getElementById('skills-status');
@@ -84,13 +86,21 @@ function skillScopeOptions() {
 function selectSkill(entry) {
   skillsNew = false;
   skillsSelected = entry;
+  skillBaseline = null;
   showSkillEditor(entry);
   api('/api/skills/detail?path=' + encodeURIComponent(entry.path)).then((detail) => {
     if (!skillsSelected || skillsSelected.path !== entry.path) { return; }
     document.getElementById('skill-description').value = detail.description;
     document.getElementById('skill-body').value = detail.body;
     document.getElementById('skill-scope-host').dataset.value = detail.scope;
-  }).catch((error) => showToast(error.message, 'error'));
+    if (skillScopeSelect) { skillScopeSelect.setValue(detail.scope); }
+    skillBaseline = JSON.parse(JSON.stringify(skillSnapshot()));
+    refreshActionBars();
+  }).catch((error) => {
+    showToast(error.message, 'error');
+    skillBaseline = JSON.parse(JSON.stringify(skillSnapshot()));
+    refreshActionBars();
+  });
 }
 
 function newSkill() {
@@ -106,7 +116,7 @@ function showSkillEditor(entry) {
   const scopeHost = document.getElementById('skill-scope-host');
   const scopeValue = entry ? entry.scope : 'user';
   scopeHost.innerHTML = '';
-  createSelect(scopeHost, {
+  skillScopeSelect = createSelect(scopeHost, {
     ariaLabel: 'Scope',
     options: skillScopeOptions(),
     value: scopeValue,
@@ -124,32 +134,68 @@ function showSkillEditor(entry) {
   const editable = skillsNew || (entry && entry.editable);
   document.getElementById('skill-description').disabled = !editable;
   document.getElementById('skill-body').disabled = !editable;
-  const save = document.querySelector('#skill-editor .primary');
-  if (save) { save.disabled = !editable; }
   const remove = document.querySelector('#skill-editor .danger');
   if (remove) { remove.disabled = skillsNew || !entry || !entry.editable; }
   document.getElementById('skill-body').placeholder = editable ? '' : '';
+  skillBaseline = skillsNew ? JSON.parse(JSON.stringify(skillSnapshot())) : null;
+  refreshActionBars();
 }
 
 function skillPath(name, scope) {
   return '/api/skills/' + encodeURIComponent(scope) + '/' + encodeURIComponent(name);
 }
 
-function saveSkill() {
+function skillSnapshot() {
+  return {
+    name: document.getElementById('skill-name').value.trim(),
+    scope: (document.getElementById('skill-scope-host').dataset.value) || 'user',
+    description: document.getElementById('skill-description').value,
+    body: document.getElementById('skill-body').value
+  };
+}
+
+function skillDirty() {
+  if (skillBaseline === null || document.getElementById('skill-editor').classList.contains('hidden')) {
+    return false;
+  }
+  return JSON.stringify(skillSnapshot()) !== JSON.stringify(skillBaseline);
+}
+
+function resetSkillEditor() {
+  if (skillBaseline === null) { return; }
+  document.getElementById('skill-name').value = skillBaseline.name;
+  document.getElementById('skill-description').value = skillBaseline.description;
+  document.getElementById('skill-body').value = skillBaseline.body;
+  document.getElementById('skill-scope-host').dataset.value = skillBaseline.scope;
+  if (skillScopeSelect) { skillScopeSelect.setValue(skillBaseline.scope); }
+  refreshActionBars();
+}
+
+async function saveSkill() {
   const name = document.getElementById('skill-name').value.trim();
   const scope = (document.getElementById('skill-scope-host').dataset.value) || 'user';
   if (!name) {
-    showToast('skill name is required', 'error');
-    return;
+    const error = new Error('skill name is required');
+    showToast(error.message, 'error');
+    throw error;
   }
   const body = {
     description: document.getElementById('skill-description').value,
     body: document.getElementById('skill-body').value
   };
-  api(skillPath(name, scope), {method: 'PUT', body: JSON.stringify(body)}).then(() => {
+  try {
+    await api(skillPath(name, scope), {method: 'PUT', body: JSON.stringify(body)});
     showToast('skill saved', 'ok');
-    return loadSkills();
-  }).catch((error) => showToast(error.message, 'error'));
+    await loadSkills();
+    const saved = (skillsState.entries || []).find((entry) => entry.name === name && entry.scope === scope);
+    if (saved) { skillsSelected = saved; }
+    skillsNew = false;
+    skillBaseline = JSON.parse(JSON.stringify(skillSnapshot()));
+    refreshActionBars();
+  } catch (error) {
+    showToast(error.message, 'error');
+    throw error;
+  }
 }
 
 function deleteSkill() {
@@ -166,6 +212,8 @@ function hideSkillEditor() {
   document.getElementById('skill-empty').classList.remove('hidden');
   document.getElementById('skill-editor').classList.add('hidden');
   skillsSelected = null;
+  skillBaseline = null;
+  refreshActionBars();
 }
 
 function setSkillEnabled(entry, enabled) {
@@ -187,3 +235,9 @@ function toggleSkillEnabled() {
   const enabled = document.getElementById('skill-enabled').checked;
   setSkillEnabled(skillsSelected, enabled);
 }
+
+actionBars.skills = createActionBar('actions-skills', {
+  isDirty: skillDirty,
+  save: saveSkill,
+  reset: resetSkillEditor
+});

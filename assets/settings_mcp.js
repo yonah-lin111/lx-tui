@@ -6,6 +6,7 @@ let mcpSelected = null;
 let mcpNew = false;
 let mcpToolNames = [];
 let mcpDisabled = new Set();
+let mcpBaseline = null;
 
 const mcpStatusMarks = {
   ready: '●',
@@ -27,6 +28,7 @@ function loadMcp() {
     mcpState = data;
     renderMcpList();
     if (status) { status.textContent = data.servers.length + ' server(s)'; }
+    refreshActionBars();
   }).catch((error) => {
     if (status) { status.textContent = error.message; }
     showToast(error.message, 'error');
@@ -150,6 +152,7 @@ function showMcpEditor(server) {
   mcpToolNames = Array.from(mcpDisabled);
   renderMcpTools();
   updateMcpVisibility();
+  mcpBaseline = JSON.parse(JSON.stringify(mcpSnapshot()));
 }
 
 function fillTransportSelect(value) {
@@ -231,6 +234,7 @@ function renderMcpTools() {
     box.checked = !mcpDisabled.has(tool);
     box.onchange = () => {
       if (box.checked) { mcpDisabled.delete(tool); } else { mcpDisabled.add(tool); }
+      refreshActionBars();
     };
     label.appendChild(box);
     label.appendChild(document.createTextNode(' ' + tool));
@@ -273,24 +277,58 @@ function buildMcpConfig() {
   return config;
 }
 
-function saveMcpServer() {
+function mcpSnapshot() {
+  return {
+    name: document.getElementById('mcp-name').value.trim(),
+    scope: selectValue('mcp-scope-host') || 'user',
+    config: buildMcpConfig(),
+    bearer_token: document.getElementById('mcp-bearer-token').value,
+    client_secret: document.getElementById('mcp-client-secret').value
+  };
+}
+
+function mcpDirty() {
+  if (mcpBaseline === null || document.getElementById('mcp-editor').classList.contains('hidden')) {
+    return false;
+  }
+  return JSON.stringify(mcpSnapshot()) !== JSON.stringify(mcpBaseline);
+}
+
+function resetMcpEditor() {
+  if (mcpNew) {
+    showMcpEditor(null);
+  } else if (mcpSelected) {
+    showMcpEditor(mcpSelected);
+  }
+}
+
+async function saveMcpServer() {
   const name = document.getElementById('mcp-name').value.trim();
   const scope = selectValue('mcp-scope-host') || 'user';
   if (!name) {
-    showToast('server name is required', 'error');
-    return;
+    const error = new Error('server name is required');
+    showToast(error.message, 'error');
+    throw error;
   }
   const body = buildMcpConfig();
-  api('/api/mcp/' + encodeURIComponent(scope) + '/' + encodeURIComponent(name), {
-    method: 'PUT',
-    body: JSON.stringify(body)
-  }).then(() => {
-    showToast('MCP server saved', 'ok');
-    return loadMcp().then(() => {
-      const saved = mcpState.servers.find((server) => server.name === name && server.scope === scope);
-      if (saved) { selectMcpServer(saved); }
+  try {
+    await api('/api/mcp/' + encodeURIComponent(scope) + '/' + encodeURIComponent(name), {
+      method: 'PUT',
+      body: JSON.stringify(body)
     });
-  }).catch((error) => showToast(error.message, 'error'));
+    showToast('MCP server saved', 'ok');
+    await loadMcp();
+    const saved = mcpState.servers.find((server) => server.name === name && server.scope === scope);
+    if (saved) {
+      selectMcpServer(saved);
+    } else {
+      mcpBaseline = JSON.parse(JSON.stringify(mcpSnapshot()));
+      refreshActionBars();
+    }
+  } catch (error) {
+    showToast(error.message, 'error');
+    throw error;
+  }
 }
 
 function deleteMcpServer() {
@@ -309,6 +347,8 @@ function hideMcpEditor() {
   document.getElementById('mcp-empty').classList.remove('hidden');
   document.getElementById('mcp-editor').classList.add('hidden');
   mcpSelected = null;
+  mcpBaseline = null;
+  refreshActionBars();
 }
 
 function mcpServerPath(suffix) {
@@ -356,3 +396,9 @@ function mcpLogout() {
     return loadMcp();
   }).catch((error) => showToast(error.message, 'error'));
 }
+
+actionBars.mcp = createActionBar('actions-mcp', {
+  isDirty: mcpDirty,
+  save: saveMcpServer,
+  reset: resetMcpEditor
+});

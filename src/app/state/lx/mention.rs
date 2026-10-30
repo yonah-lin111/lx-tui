@@ -258,6 +258,11 @@ impl LxMention {
 }
 
 impl LxMention {
+    /// 当前可用 skill 快照；分割窗格时复制给新窗格。
+    pub fn skills(&self) -> &[crate::skills::SkillEntry] {
+        &self.skills
+    }
+
     /// 写入当前可用 skill；有打开的 `@` 面板时立即重算候选。
     pub fn set_skills(
         &mut self,

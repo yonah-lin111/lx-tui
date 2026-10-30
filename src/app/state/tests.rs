@@ -631,3 +631,103 @@ fn workspace_identity_follows_git_shape() {
     assert_eq!(plain.branch, None);
     assert_eq!(plain.worktree, None);
 }
+
+#[test]
+fn inventory_sync_fills_new_panes_from_project_map() {
+    let mut state = AppState::demo();
+    let root = state
+        .active_workspace()
+        .repo_key()
+        .map(Path::to_path_buf)
+        .expect("workspace root");
+    state.mcp_inventory.insert(
+        root.clone(),
+        StartupCount {
+            total: 4,
+            ready: 3,
+            errors: 1,
+            loading: false,
+        },
+    );
+    state.skill_inventory.insert(
+        Some(root.clone()),
+        StartupCount {
+            total: 2,
+            ready: 2,
+            errors: 0,
+            loading: false,
+        },
+    );
+    assert!(state.sync_lx_inventory());
+    let first = state.active_tab().layout.focus();
+    let second = state
+        .active_tab_mut()
+        .split_pane(first, Direction::Horizontal)
+        .expect("split");
+    state
+        .pane_mut_anywhere(second)
+        .expect("new pane")
+        .lx
+        .startup = StartupCounts::default();
+    assert!(state.sync_lx_inventory());
+    let counts = state.pane_anywhere(second).expect("new pane").lx.startup;
+    assert_eq!(counts.mcp.ready, 3);
+    assert_eq!(counts.mcp.errors, 1);
+    assert_eq!(counts.skills.ready, 2);
+}
+
+#[test]
+fn inventory_sync_keeps_workspace_counts_separate() {
+    let mut state = AppState::demo();
+    let first_root = state
+        .active_workspace()
+        .repo_key()
+        .map(Path::to_path_buf)
+        .expect("workspace root");
+    let second_root = PathBuf::from("/tmp/lx-inventory-other");
+    state.workspaces.push(Workspace::single_terminal(
+        "other".into(),
+        Some(second_root.clone()),
+    ));
+    state.mcp_inventory.insert(
+        first_root,
+        StartupCount {
+            total: 4,
+            ready: 4,
+            errors: 0,
+            loading: false,
+        },
+    );
+    state.mcp_inventory.insert(
+        second_root.clone(),
+        StartupCount {
+            total: 1,
+            ready: 0,
+            errors: 1,
+            loading: false,
+        },
+    );
+    assert!(state.sync_lx_inventory());
+    assert_eq!(
+        state.workspaces[0].tabs[0].root_pane(),
+        Some(state.workspaces[0].tabs[0].layout.focus())
+    );
+    let first = state.workspaces[0].tabs[0]
+        .root_pane()
+        .and_then(|id| state.workspaces[0].tabs[0].pane(id))
+        .expect("first")
+        .lx
+        .startup
+        .mcp
+        .total;
+    let second = state.workspaces[1].tabs[0]
+        .root_pane()
+        .and_then(|id| state.workspaces[1].tabs[0].pane(id))
+        .expect("second")
+        .lx
+        .startup
+        .mcp
+        .total;
+    assert_eq!(first, 4);
+    assert_eq!(second, 1);
+}

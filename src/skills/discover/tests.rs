@@ -38,7 +38,13 @@ fn project_roots_take_priority_and_duplicates_are_shadowed() {
         lx: Some(project),
         agents: Some(project_agents),
     };
-    let catalog = discover(&user, &agents, Some(&roots), &HashSet::new());
+    let catalog = discover(
+        &user,
+        &agents,
+        Some(&roots),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
     let shared: Vec<_> = catalog
         .entries
         .iter()
@@ -72,7 +78,13 @@ fn hidden_directories_are_skipped_and_disabled_entries_are_off() {
     skill(&user, "visible");
     skill(&user, ".hidden");
     let disabled_path = std::fs::canonicalize(user.join("visible/SKILL.md")).expect("canonical");
-    let catalog = discover(&user, &agents, None, &HashSet::from([disabled_path]));
+    let catalog = discover(
+        &user,
+        &agents,
+        None,
+        &HashSet::from([disabled_path]),
+        &HashSet::new(),
+    );
     assert!(catalog.entries.iter().all(|entry| entry.name != ".hidden"));
     let visible = catalog
         .entries
@@ -94,7 +106,7 @@ fn depth_limit_is_six() {
     }
     std::fs::create_dir_all(&dir).expect("deep dir");
     std::fs::write(dir.join("SKILL.md"), "---\ndescription: too deep\n---\n").expect("file");
-    let catalog = discover(&user, &agents, None, &HashSet::new());
+    let catalog = discover(&user, &agents, None, &HashSet::new(), &HashSet::new());
     assert!(
         catalog.entries.is_empty(),
         "第 8 层目录里的 skill 不得被发现"
@@ -110,7 +122,7 @@ fn symlink_cycles_are_not_followed_forever() {
     let agents = base.join("agents");
     skill(&user, "real");
     std::os::unix::fs::symlink(&user, user.join("real").join("loop")).expect("symlink");
-    let catalog = discover(&user, &agents, None, &HashSet::new());
+    let catalog = discover(&user, &agents, None, &HashSet::new(), &HashSet::new());
     assert_eq!(
         catalog
             .entries
@@ -153,7 +165,7 @@ fn lowercase_skill_md_is_discovered() {
         "---\nname: grill-me\ndescription: Stress-test a plan.\n---\n\n# Grill\n",
     )
     .expect("skill");
-    let catalog = discover(&user, &agents, None, &HashSet::new());
+    let catalog = discover(&user, &agents, None, &HashSet::new(), &HashSet::new());
     let entry = catalog
         .entries
         .iter()
@@ -164,5 +176,35 @@ fn lowercase_skill_md_is_discovered() {
         "{:?}",
         entry.path
     );
+    let _ = std::fs::remove_dir_all(base);
+}
+
+#[test]
+fn agents_skills_are_disabled_until_explicitly_enabled() {
+    let base = temp_dir("agents-default");
+    let user = base.join("user");
+    let agents = base.join("agents");
+    skill(&agents, "agent-only");
+    let path = std::fs::canonicalize(agents.join("agent-only/SKILL.md")).expect("canonical");
+    let catalog = discover(&user, &agents, None, &HashSet::new(), &HashSet::new());
+    let entry = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.name == "agent-only")
+        .expect("agent skill discovered");
+    assert!(!entry.enabled, ".agents skill must default to disabled");
+    let catalog = discover(
+        &user,
+        &agents,
+        None,
+        &HashSet::new(),
+        &HashSet::from([path]),
+    );
+    let entry = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.name == "agent-only")
+        .expect("agent skill discovered");
+    assert!(entry.enabled, "explicit enable must load the skill");
     let _ = std::fs::remove_dir_all(base);
 }

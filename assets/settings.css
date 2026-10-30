@@ -26,6 +26,7 @@
   --accent-ink: #141414;
   --ok: #3ecf8e;
   --err: #ef6b6b;
+  --warn: #fbbf24;
   /* 层级：内高光 + 近距硬阴影 + 远距柔阴影，悬浮元素才"浮"得起来。 */
   --shadow-raise: 0 1px 2px rgba(0, 0, 0, .45);
   --shadow-overlay: inset 0 1px 0 rgba(255, 255, 255, .06), 0 2px 6px rgba(0, 0, 0, .5), 0 16px 40px rgba(0, 0, 0, .6);
@@ -41,7 +42,9 @@ nav.side { width: 200px; flex-shrink: 0; padding: 16px 0; background: var(--pane
 .side-resizer:hover::after, .side-resizer.dragging::after { background: var(--accent); }
 body.resizing { cursor: col-resize; user-select: none; }
 nav.side h1 { font-size: 13px; margin: 0 16px 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
-nav.side button { display: block; width: 100%; text-align: left; padding: 8px 16px; border: 0; background: none; font: inherit; cursor: pointer; color: var(--muted); }
+nav.side button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 8px 16px; border: 0; background: none; font: inherit; cursor: pointer; color: var(--muted); }
+nav.side button::before { content: ''; flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: transparent; }
+nav.side button.dirty::before { background: var(--warn); }
 nav.side button:hover { color: var(--text); background: var(--hover); }
 nav.side button.active { background: var(--active); color: var(--text); font-weight: 600; }
 main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; padding: 24px; }

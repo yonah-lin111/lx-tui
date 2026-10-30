@@ -1,5 +1,6 @@
 //! 应用状态：唯一状态来源，纯数据，可在无终端环境下构造与测试。
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -33,8 +34,9 @@ pub use lx::{
     ProcessEntry, ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey,
     RequestState, RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindTarget,
     RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand, SlashEntry,
-    SlashPanel, SnapshotState, SubagentDetailView, SubagentReportView, SubagentRun, TaskPage,
-    TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
+    SlashPanel, SnapshotState, StartupCount, StartupCounts, SubagentDetailView, SubagentReportView,
+    SubagentRun, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary,
+    UserShellView,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
@@ -278,6 +280,10 @@ pub struct AppState {
     pub settings_open_requested: bool,
     /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
     pub models: ModelsSnapshot,
+    /// 按项目根汇总的 MCP 装载计数；首页按窗格所属工作区取用。
+    pub mcp_inventory: BTreeMap<PathBuf, StartupCount>,
+    /// 按工作区根汇总的 skill 计数；None 表示无可用工作区根。
+    pub skill_inventory: BTreeMap<Option<PathBuf>, StartupCount>,
     /// 全局已发送 prompt 历史（跨窗格/工作区/会话共享；末尾为最近使用）。
     pub prompt_history: PromptHistory,
     /// 全局 todo 列表状态（不随工作区变化；跟随所在数据库）。
@@ -411,6 +417,8 @@ impl AppState {
             settings_available: false,
             settings_open_requested: false,
             models: ModelsSnapshot::default(),
+            mcp_inventory: BTreeMap::new(),
+            skill_inventory: BTreeMap::new(),
             prompt_history: PromptHistory::new(),
             todo: TodoPanel::new(),
             todo_scroll_drag: None,
@@ -427,6 +435,41 @@ impl AppState {
     /// 当前工作区（可变）。
     pub fn active_workspace_mut(&mut self) -> &mut Workspace {
         &mut self.workspaces[self.active_workspace]
+    }
+
+    /// 把按项目汇总的 MCP/skill 计数同步到所有窗格；新窗格、切换工作区与
+    /// 状态事件都走这一条路径，避免窗格自己维护第二份真相。
+    pub fn sync_lx_inventory(&mut self) -> bool {
+        let roots: Vec<Option<PathBuf>> = self
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.repo_key().map(Path::to_path_buf))
+            .collect();
+        let counts: Vec<StartupCounts> = roots
+            .into_iter()
+            .map(|root| StartupCounts {
+                mcp: root
+                    .as_ref()
+                    .and_then(|root| self.mcp_inventory.get(root))
+                    .copied()
+                    .unwrap_or_default(),
+                skills: self.skill_inventory.get(&root).copied().unwrap_or_default(),
+            })
+            .collect();
+        let mut changed = false;
+        for (workspace, counts) in self.workspaces.iter_mut().zip(counts) {
+            for tab in &mut workspace.tabs {
+                for id in tab.layout.pane_ids() {
+                    if let Some(pane) = tab.pane_mut(id)
+                        && pane.lx.startup != counts
+                    {
+                        pane.lx.startup = counts;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        changed
     }
 
     /// 显示中 prompt 的工作区索引：钉住时为其目标，否则为激活工作区。

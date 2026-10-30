@@ -209,6 +209,34 @@ function element(tag, className, text) {
 // 页面内不再有其它保存入口。状态圆点：绿=已保存，白=未保存，红=保存失败，灰脉冲=保存中。
 
 const actionBars = {};
+const TAB_KEYS = ['general', 'commands', 'models', 'mcp', 'skills'];
+let settingsSaving = false;
+let settingsFailed = false;
+
+function anySettingsDirty() {
+  return Object.values(actionBars).some((bar) => bar.isDirty());
+}
+
+// 任意视图的 Save 都保存全部脏视图；tab 左侧黄点由同一份 isDirty 派生。
+function saveAllDirty() {
+  if (settingsSaving) { return Promise.resolve(); }
+  const dirty = Object.entries(actionBars).filter(([, bar]) => bar.isDirty());
+  if (dirty.length === 0) { return Promise.resolve(); }
+  settingsSaving = true;
+  settingsFailed = false;
+  refreshActionBars();
+  let chain = Promise.resolve();
+  for (const [, bar] of dirty) {
+    chain = chain.then(() => bar.save());
+  }
+  return chain
+    .then(() => { settingsFailed = false; })
+    .catch((error) => { settingsFailed = true; throw error; })
+    .finally(() => {
+      settingsSaving = false;
+      refreshActionBars();
+    });
+}
 
 function createActionBar(hostId, controller) {
   const host = document.getElementById(hostId);
@@ -224,49 +252,50 @@ function createActionBar(hostId, controller) {
   host.appendChild(status);
   host.appendChild(reset);
   host.appendChild(save);
-  let saving = false;
-  let failed = false;
   const refresh = () => {
     const dirty = controller.isDirty();
-    if (saving) {
+    const anyDirty = anySettingsDirty();
+    if (settingsSaving) {
       dot.className = 'status-dot saving';
       text.textContent = 'Saving…';
-    } else if (failed) {
+    } else if (settingsFailed) {
       dot.className = 'status-dot error';
       text.textContent = 'Save failed';
-    } else if (dirty) {
+    } else if (anyDirty) {
       dot.className = 'status-dot dirty';
       text.textContent = 'Unsaved changes';
     } else {
       dot.className = 'status-dot clean';
       text.textContent = 'Saved';
     }
-    save.disabled = saving || !dirty;
-    reset.disabled = saving || !dirty;
+    save.disabled = settingsSaving || !anyDirty;
+    reset.disabled = settingsSaving || !dirty;
   };
   save.onclick = () => {
-    if (saving || !controller.isDirty()) { return; }
-    saving = true;
-    failed = false;
-    refresh();
-    Promise.resolve()
-      .then(() => controller.save())
-      .then(() => { saving = false; failed = false; refresh(); })
-      .catch(() => { saving = false; failed = true; refresh(); });
+    if (settingsSaving || !anySettingsDirty()) { return; }
+    saveAllDirty().catch(() => {});
   };
   reset.onclick = () => {
-    if (saving) { return; }
+    if (settingsSaving) { return; }
     controller.reset();
-    failed = false;
-    refresh();
+    settingsFailed = false;
+    refreshActionBars();
     showToast('Reset to last saved state', 'info');
   };
   refresh();
-  return {refresh: refresh};
+  return {
+    refresh: refresh,
+    isDirty: () => controller.isDirty(),
+    save: () => controller.save()
+  };
 }
 
 function refreshActionBars() {
   for (const bar of Object.values(actionBars)) { bar.refresh(); }
+  for (const key of TAB_KEYS) {
+    const tab = document.getElementById('tab-' + key);
+    if (tab) { tab.classList.toggle('dirty', !!(actionBars[key] && actionBars[key].isDirty())); }
+  }
 }
 
 document.addEventListener('input', refreshActionBars);

@@ -23,12 +23,20 @@ pub struct SkillsSection {
     /// 被禁用的 skill（canonical `SKILL.md` 绝对路径）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled: Vec<PathBuf>,
+    /// 显式启用的 `.agents` skill（canonical `SKILL.md` 绝对路径）；默认不加载。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enabled: Vec<PathBuf>,
 }
 
 impl SkillsConfigFile {
     /// 禁用集合（canonical 路径比较）。
     pub fn disabled_set(&self) -> BTreeSet<PathBuf> {
         self.skills.disabled.iter().cloned().collect()
+    }
+
+    /// 显式启用集合（仅 `.agents` 来源使用；默认关闭）。
+    pub fn enabled_set(&self) -> BTreeSet<PathBuf> {
+        self.skills.enabled.iter().cloned().collect()
     }
 }
 

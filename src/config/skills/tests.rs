@@ -14,6 +14,7 @@ fn disabled_round_trip_and_permissions() {
     let file = SkillsConfigFile {
         skills: SkillsSection {
             disabled: vec![PathBuf::from("/x/skills/pdf/SKILL.md")],
+            enabled: Vec::new(),
         },
     };
     save_skills(&path, &file).expect("save");

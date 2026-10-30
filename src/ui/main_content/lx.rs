@@ -371,6 +371,8 @@ struct Layout {
     panel: Option<Rect>,
     entries: Vec<(LxEntry, Rect)>,
     horizontal: bool,
+    /// 三个 agent 入口下方的资源计数行（上方留 2 行空白）。
+    inventory: Option<Rect>,
     icon: Option<(u16, u16)>,
     description: Option<TextRect>,
     /// 空间不足时退化为居中字标。
@@ -390,6 +392,7 @@ impl Layout {
             panel: None,
             entries: Vec::new(),
             horizontal: true,
+            inventory: None,
             icon: None,
             description: None,
             fallback,
@@ -582,6 +585,14 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
             content_w,
             entries_top,
         );
+        // 计数行在入口标签下方，与入口块（含选中下划线）之间空两行。
+        let inventory_top = entries_top
+            .saturating_add(entries_h)
+            .saturating_add(brand::UNDERLINE_ROWS)
+            .saturating_add(2);
+        if inventory_top < top_limit {
+            out.inventory = Some(Rect::new(content_x, inventory_top, content_w, 1));
+        }
     }
     out
 }
@@ -653,14 +664,6 @@ fn build(
         brand::draw_icon(&mut grid, ix, iy, lx.entry);
     }
     if let Some(rect) = lay.description {
-        // 计数行放在 logo 与 Tip 之间的一行空隙里；没有空间时随 Tip 一起隐藏。
-        if rect.y > area.y {
-            brand::draw_inventory(
-                &mut grid,
-                Rect::new(rect.x, rect.y - 1, rect.width, 1),
-                lx.startup,
-            );
-        }
         brand::draw_tip(
             &mut grid,
             Rect::new(rect.x, rect.y, rect.width, 1),
@@ -669,6 +672,9 @@ fn build(
     }
 
     brand::draw_entries(&mut grid, lx.entry, &lay.entries, lay.horizontal);
+    if let Some(rect) = lay.inventory {
+        brand::draw_inventory(&mut grid, rect, lx.startup);
+    }
 
     chat_bar::draw(&mut grid, lay.chat_bar, lx);
     let mut cursor = None;

@@ -37,6 +37,7 @@ pub fn discover(
     user_agents_root: &Path,
     project: Option<&ProjectSkillRoots>,
     disabled: &HashSet<PathBuf>,
+    enabled: &HashSet<PathBuf>,
 ) -> SkillCatalog {
     let mut roots: Vec<(PathBuf, SkillScope, SkillSource, bool)> = Vec::new();
     if let Some(project) = project {
@@ -70,7 +71,15 @@ pub fn discover(
     let mut seen_names: HashSet<String> = HashSet::new();
     let mut seen_paths: HashSet<PathBuf> = HashSet::new();
     for (root, scope, source, skip_projects) in roots {
-        for entry in scan_root(&root, scope, source, skip_projects, disabled, &mut catalog) {
+        for entry in scan_root(
+            &root,
+            scope,
+            source,
+            skip_projects,
+            disabled,
+            enabled,
+            &mut catalog,
+        ) {
             if !seen_paths.insert(entry.path.clone()) {
                 continue;
             }
@@ -104,6 +113,7 @@ fn scan_root(
     source: SkillSource,
     skip_projects: bool,
     disabled: &HashSet<PathBuf>,
+    enabled: &HashSet<PathBuf>,
     catalog: &mut SkillCatalog,
 ) -> Vec<SkillEntry> {
     if !root.is_dir() {
@@ -131,7 +141,9 @@ fn scan_root(
             let is_dir = entry.metadata().map(|meta| meta.is_dir()).unwrap_or(false);
             if !is_dir {
                 if is_skill_file_name(&entry.file_name()) {
-                    push_skill(&path, &dir, scope, source, disabled, catalog, &mut found);
+                    push_skill(
+                        &path, &dir, scope, source, disabled, enabled, catalog, &mut found,
+                    );
                 }
                 continue;
             }
@@ -262,6 +274,7 @@ fn push_skill(
     scope: SkillScope,
     source: SkillSource,
     disabled: &HashSet<PathBuf>,
+    enabled: &HashSet<PathBuf>,
     catalog: &mut SkillCatalog,
     found: &mut Vec<SkillEntry>,
 ) {
@@ -279,7 +292,10 @@ fn push_skill(
         path: canonical.clone(),
         scope,
         source,
-        enabled: !disabled.contains(&canonical),
+        enabled: match source {
+            SkillSource::Agents => enabled.contains(&canonical) && !disabled.contains(&canonical),
+            SkillSource::Lx => !disabled.contains(&canonical),
+        },
         shadowed_by: None,
     });
 }

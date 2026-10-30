@@ -78,6 +78,11 @@ impl Lx {
         &self.mention
     }
 
+    /// 当前 skill 候选快照；分割窗格时复制给新窗格。
+    pub fn mention_skills(&self) -> Vec<crate::skills::SkillEntry> {
+        self.mention.skills().to_vec()
+    }
+
     /// 写入 skill 候选；由事件层在 skill 目录扫描完成后调用。
     pub fn set_mention_skills(&mut self, skills: Vec<crate::skills::SkillEntry>) {
         let text = self.input.clone();

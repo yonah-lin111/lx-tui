@@ -66,6 +66,7 @@ pub enum AppEvent {
         root: Option<PathBuf>,
         total: usize,
         errors: usize,
+        entries: Vec<crate::skills::SkillEntry>,
     },
     /// 工作区 git 元数据查询结果。
     GitRefreshed {
@@ -506,6 +507,11 @@ async fn run_loop(
         if update::sync_all_lx_mention_roots(state) {
             dirty = true;
         }
+        // 资源计数按项目集中维护：每帧同步到所有窗格，新分割/新打开的工作区
+        // 不会显示成 0。
+        if state.sync_lx_inventory() {
+            dirty = true;
+        }
         pump_lx_mention_scan(state, &sender);
         git::pump_git_queries(state, &sender, &mut git_inflight);
         let geometry = session::current_geometry(tui, state, &config)?;
@@ -783,10 +789,11 @@ fn handle_app_event(
             entries,
         } => update::apply_lx_mention_entries(state, pane, generation, &root, entries),
         AppEvent::SkillsLoaded {
-            root: _,
+            root,
             total,
             errors,
-        } => inventory::apply_skills_loaded(state, total, errors),
+            entries,
+        } => inventory::apply_skills_loaded(state, root, total, errors, &entries),
         AppEvent::GitRefreshed { cwd, checkout } => {
             update::apply_git_refresh(state, &cwd, checkout)
         }
