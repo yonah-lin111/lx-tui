@@ -1,9 +1,8 @@
 # `/rename` 会话重命名命令与内联参数说明：执行任务清单
 
-- 状态：**已完成并通过 Code Review 修复（分支 `feat/lx-slash-rename`，见 `review.md`）**
+- 状态：**已完成并合并入主工作区 `dev` 分支（原分支 `feat/lx-slash-rename` 已清理，见 `review.md`）**
 - 关联设计：`docs/feature/lx-slash-rename/design.md`
 - 关联评审：`docs/feature/lx-slash-rename/review.md`
-- 工作区：`.worktrees/lx-slash-rename`
 
 ---
 

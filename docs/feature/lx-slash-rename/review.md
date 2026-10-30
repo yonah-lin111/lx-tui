@@ -1,6 +1,6 @@
 # `/rename` 会话重命名命令与内联参数说明 — 代码评审报告 (Code Review)
 
-> 评审范围：`.worktrees/lx-slash-rename`（分支 `feat/lx-slash-rename`）
+> 评审范围：`feat/lx-slash-rename`（已合并入主工作区 `dev` 分支）
 >
 > 检索与分析工具：`codegraph`（调用链与影响面分析）、`codebase-memory-mcp`（`detect_changes` 变更爆炸半径、`trace_path` 调用链追踪、`search_graph` 符号检索）
 >
