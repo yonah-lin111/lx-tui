@@ -30,18 +30,16 @@ use tokio_stream::StreamExt;
 
 use crate::app::markdown::MentionEntry;
 use crate::app::state::{AppState, WorkspaceGit};
-use crate::app::toast::Toast;
 use crate::app::update;
 use crate::chat::process::ProcessUiEvent;
 use crate::config::Config;
 use crate::db::service::Persistence;
 use crate::layout::PaneId;
-use crate::mcp::{McpEvent, ServerStatus};
+use crate::mcp::McpEvent;
 use crate::pty::PtySession;
 use crate::settings::service::{McpStatusView, SettingsEvent, SettingsService};
 use crate::tui::Tui;
 use crate::ui;
-use crate::ui::text;
 
 /// 应用级事件：后台任务（PTY 读线程、提及扫描与 git 查询）经此汇入主循环。
 #[derive(Debug)]
@@ -191,21 +189,6 @@ pub enum AppEvent {
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 /// 空闲等待：只由输入或 PTY 输出唤醒。
 const IDLE_WAIT: Duration = Duration::from_secs(3600);
-
-/// 某个项目根下的全部 lx 窗格（MCP 反馈按项目落到对应窗格）。
-fn panes_for_project(state: &AppState, project: &std::path::Path) -> Vec<PaneId> {
-    let mut panes = Vec::new();
-    for workspace in &state.workspaces {
-        if workspace.repo_key().is_none_or(|root| root != project) {
-            continue;
-        }
-        for tab in &workspace.tabs {
-            panes.extend(tab.layout.pane_ids());
-        }
-    }
-    panes
-}
-
 /// lx loading 转轮每帧间隔（对齐 codex motion.rs 的 100ms）。
 const LOADING_FRAME_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -289,117 +272,47 @@ async fn run_loop(
     commands::seed_git_requests(state);
     // 进入应用即装载资源：MCP 后台预热、skill 目录后台扫描；首页先显示 loading。
     let mut mcp_roots = chat::mcp::project_roots(state);
+    let mut skill_roots = inventory::skill_roots(state);
     inventory::initialize_mcp(state, persistence, &mcp_roots);
     inventory::spawn_skills_preload(state, persistence, &sender);
 
     while !state.should_quit {
         // 会话按状态对齐：新建工作区的窗格在此启动，被移除工作区的会话在此终止。
         session::reconcile_sessions(state, &mut sessions, &sender);
-        // 新打开的工作区也要立即预热 MCP；已有连接不会重复启动。
+        // 新打开的工作区或 GitRefreshed 解析出的新仓库根也要立即预热 MCP 与 Skills。
         let roots = chat::mcp::project_roots(state);
         if roots != mcp_roots {
             mcp_roots = roots.clone();
             inventory::initialize_mcp(state, persistence, &mcp_roots);
         }
+        let current_skill_roots = inventory::skill_roots(state);
+        if current_skill_roots != skill_roots {
+            skill_roots = current_skill_roots;
+            skills_reload = true;
+        }
         // 设置页项目表：工作区打开/关闭/信任变化都可能改变 scope 映射。
         if let Some(service) = settings_service.as_ref() {
             service.set_projects(chat::mcp::project_views(state, persistence));
         }
-        // 设置页事件：保存的配置与命令变更在事件循环内应用。
-        while let Ok(event) = settings_receiver.try_recv() {
-            match event {
-                SettingsEvent::ConfigChanged(updated) => config = updated,
-                SettingsEvent::CommandsChanged => commands_reload = true,
-                SettingsEvent::ModelsChanged(settings) => {
-                    // 模型配置已落盘：更新快照；在途请求继续持有旧快照到结束，
-                    // 下一轮发送才用新配置。
-                    update::apply_models_changed(state, &settings);
-                }
-                SettingsEvent::McpChanged => {
-                    let roots = chat::mcp::project_roots(state);
-                    inventory::prune_mcp_statuses(persistence, &roots, &mut mcp_statuses);
-                    inventory::refresh_mcp(state, persistence, &roots);
-                }
-                SettingsEvent::McpRestart { server } => {
-                    let roots = chat::mcp::project_roots(state);
-                    chat::mcp::restart_projects(persistence, &roots, Some(&server));
-                }
-                SettingsEvent::McpCredentialsChanged => {
-                    crate::mcp::global_manager().bump_credentials();
-                    let roots = chat::mcp::project_roots(state);
-                    chat::mcp::prewarm_projects(persistence, &roots);
-                }
-                SettingsEvent::SkillsChanged => {
-                    chat::skills::invalidate_skill_cache();
-                    skills_reload = true;
-                }
-            }
+        if inventory::drain_settings_events(
+            &mut settings_receiver,
+            state,
+            persistence,
+            &mut config,
+            &mut commands_reload,
+            &mut skills_reload,
+            &mut mcp_statuses,
+        ) {
             dirty = true;
         }
-        // MCP 运行事件：状态快照、启动进度与失败/登录提示。
-        while let Ok(event) = mcp_receiver.try_recv() {
-            match event {
-                McpEvent::Status {
-                    project,
-                    server,
-                    status,
-                } => {
-                    let (label, error) = match &status {
-                        ServerStatus::Disabled => ("disabled", None),
-                        ServerStatus::Starting => ("starting", None),
-                        ServerStatus::Ready { .. } => ("ready", None),
-                        ServerStatus::Failed { error } => ("failed", Some(error.clone())),
-                        ServerStatus::NeedsLogin => ("needs_login", None),
-                    };
-                    mcp_statuses.insert(
-                        (project.clone(), server.clone()),
-                        McpStatusView {
-                            project: project.clone(),
-                            server: server.clone(),
-                            status: label.into(),
-                            error: error.clone(),
-                        },
-                    );
-                    inventory::update_mcp_status(state, &project, &mcp_statuses);
-                    let notice = match &status {
-                        ServerStatus::Failed { error } => Some((
-                            text::mcp::start_failed(&server, error),
-                            error.clone(),
-                            crate::app::toast::ToastKind::Danger,
-                        )),
-                        ServerStatus::NeedsLogin => Some((
-                            text::mcp::needs_login(&server),
-                            "needs_login".to_string(),
-                            crate::app::toast::ToastKind::Warning,
-                        )),
-                        _ => None,
-                    };
-                    if let Some((message, key, kind)) = notice
-                        && mcp_toasted.insert((project.clone(), server.clone(), key))
-                    {
-                        let panes = panes_for_project(state, &project);
-                        for pane in panes {
-                            update::show_lx_toast(
-                                state,
-                                pane,
-                                Toast::new(kind, message.clone(), Some(pane), Instant::now()),
-                            );
-                        }
-                    }
-                    if let Some(service) = settings_service.as_ref() {
-                        service.set_mcp_status(mcp_statuses.values().cloned().collect());
-                    }
-                    dirty = true;
-                }
-                McpEvent::StartupProgress {
-                    project,
-                    done,
-                    total,
-                } => {
-                    inventory::update_mcp_progress(state, &project, done, total);
-                    dirty = true;
-                }
-            }
+        if inventory::drain_mcp_events(
+            &mut mcp_receiver,
+            state,
+            settings_service.as_ref(),
+            &mut mcp_statuses,
+            &mut mcp_toasted,
+        ) {
+            dirty = true;
         }
         // 设置图标点击：请求打开浏览器（后台执行，不阻塞事件循环）。
         if state.settings_open_requested {
@@ -617,9 +530,9 @@ async fn run_loop(
                     );
                     pump_mention_scan(state, &sender);
                     pump_lx_mention_scan(state, &sender);
-                    pump_prompt_worktree(state, &sender, &mut git_inflight);
+                    commands::pump_prompt_worktree(state, &sender, &mut git_inflight);
                     git::pump_git_queries(state, &sender, &mut git_inflight);
-                    pump_referenced_requests(state, &sender);
+                    commands::pump_referenced_requests(state, &sender);
                 }
                 Some(Err(error)) => return Err(error),
                 None => break,
@@ -1036,115 +949,6 @@ fn pump_lx_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<App
             });
         });
     }
-}
-
-/// prompt 模板块的 worktree 绑定：选择器打开或块内绑定未解析时发起后台查询。
-/// `inflight` 记录在途仓库根，避免同一仓库重复发起。
-fn pump_prompt_worktree(
-    state: &mut AppState,
-    sender: &mpsc::UnboundedSender<AppEvent>,
-    inflight: &mut HashSet<PathBuf>,
-) {
-    if !update::prompt_panel_active(state) {
-        return;
-    }
-    let chooser = state.prompt.worktree_chooser_open();
-    let repo = if chooser {
-        state.prompt.take_worktree_refresh()
-    } else {
-        state.prompt.take_worktree_request()
-    };
-    let Some(repo) = repo else {
-        return;
-    };
-    if !inflight.insert(repo.clone()) {
-        return;
-    }
-    let sender = sender.clone();
-    tokio::task::spawn_blocking(move || {
-        let (candidates, failed) = match crate::git::list_worktrees(&repo) {
-            Some(list) => (update::worktree_candidates(list.entries), false),
-            None => (Vec::new(), true),
-        };
-        let _ = sender.send(AppEvent::PromptWorktreeListed {
-            repo_root: repo,
-            candidates,
-            failed,
-        });
-    });
-}
-
-/// 引用文件夹后台请求：扫描目录内容或校验新增路径；结果按请求代号投递回主循环。
-///
-/// 请求由 `app` 层登记（打开弹窗/进入目录/提交输入），此处取走并在阻塞线程执行，
-/// 绝不在事件循环或渲染路径同步遍历目录。路径校验需要判重，故读取当时的项目快照。
-fn pump_referenced_requests(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
-    if state.referenced_requests.is_empty() {
-        return;
-    }
-    let requests = std::mem::take(&mut state.referenced_requests);
-    let known: Vec<PathBuf> = state
-        .referenced
-        .folders
-        .iter()
-        .map(|folder| folder.path.clone())
-        .collect();
-    for request in requests {
-        let sender = sender.clone();
-        let known = known.clone();
-        match request {
-            crate::app::referenced::ReferencedRequest::Scan { id, root, .. } => {
-                tokio::task::spawn_blocking(move || {
-                    let outcome = crate::files::scan_referenced(&root).map_err(|_| ());
-                    let _ = sender.send(AppEvent::ReferencedScanned { id, outcome });
-                });
-            }
-            crate::app::referenced::ReferencedRequest::ValidateAdd { id, input } => {
-                tokio::task::spawn_blocking(move || {
-                    let outcome = validate_referenced_path(&input, &known);
-                    let _ = sender.send(AppEvent::ReferencedValidated { id, outcome });
-                });
-            }
-        }
-    }
-}
-
-/// 后台校验新增路径：绝对路径、存在、目录类型、引用可表达性与规范化去重。
-///
-/// 返回规范化路径或明确的失败原因；规范化后与快照重复时以 `Duplicate` 报告
-/// （调用方回投时携带 duplicate 标记，避免在同一响应里既给成功又给重复）。
-fn validate_referenced_path(
-    input: &str,
-    known: &[PathBuf],
-) -> Result<PathBuf, crate::app::referenced::PathValidation> {
-    use crate::app::referenced::PathValidation;
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return Err(PathValidation::Empty);
-    }
-    let path = std::path::Path::new(trimmed);
-    if !path.is_absolute() {
-        return Err(PathValidation::NotAbsolute);
-    }
-    if !path.exists() {
-        return Err(PathValidation::NotFound);
-    }
-    if !path.is_dir() {
-        return Err(PathValidation::NotDirectory);
-    }
-    if path.to_str().is_none() {
-        return Err(PathValidation::NotRepresentable);
-    }
-    let Some(canonical) = std::fs::canonicalize(path).ok() else {
-        return Err(PathValidation::NotFound);
-    };
-    if !crate::app::markdown::reference_representable(&canonical.to_string_lossy()) {
-        return Err(PathValidation::NotRepresentable);
-    }
-    if known.contains(&canonical) {
-        return Err(PathValidation::Duplicate);
-    }
-    Ok(canonical)
 }
 
 #[cfg(test)]

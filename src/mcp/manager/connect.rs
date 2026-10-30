@@ -49,13 +49,13 @@ pub(super) async fn start_connection(
             if let Some(stderr) = stderr {
                 spawn_stderr_logger(name.to_string(), stderr);
             }
-            let handler = LxClientHandler::default();
+            let handler = LxClientHandler::new(project_root.to_path_buf());
             let tools_changed = handler.tools_changed.clone();
             let client = handler
                 .serve(transport)
                 .await
                 .map_err(|error| StartError::Failed(format!("initialize failed: {error}")))?;
-            connect_client(name, config, client, tools_changed, pid, None).await
+            connect_client(name, server.scope, config, client, tools_changed, pid, None).await
         }
         McpTransportConfig::Http {
             url,
@@ -132,19 +132,29 @@ pub(super) async fn start_connection(
             transport_config.custom_headers = headers;
             let transport =
                 rmcp::transport::StreamableHttpClientTransport::from_config(transport_config);
-            let handler = LxClientHandler::default();
+            let handler = LxClientHandler::new(project_root.to_path_buf());
             let tools_changed = handler.tools_changed.clone();
             let client = handler
                 .serve(transport)
                 .await
                 .map_err(|error| StartError::Failed(format!("initialize failed: {error}")))?;
-            connect_client(name, config, client, tools_changed, None, credential_key).await
+            connect_client(
+                name,
+                server.scope,
+                config,
+                client,
+                tools_changed,
+                None,
+                credential_key,
+            )
+            .await
         }
     }
 }
 
 async fn connect_client(
     name: &str,
+    scope: crate::config::mcp::McpScope,
     config: &McpServerConfig,
     client: RunningService<RoleClient, LxClientHandler>,
     tools_changed: Arc<AtomicBool>,
@@ -170,6 +180,7 @@ async fn connect_client(
         instructions,
         has_resources,
         tools_changed,
+        scope,
         config: config.clone(),
         pid,
         credential_key,

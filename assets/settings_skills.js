@@ -120,6 +120,7 @@ function showSkillEditor(entry) {
     ariaLabel: 'Scope',
     options: skillScopeOptions(),
     value: scopeValue,
+    disabled: !skillsNew,
     onChange: (next) => { scopeHost.dataset.value = next; }
   });
   scopeHost.dataset.value = scopeValue;
@@ -130,7 +131,9 @@ function showSkillEditor(entry) {
   document.getElementById('skill-path').value = entry ? entry.path : '';
   document.getElementById('skill-description').value = entry ? entry.description : '';
   document.getElementById('skill-body').value = '';
-  document.getElementById('skill-enabled').checked = entry ? entry.enabled : true;
+  const enabledBox = document.getElementById('skill-enabled');
+  enabledBox.checked = entry ? entry.enabled : true;
+  enabledBox.disabled = skillsNew;
   const editable = skillsNew || (entry && entry.editable);
   document.getElementById('skill-description').disabled = !editable;
   document.getElementById('skill-body').disabled = !editable;
@@ -156,6 +159,9 @@ function skillSnapshot() {
 
 function skillDirty() {
   if (skillBaseline === null || document.getElementById('skill-editor').classList.contains('hidden')) {
+    return false;
+  }
+  if (!skillsNew && (!skillsSelected || !skillsSelected.editable)) {
     return false;
   }
   return JSON.stringify(skillSnapshot()) !== JSON.stringify(skillBaseline);
@@ -222,10 +228,17 @@ function setSkillEnabled(entry, enabled) {
     body: JSON.stringify({path: entry.path, enabled})
   }).then(() => {
     entry.enabled = enabled;
+    if (skillsSelected && skillsSelected.path === entry.path) {
+      document.getElementById('skill-enabled').checked = enabled;
+    }
+    renderSkillList();
     showToast(enabled ? 'skill enabled' : 'skill disabled', 'ok');
   }).catch((error) => {
     showToast(error.message, 'error');
     entry.enabled = !enabled;
+    if (skillsSelected && skillsSelected.path === entry.path) {
+      document.getElementById('skill-enabled').checked = entry.enabled;
+    }
     renderSkillList();
   });
 }

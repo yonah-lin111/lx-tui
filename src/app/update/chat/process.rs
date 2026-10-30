@@ -49,6 +49,17 @@ pub fn settle_tool_detail(
         let Some(call) = message.tool_mut(call_id) else {
             return false;
         };
+        if detail.is_none()
+            && matches!(
+                call.detail.as_deref(),
+                Some(
+                    crate::app::state::ToolDetailView::Mcp(_)
+                        | crate::app::state::ToolDetailView::Subagent(_)
+                )
+            )
+        {
+            return false;
+        }
         if call.detail.as_deref() == detail.as_ref() {
             return false;
         }
@@ -624,16 +635,30 @@ pub fn open_task_for_selected_tool(state: &mut AppState, pane: PaneId) -> bool {
         .iter()
         .find(|message| message.id == message_id)
         .and_then(|message| message.tool(&call_id));
-    // 文件卡片：`^o` 展开/收起，绝不打开后台任务面板。
-    // 判据用 app 层的视图本身（`app` 不得反向依赖 `ui`）。
-    if call.is_some_and(|call| call.file_view().is_some_and(|view| !view.is_empty())) {
-        return toggle_tool_detail(
-            state,
-            pane,
-            &message_id,
-            &call_id,
-            crate::app::state::CardSection::Body,
-        );
+    // 非进程类的可展开卡片（文件差异 / MCP / 搜索 / 子 agent）：`^o` 直接切换卡片展开，
+    // 绝不打开后台任务面板。判据用 app 层的视图本身（`app` 不得反向依赖 `ui`）。
+    if let Some(section) = call.and_then(|call| match call.detail.as_deref() {
+        Some(crate::app::state::ToolDetailView::File(view)) if !view.is_empty() => {
+            Some(crate::app::state::CardSection::Body)
+        }
+        Some(crate::app::state::ToolDetailView::Mcp(view)) => {
+            if !view.result.is_empty()
+                || !view.images.is_empty()
+                || view.images_omitted > 0
+                || call.error.is_some()
+            {
+                Some(crate::app::state::CardSection::Output)
+            } else {
+                Some(crate::app::state::CardSection::Body)
+            }
+        }
+        Some(crate::app::state::ToolDetailView::Search(_))
+        | Some(crate::app::state::ToolDetailView::Subagent(_)) => {
+            Some(crate::app::state::CardSection::Body)
+        }
+        _ => None,
+    }) {
+        return toggle_tool_detail(state, pane, &message_id, &call_id, section);
     }
     let session_id = call.and_then(|call| call.process_session_id());
     if let Some(target) = state.pane_mut_anywhere(pane) {

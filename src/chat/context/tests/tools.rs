@@ -739,3 +739,58 @@ fn missing_tool_image_replay_adds_placeholder() {
     assert!(content.contains("[image no longer available]"), "{content}");
     assert_eq!(images, 0);
 }
+
+fn turn_with_image(label: &str) -> super::super::PlannedTurn {
+    super::super::PlannedTurn {
+        user_text: label.into(),
+        assistant_text: None,
+        items: vec![ModelItem::ToolResult {
+            call_id: label.into(),
+            content: format!("result {label}"),
+            is_error: false,
+            images: vec![crate::chat::events::ModelImage {
+                mime: "image/png".into(),
+                bytes: std::sync::Arc::new(vec![1]),
+            }],
+        }],
+        tokens: 0,
+        user_images: Vec::new(),
+    }
+}
+
+#[test]
+fn only_the_latest_three_image_rounds_keep_images() {
+    let mut planned: Vec<super::super::PlannedTurn> = (0..4)
+        .map(|index| turn_with_image(&format!("r{index}")))
+        .collect();
+    super::super::strip_old_tool_images(&mut planned);
+    let first = match &planned[0].items[0] {
+        ModelItem::ToolResult {
+            images, content, ..
+        } => (images.len(), content.clone()),
+        _ => panic!("expected tool result"),
+    };
+    assert_eq!(first.0, 0);
+    assert!(first.1.contains("earlier tool result omitted"));
+    for turn in &planned[1..] {
+        match &turn.items[0] {
+            ModelItem::ToolResult { images, .. } => assert_eq!(images.len(), 1),
+            _ => panic!("expected tool result"),
+        }
+    }
+}
+
+#[test]
+fn unsupported_models_strip_every_tool_image() {
+    let mut planned = vec![turn_with_image("a")];
+    super::super::strip_all_tool_images(&mut planned);
+    match &planned[0].items[0] {
+        ModelItem::ToolResult {
+            images, content, ..
+        } => {
+            assert!(images.is_empty());
+            assert!(content.contains("does not support image input"));
+        }
+        _ => panic!("expected tool result"),
+    }
+}

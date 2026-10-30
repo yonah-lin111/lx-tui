@@ -58,10 +58,18 @@ const openSelects = new Set();
 
 function createSelect(host, config) {
   const optionsConfig = config || {};
+  if (host._selectInstance) {
+    openSelects.delete(host._selectInstance);
+  }
+  if (host._selectMenu && host._selectMenu.parentNode) {
+    host._selectMenu.parentNode.removeChild(host._selectMenu);
+  }
+  host.innerHTML = '';
   host.classList.add('select-host');
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'select-button';
+  button.disabled = !!optionsConfig.disabled;
   button.setAttribute('aria-haspopup', 'listbox');
   if (optionsConfig.ariaLabel) { button.setAttribute('aria-label', optionsConfig.ariaLabel); }
   const label = document.createElement('span');
@@ -136,7 +144,7 @@ function createSelect(host, config) {
   };
 
   const open = () => {
-    if (opened) { return; }
+    if (opened || button.disabled) { return; }
     openSelects.forEach((other) => { other.close(); });
     opened = true;
     menu.classList.remove('hidden');
@@ -184,7 +192,13 @@ function createSelect(host, config) {
       renderLabel();
       if (opened) { renderMenu(); }
     },
+    setDisabled: (disabled) => {
+      button.disabled = !!disabled;
+      if (disabled && opened) { close(); }
+    },
   };
+  host._selectMenu = menu;
+  host._selectInstance = instance;
   instance.setOptions(optionsConfig.options || [], current);
   return instance;
 }

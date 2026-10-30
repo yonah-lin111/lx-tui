@@ -21,3 +21,12 @@ pub use schema::{MAX_SCHEMA_BYTES, SCHEMA_OMITTED_NOTE, sanitize_json_schema, tr
 pub fn is_mcp_tool(name: &str) -> bool {
     name.starts_with(MCP_PREFIX)
 }
+
+/// 该工具名是否属于 MCP 工具或 MCP resources 内置桥接工具。
+pub fn is_mcp_or_resource_tool(name: &str) -> bool {
+    is_mcp_tool(name)
+        || matches!(
+            name,
+            "list_resources" | "list_resource_templates" | "read_resource"
+        )
+}

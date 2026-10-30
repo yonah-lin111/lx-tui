@@ -869,3 +869,31 @@ fn tool_result_images_use_function_response_parts() {
         "image/png"
     );
 }
+
+#[test]
+fn google_tools_trims_unsupported_json_schema_keywords_for_mcp_tools() {
+    let mut req = request();
+    req.tools = std::sync::Arc::new(vec![crate::chat::tools::ToolDecl {
+        name: "mcp__github__search".into(),
+        description: "Search issues".into(),
+        parameters: json!({
+            "type": "object",
+            "additionalProperties": false,
+            "$ref": "#/defs/query",
+            "properties": {
+                "q": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "query"
+                }
+            },
+            "required": ["q"]
+        }),
+    }]);
+    let body = body_of(&req);
+    let decl = &body["tools"][0]["functionDeclarations"][0]["parameters"];
+    assert!(decl.get("additionalProperties").is_none(), "{decl}");
+    assert!(decl.get("$ref").is_none(), "{decl}");
+    assert!(decl["properties"]["q"].get("minLength").is_none(), "{decl}");
+    assert_eq!(decl["properties"]["q"]["type"], "string");
+}

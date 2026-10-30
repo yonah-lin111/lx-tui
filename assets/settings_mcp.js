@@ -115,6 +115,7 @@ function showMcpEditor(server) {
     ariaLabel: 'Scope',
     options: scopeOptions,
     value: scopeValue,
+    disabled: !mcpNew,
     onChange: (next) => { scopeHost.dataset.value = next; }
   });
   scopeHost.dataset.value = scopeValue;
@@ -153,6 +154,7 @@ function showMcpEditor(server) {
   renderMcpTools();
   updateMcpVisibility();
   mcpBaseline = JSON.parse(JSON.stringify(mcpSnapshot()));
+  refreshActionBars();
 }
 
 function fillTransportSelect(value) {
@@ -244,12 +246,16 @@ function renderMcpTools() {
 
 function buildMcpConfig() {
   const transport = selectValue('mcp-transport-host') || 'stdio';
+  const prev = (!mcpNew && mcpSelected && mcpSelected.config) ? mcpSelected.config : null;
   const config = {
     enabled: document.getElementById('mcp-enabled').checked,
     transport,
-    startup_timeout_sec: 30,
-    tool_timeout_sec: 300
+    startup_timeout_sec: (prev && prev.startup_timeout_sec) ? prev.startup_timeout_sec : 30,
+    tool_timeout_sec: (prev && prev.tool_timeout_sec) ? prev.tool_timeout_sec : 300
   };
+  if (prev && Array.isArray(prev.enabled_tools)) {
+    config.enabled_tools = prev.enabled_tools;
+  }
   const disabled = Array.from(mcpDisabled).sort();
   if (disabled.length > 0) { config.disabled_tools = disabled; }
   if (transport === 'stdio') {

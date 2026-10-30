@@ -522,6 +522,7 @@ fn tool_signature(
             hash.write_u8(8);
             hash.write_str(&view.server);
             hash.write_str(&view.tool);
+            hash.write_str(&view.arguments.join("\n"));
             hash.write_str(&view.result.join("\n"));
             hash.write_usize(view.result_more);
             hash.write_usize(view.arguments_more);

@@ -97,14 +97,22 @@ pub(crate) fn anthropic_tools(tools: &[ToolDecl]) -> Value {
 }
 
 /// Gemini 的 `tools` 字段：`[{"functionDeclarations":[{name,description,parameters}]}]`。
+///
+/// 动态工具（MCP 与 resources 三工具）做 Gemini 专用 schema 裁剪（design §4.5），
+/// 内置工具保持原样以维持无图片 wire 字节不变。
 pub(crate) fn google_tools(tools: &[ToolDecl]) -> Value {
     let declarations: Vec<Value> = tools
         .iter()
         .map(|tool| {
+            let parameters = if crate::mcp::is_mcp_or_resource_tool(&tool.name) {
+                crate::mcp::trim_for_gemini(&tool.parameters)
+            } else {
+                tool.parameters.clone()
+            };
             json!({
                 "name": tool.name,
                 "description": tool.description,
-                "parameters": tool.parameters,
+                "parameters": parameters,
             })
         })
         .collect();

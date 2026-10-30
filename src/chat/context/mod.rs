@@ -491,11 +491,18 @@ fn planned_tokens(turn: &PlannedTurn) -> u64 {
     )
 }
 
-/// 只保留最近 3 个含工具图片的轮次；更早轮次的图片换成一行占位。
-fn strip_old_tool_images(planned: &mut [PlannedTurn]) {
+/// 对一组轮次的工具结果执行图片裁剪：
+/// - `supports_image_input == false`：清空全部工具图片并追加不支持占位；
+/// - 否则仅保留最近 3 个含工具图片的轮次，更早轮次替换为省略占位。
+///
+/// 主会话与子 agent 历史装配共用同一规则（design §5.4）。
+pub(crate) fn trim_tool_images_in_turn_items<'a>(
+    turns: impl DoubleEndedIterator<Item = &'a mut Vec<ModelItem>>,
+    supports_image_input: bool,
+) {
     let mut rounds = 0usize;
-    for turn in planned.iter_mut().rev() {
-        let has_images = turn.items.iter().any(|item| {
+    for items in turns.rev() {
+        let has_images = items.iter().any(|item| {
             matches!(
                 item,
                 ModelItem::ToolResult { images, .. } if !images.is_empty()
@@ -505,38 +512,39 @@ fn strip_old_tool_images(planned: &mut [PlannedTurn]) {
             continue;
         }
         rounds = rounds.saturating_add(1);
-        if rounds <= 3 {
+        if supports_image_input && rounds <= 3 {
             continue;
         }
-        for item in &mut turn.items {
+        let note = if supports_image_input {
+            "\n[image from an earlier tool result omitted; call the tool again if needed]"
+        } else {
+            "\n[image omitted: this model does not support image input]"
+        };
+        for item in items {
             if let ModelItem::ToolResult {
                 content, images, ..
             } = item
                 && !images.is_empty()
             {
                 images.clear();
-                content.push_str(
-                    "\n[image from an earlier tool result omitted; call the tool again if needed]",
-                );
+                content.push_str(note);
             }
         }
+    }
+}
+
+/// 只保留最近 3 个含工具图片的轮次；更早轮次的图片换成一行占位。
+fn strip_old_tool_images(planned: &mut [PlannedTurn]) {
+    trim_tool_images_in_turn_items(planned.iter_mut().map(|turn| &mut turn.items), true);
+    for turn in planned {
         turn.tokens = planned_tokens(turn);
     }
 }
 
 /// 模型不支持图片：清空全部工具图片并追加一行英文占位。
 fn strip_all_tool_images(planned: &mut [PlannedTurn]) {
+    trim_tool_images_in_turn_items(planned.iter_mut().map(|turn| &mut turn.items), false);
     for turn in planned {
-        for item in &mut turn.items {
-            if let ModelItem::ToolResult {
-                content, images, ..
-            } = item
-                && !images.is_empty()
-            {
-                images.clear();
-                content.push_str("\n[image omitted: this model does not support image input]");
-            }
-        }
         turn.tokens = planned_tokens(turn);
     }
 }
@@ -923,64 +931,4 @@ fn message_text_of(message: &ChatMessage) -> String {
         .map(|part| part.content.as_str())
         .collect::<Vec<_>>()
         .join("")
-}
-
-#[cfg(test)]
-mod tool_image_replay_tests {
-    use super::*;
-
-    fn turn_with_image(label: &str) -> PlannedTurn {
-        PlannedTurn {
-            user_text: label.into(),
-            assistant_text: None,
-            items: vec![ModelItem::ToolResult {
-                call_id: label.into(),
-                content: format!("result {label}"),
-                is_error: false,
-                images: vec![crate::chat::events::ModelImage {
-                    mime: "image/png".into(),
-                    bytes: std::sync::Arc::new(vec![1]),
-                }],
-            }],
-            tokens: 0,
-            user_images: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn only_the_latest_three_image_rounds_keep_images() {
-        let mut planned: Vec<PlannedTurn> = (0..4)
-            .map(|index| turn_with_image(&format!("r{index}")))
-            .collect();
-        strip_old_tool_images(&mut planned);
-        let first = match &planned[0].items[0] {
-            ModelItem::ToolResult {
-                images, content, ..
-            } => (images.len(), content.clone()),
-            _ => panic!("expected tool result"),
-        };
-        assert!(first.0 == 0);
-        assert!(first.1.contains("earlier tool result omitted"));
-        for turn in &planned[1..] {
-            match &turn.items[0] {
-                ModelItem::ToolResult { images, .. } => assert_eq!(images.len(), 1),
-                _ => panic!("expected tool result"),
-            }
-        }
-    }
-
-    #[test]
-    fn unsupported_models_strip_every_tool_image() {
-        let mut planned = vec![turn_with_image("a")];
-        strip_all_tool_images(&mut planned);
-        match &planned[0].items[0] {
-            ModelItem::ToolResult {
-                images, content, ..
-            } => {
-                assert!(images.is_empty());
-                assert!(content.contains("does not support image input"));
-            }
-            _ => panic!("expected tool result"),
-        }
-    }
 }

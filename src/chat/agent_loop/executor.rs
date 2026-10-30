@@ -214,8 +214,12 @@ impl AgentTools {
         mcp_outcome_result(entry.server, entry.raw_name, outcome, Some(duration_ms))
     }
 
-    /// resources 三工具：参数解析后交给共享连接管理器。
-    async fn execute_mcp_resource(&self, call: &ReadyToolCall) -> ToolExecutionResult {
+    /// resources 三工具：参数解析后交给共享连接管理器（支持 Esc 取消与超时）。
+    async fn execute_mcp_resource(
+        &self,
+        call: &ReadyToolCall,
+        cancel: tokio::sync::watch::Receiver<bool>,
+    ) -> ToolExecutionResult {
         let Some(runtime) = &self.mcp else {
             return crate::chat::tools::ToolFailure::new(
                 crate::chat::tools::ToolErrorCode::UnknownTool,
@@ -234,17 +238,18 @@ impl AgentTools {
         };
         let server = arguments.get("server").and_then(serde_json::Value::as_str);
         let cursor = arguments.get("cursor").and_then(serde_json::Value::as_str);
+        let started = std::time::Instant::now();
         let outcome = match call.name.as_str() {
             "list_resources" => {
                 runtime
                     .manager
-                    .list_resources(&runtime.snapshot, server, cursor)
+                    .list_resources(&runtime.snapshot, server, cursor, cancel)
                     .await
             }
             "list_resource_templates" => {
                 runtime
                     .manager
-                    .list_resource_templates(&runtime.snapshot, server, cursor)
+                    .list_resource_templates(&runtime.snapshot, server, cursor, cancel)
                     .await
             }
             _ => {
@@ -259,12 +264,13 @@ impl AgentTools {
                 };
                 runtime
                     .manager
-                    .read_resource(&runtime.snapshot, &self.session_id, server, uri)
+                    .read_resource(&runtime.snapshot, &self.session_id, server, uri, cancel)
                     .await
             }
         };
+        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let label = server.unwrap_or("all servers").to_string();
-        mcp_outcome_result(label, call.name.clone(), outcome, None)
+        mcp_outcome_result(label, call.name.clone(), outcome, Some(duration_ms))
     }
 
     /// 文件工具：在阻塞线程池执行，并注入本次调用的 recorder。
@@ -412,10 +418,16 @@ impl ToolExecutor for AgentTools {
         call: &ReadyToolCall,
         cancel: tokio::sync::watch::Receiver<bool>,
     ) -> Option<ToolExecutionResult> {
-        if !crate::mcp::is_mcp_tool(&call.name) {
+        let result = if crate::mcp::is_mcp_tool(&call.name) {
+            self.execute_mcp(call, cancel).await
+        } else if matches!(
+            call.name.as_str(),
+            "list_resources" | "list_resource_templates" | "read_resource"
+        ) {
+            self.execute_mcp_resource(call, cancel).await
+        } else {
             return None;
-        }
-        let result = self.execute_mcp(call, cancel).await;
+        };
         if !call.name.is_empty() {
             let mut turn = self.turn.lock().await;
             turn.observe(&call.name, &result);
@@ -446,7 +458,8 @@ impl AgentTools {
                 self.execute_mcp(call, cancel).await
             }
             "list_resources" | "list_resource_templates" | "read_resource" => {
-                self.execute_mcp_resource(call).await
+                let (_tx, cancel) = tokio::sync::watch::channel(false);
+                self.execute_mcp_resource(call, cancel).await
             }
             "update_plan" => {
                 // 修订号先取号后校验：校验失败不消耗可观察的提交（顶层不落库）。

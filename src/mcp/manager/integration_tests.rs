@@ -258,6 +258,72 @@ async fn resources_are_listed_and_read_from_the_fixture_server() {
     if !python_available() {
         return;
     }
+    let manager = Arc::new(McpManager::new());
+    let project = std::env::temp_dir();
+    let snapshot = Arc::new(
+        manager
+            .snapshot_for(
+                &project,
+                &[server("echo", BTreeMap::new(), 10)],
+                watch::channel(false).1,
+            )
+            .await,
+    );
+    assert!(snapshot.has_resources());
+    let listed = manager
+        .list_resources(&snapshot, None, None, watch::channel(false).1)
+        .await;
+    match listed {
+        McpCallOutcome::Success { text, .. } => {
+            assert!(text.contains("echo://doc"), "{text}");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    let read = manager
+        .read_resource(
+            &snapshot,
+            "sess-test",
+            "echo",
+            "echo://doc",
+            watch::channel(false).1,
+        )
+        .await;
+    match read {
+        McpCallOutcome::Success { text, .. } => {
+            assert!(text.contains("resource-body"), "{text}");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    // 慢资源读取在收到取消信号时必须立即返回 Cancelled，不挂死轮次。
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let call_manager = manager.clone();
+    let call_snapshot = snapshot.clone();
+    let task = tokio::spawn(async move {
+        call_manager
+            .read_resource(
+                &call_snapshot,
+                "sess-test",
+                "echo",
+                "echo://slow",
+                cancel_rx,
+            )
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    cancel_tx.send(true).expect("cancel");
+    let cancelled = tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("resource read cancellation must not hang")
+        .expect("join");
+    assert_eq!(cancelled, McpCallOutcome::Cancelled);
+    manager.shutdown().await;
+}
+
+#[tokio::test]
+async fn rpc_error_from_tool_call_keeps_server_ready() {
+    if !python_available() {
+        return;
+    }
     let manager = McpManager::new();
     let project = std::env::temp_dir();
     let snapshot = manager
@@ -267,23 +333,40 @@ async fn resources_are_listed_and_read_from_the_fixture_server() {
             watch::channel(false).1,
         )
         .await;
-    assert!(snapshot.has_resources());
-    let listed = manager.list_resources(&snapshot, None, None).await;
-    match listed {
-        McpCallOutcome::Success { text, .. } => {
-            assert!(text.contains("echo://doc"), "{text}");
-        }
-        other => panic!("unexpected {other:?}"),
-    }
-    let read = manager
-        .read_resource(&snapshot, "sess-test", "echo", "echo://doc")
+    let failed = manager
+        .call_tool(
+            &snapshot,
+            "sess-test",
+            "mcp__echo__echo",
+            json!({"text": "__rpc_error__"}),
+            watch::channel(false).1,
+        )
         .await;
-    match read {
-        McpCallOutcome::Success { text, .. } => {
-            assert!(text.contains("resource-body"), "{text}");
+    assert!(matches!(
+        failed,
+        McpCallOutcome::Failure {
+            kind: McpFailureKind::Server,
+            ..
         }
-        other => panic!("unexpected {other:?}"),
-    }
+    ));
+    let statuses = manager.statuses(&project).await;
+    assert!(
+        matches!(statuses[0].1, ServerStatus::Ready { .. }),
+        "JSON-RPC error must not mark connection Failed: {statuses:?}"
+    );
+    let recovered = manager
+        .call_tool(
+            &snapshot,
+            "sess-test",
+            "mcp__echo__echo",
+            json!({"text": "still-alive"}),
+            watch::channel(false).1,
+        )
+        .await;
+    assert!(matches!(
+        recovered,
+        McpCallOutcome::Success { ref text, .. } if text == "echo:still-alive"
+    ));
     manager.shutdown().await;
 }
 
@@ -313,8 +396,13 @@ async fn tool_list_changed_replaces_the_connection_tools_for_later_snapshots() {
         )
         .await;
     assert!(first.tool("mcp__echo__ping").is_some());
-    assert!(first.tool("mcp__echo__echo").is_none());
-    // 模拟 server 发送 notifications/tools/list_changed 后的回调。
+    assert!(first.tool("mcp__echo__pong").is_none());
+    // 更新工具列表文件并模拟 server 发送 notifications/tools/list_changed 后的回调。
+    std::fs::write(
+        &tools_file,
+        r#"[{"name":"pong","description":"Pong","inputSchema":{"type":"object","properties":{}}}]"#,
+    )
+    .expect("updated tools file");
     let key = (project.clone(), "echo".to_string());
     let connection = {
         let slots = manager.slots.lock().await;
@@ -331,16 +419,16 @@ async fn tool_list_changed_replaces_the_connection_tools_for_later_snapshots() {
             watch::channel(false).1,
         )
         .await;
-    assert!(second.tool("mcp__echo__ping").is_some());
-    // 再次构建快照仍读新列表（不会被旧 connection.tools 覆盖）。
-    let third = manager
-        .snapshot_for(
-            &project,
-            &[server("echo", env.clone(), 10)],
-            watch::channel(false).1,
-        )
-        .await;
-    assert!(third.tool("mcp__echo__ping").is_some());
+    assert!(
+        first.tool("mcp__echo__ping").is_some(),
+        "frozen first snapshot must not mutate"
+    );
+    assert!(second.tool("mcp__echo__pong").is_some());
+    assert!(second.tool("mcp__echo__ping").is_none());
+    // 缓存快照同样同步更新。
+    let cached = manager.cached_snapshot(&project);
+    assert!(cached.tool("mcp__echo__pong").is_some());
+    assert!(cached.tool("mcp__echo__ping").is_none());
     manager.shutdown().await;
     let _ = std::fs::remove_file(tools_file);
 }

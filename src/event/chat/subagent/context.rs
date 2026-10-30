@@ -255,7 +255,7 @@ pub(super) fn assemble_child_context(
         .filter(|msg| msg.sequence > start_after && msg.external_id != current_user_message_id)
         .collect();
 
-    let planned = plan_child_historical_turns(&retained, &turn_items_map);
+    let planned = plan_child_historical_turns(&retained, &turn_items_map, supports_image_input);
 
     let output_reserve = output_limit.unwrap_or(0).min(8192);
     let budget = context_limit.map(|limit| {
@@ -343,6 +343,7 @@ struct PlannedChildTurn<'a> {
 fn plan_child_historical_turns<'a>(
     messages: &[&ChatMessage],
     turn_items_map: &'a HashMap<String, Vec<PersistedInputItem>>,
+    supports_image_input: bool,
 ) -> Vec<PlannedChildTurn<'a>> {
     let mut planned = Vec::new();
     let mut index = 0;
@@ -367,20 +368,26 @@ fn plan_child_historical_turns<'a>(
         }
         let user_text = message_text(user);
         let stored_user_items = turn_items_map.get(&user.external_id).map(Vec::as_slice);
-        let user_tokens = match stored_user_items {
-            Some(stored) => estimate_persisted_items_tokens(stored),
-            None => crate::chat::context::estimate_tokens(&user_text) as u64,
-        };
         let assistant_text = message_text(assistant);
         let assistant_items = crate::chat::context::assistant_items(assistant);
-        let tokens = user_tokens.saturating_add(estimate_items_tokens(&assistant_items));
         planned.push(PlannedChildTurn {
             user_text,
             assistant_text,
             stored_user_items,
             assistant_items,
-            tokens,
+            tokens: 0,
         });
+    }
+    crate::chat::context::trim_tool_images_in_turn_items(
+        planned.iter_mut().map(|turn| &mut turn.assistant_items),
+        supports_image_input,
+    );
+    for turn in &mut planned {
+        let user_tokens = match turn.stored_user_items {
+            Some(stored) => estimate_persisted_items_tokens(stored),
+            None => crate::chat::context::estimate_tokens(&turn.user_text) as u64,
+        };
+        turn.tokens = user_tokens.saturating_add(estimate_items_tokens(&turn.assistant_items));
     }
     planned
 }
@@ -428,11 +435,13 @@ fn estimate_items_tokens(items: &[ModelItem]) -> u64 {
                     + crate::chat::context::estimate_tokens(&args)) as u64
             }
             ModelItem::ToolResult {
-                call_id, content, ..
-            } => {
-                (crate::chat::context::estimate_tokens(call_id)
-                    + crate::chat::context::estimate_tokens(content)) as u64
-            }
+                call_id,
+                content,
+                images,
+                ..
+            } => ((crate::chat::context::estimate_tokens(call_id)
+                + crate::chat::context::estimate_tokens(content)) as u64)
+                .saturating_add((images.len() as u64) * 1600),
         };
         tokens = tokens.saturating_add(step);
     }

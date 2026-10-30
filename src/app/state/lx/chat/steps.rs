@@ -566,6 +566,11 @@ impl ToolCallView {
             )
             .map(super::tool_view::ToolDetailView::Subagent)
             .map(Box::new);
+        } else if crate::mcp::is_mcp_or_resource_tool(&self.name) {
+            self.detail =
+                super::tool_view::McpDetailView::from_arguments(&self.name, &self.arguments_json)
+                    .map(super::tool_view::ToolDetailView::Mcp)
+                    .map(Box::new);
         }
         self.status = ToolStatus::Pending;
         true

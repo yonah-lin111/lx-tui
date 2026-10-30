@@ -6,10 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
-use rmcp::model::{
-    CallToolRequest, CallToolRequestParams, ClientRequest, PaginatedRequestParams,
-    ReadResourceRequestParams, ResourceContents, ServerResult,
-};
+use rmcp::model::{CallToolRequest, CallToolRequestParams, ClientRequest, ServerResult};
 use rmcp::service::{
     NotificationContext, PeerRequestOptions, RunningService, RunningServiceCancellationToken,
 };
@@ -22,6 +19,7 @@ use crate::platform::path_text::bytes_hash;
 use super::naming::{McpToolEntry, qualified_name};
 
 mod connect;
+mod resources;
 use super::result::{McpCallOutcome, McpFailureKind, convert_result};
 use super::schema::{SCHEMA_OMITTED_NOTE, sanitize_json_schema};
 use connect::{StartError, build_entries, start_connection};
@@ -48,6 +46,7 @@ struct Connection {
     instructions: Option<String>,
     has_resources: bool,
     tools_changed: Arc<AtomicBool>,
+    scope: crate::config::mcp::McpScope,
     config: McpServerConfig,
     /// stdio 子进程 pid（进程组组长）；HTTP 为 None。
     pid: Option<u32>,
@@ -74,12 +73,28 @@ impl Connection {
 
 #[derive(Clone, Default)]
 pub(super) struct LxClientHandler {
+    project: PathBuf,
     tools_changed: Arc<AtomicBool>,
+}
+
+impl LxClientHandler {
+    pub(super) fn new(project: PathBuf) -> Self {
+        Self {
+            project,
+            tools_changed: Arc::new(AtomicBool::new(false)),
+        }
+    }
 }
 
 impl ClientHandler for LxClientHandler {
     async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
         self.tools_changed.store(true, Ordering::SeqCst);
+        let project = self.project.clone();
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::spawn(async move {
+                let _ = manager().refresh_cached_snapshot(&project).await;
+            });
+        }
     }
 }
 
@@ -288,13 +303,18 @@ impl McpManager {
             });
         }
 
+        self.refresh_cached_snapshot(project_root).await
+    }
+
+    /// 从当前已就绪连接汇总快照并写入 `snapshot_cache`。
+    async fn refresh_cached_snapshot(&self, project_root: &Path) -> McpToolSnapshot {
         let mut snapshot = McpToolSnapshot {
             project: Some(project_root.to_path_buf()),
             ..McpToolSnapshot::default()
         };
-        let mut slots = self.slots.lock().await;
+        let slots = self.slots.lock().await;
         let mut ready: Vec<(String, Arc<Connection>)> = Vec::new();
-        for ((root, name), slot) in slots.iter_mut() {
+        for ((root, name), slot) in slots.iter() {
             if root != project_root {
                 continue;
             }
@@ -328,6 +348,9 @@ impl McpManager {
                 }
             }
             if let Ok(tools) = connection.tools.lock() {
+                for tool in tools.iter() {
+                    taken.insert(tool.qualified.clone());
+                }
                 snapshot.tools.extend(tools.clone());
             }
             snapshot.servers.push(ServerSnapshot {
@@ -392,6 +415,7 @@ impl McpManager {
         }
         let status = slot.status.clone();
         drop(slots);
+        let _ = self.refresh_cached_snapshot(project_root).await;
         self.emit(McpEvent::Status {
             project: project_root.to_path_buf(),
             server: name.to_string(),
@@ -461,7 +485,7 @@ impl McpManager {
         session_id: &str,
         qualified: &str,
         arguments: serde_json::Value,
-        mut cancel: watch::Receiver<bool>,
+        cancel: watch::Receiver<bool>,
     ) -> McpCallOutcome {
         let Some(entry) = snapshot.tool(qualified) else {
             return McpCallOutcome::Failure {
@@ -495,6 +519,39 @@ impl McpManager {
         };
         let params = CallToolRequestParams::new(entry.raw_name.clone()).with_arguments(arguments);
         let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
+        match self
+            .send_cancellable(
+                project,
+                &entry.server,
+                &connection,
+                request,
+                cancel,
+                "mcp tool call",
+            )
+            .await
+        {
+            Ok(ServerResult::CallToolResult(result)) => convert_result(&result, session_id),
+            Ok(other) => McpCallOutcome::Failure {
+                kind: McpFailureKind::Server,
+                text: format!("mcp tool call returned unexpected response: {other:?}"),
+            },
+            Err(outcome) => outcome,
+        }
+    }
+
+    /// 发送可取消且受 `tool_timeout_sec` 约束的 MCP 请求。
+    ///
+    /// 区分 JSON-RPC 业务错误（`ServiceError::McpError`，连接仍健康）与传输断开错误
+    /// （调用 `mark_failed` 关闭连接并更新状态）。
+    async fn send_cancellable(
+        &self,
+        project: &Path,
+        server: &str,
+        connection: &Connection,
+        request: ClientRequest,
+        mut cancel: watch::Receiver<bool>,
+        label: &str,
+    ) -> Result<ServerResult, McpCallOutcome> {
         let mut handle = match connection
             .client
             .peer()
@@ -503,21 +560,10 @@ impl McpManager {
         {
             Ok(handle) => handle,
             Err(error) => {
-                let text = format!("mcp tool call failed: {error}");
-                let needs_login = self
-                    .mark_failed(project, &entry.server, &connection, &text)
-                    .await;
-                return if needs_login {
-                    McpCallOutcome::Failure {
-                        kind: McpFailureKind::AuthRequired,
-                        text: format!("mcp auth required: {}", entry.server),
-                    }
-                } else {
-                    McpCallOutcome::Failure {
-                        kind: McpFailureKind::Server,
-                        text,
-                    }
-                };
+                let text = format!("{label} failed: {error}");
+                return Err(self
+                    .fail_transport(project, server, connection, &text)
+                    .await);
             }
         };
         let timeout_sec = connection.config.tool_timeout_sec();
@@ -525,64 +571,61 @@ impl McpManager {
         tokio::pin!(timeout);
         tokio::select! {
             response = &mut handle.rx => match response {
-                Ok(Ok(ServerResult::CallToolResult(result))) => {
-                    convert_result(&result, session_id)
-                }
-                Ok(Ok(other)) => McpCallOutcome::Failure {
+                Ok(Ok(result)) => Ok(result),
+                Ok(Err(rmcp::ServiceError::McpError(error))) => Err(McpCallOutcome::Failure {
                     kind: McpFailureKind::Server,
-                    text: format!("mcp tool call returned unexpected response: {other:?}"),
-                },
+                    text: format!("{label} failed: {error}"),
+                }),
                 Ok(Err(error)) => {
-                    let text = format!("mcp tool call failed: {error}");
-                    let needs_login = self
-                        .mark_failed(project, &entry.server, &connection, &text)
-                        .await;
-                    if needs_login {
-                        McpCallOutcome::Failure {
-                            kind: McpFailureKind::AuthRequired,
-                            text: format!("mcp auth required: {}", entry.server),
-                        }
-                    } else {
-                        McpCallOutcome::Failure {
-                            kind: McpFailureKind::Server,
-                            text,
-                        }
-                    }
+                    let text = format!("{label} failed: {error}");
+                    Err(self
+                        .fail_transport(project, server, connection, &text)
+                        .await)
                 }
                 Err(_) => {
-                    let text = "mcp tool call failed: connection closed".to_string();
-                    let needs_login = self
-                        .mark_failed(project, &entry.server, &connection, &text)
-                        .await;
-                    if needs_login {
-                        McpCallOutcome::Failure {
-                            kind: McpFailureKind::AuthRequired,
-                            text: format!("mcp auth required: {}", entry.server),
-                        }
-                    } else {
-                        McpCallOutcome::Failure {
-                            kind: McpFailureKind::Server,
-                            text,
-                        }
-                    }
+                    let text = format!("{label} failed: connection closed");
+                    Err(self
+                        .fail_transport(project, server, connection, &text)
+                        .await)
                 }
             },
             _ = cancel.changed() => {
                 let _ = handle.cancel(Some("user cancelled".into())).await;
-                McpCallOutcome::Cancelled
+                Err(McpCallOutcome::Cancelled)
             }
             _ = &mut timeout => {
                 let _ = handle.cancel(Some("tool timeout".into())).await;
-                McpCallOutcome::Failure {
+                Err(McpCallOutcome::Failure {
                     kind: McpFailureKind::Timeout,
                     text: format!("mcp tool timed out after {timeout_sec}s"),
-                }
+                })
             }
         }
     }
 
-    /// 传输层失败：OAuth server 先尝试刷新 token；刷新成功则下一轮重连，
-    /// 否则标记 NeedsLogin / Failed（不自动重试）。
+    async fn fail_transport(
+        &self,
+        project: &Path,
+        server: &str,
+        connection: &Connection,
+        text: &str,
+    ) -> McpCallOutcome {
+        let needs_login = self.mark_failed(project, server, connection, text).await;
+        if needs_login {
+            McpCallOutcome::Failure {
+                kind: McpFailureKind::AuthRequired,
+                text: format!("mcp auth required: {server}"),
+            }
+        } else {
+            McpCallOutcome::Failure {
+                kind: McpFailureKind::Server,
+                text: text.to_string(),
+            }
+        }
+    }
+
+    /// 传输层失败：OAuth server 先尝试刷新 token 并重连；刷新或重连失败标记
+    /// `NeedsLogin` / `Failed`（不自动重试），并同步更新 `snapshot_cache`。
     async fn mark_failed(
         &self,
         project: &Path,
@@ -593,11 +636,41 @@ impl McpManager {
         let mut status = ServerStatus::Failed {
             error: error.to_string(),
         };
+        let mut reconnected: Option<Connection> = None;
         if let (Some(key), McpTransportConfig::Http { url, .. }) =
             (&connection.credential_key, &connection.config.transport)
         {
             if super::oauth::refresh(key, url).await {
-                status = ServerStatus::Starting;
+                let effective = EffectiveServer {
+                    name: server.to_string(),
+                    scope: connection.scope,
+                    config: connection.config.clone(),
+                    shadowed_user: false,
+                };
+                let timeout = Duration::from_secs(connection.config.startup_timeout_sec());
+                match tokio::time::timeout(timeout, start_connection(&effective, project)).await {
+                    Ok(Ok(next)) => {
+                        let tools = next.tools.lock().map(|tools| tools.len()).unwrap_or(0);
+                        status = ServerStatus::Ready { tools };
+                        reconnected = Some(next);
+                    }
+                    Ok(Err(StartError::NeedsLogin)) => {
+                        status = ServerStatus::NeedsLogin;
+                    }
+                    Ok(Err(err)) => {
+                        status = ServerStatus::Failed {
+                            error: err.message(server),
+                        };
+                    }
+                    Err(_) => {
+                        status = ServerStatus::Failed {
+                            error: format!(
+                                "MCP server \"{server}\" startup timed out after {}s",
+                                connection.config.startup_timeout_sec()
+                            ),
+                        };
+                    }
+                }
             } else {
                 status = ServerStatus::NeedsLogin;
             }
@@ -606,232 +679,25 @@ impl McpManager {
         let needs_login = matches!(status, ServerStatus::NeedsLogin);
         let mut slots = self.slots.lock().await;
         let Some(slot) = slots.get_mut(&key) else {
+            if let Some(next) = reconnected {
+                next.stop();
+            }
             return needs_login;
         };
-        if let Some(connection) = slot.connection.take() {
-            connection.stop();
+        if let Some(old) = slot.connection.take() {
+            old.stop();
         }
+        slot.connection = reconnected.map(Arc::new);
         slot.starting = false;
         slot.status = status.clone();
         drop(slots);
+        let _ = self.refresh_cached_snapshot(project).await;
         self.emit(McpEvent::Status {
             project: project.to_path_buf(),
             server: server.to_string(),
             status,
         });
         needs_login
-    }
-
-    /// 列资源；`server` 省略时遍历所有声明 resources 的 server。
-    pub async fn list_resources(
-        &self,
-        snapshot: &McpToolSnapshot,
-        server: Option<&str>,
-        cursor: Option<&str>,
-    ) -> McpCallOutcome {
-        self.list_resources_inner(snapshot, server, cursor, false)
-            .await
-    }
-
-    /// 列资源模板。
-    pub async fn list_resource_templates(
-        &self,
-        snapshot: &McpToolSnapshot,
-        server: Option<&str>,
-        cursor: Option<&str>,
-    ) -> McpCallOutcome {
-        self.list_resources_inner(snapshot, server, cursor, true)
-            .await
-    }
-
-    async fn list_resources_inner(
-        &self,
-        snapshot: &McpToolSnapshot,
-        server: Option<&str>,
-        cursor: Option<&str>,
-        templates: bool,
-    ) -> McpCallOutcome {
-        let servers: Vec<ServerSnapshot> = match server {
-            Some(name) => match snapshot.server(name) {
-                Some(server) if server.has_resources => vec![server.clone()],
-                Some(_) => {
-                    return McpCallOutcome::Failure {
-                        kind: McpFailureKind::InvalidArguments,
-                        text: format!("MCP server '{name}' does not expose resources"),
-                    };
-                }
-                None => {
-                    return McpCallOutcome::Failure {
-                        kind: McpFailureKind::InvalidArguments,
-                        text: format!("unknown MCP server '{name}'"),
-                    };
-                }
-            },
-            None => snapshot
-                .servers
-                .iter()
-                .filter(|server| server.has_resources)
-                .cloned()
-                .collect(),
-        };
-        let mut items = Vec::new();
-        let mut next_cursor = None;
-        for server_snapshot in &servers {
-            let Some(connection) = self.connection_for(snapshot, &server_snapshot.name).await
-            else {
-                continue;
-            };
-            let params = cursor.map(|cursor| {
-                PaginatedRequestParams::default().with_cursor(Some(cursor.to_string()))
-            });
-            if templates {
-                match connection.client.list_resource_templates(params).await {
-                    Ok(result) => {
-                        for template in result.resource_templates {
-                            items.push(serde_json::json!({
-                                "server": server_snapshot.name,
-                                "uriTemplate": template.uri_template,
-                                "name": template.name,
-                                "description": template.description,
-                                "mimeType": template.mime_type,
-                            }));
-                        }
-                        next_cursor = result.next_cursor;
-                    }
-                    Err(error) => {
-                        return resource_error(&server_snapshot.name, error);
-                    }
-                }
-            } else {
-                match connection.client.list_resources(params).await {
-                    Ok(result) => {
-                        for resource in result.resources {
-                            items.push(serde_json::json!({
-                                "server": server_snapshot.name,
-                                "uri": resource.uri,
-                                "name": resource.name,
-                                "mimeType": resource.mime_type,
-                                "description": resource.description,
-                            }));
-                        }
-                        next_cursor = result.next_cursor;
-                    }
-                    Err(error) => {
-                        return resource_error(&server_snapshot.name, error);
-                    }
-                }
-            }
-            if server.is_some() {
-                break;
-            }
-        }
-        let mut payload = serde_json::json!({ "resources": items });
-        if templates {
-            payload["kind"] = serde_json::json!("resource_templates");
-        }
-        if let Some(cursor) = next_cursor {
-            payload["nextCursor"] = serde_json::json!(cursor);
-        }
-        McpCallOutcome::Success {
-            text: payload.to_string(),
-            images: Vec::new(),
-            images_omitted: 0,
-            truncated: false,
-        }
-    }
-
-    async fn connection_for(
-        &self,
-        snapshot: &McpToolSnapshot,
-        server: &str,
-    ) -> Option<Arc<Connection>> {
-        let project = snapshot.project()?;
-        let slots = self.slots.lock().await;
-        slots
-            .get(&(project.to_path_buf(), server.to_string()))
-            .and_then(|slot| slot.connection.clone())
-    }
-
-    /// 读取一个资源；内容按工具结果规则转换（图片归档）。
-    pub async fn read_resource(
-        &self,
-        snapshot: &McpToolSnapshot,
-        session_id: &str,
-        server: &str,
-        uri: &str,
-    ) -> McpCallOutcome {
-        let Some(connection) = self.connection_for(snapshot, server).await else {
-            return McpCallOutcome::Failure {
-                kind: McpFailureKind::InvalidArguments,
-                text: format!("unknown MCP server '{server}'"),
-            };
-        };
-        match connection
-            .client
-            .read_resource(ReadResourceRequestParams::new(uri.to_string()))
-            .await
-        {
-            Ok(result) => {
-                let mut text = String::new();
-                let mut images = Vec::new();
-                let mut omitted = 0usize;
-                for content in result.contents {
-                    match content {
-                        ResourceContents::TextResourceContents {
-                            uri, text: body, ..
-                        } => {
-                            text.push_str(&format!("{uri}:\n{body}\n"));
-                        }
-                        ResourceContents::BlobResourceContents {
-                            uri,
-                            mime_type,
-                            blob,
-                            ..
-                        } => {
-                            let mime =
-                                mime_type.unwrap_or_else(|| "application/octet-stream".into());
-                            if mime.starts_with("image/") {
-                                if images.len() >= super::result::MAX_RESULT_IMAGES {
-                                    omitted = omitted.saturating_add(1);
-                                } else {
-                                    match super::result::archive_image(&blob, &mime, session_id) {
-                                        Ok(image) => images.push(image),
-                                        Err(error) => {
-                                            omitted = omitted.saturating_add(1);
-                                            tracing::warn!(
-                                                target: "lx::mcp",
-                                                %error,
-                                                "resource image dropped"
-                                            );
-                                        }
-                                    }
-                                }
-                            } else {
-                                text.push_str(&format!(
-                                    "[resource {uri} {mime}, {} bytes omitted]\n",
-                                    super::result::decoded_len(&blob)
-                                ));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if omitted > 0 {
-                    text.push_str(&format!("[{omitted} more image(s) omitted]\n"));
-                }
-                let (text, truncated) = super::result::truncate_text(
-                    text.trim_end(),
-                    super::result::MAX_TOOL_RESULT_BYTES,
-                );
-                McpCallOutcome::Success {
-                    text,
-                    images,
-                    images_omitted: omitted,
-                    truncated,
-                }
-            }
-            Err(error) => resource_error(server, error),
-        }
     }
 
     /// 设置页「测试连接」：一次性启动、列举工具、立即关闭。
@@ -900,6 +766,7 @@ impl McpManager {
         for connection in stopped {
             connection.stop();
         }
+        let _ = self.refresh_cached_snapshot(project_root).await;
     }
 
     /// 当前状态（设置页 / 启动进度）。
@@ -927,63 +794,8 @@ pub fn manager() -> &'static Arc<McpManager> {
     MANAGER.get_or_init(|| Arc::new(McpManager::new()))
 }
 
-fn resource_error(server: &str, error: impl std::fmt::Display) -> McpCallOutcome {
-    McpCallOutcome::Failure {
-        kind: McpFailureKind::Server,
-        text: format!("MCP server '{server}': {error}"),
-    }
-}
-
 #[cfg(test)]
 mod integration_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::mcp::McpSection;
-    use std::collections::BTreeMap;
-
-    #[test]
-    fn snapshot_prompt_lists_ready_servers_only() {
-        let snapshot = McpToolSnapshot {
-            project: None,
-            tools: Vec::new(),
-            servers: vec![ServerSnapshot {
-                name: "github".into(),
-                instructions: Some("use issues".into()),
-                has_resources: false,
-            }],
-        };
-        let prompt = snapshot.instructions_prompt().expect("prompt");
-        assert!(prompt.contains("## MCP servers"));
-        assert!(prompt.contains("### github"));
-        assert!(prompt.contains("use issues"));
-        assert!(McpToolSnapshot::default().instructions_prompt().is_none());
-    }
-
-    #[test]
-    fn empty_config_fingerprint_is_stable() {
-        let manager = McpManager::new();
-        let server = EffectiveServer {
-            name: "x".into(),
-            scope: crate::config::mcp::McpScope::User,
-            config: McpServerConfig {
-                enabled: true,
-                transport: McpTransportConfig::Stdio {
-                    command: "true".into(),
-                    args: Vec::new(),
-                    cwd: None,
-                    env: BTreeMap::new(),
-                    env_vars: Vec::new(),
-                },
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                enabled_tools: None,
-                disabled_tools: Vec::new(),
-            },
-            shadowed_user: false,
-        };
-        assert_eq!(manager.fingerprint(&server), manager.fingerprint(&server));
-        let _ = McpSection::default();
-    }
-}
+mod tests;

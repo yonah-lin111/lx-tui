@@ -111,3 +111,85 @@ pub(crate) fn chat_part_views_to_db(
 ) -> Vec<crate::db::chat::ChatMessage> {
     crate::db::chat::chat_message_views_to_db(messages)
 }
+
+/// 按需从本地路径加载用户图片字节并写入 `request.items`：
+/// - 当前轮缺图或模型不支持图片：返回 `Err(稳定错误码)`；
+/// - 历史轮次缺图：跳过该图片；模型不支持图片时降级为显式提示文本。
+pub(super) fn hydrate_item_images(
+    state: &AppState,
+    persistence: &Persistence,
+    key: &RequestKey,
+    supports_image_input: bool,
+    attachments: &[(usize, Vec<context::ItemImageAttachment>)],
+    request: &mut ChatRequest,
+) -> Result<(), &'static str> {
+    if attachments.is_empty() {
+        return Ok(());
+    }
+    let db_workspace = state.chat_session_key_for_pane(key.pane).or_else(|| {
+        state
+            .active_workspace()
+            .repo_key()
+            .map(std::path::Path::to_path_buf)
+    });
+    let Some(ws) = db_workspace else {
+        return Err("workspace missing");
+    };
+    let total_items = request.items.len();
+    for (item_idx, atts) in attachments {
+        let is_current_turn = *item_idx + 1 == total_items;
+        if !supports_image_input {
+            if is_current_turn {
+                return Err("current model does not support image input");
+            }
+            if let Some(ModelItem::UserContent { text, .. }) = request.items.get_mut(*item_idx) {
+                let mut replaced = std::mem::take(text);
+                for att in atts {
+                    if !replaced.is_empty() {
+                        replaced.push('\n');
+                    }
+                    replaced.push_str(&format!(
+                        "ERROR: Cannot read \"{}\" (this model does not support image input). Inform the user.",
+                        att.label
+                    ));
+                }
+                request.items[*item_idx] = ModelItem::UserText(replaced);
+            }
+            continue;
+        }
+        let mut loaded_images: Vec<crate::chat::events::ModelImage> = Vec::new();
+        for att in atts {
+            match persistence.load_image_payloads(&ws, &key.session, &[att.id.as_str()]) {
+                Ok(mut map) => {
+                    if let Some(bytes) = map.remove(&att.id) {
+                        if !loaded_images
+                            .iter()
+                            .any(|existing| existing.bytes.as_slice() == bytes.as_slice())
+                        {
+                            loaded_images.push(crate::chat::events::ModelImage {
+                                mime: att.mime.clone(),
+                                bytes: std::sync::Arc::new(bytes),
+                            });
+                        }
+                    } else if is_current_turn {
+                        return Err("image payload unavailable");
+                    }
+                }
+                Err(_) if is_current_turn => {
+                    return Err("image payload unavailable");
+                }
+                Err(_) => {}
+            }
+        }
+        if let Some(item) = request.items.get_mut(*item_idx) {
+            if loaded_images.is_empty() && !is_current_turn {
+                if let ModelItem::UserContent { text, .. } = item {
+                    *item = ModelItem::UserText(std::mem::take(text));
+                }
+            } else if let ModelItem::UserContent { images, .. } = item {
+                *images = loaded_images;
+            }
+        }
+    }
+    Ok(())
+}

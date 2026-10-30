@@ -108,7 +108,7 @@ pub(super) fn rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
         Some(crate::app::state::ToolDetailView::Search(view)) => {
             search::rows(call, view, width, folds.body)
         }
-        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp::rows(view, width, folds),
+        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp::rows(call, view, width, folds),
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::rows(call, width, folds.body)
         }
@@ -336,7 +336,7 @@ pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
         Some(crate::app::state::ToolDetailView::Search(view)) => {
             search::has_more(call, view, width)
         }
-        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp::has_more(view, width),
+        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp::has_more(call, view, width),
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::has_more_content(call, width)
         }
@@ -359,11 +359,12 @@ pub(super) fn agent_links(call: &ToolCallView, width: u16) -> Vec<(usize, String
 ///
 /// 标题行跟随第一块，点击标题只切换参数块；结果块从参数块之后开始。
 fn mcp_regions(
+    call: &ToolCallView,
     view: &crate::app::state::McpDetailView,
     width: u16,
     folds: Folds,
 ) -> Vec<CardRegion> {
-    let layout = mcp::layout(view, width, folds);
+    let layout = mcp::layout(call, view, width, folds);
     let mut regions = Vec::new();
     let mut offset = 0usize;
     if layout.arguments_rows > 0 {
@@ -462,7 +463,7 @@ pub(super) fn card_regions(
                 clickable: true,
             }]
         }
-        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp_regions(view, width, folds),
+        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp_regions(call, view, width, folds),
         Some(crate::app::state::ToolDetailView::File(_)) | None => {
             // 展开前后行数不变就不登记：留下一个点了没反应的点击面只会误导。
             if !has_expandable_content(call, width) {

@@ -3,16 +3,170 @@
 //! 计数按项目根集中存放，窗格只读取同步后的快照；这样新分割的窗格、切换
 //! 工作区与多个窗格共享同一项目时不会各算一份或从 0 开始。
 
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::app::state::AppState;
 use crate::app::state::lx::StartupCount;
+use crate::app::toast::Toast;
+use crate::app::update;
+use crate::config::Config;
 use crate::db::service::Persistence;
-use crate::settings::service::McpStatusView;
+use crate::layout::PaneId;
+use crate::mcp::{McpEvent, ServerStatus};
+use crate::settings::service::{McpStatusView, SettingsEvent, SettingsService};
+use crate::ui::text;
 
 use super::AppEvent;
+
+/// 某个项目根下的全部 lx 窗格（MCP 反馈按项目落到对应窗格）。
+pub(crate) fn panes_for_project(state: &AppState, project: &Path) -> Vec<PaneId> {
+    let mut panes = Vec::new();
+    for workspace in &state.workspaces {
+        if workspace.repo_key().is_none_or(|root| root != project) {
+            continue;
+        }
+        for tab in &workspace.tabs {
+            panes.extend(tab.layout.pane_ids());
+        }
+    }
+    panes
+}
+
+/// 当前所有打开工作区的 skill 作用域根（去重、保持稳定顺序）。
+pub(crate) fn skill_roots(state: &AppState) -> Vec<Option<PathBuf>> {
+    let mut roots: Vec<Option<PathBuf>> = Vec::new();
+    for workspace in &state.workspaces {
+        let root = workspace.repo_key().map(Path::to_path_buf);
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    roots
+}
+
+/// 处理设置页事件：保存的配置、命令、模型、MCP 与 Skills 变更在事件循环内应用。
+pub(crate) fn drain_settings_events(
+    receiver: &mut UnboundedReceiver<SettingsEvent>,
+    state: &mut AppState,
+    persistence: &Persistence,
+    config: &mut Config,
+    commands_reload: &mut bool,
+    skills_reload: &mut bool,
+    mcp_statuses: &mut BTreeMap<(PathBuf, String), McpStatusView>,
+) -> bool {
+    let mut changed = false;
+    while let Ok(event) = receiver.try_recv() {
+        match event {
+            SettingsEvent::ConfigChanged(updated) => *config = updated,
+            SettingsEvent::CommandsChanged => *commands_reload = true,
+            SettingsEvent::ModelsChanged(settings) => {
+                // 模型配置已落盘：更新快照；在途请求继续持有旧快照到结束，
+                // 下一轮发送才用新配置。
+                update::apply_models_changed(state, &settings);
+            }
+            SettingsEvent::McpChanged => {
+                let roots = super::chat::mcp::project_roots(state);
+                prune_mcp_statuses(persistence, &roots, mcp_statuses);
+                refresh_mcp(state, persistence, &roots);
+            }
+            SettingsEvent::McpRestart { server } => {
+                let roots = super::chat::mcp::project_roots(state);
+                super::chat::mcp::restart_projects(persistence, &roots, Some(&server));
+            }
+            SettingsEvent::McpCredentialsChanged => {
+                crate::mcp::global_manager().bump_credentials();
+                let roots = super::chat::mcp::project_roots(state);
+                super::chat::mcp::prewarm_projects(persistence, &roots);
+            }
+            SettingsEvent::SkillsChanged => {
+                super::chat::skills::invalidate_skill_cache();
+                *skills_reload = true;
+            }
+        }
+        changed = true;
+    }
+    changed
+}
+
+/// 处理 MCP 运行事件：状态快照、启动进度与失败/登录提示。
+pub(crate) fn drain_mcp_events(
+    receiver: &mut UnboundedReceiver<McpEvent>,
+    state: &mut AppState,
+    settings_service: Option<&SettingsService>,
+    mcp_statuses: &mut BTreeMap<(PathBuf, String), McpStatusView>,
+    mcp_toasted: &mut HashSet<(PathBuf, String, String)>,
+) -> bool {
+    let mut changed = false;
+    while let Ok(event) = receiver.try_recv() {
+        match event {
+            McpEvent::Status {
+                project,
+                server,
+                status,
+            } => {
+                let (label, error) = match &status {
+                    ServerStatus::Disabled => ("disabled", None),
+                    ServerStatus::Starting => ("starting", None),
+                    ServerStatus::Ready { .. } => ("ready", None),
+                    ServerStatus::Failed { error } => ("failed", Some(error.clone())),
+                    ServerStatus::NeedsLogin => ("needs_login", None),
+                };
+                mcp_statuses.insert(
+                    (project.clone(), server.clone()),
+                    McpStatusView {
+                        project: project.clone(),
+                        server: server.clone(),
+                        status: label.into(),
+                        error: error.clone(),
+                    },
+                );
+                update_mcp_status(state, &project, mcp_statuses);
+                let notice = match &status {
+                    ServerStatus::Failed { error } => Some((
+                        text::mcp::start_failed(&server, error),
+                        error.clone(),
+                        crate::app::toast::ToastKind::Danger,
+                    )),
+                    ServerStatus::NeedsLogin => Some((
+                        text::mcp::needs_login(&server),
+                        "needs_login".to_string(),
+                        crate::app::toast::ToastKind::Warning,
+                    )),
+                    _ => None,
+                };
+                if let Some((message, key, kind)) = notice
+                    && mcp_toasted.insert((project.clone(), server.clone(), key))
+                {
+                    let panes = panes_for_project(state, &project);
+                    for pane in panes {
+                        update::show_lx_toast(
+                            state,
+                            pane,
+                            Toast::new(kind, message.clone(), Some(pane), Instant::now()),
+                        );
+                    }
+                }
+                if let Some(service) = settings_service {
+                    service.set_mcp_status(mcp_statuses.values().cloned().collect());
+                }
+                changed = true;
+            }
+            McpEvent::StartupProgress {
+                project,
+                done,
+                total,
+            } => {
+                update_mcp_progress(state, &project, done, total);
+                changed = true;
+            }
+        }
+    }
+    changed
+}
 
 /// 启动（或首次打开工作区）时按配置初始化 MCP 计数并后台预热。
 pub(crate) fn initialize_mcp(state: &mut AppState, persistence: &Persistence, roots: &[PathBuf]) {
@@ -130,36 +284,42 @@ pub(crate) fn update_mcp_progress(state: &mut AppState, project: &Path, done: us
     state.mcp_inventory.insert(project.to_path_buf(), count);
 }
 
-/// 后台预扫描 skill 目录；结果经 [`AppEvent::SkillsLoaded`] 回到事件循环。
+/// 后台预扫描全部已打开工作区的 skill 目录；结果经 [`AppEvent::SkillsLoaded`] 回到事件循环。
 pub(crate) fn spawn_skills_preload(
     state: &mut AppState,
     persistence: &Persistence,
     sender: &UnboundedSender<AppEvent>,
 ) {
-    let root = state
-        .prompt_owner()
-        .repo_key()
-        .map(std::path::Path::to_path_buf);
-    let Some(job) = super::chat::skills::prepare_preload(persistence, root.as_deref(), false)
-    else {
-        apply_skills_loaded(state, root, 0, 0, &[]);
-        return;
-    };
-    state
-        .skill_inventory
-        .entry(root.clone())
-        .or_default()
-        .loading = true;
-    let sender = sender.clone();
-    tokio::task::spawn_blocking(move || {
-        let (root, total, errors, entries) = job.run();
-        let _ = sender.send(AppEvent::SkillsLoaded {
-            root,
-            total,
-            errors,
-            entries,
+    let has_runtime = tokio::runtime::Handle::try_current().is_ok();
+    for root in skill_roots(state) {
+        let Some(job) = super::chat::skills::prepare_preload(persistence, root.as_deref(), false)
+        else {
+            apply_skills_loaded(state, root, 0, 0, &[]);
+            continue;
+        };
+        if !state.skill_inventory.contains_key(&root) {
+            state
+                .skill_inventory
+                .entry(root.clone())
+                .or_default()
+                .loading = true;
+        }
+        if !has_runtime {
+            let (root, total, errors, entries) = job.run();
+            apply_skills_loaded(state, root, total, errors, &entries);
+            continue;
+        }
+        let sender = sender.clone();
+        tokio::task::spawn_blocking(move || {
+            let (root, total, errors, entries) = job.run();
+            let _ = sender.send(AppEvent::SkillsLoaded {
+                root,
+                total,
+                errors,
+                entries,
+            });
         });
-    });
+    }
 }
 
 /// 写入后台扫描结果，并把 skill 候选复制到同一工作区的窗格。
@@ -192,3 +352,6 @@ pub(crate) fn apply_skills_loaded(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

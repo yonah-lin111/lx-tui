@@ -131,11 +131,8 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         // 流中 Enter 不入队、不造消息。
         return false;
     }
-    // 以 `/` 开头的草稿若**不是**任何内置命令（命令面板里也没有它），不要当成
-    // 普通消息发给模型——那会得到一段莫名其妙的自问自答。改为黄色警告提示，
-    // 并**保留草稿**让用户改。（命令面板的采纳走 `apply_slash_enter`，不经过这里。）
+    // 以 `/` 开头的草稿若不是任何内置命令，不作为普通消息发给模型，保留草稿并黄色提示。
     if let Some(command) = unknown_slash_command(&draft) {
-        // 提示显示在**输入框上方那一行**（与 loading / jump 同一个位置），黄色。
         show_lx_hint(
             state,
             pane,
@@ -184,9 +181,6 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         );
         show_lx_hint(state, pane, InputHintLevel::Warning, msg);
         return true;
-    }
-    if let Some(warning) = prepared.warnings.first() {
-        show_lx_hint(state, pane, InputHintLevel::Warning, warning);
     }
     if let Some(notice) = prepared.skill_notices.first() {
         let message = match notice {

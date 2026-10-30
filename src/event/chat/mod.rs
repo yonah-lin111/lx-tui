@@ -520,16 +520,9 @@ pub(crate) fn active_assistant_id(state: &AppState, key: &RequestKey) -> Option<
 
 /// 由窗格消息视图装配本轮请求；返回（请求，省略的完整轮次数，草稿是否单独超限）。
 ///
-/// 装配来源固定为**窗格内存视图**（经 [`chat_part_views_to_db`] 映射为记录），
-/// 因此 `/resume` 加载的历史与本轮新增步骤走同一条路径：
-///
-/// - 本轮草稿取**最近一条 user 消息**——`on_turn_committed` 已在其后追加了 streaming
-///   的 assistant 占位，故不能取 `messages.last()`（那会得到占位、过滤 user 后变空串，
-///   导致请求携带空 user 消息被供应商拒绝）。
-/// - 只有「user 与 assistant 均 complete」的轮次参与回放；当前轮 assistant 仍在
-///   streaming，不会被当作历史（其工具步骤由 `ModelContext` 在同一轮内累计）。
-/// - 工具步骤也一并映射（[`crate::db::chat::chat_message_views_to_db`]），使已完成轮次的
-///   call/result 能成对回放，interrupted/pending 调用不进入请求。
+/// 装配来源固定为**窗格内存视图**（经 [`chat_part_views_to_db`] 映射为记录）：
+/// 本轮草稿取最近一条 user 消息；只有 user 与 assistant 均 complete 的轮次参与回放；
+/// 工具步骤一并映射，使已完成轮次的 call/result 能成对回放。
 pub(crate) fn assemble_turn_request(
     messages: &[crate::app::state::ChatMessageView],
     frozen: &crate::app::state::FrozenModel,
@@ -716,83 +709,16 @@ fn start_stream(
         return true;
     }
     let mut request = assembled.request;
-    // 如果请求中包含图片，按需从本地路径加载图片字节并装配 ModelImage：
-    // 当前正在发送的轮次若缺图严格报错拦截；历史已发送轮次若外部图片被用户事后删除则仅跳过该历史图片。
-    if !assembled.item_image_attachments.is_empty() {
-        let db_workspace = state.chat_session_key_for_pane(key.pane).or_else(|| {
-            state
-                .active_workspace()
-                .repo_key()
-                .map(std::path::Path::to_path_buf)
-        });
-        let Some(ws) = db_workspace else {
-            fail_turn(sender, key, "workspace missing");
-            return true;
-        };
-
-        let total_items = request.items.len();
-        for (item_idx, atts) in &assembled.item_image_attachments {
-            let is_current_turn = *item_idx + 1 == total_items;
-            // 若会话中途切换到了不支持图像输入的模型（参考 OpenCode `unsupportedParts`），
-            // 历史轮次中的图片替换为显式错误文本并降级为 UserText，避免请求被纯文本模型拒绝。
-            if !frozen.supports_image_input {
-                if is_current_turn {
-                    fail_turn(sender, key, "current model does not support image input");
-                    return true;
-                }
-                if let Some(ModelItem::UserContent { text, .. }) = request.items.get_mut(*item_idx)
-                {
-                    let mut replaced = std::mem::take(text);
-                    for att in atts {
-                        if !replaced.is_empty() {
-                            replaced.push('\n');
-                        }
-                        replaced.push_str(&format!(
-                            "ERROR: Cannot read \"{}\" (this model does not support image input). Inform the user.",
-                            att.label
-                        ));
-                    }
-                    request.items[*item_idx] = ModelItem::UserText(replaced);
-                }
-                continue;
-            }
-            let mut loaded_images: Vec<crate::chat::events::ModelImage> = Vec::new();
-            for att in atts {
-                match persistence.load_image_payloads(&ws, &key.session, &[att.id.as_str()]) {
-                    Ok(mut map) => {
-                        if let Some(bytes) = map.remove(&att.id) {
-                            if !loaded_images
-                                .iter()
-                                .any(|existing| existing.bytes.as_slice() == bytes.as_slice())
-                            {
-                                loaded_images.push(crate::chat::events::ModelImage {
-                                    mime: att.mime.clone(),
-                                    bytes: std::sync::Arc::new(bytes),
-                                });
-                            }
-                        } else if is_current_turn {
-                            fail_turn(sender, key, "image payload unavailable");
-                            return true;
-                        }
-                    }
-                    Err(_) => {
-                        if is_current_turn {
-                            fail_turn(sender, key, "image payload unavailable");
-                            return true;
-                        }
-                    }
-                }
-            }
-            if let Some(item) = request.items.get_mut(*item_idx) {
-                if loaded_images.is_empty() && !is_current_turn {
-                    if let ModelItem::UserContent { text, .. } = item {
-                        *item = ModelItem::UserText(std::mem::take(text));
-                    }
-                } else if let ModelItem::UserContent { images, .. } = item {
-                    *images = loaded_images;
-                }
-            }
-        }
+    if let Err(code) = timeline::hydrate_item_images(
+        state,
+        persistence,
+        &key,
+        frozen.supports_image_input,
+        &assembled.item_image_attachments,
+        &mut request,
+    ) {
+        fail_turn(sender, key, code);
+        return true;
     }
     // 冻结工作区根：本轮所有工具的相对路径都以它为准（后续切换窗格不影响）。
     let Some(workspace) = state.workspace_cwd_for_pane(key.pane) else {

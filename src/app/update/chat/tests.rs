@@ -1231,3 +1231,64 @@ fn unknown_command_detection_matches_panel_rules() {
         );
     }
 }
+
+#[test]
+fn ctrl_o_on_mcp_card_toggles_section_instead_of_opening_task_page() {
+    let mut state = AppState::demo();
+    let pane = focus_pane(&state);
+    let mut call = crate::app::state::ToolCallView::new("call-mcp", "mcp__codegraph__explore", 0);
+    assert!(call.accept_arguments(r#"{"query":"McpManager"}"#.to_string()));
+    call.status = ToolStatus::Completed;
+    call.detail = Some(Box::new(crate::app::state::ToolDetailView::Mcp(
+        crate::app::state::McpDetailView {
+            server: "codegraph".into(),
+            tool: "explore".into(),
+            summary: Some("McpManager".into()),
+            arguments: vec!["{".into(), r#"  "query": "McpManager""#.into(), "}".into()],
+            arguments_more: 0,
+            result: (0..6).map(|index| format!("line {index}")).collect(),
+            result_more: 2,
+            images: Vec::new(),
+            images_omitted: 0,
+            duration_ms: Some(120),
+        },
+    )));
+    let mut assistant = ChatMessageView {
+        id: "msg-a".into(),
+        sequence: 2,
+        kind: "chat".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        shell: None,
+        steps: Vec::new(),
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+        reports: Vec::new(),
+        attachments: Vec::new(),
+    };
+    assistant.push_tool(call);
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .push(assistant);
+
+    assert!(open_task_for_selected_tool(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(
+        target.lx.task.is_none(),
+        "Ctrl+O on MCP card must not open the background task panel"
+    );
+    assert!(target.lx.chat.section_is_expanded(
+        "msg-a",
+        "call-mcp",
+        crate::app::state::CardSection::Output
+    ));
+}

@@ -50,19 +50,42 @@ fn arguments_section(view: &McpDetailView, expanded: bool) -> Option<Section> {
     ))
 }
 
-fn result_section(view: &McpDetailView, expanded: bool) -> Option<Section> {
-    if view.result.is_empty() && view.images.is_empty() && view.images_omitted == 0 {
+fn result_section(call: &ToolCallView, view: &McpDetailView, expanded: bool) -> Option<Section> {
+    let error_fallback = if view.result.is_empty()
+        && matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted)
+    {
+        call.error.as_deref().filter(|error| !error.is_empty())
+    } else {
+        None
+    };
+    if view.result.is_empty()
+        && error_fallback.is_none()
+        && view.images.is_empty()
+        && view.images_omitted == 0
+    {
         return None;
     }
     let body_style = output_style(expanded);
-    let mut lines: Vec<Vec<Segment>> = view
-        .result
-        .iter()
-        .map(|line| vec![Segment::new(single_line(line, 8000), body_style)])
-        .collect();
-    if view.result_more > 0 {
+    let mut lines: Vec<Vec<Segment>> = if let Some(error) = error_fallback {
+        error
+            .lines()
+            .take(20)
+            .map(|line| vec![Segment::new(single_line(line, 8000), body_style)])
+            .collect()
+    } else {
+        view.result
+            .iter()
+            .map(|line| vec![Segment::new(single_line(line, 8000), body_style)])
+            .collect()
+    };
+    let more = if let Some(error) = error_fallback {
+        error.lines().count().saturating_sub(20)
+    } else {
+        view.result_more
+    };
+    if more > 0 {
         lines.push(vec![Segment::new(
-            text::mcp::more_lines(view.result_more),
+            text::mcp::more_lines(more),
             style::fold_hint(),
         )]);
     }
@@ -84,9 +107,14 @@ fn result_section(view: &McpDetailView, expanded: bool) -> Option<Section> {
     ))
 }
 
-pub(super) fn layout(view: &McpDetailView, width: u16, folds: Folds) -> McpLayout {
+pub(super) fn layout(
+    call: &ToolCallView,
+    view: &McpDetailView,
+    width: u16,
+    folds: Folds,
+) -> McpLayout {
     let folded_arguments = arguments_section(view, false);
-    let folded_result = result_section(view, false);
+    let folded_result = result_section(call, view, false);
     let arguments_expandable = folded_arguments
         .as_ref()
         .is_some_and(|section| tree::layout(std::slice::from_ref(section), width).hidden > 0);
@@ -94,7 +122,7 @@ pub(super) fn layout(view: &McpDetailView, width: u16, folds: Folds) -> McpLayou
         .as_ref()
         .is_some_and(|section| tree::layout(std::slice::from_ref(section), width).hidden > 0);
     let arguments = arguments_section(view, folds.body);
-    let result = result_section(view, folds.output);
+    let result = result_section(call, view, folds.output);
     let arguments_rows = arguments.as_ref().map_or(0, |section| {
         tree::layout(std::slice::from_ref(section), width)
             .rows
@@ -116,19 +144,19 @@ pub(super) fn layout(view: &McpDetailView, width: u16, folds: Folds) -> McpLayou
 }
 
 /// 卡片行数（含标题行）。
-pub(super) fn rows(view: &McpDetailView, width: u16, folds: Folds) -> usize {
+pub(super) fn rows(call: &ToolCallView, view: &McpDetailView, width: u16, folds: Folds) -> usize {
     if width == 0 {
         return 0;
     }
-    1 + layout(view, width, folds).layout.rows.len()
+    1 + layout(call, view, width, folds).layout.rows.len()
 }
 
 /// 展开后是否真的多出内容。
-pub(super) fn has_more(view: &McpDetailView, width: u16) -> bool {
+pub(super) fn has_more(call: &ToolCallView, view: &McpDetailView, width: u16) -> bool {
     if width == 0 {
         return false;
     }
-    let layout = layout(view, width, Folds::default());
+    let layout = layout(call, view, width, Folds::default());
     layout.arguments_expandable || layout.result_expandable
 }
 
@@ -178,207 +206,9 @@ pub(super) fn draw(
         rect,
         scroll,
         row_index,
-        &layout(view, rect.width, folds).layout.rows,
+        &layout(call, view, rect.width, folds).layout.rows,
     );
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::app::state::{ToolCallView, ToolStatus, ToolSummary};
-    use crate::ui::text;
-
-    fn call() -> ToolCallView {
-        ToolCallView {
-            call_id: "call-mcp".into(),
-            name: "mcp__github__create_issue".into(),
-            position: 0,
-            arguments_json: r#"{"title":"Fix login crash on iOS","body":"details"}"#.into(),
-            status: ToolStatus::Completed,
-            summary: Some(Box::new(ToolSummary {
-                path: Some("github · create_issue".into()),
-                ..ToolSummary::default()
-            })),
-            error: None,
-            result_json: None,
-            detail: None,
-        }
-    }
-
-    fn view() -> McpDetailView {
-        McpDetailView {
-            server: "github".into(),
-            tool: "create_issue".into(),
-            summary: Some("Fix login crash on iOS".into()),
-            arguments: vec!["{".into(), r#"  "title": "Fix login crash on iOS""#.into()],
-            arguments_more: 0,
-            result: vec!["created #42".into()],
-            result_more: 0,
-            images: vec![crate::app::state::McpImageView {
-                path: "/tmp/tool.png".into(),
-                mime: "image/png".into(),
-                width: 10,
-                height: 20,
-            }],
-            images_omitted: 0,
-            duration_ms: Some(1200),
-        }
-    }
-
-    fn render(view: &McpDetailView, width: u16, folds: Folds) -> String {
-        let total = rows(view, width, folds);
-        let rect = Rect::new(0, 0, width, u16::try_from(total.max(1)).unwrap_or(u16::MAX));
-        let mut grid = Grid::new(rect);
-        let mut row = 0;
-        draw(&mut grid, rect, 0, &mut row, &call(), view, 0, folds, false);
-        assert_eq!(row, total, "绘制行数必须与 rows 一致");
-        let mut text = String::new();
-        for y in 0..total {
-            for x in 0..width {
-                text.push(grid.cell(x, y as u16).ch);
-            }
-            text.push('\n');
-        }
-        text
-    }
-
-    #[test]
-    fn folded_card_shows_server_tool_status_and_summary() {
-        let text = render(&view(), 100, Folds::default());
-        assert!(text.contains("github · create_issue"), "{text}");
-        assert!(text.contains("1.2s"), "{text}");
-        assert!(text.contains("Fix login crash on iOS"), "{text}");
-        assert!(text.contains("[image image/png 10×20]"), "{text}");
-    }
-
-    #[test]
-    fn long_result_is_expandable() {
-        let mut view = view();
-        view.result = (0..30).map(|index| format!("line {index}")).collect();
-        view.result_more = 10;
-        assert!(has_more(&view, 80));
-        let expanded = render(
-            &view,
-            80,
-            Folds {
-                body: false,
-                output: true,
-            },
-        );
-        assert!(expanded.contains("line 19"), "{expanded}");
-        assert!(expanded.contains("10 more lines"), "{expanded}");
-    }
-
-    #[test]
-    fn mcp_card_registers_a_click_region_and_connector_colors() {
-        use crate::app::state::ToolDetailView;
-        let mut call = call();
-        let mut view = view();
-        view.result = (0..10).map(|index| format!("line {index}")).collect();
-        view.result_more = 7;
-        call.detail = Some(Box::new(ToolDetailView::Mcp(view.clone())));
-        let folds = Folds::default();
-        let total = rows(&view, 100, folds);
-        let regions = super::super::card_regions(&call, 100, folds, total);
-        assert!(regions.iter().any(|region| region.clickable));
-        assert_eq!(regions.len(), 2, "args and result have separate regions");
-        assert_eq!(regions[0].section, crate::app::state::CardSection::Body);
-        assert_eq!(regions[1].section, crate::app::state::CardSection::Output);
-        for region in &regions {
-            assert!(region.card.offset + region.card.rows <= total);
-        }
-        let expanded = layout(
-            &view,
-            100,
-            Folds {
-                body: true,
-                output: true,
-            },
-        );
-        let arg_row = expanded
-            .layout
-            .rows
-            .iter()
-            .find(|row| {
-                row.segments
-                    .iter()
-                    .any(|segment| segment.text.contains("title"))
-            })
-            .expect("argument row");
-        assert_eq!(
-            arg_row.segments[0].style,
-            style::chat_tool_param(),
-            "args use the param color"
-        );
-        let result_row = expanded
-            .layout
-            .rows
-            .iter()
-            .find(|row| {
-                row.segments
-                    .iter()
-                    .any(|segment| segment.text.contains("line 0"))
-            })
-            .expect("result row");
-        assert_eq!(result_row.segments[0].style, style::text());
-    }
-
-    #[test]
-    fn collapsed_leaf_uses_dim_and_expanded_leaf_uses_default_foreground() {
-        let mut view = view();
-        view.result = (0..10).map(|index| format!("line {index}")).collect();
-        view.result_more = 7;
-        let folded = layout(&view, 100, Folds::default());
-        let result_row = folded
-            .layout
-            .rows
-            .iter()
-            .find(|row| row.segments.iter().any(|seg| seg.text.contains("line 0")))
-            .expect("folded result");
-        assert_eq!(result_row.segments[0].style, style::muted());
-        let expanded = layout(
-            &view,
-            100,
-            Folds {
-                body: true,
-                output: true,
-            },
-        );
-        let result_row = expanded
-            .layout
-            .rows
-            .iter()
-            .find(|row| row.segments.iter().any(|seg| seg.text.contains("line 0")))
-            .expect("expanded result");
-        assert_eq!(result_row.segments[0].style, style::text());
-    }
-
-    #[test]
-    fn expanding_branch_keeps_bar_and_expanding_leaf_uses_padding() {
-        let mut view = view();
-        view.arguments = (0..10).map(|index| format!("arg {index}")).collect();
-        view.result = (0..10).map(|index| format!("line {index}")).collect();
-        let expanded = layout(
-            &view,
-            100,
-            Folds {
-                body: true,
-                output: true,
-            },
-        );
-        let arg_row = expanded
-            .layout
-            .rows
-            .iter()
-            .find(|row| row.segments.iter().any(|seg| seg.text.contains("arg 1")))
-            .expect("argument continuation");
-        assert_eq!(arg_row.prefix, text::agent::TREE_BAR);
-        let result_row = expanded
-            .layout
-            .rows
-            .iter()
-            .find(|row| row.segments.iter().any(|seg| seg.text.contains("line 1")))
-            .expect("result continuation");
-        assert_eq!(result_row.prefix, text::agent::TREE_PAD);
-    }
-}
+mod tests;

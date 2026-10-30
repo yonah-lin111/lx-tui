@@ -43,6 +43,14 @@ def respond(request_id, result):
     sys.stdout.flush()
 
 
+def respond_error(request_id, code, message):
+    sys.stdout.write(
+        json.dumps({"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}})
+        + "\n"
+    )
+    sys.stdout.flush()
+
+
 def main():
     for line in sys.stdin:
         line = line.strip()
@@ -69,6 +77,9 @@ def main():
         elif method == "resources/templates/list":
             respond(message.get("id"), {"resourceTemplates": [{"uriTemplate": "echo://{name}", "name": "echo"}]})
         elif method == "resources/read":
+            params = message.get("params") or {}
+            if params.get("uri") == "echo://slow":
+                time.sleep(10)
             respond(message.get("id"), {"contents": [{"uri": "echo://doc", "mimeType": "text/plain", "text": "resource-body"}]})
         elif method == "tools/call":
             params = message.get("params") or {}
@@ -77,6 +88,8 @@ def main():
             if name == "sleep":
                 time.sleep(float(arguments.get("seconds", 30)))
                 respond(message.get("id"), {"content": [{"type": "text", "text": "slept"}]})
+            elif arguments.get("text") == "__rpc_error__":
+                respond_error(message.get("id"), -32602, "invalid params")
             else:
                 text = str(arguments.get("text", ""))
                 respond(

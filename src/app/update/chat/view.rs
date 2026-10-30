@@ -111,6 +111,13 @@ fn tool_view_of(tool: &ToolCallRecord) -> ToolCallView {
             tool.result_json.as_deref(),
         )
         .map(ToolDetailView::Subagent)
+    } else if crate::mcp::is_mcp_or_resource_tool(&tool.name) {
+        crate::app::state::McpDetailView::from_tool(
+            &tool.name,
+            tool.result_json.as_deref(),
+            &tool.arguments_json,
+        )
+        .map(ToolDetailView::Mcp)
     } else {
         ToolDetailView::from_tool(tool.result_json.as_deref(), &tool.arguments_json)
             .or_else(|| ToolDetailView::file_detail(tool.result_json.as_deref()))
