@@ -8,6 +8,7 @@ use ratatui::style::Style;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::LxEntry;
+use crate::app::state::lx::{StartupCount, StartupCounts};
 use crate::ui::{style, text};
 
 use super::grid::Grid;
@@ -132,6 +133,54 @@ fn pixel_glyph(top: char, bottom: char) -> Option<(char, Style)> {
             Some(('▀', Style::default().fg(top_color).bg(bottom_color)))
         }
     }
+}
+
+/// 首页资源计数：`4 mcp · 3 skills`；加载中显示 `loading mcp`，失败追加 `1 error`。
+pub(super) fn draw_inventory(grid: &mut Grid, rect: Rect, counts: StartupCounts) {
+    if rect.width == 0 {
+        return;
+    }
+    let mcp = inventory_parts(counts.mcp, text::LX_HOME_MCP, style::chat_tool_verb());
+    let skills = inventory_parts(
+        counts.skills,
+        text::LX_HOME_SKILLS,
+        style::chat_tool_param(),
+    );
+    let mut segments: Vec<(String, Style)> = mcp;
+    segments.push((format!(" {} ", text::LX_ENTRY_SEPARATOR), style::muted()));
+    segments.extend(skills);
+    let width: usize = segments.iter().map(|(value, _)| value.width()).sum();
+    let width = u16::try_from(width).unwrap_or(u16::MAX);
+    // 超宽时从左边起画，后面的段由 Grid 自然裁掉。
+    let mut x = if width > rect.width {
+        rect.x
+    } else {
+        rect.x + rect.width.saturating_sub(width) / 2
+    };
+    for (value, value_style) in segments {
+        grid.put(x, rect.y, &value, value_style);
+        x = x.saturating_add(u16::try_from(value.width()).unwrap_or(u16::MAX));
+    }
+}
+
+fn inventory_parts(count: StartupCount, label: &str, color: Style) -> Vec<(String, Style)> {
+    if count.loading {
+        return vec![(
+            format!("{} {label}", text::LX_HOME_LOADING),
+            style::chat_tool_verb_running(),
+        )];
+    }
+    let mut parts = vec![(format!("{} {label}", count.ready), color)];
+    if count.errors > 0 {
+        let label = if count.errors == 1 {
+            text::LX_HOME_ERROR
+        } else {
+            text::LX_HOME_ERRORS
+        };
+        parts.push((" ".to_string(), style::muted()));
+        parts.push((format!("{} {label}", count.errors), style::agent_fail()));
+    }
+    parts
 }
 
 /// 绘制 Tip 提示行：`Tip:` 前缀强调色、其后句子次要信息；整体居中、超宽截断。

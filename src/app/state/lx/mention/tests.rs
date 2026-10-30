@@ -157,6 +157,29 @@ fn enter_folder_without_children_is_noop() {
     assert_eq!(lx.input, "@empty");
 }
 
+fn skill(name: &str, path: &str) -> crate::skills::SkillEntry {
+    crate::skills::SkillEntry {
+        name: name.into(),
+        description: format!("{name} description"),
+        path: std::path::PathBuf::from(path),
+        scope: crate::skills::SkillScope::User,
+        source: crate::skills::SkillSource::Lx,
+        enabled: true,
+        shadowed_by: None,
+    }
+}
+
+#[test]
+fn skill_candidates_open_from_mention_panel_and_insert_reference() {
+    let mut lx = ready("@pd", entries());
+    lx.set_mention_skills(vec![skill("pdf", "/skills/pdf/SKILL.md")]);
+    let panel = lx.mention().panel().expect("skill candidate");
+    assert_eq!(panel.items().len(), 1);
+    assert_eq!(panel.items()[0].path, "skill:pdf");
+    assert!(lx.mention_confirm());
+    assert_eq!(lx.input, "@[refer-skill](/skills/pdf/SKILL.md) ");
+}
+
 #[test]
 fn confirm_file_writes_mention_with_trailing_space() {
     let mut lx = ready("@main", entries());

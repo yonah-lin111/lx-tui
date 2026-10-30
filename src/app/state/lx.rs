@@ -61,6 +61,26 @@ impl LxEntry {
     pub const ALL: [LxEntry; 3] = [LxEntry::Native, LxEntry::Hybrid, LxEntry::Automation];
 }
 
+/// 首页资源计数的一类（MCP server / skill）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StartupCount {
+    /// 配置中的总数；0 表示未配置。
+    pub total: usize,
+    /// 已就绪数量。
+    pub ready: usize,
+    /// 失败或需要登录的数量。
+    pub errors: usize,
+    /// 首次启动/重载是否仍在进行。
+    pub loading: bool,
+}
+
+/// 首页展示的 MCP 与 skill 启动计数。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StartupCounts {
+    pub mcp: StartupCount,
+    pub skills: StartupCount,
+}
+
 /// lx 页交互状态：选中入口、多行输入缓冲与 markdown 块命令面板；每个 lx 窗格各持一份。
 #[derive(Debug)]
 pub struct Lx {
@@ -127,8 +147,8 @@ pub struct Lx {
     /// 由事件循环按运行实例刷新，与页面是否打开无关——用户不打开后台任务页也要
     /// 能看见"还有几个服务在跑"，否则忘了清理就是这样发生的。
     pub background_tasks: usize,
-    /// 首轮 MCP 启动进度 `(已完成, 总数)`；None 表示没有在启动的 server。
-    pub mcp_startup: Option<(usize, usize)>,
+    /// 首页资源计数：MCP server 与 skill 的加载/失败状态。
+    pub startup: StartupCounts,
     /// 撤销历史（上限 `LX_HISTORY_LIMIT`）。
     undo: Vec<LxSnapshot>,
     /// 重做历史。
@@ -208,7 +228,7 @@ impl Lx {
             ask: None,
             plain,
             background_tasks: 0,
-            mcp_startup: None,
+            startup: StartupCounts::default(),
             undo: Vec::new(),
             redo: Vec::new(),
             history: HistoryBrowse::default(),

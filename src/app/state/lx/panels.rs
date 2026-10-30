@@ -78,6 +78,13 @@ impl Lx {
         &self.mention
     }
 
+    /// 写入 skill 候选；由事件层在 skill 目录扫描完成后调用。
+    pub fn set_mention_skills(&mut self, skills: Vec<crate::skills::SkillEntry>) {
+        let text = self.input.clone();
+        let cursor = self.cursor;
+        self.mention.set_skills(skills, &text, cursor);
+    }
+
     /// 同步 `@` 提及扫描根；根变化时作废旧候选并重算面板；返回根是否变化。
     pub fn set_mention_root(&mut self, root: Option<std::path::PathBuf>) -> bool {
         self.mention.set_root(root, &self.input, self.cursor)

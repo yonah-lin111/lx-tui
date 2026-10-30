@@ -576,11 +576,8 @@ fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
         }
         return;
     };
-    // `/` 前缀或更具体前缀：命令与 skill 候选实时过滤。
-    let matching = super::super::state::lx::slash::SlashPanel::command_entries(
-        &query,
-        &crate::skills::cached_entries(),
-    );
+    // `/` 前缀或更具体前缀：命令候选实时过滤；skill 归 `@` 面板管理。
+    let matching = super::super::state::lx::slash::SlashPanel::command_entries(&query);
     if let Some(target) = state.pane_mut_anywhere(pane) {
         if matching.is_empty() {
             if matches!(
@@ -640,35 +637,7 @@ pub fn accept_slash_command(state: &mut AppState, pane: PaneId) -> bool {
         }
         return false;
     };
-    // skill 候选：把整行 `/query` 替换为引用块；分组标题不执行任何动作。
-    let command = match entry {
-        super::super::state::SlashEntry::Command(command) => command,
-        super::super::state::SlashEntry::Skill { path, .. } => {
-            let Some(reference) = crate::app::markdown::format_reference(
-                crate::app::markdown::ReferKind::Skill,
-                &path,
-            ) else {
-                return false;
-            };
-            let line_start = input[..cursor].rfind('\n').map_or(0, |offset| offset + 1);
-            if let Some(target) = state.pane_mut_anywhere(pane) {
-                let replacement = format!("{reference} ");
-                target
-                    .lx
-                    .input
-                    .replace_range(line_start..cursor, &replacement);
-                target.lx.cursor = line_start + replacement.len();
-                target.lx.slash = None;
-            }
-            return true;
-        }
-        super::super::state::SlashEntry::Header(_) => {
-            if let Some(target) = state.pane_mut_anywhere(pane) {
-                target.lx.slash = None;
-            }
-            return false;
-        }
-    };
+    let super::super::state::SlashEntry::Command(command) = entry;
     // 撤销命令必须独立占满输入：夹带正文/多行/参数/光标前后残留时拒绝并保留草稿。
     if command == super::super::state::SlashCommand::Rewind {
         let trimmed = input.trim();

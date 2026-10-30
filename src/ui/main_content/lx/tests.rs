@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::app::state::LxEntry;
+use crate::app::state::lx::{StartupCount, StartupCounts};
 use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::style::Color;
 
@@ -176,6 +177,56 @@ fn wide_page_renders_brand_entries_and_input() {
     assert!(text.contains("Tip:"), "Tip 前缀可见");
     assert!(text.contains('·'), "标签页分隔符可见");
     assert!(text.contains('─'), "输入框上下分割线可见");
+}
+
+#[test]
+fn home_shows_mcp_and_skill_counts() {
+    let area = Rect::new(0, 0, 100, 60);
+    let mut lx = Lx::new();
+    lx.startup = StartupCounts {
+        mcp: StartupCount {
+            total: 4,
+            ready: 4,
+            errors: 0,
+            loading: false,
+        },
+        skills: StartupCount {
+            total: 3,
+            ready: 3,
+            errors: 0,
+            loading: false,
+        },
+    };
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let text = buffer_text(&buf);
+    assert!(text.contains("4 mcp · 3 skills"), "{text}");
+
+    lx.startup.mcp.loading = true;
+    lx.startup.skills.loading = true;
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let text = buffer_text(&buf);
+    assert!(text.contains("loading mcp · loading skills"), "{text}");
+
+    lx.startup = StartupCounts {
+        mcp: StartupCount {
+            total: 4,
+            ready: 3,
+            errors: 1,
+            loading: false,
+        },
+        skills: StartupCount {
+            total: 3,
+            ready: 3,
+            errors: 0,
+            loading: false,
+        },
+    };
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let text = buffer_text(&buf);
+    assert!(text.contains("3 mcp 1 error · 3 skills"), "{text}");
 }
 
 #[test]

@@ -228,6 +228,12 @@ pub const LX_ENTRY_AUTOMATION: &str = "Automation Agent";
 pub const LX_ENTRY_SEPARATOR: &str = "·";
 /// lx 页入口 Tip 提示前缀；前缀强调色、句子 muted。
 pub const LX_TIP_PREFIX: &str = "Tip:";
+/// 首页资源计数：MCP / skills / loading / error。
+pub const LX_HOME_MCP: &str = "mcp";
+pub const LX_HOME_SKILLS: &str = "skills";
+pub const LX_HOME_LOADING: &str = "loading";
+pub const LX_HOME_ERROR: &str = "error";
+pub const LX_HOME_ERRORS: &str = "errors";
 /// lx 页入口 Tip 提示行：选中入口一句话描述。
 pub const LX_ENTRY_NATIVE_DESC: &str = "talks to the model directly";
 pub const LX_ENTRY_HYBRID_DESC: &str = "mixes native and external agents";
@@ -299,6 +305,9 @@ pub const WORKSPACE_TREE_LAST: &str = "└─";
 /// @ 提及面板条目标记：目录 / 文件（标准单宽通用符号，兼容无 Nerd Font 的终端）。
 pub const MENTION_DIR_ICON: &str = "▸";
 pub const MENTION_FILE_ICON: &str = "•";
+pub const MENTION_SKILL_ICON: &str = "◆";
+/// `@` 面板 skill 条目的详情前缀。
+pub const MENTION_SKILL_LABEL: &str = "Skill";
 
 /// 右键菜单项；按命令映射，禁止在逻辑层硬编码。
 pub const MENU_NEW_TAB: &str = "New tab";
@@ -1017,13 +1026,13 @@ pub const BLOCK_PANEL_TITLE: &str = "Commands";
 pub const MENTION_PANEL_TITLE: &str = "@Command";
 pub const MENTION_TAB_FILES: &str = "Files";
 pub const MENTION_TAB_REF_DIR: &str = "refDir";
-pub const MENTION_REF_DIR_EMPTY: &str = "(无匹配的引用文件夹)";
+pub const MENTION_REF_DIR_EMPTY: &str = "(no matching reference folders)";
 pub const SLASH_PANEL_TITLE: &str = "/Command";
 pub const WORKTREE_PANEL_TITLE: &str = "Worktrees";
 
 /// 斜杠命令面板右侧来源标签（不含方括号）。
 pub const SLASH_TAG_BUILTIN: &str = "Built-in";
-pub const SLASH_TAG_SKILL: &str = "Skill";
+
 pub const SLASH_TAG_USER: &str = "User";
 pub const SLASH_TAG_PROJECT: &str = "Project";
 pub const SLASH_TAG_GIT: &str = "Git";

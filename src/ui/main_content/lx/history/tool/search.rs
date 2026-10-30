@@ -24,7 +24,9 @@ use crate::ui::{style, text};
 use super::super::{Grid, visible_row};
 use super::file_summary;
 use super::tree::{self, Node, Preview, Section};
-use super::{Segment, TEXT_SAMPLE_CHARS, header_with_verb, put_segments, single_line};
+use super::{
+    Segment, TEXT_SAMPLE_CHARS, header_with_verb, output_style, put_segments, single_line,
+};
 
 /// 折叠态命中行最多显示的物理行数。
 const MATCH_PREVIEW_ROWS: usize = 2;
@@ -34,7 +36,7 @@ struct SearchLayout {
     layout: tree::Layout,
 }
 
-fn hit_line(hit: &crate::app::state::SearchMatchView) -> Vec<Segment> {
+fn hit_line(hit: &crate::app::state::SearchMatchView, expanded: bool) -> Vec<Segment> {
     let path = single_line(&hit.path, TEXT_SAMPLE_CHARS);
     let raw = single_line(&hit.text, TEXT_SAMPLE_CHARS);
     let body = raw
@@ -44,7 +46,7 @@ fn hit_line(hit: &crate::app::state::SearchMatchView) -> Vec<Segment> {
         .to_string();
     let mut spans = vec![
         Segment::new(format!("{path}:{}: ", hit.line), style::agent_step_detail()),
-        Segment::new(body, style::text()),
+        Segment::new(body, output_style(expanded)),
     ];
     if hit.line_truncated {
         spans.push(Segment::new(" …", style::agent_step_detail()));
@@ -63,7 +65,11 @@ fn layout(
     if !summary.is_empty() {
         sections.push(Section::fixed(summary));
     }
-    let hits: Vec<Vec<Segment>> = view.matches.iter().map(hit_line).collect();
+    let hits: Vec<Vec<Segment>> = view
+        .matches
+        .iter()
+        .map(|hit| hit_line(hit, expanded))
+        .collect();
     if !hits.is_empty() {
         sections.push(Section::new(
             vec![Node::block(hits)],
@@ -288,6 +294,20 @@ mod tests {
         let text = text_of(&call, &view, 60, false);
         assert!(text.contains("0 matches"), "{text}");
         assert!(!has_more(&call, &view, 60));
+    }
+
+    #[test]
+    fn folded_search_hits_are_dim_until_expanded() {
+        let call = call();
+        let view = view();
+        assert_eq!(
+            row_style(&layout(&call, &view, 80, false), "pub fn render"),
+            Some(style::muted())
+        );
+        assert_eq!(
+            row_style(&layout(&call, &view, 80, true), "pub fn render"),
+            Some(style::text())
+        );
     }
 
     #[test]

@@ -653,6 +653,14 @@ fn build(
         brand::draw_icon(&mut grid, ix, iy, lx.entry);
     }
     if let Some(rect) = lay.description {
+        // 计数行放在 logo 与 Tip 之间的一行空隙里；没有空间时随 Tip 一起隐藏。
+        if rect.y > area.y {
+            brand::draw_inventory(
+                &mut grid,
+                Rect::new(rect.x, rect.y - 1, rect.width, 1),
+                lx.startup,
+            );
+        }
         brand::draw_tip(
             &mut grid,
             Rect::new(rect.x, rect.y, rect.width, 1),

@@ -10,95 +10,117 @@ use crate::ui::{style, text};
 
 use super::super::{Grid, visible_row};
 use super::tree::{self, Node, Preview, Section};
-use super::{Segment, header_with_verb, put_segments, single_line};
+use super::{Folds, Segment, header_with_verb, output_style, put_segments, single_line};
 
 const BLOCK_PREVIEW_ROWS: usize = 3;
 
-struct McpLayout {
+pub(super) struct McpLayout {
     layout: tree::Layout,
+    /// 参数块（Body）的物理行数（含标题行时为 offset 0 的区域）。
+    pub(super) arguments_rows: usize,
+    /// 结果块（Output）的物理行数。
+    pub(super) result_rows: usize,
+    pub(super) arguments_expandable: bool,
+    pub(super) result_expandable: bool,
 }
 
-fn sections(view: &McpDetailView, expanded: bool) -> Vec<Section> {
-    let mut sections = Vec::new();
-    if !view.arguments.is_empty() {
-        let lines: Vec<Vec<Segment>> = view
-            .arguments
-            .iter()
-            .map(|line| vec![Segment::new(single_line(line, 2000), style::text())])
-            .collect();
-        let mut nodes = vec![Node::block(lines)];
-        if view.arguments_more > 0 {
-            nodes.push(Node::text(
-                text::mcp::more_lines(view.arguments_more),
-                style::fold_hint(),
-            ));
-        }
-        sections.push(
-            Section::new(
-                nodes,
-                (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
-            )
-            // 参数位置（├─ / │）用浅黄，正文保持默认前景色。
-            .with_connector(style::chat_tool_param()),
-        );
+fn arguments_section(view: &McpDetailView, expanded: bool) -> Option<Section> {
+    if view.arguments.is_empty() {
+        return None;
     }
-    if !view.result.is_empty() || !view.images.is_empty() || view.images_omitted > 0 {
-        let mut nodes: Vec<Node> = Vec::new();
-        if !view.result.is_empty() {
-            let lines: Vec<Vec<Segment>> = view
-                .result
-                .iter()
-                .map(|line| {
-                    vec![Segment::new(
-                        single_line(line, 8000),
-                        style::agent_step_detail(),
-                    )]
-                })
-                .collect();
-            nodes.push(Node::block(lines));
-        }
-        if view.result_more > 0 {
-            nodes.push(Node::text(
-                text::mcp::more_lines(view.result_more),
-                style::fold_hint(),
-            ));
-        }
-        for image in &view.images {
-            nodes.push(Node::text(
-                text::mcp::image_line(&image.mime, image.width, image.height, &image.path),
-                style::agent_step_detail(),
-            ));
-        }
-        if view.images_omitted > 0 {
-            nodes.push(Node::text(
-                text::mcp::images_label(view.images_omitted),
-                style::fold_hint(),
-            ));
-        }
-        sections.push(
-            Section::new(
-                nodes,
-                (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
-            )
-            // 结果位置（└─）与正文统一灰色。
-            .with_connector(style::agent_step_detail()),
-        );
+    let mut lines: Vec<Vec<Segment>> = view
+        .arguments
+        .iter()
+        .map(|line| {
+            vec![Segment::new(
+                single_line(line, 2000),
+                style::chat_tool_param(),
+            )]
+        })
+        .collect();
+    if view.arguments_more > 0 {
+        lines.push(vec![Segment::new(
+            text::mcp::more_lines(view.arguments_more),
+            style::fold_hint(),
+        )]);
     }
-    sections
+    Some(Section::new(
+        vec![Node::block(lines)],
+        (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
+    ))
 }
 
-fn layout(view: &McpDetailView, width: u16, expanded: bool) -> McpLayout {
+fn result_section(view: &McpDetailView, expanded: bool) -> Option<Section> {
+    if view.result.is_empty() && view.images.is_empty() && view.images_omitted == 0 {
+        return None;
+    }
+    let body_style = output_style(expanded);
+    let mut lines: Vec<Vec<Segment>> = view
+        .result
+        .iter()
+        .map(|line| vec![Segment::new(single_line(line, 8000), body_style)])
+        .collect();
+    if view.result_more > 0 {
+        lines.push(vec![Segment::new(
+            text::mcp::more_lines(view.result_more),
+            style::fold_hint(),
+        )]);
+    }
+    for image in &view.images {
+        lines.push(vec![Segment::new(
+            text::mcp::image_line(&image.mime, image.width, image.height, &image.path),
+            body_style,
+        )]);
+    }
+    if view.images_omitted > 0 {
+        lines.push(vec![Segment::new(
+            text::mcp::images_label(view.images_omitted),
+            style::fold_hint(),
+        )]);
+    }
+    Some(Section::new(
+        vec![Node::block(lines)],
+        (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
+    ))
+}
+
+pub(super) fn layout(view: &McpDetailView, width: u16, folds: Folds) -> McpLayout {
+    let folded_arguments = arguments_section(view, false);
+    let folded_result = result_section(view, false);
+    let arguments_expandable = folded_arguments
+        .as_ref()
+        .is_some_and(|section| tree::layout(std::slice::from_ref(section), width).hidden > 0);
+    let result_expandable = folded_result
+        .as_ref()
+        .is_some_and(|section| tree::layout(std::slice::from_ref(section), width).hidden > 0);
+    let arguments = arguments_section(view, folds.body);
+    let result = result_section(view, folds.output);
+    let arguments_rows = arguments.as_ref().map_or(0, |section| {
+        tree::layout(std::slice::from_ref(section), width)
+            .rows
+            .len()
+    });
+    let result_rows = result.as_ref().map_or(0, |section| {
+        tree::layout(std::slice::from_ref(section), width)
+            .rows
+            .len()
+    });
+    let sections: Vec<Section> = arguments.into_iter().chain(result).collect();
     McpLayout {
-        layout: tree::layout(&sections(view, expanded), width),
+        layout: tree::layout(&sections, width),
+        arguments_rows,
+        result_rows,
+        arguments_expandable,
+        result_expandable,
     }
 }
 
 /// 卡片行数（含标题行）。
-pub(super) fn rows(view: &McpDetailView, width: u16, expanded: bool) -> usize {
+pub(super) fn rows(view: &McpDetailView, width: u16, folds: Folds) -> usize {
     if width == 0 {
         return 0;
     }
-    1 + layout(view, width, expanded).layout.rows.len()
+    1 + layout(view, width, folds).layout.rows.len()
 }
 
 /// 展开后是否真的多出内容。
@@ -106,7 +128,8 @@ pub(super) fn has_more(view: &McpDetailView, width: u16) -> bool {
     if width == 0 {
         return false;
     }
-    layout(view, width, false).layout.hidden > 0
+    let layout = layout(view, width, Folds::default());
+    layout.arguments_expandable || layout.result_expandable
 }
 
 /// 绘制 MCP 卡片；推进行数必须与 [`rows`] 严格相等。
@@ -119,7 +142,7 @@ pub(super) fn draw(
     call: &ToolCallView,
     view: &McpDetailView,
     loading_frame: usize,
-    expanded: bool,
+    folds: Folds,
     animating: bool,
 ) {
     if rect.width == 0 {
@@ -155,7 +178,7 @@ pub(super) fn draw(
         rect,
         scroll,
         row_index,
-        &layout(view, rect.width, expanded).layout.rows,
+        &layout(view, rect.width, folds).layout.rows,
     );
 }
 
@@ -163,6 +186,7 @@ pub(super) fn draw(
 mod tests {
     use super::*;
     use crate::app::state::{ToolCallView, ToolStatus, ToolSummary};
+    use crate::ui::text;
 
     fn call() -> ToolCallView {
         ToolCallView {
@@ -201,22 +225,12 @@ mod tests {
         }
     }
 
-    fn render(view: &McpDetailView, width: u16, expanded: bool) -> String {
-        let total = rows(view, width, expanded);
+    fn render(view: &McpDetailView, width: u16, folds: Folds) -> String {
+        let total = rows(view, width, folds);
         let rect = Rect::new(0, 0, width, u16::try_from(total.max(1)).unwrap_or(u16::MAX));
         let mut grid = Grid::new(rect);
         let mut row = 0;
-        draw(
-            &mut grid,
-            rect,
-            0,
-            &mut row,
-            &call(),
-            view,
-            0,
-            expanded,
-            false,
-        );
+        draw(&mut grid, rect, 0, &mut row, &call(), view, 0, folds, false);
         assert_eq!(row, total, "绘制行数必须与 rows 一致");
         let mut text = String::new();
         for y in 0..total {
@@ -230,7 +244,7 @@ mod tests {
 
     #[test]
     fn folded_card_shows_server_tool_status_and_summary() {
-        let text = render(&view(), 100, false);
+        let text = render(&view(), 100, Folds::default());
         assert!(text.contains("github · create_issue"), "{text}");
         assert!(text.contains("1.2s"), "{text}");
         assert!(text.contains("Fix login crash on iOS"), "{text}");
@@ -243,7 +257,14 @@ mod tests {
         view.result = (0..30).map(|index| format!("line {index}")).collect();
         view.result_more = 10;
         assert!(has_more(&view, 80));
-        let expanded = render(&view, 80, true);
+        let expanded = render(
+            &view,
+            80,
+            Folds {
+                body: false,
+                output: true,
+            },
+        );
         assert!(expanded.contains("line 19"), "{expanded}");
         assert!(expanded.contains("10 more lines"), "{expanded}");
     }
@@ -256,13 +277,21 @@ mod tests {
         view.result = (0..10).map(|index| format!("line {index}")).collect();
         view.result_more = 7;
         call.detail = Some(Box::new(ToolDetailView::Mcp(view.clone())));
-        let total = rows(&view, 100, false);
-        let regions = super::super::card_regions(&call, 100, super::super::Folds::default(), total);
-        assert!(
-            regions.iter().any(|region| region.clickable),
-            "long MCP content must be clickable to expand"
+        let folds = Folds::default();
+        let total = rows(&view, 100, folds);
+        let regions = super::super::card_regions(&call, 100, folds, total);
+        assert!(regions.iter().any(|region| region.clickable));
+        assert_eq!(regions.len(), 2, "args and result have separate regions");
+        assert_eq!(regions[0].section, crate::app::state::CardSection::Body);
+        assert_eq!(regions[1].section, crate::app::state::CardSection::Output);
+        let expanded = layout(
+            &view,
+            100,
+            Folds {
+                body: true,
+                output: true,
+            },
         );
-        let expanded = layout(&view, 100, true);
         let arg_row = expanded
             .layout
             .rows
@@ -273,7 +302,11 @@ mod tests {
                     .any(|segment| segment.text.contains("title"))
             })
             .expect("argument row");
-        assert_eq!(arg_row.prefix_style, style::chat_tool_param());
+        assert_eq!(
+            arg_row.segments[0].style,
+            style::chat_tool_param(),
+            "args use the param color"
+        );
         let result_row = expanded
             .layout
             .rows
@@ -284,6 +317,65 @@ mod tests {
                     .any(|segment| segment.text.contains("line 0"))
             })
             .expect("result row");
-        assert_eq!(result_row.prefix_style, style::agent_step_detail());
+        assert_eq!(result_row.segments[0].style, style::text());
+    }
+
+    #[test]
+    fn collapsed_leaf_uses_dim_and_expanded_leaf_uses_default_foreground() {
+        let mut view = view();
+        view.result = (0..10).map(|index| format!("line {index}")).collect();
+        view.result_more = 7;
+        let folded = layout(&view, 100, Folds::default());
+        let result_row = folded
+            .layout
+            .rows
+            .iter()
+            .find(|row| row.segments.iter().any(|seg| seg.text.contains("line 0")))
+            .expect("folded result");
+        assert_eq!(result_row.segments[0].style, style::muted());
+        let expanded = layout(
+            &view,
+            100,
+            Folds {
+                body: true,
+                output: true,
+            },
+        );
+        let result_row = expanded
+            .layout
+            .rows
+            .iter()
+            .find(|row| row.segments.iter().any(|seg| seg.text.contains("line 0")))
+            .expect("expanded result");
+        assert_eq!(result_row.segments[0].style, style::text());
+    }
+
+    #[test]
+    fn expanding_branch_keeps_bar_and_expanding_leaf_uses_padding() {
+        let mut view = view();
+        view.arguments = (0..10).map(|index| format!("arg {index}")).collect();
+        view.result = (0..10).map(|index| format!("line {index}")).collect();
+        let expanded = layout(
+            &view,
+            100,
+            Folds {
+                body: true,
+                output: true,
+            },
+        );
+        let arg_row = expanded
+            .layout
+            .rows
+            .iter()
+            .find(|row| row.segments.iter().any(|seg| seg.text.contains("arg 1")))
+            .expect("argument continuation");
+        assert_eq!(arg_row.prefix, text::agent::TREE_BAR);
+        let result_row = expanded
+            .layout
+            .rows
+            .iter()
+            .find(|row| row.segments.iter().any(|seg| seg.text.contains("line 1")))
+            .expect("result continuation");
+        assert_eq!(result_row.prefix, text::agent::TREE_PAD);
     }
 }

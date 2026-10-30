@@ -4,6 +4,7 @@ pub(crate) mod chat;
 pub(crate) mod commands;
 mod git;
 pub(crate) mod input;
+mod inventory;
 pub(crate) mod mouse;
 pub(crate) mod overlay;
 mod paste;
@@ -59,6 +60,12 @@ pub enum AppEvent {
         generation: u64,
         root: PathBuf,
         entries: Vec<MentionEntry>,
+    },
+    /// 首页 skill 计数：后台预扫描完成。
+    SkillsLoaded {
+        root: Option<PathBuf>,
+        total: usize,
+        errors: usize,
     },
     /// 工作区 git 元数据查询结果。
     GitRefreshed {
@@ -252,8 +259,8 @@ async fn run_loop(
     load_models_snapshot(state);
     // 自定义命令重载触发：启动、切换显示工作区与设置页写入后。
     let mut commands_reload = true;
-    // skill 目录缓存刷新触发：启动、切换显示工作区与设置页写入后。
-    let mut skills_reload = true;
+    // skill 目录缓存刷新触发：切换显示工作区与设置页写入后；启动时单独预扫描。
+    let mut skills_reload = false;
     let mut last_prompt_workspace = state.prompt_workspace();
     initialize_layout_widths(tui, state, &config)?;
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
@@ -279,10 +286,20 @@ async fn run_loop(
     chat_streams.set_process_sender(process_sender);
     chat_streams.set_event_sender(sender.clone());
     commands::seed_git_requests(state);
+    // 进入应用即装载资源：MCP 后台预热、skill 目录后台扫描；首页先显示 loading。
+    let mut mcp_roots = chat::mcp::project_roots(state);
+    inventory::initialize_mcp(state, persistence, &mcp_roots);
+    inventory::spawn_skills_preload(state, persistence, &sender);
 
     while !state.should_quit {
         // 会话按状态对齐：新建工作区的窗格在此启动，被移除工作区的会话在此终止。
         session::reconcile_sessions(state, &mut sessions, &sender);
+        // 新打开的工作区也要立即预热 MCP；已有连接不会重复启动。
+        let roots = chat::mcp::project_roots(state);
+        if roots != mcp_roots {
+            mcp_roots = roots.clone();
+            inventory::initialize_mcp(state, persistence, &mcp_roots);
+        }
         // 设置页项目表：工作区打开/关闭/信任变化都可能改变 scope 映射。
         if let Some(service) = settings_service.as_ref() {
             service.set_projects(chat::mcp::project_views(state, persistence));
@@ -299,7 +316,7 @@ async fn run_loop(
                 }
                 SettingsEvent::McpChanged => {
                     let roots = chat::mcp::project_roots(state);
-                    chat::mcp::prewarm_projects(persistence, &roots);
+                    inventory::refresh_mcp(state, persistence, &roots);
                 }
                 SettingsEvent::McpRestart { server } => {
                     let roots = chat::mcp::project_roots(state);
@@ -341,6 +358,7 @@ async fn run_loop(
                             error: error.clone(),
                         },
                     );
+                    inventory::update_mcp_status(state, &project, &mcp_statuses);
                     let notice = match &status {
                         ServerStatus::Failed { error } => Some((
                             text::mcp::start_failed(&server, error),
@@ -376,23 +394,7 @@ async fn run_loop(
                     done,
                     total,
                 } => {
-                    let complete = done >= total && total > 0;
-                    for workspace in &mut state.workspaces {
-                        let matches = workspace
-                            .repo_key()
-                            .is_some_and(|root| root == project.as_path());
-                        if !matches {
-                            continue;
-                        }
-                        for tab in &mut workspace.tabs {
-                            let ids = tab.layout.pane_ids();
-                            for id in ids {
-                                if let Some(pane) = tab.pane_mut(id) {
-                                    pane.lx.mcp_startup = (!complete).then_some((done, total));
-                                }
-                            }
-                        }
-                    }
+                    inventory::update_mcp_progress(state, &project, done, total);
                     dirty = true;
                 }
             }
@@ -432,11 +434,7 @@ async fn run_loop(
         commands_reload = false;
         if skills_reload {
             skills_reload = false;
-            let root = state
-                .prompt_owner()
-                .repo_key()
-                .map(std::path::Path::to_path_buf);
-            let _ = chat::skills::catalog_prompt(persistence, root.as_deref(), false);
+            inventory::spawn_skills_preload(state, persistence, &sender);
         }
         // 撤销效应先取走：预检同步、执行转后台；持久化泵不再看到它们。
         if chat::apply_rewind_effects(state, &sender, persistence) {
@@ -784,6 +782,11 @@ fn handle_app_event(
             root,
             entries,
         } => update::apply_lx_mention_entries(state, pane, generation, &root, entries),
+        AppEvent::SkillsLoaded {
+            root: _,
+            total,
+            errors,
+        } => inventory::apply_skills_loaded(state, total, errors),
         AppEvent::GitRefreshed { cwd, checkout } => {
             update::apply_git_refresh(state, &cwd, checkout)
         }

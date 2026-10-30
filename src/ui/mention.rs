@@ -5,7 +5,7 @@
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::markdown::MentionEntry;
+use crate::app::markdown::{MentionEntry, skill_mention_name};
 use crate::ui::text;
 use crate::ui::widgets::command_panel::CommandItem;
 
@@ -17,14 +17,18 @@ pub const MENTION_DETAIL_MARGIN: usize = 5;
 pub struct MentionRow {
     icon: &'static str,
     is_directory: bool,
+    is_skill: bool,
     label: String,
     detail: String,
 }
 
 impl MentionRow {
-    /// 组装命令面板条目：目录与文件分色（目录用目录色，文件用正文色）。
+    /// 组装命令面板条目：目录、文件与 skill 分色。
     pub fn item(&self) -> CommandItem<'_> {
-        let (icon_style, label_style) = if self.is_directory {
+        let (icon_style, label_style) = if self.is_skill {
+            let skill = crate::ui::style::chat_tool_param();
+            (skill, skill)
+        } else if self.is_directory {
             let directory = crate::ui::style::directory();
             (directory, directory)
         } else {
@@ -44,6 +48,9 @@ impl MentionRow {
 ///
 /// 父目录超出可用宽度时按显示列中间截断（保留路径首尾）。
 pub fn file_row(entry: &MentionEntry, detail_width: usize) -> MentionRow {
+    if let Some(name) = skill_mention_name(&entry.path) {
+        return skill_row(name, detail_width);
+    }
     let (directory, name) = entry
         .path
         .rsplit_once('/')
@@ -68,8 +75,35 @@ pub fn file_row(entry: &MentionEntry, detail_width: usize) -> MentionRow {
     MentionRow {
         icon,
         is_directory: entry.is_directory,
+        is_skill: false,
         label,
         detail,
+    }
+}
+
+/// 构造 skill 条目展示：`◆ name` + `Skill · description`。
+pub fn skill_row(name: &str, detail_width: usize) -> MentionRow {
+    let description = crate::skills::cached_entries()
+        .into_iter()
+        .find(|skill| skill.name == name)
+        .map(|skill| skill.description)
+        .unwrap_or_default();
+    let detail = if description.is_empty() {
+        text::MENTION_SKILL_LABEL.to_string()
+    } else {
+        format!(
+            "{} {} {}",
+            text::MENTION_SKILL_LABEL,
+            text::LX_CHAT_TOOL_STATUS_SEP,
+            description
+        )
+    };
+    MentionRow {
+        icon: text::MENTION_SKILL_ICON,
+        is_directory: false,
+        is_skill: true,
+        label: name.to_string(),
+        detail: text::truncate_to_width(&detail, detail_width),
     }
 }
 
@@ -82,6 +116,7 @@ pub fn folder_row(name: &str, path: &str, detail_width: usize) -> MentionRow {
     MentionRow {
         icon: text::MENTION_DIR_ICON,
         is_directory: true,
+        is_skill: false,
         label,
         detail,
     }

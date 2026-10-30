@@ -119,8 +119,6 @@ fn jump_rect(bar: Rect) -> Option<Rect> {
 enum ActivityLabel<'a> {
     /// `/compact` 正在执行：摘要请求没有流式输出，优先级最高（此时聊天必然空闲）。
     Compacting,
-    /// 首轮 MCP server 启动进度。
-    McpStartup(usize, usize),
     /// 当前计划里第一个 `in_progress` 步骤的（已净化的）原文。
     Todo(&'a str),
     /// 当前 assistant 最后一步是开放思考块。
@@ -138,7 +136,6 @@ impl ActivityLabel<'_> {
     fn text(&self) -> String {
         match self {
             Self::Compacting => text::chat::COMPACTING_LABEL.to_string(),
-            Self::McpStartup(done, total) => text::mcp::startup_label(*done, *total),
             Self::Todo(todo) => (*todo).to_string(),
             Self::Thinking => text::chat::THINKING_LABEL.to_string(),
             Self::RunningTools => text::chat::RUNNING_TOOLS_LABEL.to_string(),
@@ -158,9 +155,6 @@ impl ActivityLabel<'_> {
 fn activity_label<'a>(lx: &'a Lx, plan_text: Option<&'a str>) -> ActivityLabel<'a> {
     if lx.compact.is_running() {
         return ActivityLabel::Compacting;
-    }
-    if let Some((done, total)) = lx.mcp_startup {
-        return ActivityLabel::McpStartup(done, total);
     }
     if let Some(todo) = plan_text {
         return ActivityLabel::Todo(todo);

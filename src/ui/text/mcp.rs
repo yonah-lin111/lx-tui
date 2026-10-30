@@ -1,18 +1,13 @@
-//! MCP 用户可见文案（中文）。
-
-/// 首轮启动进度（lx 活动标签）。
-pub fn startup_label(done: usize, total: usize) -> String {
-    format!("正在启动 MCP 服务 ({done}/{total})…")
-}
+//! MCP user-visible copy.
 
 /// server 启动失败 toast。
 pub fn start_failed(name: &str, error: &str) -> String {
-    format!("MCP 服务 \"{name}\" 启动失败：{error}")
+    format!("MCP server \"{name}\" failed to start: {error}")
 }
 
 /// OAuth 未登录 toast。
 pub fn needs_login(name: &str) -> String {
-    format!("MCP 服务 \"{name}\" 需要登录，请在设置页 MCP 中登录")
+    format!("MCP server \"{name}\" needs login; open Settings → MCP")
 }
 
 /// 卡片展开区的参数标题。

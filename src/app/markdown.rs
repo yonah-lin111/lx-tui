@@ -224,6 +224,23 @@ pub struct MentionEntry {
     pub is_directory: bool,
 }
 
+/// `@` 面板里的 skill 虚拟路径前缀（真实 skill 路径由缓存按名称反查）。
+pub const SKILL_MENTION_PREFIX: &str = "skill:";
+
+/// 构造 skill 候选；`path` 是虚拟路径，不参与真实文件提及插入。
+pub fn skill_mention_entry(name: &str) -> MentionEntry {
+    MentionEntry {
+        path: format!("{SKILL_MENTION_PREFIX}{name}"),
+        is_directory: false,
+    }
+}
+
+/// 从虚拟路径取 skill 名；非 skill 条目返回 None。
+pub fn skill_mention_name(path: &str) -> Option<&str> {
+    path.strip_prefix(SKILL_MENTION_PREFIX)
+        .filter(|name| !name.is_empty())
+}
+
 /// 提及面板的显示上限。
 pub const MENTION_LIMIT: usize = 100;
 

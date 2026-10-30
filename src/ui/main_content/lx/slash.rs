@@ -32,18 +32,6 @@ pub(super) fn items<'a>(
                     preview: command.description(),
                     tag: command.tag(),
                 },
-                crate::app::state::SlashEntry::Header(title) => CommandItem::Inline {
-                    label: title,
-                    preview: "",
-                    tag: "",
-                },
-                crate::app::state::SlashEntry::Skill {
-                    name, description, ..
-                } => CommandItem::Inline {
-                    label: name,
-                    preview: description,
-                    tag: text::SLASH_TAG_SKILL,
-                },
             })
             .collect(),
         SlashPanel::Model(picker) => {
@@ -252,17 +240,7 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
     let time_labels = history_time_labels(panel);
     let items = items(panel, &time_labels);
     let layout = command_panel::layout(area_of(input, area), &view(&items, panel, input, area))?;
-    let index = command_panel::item_at(&layout, &items, column, row)?;
-    match panel {
-        crate::app::state::SlashPanel::Commands { items, .. }
-            if !items
-                .get(index)
-                .is_some_and(crate::app::state::SlashEntry::selectable) =>
-        {
-            None
-        }
-        _ => Some(index),
-    }
+    command_panel::item_at(&layout, &items, column, row)
 }
 
 /// 绘制 `/` 命令面板（复用 `layout` 的矩形口径）。

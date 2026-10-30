@@ -118,8 +118,9 @@ pub struct SkillEntry {
 }
 
 static CACHE: std::sync::RwLock<Vec<SkillEntry>> = std::sync::RwLock::new(Vec::new());
+static CACHE_ERRORS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// 最近一次扫描的 skill 条目（纯数据；app 层只读它做 `/` 面板候选）。
+/// 最近一次扫描的 skill 条目（纯数据；app 层只读它做 `@` 面板候选）。
 pub fn cached_entries() -> Vec<SkillEntry> {
     CACHE
         .read()
@@ -127,11 +128,22 @@ pub fn cached_entries() -> Vec<SkillEntry> {
         .unwrap_or_default()
 }
 
+/// 最近一次扫描的解析错误数（首页计数用）。
+pub fn cached_errors() -> usize {
+    CACHE_ERRORS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// 事件层每次扫描后更新缓存。
 pub fn set_cached_entries(entries: Vec<SkillEntry>) {
+    set_cached_summary(entries, 0);
+}
+
+/// 事件层扫描后同时更新条目与解析错误数。
+pub fn set_cached_summary(entries: Vec<SkillEntry>, errors: usize) {
     if let Ok(mut cache) = CACHE.write() {
         *cache = entries;
     }
+    CACHE_ERRORS.store(errors, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// 发现结果：可用条目 + 解析错误。

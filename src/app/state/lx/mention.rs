@@ -30,6 +30,8 @@ pub struct LxMention {
     root: Option<PathBuf>,
     /// 最近一次扫描结果；None 表示尚未取得。
     cache: Option<Vec<MentionEntry>>,
+    /// 当前可用 skill；由事件层在 skill 目录扫描完成后写入。
+    skills: Vec<crate::skills::SkillEntry>,
     /// 扫描代号：根变化或新一轮扫描递增，用于丢弃过期回执。
     generation: u64,
     /// 扫描是否在途。
@@ -134,11 +136,11 @@ impl LxMention {
             self.panel = None;
             return;
         };
-        let Some(cache) = self.cache.as_ref() else {
-            self.panel = None;
-            return;
-        };
-        let items = filter_mentions(cache, &trigger.query);
+        let mut items = self.skill_mentions(&trigger.query);
+        if let Some(cache) = self.cache.as_ref() {
+            items.extend(filter_mentions(cache, &trigger.query));
+        }
+        items.truncate(markdown::MENTION_LIMIT);
         if items.is_empty() {
             self.panel = None;
             return;
@@ -195,7 +197,18 @@ impl LxMention {
         }
         let entry = panel.items().get(panel.active())?.clone();
         let range = trigger.from..trigger.to;
-        let insertion = mention_insertion(&entry);
+        let insertion = if let Some(name) = markdown::skill_mention_name(&entry.path) {
+            self.skills
+                .iter()
+                .find(|skill| skill.name == name)
+                .and_then(|skill| {
+                    markdown::format_reference(markdown::ReferKind::Skill, &skill.path)
+                })
+                .map(|reference| format!("{reference} "))
+                .unwrap_or_else(|| mention_insertion(&entry))
+        } else {
+            mention_insertion(&entry)
+        };
         self.panel = None;
         self.suppressed = true;
         Some((range, insertion))
@@ -241,6 +254,30 @@ impl LxMention {
     /// 解除压制（编辑或移动光标后由调用方清除）。
     pub fn unsuppress(&mut self) {
         self.suppressed = false;
+    }
+}
+
+impl LxMention {
+    /// 写入当前可用 skill；有打开的 `@` 面板时立即重算候选。
+    pub fn set_skills(
+        &mut self,
+        skills: Vec<crate::skills::SkillEntry>,
+        text: &str,
+        cursor: usize,
+    ) {
+        self.skills = skills;
+        self.refresh(text, cursor);
+    }
+
+    /// `@` 面板的 skill 候选：启用且未被同名项目 skill 覆盖的条目。
+    fn skill_mentions(&self, query: &str) -> Vec<MentionEntry> {
+        let entries: Vec<MentionEntry> = self
+            .skills
+            .iter()
+            .filter(|skill| skill.enabled && skill.shadowed_by.is_none())
+            .map(|skill| markdown::skill_mention_entry(&skill.name))
+            .collect();
+        filter_mentions(&entries, query)
     }
 }
 

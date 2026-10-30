@@ -108,7 +108,7 @@ pub(super) fn rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
         Some(crate::app::state::ToolDetailView::Search(view)) => {
             search::rows(call, view, width, folds.body)
         }
-        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp::rows(view, width, folds.body),
+        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp::rows(view, width, folds),
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::rows(call, width, folds.body)
         }
@@ -260,7 +260,7 @@ pub(super) fn draw_animated(
                 call,
                 view,
                 loading_frame,
-                folds.body,
+                folds,
                 animating,
             );
             return;
@@ -355,6 +355,41 @@ pub(super) fn agent_links(call: &ToolCallView, width: u16) -> Vec<(usize, String
     }
 }
 
+/// MCP 卡片的点击面：参数块（Body）与结果块（Output）各自独立折叠。
+///
+/// 标题行跟随第一块，点击标题只切换参数块；结果块从参数块之后开始。
+fn mcp_regions(
+    view: &crate::app::state::McpDetailView,
+    width: u16,
+    folds: Folds,
+) -> Vec<CardRegion> {
+    let layout = mcp::layout(view, width, folds);
+    let mut regions = Vec::new();
+    let mut offset = 0usize;
+    if layout.arguments_rows > 0 {
+        let rows = HEADER_ROWS + layout.arguments_rows;
+        regions.push(CardRegion {
+            section: CardSection::Body,
+            card: RowSpan { offset: 0, rows },
+            clickable: layout.arguments_expandable,
+        });
+        offset = rows;
+    }
+    if layout.result_rows > 0 {
+        let rows = if offset == 0 {
+            HEADER_ROWS + layout.result_rows
+        } else {
+            layout.result_rows
+        };
+        regions.push(CardRegion {
+            section: CardSection::Output,
+            card: RowSpan { offset, rows },
+            clickable: layout.result_expandable,
+        });
+    }
+    regions
+}
+
 /// 命令/交互卡片的点击面：参数区与输入/输出区各自独立折叠。
 fn command_regions(call: &ToolCallView, width: u16, blocks: command::Blocks) -> Vec<CardRegion> {
     let mut regions = vec![CardRegion {
@@ -414,8 +449,7 @@ pub(super) fn card_regions(
         Some(crate::app::state::ToolDetailView::Plan(_))
         | Some(crate::app::state::ToolDetailView::Ask(_)) => Vec::new(),
         Some(crate::app::state::ToolDetailView::Subagent(_))
-        | Some(crate::app::state::ToolDetailView::Search(_))
-        | Some(crate::app::state::ToolDetailView::Mcp(_)) => {
+        | Some(crate::app::state::ToolDetailView::Search(_)) => {
             if !has_expandable_content(call, width) {
                 return Vec::new();
             }
@@ -428,6 +462,7 @@ pub(super) fn card_regions(
                 clickable: true,
             }]
         }
+        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp_regions(view, width, folds),
         Some(crate::app::state::ToolDetailView::File(_)) | None => {
             // 展开前后行数不变就不登记：留下一个点了没反应的点击面只会误导。
             if !has_expandable_content(call, width) {

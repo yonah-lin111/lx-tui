@@ -218,18 +218,3 @@ fn session_switch_does_not_leak_previous_plan() {
     assert!(!row.contains("上个会话的任务"), "{row:?}");
     assert!(row.contains(text::chat::LOADING_LABEL), "{row:?}");
 }
-
-/// MCP 启动进度优先于计划与工具阶段，完成后自动回落。
-#[test]
-fn mcp_startup_progress_wins_over_plan_and_tools() {
-    let mut lx = streaming_lx("a1", vec![tool_step(0, ToolStatus::Running)]);
-    lx.chat.plan = Some(plan(&[("进行中的任务", PlanStepView::InProgress)]));
-    lx.mcp_startup = Some((2, 3));
-    let (grid, bar) = draw_bar(&lx, 60);
-    let row = row_text(&grid, bar);
-    assert!(row.contains("正在启动 MCP 服务 (2/3)…"), "{row:?}");
-    assert!(!row.contains("进行中的任务"), "{row:?}");
-    lx.mcp_startup = None;
-    let (grid, bar) = draw_bar(&lx, 60);
-    assert!(row_text(&grid, bar).contains("进行中的任务"));
-}
