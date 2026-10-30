@@ -318,8 +318,9 @@ fn history_panel_renders_top_rule_and_borderless_footer() {
         lines[footer_row]
     );
     assert_eq!(
-        panel.rect.height, 6,
-        "1 行顶部空行 + 1 行顶部蓝色横线 + 2 条历史记录 + 空行与底边提示 2 行 = 6 行高"
+        panel.rect.height,
+        mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS,
+        "命令面板高度固定为最大高度（2 行顶部 + 8 行内容区 + 2 行底边 = 12 行高）"
     );
 }
 
@@ -343,8 +344,9 @@ fn model_panel_renders_top_rule_and_borderless_footer() {
         lines[footer_row]
     );
     assert_eq!(
-        panel.rect.height, 7,
-        "1 行顶部空行 + 1 行顶部蓝色横线 + 3 个模型候选 + 空行与底边提示 2 行 = 7 行高"
+        panel.rect.height,
+        mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS,
+        "命令面板高度固定为最大高度（2 行顶部 + 8 行内容区 + 2 行底边 = 12 行高）"
     );
 }
 
@@ -544,4 +546,73 @@ fn lx_md_block_panel_renders_square_borders_and_clears_interior() {
             );
         }
     }
+}
+
+#[test]
+fn lx_slash_and_mention_panels_keep_fixed_max_height_across_filtering_and_tabs() {
+    let area = Rect::new(0, 0, 80, 24);
+    let expected_height =
+        mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS;
+
+    // 1. `/` 命令列表（5 个命令 < 8 行）与空态 `/resume`（1 行占位）均保持固定最大高度。
+    let slash_lx = slash_commands_lx(0);
+    let slash_panel = slash_layout(area, &slash_lx).expect("slash layout");
+    assert_eq!(slash_panel.rect.height, expected_height);
+
+    let empty_resume = slash_resume_empty_lx();
+    let resume_panel = slash_layout(area, &empty_resume).expect("empty resume layout");
+    assert_eq!(resume_panel.rect.height, expected_height);
+
+    // 2. `/model` 过滤前后（3 个候选 vs 1 个候选 vs 0 个候选）高度恒定不变，顶线 y 坐标不跳动。
+    let mut model_lx = model_panel_lx(Some(0));
+    let before = slash_layout(area, &model_lx).expect("before filter");
+    if let Some(SlashPanel::Model(picker)) = model_lx.slash.as_mut() {
+        picker.refilter("model-2");
+    }
+    let single = slash_layout(area, &model_lx).expect("single match");
+    if let Some(SlashPanel::Model(picker)) = model_lx.slash.as_mut() {
+        picker.refilter("no-such-model");
+    }
+    let none = slash_layout(area, &model_lx).expect("no match");
+    assert_eq!(before.rect, single.rect, "过滤剩 1 项时面板矩形不变");
+    assert_eq!(before.rect, none.rect, "过滤无匹配时面板矩形不变");
+    assert_eq!(before.rect.height, expected_height);
+
+    // 3. `@` 面板在 Files（1 个文件）、refDir（空态）切换时高度恒定为最大高度，且下方空白行不误命中条目。
+    let mut at_lx = mention_lx(vec![MentionEntry {
+        path: "only.rs".into(),
+        is_directory: false,
+    }]);
+    let files_panel = mention::layout(area, &at_lx).expect("files layout");
+    assert_eq!(files_panel.rect.height, expected_height);
+    // 第 1 条双行条目占 content.y..content.y+2，content.y+3 为固定高度留白区：不命中条目，但仍属浮层矩形。
+    assert_eq!(
+        mention::item_at(area, &at_lx, files_panel.content.x, files_panel.content.y),
+        Some(0)
+    );
+    assert_eq!(
+        mention::item_at(
+            area,
+            &at_lx,
+            files_panel.content.x,
+            files_panel.content.y + 3
+        ),
+        None,
+        "固定高度下方的留白行不命中候选条目"
+    );
+    assert!(
+        command_panel_contains(
+            area,
+            &at_lx,
+            files_panel.content.x,
+            files_panel.content.y + 3
+        ),
+        "固定高度下方的留白行仍由命令面板浮层拦截"
+    );
+    assert!(at_lx.mention_switch_tab(1));
+    let ref_dir_panel = mention::layout(area, &at_lx).expect("refDir layout");
+    assert_eq!(
+        ref_dir_panel.rect, files_panel.rect,
+        "切换 Tab 面板高度与位置不变"
+    );
 }

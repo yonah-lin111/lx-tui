@@ -94,6 +94,9 @@ pub struct CommandPanelView<'a> {
     pub anchor_row: u16,
     /// 面板最大高度（含边框）；None 表示仅受可用空间限制。
     pub max_height: Option<u16>,
+    /// 是否固定使用 `max_height` 作为面板高度（不足时内部下方留白，不随候选数自适应变化；
+    /// 仅在可用空间小于 `max_height` 时按可用空间夹取）。
+    pub fixed_height: bool,
     /// 顶边左侧标题。
     pub title: Option<&'a str>,
     /// 顶边 Tab 标签页组；若提供，优先于 title 绘制。
@@ -149,9 +152,11 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
     }
     let content_rows: u16 = view.items.iter().map(item_height).sum();
     let needed = content_rows.saturating_add(frame_rows);
-    let needed = view
-        .max_height
-        .map_or(needed, |max_height| needed.min(max_height));
+    let needed = match view.max_height {
+        Some(max_height) if view.fixed_height => max_height,
+        Some(max_height) => needed.min(max_height),
+        None => needed,
+    };
     let below = area
         .height
         .saturating_sub(view.anchor_row.saturating_add(1));

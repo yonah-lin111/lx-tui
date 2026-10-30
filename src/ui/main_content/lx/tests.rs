@@ -1035,8 +1035,8 @@ fn mention_panel_height_capped_at_max_popup_rows() {
 }
 
 #[test]
-fn mention_panel_height_follows_content_when_few_rows() {
-    // 候选少：面板按内容收缩，不撑到上限。
+fn mention_panel_height_stays_fixed_at_max_when_few_rows() {
+    // 候选少或过滤后：面板高度仍固定为最大高度（不随条目数自适应缩放）。
     let area = Rect::new(0, 0, 60, 60);
     let entries = vec![MentionEntry {
         path: "only.rs".into(),
@@ -1044,12 +1044,13 @@ fn mention_panel_height_follows_content_when_few_rows() {
     }];
     let lx = mention_lx(entries);
     let panel = mention::layout(area, &lx).expect("panel");
-    assert!(
-        panel.rect.height
-            < mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS,
-        "少量候选按内容高度收缩: {}",
+    assert_eq!(
+        panel.rect.height,
+        mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS,
+        "少量候选仍保持固定最大高度: {}",
         panel.rect.height
     );
+    assert!(panel.scrollbar.is_none(), "未超出最大内容行时不显示滚动条");
 }
 
 #[test]

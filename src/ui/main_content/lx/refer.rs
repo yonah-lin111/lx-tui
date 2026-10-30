@@ -123,6 +123,7 @@ fn view<'a>(
         window_start: data.viewport,
         anchor_row: above,
         max_height: Some(cap),
+        fixed_height: true,
         title: Some(text::REFER_PANEL_TITLE),
         tabs: None,
         right_title: None,

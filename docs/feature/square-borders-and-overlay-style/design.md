@@ -386,11 +386,12 @@ fn borderless_inner_rect(rect: Rect, footer_rows: u16) -> Rect {
 }
 ```
 
-#### 4.2.2 `src/ui/main_content/lx/mention.rs` 与 `src/ui/main_content/lx.rs` 高度预算同步
+#### 4.2.2 `src/ui/main_content/lx/{mention,slash,refer}.rs` 与 `src/ui/main_content/lx.rs` 高度固定最大与预算同步
 
+- **`CommandPanelView::fixed_height`**：在 `CommandPanelView` 新增 `pub fixed_height: bool`；当 `fixed_height = true` 且 `max_height = Some(cap)` 时，`command_panel::layout` 直接以 `cap` 作为目标高度（仅受锚点上方可用空间 `space` 夹取），不再随当前候选条目行数收缩。内部不足 8 行的剩余区域由 `clear::render_buffer` 保持为空白，且 `item_at` 仅命中实际可见条目行。
 - 在 `src/ui/main_content/lx/mention.rs` 中：
   `pub(super) const PANEL_BORDER_ROWS: u16 = 2;`（1 行顶部空行间隔 + 1 行顶部蓝色横线）。
-  由于 `slash.rs` 与 `refer.rs` 均直接引用 `mention::PANEL_BORDER_ROWS` 计算 `cap`（最大高度 `MAX_POPUP_ROWS + PANEL_BORDER_ROWS + PANEL_FOOTER_ROWS`），三处面板的最大高度预算将自动同步为 `8 + 2 + 2 = 12` 行，确保最大仍可展示 8 行候选内容！
+  同时在 `mention.rs`、`slash.rs` 与 `refer.rs` 的 `view` 中设置 `fixed_height: true`，使 `@`、`/`（含 `/model`、`/resume`、`/rewind`）及快捷引用面板高度固定为最大高度 `8 + 2 + 2 = 12` 行，过滤或切换 Tab 时不再自适应跳动。
 - 在 `src/ui/main_content/lx.rs` 的 `paste_panel_rows` 中：
   将最小上方高度守卫 `if region_h < 2` 同步为 `if region_h < 3`（对齐 `MIN_BORDERLESS_HEIGHT`）。
 

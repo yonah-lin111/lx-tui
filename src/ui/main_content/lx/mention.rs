@@ -246,8 +246,8 @@ fn panel_data(lx: &Lx, width: u16) -> Option<PanelData> {
 
 /// 面板视图：强制与输入框等宽、紧贴输入框上方、视口优先于窗口锚点。
 ///
-/// 高度对齐 codex 的两步口径：内容行先夹到 `MAX_POPUP_ROWS`（再加顶部分割线），
-/// 再与输入框上方可用行数取小；空间不足时不挤压输入框。
+/// 高度固定为最大高度（`MAX_POPUP_ROWS + PANEL_BORDER_ROWS + PANEL_FOOTER_ROWS`），
+/// 仅在输入框上方可用行数不足时与可用行数取小；候选较少或过滤时不自适应缩放。
 fn view<'a>(
     items: &'a [CommandItem<'a>],
     data: &'a PanelData,
@@ -268,6 +268,7 @@ fn view<'a>(
         window_start: data.viewport,
         anchor_row: above,
         max_height: Some(cap),
+        fixed_height: true,
         title: None,
         tabs: Some(&data.tabs),
         right_title: data.scope.as_deref(),

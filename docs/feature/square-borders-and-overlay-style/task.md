@@ -48,8 +48,9 @@
   - `layout` 中无边框模式 `frame_rows` 设为 `TOP_BLOCK_ROWS + footer_rows`，`tabs` 纵坐标在 `view.borderless` 下设为 `rect.y.saturating_add(1)`
   - `render_top_rule` 将蓝色 `─` 横线、左侧 `title` 与右侧 `right_title` 绘制在 `rect.y.saturating_add(1)` 行（`rect.y` 行由 `clear::render_buffer` 保持为空白行）
   - `borderless_inner_rect` 起点 `y` 设为 `rect.y.saturating_add(TOP_BLOCK_ROWS)`，高度扣除 `TOP_BLOCK_ROWS` 与 `footer_rows`
-- [x] **`src/ui/main_content/lx/mention.rs`**：
+- [x] **`src/ui/main_content/lx/mention.rs`、`src/ui/main_content/lx/slash.rs`、`src/ui/main_content/lx/refer.rs`**：
   - 将 `pub(super) const PANEL_BORDER_ROWS: u16` 从 `1` 更新为 `2`（同步生效于 `mention.rs`、`slash.rs` 与 `refer.rs` 的最大高度 `cap` 计算）
+  - 在 `CommandPanelView` 新增 `fixed_height: bool` 并在 `mention.rs`、`slash.rs`、`refer.rs` 中设为 `true`，使 `@` 和 `/` 命令面板高度固定为最大高度（12 行，空间不足时按可用空间夹取），过滤或切换 Tab 时不再自适应变化
 - [x] **`src/ui/main_content/lx.rs`**：
   - `paste_panel_rows` 中 `if region_h < 2` 更新为 `if region_h < 3`
 
