@@ -90,12 +90,13 @@ pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> 
     // 右上角关闭按钮：与全局 toast 同款 `[✕]`、同档边框色，点击命中走 `close_button_at`。
     if let Some(button) = crate::ui::widgets::modal::close_button_rect(box_area) {
         let style = border_style(toast.kind);
-        for (index, ch) in text::MODAL_CLOSE.chars().enumerate() {
-            let x = button
-                .x
-                .saturating_add(u16::try_from(index).unwrap_or(u16::MAX));
-            put(buf, x, button.y, ch, style);
-        }
+        buf.set_stringn(
+            button.x,
+            button.y,
+            text::MODAL_CLOSE,
+            usize::from(button.width),
+            style,
+        );
     }
     let body_area = Rect::new(
         box_area.x + 1,
@@ -116,23 +117,16 @@ pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> 
         let y = body_area.y + u16::try_from(offset).unwrap_or(u16::MAX);
         let line = if overflow && offset + 1 == visible {
             // 折行后的单行通常正好占满宽度，`ellipsize` 不会加省略号；
-            // 这里强制留一列给 `…`。
-            let mut truncated: String = line.chars().take(text_width.saturating_sub(1)).collect();
-            truncated.push('…');
+            // 这里按显示列宽强制留一列给 `…`。
+            let mut truncated = text::truncate_to_width(line, text_width.saturating_sub(1));
+            if !truncated.ends_with('…') {
+                truncated.push('…');
+            }
             truncated
         } else {
             line.clone()
         };
-        for (index, ch) in line.chars().enumerate() {
-            let x = text_x.saturating_add(u16::try_from(index).unwrap_or(u16::MAX));
-            if x >= body_area.right() {
-                break;
-            }
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_char(ch);
-                cell.set_style(style::text());
-            }
-        }
+        buf.set_stringn(text_x, y, &line, text_width, style::text());
     }
     Some(box_area)
 }
@@ -171,19 +165,16 @@ fn draw_title(buf: &mut Buffer, area: Rect, title: &str, kind: ToastKind) {
     }
     let label = format!(
         " {} ",
-        text::ellipsize(title, usize::from(available.saturating_sub(2)))
+        text::truncate_to_width(title, usize::from(available.saturating_sub(2)))
     );
     let style = title_style(kind);
-    for (index, ch) in label.chars().enumerate() {
-        let x = area
-            .x
-            .saturating_add(1)
-            .saturating_add(u16::try_from(index).unwrap_or(u16::MAX));
-        if x >= area.right().saturating_sub(reserved) {
-            break;
-        }
-        put(buf, x, area.y, ch, style);
-    }
+    buf.set_stringn(
+        area.x.saturating_add(1),
+        area.y,
+        &label,
+        usize::from(available),
+        style,
+    );
 }
 
 /// 命中右上角关闭按钮（`[✕]` 与全局 toast 同款、同位置）。

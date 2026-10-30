@@ -218,3 +218,28 @@ fn hovering_freezes_expiry() {
     toast.set_hovered(false);
     assert!(toast.is_expired(deadline), "取消悬停后到点即过期");
 }
+
+/// 回归：包含中文宽字符的 toast（如 `/rename 询问用户`）按显示宽度推进列，
+/// 终端 diff 不得因宽字符挤在同一列而吞掉后续字符。
+#[test]
+fn wide_cjk_characters_advance_by_display_width_without_clipping() {
+    let area = area(60, 10);
+    let message = text::chat::session_renamed("询问用户");
+    assert_eq!(message, "Renamed to \"询问用户\"");
+    let toast = toast(ToastKind::Warning, &message);
+    let box_area = rect(area, &toast).expect("fits");
+    let prev = Buffer::empty(Rect::new(0, 0, 70, 14));
+    let mut next = prev.clone();
+    draw(&mut next, area, &toast);
+
+    // 验证终端 diff 下发的完整字符序列包含全部中文字符「询问用户」，不再跳过任何宽字符。
+    let emitted: String = prev
+        .diff_iter(&next)
+        .filter(|(_, y, _)| *y == box_area.y + 1)
+        .map(|(_, _, cell)| cell.symbol())
+        .collect();
+    assert!(
+        emitted.contains("\"询问用户\""),
+        "toast 必须完整下发全部宽字符，实际: {emitted:?}"
+    );
+}
