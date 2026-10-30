@@ -974,6 +974,7 @@ fn seed_slash_commands(state: &mut AppState, pane: PaneId) {
                 .map(crate::app::state::SlashEntry::Command)
                 .collect(),
             window: crate::app::state::lx::slash::PanelWindow::new(0),
+            query: "/".into(),
         });
     }
 }

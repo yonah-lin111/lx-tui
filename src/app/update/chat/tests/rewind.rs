@@ -348,6 +348,7 @@ fn slash_command_accepts_standalone_line_and_opens_panel() {
         target.lx.slash = Some(SlashPanel::Commands {
             items: vec![crate::app::state::SlashEntry::Command(SlashCommand::Rewind)],
             window: crate::app::state::PanelWindow::new(0),
+            query: "/rewind".into(),
         });
     }
     assert!(crate::app::update::pane::accept_slash_command(
@@ -373,6 +374,7 @@ fn slash_command_with_other_text_is_rejected_and_draft_kept() {
         target.lx.slash = Some(SlashPanel::Commands {
             items: vec![crate::app::state::SlashEntry::Command(SlashCommand::Rewind)],
             window: crate::app::state::PanelWindow::new(0),
+            query: "/rewind".into(),
         });
     }
     assert!(crate::app::update::pane::accept_slash_command(
@@ -506,6 +508,7 @@ fn escape_closes_command_panel_without_arming_rewind() {
     state.pane_mut_anywhere(pane).expect("pane").lx.slash = Some(SlashPanel::Commands {
         items: Vec::new(),
         window: PanelWindow::new(0),
+        query: "/".into(),
     });
     apply_lx_input(&mut state, LxInput::Escape);
     let target = state.pane_anywhere(pane).expect("pane");

@@ -318,12 +318,17 @@ impl LxMention {
             self.reset_session();
             return;
         };
-        if self.trigger.as_ref().map(|t| t.from) != Some(trigger.from) {
+        let from_changed = self.trigger.as_ref().map(|t| t.from) != Some(trigger.from);
+        let query_changed =
+            self.trigger.as_ref().map(|t| t.query.as_str()) != Some(trigger.query.as_str());
+        if from_changed {
             self.tab = MentionTab::Files;
             self.ref_active = 0;
             self.ref_anchor = 0;
             self.ref_viewport = None;
-        } else if self.trigger.as_ref().map(|t| t.query.as_str()) != Some(trigger.query.as_str()) {
+        } else if query_changed {
+            self.ref_active = 0;
+            self.ref_anchor = 0;
             self.ref_viewport = None;
         }
         self.trigger = Some(trigger.clone());
@@ -348,15 +353,19 @@ impl LxMention {
             self.panel = None;
             return;
         }
-        // 同起点且同目录范围时保留高亮；进入/回退目录改变范围则回到首项。
-        let previous = self.panel.as_ref().filter(|panel| {
-            panel.trigger().from == trigger.from
-                && markdown::mention_scope(&panel.trigger().query)
-                    == markdown::mention_scope(&trigger.query)
-        });
-        let active = previous
-            .map_or(0, MentionPanel::active)
-            .min(items.len() - 1);
+        // 触发起点或过滤词变化时，对齐 codex 重置高亮至首项 (0)；未变时保留原高亮。
+        let active = if from_changed || query_changed {
+            0
+        } else {
+            let previous = self.panel.as_ref().filter(|panel| {
+                panel.trigger().from == trigger.from
+                    && markdown::mention_scope(&panel.trigger().query)
+                        == markdown::mention_scope(&trigger.query)
+            });
+            previous
+                .map_or(0, MentionPanel::active)
+                .min(items.len() - 1)
+        };
         self.panel = Some(MentionPanel::new(trigger, items, active));
     }
 

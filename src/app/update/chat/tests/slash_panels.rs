@@ -1039,6 +1039,54 @@ fn rename_enter_with_argument_queues_rename_effect_and_clears_input() {
 }
 
 #[test]
+fn slash_commands_typing_resets_selected_item_to_first() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+
+    // 输入 `/` 打开命令候选面板，默认选中第 0 项
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('/'));
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    let Some(SlashPanel::Commands { window, .. }) = &lx.slash else {
+        panic!("expected Commands panel");
+    };
+    assert_eq!(window.active, 0);
+
+    // 按下方向键移动到第 1 项
+    crate::app::update::apply_lx_input(&mut state, LxInput::Down);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    let Some(SlashPanel::Commands { window, .. }) = &lx.slash else {
+        panic!("expected Commands panel");
+    };
+    assert_eq!(window.active, 1);
+
+    // 输入字符过滤，过滤词发生变动，选中项必须对齐 codex 重置为第 0 项
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('r'));
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    let Some(SlashPanel::Commands { window, .. }) = &lx.slash else {
+        panic!("expected Commands panel");
+    };
+    assert_eq!(window.active, 0, "过滤词变动后高亮重置为首项");
+
+    // 再次手动下移
+    crate::app::update::apply_lx_input(&mut state, LxInput::Down);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    let Some(SlashPanel::Commands { window, .. }) = &lx.slash else {
+        panic!("expected Commands panel");
+    };
+    assert_eq!(window.active, 1);
+
+    // 退格删除字符变动过滤词，选中项再次重置为第 0 项
+    crate::app::update::apply_lx_input(&mut state, LxInput::Backspace);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    let Some(SlashPanel::Commands { window, .. }) = &lx.slash else {
+        panic!("expected Commands panel");
+    };
+    assert_eq!(window.active, 0, "退格过滤词变动后高亮重置为首项");
+}
+
+#[test]
 fn title_alias_submits_rename_and_panel_echo_supports_undo() {
     use crate::app::actions::LxInput;
 

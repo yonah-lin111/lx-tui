@@ -598,15 +598,24 @@ fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
             }
             return;
         }
-        // 高亮保持或钳到范围；同一起点时保留窗口（含滚轮视口）。
+        // 模糊匹配过滤词变化时，对齐 codex 重置高亮至首项 (0)；未变时保留原高亮与窗口。
+        let query_changed = match &target.lx.slash {
+            Some(super::super::state::SlashPanel::Commands {
+                query: prev_query, ..
+            }) => prev_query != &query,
+            _ => true,
+        };
         let mut window = match &target.lx.slash {
-            Some(super::super::state::SlashPanel::Commands { window, .. }) => *window,
+            Some(super::super::state::SlashPanel::Commands { window, .. }) if !query_changed => {
+                *window
+            }
             _ => super::super::state::lx::slash::PanelWindow::default(),
         };
         window.clamp(matching.len());
         target.lx.slash = Some(super::super::state::SlashPanel::Commands {
             items: matching,
             window,
+            query,
         });
     }
 }
@@ -632,7 +641,7 @@ fn refresh_slash_filter(state: &mut AppState, pane: PaneId) {
 pub fn accept_slash_command(state: &mut AppState, pane: PaneId) -> bool {
     // 只读取出候选与输入，避免在调用 update 函数时仍持有窗格可变借用。
     let Some((entry, input, cursor)) = state.pane_anywhere(pane).and_then(|target| {
-        let Some(super::super::state::SlashPanel::Commands { items, window }) =
+        let Some(super::super::state::SlashPanel::Commands { items, window, .. }) =
             target.lx.slash.clone()
         else {
             return None;

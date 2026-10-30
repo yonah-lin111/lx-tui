@@ -363,16 +363,16 @@ fn root_change_to_unavailable_dir_does_not_fall_back_to_old_candidates() {
 }
 
 #[test]
-fn refresh_after_edit_keeps_highlight_within_scope() {
-    // 目录范围不变时继续过滤保留高亮。
+fn refresh_after_edit_resets_highlight_to_first() {
+    // 过滤词变化时对齐 codex 重置高亮至首项 (0)。
     let mut lx = ready("@src/", entries());
     let panel = lx.mention().panel().expect("panel");
     assert!(panel.items().len() >= 2);
     lx.mention_set_active(1);
+    assert_eq!(lx.mention().panel().expect("panel").active(), 1);
     lx.insert_char('l');
     let panel = lx.mention().panel().expect("panel after filter");
-    // 高亮被钳到新列表范围内且仍有效。
-    assert!(panel.active() < panel.items().len());
+    assert_eq!(panel.active(), 0, "模糊匹配后高亮必须重置为首项");
 }
 
 #[test]
@@ -476,4 +476,50 @@ fn mention_ref_dir_navigation_and_scroll_viewport() {
     }
     assert_eq!(lx.mention().ref_viewport(), None, "查询词变化重置滚轮视口");
     assert_eq!(lx.mention().ref_active(), 0, "越界高亮钳制到末项");
+}
+
+#[test]
+fn mention_ref_tab_typing_resets_selected_item_to_first() {
+    let mut lx = ready("@", entries());
+    lx.sync_referenced_folders(&dummy_ref_folders());
+    assert!(lx.mention_switch_tab(1));
+    assert_eq!(lx.mention_tab(), MentionTab::RefDir);
+    assert!(lx.mention().filtered_ref_folders().len() >= 2);
+
+    // 手动移动到第 1 项
+    assert!(lx.mention_move(1));
+    assert_eq!(lx.mention().ref_active(), 1);
+
+    // 输入字符过滤，过滤词发生变动，即使结果仍有多项，高亮也必须重置为第 0 项
+    lx.insert_char('p');
+    assert_eq!(
+        lx.mention().ref_active(),
+        0,
+        "过滤词变动后 secondary tab 高亮重置为首项"
+    );
+
+    // 再次手动下移
+    if lx.mention().filtered_ref_folders().len() >= 2 {
+        assert!(lx.mention_move(1));
+        assert_eq!(lx.mention().ref_active(), 1);
+
+        // 退格变动过滤词，高亮再次重置为首项
+        lx.backspace();
+        assert_eq!(lx.mention().ref_active(), 0, "退格后高亮重置为首项");
+    }
+}
+
+#[test]
+fn mention_files_tab_origin_change_resets_selected_item_to_first() {
+    let mut lx = ready("@", entries());
+    let panel = lx.mention().panel().expect("panel");
+    assert!(panel.items().len() >= 2);
+    lx.mention_set_active(1);
+    assert_eq!(lx.mention().panel().expect("panel").active(), 1);
+
+    // 追加文本输入新的 @ 触发点，虽然 query 同样是空串，高亮重置为首项 (0)
+    lx.insert_char(' ');
+    lx.insert_char('@');
+    let panel = lx.mention().panel().expect("panel");
+    assert_eq!(panel.active(), 0, "跨触发起点切换时高亮必须重置为首项");
 }

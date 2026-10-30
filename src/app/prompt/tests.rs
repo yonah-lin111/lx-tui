@@ -1039,6 +1039,66 @@ fn mention_panel_confirm_inserts_path_and_is_single_undo_step() {
 }
 
 #[test]
+fn mention_panel_typing_resets_selected_item_to_first() {
+    let mut prompt = mention_prompt(vec![
+        file("src/app.rs"),
+        file("src/main.rs"),
+        file("src/ui.rs"),
+    ]);
+    assert_eq!(prompt.mention().expect("panel").active(), 0);
+    assert!(prompt.mention_move(1));
+    assert_eq!(prompt.mention().expect("panel").active(), 1);
+
+    // 输入字符 's'，query 从 "" 变为 "s"，3 项均命中，高亮重置为首项 (0)
+    prompt.insert_char('s');
+    assert_eq!(
+        prompt.mention().expect("panel").active(),
+        0,
+        "输入字符过滤后高亮重置为首项"
+    );
+
+    // 再次手动移动到第 1 项
+    assert!(prompt.mention_move(1));
+    assert_eq!(prompt.mention().expect("panel").active(), 1);
+
+    // 再输入字符 'r'，query 变为 "sr"，高亮再次重置为首项 (0)
+    prompt.insert_char('r');
+    assert_eq!(
+        prompt.mention().expect("panel").active(),
+        0,
+        "再次输入字符后高亮重置为首项"
+    );
+
+    // 再次手动移动到第 1 项
+    assert!(prompt.mention_move(1));
+    assert_eq!(prompt.mention().expect("panel").active(), 1);
+
+    // 退格删除字符，query 从 "sr" 变动为 "s"，高亮再次重置为首项 (0)
+    prompt.backspace();
+    assert_eq!(
+        prompt.mention().expect("panel").active(),
+        0,
+        "退格变动过滤词后高亮重置为首项"
+    );
+}
+
+#[test]
+fn mention_panel_trigger_origin_change_resets_selected_item_to_first() {
+    let mut prompt = mention_prompt(vec![file("src/app.rs"), file("src/main.rs")]);
+    assert_eq!(prompt.mention().expect("panel").active(), 0);
+    assert!(prompt.mention_move(1));
+    assert_eq!(prompt.mention().expect("panel").active(), 1);
+
+    // 追加文本切换到另一个 @ 触发点，虽然 query 同样是空串，高亮重置为首项 (0)
+    prompt.insert_str(" @");
+    assert_eq!(
+        prompt.mention().expect("panel").active(),
+        0,
+        "跨触发起点跳转时高亮必须重置为首项"
+    );
+}
+
+#[test]
 fn mention_panel_escape_closes_until_next_edit() {
     let mut prompt = mention_prompt(vec![file("main.rs")]);
     assert!(prompt.mention().is_some());
@@ -1457,6 +1517,33 @@ fn slash_panel_navigation_and_mouse_helpers() {
     assert_eq!(prompt.slash_panel().and_then(|p| p.viewport()), Some(1));
     prompt.slash_confirm_at(0);
     assert!(prompt.text().starts_with("&&& addTemplate --start"));
+}
+
+#[test]
+fn slash_panel_typing_resets_selected_item_to_first() {
+    let mut prompt = prompt(40, 8);
+    type_text(&mut prompt, "/");
+    assert_eq!(prompt.slash_panel().map(|p| p.active()), Some(0));
+
+    // 手动下移到第 1 项
+    assert!(prompt.slash_move(1));
+    assert_eq!(prompt.slash_panel().map(|p| p.active()), Some(1));
+
+    // 键入过滤字符，query 变动，高亮重置为第 0 项
+    type_text(&mut prompt, "re");
+    assert_eq!(
+        prompt.slash_panel().map(|p| p.active()),
+        Some(0),
+        "过滤词变动后高亮重置为首项"
+    );
+
+    // 手动选择后退格，query 变动，高亮再次重置为第 0 项
+    prompt.backspace();
+    assert_eq!(
+        prompt.slash_panel().map(|p| p.active()),
+        Some(0),
+        "退格变动过滤词后高亮重置为首项"
+    );
 }
 
 /// 插入一个标准 add 模板块并返回其起始行索引。

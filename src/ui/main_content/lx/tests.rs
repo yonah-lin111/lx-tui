@@ -1108,6 +1108,7 @@ fn slash_commands_lx(active: usize) -> Lx {
             .map(crate::app::state::SlashEntry::Command)
             .collect(),
         window: PanelWindow::new(active),
+        query: "/".into(),
     });
     lx
 }

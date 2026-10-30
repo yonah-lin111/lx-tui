@@ -402,16 +402,28 @@ impl Prompt {
             worktree_available: self.worktree_available
                 && markdown::block_end_line_at(&self.text, self.cursor).is_some(),
         };
+        let line_changed =
+            self.slash.as_ref().map(|panel| panel.trigger().line_start) != Some(trigger.line_start);
+        let query_changed = self
+            .slash
+            .as_ref()
+            .map(|panel| panel.trigger().query.as_str())
+            != Some(trigger.query.as_str());
         let items = markdown::slash_filter(&self.custom, context, &trigger.query);
         if items.is_empty() {
             self.slash = None;
             return;
         }
-        let previous = self
-            .slash
-            .as_ref()
-            .filter(|panel| panel.trigger().line_start == trigger.line_start);
-        let active = previous.map_or(0, SlashPanel::active).min(items.len() - 1);
+        // 触发所在行或过滤词变化时，对齐 codex 重置高亮至首项 (0)；未变时保留原高亮。
+        let active = if line_changed || query_changed {
+            0
+        } else {
+            let previous = self
+                .slash
+                .as_ref()
+                .filter(|panel| panel.trigger().line_start == trigger.line_start);
+            previous.map_or(0, SlashPanel::active).min(items.len() - 1)
+        };
         self.slash = Some(SlashPanel::new(trigger, items, active));
     }
 }

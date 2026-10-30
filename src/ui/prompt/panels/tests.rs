@@ -143,3 +143,39 @@ fn ref_dir_empty_state_renders_notice_and_ignores_item_click() {
         None
     );
 }
+
+#[test]
+fn mention_panel_filter_adjusts_selected_item_to_first() {
+    let mut editor = create_editor_with_ref_folders();
+    let area = Rect::new(0, 0, 60, 20);
+
+    editor.insert_char('@');
+    editor.mention_switch_tab(1); // refDir tab with 2 folders
+    assert_eq!(editor.mention_tab(), MentionTab::RefDir);
+
+    // 手动移动到下一项
+    assert!(editor.mention_move(1));
+    let data = mention_panel_data(&editor, area.width).expect("data");
+    assert_eq!(data.active, 1);
+
+    // 输入过滤字符 'h'，过滤词变动，选中的 item 调整为首项 (0)
+    editor.insert_char('h');
+    let data = mention_panel_data(&editor, area.width).expect("data");
+    assert_eq!(data.active, 0, "模糊匹配后选中的 item 必须为首项");
+}
+
+#[test]
+fn slash_panel_filter_adjusts_selected_item_to_first() {
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(60, 20);
+
+    editor.insert_char('/');
+    assert!(editor.slash_move(1));
+    let data = slash_panel_data(&editor).expect("data");
+    assert_eq!(data.active, 1);
+
+    // 输入过滤字符 'r'，过滤词变动，选中的 item 调整为首项 (0)
+    editor.insert_char('r');
+    let data = slash_panel_data(&editor).expect("data");
+    assert_eq!(data.active, 0, "模糊匹配后选中的 item 必须为首项");
+}

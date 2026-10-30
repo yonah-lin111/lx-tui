@@ -128,6 +128,7 @@ fn commands_panel_has_no_current_item() {
             SlashEntry::Command(SlashCommand::Resume),
         ],
         window: PanelWindow::new(0),
+        query: "/".into(),
     };
     assert_eq!(panel.current_index(), None, "命令候选没有已生效项");
 }
@@ -422,4 +423,81 @@ fn slash_trigger_closes_after_whitespace_and_argument_hint_follows_rename() {
     assert_eq!(parse_rename_command("/rename 询问用户"), Some("询问用户"));
     assert_eq!(parse_rename_command("/title 新标题"), Some("新标题"));
     assert_eq!(parse_rename_command("/renamefoo"), None);
+}
+
+#[test]
+fn history_refilter_resets_selected_item_to_first() {
+    let mut panel = HistoryPanel {
+        entries: vec![
+            entry("a", "Alpha", 1),
+            entry("b", "Beta", 2),
+            entry("c", "Charlie", 3),
+        ],
+        current: None,
+        now_ms: 10,
+        window: PanelWindow::new(2),
+        filter: String::new(),
+        filtered: vec![0, 1, 2],
+    };
+    assert_eq!(panel.window.active, 2);
+    panel.refilter("a");
+    assert_eq!(panel.window.active, 0, "过滤词变动后高亮项重置为首项");
+    assert_eq!(panel.window.anchor, 0, "锚点同步重置为首项");
+    assert_eq!(panel.window.viewport, None, "视口同步复位");
+
+    // 手动移动到下一项
+    panel.window.move_active(1, panel.filtered.len());
+    assert_eq!(panel.window.active, 1);
+
+    // 相同 query 不重置
+    panel.refilter("a");
+    assert_eq!(panel.window.active, 1, "相同 query 保留手动选择的高亮");
+
+    // 变动 query 再次重置
+    panel.refilter("al");
+    assert_eq!(panel.window.active, 0, "再次变动 query 重置为首项");
+}
+
+#[test]
+fn model_picker_refilter_resets_selected_item_to_first() {
+    let mut picker = ModelPicker {
+        stage: ModelPickerStage::Models,
+        candidates: vec![
+            ModelCandidate {
+                selection: crate::config::ai::ModelSelection {
+                    provider: "p1".into(),
+                    model: "gpt-4o".into(),
+                    variant: None,
+                },
+                provider_name: "openai".into(),
+                model_name: "gpt-4o".into(),
+            },
+            ModelCandidate {
+                selection: crate::config::ai::ModelSelection {
+                    provider: "p2".into(),
+                    model: "gpt-5".into(),
+                    variant: None,
+                },
+                provider_name: "openai".into(),
+                model_name: "gpt-5".into(),
+            },
+        ],
+        current: None,
+        current_variant: None,
+        window: PanelWindow::new(1),
+        filter: String::new(),
+        filtered: vec![0, 1],
+    };
+    assert_eq!(picker.window.active, 1);
+    picker.refilter("gpt");
+    assert_eq!(picker.window.active, 0, "过滤词变动后高亮项重置为首项");
+
+    picker.window.move_active(1, picker.filtered.len());
+    assert_eq!(picker.window.active, 1);
+
+    picker.refilter("gpt");
+    assert_eq!(picker.window.active, 1, "相同 query 保留手动选择的高亮");
+
+    picker.refilter("gpt-5");
+    assert_eq!(picker.window.active, 0, "再次变动 query 重置为首项");
 }

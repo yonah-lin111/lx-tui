@@ -397,6 +397,7 @@ fn slash_compact_is_accepted_without_typing() {
                 crate::app::state::SlashCommand::Compact,
             )],
             window: crate::app::state::PanelWindow::new(0),
+            query: "/compact".into(),
         });
     apply_lx_input(&mut state, LxInput::Enter);
     assert_eq!(

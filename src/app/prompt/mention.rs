@@ -717,6 +717,19 @@ impl MentionState {
             self.reset_session();
             return;
         };
+        let from_changed = self.trigger.as_ref().map(|t| t.from) != Some(trigger.from);
+        let query_changed =
+            self.trigger.as_ref().map(|t| t.query.as_str()) != Some(trigger.query.as_str());
+        if from_changed {
+            self.tab = MentionTab::Files;
+            self.ref_active = 0;
+            self.ref_anchor = 0;
+            self.ref_viewport = None;
+        } else if query_changed {
+            self.ref_active = 0;
+            self.ref_anchor = 0;
+            self.ref_viewport = None;
+        }
         self.trigger = Some(trigger.clone());
         let filtered_count = self.secondary_count();
         if self.ref_active >= filtered_count {
@@ -757,14 +770,19 @@ impl MentionState {
             self.panel = None;
             return;
         }
-        let previous = self.panel.as_ref().filter(|panel| {
-            panel.trigger().from == trigger.from
-                && markdown::mention_scope(&panel.trigger().query)
-                    == markdown::mention_scope(&trigger.query)
-        });
-        let active = previous
-            .map_or(0, MentionPanel::active)
-            .min(items.len() - 1);
+        // 触发起点或过滤词变化时，对齐 codex 重置高亮至首项 (0)；未变时保留原高亮。
+        let active = if from_changed || query_changed {
+            0
+        } else {
+            let previous = self.panel.as_ref().filter(|panel| {
+                panel.trigger().from == trigger.from
+                    && markdown::mention_scope(&panel.trigger().query)
+                        == markdown::mention_scope(&trigger.query)
+            });
+            previous
+                .map_or(0, MentionPanel::active)
+                .min(items.len() - 1)
+        };
         self.panel = Some(MentionPanel::new(trigger, items, active));
     }
 }

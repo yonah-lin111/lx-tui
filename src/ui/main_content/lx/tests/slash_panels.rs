@@ -458,3 +458,44 @@ fn rename_input_renders_muted_argument_hint_until_user_types_argument() {
         lines2[usize::from(input_row)]
     );
 }
+
+#[test]
+fn model_panel_refilter_renders_first_matching_item_selected() {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut lx = model_panel_lx(None);
+    if let Some(SlashPanel::Model(picker)) = lx.slash.as_mut() {
+        picker.window.active = 2;
+        picker.window.anchor = 2;
+        picker.refilter("model");
+        assert_eq!(picker.window.active, 0, "过滤后 active 必须重置为 0");
+    }
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
+    let lines = buffer_lines(&buf, area);
+    let marked: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.contains(text::CURRENT_ITEM_MARKER))
+        .collect();
+    assert_eq!(marked.len(), 1, "首项带 ❯ 标记");
+    assert!(marked[0].contains("model-0"), "{:?}", marked[0]);
+}
+
+#[test]
+fn history_panel_refilter_renders_first_matching_item_selected() {
+    let area = Rect::new(0, 0, 100, 24);
+    let mut lx = history_panel_lx();
+    if let Some(SlashPanel::History(history)) = lx.slash.as_mut() {
+        history.window.active = 1;
+        history.refilter("Alpha");
+        assert_eq!(history.window.active, 0, "过滤后 active 必须重置为 0");
+    }
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
+    let lines = buffer_lines(&buf, area);
+    let marked: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.contains(text::CURRENT_ITEM_MARKER))
+        .collect();
+    assert_eq!(marked.len(), 1, "首项带 ❯ 标记");
+    assert!(marked[0].contains("Alpha"), "{:?}", marked[0]);
+}

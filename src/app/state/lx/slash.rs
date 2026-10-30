@@ -336,7 +336,10 @@ impl HistoryPanel {
     /// 空查询（或全空白）恢复恒等视图（全部条目、原顺序）。时间列不参与匹配——
     /// 它在变，参与只会让人困惑。
     pub fn refilter(&mut self, query: &str) {
-        self.filter = query.to_string();
+        if self.filter != query {
+            self.filter = query.to_string();
+            self.window = PanelWindow::default();
+        }
         if query.trim().is_empty() {
             self.filtered = (0..self.entries.len()).collect();
             self.clamp_window();
@@ -401,7 +404,10 @@ impl ModelPicker {
             self.clamp_window();
             return;
         }
-        self.filter = query.to_string();
+        if self.filter != query {
+            self.filter = query.to_string();
+            self.window = PanelWindow::default();
+        }
         if query.trim().is_empty() {
             self.filtered = (0..self.stage_len()).collect();
             self.clamp_window();
@@ -467,6 +473,7 @@ pub enum SlashPanel {
     Commands {
         items: Vec<SlashEntry>,
         window: PanelWindow,
+        query: String,
     },
     /// `/model` 两级选择。
     Model(Box<ModelPicker>),
@@ -493,7 +500,7 @@ impl SlashPanel {
     /// 高亮项（命令面板）。
     pub fn active_command_entry(&self) -> Option<&SlashEntry> {
         match self {
-            Self::Commands { items, window } => items.get(window.active),
+            Self::Commands { items, window, .. } => items.get(window.active),
             _ => None,
         }
     }
