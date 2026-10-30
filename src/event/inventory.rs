@@ -39,6 +39,24 @@ pub(crate) fn initialize_mcp(state: &mut AppState, persistence: &Persistence, ro
     super::chat::mcp::prewarm_projects(persistence, roots);
 }
 
+/// 配置变化后清掉已移除 server 的旧状态，避免下一次事件把准备计数又加回来。
+pub(crate) fn prune_mcp_statuses(
+    persistence: &Persistence,
+    roots: &[PathBuf],
+    statuses: &mut std::collections::BTreeMap<(PathBuf, String), McpStatusView>,
+) {
+    let known: std::collections::HashSet<(PathBuf, String)> = roots
+        .iter()
+        .flat_map(|root| {
+            super::chat::mcp::effective_for_root(persistence, root)
+                .into_iter()
+                .filter(|server| server.config.enabled)
+                .map(|server| (root.clone(), server.name))
+        })
+        .collect();
+    statuses.retain(|key, _| known.contains(key));
+}
+
 /// 配置变化后刷新总数：保留已结算的 ready/error，只为新增 server 打开 loading。
 pub(crate) fn refresh_mcp(state: &mut AppState, persistence: &Persistence, roots: &[PathBuf]) {
     for root in roots {

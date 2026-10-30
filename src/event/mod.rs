@@ -317,6 +317,7 @@ async fn run_loop(
                 }
                 SettingsEvent::McpChanged => {
                     let roots = chat::mcp::project_roots(state);
+                    inventory::prune_mcp_statuses(persistence, &roots, &mut mcp_statuses);
                     inventory::refresh_mcp(state, persistence, &roots);
                 }
                 SettingsEvent::McpRestart { server } => {
