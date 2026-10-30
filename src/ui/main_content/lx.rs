@@ -295,7 +295,7 @@ fn paste_panel_rows(area: Rect, lx: &Lx) -> Option<PastePanelData> {
     let content_x = area.x + margin;
     let content_w = area.width.saturating_sub(margin.saturating_mul(2));
     let region_h = input.y.saturating_sub(area.y);
-    if region_h < 2 {
+    if region_h < 3 {
         return None;
     }
     let count = text::paste_item_count(panel.candidates.len());
@@ -943,7 +943,7 @@ pub fn ask_list_window(area: Rect, lx: &Lx) -> Option<(usize, usize, usize)> {
     ask::list_window(area, lx)
 }
 
-/// md 格式面板：圆角边框 + 标题 + 候选行（标签与预览，高亮项 accent）。
+/// md 格式面板：直角边框 + 标题 + 候选行（标签与预览，高亮项 accent）。
 fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
     draw_box(grid, rect, style::muted());
     grid.put(
@@ -967,17 +967,22 @@ fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
     }
 }
 
-/// 圆角细线边框（md 面板用）。
+/// 直角细线边框与内部清底（md 面板用）。
 fn draw_box(grid: &mut Grid, rect: Rect, border: Style) {
     if rect.width < 2 || rect.height < 2 {
         return;
     }
     let right = rect.right() - 1;
     let bottom = rect.bottom() - 1;
-    grid.set(rect.x, rect.y, '╭', border);
-    grid.set(right, rect.y, '╮', border);
-    grid.set(rect.x, bottom, '╰', border);
-    grid.set(right, bottom, '╯', border);
+    for y in rect.y + 1..bottom {
+        for x in rect.x + 1..right {
+            grid.set(x, y, ' ', Style::default());
+        }
+    }
+    grid.set(rect.x, rect.y, '┌', border);
+    grid.set(right, rect.y, '┐', border);
+    grid.set(rect.x, bottom, '└', border);
+    grid.set(right, bottom, '┘', border);
     for x in rect.x + 1..right {
         grid.set(x, rect.y, '─', border);
         grid.set(x, bottom, '─', border);

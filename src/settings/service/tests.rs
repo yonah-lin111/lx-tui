@@ -224,6 +224,17 @@ async fn page_locks_viewport_and_avoids_extra_scrollbars() {
         css.contains("scrollbar-width: thin"),
         "editor fallback scrollbar thin"
     );
+    // 所有容器/控件/卡片移除圆角（直角），仅侧栏与顶栏两处状态小圆点保留 border-radius: 50%。
+    assert_eq!(
+        css.matches("border-radius").count(),
+        2,
+        "only two status dots keep border-radius"
+    );
+    assert_eq!(
+        css.matches("border-radius: 50%").count(),
+        2,
+        "both remaining border-radius rules are circular status dots"
+    );
     service.shutdown();
 }
 

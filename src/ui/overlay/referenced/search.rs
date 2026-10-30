@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::ReferencedFolderSearch;
@@ -165,9 +165,7 @@ pub fn render_referenced_search(
     let layout = referenced_search_layout(screen, search)?;
     widgets::clear::render(frame, layout.area);
     let mut block = Block::bordered()
-        .border_type(BorderType::Rounded)
         .border_style(style::accent())
-        .style(style::overlay_panel())
         .title(Span::styled(
             format!(" {} ", text::REFERENCED_SEARCH_TITLE),
             style::border_title(),
@@ -239,8 +237,7 @@ pub fn render_referenced_search(
     };
     if let Some(status) = status {
         frame.render_widget(
-            Paragraph::new(Span::styled(format!(" {status}"), style::muted()))
-                .style(style::overlay_panel()),
+            Paragraph::new(Span::styled(format!(" {status}"), style::muted())),
             Rect {
                 height: 1,
                 ..layout.list
@@ -249,7 +246,7 @@ pub fn render_referenced_search(
     } else {
         render_search_rows(frame, &layout, search);
         if let Some(scrollbar) = layout.scrollbar {
-            widgets::scrollbar::render_with_base(frame, &scrollbar, style::overlay_panel());
+            widgets::scrollbar::render(frame, &scrollbar);
         }
     }
     cursor
@@ -268,7 +265,7 @@ fn render_search_rows(
         let base = if line.index == search.selected {
             style::overlay_selection()
         } else {
-            style::overlay_panel()
+            style::text()
         };
         fill_row(frame, line.row, base);
         render_entry_row(frame, line.row, entry, base);

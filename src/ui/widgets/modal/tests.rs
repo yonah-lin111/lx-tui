@@ -47,10 +47,23 @@ fn render_draws_border_and_title() {
         panic!("draw failed: {error}");
     }
     let buffer = terminal.backend().buffer().clone();
-    assert_eq!(buffer[(shell.area.x, shell.area.y)].symbol(), "╭");
+    assert_eq!(buffer[(shell.area.x, shell.area.y)].symbol(), "┌");
+    assert_eq!(buffer[(shell.area.right() - 1, shell.area.y)].symbol(), "┐");
+    assert_eq!(
+        buffer[(shell.area.x, shell.area.bottom() - 1)].symbol(),
+        "└"
+    );
     assert_eq!(
         buffer[(shell.area.right() - 1, shell.area.bottom() - 1)].symbol(),
-        "╯"
+        "┘"
+    );
+    assert_eq!(
+        buffer[(shell.area.x, shell.area.y)].bg,
+        ratatui::style::Color::Reset
+    );
+    assert_eq!(
+        buffer[(shell.inner.x, shell.inner.y)].bg,
+        ratatui::style::Color::Reset
     );
     let title_row: String = (shell.area.x..shell.area.right())
         .map(|x| buffer[(x, shell.area.y)].symbol())

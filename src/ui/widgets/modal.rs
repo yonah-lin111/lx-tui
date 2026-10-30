@@ -3,7 +3,7 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::Span;
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 
 use crate::ui::widgets::clear;
 use crate::ui::{style, text};
@@ -38,10 +38,8 @@ pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
     // 标题为关闭按钮预留右上角空间，避免重叠。
     let title = text::ellipsize(title, usize::from(shell.area.width.saturating_sub(7)));
     let block = Block::bordered()
-        .border_type(BorderType::Rounded)
         .border_style(style::accent())
-        .title(Span::styled(format!(" {title} "), style::border_title()))
-        .style(style::overlay_panel());
+        .title(Span::styled(format!(" {title} "), style::border_title()));
     frame.render_widget(block, shell.area);
     if let Some(rect) = close_button_rect(shell.area) {
         frame.render_widget(

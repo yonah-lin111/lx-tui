@@ -184,7 +184,7 @@ mod tests {
         assert!(layout.rect.width > 0);
         assert!(layout.rect.height > 0);
 
-        let hit = item_at(area, &lx, layout.rect.x + 2, layout.rect.y + 1);
+        let hit = item_at(area, &lx, layout.rect.x + 2, layout.content.y);
         assert_eq!(hit, Some(0));
 
         let mut buf = Buffer::empty(area);

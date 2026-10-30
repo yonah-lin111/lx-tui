@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
+use ratatui::widgets::{Block, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::{AppState, RightTab, Workspace, WorkspaceIdentity};
@@ -88,9 +88,7 @@ pub(crate) fn render(
         RightTab::Prompt => state.prompt_focused(),
         RightTab::Todo => state.todo_focused(),
     };
-    let border = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(style::border(focused));
+    let border = Block::bordered().border_style(style::border(focused));
     let inner = border.inner(area);
     frame.render_widget(border, area);
     if inner.width == 0 || inner.height == 0 {

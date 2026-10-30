@@ -131,7 +131,7 @@ pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> 
     Some(box_area)
 }
 
-/// 圆角边框（只画四边与四角；不依赖 `Frame`，直接写 Buffer）。
+/// 直角边框（只画四边与四角；不依赖 `Frame`，直接写 Buffer）。
 fn draw_border(buf: &mut Buffer, area: Rect, kind: ToastKind) {
     let border = border_style(kind);
     let right = area.right().saturating_sub(1);
@@ -144,10 +144,10 @@ fn draw_border(buf: &mut Buffer, area: Rect, kind: ToastKind) {
         put(buf, area.x, y, '│', border);
         put(buf, right, y, '│', border);
     }
-    put(buf, area.x, area.y, '╭', border);
-    put(buf, right, area.y, '╮', border);
-    put(buf, area.x, bottom, '╰', border);
-    put(buf, right, bottom, '╯', border);
+    put(buf, area.x, area.y, '┌', border);
+    put(buf, right, area.y, '┐', border);
+    put(buf, area.x, bottom, '└', border);
+    put(buf, right, bottom, '┘', border);
 }
 
 /// 顶边标题：` <title> `；宽度不足时省略，不侵占右侧关闭按钮。

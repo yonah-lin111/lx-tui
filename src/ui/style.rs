@@ -252,14 +252,9 @@ pub fn agent_removed_bg() -> Style {
     Style::default().bg(Color::Rgb(0x4a, 0x22, 0x1d))
 }
 
-/// 浮层面板：自包含深底浅字（256 色），保证明暗终端下的对比度。
-///
-/// 用于 toast、右键菜单、命令面板与模态容器的整块着色：底色 Indexed 236、
-/// 文字前景 Indexed 252；边框与强调/错误色在各自绘制时覆盖前景。
+/// 浮层面板基础样式：不铺设背景色（配合 `clear` 清底保持终端原生透明底色），使用终端默认前景色。
 pub fn overlay_panel() -> Style {
     Style::default()
-        .fg(Color::Indexed(252))
-        .bg(Color::Indexed(236))
 }
 
 /// 目录条目（`@` 提及面板与引用文件夹内容弹窗）：强调色，与文件条目一眼区分。

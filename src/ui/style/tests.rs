@@ -29,10 +29,10 @@ fn selected_item_fills_accent_with_contrast_foreground() {
 }
 
 #[test]
-fn overlay_panel_paints_indexed_surface_with_readable_foreground() {
+fn overlay_panel_stays_transparent_with_default_foreground() {
     let style = overlay_panel();
-    assert_eq!(style.fg, Some(Color::Indexed(252)));
-    assert_eq!(style.bg, Some(Color::Indexed(236)));
+    assert_eq!(style.fg, None);
+    assert_eq!(style.bg, None);
 }
 
 #[test]

@@ -16,8 +16,8 @@ use crate::ui::widgets::command_panel::{
 
 /// 面板最多显示的内容行数；对齐 codex `MAX_POPUP_ROWS`（8），保证浮层观感统一。
 pub(crate) const MAX_POPUP_ROWS: u16 = 8;
-/// 面板顶部分割线占用的行数（顶部单条蓝色横线，无底边框）。
-pub(super) const PANEL_BORDER_ROWS: u16 = 1;
+/// 面板顶部占用的行数（1 行上方空行间隔 + 1 行顶部蓝色横线，无底边框）。
+pub(super) const PANEL_BORDER_ROWS: u16 = 2;
 /// 面板底部快捷键提示块占用的行数（1 行空行间隔 + 1 行提示）。
 pub(super) const PANEL_FOOTER_ROWS: u16 = 2;
 

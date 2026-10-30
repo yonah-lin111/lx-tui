@@ -212,16 +212,19 @@ fn render_skips_until_visible_then_paints_panel_and_hint() {
 
     state.tooltip = Some(Tooltip::new(TooltipTarget::CollapseSidebar, now));
     let buffer = render_buffer(&state);
-    assert_ne!(
-        buffer[(area.x, area.y)].bg,
-        Color::Indexed(236),
+    let top_before: String = (area.x..area.right())
+        .map(|x| buffer[(x, area.y)].symbol())
+        .collect();
+    assert!(
+        !top_before.contains(text::TOOLTIP_TITLE),
         "未到显示时刻不绘制"
     );
 
     assert!(crate::app::update::tick(&mut state, now + TOOLTIP_DELAY));
     let buffer = render_buffer(&state);
-    assert_eq!(buffer[(area.x, area.y)].symbol(), "╭");
-    assert_eq!(buffer[(area.x, area.y)].bg, Color::Indexed(236));
+    assert_eq!(buffer[(area.x, area.y)].symbol(), "┌");
+    assert_eq!(buffer[(area.x, area.y)].bg, Color::Reset);
+    assert_eq!(buffer[(area.x + 1, area.y + 1)].bg, Color::Reset);
     let top: String = (area.x..area.right())
         .map(|x| buffer[(x, area.y)].symbol())
         .collect();

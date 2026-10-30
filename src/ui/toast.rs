@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::AppState;
@@ -72,9 +72,7 @@ pub fn render(
     let toast = state.toast.as_ref()?;
     clear::render(frame, area);
     let border = border_style(toast.kind);
-    let mut block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(border);
+    let mut block = Block::bordered().border_style(border);
     if let Some(title) = toast.title.as_deref() {
         block = block.title(Span::styled(
             format!(

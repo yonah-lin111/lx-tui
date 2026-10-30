@@ -122,10 +122,13 @@ fn model_panel_has_transparent_background_and_blue_top_rule_and_selected_model()
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
 
-    // 顶部首行左起为蓝色 `─` 横线，无圆角边框字符。
-    assert_eq!(buf[(panel.rect.x, panel.rect.y)].symbol(), "─");
+    // 顶部第 0 行为空白间隔行，第 1 行左起为蓝色 `─` 横线，无圆角边框字符。
+    for x in panel.rect.x..panel.rect.right() {
+        assert_eq!(buf[(x, panel.rect.y)].symbol(), " ", "顶线上方留一行空行");
+    }
+    assert_eq!(buf[(panel.rect.x, panel.rect.y + 1)].symbol(), "─");
     assert_eq!(
-        buf[(panel.rect.x, panel.rect.y)].fg,
+        buf[(panel.rect.x, panel.rect.y + 1)].fg,
         ratatui::style::Color::Cyan,
         "顶部横线为蓝色"
     );
@@ -315,8 +318,8 @@ fn history_panel_renders_top_rule_and_borderless_footer() {
         lines[footer_row]
     );
     assert_eq!(
-        panel.rect.height, 5,
-        "1 行顶部蓝色横线 + 2 条历史记录 + 空行与底边提示 2 行 = 5 行高"
+        panel.rect.height, 6,
+        "1 行顶部空行 + 1 行顶部蓝色横线 + 2 条历史记录 + 空行与底边提示 2 行 = 6 行高"
     );
 }
 
@@ -340,8 +343,8 @@ fn model_panel_renders_top_rule_and_borderless_footer() {
         lines[footer_row]
     );
     assert_eq!(
-        panel.rect.height, 6,
-        "1 行顶部蓝色横线 + 3 个模型候选 + 空行与底边提示 2 行 = 6 行高"
+        panel.rect.height, 7,
+        "1 行顶部空行 + 1 行顶部蓝色横线 + 3 个模型候选 + 空行与底边提示 2 行 = 7 行高"
     );
 }
 
@@ -389,9 +392,14 @@ fn mention_panel_tabs_render_and_hit_test_in_lx() {
     let all = buffer_lines(&buf, area).join("\n");
     assert!(all.contains("codex-main/"), "refDir 条目可见: {all}");
     assert_eq!(
-        buf[(panel.rect.x, panel.rect.y)].fg,
+        buf[(panel.rect.x, panel.rect.y)].symbol(),
+        " ",
+        "提及面板第 0 行为空白间隔行"
+    );
+    assert_eq!(
+        buf[(panel.rect.x, panel.rect.y + 1)].fg,
         ratatui::style::Color::Cyan,
-        "提及面板顶边为蓝色横线"
+        "提及面板第 1 行为蓝色横线"
     );
 
     // 切到 Skills Tab 渲染 skill 条目。
@@ -498,4 +506,42 @@ fn history_panel_refilter_renders_first_matching_item_selected() {
         .collect();
     assert_eq!(marked.len(), 1, "首项带 ❯ 标记");
     assert!(marked[0].contains("Alpha"), "{:?}", marked[0]);
+}
+
+#[test]
+fn lx_md_block_panel_renders_square_borders_and_clears_interior() {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut lx = Lx::new();
+    lx.resize(80, 24);
+    lx.insert_char('#');
+    assert!(lx.panel.is_some(), "输入 # 触发 md 格式面板");
+    let lay = layout(area, &lx);
+    let rect = lay.panel.expect("md panel rect");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    assert_eq!(buf[(rect.x, rect.y)].symbol(), "┌", "md 面板左上角为直角");
+    assert_eq!(
+        buf[(rect.right() - 1, rect.y)].symbol(),
+        "┐",
+        "md 面板右上角为直角"
+    );
+    assert_eq!(
+        buf[(rect.x, rect.bottom() - 1)].symbol(),
+        "└",
+        "md 面板左下角为直角"
+    );
+    assert_eq!(
+        buf[(rect.right() - 1, rect.bottom() - 1)].symbol(),
+        "┘",
+        "md 面板右下角为直角"
+    );
+    for y in rect.y..rect.bottom() {
+        for x in rect.x..rect.right() {
+            assert_eq!(
+                buf[(x, y)].bg,
+                ratatui::style::Color::Reset,
+                "md 面板不铺背景色 ({x},{y})"
+            );
+        }
+    }
 }

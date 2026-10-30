@@ -529,8 +529,8 @@ fn status_bar_is_removed() {
     let state = AppState::demo();
     let lines = render_lines(&state);
     let last = lines.last().map(String::as_str).unwrap_or_default();
-    // 末行为面板底边框（含 `╰`），不再有独立状态栏；`ws:` 路径名合法落在 prompt 底边框。
-    assert!(last.contains('╰'), "last row should be pane border");
+    // 末行为面板底边框（含 `└`），不再有独立状态栏；`ws:` 路径名合法落在 prompt 底边框。
+    assert!(last.contains('└'), "last row should be pane border");
 }
 
 #[test]
@@ -552,7 +552,7 @@ fn toast_renders_title_and_message() {
         .iter()
         .find(|line| line.contains("Clipboard"))
         .expect("toast title is visible");
-    assert!(title_line.contains('╭'), "title must sit on the top border");
+    assert!(title_line.contains('┌'), "title must sit on the top border");
     assert!(lines.iter().any(|line| line.contains(text::TOAST_COPIED)));
 }
 
@@ -2352,8 +2352,8 @@ fn lx_pane_top_border_keeps_corners_with_long_path() {
     update::update_pane_cwd(&mut state, pane, Path::new(&long), "x".into());
     let lines = render_lines(&state);
     let top: Vec<char> = lines[usize::from(rect.y)].chars().collect();
-    assert_eq!(top[usize::from(rect.x)], '╭', "保留左上角");
-    assert_eq!(top[usize::from(rect.right() - 1)], '╮', "保留右上角");
+    assert_eq!(top[usize::from(rect.x)], '┌', "保留左上角");
+    assert_eq!(top[usize::from(rect.right() - 1)], '┐', "保留右上角");
 }
 
 #[test]
@@ -2473,7 +2473,7 @@ fn pane_border_agent_label_absent_without_agent() {
     );
 }
 
-/// 浮层顶边框标题单元格：淡蓝色（Cyan + dim）、非粗体，面板底色保留。
+/// 浮层顶边框标题单元格：淡蓝色（Cyan + dim）、非粗体，保持透明底色。
 fn assert_overlay_title(buffer: &ratatui::buffer::Buffer, area: Rect) {
     let cell = &buffer[(area.x + 1, area.y)];
     assert!(
@@ -2481,7 +2481,7 @@ fn assert_overlay_title(buffer: &ratatui::buffer::Buffer, area: Rect) {
         "边框标题必须 dim: {cell:?}"
     );
     assert_eq!(cell.fg, ratatui::style::Color::Cyan);
-    assert_eq!(cell.bg, ratatui::style::Color::Indexed(236));
+    assert_eq!(cell.bg, ratatui::style::Color::Reset);
     assert!(!cell.modifier.contains(ratatui::style::Modifier::BOLD));
 }
 

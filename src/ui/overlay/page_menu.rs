@@ -200,9 +200,7 @@ pub(super) fn render_page_menu(
     let layout = page_menu_layout(state, screen, menu);
     crate::ui::widgets::clear::render(frame, layout.area);
     let block = ratatui::widgets::Block::bordered()
-        .border_type(ratatui::widgets::BorderType::Rounded)
         .border_style(style::accent())
-        .style(style::overlay_panel())
         .title_alignment(Alignment::Left)
         .title(Span::styled(
             format!(" {} ", text::MENU_TITLE_PAGES),
@@ -233,7 +231,7 @@ pub(super) fn render_page_menu(
         let base = if selected {
             style::overlay_selection()
         } else {
-            style::overlay_panel()
+            style::text()
         };
         fill_row(frame, *rect, base);
         if *current {
@@ -264,11 +262,11 @@ pub(super) fn render_page_menu(
 /// 边框按钮：文字覆盖在顶部边框上、贴右端；不可用时置灰（同工具栏撤销/重做），
 /// 悬停不铺底色，仅由 tooltip 提示。
 fn render_chip(frame: &mut Frame<'_>, rect: Rect, label: &str, disabled: bool) {
-    let text_style = style::overlay_panel().patch(if disabled {
-        style::muted()
+    let text_style = if disabled {
+        style::muted_on_border()
     } else {
         style::accent()
-    });
+    };
     paint_text(frame, rect, label, text_style);
 }
 

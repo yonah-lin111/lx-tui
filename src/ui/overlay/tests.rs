@@ -127,7 +127,7 @@ fn menu_renders_target_name_in_border_title() {
     );
     let (lines, _) = draw_overlay(&state);
     assert!(lines[5].contains("demo"), "title row={:?}", lines[5]);
-    assert!(lines[5].contains('╭'), "title row={:?}", lines[5]);
+    assert!(lines[5].contains('┌'), "title row={:?}", lines[5]);
 }
 
 #[test]
@@ -204,13 +204,13 @@ fn menu_renders_labels_and_overlay_selection() {
     let buffer = terminal.backend().buffer().clone();
     assert_eq!(
         buffer[(11, 7)].bg,
-        style::overlay_panel().bg.expect("panel bg"),
-        "离开容器后无悬停高亮"
+        Color::Reset,
+        "离开容器后无悬停高亮且保持透明底色"
     );
 }
 
 #[test]
-fn modal_uses_overlay_panel_background() {
+fn modal_uses_transparent_background() {
     let state = rename_state("demo");
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| {
@@ -220,11 +220,8 @@ fn modal_uses_overlay_panel_background() {
     }
     let buffer = terminal.backend().buffer().clone();
     let shell = rename_shell(SCREEN).expect("rename modal fits");
-    assert_eq!(buffer[(shell.area.x, shell.area.y)].bg, Color::Indexed(236));
-    assert_eq!(
-        buffer[(shell.inner.x, shell.inner.y)].bg,
-        Color::Indexed(236)
-    );
+    assert_eq!(buffer[(shell.area.x, shell.area.y)].bg, Color::Reset);
+    assert_eq!(buffer[(shell.inner.x, shell.inner.y)].bg, Color::Reset);
 }
 
 #[test]
@@ -893,7 +890,7 @@ fn referenced_search_paints_solid_panel_background() {
     };
     let layout = referenced_search_layout(SCREEN, search).expect("layout");
     let scrollbar = layout.scrollbar.expect("list overflows");
-    // 范围路径文字、搜索框、非选中候选与滚动条都保持浮层底色，不透明。
+    // 范围路径文字、搜索框、非选中候选与滚动条都保持透明底色，仅选中候选行铺高亮底色。
     for (label, x, y) in [
         ("范围路径", layout.title.x, layout.title.y),
         ("范围路径第二个字符", layout.title.x + 1, layout.title.y),
@@ -903,11 +900,7 @@ fn referenced_search_paints_solid_panel_background() {
         ("滚动条轨道", scrollbar.track.x, scrollbar.track.y),
         ("滚动条 thumb", scrollbar.thumb.x, scrollbar.thumb.y),
     ] {
-        assert_eq!(
-            buf[(x, y)].bg,
-            Color::Indexed(236),
-            "{label} 应保持浮层底色"
-        );
+        assert_eq!(buf[(x, y)].bg, Color::Reset, "{label} 应保持透明底色");
     }
     assert_eq!(
         buf[(layout.list.x, layout.list.y)].bg,
@@ -957,7 +950,7 @@ fn referenced_menu_hover_backgrounds_row_without_marker() {
         Color::Indexed(240),
         "悬停行铺选中底色"
     );
-    // 选中行（未悬停）：只有 `❯` 标记，不铺底色（背景保持面板本色）。
+    // 选中行（未悬停）：只有 `❯` 标记，不铺底色（背景保持透明）。
     let selected = layout.rows[0];
     assert_eq!(
         buffer[(selected.x, selected.y)].symbol(),
@@ -966,7 +959,7 @@ fn referenced_menu_hover_backgrounds_row_without_marker() {
     );
     assert_eq!(
         buffer[(selected.x, selected.y)].bg,
-        Color::Indexed(236),
+        Color::Reset,
         "选中行不铺底色"
     );
 }
@@ -1298,7 +1291,7 @@ fn save_draft_picker_renders_name_tree_entries_and_buttons() {
     let buffer = terminal.backend().buffer();
     let list_y = shell.inner.y + 2;
     assert_eq!(buffer[(shell.inner.x, list_y + 1)].bg, Color::Indexed(240));
-    assert_eq!(buffer[(shell.inner.x, list_y)].bg, Color::Indexed(236));
+    assert_eq!(buffer[(shell.inner.x, list_y)].bg, Color::Reset);
 }
 
 #[test]
@@ -1555,8 +1548,8 @@ fn page_menu_renders_border_chips_single_line_pages_and_current_marker() {
     state.menu_hover = false;
     let buffer = draw_overlay_buffer(&state);
     assert_eq!(
-        Some(buffer[(current.x, current.y)].bg),
-        style::overlay_panel().bg,
+        buffer[(current.x, current.y)].bg,
+        Color::Reset,
         "指针离开容器：当前页行不铺颜色高亮"
     );
     let row: String = (current.x..current.right())
@@ -1588,18 +1581,14 @@ fn page_menu_border_chips_never_highlight_and_gray_when_disabled() {
     let layout = page_menu_layout(&state, SCREEN, menu);
     for rect in [layout.new_rect, layout.delete_rect] {
         assert_eq!(
-            Some(buffer[(rect.x, rect.y)].bg),
-            style::overlay_panel().bg,
+            buffer[(rect.x, rect.y)].bg,
+            Color::Reset,
             "边框按钮无 hover 底色"
         );
     }
-    // 单页时删除按钮不可用：默认灰（前景 252 + dim），与工具栏撤销/重做一致。
+    // 单页时删除按钮不可用：默认灰（前景 Reset + dim），与工具栏撤销/重做一致。
     let disabled = &buffer[(layout.delete_rect.x, layout.delete_rect.y)];
-    assert_eq!(
-        disabled.fg,
-        style::overlay_panel().fg.expect("panel fg"),
-        "禁用按钮灰前景"
-    );
+    assert_eq!(disabled.fg, Color::Reset, "禁用按钮默认前景");
     assert!(disabled.modifier.contains(ratatui::style::Modifier::DIM));
     let enabled = &buffer[(layout.new_rect.x, layout.new_rect.y)];
     assert_eq!(

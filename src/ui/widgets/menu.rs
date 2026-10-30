@@ -3,7 +3,7 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::ui::widgets::clear;
@@ -89,10 +89,7 @@ pub fn render_with_confirm(
     confirming: Option<usize>,
 ) {
     clear::render(frame, layout.area);
-    let mut block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(style::accent())
-        .style(style::overlay_panel());
+    let mut block = Block::bordered().border_style(style::accent());
     if !title.is_empty() {
         let max_title = usize::from(layout.area.width.saturating_sub(2));
         block = block.title(Span::styled(

@@ -3,7 +3,7 @@
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 
 use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneKind, RightTab};
@@ -59,9 +59,7 @@ pub fn render(
     let area = rect(screen, anchor, title, hint)?;
     clear::render(frame, area);
     let block = Block::bordered()
-        .border_type(BorderType::Rounded)
         .border_style(style::muted())
-        .style(style::overlay_panel())
         .title(Span::styled(
             format!(
                 " {} ",

@@ -8,7 +8,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::text::Span;
-use ratatui::widgets::{Block, BorderType};
+use ratatui::widgets::Block;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::{ReferencedFolderMenu, ReferencedFolderMenuRow};
@@ -117,9 +117,7 @@ pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &Refere
     let layout = referenced_menu_layout(screen, menu);
     clear::render(frame, layout.area);
     let block = Block::bordered()
-        .border_type(BorderType::Rounded)
         .border_style(style::accent())
-        .style(style::overlay_panel())
         .title_alignment(Alignment::Left)
         .title(Span::styled(
             format!(" {} ", text::MENU_TITLE_REFERENCED_FOLDERS),
@@ -145,9 +143,9 @@ pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &Refere
             hovered,
         );
     }
-    // 列表溢出时在最右一列绘制滚动条（轨道 muted、thumb 亮色）。
+    // 列表溢出时在最右一列绘制滚动条（轨道留空、thumb 亮色）。
     if let Some(scrollbar) = layout.scrollbar {
-        widgets::scrollbar::render_with_base(frame, &scrollbar, style::overlay_panel());
+        widgets::scrollbar::render(frame, &scrollbar);
     }
 }
 
@@ -179,11 +177,11 @@ fn render_menu_row(
     selected: bool,
     hovered: bool,
 ) {
-    // 背景颜色只在悬停时出现；选中行仅显示 `❯` 标记，底色保持面板本色。
+    // 背景颜色只在悬停时出现；选中行仅显示 `❯` 标记，底色保持透明。
     let base = if hovered {
         style::overlay_selection()
     } else {
-        style::overlay_panel()
+        style::text()
     };
     fill_row(frame, rect, base);
     match row {

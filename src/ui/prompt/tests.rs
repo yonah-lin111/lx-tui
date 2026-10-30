@@ -230,10 +230,12 @@ fn renders_block_command_panel_below_cursor() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
-    assert_eq!(buf[(0, 1)].symbol(), "╭");
+    assert_eq!(buf[(0, 1)].symbol(), "┌");
+    assert_eq!(buf[(0, 1)].bg, Color::Reset);
     let row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
     assert!(row.contains("Heading 1"));
     assert_eq!(buf[(2, 2)].bg, Color::Indexed(240));
+    assert_eq!(buf[(2, 3)].bg, Color::Reset);
 
     let mut empty = Buffer::empty(area);
     let blank = prompt(10, 3, "plain");
@@ -323,7 +325,8 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
-    assert_eq!(buf[(0, 1)].symbol(), "╭");
+    assert_eq!(buf[(0, 1)].symbol(), "┌");
+    assert_eq!(buf[(0, 1)].bg, Color::Reset);
     let name_row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
     let dir_row: String = (0..area.width).map(|x| buf[(x, 3)].symbol()).collect();
     assert!(name_row.contains("app.rs"));
@@ -487,11 +490,7 @@ fn mention_panel_marks_directory_and_file_icons() {
     assert_eq!(buf[(3, 2)].fg, Color::Cyan, "目录图标用目录色");
     assert!(buf[(3, 2)].modifier.contains(Modifier::BOLD));
     assert_eq!(buf[(5, 2)].fg, Color::Cyan, "目录名称用目录色");
-    assert_eq!(
-        buf[(5, 3)].fg,
-        Color::Indexed(252),
-        "文件名称沿用浮层默认前景"
-    );
+    assert_eq!(buf[(5, 3)].fg, Color::Reset, "文件名称沿用终端默认前景");
     assert!(!buf[(5, 3)].modifier.contains(Modifier::BOLD));
 }
 
@@ -986,7 +985,7 @@ fn template_command_and_title_and_mention_styles() {
     render(area, &mut buf, &editor, None);
 
     // 模板块左边框占前两列，文本整体右移。
-    assert_eq!(buf[(0, 0)].symbol(), "╭");
+    assert_eq!(buf[(0, 0)].symbol(), "┌");
     assert_eq!(buf[(0, 0)].fg, Color::LightBlue, "todo 边框为靛蓝");
     assert_eq!(buf[(1, 0)].symbol(), "─");
 
@@ -1022,15 +1021,15 @@ fn template_block_draws_status_colored_border_box() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &running, None);
 
-    assert_eq!(buf[(0, 0)].symbol(), "╭");
+    assert_eq!(buf[(0, 0)].symbol(), "┌");
     assert_eq!(buf[(0, 0)].fg, Color::Yellow, "in_progress 边框为黄");
-    assert_eq!(buf[(59, 0)].symbol(), "╮");
+    assert_eq!(buf[(59, 0)].symbol(), "┐");
     assert_eq!(buf[(59, 0)].fg, Color::Yellow);
     assert_eq!(buf[(0, 1)].symbol(), "│");
     assert_eq!(buf[(0, 1)].fg, Color::Yellow);
     assert_eq!(buf[(59, 1)].symbol(), "│");
-    assert_eq!(buf[(0, 2)].symbol(), "╰");
-    assert_eq!(buf[(59, 2)].symbol(), "╯");
+    assert_eq!(buf[(0, 2)].symbol(), "└");
+    assert_eq!(buf[(59, 2)].symbol(), "┘");
     assert_eq!(buf[(0, 2)].fg, Color::Yellow);
     // 结束行底边以 `─` 补满文本之后。
     assert_eq!(buf[(40, 2)].symbol(), "─");
@@ -1122,7 +1121,7 @@ fn template_buttons_render_and_hit_test() {
     assert!(row.contains(text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_CLEAN), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_DEL), "{row}");
-    assert_eq!(buf[(69, 0)].symbol(), "╮");
+    assert_eq!(buf[(69, 0)].symbol(), "┐");
 
     for hit in &buttons {
         let cell = hit.rect;
@@ -1304,7 +1303,7 @@ fn folded_supplement_renders_compact_header_and_toggles_icon() {
     assert!(prompt.toggle_supple_fold(1));
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
-    assert_eq!(buf[(0, 1)].symbol(), "╭");
+    assert_eq!(buf[(0, 1)].symbol(), "┌");
     let row = row_text(&buf, 1);
     assert!(row.contains("[▾]"), "{row}");
     assert!((0..8).any(|y| row_text(&buf, y).contains("{title: }")));
@@ -1365,12 +1364,11 @@ fn supple_block_renders_title_separator_like_template() {
 
 // ===== 标题行标题与页控件 =====
 
-/// 标题行渲染工具：先画圆角边框与分割线，再把标题覆盖到分割线行，
+/// 标题行渲染工具：先画直角边框与分割线，再把标题覆盖到分割线行，
 /// 返回标题行整行字符串（含两端 `├` / `┤`）。
 fn title_row_render(panel: Rect, data: &TitleRowData<'_>) -> String {
     let mut buf = Buffer::empty(panel);
-    let block =
-        ratatui::widgets::Block::bordered().border_type(ratatui::widgets::BorderType::Rounded);
+    let block = ratatui::widgets::Block::bordered();
     ratatui::widgets::Widget::render(block, panel, &mut buf);
     if let Some(header) = crate::layout::prompt_header_rect(panel) {
         render_divider(panel, header, &mut buf, false);

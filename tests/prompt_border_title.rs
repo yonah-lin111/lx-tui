@@ -102,8 +102,8 @@ fn editor_title_row_shows_item_title_page_name_and_pager() {
 
     // 容器顶边框只承载 tab。
     let border = border_row(&terminal, &view);
-    assert!(border.starts_with('╭'), "顶边框仍是圆角边框: {border}");
-    assert!(border.ends_with('╮'), "{border}");
+    assert!(border.starts_with('┌'), "顶边框为直角边框: {border}");
+    assert!(border.ends_with('┐'), "{border}");
     assert!(border.contains(text::RIGHT_TAB_PROMPT_LABEL), "{border}");
     assert!(border.contains(text::RIGHT_TAB_TODO_LABEL), "{border}");
 

@@ -217,14 +217,14 @@ fn tabs_drop_trailing_when_narrow() {
     let border = panel_row(&buffer, &view, view.prompt.y);
     assert!(!border.contains(text::RIGHT_TAB_PROMPT_LABEL), "{border:?}");
     assert!(!border.contains(text::RIGHT_TAB_TODO_LABEL), "{border:?}");
-    assert!(border.starts_with('╭'), "左圆角仍在: {border:?}");
-    assert!(border.ends_with('╮'), "右圆角仍在: {border:?}");
+    assert!(border.starts_with('┌'), "左直角仍在: {border:?}");
+    assert!(border.ends_with('┐'), "右直角仍在: {border:?}");
 }
 
 #[test]
 fn tabs_never_touch_the_right_corner() {
     // 扫遍可达宽度：tab 与右角之间必须恒有 1 列 `─`。
-    // 只判"不压住 ╮"时，宽 11 与 18 会出现 `╭─ Prompt ╮`（实测），要求 >= right-1 才挡住。
+    // 只判"不压住 ┐"时，宽 11 与 18 会出现 `┌─ Prompt ┐`（实测），要求 >= right-1 才挡住。
     for width in 10..=24u16 {
         let mut state = AppState::demo();
         state.prompt_width = width;
@@ -250,8 +250,8 @@ fn tabs_never_touch_the_right_corner() {
             );
         }
         assert!(
-            rendered.starts_with('╭') && rendered.ends_with('╮'),
-            "宽 {width}: 圆角完整: {rendered}"
+            rendered.starts_with('┌') && rendered.ends_with('┐'),
+            "宽 {width}: 直角完整: {rendered}"
         );
     }
 }

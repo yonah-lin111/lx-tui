@@ -1062,7 +1062,16 @@ fn mention_panel_footer_lists_shortcut_hints_without_border() {
     let panel = mention::layout(area, &lx).expect("panel");
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
-    // 底部最后一行是快捷键提示（无边框、无分割线）。
+    // 底部最后一行是快捷键提示（无边框、无分割线）；顶部第一行（rect.y）为空白隔离行，第二行（rect.y + 1）为顶部蓝色横线。
+    let top_blank: String = (panel.rect.x..panel.rect.right())
+        .map(|x| buf[(x, panel.rect.y)].symbol())
+        .collect();
+    assert_eq!(top_blank.trim(), "", "提及面板顶线上方留一行空白隔离行");
+    assert_eq!(
+        buf[(panel.rect.x, panel.rect.y + 1)].symbol(),
+        "─",
+        "第二行为顶部蓝色横线"
+    );
     let footer_row = panel.rect.bottom() - 1;
     let footer: String = (panel.rect.x..panel.rect.right())
         .map(|x| buf[(x, footer_row)].symbol())

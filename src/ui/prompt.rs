@@ -561,7 +561,7 @@ fn template_button_labels(status: TemplateStatus) -> [&'static str; 4] {
     TEMPLATE_BUTTONS.map(|button| template_button_label(button, status))
 }
 
-/// 绘制块边框：左槽 `╭─`/`│ `/`╰─`、右槽 `╮`/`│`/`╯`；
+/// 绘制块边框：左槽 `┌─`/`│ `/`└─`、右槽 `┐`/`│`/`┘`；
 /// 折叠的补充块只有起始行，改用 `├─` / `┤` 画成自成一行的紧凑标题。
 /// 起始行顶边与结束行底边以 `─` 补满文本之后的空间（按钮组由后续绘制覆盖）。
 fn paint_block_border(
@@ -597,9 +597,9 @@ fn paint_block_border(
             }
         }
         Some(BlockRole::Start) => {
-            put(left, '╭');
+            put(left, '┌');
             put(left + 1, '─');
-            put(right, '╮');
+            put(right, '┐');
             for x in painted..buttons_start.min(right) {
                 put(x, '─');
             }
@@ -609,9 +609,9 @@ fn paint_block_border(
             put(right, '│');
         }
         Some(BlockRole::End) => {
-            put(left, '╰');
+            put(left, '└');
             put(left + 1, '─');
-            put(right, '╯');
+            put(right, '┘');
             for x in painted..right {
                 put(x, '─');
             }

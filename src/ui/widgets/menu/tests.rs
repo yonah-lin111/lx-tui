@@ -105,20 +105,22 @@ fn render_draws_border_title_labels_and_overlay_selection() {
     }
     let buffer = terminal.backend().buffer().clone();
     let text_at = |x: u16, y: u16| buffer[(x, y)].symbol().to_string();
-    assert_eq!(text_at(menu.area.x, menu.area.y), "╭");
-    assert_eq!(text_at(menu.area.right() - 1, menu.area.y), "╮");
+    assert_eq!(text_at(menu.area.x, menu.area.y), "┌");
+    assert_eq!(text_at(menu.area.right() - 1, menu.area.y), "┐");
+    assert_eq!(text_at(menu.area.x, menu.area.bottom() - 1), "└");
+    assert_eq!(text_at(menu.area.right() - 1, menu.area.bottom() - 1), "┘");
     let title_row: String = (menu.area.x..menu.area.right())
         .map(|x| text_at(x, menu.area.y))
         .collect();
     assert!(title_row.contains(TITLE), "{title_row}");
-    assert_eq!(buffer[(menu.area.x, menu.area.y)].bg, Color::Indexed(236));
+    assert_eq!(buffer[(menu.area.x, menu.area.y)].bg, Color::Reset);
     assert_eq!(
         buffer[(menu.item_rects[0].x, menu.item_rects[0].y)].bg,
-        Color::Indexed(236)
+        Color::Reset
     );
     assert_eq!(
         buffer[(menu.item_rects[0].x, menu.item_rects[0].y)].fg,
-        Color::Indexed(252)
+        Color::Reset
     );
     let row: String = (menu.item_rects[0].x..menu.item_rects[0].right())
         .map(|x| text_at(x, menu.item_rects[0].y))

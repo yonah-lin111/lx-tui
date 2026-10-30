@@ -157,9 +157,9 @@ fn lx_toast_is_painted_inside_the_pane() {
         .expect("pane rect");
     let target = state.pane_anywhere(pane).expect("pane");
     let toast = crate::ui::main_content::lx::toast_rect(inner, &target.lx).expect("toast 可见");
-    // 盒的左上角必须是边框（不是历史正文）。
+    // 盒的左上角必须是直角边框（不是历史正文）。
     let corner = buffer[(toast.x, toast.y)].symbol();
-    assert_eq!(corner, "╭", "toast 盒左上角应为圆角边框");
+    assert_eq!(corner, "┌", "toast 盒左上角应为直角边框");
     // 顶部一行出现提示文字的前半段。
     let header: String = (toast.x..toast.right())
         .map(|x| buffer[(x, toast.y + 1)].symbol())

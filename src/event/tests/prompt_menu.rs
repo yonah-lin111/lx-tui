@@ -386,7 +386,7 @@ fn mouse_hover_over_referenced_menu_paints_background_without_marker() {
     );
     assert_eq!(
         buffer[(selected.x, selected.y)].bg,
-        ratatui::style::Color::Indexed(236),
+        ratatui::style::Color::Reset,
         "选中行不铺底色"
     );
 }
@@ -471,7 +471,7 @@ fn mouse_hover_after_opening_referenced_menu_backgrounds_row_without_marker() {
     );
     assert_eq!(
         buffer[(layout.rows[0].x, layout.rows[0].y)].bg,
-        ratatui::style::Color::Indexed(236),
+        ratatui::style::Color::Reset,
         "选中行不铺底色"
     );
 }

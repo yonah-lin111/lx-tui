@@ -104,7 +104,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     let row = line_text(&terminal, start_row);
     assert_eq!(
         terminal.backend().buffer()[(area.x, start_row)].symbol(),
-        "╭"
+        "┌"
     );
     assert_eq!(
         terminal.backend().buffer()[(area.x, start_row)].fg,
@@ -146,7 +146,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_CLEAN), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_DEL), "{row}");
-    assert!(row.contains('╮'), "右上角闭合: {row}");
+    assert!(row.contains('┐'), "右上角闭合: {row}");
 
     // 切换状态后整块底色跟随。
     update::toggle_template_status(&mut state, 0);
