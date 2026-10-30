@@ -137,6 +137,16 @@ pub fn unknown_command(command: &str) -> String {
     format!("{UNKNOWN_COMMAND_PREFIX}{sample}{UNKNOWN_COMMAND_HINT}")
 }
 
+/// 会话重命名成功提示：`Renamed to "foo"`（超长标题按字符取样截断）。
+pub fn session_renamed(title: &str) -> String {
+    let trimmed = title.trim();
+    let mut sample: String = trimmed.chars().take(UNKNOWN_COMMAND_SAMPLE).collect();
+    if sample.chars().count() < trimmed.chars().count() {
+        sample.push('…');
+    }
+    format!("Renamed to \"{sample}\"")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +184,14 @@ mod tests {
             unknown_command("  /foo  "),
             "Unknown command /foo · try /model"
         );
+    }
+
+    #[test]
+    fn session_renamed_formats_and_truncates_title() {
+        assert_eq!(session_renamed("  fix login  "), "Renamed to \"fix login\"");
+        let long = "x".repeat(UNKNOWN_COMMAND_SAMPLE + 5);
+        let msg = session_renamed(&long);
+        assert!(msg.contains('…'), "{msg}");
     }
 }
 

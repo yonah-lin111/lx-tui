@@ -379,3 +379,45 @@ fn mention_panel_tabs_render_and_hit_test_in_lx() {
         "提及面板顶边为蓝色横线"
     );
 }
+
+#[test]
+fn rename_input_renders_muted_argument_hint_until_user_types_argument() {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut lx = Lx::new();
+    lx.input = "/rename ".into();
+    lx.cursor = lx.input.len();
+
+    let mut buf = Buffer::empty(area);
+    let cursor = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    assert!(cursor.is_some(), "聚焦时返回光标坐标");
+
+    let lines = buffer_lines(&buf, area);
+    let input_row = (0..area.height)
+        .find(|y| lines[usize::from(*y)].contains("/rename"))
+        .expect("input row");
+    assert!(
+        lines[usize::from(input_row)].contains("/rename  [name]"),
+        "输入框在 `/rename ` 后显示 `[name]` 参数说明: {:?}",
+        lines[usize::from(input_row)]
+    );
+    let bracket_x = (0..area.width)
+        .find(|x| buf[(*x, input_row)].symbol() == "[")
+        .expect("`[name]` 起始列");
+    assert_eq!(
+        buf[(bracket_x, input_row)].fg,
+        crate::ui::style::muted().fg.unwrap_or_default(),
+        "`[name]` 必须为灰色 muted 字体"
+    );
+
+    // 用户输入参数字符后，`[name]` 立即消失。
+    lx.input = "/rename demo".into();
+    lx.cursor = lx.input.len();
+    let mut buf2 = Buffer::empty(area);
+    let _ = render(area, &mut buf2, &lx, true, None, &mut PaneCache::default());
+    let lines2 = buffer_lines(&buf2, area);
+    assert!(
+        !lines2[usize::from(input_row)].contains("[name]"),
+        "输入参数后不再显示 `[name]`: {:?}",
+        lines2[usize::from(input_row)]
+    );
+}

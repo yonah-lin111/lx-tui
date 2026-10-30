@@ -4832,10 +4832,10 @@ fn lx_slash_fuzzy_matches_subsequence_and_aliases() {
         .collect();
     assert_eq!(
         names,
-        vec!["resume", "rewind"],
-        "前缀命中 /resume 与 /rewind（别名不做子序列匹配）"
+        vec!["resume", "rewind", "rename"],
+        "前缀命中 /resume、/rewind 与 /rename（别名不做子序列匹配）"
     );
-    // 别名：/clear → new，/session → resume。
+    // 别名：/clear → new，/session → resume，/title → rename。
     let names: Vec<&str> = SlashPanel::commands_matching("/clear")
         .into_iter()
         .map(SlashCommand::name)
@@ -4846,6 +4846,11 @@ fn lx_slash_fuzzy_matches_subsequence_and_aliases() {
         .map(SlashCommand::name)
         .collect();
     assert_eq!(names, vec!["resume"], "别名 /session 命中 /resume");
+    let names: Vec<&str> = SlashPanel::commands_matching("/title")
+        .into_iter()
+        .map(SlashCommand::name)
+        .collect();
+    assert_eq!(names, vec!["rename"], "别名 /title 命中 /rename");
     // 别名不能命中其它命令（/clear 不应出现 /model）。
     assert!(SlashCommand::Model.aliases().is_empty(), "model 无别名");
 }

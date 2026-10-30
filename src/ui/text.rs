@@ -752,6 +752,12 @@ pub fn compact_notice(model: &str, time: &str) -> String {
 }
 /// `/resume` 命令描述。
 pub const LX_RESUME_COMMAND_DESC: &str = "Resume a previous session in this workspace";
+/// `/rename` 命令描述、参数占位提示与反馈文案。
+pub const LX_RENAME_COMMAND_DESC: &str = "Rename the current session";
+pub const LX_RENAME_ARG_HINT: &str = "[name]";
+pub const LX_RENAME_EMPTY_NAME: &str = "Session name cannot be empty";
+pub const LX_RENAME_NO_SESSION: &str = "No active session to rename";
+pub const LX_RENAME_STANDALONE_FAILED: &str = "Run /rename on its own line";
 /// `/resume` 历史面板标题与空态。
 pub const LX_HISTORY_PANEL_TITLE: &str = "Resume";
 pub const LX_HISTORY_EMPTY: &str = "no sessions yet";

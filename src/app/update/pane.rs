@@ -647,6 +647,35 @@ pub fn accept_slash_command(state: &mut AppState, pane: PaneId) -> bool {
         }
         return false;
     };
+    // 带参回显命令（如 `/rename`）：必须独立占满单行，采纳后将输入替换为 `<cmd> ` 并留待输入参数。
+    if let Some(prefix) = command.echo_prefix() {
+        let trimmed = input.trim();
+        let line_start = input[..cursor].rfind('\n').map_or(0, |offset| offset + 1);
+        let line = input[line_start..].trim();
+        let standalone = trimmed == line
+            && input[cursor..].trim().is_empty()
+            && !line.contains('\n')
+            && !line.contains('\r')
+            && !line.contains(char::is_whitespace)
+            && line.starts_with('/');
+        if !standalone {
+            super::chat::show_lx_hint(
+                state,
+                pane,
+                super::super::state::InputHintLevel::Warning,
+                crate::ui::text::LX_RENAME_STANDALONE_FAILED,
+            );
+            return true;
+        }
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.input.clear();
+            target.lx.input.push_str(prefix);
+            target.lx.cursor = prefix.len();
+            target.lx.clear_text_selection();
+            target.lx.slash = None;
+        }
+        return true;
+    }
     // 撤销命令必须独立占满输入：夹带正文/多行/参数/光标前后残留时拒绝并保留草稿。
     if command == super::super::state::SlashCommand::Rewind {
         let trimmed = input.trim();

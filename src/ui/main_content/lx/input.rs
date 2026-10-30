@@ -131,6 +131,28 @@ pub(super) fn draw(
             usize::from(content_w),
         );
         grid.put(content_x, text_top, &placeholder, style::muted());
+    } else if !shell
+        && scroll == 0
+        && let Some(hint) = crate::app::state::lx::slash::active_argument_hint(&lx.input)
+    {
+        // `/rename ` 占 8 列（含 1 个尾随空格，光标停在第 8 列）；
+        // 在光标右侧再留 1 列间距（与 `/rename` 共隔 2 列），绘制只读灰色参数说明 `[name]`。
+        let min_offset = crate::app::state::SlashCommand::Rename
+            .text()
+            .len()
+            .saturating_add(2);
+        let offset = display_width(&lx.input).max(min_offset);
+        let offset_u16 = u16::try_from(offset).unwrap_or(u16::MAX);
+        if offset_u16 < content_w {
+            let avail = usize::from(content_w - offset_u16);
+            let placeholder = text::truncate_to_width(hint, avail);
+            grid.put(
+                content_x.saturating_add(offset_u16),
+                text_top,
+                &placeholder,
+                style::muted(),
+            );
+        }
     }
     cursor
 }
