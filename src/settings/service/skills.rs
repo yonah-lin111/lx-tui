@@ -312,7 +312,7 @@ fn path_is_known_skill(state: &ServiceState, root: &Path, path: &str) -> bool {
     let Some(name) = path.file_name() else {
         return false;
     };
-    if name != "SKILL.md" {
+    if !crate::skills::is_skill_file_name(name) {
         return false;
     }
     let canonical = std::fs::canonicalize(&path).unwrap_or(path);

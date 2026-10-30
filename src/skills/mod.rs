@@ -8,7 +8,7 @@ pub mod parse;
 pub mod render;
 pub mod store;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub use discover::{ProjectSkillRoots, catalog_signature, discover};
 pub use parse::{ParsedSkill, load_skill_body, parse_skill};
@@ -16,6 +16,40 @@ pub use render::{
     render_catalog, render_catalog_with_omitted, render_injection, render_replay_line,
 };
 pub use store::{delete_skill, read_skill, read_skill_at, serialize_skill, write_skill};
+
+/// skill 文件的标准文件名。
+pub const SKILL_FILE_NAME: &str = "SKILL.md";
+
+/// 是否为 skill 文件：允许 `SKILL.md` 大小写变体。
+///
+/// macOS/Windows 大小写不敏感，用户常写成 `skill.md`；`read_dir` 返回的实际
+/// 文件名仍是写入时的 casing，因此比较必须忽略大小写，否则目录里明明有文件、
+/// lx 却当成不存在。
+pub fn is_skill_file_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|name| name.eq_ignore_ascii_case(SKILL_FILE_NAME))
+}
+
+/// 在一个 skill 目录里找实际存在的 `SKILL.md`（优先标准大写名）。
+pub fn find_skill_file(dir: &Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut fallback = None;
+    for entry in entries.flatten() {
+        if !is_skill_file_name(&entry.file_name()) {
+            continue;
+        }
+        // 跟随符号链接，与发现阶段的 `entry.metadata()` 保持同一口径。
+        if !entry.metadata().map(|meta| meta.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let path = entry.path();
+        if entry.file_name() == std::ffi::OsStr::new(SKILL_FILE_NAME) {
+            return Some(path);
+        }
+        fallback.get_or_insert(path);
+    }
+    fallback
+}
 
 /// `SKILL.md` 读取上限（256 KiB）。
 pub const MAX_SKILL_FILE_BYTES: usize = 256 * 1024;

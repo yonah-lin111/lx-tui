@@ -4,7 +4,10 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use super::parse::parse_dir;
-use super::{MAX_DEPTH, MAX_DIRS_PER_ROOT, SkillCatalog, SkillEntry, SkillScope, SkillSource};
+use super::{
+    MAX_DEPTH, MAX_DIRS_PER_ROOT, SkillCatalog, SkillEntry, SkillScope, SkillSource,
+    is_skill_file_name,
+};
 
 /// 项目级 skill 根（未信任项目不传这一项）。
 #[derive(Debug, Clone, Default)]
@@ -127,7 +130,7 @@ fn scan_root(
             let path = entry.path();
             let is_dir = entry.metadata().map(|meta| meta.is_dir()).unwrap_or(false);
             if !is_dir {
-                if entry.file_name() == "SKILL.md" {
+                if is_skill_file_name(&entry.file_name()) {
                     push_skill(&path, &dir, scope, source, disabled, catalog, &mut found);
                 }
                 continue;
@@ -218,7 +221,7 @@ fn hash_root_signature(root: &Path, skip_projects: bool, mix: &mut impl FnMut(&[
                 continue;
             };
             if !meta.is_dir() {
-                if entry.file_name() == "SKILL.md" {
+                if is_skill_file_name(&entry.file_name()) {
                     mix(path.to_string_lossy().as_bytes());
                     mix_modified(&meta, mix);
                     mix(&meta.len().to_le_bytes());

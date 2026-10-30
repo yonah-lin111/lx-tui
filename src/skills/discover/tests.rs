@@ -140,3 +140,29 @@ fn catalog_signature_tracks_added_and_edited_skills() {
     assert_ne!(second, third, "edited SKILL.md changes the signature");
     let _ = std::fs::remove_dir_all(base);
 }
+
+#[test]
+fn lowercase_skill_md_is_discovered() {
+    let base = temp_dir("lowercase");
+    let user = base.join("user");
+    let agents = base.join("agents");
+    let dir = user.join("grill-me");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(
+        dir.join("skill.md"),
+        "---\nname: grill-me\ndescription: Stress-test a plan.\n---\n\n# Grill\n",
+    )
+    .expect("skill");
+    let catalog = discover(&user, &agents, None, &HashSet::new());
+    let entry = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.name == "grill-me")
+        .expect("lowercase skill discovered");
+    assert!(
+        entry.path.ends_with("grill-me/skill.md"),
+        "{:?}",
+        entry.path
+    );
+    let _ = std::fs::remove_dir_all(base);
+}

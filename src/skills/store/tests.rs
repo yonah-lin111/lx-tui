@@ -41,3 +41,32 @@ fn serialize_rejects_empty_description_and_invalid_name() {
     assert!(serialize_skill("pdf", "", "body").is_err());
     assert!(serialize_skill("bad name", "d", "body").is_err());
 }
+
+#[test]
+fn lowercase_skill_file_is_read_updated_and_deleted() {
+    let root = temp_dir("lowercase");
+    let dir = root.join("grill-me");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(
+        dir.join("skill.md"),
+        "---\nname: grill-me\ndescription: Old text.\n---\n\n# Old\n",
+    )
+    .expect("skill");
+    let (_, description, _) = read_skill(&root, "grill-me").expect("read");
+    assert_eq!(description, "Old text.");
+    let path = write_skill(&root, "grill-me", "New text.", "# New\n").expect("write");
+    assert!(path.ends_with("grill-me/skill.md"), "{path:?}");
+    assert_eq!(
+        crate::skills::find_skill_file(&dir)
+            .expect("file")
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("skill.md"),
+        "must keep the existing casing"
+    );
+    let (_, description, _) = read_skill(&root, "grill-me").expect("read updated");
+    assert_eq!(description, "New text.");
+    delete_skill(&root, "grill-me").expect("delete");
+    assert!(!dir.exists());
+    let _ = std::fs::remove_dir_all(root);
+}

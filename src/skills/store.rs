@@ -8,7 +8,9 @@ use super::parse::validate_name;
 /// 读取一个 skill 的 name/description/body（供设置页详情）。
 pub fn read_skill(root: &Path, name: &str) -> Result<(String, String, String), String> {
     validate_name(name)?;
-    let path = root.join(name).join("SKILL.md");
+    let dir = root.join(name);
+    let path =
+        super::find_skill_file(&dir).ok_or_else(|| format!("skill '{name}' has no SKILL.md"))?;
     let text = super::parse::load_skill_body(&path)?;
     let parsed = super::parse::parse_skill(&text, name)?;
     let body = strip_frontmatter(&text).unwrap_or_default();
@@ -56,7 +58,9 @@ pub fn write_skill(
     let text = serialize_skill(name, description, body)?;
     let dir = root.join(name);
     std::fs::create_dir_all(&dir).map_err(|error| format!("create failed: {error}"))?;
-    let path = dir.join("SKILL.md");
+    // 已存在的 `skill.md` 就地更新，不额外生成一个 `SKILL.md`（大小写不敏感文件系统上
+    // 两个名字会指向同一个文件；显式保留原 casing 更可预期）。
+    let path = super::find_skill_file(&dir).unwrap_or_else(|| dir.join(super::SKILL_FILE_NAME));
     std::fs::write(&path, text.as_bytes()).map_err(|error| format!("write failed: {error}"))?;
     Ok(path)
 }
@@ -67,17 +71,19 @@ pub fn delete_skill(root: &Path, name: &str) -> Result<(), String> {
     let dir = root.join(name);
     let entries = std::fs::read_dir(&dir).map_err(|error| format!("read failed: {error}"))?;
     let mut only_skill = true;
+    let mut skill_file = None;
     for entry in entries.flatten() {
-        if entry.file_name() != "SKILL.md" {
-            only_skill = false;
-            break;
+        if super::is_skill_file_name(&entry.file_name()) {
+            skill_file = Some(entry.path());
+            continue;
         }
+        only_skill = false;
+        break;
     }
     if !only_skill {
         return Err("skill directory contains other files; delete them manually".into());
     }
-    let skill = dir.join("SKILL.md");
-    if skill.is_file() {
+    if let Some(skill) = skill_file.filter(|path| path.is_file()) {
         std::fs::remove_file(&skill).map_err(|error| format!("delete failed: {error}"))?;
     }
     std::fs::remove_dir(&dir).map_err(|error| format!("delete failed: {error}"))?;
