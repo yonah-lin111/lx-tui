@@ -488,7 +488,8 @@ fn renders_titles_and_footer_on_border() {
         "左侧标题在右标题之前：{top}"
     );
     assert_eq!(buf[(rect.x, rect.y + 2)].symbol(), "│");
-    assert_eq!(buf[(rect.x, rect.bottom() - 3)].symbol(), "│");
+    assert_eq!(buf[(rect.x, rect.bottom() - 3)].symbol(), "├");
+    assert_eq!(buf[(rect.x, rect.bottom() - 2)].symbol(), "│");
     let bottom = row_text(&buf, area, rect.bottom() - 2);
     assert!(bottom.contains("⇧↵ open · ^z back"), "{bottom}");
 }

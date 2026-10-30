@@ -101,7 +101,7 @@ fn tiny_modal_keeps_title_off_the_border() {
 
 #[test]
 fn button_row_centers_buttons_with_gap() {
-    let shell = layout(SCREEN, 40, 5).expect("modal fits");
+    let shell = layout(SCREEN, 40, 6).expect("modal fits");
     let labels = ["[save enter]", "[clear ^c]", "[cancel esc]"];
     let rects = button_row(shell.inner, &labels, 2, 2);
     assert_eq!(rects.len(), 3);

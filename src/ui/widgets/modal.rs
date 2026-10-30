@@ -20,8 +20,8 @@ pub struct ModalShell {
 
 /// 居中模态几何；屏幕放不下（宽 < 4 或高 < 3）返回 None。
 ///
-/// 当高度充裕（≥ 6 行）时，顶部预留 3 行顶栏框（`┌──┐` + `│ Title [✕] │` + `├──┤`），
-/// `inner` 从 `area.y + 3` 起算。
+/// 当高度充裕（≥ 5 行）时，顶部预留 2 行顶栏（`┌──┐` + `│ Title [✕] │`），
+/// `inner` 从 `area.y + 2` 起算。
 pub fn layout(screen: Rect, width: u16, height: u16) -> Option<ModalShell> {
     let width = width.min(screen.width);
     let height = height.min(screen.height);
@@ -34,12 +34,12 @@ pub fn layout(screen: Rect, width: u16, height: u16) -> Option<ModalShell> {
         width,
         height,
     );
-    let inner = if area.height >= 6 {
+    let inner = if area.height >= 5 {
         Rect::new(
             area.x.saturating_add(1),
-            area.y.saturating_add(3),
+            area.y.saturating_add(2),
             area.width.saturating_sub(2),
-            area.height.saturating_sub(4),
+            area.height.saturating_sub(3),
         )
     } else {
         Block::bordered().inner(area)
@@ -53,7 +53,7 @@ pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
     clear::render(frame, shell.area);
     let block = Block::bordered().border_style(style::accent());
     frame.render_widget(block, shell.area);
-    if shell.area.height >= 6 && shell.area.width >= 4 {
+    if shell.area.height >= 5 && shell.area.width >= 4 {
         let fitted = text::ellipsize(title, usize::from(shell.area.width.saturating_sub(7)));
         let title_w = u16::try_from(fitted.width()).unwrap_or(u16::MAX);
         frame.render_widget(
@@ -76,6 +76,15 @@ pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
             shell.area.y + 1,
             from.saturating_add(1),
             to,
+            style::accent(),
+        );
+    }
+    // 底栏按钮行上方的分割线（按钮行位于 `bottom - 2`）。
+    if shell.area.height >= 6 {
+        paint_divider(
+            frame.buffer_mut(),
+            shell.area,
+            shell.area.bottom().saturating_sub(3),
             style::accent(),
         );
     }
@@ -109,9 +118,30 @@ pub(crate) fn paint_title_rule(
     }
 }
 
-/// 右上角关闭按钮矩形（`[✕]`，3 列，右侧留 1 列内边距）；高度 ≥ 6 时位于顶栏行（`area.y + 1`），否则位于 `area.y`。
+/// 在 `y` 行绘制 `├───┤` 分割线（与左右外框衔接）。
+pub(crate) fn paint_divider(buf: &mut Buffer, area: Rect, y: u16, border_style: Style) {
+    if area.width < 2 || y <= area.y || y >= area.bottom().saturating_sub(1) {
+        return;
+    }
+    let right = area.right().saturating_sub(1);
+    for x in area.x..=right {
+        let ch = if x == area.x {
+            '├'
+        } else if x == right {
+            '┤'
+        } else {
+            '─'
+        };
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.set_char(ch);
+            cell.set_style(border_style);
+        }
+    }
+}
+
+/// 右上角关闭按钮矩形（`[✕]`，3 列，右侧留 1 列内边距）；高度 ≥ 5 时位于标题行（`area.y + 1`），否则位于 `area.y`。
 pub fn close_button_rect(area: Rect) -> Option<Rect> {
-    let y = if area.height >= 6 {
+    let y = if area.height >= 5 {
         area.y.saturating_add(1)
     } else {
         area.y
@@ -131,7 +161,7 @@ pub fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
     }
     let x = area.right().saturating_sub(5);
     Rect::new(x, area.y, 3, 1).contains((column, row).into())
-        || (area.height >= 6
+        || (area.height >= 5
             && Rect::new(x, area.y.saturating_add(1), 3, 1).contains((column, row).into()))
 }
 

@@ -61,7 +61,7 @@ pub fn render(
     clear::render(frame, area);
     let block = Block::bordered().border_style(style::muted());
     frame.render_widget(block, area);
-    if area.height >= 5 && area.width >= 4 {
+    if area.height >= 4 && area.width >= 4 {
         let fitted = text::ellipsize(title, usize::from(area.width.saturating_sub(4)));
         let title_w = u16::try_from(fitted.width()).unwrap_or(u16::MAX);
         frame.render_widget(
@@ -80,8 +80,8 @@ pub fn render(
             style::muted(),
         );
     }
-    let body_y = if area.height >= 5 {
-        area.y + 3
+    let body_y = if area.height >= 4 {
+        area.y + 2
     } else {
         area.y + 1
     };
@@ -268,7 +268,7 @@ fn rect(screen: Rect, anchor: Rect, title: &str, hint: &str) -> Option<Rect> {
     if width == 0 {
         return None;
     }
-    let height = 5.min(screen.height);
+    let height = 4.min(screen.height);
     let below = anchor.y.saturating_add(1);
     let y = if below.saturating_add(height) <= screen.bottom() {
         below

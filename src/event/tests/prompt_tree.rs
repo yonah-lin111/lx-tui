@@ -338,9 +338,9 @@ fn mouse_interacts_with_block_command_panel() {
         Some(Some(1))
     );
 
-    // 悬停条目：只改高亮（内容区从 rect.y + 3 开始）。
+    // 悬停条目：只改高亮（内容区从 rect.y + 2 开始）。
     handle_terminal_event(
-        mouse(MouseEventKind::Moved, rect.x + 2, rect.y + 6),
+        mouse(MouseEventKind::Moved, rect.x + 2, rect.y + 5),
         &mut state,
         &mut sessions,
         &geo,
@@ -355,7 +355,7 @@ fn mouse_interacts_with_block_command_panel() {
         mouse(
             MouseEventKind::Down(MouseButton::Left),
             rect.x + 2,
-            rect.y + 4,
+            rect.y + 3,
         ),
         &mut state,
         &mut sessions,

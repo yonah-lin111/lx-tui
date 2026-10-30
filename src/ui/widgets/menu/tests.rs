@@ -18,10 +18,10 @@ const TITLE: &str = "workspace";
 fn layout_sizes_to_longest_label_with_minimum_width() {
     let menu = layout(SCREEN, (0, 0), TITLE, &["Rename", "Close"]);
     assert_eq!(menu.area.width, MIN_WIDTH);
-    assert_eq!(menu.area.height, 6);
+    assert_eq!(menu.area.height, 5);
     assert_eq!(menu.item_rects.len(), 2);
-    assert_eq!(menu.item_rects[0].y, 3);
-    assert_eq!(menu.item_rects[1].y, 4);
+    assert_eq!(menu.item_rects[0].y, 2);
+    assert_eq!(menu.item_rects[1].y, 3);
     assert_eq!(menu.item_rects[0].width, MIN_WIDTH - 2);
 
     let wide = layout(SCREEN, (0, 0), TITLE, &["a very long menu entry label"]);
@@ -53,14 +53,13 @@ fn layout_shrinks_to_small_screen() {
 #[test]
 fn item_at_hits_rows_inside_border_only() {
     let menu = layout(SCREEN, (10, 5), TITLE, &["Rename", "Close"]);
-    assert_eq!(item_at(&menu, 11, 8), Some(0));
-    assert_eq!(item_at(&menu, 11, 9), Some(1));
-    assert_eq!(item_at(&menu, 10, 8), None);
+    assert_eq!(item_at(&menu, 11, 7), Some(0));
+    assert_eq!(item_at(&menu, 11, 8), Some(1));
+    assert_eq!(item_at(&menu, 10, 7), None);
     assert_eq!(item_at(&menu, 11, 5), None);
     assert_eq!(item_at(&menu, 11, 6), None);
-    assert_eq!(item_at(&menu, 11, 7), None);
-    assert_eq!(item_at(&menu, 11, 10), None);
-    assert_eq!(item_at(&menu, 100, 8), None);
+    assert_eq!(item_at(&menu, 11, 9), None);
+    assert_eq!(item_at(&menu, 100, 7), None);
 }
 
 #[test]

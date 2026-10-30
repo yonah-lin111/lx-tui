@@ -66,27 +66,18 @@ pub fn referenced_search_layout(
     let width = SEARCH_WIDTH.min(screen.width);
     // 高度固定（顶部范围行 + 搜索行 + 双行候选列表 + 上下边框），不随候选数量伸缩。
     let height = SEARCH_HEIGHT.min(screen.height);
-    if width < 8 || height < 6 {
+    if width < 8 || height < 8 {
         return None;
     }
     let x = screen.x + (screen.width - width) / 2;
     let y = screen.y + (screen.height - height) / 2;
     let area = Rect::new(x, y, width, height);
-    let content_top = if area.height >= 10 {
-        area.y.saturating_add(3)
-    } else {
-        area.y.saturating_add(1)
-    };
-    let content_bottom = if area.height >= 10 {
-        area.bottom().saturating_sub(3)
-    } else {
-        area.bottom().saturating_sub(1)
-    };
+    // 顶部 2 行（顶边 + 标题行）；底部 3 行（分割线 + 快捷键行 + 底边）。
     let inner = Rect::new(
         area.x.saturating_add(1),
-        content_top,
+        area.y.saturating_add(2),
         area.width.saturating_sub(2),
-        content_bottom.saturating_sub(content_top),
+        area.height.saturating_sub(5),
     );
     if inner.width == 0 || inner.height == 0 {
         return None;
@@ -181,11 +172,7 @@ pub fn render_referenced_search(
     widgets::clear::render(frame, layout.area);
     let block = Block::bordered().border_style(style::accent());
     frame.render_widget(block, layout.area);
-    let header_y = if layout.area.height >= 10 {
-        layout.area.y + 1
-    } else {
-        layout.area.y
-    };
+    let header_y = layout.area.y + 1;
     if layout.area.width >= 4 {
         paint_text(
             frame,
@@ -216,21 +203,19 @@ pub fn render_referenced_search(
                 rule_to = scope_x.saturating_sub(1);
             }
         }
-        if layout.area.height >= 10 {
-            crate::ui::widgets::modal::paint_title_rule(
-                frame.buffer_mut(),
-                layout.area,
-                header_y,
-                layout
-                    .area
-                    .x
-                    .saturating_add(2)
-                    .saturating_add(title_w)
-                    .saturating_add(1),
-                rule_to,
-                style::accent(),
-            );
-        }
+        crate::ui::widgets::modal::paint_title_rule(
+            frame.buffer_mut(),
+            layout.area,
+            header_y,
+            layout
+                .area
+                .x
+                .saturating_add(2)
+                .saturating_add(title_w)
+                .saturating_add(1),
+            rule_to,
+            style::accent(),
+        );
     }
     // 顶部范围路径 + 右端原始路径复制按钮；截断提示紧贴复制按钮左侧（始终可见）。
     let truncated = search
@@ -396,7 +381,7 @@ fn referenced_entry_address(entry: &ReferencedEntry, width: usize) -> String {
     format!("{prefix}{}", text::ellipsize_middle(&parent, available))
 }
 
-/// 渲染内容搜索弹窗底栏快捷键提示（位于底边上方一行，左右边框保留）。
+/// 渲染内容搜索弹窗底栏（上方 `├───┤` 分割线 + 快捷键提示行，左右边框保留）。
 pub fn render_referenced_search_footer(
     frame: &mut Frame<'_>,
     screen: Rect,
@@ -405,11 +390,13 @@ pub fn render_referenced_search_footer(
     let Some(layout) = referenced_search_layout(screen, search) else {
         return;
     };
-    let y = if layout.area.height >= 10 {
-        layout.area.bottom().saturating_sub(2)
-    } else {
-        layout.area.bottom().saturating_sub(1)
-    };
+    crate::ui::widgets::modal::paint_divider(
+        frame.buffer_mut(),
+        layout.area,
+        layout.area.bottom().saturating_sub(3),
+        style::accent(),
+    );
+    let y = layout.area.bottom().saturating_sub(2);
     paint_text(
         frame,
         Rect::new(layout.area.x + 2, y, layout.area.width.saturating_sub(4), 1),

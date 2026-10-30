@@ -233,10 +233,10 @@ fn renders_block_command_panel_below_cursor() {
     assert_eq!(buf[(0, 1)].symbol(), "┌");
     assert_eq!(buf[(0, 3)].symbol(), "│");
     assert_eq!(buf[(0, 1)].bg, Color::Reset);
-    let row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
+    let row: String = (0..area.width).map(|x| buf[(x, 3)].symbol()).collect();
     assert!(row.contains("Heading 1"));
-    assert_eq!(buf[(2, 4)].bg, Color::Indexed(240));
-    assert_eq!(buf[(2, 5)].bg, Color::Reset);
+    assert_eq!(buf[(2, 3)].bg, Color::Indexed(240));
+    assert_eq!(buf[(2, 4)].bg, Color::Reset);
 
     let mut empty = Buffer::empty(area);
     let blank = prompt(10, 3, "plain");
@@ -268,18 +268,18 @@ fn block_panel_rect_and_items_hit_test() {
     editor.insert_str("#");
     let rect = panel_rect(&editor, area).expect("panel visible");
     assert_eq!(rect.y, 1, "面板贴在锚点行下方");
-    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 3), Some(0));
-    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 4), Some(1));
-    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 8), Some(5));
+    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 2), Some(0));
+    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 3), Some(1));
+    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 7), Some(5));
     assert_eq!(
-        panel_item_at(&editor, area, 2, rect.y + 9),
+        panel_item_at(&editor, area, 2, rect.y + 8),
         None,
         "底栏分割线不命中"
     );
     assert_eq!(
-        panel_item_at(&editor, area, 2, rect.y + 2),
+        panel_item_at(&editor, area, 2, rect.y + 1),
         None,
-        "顶栏分割线不命中"
+        "标题行不命中"
     );
 }
 
@@ -291,17 +291,17 @@ fn block_panel_window_keeps_still_when_hovering_visible_item() {
     editor.insert_str("#");
     editor.panel_move(5);
     let rect = panel_rect(&editor, area).expect("panel visible");
-    let top = panel_item_at(&editor, area, 2, rect.y + 3);
+    let top = panel_item_at(&editor, area, 2, rect.y + 2);
 
     // 悬停窗口内条目：窗口保持不动（锚点不跟随悬停）。
     assert!(editor.panel_set_active(3));
     assert_eq!(editor.panel().map(|panel| panel.active()), Some(3));
     assert_eq!(panel_rect(&editor, area), Some(rect));
-    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 3), top);
+    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 2), top);
 
     // 键盘移动：锚点跟随高亮，窗口滚动。
     editor.panel_move(-1);
-    assert_ne!(panel_item_at(&editor, area, 2, rect.y + 3), top);
+    assert_ne!(panel_item_at(&editor, area, 2, rect.y + 2), top);
 }
 
 #[test]
@@ -330,23 +330,23 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
 
     assert_eq!(buf[(0, 1)].symbol(), "┌");
     assert_eq!(buf[(0, 1)].bg, Color::Reset);
-    let name_row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
-    let dir_row: String = (0..area.width).map(|x| buf[(x, 5)].symbol()).collect();
+    let name_row: String = (0..area.width).map(|x| buf[(x, 3)].symbol()).collect();
+    let dir_row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
     assert!(name_row.contains("app.rs"));
     assert!(name_row.contains(text::MENTION_FILE_ICON), "{name_row}");
-    assert_eq!(buf[(3, 4)].symbol(), text::MENTION_FILE_ICON);
-    assert!(buf[(3, 4)].modifier.contains(Modifier::DIM));
+    assert_eq!(buf[(3, 3)].symbol(), text::MENTION_FILE_ICON);
+    assert!(buf[(3, 3)].modifier.contains(Modifier::DIM));
     assert!(dir_row.contains("src"));
     assert!(dir_row.contains(text::WORKSPACE_TREE_LAST), "{dir_row}");
-    assert!(buf[(3, 5)].modifier.contains(Modifier::DIM));
-    assert_eq!(buf[(2, 4)].bg, Color::Indexed(240));
+    assert!(buf[(3, 4)].modifier.contains(Modifier::DIM));
+    assert_eq!(buf[(2, 3)].bg, Color::Indexed(240));
 
+    assert_eq!(mention_item_at(&editor, area, 2, 3), Some(0));
     assert_eq!(mention_item_at(&editor, area, 2, 4), Some(0));
-    assert_eq!(mention_item_at(&editor, area, 2, 5), Some(0));
+    assert_eq!(mention_item_at(&editor, area, 2, 5), Some(1));
     assert_eq!(mention_item_at(&editor, area, 2, 6), Some(1));
-    assert_eq!(mention_item_at(&editor, area, 2, 7), Some(1));
-    assert_eq!(mention_item_at(&editor, area, 2, 8), None);
-    assert_eq!(mention_item_at(&editor, area, 2, 3), None);
+    assert_eq!(mention_item_at(&editor, area, 2, 7), None);
+    assert_eq!(mention_item_at(&editor, area, 2, 2), None);
 }
 
 #[test]
@@ -482,19 +482,19 @@ fn mention_panel_marks_directory_and_file_icons() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
-    let dir_row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
-    let file_row: String = (0..area.width).map(|x| buf[(x, 5)].symbol()).collect();
+    let dir_row: String = (0..area.width).map(|x| buf[(x, 3)].symbol()).collect();
+    let file_row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
     assert!(dir_row.contains(text::MENTION_DIR_ICON), "{dir_row}");
     assert!(dir_row.contains("src/"), "{dir_row}");
     assert!(file_row.contains(text::MENTION_FILE_ICON), "{file_row}");
     assert!(file_row.contains("app.rs"), "{file_row}");
     assert_ne!(text::MENTION_DIR_ICON, text::MENTION_FILE_ICON);
     // 目录条目按目录色（强调色加粗）着色，文件条目保持默认前景。
-    assert_eq!(buf[(3, 4)].fg, Color::Cyan, "目录图标用目录色");
-    assert!(buf[(3, 4)].modifier.contains(Modifier::BOLD));
-    assert_eq!(buf[(5, 4)].fg, Color::Cyan, "目录名称用目录色");
-    assert_eq!(buf[(5, 5)].fg, Color::Reset, "文件名称沿用终端默认前景");
-    assert!(!buf[(5, 5)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buf[(3, 3)].fg, Color::Cyan, "目录图标用目录色");
+    assert!(buf[(3, 3)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buf[(5, 3)].fg, Color::Cyan, "目录名称用目录色");
+    assert_eq!(buf[(5, 4)].fg, Color::Reset, "文件名称沿用终端默认前景");
+    assert!(!buf[(5, 4)].modifier.contains(Modifier::BOLD));
 }
 
 #[test]
@@ -569,10 +569,10 @@ fn mention_panel_middle_truncates_overlong_parent_path() {
 
     let rect = mention_panel_rect(&editor, area).expect("panel visible");
     let name_row: String = (0..area.width)
-        .map(|x| buf[(x, rect.y + 3)].symbol())
+        .map(|x| buf[(x, rect.y + 2)].symbol())
         .collect();
     let dir_row: String = (0..area.width)
-        .map(|x| buf[(x, rect.y + 4)].symbol())
+        .map(|x| buf[(x, rect.y + 3)].symbol())
         .collect();
     assert!(name_row.contains("file.rs"), "{name_row}");
     assert!(dir_row.contains(text::WORKSPACE_TREE_LAST), "{dir_row}");
@@ -608,13 +608,13 @@ fn mention_panel_window_keeps_still_when_hovering_visible_item() {
 
     editor.mention_move(9);
     let rect = mention_panel_rect(&editor, area).expect("panel visible");
-    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 3), Some(6));
+    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 2), Some(6));
 
     // 悬停窗口内条目：窗口保持不动，不因悬停向上滚动。
     editor.mention_set_active(8);
     assert_eq!(mention_panel_rect(&editor, area), Some(rect));
-    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 3), Some(6));
-    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 9), Some(9));
+    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 2), Some(6));
+    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 8), Some(9));
 }
 
 /// 工具栏渲染测试面板：40x8，内容区含顶部 2 行表头。
