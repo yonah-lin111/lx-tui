@@ -20,71 +20,69 @@ struct McpLayout {
 
 fn sections(view: &McpDetailView, expanded: bool) -> Vec<Section> {
     let mut sections = Vec::new();
-    if let Some(summary) = view.argument_summary() {
-        sections.push(Section::fixed(vec![Node::text(
-            summary,
-            style::chat_tool_param(),
-        )]));
-    }
     if !view.arguments.is_empty() {
         let lines: Vec<Vec<Segment>> = view
             .arguments
             .iter()
-            .map(|line| {
-                vec![Segment::new(
-                    single_line(line, 2000),
-                    style::agent_step_detail(),
-                )]
-            })
+            .map(|line| vec![Segment::new(single_line(line, 2000), style::text())])
             .collect();
         let mut nodes = vec![Node::block(lines)];
         if view.arguments_more > 0 {
             nodes.push(Node::text(
                 text::mcp::more_lines(view.arguments_more),
-                style::agent_step_detail(),
+                style::fold_hint(),
             ));
         }
-        sections.push(Section::new(
-            nodes,
-            (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
-        ));
+        sections.push(
+            Section::new(
+                nodes,
+                (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
+            )
+            // 参数位置（├─ / │）用浅黄，正文保持默认前景色。
+            .with_connector(style::chat_tool_param()),
+        );
     }
-    if !view.result.is_empty() {
-        let lines: Vec<Vec<Segment>> = view
-            .result
-            .iter()
-            .map(|line| vec![Segment::new(single_line(line, 8000), style::text())])
-            .collect();
-        let mut nodes = vec![Node::block(lines)];
+    if !view.result.is_empty() || !view.images.is_empty() || view.images_omitted > 0 {
+        let mut nodes: Vec<Node> = Vec::new();
+        if !view.result.is_empty() {
+            let lines: Vec<Vec<Segment>> = view
+                .result
+                .iter()
+                .map(|line| {
+                    vec![Segment::new(
+                        single_line(line, 8000),
+                        style::agent_step_detail(),
+                    )]
+                })
+                .collect();
+            nodes.push(Node::block(lines));
+        }
         if view.result_more > 0 {
             nodes.push(Node::text(
                 text::mcp::more_lines(view.result_more),
+                style::fold_hint(),
+            ));
+        }
+        for image in &view.images {
+            nodes.push(Node::text(
+                text::mcp::image_line(&image.mime, image.width, image.height, &image.path),
                 style::agent_step_detail(),
             ));
         }
-        sections.push(Section::new(
-            nodes,
-            (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
-        ));
-    }
-    if !view.images.is_empty() || view.images_omitted > 0 {
-        let mut nodes: Vec<Node> = view
-            .images
-            .iter()
-            .map(|image| {
-                Node::text(
-                    text::mcp::image_line(&image.mime, image.width, image.height, &image.path),
-                    style::agent_step_detail(),
-                )
-            })
-            .collect();
         if view.images_omitted > 0 {
             nodes.push(Node::text(
                 text::mcp::images_label(view.images_omitted),
-                style::agent_step_detail(),
+                style::fold_hint(),
             ));
         }
-        sections.push(Section::fixed(nodes));
+        sections.push(
+            Section::new(
+                nodes,
+                (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
+            )
+            // 结果位置（└─）与正文统一灰色。
+            .with_connector(style::agent_step_detail()),
+        );
     }
     sections
 }
@@ -247,6 +245,45 @@ mod tests {
         assert!(has_more(&view, 80));
         let expanded = render(&view, 80, true);
         assert!(expanded.contains("line 19"), "{expanded}");
-        assert!(expanded.contains("10 more line(s)"), "{expanded}");
+        assert!(expanded.contains("10 more lines"), "{expanded}");
+    }
+
+    #[test]
+    fn mcp_card_registers_a_click_region_and_connector_colors() {
+        use crate::app::state::ToolDetailView;
+        let mut call = call();
+        let mut view = view();
+        view.result = (0..10).map(|index| format!("line {index}")).collect();
+        view.result_more = 7;
+        call.detail = Some(Box::new(ToolDetailView::Mcp(view.clone())));
+        let total = rows(&view, 100, false);
+        let regions = super::super::card_regions(&call, 100, super::super::Folds::default(), total);
+        assert!(
+            regions.iter().any(|region| region.clickable),
+            "long MCP content must be clickable to expand"
+        );
+        let expanded = layout(&view, 100, true);
+        let arg_row = expanded
+            .layout
+            .rows
+            .iter()
+            .find(|row| {
+                row.segments
+                    .iter()
+                    .any(|segment| segment.text.contains("title"))
+            })
+            .expect("argument row");
+        assert_eq!(arg_row.prefix_style, style::chat_tool_param());
+        let result_row = expanded
+            .layout
+            .rows
+            .iter()
+            .find(|row| {
+                row.segments
+                    .iter()
+                    .any(|segment| segment.text.contains("line 0"))
+            })
+            .expect("result row");
+        assert_eq!(result_row.prefix_style, style::agent_step_detail());
     }
 }

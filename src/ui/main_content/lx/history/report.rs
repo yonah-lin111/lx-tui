@@ -261,7 +261,7 @@ pub(super) fn draw(
     if body.remaining > 0 {
         if let Some(y) = visible_row(rect, scroll, *row) {
             let hint = text::agent::file_diff_more_lines(body.remaining);
-            grid.put_clipped(body_x, y, &hint, style::agent_step_detail(), body_width);
+            grid.put_clipped(body_x, y, &hint, style::fold_hint(), body_width);
         }
         *row += 1;
     }

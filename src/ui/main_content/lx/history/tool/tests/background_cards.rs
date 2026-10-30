@@ -541,7 +541,7 @@ fn params_more_lines_hint_is_a_dim_note() {
         .and_then(|row| row.segments.first())
         .expect("折叠态必须有提示行");
     assert!(hint.text.contains("more line"), "{:?}", hint.text);
-    assert_eq!(hint.style, style::agent_step_detail(), "提示行是 dim 注脚");
+    assert_eq!(hint.style, style::fold_hint(), "提示行是 dim 斜体注脚");
     // 真实卡片同样给出提示。
     let text = render_text(&call, 40);
     assert!(text.contains("more line"), "{text}");

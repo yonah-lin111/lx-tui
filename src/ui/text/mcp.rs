@@ -31,7 +31,11 @@ pub fn images_label(count: usize) -> String {
 pub fn image_line(mime: &str, width: u32, height: u32, path: &str) -> String {
     format!("[image {mime} {width}×{height}] {path}")
 }
-/// 超出 20 行时的提示。
+/// 超出 20 行时的提示（单复数与 `… N more lines` 一致）。
 pub fn more_lines(count: usize) -> String {
-    format!("… {count} more line(s)")
+    if count == 1 {
+        "… 1 more line".to_string()
+    } else {
+        format!("… {count} more lines")
+    }
 }

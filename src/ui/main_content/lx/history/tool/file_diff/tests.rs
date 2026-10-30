@@ -426,8 +426,8 @@ fn file_diff_folded_content_never_lifts() {
     );
     assert_eq!(
         grid.cell(6, hint_y).style,
-        style::agent_step_detail(),
-        "剩余行数提示恒为 dim"
+        style::fold_hint(),
+        "剩余行数提示恒为 dim 斜体"
     );
     assert_ne!(
         grid.cell(6, hint_y).style,

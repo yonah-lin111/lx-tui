@@ -81,11 +81,17 @@ pub(crate) struct Section {
     pub(crate) nodes: Vec<Node>,
     /// 折叠预算；`None` 表示该块始终展开。
     pub(crate) preview: Option<Preview>,
+    /// 本块连接符颜色（MCP 参数黄、结果灰）。
+    connector: Style,
 }
 
 impl Section {
     pub(crate) fn new(nodes: Vec<Node>, preview: Option<Preview>) -> Self {
-        Self { nodes, preview }
+        Self {
+            nodes,
+            preview,
+            connector: style::chat_notice_connector(),
+        }
     }
 
     /// 常显块（状态、参数外的元信息）。
@@ -93,13 +99,21 @@ impl Section {
         Self {
             nodes,
             preview: None,
+            connector: style::chat_notice_connector(),
         }
+    }
+
+    /// 覆盖本块连接符颜色。
+    pub(crate) fn with_connector(mut self, connector: Style) -> Self {
+        self.connector = connector;
+        self
     }
 }
 
 /// 一个物理行：连接符（可能为空）+ 内容。
 pub(crate) struct Row {
     pub(crate) prefix: &'static str,
+    pub(crate) prefix_style: Style,
     pub(crate) segments: Vec<Segment>,
     /// 内容所属节点；省略提示行归属到它继续的那个节点。
     node: Option<usize>,
@@ -126,7 +140,7 @@ impl Layout {
             .map(|row| {
                 let mut segments = Vec::with_capacity(row.segments.len() + 1);
                 if !row.prefix.is_empty() {
-                    segments.push(Segment::new(row.prefix, style::chat_notice_connector()));
+                    segments.push(Segment::new(row.prefix, row.prefix_style));
                 }
                 segments.extend(row.segments.iter().cloned());
                 segments
@@ -216,6 +230,7 @@ pub(crate) fn layout(sections: &[Section], width: u16) -> Layout {
             last_visible = Some(line.node);
             rows.push(Row {
                 prefix: "",
+                prefix_style: section.connector,
                 segments: line.segments.clone(),
                 node: Some(line.node),
                 first,
@@ -228,7 +243,8 @@ pub(crate) fn layout(sections: &[Section], width: u16) -> Layout {
                 // `└─`，否则长输出里每个折叠块都多一个收口符。
                 rows.push(Row {
                     prefix: "",
-                    segments: vec![Segment::new(hint, style::agent_step_detail())],
+                    prefix_style: section.connector,
+                    segments: vec![Segment::new(hint, style::fold_hint())],
                     node: last_visible,
                     first: false,
                 });
@@ -273,7 +289,7 @@ pub(crate) fn draw(
         if let Some(y) = visible_row(rect, scroll, *row_index) {
             let mut segments: Vec<Segment> = Vec::with_capacity(row.segments.len() + 1);
             if !row.prefix.is_empty() {
-                segments.push(Segment::new(row.prefix, style::chat_notice_connector()));
+                segments.push(Segment::new(row.prefix, row.prefix_style));
             }
             segments.extend(row.segments.iter().cloned());
             put_segments(grid, rect.x, y, rect.width, &segments);

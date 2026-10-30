@@ -63,6 +63,10 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(html.contains("Skills"), "skills tab present");
     assert!(html.contains("view-skills"), "skills view container");
     assert!(
+        html.contains("id=\"skill-body\" rows=\"22\""),
+        "tall skill body"
+    );
+    assert!(
         html.contains("type=\"password\""),
         "api key input masked by default"
     );
@@ -81,6 +85,14 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(css.contains("text/css"), "css content type");
     assert!(body(&css).contains("color-scheme: dark"), "dark theme");
     assert!(body(&css).contains(".models-grid"), "models layout styles");
+    assert!(
+        body(&css).contains("#mcp-editor") && body(&css).contains("#skill-editor"),
+        "mcp/skills editors participate in the flex scroll layout"
+    );
+    assert!(
+        body(&css).contains("#skill-body"),
+        "skill body height style"
+    );
 
     let js = request(port, &get("/settings.js")).await;
     assert_eq!(status(&js), 200);

@@ -223,6 +223,11 @@ pub fn agent_step_detail() -> Style {
     muted()
 }
 
+/// 折叠态“…”省略提示：与正文区分、统一斜体。
+pub fn fold_hint() -> Style {
+    muted().add_modifier(Modifier::ITALIC)
+}
+
 /// diff 新增行计数与前缀：Green。
 pub fn agent_added() -> Style {
     Style::default().fg(Color::Green)

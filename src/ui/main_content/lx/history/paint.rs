@@ -328,7 +328,7 @@ fn draw_user_text(
                 rect.x.saturating_add(USER_INDENT),
                 y,
                 hint,
-                style::muted().patch(bg),
+                style::fold_hint().patch(bg),
                 rect.width.saturating_sub(USER_INDENT),
             );
         }

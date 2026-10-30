@@ -133,7 +133,7 @@ fn layout(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
             rows.push(Row::plain(prefixed(
                 &continuation_prefix(),
                 text::agent::file_diff_more_lines(remaining),
-                style::agent_step_detail(),
+                style::fold_hint(),
             )));
         }
     }
