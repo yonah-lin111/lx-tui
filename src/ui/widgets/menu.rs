@@ -93,6 +93,8 @@ pub fn render_with_confirm(
     frame.render_widget(block, layout.area);
     if !title.is_empty() && layout.area.height >= 4 && layout.area.width >= 4 {
         let max_title = usize::from(layout.area.width.saturating_sub(4));
+        let fitted = text::ellipsize(title, max_title);
+        let title_w = u16::try_from(fitted.width()).unwrap_or(u16::MAX);
         let title_rect = Rect::new(
             layout.area.x + 2,
             layout.area.y + 1,
@@ -100,11 +102,21 @@ pub fn render_with_confirm(
             1,
         );
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                text::ellipsize(title, max_title),
-                style::border_title(),
-            )),
+            Paragraph::new(Span::styled(fitted, style::border_title())),
             title_rect,
+        );
+        crate::ui::widgets::modal::paint_title_rule(
+            frame.buffer_mut(),
+            layout.area,
+            layout.area.y + 1,
+            layout
+                .area
+                .x
+                .saturating_add(2)
+                .saturating_add(title_w)
+                .saturating_add(1),
+            layout.area.right().saturating_sub(2),
+            style::accent(),
         );
     }
     let width = usize::from(layout.area.width.saturating_sub(2));

@@ -198,24 +198,38 @@ pub fn render_referenced_search(
             text::REFERENCED_SEARCH_TITLE,
             style::border_title(),
         );
+        let title_w = u16::try_from(text::REFERENCED_SEARCH_TITLE.width()).unwrap_or(u16::MAX);
+        let mut rule_to = layout.area.right().saturating_sub(2);
         if let Some(scope) = search_scope_name(search) {
             let available = usize::from(layout.area.width.saturating_sub(4))
                 .saturating_sub(text::REFERENCED_SEARCH_TITLE.width() + 2);
             let clipped = text::truncate_to_width(&scope, available);
             let scope_w = u16::try_from(clipped.width()).unwrap_or(0);
             if scope_w > 0 && scope_w <= layout.area.width.saturating_sub(4) {
+                let scope_x = layout.area.right().saturating_sub(2 + scope_w);
                 paint_text(
                     frame,
-                    Rect::new(
-                        layout.area.right().saturating_sub(2 + scope_w),
-                        header_y,
-                        scope_w,
-                        1,
-                    ),
+                    Rect::new(scope_x, header_y, scope_w, 1),
                     &clipped,
                     style::border_title(),
                 );
+                rule_to = scope_x.saturating_sub(1);
             }
+        }
+        if layout.area.height >= 10 {
+            crate::ui::widgets::modal::paint_title_rule(
+                frame.buffer_mut(),
+                layout.area,
+                header_y,
+                layout
+                    .area
+                    .x
+                    .saturating_add(2)
+                    .saturating_add(title_w)
+                    .saturating_add(1),
+                rule_to,
+                style::accent(),
+            );
         }
     }
     // 顶部范围路径 + 右端原始路径复制按钮；截断提示紧贴复制按钮左侧（始终可见）。

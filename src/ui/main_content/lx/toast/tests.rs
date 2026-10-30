@@ -150,7 +150,7 @@ fn titled_toast_keeps_the_close_button_visible() {
         })
         .expect("draw");
     let buffer = terminal.backend().buffer().clone();
-    let close_x = box_area.right() - 4;
+    let close_x = box_area.right() - 5;
     let close_y = box_area.y + 1;
     let label: String = (close_x..close_x + 3)
         .map(|x| buffer[(x, close_y)].symbol())

@@ -70,6 +70,10 @@ fn render_draws_border_and_title() {
         .map(|x| buffer[(x, shell.area.y + 1)].symbol())
         .collect();
     assert!(title_row.contains("Rename workspace"), "{title_row}");
+    assert!(
+        title_row.contains('─'),
+        "标题后以 ─ 连通到关闭按钮: {title_row}"
+    );
     assert_eq!(buffer[(shell.area.x, shell.area.y + 1)].symbol(), "│");
     assert_eq!(
         buffer[(shell.area.right() - 1, shell.area.y + 1)].symbol(),
@@ -141,7 +145,7 @@ fn button_at_hits_button_cells_only() {
 fn render_draws_close_button_and_hit_test() {
     let shell = layout(SCREEN, 40, 3).expect("modal fits");
     let close = close_button_rect(shell.area).expect("close button fits");
-    assert_eq!(close.x, shell.area.right() - 4);
+    assert_eq!(close.x, shell.area.right() - 5);
     assert_eq!(close.y, shell.area.y);
     assert!(close_button_at(shell.area, close.x, close.y));
     assert!(close_button_at(shell.area, close.right() - 1, close.y));

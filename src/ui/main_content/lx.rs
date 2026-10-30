@@ -954,6 +954,12 @@ fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
         text::LX_BLOCK_PANEL_TITLE,
         style::muted(),
     );
+    let title_w = u16::try_from(text::LX_BLOCK_PANEL_TITLE.width()).unwrap_or(u16::MAX);
+    let rule_from = rect.x + 2 + title_w + 1;
+    let rule_to = rect.right() - 2;
+    for x in rule_from..rule_to {
+        grid.set(x, rect.y + 1, '─', style::muted());
+    }
     for (index, id) in panel.items().iter().enumerate() {
         let y = rect.y + 3 + index as u16;
         let (label, preview) = text::block_command_text(*id);

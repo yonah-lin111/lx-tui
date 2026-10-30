@@ -79,12 +79,26 @@ pub fn render(
         && has_title
     {
         let title_max = usize::from(area.width.saturating_sub(8));
+        let fitted = text::truncate_to_width(title, title_max);
+        let title_w = u16::try_from(fitted.width()).unwrap_or(u16::MAX);
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                text::truncate_to_width(title, title_max),
-                title_style(toast.kind),
-            )),
+            Paragraph::new(Span::styled(fitted, title_style(toast.kind))),
             Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), 1),
+        );
+        let to = close_button_rect_for(area, true).map_or_else(
+            || area.right().saturating_sub(2),
+            |rect| rect.x.saturating_sub(1),
+        );
+        crate::ui::widgets::modal::paint_title_rule(
+            frame.buffer_mut(),
+            area,
+            area.y + 1,
+            area.x
+                .saturating_add(2)
+                .saturating_add(title_w)
+                .saturating_add(1),
+            to,
+            border,
         );
     }
     if let Some(rect) = close_button_rect_for(area, has_title) {
@@ -119,7 +133,7 @@ pub fn render(
 fn close_button_rect_for(area: Rect, has_title: bool) -> Option<Rect> {
     let y = if has_title { area.y + 1 } else { area.y };
     (area.width >= 10 && y < area.bottom()).then_some(Rect::new(
-        area.right().saturating_sub(4),
+        area.right().saturating_sub(5),
         y,
         3,
         1,

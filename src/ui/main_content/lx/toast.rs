@@ -89,11 +89,25 @@ pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> 
     let box_area = rect(area, toast)?;
     clear::render_buffer(buf, box_area);
     draw_border(buf, box_area, toast.kind);
+    let close_x = box_area.width.saturating_sub(5);
     let has_title = toast.title.is_some() && box_area.height >= 5;
     if let Some(title) = toast.title.as_deref()
         && has_title
     {
-        draw_title(buf, box_area, title, toast.kind);
+        let title_end = draw_title(buf, box_area, title, toast.kind);
+        let to = if box_area.width >= 10 {
+            close_x.saturating_add(box_area.x).saturating_sub(1)
+        } else {
+            box_area.right().saturating_sub(2)
+        };
+        crate::ui::widgets::modal::paint_title_rule(
+            buf,
+            box_area,
+            box_area.y + 1,
+            title_end.saturating_add(1),
+            to,
+            border_style(toast.kind),
+        );
     }
     let close_y = if has_title {
         box_area.y.saturating_add(1)
@@ -103,7 +117,7 @@ pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> 
     if box_area.width >= 10 {
         let style = border_style(toast.kind);
         buf.set_stringn(
-            box_area.right().saturating_sub(4),
+            box_area.x.saturating_add(close_x),
             close_y,
             text::MODAL_CLOSE,
             3,
@@ -168,7 +182,8 @@ fn draw_border(buf: &mut Buffer, area: Rect, kind: ToastKind) {
 }
 
 /// 顶栏标题：` <title> `（位于 `area.y + 1`）；宽度不足时省略，不侵占右侧关闭按钮。
-fn draw_title(buf: &mut Buffer, area: Rect, title: &str, kind: ToastKind) {
+/// 返回标题文本结束后的下一列，供调用方衔接 `─` 填充。
+fn draw_title(buf: &mut Buffer, area: Rect, title: &str, kind: ToastKind) -> u16 {
     let reserved = if area.width >= 10 {
         u16::try_from(text::MODAL_CLOSE.width())
             .unwrap_or(0)
@@ -178,20 +193,23 @@ fn draw_title(buf: &mut Buffer, area: Rect, title: &str, kind: ToastKind) {
     };
     let available = area.width.saturating_sub(2).saturating_sub(reserved);
     if available < 4 {
-        return;
+        return area.x.saturating_add(1);
     }
     let label = format!(
         " {} ",
         text::truncate_to_width(title, usize::from(available.saturating_sub(2)))
     );
+    let label_w = u16::try_from(label.width()).unwrap_or(u16::MAX);
     let style = title_style(kind);
+    let x = area.x.saturating_add(1);
     buf.set_stringn(
-        area.x.saturating_add(1),
+        x,
         area.y.saturating_add(1),
         &label,
         usize::from(available),
         style,
     );
+    x.saturating_add(label_w)
 }
 
 /// 命中右上角关闭按钮（`[✕]` 与全局 toast 同款、支持无标题 `area.y` 与有标题 `area.y + 1`）。
@@ -199,7 +217,7 @@ pub(crate) fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
     if area.width < 10 {
         return false;
     }
-    let x = area.right().saturating_sub(4);
+    let x = area.right().saturating_sub(5);
     let y_top = Rect::new(x, area.y, 3, 1);
     let y_bar = Rect::new(x, area.y.saturating_add(1), 3, 1);
     y_top.contains((column, row).into())

@@ -108,6 +108,13 @@ fn titled_toast_keeps_side_borders_on_the_title_row() {
         .draw(|frame| crate::ui::render(frame, &state, &config))
         .expect("draw");
     let buffer = terminal.backend().buffer();
+    let title_row: String = (area.x..area.right())
+        .map(|x| buffer[(x, area.y + 1)].symbol())
+        .collect();
+    assert!(
+        title_row.contains('─'),
+        "标题后以 ─ 连通到关闭按钮: {title_row}"
+    );
     assert_eq!(buffer[(area.x, area.y + 1)].symbol(), "│");
     assert_eq!(buffer[(area.right() - 1, area.y + 1)].symbol(), "│");
     assert_eq!(

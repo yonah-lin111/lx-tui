@@ -317,7 +317,7 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
     Some(layout.rect)
 }
 
-/// 绘制有边框命令面板的顶栏框（`│ Title / Tabs ... right_title │` + 下方 `├───┤` 分割线）。
+/// 绘制有边框命令面板的顶栏（`│ Title / Tabs ─── right_title │`）。
 fn render_bordered_header(
     buf: &mut Buffer,
     layout: &PanelLayout,
@@ -351,6 +351,7 @@ fn render_bordered_header(
             left_end = x.saturating_add(draw_w);
         }
     }
+    let mut rule_to = rect.right().saturating_sub(2);
     if let Some(right_title) = view.right_title {
         let right_edge = rect.right().saturating_sub(2);
         let min_x = left_end.saturating_add(1);
@@ -361,9 +362,18 @@ fn render_bordered_header(
             if text_w <= right_edge.saturating_sub(min_x) {
                 let x = right_edge.saturating_sub(text_w);
                 buf.set_stringn(x, header_y, &clipped, usize::from(text_w), style::muted());
+                rule_to = x.saturating_sub(1);
             }
         }
     }
+    crate::ui::widgets::modal::paint_title_rule(
+        buf,
+        rect,
+        header_y,
+        left_end.saturating_add(1).max(rect.x.saturating_add(2)),
+        rule_to,
+        style::muted(),
+    );
 }
 
 /// 绘制有边框命令面板的底栏行（`│ footer │`，左侧边框与右侧留白保留，无分割线）。
