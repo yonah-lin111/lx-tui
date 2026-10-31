@@ -171,52 +171,21 @@ pub fn parse_worktree_line(line: &str) -> Option<&str> {
 
 /// 解析 `line` 起始的模板块范围；非起始行返回 None，未闭合时 `end` 为文末行。
 pub fn parse_template_block_at_line(text: &str, line: usize) -> Option<TemplateBlockRange> {
-    let lines: Vec<&str> = text.split('\n').collect();
-    parse_template_start_line(lines.get(line)?)?;
-    for (index, content) in lines.iter().enumerate().skip(line + 1) {
-        if parse_template_end_line(content).is_some() {
-            return Some(TemplateBlockRange {
-                start: line,
-                end: index,
-            });
-        }
-    }
-    Some(TemplateBlockRange {
-        start: line,
-        end: lines.len().saturating_sub(1),
-    })
-}
-
-/// offset 是否位于模板块内；用于斜杠命令触发抑制。
-pub fn inside_template_block(text: &str, offset: usize) -> bool {
-    let mut inside = false;
-    let mut position = 0;
-    for line in text.split('\n') {
-        if position >= offset {
-            break;
-        }
-        if parse_template_end_line(line).is_some() {
-            inside = false;
-        } else if parse_template_start_line(line).is_some() {
-            inside = true;
-        }
-        position += line.len() + 1;
-    }
-    inside
+    super::blocks::block_scan(text)
+        .spans
+        .into_iter()
+        .find(|span| span.kind == super::blocks::BlockKind::Template && span.start == line)
+        .map(|span| TemplateBlockRange {
+            start: span.start,
+            end: span.end,
+        })
 }
 
 /// offset 所在模板块的开始行；不在块内返回 None（含起止行自身）。
 pub fn template_block_start_at(text: &str, offset: usize) -> Option<usize> {
-    let bounded = offset.min(text.len());
-    if !text.is_char_boundary(bounded) {
-        return None;
-    }
-    let line = text[..bounded].matches('\n').count();
-    let infos = template_line_infos(text);
-    infos.get(line).copied().flatten()?;
-    (0..=line)
-        .rev()
-        .find(|index| infos[*index].is_some_and(|info| info.role == TemplateLineRole::Start))
+    super::blocks::block_at(text, offset)
+        .filter(|info| info.kind == super::blocks::BlockKind::Template)
+        .map(|info| info.start)
 }
 
 /// 模板块行的渲染角色。
@@ -236,95 +205,34 @@ pub struct TemplateLineInfo {
     pub separator: bool,
 }
 
-/// 逐行扫描模板块归属；不在块内的行为 None，未闭合块延伸至文末。
+/// 逐行扫描模板块归属（由 `block_scan` 投影）；不在块内的行为 None，未闭合块延伸至文末。
 pub fn template_line_infos(text: &str) -> Vec<Option<TemplateLineInfo>> {
-    let lines: Vec<&str> = text.split('\n').collect();
-    let mut infos = vec![None; lines.len()];
-    let mut start: Option<usize> = None;
-    for (index, content) in lines.iter().enumerate() {
-        if start.is_some() {
-            if let Some(end) = parse_template_end_line(content) {
-                let from = start.take().unwrap_or(index);
-                for (line, info) in infos.iter_mut().enumerate().take(index + 1).skip(from) {
-                    *info = Some(TemplateLineInfo {
-                        role: if line == from {
-                            TemplateLineRole::Start
-                        } else if line == index {
-                            TemplateLineRole::End
-                        } else {
-                            TemplateLineRole::Middle
-                        },
-                        status: end.status,
-                        separator: false,
-                    });
-                }
-            }
-        } else if parse_template_start_line(content).is_some() {
-            start = Some(index);
-        }
-    }
-    if let Some(from) = start {
-        for (line, info) in infos.iter_mut().enumerate().skip(from) {
-            *info = Some(TemplateLineInfo {
-                role: if line == from {
-                    TemplateLineRole::Start
-                } else {
-                    TemplateLineRole::Middle
-                },
-                status: TemplateStatus::Todo,
-                separator: false,
-            });
-        }
-    }
-    mark_separator_rows(&lines, &mut infos);
-    infos
-}
-
-/// 标记结构分割行：块内空行，且紧邻标题行之下或 `{wt:}` 绑定行之上。
-fn mark_separator_rows(lines: &[&str], infos: &mut [Option<TemplateLineInfo>]) {
-    for index in 0..lines.len() {
-        let Some(info) = infos[index] else {
-            continue;
-        };
-        if info.role != TemplateLineRole::Middle || !lines[index].trim().is_empty() {
-            continue;
-        }
-        let after_title = index > 0
-            && infos.get(index - 1).is_some_and(Option::is_some)
-            && is_title_line(lines[index - 1]);
-        let before_binding = infos.get(index + 1).is_some_and(Option::is_some)
-            && lines
-                .get(index + 1)
-                .is_some_and(|next| parse_worktree_line(next).is_some());
-        if (after_title || before_binding)
-            && let Some(Some(slot)) = infos.get_mut(index)
-        {
-            slot.separator = true;
-        }
-    }
+    super::blocks::block_scan(text)
+        .infos
+        .into_iter()
+        .map(|info| {
+            let info = info.filter(|info| info.kind == super::blocks::BlockKind::Template)?;
+            let role = match info.role {
+                super::blocks::BlockRole::Start => TemplateLineRole::Start,
+                super::blocks::BlockRole::Middle => TemplateLineRole::Middle,
+                super::blocks::BlockRole::End => TemplateLineRole::End,
+            };
+            Some(TemplateLineInfo {
+                role,
+                status: info.status,
+                separator: info.separator,
+            })
+        })
+        .collect()
 }
 
 /// `line` 是否位于模板块内（含起止行）；用于渲染与光标/鼠标坐标映射。
 pub fn is_template_block_line(text: &str, line: usize) -> bool {
-    let mut inside = false;
-    let mut lines = 0;
-    for (index, content) in text.split('\n').enumerate() {
-        lines = index + 1;
-        if index > line {
-            break;
-        }
-        if inside {
-            if index == line {
-                return true;
-            }
-            if parse_template_end_line(content).is_some() {
-                inside = false;
-            }
-        } else if parse_template_start_line(content).is_some() {
-            inside = true;
-        }
-    }
-    inside && line < lines
+    template_line_infos(text)
+        .get(line)
+        .copied()
+        .flatten()
+        .is_some()
 }
 
 /// 循环切换模板块结束行状态并保留 command、id 与 wt；非结束行返回 None。
@@ -440,12 +348,11 @@ pub fn ensure_bottom_gap(body: String) -> String {
 }
 
 /// 复制用正文（对齐 lx-agent 的复制语义，不修改原文）：
-/// 剔除标题占位行（`--start` 下一行）、`{wt:}` 绑定行、`+++` 补充子块（含内部内容）、
-/// 保留 `%%%` 记录子块内容但剔除其起止标记行、剔除 `//` 注释行，最后清理未填写空项。
+/// 剔除标题占位行（`--start` 下一行）、`{wt:}` 绑定行，
+/// 保留 `%%%` / `+++ log` 记录子块内容但剔除其起止标记行、剔除 `//` 注释行，最后清理未填写空项。
 pub fn copy_template_content(text: &str) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut kept: Vec<&str> = Vec::new();
-    let mut inside_supple = false;
     for (index, line) in lines.iter().enumerate() {
         if index == 0 && is_title_line(line) {
             continue;
@@ -453,19 +360,7 @@ pub fn copy_template_content(text: &str) -> String {
         if parse_worktree_line(line).is_some() {
             continue;
         }
-        if let Some(kind) = copy_subblock_start(line) {
-            if kind == CopySubblock::Supple {
-                inside_supple = true;
-            }
-            continue;
-        }
-        if inside_supple {
-            if subblock_end(line) {
-                inside_supple = false;
-            }
-            continue;
-        }
-        if subblock_end(line) || is_comment_line(line) {
+        if is_log_subblock_start(line) || subblock_end(line) || is_comment_line(line) {
             continue;
         }
         kept.push(line);
@@ -560,26 +455,19 @@ pub fn edit_touches_title_line(text: &str, from: usize, to: usize) -> bool {
     false
 }
 
-/// 复制语义下的子块类型：`+++` 补充块整体剔除；`%%%` 记录块保留内容、剔除标记。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CopySubblock {
-    Supple,
-    Log,
-}
-
-/// 子块起始行类型；`+++ log`/`+++ logTemplate` 为旧版记录块，按 log 处理（对齐 lx-agent）。
-fn copy_subblock_start(line: &str) -> Option<CopySubblock> {
+/// 记录子块起始行：`%%% <name> --start` 或旧版 `+++ log` / `+++ logTemplate --start`（保留内容、剔除标记）。
+fn is_log_subblock_start(line: &str) -> bool {
     let mut tokens = line.split_whitespace();
-    let marker = tokens.next()?;
-    let name = tokens.next()?;
+    let Some(marker) = tokens.next() else {
+        return false;
+    };
+    let Some(name) = tokens.next() else {
+        return false;
+    };
     if !tokens.any(|token| token == "--start") {
-        return None;
+        return false;
     }
-    match (marker, name) {
-        ("%%%", _) | ("+++", "log" | "logTemplate") => Some(CopySubblock::Log),
-        ("+++", _) => Some(CopySubblock::Supple),
-        _ => None,
-    }
+    matches!((marker, name), ("%%%", _) | ("+++", "log" | "logTemplate"))
 }
 
 /// `//` 注释行（允许前置缩进）。

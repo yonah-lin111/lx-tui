@@ -1447,7 +1447,7 @@ fn slash_panel_opens_filters_and_closes_off_line_end() {
     let mut prompt = prompt(40, 8);
     type_text(&mut prompt, "/");
     let panel = prompt.slash_panel().expect("panel on bare slash");
-    assert_eq!(panel.items().len(), 5, "5 个内置模板");
+    assert_eq!(panel.items().len(), 6, "5 个内置模板 + supplement");
     assert_eq!(panel.trigger().query, "");
 
     type_text(&mut prompt, "ref");
@@ -1581,9 +1581,9 @@ fn copy_text_at_cursor_extracts_supple_block_body() {
     let mut editor = prompt(60, 20);
     type_text(
         &mut editor,
-        "&&& x --start\n+++ supplement --start\n{title: Review}\n\n- keep me\n+++ supplement --end\n&&& x --end",
+        "&&& x --start\n&&& x --end\n\n+++ supplement --start\n{title: Review}\n\n- keep me\n+++ supplement --end",
     );
-    // 光标在最内层 `+++` 块内：复制其正文（剔除标题占位行）。
+    // 光标在顶层 `+++` 块内：复制其正文（剔除标题占位行）。
     let offset = editor.text().find("keep me").expect("body line");
     editor.set_cursor_offset_for_test(offset);
     assert_eq!(
@@ -1592,7 +1592,7 @@ fn copy_text_at_cursor_extracts_supple_block_body() {
         "光标在 `+++` 内复制补充块正文"
     );
     assert_eq!(
-        editor.supple_block_body(1).as_deref(),
+        editor.supple_block_body(3).as_deref(),
         Some("{title: Review}\n\n- keep me"),
         "补充块正文含标题行（复制语义再剔除）"
     );
@@ -1835,13 +1835,10 @@ fn template_scoped_markdown_only_inside_blocks_and_block_command_only_outside() 
     );
     assert!(!names.contains(&"add"), "builtins hidden inside: {names:?}");
 
-    // 块外（已闭合块之后）：显示内置与模板块命令，隐藏 template 作用域 Markdown。
+    // 块外（尚无 &&&）：显示内置与模板块命令，隐藏 template 作用域 Markdown。
     let mut outside = prompt(80, 12);
     outside.set_custom_commands(custom_items());
-    type_text(
-        &mut outside,
-        "&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end\n/",
-    );
+    type_text(&mut outside, "/");
     let names: Vec<&str> = outside
         .slash_panel()
         .expect("panel outside block")
@@ -1855,6 +1852,25 @@ fn template_scoped_markdown_only_inside_blocks_and_block_command_only_outside() 
         !names.contains(&"notes"),
         "template markdown hidden outside: {names:?}"
     );
+
+    // 块外但已有 &&&：内置与模板块命令全部隐藏，仅保留 supplement 与全局 Markdown。
+    let mut after_template = prompt(80, 12);
+    after_template.set_custom_commands(custom_items());
+    type_text(
+        &mut after_template,
+        "&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end\n/",
+    );
+    let names: Vec<&str> = after_template
+        .slash_panel()
+        .expect("panel after template")
+        .items()
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
+    assert!(!names.contains(&"triage"), "{names:?}");
+    assert!(!names.contains(&"add"), "{names:?}");
+    assert!(names.contains(&"supplement"), "{names:?}");
+    assert!(names.contains(&"lint"), "{names:?}");
 }
 
 #[test]
@@ -2829,7 +2845,9 @@ fn backspace_removes_short_ref_as_one_block() {
 #[test]
 fn slash_supplement_offered_inside_template_and_inserts_subblock() {
     let mut prompt = prompt(60, 12);
-    type_text(&mut prompt, "&&& addTemplate --start {title: }\n");
+    prompt.set_text("&&& addTemplate --start {title: }\n\n&&& addTemplate --end");
+    let inside = prompt.text().find("\n&&& addTemplate --end").unwrap();
+    prompt.set_cursor_offset_for_test(inside);
     type_text(&mut prompt, "/supplement");
     let panel = prompt
         .slash_panel()
@@ -2860,22 +2878,23 @@ fn supple_clean_and_delete_are_single_steps() {
     let text = concat!(
         "&&& x --start\n",
         "{title: }\n",
+        "&&& x --end\n",
+        "\n",
         "+++ supplement --start\n",
         "- Reference: \n",
         "- Requirements: \n",
         "  - \n",
-        "+++ supplement --end\n",
-        "&&& x --end",
+        "+++ supplement --end",
     );
     let mut prompt = prompt(60, 20);
     prompt.set_text(text);
-    assert!(prompt.clean_supple_block(2));
+    assert!(prompt.clean_supple_block(4));
     assert!(!prompt.text().contains("- Reference:"));
     assert!(prompt.text().contains("+++ supplement --end"));
     prompt.undo();
     assert_eq!(prompt.text(), text, "clean is one undo step");
 
-    assert!(prompt.delete_supple_block(2));
+    assert!(prompt.delete_supple_block(4));
     assert!(!prompt.text().contains("+++ supplement"));
     assert!(prompt.text().contains("&&& x --end"));
     prompt.undo();
@@ -2886,7 +2905,7 @@ fn supple_clean_and_delete_are_single_steps() {
 fn slash_panel_offers_git_worktree_inside_supple_block() {
     let mut editor = prompt(60, 12);
     editor.set_text(
-        "&&& x --start\n{title: }\n+++ supplement --start\nbody\n/w\n+++ supplement --end\n&&& x --end",
+        "&&& x --start\n{title: }\n&&& x --end\n\n+++ supplement --start\nbody\n/w\n+++ supplement --end",
     );
     editor.set_worktree_repo(Some(PathBuf::from("/repo")));
     let at = editor.text().find("/w").unwrap() + 2;
@@ -2934,10 +2953,10 @@ fn line_start(text: &str, line: usize) -> usize {
 #[test]
 fn enter_focus_prefers_cursor_block() {
     let mut editor = focus_prompt(THREE_BLOCKS);
-    let cursor = editor.text().find("body-b").expect("body") + 2;
+    let cursor = editor.text().find("body-a").expect("body") + 2;
     editor.set_cursor_offset_for_test(cursor);
     assert!(editor.enter_block_focus());
-    assert_eq!(editor.focus_block, Some(6), "光标在块 B 内");
+    assert_eq!(editor.focus_block, Some(1), "光标在块 A 内");
     assert_eq!(editor.cursor(), cursor, "进入时保留块内光标");
 }
 
@@ -2967,38 +2986,8 @@ fn adjacent_block_clamps_at_ends() {
     assert!(editor.enter_block_focus());
     assert!(!editor.focus_adjacent_block(-1), "首块再往前钳制");
     assert_eq!(editor.focus_block, Some(1));
-    assert!(editor.focus_adjacent_block(1));
-    assert_eq!(editor.focus_block, Some(6));
-    assert!(!editor.focus_adjacent_block(1), "末块再往后钳制");
-    assert_eq!(editor.focus_block, Some(6));
-}
-
-#[test]
-fn adjacent_block_skips_supple_and_fence() {
-    let text = "&&& a --start\nbody-a\n+++ supple --start\nsupple\n+++ supple --end\n\
-                ```\n&&& fake --start\n```\n&&& a --end\n\
-                &&& b --start\nbody-b\n&&& b --end";
-    let mut editor = focus_prompt(text);
-    let cursor = editor.text().find("body-a").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert!(editor.focus_adjacent_block(1));
-    assert_eq!(
-        editor.focus_block,
-        Some(9),
-        "只停在顶层 &&&，跳过 +++ 与围栏"
-    );
-}
-
-#[test]
-fn adjacent_block_includes_unclosed() {
-    let text = "&&& a --start\nbody-a\n&&& a --end\n&&& b --start\nbody-b";
-    let mut editor = focus_prompt(text);
-    let cursor = editor.text().find("body-a").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert!(editor.focus_adjacent_block(1));
-    assert_eq!(editor.focus_block, Some(3), "末尾未闭合块也算一块");
+    assert!(!editor.focus_adjacent_block(1), "单 &&& 规则下末块同样钳制");
+    assert_eq!(editor.focus_block, Some(1));
 }
 
 #[test]
@@ -3072,17 +3061,6 @@ fn delete_current_block_focuses_next() {
 }
 
 #[test]
-fn delete_current_block_focuses_previous() {
-    let mut editor = focus_prompt(THREE_BLOCKS);
-    let cursor = editor.text().find("body-b").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert!(editor.delete_template_block(6));
-    editor.focus_after_block_removed(6);
-    assert_eq!(editor.focus_block, Some(1), "末块删除后回到上一块");
-}
-
-#[test]
 fn delete_last_block_exits_focus() {
     let mut editor = focus_prompt("&&& only --start\nbody\n&&& only --end");
     let cursor = editor.text().find("body").expect("body") + 1;
@@ -3126,10 +3104,10 @@ fn edit_inside_block_keeps_focus_and_outside_exits() {
 fn focus_relocates_when_recorded_line_invalid() {
     let mut editor = focus_prompt(THREE_BLOCKS);
     editor.focus_block = Some(999);
-    let cursor = editor.text().find("body-b").expect("body") + 1;
+    let cursor = editor.text().find("body-a").expect("body") + 1;
     editor.set_cursor_offset_for_test(cursor);
     editor.reconcile_block_focus();
-    assert_eq!(editor.focus_block, Some(6), "失效行按光标所在块重定位");
+    assert_eq!(editor.focus_block, Some(1), "失效行按光标所在块重定位");
 }
 
 #[test]

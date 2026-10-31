@@ -390,6 +390,29 @@ impl Prompt {
         }
         self.scroll = self.scroll.min(self.max_scroll());
     }
+    /// 让逻辑行区间 `[start_line, end_line]` 尽量完整可见；块高于视口时保证起始行可见。
+    pub(super) fn scroll_lines_into_view(&mut self, start_line: usize, end_line: usize) {
+        let rows = self.visual_rows();
+        if rows.is_empty() {
+            self.scroll = 0;
+            return;
+        }
+        let Some(first) = rows.iter().position(|row| row.line >= start_line) else {
+            return;
+        };
+        let last = rows
+            .iter()
+            .rposition(|row| row.line <= end_line)
+            .unwrap_or(first);
+        let height = usize::from(self.height.max(1));
+        let span = last.saturating_sub(first) + 1;
+        if span >= height || first < self.scroll {
+            self.scroll = first;
+        } else if last >= self.scroll + height {
+            self.scroll = last + 1 - height;
+        }
+        self.scroll = self.scroll.min(self.max_scroll());
+    }
 }
 
 /// 显示列 → 行内字节偏移（宽字符取整到字符边界）。

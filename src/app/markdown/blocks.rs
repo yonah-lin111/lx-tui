@@ -1,7 +1,7 @@
-//! 统一块扫描：一次性识别代码围栏与顶层 `&&&`，再识别 `&&&` 内部的 `+++`。
+//! 统一块扫描：一次性识别代码围栏，再识别顶层 `&&&`（仅首个）与顶层 `+++`（平级）。
 //!
-//! 纯函数、无 IO。行角色用 `BlockKind` + `Start/Middle/End` 表示；`&&&` 内的 `+++`
-//! 覆盖父块角色。未闭合块延伸到其合法父范围末行。
+//! 纯函数、无 IO。行角色用 `BlockKind` + `Start/Middle/End` 表示；块之间互不嵌套。
+//! 未闭合块延伸到文末。
 
 use super::supple::{parse_supple_end_line, parse_supple_start_line};
 use super::template::{
@@ -9,7 +9,7 @@ use super::template::{
     parse_worktree_line,
 };
 
-/// 块类型：任务块 `&&&`、补充子块 `+++`。
+/// 块类型：任务块 `&&&`、补充块 `+++`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockKind {
     Template,
@@ -33,7 +33,7 @@ pub struct BlockLineInfo {
     pub end: usize,
     /// `&&&` 状态；`+++` 恒为 `Todo`。
     pub status: TemplateStatus,
-    /// `&&&` 结构分割行（标题下或绑定行上的空行）；其余块恒为 false。
+    /// 块结构分割行（标题下或绑定行上的空行）。
     pub separator: bool,
     /// 所属块是否已闭合。
     pub closed: bool,
@@ -102,10 +102,17 @@ pub fn template_counts(text: &str) -> TemplateCounts {
 pub enum BlockContext {
     /// 普通正文（不在任何块内）。
     Normal,
-    /// `&&&` 任务块内（不含 `+++`）。
+    /// `&&&` 任务块内。
     Template,
-    /// `+++` 补充子块内。
+    /// `+++` 补充块内。
     Supple,
+}
+
+/// 当前打开的块：类型与起始行。
+#[derive(Clone, Copy)]
+enum Open {
+    Template(usize),
+    Supple(usize),
 }
 
 /// 扫描全文，返回每行块归属与块范围。
@@ -114,8 +121,9 @@ pub fn block_scan(text: &str) -> BlockScan {
     let infos = vec![None; lines.len()];
     let mut spans: Vec<BlockSpan> = Vec::new();
     let mut fence: Option<(u8, usize)> = None;
-    let mut template: Option<usize> = None;
-    let mut supple: Option<usize> = None;
+    let mut open: Option<Open> = None;
+    // 已出现过 `&&&`（含未闭合）：之后的 `&&&` 起始行按普通文本处理（一页一个任务块）。
+    let mut template_seen = false;
 
     for (index, line) in lines.iter().enumerate() {
         if let Some((marker, length)) = fence {
@@ -124,58 +132,63 @@ pub fn block_scan(text: &str) -> BlockScan {
             }
             continue;
         }
-        if let Some(open) = fence_delimiter(line) {
-            fence = Some(open);
+        if let Some(delim) = fence_delimiter(line) {
+            fence = Some(delim);
             continue;
         }
-        if let Some(start) = template {
-            if let Some(end) = parse_template_end_line(line) {
-                spans.push(BlockSpan {
-                    kind: BlockKind::Template,
-                    start,
-                    end: index,
-                    status: end.status,
-                    closed: true,
-                });
-                template = None;
-                supple = None;
-            } else if let Some(s_start) = supple {
+        match open {
+            Some(Open::Template(start)) => {
+                if let Some(end) = parse_template_end_line(line) {
+                    spans.push(BlockSpan {
+                        kind: BlockKind::Template,
+                        start,
+                        end: index,
+                        status: end.status,
+                        closed: true,
+                    });
+                    open = None;
+                }
+            }
+            Some(Open::Supple(start)) => {
                 if parse_supple_end_line(line).is_some() {
                     spans.push(BlockSpan {
                         kind: BlockKind::Supple,
-                        start: s_start,
+                        start,
                         end: index,
                         status: TemplateStatus::Todo,
                         closed: true,
                     });
-                    supple = None;
+                    open = None;
                 }
-            } else if parse_supple_start_line(line).is_some() {
-                supple = Some(index);
             }
-        } else if parse_template_start_line(line).is_some() {
-            template = Some(index);
+            None => {
+                if !template_seen && parse_template_start_line(line).is_some() {
+                    template_seen = true;
+                    open = Some(Open::Template(index));
+                } else if parse_supple_start_line(line).is_some() {
+                    open = Some(Open::Supple(index));
+                }
+            }
         }
     }
 
     let last = lines.len().saturating_sub(1);
-    if let Some(start) = template {
-        spans.push(BlockSpan {
+    match open {
+        Some(Open::Template(start)) => spans.push(BlockSpan {
             kind: BlockKind::Template,
             start,
             end: last,
             status: TemplateStatus::Todo,
             closed: false,
-        });
-    }
-    if let Some(start) = supple {
-        spans.push(BlockSpan {
+        }),
+        Some(Open::Supple(start)) => spans.push(BlockSpan {
             kind: BlockKind::Supple,
             start,
             end: last,
             status: TemplateStatus::Todo,
             closed: false,
-        });
+        }),
+        None => {}
     }
 
     let mut scan = BlockScan { infos, spans };
@@ -189,37 +202,29 @@ pub fn block_line_infos(text: &str) -> Vec<Option<BlockLineInfo>> {
     block_scan(text).infos
 }
 
-/// 按固定优先级填充行归属：`&&&` 最外，`+++` 覆盖。
+/// 填充行归属：块之间互不重叠，按文档顺序一轮遍历。
 fn fill_roles(scan: &mut BlockScan) {
-    for kind in [BlockKind::Template, BlockKind::Supple] {
-        let spans: Vec<BlockSpan> = scan
-            .spans
-            .iter()
-            .copied()
-            .filter(|span| span.kind == kind)
-            .collect();
-        for span in spans {
-            for line in span.start..=span.end {
-                let Some(slot) = scan.infos.get_mut(line) else {
-                    continue;
-                };
-                let role = if line == span.start {
-                    BlockRole::Start
-                } else if span.closed && line == span.end {
-                    BlockRole::End
-                } else {
-                    BlockRole::Middle
-                };
-                *slot = Some(BlockLineInfo {
-                    kind,
-                    role,
-                    start: span.start,
-                    end: span.end,
-                    status: span.status,
-                    separator: false,
-                    closed: span.closed,
-                });
-            }
+    for span in &scan.spans {
+        for line in span.start..=span.end {
+            let Some(slot) = scan.infos.get_mut(line) else {
+                continue;
+            };
+            let role = if line == span.start {
+                BlockRole::Start
+            } else if span.closed && line == span.end {
+                BlockRole::End
+            } else {
+                BlockRole::Middle
+            };
+            *slot = Some(BlockLineInfo {
+                kind: span.kind,
+                role,
+                start: span.start,
+                end: span.end,
+                status: span.status,
+                separator: false,
+                closed: span.closed,
+            });
         }
     }
 }
@@ -305,7 +310,7 @@ pub fn supple_block_start_at(text: &str, offset: usize) -> Option<usize> {
     (span.kind == BlockKind::Supple).then_some(span.start)
 }
 
-/// 全部块范围（文档顺序，按结束行）。
+/// 全部块范围（文档顺序）。
 pub fn block_spans(text: &str) -> Vec<BlockSpan> {
     block_scan(text).spans
 }
@@ -378,3 +383,6 @@ fn fence_delimiter(line: &str) -> Option<(u8, usize)> {
     let length = trimmed.bytes().take_while(|byte| *byte == marker).count();
     (length >= 3).then_some((marker, length))
 }
+
+#[cfg(test)]
+mod tests;

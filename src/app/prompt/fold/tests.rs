@@ -3,7 +3,7 @@
 use super::*;
 use crate::layout::PaneId;
 
-const TASK: &str = "&&& x --start\n+++ supplement --start\n{title: Review}\nbody\n+++ supplement --end\n&&& x --end";
+const TASK: &str = "pre\n+++ supplement --start\n{title: Review}\nbody\n+++ supplement --end\npost";
 
 fn prompt(text: &str) -> Prompt {
     let mut prompt = Prompt::new(PaneId::alloc());
@@ -53,19 +53,15 @@ fn enter_on_folded_line_breaks_after_block() {
     let (_, end) = block_start_end(&text);
     prompt.set_cursor_offset_for_test(end);
     prompt.insert_char('\n');
-    assert!(
-        prompt
-            .text()
-            .contains("+++ supplement --end\n\n&&& x --end")
-    );
+    assert!(prompt.text().contains("+++ supplement --end\n\npost"));
     let cursor = prompt.cursor();
-    assert!(prompt.text()[cursor..].starts_with("\n&&& x --end"));
+    assert!(prompt.text()[cursor..].starts_with("\npost"));
     assert_eq!(prompt.folded_blocks().len(), 1);
 }
 
 #[test]
 fn enter_on_folded_last_line_appends_after_block() {
-    let text = "&&& x --start\n+++ supplement --start\nbody\n+++ supplement --end";
+    let text = "pre\n+++ supplement --start\nbody\n+++ supplement --end";
     let mut prompt = prompt(text);
     let (_, end) = block_start_end(text);
     prompt.set_cursor_offset_for_test(end);
@@ -81,11 +77,7 @@ fn enter_mid_header_goes_after_block() {
     let (start, _) = block_start_end(&text);
     prompt.set_cursor_offset_for_test(start + 5);
     prompt.insert_char('\n');
-    assert!(
-        prompt
-            .text()
-            .contains("+++ supplement --end\n\n&&& x --end")
-    );
+    assert!(prompt.text().contains("+++ supplement --end\n\npost"));
     assert!(
         prompt
             .text()
@@ -101,11 +93,7 @@ fn enter_at_header_start_inserts_before_block() {
     let (start, _) = block_start_end(&text);
     prompt.set_cursor_offset_for_test(start);
     prompt.insert_char('\n');
-    assert!(
-        prompt
-            .text()
-            .contains("&&& x --start\n\n+++ supplement --start")
-    );
+    assert!(prompt.text().contains("pre\n\n+++ supplement --start"));
 }
 
 #[test]
@@ -127,7 +115,7 @@ fn navigation_skips_hidden_lines() {
     let (start, _) = block_start_end(&text);
     let title = offset_of(&text, "{title: Review}");
     let title_end = title + "{title: Review}".len();
-    let after = offset_of(&text, "&&& x --end");
+    let after = offset_of(&text, "post");
     prompt.set_cursor_offset_for_test(start);
     prompt.move_down();
     assert_eq!(prompt.cursor(), title, "折叠后下移落到可见标题行");
@@ -142,8 +130,8 @@ fn navigation_skips_hidden_lines() {
 fn delete_across_folded_block_is_rejected() {
     let mut prompt = prompt(TASK);
     let text = prompt.text().to_string();
-    let at = offset_of(&text, "x --start") + 2;
-    let after = offset_of(&text, "&&& x --end") + 3;
+    let at = 1;
+    let after = offset_of(&text, "post") + 2;
     assert!(!prompt.replace_range(at, after, ""));
     assert_eq!(prompt.text(), text);
     assert!(prompt.take_fold_blocked());
@@ -189,16 +177,16 @@ fn selection_text_skips_folded_content() {
     let copied = prompt.selection_text((0, 0), (3, 5));
     assert_eq!(
         copied.as_deref(),
-        Some("&&& x --start\n+++ supplement --start\n{title: Review}\n&&& ")
+        Some("pre\n+++ supplement --start\n{title: Review}\npost")
     );
 }
 
 #[test]
 fn unclosed_supplement_stays_visible() {
-    let text = "&&& x --start\n+++ supplement --start\nbody\n&&& x --end";
+    let text = "pre\n+++ supplement --start\nbody";
     let prompt = prompt(text);
     assert!(prompt.folded_blocks().is_empty());
-    assert_eq!(prompt.visual_rows().len(), 4);
+    assert_eq!(prompt.visual_rows().len(), 3);
 }
 
 #[test]

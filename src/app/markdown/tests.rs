@@ -634,11 +634,12 @@ fn slash_trigger_suppressed_in_fence_but_allowed_inside_template_blocks() {
     );
 }
 
-/// 空上下文：块外、无 git。
+/// 空上下文：块外、无 git、无模板块。
 fn outside_context() -> SlashContext {
     SlashContext {
         context: BlockContext::Normal,
         worktree_available: false,
+        template_present: false,
     }
 }
 
@@ -652,7 +653,7 @@ fn filter_names(query: &str) -> Vec<String> {
 
 #[test]
 fn slash_filter_ranks_short_and_long_aliases() {
-    assert_eq!(filter_names("").len(), 5, "5 个内置模板");
+    assert_eq!(filter_names("").len(), 6, "5 个内置模板 + supplement");
     assert_eq!(filter_names("add"), vec!["add"]);
     assert_eq!(filter_names("addt"), vec!["add"]);
     assert_eq!(filter_names("ADD"), vec!["add"]);
@@ -670,11 +671,12 @@ fn slash_filter_matches_subsequence_like_mentions() {
     assert_eq!(filter_names("cmm"), vec!["common"]);
     assert_eq!(filter_names("cmn"), vec!["common"]);
     assert_eq!(filter_names("rf"), vec!["refactor"]);
-    assert_eq!(filter_names("st"), vec!["style"]);
+    assert_eq!(filter_names("st"), vec!["style", "supplement"]);
+    assert_eq!(filter_names("sty"), vec!["style"]);
     assert_eq!(filter_names("common"), vec!["common"], "精确短名优先");
 }
 
-/// 自定义命令构造：Markdown 与模板块。
+/// 自定义命令构造：Markdown、模板块与补充块。
 fn custom_items() -> Vec<SlashItem> {
     vec![
         SlashItem::custom_markdown(
@@ -698,32 +700,67 @@ fn custom_items() -> Vec<SlashItem> {
             "body",
             "triage the bug",
         ),
+        SlashItem::custom_supple(
+            "extra",
+            CommandSource::User,
+            Some("Extra"),
+            "supple body",
+            "extra supplement",
+        ),
     ]
 }
 
 #[test]
 fn slash_filter_scopes_custom_commands_by_block_context() {
-    // 块外：global Markdown + 模板块命令；template 作用域隐藏。
+    // 块外（尚无 &&&）：global Markdown + 模板块命令 + 补充块命令；template 作用域隐藏。
     let outside = slash_filter(&custom_items(), outside_context(), "");
     let names: Vec<&str> = outside.iter().map(|item| item.name.as_str()).collect();
     assert!(names.contains(&"lint"), "{names:?}");
     assert!(names.contains(&"triage"), "{names:?}");
+    assert!(names.contains(&"extra"), "{names:?}");
     assert!(
         !names.contains(&"notes"),
         "template markdown hidden outside: {names:?}"
     );
-    // 块内：内置模板隐藏，template Markdown 出现，模板块命令隐藏。
+    // 块外但本页已有 &&&：内置模板与自定义 AgentBlock 隐藏，/supplement 与 SuppleBlock 保留。
+    let with_template = slash_filter(
+        &custom_items(),
+        SlashContext {
+            context: BlockContext::Normal,
+            worktree_available: false,
+            template_present: true,
+        },
+        "",
+    );
+    let names: Vec<&str> = with_template
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
+    assert!(
+        !names.contains(&"add"),
+        "template_present 时隐藏内置模板: {names:?}"
+    );
+    assert!(
+        !names.contains(&"triage"),
+        "template_present 时隐藏 AgentBlock: {names:?}"
+    );
+    assert!(names.contains(&"supplement"), "{names:?}");
+    assert!(names.contains(&"extra"), "{names:?}");
+    assert!(names.contains(&"lint"), "{names:?}");
+    // 块内：内置模板隐藏，template Markdown 出现，模板块命令隐藏，补充块命令保留。
     let inside = slash_filter(
         &custom_items(),
         SlashContext {
             context: BlockContext::Template,
             worktree_available: false,
+            template_present: true,
         },
         "",
     );
     let names: Vec<&str> = inside.iter().map(|item| item.name.as_str()).collect();
     assert!(!names.contains(&"add"), "builtins hidden inside: {names:?}");
     assert!(names.contains(&"notes"), "{names:?}");
+    assert!(names.contains(&"extra"), "{names:?}");
     assert!(
         !names.contains(&"triage"),
         "block command hidden inside: {names:?}"
@@ -737,6 +774,7 @@ fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
         SlashContext {
             context: BlockContext::Template,
             worktree_available: true,
+            template_present: true,
         },
         "work",
     );
@@ -747,6 +785,7 @@ fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
         SlashContext {
             context: BlockContext::Template,
             worktree_available: false,
+            template_present: true,
         },
         "work",
     );
@@ -756,6 +795,7 @@ fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
         SlashContext {
             context: BlockContext::Normal,
             worktree_available: true,
+            template_present: false,
         },
         "work",
     );
@@ -1161,16 +1201,15 @@ fn ensure_bottom_gap_keeps_binding_and_is_idempotent() {
 }
 
 #[test]
-fn copy_template_content_strips_supple_and_log_markers() {
-    let content = "{title: 标题}\n# Add Requirement\n\n+++ suppleTemplate --start {title: }\n- Extra: keep out\n+++ suppleTemplate --end\n%%% logTemplate --start {title: }\n- Time: 10:00\n%%% logTemplate --end\n- Location: here";
+fn copy_template_content_strips_title_worktree_and_log_markers() {
+    let content = "{title: 标题}\n# Add Requirement\n\n%%% logTemplate --start {title: }\n- Time: 10:00\n%%% logTemplate --end\n{wt:main}\n- Location: here";
     let copied = copy_template_content(content);
     assert!(
         copied.starts_with("# Add Requirement"),
         "标题占位行不进复制内容: {copied}"
     );
-    assert!(!copied.contains("suppleTemplate"), "{copied}");
-    assert!(!copied.contains("Extra"), "补充子块内容整体剔除: {copied}");
     assert!(!copied.contains("%%%"), "记录子块标记剔除: {copied}");
+    assert!(!copied.contains("{wt:main}"), "绑定行剔除: {copied}");
     assert!(
         copied.contains("- Time: 10:00"),
         "记录子块内容保留: {copied}"
@@ -1191,16 +1230,6 @@ fn copy_template_content_keeps_legacy_log_blocks() {
     let content = "- Location: x\n+++ log --start\n- Records: a\n+++ log --end";
     let copied = copy_template_content(content);
     assert_eq!(copied, "- Location: x\n- Records: a");
-}
-
-#[test]
-fn inside_template_block_tracks_offsets() {
-    let text = "a\n&&& addTemplate --start {title: }\nbody\n&&& addTemplate --end\nb";
-    let inside = text.find("body").expect("body");
-    let outside = text.rfind("\nb").expect("b") + 1;
-    assert!(inside_template_block(text, inside));
-    assert!(!inside_template_block(text, outside));
-    assert!(!inside_template_block(text, 0));
 }
 
 #[test]
@@ -1327,79 +1356,6 @@ fn parse_supple_end_line_forms() {
     assert!(parse_supple_end_line("+++ x --start").is_none());
 }
 
-#[test]
-fn block_scan_marks_template_and_nested_supple() {
-    let text = concat!(
-        "&&& addTemplate --start\n",
-        "{title: }\n",
-        "+++ supplement --start\n",
-        "- a\n",
-        "+++ supplement --end\n",
-        "&&& addTemplate --end\n",
-    );
-    let infos = block_line_infos(text);
-    assert_eq!(infos[0].unwrap().kind, BlockKind::Template);
-    assert_eq!(infos[0].unwrap().role, BlockRole::Start);
-    assert_eq!(infos[2].unwrap().kind, BlockKind::Supple);
-    assert_eq!(infos[2].unwrap().role, BlockRole::Start);
-    assert_eq!(infos[3].unwrap().kind, BlockKind::Supple);
-    assert_eq!(infos[4].unwrap().kind, BlockKind::Supple);
-    assert_eq!(infos[4].unwrap().role, BlockRole::End);
-    assert_eq!(infos[5].unwrap().kind, BlockKind::Template);
-    assert_eq!(infos[5].unwrap().role, BlockRole::End);
-}
-
-#[test]
-fn block_scan_ignores_supple_outside_template_and_fences() {
-    let text = "+++ supplement --start\n- a\n+++ supplement --end";
-    assert!(block_line_infos(text).iter().all(Option::is_none));
-    let fenced = "```\n&&& x --start\n```\n&&& x --start\n&&& x --end";
-    let infos = block_line_infos(fenced);
-    assert!(infos[1].is_none(), "围栏内的 &&& 不识别");
-    assert_eq!(infos[3].unwrap().role, BlockRole::Start);
-    assert_eq!(infos[4].unwrap().role, BlockRole::End);
-}
-
-#[test]
-fn block_scan_unclosed_extends_to_end() {
-    let text = "&&& x --start\n+++ supplement --start\n- a";
-    let infos = block_line_infos(text);
-    assert_eq!(infos[2].unwrap().kind, BlockKind::Supple);
-    assert_eq!(infos[2].unwrap().role, BlockRole::Middle);
-    assert_eq!(infos[2].unwrap().end, 2);
-}
-
-#[test]
-fn block_scan_supple_crossing_parent_end_is_invalid() {
-    // 补充块未闭合即遇到父 `&&&` 结束行：子块作废，其行仍属父块正文。
-    let text = "&&& x --start\n+++ supplement --start\n- a\n&&& x --end";
-    let infos = block_line_infos(text);
-    assert_eq!(infos[1].unwrap().kind, BlockKind::Template);
-    assert_eq!(infos[2].unwrap().kind, BlockKind::Template);
-    assert_eq!(infos[3].unwrap().role, BlockRole::End);
-}
-
-#[test]
-fn block_context_reports_position() {
-    let text = concat!(
-        "plain\n",
-        "&&& x --start\n",
-        "+++ supplement --start\n",
-        "in supple\n",
-        "+++ supplement --end\n",
-        "&&& x --end\n",
-    );
-    assert_eq!(block_context(text, 0), BlockContext::Normal);
-    assert_eq!(
-        block_context(text, text.find("&&&").unwrap()),
-        BlockContext::Template
-    );
-    assert_eq!(
-        block_context(text, text.find("in supple").unwrap()),
-        BlockContext::Supple
-    );
-}
-
 /// 指定上下文的候选短名序列。
 fn filter_names_in(ctx: BlockContext, query: &str) -> Vec<String> {
     slash_filter(
@@ -1407,6 +1363,7 @@ fn filter_names_in(ctx: BlockContext, query: &str) -> Vec<String> {
         SlashContext {
             context: ctx,
             worktree_available: false,
+            template_present: false,
         },
         query,
     )
@@ -1419,13 +1376,13 @@ fn filter_names_in(ctx: BlockContext, query: &str) -> Vec<String> {
 fn slash_filter_scopes_builtin_by_context() {
     let normal = filter_names_in(BlockContext::Normal, "");
     assert!(normal.contains(&"add".to_string()));
-    assert!(!normal.contains(&"supplement".to_string()));
+    assert!(normal.contains(&"supplement".to_string()));
 
     let template = filter_names_in(BlockContext::Template, "");
     assert_eq!(template, vec!["supplement"]);
 
     let supple = filter_names_in(BlockContext::Supple, "");
-    assert!(supple.is_empty(), "{supple:?}");
+    assert_eq!(supple, vec!["supplement"]);
 }
 
 #[test]
@@ -1457,14 +1414,14 @@ fn slash_insertion_maps_supple_builtin() {
 
 #[test]
 fn supple_block_worktree_binding_round_trips() {
-    let text = "&&& x --start\n+++ supplement --start\nbody\n+++ supplement --end\n&&& x --end";
+    let text = "&&& x --start\n&&& x --end\n\n+++ supplement --start\nbody\n+++ supplement --end\n";
     let cursor = text.find("body").unwrap();
     assert_eq!(
         block_end_line_at(text, cursor),
-        Some(3),
-        "光标在 +++ 内定位到子块结束行"
+        Some(5),
+        "光标在顶层 +++ 内定位到补充块结束行"
     );
-    let (range, new) = set_line_worktree(text, 3, "main", None).expect("set supple binding");
+    let (range, new) = set_line_worktree(text, 5, "main", None).expect("set supple binding");
     let mut text = text.to_string();
     text.replace_range(range, &new);
     assert!(text.contains("{wt:main}"));
@@ -1478,17 +1435,18 @@ fn supple_block_worktree_binding_round_trips() {
     assert!(!text.contains("{wt:"), "{text}");
     assert!(
         text.contains("body\n\n+++ supplement --end"),
-        "解绑保留子块底部空行: {text}"
+        "解绑保留补充块底部空行: {text}"
     );
 }
 
 #[test]
-fn slash_filter_offers_worktree_in_supple_context_only() {
+fn slash_filter_offers_worktree_and_supplement_in_supple_context() {
     let supple = slash_filter(
         &[],
         SlashContext {
             context: BlockContext::Supple,
             worktree_available: true,
+            template_present: false,
         },
         "",
     );
@@ -1497,21 +1455,19 @@ fn slash_filter_offers_worktree_in_supple_context_only() {
             .iter()
             .map(|item| item.name.clone())
             .collect::<Vec<_>>(),
-        vec!["gitWorkTree"]
+        vec!["supplement", "gitWorkTree"]
     );
 }
 
 // ===== 模板块状态计数（分页统计） =====
 
 #[test]
-fn template_counts_only_closed_top_level_templates() {
+fn template_counts_only_first_closed_top_level_template() {
     let text = "\
-&&& addTemplate --start
-&&& addTemplate --end
 &&& bugTemplate --start
+&&& bugTemplate --end in_progress
 +++ noteSupple --start
 +++ noteSupple --end
-&&& bugTemplate --end in_progress
 &&& refactorTemplate --start
 plain tail
 &&& refactorTemplate --end done
@@ -1520,9 +1476,12 @@ plain tail
 &&& commonTemplate --end
 ```";
     let counts = template_counts(text);
-    assert_eq!(counts.todo, 1, "只统计闭合顶层 &&&，+++ 与围栏不计数");
-    assert_eq!(counts.in_progress, 1);
-    assert_eq!(counts.done, 1);
+    assert_eq!(counts.todo, 0);
+    assert_eq!(
+        counts.in_progress, 1,
+        "只统计首个闭合顶层 &&&，第二个 &&&、+++ 与围栏不计数"
+    );
+    assert_eq!(counts.done, 0);
 }
 
 #[test]

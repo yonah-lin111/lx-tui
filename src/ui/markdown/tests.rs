@@ -209,7 +209,7 @@ fn template_title_on_own_line_is_styled_inside_block() {
 #[test]
 fn template_end_line_tokens_include_status_and_metadata() {
     assert_eq!(
-        kinds("&&& bugTemplate --end done {id:abc}"),
+        summarize("&&& bugTemplate --start\n&&& bugTemplate --end done {id:abc}")[1],
         vec![
             (TokenKind::TemplateMarker, "&&&"),
             (
@@ -222,14 +222,63 @@ fn template_end_line_tokens_include_status_and_metadata() {
         ]
     );
     assert_eq!(
-        kinds("&&& --end in_progress"),
+        summarize("&&& bugTemplate --start\n&&& --end in_progress")[1],
         vec![
             (TokenKind::TemplateMarker, "&&&"),
             (TokenKind::TemplateMarker, "--end"),
             (TokenKind::TemplateMarker, "in_progress"),
         ]
     );
-    assert_eq!(kinds("&&&"), vec![(TokenKind::TemplateMarker, "&&&")]);
+    assert_eq!(
+        summarize("&&& bugTemplate --start\n&&&")[1],
+        vec![(TokenKind::TemplateMarker, "&&&")]
+    );
+}
+
+#[test]
+fn second_template_and_nested_supple_are_plain_while_top_level_supple_is_highlighted() {
+    let doc = concat!(
+        "&&& addTemplate --start\n",
+        "+++ nested --start\n",
+        "+++ nested --end\n",
+        "&&& addTemplate --end\n",
+        "&&& bugTemplate --start\n",
+        "&&& bugTemplate --end\n",
+        "+++ supplement --start {title: T}\n",
+        "{title: S}\n",
+        "{wt:main}\n",
+        "+++ supplement --end",
+    );
+    let lines = summarize(doc);
+    assert!(
+        lines[1].is_empty() && lines[2].is_empty(),
+        "&&& 内的 +++ 不产生 SuppleMarker: {:?}",
+        &lines[1..=2]
+    );
+    assert!(
+        lines[4].is_empty() && lines[5].is_empty(),
+        "第二个 &&& 不产生 TemplateMarker: {:?}",
+        &lines[4..=5]
+    );
+    assert_eq!(
+        lines[6],
+        vec![
+            (TokenKind::SuppleMarker, "+++"),
+            (TokenKind::SuppleCommand, "supplement"),
+            (TokenKind::SuppleMarker, "--start"),
+            (TokenKind::TemplateTitle, "{title: T}"),
+        ]
+    );
+    assert_eq!(lines[7], vec![(TokenKind::TemplateTitle, "{title: S}")]);
+    assert_eq!(lines[8], vec![(TokenKind::TemplateMarker, "{wt:main}")]);
+    assert_eq!(
+        lines[9],
+        vec![
+            (TokenKind::SuppleMarker, "+++"),
+            (TokenKind::SuppleCommand, "supplement"),
+            (TokenKind::SuppleMarker, "--end"),
+        ]
+    );
 }
 
 #[test]
