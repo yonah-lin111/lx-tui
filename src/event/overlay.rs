@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use crate::app::actions::OverlayKey;
 use crate::app::overlay::Overlay;
 use crate::app::prompt::PromptRowKind;
-use crate::app::state::AppState;
+use crate::app::state::{AppState, RightTab};
 use crate::app::update;
 use crate::layout::PaneId;
 use crate::ui;
@@ -128,7 +128,7 @@ pub(crate) fn handle_overlay_click(
             }
         }
         Some(Overlay::ConfirmClose(confirm)) => {
-            let question = ui::overlay::confirm_question(state, confirm.target);
+            let question = ui::overlay::confirm_question(state, &confirm.target);
             let Some(shell) = ui::overlay::confirm_shell(screen, &question) else {
                 update::close_overlay(state);
                 return None;
@@ -528,6 +528,15 @@ pub(crate) fn open_right_click_menu(
                 Some(PromptHit::Section) => {}
                 None => update::open_prompt_tree_menu(state, (column, row)),
             }
+            return true;
+        }
+    }
+    // Todo 列表：行上打开条目菜单，空白区域打开空白菜单。
+    if !state.prompt_collapsed && state.right_tab == RightTab::Todo {
+        let list_rect = ui::right_panel::todo::effective_list_rect(view.prompt, state);
+        if list_rect.contains((column, row).into()) {
+            let display = ui::right_panel::todo::row_at(view.prompt, state, column, row);
+            update::right_click_todo_list(state, display, (column, row));
             return true;
         }
     }

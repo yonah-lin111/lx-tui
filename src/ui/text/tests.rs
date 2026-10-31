@@ -51,6 +51,8 @@ fn user_visible_labels_are_clean_ascii() {
         MENU_TITLE_PROMPT,
         MENU_TITLE_FOLDER,
         MENU_TITLE_PROMPT_TREE,
+        MENU_TITLE_TODO_ITEM,
+        MENU_TITLE_TODO_BLANK,
         CONFIRM_DELETE_PAGE_TITLE,
         RENAME_PROMPT_TITLE,
         RENAME_FOLDER_TITLE,

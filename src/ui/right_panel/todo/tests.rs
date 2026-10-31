@@ -93,37 +93,21 @@ fn toolbar_puts_new_on_left_and_actions_on_right() {
     assert_eq!(new.x, bar.x, "[+] 贴左边框");
     assert_eq!(new.width, NEW_WIDTH);
 
-    // 右侧组贴右缘，从左到右依次 `[edit] [del] [clear done]`。
-    let edit = button_rect(area, TodoButton::Edit).expect("[edit] visible");
-    let del = button_rect(area, TodoButton::Delete).expect("[del] visible");
-    let clear = button_rect(area, TodoButton::ClearDone).expect("[clear done] visible");
-    assert_eq!(clear.right(), bar.right(), "[clear done] 贴右缘");
-    assert_eq!(del.right().saturating_add(BUTTON_GAP), clear.x);
-    assert_eq!(edit.right().saturating_add(BUTTON_GAP), del.x);
+    // 右侧组贴右缘：`[sort]`。
+    let sort = button_rect(area, TodoButton::Sort).expect("[sort] visible");
+    assert_eq!(sort.right(), bar.right(), "[sort] 贴右缘");
     assert!(
-        new.right().saturating_add(BUTTON_GAP) <= edit.x,
-        "左右两组之间至少留 1 列空白: {new:?} / {edit:?}"
+        new.right().saturating_add(BUTTON_GAP) <= sort.x,
+        "左右两组之间至少留 1 列空白: {new:?} / {sort:?}"
     );
 }
 
 #[test]
 fn toolbar_drops_action_buttons_before_new() {
-    // `[+]` 恒在；右侧组从右往左丢弃，靠右的 `[clear done]` 先丢。
-    let cases: [(u16, Vec<TodoButton>); 4] = [
-        (
-            38,
-            vec![
-                TodoButton::New,
-                TodoButton::Edit,
-                TodoButton::Delete,
-                TodoButton::ClearDone,
-            ],
-        ),
-        (
-            20,
-            vec![TodoButton::New, TodoButton::Edit, TodoButton::Delete],
-        ),
-        (13, vec![TodoButton::New, TodoButton::Edit]),
+    // `[+]` 恒在；右侧组靠右的 `[sort]` 在空间不足时丢弃。
+    let cases: [(u16, Vec<TodoButton>); 3] = [
+        (38, vec![TodoButton::New, TodoButton::Sort]),
+        (13, vec![TodoButton::New, TodoButton::Sort]),
         (8, vec![TodoButton::New]),
     ];
     for (inner, want) in cases {
@@ -170,9 +154,9 @@ fn button_hit_matches_button_rect_boundaries() {
 
     // 左右两组之间的空档：不命中任何按钮。
     let new = button_rect(area, TodoButton::New).expect("[+] visible");
-    let edit = button_rect(area, TodoButton::Edit).expect("[edit] visible");
-    assert!(new.right() < edit.x, "两组之间必须有空档");
-    for x in (new.right())..edit.x {
+    let sort = button_rect(area, TodoButton::Sort).expect("[sort] visible");
+    assert!(new.right() < sort.x, "两组之间必须有空档");
+    for x in (new.right())..sort.x {
         assert_eq!(button_at(area, x, bar.y), None, "第 {x} 列空档不命中");
     }
 }
@@ -242,8 +226,8 @@ fn selected_row_uses_selection_style_without_inheriting_border_accent() {
         "标记格不得继承边框加粗: {marker:?}"
     );
 
-    // 状态框与正文格子同样铺满选中底色（文本样式不带显式背景）。
-    for x in [list.x.saturating_add(2), list.x.saturating_add(6)] {
+    // 状态框与正文格子同样铺满选中底色（文本样式不带显式背景；优先级徽标拥有独立底色）。
+    for x in [list.x.saturating_add(2), row_text_x(list)] {
         let cell = &buffer[(x, list.y)];
         assert_eq!(Some(cell.bg), selection, "选中行第 {x} 列底色: {cell:?}");
     }
@@ -259,12 +243,7 @@ fn done_row_is_muted_and_crossed_out() {
 
     let (buffer, _) = render_panel(&state, area);
     let list = list_rect(area);
-    let text_x = list
-        .x
-        .saturating_add(MARKER_WIDTH)
-        .saturating_add(1)
-        .saturating_add(STATUS_WIDTH)
-        .saturating_add(1);
+    let text_x = row_text_x(list);
     for offset in 0..u16::try_from("finished".len()).unwrap_or(u16::MAX) {
         let cell = &buffer[(text_x.saturating_add(offset), list.y)];
         assert!(
@@ -341,15 +320,18 @@ fn edit_row_returns_cursor_position() {
 #[test]
 fn list_and_stats_split_body_evenly() {
     let area = panel(38);
+    let strip = week_strip_rect(area).expect("周感知带可见");
     let list = list_rect(area);
     let divider = stats_divider_rect(area).expect("统计块可见");
     let stats = stats_rect(area).expect("统计块可见");
     let body = crate::layout::prompt_body_rect(crate::layout::pane_inner_rect(area));
 
+    assert_eq!(strip.y, body.y, "周感知带贴主体区顶边");
+    assert_eq!(list.y, strip.bottom(), "列表紧贴周感知带下方");
     assert_eq!(
-        u32::from(list.height) + u32::from(stats.height) + 1,
+        u32::from(strip.height) + u32::from(list.height) + u32::from(stats.height) + 1,
         u32::from(body.height),
-        "列表 + 分割线 + 统计 == 主体区高度"
+        "周感知带 + 列表 + 分割线 + 统计 == 主体区高度"
     );
     let diff = list.height.abs_diff(stats.height);
     assert!(
@@ -576,12 +558,7 @@ fn edit_row_cursor_uses_display_width() {
 
     let (buffer, cursor) = render_panel(&state, area);
     let list = list_rect(area);
-    let text_x = list
-        .x
-        .saturating_add(MARKER_WIDTH)
-        .saturating_add(1)
-        .saturating_add(STATUS_WIDTH)
-        .saturating_add(1);
+    let text_x = row_text_x(list);
     let (x, _) = cursor.expect("编辑行必须返回光标坐标");
     assert_eq!(x, text_x + 6, "光标列 = 文本显示宽度，不是字符数");
     // 文本也确实按两列一格铺开。
@@ -725,4 +702,254 @@ fn hidden_panel_has_no_scrollbar() {
 
     state.prompt_collapsed = true;
     assert!(scrollbar(area, &state).is_none(), "容器折叠时也不存在");
+}
+
+#[test]
+fn priority_badges_have_distinct_backgrounds_and_high_contrast_foregrounds() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "p0", TodoStatus::Todo, TodoPriority::P0, 0),
+        TodoRecord::new_on(&today, "p1", TodoStatus::Todo, TodoPriority::P1, 1),
+        TodoRecord::new_on(&today, "p2", TodoStatus::Todo, TodoPriority::P2, 2),
+        TodoRecord::new_on(&today, "p3", TodoStatus::Todo, TodoPriority::P3, 3),
+    ]);
+
+    let (buffer, _) = render_panel(&state, area);
+    let list = list_rect(area);
+    let px = row_priority_x(list);
+
+    let mut bgs = std::collections::BTreeSet::new();
+    let mut fgs = std::collections::BTreeSet::new();
+    for row in 0..4u16 {
+        let y = list.y + row;
+        let cell = &buffer[(px, y)];
+        assert_ne!(cell.bg, Color::Reset, "第 {row} 行徽标必须带专属底色");
+        assert_ne!(cell.fg, Color::Reset, "第 {row} 行徽标必须带显式前景色");
+        assert_ne!(cell.fg, cell.bg, "前景色与背景色不得相同");
+        bgs.insert(format!("{:?}", cell.bg));
+        fgs.insert(format!("{:?}", cell.fg));
+        assert_eq!(priority_at(area, &state, px, y), Some(usize::from(row)));
+    }
+    assert_eq!(bgs.len(), 4, "四档优先级必须拥有 4 种互不相同的背景色");
+    assert_eq!(fgs.len(), 4, "四档优先级必须拥有 4 种互不相同的前景色");
+}
+
+#[test]
+fn week_strip_and_rollover_banner_hit_and_render() {
+    let mut state = AppState::demo();
+    let area = panel(46);
+    state.todo.set_today_date("2026-10-31");
+    state.todo.replace(vec![
+        TodoRecord::new_on(
+            "2026-10-30",
+            "yesterday-open",
+            TodoStatus::Todo,
+            TodoPriority::P0,
+            0,
+        ),
+        TodoRecord::new_on(
+            "2026-10-31",
+            "today-open",
+            TodoStatus::Todo,
+            TodoPriority::P1,
+            0,
+        ),
+    ]);
+
+    let (buffer, _) = render_panel(&state, area);
+    let header = crate::layout::prompt_header_rect(area).expect("header");
+    let divider_y = header.y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
+    let divider_text: String = (area.x..area.right())
+        .map(|x| buffer[(x, divider_y)].symbol())
+        .collect();
+    assert!(
+        divider_text.contains("2026/10/31"),
+        "周感知带上方左侧边框包含 yyyy/mm/dd: {divider_text:?}"
+    );
+    assert!(
+        divider_text.contains("26-01"),
+        "周感知带上方右侧边框包含周跨度 26-01: {divider_text:?}"
+    );
+
+    let strip = week_strip_rect(area).expect("周感知带可见");
+    let strip_text: String = (strip.x..strip.right())
+        .map(|x| buffer[(x, strip.y)].symbol())
+        .collect();
+    assert!(
+        strip_text.contains("Mon") && strip_text.contains("Sat"),
+        "周感知带包含英文星期缩写: {strip_text:?}"
+    );
+    assert!(
+        !strip_text.contains("30") && !strip_text.contains("31"),
+        "周感知带已移除日期号数字: {strip_text:?}"
+    );
+    assert_eq!(
+        week_strip_hit_at(area, &state, strip.x, strip.y),
+        Some(WeekStripHit::PrevWeek)
+    );
+    assert_eq!(
+        week_strip_hit_at(area, &state, strip.right() - 1, strip.y),
+        Some(WeekStripHit::NextWeek)
+    );
+
+    let banner = rollover_banner_rect(area, &state).expect("顺延横幅可见");
+    let banner_text: String = (banner.x..banner.right())
+        .map(|x| buffer[(x, banner.y)].symbol())
+        .collect();
+    assert!(
+        banner_text.contains("past"),
+        "横幅提示历史未完成: {banner_text:?}"
+    );
+    let (action_rect, dismiss_rect) =
+        schedule::rollover_button_rects(area, &state).expect("横幅按钮可见");
+    assert_eq!(
+        rollover_hit_at(area, &state, action_rect.x, action_rect.y),
+        Some(RolloverHit::MoveToToday)
+    );
+    assert_eq!(
+        rollover_hit_at(area, &state, dismiss_rect.x, dismiss_rect.y),
+        Some(RolloverHit::Dismiss)
+    );
+}
+
+#[test]
+fn chart_switcher_and_three_chart_modes_render() {
+    let mut state = AppState::demo();
+    let area = panel(46);
+    state.todo.set_today_date("2026-10-31");
+    state.todo.replace(vec![
+        TodoRecord::new_on("2026-10-30", "d1", TodoStatus::Done, TodoPriority::P0, 0),
+        TodoRecord::new_on("2026-10-31", "t1", TodoStatus::Todo, TodoPriority::P0, 0),
+        TodoRecord::new_on("2026-10-31", "t2", TodoStatus::Done, TodoPriority::P2, 1),
+    ]);
+
+    let stats = stats_rect(area).expect("统计块可见");
+    let (whole, prev_btn, next_btn) =
+        charts::chart_switcher_rects(area, &state).expect("切图器可见");
+    let (buffer, _) = render_panel(&state, area);
+    let switcher_text: String = (whole.x..whole.right())
+        .map(|x| buffer[(x, whole.y)].symbol())
+        .collect();
+    assert!(
+        switcher_text.contains("today · status 1/3"),
+        "切图器注明当天: {switcher_text:?}"
+    );
+    assert_eq!(
+        chart_switch_hit_at(area, &state, prev_btn.x, prev_btn.y),
+        Some(ChartSwitchHit::Prev)
+    );
+    assert_eq!(
+        chart_switch_hit_at(area, &state, next_btn.x, next_btn.y),
+        Some(ChartSwitchHit::Next)
+    );
+
+    // Chart 2: Priority
+    state
+        .todo
+        .set_chart(crate::app::state::TodoChartKind::Priority);
+    let (buffer, _) = render_panel(&state, area);
+    let (whole2, _, _) = charts::chart_switcher_rects(area, &state).expect("switcher2");
+    let switcher2_text: String = (whole2.x..whole2.right())
+        .map(|x| buffer[(x, whole2.y)].symbol())
+        .collect();
+    assert!(
+        switcher2_text.contains("today · priority 2/3"),
+        "切图器注明优先级为当天: {switcher2_text:?}"
+    );
+    let summary: String = (stats.x..stats.right())
+        .map(|x| buffer[(x, stats.y)].symbol())
+        .collect();
+    assert!(summary.contains("P0 1"), "优先级统计摘要: {summary:?}");
+    assert!(summary.contains("P2 1"), "优先级统计摘要: {summary:?}");
+
+    // Chart 3: 7-Day Trend
+    state
+        .todo
+        .set_chart(crate::app::state::TodoChartKind::Trend7Day);
+    let (buffer, _) = render_panel(&state, area);
+    let (whole3, prev3, next3) = charts::chart_switcher_rects(area, &state).expect("switcher3");
+    let switcher3_text: String = (whole3.x..whole3.right())
+        .map(|x| buffer[(x, whole3.y)].symbol())
+        .collect();
+    assert!(
+        switcher3_text.contains("week · 7d trend 3/3"),
+        "切图器注明趋势为一周: {switcher3_text:?}"
+    );
+    let divider = stats_divider_rect(area).expect("divider");
+    // 左右两侧边框线的字符与样式必须完全一致（无色差）：
+    assert_eq!(buffer[(prev3.x - 1, divider.y)].symbol(), "─");
+    assert_eq!(buffer[(next3.x + 1, divider.y)].symbol(), "─");
+    assert_eq!(
+        buffer[(prev3.x - 1, divider.y)].modifier,
+        buffer[(next3.x + 1, divider.y)].modifier,
+        "切图按钮左侧边框与右侧边框 modifier 必须完全一致"
+    );
+    assert_eq!(
+        buffer[(prev3.x - 1, divider.y)].fg,
+        buffer[(next3.x + 1, divider.y)].fg,
+        "切图按钮左侧边框与右侧边框前景色必须完全一致"
+    );
+    // 切图按钮 `<` / `>` 本身已重置底层 DIM，只保留 BOLD 强调色：
+    assert!(
+        !buffer[(prev3.x, divider.y)]
+            .modifier
+            .contains(Modifier::DIM),
+        "切图按钮左箭头不应继承分割线的 DIM"
+    );
+    assert!(
+        !buffer[(next3.x, divider.y)]
+            .modifier
+            .contains(Modifier::DIM),
+        "切图按钮右箭头不应继承分割线的 DIM"
+    );
+
+    let summary: String = (stats.x..stats.right())
+        .map(|x| buffer[(x, stats.y)].symbol())
+        .collect();
+    assert!(
+        summary.contains("plan 3"),
+        "7日趋势摘要包含计划总数: {summary:?}"
+    );
+    assert!(
+        summary.contains("done 2"),
+        "7日趋势摘要包含完成总数: {summary:?}"
+    );
+}
+
+#[test]
+fn ghost_row_before_selected_keeps_selection_highlight_aligned_and_scrollbar_counts_ghost() {
+    let mut state = AppState::demo();
+    let area = panel(44);
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "row-0", TodoStatus::Todo, TodoPriority::P1, 0),
+        TodoRecord::new_on(&today, "row-1", TodoStatus::Todo, TodoPriority::P1, 1),
+    ]);
+    crate::app::update::select_right_tab(&mut state, RightTab::Todo);
+    // 选中第 1 项（"row-1"），但在第 0 位置打开新建幽灵行（模拟幽灵行在选中行之前）：
+    state.todo.select(1);
+    state
+        .todo
+        .begin_edit(crate::app::state::TodoEdit::new(None, String::new(), 0));
+
+    let (buffer, _) = render_panel(&state, area);
+    let list = effective_list_rect(area, &state);
+    // 显示行 0 是幽灵行，显示行 1 是 row-0（未选中），显示行 2 是 row-1（选中，带 ❯ 与 selection 底色）：
+    assert_eq!(buffer[(list.x, list.y + 1)].symbol(), " ");
+    assert_eq!(
+        buffer[(list.x, list.y + 1)].bg,
+        Color::Reset,
+        "未选中的 row-0 不应被幽灵行偏移误染选中底色"
+    );
+    assert_eq!(
+        buffer[(list.x, list.y + 2)].symbol(),
+        text::AGENT_SELECTED_MARKER
+    );
+    assert_eq!(
+        buffer[(list.x, list.y + 2)].bg,
+        style::selection().bg.unwrap_or(Color::Reset),
+        "选中的 row-1 必须同时拥有 ❯ 标记与选中背景色"
+    );
 }

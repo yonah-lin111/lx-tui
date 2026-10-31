@@ -242,7 +242,7 @@ fn skill_attachments_are_accepted_and_loaded() {
             &test_model(),
         )
         .expect("skill attachment accepted");
-    assert_eq!(SCHEMA_VERSION, 20);
+    assert_eq!(SCHEMA_VERSION, 21);
     let meta = db
         .load_message_attachments(&committed.user_message_id)
         .expect("attachments");

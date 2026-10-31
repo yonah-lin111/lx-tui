@@ -137,39 +137,6 @@ fn scroll_by_moves_viewport_only() {
 }
 
 #[test]
-fn take_with_status_removes_only_matching() {
-    let mut panel = TodoPanel::new();
-    panel.replace(vec![
-        TodoRecord::new("open", TodoStatus::Todo, 0),
-        TodoRecord::new("done-1", TodoStatus::Done, 1),
-        TodoRecord::new("active", TodoStatus::InProgress, 2),
-        TodoRecord::new("done-2", TodoStatus::Done, 3),
-    ]);
-
-    let removed = panel.take_with_status(TodoStatus::Done);
-
-    let removed_texts: Vec<&str> = removed.iter().map(|item| item.text.as_str()).collect();
-    assert_eq!(removed_texts, ["done-1", "done-2"], "保持原相对顺序");
-    let kept: Vec<&str> = panel
-        .items()
-        .iter()
-        .map(|item| item.text.as_str())
-        .collect();
-    assert_eq!(kept, ["open", "active"]);
-    assert_dense(&panel);
-
-    // 原位置（1 与 3）插回后回到原来的下标。
-    panel.restore(removed);
-    let texts: Vec<&str> = panel
-        .items()
-        .iter()
-        .map(|item| item.text.as_str())
-        .collect();
-    assert_eq!(texts, ["open", "done-1", "active", "done-2"]);
-    assert_dense(&panel);
-}
-
-#[test]
 fn restore_reinserts_by_position() {
     let mut panel = TodoPanel::new();
     panel.replace(records(&["a", "c"]));
@@ -244,4 +211,51 @@ fn set_viewport_rows_keeps_ghost_slot_in_range() {
     // 视口从 4 缩到 5：幽灵槽位仍存在，scroll 不该被钳回去。
     panel.set_viewport_rows(5);
     assert_eq!(panel.scroll(), 0, "5 行能装下 5 个槽位");
+}
+
+#[test]
+fn set_scroll_and_replace_and_today_rollover_invariants() {
+    let mut panel = TodoPanel::new();
+    panel.set_today_date("2026-10-31");
+    // 乱序 position 注入当前选中日期：replace 必须按 position 升序重排后再归一。
+    panel.replace(vec![
+        TodoRecord::new_on(
+            "2026-10-31",
+            "second",
+            TodoStatus::Todo,
+            TodoPriority::P1,
+            5,
+        ),
+        TodoRecord::new_on("2026-10-31", "first", TodoStatus::Todo, TodoPriority::P1, 0),
+        TodoRecord::new_on("2026-10-30", "past", TodoStatus::Todo, TodoPriority::P0, 0),
+    ]);
+    assert_eq!(
+        panel
+            .items()
+            .iter()
+            .map(|i| i.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "second"]
+    );
+
+    // 末尾打开幽灵行时，set_scroll 向下滚动不能把幽灵行钳出视口。
+    panel.set_viewport_rows(2);
+    panel.begin_edit(TodoEdit::new(None, String::new(), panel.len()));
+    assert!(panel.scroll_to_edit());
+    assert_eq!(panel.scroll(), 1, "2 条 + 1 幽灵 - 2 行视口 = 1");
+    assert!(
+        !panel.set_scroll(5),
+        "已处于含幽灵行的最大偏移 1，不应倒退回 0"
+    );
+    assert_eq!(panel.scroll(), 1);
+    panel.take_edit();
+
+    // 关闭顺延横幅后跨日更新 today_date，必须重新允许显示新一天的顺延横幅。
+    assert!(panel.dismiss_rollover());
+    assert!(!panel.has_rollover_banner());
+    panel.set_today_date("2026-11-01");
+    assert!(
+        panel.has_rollover_banner(),
+        "跨日推进后 rollover_dismissed 必须复位"
+    );
 }

@@ -312,7 +312,7 @@ fn todo_panel_renders_toolbar_and_placeholder() {
         .collect();
     assert_eq!(label, text::TODO_NEW_LABEL);
 
-    // 分割线行：两端 `├` / `┤`，中间全 `─`（无条目名、无页控件）。
+    // 分割线行：两端 `├` / `┤`，左侧内嵌所选年月日，右侧内嵌当前周跨度。
     let divider_y = inner.y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
     assert_eq!(
         buffer[(view.prompt.x, divider_y)].symbol(),
@@ -322,13 +322,14 @@ fn todo_panel_renders_toolbar_and_placeholder() {
         buffer[(view.prompt.right() - 1, divider_y)].symbol(),
         text::DIVIDER_RIGHT_JOIN
     );
-    for x in inner.x..inner.right() {
-        assert_eq!(
-            buffer[(x, divider_y)].symbol(),
-            text::DIVIDER_MID,
-            "Todo 分割线第 {x} 列必须为 `─`"
-        );
-    }
+    let divider_text: String = (inner.x..inner.right())
+        .map(|x| buffer[(x, divider_y)].symbol())
+        .collect();
+    let expected_date = state.todo.selected_date().replace('-', "/");
+    assert!(
+        divider_text.contains(&expected_date),
+        "分割线左侧必须包含 yyyy/mm/dd: {divider_text:?}"
+    );
 
     // 空列表：内容区首行是占位文案，其余行空白。
     let list = todo::list_rect(view.prompt);

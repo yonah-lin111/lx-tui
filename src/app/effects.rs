@@ -281,11 +281,19 @@ pub enum Effect {
     SaveTodo { record: crate::db::todo::TodoRecord },
     /// 删除一条 todo。
     DeleteTodo { id: String },
-    /// 删除某状态的全部 todo（`[clear done]`）。
-    DeleteTodosWithStatus { status: crate::db::todo::TodoStatus },
     /// 恢复一批被删 todo（撤销）。
     RestoreTodos {
         records: Vec<crate::db::todo::TodoRecord>,
+    },
+    /// 按指定 ID 顺序重排某日期下的 todo（`[sort]`）。
+    ReorderTodos {
+        entry_date: String,
+        ordered_ids: Vec<String>,
+    },
+    /// 将历史未完成 todo 顺延移动到目标日期。
+    RolloverTodos {
+        ids: Vec<String>,
+        target_date: String,
     },
 }
 

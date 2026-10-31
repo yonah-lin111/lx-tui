@@ -230,7 +230,7 @@ fn rename_title(target: RenameTarget) -> &'static str {
 }
 
 /// 确认浮层标题与目标名（供页码菜单删除非空页使用）。
-fn confirm_text(state: &AppState, target: OverlayTarget) -> (&'static str, String) {
+fn confirm_text(state: &AppState, target: &OverlayTarget) -> (&'static str, String) {
     match target {
         OverlayTarget::PromptPage {
             workspace,
@@ -238,14 +238,14 @@ fn confirm_text(state: &AppState, target: OverlayTarget) -> (&'static str, Strin
             page,
         } => (
             text::CONFIRM_DELETE_PAGE_TITLE,
-            prompt_page_name(state, workspace, owner, page).unwrap_or_default(),
+            prompt_page_name(state, *workspace, *owner, *page).unwrap_or_default(),
         ),
         _ => (text::CONFIRM_DELETE_PAGE_TITLE, String::new()),
     }
 }
 
 /// 确认浮层的问题文案。
-pub fn confirm_question(state: &AppState, target: OverlayTarget) -> String {
+pub fn confirm_question(state: &AppState, target: &OverlayTarget) -> String {
     let (_, name) = confirm_text(state, target);
     text::confirm_delete_page_question(&name)
 }
@@ -361,11 +361,11 @@ pub(crate) fn render_confirm(
     state: &AppState,
     confirm: &ConfirmClose,
 ) {
-    let question = confirm_question(state, confirm.target);
+    let question = confirm_question(state, &confirm.target);
     let Some(shell) = confirm_shell(screen, &question) else {
         return;
     };
-    let (title, _) = confirm_text(state, confirm.target);
+    let (title, _) = confirm_text(state, &confirm.target);
     render_confirm_dialog(frame, &shell, title, &question);
 }
 

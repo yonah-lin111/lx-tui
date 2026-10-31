@@ -735,9 +735,10 @@ fn pane_content_inner_is_zero_on_todo_tab() {
 }
 
 #[test]
-fn mouse_right_click_prompt_tree_on_todo_opens_no_menu() {
-    // 提示词树右键菜单的闸门：Todo 下内容区不接收右键。
-    // 正向对照在前提里：同一坐标在 Prompt 态确实能打开菜单。
+fn mouse_right_click_prompt_tree_on_todo_opens_todo_menu() {
+    // 提示词树右键菜单的闸门：Todo 下内容区不接收提示词树右键，而是打开 Todo 菜单。
+    // 正向对照在前提里：同一坐标在 Prompt 态确实能打开提示词树菜单。
+    use crate::app::overlay::OverlayTarget;
     use crate::app::prompt::PromptItem;
     let config = Config::default();
     let mut state = demo_terminal();
@@ -790,8 +791,18 @@ fn mouse_right_click_prompt_tree_on_todo_opens_no_menu() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert!(state.overlay.is_none(), "Todo 下右键不打开提示词树菜单");
-    assert!(!dirty);
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("Todo 列表区右键打开 Todo 菜单");
+    };
+    assert!(
+        matches!(
+            menu.target,
+            OverlayTarget::TodoItem { .. } | OverlayTarget::TodoBlank
+        ),
+        "目标为 TodoItem 或 TodoBlank: {:?}",
+        menu.target
+    );
+    assert!(dirty);
 }
 
 #[test]

@@ -81,9 +81,7 @@ pub enum TooltipTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TodoButton {
     New,
-    Edit,
-    Delete,
-    ClearDone,
+    Sort,
 }
 
 /// 鼠标当前悬停的按钮；到显示时刻前只计时不渲染。

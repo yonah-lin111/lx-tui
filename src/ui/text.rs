@@ -1009,9 +1009,7 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptFolders => "referenced folders",
         TooltipTarget::TodoButton(button) => match button {
             crate::app::tooltip::TodoButton::New => TODO_TOOLTIP_NEW,
-            crate::app::tooltip::TodoButton::Edit => TODO_TOOLTIP_EDIT,
-            crate::app::tooltip::TodoButton::Delete => TODO_TOOLTIP_DELETE,
-            crate::app::tooltip::TodoButton::ClearDone => TODO_TOOLTIP_CLEAR_DONE,
+            crate::app::tooltip::TodoButton::Sort => TODO_TOOLTIP_SORT,
         },
         TooltipTarget::ReferencedSearchCopyPath => "copy path",
         TooltipTarget::BlockButton { button, .. } => match button {

@@ -1101,12 +1101,19 @@ impl Persistence {
                 self.todo_write(state, |db| db.delete_todo(&id));
                 false
             }
-            Effect::DeleteTodosWithStatus { status } => {
-                self.todo_write(state, |db| db.delete_todos_with_status(status).map(|_| ()));
-                false
-            }
             Effect::RestoreTodos { records } => {
                 self.todo_write(state, |db| db.restore_todos(&records));
+                false
+            }
+            Effect::ReorderTodos {
+                entry_date,
+                ordered_ids,
+            } => {
+                self.todo_write(state, |db| db.reorder_todos(&entry_date, &ordered_ids));
+                false
+            }
+            Effect::RolloverTodos { ids, target_date } => {
+                self.todo_write(state, |db| db.rollover_todos_to_date(&ids, &target_date));
                 false
             }
             // 网络与进程效应由事件层执行（pump 已过滤；此处兜底忽略并记录）。
