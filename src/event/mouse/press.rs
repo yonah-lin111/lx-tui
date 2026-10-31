@@ -51,6 +51,15 @@ pub(crate) fn handle_mouse_down_left(
     // 新的一次按下意味着上一轮 Down→Up 已经结束：指针在拖动中移出窗口会丢掉 Up，
     // 残留现场若被这次无关的 Up 消费，会按旧行号误点（如点工具栏却折叠了树里的文件夹）。
     state.prompt_drag = None;
+    // 全局 toast 绘制在最顶层（含模态浮层之上）：点击 toast 盒内关闭并消费点击；
+    // 点击 toast 盒外先关闭 toast，再继续处理当前点击（含模态点击）。
+    if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config) {
+        update::dismiss_toast(state);
+        *dirty = true;
+        if toast.contains((mouse.column, mouse.row).into()) {
+            return;
+        }
+    }
     if state.overlay.is_some() {
         // 引用文件夹搜索弹窗的滚动条独立于模态点击：命中轨道/thumb 时滚动视口后再走浮层点击。
         if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref()
@@ -113,27 +122,10 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
         return;
     }
-    if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config) {
-        if toast.contains((mouse.column, mouse.row).into()) {
-            // 点击 toast 内部内容不关闭；仅右上角 [✕] 关闭。
-            if ui::toast::close_button_at(toast, mouse.column, mouse.row) {
-                update::dismiss_toast(state);
-                *dirty = true;
-            }
-            return;
-        }
-        // 点击 toast 之外：关闭 toast 后继续处理本次点击。
-        update::dismiss_toast(state);
+    // lx 页自己的 toast 盒：点击盒内关闭并消费点击，点击盒外关闭后继续处理本次点击。
+    if let Some((pane, _toast)) = lx_toast_at(rects, state, mouse.column, mouse.row) {
+        update::dismiss_lx_toast(state, pane);
         *dirty = true;
-    }
-    // lx 页自己的 toast 盒：与全局 toast 同样的点击语义（点内部不关、点 [✕] 关、
-    // 点外部关闭后继续处理本次点击），但它只画在窗格内容区里，命中区也只在窗格内。
-    if let Some((pane, toast)) = lx_toast_at(rects, state, mouse.column, mouse.row) {
-        if ui::main_content::lx::toast::close_button_at(toast, mouse.column, mouse.row) {
-            update::dismiss_lx_toast(state, pane);
-            *dirty = true;
-            return;
-        }
         return;
     }
     if dismiss_lx_toast_outside(rects, state, mouse.column, mouse.row) {
@@ -349,6 +341,12 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
     } else if let Some(index) = panel_item_at(state, view, mouse.column, mouse.row) {
         update::select_panel(state, index);
+        *dirty = true;
+    } else if super::hit::prompt_command_panel_contains(state, view, mouse.column, mouse.row) {
+        // 浮层边界拦截：点击落在 Prompt 已打开命令面板的非条目区域（顶底边框、标题行、
+        // 呼吸空白行、底栏快捷键提示、空状态占位行或滚动条列）时直接吞掉，
+        // 绝不穿透触发底层模板/补充块按钮或移动编辑器正文光标。
+        update::focus_prompt(state);
         *dirty = true;
     } else if let Some(hit) = template_button_at(state, view, mouse.column, mouse.row) {
         apply_template_button(state, hit);

@@ -129,10 +129,14 @@ pub fn render(
     render_slash_panel(area, buf, lx);
     // 本页 toast 最后画：盖住历史、输入框与上述所有浮层，但**只在窗格内容区内**。
     // 全局 toast 覆盖层不再承载 lx 反馈（见 `app::state::Lx::toast`）。
-    if let Some(toast) = lx.toast.as_ref() {
-        toast::draw(buf, area, toast);
-    }
-    cursor
+    let toast_box = lx
+        .toast
+        .as_ref()
+        .and_then(|toast| toast::draw(buf, area, toast));
+    cursor.filter(|(row, col)| {
+        let abs = (area.x.saturating_add(*col), area.y.saturating_add(*row)).into();
+        !toast_box.is_some_and(|box_area| box_area.contains(abs))
+    })
 }
 
 /// 本页 toast 盒矩形（绝对屏幕坐标）；无 toast 或空间不足返回 None。
@@ -295,7 +299,7 @@ fn paste_panel_rows(area: Rect, lx: &Lx) -> Option<PastePanelData> {
     let content_x = area.x + margin;
     let content_w = area.width.saturating_sub(margin.saturating_mul(2));
     let region_h = input.y.saturating_sub(area.y);
-    if region_h < 2 {
+    if region_h < 3 {
         return None;
     }
     let count = text::paste_item_count(panel.candidates.len());
@@ -386,6 +390,7 @@ pub(crate) fn command_panel_contains(area: Rect, lx: &Lx, column: u16, row: u16)
         || mention_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
         || refer_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
         || slash_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
+        || layout(area, lx).panel.is_some_and(|r| r.contains(pos))
 }
 
 /// 绘制路径粘贴参照面板：锚定输入框上沿、复用命令面板渲染（只读状态）。
@@ -575,7 +580,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let panel_base = out.chat_bar.map_or(input.y, |bar| bar.y);
     if let Some(panel) = lx.panel.as_ref() {
         let rows = panel.items().len();
-        let panel_h = u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(2);
+        let panel_h = u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(6);
         let panel_w = panel_width(panel, content_w);
         if panel_base >= area.y + panel_h + SECTION_GAP {
             out.panel = Some(Rect::new(content_x, panel_base - panel_h, panel_w, panel_h));
@@ -669,7 +674,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     out
 }
 
-/// md 面板宽度：最宽条目（标签 + 预览）+ 边框与内边距，夹取到内容区宽度。
+/// md 面板宽度：最宽条目（标签 + 预览）与底栏提示取大 + 边框与内边距，夹取到内容区宽度。
 fn panel_width(panel: &BlockPanel, content_w: u16) -> u16 {
     let inner = panel
         .items()
@@ -679,7 +684,9 @@ fn panel_width(panel: &BlockPanel, content_w: u16) -> u16 {
             label.width() + 2 + preview.width()
         })
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(text::COMMAND_PANEL_FOOTER.width())
+        .max(text::LX_BLOCK_PANEL_TITLE.width());
     u16::try_from(inner + 4).unwrap_or(u16::MAX).min(content_w)
 }
 
@@ -943,41 +950,73 @@ pub fn ask_list_window(area: Rect, lx: &Lx) -> Option<(usize, usize, usize)> {
     ask::list_window(area, lx)
 }
 
-/// md 格式面板：圆角边框 + 标题 + 候选行（标签与预览，高亮项 accent）。
+/// md 格式面板：强调色直角边框 + 内框粗体标题 + 候选行（选中项整行高亮）+ 底栏快捷键行（对齐 herdr 面板）。
 fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
-    draw_box(grid, rect, style::muted());
-    grid.put(
-        rect.x + 2,
-        rect.y,
+    draw_box(grid, rect, style::accent());
+    let inner_w = rect.width.saturating_sub(4);
+    if inner_w == 0 {
+        return;
+    }
+    let text_x = rect.x + 2;
+    let text_right = text_x.saturating_add(inner_w);
+    grid.put_clipped(
+        text_x,
+        rect.y + 1,
         text::LX_BLOCK_PANEL_TITLE,
-        style::muted(),
+        style::strong(),
+        inner_w,
     );
     for (index, id) in panel.items().iter().enumerate() {
-        let y = rect.y + 1 + index as u16;
+        let y = rect.y + 3 + index as u16;
         let (label, preview) = text::block_command_text(*id);
         let active = index == panel.active();
-        let label_style = if active {
-            style::accent()
+        if active {
+            for x in rect.x + 1..rect.right().saturating_sub(1) {
+                grid.set(x, y, ' ', style::overlay_selection());
+            }
+        }
+        let base = if active {
+            style::overlay_selection()
         } else {
-            style::muted()
+            style::text()
         };
-        grid.put(rect.x + 2, y, &label, label_style);
-        let preview_x = rect.x + 2 + u16::try_from(label.width()).unwrap_or(0) + 2;
-        grid.put(preview_x, y, &preview, style::muted());
+        grid.put_clipped(text_x, y, &label, base, inner_w);
+        let preview_x = text_x + u16::try_from(label.width()).unwrap_or(0) + 2;
+        if preview_x < text_right {
+            grid.put_clipped(
+                preview_x,
+                y,
+                &preview,
+                base.patch(style::muted()),
+                text_right - preview_x,
+            );
+        }
     }
+    grid.put_clipped(
+        text_x,
+        rect.bottom() - 2,
+        text::COMMAND_PANEL_FOOTER,
+        style::muted(),
+        inner_w,
+    );
 }
 
-/// 圆角细线边框（md 面板用）。
+/// 直角细线边框与内部清底（md 面板用）。
 fn draw_box(grid: &mut Grid, rect: Rect, border: Style) {
     if rect.width < 2 || rect.height < 2 {
         return;
     }
     let right = rect.right() - 1;
     let bottom = rect.bottom() - 1;
-    grid.set(rect.x, rect.y, '╭', border);
-    grid.set(right, rect.y, '╮', border);
-    grid.set(rect.x, bottom, '╰', border);
-    grid.set(right, bottom, '╯', border);
+    for y in rect.y + 1..bottom {
+        for x in rect.x + 1..right {
+            grid.set(x, y, ' ', Style::default());
+        }
+    }
+    grid.set(rect.x, rect.y, '┌', border);
+    grid.set(right, rect.y, '┐', border);
+    grid.set(rect.x, bottom, '└', border);
+    grid.set(right, bottom, '┘', border);
     for x in rect.x + 1..right {
         grid.set(x, rect.y, '─', border);
         grid.set(x, bottom, '─', border);

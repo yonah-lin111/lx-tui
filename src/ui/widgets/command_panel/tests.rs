@@ -121,10 +121,10 @@ fn renders_below_anchor_without_covering_it() {
     let rect = render(area, &mut buf, &view(&items, 0, 2, None)).expect("panel renders");
 
     assert_eq!(rect, Rect::new(0, 3, 17, 5));
-    assert_eq!(buf[(0, 3)].symbol(), "╭");
-    assert_eq!(buf[(0, 3)].bg, Color::Indexed(236));
-    assert_eq!(buf[(1, 5)].bg, Color::Indexed(236));
-    assert_eq!(buf[(1, 5)].fg, Color::Indexed(252));
+    assert_eq!(buf[(0, 3)].symbol(), "┌");
+    assert_eq!(buf[(0, 3)].bg, Color::Reset);
+    assert_eq!(buf[(1, 5)].bg, Color::Reset);
+    assert_eq!(buf[(1, 5)].fg, Color::Reset);
     assert_eq!(buf[(2, 4)].bg, Color::Indexed(240));
     assert_eq!(buf[(2, 4)].fg, Color::Indexed(255));
     assert_eq!(buf[(0, 2)].symbol(), " ");
@@ -136,7 +136,7 @@ fn renders_below_anchor_without_covering_it() {
 }
 
 #[test]
-fn scrollbar_keeps_panel_background_inside_command_panel() {
+fn scrollbar_keeps_transparent_background_inside_command_panel() {
     let area = Rect::new(0, 0, 24, 8);
     let mut buf = Buffer::empty(area);
     let labels: Vec<(String, String)> = (0..10)
@@ -156,13 +156,9 @@ fn scrollbar_keeps_panel_background_inside_command_panel() {
     let layout = layout(area, &view).expect("panel layout");
     render(area, &mut buf, &view).expect("panel renders");
     let bar = layout.scrollbar.expect("list overflows");
-    // 命令面板是浮层：滚动条轨道/thumb 保持面板底色，不透明。
-    assert_eq!(buf[(bar.track.x, bar.track.y)].bg, Color::Indexed(236));
-    assert_eq!(buf[(bar.thumb.x, bar.thumb.y)].bg, Color::Indexed(236));
-    // 非浮层滚动条保持透明底。
-    let mut plain = Buffer::empty(area);
-    scrollbar::render_buffer(&mut plain, &bar);
-    assert_eq!(plain[(bar.track.x, bar.track.y)].bg, Color::Reset);
+    // 命令面板移除背景色：滚动条轨道/thumb 保持透明底。
+    assert_eq!(buf[(bar.track.x, bar.track.y)].bg, Color::Reset);
+    assert_eq!(buf[(bar.thumb.x, bar.thumb.y)].bg, Color::Reset);
 }
 
 #[test]
@@ -238,10 +234,10 @@ fn clamps_width_and_truncates_items() {
     let rect = render(area, &mut buf, &view(&items, 0, 0, None)).expect("panel renders");
 
     assert_eq!(rect, Rect::new(0, 1, 10, 3));
-    assert_eq!(buf[(0, 1)].symbol(), "╭");
-    assert_eq!(buf[(9, 1)].symbol(), "╮");
-    assert_eq!(buf[(0, 3)].symbol(), "╰");
-    assert_eq!(buf[(9, 3)].symbol(), "╯");
+    assert_eq!(buf[(0, 1)].symbol(), "┌");
+    assert_eq!(buf[(9, 1)].symbol(), "┐");
+    assert_eq!(buf[(0, 3)].symbol(), "└");
+    assert_eq!(buf[(9, 3)].symbol(), "┘");
 }
 
 #[test]
@@ -469,7 +465,7 @@ fn renders_scrollbar_when_overflowing() {
 
 #[test]
 fn renders_titles_and_footer_on_border() {
-    let area = Rect::new(0, 0, 40, 8);
+    let area = Rect::new(0, 0, 40, 10);
     let mut buf = Buffer::empty(area);
     let items = stacked(&[("app.rs", "src")]);
     let rect = render(
@@ -479,28 +475,31 @@ fn renders_titles_and_footer_on_border() {
             &items,
             Some("Files"),
             Some("src"),
-            Some("[open ⇧↵] [back ^z]"),
+            Some("⇧↵ open · ^z back"),
         ),
     )
     .expect("panel renders");
 
-    let top = row_text(&buf, area, rect.y);
-    assert!(top.contains(" Files "), "{top}");
-    assert!(top.contains(" src "), "{top}");
+    let top = row_text(&buf, area, rect.y + 1);
+    assert!(top.contains("Files"), "{top}");
+    assert!(top.contains("src"), "{top}");
     assert!(
-        top.find(" Files ").expect("left title") < top.find(" src ").expect("right title"),
+        top.find("Files").expect("left title") < top.find("src").expect("right title"),
         "左侧标题在右标题之前：{top}"
     );
-    let bottom = row_text(&buf, area, rect.bottom() - 1);
-    assert!(bottom.contains("[open ⇧↵] [back ^z]"), "{bottom}");
+    assert_eq!(buf[(rect.x, rect.y + 2)].symbol(), "│");
+    assert_eq!(buf[(rect.x, rect.bottom() - 3)].symbol(), "│");
+    assert_eq!(buf[(rect.x, rect.bottom() - 2)].symbol(), "│");
+    let bottom = row_text(&buf, area, rect.bottom() - 2);
+    assert!(bottom.contains("⇧↵ open · ^z back"), "{bottom}");
 }
 
 #[test]
 fn panel_width_covers_footer_and_titles() {
     use unicode_width::UnicodeWidthStr;
 
-    let area = Rect::new(0, 0, 60, 8);
-    let footer = "[open ⇧↵] [back ^z]";
+    let area = Rect::new(0, 0, 60, 10);
+    let footer = "⇧↵ open · ^z back";
     let items = stacked(&[("a.rs", "s")]);
     let plain = layout(area, &view(&items, 0, 0, None)).expect("plain layout");
     let titled = layout(
@@ -520,7 +519,7 @@ fn panel_width_covers_footer_and_titles() {
 
 #[test]
 fn clamps_titles_when_area_is_narrow() {
-    let area = Rect::new(0, 0, 12, 6);
+    let area = Rect::new(0, 0, 12, 10);
     let mut buf = Buffer::empty(area);
     let items = stacked(&[("a.rs", "s")]);
     let rect = render(
@@ -530,7 +529,7 @@ fn clamps_titles_when_area_is_narrow() {
             &items,
             Some("Files"),
             Some("very-long-directory"),
-            Some("[open ⇧↵] [back ^z]"),
+            Some("⇧↵ open · ^z back"),
         ),
     )
     .expect("panel renders");
@@ -560,20 +559,20 @@ fn layout_and_hit_test_tabs() {
     // Tab 0 starts at rect.x + 2, width = 5 + 2 = 7 (" Files ")
     assert_eq!(l.tabs[0].x, l.rect.x + 2);
     assert_eq!(l.tabs[0].width, 7);
-    assert_eq!(l.tabs[0].y, l.rect.y);
+    assert_eq!(l.tabs[0].y, l.rect.y + 1);
 
     // Tab 1 starts at rect.x + 2 + 7 + 1 = rect.x + 10, width = 6 + 2 = 8 (" refDir ")
     assert_eq!(l.tabs[1].x, l.rect.x + 10);
     assert_eq!(l.tabs[1].width, 8);
-    assert_eq!(l.tabs[1].y, l.rect.y);
+    assert_eq!(l.tabs[1].y, l.rect.y + 1);
 
-    assert_eq!(tab_at(&l, l.tabs[0].x, l.rect.y), Some(0));
-    assert_eq!(tab_at(&l, l.tabs[0].right() - 1, l.rect.y), Some(0));
-    assert_eq!(tab_at(&l, l.tabs[1].x, l.rect.y), Some(1));
-    assert_eq!(tab_at(&l, l.tabs[1].right() - 1, l.rect.y), Some(1));
-    assert_eq!(tab_at(&l, l.tabs[0].right(), l.rect.y), None); // separator column
-    assert_eq!(tab_at(&l, l.rect.x, l.rect.y), None); // corner
-    assert_eq!(tab_at(&l, l.tabs[0].x, l.rect.y + 1), None); // inside content
+    assert_eq!(tab_at(&l, l.tabs[0].x, l.rect.y + 1), Some(0));
+    assert_eq!(tab_at(&l, l.tabs[0].right() - 1, l.rect.y + 1), Some(0));
+    assert_eq!(tab_at(&l, l.tabs[1].x, l.rect.y + 1), Some(1));
+    assert_eq!(tab_at(&l, l.tabs[1].right() - 1, l.rect.y + 1), Some(1));
+    assert_eq!(tab_at(&l, l.tabs[0].right(), l.rect.y + 1), None); // separator column
+    assert_eq!(tab_at(&l, l.rect.x, l.rect.y + 1), None); // border
+    assert_eq!(tab_at(&l, l.tabs[0].x, l.rect.y + 2), None); // divider row
 
     let mut buf = Buffer::empty(area);
     assert!(render(area, &mut buf, &v).is_some());
@@ -596,12 +595,17 @@ fn borderless_panel_renders_top_blue_rule_and_no_background_or_side_borders() {
         ..Default::default()
     };
     let rect = render(area, &mut buf, &v).expect("borderless renders");
-    // 1 top rule + 2 items = 3 rows, placed directly above anchor_row = 5 -> y = 2..5
-    assert_eq!(rect, Rect::new(0, 2, 30, 3));
-    assert_eq!(buf[(0, 2)].symbol(), "─");
-    assert_eq!(buf[(0, 2)].fg, Color::Cyan);
-    assert_eq!(buf[(29, 2)].symbol(), "─");
-    assert_eq!(buf[(29, 2)].fg, Color::Cyan);
+    // 1 top blank row + 1 top rule + 2 items = 4 rows, placed directly above anchor_row = 5 -> y = 1..5
+    assert_eq!(rect, Rect::new(0, 1, 30, 4));
+    // y = 1 is the top rule line, y = 2 is the clean title row
+    assert_eq!(buf[(0, 1)].symbol(), "─");
+    assert_eq!(buf[(0, 1)].fg, Color::Cyan);
+    assert_eq!(buf[(29, 1)].symbol(), "─");
+    assert_eq!(buf[(29, 1)].fg, Color::Cyan);
+    assert!(
+        row_text(&buf, area, 2).contains("/Command"),
+        "row 2 is clean title row"
+    );
 
     // No overlay background anywhere
     for y in rect.y..rect.bottom() {
@@ -639,7 +643,7 @@ fn borderless_overlap_active_and_current_uses_default_marker_and_blue_label() {
         ..Default::default()
     };
     let rect = render(area, &mut buf, &v).expect("renders");
-    let row_y = rect.y + 1;
+    let row_y = rect.y + 2;
     // `❯` is default color (indicating active selection), label is Cyan (indicating current model)
     assert_eq!(buf[(0, row_y)].symbol(), "❯");
     assert_eq!(buf[(0, row_y)].fg, Color::Reset);
@@ -663,8 +667,13 @@ fn borderless_panel_footer_row_adds_spacer_and_hint_without_border() {
         ..Default::default()
     };
     let rect = render(area, &mut buf, &v).expect("renders");
-    // 1 top rule + 1 item + 1 spacer + 1 footer = 4 rows
-    assert_eq!(rect, Rect::new(0, 2, 40, 4));
+    // 1 top blank + 1 top rule + 1 item + 1 spacer + 1 footer = 5 rows
+    assert_eq!(rect, Rect::new(0, 1, 40, 5));
+    assert_eq!(
+        row_text(&buf, area, rect.y),
+        "─".repeat(40),
+        "顶线在面板顶部第 0 行"
+    );
     // 内容与提示之间空一行。
     let spacer = row_text(&buf, area, rect.bottom() - 2);
     assert_eq!(spacer.trim(), "", "内容与提示之间留一行空行: {spacer:?}");
@@ -676,7 +685,7 @@ fn borderless_panel_footer_row_adds_spacer_and_hint_without_border() {
     );
     assert!(!footer.contains('─'), "底边提示行不画分割线: {footer:?}");
     assert!(
-        !footer.contains('│') && !footer.contains('╰') && !footer.contains('╯'),
+        !footer.contains('│') && !footer.contains('└') && !footer.contains('┘'),
         "底边提示行不画边框: {footer:?}"
     );
     // 无边框面板没有背景色。
@@ -704,8 +713,8 @@ fn borderless_panel_without_footer_keeps_height() {
     let rect = render(area, &mut buf, &v).expect("renders");
     assert_eq!(
         rect,
-        Rect::new(0, 4, 40, 2),
-        "无 footer 时只占顶线 + 内容行"
+        Rect::new(0, 3, 40, 3),
+        "无 footer 时占顶部空行 + 顶线 + 内容行"
     );
 }
 
@@ -737,6 +746,7 @@ fn borderless_narrow_top_rule_keeps_tabs_and_never_overwrites_title_with_right_t
     };
     let l = layout(area, &v_tabs).expect("layout");
     assert_eq!(l.tabs.len(), 2, "长目录名不得挤丢左侧 Tab");
+    assert_eq!(l.tabs[0].y, l.rect.y + 1, "无边框面板 Tab 落在顶线行");
 
     // 窄宽度下带 title 与长 right_title：左侧标题不得被覆盖。
     let mut buf = Buffer::empty(area);
@@ -752,9 +762,65 @@ fn borderless_narrow_top_rule_keeps_tabs_and_never_overwrites_title_with_right_t
         ..Default::default()
     };
     let rect = render(area, &mut buf, &v_title).expect("renders");
-    let top = row_text(&buf, area, rect.y);
+    let top = row_text(&buf, area, rect.y + 1);
     assert!(
         top.contains(" Rewind "),
         "左侧标题不得被右侧说明覆盖: {top:?}"
+    );
+}
+
+#[test]
+fn bordered_panel_with_title_and_tabs_expands_width_and_omits_tabs_when_cramped() {
+    let area = Rect::new(0, 0, 60, 20);
+    let items = inline(&[("scanning…", "")]);
+    let tabs = [
+        PanelTab {
+            label: "Files",
+            active: true,
+        },
+        PanelTab {
+            label: "refDir",
+            active: false,
+        },
+        PanelTab {
+            label: "Skills",
+            active: false,
+        },
+        PanelTab {
+            label: "MCP",
+            active: false,
+        },
+    ];
+    let v = CommandPanelView {
+        items: &items,
+        active: 0,
+        anchor_row: 12,
+        title: Some("@Command"),
+        tabs: Some(&tabs),
+        hide_active_marker: true,
+        ..Default::default()
+    };
+    let l = layout(area, &v).expect("layout");
+    assert_eq!(
+        l.tabs.len(),
+        4,
+        "即使候选行极短，自适应宽度也须容纳 @Command 与全部 4 个 Tab"
+    );
+
+    // 极矮退化态（available_rows < 7 -> top_rows == 1）：不生成与首条候选重叠的 Tab 命中框。
+    let cramped_area = Rect::new(0, 0, 60, 5);
+    let v_cramped = CommandPanelView {
+        items: &items,
+        active: 0,
+        anchor_row: 4,
+        title: Some("@Command"),
+        tabs: Some(&tabs),
+        ..Default::default()
+    };
+    let l_cramped = layout(cramped_area, &v_cramped).expect("cramped layout");
+    assert_eq!(l_cramped.inner.y, l_cramped.rect.y + 1);
+    assert!(
+        l_cramped.tabs.is_empty(),
+        "退化态无独立顶栏行时不得在首条候选行上登记 Tab 命中区"
     );
 }

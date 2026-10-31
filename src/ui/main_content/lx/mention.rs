@@ -16,8 +16,8 @@ use crate::ui::widgets::command_panel::{
 
 /// 面板最多显示的内容行数；对齐 codex `MAX_POPUP_ROWS`（8），保证浮层观感统一。
 pub(crate) const MAX_POPUP_ROWS: u16 = 8;
-/// 面板顶部分割线占用的行数（顶部单条蓝色横线，无底边框）。
-pub(super) const PANEL_BORDER_ROWS: u16 = 1;
+/// 面板顶部占用的行数（1 行上方空行间隔 + 1 行顶部蓝色横线，无底边框）。
+pub(super) const PANEL_BORDER_ROWS: u16 = 2;
 /// 面板底部快捷键提示块占用的行数（1 行空行间隔 + 1 行提示）。
 pub(super) const PANEL_FOOTER_ROWS: u16 = 2;
 
@@ -246,8 +246,7 @@ fn panel_data(lx: &Lx, width: u16) -> Option<PanelData> {
 
 /// 面板视图：强制与输入框等宽、紧贴输入框上方、视口优先于窗口锚点。
 ///
-/// 高度对齐 codex 的两步口径：内容行先夹到 `MAX_POPUP_ROWS`（再加顶部分割线），
-/// 再与输入框上方可用行数取小；空间不足时不挤压输入框。
+/// 高度按候选数自适应收缩，上限为 `MAX_POPUP_ROWS + PANEL_BORDER_ROWS + PANEL_FOOTER_ROWS`。
 fn view<'a>(
     items: &'a [CommandItem<'a>],
     data: &'a PanelData,
@@ -268,7 +267,8 @@ fn view<'a>(
         window_start: data.viewport,
         anchor_row: above,
         max_height: Some(cap),
-        title: None,
+        fixed_height: false,
+        title: Some(text::MENTION_PANEL_TITLE),
         tabs: Some(&data.tabs),
         right_title: data.scope.as_deref(),
         footer: Some(if data.tabs[0].active {

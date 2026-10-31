@@ -3,7 +3,7 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::ui::widgets::clear;
@@ -21,19 +21,16 @@ pub struct MenuLayout {
     pub item_rects: Vec<Rect>,
 }
 
-/// 按锚点、标题与标签计算菜单几何；锚点与尺寸均夹取到屏幕内。
+/// 按锚点与标签计算菜单几何；锚点与尺寸均夹取到屏幕内。
 ///
-/// 宽度按终端显示列（`UnicodeWidthStr::width`）计算，宽字符与中文不再误判为窄；
-/// 仅在超出屏幕宽度时兜底钳制。
-pub fn layout(screen: Rect, anchor: (u16, u16), title: &str, labels: &[&str]) -> MenuLayout {
+/// 对齐 herdr 右键菜单：无标题行与内部横线，仅上下直角边框包裹列表项（高 = 项数 + 2）。
+pub fn layout(screen: Rect, anchor: (u16, u16), _title: &str, labels: &[&str]) -> MenuLayout {
     let max_label = labels
         .iter()
         .map(|label| label.width())
         .max()
         .unwrap_or_default();
-    // 边框标题以 ` title ` 占位，加减两角。
-    let max_title = title.width().saturating_add(4);
-    let width = u16::try_from(max_label.saturating_add(HORIZONTAL_PADDING).max(max_title))
+    let width = u16::try_from(max_label.saturating_add(HORIZONTAL_PADDING))
         .unwrap_or(u16::MAX)
         .max(MIN_WIDTH)
         .min(screen.width);
@@ -47,11 +44,12 @@ pub fn layout(screen: Rect, anchor: (u16, u16), title: &str, labels: &[&str]) ->
         .1
         .clamp(screen.y, screen.y + screen.height.saturating_sub(height));
     let area = Rect::new(x, y, width, height);
+    let item_top = area.y.saturating_add(1);
     let item_rects = (0..labels.len() as u16)
         .map(|index| {
             Rect::new(
                 area.x + 1,
-                area.y + 1 + index,
+                item_top + index,
                 area.width.saturating_sub(2),
                 1,
             )
@@ -68,7 +66,7 @@ pub fn item_at(layout: &MenuLayout, column: u16, row: u16) -> Option<usize> {
         .position(|rect| rect.contains((column, row).into()))
 }
 
-/// 渲染菜单：清底、强调色边框与标题、逐项文本；选中项使用悬停高亮，待确认项使用危险红底高亮。
+/// 渲染菜单：清底、强调色边框与顶栏标题框、逐项文本；选中项使用悬停高亮，待确认项使用危险红底高亮。
 pub fn render(
     frame: &mut Frame<'_>,
     layout: &MenuLayout,
@@ -79,33 +77,27 @@ pub fn render(
     render_with_confirm(frame, layout, title, labels, selected, None);
 }
 
-/// 渲染菜单（支持指定某一项处于行内二次确认态）。
+/// 渲染菜单（支持指定某一项处于行内二次确认态；对齐 herdr 右键菜单：无标题栏、左侧 1 列内边距）。
 pub fn render_with_confirm(
     frame: &mut Frame<'_>,
     layout: &MenuLayout,
-    title: &str,
+    _title: &str,
     labels: &[&str],
     selected: Option<usize>,
     confirming: Option<usize>,
 ) {
     clear::render(frame, layout.area);
-    let mut block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(style::accent())
-        .style(style::overlay_panel());
-    if !title.is_empty() {
-        let max_title = usize::from(layout.area.width.saturating_sub(2));
-        block = block.title(Span::styled(
-            format!(" {} ", text::ellipsize(title, max_title)),
-            style::border_title(),
-        ));
-    }
+    let block = Block::bordered().border_style(style::accent());
     frame.render_widget(block, layout.area);
     let width = usize::from(layout.area.width.saturating_sub(2));
+    let text_budget = width.saturating_sub(1);
     for (index, label) in labels.iter().enumerate() {
         let Some(rect) = layout.item_rects.get(index) else {
             continue;
         };
+        if rect.y >= layout.area.bottom().saturating_sub(1) {
+            continue;
+        }
         let item_style = if confirming == Some(index) {
             style::menu_confirm()
         } else if selected == Some(index) {
@@ -113,14 +105,17 @@ pub fn render_with_confirm(
         } else {
             style::text()
         };
-        // 几何按显示宽度计算，宽度充裕时完整渲染；仅在钳到窄屏时截断。
-        let rendered = if label.width() <= width {
+        let fitted = if label.width() <= text_budget {
             (*label).to_string()
         } else {
-            text::ellipsize(label, width)
+            text::ellipsize(label, text_budget)
+        };
+        let rendered = if width > 0 {
+            format!(" {fitted}")
+        } else {
+            String::new()
         };
         let line = Line::from(Span::styled(rendered, item_style));
-        // 行级样式让选中项或待确认项整行铺满底色。
         frame.render_widget(Paragraph::new(line).style(item_style), *rect);
     }
 }

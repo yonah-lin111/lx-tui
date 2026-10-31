@@ -123,6 +123,7 @@ fn view<'a>(
         window_start: data.viewport,
         anchor_row: above,
         max_height: Some(cap),
+        fixed_height: false,
         title: Some(text::REFER_PANEL_TITLE),
         tabs: None,
         right_title: None,
@@ -184,7 +185,7 @@ mod tests {
         assert!(layout.rect.width > 0);
         assert!(layout.rect.height > 0);
 
-        let hit = item_at(area, &lx, layout.rect.x + 2, layout.rect.y + 1);
+        let hit = item_at(area, &lx, layout.rect.x + 2, layout.content.y);
         assert_eq!(hit, Some(0));
 
         let mut buf = Buffer::empty(area);

@@ -110,24 +110,25 @@ pub(crate) fn render_cached(
     let tooltip_area = (!border_tooltip_open)
         .then(|| tooltip::render(frame, area, state, &view, &pane_rects))
         .flatten();
-    let toast_area = toast::render(frame, area, state, &view, &pane_rects, config);
     let overlay_cursor = overlay::render(frame, area, state);
+    let toast_area = toast::render(frame, area, state, &view, &pane_rects, config);
     let menu_tooltip_area = border_tooltip_open
         .then(|| tooltip::render(frame, area, state, &view, &pane_rects))
         .flatten();
 
-    // 浮层是模态：重命名浮层接管硬件光标，其余浮层不显示光标。
-    // 非模态时若光标位置被 tooltip/toast 盒覆盖（后绘制），一并隐藏，避免覆盖浮层。
-    let cursor = match state.overlay {
+    // 浮层是模态：重命名等单行输入浮层接管硬件光标，其余浮层不显示光标。
+    // 若光标位置被后绘制的 tooltip/toast 盒覆盖，一并隐藏，避免硬件光标穿透浮层。
+    let base_cursor = match state.overlay {
         Some(_) => overlay_cursor,
-        None => prompt_cursor.filter(|position| {
-            !tooltip_area
-                .into_iter()
-                .chain(menu_tooltip_area)
-                .chain(toast_area)
-                .any(|box_area| box_area.contains((*position).into()))
-        }),
+        None => prompt_cursor,
     };
+    let cursor = base_cursor.filter(|position| {
+        !tooltip_area
+            .into_iter()
+            .chain(menu_tooltip_area)
+            .chain(toast_area)
+            .any(|box_area| box_area.contains((*position).into()))
+    });
     if let Some(position) = cursor {
         frame.set_cursor_position(position);
     }

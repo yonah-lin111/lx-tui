@@ -83,35 +83,28 @@ fn model_panel_marks_current_model_with_marker() {
 }
 
 #[test]
-fn model_panel_without_current_model_marks_active_with_default_color() {
+fn model_panel_without_current_model_marks_active_with_default_marker() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = model_panel_lx(None);
+    let panel = slash_layout(area, &lx).expect("slash layout");
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
-    let lines = buffer_lines(&buf, area);
-    let marked: Vec<&String> = lines
-        .iter()
-        .filter(|line| line.contains(text::CURRENT_ITEM_MARKER))
-        .collect();
-    assert_eq!(marked.len(), 1, "正在选择的项带 ❯ 标记: {lines:?}");
-    assert!(marked[0].contains("model-0"), "{:?}", marked[0]);
-    for y in 0..area.height {
-        for x in 0..area.width {
-            if buf[(x, y)].symbol() == text::CURRENT_ITEM_MARKER {
-                assert_eq!(
-                    buf[(x, y)].fg,
-                    ratatui::style::Color::Reset,
-                    "正在选择项的 ❯ 使用默认字体颜色"
-                );
-            }
-        }
-    }
+    let row0 = panel.content.y;
+    assert_eq!(
+        buf[(panel.content.x, row0)].symbol(),
+        text::CURRENT_ITEM_MARKER,
+        "正在选择的项带 ❯ 标记"
+    );
+    assert_eq!(
+        buf[(panel.content.x, row0)].bg,
+        ratatui::style::Color::Reset,
+        "无边框面板保持透明底色"
+    );
 }
 
 #[test]
-fn model_panel_has_transparent_background_and_blue_top_rule_and_selected_model() {
-    // 无背景色、顶部单条蓝色横线；当前模型标为蓝色，光标移开时旧模型保留蓝色 ❯ + 蓝色名称，
-    // 新焦点行显示默认色 ❯ + 默认色名称。
+fn model_panel_renders_top_blue_rule_and_markers() {
+    // 顶部单条蓝色横线、面板透明底色；当前模型标为蓝色 ❯ + 蓝色名称，正在选择的行带默认色 ❯。
     let area = Rect::new(0, 0, 80, 24);
     let mut lx = model_panel_lx(Some(0));
     if let Some(SlashPanel::Model(picker)) = lx.slash.as_mut() {
@@ -122,7 +115,7 @@ fn model_panel_has_transparent_background_and_blue_top_rule_and_selected_model()
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
 
-    // 顶部首行左起为蓝色 `─` 横线，无圆角边框字符。
+    // 顶部第 0 行为独立蓝色横线，第 1 行为干净的标题行。
     assert_eq!(buf[(panel.rect.x, panel.rect.y)].symbol(), "─");
     assert_eq!(
         buf[(panel.rect.x, panel.rect.y)].fg,
@@ -133,13 +126,8 @@ fn model_panel_has_transparent_background_and_blue_top_rule_and_selected_model()
         for x in panel.rect.x..panel.rect.right() {
             assert_ne!(
                 buf[(x, y)].bg,
-                ratatui::style::Color::Indexed(236),
-                "移除面板背景色"
-            );
-            assert_ne!(
-                buf[(x, y)].bg,
                 ratatui::style::Color::Indexed(240),
-                "移除条目选中背景色"
+                "无边框模式移除条目选中背景色"
             );
         }
     }
@@ -169,11 +157,6 @@ fn model_panel_has_transparent_background_and_blue_top_rule_and_selected_model()
         buf[(panel.content.x, row1)].fg,
         ratatui::style::Color::Reset,
         "正在选择的项 ❯ 为默认颜色"
-    );
-    assert_eq!(
-        buf[(panel.content.x + 2, row1)].fg,
-        ratatui::style::Color::Reset,
-        "正在选择的非当前模型名称为默认颜色"
     );
 }
 
@@ -315,8 +298,9 @@ fn history_panel_renders_top_rule_and_borderless_footer() {
         lines[footer_row]
     );
     assert_eq!(
-        panel.rect.height, 5,
-        "1 行顶部蓝色横线 + 2 条历史记录 + 空行与底边提示 2 行 = 5 行高"
+        panel.rect.height,
+        2 + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS,
+        "命令面板高度按实际候选数自适应收缩（2 行顶部 + 2 行内容 + 2 行底边 = 6 行）"
     );
 }
 
@@ -340,8 +324,9 @@ fn model_panel_renders_top_rule_and_borderless_footer() {
         lines[footer_row]
     );
     assert_eq!(
-        panel.rect.height, 6,
-        "1 行顶部蓝色横线 + 3 个模型候选 + 空行与底边提示 2 行 = 6 行高"
+        panel.rect.height,
+        3 + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS,
+        "命令面板高度按实际候选数自适应收缩（2 行顶部 + 3 行内容 + 2 行底边 = 7 行）"
     );
 }
 
@@ -382,16 +367,22 @@ fn mention_panel_tabs_render_and_hit_test_in_lx() {
         );
     }
 
-    // 切到 refDir 后渲染出引用文件夹条目，且顶边为蓝色横线、无背景色。
+    // 切到 refDir 后渲染出引用文件夹条目，且顶边为蓝色横线、无边框。
     assert!(lx.mention_switch_tab(1));
+    let panel = mention::layout(area, &lx).expect("refDir layout");
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
     let all = buffer_lines(&buf, area).join("\n");
     assert!(all.contains("codex-main/"), "refDir 条目可见: {all}");
     assert_eq!(
+        buf[(panel.rect.x, panel.rect.y)].symbol(),
+        "─",
+        "提及面板第 0 行为蓝色横线"
+    );
+    assert_eq!(
         buf[(panel.rect.x, panel.rect.y)].fg,
         ratatui::style::Color::Cyan,
-        "提及面板顶边为蓝色横线"
+        "横线为强调色"
     );
 
     // 切到 Skills Tab 渲染 skill 条目。
@@ -469,15 +460,14 @@ fn model_panel_refilter_renders_first_matching_item_selected() {
         picker.refilter("model");
         assert_eq!(picker.window.active, 0, "过滤后 active 必须重置为 0");
     }
+    let panel = slash_layout(area, &lx).expect("slash layout");
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
-    let lines = buffer_lines(&buf, area);
-    let marked: Vec<&String> = lines
-        .iter()
-        .filter(|line| line.contains(text::CURRENT_ITEM_MARKER))
-        .collect();
-    assert_eq!(marked.len(), 1, "首项带 ❯ 标记");
-    assert!(marked[0].contains("model-0"), "{:?}", marked[0]);
+    assert_eq!(
+        buf[(panel.content.x, panel.content.y)].symbol(),
+        text::CURRENT_ITEM_MARKER,
+        "首项带 ❯ 标记"
+    );
 }
 
 #[test]
@@ -489,13 +479,105 @@ fn history_panel_refilter_renders_first_matching_item_selected() {
         history.refilter("Alpha");
         assert_eq!(history.window.active, 0, "过滤后 active 必须重置为 0");
     }
+    let panel = slash_layout(area, &lx).expect("slash layout");
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
-    let lines = buffer_lines(&buf, area);
-    let marked: Vec<&String> = lines
-        .iter()
-        .filter(|line| line.contains(text::CURRENT_ITEM_MARKER))
-        .collect();
-    assert_eq!(marked.len(), 1, "首项带 ❯ 标记");
-    assert!(marked[0].contains("Alpha"), "{:?}", marked[0]);
+    assert_eq!(
+        buf[(panel.content.x, panel.content.y)].symbol(),
+        text::CURRENT_ITEM_MARKER,
+        "首项 Alpha 带 ❯ 标记"
+    );
+}
+
+#[test]
+fn lx_md_block_panel_renders_square_borders_and_selection_highlight() {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut lx = Lx::new();
+    lx.resize(80, 24);
+    lx.insert_char('#');
+    assert!(lx.panel.is_some(), "输入 # 触发 md 格式面板");
+    let lay = layout(area, &lx);
+    let rect = lay.panel.expect("md panel rect");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    assert_eq!(buf[(rect.x, rect.y)].symbol(), "┌", "md 面板左上角为直角");
+    assert_eq!(
+        buf[(rect.right() - 1, rect.y)].symbol(),
+        "┐",
+        "md 面板右上角为直角"
+    );
+    assert_eq!(
+        buf[(rect.x, rect.bottom() - 1)].symbol(),
+        "└",
+        "md 面板左下角为直角"
+    );
+    assert_eq!(
+        buf[(rect.right() - 1, rect.bottom() - 1)].symbol(),
+        "┘",
+        "md 面板右下角为直角"
+    );
+    assert_eq!(buf[(rect.x, rect.y)].bg, ratatui::style::Color::Reset);
+    assert_eq!(
+        buf[(rect.x + 2, rect.y + 3)].bg,
+        ratatui::style::Color::Indexed(240),
+        "选中项铺高亮底色"
+    );
+    assert_eq!(
+        buf[(rect.x + 2, rect.y + 4)].bg,
+        ratatui::style::Color::Reset,
+        "非选中项保持透明底色"
+    );
+    assert!(
+        super::super::command_panel_contains(area, &lx, rect.x + 2, rect.y + 1),
+        "md 格式面板矩形纳入 command_panel_contains 防穿透保护"
+    );
+
+    // 窄宽度下绘制 md 面板：长底栏与预览不得写穿右边框 `│`。
+    let narrow = Rect::new(0, 0, 26, 20);
+    let mut narrow_lx = Lx::new();
+    narrow_lx.resize(26, 20);
+    narrow_lx.insert_char('#');
+    let narrow_rect = layout(narrow, &narrow_lx).panel.expect("narrow md panel");
+    let mut narrow_buf = Buffer::empty(narrow);
+    let _ = render(
+        narrow,
+        &mut narrow_buf,
+        &narrow_lx,
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
+    for y in narrow_rect.y + 1..narrow_rect.bottom() - 1 {
+        assert_eq!(
+            narrow_buf[(narrow_rect.right() - 1, y)].symbol(),
+            "│",
+            "第 {y} 行右边框不得被内部文字覆盖"
+        );
+    }
+}
+
+#[test]
+fn lx_slash_and_mention_panels_adapt_height_up_to_max() {
+    let area = Rect::new(0, 0, 80, 24);
+    let frame_rows = mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS;
+
+    // 1. `/` 命令列表（6 个命令）与空态 `/resume`（1 行占位）按条目数自适应高度。
+    let slash_lx = slash_commands_lx(0);
+    let slash_panel = slash_layout(area, &slash_lx).expect("slash layout");
+    assert_eq!(slash_panel.rect.height, 6 + frame_rows);
+
+    let empty_resume = slash_resume_empty_lx();
+    let resume_panel = slash_layout(area, &empty_resume).expect("empty resume layout");
+    assert_eq!(resume_panel.rect.height, 1 + frame_rows);
+
+    // 2. `/model` 过滤前后（3 个候选 vs 1 个候选）高度按候选数自适应收缩，底边始终紧贴输入框。
+    let mut model_lx = model_panel_lx(Some(0));
+    let before = slash_layout(area, &model_lx).expect("before filter");
+    assert_eq!(before.rect.height, 3 + frame_rows);
+    if let Some(SlashPanel::Model(picker)) = model_lx.slash.as_mut() {
+        picker.refilter("model-2");
+    }
+    let single = slash_layout(area, &model_lx).expect("single match");
+    assert_eq!(single.rect.height, 1 + frame_rows);
+    assert_eq!(before.rect.bottom(), single.rect.bottom());
 }

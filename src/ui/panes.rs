@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType};
+use ratatui::widgets::Block;
 use unicode_width::UnicodeWidthStr;
 
 use super::{main_content, style, text, widgets};
@@ -47,7 +47,6 @@ pub(crate) fn render_panes(
             Line::from(Span::styled(format!(" {title} "), style::border_title()))
         };
         let block = Block::bordered()
-            .border_type(BorderType::Rounded)
             .border_style(style::border(focused))
             .title(title_line);
         let inner = block.inner(*rect);

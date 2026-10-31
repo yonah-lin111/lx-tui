@@ -157,9 +157,9 @@ fn lx_toast_is_painted_inside_the_pane() {
         .expect("pane rect");
     let target = state.pane_anywhere(pane).expect("pane");
     let toast = crate::ui::main_content::lx::toast_rect(inner, &target.lx).expect("toast 可见");
-    // 盒的左上角必须是边框（不是历史正文）。
+    // 盒的左上角必须是直角边框（不是历史正文）。
     let corner = buffer[(toast.x, toast.y)].symbol();
-    assert_eq!(corner, "╭", "toast 盒左上角应为圆角边框");
+    assert_eq!(corner, "┌", "toast 盒左上角应为直角边框");
     // 顶部一行出现提示文字的前半段。
     let header: String = (toast.x..toast.right())
         .map(|x| buffer[(x, toast.y + 1)].symbol())
@@ -197,13 +197,13 @@ fn lx_toast_click_closes_it() {
     let toast = crate::ui::main_content::lx::toast_rect(inner, &target.lx).expect("toast 可见");
     let mut sessions = std::collections::HashMap::new();
 
-    // 点盒内正文：不关闭。
+    // 点盒内或盒外均关闭 toast。
     let mut dirty = false;
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
             toast.x + 2,
-            toast.y + 2,
+            toast.y + 1,
         ),
         &mut state,
         &mut sessions,
@@ -215,27 +215,8 @@ fn lx_toast_click_closes_it() {
     assert!(
         state
             .pane_anywhere(pane)
-            .is_some_and(|target| target.lx.toast.is_some()),
-        "点 toast 内部内容不关闭"
-    );
-
-    // 点右上角 [✕]：关闭。
-    let close = crate::ui::widgets::modal::close_button_rect(toast).expect("close button");
-    let mut dirty = false;
-    handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), close.x, close.y),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
-    assert!(
-        state
-            .pane_anywhere(pane)
             .is_some_and(|target| target.lx.toast.is_none()),
-        "[✕] 关闭窗格内 toast"
+        "点 toast 内部关闭窗格内 toast"
     );
 
     // 重新弹一条，点盒外：关闭（且不吞掉这次点击）。

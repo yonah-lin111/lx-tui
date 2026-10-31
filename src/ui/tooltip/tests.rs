@@ -212,20 +212,20 @@ fn render_skips_until_visible_then_paints_panel_and_hint() {
 
     state.tooltip = Some(Tooltip::new(TooltipTarget::CollapseSidebar, now));
     let buffer = render_buffer(&state);
-    assert_ne!(
-        buffer[(area.x, area.y)].bg,
-        Color::Indexed(236),
-        "未到显示时刻不绘制"
+    let row_before: String = (area.x + 1..area.right() - 1)
+        .map(|x| buffer[(x, area.y + 1)].symbol())
+        .collect();
+    assert!(
+        !row_before.contains(hint),
+        "未到显示时刻不绘制: {row_before:?}"
     );
 
     assert!(crate::app::update::tick(&mut state, now + TOOLTIP_DELAY));
     let buffer = render_buffer(&state);
-    assert_eq!(buffer[(area.x, area.y)].symbol(), "╭");
-    assert_eq!(buffer[(area.x, area.y)].bg, Color::Indexed(236));
-    let top: String = (area.x..area.right())
-        .map(|x| buffer[(x, area.y)].symbol())
-        .collect();
-    assert!(top.contains(text::TOOLTIP_TITLE), "顶边框标题：{top:?}");
+    assert_eq!(buffer[(area.x, area.y)].symbol(), "┌");
+    assert_eq!(buffer[(area.right() - 1, area.y + 1)].symbol(), "│");
+    assert_eq!(buffer[(area.x, area.y)].bg, Color::Reset);
+    assert_eq!(buffer[(area.x + 1, area.y + 1)].bg, Color::Reset);
     let row: String = (area.x + 1..area.right() - 1)
         .map(|x| buffer[(x, area.y + 1)].symbol())
         .collect();

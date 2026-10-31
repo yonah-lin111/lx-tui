@@ -10,10 +10,10 @@ use ratatui::widgets::Paragraph;
 
 use super::dialog::{BUTTON_GAP, render_buttons, render_input};
 
-/// worktree 对话框宽度与高度范围（行）：条目两行一条 + 搜索/分隔/按钮与外框。
+/// worktree 对话框宽度与高度范围（行）：条目两行一条 + 搜索/分隔/按钮与顶底栏框。
 const WORKTREE_DIALOG_WIDTH: u16 = 56;
-const WORKTREE_DIALOG_MIN_HEIGHT: u16 = 10;
-const WORKTREE_DIALOG_MAX_HEIGHT: u16 = 20;
+const WORKTREE_DIALOG_MIN_HEIGHT: u16 = 12;
+const WORKTREE_DIALOG_MAX_HEIGHT: u16 = 22;
 const WORKTREE_DIALOG_BUTTONS: [&str; 2] = [text::BUTTON_OPEN, text::BUTTON_CANCEL];
 
 /// worktree 对话框按钮。
@@ -30,14 +30,14 @@ pub fn worktree_dialog_shell(
 ) -> Option<widgets::modal::ModalShell> {
     let rows = entry_count.max(1).saturating_mul(2) as u16;
     let height = rows
-        .saturating_add(6)
+        .saturating_add(9)
         .clamp(WORKTREE_DIALOG_MIN_HEIGHT, WORKTREE_DIALOG_MAX_HEIGHT);
     widgets::modal::layout(screen, WORKTREE_DIALOG_WIDTH, height)
 }
 
-/// 对话框列表可视条目数；每条两行。
+/// 对话框列表可视条目数；每条两行（扣除搜索行、分割线、底栏分割线与按钮行共 4 行）。
 pub fn worktree_dialog_max_rows(shell: &widgets::modal::ModalShell) -> usize {
-    usize::from(shell.inner.height.saturating_sub(3)) / 2
+    usize::from(shell.inner.height.saturating_sub(4)) / 2
 }
 
 /// 列表窗口起始条目位置：让选中项落在窗口内。
@@ -132,7 +132,7 @@ pub(super) fn render_worktree_open(
         shell.inner.x,
         list_y,
         shell.inner.width,
-        shell.inner.height.saturating_sub(3),
+        shell.inner.height.saturating_sub(4),
     );
     let message = if dialog.loading {
         Some(text::WORKTREE_OPEN_LOADING)
@@ -179,14 +179,14 @@ pub(super) fn render_worktree_open(
             shell.inner.height.saturating_sub(1),
         ),
         &[
-            (text::BUTTON_OPEN, style::accent()),
-            (text::BUTTON_CANCEL, style::muted()),
+            (text::BUTTON_OPEN, style::button_primary()),
+            (text::BUTTON_CANCEL, style::button_secondary()),
         ],
     );
     cursor
 }
 
-/// 单条 worktree：首行 `› 名字` 加右对齐状态，次行缩进路径。
+/// 单条 worktree：首行 `› 名字` 加右对齐状态，次行缩进路径；选中项整行铺 surface 底色（对齐 herdr）。
 fn render_worktree_entry(
     frame: &mut Frame<'_>,
     inner: Rect,
@@ -200,11 +200,17 @@ fn render_worktree_entry(
     } else {
         " "
     };
-    let name_style = if selected {
-        style::accent()
+    let row_base = if selected {
+        style::overlay_selection()
     } else {
         style::text()
     };
+    let name_style = if selected {
+        row_base.add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
+        style::text()
+    };
+    let muted_style = row_base.patch(style::muted());
     let status = match entry.status() {
         WorktreeStatus::Open => text::WORKTREE_STATUS_OPEN,
         WorktreeStatus::Detached => text::WORKTREE_STATUS_DETACHED,
@@ -224,19 +230,25 @@ fn render_worktree_entry(
         .saturating_sub(title.chars().count())
         .saturating_sub(status.chars().count())
         .max(1);
+    let top_rect = Rect::new(inner.x, y, inner.width, 1);
+    let bottom_rect = Rect::new(inner.x, y.saturating_add(1), inner.width, 1);
+    if selected {
+        frame.buffer_mut().set_style(top_rect, row_base);
+        frame.buffer_mut().set_style(bottom_rect, row_base);
+    }
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(title, name_style),
             Span::styled(" ".repeat(pad), name_style),
-            Span::styled(status, style::muted()),
+            Span::styled(status, muted_style),
         ])),
-        Rect::new(inner.x, y, inner.width, 1),
+        top_rect,
     );
     frame.render_widget(
         Paragraph::new(Span::styled(
             text::ellipsize(&format!("  {}", entry.path.display()), width),
-            style::muted(),
+            muted_style,
         )),
-        Rect::new(inner.x, y.saturating_add(1), inner.width, 1),
+        bottom_rect,
     );
 }

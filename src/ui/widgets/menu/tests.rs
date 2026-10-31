@@ -27,8 +27,9 @@ fn layout_sizes_to_longest_label_with_minimum_width() {
     let wide = layout(SCREEN, (0, 0), TITLE, &["a very long menu entry label"]);
     assert_eq!(wide.area.width, 32);
 
+    // 对齐 herdr 右键菜单：不显示标题行，宽度只由菜单项决定，不被长标题撑宽。
     let long_title = layout(SCREEN, (0, 0), &"t".repeat(40), &["Close"]);
-    assert_eq!(long_title.area.width, 44);
+    assert_eq!(long_title.area.width, MIN_WIDTH);
 }
 
 #[test]
@@ -69,10 +70,9 @@ fn layout_measures_display_width_for_wide_labels() {
 }
 
 #[test]
-fn layout_sizes_title_by_display_width() {
-    // 7 个 CJK 字符 = 14 显示列 + 4 = 18，标题不再按字符数低估。
+fn layout_ignores_title_width() {
     let menu = layout(SCREEN, (0, 0), "工作区菜单标题", &["Close"]);
-    assert_eq!(menu.area.width, 18);
+    assert_eq!(menu.area.width, MIN_WIDTH);
 }
 
 #[test]
@@ -105,29 +105,27 @@ fn render_draws_border_title_labels_and_overlay_selection() {
     }
     let buffer = terminal.backend().buffer().clone();
     let text_at = |x: u16, y: u16| buffer[(x, y)].symbol().to_string();
-    assert_eq!(text_at(menu.area.x, menu.area.y), "╭");
-    assert_eq!(text_at(menu.area.right() - 1, menu.area.y), "╮");
-    let title_row: String = (menu.area.x..menu.area.right())
-        .map(|x| text_at(x, menu.area.y))
-        .collect();
-    assert!(title_row.contains(TITLE), "{title_row}");
-    assert_eq!(buffer[(menu.area.x, menu.area.y)].bg, Color::Indexed(236));
+    assert_eq!(text_at(menu.area.x, menu.area.y), "┌");
+    assert_eq!(text_at(menu.area.right() - 1, menu.area.y), "┐");
+    assert_eq!(text_at(menu.area.x, menu.area.bottom() - 1), "└");
+    assert_eq!(text_at(menu.area.right() - 1, menu.area.bottom() - 1), "┘");
+    assert_eq!(buffer[(menu.area.x, menu.area.y)].bg, Color::Reset);
     assert_eq!(
         buffer[(menu.item_rects[0].x, menu.item_rects[0].y)].bg,
-        Color::Indexed(236)
+        Color::Reset
     );
     assert_eq!(
         buffer[(menu.item_rects[0].x, menu.item_rects[0].y)].fg,
-        Color::Indexed(252)
+        Color::Reset
     );
     let row: String = (menu.item_rects[0].x..menu.item_rects[0].right())
         .map(|x| text_at(x, menu.item_rects[0].y))
         .collect();
-    assert_eq!(row.trim_end(), "Rename");
+    assert_eq!(row.trim_end(), " Rename");
     let close: String = (menu.item_rects[1].x..menu.item_rects[1].right())
         .map(|x| text_at(x, menu.item_rects[1].y))
         .collect();
-    assert_eq!(close.trim_end(), "Close");
+    assert_eq!(close.trim_end(), " Close");
     for x in menu.item_rects[1].x..menu.item_rects[1].right() {
         let cell = &buffer[(x, menu.item_rects[1].y)];
         assert!(!cell.modifier.contains(Modifier::REVERSED), "x={x}");

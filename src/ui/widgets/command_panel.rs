@@ -1,10 +1,10 @@
 //! 浮层命令面板：条目列表、高亮、窗口滚动与边框绘制；无业务语义、不读状态。
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Alignment, Position, Rect};
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
+use ratatui::widgets::{Block, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::ui::style;
@@ -12,11 +12,12 @@ use crate::ui::text;
 use crate::ui::widgets::clear;
 use crate::ui::widgets::scrollbar::{self, ScrollbarLayout};
 
-/// 面板最小可用尺寸（含边框）。
+/// 面板最小可用宽度（含边框）。
 const MIN_WIDTH: u16 = 3;
-const MIN_HEIGHT: u16 = 3;
-/// 无边框面板最小高度（1 行顶部分割线 + 1 行内容）。
-const MIN_BORDERLESS_HEIGHT: u16 = 2;
+/// 无边框面板顶部块的行数：1 行上方空行间隔 + 1 行顶部分割线。
+const TOP_BLOCK_ROWS: u16 = 2;
+/// 无边框面板最小高度（顶部 2 行 + 1 行内容）。
+const MIN_BORDERLESS_HEIGHT: u16 = TOP_BLOCK_ROWS + 1;
 /// 无边框面板底部提示块的行数：1 行空行间隔 + 1 行快捷键提示。
 const FOOTER_BLOCK_ROWS: u16 = 2;
 
@@ -92,6 +93,9 @@ pub struct CommandPanelView<'a> {
     pub anchor_row: u16,
     /// 面板最大高度（含边框）；None 表示仅受可用空间限制。
     pub max_height: Option<u16>,
+    /// 是否固定使用 `max_height` 作为面板高度（不足时内部下方留白，不随候选数自适应变化；
+    /// 仅在可用空间小于 `max_height` 时按可用空间夹取）。
+    pub fixed_height: bool,
     /// 顶边左侧标题。
     pub title: Option<&'a str>,
     /// 顶边 Tab 标签页组；若提供，优先于 title 绘制。
@@ -126,26 +130,51 @@ pub struct PanelLayout {
 
 /// 计算面板布局；空间不足或没有可见条目时返回 None。
 pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
-    // 无边框面板：顶部 1 行分割线 + 底部「1 行空行间隔 + 1 行快捷键提示」；有边框面板：上下边框各 1 行。
-    let footer_rows: u16 = if view.borderless && view.footer.is_some() {
-        FOOTER_BLOCK_ROWS
-    } else {
-        0
+    let has_header = view.title.is_some()
+        || view.right_title.is_some()
+        || view.tabs.is_some_and(|tabs| !tabs.is_empty());
+    let has_footer = view.footer.is_some();
+    let available_rows = match view.placement {
+        PanelPlacement::Auto => area
+            .height
+            .saturating_sub(view.anchor_row.saturating_add(1))
+            .max(view.anchor_row),
+        PanelPlacement::Above => view.anchor_row.min(area.height),
     };
-    let frame_rows: u16 = if view.borderless { 1 + footer_rows } else { 2 };
-    let min_height = if view.borderless {
-        MIN_BORDERLESS_HEIGHT + footer_rows
+    // 无边框面板：顶部「1 行空行间隔 + 1 行分割线」+ 底部「1 行空行间隔 + 1 行快捷键提示」；
+    // 有边框面板（对齐 herdr）：空间充裕（≥ 7 行）时，有标题占顶部 3 行（`┌──┐` + 粗体标题行 + 1 行呼吸空白），
+    // 有底栏占底部 3 行（1 行呼吸空白 + `│ footer │` + `└──┘`）；极窄矮空间（< 7 行）时退化为仅保留上下边框以优先展示候选。
+    let roomy = available_rows >= 7;
+    let top_rows: u16 = if view.borderless {
+        TOP_BLOCK_ROWS
+    } else if has_header && roomy {
+        3
     } else {
-        MIN_HEIGHT
+        1
+    };
+    let bottom_rows: u16 = if view.borderless {
+        if has_footer { FOOTER_BLOCK_ROWS } else { 0 }
+    } else if has_footer && roomy {
+        3
+    } else {
+        1
+    };
+    let frame_rows: u16 = top_rows + bottom_rows;
+    let min_height = if view.borderless {
+        MIN_BORDERLESS_HEIGHT + bottom_rows
+    } else {
+        frame_rows.saturating_add(1)
     };
     if view.items.is_empty() || area.width < MIN_WIDTH || area.height < min_height {
         return None;
     }
     let content_rows: u16 = view.items.iter().map(item_height).sum();
     let needed = content_rows.saturating_add(frame_rows);
-    let needed = view
-        .max_height
-        .map_or(needed, |max_height| needed.min(max_height));
+    let needed = match view.max_height {
+        Some(max_height) if view.fixed_height => max_height,
+        Some(max_height) => needed.min(max_height),
+        None => needed,
+    };
     let below = area
         .height
         .saturating_sub(view.anchor_row.saturating_add(1));
@@ -196,9 +225,9 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
     };
     let rect = Rect::new(area.x, y, width, height);
     let inner = if view.borderless {
-        borderless_inner_rect(rect, footer_rows)
+        borderless_inner_rect(rect, bottom_rows)
     } else {
-        inner_rect(rect)
+        inner_rect(rect, top_rows, bottom_rows)
     };
     let scrollbar = if overflow {
         scrollbar::layout(inner, view.items.len(), visible, start)
@@ -214,10 +243,30 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
         ),
         None => inner,
     };
+    let tab_y = rect.y.saturating_add(1);
+    let show_header = view.borderless || top_rows > 1;
     let tabs = match view.tabs {
-        Some(tabs) if !tabs.is_empty() => {
+        Some(tabs) if !tabs.is_empty() && show_header => {
             let mut out = Vec::with_capacity(tabs.len());
-            let mut x = rect.x.saturating_add(2);
+            let mut x = if view.borderless {
+                if let Some(title) = view.title {
+                    let text_w = u16::try_from(UnicodeWidthStr::width(title)).unwrap_or(0);
+                    rect.x
+                        .saturating_add(1)
+                        .saturating_add(text_w)
+                        .saturating_add(1)
+                } else {
+                    rect.x
+                }
+            } else if let Some(title) = view.title {
+                let text_w = u16::try_from(UnicodeWidthStr::width(title)).unwrap_or(0);
+                rect.x
+                    .saturating_add(2)
+                    .saturating_add(text_w)
+                    .saturating_add(1)
+            } else {
+                rect.x.saturating_add(2)
+            };
             let right_limit = rect.right().saturating_sub(1);
             for tab in tabs {
                 let width = u16::try_from(UnicodeWidthStr::width(tab.label))
@@ -226,7 +275,7 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
                 if x.saturating_add(width) > right_limit {
                     break;
                 }
-                out.push(Rect::new(x, rect.y, width, 1));
+                out.push(Rect::new(x, tab_y, width, 1));
                 x = x.saturating_add(width).saturating_add(1);
             }
             out
@@ -249,32 +298,20 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
     let layout = layout(area, view)?;
     clear::render_buffer(buf, layout.rect);
     let has_tabs = view.tabs.is_some_and(|tabs| !tabs.is_empty());
+    let has_header = has_tabs || view.title.is_some() || view.right_title.is_some();
     if view.borderless {
         render_top_rule(buf, &layout, view, has_tabs);
     } else {
-        let mut block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(style::muted())
-            .style(style::overlay_panel());
-        if !has_tabs && let Some(title) = view.title {
-            block = block.title_top(Line::from(Span::styled(
-                format!(" {title} "),
-                style::muted(),
-            )));
-        }
-        if let Some(right_title) = view.right_title {
-            block = block.title_top(
-                Line::from(Span::styled(format!(" {right_title} "), style::muted()))
-                    .alignment(Alignment::Right),
-            );
-        }
-        if let Some(footer) = view.footer {
-            block = block.title_bottom(Line::from(Span::styled(
-                format!(" {footer} "),
-                style::muted(),
-            )));
-        }
+        let block = Block::bordered().border_style(style::accent());
         block.render(layout.rect, buf);
+        if has_header && layout.inner.y > layout.rect.y.saturating_add(1) {
+            render_bordered_header(buf, &layout, view, has_tabs);
+        }
+        if let Some(footer) = view.footer
+            && layout.inner.bottom() < layout.rect.bottom().saturating_sub(1)
+        {
+            render_bordered_footer(buf, layout.rect, footer);
+        }
     }
     if let Some(tabs) = view.tabs {
         for (i, tab_rect) in layout.tabs.iter().enumerate() {
@@ -303,14 +340,69 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
         render_borderless_footer(buf, layout.rect, footer);
     }
     if let Some(scrollbar) = layout.scrollbar.as_ref() {
-        if view.borderless {
-            scrollbar::render_buffer(buf, scrollbar);
-        } else {
-            // 带底色的浮层：滚动条沿用面板底色，不透明。
-            scrollbar::render_buffer_with_base(buf, scrollbar, style::overlay_panel());
-        }
+        scrollbar::render_buffer(buf, scrollbar);
     }
     Some(layout.rect)
+}
+
+/// 绘制有边框命令面板的顶栏（`│ Title / Tabs ─── right_title │`）。
+fn render_bordered_header(
+    buf: &mut Buffer,
+    layout: &PanelLayout,
+    view: &CommandPanelView<'_>,
+    has_tabs: bool,
+) {
+    let rect = layout.rect;
+    let header_y = rect.y.saturating_add(1);
+    let mut left_end = rect.x.saturating_add(1);
+    if let Some(title) = view.title {
+        let x = rect.x.saturating_add(2);
+        let max_w = usize::from(rect.right().saturating_sub(1).saturating_sub(x));
+        if max_w > 0 {
+            let draw_w = u16::try_from(title.width().min(max_w)).unwrap_or(u16::MAX);
+            buf.set_stringn(x, header_y, title, max_w, style::strong());
+            left_end = x.saturating_add(draw_w);
+        }
+    }
+    if has_tabs {
+        for (i, tab_rect) in layout.tabs.iter().enumerate() {
+            if i + 1 < layout.tabs.len() {
+                let sep_x = tab_rect.right();
+                if sep_x < rect.right().saturating_sub(1)
+                    && let Some(cell) = buf.cell_mut((sep_x, header_y))
+                {
+                    cell.set_char('·');
+                    cell.set_style(style::muted());
+                }
+            }
+        }
+        if let Some(last_tab) = layout.tabs.last() {
+            left_end = last_tab.right();
+        }
+    }
+    if let Some(right_title) = view.right_title {
+        let right_edge = rect.right().saturating_sub(2);
+        let min_x = left_end.saturating_add(1);
+        let avail = usize::from(right_edge.saturating_sub(min_x));
+        if avail >= 1 {
+            let clipped = text::truncate_to_width(right_title, avail);
+            let text_w = u16::try_from(clipped.width()).unwrap_or(u16::MAX);
+            if text_w <= right_edge.saturating_sub(min_x) {
+                let x = right_edge.saturating_sub(text_w);
+                buf.set_stringn(x, header_y, &clipped, usize::from(text_w), style::muted());
+            }
+        }
+    }
+}
+
+/// 绘制有边框命令面板的底栏（无 `├───┤` 分割线，上方保留 1 行呼吸空白）。
+fn render_bordered_footer(buf: &mut Buffer, rect: Rect, footer: &str) {
+    let y = rect.bottom().saturating_sub(2);
+    let max_w = usize::from(rect.width.saturating_sub(4));
+    if max_w > 0 {
+        let clipped = text::truncate_to_width(footer, max_w);
+        buf.set_stringn(rect.x.saturating_add(2), y, &clipped, max_w, style::muted());
+    }
 }
 
 /// 绘制无边框命令面板底部的快捷键提示行（上方留 1 行空行间隔，无边框、无分割线，muted 单行，超宽截断）。
@@ -320,10 +412,7 @@ fn render_borderless_footer(buf: &mut Buffer, rect: Rect, footer: &str) {
     buf.set_stringn(rect.x, y, &text, usize::from(rect.width), style::muted());
 }
 
-/// 绘制无边框命令面板的顶部蓝色横线及内嵌标题/右侧状态。
-///
-/// 左侧 `tabs` 或 `title` 优先排布；右侧 `right_title` 仅在左侧内容之后至少留出 1 列 `─`
-/// 分隔线时绘制（超宽时按剩余空间截断，仍放不下则省略），绝不覆盖左侧标题或 Tab。
+/// 绘制无边框命令面板的顶部蓝色横线及下方干净标题栏（无横线穿透文字）。
 fn render_top_rule(
     buf: &mut Buffer,
     layout: &PanelLayout,
@@ -331,40 +420,50 @@ fn render_top_rule(
     has_tabs: bool,
 ) {
     let rect = layout.rect;
+    let rule_y = rect.y;
     for x in rect.x..rect.right() {
-        if let Some(cell) = buf.cell_mut((x, rect.y)) {
+        if let Some(cell) = buf.cell_mut((x, rule_y)) {
             cell.set_char('─');
             cell.set_style(style::accent());
         }
     }
+    let header_y = rect.y.saturating_add(1);
     let mut left_end = rect.x;
-    if has_tabs {
-        if let Some(last_tab) = layout.tabs.last() {
-            left_end = last_tab.right();
-        }
-    } else if let Some(title) = view.title {
-        let text = format!(" {title} ");
+    if let Some(title) = view.title {
         let x = rect.x.saturating_add(1);
         let max_w = usize::from(rect.right().saturating_sub(1).saturating_sub(x));
         if max_w > 0 {
-            let draw_w = u16::try_from(text.width().min(max_w)).unwrap_or(u16::MAX);
-            buf.set_style(Rect::new(x, rect.y, draw_w, 1), Style::reset());
-            buf.set_stringn(x, rect.y, &text, max_w, style::muted());
+            let draw_w = u16::try_from(title.width().min(max_w)).unwrap_or(u16::MAX);
+            buf.set_stringn(x, header_y, title, max_w, style::strong());
             left_end = x.saturating_add(draw_w);
+        }
+    }
+    if has_tabs {
+        for (i, tab_rect) in layout.tabs.iter().enumerate() {
+            if i + 1 < layout.tabs.len() {
+                let sep_x = tab_rect.right();
+                if sep_x < rect.right().saturating_sub(1)
+                    && let Some(cell) = buf.cell_mut((sep_x, header_y))
+                {
+                    cell.set_char('·');
+                    cell.set_style(style::muted());
+                }
+            }
+        }
+        if let Some(last_tab) = layout.tabs.last() {
+            left_end = last_tab.right();
         }
     }
     if let Some(right_title) = view.right_title {
         let right_edge = rect.right().saturating_sub(1);
         let min_x = left_end.saturating_add(1);
         let avail = usize::from(right_edge.saturating_sub(min_x));
-        if avail >= 3 {
-            let clipped = text::truncate_to_width(right_title, avail.saturating_sub(2));
-            let text = format!(" {clipped} ");
-            let text_w = u16::try_from(text.width()).unwrap_or(u16::MAX);
+        if avail >= 1 {
+            let clipped = text::truncate_to_width(right_title, avail);
+            let text_w = u16::try_from(clipped.width()).unwrap_or(u16::MAX);
             if text_w <= right_edge.saturating_sub(min_x) {
                 let x = right_edge.saturating_sub(text_w);
-                buf.set_style(Rect::new(x, rect.y, text_w, 1), Style::reset());
-                buf.set_stringn(x, rect.y, &text, usize::from(text_w), style::muted());
+                buf.set_stringn(x, header_y, &clipped, usize::from(text_w), style::muted());
             }
         }
     }
@@ -466,9 +565,13 @@ fn panel_width(available: u16, view: &CommandPanelView<'_>) -> u16 {
     // 标题与提示自带的包裹空格随文案宽度计入；最终宽度还需容纳两侧边框。
     let tabs_header = match view.tabs {
         Some(tabs) if !tabs.is_empty() => {
+            let title_w = view.title.map_or(0, |title| title.width() + 1);
             let total_tabs: usize = tabs.iter().map(|t| t.label.width() + 2).sum();
             let separators = tabs.len().saturating_sub(1);
-            total_tabs + separators + view.right_title.map_or(0, |title| title.width() + 2)
+            title_w
+                + total_tabs
+                + separators
+                + view.right_title.map_or(0, |title| title.width() + 2)
         }
         _ => {
             view.title.map_or(0, |title| title.width() + 2)
@@ -572,6 +675,7 @@ fn render_items(buf: &mut Buffer, layout: &PanelLayout, view: &CommandPanelView<
             item,
             !view.hide_active_marker && index == view.active,
             view.current == Some(index),
+            view.hide_active_marker,
             marker,
             label_width,
             view.borderless,
@@ -585,12 +689,14 @@ fn render_items(buf: &mut Buffer, layout: &PanelLayout, view: &CommandPanelView<
 /// - 带边框模式（Prompt 面板）：高亮项与当前项整行铺底色，当前项另加行首蓝色 `❯` 标记。
 /// - 无边框模式（lx 命令面板）：不铺任何行背景色；正在选择的项（`active`）左侧显示默认颜色 `❯`，
 ///   已生效项（`current`）主名称标为蓝色（`style::accent()`），且未处于 `active` 时左侧显示蓝色 `❯`。
+#[allow(clippy::too_many_arguments)]
 fn render_item(
     buf: &mut Buffer,
     area: Rect,
     item: &CommandItem<'_>,
     active: bool,
     current: bool,
+    placeholder: bool,
     marker: usize,
     label_width: usize,
     borderless: bool,
@@ -598,7 +704,7 @@ fn render_item(
     if area.width < 3 {
         return;
     }
-    let row_style = if !borderless && (active || current) {
+    let row_style = if !borderless && active {
         style::overlay_selection()
     } else {
         Style::default()
@@ -658,8 +764,10 @@ fn render_item(
             if marker > 0 {
                 spans.push(Span::styled(marker_span, marker_style));
             }
-            let item_label_style = if borderless && current {
+            let item_label_style = if current {
                 style::accent()
+            } else if placeholder {
+                style::muted()
             } else {
                 style::text()
             };
@@ -717,23 +825,27 @@ fn render_item(
     }
 }
 
-/// 内容区矩形：含边框面板向内收缩一圈。
-fn inner_rect(rect: Rect) -> Rect {
+/// 内容区矩形：含边框面板扣除顶部框与底部框行数，左右各扣除 1 列边框。
+fn inner_rect(rect: Rect, top_rows: u16, bottom_rows: u16) -> Rect {
     Rect::new(
         rect.x.saturating_add(1),
-        rect.y.saturating_add(1),
+        rect.y.saturating_add(top_rows),
         rect.width.saturating_sub(2),
-        rect.height.saturating_sub(2),
+        rect.height
+            .saturating_sub(top_rows)
+            .saturating_sub(bottom_rows),
     )
 }
 
-/// 无边框面板内容区矩形：扣除顶部一行分割线与底部可选快捷键提示行，左右不留边框。
+/// 无边框面板内容区矩形：扣除顶部两行（1 行空行 + 1 行分割线）与底部可选快捷键提示行，左右不留边框。
 fn borderless_inner_rect(rect: Rect, footer_rows: u16) -> Rect {
     Rect::new(
         rect.x,
-        rect.y.saturating_add(1),
+        rect.y.saturating_add(TOP_BLOCK_ROWS),
         rect.width,
-        rect.height.saturating_sub(1).saturating_sub(footer_rows),
+        rect.height
+            .saturating_sub(TOP_BLOCK_ROWS)
+            .saturating_sub(footer_rows),
     )
 }
 

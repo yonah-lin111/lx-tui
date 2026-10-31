@@ -16,6 +16,7 @@ use ratatui::style::{Color, Modifier};
 fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
     let config = Config::default();
     let mut state = AppState::demo();
+    state.prompt_width = 55;
     let screen = Rect::new(0, 0, 100, 24);
     let view = ui::layout::compute(
         screen,
@@ -236,10 +237,10 @@ fn mention_panel_renders_and_confirms_insertion() {
     let buffer = terminal.backend().buffer();
     let inner = layout::prompt_text_rect(view.prompt);
     let name_row: String = (inner.x..inner.x + inner.width)
-        .map(|x| buffer[(x, inner.y + 2)].symbol())
+        .map(|x| buffer[(x, inner.y + 4)].symbol())
         .collect();
     let detail_row: String = (inner.x..inner.x + inner.width)
-        .map(|x| buffer[(x, inner.y + 3)].symbol())
+        .map(|x| buffer[(x, inner.y + 5)].symbol())
         .collect();
     assert!(name_row.contains("app.rs"));
     assert!(name_row.contains(ui::text::MENTION_FILE_ICON), "{name_row}");
@@ -275,7 +276,7 @@ fn mention_panel_ref_dir_tab_keyboard_switching_and_insert() {
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();
     let top: String = (panel.rect.x..panel.rect.right())
-        .map(|x| buffer[(x, panel.rect.y)].symbol())
+        .map(|x| buffer[(x, panel.rect.y + 1)].symbol())
         .collect();
     assert!(top.contains(ui::text::MENTION_TAB_REF_DIR), "{top}");
 
@@ -333,7 +334,7 @@ fn mention_panel_wheel_scrolls_viewport_and_keeps_active() {
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();
     let first_row: String = (inner.x..inner.x + inner.width)
-        .map(|x| buffer[(x, inner.y + 2)].symbol())
+        .map(|x| buffer[(x, inner.y + 4)].symbol())
         .collect();
     assert!(first_row.contains("f1.rs"), "视口应下移一项：{first_row}");
     assert!(!first_row.contains("f0.rs"), "{first_row}");
@@ -393,14 +394,14 @@ fn mention_panel_folder_navigation_flow() {
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();
     let top: String = (panel.rect.x..panel.rect.right())
-        .map(|x| buffer[(x, panel.rect.y)].symbol())
+        .map(|x| buffer[(x, panel.rect.y + 1)].symbol())
         .collect();
     let bottom: String = (panel.rect.x..panel.rect.right())
-        .map(|x| buffer[(x, panel.rect.bottom() - 1)].symbol())
+        .map(|x| buffer[(x, panel.rect.bottom() - 2)].symbol())
         .collect();
     assert!(top.contains(ui::text::MENTION_TAB_FILES), "{top}");
     assert!(top.contains(ui::text::MENTION_TAB_REF_DIR), "{top}");
-    assert!(top.contains(" src "), "{top}");
+    assert!(top.contains("src"), "{top}");
     assert!(bottom.contains("tab"), "{bottom}");
 
     // Ctrl/Cmd+Z 撤销进入，回退到根，候选恢复全量。

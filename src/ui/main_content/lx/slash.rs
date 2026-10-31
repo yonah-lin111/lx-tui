@@ -213,6 +213,7 @@ fn view<'a>(
         window_start: window.viewport,
         anchor_row: above,
         max_height: Some(cap),
+        fixed_height: false,
         title: Some(title),
         tabs: None,
         right_title,

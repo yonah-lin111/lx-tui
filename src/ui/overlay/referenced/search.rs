@@ -4,10 +4,10 @@
 //! 次行 `└─ ` 父目录地址）；进入子目录后顶边右端显示当前文件夹；底边为快捷键提示。
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::text::Span;
+use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::ReferencedFolderSearch;
@@ -66,13 +66,19 @@ pub fn referenced_search_layout(
     let width = SEARCH_WIDTH.min(screen.width);
     // 高度固定（顶部范围行 + 搜索行 + 双行候选列表 + 上下边框），不随候选数量伸缩。
     let height = SEARCH_HEIGHT.min(screen.height);
-    if width < 8 || height < 6 {
+    if width < 8 || height < 10 {
         return None;
     }
     let x = screen.x + (screen.width - width) / 2;
     let y = screen.y + (screen.height - height) / 2;
     let area = Rect::new(x, y, width, height);
-    let inner = Block::bordered().inner(area);
+    // 顶部 3 行（顶边 + 标题行 + 分割线）；底部 3 行（分割线 + 快捷键行 + 底边）。
+    let inner = Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(3),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(6),
+    );
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
@@ -163,28 +169,39 @@ pub fn render_referenced_search(
     search: &ReferencedFolderSearch,
 ) -> Option<(u16, u16)> {
     let layout = referenced_search_layout(screen, search)?;
+    widgets::modal::dim_background(frame, screen);
     widgets::clear::render(frame, layout.area);
-    let mut block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(style::accent())
-        .style(style::overlay_panel())
-        .title(Span::styled(
-            format!(" {} ", text::REFERENCED_SEARCH_TITLE),
-            style::border_title(),
-        ));
-    // 进入子目录后顶边右端显示当前文件夹名。
-    if let Some(scope) = search_scope_name(search) {
-        let available = usize::from(layout.area.width.saturating_sub(2))
-            .saturating_sub(text::REFERENCED_SEARCH_TITLE.width() + 4);
-        block = block.title_top(
-            Line::from(Span::styled(
-                format!(" {} ", text::truncate_to_width(&scope, available)),
-                style::border_title(),
-            ))
-            .alignment(Alignment::Right),
-        );
-    }
+    let block = Block::bordered().border_style(style::accent());
     frame.render_widget(block, layout.area);
+    let header_y = layout.area.y + 1;
+    if layout.area.width >= 4 {
+        paint_text(
+            frame,
+            Rect::new(
+                layout.area.x + 2,
+                header_y,
+                layout.area.width.saturating_sub(4),
+                1,
+            ),
+            text::REFERENCED_SEARCH_TITLE,
+            style::strong(),
+        );
+        if let Some(scope) = search_scope_name(search) {
+            let available = usize::from(layout.area.width.saturating_sub(4))
+                .saturating_sub(text::REFERENCED_SEARCH_TITLE.width() + 2);
+            let clipped = text::truncate_to_width(&scope, available);
+            let scope_w = u16::try_from(clipped.width()).unwrap_or(0);
+            if scope_w > 0 && scope_w <= layout.area.width.saturating_sub(4) {
+                let scope_x = layout.area.right().saturating_sub(2 + scope_w);
+                paint_text(
+                    frame,
+                    Rect::new(scope_x, header_y, scope_w, 1),
+                    &clipped,
+                    style::muted(),
+                );
+            }
+        }
+    }
     // 顶部范围路径 + 右端原始路径复制按钮；截断提示紧贴复制按钮左侧（始终可见）。
     let truncated = search
         .truncated
@@ -239,8 +256,7 @@ pub fn render_referenced_search(
     };
     if let Some(status) = status {
         frame.render_widget(
-            Paragraph::new(Span::styled(format!(" {status}"), style::muted()))
-                .style(style::overlay_panel()),
+            Paragraph::new(Span::styled(format!(" {status}"), style::muted())),
             Rect {
                 height: 1,
                 ..layout.list
@@ -249,7 +265,7 @@ pub fn render_referenced_search(
     } else {
         render_search_rows(frame, &layout, search);
         if let Some(scrollbar) = layout.scrollbar {
-            widgets::scrollbar::render_with_base(frame, &scrollbar, style::overlay_panel());
+            widgets::scrollbar::render(frame, &scrollbar);
         }
     }
     cursor
@@ -268,7 +284,7 @@ fn render_search_rows(
         let base = if line.index == search.selected {
             style::overlay_selection()
         } else {
-            style::overlay_panel()
+            style::text()
         };
         fill_row(frame, line.row, base);
         render_entry_row(frame, line.row, entry, base);
@@ -350,7 +366,7 @@ fn referenced_entry_address(entry: &ReferencedEntry, width: usize) -> String {
     format!("{prefix}{}", text::ellipsize_middle(&parent, available))
 }
 
-/// 渲染内容搜索弹窗底边快捷键提示（贴底边，覆盖边框上）。
+/// 渲染内容搜索弹窗底栏快捷键提示行（无 `├───┤` 贯穿线，保留 1 行呼吸空白）。
 pub fn render_referenced_search_footer(
     frame: &mut Frame<'_>,
     screen: Rect,
@@ -359,7 +375,7 @@ pub fn render_referenced_search_footer(
     let Some(layout) = referenced_search_layout(screen, search) else {
         return;
     };
-    let y = layout.area.bottom().saturating_sub(1);
+    let y = layout.area.bottom().saturating_sub(2);
     paint_text(
         frame,
         Rect::new(layout.area.x + 2, y, layout.area.width.saturating_sub(4), 1),

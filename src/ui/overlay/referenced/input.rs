@@ -12,8 +12,8 @@ use super::paint_text;
 
 /// 路径输入弹窗宽度（列）；容纳长绝对路径。
 const INPUT_WIDTH: u16 = 72;
-/// 路径输入弹窗高度（行）：输入行、校验/错误行与底部按钮。
-const INPUT_HEIGHT: u16 = 8;
+/// 路径输入弹窗高度（行）：顶栏 3 行 + 输入行 + 校验/错误行 + 底栏 3 行。
+const INPUT_HEIGHT: u16 = 9;
 
 /// 路径输入弹窗按钮几何；不可用时 None（屏幕放不下）。
 pub fn referenced_input_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
@@ -68,9 +68,9 @@ pub fn render_referenced_input(
             shell.inner.height.saturating_sub(1),
         ),
         &[
-            (text::BUTTON_CREATE, style::accent()),
-            (text::BUTTON_CLEAR, style::muted()),
-            (text::BUTTON_CANCEL, style::muted()),
+            (text::BUTTON_CREATE, style::button_primary()),
+            (text::BUTTON_CLEAR, style::button_secondary()),
+            (text::BUTTON_CANCEL, style::button_secondary()),
         ],
     );
     let cursor = render_input(

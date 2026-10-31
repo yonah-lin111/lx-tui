@@ -1035,8 +1035,8 @@ fn mention_panel_height_capped_at_max_popup_rows() {
 }
 
 #[test]
-fn mention_panel_height_follows_content_when_few_rows() {
-    // 候选少：面板按内容收缩，不撑到上限。
+fn mention_panel_height_shrinks_to_content_when_few_rows() {
+    // 候选较少时：面板高度按候选行数自适应收缩（顶部 3 行 + 根层单行候选 1 行 + 底部 3 行 = 7 行）。
     let area = Rect::new(0, 0, 60, 60);
     let entries = vec![MentionEntry {
         path: "only.rs".into(),
@@ -1044,16 +1044,17 @@ fn mention_panel_height_follows_content_when_few_rows() {
     }];
     let lx = mention_lx(entries);
     let panel = mention::layout(area, &lx).expect("panel");
-    assert!(
-        panel.rect.height
-            < mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS,
-        "少量候选按内容高度收缩: {}",
+    assert_eq!(
+        panel.rect.height,
+        1 + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS,
+        "少量候选按实际高度收缩: {}",
         panel.rect.height
     );
+    assert!(panel.scrollbar.is_none(), "未超出最大内容行时不显示滚动条");
 }
 
 #[test]
-fn mention_panel_footer_lists_shortcut_hints_without_border() {
+fn mention_panel_renders_top_rule_with_title_and_tabs_and_borderless_footer() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = mention_lx(vec![MentionEntry {
         path: "src/main.rs".into(),
@@ -1062,18 +1063,40 @@ fn mention_panel_footer_lists_shortcut_hints_without_border() {
     let panel = mention::layout(area, &lx).expect("panel");
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
-    // 底部最后一行是快捷键提示（无边框、无分割线）。
+    // 顶部第 0 行为独立蓝色横线，第 1 行为干净的标题行（嵌 @Command 标题与 Tab，无横线穿透）
+    assert_eq!(
+        buf[(panel.rect.x, panel.rect.y)].symbol(),
+        "─",
+        "顶部为独立蓝色横线"
+    );
+    assert_eq!(
+        buf[(panel.rect.x, panel.rect.y)].fg,
+        ratatui::style::Color::Cyan,
+        "顶线为强调色"
+    );
+    let header_row: String = (panel.rect.x..panel.rect.right())
+        .map(|x| buf[(x, panel.rect.y + 1)].symbol())
+        .collect();
+    assert!(
+        header_row.contains("@Command"),
+        "标题行包含 @Command 标题: {header_row}"
+    );
+    assert!(
+        header_row.contains("Files"),
+        "标题行包含 Files 标签: {header_row}"
+    );
+    assert!(!header_row.contains('─'), "标题行无横线穿透: {header_row}");
     let footer_row = panel.rect.bottom() - 1;
     let footer: String = (panel.rect.x..panel.rect.right())
         .map(|x| buf[(x, footer_row)].symbol())
         .collect();
     assert!(
-        footer.contains("[tabs ←→]") && footer.contains("[close esc]"),
-        "底边显示快捷键提示: {footer:?}"
+        footer.contains("←→ tabs") && footer.contains("esc close"),
+        "底栏显示快捷键提示: {footer:?}"
     );
     assert!(
         !footer.contains('─') && !footer.contains('│'),
-        "底边提示行不画边框或分割线: {footer:?}"
+        "底栏无边框与分割线: {footer:?}"
     );
 }
 

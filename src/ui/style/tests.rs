@@ -29,10 +29,10 @@ fn selected_item_fills_accent_with_contrast_foreground() {
 }
 
 #[test]
-fn overlay_panel_paints_indexed_surface_with_readable_foreground() {
+fn overlay_panel_stays_transparent_with_default_foreground() {
     let style = overlay_panel();
-    assert_eq!(style.fg, Some(Color::Indexed(252)));
-    assert_eq!(style.bg, Some(Color::Indexed(236)));
+    assert_eq!(style.fg, None);
+    assert_eq!(style.bg, None);
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn overlay_selection_uses_contrast_surface_without_reversed() {
 }
 
 #[test]
-fn menu_confirm_and_toast_border_styles_are_distinct_from_primary_cyan() {
+fn toast_border_follows_overlay_accent_and_semantic_colors() {
     use crate::app::toast::ToastKind;
     let confirm = menu_confirm();
     assert_eq!(confirm.fg, Some(Color::Indexed(255)));
@@ -115,12 +115,17 @@ fn menu_confirm_and_toast_border_styles_are_distinct_from_primary_cyan() {
     let default_b = toast_border(ToastKind::Default);
     let warn_b = toast_border(ToastKind::Warning);
     let danger_b = toast_border(ToastKind::Danger);
-    assert_eq!(default_b.fg, Some(Color::Indexed(141)));
-    assert_eq!(warn_b.fg, Some(Color::Indexed(214)));
-    assert_eq!(danger_b.fg, Some(Color::Indexed(204)));
+    assert_eq!(default_b.fg, accent().fg, "默认 toast 与浮层强调色一致");
+    assert_eq!(warn_b.fg, Some(Color::Yellow));
+    assert_eq!(danger_b.fg, Some(Color::Red));
     for s in [default_b, warn_b, danger_b] {
-        assert_ne!(s.fg, accent().fg, "toast 边框不得与主色调 Cyan 重叠");
         assert_eq!(s.bg, None, "toast 边框不自带背景色");
+    }
+    for kind in [ToastKind::Default, ToastKind::Warning, ToastKind::Danger] {
+        let title = toast_title(kind);
+        assert!(title.add_modifier.contains(Modifier::DIM));
+        assert!(!title.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(title.fg, toast_border(kind).fg, "标题与边框同色系");
     }
 }
 

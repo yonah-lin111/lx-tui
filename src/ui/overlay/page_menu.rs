@@ -5,9 +5,8 @@
 //! 页数超出屏幕时窗口跟随光标滚动。
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::markdown::TemplateStatus;
@@ -87,9 +86,9 @@ fn page_labels(state: &AppState, menu: &PageMenu) -> Vec<PageLabel> {
         .collect()
 }
 
-/// 页码菜单可视页数（扣除上下边框，每页一行）。
+/// 页码菜单可视页数（扣除顶边 + 标题行 + 底边共 3 行，每页一行）。
 pub fn page_menu_visible_pages(screen: Rect) -> usize {
-    usize::from(screen.height.saturating_sub(2))
+    usize::from(screen.height.saturating_sub(3))
 }
 
 /// 页窗口起点：光标停在页行时保持该页可见（靠底部对齐）；按钮行光标贴两端。
@@ -127,7 +126,7 @@ pub fn page_menu_layout(state: &AppState, screen: Rect, menu: &PageMenu) -> Page
     let interior = desired.min(screen.width.saturating_sub(2));
     let width = interior + 2;
     let shown = end - start;
-    let height = u16::try_from(2 + shown)
+    let height = u16::try_from(3 + shown)
         .unwrap_or(u16::MAX)
         .min(screen.height);
     let x = menu
@@ -139,22 +138,31 @@ pub fn page_menu_layout(state: &AppState, screen: Rect, menu: &PageMenu) -> Page
         .1
         .clamp(screen.y, screen.y + screen.height.saturating_sub(height));
     let area = Rect::new(x, y, width, height);
+    let header_y = area
+        .y
+        .saturating_add(1)
+        .min(area.bottom().saturating_sub(1));
     let delete_width = u16::try_from(text::MENU_PAGE_DELETE.width()).unwrap_or(u16::MAX);
     let delete_rect = Rect::new(
         area.right().saturating_sub(1 + delete_width),
-        area.y,
+        header_y,
         delete_width,
         1,
     );
     let new_width = u16::try_from(text::MENU_PAGE_NEW.width()).unwrap_or(u16::MAX);
     let new_rect = Rect::new(
         delete_rect.x.saturating_sub(1 + new_width),
-        area.y,
+        header_y,
         new_width,
         1,
     );
+    let page_top = if area.height >= 3 {
+        area.y.saturating_add(2)
+    } else {
+        area.y.saturating_add(1)
+    };
     let page_rects = (0..shown)
-        .map(|index| Rect::new(area.x + 1, area.y + 1 + index as u16, interior, 1))
+        .map(|index| Rect::new(area.x + 1, page_top + index as u16, interior, 1))
         .collect();
     PageMenuLayout {
         area,
@@ -199,16 +207,21 @@ pub(super) fn render_page_menu(
     let labels = page_labels(state, menu);
     let layout = page_menu_layout(state, screen, menu);
     crate::ui::widgets::clear::render(frame, layout.area);
-    let block = ratatui::widgets::Block::bordered()
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(style::accent())
-        .style(style::overlay_panel())
-        .title_alignment(Alignment::Left)
-        .title(Span::styled(
-            format!(" {} ", text::MENU_TITLE_PAGES),
-            style::border_title(),
-        ));
+    let block = ratatui::widgets::Block::bordered().border_style(style::accent());
     frame.render_widget(block, layout.area);
+    if layout.area.height >= 3 && layout.area.width >= 4 {
+        paint_text(
+            frame,
+            Rect::new(
+                layout.area.x + 2,
+                layout.area.y + 1,
+                layout.area.width.saturating_sub(4),
+                1,
+            ),
+            text::MENU_TITLE_PAGES,
+            style::strong(),
+        );
+    }
     let last = menu.rows.len().saturating_sub(1);
     let delete_enabled = matches!(
         menu.rows.get(last),
@@ -233,7 +246,7 @@ pub(super) fn render_page_menu(
         let base = if selected {
             style::overlay_selection()
         } else {
-            style::overlay_panel()
+            style::text()
         };
         fill_row(frame, *rect, base);
         if *current {
@@ -264,11 +277,11 @@ pub(super) fn render_page_menu(
 /// 边框按钮：文字覆盖在顶部边框上、贴右端；不可用时置灰（同工具栏撤销/重做），
 /// 悬停不铺底色，仅由 tooltip 提示。
 fn render_chip(frame: &mut Frame<'_>, rect: Rect, label: &str, disabled: bool) {
-    let text_style = style::overlay_panel().patch(if disabled {
-        style::muted()
+    let text_style = if disabled {
+        style::muted_on_border()
     } else {
         style::accent()
-    });
+    };
     paint_text(frame, rect, label, text_style);
 }
 

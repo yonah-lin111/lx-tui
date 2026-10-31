@@ -355,6 +355,20 @@ pub(crate) fn slash_panel_layout(
     ui::prompt::slash_layout(&state.prompt, area)
 }
 
+/// 坐标是否落在 Prompt 编辑区任意已打开的命令面板矩形内。
+pub(crate) fn prompt_command_panel_contains(
+    state: &AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> bool {
+    if !update::prompt_panel_active(state) || update::prompt_tree_mode(state) {
+        return false;
+    }
+    let area = paste::prompt_text_area(view);
+    ui::prompt::command_panel_contains(&state.prompt, area, column, row)
+}
+
 /// 模板块操作按钮命中；未命中返回 None。
 pub(crate) fn template_button_at(
     state: &AppState,

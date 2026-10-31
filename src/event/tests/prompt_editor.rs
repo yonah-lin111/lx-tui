@@ -137,9 +137,9 @@ fn mouse_interacts_with_slash_panel() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    // 悬停第 2 项：只改高亮。
+    // 悬停第 2 项：只改高亮（内容区从 panel.content.y 开始）。
     handle_terminal_event(
-        mouse(MouseEventKind::Moved, rect.x + 2, rect.y + 2),
+        mouse(MouseEventKind::Moved, rect.x + 2, panel.content.y + 1),
         &mut state,
         &mut sessions,
         &geo,
@@ -157,7 +157,7 @@ fn mouse_interacts_with_slash_panel() {
         mouse(
             MouseEventKind::Down(MouseButton::Left),
             rect.x + 2,
-            rect.y + 1,
+            panel.content.y,
         ),
         &mut state,
         &mut sessions,
@@ -835,5 +835,43 @@ fn prompt_refer_panel_wheel_scrolls_by_wheel_lines_without_scrolling_editor() {
         state.prompt.scroll(),
         scroll_before,
         "快捷引用面板内滚轮不滚动底层 prompt"
+    );
+}
+
+#[test]
+fn clicking_prompt_command_panel_chrome_does_not_penetrate_to_editor_cursor() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    update::focus_prompt(&mut state);
+    state.prompt.insert_str("line 0\nline 1\nline 2\n@");
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let text_area = crate::event::paste::prompt_text_area(&geo.view);
+    let panel = ui::prompt::mention_layout(&state.prompt, text_area).expect("mention panel open");
+    let cursor_before = state.prompt.cursor();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 点击面板标题 @Command 所在行或底部快捷键提示行：面板保持打开、光标不跳到底层文本行。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            panel.rect.x + 2,
+            panel.rect.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(
+        state.prompt.mention_active(),
+        "点击面板标题区不得关闭提及面板"
+    );
+    assert_eq!(
+        state.prompt.cursor(),
+        cursor_before,
+        "点击面板非条目区不得穿透移动底层编辑器光标"
     );
 }

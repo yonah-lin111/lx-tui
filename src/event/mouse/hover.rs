@@ -51,6 +51,11 @@ pub(crate) fn handle_mouse_moved(
         rects,
         view,
     } = geometry;
+    let hovering_toast = ui::toast::rect(state, view, rects, *screen, config)
+        .is_some_and(|toast| toast.contains((mouse.column, mouse.row).into()));
+    if update::set_toast_hover(state, hovering_toast) {
+        *dirty = true;
+    }
     // 浮层打开时悬停只服务菜单高亮，不触碰底层 hover 状态。
     if state.overlay.is_some() {
         if let Some(Overlay::Menu(menu)) = state.overlay.as_ref() {
@@ -216,11 +221,6 @@ pub(crate) fn handle_mouse_moved(
             *dirty = true;
         }
         return;
-    }
-    let hovering_toast = ui::toast::rect(state, view, rects, *screen, config)
-        .is_some_and(|toast| toast.contains((mouse.column, mouse.row).into()));
-    if update::set_toast_hover(state, hovering_toast) {
-        *dirty = true;
     }
     // lx 窗格自己的 toast：悬停同样冻结消失计时（与全局 toast 同一语义）。
     // 命中的是「指针下那个窗格的盒」，不放宽到其它窗格。

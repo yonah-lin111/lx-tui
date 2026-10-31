@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 
 use crate::app::state::{AppState, Workspace};
 use crate::detect::PaneAgentSnapshot;
@@ -22,7 +22,6 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     }
     // 侧栏边框随焦点描边：它自己持焦点时用强调色，其余容器持焦点时保持 muted。
     let block = Block::bordered()
-        .border_type(BorderType::Rounded)
         .border_style(style::border(state.sidebar_focused()))
         .title(Span::styled(
             format!(" {} ", text::SIDEBAR_TITLE),

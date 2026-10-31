@@ -222,18 +222,21 @@ fn wide_chars_mark_spacer_cells() {
 
 #[test]
 fn renders_block_command_panel_below_cursor() {
-    let area = Rect::new(0, 0, 30, 10);
+    let area = Rect::new(0, 0, 30, 12);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
-    editor.resize(30, 10);
+    editor.resize(30, 12);
     editor.insert_str("#");
     assert!(editor.panel().is_some());
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
-    assert_eq!(buf[(0, 1)].symbol(), "╭");
-    let row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
+    assert_eq!(buf[(0, 1)].symbol(), "┌");
+    assert_eq!(buf[(0, 3)].symbol(), "│");
+    assert_eq!(buf[(0, 1)].bg, Color::Reset);
+    let row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
     assert!(row.contains("Heading 1"));
-    assert_eq!(buf[(2, 2)].bg, Color::Indexed(240));
+    assert_eq!(buf[(2, 4)].bg, Color::Indexed(240));
+    assert_eq!(buf[(2, 5)].bg, Color::Reset);
 
     let mut empty = Buffer::empty(area);
     let blank = prompt(10, 3, "plain");
@@ -243,60 +246,62 @@ fn renders_block_command_panel_below_cursor() {
 
 #[test]
 fn block_panel_renders_commands_title() {
-    let area = Rect::new(0, 0, 30, 10);
+    let area = Rect::new(0, 0, 30, 12);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
-    editor.resize(30, 10);
+    editor.resize(30, 12);
     editor.insert_str("#");
     let rect = panel_rect(&editor, area).expect("panel visible");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
-    let top: String = (0..area.width).map(|x| buf[(x, rect.y)].symbol()).collect();
+    let top: String = (0..area.width)
+        .map(|x| buf[(x, rect.y + 1)].symbol())
+        .collect();
     assert!(top.contains(text::BLOCK_PANEL_TITLE), "{top}");
 }
 
 #[test]
 fn block_panel_rect_and_items_hit_test() {
-    let area = Rect::new(0, 0, 30, 10);
+    let area = Rect::new(0, 0, 30, 14);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
-    editor.resize(30, 10);
+    editor.resize(30, 14);
     editor.insert_str("#");
     let rect = panel_rect(&editor, area).expect("panel visible");
     assert_eq!(rect.y, 1, "面板贴在锚点行下方");
-    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 1), Some(0));
-    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 2), Some(1));
-    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 6), Some(5));
+    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 3), Some(0));
+    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 4), Some(1));
+    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 8), Some(5));
     assert_eq!(
-        panel_item_at(&editor, area, 2, rect.y + 7),
+        panel_item_at(&editor, area, 2, rect.y + 9),
         None,
-        "下边框不命中"
+        "底栏分割线不命中"
     );
     assert_eq!(
-        panel_item_at(&editor, area, 2, rect.y),
+        panel_item_at(&editor, area, 2, rect.y + 2),
         None,
-        "上边框不命中"
+        "顶栏分割线不命中"
     );
 }
 
 #[test]
 fn block_panel_window_keeps_still_when_hovering_visible_item() {
-    let area = Rect::new(0, 0, 30, 7);
+    let area = Rect::new(0, 0, 30, 11);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
-    editor.resize(30, 7);
+    editor.resize(30, 11);
     editor.insert_str("#");
     editor.panel_move(5);
     let rect = panel_rect(&editor, area).expect("panel visible");
-    let top = panel_item_at(&editor, area, 2, rect.y + 1);
+    let top = panel_item_at(&editor, area, 2, rect.y + 3);
 
     // 悬停窗口内条目：窗口保持不动（锚点不跟随悬停）。
     assert!(editor.panel_set_active(3));
     assert_eq!(editor.panel().map(|panel| panel.active()), Some(3));
     assert_eq!(panel_rect(&editor, area), Some(rect));
-    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 1), top);
+    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 3), top);
 
     // 键盘移动：锚点跟随高亮，窗口滚动。
     editor.panel_move(-1);
-    assert_ne!(panel_item_at(&editor, area, 2, rect.y + 1), top);
+    assert_ne!(panel_item_at(&editor, area, 2, rect.y + 3), top);
 }
 
 #[test]
@@ -323,24 +328,25 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
-    assert_eq!(buf[(0, 1)].symbol(), "╭");
-    let name_row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
-    let dir_row: String = (0..area.width).map(|x| buf[(x, 3)].symbol()).collect();
+    assert_eq!(buf[(0, 1)].symbol(), "┌");
+    assert_eq!(buf[(0, 1)].bg, Color::Reset);
+    let name_row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
+    let dir_row: String = (0..area.width).map(|x| buf[(x, 5)].symbol()).collect();
     assert!(name_row.contains("app.rs"));
     assert!(name_row.contains(text::MENTION_FILE_ICON), "{name_row}");
-    assert_eq!(buf[(3, 2)].symbol(), text::MENTION_FILE_ICON);
-    assert!(buf[(3, 2)].modifier.contains(Modifier::DIM));
+    assert_eq!(buf[(3, 4)].symbol(), text::MENTION_FILE_ICON);
+    assert!(buf[(3, 4)].modifier.contains(Modifier::DIM));
     assert!(dir_row.contains("src"));
     assert!(dir_row.contains(text::WORKSPACE_TREE_LAST), "{dir_row}");
-    assert!(buf[(3, 3)].modifier.contains(Modifier::DIM));
-    assert_eq!(buf[(2, 2)].bg, Color::Indexed(240));
+    assert!(buf[(3, 5)].modifier.contains(Modifier::DIM));
+    assert_eq!(buf[(2, 4)].bg, Color::Indexed(240));
 
-    assert_eq!(mention_item_at(&editor, area, 2, 2), Some(0));
-    assert_eq!(mention_item_at(&editor, area, 2, 3), Some(0));
-    assert_eq!(mention_item_at(&editor, area, 2, 4), Some(1));
-    assert_eq!(mention_item_at(&editor, area, 2, 5), Some(1));
-    assert_eq!(mention_item_at(&editor, area, 2, 6), None);
-    assert_eq!(mention_item_at(&editor, area, 2, 1), None);
+    assert_eq!(mention_item_at(&editor, area, 2, 4), Some(0));
+    assert_eq!(mention_item_at(&editor, area, 2, 5), Some(0));
+    assert_eq!(mention_item_at(&editor, area, 2, 6), Some(1));
+    assert_eq!(mention_item_at(&editor, area, 2, 7), Some(1));
+    assert_eq!(mention_item_at(&editor, area, 2, 8), None);
+    assert_eq!(mention_item_at(&editor, area, 2, 3), None);
 }
 
 #[test]
@@ -476,30 +482,25 @@ fn mention_panel_marks_directory_and_file_icons() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
-    let dir_row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
-    let file_row: String = (0..area.width).map(|x| buf[(x, 3)].symbol()).collect();
+    let dir_row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
+    let file_row: String = (0..area.width).map(|x| buf[(x, 5)].symbol()).collect();
     assert!(dir_row.contains(text::MENTION_DIR_ICON), "{dir_row}");
     assert!(dir_row.contains("src/"), "{dir_row}");
     assert!(file_row.contains(text::MENTION_FILE_ICON), "{file_row}");
     assert!(file_row.contains("app.rs"), "{file_row}");
     assert_ne!(text::MENTION_DIR_ICON, text::MENTION_FILE_ICON);
-    // 目录条目按目录色（强调色加粗）着色，文件条目保持默认前景。
-    assert_eq!(buf[(3, 2)].fg, Color::Cyan, "目录图标用目录色");
-    assert!(buf[(3, 2)].modifier.contains(Modifier::BOLD));
-    assert_eq!(buf[(5, 2)].fg, Color::Cyan, "目录名称用目录色");
-    assert_eq!(
-        buf[(5, 3)].fg,
-        Color::Indexed(252),
-        "文件名称沿用浮层默认前景"
-    );
-    assert!(!buf[(5, 3)].modifier.contains(Modifier::BOLD));
+    // 目录条目按目录色（黄色）着色，文件条目保持默认前景。
+    assert_eq!(buf[(3, 4)].fg, Color::Yellow, "目录图标用目录色");
+    assert_eq!(buf[(5, 4)].fg, Color::Yellow, "目录名称用目录色");
+    assert_eq!(buf[(5, 5)].fg, Color::Reset, "文件名称沿用终端默认前景");
+    assert!(!buf[(5, 5)].modifier.contains(Modifier::BOLD));
 }
 
 #[test]
 fn mention_panel_renders_title_folder_name_and_footer() {
-    let area = Rect::new(0, 0, 40, 20);
+    let area = Rect::new(0, 0, 50, 20);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
-    editor.resize(40, 20);
+    editor.resize(50, 20);
     editor.set_mention_root(Some(std::path::PathBuf::from("/tmp/ws")));
     editor.insert_str("@");
     let (generation, _) = editor.take_mention_scan_request().expect("scan requested");
@@ -517,16 +518,17 @@ fn mention_panel_renders_title_folder_name_and_footer() {
         ],
     );
 
-    // 根范围：只有左上标题与底边提示，右上不显示目录名。
+    // 根范围：左上 @Command 与 Tab，底边提示，右上不显示目录名。
     let root_rect = mention_panel_rect(&editor, area).expect("panel visible");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
     let root_top: String = (0..area.width)
-        .map(|x| buf[(x, root_rect.y)].symbol())
+        .map(|x| buf[(x, root_rect.y + 1)].symbol())
         .collect();
     let root_bottom: String = (0..area.width)
-        .map(|x| buf[(x, root_rect.bottom() - 1)].symbol())
+        .map(|x| buf[(x, root_rect.bottom() - 2)].symbol())
         .collect();
+    assert!(root_top.contains("@Command"), "{root_top}");
     assert!(root_top.contains(text::MENTION_TAB_FILES), "{root_top}");
     assert!(root_top.contains(text::MENTION_TAB_REF_DIR), "{root_top}");
     assert!(root_bottom.contains("tab"), "{root_bottom}");
@@ -536,12 +538,15 @@ fn mention_panel_renders_title_folder_name_and_footer() {
     let rect = mention_panel_rect(&editor, area).expect("scoped panel visible");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
-    let top: String = (0..area.width).map(|x| buf[(x, rect.y)].symbol()).collect();
-    let bottom: String = (0..area.width)
-        .map(|x| buf[(x, rect.bottom() - 1)].symbol())
+    let top: String = (0..area.width)
+        .map(|x| buf[(x, rect.y + 1)].symbol())
         .collect();
+    let bottom: String = (0..area.width)
+        .map(|x| buf[(x, rect.bottom() - 2)].symbol())
+        .collect();
+    assert!(top.contains("@Command"), "{top}");
     assert!(top.contains(text::MENTION_TAB_FILES), "{top}");
-    assert!(top.contains(" src "), "{top}");
+    assert!(top.contains("src"), "{top}");
     assert!(bottom.contains("tab"), "{bottom}");
 }
 
@@ -565,10 +570,10 @@ fn mention_panel_middle_truncates_overlong_parent_path() {
 
     let rect = mention_panel_rect(&editor, area).expect("panel visible");
     let name_row: String = (0..area.width)
-        .map(|x| buf[(x, rect.y + 1)].symbol())
+        .map(|x| buf[(x, rect.y + 3)].symbol())
         .collect();
     let dir_row: String = (0..area.width)
-        .map(|x| buf[(x, rect.y + 2)].symbol())
+        .map(|x| buf[(x, rect.y + 4)].symbol())
         .collect();
     assert!(name_row.contains("file.rs"), "{name_row}");
     assert!(dir_row.contains(text::WORKSPACE_TREE_LAST), "{dir_row}");
@@ -588,9 +593,9 @@ fn mention_panel_middle_truncates_overlong_parent_path() {
 
 #[test]
 fn mention_panel_window_keeps_still_when_hovering_visible_item() {
-    let area = Rect::new(0, 0, 30, 20);
+    let area = Rect::new(0, 0, 30, 28);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
-    editor.resize(30, 20);
+    editor.resize(30, 28);
     editor.set_mention_root(Some(std::path::PathBuf::from("/tmp/ws")));
     editor.insert_str("@");
     let (generation, _) = editor.take_mention_scan_request().expect("scan requested");
@@ -604,13 +609,13 @@ fn mention_panel_window_keeps_still_when_hovering_visible_item() {
 
     editor.mention_move(9);
     let rect = mention_panel_rect(&editor, area).expect("panel visible");
-    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 1), Some(6));
+    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 3), Some(6));
 
     // 悬停窗口内条目：窗口保持不动，不因悬停向上滚动。
     editor.mention_set_active(8);
     assert_eq!(mention_panel_rect(&editor, area), Some(rect));
-    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 1), Some(6));
-    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 7), Some(9));
+    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 3), Some(6));
+    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 9), Some(9));
 }
 
 /// 工具栏渲染测试面板：40x8，内容区含顶部 2 行表头。
@@ -867,7 +872,7 @@ fn toolbar_folders_button_renders_left_of_pin_and_hides_in_tree() {
 }
 
 #[test]
-fn divider_follows_prompt_focus_style() {
+fn divider_stays_muted_across_focus_states() {
     let panel = toolbar_panel();
     let editor = Prompt::new(PaneId::from_raw_for_test(1));
     let divider_y = crate::layout::prompt_toolbar_rect(panel)
@@ -875,40 +880,25 @@ fn divider_follows_prompt_focus_style() {
         .y
         + crate::layout::PROMPT_TOOLBAR_HEIGHT;
 
-    let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        true,
-        PromptMode::Editor,
-        false,
-        false,
-        false,
-        true,
-    );
-    for x in [panel.x, 5, panel.right() - 1] {
-        let cell = &buf[(x, divider_y)];
-        assert_eq!(cell.fg, Color::Cyan, "聚焦分割线跟随强调色: x={x}");
-        assert!(cell.modifier.contains(Modifier::BOLD));
-    }
-
-    let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        false,
-        PromptMode::Editor,
-        false,
-        false,
-        false,
-        true,
-    );
-    for x in [panel.x, 5, panel.right() - 1] {
-        let cell = &buf[(x, divider_y)];
-        assert_ne!(cell.fg, Color::Cyan, "失焦分割线不强调: x={x}");
-        assert!(cell.modifier.contains(Modifier::DIM));
+    for focused in [true, false] {
+        let mut buf = Buffer::empty(panel);
+        render_header(
+            panel,
+            &mut buf,
+            &editor,
+            focused,
+            PromptMode::Editor,
+            false,
+            false,
+            false,
+            true,
+        );
+        for x in [panel.x, 5, panel.right() - 1] {
+            let cell = &buf[(x, divider_y)];
+            assert_ne!(cell.fg, Color::Cyan, "分割线恒为暗灰、不随焦点变色: x={x}");
+            assert!(cell.modifier.contains(Modifier::DIM));
+            assert!(!cell.modifier.contains(Modifier::BOLD));
+        }
     }
 }
 
@@ -986,7 +976,7 @@ fn template_command_and_title_and_mention_styles() {
     render(area, &mut buf, &editor, None);
 
     // 模板块左边框占前两列，文本整体右移。
-    assert_eq!(buf[(0, 0)].symbol(), "╭");
+    assert_eq!(buf[(0, 0)].symbol(), "┌");
     assert_eq!(buf[(0, 0)].fg, Color::LightBlue, "todo 边框为靛蓝");
     assert_eq!(buf[(1, 0)].symbol(), "─");
 
@@ -1022,15 +1012,15 @@ fn template_block_draws_status_colored_border_box() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &running, None);
 
-    assert_eq!(buf[(0, 0)].symbol(), "╭");
+    assert_eq!(buf[(0, 0)].symbol(), "┌");
     assert_eq!(buf[(0, 0)].fg, Color::Yellow, "in_progress 边框为黄");
-    assert_eq!(buf[(59, 0)].symbol(), "╮");
+    assert_eq!(buf[(59, 0)].symbol(), "┐");
     assert_eq!(buf[(59, 0)].fg, Color::Yellow);
     assert_eq!(buf[(0, 1)].symbol(), "│");
     assert_eq!(buf[(0, 1)].fg, Color::Yellow);
     assert_eq!(buf[(59, 1)].symbol(), "│");
-    assert_eq!(buf[(0, 2)].symbol(), "╰");
-    assert_eq!(buf[(59, 2)].symbol(), "╯");
+    assert_eq!(buf[(0, 2)].symbol(), "└");
+    assert_eq!(buf[(59, 2)].symbol(), "┘");
     assert_eq!(buf[(0, 2)].fg, Color::Yellow);
     // 结束行底边以 `─` 补满文本之后。
     assert_eq!(buf[(40, 2)].symbol(), "─");
@@ -1049,37 +1039,26 @@ fn template_block_draws_status_colored_border_box() {
 }
 
 #[test]
-fn template_block_paints_status_background() {
+fn template_block_keeps_transparent_background() {
     let area = Rect::new(0, 0, 60, 4);
-    let cases = [
-        (
-            "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end",
-            Color::Rgb(35, 40, 56),
-        ),
-        (
-            "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end in_progress",
-            Color::Rgb(51, 41, 28),
-        ),
-        (
-            "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end done",
-            Color::Rgb(29, 46, 36),
-        ),
-    ];
-    for (text, bg) in cases {
+    for text in [
+        "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end",
+        "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end in_progress",
+        "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end done",
+    ] {
         let editor = prompt(60, 4, text);
         let mut buf = Buffer::empty(area);
         render(area, &mut buf, &editor, None);
-        for y in 0..3 {
+        for y in 0..4 {
             for x in 0..area.width {
-                assert_eq!(buf[(x, y)].bg, bg, "{text:?} ({x},{y})");
+                assert_eq!(buf[(x, y)].bg, Color::Reset, "{text:?} ({x},{y})");
             }
         }
-        assert_eq!(buf[(0, 3)].bg, Color::Reset, "块外行不着色");
     }
 }
 
 #[test]
-fn template_block_background_skips_selected_cells() {
+fn template_block_selection_uses_reversed_modifier_on_transparent_background() {
     let area = Rect::new(0, 0, 60, 4);
     let editor = prompt(
         60,
@@ -1089,9 +1068,9 @@ fn template_block_background_skips_selected_cells() {
     let selection = selection(&editor, (1, 3), (1, 8));
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, Some(&selection));
-    assert_eq!(buf[(5, 1)].bg, Color::Reset, "选区格不铺块底色");
+    assert_eq!(buf[(5, 1)].bg, Color::Reset);
     assert!(buf[(5, 1)].modifier.contains(Modifier::REVERSED));
-    assert_eq!(buf[(20, 1)].bg, Color::Rgb(51, 41, 28), "非选区格铺块底色");
+    assert_eq!(buf[(20, 1)].bg, Color::Reset);
 }
 
 #[test]
@@ -1122,7 +1101,7 @@ fn template_buttons_render_and_hit_test() {
     assert!(row.contains(text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_CLEAN), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_DEL), "{row}");
-    assert_eq!(buf[(69, 0)].symbol(), "╮");
+    assert_eq!(buf[(69, 0)].symbol(), "┐");
 
     for hit in &buttons {
         let cell = hit.rect;
@@ -1258,7 +1237,7 @@ fn supple_block_overrides_parent_template_colors() {
     render(area, &mut buf, &prompt, None);
     assert_eq!(buf[(0, 0)].fg, Color::LightBlue, "父块 todo 边框");
     assert_eq!(buf[(0, 2)].fg, Color::LightMagenta, "+++ 覆盖父边框色");
-    assert_eq!(buf[(2, 3)].bg, Color::Rgb(46, 32, 54), "+++ 覆盖父底色");
+    assert_eq!(buf[(2, 3)].bg, Color::Reset, "补充块保持透明底色");
 
     let hits = block_buttons(&prompt, area);
     assert_eq!(hits.len(), 4, "补充块折叠、复制、清理与删除四个按钮");
@@ -1304,7 +1283,7 @@ fn folded_supplement_renders_compact_header_and_toggles_icon() {
     assert!(prompt.toggle_supple_fold(1));
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
-    assert_eq!(buf[(0, 1)].symbol(), "╭");
+    assert_eq!(buf[(0, 1)].symbol(), "┌");
     let row = row_text(&buf, 1);
     assert!(row.contains("[▾]"), "{row}");
     assert!((0..8).any(|y| row_text(&buf, y).contains("{title: }")));
@@ -1313,13 +1292,17 @@ fn folded_supplement_renders_compact_header_and_toggles_icon() {
 
 #[test]
 fn refer_panel_width_grows_with_content_up_to_container() {
-    let area = Rect::new(0, 0, 40, 10);
-    let short = prompt(40, 10, "@a.txt one\nat");
+    let area = Rect::new(0, 0, 60, 14);
+    let short = prompt(60, 14, "@a.txt one\nat");
     let narrow = refer_layout(&short, area)
         .expect("short refer panel")
         .rect
         .width;
-    let long = prompt(40, 10, "@a/very/long/path/to/name.txt one\nname");
+    let long = prompt(
+        60,
+        14,
+        "@a/very/long/path/to/some/deep/module/name.txt one\nname",
+    );
     let wide = refer_layout(&long, area)
         .expect("long refer panel")
         .rect
@@ -1330,8 +1313,8 @@ fn refer_panel_width_grows_with_content_up_to_container() {
     );
     assert!(wide <= area.width, "panel never exceeds container: {wide}");
     let huge = prompt(
-        40,
-        10,
+        60,
+        14,
         &format!("@{}verylongname.txt one\nvery", "p/".repeat(60)),
     );
     let capped = refer_layout(&huge, area)
@@ -1365,12 +1348,11 @@ fn supple_block_renders_title_separator_like_template() {
 
 // ===== 标题行标题与页控件 =====
 
-/// 标题行渲染工具：先画圆角边框与分割线，再把标题覆盖到分割线行，
+/// 标题行渲染工具：先画直角边框与分割线，再把标题覆盖到分割线行，
 /// 返回标题行整行字符串（含两端 `├` / `┤`）。
 fn title_row_render(panel: Rect, data: &TitleRowData<'_>) -> String {
     let mut buf = Buffer::empty(panel);
-    let block =
-        ratatui::widgets::Block::bordered().border_type(ratatui::widgets::BorderType::Rounded);
+    let block = ratatui::widgets::Block::bordered();
     ratatui::widgets::Widget::render(block, panel, &mut buf);
     if let Some(header) = crate::layout::prompt_header_rect(panel) {
         render_divider(panel, header, &mut buf, false);

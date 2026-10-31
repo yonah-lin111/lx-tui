@@ -36,9 +36,9 @@ pub fn shell_prompt() -> Style {
     Style::default().fg(Color::LightRed)
 }
 
-/// 分区边框；焦点态使用 accent。
-pub fn border(focused: bool) -> Style {
-    if focused { accent() } else { muted() }
+/// 分区边框：恒为 muted（暗灰），不随焦点变色。
+pub fn border(_focused: bool) -> Style {
+    muted()
 }
 
 /// 叠加在强调色边框上的灰字（显式前景 + dim）：prompt 顶边框页名、页重命名 `· ` 分隔符、
@@ -88,11 +88,49 @@ pub fn selection() -> Style {
         .bg(Color::Indexed(240))
 }
 
-/// 浮层内选中/悬停项：在 overlay_panel（Indexed 236）底色之上使用更高亮的中灰背景（Indexed 240）与高亮白字（Indexed 255）。
+/// 浮层内选中/悬停项：使用高亮中灰背景（Indexed 240）与高亮白字（Indexed 255）。
 pub fn overlay_selection() -> Style {
     Style::default()
         .fg(Color::Indexed(255))
         .bg(Color::Indexed(240))
+}
+
+/// 模态主按钮（实心强调色胶囊块：Cyan 底、黑字、加粗；对齐 herdr 的 primary action button）。
+pub fn button_primary() -> Style {
+    Style::default()
+        .fg(Color::Black)
+        .bg(Color::Cyan)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 模态危险确认主按钮（实心红底、亮白字、加粗；对齐 herdr 的 destructive action button）。
+pub fn button_danger() -> Style {
+    Style::default()
+        .fg(Color::Indexed(255))
+        .bg(Color::Red)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 模态次级按钮（实心暗灰 surface 底、亮白字、加粗；对齐 herdr 的 surface0 action button）。
+pub fn button_secondary() -> Style {
+    Style::default()
+        .fg(Color::Indexed(255))
+        .bg(Color::Indexed(238))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 模态单行输入框底条（实心暗色 surface 底、亮白字；对齐 herdr 的 surface0 输入条）。
+pub fn modal_input() -> Style {
+    Style::default()
+        .fg(Color::Indexed(255))
+        .bg(Color::Indexed(236))
+}
+
+/// 模态单行输入框占位文字（实心暗色 surface 底上的暗灰字）。
+pub fn modal_input_placeholder() -> Style {
+    Style::default()
+        .fg(Color::Indexed(244))
+        .bg(Color::Indexed(236))
 }
 
 /// 右键菜单项行内待确认态：深红底（Indexed 160）配亮白字（Indexed 255）加粗，对齐 lx-agent 的 dangerActive。
@@ -103,17 +141,24 @@ pub fn menu_confirm() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// Toast 提示框三档专属色（边框、顶边标题与右上角 `[✕]` 关闭按钮共用）：
-/// 刻意避开项目主色调 `Cyan`、聊天步骤翡翠绿 `Indexed(42)` 与思考品红 `Indexed(218)`，
-/// 确保无背景色的 Toast 在任何面板/窗格边框旁都层次分明、不撞色。
+/// Toast 提示框三档语义色（边框与右上角 `[✕]` 共用）：默认沿用浮层强调色，
+/// warning 黄、danger 红——与模态弹窗/右键菜单同一套视觉语言（强调色边框）。
 pub fn toast_border(kind: crate::app::toast::ToastKind) -> Style {
     use crate::app::toast::ToastKind;
-    let color = match kind {
-        ToastKind::Default => Color::Indexed(141),
-        ToastKind::Warning => Color::Indexed(214),
-        ToastKind::Danger => Color::Indexed(204),
-    };
-    Style::default().fg(color)
+    match kind {
+        ToastKind::Default => accent(),
+        ToastKind::Warning => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        ToastKind::Danger => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+    }
+}
+
+/// Toast 标题色：与边框同色系，降为 dim 且不加粗（对齐浮层标题 `border_title`）。
+pub fn toast_title(kind: crate::app::toast::ToastKind) -> Style {
+    toast_border(kind)
+        .remove_modifier(Modifier::BOLD)
+        .add_modifier(Modifier::DIM)
 }
 
 /// 右侧容器顶边框标签页的激活项：深青蓝实心块（Indexed 24）+ 近白字 + 加粗。
@@ -252,19 +297,14 @@ pub fn agent_removed_bg() -> Style {
     Style::default().bg(Color::Rgb(0x4a, 0x22, 0x1d))
 }
 
-/// 浮层面板：自包含深底浅字（256 色），保证明暗终端下的对比度。
-///
-/// 用于 toast、右键菜单、命令面板与模态容器的整块着色：底色 Indexed 236、
-/// 文字前景 Indexed 252；边框与强调/错误色在各自绘制时覆盖前景。
+/// 浮层面板基础样式：不铺设背景色（配合 `clear` 清底保持终端原生透明底色），使用终端默认前景色。
 pub fn overlay_panel() -> Style {
     Style::default()
-        .fg(Color::Indexed(252))
-        .bg(Color::Indexed(236))
 }
 
-/// 目录条目（`@` 提及面板与引用文件夹内容弹窗）：强调色，与文件条目一眼区分。
+/// 目录条目（`@` 提及面板与引用文件夹内容弹窗）：黄色，与文件条目一眼区分，不使用蓝色。
 pub fn directory() -> Style {
-    accent()
+    Style::default().fg(Color::Yellow)
 }
 
 // ===== 阅读渲染高亮（`ui::markdown_render` 专用）：GitHub Dark 官方色板 =====

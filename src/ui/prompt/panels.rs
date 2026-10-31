@@ -67,7 +67,7 @@ fn paste_view<'a>(items: &'a [CommandItem<'a>], data: &PastePanelData) -> Comman
         max_height: None,
         title: Some(text::PASTE_PANEL_TITLE),
         right_title: None,
-        footer: None,
+        footer: Some(text::LX_PASTE_PANEL_FOOTER),
         ..Default::default()
     }
 }
@@ -132,7 +132,7 @@ fn refer_view<'a>(items: &'a [CommandItem<'a>], data: &ReferPanelData) -> Comman
         max_height: None,
         title: Some(text::REFER_PANEL_TITLE),
         right_title: None,
-        footer: None,
+        footer: Some(text::COMMAND_PANEL_FOOTER),
         ..Default::default()
     }
 }
@@ -240,7 +240,7 @@ fn block_view<'a>(items: &'a [CommandItem<'a>], data: &BlockPanelData) -> Comman
         max_height: None,
         title: Some(text::BLOCK_PANEL_TITLE),
         right_title: None,
-        footer: None,
+        footer: Some(text::COMMAND_PANEL_FOOTER),
         ..Default::default()
     }
 }
@@ -280,6 +280,7 @@ struct SlashPanelData {
     viewport: Option<usize>,
     anchor_row: u16,
     chooser: bool,
+    placeholder: bool,
 }
 
 /// 斜杠命令面板渲染数据；面板未打开或光标滚出视口返回 None。
@@ -290,6 +291,12 @@ fn slash_panel_data(prompt: &Prompt) -> Option<SlashPanelData> {
         panel.kind(),
         crate::app::markdown::SlashPanelKind::WorktreeChooser { .. }
     );
+    let placeholder = panel.items().iter().all(|item| {
+        matches!(
+            item.insertion,
+            crate::app::markdown::SlashInsertion::Placeholder
+        )
+    });
     Some(SlashPanelData {
         rows: panel.items().iter().map(slash_row).collect(),
         active: panel.active(),
@@ -297,6 +304,7 @@ fn slash_panel_data(prompt: &Prompt) -> Option<SlashPanelData> {
         viewport: panel.viewport(),
         anchor_row,
         chooser,
+        placeholder,
     })
 }
 
@@ -361,7 +369,8 @@ fn slash_view<'a>(items: &'a [CommandItem<'a>], data: &'a SlashPanelData) -> Com
             text::SLASH_PANEL_TITLE
         }),
         right_title: None,
-        footer: None,
+        footer: Some(text::COMMAND_PANEL_FOOTER),
+        hide_active_marker: data.placeholder,
         ..Default::default()
     }
 }
@@ -376,6 +385,9 @@ pub fn slash_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
 /// 斜杠命令面板命中：返回被点中的条目索引；面板未打开或未命中返回 None。
 pub fn slash_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
     let data = slash_panel_data(prompt)?;
+    if data.placeholder {
+        return None;
+    }
     let items = slash_items(&data);
     let layout = command_panel::layout(area, &slash_view(&items, &data))?;
     command_panel::item_at(&layout, &items, column, row)
@@ -413,6 +425,16 @@ pub fn mention_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Op
 /// 提及面板矩形；用于滚轮命中。
 pub fn mention_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
     mention_layout(prompt, area).map(|layout| layout.rect)
+}
+
+/// 坐标是否落在任意已打开的 Prompt 命令面板（粘贴 / `@` 提及 / 快捷引用 / `/` 斜杠 / 块命令）矩形内。
+pub fn command_panel_contains(prompt: &Prompt, area: Rect, column: u16, row: u16) -> bool {
+    let pos = (column, row).into();
+    paste_panel_rect(prompt, area).is_some_and(|r| r.contains(pos))
+        || mention_panel_rect(prompt, area).is_some_and(|r| r.contains(pos))
+        || refer_panel_rect(prompt, area).is_some_and(|r| r.contains(pos))
+        || slash_panel_rect(prompt, area).is_some_and(|r| r.contains(pos))
+        || panel_rect(prompt, area).is_some_and(|r| r.contains(pos))
 }
 
 /// 提及面板条目：文件候选（图标 + 文件名 + 父目录明细）、取根选择（单行）或空状态（单行置灰）。
@@ -572,7 +594,7 @@ fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
                 viewport: prompt.mention_ref_viewport(),
                 anchor_row,
                 scope: None,
-                title: text::MENTION_TAB_REF_DIR.to_string(),
+                title: mention_title(prompt),
                 chooser: false,
                 tab,
                 tabs,
@@ -605,7 +627,7 @@ fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
                 viewport: prompt.mention_ref_viewport(),
                 anchor_row,
                 scope: None,
-                title: text::MENTION_TAB_SKILLS.to_string(),
+                title: mention_title(prompt),
                 chooser: false,
                 tab,
                 tabs,
@@ -638,7 +660,7 @@ fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
                 viewport: prompt.mention_ref_viewport(),
                 anchor_row,
                 scope: None,
-                title: text::MENTION_TAB_MCP.to_string(),
+                title: mention_title(prompt),
                 chooser: false,
                 tab,
                 tabs,
@@ -679,7 +701,7 @@ fn mention_view<'a>(
     max_height: u16,
 ) -> CommandPanelView<'a> {
     let footer = if data.chooser {
-        None
+        Some(text::COMMAND_PANEL_FOOTER)
     } else if data.tab == crate::app::prompt::MentionTab::Files {
         Some(text::MENTION_FOOTER_FILES)
     } else {
@@ -698,6 +720,7 @@ fn mention_view<'a>(
         tabs: (!data.chooser).then_some(&data.tabs[..]),
         right_title,
         footer,
+        hide_active_marker: matches!(data.rows.first(), Some(MentionRowText::Empty(_))),
         ..Default::default()
     }
 }

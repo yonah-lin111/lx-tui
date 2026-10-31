@@ -529,8 +529,8 @@ fn status_bar_is_removed() {
     let state = AppState::demo();
     let lines = render_lines(&state);
     let last = lines.last().map(String::as_str).unwrap_or_default();
-    // 末行为面板底边框（含 `╰`），不再有独立状态栏；`ws:` 路径名合法落在 prompt 底边框。
-    assert!(last.contains('╰'), "last row should be pane border");
+    // 末行为面板底边框（含 `└`），不再有独立状态栏；`ws:` 路径名合法落在 prompt 底边框。
+    assert!(last.contains('└'), "last row should be pane border");
 }
 
 #[test]
@@ -548,11 +548,22 @@ fn toast_renders_title_and_message() {
         .with_title("Clipboard"),
     );
     let lines = render_lines(&state);
-    let title_line = lines
+    let title_idx = lines
         .iter()
-        .find(|line| line.contains("Clipboard"))
+        .position(|line| line.contains("Clipboard"))
         .expect("toast title is visible");
-    assert!(title_line.contains('╭'), "title must sit on the top border");
+    assert!(
+        lines[title_idx - 1].contains('┌'),
+        "top border is above title row"
+    );
+    // 标题行不再是边框内嵌，而是独立一行；正文字样出现在其下方。
+    assert!(
+        lines
+            .iter()
+            .skip(title_idx + 1)
+            .any(|line| line.contains(text::TOAST_COPIED)),
+        "message renders below the title row"
+    );
     assert!(lines.iter().any(|line| line.contains(text::TOAST_COPIED)));
 }
 
@@ -606,7 +617,7 @@ fn tooltip_over_prompt_search_hides_hardware_cursor() {
 fn toast_over_prompt_search_hides_hardware_cursor() {
     let mut state = focused_tree_state();
     let view = view_for(&state);
-    let message = "x".repeat(usize::from(view.prompt.width.saturating_sub(6)));
+    let message = "x".repeat(usize::from(view.prompt.width.saturating_sub(8)));
     let anchor = state.prompt.id();
     update::show_toast(
         &mut state,
@@ -631,7 +642,7 @@ fn modal_without_input_hides_prompt_hardware_cursor() {
 }
 
 #[test]
-fn error_toast_uses_danger_coral_border() {
+fn error_toast_uses_danger_red_border() {
     let mut state = AppState::demo();
     let anchor = state.prompt.id();
     update::show_toast(
@@ -665,10 +676,7 @@ fn error_toast_uses_danger_coral_border() {
         panic!("draw failed: {error}");
     }
     let buffer = terminal.backend().buffer().clone();
-    assert_eq!(
-        buffer[(area.x, area.y)].fg,
-        ratatui::style::Color::Indexed(204)
-    );
+    assert_eq!(buffer[(area.x, area.y)].fg, ratatui::style::Color::Red);
 }
 
 #[test]
@@ -2352,8 +2360,8 @@ fn lx_pane_top_border_keeps_corners_with_long_path() {
     update::update_pane_cwd(&mut state, pane, Path::new(&long), "x".into());
     let lines = render_lines(&state);
     let top: Vec<char> = lines[usize::from(rect.y)].chars().collect();
-    assert_eq!(top[usize::from(rect.x)], '╭', "保留左上角");
-    assert_eq!(top[usize::from(rect.right() - 1)], '╮', "保留右上角");
+    assert_eq!(top[usize::from(rect.x)], '┌', "保留左上角");
+    assert_eq!(top[usize::from(rect.right() - 1)], '┐', "保留右上角");
 }
 
 #[test]
@@ -2473,16 +2481,15 @@ fn pane_border_agent_label_absent_without_agent() {
     );
 }
 
-/// 浮层顶边框标题单元格：淡蓝色（Cyan + dim）、非粗体，面板底色保留。
-fn assert_overlay_title(buffer: &ratatui::buffer::Buffer, area: Rect) {
-    let cell = &buffer[(area.x + 1, area.y)];
+/// 模态内框首行标题：粗体正文色、透明底色（对齐 herdr `render_modal_header`）。
+fn assert_modal_header_title(buffer: &ratatui::buffer::Buffer, area: Rect) {
+    let cell = &buffer[(area.x + 2, area.y + 1)];
     assert!(
-        cell.modifier.contains(ratatui::style::Modifier::DIM),
-        "边框标题必须 dim: {cell:?}"
+        cell.modifier.contains(ratatui::style::Modifier::BOLD),
+        "模态标题必须加粗: {cell:?}"
     );
-    assert_eq!(cell.fg, ratatui::style::Color::Cyan);
-    assert_eq!(cell.bg, ratatui::style::Color::Indexed(236));
-    assert!(!cell.modifier.contains(ratatui::style::Modifier::BOLD));
+    assert_eq!(cell.fg, ratatui::style::Color::Reset);
+    assert_eq!(cell.bg, ratatui::style::Color::Reset);
 }
 
 #[test]
@@ -2508,32 +2515,28 @@ fn focused_pane_title_uses_soft_blue_style() {
         assert!(!cell.modifier.contains(ratatui::style::Modifier::BOLD));
         assert_eq!(cell.fg, ratatui::style::Color::Cyan);
     }
-    // 焦点仍由边框颜色区分。
-    assert_eq!(
+    // 边框恒为暗灰（不再随焦点使用强调色）。
+    assert_ne!(
         buffer[(rect.x, rect.y + 1)].fg,
         ratatui::style::Color::Cyan,
-        "焦点窗格边框保持强调色"
+        "焦点窗格边框保持 muted"
     );
 }
 
 #[test]
-fn overlay_border_titles_use_soft_blue_style() {
+fn overlay_menu_has_no_title_and_modal_uses_bold_header() {
     let screen = Rect::new(0, 0, 100, 24);
 
-    // 右键菜单顶边框标题。
+    // 右键菜单：无标题栏，首行内部直接是菜单项。
     let mut state = AppState::demo();
     update::open_workspace_menu(&mut state, 0, (5, 5));
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu overlay expected");
     };
     let menu_layout = overlay::menu_layout(&state, screen, menu);
-    let buffer = render_buffer(&state);
-    assert_overlay_title(&buffer, menu_layout.area);
+    assert_eq!(menu_layout.item_rects[0].y, menu_layout.area.y + 1);
 
-    // 模态（重命名）顶边框标题。
-    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
-        panic!("menu overlay expected");
-    };
+    // 模态（重命名）顶栏粗体标题。
     let rename_index = menu
         .commands
         .iter()
@@ -2543,7 +2546,7 @@ fn overlay_border_titles_use_soft_blue_style() {
     update::activate_menu(&mut state);
     let shell = overlay::rename_shell(screen).expect("rename modal visible");
     let buffer = render_buffer(&state);
-    assert_overlay_title(&buffer, shell.area);
+    assert_modal_header_title(&buffer, shell.area);
 }
 
 /// 工作区 git 元数据（侧栏分组渲染测试用）。
@@ -3295,10 +3298,8 @@ fn controls_and_prompt_frame_geometry_and_hit_tests() {
 
 /// 同一时刻只有一个容器描边强调色：右侧容器持焦点时主区与侧栏一律 muted。
 ///
-/// 真机缺陷：主区按 `!prompt_focused` 判焦点、侧栏恒为 `false`，于是点右侧容器后
-/// 主区也仍然高亮，两个容器同时描边（截图里 8 条 Cyan 边框）。
 #[test]
-fn only_focused_container_uses_accent_border() {
+fn containers_use_muted_borders_regardless_of_focus() {
     use crate::app::state::FocusedContainer;
     let mut state = AppState::demo();
     state.prompt_width = 40;
@@ -3316,27 +3317,28 @@ fn only_focused_container_uses_accent_border() {
         };
         let view = view_for(&state);
         let buffer = render_buffer(&state);
-        // 取每个容器左上角圆角的颜色：聚焦 = Cyan，其余 = muted（非 Cyan）。
+        // 取每个容器左上角的颜色：边框恒为 muted（非 Cyan、带 DIM 修饰）。
         let corners = [
             ("sidebar", view.sidebar.x, view.sidebar.y),
             ("panes", view.panes.x, view.panes.y),
             ("right", view.prompt.x, view.prompt.y),
         ];
-        let accented: Vec<&str> = corners
-            .iter()
-            .filter(|(_, x, y)| buffer[(*x, *y)].fg == ratatui::style::Color::Cyan)
-            .map(|(name, _, _)| *name)
-            .collect();
-        let expected = match target {
-            FocusedContainer::Sidebar => vec!["sidebar"],
-            FocusedContainer::Panes => vec!["panes"],
-            FocusedContainer::Prompt | FocusedContainer::Todo => vec!["right"],
-        };
-        assert_eq!(accented, expected, "{target:?} 时应只有 {expected:?} 描边");
+        for (name, x, y) in corners {
+            let cell = &buffer[(x, y)];
+            assert_ne!(
+                cell.fg,
+                ratatui::style::Color::Cyan,
+                "{target:?} 时 {name} 边框不使用强调色"
+            );
+            assert!(
+                cell.modifier.contains(ratatui::style::Modifier::DIM),
+                "{target:?} 时 {name} 边框保持 muted(DIM)"
+            );
+        }
     }
 }
 
-/// 点右侧容器的 tab 后，高亮必须留在右栏——不得退回主区（真机缺陷）。
+/// 点右侧容器的 tab 后，焦点状态正确转移至右栏，边框保持恒定 muted。
 #[test]
 fn switching_right_tab_keeps_focus_in_right_panel() {
     use crate::app::state::RightTab;
@@ -3353,15 +3355,15 @@ fn switching_right_tab_keeps_focus_in_right_panel() {
 
     let view = view_for(&state);
     let buffer = render_buffer(&state);
-    assert_eq!(
+    assert_ne!(
         buffer[(view.prompt.x, view.prompt.y)].fg,
         ratatui::style::Color::Cyan,
-        "右栏边框必须是强调色"
+        "右栏边框保持 muted"
     );
     assert_ne!(
         buffer[(view.panes.x, view.panes.y)].fg,
         ratatui::style::Color::Cyan,
-        "主区边框必须让出强调色"
+        "主区边框保持 muted"
     );
 
     assert!(crate::app::update::select_right_tab(

@@ -3,7 +3,7 @@
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 
 use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneKind, RightTab};
@@ -58,17 +58,7 @@ pub fn render(
     let hint = text::tooltip_hint(tooltip.target, state);
     let area = rect(screen, anchor, title, hint)?;
     clear::render(frame, area);
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(style::muted())
-        .style(style::overlay_panel())
-        .title(Span::styled(
-            format!(
-                " {} ",
-                text::ellipsize(title, usize::from(area.width.saturating_sub(2)))
-            ),
-            style::border_title(),
-        ));
+    let block = Block::bordered().border_style(style::muted());
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {

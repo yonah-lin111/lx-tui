@@ -182,10 +182,8 @@ pub(crate) fn handle_overlay_click(
                 update::cancel_new_node(state);
                 return None;
             };
-            // [✕] 或浮层之外：取消（来自选择器时恢复选择器）。
-            if ui::widgets::modal::close_button_at(shell.area, column, row)
-                || !shell.area.contains((column, row).into())
-            {
+            // 浮层之外：取消（来自选择器时恢复选择器）。
+            if !shell.area.contains((column, row).into()) {
                 update::cancel_new_node(state);
                 return None;
             }
@@ -341,10 +339,8 @@ pub(crate) fn handle_overlay_click(
                 update::apply_trust_decision(state, false);
                 return None;
             };
-            // 点击关闭按钮或浮层之外视同拒绝信任：不因误触授予访问；内部空白保持打开。
-            if ui::widgets::modal::close_button_at(shell.area, column, row)
-                || !shell.area.contains((column, row).into())
-            {
+            // 点击浮层之外视同拒绝信任：不因误触授予访问；内部空白保持打开。
+            if !shell.area.contains((column, row).into()) {
                 update::apply_trust_decision(state, false);
                 return None;
             }
@@ -448,16 +444,14 @@ pub(crate) fn overlay_input_hit_mut(
     }
 }
 
-/// 模态浮层通用点击前置：命中右上角关闭按钮或点击浮层之外时关闭；返回是否已处理。
+/// 模态浮层通用点击前置：点击浮层之外时关闭；返回是否已处理。
 fn modal_dismissed(
     state: &mut AppState,
     shell: &ui::widgets::modal::ModalShell,
     column: u16,
     row: u16,
 ) -> bool {
-    if ui::widgets::modal::close_button_at(shell.area, column, row)
-        || !shell.area.contains((column, row).into())
-    {
+    if !shell.area.contains((column, row).into()) {
         update::close_overlay(state);
         return true;
     }

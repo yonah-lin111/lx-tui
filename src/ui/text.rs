@@ -122,7 +122,7 @@ pub const REFERENCED_MENU_EMPTY: &str = "no folders referenced";
 /// 引用文件夹弹窗末行的新建动作项。
 pub const REFERENCED_MENU_ADD_ROW: &str = "+ add folder…";
 /// 引用文件夹弹窗底边快捷键提示。
-pub const REFERENCED_MENU_FOOTER: &str = "[open ↵] [copy ^c] [del ^d] [close esc]";
+pub const REFERENCED_MENU_FOOTER: &str = "↵ open · ^c copy · ^d del · esc close";
 /// 引用文件夹路径输入弹窗标题与占位。
 pub const REFERENCED_INPUT_TITLE: &str = "Add folder";
 pub const REFERENCED_INPUT_PLACEHOLDER: &str = "path to directory";
@@ -138,7 +138,7 @@ pub const REFERENCED_SEARCH_LOADING: &str = "scanning…";
 pub const REFERENCED_SEARCH_FAILED: &str = "folder is not accessible";
 pub const REFERENCED_SEARCH_EMPTY: &str = "no matching files";
 pub const REFERENCED_SEARCH_TRUNCATED: &str = "results truncated";
-pub const REFERENCED_SEARCH_FOOTER: &str = "[copy ↵/^c] [open ⇧↵] [back ^z] [close esc]";
+pub const REFERENCED_SEARCH_FOOTER: &str = "↵/^c copy · ⇧↵ open · ^z back · esc close";
 /// 引用文件夹搜索结果行图标：目录 / 文件。
 pub const REFERENCED_DIR_ICON: &str = "▸";
 pub const REFERENCED_FILE_ICON: &str = "•";
@@ -410,8 +410,8 @@ pub const RENAME_TAB_TITLE: &str = "Rename tab";
 /// 信任工作区模态：标题、问题与按钮。
 pub const TRUST_WORKSPACE_TITLE: &str = "Trust workspace";
 pub const TRUST_WORKSPACE_QUESTION: &str = "Do you trust the files in this folder?";
-pub const BUTTON_TRUST: &str = "[trust & open ↵]";
-pub const BUTTON_DONT_TRUST: &str = "[don't trust esc]";
+pub const BUTTON_TRUST: &str = " ↵ trust & open ";
+pub const BUTTON_DONT_TRUST: &str = " esc don't trust ";
 /// 启动信任页（行内，进入应用前）：标题行、安全提示、说明、可选项与页脚。
 pub const TRUST_CONSOLE_HEADING: &str = "Accessing workspace:";
 /// 安全提示段落；`:` 前的前缀在渲染时加粗强调。
@@ -426,7 +426,7 @@ pub const TRUST_OPTION_NO: &str = "No, exit";
 pub const TRUST_OPTION_YES: &str = "Yes, I trust this folder";
 /// 信任页选项选中标记（与侧栏 Agents 选中行同符号）。
 pub const TRUST_SELECTION_MARKER: &str = "▸";
-pub const TRUST_CONSOLE_FOOTER: &str = "[↑/↓] select  [↵] confirm  [esc] cancel";
+pub const TRUST_CONSOLE_FOOTER: &str = "↑↓ select · ↵ confirm · esc cancel";
 /// 启动拒绝信任后的终端提示（不进入应用，直接退出）。
 pub const TRUST_REFUSED_MESSAGE: &str = "workspace not trusted; exiting";
 
@@ -441,19 +441,18 @@ pub const WORKTREE_STATUS_OPEN: &str = "open";
 pub const WORKTREE_STATUS_DETACHED: &str = "detached";
 pub const WORKTREE_STATUS_ROOT: &str = "root";
 
-/// 模态底部按钮：名称在前、快捷键在后。
-pub const BUTTON_SAVE: &str = "[save ↵]";
-pub const BUTTON_CREATE: &str = "[create ↵]";
-pub const BUTTON_CLEAR: &str = "[clear ^c]";
-pub const BUTTON_CANCEL: &str = "[cancel esc]";
-pub const BUTTON_CONFIRM: &str = "[confirm ↵]";
+/// 模态底部胶囊按钮：快捷键符号在前、功能名在后，左右各留 1 列内边距（对齐 herdr 实心胶囊按钮）。
+pub const BUTTON_SAVE: &str = " ↵ save ";
+pub const BUTTON_CREATE: &str = " ↵ create ";
+pub const BUTTON_CLEAR: &str = " ^c clear ";
+pub const BUTTON_CANCEL: &str = " esc cancel ";
+pub const BUTTON_CONFIRM: &str = " ↵ confirm ";
 /// `/resume` 会话编辑模态的删除与二次确认按钮。
-pub const BUTTON_DELETE: &str = "[delete ^d]";
-pub const BUTTON_CONFIRM_DELETE: &str = "[confirm del ↵]";
-/// 模态浮层与 toast 右上角的关闭按钮图标；与模板块删除按钮（`TEMPLATE_BUTTON_DEL`）
-/// 共用同一字符，一致性由 `text::tests` 的回归测试钉住。
+pub const BUTTON_DELETE: &str = " ^d delete ";
+pub const BUTTON_CONFIRM_DELETE: &str = " ↵ confirm del ";
+/// 模态关闭图标常量（与模板块删除按钮 `TEMPLATE_BUTTON_DEL` 保持同字符）。
 pub const MODAL_CLOSE: &str = "[✕]";
-pub const BUTTON_OPEN: &str = "[open ↵]";
+pub const BUTTON_OPEN: &str = " ↵ open ";
 
 /// 删除提示词页确认问题文案。
 pub fn confirm_delete_page_question(name: &str) -> String {
@@ -636,21 +635,21 @@ pub const LX_CHAT_STATS_SPEED_SUFFIX: &str = " tok/s";
 /// `/` 命令面板标题。
 pub const LX_SLASH_PANEL_TITLE: &str = "/Command";
 /// `/` 命令面板底边快捷键提示（无边框面板里的单行 muted 提示）。
-pub const LX_SLASH_PANEL_FOOTER: &str = "[select ↑↓] [open ↵] [close esc]";
+pub const LX_SLASH_PANEL_FOOTER: &str = "↑↓ select · ↵ open · esc close";
 /// 路径粘贴面板底边快捷键提示。
-pub const LX_PASTE_PANEL_FOOTER: &str = "[select ↑↓] [confirm ↵] [cancel esc]";
+pub const LX_PASTE_PANEL_FOOTER: &str = "↑↓ select · ↵ confirm · esc cancel";
 /// 快捷引用面板底边快捷键提示。
-pub const LX_REFER_PANEL_FOOTER: &str = "[select ↑↓] [insert ↵] [close esc]";
+pub const LX_REFER_PANEL_FOOTER: &str = "↑↓ select · ↵ insert · esc close";
 /// `@` 面板按 Tab 区分的底边快捷键提示。
-pub const LX_MENTION_FOOTER_FILES: &str = "[tabs ←→] [select ↑↓] [insert ↵] [enter ⇧↵] [close esc]";
-pub const LX_MENTION_FOOTER_REF_DIR: &str = "[tabs ←→] [select ↑↓] [insert ↵] [close esc]";
+pub const LX_MENTION_FOOTER_FILES: &str = "←→ tabs · ↑↓ select · ↵ insert · ⇧↵ enter · esc close";
+pub const LX_MENTION_FOOTER_REF_DIR: &str = "←→ tabs · ↑↓ select · ↵ insert · esc close";
 
 // ===== 最新轮次撤销 =====
 
 /// 撤销动作面板标题。
 pub const LX_REWIND_PANEL_TITLE: &str = "Rewind";
 /// 撤销动作面板底边快捷键提示。
-pub const LX_REWIND_PANEL_FOOTER: &str = "[select ↑↓] [open ↵] [back esc]";
+pub const LX_REWIND_PANEL_FOOTER: &str = "↑↓ select · ↵ open · esc back";
 /// 第一次 Esc 后的待命提示（toast，不写历史）。
 pub const LX_REWIND_ARMED_HINT: &str = "Press esc again to rewind";
 /// 面板范围说明。
@@ -773,7 +772,7 @@ pub const LX_RENAME_STANDALONE_FAILED: &str = "Run /rename on its own line";
 pub const LX_HISTORY_PANEL_TITLE: &str = "Resume";
 pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
 /// `/resume` 历史面板底边快捷键提示（`⇧↵` 打开会话编辑模态、`^c` 复制会话 id）。
-pub const LX_HISTORY_PANEL_FOOTER: &str = "[select ↑↓] [open ↵] [copy ^c] [edit ⇧↵] [close esc]";
+pub const LX_HISTORY_PANEL_FOOTER: &str = "↑↓ select · ↵ open · ^c copy · ⇧↵ edit · esc close";
 /// `/model` 面板标题。
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
 pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
@@ -796,15 +795,15 @@ pub const LX_TASK_AGENTS_LOADING: &str = "loading agent transcript…";
 pub const LX_TASK_OUTPUT_EMPTY: &str = "waiting for output";
 /// 输出容器顶边栏的标题（右侧接高亮任务的命令原文）。
 pub const LX_TASK_OUTPUT_TITLE: &str = "Output";
-/// 一条键位提示：`[功能 键]`。
+/// 一条键位提示：`[键 功能]`。
 ///
-/// **功能名在前、快捷键在后**（用户要求），方括号包住整条——它既是一个视觉单位，
-/// 也是可点击的目标。所有提示都是这个形状，不再有"只有键位"的例外写法。
+/// **快捷键符号在前、功能名在后**（统一格式），方括号包住整条——它既是一个视觉单位，
+/// 也是可点击的目标。
 pub const fn hint(action: &'static str, key: &'static str) -> Hint {
     Hint { action, key }
 }
 
-/// 键位提示（`[功能 键]`）。
+/// 键位提示（`[键 功能]`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hint {
     /// 功能名称，如 `select`。
@@ -814,9 +813,9 @@ pub struct Hint {
 }
 
 impl Hint {
-    /// 完整文案：`[select ↑↓]`。
+    /// 完整文案：`[↑↓ select]`。
     pub fn label(self) -> String {
-        format!("[{} {}]", self.action, self.key)
+        format!("[{} {}]", self.key, self.action)
     }
 }
 
@@ -1088,9 +1087,10 @@ pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
 /// 写入落在折叠补充块内被拒绝时的提示。
 pub const SUPPLE_FOLD_BLOCKED: &str = "Folded supplement; unfold to edit";
 
-/// @ 面板底边快捷键提示（Prompt 右栏带边框面板使用）。
+/// @ 面板与命令面板底边快捷键提示（Prompt 右栏带边框面板使用）。
 pub const MENTION_FOOTER_FILES: &str = "←→ tab · ↑↓ select · ↵ confirm · ⇧↵ enter · esc cancel";
 pub const MENTION_FOOTER_REF_DIR: &str = "←→ tab · ↑↓ select · ↵ insert · esc cancel";
+pub const COMMAND_PANEL_FOOTER: &str = "↑↓ select · ↵ confirm · esc cancel";
 
 /// `@` 提及面板状态行文案（Prompt 与 lx 面板共用）。
 pub const LX_MENTION_LOADING: &str = "scanning…";

@@ -15,29 +15,29 @@ use crate::ui::{style, text};
 
 use super::menu::prompt_page_name;
 
-/// 重命名浮层尺寸（列，行）：输入行、空行与按钮行。
+/// 重命名浮层尺寸（列，行）：顶栏 3 行 + 输入行 + 底栏 3 行（内容与分割线之间不留空行）。
 const RENAME_WIDTH: u16 = 40;
-const RENAME_HEIGHT: u16 = 5;
-/// 新建节点浮层尺寸（列，行）：输入行、空行与按钮行（容纳三个按钮）。
+const RENAME_HEIGHT: u16 = 7;
+/// 新建节点浮层尺寸（列，行）：顶栏 3 行 + 输入行 + 底栏 3 行（容纳三个按钮）。
 const NEW_NODE_WIDTH: u16 = 42;
-const NEW_NODE_HEIGHT: u16 = 5;
-/// 新建工作区浮层尺寸（列，行）：输入行、空行与按钮行。
+const NEW_NODE_HEIGHT: u16 = 7;
+/// 新建工作区浮层尺寸（列，行）：顶栏 3 行 + 输入行 + 底栏 3 行。
 const NEW_WORKSPACE_WIDTH: u16 = 44;
-const NEW_WORKSPACE_HEIGHT: u16 = 5;
-/// 关闭确认浮层最小宽度（列）；高度 = 问题换行行数 + 按钮行 + 上下边框。
+const NEW_WORKSPACE_HEIGHT: u16 = 7;
+/// 关闭确认浮层最小宽度（列）；高度 = 问题换行行数 + 顶栏 3 行 + 底栏 3 行。
 pub(crate) const CONFIRM_WIDTH: u16 = 40;
-/// 信任浮层尺寸（列，行）：问题行、路径行、空行与按钮行。
+/// 信任浮层尺寸（列，行）：顶栏 3 行 + 问题行 + 路径行 + 底栏 3 行。
 const TRUST_WIDTH: u16 = 52;
-const TRUST_HEIGHT: u16 = 6;
+const TRUST_HEIGHT: u16 = 8;
 /// 按钮间距与所在内容行。
 pub(crate) const BUTTON_GAP: u16 = 2;
-pub(crate) const RENAME_BUTTON_ROW: u16 = 2;
-pub(crate) const NEW_WORKSPACE_BUTTON_ROW: u16 = 2;
+pub(crate) const RENAME_BUTTON_ROW: u16 = 3;
+pub(crate) const NEW_WORKSPACE_BUTTON_ROW: u16 = 3;
 
 const RENAME_BUTTONS: [&str; 3] = [text::BUTTON_SAVE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
 /// `/resume` 会话编辑模态尺寸与按钮组（编辑态 3 个、确认删除态 2 个）。
 const RESUME_EDIT_WIDTH: u16 = 48;
-const RESUME_EDIT_HEIGHT: u16 = 5;
+const RESUME_EDIT_HEIGHT: u16 = 8;
 const RESUME_EDIT_BUTTONS: [&str; 3] =
     [text::BUTTON_SAVE, text::BUTTON_DELETE, text::BUTTON_CANCEL];
 const RESUME_EDIT_CONFIRM_BUTTONS: [&str; 2] = [text::BUTTON_CONFIRM_DELETE, text::BUTTON_CANCEL];
@@ -104,7 +104,7 @@ fn confirm_shell_for(
     let lines = text::wrap(question, inner_width).len().max(1);
     let height = u16::try_from(lines)
         .unwrap_or(u16::MAX)
-        .saturating_add(3)
+        .saturating_add(6)
         .min(screen.height);
     widgets::modal::layout(screen, width, height)
 }
@@ -265,9 +265,9 @@ pub(crate) fn render_rename(
         frame,
         &widgets::modal::button_row(shell.inner, &RENAME_BUTTONS, BUTTON_GAP, RENAME_BUTTON_ROW),
         &[
-            (text::BUTTON_SAVE, style::accent()),
-            (text::BUTTON_CLEAR, style::muted()),
-            (text::BUTTON_CANCEL, style::muted()),
+            (text::BUTTON_SAVE, style::button_primary()),
+            (text::BUTTON_CLEAR, style::button_secondary()),
+            (text::BUTTON_CANCEL, style::button_secondary()),
         ],
     );
     render_input(
@@ -300,9 +300,9 @@ pub(crate) fn render_new_workspace(
             NEW_WORKSPACE_BUTTON_ROW,
         ),
         &[
-            (text::BUTTON_CREATE, style::accent()),
-            (text::BUTTON_CLEAR, style::muted()),
-            (text::BUTTON_CANCEL, style::muted()),
+            (text::BUTTON_CREATE, style::button_primary()),
+            (text::BUTTON_CLEAR, style::button_secondary()),
+            (text::BUTTON_CANCEL, style::button_secondary()),
         ],
     );
     render_input(
@@ -339,9 +339,9 @@ pub(crate) fn render_new_node(
             RENAME_BUTTON_ROW,
         ),
         &[
-            (text::BUTTON_CREATE, style::accent()),
-            (text::BUTTON_CLEAR, style::muted()),
-            (text::BUTTON_CANCEL, style::muted()),
+            (text::BUTTON_CREATE, style::button_primary()),
+            (text::BUTTON_CLEAR, style::button_secondary()),
+            (text::BUTTON_CANCEL, style::button_secondary()),
         ],
     );
     render_input(
@@ -420,8 +420,8 @@ pub(crate) fn render_trust(frame: &mut Frame<'_>, screen: Rect, trust: &TrustWor
         frame,
         &widgets::modal::button_row(shell.inner, &TRUST_BUTTONS, BUTTON_GAP, TRUST_BUTTON_ROW),
         &[
-            (text::BUTTON_TRUST, style::accent()),
-            (text::BUTTON_DONT_TRUST, style::muted()),
+            (text::BUTTON_TRUST, style::button_primary()),
+            (text::BUTTON_DONT_TRUST, style::button_secondary()),
         ],
     );
 }
@@ -434,13 +434,13 @@ fn render_confirm_dialog(
     title: &str,
     question: &str,
 ) {
-    widgets::modal::render(frame, shell, title);
+    widgets::modal::render_danger(frame, shell, title);
     if shell.inner.width == 0 || shell.inner.height == 0 {
         return;
     }
     let width = usize::from(shell.inner.width);
     let lines = text::wrap(question, width);
-    let max_rows = usize::from(shell.inner.height.saturating_sub(1));
+    let max_rows = usize::from(shell.inner.height.saturating_sub(2)).max(1);
     for (index, line) in lines.iter().take(max_rows).enumerate() {
         let clipped = lines.len() > max_rows && index + 1 == max_rows;
         let visible = if clipped {
@@ -467,8 +467,8 @@ fn render_confirm_dialog(
             shell.inner.height.saturating_sub(1),
         ),
         &[
-            (text::BUTTON_CONFIRM, style::accent()),
-            (text::BUTTON_CANCEL, style::muted()),
+            (text::BUTTON_CONFIRM, style::button_danger()),
+            (text::BUTTON_CANCEL, style::button_secondary()),
         ],
     );
 }
@@ -531,7 +531,11 @@ pub(crate) fn render_resume_session_edit(
     edit: &crate::app::overlay::ResumeSessionEdit,
 ) -> Option<(u16, u16)> {
     let shell = resume_edit_shell(screen)?;
-    widgets::modal::render(frame, &shell, text::RESUME_EDIT_MODAL_TITLE);
+    if edit.confirming_delete {
+        widgets::modal::render_danger(frame, &shell, text::RESUME_EDIT_MODAL_TITLE);
+    } else {
+        widgets::modal::render(frame, &shell, text::RESUME_EDIT_MODAL_TITLE);
+    }
     if shell.inner.width == 0 || shell.inner.height == 0 {
         return None;
     }
@@ -539,17 +543,17 @@ pub(crate) fn render_resume_session_edit(
         (
             &RESUME_EDIT_CONFIRM_BUTTONS,
             &[
-                (text::BUTTON_CONFIRM_DELETE, style::accent()),
-                (text::BUTTON_CANCEL, style::muted()),
+                (text::BUTTON_CONFIRM_DELETE, style::button_danger()),
+                (text::BUTTON_CANCEL, style::button_secondary()),
             ],
         )
     } else {
         (
             &RESUME_EDIT_BUTTONS,
             &[
-                (text::BUTTON_SAVE, style::accent()),
-                (text::BUTTON_DELETE, style::error()),
-                (text::BUTTON_CANCEL, style::muted()),
+                (text::BUTTON_SAVE, style::button_primary()),
+                (text::BUTTON_DELETE, style::button_danger()),
+                (text::BUTTON_CANCEL, style::button_secondary()),
             ],
         )
     };
@@ -593,8 +597,8 @@ pub(crate) fn render_resume_session_edit(
     )
 }
 
-/// 模态输入行：左侧 `> ` 前缀（与 prompt 列表搜索框同图标）+ 单行输入（支持选区反色）；
-/// 返回硬件光标位置；宽度放不下前缀时输入区为空、不显示光标。
+/// 模态输入行：整行铺设暗色 surface 底条（对齐 herdr `render_name_input_field`），
+/// 左侧 `> ` 前缀 + 单行输入（支持选区反色）；返回硬件光标位置。
 pub(crate) fn render_input(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -603,10 +607,14 @@ pub(crate) fn render_input(
     selection: Option<(usize, usize)>,
     placeholder: Option<&str>,
 ) -> Option<(u16, u16)> {
+    frame.buffer_mut().set_style(area, style::modal_input());
     let prefix = format!("{} ", text::INPUT_PREFIX_ICON);
     let prefix_width = prefix.chars().count() as u16;
     frame.render_widget(
-        Paragraph::new(Span::styled(prefix, style::accent())),
+        Paragraph::new(Span::styled(
+            prefix,
+            style::modal_input().patch(style::accent()),
+        )),
         Rect {
             width: area.width.min(prefix_width),
             height: 1,

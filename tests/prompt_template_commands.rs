@@ -82,14 +82,17 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
         update::apply_editor(&mut state, EditorCommand::InsertChar(ch));
     }
     let panel = ui::prompt::slash_layout(&state.prompt, area).expect("slash panel opens");
-    assert_eq!(panel.rect.height, 3, "查询 add 命中 add");
+    assert_eq!(
+        panel.rect.height, 7,
+        "查询 add 命中 add（顶栏 3 + 内容 1 + 底栏 3）"
+    );
     assert_eq!(
         state.prompt.slash_panel().map(|panel| panel.items().len()),
         Some(1)
     );
     let terminal = draw(&state, &config);
     assert!(
-        line_text(&terminal, panel.rect.y).contains("/Command"),
+        line_text(&terminal, panel.rect.y + 1).contains("/Command"),
         "面板标题"
     );
 
@@ -104,7 +107,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     let row = line_text(&terminal, start_row);
     assert_eq!(
         terminal.backend().buffer()[(area.x, start_row)].symbol(),
-        "╭"
+        "┌"
     );
     assert_eq!(
         terminal.backend().buffer()[(area.x, start_row)].fg,
@@ -124,7 +127,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert_eq!(title.fg, Color::Cyan);
     assert!(title.modifier.contains(Modifier::UNDERLINED));
 
-    // 整块底色：起始行与标题行按 todo 铺底。
+    // 模板块保持透明背景：起始行与标题行不铺不透明底色。
     for y in [start_row, start_row + 1] {
         for x in area.x..area.right() {
             if wide_spacer(terminal.backend().buffer(), x, y) {
@@ -132,8 +135,8 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
             }
             assert_eq!(
                 terminal.backend().buffer()[(x, y)].bg,
-                Color::Rgb(35, 40, 56),
-                "todo 整块底色 ({x},{y})"
+                Color::Reset,
+                "todo 保持透明底色 ({x},{y})"
             );
         }
     }
@@ -146,19 +149,24 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_CLEAN), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_DEL), "{row}");
-    assert!(row.contains('╮'), "右上角闭合: {row}");
+    assert!(row.contains('┐'), "右上角闭合: {row}");
 
-    // 切换状态后整块底色跟随。
+    // 切换状态后边框颜色跟随为黄色，背景保持透明。
     update::toggle_template_status(&mut state, 0);
     let terminal = draw(&state, &config);
+    assert_eq!(
+        terminal.backend().buffer()[(area.x, start_row)].fg,
+        Color::Yellow,
+        "in_progress 边框为黄色"
+    );
     for x in area.x..area.right() {
         if wide_spacer(terminal.backend().buffer(), x, start_row) {
             continue;
         }
         assert_eq!(
             terminal.backend().buffer()[(x, start_row)].bg,
-            Color::Rgb(51, 41, 28),
-            "in_progress 整块底色 ({x})"
+            Color::Reset,
+            "in_progress 保持透明底色 ({x})"
         );
     }
 }
@@ -207,7 +215,10 @@ fn slash_panel_shows_all_candidates_for_bare_slash() {
     let area = layout::prompt_text_rect(view.prompt);
     update::apply_editor(&mut state, EditorCommand::InsertChar('/'));
     let panel = ui::prompt::slash_layout(&state.prompt, area).expect("slash panel opens");
-    assert_eq!(panel.rect.height, 7, "空查询展示全部 5 个候选 + 上下边框");
+    assert_eq!(
+        panel.rect.height, 11,
+        "空查询展示全部 5 个候选 + 标题行、底栏与上下边框"
+    );
     let terminal = draw(&state, &config);
     let text: String = (panel.rect.y..panel.rect.bottom())
         .map(|y| line_text(&terminal, y))
