@@ -967,3 +967,73 @@ async fn oauth_callback_rejects_unknown_state_without_token() {
     );
     service.shutdown();
 }
+
+#[tokio::test]
+async fn page_preserves_subtab_drafts_and_dirty_dots_across_views() {
+    let (service, _events, _dir) = start("subtab-drafts").await;
+    let port = service.port();
+    let token = service.token().to_string();
+
+    let html = body(&request(port, &get(&format!("/?token={token}"))).await).to_string();
+    let css = body(&request(port, &get("/settings.css")).await).to_string();
+    let js = body(&request(port, &get("/settings.js")).await).to_string();
+    let models_js = body(&request(port, &get("/settings_models.js")).await).to_string();
+    let mcp_js = body(&request(port, &get("/settings_mcp.js")).await).to_string();
+    let skills_js = body(&request(port, &get("/settings_skills.js")).await).to_string();
+
+    assert!(
+        css.contains(".nav-item.dirty::after") && css.contains("grid-column: 3; grid-row: 1;"),
+        "sub-tab dirty dot styled on right column"
+    );
+    for hook in [
+        "loadGeneral()",
+        "reloadCommands(true)",
+        "loadMcp(true)",
+        "loadSkills(true)",
+        "cancelProvider()",
+    ] {
+        assert!(html.contains(hook), "html isolated action hook: {hook}");
+    }
+    for symbol in [
+        "commandBaselines",
+        "commandDrafts",
+        "newCommandDraft",
+        "syncCommandEditorToDraft",
+        "isCommandItemDirty",
+        "isNewCommandDirty",
+        "updateCommandDirtyDots",
+    ] {
+        assert!(js.contains(symbol), "commands draft symbol: {symbol}");
+    }
+    for symbol in [
+        "isProviderDirty",
+        "computeModelsDirty",
+        "updateProviderDirtyDots",
+        "cancelProvider",
+    ] {
+        assert!(models_js.contains(symbol), "models draft symbol: {symbol}");
+    }
+    for symbol in [
+        "mcpBaselines",
+        "mcpDrafts",
+        "mcpNewDraft",
+        "syncMcpEditorToDraft",
+        "isMcpItemDirty",
+        "isMcpNewDirty",
+        "updateMcpDirtyDots",
+    ] {
+        assert!(mcp_js.contains(symbol), "mcp draft symbol: {symbol}");
+    }
+    for symbol in [
+        "skillBaselines",
+        "skillDrafts",
+        "skillNewDraft",
+        "syncSkillEditorToDraft",
+        "isSkillItemDirty",
+        "isSkillNewDirty",
+        "updateSkillDirtyDots",
+    ] {
+        assert!(skills_js.contains(symbol), "skills draft symbol: {symbol}");
+    }
+    service.shutdown();
+}

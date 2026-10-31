@@ -37,7 +37,7 @@
       </div>
     </fieldset>
     <div class="actions">
-      <button class="ghost" onclick="loadState()">Reload</button>
+      <button class="ghost" onclick="loadGeneral()">Reload</button>
     </div>
   </section>
 
@@ -49,7 +49,7 @@
     <div class="commands-toolbar">
       <label>Type</label>
       <div id="cmd-filter-select" class="select-host toolbar-select"></div>
-      <button class="ghost" onclick="loadState()">Reload</button>
+      <button class="ghost" onclick="reloadCommands(true)">Reload</button>
       <span class="status" id="commands-status">Loading…</span>
     </div>
     <div class="commands-grid">
@@ -149,6 +149,7 @@
           <div class="editor-head">
             <h3 id="provider-legend">Edit provider</h3>
             <div class="actions">
+              <button class="ghost" onclick="cancelProvider()">Cancel</button>
               <button class="ghost" onclick="duplicateProvider()">Duplicate</button>
               <button class="danger" onclick="deleteProvider()">Delete</button>
             </div>
@@ -210,7 +211,7 @@
       <div id="actions-mcp" class="view-actions"></div>
     </div>
     <div class="models-toolbar">
-      <button class="ghost" onclick="loadMcp()">Reload</button>
+      <button class="ghost" onclick="loadMcp(true)">Reload</button>
       <span class="status" id="mcp-status">Loading…</span>
     </div>
     <div class="models-grid">
@@ -341,7 +342,7 @@
       <div id="actions-skills" class="view-actions"></div>
     </div>
     <div class="models-toolbar">
-      <button class="ghost" onclick="loadSkills()">Reload</button>
+      <button class="ghost" onclick="loadSkills(true)">Reload</button>
       <span class="status" id="skills-status">Loading…</span>
     </div>
     <div class="models-grid">

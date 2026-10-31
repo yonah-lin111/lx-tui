@@ -28,9 +28,40 @@ function currentProvider() {
   return modelsDraft.providers.find((provider) => provider.key === selectedProviderKey) || null;
 }
 
+function isProviderDirty(provider) {
+  if (!modelsBaseline || !Array.isArray(modelsBaseline.providers)) { return false; }
+  const base = modelsBaseline.providers.find((item) => item.key === provider.key);
+  if (!base) { return true; }
+  return JSON.stringify(provider) !== JSON.stringify(base);
+}
+
+function computeModelsDirty() {
+  if (!modelsDraft || !modelsBaseline) { return false; }
+  return JSON.stringify({
+    defaultModel: modelsDraft.defaultModel,
+    providers: modelsDraft.providers
+  }) !== JSON.stringify({
+    defaultModel: modelsBaseline.defaultModel,
+    providers: modelsBaseline.providers
+  });
+}
+
+function updateProviderDirtyDots() {
+  modelsDirty = computeModelsDirty();
+  const list = document.getElementById('provider-list');
+  if (!list || !modelsDraft) { return; }
+  const rows = list.querySelectorAll('.nav-item');
+  modelsDraft.providers.forEach((provider, index) => {
+    if (rows[index]) {
+      rows[index].classList.toggle('dirty', isProviderDirty(provider));
+    }
+  });
+}
+
 function markModelsDirty() {
-  modelsDirty = true;
+  modelsDirty = computeModelsDirty();
   updateModelsStatus();
+  updateProviderDirtyDots();
   refreshActionBars();
 }
 
@@ -127,7 +158,8 @@ function renderProviders() {
     list.appendChild(element('p', 'nav-empty', 'No providers configured.'));
   }
   for (const provider of providers) {
-    const row = element('button', 'nav-item' + (provider.key === selectedProviderKey ? ' selected' : ''));
+    const dirty = isProviderDirty(provider);
+    const row = element('button', 'nav-item' + (provider.key === selectedProviderKey ? ' selected' : '') + (dirty ? ' dirty' : ''));
     row.type = 'button';
     const name = element('span', 'nav-name', provider.name || provider.id);
     const tag = element('span', 'tag', provider.type + (provider.apiKey ? '' : ' · no key') + (provider.enabled ? '' : ' · off'));
@@ -187,6 +219,24 @@ function duplicateProvider() {
   copy.apiKey = ''; // 复制项默认需重新输入 Key
   modelsDraft.providers.push(copy);
   selectedProviderKey = id;
+  markModelsDirty();
+  renderModelsView();
+}
+
+function cancelProvider() {
+  if (!modelsDraft || !selectedProviderKey) { return; }
+  const base = modelsBaseline && Array.isArray(modelsBaseline.providers)
+    ? modelsBaseline.providers.find((item) => item.key === selectedProviderKey)
+    : null;
+  const index = modelsDraft.providers.findIndex((item) => item.key === selectedProviderKey);
+  if (index >= 0) {
+    if (base) {
+      modelsDraft.providers[index] = JSON.parse(JSON.stringify(base));
+    } else {
+      modelsDraft.providers.splice(index, 1);
+    }
+  }
+  selectedProviderKey = null;
   markModelsDirty();
   renderModelsView();
 }
@@ -544,45 +594,51 @@ function buildPayload() {
   const seenProviders = new Set();
   const providers = [];
   for (const provider of modelsDraft.providers) {
-    const id = (provider.id || '').trim();
-    if (!id) { throw new Error('Provider ID is required'); }
-    if (seenProviders.has(id)) { throw new Error('Duplicate provider ID: ' + id); }
-    seenProviders.add(id);
-    const baseUrl = (provider.baseUrl || '').trim();
-    if (!baseUrl) { throw new Error('Base URL is required for provider ' + id); }
-    const seenModels = new Set();
-    const models = [];
-    for (const model of provider.models) {
-      const modelId = (model.id || '').trim();
-      if (!modelId) { continue; }
-      if (seenModels.has(modelId)) { throw new Error('Duplicate model ID ' + modelId + ' on provider ' + id); }
-      seenModels.add(modelId);
-      const variants = buildVariants(model);
-      const variant = model.variant || null;
-      if (variant && !Object.prototype.hasOwnProperty.call(variants, variant)) {
-        throw new Error('Default thinking variant ' + variant + ' is missing on model ' + modelId);
+    try {
+      const id = (provider.id || '').trim();
+      if (!id) { throw new Error('Provider ID is required'); }
+      if (seenProviders.has(id)) { throw new Error('Duplicate provider ID: ' + id); }
+      seenProviders.add(id);
+      const baseUrl = (provider.baseUrl || '').trim();
+      if (!baseUrl) { throw new Error('Base URL is required for provider ' + id); }
+      const seenModels = new Set();
+      const models = [];
+      for (const model of provider.models) {
+        const modelId = (model.id || '').trim();
+        if (!modelId) { continue; }
+        if (seenModels.has(modelId)) { throw new Error('Duplicate model ID ' + modelId + ' on provider ' + id); }
+        seenModels.add(modelId);
+        const variants = buildVariants(model);
+        const variant = model.variant || null;
+        if (variant && !Object.prototype.hasOwnProperty.call(variants, variant)) {
+          throw new Error('Default thinking variant ' + variant + ' is missing on model ' + modelId);
+        }
+        models.push({
+          id: modelId,
+          name: (model.name || '').trim() || modelId,
+          transport: model.transport || null,
+          limit: limitOf(model, modelId),
+          variant: variant,
+          variants: variants,
+          modalities: modalitiesOf(model)
+        });
       }
-      models.push({
-        id: modelId,
-        name: (model.name || '').trim() || modelId,
-        transport: model.transport || null,
-        limit: limitOf(model, modelId),
-        variant: variant,
-        variants: variants,
-        modalities: modalitiesOf(model)
-      });
+      const entry = {
+        key: id,
+        id: id,
+        type: provider.type,
+        name: (provider.name || '').trim() || id,
+        baseUrl: baseUrl,
+        // apiKey 三态：非空替换、空字符串清除、字段缺失保留（这里始终显式发送）。
+        apiKey: provider.apiKey || '',
+        models: models
+      };
+      providers.push(entry);
+    } catch (error) {
+      selectedProviderKey = provider.key;
+      renderModelsView();
+      throw error;
     }
-    const entry = {
-      key: id,
-      id: id,
-      type: provider.type,
-      name: (provider.name || '').trim() || id,
-      baseUrl: baseUrl,
-      // apiKey 三态：非空替换、空字符串清除、字段缺失保留（这里始终显式发送）。
-      apiKey: provider.apiKey || '',
-      models: models
-    };
-    providers.push(entry);
   }
   const enabledProviders = modelsDraft.providers.filter((provider) => provider.enabled).map((provider) => provider.id.trim());
   let defaultModel = null;
@@ -759,7 +815,7 @@ function initModelsView() {
 }
 
 actionBars.models = createActionBar('actions-models', {
-  isDirty: () => modelsDirty,
+  isDirty: computeModelsDirty,
   save: saveModels,
   reset: resetModels
 });
