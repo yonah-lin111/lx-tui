@@ -1,7 +1,7 @@
 # lx 与全局滚动速度统一 — 代码评审报告（Review）
 
 - 目录：`docs/feature/lx-scroll-speed/`
-- 分支：`feat/lx-scroll-speed`（`.worktrees/lx-scroll-speed`）
+- 分支：`feat/lx-scroll-speed`（已合并入主工作区 `dev` 分支，合并提交 `4c1d2ac9`；工作区 `.worktrees/lx-scroll-speed` 与分支已清理）
 - 评审方式：基于 `codegraph` 与 `codebase-memory-mcp` 全链路追踪 `handle_mouse_wheel`、浮层面板优先级、视口钳制与脏标记传播
 
 ---

@@ -1,7 +1,8 @@
 # lx 与全局滚动速度统一 — 执行任务清单
 
 - 目录：`docs/feature/lx-scroll-speed/`
-- 关联设计：`docs/feature/lx-scroll-speed/design.md`
+- 关联设计：`docs/feature/lx-scroll-speed/design.md` · 评审报告：`docs/feature/lx-scroll-speed/review.md`
+- 状态：**已实现并合并到 `dev` 分支**（2026-10-31，合并提交 `4c1d2ac9`）；工作区 `.worktrees/lx-scroll-speed` 与分支 `feat/lx-scroll-speed` 已移除。
 - 约束：生产代码禁止 `unwrap()` / `expect()`；保持 `app/` 与 `ui/` 边界清晰；用户审核确认本文件与 `design.md` 后方可执行代码修改。
 
 ---

@@ -1,7 +1,7 @@
 # lx 与全局滚动速度统一 — 设计文档
 
 - 目录：`docs/feature/lx-scroll-speed/`
-- 状态：已完成（代码与测试均已落地并通过校验）
+- 状态：**已实现并合并到 `dev` 分支**（2026-10-31，合并提交 `4c1d2ac9`）；自动测试与 Code Review P0–P2 修复全部落地（见 [review.md](./review.md)），工作区 `.worktrees/lx-scroll-speed` 与分支 `feat/lx-scroll-speed` 已清理。
 
 ---
 
