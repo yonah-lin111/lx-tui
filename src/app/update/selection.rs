@@ -11,8 +11,8 @@ use crate::layout::PaneId;
 use super::editor::place_prompt_cursor;
 use super::pane::scroll_pane_lines;
 
-/// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。
-pub(crate) const WHEEL_LINES: isize = 3;
+/// 全局滚轮一格滚动的视觉行数/条目数；对齐 opencode 默认步长。
+pub const WHEEL_LINES: isize = 3;
 
 /// 边缘自动滚动每步的间隔。
 pub(crate) const AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);

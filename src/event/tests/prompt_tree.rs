@@ -335,7 +335,7 @@ fn mouse_interacts_with_block_command_panel() {
     );
     assert_eq!(
         state.prompt.panel().map(|panel| panel.viewport()),
-        Some(Some(1))
+        Some(Some(3))
     );
 
     // 悬停条目：只改高亮。
@@ -412,7 +412,7 @@ fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
     );
 
     let after = crate::ui::prompt::mention_layout(&state.prompt, area).expect("mention panel");
-    assert_eq!(after.start, before.start + 1, "滚轮下移视口一项");
+    assert_eq!(after.start, before.start + 3, "滚轮下移视口 3 项");
     assert_eq!(
         state.prompt.mention().map(|panel| panel.active()),
         Some(0),

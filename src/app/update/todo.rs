@@ -12,10 +12,8 @@ use crate::app::tooltip::TodoButton;
 use crate::db::todo::{TodoRecord, TodoStatus};
 use crate::input::TodoKey;
 
+use super::selection::WHEEL_LINES;
 use super::show_toast;
-
-/// 滚轮每格移动的行数（与 prompt 正文一致）。
-const WHEEL_LINES: usize = 3;
 
 /// 聚焦 todo 面板：收起 prompt 瞬时指针。
 ///
@@ -533,8 +531,7 @@ pub fn undo_todo_delete(state: &mut AppState) -> bool {
 
 /// 滚轮：只动视口，不动高亮。
 pub fn scroll_todo(state: &mut AppState, direction: isize) -> bool {
-    let step = isize::try_from(WHEEL_LINES).unwrap_or(3);
-    state.todo.scroll_by(direction.saturating_mul(step))
+    state.todo.scroll_by(direction.saturating_mul(WHEEL_LINES))
 }
 
 /// 滚动条拖拽/轨道点击。

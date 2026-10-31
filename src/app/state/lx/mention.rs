@@ -418,14 +418,11 @@ impl LxMention {
             if count == 0 {
                 return false;
             }
-            let current = self.ref_viewport.unwrap_or(base);
-            let next = (current as isize + delta).max(0) as usize;
-            let clamped = next.min(count.saturating_sub(1));
-            if self.ref_viewport == Some(clamped) {
-                return false;
-            }
+            let max = count.saturating_sub(1) as isize;
+            let clamped = (base.min(max as usize) as isize + delta).clamp(0, max) as usize;
+            let changed = clamped != base;
             self.ref_viewport = Some(clamped);
-            return true;
+            return changed;
         }
         match self.panel.as_mut() {
             Some(panel) => panel.scroll_viewport(delta, base),

@@ -295,8 +295,8 @@ fn wheel_over_workspace_list_rescrolls_hover() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert_eq!(state.workspace_scroll, 1);
-    assert_eq!(state.workspace_hover, Some(1), "滚动后按新偏移重算悬停");
+    assert_eq!(state.workspace_scroll, 3);
+    assert_eq!(state.workspace_hover, Some(3), "滚动后按新偏移重算悬停");
 }
 
 #[test]
@@ -410,8 +410,8 @@ fn wheel_over_agents_section_scrolls_list() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert_eq!(state.agent_scroll, 1);
-    assert_eq!(state.agent_hover, Some(1), "hover follows the scrolled row");
+    assert_eq!(state.agent_scroll, 3);
+    assert_eq!(state.agent_hover, Some(3), "hover follows the scrolled row");
 }
 
 #[test]
