@@ -647,6 +647,78 @@ fn save_prompt_content_failure_keeps_dirty_and_pending() {
     service.pump(&mut state);
     assert!(!state.prompt.is_saved(), "失败保留脏状态等待重试");
     assert!(state.toast.is_some(), "失败给出可见反馈");
+    assert_eq!(
+        state.toast.as_ref().and_then(|toast| toast.anchor),
+        Some(prompt),
+        "Prompt 保存失败 toast 必须锚定在右侧面板容器内"
+    );
+}
+
+#[test]
+fn copy_to_clipboard_effect_routes_toast_by_anchor_container() {
+    let (mut service, mut state, _, _) = trusted_service("copy-anchor");
+    let pane = state.active_tab().layout.focus();
+
+    // 1. 终端窗格复制（anchor = Some(pane)）：落入 state.toast 并携带该窗格锚点。
+    state.pane_mut_anywhere(pane).expect("pane").view = crate::app::state::PaneView::Terminal;
+    state.effects.push(Effect::CopyToClipboard {
+        text: "/tmp/terminal".into(),
+        anchor: Some(pane),
+    });
+    assert!(service.pump(&mut state));
+    assert_eq!(
+        state.toast.as_ref().and_then(|toast| toast.anchor),
+        Some(pane),
+        "终端窗格复制 toast 锚定到该窗格"
+    );
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.toast.is_none(),
+        "终端窗格复制不写 lx.toast"
+    );
+
+    // 2. lx 窗格复制（anchor = Some(pane)）：落入该窗格专属的 pane.lx.toast，不占全局槽。
+    state.toast = None;
+    state.pane_mut_anywhere(pane).expect("pane").view = crate::app::state::PaneView::Lx;
+    state.effects.push(Effect::CopyToClipboard {
+        text: "sess-123".into(),
+        anchor: Some(pane),
+    });
+    assert!(service.pump(&mut state));
+    assert!(state.toast.is_none(), "lx 窗格复制不占全局 state.toast");
+    let lx_toast = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.toast.as_ref())
+        .expect("lx 窗格内弹出复制 toast");
+    assert_eq!(lx_toast.anchor, Some(pane));
+    assert_eq!(
+        lx_toast.title.as_deref(),
+        Some(crate::ui::text::TOAST_CLIPBOARD_TITLE)
+    );
+
+    // 3. 右侧面板复制（anchor = Some(state.prompt.id())）：落入带右侧面板锚点的 state.toast。
+    let prompt_id = state.prompt.id();
+    state.effects.push(Effect::CopyToClipboard {
+        text: "prompt content".into(),
+        anchor: Some(prompt_id),
+    });
+    assert!(service.pump(&mut state));
+    assert_eq!(
+        state.toast.as_ref().and_then(|toast| toast.anchor),
+        Some(prompt_id),
+        "右侧面板复制 toast 锚定到右侧面板"
+    );
+
+    // 4. 左侧工作区栏复制（anchor = None）：落入全局屏幕顶部居中 state.toast。
+    state.effects.push(Effect::CopyToClipboard {
+        text: "/tmp/workspace".into(),
+        anchor: None,
+    });
+    assert!(service.pump(&mut state));
+    assert_eq!(
+        state.toast.as_ref().and_then(|toast| toast.anchor),
+        None,
+        "左侧栏复制走全局 toast（anchor = None）"
+    );
 }
 
 /// 仓库主 checkout 工作区的 git 元数据。

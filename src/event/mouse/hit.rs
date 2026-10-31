@@ -380,12 +380,13 @@ pub(crate) fn template_button_at(
     ui::prompt::template_button_at(&state.prompt, area, column, row)
 }
 
-/// 执行模板块按钮动作：复制写剪贴板并 Toast，其余就地变更（均单步可撤销）。
+/// 执行模板块按钮动作：复制写剪贴板并在右侧面板弹出 Toast，其余就地变更（均单步可撤销）。
 pub(crate) fn apply_template_button(state: &mut AppState, hit: ui::prompt::TemplateButtonHit) {
     match hit.button {
         ui::prompt::TemplateBlockButton::Copy => {
             if let Some(text) = update::copy_template_block(state, hit.line) {
-                copy_with_toast(state, &text);
+                let anchor = Some(state.prompt.id());
+                copy_with_toast(state, &text, anchor);
             }
         }
         ui::prompt::TemplateBlockButton::Clean => {
@@ -421,7 +422,8 @@ pub(crate) fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockBut
         }
         (BlockKind::Supple, BlockButton::Copy) => {
             if let Some(text) = update::copy_supple_block(state, hit.line) {
-                copy_with_toast(state, &text);
+                let anchor = Some(state.prompt.id());
+                copy_with_toast(state, &text, anchor);
             }
         }
         (BlockKind::Supple, BlockButton::Clean) => {
@@ -484,8 +486,8 @@ pub(crate) fn dismiss_lx_toast_outside(
     crate::app::update::dismiss_lx_toast(state, pane)
 }
 
-/// 写系统剪贴板并在全局屏幕顶部居中弹出成功/失败 toast。
-pub(crate) fn copy_with_toast(state: &mut AppState, text: &str) {
+/// 写系统剪贴板并按 `anchor` 在目标容器（或全局屏幕顶部居中）弹出成功/失败 toast。
+pub(crate) fn copy_with_toast(state: &mut AppState, text: &str, anchor: Option<PaneId>) {
     let now = Instant::now();
     let (kind, message) = if crate::platform::write_clipboard(text) {
         (ToastKind::Default, ui::text::toast_copied(text))
@@ -493,9 +495,10 @@ pub(crate) fn copy_with_toast(state: &mut AppState, text: &str) {
         tracing::warn!("clipboard write failed");
         (ToastKind::Danger, ui::text::TOAST_COPY_FAILED.to_string())
     };
-    update::show_toast(
+    update::show_toast_at(
         state,
-        Toast::new(kind, message, None, now).with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+        anchor,
+        Toast::new(kind, message, anchor, now).with_title(ui::text::TOAST_CLIPBOARD_TITLE),
     );
 }
 

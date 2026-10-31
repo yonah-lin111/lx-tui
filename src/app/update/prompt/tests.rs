@@ -337,9 +337,11 @@ fn item_menu_lists_commands_and_dispatches_copy_delete() {
         confirming: false,
     }));
     crate::app::update::activate_menu(&mut state);
+    let prompt_id = state.prompt.id();
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
-        Effect::CopyToClipboard { text, .. } if text == "nested content"
+        Effect::CopyToClipboard { text, anchor }
+            if text == "nested content" && *anchor == Some(prompt_id)
     )));
 
     // 删除命令 → 第一次触发进入菜单行内待确认态，第二次触发直接删除。
@@ -998,9 +1000,11 @@ fn temp_menu_lists_commands_and_deletes_immediately() {
         confirming: false,
     }));
     crate::app::update::activate_menu(&mut state);
+    let prompt_id = state.prompt.id();
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
-        Effect::CopyToClipboard { text, .. } if text == "doomed"
+        Effect::CopyToClipboard { text, anchor }
+            if text == "doomed" && *anchor == Some(prompt_id)
     )));
 
     // 删除命令 → 立即移除（不打开确认浮层）。
@@ -1843,9 +1847,11 @@ fn copy_content_uses_active_page_only() {
     assert!(select_prompt_page(&mut state, second));
     state.effects.clear();
     copy_prompt_content(&mut state, 0, 10);
+    let prompt_id = state.prompt.id();
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
-        Effect::CopyToClipboard { text, .. } if text == "second page"
+        Effect::CopyToClipboard { text, anchor }
+            if text == "second page" && *anchor == Some(prompt_id)
     )));
 }
 

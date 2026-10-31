@@ -438,7 +438,7 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
             if let Some(path) = path {
                 state.effects.push(Effect::CopyToClipboard {
                     text: path.display().to_string(),
-                    anchor: None,
+                    anchor: Some(pane),
                 });
             }
         }

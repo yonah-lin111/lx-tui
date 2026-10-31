@@ -82,7 +82,7 @@ pub(crate) fn handle_key_event(
                 && let Some(text) = overlay_selected_text(state)
             {
                 if !text.trim().is_empty() {
-                    copy_with_toast(state, &text);
+                    copy_with_toast(state, &text, None);
                 }
                 *dirty = true;
                 return;
@@ -116,13 +116,15 @@ pub(crate) fn handle_key_event(
                 update::clear_prompt_search(state);
                 *dirty = true;
             } else if let Some(text) = update::prompt_copy_text(state) {
-                copy_with_toast(state, &text);
+                let anchor = Some(state.prompt.id());
+                copy_with_toast(state, &text, anchor);
                 *dirty = true;
             }
         }
         Routed::CopyTemplateBlock => {
             if let Some(text) = update::copy_template_block_at_cursor(state) {
-                copy_with_toast(state, &text);
+                let anchor = Some(state.prompt.id());
+                copy_with_toast(state, &text, anchor);
                 *dirty = true;
             }
         }
@@ -151,7 +153,8 @@ pub(crate) fn handle_key_event(
                     .and_then(|inp| inp.selected_text())
             {
                 if !text.trim().is_empty() {
-                    copy_with_toast(state, &text);
+                    let anchor = Some(state.prompt.id());
+                    copy_with_toast(state, &text, anchor);
                 }
                 *dirty = true;
                 return;
@@ -256,17 +259,17 @@ fn is_copy_chord(key: KeyEvent) -> bool {
             .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT)
 }
 
-/// 复制焦点终端窗格的选区文本并弹出全局顶部居中 Toast；选区保留，无选区返回 false。
+/// 复制焦点终端窗格的选区文本并在该窗格顶部居中弹出 Toast；选区保留，无选区返回 false。
 fn copy_terminal_selection(state: &mut AppState) -> bool {
     let pane = state.active_tab().layout.focus();
     let Some(text) = update::terminal_selection_text(state, pane) else {
         return false;
     };
-    copy_with_toast(state, &text);
+    copy_with_toast(state, &text, Some(pane));
     true
 }
 
-/// 复制焦点 lx 窗格的底部输入框选区或主内容区选区文本并弹出全局顶部居中 Toast；
+/// 复制焦点 lx 窗格的底部输入框选区或主内容区选区文本并在该 lx 窗格内弹出 Toast；
 /// 选区保留，无选区返回 false。
 fn copy_lx_selection(
     state: &mut AppState,
@@ -297,7 +300,7 @@ fn copy_lx_selection(
         })
     {
         if !text.trim().is_empty() {
-            copy_with_toast(state, &text);
+            copy_with_toast(state, &text, Some(pane));
         }
         return true;
     }
@@ -319,7 +322,7 @@ fn copy_lx_selection(
     }
     let text = ui::main_content::lx::copy_text(area, &target.lx, range, cache.pane(pane));
     if !text.trim().is_empty() {
-        copy_with_toast(state, &text);
+        copy_with_toast(state, &text, Some(pane));
     }
     true
 }

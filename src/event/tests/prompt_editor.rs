@@ -301,6 +301,19 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
         Some("Copied 9 chars"),
         "复制反馈显示复制的字符数（`- keep me` 共 9 字符）"
     );
+    assert_eq!(
+        state.toast.as_ref().and_then(|toast| toast.anchor),
+        Some(state.prompt.id()),
+        "补充块复制按钮的 toast 必须锚定在右侧面板容器"
+    );
+    let toast_rect = ui::toast::rect(&state, &geo.view, &geo.rects, geo.screen, &config)
+        .expect("toast rect in right panel");
+    assert!(
+        toast_rect.left() >= geo.view.prompt.left()
+            && toast_rect.right() <= geo.view.prompt.right(),
+        "右侧面板复制 toast 矩形 {toast_rect:?} 必须落在右侧面板容器 {:?} 内",
+        geo.view.prompt
+    );
 }
 
 #[test]

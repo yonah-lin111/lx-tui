@@ -2119,7 +2119,7 @@ fn activate_menu_copy_path_from_terminal_pane_prefers_pane_cwd() {
         state.effects,
         vec![Effect::CopyToClipboard {
             text: "/tmp/term-cwd".to_string(),
-            anchor: None,
+            anchor: Some(pane),
         }]
     );
 }
@@ -2140,7 +2140,7 @@ fn activate_menu_copy_path_from_lx_pane_falls_back_to_workspace_cwd() {
         state.effects,
         vec![Effect::CopyToClipboard {
             text: "/tmp/ws-cwd".to_string(),
-            anchor: None,
+            anchor: Some(pane),
         }]
     );
 }
