@@ -1,10 +1,11 @@
 //! 全局 toast 覆盖层：渲染与命中几何共用；锚点容器内顶边框下方居中，放不下时降级屏幕顶部居中。
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::AppState;
@@ -58,6 +59,34 @@ pub fn rect(
     ))
 }
 
+/// 绘制 toast 外框、标题行、标题下方分割线与右上角 `[✕]`；返回是否存在标题行。
+///
+/// 全局 toast 与 lx 窗格内 toast 共用这一份绘制，保证两者与模态弹窗/右键菜单同款：
+/// 直角边框、标题独占一行、标题下方 `├──┤`、`[✕]` 贴右端。
+pub(crate) fn draw_frame(buf: &mut Buffer, area: Rect, toast: &Toast) -> bool {
+    let border = border_style(toast.kind);
+    Block::bordered().border_style(border).render(area, buf);
+    let has_title = toast.title.is_some() && area.height >= 5;
+    if let Some(title) = toast.title.as_deref()
+        && has_title
+    {
+        let max = usize::from(area.width.saturating_sub(8));
+        let fitted = text::truncate_to_width(title, max);
+        buf.set_stringn(
+            area.x.saturating_add(2),
+            area.y.saturating_add(1),
+            &fitted,
+            max,
+            title_style(toast.kind),
+        );
+        crate::ui::widgets::modal::paint_divider(buf, area, area.y.saturating_add(2), border);
+    }
+    if let Some(rect) = close_button_rect_for(area, has_title) {
+        buf.set_stringn(rect.x, rect.y, text::MODAL_CLOSE, 3, border);
+    }
+    has_title
+}
+
 /// 绘制 toast；必须晚于全部下层内容。
 /// 返回绘制出的盒矩形，供调用方隐藏被其覆盖的硬件光标。
 pub fn render(
@@ -71,27 +100,7 @@ pub fn render(
     let area = rect(state, view, pane_rects, screen, config)?;
     let toast = state.toast.as_ref()?;
     clear::render(frame, area);
-    let border = border_style(toast.kind);
-    let block = Block::bordered().border_style(border);
-    frame.render_widget(block, area);
-    let has_title = toast.title.is_some() && area.height >= 5;
-    if let Some(title) = toast.title.as_deref()
-        && has_title
-    {
-        let title_max = usize::from(area.width.saturating_sub(8));
-        let fitted = text::truncate_to_width(title, title_max);
-        frame.render_widget(
-            Paragraph::new(Span::styled(fitted, title_style(toast.kind))),
-            Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), 1),
-        );
-        crate::ui::widgets::modal::paint_divider(frame.buffer_mut(), area, area.y + 2, border);
-    }
-    if let Some(rect) = close_button_rect_for(area, has_title) {
-        frame.render_widget(
-            Paragraph::new(Span::styled(text::MODAL_CLOSE, border)),
-            rect,
-        );
-    }
+    let has_title = draw_frame(frame.buffer_mut(), area, toast);
     let body_y = if has_title { area.y + 3 } else { area.y + 1 };
     let inner = Rect::new(
         area.x + 1,
@@ -137,9 +146,9 @@ pub(crate) fn border_style(kind: ToastKind) -> Style {
     style::toast_border(kind)
 }
 
-/// 标题语义色：与该档边框保持同色。
+/// 标题语义色：与边框同色系、dim 且不加粗（对齐浮层标题）。
 pub(crate) fn title_style(kind: ToastKind) -> Style {
-    style::toast_border(kind)
+    style::toast_title(kind)
 }
 
 /// 盒尺寸：正文最长行与边框标题各自按显示列宽加边框与内边距取宽；有标题时含顶栏框共 5 行，无标题 3 行。

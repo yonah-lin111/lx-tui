@@ -262,40 +262,36 @@ fn toast_renders_close_button_and_hit_test() {
     assert_eq!(label, text::MODAL_CLOSE);
 }
 
-/// 三档专属边框色：default 薰衣草紫(141)、warning 琥珀金橙(214)、danger 珊瑚玫红(204)；
-/// 边框、标题与关闭按钮同色，且不与项目主色调 Cyan 重叠。
+/// 三档语义色：default 沿用浮层强调色 Cyan、warning 黄、danger 红；
+/// 标题与边框同色系但降为 dim（对齐弹窗标题）。
 #[test]
 fn kinds_drive_border_and_title_colors() {
     use ratatui::style::Color;
-    assert_eq!(
-        border_style(ToastKind::Default).fg,
-        Some(Color::Indexed(141))
-    );
-    assert_eq!(
-        border_style(ToastKind::Warning).fg,
-        Some(Color::Indexed(214))
-    );
-    assert_eq!(
-        border_style(ToastKind::Danger).fg,
-        Some(Color::Indexed(204))
-    );
+    assert_eq!(border_style(ToastKind::Default).fg, Some(Color::Cyan));
+    assert_eq!(border_style(ToastKind::Warning).fg, Some(Color::Yellow));
+    assert_eq!(border_style(ToastKind::Danger).fg, Some(Color::Red));
     for kind in [ToastKind::Default, ToastKind::Warning, ToastKind::Danger] {
-        assert_ne!(
-            border_style(kind).fg,
-            Some(Color::Cyan),
-            "{kind:?} 边框色不得与项目主色调 Cyan 重叠"
-        );
         assert_eq!(
-            title_style(kind),
-            border_style(kind),
-            "{kind:?} 的边框与标题同色"
+            title_style(kind).fg,
+            border_style(kind).fg,
+            "{kind:?} 的边框与标题同色系"
+        );
+        assert!(
+            title_style(kind)
+                .add_modifier
+                .contains(ratatui::style::Modifier::DIM)
+        );
+        assert!(
+            !title_style(kind)
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
         );
     }
 }
 
-/// 渲染：warning toast 的边框、标题与关闭按钮都落琥珀金橙（Indexed 214）单元格。
+/// 渲染：warning toast 的边框落黄色单元格。
 #[test]
-fn warning_toast_paints_amber_border_and_title() {
+fn warning_toast_paints_yellow_border() {
     use ratatui::style::Color;
     let mut state = AppState::demo();
     let pane = state.prompt.id();
@@ -331,8 +327,8 @@ fn warning_toast_paints_amber_border_and_title() {
     for x in area.x..area.right() {
         assert_eq!(
             buffer[(x, area.y)].fg,
-            Color::Indexed(214),
-            "warning 顶边框、标题与关闭按钮均使用琥珀金橙 Indexed(214)"
+            Color::Yellow,
+            "warning 顶边框使用黄色"
         );
     }
 }

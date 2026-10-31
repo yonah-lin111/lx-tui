@@ -642,7 +642,7 @@ fn modal_without_input_hides_prompt_hardware_cursor() {
 }
 
 #[test]
-fn error_toast_uses_danger_coral_border() {
+fn error_toast_uses_danger_red_border() {
     let mut state = AppState::demo();
     let anchor = state.prompt.id();
     update::show_toast(
@@ -676,10 +676,7 @@ fn error_toast_uses_danger_coral_border() {
         panic!("draw failed: {error}");
     }
     let buffer = terminal.backend().buffer().clone();
-    assert_eq!(
-        buffer[(area.x, area.y)].fg,
-        ratatui::style::Color::Indexed(204)
-    );
+    assert_eq!(buffer[(area.x, area.y)].fg, ratatui::style::Color::Red);
 }
 
 #[test]

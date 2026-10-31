@@ -15,7 +15,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::toast::{Toast, ToastKind};
+use crate::app::toast::Toast;
 use crate::ui::widgets::clear;
 use crate::ui::{style, text};
 
@@ -84,39 +84,13 @@ pub(crate) fn rect(area: Rect, toast: &Toast) -> Option<Rect> {
 
 /// 绘制 toast 盒；返回绘制出的矩形（供调用方隐藏被覆盖的硬件光标）。
 ///
-/// 先清底擦除底层字符（重置为终端默认透明背景，不再填充背景色），再写边框、标题栏框、关闭按钮与正文。
+/// 先清底擦除底层字符（重置为终端默认透明背景，不再填充背景色），
+/// 再复用 [`crate::ui::toast::draw_frame`] 画边框、标题行、分割线与关闭按钮，
+/// 最后按窗格宽度折行绘制正文（超出上限时末行加省略号）。
 pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> {
     let box_area = rect(area, toast)?;
     clear::render_buffer(buf, box_area);
-    draw_border(buf, box_area, toast.kind);
-    let close_x = box_area.width.saturating_sub(5);
-    let has_title = toast.title.is_some() && box_area.height >= 5;
-    if let Some(title) = toast.title.as_deref()
-        && has_title
-    {
-        draw_title(buf, box_area, title, toast.kind);
-        crate::ui::widgets::modal::paint_divider(
-            buf,
-            box_area,
-            box_area.y + 2,
-            border_style(toast.kind),
-        );
-    }
-    let close_y = if has_title {
-        box_area.y.saturating_add(1)
-    } else {
-        box_area.y
-    };
-    if box_area.width >= 10 {
-        let style = border_style(toast.kind);
-        buf.set_stringn(
-            box_area.x.saturating_add(close_x),
-            close_y,
-            text::MODAL_CLOSE,
-            3,
-            style,
-        );
-    }
+    let has_title = crate::ui::toast::draw_frame(buf, box_area, toast);
     let body_top = if has_title {
         box_area.y.saturating_add(3)
     } else {
@@ -155,56 +129,6 @@ pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> 
     Some(box_area)
 }
 
-/// 直角边框（只画四边与四角；不依赖 `Frame`，直接写 Buffer）。
-fn draw_border(buf: &mut Buffer, area: Rect, kind: ToastKind) {
-    let border = border_style(kind);
-    let right = area.right().saturating_sub(1);
-    let bottom = area.bottom().saturating_sub(1);
-    for x in area.x..=right {
-        put(buf, x, area.y, '─', border);
-        put(buf, x, bottom, '─', border);
-    }
-    for y in area.y..=bottom {
-        put(buf, area.x, y, '│', border);
-        put(buf, right, y, '│', border);
-    }
-    put(buf, area.x, area.y, '┌', border);
-    put(buf, right, area.y, '┐', border);
-    put(buf, area.x, bottom, '└', border);
-    put(buf, right, bottom, '┘', border);
-}
-
-/// 顶栏标题：` <title> `（位于 `area.y + 1`）；宽度不足时省略，不侵占右侧关闭按钮。
-/// 返回标题文本结束后的下一列，供调用方衔接 `─` 填充。
-fn draw_title(buf: &mut Buffer, area: Rect, title: &str, kind: ToastKind) -> u16 {
-    let reserved = if area.width >= 10 {
-        u16::try_from(text::MODAL_CLOSE.width())
-            .unwrap_or(0)
-            .saturating_add(2)
-    } else {
-        0
-    };
-    let available = area.width.saturating_sub(2).saturating_sub(reserved);
-    if available < 4 {
-        return area.x.saturating_add(1);
-    }
-    let label = format!(
-        " {} ",
-        text::truncate_to_width(title, usize::from(available.saturating_sub(2)))
-    );
-    let label_w = u16::try_from(label.width()).unwrap_or(u16::MAX);
-    let style = title_style(kind);
-    let x = area.x.saturating_add(1);
-    buf.set_stringn(
-        x,
-        area.y.saturating_add(1),
-        &label,
-        usize::from(available),
-        style,
-    );
-    x.saturating_add(label_w)
-}
-
 /// 命中右上角关闭按钮（`[✕]` 与全局 toast 同款、支持无标题 `area.y` 与有标题 `area.y + 1`）。
 pub(crate) fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
     if area.width < 10 {
@@ -215,24 +139,6 @@ pub(crate) fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
     let y_bar = Rect::new(x, area.y.saturating_add(1), 3, 1);
     y_top.contains((column, row).into())
         || (area.height >= 5 && y_bar.contains((column, row).into()))
-}
-
-/// 写一个单元格（越界忽略）。
-fn put(buf: &mut Buffer, x: u16, y: u16, ch: char, style: ratatui::style::Style) {
-    if let Some(cell) = buf.cell_mut((x, y)) {
-        cell.set_char(ch);
-        cell.set_style(style);
-    }
-}
-
-/// 边框语义色：与全局 toast 完全一致（薰衣草紫 / 琥珀金橙 / 珊瑚玫红，不与主色调 Cyan 重叠）。
-fn border_style(kind: ToastKind) -> ratatui::style::Style {
-    crate::ui::toast::border_style(kind)
-}
-
-/// 标题语义色：与边框同色规则一致。
-fn title_style(kind: ToastKind) -> ratatui::style::Style {
-    crate::ui::toast::title_style(kind)
 }
 
 #[cfg(test)]

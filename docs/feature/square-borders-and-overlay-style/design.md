@@ -441,6 +441,7 @@ fn borderless_inner_rect(rect: Rect, footer_rows: u16) -> Rect {
 - **底栏**：`├───┤`（`bottom - 3`）+ `│ footer / buttons │`（`bottom - 2`）+ `└───┘`（`bottom - 1`）；内容与分割线之间**不留空行**。
 - 关闭按钮 `[✕]` 与左右边框各留 1 列内边距（`right - 5` 起 3 列）。
 - 无底栏的浮层（菜单、toast、tooltip）在标题分割线下直接接内容，底部无多余空行。
+- **Toast 统一到浮层样式**：全局 toast 与 `lx` 窗格内 toast 共用 `ui::toast::draw_frame` 绘制外框、标题行、标题下方 `├──┤` 与右上角 `[✕]`；边框默认用浮层强调色（Cyan），`warning` 黄、`danger` 红，标题与边框同色系但 dim。
 
 ### 4.5 统一快捷键文案格式与移除 Prompt 模板块/补充块背景色
 

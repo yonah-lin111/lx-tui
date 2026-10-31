@@ -103,17 +103,24 @@ pub fn menu_confirm() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// Toast 提示框三档专属色（边框、顶边标题与右上角 `[✕]` 关闭按钮共用）：
-/// 刻意避开项目主色调 `Cyan`、聊天步骤翡翠绿 `Indexed(42)` 与思考品红 `Indexed(218)`，
-/// 确保无背景色的 Toast 在任何面板/窗格边框旁都层次分明、不撞色。
+/// Toast 提示框三档语义色（边框与右上角 `[✕]` 共用）：默认沿用浮层强调色，
+/// warning 黄、danger 红——与模态弹窗/右键菜单同一套视觉语言（强调色边框）。
 pub fn toast_border(kind: crate::app::toast::ToastKind) -> Style {
     use crate::app::toast::ToastKind;
-    let color = match kind {
-        ToastKind::Default => Color::Indexed(141),
-        ToastKind::Warning => Color::Indexed(214),
-        ToastKind::Danger => Color::Indexed(204),
-    };
-    Style::default().fg(color)
+    match kind {
+        ToastKind::Default => accent(),
+        ToastKind::Warning => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        ToastKind::Danger => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+    }
+}
+
+/// Toast 标题色：与边框同色系，降为 dim 且不加粗（对齐浮层标题 `border_title`）。
+pub fn toast_title(kind: crate::app::toast::ToastKind) -> Style {
+    toast_border(kind)
+        .remove_modifier(Modifier::BOLD)
+        .add_modifier(Modifier::DIM)
 }
 
 /// 右侧容器顶边框标签页的激活项：深青蓝实心块（Indexed 24）+ 近白字 + 加粗。

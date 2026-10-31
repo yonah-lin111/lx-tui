@@ -4,7 +4,7 @@
 //! 时会降级到屏幕顶部居中、横跨整个窗口；lx 的提示必须始终留在自己的窗格内。
 
 use super::*;
-use crate::app::toast::TOAST_DURATION;
+use crate::app::toast::{TOAST_DURATION, ToastKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use std::time::Instant;
@@ -102,7 +102,7 @@ fn draw_clears_background_and_paints_dedicated_border_and_close_button() {
             );
         }
     }
-    // 边框珊瑚玫红（danger = Indexed 204）。
+    // 边框语义红（danger）。
     assert_eq!(
         Some(buffer[(box_area.x, box_area.y)].fg),
         crate::ui::style::toast_border(ToastKind::Danger).fg
@@ -125,12 +125,12 @@ fn draw_clears_background_and_paints_dedicated_border_and_close_button() {
 fn kinds_share_the_global_palette() {
     for kind in [ToastKind::Default, ToastKind::Warning, ToastKind::Danger] {
         assert_eq!(
-            border_style(kind),
+            crate::ui::toast::border_style(kind),
             crate::ui::toast::border_style(kind),
             "{kind:?} 边框色必须与全局 toast 一致"
         );
         assert_eq!(
-            title_style(kind),
+            crate::ui::toast::title_style(kind),
             crate::ui::toast::title_style(kind),
             "{kind:?} 标题色必须与全局 toast 一致"
         );
