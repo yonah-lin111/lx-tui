@@ -642,3 +642,29 @@ fn params_stay_light_yellow_and_output_lifts_independently() {
         "展开参数不得连带展开输出"
     );
 }
+
+#[test]
+fn command_output_keeps_dashes_literal_and_styles_headings_uniformly() {
+    let call = command_call(
+        ProcessStateView::Exited { code: Some(0) },
+        ToolStatus::Completed,
+        "---\n# lx 工具演示\n### 子标题\n---\n",
+    );
+    let expanded = tool::Folds {
+        body: true,
+        output: true,
+    };
+    let height = tool::rows(&call, 60, expanded).max(1) as u16;
+    let area = Rect::new(0, 0, 60, height);
+    let mut grid = Grid::new(area);
+    let mut row = 0usize;
+    tool::draw_animated(&mut grid, area, 0, &mut row, &call, 0, expanded, false);
+    let dash_row = row_of_text(&grid, 60, height, "---").expect("--- 行原样保留");
+    let dash_line: String = (5..60).map(|x| grid.cell(x, dash_row).ch).collect();
+    assert_eq!(dash_line.trim_end(), "---");
+    let h1_row = row_of_text(&grid, 60, height, "lx 工具演示").expect("h1 标题行");
+    let h3_row = row_of_text(&grid, 60, height, "子标题").expect("h3 标题行");
+    let expected = style::md_read_heading_level(1).patch(style::muted());
+    assert_eq!(grid.cell(5, h1_row).style, expected);
+    assert_eq!(grid.cell(5, h3_row).style, expected);
+}

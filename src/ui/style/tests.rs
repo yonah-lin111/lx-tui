@@ -382,17 +382,22 @@ fn markdown_palette_is_github_dark_truecolor() {
             .contains(Modifier::CROSSED_OUT)
     );
 
-    // 层级靠下划线：GitHub 的 h1/h2 带 border-bottom。
-    assert!(
-        md_read_heading_level(1)
-            .add_modifier
-            .contains(Modifier::UNDERLINED)
-    );
-    assert!(
-        md_read_heading_level(2)
-            .add_modifier
-            .contains(Modifier::UNDERLINED)
-    );
+    // 六级标题统一为同一种格式：GitHub Dark 实体紫 `#d2a8ff` + 加粗 + 斜体 + 下划线。
+    for level in 1..=6 {
+        let heading = md_read_heading_level(level);
+        assert_eq!(heading.fg, entity, "h{level} 标题高亮色 = #d2a8ff");
+        assert!(
+            heading
+                .add_modifier
+                .contains(Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED),
+            "h{level} 标题必须包含加粗、斜体与下划线"
+        );
+        assert_eq!(
+            heading,
+            md_read_heading_level(1),
+            "所有级别标题统一为同一种格式"
+        );
+    }
 }
 
 /// 编辑器高亮（prompt 编辑器 / lx 输入框）是**独立于阅读渲染**的 ANSI 语义色板。

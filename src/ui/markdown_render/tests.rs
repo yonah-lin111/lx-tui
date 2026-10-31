@@ -620,3 +620,31 @@ fn indented_code_block_renders_body_only() {
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].text(), "let x = 1;");
 }
+
+#[test]
+fn literal_rules_mode_preserves_raw_dashes_while_default_expands_rule() {
+    let src = "before\n---\n# lx 工具演示\n---\nafter";
+    let expanded_rule = render_wrapped(src, 30);
+    assert!(
+        expanded_rule.iter().any(|line| line.text().contains('─')),
+        "默认模式（思考块与正文）将 --- 渲染为水平横线"
+    );
+    let literal_rule = render_wrapped_literal_rules(src, 30);
+    assert!(
+        literal_rule.iter().all(|line| !line.text().contains('─')),
+        "工具展开模式不得将 --- 渲染为整行横线：{literal_rule:?}"
+    );
+    assert_eq!(
+        literal_rule
+            .iter()
+            .filter(|line| line.text() == "---")
+            .count(),
+        2,
+        "工具展开模式原样保留 ---"
+    );
+    let heading = literal_rule
+        .iter()
+        .find(|line| line.text() == "lx 工具演示")
+        .expect("heading line");
+    assert_eq!(heading.spans[0].1, style::md_read_heading_level(1));
+}

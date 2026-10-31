@@ -162,13 +162,14 @@ pub(super) fn sample_markdown_source(raw: &str) -> String {
 
 /// 将 markdown 源码按给定列宽排版为思考块同款的压暗多段物理行（`span_style.patch(style::muted())`）。
 ///
+/// 展开内容中的水平线（`---`）保持字面量，不拉满整行 `─` 边框线；
 /// 每条返回的 `Vec<Segment>` 对应一个已按 `width` 折好行的物理行（含 `MdLine::indent` 前导空格），
 /// 显示总列宽 `<= width.max(1)`；送入 `tree::Node::block` 后经 `wrap_spans(logical, body)` 保持 1:1 物理行映射。
 pub(super) fn muted_markdown_lines(source: &str, width: u16) -> Vec<Vec<Segment>> {
     if source.trim().is_empty() {
         return Vec::new();
     }
-    crate::ui::markdown_render::render_wrapped(source, width.max(1))
+    crate::ui::markdown_render::render_wrapped_literal_rules(source, width.max(1))
         .into_iter()
         .map(md_line_segments)
         .collect()

@@ -80,7 +80,7 @@ impl MdLine {
 ///
 /// 调用方负责换行与宽度裁剪；本函数只做块级结构还原与行内标记折叠。
 pub fn render(source: &str) -> Vec<MdLine> {
-    render_blocks(source, None)
+    render_blocks(source, None, true)
 }
 
 /// 把 markdown 源码渲染成**恰好不超过 `width` 列**的行（块级：表格自适应宽度、其余软换行）。
@@ -89,16 +89,28 @@ pub fn render(source: &str) -> Vec<MdLine> {
 /// （对齐 opencode 的 markdown 表格），避免窄宽度下把方框网格硬折断成「变形」；
 /// 其余块（段落/列表/引用/代码）按词优先软换行，超长不可断的内容按字符切分。
 pub fn render_wrapped(source: &str, width: u16) -> Vec<MdLine> {
+    render_wrapped_with_options(source, width, true)
+}
+
+/// 与 [`render_wrapped`] 相同，但水平分割线（`---` / `***` / `___`）保持原始文本而不拉满整行 `─` 横线。
+///
+/// 供工具卡片展开内容、子 agent 汇报与 compact 摘要使用：输出中的 `---` 保持原样，不画成整行边框线；
+/// 思考块与主回答正文仍用 [`render_wrapped`]。
+pub fn render_wrapped_literal_rules(source: &str, width: u16) -> Vec<MdLine> {
+    render_wrapped_with_options(source, width, false)
+}
+
+fn render_wrapped_with_options(source: &str, width: u16, expand_rules: bool) -> Vec<MdLine> {
     let width = usize::from(width.max(1));
     let mut out = Vec::new();
-    for line in render_blocks(source, Some(width)) {
+    for line in render_blocks(source, Some(width), expand_rules) {
         wrap_md_line(&line, width, &mut out);
     }
     out
 }
 
 /// 块级解析：`width` 为 Some 时表格按可用宽度收缩（其余块仍按自然宽度产出，由调用方换行）。
-fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
+fn render_blocks(source: &str, width: Option<usize>, expand_rules: bool) -> Vec<MdLine> {
     let mut lines = Vec::new();
     let source_lines: Vec<&str> = source.split('\n').collect();
     // 列表缩进档位栈：把源码缩进列数换算成层级，跨行维护，非列表行清空（空行不清，
@@ -139,12 +151,16 @@ fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
             continue;
         }
         if is_rule(trimmed) {
-            let rule_width = width.unwrap_or(40).max(1);
-            lines.push(MdLine::plain(
-                0,
-                RULE.repeat(rule_width),
-                style::md_read_rule(),
-            ));
+            if expand_rules {
+                let rule_width = width.unwrap_or(40).max(1);
+                lines.push(MdLine::plain(
+                    0,
+                    RULE.repeat(rule_width),
+                    style::md_read_rule(),
+                ));
+            } else {
+                lines.push(MdLine::plain(0, trimmed, Style::default()));
+            }
             index += 1;
             continue;
         }

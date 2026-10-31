@@ -317,15 +317,12 @@ pub fn md_read_marker() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
 }
 
-/// markdown 六级标题的样式：h1 加粗+下划线（对齐 GitHub 的 `border-bottom`）、h2 加粗+
-/// 下划线、h3 加粗、h4–h6 斜体；全程只用修饰符，不换色（与 GitHub Dark 一致）。
-pub fn md_read_heading_level(level: u8) -> Style {
-    match level {
-        1 => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        2 => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        3 => Style::default().add_modifier(Modifier::BOLD),
-        _ => Style::default().add_modifier(Modifier::ITALIC),
-    }
+/// markdown 六级标题的统一样式：所有级别（h1–h6）统一为同一种格式，
+/// 使用 GitHub Dark 实体紫 `#d2a8ff` 高亮，并同时添加加粗、斜体与下划线。
+pub fn md_read_heading_level(_level: u8) -> Style {
+    Style::default()
+        .fg(github_dark::ENTITY)
+        .add_modifier(Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED)
 }
 
 /// markdown 粗斜体（`***…***`）：正文色加粗+斜体（不再额外上色）。
