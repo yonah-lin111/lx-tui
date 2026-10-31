@@ -87,8 +87,20 @@
 
 ---
 
-### 阶段 6：精确校验与验收（Verification）
-- [x] 6.1 代码格式规范检查：`cargo fmt --check`
-- [x] 6.2 编译器与 Clippy 静态检查：`cargo clippy --all-targets -- -D warnings`
-- [x] 6.3 单元测试与集成测试验证：`cargo test todo`（140 passed）
-- [ ] 6.4 提交用户人工 `cargo run` 确认 TUI 观感与是否合并分支
+### 阶段 6：右键上下文菜单与工具栏精简（Context Menu & Toolbar Pruning）
+- [x] 6.1 顶部工具栏精简：仅保留 `[+]` 与 `[sort]`，移除 `[edit]`、`[del]` 与 `[clear done]`
+- [x] 6.2 全量物理删除 `Clear Done`：清理 DB `delete_todos_with_status*`、Effect `DeleteTodosWithStatus` 与对应 UI 文案/提示词
+- [x] 6.3 引入 Todo 右键菜单系统：
+  - 在 `OverlayTarget` 扩展 `TodoItem { id }` 与 `TodoBlank`
+  - 在 `MenuCommand` 扩展 `NewTodo`、`EditTodo`、`CycleTodoPriority`、`DeleteTodo`（带行内二次确认）、`SortTodos`
+  - 在 `event/overlay.rs` 对 `effective_list_rect` 内右键点击进行路由分派（自动提交编辑并同步选中目标行）
+  - 在 `app/update/menu.rs` 中完整接入命令执行分派
+- [x] 6.4 编写右键菜单打开、命令执行与二次确认的单元测试（`src/app/update/todo/tests.rs`、`src/event/tests/todo.rs`）
+
+---
+
+### 阶段 7：精确校验与验收（Verification）
+- [x] 7.1 代码格式规范检查：`cargo fmt --check`
+- [x] 7.2 编译器与 Clippy 静态检查：`cargo clippy --all-targets -- -D warnings`
+- [x] 7.3 单元测试与集成测试验证：`cargo test todo`（140 passed）
+- [ ] 7.4 提交用户人工 `cargo run` 确认 TUI 观感与是否合并分支

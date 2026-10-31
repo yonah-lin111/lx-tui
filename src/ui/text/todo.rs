@@ -2,10 +2,7 @@
 
 /// 工具栏按钮。
 pub const TODO_NEW_LABEL: &str = "[+]";
-pub const TODO_EDIT_LABEL: &str = "[edit]";
-pub const TODO_DELETE_LABEL: &str = "[del]";
 pub const TODO_SORT_LABEL: &str = "[sort]";
-pub const TODO_CLEAR_DONE_LABEL: &str = "[clear done]";
 
 /// 状态框（三态各 3 列；`[ ]` 内含一个空格，与 markdown 任务列表口径一致）。
 pub const TODO_STATUS_TODO: &str = "[ ]";

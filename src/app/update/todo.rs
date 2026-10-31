@@ -660,24 +660,41 @@ pub fn delete_todo_selected(state: &mut AppState) -> bool {
     remove_todo_at(state, index)
 }
 
-/// 删除全部完成项（写入撤销槽）。
-pub fn clear_done_todos(state: &mut AppState) -> bool {
-    let changed = commit_todo_edit(state);
-    if state.todo.done_count() == 0 {
-        return changed;
+/// 打开 Todo 条目右键菜单：编辑、循环优先级与删除（需二次确认）。
+pub fn open_todo_item_menu(state: &mut AppState, id: impl Into<String>, anchor: (u16, u16)) {
+    let id = id.into();
+    if state.todo.items().iter().all(|item| item.id != id) {
+        return;
     }
-    let removed = state.todo.take_with_status(TodoStatus::Done);
-    if removed.is_empty() {
-        return changed;
-    }
-    let entry_date = state.todo.selected_date().to_string();
-    state.todo.set_undo(removed);
-    state.todo.clamp_selection();
-    state.effects.push(Effect::DeleteTodosWithStatus {
-        entry_date,
-        status: TodoStatus::Done,
-    });
-    true
+    state.overlay = Some(crate::app::overlay::Overlay::Menu(
+        crate::app::overlay::Menu {
+            anchor,
+            target: crate::app::overlay::OverlayTarget::TodoItem { id },
+            commands: vec![
+                crate::app::overlay::MenuCommand::EditTodo,
+                crate::app::overlay::MenuCommand::CycleTodoPriority,
+                crate::app::overlay::MenuCommand::DeleteTodo,
+            ],
+            selected: 0,
+            confirming: false,
+        },
+    ));
+}
+
+/// 打开 Todo 列表空白区域右键菜单：新建待办与智能排序。
+pub fn open_todo_blank_menu(state: &mut AppState, anchor: (u16, u16)) {
+    state.overlay = Some(crate::app::overlay::Overlay::Menu(
+        crate::app::overlay::Menu {
+            anchor,
+            target: crate::app::overlay::OverlayTarget::TodoBlank,
+            commands: vec![
+                crate::app::overlay::MenuCommand::NewTodo,
+                crate::app::overlay::MenuCommand::SortTodos,
+            ],
+            selected: 0,
+            confirming: false,
+        },
+    ));
 }
 
 /// 撤销最近一次删除。
@@ -715,7 +732,7 @@ pub fn fail_todo_write(state: &mut AppState) {
 }
 
 /// 删除指定下标的条目并登记效应。
-fn remove_todo_at(state: &mut AppState, index: usize) -> bool {
+pub fn remove_todo_at(state: &mut AppState, index: usize) -> bool {
     let Some(removed) = state.todo.remove(index) else {
         return false;
     };
@@ -729,9 +746,7 @@ fn remove_todo_at(state: &mut AppState, index: usize) -> bool {
 pub fn todo_button_enabled(state: &AppState, button: TodoButton) -> bool {
     match button {
         TodoButton::New => true,
-        TodoButton::Edit | TodoButton::Delete => !state.todo.is_empty() && !state.todo.is_editing(),
         TodoButton::Sort => state.todo.len() > 1 && !state.todo.is_editing(),
-        TodoButton::ClearDone => state.todo.done_count() > 0,
     }
 }
 
@@ -746,13 +761,7 @@ pub fn apply_todo_button(state: &mut AppState, button: TodoButton) -> bool {
     let mut changed = focus_todo(state);
     changed |= match button {
         TodoButton::New => begin_todo_edit(state, TodoEditTarget::New),
-        TodoButton::Edit => match state.todo.selected() {
-            Some(index) => begin_todo_edit(state, TodoEditTarget::Current(index)),
-            None => false,
-        },
-        TodoButton::Delete => delete_todo_selected(state),
         TodoButton::Sort => sort_todos(state),
-        TodoButton::ClearDone => clear_done_todos(state),
     };
     changed
 }

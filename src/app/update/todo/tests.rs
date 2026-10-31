@@ -207,27 +207,13 @@ fn delete_then_undo_restores_position() {
 }
 
 #[test]
-fn clear_done_removes_only_done_and_can_be_undone() {
-    let mut state = todo_state(&["open", "done-1", "active", "done-2"]);
-    for index in [1, 3] {
-        let text = state.todo.items()[index].text.clone();
-        state.todo.update(index, text, TodoStatus::Done);
-    }
-
-    assert!(clear_done_todos(&mut state));
-
-    assert_eq!(texts(&state), ["open", "active"], "只删完成项");
-    let expected_date = state.todo.selected_date().to_string();
-    assert!(state.effects.iter().any(|effect| matches!(
-        effect,
-        Effect::DeleteTodosWithStatus {
-            entry_date,
-            status: TodoStatus::Done,
-        } if entry_date == &expected_date
-    )));
-
+fn delete_todo_removes_item_and_can_be_undone() {
+    let mut state = todo_state(&["first", "second"]);
+    state.todo.select(0);
+    assert!(delete_todo_selected(&mut state));
+    assert_eq!(texts(&state), ["second"]);
     assert!(undo_todo_delete(&mut state));
-    assert_eq!(texts(&state), ["open", "done-1", "active", "done-2"]);
+    assert_eq!(texts(&state), ["first", "second"]);
 }
 
 #[test]
@@ -266,16 +252,8 @@ fn toolbar_button_disabled_states() {
     );
 
     assert!(
-        !apply_todo_button(&mut state, TodoButton::Edit),
-        "空列表不可编辑"
-    );
-    assert!(
-        !apply_todo_button(&mut state, TodoButton::Delete),
-        "空列表无可删"
-    );
-    assert!(
-        !apply_todo_button(&mut state, TodoButton::ClearDone),
-        "无完成项"
+        !apply_todo_button(&mut state, TodoButton::Sort),
+        "单条以下不可排序"
     );
     assert_eq!(
         (
@@ -848,8 +826,8 @@ fn pending_g_is_cleared_by_non_g_keys_and_clear_done_preserves_edit_commit() {
     assert!(!apply_todo_key(&mut state, TodoKey::Char('g')));
     assert_eq!(state.todo.selected(), Some(1), "单个 g 不应触发 gg 跳首");
 
-    // 仅有一条已完成项，进入编辑清空文本后触发 clear_done_todos：
-    // commit_todo_edit 会删除该条使 done_count 归零，但返回值仍必须为 true。
+    // 仅有一条已完成项，进入编辑清空文本后提交：
+    // commit_todo_edit 会删除该条，返回值仍必须为 true。
     let mut state2 = todo_state(&["only-done"]);
     state2
         .todo
@@ -857,8 +835,75 @@ fn pending_g_is_cleared_by_non_g_keys_and_clear_done_preserves_edit_commit() {
     assert!(begin_todo_edit(&mut state2, TodoEditTarget::Current(0)));
     state2.todo.edit_input_mut().expect("edit").clear();
     assert!(
-        clear_done_todos(&mut state2),
-        "commit_todo_edit 产生的变更不得被 clear_done_todos 吞掉"
+        commit_todo_edit(&mut state2),
+        "commit_todo_edit 清空文本时删除该条并返回变化"
     );
     assert!(state2.todo.is_empty());
+}
+
+#[test]
+fn todo_item_and_blank_context_menu_commands_execute() {
+    use crate::app::overlay::{MenuCommand, Overlay, OverlayTarget};
+
+    let mut state = todo_state(&["item-1", "item-2"]);
+    let id_0 = state.todo.items()[0].id.clone();
+    let id_1 = state.todo.items()[1].id.clone();
+
+    // 1. 打开 Item 菜单，包含 Edit / CyclePriority / Delete
+    open_todo_item_menu(&mut state, &id_0, (10, 10));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu opened");
+    };
+    assert_eq!(
+        menu.commands,
+        vec![
+            MenuCommand::EditTodo,
+            MenuCommand::CycleTodoPriority,
+            MenuCommand::DeleteTodo,
+        ]
+    );
+
+    // 2. 执行 EditTodo 命令
+    assert!(crate::app::update::activate_menu(&mut state).is_none());
+    assert!(state.todo.is_editing());
+    assert_eq!(state.todo.selected(), Some(0));
+    commit_todo_edit(&mut state);
+
+    // 3. 执行 CycleTodoPriority 命令
+    open_todo_item_menu(&mut state, &id_1, (10, 10));
+    assert!(crate::app::update::set_menu_selection(&mut state, 1));
+    assert!(crate::app::update::activate_menu(&mut state).is_none());
+    assert_eq!(state.todo.items()[1].priority, TodoPriority::P2);
+
+    // 4. DeleteTodo 需二次确认，确认后删除该项
+    open_todo_item_menu(&mut state, &id_0, (10, 10));
+    assert!(crate::app::update::set_menu_selection(&mut state, 2));
+    assert!(crate::app::update::activate_menu(&mut state).is_none());
+    // 第一次点击进入确认中状态
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("still confirming");
+    };
+    assert!(menu.confirming);
+    // 第二次点击确认删除
+    assert!(crate::app::update::activate_menu(&mut state).is_none());
+    assert_eq!(texts(&state), vec!["item-2"]);
+    assert_eq!(state.todo.selected(), Some(0));
+
+    // 5. 空白区菜单：NewTodo 与 SortTodos
+    open_todo_blank_menu(&mut state, (10, 10));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("blank menu opened");
+    };
+    assert_eq!(
+        menu.commands,
+        vec![MenuCommand::NewTodo, MenuCommand::SortTodos]
+    );
+    assert_eq!(menu.target, OverlayTarget::TodoBlank);
+    // 激活 NewTodo 进入新建编辑
+    assert!(crate::app::update::activate_menu(&mut state).is_none());
+    assert!(state.todo.is_editing());
+    assert_eq!(
+        state.todo.editing().map(|e| e.target.as_deref()),
+        Some(None)
+    );
 }

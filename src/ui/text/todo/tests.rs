@@ -11,36 +11,17 @@ fn todo_labels_align_to_three_columns() {
 
 #[test]
 fn todo_buttons_are_ascii_words() {
-    // `[+]` 是加号图标（新建），其余为小写单词。
+    // `[+]` 是加号图标（新建），`[sort]` 为小写单词。
     assert_eq!(TODO_NEW_LABEL, "[+]");
-    for label in [TODO_EDIT_LABEL, TODO_DELETE_LABEL] {
-        assert!(label.starts_with('[') && label.ends_with(']'), "{label}");
-        assert!(
-            label[1..label.len() - 1]
-                .chars()
-                .all(|ch| ch.is_ascii_lowercase()),
-            "{label} 只含小写 ASCII"
-        );
-    }
-    assert_eq!(TODO_CLEAR_DONE_LABEL, "[clear done]");
-    for label in [
-        TODO_NEW_LABEL,
-        TODO_EDIT_LABEL,
-        TODO_DELETE_LABEL,
-        TODO_CLEAR_DONE_LABEL,
-    ] {
+    assert_eq!(TODO_SORT_LABEL, "[sort]");
+    for label in [TODO_NEW_LABEL, TODO_SORT_LABEL] {
         assert!(label.is_ascii(), "{label} 必须纯 ASCII");
     }
 }
 
 #[test]
 fn todo_tooltips_are_non_empty_ascii() {
-    for hint in [
-        TODO_TOOLTIP_NEW,
-        TODO_TOOLTIP_EDIT,
-        TODO_TOOLTIP_DELETE,
-        TODO_TOOLTIP_CLEAR_DONE,
-    ] {
+    for hint in [TODO_TOOLTIP_NEW, TODO_TOOLTIP_SORT] {
         assert!(!hint.is_empty() && hint.is_ascii(), "{hint:?}");
     }
 }

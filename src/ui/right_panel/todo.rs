@@ -26,10 +26,7 @@ use super::super::{prompt, style, widgets};
 
 /// 工具栏按钮宽度（列）；与 `text::TODO_*_LABEL` 的显示宽度一一对应。
 const NEW_WIDTH: u16 = 3;
-const EDIT_WIDTH: u16 = 6;
-const DELETE_WIDTH: u16 = 5;
 const SORT_WIDTH: u16 = 6;
-const CLEAR_DONE_WIDTH: u16 = 12;
 /// 按钮之间的空档（列）。
 const BUTTON_GAP: u16 = 1;
 /// 行首选中标记槽宽（列）：`❯` 与未选中的空格共用同一列，保证文本左对齐。
@@ -47,21 +44,11 @@ const BAR_WIDTH: u16 = 3;
 
 /// 工具栏左侧组：新建（`[+]`，贴近左边框）。
 const LEFT_BUTTONS: [(TodoButton, u16); 1] = [(TodoButton::New, NEW_WIDTH)];
-/// 工具栏右侧组：条目操作，从右缘往左丢弃（先丢 `[clear done]`、再丢 `[sort]`、`[del]`、`[edit]`）。
-const RIGHT_BUTTONS: [(TodoButton, u16); 4] = [
-    (TodoButton::Edit, EDIT_WIDTH),
-    (TodoButton::Delete, DELETE_WIDTH),
-    (TodoButton::Sort, SORT_WIDTH),
-    (TodoButton::ClearDone, CLEAR_DONE_WIDTH),
-];
+/// 工具栏右侧组：智能排序。
+const RIGHT_BUTTONS: [(TodoButton, u16); 1] = [(TodoButton::Sort, SORT_WIDTH)];
 /// 全部按钮（命中与文案查表用）。
-const BUTTONS: [(TodoButton, u16); 5] = [
-    (TodoButton::New, NEW_WIDTH),
-    (TodoButton::Edit, EDIT_WIDTH),
-    (TodoButton::Delete, DELETE_WIDTH),
-    (TodoButton::Sort, SORT_WIDTH),
-    (TodoButton::ClearDone, CLEAR_DONE_WIDTH),
-];
+const BUTTONS: [(TodoButton, u16); 2] =
+    [(TodoButton::New, NEW_WIDTH), (TodoButton::Sort, SORT_WIDTH)];
 
 /// 主体区：表头两行之下的整块（含最右 1 列滚动条槽）。
 fn body_rect(panel: Rect) -> Rect {
@@ -381,10 +368,7 @@ fn render_toolbar(panel: Rect, buf: &mut Buffer, state: &AppState) {
         let enabled = crate::app::update::todo_button_enabled(state, button);
         let label = match button {
             TodoButton::New => text::TODO_NEW_LABEL,
-            TodoButton::Edit => text::TODO_EDIT_LABEL,
-            TodoButton::Delete => text::TODO_DELETE_LABEL,
             TodoButton::Sort => text::TODO_SORT_LABEL,
-            TodoButton::ClearDone => text::TODO_CLEAR_DONE_LABEL,
         };
         let button_style = if enabled {
             style::accent()

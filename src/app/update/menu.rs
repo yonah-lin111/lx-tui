@@ -6,7 +6,7 @@ use crate::app::effects::Effect;
 use crate::app::overlay::{
     Menu, MenuCommand, Overlay, OverlayTarget, Rename, RenameTarget, TextInput,
 };
-use crate::app::state::{AppState, PaneView, tab_label};
+use crate::app::state::{AppState, PaneView, TodoEditTarget, tab_label};
 use crate::app::trust::TrustTrigger;
 use crate::layout::PaneId;
 
@@ -17,6 +17,7 @@ use super::prompt::{
     open_new_folder, open_new_prompt, open_prompt_rename,
 };
 use super::selection::clear_selection;
+use super::todo::{begin_todo_edit, cycle_todo_priority, remove_todo_at, sort_todos};
 use super::workspace::{
     close_pane, close_tab, close_workspace, create_tab, create_terminal_in_workspace,
     open_new_workspace_dialog, open_prompt_for_pane, open_prompt_for_workspace,
@@ -444,6 +445,29 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
         }
         (Some(MenuCommand::DeleteTemp), OverlayTarget::TempPrompt { workspace, temp_id }) => {
             delete_prompt_temp(state, workspace, temp_id);
+        }
+        (Some(MenuCommand::NewTodo), OverlayTarget::TodoBlank) => {
+            begin_todo_edit(state, TodoEditTarget::New);
+        }
+        (Some(MenuCommand::SortTodos), OverlayTarget::TodoBlank) => {
+            sort_todos(state);
+        }
+        (Some(MenuCommand::EditTodo), OverlayTarget::TodoItem { id }) => {
+            if let Some(index) = state.todo.items().iter().position(|item| item.id == *id) {
+                state.todo.select(index);
+                begin_todo_edit(state, TodoEditTarget::Current(index));
+            }
+        }
+        (Some(MenuCommand::CycleTodoPriority), OverlayTarget::TodoItem { id }) => {
+            if let Some(index) = state.todo.items().iter().position(|item| item.id == *id) {
+                state.todo.select(index);
+                cycle_todo_priority(state);
+            }
+        }
+        (Some(MenuCommand::DeleteTodo), OverlayTarget::TodoItem { id }) => {
+            if let Some(index) = state.todo.items().iter().position(|item| item.id == *id) {
+                remove_todo_at(state, index);
+            }
         }
         _ => {}
     }

@@ -392,8 +392,8 @@ fn confirm_question_wraps_and_dialog_grows() {
         owner: crate::app::prompt::PromptEditing::Item(1),
         page: page_id,
     };
+    let question = confirm_question(&state, &target);
     state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target }));
-    let question = confirm_question(&state, target);
     let shell = confirm_shell(SCREEN, &question).expect("dialog fits");
     assert!(shell.area.height > 4, "高度随换行增长: {:?}", shell.area);
     let (lines, _) = draw_overlay(&state);
@@ -1626,7 +1626,7 @@ fn page_delete_confirm_uses_page_name_question() {
     assert!(crate::app::update::edit_prompt_item(&mut state, 0, 7));
     let question = confirm_question(
         &state,
-        OverlayTarget::PromptPage {
+        &OverlayTarget::PromptPage {
             workspace: 0,
             owner: crate::app::prompt::PromptEditing::Item(7),
             page: PromptPageId::Saved(70),

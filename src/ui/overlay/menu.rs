@@ -19,17 +19,17 @@ pub fn menu_layout(state: &AppState, screen: Rect, menu: &Menu) -> widgets::menu
 
 /// 菜单边框标题：目标名优先，取不到时回退种类名。
 pub(crate) fn menu_title(state: &AppState, menu: &Menu) -> String {
-    match menu.target {
+    match &menu.target {
         OverlayTarget::Workspace(index) => state
             .workspaces
-            .get(index)
+            .get(*index)
             .map(|workspace| workspace.name.clone())
             .unwrap_or_else(|| text::MENU_TITLE_WORKSPACE.to_string()),
         OverlayTarget::Tab { workspace, tab } => state
             .workspaces
-            .get(workspace)
-            .and_then(|workspace| workspace.tabs.get(tab))
-            .map(|tab_state| tab_label(tab, tab_state.name.as_deref()))
+            .get(*workspace)
+            .and_then(|workspace| workspace.tabs.get(*tab))
+            .map(|tab_state| tab_label(*tab, tab_state.name.as_deref()))
             .unwrap_or_else(|| text::MENU_TITLE_TAB.to_string()),
         OverlayTarget::Pane {
             workspace,
@@ -37,12 +37,12 @@ pub(crate) fn menu_title(state: &AppState, menu: &Menu) -> String {
             pane,
         } => state
             .workspaces
-            .get(workspace)
-            .and_then(|workspace| workspace.tabs.get(tab))
-            .and_then(|tab_state| tab_state.pane(pane))
+            .get(*workspace)
+            .and_then(|workspace| workspace.tabs.get(*tab))
+            .and_then(|tab_state| tab_state.pane(*pane))
             .map(|pane_state| {
                 text::pane_title(
-                    pane,
+                    *pane,
                     pane_state.terminal.title(),
                     pane_state.cwd_label.as_deref(),
                 )
@@ -51,19 +51,28 @@ pub(crate) fn menu_title(state: &AppState, menu: &Menu) -> String {
         OverlayTarget::PromptFolder {
             workspace,
             folder_id,
-        } => prompt_folder_name(state, workspace, folder_id)
+        } => prompt_folder_name(state, *workspace, *folder_id)
             .unwrap_or_else(|| text::MENU_TITLE_FOLDER.to_string()),
         OverlayTarget::PromptItem { workspace, item_id } => {
-            prompt_item_name(state, workspace, item_id)
+            prompt_item_name(state, *workspace, *item_id)
                 .unwrap_or_else(|| text::MENU_TITLE_PROMPT.to_string())
         }
         OverlayTarget::TempPrompt { workspace, temp_id } => {
-            prompt_temp_name(state, workspace, temp_id)
+            prompt_temp_name(state, *workspace, *temp_id)
                 .unwrap_or_else(|| text::MENU_TITLE_PROMPT.to_string())
         }
         OverlayTarget::PromptTree { .. } => text::MENU_TITLE_PROMPT_TREE.to_string(),
         OverlayTarget::PromptPage { .. } => text::MENU_TITLE_PAGES.to_string(),
         OverlayTarget::WorkspaceList => text::MENU_TITLE_WORKSPACES.to_string(),
+        OverlayTarget::TodoItem { id } => state
+            .todo
+            .items()
+            .iter()
+            .find(|item| item.id == *id)
+            .map(|item| item.text.clone())
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| text::MENU_TITLE_TODO_ITEM.to_string()),
+        OverlayTarget::TodoBlank => text::MENU_TITLE_TODO_BLANK.to_string(),
     }
 }
 
@@ -136,6 +145,17 @@ pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
                 MenuCommand::EditPrompt => text::MENU_PROMPT_EDIT,
                 MenuCommand::CopyPromptContent => text::MENU_PROMPT_COPY,
                 MenuCommand::CopyPath => text::MENU_COPY_PATH,
+                MenuCommand::NewTodo => text::MENU_TODO_NEW,
+                MenuCommand::EditTodo => text::MENU_TODO_EDIT,
+                MenuCommand::CycleTodoPriority => text::MENU_TODO_PRIORITY,
+                MenuCommand::DeleteTodo => {
+                    if confirming {
+                        text::MENU_CONFIRM_DELETE
+                    } else {
+                        text::MENU_TODO_DELETE
+                    }
+                }
+                MenuCommand::SortTodos => text::MENU_TODO_SORT,
             }
         })
         .collect()

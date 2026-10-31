@@ -269,7 +269,7 @@ pub struct Menu {
 }
 
 /// 菜单与关闭确认作用目标：工作区、工作区内的标签或标签内的窗格，以及提示词树节点。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverlayTarget {
     Workspace(usize),
     /// 工作区列表空白区域。
@@ -308,6 +308,12 @@ pub enum OverlayTarget {
         owner: PromptEditing,
         page: PromptPageId,
     },
+    /// Todo 条目。
+    TodoItem {
+        id: String,
+    },
+    /// Todo 列表空白区域。
+    TodoBlank,
 }
 
 /// 菜单命令；文案由 `ui/text.rs` 按命令映射，app 层不持有用户可见字符串。
@@ -341,6 +347,11 @@ pub enum MenuCommand {
     EditPrompt,
     CopyPromptContent,
     CopyPath,
+    NewTodo,
+    EditTodo,
+    CycleTodoPriority,
+    DeleteTodo,
+    SortTodos,
 }
 
 impl MenuCommand {
@@ -353,6 +364,7 @@ impl MenuCommand {
                 | Self::ClosePane
                 | Self::DeleteFolder
                 | Self::DeletePrompt
+                | Self::DeleteTodo
                 | Self::SwitchToWorkspaceCwd
                 | Self::SyncWorkspaceToTerminalCwd
         )
@@ -376,7 +388,7 @@ pub struct Rename {
 }
 
 /// 关闭确认浮层：目标。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfirmClose {
     pub target: OverlayTarget,
 }

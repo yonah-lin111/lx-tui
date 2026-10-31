@@ -281,11 +281,6 @@ pub enum Effect {
     SaveTodo { record: crate::db::todo::TodoRecord },
     /// 删除一条 todo。
     DeleteTodo { id: String },
-    /// 删除某日期下某状态的全部 todo（`[clear done]`）。
-    DeleteTodosWithStatus {
-        entry_date: String,
-        status: crate::db::todo::TodoStatus,
-    },
     /// 恢复一批被删 todo（撤销）。
     RestoreTodos {
         records: Vec<crate::db::todo::TodoRecord>,

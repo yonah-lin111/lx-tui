@@ -150,30 +150,6 @@ fn delete_todo_renumbers_remaining() {
 }
 
 #[test]
-fn delete_todos_with_status_reports_removed_records() {
-    let db = open_test_database();
-    let done = append(&db, "done-1");
-    append(&db, "open");
-    let done_two = append(&db, "done-2");
-    for id in [&done.id, &done_two.id] {
-        let mut record = db.todo_by_id(id).expect("read").expect("exists");
-        record.status = TodoStatus::Done;
-        db.save_todo(&record).expect("mark done");
-    }
-
-    let removed = db
-        .delete_todos_with_status(TodoStatus::Done)
-        .expect("clear done");
-    assert_eq!(texts(&removed), vec!["done-1", "done-2"], "按原顺序返回");
-    assert_eq!(removed[0].position, 0);
-    assert_eq!(removed[1].position, 2);
-
-    let items = db.list_todos().expect("list");
-    assert_eq!(texts(&items), vec!["open"]);
-    assert_eq!(positions(&items), vec![0], "剩余位置重排为密集");
-}
-
-#[test]
 fn restore_todos_reinserts_at_original_positions() {
     let db = open_test_database();
     append(&db, "a");

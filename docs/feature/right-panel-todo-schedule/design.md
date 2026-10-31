@@ -20,10 +20,15 @@
 3. **分割线日期跨度与纯英文一周快速点击感知带（Week Strip）**：
    - 工具栏下方的分割线内嵌当前日期信息：**左侧**展示当前选中年月日 `yyyy/mm/dd`（如 `2026/10/31`），**右侧**展示当前周起止号 `DD-DD`（如 `26-01`）；
    - 分割线正下方、列表区正上方为 **Week Strip**（1 行）：包含 `‹` 与 `›` 快速翻周按钮，中间均分周一至周日 7 个槽位，**去除日期号数字，仅显示纯英文星期**（`Mon`..`Sun`，窄宽度降级为 `M`..`S`），今日附带点标 `•`，选中日全槽高亮反显。
-4. **一键智能排序（Sort by Priority）**：
-   - 在顶部工具栏新增 `[sort]` 按钮（支持键盘 `s` 键）；
-   - 排序规则严格对齐 `lx-agent`：**未完成在前 → 优先级 P0 > P1 > P2 > P3 → 原位置顺序 → ID 稳定兜底**。
-5. **优先级徽标与可读性样式（Priority Chip）**：
+4. **一键智能排序与精简工具栏（Sort by Priority & Compact Toolbar）**：
+   - 顶部工具栏精简为仅保留左侧 `[+]`（新建）与右侧 `[sort]`（智能排序），移除 `[edit]`、`[del]` 与 `[clear done]`；
+   - 排序规则严格对齐 `lx-agent`：**未完成在前 → 优先级 P0 > P1 > P2 > P3 → 原位置顺序 → ID 稳定兜底**；支持键盘 `s` 键。
+5. **Todo 列表右键上下文菜单（Context Menu）**：
+   - 参考 Prompt 树右键交互，在 Todo 列表区（`effective_list_rect`）引入右键菜单双靶点：
+     1. **`TodoItem`（条目行右键）**：提供 `Edit`（编辑）、`Cycle priority`（切换优先级）、`Delete`（删除条目）；右键即选中该行并聚焦；`Delete` 支持行内二次确认（`Confirm delete`）；
+     2. **`TodoBlank`（列表空白区右键）**：提供 `New todo`（新建待办）、`Sort by priority`（智能排序）；
+   - 右键时若处于行内编辑态（含新建幽灵行），先自动调用 `commit_todo_edit` 提交草稿，杜绝输入丢失与并发状态错乱。
+6. **优先级徽标与可读性样式（Priority Chip）**：
    - 条目行内增加 `P0` / `P1` / `P2` / `P3` 徽标；
    - 支持鼠标单击徽标切换（`P0 → P1 → P2 → P3 → P0`）与键盘 `p` 键切换；
    - 各优先级具备专属深暗背景色与高对比度明亮前景色，且行选中/悬停底色绝不污染徽标可读性；已完成条目徽标自动压暗。
@@ -98,7 +103,7 @@ CREATE INDEX IF NOT EXISTS idx_todo_entry_date ON todo(entry_date);
 #### 垂直布局划分
 ```text
 ┌─ Prompt ─ Todo ──────────────────────────────┐  ← 右侧容器顶边框 Tab 栏
-│ [+]                  [edit] [del] [sort] ... │  ← 工具栏 (Toolbar)
+│ [+]                                   [sort] │  ← 工具栏 (Toolbar, 仅保留新建与排序)
 ├─ 2026/10/31 ───────────────────────── 26-01 ─┤  ← 表头分割线（左：所选年月日，右：本周日跨度）
 │ ‹  Mon   Tue   Wed   Thu   Fri  [Sat •] Sun ›│  ← 一周感知带 (Week Strip, 纯英文星期 + 今日点标)
 │ ! 2 past unfinished       [move to today] [x]│  ← 顺延横幅 (Rollover Banner, 存在时占列表首行)

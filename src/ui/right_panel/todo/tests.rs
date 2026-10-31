@@ -93,49 +93,21 @@ fn toolbar_puts_new_on_left_and_actions_on_right() {
     assert_eq!(new.x, bar.x, "[+] 贴左边框");
     assert_eq!(new.width, NEW_WIDTH);
 
-    // 右侧组贴右缘，从左到右依次 `[edit] [del] [sort] [clear done]`。
-    let edit = button_rect(area, TodoButton::Edit).expect("[edit] visible");
-    let del = button_rect(area, TodoButton::Delete).expect("[del] visible");
+    // 右侧组贴右缘：`[sort]`。
     let sort = button_rect(area, TodoButton::Sort).expect("[sort] visible");
-    let clear = button_rect(area, TodoButton::ClearDone).expect("[clear done] visible");
-    assert_eq!(clear.right(), bar.right(), "[clear done] 贴右缘");
-    assert_eq!(sort.right().saturating_add(BUTTON_GAP), clear.x);
-    assert_eq!(del.right().saturating_add(BUTTON_GAP), sort.x);
-    assert_eq!(edit.right().saturating_add(BUTTON_GAP), del.x);
+    assert_eq!(sort.right(), bar.right(), "[sort] 贴右缘");
     assert!(
-        new.right().saturating_add(BUTTON_GAP) <= edit.x,
-        "左右两组之间至少留 1 列空白: {new:?} / {edit:?}"
+        new.right().saturating_add(BUTTON_GAP) <= sort.x,
+        "左右两组之间至少留 1 列空白: {new:?} / {sort:?}"
     );
 }
 
 #[test]
 fn toolbar_drops_action_buttons_before_new() {
-    // `[+]` 恒在；右侧组从右往左丢弃，靠右的 `[clear done]` 先丢，再丢 `[sort]`。
-    let cases: [(u16, Vec<TodoButton>); 5] = [
-        (
-            38,
-            vec![
-                TodoButton::New,
-                TodoButton::Edit,
-                TodoButton::Delete,
-                TodoButton::Sort,
-                TodoButton::ClearDone,
-            ],
-        ),
-        (
-            27,
-            vec![
-                TodoButton::New,
-                TodoButton::Edit,
-                TodoButton::Delete,
-                TodoButton::Sort,
-            ],
-        ),
-        (
-            20,
-            vec![TodoButton::New, TodoButton::Edit, TodoButton::Delete],
-        ),
-        (13, vec![TodoButton::New, TodoButton::Edit]),
+    // `[+]` 恒在；右侧组靠右的 `[sort]` 在空间不足时丢弃。
+    let cases: [(u16, Vec<TodoButton>); 3] = [
+        (38, vec![TodoButton::New, TodoButton::Sort]),
+        (13, vec![TodoButton::New, TodoButton::Sort]),
         (8, vec![TodoButton::New]),
     ];
     for (inner, want) in cases {
@@ -182,9 +154,9 @@ fn button_hit_matches_button_rect_boundaries() {
 
     // 左右两组之间的空档：不命中任何按钮。
     let new = button_rect(area, TodoButton::New).expect("[+] visible");
-    let edit = button_rect(area, TodoButton::Edit).expect("[edit] visible");
-    assert!(new.right() < edit.x, "两组之间必须有空档");
-    for x in (new.right())..edit.x {
+    let sort = button_rect(area, TodoButton::Sort).expect("[sort] visible");
+    assert!(new.right() < sort.x, "两组之间必须有空档");
+    for x in (new.right())..sort.x {
         assert_eq!(button_at(area, x, bar.y), None, "第 {x} 列空档不命中");
     }
 }

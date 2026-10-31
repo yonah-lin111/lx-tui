@@ -348,63 +348,6 @@ impl Database {
         Ok(())
     }
 
-    /// 删除全部指定状态的条目，返回**被删记录**（供单槽撤销回填）。
-    pub fn delete_todos_with_status(&self, status: TodoStatus) -> Result<Vec<TodoRecord>> {
-        let transaction = self.conn.unchecked_transaction()?;
-        let mut statement = transaction.prepare(
-            "SELECT id, entry_date, text, status, priority, completed_date, position
-             FROM todo
-             WHERE status = ?1
-             ORDER BY entry_date ASC, position ASC",
-        )?;
-        let rows = statement.query_map(params![status.as_str()], map_todo_row)?;
-        let mut removed = Vec::new();
-        let mut dates = BTreeSet::new();
-        for row in rows {
-            let item = row?;
-            dates.insert(item.entry_date.clone());
-            removed.push(item);
-        }
-        drop(statement);
-        transaction.execute(
-            "DELETE FROM todo WHERE status = ?1",
-            params![status.as_str()],
-        )?;
-        for date in dates {
-            renumber_date(&transaction, &date)?;
-        }
-        transaction.commit()?;
-        Ok(removed)
-    }
-
-    /// 删除指定日期下全部指定状态的条目，返回被删记录。
-    pub fn delete_todos_with_status_on(
-        &self,
-        entry_date: &str,
-        status: TodoStatus,
-    ) -> Result<Vec<TodoRecord>> {
-        let transaction = self.conn.unchecked_transaction()?;
-        let mut statement = transaction.prepare(
-            "SELECT id, entry_date, text, status, priority, completed_date, position
-             FROM todo
-             WHERE entry_date = ?1 AND status = ?2
-             ORDER BY position ASC",
-        )?;
-        let rows = statement.query_map(params![entry_date, status.as_str()], map_todo_row)?;
-        let mut removed = Vec::new();
-        for row in rows {
-            removed.push(row?);
-        }
-        drop(statement);
-        transaction.execute(
-            "DELETE FROM todo WHERE entry_date = ?1 AND status = ?2",
-            params![entry_date, status.as_str()],
-        )?;
-        renumber_date(&transaction, entry_date)?;
-        transaction.commit()?;
-        Ok(removed)
-    }
-
     /// 批量恢复被删记录（撤销）：按各自归属日期与原 `position` 插回并重排为 `0..n`。
     pub fn restore_todos(&self, records: &[TodoRecord]) -> Result<()> {
         if records.is_empty() {
