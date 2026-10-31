@@ -20,39 +20,87 @@ pub enum ChartSwitchHit {
     Next,
 }
 
-/// 当前图表的短标题文案。
-pub fn chart_title(kind: TodoChartKind) -> &'static str {
+/// 当前图表的标题与范围标注（注明今天还是一周）。
+pub fn chart_title(kind: TodoChartKind, is_today: bool) -> &'static str {
     match kind {
-        TodoChartKind::StatusAndRate => text::TODO_CHART_STATUS_TITLE,
-        TodoChartKind::Priority => text::TODO_CHART_PRIORITY_TITLE,
-        TodoChartKind::Trend7Day => text::TODO_CHART_TREND_TITLE,
+        TodoChartKind::StatusAndRate => {
+            if is_today {
+                "today · status"
+            } else {
+                "day · status"
+            }
+        }
+        TodoChartKind::Priority => {
+            if is_today {
+                "today · priority"
+            } else {
+                "day · priority"
+            }
+        }
+        TodoChartKind::Trend7Day => "week · 7d trend",
+    }
+}
+
+/// 空间紧凑时的简短范围标注。
+pub fn chart_short_title(kind: TodoChartKind, is_today: bool) -> &'static str {
+    match kind {
+        TodoChartKind::StatusAndRate => {
+            if is_today {
+                "today"
+            } else {
+                "day"
+            }
+        }
+        TodoChartKind::Priority => {
+            if is_today {
+                "today"
+            } else {
+                "day"
+            }
+        }
+        TodoChartKind::Trend7Day => "week",
     }
 }
 
 /// 分割线上的图表切换器矩形：返回 `(整体矩形, 左箭头 ‹ 矩形, 右箭头 › 矩形)`。
 pub fn chart_switcher_rects(panel: Rect, state: &AppState) -> Option<(Rect, Rect, Rect)> {
     let divider = stats_divider_rect(panel)?;
+    let is_today = state.todo.is_viewing_today();
     let kind = state.todo.active_chart();
-    let label = format!(
-        " {} {} {}/3 {} ",
+    let full = format!(
+        "{} {} {}/3 {}",
         text::TODO_CHART_PREV_LABEL,
-        chart_title(kind),
+        chart_title(kind, is_today),
         kind.number(),
         text::TODO_CHART_NEXT_LABEL
     );
-    let width = u16::try_from(UnicodeWidthStr::width(label.as_str())).unwrap_or(u16::MAX);
-    if divider.width < width.saturating_add(2) {
+    let full_w = u16::try_from(UnicodeWidthStr::width(full.as_str())).unwrap_or(u16::MAX);
+    let short = format!(
+        "{} {} {}/3 {}",
+        text::TODO_CHART_PREV_LABEL,
+        chart_short_title(kind, is_today),
+        kind.number(),
+        text::TODO_CHART_NEXT_LABEL
+    );
+    let short_w = u16::try_from(UnicodeWidthStr::width(short.as_str())).unwrap_or(u16::MAX);
+
+    let width = if divider.width >= full_w.saturating_add(4) {
+        full_w
+    } else if divider.width >= short_w.saturating_add(4) {
+        short_w
+    } else {
         return None;
-    }
-    // 贴分割线右侧内嵌（留出右端 1 列 `─` 衔接 `┤`）。
-    let x = divider.right().saturating_sub(1).saturating_sub(width);
-    let prev_x = x.saturating_add(1);
-    let next_x = x.saturating_add(width).saturating_sub(2);
-    Some((
-        Rect::new(x, divider.y, width, 1),
-        Rect::new(prev_x, divider.y, 1, 1),
-        Rect::new(next_x, divider.y, 1, 1),
-    ))
+    };
+
+    // 贴分割线右侧内嵌（右端留 1 列 `─` 衔接 `┤`）。
+    // prev_x 是 `‹` 所在列，next_x 是 `›` 所在列，整段严格限制在 prev_x..=next_x，
+    // 绝不外溢到两旁的 `─` 边框线单元格，保证左右边框线样式完全一致。
+    let next_x = divider.right().saturating_sub(2);
+    let prev_x = next_x.saturating_sub(width).saturating_add(1);
+    let whole = Rect::new(prev_x, divider.y, width, 1);
+    let prev = Rect::new(prev_x, divider.y, 1, 1);
+    let next = Rect::new(next_x, divider.y, 1, 1);
+    Some((whole, prev, next))
 }
 
 /// 图表切换控件点击命中：点左箭头切上一张，点右箭头或标题本身切下一张。
@@ -95,7 +143,6 @@ fn render_chart_switcher(panel: Rect, buf: &mut Buffer, state: &AppState) {
     let Some((whole, prev, next)) = chart_switcher_rects(panel, state) else {
         return;
     };
-    buf.set_style(whole, Style::reset());
     write_cell(
         buf,
         prev.x,
@@ -103,15 +150,6 @@ fn render_chart_switcher(panel: Rect, buf: &mut Buffer, state: &AppState) {
         text::TODO_CHART_PREV_LABEL,
         style::accent(),
     );
-    let kind = state.todo.active_chart();
-    let mid = format!(" {} {}/3 ", chart_title(kind), kind.number());
-    let mid_rect = Rect::new(
-        prev.right(),
-        whole.y,
-        next.x.saturating_sub(prev.right()),
-        1,
-    );
-    write_inline(buf, mid_rect, mid_rect.x, &mid, style::muted());
     write_cell(
         buf,
         next.x,
@@ -119,6 +157,22 @@ fn render_chart_switcher(panel: Rect, buf: &mut Buffer, state: &AppState) {
         text::TODO_CHART_NEXT_LABEL,
         style::accent(),
     );
+
+    let is_today = state.todo.is_viewing_today();
+    let kind = state.todo.active_chart();
+    let full_title = chart_title(kind, is_today);
+    let full_mid = format!(" {full_title} {}/3 ", kind.number());
+    let short_title = chart_short_title(kind, is_today);
+    let short_mid = format!(" {short_title} {}/3 ", kind.number());
+
+    let mid_w = next.x.saturating_sub(prev.right());
+    let mid_text = if usize::from(mid_w) >= UnicodeWidthStr::width(full_mid.as_str()) {
+        full_mid
+    } else {
+        short_mid
+    };
+    let mid_rect = Rect::new(prev.right(), whole.y, mid_w, 1);
+    write_inline(buf, mid_rect, mid_rect.x, &mid_text, style::muted());
 }
 
 /// 图表 1：三态柱状分布与完成率摘要。

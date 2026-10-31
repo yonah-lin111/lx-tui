@@ -787,7 +787,32 @@ fn week_strip_and_rollover_banner_hit_and_render() {
     ]);
 
     let (buffer, _) = render_panel(&state, area);
+    let header = crate::layout::prompt_header_rect(area).expect("header");
+    let divider_y = header.y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
+    let divider_text: String = (area.x..area.right())
+        .map(|x| buffer[(x, divider_y)].symbol())
+        .collect();
+    assert!(
+        divider_text.contains("2026/10/31"),
+        "周感知带上方左侧边框包含 yyyy/mm/dd: {divider_text:?}"
+    );
+    assert!(
+        divider_text.contains("26-01"),
+        "周感知带上方右侧边框包含周跨度 26-01: {divider_text:?}"
+    );
+
     let strip = week_strip_rect(area).expect("周感知带可见");
+    let strip_text: String = (strip.x..strip.right())
+        .map(|x| buffer[(x, strip.y)].symbol())
+        .collect();
+    assert!(
+        strip_text.contains("Mon") && strip_text.contains("Sat"),
+        "周感知带包含英文星期缩写: {strip_text:?}"
+    );
+    assert!(
+        !strip_text.contains("30") && !strip_text.contains("31"),
+        "周感知带已移除日期号数字: {strip_text:?}"
+    );
     assert_eq!(
         week_strip_hit_at(area, &state, strip.x, strip.y),
         Some(WeekStripHit::PrevWeek)
@@ -829,7 +854,16 @@ fn chart_switcher_and_three_chart_modes_render() {
     ]);
 
     let stats = stats_rect(area).expect("统计块可见");
-    let (_, prev_btn, next_btn) = charts::chart_switcher_rects(area, &state).expect("切图器可见");
+    let (whole, prev_btn, next_btn) =
+        charts::chart_switcher_rects(area, &state).expect("切图器可见");
+    let (buffer, _) = render_panel(&state, area);
+    let switcher_text: String = (whole.x..whole.right())
+        .map(|x| buffer[(x, whole.y)].symbol())
+        .collect();
+    assert!(
+        switcher_text.contains("today · status 1/3"),
+        "切图器注明当天: {switcher_text:?}"
+    );
     assert_eq!(
         chart_switch_hit_at(area, &state, prev_btn.x, prev_btn.y),
         Some(ChartSwitchHit::Prev)
@@ -844,6 +878,14 @@ fn chart_switcher_and_three_chart_modes_render() {
         .todo
         .set_chart(crate::app::state::TodoChartKind::Priority);
     let (buffer, _) = render_panel(&state, area);
+    let (whole2, _, _) = charts::chart_switcher_rects(area, &state).expect("switcher2");
+    let switcher2_text: String = (whole2.x..whole2.right())
+        .map(|x| buffer[(x, whole2.y)].symbol())
+        .collect();
+    assert!(
+        switcher2_text.contains("today · priority 2/3"),
+        "切图器注明优先级为当天: {switcher2_text:?}"
+    );
     let summary: String = (stats.x..stats.right())
         .map(|x| buffer[(x, stats.y)].symbol())
         .collect();
@@ -855,12 +897,39 @@ fn chart_switcher_and_three_chart_modes_render() {
         .todo
         .set_chart(crate::app::state::TodoChartKind::Trend7Day);
     let (buffer, _) = render_panel(&state, area);
+    let (whole3, prev3, next3) = charts::chart_switcher_rects(area, &state).expect("switcher3");
+    let switcher3_text: String = (whole3.x..whole3.right())
+        .map(|x| buffer[(x, whole3.y)].symbol())
+        .collect();
+    assert!(
+        switcher3_text.contains("week · 7d trend 3/3"),
+        "切图器注明趋势为一周: {switcher3_text:?}"
+    );
+    let divider = stats_divider_rect(area).expect("divider");
+    // 左右两侧边框线的字符与样式必须完全一致（无色差）：
+    assert_eq!(buffer[(prev3.x - 1, divider.y)].symbol(), "─");
+    assert_eq!(buffer[(next3.x + 1, divider.y)].symbol(), "─");
+    assert_eq!(
+        buffer[(prev3.x - 1, divider.y)].modifier,
+        buffer[(next3.x + 1, divider.y)].modifier,
+        "切图按钮左侧边框与右侧边框 modifier 必须完全一致"
+    );
+    assert_eq!(
+        buffer[(prev3.x - 1, divider.y)].fg,
+        buffer[(next3.x + 1, divider.y)].fg,
+        "切图按钮左侧边框与右侧边框前景色必须完全一致"
+    );
+
     let summary: String = (stats.x..stats.right())
         .map(|x| buffer[(x, stats.y)].symbol())
         .collect();
     assert!(
         summary.contains("plan 3"),
         "7日趋势摘要包含计划总数: {summary:?}"
+    );
+    assert!(
+        summary.contains("done 2"),
+        "7日趋势摘要包含完成总数: {summary:?}"
     );
     assert!(
         summary.contains("done 2"),

@@ -42,6 +42,9 @@ pub const TODO_CHART_NEXT_LABEL: &str = "›";
 pub const TODO_CHART_STATUS_TITLE: &str = "status";
 pub const TODO_CHART_PRIORITY_TITLE: &str = "priority";
 pub const TODO_CHART_TREND_TITLE: &str = "7d trend";
+pub const TODO_CHART_TODAY_PREFIX: &str = "today";
+pub const TODO_CHART_DAY_PREFIX: &str = "day";
+pub const TODO_CHART_WEEK_PREFIX: &str = "week";
 
 /// 柱图实心格与计划浅格。
 pub const TODO_BAR_FILLED: &str = "█";

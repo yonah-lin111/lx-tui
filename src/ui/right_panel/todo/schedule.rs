@@ -155,6 +155,50 @@ pub fn rollover_hit_at(
     None
 }
 
+/// 绘制周感知带上方分割线内嵌的日期标签：
+/// 左侧当前选中年月日（`yyyy/mm/dd`），右侧当前周跨度（`DD-DD`，例如 `26-01`）。
+pub(super) fn render_divider_labels(panel: Rect, buf: &mut Buffer, state: &AppState) {
+    let Some(header) = crate::layout::prompt_header_rect(panel) else {
+        return;
+    };
+    let divider_y = header.y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
+    let inner = crate::layout::pane_inner_rect(panel);
+    if inner.width < 14 {
+        return;
+    }
+
+    let date_str = state.todo.selected_date().replace('-', "/");
+    let left_text = format!(" {date_str} ");
+    let left_w = u16::try_from(UnicodeWidthStr::width(left_text.as_str())).unwrap_or(u16::MAX);
+    let left_x = inner.x.saturating_add(1);
+    if left_x.saturating_add(left_w) <= inner.right() {
+        write_inline(
+            buf,
+            Rect::new(left_x, divider_y, left_w, 1),
+            left_x,
+            &left_text,
+            style::border_title(),
+        );
+    }
+
+    let week = crate::db::todo::week_dates(state.todo.selected_date());
+    let mon_day = crate::db::todo::day_of_month(&week[0]);
+    let sun_day = crate::db::todo::day_of_month(&week[6]);
+    let right_text = format!(" {:02}-{:02} ", mon_day, sun_day);
+    let right_w = u16::try_from(UnicodeWidthStr::width(right_text.as_str())).unwrap_or(u16::MAX);
+    let right_x = inner.right().saturating_sub(1).saturating_sub(right_w);
+
+    if right_x > left_x.saturating_add(left_w) {
+        write_inline(
+            buf,
+            Rect::new(right_x, divider_y, right_w, 1),
+            right_x,
+            &right_text,
+            style::border_title(),
+        );
+    }
+}
+
 /// 绘制一周快速点击感知带（内嵌在工具栏下方分割线行）。
 pub(super) fn render_week_strip(panel: Rect, buf: &mut Buffer, state: &AppState) {
     let Some(strip) = week_strip_rect(panel) else {
@@ -195,12 +239,14 @@ fn render_week_day_slot(buf: &mut Buffer, slot: Rect, day: &WeekDayView) {
         ""
     };
     let width = usize::from(slot.width);
-    let label = if width >= 7 {
-        format!("{} {:02}{dot}", day.weekday_short, day.day_of_month)
-    } else if width >= 5 {
-        format!("{}{:02}{dot}", day.weekday_initial, day.day_of_month)
+    let label = if width >= 5 && day.is_today {
+        format!("{} {dot}", day.weekday_short)
+    } else if width >= 4 && day.is_today {
+        format!("{}{dot}", day.weekday_short)
     } else if width >= 3 {
-        format!("{}{:02}", day.weekday_initial, day.day_of_month)
+        day.weekday_short.to_string()
+    } else if width >= 2 && day.is_today {
+        format!("{}{dot}", day.weekday_initial)
     } else {
         day.weekday_initial.to_string()
     };

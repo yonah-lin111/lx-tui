@@ -361,6 +361,7 @@ pub(crate) fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Opt
     prompt::render_divider(area, header, frame.buffer_mut(), focused);
     let buf = frame.buffer_mut();
     render_toolbar(area, buf, state);
+    schedule::render_divider_labels(area, buf, state);
     schedule::render_week_strip(area, buf, state);
     schedule::render_rollover_banner(area, buf, state);
     let cursor = render_rows(area, buf, state).filter(|_| focused);
