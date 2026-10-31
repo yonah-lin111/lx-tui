@@ -65,10 +65,16 @@ pub const TOAST_TODO_TOO_LONG: &str = "todo too long (max 500 chars)";
 
 /// 工具栏按钮 hover 提示。
 pub const TODO_TOOLTIP_NEW: &str = "new todo";
-pub const TODO_TOOLTIP_EDIT: &str = "edit todo";
-pub const TODO_TOOLTIP_DELETE: &str = "delete todo";
 pub const TODO_TOOLTIP_SORT: &str = "sort by priority";
-pub const TODO_TOOLTIP_CLEAR_DONE: &str = "clear done todos";
+
+/// Todo 右键菜单项与回退标题。
+pub const MENU_TODO_NEW: &str = "New todo";
+pub const MENU_TODO_EDIT: &str = "Edit";
+pub const MENU_TODO_PRIORITY: &str = "Cycle priority";
+pub const MENU_TODO_DELETE: &str = "Delete";
+pub const MENU_TODO_SORT: &str = "Sort by priority";
+pub const MENU_TITLE_TODO_ITEM: &str = "Todo";
+pub const MENU_TITLE_TODO_BLANK: &str = "Todos";
 
 #[cfg(test)]
 mod tests;

@@ -112,6 +112,9 @@ pub(crate) fn handle_mouse_moved(
         if update::set_prompt_tree_hover(state, None) {
             *dirty = true;
         }
+        if update::set_todo_hover(state, None) {
+            *dirty = true;
+        }
         // 页码菜单与引用文件夹内容弹窗的边框按钮可提示；其余浮层抑制 tooltip。
         let tooltip_target = if matches!(
             state.overlay,

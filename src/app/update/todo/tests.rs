@@ -907,3 +907,75 @@ fn todo_item_and_blank_context_menu_commands_execute() {
         Some(None)
     );
 }
+
+#[test]
+fn right_click_todo_list_with_open_ghost_or_empty_edit_targets_exact_item() {
+    use crate::app::overlay::{Overlay, OverlayTarget};
+
+    // 场景 1：在 a 后打开空白幽灵行（显示槽位 1），b 与 c 顺延到显示槽位 2、3；
+    // 右键点击显示槽位 2（即条目 b）时，必须在提交前解析出 b，绝不可误中 c。
+    let mut state = todo_state(&["a", "b", "c"]);
+    let id_b = state.todo.items()[1].id.clone();
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::After(0)));
+    right_click_todo_list(&mut state, Some(2), (10, 10));
+    assert!(!state.todo.is_editing(), "右键先提交/销毁空白幽灵行");
+    assert_eq!(state.todo.selected(), Some(1), "选中落在 b 上而非 c");
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu opened for b");
+    };
+    assert_eq!(
+        menu.target,
+        OverlayTarget::TodoItem { id: id_b },
+        "右键菜单目标必须是 b 而非 c"
+    );
+
+    // 场景 2：在 a 后打开空白幽灵行（显示槽位 1），直接右键点击空白幽灵行本身（显示槽位 1）：
+    // 销毁幽灵行后必须弹出 TodoBlank 空白菜单，绝不可误打开顶替上来的 b 的条目菜单。
+    let mut state2 = todo_state(&["a", "b"]);
+    assert!(begin_todo_edit(&mut state2, TodoEditTarget::After(0)));
+    right_click_todo_list(&mut state2, Some(1), (10, 10));
+    let Some(Overlay::Menu(menu2)) = state2.overlay.as_ref() else {
+        panic!("blank menu opened");
+    };
+    assert_eq!(
+        menu2.target,
+        OverlayTarget::TodoBlank,
+        "右键空白幽灵行应打开 TodoBlank 菜单"
+    );
+
+    // 场景 3：编辑第 0 行 a 并清空文本（提交会删除 a），随后右键点击显示槽位 1（即 b）：
+    // 提交后 a 被删、b 前移到下标 0，菜单仍必须绑定在 b 上。
+    let mut state3 = todo_state(&["a", "b", "c"]);
+    let id_b3 = state3.todo.items()[1].id.clone();
+    assert!(begin_todo_edit(&mut state3, TodoEditTarget::Current(0)));
+    state3.todo.edit_input_mut().expect("edit").clear();
+    right_click_todo_list(&mut state3, Some(1), (10, 10));
+    assert_eq!(texts(&state3), vec!["b", "c"]);
+    assert_eq!(state3.todo.selected(), Some(0));
+    let Some(Overlay::Menu(menu3)) = state3.overlay.as_ref() else {
+        panic!("menu opened for b after deleting empty a");
+    };
+    assert_eq!(menu3.target, OverlayTarget::TodoItem { id: id_b3 });
+}
+
+#[test]
+fn delete_resets_double_click_sequence_and_clamps_hover() {
+    let mut state = todo_state(&["a", "b"]);
+    let t0 = Instant::now();
+    // 单击第 0 行 a，记录双击序列起点；同时悬停在末行 1。
+    click_todo_row(&mut state, 0, t0);
+    state.todo_hover = Some(1);
+    assert!(state.todo_row_click.is_some());
+
+    // 按 d 删除 a：b 上移到第 0 行，此时双击序列必须作废，越界的 hover (1 >= len 1) 必须清空。
+    assert!(apply_todo_key(&mut state, TodoKey::Char('d')));
+    assert!(state.todo_row_click.is_none(), "删除后双击计时序列必须清空");
+    assert_eq!(state.todo_hover, None, "越界悬停下标必须清空");
+
+    // 在双击时间窗内单击第 0 行（现在的 b），只能算首次单击，不得误入编辑态。
+    click_todo_row(&mut state, 0, t0 + Duration::from_millis(30));
+    assert!(
+        !state.todo.is_editing(),
+        "删除导致行上移后，同坐标单击不得被误判为双击进入编辑"
+    );
+}

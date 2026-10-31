@@ -535,23 +535,8 @@ pub(crate) fn open_right_click_menu(
     if !state.prompt_collapsed && state.right_tab == RightTab::Todo {
         let list_rect = ui::right_panel::todo::effective_list_rect(view.prompt, state);
         if list_rect.contains((column, row).into()) {
-            update::commit_todo_edit(state);
-            update::focus_todo(state);
-            let target_item = ui::right_panel::todo::row_at(view.prompt, state, column, row)
-                .and_then(|display| ui::right_panel::todo::list_index(state, display))
-                .and_then(|record_index| {
-                    state.todo.select(record_index);
-                    state
-                        .todo
-                        .items()
-                        .get(record_index)
-                        .map(|item| item.id.clone())
-                });
-            if let Some(id) = target_item {
-                update::open_todo_item_menu(state, id, (column, row));
-            } else {
-                update::open_todo_blank_menu(state, (column, row));
-            }
+            let display = ui::right_panel::todo::row_at(view.prompt, state, column, row);
+            update::right_click_todo_list(state, display, (column, row));
             return true;
         }
     }

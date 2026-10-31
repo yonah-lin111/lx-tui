@@ -726,16 +726,6 @@ impl TodoPanel {
         (before_ids != after_ids).then_some(after_ids)
     }
 
-    /// 取走全部指定状态的条目（`[clear done]`）；返回被删记录。
-    pub fn take_with_status(&mut self, status: TodoStatus) -> Vec<TodoRecord> {
-        let (removed, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.items)
-            .into_iter()
-            .partition(|item| item.status == status);
-        self.items = kept;
-        self.normalize_positions();
-        removed
-    }
-
     /// 按原位置把一批记录插回（撤销）。
     pub fn restore(&mut self, records: Vec<TodoRecord>) {
         let mut records = records;

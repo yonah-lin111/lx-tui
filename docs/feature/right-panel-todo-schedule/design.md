@@ -2,7 +2,7 @@
 
 - 任务目录：`docs/feature/right-panel-todo-schedule/`
 - 目标路径：`src/db/todo.rs`, `src/db/todo/date.rs`, `src/app/state/todo.rs`, `src/app/update/todo.rs`, `src/ui/right_panel/todo.rs`, `src/ui/right_panel/todo/{schedule.rs,charts.rs}`, `src/ui/style/todo.rs`, `src/ui/text/todo.rs`
-- 状态：全部阶段及补充需求实现完成，并通过代码评审与 P0–P2 缺陷修复。
+- 状态：全部阶段（含右键上下文菜单与工具栏精简）、代码评审与 P0–P2 缺陷修复全部完成，已合并至 `dev` 主分支。
 
 ---
 
@@ -27,7 +27,7 @@
    - 参考 Prompt 树右键交互，在 Todo 列表区（`effective_list_rect`）引入右键菜单双靶点：
      1. **`TodoItem`（条目行右键）**：提供 `Edit`（编辑）、`Cycle priority`（切换优先级）、`Delete`（删除条目）；右键即选中该行并聚焦；`Delete` 支持行内二次确认（`Confirm delete`）；
      2. **`TodoBlank`（列表空白区右键）**：提供 `New todo`（新建待办）、`Sort by priority`（智能排序）；
-   - 右键时若处于行内编辑态（含新建幽灵行），先自动调用 `commit_todo_edit` 提交草稿，杜绝输入丢失与并发状态错乱。
+   - 右键时由 `right_click_todo_list` **先于 `commit_todo_edit` 解析屏幕显示下标**（区分幽灵行、既有条目 ID 与列表下方空白），随后复位 `pending_g` / `todo_row_click` / `todo_hover`、自动提交在途草稿并按条目 ID 重定位选中，杜绝幽灵行或空编辑销毁引发的行号错位与误删。
 6. **优先级徽标与可读性样式（Priority Chip）**：
    - 条目行内增加 `P0` / `P1` / `P2` / `P3` 徽标；
    - 支持鼠标单击徽标切换（`P0 → P1 → P2 → P3 → P0`）与键盘 `p` 键切换；

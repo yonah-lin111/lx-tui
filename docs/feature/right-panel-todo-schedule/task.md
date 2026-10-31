@@ -1,6 +1,6 @@
 # 右侧面板 Todo 日程增强与多图表统计 — 执行任务清单
 
-> 状态：全部阶段、补充需求及评审修复均已完成并通过验证。
+> 状态：全部阶段（阶段 1 ~ 阶段 7）、补充需求及评审修复均已完成并通过验证，已合并至 `dev` 主分支。
 > 关联文档：`docs/feature/right-panel-todo-schedule/design.md`、`docs/feature/right-panel-todo-schedule/review.md`
 > 规则：生产代码禁止 `unwrap()/expect()`；错误使用 `Result` 与 `?`；文案一律英文；严格遵守单文件 ≤1000 行限制。
 
@@ -89,18 +89,18 @@
 
 ### 阶段 6：右键上下文菜单与工具栏精简（Context Menu & Toolbar Pruning）
 - [x] 6.1 顶部工具栏精简：仅保留 `[+]` 与 `[sort]`，移除 `[edit]`、`[del]` 与 `[clear done]`
-- [x] 6.2 全量物理删除 `Clear Done`：清理 DB `delete_todos_with_status*`、Effect `DeleteTodosWithStatus` 与对应 UI 文案/提示词
+- [x] 6.2 全量物理删除 `Clear Done`：清理 DB `delete_todos_with_status*`、Effect `DeleteTodosWithStatus`、`TodoPanel::take_with_status` 与对应 UI 文案/提示词
 - [x] 6.3 引入 Todo 右键菜单系统：
   - 在 `OverlayTarget` 扩展 `TodoItem { id }` 与 `TodoBlank`
   - 在 `MenuCommand` 扩展 `NewTodo`、`EditTodo`、`CycleTodoPriority`、`DeleteTodo`（带行内二次确认）、`SortTodos`
-  - 在 `event/overlay.rs` 对 `effective_list_rect` 内右键点击进行路由分派（自动提交编辑并同步选中目标行）
-  - 在 `app/update/menu.rs` 中完整接入命令执行分派
-- [x] 6.4 编写右键菜单打开、命令执行与二次确认的单元测试（`src/app/update/todo/tests.rs`、`src/event/tests/todo.rs`）
+  - 在 `event/overlay.rs` 与 `app/update/todo.rs::right_click_todo_list` 对 `effective_list_rect` 内右键点击进行路由分派（先按显示下标锁死条目 ID，再自动提交编辑并重定位选中目标行）
+  - 在 `app/update/menu.rs` 中完整接入命令执行分派，并在 `ui/text/todo.rs` 统一收口菜单文案常量
+- [x] 6.4 对新增右键上下文菜单与工具栏精简执行二次代码评审，更新 `docs/feature/right-panel-todo-schedule/review.md`（P0–P2 共 11 项），修复提交前换算行号、删除后重置双击序列、浮层悬停清理及死代码残留，并补充回归测试（`src/app/update/todo/tests.rs`、`src/event/tests/todo.rs`）
 
 ---
 
 ### 阶段 7：精确校验与验收（Verification）
 - [x] 7.1 代码格式规范检查：`cargo fmt --check`
 - [x] 7.2 编译器与 Clippy 静态检查：`cargo clippy --all-targets -- -D warnings`
-- [x] 7.3 单元测试与集成测试验证：`cargo test todo`（140 passed）
-- [ ] 7.4 提交用户人工 `cargo run` 确认 TUI 观感与是否合并分支
+- [x] 7.3 单元测试与集成测试验证：`cargo test todo`（141 passed）
+- [x] 7.4 合并至 `dev` 主工作区并清理隔离 worktree 与分支

@@ -336,11 +336,6 @@ pub const MENU_PROMPT_EDIT: &str = "Edit";
 pub const MENU_PROMPT_RENAME: &str = "Rename";
 pub const MENU_PROMPT_COPY: &str = "Copy content";
 pub const MENU_PROMPT_DELETE: &str = "Delete";
-pub const MENU_TODO_NEW: &str = "New todo";
-pub const MENU_TODO_EDIT: &str = "Edit";
-pub const MENU_TODO_PRIORITY: &str = "Cycle priority";
-pub const MENU_TODO_DELETE: &str = "Delete";
-pub const MENU_TODO_SORT: &str = "Sort by priority";
 
 /// 右键菜单项行内二次确认文案。
 pub const MENU_CONFIRM_CLOSE: &str = "Confirm close";
@@ -1034,8 +1029,6 @@ pub const MENU_TITLE_PANE: &str = "Pane";
 pub const MENU_TITLE_PROMPT: &str = "Prompt";
 pub const MENU_TITLE_FOLDER: &str = "Folder";
 pub const MENU_TITLE_PROMPT_TREE: &str = "Prompts";
-pub const MENU_TITLE_TODO_ITEM: &str = "Todo";
-pub const MENU_TITLE_TODO_BLANK: &str = "Todos";
 
 /// 浮层命令面板顶边左侧标题：markdown 块命令 / 文件提及 / 斜杠命令 / worktree 选择器。
 pub const BLOCK_PANEL_TITLE: &str = "Commands";

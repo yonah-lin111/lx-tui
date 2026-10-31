@@ -137,39 +137,6 @@ fn scroll_by_moves_viewport_only() {
 }
 
 #[test]
-fn take_with_status_removes_only_matching() {
-    let mut panel = TodoPanel::new();
-    panel.replace(vec![
-        TodoRecord::new("open", TodoStatus::Todo, 0),
-        TodoRecord::new("done-1", TodoStatus::Done, 1),
-        TodoRecord::new("active", TodoStatus::InProgress, 2),
-        TodoRecord::new("done-2", TodoStatus::Done, 3),
-    ]);
-
-    let removed = panel.take_with_status(TodoStatus::Done);
-
-    let removed_texts: Vec<&str> = removed.iter().map(|item| item.text.as_str()).collect();
-    assert_eq!(removed_texts, ["done-1", "done-2"], "保持原相对顺序");
-    let kept: Vec<&str> = panel
-        .items()
-        .iter()
-        .map(|item| item.text.as_str())
-        .collect();
-    assert_eq!(kept, ["open", "active"]);
-    assert_dense(&panel);
-
-    // 原位置（1 与 3）插回后回到原来的下标。
-    panel.restore(removed);
-    let texts: Vec<&str> = panel
-        .items()
-        .iter()
-        .map(|item| item.text.as_str())
-        .collect();
-    assert_eq!(texts, ["open", "done-1", "active", "done-2"]);
-    assert_dense(&panel);
-}
-
-#[test]
 fn restore_reinserts_by_position() {
     let mut panel = TodoPanel::new();
     panel.replace(records(&["a", "c"]));

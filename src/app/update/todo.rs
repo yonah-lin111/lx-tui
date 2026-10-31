@@ -246,9 +246,10 @@ pub fn execute_todo_rollover(state: &mut AppState) -> bool {
             target_date,
         });
         let message = crate::ui::text::toast_todo_rollover(count);
+        let anchor = Some(state.prompt.id());
         show_toast(
             state,
-            Toast::new(ToastKind::Default, message, None, Instant::now()),
+            Toast::new(ToastKind::Default, message, anchor, Instant::now()),
         );
         state.todo_row_click = None;
         changed = true;
@@ -471,7 +472,7 @@ fn apply_todo_list_key(state: &mut AppState, key: TodoKey) -> bool {
         TodoKey::Up => move_todo_selection(state, -1),
         TodoKey::Down => move_todo_selection(state, 1),
         TodoKey::Space => cycle_todo_status(state),
-        // `Tab` 切状态（与编辑态同义）：进入编辑只走双击 / `e` / `[edit]`。
+        // `Tab` 切状态（与编辑态同义）：进入编辑走双击 / `e` / 右键菜单 `Edit`。
         TodoKey::Tab => cycle_todo_status(state),
         // `Enter` 编辑当前项（对齐 lx-agent 点行即改）；`Shift+Enter` 新建一条。
         TodoKey::Enter => match state.todo.selected() {
@@ -660,12 +661,76 @@ pub fn delete_todo_selected(state: &mut AppState) -> bool {
     remove_todo_at(state, index)
 }
 
+/// 右键点击 Todo 列表区（`effective_list_rect`）：
+///
+/// 1. **在提交编辑前**解析 `display`（幽灵行占用显示槽位、空编辑提交会删除条目并重排下标，提交后再按屏幕行号换算会错位到相邻条目）；
+/// 2. 复位 `pending_g`、`todo_row_click` 与 `todo_hover`，提交在途编辑并聚焦 Todo 面板；
+/// 3. 若命中有效条目（含刚由非空幽灵行提交生成的新条目）则选中该行并打开条目菜单，否则打开列表空白菜单。
+pub fn right_click_todo_list(state: &mut AppState, display: Option<usize>, anchor: (u16, u16)) {
+    enum HitBeforeCommit {
+        Ghost { non_empty: bool },
+        Item(String),
+        Blank,
+    }
+
+    let hit = match display {
+        Some(d) => match editing_layout(state) {
+            Some((ghost_at, true)) if d == ghost_at => {
+                let non_empty = state
+                    .todo
+                    .editing()
+                    .is_some_and(|edit| !edit.input.text().trim().is_empty());
+                HitBeforeCommit::Ghost { non_empty }
+            }
+            _ => match resolve_display_index(state, d)
+                .and_then(|idx| state.todo.items().get(idx))
+                .map(|item| item.id.clone())
+            {
+                Some(id) => HitBeforeCommit::Item(id),
+                None => HitBeforeCommit::Blank,
+            },
+        },
+        None => HitBeforeCommit::Blank,
+    };
+
+    state.todo.set_pending_g(false);
+    state.todo_row_click = None;
+    state.todo_hover = None;
+    commit_todo_edit(state);
+    focus_todo(state);
+
+    let target_id = match hit {
+        HitBeforeCommit::Ghost { non_empty: true } => {
+            state.todo.selected_item().map(|item| item.id.clone())
+        }
+        HitBeforeCommit::Ghost { non_empty: false } | HitBeforeCommit::Blank => None,
+        HitBeforeCommit::Item(id) => state
+            .todo
+            .items()
+            .iter()
+            .position(|item| item.id == id)
+            .map(|index| {
+                state.todo.select(index);
+                id
+            }),
+    };
+
+    if let Some(id) = target_id {
+        open_todo_item_menu(state, id, anchor);
+    } else {
+        open_todo_blank_menu(state, anchor);
+    }
+}
+
 /// 打开 Todo 条目右键菜单：编辑、循环优先级与删除（需二次确认）。
 pub fn open_todo_item_menu(state: &mut AppState, id: impl Into<String>, anchor: (u16, u16)) {
     let id = id.into();
     if state.todo.items().iter().all(|item| item.id != id) {
         return;
     }
+    state.todo.set_pending_g(false);
+    state.todo_row_click = None;
+    state.todo_hover = None;
     state.overlay = Some(crate::app::overlay::Overlay::Menu(
         crate::app::overlay::Menu {
             anchor,
@@ -683,6 +748,9 @@ pub fn open_todo_item_menu(state: &mut AppState, id: impl Into<String>, anchor: 
 
 /// 打开 Todo 列表空白区域右键菜单：新建待办与智能排序。
 pub fn open_todo_blank_menu(state: &mut AppState, anchor: (u16, u16)) {
+    state.todo.set_pending_g(false);
+    state.todo_row_click = None;
+    state.todo_hover = None;
     state.overlay = Some(crate::app::overlay::Overlay::Menu(
         crate::app::overlay::Menu {
             anchor,
@@ -718,14 +786,15 @@ pub fn set_todo_scroll(state: &mut AppState, offset: usize) -> bool {
     state.todo.set_scroll(offset)
 }
 
-/// 服务回执：写入失败；全局 toast（内存列表保持不变）。
+/// 服务回执：写入失败；在右侧面板展示错误 toast（内存列表保持不变）。
 pub fn fail_todo_write(state: &mut AppState) {
+    let anchor = Some(state.prompt.id());
     show_toast(
         state,
         Toast::new(
             ToastKind::Danger,
             crate::ui::text::TOAST_TODO_SAVE_FAILED,
-            None,
+            anchor,
             Instant::now(),
         ),
     );
@@ -736,6 +805,14 @@ pub fn remove_todo_at(state: &mut AppState, index: usize) -> bool {
     let Some(removed) = state.todo.remove(index) else {
         return false;
     };
+    state.todo.set_pending_g(false);
+    state.todo_row_click = None;
+    if state
+        .todo_hover
+        .is_some_and(|hover| hover >= state.todo.len())
+    {
+        state.todo_hover = None;
+    }
     state.todo.set_undo(vec![removed.clone()]);
     state.todo.clamp_selection();
     state.effects.push(Effect::DeleteTodo { id: removed.id });
