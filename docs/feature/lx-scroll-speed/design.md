@@ -447,6 +447,24 @@ pub(crate) fn vertical_wheel_delta(kind: MouseEventKind) -> Option<isize> {
 
 ---
 
+### 3.5 代码评审（Review P0–P2）发现的边界缺陷与加固设计
+
+详见 `docs/feature/lx-scroll-speed/review.md`：
+
+1. **P0-1：`lx` `/` 命令面板滚轮优先级高于 `history_wheel_region`**
+   - `/` 命令面板（含 `/model`、`/resume`、`/rewind`）以 `AboveAnchor` 贴在输入框上沿，其矩形位于 `history_wheel_region` 内。将 `lx_slash_panel_layout` 移至 `refer_layout` 之后、`task_rects` 与 `history_wheel_region` 之前，防止有聊天历史时滚轮被 `history_wheel_region` 抢先拦截。
+2. **P0-2：`lx` `history_wheel_region` 触顶/触底时消费滚轮事件，严禁穿透到底部输入框**
+   - 当 `history_rect.contains(...)` 命中时，在块内判断 `update::scroll_lx_history` 是否返回 `true` 来设置 `*dirty = true`，随后无条件 `return;`，防止历史区触顶/触底返回 `false` 时落入末尾的 `update::scroll_lx_input`。
+3. **P1-1：补齐 `prompt` 快捷引用面板（`ReferPanel`）滚轮支持**
+   - `src/ui/prompt/panels.rs` 的 `ReferPanelData` 补充 `viewport: panel.viewport()` 并映射至 `CommandPanelView.window_start`；
+   - 新增 `Prompt::refer_scroll`（`src/app/prompt/refer.rs`）、`update::scroll_refer`（`src/app/update/editor.rs`）、`hit::refer_panel_layout`（`src/event/mouse/hit.rs`），并在 `handle_mouse_wheel` 中按 `WHEEL_LINES = 3` 拦截滚动。
+4. **P1-2：`prompt` 与 `lx` 路径粘贴选择面板（`paste_panel`）吞没滚轮防穿透**
+   - 在 `handle_mouse_wheel` 中对 `prompt` 的 `paste_panel_rect` 与 `lx` 的 `paste_layout` 矩形做滚轮命中吞没（`return;`）。
+5. **P2-1：`prompt` 浮层面板滚轮仅在产生实际位移时置 `*dirty = true`**
+   - `update::scroll_mention`、`update::scroll_refer`、`update::scroll_slash`、`update::scroll_panel` 返回 `true` 时才置 `*dirty = true`。
+
+---
+
 ## 4. 影响范围与不变量检查
 
 1. **`app/` 与 `ui/` 边界不变量**：
@@ -483,5 +501,10 @@ pub(crate) fn vertical_wheel_delta(kind: MouseEventKind) -> Option<isize> {
 ### 5.2 新增专项回归测试
 
 - 在 `src/event/tests/lx_view.rs` 新增测试 `lx_history_wheel_scrolls_by_wheel_lines_and_clamps`：
-  - 构造长消息历史（如 30 行内容），验证在 `lx` 主聊天历史区向上拨动 1 格滚轮（`ScrollUp`）时，`history_scroll` 精确减少 `WHEEL_LINES`（3 行）且退出 `follow_bottom`；再向下拨动 1 格滚轮（`ScrollDown`）时，`history_scroll` 精确增加 3 行并恢复 `follow_bottom`。
+  - 构造长消息历史，验证在 `lx` 主聊天历史区向下/向上拨动 1 格滚轮时，`history_scroll` 精确移动 `WHEEL_LINES`（3 行）、触顶钳制在 `0` 且不置脏、距底不足 3 行时向下滚轮直接钳制到 `max_top` 并恢复 `follow_bottom`。
+- 在 `src/event/tests/prompt_editor.rs` 新增测试：
+  - `lx_slash_wheel_prioritizes_over_history_and_clamped_history_never_leaks_to_input`（覆盖 P0-1、P0-2）
+  - `prompt_refer_panel_wheel_scrolls_by_wheel_lines_without_scrolling_editor`（覆盖 P1-1、P2-1）
+- 在 `src/event/tests/focus_and_paste.rs` 新增测试：
+  - `paste_panel_swallows_mouse_wheel_without_scrolling_underlying_views`（覆盖 P1-2）
 - 执行 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 与受影响模块 `cargo test` 验证全绿。

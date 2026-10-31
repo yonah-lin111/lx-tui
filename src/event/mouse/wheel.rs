@@ -16,7 +16,8 @@ use alacritty_terminal::term::TermMode;
 
 use super::super::session::{Geometry, write_to_pane};
 use super::hit::{
-    block_panel_layout, mention_panel_layout, pane_at, pane_content_inner, slash_panel_layout,
+    block_panel_layout, mention_panel_layout, pane_at, pane_content_inner, paste_panel_rect,
+    refer_panel_layout, slash_panel_layout,
 };
 
 /// 纵向滚轮方向（负数向上）；横向滚轮返回 None。
@@ -275,13 +276,31 @@ pub(crate) fn handle_mouse_wheel(
     if state.resizing_prompt || state.resizing_pane.is_some() {
         return;
     }
+    // 粘贴面板打开且指针在其上：吞掉滚轮，不穿透到 prompt 与窗格。
+    if vertical_wheel_direction(mouse.kind).is_some()
+        && let Some(rect) = paste_panel_rect(state, view)
+        && rect.contains((mouse.column, mouse.row).into())
+    {
+        return;
+    }
     // @ 提及面板打开且指针在其上：滚轮滚动面板视口（高亮不动），不穿透到 prompt 与窗格。
     if let Some(delta) = vertical_wheel_delta(mouse.kind)
         && let Some(panel) = mention_panel_layout(state, view)
         && panel.rect.contains((mouse.column, mouse.row).into())
     {
-        update::scroll_mention(state, delta, panel.start);
-        *dirty = true;
+        if update::scroll_mention(state, delta, panel.start) {
+            *dirty = true;
+        }
+        return;
+    }
+    // 字母快捷面板打开且指针在其上：滚轮滚动面板视口（高亮不动），不穿透到 prompt 与窗格。
+    if let Some(delta) = vertical_wheel_delta(mouse.kind)
+        && let Some(panel) = refer_panel_layout(state, view)
+        && panel.rect.contains((mouse.column, mouse.row).into())
+    {
+        if update::scroll_refer(state, delta, panel.start) {
+            *dirty = true;
+        }
         return;
     }
     // 斜杠命令面板同上：滚轮滚动视口，到底/顶后钳制不循环。
@@ -289,8 +308,9 @@ pub(crate) fn handle_mouse_wheel(
         && let Some(panel) = slash_panel_layout(state, view)
         && panel.rect.contains((mouse.column, mouse.row).into())
     {
-        update::scroll_slash(state, delta, panel.start);
-        *dirty = true;
+        if update::scroll_slash(state, delta, panel.start) {
+            *dirty = true;
+        }
         return;
     }
     // 块命令面板同上。
@@ -298,8 +318,9 @@ pub(crate) fn handle_mouse_wheel(
         && let Some(panel) = block_panel_layout(state, view)
         && panel.rect.contains((mouse.column, mouse.row).into())
     {
-        update::scroll_panel(state, delta, panel.start);
-        *dirty = true;
+        if update::scroll_panel(state, delta, panel.start) {
+            *dirty = true;
+        }
         return;
     }
     // prompt 拖拽选区：滚轮滚动视口，锚点钉在文本上，终点跟到鼠标。
@@ -382,7 +403,16 @@ pub(crate) fn handle_mouse_wheel(
             .pane_anywhere(pane)
             .is_some_and(|target| target.view == PaneView::Lx)
         {
-            // lx 页：提及面板候选视口优先于输入框滚动；面板内滚轮不穿透到输入框。
+            // lx 页：粘贴选择面板打开且指针在其上时吞掉滚轮，不穿透到历史区与输入框。
+            if vertical_wheel_direction(mouse.kind).is_some()
+                && let Some(bar) = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::paste_layout(inner, &target.lx))
+                && bar.rect.contains((mouse.column, mouse.row).into())
+            {
+                return;
+            }
+            // lx 页：提及面板候选视口优先于历史区与输入框滚动；面板内滚轮不穿透。
             if let Some(delta) = vertical_wheel_delta(mouse.kind)
                 && let Some(bar) = state
                     .pane_anywhere(pane)
@@ -394,7 +424,7 @@ pub(crate) fn handle_mouse_wheel(
                 }
                 return;
             }
-            // lx 页：快捷引用面板候选视口优先于输入框滚动。
+            // lx 页：快捷引用面板候选视口优先于历史区与输入框滚动。
             if let Some(delta) = vertical_wheel_delta(mouse.kind)
                 && let Some(bar) = state
                     .pane_anywhere(pane)
@@ -402,6 +432,16 @@ pub(crate) fn handle_mouse_wheel(
                 && bar.rect.contains((mouse.column, mouse.row).into())
             {
                 if update::scroll_lx_refer(state, pane, delta, bar.start) {
+                    *dirty = true;
+                }
+                return;
+            }
+            // lx 页：`/` 命令面板（含 `/model`、`/resume`、`/rewind`）优先于历史区与输入框滚动。
+            if let Some(delta) = vertical_wheel_delta(mouse.kind)
+                && let Some(bar) = super::hit::lx_slash_panel_layout(state, pane, inner)
+                && bar.rect.contains((mouse.column, mouse.row).into())
+            {
+                if update::scroll_lx_slash(state, pane, delta, bar.start) {
                     *dirty = true;
                 }
                 return;
@@ -469,33 +509,23 @@ pub(crate) fn handle_mouse_wheel(
                 }
                 return;
             }
-            // 聊天历史区滚轮：滚动历史视口（保留输入框滚轮给输入缓冲区）。
+            // 聊天历史区滚轮：滚动历史视口；即使触顶/触底未产生位移也必须在此消费并返回，
+            // 严禁向下穿透滚动底部输入框。
             if let Some(delta) = vertical_wheel_delta(mouse.kind)
                 && let Some(history_rect) = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::history_wheel_region(inner, &target.lx)
                 })
                 && history_rect.contains((mouse.column, mouse.row).into())
-                && let Some((total, visible)) = state.pane_anywhere(pane).and_then(|target| {
+            {
+                if let Some((total, visible)) = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::history_rows(inner, &target.lx, cache.pane(pane))
-                })
-                && update::scroll_lx_history(state, pane, delta, total, visible)
-            {
-                *dirty = true;
-                return;
-            }
-            // `/` 命令面板滚轮：滚动候选窗口（不穿透到输入框）。
-            if let Some(delta) = vertical_wheel_delta(mouse.kind)
-                && let Some((pane, inner)) =
-                    super::hit::lx_pane_at(state, rects, mouse.column, mouse.row)
-                && let Some(bar) = super::hit::lx_slash_panel_layout(state, pane, inner)
-                && bar.rect.contains((mouse.column, mouse.row).into())
-            {
-                if update::scroll_lx_slash(state, pane, delta, bar.start) {
+                }) && update::scroll_lx_history(state, pane, delta, total, visible)
+                {
                     *dirty = true;
                 }
                 return;
             }
-            // 提及面板外：滚轮滚动输入缓冲区视口，不穿透到隐藏终端。
+            // 提及面板与历史区外：滚轮滚动输入缓冲区视口，不穿透到隐藏终端。
             if let Some(direction) = vertical_wheel_direction(mouse.kind)
                 && update::scroll_lx_input(state, pane, direction)
             {

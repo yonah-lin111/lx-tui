@@ -77,8 +77,19 @@
 
 ---
 
-### 阶段 4：代码校验
-- [x] **任务 4.1**：运行 `cargo fmt`
-- [x] **任务 4.2**：运行 `cargo clippy --all-targets -- -D warnings`
-- [x] **任务 4.3**：运行受影响模块的精确单元测试（`cargo test --lib event::tests`、`cargo test --lib app::update`、`cargo test --lib app::state::lx::mention`）
-- [ ] **任务 4.4**：由用户运行 `cargo run` 实际确认 TUI 滚动手感
+### 阶段 4：代码评审（Review P0–P2）与缺陷修复
+- [x] **任务 4.1**：输出评审报告 `docs/feature/lx-scroll-speed/review.md`（按 P0 → P2 排序，记录关键点与错误根因）
+- [x] **任务 4.2（P0-1）**：调整 `src/event/mouse/wheel.rs` 中 `lx_slash_panel_layout` 顺序至 `history_wheel_region` 之前，修复有聊天历史时 `/` 命令面板滚轮被历史区抢占的问题
+- [x] **任务 4.3（P0-2）**：修复 `src/event/mouse/wheel.rs` 中 `history_wheel_region` 在 `scroll_lx_history` 返回 `false` 时未 `return` 导致滚轮穿透到底部输入框的问题
+- [x] **任务 4.4（P1-1）**：补齐 `prompt` 快捷引用面板（`ReferPanel`）的 `viewport` 映射（`src/ui/prompt/panels.rs`）、`Prompt::refer_scroll`（`src/app/prompt/refer.rs`）、`update::scroll_refer`（`src/app/update/editor.rs`）、`hit::refer_panel_layout`（`src/event/mouse/hit.rs`）及 `wheel.rs` 滚轮拦截
+- [x] **任务 4.5（P1-2）**：在 `src/event/mouse/wheel.rs` 拦截并吞没 `prompt` 与 `lx` 路径粘贴面板（`paste_panel`）上的滚轮事件，防止穿透滚动底层视图
+- [x] **任务 4.6（P2-1）**：修复 `src/event/mouse/wheel.rs` 中 `prompt` 浮层面板滚轮未移动视口时仍无条件置 `*dirty = true` 的问题
+- [x] **任务 4.7**：在 `src/event/tests/prompt_editor.rs` 与 `src/event/tests/focus_and_paste.rs` 新增针对 P0-1、P0-2、P1-1、P1-2、P2-1 的回归测试
+
+---
+
+### 阶段 5：代码校验
+- [x] **任务 5.1**：运行 `cargo fmt`
+- [x] **任务 5.2**：运行 `cargo clippy --all-targets -- -D warnings`
+- [x] **任务 5.3**：运行受影响模块的精确单元测试（`cargo test --lib event::tests`、`cargo test --lib app::update`、`cargo test --lib app::state::lx::mention`）
+- [ ] **任务 5.4**：由用户运行 `cargo run` 实际确认 TUI 滚动手感

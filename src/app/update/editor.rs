@@ -439,6 +439,11 @@ pub fn select_refer(state: &mut AppState, index: usize) {
     state.prompt.refer_confirm();
 }
 
+/// 滚轮在字母快捷面板上滚动可见窗口：`base` 为当前窗口起点；高亮不动。
+pub fn scroll_refer(state: &mut AppState, delta: isize, base: usize) -> bool {
+    state.prompt.refer_scroll(delta, base)
+}
+
 /// 鼠标悬停粘贴面板操作项：仅接受可用项；返回是否变化。
 pub fn hover_paste(state: &mut AppState, index: usize) -> bool {
     state.prompt.paste_set_active(index)
