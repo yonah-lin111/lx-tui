@@ -648,3 +648,64 @@ fn literal_rules_mode_preserves_raw_dashes_while_default_expands_rule() {
         .expect("heading line");
     assert_eq!(heading.spans[0].1, style::md_read_heading_level(1));
 }
+
+#[test]
+fn intraword_underscores_and_spaced_asterisks_stay_literal() {
+    // P0-1：词内下划线（如 `exec_command / write_stdin`）与含空格星号（如 `*.rs *.toml`）不得被误解析为斜体。
+    let lines = render("- exec_command / write_stdin\n- ls *.rs *.toml\n- _snake_case_");
+    assert_eq!(lines[0].text(), "• exec_command / write_stdin");
+    assert!(
+        lines[0]
+            .spans
+            .iter()
+            .all(|(_, span_style)| *span_style != style::md_read_emphasis()),
+        "snake_case 标识符不得触发斜体：{:?}",
+        lines[0].spans
+    );
+    assert_eq!(lines[1].text(), "• ls *.rs *.toml");
+    assert!(
+        lines[1]
+            .spans
+            .iter()
+            .all(|(_, span_style)| *span_style != style::md_read_emphasis()),
+        "通配符星号不得跨空格触发斜体：{:?}",
+        lines[1].spans
+    );
+    // 真正以边界 `_…_` 包裹的斜体仍然正常折叠。
+    assert_eq!(lines[2].text(), "• snake_case");
+    assert!(
+        lines[2]
+            .spans
+            .iter()
+            .any(|(text, span_style)| text == "snake_case"
+                && *span_style == style::md_read_emphasis()),
+        "合法的 _snake_case_ 斜体仍应生效：{:?}",
+        lines[2].spans
+    );
+}
+
+#[test]
+fn blockquote_renders_inline_markdown_spans_with_quote_tint() {
+    // P2-1：引用块内部支持行内代码与加粗折叠，同时叠加引用块基础灰色。
+    let lines = render("> quote with `inline_code` and **bold**");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].text(), "> quote with inline_code and bold");
+    let code_span = lines[0]
+        .spans
+        .iter()
+        .find(|(text, _)| text == "inline_code")
+        .expect("inline code in quote");
+    assert_eq!(
+        code_span.1,
+        style::md_read_quote().patch(style::md_read_inline_code())
+    );
+    let bold_span = lines[0]
+        .spans
+        .iter()
+        .find(|(text, _)| text == "bold")
+        .expect("bold in quote");
+    assert_eq!(
+        bold_span.1,
+        style::md_read_quote().patch(style::md_read_strong())
+    );
+}

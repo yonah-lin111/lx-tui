@@ -131,16 +131,18 @@ pub(super) const TEXT_SAMPLE_CHARS: usize = 512;
 /// 截断处显式补 `…`，不静默吞掉内容。
 pub(super) const MAX_OUTPUT_LINE_CHARS: usize = 8 * 1024;
 
-/// 输出单行取样（超过上限按字符截断并补 `…`，不按字节切）。
+/// 输出单行取样与控制字符净化（超过上限按字符截断并补 `…`；`\t` 及控制字符转单空格，
+/// 避免 `Grid::put_clipped` 将 0 宽控制字符跳过导致词粘连或与折行列宽失配）。
 pub(super) fn sample_output_line(line: &str) -> String {
-    match line.char_indices().nth(MAX_OUTPUT_LINE_CHARS) {
-        Some((index, _)) => {
-            let mut text = line[..index].to_string();
+    let mut text = String::with_capacity(line.len().min(MAX_OUTPUT_LINE_CHARS + 4));
+    for (count, ch) in line.chars().enumerate() {
+        if count == MAX_OUTPUT_LINE_CHARS {
             text.push('…');
-            text
+            break;
         }
-        None => line.to_string(),
+        text.push(if ch.is_control() { ' ' } else { ch });
     }
+    text
 }
 
 /// 将多行原始输出按行做单行长度采样（上限 [`MAX_OUTPUT_LINE_CHARS`]）并剥离末尾空行，

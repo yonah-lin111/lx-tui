@@ -668,3 +668,31 @@ fn command_output_keeps_dashes_literal_and_styles_headings_uniformly() {
     assert_eq!(grid.cell(5, h1_row).style, expected);
     assert_eq!(grid.cell(5, h3_row).style, expected);
 }
+
+#[test]
+fn command_output_sanitizes_tabs_and_preserves_snake_case_identifiers() {
+    // P0-1 & P1-1：命令输出含 `\t` 与 `exec_command / write_stdin` 时，`\t` 转空格不粘连，`_` 不被吞掉。
+    let call = command_call(
+        ProcessStateView::Exited { code: Some(0) },
+        ToolStatus::Completed,
+        "755\tcheck.sh\t65B\n- exec_command / write_stdin\n",
+    );
+    let expanded = tool::Folds {
+        body: true,
+        output: true,
+    };
+    let height = tool::rows(&call, 60, expanded).max(1) as u16;
+    let area = Rect::new(0, 0, 60, height);
+    let mut grid = Grid::new(area);
+    let mut row = 0usize;
+    tool::draw_animated(&mut grid, area, 0, &mut row, &call, 0, expanded, false);
+    assert_eq!(row, height as usize);
+    assert!(
+        row_of_text(&grid, 60, height, "755 check.sh 65B").is_some(),
+        "Tab 字符应转为空格而非被 Grid 跳过导致词粘连"
+    );
+    assert!(
+        row_of_text(&grid, 60, height, "exec_command / write_stdin").is_some(),
+        "snake_case 下划线不得被当成斜体标记吞掉"
+    );
+}

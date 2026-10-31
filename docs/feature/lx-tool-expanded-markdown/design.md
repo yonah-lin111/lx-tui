@@ -1,10 +1,10 @@
 # lx 工具与卡片展开内容统一思考块同款压暗 Markdown 格式与配色：设计方案
 
-> 状态：**已在 `.worktrees/lx-tool-expanded-markdown`（分支 `feat/lx-tool-expanded-markdown`）完成实现与测试验证，待用户确认是否合并到 `dev`**。
+> 状态：**已在 `.worktrees/lx-tool-expanded-markdown`（分支 `feat/lx-tool-expanded-markdown`）完成实现、视觉微调与 Code Review 修复（见 [review.md](./review.md)），待用户确认是否合并到 `dev`**。
 > 日期：2026-10-31。
 > 项目：`/Users/yonah/projects/agent/lx-tui`。
-> 作用域：`src/ui/main_content/lx/history/` 及配套设计规范 `docs/standards/tui-design-requirements.md`。
-> 配套任务清单：[task.md](./task.md)。
+> 作用域：`src/ui/main_content/lx/history/`、`src/ui/markdown_render.rs`、`src/ui/style.rs` 及配套设计规范 `docs/standards/tui-design-requirements.md`。
+> 配套文档：[task.md](./task.md) · [review.md](./review.md)。
 
 ---
 
@@ -32,6 +32,8 @@
 | **D1** | **覆盖范围分类** | 1. **接入压暗 Markdown 渲染（`markdown_render::render_wrapped` + `span_style.patch(style::muted())`）**：<br>   - `Subagent report` 卡片正文（`report.rs`）<br>   - `spawn_agent` / `wait_agent` 展开后的 `Report:` 正文（`tool/subagent.rs`）<br>   - `MCP` 工具结果块（`tool/mcp.rs` 的 `result_section`）<br>   - `exec_command` / `write_stdin` 命令输出块（`tool/command.rs` 的 `output_section`）<br>   - 用户 `!` 本地命令输出块（`user_shell.rs` 的 `output_section`）<br>   - `Compact` 压缩检查点展开后的 `summary` 摘要（`compact.rs`）<br>2. **仅移除展开变默认亮色（保持 `style::muted()`，不解析 Markdown）**：<br>   - `search` 工具的代码命中行（`tool/search.rs` 的 `hit_line`），防止代码行中的 `#`、`*` 等字符被误解析为 Markdown 标题或列表。<br>3. **保持现有专有样式不变**：<br>   - `edit` / `write` 的文件 Diff 卡片（`tool/file_diff.rs`）及各工具顶部的入参路径/命令文本（`style::chat_tool_param()`）。 | 问题 1：用户确认「使用推荐」 |
 | **D2** | **折叠预览与展开态同源渲染** | 对于未展开时带 2~3 行（或首 3 尾 2 行）折叠预览的卡片（`report.rs`、`tool/mcp.rs`、`tool/command.rs`、`user_shell.rs`），**折叠预览态与展开态全程共用同一份 `muted_markdown_lines` 物理行序列**：折叠态直接通过 `Preview`（或行上限）截取可见行，展开态展示全部行。既保证折叠预览行也具备柔和 Markdown 染色，又保证折叠态提示的 `… N more lines` 与展开后的实际物理行数 100% 严格相等，绝不因围栏折叠或表格收敛产生行数跳变。 | 问题 2：用户确认「使用推荐」 |
 | **D3** | **附属标签行与规范/测试同步** | 1. `report.rs` 与 `tool/subagent.rs` 中的 `Report:` 标签行、`tool/command.rs` 中 `Send input` 的输入预览行、`user_shell.rs` 的 `(no output)` 占位行统一使用恒定 `style::muted()`（彻底移除 `tool::output_style(expanded)` 中展开变 `style::text()` 的分支）；<br>2. 同步更新 `docs/standards/tui-design-requirements.md` 中关于「折叠态 `muted()`、展开态恢复 `style::text()`」的旧描述，以及相关单元测试断言。 | 问题 3：用户确认「使用推荐」 |
+| **D4** | **展开内容保留 `---` 字面量（不画整行边框线）** | 工具/卡片展开内容（`muted_markdown_lines`）调用 `markdown_render::render_wrapped_literal_rules`，遇到 `---` / `***` / `___` 时保留原始文本（如 `---`），不扩展成整行 `─` 分割线；思考块与主回答正文仍用 `render_wrapped` 保持不变。 | 用户实机截图反馈 1 |
+| **D5** | **Markdown 标题（`# title`）与引用块（`> `）样式调整** | 1. 所有级别标题（`h1`–`h6`，`style::md_read_heading_level`）统一为同一种格式：GitHub Dark 实体紫高亮（`#d2a8ff`）+ 加粗 + 下划线（`Modifier::BOLD \| Modifier::UNDERLINED`），不含斜体；<br>2. `> ` 引用块（`style::md_read_quote`）字体颜色调整为与底栏模型上下文占用同款的灰色（`style::chat_provider()` = `style::muted()`），避免使用 `#7d8590` 暗灰色叠加 `DIM` 后过暗。 | 用户实机截图反馈 1–3 |
 
 ---
 

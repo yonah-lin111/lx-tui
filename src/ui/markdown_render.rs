@@ -306,7 +306,7 @@ fn render_code(body: &[&str], lang: Option<&str>, lines: &mut Vec<MdLine>) {
     }
 }
 
-/// 引用块：收集连续 `>` 行，用 `>` 作前缀（不用左边框）。
+/// 引用块：收集连续 `>` 行，用 `>` 作前缀（不用左边框），正文支持行内 markdown 折叠与着色。
 fn blockquote(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
     let mut index = start;
     while index < source.len() {
@@ -316,14 +316,12 @@ fn blockquote(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
         };
         let body = rest.strip_prefix(' ').unwrap_or(rest);
         let marker = format!("{QUOTE_MARKER} ");
-        lines.push(MdLine::hanging(
-            0,
-            marker_width(&marker),
-            vec![
-                (marker, style::md_read_quote()),
-                (body.to_string(), style::md_read_quote()),
-            ],
-        ));
+        let quote_style = style::md_read_quote();
+        let mut spans = vec![(marker.clone(), quote_style)];
+        for (value, span_style) in inline_spans(body) {
+            spans.push((value, quote_style.patch(span_style)));
+        }
+        lines.push(MdLine::hanging(0, marker_width(&marker), spans));
         index += 1;
     }
     index
@@ -480,6 +478,7 @@ fn inline_spans(text: &str) -> Vec<(String, Style)> {
     let bytes = text.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
+        let prev = text[..index].chars().next_back();
         let rest = &text[index..];
         // 行内代码：`code`（内部不再解析）。
         if let Some(inner) = delimited(rest, "`", "`") {
@@ -489,28 +488,30 @@ fn inline_spans(text: &str) -> Vec<(String, Style)> {
             continue;
         }
         // 粗斜体 `***…***`。
-        if let Some(inner) = delimited(rest, "***", "***") {
+        if let Some(inner) = delimited_emphasis(rest, "***", prev) {
             flush(&mut plain, &mut spans);
             spans.push((inner.to_string(), style::md_read_strong_emphasis()));
             index += inner.len() + 6;
             continue;
         }
         // 粗体 `**…**` / `__…__`。
-        if let Some(inner) = delimited(rest, "**", "**").or_else(|| delimited(rest, "__", "__")) {
+        if let Some(inner) =
+            delimited_emphasis(rest, "**", prev).or_else(|| delimited_emphasis(rest, "__", prev))
+        {
             flush(&mut plain, &mut spans);
             spans.push((inner.to_string(), style::md_read_strong()));
             index += inner.len() + 4;
             continue;
         }
         // 删除线 `~~…~~`。
-        if let Some(inner) = delimited(rest, "~~", "~~") {
+        if let Some(inner) = delimited_emphasis(rest, "~~", prev) {
             flush(&mut plain, &mut spans);
             spans.push((inner.to_string(), style::md_read_strikethrough()));
             index += inner.len() + 4;
             continue;
         }
-        // 斜体 `*…*` / `_…_`（排除双写）。
-        if let Some(inner) = emphasis(rest) {
+        // 斜体 `*…*` / `_…_`（排除双写与词内下划线）。
+        if let Some(inner) = emphasis(rest, prev) {
             flush(&mut plain, &mut spans);
             spans.push((inner.to_string(), style::md_read_emphasis()));
             index += inner.len() + 2;
@@ -568,17 +569,45 @@ fn delimited<'a>(rest: &'a str, open: &str, close: &str) -> Option<&'a str> {
     (end > 0).then(|| &after[..end])
 }
 
-/// 斜体 `*…*` / `_…_`；排除双写前缀。
-fn emphasis(rest: &str) -> Option<&str> {
-    let mut chars = rest.chars();
-    let ch = chars.next()?;
+/// 匹配强调类对称标记（`***` / `**` / `__` / `~~` / `*` / `_`）：
+/// - 遵循 CommonMark 规则：开标记后与闭标记前均不得紧邻空白（防止 `2 * 3 * 4` 或 `*.rs *.toml` 误配对）；
+/// - 下划线标记（`_` / `__`）不得在 ASCII 字母或数字词内开闭（防止 `exec_command / write_stdin` 吞掉 `_`）。
+fn delimited_emphasis<'a>(rest: &'a str, delim: &str, prev: Option<char>) -> Option<&'a str> {
+    let delim_char = delim.chars().next()?;
+    let is_underscore = delim_char == '_';
+    if is_underscore && prev.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return None;
+    }
+    let after = rest.strip_prefix(delim)?;
+    let first = after.chars().next()?;
+    if first == delim_char || first.is_whitespace() {
+        return None;
+    }
+    let mut search_from = 0;
+    while let Some(pos) = after[search_from..].find(delim) {
+        let end = search_from + pos;
+        let inner = &after[..end];
+        let tail = &after[end + delim.len()..];
+        let before_close = inner.chars().next_back();
+        let after_close = tail.chars().next();
+        let valid_before = before_close.is_some_and(|ch| !ch.is_whitespace() && ch != delim_char);
+        let valid_after = after_close
+            .is_none_or(|ch| ch != delim_char && (!is_underscore || !ch.is_ascii_alphanumeric()));
+        if valid_before && valid_after {
+            return Some(inner);
+        }
+        search_from = end + delim.len();
+    }
+    None
+}
+
+/// 斜体 `*…*` / `_…_`；排除双写前缀与词内下划线。
+fn emphasis(rest: &str, prev: Option<char>) -> Option<&str> {
+    let ch = rest.chars().next()?;
     if ch != '*' && ch != '_' {
         return None;
     }
-    if chars.next() == Some(ch) {
-        return None;
-    }
-    delimited(rest, &ch.to_string(), &ch.to_string())
+    delimited_emphasis(rest, if ch == '*' { "*" } else { "_" }, prev)
 }
 
 /// 链接 `[文字](url)`；返回（文字、URL、消耗字节数）。

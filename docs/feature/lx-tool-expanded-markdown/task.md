@@ -1,8 +1,8 @@
 # lx 工具与卡片展开内容统一思考块同款压暗 Markdown 格式与配色：任务清单
 
-> 状态：**已在 `.worktrees/lx-tool-expanded-markdown`（分支 `feat/lx-tool-expanded-markdown`）完成 T1–T6，待用户确认是否合并到 `dev`**。
+> 状态：**已在 `.worktrees/lx-tool-expanded-markdown`（分支 `feat/lx-tool-expanded-markdown`）完成 T1–T8（含视觉微调与 Code Review P0–P2 修复），待用户确认是否合并到 `dev`**。
 > 日期：2026-10-31。
-> 设计依据：[design.md](./design.md)。
+> 设计依据：[design.md](./design.md) · 评审报告：[review.md](./review.md)。
 
 ---
 
@@ -104,3 +104,28 @@
   - [x] `cargo clippy --all-targets -- -D warnings` 零警告；
   - [x] `cargo fmt -- --check` 零差异；
   - [x] 单文件行数均不超过 1000 行规范上限。
+
+### T7：实机视觉反馈微调（展开内容保留 `---`、统一标题与引用块配色）
+
+- **目标文件**：
+  - `src/ui/markdown_render.rs`
+  - `src/ui/style.rs`
+  - `src/ui/main_content/lx/history/tool.rs`
+- **具体步骤**：
+  - [x] 新增 `markdown_render::render_wrapped_literal_rules` 并在 `tool::muted_markdown_lines` 中接入，使展开内容中的 `---` 保持原样而不画成整行 `─` 横线（思考块保持不变）。
+  - [x] 将 `style::md_read_heading_level(1..=6)` 统一为 GitHub Dark 实体紫（`#d2a8ff`）+ 加粗 + 下划线（不含斜体）。
+  - [x] 将 `style::md_read_quote()` 调整为底栏模型上下文字体同款灰色（`style::chat_provider()` = `style::muted()`），避免 `#7d8590` 暗灰色过暗。
+
+### T8：Code Review 审查与 P0–P2 问题修复（见 [review.md](./review.md)）
+
+- **目标文件**：
+  - `docs/feature/lx-tool-expanded-markdown/review.md`
+  - `src/ui/markdown_render.rs`
+  - `src/ui/main_content/lx/history/tool.rs`
+  - `src/ui/markdown_render/tests.rs`
+  - `src/ui/main_content/lx/history/tool/tests/background_cards.rs`
+- **具体步骤**：
+  - [x] **P0-1 修复**：在 `markdown_render::inline_spans` 中引入 `delimited_emphasis`，校验分隔符内侧非空白及 `_`/`__` 词边界，防止 `exec_command / write_stdin` 与 `*.rs *.toml` 被吞掉符号并误设为斜体。
+  - [x] **P1-1 修复**：在 `tool::sample_output_line` 中将 `\t` 及其他控制字符统一净化为单空格 `' '`，消除 `Grid::put_clipped` 跳过 0 宽控制字符造成的词粘连与列宽失配。
+  - [x] **P2-1 修复**：在 `markdown_render::blockquote` 中接入 `inline_spans(body)` 并叠加 `quote_style.patch(span_style)`，支持引用块内的行内代码与加粗标记折叠。
+  - [x] 补齐 P0-1、P1-1、P2-1 单元测试并执行 `rtk cargo fmt`、`rtk cargo clippy`、`rtk cargo test` 验证与提交。
