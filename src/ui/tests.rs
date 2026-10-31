@@ -2515,11 +2515,11 @@ fn focused_pane_title_uses_soft_blue_style() {
         assert!(!cell.modifier.contains(ratatui::style::Modifier::BOLD));
         assert_eq!(cell.fg, ratatui::style::Color::Cyan);
     }
-    // 焦点仍由边框颜色区分。
-    assert_eq!(
+    // 边框恒为暗灰（不再随焦点使用强调色）。
+    assert_ne!(
         buffer[(rect.x, rect.y + 1)].fg,
         ratatui::style::Color::Cyan,
-        "焦点窗格边框保持强调色"
+        "焦点窗格边框保持 muted"
     );
 }
 
@@ -3298,10 +3298,8 @@ fn controls_and_prompt_frame_geometry_and_hit_tests() {
 
 /// 同一时刻只有一个容器描边强调色：右侧容器持焦点时主区与侧栏一律 muted。
 ///
-/// 真机缺陷：主区按 `!prompt_focused` 判焦点、侧栏恒为 `false`，于是点右侧容器后
-/// 主区也仍然高亮，两个容器同时描边（截图里 8 条 Cyan 边框）。
 #[test]
-fn only_focused_container_uses_accent_border() {
+fn containers_use_muted_borders_regardless_of_focus() {
     use crate::app::state::FocusedContainer;
     let mut state = AppState::demo();
     state.prompt_width = 40;
@@ -3319,27 +3317,28 @@ fn only_focused_container_uses_accent_border() {
         };
         let view = view_for(&state);
         let buffer = render_buffer(&state);
-        // 取每个容器左上角圆角的颜色：聚焦 = Cyan，其余 = muted（非 Cyan）。
+        // 取每个容器左上角的颜色：边框恒为 muted（非 Cyan、带 DIM 修饰）。
         let corners = [
             ("sidebar", view.sidebar.x, view.sidebar.y),
             ("panes", view.panes.x, view.panes.y),
             ("right", view.prompt.x, view.prompt.y),
         ];
-        let accented: Vec<&str> = corners
-            .iter()
-            .filter(|(_, x, y)| buffer[(*x, *y)].fg == ratatui::style::Color::Cyan)
-            .map(|(name, _, _)| *name)
-            .collect();
-        let expected = match target {
-            FocusedContainer::Sidebar => vec!["sidebar"],
-            FocusedContainer::Panes => vec!["panes"],
-            FocusedContainer::Prompt | FocusedContainer::Todo => vec!["right"],
-        };
-        assert_eq!(accented, expected, "{target:?} 时应只有 {expected:?} 描边");
+        for (name, x, y) in corners {
+            let cell = &buffer[(x, y)];
+            assert_ne!(
+                cell.fg,
+                ratatui::style::Color::Cyan,
+                "{target:?} 时 {name} 边框不使用强调色"
+            );
+            assert!(
+                cell.modifier.contains(ratatui::style::Modifier::DIM),
+                "{target:?} 时 {name} 边框保持 muted(DIM)"
+            );
+        }
     }
 }
 
-/// 点右侧容器的 tab 后，高亮必须留在右栏——不得退回主区（真机缺陷）。
+/// 点右侧容器的 tab 后，焦点状态正确转移至右栏，边框保持恒定 muted。
 #[test]
 fn switching_right_tab_keeps_focus_in_right_panel() {
     use crate::app::state::RightTab;
@@ -3356,15 +3355,15 @@ fn switching_right_tab_keeps_focus_in_right_panel() {
 
     let view = view_for(&state);
     let buffer = render_buffer(&state);
-    assert_eq!(
+    assert_ne!(
         buffer[(view.prompt.x, view.prompt.y)].fg,
         ratatui::style::Color::Cyan,
-        "右栏边框必须是强调色"
+        "右栏边框保持 muted"
     );
     assert_ne!(
         buffer[(view.panes.x, view.panes.y)].fg,
         ratatui::style::Color::Cyan,
-        "主区边框必须让出强调色"
+        "主区边框保持 muted"
     );
 
     assert!(crate::app::update::select_right_tab(

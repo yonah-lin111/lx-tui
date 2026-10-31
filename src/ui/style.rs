@@ -36,9 +36,9 @@ pub fn shell_prompt() -> Style {
     Style::default().fg(Color::LightRed)
 }
 
-/// 分区边框；焦点态使用 accent。
-pub fn border(focused: bool) -> Style {
-    if focused { accent() } else { muted() }
+/// 分区边框：恒为 muted（暗灰），不随焦点变色。
+pub fn border(_focused: bool) -> Style {
+    muted()
 }
 
 /// 叠加在强调色边框上的灰字（显式前景 + dim）：prompt 顶边框页名、页重命名 `· ` 分隔符、

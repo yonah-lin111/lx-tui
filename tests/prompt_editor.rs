@@ -16,6 +16,7 @@ use ratatui::style::{Color, Modifier};
 fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
     let config = Config::default();
     let mut state = AppState::demo();
+    state.prompt_width = 40;
     let screen = Rect::new(0, 0, 100, 24);
     let view = ui::layout::compute(
         screen,

@@ -220,7 +220,7 @@ fn view<'a>(
         footer: Some(footer),
         width: Some(input.width),
         placement: PanelPlacement::Above,
-        borderless: false,
+        borderless: true,
         hide_active_marker: is_placeholder(panel),
     }
 }

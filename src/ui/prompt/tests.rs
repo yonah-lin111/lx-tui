@@ -499,9 +499,9 @@ fn mention_panel_marks_directory_and_file_icons() {
 
 #[test]
 fn mention_panel_renders_title_folder_name_and_footer() {
-    let area = Rect::new(0, 0, 40, 20);
+    let area = Rect::new(0, 0, 50, 20);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
-    editor.resize(40, 20);
+    editor.resize(50, 20);
     editor.set_mention_root(Some(std::path::PathBuf::from("/tmp/ws")));
     editor.insert_str("@");
     let (generation, _) = editor.take_mention_scan_request().expect("scan requested");
@@ -519,7 +519,7 @@ fn mention_panel_renders_title_folder_name_and_footer() {
         ],
     );
 
-    // 根范围：只有左上标题与底边提示，右上不显示目录名。
+    // 根范围：左上 @Command 与 Tab，底边提示，右上不显示目录名。
     let root_rect = mention_panel_rect(&editor, area).expect("panel visible");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
@@ -529,6 +529,7 @@ fn mention_panel_renders_title_folder_name_and_footer() {
     let root_bottom: String = (0..area.width)
         .map(|x| buf[(x, root_rect.bottom() - 2)].symbol())
         .collect();
+    assert!(root_top.contains("@Command"), "{root_top}");
     assert!(root_top.contains(text::MENTION_TAB_FILES), "{root_top}");
     assert!(root_top.contains(text::MENTION_TAB_REF_DIR), "{root_top}");
     assert!(root_bottom.contains("tab"), "{root_bottom}");
@@ -544,6 +545,7 @@ fn mention_panel_renders_title_folder_name_and_footer() {
     let bottom: String = (0..area.width)
         .map(|x| buf[(x, rect.bottom() - 2)].symbol())
         .collect();
+    assert!(top.contains("@Command"), "{top}");
     assert!(top.contains(text::MENTION_TAB_FILES), "{top}");
     assert!(top.contains("src"), "{top}");
     assert!(bottom.contains("tab"), "{bottom}");
@@ -871,7 +873,7 @@ fn toolbar_folders_button_renders_left_of_pin_and_hides_in_tree() {
 }
 
 #[test]
-fn divider_follows_prompt_focus_style() {
+fn divider_stays_muted_across_focus_states() {
     let panel = toolbar_panel();
     let editor = Prompt::new(PaneId::from_raw_for_test(1));
     let divider_y = crate::layout::prompt_toolbar_rect(panel)
@@ -879,40 +881,25 @@ fn divider_follows_prompt_focus_style() {
         .y
         + crate::layout::PROMPT_TOOLBAR_HEIGHT;
 
-    let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        true,
-        PromptMode::Editor,
-        false,
-        false,
-        false,
-        true,
-    );
-    for x in [panel.x, 5, panel.right() - 1] {
-        let cell = &buf[(x, divider_y)];
-        assert_eq!(cell.fg, Color::Cyan, "聚焦分割线跟随强调色: x={x}");
-        assert!(cell.modifier.contains(Modifier::BOLD));
-    }
-
-    let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        false,
-        PromptMode::Editor,
-        false,
-        false,
-        false,
-        true,
-    );
-    for x in [panel.x, 5, panel.right() - 1] {
-        let cell = &buf[(x, divider_y)];
-        assert_ne!(cell.fg, Color::Cyan, "失焦分割线不强调: x={x}");
-        assert!(cell.modifier.contains(Modifier::DIM));
+    for focused in [true, false] {
+        let mut buf = Buffer::empty(panel);
+        render_header(
+            panel,
+            &mut buf,
+            &editor,
+            focused,
+            PromptMode::Editor,
+            false,
+            false,
+            false,
+            true,
+        );
+        for x in [panel.x, 5, panel.right() - 1] {
+            let cell = &buf[(x, divider_y)];
+            assert_ne!(cell.fg, Color::Cyan, "分割线恒为暗灰、不随焦点变色: x={x}");
+            assert!(cell.modifier.contains(Modifier::DIM));
+            assert!(!cell.modifier.contains(Modifier::BOLD));
+        }
     }
 }
 

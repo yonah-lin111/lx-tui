@@ -130,7 +130,7 @@ fn view<'a>(
         footer: Some(text::LX_REFER_PANEL_FOOTER),
         width: Some(input.width),
         placement: PanelPlacement::Above,
-        borderless: false,
+        borderless: true,
         hide_active_marker: false,
     }
 }

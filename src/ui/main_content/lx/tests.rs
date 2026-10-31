@@ -1054,7 +1054,7 @@ fn mention_panel_height_shrinks_to_content_when_few_rows() {
 }
 
 #[test]
-fn mention_panel_renders_bordered_header_and_footer() {
+fn mention_panel_renders_top_rule_with_title_and_tabs_and_borderless_footer() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = mention_lx(vec![MentionEntry {
         path: "src/main.rs".into(),
@@ -1063,23 +1063,35 @@ fn mention_panel_renders_bordered_header_and_footer() {
     let panel = mention::layout(area, &lx).expect("panel");
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    // 顶部第 0 行为空白间隔行，第 1 行为顶部蓝色横线嵌 @Command 标题与 Tab
     assert_eq!(
         buf[(panel.rect.x, panel.rect.y)].symbol(),
-        "┌",
-        "提及面板顶边为直角边框"
+        " ",
+        "顶部留一行空白间隔"
     );
-    assert_eq!(
-        buf[(panel.rect.x, panel.rect.y + 2)].symbol(),
-        "│",
-        "标题下方留一行呼吸空白且无 ├───┤ 分割线"
+    let rule_row: String = (panel.rect.x..panel.rect.right())
+        .map(|x| buf[(x, panel.rect.y + 1)].symbol())
+        .collect();
+    assert!(
+        rule_row.contains("@Command"),
+        "顶线包含 @Command 标题: {rule_row}"
     );
-    let footer_row = panel.rect.bottom() - 2;
+    assert!(
+        rule_row.contains("Files"),
+        "顶线包含 Files 标签: {rule_row}"
+    );
+    assert!(rule_row.contains('─'), "顶线包含 ─ 蓝色横线: {rule_row}");
+    let footer_row = panel.rect.bottom() - 1;
     let footer: String = (panel.rect.x..panel.rect.right())
         .map(|x| buf[(x, footer_row)].symbol())
         .collect();
     assert!(
         footer.contains("←→ tabs") && footer.contains("esc close"),
         "底栏显示快捷键提示: {footer:?}"
+    );
+    assert!(
+        !footer.contains('─') && !footer.contains('│'),
+        "底栏无边框与分割线: {footer:?}"
     );
 }
 

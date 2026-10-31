@@ -247,7 +247,24 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
     let tabs = match view.tabs {
         Some(tabs) if !tabs.is_empty() => {
             let mut out = Vec::with_capacity(tabs.len());
-            let mut x = rect.x.saturating_add(2);
+            let mut x = if view.borderless {
+                if let Some(title) = view.title {
+                    let text_w = u16::try_from(UnicodeWidthStr::width(title))
+                        .unwrap_or(0)
+                        .saturating_add(2);
+                    rect.x.saturating_add(1).saturating_add(text_w)
+                } else {
+                    rect.x
+                }
+            } else if let Some(title) = view.title {
+                let text_w = u16::try_from(UnicodeWidthStr::width(title)).unwrap_or(0);
+                rect.x
+                    .saturating_add(2)
+                    .saturating_add(text_w)
+                    .saturating_add(2)
+            } else {
+                rect.x.saturating_add(2)
+            };
             let right_limit = rect.right().saturating_sub(1);
             for tab in tabs {
                 let width = u16::try_from(UnicodeWidthStr::width(tab.label))
@@ -336,6 +353,15 @@ fn render_bordered_header(
     let rect = layout.rect;
     let header_y = rect.y.saturating_add(1);
     let mut left_end = rect.x.saturating_add(1);
+    if let Some(title) = view.title {
+        let x = rect.x.saturating_add(2);
+        let max_w = usize::from(rect.right().saturating_sub(1).saturating_sub(x));
+        if max_w > 0 {
+            let draw_w = u16::try_from(title.width().min(max_w)).unwrap_or(u16::MAX);
+            buf.set_stringn(x, header_y, title, max_w, style::strong());
+            left_end = x.saturating_add(draw_w);
+        }
+    }
     if has_tabs {
         for (i, tab_rect) in layout.tabs.iter().enumerate() {
             if i + 1 < layout.tabs.len() {
@@ -350,14 +376,6 @@ fn render_bordered_header(
         }
         if let Some(last_tab) = layout.tabs.last() {
             left_end = last_tab.right();
-        }
-    } else if let Some(title) = view.title {
-        let x = rect.x.saturating_add(2);
-        let max_w = usize::from(rect.right().saturating_sub(1).saturating_sub(x));
-        if max_w > 0 {
-            let draw_w = u16::try_from(title.width().min(max_w)).unwrap_or(u16::MAX);
-            buf.set_stringn(x, header_y, title, max_w, style::strong());
-            left_end = x.saturating_add(draw_w);
         }
     }
     if let Some(right_title) = view.right_title {
@@ -411,11 +429,7 @@ fn render_top_rule(
         }
     }
     let mut left_end = rect.x;
-    if has_tabs {
-        if let Some(last_tab) = layout.tabs.last() {
-            left_end = last_tab.right();
-        }
-    } else if let Some(title) = view.title {
+    if let Some(title) = view.title {
         let text = format!(" {title} ");
         let x = rect.x.saturating_add(1);
         let max_w = usize::from(rect.right().saturating_sub(1).saturating_sub(x));
@@ -425,6 +439,9 @@ fn render_top_rule(
             buf.set_stringn(x, rule_y, &text, max_w, style::muted());
             left_end = x.saturating_add(draw_w);
         }
+    }
+    if has_tabs && let Some(last_tab) = layout.tabs.last() {
+        left_end = last_tab.right();
     }
     if let Some(right_title) = view.right_title {
         let right_edge = rect.right().saturating_sub(1);

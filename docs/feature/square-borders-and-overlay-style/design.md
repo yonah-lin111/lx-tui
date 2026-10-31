@@ -449,10 +449,13 @@ fn borderless_inner_rect(rect: Rect, footer_rows: u16) -> Rect {
    - 有标题 Toast 为 4 行高：首行 `│ ● <title> │`（圆点取语义色，标题加粗），次行 `│   <message> │`（缩进 2 列与标题对齐，次要色；`lx` 窗格内支持多行折行）。
 4. **Tooltip 与页码菜单（`src/ui/tooltip.rs`、`src/ui/overlay/page_menu.rs`）**：
    - Tooltip 恢复为无标题栏、无分割线的 3 行紧凑直角盒；页码菜单移除 `├───┤` 分割线，顶栏内左置粗体标题、右置 `[add]`/`[del]` 按钮。
-5. **`lx` 与 Prompt 编辑区命令面板统一（`src/ui/widgets/command_panel.rs`、`src/ui/main_content/lx.rs`、`src/ui/main_content/lx/{mention,slash,refer}.rs`、`src/ui/prompt/panels.rs`）**：
-   - `lx`（`@`、`/`、`#` 块格式、粘贴、引用）与 Prompt 编辑区的命令面板全部统一为 `herdr` 风格直角强调色边框面板（`borderless: false`）。
-   - 移除刺穿外框的 `├───┤` 分割线：内框首行显示粗体标题或 Tab（右侧可选显示 muted 范围说明），下方留 1 行呼吸空白；底部快捷键提示行上方同样留 1 行呼吸空白。
-   - 高度按候选数自适应收缩（上限为 `MAX_POPUP_ROWS`），选中项整行铺 `style::overlay_selection()` 高亮底色，已生效项（如当前模型/会话）显示蓝色 `❯` 与蓝色名称。
+5. **`lx` 与 Prompt 编辑区命令面板统一与调整（`src/ui/widgets/command_panel.rs`、`src/ui/main_content/lx.rs`、`src/ui/main_content/lx/{mention,slash,refer}.rs`、`src/ui/prompt/panels.rs`）**：
+   - `lx` 的 `@`、`/`、粘贴与快捷引用面板采用顶部单条横线样式（只保留顶部蓝色横线与内嵌标题/Tab，移除左、右和底边框，贴合输入框上沿），条目项使用 `❯` 标记与透明背景；Prompt 编辑区面板保持直角外框面板。
+   - `@` 命令面板在 Tab（`Files`、`refDir` 等）左侧增加 `@Command` 粗体字样（`lx` 与 Prompt 统一对齐），Tab 点击命中区与渲染位置同步右移。
+   - 面板高度按候选数自适应收缩（上限为 `MAX_POPUP_ROWS`），已生效项（如当前模型/会话）显示蓝色 `❯` 与蓝色名称。
+6. **移除左、右、主区边框与嵌入文字的聚焦变色（`src/ui/style.rs`、`src/ui/panes.rs`、`src/ui/sidebar.rs`、`src/ui/right_panel.rs`）**：
+   - 分区边框（`style::border`）全天候恒为 `style::muted()`（暗灰），不再随焦点状态切换为强调色（Cyan + BOLD）。
+   - 边框标题与前缀标签保持淡青（`border_title`，Cyan + DIM），静态常驻、不再随焦点闪烁。
 
 ### 4.5 统一快捷键文案格式与移除 Prompt 模板块/补充块背景色
 

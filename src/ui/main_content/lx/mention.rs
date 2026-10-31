@@ -16,10 +16,10 @@ use crate::ui::widgets::command_panel::{
 
 /// 面板最多显示的内容行数；对齐 codex `MAX_POPUP_ROWS`（8），保证浮层观感统一。
 pub(crate) const MAX_POPUP_ROWS: u16 = 8;
-/// 面板顶部占用的行数（顶边 `┌──┐` + 粗体标题/Tab 行 + 1 行空白间隔）。
-pub(super) const PANEL_BORDER_ROWS: u16 = 3;
-/// 面板底部占用的行数（1 行空白间隔 + 快捷键提示行 + 底边 `└──┘`）。
-pub(super) const PANEL_FOOTER_ROWS: u16 = 3;
+/// 面板顶部占用的行数（1 行上方空行间隔 + 1 行顶部蓝色横线，无底边框）。
+pub(super) const PANEL_BORDER_ROWS: u16 = 2;
+/// 面板底部快捷键提示块占用的行数（1 行空行间隔 + 1 行提示）。
+pub(super) const PANEL_FOOTER_ROWS: u16 = 2;
 
 /// 提及面板条目文本：候选文件/目录/skill/MCP（双行）或状态行（单行）。
 enum PanelRow {
@@ -268,7 +268,7 @@ fn view<'a>(
         anchor_row: above,
         max_height: Some(cap),
         fixed_height: false,
-        title: None,
+        title: Some(text::MENTION_PANEL_TITLE),
         tabs: Some(&data.tabs),
         right_title: data.scope.as_deref(),
         footer: Some(if data.tabs[0].active {
@@ -278,7 +278,7 @@ fn view<'a>(
         }),
         width: Some(input.width),
         placement: PanelPlacement::Above,
-        borderless: false,
+        borderless: true,
         hide_active_marker: !data.interactive,
     }
 }
