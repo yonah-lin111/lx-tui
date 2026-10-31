@@ -287,6 +287,16 @@ pub enum Effect {
     RestoreTodos {
         records: Vec<crate::db::todo::TodoRecord>,
     },
+    /// 按指定 ID 顺序重排某日期下的 todo（`[sort]`）。
+    ReorderTodos {
+        entry_date: String,
+        ordered_ids: Vec<String>,
+    },
+    /// 将历史未完成 todo 顺延移动到目标日期。
+    RolloverTodos {
+        ids: Vec<String>,
+        target_date: String,
+    },
 }
 
 /// 撤销执行请求：目标身份、动作与回填所需的原文全部在发起时冻结。

@@ -146,6 +146,7 @@ fn targets(
             crate::app::tooltip::TodoButton::New,
             crate::app::tooltip::TodoButton::Edit,
             crate::app::tooltip::TodoButton::Delete,
+            crate::app::tooltip::TodoButton::Sort,
             crate::app::tooltip::TodoButton::ClearDone,
         ] {
             if let Some(area) = ui::right_panel::todo::button_rect(view.prompt, button) {

@@ -949,18 +949,21 @@ fn v14_database_upgrades_to_v15_with_todo_table() {
             "status",
             "position",
             "created_at_ms",
-            "updated_at_ms"
+            "updated_at_ms",
+            "entry_date",
+            "priority",
+            "completed_date",
         ]
     );
     let index: i64 = database
         .conn
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_todo_position'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_todo_date_position'",
             [],
             |row| row.get(0),
         )
         .expect("index");
-    assert_eq!(index, 1, "position 唯一索引必须存在");
+    assert_eq!(index, 1, "date+position 唯一索引必须存在");
 
     // 既有数据未动。
     let workspaces: i64 = database

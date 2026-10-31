@@ -83,6 +83,7 @@ pub enum TodoButton {
     New,
     Edit,
     Delete,
+    Sort,
     ClearDone,
 }
 

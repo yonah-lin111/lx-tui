@@ -1011,6 +1011,7 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             crate::app::tooltip::TodoButton::New => TODO_TOOLTIP_NEW,
             crate::app::tooltip::TodoButton::Edit => TODO_TOOLTIP_EDIT,
             crate::app::tooltip::TodoButton::Delete => TODO_TOOLTIP_DELETE,
+            crate::app::tooltip::TodoButton::Sort => TODO_TOOLTIP_SORT,
             crate::app::tooltip::TodoButton::ClearDone => TODO_TOOLTIP_CLEAR_DONE,
         },
         TooltipTarget::ReferencedSearchCopyPath => "copy path",

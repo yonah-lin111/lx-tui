@@ -707,3 +707,126 @@ fn paste_is_clipped_to_storage_limit() {
     // 已经装满：再粘贴不产生变化，也不置脏。
     assert!(!apply_todo_paste(&mut state, "more"));
 }
+
+#[test]
+fn sort_todos_orders_incomplete_first_then_by_priority() {
+    let mut state = todo_state(&[]);
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "done-p0", TodoStatus::Done, TodoPriority::P0, 0),
+        TodoRecord::new_on(&today, "open-p3", TodoStatus::Todo, TodoPriority::P3, 1),
+        TodoRecord::new_on(
+            &today,
+            "doing-p0",
+            TodoStatus::InProgress,
+            TodoPriority::P0,
+            2,
+        ),
+        TodoRecord::new_on(&today, "open-p1", TodoStatus::Todo, TodoPriority::P1, 3),
+    ]);
+
+    assert!(apply_todo_button(&mut state, TodoButton::Sort));
+    assert_eq!(
+        texts(&state),
+        vec!["doing-p0", "open-p1", "open-p3", "done-p0"]
+    );
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::ReorderTodos { .. })),
+        "必须登记 ReorderTodos 效应"
+    );
+}
+
+#[test]
+fn cycle_priority_by_key_and_click() {
+    let mut state = todo_state(&["first", "second"]);
+    assert_eq!(state.todo.items()[0].priority, TodoPriority::P1);
+
+    // 键盘 `p` 切换当前选中项优先级。
+    assert!(apply_todo_key(&mut state, TodoKey::Char('p')));
+    assert_eq!(state.todo.items()[0].priority, TodoPriority::P2);
+
+    // 鼠标点击第 1 行徽标选中并切换第 1 行优先级。
+    assert!(click_todo_priority(&mut state, 1));
+    assert_eq!(state.todo.selected(), Some(1));
+    assert_eq!(state.todo.items()[1].priority, TodoPriority::P2);
+}
+
+#[test]
+fn date_selection_and_rollover_past_incomplete_to_today() {
+    let mut state = todo_state(&[]);
+    state.todo.set_today_date("2026-10-31");
+    state.todo.replace(vec![
+        TodoRecord::new_on(
+            "2026-10-29",
+            "old-open",
+            TodoStatus::Todo,
+            TodoPriority::P0,
+            0,
+        ),
+        TodoRecord::new_on(
+            "2026-10-29",
+            "old-done",
+            TodoStatus::Done,
+            TodoPriority::P2,
+            1,
+        ),
+        TodoRecord::new_on(
+            "2026-10-31",
+            "today-item",
+            TodoStatus::Todo,
+            TodoPriority::P1,
+            0,
+        ),
+    ]);
+
+    assert!(
+        state.todo.has_rollover_banner(),
+        "查看今天且存在历史未完成时显示横幅"
+    );
+    assert_eq!(state.todo.past_incomplete_count(), 1);
+
+    // 切到历史日期时横幅隐藏，只显示该日条目。
+    assert!(select_todo_date(&mut state, "2026-10-29"));
+    assert!(!state.todo.has_rollover_banner());
+    assert_eq!(texts(&state), vec!["old-open", "old-done"]);
+
+    // 切回今天并执行顺延：仅未完成项被移到今天末尾。
+    assert!(select_todo_date(&mut state, "2026-10-31"));
+    assert!(execute_todo_rollover(&mut state));
+    assert!(!state.todo.has_rollover_banner());
+    assert_eq!(texts(&state), vec!["today-item", "old-open"]);
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::RolloverTodos { .. })),
+        "必须登记 RolloverTodos 效应"
+    );
+}
+
+#[test]
+fn chart_cycles_across_three_modes() {
+    let mut state = todo_state(&["a"]);
+    assert_eq!(
+        state.todo.active_chart(),
+        crate::app::state::TodoChartKind::StatusAndRate
+    );
+    assert!(apply_todo_key(&mut state, TodoKey::Char('c')));
+    assert_eq!(
+        state.todo.active_chart(),
+        crate::app::state::TodoChartKind::Priority
+    );
+    assert!(next_todo_chart(&mut state));
+    assert_eq!(
+        state.todo.active_chart(),
+        crate::app::state::TodoChartKind::Trend7Day
+    );
+    assert!(prev_todo_chart(&mut state));
+    assert_eq!(
+        state.todo.active_chart(),
+        crate::app::state::TodoChartKind::Priority
+    );
+}

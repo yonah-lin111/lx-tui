@@ -289,3 +289,112 @@ fn status_cycle_walks_three_states() {
     assert_eq!(TodoStatus::InProgress.cycle(), TodoStatus::Done);
     assert_eq!(TodoStatus::Done.cycle(), TodoStatus::Todo);
 }
+
+#[test]
+fn priority_cycle_walks_four_levels() {
+    assert_eq!(TodoPriority::P0.cycle(), TodoPriority::P1);
+    assert_eq!(TodoPriority::P1.cycle(), TodoPriority::P2);
+    assert_eq!(TodoPriority::P2.cycle(), TodoPriority::P3);
+    assert_eq!(TodoPriority::P3.cycle(), TodoPriority::P0);
+    assert_eq!(TodoPriority::from_db("P0"), TodoPriority::P0);
+    assert_eq!(TodoPriority::from_db("P2"), TodoPriority::P2);
+    assert_eq!(TodoPriority::from_db("P3"), TodoPriority::P3);
+    assert_eq!(TodoPriority::from_db("unknown"), TodoPriority::P1);
+}
+
+#[test]
+fn date_partitioned_positions_and_rollover_to_today() {
+    let db = open_test_database();
+    let d1 = TodoRecord::new_on(
+        "2026-10-28",
+        "fri-open",
+        TodoStatus::Todo,
+        TodoPriority::P0,
+        0,
+    );
+    let d2 = TodoRecord::new_on(
+        "2026-10-28",
+        "fri-done",
+        TodoStatus::Done,
+        TodoPriority::P2,
+        1,
+    );
+    let d3 = TodoRecord::new_on(
+        "2026-10-29",
+        "sat-doing",
+        TodoStatus::InProgress,
+        TodoPriority::P1,
+        0,
+    );
+    let t1 = TodoRecord::new_on(
+        "2026-10-31",
+        "today-1",
+        TodoStatus::Todo,
+        TodoPriority::P3,
+        0,
+    );
+    for record in [&d1, &d2, &d3, &t1] {
+        db.save_todo(record).expect("save");
+    }
+
+    let past = db
+        .list_past_incomplete_todos("2026-10-31")
+        .expect("list past incomplete");
+    assert_eq!(texts(&past), vec!["fri-open", "sat-doing"]);
+
+    db.rollover_todos_to_date(&[d1.id.clone(), d3.id.clone()], "2026-10-31")
+        .expect("rollover");
+
+    let fri = db.list_todos_by_date("2026-10-28").expect("fri");
+    assert_eq!(texts(&fri), vec!["fri-done"]);
+    assert_eq!(positions(&fri), vec![0]);
+
+    let today = db.list_todos_by_date("2026-10-31").expect("today");
+    assert_eq!(texts(&today), vec!["today-1", "fri-open", "sat-doing"]);
+    assert_eq!(positions(&today), vec![0, 1, 2]);
+}
+
+#[test]
+fn reorder_and_range_stats_by_date() {
+    let db = open_test_database();
+    let a = TodoRecord::new_on("2026-10-31", "a", TodoStatus::Todo, TodoPriority::P2, 0);
+    let b = TodoRecord::new_on("2026-10-31", "b", TodoStatus::Done, TodoPriority::P0, 1);
+    let c = TodoRecord::new_on("2026-10-31", "c", TodoStatus::Todo, TodoPriority::P0, 2);
+    for record in [&a, &b, &c] {
+        db.save_todo(record).expect("save");
+    }
+    db.reorder_todos("2026-10-31", &[c.id.clone(), a.id.clone(), b.id.clone()])
+        .expect("reorder");
+    let reordered = db.list_todos_by_date("2026-10-31").expect("list");
+    assert_eq!(texts(&reordered), vec!["c", "a", "b"]);
+    assert_eq!(positions(&reordered), vec![0, 1, 2]);
+
+    let stats = db
+        .query_range_stats("2026-10-25", "2026-10-31")
+        .expect("range stats");
+    assert_eq!(stats.len(), 1);
+    assert_eq!(stats[0].date, "2026-10-31");
+    assert_eq!(stats[0].planned_count, 3);
+    assert_eq!(stats[0].completed_count, 1);
+}
+
+#[test]
+fn week_dates_and_shift_date_compute_monday_to_sunday() {
+    // 2026-10-31 是周六。
+    assert_eq!(weekday_short("2026-10-31"), "Sat");
+    let week = week_dates("2026-10-31");
+    assert_eq!(
+        week,
+        [
+            "2026-10-26",
+            "2026-10-27",
+            "2026-10-28",
+            "2026-10-29",
+            "2026-10-30",
+            "2026-10-31",
+            "2026-11-01",
+        ]
+    );
+    assert_eq!(shift_date("2026-10-31", 1), "2026-11-01");
+    assert_eq!(shift_date("2026-10-31", -7), "2026-10-24");
+}

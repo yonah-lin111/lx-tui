@@ -308,6 +308,36 @@ pub(crate) fn handle_mouse_down_left(
             ui::right_panel::todo::button_at(view.prompt, mouse.column, mouse.row)
         {
             changed = update::apply_todo_button(state, button);
+        } else if let Some(hit) =
+            ui::right_panel::todo::week_strip_hit_at(view.prompt, state, mouse.column, mouse.row)
+        {
+            changed = match hit {
+                ui::right_panel::todo::WeekStripHit::PrevWeek => update::shift_todo_week(state, -1),
+                ui::right_panel::todo::WeekStripHit::NextWeek => update::shift_todo_week(state, 1),
+                ui::right_panel::todo::WeekStripHit::Day(date) => {
+                    update::select_todo_date(state, date)
+                }
+            };
+        } else if let Some(hit) =
+            ui::right_panel::todo::rollover_hit_at(view.prompt, state, mouse.column, mouse.row)
+        {
+            changed = match hit {
+                ui::right_panel::todo::RolloverHit::MoveToToday => {
+                    update::execute_todo_rollover(state)
+                }
+                ui::right_panel::todo::RolloverHit::Dismiss => update::dismiss_todo_rollover(state),
+            };
+        } else if let Some(hit) =
+            ui::right_panel::todo::chart_switch_hit_at(view.prompt, state, mouse.column, mouse.row)
+        {
+            changed = match hit {
+                ui::right_panel::todo::ChartSwitchHit::Prev => update::prev_todo_chart(state),
+                ui::right_panel::todo::ChartSwitchHit::Next => update::next_todo_chart(state),
+            };
+        } else if let Some(display) =
+            ui::right_panel::todo::priority_at(view.prompt, state, mouse.column, mouse.row)
+        {
+            changed = update::click_todo_priority(state, display);
         } else if let Some(index) =
             ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
         {
