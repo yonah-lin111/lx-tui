@@ -308,8 +308,6 @@ mod github_dark {
     pub(super) const CONSTANT: Color = Color::Rgb(0x79, 0xc0, 0xff);
     /// 语法：函数 / 实体 / 类型名 `--color-prettylights-syntax-entity`。
     pub(super) const ENTITY: Color = Color::Rgb(0xd2, 0xa8, 0xff);
-    /// 语法：引用块 `--color-prettylights-syntax-markup-quote`（GitHub Dark `#7ee787`）。
-    pub(super) const QUOTE: Color = Color::Rgb(0x7e, 0xe7, 0x87);
     /// 语法：注释 `--color-prettylights-syntax-comment`。
     pub(super) const COMMENT: Color = Color::Rgb(0x8b, 0x94, 0x9e);
 }
@@ -385,9 +383,10 @@ pub fn code_comment() -> Style {
     Style::default().fg(github_dark::COMMENT)
 }
 
-/// markdown 引用内容：GitHub Dark `markup.quote` 柔绿 `#7ee787`（不使用暗灰色）。
+/// markdown 引用内容：使用与底栏模型上下文占用（[`chat_provider`]）同款的次要信息灰色（`muted()`），
+/// 避免使用 `FG_MUTED`（`#7d8590`）叠加 `DIM` 后变成过暗的死灰。
 pub fn md_read_quote() -> Style {
-    Style::default().fg(github_dark::QUOTE)
+    chat_provider()
 }
 
 /// markdown 链接文字：GitHub 的链接蓝 `#4493f8` + 下划线。
