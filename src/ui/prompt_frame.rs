@@ -17,6 +17,19 @@ pub(crate) fn prompt_edit_title(state: &AppState) -> Option<String> {
     }
 }
 
+/// edit 区边框色：编辑视图 + Prompt tab + 本页存在 `&&&` 时取其状态色；否则 None（保持灰）。
+pub(crate) fn edit_border_style(state: &AppState) -> Option<ratatui::style::Style> {
+    if state.right_tab != crate::app::state::RightTab::Prompt
+        || state.prompt_owner().prompt_panel.mode != PromptMode::Editor
+    {
+        return None;
+    }
+    crate::app::markdown::block_spans(state.prompt.text())
+        .into_iter()
+        .find(|span| span.kind == crate::app::markdown::BlockKind::Template)
+        .map(|span| super::style::template_border(span.status))
+}
+
 /// 标题行标题来源：树视图无标题（纯分割线）。
 enum TitleSource {
     Tree,

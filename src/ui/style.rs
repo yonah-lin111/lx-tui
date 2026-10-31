@@ -325,7 +325,7 @@ pub fn directory() -> Style {
 //
 // 用 `Color::Rgb` 而不是 256 色：GitHub 的十六进制值经过 256 色 cube 量化会明显偏色
 // （例如 `#a5d6ff` 会落到 `#afd7ff`），而且用户主题对 Indexed 的重映射会让它不再是
-// GitHub。固定 RGB 与 [`template_block_bg`] 同一条理由。
+// GitHub。
 //
 // GitHub Dark 的结构几乎**没有强调色**：标题/粗体/斜体/引用都只是正文色 + 修饰符，
 // 颜色只出现在链接（`#4493f8`）与代码 token 上。因此本组不会重新变成“花里胡哨”。
@@ -692,18 +692,6 @@ pub fn template_border(status: TemplateStatus) -> Style {
     }
 }
 
-/// 模板块整行底色：按状态铺低饱和暗色底（todo 暗灰蓝 / in_progress 暗灰琥珀 / done 暗灰绿）。
-///
-/// 固定 RGB，不受终端 256 色主题映射影响；只设置背景，前景与修饰符由各单元格自身样式决定。
-pub fn template_block_bg(status: TemplateStatus) -> Style {
-    let color = match status {
-        TemplateStatus::Todo => Color::Rgb(35, 40, 56),
-        TemplateStatus::InProgress => Color::Rgb(51, 41, 28),
-        TemplateStatus::Done => Color::Rgb(29, 46, 36),
-    };
-    Style::default().bg(color)
-}
-
 /// 补充块 `+++` 结构标记：次要信息。
 pub fn supple_marker() -> Style {
     muted()
@@ -979,11 +967,6 @@ pub fn supple_command() -> Style {
 /// 补充块边框：固定品红（覆盖父块状态色）。
 pub fn supple_border() -> Style {
     Style::default().fg(Color::LightMagenta)
-}
-
-/// 补充块整行底色：固定暗紫（覆盖父 `&&&` 状态底色）。
-pub fn supple_block_bg() -> Style {
-    Style::default().bg(Color::Rgb(46, 32, 54))
 }
 
 /// 块操作按钮（补充块）：常态次要信息。

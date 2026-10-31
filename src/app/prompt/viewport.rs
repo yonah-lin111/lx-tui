@@ -7,13 +7,10 @@ use super::{Prompt, VisualRow, char_width, display_width};
 pub type UnitCellSpan = (((i32, u16), (i32, u16)), (usize, usize));
 
 impl Prompt {
-    /// 按内容宽度软换行得到的可见视觉行；块行扣除左右边框槽后再换行。
+    /// 按内容宽度软换行得到的可见视觉行；块行扣除左侧色条槽后再换行。
     pub fn visual_rows(&self) -> Vec<VisualRow> {
         let width = usize::from(self.width.max(1));
-        let margins = usize::from(
-            crate::layout::PROMPT_TEMPLATE_GUTTER_LEFT
-                + crate::layout::PROMPT_TEMPLATE_GUTTER_RIGHT,
-        );
+        let margins = usize::from(crate::layout::PROMPT_BLOCK_GUTTER_LEFT);
         let scan = markdown::block_scan(&self.text);
         let lines: Vec<&str> = self.text.split('\n').collect();
         let mut rows = Vec::new();
@@ -345,10 +342,10 @@ impl Prompt {
         }
         visual.end
     }
-    /// 块行左边框槽宽度；非块行为 0（渲染、光标与鼠标坐标映射共用）。
+    /// 块行左侧色条槽宽度；非块行为 0（渲染、光标与鼠标坐标映射共用）。
     fn line_gutter(&self, line: usize) -> u16 {
         if markdown::block_span_at_line(&self.text, line).is_some() {
-            crate::layout::PROMPT_TEMPLATE_GUTTER_LEFT
+            crate::layout::PROMPT_BLOCK_GUTTER_LEFT
         } else {
             0
         }

@@ -368,3 +368,109 @@ fn bottom_identity_survives_tab_switch() {
         "底边框（身份标签 + 折叠按钮）不得随 tab 变化"
     );
 }
+
+#[test]
+fn edit_border_tints_divider_sides_and_bottom_by_template_status_while_keeping_header_and_controls()
+{
+    let mut state = AppState::demo();
+    state.prompt_width = 56;
+    state
+        .prompt
+        .set_text("&&& addTemplate --start\n{title: T}\n&&& addTemplate --end in_progress");
+    let view = view_for(&state);
+    let panel = view.prompt;
+    let buffer = render_buffer(&state);
+    let divider_y = crate::layout::prompt_divider_rect(panel)
+        .expect("divider")
+        .y;
+    let toolbar_y = divider_y - 1;
+    let bottom_y = panel.bottom() - 1;
+
+    // 顶边框与按钮行两侧竖边保持灰色（dim）。
+    assert!(buffer[(panel.x, panel.y)].modifier.contains(Modifier::DIM));
+    assert!(
+        buffer[(panel.x, toolbar_y)]
+            .modifier
+            .contains(Modifier::DIM)
+    );
+    assert!(
+        buffer[(panel.right() - 1, toolbar_y)]
+            .modifier
+            .contains(Modifier::DIM)
+    );
+
+    // 分割线两端 ├ / ┤、两侧竖边、底边两角 └ / ┘ 均为黄色（in_progress）。
+    assert_eq!(buffer[(panel.x, divider_y)].symbol(), "├");
+    assert_eq!(buffer[(panel.x, divider_y)].fg, Color::Yellow);
+    assert_eq!(buffer[(panel.right() - 1, divider_y)].symbol(), "┤");
+    assert_eq!(buffer[(panel.right() - 1, divider_y)].fg, Color::Yellow);
+    for y in (divider_y + 1)..bottom_y {
+        if buffer[(panel.x, y)].symbol() == "│" {
+            assert_eq!(buffer[(panel.x, y)].fg, Color::Yellow, "左竖边 y={y}");
+        }
+        assert_eq!(
+            buffer[(panel.right() - 1, y)].fg,
+            Color::Yellow,
+            "右竖边 y={y}"
+        );
+    }
+    assert_eq!(buffer[(panel.x, bottom_y)].symbol(), "└");
+    assert_eq!(buffer[(panel.x, bottom_y)].fg, Color::Yellow);
+    assert_eq!(buffer[(panel.right() - 1, bottom_y)].symbol(), "┘");
+    assert_eq!(buffer[(panel.right() - 1, bottom_y)].fg, Color::Yellow);
+
+    // 底边上的折叠按钮 [▶] 和身份文字样式不被覆盖。
+    let collapse_x = panel.right() - 2;
+    assert_eq!(buffer[(collapse_x, bottom_y)].symbol(), "]");
+    assert_eq!(
+        buffer[(collapse_x, bottom_y)].fg,
+        Color::Cyan,
+        "折叠按钮保持强调色"
+    );
+}
+
+#[test]
+fn edit_border_stays_grey_without_template_in_tree_mode_or_on_todo_tab_and_blue_when_unclosed() {
+    let mut state = AppState::demo();
+    state.prompt_width = 56;
+    let view = view_for(&state);
+    let panel = view.prompt;
+    let divider_y = crate::layout::prompt_divider_rect(panel)
+        .expect("divider")
+        .y;
+
+    // 1. 没有 &&&：保持灰色。
+    state
+        .prompt
+        .set_text("plain text\n+++ supplement --start\n+++ supplement --end");
+    let buffer = render_buffer(&state);
+    assert!(
+        buffer[(panel.x, divider_y)]
+            .modifier
+            .contains(Modifier::DIM)
+    );
+
+    // 2. 未闭合的 &&&：蓝色（Todo）。
+    state.prompt.set_text("&&& addTemplate --start\nbody");
+    let buffer = render_buffer(&state);
+    assert_eq!(buffer[(panel.x, divider_y)].fg, Color::LightBlue);
+
+    // 3. Tree 视图：保持灰色。
+    state.workspaces[0].prompt_panel.mode = crate::app::prompt::PromptMode::Tree;
+    let buffer = render_buffer(&state);
+    assert!(
+        buffer[(panel.x, divider_y)]
+            .modifier
+            .contains(Modifier::DIM)
+    );
+
+    // 4. Todo tab：保持灰色。
+    state.workspaces[0].prompt_panel.mode = crate::app::prompt::PromptMode::Editor;
+    state.right_tab = RightTab::Todo;
+    let buffer = render_buffer(&state);
+    assert!(
+        buffer[(panel.x, divider_y)]
+            .modifier
+            .contains(Modifier::DIM)
+    );
+}

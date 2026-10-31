@@ -249,15 +249,15 @@ fn selection_preserves_leading_indentation_and_accounts_for_block_gutter() {
         Some("first")
     );
 
-    // 模板块内（左边框占 2 列）：从块内正文起点（col 2）或首个非空白字符（col 4）拖选均保留缩进。
+    // 模板块内（左侧色条占 1 列）：从块内正文起点（col 1）或首个非空白字符（col 3）拖选均保留缩进。
     let mut block = prompt(40, 6);
     block.set_text("&&& addTemplate --start\n  - item1\n\n    - item2\n&&& addTemplate --end");
     assert_eq!(
-        block.selection_text((1, 2), (3, 15)).as_deref(),
+        block.selection_text((1, 1), (3, 15)).as_deref(),
         Some("  - item1\n\n    - item2")
     );
     assert_eq!(
-        block.selection_text((1, 4), (3, 15)).as_deref(),
+        block.selection_text((1, 3), (3, 15)).as_deref(),
         Some("  - item1\n\n    - item2")
     );
 }
@@ -1739,11 +1739,15 @@ fn template_block_lines_shift_cursor_and_mouse_mapping() {
     let mut editor = prompt(40, 10);
     editor.insert_str("&&& addTemplate --start {title: }\n# Add\n&&& addTemplate --end\nplain");
 
-    // 块内行：渲染列 = 左边框槽 2 + 文本列；点击左边框（col 0/1）落到文本行首。
-    editor.set_cursor_from_cell(1, 2);
-    assert_eq!(editor.cursor_cell(), Some((1, 2)), "块行文本首列映射");
+    // 块内行：渲染列 = 左侧色条槽 1 + 文本列；点击左侧色条（col 0）落到文本行首。
+    editor.set_cursor_from_cell(1, 1);
+    assert_eq!(editor.cursor_cell(), Some((1, 1)), "块行文本首列映射");
     editor.set_cursor_from_cell(1, 0);
-    assert_eq!(editor.cursor_cell(), Some((1, 2)), "点击左边框钳到文本行首");
+    assert_eq!(
+        editor.cursor_cell(),
+        Some((1, 1)),
+        "点击左侧色条钳到文本行首"
+    );
     editor.set_cursor_from_cell(1, 4);
     assert_eq!(editor.cursor_cell(), Some((1, 4)));
 
@@ -1758,12 +1762,12 @@ fn template_block_lines_wrap_inside_border_gutters() {
     editor.insert_str("&&& addTemplate --start {title: }");
     let rows = editor.visual_rows();
     let block_rows: Vec<_> = rows.iter().filter(|row| row.line == 0).collect();
-    assert!(block_rows.len() > 1, "块行按扣除边框槽后的宽度换行");
+    assert!(block_rows.len() > 1, "块行按扣除色条槽后的宽度换行");
     assert!(
         block_rows
             .iter()
-            .all(|row| display_width(&editor.text()[row.start..row.end]) <= 10 - 3),
-        "换行宽度扣除左右边框槽"
+            .all(|row| display_width(&editor.text()[row.start..row.end]) < 10),
+        "换行宽度扣除左侧色条槽"
     );
 }
 

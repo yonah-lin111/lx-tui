@@ -1075,6 +1075,10 @@ pub fn template_status_label(status: TemplateStatus) -> &'static str {
 /// 补充块操作按钮：清理与删除复用模板块图标。
 pub const SUPPLE_BUTTON_CLEAN: &str = TEMPLATE_BUTTON_CLEAN;
 pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
+/// prompt 块左侧色条字形（`&&&` 状态色 / `+++` 品红）。
+pub const PROMPT_BLOCK_BAR: &str = "▎";
+/// 块结构分割线（标题下 / 绑定行上的空行）。
+pub const PROMPT_BLOCK_RULE: char = '─';
 
 /// @ 面板与命令面板底边快捷键提示（Prompt 右栏带边框面板使用）。
 pub const MENTION_FOOTER_FILES: &str = "←→ tab · ↑↓ select · ↵ confirm · ⇧↵ enter · esc cancel";

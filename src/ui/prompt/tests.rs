@@ -357,12 +357,11 @@ fn template_separator_renders_block_border_line() {
     editor.set_text("&&& addTemplate --start\n{title: }\n\nbody\n&&& addTemplate --end\n");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
-    // 分割线整行以模板块边框样式绘制：├─…─┤。
+    // 分割线首列画色条 `▎`，其余列画满 `─`。
     let row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
-    assert!(row.starts_with("├──"), "{row}");
-    assert!(row.ends_with("┤"), "{row}");
-    assert_eq!(buf[(8, 2)].fg, Color::LightBlue, "todo 边框色");
-    assert!(row.contains('─'), "{row}");
+    assert!(row.starts_with("▎──"), "{row}");
+    assert!(row.ends_with("─"), "{row}");
+    assert_eq!(buf[(8, 2)].fg, Color::LightBlue, "todo 色条色");
 }
 
 #[test]
@@ -371,13 +370,13 @@ fn template_bottom_gap_renders_as_plain_blank_row() {
     let editor = prompt(30, 8, "&&& x --start\n{title: }\n\nbody\n\n&&& x --end");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
-    // 标题下空行渲染为分割线；结束行上方的块底部空行按普通空行渲染（只有两侧边框）。
+    // 标题下空行渲染为分割线；结束行上方的块底部空行按普通空行渲染（只有首列色条）。
     let title_sep: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
-    assert!(title_sep.starts_with("├──"), "{title_sep}");
-    assert!(title_sep.ends_with("┤"), "{title_sep}");
+    assert!(title_sep.starts_with("▎──"), "{title_sep}");
+    assert!(title_sep.ends_with("─"), "{title_sep}");
     let bottom_row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
-    assert_eq!(buf[(0, 4)].symbol(), "│", "{bottom_row}");
-    assert_eq!(buf[(29, 4)].symbol(), "│", "{bottom_row}");
+    assert_eq!(buf[(0, 4)].symbol(), "▎", "{bottom_row}");
+    assert_eq!(buf[(29, 4)].symbol(), " ", "{bottom_row}");
     assert!(
         !bottom_row.contains('─'),
         "底部空行不画分割线: {bottom_row}"
@@ -955,23 +954,22 @@ fn template_command_and_title_and_mention_styles() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
-    // 模板块左边框占前两列，文本整体右移。
-    assert_eq!(buf[(0, 0)].symbol(), "┌");
-    assert_eq!(buf[(0, 0)].fg, Color::LightBlue, "todo 边框为靛蓝");
-    assert_eq!(buf[(1, 0)].symbol(), "─");
+    // 模板块左侧色条占第 0 列，文本从第 1 列开始。
+    assert_eq!(buf[(0, 0)].symbol(), "▎");
+    assert_eq!(buf[(0, 0)].fg, Color::LightBlue, "todo 色条为靛蓝");
 
-    assert!(buf[(2, 0)].modifier.contains(Modifier::DIM), "&&& 为 dim");
-    assert_eq!(buf[(6, 0)].symbol(), "a");
-    assert_eq!(buf[(6, 0)].fg, Color::Green, "add 命令为绿色");
-    assert!(buf[(6, 0)].modifier.contains(Modifier::BOLD));
-    assert_eq!(buf[(18, 0)].symbol(), "-", "--start 为 dim 标记");
-    assert!(buf[(18, 0)].modifier.contains(Modifier::DIM));
+    assert!(buf[(1, 0)].modifier.contains(Modifier::DIM), "&&& 为 dim");
+    assert_eq!(buf[(5, 0)].symbol(), "a");
+    assert_eq!(buf[(5, 0)].fg, Color::Green, "add 命令为绿色");
+    assert!(buf[(5, 0)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buf[(17, 0)].symbol(), "-", "--start 为 dim 标记");
+    assert!(buf[(17, 0)].modifier.contains(Modifier::DIM));
 
-    assert_eq!(buf[(26, 0)].symbol(), "{");
-    assert_eq!(buf[(26, 0)].fg, Color::Cyan, "标题占位符为 Cyan");
-    assert!(buf[(26, 0)].modifier.contains(Modifier::UNDERLINED));
+    assert_eq!(buf[(25, 0)].symbol(), "{");
+    assert_eq!(buf[(25, 0)].fg, Color::Cyan, "标题占位符为 Cyan");
+    assert!(buf[(25, 0)].modifier.contains(Modifier::UNDERLINED));
 
-    // 非模板块行不缩进、无边框。
+    // 非模板块行不缩进、无色条。
     assert_eq!(buf[(0, 2)].symbol(), "@");
     assert_eq!(
         buf[(0, 2)].fg,
@@ -982,7 +980,7 @@ fn template_command_and_title_and_mention_styles() {
 }
 
 #[test]
-fn template_block_draws_status_colored_border_box() {
+fn template_block_draws_status_colored_bar() {
     let area = Rect::new(0, 0, 60, 4);
     let running = prompt(
         60,
@@ -992,19 +990,12 @@ fn template_block_draws_status_colored_border_box() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &running, None);
 
-    assert_eq!(buf[(0, 0)].symbol(), "┌");
-    assert_eq!(buf[(0, 0)].fg, Color::Yellow, "in_progress 边框为黄");
-    assert_eq!(buf[(59, 0)].symbol(), "┐");
-    assert_eq!(buf[(59, 0)].fg, Color::Yellow);
-    assert_eq!(buf[(0, 1)].symbol(), "│");
-    assert_eq!(buf[(0, 1)].fg, Color::Yellow);
-    assert_eq!(buf[(59, 1)].symbol(), "│");
-    assert_eq!(buf[(0, 2)].symbol(), "└");
-    assert_eq!(buf[(59, 2)].symbol(), "┘");
-    assert_eq!(buf[(0, 2)].fg, Color::Yellow);
-    // 结束行底边以 `─` 补满文本之后。
-    assert_eq!(buf[(40, 2)].symbol(), "─");
-    // 块外行无边框。
+    for y in 0..3 {
+        assert_eq!(buf[(0, y)].symbol(), "▎");
+        assert_eq!(buf[(0, y)].fg, Color::Yellow, "in_progress 色条为黄");
+    }
+    assert_eq!(buf[(59, 1)].symbol(), " ", "右侧不再绘制竖框");
+    assert_eq!(buf[(40, 2)].symbol(), " ", "结束行不再补 ─");
     assert_eq!(buf[(0, 3)].symbol(), " ");
 
     let done = prompt(
@@ -1014,7 +1005,7 @@ fn template_block_draws_status_colored_border_box() {
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &done, None);
-    assert_eq!(buf[(0, 0)].fg, Color::Green, "done 边框为绿");
+    assert_eq!(buf[(0, 0)].fg, Color::Green, "done 色条为绿");
     assert_eq!(buf[(0, 1)].fg, Color::Green);
 }
 
@@ -1068,11 +1059,7 @@ fn template_buttons_render_and_hit_test() {
     assert_eq!(buttons[2].button, TemplateBlockButton::Clean);
     assert_eq!(buttons[3].button, TemplateBlockButton::Delete);
     assert_eq!(buttons[3].status, TemplateStatus::Todo);
-    assert_eq!(
-        buttons[3].rect.right(),
-        69,
-        "按钮组贴右角内侧、右边框在末列"
-    );
+    assert_eq!(buttons[3].rect.right(), 70, "按钮组右对齐到文本区右边界");
 
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
@@ -1081,7 +1068,7 @@ fn template_buttons_render_and_hit_test() {
     assert!(row.contains(text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_CLEAN), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_DEL), "{row}");
-    assert_eq!(buf[(69, 0)].symbol(), "┐");
+    assert_eq!(buf[(69, 0)].symbol(), "]");
 
     for hit in &buttons {
         let cell = hit.rect;
@@ -1103,7 +1090,7 @@ fn template_buttons_stay_visible_and_text_ellipsizes() {
     );
     let buttons = template_buttons(&editor, area);
     assert_eq!(buttons.len(), 4, "窄屏按钮不隐藏");
-    assert!(buttons[0].rect.x >= area.x + 2, "按钮让开左边框");
+    assert!(buttons[0].rect.x > area.x, "按钮让开左侧色条");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
     let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
@@ -1269,12 +1256,8 @@ fn refer_panel_width_grows_with_content_up_to_container() {
 fn assert_full_width_separator(buf: &Buffer, width: u16, y: u16) {
     let separator: String = (0..width).map(|x| buf[(x, y)].symbol()).collect();
     let chars: Vec<char> = separator.chars().collect();
-    assert_eq!(chars.first(), Some(&'├'), "sep={separator:?}");
-    assert_eq!(chars.last(), Some(&'┤'), "sep={separator:?}");
-    assert!(
-        chars[1..chars.len() - 1].iter().all(|ch| *ch == '─'),
-        "sep={separator:?}"
-    );
+    assert_eq!(chars.first(), Some(&'▎'), "sep={separator:?}");
+    assert!(chars[1..].iter().all(|ch| *ch == '─'), "sep={separator:?}");
 }
 
 #[test]

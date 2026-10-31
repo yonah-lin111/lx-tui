@@ -12,9 +12,8 @@ pub const PROMPT_DIVIDER_HEIGHT: u16 = 1;
 pub const PROMPT_HEADER_HEIGHT: u16 = PROMPT_TOOLBAR_HEIGHT + PROMPT_DIVIDER_HEIGHT;
 /// 树视图顶部固定行数（搜索框 + 分割线）。
 pub const PROMPT_TREE_HEADER_HEIGHT: u16 = 2;
-/// prompt 模板块边框占位：左侧（`╭─`/`│ `/`╰─`）与右侧竖线（`╮`/`│`/`╯`）列数。
-pub const PROMPT_TEMPLATE_GUTTER_LEFT: u16 = 2;
-pub const PROMPT_TEMPLATE_GUTTER_RIGHT: u16 = 1;
+/// prompt 块左侧色条占位（`▎` + 0 列间隔）；右侧不再占位。
+pub const PROMPT_BLOCK_GUTTER_LEFT: u16 = 1;
 
 /// 模式按钮（`[≡]` / `[/]`）宽度（列）。
 const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 3;

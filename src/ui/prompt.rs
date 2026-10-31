@@ -204,8 +204,7 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         let info = infos.get(row.line).copied().flatten();
         let first = index == 0 || rows[index - 1].line != row.line;
         let last = index + 1 >= rows.len() || rows[index + 1].line != row.line;
-        let role = block_row_role(info, first, last);
-        let start_row = role == Some(BlockRole::Start);
+        let start_row = info.is_some_and(|info| info.role == BlockRole::Start && first);
         let text_start = area.x + block_gutter(info.is_some());
         let buttons_start = if start_row {
             let labels = block_button_labels(info);
@@ -213,27 +212,27 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         } else {
             area.right()
         };
-        let text_end = block_text_end(area, info.is_some(), start_row, buttons_start);
+        let text_end = block_text_end(area, start_row, buttons_start);
         let geometry = RowGeometry {
             start_x: text_start,
             end_x: text_end,
             ellipsize: start_row,
         };
-        let painted = paint_row(buf, y, prompt.text(), row, line_tokens, base, geometry);
+        paint_row(buf, y, prompt.text(), row, line_tokens, base, geometry);
         if let Some(selection) = selection {
             paint_selection(buf, area, y, index as u16, selection);
         }
         if let Some(info) = info {
-            paint_block_border(buf, area, y, info, role, painted, buttons_start);
+            paint_block_bar(buf, area, y, info);
             if first && last && info.separator {
-                separator_rows.push((y, info.kind, info.status));
+                separator_rows.push((y, info));
             }
         }
     }
     render_block_buttons(buf, area, prompt);
     render_template_buttons(buf, area, prompt);
-    for (y, kind, status) in separator_rows {
-        paint_block_separator(buf, area, y, kind, status);
+    for (y, info) in separator_rows {
+        paint_block_separator(buf, area, y, info);
     }
     if prompt.text().is_empty() {
         paint_placeholder(buf, area);
@@ -305,23 +304,13 @@ const TEMPLATE_BUTTONS: [TemplateBlockButton; 4] = [
 const SUPPLE_BUTTONS: [BlockButton; 3] =
     [BlockButton::Copy, BlockButton::Clean, BlockButton::Delete];
 
-/// 块行左边框槽宽度：块行为 `PROMPT_TEMPLATE_GUTTER_LEFT`，其余为 0。
+/// 块行左侧色条槽宽度：块行为 `PROMPT_BLOCK_GUTTER_LEFT`，其余为 0。
 fn block_gutter(block: bool) -> u16 {
     if block {
-        layout::PROMPT_TEMPLATE_GUTTER_LEFT
+        layout::PROMPT_BLOCK_GUTTER_LEFT
     } else {
         0
     }
-}
-
-/// 视觉行的块角色：软换行续行降级为中间行（`╭`/`╰` 只在首末行）。
-fn block_row_role(info: Option<BlockLineInfo>, first: bool, last: bool) -> Option<BlockRole> {
-    let info = info?;
-    Some(match info.role {
-        BlockRole::Start if !first => BlockRole::Middle,
-        BlockRole::End if !last => BlockRole::Middle,
-        role => role,
-    })
 }
 
 /// 按钮组文案（按块类型与状态）。
@@ -344,28 +333,22 @@ fn block_buttons_total(labels: &[&str]) -> u16 {
     (width + labels.len().saturating_sub(1)) as u16
 }
 
-/// 按钮组起点：右对齐贴右边框内侧；极窄时钳到左边框之后（按钮常显、优先于文本）。
+/// 按钮组起点：右对齐贴文本区右缘；极窄时钳到左侧色条之后（按钮常显、优先于文本）。
 fn block_buttons_start(area: Rect, total: u16) -> u16 {
-    let corner = area.right().saturating_sub(1);
-    corner
+    area.right()
         .saturating_sub(total)
-        .max(area.x + layout::PROMPT_TEMPLATE_GUTTER_LEFT)
+        .max(area.x + layout::PROMPT_BLOCK_GUTTER_LEFT)
 }
 
-/// 视觉行文本区右边界（不含）：普通行到内容区右缘，块行到右边框前；
-/// 起始行再为按钮组让出一列间距（空间不足时退到左边框之后，文本仅剩省略号）。
-fn block_text_end(area: Rect, block: bool, start_row: bool, buttons_start: u16) -> u16 {
-    let end = if block {
-        area.right()
-            .saturating_sub(layout::PROMPT_TEMPLATE_GUTTER_RIGHT)
-    } else {
-        area.right()
-    };
+/// 视觉行文本区右边界（不含）：普通行与非起始块行均到文本区右缘；
+/// 起始行再为按钮组让出一列间距（空间不足时退到左侧色条之后，文本仅剩省略号）。
+fn block_text_end(area: Rect, start_row: bool, buttons_start: u16) -> u16 {
     if start_row {
-        end.min(buttons_start.saturating_sub(1))
-            .max(area.x + layout::PROMPT_TEMPLATE_GUTTER_LEFT)
+        area.right()
+            .min(buttons_start.saturating_sub(1))
+            .max(area.x + layout::PROMPT_BLOCK_GUTTER_LEFT)
     } else {
-        end
+        area.right()
     }
 }
 
@@ -506,79 +489,32 @@ fn template_button_labels(status: TemplateStatus) -> [&'static str; 4] {
     TEMPLATE_BUTTONS.map(|button| template_button_label(button, status))
 }
 
-/// 绘制块边框：左槽 `┌─`/`│ `/`└─`、右槽 `┐`/`│`/`┘`；
-/// 起始行顶边与结束行底边以 `─` 补满文本之后的空间（按钮组由后续绘制覆盖）。
-fn paint_block_border(
-    buf: &mut Buffer,
-    area: Rect,
-    y: u16,
-    info: BlockLineInfo,
-    role: Option<BlockRole>,
-    painted: u16,
-    buttons_start: u16,
-) {
-    let border = match info.kind {
+/// 块颜色：`&&&` 按状态（`style::template_border`）、`+++` 固定品红（`style::supple_border`）。
+fn block_color(info: BlockLineInfo) -> Style {
+    match info.kind {
         BlockKind::Template => style::template_border(info.status),
         BlockKind::Supple => style::supple_border(),
-    };
-    let left = area.x;
-    let right = area.right().saturating_sub(1);
-    let mut put = |x: u16, symbol: char| {
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.reset();
-            cell.set_char(symbol);
-            cell.set_style(border);
-        }
-    };
-    match role {
-        Some(BlockRole::Start) => {
-            put(left, '┌');
-            put(left + 1, '─');
-            put(right, '┐');
-            for x in painted..buttons_start.min(right) {
-                put(x, '─');
-            }
-        }
-        Some(BlockRole::Middle) => {
-            put(left, '│');
-            put(right, '│');
-        }
-        Some(BlockRole::End) => {
-            put(left, '└');
-            put(left + 1, '─');
-            put(right, '┘');
-            for x in painted..right {
-                put(x, '─');
-            }
-        }
-        None => {}
     }
 }
 
-/// 绘制块分割线：`├─…─┤` 以块边框样式横贯整行，与块上下边同色。
-fn paint_block_separator(
-    buf: &mut Buffer,
-    area: Rect,
-    y: u16,
-    kind: BlockKind,
-    status: TemplateStatus,
-) {
-    let border = match kind {
-        BlockKind::Template => style::template_border(status),
-        BlockKind::Supple => style::supple_border(),
-    };
-    let right = area.right().saturating_sub(1);
-    for x in area.x..=right {
-        let symbol = if x == area.x {
-            '├'
-        } else if x == right {
-            '┤'
-        } else {
-            '─'
-        };
+/// 块行左侧色条：每个视觉行（含软换行续行）首列画 `▎`，色随块类型/状态。
+fn paint_block_bar(buf: &mut Buffer, area: Rect, y: u16, info: BlockLineInfo) {
+    if let Some(cell) = buf.cell_mut((area.x, y)) {
+        cell.reset();
+        cell.set_symbol(text::PROMPT_BLOCK_BAR);
+        cell.set_style(block_color(info));
+    }
+}
+
+/// 绘制块结构分割线：首列画色条 `▎`，其余列画满 `─`，颜色跟随所在块。
+fn paint_block_separator(buf: &mut Buffer, area: Rect, y: u16, info: BlockLineInfo) {
+    let color = block_color(info);
+    paint_block_bar(buf, area, y, info);
+    for x in area.x.saturating_add(1)..area.right() {
         if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.set_char(symbol);
-            cell.set_style(border);
+            cell.reset();
+            cell.set_char(text::PROMPT_BLOCK_RULE);
+            cell.set_style(color);
         }
     }
 }
@@ -732,5 +668,8 @@ pub(crate) fn token_style(kind: TokenKind) -> Style {
     }
 }
 
+#[cfg(test)]
+#[path = "prompt/blocks/tests.rs"]
+mod block_tests;
 #[cfg(test)]
 mod tests;

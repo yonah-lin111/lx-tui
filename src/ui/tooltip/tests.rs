@@ -449,14 +449,14 @@ fn block_button_tooltips_have_hints() {
 fn hits_block_buttons_via_prompt_text_area() {
     let mut state = AppState::demo();
     state.prompt.resize(40, 20);
-    state.prompt.insert_str(
-        "&&& x --start\n+++ supplement --start\nbody\n+++ supplement --end\n&&& x --end",
-    );
+    state
+        .prompt
+        .insert_str("+++ supplement --start\nbody\n+++ supplement --end");
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
     let area = layout::prompt_text_rect(view.prompt);
     let hits = ui::prompt::block_buttons(&state.prompt, area);
-    assert_eq!(hits.len(), 4, "折叠、复制、清理、删除按钮可见");
+    assert_eq!(hits.len(), 3, "复制、清理、删除按钮可见");
     let clean = hits
         .iter()
         .find(|hit| hit.button == ui::prompt::BlockButton::Clean)
