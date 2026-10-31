@@ -1,6 +1,6 @@
 # lx 工具与卡片展开内容统一思考块同款压暗 Markdown 格式与配色：任务清单
 
-> 状态：**已在 `.worktrees/lx-tool-expanded-markdown`（分支 `feat/lx-tool-expanded-markdown`）完成 T1–T8（含视觉微调与 Code Review P0–P2 修复），待用户确认是否合并到 `dev`**。
+> 状态：**已实现并合并到 `dev` 分支**（2026-10-31，合并提交 `a2716dae`）；工作区 `.worktrees/lx-tool-expanded-markdown` 与分支 `feat/lx-tool-expanded-markdown` 已清理。
 > 日期：2026-10-31。
 > 设计依据：[design.md](./design.md) · 评审报告：[review.md](./review.md)。
 

@@ -1,6 +1,6 @@
 # lx 工具与卡片展开内容统一思考块同款压暗 Markdown 格式与配色：设计方案
 
-> 状态：**已在 `.worktrees/lx-tool-expanded-markdown`（分支 `feat/lx-tool-expanded-markdown`）完成实现、视觉微调与 Code Review 修复（见 [review.md](./review.md)），待用户确认是否合并到 `dev`**。
+> 状态：**已实现并合并到 `dev` 分支**（2026-10-31，合并提交 `a2716dae`）；自动测试验证通过，Code Review P0–P2 已全部修复（见 [review.md](./review.md)）。
 > 日期：2026-10-31。
 > 项目：`/Users/yonah/projects/agent/lx-tui`。
 > 作用域：`src/ui/main_content/lx/history/`、`src/ui/markdown_render.rs`、`src/ui/style.rs` 及配套设计规范 `docs/standards/tui-design-requirements.md`。

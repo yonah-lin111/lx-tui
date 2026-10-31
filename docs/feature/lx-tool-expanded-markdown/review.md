@@ -1,6 +1,6 @@
 # lx 工具与卡片展开内容统一压暗 Markdown 格式与配色 — 代码评审报告 (Code Review)
 
-> 评审范围：`feat/lx-tool-expanded-markdown`（工作区 `/Users/yonah/projects/agent/lx-tui/.worktrees/lx-tool-expanded-markdown`）
+> 评审范围：`feat/lx-tool-expanded-markdown`（已合并入主工作区 `dev` 分支，合并提交 `a2716dae`）
 >
 > 检索与分析工具：`codegraph`（`codegraph_explore` 调用链与影响面分析）、`codebase-memory-mcp`（`detect_changes` 变更爆炸半径、`search_graph` 符号检索、`check_index_coverage` 索引覆盖核验）
 >
