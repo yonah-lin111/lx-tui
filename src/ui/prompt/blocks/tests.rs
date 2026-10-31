@@ -28,7 +28,7 @@ fn template_block_paints_left_bar_on_every_visual_row_with_status_color() {
             text::PROMPT_BLOCK_BAR,
             "视觉行 {y} 首列应画色条"
         );
-        assert_eq!(buf[(0, y)].fg, Color::Cyan, "&&& 色条固定青色");
+        assert_eq!(buf[(0, y)].fg, style::LX_PINK, "&&& 色条固定 lx 粉");
     }
 
     let in_progress = prompt_at(
@@ -40,7 +40,7 @@ fn template_block_paints_left_bar_on_every_visual_row_with_status_color() {
     render(area, &mut buf, &in_progress, None);
     for y in 0..3 {
         assert_eq!(buf[(0, y)].symbol(), text::PROMPT_BLOCK_BAR);
-        assert_eq!(buf[(0, y)].fg, Color::Cyan, "&&& 色条固定青色");
+        assert_eq!(buf[(0, y)].fg, style::LX_PINK, "&&& 色条固定 lx 粉");
     }
 
     let done = prompt_at(
@@ -52,7 +52,7 @@ fn template_block_paints_left_bar_on_every_visual_row_with_status_color() {
     render(area, &mut buf, &done, None);
     for y in 0..3 {
         assert_eq!(buf[(0, y)].symbol(), text::PROMPT_BLOCK_BAR);
-        assert_eq!(buf[(0, y)].fg, Color::Cyan, "&&& 色条固定青色");
+        assert_eq!(buf[(0, y)].fg, style::LX_PINK, "&&& 色条固定 lx 粉");
     }
 }
 
@@ -83,10 +83,10 @@ fn separator_row_paints_bar_then_full_horizontal_rule_without_join_glyphs() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
     assert_eq!(buf[(0, 2)].symbol(), text::PROMPT_BLOCK_BAR);
-    assert_eq!(buf[(0, 2)].fg, Color::Cyan);
+    assert_eq!(buf[(0, 2)].fg, style::LX_PINK);
     for x in 1..area.width {
         assert_eq!(buf[(x, 2)].symbol(), "─", "列 {x} 应为 ─，不含 ├/┤");
-        assert_eq!(buf[(x, 2)].fg, Color::Cyan);
+        assert_eq!(buf[(x, 2)].fg, style::LX_PINK);
     }
 }
 

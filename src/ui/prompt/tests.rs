@@ -361,7 +361,7 @@ fn template_separator_renders_block_border_line() {
     let row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
     assert!(row.starts_with("▎──"), "{row}");
     assert!(row.ends_with("─"), "{row}");
-    assert_eq!(buf[(8, 2)].fg, Color::Cyan, "&&& 分割线为青色");
+    assert_eq!(buf[(8, 2)].fg, style::LX_PINK, "&&& 分割线为 lx 粉");
 }
 
 #[test]
@@ -954,9 +954,9 @@ fn template_command_and_title_and_mention_styles() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
-    // 模板块左侧色条占第 0 列，固定为青色。
+    // 模板块左侧色条占第 0 列，固定为 lx 品牌粉。
     assert_eq!(buf[(0, 0)].symbol(), "▎");
-    assert_eq!(buf[(0, 0)].fg, Color::Cyan, "&&& 色条固定青色");
+    assert_eq!(buf[(0, 0)].fg, style::LX_PINK, "&&& 色条固定 lx 粉");
 
     assert!(buf[(1, 0)].modifier.contains(Modifier::DIM), "&&& 为 dim");
     assert_eq!(buf[(5, 0)].symbol(), "a");
@@ -992,7 +992,7 @@ fn template_block_draws_status_colored_bar() {
 
     for y in 0..3 {
         assert_eq!(buf[(0, y)].symbol(), "▎");
-        assert_eq!(buf[(0, y)].fg, Color::Cyan, "&&& 色条固定青色");
+        assert_eq!(buf[(0, y)].fg, style::LX_PINK, "&&& 色条固定 lx 粉");
     }
     assert_eq!(buf[(59, 1)].symbol(), " ", "右侧不再绘制竖框");
     assert_eq!(buf[(40, 2)].symbol(), " ", "结束行不再补 ─");
@@ -1005,8 +1005,8 @@ fn template_block_draws_status_colored_bar() {
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &done, None);
-    assert_eq!(buf[(0, 0)].fg, Color::Cyan, "&&& 色条固定青色");
-    assert_eq!(buf[(0, 1)].fg, Color::Cyan);
+    assert_eq!(buf[(0, 0)].fg, style::LX_PINK, "&&& 色条固定 lx 粉");
+    assert_eq!(buf[(0, 1)].fg, style::LX_PINK);
 }
 
 #[test]
@@ -1202,7 +1202,7 @@ fn supple_block_renders_magenta_and_three_buttons() {
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
-    assert_eq!(buf[(0, 0)].fg, Color::Cyan, "模板块固定青色");
+    assert_eq!(buf[(0, 0)].fg, style::LX_PINK, "模板块固定 lx 粉");
     assert_eq!(buf[(0, 4)].fg, Color::LightMagenta, "+++ 品红色");
     assert_eq!(buf[(2, 5)].bg, Color::Reset, "补充块保持透明底色");
 

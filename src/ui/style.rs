@@ -683,9 +683,10 @@ pub fn template_status(status: TemplateStatus) -> Style {
     }
 }
 
-/// &&& 模板块色条与分割线：固定为 Cyan，不随状态变色，与 +++（品红）及三态色（蓝/黄/绿）不冲突。
+/// &&& 模板块色条与分割线：固定为 lx 品牌粉（`Indexed 218`），不随状态变色；
+/// 与 +++（品红）及三态色（蓝/黄/绿）保持区分。
 pub fn template_block_bar() -> Style {
-    Style::default().fg(Color::Cyan)
+    Style::default().fg(LX_PINK)
 }
 
 /// 模板块边框：按状态分色（todo 靛蓝 / in_progress 黄 / done 绿）。
@@ -979,13 +980,16 @@ pub fn block_button() -> Style {
     muted()
 }
 
+/// lx 页品牌主粉：logo `p` 像素与 Native 入口渐变起点（`Indexed 218`）。
+pub const LX_PINK: Color = Color::Indexed(218);
+
 /// lx 页品牌 logo 像素色：按像素字符映射 256 色（仅 lx 页使用，不影响其余区域的 ANSI 槽位规则）。
 ///
 /// `k` 描边藏青、`p` 主体粉、`n` 深粉、`b` 天空蓝、`c` 冰蓝高光、`w` 高光白；其余字符视为透明。
 pub fn logo_pixel(ch: char) -> Option<Color> {
     match ch {
         'k' => Some(Color::Indexed(17)),
-        'p' => Some(Color::Indexed(218)),
+        'p' => Some(LX_PINK),
         'n' => Some(Color::Indexed(168)),
         'b' => Some(Color::Indexed(117)),
         'c' => Some(Color::Indexed(195)),
@@ -1002,7 +1006,7 @@ pub fn lx_entry_border(selected: bool) -> Style {
 /// lx 页入口标签的渐变端点色（粉 → 蓝），取该入口 logo 的两主色（字标 L 侧粉、X 侧蓝）。
 pub fn lx_entry_gradient(entry: LxEntry) -> (Color, Color) {
     match entry {
-        LxEntry::Native => (Color::Indexed(218), Color::Indexed(117)),
+        LxEntry::Native => (LX_PINK, Color::Indexed(117)),
         LxEntry::Hybrid => (Color::Indexed(168), Color::Indexed(195)),
         LxEntry::Automation => (Color::Indexed(195), Color::Indexed(168)),
     }
