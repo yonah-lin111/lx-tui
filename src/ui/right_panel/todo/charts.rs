@@ -25,40 +25,33 @@ pub fn chart_title(kind: TodoChartKind, is_today: bool) -> &'static str {
     match kind {
         TodoChartKind::StatusAndRate => {
             if is_today {
-                "today · status"
+                text::TODO_CHART_TODAY_STATUS_TITLE
             } else {
-                "day · status"
+                text::TODO_CHART_DAY_STATUS_TITLE
             }
         }
         TodoChartKind::Priority => {
             if is_today {
-                "today · priority"
+                text::TODO_CHART_TODAY_PRIORITY_TITLE
             } else {
-                "day · priority"
+                text::TODO_CHART_DAY_PRIORITY_TITLE
             }
         }
-        TodoChartKind::Trend7Day => "week · 7d trend",
+        TodoChartKind::Trend7Day => text::TODO_CHART_WEEK_TREND_TITLE,
     }
 }
 
 /// 空间紧凑时的简短范围标注。
 pub fn chart_short_title(kind: TodoChartKind, is_today: bool) -> &'static str {
     match kind {
-        TodoChartKind::StatusAndRate => {
+        TodoChartKind::StatusAndRate | TodoChartKind::Priority => {
             if is_today {
-                "today"
+                text::TODO_CHART_TODAY_SHORT_TITLE
             } else {
-                "day"
+                text::TODO_CHART_DAY_SHORT_TITLE
             }
         }
-        TodoChartKind::Priority => {
-            if is_today {
-                "today"
-            } else {
-                "day"
-            }
-        }
-        TodoChartKind::Trend7Day => "week",
+        TodoChartKind::Trend7Day => text::TODO_CHART_WEEK_SHORT_TITLE,
     }
 }
 
@@ -143,6 +136,9 @@ fn render_chart_switcher(panel: Rect, buf: &mut Buffer, state: &AppState) {
     let Some((whole, prev, next)) = chart_switcher_rects(panel, state) else {
         return;
     };
+    // whole 严格收敛在 prev.x..=next.x，不含两旁 `─` 边框格；
+    // 先重置该区间以剥离分割线残留的 DIM/强调色，确保 `‹` / `›` 保持纯正 `accent()`。
+    buf.set_style(whole, Style::reset());
     write_cell(
         buf,
         prev.x,
@@ -172,7 +168,13 @@ fn render_chart_switcher(panel: Rect, buf: &mut Buffer, state: &AppState) {
         short_mid
     };
     let mid_rect = Rect::new(prev.right(), whole.y, mid_w, 1);
-    write_inline(buf, mid_rect, mid_rect.x, &mid_text, style::muted());
+    write_inline(
+        buf,
+        mid_rect,
+        mid_rect.x,
+        &mid_text,
+        style::muted_on_border(),
+    );
 }
 
 /// 图表 1：三态柱状分布与完成率摘要。

@@ -39,12 +39,23 @@ pub const TODO_STATS_PERCENT_SUFFIX: &str = "%";
 /// 图表切换控件与标题。
 pub const TODO_CHART_PREV_LABEL: &str = "‹";
 pub const TODO_CHART_NEXT_LABEL: &str = "›";
-pub const TODO_CHART_STATUS_TITLE: &str = "status";
-pub const TODO_CHART_PRIORITY_TITLE: &str = "priority";
-pub const TODO_CHART_TREND_TITLE: &str = "7d trend";
-pub const TODO_CHART_TODAY_PREFIX: &str = "today";
-pub const TODO_CHART_DAY_PREFIX: &str = "day";
-pub const TODO_CHART_WEEK_PREFIX: &str = "week";
+pub const TODO_CHART_TODAY_STATUS_TITLE: &str = "today · status";
+pub const TODO_CHART_DAY_STATUS_TITLE: &str = "day · status";
+pub const TODO_CHART_TODAY_PRIORITY_TITLE: &str = "today · priority";
+pub const TODO_CHART_DAY_PRIORITY_TITLE: &str = "day · priority";
+pub const TODO_CHART_WEEK_TREND_TITLE: &str = "week · 7d trend";
+pub const TODO_CHART_TODAY_SHORT_TITLE: &str = "today";
+pub const TODO_CHART_DAY_SHORT_TITLE: &str = "day";
+pub const TODO_CHART_WEEK_SHORT_TITLE: &str = "week";
+
+/// 顺延完成后的 Toast 提示文案。
+pub fn toast_todo_rollover(count: usize) -> String {
+    if count == 1 {
+        "Moved 1 uncompleted todo to today".to_string()
+    } else {
+        format!("Moved {count} uncompleted todos to today")
+    }
+}
 
 /// 柱图实心格与计划浅格。
 pub const TODO_BAR_FILLED: &str = "█";

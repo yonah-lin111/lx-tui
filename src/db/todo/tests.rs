@@ -398,3 +398,32 @@ fn week_dates_and_shift_date_compute_monday_to_sunday() {
     assert_eq!(shift_date("2026-10-31", 1), "2026-11-01");
     assert_eq!(shift_date("2026-10-31", -7), "2026-10-24");
 }
+
+#[test]
+fn rollover_does_not_collide_when_target_date_had_sparse_position() {
+    let db = open_test_database();
+    // 以 position = 1 插入唯一一条今日记录（检验 save_todo 自动归一 + rollover 独立偏移区间不冲突）。
+    let target = TodoRecord::new_on(
+        "2026-10-31",
+        "today-sparse",
+        TodoStatus::Todo,
+        TodoPriority::P1,
+        1,
+    );
+    let past = TodoRecord::new_on(
+        "2026-10-30",
+        "past-open",
+        TodoStatus::Todo,
+        TodoPriority::P0,
+        0,
+    );
+    db.save_todo(&target).expect("save target");
+    db.save_todo(&past).expect("save past");
+
+    db.rollover_todos_to_date(std::slice::from_ref(&past.id), "2026-10-31")
+        .expect("rollover without unique index collision");
+
+    let today = db.list_todos_by_date("2026-10-31").expect("list today");
+    assert_eq!(texts(&today), vec!["today-sparse", "past-open"]);
+    assert_eq!(positions(&today), vec![0, 1]);
+}

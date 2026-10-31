@@ -321,7 +321,7 @@ pub fn scrollbar(panel: Rect, state: &AppState) -> Option<widgets::scrollbar::Sc
     let slot = Rect::new(list.right(), list.y, 1, list.height);
     widgets::scrollbar::layout(
         slot,
-        state.todo.len(),
+        state.todo.display_len(),
         visible_rows_for(panel, state),
         state.todo.scroll(),
     )
@@ -431,7 +431,6 @@ fn render_rows(panel: Rect, buf: &mut Buffer, state: &AppState) -> Option<(u16, 
             break;
         }
         let y = list.y.saturating_add(slot as u16);
-        let row_selected = state.todo_focused() && state.todo.selected() == Some(index);
         if pending_new == Some(index) {
             cursor = cursor.or(render_row(
                 buf,
@@ -456,6 +455,7 @@ fn render_rows(panel: Rect, buf: &mut Buffer, state: &AppState) -> Option<(u16, 
         let Some(record) = state.todo.items().get(record_index) else {
             break;
         };
+        let row_selected = state.todo_focused() && state.todo.selected() == Some(record_index);
         let hovered = state.todo_hover == Some(record_index);
         cursor = cursor.or(render_row(
             buf,

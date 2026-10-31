@@ -88,6 +88,7 @@ pub fn focus_todo_from_click(state: &mut AppState) -> bool {
 
 /// 列表行左键点击：单击选中 + 聚焦，双击再进入该行的行内编辑（对齐 lx-agent 点行即改）。
 pub fn click_todo_row(state: &mut AppState, display: usize, now: Instant) -> bool {
+    state.todo.set_pending_g(false);
     let double = state.todo_row_click.is_some_and(|(last, at)| {
         last == display
             && now.saturating_duration_since(at) <= crate::app::update::PROMPT_DOUBLE_CLICK_WINDOW
@@ -122,6 +123,7 @@ pub fn click_todo_row(state: &mut AppState, display: usize, now: Instant) -> boo
 
 /// 点击某行的优先级徽标：选中该行、聚焦面板并循环切换该条目的优先级（`P0 → P1 → P2 → P3 → P0`）。
 pub fn click_todo_priority(state: &mut AppState, display: usize) -> bool {
+    state.todo.set_pending_g(false);
     state.todo_row_click = None;
     let Some(id) =
         resolve_display_index(state, display).map(|index| state.todo.items()[index].id.clone())
@@ -230,6 +232,7 @@ pub fn shift_todo_week(state: &mut AppState, delta_weeks: i32) -> bool {
 
 /// 执行「将历史未完成待办顺延移动到今天」。
 pub fn execute_todo_rollover(state: &mut AppState) -> bool {
+    state.todo.set_pending_g(false);
     let mut changed = commit_todo_edit(state);
     if !state.todo.has_rollover_banner() {
         return changed;
@@ -242,11 +245,7 @@ pub fn execute_todo_rollover(state: &mut AppState) -> bool {
             ids: moved_ids,
             target_date,
         });
-        let message = if count == 1 {
-            "Moved 1 uncompleted todo to today".to_string()
-        } else {
-            format!("Moved {count} uncompleted todos to today")
-        };
+        let message = crate::ui::text::toast_todo_rollover(count);
         show_toast(
             state,
             Toast::new(ToastKind::Default, message, None, Instant::now()),
@@ -260,6 +259,7 @@ pub fn execute_todo_rollover(state: &mut AppState) -> bool {
 
 /// 关闭「历史未完成顺延」提醒横幅。
 pub fn dismiss_todo_rollover(state: &mut AppState) -> bool {
+    state.todo.set_pending_g(false);
     let mut changed = state.todo.dismiss_rollover();
     changed |= focus_todo(state);
     changed
@@ -267,6 +267,7 @@ pub fn dismiss_todo_rollover(state: &mut AppState) -> bool {
 
 /// 切换到下一张底部统计图表。
 pub fn next_todo_chart(state: &mut AppState) -> bool {
+    state.todo.set_pending_g(false);
     let mut changed = state.todo.next_chart();
     changed |= focus_todo(state);
     changed
@@ -274,6 +275,7 @@ pub fn next_todo_chart(state: &mut AppState) -> bool {
 
 /// 切换到上一张底部统计图表。
 pub fn prev_todo_chart(state: &mut AppState) -> bool {
+    state.todo.set_pending_g(false);
     let mut changed = state.todo.prev_chart();
     changed |= focus_todo(state);
     changed
@@ -462,6 +464,9 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
 
 /// 列表态按键。
 fn apply_todo_list_key(state: &mut AppState, key: TodoKey) -> bool {
+    if !matches!(key, TodoKey::Char('g')) {
+        state.todo.set_pending_g(false);
+    }
     match key {
         TodoKey::Up => move_todo_selection(state, -1),
         TodoKey::Down => move_todo_selection(state, 1),
@@ -657,17 +662,19 @@ pub fn delete_todo_selected(state: &mut AppState) -> bool {
 
 /// 删除全部完成项（写入撤销槽）。
 pub fn clear_done_todos(state: &mut AppState) -> bool {
-    let _ = commit_todo_edit(state);
+    let changed = commit_todo_edit(state);
     if state.todo.done_count() == 0 {
-        return false;
+        return changed;
     }
     let removed = state.todo.take_with_status(TodoStatus::Done);
     if removed.is_empty() {
-        return false;
+        return changed;
     }
+    let entry_date = state.todo.selected_date().to_string();
     state.todo.set_undo(removed);
     state.todo.clamp_selection();
     state.effects.push(Effect::DeleteTodosWithStatus {
+        entry_date,
         status: TodoStatus::Done,
     });
     true

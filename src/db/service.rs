@@ -1098,10 +1098,10 @@ impl Persistence {
                 self.todo_write(state, |db| db.delete_todo(&id));
                 false
             }
-            Effect::DeleteTodosWithStatus { status } => {
-                let date = state.todo.selected_date().to_string();
+            Effect::DeleteTodosWithStatus { entry_date, status } => {
                 self.todo_write(state, |db| {
-                    db.delete_todos_with_status_on(&date, status).map(|_| ())
+                    db.delete_todos_with_status_on(&entry_date, status)
+                        .map(|_| ())
                 });
                 false
             }

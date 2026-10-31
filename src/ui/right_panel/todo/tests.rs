@@ -919,6 +919,19 @@ fn chart_switcher_and_three_chart_modes_render() {
         buffer[(next3.x + 1, divider.y)].fg,
         "切图按钮左侧边框与右侧边框前景色必须完全一致"
     );
+    // 切图按钮 `<` / `>` 本身已重置底层 DIM，只保留 BOLD 强调色：
+    assert!(
+        !buffer[(prev3.x, divider.y)]
+            .modifier
+            .contains(Modifier::DIM),
+        "切图按钮左箭头不应继承分割线的 DIM"
+    );
+    assert!(
+        !buffer[(next3.x, divider.y)]
+            .modifier
+            .contains(Modifier::DIM),
+        "切图按钮右箭头不应继承分割线的 DIM"
+    );
 
     let summary: String = (stats.x..stats.right())
         .map(|x| buffer[(x, stats.y)].symbol())
@@ -931,8 +944,40 @@ fn chart_switcher_and_three_chart_modes_render() {
         summary.contains("done 2"),
         "7日趋势摘要包含完成总数: {summary:?}"
     );
-    assert!(
-        summary.contains("done 2"),
-        "7日趋势摘要包含完成总数: {summary:?}"
+}
+
+#[test]
+fn ghost_row_before_selected_keeps_selection_highlight_aligned_and_scrollbar_counts_ghost() {
+    let mut state = AppState::demo();
+    let area = panel(44);
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "row-0", TodoStatus::Todo, TodoPriority::P1, 0),
+        TodoRecord::new_on(&today, "row-1", TodoStatus::Todo, TodoPriority::P1, 1),
+    ]);
+    crate::app::update::select_right_tab(&mut state, RightTab::Todo);
+    // 选中第 1 项（"row-1"），但在第 0 位置打开新建幽灵行（模拟幽灵行在选中行之前）：
+    state.todo.select(1);
+    state
+        .todo
+        .begin_edit(crate::app::state::TodoEdit::new(None, String::new(), 0));
+
+    let (buffer, _) = render_panel(&state, area);
+    let list = effective_list_rect(area, &state);
+    // 显示行 0 是幽灵行，显示行 1 是 row-0（未选中），显示行 2 是 row-1（选中，带 ❯ 与 selection 底色）：
+    assert_eq!(buffer[(list.x, list.y + 1)].symbol(), " ");
+    assert_eq!(
+        buffer[(list.x, list.y + 1)].bg,
+        Color::Reset,
+        "未选中的 row-0 不应被幽灵行偏移误染选中底色"
+    );
+    assert_eq!(
+        buffer[(list.x, list.y + 2)].symbol(),
+        text::AGENT_SELECTED_MARKER
+    );
+    assert_eq!(
+        buffer[(list.x, list.y + 2)].bg,
+        style::selection().bg.unwrap_or(Color::Reset),
+        "选中的 row-1 必须同时拥有 ❯ 标记与选中背景色"
     );
 }

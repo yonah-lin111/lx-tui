@@ -323,6 +323,7 @@ impl Database {
                         now_ms()
                     ],
                 )?;
+                renumber_date(&transaction, &entry_date)?;
             }
         }
         transaction.commit()?;
@@ -525,11 +526,6 @@ impl Database {
         }
         let transaction = self.conn.unchecked_transaction()?;
         let mut source_dates = BTreeSet::new();
-        let base_count: i64 = transaction.query_row(
-            "SELECT COUNT(*) FROM todo WHERE entry_date = ?1",
-            params![target_date],
-            |row| row.get(0),
-        )?;
         for (offset, id) in ids.iter().enumerate() {
             let old_date: Option<String> = transaction
                 .query_row(
@@ -548,7 +544,7 @@ impl Database {
                      WHERE id = ?4",
                     params![
                         target_date,
-                        RENUMBER_OFFSET + base_count + offset as i64,
+                        RESTORE_OFFSET + offset as i64,
                         now_ms(),
                         id.as_str()
                     ],

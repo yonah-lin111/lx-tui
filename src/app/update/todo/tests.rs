@@ -217,11 +217,13 @@ fn clear_done_removes_only_done_and_can_be_undone() {
     assert!(clear_done_todos(&mut state));
 
     assert_eq!(texts(&state), ["open", "active"], "只删完成项");
+    let expected_date = state.todo.selected_date().to_string();
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
         Effect::DeleteTodosWithStatus {
-            status: TodoStatus::Done
-        }
+            entry_date,
+            status: TodoStatus::Done,
+        } if entry_date == &expected_date
     )));
 
     assert!(undo_todo_delete(&mut state));
@@ -829,4 +831,34 @@ fn chart_cycles_across_three_modes() {
         state.todo.active_chart(),
         crate::app::state::TodoChartKind::Priority
     );
+}
+
+#[test]
+fn pending_g_is_cleared_by_non_g_keys_and_clear_done_preserves_edit_commit() {
+    let mut state = todo_state(&["a", "b", "c"]);
+    assert!(apply_todo_key(&mut state, TodoKey::Char('G')));
+    assert_eq!(state.todo.selected(), Some(2));
+
+    // 按一次 `g` 后再按 `k`（非 `g`），挂起状态必须清除，随后再按一次 `g` 不应直接跳到第 0 行。
+    assert!(!apply_todo_key(&mut state, TodoKey::Char('g')));
+    assert!(state.todo.pending_g());
+    assert!(apply_todo_key(&mut state, TodoKey::Char('k')));
+    assert!(!state.todo.pending_g(), "非 g 按键必须清除 pending_g");
+    assert_eq!(state.todo.selected(), Some(1));
+    assert!(!apply_todo_key(&mut state, TodoKey::Char('g')));
+    assert_eq!(state.todo.selected(), Some(1), "单个 g 不应触发 gg 跳首");
+
+    // 仅有一条已完成项，进入编辑清空文本后触发 clear_done_todos：
+    // commit_todo_edit 会删除该条使 done_count 归零，但返回值仍必须为 true。
+    let mut state2 = todo_state(&["only-done"]);
+    state2
+        .todo
+        .update(0, "only-done".to_string(), TodoStatus::Done);
+    assert!(begin_todo_edit(&mut state2, TodoEditTarget::Current(0)));
+    state2.todo.edit_input_mut().expect("edit").clear();
+    assert!(
+        clear_done_todos(&mut state2),
+        "commit_todo_edit 产生的变更不得被 clear_done_todos 吞掉"
+    );
+    assert!(state2.todo.is_empty());
 }

@@ -172,13 +172,9 @@ pub(super) fn render_divider_labels(panel: Rect, buf: &mut Buffer, state: &AppSt
     let left_w = u16::try_from(UnicodeWidthStr::width(left_text.as_str())).unwrap_or(u16::MAX);
     let left_x = inner.x.saturating_add(1);
     if left_x.saturating_add(left_w) <= inner.right() {
-        write_inline(
-            buf,
-            Rect::new(left_x, divider_y, left_w, 1),
-            left_x,
-            &left_text,
-            style::border_title(),
-        );
+        let left_rect = Rect::new(left_x, divider_y, left_w, 1);
+        buf.set_style(left_rect, Style::reset());
+        write_inline(buf, left_rect, left_x, &left_text, style::border_title());
     }
 
     let week = crate::db::todo::week_dates(state.todo.selected_date());
@@ -189,13 +185,9 @@ pub(super) fn render_divider_labels(panel: Rect, buf: &mut Buffer, state: &AppSt
     let right_x = inner.right().saturating_sub(1).saturating_sub(right_w);
 
     if right_x > left_x.saturating_add(left_w) {
-        write_inline(
-            buf,
-            Rect::new(right_x, divider_y, right_w, 1),
-            right_x,
-            &right_text,
-            style::border_title(),
-        );
+        let right_rect = Rect::new(right_x, divider_y, right_w, 1);
+        buf.set_style(right_rect, Style::reset());
+        write_inline(buf, right_rect, right_x, &right_text, style::border_title());
     }
 }
 
@@ -287,18 +279,27 @@ pub(super) fn render_rollover_banner(panel: Rect, buf: &mut Buffer, state: &AppS
     };
     let text_limit = usize::from(action_rect.x.saturating_sub(banner.x).saturating_sub(1));
     if text_limit > 0 {
-        let prompt_str = if text_limit >= 18 {
-            format!("! {count} past unfinished")
+        let full_prompt = format!("! {count} past unfinished");
+        let mid_prompt = format!("! {count} past");
+        let short_prompt = format!("!{count}");
+        let chosen = if UnicodeWidthStr::width(full_prompt.as_str()) <= text_limit {
+            Some(full_prompt)
+        } else if UnicodeWidthStr::width(mid_prompt.as_str()) <= text_limit {
+            Some(mid_prompt)
+        } else if UnicodeWidthStr::width(short_prompt.as_str()) <= text_limit {
+            Some(short_prompt)
         } else {
-            format!("! {count} past")
+            None
         };
-        buf.set_stringn(
-            banner.x,
-            banner.y,
-            &prompt_str,
-            text_limit,
-            style::todo_rollover_banner(),
-        );
+        if let Some(prompt_str) = chosen {
+            buf.set_stringn(
+                banner.x,
+                banner.y,
+                &prompt_str,
+                text_limit,
+                style::todo_rollover_banner(),
+            );
+        }
     }
     let action_label = if action_rect.width
         >= u16::try_from(UnicodeWidthStr::width(text::TODO_ROLLOVER_ACTION_LABEL)).unwrap_or(15)

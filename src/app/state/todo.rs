@@ -170,8 +170,12 @@ impl TodoPanel {
     /// 设定今日日期基准（测试或跨日刷新用）；若此前停留在旧今日则同步跟随。
     pub fn set_today_date(&mut self, today: impl Into<String>) {
         let today = today.into();
+        if self.today_date == today {
+            return;
+        }
         let was_viewing_today = self.selected_date == self.today_date;
         self.today_date = today.clone();
+        self.rollover_dismissed = false;
         if was_viewing_today && self.selected_date != today {
             let _ = self.select_date(today);
         }
@@ -218,6 +222,15 @@ impl TodoPanel {
     /// 当前选中日期的条目数量。
     pub fn len(&self) -> usize {
         self.items.len()
+    }
+
+    /// 当前显示序列总行数（含新建幽灵槽位）。
+    pub fn display_len(&self) -> usize {
+        let ghost = self
+            .editing
+            .as_ref()
+            .map_or(0, |edit| usize::from(edit.target.is_none()));
+        self.items.len() + ghost
     }
 
     /// 当前选中日期是否为空。
@@ -404,11 +417,7 @@ impl TodoPanel {
             return false;
         }
         self.rows = rows;
-        let ghost = self
-            .editing
-            .as_ref()
-            .map_or(0, |edit| usize::from(edit.target.is_none()));
-        let max = (self.items.len() + ghost).saturating_sub(rows);
+        let max = self.display_len().saturating_sub(rows);
         if self.scroll > max {
             self.scroll = max;
         }
@@ -482,6 +491,7 @@ impl TodoPanel {
                     .push(item);
             }
         }
+        self.items.sort_by_key(|item| item.position);
         self.normalize_positions();
         for (date, list) in &mut self.other_dates {
             list.sort_by_key(|item| item.position);
@@ -543,12 +553,13 @@ impl TodoPanel {
         true
     }
 
-    /// 视口滚到目标偏移（钳制到 `0..=max`）。
+    /// 视口滚到目标偏移（钳制到 `0..=max`，含新建幽灵行槽位）。
     pub fn set_scroll(&mut self, offset: usize) -> bool {
+        let total = self.display_len();
         let max = if self.rows == 0 {
-            self.items.len().saturating_sub(1)
+            total.saturating_sub(1)
         } else {
-            self.items.len().saturating_sub(self.rows)
+            total.saturating_sub(self.rows)
         };
         let next = offset.min(max);
         if next == self.scroll {
