@@ -1,5 +1,7 @@
 # Prompt 分页与底部空占位设计
 
+> **部分已被 `docs/feature/prompt-block-restyle/` 取代**（其中的「页码菜单 `PageMenu`」与「标题行页名内联重命名」已由 `PromptMode::Pages` 页列表视图与页右键菜单取代）。
+
 - 状态：**已实施并合并至 `dev`**（分页主功能 `c04c37c`，后续需求批次 `40982d6`、`9ebddd5`、`61c0862`、`a5ce735`、`3b67253`、`370ab0b`，合并提交 `0c6b22e`）；与本文设计的差异见第 9 节。
 - 参考实现：`/Users/yonah/projects/agent/lx-agent/src/renderer/src/features/markdown/` 下的 `hooks/useMarkdownPages.ts`、`components/MarkdownEditorToolbar.tsx` 和 `extensions/editorTheme.ts`。
 - 适用范围：Prompt 编辑视图、Prompt 列表、正式提示词持久化、临时提示词内存状态。保持 ratatui + crossterm、`app/` 纯状态、`ui/` 纯渲染与 `db/` 独占 SQLite 的现有边界。
