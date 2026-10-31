@@ -443,9 +443,9 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
 /// （对齐 lx-agent 的 `Ctrl/Cmd+Shift+Enter`）。
 /// Ctrl/Alt 组合同 opencode/readline：Ctrl+U 删除到逻辑行首（已在行首时删除前一个换行）、
 /// Ctrl+K 删除到行尾、Ctrl+W 向前删词、
-/// Ctrl+A/E 逻辑行首尾、Ctrl+D 正向删除、Ctrl+←/→ 按词移动；撤销/重做用
+/// Ctrl+A/E 逻辑行首尾、Ctrl+D 正向删除、Ctrl/Cmd+←/→ 切换上一页/下一页；撤销/重做用
 /// Ctrl+Z / Ctrl+Y（legacy 终端可靠），并对齐 opencode 接受 Ctrl+Shift+Z、Ctrl+-、
-/// Ctrl+. 与 Super 组合（终端支持才收得到）；Alt+B/F、Alt+D 作为别名；
+/// Ctrl+. 与 Super 组合（终端支持才收得到）；Alt+B/F、Alt+←/→ 按词移动，Alt+D 向前删词；
 /// Tab/BackTab 缩进/反缩进；其余 Ctrl/Alt 组合吞掉。
 fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
     let modifiers = key.modifiers;
@@ -455,8 +455,8 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
     if modifiers.contains(KeyModifiers::SUPER) {
         return match key.code {
             KeyCode::Enter => Some(EditorCommand::NewlineBelow),
-            KeyCode::Left => Some(EditorCommand::BlockPrev { cmd: true }),
-            KeyCode::Right => Some(EditorCommand::BlockNext { cmd: true }),
+            KeyCode::Left => Some(EditorCommand::PagePrev),
+            KeyCode::Right => Some(EditorCommand::PageNext),
             KeyCode::Char('z' | 'Z') if shift => Some(EditorCommand::Redo),
             KeyCode::Char('z' | 'Z') => Some(EditorCommand::Undo),
             KeyCode::Char('y' | 'Y') => Some(EditorCommand::Redo),
@@ -478,8 +478,8 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
         },
         (true, false, KeyCode::Backspace) => Some(EditorCommand::DeleteWordBackward),
         (true, false, KeyCode::Delete) => Some(EditorCommand::DeleteWordForward),
-        (true, false, KeyCode::Left) => Some(EditorCommand::BlockPrev { cmd: false }),
-        (true, false, KeyCode::Right) => Some(EditorCommand::BlockNext { cmd: false }),
+        (true, false, KeyCode::Left) => Some(EditorCommand::PagePrev),
+        (true, false, KeyCode::Right) => Some(EditorCommand::PageNext),
         (false, true, KeyCode::Char('b')) => Some(EditorCommand::WordLeft),
         (false, true, KeyCode::Char('f')) => Some(EditorCommand::WordRight),
         (false, true, KeyCode::Char('d')) => Some(EditorCommand::DeleteWordForward),

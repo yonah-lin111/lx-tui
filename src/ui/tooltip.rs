@@ -163,10 +163,6 @@ fn targets(
             ),
             (layout::PromptToolbarButton::Pin, TooltipTarget::PromptPin),
             (
-                layout::PromptToolbarButton::BlockFocus,
-                TooltipTarget::PromptBlockFocus,
-            ),
-            (
                 layout::PromptToolbarButton::TempPrompt,
                 TooltipTarget::PromptTempPrompt,
             ),
@@ -218,7 +214,6 @@ fn template_button_kind(button: ui::prompt::TemplateBlockButton) -> TemplateButt
 /// 补充块按钮 → app 侧种类。
 fn block_button_kind(button: ui::prompt::BlockButton) -> BlockButtonKind {
     match button {
-        ui::prompt::BlockButton::Fold => BlockButtonKind::Fold,
         ui::prompt::BlockButton::Copy => BlockButtonKind::Copy,
         ui::prompt::BlockButton::Clean => BlockButtonKind::Clean,
         ui::prompt::BlockButton::Delete => BlockButtonKind::Delete,

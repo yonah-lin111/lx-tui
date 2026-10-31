@@ -100,9 +100,6 @@ pub const PROMPT_DRAFT_DOT: &str = "○";
 /// 不再使用 `[pin]`/`[unpin]` 英文单词，避免 7 列占位与右对齐补空格）。
 pub const PROMPT_UNPINNED_LABEL: &str = "[○]";
 pub const PROMPT_PINNED_LABEL: &str = "[◉]";
-/// 块聚焦模式按钮：未进入 `[⊞]`（全部块）、已进入 `[⊡]`（聚焦单块）。
-pub const PROMPT_BLOCK_FOCUS_ALL_LABEL: &str = "[⊞]";
-pub const PROMPT_BLOCK_FOCUS_ONE_LABEL: &str = "[⊡]";
 /// prompt 视图模式按钮：编辑视图显示 `[≡]`（切到列表）、树视图显示 `[/]`（切到编辑）。
 pub const PROMPT_MODE_LIST_LABEL: &str = "[≡]";
 pub const PROMPT_MODE_EDIT_LABEL: &str = "[/]";
@@ -994,8 +991,6 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptSave => "mark saved",
         TooltipTarget::PromptPin if state.prompt_pinned.is_some() => "unpin prompt",
         TooltipTarget::PromptPin => "pin prompt",
-        TooltipTarget::PromptBlockFocus if state.prompt.block_focus_active() => "show all blocks",
-        TooltipTarget::PromptBlockFocus => "focus template block",
         TooltipTarget::SwapPromptSide => "swap prompt side",
         TooltipTarget::SidebarSettings => "open settings",
         TooltipTarget::TemplateButton { button, .. } => match button {
@@ -1015,7 +1010,6 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         },
         TooltipTarget::ReferencedSearchCopyPath => "copy path",
         TooltipTarget::BlockButton { button, .. } => match button {
-            BlockButtonKind::Fold => "fold/unfold block",
             BlockButtonKind::Copy => "copy block",
             BlockButtonKind::Clean => "clean block",
             BlockButtonKind::Delete => "delete block",
@@ -1078,14 +1072,9 @@ pub fn template_status_label(status: TemplateStatus) -> &'static str {
     }
 }
 
-/// 补充块操作按钮：折叠/展开、清理与删除（清理/删除复用模板块图标）。
-/// 折叠态显示 `▸`，展开态显示 `▾`。
-pub const SUPPLE_BUTTON_FOLD_CLOSED: &str = "[▸]";
-pub const SUPPLE_BUTTON_FOLD_OPEN: &str = "[▾]";
+/// 补充块操作按钮：清理与删除复用模板块图标。
 pub const SUPPLE_BUTTON_CLEAN: &str = TEMPLATE_BUTTON_CLEAN;
 pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
-/// 写入落在折叠补充块内被拒绝时的提示。
-pub const SUPPLE_FOLD_BLOCKED: &str = "Folded supplement; unfold to edit";
 
 /// @ 面板与命令面板底边快捷键提示（Prompt 右栏带边框面板使用）。
 pub const MENTION_FOOTER_FILES: &str = "←→ tab · ↑↓ select · ↵ confirm · ⇧↵ enter · esc cancel";

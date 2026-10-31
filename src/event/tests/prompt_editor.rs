@@ -263,7 +263,7 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
     crate::app::update::apply_editor(
         &mut state,
         crate::app::actions::EditorCommand::InsertText(
-            "&&& x --start\n+++ supplement --start\n{title: Review}\n\n- keep me\n+++ supplement --end\n&&& x --end"
+            "&&& x --start\n&&& x --end\n\n+++ supplement --start\n{title: Review}\n\n- keep me\n+++ supplement --end"
                 .into(),
         ),
     );
@@ -314,52 +314,6 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
         "右侧面板复制 toast 矩形 {toast_rect:?} 必须落在右侧面板容器 {:?} 内",
         geo.view.prompt
     );
-}
-
-#[test]
-fn mouse_supple_fold_button_toggles_without_editing_text() {
-    let config = Config::default();
-    let mut state = AppState::demo();
-    state.prompt_width = 80;
-    state.prompt.resize(78, 16);
-    crate::app::update::focus_prompt(&mut state);
-    crate::app::update::apply_editor(
-        &mut state,
-        crate::app::actions::EditorCommand::InsertText(
-            "&&& x --start\n+++ supplement --start\n{title: Review}\n\n- keep me\n+++ supplement --end\n&&& x --end"
-                .into(),
-        ),
-    );
-    state.prompt.mark_saved();
-    let geo = geometry(&state, &config, Rect::new(0, 0, 220, 30));
-    let area = crate::layout::prompt_text_rect(geo.view.prompt);
-    let text = state.prompt.text().to_string();
-    let mut sessions = HashMap::new();
-    let mut dirty = false;
-
-    for folded in [false, true] {
-        let fold = crate::ui::prompt::block_buttons(&state.prompt, area)
-            .into_iter()
-            .find(|hit| hit.button == crate::ui::prompt::BlockButton::Fold)
-            .expect("supple fold button visible");
-        assert_eq!(fold.folded, !folded, "按钮字形跟随折叠态");
-        handle_terminal_event(
-            mouse(
-                MouseEventKind::Down(MouseButton::Left),
-                fold.rect.x,
-                fold.rect.y,
-            ),
-            &mut state,
-            &mut sessions,
-            &geo,
-            &config,
-            &mut ui::RenderCache::default(),
-            &mut dirty,
-        );
-        assert_eq!(state.prompt.supple_folded_at(1), folded);
-        assert_eq!(state.prompt.text(), text, "折叠不修改正文");
-        assert!(state.prompt.is_saved(), "折叠不置脏");
-    }
 }
 
 #[test]

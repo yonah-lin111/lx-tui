@@ -39,16 +39,11 @@ pub(crate) const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = PROMPT_TOOLBAR_BUTTON_WIDTH
     + PROMPT_SELECT_ALL_WIDTH
     + PROMPT_TOOLBAR_BUTTON_GAP
     + 1;
-/// 块聚焦按钮宽度（列）：`[⊞]` / `[⊡]`，与 `[all]` 同层右组。
-const PROMPT_BLOCK_FOCUS_WIDTH: u16 = 3;
-/// 显示块聚焦按钮所需的最小内容区宽度（列）：左组 17 + 1 + `[⊡]` 3 + 1 + `●` 1。
-pub(crate) const PROMPT_BLOCK_FOCUS_MIN_WIDTH_EDITOR: u16 =
-    PROMPT_SELECT_ALL_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_BLOCK_FOCUS_WIDTH;
 /// 钉住按钮宽度（列）：单字图标 `[○]` / `[◉]` 恒为 3，两态同宽同址。
 pub(crate) const PROMPT_PIN_WIDTH: u16 = 3;
-/// 显示钉住按钮所需的最小内容区宽度（列）：编辑视图在块聚焦按钮左侧、树视图在 `[tmp]` 左侧。
+/// 显示钉住按钮所需的最小内容区宽度（列）：编辑视图在保存点左侧、树视图在 `[tmp]` 左侧。
 pub(crate) const PROMPT_PIN_MIN_WIDTH_EDITOR: u16 =
-    PROMPT_BLOCK_FOCUS_MIN_WIDTH_EDITOR + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
+    PROMPT_SELECT_ALL_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
 pub(crate) const PROMPT_PIN_MIN_WIDTH_TREE: u16 =
     PROMPT_TEMP_PROMPT_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
 /// 引用文件夹按钮（`[refDir]`）宽度（列）；仅编辑视图显示、位于钉住按钮左侧。
@@ -62,14 +57,12 @@ pub(crate) const PROMPT_FOLDERS_MIN_WIDTH_EDITOR: u16 =
 pub enum PromptToolbarButton {
     /// 视图模式切换：编辑视图显示 `[≡]`、树视图显示 `[/]`。
     Mode,
-    /// 钉住切换：未钉 `[○]`、已钉 `[◉]`（编辑视图在块聚焦按钮左侧、树视图在 `[tmp]` 左侧）。
+    /// 钉住切换：未钉 `[○]`、已钉 `[◉]`（编辑视图在保存点左侧、树视图在 `[tmp]` 左侧）。
     Pin,
     /// 树视图 `[tmp]`：新建临时提示词编辑视图（仅树视图显示、不入库）。
     TempPrompt,
     /// 编辑视图 `[dir]`：打开引用文件夹菜单（仅编辑视图显示，位于钉住按钮左侧）。
     Folders,
-    /// 编辑视图 `[⊞]` / `[⊡]`：切换「单模板块聚焦」模式（仅编辑视图显示）。
-    BlockFocus,
     Undo,
     Redo,
     SelectAll,
@@ -180,23 +173,32 @@ pub fn prompt_toolbar_button_rect(
     let rect = match button {
         PromptToolbarButton::Mode => Rect::new(bar.x, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1),
         PromptToolbarButton::Pin => {
-            let (anchor_button, min_width) = if tree {
-                (PromptToolbarButton::TempPrompt, PROMPT_PIN_MIN_WIDTH_TREE)
+            if tree {
+                if inner.width < PROMPT_PIN_MIN_WIDTH_TREE {
+                    return None;
+                }
+                let anchor =
+                    prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, tree)?;
+                Rect::new(
+                    anchor
+                        .x
+                        .saturating_sub(PROMPT_PIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP),
+                    bar.y,
+                    PROMPT_PIN_WIDTH,
+                    1,
+                )
             } else {
-                (PromptToolbarButton::BlockFocus, PROMPT_PIN_MIN_WIDTH_EDITOR)
-            };
-            if inner.width < min_width {
-                return None;
+                if inner.width < PROMPT_PIN_MIN_WIDTH_EDITOR {
+                    return None;
+                }
+                Rect::new(
+                    bar.right()
+                        .saturating_sub(1 + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH),
+                    bar.y,
+                    PROMPT_PIN_WIDTH,
+                    1,
+                )
             }
-            let anchor = prompt_toolbar_button_rect(panel, anchor_button, tree)?;
-            Rect::new(
-                anchor
-                    .x
-                    .saturating_sub(PROMPT_PIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP),
-                bar.y,
-                PROMPT_PIN_WIDTH,
-                1,
-            )
         }
         PromptToolbarButton::TempPrompt => {
             if !tree || inner.width < PROMPT_TEMP_PROMPT_MIN_WIDTH {
@@ -220,18 +222,6 @@ pub fn prompt_toolbar_button_rect(
                     .saturating_sub(PROMPT_FOLDERS_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP),
                 bar.y,
                 PROMPT_FOLDERS_WIDTH,
-                1,
-            )
-        }
-        PromptToolbarButton::BlockFocus => {
-            if tree || inner.width < PROMPT_BLOCK_FOCUS_MIN_WIDTH_EDITOR {
-                return None;
-            }
-            Rect::new(
-                bar.right()
-                    .saturating_sub(1 + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_BLOCK_FOCUS_WIDTH),
-                bar.y,
-                PROMPT_BLOCK_FOCUS_WIDTH,
                 1,
             )
         }
@@ -279,7 +269,6 @@ pub fn prompt_toolbar_button_at(
         PromptToolbarButton::Mode,
         PromptToolbarButton::Folders,
         PromptToolbarButton::Pin,
-        PromptToolbarButton::BlockFocus,
         PromptToolbarButton::TempPrompt,
         PromptToolbarButton::Undo,
         PromptToolbarButton::Redo,

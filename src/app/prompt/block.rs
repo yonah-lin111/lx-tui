@@ -131,7 +131,6 @@ impl Prompt {
             }
         };
 
-        self.expanded_supplements.insert(block_start);
         self.cursor = block_start + cursor;
         let start_line = self.text[..block_start].matches('\n').count();
         let end_line = start_line + content.matches('\n').count();

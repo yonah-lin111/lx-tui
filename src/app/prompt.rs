@@ -17,17 +17,12 @@ pub use tree::{
     pages_template_counts,
 };
 
-mod fold;
 mod navigation;
 pub(crate) mod text;
 mod viewport;
 
-mod block_focus;
-
-pub use fold::FoldedBlock;
 pub use mention::{McpMentionEntry, MentionTab};
 
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -89,12 +84,6 @@ pub struct Prompt {
     revision: u64,
     /// 自动保存静置观察：最近一次判定时的修订号与时间；修订号变化即重置计时。
     autosave: Option<(u64, Instant)>,
-    /// 展开的补充块起始行字节偏移；空集合表示全部折叠（默认）。
-    expanded_supplements: BTreeSet<usize>,
-    /// 最近一次写入是否因落在折叠区内被拒绝（供上层提示，读取即清）。
-    fold_blocked: bool,
-    /// 块聚焦：顶层 `&&&` 起始逻辑行；None = 普通视图（按工作区随草稿 swap）。
-    focus_block: Option<usize>,
 }
 
 /// 一个视觉行：所属逻辑行与文本字节范围（不含行尾换行）。
@@ -105,16 +94,14 @@ pub struct VisualRow {
     pub end: usize,
 }
 
-/// 历史快照：文本、光标位置与折叠状态（折叠键只在对应文本内有效）。
+/// 历史快照：文本与光标位置。
 #[derive(Debug, Clone)]
 struct Snapshot {
     text: String,
     cursor: usize,
-    expanded_supplements: BTreeSet<usize>,
-    focus_block: Option<usize>,
 }
 
-/// 编辑器完整历史状态：文本、光标、撤销/重做栈、已保存标记、折叠状态与滚动位置。
+/// 编辑器完整历史状态：文本、光标、撤销/重做栈、已保存标记与滚动位置。
 ///
 /// 用于离开编辑视图（切到列表）时暂存、返回同一目标时整体恢复，
 /// 使撤销/重做记录、光标与滚动视口不因视图往返而丢失（修订号连续演进、不在此暂存）。
@@ -126,8 +113,6 @@ pub struct PromptHistory {
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     is_saved: bool,
-    expanded_supplements: BTreeSet<usize>,
-    focus_block: Option<usize>,
 }
 
 impl PromptHistory {
@@ -184,9 +169,6 @@ impl Prompt {
             is_saved: true,
             revision: 0,
             autosave: None,
-            expanded_supplements: BTreeSet::new(),
-            fold_blocked: false,
-            focus_block: None,
         }
     }
 
@@ -291,8 +273,6 @@ impl Prompt {
         self.panel_suppressed = false;
         self.is_saved = true;
         self.autosave = None;
-        self.expanded_supplements.clear();
-        self.fold_blocked = false;
         self.scroll_cursor_into_view();
     }
 
@@ -318,8 +298,6 @@ impl Prompt {
             undo: self.undo.clone(),
             redo: self.redo.clone(),
             is_saved: self.is_saved,
-            expanded_supplements: self.expanded_supplements.clone(),
-            focus_block: self.focus_block,
         }
     }
 
@@ -340,10 +318,6 @@ impl Prompt {
         self.panel_suppressed = false;
         self.is_saved = history.is_saved;
         self.autosave = None;
-        self.expanded_supplements = history.expanded_supplements;
-        self.focus_block = history.focus_block;
-        self.normalize_fold_cursor();
-        self.reconcile_block_focus();
         self.scroll = history.scroll.min(self.max_scroll());
         self.scroll_cursor_into_view();
     }
@@ -384,14 +358,6 @@ impl Prompt {
     /// 在当前逻辑行尾另起一行并保留行首缩进；不续写列表标记（lx-agent 的 Ctrl/Cmd+Shift+Enter）。
     pub fn newline_below(&mut self) {
         self.break_group();
-        // 折叠块上的换行落在整块之后，不进入隐藏正文。
-        if let Some((at, cursor)) = self.fold_newline_target(self.cursor) {
-            self.record(EditKind::Other);
-            self.splice_text(at, at, "\n");
-            self.cursor = cursor;
-            self.settle();
-            return;
-        }
         let start = line_start(&self.text, self.cursor);
         let end = line_end(&self.text, self.cursor);
         let indent = self.text[start..end]
@@ -836,44 +802,19 @@ impl Prompt {
         self.cursor = offset.min(self.text.len());
     }
 
-    /// 编辑是否触碰受保护的绑定行或折叠区；触碰时拒绝该次编辑。
+    /// 编辑是否触碰受保护的绑定行或标题行；触碰时拒绝该次编辑。
     fn protected_edit(&mut self, from: usize, to: usize) -> bool {
-        if markdown::edit_touches_worktree_line(&self.text, from, to)
+        markdown::edit_touches_worktree_line(&self.text, from, to)
             || markdown::edit_touches_title_line(&self.text, from, to)
-        {
-            return true;
-        }
-        if self.edit_hits_fold(from, to) {
-            self.fold_blocked = true;
-            return true;
-        }
-        false
     }
 
-    /// 取走「写入落在折叠补充块内被拒」提示标记。
-    pub fn take_fold_blocked(&mut self) -> bool {
-        std::mem::take(&mut self.fold_blocked)
-    }
-
-    /// 替换正文区间并平移展开键；调用方负责历史、光标与收尾。
+    /// 替换正文区间；调用方负责历史、光标与收尾。
     fn splice_text(&mut self, from: usize, to: usize, insert: &str) {
-        self.shift_folds(from, to - from, insert.len());
         self.text.replace_range(from..to, insert);
     }
 
     /// 在光标处插入已净化的文本并推进光标；触碰受保护绑定行时忽略。
-    ///
-    /// 光标停在折叠补充块上时，回车改为在整块之后另起一行，不写入隐藏正文。
     fn insert_at(&mut self, insert: &str) {
-        if insert == "\n"
-            && let Some((at, cursor)) = self.fold_newline_target(self.cursor)
-        {
-            self.record(EditKind::Insert);
-            self.splice_text(at, at, "\n");
-            self.cursor = cursor;
-            self.settle();
-            return;
-        }
         if self.protected_edit(self.cursor, self.cursor) {
             return;
         }
@@ -900,8 +841,6 @@ impl Prompt {
         Snapshot {
             text: self.text.clone(),
             cursor: self.cursor,
-            expanded_supplements: self.expanded_supplements.clone(),
-            focus_block: self.focus_block,
         }
     }
 
@@ -915,8 +854,6 @@ impl Prompt {
     fn restore(&mut self, snapshot: Snapshot) {
         self.text = snapshot.text;
         self.cursor = snapshot.cursor;
-        self.expanded_supplements = snapshot.expanded_supplements;
-        self.focus_block = snapshot.focus_block;
         self.last_edit = None;
         self.settle();
     }
@@ -932,13 +869,11 @@ impl Prompt {
     /// 高优先级面板打开时清空其余（粘贴二级面板不由编辑重算，单独由 `clear_panel` 取消）。
     fn settle(&mut self) {
         self.settle_panels();
-        self.reconcile_block_focus();
     }
 
-    /// 面板互斥收敛与滚动跟随；由 [`Self::settle`] 调用后统一做块聚焦重定位。
+    /// 面板互斥收敛与滚动跟随。
     fn settle_panels(&mut self) {
         self.panel_suppressed = false;
-        self.normalize_fold_cursor();
         self.scroll_cursor_into_view();
         self.mention.refresh(&self.text, self.cursor);
         if self.mention.panel().is_some() {

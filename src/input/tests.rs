@@ -239,12 +239,12 @@ fn prompt_focus_maps_readline_shortcuts() {
         (
             KeyCode::Left,
             KeyModifiers::CONTROL,
-            EditorCommand::BlockPrev { cmd: false },
+            EditorCommand::PagePrev,
         ),
         (
             KeyCode::Right,
             KeyModifiers::CONTROL,
-            EditorCommand::BlockNext { cmd: false },
+            EditorCommand::PageNext,
         ),
         (
             KeyCode::Char('b'),
@@ -278,30 +278,30 @@ fn prompt_focus_maps_readline_shortcuts() {
 }
 
 #[test]
-fn ctrl_arrows_map_to_block_navigation() {
+fn ctrl_arrows_map_to_page_navigation() {
     let route_prompt =
         |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
     assert_eq!(
         route_prompt(KeyCode::Left, KeyModifiers::CONTROL),
-        Some(Routed::Editor(EditorCommand::BlockPrev { cmd: false }))
+        Some(Routed::Editor(EditorCommand::PagePrev))
     );
     assert_eq!(
         route_prompt(KeyCode::Right, KeyModifiers::CONTROL),
-        Some(Routed::Editor(EditorCommand::BlockNext { cmd: false }))
+        Some(Routed::Editor(EditorCommand::PageNext))
     );
 }
 
 #[test]
-fn cmd_arrows_map_to_block_navigation() {
+fn cmd_arrows_map_to_page_navigation() {
     let route_prompt =
         |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
     assert_eq!(
         route_prompt(KeyCode::Left, KeyModifiers::SUPER),
-        Some(Routed::Editor(EditorCommand::BlockPrev { cmd: true }))
+        Some(Routed::Editor(EditorCommand::PagePrev))
     );
     assert_eq!(
         route_prompt(KeyCode::Right, KeyModifiers::SUPER),
-        Some(Routed::Editor(EditorCommand::BlockNext { cmd: true }))
+        Some(Routed::Editor(EditorCommand::PageNext))
     );
 }
 

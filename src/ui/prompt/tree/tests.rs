@@ -623,14 +623,21 @@ fn item_rows_with_different_digit_counts_align_vertical_bars() {
     item1.pages[0].content = "&&& a --start\n&&& a --end".into(); // todo: 1
 
     let mut item2 = item(2, None, "two_digits");
-    let mut content2 = String::new();
-    for _ in 0..10 {
-        content2.push_str("&&& a --start\n&&& a --end\n");
+    item2.pages.clear();
+    for index in 0..10 {
+        item2.pages.push(crate::app::prompt::PromptPage {
+            id: crate::app::prompt::PromptPageId::Saved(100 + index),
+            name: format!("todo-{index}"),
+            content: "&&& a --start\n&&& a --end".into(),
+        });
     }
-    for _ in 0..20 {
-        content2.push_str("&&& b --start\n&&& b --end done\n");
+    for index in 0..20 {
+        item2.pages.push(crate::app::prompt::PromptPage {
+            id: crate::app::prompt::PromptPageId::Saved(200 + index),
+            name: format!("done-{index}"),
+            content: "&&& b --start\n&&& b --end done".into(),
+        });
     }
-    item2.pages[0].content = content2;
 
     let item3 = item(3, None, "zero_count");
 

@@ -1,18 +1,13 @@
-//! prompt 视口几何与坐标映射：软换行、折叠隐藏、滚动、选区与单元格/字节换算。
-//!
-//! 折叠的补充块只保留起始行；隐藏行不进入视觉行序，因此光标、点击、选区与滚动
-//! 共用同一份可见行口径。
+//! prompt 视口几何与坐标映射：软换行、滚动、选区与单元格/字节换算。
 
 use super::super::markdown;
-use super::fold;
 use super::{Prompt, VisualRow, char_width, display_width};
 
 /// 多击选词/选行返回的（单元格闭区间，字节半开区间）。
 pub type UnitCellSpan = (((i32, u16), (i32, u16)), (usize, usize));
 
 impl Prompt {
-    /// 按内容宽度软换行得到的可见视觉行；块行扣除左右边框槽后再换行，
-    /// 折叠补充块的隐藏行整体跳过。
+    /// 按内容宽度软换行得到的可见视觉行；块行扣除左右边框槽后再换行。
     pub fn visual_rows(&self) -> Vec<VisualRow> {
         let width = usize::from(self.width.max(1));
         let margins = usize::from(
@@ -21,26 +16,10 @@ impl Prompt {
         );
         let scan = markdown::block_scan(&self.text);
         let lines: Vec<&str> = self.text.split('\n').collect();
-        // 块聚焦时只保留该块的逻辑行区间（含起止行）；范围失效时退回普通视图。
-        let focus = self.focused_block_range(&scan);
-        let mut hidden = vec![false; lines.len()];
-        for block in fold::folded_blocks_from(&scan, &self.text, &self.expanded_supplements) {
-            for line in block.hidden_from_line..=block.end_line {
-                if let Some(slot) = hidden.get_mut(line) {
-                    *slot = true;
-                }
-            }
-        }
         let mut rows = Vec::new();
         let mut line_start = 0;
         for (line, segment) in lines.iter().enumerate() {
             let line_end = line_start + segment.len();
-            // 聚焦块外的逻辑行整体跳过（软换行判定在块内照旧）。
-            let outside_focus = focus.is_some_and(|(start, end)| line < start || line > end);
-            if hidden.get(line).copied().unwrap_or(false) || outside_focus {
-                line_start = line_end + 1;
-                continue;
-            }
             let info = scan.infos.get(line).copied().flatten();
             let width = if info.is_some() {
                 width.saturating_sub(margins).max(1)

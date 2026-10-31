@@ -142,15 +142,10 @@ pub enum EditorCommand {
     DeleteWordForward,
     Indent,
     Outdent,
-    /// Ctrl+←（`cmd == false`）/ Cmd+←（`cmd == true`）：块模式内切上一块、
-    /// 普通视图 Ctrl 为按词左移、Cmd 吞掉。
-    BlockPrev {
-        cmd: bool,
-    },
-    /// Ctrl+→ / Cmd+→：同 `BlockPrev`，方向相反。
-    BlockNext {
-        cmd: bool,
-    },
+    /// Ctrl/Cmd+←：编辑视图切到上一页（首页原地不动，不循环）。
+    PagePrev,
+    /// Ctrl/Cmd+→：编辑视图切到下一页（末页原地不动，不循环）。
+    PageNext,
     Undo,
     Redo,
     Escape,
