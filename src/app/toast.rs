@@ -1,4 +1,5 @@
-//! 全局 toast 模型：单条替换、到期自动消失、hover 期间暂停消失动作。
+//! Toast 模型：单条替换、到期自动消失、hover 期间暂停消失动作；
+//! 同时服务于 `AppState.toast`（全局/右侧面板/终端窗格锚点）与 `Lx.toast`（lx 窗格内专属槽）。
 
 use std::time::{Duration, Instant};
 

@@ -927,10 +927,15 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
         pane.lx.paste_cancel();
         // 隐藏的 lx 页不得保留可点击的提及面板。
         pane.lx.mention_escape();
+        // 视图切换时清理旧视图残留的窗格内 toast，避免冻结态残留。
+        pane.lx.toast = None;
         pane.view
     }) else {
         return false;
     };
+    if state.toast.as_ref().and_then(|toast| toast.anchor) == Some(id) {
+        state.toast = None;
+    }
     super::selection::clear_lx_selection_for(state, id);
     if view == PaneView::Lx {
         if state.terminal_selection == Some(id) {
@@ -1056,6 +1061,7 @@ pub fn focus_agent_pane(state: &mut AppState, pane: PaneId) -> bool {
         && target.view == PaneView::Lx
     {
         target.view = PaneView::Terminal;
+        target.lx.toast = None;
     }
     super::focus::focus_pane(state, pane);
     clear_selection(state);

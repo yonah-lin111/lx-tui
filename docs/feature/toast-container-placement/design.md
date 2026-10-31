@@ -1,8 +1,8 @@
 # Toast 容器归属与复制反馈位置重调整 — 详细设计方案
 
-> 状态：**已完成边界确认（Grill Me Q1–Q3）、代码实现与测试校验**
+> 状态：**已完成边界确认（Grill Me Q1–Q3）、代码实现、Code Review（P0–P2 修复）与测试校验**
 >
-> 涉及模块：`src/event/mouse/hit.rs`、`src/event/input.rs`、`src/db/service.rs`、`src/app/update/prompt.rs`、`src/app/update/menu.rs`、`src/app/update/todo.rs`、`src/app/update/interaction.rs`、`src/ui/toast.rs`、`src/ui/main_content/lx/toast.rs`、`docs/standards/tui-design-requirements.md`
+> 涉及模块：`src/event/mouse/hit.rs`、`src/event/mouse/hover.rs`、`src/event/input.rs`、`src/db/service.rs`、`src/app/update/prompt.rs`、`src/app/update/menu.rs`、`src/app/update/todo.rs`、`src/app/update/interaction.rs`、`src/app/update/pane.rs`、`src/app/update/workspace.rs`、`src/ui/toast.rs`、`src/ui/main_content/lx/toast.rs`、`docs/standards/tui-design-requirements.md`
 
 ---
 
@@ -509,6 +509,10 @@ pub fn fail_todo_write(state: &mut AppState) {
 ### 6.2 新增回归测试
 - **右侧面板 Todo 编辑框复制与保存失败锚点测试**：验证在 Todo 行内编辑框选中文字按 `Ctrl+C` 以及 `fail_todo_write` 触发时，`state.toast` 的 `anchor` 均为 `Some(state.prompt.id())`。
 - **`Persistence::execute` 处理 `Effect::CopyToClipboard` 路由测试**：验证 `anchor: Some(lx_pane)` 落入 `pane.lx.toast`、`anchor: Some(terminal_pane)` 落入带窗格锚点的 `state.toast`、`anchor: Some(state.prompt.id())` 落入带右侧面板锚点的 `state.toast`、`anchor: None` 落入全局 `state.toast`。
+- **Code Review（P0–P2）回归测试**：
+  - `lx_toast_hover_takes_priority_over_slash_panel_and_clears_on_overlay`（`src/event/tests/lx_toast.rs`）：验证 `/resume` 等二级面板打开时 `lx.toast` 悬停优先冻结且不穿透改写底部高亮行，以及打开顶层 `Overlay` 时自动解除 `lx.toast` 悬停冻结；
+  - `toggling_pane_view_or_closing_pane_clears_anchored_toast`（`src/app/update/tests.rs`）：验证 `Terminal ↔ Lx` 视图切换或关闭窗格时自动清理旧视图关联的 Toast，防止同窗格双框叠画或关闭后窜位；
+  - `inactive_tab_pane_toast_does_not_leak_to_global_top_center`（`src/ui/toast/tests.rs`）：验证切换标签页后非活动标签页窗格的 `state.toast` 不降级泄漏到全屏顶部居中。
 
 ### 6.3 规范文档同步
 - 同步更新 `docs/standards/tui-design-requirements.md` 中“选择与复制 → 复制反馈”与“全局 toast”章节关于复制 Toast 按容器归属显示的描述。

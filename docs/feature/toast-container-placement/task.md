@@ -64,3 +64,13 @@
   - `rtk cargo fmt --check`
   - `rtk cargo clippy --all-targets -- -D warnings`
   - 运行受影响模块的单元测试与集成测试
+
+---
+
+## 阶段四：Code Review 审查与 P0–P2 缺陷修复（已完成）
+
+- [x] 结合 `codegraph` 与 `codebase-memory-mcp`（`detect_changes`）进行全链路审查并输出 `docs/feature/toast-container-placement/review.md`
+- [x] **P0 修复**（`src/event/mouse/hover.rs`）：将 `lx_toast` 悬停判定提升至 `handle_mouse_moved` 顶部（早于模态浮层与二级面板的提前 `return`），在 `hovering_lx_toast.is_some()` 时阻断底层 `lx_slash`/`lx_mention`/`lx_paste`/`lx_refer` 面板的悬停穿透，并在打开 `Overlay` 时自动解除 `lx_toast` 悬停冻结；新增回归测试 `lx_toast_hover_takes_priority_over_slash_panel_and_clears_on_overlay`
+- [x] **P1-1 修复**（`src/app/update/interaction.rs`、`src/app/update/pane.rs`、`src/app/update/workspace.rs`）：确保同一窗格的 `state.toast` 与 `pane.lx.toast` 互斥，在 `toggle_pane_view`、`focus_agent_pane` 与 `close_pane` 时清理该窗格关联的 Toast，杜绝同窗格双框叠画与关窗格后 Toast 窜位；新增回归测试 `toggling_pane_view_or_closing_pane_clears_anchored_toast`
+- [x] **P1-2 修复**（`src/ui/toast.rs`）：在 `ui::toast::rect` 中校验窗格锚点是否属于当前活动标签页（`state.active_tab().pane(id)`），避免切换标签页/工作区后后台终端窗格的 Toast 降级泄漏到全屏顶部正中央；新增回归测试 `inactive_tab_pane_toast_does_not_leak_to_global_top_center`
+- [x] **P2 修复**（`tests/prompt_copy.rs`、`src/app/toast.rs`）：在 `tests/prompt_copy.rs` 中补充右侧面板复制 Toast 的列坐标断言（`toast_x >= 60`），并同步更新文档注释

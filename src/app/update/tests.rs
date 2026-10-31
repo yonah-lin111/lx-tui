@@ -2176,6 +2176,71 @@ fn inline_confirm_close_pane_removes_and_focuses_sibling() {
 }
 
 #[test]
+fn toggling_pane_view_or_closing_pane_clears_anchored_toast() {
+    let (mut state, _first, second) = demo_two_panes();
+    let now = Instant::now();
+
+    // 1. 终端窗格锚定 state.toast 后切换到 Lx 视图：必须清除该窗格锚定的 state.toast。
+    state.pane_mut_anywhere(second).expect("pane").view = PaneView::Terminal;
+    show_toast_at(
+        &mut state,
+        Some(second),
+        Toast::new(ToastKind::Default, "Copied 5 chars", Some(second), now),
+    );
+    assert_eq!(
+        state.toast.as_ref().and_then(|t| t.anchor),
+        Some(second),
+        "终端窗格复制写入 state.toast"
+    );
+    assert!(toggle_pane_view(&mut state, second));
+    assert!(
+        state.toast.is_none(),
+        "切换到 Lx 视图时必须清除锚定在该窗格的 state.toast，避免双框叠画"
+    );
+
+    // 2. Lx 窗格有 pane.lx.toast 时切回 Terminal 视图：必须清除 pane.lx.toast。
+    show_toast_at(
+        &mut state,
+        Some(second),
+        Toast::new(ToastKind::Default, "Copied 8 chars", Some(second), now),
+    );
+    assert!(
+        state
+            .pane_anywhere(second)
+            .expect("pane")
+            .lx
+            .toast
+            .is_some()
+    );
+    assert!(toggle_pane_view(&mut state, second));
+    assert!(
+        state
+            .pane_anywhere(second)
+            .expect("pane")
+            .lx
+            .toast
+            .is_none(),
+        "切回 Terminal 视图时必须清除残留的 pane.lx.toast"
+    );
+
+    // 3. 终端窗格锚定 state.toast 后被关闭：必须清除 state.toast，避免窜位到全屏顶部居中。
+    show_toast_at(
+        &mut state,
+        Some(second),
+        Toast::new(ToastKind::Default, "Copied 3 chars", Some(second), now),
+    );
+    assert!(state.toast.is_some());
+    open_pane_menu(&mut state, second, (0, 0));
+    select_menu_command(&mut state, MenuCommand::ClosePane);
+    activate_menu(&mut state);
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(
+        state.toast.is_none(),
+        "关闭被锚定的窗格时必须同步清除其 state.toast"
+    );
+}
+
+#[test]
 fn close_pane_refuses_last_pane() {
     let mut state = AppState::demo();
     let only = state.active_tab().layout.focus();

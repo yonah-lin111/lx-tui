@@ -328,3 +328,36 @@ fn warning_toast_paints_yellow_border() {
         );
     }
 }
+
+/// 回归（P1-2）：锚定在终端窗格的 toast 在切换到其它标签页后隐藏，不跨标签页窜位到屏幕顶部居中。
+#[test]
+fn inactive_tab_pane_toast_does_not_leak_to_global_top_center() {
+    let mut state = AppState::demo();
+    let first_tab_pane = state.active_tab().layout.focus();
+    show(&mut state, Some(first_tab_pane));
+    // 新建并切换到第二个标签页：此时 first_tab_pane 不在当前活动标签页中。
+    update::open_tab_menu(&mut state, 0, (0, 0));
+    if let Some(crate::app::overlay::Overlay::Menu(menu)) = state.overlay.as_mut()
+        && let Some(idx) = menu
+            .commands
+            .iter()
+            .position(|cmd| *cmd == crate::app::overlay::MenuCommand::NewTab)
+    {
+        menu.selected = idx;
+    }
+    update::activate_menu(&mut state);
+    assert!(state.active_tab().pane(first_tab_pane).is_none());
+    let view = view_for(&state);
+    let rects = pane_rects(&state, &view);
+    assert!(
+        rect(
+            &state,
+            &view,
+            &rects,
+            Rect::new(0, 0, 100, 24),
+            &Config::default(),
+        )
+        .is_none(),
+        "非活动标签页的窗格 toast 不得降级泄漏到当前屏幕顶部居中"
+    );
+}

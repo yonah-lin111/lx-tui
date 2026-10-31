@@ -376,6 +376,9 @@ pub(crate) fn close_pane(state: &mut AppState, workspace: usize, tab: usize, pan
     if !tab_state.remove_pane(pane) {
         return;
     }
+    if state.toast.as_ref().and_then(|toast| toast.anchor) == Some(pane) {
+        state.toast = None;
+    }
     if state.terminal_selection == Some(pane) {
         state.terminal_selection = None;
     }
