@@ -51,6 +51,15 @@ impl Prompt {
         true
     }
 
+    /// 滚轮在快捷引用面板上滚动可见窗口：视口从 `base` 起偏移、越界钳制不循环；
+    /// 高亮不动；面板未打开或视口未移动返回 false。
+    pub fn refer_scroll(&mut self, delta: isize, base: usize) -> bool {
+        let Some(panel) = self.refer.as_mut() else {
+            return false;
+        };
+        panel.scroll_viewport(delta, base)
+    }
+
     /// 确认高亮候选：完整原文替换触发词并压制重弹；返回是否消费该按键。
     pub fn refer_confirm(&mut self) -> bool {
         let Some(panel) = self.refer.take() else {

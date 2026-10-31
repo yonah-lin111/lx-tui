@@ -382,8 +382,8 @@ fn lx_mention_wheel_scrolls_panel_not_input() {
     let target = state.pane_anywhere(pane).expect("pane").lx.mention();
     assert_eq!(
         target.panel().expect("panel").viewport(),
-        Some(1),
-        "面板内滚轮滚动候选视口"
+        Some(3),
+        "面板内滚轮滚动候选视口（每格 3 项）"
     );
     assert_eq!(
         state.pane_anywhere(pane).expect("pane").lx.scroll(),
@@ -620,8 +620,8 @@ fn lx_history_selection_waits_for_copy_shortcut_and_follows_wheel_scroll() {
     assert!(!selection.is_dragging(), "松开后结束拖拽态");
     assert_eq!(
         selection.range(),
-        Some(((0, 0), (4, 15))),
-        "锚点钉在内容第 0 行，终点随两次滚轮延伸到内容第 4 行"
+        Some(((0, 0), (8, 15))),
+        "锚点钉在内容第 0 行，终点随两次滚轮（每次 3 行）延伸到内容第 8 行"
     );
     assert!(
         state.pane_anywhere(pane).expect("pane").lx.toast.is_none(),
@@ -640,7 +640,7 @@ fn lx_history_selection_waits_for_copy_shortcut_and_follows_wheel_scroll() {
     );
     assert_eq!(
         state.lx_selection.and_then(|sel| sel.range()),
-        Some(((0, 0), (4, 15))),
+        Some(((0, 0), (8, 15))),
         "松开后滚轮滚动不丢失选区"
     );
 
@@ -1008,8 +1008,8 @@ fn lx_task_output_and_agents_detail_selection_scroll_and_copy() {
     );
     assert_eq!(
         state.lx_selection.and_then(|sel| sel.range()),
-        Some(((0, 0), (3, 6))),
-        "Agents 详情边拖边滚后，选区锚点钉在第 0 行、终点延伸到第 3 行"
+        Some(((0, 0), (5, 6))),
+        "Agents 详情边拖边滚（每格 3 行）后，选区锚点钉在第 0 行、终点延伸到第 5 行"
     );
 }
 
@@ -1351,4 +1351,146 @@ fn lx_command_panel_non_item_clicks_do_not_penetrate_to_underlying_entries() {
         &mut dirty,
     );
     assert!(state.lx_selection.is_none(), "点击面板空态行不启动底层选区");
+}
+
+#[test]
+fn lx_history_wheel_scrolls_by_wheel_lines_and_clamps() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 18));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        for index in 0..20 {
+            target
+                .lx
+                .chat
+                .messages
+                .push(crate::app::state::ChatMessageView {
+                    sequence: index,
+                    id: format!("m-{index}"),
+                    role: "user".into(),
+                    status: "complete".into(),
+                    turn_index: index,
+                    kind: "chat".into(),
+                    shell: None,
+                    steps: vec![crate::app::state::AssistantStepView::Part {
+                        position: 0,
+                        part: crate::app::state::ChatPartView {
+                            kind: crate::chat::events::PartKind::Text,
+                            content: format!("history-line-{index:02}"),
+                            provider_metadata_json: None,
+                            started_at_ms: None,
+                            ended_at_ms: None,
+                            completed_at_ms: None,
+                        },
+                    }],
+                    model_label: None,
+                    error_code: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_read_tokens: None,
+                    duration_ms: None,
+                    reports: Vec::new(),
+                    attachments: Vec::new(),
+                });
+        }
+        target.lx.chat.follow_bottom = false;
+        target.lx.chat.history_scroll = 0;
+    }
+    let mut cache = ui::RenderCache::default();
+    let (total, visible) = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::history_rows(inner, &target.lx, cache.pane(pane))
+            .expect("history rows")
+    };
+    let max_top = total.saturating_sub(visible);
+    assert!(max_top >= 6, "夹具：历史最大滚动偏移需不小于 6 行");
+    let region = ui::main_content::lx::history_wheel_region(
+        inner,
+        &state.pane_anywhere(pane).expect("pane").lx,
+    )
+    .expect("wheel region");
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 1. 从顶部（history_scroll = 0）向下滚轮 1 格：精确前进 WHEEL_LINES（3 行）。
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, region.x + 2, region.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(dirty);
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .history_scroll,
+        crate::app::update::WHEEL_LINES as usize,
+        "lx 聊天历史单格滚轮向下移动 WHEEL_LINES（3）行"
+    );
+
+    // 2. 向上滚轮 1 格回到顶部 0；继续向上滚轮被钳制在 0 且不产生无效重绘。
+    dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollUp, region.x + 2, region.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(dirty);
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .history_scroll,
+        0
+    );
+    dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollUp, region.x + 2, region.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(!dirty, "触顶后继续上滚不置脏");
+
+    // 3. 距底部不足 3 行（max_top - 2）时向下滚轮 1 格：钳制到 max_top 并恢复 follow_bottom。
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .history_scroll = max_top - 2;
+    dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, region.x + 2, region.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert!(dirty);
+    assert!(chat.follow_bottom, "滚回底部恢复跟随");
+    assert_eq!(chat.history_scroll, max_top);
 }

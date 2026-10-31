@@ -307,3 +307,46 @@ fn paste_while_sidebar_focused_is_swallowed() {
     assert_eq!(state.prompt.text(), before, "不得写进 prompt");
     assert!(!dirty, "无变化不置脏");
 }
+
+#[test]
+fn paste_panel_swallows_mouse_wheel_without_scrolling_underlying_views() {
+    let dir = std::env::temp_dir().join(format!("lx-wheel-paste-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let file_path = dir.join("sample.rs");
+    std::fs::write(&file_path, "fn main() {}\n").expect("write");
+    let path_str = file_path.to_string_lossy().into_owned();
+
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 20));
+    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    state.prompt.resize(area.width, area.height);
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
+    for i in 0..30 {
+        state.prompt.insert_str(&format!("line {i}\n"));
+    }
+    paste::handle_terminal_paste(&mut state, path_str);
+    let rect = crate::ui::prompt::paste_panel_rect(&state.prompt, area).expect("paste panel");
+    let prompt_scroll_before = state.prompt.scroll();
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollUp, rect.x + 1, rect.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(!dirty, "粘贴面板吞掉滚轮且不置脏");
+    assert_eq!(
+        state.prompt.scroll(),
+        prompt_scroll_before,
+        "粘贴面板上滚轮不得穿透滚动底层 prompt"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

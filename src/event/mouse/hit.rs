@@ -228,6 +228,21 @@ pub(crate) fn mention_panel_layout(
     ui::prompt::mention_layout(&state.prompt, area)
 }
 
+/// 粘贴面板矩形；用于滚轮防穿透拦截。
+pub(crate) fn paste_panel_rect(state: &AppState, view: &ui::layout::ViewLayout) -> Option<Rect> {
+    let area = paste::prompt_text_area(view);
+    ui::prompt::paste_panel_rect(&state.prompt, area)
+}
+
+/// 字母快捷面板布局；用于滚轮命中与视口滚动。
+pub(crate) fn refer_panel_layout(
+    state: &AppState,
+    view: &ui::layout::ViewLayout,
+) -> Option<ui::widgets::command_panel::PanelLayout> {
+    let area = paste::prompt_text_area(view);
+    ui::prompt::refer_layout(&state.prompt, area)
+}
+
 /// 定位鼠标下的 lx 窗格及其内容区（仅 lx 视图）；用于 `/` 面板命中/悬停/滚轮。
 pub(crate) fn lx_pane_at(
     state: &AppState,

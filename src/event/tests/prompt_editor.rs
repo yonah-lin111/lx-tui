@@ -654,3 +654,186 @@ fn mouse_click_prompt_collapse_button_works_on_todo_tab() {
     assert_eq!(state.right_tab, RightTab::Todo, "折叠不改当前面板");
     assert!(dirty);
 }
+
+#[test]
+fn lx_slash_wheel_prioritizes_over_history_and_clamped_history_never_leaks_to_input() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 22));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        // 填充超一屏历史消息（位于顶部 history_scroll = 0）。
+        for index in 0..20 {
+            target
+                .lx
+                .chat
+                .messages
+                .push(crate::app::state::ChatMessageView {
+                    sequence: index,
+                    id: format!("m-{index}"),
+                    role: "user".into(),
+                    status: "complete".into(),
+                    turn_index: index,
+                    kind: "chat".into(),
+                    shell: None,
+                    steps: vec![crate::app::state::AssistantStepView::Part {
+                        position: 0,
+                        part: crate::app::state::ChatPartView {
+                            kind: crate::chat::events::PartKind::Text,
+                            content: format!("history-line-{index:02}"),
+                            provider_metadata_json: None,
+                            started_at_ms: None,
+                            ended_at_ms: None,
+                            completed_at_ms: None,
+                        },
+                    }],
+                    model_label: None,
+                    error_code: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_read_tokens: None,
+                    duration_ms: None,
+                    reports: Vec::new(),
+                    attachments: Vec::new(),
+                });
+        }
+        target.lx.chat.follow_bottom = false;
+        target.lx.chat.history_scroll = 0;
+        // 打开 `/` 命令面板（贴在输入框上沿，落在 history_wheel_region 内）。
+        target.lx.slash = Some(crate::app::state::SlashPanel::Commands {
+            items: crate::app::state::SlashPanel::command_entries(""),
+            window: Default::default(),
+            query: String::new(),
+        });
+    }
+    let mut cache = ui::RenderCache::default();
+    let mut sessions = HashMap::new();
+    let slash_bar = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::slash_layout(inner, &target.lx).expect("slash panel")
+    };
+
+    // 1. P0-1 回归：存在聊天历史时在 `/` 面板上滚轮，必须滚动 `/` 面板（3 项），不得滚动底层历史。
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            slash_bar.content.x + 1,
+            slash_bar.content.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(dirty);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.slash.as_ref().expect("slash").window().viewport,
+        Some(crate::app::update::WHEEL_LINES as usize),
+        "`/` 面板优先于聊天历史响应滚轮"
+    );
+    assert_eq!(
+        target.lx.chat.history_scroll, 0,
+        "`/` 面板内滚轮不得穿透到底层聊天历史"
+    );
+
+    // 2. P0-2 回归：关闭 `/` 面板、给输入框填入多行可滚文本，在历史区触顶（0）继续向上滚轮时，
+    //    不得穿透到底部输入框滚动。
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.slash = None;
+        target.lx.input.clear();
+        target.lx.cursor = 0;
+        target.lx.resize(inner.width.saturating_sub(6), 3);
+        target
+            .lx
+            .insert_str("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10");
+    }
+    let input_scroll_before = state.pane_anywhere(pane).expect("pane").lx.scroll();
+    assert!(input_scroll_before > 0, "夹具：输入框贴底且可向上滚");
+    let history_region = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::history_wheel_region(inner, &target.lx).expect("history region")
+    };
+    dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollUp,
+            history_region.x + 2,
+            history_region.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(!dirty, "历史区已在顶部时上滚不置脏");
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.scroll(),
+        input_scroll_before,
+        "历史区触顶滚轮不得穿透滚动底部输入框"
+    );
+}
+
+#[test]
+fn prompt_refer_panel_wheel_scrolls_by_wheel_lines_without_scrolling_editor() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    state.prompt.resize(area.width, area.height);
+    // 构造 6 个不同提及加上 2 个快捷输入字符 `re`，触发 prompt 的 ReferPanel。
+    state
+        .prompt
+        .insert_str("@ref_a.rs @ref_b.rs @ref_c.rs @ref_d.rs @ref_e.rs @ref_f.rs\nre");
+    let panel = crate::ui::prompt::refer_layout(&state.prompt, area).expect("refer panel visible");
+    let scroll_before = state.prompt.scroll();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 1. P2-1 回归：已在顶部（start == 0）向上滚轮不置脏。
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollUp, panel.rect.x + 2, panel.rect.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(!dirty, "面板已在顶部时向上滚轮不产生虚假重绘");
+
+    // 2. P1-1 回归：在快捷引用面板上向下滚轮按 WHEEL_LINES（3 项）滚动面板视口，不穿透滚动编辑器。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            panel.rect.x + 2,
+            panel.rect.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(dirty);
+    assert_eq!(
+        state.prompt.refer_panel().and_then(|p| p.viewport()),
+        Some(crate::app::update::WHEEL_LINES as usize),
+        "prompt 快捷引用面板滚轮按 3 项移动视口"
+    );
+    assert_eq!(
+        state.prompt.scroll(),
+        scroll_before,
+        "快捷引用面板内滚轮不滚动底层 prompt"
+    );
+}

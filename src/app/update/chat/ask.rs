@@ -23,6 +23,7 @@ use crate::app::state::{AppState, AskState};
 use crate::app::toast::{Toast, ToastKind};
 use crate::layout::PaneId;
 
+use super::super::WHEEL_LINES;
 use super::escape_stop;
 
 /// 回车时当前题还没有答案的 toast 文案。
@@ -32,10 +33,7 @@ pub const ASK_HINT_EMPTY: &str = "select an answer first";
 pub const ASK_HINT_TOO_LONG: &str = "answer is too long";
 
 /// 预览滚动的单次步长（`PgUp`/`PgDn` 与滚轮共用）。
-const PREVIEW_STEP: isize = 3;
-
-/// 选项列表滚轮的单次步长（行）；与输入框、历史区的滚轮步长一致。
-const WHEEL_STEP: isize = 3;
+const PREVIEW_STEP: isize = WHEEL_LINES;
 
 /// ask 面板接管 lx 输入；返回是否产生状态变化。
 pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
@@ -278,12 +276,12 @@ pub fn apply_ask_wheel(
         return false;
     };
     match zone {
-        AskWheelZone::Preview => ask.scroll_preview(direction.saturating_mul(PREVIEW_STEP)),
+        AskWheelZone::Preview => ask.scroll_preview(direction.saturating_mul(WHEEL_LINES)),
         AskWheelZone::Options => {
             let Some((base, total, visible)) = window else {
                 return false;
             };
-            ask.scroll_viewport(direction.saturating_mul(WHEEL_STEP), base, total, visible)
+            ask.scroll_viewport(direction.saturating_mul(WHEEL_LINES), base, total, visible)
         }
     }
 }

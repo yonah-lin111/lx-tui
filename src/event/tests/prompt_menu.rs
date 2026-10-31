@@ -335,7 +335,7 @@ fn mouse_hover_over_referenced_menu_after_wheel_keeps_viewport() {
     };
     assert_eq!(menu.hover, Some(row_index), "悬停按可见行命中");
     assert_eq!(menu.selected, 0, "悬停不移动 `❯` 选中标记");
-    assert_eq!(menu.viewport, Some(1), "悬停不改变已滚开的视口");
+    assert_eq!(menu.viewport, Some(3), "悬停不改变已滚开的视口");
 }
 
 #[test]
@@ -502,7 +502,7 @@ fn mouse_wheel_over_referenced_menu_scrolls_viewport_not_highlight() {
     let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
         panic!("menu");
     };
-    assert_eq!(menu.viewport, Some(1), "滚轮下移视口一项");
+    assert_eq!(menu.viewport, Some(3), "滚轮下移视口 3 项");
     assert_eq!(menu.selected, 0, "滚轮不动高亮");
     assert_eq!(
         state.prompt.scroll(),

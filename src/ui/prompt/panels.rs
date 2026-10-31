@@ -92,10 +92,11 @@ pub fn paste_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
     paste_layout(prompt, area).map(|layout| layout.rect)
 }
 
-/// 字母快捷面板渲染数据：候选行、高亮与锚点行。
+/// 字母快捷面板渲染数据：候选行、高亮、显式视口与锚点行。
 struct ReferPanelData {
     rows: Vec<SlashRow>,
     active: usize,
+    viewport: Option<usize>,
     anchor_row: u16,
 }
 
@@ -114,18 +115,19 @@ fn refer_panel_data(prompt: &Prompt) -> Option<ReferPanelData> {
             })
             .collect(),
         active: panel.active(),
+        viewport: panel.viewport(),
         anchor_row,
     })
 }
 
-/// 字母快捷面板视图：锚定光标行，窗口跟随高亮；标题固定。
+/// 字母快捷面板视图：锚定光标行，显式视口优先，否则窗口跟随高亮；标题固定。
 fn refer_view<'a>(items: &'a [CommandItem<'a>], data: &ReferPanelData) -> CommandPanelView<'a> {
     CommandPanelView {
         current: None,
         items,
         active: data.active,
         window_anchor: Some(data.active),
-        window_start: None,
+        window_start: data.viewport,
         anchor_row: data.anchor_row,
         max_height: None,
         title: Some(text::REFER_PANEL_TITLE),

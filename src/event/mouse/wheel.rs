@@ -6,7 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKi
 use ratatui::layout::Rect;
 
 use crate::app::state::{AppState, PaneKind, PaneView};
-use crate::app::update;
+use crate::app::update::{self, WHEEL_LINES};
 use crate::input;
 use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
@@ -16,11 +16,9 @@ use alacritty_terminal::term::TermMode;
 
 use super::super::session::{Geometry, write_to_pane};
 use super::hit::{
-    block_panel_layout, mention_panel_layout, pane_at, pane_content_inner, slash_panel_layout,
+    block_panel_layout, mention_panel_layout, pane_at, pane_content_inner, paste_panel_rect,
+    refer_panel_layout, slash_panel_layout,
 };
-
-/// 每次滚轮滚动的视觉行数（与 prompt 视口一致）。
-const WHEEL_LINES: isize = 3;
 
 /// 纵向滚轮方向（负数向上）；横向滚轮返回 None。
 pub(crate) fn vertical_wheel_direction(kind: MouseEventKind) -> Option<isize> {
@@ -29,6 +27,11 @@ pub(crate) fn vertical_wheel_direction(kind: MouseEventKind) -> Option<isize> {
         MouseEventKind::ScrollDown => Some(1),
         _ => None,
     }
+}
+
+/// 纵向滚轮单格步长（负数向上，每格 `WHEEL_LINES` 行/项）；横向滚轮返回 None。
+pub(crate) fn vertical_wheel_delta(kind: MouseEventKind) -> Option<isize> {
+    vertical_wheel_direction(kind).map(|direction| direction.saturating_mul(WHEEL_LINES))
 }
 
 /// 拖拽选择中滚轮：滚动选区所在窗格，并把选区光标延伸到鼠标位置（钳在窗格内）。
@@ -80,6 +83,7 @@ fn wheel_lx_selection(
     else {
         return false;
     };
+    let step = direction.saturating_mul(WHEEL_LINES);
     let moved = if has_task {
         update::resolve_task_output_visible(state, rects);
         update::resolve_task_agents_visible(state, rects);
@@ -88,15 +92,15 @@ fn wheel_lx_selection(
             .and_then(|target| target.lx.task.as_ref())
             .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
         if agents_tab {
-            update::scroll_agents_detail(state, pane, direction)
+            update::scroll_agents_detail(state, pane, step)
         } else {
-            update::scroll_task_output(state, pane, direction.saturating_mul(WHEEL_LINES))
+            update::scroll_task_output(state, pane, step)
         }
     } else if let Some((total, visible)) = state
         .pane_anywhere(pane)
         .and_then(|target| ui::main_content::lx::history_rows(inner, &target.lx, cache.pane(pane)))
     {
-        update::scroll_lx_history(state, pane, direction, total, visible)
+        update::scroll_lx_history(state, pane, step, total, visible)
     } else {
         false
     };
@@ -241,26 +245,26 @@ pub(crate) fn handle_mouse_wheel(
     if state.prompt_drag.is_some() {
         return;
     }
-    if let Some(direction) = vertical_wheel_direction(mouse.kind)
+    if let Some(delta) = vertical_wheel_delta(mouse.kind)
         && let Some(crate::app::overlay::Overlay::ReferencedFolderSearch(search)) =
             state.overlay.as_ref()
         && let Some(layout) = ui::overlay::referenced_search_layout(geometry.screen, search)
         && layout.area.contains((mouse.column, mouse.row).into())
     {
         // 弹窗内滚轮滚动列表视口（高亮不动、越界钳制），不穿透到底层。
-        if update::scroll_referenced_search(state, direction, layout.start, layout.visible()) {
+        if update::scroll_referenced_search(state, delta, layout.start, layout.visible()) {
             *dirty = true;
         }
         return;
     }
-    if let Some(direction) = vertical_wheel_direction(mouse.kind)
+    if let Some(delta) = vertical_wheel_delta(mouse.kind)
         && let Some(crate::app::overlay::Overlay::ReferencedFolderMenu(menu)) =
             state.overlay.as_ref()
     {
         // 弹窗内滚轮滚动列表视口（高亮不动、越界钳制），不穿透到底层；与 prompt 的 @ 面板一致。
         let layout = ui::overlay::referenced_menu_layout(geometry.screen, menu);
         if layout.area.contains((mouse.column, mouse.row).into()) {
-            if update::scroll_referenced_menu(state, direction, layout.start, layout.visible()) {
+            if update::scroll_referenced_menu(state, delta, layout.start, layout.visible()) {
                 *dirty = true;
             }
             return;
@@ -272,31 +276,51 @@ pub(crate) fn handle_mouse_wheel(
     if state.resizing_prompt || state.resizing_pane.is_some() {
         return;
     }
+    // 粘贴面板打开且指针在其上：吞掉滚轮，不穿透到 prompt 与窗格。
+    if vertical_wheel_direction(mouse.kind).is_some()
+        && let Some(rect) = paste_panel_rect(state, view)
+        && rect.contains((mouse.column, mouse.row).into())
+    {
+        return;
+    }
     // @ 提及面板打开且指针在其上：滚轮滚动面板视口（高亮不动），不穿透到 prompt 与窗格。
-    if let Some(direction) = vertical_wheel_direction(mouse.kind)
+    if let Some(delta) = vertical_wheel_delta(mouse.kind)
         && let Some(panel) = mention_panel_layout(state, view)
         && panel.rect.contains((mouse.column, mouse.row).into())
     {
-        update::scroll_mention(state, direction, panel.start);
-        *dirty = true;
+        if update::scroll_mention(state, delta, panel.start) {
+            *dirty = true;
+        }
+        return;
+    }
+    // 字母快捷面板打开且指针在其上：滚轮滚动面板视口（高亮不动），不穿透到 prompt 与窗格。
+    if let Some(delta) = vertical_wheel_delta(mouse.kind)
+        && let Some(panel) = refer_panel_layout(state, view)
+        && panel.rect.contains((mouse.column, mouse.row).into())
+    {
+        if update::scroll_refer(state, delta, panel.start) {
+            *dirty = true;
+        }
         return;
     }
     // 斜杠命令面板同上：滚轮滚动视口，到底/顶后钳制不循环。
-    if let Some(direction) = vertical_wheel_direction(mouse.kind)
+    if let Some(delta) = vertical_wheel_delta(mouse.kind)
         && let Some(panel) = slash_panel_layout(state, view)
         && panel.rect.contains((mouse.column, mouse.row).into())
     {
-        update::scroll_slash(state, direction, panel.start);
-        *dirty = true;
+        if update::scroll_slash(state, delta, panel.start) {
+            *dirty = true;
+        }
         return;
     }
     // 块命令面板同上。
-    if let Some(direction) = vertical_wheel_direction(mouse.kind)
+    if let Some(delta) = vertical_wheel_delta(mouse.kind)
         && let Some(panel) = block_panel_layout(state, view)
         && panel.rect.contains((mouse.column, mouse.row).into())
     {
-        update::scroll_panel(state, direction, panel.start);
-        *dirty = true;
+        if update::scroll_panel(state, delta, panel.start) {
+            *dirty = true;
+        }
         return;
     }
     // prompt 拖拽选区：滚轮滚动视口，锚点钉在文本上，终点跟到鼠标。
@@ -359,9 +383,13 @@ pub(crate) fn handle_mouse_wheel(
             update::clear_selection(state);
             if let Some(direction) = vertical_wheel_direction(mouse.kind) {
                 if update::prompt_tree_mode(state) {
-                    // 树视图滚轮按行滚动，光标/选中不动。
+                    // 树视图滚轮按全局步长滚动，光标/选中不动。
                     let visible = update::prompt_tree_visible_rows(state);
-                    if update::scroll_prompt_tree(state, direction, visible) {
+                    if update::scroll_prompt_tree(
+                        state,
+                        direction.saturating_mul(WHEEL_LINES),
+                        visible,
+                    ) {
                         *dirty = true;
                     }
                 } else {
@@ -375,32 +403,51 @@ pub(crate) fn handle_mouse_wheel(
             .pane_anywhere(pane)
             .is_some_and(|target| target.view == PaneView::Lx)
         {
-            // lx 页：提及面板候选视口优先于输入框滚动；面板内滚轮不穿透到输入框。
-            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+            // lx 页：粘贴选择面板打开且指针在其上时吞掉滚轮，不穿透到历史区与输入框。
+            if vertical_wheel_direction(mouse.kind).is_some()
+                && let Some(bar) = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::paste_layout(inner, &target.lx))
+                && bar.rect.contains((mouse.column, mouse.row).into())
+            {
+                return;
+            }
+            // lx 页：提及面板候选视口优先于历史区与输入框滚动；面板内滚轮不穿透。
+            if let Some(delta) = vertical_wheel_delta(mouse.kind)
                 && let Some(bar) = state
                     .pane_anywhere(pane)
                     .and_then(|target| ui::main_content::lx::mention_layout(inner, &target.lx))
                 && bar.rect.contains((mouse.column, mouse.row).into())
             {
-                if update::scroll_lx_mention(state, pane, direction, bar.start) {
+                if update::scroll_lx_mention(state, pane, delta, bar.start) {
                     *dirty = true;
                 }
                 return;
             }
-            // lx 页：快捷引用面板候选视口优先于输入框滚动。
-            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+            // lx 页：快捷引用面板候选视口优先于历史区与输入框滚动。
+            if let Some(delta) = vertical_wheel_delta(mouse.kind)
                 && let Some(bar) = state
                     .pane_anywhere(pane)
                     .and_then(|target| ui::main_content::lx::refer_layout(inner, &target.lx))
                 && bar.rect.contains((mouse.column, mouse.row).into())
             {
-                if update::scroll_lx_refer(state, pane, direction, bar.start) {
+                if update::scroll_lx_refer(state, pane, delta, bar.start) {
+                    *dirty = true;
+                }
+                return;
+            }
+            // lx 页：`/` 命令面板（含 `/model`、`/resume`、`/rewind`）优先于历史区与输入框滚动。
+            if let Some(delta) = vertical_wheel_delta(mouse.kind)
+                && let Some(bar) = super::hit::lx_slash_panel_layout(state, pane, inner)
+                && bar.rect.contains((mouse.column, mouse.row).into())
+            {
+                if update::scroll_lx_slash(state, pane, delta, bar.start) {
                     *dirty = true;
                 }
                 return;
             }
             // 后台任务面板的输出容器：滚轮滚动输出视口（不穿透到下方 item 列表）。
-            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+            if let Some(delta) = vertical_wheel_delta(mouse.kind)
                 && let Some(task_rects) = state
                     .pane_anywhere(pane)
                     .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
@@ -412,11 +459,11 @@ pub(crate) fn handle_mouse_wheel(
                     .pane_anywhere(pane)
                     .and_then(|target| target.lx.task.as_ref())
                     .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
-                // Agents 详情按主聊天历史的步长（1 行/格）；进程输出沿用 3 行。
+                // Agents 详情与进程输出统一按 WHEEL_LINES（3 行/格）滚动。
                 let changed = if agents_tab {
-                    update::scroll_agents_detail(state, pane, direction)
+                    update::scroll_agents_detail(state, pane, delta)
                 } else {
-                    update::scroll_task_output(state, pane, direction.saturating_mul(WHEEL_LINES))
+                    update::scroll_task_output(state, pane, delta)
                 };
                 if changed {
                     *dirty = true;
@@ -427,13 +474,13 @@ pub(crate) fn handle_mouse_wheel(
             //
             // 之前这里没有分支，滚轮直接漏到下方 `scroll_lx_input`——滚动一个看不见的
             // 输入缓冲并置脏，而列表实际滚不动（`window.viewport` 永远没人写）。
-            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+            if let Some(delta) = vertical_wheel_delta(mouse.kind)
                 && let Some(rects) = state
                     .pane_anywhere(pane)
                     .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
                 && rects.list.contains((mouse.column, mouse.row).into())
             {
-                if update::scroll_task_list(state, pane, direction.saturating_mul(WHEEL_LINES)) {
+                if update::scroll_task_list(state, pane, delta) {
                     *dirty = true;
                 }
                 return;
@@ -462,33 +509,23 @@ pub(crate) fn handle_mouse_wheel(
                 }
                 return;
             }
-            // 聊天历史区滚轮：滚动历史视口（保留输入框滚轮给输入缓冲区）。
-            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+            // 聊天历史区滚轮：滚动历史视口；即使触顶/触底未产生位移也必须在此消费并返回，
+            // 严禁向下穿透滚动底部输入框。
+            if let Some(delta) = vertical_wheel_delta(mouse.kind)
                 && let Some(history_rect) = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::history_wheel_region(inner, &target.lx)
                 })
                 && history_rect.contains((mouse.column, mouse.row).into())
-                && let Some((total, visible)) = state.pane_anywhere(pane).and_then(|target| {
+            {
+                if let Some((total, visible)) = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::history_rows(inner, &target.lx, cache.pane(pane))
-                })
-                && update::scroll_lx_history(state, pane, direction, total, visible)
-            {
-                *dirty = true;
-                return;
-            }
-            // `/` 命令面板滚轮：滚动候选窗口（不穿透到输入框）。
-            if let Some(direction) = vertical_wheel_direction(mouse.kind)
-                && let Some((pane, inner)) =
-                    super::hit::lx_pane_at(state, rects, mouse.column, mouse.row)
-                && let Some(bar) = super::hit::lx_slash_panel_layout(state, pane, inner)
-                && bar.rect.contains((mouse.column, mouse.row).into())
-            {
-                if update::scroll_lx_slash(state, pane, direction, bar.start) {
+                }) && update::scroll_lx_history(state, pane, delta, total, visible)
+                {
                     *dirty = true;
                 }
                 return;
             }
-            // 提及面板外：滚轮滚动输入缓冲区视口，不穿透到隐藏终端。
+            // 提及面板与历史区外：滚轮滚动输入缓冲区视口，不穿透到隐藏终端。
             if let Some(direction) = vertical_wheel_direction(mouse.kind)
                 && update::scroll_lx_input(state, pane, direction)
             {
@@ -502,8 +539,8 @@ pub(crate) fn handle_mouse_wheel(
         }
     } else if ui::workspace_section_at(view, state, mouse.column, mouse.row)
         && let Some(rows) = ui::workspace_list_rows(view, state)
-        && let Some(direction) = vertical_wheel_direction(mouse.kind)
-        && update::scroll_workspace_list(state, direction, rows)
+        && let Some(delta) = vertical_wheel_delta(mouse.kind)
+        && update::scroll_workspace_list(state, delta, rows)
     {
         // 列表滚动后指针下的工作区可能已换行：按新偏移重算悬停。
         let hover = ui::workspace_item_at(view, state, mouse.column, mouse.row);
@@ -511,8 +548,8 @@ pub(crate) fn handle_mouse_wheel(
         *dirty = true;
     } else if ui::agents_section_at(view, state, mouse.column, mouse.row)
         && let Some(rows) = ui::agent_list_rows(view, state)
-        && let Some(direction) = vertical_wheel_direction(mouse.kind)
-        && update::scroll_agent_list(state, direction, rows)
+        && let Some(delta) = vertical_wheel_delta(mouse.kind)
+        && update::scroll_agent_list(state, delta, rows)
     {
         // 列表滚动后指针下的条目可能已换行：按新偏移重算悬停。
         let hover = ui::agent_item_index_at(view, state, mouse.column, mouse.row);

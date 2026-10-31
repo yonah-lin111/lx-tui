@@ -279,6 +279,22 @@ fn scroll_viewport_only_moves_window_not_highlight() {
     let panel = lx.mention().panel().expect("panel");
     assert_eq!(panel.viewport(), Some(2));
     assert_eq!(panel.active(), active, "滚轮不动高亮");
+
+    // 切到 refDir Tab 后滚轮以传入的 base 为准偏移并钳制，不动高亮。
+    let folders: Vec<crate::app::referenced::ReferencedFolder> = (0..6)
+        .map(|id| crate::app::referenced::ReferencedFolder {
+            id,
+            path: std::path::PathBuf::from(format!("/ref/{id}")),
+        })
+        .collect();
+    lx.sync_referenced_folders(&folders);
+    assert!(lx.mention_switch_tab(1));
+    assert!(lx.mention_scroll(3, 0));
+    assert_eq!(lx.mention().ref_viewport(), Some(3));
+    assert_eq!(lx.mention().ref_active(), 0);
+    // 渲染层按可见高度钳制后的 base（如 2）作为回滚起点：向上滚 3 格直接回到 0。
+    assert!(lx.mention_scroll(-3, 2));
+    assert_eq!(lx.mention().ref_viewport(), Some(0));
 }
 
 #[test]
