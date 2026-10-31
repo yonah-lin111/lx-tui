@@ -1,6 +1,6 @@
 # Toast 容器归属与复制反馈位置重调整 — 详细设计方案
 
-> 状态：**已完成边界确认（Grill Me Q1–Q3）、代码实现、Code Review（P0–P2 修复）与测试校验**
+> 状态：**已完成边界确认（Grill Me Q1–Q3）、代码实现、Code Review（P0–P2 修复）与测试校验，已合并入 dev 主分支**
 >
 > 涉及模块：`src/event/mouse/hit.rs`、`src/event/mouse/hover.rs`、`src/event/input.rs`、`src/db/service.rs`、`src/app/update/prompt.rs`、`src/app/update/menu.rs`、`src/app/update/todo.rs`、`src/app/update/interaction.rs`、`src/app/update/pane.rs`、`src/app/update/workspace.rs`、`src/ui/toast.rs`、`src/ui/main_content/lx/toast.rs`、`docs/standards/tui-design-requirements.md`
 

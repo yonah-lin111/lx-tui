@@ -74,3 +74,12 @@
 - [x] **P1-1 修复**（`src/app/update/interaction.rs`、`src/app/update/pane.rs`、`src/app/update/workspace.rs`）：确保同一窗格的 `state.toast` 与 `pane.lx.toast` 互斥，在 `toggle_pane_view`、`focus_agent_pane` 与 `close_pane` 时清理该窗格关联的 Toast，杜绝同窗格双框叠画与关窗格后 Toast 窜位；新增回归测试 `toggling_pane_view_or_closing_pane_clears_anchored_toast`
 - [x] **P1-2 修复**（`src/ui/toast.rs`）：在 `ui::toast::rect` 中校验窗格锚点是否属于当前活动标签页（`state.active_tab().pane(id)`），避免切换标签页/工作区后后台终端窗格的 Toast 降级泄漏到全屏顶部正中央；新增回归测试 `inactive_tab_pane_toast_does_not_leak_to_global_top_center`
 - [x] **P2 修复**（`tests/prompt_copy.rs`、`src/app/toast.rs`）：在 `tests/prompt_copy.rs` 中补充右侧面板复制 Toast 的列坐标断言（`toast_x >= 60`），并同步更新文档注释
+
+---
+
+## 阶段五：合并主分支与清理 Worktree（已完成）
+
+- [x] 核对数据库迁移与 `SCHEMA_VERSION`（本次改动无数据库迁移）
+- [x] 将 `feat/toast-container-placement` 分支合并回 `dev` 主分支
+- [x] 验证 `dev` 分支代码格式、clippy 与全量受影响测试
+- [x] 清理 worktree `.worktrees/toast-container-placement` 与 feature 分支
