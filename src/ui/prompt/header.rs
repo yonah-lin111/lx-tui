@@ -1,15 +1,17 @@
 //! prompt 标题行与页控件：只读状态，无 IO。
 //!
-//! 编辑视图在**工具栏下方的分割线**上内嵌 `条目名 · 页名`（左侧）与 `‹ n/m ›`（右侧），
+//! 编辑视图在**工具栏下方的分割线**上内嵌 `条目名 · 页名`（左侧）、
+//! 状态标签 `[todo]`/`[run]`/`[done]`（页控件左侧，按状态着色）与 `‹ n/m ›`（右侧），
 //! 页列表视图内嵌 `条目名 · pages`（左侧）与无箭头的 `n/m`（右侧），
-//! 树视图的标题行为纯 `─`、不显示页控件。
-//! 三段抢宽度时的优先级为 页控件 → 条目名 → 页名（页控件永不截断）。
+//! 树视图的标题行为纯 `─`、不显示状态与页控件。
+//! 抢宽度时的优先级为 页控件 → 状态标签 → 条目名 → 页名（页控件永不截断）。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_width::UnicodeWidthStr;
 
+use crate::app::markdown::TemplateStatus;
 use crate::app::prompt::{Prompt, PromptMode};
 use crate::ui::{style, text};
 
@@ -92,11 +94,19 @@ pub fn page_controls_with(area: Rect, counter: &str, arrows: bool) -> Option<Pro
     }
 }
 
-/// 标题行左侧标题区（页控件之前）；无控件时到右边角前一列。
-fn title_text_rect(area: Rect, controls: Option<&PromptPageControls>) -> Rect {
+/// 标题行左侧标题区（页控件与状态标签之前）；无控件时到右边角前一列。
+fn title_text_rect(
+    area: Rect,
+    controls: Option<&PromptPageControls>,
+    status_x: Option<u16>,
+) -> Rect {
     let end = match controls {
         Some(controls) => controls.prev.x.saturating_sub(1),
         None => area.right().saturating_sub(1),
+    };
+    let end = match status_x {
+        Some(x) => x.saturating_sub(1),
+        None => end,
     };
     let x = area.x.saturating_add(2);
     Rect {
@@ -105,6 +115,28 @@ fn title_text_rect(area: Rect, controls: Option<&PromptPageControls>) -> Rect {
         width: end.saturating_sub(x),
         height: 1,
     }
+}
+
+/// 本页模板块状态标签：右对齐贴页控件左侧、与标题区隔 1 列；
+/// 标题区至少保留 2 列，空间不足时隐藏。
+fn status_rect(
+    area: Rect,
+    controls: Option<&PromptPageControls>,
+    status: TemplateStatus,
+) -> Option<(Rect, Style)> {
+    let label = text::template_status_label(status);
+    let width = u16::try_from(UnicodeWidthStr::width(label)).ok()?;
+    let right = match controls {
+        Some(controls) => controls.prev.x.saturating_sub(1),
+        None => area.right().saturating_sub(1),
+    };
+    let x = right.checked_sub(width)?;
+    (x >= area.x.saturating_add(5)).then(|| {
+        (
+            Rect::new(x, area.y, width, 1),
+            style::template_border(status),
+        )
+    })
 }
 
 /// 标题行排布结果：条目名段、页名段与其起点列。
@@ -162,8 +194,16 @@ fn border_title_style(draft: bool) -> Style {
     }
 }
 
-/// 绘制标题行标题与页控件；须在面板边框绘制之后调用（覆盖 `─`）。
-pub fn paint_title_row(buf: &mut Buffer, area: Rect, data: &TitleRowData<'_>) {
+/// 绘制标题行标题、状态标签与页控件；须在面板边框绘制之后调用（覆盖 `─`）。
+///
+/// `status` 为本页 `&&&` 模板块状态：`Some` 时在页控件左侧画 `[todo]`/`[run]`/`[done]`，
+/// 颜色按状态（蓝/黄/绿）；空间不足时隐藏标签，优先保留页控件与标题。
+pub fn paint_title_row(
+    buf: &mut Buffer,
+    area: Rect,
+    data: &TitleRowData<'_>,
+    status: Option<TemplateStatus>,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -174,10 +214,19 @@ pub fn paint_title_row(buf: &mut Buffer, area: Rect, data: &TitleRowData<'_>) {
             page.arrows,
         )
     });
-    let title_area = title_text_rect(area, controls.as_ref());
+    let status_area = status.and_then(|status| status_rect(area, controls.as_ref(), status));
+    let title_area = title_text_rect(
+        area,
+        controls.as_ref(),
+        status_area.as_ref().map(|(rect, _)| rect.x),
+    );
     let title_style = border_title_style(data.draft);
     if title_area.width > 0 {
         paint_border_text(buf, title_area, data, title_style);
+    }
+    if let (Some(status), Some((rect, status_style))) = (status, status_area) {
+        let label = text::template_status_label(status);
+        buf.set_stringn(rect.x, rect.y, label, usize::from(rect.width), status_style);
     }
     if let (Some(controls), Some(page)) = (controls.as_ref(), data.page.as_ref()) {
         paint_page_controls(buf, controls, page);

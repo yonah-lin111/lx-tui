@@ -598,7 +598,7 @@ pub fn template_command(id: Option<SlashCommandId>) -> Style {
     Style::default().fg(color).add_modifier(Modifier::BOLD)
 }
 
-/// 模板块标题占位符 `{title: …}`：Cyan 下划线（与状态色边框、@ 提及黄区分）。
+/// 模板块标题占位符 `{title: …}`：Cyan 下划线（与状态标签色、@ 提及黄区分）。
 pub fn template_title() -> Style {
     Style::default()
         .fg(Color::Cyan)
@@ -689,7 +689,7 @@ pub fn template_block_bar() -> Style {
     Style::default().fg(LX_PINK)
 }
 
-/// 模板块边框：按状态分色（todo 靛蓝 / in_progress 黄 / done 绿）。
+/// 模板块状态标签：按状态分色（todo 靛蓝 / in_progress 黄 / done 绿）。
 pub fn template_border(status: TemplateStatus) -> Style {
     match status {
         TemplateStatus::Todo => Style::default().fg(Color::LightBlue),

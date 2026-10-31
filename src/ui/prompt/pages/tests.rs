@@ -110,7 +110,7 @@ fn title_row_in_pages_mode_hides_arrows_and_shows_pages_label_and_counter() {
             arrows: false,
         }),
     };
-    paint_title_row(&mut buf, row, &data);
+    paint_title_row(&mut buf, row, &data, None);
     let rendered: String = (panel.x..panel.right())
         .map(|x| buf[(x, row.y)].symbol())
         .collect();

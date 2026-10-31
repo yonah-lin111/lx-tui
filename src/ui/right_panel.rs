@@ -101,48 +101,11 @@ pub(crate) fn render(
         state.right_tab_hover,
     );
     render_bottom(frame, area, state);
-    let cursor = match state.right_tab {
+    match state.right_tab {
         // Prompt 体：功能按钮行 + 标题行 + 正文/树 + 滚动条 + 硬件光标
         RightTab::Prompt => prompt_frame::render_body(frame, area, state),
         // Todo：工具栏按钮 + 三态列表 + 行内编辑 + 滚动条
         RightTab::Todo => todo::render(frame, area, state),
-    };
-    if let Some((color, divider)) =
-        prompt_frame::edit_border_style(state).zip(crate::layout::prompt_divider_rect(area))
-    {
-        tint_edit_border(frame.buffer_mut(), area, divider.y, color);
-    }
-    cursor
-}
-
-/// 用 `color` 重绘分割线行至底边的外框字形（左右竖边、底边 `─` 与两角）；
-/// 只改前景色，不改字形与单元格内容，底边已绘制的文字/控件不覆盖。
-fn tint_edit_border(buf: &mut Buffer, panel: Rect, from_y: u16, color: Style) {
-    if panel.width == 0 || panel.height == 0 {
-        return;
-    }
-    let left = panel.x;
-    let right = panel.right() - 1;
-    let bottom = panel.bottom() - 1;
-    let tint = |cell: &mut ratatui::buffer::Cell| {
-        cell.set_style(Style::reset());
-        cell.set_style(color);
-    };
-    for y in from_y..=bottom {
-        for x in [left, right] {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                tint(cell);
-            }
-        }
-    }
-    for y in [from_y, bottom] {
-        for x in left..=right {
-            if let Some(cell) = buf.cell_mut((x, y))
-                && matches!(cell.symbol(), "─" | "├" | "┤" | "└" | "┘")
-            {
-                tint(cell);
-            }
-        }
     }
 }
 

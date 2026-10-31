@@ -1,6 +1,7 @@
 # Prompt 块结构与页列表重构 — 设计
 
 - 状态：**已实施**（P1–P5 已在 `feat/prompt-block-restyle` 完成并验证通过）。
+- 后续调整：`&&&` 状态不再染 edit 区外框，改为标题行页控件左侧的状态标签（`[todo]`/`[run]`/`[done]`，按状态取蓝/黄/绿）；§6 的边框染色仅作历史记录。
 - 分支 / 工作区：`feat/prompt-block-restyle` @ `.worktrees/prompt-block-restyle`（基于 `dev` `c59c4bbd`）。
 - 范围：`src/app/markdown/`、`src/app/prompt/`、`src/app/update/`、`src/ui/prompt*`、`src/ui/overlay/`、`src/ui/right_panel.rs`、`src/layout/prompt.rs`、`src/input/mod.rs`、`src/event/`、`assets/settings.js`。
 - 取代：`docs/feature/prompt-block-focus/`（块聚焦）、`docs/feature/prompt-supplement-fold/`（补充块折叠）、`docs/feature/prompt-pagination/` 中的「页码菜单」与「标题行页名重命名」部分。旧文档保留，在顶部加「已被 prompt-block-restyle 取代」标注。

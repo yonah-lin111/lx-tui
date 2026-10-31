@@ -17,17 +17,12 @@ pub(crate) fn prompt_edit_title(state: &AppState) -> Option<String> {
     }
 }
 
-/// edit 区边框色：编辑视图 + Prompt tab + 本页存在 `&&&` 时取其状态色；否则 None（保持灰）。
-pub(crate) fn edit_border_style(state: &AppState) -> Option<ratatui::style::Style> {
-    if state.right_tab != crate::app::state::RightTab::Prompt
-        || state.prompt_owner().prompt_panel.mode != PromptMode::Editor
-    {
-        return None;
-    }
+/// 本页 `&&&` 模板块状态（编辑视图标题行的状态标签；无块时 None）。
+fn prompt_template_status(state: &AppState) -> Option<crate::app::markdown::TemplateStatus> {
     crate::app::markdown::block_spans(state.prompt.text())
         .into_iter()
         .find(|span| span.kind == crate::app::markdown::BlockKind::Template)
-        .map(|span| super::style::template_border(span.status))
+        .map(|span| span.status)
 }
 
 /// 标题行标题来源：树视图无标题（纯分割线），编辑视图与页列表视图展示标题与页信息。
@@ -37,6 +32,7 @@ enum TitleSource {
         title: Option<String>,
         draft: bool,
         page: Option<PromptPageHeader>,
+        status: Option<crate::app::markdown::TemplateStatus>,
     },
     Pages {
         title: Option<String>,
@@ -55,6 +51,7 @@ fn title_source(state: &AppState) -> TitleSource {
             title: prompt_edit_title(state),
             draft,
             page: prompt_page_header(state),
+            status: prompt_template_status(state),
         },
         PromptMode::Pages => TitleSource::Pages {
             title: prompt_edit_title(state),
@@ -169,10 +166,21 @@ pub(crate) fn render_body(
     let focused = state.prompt_focused();
     let mode = state.prompt_owner().prompt_panel.mode;
     let title = title_source(state);
-    let (title_text, draft, page) = match &title {
-        TitleSource::Tree => (None, false, None),
-        TitleSource::Editor { title, draft, page } | TitleSource::Pages { title, draft, page } => {
-            (title.as_deref().or(Some("")), *draft, page.as_ref())
+    let (title_text, draft, page, status) = match &title {
+        TitleSource::Tree => (None, false, None, None),
+        TitleSource::Editor {
+            title,
+            draft,
+            page,
+            status,
+        } => (
+            title.as_deref().or(Some("")),
+            *draft,
+            page.as_ref(),
+            *status,
+        ),
+        TitleSource::Pages { title, draft, page } => {
+            (title.as_deref().or(Some("")), *draft, page.as_ref(), None)
         }
     };
     let page_data = prompt::TitleRowData {
@@ -190,7 +198,7 @@ pub(crate) fn render_body(
         state.prompt_pinned.is_some(),
     );
     if let Some(row) = title_row(area) {
-        prompt::paint_title_row(frame.buffer_mut(), row, &page_data);
+        prompt::paint_title_row(frame.buffer_mut(), row, &page_data, status);
     }
     let text_area = crate::layout::prompt_text_rect(area);
     let list_cursor = match mode {

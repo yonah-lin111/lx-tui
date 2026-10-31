@@ -1279,6 +1279,15 @@ fn supple_block_renders_title_separator_like_template() {
 /// 标题行渲染工具：先画直角边框与分割线，再把标题覆盖到分割线行，
 /// 返回标题行整行字符串（含两端 `├` / `┤`）。
 fn title_row_render(panel: Rect, data: &TitleRowData<'_>) -> String {
+    title_row_render_with_status(panel, data, None)
+}
+
+/// 同上，附加本页模板块状态标签。
+fn title_row_render_with_status(
+    panel: Rect,
+    data: &TitleRowData<'_>,
+    status: Option<TemplateStatus>,
+) -> String {
     let mut buf = Buffer::empty(panel);
     let block = ratatui::widgets::Block::bordered();
     ratatui::widgets::Widget::render(block, panel, &mut buf);
@@ -1286,7 +1295,7 @@ fn title_row_render(panel: Rect, data: &TitleRowData<'_>) -> String {
         render_divider(panel, header, &mut buf, false);
     }
     let row = crate::ui::prompt_frame::title_row(panel).expect("title row");
-    paint_title_row(&mut buf, row, data);
+    paint_title_row(&mut buf, row, data, status);
     (panel.x..panel.right())
         .map(|x| buf[(x, row.y)].symbol())
         .collect()
@@ -1382,6 +1391,7 @@ fn arrows_grey_out_at_page_edges() {
             draft: false,
             page: Some(page_data(1, 2, "Page 1")),
         },
+        None,
     );
     assert_eq!(
         buf[(controls.prev.x, border.y)].fg,
@@ -1403,6 +1413,7 @@ fn arrows_grey_out_at_page_edges() {
             draft: false,
             page: Some(page_data(2, 2, "Page 2")),
         },
+        None,
     );
     assert_eq!(
         buf[(controls.next.x, border.y)].fg,
@@ -1475,10 +1486,61 @@ fn title_row_draft_uses_muted_style() {
             draft: true,
             page: Some(page_data(1, 1, "Page 1")),
         },
+        None,
     );
     let cell = &buf[(border.x + 2, border.y)];
     assert_eq!(cell.fg, Color::Reset, "草稿标题显式重置前景");
     assert!(cell.modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn title_row_draws_status_label_left_of_page_controls() {
+    let panel = Rect::new(0, 0, 56, 8);
+    let border = crate::ui::prompt_frame::title_row(panel).expect("title row");
+    let controls = page_controls(border, "2/4").expect("controls");
+    let data = TitleRowData {
+        title: Some("item"),
+        draft: false,
+        page: Some(page_data(2, 4, "Page 2")),
+    };
+
+    let mut buf = Buffer::empty(panel);
+    paint_title_row(&mut buf, border, &data, Some(TemplateStatus::InProgress));
+    let row: String = (panel.x..panel.right())
+        .map(|x| buf[(x, border.y)].symbol())
+        .collect();
+    assert!(row.contains(text::TEMPLATE_BUTTON_RUN), "{row}");
+    let byte = row.find(text::TEMPLATE_BUTTON_RUN).expect("status label");
+    let x = panel.x + u16::try_from(row[..byte].chars().count()).expect("col fits");
+    assert_eq!(buf[(x, border.y)].fg, Color::Yellow, "in_progress 标签黄色");
+    let width = u16::try_from(text::TEMPLATE_BUTTON_RUN.chars().count()).expect("width");
+    assert_eq!(x + width + 1, controls.prev.x, "标签右侧留 1 列再排箭头");
+
+    // 三态各自颜色：todo 蓝、done 绿（与旧边框语义一致）。
+    for (status, color) in [
+        (TemplateStatus::Todo, Color::LightBlue),
+        (TemplateStatus::Done, Color::Green),
+    ] {
+        let mut buf = Buffer::empty(panel);
+        paint_title_row(&mut buf, border, &data, Some(status));
+        assert_eq!(buf[(x, border.y)].fg, color, "{status:?} 标签颜色");
+    }
+
+    // 极窄：隐藏状态标签，优先保留页控件与标题。
+    let narrow = Rect::new(0, 0, 20, 8);
+    let narrow_border = crate::ui::prompt_frame::title_row(narrow).expect("title row");
+    let data = TitleRowData {
+        title: Some("i"),
+        draft: false,
+        page: Some(page_data(1, 1, "P")),
+    };
+    let mut buf = Buffer::empty(narrow);
+    paint_title_row(&mut buf, narrow_border, &data, Some(TemplateStatus::Todo));
+    let row: String = (narrow.x..narrow.right())
+        .map(|x| buf[(x, narrow_border.y)].symbol())
+        .collect();
+    assert!(!row.contains(text::TEMPLATE_BUTTON_TODO), "{row}");
+    assert!(row.contains("1/1"), "{row}");
 }
 
 #[test]
