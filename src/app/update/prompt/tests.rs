@@ -2,9 +2,7 @@
 
 use super::*;
 use crate::app::actions::{Action, EditorCommand};
-use crate::app::overlay::{
-    ConfirmClose, MenuCommand, NewNodeKind, Overlay, OverlayTarget, PageMenuRow, SaveDraftEntry,
-};
+use crate::app::overlay::{MenuCommand, NewNodeKind, Overlay, OverlayTarget, SaveDraftEntry};
 use crate::app::prompt::{
     PromptDropHit, PromptFolder, PromptItem, PromptPage, PromptPageId, PromptRowKind, PromptSection,
 };
@@ -1688,158 +1686,6 @@ fn relative_page_switch_stops_at_edges() {
 }
 
 #[test]
-fn page_rename_commits_non_empty_and_keeps_name_on_escape() {
-    let mut state = demo_state();
-    let (_first, second) = add_second_page(&mut state);
-    assert!(edit_prompt_item(&mut state, 0, 10));
-    assert!(select_prompt_page(&mut state, second));
-    state.effects.clear();
-    assert!(begin_page_rename(&mut state));
-    assert!(page_rename_active(&state));
-    // 空名回车拒绝并保持输入态。
-    apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Clear);
-    apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Enter);
-    assert!(page_rename_active(&state), "空名拒绝并保持输入态");
-    for ch in "Intro".chars() {
-        apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Char(ch));
-    }
-    apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Enter);
-    assert!(!page_rename_active(&state));
-    let item = state.workspaces[0].prompt_panel.tree.item(10).unwrap();
-    assert_eq!(item.page(second).unwrap().name, "Intro");
-    assert!(state.effects.iter().any(|effect| matches!(
-        effect,
-        Effect::RenamePage { page_id: 110, name, .. } if name == "Intro"
-    )));
-    // Esc 保留改名后的名称。
-    assert!(begin_page_rename(&mut state));
-    apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Clear);
-    apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Esc);
-    assert!(!page_rename_active(&state));
-    let item = state.workspaces[0].prompt_panel.tree.item(10).unwrap();
-    assert_eq!(item.page(second).unwrap().name, "Intro");
-}
-
-#[test]
-fn delete_current_page_confirms_non_empty_and_guards_last_page() {
-    let mut state = demo_state();
-    let (first, second) = add_second_page(&mut state);
-    assert!(edit_prompt_item(&mut state, 0, 10));
-    // 非空页：先二次确认；取消后页与正文保持原状。
-    assert!(delete_current_page(&mut state));
-    assert!(matches!(
-        state.overlay,
-        Some(Overlay::ConfirmClose(ConfirmClose {
-            target: OverlayTarget::PromptPage { page, .. },
-        })) if page == first
-    ));
-    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Esc);
-    assert!(
-        state.workspaces[0]
-            .prompt_panel
-            .tree
-            .item(10)
-            .unwrap()
-            .page(first)
-            .is_some()
-    );
-    // 确认删除：显示原下一页。
-    assert!(delete_current_page(&mut state));
-    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
-    let item = state.workspaces[0].prompt_panel.tree.item(10).unwrap();
-    assert!(item.page(first).is_none());
-    assert_eq!(item.active_page, second);
-    assert_eq!(state.prompt.text(), "second page");
-    assert!(state.effects.iter().any(|effect| matches!(
-        effect,
-        Effect::DeletePage {
-            id: 10,
-            page_id: 10,
-            ..
-        }
-    )));
-    // 空白页直接删除（无确认浮层）。
-    {
-        let item = state.workspaces[0].prompt_panel.tree.item_mut(10).unwrap();
-        item.pages
-            .push(PromptPage::saved(120, text::default_page_name(3), ""));
-        item.active_page = PromptPageId::Saved(120);
-    }
-    assert!(delete_current_page(&mut state));
-    assert!(state.overlay.is_none(), "空白页无确认直接删除");
-    assert!(
-        state.workspaces[0]
-            .prompt_panel
-            .tree
-            .item(10)
-            .unwrap()
-            .page(PromptPageId::Saved(120))
-            .is_none()
-    );
-    // 最后一页不可删除。
-    assert!(!delete_current_page(&mut state));
-}
-
-#[test]
-fn page_menu_snapshots_counts_and_switches_on_activate() {
-    let mut state = demo_state();
-    {
-        let item = state.workspaces[0].prompt_panel.tree.item_mut(10).unwrap();
-        item.pages[0].content = "&&& addTemplate --start\nbody\n&&& addTemplate --end".into();
-        item.pages.push(PromptPage::saved(
-            110,
-            "Page 2",
-            "&&& bugTemplate --start\n&&& bugTemplate --end",
-        ));
-    }
-    assert!(edit_prompt_item(&mut state, 0, 10));
-    assert!(open_prompt_page_menu(&mut state, (3, 3)));
-    let Some(Overlay::PageMenu(menu)) = &state.overlay else {
-        panic!("page menu open");
-    };
-    assert_eq!(menu.rows.len(), 4, "New page + 两页 + Delete page");
-    assert!(matches!(menu.rows[0], PageMenuRow::NewPage));
-    assert!(matches!(
-        &menu.rows[1],
-        PageMenuRow::Page { current: true, counts, .. } if counts.todo == 1
-    ));
-    assert!(matches!(
-        &menu.rows[2],
-        PageMenuRow::Page { current: false, counts, .. } if counts.todo == 1
-    ));
-    assert!(matches!(
-        menu.rows[3],
-        PageMenuRow::DeletePage { enabled: true }
-    ));
-    assert_eq!(menu.selected, 1, "当前页行默认高亮");
-    assert!(set_page_menu_selection(&mut state, 2));
-    assert!(activate_page_menu_row(&mut state));
-    assert!(state.overlay.is_none(), "选择页行后关闭菜单");
-    assert_eq!(
-        state.prompt.text(),
-        "&&& bugTemplate --start\n&&& bugTemplate --end"
-    );
-}
-
-#[test]
-fn page_menu_delete_disabled_for_single_page() {
-    let mut state = demo_state();
-    assert!(edit_prompt_item(&mut state, 0, 10));
-    assert!(open_prompt_page_menu(&mut state, (3, 3)));
-    let Some(Overlay::PageMenu(menu)) = &state.overlay else {
-        panic!("page menu open");
-    };
-    let last = menu.rows.len() - 1;
-    assert!(matches!(
-        menu.rows.last(),
-        Some(PageMenuRow::DeletePage { enabled: false })
-    ));
-    assert!(set_page_menu_selection(&mut state, last));
-    assert!(!activate_page_menu_row(&mut state), "禁用删除不动作");
-    assert!(state.overlay.is_some(), "菜单保持打开");
-}
-
-#[test]
 fn copy_content_uses_active_page_only() {
     let mut state = demo_state();
     let (_first, second) = add_second_page(&mut state);
@@ -1912,25 +1758,6 @@ fn tree_reload_rebinds_editor_when_shared_panel_switches_page() {
         )),
         "旧页正文先结算保存"
     );
-}
-
-#[test]
-fn overlay_enter_activates_page_menu_and_escape_closes_without_switch() {
-    let mut state = demo_state();
-    let (_first, second) = add_second_page(&mut state);
-    assert!(edit_prompt_item(&mut state, 0, 10));
-    assert!(select_prompt_page(&mut state, second));
-    // 菜单当前页行高亮；上移到第一页行并回车：切页并关闭。
-    assert!(open_prompt_page_menu(&mut state, (3, 3)));
-    assert!(set_page_menu_selection(&mut state, 1));
-    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
-    assert!(state.overlay.is_none());
-    assert_eq!(state.prompt.text(), "loose content");
-    // Esc 关闭菜单且不改正文。
-    assert!(open_prompt_page_menu(&mut state, (3, 3)));
-    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Esc);
-    assert!(state.overlay.is_none());
-    assert_eq!(state.prompt.text(), "loose content");
 }
 
 #[test]

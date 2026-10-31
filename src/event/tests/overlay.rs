@@ -668,65 +668,6 @@ fn mouse_leaving_overlay_menu_clears_hover_feedback() {
 }
 
 #[test]
-fn mouse_leaving_page_menu_clears_hover_feedback() {
-    let config = Config::default();
-    let mut state = demo_terminal();
-    assert!(crate::app::update::open_temp_prompt(&mut state));
-    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let mut sessions = HashMap::new();
-    let mut dirty = false;
-    assert!(crate::app::update::open_prompt_page_menu(
-        &mut state,
-        (10, 4)
-    ));
-    assert!(state.menu_hover, "页码菜单打开时指针位于容器内");
-
-    // 移出容器：清除悬停高亮反馈。
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Moved,
-            geo.screen.x,
-            geo.screen.bottom().saturating_sub(1),
-        ),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
-    assert!(!state.menu_hover, "离开容器移除悬停效果");
-
-    // 回到边框按钮：恢复悬停并命中对应行。
-    let Some(Overlay::PageMenu(menu)) = state.overlay.as_ref() else {
-        panic!("page menu open");
-    };
-    let layout2 = ui::overlay::page_menu_layout(&state, geo.screen, menu);
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Moved,
-            layout2.new_rect.x,
-            layout2.new_rect.y,
-        ),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
-    assert!(state.menu_hover);
-    assert_eq!(
-        state.overlay.as_ref().and_then(|overlay| match overlay {
-            Overlay::PageMenu(menu) => Some(menu.selected),
-            _ => None,
-        }),
-        Some(0),
-        "悬停 [add] 按钮"
-    );
-}
-
-#[test]
 fn rename_overlay_inside_click_keeps_open_and_outside_dismiss() {
     let screen = Rect::new(0, 0, 80, 24);
     let mut state = AppState::demo();

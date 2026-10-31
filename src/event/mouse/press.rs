@@ -264,13 +264,7 @@ pub(crate) fn handle_mouse_down_left(
     } else if !state.prompt_collapsed
         && let Some(tab) = ui::right_panel::tab_at(view.prompt, mouse.column, mouse.row)
     {
-        // 容器顶边框 tab：先提交页重命名（tab 与工具栏按钮同属控件，点击即离开输入态），
-        // 再切换面板（内部清瞬时指针）。点当前 tab 也要提交，否则重命名输入会僵在原处；
-        // 都没有状态变化时不置脏。空名提交也结束输入态，因此按"之前是否在重命名"计变化。
-        let was_renaming = update::page_rename_active(state);
-        let mut changed = update::finish_page_rename(state) || was_renaming;
-        changed |= update::select_right_tab(state, tab);
-        if changed {
+        if update::select_right_tab(state, tab) {
             *dirty = true;
         }
     } else if !state.prompt_collapsed
@@ -359,13 +353,12 @@ pub(crate) fn handle_mouse_down_left(
             view.prompt,
             mouse.column,
             mouse.row,
-            update::prompt_tree_mode(state),
+            state.prompt_owner().prompt_panel.mode,
         )
     {
-        // 工具栏按钮是控件：执行动作，不抢焦点、不移动文本光标；
-        // 页重命名输入先提交（空名保留旧名）。
-        update::finish_page_rename(state);
-        let editor_view = !update::prompt_tree_mode(state);
+        // 工具栏按钮是控件：执行动作，不抢焦点、不移动文本光标。
+        let editor_view =
+            state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Editor;
         match button {
             layout::PromptToolbarButton::Mode => {
                 update::toggle_prompt_panel_mode(state);
@@ -390,18 +383,6 @@ pub(crate) fn handle_mouse_down_left(
             _ => {}
         }
         *dirty = true;
-    } else if !state.prompt_collapsed
-        && update::page_rename_active(state)
-        && state.overlay.is_none()
-    {
-        // 页重命名输入期间：点击输入区保持输入态；点击其余位置提交
-        // （空名保留旧名）并吞掉本次点击。
-        if ui::prompt_page_control_at(view.prompt, state, mouse.column, mouse.row)
-            != Some(ui::prompt::PageControl::Name)
-        {
-            update::finish_page_rename(state);
-        }
-        *dirty = true;
     } else if let Some(control) = (!state.prompt_collapsed)
         .then(|| ui::prompt_page_control_at(view.prompt, state, mouse.column, mouse.row))
         .flatten()
@@ -416,10 +397,7 @@ pub(crate) fn handle_mouse_down_left(
                 update::switch_prompt_page(state, 1);
             }
             ui::prompt::PageControl::Counter => {
-                update::open_prompt_page_menu(state, (mouse.column, mouse.row));
-            }
-            ui::prompt::PageControl::Name => {
-                update::begin_page_rename(state);
+                update::toggle_prompt_pages(state);
             }
         }
         *dirty = true;
@@ -462,6 +440,21 @@ pub(crate) fn handle_mouse_down_left(
                 );
                 if let Some(index) = hit {
                     update::begin_prompt_drag(state, index);
+                }
+            } else if update::prompt_pages_mode(state) {
+                // 页列表视图：单击选中，400ms 内双击同一行打开该页（不支持拖拽）。
+                let hit = ui::prompt::pages::page_row_at(
+                    inner,
+                    &state.prompt_owner().prompt_panel,
+                    mouse.column,
+                    mouse.row,
+                );
+                if let Some(index) = hit {
+                    let now = Instant::now();
+                    update::select_page_row(state, index);
+                    if update::page_row_double_click(state, index, now) {
+                        update::open_selected_page(state);
+                    }
                 }
             } else {
                 // 底部虚拟空占位只聚焦编辑器，不把光标移到不存在的文本行。

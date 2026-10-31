@@ -7,9 +7,10 @@ use crate::app::state::{AppState, FocusedContainer};
 use crate::layout::PaneId;
 
 use super::prompt::{
-    activate_prompt_row, apply_prompt_search, commit_prompt_buffer, move_prompt_selection,
-    prompt_tree_mode, prompt_tree_visible_rows, select_prompt_item, show_prompt_tree,
-    toggle_prompt_panel_mode,
+    activate_prompt_row, apply_page_search, apply_prompt_search, commit_prompt_buffer,
+    hide_prompt_pages, move_page_selection, move_prompt_selection, open_selected_page,
+    prompt_pages_mode, prompt_tree_mode, prompt_tree_visible_rows, select_prompt_item,
+    show_prompt_tree, toggle_prompt_pages, toggle_prompt_panel_mode,
 };
 use super::selection::{
     WHEEL_LINES, clear_selection, prompt_selection_bounds, scroll_prompt_selection,
@@ -21,7 +22,7 @@ use super::selection::{
 /// 紧跟的 Enter 会把这段正文替换成候选原文（把刚粘贴的路径吃掉）。
 pub fn apply_pasted_text(state: &mut AppState, text: String) {
     apply_editor(state, EditorCommand::InsertText(text));
-    if !prompt_tree_mode(state) {
+    if !prompt_tree_mode(state) && !prompt_pages_mode(state) {
         state.prompt.suppress_completion_panels();
     }
 }
@@ -31,9 +32,32 @@ pub fn apply_pasted_text(state: &mut AppState, text: String) {
 /// prompt 存在选区时：输入类命令用新内容替换选区，Backspace/Delete 删除选区，
 /// 其余命令先清除选区再执行（选区删除/替换作为一步撤销）。
 pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
-    // 树视图轻量接管按键：上下移动、回车激活、左右展开折叠，其余吞掉。
+    match command {
+        EditorCommand::TogglePromptList => {
+            state.prompt.clear_panel();
+            if prompt_pages_mode(state) {
+                hide_prompt_pages(state);
+                show_prompt_tree(state);
+            } else {
+                toggle_prompt_panel_mode(state);
+            }
+            return;
+        }
+        EditorCommand::TogglePageList => {
+            state.prompt.clear_panel();
+            toggle_prompt_pages(state);
+            return;
+        }
+        _ => {}
+    }
+    // 树视图轻量接管按键：上下移动、回车激活、左右展开折叠，其余进入搜索框。
     if prompt_tree_mode(state) {
         route_prompt_tree(state, &command);
+        return;
+    }
+    // 页列表视图接管按键：上下移动、回车打开、Esc 返回编辑，其余进入页搜索框。
+    if prompt_pages_mode(state) {
+        route_prompt_pages(state, &command);
         return;
     }
     sync_mention_root(state);
@@ -102,7 +126,8 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         }
         EditorCommand::Undo => state.prompt.undo(),
         EditorCommand::Redo => state.prompt.redo(),
-        EditorCommand::Escape => {}
+        EditorCommand::Escape | EditorCommand::TogglePromptList | EditorCommand::TogglePageList => {
+        }
     }
 }
 
@@ -237,6 +262,30 @@ fn route_prompt_tree(state: &mut AppState, command: &EditorCommand) {
     }
 }
 
+/// 页列表视图按键路由：上下移动选中、回车打开、Esc 返回编辑视图；
+/// `PagePrev`/`PageNext` 吞掉，其余可映射按键进入页搜索框。
+fn route_prompt_pages(state: &mut AppState, command: &EditorCommand) {
+    let visible = prompt_tree_visible_rows(state);
+    match command {
+        EditorCommand::Up => {
+            move_page_selection(state, -1, visible);
+        }
+        EditorCommand::Down => {
+            move_page_selection(state, 1, visible);
+        }
+        EditorCommand::Newline => {
+            open_selected_page(state);
+        }
+        EditorCommand::Escape => {
+            hide_prompt_pages(state);
+        }
+        EditorCommand::PagePrev | EditorCommand::PageNext => {}
+        _ => {
+            apply_page_search(state, command);
+        }
+    }
+}
+
 /// 显示中工作区是否处于已绑定条目的编辑视图。
 pub(crate) fn prompt_editing(state: &AppState) -> bool {
     state
@@ -290,7 +339,6 @@ pub(crate) fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) 
     commit_prompt_buffer(state, from);
     if let Some(workspace) = state.workspaces.get_mut(from) {
         workspace.prompt_panel.drop_blank_temp_binding();
-        workspace.prompt_panel.cancel_page_rename();
         // 跨越工作区的切换丢弃编辑状态暂存：列表往返的历史不再适用于返回目标。
         workspace.prompt_panel.clear_editor_stash();
     }
@@ -319,7 +367,7 @@ pub(crate) fn restore_prompt_view(state: &mut AppState, index: usize) {
         return;
     };
     let panel = &workspace.prompt_panel;
-    if panel.mode == PromptMode::Editor {
+    if matches!(panel.mode, PromptMode::Editor | PromptMode::Pages) {
         match panel.editing {
             Some(PromptEditing::Item(id)) if panel.tree.item(id).is_some() => {
                 select_prompt_item(state, index, id);

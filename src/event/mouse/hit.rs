@@ -57,6 +57,9 @@ pub(crate) fn handle_prompt_scrollbar_press(
             if update::prompt_tree_mode(state) {
                 let visible = update::prompt_tree_visible_rows(state);
                 update::set_prompt_tree_scroll(state, offset, visible);
+            } else if update::prompt_pages_mode(state) {
+                let visible = update::prompt_tree_visible_rows(state);
+                update::set_page_list_scroll(state, offset, visible);
             } else {
                 update::set_prompt_scroll(state, offset);
             }
@@ -362,7 +365,10 @@ pub(crate) fn prompt_command_panel_contains(
     column: u16,
     row: u16,
 ) -> bool {
-    if !update::prompt_panel_active(state) || update::prompt_tree_mode(state) {
+    if !update::prompt_panel_active(state)
+        || update::prompt_tree_mode(state)
+        || update::prompt_pages_mode(state)
+    {
         return false;
     }
     let area = paste::prompt_text_area(view);
@@ -376,6 +382,12 @@ pub(crate) fn template_button_at(
     column: u16,
     row: u16,
 ) -> Option<ui::prompt::TemplateButtonHit> {
+    if !update::prompt_panel_active(state)
+        || update::prompt_tree_mode(state)
+        || update::prompt_pages_mode(state)
+    {
+        return None;
+    }
     let area = paste::prompt_text_area(view);
     ui::prompt::template_button_at(&state.prompt, area, column, row)
 }
@@ -408,6 +420,12 @@ pub(crate) fn block_button_at(
     column: u16,
     row: u16,
 ) -> Option<ui::prompt::BlockButtonHit> {
+    if !update::prompt_panel_active(state)
+        || update::prompt_tree_mode(state)
+        || update::prompt_pages_mode(state)
+    {
+        return None;
+    }
     let area = paste::prompt_text_area(view);
     ui::prompt::block_button_at(&state.prompt, area, column, row)
 }

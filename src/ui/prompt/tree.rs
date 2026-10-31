@@ -130,7 +130,7 @@ enum DragRow {
 }
 
 /// 绘制搜索框下方分割线：整行 `─`，两端 `├` / `┤` 衔接面板边框；样式跟随边框焦点态。
-fn paint_divider(buf: &mut Buffer, area: Rect, y: u16, focused: bool) {
+pub(super) fn paint_divider(buf: &mut Buffer, area: Rect, y: u16, focused: bool) {
     let divider_style = style::border(focused);
     let left_join = area.x.saturating_sub(1);
     for x in left_join..=area.right() {
@@ -365,7 +365,7 @@ fn paint_row(
 }
 
 /// 悬停行整行铺选中底色，保证反馈跨满行宽。
-fn fill_row(buf: &mut Buffer, area: Rect, y: u16) {
+pub(super) fn fill_row(buf: &mut Buffer, area: Rect, y: u16) {
     for x in area.x..area.right() {
         if let Some(cell) = buf.cell_mut((x, y)) {
             cell.reset();
@@ -376,7 +376,7 @@ fn fill_row(buf: &mut Buffer, area: Rect, y: u16) {
 }
 
 /// 绘制文本直到右界；超出右界的字符整体丢弃。
-fn paint_text(
+pub(super) fn paint_text(
     buf: &mut Buffer,
     x: u16,
     y: u16,
@@ -401,7 +401,7 @@ fn paint_text(
 }
 
 /// 绘制名称：放不下时以 `…` 截断，并保证不越过右界。
-fn paint_name(
+pub(super) fn paint_name(
     buf: &mut Buffer,
     x: u16,
     y: u16,
@@ -437,7 +437,7 @@ fn paint_name(
 }
 
 /// 文本显示宽度（列）。
-fn width_of(content: &str) -> usize {
+pub(super) fn width_of(content: &str) -> usize {
     content.chars().map(|ch| ch.width().unwrap_or(0)).sum()
 }
 

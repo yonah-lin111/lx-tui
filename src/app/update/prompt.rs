@@ -6,11 +6,13 @@
 mod draft;
 mod drag;
 mod pages;
+mod pages_view;
 mod tree_view;
 
 pub use draft::*;
 pub use drag::*;
 pub use pages::*;
+pub use pages_view::*;
 pub use tree_view::*;
 
 use std::path::Path;
@@ -131,7 +133,6 @@ pub fn apply_prompt_tree(
     {
         workspace_state.prompt_panel.editing = None;
         workspace_state.prompt_panel.mode = PromptMode::Tree;
-        workspace_state.prompt_panel.cancel_page_rename();
     }
     workspace_state.prompt_panel.clamp_selection(visible);
     // 记录的当前页 id 失效时回退第一页并修复持久化（不依赖打开动作）。
@@ -172,7 +173,6 @@ pub fn apply_prompt_tree(
 /// （条目或临时提示词），无有效绑定时高亮 default temp。
 pub fn show_prompt_tree(state: &mut AppState) {
     commit_editing_prompt(state);
-    cancel_page_rename(state);
     let index = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
     // 提交后再捕获编辑状态：正文此时与页一致，返回同一目标时据此保留撤销/重做与光标。
@@ -188,6 +188,7 @@ pub fn show_prompt_tree(state: &mut AppState) {
     }
     state.prompt.clear_panel();
     state.selection = None;
+    state.prompt_tree_hover = None;
     select_tree_entry_row(state, index);
 }
 
@@ -234,12 +235,14 @@ fn select_tree_entry_row(state: &mut AppState, index: usize) {
     }
 }
 
-/// 工具栏模式按钮：树视图返回编辑（用户未显式改过选中时恢复进入列表前的编辑绑定），
-/// 编辑视图切回树。
+/// 工具栏模式按钮：树视图或页视图返回编辑，编辑视图切回树。
 pub fn toggle_prompt_panel_mode(state: &mut AppState) {
     state.prompt_drag = None;
+    state.prompt_tree_hover = None;
     if prompt_tree_mode(state) {
         restore_or_edit_selected(state);
+    } else if prompt_pages_mode(state) {
+        hide_prompt_pages(state);
     } else {
         show_prompt_tree(state);
     }
@@ -415,7 +418,6 @@ pub fn edit_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) ->
     };
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Item(item_id));
-    workspace_state.prompt_panel.cancel_page_rename();
     let page = workspace_state
         .prompt_panel
         .tree
@@ -452,7 +454,6 @@ pub fn edit_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) ->
     };
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Temp(temp_id));
-    workspace_state.prompt_panel.cancel_page_rename();
     load_editor_target(
         state,
         workspace,
@@ -534,7 +535,6 @@ pub fn open_temp_prompt(state: &mut AppState) -> bool {
     };
     // 不变量兜底：空白项至多一条，残留空白项先回收（default temp 由新建项接替）。
     workspace_state.prompt_panel.remove_blank_temps();
-    workspace_state.prompt_panel.cancel_page_rename();
     // 新建目标与旧暂存无关：丢弃，避免陈旧历史被同名目标误恢复。
     workspace_state.prompt_panel.clear_editor_stash();
     let id = workspace_state.prompt_panel.new_temp();
@@ -753,8 +753,43 @@ pub fn open_prompt_rename(state: &mut AppState, target: RenameTarget) {
     }));
 }
 
-/// 提交提示词树重命名；空名拒绝（浮层保持打开）。
+/// 提交提示词树或页重命名；空名拒绝（浮层保持打开）。
 pub fn commit_prompt_rename(state: &mut AppState, target: RenameTarget, name: String) {
+    if let RenameTarget::PromptPage {
+        workspace,
+        owner,
+        page,
+    } = target
+    {
+        let renamed = state
+            .workspaces
+            .get_mut(workspace)
+            .is_some_and(|ws| match owner {
+                PromptEditing::Item(id) => ws
+                    .prompt_panel
+                    .tree
+                    .item_mut(id)
+                    .and_then(|item| item.page_mut(page))
+                    .map(|target_page| target_page.name.clone_from(&name))
+                    .is_some(),
+                PromptEditing::Temp(id) => ws
+                    .prompt_panel
+                    .temp_mut(id)
+                    .and_then(|temp| temp.page_mut(page))
+                    .map(|target_page| target_page.name.clone_from(&name))
+                    .is_some(),
+            });
+        if renamed
+            && let (Some(page_id), Some(cwd)) = (page.saved(), workspace_cwd(state, workspace))
+        {
+            state.effects.push(Effect::RenamePage {
+                workspace: cwd,
+                page_id,
+                name,
+            });
+        }
+        return;
+    }
     let workspace = state.prompt_workspace();
     let Some(cwd) = displayed_workspace_cwd(state) else {
         return;

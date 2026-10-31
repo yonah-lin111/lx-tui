@@ -101,18 +101,18 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert_eq!(state.prompt.text(), content);
     assert!(state.prompt.slash_panel().is_none());
 
-    // 高亮：命令名绿色加粗；标题独立成行 Cyan 下划线；块边框与整块底色 todo 藏青。
+    // 高亮：命令名绿色加粗；标题独立成行 Cyan 下划线；左侧色条 todo 藏青。
     let terminal = draw(&state, &config);
     let start_row = area.y;
     let row = line_text(&terminal, start_row);
     assert_eq!(
         terminal.backend().buffer()[(area.x, start_row)].symbol(),
-        "┌"
+        "▎"
     );
     assert_eq!(
         terminal.backend().buffer()[(area.x, start_row)].fg,
         Color::LightBlue,
-        "todo 边框为靛蓝"
+        "todo 色条为靛蓝"
     );
     let command_x = cell_x(&row, "addTemplate");
     let command = &terminal.backend().buffer()[(command_x, start_row)];
@@ -149,9 +149,8 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_CLEAN), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_DEL), "{row}");
-    assert!(row.contains('┐'), "右上角闭合: {row}");
 
-    // 切换状态后边框颜色跟随为黄色，背景保持透明。
+    // 切换状态后色条颜色跟随为黄色，背景保持透明。
     update::toggle_template_status(&mut state, 0);
     let terminal = draw(&state, &config);
     assert_eq!(
@@ -205,7 +204,7 @@ fn narrow_prompt_keeps_buttons_and_ellipsizes_header() {
     assert!(row.contains("[todo]"), "窄屏按钮不隐藏: {row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_DEL), "{row}");
     assert!(row.contains('…'), "左上内容省略号截断: {row}");
-    assert!(!row.contains("addTemplate"), "正文让位按钮: {row}");
+    assert!(!row.contains("--start"), "正文让位按钮: {row}");
 }
 
 #[test]
@@ -216,15 +215,22 @@ fn slash_panel_shows_all_candidates_for_bare_slash() {
     update::apply_editor(&mut state, EditorCommand::InsertChar('/'));
     let panel = ui::prompt::slash_layout(&state.prompt, area).expect("slash panel opens");
     assert_eq!(
-        panel.rect.height, 11,
-        "空查询展示全部 5 个候选 + 标题行、底栏与上下边框"
+        panel.rect.height, 12,
+        "空查询展示全部 6 个候选（5 个内置模板 + supplement）+ 标题行、底栏与上下边框"
     );
     let terminal = draw(&state, &config);
     let text: String = (panel.rect.y..panel.rect.bottom())
         .map(|y| line_text(&terminal, y))
         .collect::<Vec<_>>()
         .join("\n");
-    for label in ["/add", "/bug", "/common", "/refactor", "/style"] {
+    for label in [
+        "/add",
+        "/bug",
+        "/common",
+        "/refactor",
+        "/style",
+        "/supplement",
+    ] {
         assert!(text.contains(label), "缺少候选 {label}: {text}");
     }
 }

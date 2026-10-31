@@ -363,7 +363,7 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
     );
     assert_eq!(state.prompt.text(), "beta");
     assert!(state.prompt_focused());
-    // 计数：打开页码菜单。
+    // 计数：切换到页列表视图；Esc 返回编辑视图。
     let controls = ui::prompt::page_controls(title, "2/2").expect("controls");
     handle_terminal_event(
         mouse(
@@ -378,8 +378,7 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert!(matches!(state.overlay, Some(Overlay::PageMenu(_))));
-    // Esc 关闭菜单且不穿透编辑器。
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Pages);
     handle_terminal_event(
         TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         &mut state,
@@ -389,70 +388,8 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
     assert_eq!(state.prompt.text(), "beta");
-}
-
-#[test]
-fn mouse_click_prompt_page_name_starts_rename_and_keys_commit() {
-    let config = Config::default();
-    let mut state = paged_prompt_state();
-    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
-    let mut sessions = HashMap::new();
-    let mut dirty = false;
-    let title = ui::prompt_frame::title_row(geo.view.prompt).expect("title row");
-    assert_eq!(
-        title.y,
-        crate::layout::pane_inner_rect(geo.view.prompt).y + 1,
-        "页名已下移到标题行（工具栏下一行），不再是容器顶边框"
-    );
-    // 标题行 `├─ paged · Page 1 `：点击页名起始后两列。
-    let name_col = title.x + 2 + " paged ".len() as u16 + 2;
-    handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), name_col, title.y),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
-    assert!(
-        crate::app::update::page_rename_active(&state),
-        "点击页名进入重命名"
-    );
-    assert_eq!(state.prompt.text(), "alpha", "重命名不改正文");
-    handle_terminal_event(
-        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE)),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
-    assert_eq!(
-        state.workspaces[0]
-            .prompt_panel
-            .page_rename()
-            .expect("rename active")
-            .input
-            .text(),
-        "Page 1X",
-        "字符输入进入页名"
-    );
-    handle_terminal_event(
-        TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
-    assert!(!crate::app::update::page_rename_active(&state));
-    let item = state.workspaces[0].prompt_panel.tree.item(7).expect("item");
-    assert_eq!(item.pages[0].name, "Page 1X");
 }
 
 #[test]
@@ -486,53 +423,6 @@ fn mouse_click_prompt_padding_only_focuses_without_moving_cursor() {
         0,
         "点击留白不移动光标到不存在的文本行"
     );
-}
-
-#[test]
-fn mouse_click_current_tab_commits_page_rename() {
-    // 设计：tab 与工具栏按钮同属控件，点一下即离开重命名输入态。
-    // 点**当前** tab 时 `select_right_tab` 会因同 tab 早退，提交必须由 press 自己完成。
-    let config = Config::default();
-    let mut state = paged_prompt_state();
-    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
-    assert!(crate::app::update::begin_page_rename(&mut state));
-    crate::app::update::apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Clear);
-    for ch in "Intro".chars() {
-        crate::app::update::apply_page_rename_key(
-            &mut state,
-            crate::app::actions::OverlayKey::Char(ch),
-        );
-    }
-    assert!(
-        crate::app::update::page_rename_active(&state),
-        "前提：重命名中"
-    );
-    let mut sessions = HashMap::new();
-    let mut dirty = false;
-
-    let prompt_tab = right_tab_rect(&geo, RightTab::Prompt);
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            prompt_tab.x,
-            prompt_tab.y,
-        ),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
-
-    assert_eq!(state.right_tab, RightTab::Prompt, "点的就是当前 tab");
-    assert!(
-        !crate::app::update::page_rename_active(&state),
-        "提交并退出输入态"
-    );
-    let item = state.workspaces[0].prompt_panel.tree.item(7).expect("item");
-    assert_eq!(item.pages[0].name, "Intro", "非空页名写回");
-    assert!(dirty);
 }
 
 #[test]

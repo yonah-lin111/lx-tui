@@ -2,14 +2,12 @@
 
 pub mod dialog;
 pub mod menu;
-mod page_menu;
 mod referenced;
 pub mod save_draft;
 mod worktree;
 
 pub use dialog::*;
 pub use menu::*;
-pub use page_menu::{PageMenuLayout, page_menu_item_at, page_menu_layout, page_menu_visible_pages};
 pub use referenced::{
     ReferencedInputButton, ReferencedMenuLayout, ReferencedSearchLayout,
     referenced_input_button_at, referenced_input_shell, referenced_menu_layout,
@@ -30,7 +28,6 @@ pub(crate) use dialog::{
 #[cfg(test)]
 pub(crate) use save_draft::SAVE_DRAFT_BUTTONS;
 
-use page_menu::render_page_menu;
 use referenced::{
     render_referenced_input, render_referenced_menu, render_referenced_menu_footer,
     render_referenced_search, render_referenced_search_footer,
@@ -72,10 +69,6 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
         }
         Overlay::NewNode(node) => dialog::render_new_node(frame, screen, node),
         Overlay::SaveDraft(dialog) => save_draft::render_save_draft(frame, screen, dialog),
-        Overlay::PageMenu(menu) => {
-            render_page_menu(frame, screen, state, menu);
-            None
-        }
         Overlay::ReferencedFolderMenu(menu) => {
             render_referenced_menu(frame, screen, menu);
             render_referenced_menu_footer(frame, screen, menu);

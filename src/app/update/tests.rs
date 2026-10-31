@@ -5222,40 +5222,8 @@ fn select_right_tab_commits_rename_and_clears_transient_state() {
     assert!(state.selection.is_some(), "前提：prompt 选区存在");
     state.prompt_tree_hover = Some(0);
     state.right_tab_hover = Some(RightTab::Todo);
-    assert!(begin_page_rename(&mut state), "前提：页重命名输入中");
-    apply_page_rename_key(&mut state, OverlayKey::Clear);
-    for ch in "Intro".chars() {
-        apply_page_rename_key(&mut state, OverlayKey::Char(ch));
-    }
-    let page_id = state.workspaces[0]
-        .prompt_panel
-        .tree
-        .item(7)
-        .map(|item| item.active_page)
-        .expect("item 7");
-    let saved_page_id = page_id.saved().expect("正式页");
 
     assert!(select_right_tab(&mut state, RightTab::Todo));
-
-    // 重命名已提交（非空写回，产出 RenamePage），输入现场清空。
-    assert!(!page_rename_active(&state), "切 tab 提交页重命名");
-    assert!(
-        state.effects.iter().any(|effect| matches!(
-            effect,
-            Effect::RenamePage { page_id: id, name, .. } if *id == saved_page_id && name == "Intro"
-        )),
-        "非空页名写回: {:?}",
-        state.effects
-    );
-    assert_eq!(
-        state.workspaces[0]
-            .prompt_panel
-            .tree
-            .item(7)
-            .and_then(|item| item.page(page_id))
-            .map(|page| page.name.as_str()),
-        Some("Intro")
-    );
 
     // 瞬时指针全部收回。
     assert!(!state.prompt_focused(), "焦点退回窗格");

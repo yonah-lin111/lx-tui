@@ -293,54 +293,6 @@ fn referenced_menu_has_no_tooltip_targets_and_search_copy_path_arms() {
 }
 
 #[test]
-fn page_menu_border_chips_arm_and_render_tooltips() {
-    let mut state = AppState::demo();
-    assert!(crate::app::update::open_temp_prompt(&mut state));
-    assert!(crate::app::update::open_prompt_page_menu(
-        &mut state,
-        (10, 4)
-    ));
-    let Some(crate::app::overlay::Overlay::PageMenu(menu)) = &state.overlay else {
-        panic!("page menu open");
-    };
-    let layout = ui::overlay::page_menu_layout(&state, SCREEN, menu);
-    // 命中：边框按钮映射到专属提示目标。
-    assert_eq!(
-        target_at(
-            &view_for(&state),
-            &state,
-            &[],
-            SCREEN,
-            layout.new_rect.x,
-            layout.new_rect.y
-        ),
-        Some(TooltipTarget::PageMenuAdd)
-    );
-    assert_eq!(
-        target_at(
-            &view_for(&state),
-            &state,
-            &[],
-            SCREEN,
-            layout.delete_rect.x,
-            layout.delete_rect.y
-        ),
-        Some(TooltipTarget::PageMenuDelete)
-    );
-    // 渲染：浮层打开时仍绘制在菜单之上。
-    let now = Instant::now();
-    state.tooltip = Some(Tooltip::new(TooltipTarget::PageMenuAdd, now));
-    assert!(crate::app::update::tick(&mut state, now + TOOLTIP_DELAY));
-    let buffer = render_buffer(&state);
-    let hint = text::tooltip_hint(TooltipTarget::PageMenuAdd, &state);
-    let area = rect(SCREEN, layout.new_rect, text::TOOLTIP_TITLE, hint).expect("rect resolves");
-    let row: String = (area.x + 1..area.right() - 1)
-        .map(|x| buffer[(x, area.y + 1)].symbol())
-        .collect();
-    assert!(row.contains(hint), "页码菜单按钮提示: {row:?}");
-}
-
-#[test]
 fn render_skips_while_overlay_open() {
     let mut state = AppState::demo();
     let now = Instant::now();

@@ -146,6 +146,10 @@ pub enum EditorCommand {
     PagePrev,
     /// Ctrl/Cmd+→：编辑视图切到下一页（末页原地不动，不循环）。
     PageNext,
+    /// Ctrl/Cmd+L：切换提示词树视图与编辑视图。
+    TogglePromptList,
+    /// Ctrl/Cmd+P：切换页列表视图与编辑视图。
+    TogglePageList,
     Undo,
     Redo,
     Escape,

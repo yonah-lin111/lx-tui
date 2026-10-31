@@ -1,6 +1,7 @@
 //! prompt 编辑器渲染：文本、markdown 高亮与选区，只读状态。
 
 mod header;
+pub mod pages;
 mod panels;
 pub mod tree;
 
@@ -60,7 +61,8 @@ pub(crate) fn render_rule(panel: Rect, y: u16, buf: &mut Buffer, focused: bool) 
 }
 
 /// 工具栏：模式切换按钮常显；编辑视图左组为 `[≡] [←] [→] [all]`，
-/// 右组自右向左为 `● [○/◉] [dir]`；树视图为 `[/]` + `[tmp]` + `[○/◉]`。
+/// 右组自右向左为 `● [○/◉] [dir]`；树视图为 `[/]` + `[tmp]` + `[○/◉]`；
+/// 页列表视图为 `[/]` + `[○/◉]`。
 fn render_toolbar(
     panel: Rect,
     buf: &mut Buffer,
@@ -71,83 +73,81 @@ fn render_toolbar(
 ) {
     let mode_label = match mode {
         PromptMode::Editor => text::PROMPT_MODE_LIST_LABEL,
-        PromptMode::Tree => text::PROMPT_MODE_EDIT_LABEL,
+        PromptMode::Tree | PromptMode::Pages => text::PROMPT_MODE_EDIT_LABEL,
     };
-    let tree = mode == PromptMode::Tree;
+    let pin_button = (
+        PromptToolbarButton::Pin,
+        if pinned {
+            text::PROMPT_PINNED_LABEL
+        } else {
+            text::PROMPT_UNPINNED_LABEL
+        },
+        style::accent(),
+    );
     let mut buttons = vec![(PromptToolbarButton::Mode, mode_label, style::accent())];
-    if tree {
-        buttons.extend([
-            (
-                PromptToolbarButton::Pin,
-                if pinned {
-                    text::PROMPT_PINNED_LABEL
-                } else {
-                    text::PROMPT_UNPINNED_LABEL
-                },
-                style::accent(),
-            ),
-            (
-                PromptToolbarButton::TempPrompt,
-                text::PROMPT_TEMP_PROMPT_LABEL,
-                style::accent(),
-            ),
-        ]);
-    } else {
-        buttons.extend([
-            (
-                PromptToolbarButton::Undo,
-                text::PROMPT_UNDO_LABEL,
-                if prompt.can_undo() {
-                    style::accent()
-                } else {
-                    style::muted()
-                },
-            ),
-            (
-                PromptToolbarButton::Redo,
-                text::PROMPT_REDO_LABEL,
-                if prompt.can_redo() {
-                    style::accent()
-                } else {
-                    style::muted()
-                },
-            ),
-            (
-                PromptToolbarButton::SelectAll,
-                text::PROMPT_SELECT_ALL_LABEL,
-                style::accent(),
-            ),
-            (
-                PromptToolbarButton::Folders,
-                text::PROMPT_FOLDERS_LABEL,
-                style::accent(),
-            ),
-            (
-                PromptToolbarButton::Pin,
-                if pinned {
-                    text::PROMPT_PINNED_LABEL
-                } else {
-                    text::PROMPT_UNPINNED_LABEL
-                },
-                style::accent(),
-            ),
-            (
-                PromptToolbarButton::Save,
-                if draft {
-                    text::PROMPT_DRAFT_DOT
-                } else {
-                    text::PROMPT_SAVE_DOT
-                },
-                if draft {
-                    style::status_dot_draft()
-                } else {
-                    style::status_dot(prompt.is_saved())
-                },
-            ),
-        ]);
+    match mode {
+        PromptMode::Tree => {
+            buttons.extend([
+                pin_button,
+                (
+                    PromptToolbarButton::TempPrompt,
+                    text::PROMPT_TEMP_PROMPT_LABEL,
+                    style::accent(),
+                ),
+            ]);
+        }
+        PromptMode::Pages => {
+            buttons.push(pin_button);
+        }
+        PromptMode::Editor => {
+            buttons.extend([
+                (
+                    PromptToolbarButton::Undo,
+                    text::PROMPT_UNDO_LABEL,
+                    if prompt.can_undo() {
+                        style::accent()
+                    } else {
+                        style::muted()
+                    },
+                ),
+                (
+                    PromptToolbarButton::Redo,
+                    text::PROMPT_REDO_LABEL,
+                    if prompt.can_redo() {
+                        style::accent()
+                    } else {
+                        style::muted()
+                    },
+                ),
+                (
+                    PromptToolbarButton::SelectAll,
+                    text::PROMPT_SELECT_ALL_LABEL,
+                    style::accent(),
+                ),
+                (
+                    PromptToolbarButton::Folders,
+                    text::PROMPT_FOLDERS_LABEL,
+                    style::accent(),
+                ),
+                pin_button,
+                (
+                    PromptToolbarButton::Save,
+                    if draft {
+                        text::PROMPT_DRAFT_DOT
+                    } else {
+                        text::PROMPT_SAVE_DOT
+                    },
+                    if draft {
+                        style::status_dot_draft()
+                    } else {
+                        style::status_dot(prompt.is_saved())
+                    },
+                ),
+            ]);
+        }
     }
     for (button, label, button_style) in buttons {
-        let Some(rect) = layout::prompt_toolbar_button_rect(panel, button, tree) else {
+        let Some(rect) = layout::prompt_toolbar_button_rect(panel, button, mode) else {
             continue;
         };
         // 整格重置：按钮槽位宽度固定，两态切换时不留旧字形残影。

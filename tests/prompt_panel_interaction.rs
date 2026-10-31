@@ -435,29 +435,29 @@ fn page_controls_create_switch_and_rename_via_real_mouse_and_keys() {
     app.send(b"page one body");
     assert!(app.wait_for("page one body"), "first page typed");
 
-    // 点击计数打开页码菜单：New page / Delete page 与页行。
+    // 点击计数进入页列表视图：右键弹出菜单新建页并切回编辑视图。
     app.click("1/1");
     assert!(
-        app.wait_for(text::MENU_PAGE_NEW),
-        "page menu: \n{}",
+        app.wait_for(text::PROMPT_PAGES_SEARCH_PLACEHOLDER),
+        "pages view: \n{}",
         app.screen()
     );
-    assert!(app.wait_for(text::MENU_PAGE_DELETE));
-
-    // 点击 New page：追加末尾、立即切换并进入默认名编辑
-    // （正文为空；输入落入页名而不是编辑器）。
+    let (col, row) = app.find("Page 1").expect("page 1 row");
+    app.right_click(col, row);
+    assert!(
+        app.wait_for(text::MENU_PAGE_NEW),
+        "page context menu: \n{}",
+        app.screen()
+    );
     app.click(text::MENU_PAGE_NEW);
     assert!(
         app.wait_for("2/2"),
         "switched to new page: \n{}",
         app.screen()
     );
-    app.send(b"XYZ");
-    app.send(b"\x1b");
-    app.settle();
     assert!(
         app.screen().contains("Write your prompt"),
-        "重命名输入不写入正文，新页正文为空: \n{}",
+        "新页正文为空: \n{}",
         app.screen()
     );
     assert!(!app.screen().contains("page one body"), "新页正文为空");

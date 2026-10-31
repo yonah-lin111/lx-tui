@@ -7,17 +7,10 @@ use crate::app::prompt::PromptHistory;
 use crate::ui::text;
 
 use super::{
-    PromptFolder, PromptPageId, PromptRow, PromptRowKind, PromptSection, PromptTree, TempPrompt,
+    PromptFolder, PromptPage, PromptPageId, PromptRow, PromptRowKind, PromptSection, PromptTree,
+    TempPrompt,
 };
-
-/// 提示词面板视图模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PromptMode {
-    /// 树状管理器：文件夹与条目列表。
-    Tree,
-    /// 编辑视图：编辑选中条目正文。
-    Editor,
-}
+pub use crate::layout::PromptMode;
 
 /// 编辑视图绑定的目标：正式条目或临时提示词。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,11 +20,22 @@ pub enum PromptEditing {
     Temp(u64),
 }
 
-/// 页重命名输入现场：目标页与单行输入（名称预填，Esc 保留旧名）。
+/// 页列表视图：选中行、滚动与搜索过滤（进入时选中当前页、清空搜索）。
 #[derive(Debug)]
-pub struct PageRename {
-    pub page: PromptPageId,
-    pub input: TextInput,
+pub struct PageListView {
+    pub selected: usize,
+    pub scroll: usize,
+    pub search: TextInput,
+}
+
+impl Default for PageListView {
+    fn default() -> Self {
+        Self {
+            selected: 0,
+            scroll: 0,
+            search: TextInput::new(""),
+        }
+    }
 }
 
 /// 离开编辑视图时的编辑状态暂存：绑定目标、当前页与完整历史。
@@ -77,8 +81,8 @@ pub struct PromptPanel {
     tree_selection_touched: bool,
     /// 树视图搜索过滤词（单行输入语义：光标可移动编辑）；空串为不过滤。
     pub search: TextInput,
-    /// 页标题行的重命名输入现场；None 表示未在重命名。
-    page_rename: Option<PageRename>,
+    /// 页列表视图专用状态（选中行、滚动与搜索过滤）。
+    pub pages_view: PageListView,
     /// 已更新内存但数据库尚未确认的页（条目 id、页 id）。
     pending_saves: Vec<(i64, i64)>,
     /// 离开编辑视图时的编辑状态暂存（切到列表时写入）；返回同一目标时恢复。
@@ -107,7 +111,7 @@ impl PromptPanel {
             tree_return: None,
             tree_selection_touched: false,
             search: TextInput::new(""),
-            page_rename: None,
+            pages_view: PageListView::default(),
             pending_saves: Vec::new(),
             editor_stash: None,
         }
@@ -146,32 +150,17 @@ impl PromptPanel {
         self.pending_saves.clear();
     }
 
-    /// 页重命名现场（只读）。
-    pub fn page_rename(&self) -> Option<&PageRename> {
-        self.page_rename.as_ref()
-    }
-
-    /// 页重命名现场（可变，供输入编辑）。
-    pub fn page_rename_mut(&mut self) -> Option<&mut PageRename> {
-        self.page_rename.as_mut()
-    }
-
-    /// 进入页重命名输入态（预填页名）。
-    pub fn start_page_rename(&mut self, page: PromptPageId, name: &str) {
-        self.page_rename = Some(PageRename {
-            page,
-            input: TextInput::new(name),
-        });
-    }
-
-    /// 结束页重命名输入态，返回现场。
-    pub fn take_page_rename(&mut self) -> Option<PageRename> {
-        self.page_rename.take()
-    }
-
-    /// 丢弃页重命名输入态（保留旧名）。
-    pub fn cancel_page_rename(&mut self) {
-        self.page_rename = None;
+    /// 当前编辑目标的页切片与激活页 id；无编辑绑定时返回 None。
+    pub fn editing_pages(&self) -> Option<(&[PromptPage], PromptPageId)> {
+        match self.editing? {
+            PromptEditing::Item(id) => self
+                .tree
+                .item(id)
+                .map(|item| (item.pages.as_slice(), item.active_page)),
+            PromptEditing::Temp(id) => self
+                .temp(id)
+                .map(|temp| (temp.pages.as_slice(), temp.active_page)),
+        }
     }
 
     /// 进入树视图：暂存当前编辑绑定并复位"用户改过选中"标记（须在空白绑定清除之后调用）。
@@ -483,7 +472,7 @@ fn snap_selectable(rows: &[PromptRow], index: usize) -> usize {
 }
 
 /// 名称是否命中过滤词（大小写不敏感子串）。
-fn name_matches(name: &str, query: &str) -> bool {
+pub(crate) fn name_matches(name: &str, query: &str) -> bool {
     name.to_lowercase().contains(query)
 }
 

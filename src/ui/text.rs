@@ -353,10 +353,16 @@ pub fn default_page_name(index: usize) -> String {
     format!("Page {index}")
 }
 
-/// 页菜单动作项与标题。
-pub const MENU_PAGE_NEW: &str = "[add]";
-pub const MENU_PAGE_DELETE: &str = "[del]";
+/// 页列表与页右键菜单文案。
+pub const MENU_PAGE_OPEN: &str = "Open";
+pub const MENU_PAGE_NEW: &str = "New page";
 pub const MENU_TITLE_PAGES: &str = "Pages";
+pub const PROMPT_PAGES_LABEL: &str = "pages";
+pub const PROMPT_PAGES_SEARCH_PLACEHOLDER: &str = "search pages";
+pub const PROMPT_PAGES_NO_MATCHES: &str = "no matching pages";
+pub const PAGE_STATUS_OPEN: &str = "○";
+pub const PAGE_STATUS_DOT: &str = "●";
+pub const RENAME_PAGE_TITLE: &str = "Rename page";
 
 /// 模板块状态计数分隔符：`|`。
 const TEMPLATE_COUNT_SEPARATOR: &str = "|";
@@ -978,10 +984,10 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::TabScrollRight => "scroll tabs right",
         TooltipTarget::Exit => "quit lx-tui",
         TooltipTarget::PromptMode => {
-            if state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Tree {
-                "open editor"
-            } else {
+            if state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Editor {
                 "open prompt list"
+            } else {
+                "open editor"
             }
         }
         TooltipTarget::PromptTempPrompt => "open temp prompt",
@@ -999,8 +1005,6 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             TemplateButtonKind::Clean => "clean block",
             TemplateButtonKind::Delete => "delete block",
         },
-        TooltipTarget::PageMenuAdd => "add page",
-        TooltipTarget::PageMenuDelete => "delete page",
         TooltipTarget::PromptFolders => "referenced folders",
         TooltipTarget::TodoButton(button) => match button {
             crate::app::tooltip::TodoButton::New => TODO_TOOLTIP_NEW,

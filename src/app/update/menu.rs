@@ -12,9 +12,10 @@ use crate::layout::PaneId;
 
 use super::pane::toggle_pane_view;
 use super::prompt::{
-    copy_prompt_content, copy_prompt_temp_content, delete_prompt_folder, delete_prompt_item,
-    delete_prompt_temp, edit_prompt_item, edit_prompt_temp, move_page_menu_selection,
-    open_new_folder, open_new_prompt, open_prompt_rename,
+    copy_page_content, copy_prompt_content, copy_prompt_temp_content, delete_prompt_folder,
+    delete_prompt_item, delete_prompt_temp, edit_prompt_item, edit_prompt_temp, hide_prompt_pages,
+    open_new_folder, open_new_page, open_new_prompt, open_page_rename, open_prompt_rename,
+    perform_delete_page, select_prompt_page,
 };
 use super::selection::clear_selection;
 use super::workspace::{
@@ -172,12 +173,8 @@ pub fn close_overlay(state: &mut AppState) {
     state.overlay = None;
 }
 
-/// 菜单高亮按步长循环移动；页码菜单按列表语义钳制移动。
+/// 菜单高亮按步长循环移动。
 pub fn move_menu_selection(state: &mut AppState, step: isize) {
-    if matches!(state.overlay, Some(Overlay::PageMenu(_))) {
-        move_page_menu_selection(state, step);
-        return;
-    }
     let Some(Overlay::Menu(menu)) = state.overlay.as_mut() else {
         return;
     };
@@ -444,6 +441,46 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
         }
         (Some(MenuCommand::DeleteTemp), OverlayTarget::TempPrompt { workspace, temp_id }) => {
             delete_prompt_temp(state, workspace, temp_id);
+        }
+        (Some(MenuCommand::OpenPage), OverlayTarget::PromptPage { page, .. }) => {
+            hide_prompt_pages(state);
+            select_prompt_page(state, page);
+        }
+        (
+            Some(MenuCommand::RenamePage),
+            OverlayTarget::PromptPage {
+                workspace,
+                owner,
+                page,
+            },
+        ) => {
+            open_page_rename(state, workspace, owner, page);
+        }
+        (
+            Some(MenuCommand::CopyPageContent),
+            OverlayTarget::PromptPage {
+                workspace,
+                owner,
+                page,
+            },
+        ) => {
+            copy_page_content(state, workspace, owner, page);
+        }
+        (
+            Some(MenuCommand::NewPage),
+            OverlayTarget::PromptPage { .. } | OverlayTarget::PromptPages { .. },
+        ) => {
+            open_new_page(state);
+        }
+        (
+            Some(MenuCommand::DeletePage),
+            OverlayTarget::PromptPage {
+                workspace,
+                owner,
+                page,
+            },
+        ) => {
+            perform_delete_page(state, workspace, owner, page);
         }
         _ => {}
     }

@@ -1294,7 +1294,7 @@ fn page_data(current: usize, total: usize, name: &str) -> PageHeaderData<'_> {
         current,
         total,
         name,
-        rename: None,
+        arrows: true,
     }
 }
 
@@ -1336,14 +1336,14 @@ fn page_control_hit_areas() {
     ] {
         assert_eq!(page_control_at(border, &data, rect.x, row), Some(expected));
     }
-    // 页名段命中（点击进入重命名）：`· Intro` 的 `I` 所在列。
+    // 页名段为纯展示，点击不产生控件命中。
     let row_text = title_row_render(panel, &data);
     let byte = row_text.find("· Intro").expect("name visible");
     let name_col = border.x + u16::try_from(row_text[..byte].chars().count()).expect("col") + 2;
     assert_eq!(
         page_control_at(border, &data, name_col, row),
-        Some(PageControl::Name),
-        "row={row_text}"
+        None,
+        "页名为纯展示，不命中: row={row_text}"
     );
     // 条目名与边框空白不产生控件命中。
     assert_eq!(
@@ -1457,7 +1457,7 @@ fn title_row_degrades_page_name_before_item_name() {
 }
 
 #[test]
-fn title_row_draft_uses_muted_style_and_renames_with_cursor() {
+fn title_row_draft_uses_muted_style() {
     let panel = Rect::new(0, 0, 56, 8);
     let border = crate::ui::prompt_frame::title_row(panel).expect("title row");
 
@@ -1475,84 +1475,6 @@ fn title_row_draft_uses_muted_style_and_renames_with_cursor() {
     let cell = &buf[(border.x + 2, border.y)];
     assert_eq!(cell.fg, Color::Reset, "草稿标题显式重置前景");
     assert!(cell.modifier.contains(Modifier::DIM));
-
-    // 重命名：页名段替换为单行输入，硬件光标随字符索引。
-    let rename = PageHeaderData {
-        current: 1,
-        total: 1,
-        name: "Page 1",
-        rename: Some(("Draft", 2)),
-    };
-    let row = title_row_render(
-        panel,
-        &TitleRowData {
-            title: Some("named prompt"),
-            draft: false,
-            page: Some(PageHeaderData {
-                current: 1,
-                total: 1,
-                name: "Page 1",
-                rename: Some(("Draft", 2)),
-            }),
-        },
-    );
-    assert!(row.contains(" named prompt "), "{row}");
-    assert!(row.contains("· Draft"), "输入替换页名段: {row}");
-    let cursor = rename_cursor(border, Some("named prompt"), &rename).expect("cursor");
-    assert_eq!(cursor.1, border.y);
-    let byte = row.find("Draft").expect("rename visible");
-    let input_col = border.x + u16::try_from(row[..byte].chars().count()).expect("col");
-    assert_eq!(cursor.0, input_col + 2, "光标列随字符索引: row={row}");
-    // 重命名期间命中输入区仍算页名（字符继续进输入框）。
-    assert_eq!(
-        page_control_at(
-            border,
-            &TitleRowData {
-                title: Some("named prompt"),
-                draft: false,
-                page: Some(rename),
-            },
-            input_col,
-            border.y
-        ),
-        Some(PageControl::Name)
-    );
-}
-
-#[test]
-fn rename_keeps_divider_line_right_of_input() {
-    let panel = Rect::new(0, 0, 40, 8);
-    let row = title_row_render(
-        panel,
-        &TitleRowData {
-            title: Some("named prompt"),
-            draft: false,
-            page: Some(PageHeaderData {
-                current: 1,
-                total: 2,
-                name: "Page 1",
-                rename: Some(("Draft", 5)),
-            }),
-        },
-    );
-    // 回归：重命名输入不得把右侧边框线清成空白；失焦态与聚焦态都保持 `─` 到页控件。
-    assert!(row.starts_with(text::DIVIDER_LEFT_JOIN), "{row}");
-    assert!(row.ends_with("›─┤"), "右端衔接符与页控件完整: {row}");
-    let tail = row.split("· Draft").nth(1).expect("重命名输入可见");
-    assert!(tail.starts_with(' '), "输入后保留 1 列空白: {row}");
-    let before_controls = tail
-        .trim_start_matches(' ')
-        .split('‹')
-        .next()
-        .unwrap_or_default();
-    assert!(
-        !before_controls.is_empty(),
-        "输入与页控件之间仍有边框线: {row}"
-    );
-    assert!(
-        before_controls.chars().all(|ch| ch == '─'),
-        "输入右侧只保留边框线: {row}"
-    );
 }
 
 #[test]
