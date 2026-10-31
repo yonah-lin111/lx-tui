@@ -234,14 +234,17 @@ function anySettingsDirty() {
 // 任意视图的 Save 都保存全部脏视图；tab 左侧黄点由同一份 isDirty 派生。
 function saveAllDirty() {
   if (settingsSaving) { return Promise.resolve(); }
-  const dirty = Object.entries(actionBars).filter(([, bar]) => bar.isDirty());
+  const dirty = TAB_KEYS.filter((key) => actionBars[key] && actionBars[key].isDirty());
   if (dirty.length === 0) { return Promise.resolve(); }
   settingsSaving = true;
   settingsFailed = false;
   refreshActionBars();
   let chain = Promise.resolve();
-  for (const [, bar] of dirty) {
-    chain = chain.then(() => bar.save());
+  for (const key of dirty) {
+    chain = chain.then(() => actionBars[key].save().catch((error) => {
+      showTab(key);
+      throw error;
+    }));
   }
   return chain
     .then(() => { settingsFailed = false; })
@@ -266,9 +269,9 @@ function createActionBar(hostId, controller) {
   host.appendChild(status);
   host.appendChild(reset);
   host.appendChild(save);
-  const refresh = () => {
-    const dirty = controller.isDirty();
-    const anyDirty = anySettingsDirty();
+  const refresh = (knownDirty, knownAnyDirty) => {
+    const dirty = knownDirty !== undefined ? knownDirty : controller.isDirty();
+    const anyDirty = knownAnyDirty !== undefined ? knownAnyDirty : anySettingsDirty();
     if (settingsSaving) {
       dot.className = 'status-dot saving';
       text.textContent = 'Saving…';
@@ -305,10 +308,23 @@ function createActionBar(hostId, controller) {
 }
 
 function refreshActionBars() {
-  for (const bar of Object.values(actionBars)) { bar.refresh(); }
+  if (typeof updateCommandDirtyDots === 'function') { updateCommandDirtyDots(); }
+  if (typeof updateProviderDirtyDots === 'function') { updateProviderDirtyDots(); }
+  if (typeof updateMcpDirtyDots === 'function') { updateMcpDirtyDots(); }
+  if (typeof updateSkillDirtyDots === 'function') { updateSkillDirtyDots(); }
+  const dirtyMap = {};
+  let anyDirty = false;
+  for (const [key, bar] of Object.entries(actionBars)) {
+    const isDirty = !!bar.isDirty();
+    dirtyMap[key] = isDirty;
+    if (isDirty) { anyDirty = true; }
+  }
+  for (const [key, bar] of Object.entries(actionBars)) {
+    bar.refresh(dirtyMap[key], anyDirty);
+  }
   for (const key of TAB_KEYS) {
     const tab = document.getElementById('tab-' + key);
-    if (tab) { tab.classList.toggle('dirty', !!(actionBars[key] && actionBars[key].isDirty())); }
+    if (tab) { tab.classList.toggle('dirty', !!dirtyMap[key]); }
   }
 }
 
@@ -347,27 +363,39 @@ async function saveGeneral() {
   try {
     await api('/api/config', {method: 'PUT', body: JSON.stringify({config})});
     showToast('Settings saved', 'ok');
-    await loadState();
+    await loadGeneral();
   } catch (error) {
     showToast(error.message, 'error');
     throw error;
   }
 }
 
+function applyGeneralData(data) {
+  for (const key of CONFIG_KEYS) {
+    document.getElementById(key).value = data.config[key];
+  }
+  generalBaseline = generalValues();
+  document.getElementById('general-status').textContent = 'Settings loaded';
+  document.getElementById('general-status').className = 'status ok';
+}
+
+function loadGeneral() {
+  return api('/api/state').then((data) => {
+    if (!state) { state = {}; }
+    state.config = data.config;
+    applyGeneralData(data);
+    refreshActionBars();
+  }).catch((error) => {
+    document.getElementById('general-status').textContent = 'Failed to load: ' + error.message;
+    document.getElementById('general-status').className = 'status error';
+  });
+}
+
 function loadState() {
   return api('/api/state').then((data) => {
     state = data;
-    // 选中项跟随最新列表；被删除的选中项清空回占位。
-    if (selected) {
-      selected = (data.commands || []).find((command) => command.name === selected.name && command.kind === selected.kind) || null;
-      if (!selected) { draft = false; hideEditor(); }
-    }
-    for (const key of CONFIG_KEYS) {
-      document.getElementById(key).value = data.config[key];
-    }
-    generalBaseline = generalValues();
-    document.getElementById('general-status').textContent = 'Settings loaded';
-    document.getElementById('general-status').className = 'status ok';
+    applyGeneralData(data);
+    syncCommandBaselines(data.commands || [], true);
     renderCommands();
   }).catch((error) => {
     renderCommands();
@@ -381,7 +409,70 @@ function loadState() {
 // ===== Commands view =====
 
 const KIND_LABELS = {agentMD: 'Markdown', agentBlock: 'Template'};
+const NEW_COMMAND_DEFAULT = {
+  name: '',
+  kind: 'agentMD',
+  md_scope: 'global',
+  block_type: 'template',
+  title: '',
+  description: '',
+  body: ''
+};
 const commandSelects = {};
+let selectedCommandKey = null;
+const commandBaselines = new Map();
+const commandDrafts = new Map();
+let newCommandDraft = null;
+
+function commandKey(command) {
+  return (command.kind || 'agentMD') + '\u0000' + (command.name || '');
+}
+
+function normalizeCommandValues(command) {
+  const kind = command.kind || 'agentMD';
+  return {
+    name: (command.name || '').trim(),
+    kind: kind,
+    md_scope: kind === 'agentBlock' ? 'template' : (command.md_scope || 'global'),
+    block_type: command.block_type || 'template',
+    title: command.title || '',
+    description: command.description || '',
+    body: command.body || ''
+  };
+}
+
+function syncCommandBaselines(commands, discardDrafts) {
+  if (discardDrafts) {
+    commandDrafts.clear();
+    newCommandDraft = null;
+  }
+  commandBaselines.clear();
+  for (const command of commands) {
+    commandBaselines.set(commandKey(command), normalizeCommandValues(command));
+  }
+  for (const [key, draftValues] of Array.from(commandDrafts.entries())) {
+    if (!commandBaselines.has(key) || JSON.stringify(draftValues) === JSON.stringify(commandBaselines.get(key))) {
+      commandDrafts.delete(key);
+    }
+  }
+  if (!draft && selectedCommandKey) {
+    selected = commands.find((command) => commandKey(command) === selectedCommandKey) || null;
+    if (!selected) {
+      selectedCommandKey = null;
+      document.getElementById('editor').classList.add('hidden');
+      document.getElementById('editor-empty').classList.remove('hidden');
+    } else if (discardDrafts || !commandDrafts.has(selectedCommandKey)) {
+      applyEditorValues(commandBaselines.get(selectedCommandKey));
+      document.getElementById('editor-legend').textContent = 'Edit ' + selected.name;
+    }
+  } else if (draft && discardDrafts) {
+    draft = false;
+    selected = null;
+    selectedCommandKey = null;
+    document.getElementById('editor').classList.add('hidden');
+    document.getElementById('editor-empty').classList.remove('hidden');
+  }
+}
 
 function initCommandSelects() {
   commandSelects.filter = createSelect(document.getElementById('cmd-filter-select'), {
@@ -405,7 +496,13 @@ function initCommandSelects() {
     options: [
       {value: 'agentMD', label: 'Markdown insertion'},
       {value: 'agentBlock', label: 'Template block'}
-    ]
+    ],
+    onChange: (kind) => {
+      if (kind === 'agentBlock') {
+        commandSelects.mdScope.setValue('template');
+      }
+      commandSelects.mdScope.setDisabled(kind === 'agentBlock');
+    }
   });
   commandSelects.mdScope = createSelect(document.getElementById('cmd-md-scope-select'), {
     ariaLabel: 'Command visibility',
@@ -426,6 +523,7 @@ function initCommandSelects() {
 }
 
 function renderCommands() {
+  syncCommandEditorToDraft();
   const list = document.getElementById('command-list');
   while (list.firstChild) { list.removeChild(list.firstChild); }
   const filter = commandSelects.filter.value();
@@ -442,10 +540,13 @@ function renderCommands() {
     list.appendChild(empty);
   }
   for (const command of commands) {
-    const isSelected = !draft && selected !== null && selected.name === command.name && selected.kind === command.kind;
+    const key = commandKey(command);
+    const isSelected = !draft && selectedCommandKey === key;
+    const isDirty = isCommandItemDirty(key);
     const row = document.createElement('button');
     row.type = 'button';
-    row.className = 'nav-item' + (isSelected ? ' selected' : '');
+    row.className = 'nav-item' + (isSelected ? ' selected' : '') + (isDirty ? ' dirty' : '');
+    row.dataset.key = key;
     if (isSelected) { row.setAttribute('aria-current', 'true'); }
     const slash = document.createElement('span');
     slash.className = 'nav-slash';
@@ -462,31 +563,64 @@ function renderCommands() {
     row.onclick = () => selectCommand(command);
     list.appendChild(row);
   }
-  document.getElementById('new-command-row').classList.toggle('selected', draft);
+  const newRow = document.getElementById('new-command-row');
+  newRow.classList.toggle('selected', draft);
+  newRow.classList.toggle('dirty', isNewCommandDirty());
   refreshActionBars();
 }
 
+function updateCommandDirtyDots() {
+  syncCommandEditorToDraft();
+  const list = document.getElementById('command-list');
+  if (list) {
+    list.querySelectorAll('.nav-item').forEach((row) => {
+      const key = row.dataset.key;
+      if (key) { row.classList.toggle('dirty', isCommandItemDirty(key)); }
+    });
+  }
+  const newRow = document.getElementById('new-command-row');
+  if (newRow) {
+    newRow.classList.toggle('selected', draft);
+    newRow.classList.toggle('dirty', isNewCommandDirty());
+  }
+}
+
 function selectCommand(command) {
+  syncCommandEditorToDraft();
   draft = false;
   selected = command;
-  showEditor(command);
+  selectedCommandKey = commandKey(command);
+  const values = commandDrafts.get(selectedCommandKey) ||
+    commandBaselines.get(selectedCommandKey) ||
+    normalizeCommandValues(command);
+  showEditor(values, command.name);
   renderCommands();
+}
+
+function selectCommandByKey(key) {
+  const all = (state && state.commands) || [];
+  const match = all.find((command) => commandKey(command) === key);
+  if (match) { selectCommand(match); }
 }
 
 function newCommand() {
+  syncCommandEditorToDraft();
   draft = true;
   selected = null;
-  showEditor({name: '', scope: 'user', kind: 'agentMD', md_scope: 'global', title: '', description: '', body: ''});
+  selectedCommandKey = null;
+  if (!newCommandDraft) {
+    newCommandDraft = Object.assign({}, NEW_COMMAND_DEFAULT);
+  }
+  showEditor(newCommandDraft, '');
   renderCommands();
 }
 
-let commandBaseline = null;
-
 function editorValues() {
+  const kind = commandSelects.kind.value();
   return {
     name: document.getElementById('cmd-name').value.trim(),
-    kind: commandSelects.kind.value(),
-    md_scope: commandSelects.mdScope.value(),
+    kind: kind,
+    md_scope: kind === 'agentBlock' ? 'template' : commandSelects.mdScope.value(),
     block_type: commandSelects.blockType.value(),
     title: document.getElementById('cmd-title').value,
     description: document.getElementById('cmd-description').value,
@@ -494,56 +628,97 @@ function editorValues() {
   };
 }
 
+function syncCommandEditorToDraft() {
+  const editor = document.getElementById('editor');
+  if (!editor || editor.classList.contains('hidden')) { return; }
+  const current = editorValues();
+  if (draft) {
+    newCommandDraft = current;
+    return;
+  }
+  if (!selectedCommandKey || !commandBaselines.has(selectedCommandKey)) { return; }
+  const base = commandBaselines.get(selectedCommandKey);
+  if (JSON.stringify(current) === JSON.stringify(base)) {
+    commandDrafts.delete(selectedCommandKey);
+  } else {
+    commandDrafts.set(selectedCommandKey, current);
+  }
+}
+
+function isCommandItemDirty(key) {
+  if (!commandDrafts.has(key) || !commandBaselines.has(key)) { return false; }
+  return JSON.stringify(commandDrafts.get(key)) !== JSON.stringify(commandBaselines.get(key));
+}
+
+function isNewCommandDirty() {
+  return newCommandDraft !== null &&
+    JSON.stringify(newCommandDraft) !== JSON.stringify(NEW_COMMAND_DEFAULT);
+}
+
 function commandsDirty() {
-  return commandBaseline !== null && JSON.stringify(editorValues()) !== JSON.stringify(commandBaseline);
+  syncCommandEditorToDraft();
+  for (const key of commandDrafts.keys()) {
+    if (isCommandItemDirty(key)) { return true; }
+  }
+  return isNewCommandDirty();
 }
 
 function applyEditorValues(values) {
+  const kind = values.kind || 'agentMD';
+  const mdScope = kind === 'agentBlock' ? 'template' : (values.md_scope || 'global');
   document.getElementById('cmd-name').value = values.name;
   document.getElementById('cmd-title').value = values.title;
   document.getElementById('cmd-description').value = values.description;
   document.getElementById('cmd-body').value = values.body;
-  commandSelects.kind.setValue(values.kind);
-  commandSelects.mdScope.setValue(values.md_scope);
+  commandSelects.kind.setValue(kind);
+  commandSelects.mdScope.setValue(mdScope);
+  commandSelects.mdScope.setDisabled(kind === 'agentBlock');
   commandSelects.blockType.setValue(values.block_type);
 }
 
 function resetCommandEditor() {
-  if (commandBaseline === null) { return; }
-  applyEditorValues(commandBaseline);
+  commandDrafts.clear();
+  newCommandDraft = null;
+  if (draft) {
+    newCommandDraft = Object.assign({}, NEW_COMMAND_DEFAULT);
+    applyEditorValues(newCommandDraft);
+  } else if (selectedCommandKey && commandBaselines.has(selectedCommandKey)) {
+    applyEditorValues(commandBaselines.get(selectedCommandKey));
+  }
+  renderCommands();
 }
 
-function showEditor(command) {
+function showEditor(command, originalName) {
   document.getElementById('editor-empty').classList.add('hidden');
   document.getElementById('editor').classList.remove('hidden');
-  document.getElementById('editor-legend').textContent = command.name ? ('Edit ' + command.name) : 'New command';
-  const values = {
-    name: command.name || '',
-    kind: command.kind || 'agentMD',
-    md_scope: command.md_scope || 'global',
-    block_type: command.block_type || 'template',
-    title: command.title || '',
-    description: command.description || '',
-    body: command.body || ''
-  };
+  const titleName = originalName !== undefined ? originalName : command.name;
+  document.getElementById('editor-legend').textContent = titleName ? ('Edit ' + titleName) : 'New command';
+  const remove = document.querySelector('#editor .danger');
+  if (remove) { remove.disabled = !!draft; }
+  const values = normalizeCommandValues(command);
   applyEditorValues(values);
-  commandBaseline = JSON.parse(JSON.stringify(values));
 }
 
 function hideEditor() {
+  if (draft) {
+    newCommandDraft = null;
+  } else if (selectedCommandKey) {
+    commandDrafts.delete(selectedCommandKey);
+  }
   draft = false;
   selected = null;
-  commandBaseline = null;
+  selectedCommandKey = null;
   document.getElementById('editor').classList.add('hidden');
   document.getElementById('editor-empty').classList.remove('hidden');
   renderCommands();
 }
 
 // 命令列表单独刷新：不重放 General 输入，避免保存命令时冲掉未保存的常规设置。
-function reloadCommands() {
+function reloadCommands(discardDrafts) {
   return api('/api/commands').then((commands) => {
     if (!state) { state = {}; }
     state.commands = commands;
+    syncCommandBaselines(commands || [], !!discardDrafts);
     renderCommands();
   }).catch((error) => {
     showToast(error.message, 'error');
@@ -551,44 +726,127 @@ function reloadCommands() {
 }
 
 async function saveCommand() {
-  const name = document.getElementById('cmd-name').value.trim();
-  const kind = commandSelects.kind.value();
-  const mdScope = commandSelects.mdScope.value();
-  const body = document.getElementById('cmd-body').value;
-  const blockType = commandSelects.blockType.value();
-  const payload = {
-    description: document.getElementById('cmd-description').value,
-    md_scope: mdScope,
-    block_type: blockType,
-    title: document.getElementById('cmd-title').value,
-    body: body
-  };
+  syncCommandEditorToDraft();
+  const dirtyKeys = Array.from(commandDrafts.keys()).filter(isCommandItemDirty);
+  const saveNew = isNewCommandDirty();
+  if (dirtyKeys.length === 0 && !saveNew) { return; }
+
   try {
-    // 已存在的命令改名：先 rename（失败即中止，不动内容），再 PUT 新路径。
-    if (!draft && selected !== null && selected.name && name !== selected.name) {
-      await api('/api/commands/user/' + encodeURIComponent(selected.kind) + '/' + encodeURIComponent(selected.name) + '/rename', {method: 'POST', body: JSON.stringify({to: name})});
-      selected = Object.assign({}, selected, {name: name});
-      renderCommands();
+    for (const key of dirtyKeys) {
+      const values = commandDrafts.get(key);
+      const base = commandBaselines.get(key);
+      const name = values.name.trim();
+      if (!name) {
+        selectCommandByKey(key);
+        throw new Error('Command name is required');
+      }
+      const nextKey = commandKey({kind: values.kind, name});
+      if (nextKey !== key && commandBaselines.has(nextKey)) {
+        selectCommandByKey(key);
+        throw new Error('Command "' + name + '" already exists');
+      }
+      const payload = {
+        description: values.description,
+        md_scope: values.kind === 'agentBlock' ? 'template' : values.md_scope,
+        block_type: values.block_type,
+        title: values.title,
+        body: values.body
+      };
+      try {
+        // 已存在的命令改名：先 rename（失败即中止，不动内容），再 PUT 新路径。
+        if (base.kind === values.kind && name !== base.name) {
+          await api('/api/commands/user/' + encodeURIComponent(base.kind) + '/' + encodeURIComponent(base.name) + '/rename', {
+            method: 'POST',
+            body: JSON.stringify({to: name})
+          });
+        }
+        await api('/api/commands/user/' + encodeURIComponent(values.kind) + '/' + encodeURIComponent(name), {
+          method: 'PUT',
+          body: JSON.stringify(payload)
+        });
+        if (base.kind !== values.kind) {
+          await api('/api/commands/user/' + encodeURIComponent(base.kind) + '/' + encodeURIComponent(base.name), {
+            method: 'DELETE'
+          }).catch(() => {});
+        }
+      } catch (err) {
+        selectCommandByKey(key);
+        throw err;
+      }
+      commandDrafts.delete(key);
+      commandBaselines.delete(key);
+      const savedItem = Object.assign({}, values, {name, scope: 'user'});
+      commandBaselines.set(nextKey, normalizeCommandValues(savedItem));
+      if (selectedCommandKey === key) {
+        selectedCommandKey = nextKey;
+        selected = savedItem;
+        document.getElementById('editor-legend').textContent = 'Edit ' + name;
+      }
     }
-    await api('/api/commands/user/' + encodeURIComponent(kind) + '/' + encodeURIComponent(name), {method: 'PUT', body: JSON.stringify(payload)});
-    draft = false;
-    selected = {name, scope: 'user', kind, md_scope: mdScope, block_type: blockType, title: payload.title, description: payload.description, body};
-    showEditor(selected);
+
+    if (saveNew) {
+      const values = newCommandDraft;
+      const name = values.name.trim();
+      if (!name) {
+        newCommand();
+        throw new Error('Command name is required');
+      }
+      const createdKey = commandKey({kind: values.kind, name});
+      if (commandBaselines.has(createdKey)) {
+        newCommand();
+        throw new Error('Command "' + name + '" already exists');
+      }
+      const payload = {
+        description: values.description,
+        md_scope: values.kind === 'agentBlock' ? 'template' : values.md_scope,
+        block_type: values.block_type,
+        title: values.title,
+        body: values.body
+      };
+      try {
+        await api('/api/commands/user/' + encodeURIComponent(values.kind) + '/' + encodeURIComponent(name), {
+          method: 'PUT',
+          body: JSON.stringify(payload)
+        });
+      } catch (err) {
+        newCommand();
+        throw err;
+      }
+      const created = Object.assign({}, values, {name, scope: 'user'});
+      commandBaselines.set(createdKey, normalizeCommandValues(created));
+      newCommandDraft = null;
+      if (draft) {
+        draft = false;
+        selected = created;
+        selectedCommandKey = createdKey;
+        showEditor(created, name);
+      }
+    }
+
     showToast('Saved', 'ok');
-    renderCommands();
-    await reloadCommands();
+    await reloadCommands(false);
   } catch (error) {
+    await reloadCommands(false);
     showToast(error.message, 'error');
     throw error;
   }
 }
 
 function deleteCommand() {
+  if (draft) {
+    hideEditor();
+    return;
+  }
   if (!selected || !selected.name) { return; }
+  const deletingKey = selectedCommandKey;
   api('/api/commands/user/' + encodeURIComponent(selected.kind) + '/' + encodeURIComponent(selected.name), {method: 'DELETE'}).then(() => {
+    if (deletingKey) {
+      commandDrafts.delete(deletingKey);
+      commandBaselines.delete(deletingKey);
+    }
     hideEditor();
     showToast('Deleted', 'ok');
-    reloadCommands();
+    reloadCommands(false);
   }).catch((error) => {
     showToast(error.message, 'error');
   });

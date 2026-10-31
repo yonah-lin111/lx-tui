@@ -3,10 +3,13 @@
 
 let mcpState = null;
 let mcpSelected = null;
+let mcpSelectedKey = null;
 let mcpNew = false;
 let mcpToolNames = [];
 let mcpDisabled = new Set();
-let mcpBaseline = null;
+const mcpBaselines = new Map();
+const mcpDrafts = new Map();
+let mcpNewDraft = null;
 
 const mcpStatusMarks = {
   ready: '●',
@@ -21,11 +24,119 @@ function mcpServerKey(scope, name) {
   return scope + '\u0000' + name;
 }
 
-function loadMcp() {
+function normalizeMcpConfig(raw, prev) {
+  const cfg = raw || {};
+  const basePrev = prev || cfg;
+  const transport = cfg.transport || 'stdio';
+  const config = {
+    enabled: cfg.enabled !== false,
+    transport,
+    startup_timeout_sec: (basePrev && basePrev.startup_timeout_sec) ? basePrev.startup_timeout_sec : 30,
+    tool_timeout_sec: (basePrev && basePrev.tool_timeout_sec) ? basePrev.tool_timeout_sec : 300
+  };
+  if (basePrev && Array.isArray(basePrev.enabled_tools)) {
+    config.enabled_tools = basePrev.enabled_tools;
+  }
+  const disabled = Array.from(new Set(cfg.disabled_tools || [])).sort();
+  if (disabled.length > 0) { config.disabled_tools = disabled; }
+  if (transport === 'stdio') {
+    config.command = (cfg.command || '').trim();
+    config.args = parseLines((cfg.args || []).join('\n'));
+    const cwd = (cfg.cwd || '').trim();
+    if (cwd) { config.cwd = cwd; }
+    config.env = parseMap(mapToLines(cfg.env || {}));
+    config.env_vars = parseLines((cfg.env_vars || []).join('\n'));
+    return config;
+  }
+  config.url = (cfg.url || '').trim();
+  config.auth = cfg.auth || 'none';
+  if (cfg.bearer_token) { config.bearer_token = cfg.bearer_token; }
+  const tokenEnv = (cfg.bearer_token_env_var || '').trim();
+  if (tokenEnv) { config.bearer_token_env_var = tokenEnv; }
+  config.http_headers = parseMap(mapToLines(cfg.http_headers || {}));
+  config.env_http_headers = parseMap(mapToLines(cfg.env_http_headers || {}));
+  config.scopes = parseLines((cfg.scopes || []).join(' ').replace(/\s+/g, '\n'));
+  const clientId = (cfg.client_id || '').trim();
+  if (clientId) { config.client_id = clientId; }
+  if (cfg.client_secret) { config.client_secret = cfg.client_secret; }
+  return config;
+}
+
+function serverToMcpRecord(server) {
+  const rawConfig = server ? server.config : null;
+  const config = normalizeMcpConfig(rawConfig, rawConfig);
+  const disabled = Array.isArray(config.disabled_tools) ? config.disabled_tools.slice() : [];
+  return {
+    name: server ? server.name : '',
+    scope: server ? server.scope : 'user',
+    config: config,
+    bearer_token: '',
+    client_secret: '',
+    toolNames: disabled,
+    secret_flags: (server && server.secret_flags) ? Object.assign({}, server.secret_flags) : {}
+  };
+}
+
+function comparableMcpRecord(record) {
+  return {
+    name: record.name,
+    scope: record.scope,
+    config: record.config,
+    bearer_token: record.bearer_token || '',
+    client_secret: record.client_secret || ''
+  };
+}
+
+function syncMcpBaselines(servers, discardDrafts) {
+  if (discardDrafts) {
+    mcpDrafts.clear();
+    mcpNewDraft = null;
+  }
+  const previousTools = new Map();
+  for (const [key, base] of mcpBaselines.entries()) {
+    if (Array.isArray(base.toolNames) && base.toolNames.length > 0) {
+      previousTools.set(key, base.toolNames);
+    }
+  }
+  mcpBaselines.clear();
+  for (const server of servers) {
+    const key = mcpServerKey(server.scope, server.name);
+    const record = serverToMcpRecord(server);
+    if (previousTools.has(key) && record.toolNames.length === 0) {
+      record.toolNames = previousTools.get(key);
+    }
+    mcpBaselines.set(key, record);
+  }
+  for (const [key, draftRecord] of Array.from(mcpDrafts.entries())) {
+    if (!mcpBaselines.has(key) ||
+        JSON.stringify(comparableMcpRecord(draftRecord)) === JSON.stringify(comparableMcpRecord(mcpBaselines.get(key)))) {
+      mcpDrafts.delete(key);
+    }
+  }
+  if (!mcpNew && mcpSelectedKey) {
+    mcpSelected = servers.find((server) => mcpServerKey(server.scope, server.name) === mcpSelectedKey) || null;
+    if (!mcpSelected) {
+      mcpSelectedKey = null;
+      document.getElementById('mcp-empty').classList.remove('hidden');
+      document.getElementById('mcp-editor').classList.add('hidden');
+    } else if (discardDrafts || !mcpDrafts.has(mcpSelectedKey)) {
+      applyMcpRecordToEditor(mcpBaselines.get(mcpSelectedKey), false);
+    }
+  } else if (mcpNew && discardDrafts) {
+    mcpNew = false;
+    mcpSelected = null;
+    mcpSelectedKey = null;
+    document.getElementById('mcp-empty').classList.remove('hidden');
+    document.getElementById('mcp-editor').classList.add('hidden');
+  }
+}
+
+function loadMcp(discardDrafts) {
   const status = document.getElementById('mcp-status');
   if (status) { status.textContent = 'Loading…'; }
   return api('/api/mcp').then((data) => {
     mcpState = data;
+    syncMcpBaselines(data.servers || [], !!discardDrafts);
     renderMcpList();
     if (status) { status.textContent = data.servers.length + ' server(s)'; }
     refreshActionBars();
@@ -36,6 +147,7 @@ function loadMcp() {
 }
 
 function renderMcpList() {
+  syncMcpEditorToDraft();
   const list = document.getElementById('mcp-list');
   if (!list || !mcpState) { return; }
   while (list.firstChild) { list.removeChild(list.firstChild); }
@@ -50,7 +162,6 @@ function renderMcpList() {
     empty.className = 'field-hint';
     empty.textContent = 'No MCP servers configured.';
     list.appendChild(empty);
-    return;
   }
   for (const [label, servers] of groups) {
     const header = document.createElement('div');
@@ -58,9 +169,13 @@ function renderMcpList() {
     header.textContent = label;
     list.appendChild(header);
     for (const server of servers) {
+      const key = mcpServerKey(server.scope, server.name);
+      const isSelected = !mcpNew && mcpSelectedKey === key;
+      const isDirty = isMcpItemDirty(key);
       const row = document.createElement('button');
       row.type = 'button';
-      row.className = 'nav-item';
+      row.className = 'nav-item' + (isSelected ? ' selected' : '') + (isDirty ? ' dirty' : '');
+      row.dataset.key = key;
       const mark = document.createElement('span');
       mark.textContent = mcpStatusMarks[server.status] || '○';
       mark.style.color = server.status === 'failed' ? '#ff6b6b' : (server.status === 'ready' ? '#4ade80' : (server.status === 'needs_login' ? '#fbbf24' : 'inherit'));
@@ -73,13 +188,34 @@ function renderMcpList() {
       row.appendChild(name);
       if (server.overrides_user) {
         const tag = document.createElement('span');
-        tag.className = 'field-hint';
-        tag.textContent = ' overrides user';
+        tag.className = 'tag';
+        tag.textContent = 'overrides user';
         row.appendChild(tag);
       }
       row.onclick = () => selectMcpServer(server);
       list.appendChild(row);
     }
+  }
+  const newRow = document.getElementById('new-mcp-row');
+  if (newRow) {
+    newRow.classList.toggle('selected', mcpNew);
+    newRow.classList.toggle('dirty', isMcpNewDirty());
+  }
+}
+
+function updateMcpDirtyDots() {
+  syncMcpEditorToDraft();
+  const list = document.getElementById('mcp-list');
+  if (list) {
+    list.querySelectorAll('.nav-item').forEach((row) => {
+      const key = row.dataset.key;
+      if (key) { row.classList.toggle('dirty', isMcpItemDirty(key)); }
+    });
+  }
+  const newRow = document.getElementById('new-mcp-row');
+  if (newRow) {
+    newRow.classList.toggle('selected', mcpNew);
+    newRow.classList.toggle('dirty', isMcpNewDirty());
   }
 }
 
@@ -89,42 +225,69 @@ function mcpProjects() {
 }
 
 function selectMcpServer(server) {
+  syncMcpEditorToDraft();
   mcpNew = false;
   mcpSelected = server;
-  showMcpEditor(server);
+  mcpSelectedKey = mcpServerKey(server.scope, server.name);
+  const record = mcpDrafts.get(mcpSelectedKey) ||
+    mcpBaselines.get(mcpSelectedKey) ||
+    serverToMcpRecord(server);
+  applyMcpRecordToEditor(record, false);
+  renderMcpList();
+  refreshActionBars();
+}
+
+function selectMcpServerByKey(key) {
+  if (!mcpState || !Array.isArray(mcpState.servers)) { return; }
+  const match = mcpState.servers.find((server) => mcpServerKey(server.scope, server.name) === key);
+  if (match) { selectMcpServer(match); }
 }
 
 function newMcpServer() {
+  syncMcpEditorToDraft();
   mcpNew = true;
   mcpSelected = null;
-  showMcpEditor(null);
+  mcpSelectedKey = null;
+  if (!mcpNewDraft) {
+    mcpNewDraft = serverToMcpRecord(null);
+  }
+  applyMcpRecordToEditor(mcpNewDraft, true);
+  renderMcpList();
+  refreshActionBars();
 }
 
 function showMcpEditor(server) {
+  const record = server ? serverToMcpRecord(server) : serverToMcpRecord(null);
+  applyMcpRecordToEditor(record, !server);
+}
+
+function applyMcpRecordToEditor(record, isNew) {
   const empty = document.getElementById('mcp-empty');
   const editor = document.getElementById('mcp-editor');
   empty.classList.add('hidden');
   editor.classList.remove('hidden');
-  document.getElementById('mcp-legend').textContent = mcpNew ? 'New server' : ('Edit ' + server.name);
+  document.getElementById('mcp-legend').textContent = isNew ? 'New server' : ('Edit ' + record.name);
+  const remove = document.querySelector('#mcp-editor .danger');
+  if (remove) { remove.disabled = !!isNew; }
 
   const scopeHost = document.getElementById('mcp-scope-host');
   scopeHost.innerHTML = '';
   const scopeOptions = [{value: 'user', label: 'user'}].concat(mcpProjects().map((project) => ({value: project.scope, label: project.name})));
-  const scopeValue = server ? server.scope : 'user';
+  const scopeValue = record.scope || 'user';
   createSelect(scopeHost, {
     ariaLabel: 'Scope',
     options: scopeOptions,
     value: scopeValue,
-    disabled: !mcpNew,
+    disabled: !isNew,
     onChange: (next) => { scopeHost.dataset.value = next; }
   });
   scopeHost.dataset.value = scopeValue;
 
   const nameInput = document.getElementById('mcp-name');
-  nameInput.value = server ? server.name : '';
-  nameInput.disabled = !mcpNew;
+  nameInput.value = record.name || '';
+  nameInput.disabled = !isNew;
 
-  const config = server ? server.config : {enabled: true, transport: 'stdio', command: '', args: [], env: {}, env_vars: [], startup_timeout_sec: 30, tool_timeout_sec: 300};
+  const config = record.config || {enabled: true, transport: 'stdio', command: '', args: [], env: {}, env_vars: [], startup_timeout_sec: 30, tool_timeout_sec: 300};
   document.getElementById('mcp-enabled').checked = config.enabled !== false;
 
   fillTransportSelect(config.transport || 'stdio');
@@ -137,24 +300,23 @@ function showMcpEditor(server) {
   document.getElementById('mcp-env').value = mapToLines(config.env || {});
 
   document.getElementById('mcp-url').value = config.url || '';
-  const hasBearer = server && server.secret_flags && server.secret_flags.bearer_token;
-  const hasSecret = server && server.secret_flags && server.secret_flags.client_secret;
-  document.getElementById('mcp-bearer-token').value = '';
+  const hasBearer = !!(record.secret_flags && record.secret_flags.bearer_token);
+  const hasSecret = !!(record.secret_flags && record.secret_flags.client_secret);
+  document.getElementById('mcp-bearer-token').value = record.bearer_token || '';
   document.getElementById('mcp-bearer-token').placeholder = hasBearer ? 'already set; leave empty to keep' : 'paste the token';
   document.getElementById('mcp-bearer-env').value = config.bearer_token_env_var || '';
   document.getElementById('mcp-headers').value = mapToLines(config.http_headers || {});
   document.getElementById('mcp-env-headers').value = mapToLines(config.env_http_headers || {});
   document.getElementById('mcp-scopes').value = (config.scopes || []).join(' ');
   document.getElementById('mcp-client-id').value = config.client_id || '';
-  document.getElementById('mcp-client-secret').value = '';
+  document.getElementById('mcp-client-secret').value = record.client_secret || '';
   document.getElementById('mcp-client-secret').placeholder = hasSecret ? 'already set; leave empty to keep' : 'optional';
 
   mcpDisabled = new Set(config.disabled_tools || []);
-  mcpToolNames = Array.from(mcpDisabled);
+  const knownTools = Array.isArray(record.toolNames) ? record.toolNames : [];
+  mcpToolNames = Array.from(new Set(knownTools.concat(Array.from(mcpDisabled))));
   renderMcpTools();
   updateMcpVisibility();
-  mcpBaseline = JSON.parse(JSON.stringify(mcpSnapshot()));
-  refreshActionBars();
 }
 
 function fillTransportSelect(value) {
@@ -246,7 +408,11 @@ function renderMcpTools() {
 
 function buildMcpConfig() {
   const transport = selectValue('mcp-transport-host') || 'stdio';
-  const prev = (!mcpNew && mcpSelected && mcpSelected.config) ? mcpSelected.config : null;
+  const baseRecord = (!mcpNew && mcpSelectedKey && mcpBaselines.has(mcpSelectedKey))
+    ? mcpBaselines.get(mcpSelectedKey)
+    : null;
+  const prev = (baseRecord && baseRecord.config) ||
+    ((!mcpNew && mcpSelected && mcpSelected.config) ? mcpSelected.config : null);
   const config = {
     enabled: document.getElementById('mcp-enabled').checked,
     transport,
@@ -284,76 +450,200 @@ function buildMcpConfig() {
 }
 
 function mcpSnapshot() {
+  const base = (!mcpNew && mcpSelectedKey && mcpBaselines.has(mcpSelectedKey))
+    ? mcpBaselines.get(mcpSelectedKey)
+    : null;
   return {
     name: document.getElementById('mcp-name').value.trim(),
     scope: selectValue('mcp-scope-host') || 'user',
     config: buildMcpConfig(),
     bearer_token: document.getElementById('mcp-bearer-token').value,
-    client_secret: document.getElementById('mcp-client-secret').value
+    client_secret: document.getElementById('mcp-client-secret').value,
+    toolNames: mcpToolNames.slice(),
+    secret_flags: base ? Object.assign({}, base.secret_flags) : {}
   };
 }
 
-function mcpDirty() {
-  if (mcpBaseline === null || document.getElementById('mcp-editor').classList.contains('hidden')) {
-    return false;
+function syncMcpEditorToDraft() {
+  const editor = document.getElementById('mcp-editor');
+  if (!editor || editor.classList.contains('hidden')) { return; }
+  const current = mcpSnapshot();
+  if (mcpNew) {
+    mcpNewDraft = current;
+    return;
   }
-  return JSON.stringify(mcpSnapshot()) !== JSON.stringify(mcpBaseline);
+  if (!mcpSelectedKey || !mcpBaselines.has(mcpSelectedKey)) { return; }
+  const base = mcpBaselines.get(mcpSelectedKey);
+  base.toolNames = current.toolNames.slice();
+  if (JSON.stringify(comparableMcpRecord(current)) === JSON.stringify(comparableMcpRecord(base))) {
+    mcpDrafts.delete(mcpSelectedKey);
+  } else {
+    mcpDrafts.set(mcpSelectedKey, current);
+  }
+}
+
+function isMcpItemDirty(key) {
+  if (!mcpDrafts.has(key) || !mcpBaselines.has(key)) { return false; }
+  return JSON.stringify(comparableMcpRecord(mcpDrafts.get(key))) !==
+    JSON.stringify(comparableMcpRecord(mcpBaselines.get(key)));
+}
+
+function isMcpNewDirty() {
+  if (!mcpNewDraft) { return false; }
+  const def = serverToMcpRecord(null);
+  return JSON.stringify(comparableMcpRecord(mcpNewDraft)) !==
+    JSON.stringify(comparableMcpRecord(def));
+}
+
+function mcpDirty() {
+  syncMcpEditorToDraft();
+  for (const key of mcpDrafts.keys()) {
+    if (isMcpItemDirty(key)) { return true; }
+  }
+  return isMcpNewDirty();
 }
 
 function resetMcpEditor() {
+  mcpDrafts.clear();
+  mcpNewDraft = null;
   if (mcpNew) {
-    showMcpEditor(null);
-  } else if (mcpSelected) {
-    showMcpEditor(mcpSelected);
+    mcpNewDraft = serverToMcpRecord(null);
+    applyMcpRecordToEditor(mcpNewDraft, true);
+  } else if (mcpSelectedKey && mcpBaselines.has(mcpSelectedKey)) {
+    applyMcpRecordToEditor(mcpBaselines.get(mcpSelectedKey), false);
   }
+  renderMcpList();
+  refreshActionBars();
 }
 
 async function saveMcpServer() {
-  const name = document.getElementById('mcp-name').value.trim();
-  const scope = selectValue('mcp-scope-host') || 'user';
-  if (!name) {
-    const error = new Error('server name is required');
-    showToast(error.message, 'error');
-    throw error;
-  }
-  const body = buildMcpConfig();
+  syncMcpEditorToDraft();
+  const dirtyKeys = Array.from(mcpDrafts.keys()).filter(isMcpItemDirty);
+  const saveNew = isMcpNewDirty();
+  if (dirtyKeys.length === 0 && !saveNew) { return; }
+
   try {
-    await api('/api/mcp/' + encodeURIComponent(scope) + '/' + encodeURIComponent(name), {
-      method: 'PUT',
-      body: JSON.stringify(body)
-    });
-    showToast('MCP server saved', 'ok');
-    await loadMcp();
-    const saved = mcpState.servers.find((server) => server.name === name && server.scope === scope);
-    if (saved) {
-      selectMcpServer(saved);
-    } else {
-      mcpBaseline = JSON.parse(JSON.stringify(mcpSnapshot()));
-      refreshActionBars();
+    for (const key of dirtyKeys) {
+      const record = mcpDrafts.get(key);
+      const name = (record.name || '').trim();
+      const scope = record.scope || 'user';
+      if (!name) {
+        selectMcpServerByKey(key);
+        throw new Error('server name is required');
+      }
+      try {
+        await api('/api/mcp/' + encodeURIComponent(scope) + '/' + encodeURIComponent(name), {
+          method: 'PUT',
+          body: JSON.stringify(record.config)
+        });
+      } catch (err) {
+        selectMcpServerByKey(key);
+        throw err;
+      }
+      const nextFlags = Object.assign({}, record.secret_flags);
+      if (record.bearer_token) { nextFlags.bearer_token = true; }
+      if (record.client_secret) { nextFlags.client_secret = true; }
+      const savedConfig = JSON.parse(JSON.stringify(record.config));
+      delete savedConfig.bearer_token;
+      delete savedConfig.client_secret;
+      mcpBaselines.set(key, {
+        name,
+        scope,
+        config: savedConfig,
+        bearer_token: '',
+        client_secret: '',
+        toolNames: record.toolNames.slice(),
+        secret_flags: nextFlags
+      });
+      mcpDrafts.delete(key);
     }
+
+    if (saveNew) {
+      const record = mcpNewDraft;
+      const name = (record.name || '').trim();
+      const scope = record.scope || 'user';
+      if (!name) {
+        newMcpServer();
+        throw new Error('server name is required');
+      }
+      const createdKey = mcpServerKey(scope, name);
+      if (mcpBaselines.has(createdKey)) {
+        newMcpServer();
+        throw new Error('MCP server "' + name + '" already exists');
+      }
+      try {
+        await api('/api/mcp/' + encodeURIComponent(scope) + '/' + encodeURIComponent(name), {
+          method: 'PUT',
+          body: JSON.stringify(record.config)
+        });
+      } catch (err) {
+        newMcpServer();
+        throw err;
+      }
+      const nextFlags = {};
+      if (record.bearer_token) { nextFlags.bearer_token = true; }
+      if (record.client_secret) { nextFlags.client_secret = true; }
+      const savedConfig = JSON.parse(JSON.stringify(record.config));
+      delete savedConfig.bearer_token;
+      delete savedConfig.client_secret;
+      mcpBaselines.set(createdKey, {
+        name,
+        scope,
+        config: savedConfig,
+        bearer_token: '',
+        client_secret: '',
+        toolNames: record.toolNames.slice(),
+        secret_flags: nextFlags
+      });
+      mcpNewDraft = null;
+      if (mcpNew) {
+        mcpNew = false;
+        mcpSelectedKey = createdKey;
+      }
+    }
+
+    showToast('MCP server saved', 'ok');
+    await loadMcp(false);
   } catch (error) {
+    await loadMcp(false);
     showToast(error.message, 'error');
     throw error;
   }
 }
 
 function deleteMcpServer() {
+  if (mcpNew) {
+    hideMcpEditor();
+    return;
+  }
   if (!mcpSelected) { return; }
   if (!window.confirm('Delete MCP server "' + mcpSelected.name + '"?')) { return; }
+  const deletingKey = mcpSelectedKey;
   api('/api/mcp/' + encodeURIComponent(mcpSelected.scope) + '/' + encodeURIComponent(mcpSelected.name), {
     method: 'DELETE'
   }).then(() => {
+    if (deletingKey) {
+      mcpDrafts.delete(deletingKey);
+      mcpBaselines.delete(deletingKey);
+    }
     showToast('MCP server deleted', 'ok');
     hideMcpEditor();
-    return loadMcp();
+    return loadMcp(false);
   }).catch((error) => showToast(error.message, 'error'));
 }
 
 function hideMcpEditor() {
+  if (mcpNew) {
+    mcpNewDraft = null;
+  } else if (mcpSelectedKey) {
+    mcpDrafts.delete(mcpSelectedKey);
+  }
   document.getElementById('mcp-empty').classList.remove('hidden');
   document.getElementById('mcp-editor').classList.add('hidden');
+  mcpNew = false;
   mcpSelected = null;
-  mcpBaseline = null;
+  mcpSelectedKey = null;
+  renderMcpList();
   refreshActionBars();
 }
 
@@ -364,21 +654,43 @@ function mcpServerPath(suffix) {
 }
 
 function mcpProbe() {
+  if (mcpNew || !mcpSelectedKey) {
+    showToast('Save the server before testing connection', 'info');
+    return;
+  }
+  const targetKey = mcpSelectedKey;
   api(mcpServerPath('/probe'), {method: 'POST', body: '{}'}).then((data) => {
-    mcpToolNames = data.tools || [];
-    renderMcpTools();
-    showToast('connection ok: ' + mcpToolNames.length + ' tool(s)', 'ok');
+    const tools = data.tools || [];
+    if (mcpBaselines.has(targetKey)) {
+      mcpBaselines.get(targetKey).toolNames = tools.slice();
+    }
+    if (mcpDrafts.has(targetKey)) {
+      mcpDrafts.get(targetKey).toolNames = tools.slice();
+    }
+    if (!mcpNew && mcpSelectedKey === targetKey) {
+      mcpToolNames = tools;
+      renderMcpTools();
+    }
+    showToast('connection ok: ' + tools.length + ' tool(s)', 'ok');
   }).catch((error) => showToast(error.message, 'error'));
 }
 
 function mcpRestart() {
+  if (mcpNew || !mcpSelectedKey) {
+    showToast('Save the server before restarting', 'info');
+    return;
+  }
   api(mcpServerPath('/restart'), {method: 'POST', body: '{}'}).then(() => {
     showToast('restart requested', 'ok');
-    setTimeout(loadMcp, 800);
+    setTimeout(() => loadMcp(false), 800);
   }).catch((error) => showToast(error.message, 'error'));
 }
 
 function mcpLogin() {
+  if (mcpNew || !mcpSelectedKey) {
+    showToast('Save the server before logging in', 'info');
+    return;
+  }
   // 先同步打开空白页，避免 fetch 回调里的 window.open 被浏览器拦截。
   const popup = window.open('', '_blank');
   api(mcpServerPath('/oauth/start'), {method: 'POST', body: '{}'}).then((data) => {
@@ -387,7 +699,7 @@ function mcpLogin() {
     let attempts = 0;
     const timer = setInterval(() => {
       attempts += 1;
-      loadMcp();
+      loadMcp(false);
       if (attempts >= 30) { clearInterval(timer); }
     }, 2000);
   }).catch((error) => {
@@ -397,9 +709,13 @@ function mcpLogin() {
 }
 
 function mcpLogout() {
+  if (mcpNew || !mcpSelectedKey) {
+    showToast('Save the server before logging out', 'info');
+    return;
+  }
   api(mcpServerPath('/oauth/logout'), {method: 'POST', body: '{}'}).then(() => {
     showToast('logged out', 'ok');
-    return loadMcp();
+    return loadMcp(false);
   }).catch((error) => showToast(error.message, 'error'));
 }
 
