@@ -1,7 +1,7 @@
 # 设置页（Settings）多层级未保存状态与一键保存 — 设计文档
 
-> 状态：**已完成实现与验证**（2026-10-31）
-> 关联任务清单：[task.md](task.md)
+> 状态：**已完成实现、评审（Review P0–P2 修复）与验证**（2026-10-31）
+> 关联任务清单：[task.md](task.md)，功能评审报告：[review.md](review.md)
 > 涉及范围：`assets/settings.html`、`assets/settings.css`、`assets/settings.js`、`assets/settings_models.js`、`assets/settings_mcp.js`、`assets/settings_skills.js`、`src/settings/service/tests.rs`
 
 ---
@@ -674,14 +674,20 @@ async function saveSkill() {
 
 ---
 
-## 4. 边界条件与回归防护
+## 4. 边界条件与回归防护（含 Review P0–P2 收口）
 
-1. **命令重命名（Rename）与类型切换（Kind 切换）**：
+1. **命令重命名（Rename）、类型切换（`agentBlock` 锁定 `template`）与同名冲突拦截（P0-1 / P0-2）**：
    - 保留 `'/rename'` 与 `JSON.stringify({to: name})` 的调用结构，兼容已有测试 `page_editor_supports_rename_flow`。
-   - 当已有命令同时修改了 `Type`（如 `agentMD` → `agentBlock`）时，先向新 `kind` 路径执行 `PUT`，成功后再 `DELETE` 旧 `kind` 路径文件，防止文件丢失或残留两份同名命令。
-2. **输入期间列表小黄点实时刷新不丢焦点**：
-   - 在右侧表单输入文字触发 `document` 的 `input` / `change` 事件时，调用各视图的 `sync*EditorToDraft()` 与列表节点 `.classList.toggle('dirty', ...)` 原地更新类名，**不重建整个左侧列表 DOM**，保证输入焦点与滚动位置丝滑稳定。
-3. **测试断言兼容与新增验证（`src/settings/service/tests.rs`）**：
+   - 当命令类型切为 `agentBlock` 时，自动将 `md_scope` 设为 `'template'` 并禁用 `Visibility` 下拉框，避免后端返回 `422: agentBlock requires template scope`。
+   - 当已有命令跨类型迁移或改名（`nextKey !== key`）、以及在 `Commands` / `MCP` / `Skills` 中保存 `+ New ...` 新建草稿时，前端先校验目标键是否已存在于各自 `Baselines` 中，若冲突则定位到该项并报错，防止静默调用幂等 `PUT` 覆盖磁盘已有项。
+2. **Skills `Reload` 强制失效正文缓存与 MCP `mcpProbe` 异步防串台（P1-1 / P1-2 / P1-3）**：
+   - `loadSkills(true)`（点击 `Reload`）时不复用旧 `skillBaselines` 的 `bodyLoaded` 缓存，且若当前正选中某 Skill，自动重新请求 `/api/skills/detail` 刷新正文。
+   - `Models` 在 `selectProvider` / `newProvider` / `duplicateProvider` / `cancelProvider` / `resetModels` 时统一调用 `hideFetchCandidates()` 清理 `#fetch-candidates` 候选框。
+   - `mcpProbe()` 捕获发起时的 `targetKey = mcpSelectedKey` 并拦截未落盘的新建草稿，防止异步返回时把工具列表串写到其它 Server。
+3. **输入期间列表小黄点实时刷新与单次脏计算优化（P2-1 / P2-2）**：
+   - 在右侧表单输入文字触发 `document` 的 `input` / `change` 事件时，调用各视图的 `sync*EditorToDraft()` 与列表节点 `.classList.toggle('dirty', ...)` 原地更新类名，**不重建整个左侧列表 DOM**；`refreshActionBars()` 汇总一次 `dirtyMap` 与 `anyDirty` 并分发给各操作条，消除重复序列化比对。
+   - `Commands`、`MCP`、`Skills` 在新建模式下统一禁用编辑器头部的红色 `Delete` 按钮。
+4. **测试断言兼容与新增验证（`src/settings/service/tests.rs`）**：
    - 保留 `src/settings/service/tests.rs` 中对 `.nav-item`、`.models-grid`、`#mcp-editor`、`#skill-editor`、`loadModels`/`saveModels`、`loadMcp`/`saveMcpServer`、`loadSkills`/`saveSkill` 等全部既有断言；
-   - 新增对 `.nav-item.dirty::after`、多草稿状态管理函数（`commandDrafts`、`mcpDrafts`、`skillDrafts`、`isProviderDirty`）的静态资源契约测试。
+   - 新增对 `.nav-item.dirty::after`、多草稿状态管理函数及 P0–P2 边界防护的测试。
    - 使用 `node --check` 校验四份 `.js` 脚本语法零错误。

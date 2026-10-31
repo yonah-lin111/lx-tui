@@ -269,9 +269,9 @@ function createActionBar(hostId, controller) {
   host.appendChild(status);
   host.appendChild(reset);
   host.appendChild(save);
-  const refresh = () => {
-    const dirty = controller.isDirty();
-    const anyDirty = anySettingsDirty();
+  const refresh = (knownDirty, knownAnyDirty) => {
+    const dirty = knownDirty !== undefined ? knownDirty : controller.isDirty();
+    const anyDirty = knownAnyDirty !== undefined ? knownAnyDirty : anySettingsDirty();
     if (settingsSaving) {
       dot.className = 'status-dot saving';
       text.textContent = 'Saving…';
@@ -312,10 +312,19 @@ function refreshActionBars() {
   if (typeof updateProviderDirtyDots === 'function') { updateProviderDirtyDots(); }
   if (typeof updateMcpDirtyDots === 'function') { updateMcpDirtyDots(); }
   if (typeof updateSkillDirtyDots === 'function') { updateSkillDirtyDots(); }
-  for (const bar of Object.values(actionBars)) { bar.refresh(); }
+  const dirtyMap = {};
+  let anyDirty = false;
+  for (const [key, bar] of Object.entries(actionBars)) {
+    const isDirty = !!bar.isDirty();
+    dirtyMap[key] = isDirty;
+    if (isDirty) { anyDirty = true; }
+  }
+  for (const [key, bar] of Object.entries(actionBars)) {
+    bar.refresh(dirtyMap[key], anyDirty);
+  }
   for (const key of TAB_KEYS) {
     const tab = document.getElementById('tab-' + key);
-    if (tab) { tab.classList.toggle('dirty', !!(actionBars[key] && actionBars[key].isDirty())); }
+    if (tab) { tab.classList.toggle('dirty', !!dirtyMap[key]); }
   }
 }
 
@@ -420,10 +429,11 @@ function commandKey(command) {
 }
 
 function normalizeCommandValues(command) {
+  const kind = command.kind || 'agentMD';
   return {
     name: (command.name || '').trim(),
-    kind: command.kind || 'agentMD',
-    md_scope: command.md_scope || 'global',
+    kind: kind,
+    md_scope: kind === 'agentBlock' ? 'template' : (command.md_scope || 'global'),
     block_type: command.block_type || 'template',
     title: command.title || '',
     description: command.description || '',
@@ -486,7 +496,13 @@ function initCommandSelects() {
     options: [
       {value: 'agentMD', label: 'Markdown insertion'},
       {value: 'agentBlock', label: 'Template block'}
-    ]
+    ],
+    onChange: (kind) => {
+      if (kind === 'agentBlock') {
+        commandSelects.mdScope.setValue('template');
+      }
+      commandSelects.mdScope.setDisabled(kind === 'agentBlock');
+    }
   });
   commandSelects.mdScope = createSelect(document.getElementById('cmd-md-scope-select'), {
     ariaLabel: 'Command visibility',
@@ -600,10 +616,11 @@ function newCommand() {
 }
 
 function editorValues() {
+  const kind = commandSelects.kind.value();
   return {
     name: document.getElementById('cmd-name').value.trim(),
-    kind: commandSelects.kind.value(),
-    md_scope: commandSelects.mdScope.value(),
+    kind: kind,
+    md_scope: kind === 'agentBlock' ? 'template' : commandSelects.mdScope.value(),
     block_type: commandSelects.blockType.value(),
     title: document.getElementById('cmd-title').value,
     description: document.getElementById('cmd-description').value,
@@ -647,12 +664,15 @@ function commandsDirty() {
 }
 
 function applyEditorValues(values) {
+  const kind = values.kind || 'agentMD';
+  const mdScope = kind === 'agentBlock' ? 'template' : (values.md_scope || 'global');
   document.getElementById('cmd-name').value = values.name;
   document.getElementById('cmd-title').value = values.title;
   document.getElementById('cmd-description').value = values.description;
   document.getElementById('cmd-body').value = values.body;
-  commandSelects.kind.setValue(values.kind);
-  commandSelects.mdScope.setValue(values.md_scope);
+  commandSelects.kind.setValue(kind);
+  commandSelects.mdScope.setValue(mdScope);
+  commandSelects.mdScope.setDisabled(kind === 'agentBlock');
   commandSelects.blockType.setValue(values.block_type);
 }
 
@@ -673,6 +693,8 @@ function showEditor(command, originalName) {
   document.getElementById('editor').classList.remove('hidden');
   const titleName = originalName !== undefined ? originalName : command.name;
   document.getElementById('editor-legend').textContent = titleName ? ('Edit ' + titleName) : 'New command';
+  const remove = document.querySelector('#editor .danger');
+  if (remove) { remove.disabled = !!draft; }
   const values = normalizeCommandValues(command);
   applyEditorValues(values);
 }
@@ -718,9 +740,14 @@ async function saveCommand() {
         selectCommandByKey(key);
         throw new Error('Command name is required');
       }
+      const nextKey = commandKey({kind: values.kind, name});
+      if (nextKey !== key && commandBaselines.has(nextKey)) {
+        selectCommandByKey(key);
+        throw new Error('Command "' + name + '" already exists');
+      }
       const payload = {
         description: values.description,
-        md_scope: values.md_scope,
+        md_scope: values.kind === 'agentBlock' ? 'template' : values.md_scope,
         block_type: values.block_type,
         title: values.title,
         body: values.body
@@ -749,7 +776,6 @@ async function saveCommand() {
       commandDrafts.delete(key);
       commandBaselines.delete(key);
       const savedItem = Object.assign({}, values, {name, scope: 'user'});
-      const nextKey = commandKey(savedItem);
       commandBaselines.set(nextKey, normalizeCommandValues(savedItem));
       if (selectedCommandKey === key) {
         selectedCommandKey = nextKey;
@@ -765,9 +791,14 @@ async function saveCommand() {
         newCommand();
         throw new Error('Command name is required');
       }
+      const createdKey = commandKey({kind: values.kind, name});
+      if (commandBaselines.has(createdKey)) {
+        newCommand();
+        throw new Error('Command "' + name + '" already exists');
+      }
       const payload = {
         description: values.description,
-        md_scope: values.md_scope,
+        md_scope: values.kind === 'agentBlock' ? 'template' : values.md_scope,
         block_type: values.block_type,
         title: values.title,
         body: values.body
@@ -782,7 +813,6 @@ async function saveCommand() {
         throw err;
       }
       const created = Object.assign({}, values, {name, scope: 'user'});
-      const createdKey = commandKey(created);
       commandBaselines.set(createdKey, normalizeCommandValues(created));
       newCommandDraft = null;
       if (draft) {

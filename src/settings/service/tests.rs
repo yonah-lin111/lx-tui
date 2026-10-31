@@ -1035,5 +1035,11 @@ async fn page_preserves_subtab_drafts_and_dirty_dots_across_views() {
     ] {
         assert!(skills_js.contains(symbol), "skills draft symbol: {symbol}");
     }
+    assert!(
+        js.contains("already exists")
+            && mcp_js.contains("already exists")
+            && skills_js.contains("already exists"),
+        "duplicate creation guard across views"
+    );
     service.shutdown();
 }

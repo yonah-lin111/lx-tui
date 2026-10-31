@@ -41,7 +41,7 @@ function syncSkillBaselines(entries, discardDrafts) {
     skillDrafts.clear();
     skillNewDraft = null;
   }
-  const previous = new Map(skillBaselines);
+  const previous = discardDrafts ? new Map() : new Map(skillBaselines);
   skillBaselines.clear();
   for (const entry of entries) {
     skillBaselines.set(entry.path, entryToSkillRecord(entry, previous.get(entry.path)));
@@ -57,7 +57,9 @@ function syncSkillBaselines(entries, discardDrafts) {
       selectedSkillPath = null;
       document.getElementById('skill-empty').classList.remove('hidden');
       document.getElementById('skill-editor').classList.add('hidden');
-    } else if (discardDrafts || !skillDrafts.has(selectedSkillPath)) {
+    } else if (discardDrafts) {
+      selectSkill(skillsSelected);
+    } else if (!skillDrafts.has(selectedSkillPath)) {
       applySkillRecordToEditor(skillBaselines.get(selectedSkillPath), false);
     }
   } else if (skillsNew && discardDrafts) {
@@ -395,6 +397,11 @@ async function saveSkill() {
       if (!name) {
         newSkill();
         throw new Error('skill name is required');
+      }
+      const duplicate = Array.from(skillBaselines.values()).some((item) => item.scope === scope && item.name === name);
+      if (duplicate) {
+        newSkill();
+        throw new Error('Skill "' + name + '" already exists');
       }
       try {
         await api(skillPath(name, scope), {

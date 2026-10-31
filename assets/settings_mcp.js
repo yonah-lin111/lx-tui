@@ -267,6 +267,8 @@ function applyMcpRecordToEditor(record, isNew) {
   empty.classList.add('hidden');
   editor.classList.remove('hidden');
   document.getElementById('mcp-legend').textContent = isNew ? 'New server' : ('Edit ' + record.name);
+  const remove = document.querySelector('#mcp-editor .danger');
+  if (remove) { remove.disabled = !!isNew; }
 
   const scopeHost = document.getElementById('mcp-scope-host');
   scopeHost.innerHTML = '';
@@ -406,7 +408,11 @@ function renderMcpTools() {
 
 function buildMcpConfig() {
   const transport = selectValue('mcp-transport-host') || 'stdio';
-  const prev = (!mcpNew && mcpSelected && mcpSelected.config) ? mcpSelected.config : null;
+  const baseRecord = (!mcpNew && mcpSelectedKey && mcpBaselines.has(mcpSelectedKey))
+    ? mcpBaselines.get(mcpSelectedKey)
+    : null;
+  const prev = (baseRecord && baseRecord.config) ||
+    ((!mcpNew && mcpSelected && mcpSelected.config) ? mcpSelected.config : null);
   const config = {
     enabled: document.getElementById('mcp-enabled').checked,
     transport,
@@ -560,6 +566,11 @@ async function saveMcpServer() {
         newMcpServer();
         throw new Error('server name is required');
       }
+      const createdKey = mcpServerKey(scope, name);
+      if (mcpBaselines.has(createdKey)) {
+        newMcpServer();
+        throw new Error('MCP server "' + name + '" already exists');
+      }
       try {
         await api('/api/mcp/' + encodeURIComponent(scope) + '/' + encodeURIComponent(name), {
           method: 'PUT',
@@ -569,7 +580,6 @@ async function saveMcpServer() {
         newMcpServer();
         throw err;
       }
-      const createdKey = mcpServerKey(scope, name);
       const nextFlags = {};
       if (record.bearer_token) { nextFlags.bearer_token = true; }
       if (record.client_secret) { nextFlags.client_secret = true; }
@@ -644,21 +654,43 @@ function mcpServerPath(suffix) {
 }
 
 function mcpProbe() {
+  if (mcpNew || !mcpSelectedKey) {
+    showToast('Save the server before testing connection', 'info');
+    return;
+  }
+  const targetKey = mcpSelectedKey;
   api(mcpServerPath('/probe'), {method: 'POST', body: '{}'}).then((data) => {
-    mcpToolNames = data.tools || [];
-    renderMcpTools();
-    showToast('connection ok: ' + mcpToolNames.length + ' tool(s)', 'ok');
+    const tools = data.tools || [];
+    if (mcpBaselines.has(targetKey)) {
+      mcpBaselines.get(targetKey).toolNames = tools.slice();
+    }
+    if (mcpDrafts.has(targetKey)) {
+      mcpDrafts.get(targetKey).toolNames = tools.slice();
+    }
+    if (!mcpNew && mcpSelectedKey === targetKey) {
+      mcpToolNames = tools;
+      renderMcpTools();
+    }
+    showToast('connection ok: ' + tools.length + ' tool(s)', 'ok');
   }).catch((error) => showToast(error.message, 'error'));
 }
 
 function mcpRestart() {
+  if (mcpNew || !mcpSelectedKey) {
+    showToast('Save the server before restarting', 'info');
+    return;
+  }
   api(mcpServerPath('/restart'), {method: 'POST', body: '{}'}).then(() => {
     showToast('restart requested', 'ok');
-    setTimeout(loadMcp, 800);
+    setTimeout(() => loadMcp(false), 800);
   }).catch((error) => showToast(error.message, 'error'));
 }
 
 function mcpLogin() {
+  if (mcpNew || !mcpSelectedKey) {
+    showToast('Save the server before logging in', 'info');
+    return;
+  }
   // 先同步打开空白页，避免 fetch 回调里的 window.open 被浏览器拦截。
   const popup = window.open('', '_blank');
   api(mcpServerPath('/oauth/start'), {method: 'POST', body: '{}'}).then((data) => {
@@ -667,7 +699,7 @@ function mcpLogin() {
     let attempts = 0;
     const timer = setInterval(() => {
       attempts += 1;
-      loadMcp();
+      loadMcp(false);
       if (attempts >= 30) { clearInterval(timer); }
     }, 2000);
   }).catch((error) => {
@@ -677,9 +709,13 @@ function mcpLogin() {
 }
 
 function mcpLogout() {
+  if (mcpNew || !mcpSelectedKey) {
+    showToast('Save the server before logging out', 'info');
+    return;
+  }
   api(mcpServerPath('/oauth/logout'), {method: 'POST', body: '{}'}).then(() => {
     showToast('logged out', 'ok');
-    return loadMcp();
+    return loadMcp(false);
   }).catch((error) => showToast(error.message, 'error'));
 }
 

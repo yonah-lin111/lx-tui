@@ -1,7 +1,7 @@
 # 设置页（Settings）多层级未保存状态与一键保存 — 执行任务清单
 
-> 状态：**已完成实现与验证**（2026-10-31）
-> 设计依据：[design.md](design.md)
+> 状态：**已完成实现、评审（Review P0–P2 修复）与验证**（2026-10-31）
+> 设计依据：[design.md](design.md)，功能评审报告：[review.md](review.md)
 > 执行约束：用户审核确认本文档与 `design.md` 后再开始修改代码；完成后执行 `node --check` 与 `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 定向及全量校验。
 
 ---
@@ -90,3 +90,14 @@
   - 运行 `node --check assets/settings.js assets/settings_models.js assets/settings_mcp.js assets/settings_skills.js` 验证全部脚本语法。
   - 在 `src/settings/service/tests.rs` 中补充对 `.nav-item.dirty::after` 及各视图多草稿状态管理入口的断言。
   - 运行 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test settings::service` 完成校验。
+
+---
+
+## 阶段 7：功能评审（Review）与 P0–P2 缺陷修复（[review.md](review.md)）
+
+- [x] **R1（P0-1）**：修复 `Commands` 切换为 `agentBlock` 时未自动将 `md_scope` 设为 `'template'` 并锁定下拉框导致保存报 422 的问题；补齐新建命令与跨类型改名时的同名冲突拦截（`already exists`）。
+- [x] **R2（P0-2）**：补齐 `MCP` 与 `Skills` 新建草稿保存时的同作用域同名冲突拦截，防止静默覆写已有配置。
+- [x] **R3（P1-1）**：修复 `Skills` 点击 `Reload`（`loadSkills(true)`）时仍复用旧 `bodyLoaded` 正文缓存导致无法从磁盘重刷 `SKILL.md` 正文的问题。
+- [x] **R4（P1-2）**：修复 `Models` 在切换 Provider、新建/复制、`Cancel`、`Reset` 时未调用 `hideFetchCandidates()` 清理 `#fetch-candidates` 的问题。
+- [x] **R5（P1-3）**：修复 `MCP` 的 `mcpProbe` 异步返回未绑定 `targetKey` 可能串写工具列表、以及未保存新建项直接调用连接管理接口的问题。
+- [x] **R6（P2-1 & P2-2）**：优化 `refreshActionBars()` 单次计算 `dirtyMap` 与 `anyDirty`，避免每次输入重复执行 36 次比对；在 `Commands` 与 `MCP` 新建模式下统一禁用 `Delete` 按钮。

@@ -74,6 +74,7 @@ function updateModelsStatus() {
 // Reset：把草稿回填为最近一次加载/保存的快照。
 function resetModels() {
   if (modelsBaseline === null) { return; }
+  hideFetchCandidates();
   modelsDraft = JSON.parse(JSON.stringify(modelsBaseline));
   modelsDirty = false;
   if (!modelsDraft.providers.some((provider) => provider.key === selectedProviderKey)) {
@@ -191,6 +192,7 @@ function renderEditor() {
 }
 
 function selectProvider(key) {
+  hideFetchCandidates();
   selectedProviderKey = key;
   renderProviders();
   renderEditor();
@@ -198,6 +200,7 @@ function selectProvider(key) {
 
 function newProvider() {
   if (!modelsDraft) { return; }
+  hideFetchCandidates();
   const id = 'provider-' + suffix();
   modelsDraft.providers.push({
     key: id, id: id, type: 'openai-compatible', name: 'New Provider', baseUrl: '',
@@ -211,6 +214,7 @@ function newProvider() {
 function duplicateProvider() {
   const provider = currentProvider();
   if (!provider || !modelsDraft) { return; }
+  hideFetchCandidates();
   const id = provider.id + '-copy-' + suffix();
   const copy = JSON.parse(JSON.stringify(provider));
   copy.key = id;
@@ -225,6 +229,7 @@ function duplicateProvider() {
 
 function cancelProvider() {
   if (!modelsDraft || !selectedProviderKey) { return; }
+  hideFetchCandidates();
   const base = modelsBaseline && Array.isArray(modelsBaseline.providers)
     ? modelsBaseline.providers.find((item) => item.key === selectedProviderKey)
     : null;
