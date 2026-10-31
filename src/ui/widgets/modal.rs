@@ -6,7 +6,6 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Span;
 use ratatui::widgets::{Block, Paragraph};
-use unicode_width::UnicodeWidthStr;
 
 use crate::ui::widgets::clear;
 use crate::ui::{style, text};
@@ -47,15 +46,14 @@ pub fn layout(screen: Rect, width: u16, height: u16) -> Option<ModalShell> {
     Some(ModalShell { area, inner })
 }
 
-/// 渲染清底、强调色边框、顶栏标题行与右上角关闭按钮；标题行左侧写标题，
-/// 右侧用 `─` 连通到关闭按钮，形成 `│ Title ───── [✕] │`；内容由调用方绘制在 `shell.inner`。
+/// 渲染清底、强调色边框、顶栏标题行、标题下方分割线与右上角关闭按钮；
+/// 内容由调用方绘制在 `shell.inner`。
 pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
     clear::render(frame, shell.area);
     let block = Block::bordered().border_style(style::accent());
     frame.render_widget(block, shell.area);
     if shell.area.height >= 6 && shell.area.width >= 4 {
         let fitted = text::ellipsize(title, usize::from(shell.area.width.saturating_sub(7)));
-        let title_w = u16::try_from(fitted.width()).unwrap_or(u16::MAX);
         frame.render_widget(
             Paragraph::new(Span::styled(fitted, style::border_title())),
             Rect::new(
@@ -64,19 +62,6 @@ pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
                 shell.area.width.saturating_sub(4),
                 1,
             ),
-        );
-        let from = shell.area.x.saturating_add(2).saturating_add(title_w);
-        let to = close_button_rect(shell.area).map_or_else(
-            || shell.area.right().saturating_sub(2),
-            |rect| rect.x.saturating_sub(1),
-        );
-        paint_title_rule(
-            frame.buffer_mut(),
-            shell.area,
-            shell.area.y + 1,
-            from.saturating_add(1),
-            to,
-            style::accent(),
         );
         paint_divider(
             frame.buffer_mut(),
@@ -99,28 +84,6 @@ pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
             Paragraph::new(Span::styled(text::MODAL_CLOSE, style::accent())),
             rect,
         );
-    }
-}
-
-/// 在标题行把标题与右侧元素之间的空白填成 `─`（外框两列与既有文字由调用方排除）。
-pub(crate) fn paint_title_rule(
-    buf: &mut Buffer,
-    area: Rect,
-    y: u16,
-    from: u16,
-    to: u16,
-    border_style: Style,
-) {
-    if y <= area.y || y >= area.bottom().saturating_sub(1) {
-        return;
-    }
-    let start = from.max(area.x.saturating_add(1));
-    let end = to.min(area.right().saturating_sub(1));
-    for x in start..end {
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.set_char('─');
-            cell.set_style(border_style);
-        }
     }
 }
 

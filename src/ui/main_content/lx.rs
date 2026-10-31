@@ -954,12 +954,6 @@ fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
         text::LX_BLOCK_PANEL_TITLE,
         style::muted(),
     );
-    let title_w = u16::try_from(text::LX_BLOCK_PANEL_TITLE.width()).unwrap_or(u16::MAX);
-    let rule_from = rect.x + 2 + title_w + 1;
-    let rule_to = rect.right() - 2;
-    for x in rule_from..rule_to {
-        grid.set(x, rect.y + 1, '─', style::muted());
-    }
     // 标题行下方的分割线（`├───┤`）。
     let header_divider = rect.y + 2;
     grid.set(rect.x, header_divider, '├', style::muted());

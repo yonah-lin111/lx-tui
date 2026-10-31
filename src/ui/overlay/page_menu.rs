@@ -221,20 +221,6 @@ pub(super) fn render_page_menu(
             text::MENU_TITLE_PAGES,
             style::border_title(),
         );
-        let title_w = u16::try_from(text::MENU_TITLE_PAGES.width()).unwrap_or(u16::MAX);
-        crate::ui::widgets::modal::paint_title_rule(
-            frame.buffer_mut(),
-            layout.area,
-            layout.area.y + 1,
-            layout
-                .area
-                .x
-                .saturating_add(2)
-                .saturating_add(title_w)
-                .saturating_add(1),
-            layout.new_rect.x.saturating_sub(1),
-            style::accent(),
-        );
         crate::ui::widgets::modal::paint_divider(
             frame.buffer_mut(),
             layout.area,

@@ -4,7 +4,6 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneKind, RightTab};
@@ -63,21 +62,9 @@ pub fn render(
     frame.render_widget(block, area);
     if area.height >= 5 && area.width >= 4 {
         let fitted = text::ellipsize(title, usize::from(area.width.saturating_sub(4)));
-        let title_w = u16::try_from(fitted.width()).unwrap_or(u16::MAX);
         frame.render_widget(
             Paragraph::new(Span::styled(fitted, style::border_title())),
             Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), 1),
-        );
-        crate::ui::widgets::modal::paint_title_rule(
-            frame.buffer_mut(),
-            area,
-            area.y + 1,
-            area.x
-                .saturating_add(2)
-                .saturating_add(title_w)
-                .saturating_add(1),
-            area.right().saturating_sub(2),
-            style::muted(),
         );
         crate::ui::widgets::modal::paint_divider(
             frame.buffer_mut(),

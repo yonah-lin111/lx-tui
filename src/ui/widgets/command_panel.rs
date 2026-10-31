@@ -351,7 +351,6 @@ fn render_bordered_header(
             left_end = x.saturating_add(draw_w);
         }
     }
-    let mut rule_to = rect.right().saturating_sub(2);
     if let Some(right_title) = view.right_title {
         let right_edge = rect.right().saturating_sub(2);
         let min_x = left_end.saturating_add(1);
@@ -362,18 +361,9 @@ fn render_bordered_header(
             if text_w <= right_edge.saturating_sub(min_x) {
                 let x = right_edge.saturating_sub(text_w);
                 buf.set_stringn(x, header_y, &clipped, usize::from(text_w), style::muted());
-                rule_to = x.saturating_sub(1);
             }
         }
     }
-    crate::ui::widgets::modal::paint_title_rule(
-        buf,
-        rect,
-        header_y,
-        left_end.saturating_add(1).max(rect.x.saturating_add(2)),
-        rule_to,
-        style::muted(),
-    );
     crate::ui::widgets::modal::paint_divider(buf, rect, rect.y.saturating_add(2), style::muted());
 }
 

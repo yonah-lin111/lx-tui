@@ -112,8 +112,8 @@ fn titled_toast_keeps_side_borders_on_the_title_row() {
         .map(|x| buffer[(x, area.y + 1)].symbol())
         .collect();
     assert!(
-        title_row.contains('─'),
-        "标题后以 ─ 连通到关闭按钮: {title_row}"
+        !title_row.contains('─'),
+        "标题行不再画横向连线: {title_row}"
     );
     assert_eq!(buffer[(area.x, area.y + 1)].symbol(), "│");
     assert_eq!(buffer[(area.right() - 1, area.y + 1)].symbol(), "│");

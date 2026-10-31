@@ -94,20 +94,7 @@ pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> 
     if let Some(title) = toast.title.as_deref()
         && has_title
     {
-        let title_end = draw_title(buf, box_area, title, toast.kind);
-        let to = if box_area.width >= 10 {
-            close_x.saturating_add(box_area.x).saturating_sub(1)
-        } else {
-            box_area.right().saturating_sub(2)
-        };
-        crate::ui::widgets::modal::paint_title_rule(
-            buf,
-            box_area,
-            box_area.y + 1,
-            title_end.saturating_add(1),
-            to,
-            border_style(toast.kind),
-        );
+        draw_title(buf, box_area, title, toast.kind);
         crate::ui::widgets::modal::paint_divider(
             buf,
             box_area,

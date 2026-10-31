@@ -80,25 +80,9 @@ pub fn render(
     {
         let title_max = usize::from(area.width.saturating_sub(8));
         let fitted = text::truncate_to_width(title, title_max);
-        let title_w = u16::try_from(fitted.width()).unwrap_or(u16::MAX);
         frame.render_widget(
             Paragraph::new(Span::styled(fitted, title_style(toast.kind))),
             Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), 1),
-        );
-        let to = close_button_rect_for(area, true).map_or_else(
-            || area.right().saturating_sub(2),
-            |rect| rect.x.saturating_sub(1),
-        );
-        crate::ui::widgets::modal::paint_title_rule(
-            frame.buffer_mut(),
-            area,
-            area.y + 1,
-            area.x
-                .saturating_add(2)
-                .saturating_add(title_w)
-                .saturating_add(1),
-            to,
-            border,
         );
         crate::ui::widgets::modal::paint_divider(frame.buffer_mut(), area, area.y + 2, border);
     }

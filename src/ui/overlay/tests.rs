@@ -129,8 +129,8 @@ fn menu_renders_target_name_in_border_title() {
     assert!(lines[5].contains('┌'), "top border={:?}", lines[5]);
     assert!(lines[6].contains("demo"), "title row={:?}", lines[6]);
     assert!(
-        lines[6].contains('│') && lines[6].contains('─'),
-        "标题行保留左右边框并用 ─ 贯通: {:?}",
+        lines[6].contains('│') && !lines[6].contains('─'),
+        "标题行保留左右边框、不再画横线: {:?}",
         lines[6]
     );
     assert!(lines[7].contains('├'), "标题下方有分割线: {:?}", lines[7]);

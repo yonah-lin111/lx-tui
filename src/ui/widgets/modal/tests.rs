@@ -71,8 +71,8 @@ fn render_draws_border_and_title() {
         .collect();
     assert!(title_row.contains("Rename workspace"), "{title_row}");
     assert!(
-        title_row.contains('─'),
-        "标题后以 ─ 连通到关闭按钮: {title_row}"
+        !title_row.contains('─'),
+        "标题行不再画横向连线: {title_row}"
     );
     assert_eq!(buffer[(shell.area.x, shell.area.y + 1)].symbol(), "│");
     assert_eq!(

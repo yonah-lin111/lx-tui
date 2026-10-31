@@ -145,21 +145,6 @@ pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &Refere
             text::MENU_TITLE_REFERENCED_FOLDERS,
             style::border_title(),
         );
-        let title_w =
-            u16::try_from(text::MENU_TITLE_REFERENCED_FOLDERS.width()).unwrap_or(u16::MAX);
-        crate::ui::widgets::modal::paint_title_rule(
-            frame.buffer_mut(),
-            layout.area,
-            layout.area.y + 1,
-            layout
-                .area
-                .x
-                .saturating_add(2)
-                .saturating_add(title_w)
-                .saturating_add(1),
-            layout.area.right().saturating_sub(2),
-            style::accent(),
-        );
         crate::ui::widgets::modal::paint_divider(
             frame.buffer_mut(),
             layout.area,
