@@ -134,18 +134,27 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
         || view.right_title.is_some()
         || view.tabs.is_some_and(|tabs| !tabs.is_empty());
     let has_footer = view.footer.is_some();
+    let available_rows = match view.placement {
+        PanelPlacement::Auto => area
+            .height
+            .saturating_sub(view.anchor_row.saturating_add(1))
+            .max(view.anchor_row),
+        PanelPlacement::Above => view.anchor_row.min(area.height),
+    };
     // 无边框面板：顶部「1 行空行间隔 + 1 行分割线」+ 底部「1 行空行间隔 + 1 行快捷键提示」；
-    // 有边框面板：有标题时顶部占 3 行（`┌──┐` + `│ Title ─── │` + `├──┤`），有底栏时底部占 3 行（`├──┤` + `│ footer │` + `└──┘`）。
+    // 有边框面板（对齐 herdr）：空间充裕（≥ 7 行）时，有标题占顶部 3 行（`┌──┐` + 粗体标题行 + 1 行呼吸空白），
+    // 有底栏占底部 3 行（1 行呼吸空白 + `│ footer │` + `└──┘`）；极窄矮空间（< 7 行）时退化为仅保留上下边框以优先展示候选。
+    let roomy = available_rows >= 7;
     let top_rows: u16 = if view.borderless {
         TOP_BLOCK_ROWS
-    } else if has_header {
+    } else if has_header && roomy {
         3
     } else {
         1
     };
     let bottom_rows: u16 = if view.borderless {
         if has_footer { FOOTER_BLOCK_ROWS } else { 0 }
-    } else if has_footer {
+    } else if has_footer && roomy {
         3
     } else {
         1
@@ -274,13 +283,13 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
     if view.borderless {
         render_top_rule(buf, &layout, view, has_tabs);
     } else {
-        let block = Block::bordered().border_style(style::muted());
+        let block = Block::bordered().border_style(style::accent());
         block.render(layout.rect, buf);
-        if has_header && layout.rect.height >= 4 {
+        if has_header && layout.inner.y > layout.rect.y.saturating_add(1) {
             render_bordered_header(buf, &layout, view, has_tabs);
         }
         if let Some(footer) = view.footer
-            && layout.rect.height >= 4
+            && layout.inner.bottom() < layout.rect.bottom().saturating_sub(1)
         {
             render_bordered_footer(buf, layout.rect, footer);
         }
@@ -347,7 +356,7 @@ fn render_bordered_header(
         let max_w = usize::from(rect.right().saturating_sub(1).saturating_sub(x));
         if max_w > 0 {
             let draw_w = u16::try_from(title.width().min(max_w)).unwrap_or(u16::MAX);
-            buf.set_stringn(x, header_y, title, max_w, style::muted());
+            buf.set_stringn(x, header_y, title, max_w, style::strong());
             left_end = x.saturating_add(draw_w);
         }
     }
@@ -364,37 +373,15 @@ fn render_bordered_header(
             }
         }
     }
-    paint_divider(buf, rect, rect.y.saturating_add(2), style::muted());
 }
 
-/// 绘制有边框命令面板的底栏（上方 `├───┤` 分割线 + `│ footer │`）。
+/// 绘制有边框命令面板的底栏（无 `├───┤` 分割线，上方保留 1 行呼吸空白）。
 fn render_bordered_footer(buf: &mut Buffer, rect: Rect, footer: &str) {
-    paint_divider(buf, rect, rect.bottom().saturating_sub(3), style::muted());
     let y = rect.bottom().saturating_sub(2);
     let max_w = usize::from(rect.width.saturating_sub(4));
     if max_w > 0 {
         let clipped = text::truncate_to_width(footer, max_w);
         buf.set_stringn(rect.x.saturating_add(2), y, &clipped, max_w, style::muted());
-    }
-}
-
-fn paint_divider(buf: &mut Buffer, area: Rect, y: u16, border_style: Style) {
-    if area.width < 2 || y <= area.y || y >= area.bottom().saturating_sub(1) {
-        return;
-    }
-    let right = area.right().saturating_sub(1);
-    for x in area.x..=right {
-        let ch = if x == area.x {
-            '├'
-        } else if x == right {
-            '┤'
-        } else {
-            '─'
-        };
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.set_char(ch);
-            cell.set_style(border_style);
-        }
     }
 }
 
@@ -684,7 +671,7 @@ fn render_item(
     if area.width < 3 {
         return;
     }
-    let row_style = if !borderless && (active || current) {
+    let row_style = if !borderless && active {
         style::overlay_selection()
     } else {
         Style::default()
@@ -744,7 +731,7 @@ fn render_item(
             if marker > 0 {
                 spans.push(Span::styled(marker_span, marker_style));
             }
-            let item_label_style = if borderless && current {
+            let item_label_style = if current {
                 style::accent()
             } else {
                 style::text()

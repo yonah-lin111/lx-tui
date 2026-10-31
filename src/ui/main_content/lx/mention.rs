@@ -16,10 +16,10 @@ use crate::ui::widgets::command_panel::{
 
 /// 面板最多显示的内容行数；对齐 codex `MAX_POPUP_ROWS`（8），保证浮层观感统一。
 pub(crate) const MAX_POPUP_ROWS: u16 = 8;
-/// 面板顶部占用的行数（1 行上方空行间隔 + 1 行顶部蓝色横线，无底边框）。
-pub(super) const PANEL_BORDER_ROWS: u16 = 2;
-/// 面板底部快捷键提示块占用的行数（1 行空行间隔 + 1 行提示）。
-pub(super) const PANEL_FOOTER_ROWS: u16 = 2;
+/// 面板顶部占用的行数（顶边 `┌──┐` + 粗体标题/Tab 行 + 1 行空白间隔）。
+pub(super) const PANEL_BORDER_ROWS: u16 = 3;
+/// 面板底部占用的行数（1 行空白间隔 + 快捷键提示行 + 底边 `└──┘`）。
+pub(super) const PANEL_FOOTER_ROWS: u16 = 3;
 
 /// 提及面板条目文本：候选文件/目录/skill/MCP（双行）或状态行（单行）。
 enum PanelRow {
@@ -246,8 +246,7 @@ fn panel_data(lx: &Lx, width: u16) -> Option<PanelData> {
 
 /// 面板视图：强制与输入框等宽、紧贴输入框上方、视口优先于窗口锚点。
 ///
-/// 高度固定为最大高度（`MAX_POPUP_ROWS + PANEL_BORDER_ROWS + PANEL_FOOTER_ROWS`），
-/// 仅在输入框上方可用行数不足时与可用行数取小；候选较少或过滤时不自适应缩放。
+/// 高度按候选数自适应收缩，上限为 `MAX_POPUP_ROWS + PANEL_BORDER_ROWS + PANEL_FOOTER_ROWS`。
 fn view<'a>(
     items: &'a [CommandItem<'a>],
     data: &'a PanelData,
@@ -268,7 +267,7 @@ fn view<'a>(
         window_start: data.viewport,
         anchor_row: above,
         max_height: Some(cap),
-        fixed_height: true,
+        fixed_height: false,
         title: None,
         tabs: Some(&data.tabs),
         right_title: data.scope.as_deref(),
@@ -279,7 +278,7 @@ fn view<'a>(
         }),
         width: Some(input.width),
         placement: PanelPlacement::Above,
-        borderless: true,
+        borderless: false,
         hide_active_marker: !data.interactive,
     }
 }

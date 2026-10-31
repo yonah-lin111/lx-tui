@@ -231,7 +231,7 @@ fn renders_block_command_panel_below_cursor() {
     render(area, &mut buf, &editor, None);
 
     assert_eq!(buf[(0, 1)].symbol(), "┌");
-    assert_eq!(buf[(0, 3)].symbol(), "├");
+    assert_eq!(buf[(0, 3)].symbol(), "│");
     assert_eq!(buf[(0, 1)].bg, Color::Reset);
     let row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
     assert!(row.contains("Heading 1"));

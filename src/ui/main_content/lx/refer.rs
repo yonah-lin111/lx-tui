@@ -123,14 +123,14 @@ fn view<'a>(
         window_start: data.viewport,
         anchor_row: above,
         max_height: Some(cap),
-        fixed_height: true,
+        fixed_height: false,
         title: Some(text::REFER_PANEL_TITLE),
         tabs: None,
         right_title: None,
         footer: Some(text::LX_REFER_PANEL_FOOTER),
         width: Some(input.width),
         placement: PanelPlacement::Above,
-        borderless: true,
+        borderless: false,
         hide_active_marker: false,
     }
 }

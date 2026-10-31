@@ -79,6 +79,7 @@
 - [x] 右键菜单对齐 `herdr-master`：移除标题栏与 `├───┤` 分割线，改为纯列表（高 = `items + 2`）+ 左侧 1 列内边距
 - [x] 模态弹窗对齐 `herdr-master`：移除 `[✕]` 与 `├───┤` 贯穿线，启用底层 `DIM` 压暗、内框粗体标题（危险确认弹窗用红框红标题）、暗色 `surface` 输入条与实心胶囊按钮（` ↵ save ` / ` esc cancel `）
 - [x] Toast（全局与 `lx` 窗格内）对齐 `herdr-master`：移除 `[✕]` 与 `├───┤` 分割线，改为紧凑 `● <message>`（3 行）与 `● <title>` + 缩进 `<message>`（4 行），点击即关
+- [x] `lx` 与 Prompt 编辑区命令面板统一为 `herdr` 直角强调色边框面板：移除 `├───┤` 分割线、内框首行粗体标题/Tab、标题下与底栏上各留 1 行呼吸空白、自适应高度、选中项整行高亮
 - [x] 移除 `src/ui/prompt.rs` 中模板块/补充块的整行背景色渲染 `paint_block_background`
 - [x] 更新并补充对应测试，完成 `cargo fmt`、`cargo clippy`、`cargo test` 验证
 

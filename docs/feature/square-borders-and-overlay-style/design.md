@@ -449,6 +449,10 @@ fn borderless_inner_rect(rect: Rect, footer_rows: u16) -> Rect {
    - 有标题 Toast 为 4 行高：首行 `│ ● <title> │`（圆点取语义色，标题加粗），次行 `│   <message> │`（缩进 2 列与标题对齐，次要色；`lx` 窗格内支持多行折行）。
 4. **Tooltip 与页码菜单（`src/ui/tooltip.rs`、`src/ui/overlay/page_menu.rs`）**：
    - Tooltip 恢复为无标题栏、无分割线的 3 行紧凑直角盒；页码菜单移除 `├───┤` 分割线，顶栏内左置粗体标题、右置 `[add]`/`[del]` 按钮。
+5. **`lx` 与 Prompt 编辑区命令面板统一（`src/ui/widgets/command_panel.rs`、`src/ui/main_content/lx.rs`、`src/ui/main_content/lx/{mention,slash,refer}.rs`、`src/ui/prompt/panels.rs`）**：
+   - `lx`（`@`、`/`、`#` 块格式、粘贴、引用）与 Prompt 编辑区的命令面板全部统一为 `herdr` 风格直角强调色边框面板（`borderless: false`）。
+   - 移除刺穿外框的 `├───┤` 分割线：内框首行显示粗体标题或 Tab（右侧可选显示 muted 范围说明），下方留 1 行呼吸空白；底部快捷键提示行上方同样留 1 行呼吸空白。
+   - 高度按候选数自适应收缩（上限为 `MAX_POPUP_ROWS`），选中项整行铺 `style::overlay_selection()` 高亮底色，已生效项（如当前模型/会话）显示蓝色 `❯` 与蓝色名称。
 
 ### 4.5 统一快捷键文案格式与移除 Prompt 模板块/补充块背景色
 

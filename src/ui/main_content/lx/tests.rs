@@ -1035,8 +1035,8 @@ fn mention_panel_height_capped_at_max_popup_rows() {
 }
 
 #[test]
-fn mention_panel_height_stays_fixed_at_max_when_few_rows() {
-    // 候选少或过滤后：面板高度仍固定为最大高度（不随条目数自适应缩放）。
+fn mention_panel_height_shrinks_to_content_when_few_rows() {
+    // 候选较少时：面板高度按候选行数自适应收缩（顶部 3 行 + 根层单行候选 1 行 + 底部 3 行 = 7 行）。
     let area = Rect::new(0, 0, 60, 60);
     let entries = vec![MentionEntry {
         path: "only.rs".into(),
@@ -1046,15 +1046,15 @@ fn mention_panel_height_stays_fixed_at_max_when_few_rows() {
     let panel = mention::layout(area, &lx).expect("panel");
     assert_eq!(
         panel.rect.height,
-        mention::MAX_POPUP_ROWS + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS,
-        "少量候选仍保持固定最大高度: {}",
+        1 + mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS,
+        "少量候选按实际高度收缩: {}",
         panel.rect.height
     );
     assert!(panel.scrollbar.is_none(), "未超出最大内容行时不显示滚动条");
 }
 
 #[test]
-fn mention_panel_footer_lists_shortcut_hints_without_border() {
+fn mention_panel_renders_bordered_header_and_footer() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = mention_lx(vec![MentionEntry {
         path: "src/main.rs".into(),
@@ -1063,27 +1063,23 @@ fn mention_panel_footer_lists_shortcut_hints_without_border() {
     let panel = mention::layout(area, &lx).expect("panel");
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
-    // 底部最后一行是快捷键提示（无边框、无分割线）；顶部第一行（rect.y）为空白隔离行，第二行（rect.y + 1）为顶部蓝色横线。
-    let top_blank: String = (panel.rect.x..panel.rect.right())
-        .map(|x| buf[(x, panel.rect.y)].symbol())
-        .collect();
-    assert_eq!(top_blank.trim(), "", "提及面板顶线上方留一行空白隔离行");
     assert_eq!(
-        buf[(panel.rect.x, panel.rect.y + 1)].symbol(),
-        "─",
-        "第二行为顶部蓝色横线"
+        buf[(panel.rect.x, panel.rect.y)].symbol(),
+        "┌",
+        "提及面板顶边为直角边框"
     );
-    let footer_row = panel.rect.bottom() - 1;
+    assert_eq!(
+        buf[(panel.rect.x, panel.rect.y + 2)].symbol(),
+        "│",
+        "标题下方留一行呼吸空白且无 ├───┤ 分割线"
+    );
+    let footer_row = panel.rect.bottom() - 2;
     let footer: String = (panel.rect.x..panel.rect.right())
         .map(|x| buf[(x, footer_row)].symbol())
         .collect();
     assert!(
         footer.contains("←→ tabs") && footer.contains("esc close"),
-        "底边显示快捷键提示: {footer:?}"
-    );
-    assert!(
-        !footer.contains('─') && !footer.contains('│'),
-        "底边提示行不画边框或分割线: {footer:?}"
+        "底栏显示快捷键提示: {footer:?}"
     );
 }
 

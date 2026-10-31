@@ -213,14 +213,14 @@ fn view<'a>(
         window_start: window.viewport,
         anchor_row: above,
         max_height: Some(cap),
-        fixed_height: true,
+        fixed_height: false,
         title: Some(title),
         tabs: None,
         right_title,
         footer: Some(footer),
         width: Some(input.width),
         placement: PanelPlacement::Above,
-        borderless: true,
+        borderless: false,
         hide_active_marker: is_placeholder(panel),
     }
 }

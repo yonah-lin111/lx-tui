@@ -340,7 +340,7 @@ fn paste_view<'a>(
         footer: Some(text::LX_PASTE_PANEL_FOOTER),
         width: Some(panel_area.width),
         placement: command_panel::PanelPlacement::Above,
-        borderless: true,
+        borderless: false,
         ..Default::default()
     }
 }
@@ -945,41 +945,32 @@ pub fn ask_list_window(area: Rect, lx: &Lx) -> Option<(usize, usize, usize)> {
     ask::list_window(area, lx)
 }
 
-/// md 格式面板：直角边框 + 顶栏标题行 + 候选行（标签与预览，高亮项 accent）+ 底栏快捷键行。
+/// md 格式面板：强调色直角边框 + 内框粗体标题 + 候选行（选中项整行高亮）+ 底栏快捷键行（对齐 herdr 面板）。
 fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
-    draw_box(grid, rect, style::muted());
+    draw_box(grid, rect, style::accent());
     grid.put(
         rect.x + 2,
         rect.y + 1,
         text::LX_BLOCK_PANEL_TITLE,
-        style::muted(),
+        style::strong(),
     );
-    // 标题行下方的分割线（`├───┤`）。
-    let header_divider = rect.y + 2;
-    grid.set(rect.x, header_divider, '├', style::muted());
-    grid.set(rect.right() - 1, header_divider, '┤', style::muted());
-    for x in rect.x + 1..rect.right() - 1 {
-        grid.set(x, header_divider, '─', style::muted());
-    }
     for (index, id) in panel.items().iter().enumerate() {
         let y = rect.y + 3 + index as u16;
         let (label, preview) = text::block_command_text(*id);
         let active = index == panel.active();
-        let label_style = if active {
-            style::accent()
+        if active {
+            for x in rect.x + 1..rect.right().saturating_sub(1) {
+                grid.set(x, y, ' ', style::overlay_selection());
+            }
+        }
+        let base = if active {
+            style::overlay_selection()
         } else {
-            style::muted()
+            style::text()
         };
-        grid.put(rect.x + 2, y, &label, label_style);
+        grid.put(rect.x + 2, y, &label, base);
         let preview_x = rect.x + 2 + u16::try_from(label.width()).unwrap_or(0) + 2;
-        grid.put(preview_x, y, &preview, style::muted());
-    }
-    // 快捷键行上方的分割线（`├───┤`）。
-    let divider_y = rect.bottom() - 3;
-    grid.set(rect.x, divider_y, '├', style::muted());
-    grid.set(rect.right() - 1, divider_y, '┤', style::muted());
-    for x in rect.x + 1..rect.right() - 1 {
-        grid.set(x, divider_y, '─', style::muted());
+        grid.put(preview_x, y, &preview, base.patch(style::muted()));
     }
     grid.put(
         rect.x + 2,
