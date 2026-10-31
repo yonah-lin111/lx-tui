@@ -25,10 +25,13 @@ use crate::app::state::{
 };
 use crate::ui::{style, text};
 
-use super::super::{Grid, StepMark, visible_row, wrap};
+use super::super::{Grid, StepMark, visible_row};
 use super::file_summary::{DETAIL_MAX_ROWS, DETAIL_PREVIEW_ROWS};
 use super::tree::{self, Node, Preview, Section};
-use super::{Folds, Segment, header_with_verb, mark_of, output_style, single_line, title_rows};
+use super::{
+    Folds, Segment, header_with_verb, mark_of, muted_markdown_lines, output_style,
+    sample_markdown_source, single_line, title_rows,
+};
 
 /// 单行取样上限（限住每帧成本）。
 const SAMPLE_CHARS: usize = 512;
@@ -139,7 +142,7 @@ fn param_section(call: &ToolCallView, folded: bool) -> Section {
     )
 }
 
-/// 输出块：已保存输出按列宽折行，整块是一个多行节点；折叠首尾预览。
+/// 输出块：已保存输出按压暗 markdown 折行，整块是一个多行节点；折叠首尾预览。
 fn output_section(
     output: &str,
     width: u16,
@@ -147,12 +150,9 @@ fn output_section(
     truncated: bool,
     dropped: u64,
 ) -> Option<Section> {
-    let body_width = tree::content_width(width);
-    let mut lines: Vec<Vec<Segment>> =
-        output_lines(output, u16::try_from(body_width).unwrap_or(u16::MAX))
-            .into_iter()
-            .map(|line| vec![Segment::new(line, output_style(!folded))])
-            .collect();
+    let body_width = u16::try_from(tree::content_width(width)).unwrap_or(u16::MAX);
+    let sampled = sample_markdown_source(output);
+    let mut lines: Vec<Vec<Segment>> = muted_markdown_lines(&sampled, body_width);
     if truncated {
         lines.push(vec![Segment::new(
             text::agent::OUTPUT_LIMITED,
@@ -306,27 +306,6 @@ fn sections(call: &ToolCallView, width: u16, folds: Folds) -> (Vec<Section>, Vec
         _ => {}
     }
     (params, output)
-}
-
-/// 输出正文按列宽折行（末尾空行不占位）。
-fn output_lines(output: &str, width: u16) -> Vec<String> {
-    if output.is_empty() {
-        return Vec::new();
-    }
-    let mut rows: Vec<String> = Vec::new();
-    for line in output.split('\n') {
-        let line = line.trim_end_matches('\r');
-        if line.is_empty() {
-            rows.push(String::new());
-            continue;
-        }
-        let line = super::sample_output_line(line);
-        rows.extend(wrap(&line, width));
-    }
-    while rows.last().is_some_and(String::is_empty) {
-        rows.pop();
-    }
-    rows
 }
 
 /// 绘制命令或交互卡片；推进的行数必须与 [`rows`] 严格相等。
@@ -631,7 +610,7 @@ mod tests {
             tree::layout(&output, 60).rows[0].segments[0].style
         };
         assert_eq!(input_style(false), style::muted(), "默认折叠态是灰色");
-        assert_eq!(input_style(true), style::text(), "展开后是默认前景色");
+        assert_eq!(input_style(true), style::muted(), "展开后仍保持压暗灰色");
     }
 
     /// TTY 回显与输入相同：只显示输入，不重复输出。

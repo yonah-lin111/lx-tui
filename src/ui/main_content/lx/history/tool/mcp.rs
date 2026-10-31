@@ -10,7 +10,9 @@ use crate::ui::{style, text};
 
 use super::super::{Grid, visible_row};
 use super::tree::{self, Node, Preview, Section};
-use super::{Folds, Segment, header_with_verb, output_style, put_segments, single_line};
+use super::{
+    Folds, Segment, header_with_verb, muted_markdown_lines, output_style, put_segments, single_line,
+};
 
 const BLOCK_PREVIEW_ROWS: usize = 3;
 
@@ -50,7 +52,21 @@ fn arguments_section(view: &McpDetailView, expanded: bool) -> Option<Section> {
     ))
 }
 
-fn result_section(call: &ToolCallView, view: &McpDetailView, expanded: bool) -> Option<Section> {
+fn sanitize_result_line(line: &str, max_chars: usize) -> String {
+    line.chars()
+        .take(max_chars)
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
+fn result_section(
+    call: &ToolCallView,
+    view: &McpDetailView,
+    width: u16,
+    expanded: bool,
+) -> Option<Section> {
     let error_fallback = if view.result.is_empty()
         && matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted)
     {
@@ -66,18 +82,22 @@ fn result_section(call: &ToolCallView, view: &McpDetailView, expanded: bool) -> 
         return None;
     }
     let body_style = output_style(expanded);
-    let mut lines: Vec<Vec<Segment>> = if let Some(error) = error_fallback {
+    let body_width = u16::try_from(tree::content_width(width)).unwrap_or(u16::MAX);
+    let raw_source = if let Some(error) = error_fallback {
         error
             .lines()
             .take(20)
-            .map(|line| vec![Segment::new(single_line(line, 8000), body_style)])
-            .collect()
+            .map(|line| sanitize_result_line(line, 8000))
+            .collect::<Vec<_>>()
+            .join("\n")
     } else {
         view.result
             .iter()
-            .map(|line| vec![Segment::new(single_line(line, 8000), body_style)])
-            .collect()
+            .map(|line| sanitize_result_line(line, 8000))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
+    let mut lines: Vec<Vec<Segment>> = muted_markdown_lines(&raw_source, body_width);
     let more = if let Some(error) = error_fallback {
         error.lines().count().saturating_sub(20)
     } else {
@@ -101,6 +121,9 @@ fn result_section(call: &ToolCallView, view: &McpDetailView, expanded: bool) -> 
             style::fold_hint(),
         )]);
     }
+    if lines.is_empty() {
+        return None;
+    }
     Some(Section::new(
         vec![Node::block(lines)],
         (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
@@ -114,7 +137,7 @@ pub(super) fn layout(
     folds: Folds,
 ) -> McpLayout {
     let folded_arguments = arguments_section(view, false);
-    let folded_result = result_section(call, view, false);
+    let folded_result = result_section(call, view, width, false);
     let arguments_expandable = folded_arguments
         .as_ref()
         .is_some_and(|section| tree::layout(std::slice::from_ref(section), width).hidden > 0);
@@ -122,7 +145,7 @@ pub(super) fn layout(
         .as_ref()
         .is_some_and(|section| tree::layout(std::slice::from_ref(section), width).hidden > 0);
     let arguments = arguments_section(view, folds.body);
-    let result = result_section(call, view, folds.output);
+    let result = result_section(call, view, width, folds.output);
     let arguments_rows = arguments.as_ref().map_or(0, |section| {
         tree::layout(std::slice::from_ref(section), width)
             .rows

@@ -143,6 +143,56 @@ pub(super) fn sample_output_line(line: &str) -> String {
     }
 }
 
+/// 将多行原始输出按行做单行长度采样（上限 [`MAX_OUTPUT_LINE_CHARS`]）并剥离末尾空行，
+/// 供 [`muted_markdown_lines`] 进行有界 Markdown 渲染。
+pub(super) fn sample_markdown_source(raw: &str) -> String {
+    if raw.is_empty() {
+        return String::new();
+    }
+    let mut out = Vec::new();
+    for line in raw.split('\n') {
+        let line = line.trim_end_matches('\r');
+        out.push(sample_output_line(line));
+    }
+    while out.last().is_some_and(String::is_empty) {
+        out.pop();
+    }
+    out.join("\n")
+}
+
+/// 将 markdown 源码按给定列宽排版为思考块同款的压暗多段物理行（`span_style.patch(style::muted())`）。
+///
+/// 每条返回的 `Vec<Segment>` 对应一个已按 `width` 折好行的物理行（含 `MdLine::indent` 前导空格），
+/// 显示总列宽 `<= width.max(1)`；送入 `tree::Node::block` 后经 `wrap_spans(logical, body)` 保持 1:1 物理行映射。
+pub(super) fn muted_markdown_lines(source: &str, width: u16) -> Vec<Vec<Segment>> {
+    if source.trim().is_empty() {
+        return Vec::new();
+    }
+    crate::ui::markdown_render::render_wrapped(source, width.max(1))
+        .into_iter()
+        .map(md_line_segments)
+        .collect()
+}
+
+/// 单行 [`crate::ui::markdown_render::MdLine`] 转为思考块同款的压暗 [`Segment`] 序列：
+/// - `line.indent > 0` 时在行首补等宽空格段（`style::muted()`）；
+/// - 每个非空分段保留自身 markdown 语法前景色与修饰符，并叠加 `style::muted()`（`DIM`）。
+pub(super) fn md_line_segments(line: crate::ui::markdown_render::MdLine) -> Vec<Segment> {
+    let mut segments = Vec::with_capacity(line.spans.len() + usize::from(line.indent > 0));
+    if line.indent > 0 {
+        segments.push(Segment::new(
+            " ".repeat(usize::from(line.indent)),
+            style::muted(),
+        ));
+    }
+    for (value, span_style) in line.spans {
+        if !value.is_empty() {
+            segments.push(Segment::new(value, span_style.patch(style::muted())));
+        }
+    }
+    segments
+}
+
 /// 绘制工具步骤并推进内容行号；推进的行数与 [`rows`] 严格相等。
 ///
 /// `animating` 是"呼吸相位是否还在推进"（调用方传 `lx.chat.status.streaming`）：
@@ -303,17 +353,11 @@ pub(super) fn title_rows() -> usize {
     HEADER_ROWS
 }
 
-/// 输出区的文字档位：折叠 = dim；展开 = 终端默认前景。
-///
-/// 只有**输出正文**随展开态变化；参数/路径恒为浅黄（[`style::chat_tool_param`]）。
-///
-/// 折叠内容不再随鼠标悬停提亮（只有思考块保留悬停态），因此这里只看展开态。
-pub(super) fn output_style(expanded: bool) -> Style {
-    if expanded {
-        style::text()
-    } else {
-        style::muted()
-    }
+/// 输出区与附属说明的基础文字档位：折叠与展开均保持 `style::muted()`（dim），
+/// 不在展开后切换为默认亮白前景 `style::text()`，避免抢夺主回答正文的视觉焦点；
+/// 参数/路径恒为浅黄（[`style::chat_tool_param`]）。
+pub(super) fn output_style(_expanded: bool) -> Style {
+    style::muted()
 }
 
 /// 该调用的内容是否**能靠展开看到更多**（不能时不登记点击面）。

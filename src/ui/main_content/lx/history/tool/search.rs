@@ -306,7 +306,7 @@ mod tests {
         );
         assert_eq!(
             row_style(&layout(&call, &view, 80, true), "pub fn render"),
-            Some(style::text())
+            Some(style::muted())
         );
     }
 
@@ -318,7 +318,31 @@ mod tests {
         assert!(text.contains("pub fn render"), "{text}");
         assert_eq!(
             row_style(&layout(&call, &view, 80, true), "pub fn render"),
-            Some(style::text())
+            Some(style::muted())
+        );
+    }
+
+    #[test]
+    fn expanded_search_hits_preserve_raw_code_syntax_without_markdown_folding() {
+        let call = call();
+        let view = SearchDetailView {
+            matches: vec![SearchMatchView {
+                path: "src/foo.rs".into(),
+                line: 7,
+                text: "# Heading *not_italic* `raw_backtick`".into(),
+                line_truncated: false,
+            }],
+            truncated: false,
+            files_scanned: 1,
+        };
+        let text = text_of(&call, &view, 80, true);
+        assert!(
+            text.contains("# Heading *not_italic* `raw_backtick`"),
+            "搜索代码行不得被当成 markdown 折叠符号：{text}"
+        );
+        assert_eq!(
+            row_style(&layout(&call, &view, 80, true), "# Heading"),
+            Some(style::muted())
         );
     }
 

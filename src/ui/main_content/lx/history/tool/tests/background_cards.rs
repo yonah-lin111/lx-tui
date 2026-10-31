@@ -565,12 +565,12 @@ fn short_output_has_no_click_face() {
     assert!(!output.clickable, "短输出没有可展开内容");
 }
 
-/// 参数区恒为浅黄（不随展开变色）；输出区折叠 dim、展开为默认前景；
+/// 参数区恒为浅黄（不随展开变色）；输出区折叠与展开均采用压暗 markdown 格式（不升为亮白默认前景）；
 /// 两块互不连带，且都没有整行底色。
 #[test]
 fn params_stay_light_yellow_and_output_lifts_independently() {
     let output: String = (0..40)
-        .map(|index| format!("heartbeat {index}\n"))
+        .map(|index| format!("heartbeat {index} `tick_{index}`\n"))
         .collect();
     let call = command_call(
         ProcessStateView::Exited { code: Some(0) },
@@ -591,7 +591,7 @@ fn params_stay_light_yellow_and_output_lifts_independently() {
         style::muted(),
         "折叠态输出是 dim"
     );
-    // 只展开输出：命令仍是浅黄，输出首行升为默认前景，且不铺底色。
+    // 只展开输出：命令仍是浅黄，输出首行保持压暗 markdown（普通段 dim，行内代码带压暗语法色），且不铺底色。
     let only_output = tool::Folds {
         body: false,
         output: true,
@@ -608,8 +608,13 @@ fn params_stay_light_yellow_and_output_lifts_independently() {
     );
     assert_eq!(
         grid.cell(content_col, first_output).style,
-        style::text(),
-        "展开的输出是默认前景"
+        style::muted(),
+        "展开的输出普通文本保持 dim"
+    );
+    assert_eq!(
+        grid.cell(content_col + 12, first_output).style,
+        style::md_read_inline_code().patch(style::muted()),
+        "展开的输出行内代码保留语法色并叠加 dim"
     );
     assert_eq!(
         grid.cell(content_col, first_output).style.bg,

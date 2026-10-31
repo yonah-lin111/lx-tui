@@ -21,7 +21,7 @@ pub(super) fn rows(notice: &CompactNoticeView, count: usize, width: u16, expande
     total += super::wrap(&description(notice), width).len();
     if expanded {
         total += super::wrap(&range_line(notice), width).len();
-        total += super::wrap(&notice.summary, width).len();
+        total += super::tool::muted_markdown_lines(&notice.summary, width).len();
     }
     total
 }
@@ -85,9 +85,9 @@ pub(super) fn draw(
         }
         *row_index += 1;
     }
-    for line in super::wrap(&notice.summary, content.width) {
+    for segments in super::tool::muted_markdown_lines(&notice.summary, content.width) {
         if let Some(y) = visible_row(content, scroll, *row_index) {
-            grid.put_clipped(content.x, y, &line, style::muted(), content.width);
+            super::tool::put_segments(grid, content.x, y, content.width, &segments);
         }
         *row_index += 1;
     }

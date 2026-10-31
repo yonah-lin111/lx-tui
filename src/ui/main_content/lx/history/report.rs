@@ -10,19 +10,20 @@
 //! ```
 //!
 //! 数据来自 `ChatMessageView.reports`；同一条内部 user 消息里的所有汇报各成一块。
-//! 折叠预览固定 2 行灰色正文，展开用默认前景；点击整块切换展开状态，槽位
+//! 折叠预览固定 2 行，折叠与展开正文均采用思考块同款的压暗 markdown 格式；点击整块切换展开状态，槽位
 //! `report:<agent_id>`。
 
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::SubagentReportView;
-use crate::ui::markdown_render;
 use crate::ui::{style, text};
 
 use super::super::Grid;
 use super::{StepKind, StepMark, visible_row};
-use crate::ui::main_content::lx::history::tool::{Segment, put_segments, segments_cols};
+use crate::ui::main_content::lx::history::tool::{
+    Segment, muted_markdown_lines, put_segments, segments_cols,
+};
 
 /// 汇报块**每次展开**追加的正文行数；展开上限按固定批次递增，
 /// `… N more lines` 点击一次只追加一批（避免一次把整段报告铺满历史）。
@@ -66,24 +67,15 @@ fn body_indent(width: u16) -> u16 {
     if width > indent { indent } else { 0 }
 }
 
-/// 正文的物理行（markdown 已按宽度折行）。
-fn body_lines(report: &SubagentReportView, width: u16) -> Vec<String> {
+/// 正文的物理行（压暗 markdown 已按宽度折行）。
+fn body_lines(report: &SubagentReportView, width: u16) -> Vec<Vec<Segment>> {
     let body_width = width.saturating_sub(body_indent(width)).max(1);
-    markdown_render::render_wrapped(&report.body, body_width)
-        .into_iter()
-        .map(|line| {
-            let mut text = " ".repeat(usize::from(line.indent));
-            for (value, _) in line.spans {
-                text.push_str(&value);
-            }
-            text
-        })
-        .collect()
+    muted_markdown_lines(&report.body, body_width)
 }
 
 /// 当前折叠态/展开态实际显示的正文行与剩余行数。
 struct BodyView {
-    lines: Vec<String>,
+    lines: Vec<Vec<Segment>>,
     remaining: usize,
 }
 
@@ -230,18 +222,13 @@ pub(super) fn draw(
     }
     *row += 1;
 
-    let body_style = if expanded {
-        style::text()
-    } else {
-        style::agent_step_detail()
-    };
     if !body.lines.is_empty() {
         let label = vec![
             Segment::new(
                 text::agent::TREE_LEAF.to_string(),
                 style::chat_notice_connector(),
             ),
-            Segment::new(text::agent::REPORT_LABEL, body_style),
+            Segment::new(text::agent::REPORT_LABEL, style::muted()),
         ];
         if let Some(y) = visible_row(rect, scroll, *row) {
             put_segments(grid, rect.x, y, rect.width, &label);
@@ -254,7 +241,7 @@ pub(super) fn draw(
     let body_width = rect.width.saturating_sub(indent);
     for line in &body.lines {
         if let Some(y) = visible_row(rect, scroll, *row) {
-            grid.put_clipped(body_x, y, line, body_style, body_width);
+            put_segments(grid, body_x, y, body_width, line);
         }
         *row += 1;
     }
@@ -371,9 +358,9 @@ mod tests {
         );
         let detail: String = (0..60).map(|x| grid.cell(x, 1).ch).collect();
         assert!(detail.contains("explorer · test title"), "{detail}");
-        // `Report:` 标签颜色与正文内容保持一致（折叠态灰、展开态默认前景），不加额外参数色。
+        // `Report:` 标签与普通正文在折叠与展开态下均保持压暗 `style::muted()`，不随展开变亮白前景。
         assert_eq!(grid.cell(5, 2).style, grid.cell(5, 3).style);
-        assert_eq!(grid.cell(5, 2).style, style::agent_step_detail());
+        assert_eq!(grid.cell(5, 2).style, style::muted());
         let mut expanded_grid = Grid::new(area);
         let mut expanded_row = 0;
         draw(
@@ -391,7 +378,7 @@ mod tests {
             expanded_grid.cell(5, 2).style,
             expanded_grid.cell(5, 3).style
         );
-        assert_eq!(expanded_grid.cell(5, 2).style, style::text());
+        assert_eq!(expanded_grid.cell(5, 2).style, style::muted());
         // 极窄宽度（<= 5 列）让出缩进，正文仍写进网格且行数与 measure 一致。
         let narrow_area = Rect::new(0, 0, 4, 20);
         let mut narrow_grid = Grid::new(narrow_area);
@@ -412,6 +399,28 @@ mod tests {
         assert!(
             !narrow_body.trim().is_empty(),
             "极窄宽度正文可见：{narrow_body:?}"
+        );
+    }
+
+    #[test]
+    fn report_body_preserves_muted_markdown_syntax_styles_when_expanded() {
+        let report = report("plain `inline_code` tail");
+        let area = Rect::new(0, 0, 60, 10);
+        let mut grid = Grid::new(area);
+        let mut row = 0;
+        draw(&mut grid, area, &report, 0, &mut row, 0, false, true, 0);
+        assert_eq!(row, rows(&report, 60, true, 0));
+        // 第 3 行（y=3）是正文首行：`plain inline_code tail`（反引号被折叠，保留压暗行内代码色）。
+        let line_text: String = (5..40).map(|x| grid.cell(x, 3).ch).collect();
+        assert!(
+            line_text.starts_with("plain inline_code tail"),
+            "{line_text}"
+        );
+        assert_eq!(grid.cell(5, 3).style, style::muted(), "普通文本段为 dim");
+        assert_eq!(
+            grid.cell(5 + 6, 3).style,
+            style::md_read_inline_code().patch(style::muted()),
+            "行内代码保留语法色并叠加 dim"
         );
     }
 }

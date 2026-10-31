@@ -17,14 +17,13 @@ use ratatui::style::Style;
 
 use crate::app::state::{SubagentDetailView, ToolCallView, ToolDetailView, ToolStatus};
 use crate::chat::agent::WaitMode;
-use crate::ui::markdown_render;
 use crate::ui::{style, text};
 
 use super::super::{Grid, StepMark, visible_row};
 use super::tree::{self, Node, Section};
 use super::{
-    Segment, TEXT_SAMPLE_CHARS, header_with_mark, header_with_verb, mark_of, put_segments,
-    single_line,
+    Segment, TEXT_SAMPLE_CHARS, header_with_mark, header_with_verb, mark_of, muted_markdown_lines,
+    put_segments, single_line,
 };
 
 /// 标题动词（按工具名）。
@@ -215,20 +214,14 @@ fn target_node(view: &SubagentDetailView, agent_id: &str) -> Node {
     ])
 }
 
-/// 展开态报告：`Report:` + markdown 正文，整块一个多行节点。
+/// 展开态报告：`Report:` + 压暗 markdown 正文，整块一个多行节点。
 fn report_node(body: &str, width: u16) -> Node {
-    let mut lines: Vec<Vec<Segment>> =
-        vec![vec![Segment::new(text::agent::REPORT_LABEL, style::text())]];
-    for line in markdown_render::render_wrapped(
-        body,
-        u16::try_from(tree::content_width(width)).unwrap_or(1),
-    ) {
-        let mut text = " ".repeat(usize::from(line.indent));
-        for (value, _) in line.spans {
-            text.push_str(&value);
-        }
-        lines.push(vec![Segment::new(text, style::text())]);
-    }
+    let body_width = u16::try_from(tree::content_width(width)).unwrap_or(1);
+    let mut lines: Vec<Vec<Segment>> = vec![vec![Segment::new(
+        text::agent::REPORT_LABEL,
+        style::muted(),
+    )]];
+    lines.extend(muted_markdown_lines(body, body_width));
     Node::block(lines)
 }
 
@@ -606,5 +599,37 @@ mod tests {
         assert!(text.contains("a1"), "{text}");
         assert!(!text.contains('·'), "{text}");
         assert!(text.contains("previous: running"), "{text}");
+    }
+
+    #[test]
+    fn expanded_subagent_report_uses_muted_markdown_instead_of_bright_text() {
+        let mut view = wait_view();
+        view.agents[0].report = Some("found `target_fn` in module".into());
+        let call = call("wait_agent", view);
+        let (tree, _) = layout(&call, 80, true);
+        let report_label = tree
+            .rows
+            .iter()
+            .flat_map(|row| row.segments.iter())
+            .find(|seg| seg.text.contains("Report:"))
+            .expect("Report label");
+        assert_eq!(report_label.style, style::muted());
+        let plain_seg = tree
+            .rows
+            .iter()
+            .flat_map(|row| row.segments.iter())
+            .find(|seg| seg.text.contains("found "))
+            .expect("plain segment");
+        assert_eq!(plain_seg.style, style::muted());
+        let code_seg = tree
+            .rows
+            .iter()
+            .flat_map(|row| row.segments.iter())
+            .find(|seg| seg.text == "target_fn")
+            .expect("inline code segment");
+        assert_eq!(
+            code_seg.style,
+            style::md_read_inline_code().patch(style::muted())
+        );
     }
 }

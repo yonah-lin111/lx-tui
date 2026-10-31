@@ -18,7 +18,7 @@
 - 生产代码禁止 `unwrap()` / `expect()`；错误使用 `Result` 与 `?` 传播。
 - 日志统一使用 `tracing`；禁止用 `println!` / `eprintln!` 输出调试信息，禁止绕过 ratatui 直接写 stdout。
 - **lx 的模型提示词一律用英文编写**（系统提示、工具描述与 schema description、工具错误消息、环境快照、压缩提示、注入上下文的结构文本）；中文只用于代码注释与日志。**TUI 和浏览器设置页中所有用户可见文案一律英文**（toast、面板、工具卡片、状态行、空态与按钮），禁止中文文案泄漏到界面。系统提示结构对齐 codex `base_instructions`，默认回复语言跟随用户当前输入的语言（不预设、不强制单一语言）。
-- **工具树展开/折叠**：各可折叠块独立，点击一块只切换该块，禁止整卡一起展开；`├─` 块展开后的续行保留 `│`，`└─` 块展开后的续行使用等宽空白、不补 `│`；`└─` 内容折叠态用 `style::muted()`，展开态恢复 `style::text()`。该规则适用于所有工具卡片，细节见 `docs/standards/tui-design-requirements.md`。
+- **工具树展开/折叠**：各可折叠块独立，点击一块只切换该块，禁止整卡一起展开；`├─` 块展开后的续行保留 `│`，`└─` 块展开后的续行使用等宽空白、不补 `│`；`└─` 输出与汇报内容在折叠与展开态下统一采用思考块同款的压暗 markdown 格式（`markdown_render::render_wrapped` + `span_style.patch(style::muted())`），`search` 命中行与附属标签恒定保持 `style::muted()`，不在展开后恢复为 `style::text()`。该规则适用于所有工具卡片，细节见 `docs/standards/tui-design-requirements.md`。
 - **agent 身份名固定为 `lx`，不可变**（`chat::prompt::AGENT_NAME` 唯一来源，提示首行由它生成）：不得由环境变量、命令行、设置项改写；改名等于换 agent，必须同时递增 `PROMPT_VERSION`。详见 `docs/standards/code-writing-standards.md`。
 - **lx 页的 toast 必须显示在 lx 页内**：lx 视图的反馈一律写 `pane.lx.toast`（`app::update::show_lx_toast` / `show_toast_at` / `show_lx_toast_for_session`），在窗格内容区里绘制（`ui::main_content::lx::toast`，宽度夹在窗格内、允许折行），禁止使用全局 `AppState.toast` 覆盖层。全局槽只有一个，且锚点容器放不下时会降级到屏幕顶部居中、横跨整个窗口——lx 的反馈会因此失去指代并挡住别的窗格（compact 失败提示曾这样横穿全屏）。终端视图与 prompt 栏等非 lx 区域仍用全局 toast。
 - OS 专属代码只允许出现在 `src/platform/`，并按 `#[cfg(...)]` 门控。

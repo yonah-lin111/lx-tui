@@ -174,13 +174,15 @@ fn mcp_card_registers_a_click_region_and_connector_colors() {
                 .any(|segment| segment.text.contains("line 0"))
         })
         .expect("result row");
-    assert_eq!(result_row.segments[0].style, style::text());
+    assert_eq!(result_row.segments[0].style, style::muted());
 }
 
 #[test]
-fn collapsed_leaf_uses_dim_and_expanded_leaf_uses_default_foreground() {
+fn collapsed_and_expanded_result_use_muted_markdown_styles() {
     let mut view = view();
-    view.result = (0..10).map(|index| format!("line {index}")).collect();
+    view.result = (0..10)
+        .map(|index| format!("line {index} with `code_{index}`"))
+        .collect();
     view.result_more = 7;
     let folded = layout(&call(), &view, 100, Folds::default());
     let result_row = folded
@@ -190,6 +192,15 @@ fn collapsed_leaf_uses_dim_and_expanded_leaf_uses_default_foreground() {
         .find(|row| row.segments.iter().any(|seg| seg.text.contains("line 0")))
         .expect("folded result");
     assert_eq!(result_row.segments[0].style, style::muted());
+    assert_eq!(
+        result_row
+            .segments
+            .iter()
+            .find(|seg| seg.text == "code_0")
+            .expect("folded inline code")
+            .style,
+        style::md_read_inline_code().patch(style::muted())
+    );
     let expanded = layout(
         &call(),
         &view,
@@ -205,7 +216,16 @@ fn collapsed_leaf_uses_dim_and_expanded_leaf_uses_default_foreground() {
         .iter()
         .find(|row| row.segments.iter().any(|seg| seg.text.contains("line 0")))
         .expect("expanded result");
-    assert_eq!(result_row.segments[0].style, style::text());
+    assert_eq!(result_row.segments[0].style, style::muted());
+    assert_eq!(
+        result_row
+            .segments
+            .iter()
+            .find(|seg| seg.text == "code_0")
+            .expect("expanded inline code")
+            .style,
+        style::md_read_inline_code().patch(style::muted())
+    );
 }
 
 #[test]

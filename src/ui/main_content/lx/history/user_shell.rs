@@ -12,7 +12,7 @@
 //! - 退出状态与耗时在**标题右侧**，不再占树体行；
 //! - **两个可独立折叠的区域**：命令参数与命令输出各有展开状态；
 //! - 输出正文是一块多行节点：首行 `└─`，其余行左对齐；
-//! - 折叠态一律 dim，展开升为终端默认前景（没有整行灰底，也不随鼠标悬停变色）；
+//! - 折叠与展开态均采用思考块同款的压暗 markdown 格式（没有整行灰底，也不随展开或鼠标悬停变亮白前景）；
 //! - **运行中（长任务）只给一行引导**：命令 + `open task panel · live output`；
 //! - 输出被丢弃（`dropped_bytes`）是执行事实，附在输出块末尾，不混进 UI 省略行数。
 
@@ -25,8 +25,11 @@ use crate::app::state::{CardSection, UserShellView};
 use crate::ui::{style, text};
 
 use super::tool::tree::{self, Node, Preview, Section};
-use super::tool::{Folds, Segment, output_style, put_segments, segments_cols};
-use super::{Grid, truncate_with_ellipsis, visible_row, wrap};
+use super::tool::{
+    Folds, Segment, muted_markdown_lines, output_style, put_segments, sample_markdown_source,
+    segments_cols,
+};
+use super::{Grid, truncate_with_ellipsis, visible_row};
 
 /// 折叠态保留的真实输出行数：首 3 + 尾 2（提示行另占一行）。
 const PREVIEW_HEAD: usize = 3;
@@ -76,17 +79,16 @@ fn output_section(shell: &UserShellView, width: u16, folded: bool) -> Option<Sec
     if shell.is_running() {
         return None;
     }
-    let body_width = tree::content_width(width);
-    let rows = all_output_lines(&shell.output, u16::try_from(body_width).unwrap_or(u16::MAX));
+    let body_width = u16::try_from(tree::content_width(width)).unwrap_or(u16::MAX);
+    let sampled = sample_markdown_source(&shell.output);
+    let rows = muted_markdown_lines(&sampled, body_width);
     let mut lines: Vec<Vec<Segment>> = if rows.is_empty() {
         vec![vec![Segment::new(
             text::LX_SHELL_NO_OUTPUT,
             output_style(!folded),
         )]]
     } else {
-        rows.into_iter()
-            .map(|line| vec![Segment::new(line, output_style(!folded))])
-            .collect()
+        rows
     };
     if shell.output_truncated() {
         lines.push(vec![Segment::new(
@@ -278,27 +280,6 @@ fn header_mark(shell: &UserShellView, loading_frame: usize, animating: bool) -> 
     (text::agent::STEP_MARK_FILLED, style::agent_ok())
 }
 
-/// 全部输出按宽度换行（末尾空行不占位）。
-fn all_output_lines(output: &str, width: u16) -> Vec<String> {
-    if output.is_empty() {
-        return Vec::new();
-    }
-    let mut rows: Vec<String> = Vec::new();
-    for line in output.split('\n') {
-        let line = line.trim_end_matches('\r');
-        if line.is_empty() {
-            rows.push(String::new());
-            continue;
-        }
-        let line = super::tool::sample_output_line(line);
-        rows.extend(wrap(&line, width));
-    }
-    while rows.last().is_some_and(String::is_empty) {
-        rows.pop();
-    }
-    rows
-}
-
 /// 输出行的显示宽度（测试用）。
 #[cfg(test)]
 pub fn display_width(value: &str) -> usize {
@@ -476,10 +457,10 @@ mod tests {
         assert!(!output.clickable, "短输出没有可展开内容");
     }
 
-    /// 参数恒为浅黄；输出折叠恒 dim、展开恒默认前景。
+    /// 参数恒为浅黄；输出折叠与展开均采用压暗 markdown（普通文本恒 dim，行内代码带压暗语法色）。
     #[test]
     fn params_stay_light_yellow_and_output_follows_expanded_only() {
-        let output: String = (0..20).map(|n| format!("line {n}\n")).collect();
+        let output: String = (0..20).map(|n| format!("line {n} `code_{n}`\n")).collect();
         let shell = shell(&output, ProcessStateView::Exited { code: Some(0) });
         let dim = body_layout(&shell, 40, folds(false, false));
         let output_expanded = body_layout(&shell, 40, folds(false, true));
@@ -503,11 +484,25 @@ mod tests {
                 .map(|segment| segment.style)
                 .expect("输出段")
         };
+        let code_style = |layout: &tree::Layout| {
+            layout
+                .rows
+                .iter()
+                .flat_map(|row| row.segments.iter())
+                .find(|segment| segment.text == "code_0")
+                .map(|segment| segment.style)
+                .expect("行内代码段")
+        };
         assert_eq!(out_style(&dim), style::muted(), "折叠输出恒为 dim");
         assert_eq!(
             out_style(&output_expanded),
-            style::text(),
-            "展开的输出是默认前景"
+            style::muted(),
+            "展开的输出普通文本仍保持 dim"
+        );
+        assert_eq!(
+            code_style(&output_expanded),
+            style::md_read_inline_code().patch(style::muted()),
+            "展开的输出保留压暗 markdown 行内代码色"
         );
     }
 

@@ -186,3 +186,27 @@ fn compact_fold_toggle_changes_row_count_consistently() {
     let mut grid = Grid::new(area);
     assert_eq!(render(&mut grid, area, &lx, 0, &mut cache()), expanded);
 }
+
+#[test]
+fn expanded_compact_summary_uses_muted_markdown_styles() {
+    let mut lx = Lx::new();
+    let mut notice = checkpoint(4, true);
+    notice.summary = "Summary with `inline_code` token".into();
+    lx.compact.replace(vec![notice]);
+    lx.compact.toggle("compact-4");
+    let area = Rect::new(0, 0, 60, 12);
+    let mut grid = Grid::new(area);
+    let drawn = render(&mut grid, area, &lx, 0, &mut cache());
+    assert_eq!(drawn, layout(area, &lx, &mut cache()).total_rows);
+    let summary_y = (area.y..area.bottom())
+        .find(|&y| {
+            let line: String = (area.x..area.right()).map(|x| grid.cell(x, y).ch).collect();
+            line.contains("Summary with inline_code")
+        })
+        .expect("summary row");
+    assert_eq!(grid.cell(0, summary_y).style, style::muted());
+    assert_eq!(
+        grid.cell(13, summary_y).style,
+        style::md_read_inline_code().patch(style::muted())
+    );
+}
