@@ -387,3 +387,92 @@ fn compact_empty_notice_lands_in_the_pane_slot() {
     assert_eq!(toast.kind, crate::app::toast::ToastKind::Warning);
     assert!(state.toast.is_none(), "不得占用全局 toast");
 }
+
+/// 回归（P0）：`/resume` 等二级面板打开时，`lx.toast` 悬停优先于面板条目命中（不穿透改写高亮），
+/// 且当打开右键菜单浮层（`Overlay`）时自动解除 `lx.toast` 的悬停冻结。
+#[test]
+fn lx_toast_hover_takes_priority_over_slash_panel_and_clears_on_overlay() {
+    let mut state = lx_state();
+    let pane = state.active_tab().layout.focus();
+    // 打开 `/resume` 历史面板并塞入多条记录，使其在矮窗格内与顶部 `lx.toast` 重叠。
+    assert!(update::open_history(&mut state, pane));
+    let entries = (0..6)
+        .map(|idx| crate::app::state::lx::slash::HistoryEntry {
+            session_id: format!("sess-{idx}"),
+            title: format!("Session {idx}"),
+            status: "active".into(),
+            updated_at_ms: 1_000,
+        })
+        .collect();
+    assert!(update::on_history_listed(&mut state, pane, entries));
+    update::show_lx_toast(
+        &mut state,
+        pane,
+        crate::app::toast::Toast::new(
+            crate::app::toast::ToastKind::Default,
+            "Copied 6 chars",
+            Some(pane),
+            Instant::now(),
+        )
+        .with_title(text::TOAST_CLIPBOARD_TITLE),
+    );
+    let config = Config::default();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 14));
+    let inner = geo
+        .rects
+        .iter()
+        .find(|(id, _)| *id == pane)
+        .map(|(_, rect)| crate::layout::pane_inner_rect(*rect))
+        .expect("pane rect");
+    let toast = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        crate::ui::main_content::lx::toast_rect(inner, &target.lx).expect("toast visible")
+    };
+    let mut sessions = std::collections::HashMap::new();
+    let mut dirty = false;
+
+    // 1. 鼠标移到 toast 盒中心：必须冻结 `lx.toast` 到期计时，且不穿透改动底下 `/resume` 的高亮行。
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, toast.x + 2, toast.y + 2),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|t| t.lx.toast.as_ref())
+            .is_some_and(|t| t.hovered()),
+        "二级面板打开时悬停在 lx.toast 上仍必须冻结消失计时"
+    );
+    let selected_after_hover = match state.pane_anywhere(pane).unwrap().lx.slash.as_ref() {
+        Some(crate::app::state::SlashPanel::History(panel)) => panel.window.active,
+        _ => panic!("history panel open"),
+    };
+    assert_eq!(
+        selected_after_hover, 0,
+        "鼠标在 lx.toast 上移动不得穿透改写底下 `/resume` 面板选中项"
+    );
+
+    // 2. 打开右键菜单浮层后移动鼠标：`lx.toast` 的悬停冻结必须立即解除，避免永久不消失。
+    update::open_pane_menu(&mut state, pane, (toast.x, toast.y));
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, toast.x + 2, toast.y + 2),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|t| t.lx.toast.as_ref())
+            .is_some_and(|t| !t.hovered()),
+        "顶层浮层打开后必须解除 lx.toast 的悬停冻结"
+    );
+}

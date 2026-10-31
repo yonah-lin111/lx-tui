@@ -738,3 +738,82 @@ fn mouse_motion_tracks_right_tab_hover() {
     );
     assert_eq!(state.right_tab_hover, None, "折叠态不产生 tab 悬停");
 }
+
+#[test]
+fn copy_toast_anchors_to_right_panel_for_template_and_todo_and_global_for_overlay() {
+    // 1. 右侧面板模板块 [copy] 按钮：Toast 锚定到右侧面板容器。
+    let (mut state, config, geo, area) = template_button_state();
+    let copy = crate::ui::prompt::template_buttons(&state.prompt, area)
+        .into_iter()
+        .find(|hit| hit.button == crate::ui::prompt::TemplateBlockButton::Copy)
+        .expect("copy button visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            copy.rect.x,
+            copy.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(
+        state.toast.as_ref().and_then(|t| t.anchor),
+        Some(state.prompt.id()),
+        "模板块复制按钮 toast 锚定到右侧面板"
+    );
+
+    // 2. 右侧面板 Todo 行内编辑框选区 Ctrl+C：Toast 锚定到右侧面板容器。
+    state.toast = None;
+    state.right_tab = RightTab::Todo;
+    state.set_focus(crate::app::state::FocusedContainer::Todo);
+    assert!(update::begin_todo_edit(
+        &mut state,
+        crate::app::state::TodoEditTarget::New
+    ));
+    if let Some(inp) = state.todo.edit_input_mut() {
+        inp.insert_str("todo-copy-item");
+        inp.select_all();
+    }
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(
+        state.toast.as_ref().map(|t| (t.message.as_str(), t.anchor)),
+        Some(("Copied 14 chars", Some(state.prompt.id()))),
+        "Todo 行内编辑框复制 toast 锚定到右侧面板"
+    );
+
+    // 3. 居中模态弹窗（如新建工作区）输入框选区 Ctrl+C：Toast 保持全局（anchor = None）。
+    state.toast = None;
+    update::open_new_workspace_dialog(&mut state);
+    if let Some(Overlay::NewWorkspace(dialog)) = state.overlay.as_mut() {
+        dialog.input.insert_str("/tmp/modal-copy");
+        dialog.input.select_all();
+    }
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(
+        state.toast.as_ref().map(|t| (t.message.as_str(), t.anchor)),
+        Some(("Copied 15 chars", None)),
+        "居中模态弹窗内复制走全局 toast（anchor = None）"
+    );
+}

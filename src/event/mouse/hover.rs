@@ -56,6 +56,21 @@ pub(crate) fn handle_mouse_moved(
     if update::set_toast_hover(state, hovering_toast) {
         *dirty = true;
     }
+    // lx 窗格自己的 toast：在所有提前 return（模态浮层与二级面板）之前更新悬停状态，
+    // 确保打开模态或移入 `/resume` 等面板时能及时解除冻结，且浮在二级面板之上的
+    // lx toast 优先生效、不穿透触发底层二级面板悬停。
+    let hovering_lx_toast = state
+        .overlay
+        .is_none()
+        .then(|| lx_toast_at(rects, state, mouse.column, mouse.row))
+        .flatten();
+    let lx_toast_panes = state.all_pane_ids();
+    for pane in lx_toast_panes {
+        let hovered = hovering_lx_toast.is_some_and(|(id, _)| id == pane);
+        if update::set_lx_toast_hover(state, pane, hovered) {
+            *dirty = true;
+        }
+    }
     // 浮层打开时悬停只服务菜单高亮，不触碰底层 hover 状态。
     if state.overlay.is_some() {
         if let Some(Overlay::Menu(menu)) = state.overlay.as_ref() {
@@ -168,41 +183,43 @@ pub(crate) fn handle_mouse_moved(
         }
         return;
     }
-    if let Some((pane, index)) = lx_paste_item_at(state, rects, mouse.column, mouse.row) {
-        if update::hover_lx_paste(state, pane, index) {
-            *dirty = true;
+    if hovering_lx_toast.is_none() {
+        if let Some((pane, index)) = lx_paste_item_at(state, rects, mouse.column, mouse.row) {
+            if update::hover_lx_paste(state, pane, index) {
+                *dirty = true;
+            }
+            if update::clear_tooltip(state) {
+                *dirty = true;
+            }
+            return;
         }
-        if update::clear_tooltip(state) {
-            *dirty = true;
+        if let Some((pane, index)) = lx_mention_item_at(state, rects, mouse.column, mouse.row) {
+            if update::hover_lx_mention(state, pane, index) {
+                *dirty = true;
+            }
+            if update::clear_tooltip(state) {
+                *dirty = true;
+            }
+            return;
         }
-        return;
-    }
-    if let Some((pane, index)) = lx_mention_item_at(state, rects, mouse.column, mouse.row) {
-        if update::hover_lx_mention(state, pane, index) {
-            *dirty = true;
+        if let Some((pane, index)) = lx_refer_item_at(state, rects, mouse.column, mouse.row) {
+            if update::hover_lx_refer(state, pane, index) {
+                *dirty = true;
+            }
+            if update::clear_tooltip(state) {
+                *dirty = true;
+            }
+            return;
         }
-        if update::clear_tooltip(state) {
-            *dirty = true;
+        if let Some((pane, index)) = lx_slash_item_at(state, rects, mouse.column, mouse.row) {
+            if update::hover_lx_slash(state, pane, index) {
+                *dirty = true;
+            }
+            if update::clear_tooltip(state) {
+                *dirty = true;
+            }
+            return;
         }
-        return;
-    }
-    if let Some((pane, index)) = lx_refer_item_at(state, rects, mouse.column, mouse.row) {
-        if update::hover_lx_refer(state, pane, index) {
-            *dirty = true;
-        }
-        if update::clear_tooltip(state) {
-            *dirty = true;
-        }
-        return;
-    }
-    if let Some((pane, index)) = lx_slash_item_at(state, rects, mouse.column, mouse.row) {
-        if update::hover_lx_slash(state, pane, index) {
-            *dirty = true;
-        }
-        if update::clear_tooltip(state) {
-            *dirty = true;
-        }
-        return;
     }
     if let Some(index) = slash_item_at(state, view, mouse.column, mouse.row) {
         if update::hover_slash(state, index) {
@@ -221,16 +238,6 @@ pub(crate) fn handle_mouse_moved(
             *dirty = true;
         }
         return;
-    }
-    // lx 窗格自己的 toast：悬停同样冻结消失计时（与全局 toast 同一语义）。
-    // 命中的是「指针下那个窗格的盒」，不放宽到其它窗格。
-    let hovering_lx_toast = lx_toast_at(rects, state, mouse.column, mouse.row);
-    let lx_toast_panes = state.all_pane_ids();
-    for pane in lx_toast_panes {
-        let hovered = hovering_lx_toast.is_some_and(|(id, _)| id == pane);
-        if update::set_lx_toast_hover(state, pane, hovered) {
-            *dirty = true;
-        }
     }
     // 指针停在任意一条 lx 提示上时，都不触发它下面那些控件的悬停反馈。
     let hovering_toast = hovering_toast || hovering_lx_toast.is_some();

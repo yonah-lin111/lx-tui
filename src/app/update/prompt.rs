@@ -893,7 +893,7 @@ pub fn delete_prompt_folder(state: &mut AppState, workspace: usize, folder_id: i
     });
 }
 
-/// 复制提示词当前页正文到剪贴板（经效应出箱由事件层写入系统剪贴板）。
+/// 复制提示词当前页正文到剪贴板（经效应出箱由事件层写入系统剪贴板，Toast 锚定右侧面板）。
 pub fn copy_prompt_content(state: &mut AppState, workspace: usize, item_id: i64) {
     let Some(content) = state
         .workspaces
@@ -904,13 +904,14 @@ pub fn copy_prompt_content(state: &mut AppState, workspace: usize, item_id: i64)
     else {
         return;
     };
+    let anchor = Some(state.prompt.id());
     state.effects.push(Effect::CopyToClipboard {
         text: content,
-        anchor: None,
+        anchor,
     });
 }
 
-/// 复制临时提示词当前页正文到剪贴板；不入库、无确认。
+/// 复制临时提示词当前页正文到剪贴板；不入库、无确认，Toast 锚定右侧面板。
 pub fn copy_prompt_temp_content(state: &mut AppState, workspace: usize, temp_id: u64) {
     let Some(content) = state
         .workspaces
@@ -921,9 +922,10 @@ pub fn copy_prompt_temp_content(state: &mut AppState, workspace: usize, temp_id:
     else {
         return;
     };
+    let anchor = Some(state.prompt.id());
     state.effects.push(Effect::CopyToClipboard {
         text: content,
-        anchor: None,
+        anchor,
     });
 }
 

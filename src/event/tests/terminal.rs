@@ -469,7 +469,7 @@ fn terminal_selection_retains_on_mouse_up_scrolls_and_copies_on_ctrl_c() {
         "松开后滚轮滚动不改变已选中的终端内容文本"
     );
 
-    // 3. 按下 Ctrl+C 复制：弹出全局顶部居中 toast（anchor = None）并显示复制字符数，选区继续保留。
+    // 3. 按下 Ctrl+C 复制：在该终端窗格顶部居中弹出复制 toast（anchor = Some(pane)）并显示复制字符数，选区继续保留。
     handle_terminal_event(
         TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
         &mut state,
@@ -482,8 +482,12 @@ fn terminal_selection_retains_on_mouse_up_scrolls_and_copies_on_ctrl_c() {
     let toast = state
         .toast
         .as_ref()
-        .expect("终端选区按 Ctrl+C 弹出全局复制 toast");
-    assert_eq!(toast.anchor, None, "全局复制 toast 固定在屏幕顶部居中");
+        .expect("终端选区按 Ctrl+C 弹出复制 toast");
+    assert_eq!(
+        toast.anchor,
+        Some(pane),
+        "终端窗格复制 toast 锚定到该终端窗格容器"
+    );
     assert_eq!(toast.message, "Copied 12 chars");
     assert!(
         update::terminal_selection_text(&state, pane).is_some(),
@@ -669,9 +673,16 @@ fn double_and_triple_click_select_word_and_line_across_all_views() {
         &mut cache,
         &mut dirty,
     );
+    assert!(
+        state.toast.is_none(),
+        "lx 输入框复制落入该 lx 窗格自己的 toast 槽，不占全局槽"
+    );
     assert_eq!(
-        state.toast.as_ref().map(|t| t.message.as_str()),
-        Some("Copied 10 chars")
+        state
+            .pane_anywhere(pane)
+            .and_then(|t| t.lx.toast.as_ref())
+            .map(|t| (t.message.as_str(), t.anchor)),
+        Some(("Copied 10 chars", Some(pane)))
     );
     assert_eq!(
         state.pane_anywhere(pane).expect("pane").lx.input,
@@ -679,7 +690,7 @@ fn double_and_triple_click_select_word_and_line_across_all_views() {
         "输入框有选区时按 Ctrl+C 不清空草稿"
     );
 
-    // 3. 右侧 Prompt 编辑器：双击选词、三击选整逻辑行。
+    // 3. 右侧 Prompt 编辑器：双击选词、三击选整逻辑行，按 Ctrl+C 复制时 Toast 锚定右侧面板。
     let prompt_area = super::paste::prompt_text_area(&geo.view);
     let px = prompt_area.x + 12;
     let py = prompt_area.y;
@@ -730,6 +741,20 @@ fn double_and_triple_click_select_word_and_line_across_all_views() {
         update::prompt_selection_text(&state).as_deref(),
         Some("prompt_one prompt_two"),
         "三击 Prompt 选中整条逻辑行"
+    );
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(
+        state.toast.as_ref().map(|t| (t.message.as_str(), t.anchor)),
+        Some(("Copied 21 chars", Some(state.prompt.id()))),
+        "右侧 Prompt 编辑器复制 toast 锚定到右侧面板容器"
     );
 
     // 4. 终端窗格：双击选词、三击选整行。

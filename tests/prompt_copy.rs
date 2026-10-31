@@ -1,7 +1,7 @@
 //! 集成测试：真实 PTY 中 prompt 选区的复制快捷键（Ctrl+C / Cmd+C）。
 //!
 //! 覆盖 legacy `\x03`、kitty 协议 `CSI 99;5u`（ctrl+c）与 `CSI 99;9u`（super+c）：
-//! 拖选 prompt 文本后按键应触发 `Copied to clipboard` toast。
+//! 拖选 prompt 文本后按键应在右侧 Prompt 面板容器内触发 `Copied N chars` toast。
 //! 原生剪贴板写入经临时 PATH 中的 pbcopy 桩拦截，避免污染真实剪贴板。
 
 #![cfg(unix)]
@@ -228,6 +228,12 @@ fn ctrl_c_copies_prompt_selection() {
     assert!(
         app.wait_for("Copied 11 chars", Duration::from_secs(3)),
         "ctrl+c 应触发复制 toast：\n{}",
+        app.screen()
+    );
+    let (toast_x, _) = app.find("Copied 11 chars").expect("toast position");
+    assert!(
+        toast_x >= 60,
+        "右侧 Prompt 面板复制 toast 必须出现在右栏容器内（实际列 x = {toast_x}）：\n{}",
         app.screen()
     );
 }

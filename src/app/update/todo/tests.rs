@@ -251,6 +251,11 @@ fn write_failure_keeps_items_and_toasts() {
         "写库失败不改内存列表"
     );
     assert!(state.toast.is_some(), "失败必须 toast");
+    assert_eq!(
+        state.toast.as_ref().and_then(|toast| toast.anchor),
+        Some(state.prompt.id()),
+        "Todo 写库失败 toast 必须锚定在右侧面板容器内"
+    );
 }
 
 #[test]

@@ -150,6 +150,11 @@ pub fn set_prompt_tree_hover(state: &mut AppState, hover: Option<usize>) -> bool
 
 /// 展示 toast；单条替换并重置倒计时。
 pub fn show_toast(state: &mut AppState, toast: Toast) {
+    if let Some(pane) = toast.anchor
+        && let Some(target) = state.pane_mut_anywhere(pane)
+    {
+        target.lx.toast = None;
+    }
     state.toast = Some(toast);
 }
 
@@ -159,6 +164,9 @@ pub fn show_toast(state: &mut AppState, toast: Toast) {
 /// 全局槽只有一个，且锚点容器放不下时会降级到屏幕顶部居中、横跨整个窗口。
 /// 窗格不存在时静默丢弃——没有可落地的页面，就不该凭空造一条全局提示。
 pub fn show_lx_toast(state: &mut AppState, pane: PaneId, toast: Toast) {
+    if state.toast.as_ref().and_then(|current| current.anchor) == Some(pane) {
+        state.toast = None;
+    }
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.toast = Some(toast);
     }

@@ -659,15 +659,15 @@ fn lx_history_selection_waits_for_copy_shortcut_and_follows_wheel_scroll() {
         lx.input, "keep my draft",
         "有选区时按 Ctrl+C 不清空输入框草稿"
     );
-    assert!(lx.toast.is_none(), "复制反馈不再写入 lx 页内 toast");
-    let toast = state
+    assert!(
+        state.toast.is_none(),
+        "lx 视图复制反馈落入窗格专属槽，不占全局 state.toast"
+    );
+    let toast = lx
         .toast
         .as_ref()
-        .expect("按 Ctrl+C 后弹出全局复制 toast");
-    assert_eq!(
-        toast.anchor, None,
-        "全局复制 toast 固定在屏幕顶部居中（anchor = None）"
-    );
+        .expect("按 Ctrl+C 后在该 lx 窗格内弹出复制 toast");
+    assert_eq!(toast.anchor, Some(pane), "lx 复制 toast 锚定到当前 lx 窗格");
     assert_eq!(
         toast.title.as_deref(),
         Some(crate::ui::text::TOAST_CLIPBOARD_TITLE)
@@ -774,11 +774,15 @@ fn lx_task_output_and_agents_detail_selection_scroll_and_copy() {
         &mut cache,
         &mut dirty,
     );
+    assert!(
+        state.toast.is_none(),
+        "lx 后台任务页复制不占全局 state.toast"
+    );
     let toast = state
-        .toast
-        .as_ref()
-        .expect("后台管理页按 Ctrl+C 触发全局复制 toast");
-    assert_eq!(toast.anchor, None, "全局复制 toast 固定在屏幕顶部居中");
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.toast.as_ref())
+        .expect("后台管理页按 Ctrl+C 在当前 lx 窗格内弹出复制 toast");
+    assert_eq!(toast.anchor, Some(pane), "复制 toast 锚定到当前 lx 窗格");
     assert!(
         toast.message.starts_with("Copied ") && toast.message.ends_with(" chars"),
         "显示复制字符数：{}",

@@ -706,14 +706,15 @@ impl Persistence {
                     );
                     true
                 } else {
-                    // 失败：保留脏状态与待保存内容，下一轮静置重试并给出可见反馈。
+                    // 失败：保留脏状态与待保存内容，下一轮静置重试并在右侧面板给出可见反馈。
                     update::reset_prompt_autosave(state, prompt);
+                    let anchor = Some(state.prompt.id());
                     update::show_toast(
                         state,
                         Toast::new(
                             ToastKind::Danger,
                             text::TOAST_PROMPT_SAVE_FAILED,
-                            None,
+                            anchor,
                             Instant::now(),
                         ),
                     );
@@ -809,7 +810,7 @@ impl Persistence {
                 changed |= self.reload_referenced(state, &key);
                 changed
             }
-            Effect::CopyToClipboard { text, anchor: _ } => {
+            Effect::CopyToClipboard { text, anchor } => {
                 let now = Instant::now();
                 let (kind, message) = if crate::platform::write_clipboard(&text) {
                     (ToastKind::Default, text::toast_copied(&text))
@@ -817,10 +818,12 @@ impl Persistence {
                     tracing::warn!("clipboard write failed");
                     (ToastKind::Danger, text::TOAST_COPY_FAILED.to_string())
                 };
-                // 全部剪贴板复制反馈统一走全局屏幕顶部居中 toast（anchor = None）。
-                update::show_toast(
+                // 按触发容器分派：lx 窗格落窗格专属槽，终端窗格与右侧面板落各自容器锚点，
+                // 左侧栏与居中模态弹窗（anchor = None）落全局屏幕顶部居中。
+                update::show_toast_at(
                     state,
-                    Toast::new(kind, message, None, now).with_title(text::TOAST_CLIPBOARD_TITLE),
+                    anchor,
+                    Toast::new(kind, message, anchor, now).with_title(text::TOAST_CLIPBOARD_TITLE),
                 );
                 true
             }

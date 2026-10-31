@@ -539,14 +539,15 @@ pub fn set_todo_scroll(state: &mut AppState, offset: usize) -> bool {
     state.todo.set_scroll(offset)
 }
 
-/// 服务回执：写入失败；全局 toast（内存列表保持不变）。
+/// 服务回执：写入失败；在右侧面板展示错误 toast（内存列表保持不变）。
 pub fn fail_todo_write(state: &mut AppState) {
+    let anchor = Some(state.prompt.id());
     show_toast(
         state,
         Toast::new(
             ToastKind::Danger,
             crate::ui::text::TOAST_TODO_SAVE_FAILED,
-            None,
+            anchor,
             Instant::now(),
         ),
     );
