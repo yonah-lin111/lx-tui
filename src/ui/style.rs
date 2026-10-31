@@ -318,11 +318,11 @@ pub fn md_read_marker() -> Style {
 }
 
 /// markdown 六级标题的统一样式：所有级别（h1–h6）统一为同一种格式，
-/// 使用 GitHub Dark 实体紫 `#d2a8ff` + 加粗（无下划线、无斜体）。
+/// 使用 GitHub Dark 实体紫 `#d2a8ff` + 加粗 + 下划线（无斜体）。
 pub fn md_read_heading_level(_level: u8) -> Style {
     Style::default()
         .fg(github_dark::ENTITY)
-        .add_modifier(Modifier::BOLD)
+        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
 }
 
 /// markdown 粗斜体（`***…***`）：正文色加粗+斜体（不再额外上色）。

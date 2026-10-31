@@ -387,17 +387,15 @@ fn markdown_palette_is_github_dark_truecolor() {
             .contains(Modifier::CROSSED_OUT)
     );
 
-    // 六级标题统一为同一种格式：GitHub Dark 实体紫 `#d2a8ff` + 加粗（无下划线、无斜体）。
+    // 六级标题统一为同一种格式：GitHub Dark 实体紫 `#d2a8ff` + 加粗 + 下划线（无斜体）。
     for level in 1..=6 {
         let heading = md_read_heading_level(level);
         assert_eq!(heading.fg, entity, "h{level} 标题高亮色 = #d2a8ff");
         assert!(
-            heading.add_modifier.contains(Modifier::BOLD),
-            "h{level} 标题加粗"
-        );
-        assert!(
-            !heading.add_modifier.contains(Modifier::UNDERLINED),
-            "h{level} 标题不加下划线"
+            heading
+                .add_modifier
+                .contains(Modifier::BOLD | Modifier::UNDERLINED),
+            "h{level} 标题加粗且带下划线"
         );
         assert!(
             !heading.add_modifier.contains(Modifier::ITALIC),
