@@ -114,26 +114,18 @@ pub(crate) fn handle_mouse_down_left(
         return;
     }
     if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config) {
+        update::dismiss_toast(state);
+        *dirty = true;
         if toast.contains((mouse.column, mouse.row).into()) {
-            // 点击 toast 内部内容不关闭；仅右上角 [✕] 关闭。
-            if ui::toast::close_button_at(toast, mouse.column, mouse.row) {
-                update::dismiss_toast(state);
-                *dirty = true;
-            }
+            // 点击 toast 本身：关闭 toast 并消费本次点击。
             return;
         }
         // 点击 toast 之外：关闭 toast 后继续处理本次点击。
-        update::dismiss_toast(state);
-        *dirty = true;
     }
-    // lx 页自己的 toast 盒：与全局 toast 同样的点击语义（点内部不关、点 [✕] 关、
-    // 点外部关闭后继续处理本次点击），但它只画在窗格内容区里，命中区也只在窗格内。
-    if let Some((pane, toast)) = lx_toast_at(rects, state, mouse.column, mouse.row) {
-        if ui::main_content::lx::toast::close_button_at(toast, mouse.column, mouse.row) {
-            update::dismiss_lx_toast(state, pane);
-            *dirty = true;
-            return;
-        }
+    // lx 页自己的 toast 盒：点击盒内关闭并消费点击，点击盒外关闭后继续处理本次点击。
+    if let Some((pane, _toast)) = lx_toast_at(rects, state, mouse.column, mouse.row) {
+        update::dismiss_lx_toast(state, pane);
+        *dirty = true;
         return;
     }
     if dismiss_lx_toast_outside(rects, state, mouse.column, mouse.row) {

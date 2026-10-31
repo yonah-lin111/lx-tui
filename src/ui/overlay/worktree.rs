@@ -179,14 +179,14 @@ pub(super) fn render_worktree_open(
             shell.inner.height.saturating_sub(1),
         ),
         &[
-            (text::BUTTON_OPEN, style::accent()),
-            (text::BUTTON_CANCEL, style::muted()),
+            (text::BUTTON_OPEN, style::button_primary()),
+            (text::BUTTON_CANCEL, style::button_secondary()),
         ],
     );
     cursor
 }
 
-/// 单条 worktree：首行 `› 名字` 加右对齐状态，次行缩进路径。
+/// 单条 worktree：首行 `› 名字` 加右对齐状态，次行缩进路径；选中项整行铺 surface 底色（对齐 herdr）。
 fn render_worktree_entry(
     frame: &mut Frame<'_>,
     inner: Rect,
@@ -200,11 +200,17 @@ fn render_worktree_entry(
     } else {
         " "
     };
-    let name_style = if selected {
-        style::accent()
+    let row_base = if selected {
+        style::overlay_selection()
     } else {
         style::text()
     };
+    let name_style = if selected {
+        row_base.add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
+        style::text()
+    };
+    let muted_style = row_base.patch(style::muted());
     let status = match entry.status() {
         WorktreeStatus::Open => text::WORKTREE_STATUS_OPEN,
         WorktreeStatus::Detached => text::WORKTREE_STATUS_DETACHED,
@@ -224,19 +230,25 @@ fn render_worktree_entry(
         .saturating_sub(title.chars().count())
         .saturating_sub(status.chars().count())
         .max(1);
+    let top_rect = Rect::new(inner.x, y, inner.width, 1);
+    let bottom_rect = Rect::new(inner.x, y.saturating_add(1), inner.width, 1);
+    if selected {
+        frame.buffer_mut().set_style(top_rect, row_base);
+        frame.buffer_mut().set_style(bottom_rect, row_base);
+    }
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(title, name_style),
             Span::styled(" ".repeat(pad), name_style),
-            Span::styled(status, style::muted()),
+            Span::styled(status, muted_style),
         ])),
-        Rect::new(inner.x, y, inner.width, 1),
+        top_rect,
     );
     frame.render_widget(
         Paragraph::new(Span::styled(
             text::ellipsize(&format!("  {}", entry.path.display()), width),
-            style::muted(),
+            muted_style,
         )),
-        Rect::new(inner.x, y.saturating_add(1), inner.width, 1),
+        bottom_rect,
     );
 }

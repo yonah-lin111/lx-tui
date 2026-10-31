@@ -120,24 +120,28 @@ fn menu_layout_maps_commands_to_text_labels() {
 }
 
 #[test]
-fn menu_renders_target_name_in_border_title() {
+fn menu_renders_pure_item_list_without_title_or_divider() {
     let state = menu_state(
         vec![MenuCommand::RenameWorkspace, MenuCommand::CloseWorkspace],
         0,
     );
     let (lines, _) = draw_overlay(&state);
     assert!(lines[5].contains('┌'), "top border={:?}", lines[5]);
-    assert!(lines[6].contains("demo"), "title row={:?}", lines[6]);
     assert!(
-        lines[6].contains('│') && !lines[6].contains('─'),
-        "标题行保留左右边框、不再画横线: {:?}",
+        lines[6].contains(text::MENU_RENAME_WORKSPACE),
+        "first item row={:?}",
         lines[6]
     );
-    assert!(lines[7].contains('├'), "标题下方有分割线: {:?}", lines[7]);
+    assert!(
+        lines[7].contains(text::MENU_CLOSE_WORKSPACE),
+        "second item row={:?}",
+        lines[7]
+    );
+    assert!(lines[8].contains('└'), "bottom border={:?}", lines[8]);
 }
 
 #[test]
-fn menu_falls_back_to_target_kind_title() {
+fn menu_title_resolves_fallback_when_target_missing() {
     let mut state = AppState::demo();
     state.overlay = Some(Overlay::Menu(Menu {
         anchor: (10, 5),
@@ -146,16 +150,16 @@ fn menu_falls_back_to_target_kind_title() {
         selected: 0,
         confirming: false,
     }));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu expected");
+    };
+    assert_eq!(menu_title(&state, menu), text::MENU_TITLE_WORKSPACE);
     let (lines, _) = draw_overlay(&state);
-    assert!(
-        lines[6].contains(text::MENU_TITLE_WORKSPACE),
-        "title row={:?}",
-        lines[6]
-    );
+    assert!(lines[6].contains(text::MENU_CLOSE_WORKSPACE));
 }
 
 #[test]
-fn menu_workspace_list_shows_list_title_and_new_workspace_label() {
+fn menu_workspace_list_shows_new_workspace_label() {
     let mut state = AppState::demo();
     state.overlay = Some(Overlay::Menu(Menu {
         anchor: (10, 5),
@@ -166,14 +170,7 @@ fn menu_workspace_list_shows_list_title_and_new_workspace_label() {
     }));
     let (lines, _) = draw_overlay(&state);
     assert!(
-        lines[6].contains(text::MENU_TITLE_WORKSPACES),
-        "title row={:?}",
-        lines[6]
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains(text::MENU_NEW_WORKSPACE)),
+        lines[6].contains(text::MENU_NEW_WORKSPACE),
         "item label missing: {lines:?}"
     );
 }
@@ -187,8 +184,8 @@ fn menu_renders_labels_and_overlay_selection() {
     state.menu_hover = true;
     let (lines, cursor) = draw_overlay(&state);
     assert_eq!(cursor, None);
-    assert!(lines[8].contains(text::MENU_RENAME_WORKSPACE));
-    assert!(lines[9].contains(text::MENU_CLOSE_WORKSPACE));
+    assert!(lines[6].contains(text::MENU_RENAME_WORKSPACE));
+    assert!(lines[7].contains(text::MENU_CLOSE_WORKSPACE));
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| {
         render(frame, frame.area(), &state);
@@ -196,9 +193,9 @@ fn menu_renders_labels_and_overlay_selection() {
         panic!("draw failed: {error}");
     }
     let buffer = terminal.backend().buffer().clone();
-    assert_eq!(buffer[(11, 9)].bg, Color::Indexed(240));
-    assert_eq!(buffer[(11, 9)].fg, Color::Indexed(255));
-    assert!(!buffer[(11, 9)].modifier.contains(Modifier::REVERSED));
+    assert_eq!(buffer[(11, 7)].bg, Color::Indexed(240));
+    assert_eq!(buffer[(11, 7)].fg, Color::Indexed(255));
+    assert!(!buffer[(11, 7)].modifier.contains(Modifier::REVERSED));
 
     // 指针离开容器：高亮反馈整体移除。
     state.menu_hover = false;
@@ -209,14 +206,14 @@ fn menu_renders_labels_and_overlay_selection() {
     }
     let buffer = terminal.backend().buffer().clone();
     assert_eq!(
-        buffer[(11, 9)].bg,
+        buffer[(11, 7)].bg,
         Color::Reset,
         "离开容器后无悬停高亮且保持透明底色"
     );
 }
 
 #[test]
-fn modal_uses_transparent_background() {
+fn modal_uses_transparent_panel_and_surface_input_bar() {
     let state = rename_state("demo");
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| {
@@ -227,7 +224,15 @@ fn modal_uses_transparent_background() {
     let buffer = terminal.backend().buffer().clone();
     let shell = rename_shell(SCREEN).expect("rename modal fits");
     assert_eq!(buffer[(shell.area.x, shell.area.y)].bg, Color::Reset);
-    assert_eq!(buffer[(shell.inner.x, shell.inner.y)].bg, Color::Reset);
+    assert_eq!(
+        buffer[(shell.area.x + 1, shell.area.y + 1)].bg,
+        Color::Reset
+    );
+    assert_eq!(
+        buffer[(shell.inner.x, shell.inner.y)].bg,
+        Color::Indexed(236),
+        "输入行铺暗色 surface 底条"
+    );
 }
 
 #[test]
@@ -420,9 +425,9 @@ fn tab_menu_renders_new_rename_close_labels() {
     );
     let (lines, cursor) = draw_overlay(&state);
     assert_eq!(cursor, None);
-    assert!(lines[8].contains(text::MENU_NEW_TAB));
-    assert!(lines[9].contains(text::MENU_RENAME_TAB));
-    assert!(lines[10].contains(text::MENU_CLOSE_TAB));
+    assert!(lines[6].contains(text::MENU_NEW_TAB));
+    assert!(lines[7].contains(text::MENU_RENAME_TAB));
+    assert!(lines[8].contains(text::MENU_CLOSE_TAB));
 }
 
 #[test]
@@ -439,11 +444,11 @@ fn pane_menu_renders_split_switch_and_close_labels() {
     );
     let (lines, cursor) = draw_overlay(&state);
     assert_eq!(cursor, None);
-    assert!(lines[8].contains(text::MENU_SPLIT_RIGHT));
-    assert!(lines[9].contains(text::MENU_SPLIT_DOWN));
-    assert!(lines[10].contains(text::MENU_OPEN_PROMPT));
-    assert!(lines[11].contains(text::MENU_SWITCH_TO_TERMINAL));
-    assert!(lines[12].contains(text::MENU_CLOSE_PANE));
+    assert!(lines[6].contains(text::MENU_SPLIT_RIGHT));
+    assert!(lines[7].contains(text::MENU_SPLIT_DOWN));
+    assert!(lines[8].contains(text::MENU_OPEN_PROMPT));
+    assert!(lines[9].contains(text::MENU_SWITCH_TO_TERMINAL));
+    assert!(lines[10].contains(text::MENU_CLOSE_PANE));
 }
 
 #[test]
@@ -896,11 +901,10 @@ fn referenced_search_paints_solid_panel_background() {
     };
     let layout = referenced_search_layout(SCREEN, search).expect("layout");
     let scrollbar = layout.scrollbar.expect("list overflows");
-    // 范围路径文字、搜索框、非选中候选与滚动条都保持透明底色，仅选中候选行铺高亮底色。
+    // 范围路径文字、非选中候选与滚动条都保持透明底色；搜索框铺暗色 surface 底条，选中候选行铺高亮底色。
     for (label, x, y) in [
         ("范围路径", layout.title.x, layout.title.y),
         ("范围路径第二个字符", layout.title.x + 1, layout.title.y),
-        ("搜索框", layout.query.x, layout.query.y),
         ("非选中候选首行", layout.list.x, layout.list.y + 2),
         ("非选中候选地址行", layout.list.x + 2, layout.list.y + 3),
         ("滚动条轨道", scrollbar.track.x, scrollbar.track.y),
@@ -908,6 +912,11 @@ fn referenced_search_paints_solid_panel_background() {
     ] {
         assert_eq!(buf[(x, y)].bg, Color::Reset, "{label} 应保持透明底色");
     }
+    assert_eq!(
+        buf[(layout.query.x, layout.query.y)].bg,
+        Color::Indexed(236),
+        "搜索框铺 surface 底条"
+    );
     assert_eq!(
         buf[(layout.list.x, layout.list.y)].bg,
         Color::Indexed(240),
@@ -1660,7 +1669,7 @@ fn page_menu_windows_around_selected_row_when_tall() {
     assert_eq!(layout.page_rects.len(), visible);
     assert_eq!(
         layout.area.height,
-        u16::try_from(4 + visible).expect("height"),
+        u16::try_from(3 + visible).expect("height"),
         "菜单高度钳到屏幕内"
     );
     let selected_rect = layout.page_rects[target - layout.start - 1];

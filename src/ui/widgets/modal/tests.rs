@@ -65,7 +65,7 @@ fn render_draws_border_and_title() {
         buffer[(shell.inner.x, shell.inner.y)].bg,
         ratatui::style::Color::Reset
     );
-    // 标题独占顶边框内的第一行，左右仍是竖边框；下一行是 ├──┤ 分割线。
+    // 标题位于顶边框内的第一行，左右仍是竖边框；下一行为空白呼吸行（无 ├──┤ 分割线）。
     let title_row: String = (shell.area.x..shell.area.right())
         .map(|x| buffer[(x, shell.area.y + 1)].symbol())
         .collect();
@@ -79,7 +79,13 @@ fn render_draws_border_and_title() {
         buffer[(shell.area.right() - 1, shell.area.y + 1)].symbol(),
         "│"
     );
-    assert_eq!(buffer[(shell.area.x, shell.area.y + 2)].symbol(), "├");
+    assert_eq!(buffer[(shell.area.x, shell.area.y + 2)].symbol(), "│");
+    // 模态外部背景被施加 DIM 修饰符。
+    assert!(
+        buffer[(0, 0)]
+            .modifier
+            .contains(ratatui::style::Modifier::DIM)
+    );
 }
 
 #[test]
@@ -142,35 +148,19 @@ fn button_at_hits_button_cells_only() {
 }
 
 #[test]
-fn render_draws_close_button_and_hit_test() {
-    let shell = layout(SCREEN, 40, 3).expect("modal fits");
-    let close = close_button_rect(shell.area).expect("close button fits");
-    assert_eq!(close.x, shell.area.right() - 5);
-    assert_eq!(close.y, shell.area.y);
-    assert!(close_button_at(shell.area, close.x, close.y));
-    assert!(close_button_at(shell.area, close.right() - 1, close.y));
-    assert!(
-        !close_button_at(shell.area, close.x - 1, close.y),
-        "按钮左侧不命中"
-    );
-    assert!(
-        !close_button_at(shell.area, close.x, close.y + 1),
-        "边框下一行不命中"
-    );
-
+fn render_danger_uses_red_border_and_title() {
+    let shell = layout(SCREEN, 40, 7).expect("modal fits");
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
     terminal
-        .draw(|frame| render(frame, &shell, "Rename workspace"))
+        .draw(|frame| render_danger(frame, &shell, "Delete page"))
         .expect("draw succeeds");
     let buffer = terminal.backend().buffer();
-    let label: String = (close.x..close.right())
-        .map(|x| buffer[(x, close.y)].symbol())
-        .collect();
-    assert_eq!(label, text::MODAL_CLOSE);
-}
-
-#[test]
-fn close_button_absent_on_narrow_modal() {
-    let shell = layout(Rect::new(0, 0, 30, 8), 9, 3).expect("modal fits");
-    assert_eq!(close_button_rect(shell.area), None);
+    assert_eq!(
+        buffer[(shell.area.x, shell.area.y)].fg,
+        ratatui::style::Color::Red
+    );
+    assert_eq!(
+        buffer[(shell.area.x + 2, shell.area.y + 1)].fg,
+        ratatui::style::Color::Red
+    );
 }

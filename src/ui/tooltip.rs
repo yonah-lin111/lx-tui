@@ -59,31 +59,8 @@ pub fn render(
     let area = rect(screen, anchor, title, hint)?;
     clear::render(frame, area);
     let block = Block::bordered().border_style(style::muted());
+    let inner = block.inner(area);
     frame.render_widget(block, area);
-    if area.height >= 5 && area.width >= 4 {
-        let fitted = text::ellipsize(title, usize::from(area.width.saturating_sub(4)));
-        frame.render_widget(
-            Paragraph::new(Span::styled(fitted, style::border_title())),
-            Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), 1),
-        );
-        crate::ui::widgets::modal::paint_divider(
-            frame.buffer_mut(),
-            area,
-            area.y + 2,
-            style::muted(),
-        );
-    }
-    let body_y = if area.height >= 5 {
-        area.y + 3
-    } else {
-        area.y + 1
-    };
-    let inner = Rect::new(
-        area.x + 1,
-        body_y,
-        area.width.saturating_sub(2),
-        area.bottom().saturating_sub(1).saturating_sub(body_y),
-    );
     if inner.width == 0 || inner.height == 0 {
         return Some(area);
     }
@@ -261,7 +238,7 @@ fn rect(screen: Rect, anchor: Rect, title: &str, hint: &str) -> Option<Rect> {
     if width == 0 {
         return None;
     }
-    let height = 5.min(screen.height);
+    let height = 3.min(screen.height);
     let below = anchor.y.saturating_add(1);
     let y = if below.saturating_add(height) <= screen.bottom() {
         below

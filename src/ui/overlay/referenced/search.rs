@@ -169,6 +169,7 @@ pub fn render_referenced_search(
     search: &ReferencedFolderSearch,
 ) -> Option<(u16, u16)> {
     let layout = referenced_search_layout(screen, search)?;
+    widgets::modal::dim_background(frame, screen);
     widgets::clear::render(frame, layout.area);
     let block = Block::bordered().border_style(style::accent());
     frame.render_widget(block, layout.area);
@@ -183,7 +184,7 @@ pub fn render_referenced_search(
                 1,
             ),
             text::REFERENCED_SEARCH_TITLE,
-            style::border_title(),
+            style::strong(),
         );
         if let Some(scope) = search_scope_name(search) {
             let available = usize::from(layout.area.width.saturating_sub(4))
@@ -196,16 +197,10 @@ pub fn render_referenced_search(
                     frame,
                     Rect::new(scope_x, header_y, scope_w, 1),
                     &clipped,
-                    style::border_title(),
+                    style::muted(),
                 );
             }
         }
-        crate::ui::widgets::modal::paint_divider(
-            frame.buffer_mut(),
-            layout.area,
-            layout.area.y + 2,
-            style::accent(),
-        );
     }
     // 顶部范围路径 + 右端原始路径复制按钮；截断提示紧贴复制按钮左侧（始终可见）。
     let truncated = search
@@ -371,7 +366,7 @@ fn referenced_entry_address(entry: &ReferencedEntry, width: usize) -> String {
     format!("{prefix}{}", text::ellipsize_middle(&parent, available))
 }
 
-/// 渲染内容搜索弹窗底栏（上方 `├───┤` 分割线 + 快捷键提示行，左右边框保留）。
+/// 渲染内容搜索弹窗底栏快捷键提示行（无 `├───┤` 贯穿线，保留 1 行呼吸空白）。
 pub fn render_referenced_search_footer(
     frame: &mut Frame<'_>,
     screen: Rect,
@@ -380,12 +375,6 @@ pub fn render_referenced_search_footer(
     let Some(layout) = referenced_search_layout(screen, search) else {
         return;
     };
-    crate::ui::widgets::modal::paint_divider(
-        frame.buffer_mut(),
-        layout.area,
-        layout.area.bottom().saturating_sub(3),
-        style::accent(),
-    );
     let y = layout.area.bottom().saturating_sub(2);
     paint_text(
         frame,

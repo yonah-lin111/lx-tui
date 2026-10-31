@@ -1,9 +1,12 @@
-//! 模态容器组件：居中定位、清底、边框与标题；内容由调用方在 `inner` 绘制。
+//! 模态容器组件：背景压暗、居中定位、清底、边框与标题；内容由调用方在 `inner` 绘制。
+//!
+//! 布局对齐 herdr `render_modal_shell` + `render_modal_header`：
+//! 底层屏幕施加 `DIM` 压暗，模态框为直角边框（普通强调色 / 危险操作红色），
+//! 标题位于顶边框内首行加粗显示，标题与内容之间留 1 行空白呼吸区，无 `├───┤` 贯穿线与 `[✕]` 按钮。
 
 use ratatui::Frame;
-use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, Paragraph};
 
@@ -17,10 +20,22 @@ pub struct ModalShell {
     pub inner: Rect,
 }
 
+/// 将底层区域所有单元格压暗（对齐 herdr `dim_background`）。
+pub fn dim_background(frame: &mut Frame<'_>, area: Rect) {
+    let buf = frame.buffer_mut();
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_style(cell.style().add_modifier(Modifier::DIM));
+            }
+        }
+    }
+}
+
 /// 居中模态几何；屏幕放不下（宽 < 4 或高 < 3）返回 None。
 ///
-/// 当高度充裕（≥ 6 行）时，顶部预留 3 行（`┌──┐` + `│ Title [✕] │` + `├──┤`），
-/// `inner` 从 `area.y + 3` 起算并包含底栏按钮行。
+/// 当高度充裕（≥ 6 行）时，顶部预留 3 行（`┌──┐` + 粗体标题行 + 1 行空白间隔），
+/// `inner` 从 `area.y + 3` 起算并包含底部按钮行。
 pub fn layout(screen: Rect, width: u16, height: u16) -> Option<ModalShell> {
     let width = width.min(screen.width);
     let height = height.min(screen.height);
@@ -46,16 +61,32 @@ pub fn layout(screen: Rect, width: u16, height: u16) -> Option<ModalShell> {
     Some(ModalShell { area, inner })
 }
 
-/// 渲染清底、强调色边框、顶栏标题行、标题下方分割线与右上角关闭按钮；
-/// 内容由调用方绘制在 `shell.inner`。
+/// 渲染常规模态壳：底层压暗、清底、强调色边框与内框首行粗体标题。
 pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
+    render_with_style(frame, shell, title, style::accent(), style::strong());
+}
+
+/// 渲染危险确认模态壳：底层压暗、清底、红色边框与内框首行红色粗体标题（对齐 herdr 确认弹窗）。
+pub fn render_danger(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
+    let danger = style::error().add_modifier(Modifier::BOLD);
+    render_with_style(frame, shell, title, danger, danger);
+}
+
+fn render_with_style(
+    frame: &mut Frame<'_>,
+    shell: &ModalShell,
+    title: &str,
+    border_style: Style,
+    title_style: Style,
+) {
+    dim_background(frame, frame.area());
     clear::render(frame, shell.area);
-    let block = Block::bordered().border_style(style::accent());
+    let block = Block::bordered().border_style(border_style);
     frame.render_widget(block, shell.area);
-    if shell.area.height >= 6 && shell.area.width >= 4 {
-        let fitted = text::ellipsize(title, usize::from(shell.area.width.saturating_sub(7)));
+    if shell.area.height >= 4 && shell.area.width >= 4 {
+        let fitted = text::ellipsize(title, usize::from(shell.area.width.saturating_sub(4)));
         frame.render_widget(
-            Paragraph::new(Span::styled(fitted, style::border_title())),
+            Paragraph::new(Span::styled(fitted, title_style)),
             Rect::new(
                 shell.area.x + 2,
                 shell.area.y + 1,
@@ -63,75 +94,7 @@ pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
                 1,
             ),
         );
-        paint_divider(
-            frame.buffer_mut(),
-            shell.area,
-            shell.area.y + 2,
-            style::accent(),
-        );
     }
-    // 底栏按钮行上方的分割线（按钮行位于 `bottom - 2`）。
-    if shell.area.height >= 6 {
-        paint_divider(
-            frame.buffer_mut(),
-            shell.area,
-            shell.area.bottom().saturating_sub(3),
-            style::accent(),
-        );
-    }
-    if let Some(rect) = close_button_rect(shell.area) {
-        frame.render_widget(
-            Paragraph::new(Span::styled(text::MODAL_CLOSE, style::accent())),
-            rect,
-        );
-    }
-}
-
-/// 在 `y` 行绘制 `├───┤` 分割线（与左右外框衔接）。
-pub(crate) fn paint_divider(buf: &mut Buffer, area: Rect, y: u16, border_style: Style) {
-    if area.width < 2 || y <= area.y || y >= area.bottom().saturating_sub(1) {
-        return;
-    }
-    let right = area.right().saturating_sub(1);
-    for x in area.x..=right {
-        let ch = if x == area.x {
-            '├'
-        } else if x == right {
-            '┤'
-        } else {
-            '─'
-        };
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.set_char(ch);
-            cell.set_style(border_style);
-        }
-    }
-}
-
-/// 右上角关闭按钮矩形（`[✕]`，3 列，右侧留 1 列内边距）；高度 ≥ 6 时位于标题行（`area.y + 1`），否则位于 `area.y`。
-pub fn close_button_rect(area: Rect) -> Option<Rect> {
-    let y = if area.height >= 6 {
-        area.y.saturating_add(1)
-    } else {
-        area.y
-    };
-    (area.width >= 10 && y < area.bottom()).then_some(Rect::new(
-        area.right().saturating_sub(5),
-        y,
-        3,
-        1,
-    ))
-}
-
-/// 命中右上角关闭按钮。
-pub fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
-    if area.width < 10 {
-        return false;
-    }
-    let x = area.right().saturating_sub(5);
-    Rect::new(x, area.y, 3, 1).contains((column, row).into())
-        || (area.height >= 6
-            && Rect::new(x, area.y.saturating_add(1), 3, 1).contains((column, row).into()))
 }
 
 /// 按钮行：按标签宽度水平居中排布；`row_offset` 为相对内容区顶部的行号。

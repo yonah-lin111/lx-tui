@@ -364,22 +364,37 @@ fn render_bordered_header(
             }
         }
     }
-    crate::ui::widgets::modal::paint_divider(buf, rect, rect.y.saturating_add(2), style::muted());
+    paint_divider(buf, rect, rect.y.saturating_add(2), style::muted());
 }
 
 /// 绘制有边框命令面板的底栏（上方 `├───┤` 分割线 + `│ footer │`）。
 fn render_bordered_footer(buf: &mut Buffer, rect: Rect, footer: &str) {
-    crate::ui::widgets::modal::paint_divider(
-        buf,
-        rect,
-        rect.bottom().saturating_sub(3),
-        style::muted(),
-    );
+    paint_divider(buf, rect, rect.bottom().saturating_sub(3), style::muted());
     let y = rect.bottom().saturating_sub(2);
     let max_w = usize::from(rect.width.saturating_sub(4));
     if max_w > 0 {
         let clipped = text::truncate_to_width(footer, max_w);
         buf.set_stringn(rect.x.saturating_add(2), y, &clipped, max_w, style::muted());
+    }
+}
+
+fn paint_divider(buf: &mut Buffer, area: Rect, y: u16, border_style: Style) {
+    if area.width < 2 || y <= area.y || y >= area.bottom().saturating_sub(1) {
+        return;
+    }
+    let right = area.right().saturating_sub(1);
+    for x in area.x..=right {
+        let ch = if x == area.x {
+            '├'
+        } else if x == right {
+            '┤'
+        } else {
+            '─'
+        };
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.set_char(ch);
+            cell.set_style(border_style);
+        }
     }
 }
 

@@ -18,17 +18,18 @@ const TITLE: &str = "workspace";
 fn layout_sizes_to_longest_label_with_minimum_width() {
     let menu = layout(SCREEN, (0, 0), TITLE, &["Rename", "Close"]);
     assert_eq!(menu.area.width, MIN_WIDTH);
-    assert_eq!(menu.area.height, 6);
+    assert_eq!(menu.area.height, 4);
     assert_eq!(menu.item_rects.len(), 2);
-    assert_eq!(menu.item_rects[0].y, 3);
-    assert_eq!(menu.item_rects[1].y, 4);
+    assert_eq!(menu.item_rects[0].y, 1);
+    assert_eq!(menu.item_rects[1].y, 2);
     assert_eq!(menu.item_rects[0].width, MIN_WIDTH - 2);
 
     let wide = layout(SCREEN, (0, 0), TITLE, &["a very long menu entry label"]);
     assert_eq!(wide.area.width, 32);
 
+    // 对齐 herdr 右键菜单：不显示标题行，宽度只由菜单项决定，不被长标题撑宽。
     let long_title = layout(SCREEN, (0, 0), &"t".repeat(40), &["Close"]);
-    assert_eq!(long_title.area.width, 44);
+    assert_eq!(long_title.area.width, MIN_WIDTH);
 }
 
 #[test]
@@ -53,14 +54,12 @@ fn layout_shrinks_to_small_screen() {
 #[test]
 fn item_at_hits_rows_inside_border_only() {
     let menu = layout(SCREEN, (10, 5), TITLE, &["Rename", "Close"]);
-    assert_eq!(item_at(&menu, 11, 8), Some(0));
-    assert_eq!(item_at(&menu, 11, 9), Some(1));
-    assert_eq!(item_at(&menu, 10, 8), None);
+    assert_eq!(item_at(&menu, 11, 6), Some(0));
+    assert_eq!(item_at(&menu, 11, 7), Some(1));
+    assert_eq!(item_at(&menu, 10, 6), None);
     assert_eq!(item_at(&menu, 11, 5), None);
-    assert_eq!(item_at(&menu, 11, 6), None);
-    assert_eq!(item_at(&menu, 11, 7), None);
-    assert_eq!(item_at(&menu, 11, 10), None);
-    assert_eq!(item_at(&menu, 100, 8), None);
+    assert_eq!(item_at(&menu, 11, 8), None);
+    assert_eq!(item_at(&menu, 100, 6), None);
 }
 
 #[test]
@@ -71,10 +70,9 @@ fn layout_measures_display_width_for_wide_labels() {
 }
 
 #[test]
-fn layout_sizes_title_by_display_width() {
-    // 7 个 CJK 字符 = 14 显示列 + 4 = 18，标题不再按字符数低估。
+fn layout_ignores_title_width() {
     let menu = layout(SCREEN, (0, 0), "工作区菜单标题", &["Close"]);
-    assert_eq!(menu.area.width, 18);
+    assert_eq!(menu.area.width, MIN_WIDTH);
 }
 
 #[test]
@@ -109,14 +107,8 @@ fn render_draws_border_title_labels_and_overlay_selection() {
     let text_at = |x: u16, y: u16| buffer[(x, y)].symbol().to_string();
     assert_eq!(text_at(menu.area.x, menu.area.y), "┌");
     assert_eq!(text_at(menu.area.right() - 1, menu.area.y), "┐");
-    assert_eq!(text_at(menu.area.x, menu.area.y + 2), "├");
-    assert_eq!(text_at(menu.area.right() - 1, menu.area.y + 2), "┤");
     assert_eq!(text_at(menu.area.x, menu.area.bottom() - 1), "└");
     assert_eq!(text_at(menu.area.right() - 1, menu.area.bottom() - 1), "┘");
-    let title_row: String = (menu.area.x..menu.area.right())
-        .map(|x| text_at(x, menu.area.y + 1))
-        .collect();
-    assert!(title_row.contains(TITLE), "{title_row}");
     assert_eq!(buffer[(menu.area.x, menu.area.y)].bg, Color::Reset);
     assert_eq!(
         buffer[(menu.item_rects[0].x, menu.item_rects[0].y)].bg,
@@ -129,11 +121,11 @@ fn render_draws_border_title_labels_and_overlay_selection() {
     let row: String = (menu.item_rects[0].x..menu.item_rects[0].right())
         .map(|x| text_at(x, menu.item_rects[0].y))
         .collect();
-    assert_eq!(row.trim_end(), "Rename");
+    assert_eq!(row.trim_end(), " Rename");
     let close: String = (menu.item_rects[1].x..menu.item_rects[1].right())
         .map(|x| text_at(x, menu.item_rects[1].y))
         .collect();
-    assert_eq!(close.trim_end(), "Close");
+    assert_eq!(close.trim_end(), " Close");
     for x in menu.item_rects[1].x..menu.item_rects[1].right() {
         let cell = &buffer[(x, menu.item_rects[1].y)];
         assert!(!cell.modifier.contains(Modifier::REVERSED), "x={x}");

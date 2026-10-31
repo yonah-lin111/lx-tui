@@ -617,7 +617,7 @@ fn tooltip_over_prompt_search_hides_hardware_cursor() {
 fn toast_over_prompt_search_hides_hardware_cursor() {
     let mut state = focused_tree_state();
     let view = view_for(&state);
-    let message = "x".repeat(usize::from(view.prompt.width.saturating_sub(6)));
+    let message = "x".repeat(usize::from(view.prompt.width.saturating_sub(8)));
     let anchor = state.prompt.id();
     update::show_toast(
         &mut state,
@@ -2481,16 +2481,15 @@ fn pane_border_agent_label_absent_without_agent() {
     );
 }
 
-/// 浮层顶栏标题单元格：淡蓝色（Cyan + dim）、非粗体，保持透明底色。
-fn assert_overlay_title(buffer: &ratatui::buffer::Buffer, area: Rect) {
+/// 模态内框首行标题：粗体正文色、透明底色（对齐 herdr `render_modal_header`）。
+fn assert_modal_header_title(buffer: &ratatui::buffer::Buffer, area: Rect) {
     let cell = &buffer[(area.x + 2, area.y + 1)];
     assert!(
-        cell.modifier.contains(ratatui::style::Modifier::DIM),
-        "边框标题必须 dim: {cell:?}"
+        cell.modifier.contains(ratatui::style::Modifier::BOLD),
+        "模态标题必须加粗: {cell:?}"
     );
-    assert_eq!(cell.fg, ratatui::style::Color::Cyan);
+    assert_eq!(cell.fg, ratatui::style::Color::Reset);
     assert_eq!(cell.bg, ratatui::style::Color::Reset);
-    assert!(!cell.modifier.contains(ratatui::style::Modifier::BOLD));
 }
 
 #[test]
@@ -2525,23 +2524,19 @@ fn focused_pane_title_uses_soft_blue_style() {
 }
 
 #[test]
-fn overlay_border_titles_use_soft_blue_style() {
+fn overlay_menu_has_no_title_and_modal_uses_bold_header() {
     let screen = Rect::new(0, 0, 100, 24);
 
-    // 右键菜单顶边框标题。
+    // 右键菜单：无标题栏，首行内部直接是菜单项。
     let mut state = AppState::demo();
     update::open_workspace_menu(&mut state, 0, (5, 5));
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu overlay expected");
     };
     let menu_layout = overlay::menu_layout(&state, screen, menu);
-    let buffer = render_buffer(&state);
-    assert_overlay_title(&buffer, menu_layout.area);
+    assert_eq!(menu_layout.item_rects[0].y, menu_layout.area.y + 1);
 
-    // 模态（重命名）顶边框标题。
-    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
-        panic!("menu overlay expected");
-    };
+    // 模态（重命名）顶栏粗体标题。
     let rename_index = menu
         .commands
         .iter()
@@ -2551,7 +2546,7 @@ fn overlay_border_titles_use_soft_blue_style() {
     update::activate_menu(&mut state);
     let shell = overlay::rename_shell(screen).expect("rename modal visible");
     let buffer = render_buffer(&state);
-    assert_overlay_title(&buffer, shell.area);
+    assert_modal_header_title(&buffer, shell.area);
 }
 
 /// 工作区 git 元数据（侧栏分组渲染测试用）。

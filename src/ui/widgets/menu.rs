@@ -21,22 +21,20 @@ pub struct MenuLayout {
     pub item_rects: Vec<Rect>,
 }
 
-/// 按锚点、标题与标签计算菜单几何；锚点与尺寸均夹取到屏幕内。
+/// 按锚点与标签计算菜单几何；锚点与尺寸均夹取到屏幕内。
 ///
-/// 有标题时顶部占 3 行（`┌──┐` + `│ Title ─── │` + `├──┤`），无标题占 1 行顶边。
-pub fn layout(screen: Rect, anchor: (u16, u16), title: &str, labels: &[&str]) -> MenuLayout {
+/// 对齐 herdr 右键菜单：无标题行与内部横线，仅上下直角边框包裹列表项（高 = 项数 + 2）。
+pub fn layout(screen: Rect, anchor: (u16, u16), _title: &str, labels: &[&str]) -> MenuLayout {
     let max_label = labels
         .iter()
         .map(|label| label.width())
         .max()
         .unwrap_or_default();
-    let max_title = title.width().saturating_add(4);
-    let width = u16::try_from(max_label.saturating_add(HORIZONTAL_PADDING).max(max_title))
+    let width = u16::try_from(max_label.saturating_add(HORIZONTAL_PADDING))
         .unwrap_or(u16::MAX)
         .max(MIN_WIDTH)
         .min(screen.width);
-    let header_rows: usize = if title.is_empty() { 1 } else { 3 };
-    let height = u16::try_from(labels.len().saturating_add(header_rows + 1))
+    let height = u16::try_from(labels.len().saturating_add(2))
         .unwrap_or(u16::MAX)
         .min(screen.height);
     let x = anchor
@@ -46,7 +44,7 @@ pub fn layout(screen: Rect, anchor: (u16, u16), title: &str, labels: &[&str]) ->
         .1
         .clamp(screen.y, screen.y + screen.height.saturating_sub(height));
     let area = Rect::new(x, y, width, height);
-    let item_top = area.y.saturating_add(header_rows as u16);
+    let item_top = area.y.saturating_add(1);
     let item_rects = (0..labels.len() as u16)
         .map(|index| {
             Rect::new(
@@ -79,11 +77,11 @@ pub fn render(
     render_with_confirm(frame, layout, title, labels, selected, None);
 }
 
-/// 渲染菜单（支持指定某一项处于行内二次确认态）。
+/// 渲染菜单（支持指定某一项处于行内二次确认态；对齐 herdr 右键菜单：无标题栏、左侧 1 列内边距）。
 pub fn render_with_confirm(
     frame: &mut Frame<'_>,
     layout: &MenuLayout,
-    title: &str,
+    _title: &str,
     labels: &[&str],
     selected: Option<usize>,
     confirming: Option<usize>,
@@ -91,27 +89,8 @@ pub fn render_with_confirm(
     clear::render(frame, layout.area);
     let block = Block::bordered().border_style(style::accent());
     frame.render_widget(block, layout.area);
-    if !title.is_empty() && layout.area.height >= 4 && layout.area.width >= 4 {
-        let max_title = usize::from(layout.area.width.saturating_sub(4));
-        let fitted = text::ellipsize(title, max_title);
-        let title_rect = Rect::new(
-            layout.area.x + 2,
-            layout.area.y + 1,
-            layout.area.width.saturating_sub(4),
-            1,
-        );
-        frame.render_widget(
-            Paragraph::new(Span::styled(fitted, style::border_title())),
-            title_rect,
-        );
-        crate::ui::widgets::modal::paint_divider(
-            frame.buffer_mut(),
-            layout.area,
-            layout.area.y + 2,
-            style::accent(),
-        );
-    }
     let width = usize::from(layout.area.width.saturating_sub(2));
+    let text_budget = width.saturating_sub(1);
     for (index, label) in labels.iter().enumerate() {
         let Some(rect) = layout.item_rects.get(index) else {
             continue;
@@ -126,10 +105,15 @@ pub fn render_with_confirm(
         } else {
             style::text()
         };
-        let rendered = if label.width() <= width {
+        let fitted = if label.width() <= text_budget {
             (*label).to_string()
         } else {
-            text::ellipsize(label, width)
+            text::ellipsize(label, text_budget)
+        };
+        let rendered = if width > 0 {
+            format!(" {fitted}")
+        } else {
+            String::new()
         };
         let line = Line::from(Span::styled(rendered, item_style));
         frame.render_widget(Paragraph::new(line).style(item_style), *rect);

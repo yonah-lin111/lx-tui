@@ -127,9 +127,10 @@ pub fn referenced_menu_row_at(
         .map(|offset| layout.start + offset)
 }
 
-/// 渲染目录弹窗：边框标题与 prompt 列表式行（底边提示由调用方叠加）。
+/// 渲染目录弹窗：底层压暗、边框标题与 prompt 列表式行（底边提示由调用方叠加）。
 pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &ReferencedFolderMenu) {
     let layout = referenced_menu_layout(screen, menu);
+    widgets::modal::dim_background(frame, screen);
     clear::render(frame, layout.area);
     let block = Block::bordered().border_style(style::accent());
     frame.render_widget(block, layout.area);
@@ -143,13 +144,7 @@ pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &Refere
                 1,
             ),
             text::MENU_TITLE_REFERENCED_FOLDERS,
-            style::border_title(),
-        );
-        crate::ui::widgets::modal::paint_divider(
-            frame.buffer_mut(),
-            layout.area,
-            layout.area.y + 2,
-            style::accent(),
+            style::strong(),
         );
     }
     for (offset, rect) in layout.rows.iter().enumerate() {
@@ -177,21 +172,13 @@ pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &Refere
     }
 }
 
-/// 渲染目录弹窗底栏（上方 `├───┤` 分割线 + 快捷键提示行，左右边框保留）。
+/// 渲染目录弹窗底栏快捷键提示行（无 `├───┤` 贯穿线，保留 1 行呼吸空白）。
 pub fn render_referenced_menu_footer(
     frame: &mut Frame<'_>,
     screen: Rect,
     menu: &ReferencedFolderMenu,
 ) {
     let layout = referenced_menu_layout(screen, menu);
-    if layout.area.height >= 7 {
-        crate::ui::widgets::modal::paint_divider(
-            frame.buffer_mut(),
-            layout.area,
-            layout.area.bottom().saturating_sub(3),
-            style::accent(),
-        );
-    }
     let y = if layout.area.height >= 7 {
         layout.area.bottom().saturating_sub(2)
     } else {

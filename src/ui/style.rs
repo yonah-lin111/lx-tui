@@ -88,11 +88,49 @@ pub fn selection() -> Style {
         .bg(Color::Indexed(240))
 }
 
-/// 浮层内选中/悬停项：在 overlay_panel（Indexed 236）底色之上使用更高亮的中灰背景（Indexed 240）与高亮白字（Indexed 255）。
+/// 浮层内选中/悬停项：使用高亮中灰背景（Indexed 240）与高亮白字（Indexed 255）。
 pub fn overlay_selection() -> Style {
     Style::default()
         .fg(Color::Indexed(255))
         .bg(Color::Indexed(240))
+}
+
+/// 模态主按钮（实心强调色胶囊块：Cyan 底、黑字、加粗；对齐 herdr 的 primary action button）。
+pub fn button_primary() -> Style {
+    Style::default()
+        .fg(Color::Black)
+        .bg(Color::Cyan)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 模态危险确认主按钮（实心红底、亮白字、加粗；对齐 herdr 的 destructive action button）。
+pub fn button_danger() -> Style {
+    Style::default()
+        .fg(Color::Indexed(255))
+        .bg(Color::Red)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 模态次级按钮（实心暗灰 surface 底、亮白字、加粗；对齐 herdr 的 surface0 action button）。
+pub fn button_secondary() -> Style {
+    Style::default()
+        .fg(Color::Indexed(255))
+        .bg(Color::Indexed(238))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 模态单行输入框底条（实心暗色 surface 底、亮白字；对齐 herdr 的 surface0 输入条）。
+pub fn modal_input() -> Style {
+    Style::default()
+        .fg(Color::Indexed(255))
+        .bg(Color::Indexed(236))
+}
+
+/// 模态单行输入框占位文字（实心暗色 surface 底上的暗灰字）。
+pub fn modal_input_placeholder() -> Style {
+    Style::default()
+        .fg(Color::Indexed(244))
+        .bg(Color::Indexed(236))
 }
 
 /// 右键菜单项行内待确认态：深红底（Indexed 160）配亮白字（Indexed 255）加粗，对齐 lx-agent 的 dangerActive。

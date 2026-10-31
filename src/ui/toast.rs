@@ -1,11 +1,15 @@
 //! 全局 toast 覆盖层：渲染与命中几何共用；锚点容器内顶边框下方居中，放不下时降级屏幕顶部居中。
+//!
+//! 布局对齐 herdr `render_toast_notification` / `render_copy_feedback`：
+//! - 无标题（单行）：3 行高，`│ ● <message> │`（圆点取语义色、正文加粗）；
+//! - 有标题（双行）：4 行高，首行 `│ ● <title> │`（圆点语义色、标题加粗），次行 `│   <message> │`（缩进 2 列与标题对齐、次要色）；
+//! - 无 `├───┤` 分割线与 `[✕]` 关闭按钮，点击 toast 本身或外部即关闭。
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Widget};
+use ratatui::widgets::{Block, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::AppState;
@@ -15,6 +19,9 @@ use crate::layout::PaneId;
 use crate::ui::layout::ViewLayout;
 use crate::ui::widgets::clear;
 use crate::ui::{style, text};
+
+/// 盒宽相对文本内容的固定开销：左右边框 2 列 + 左右各 1 列留白 + 行首 `● ` 2 列 = 6 列。
+pub(crate) const FRAME_WIDTH: usize = 6;
 
 /// toast 覆盖层矩形；渲染与鼠标命中共用，保证所见即所点。
 ///
@@ -59,30 +66,36 @@ pub fn rect(
     ))
 }
 
-/// 绘制 toast 外框、标题行、标题下方分割线与右上角 `[✕]`；返回是否存在标题行。
+/// 绘制 toast 外框、首行语义色圆点 `●` 与可选标题行；返回是否存在独立标题行。
 ///
-/// 全局 toast 与 lx 窗格内 toast 共用这一份绘制，保证两者与模态弹窗/右键菜单同款：
-/// 直角边框、标题独占一行、标题下方 `├──┤`、`[✕]` 贴右端。
+/// 全局 toast 与 lx 窗格内 toast 共用这一份绘制，保证两者与 herdr toast 完全同款。
 pub(crate) fn draw_frame(buf: &mut Buffer, area: Rect, toast: &Toast) -> bool {
     let border = border_style(toast.kind);
     Block::bordered().border_style(border).render(area, buf);
-    let has_title = toast.title.is_some() && area.height >= 5;
-    if let Some(title) = toast.title.as_deref()
-        && has_title
-    {
-        let max = usize::from(area.width.saturating_sub(8));
-        let fitted = text::truncate_to_width(title, max);
+    if area.width >= 5 && area.height >= 3 {
         buf.set_stringn(
             area.x.saturating_add(2),
             area.y.saturating_add(1),
-            &fitted,
-            max,
-            title_style(toast.kind),
+            text::AGENT_STATUS_DOT,
+            1,
+            border,
         );
-        crate::ui::widgets::modal::paint_divider(buf, area, area.y.saturating_add(2), border);
     }
-    if let Some(rect) = close_button_rect_for(area, has_title) {
-        buf.set_stringn(rect.x, rect.y, text::MODAL_CLOSE, 3, border);
+    let has_title = toast.title.is_some() && area.height >= 4;
+    if let Some(title) = toast.title.as_deref()
+        && has_title
+    {
+        let max = usize::from(area.width).saturating_sub(FRAME_WIDTH);
+        if max > 0 {
+            let fitted = text::truncate_to_width(title, max);
+            buf.set_stringn(
+                area.x.saturating_add(4),
+                area.y.saturating_add(1),
+                &fitted,
+                max,
+                title_style(toast.kind),
+            );
+        }
     }
     has_title
 }
@@ -100,68 +113,46 @@ pub fn render(
     let area = rect(state, view, pane_rects, screen, config)?;
     let toast = state.toast.as_ref()?;
     clear::render(frame, area);
-    let has_title = draw_frame(frame.buffer_mut(), area, toast);
-    let body_y = if has_title { area.y + 3 } else { area.y + 1 };
-    let inner = Rect::new(
-        area.x + 1,
-        body_y,
-        area.width.saturating_sub(2),
-        area.bottom().saturating_sub(1).saturating_sub(body_y),
-    );
-    if inner.width == 0 || inner.height == 0 {
+    let buf = frame.buffer_mut();
+    let has_title = draw_frame(buf, area, toast);
+    let body_y = if has_title { area.y + 2 } else { area.y + 1 };
+    let max_width = usize::from(area.width).saturating_sub(FRAME_WIDTH);
+    if max_width == 0 || body_y >= area.bottom().saturating_sub(1) {
         return Some(area);
     }
-    let width = usize::from(inner.width);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            text::truncate_to_width(&toast.message, width),
-            style::text(),
-        )))
-        .alignment(Alignment::Center),
-        inner,
+    let body_style = if has_title {
+        style::muted()
+    } else {
+        style::strong()
+    };
+    let fitted = text::truncate_to_width(&toast.message, max_width);
+    buf.set_stringn(
+        area.x.saturating_add(4),
+        body_y,
+        &fitted,
+        max_width,
+        body_style,
     );
     Some(area)
 }
 
-/// 右上角关闭按钮矩形：有标题栏时落在标题栏行（`area.y + 1`），无标题时落在顶边框（`area.y`）。
-fn close_button_rect_for(area: Rect, has_title: bool) -> Option<Rect> {
-    let y = if has_title { area.y + 1 } else { area.y };
-    (area.width >= 10 && y < area.bottom()).then_some(Rect::new(
-        area.right().saturating_sub(5),
-        y,
-        3,
-        1,
-    ))
-}
-
-/// 命中 toast 右上角关闭按钮。
-pub fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
-    let has_title = area.height >= 5;
-    close_button_rect_for(area, has_title).is_some_and(|rect| rect.contains((column, row).into()))
-        || crate::ui::widgets::modal::close_button_at(area, column, row)
-}
-
-/// 边框语义色：三档独立 256 色（薰衣草紫 / 琥珀金橙 / 珊瑚玫红），不与项目主色调 Cyan 重叠。
+/// 边框与首行状态圆点语义色（Cyan / Yellow / Red）。
 pub(crate) fn border_style(kind: ToastKind) -> Style {
     style::toast_border(kind)
 }
 
-/// 标题语义色：与边框同色系、dim 且不加粗（对齐浮层标题）。
+/// 标题样式：与边框同色系或强调显示。
 pub(crate) fn title_style(kind: ToastKind) -> Style {
     style::toast_title(kind)
 }
 
-/// 盒尺寸：正文最长行与边框标题各自按显示列宽加边框与内边距取宽；有标题时含顶栏框共 5 行，无标题 3 行。
+/// 盒尺寸：按标题与正文显示宽度加 `FRAME_WIDTH`（6 列）取宽；无标题 3 行，有标题 4 行。
 fn box_size(toast: &Toast) -> (u16, u16) {
     let msg_w = toast.message.width();
-    let title_w = toast
-        .title
-        .as_deref()
-        .map(|t| t.width().saturating_add(4))
-        .unwrap_or_default();
-    let text = msg_w.max(title_w);
-    let width = u16::try_from(text.saturating_add(4)).unwrap_or(u16::MAX);
-    let height = if toast.title.is_some() { 5 } else { 3 };
+    let title_w = toast.title.as_deref().map(str::width).unwrap_or_default();
+    let text_w = msg_w.max(title_w);
+    let width = u16::try_from(text_w.saturating_add(FRAME_WIDTH)).unwrap_or(u16::MAX);
+    let height = if toast.title.is_some() { 4 } else { 3 };
     (width, height)
 }
 

@@ -183,9 +183,9 @@ fn rect_prefers_below_and_flips_above_last_row() {
     let hint = "new tab";
     let title = text::TOOLTIP_TITLE;
     let below = rect(screen, Rect::new(10, 5, 6, 1), title, hint).expect("rect resolves");
-    assert_eq!(below, Rect::new(10, 6, 11, 5));
+    assert_eq!(below, Rect::new(10, 6, 11, 3));
     let above = rect(screen, Rect::new(10, 23, 6, 1), title, hint).expect("rect resolves");
-    assert_eq!(above.y, 18);
+    assert_eq!(above.y, 20);
     assert!(above.bottom() <= screen.bottom());
 }
 
@@ -212,27 +212,22 @@ fn render_skips_until_visible_then_paints_panel_and_hint() {
 
     state.tooltip = Some(Tooltip::new(TooltipTarget::CollapseSidebar, now));
     let buffer = render_buffer(&state);
-    let top_before: String = (area.x..area.right())
-        .map(|x| buffer[(x, area.y)].symbol())
+    let row_before: String = (area.x + 1..area.right() - 1)
+        .map(|x| buffer[(x, area.y + 1)].symbol())
         .collect();
     assert!(
-        !top_before.contains(text::TOOLTIP_TITLE),
-        "未到显示时刻不绘制"
+        !row_before.contains(hint),
+        "未到显示时刻不绘制: {row_before:?}"
     );
 
     assert!(crate::app::update::tick(&mut state, now + TOOLTIP_DELAY));
     let buffer = render_buffer(&state);
     assert_eq!(buffer[(area.x, area.y)].symbol(), "┌");
-    assert_eq!(buffer[(area.x, area.y + 2)].symbol(), "├");
     assert_eq!(buffer[(area.right() - 1, area.y + 1)].symbol(), "│");
     assert_eq!(buffer[(area.x, area.y)].bg, Color::Reset);
     assert_eq!(buffer[(area.x + 1, area.y + 1)].bg, Color::Reset);
-    let top: String = (area.x..area.right())
-        .map(|x| buffer[(x, area.y + 1)].symbol())
-        .collect();
-    assert!(top.contains(text::TOOLTIP_TITLE), "顶栏框标题：{top:?}");
     let row: String = (area.x + 1..area.right() - 1)
-        .map(|x| buffer[(x, area.y + 3)].symbol())
+        .map(|x| buffer[(x, area.y + 1)].symbol())
         .collect();
     assert!(row.contains(hint), "正文包含提示文案：{row:?}");
 }
@@ -351,7 +346,7 @@ fn page_menu_border_chips_arm_and_render_tooltips() {
     let hint = text::tooltip_hint(TooltipTarget::PageMenuAdd, &state);
     let area = rect(SCREEN, layout.new_rect, text::TOOLTIP_TITLE, hint).expect("rect resolves");
     let row: String = (area.x + 1..area.right() - 1)
-        .map(|x| buffer[(x, area.y + 3)].symbol())
+        .map(|x| buffer[(x, area.y + 1)].symbol())
         .collect();
     assert!(row.contains(hint), "页码菜单按钮提示: {row:?}");
 }

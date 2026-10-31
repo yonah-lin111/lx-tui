@@ -86,9 +86,9 @@ fn page_labels(state: &AppState, menu: &PageMenu) -> Vec<PageLabel> {
         .collect()
 }
 
-/// 页码菜单可视页数（扣除顶边 + 标题行 + 分割线 + 底边共 4 行，每页一行）。
+/// 页码菜单可视页数（扣除顶边 + 标题行 + 底边共 3 行，每页一行）。
 pub fn page_menu_visible_pages(screen: Rect) -> usize {
-    usize::from(screen.height.saturating_sub(4))
+    usize::from(screen.height.saturating_sub(3))
 }
 
 /// 页窗口起点：光标停在页行时保持该页可见（靠底部对齐）；按钮行光标贴两端。
@@ -126,7 +126,7 @@ pub fn page_menu_layout(state: &AppState, screen: Rect, menu: &PageMenu) -> Page
     let interior = desired.min(screen.width.saturating_sub(2));
     let width = interior + 2;
     let shown = end - start;
-    let height = u16::try_from(4 + shown)
+    let height = u16::try_from(3 + shown)
         .unwrap_or(u16::MAX)
         .min(screen.height);
     let x = menu
@@ -156,8 +156,8 @@ pub fn page_menu_layout(state: &AppState, screen: Rect, menu: &PageMenu) -> Page
         new_width,
         1,
     );
-    let page_top = if area.height >= 4 {
-        area.y.saturating_add(3)
+    let page_top = if area.height >= 3 {
+        area.y.saturating_add(2)
     } else {
         area.y.saturating_add(1)
     };
@@ -209,7 +209,7 @@ pub(super) fn render_page_menu(
     crate::ui::widgets::clear::render(frame, layout.area);
     let block = ratatui::widgets::Block::bordered().border_style(style::accent());
     frame.render_widget(block, layout.area);
-    if layout.area.height >= 4 && layout.area.width >= 4 {
+    if layout.area.height >= 3 && layout.area.width >= 4 {
         paint_text(
             frame,
             Rect::new(
@@ -219,13 +219,7 @@ pub(super) fn render_page_menu(
                 1,
             ),
             text::MENU_TITLE_PAGES,
-            style::border_title(),
-        );
-        crate::ui::widgets::modal::paint_divider(
-            frame.buffer_mut(),
-            layout.area,
-            layout.area.y + 2,
-            style::accent(),
+            style::strong(),
         );
     }
     let last = menu.rows.len().saturating_sub(1);

@@ -434,14 +434,21 @@ fn borderless_inner_rect(rect: Rect, footer_rows: u16) -> Rect {
 6. **`src/ui/tooltip.rs`**：
    - `clear::render(frame, area)` 清底后，`Block::bordered()` 移除 `.style(style::overlay_panel())`。
 
-### 4.4 浮层顶栏/底栏（标题行 + 标题下方 `├──┤`，快捷键上方 `├──┤`）
+### 4.4 对齐 `herdr-master` 的弹窗、右键菜单与 Toast 布局重构
 
-除 `lx` 输入框上方的无边框命令面板外，所有有 `title` 或底部快捷键/按钮的浮层（右键菜单、页码菜单、引用文件夹菜单/搜索弹窗、居中模态弹窗、全局与 `lx` 窗格内 Toast、Tooltip、Prompt 有边框命令面板、`lx` Markdown 块面板）：
-- **顶栏**：`┌───┐`（`y`）+ 标题行（`y + 1`：左侧标题、右侧关闭按钮，中间留空不画横线）+ `├───┤`（`y + 2`），内容区从 `y + 3` 开始；标题行左右外框 `│` 贯通。
-- **底栏**：`├───┤`（`bottom - 3`）+ `│ footer / buttons │`（`bottom - 2`）+ `└───┘`（`bottom - 1`）；内容与分割线之间**不留空行**。
-- 关闭按钮 `[✕]` 与左右边框各留 1 列内边距（`right - 5` 起 3 列）。
-- 无底栏的浮层（菜单、toast、tooltip）在标题分割线下直接接内容，底部无多余空行。
-- **Toast 统一到浮层样式**：全局 toast 与 `lx` 窗格内 toast 共用 `ui::toast::draw_frame` 绘制外框、标题行、标题下方 `├──┤` 与右上角 `[✕]`；边框默认用浮层强调色（Cyan），`warning` 黄、`danger` 红，标题与边框同色系但 dim。
+1. **右键菜单（`src/ui/widgets/menu.rs`）**：
+   - 完全对齐 `herdr-master` `render_context_menu`：移除顶部标题栏与 `├───┤` 分割线，仅保留直角强调色外框包裹列表项（`height = items + 2`），每项左侧预留 1 列内边距（`│ Rename │`），宽度仅由菜单项决定。
+2. **模态弹窗（`src/ui/widgets/modal.rs`、`src/ui/overlay/dialog.rs`、`worktree.rs`、`save_draft.rs`、`referenced/*.rs`）**：
+   - 打开模态弹窗时对底层画面施加 `DIM` 压暗（`modal::dim_background`），浮层面板本身清底保持透明底色（`Color::Reset`）。
+   - 移除贯穿外框的 `├───┤` 分割线与右上角 `[✕]` 按钮；标题位于内框首行粗体显示（危险确认弹窗使用红框 + 红色粗体标题 `render_danger`），标题与主体内容之间保留 1 行空白呼吸区。
+   - 模态单行输入框整行铺设暗色 `surface` 底条（`style::modal_input()`，`Indexed(236)`）。
+   - 底部按钮改为 `herdr-master` 同款实心胶囊按钮（` ↵ save ` / ` ^c clear ` / ` esc cancel `，无方括号）：主按钮使用强调色实心块（`style::button_primary()`）或危险红实心块（`style::button_danger()`），次按钮使用暗灰 `surface` 实心块（`style::button_secondary()`）。
+3. **Toast（`src/ui/toast.rs`、`src/ui/main_content/lx/toast.rs`）**：
+   - 对齐 `herdr-master` `render_toast_notification` / `render_copy_feedback`：移除 `├───┤` 分割线与 `[✕]` 关闭按钮（点击 toast 本身或外部即关闭）。
+   - 无标题 Toast 为 3 行高：`│ ● <message> │`（圆点取语义色 Cyan/Yellow/Red，正文加粗）。
+   - 有标题 Toast 为 4 行高：首行 `│ ● <title> │`（圆点取语义色，标题加粗），次行 `│   <message> │`（缩进 2 列与标题对齐，次要色；`lx` 窗格内支持多行折行）。
+4. **Tooltip 与页码菜单（`src/ui/tooltip.rs`、`src/ui/overlay/page_menu.rs`）**：
+   - Tooltip 恢复为无标题栏、无分割线的 3 行紧凑直角盒；页码菜单移除 `├───┤` 分割线，顶栏内左置粗体标题、右置 `[add]`/`[del]` 按钮。
 
 ### 4.5 统一快捷键文案格式与移除 Prompt 模板块/补充块背景色
 

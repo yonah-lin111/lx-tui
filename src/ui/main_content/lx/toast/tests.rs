@@ -102,20 +102,17 @@ fn draw_clears_background_and_paints_dedicated_border_and_close_button() {
             );
         }
     }
-    // 边框语义红（danger）。
+    // 边框与首行圆点均为语义红（danger）。
     assert_eq!(
         Some(buffer[(box_area.x, box_area.y)].fg),
         crate::ui::style::toast_border(ToastKind::Danger).fg
     );
-    // 关闭按钮在右上角且与边框同色。
-    let close = crate::ui::widgets::modal::close_button_rect(box_area).expect("button");
-    assert!(close_button_at(box_area, close.x, close.y));
-    let label: String = (close.x..close.right())
-        .map(|x| buffer[(x, close.y)].symbol())
-        .collect();
-    assert_eq!(label, text::MODAL_CLOSE);
     assert_eq!(
-        Some(buffer[(close.x, close.y)].fg),
+        buffer[(box_area.x + 2, box_area.y + 1)].symbol(),
+        text::AGENT_STATUS_DOT
+    );
+    assert_eq!(
+        Some(buffer[(box_area.x + 2, box_area.y + 1)].fg),
         crate::ui::style::toast_border(ToastKind::Danger).fg
     );
 }
@@ -137,12 +134,13 @@ fn kinds_share_the_global_palette() {
     }
 }
 
-/// 标题参与宽度计算，且不会盖住右上角关闭按钮。
+/// 有标题 toast 为 4 行紧凑盒：首行 `● <title>`、次行缩进正文。
 #[test]
-fn titled_toast_keeps_the_close_button_visible() {
+fn titled_toast_renders_dot_title_and_indented_body() {
     let area = area(40, 10);
     let toast = toast(ToastKind::Warning, "watch out").with_title("Clipboard");
     let box_area = rect(area, &toast).expect("fits");
+    assert_eq!(box_area.height, 4);
     let mut terminal = Terminal::new(TestBackend::new(50, 16)).expect("backend");
     terminal
         .draw(|frame| {
@@ -150,12 +148,14 @@ fn titled_toast_keeps_the_close_button_visible() {
         })
         .expect("draw");
     let buffer = terminal.backend().buffer().clone();
-    let close_x = box_area.right() - 5;
-    let close_y = box_area.y + 1;
-    let label: String = (close_x..close_x + 3)
-        .map(|x| buffer[(x, close_y)].symbol())
+    let title_row: String = (box_area.x + 1..box_area.right() - 1)
+        .map(|x| buffer[(x, box_area.y + 1)].symbol())
         .collect();
-    assert_eq!(label, text::MODAL_CLOSE, "标题不得侵占 [✕]");
+    let body_row: String = (box_area.x + 1..box_area.right() - 1)
+        .map(|x| buffer[(x, box_area.y + 2)].symbol())
+        .collect();
+    assert!(title_row.contains("● Clipboard"), "{title_row:?}");
+    assert!(body_row.contains("  watch out"), "{body_row:?}");
 }
 
 /// 盒宽按“正文 + 左右边框 + 左右内边距”计算，不把正文挤成提前折行。

@@ -74,11 +74,11 @@
 
 - [x] 更新单元测试与集成测试中的圆角字符断言、无边框面板高度与顶线行号断言、浮层透明背景断言及 `settings.css` 样式断言
 - [x] 同步更新 `docs/standards/tui-design-requirements.md`
-## 阶段六：补充需求（顶栏/底栏框、快捷键格式统一、移除模板块底色）
+## 阶段六：补充需求（对齐 `herdr-master` 重构弹窗、右键菜单与 Toast 布局）
 
-- [x] 为模态弹窗、右键菜单、页码菜单、引用文件夹弹窗、Toast、Tooltip、Prompt 命令面板与 `lx` md 块面板统一顶栏/底栏（标题行保留左右边框、不画横线，标题下方与快捷键上方各一条 `├───┤` 分割线，内容与分割线之间不留空行）
-- [x] 将所有快捷键文案统一为 `符号 功能`（纯文本底栏用 ` · ` 分隔，可点击按钮保留 `[符号 功能]`）
+- [x] 右键菜单对齐 `herdr-master`：移除标题栏与 `├───┤` 分割线，改为纯列表（高 = `items + 2`）+ 左侧 1 列内边距
+- [x] 模态弹窗对齐 `herdr-master`：移除 `[✕]` 与 `├───┤` 贯穿线，启用底层 `DIM` 压暗、内框粗体标题（危险确认弹窗用红框红标题）、暗色 `surface` 输入条与实心胶囊按钮（` ↵ save ` / ` esc cancel `）
+- [x] Toast（全局与 `lx` 窗格内）对齐 `herdr-master`：移除 `[✕]` 与 `├───┤` 分割线，改为紧凑 `● <message>`（3 行）与 `● <title>` + 缩进 `<message>`（4 行），点击即关
 - [x] 移除 `src/ui/prompt.rs` 中模板块/补充块的整行背景色渲染 `paint_block_background`
-- [x] 重构 toast：全局与 `lx` 共用 `draw_frame`，对齐弹窗/右键菜单的标题行 + 分割线 + `[✕]`，边框改为强调色/黄/红
-- [x] 更新并补充对应测试，完成 `cargo fmt`、`cargo clippy`、`cargo test` 与 git commit
+- [x] 更新并补充对应测试，完成 `cargo fmt`、`cargo clippy`、`cargo test` 验证
 

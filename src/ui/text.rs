@@ -410,8 +410,8 @@ pub const RENAME_TAB_TITLE: &str = "Rename tab";
 /// 信任工作区模态：标题、问题与按钮。
 pub const TRUST_WORKSPACE_TITLE: &str = "Trust workspace";
 pub const TRUST_WORKSPACE_QUESTION: &str = "Do you trust the files in this folder?";
-pub const BUTTON_TRUST: &str = "[↵ trust & open]";
-pub const BUTTON_DONT_TRUST: &str = "[esc don't trust]";
+pub const BUTTON_TRUST: &str = " ↵ trust & open ";
+pub const BUTTON_DONT_TRUST: &str = " esc don't trust ";
 /// 启动信任页（行内，进入应用前）：标题行、安全提示、说明、可选项与页脚。
 pub const TRUST_CONSOLE_HEADING: &str = "Accessing workspace:";
 /// 安全提示段落；`:` 前的前缀在渲染时加粗强调。
@@ -441,19 +441,18 @@ pub const WORKTREE_STATUS_OPEN: &str = "open";
 pub const WORKTREE_STATUS_DETACHED: &str = "detached";
 pub const WORKTREE_STATUS_ROOT: &str = "root";
 
-/// 模态底部按钮：快捷键符号在前、功能名在后。
-pub const BUTTON_SAVE: &str = "[↵ save]";
-pub const BUTTON_CREATE: &str = "[↵ create]";
-pub const BUTTON_CLEAR: &str = "[^c clear]";
-pub const BUTTON_CANCEL: &str = "[esc cancel]";
-pub const BUTTON_CONFIRM: &str = "[↵ confirm]";
+/// 模态底部胶囊按钮：快捷键符号在前、功能名在后，左右各留 1 列内边距（对齐 herdr 实心胶囊按钮）。
+pub const BUTTON_SAVE: &str = " ↵ save ";
+pub const BUTTON_CREATE: &str = " ↵ create ";
+pub const BUTTON_CLEAR: &str = " ^c clear ";
+pub const BUTTON_CANCEL: &str = " esc cancel ";
+pub const BUTTON_CONFIRM: &str = " ↵ confirm ";
 /// `/resume` 会话编辑模态的删除与二次确认按钮。
-pub const BUTTON_DELETE: &str = "[^d delete]";
-pub const BUTTON_CONFIRM_DELETE: &str = "[↵ confirm del]";
-/// 模态浮层与 toast 右上角的关闭按钮图标；与模板块删除按钮（`TEMPLATE_BUTTON_DEL`）
-/// 共用同一字符，一致性由 `text::tests` 的回归测试钉住。
+pub const BUTTON_DELETE: &str = " ^d delete ";
+pub const BUTTON_CONFIRM_DELETE: &str = " ↵ confirm del ";
+/// 模态关闭图标常量（与模板块删除按钮 `TEMPLATE_BUTTON_DEL` 保持同字符）。
 pub const MODAL_CLOSE: &str = "[✕]";
-pub const BUTTON_OPEN: &str = "[↵ open]";
+pub const BUTTON_OPEN: &str = " ↵ open ";
 
 /// 删除提示词页确认问题文案。
 pub fn confirm_delete_page_question(name: &str) -> String {

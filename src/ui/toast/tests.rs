@@ -61,12 +61,12 @@ fn anchored_toast_centers_below_container_top_border() {
     assert_eq!(rect.height, 3);
     assert_eq!(
         usize::from(rect.width),
-        text::TOAST_COPIED.chars().count() + 4
+        text::TOAST_COPIED.chars().count() + FRAME_WIDTH
     );
 }
 
 #[test]
-fn titled_toast_keeps_five_rows_and_fits_title() {
+fn titled_toast_keeps_four_rows_and_fits_title() {
     let mut state = AppState::demo();
     update::show_toast(
         &mut state,
@@ -83,15 +83,15 @@ fn titled_toast_keeps_five_rows_and_fits_title() {
         &Config::default(),
     )
     .expect("toast area is resolvable");
-    assert_eq!(rect.height, 5);
+    assert_eq!(rect.height, 4);
     assert_eq!(
         usize::from(rect.width),
-        text::TOAST_COPIED.chars().count() + 4
+        text::TOAST_COPIED.chars().count() + FRAME_WIDTH
     );
 }
 
 #[test]
-fn titled_toast_keeps_side_borders_on_the_title_row() {
+fn titled_toast_renders_dot_title_and_indented_context_without_divider() {
     let mut state = AppState::demo();
     update::show_toast(
         &mut state,
@@ -111,17 +111,19 @@ fn titled_toast_keeps_side_borders_on_the_title_row() {
     let title_row: String = (area.x..area.right())
         .map(|x| buffer[(x, area.y + 1)].symbol())
         .collect();
+    let body_row: String = (area.x..area.right())
+        .map(|x| buffer[(x, area.y + 2)].symbol())
+        .collect();
     assert!(
-        !title_row.contains('─'),
-        "标题行不再画横向连线: {title_row}"
+        title_row.contains("● Clipboard"),
+        "首行显示 ● 标题: {title_row}"
+    );
+    assert!(
+        body_row.contains("  Copied to clipboard"),
+        "次行缩进 2 列显示正文: {body_row}"
     );
     assert_eq!(buffer[(area.x, area.y + 1)].symbol(), "│");
-    assert_eq!(buffer[(area.right() - 1, area.y + 1)].symbol(), "│");
-    assert_eq!(
-        buffer[(area.x, area.y + 2)].symbol(),
-        "├",
-        "标题行下方是 ├──┤ 分割线"
-    );
+    assert_eq!(buffer[(area.x, area.y + 2)].symbol(), "│");
     assert_eq!(
         buffer[(area.x, area.y + 2)].bg,
         ratatui::style::Color::Reset
@@ -234,20 +236,13 @@ fn below_minimum_screen_has_no_toast() {
 }
 
 #[test]
-fn toast_renders_close_button_and_hit_test() {
+fn toast_renders_leading_dot_and_message() {
     let mut state = AppState::demo();
     show(&mut state, None);
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
     let screen = Rect::new(0, 0, 100, 24);
     let area = rect(&state, &view, &rects, screen, &Config::default()).expect("toast area");
-    let close = crate::ui::widgets::modal::close_button_rect(area).expect("close button fits");
-    assert!(close_button_at(area, close.x, close.y));
-    assert!(
-        !close_button_at(area, area.x + 1, area.y),
-        "内容区不命中关闭按钮"
-    );
-
     let mut terminal =
         Terminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     terminal
@@ -256,10 +251,11 @@ fn toast_renders_close_button_and_hit_test() {
         })
         .expect("draw succeeds");
     let buffer = terminal.backend().buffer();
-    let label: String = (close.x..close.right())
-        .map(|x| buffer[(x, close.y)].symbol())
+    assert_eq!(buffer[(area.x + 2, area.y + 1)].symbol(), "●");
+    let row: String = (area.x + 1..area.right() - 1)
+        .map(|x| buffer[(x, area.y + 1)].symbol())
         .collect();
-    assert_eq!(label, text::MODAL_CLOSE);
+    assert!(row.contains(text::TOAST_COPIED), "{row}");
 }
 
 /// 三档语义色：default 沿用浮层强调色 Cyan、warning 黄、danger 红；

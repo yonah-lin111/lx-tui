@@ -68,9 +68,9 @@ pub fn render_referenced_input(
             shell.inner.height.saturating_sub(1),
         ),
         &[
-            (text::BUTTON_CREATE, style::accent()),
-            (text::BUTTON_CLEAR, style::muted()),
-            (text::BUTTON_CANCEL, style::muted()),
+            (text::BUTTON_CREATE, style::button_primary()),
+            (text::BUTTON_CLEAR, style::button_secondary()),
+            (text::BUTTON_CANCEL, style::button_secondary()),
         ],
     );
     let cursor = render_input(
