@@ -597,15 +597,15 @@ fn borderless_panel_renders_top_blue_rule_and_no_background_or_side_borders() {
     let rect = render(area, &mut buf, &v).expect("borderless renders");
     // 1 top blank row + 1 top rule + 2 items = 4 rows, placed directly above anchor_row = 5 -> y = 1..5
     assert_eq!(rect, Rect::new(0, 1, 30, 4));
-    assert_eq!(
-        row_text(&buf, area, 1).trim(),
-        "",
-        "top row is blank spacer"
+    // y = 1 is the top rule line, y = 2 is the clean title row
+    assert_eq!(buf[(0, 1)].symbol(), "─");
+    assert_eq!(buf[(0, 1)].fg, Color::Cyan);
+    assert_eq!(buf[(29, 1)].symbol(), "─");
+    assert_eq!(buf[(29, 1)].fg, Color::Cyan);
+    assert!(
+        row_text(&buf, area, 2).contains("/Command"),
+        "row 2 is clean title row"
     );
-    assert_eq!(buf[(0, 2)].symbol(), "─");
-    assert_eq!(buf[(0, 2)].fg, Color::Cyan);
-    assert_eq!(buf[(29, 2)].symbol(), "─");
-    assert_eq!(buf[(29, 2)].fg, Color::Cyan);
 
     // No overlay background anywhere
     for y in rect.y..rect.bottom() {
@@ -670,9 +670,9 @@ fn borderless_panel_footer_row_adds_spacer_and_hint_without_border() {
     // 1 top blank + 1 top rule + 1 item + 1 spacer + 1 footer = 5 rows
     assert_eq!(rect, Rect::new(0, 1, 40, 5));
     assert_eq!(
-        row_text(&buf, area, rect.y).trim(),
-        "",
-        "顶线外侧上方留一行空行"
+        row_text(&buf, area, rect.y),
+        "─".repeat(40),
+        "顶线在面板顶部第 0 行"
     );
     // 内容与提示之间空一行。
     let spacer = row_text(&buf, area, rect.bottom() - 2);
@@ -766,5 +766,61 @@ fn borderless_narrow_top_rule_keeps_tabs_and_never_overwrites_title_with_right_t
     assert!(
         top.contains(" Rewind "),
         "左侧标题不得被右侧说明覆盖: {top:?}"
+    );
+}
+
+#[test]
+fn bordered_panel_with_title_and_tabs_expands_width_and_omits_tabs_when_cramped() {
+    let area = Rect::new(0, 0, 60, 20);
+    let items = inline(&[("scanning…", "")]);
+    let tabs = [
+        PanelTab {
+            label: "Files",
+            active: true,
+        },
+        PanelTab {
+            label: "refDir",
+            active: false,
+        },
+        PanelTab {
+            label: "Skills",
+            active: false,
+        },
+        PanelTab {
+            label: "MCP",
+            active: false,
+        },
+    ];
+    let v = CommandPanelView {
+        items: &items,
+        active: 0,
+        anchor_row: 12,
+        title: Some("@Command"),
+        tabs: Some(&tabs),
+        hide_active_marker: true,
+        ..Default::default()
+    };
+    let l = layout(area, &v).expect("layout");
+    assert_eq!(
+        l.tabs.len(),
+        4,
+        "即使候选行极短，自适应宽度也须容纳 @Command 与全部 4 个 Tab"
+    );
+
+    // 极矮退化态（available_rows < 7 -> top_rows == 1）：不生成与首条候选重叠的 Tab 命中框。
+    let cramped_area = Rect::new(0, 0, 60, 5);
+    let v_cramped = CommandPanelView {
+        items: &items,
+        active: 0,
+        anchor_row: 4,
+        title: Some("@Command"),
+        tabs: Some(&tabs),
+        ..Default::default()
+    };
+    let l_cramped = layout(cramped_area, &v_cramped).expect("cramped layout");
+    assert_eq!(l_cramped.inner.y, l_cramped.rect.y + 1);
+    assert!(
+        l_cramped.tabs.is_empty(),
+        "退化态无独立顶栏行时不得在首条候选行上登记 Tab 命中区"
     );
 }

@@ -811,3 +811,42 @@ fn toast_click_inside_or_outside_dismisses() {
     );
     assert!(state.toast.is_none(), "点击 toast 之外关闭");
 }
+
+#[test]
+fn clicking_toast_while_modal_open_dismisses_toast_without_closing_modal() {
+    let mut state = demo_terminal();
+    update::open_new_workspace_dialog(&mut state);
+    update::show_toast(
+        &mut state,
+        Toast::new(
+            ToastKind::Danger,
+            ui::text::TOAST_DIRECTORY_NOT_FOUND,
+            None,
+            Instant::now(),
+        ),
+    );
+    let (config, geo) = toolbar_geometry(&mut state);
+    let toast_area =
+        ui::toast::rect(&state, &geo.view, &geo.rects, geo.screen, &config).expect("toast visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            toast_area.x + 2,
+            toast_area.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.toast.is_none(), "点击全局报错 toast 应关闭 toast");
+    assert!(
+        matches!(state.overlay, Some(Overlay::NewWorkspace(_))),
+        "点击 toast 本身不得误关底层正在编辑的模态弹窗"
+    );
+}

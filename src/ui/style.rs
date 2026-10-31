@@ -302,9 +302,9 @@ pub fn overlay_panel() -> Style {
     Style::default()
 }
 
-/// 目录条目（`@` 提及面板与引用文件夹内容弹窗）：强调色，与文件条目一眼区分。
+/// 目录条目（`@` 提及面板与引用文件夹内容弹窗）：黄色，与文件条目一眼区分，不使用蓝色。
 pub fn directory() -> Style {
-    accent()
+    Style::default().fg(Color::Yellow)
 }
 
 // ===== 阅读渲染高亮（`ui::markdown_render` 专用）：GitHub Dark 官方色板 =====

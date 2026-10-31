@@ -142,6 +142,24 @@ fn ref_dir_empty_state_renders_notice_and_ignores_item_click() {
         mention_item_at(&editor, area, layout.content.x, layout.content.y),
         None
     );
+    // 空状态占位行不铺选中底色，且 command_panel_contains 覆盖整个面板矩形。
+    assert_eq!(
+        buf[(layout.content.x + 1, layout.content.y)].bg,
+        ratatui::style::Color::Reset,
+        "空状态占位行不得渲染为选中高亮底色"
+    );
+    assert!(command_panel_contains(
+        &editor,
+        area,
+        layout.rect.x + 2,
+        layout.rect.y + 1
+    ));
+    assert!(command_panel_contains(
+        &editor,
+        area,
+        layout.content.x,
+        layout.content.y
+    ));
 }
 
 #[test]

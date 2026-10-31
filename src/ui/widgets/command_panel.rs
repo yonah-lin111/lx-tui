@@ -244,15 +244,17 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
         None => inner,
     };
     let tab_y = rect.y.saturating_add(1);
+    let show_header = view.borderless || top_rows > 1;
     let tabs = match view.tabs {
-        Some(tabs) if !tabs.is_empty() => {
+        Some(tabs) if !tabs.is_empty() && show_header => {
             let mut out = Vec::with_capacity(tabs.len());
             let mut x = if view.borderless {
                 if let Some(title) = view.title {
-                    let text_w = u16::try_from(UnicodeWidthStr::width(title))
-                        .unwrap_or(0)
-                        .saturating_add(2);
-                    rect.x.saturating_add(1).saturating_add(text_w)
+                    let text_w = u16::try_from(UnicodeWidthStr::width(title)).unwrap_or(0);
+                    rect.x
+                        .saturating_add(1)
+                        .saturating_add(text_w)
+                        .saturating_add(1)
                 } else {
                     rect.x
                 }
@@ -261,7 +263,7 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
                 rect.x
                     .saturating_add(2)
                     .saturating_add(text_w)
-                    .saturating_add(2)
+                    .saturating_add(1)
             } else {
                 rect.x.saturating_add(2)
             };
@@ -410,10 +412,7 @@ fn render_borderless_footer(buf: &mut Buffer, rect: Rect, footer: &str) {
     buf.set_stringn(rect.x, y, &text, usize::from(rect.width), style::muted());
 }
 
-/// 绘制无边框命令面板的顶部蓝色横线及内嵌标题/右侧状态。
-///
-/// 左侧 `tabs` 或 `title` 优先排布；右侧 `right_title` 仅在左侧内容之后至少留出 1 列 `─`
-/// 分隔线时绘制（超宽时按剩余空间截断，仍放不下则省略），绝不覆盖左侧标题或 Tab。
+/// 绘制无边框命令面板的顶部蓝色横线及下方干净标题栏（无横线穿透文字）。
 fn render_top_rule(
     buf: &mut Buffer,
     layout: &PanelLayout,
@@ -421,40 +420,50 @@ fn render_top_rule(
     has_tabs: bool,
 ) {
     let rect = layout.rect;
-    let rule_y = rect.y.saturating_add(1);
+    let rule_y = rect.y;
     for x in rect.x..rect.right() {
         if let Some(cell) = buf.cell_mut((x, rule_y)) {
             cell.set_char('─');
             cell.set_style(style::accent());
         }
     }
+    let header_y = rect.y.saturating_add(1);
     let mut left_end = rect.x;
     if let Some(title) = view.title {
-        let text = format!(" {title} ");
         let x = rect.x.saturating_add(1);
         let max_w = usize::from(rect.right().saturating_sub(1).saturating_sub(x));
         if max_w > 0 {
-            let draw_w = u16::try_from(text.width().min(max_w)).unwrap_or(u16::MAX);
-            buf.set_style(Rect::new(x, rule_y, draw_w, 1), Style::reset());
-            buf.set_stringn(x, rule_y, &text, max_w, style::muted());
+            let draw_w = u16::try_from(title.width().min(max_w)).unwrap_or(u16::MAX);
+            buf.set_stringn(x, header_y, title, max_w, style::strong());
             left_end = x.saturating_add(draw_w);
         }
     }
-    if has_tabs && let Some(last_tab) = layout.tabs.last() {
-        left_end = last_tab.right();
+    if has_tabs {
+        for (i, tab_rect) in layout.tabs.iter().enumerate() {
+            if i + 1 < layout.tabs.len() {
+                let sep_x = tab_rect.right();
+                if sep_x < rect.right().saturating_sub(1)
+                    && let Some(cell) = buf.cell_mut((sep_x, header_y))
+                {
+                    cell.set_char('·');
+                    cell.set_style(style::muted());
+                }
+            }
+        }
+        if let Some(last_tab) = layout.tabs.last() {
+            left_end = last_tab.right();
+        }
     }
     if let Some(right_title) = view.right_title {
         let right_edge = rect.right().saturating_sub(1);
         let min_x = left_end.saturating_add(1);
         let avail = usize::from(right_edge.saturating_sub(min_x));
-        if avail >= 3 {
-            let clipped = text::truncate_to_width(right_title, avail.saturating_sub(2));
-            let text = format!(" {clipped} ");
-            let text_w = u16::try_from(text.width()).unwrap_or(u16::MAX);
+        if avail >= 1 {
+            let clipped = text::truncate_to_width(right_title, avail);
+            let text_w = u16::try_from(clipped.width()).unwrap_or(u16::MAX);
             if text_w <= right_edge.saturating_sub(min_x) {
                 let x = right_edge.saturating_sub(text_w);
-                buf.set_style(Rect::new(x, rule_y, text_w, 1), Style::reset());
-                buf.set_stringn(x, rule_y, &text, usize::from(text_w), style::muted());
+                buf.set_stringn(x, header_y, &clipped, usize::from(text_w), style::muted());
             }
         }
     }
@@ -556,9 +565,13 @@ fn panel_width(available: u16, view: &CommandPanelView<'_>) -> u16 {
     // 标题与提示自带的包裹空格随文案宽度计入；最终宽度还需容纳两侧边框。
     let tabs_header = match view.tabs {
         Some(tabs) if !tabs.is_empty() => {
+            let title_w = view.title.map_or(0, |title| title.width() + 1);
             let total_tabs: usize = tabs.iter().map(|t| t.label.width() + 2).sum();
             let separators = tabs.len().saturating_sub(1);
-            total_tabs + separators + view.right_title.map_or(0, |title| title.width() + 2)
+            title_w
+                + total_tabs
+                + separators
+                + view.right_title.map_or(0, |title| title.width() + 2)
         }
         _ => {
             view.title.map_or(0, |title| title.width() + 2)
@@ -662,6 +675,7 @@ fn render_items(buf: &mut Buffer, layout: &PanelLayout, view: &CommandPanelView<
             item,
             !view.hide_active_marker && index == view.active,
             view.current == Some(index),
+            view.hide_active_marker,
             marker,
             label_width,
             view.borderless,
@@ -675,12 +689,14 @@ fn render_items(buf: &mut Buffer, layout: &PanelLayout, view: &CommandPanelView<
 /// - 带边框模式（Prompt 面板）：高亮项与当前项整行铺底色，当前项另加行首蓝色 `❯` 标记。
 /// - 无边框模式（lx 命令面板）：不铺任何行背景色；正在选择的项（`active`）左侧显示默认颜色 `❯`，
 ///   已生效项（`current`）主名称标为蓝色（`style::accent()`），且未处于 `active` 时左侧显示蓝色 `❯`。
+#[allow(clippy::too_many_arguments)]
 fn render_item(
     buf: &mut Buffer,
     area: Rect,
     item: &CommandItem<'_>,
     active: bool,
     current: bool,
+    placeholder: bool,
     marker: usize,
     label_width: usize,
     borderless: bool,
@@ -750,6 +766,8 @@ fn render_item(
             }
             let item_label_style = if current {
                 style::accent()
+            } else if placeholder {
+                style::muted()
             } else {
                 style::text()
             };

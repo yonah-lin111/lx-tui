@@ -179,17 +179,15 @@ pub fn render_referenced_menu_footer(
     menu: &ReferencedFolderMenu,
 ) {
     let layout = referenced_menu_layout(screen, menu);
-    let y = if layout.area.height >= 7 {
-        layout.area.bottom().saturating_sub(2)
-    } else {
-        layout.area.bottom().saturating_sub(1)
-    };
-    paint_text(
-        frame,
-        Rect::new(layout.area.x + 2, y, layout.area.width.saturating_sub(4), 1),
-        text::REFERENCED_MENU_FOOTER,
-        style::muted_on_border(),
-    );
+    if layout.area.height >= 7 && layout.area.width >= 4 {
+        let y = layout.area.bottom().saturating_sub(2);
+        paint_text(
+            frame,
+            Rect::new(layout.area.x + 2, y, layout.area.width.saturating_sub(4), 1),
+            text::REFERENCED_MENU_FOOTER,
+            style::muted_on_border(),
+        );
+    }
 }
 
 /// 单行：悬停时整行铺选中底色；空状态/不可用为 muted 提示，目录记录为
@@ -245,7 +243,7 @@ fn render_menu_row(
                 rect,
                 x,
                 text::REFERENCED_DIR_ICON,
-                base.patch(style::accent()),
+                base.patch(style::directory()),
             );
             x = paint_text_x(frame, rect, x, " ", base);
             let available = rect.right().saturating_sub(x);

@@ -129,10 +129,14 @@ pub fn render(
     render_slash_panel(area, buf, lx);
     // 本页 toast 最后画：盖住历史、输入框与上述所有浮层，但**只在窗格内容区内**。
     // 全局 toast 覆盖层不再承载 lx 反馈（见 `app::state::Lx::toast`）。
-    if let Some(toast) = lx.toast.as_ref() {
-        toast::draw(buf, area, toast);
-    }
-    cursor
+    let toast_box = lx
+        .toast
+        .as_ref()
+        .and_then(|toast| toast::draw(buf, area, toast));
+    cursor.filter(|(row, col)| {
+        let abs = (area.x.saturating_add(*col), area.y.saturating_add(*row)).into();
+        !toast_box.is_some_and(|box_area| box_area.contains(abs))
+    })
 }
 
 /// 本页 toast 盒矩形（绝对屏幕坐标）；无 toast 或空间不足返回 None。
@@ -386,6 +390,7 @@ pub(crate) fn command_panel_contains(area: Rect, lx: &Lx, column: u16, row: u16)
         || mention_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
         || refer_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
         || slash_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
+        || layout(area, lx).panel.is_some_and(|r| r.contains(pos))
 }
 
 /// 绘制路径粘贴参照面板：锚定输入框上沿、复用命令面板渲染（只读状态）。
@@ -948,11 +953,18 @@ pub fn ask_list_window(area: Rect, lx: &Lx) -> Option<(usize, usize, usize)> {
 /// md 格式面板：强调色直角边框 + 内框粗体标题 + 候选行（选中项整行高亮）+ 底栏快捷键行（对齐 herdr 面板）。
 fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
     draw_box(grid, rect, style::accent());
-    grid.put(
-        rect.x + 2,
+    let inner_w = rect.width.saturating_sub(4);
+    if inner_w == 0 {
+        return;
+    }
+    let text_x = rect.x + 2;
+    let text_right = text_x.saturating_add(inner_w);
+    grid.put_clipped(
+        text_x,
         rect.y + 1,
         text::LX_BLOCK_PANEL_TITLE,
         style::strong(),
+        inner_w,
     );
     for (index, id) in panel.items().iter().enumerate() {
         let y = rect.y + 3 + index as u16;
@@ -968,15 +980,24 @@ fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
         } else {
             style::text()
         };
-        grid.put(rect.x + 2, y, &label, base);
-        let preview_x = rect.x + 2 + u16::try_from(label.width()).unwrap_or(0) + 2;
-        grid.put(preview_x, y, &preview, base.patch(style::muted()));
+        grid.put_clipped(text_x, y, &label, base, inner_w);
+        let preview_x = text_x + u16::try_from(label.width()).unwrap_or(0) + 2;
+        if preview_x < text_right {
+            grid.put_clipped(
+                preview_x,
+                y,
+                &preview,
+                base.patch(style::muted()),
+                text_right - preview_x,
+            );
+        }
     }
-    grid.put(
-        rect.x + 2,
+    grid.put_clipped(
+        text_x,
         rect.bottom() - 2,
         text::COMMAND_PANEL_FOOTER,
         style::muted(),
+        inner_w,
     );
 }
 

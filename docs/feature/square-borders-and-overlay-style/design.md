@@ -1,482 +1,130 @@
-# 全局直角边框、浮层透明背景与 lx 命令面板顶部空行 — 详细设计方案
+# 全局直角边框、浮层样式重构与命令面板统一 — 详细设计文档
 
-> 状态：已完成实现与测试验证（位于 `.worktrees/square-borders-and-overlay-style` 工作区）
->
-> 涉及模块：`src/ui/sidebar.rs`、`src/ui/panes.rs`、`src/ui/right_panel.rs`、`src/ui/toast.rs`、`src/ui/tooltip.rs`、`src/ui/prompt.rs`、`src/ui/prompt/panels.rs`、`src/ui/main_content/lx.rs`、`src/ui/main_content/lx/{mention,slash,refer,toast}.rs`、`src/ui/widgets/{command_panel,menu,modal,scrollbar}.rs`、`src/ui/overlay/{page_menu,referenced}.rs`、`src/ui/style.rs`、`assets/settings.css`、`docs/standards/tui-design-requirements.md`
-
----
-
-## 1. 背景与需求目标
-
-当前 `lx-tui` 在界面边框、浮层背景与命令面板间距上存在以下三处需要统一调整的设计细节：
-
-1. **边框圆角需统一调整为直角**：
-   - TUI 侧：侧栏（`Workspaces`）、主区窗格、右侧面板（`Prompt`/`Todo`）、模态弹窗、右键菜单、命令面板、全局与窗格内 Toast、Tooltip、lx 页 Markdown 块命令面板、以及 Prompt 编辑器内的模板块（`&&&`）与补充块（`%%%`）目前均使用圆角边框（`BorderType::Rounded` 或手绘 `'╭' / '╮' / '╰' / '╯'`）。
-   - 浏览器设置页（`assets/settings.html` 关联的 `assets/settings.css`）：表单 `fieldset`、卡片 `.card` / `.model-card` / `.editor-card` / `.editor-empty`、输入框 `input` / `textarea`、按钮 `button.*`、导航项 `.nav-item`、标签 `.tag`、下拉菜单 `.select-button` / `.select-menu` / `.select-option`、`.toast`、以及滚动条滑块均设置了 `border-radius: 3px/4px/6px`。
-   - **目标**：将 TUI 与浏览器设置页的所有容器、组件边框统一改为干脆利落的直角（TUI 使用 `BorderType::Plain` / `'┌' '┐' '└' '┘'`，设置页移除容器/控件圆角，仅保留两处状态圆点的 `50%` 圆形）。
-
-2. **`src/ui/main_content/lx/` 输入框的 `@` 和 `/` 命令面板上方增加一行空行**：
-   - 当前在 lx 输入框弹出无边框命令面板（`@` 提及面板、`/` 斜杠面板及同款的快捷引用、路径粘贴面板）时，面板底部在候选列表与快捷键提示之间留有 1 行空行（`FOOTER_BLOCK_ROWS = 2`），但**面板顶部蓝色横线（`── Commands ──` / `── Files refDir ... ──`）直接紧贴上方聊天历史或欢迎页内容**，没有空白隔离带，视觉上显得拥挤。
-   - **目标**：在面板顶部蓝色横线的外侧上方增加 1 行空白行（由浮层清底擦除底层字符），使面板顶线与上方聊天记录/欢迎页内容之间始终隔开 1 行空行。
-
-3. **移除模态弹窗、右键菜单、`src/ui/prompt/` 命令面板及 md 格式面板的背景颜色**：
-   - 当前除 Toast 与 lx 无边框命令面板外，其余浮层（居中模态框、右键菜单、页码菜单、引用文件夹菜单与搜索弹窗、Prompt 右栏的 `@` 提及 / `/` 斜杠 / 快捷引用 / 粘贴 / Markdown 块命令面板、以及 Tooltip）均通过 `style::overlay_panel()` 铺设了 `Color::Indexed(236)` 的深灰不透明底色。
-   - **目标**：移除所有上述浮层的面板背景颜色（仅通过 `clear::render` / `clear::render_buffer` 擦除底层文字，保持终端原生透明底色），同时保留菜单/面板中当前选中项、悬停项（`style::overlay_selection()`：`Indexed(240)` 底 + `Indexed(255)` 字）以及右键菜单行内二次确认项（`style::menu_confirm()`：`Indexed(160)` 深红底 + `Indexed(255)` 字）的整行高亮底色。
+- **分支**：`feat/square-borders-and-overlay-style`
+- **工作区**：`.worktrees/square-borders-and-overlay-style`
+- **关联文档**：[task.md](task.md)、[review.md](review.md)
+- **参考规范**：
+  - `docs/standards/project-directory-structure.md`
+  - `docs/standards/code-writing-standards.md`
+  - `docs/standards/tui-design-requirements.md`
+  - `docs/standards/html-assets.md`
+  - `/Users/yonah/projects/agent/herdr-master`（视觉与浮层布局参考基线）
 
 ---
 
-## 2. 已确认边界（Grill Me 决策汇总）
+## 1. 背景与目标
+
+本次特性对 `lx-tui` 的容器边框、模态/菜单/Toast 浮层以及 `lx` / Prompt 命令面板进行系统性重构，对齐 `herdr-master` 的克制硬朗美学：
+
+1. **全局直角边框**：TUI 全量组件（侧栏、主区窗格、右侧容器、模态弹窗、右键菜单、页码菜单、引用文件夹弹窗、命令面板、Toast、Tooltip、Prompt 模板块/补充块、`lx` 块格式面板）统一由圆角 `╭ ╮ ╰ ╯` 改为直角 `┌ ┐ └ ┘`；浏览器设置页（`assets/settings.css`）移除除状态圆点（`border-radius: 50%`）以外的全部圆角。
+2. **分区边框静态暗灰**：移除左侧栏、中间主窗格与右侧容器的聚焦边框变色（`style::border(_focused)` 恒为 `style::muted()`），边框内嵌标题（`border_title`）与标签前缀（`border_label_prefix`）保持静态淡青（`Cyan + DIM`、不加粗）。
+3. **浮层透明底与 `herdr` 布局重构**：
+   - 浮层面板本体移除自绘深色背景（`style::overlay_panel()` 返回 `Style::default()`），配合 `clear` 清底保持终端原生透明背景；
+   - **右键菜单**：移除标题栏与 `├───┤` 分割线，简化为纯列表框（`height = items + 2`），每项左侧 1 列内边距，点击菜单外或按 `Esc` 关闭；
+   - **模态弹窗**：打开时调用 `modal::dim_background` 压暗全屏底层画面；移除 `├───┤` 分割线与右上角 `[✕]` 关闭按钮，标题位于内框首行粗体显示（危险确认弹窗使用红框 + 红色粗体标题 `render_danger`），标题下留 1 行呼吸空白；单行输入框整行铺暗色 `surface` 底条（`Indexed(236)`）；底部采用实心胶囊按钮（` ↵ save ` / ` ^c clear ` / ` esc cancel `，无方括号）；
+   - **Toast（全局与 `lx` 窗格内）**：移除 `├───┤` 分割线与 `[✕]` 按钮，点击任意位置即关闭；首行前缀语义色圆点 `●`（无标题 3 行高 `│ ● <message> │`，有标题 4 行高 `│ ● <title> │` + 缩进次行 `│   <message> │`）；全局 Toast 晚于 `overlay::render` 绘制并优先响应点击/悬停，确保模态打开期间触发的报错/复制 Toast 不被压暗且点击 Toast 不误关模态。
+4. **`lx` 与 Prompt 命令面板统一与目录配色**：
+   - `lx` 的 `@`、`/`、粘贴与快捷引用面板采用 `borderless: true` 无边框样式：第 0 行为独立纯粹的强调色横线 `─`（作为浮层上边界，无左右和底框），第 1 行为干净的标题/Tab 文本行（无横线穿透文字，与 Prompt 内框首行一致），底部留 1 行空白间隔 + 1 行快捷键提示；
+   - `@` 命令面板在 Tab（`Files · refDir · Skills · MCP`）左侧统一显示粗体 `@Command`（Prompt 选定取根时为 `@Command-[main]` / `@Command-[wt]`），`panel_width` 同时计入 `title` 与 `tabs` 宽度；
+   - `@` 命令面板 Files / refDir 候选以及引用文件夹弹窗（`ReferencedFolderMenu` / `ReferencedFolderSearch`）中的文件夹图标与名称统一改为目录黄（`style::directory()` = `Color::Yellow`），不再使用蓝色；
+   - Prompt 与 `lx` 命令面板全矩形范围（含标题行、呼吸空行、底栏提示、空状态行、边框与滚动条）均拦截左键点击，杜绝穿透触发底层块按钮或移走编辑器光标。
+
+---
+
+## 2. 已确认设计决策汇总
 
 | 编号 | 决策问题 | 最终确认方案 |
-| --- | --- | --- |
-| **Q1** | `src/ui/main_content/lx/` 中 `@` 和 `/` 命令面板“上方多一行空行”的具体位置 | **位置 B（面板顶线外侧上方）**：在无边框命令面板顶部蓝色 `─` 横线的上方多留 1 行空白隔离带（纳入面板矩形顶部的清底范围），将上方聊天历史/欢迎页文字与面板顶部蓝色横线隔开 1 行空行。同步覆盖共用 `borderless: true` 的 `@`、`/`、快捷引用与路径粘贴面板。 |
-| **Q2** | 移除浮层背景颜色的覆盖范围与选中高亮保留方式 | **全量浮层透明底 + 保留选中行高亮**：模态弹窗、右键菜单、页码菜单、引用文件夹菜单/搜索弹窗、`src/ui/prompt/` 下的所有浮层面板（`@`、`/`、md 块命令、快捷引用、粘贴面板）以及 Tooltip 统一移除 `overlay_panel` 面板背景色，仅用 `clear` 擦除底层字符并保持终端默认透明背景；选中行/悬停行继续保留 `style::overlay_selection()` 底色，右键菜单二次确认行继续保留 `style::menu_confirm()` 红底。 |
-| **Q3** | 直角边框在 TUI 内部特殊块与浏览器设置页（`settings.html` / `settings.css`）的细节边界 | **TUI 全量直角 + 设置页仅状态圆点保留圆形**：<br>1. TUI 所有 `Block::bordered()` 面板/弹窗/菜单/Toast/Tooltip、lx 页 md 块面板及 Toast、Prompt 编辑器内的 `&&&` 模板块与 `%%%` 补充块全部由 `╭ ╮ ╰ ╯` 改为直角 `┌ ┐ └ ┘`。<br>2. `assets/settings.css` 中所有容器、卡片、输入框、按钮、导航项、标签、下拉菜单、Toast、滚动条滑块的 `border-radius` 全部移除（直角），仅保留侧栏未保存状态点（`nav.side button::before`）和顶栏状态点（`.status-dot`）的 `border-radius: 50%`。 |
+| :--- | :--- | :--- |
+| **Q1** | 直角边框在 TUI 与浏览器设置页的边界 | TUI 所有 `Block::bordered()` 与手绘框全部改为直角 `┌ ┐ └ ┘`；`assets/settings.css` 移除 20 处圆角，仅保留 `nav.side button::before` 与 `.status-dot` 的 `border-radius: 50%`。 |
+| **Q2** | 浮层背景色与模态压暗 | 所有浮层面板移除 `Indexed(236)` 背景色，保持 `Color::Reset` 透明底；模态弹窗打开时通过 `modal::dim_background` 压暗底层画面；模态单行输入框铺 `Indexed(236)` 暗色底条；保留列表选中行 `overlay_selection()`（`Indexed(240)`）与菜单二次确认行 `menu_confirm()`（`Indexed(160)`）底色。 |
+| **Q3** | 模态、右键菜单与 Toast 关闭交互 | 统一移除右上角 `[✕]` 关闭按钮与内部 `├───┤` 横向分割线；模态与菜单通过点击外部、`Esc` 或底部取消按钮关闭；Toast 通过点击任意位置（盒内消费、盒外关闭后继续派发）关闭。 |
+| **Q4** | 左、中、右分区边框聚焦表现 | 移除分区边框聚焦变色：`style::border(_focused)` 恒为静态暗灰 `style::muted()`；内嵌标题与标签前缀保持静态淡青 `Cyan + DIM`。 |
+| **Q5** | `lx` 与 Prompt 命令面板顶部对齐方案 | 顶线独立于文字行：`lx` 无边框面板第 0 行为纯 `─` 强调色横线，第 1 行为干净的 `@Command   Files · refDir · Skills · MCP`（或 `/Command` 等）文字行，无横线刺穿文字，与 Prompt 有边框面板的内框首行排版完全对齐。 |
+| **Q6** | `@` 面板文件夹字体颜色 | 文件夹图标 `🗁` 与目录名统一使用目录黄 `Color::Yellow`（`style::directory()`），普通文件保持终端默认文字色。 |
 
 ---
 
-## 3. 核心架构与视觉布局变化
+## 3. 核心架构与视觉布局
 
-### 3.1 TUI 全局直角边框示意
+### 3.1 模态弹窗、右键菜单与 Toast 布局（对齐 `herdr-master`）
 
 ```text
-修改前（圆角 BorderType::Rounded / 手绘 ╭ ╮ ╰ ╯）：
-╭─ Workspaces ───────────[+]─╮╭─ lx-[Native Agent] ────────────── [>_] ─╮
-│ ❯   ψ lx-tui *             ││                                         │
-╰─[SET]──────────────────[◀]─╯╰─ model · 12k(6%) ───────────────────────╯
+模态弹窗（普通 / 危险确认）：                  右键菜单（纯列表，高 = N + 2）：
+┌──────────────────────────────────────┐      ┌────────────────────────┐
+│ Rename workspace                     │      │ Split right            │
+│                                      │      │ Split down             │
+│ > my-workspace█                      │      │ Open prompt            │
+│                                      │      │ Close                  │
+│      ↵ save    ^c clear    esc cancel│      └────────────────────────┘
+└──────────────────────────────────────┘
 
-修改后（直角 BorderType::Plain / 手绘 ┌ ┐ └ ┘）：
-┌─ Workspaces ───────────[+]─┐┌─ lx-[Native Agent] ────────────── [>_] ─┐
-│ ❯   ψ lx-tui *             ││                                         │
-└─[SET]──────────────────[◀]─┘└─ model · 12k(6%) ───────────────────────┘
+Toast（无标题 3 行 / 有标题 4 行）：
+┌────────────────────────┐                    ┌──────────────────────────────┐
+│ ● Copied 12 chars      │                    │ ● Compact failed             │
+└────────────────────────┘                    │   context window exceeded    │
+                                              └──────────────────────────────┘
 ```
 
-### 3.2 `lx` 无边框命令面板（`@` / `/`）顶部新增空行结构
+### 3.2 `lx` 与 Prompt 命令面板顶部对齐示意
 
 ```text
-修改前（TOP_BLOCK_ROWS = 1，顶线紧贴上方历史内容）：
-  ● Here is the previous assistant message...
-── Commands ──────────────────────────────────────────────────  <-- rect.y（顶线直接贴着上一行历史）
-❯ /compact          compact conversation history                <-- inner.y = rect.y + 1
-  /clear            clear current session
-                                                                <-- rect.bottom() - 2（底部空行）
-[select ↑↓] [run ↵] [close esc]                                 <-- rect.bottom() - 1（底部提示）
-──────────────────────────────────────────────────────────────  <-- input.y（输入框顶边）
-> /
+lx 无边框 @ 提及面板（borderless = true）：
+────────────────────────────────────────────────────────────────────────────
+ @Command  Files · refDir · Skills · MCP                                src
+❯ 🗁 components/
+    └─ src/ui
+  • mod.rs
+    └─ src/ui
 
-修改后（TOP_BLOCK_ROWS = 2，顶线上方新增 1 行清底空行）：
-  ● Here is the previous assistant message...
-                                                                <-- rect.y（新增：1 行清底空白隔离行）
-── Commands ──────────────────────────────────────────────────  <-- rect.y + 1（顶部蓝色横线 + Title/Tabs）
-❯ /compact          compact conversation history                <-- inner.y = rect.y + 2
-  /clear            clear current session
-                                                                <-- rect.bottom() - 2（底部空行）
-[select ↑↓] [run ↵] [close esc]                                 <-- rect.bottom() - 1（底部提示）
-──────────────────────────────────────────────────────────────  <-- input.y（输入框顶边）
-> /
-```
+[←→ tabs] [↑↓ select] [↵ insert] [⇧↵ open] [^z back] [esc close]
 
-### 3.3 浮层移除背景色后的渲染管线
-
-```text
-[绘制浮层：Modal / Menu / CommandPanel / PageMenu / ReferencedMenu / ReferencedSearch / Tooltip]
-       │
-       ▼
-1. clear::render(frame, area) 或 clear::render_buffer(buf, rect)
-   - 将浮层矩形内所有单元格 reset() 为空格 ' '、前景 Color::Reset、背景 Color::Reset（透明）
-   - 自动擦除浮层左右边缘切半的底层宽字符（中文/emoji）
-       │
-       ▼
-2. 绘制直角边框 Block::bordered()（默认 BorderType::Plain）
-   - 不再调用 .style(style::overlay_panel())，保持背景 Color::Reset
-       │
-       ▼
-3. 绘制内部条目与控件
-   - 未选中/普通文本：style::text() / style::muted() / style::accent()（背景保持透明 Color::Reset）
-   - 选中/悬停条目行：整行填充 style::overlay_selection()（bg: Indexed(240), fg: Indexed(255)）
-   - 右键菜单待确认行：整行填充 style::menu_confirm()（bg: Indexed(160), fg: Indexed(255), BOLD）
-   - 滚动条：统一使用透明底渲染 scrollbar::render / scrollbar::render_buffer（仅绘制 thumb '▐'）
+Prompt 有边框 @ 提及面板（borderless = false）：
+┌────────────────────────────────────────────────────┐
+│ @Command  Files · refDir · Skills · MCP        src │
+│                                                    │
+│  🗁 components/                                     │
+│    └─ src/ui                                       │
+│                                                    │
+│ [←→ tabs] [↑↓ select] [↵ insert] [⇧↵ open] [esc]   │
+└────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 4. 模块级详细设计与关键代码
+## 4. 模块级实现细节
 
-### 4.1 全局直角边框改造（TUI + Web 设置页）
+### 4.1 样式层（`src/ui/style.rs`）
 
-#### 4.1.1 Ratatui `Block::bordered()` 组件（11 处）
+- `border(_focused: bool) -> Style`：恒返回 `muted()`。
+- `overlay_panel() -> Style`：返回 `Style::default()`（透明背景）。
+- `directory() -> Style`：返回 `Style::default().fg(Color::Yellow)`（目录黄，不使用蓝色）。
+- 新增模态胶囊按钮与输入条语义样式：
+  - `button_primary()`：`Color::Black` on `Color::Cyan` + `BOLD`
+  - `button_danger()`：`Color::Indexed(255)` on `Color::Red` + `BOLD`
+  - `button_secondary()`：`Color::Indexed(255)` on `Color::Indexed(238)` + `BOLD`
+  - `modal_input()`：`Color::Indexed(255)` on `Color::Indexed(236)`
+  - `modal_input_placeholder()`：`Color::Indexed(244)` on `Color::Indexed(236)`
 
-`ratatui::widgets::Block::bordered()` 的默认 `border_type` 即为 `BorderType::Plain`（直角 `┌ ─ ┐ │ └ ┘`）。我们将以下 11 处的 `.border_type(BorderType::Rounded)` 移除（或显式脱离 `BorderType::Rounded` 导入）：
+### 4.2 模态、右键菜单与 Toast（`src/ui/widgets/{modal,menu}.rs`、`src/ui/toast.rs`、`src/ui/main_content/lx/toast.rs`、`src/ui/mod.rs`）
 
-| 序号 | 文件路径 | 所在函数 | 行号 | 说明 |
-| --- | --- | --- | --- | --- |
-| 1 | `src/ui/sidebar.rs` | `render` | L24-25 | 左侧 Workspaces / Agents 侧栏外框 |
-| 2 | `src/ui/panes.rs` | `render_panes` | L49-50 | 主区域平铺窗格（lx 视图与终端视图）外框 |
-| 3 | `src/ui/right_panel.rs` | `render` | L91-92 | 右侧 `Prompt` / `Todo` 容器外框 |
-| 4 | `src/ui/widgets/modal.rs` | `render` | L40-41 | 通用居中模态容器（重命名、新建、确认、信任、worktree、保存草稿、会话编辑） |
-| 5 | `src/ui/widgets/menu.rs` | `render_with_confirm` | L92-93 | 右键上下文菜单外框 |
-| 6 | `src/ui/widgets/command_panel.rs` | `render` | L255-256 | 有边框命令面板（Prompt 右栏 `@`、`/`、md 块命令、快捷引用、粘贴面板）外框 |
-| 7 | `src/ui/overlay/page_menu.rs` | `render_page_menu` | L202-203 | Prompt 页码菜单外框 |
-| 8 | `src/ui/overlay/referenced/menu.rs` | `render_referenced_menu` | L119-120 | 引用文件夹目录弹窗外框 |
-| 9 | `src/ui/overlay/referenced/search.rs` | `render_referenced_search` | L167-168 | 引用文件夹内容搜索弹窗外框 |
-| 10 | `src/ui/toast.rs` | `render` | L75-76 | 全局 Toast 提示框 |
-| 11 | `src/ui/tooltip.rs` | `render` | L61-62 | 全局按钮悬停 Tooltip 框 |
+- **`modal.rs`**：
+  - `dim_background(frame, area)`：为全屏已有单元格叠加 `Modifier::DIM`。
+  - `layout(screen, width, height)`：`height >= 6` 时顶部预留 3 行（`┌──┐` + 粗体标题行 + 1 行呼吸空白），`inner` 从 `area.y + 3` 起算、高度为 `area.height - 4`。
+  - `render` / `render_danger`：压暗背景、清底、绘制直角边框与 `area.y + 1` 行的粗体标题。
+- **`menu.rs`**：
+  - `layout`：`height = labels.len() + 2`，`item_top = area.y + 1`，移除标题行与分割线。
+- **`toast.rs` & `lx/toast.rs`**：
+  - `draw_frame` 在 `(area.x + 2, area.y + 1)` 绘制语义色圆点 `●`；有标题时标题在 `(area.x + 4, area.y + 1)` 加粗显示、正文在 `area.y + 2` 以 `style::muted()` 显示；无标题时正文在 `(area.x + 4, area.y + 1)` 加粗（全局）或常规文本色（`lx` 窗格内折行）显示。
+- **渲染与事件层序（`src/ui/mod.rs`、`src/event/mouse/{press,hover}.rs`）**：
+  - `ui::render_cached` 中 `toast::render` 置于 `overlay::render` 之后，保证模态打开期间弹出的全局 Toast 不被 `dim_background` 压暗或被模态框擦除；硬件光标在 `state.overlay` 存在与否两分支下统一过滤 `tooltip_area`、`menu_tooltip_area` 与 `toast_area`。
+  - `press.rs` 与 `hover.rs` 将全局 Toast 命中置于 `state.overlay.is_some()` 之前，点击 Toast 本身仅关闭 Toast 并消费事件，绝不误关底层模态弹窗。
 
-**关键代码（以 `src/ui/sidebar.rs`、`src/ui/panes.rs`、`src/ui/right_panel.rs` 为例）**：
+### 4.3 命令面板统一与防穿透（`src/ui/widgets/command_panel.rs`、`src/ui/prompt/panels.rs`、`src/ui/main_content/lx.rs`）
 
-```rust
-// src/ui/sidebar.rs
-let block = Block::bordered()
-    .border_style(style::border(state.sidebar_focused()))
-    .title(Span::styled(
-        format!(" {} ", text::SIDEBAR_TITLE),
-        style::border_title(),
-    ));
-
-// src/ui/panes.rs
-let block = Block::bordered()
-    .border_style(style::border(focused))
-    .title(title_line);
-
-// src/ui/right_panel.rs
-let border = Block::bordered()
-    .border_style(style::border(focused));
-```
-
-#### 4.1.2 手绘网格/缓冲区边框（3 处）
-
-1. **`src/ui/main_content/lx.rs`（lx 页 Markdown 格式面板 `draw_box`）**：
-   - 将四角字符由 `'╭' / '╮' / '╰' / '╯'` 改为 `'┌' / '┐' / '└' / '┘'`。
-   - 同时在 `draw_box` 内将矩形内部单元格重置为空格 `' '` 与 `Style::default()`（透明清底），防止在聊天历史模式下打开 md 格式面板时底层历史文字穿透面板空白处。
-
-```rust
-/// 直角细线边框与内部清底（md 面板用）。
-fn draw_box(grid: &mut Grid, rect: Rect, border: Style) {
-    if rect.width < 2 || rect.height < 2 {
-        return;
-    }
-    let right = rect.right() - 1;
-    let bottom = rect.bottom() - 1;
-    for y in rect.y + 1..bottom {
-        for x in rect.x + 1..right {
-            grid.set(x, y, ' ', Style::default());
-        }
-    }
-    grid.set(rect.x, rect.y, '┌', border);
-    grid.set(right, rect.y, '┐', border);
-    grid.set(rect.x, bottom, '└', border);
-    grid.set(right, bottom, '┘', border);
-    for x in rect.x + 1..right {
-        grid.set(x, rect.y, '─', border);
-        grid.set(x, bottom, '─', border);
-    }
-    for y in rect.y + 1..bottom {
-        grid.set(rect.x, y, '│', border);
-        grid.set(right, y, '│', border);
-    }
-}
-```
-
-2. **`src/ui/main_content/lx/toast.rs`（lx 窗格内 Toast `draw_border`）**：
-   - 将四角字符由 `'╭' / '╮' / '╰' / '╯'` 改为 `'┌' / '┐' / '└' / '┘'`。
-
-```rust
-/// 直角边框（只画四边与四角；不依赖 `Frame`，直接写 Buffer）。
-fn draw_border(buf: &mut Buffer, area: Rect, kind: ToastKind) {
-    let border = border_style(kind);
-    let right = area.right().saturating_sub(1);
-    let bottom = area.bottom().saturating_sub(1);
-    for x in area.x..=right {
-        put(buf, x, area.y, '─', border);
-        put(buf, x, bottom, '─', border);
-    }
-    for y in area.y..=bottom {
-        put(buf, area.x, y, '│', border);
-        put(buf, right, y, '│', border);
-    }
-    put(buf, area.x, area.y, '┌', border);
-    put(buf, right, area.y, '┐', border);
-    put(buf, area.x, bottom, '└', border);
-    put(buf, right, bottom, '┘', border);
-}
-```
-
-3. **`src/ui/prompt.rs`（Prompt 编辑器模板块 `&&&` 与补充块 `%%%` 的 `paint_block_border`）**：
-   - 将起始行四角 `'╭' / '╮'` 改为 `'┌' / '┐'`，结束行四角 `'╰' / '╯'` 改为 `'└' / '┘'`。
-
-```rust
-        Some(BlockRole::Start) => {
-            put(left, '┌');
-            put(left + 1, '─');
-            put(right, '┐');
-            for x in painted..buttons_start.min(right) {
-                put(x, '─');
-            }
-        }
-        Some(BlockRole::Middle) => {
-            put(left, '│');
-            put(right, '│');
-        }
-        Some(BlockRole::End) => {
-            put(left, '└');
-            put(left + 1, '─');
-            put(right, '┘');
-            for x in painted..right {
-                put(x, '─');
-            }
-        }
-```
-
-#### 4.1.3 浏览器设置页样式（`assets/settings.css`）
-
-移除 `assets/settings.css` 中除 `nav.side button::before`（L46）与 `.status-dot`（L60）之外的所有 20 处 `border-radius` 属性：
-
-```css
-/* 移除以下选择器的 border-radius 属性，使其全部保持直角： */
-fieldset { border: 1px solid var(--border); margin: 0 0 16px; padding: 12px; background: var(--panel); }
-input, textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--border-strong); font: inherit; background: var(--field); color: var(--text); }
-button.primary { background: var(--accent); border: 0; color: var(--accent-ink); padding: 7px 14px; cursor: pointer; font-weight: 600; }
-button.ghost { background: none; border: 1px solid var(--border-strong); padding: 6px 12px; cursor: pointer; color: var(--text); }
-button.danger { background: none; border: 1px solid var(--err); color: var(--err); padding: 6px 12px; cursor: pointer; }
-.nav-item { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 6px; row-gap: 2px; width: 100%; padding: 6px 8px; border: 0; background: none; color: var(--muted); font: inherit; text-align: left; cursor: pointer; }
-.nav-item .tag { grid-column: 2; grid-row: 2; justify-self: start; font-size: 11px; border: 1px solid var(--border-strong); padding: 1px 6px; color: var(--muted); }
-.nav-item.new { margin-top: 8px; flex-shrink: 0; border-top: 1px solid var(--border); padding-top: 10px; }
-.editor-card { display: flex; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid var(--border); background: var(--panel); padding: 12px; }
-.editor-empty { display: flex; min-height: 280px; flex: 1 1 auto; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px dashed var(--border-strong); color: var(--muted); font-size: 12px; text-align: center; }
-.editor-body::-webkit-scrollbar-thumb { background: var(--border-strong); }
-.select-button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--border-strong); background: var(--field); color: var(--text); font: inherit; cursor: pointer; text-align: left; }
-.select-menu { position: fixed; z-index: var(--z-menu); left: 0; right: auto; max-height: 240px; overflow-y: auto; padding: 4px; border: 1px solid var(--border-overlay); background: var(--overlay); box-shadow: var(--shadow-overlay); scrollbar-width: thin; }
-.select-option { display: block; width: 100%; padding: 6px 10px; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
-.toast { padding: 8px 14px; border: 1px solid var(--border-overlay); border-left: 3px solid var(--accent); background: var(--overlay); color: var(--text); font-size: 12px; box-shadow: var(--shadow-overlay); pointer-events: auto; animation: toast-in .16s ease-out; }
-.provider-list::-webkit-scrollbar-thumb { background: var(--border-strong); }
-.input-action { position: absolute; top: 50%; right: 4px; display: flex; width: 28px; height: 24px; align-items: center; justify-content: center; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; transform: translateY(-50%); }
-.card { border: 1px solid var(--border); background: var(--panel); padding: 12px; margin-bottom: 12px; }
-.model-card { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); background: var(--panel-raised); padding: 8px; }
-.fetch-candidates { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; margin-bottom: 8px; border: 1px dashed var(--border-strong); padding: 8px; scrollbar-width: thin; }
-```
-
----
-
-### 4.2 `src/ui/main_content/lx/` 无边框命令面板顶部增加 1 行空行
-
-#### 4.2.1 `src/ui/widgets/command_panel.rs` 几何与绘制调整
-
-1. **顶部行数常量与最小高度**：
-   - 新增 `const TOP_BLOCK_ROWS: u16 = 2;`（无边框面板顶部块行数：第 0 行为空白间隔行，第 1 行为顶部蓝色 `─` 分割线及标题/Tab）。
-   - `const MIN_BORDERLESS_HEIGHT: u16 = TOP_BLOCK_ROWS + 1;`（即 3 行：1 行顶部空行 + 1 行顶部蓝色横线 + 至少 1 行内容）。
-2. **`layout` 计算**：
-   - `let frame_rows: u16 = if view.borderless { TOP_BLOCK_ROWS + footer_rows } else { 2 };`
-   - `tabs` 的纵坐标：当 `view.borderless` 为 `true` 时，Tab 位于顶部蓝色横线所在行 `rect.y.saturating_add(1)`；有边框模式仍位于 `rect.y`。
-   - `borderless_inner_rect`：内容区起点从 `rect.y.saturating_add(TOP_BLOCK_ROWS)` 开始，高度为 `rect.height.saturating_sub(TOP_BLOCK_ROWS).saturating_sub(footer_rows)`。
-3. **`render_top_rule` 绘制行下移 1 行**：
-   - `clear::render_buffer(buf, layout.rect)` 会将 `rect.y..rect.bottom()` 全部清空为空白透明单元格，因此 `rect.y` 自然成为 1 行干净的空白隔离带。
-   - `render_top_rule` 在 `let rule_y = rect.y.saturating_add(1);` 上绘制蓝色 `─` 横线、左侧 `title` 与右侧 `right_title`。
-
-**关键代码（`src/ui/widgets/command_panel.rs`）**：
-
-```rust
-/// 无边框面板顶部块的行数：1 行上方空行间隔 + 1 行顶部分割线。
-const TOP_BLOCK_ROWS: u16 = 2;
-/// 无边框面板最小高度（顶部 2 行 + 1 行内容）。
-const MIN_BORDERLESS_HEIGHT: u16 = TOP_BLOCK_ROWS + 1;
-/// 无边框面板底部提示块的行数：1 行空行间隔 + 1 行快捷键提示。
-const FOOTER_BLOCK_ROWS: u16 = 2;
-
-pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
-    let footer_rows: u16 = if view.borderless && view.footer.is_some() {
-        FOOTER_BLOCK_ROWS
-    } else {
-        0
-    };
-    let frame_rows: u16 = if view.borderless {
-        TOP_BLOCK_ROWS + footer_rows
-    } else {
-        2
-    };
-    let min_height = if view.borderless {
-        MIN_BORDERLESS_HEIGHT + footer_rows
-    } else {
-        MIN_HEIGHT
-    };
-    // ...
-    let tab_y = if view.borderless {
-        rect.y.saturating_add(1)
-    } else {
-        rect.y
-    };
-    let tabs = match view.tabs {
-        Some(tabs) if !tabs.is_empty() => {
-            let mut out = Vec::with_capacity(tabs.len());
-            let mut x = rect.x.saturating_add(2);
-            let right_limit = rect.right().saturating_sub(1);
-            for tab in tabs {
-                let width = u16::try_from(UnicodeWidthStr::width(tab.label))
-                    .unwrap_or(u16::MAX)
-                    .saturating_add(2);
-                if x.saturating_add(width) > right_limit {
-                    break;
-                }
-                out.push(Rect::new(x, tab_y, width, 1));
-                x = x.saturating_add(width).saturating_add(1);
-            }
-            out
-        }
-        _ => Vec::new(),
-    };
-    // ...
-}
-
-fn render_top_rule(
-    buf: &mut Buffer,
-    layout: &PanelLayout,
-    view: &CommandPanelView<'_>,
-    has_tabs: bool,
-) {
-    let rect = layout.rect;
-    let rule_y = rect.y.saturating_add(1);
-    for x in rect.x..rect.right() {
-        if let Some(cell) = buf.cell_mut((x, rule_y)) {
-            cell.set_char('─');
-            cell.set_style(style::accent());
-        }
-    }
-    let mut left_end = rect.x;
-    if has_tabs {
-        if let Some(last_tab) = layout.tabs.last() {
-            left_end = last_tab.right();
-        }
-    } else if let Some(title) = view.title {
-        let text = format!(" {title} ");
-        let x = rect.x.saturating_add(1);
-        let max_w = usize::from(rect.right().saturating_sub(1).saturating_sub(x));
-        if max_w > 0 {
-            let draw_w = u16::try_from(text.width().min(max_w)).unwrap_or(u16::MAX);
-            buf.set_style(Rect::new(x, rule_y, draw_w, 1), Style::reset());
-            buf.set_stringn(x, rule_y, &text, max_w, style::muted());
-            left_end = x.saturating_add(draw_w);
-        }
-    }
-    if let Some(right_title) = view.right_title {
-        let right_edge = rect.right().saturating_sub(1);
-        let min_x = left_end.saturating_add(1);
-        let avail = usize::from(right_edge.saturating_sub(min_x));
-        if avail >= 3 {
-            let clipped = text::truncate_to_width(right_title, avail.saturating_sub(2));
-            let text = format!(" {clipped} ");
-            let text_w = u16::try_from(text.width()).unwrap_or(u16::MAX);
-            if text_w <= right_edge.saturating_sub(min_x) {
-                let x = right_edge.saturating_sub(text_w);
-                buf.set_style(Rect::new(x, rule_y, text_w, 1), Style::reset());
-                buf.set_stringn(x, rule_y, &text, usize::from(text_w), style::muted());
-            }
-        }
-    }
-}
-
-/// 无边框面板内容区矩形：扣除顶部两行（1 行空行 + 1 行分割线）与底部可选快捷键提示行，左右不留边框。
-fn borderless_inner_rect(rect: Rect, footer_rows: u16) -> Rect {
-    Rect::new(
-        rect.x,
-        rect.y.saturating_add(TOP_BLOCK_ROWS),
-        rect.width,
-        rect.height
-            .saturating_sub(TOP_BLOCK_ROWS)
-            .saturating_sub(footer_rows),
-    )
-}
-```
-
-#### 4.2.2 `src/ui/main_content/lx/{mention,slash,refer}.rs` 与 `src/ui/main_content/lx.rs` 高度固定最大与预算同步
-
-- **`CommandPanelView::fixed_height`**：在 `CommandPanelView` 新增 `pub fixed_height: bool`；当 `fixed_height = true` 且 `max_height = Some(cap)` 时，`command_panel::layout` 直接以 `cap` 作为目标高度（仅受锚点上方可用空间 `space` 夹取），不再随当前候选条目行数收缩。内部不足 8 行的剩余区域由 `clear::render_buffer` 保持为空白，且 `item_at` 仅命中实际可见条目行。
-- 在 `src/ui/main_content/lx/mention.rs` 中：
-  `pub(super) const PANEL_BORDER_ROWS: u16 = 2;`（1 行顶部空行间隔 + 1 行顶部蓝色横线）。
-  同时在 `mention.rs`、`slash.rs` 与 `refer.rs` 的 `view` 中设置 `fixed_height: true`，使 `@`、`/`（含 `/model`、`/resume`、`/rewind`）及快捷引用面板高度固定为最大高度 `8 + 2 + 2 = 12` 行，过滤或切换 Tab 时不再自适应跳动。
-- 在 `src/ui/main_content/lx.rs` 的 `paste_panel_rows` 中：
-  将最小上方高度守卫 `if region_h < 2` 同步为 `if region_h < 3`（对齐 `MIN_BORDERLESS_HEIGHT`）。
-
----
-
-### 4.3 移除浮层背景颜色（Modal / Menu / Prompt Panels / PageMenu / Referenced / Tooltip）
-
-#### 4.3.1 `src/ui/style.rs` 样式收敛
-
-- 将 `style::overlay_panel()` 调整为透明底与终端默认前景（`Style::default()`），或移除对 `Color::Indexed(236)` 背景色的设置：
-  ```rust
-  /// 浮层面板基础样式：不铺设背景色（配合 `clear` 清底保持终端原生透明底色），使用终端默认前景。
-  pub fn overlay_panel() -> Style {
-      Style::default()
-  }
-  ```
-- 保留 `style::overlay_selection()`（`fg: Color::Indexed(255), bg: Color::Indexed(240)`）与 `style::menu_confirm()`（`fg: Color::Indexed(255), bg: Color::Indexed(160), BOLD`）供选中/悬停/确认行高亮使用。
-
-#### 4.3.2 各浮层组件绘制更新
-
-1. **`src/ui/widgets/modal.rs`**：
-   - `clear::render(frame, shell.area)` 擦除底层文字并重置为透明背景；
-   - `Block::bordered()` 移除 `.style(style::overlay_panel())`。
-2. **`src/ui/widgets/menu.rs`**：
-   - `clear::render(frame, layout.area)` 擦除底层文字；
-   - `Block::bordered()` 移除 `.style(style::overlay_panel())`；
-   - 菜单项：`confirming` 行用 `style::menu_confirm()`，`selected` 行用 `style::overlay_selection()`，其余未选中行用 `style::text()`（无背景色）。
-3. **`src/ui/widgets/command_panel.rs`（服务于 `src/ui/prompt/panels.rs` 的 `@`、`/`、md 格式面板、快捷引用、粘贴面板）**：
-   - `clear::render_buffer(buf, layout.rect)` 擦除底层文字；
-   - 有边框分支（`!view.borderless`）的 `Block::bordered()` 移除 `.style(style::overlay_panel())`；
-   - 滚动条：无论 `view.borderless` 与否，统一调用 `scrollbar::render_buffer(buf, scrollbar)`（透明底，仅绘制 thumb `'▐'`）。
-4. **`src/ui/overlay/page_menu.rs`**：
-   - `Block::bordered()` 移除 `.style(style::overlay_panel())`；
-   - 顶部边框按钮 `render_chip`：不可用时使用 `style::muted_on_border()`（显式 `fg: Color::Reset + DIM` 且移除粗体，避免继承聚焦边框的 Cyan 加粗），可用时使用 `style::accent()`；
-   - 页面列表行：选中/悬停行用 `style::overlay_selection()`，未选中行用 `style::text()`。
-5. **`src/ui/overlay/referenced/menu.rs` & `src/ui/overlay/referenced/search.rs`**：
-   - `Block::bordered()` 移除 `.style(style::overlay_panel())`；
-   - 滚动条改为 `widgets::scrollbar::render(frame, &scrollbar)`（透明底）；
-   - 未悬停/未选中行基础样式改为 `style::text()`（透明底），悬停/选中行保持 `style::overlay_selection()`。
-6. **`src/ui/tooltip.rs`**：
-   - `clear::render(frame, area)` 清底后，`Block::bordered()` 移除 `.style(style::overlay_panel())`。
-
-### 4.4 对齐 `herdr-master` 的弹窗、右键菜单与 Toast 布局重构
-
-1. **右键菜单（`src/ui/widgets/menu.rs`）**：
-   - 完全对齐 `herdr-master` `render_context_menu`：移除顶部标题栏与 `├───┤` 分割线，仅保留直角强调色外框包裹列表项（`height = items + 2`），每项左侧预留 1 列内边距（`│ Rename │`），宽度仅由菜单项决定。
-2. **模态弹窗（`src/ui/widgets/modal.rs`、`src/ui/overlay/dialog.rs`、`worktree.rs`、`save_draft.rs`、`referenced/*.rs`）**：
-   - 打开模态弹窗时对底层画面施加 `DIM` 压暗（`modal::dim_background`），浮层面板本身清底保持透明底色（`Color::Reset`）。
-   - 移除贯穿外框的 `├───┤` 分割线与右上角 `[✕]` 按钮；标题位于内框首行粗体显示（危险确认弹窗使用红框 + 红色粗体标题 `render_danger`），标题与主体内容之间保留 1 行空白呼吸区。
-   - 模态单行输入框整行铺设暗色 `surface` 底条（`style::modal_input()`，`Indexed(236)`）。
-   - 底部按钮改为 `herdr-master` 同款实心胶囊按钮（` ↵ save ` / ` ^c clear ` / ` esc cancel `，无方括号）：主按钮使用强调色实心块（`style::button_primary()`）或危险红实心块（`style::button_danger()`），次按钮使用暗灰 `surface` 实心块（`style::button_secondary()`）。
-3. **Toast（`src/ui/toast.rs`、`src/ui/main_content/lx/toast.rs`）**：
-   - 对齐 `herdr-master` `render_toast_notification` / `render_copy_feedback`：移除 `├───┤` 分割线与 `[✕]` 关闭按钮（点击 toast 本身或外部即关闭）。
-   - 无标题 Toast 为 3 行高：`│ ● <message> │`（圆点取语义色 Cyan/Yellow/Red，正文加粗）。
-   - 有标题 Toast 为 4 行高：首行 `│ ● <title> │`（圆点取语义色，标题加粗），次行 `│   <message> │`（缩进 2 列与标题对齐，次要色；`lx` 窗格内支持多行折行）。
-4. **Tooltip 与页码菜单（`src/ui/tooltip.rs`、`src/ui/overlay/page_menu.rs`）**：
-   - Tooltip 恢复为无标题栏、无分割线的 3 行紧凑直角盒；页码菜单移除 `├───┤` 分割线，顶栏内左置粗体标题、右置 `[add]`/`[del]` 按钮。
-5. **`lx` 与 Prompt 编辑区命令面板统一与调整（`src/ui/widgets/command_panel.rs`、`src/ui/main_content/lx.rs`、`src/ui/main_content/lx/{mention,slash,refer}.rs`、`src/ui/prompt/panels.rs`）**：
-   - `lx` 的 `@`、`/`、粘贴与快捷引用面板采用顶部单条横线样式（只保留顶部蓝色横线与内嵌标题/Tab，移除左、右和底边框，贴合输入框上沿），条目项使用 `❯` 标记与透明背景；Prompt 编辑区面板保持直角外框面板。
-   - `@` 命令面板在 Tab（`Files`、`refDir` 等）左侧增加 `@Command` 粗体字样（`lx` 与 Prompt 统一对齐），Tab 点击命中区与渲染位置同步右移。
-   - 面板高度按候选数自适应收缩（上限为 `MAX_POPUP_ROWS`），已生效项（如当前模型/会话）显示蓝色 `❯` 与蓝色名称。
-6. **移除左、右、主区边框与嵌入文字的聚焦变色（`src/ui/style.rs`、`src/ui/panes.rs`、`src/ui/sidebar.rs`、`src/ui/right_panel.rs`）**：
-   - 分区边框（`style::border`）全天候恒为 `style::muted()`（暗灰），不再随焦点状态切换为强调色（Cyan + BOLD）。
-   - 边框标题与前缀标签保持淡青（`border_title`，Cyan + DIM），静态常驻、不再随焦点闪烁。
-
-### 4.5 统一快捷键文案格式与移除 Prompt 模板块/补充块背景色
-
-1. **快捷键显示格式统一**：
-   - 纯文本底栏说明：`符号 功能 · 符号 功能`（如 `↑↓ select · ↵ confirm · esc cancel`、`↵ open · ^c copy · ^d del · esc close`）。
-   - 可点击带快捷键按钮：`[符号 功能]`（如 `[↵ save]`、`[^c clear]`、`[esc cancel]`、`[↑↓ select]`）。
-2. **移除 Prompt 模板块与补充块整行背景色**：
-   - `src/ui/prompt.rs` 移除 `paint_block_background` 调用，模板块（`&&&`）与补充块（`%%%`）仅保留状态色直角边框与语法高亮，保持透明底色，彻底消除弹出透明浮层时切穿深色块造成的透明破洞。
-
----
-
-## 5. 影响面与测试验证计划
-
-1. **受影响测试更新**：
-   - **直角边框断言**：更新 `src/ui/tests.rs`、`src/ui/widgets/modal/tests.rs`、`src/ui/widgets/menu/tests.rs`、`src/ui/widgets/command_panel/tests.rs`、`src/ui/overlay/tests.rs`、`src/ui/prompt/tests.rs`、`src/ui/right_panel/tests.rs`、`src/ui/tooltip/tests.rs`、`src/event/tests/lx_toast.rs`、`tests/prompt_border_title.rs`、`tests/prompt_template_commands.rs` 中断言 `'╭' / '╮' / '╰' / '╯'` 的用例为 `'┌' / '┐' / '└' / '┘'`。
-   - **无边框命令面板顶部空行断言**：更新 `src/ui/widgets/command_panel/tests.rs`、`src/ui/main_content/lx/tests.rs`、`src/ui/main_content/lx/tests/slash_panels.rs` 中关于无边框面板高度、顶线行坐标（`rect.y + 1`）及顶部空行（`rect.y` 为空白）的断言。
-   - **浮层透明背景断言**：更新 `src/ui/overlay/tests.rs`、`src/ui/style/tests.rs`、`src/ui/widgets/command_panel/tests.rs`、`src/ui/widgets/menu/tests.rs` 中检查浮层背景色为 `Color::Indexed(236)` 的断言为 `Color::Reset`，同时验证选中行仍为 `Color::Indexed(240)`。
-   - **浏览器设置页 CSS 断言**：在 `src/settings/service/tests.rs` 中补充验证容器/控件已移除圆角、仅状态圆点保留 `border-radius: 50%`。
-2. **文档同步**：
-   - 同步更新 `docs/standards/tui-design-requirements.md` 中关于边框直角、浮层透明底色与 lx 命令面板顶部空行的规范说明。
-3. **验证命令**：
-   - `rtk cargo fmt --check`
-   - `rtk cargo clippy --all-targets -- -D warnings`
-   - 针对受影响模块运行 `rtk cargo test`
+- **顶栏排布与自适应宽度**：
+  - `render_top_rule`（`borderless = true`）：`rect.y` 绘制强调色 `─` 顶线，`rect.y + 1` 绘制干净的 `title`（粗体）、`tabs`（`·` 分隔）与 `right_title`（右对齐 `muted`）。
+  - `render_bordered_header`（`borderless = false`）：`rect.y + 1` 绘制内框首行 `title`、`tabs` 与 `right_title`，`rect.y + 2` 留 1 行呼吸空白；当 `available_rows < 7`（`!roomy`）退化为 `top_rows = 1` 时跳过顶栏与 `layout.tabs` 生成，避免与首条候选重叠。
+  - `panel_width`：当 `view.tabs` 与 `view.title` 同时存在时，`tabs_header` 累加 `title.width() + 1 + total_tabs + separators + right_title`，确保自适应宽度面板完整容纳 `@Command` 与全部 4 个 Tab。
+- **空状态置灰与面板防穿透**：
+  - Prompt `mention_view` 与 `slash_view` 在空状态/占位行时设置 `hide_active_marker: true`，`render_item` 对占位行不铺 `overlay_selection()` 底色并以 `style::muted()` 置灰显示。
+  - `ui::prompt::command_panel_contains` 与 `ui::main_content::lx::command_panel_contains`（含 `lx.panel`）覆盖全部打开的命令面板矩形，在 `press.rs` 中拦截面板非条目区域的左键点击，杜绝穿透触发底层按钮或移走编辑器光标。

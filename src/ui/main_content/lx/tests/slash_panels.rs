@@ -115,13 +115,10 @@ fn model_panel_renders_top_blue_rule_and_markers() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
 
-    // 顶部第 0 行为空白间隔行，第 1 行为蓝色 `─` 横线。
-    for x in panel.rect.x..panel.rect.right() {
-        assert_eq!(buf[(x, panel.rect.y)].symbol(), " ", "顶线上方留一行空行");
-    }
-    assert_eq!(buf[(panel.rect.x, panel.rect.y + 1)].symbol(), "─");
+    // 顶部第 0 行为独立蓝色横线，第 1 行为干净的标题行。
+    assert_eq!(buf[(panel.rect.x, panel.rect.y)].symbol(), "─");
     assert_eq!(
-        buf[(panel.rect.x, panel.rect.y + 1)].fg,
+        buf[(panel.rect.x, panel.rect.y)].fg,
         ratatui::style::Color::Cyan,
         "顶部横线为蓝色"
     );
@@ -379,16 +376,11 @@ fn mention_panel_tabs_render_and_hit_test_in_lx() {
     assert!(all.contains("codex-main/"), "refDir 条目可见: {all}");
     assert_eq!(
         buf[(panel.rect.x, panel.rect.y)].symbol(),
-        " ",
-        "提及面板第 0 行为空白间隔行"
-    );
-    assert_eq!(
-        buf[(panel.rect.x, panel.rect.y + 1)].symbol(),
         "─",
-        "提及面板第 1 行为蓝色横线"
+        "提及面板第 0 行为蓝色横线"
     );
     assert_eq!(
-        buf[(panel.rect.x, panel.rect.y + 1)].fg,
+        buf[(panel.rect.x, panel.rect.y)].fg,
         ratatui::style::Color::Cyan,
         "横线为强调色"
     );
@@ -535,6 +527,33 @@ fn lx_md_block_panel_renders_square_borders_and_selection_highlight() {
         ratatui::style::Color::Reset,
         "非选中项保持透明底色"
     );
+    assert!(
+        super::super::command_panel_contains(area, &lx, rect.x + 2, rect.y + 1),
+        "md 格式面板矩形纳入 command_panel_contains 防穿透保护"
+    );
+
+    // 窄宽度下绘制 md 面板：长底栏与预览不得写穿右边框 `│`。
+    let narrow = Rect::new(0, 0, 26, 20);
+    let mut narrow_lx = Lx::new();
+    narrow_lx.resize(26, 20);
+    narrow_lx.insert_char('#');
+    let narrow_rect = layout(narrow, &narrow_lx).panel.expect("narrow md panel");
+    let mut narrow_buf = Buffer::empty(narrow);
+    let _ = render(
+        narrow,
+        &mut narrow_buf,
+        &narrow_lx,
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
+    for y in narrow_rect.y + 1..narrow_rect.bottom() - 1 {
+        assert_eq!(
+            narrow_buf[(narrow_rect.right() - 1, y)].symbol(),
+            "│",
+            "第 {y} 行右边框不得被内部文字覆盖"
+        );
+    }
 }
 
 #[test]

@@ -1063,24 +1063,29 @@ fn mention_panel_renders_top_rule_with_title_and_tabs_and_borderless_footer() {
     let panel = mention::layout(area, &lx).expect("panel");
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
-    // 顶部第 0 行为空白间隔行，第 1 行为顶部蓝色横线嵌 @Command 标题与 Tab
+    // 顶部第 0 行为独立蓝色横线，第 1 行为干净的标题行（嵌 @Command 标题与 Tab，无横线穿透）
     assert_eq!(
         buf[(panel.rect.x, panel.rect.y)].symbol(),
-        " ",
-        "顶部留一行空白间隔"
+        "─",
+        "顶部为独立蓝色横线"
     );
-    let rule_row: String = (panel.rect.x..panel.rect.right())
+    assert_eq!(
+        buf[(panel.rect.x, panel.rect.y)].fg,
+        ratatui::style::Color::Cyan,
+        "顶线为强调色"
+    );
+    let header_row: String = (panel.rect.x..panel.rect.right())
         .map(|x| buf[(x, panel.rect.y + 1)].symbol())
         .collect();
     assert!(
-        rule_row.contains("@Command"),
-        "顶线包含 @Command 标题: {rule_row}"
+        header_row.contains("@Command"),
+        "标题行包含 @Command 标题: {header_row}"
     );
     assert!(
-        rule_row.contains("Files"),
-        "顶线包含 Files 标签: {rule_row}"
+        header_row.contains("Files"),
+        "标题行包含 Files 标签: {header_row}"
     );
-    assert!(rule_row.contains('─'), "顶线包含 ─ 蓝色横线: {rule_row}");
+    assert!(!header_row.contains('─'), "标题行无横线穿透: {header_row}");
     let footer_row = panel.rect.bottom() - 1;
     let footer: String = (panel.rect.x..panel.rect.right())
         .map(|x| buf[(x, footer_row)].symbol())
