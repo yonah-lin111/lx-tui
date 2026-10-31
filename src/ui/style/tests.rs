@@ -316,6 +316,7 @@ fn markdown_palette_is_github_dark_truecolor() {
     let string = Some(Color::Rgb(0xa5, 0xd6, 0xff)); // #a5d6ff
     let constant = Some(Color::Rgb(0x79, 0xc0, 0xff)); // #79c0ff
     let entity = Some(Color::Rgb(0xd2, 0xa8, 0xff)); // #d2a8ff
+    let quote = Some(Color::Rgb(0x7e, 0xe7, 0x87)); // #7ee787
     let comment = Some(Color::Rgb(0x8b, 0x94, 0x9e)); // #8b949e
     let muted = Some(Color::Rgb(0x7d, 0x85, 0x90)); // #7d8590
     let link = Some(Color::Rgb(0x44, 0x93, 0xf8)); // #4493f8
@@ -332,7 +333,7 @@ fn markdown_palette_is_github_dark_truecolor() {
         "行内代码 = markup.inline.raw = #79c0ff"
     );
 
-    // 文档结构：链接用 accent 蓝；引用/标记/URL/表格用 fg-muted。
+    // 文档结构：链接用 accent 蓝；引用用 markup.quote 绿；标记/表格用 fg-muted。
     assert_eq!(md_read_link_text().fg, link, "链接 = #4493f8");
     assert!(
         md_read_link_text()
@@ -340,7 +341,12 @@ fn markdown_palette_is_github_dark_truecolor() {
             .contains(Modifier::UNDERLINED)
     );
     assert_eq!(md_read_url().fg, link, "裸 URL 同链接色");
-    assert_eq!(md_read_quote().fg, muted, "引用 = fg-muted");
+    assert_eq!(
+        md_read_quote().fg,
+        quote,
+        "引用 = markup.quote = #7ee787（不使用暗灰色）"
+    );
+    assert_ne!(md_read_quote().fg, muted, "引用不得使用暗灰色");
     assert_eq!(md_read_marker().fg, muted, "语法标记 = fg-muted");
     assert_eq!(md_read_rule().fg, muted, "水平线/表格边框 = fg-muted");
     assert_eq!(md_read_image().fg, muted, "图片说明 = fg-muted");
@@ -382,15 +388,21 @@ fn markdown_palette_is_github_dark_truecolor() {
             .contains(Modifier::CROSSED_OUT)
     );
 
-    // 六级标题统一为同一种格式：GitHub Dark 实体紫 `#d2a8ff` + 加粗 + 斜体 + 下划线。
+    // 六级标题统一为同一种格式：GitHub Dark 实体紫 `#d2a8ff` + 加粗（无下划线、无斜体）。
     for level in 1..=6 {
         let heading = md_read_heading_level(level);
         assert_eq!(heading.fg, entity, "h{level} 标题高亮色 = #d2a8ff");
         assert!(
-            heading
-                .add_modifier
-                .contains(Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED),
-            "h{level} 标题必须包含加粗、斜体与下划线"
+            heading.add_modifier.contains(Modifier::BOLD),
+            "h{level} 标题加粗"
+        );
+        assert!(
+            !heading.add_modifier.contains(Modifier::UNDERLINED),
+            "h{level} 标题不加下划线"
+        );
+        assert!(
+            !heading.add_modifier.contains(Modifier::ITALIC),
+            "h{level} 标题不加斜体"
         );
         assert_eq!(
             heading,

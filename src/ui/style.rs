@@ -308,6 +308,8 @@ mod github_dark {
     pub(super) const CONSTANT: Color = Color::Rgb(0x79, 0xc0, 0xff);
     /// 语法：函数 / 实体 / 类型名 `--color-prettylights-syntax-entity`。
     pub(super) const ENTITY: Color = Color::Rgb(0xd2, 0xa8, 0xff);
+    /// 语法：引用块 `--color-prettylights-syntax-markup-quote`（GitHub Dark `#7ee787`）。
+    pub(super) const QUOTE: Color = Color::Rgb(0x7e, 0xe7, 0x87);
     /// 语法：注释 `--color-prettylights-syntax-comment`。
     pub(super) const COMMENT: Color = Color::Rgb(0x8b, 0x94, 0x9e);
 }
@@ -318,11 +320,11 @@ pub fn md_read_marker() -> Style {
 }
 
 /// markdown 六级标题的统一样式：所有级别（h1–h6）统一为同一种格式，
-/// 使用 GitHub Dark 实体紫 `#d2a8ff` 高亮，并同时添加加粗、斜体与下划线。
+/// 使用 GitHub Dark 实体紫 `#d2a8ff` + 加粗（无下划线、无斜体）。
 pub fn md_read_heading_level(_level: u8) -> Style {
     Style::default()
         .fg(github_dark::ENTITY)
-        .add_modifier(Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED)
+        .add_modifier(Modifier::BOLD)
 }
 
 /// markdown 粗斜体（`***…***`）：正文色加粗+斜体（不再额外上色）。
@@ -383,9 +385,9 @@ pub fn code_comment() -> Style {
     Style::default().fg(github_dark::COMMENT)
 }
 
-/// markdown 引用内容：GitHub 的引用只改前景 + 左侧竖条，不斜体、不换色。
+/// markdown 引用内容：GitHub Dark `markup.quote` 柔绿 `#7ee787`（不使用暗灰色）。
 pub fn md_read_quote() -> Style {
-    Style::default().fg(github_dark::FG_MUTED)
+    Style::default().fg(github_dark::QUOTE)
 }
 
 /// markdown 链接文字：GitHub 的链接蓝 `#4493f8` + 下划线。

@@ -320,7 +320,7 @@ fn blockquote(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
             0,
             marker_width(&marker),
             vec![
-                (marker, style::md_read_marker()),
+                (marker, style::md_read_quote()),
                 (body.to_string(), style::md_read_quote()),
             ],
         ));
