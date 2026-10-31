@@ -432,6 +432,7 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
         return match key.code {
             KeyCode::Enter => Some(EditorCommand::NewlineBelow),
             KeyCode::Left => Some(EditorCommand::PagePrev),
+            KeyCode::Right if shift => Some(EditorCommand::NewPage),
             KeyCode::Right => Some(EditorCommand::PageNext),
             KeyCode::Char('l' | 'L') if !shift => Some(EditorCommand::TogglePromptList),
             KeyCode::Char('p' | 'P') if !shift => Some(EditorCommand::TogglePageList),
@@ -459,6 +460,7 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
         (true, false, KeyCode::Backspace) => Some(EditorCommand::DeleteWordBackward),
         (true, false, KeyCode::Delete) => Some(EditorCommand::DeleteWordForward),
         (true, false, KeyCode::Left) => Some(EditorCommand::PagePrev),
+        (true, false, KeyCode::Right) if shift => Some(EditorCommand::NewPage),
         (true, false, KeyCode::Right) => Some(EditorCommand::PageNext),
         (false, true, KeyCode::Char('b')) => Some(EditorCommand::WordLeft),
         (false, true, KeyCode::Char('f')) => Some(EditorCommand::WordRight),

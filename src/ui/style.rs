@@ -683,6 +683,11 @@ pub fn template_status(status: TemplateStatus) -> Style {
     }
 }
 
+/// &&& 模板块色条与分割线：固定为 Cyan，不随状态变色，与 +++（品红）及三态色（蓝/黄/绿）不冲突。
+pub fn template_block_bar() -> Style {
+    Style::default().fg(Color::Cyan)
+}
+
 /// 模板块边框：按状态分色（todo 靛蓝 / in_progress 黄 / done 绿）。
 pub fn template_border(status: TemplateStatus) -> Style {
     match status {

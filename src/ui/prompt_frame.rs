@@ -90,14 +90,10 @@ pub(crate) fn prompt_page_header(state: &AppState) -> Option<PromptPageHeader> {
         PromptMode::Tree => None,
         PromptMode::Editor => {
             let index = pages.iter().position(|page| page.id == active).unwrap_or(0);
-            let name = pages
-                .get(index)
-                .map(|page| page.name.clone())
-                .unwrap_or_default();
             Some(PromptPageHeader {
                 current: index + 1,
                 total: pages.len(),
-                name,
+                name: String::new(),
                 arrows: true,
             })
         }

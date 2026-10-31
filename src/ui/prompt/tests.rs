@@ -230,18 +230,18 @@ fn renders_block_command_panel_below_cursor() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
-    assert_eq!(buf[(0, 1)].symbol(), "┌");
-    assert_eq!(buf[(0, 3)].symbol(), "│");
-    assert_eq!(buf[(0, 1)].bg, Color::Reset);
+    assert_eq!(buf[(1, 1)].symbol(), "┌");
+    assert_eq!(buf[(1, 3)].symbol(), "│");
+    assert_eq!(buf[(1, 1)].bg, Color::Reset);
     let row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
     assert!(row.contains("Heading 1"));
-    assert_eq!(buf[(2, 4)].bg, Color::Indexed(240));
-    assert_eq!(buf[(2, 5)].bg, Color::Reset);
+    assert_eq!(buf[(3, 4)].bg, Color::Indexed(240));
+    assert_eq!(buf[(3, 5)].bg, Color::Reset);
 
     let mut empty = Buffer::empty(area);
     let blank = prompt(10, 3, "plain");
     render(area, &mut empty, &blank, None);
-    assert_eq!(empty[(0, 1)].symbol(), " ");
+    assert_eq!(empty[(1, 1)].symbol(), " ");
 }
 
 #[test]
@@ -328,18 +328,18 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
-    assert_eq!(buf[(0, 1)].symbol(), "┌");
-    assert_eq!(buf[(0, 1)].bg, Color::Reset);
+    assert_eq!(buf[(1, 1)].symbol(), "┌");
+    assert_eq!(buf[(1, 1)].bg, Color::Reset);
     let name_row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
     let dir_row: String = (0..area.width).map(|x| buf[(x, 5)].symbol()).collect();
     assert!(name_row.contains("app.rs"));
     assert!(name_row.contains(text::MENTION_FILE_ICON), "{name_row}");
-    assert_eq!(buf[(3, 4)].symbol(), text::MENTION_FILE_ICON);
-    assert!(buf[(3, 4)].modifier.contains(Modifier::DIM));
+    assert_eq!(buf[(4, 4)].symbol(), text::MENTION_FILE_ICON);
+    assert!(buf[(4, 4)].modifier.contains(Modifier::DIM));
     assert!(dir_row.contains("src"));
     assert!(dir_row.contains(text::WORKSPACE_TREE_LAST), "{dir_row}");
-    assert!(buf[(3, 5)].modifier.contains(Modifier::DIM));
-    assert_eq!(buf[(2, 4)].bg, Color::Indexed(240));
+    assert!(buf[(4, 5)].modifier.contains(Modifier::DIM));
+    assert_eq!(buf[(3, 4)].bg, Color::Indexed(240));
 
     assert_eq!(mention_item_at(&editor, area, 2, 4), Some(0));
     assert_eq!(mention_item_at(&editor, area, 2, 5), Some(0));
@@ -361,7 +361,7 @@ fn template_separator_renders_block_border_line() {
     let row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
     assert!(row.starts_with("▎──"), "{row}");
     assert!(row.ends_with("─"), "{row}");
-    assert_eq!(buf[(8, 2)].fg, Color::LightBlue, "todo 色条色");
+    assert_eq!(buf[(8, 2)].fg, Color::Cyan, "&&& 分割线为青色");
 }
 
 #[test]
@@ -489,10 +489,10 @@ fn mention_panel_marks_directory_and_file_icons() {
     assert!(file_row.contains("app.rs"), "{file_row}");
     assert_ne!(text::MENTION_DIR_ICON, text::MENTION_FILE_ICON);
     // 目录条目按目录色（黄色）着色，文件条目保持默认前景。
-    assert_eq!(buf[(3, 4)].fg, Color::Yellow, "目录图标用目录色");
-    assert_eq!(buf[(5, 4)].fg, Color::Yellow, "目录名称用目录色");
-    assert_eq!(buf[(5, 5)].fg, Color::Reset, "文件名称沿用终端默认前景");
-    assert!(!buf[(5, 5)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buf[(4, 4)].fg, Color::Yellow, "目录图标用目录色");
+    assert_eq!(buf[(6, 4)].fg, Color::Yellow, "目录名称用目录色");
+    assert_eq!(buf[(6, 5)].fg, Color::Reset, "文件名称沿用终端默认前景");
+    assert!(!buf[(6, 5)].modifier.contains(Modifier::BOLD));
 }
 
 #[test]
@@ -954,9 +954,9 @@ fn template_command_and_title_and_mention_styles() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
-    // 模板块左侧色条占第 0 列，文本从第 1 列开始。
+    // 模板块左侧色条占第 0 列，固定为青色。
     assert_eq!(buf[(0, 0)].symbol(), "▎");
-    assert_eq!(buf[(0, 0)].fg, Color::LightBlue, "todo 色条为靛蓝");
+    assert_eq!(buf[(0, 0)].fg, Color::Cyan, "&&& 色条固定青色");
 
     assert!(buf[(1, 0)].modifier.contains(Modifier::DIM), "&&& 为 dim");
     assert_eq!(buf[(5, 0)].symbol(), "a");
@@ -992,7 +992,7 @@ fn template_block_draws_status_colored_bar() {
 
     for y in 0..3 {
         assert_eq!(buf[(0, y)].symbol(), "▎");
-        assert_eq!(buf[(0, y)].fg, Color::Yellow, "in_progress 色条为黄");
+        assert_eq!(buf[(0, y)].fg, Color::Cyan, "&&& 色条固定青色");
     }
     assert_eq!(buf[(59, 1)].symbol(), " ", "右侧不再绘制竖框");
     assert_eq!(buf[(40, 2)].symbol(), " ", "结束行不再补 ─");
@@ -1005,8 +1005,8 @@ fn template_block_draws_status_colored_bar() {
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &done, None);
-    assert_eq!(buf[(0, 0)].fg, Color::Green, "done 色条为绿");
-    assert_eq!(buf[(0, 1)].fg, Color::Green);
+    assert_eq!(buf[(0, 0)].fg, Color::Cyan, "&&& 色条固定青色");
+    assert_eq!(buf[(0, 1)].fg, Color::Cyan);
 }
 
 #[test]
@@ -1202,7 +1202,7 @@ fn supple_block_renders_magenta_and_three_buttons() {
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
-    assert_eq!(buf[(0, 0)].fg, Color::LightBlue, "模板块 todo 颜色");
+    assert_eq!(buf[(0, 0)].fg, Color::Cyan, "模板块固定青色");
     assert_eq!(buf[(0, 4)].fg, Color::LightMagenta, "+++ 品红色");
     assert_eq!(buf[(2, 5)].bg, Color::Reset, "补充块保持透明底色");
 
@@ -1250,7 +1250,11 @@ fn refer_panel_width_grows_with_content_up_to_container() {
         .expect("huge refer panel")
         .rect
         .width;
-    assert_eq!(capped, area.width, "capped at container width");
+    assert_eq!(
+        capped,
+        area.width - crate::layout::PROMPT_BLOCK_GUTTER_LEFT,
+        "capped at container width minus gutter"
+    );
 }
 
 fn assert_full_width_separator(buf: &Buffer, width: u16, y: u16) {

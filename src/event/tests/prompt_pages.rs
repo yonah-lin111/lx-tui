@@ -2,7 +2,9 @@
 
 use super::test_support::*;
 use super::*;
+use crate::app::actions::EditorCommand;
 use crate::app::prompt::PromptPage;
+use crate::ui::text;
 
 fn multi_page_state() -> AppState {
     let mut state = paged_prompt_state();
@@ -188,4 +190,30 @@ fn clicking_title_counter_toggles_between_editor_and_pages() {
         &mut dirty,
     );
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+}
+
+#[test]
+fn ctrl_shift_right_creates_page_or_toasts_when_empty_page_already_exists() {
+    let mut state = AppState::demo();
+    state.prompt.set_text("page 1 content");
+    crate::app::update::commit_editing_prompt(&mut state);
+    crate::app::update::focus_prompt(&mut state);
+    state.workspaces[0].prompt_panel.mode = PromptMode::Editor;
+
+    // 当前仅 Page 1，正文非空。按 Ctrl+Shift+Right 新建页：创建 Page 2，切入并弹 toast。
+    crate::app::update::apply_editor(&mut state, EditorCommand::NewPage);
+    assert!(state.toast.is_some(), "新建页弹出 toast");
+    assert_eq!(
+        state.toast.as_ref().map(|t| t.message.as_str()),
+        Some(text::TOAST_PAGE_CREATED)
+    );
+    assert_eq!(state.prompt.text(), "");
+
+    // 此时 Page 2 是空页，再次按 Ctrl+Shift+Right：不再新建，提示已有新页。
+    state.toast = None;
+    crate::app::update::apply_editor(&mut state, EditorCommand::NewPage);
+    assert_eq!(
+        state.toast.as_ref().map(|t| t.message.as_str()),
+        Some(text::TOAST_PAGE_ALREADY_NEW)
+    );
 }

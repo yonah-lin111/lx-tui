@@ -1599,27 +1599,23 @@ fn copy_text_at_cursor_extracts_supple_block_body() {
 }
 
 #[test]
-fn cycle_status_at_cursor_cycles_inside_block() {
+fn cycle_status_cycles_from_anywhere_in_page_when_template_present() {
     let mut editor = prompt(60, 20);
-    with_add_template(&mut editor);
-    assert!(editor.cycle_template_status_at_cursor());
-    assert!(
-        editor.text().contains("--end in_progress"),
-        "{}",
-        editor.text()
+    editor.set_text(
+        "plain text header\n&&& addTemplate --start\nbody\n&&& addTemplate --end\nplain text footer",
     );
-    assert!(editor.cycle_template_status_at_cursor());
-    assert!(editor.text().contains("--end done"), "{}", editor.text());
-    assert!(editor.cycle_template_status_at_cursor());
-    assert!(
-        editor.text().trim_end().ends_with("--end"),
-        "回到 todo：{}",
-        editor.text()
-    );
+    editor.set_cursor_offset(0); // 在页面首行，完全位于 &&& 块外部
+    assert!(editor.cycle_template_status());
+    assert!(editor.text().contains("--end in_progress"));
+    editor.set_cursor_offset(editor.text().len()); // 在页面末尾，完全位于 &&& 块外部
+    assert!(editor.cycle_template_status());
+    assert!(editor.text().contains("--end done"));
+    assert!(editor.cycle_template_status());
+    assert!(editor.text().contains("&&& addTemplate --end\n"));
 
     let mut plain = prompt(40, 8);
-    type_text(&mut plain, "plain");
-    assert!(!plain.cycle_template_status_at_cursor(), "不在块内不处理");
+    plain.set_text("plain text only");
+    assert!(!plain.cycle_template_status(), "无 &&& 任务块时返回 false");
 }
 
 #[test]

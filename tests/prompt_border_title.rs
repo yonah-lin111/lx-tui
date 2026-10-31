@@ -111,7 +111,10 @@ fn editor_title_row_shows_item_title_page_name_and_pager() {
     assert!(title.starts_with(text::DIVIDER_LEFT_JOIN), "{title}");
     assert!(title.ends_with(text::DIVIDER_RIGHT_JOIN), "{title}");
     assert!(title.contains(" paged "), "条目名进标题行: {title}");
-    assert!(title.contains("· Page 1"), "页名跟随条目名: {title}");
+    assert!(
+        !title.contains("Page 1"),
+        "编辑区域左上角不显示页名: {title}"
+    );
     assert!(title.contains("1/2"), "页控件进标题行: {title}");
     assert!(title.contains('‹') && title.contains('›'), "{title}");
 
@@ -171,13 +174,7 @@ fn border_pager_hit_matches_rendered_columns() {
         "页码命中（打开页菜单）: {border}"
     );
 
-    // 页名段为纯展示；条目名、页名与边框空白不产生控件。
-    let name_col = column_of(&border, "· Page 1", view.prompt.x) + 2;
-    assert_eq!(
-        ui::prompt_page_control_at(view.prompt, &state, name_col, row),
-        None,
-        "页名为纯展示，不命中: {border}"
-    );
+    // 条目名与边框空白不产生控件。
     assert_eq!(
         ui::prompt_page_control_at(view.prompt, &state, view.prompt.x + 3, row),
         None,
@@ -205,7 +202,7 @@ fn border_switches_page_and_rename_roundtrip() {
     assert_eq!(state.prompt.text(), "beta");
     let terminal = draw(&state, &config);
     let border = title_row(&terminal, &view);
-    assert!(border.contains("· Page 2"), "{border}");
+    assert!(!border.contains("Page 2"), "{border}");
     assert!(border.contains("2/2"), "{border}");
 
     // 末页右箭头置灰（Reset 前景），左箭头可用（Cyan）。
@@ -254,11 +251,10 @@ fn tree_title_row_is_plain_without_pager() {
 }
 
 #[test]
-fn border_title_truncates_page_name_before_item_title() {
+fn border_title_truncates_item_title_when_narrow() {
     let (mut state, config, view) = ready_state();
-    let long_name = "long-page-name-".repeat(6);
-    let mut item = PromptItem::single(11, None, "item", "body");
-    item.pages[0].name = long_name.clone();
+    let long_title = "long-item-title-".repeat(6);
+    let item = PromptItem::single(11, None, &long_title, "body");
     state.workspaces[0]
         .prompt_panel
         .tree
@@ -268,8 +264,7 @@ fn border_title_truncates_page_name_before_item_title() {
     let terminal = draw(&state, &config);
     let border = title_row(&terminal, &view);
 
-    assert!(border.contains(" item "), "条目名优先完整: {border}");
     assert!(border.contains("1/1"), "页控件完整: {border}");
-    assert!(!border.contains(&long_name), "页名被截断: {border}");
-    assert!(border.contains('…'), "页名以省略号收尾: {border}");
+    assert!(!border.contains(&long_title), "条目名过长被截断: {border}");
+    assert!(border.contains('…'), "条目名以省略号收尾: {border}");
 }

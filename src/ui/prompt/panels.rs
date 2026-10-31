@@ -72,8 +72,19 @@ fn paste_view<'a>(items: &'a [CommandItem<'a>], data: &PastePanelData) -> Comman
     }
 }
 
+/// 面板布局区域：向右缩进跳过左侧色条槽 `PROMPT_BLOCK_GUTTER_LEFT`，避免遮盖 `▎`。
+fn panel_content_area(area: Rect) -> Rect {
+    let offset = crate::layout::PROMPT_BLOCK_GUTTER_LEFT.min(area.width);
+    Rect {
+        x: area.x.saturating_add(offset),
+        width: area.width.saturating_sub(offset),
+        ..area
+    }
+}
+
 /// 粘贴面板布局；面板未打开或空间不足返回 None。
 pub fn paste_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
+    let area = panel_content_area(area);
     let data = paste_panel_data(prompt)?;
     let items = paste_items(&data);
     command_panel::layout(area, &paste_view(&items, &data))
@@ -81,6 +92,7 @@ pub fn paste_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
 
 /// 粘贴面板命中：返回被点中的操作索引；面板未打开或未命中返回 None。
 pub fn paste_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
+    let area = panel_content_area(area);
     let data = paste_panel_data(prompt)?;
     let items = paste_items(&data);
     let layout = command_panel::layout(area, &paste_view(&items, &data))?;
@@ -139,6 +151,7 @@ fn refer_view<'a>(items: &'a [CommandItem<'a>], data: &ReferPanelData) -> Comman
 
 /// 字母快捷面板布局；面板未打开或空间不足返回 None。
 pub fn refer_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
+    let area = panel_content_area(area);
     let data = refer_panel_data(prompt)?;
     let items = slash_row_items(&data.rows);
     command_panel::layout(area, &refer_view(&items, &data))
@@ -146,6 +159,7 @@ pub fn refer_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
 
 /// 字母快捷面板命中：返回被点中的候选索引；面板未打开或未命中返回 None。
 pub fn refer_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
+    let area = panel_content_area(area);
     let data = refer_panel_data(prompt)?;
     let items = slash_row_items(&data.rows);
     let layout = command_panel::layout(area, &refer_view(&items, &data))?;
@@ -163,6 +177,7 @@ const MENTION_DETAIL_MARGIN: usize = crate::ui::mention::MENTION_DETAIL_MARGIN;
 /// 绘制浮层面板：粘贴选择优先，其次文件提及、字母快捷、斜杠命令，最后块命令；
 /// 状态由 app 层维护，这里只做只读映射。
 pub(super) fn render_panels(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
+    let area = panel_content_area(area);
     if let Some(data) = paste_panel_data(prompt) {
         let items = paste_items(&data);
         command_panel::render(area, buf, &paste_view(&items, &data));
@@ -247,6 +262,7 @@ fn block_view<'a>(items: &'a [CommandItem<'a>], data: &BlockPanelData) -> Comman
 
 /// 块命令面板布局；面板未打开或空间不足返回 None。
 pub fn panel_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
+    let area = panel_content_area(area);
     let data = block_panel_data(prompt)?;
     let items = block_items(&data);
     command_panel::layout(area, &block_view(&items, &data))
@@ -254,6 +270,7 @@ pub fn panel_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
 
 /// 块命令面板命中：返回被点中的条目索引；面板未打开或未命中返回 None。
 pub fn panel_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
+    let area = panel_content_area(area);
     let data = block_panel_data(prompt)?;
     let items = block_items(&data);
     let layout = command_panel::layout(area, &block_view(&items, &data))?;
@@ -377,6 +394,7 @@ fn slash_view<'a>(items: &'a [CommandItem<'a>], data: &'a SlashPanelData) -> Com
 
 /// 斜杠命令面板布局；面板未打开或空间不足返回 None。
 pub fn slash_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
+    let area = panel_content_area(area);
     let data = slash_panel_data(prompt)?;
     let items = slash_items(&data);
     command_panel::layout(area, &slash_view(&items, &data))
@@ -384,6 +402,7 @@ pub fn slash_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
 
 /// 斜杠命令面板命中：返回被点中的条目索引；面板未打开或未命中返回 None。
 pub fn slash_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
+    let area = panel_content_area(area);
     let data = slash_panel_data(prompt)?;
     if data.placeholder {
         return None;
@@ -400,6 +419,7 @@ pub fn slash_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
 
 /// 提及面板布局；面板未打开或空间不足返回 None。
 pub fn mention_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
+    let area = panel_content_area(area);
     let data = mention_panel_data(prompt, area.width)?;
     let items = data.items();
     command_panel::layout(area, &mention_view(&items, &data, area.height / 2))
@@ -413,6 +433,7 @@ pub fn mention_tab_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Opt
 
 /// 提及面板命中：返回被点中的条目索引；面板未打开或未命中返回 None。
 pub fn mention_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
+    let area = panel_content_area(area);
     let data = mention_panel_data(prompt, area.width)?;
     if matches!(data.rows.first(), Some(MentionRowText::Empty(_))) {
         return None;

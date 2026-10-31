@@ -101,7 +101,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert_eq!(state.prompt.text(), content);
     assert!(state.prompt.slash_panel().is_none());
 
-    // 高亮：命令名绿色加粗；标题独立成行 Cyan 下划线；左侧色条 todo 藏青。
+    // 高亮：命令名绿色加粗；标题独立成行 Cyan 下划线；左侧色条固定 Cyan。
     let terminal = draw(&state, &config);
     let start_row = area.y;
     let row = line_text(&terminal, start_row);
@@ -111,8 +111,8 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     );
     assert_eq!(
         terminal.backend().buffer()[(area.x, start_row)].fg,
-        Color::LightBlue,
-        "todo 色条为靛蓝"
+        Color::Cyan,
+        "&&& 色条固定青色"
     );
     let command_x = cell_x(&row, "addTemplate");
     let command = &terminal.backend().buffer()[(command_x, start_row)];
@@ -150,13 +150,13 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_CLEAN), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_DEL), "{row}");
 
-    // 切换状态后色条颜色跟随为黄色，背景保持透明。
+    // 切换状态后色条颜色保持 Cyan，背景保持透明。
     update::toggle_template_status(&mut state, 0);
     let terminal = draw(&state, &config);
     assert_eq!(
         terminal.backend().buffer()[(area.x, start_row)].fg,
-        Color::Yellow,
-        "in_progress 边框为黄色"
+        Color::Cyan,
+        "&&& 色条固定青色"
     );
     for x in area.x..area.right() {
         if wide_spacer(terminal.backend().buffer(), x, start_row) {

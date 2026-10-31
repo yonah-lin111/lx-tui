@@ -64,11 +64,6 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
     if route_panel(state, &command) {
         return;
     }
-    // 编辑绑定条目时 Esc 返回树视图并提交内容；无绑定时保持既有行为。
-    if command == EditorCommand::Escape && prompt_editing(state) {
-        show_prompt_tree(state);
-        return;
-    }
     if let Some((start, end)) = prompt_selection_bounds(state) {
         // 写入类命令替换选区。
         let write = match &command {
@@ -112,7 +107,7 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::DeleteWordForward => state.prompt.delete_word_forward(),
         EditorCommand::Indent => state.prompt.indent(),
         EditorCommand::Outdent => {
-            if !state.prompt.cycle_template_status_at_cursor() {
+            if !state.prompt.cycle_template_status() {
                 state.prompt.outdent();
             }
         }
@@ -123,6 +118,9 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::PageNext => {
             state.prompt.clear_panel();
             super::switch_prompt_page(state, 1);
+        }
+        EditorCommand::NewPage => {
+            super::create_or_toast_new_page(state);
         }
         EditorCommand::Undo => state.prompt.undo(),
         EditorCommand::Redo => state.prompt.redo(),
@@ -284,14 +282,6 @@ fn route_prompt_pages(state: &mut AppState, command: &EditorCommand) {
             apply_page_search(state, command);
         }
     }
-}
-
-/// 显示中工作区是否处于已绑定条目的编辑视图。
-pub(crate) fn prompt_editing(state: &AppState) -> bool {
-    state
-        .workspaces
-        .get(state.prompt_workspace())
-        .is_some_and(|workspace| workspace.prompt_panel.editing.is_some())
 }
 
 /// 显示中工作区是否处于已绑定条目的编辑视图（临时提示词不参与自动保存）。

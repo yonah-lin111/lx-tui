@@ -452,11 +452,15 @@ fn page_controls_create_switch_and_rename_via_real_mouse_and_keys() {
     app.click(text::MENU_PAGE_NEW);
     assert!(
         app.wait_for("2/2"),
-        "switched to new page: \n{}",
+        "created new page in list: \n{}",
         app.screen()
     );
+    assert!(app.screen().contains("Page 2"), "新页显示在列表中");
+
+    // 新建页留在 Pages 列表，回车打开选中的新页。
+    app.send(b"\r");
     assert!(
-        app.screen().contains("Write your prompt"),
+        app.wait_for("Write your prompt"),
         "新页正文为空: \n{}",
         app.screen()
     );

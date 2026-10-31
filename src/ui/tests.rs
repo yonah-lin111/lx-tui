@@ -1401,7 +1401,10 @@ fn prompt_editor_divider_shows_editing_title() {
     let border = prompt_line(&lines, &view, y);
     assert!(border.contains(text::PROMPT_DRAFT_TITLE), "{border}");
     assert!(!border.contains("[tmp]"), "标题不带 tmp 标识: {border}");
-    assert!(border.contains("Page 1"), "内嵌当前页名: {border}");
+    assert!(
+        !border.contains("Page 1"),
+        "编辑区域左上角不显示页名: {border}"
+    );
     assert!(border.contains('‹') && border.contains('›'), "{border}");
     assert!(border.contains("1/1"), "{border}");
     // 标题为未聚焦灰（muted）：前景默认、DIM，即使 prompt 持有焦点。
@@ -1558,7 +1561,7 @@ fn prompt_renders_toolbar_and_divider_rows() {
     assert!(divider.contains(text::DIVIDER_RIGHT_JOIN), "{divider}");
     assert!(divider.contains(text::DIVIDER_MID), "{divider}");
     assert!(divider.contains(text::PROMPT_DRAFT_TITLE), "{divider}");
-    assert!(divider.contains("Page 1"), "{divider}");
+    assert!(!divider.contains("Page 1"), "{divider}");
     assert!(divider.contains("1/1"), "{divider}");
     // 顶边框只承载容器 tab。
     let border = prompt_line(&lines, &view, view.prompt.y);
@@ -2311,6 +2314,7 @@ fn prompt_bottom_prefix_ignores_focus() {
 fn prompt_page_name_ignores_focus() {
     let mut state = AppState::demo();
     state.prompt_width = 56;
+    update::show_prompt_pages(&mut state);
     let view = view_for(&state);
     let mut styles = Vec::new();
     for focused in [false, true] {

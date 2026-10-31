@@ -118,9 +118,8 @@ fn set_active_page(
     }
 }
 
-/// 新建页：先回到编辑视图；正式条目走 DB 效应（成功后载入）；临时提示词直接末尾追加并切到新页。
+/// 新建页：处于页列表视图时保留在列表并选中新页；处于编辑视图时切到新页。
 pub fn open_new_page(state: &mut AppState) -> bool {
-    hide_prompt_pages(state);
     let workspace = state.prompt_workspace();
     let Some(target) = state
         .workspaces
@@ -129,6 +128,10 @@ pub fn open_new_page(state: &mut AppState) -> bool {
     else {
         return false;
     };
+    let in_pages = state.prompt_owner().prompt_panel.mode == PromptMode::Pages;
+    if !in_pages {
+        hide_prompt_pages(state);
+    }
     commit_editing_prompt(state);
     state.prompt.clear_panel();
     state.selection = None;
@@ -165,10 +168,23 @@ pub fn open_new_page(state: &mut AppState) -> bool {
             let added = with_panel(state, workspace, |panel| {
                 let page_id = panel.alloc_temp_page_id();
                 let page = PromptPageId::Temp(page_id);
+                let mode = panel.mode;
+                let search_text = panel.pages_view.search.text().to_string();
                 let Some(temp) = panel.temp_mut(id) else {
                     return false;
                 };
                 temp.pages.push(PromptPage::temp(page_id, &name, ""));
+                if mode == PromptMode::Pages {
+                    let rows = crate::app::prompt::pages_list::page_rows(
+                        &temp.pages,
+                        temp.active_page,
+                        &search_text,
+                    );
+                    if let Some(pos) = rows.iter().position(|row| row.page == page) {
+                        panel.pages_view.selected = pos;
+                    }
+                    return true;
+                }
                 temp.active_page = page;
                 panel.mode = PromptMode::Editor;
                 true
@@ -176,13 +192,58 @@ pub fn open_new_page(state: &mut AppState) -> bool {
             if !added {
                 return false;
             }
-            reload_editor_from_active_page(state, workspace);
+            if !in_pages {
+                reload_editor_from_active_page(state, workspace);
+            }
             true
         }
     }
 }
 
-/// 服务回调：正式条目新页已落库并重载；立即切换到该页并进入编辑视图。
+/// 快捷键新建页（`Ctrl/Cmd+Shift+→`）：
+/// 若已有未填写的空页，切到该空页并 Toast 提示已有新页；
+/// 否则新建页、切入并 Toast 提示已新建。
+pub fn create_or_toast_new_page(state: &mut AppState) -> bool {
+    state.prompt.clear_panel();
+    commit_editing_prompt(state);
+    let Some((pages, active)) = displayed_prompt_pages(state) else {
+        return false;
+    };
+    let anchor = Some(state.prompt.id());
+    if let Some(empty) = pages.iter().find(|page| page.content.trim().is_empty()) {
+        let empty_id = empty.id;
+        if empty_id != active {
+            select_prompt_page(state, empty_id);
+        }
+        super::super::show_toast_at(
+            state,
+            anchor,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Warning,
+                text::TOAST_PAGE_ALREADY_NEW,
+                anchor,
+                std::time::Instant::now(),
+            ),
+        );
+        return true;
+    }
+    let created = open_new_page(state);
+    if created {
+        super::super::show_toast_at(
+            state,
+            anchor,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Default,
+                text::TOAST_PAGE_CREATED,
+                anchor,
+                std::time::Instant::now(),
+            ),
+        );
+    }
+    created
+}
+
+/// 服务回调：正式条目新页已落库并重载；页列表视图下保持在列表，编辑视图下切到新页。
 pub fn open_created_page(
     state: &mut AppState,
     workspace: usize,
@@ -191,12 +252,27 @@ pub fn open_created_page(
     _name: &str,
 ) -> bool {
     let page = PromptPageId::Saved(page_id);
+    let mut was_pages = false;
     let opened = with_panel(state, workspace, |panel| {
+        let mode = panel.mode;
+        let search_text = panel.pages_view.search.text().to_string();
         let Some(item) = panel.tree.item_mut(item_id) else {
             return false;
         };
         if item.page(page).is_none() {
             return false;
+        }
+        if mode == PromptMode::Pages {
+            was_pages = true;
+            let rows = crate::app::prompt::pages_list::page_rows(
+                &item.pages,
+                item.active_page,
+                &search_text,
+            );
+            if let Some(pos) = rows.iter().position(|row| row.page == page) {
+                panel.pages_view.selected = pos;
+            }
+            return true;
         }
         item.active_page = page;
         panel.mode = PromptMode::Editor;
@@ -205,7 +281,7 @@ pub fn open_created_page(
     if !opened {
         return false;
     }
-    if workspace == state.prompt_workspace() {
+    if !was_pages && workspace == state.prompt_workspace() {
         reload_editor_from_active_page(state, workspace);
         state.prompt_collapsed = false;
         super::super::focus_prompt(state);

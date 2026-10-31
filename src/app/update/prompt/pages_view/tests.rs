@@ -81,13 +81,11 @@ fn mode_switching_matrix_covers_all_nine_combinations() {
     apply_editor(&mut state, EditorCommand::Escape);
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
 
-    // 9. Editor + Esc → Tree
+    // 9. Editor + Esc → Editor（Esc 不再进入 Tree，只有退出两个 list 的作用）
     apply_editor(&mut state, EditorCommand::Escape);
-    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Tree);
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
 
     // Pages 模式下点击 [≡]/[/] 按钮同样返回 Editor。
-    toggle_prompt_panel_mode(&mut state);
-    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
     show_prompt_pages(&mut state);
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Pages);
     toggle_prompt_panel_mode(&mut state);
@@ -298,13 +296,13 @@ fn page_menu_delete_requires_inline_confirm_and_preserves_undo_when_deleting_non
 
 #[test]
 fn page_menu_new_page_and_copy_content() {
-    // 1. 正式条目 New page：返回 Editor 并推入 Effect::CreatePage，回调后不进入行内重命名。
+    // 1. 正式条目 New page：留在 Pages 列表并推入 Effect::CreatePage，回调后不切到 Editor。
     let mut state = state_with_three_pages();
     show_prompt_pages(&mut state);
     open_pages_blank_menu(&mut state, (10, 10));
     state.effects.clear();
     activate_menu(&mut state);
-    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Pages);
     assert!(
         state
             .effects
@@ -312,7 +310,7 @@ fn page_menu_new_page_and_copy_content() {
             .any(|effect| matches!(effect, Effect::CreatePage { id: 10, .. }))
     );
 
-    // 2. 临时提示词 New page：末尾追加新页并回到 Editor。
+    // 2. 临时提示词 New page：末尾追加新页并保持在 Pages 列表。
     let mut temp_state = AppState::demo();
     temp_state.prompt.set_text("temp p1");
     show_prompt_pages(&mut temp_state);
@@ -320,13 +318,17 @@ fn page_menu_new_page_and_copy_content() {
     activate_menu(&mut temp_state);
     assert_eq!(
         temp_state.workspaces[0].prompt_panel.mode,
-        PromptMode::Editor
+        PromptMode::Pages
     );
     assert_eq!(
         temp_state.workspaces[0].prompt_panel.temps()[0].pages.len(),
         2
     );
-    assert_eq!(temp_state.prompt.text(), "");
+    assert_eq!(temp_state.prompt.text(), "temp p1");
+    assert_eq!(
+        temp_state.workspaces[0].prompt_panel.temps()[0].pages[1].content,
+        ""
+    );
 
     // 3. Copy content：复制该页全文并弹出剪贴板 toast。
     show_prompt_pages(&mut state);

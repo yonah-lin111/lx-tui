@@ -126,10 +126,13 @@ fn enter_on_item_opens_editor_and_escape_returns() {
     assert_eq!(state.prompt.text(), "nested content");
     assert!(state.prompt_focused());
 
-    // Esc 返回树并保持绑定清除。
+    // Esc 不再打开树视图（保持 Editor）。
     apply_editor(&mut state, EditorCommand::Escape);
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+
+    // Ctrl/Cmd+L 切回树。
+    apply_editor(&mut state, EditorCommand::TogglePromptList);
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Tree);
-    assert_eq!(state.workspaces[0].prompt_panel.editing, None);
 
     // 树视图 Esc 切换回编辑：恢复进入列表前的绑定。
     apply_editor(&mut state, EditorCommand::Escape);
@@ -936,8 +939,12 @@ fn activate_temp_row_opens_editor_and_escape_returns() {
     );
     assert_eq!(state.prompt.text(), "temp body");
 
-    // Esc 返回树：内容保留、绑定清除、内容 temp 与 default temp 同列。
+    // Esc 不再从 Editor 切换到 Tree。
     apply_editor(&mut state, EditorCommand::Escape);
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+
+    // Ctrl/Cmd+L 切回树。
+    apply_editor(&mut state, EditorCommand::TogglePromptList);
     let panel = &state.workspaces[0].prompt_panel;
     assert_eq!(panel.mode, PromptMode::Tree);
     assert_eq!(panel.editing, None);

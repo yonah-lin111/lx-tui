@@ -492,7 +492,7 @@ fn template_button_labels(status: TemplateStatus) -> [&'static str; 4] {
 /// 块颜色：`&&&` 按状态（`style::template_border`）、`+++` 固定品红（`style::supple_border`）。
 fn block_color(info: BlockLineInfo) -> Style {
     match info.kind {
-        BlockKind::Template => style::template_border(info.status),
+        BlockKind::Template => style::template_block_bar(),
         BlockKind::Supple => style::supple_border(),
     }
 }

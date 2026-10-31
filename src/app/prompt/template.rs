@@ -28,12 +28,24 @@ impl Prompt {
 
     /// 光标在模板块内时循环块状态（todo → in_progress → done）；返回是否已处理。
     ///
-    /// 对齐 lx-agent `Shift-Tab`：不在块内返回 false，由调用方回退为反缩进。
-    pub fn cycle_template_status_at_cursor(&mut self) -> bool {
-        let Some(start) = markdown::template_block_start_at(&self.text, self.cursor) else {
+    /// 切换当前页模板块状态（todo → in_progress → done → todo，单步撤销）；
+    /// 无论光标位于页内何处，只要本页存在 &&& 任务块即轮转并返回 true；
+    /// 本页无 &&& 任务块时返回 false，由调用方回退为反缩进。
+    pub fn cycle_template_status(&mut self) -> bool {
+        let scan = markdown::block_scan(&self.text);
+        let Some(template) = scan
+            .spans
+            .iter()
+            .find(|span| span.kind == markdown::BlockKind::Template)
+        else {
             return false;
         };
-        self.toggle_template_status(start)
+        self.toggle_template_status(template.start)
+    }
+
+    /// 兼容旧方法：委托 [`Self::cycle_template_status`]。
+    pub fn cycle_template_status_at_cursor(&mut self) -> bool {
+        self.cycle_template_status()
     }
 
     /// 清理模板块内未填写的空项（单步撤销）；返回是否产生变更。

@@ -548,6 +548,10 @@ pub const TOAST_PROMPT_MOVE_FAILED: &str = "Failed to move; unchanged";
 pub const TOAST_PROMPT_MOVE_DEPTH: &str = "Cannot move: folders support two levels";
 /// 被拖文件夹内含子文件夹，不能整体移入另一文件夹。
 pub const TOAST_PROMPT_MOVE_NESTED: &str = "Cannot move: folder contains subfolders";
+/// 已有未编辑的空页提示。
+pub const TOAST_PAGE_ALREADY_NEW: &str = "Already have a new page";
+/// 新页创建成功提示。
+pub const TOAST_PAGE_CREATED: &str = "New page created";
 
 /// lx 聊天相关提示与状态文案。
 ///
