@@ -1,6 +1,6 @@
 # lx Agent 系统提示词（AGENTS.md）注入与模型切换逻辑 — 设计文档
 
-> 状态：**已实现并通过评审**（P0/P1/P2 共 11 项评审问题已全部修复，待合并入 `dev`）（2026-11-01）
+> 状态：**已完成并合并入 `dev`**（P0/P1/P2 共 11 项评审问题已全部修复并锁死回归测试）（2026-11-01）
 > 参考实现：
 > - `/Users/yonah/projects/agent/codex-main`（`codex-rs/codex-home/src/instructions/mod.rs`、`codex-rs/core/src/agents_md.rs`、`codex-rs/core/src/context/user_instructions.rs`）
 > - `/Users/yonah/projects/agent/opencode-dev`（`packages/core/src/plugin/identity.ts`、`packages/core/src/session/instruction-state.ts`、`packages/core/src/session/runner/to-llm-message.ts`、`packages/tui/src/util/model.ts`）
