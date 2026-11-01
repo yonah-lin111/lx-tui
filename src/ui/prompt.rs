@@ -199,10 +199,19 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         .take(usize::from(area.height))
     {
         let y = area.y + (index - scroll) as u16;
+        let info = infos.get(row.line).copied().flatten();
+        if row.top_border {
+            if let Some(info) = info {
+                paint_block_top_border(buf, area, y, info);
+            }
+            if let Some(selection) = selection {
+                paint_selection(buf, area, y, index as u16, selection);
+            }
+            continue;
+        }
         let line_tokens = tokens.get(row.line).map(Vec::as_slice).unwrap_or_default();
         let base = row.start - line_starts.get(row.line).copied().unwrap_or(row.start);
-        let info = infos.get(row.line).copied().flatten();
-        let first = index == 0 || rows[index - 1].line != row.line;
+        let first = first_text_row(&rows, index);
         let last = index + 1 >= rows.len() || rows[index + 1].line != row.line;
         let start_row = info.is_some_and(|info| info.role == BlockRole::Start && first);
         let text_start = area.x + block_gutter(info.is_some());
@@ -301,6 +310,13 @@ const TEMPLATE_BUTTONS: [TemplateBlockButton; 3] = [
 const SUPPLE_BUTTONS: [BlockButton; 3] =
     [BlockButton::Copy, BlockButton::Clean, BlockButton::Delete];
 
+/// 是否为所属逻辑行的首个文本视觉行（跳过块顶边装饰行）。
+fn first_text_row(rows: &[VisualRow], index: usize) -> bool {
+    let row = rows[index];
+    !row.top_border
+        && (index == 0 || rows[index - 1].line != row.line || rows[index - 1].top_border)
+}
+
 /// 块行左侧色条槽宽度：块行为 `PROMPT_BLOCK_GUTTER_LEFT`，其余为 0。
 fn block_gutter(block: bool) -> u16 {
     if block {
@@ -359,8 +375,7 @@ pub fn template_buttons(prompt: &Prompt, area: Rect) -> Vec<TemplateButtonHit> {
     let scroll = prompt.scroll();
     let mut hits = Vec::new();
     for (index, row) in rows.iter().enumerate() {
-        let first = index == 0 || rows[index - 1].line != row.line;
-        if !first {
+        if !first_text_row(&rows, index) {
             continue;
         }
         let Some(visible) = index.checked_sub(scroll) else {
@@ -414,8 +429,7 @@ pub fn block_buttons(prompt: &Prompt, area: Rect) -> Vec<BlockButtonHit> {
     let scroll = prompt.scroll();
     let mut hits = Vec::new();
     for (index, row) in rows.iter().enumerate() {
-        let first = index == 0 || rows[index - 1].line != row.line;
-        if !first {
+        if !first_text_row(&rows, index) {
             continue;
         }
         let Some(visible) = index.checked_sub(scroll) else {
@@ -498,6 +512,18 @@ fn paint_block_bar(buf: &mut Buffer, area: Rect, y: u16, info: BlockLineInfo) {
         cell.reset();
         cell.set_symbol(text::PROMPT_BLOCK_BAR);
         cell.set_style(block_color(info));
+    }
+}
+
+/// 绘制块顶部边框：整行画满与左侧色条等厚的下 1/4 块 `▂`，颜色跟随所在块。
+fn paint_block_top_border(buf: &mut Buffer, area: Rect, y: u16, info: BlockLineInfo) {
+    let color = block_color(info);
+    for x in area.x..area.right() {
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.reset();
+            cell.set_symbol(text::PROMPT_BLOCK_TOP_BORDER);
+            cell.set_style(color);
+        }
     }
 }
 

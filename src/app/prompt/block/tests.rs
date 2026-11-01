@@ -38,15 +38,15 @@ fn supplement_in_empty_document_replaces_entire_text_and_positions_cursor_in_tit
 }
 
 #[test]
-fn supplement_typed_before_template_appends_after_template_with_single_blank_line() {
+fn supplement_typed_before_template_keeps_command_blank_line_and_appends_after_template() {
     let initial = "\n&&& addTemplate --start\n{title: T}\n\n- body\n&&& addTemplate --end";
     let mut p = prompt_with(60, 20, initial);
     p.set_cursor_offset(0);
     trigger_supplement(&mut p);
 
     assert!(
-        p.text().starts_with("&&& addTemplate --start\n"),
-        "原命令行应整行消失: {:?}",
+        p.text().starts_with("\n&&& addTemplate --start\n"),
+        "原命令行只清空命令文字、保留空行: {:?}",
         p.text()
     );
     assert!(
@@ -93,6 +93,12 @@ fn supplement_typed_inside_template_appends_after_last_existing_supplement() {
     );
     assert!(
         p.text()
+            .starts_with("&&& addTemplate --start\n{title: T}\n\n&&& addTemplate --end"),
+        "&&& 内部触发行的空行保留: {:?}",
+        p.text()
+    );
+    assert!(
+        p.text()
             .contains("{title: S2}\n\n+++ supplement --end\n\n+++ supplement --start\n{title: }"),
         "追加在第 2 个 +++ 之后且空一行: {:?}",
         p.text()
@@ -114,8 +120,8 @@ fn supplement_with_trailing_plain_text_inserts_between_block_and_tail_with_blank
         p.text()
     );
     assert!(
-        p.text().ends_with("+++ supplement --end\n\nplain tail"),
-        "新块与后续正文隔一空行: {:?}",
+        p.text().ends_with("+++ supplement --end\n\nplain tail\n"),
+        "新块与后续正文隔一空行且触发处空行保留: {:?}",
         p.text()
     );
 }
@@ -139,7 +145,7 @@ fn supplement_when_anchor_already_followed_by_blank_line_does_not_double_blanks(
         p.text()
     );
     assert!(
-        p.text().ends_with("+++ supplement --end\n\nplain tail"),
+        p.text().ends_with("+++ supplement --end\n\nplain tail\n"),
         "{:?}",
         p.text()
     );
@@ -178,7 +184,7 @@ fn unclosed_block_hides_supplement_command_and_skips_append() {
     assert!(p.slash_panel().is_none(), "未闭合块下不提供 /supplement");
     assert!(!p.slash_confirm(), "无候选可确认");
 
-    // 即使绕过面板直接追加也不插入：落点会落在未闭合块内部（命令行按触发语义删除）。
+    // 即使绕过面板直接追加也不插入：落点会落在未闭合块内部（命令行仅清空命令文字、保留空行）。
     let cursor = p.cursor();
     let trigger = markdown::SlashTrigger {
         line_start: cursor - "/supplement".len(),
@@ -188,7 +194,7 @@ fn unclosed_block_hides_supplement_command_and_skips_append() {
     };
     let (content, cursor_in_block) = markdown::supple_block_content("supplement", None, "");
     p.append_supple_block(&trigger, &content, cursor_in_block);
-    assert_eq!(p.text(), "&&& addTemplate --start\n{title: T}\nbody");
+    assert_eq!(p.text(), "&&& addTemplate --start\n{title: T}\nbody\n");
     assert!(!p.text().contains("+++"), "未闭合块下不得追加补充块");
 }
 
@@ -226,4 +232,49 @@ fn supplement_scrolls_viewport_so_new_block_start_line_is_visible() {
         p.scroll(),
         p.scroll() + 6
     );
+}
+
+#[test]
+fn block_top_border_row_is_skipped_by_navigation_and_kept_in_view_when_scrolling_up() {
+    let mut p = prompt_with(
+        40,
+        4,
+        "header line\n&&& addTemplate --start\n{title: T}\nbody\n&&& addTemplate --end",
+    );
+    p.scroll_to(0);
+    // 起始状态：row 0 为 "header line"，row 1 为 &&& 顶边，row 2 为 "&&& addTemplate --start"。
+    p.set_cursor_from_cell(0, 3);
+    assert_eq!(p.cursor_cell(), Some((0, 3)));
+
+    // 从 header line 下移：跳过 row 1 顶边，直接落到 row 2 的起始文本行并保持列偏移。
+    p.move_down();
+    assert_eq!(
+        p.cursor_cell(),
+        Some((2, 4)),
+        "下移跳过顶边并加上左色条 1 列"
+    );
+
+    // 从起始文本行上移：跳过 row 1 顶边，直接回到 row 0 的 header line。
+    p.move_up();
+    assert_eq!(p.cursor_cell(), Some((0, 3)), "上移跳过顶边回到上一文本行");
+
+    // 点击顶边行（row 1）：光标归位到块起始文本行行首（row 2, col 1）。
+    p.set_cursor_from_cell(1, 5);
+    assert_eq!(
+        p.cursor_cell(),
+        Some((2, 1)),
+        "点击顶边落到块起始文本行行首"
+    );
+
+    // 当块起始行在文档首行、视口向下滚动后上移回块起始行时，顶边行（row 0）一并滚入视口。
+    let mut top_block = prompt_with(
+        40,
+        3,
+        "&&& addTemplate --start\n{title: T}\nline1\nline2\n&&& addTemplate --end",
+    );
+    top_block.set_cursor_offset(top_block.text().len());
+    assert!(top_block.scroll() > 0);
+    top_block.set_cursor_offset(0);
+    assert_eq!(top_block.scroll(), 0, "上移到块起始行时连同顶边行滚入视口");
+    assert_eq!(top_block.cursor_cell(), Some((1, 1)));
 }

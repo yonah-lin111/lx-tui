@@ -18,6 +18,14 @@ impl Prompt {
         for (line, segment) in lines.iter().enumerate() {
             let line_end = line_start + segment.len();
             let info = scan.infos.get(line).copied().flatten();
+            if info.is_some_and(|info| info.role == markdown::BlockRole::Start) {
+                rows.push(VisualRow {
+                    line,
+                    start: line_start,
+                    end: line_start,
+                    top_border: true,
+                });
+            }
             let width = if info.is_some() {
                 width.saturating_sub(margins).max(1)
             } else {
@@ -33,6 +41,7 @@ impl Prompt {
                         line,
                         start: row_start,
                         end: absolute,
+                        top_border: false,
                     });
                     row_start = absolute;
                     col = 0;
@@ -43,6 +52,7 @@ impl Prompt {
                 line,
                 start: row_start,
                 end: line_end,
+                top_border: false,
             });
             line_start = line_end + 1;
         }
@@ -289,6 +299,9 @@ impl Prompt {
             return (0, 0);
         }
         for (index, row) in rows.iter().enumerate() {
+            if row.top_border {
+                continue;
+            }
             // 光标落在折叠区留下的空隙：归到其后首个可见行行首。
             if self.cursor < row.start {
                 return (index, 0);
@@ -360,7 +373,11 @@ impl Prompt {
         let height = usize::from(self.height.max(1));
         let (row, _) = self.cursor_visual_in(&rows);
         if row < self.scroll {
-            self.scroll = row;
+            self.scroll = if height > 1 && row > 0 && rows[row - 1].top_border {
+                row - 1
+            } else {
+                row
+            };
         } else if row >= self.scroll + height {
             self.scroll = row + 1 - height;
         }

@@ -19,7 +19,8 @@ fn new_prompt_is_empty_with_single_row() {
         vec![VisualRow {
             line: 0,
             start: 0,
-            end: 0
+            end: 0,
+            top_border: false,
         }]
     );
     assert_eq!(prompt.cursor_cell(), Some((0, 0)));
@@ -93,12 +94,14 @@ fn wraps_long_lines_at_content_width() {
             VisualRow {
                 line: 0,
                 start: 0,
-                end: 4
+                end: 4,
+                top_border: false,
             },
             VisualRow {
                 line: 0,
                 start: 4,
-                end: 5
+                end: 5,
+                top_border: false,
             },
         ]
     );
@@ -114,12 +117,14 @@ fn wide_chars_are_never_split_across_rows() {
             VisualRow {
                 line: 0,
                 start: 0,
-                end: 6
+                end: 6,
+                top_border: false,
             },
             VisualRow {
                 line: 0,
                 start: 6,
-                end: 9
+                end: 9,
+                top_border: false,
             },
         ]
     );
@@ -249,15 +254,15 @@ fn selection_preserves_leading_indentation_and_accounts_for_block_gutter() {
         Some("first")
     );
 
-    // 模板块内（左侧色条占 1 列）：从块内正文起点（col 1）或首个非空白字符（col 3）拖选均保留缩进。
+    // 模板块内（左侧色条占 1 列，行 0 为顶边行）：从块内正文起点（col 1）或首个非空白字符（col 3）拖选均保留缩进。
     let mut block = prompt(40, 6);
     block.set_text("&&& addTemplate --start\n  - item1\n\n    - item2\n&&& addTemplate --end");
     assert_eq!(
-        block.selection_text((1, 1), (3, 15)).as_deref(),
+        block.selection_text((2, 1), (4, 15)).as_deref(),
         Some("  - item1\n\n    - item2")
     );
     assert_eq!(
-        block.selection_text((1, 3), (3, 15)).as_deref(),
+        block.selection_text((2, 3), (4, 15)).as_deref(),
         Some("  - item1\n\n    - item2")
     );
 }
@@ -1746,21 +1751,22 @@ fn template_block_lines_shift_cursor_and_mouse_mapping() {
     let mut editor = prompt(40, 10);
     editor.insert_str("&&& addTemplate --start {title: }\n# Add\n&&& addTemplate --end\nplain");
 
-    // 块内行：渲染列 = 左侧色条槽 1 + 文本列；点击左侧色条（col 0）落到文本行首。
-    editor.set_cursor_from_cell(1, 1);
-    assert_eq!(editor.cursor_cell(), Some((1, 1)), "块行文本首列映射");
-    editor.set_cursor_from_cell(1, 0);
+    // 块内行（row 0 为顶边装饰行，row 1..=3 为块内文本行）：
+    // 渲染列 = 左侧色条槽 1 + 文本列；点击左侧色条（col 0）落到文本行首。
+    editor.set_cursor_from_cell(2, 1);
+    assert_eq!(editor.cursor_cell(), Some((2, 1)), "块行文本首列映射");
+    editor.set_cursor_from_cell(2, 0);
     assert_eq!(
         editor.cursor_cell(),
-        Some((1, 1)),
+        Some((2, 1)),
         "点击左侧色条钳到文本行首"
     );
-    editor.set_cursor_from_cell(1, 4);
-    assert_eq!(editor.cursor_cell(), Some((1, 4)));
+    editor.set_cursor_from_cell(2, 4);
+    assert_eq!(editor.cursor_cell(), Some((2, 4)));
 
     // 块外行不缩进。
-    editor.set_cursor_from_cell(3, 0);
-    assert_eq!(editor.cursor_cell(), Some((3, 0)));
+    editor.set_cursor_from_cell(4, 0);
+    assert_eq!(editor.cursor_cell(), Some((4, 0)));
 }
 
 #[test]
@@ -1768,7 +1774,10 @@ fn template_block_lines_wrap_inside_border_gutters() {
     let mut editor = prompt(10, 20);
     editor.insert_str("&&& addTemplate --start {title: }");
     let rows = editor.visual_rows();
-    let block_rows: Vec<_> = rows.iter().filter(|row| row.line == 0).collect();
+    let block_rows: Vec<_> = rows
+        .iter()
+        .filter(|row| row.line == 0 && !row.top_border)
+        .collect();
     assert!(block_rows.len() > 1, "块行按扣除色条槽后的宽度换行");
     assert!(
         block_rows
@@ -1898,7 +1907,7 @@ fn custom_block_inserts_wrapped_template_with_cursor_in_title() {
     assert!(text.ends_with("&&& triage --end"), "{text}");
     assert!(text.contains("triage body"));
     let (row, col) = prompt.cursor_cell().expect("cursor visible");
-    assert_eq!(row, 1, "光标落在标题行");
+    assert_eq!(row, 2, "光标落在标题行（row 0 为顶边、row 1 为起始行）");
     assert!(col > 0);
 }
 
@@ -2102,10 +2111,10 @@ fn worktree_chooser_keeps_a_non_adjacent_command_line() {
         text.matches('\n').count(),
         fixture.matches('\n').count() + 2
     );
-    // 光标留在被清空的命令行上（不因下方插入绑定行而落到下一行）。
+    // 光标留在被清空的命令行上（不因下方插入绑定行而落到下一行；含块顶边行偏移 +1）。
     assert_eq!(
         prompt.cursor_cell().map(|cell| cell.0),
-        Some(2),
+        Some(3),
         "{}",
         prompt.text()
     );
@@ -2148,10 +2157,10 @@ fn worktree_chooser_keeps_a_deeper_command_line() {
         text,
         "&&& addTemplate --start\n{title: }\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n"
     );
-    // 光标落在绑定行行尾（不因新增分割线行而落到下一行）。
+    // 光标落在绑定行行尾（不因新增分割线行而落到下一行；含块顶边行偏移 +1）。
     assert_eq!(
         prompt.cursor_cell().map(|cell| cell.0),
-        Some(4),
+        Some(5),
         "{}",
         prompt.text()
     );
@@ -2271,7 +2280,7 @@ fn worktree_chooser_echoes_command_and_follows_the_command_line() {
         text.contains("body\n/gitWorkTree \n&&& addTemplate --end"),
         "命令回显: {text}"
     );
-    assert_eq!(prompt.cursor_cell().map(|cell| cell.0), Some(3), "{text}");
+    assert_eq!(prompt.cursor_cell().map(|cell| cell.0), Some(4), "{text}");
 
     // 同一行内移动光标：仍锚定，选择器保持打开。
     prompt.move_left();
