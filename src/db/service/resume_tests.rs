@@ -370,3 +370,66 @@ fn resume_ensures_unregistered_repo_root_before_listing() {
     let count = open_history_list(&mut service, &mut state);
     assert_eq!(count, 1, "未登记主 checkout 也要能列出共享会话");
 }
+
+#[test]
+fn resume_restores_persisted_model_switches() {
+    let (mut service, mut state, cwd, _) = trusted_service("resume-model-switches");
+    let session_id = seed_session(service.db.as_ref().expect("db"), &cwd, "initial turn");
+    let pane = focused_pane(&state);
+
+    // 先加载会话到窗格
+    open_history_list(&mut service, &mut state);
+    crate::app::update::apply_slash_enter(&mut state, pane);
+    service.pump(&mut state);
+
+    // 切换模型并通过 Persistence::pump 持久化到 agent_model_switch 表
+    crate::app::update::finish_model_selection(
+        &mut state,
+        pane,
+        crate::config::ai::ModelSelection {
+            provider: "9router".into(),
+            model: "deepseek-v4.1-flash".into(),
+            variant: Some("max".into()),
+        },
+    );
+    service.pump(&mut state);
+
+    // 开启新会话清空窗格内存，再通过 /resume 重新加载原会话
+    crate::app::update::new_session(&mut state, pane);
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .model_switch
+            .is_empty()
+    );
+    open_history_list(&mut service, &mut state);
+    crate::app::update::apply_slash_enter(&mut state, pane);
+    service.pump(&mut state);
+
+    let switches = &state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .model_switch
+        .switches;
+    assert_eq!(
+        switches.len(),
+        1,
+        "/resume 后必须从数据库恢复模型切换时间线"
+    );
+    assert_eq!(switches[0].to_provider, "9router");
+    assert_eq!(switches[0].to_model, "deepseek-v4.1-flash");
+    assert_eq!(switches[0].to_variant.as_deref(), Some("max"));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .session_id
+            .as_deref(),
+        Some(session_id.as_str())
+    );
+}

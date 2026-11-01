@@ -27,6 +27,7 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.chat.reset_session_view();
     target.lx.clear_agents();
     target.lx.compact.reset();
+    target.lx.model_switch.reset();
     target.lx.clear_rewind();
     crate::app::update::clear_lx_selection_for(state, pane);
     refresh_lx_status(state, pane);
@@ -402,8 +403,9 @@ pub fn on_session_loaded_full(
         }
     }
     target.lx.chat.session_id = Some(session_id.to_string());
-    // 切会话：先清空 compact 状态（检查点列表随后由加载回执回填）。
+    // 切会话：先清空 compact 与 model_switch 状态（列表随后由加载回执回填）。
     target.lx.compact.reset();
+    target.lx.model_switch.reset();
     target.lx.clear_rewind();
     // 切换会话：未执行的命令与排队项不得漂移到新会话。
     target.lx.chat.pending_shells.clear();
@@ -504,6 +506,9 @@ pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) 
     if target.lx.chat.session_id.as_deref() == Some(session_id) {
         target.lx.chat.reset_session_view();
         target.lx.clear_agents();
+        target.lx.compact.reset();
+        target.lx.model_switch.reset();
+        target.lx.clear_rewind();
         crate::app::update::clear_lx_selection_for(state, pane);
         return true;
     }
@@ -633,37 +638,137 @@ fn default_variant_index(
         .unwrap_or(0)
 }
 
-/// 选择完成后写入窗格选择；已保存 session 同步 DB 三列；并写回配置默认（下次启动沿用）。
+/// 选择完成后写入窗格选择；已保存 session 同步 DB 三列与切换时间线；并写回配置默认（下次启动沿用）。
 pub(crate) fn finish_model_selection(
     state: &mut AppState,
     pane: PaneId,
     selection: ModelSelection,
 ) {
+    let models = state.models.clone();
+    let workspace = state.chat_session_key_for_pane(pane);
+    let normalized = models.normalize_selection(selection.clone());
     if let Some(target) = state.pane_mut_anywhere(pane) {
+        let previous = target.lx.chat.effective_selection(&models).or_else(|| {
+            target
+                .lx
+                .chat
+                .selection
+                .as_ref()
+                .map(|sel| models.normalize_selection(sel.clone()))
+        });
         target.lx.slash = None;
         target.lx.chat.selection = Some(selection.clone());
         // 切模型时旧分子清空。
         target.lx.chat.input_tokens_reset();
-        // 已保存 session：选择动作排队写 DB。
-        if let Some(session_id) = target.lx.chat.session_id.clone()
-            && let Some(workspace) = state.chat_session_key_for_pane(pane)
-        {
-            state
-                .effects
-                .push(crate::app::effects::Effect::SetChatSessionModel {
-                    workspace,
-                    session_id,
-                    model: ModelSnapshot {
-                        provider: selection.provider.clone(),
-                        model: selection.model.clone(),
-                        variant: selection.variant.clone(),
-                    },
+
+        if let Some(session_id) = target.lx.chat.session_id.clone() {
+            let model_snapshot = ModelSnapshot {
+                provider: normalized.provider.clone(),
+                model: normalized.model.clone(),
+                variant: normalized.variant.clone(),
+            };
+            let has_messages = !target.lx.chat.messages.is_empty();
+            let changed = previous.as_ref() != Some(&normalized);
+            let commit = if has_messages && changed {
+                let from_snapshot = previous.as_ref().map(|prev| ModelSnapshot {
+                    provider: prev.provider.clone(),
+                    model: prev.model.clone(),
+                    variant: prev.variant.clone(),
                 });
+                let from_label = previous.as_ref().map(|prev| {
+                    let name = models.model_display_name(&prev.provider, &prev.model);
+                    match prev.variant.as_deref().filter(|v| !v.is_empty()) {
+                        Some(variant) => format!("{name} ({variant})"),
+                        None => name,
+                    }
+                });
+                let to_label = models.model_display_name(&normalized.provider, &normalized.model);
+                let supports_image_input =
+                    crate::app::state::FrozenModel::resolve(&models, &normalized)
+                        .is_some_and(|frozen| frozen.supports_image_input);
+                let to_identity = crate::chat::agent::ModelIdentity {
+                    display_name: to_label.clone(),
+                    provider_id: normalized.provider.clone(),
+                    model_id: normalized.model.clone(),
+                    variant: normalized.variant.clone(),
+                    supports_image_input,
+                };
+                let updated_sources = crate::chat::agent::compute_updated_sources(
+                    from_snapshot.as_ref(),
+                    &model_snapshot,
+                    false,
+                );
+                let injected_prompt = crate::chat::agent::render_model_switch_update(
+                    from_label.as_deref(),
+                    &to_identity,
+                    &updated_sources,
+                    &[],
+                );
+                let next_seq = next_pane_sequence(&target.lx);
+                target
+                    .lx
+                    .model_switch
+                    .switches
+                    .push(crate::app::state::ModelSwitchNoticeView {
+                        id: crate::db::new_external_id("msw"),
+                        sequence: next_seq,
+                        from_provider: from_snapshot.as_ref().map(|s| s.provider.clone()),
+                        from_model: from_snapshot.as_ref().map(|s| s.model.clone()),
+                        from_variant: from_snapshot.as_ref().and_then(|s| s.variant.clone()),
+                        to_provider: model_snapshot.provider.clone(),
+                        to_model: model_snapshot.model.clone(),
+                        to_variant: model_snapshot.variant.clone(),
+                        from_label: from_label.clone(),
+                        to_label: to_label.clone(),
+                        updated_sources: updated_sources.clone(),
+                        injected_prompt: injected_prompt.clone(),
+                        created_at_ms: crate::db::now_ms(),
+                    });
+                Some(crate::db::chat::ModelSwitchCommit {
+                    session_id: session_id.clone(),
+                    model: model_snapshot.clone(),
+                    from_label,
+                    to_label,
+                    updated_sources,
+                    injected_prompt,
+                })
+            } else {
+                None
+            };
+            if let Some(workspace) = workspace {
+                state
+                    .effects
+                    .push(crate::app::effects::Effect::SetChatSessionModel {
+                        workspace,
+                        session_id,
+                        model: model_snapshot,
+                        commit,
+                    });
+            }
         }
     }
     // 持久化：写回 `ai.json` defaultModel（关闭重开仍是这个模型）。
     persist_default_model(state, &selection);
     refresh_lx_status(state, pane);
+}
+
+/// 计算窗格当前内存时间线中的下一个单调 `sequence`。
+fn next_pane_sequence(lx: &crate::app::state::Lx) -> i64 {
+    let max_msg = lx
+        .chat
+        .messages
+        .iter()
+        .enumerate()
+        .map(|(idx, m)| m.sequence.max(idx as i64))
+        .max();
+    let max_notice = lx.chat.notices.iter().map(|n| n.sequence).max();
+    let max_compact = lx.compact.checkpoints.iter().map(|c| c.sequence).max();
+    let max_switch = lx.model_switch.switches.iter().map(|s| s.sequence).max();
+    [max_msg, max_notice, max_compact, max_switch]
+        .into_iter()
+        .flatten()
+        .max()
+        .map_or(0, |max| max.saturating_add(1))
 }
 
 /// 模型的 variants 键列表。

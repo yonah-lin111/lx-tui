@@ -29,9 +29,12 @@ fn assemble_with(
         output_limit: None,
         variant_params: None,
         compact,
+        model_identity: None,
         environment: None,
+        instructions: None,
         skills: None,
         mcp: None,
+        model_switches: &[],
         skill_blocks: &[],
         supports_image_input: true,
     })

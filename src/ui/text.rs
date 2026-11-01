@@ -760,6 +760,43 @@ pub fn compact_notice_title(count: usize) -> String {
 pub fn compact_notice(model: &str, time: &str) -> String {
     format!("model: {model} · {time}")
 }
+
+/// 模型切换提示条目标题（独立时间线条目）。
+pub const LX_MODEL_SWITCH_NOTICE_TITLE: &str = "-- Model switched --";
+
+/// 模型切换提示条目标题：连续多条合并时带数量（`-- Model switched x2 --`）。
+pub fn model_switch_notice_title(count: usize) -> String {
+    if count > 1 {
+        format!("-- Model switched x{count} --")
+    } else {
+        LX_MODEL_SWITCH_NOTICE_TITLE.to_string()
+    }
+}
+
+/// 模型切换提示条目描述行（英文，对齐 compact 描述风格）。
+pub fn model_switch_notice_desc(
+    variant_only: bool,
+    model_label: &str,
+    variant: Option<&str>,
+    time: &str,
+    updated_sources: &[String],
+) -> String {
+    let base = if variant_only {
+        let level = variant.filter(|v| !v.is_empty()).unwrap_or("default");
+        format!("variant: {level} ({model_label}) · {time}")
+    } else {
+        let model_display = match variant.filter(|v| !v.is_empty()) {
+            Some(level) => format!("{model_label} ({level})"),
+            None => model_label.to_string(),
+        };
+        format!("model: {model_display} · {time}")
+    };
+    if updated_sources.is_empty() {
+        base
+    } else {
+        format!("{base} · instructions: {}", updated_sources.join(", "))
+    }
+}
 /// `/resume` 命令描述。
 pub const LX_RESUME_COMMAND_DESC: &str = "Resume a previous session in this workspace";
 /// `/rename` 命令描述、参数占位提示与反馈文案。

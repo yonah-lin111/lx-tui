@@ -687,31 +687,23 @@ impl Database {
             return Err(DbError::RewindTargetChanged);
         }
         // 目标必须仍是最新用户消息。
-        let latest: Option<(String, i64)> = transaction
+        let latest: Option<(String, i64, i64)> = transaction
             .query_row(
-                r#"SELECT external_id, turn_index FROM agent_message
+                r#"SELECT external_id, turn_index, sequence FROM agent_message
                    WHERE session_id = ?1 AND role = 'user' AND kind <> 'user_shell'
                    ORDER BY sequence DESC LIMIT 1"#,
                 params![commit.session_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        let Some((latest_id, turn_index)) = latest else {
+        let Some((latest_id, turn_index, target_sequence)) = latest else {
             return Err(DbError::RewindTargetChanged);
         };
         if latest_id != commit.target_user_message_id {
             return Err(DbError::RewindTargetChanged);
         }
         // 在删除之前取联合新序号：保留的 tip 必须保住高水位。
-        let next_sequence: i64 = transaction.query_row(
-            r#"SELECT COALESCE(MAX(sequence) + 1, 0) FROM (
-                   SELECT sequence FROM agent_message WHERE session_id = ?1
-                   UNION ALL
-                   SELECT sequence FROM agent_session_notice WHERE session_id = ?1
-               )"#,
-            params![commit.session_id],
-            |row| row.get(0),
-        )?;
+        let next_sequence = super::next_session_sequence(&transaction, &commit.session_id)?;
         let user_text: String = transaction
             .query_row(
                 "SELECT content FROM agent_message_part WHERE message_id = ?1 AND kind = 'text' ORDER BY position LIMIT 1",
@@ -724,6 +716,10 @@ impl Database {
             transaction.execute(
                 "DELETE FROM agent_message WHERE session_id = ?1 AND turn_index >= ?2",
                 params![commit.session_id, turn_index],
+            )?;
+            transaction.execute(
+                "DELETE FROM agent_model_switch WHERE session_id = ?1 AND sequence >= ?2",
+                params![commit.session_id, target_sequence],
             )?;
         }
         // 删掉最后一轮后会话只剩提示（或什么都没有）：整体移除会话及其提示、快照、

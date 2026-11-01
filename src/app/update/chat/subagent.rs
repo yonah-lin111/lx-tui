@@ -507,6 +507,7 @@ pub fn toggle_agent_card(state: &mut AppState, pane: PaneId, target: CardTarget)
             .chat
             .toggle_section(&message_id, crate::app::state::SHELL_SLOT, section),
         CardTarget::Compact { checkpoint_id } => run.compact.toggle(&checkpoint_id),
+        CardTarget::ModelSwitch { .. } => false,
         CardTarget::Report {
             message_id,
             agent_id,

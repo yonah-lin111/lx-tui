@@ -18,6 +18,7 @@ use crate::ui::text;
 
 pub mod ask;
 pub mod compact;
+pub mod model_switch;
 mod process;
 pub mod rewind;
 mod session;
@@ -34,6 +35,7 @@ pub use compact::{
     on_compact_revert_failed, on_compact_reverted, set_checkpoints as set_compact_checkpoints,
     toggle_checkpoint,
 };
+pub use model_switch::{set_switches as set_model_switches, toggle_model_switch};
 pub use process::{
     activate_tool_card, apply_interaction_exit, apply_process_exit, apply_process_output,
     apply_process_snapshot, commit_plan, open_task_for_selected_tool, reconcile_process_records,
@@ -47,6 +49,8 @@ pub use rewind::{
     on_session_reloaded as on_rewind_session_reloaded, on_succeeded as on_rewind_succeeded,
     open_from_command as open_rewind_from_command, set_active as set_rewind_active,
 };
+#[cfg(test)]
+pub(crate) use session::finish_model_selection;
 pub use session::{
     apply_models_changed, apply_slash_command, apply_slash_enter, close_task_page, delete_session,
     new_session, on_history_listed, on_process_listed, on_session_deleted, on_session_loaded,

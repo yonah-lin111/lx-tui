@@ -258,6 +258,19 @@ impl Database {
         if version < 21 {
             self.migrate_v21_todo_schedule()?;
         }
+        if version < 22 {
+            self.migrate_v22_model_switch()?;
+        }
+        Ok(())
+    }
+
+    /// v22：创建会话中途模型切换时间线表 `agent_model_switch`。
+    fn migrate_v22_model_switch(&mut self) -> Result<()> {
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute_batch(SCHEMA_V22_MODEL_SWITCH)?;
+        ensure_no_foreign_key_violation(&transaction)?;
+        transaction.pragma_update(None, "user_version", 22)?;
+        transaction.commit()?;
         Ok(())
     }
 

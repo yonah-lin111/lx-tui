@@ -455,9 +455,12 @@ fn cross_provider_history_replays_normalized_fields_only() {
         output_limit: None,
         variant_params: None,
         compact: None,
+        model_identity: None,
         environment: None,
+        instructions: None,
         skills: None,
         mcp: None,
+        model_switches: &[],
         skill_blocks: &[],
         supports_image_input: true,
     });
@@ -742,6 +745,7 @@ fn missing_tool_image_replay_adds_placeholder() {
 
 fn turn_with_image(label: &str) -> super::super::PlannedTurn {
     super::super::PlannedTurn {
+        user_sequence: 0,
         user_text: label.into(),
         assistant_text: None,
         items: vec![ModelItem::ToolResult {

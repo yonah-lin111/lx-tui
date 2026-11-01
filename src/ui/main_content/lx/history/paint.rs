@@ -36,6 +36,13 @@ pub(crate) enum BlockSource {
     Rewind { last: usize, count: usize },
     /// 时间线里的 compact 检查点。
     Compact { index: usize, expanded: bool },
+    /// 时间线里的模型切换提示（合并后的起止下标与条数）。
+    ModelSwitch {
+        first: usize,
+        last: usize,
+        count: usize,
+        expanded: bool,
+    },
     /// 消息内的汇报块（第 `index` 份）。
     Report { message_index: usize, index: usize },
     /// 与 `Lx` 无关的静态块（统计行）：样式已随绘制数据存好，绘制不需要回查状态。
@@ -621,6 +628,30 @@ fn draw_legacy(
                 return;
             };
             super::compact::draw(grid, notice, 1, expanded, rect, scroll, &mut row);
+        }
+        BlockSource::ModelSwitch {
+            first,
+            last,
+            count,
+            expanded,
+        } => {
+            let Some(notice) = history.switches.get(last) else {
+                return;
+            };
+            let from_override = history
+                .switches
+                .get(first)
+                .and_then(|item| item.from_label.as_deref());
+            super::model_switch::draw(
+                grid,
+                notice,
+                from_override,
+                count,
+                expanded,
+                rect,
+                scroll,
+                &mut row,
+            );
         }
         BlockSource::Report {
             message_index,

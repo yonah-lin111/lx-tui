@@ -374,6 +374,9 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
         CardTarget::Compact { checkpoint_id } => {
             super::compact::toggle_checkpoint(state, pane, &checkpoint_id)
         }
+        CardTarget::ModelSwitch { switch_id } => {
+            super::model_switch::toggle_model_switch(state, pane, &switch_id)
+        }
         CardTarget::Report {
             message_id,
             agent_id,

@@ -29,14 +29,16 @@ type LoadedSession = (
     Vec<crate::db::chat::ProcessRecord>,
     Vec<crate::db::chat::NoticeRecord>,
     Vec<crate::db::chat::CompactCheckpoint>,
+    Vec<crate::db::chat::ModelSwitchRecord>,
     i64,
 );
 
-/// 撤销成功后的视图重载结果：消息、独立提示、compact 检查点与会话 revision。
+/// 撤销成功后的视图重载结果：消息、独立提示、compact 检查点、模型切换与会话 revision。
 pub struct RewindView {
     pub messages: Vec<crate::db::chat::ChatMessage>,
     pub notices: Vec<crate::db::chat::NoticeRecord>,
     pub checkpoints: Vec<crate::db::chat::CompactCheckpoint>,
+    pub switches: Vec<crate::db::chat::ModelSwitchRecord>,
     pub revision: i64,
 }
 
@@ -269,11 +271,13 @@ impl Persistence {
             .ok_or(super::DbError::SessionMissing)?;
         let notices = db.load_notices(workspace, session_id)?;
         let checkpoints = db.compact_checkpoints(workspace, session_id)?;
+        let switches = db.model_switches(workspace, session_id)?;
         let revision = db.session_revision(session_id)?;
         Ok(RewindView {
             messages,
             notices,
             checkpoints,
+            switches,
             revision,
         })
     }
@@ -946,11 +950,29 @@ impl Persistence {
                     let checkpoints = db
                         .compact_checkpoints(&workspace, &session_id)
                         .unwrap_or_default();
+                    let switches = db
+                        .model_switches(&workspace, &session_id)
+                        .unwrap_or_default();
                     let revision = db.session_revision(&session_id).unwrap_or(0);
-                    Ok((messages, model, processes, notices, checkpoints, revision))
+                    Ok((
+                        messages,
+                        model,
+                        processes,
+                        notices,
+                        checkpoints,
+                        switches,
+                        revision,
+                    ))
                 });
-                let Some((Some(messages), model, processes, notices, checkpoints, revision)) =
-                    loaded
+                let Some((
+                    Some(messages),
+                    model,
+                    processes,
+                    notices,
+                    checkpoints,
+                    switches,
+                    revision,
+                )) = loaded
                 else {
                     // 加载失败发生在 lx 页：反馈落该窗格自己的槽（不占用全局覆盖层）。
                     update::show_lx_toast(
@@ -980,14 +1002,16 @@ impl Persistence {
                     revision,
                     selection,
                 );
-                // 检查点列表随会话一起回填（渲染与撤销都依赖它）。
+                // 检查点与模型切换列表随会话一起回填（渲染与撤销都依赖它）。
                 let checkpoints_changed =
                     update::set_compact_checkpoints(state, pane, &checkpoints);
+                let switches_changed = update::set_model_switches(state, pane, &switches);
                 // 会话视图建好之后再按进程记录校正（需要卡片已存在）。
                 let drains = update::request_report_drain_if_idle(state, pane);
                 update::reconcile_process_records(state, pane, &processes)
                     | changed
                     | checkpoints_changed
+                    | switches_changed
                     | drains
             }
             Effect::RenameChatSession {
@@ -1055,8 +1079,47 @@ impl Persistence {
                 workspace,
                 session_id,
                 model,
+                commit,
             } => {
-                self.with_db(|db| db.set_chat_session_model(&workspace, &session_id, &model));
+                if let Some(mut commit) = commit {
+                    // 若工作区或全局存在有效 AGENTS.md，补充 core/agents_md 与实际文件路径到持久化记录中。
+                    let user_root = crate::config::user_data_root().ok();
+                    let project_root = prompt_key_for(state, &workspace);
+                    let trusted = self.is_trusted(&workspace);
+                    let loaded_inst = crate::chat::agent::load_instructions(
+                        user_root.as_deref(),
+                        Some(&project_root),
+                        Some(&workspace),
+                        trusted,
+                    );
+                    if !loaded_inst.is_empty()
+                        && !commit
+                            .updated_sources
+                            .iter()
+                            .any(|s| s == crate::chat::agent::SOURCE_CORE_AGENTS_MD)
+                    {
+                        commit
+                            .updated_sources
+                            .push(crate::chat::agent::SOURCE_CORE_AGENTS_MD.to_string());
+                    }
+                    let recorded = self.with_db(|db| {
+                        let _ = db.record_model_switch(&workspace, &commit)?;
+                        db.model_switches(&workspace, &session_id)
+                    });
+                    if let Some(switches) = recorded {
+                        let mut changed = false;
+                        for pane in state.all_pane_ids() {
+                            if state.pane_anywhere(pane).is_some_and(|target| {
+                                target.lx.chat.session_id.as_deref() == Some(session_id.as_str())
+                            }) {
+                                changed |= update::set_model_switches(state, pane, &switches);
+                            }
+                        }
+                        return changed;
+                    }
+                } else {
+                    self.with_db(|db| db.set_chat_session_model(&workspace, &session_id, &model));
+                }
                 false
             }
             // 把当前选择的模型写回 `ai.json` 的 `defaultModel`（下次启动沿用）。

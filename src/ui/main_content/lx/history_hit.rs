@@ -354,6 +354,9 @@ fn target_of(kind: &history::CardKind) -> CardTarget {
         history::CardKind::Compact { checkpoint_id, .. } => CardTarget::Compact {
             checkpoint_id: checkpoint_id.clone(),
         },
+        history::CardKind::ModelSwitch { switch_id, .. } => CardTarget::ModelSwitch {
+            switch_id: switch_id.clone(),
+        },
         history::CardKind::Report {
             message_id,
             agent_id,

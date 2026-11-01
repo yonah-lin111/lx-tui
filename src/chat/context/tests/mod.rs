@@ -11,6 +11,7 @@ use super::*;
 mod budget;
 mod compact;
 mod legacy;
+mod model_switch;
 mod roundtrip;
 mod shell;
 mod tools;
@@ -107,9 +108,12 @@ fn assemble_unbounded(messages: &[ChatMessage], draft: &str) -> Assembly {
         output_limit: None,
         variant_params: None,
         compact: None,
+        model_identity: None,
         environment: None,
+        instructions: None,
         skills: None,
         mcp: None,
+        model_switches: &[],
         skill_blocks: &[],
         supports_image_input: true,
     })
@@ -126,9 +130,12 @@ fn assemble_with_limit(messages: &[ChatMessage], draft: &str, limit: u64, output
         output_limit: Some(output),
         variant_params: None,
         compact: None,
+        model_identity: None,
         environment: None,
+        instructions: None,
         skills: None,
         mcp: None,
+        model_switches: &[],
         skill_blocks: &[],
         supports_image_input: true,
     })

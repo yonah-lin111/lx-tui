@@ -605,3 +605,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_date_position ON todo(entry_date, pos
 CREATE INDEX IF NOT EXISTS idx_todo_date_status ON todo(entry_date, status);
 CREATE INDEX IF NOT EXISTS idx_todo_entry_date ON todo(entry_date);
 "#;
+
+/// v22：会话中途模型切换时间线与提示词注入记录表（与消息/notice/compact 共用 sequence）。
+pub(super) const SCHEMA_V22_MODEL_SWITCH: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_model_switch (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    from_provider TEXT,
+    from_model TEXT,
+    from_variant TEXT,
+    to_provider TEXT NOT NULL,
+    to_model TEXT NOT NULL,
+    to_variant TEXT,
+    from_label TEXT,
+    to_label TEXT NOT NULL,
+    updated_sources_json TEXT NOT NULL DEFAULT '[]',
+    injected_prompt TEXT NOT NULL DEFAULT '',
+    created_at_ms INTEGER NOT NULL,
+    UNIQUE(session_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_model_switch_session_seq
+    ON agent_model_switch(session_id, sequence);
+"#;

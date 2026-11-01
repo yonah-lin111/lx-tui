@@ -200,6 +200,8 @@ pub fn handle_rewind_finished(
                     }) && let Some(target) = state.pane_mut_anywhere(target_pane)
                     {
                         target.lx.chat.reset_session_view();
+                        target.lx.compact.reset();
+                        target.lx.model_switch.reset();
                         target.lx.clear_rewind();
                     }
                 }
@@ -229,6 +231,7 @@ pub fn handle_rewind_finished(
                                 other,
                                 &view.checkpoints,
                             );
+                            crate::app::update::set_model_switches(state, other, &view.switches);
                         }
                     }
                     crate::app::update::on_rewind_succeeded(state, pane, action, &user_text);

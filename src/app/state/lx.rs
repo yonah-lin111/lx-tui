@@ -13,6 +13,7 @@ pub mod chat;
 pub mod compact;
 mod history;
 pub mod mention;
+pub mod model_switch;
 mod panels;
 pub mod refer;
 pub mod rewind;
@@ -38,6 +39,7 @@ pub use chat::{
 };
 pub use compact::{CompactNoticeView, LxCompact};
 pub use mention::{LxMention, LxMentionView};
+pub use model_switch::{LxModelSwitch, ModelSwitchNoticeView};
 pub use rewind::{
     LxRewind, RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindTarget,
     RewindTargetKind, SnapshotState,
@@ -122,6 +124,8 @@ pub struct Lx {
     pub rewind: LxRewind,
     /// 上下文压缩：检查点、展开状态与执行中标记（只读视图，IO 在事件层）。
     pub compact: LxCompact,
+    /// 会话中途模型切换记录与展开状态。
+    pub model_switch: LxModelSwitch,
     /// 本页自己的 toast 槽；`Some` 时覆盖绘制在**窗格内容区内部**。
     ///
     /// lx 页的反馈一律落在本页里，不占用全局 `AppState.toast`：全局 toast 锚点
@@ -223,6 +227,7 @@ impl Lx {
             agents: AgentsState::default(),
             rewind: LxRewind::default(),
             compact: LxCompact::default(),
+            model_switch: LxModelSwitch::default(),
             toast: None,
             task: None,
             ask: None,

@@ -44,6 +44,8 @@ pub(crate) const REWIND_SLOT_BLOCK: usize = usize::MAX - 3;
 pub(crate) const COMPACT_SLOT_BLOCK: usize = usize::MAX - 4;
 /// 消息内的子 agent 汇报块（一条消息可有多份，按序号排列）。
 pub(crate) const REPORT_SLOT_BLOCK: usize = usize::MAX - 5;
+/// 时间线里的模型切换提示。
+pub(crate) const MODEL_SWITCH_SLOT_BLOCK: usize = usize::MAX - 6;
 
 /// 二级缓存项。
 #[derive(Debug)]
@@ -388,6 +390,21 @@ pub(crate) fn list_signature_source(source: super::source::HistorySource<'_>, wi
                 .iter()
                 .any(|id| id == &checkpoint.id),
         ));
+    }
+    for sw in source.switches {
+        hash.write_str(&sw.id);
+        hash.write_i64(sw.sequence);
+        hash.write_str(sw.from_label.as_deref().unwrap_or(""));
+        hash.write_str(&sw.to_provider);
+        hash.write_str(&sw.to_model);
+        hash.write_str(sw.to_variant.as_deref().unwrap_or(""));
+        hash.write_str(&sw.to_label);
+        hash.write_i64(sw.created_at_ms);
+        hash.write_str(&sw.injected_prompt);
+        for src in &sw.updated_sources {
+            hash.write_str(src);
+        }
+        hash.write_u8(u8::from(source.model_switch.is_expanded(&sw.id)));
     }
     hash.finish()
 }
@@ -790,6 +807,28 @@ pub(crate) fn compact_block_signature(
     hash.write_i64(notice.created_at_ms);
     hash.write_str(&notice.summary);
     hash.write_u8(u8::from(notice.active));
+    hash.write_u8(u8::from(expanded));
+    hash.finish()
+}
+
+/// 模型切换提示条目的指纹。
+pub(crate) fn model_switch_block_signature(
+    notice: &crate::app::state::ModelSwitchNoticeView,
+    from_override: Option<&str>,
+    count: usize,
+    expanded: bool,
+) -> u64 {
+    let mut hash = Fnv::new();
+    hash.write_str(&notice.id);
+    hash.write_str(from_override.unwrap_or(""));
+    hash.write_str(&notice.to_label);
+    hash.write_str(notice.to_variant.as_deref().unwrap_or(""));
+    hash.write_i64(notice.created_at_ms);
+    hash.write_str(&notice.injected_prompt);
+    for src in &notice.updated_sources {
+        hash.write_str(src);
+    }
+    hash.write_usize(count);
     hash.write_u8(u8::from(expanded));
     hash.finish()
 }

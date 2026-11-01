@@ -820,6 +820,7 @@ async fn auto_compact_persists_checkpoint_and_replays_in_subsequent_turn() {
         model: "m".into(),
         variant: None,
     };
+    let mcp_snapshot = crate::mcp::McpToolSnapshot::default();
     let ctx = super::context::assemble_child_context(
         db,
         fixture.workspace(),
@@ -828,9 +829,13 @@ async fn auto_compact_persists_checkpoint_and_replays_in_subsequent_turn() {
         &child_session,
         "msg-next",
         AgentRole::Explorer,
-        "<environment_context/>",
-        None,
-        &crate::mcp::McpToolSnapshot::default(),
+        super::context::ChildPromptContext {
+            model_identity: None,
+            environment: "<environment_context/>",
+            instructions: None,
+            skills: None,
+            mcp: &mcp_snapshot,
+        },
         fixture.workspace(),
         &model,
         None,
@@ -1156,5 +1161,36 @@ async fn p1_send_input_to_idle_agent_at_concurrency_limit_does_not_leave_orphan_
     assert!(
         next.is_none(),
         "并发受阻报错时不得在数据库遗留孤儿 queued 项"
+    );
+}
+
+#[test]
+fn replay_persisted_items_degrades_historical_images_when_model_lacks_vision() {
+    let items = vec![
+        crate::db::chat::PersistedInputItem::Text {
+            text: "Inspect this screenshot".into(),
+        },
+        crate::db::chat::PersistedInputItem::Image {
+            label: "screen.png".into(),
+            archive_path: "/nonexistent/screen.png".into(),
+            mime: "image/png".into(),
+            content_hash: "deadbeef".into(),
+            width: 100,
+            height: 100,
+        },
+    ];
+    // 当前轮输入带图片但模型不支持图片：必须报错拒绝
+    let current_err =
+        super::context::replay_persisted_items("child-1", false, true, &items).unwrap_err();
+    assert!(current_err.contains("does not support image input"));
+
+    // 历史轮次回放带图片但切换后的新模型不支持图片：降级为英文文本占位，不阻塞子 agent
+    let replayed = super::context::replay_persisted_items("child-1", false, false, &items)
+        .expect("historical image degraded");
+    assert_eq!(
+        replayed,
+        vec![ModelItem::UserText(
+            "Inspect this screenshot\nERROR: Cannot read \"screen.png\" (this model does not support image input). Inform the user.".into()
+        )]
     );
 }

@@ -26,6 +26,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("lx-tui starting");
 
     let config = Config::default();
+    if let Ok(root) = lx_tui::config::user_data_root() {
+        let _ = lx_tui::chat::agent::ensure_global_agents_md(&root);
+    }
     let mut state = AppState::demo();
     let persistence = Persistence::start(database_worktree().as_deref());
     // 全局 prompt 历史：库不可用时内部降级为空历史，不阻断启动。

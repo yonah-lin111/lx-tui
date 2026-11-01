@@ -4,7 +4,9 @@
 //! 渲染层只读：不克隆 `LxChat`、不访问 DB、不做 IO。
 
 use crate::app::state::RewindNoticeView;
-use crate::app::state::{ChatMessageView, CompactNoticeView, Lx, LxChat, LxCompact};
+use crate::app::state::{
+    ChatMessageView, CompactNoticeView, Lx, LxChat, LxCompact, LxModelSwitch, ModelSwitchNoticeView,
+};
 
 /// 历史渲染的只读数据源。
 #[derive(Debug, Clone, Copy)]
@@ -15,10 +17,14 @@ pub(crate) struct HistorySource<'a> {
     pub notices: &'a [RewindNoticeView],
     /// compact 检查点。
     pub checkpoints: &'a [CompactNoticeView],
+    /// 模型切换提示。
+    pub switches: &'a [ModelSwitchNoticeView],
     /// 折叠状态 / loading 相位。
     pub chat: &'a LxChat,
     /// compact 状态。
     pub compact: &'a LxCompact,
+    /// 模型切换状态。
+    pub model_switch: &'a LxModelSwitch,
     /// 撤销面板当前选中的用户消息（渲染高亮用；无则 None）。
     pub selected_user_message: Option<&'a str>,
     /// 本会话仍有子 agent 在跑：统计行是任务收尾信息，必须等它们全部结束。
@@ -31,8 +37,10 @@ impl<'a> From<&'a Lx> for HistorySource<'a> {
             messages: &lx.chat.messages,
             notices: &lx.chat.notices,
             checkpoints: &lx.compact.checkpoints,
+            switches: &lx.model_switch.switches,
             chat: &lx.chat,
             compact: &lx.compact,
+            model_switch: &lx.model_switch,
             selected_user_message: lx
                 .rewind
                 .selected
@@ -46,12 +54,15 @@ impl<'a> From<&'a Lx> for HistorySource<'a> {
 impl<'a> HistorySource<'a> {
     /// 只有一份 `LxChat` 的数据源（`Agents` 详情区）。
     pub(crate) fn from_chat(chat: &'a LxChat, compact: &'a LxCompact) -> HistorySource<'a> {
+        static EMPTY_MODEL_SWITCH: LxModelSwitch = LxModelSwitch::EMPTY;
         HistorySource {
             messages: &chat.messages,
             notices: &chat.notices,
             checkpoints: &compact.checkpoints,
+            switches: &[],
             chat,
             compact,
+            model_switch: &EMPTY_MODEL_SWITCH,
             selected_user_message: None,
             subagents_running: false,
         }
@@ -65,6 +76,7 @@ impl<'a> HistorySource<'a> {
             .any(|(index, _)| !is_legacy_report_row(self.messages, index))
             || !self.notices.is_empty()
             || !self.compact.is_empty()
+            || !self.model_switch.is_empty()
     }
 }
 

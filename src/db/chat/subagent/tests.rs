@@ -298,9 +298,12 @@ fn report_message_and_turn_replay_in_one_turn() {
         output_limit: None,
         variant_params: None,
         compact: None,
+        model_identity: None,
         environment: None,
+        instructions: None,
         skills: None,
         mcp: None,
+        model_switches: &[],
         skill_blocks: &[],
         supports_image_input: true,
     });
@@ -822,7 +825,7 @@ fn dev_database_copy_migrates_to_current_version_and_passes_integrity_check() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("user_version");
-    assert_eq!(version, 20);
+    assert_eq!(version, crate::db::SCHEMA_VERSION_FOR_TESTS);
 
     let after_sessions: i64 = migrated
         .connection()

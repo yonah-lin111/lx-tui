@@ -151,10 +151,23 @@ fn resolve_image_path(cwd: &Path, raw: &str) -> Result<std::path::PathBuf, Strin
     Ok(cwd.join(path))
 }
 
+/// 子会话系统提示词冻结输入段。
+pub(super) struct ChildPromptContext<'a> {
+    pub model_identity: Option<&'a str>,
+    pub environment: &'a str,
+    pub instructions: Option<&'a str>,
+    pub skills: Option<&'a str>,
+    pub mcp: &'a crate::mcp::McpToolSnapshot,
+}
+
 /// 从持久化的 `PersistedInputItem` 重放有序 `ModelItem`（严格校验归档文件与摘要）。
+///
+/// - `is_current_input == true`：若含图片但当前模型不支持图片输入，返回错误拒绝本轮；
+/// - `is_current_input == false`（历史轮次回放）：若当前模型不支持图片输入，降级为英文占位文本。
 pub(super) fn replay_persisted_items(
     child_session_id: &str,
     supports_image_input: bool,
+    is_current_input: bool,
     items: &[PersistedInputItem],
 ) -> Result<Vec<ModelItem>, String> {
     if items.is_empty() {
@@ -164,7 +177,25 @@ pub(super) fn replay_persisted_items(
         .iter()
         .any(|item| matches!(item, PersistedInputItem::Image { .. }));
     if has_images && !supports_image_input {
-        return Err("current model does not support image input".to_string());
+        if is_current_input {
+            return Err("current model does not support image input".to_string());
+        }
+        let mut degraded_lines = Vec::new();
+        for item in items {
+            match item {
+                PersistedInputItem::Text { text } => {
+                    if !text.is_empty() {
+                        degraded_lines.push(text.clone());
+                    }
+                }
+                PersistedInputItem::Image { label, .. } => {
+                    degraded_lines.push(format!(
+                        "ERROR: Cannot read \"{label}\" (this model does not support image input). Inform the user."
+                    ));
+                }
+            }
+        }
+        return Ok(vec![ModelItem::UserText(degraded_lines.join("\n"))]);
     }
     if !has_images {
         return Ok(vec![ModelItem::UserText(PersistedInputItem::joined_text(
@@ -220,9 +251,7 @@ pub(super) fn assemble_child_context(
     child_session_id: &str,
     current_user_message_id: &str,
     role: AgentRole,
-    environment: &str,
-    skills: Option<&str>,
-    mcp: &crate::mcp::McpToolSnapshot,
+    prompt_ctx: ChildPromptContext<'_>,
     cwd: &Path,
     model: &ModelSnapshot,
     variant_params: Option<serde_json::Value>,
@@ -232,7 +261,7 @@ pub(super) fn assemble_child_context(
     current_items: &[PersistedInputItem],
 ) -> Result<ModelContext, String> {
     let current_model_items =
-        replay_persisted_items(child_session_id, supports_image_input, current_items)?;
+        replay_persisted_items(child_session_id, supports_image_input, true, current_items)?;
     let current_text = PersistedInputItem::joined_text(current_items);
     let current_tokens = estimate_items_tokens(&current_model_items);
 
@@ -282,7 +311,9 @@ pub(super) fn assemble_child_context(
     let mut items = Vec::new();
     for turn in kept {
         let user_items = match turn.stored_user_items {
-            Some(stored) => replay_persisted_items(child_session_id, supports_image_input, stored)?,
+            Some(stored) => {
+                replay_persisted_items(child_session_id, supports_image_input, false, stored)?
+            }
             None => vec![ModelItem::UserText(turn.user_text.clone())],
         };
         turns.push(ChatTurn {
@@ -305,12 +336,14 @@ pub(super) fn assemble_child_context(
     });
     items.extend(current_model_items);
 
-    let mcp_prompt = mcp.instructions_prompt();
+    let mcp_prompt = prompt_ctx.mcp.instructions_prompt();
     let system_prompt = compose_subagent_prompt(
         role,
         crate::chat::prompt::PromptParts {
-            environment: Some(environment),
-            skills,
+            model_identity: prompt_ctx.model_identity,
+            environment: Some(prompt_ctx.environment),
+            instructions: prompt_ctx.instructions,
+            skills: prompt_ctx.skills,
             mcp: mcp_prompt.as_deref(),
             compact: None,
         },
@@ -324,7 +357,7 @@ pub(super) fn assemble_child_context(
         system_prompt: Some(system_prompt),
         tools: std::sync::Arc::new(crate::chat::tools::turn_tools(
             crate::chat::agent::ToolSurface::from_role(role),
-            mcp,
+            prompt_ctx.mcp,
         )),
     };
     Ok(ModelContext::new(request, cwd.to_path_buf())

@@ -24,7 +24,10 @@
 //! 装配只负责「DB/视图历史 + 末尾当前 user 消息」。
 
 use crate::chat::events::{ChatRequest, ChatTurn, ModelItem};
-use crate::db::chat::{ChatMessage, ModelSnapshot, ToolCallRecord, UserShellRecord};
+use crate::db::chat::{ChatMessage, ModelSnapshot, ToolCallRecord};
+
+mod user_shell;
+pub use user_shell::format_user_shell;
 
 #[cfg(test)]
 mod tests;
@@ -59,14 +62,20 @@ pub struct AssemblyInput<'a> {
     /// 有值时只回放 `end_sequence` 之后的消息，并把摘要作为**独立的前置上下文**
     /// 注入（不是 user/assistant 消息，也不进入复制选区）。
     pub compact: Option<&'a CompactContext>,
+    /// 本 turn 冻结的模型身份段（`# Your Model`）；None 时省略。
+    pub model_identity: Option<&'a str>,
     /// 本 turn 冻结的环境快照文本；None 时由 transport 现场采集（旧路径/测试）。
     ///
     /// 生产路径由事件层在 turn 创建时冻结一次，本轮所有采样复用同一份。
     pub environment: Option<&'a str>,
+    /// 本 turn 冻结的 `AGENTS.md` / `agent.md` 指令段；None 时省略。
+    pub instructions: Option<&'a str>,
     /// 本 turn 冻结的 skill 目录段；None 时省略。
     pub skills: Option<&'a str>,
     /// 本 turn 冻结的 MCP server 说明段；None 时省略。
     pub mcp: Option<&'a str>,
+    /// 会话内已持久化的模型切换记录（按 `sequence` 注入 `<system-update>`）。
+    pub model_switches: &'a [crate::db::chat::ModelSwitchRecord],
     /// 用户点名的 skill 全文块（只注入当前轮，不落库）。
     pub skill_blocks: &'a [String],
     /// 当前模型是否支持图片输入；false 时工具图片降级为文本占位。
@@ -169,6 +178,8 @@ const ENVELOPE_RESERVE_TOKENS: u64 = 256;
 
 /// 一个参与回放的组：普通完整聊天轮次，或一条独立终态本地命令。
 struct PlannedTurn {
+    /// 该组起点消息的 sequence（用于与模型切换时间线对齐）。
+    user_sequence: i64,
     /// user 正文（聊天正文，或命令的稳定格式化文本）。
     user_text: String,
     /// assistant 可见正文（旧纯文本视图用；reasoning 不计入）；命令组为 None。
@@ -243,9 +254,33 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
     let mut items: Vec<ModelItem> = Vec::new();
     let mut groups = Vec::with_capacity(kept.len());
     let mut item_image_attachments: Vec<(usize, Vec<ItemImageAttachment>)> = Vec::new();
+    let min_switch_sequence = if omitted_turns > 0 {
+        kept.first()
+            .map_or(start_after, |first| first.user_sequence)
+    } else {
+        start_after
+    };
+    let retained_switches: Vec<&crate::db::chat::ModelSwitchRecord> = input
+        .model_switches
+        .iter()
+        .filter(|sw| sw.sequence > min_switch_sequence)
+        .collect();
+    let mut switch_cursor = 0usize;
+
     for turn in &kept {
         let turn_start = turns.len();
         let item_start = items.len();
+        while switch_cursor < retained_switches.len()
+            && retained_switches[switch_cursor].sequence < turn.user_sequence
+        {
+            let sw = retained_switches[switch_cursor];
+            if !sw.injected_prompt.trim().is_empty() {
+                items.push(ModelItem::UserText(crate::chat::agent::wrap_system_update(
+                    &sw.injected_prompt,
+                )));
+            }
+            switch_cursor += 1;
+        }
         turns.push(ChatTurn {
             role: "user".into(),
             text: turn.user_text.clone(),
@@ -287,6 +322,16 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
             item_end: items.len(),
         });
     }
+    // 冲刷最新一轮完成之后、当前草稿之前发生的模型切换 `<system-update>`（必须在 draft 之前，保持当前轮图片索引不变量）。
+    while switch_cursor < retained_switches.len() {
+        let sw = retained_switches[switch_cursor];
+        if !sw.injected_prompt.trim().is_empty() {
+            items.push(ModelItem::UserText(crate::chat::agent::wrap_system_update(
+                &sw.injected_prompt,
+            )));
+        }
+        switch_cursor += 1;
+    }
     // 当前用户消息必须保留（不因预算截断用户输入）。
     let draft_exceeds = budget.is_some_and(|budget| draft_tokens > budget);
     turns.push(ChatTurn {
@@ -322,7 +367,9 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
     }
     let system_prompt =
         crate::chat::prompt::compose_system_prompt(crate::chat::prompt::PromptParts {
+            model_identity: input.model_identity,
             environment: input.environment,
+            instructions: input.instructions,
             skills: input.skills,
             mcp: input.mcp,
             compact: input.compact.map(CompactContext::as_prompt).as_deref(),
@@ -466,6 +513,7 @@ fn plan_turn(user: &ChatMessage, assistant: &ChatMessage) -> PlannedTurn {
         .cloned()
         .collect();
     let turn = PlannedTurn {
+        user_sequence: user.sequence,
         user_text,
         assistant_text: Some(assistant_text),
         items,
@@ -596,86 +644,13 @@ fn plan_user_shell(message: &ChatMessage) -> Option<PlannedTurn> {
     }
     let text = format_user_shell(record);
     Some(PlannedTurn {
+        user_sequence: message.sequence,
         tokens: estimate_tokens(&text) as u64,
         user_text: text,
         assistant_text: None,
         items: Vec::new(),
         user_images: Vec::new(),
     })
-}
-
-/// 用户命令记录 → 稳定的 user 上下文文本。
-///
-/// 结构字段由代码拼接，输出正文先净化控制字符并转义结构符号，绝不改变记录边界。
-/// 回放只截断一次（64 KiB），并显式标注丢弃字节。
-pub fn format_user_shell(record: &UserShellRecord) -> String {
-    let command = escape_record_text(&sanitize_control(&record.command));
-    let output = truncate_result_for_replay(&escape_record_text(&sanitize_control(&record.output)));
-    let mut result = String::new();
-    result.push_str("State: ");
-    result.push_str(&record.state);
-    result.push('\n');
-    result.push_str("Exit code: ");
-    result.push_str(
-        &record
-            .exit_code
-            .map_or_else(|| "unknown".to_string(), |code| code.to_string()),
-    );
-    result.push('\n');
-    if let Some(duration_ms) = record.duration_ms {
-        result.push_str(&format!(
-            "Duration: {:.1} seconds\n",
-            duration_ms as f64 / 1_000.0
-        ));
-    }
-    if record.output_truncated() {
-        result.push_str(&format!(
-            "Output truncated: {} earlier bytes dropped\n",
-            record.dropped_bytes
-        ));
-    }
-    result.push_str("Output:\n");
-    result.push_str(if output.is_empty() {
-        "(no output)"
-    } else {
-        output.as_str()
-    });
-    format!(
-        "<user_shell_command>\n<command>{command}</command>\n<result>\n{result}\n</result>\n</user_shell_command>"
-    )
-}
-
-/// 结构文本转义：输出里的尖括号/& 不得伪造记录字段。
-fn escape_record_text(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-/// 剥离 ANSI/控制字符（保留换行与制表符）。
-fn sanitize_control(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' {
-            // CSI / OSC 等转义序列：吞掉引导符与后续参数字节，直到终止字符。
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                for next in chars.by_ref() {
-                    if ('@'..='~').contains(&next) {
-                        break;
-                    }
-                }
-            } else {
-                let _ = chars.next();
-            }
-            continue;
-        }
-        if ch == '\n' || ch == '\t' || !ch.is_control() {
-            out.push(ch);
-        }
-    }
-    out
 }
 
 /// assistant 的有序模型项：把 `parts` 与 `tools` 按 `position` 合并成唯一时间线。

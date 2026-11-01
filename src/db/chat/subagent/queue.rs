@@ -315,19 +315,13 @@ impl Database {
         }
         let user_text = PersistedInputItem::joined_text(&items);
 
-        let (user_sequence, turn_index, revision): (i64, i64, i64) = transaction.query_row(
+        let user_sequence = super::super::next_session_sequence(&transaction, &child_session_id)?;
+        let (turn_index, revision): (i64, i64) = transaction.query_row(
             r#"SELECT
-                   (SELECT COALESCE(MAX(sequence) + 1, 0) FROM (
-                       SELECT sequence FROM agent_message WHERE session_id = ?1
-                       UNION ALL
-                       SELECT sequence FROM agent_session_notice WHERE session_id = ?1
-                       UNION ALL
-                       SELECT sequence FROM agent_compact_checkpoint WHERE session_id = ?1
-                   )),
                    COALESCE((SELECT MAX(turn_index) + 1 FROM agent_message WHERE session_id = ?1), 0),
                    COALESCE((SELECT revision FROM agent_session WHERE external_id = ?1), 0)"#,
             params![child_session_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         let assistant_sequence = user_sequence.saturating_add(1);
         let user_message_id = new_external_id("msg");

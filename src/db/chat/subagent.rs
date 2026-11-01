@@ -491,18 +491,11 @@ impl Database {
         let now = now_ms();
         let transaction = self.conn.unchecked_transaction()?;
         ensure_session_owned(&transaction, session_id, &workspace_external)?;
-        let (user_sequence, turn_index): (i64, i64) = transaction.query_row(
-            r#"SELECT (SELECT COALESCE(MAX(sequence) + 1, 0) FROM (
-                          SELECT sequence FROM agent_message WHERE session_id = ?1
-                          UNION ALL
-                          SELECT sequence FROM agent_session_notice WHERE session_id = ?1
-                          UNION ALL
-                          SELECT sequence FROM agent_compact_checkpoint WHERE session_id = ?1
-                      )),
-                      COALESCE(MAX(turn_index) + 1, 0)
-               FROM agent_message WHERE session_id = ?1"#,
+        let user_sequence = super::next_session_sequence(&transaction, session_id)?;
+        let turn_index: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(turn_index) + 1, 0) FROM agent_message WHERE session_id = ?1",
             params![session_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| row.get(0),
         )?;
         let user_message_id = new_external_id("msg");
         let assistant_message_id = new_external_id("msg");
