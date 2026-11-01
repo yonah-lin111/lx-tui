@@ -104,30 +104,41 @@ fn zero_option_question_only_has_the_other_row() {
 }
 
 #[test]
-fn submit_row_only_exists_for_multi_select_or_the_last_question() {
-    // 单题单选：没有提交按钮，选中即提交。
+fn submit_row_follows_the_tab_style() {
+    // 单题单选：没有 tab、没有提交胶囊，选中即提交。
     let single = state(vec![question("q", false, &["A", "B"])]);
+    assert!(single.is_single_select_only());
+    assert_eq!(single.tab_len(), 1);
+    assert!(!single.is_confirm());
     assert!(!single.has_submit_row());
     assert_eq!(single.submit_row(), None);
     assert_eq!(single.row_count(), 3, "2 选项 + Other");
 
-    // 单题多选：Other 下方是提交按钮。
+    // 单题多选：题目 + Submit 两个 tab，选项底部有提交胶囊。
     let multi = state(vec![question("q", true, &["A", "B"])]);
+    assert!(!multi.is_single_select_only());
+    assert_eq!(multi.tab_len(), 2);
     assert!(multi.has_submit_row());
     assert_eq!(multi.other_row(), 2);
     assert_eq!(multi.submit_row(), Some(3));
     assert_eq!(multi.row_count(), 4, "2 选项 + Other + Submit");
 
-    // 多题：前 N-1 题无按钮，最后一题固定有按钮。
+    // 多题：每题一个 tab，末尾是 Submit 汇总；单选的题目没有选项底部按钮。
     let mut flow = state(vec![
         question("a", false, &["A1", "A2"]),
         question("b", false, &["B1"]),
     ]);
+    assert_eq!(flow.tab_len(), 3, "两题 + Submit");
     assert!(!flow.has_submit_row());
     assert_eq!(flow.submit_row(), None);
     assert!(flow.next_step());
-    assert!(flow.has_submit_row(), "多题末题固定显示提交按钮");
-    assert_eq!(flow.submit_row(), Some(2));
+    assert_eq!(flow.current, 1);
+    assert!(!flow.has_submit_row(), "多题里的单选不显示选项提交按钮");
+    assert!(flow.next_step());
+    assert!(flow.is_confirm(), "末题前进到 Submit 汇总");
+    assert!(flow.has_submit_row(), "汇总 tab 显示提交胶囊");
+    assert_eq!(flow.row_count(), 0, "汇总 tab 没有可高亮项");
+    assert_eq!(flow.submit_row(), None, "汇总 tab 的胶囊不是高亮行");
 }
 
 #[test]
@@ -144,23 +155,24 @@ fn question_has_preview_ignores_blank_previews() {
 }
 
 #[test]
-fn goto_tab_clamps_and_resets_the_edit_state() {
+fn goto_tab_switches_between_questions_and_the_submit_tab() {
     let mut ask = state(vec![
         question("a", false, &["A1"]),
         question("b", false, &["B1"]),
     ]);
     assert!(ask.begin_edit());
-    ask.preview_scroll[0] = 2;
-    assert!(ask.goto_tab(9), "越界题号钳到末题");
-    assert_eq!(ask.current, 1);
-    assert!(!ask.editing, "切题退出编辑态");
+    assert!(ask.goto_tab(9), "越界 tab 进入 Submit 汇总");
+    assert!(ask.is_confirm());
+    assert!(!ask.editing, "切 tab 退出编辑态");
+    assert!(!ask.goto_tab(9), "已在汇总 tab");
     assert!(ask.goto_tab(0));
-    assert_eq!(ask.preview_scroll[0], 0, "切题重置预览滚动");
+    assert!(!ask.is_confirm());
+    assert_eq!(ask.current, 0);
     assert!(!ask.goto_tab(0), "同题不产生变化");
 }
 
 #[test]
-fn navigation_keeps_per_question_state_and_is_clamped() {
+fn navigation_cycles_tabs_and_wraps_the_highlight() {
     let mut ask = state(vec![
         question("a", false, &["A1", "A2"]),
         question("b", true, &["B1"]),
@@ -169,20 +181,27 @@ fn navigation_keeps_per_question_state_and_is_clamped() {
     assert!(ask.next_step());
     ask.choose(0);
     assert_eq!(ask.current, 1);
-    assert!(!ask.next_step(), "末题已是最后一步，提交按钮收尾");
-    assert_eq!(ask.current, 1);
-    assert!(ask.goto_tab(0));
+    assert!(ask.next_step(), "末题前进到 Submit 汇总");
+    assert!(ask.is_confirm());
+    assert!(ask.next_step(), "汇总循环回第一题");
+    assert_eq!(ask.current, 0);
+    assert!(!ask.is_confirm());
     assert_eq!(
         ask.current_answers(),
         vec!["A2".to_string()],
         "切题保留各题已选状态"
     );
-    // 高亮不循环：顶/底钳制。
-    ask.set_highlight(0);
-    assert!(!ask.move_highlight(-3));
-    assert_eq!(ask.highlight[0], 0);
-    assert!(ask.move_highlight(9));
-    assert_eq!(ask.highlight[0], ask.row_count() - 1);
+    // `Shift+Tab`：第一题后退回到汇总，再后退落到末题。
+    assert!(ask.prev_step());
+    assert!(ask.is_confirm());
+    assert!(ask.prev_step());
+    assert_eq!(ask.current, 1);
+    // 高亮循环：顶/底互相绕回（当前题是第 2 题）。
+    ask.highlight[1] = 0;
+    assert!(ask.move_highlight(-1));
+    assert_eq!(ask.highlight[1], ask.row_count() - 1);
+    assert!(ask.move_highlight(1));
+    assert_eq!(ask.highlight[1], 0);
 }
 
 #[test]
@@ -201,42 +220,30 @@ fn started_at_is_recorded_and_compensated_into_the_turn_clock() {
 }
 
 #[test]
-fn preview_scroll_is_clamped_by_preview_lines() {
-    let mut previewed = question("q", false, &["A", "B"]);
-    previewed.options[0].preview = Some("one\ntwo\nthree".into());
-    let mut ask = state(vec![previewed]);
-    assert_eq!(ask.preview(), Some("one\ntwo\nthree"));
-    // 可视行数未同步时按 1 行算，上限 = 总行数 - 1。
-    assert_eq!(ask.preview_max_scroll(), 2);
-    // 同步为 3 行可见：内容正好一屏，一点都滚不动（短预览不许滚出空白）。
-    assert!(!ask.resize_preview(3));
-    assert_eq!(ask.preview_max_scroll(), 0);
-    assert!(!ask.scroll_preview(99), "没有溢出时滚动无效");
-    assert_eq!(ask.preview_scroll[0], 0);
-    // 只剩 1 行可见时上限回到 2（偏移本来是 0，无需收紧）。
-    assert!(!ask.resize_preview(1));
-    assert!(ask.scroll_preview(99), "一次大滚动钳到上限");
-    assert_eq!(ask.preview_scroll[0], 2);
-    assert!(!ask.scroll_preview(1), "已到上限不再变化");
-    assert!(ask.scroll_preview(-9));
-    assert_eq!(ask.preview_scroll[0], 0);
-    // 切到无预览项：预览为空，滚动偏移不再增长。
-    ask.set_highlight(1);
-    assert_eq!(ask.preview(), None);
-    assert_eq!(ask.preview_max_scroll(), 0);
-}
+fn page_scroll_moves_the_unified_window_and_clamps() {
+    let mut ask = state(vec![question("q", true, &["A", "B"])]);
+    assert!(!ask.scroll_page(1), "还没有几何时不产生位移");
 
-#[test]
-fn shrinking_the_preview_pulls_the_offset_back_into_range() {
-    let mut previewed = question("q", false, &["A"]);
-    previewed.options[0].preview = Some("1\n2\n3\n4\n5\n6".into());
-    let mut ask = state(vec![previewed]);
-    ask.resize_preview(1);
-    assert!(ask.scroll_preview(99));
-    assert_eq!(ask.preview_scroll[0], 5);
-    // 预览区变高：偏移必须被收紧，否则用户看到的是空白。
-    assert!(ask.resize_preview(4));
-    assert_eq!(ask.preview_scroll[0], 2);
+    ask.sync_list_window(0, 20, 5);
+    assert!(ask.scroll_page(1), "PageDown 前进一屏");
+    assert_eq!(ask.viewport(), Some(5));
+    assert!(ask.scroll_window(-1));
+    assert_eq!(ask.viewport(), Some(4));
+    assert!(ask.scroll_page(9), "一次大滚动钳到上限");
+    assert_eq!(ask.viewport(), Some(15));
+    assert_eq!(ask.highlight[0], 0, "滚动绝不动高亮");
+
+    // 窗口跟随高亮（无显式视口）时，滚动从上一帧的窗口起点继续。
+    ask.viewport = None;
+    ask.sync_list_window(3, 20, 5);
+    assert!(ask.scroll_window(1));
+    assert_eq!(ask.viewport(), Some(4));
+
+    // 内容装得下时翻页无效，也不会留下虚假视口。
+    ask.viewport = None;
+    ask.sync_list_window(0, 4, 8);
+    assert!(!ask.scroll_page(1));
+    assert_eq!(ask.viewport(), None);
 }
 
 #[test]

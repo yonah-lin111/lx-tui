@@ -74,7 +74,7 @@ pub use user_shell::{
 pub(crate) use view::view_message_of;
 pub use viewport::{
     hover_lx_chat, hover_lx_jump_bottom, jump_lx_history_bottom, jump_lx_history_to_prompt,
-    resolve_ask_preview_visible, resolve_task_agents_visible, resolve_task_output_visible,
+    resolve_ask_list_window, resolve_task_agents_visible, resolve_task_output_visible,
     scroll_lx_history, set_lx_history_scroll, toggle_lx_card,
 };
 pub(crate) use viewport::{resolve_lx_history, resolve_lx_rewind_center};

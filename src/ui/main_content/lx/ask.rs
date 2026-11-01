@@ -8,21 +8,22 @@
 //!
 //! ```text
 //! ────────────────────────────────────────────────────────
-//!  1 布局   2 主题
+//!  1 布局   2 主题   Submit
 //!  侧栏用哪种布局？
 //! ❯ (•) 双栏
 //!       推荐项，描述按全宽自动换行，续行缩进 6 列。
 //!   ( ) 单栏
 //!   ( ) Other...                       ← 激活后原地变成 1~3 行输入框
-//!        ↵ submit                      ← 仅单题多选 / 多题最后一题
-//!   ┌──┬──┐                             ← 预览置于所有选项正下方
+//!        ↵ submit                      ← 多选 / Submit 汇总
+//!                                      ← 空行
+//!   ┌──┬──┐                             ← 角色画预览与选项共用同一个滚动列表
 //!   │a │b │
 //!   └──┴──┘
-//! ↑↓ select · enter submit                     esc cancel
+//! ⇆ tab · ↑↓ select · ↵ submit                esc cancel
 //! ```
 //!
-//! 末尾的提交按钮是一个真实的进度门：多选/末题必须把焦点移上去按回车才提交。
-//! 内容超过「窗格高度 70%」时选项区内部滚动（右侧滚动条），顶部题目 tab 始终保留。
+//! `Submit` 汇总 tab 用问答回顾行替代选项，并同样以 ` ↵ submit ` 胶囊收尾。
+//! 内容超过「窗格高度 70%」时整块列表内部滚动（右侧**一个**滚动条），顶部 tab 始终保留。
 
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
@@ -38,10 +39,6 @@ use super::grid::Grid;
 const HEIGHT_PERCENT: u16 = crate::layout::LX_ASK_HEIGHT_PERCENT;
 /// 题干最多显示行数。
 const MAX_QUESTION_ROWS: u16 = 3;
-/// 预览区与选项区之间的空行。
-const PREVIEW_GAP: u16 = 1;
-/// 预览区最多占用行数。
-const PREVIEW_MAX_ROWS: u16 = 8;
 /// 选项行前缀列数（高亮箭头 2 + 标记 3 + 空格 1）。
 const ROW_PREFIX: u16 = 6;
 /// 面板最小可用行数：分隔线 + 一行可选行 + 底栏（题目 tab 另算）。
@@ -58,6 +55,14 @@ enum RowKind {
     Other { line: usize },
     /// 提交按钮行（仅 `has_submit_row()` 时存在）。
     Submit,
+    /// 角色画预览前的空行。
+    PreviewGap,
+    /// 角色画预览的第 `line` 行。
+    PreviewLine(usize),
+    /// 当前高亮项没有预览时的占位（`(no preview)`）。
+    PreviewPlaceholder,
+    /// `Submit` 汇总 tab 里第 `index` 题的第 `line` 个回顾行。
+    Review { index: usize, line: usize },
 }
 
 /// 一条已落位的可视行（绘制与命中共用）。
@@ -69,10 +74,10 @@ struct VisualRow {
 
 /// 一次布局的全部矩形（绝对屏幕坐标）。
 pub(super) struct AskLayout {
-    /// 顶部可选中的题目 tab：`(题目下标, 矩形)`。
+    /// 顶部可选中的题目 tab：`(题目下标, 矩形)`；`questions.len()` 是 `Submit` 汇总。
     tabs: Vec<(usize, Rect)>,
     question: Rect,
-    /// 选项 / Other / 提交按钮列表区域（恒占满全宽）。
+    /// 统一可滚列表（选项 / Other / 提交按钮 / 预览 / 回顾），恒占满全宽。
     options: Rect,
     /// 列表区可视行（已按滚动窗口裁剪）。
     rows: Vec<VisualRow>,
@@ -80,7 +85,6 @@ pub(super) struct AskLayout {
     content_rows: usize,
     /// 列表滚动起点（行）。
     scroll: usize,
-    preview: Option<Rect>,
     footer: Rect,
 }
 
@@ -101,14 +105,13 @@ impl AskLayout {
             rows: Vec::new(),
             content_rows: 0,
             scroll: 0,
-            preview: None,
             footer: Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1),
         };
         if inner.width == 0 || inner.height < 2 {
             return lay;
         }
         let mut y = inner.y;
-        // 题目 tab 只在多题时出现（没有 Confirm 汇总 Tab）；高度再小也保留这一行。
+        // tab 只在可切 tab 时出现（多题 / 单题多选，含 `Submit` 汇总）；高度再小也保留这一行。
         if ask.tab_len() > 1 {
             lay.tabs = place_tabs(ask, inner.x, y, inner.width);
             y = y.saturating_add(1);
@@ -135,29 +138,9 @@ impl AskLayout {
         if body_h == 0 {
             return lay;
         }
-        place_body(&mut lay, ask, y, footer_y, body_h);
+        lay.options = Rect::new(lay.question.x, y, lay.question.width, body_h);
         place_rows(&mut lay, ask);
         lay
-    }
-}
-
-/// 选项区与预览区的垂直切分：预览恒在选项（含 Other 与提交按钮）正下方，
-/// 本题没有任何 preview 时完全不占高度。
-fn place_body(lay: &mut AskLayout, ask: &AskState, y: u16, bottom: u16, body_h: u16) {
-    let width = lay.question.width;
-    let rows = u16::try_from(rows_model(ask, width).len()).unwrap_or(u16::MAX);
-    // 选项 1 行 + 空行 + 预览 1 行是最小可行组合。
-    let has_preview = ask.question_has_preview() && body_h >= PREVIEW_GAP + 2;
-    if !has_preview {
-        lay.options = Rect::new(lay.question.x, y, width, body_h);
-        return;
-    }
-    let options_h = rows.min(body_h.saturating_sub(PREVIEW_GAP + 1)).max(1);
-    lay.options = Rect::new(lay.question.x, y, width, options_h);
-    let preview_y = y.saturating_add(options_h).saturating_add(PREVIEW_GAP);
-    let preview_h = bottom.saturating_sub(preview_y).min(PREVIEW_MAX_ROWS);
-    if preview_h > 0 {
-        lay.preview = Some(Rect::new(lay.question.x, preview_y, width, preview_h));
     }
 }
 
@@ -173,16 +156,10 @@ pub(super) fn height(area_h: u16, width: u16, lx: &Lx) -> u16 {
     let max_h = area_h.saturating_mul(HEIGHT_PERCENT) / 100;
     let tabs = u16::from(ask.tab_len() > 1);
     let rows = u16::try_from(rows_model(ask, width).len()).unwrap_or(u16::MAX);
-    let preview = if ask.question_has_preview() {
-        PREVIEW_GAP.saturating_add(PREVIEW_MAX_ROWS)
-    } else {
-        0
-    };
     let need = 1u16
         .saturating_add(tabs)
         .saturating_add(question_rows(ask, width))
         .saturating_add(rows)
-        .saturating_add(preview)
         .saturating_add(1);
     // 1 分隔线 + tabs + 1 行可选行 + 1 底栏。
     let viable = MIN_PANEL_ROWS.saturating_add(tabs);
@@ -254,26 +231,13 @@ pub(super) fn list_window(area: Rect, lx: &Lx) -> Option<(usize, usize, usize)> 
     ))
 }
 
-/// 预览区可见行数（滚动上限钳制用）；面板未激活或无预览区返回 None。
-pub(super) fn preview_rows(area: Rect, lx: &Lx) -> Option<usize> {
-    let ask = lx.ask.as_ref()?;
-    let rect = rect(area, lx)?;
-    let lay = AskLayout::compute(rect, ask);
-    Some(usize::from(lay.preview?.height))
-}
-
-/// 滚轮分区：面板内返回区域，面板外 None（事件层据此吞掉）。
+/// 滚轮分区：面板内一律返回 [`AskWheelZone::Options`]（选项与预览共用一个视口），
+/// 面板外 None（事件层据此吞掉）。
 pub(super) fn wheel_zone(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<AskWheelZone> {
-    let ask = lx.ask.as_ref()?;
+    lx.ask.as_ref()?;
     let rect = rect(area, lx)?;
-    if !rect.contains((column, row).into()) {
-        return None;
-    }
-    let lay = AskLayout::compute(rect, ask);
-    match lay.preview {
-        Some(preview) if preview.contains((column, row).into()) => Some(AskWheelZone::Preview),
-        _ => Some(AskWheelZone::Options),
-    }
+    rect.contains((column, row).into())
+        .then_some(AskWheelZone::Options)
 }
 
 /// 绘制面板；返回聚焦且编辑态时的光标绝对坐标（行, 列）。
@@ -291,7 +255,6 @@ pub(super) fn draw(
     draw_question(grid, &lay, ask);
     draw_rows(grid, &lay, ask);
     draw_scrollbar(grid, &lay);
-    draw_preview(grid, &lay, ask);
     let cursor = cursor_cell(&lay, ask, focused);
     draw_footer(grid, &lay, lx);
     cursor
@@ -311,10 +274,15 @@ fn draw_rule(grid: &mut Grid, rect: Rect) {
     );
 }
 
-/// 题目 tab：题目标题；当前题反显。
+/// 题目 tab（最后一格是 `Submit` 汇总）：当前页反显。
 fn draw_tabs(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
+    let total = ask.questions.len();
     for (index, rect) in &lay.tabs {
-        let active = *index == ask.current;
+        let active = if *index >= total {
+            ask.is_confirm()
+        } else {
+            !ask.is_confirm() && *index == ask.current
+        };
         let label = tab_label(ask, *index);
         grid.put_clipped(
             rect.x,
@@ -330,9 +298,9 @@ fn draw_tabs(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
     }
 }
 
-/// 题干（最多 3 行软折行）。
+/// 题干（最多 3 行软折行）；`Submit` 汇总 tab 不显示题干。
 fn draw_question(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
-    if lay.question.width == 0 || lay.question.height == 0 {
+    if lay.question.width == 0 || lay.question.height == 0 || ask.is_confirm() {
         return;
     }
     let Some(question) = ask.question() else {
@@ -354,7 +322,10 @@ fn draw_question(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
     }
 }
 
-/// 列表：选项（标签 + 完整折行描述）/ 原地 Other / 提交按钮。
+/// 列表：选项（标签 + 完整折行描述）/ 原地 Other / 提交按钮 / 预览 / 回顾。
+///
+/// 行宽已在 [`place_rows`] 里统一收窄过：内容溢出时右侧让出一列给滚动条，
+/// `▐` 绝不压住文本的最后一格。
 fn draw_rows(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
     for row in &lay.rows {
         match row.kind {
@@ -364,6 +335,16 @@ fn draw_rows(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
             }
             RowKind::Other { line } => draw_other(grid, row.rect, ask, line),
             RowKind::Submit => draw_submit(grid, row.rect, ask),
+            RowKind::PreviewGap => {}
+            RowKind::PreviewLine(index) => draw_preview_line(grid, row.rect, ask, index),
+            RowKind::PreviewPlaceholder => grid.put_clipped(
+                row.rect.x,
+                row.rect.y,
+                a::ASK_NO_PREVIEW,
+                style::muted(),
+                row.rect.width,
+            ),
+            RowKind::Review { index, line } => draw_review(grid, row.rect, ask, index, line),
         }
     }
 }
@@ -624,54 +605,43 @@ fn draw_scrollbar(grid: &mut Grid, lay: &AskLayout) {
     }
 }
 
-/// 预览区：原样等宽渲染（保留前导空格、`\t`=4 列、宽字符占两列）。
+/// 角色画预览：原样等宽渲染（保留前导空格、`\t`=4 列、宽字符占两列）。
 ///
-/// 高亮移到 `Other` / 提交按钮时没有预览可看，此时渲染 `(no preview)` 占位：
-/// 面板高度因此恒定，不会随高亮上下抖动。
-fn draw_preview(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
-    let Some(preview) = lay.preview else {
-        return;
-    };
-    if preview.width == 0 || preview.height == 0 {
-        return;
-    }
+/// 预览行是统一列表的一部分，滚动条由列表统一绘制：这里不再有独立视口。
+fn draw_preview_line(grid: &mut Grid, rect: Rect, ask: &AskState, index: usize) {
     let Some(content) = ask.preview() else {
-        grid.put_clipped(
-            preview.x,
-            preview.y,
-            a::ASK_NO_PREVIEW,
-            style::muted(),
-            preview.width,
-        );
         return;
     };
-    let lines: Vec<String> = content.split('\n').map(expand_tabs).collect();
-    let total = lines.len();
-    let visible = usize::from(preview.height);
-    let offset = ask
-        .preview_scroll
-        .get(ask.current)
-        .copied()
-        .unwrap_or(0)
-        .min(total.saturating_sub(1));
-    let overflow = total > visible;
-    let width = preview.width.saturating_sub(u16::from(overflow));
-    for (index, line) in lines.iter().skip(offset).take(visible).enumerate() {
-        grid.put_clipped(
-            preview.x,
-            preview.y.saturating_add(index as u16),
-            line,
-            style::text(),
-            width,
-        );
-    }
-    if overflow
-        && let Some(bar) = crate::ui::widgets::scrollbar::layout(preview, total, visible, offset)
-    {
-        for y in bar.thumb.y..bar.thumb.bottom() {
-            grid.set(preview.right().saturating_sub(1), y, '▐', style::text());
-        }
-    }
+    let Some(line) = content.split('\n').nth(index) else {
+        return;
+    };
+    grid.put_clipped(
+        rect.x,
+        rect.y,
+        &expand_tabs(line),
+        style::text(),
+        rect.width,
+    );
+}
+
+/// `Submit` 汇总里的一行问答回顾：`header: answers`，未作答时压暗显示 `(no answer)`。
+fn draw_review(grid: &mut Grid, rect: Rect, ask: &AskState, index: usize, line: usize) {
+    let wrapped = review_lines(ask, index, usize::from(rect.width));
+    let Some(text) = wrapped.get(line) else {
+        return;
+    };
+    let answered = ask.answered(index);
+    grid.put_clipped(
+        rect.x,
+        rect.y,
+        text,
+        if answered {
+            style::text()
+        } else {
+            style::muted()
+        },
+        rect.width,
+    );
 }
 
 /// 底栏：左侧键位提示，右侧 Esc 状态。
@@ -685,12 +655,17 @@ fn draw_footer(grid: &mut Grid, lay: &AskLayout, lx: &Lx) {
     } else {
         a::ASK_FOOTER_CANCEL.to_string()
     };
+    let keys = match lx.ask.as_ref() {
+        Some(ask) if ask.is_single_select_only() => a::ASK_FOOTER_KEYS_SINGLE,
+        Some(ask) if ask.is_confirm() => a::ASK_FOOTER_KEYS_CONFIRM,
+        _ => a::ASK_FOOTER_KEYS,
+    };
     let right_w = u16::try_from(right.width()).unwrap_or(u16::MAX);
     if right_w.saturating_add(2) <= area.width {
         grid.put_clipped(
             area.x,
             area.y,
-            a::ASK_FOOTER_KEYS,
+            keys,
             style::muted(),
             area.width.saturating_sub(right_w).saturating_sub(1),
         );
@@ -702,13 +677,7 @@ fn draw_footer(grid: &mut Grid, lay: &AskLayout, lx: &Lx) {
             right_w,
         );
     } else {
-        grid.put_clipped(
-            area.x,
-            area.y,
-            a::ASK_FOOTER_KEYS,
-            style::muted(),
-            area.width,
-        );
+        grid.put_clipped(area.x, area.y, keys, style::muted(), area.width);
     }
 }
 
@@ -720,15 +689,15 @@ fn stop_armed(lx: &Lx) -> bool {
     })
 }
 
-/// tab 文案：` N header `（只有真实题目，没有 Confirm）。
+/// tab 文案：` N header `；最后一格是 `Submit` 汇总。
 fn tab_label(ask: &AskState, index: usize) -> String {
     match ask.questions.get(index) {
         Some(question) => format!(" {} {} ", index + 1, question.header),
-        None => String::new(),
+        None => a::ASK_TAB_SUBMIT.to_string(),
     }
 }
 
-/// 题目 tab 落位；总宽超出时只画放得下的（命中同步）。
+/// tab 落位；总宽超出时只画放得下的（命中同步）。
 fn place_tabs(ask: &AskState, x: u16, y: u16, width: u16) -> Vec<(usize, Rect)> {
     let mut out = Vec::with_capacity(ask.tab_len());
     let mut cx = x;
@@ -745,7 +714,20 @@ fn place_tabs(ask: &AskState, x: u16, y: u16, width: u16) -> Vec<(usize, Rect)> 
 }
 
 /// 列表模型：每个视觉行一条（绘制、滚动与命中共用同一份几何）。
+///
+/// 选项、`Other`、提交胶囊、空行、角色画预览与 `Submit` 回顾都在**同一个**可滚
+/// 列表里，因此只可能有一条滚动条，滚轮/翻页也只会同时挪动整块内容。
 fn rows_model(ask: &AskState, width: u16) -> Vec<RowKind> {
+    if ask.is_confirm() {
+        let mut out = Vec::new();
+        for index in 0..ask.questions.len() {
+            for line in 0..review_lines(ask, index, usize::from(width)).len() {
+                out.push(RowKind::Review { index, line });
+            }
+        }
+        out.push(RowKind::Submit);
+        return out;
+    }
     let Some(question) = ask.question() else {
         return Vec::new();
     };
@@ -765,7 +747,34 @@ fn rows_model(ask: &AskState, width: u16) -> Vec<RowKind> {
     if ask.has_submit_row() {
         out.push(RowKind::Submit);
     }
+    if ask.question_has_preview() {
+        out.push(RowKind::PreviewGap);
+        match ask.preview() {
+            Some(content) => {
+                for line in 0..content.split('\n').count() {
+                    out.push(RowKind::PreviewLine(line));
+                }
+            }
+            None => out.push(RowKind::PreviewPlaceholder),
+        }
+    }
     out
+}
+
+/// `Submit` 汇总里某题的回顾文本（`header: answers`，未作答显示 `(no answer)`）。
+fn review_lines(ask: &AskState, index: usize, width: usize) -> Vec<String> {
+    let header = ask
+        .questions
+        .get(index)
+        .map(|question| question.header.as_str())
+        .unwrap_or_default();
+    let answers = ask.answers_at(index);
+    let value = if answers.is_empty() {
+        a::ASK_NO_ANSWER.to_string()
+    } else {
+        answers.join(", ")
+    };
+    wrap(&format!("{header}: {value}"), width)
 }
 
 /// 描述 / 行内输入框正文的可用宽度（缩进 6 列后占满剩余宽度）。
@@ -811,45 +820,38 @@ fn other_window(ask: &AskState) -> (usize, usize) {
 }
 
 /// 行种类 → 它所属的逻辑条目下标（`↑`/`↓` 的高亮单位）。
+///
+/// 预览 / 回顾行不属于任何可高亮项：它们只参与滚动。
 fn item_index(ask: &AskState, kind: RowKind) -> Option<usize> {
     match kind {
         RowKind::OptionLabel(index) | RowKind::OptionDesc { index, .. } => Some(index),
         RowKind::Other { .. } => Some(ask.other_row()),
         RowKind::Submit => ask.submit_row(),
+        RowKind::PreviewGap | RowKind::PreviewLine(_) | RowKind::PreviewPlaceholder => None,
+        RowKind::Review { .. } => None,
     }
 }
 
 /// 可见行落位：按高亮自动滚动，保证高亮项完整可见。
 fn place_rows(lay: &mut AskLayout, ask: &AskState) {
-    let model = rows_model(ask, lay.options.width);
+    let visible = usize::from(lay.options.height);
+    let mut width = lay.options.width;
+    let mut model = rows_model(ask, width);
+    // 内容溢出时右侧要让出一列给滚动条：折行宽度必须同步收窄，否则模型与绘制
+    // 会按两个宽度各算一遍（最后一列被裁掉、描述折行数也对不上）。
+    if model.len() > visible && width > 1 {
+        width = width.saturating_sub(1);
+        model = rows_model(ask, width);
+    }
     let total = model.len();
     lay.content_rows = total;
-    let visible = usize::from(lay.options.height);
     if visible == 0 || total == 0 {
         return;
     }
-    // 高亮项的末行：滚动只需保证它在可视区底部（其余内容自然在上方）。
-    let highlight = ask.highlight.get(ask.current).copied().unwrap_or(0);
-    let mut end = 0usize;
-    for (index, kind) in model.iter().enumerate() {
-        if item_index(ask, *kind) == Some(highlight) {
-            end = index + 1;
-        }
-    }
-    // 显式视口（滚轮）优先：滚轮只滚列表，不移动高亮，因此窗口起点不能被高亮覆盖。
-    // 与 `@`/`/` 面板的 `PanelWindow.viewport` 同一语义；键盘移动高亮会清空它。
     let scroll = match ask.viewport() {
+        // 显式视口（滚轮 / 翻页）优先：浏览不移动高亮。
         Some(start) => start.min(total.saturating_sub(visible)),
-        None => {
-            let mut follow = end.saturating_sub(visible);
-            // 高亮停在「其他」时它的下一行就是 `Submit`：按高亮对齐的窗口恰好把
-            // `Submit` 挤到可视区外（行下标 == visible 被丢弃），纯鼠标用户因此
-            // 永远点不到提交按钮。
-            if end + 1 == total && follow + visible < total {
-                follow = follow.saturating_add(1);
-            }
-            follow
-        }
+        None => follow_scroll(ask, &model, visible),
     };
     lay.scroll = scroll;
     for (index, kind) in model.iter().enumerate() {
@@ -865,7 +867,7 @@ fn place_rows(lay: &mut AskLayout, ask: &AskState) {
             lay.options
                 .y
                 .saturating_add(u16::try_from(line).unwrap_or(u16::MAX)),
-            lay.options.width,
+            width,
             1,
         );
         let hit = match kind {
@@ -874,6 +876,10 @@ fn place_rows(lay: &mut AskLayout, ask: &AskState) {
             }
             RowKind::Other { .. } => Some(AskHit::Other),
             RowKind::Submit => Some(AskHit::Submit),
+            RowKind::PreviewGap
+            | RowKind::PreviewLine(_)
+            | RowKind::PreviewPlaceholder
+            | RowKind::Review { .. } => None,
         };
         lay.rows.push(VisualRow {
             kind: *kind,
@@ -883,8 +889,32 @@ fn place_rows(lay: &mut AskLayout, ask: &AskState) {
     }
 }
 
-/// 题干占用行数（最多 [`MAX_QUESTION_ROWS`] 行）。
+/// 高亮项完整可见所需的窗口起点：先保证末行进入视口，再保证首行不越出顶部。
+fn follow_scroll(ask: &AskState, model: &[RowKind], visible: usize) -> usize {
+    let highlight = ask.highlight.get(ask.current).copied().unwrap_or(0);
+    let mut start_row = None;
+    let mut end_row = 0usize;
+    for (index, kind) in model.iter().enumerate() {
+        if item_index(ask, *kind) == Some(highlight) {
+            start_row.get_or_insert(index);
+            end_row = index + 1;
+        }
+    }
+    let Some(start_row) = start_row else {
+        return 0;
+    };
+    let mut scroll = end_row.saturating_sub(visible);
+    if start_row < scroll {
+        scroll = start_row;
+    }
+    scroll
+}
+
+/// 题干占用行数（最多 [`MAX_QUESTION_ROWS`] 行）；`Submit` 汇总 tab 没有题干。
 fn question_rows(ask: &AskState, width: u16) -> u16 {
+    if ask.is_confirm() {
+        return 0;
+    }
     let Some(question) = ask.question() else {
         return 1;
     };

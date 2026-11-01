@@ -1108,6 +1108,31 @@ fn ask_click_submits_a_single_select_question_and_does_not_reach_history() {
 }
 
 #[test]
+fn resolving_the_ask_list_window_feeds_page_scrolling() {
+    // `PageUp`/`PageDown` 在 app 层拿不到窗格几何：事件循环必须把渲染层的窗口
+    // （起点、总行数、可视行数）落进状态，否则翻页永远不动。
+    let config = Config::default();
+    let (mut state, pane) = busy_ask_state();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    assert!(update::resolve_ask_list_window(&mut state, &geo.rects));
+    let inner = layout::pane_inner_rect(
+        geo.rects
+            .iter()
+            .find(|(id, _)| *id == pane)
+            .map(|(_, rect)| *rect)
+            .expect("pane rect"),
+    );
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    let (scroll, total, visible) =
+        ui::main_content::lx::ask_list_window(inner, lx).expect("list window");
+    let ask = lx.ask.as_ref().expect("ask");
+    assert_eq!(ask.list_scroll, scroll);
+    assert_eq!(ask.list_total, total);
+    assert_eq!(ask.list_visible, visible);
+    assert!(total > 0 && visible > 0);
+}
+
+#[test]
 fn task_page_swallows_ask_hits_so_the_list_stays_clickable() {
     // 后台任务页与 ask 面板共用输入框矩形：页打开时面板不可见，点击必须落在
     // 任务列表上，绝不能命中隐藏面板改一个看不见的答案。

@@ -71,24 +71,22 @@
 **目标文件**：`src/app/state/lx/ask.rs`、`src/ui/main_content/lx/ask.rs`、`src/app/update/chat/ask.rs`、`src/app/update/chat/mod.rs`、`src/event/chat/ask.rs`、`src/ui/main_content/lx/chat_bar.rs`、`src/ui/main_content/lx/history.rs`、`src/ui/text/agent.rs`
 
 - [x] **3.1 重构 `AskState` 状态模型（`src/app/state/lx/ask.rs`）**
-  - 移除 `confirm: bool` 字段及相关复核步方法，`tab_len()` 恒为 `questions.len()`；
+  - 对齐 `opencode-dev`：新增 `is_single_select_only()`；单题单选无顶部 Tab，多题或单题多选包含 `Submit` 汇总 Tab（`tab_len() = questions.len() + 1`）；
   - 新增 `started_at_ms: i64`（初始化为 `crate::db::now_ms()`）；
-  - 新增 `has_submit_row(&self) -> bool`（单题仅多选为 `true`，多题仅最后一题为 `true`）、`submit_row(&self) -> Option<usize>`、`question_has_preview(&self) -> bool`；
-  - 更新 `row_count(&self)` 为 `options.len() + 1 + usize::from(has_submit_row())`，使提交按钮成为最后一个可通过 `↑`/`↓` 聚焦的逻辑项；
-  - 更新 `MAX_OTHER_EDIT_ROWS = 3` 行内编辑高度同步。
+  - 新增 `has_submit_row(&self) -> bool`（多选与 `Submit` 汇总页为 `true`）、`submit_row(&self) -> Option<usize>`、`question_has_preview(&self) -> bool`；
+  - 更新 `MAX_OTHER_EDIT_ROWS = 3` 行内编辑高度同步，移除独立的 `preview_scroll` 与 `preview_visible`，统一使用单一 `viewport` 滚动。
 
 - [x] **3.2 重构 Ask 面板布局与渲染（`src/ui/main_content/lx/ask.rs`、`src/ui/text/agent.rs`）**
   - 移除左右分栏（`SPLIT_MIN_WIDTH`）与底部独立编辑框（`lay.editor`、`draw_editor`）；
   - **选项描述完整换行**：将 `RowKind::OptionDesc` 按 `options.width - ROW_PREFIX` 全宽软折行展开为多行，每行缩进 6 列绘制；
   - **Other 原地行内编辑**：将 `RowKind::Other` 在编辑态或有内容时按 `1..=3` 行展开，左侧 6 列绘制 `❯ (•) ` / `❯ [x] `，右侧原地绘制 `AskEditor` 的 1~3 行软折行内容、空态占位符 `Other...`、选区反显，并返回硬件光标坐标；
-  - **弹窗胶囊样式提交按钮**：在 `has_submit_row()` 为真时，于 `Other` 下方渲染 `RowKind::Submit`（文案 ` ↵ submit `，就绪时 `style::button_primary()`、未就绪时 `style::button_secondary()`，聚焦时行首带 `❯`）；
-  - **Preview 置底且按需显隐**：仅当 `ask.question_has_preview()` 为真时，在所有选项行下方分配 `lay.preview`；本题无任何 `preview` 时完全隐藏预览区。
+  - **弹窗胶囊样式提交按钮**：在 `has_submit_row()` 为真时渲染 `RowKind::Submit`（文案 ` ↵ submit `，就绪时 `style::button_primary()`、未就绪时 `style::button_secondary()`，聚焦时行首带 `❯`）；
+  - **Preview 置底且与问题选项共用唯一滚动条**：移除字符图独立滚动条，将 `PreviewGap` / `PreviewLine` / `PreviewPlaceholder` 直接纳入统一的 `rows_model`，使问题选项与字符图共用面板最右侧唯一一条滚动条；本题无任何 `preview` 时完全隐藏预览区。
 
-- [x] **3.3 重构 Ask 键盘与鼠标交互（`src/app/update/chat/ask.rs`）**
-  - 列表态仅保留 `↑`/`↓` 切换高亮（移除 `Tab`/`Shift+Tab`/`←`/`→`/`j`/`k`/`1..9`）；
-  - 单选题（无提交按钮时）在选项上按 `Enter` 或鼠标单击：立即选中并提交（单题）或切到下一题（多题非末题）；
-  - 多选题或多题最后一题：在选项上按 `Enter`/`Space`/鼠标点击仅切换选中态，必须在焦点位于 ` ↵ submit ` 按钮时按 `Enter`（或鼠标点击按钮）才触发提交；若尚有未作答题目，弹 Toast 并自动跳转到第一个未作答题目；
-  - 行内编辑态按 `Enter`：提交手写文本（单题单选直接提交整题，多题非末题单选进入下一题，多选或末题退出编辑并勾选）；按 `Shift+Enter`/`Ctrl+Enter` 换行；按 `Esc` 退出行内编辑。
+- [x] **3.3 重构 Ask 键盘与鼠标交互（对齐 `opencode-dev`，`src/app/update/chat/ask.rs`）**
+  - 支持 `←`/`→`、`Tab`/`Shift+Tab` 在各题与 `Submit` 汇总 Tab 间循环切换，`↑`/`↓` 循环切换选项，`1..9` 数字键快捷选择；
+  - 单题单选按 `Enter` 或鼠标单击立即提交；多题单选按 `Enter` 或鼠标单击选中并自动切到下一 Tab；多选按 `Enter`/`Space` 切换勾选；
+  - 高亮停在 `Other...` 时直接打字自动进入行内编辑并插入字符；行内编辑首行按 `↑` 自动退出编辑并回到上一项，按 `Tab`/`Shift+Tab` 自动保存并切题，按 `Enter` 确认输入，按 `Esc` 退出行内编辑。
 
 - [x] **3.4 Ask 过程中暂停 Agent 计时与 Loading（`src/ui/main_content/lx/chat_bar.rs`、`src/ui/main_content/lx/history.rs`、`src/app/update/chat/mod.rs`、`src/event/chat/ask.rs`）**
   - `chat_bar::loading_visible`：当 `lx.ask.is_some()` 时返回 `false`；

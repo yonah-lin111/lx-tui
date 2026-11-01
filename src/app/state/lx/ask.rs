@@ -23,7 +23,10 @@ pub enum AskHit {
     Tab(usize),
 }
 
-/// 滚轮所在分区：选项区移动高亮，预览区只滚预览。
+/// 滚轮所在分区。
+///
+/// 选项与角色画预览共用同一个滚动视口，两个分区语义完全一致：保留枚举只为兼容
+/// 既有事件路由（`Options` / `Preview` 都是「滚动统一列表」）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AskWheelZone {
     Options,
@@ -50,12 +53,17 @@ pub struct AskState {
     pub custom_on: Vec<bool>,
     /// 当前题是否处于编辑态。
     pub editing: bool,
-    /// 每题预览滚动偏移。
-    pub preview_scroll: Vec<usize>,
-    /// 预览区可视行数（由事件循环按几何同步；0 表示没有预览区）。
+    /// 是否停在 `Submit` 汇总 tab（只有多题 / 单题多选才有）。
     ///
-    /// 滚动上限必须扣掉可视行数，否则短预览也能滚出一片空白。
-    pub preview_visible: usize,
+    /// 单题单选没有汇总 tab：选中即提交，`confirm` 恒为 `false`。
+    pub confirm: bool,
+    /// 统一列表的滚动起点、总行数与可视行数（由事件循环按几何同步）。
+    ///
+    /// 选项与角色画预览现在是同一份可滚列表，`PageUp`/`PageDown` 在 `app/` 层
+    /// 拿不到窗格几何，只能消费这里落下的上一帧窗口。
+    pub list_scroll: usize,
+    pub list_total: usize,
+    pub list_visible: usize,
     /// 选项列表的显式滚动起点（行）；`None` 表示窗口跟随高亮。
     ///
     /// 语义与 `@` 提及面板、`/` 命令面板的 `PanelWindow.viewport` 一致：
@@ -82,8 +90,10 @@ impl AskState {
             custom: (0..count).map(|_| AskEditor::new()).collect(),
             custom_on: vec![false; count],
             editing: false,
-            preview_scroll: vec![0; count],
-            preview_visible: 0,
+            confirm: false,
+            list_scroll: 0,
+            list_total: 0,
+            list_visible: 0,
             viewport: None,
         }
     }
@@ -93,23 +103,33 @@ impl AskState {
         self.questions.get(self.current)
     }
 
-    /// 当前题是否显示底部「提交」按钮：
+    /// 唯一一题且为单选：没有 tab 栏、没有 `Submit` 汇总，选中即提交。
+    pub fn is_single_select_only(&self) -> bool {
+        self.questions.len() == 1 && self.questions.first().is_some_and(|q| !q.multi_select)
+    }
+
+    /// 是否停在 `Submit` 汇总 tab（单题单选永远不是）。
+    pub fn is_confirm(&self) -> bool {
+        !self.is_single_select_only() && self.confirm
+    }
+
+    /// 当前题是否显示选项列表底部的「提交」胶囊：
     ///
-    /// - 单题：只有多选需要按钮（单选选中即提交）；
-    /// - 多题：只有最后一题需要按钮，前 `N-1` 题答完自动前进。
+    /// `Submit` 汇总 tab 恒显示；其余情况只有多选需要按钮（单选选中即前进/提交）。
     pub fn has_submit_row(&self) -> bool {
-        let Some(question) = self.question() else {
-            return false;
-        };
-        if self.questions.len() > 1 {
-            self.current + 1 == self.questions.len()
-        } else {
-            question.multi_select
-        }
+        self.is_confirm()
+            || self
+                .question()
+                .is_some_and(|question| question.multi_select)
     }
 
     /// 当前题可被 `↑`/`↓` 高亮的逻辑条目数：选项 + 「其他」 + 可能存在的提交按钮。
+    ///
+    /// `Submit` 汇总 tab 没有任何可高亮项（`↑`/`↓` 在那里是滚动）。
     pub fn row_count(&self) -> usize {
+        if self.is_confirm() {
+            return 0;
+        }
         self.question().map_or(0, |question| {
             question.options.len() + 1 + usize::from(self.has_submit_row())
         })
@@ -120,20 +140,9 @@ impl AskState {
         self.question().map_or(0, |question| question.options.len())
     }
 
-    /// 提交按钮行的逻辑下标；不显示按钮时为 None。
+    /// 提交按钮行的逻辑下标；不显示按钮（含 `Submit` 汇总 tab）时为 None。
     pub fn submit_row(&self) -> Option<usize> {
-        self.has_submit_row()
-            .then(|| self.other_row().saturating_add(1))
-    }
-
-    /// 把高亮移到提交按钮行，并让列表窗口重新跟随高亮；无按钮时不动。
-    pub fn focus_submit(&mut self) -> bool {
-        let Some(row) = self.submit_row() else {
-            return false;
-        };
-        self.highlight[self.current] = row;
-        self.viewport = None;
-        true
+        (!self.is_confirm() && self.has_submit_row()).then(|| self.other_row().saturating_add(1))
     }
 
     /// 当前题是否有任何选项配置了非空 preview（决定预览区是否占位）。
@@ -214,23 +223,22 @@ impl AskState {
         true
     }
 
-    /// 移动高亮（钳制在 `0..row_count`，不循环）；返回是否移动。
+    /// 移动高亮：在 `0..row_count` 上**循环**（对齐 `opencode` 的
+    /// `(selected + delta + total) % total`），滚动视口交还给高亮。
+    ///
+    /// 必须清视口：高亮滚出可视区后按到边界方向键时只会绕回另一端，若不清，
+    /// 窗口不会回来——键盘看起来"完全没反应"，用户唯一的出路是继续盲目滚轮。
     pub fn move_highlight(&mut self, delta: isize) -> bool {
         let len = self.row_count();
         if len == 0 {
             return false;
         }
-        let max = len - 1;
-        let next = (self.highlight[self.current] as isize)
+        let current = self.highlight[self.current].min(len - 1);
+        let next = (current as isize)
             .saturating_add(delta)
-            .clamp(0, max as isize) as usize;
+            .rem_euclid(len as isize) as usize;
         let moved = next != self.highlight[self.current];
         self.highlight[self.current] = next;
-        // 键盘移动（或已到边界）都把窗口交还给高亮：与 `@`/`/` 面板同语义。
-        //
-        // 必须在 `moved` 之外清视口：高亮滚出可视区后按到边界方向键时 `moved`
-        // 为 false，若只在 `moved` 时清，窗口不会回来——键盘看起来"完全没反应"，
-        // 用户唯一的出路是继续盲目滚轮。
         let had_viewport = self.viewport.take().is_some();
         moved || had_viewport
     }
@@ -292,9 +300,13 @@ impl AskState {
         std::mem::replace(&mut self.editing, false)
     }
 
-    /// tab 总数：只按题目数量（没有 Confirm 汇总 Tab）。
+    /// tab 总数：单题单选没有 tab（恒 1），其余为「题目数 + Submit 汇总」。
     pub fn tab_len(&self) -> usize {
-        self.questions.len()
+        if self.is_single_select_only() {
+            1
+        } else {
+            self.questions.len().saturating_add(1)
+        }
     }
 
     /// 指定题是否已有答案（勾选或已提交的手写文本）。
@@ -307,18 +319,28 @@ impl AskState {
         (0..self.questions.len()).all(|index| self.answered(index))
     }
 
-    /// 切到指定题目 tab；越界钳到末题，同位置返回 false。
+    /// 切到指定 tab；题目越界钳到末题，`questions.len()` 是 `Submit` 汇总。
+    ///
+    /// 与 `opencode` 的 `selectTab` 一致：切 tab 一律退出编辑、清滚动视口，
+    /// 并恢复该题的高亮（否则回车会默认选中第 1 项、悄悄覆盖用户之前的选择）。
     pub fn goto_tab(&mut self, index: usize) -> bool {
+        if !self.is_single_select_only() && index >= self.questions.len() {
+            if self.confirm {
+                return false;
+            }
+            self.confirm = true;
+            self.editing = false;
+            self.viewport = None;
+            return true;
+        }
         let index = index.min(self.questions.len().saturating_sub(1));
-        if index == self.current {
+        if index == self.current && !self.confirm {
             return false;
         }
         self.current = index;
+        self.confirm = false;
         self.editing = false;
         self.viewport = None;
-        if let Some(scroll) = self.preview_scroll.get_mut(index) {
-            *scroll = 0;
-        }
         self.restore_highlight();
         true
     }
@@ -340,16 +362,36 @@ impl AskState {
         }
     }
 
-    /// 前进到下一题（末题返回 false，由提交按钮收尾）。
+    /// 前进一个 tab：题目 → 下一题 → `Submit` 汇总 → 回到第 1 题（循环）。
+    ///
+    /// 单题单选没有 tab 可切，返回 false。
     pub fn next_step(&mut self) -> bool {
-        if self.current + 1 >= self.questions.len() {
+        if self.is_single_select_only() {
             return false;
         }
-        self.current += 1;
-        self.editing = false;
-        self.viewport = None;
-        self.restore_highlight();
-        true
+        if self.is_confirm() {
+            return self.goto_tab(0);
+        }
+        if self.current + 1 < self.questions.len() {
+            self.goto_tab(self.current + 1)
+        } else {
+            self.goto_tab(self.questions.len())
+        }
+    }
+
+    /// 后退一个 tab：`Submit` 汇总 → 末题 → 上一题 → `Submit` 汇总（循环）。
+    pub fn prev_step(&mut self) -> bool {
+        if self.is_single_select_only() {
+            return false;
+        }
+        if self.is_confirm() {
+            return self.goto_tab(self.questions.len().saturating_sub(1));
+        }
+        if self.current > 0 {
+            self.goto_tab(self.current - 1)
+        } else {
+            self.goto_tab(self.questions.len())
+        }
     }
 
     /// 当前高亮选项的预览文本（高亮在 `Other` / 提交按钮时没有预览）。
@@ -358,39 +400,26 @@ impl AskState {
         self.question()?.options.get(highlight)?.preview.as_deref()
     }
 
-    /// 当前预览的最大滚动偏移：总行数减可视行数（不足一屏时为 0）。
-    ///
-    /// 只按 `lines - 1` 钳制会让短预览也能滚出一片空白：内容没溢出时滚动毫无意义。
-    pub fn preview_max_scroll(&self) -> usize {
-        let Some(preview) = self.preview() else {
-            return 0;
-        };
-        let total = preview.split('\n').count();
-        total.saturating_sub(self.preview_visible.max(1))
+    /// 同步统一列表的 `(滚动起点, 总行数, 可视行数)`（事件循环按几何写入）。
+    pub fn sync_list_window(&mut self, scroll: usize, total: usize, visible: usize) -> bool {
+        let changed =
+            self.list_scroll != scroll || self.list_total != total || self.list_visible != visible;
+        self.list_scroll = scroll;
+        self.list_total = total;
+        self.list_visible = visible;
+        changed
     }
 
-    /// 同步预览区可视行数（只有真的溢出才允许滚动，返回值表示偏移被收紧）。
-    pub fn resize_preview(&mut self, visible: usize) -> bool {
-        self.preview_visible = visible;
-        let mut moved = false;
-        for index in 0..self.preview_scroll.len() {
-            let total = self
-                .questions
-                .get(index)
-                .and_then(|question| {
-                    question
-                        .options
-                        .get(self.highlight.get(index).copied().unwrap_or(0))
-                })
-                .and_then(|option| option.preview.as_deref())
-                .map_or(0, |preview| preview.split('\n').count());
-            let max = total.saturating_sub(visible.max(1));
-            if self.preview_scroll[index] > max {
-                self.preview_scroll[index] = max;
-                moved = true;
-            }
-        }
-        moved
+    /// 按行滚动统一列表（`Submit` 汇总 tab 的 `↑`/`↓`）；返回视口是否变化。
+    pub fn scroll_window(&mut self, delta: isize) -> bool {
+        let base = self.viewport.unwrap_or(self.list_scroll);
+        self.scroll_viewport(delta, base, self.list_total, self.list_visible)
+    }
+
+    /// 按一屏滚动统一列表（`PageUp`/`PageDown`）；返回视口是否变化。
+    pub fn scroll_page(&mut self, direction: isize) -> bool {
+        let step = isize::try_from(self.list_visible.max(1)).unwrap_or(isize::MAX);
+        self.scroll_window(direction.saturating_mul(step))
     }
 
     /// 滚轮滚动选项列表：只动显式视口，**不动高亮**（与 `@`/`/` 面板同语义）。
@@ -419,17 +448,6 @@ impl AskState {
     /// 选项列表的显式视口起点；`None` 表示窗口跟随高亮。
     pub fn viewport(&self) -> Option<usize> {
         self.viewport
-    }
-
-    /// 滚动预览（正数向下）；返回偏移是否变化。
-    pub fn scroll_preview(&mut self, delta: isize) -> bool {
-        let max = self.preview_max_scroll();
-        let next = (self.preview_scroll[self.current] as isize)
-            .saturating_add(delta)
-            .clamp(0, max as isize) as usize;
-        let moved = next != self.preview_scroll[self.current];
-        self.preview_scroll[self.current] = next;
-        moved
     }
 
     /// 该题手写缓冲（供编辑态按键/粘贴使用）。

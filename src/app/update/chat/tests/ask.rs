@@ -109,24 +109,23 @@ fn snapshot(state: &AppState, pane: PaneId) -> String {
 // ===== 列表态键位（design §4.3.3）=====
 
 #[test]
-fn list_navigation_only_honors_arrows() {
+fn list_navigation_honors_arrows_and_swallows_other_keys() {
     let (mut state, pane, _key) = asking(vec![question("q", false, &["A", "B"])]);
     press(&mut state, LxInput::Down);
     assert_eq!(panel(&state, pane).highlight[0], 1);
     press(&mut state, LxInput::Up);
     assert_eq!(panel(&state, pane).highlight[0], 0);
-    // 其余历史快捷键一律吞掉，不动高亮、也不漏进草稿。
-    for command in [
-        LxInput::Char('j'),
-        LxInput::Char('k'),
-        LxInput::Char('2'),
-        LxInput::Tab,
-        LxInput::PrevStep,
-        LxInput::Left,
-        LxInput::Right,
-    ] {
-        assert!(!press(&mut state, command), "快捷键必须被吞掉");
-        assert_eq!(panel(&state, pane).highlight[0], 0);
+    // `↑` 从首行绕到末行（对齐 opencode 的循环高亮）。
+    press(&mut state, LxInput::Up);
+    assert_eq!(
+        panel(&state, pane).highlight[0],
+        panel(&state, pane).row_count() - 1
+    );
+    // 回到普通选项行：未绑定的字符键一律吞掉，不动高亮、也不漏进草稿。
+    press(&mut state, LxInput::Down);
+    assert_eq!(panel(&state, pane).highlight[0], 0);
+    for command in [LxInput::Char('j'), LxInput::Char('k')] {
+        assert!(!press(&mut state, command), "按键必须被吞掉");
     }
     assert_eq!(
         state.pane_anywhere(pane).expect("pane").lx.input,
@@ -166,7 +165,7 @@ fn single_question_single_select_enter_submits_immediately() {
 }
 
 #[test]
-fn multi_question_single_select_advances_then_focuses_the_submit_row() {
+fn multi_question_single_select_advances_then_enters_the_submit_tab() {
     let (mut state, pane, _key) = asking(vec![
         question("a", false, &["A"]),
         question("b", false, &["B"]),
@@ -175,18 +174,59 @@ fn multi_question_single_select_advances_then_focuses_the_submit_row() {
     press(&mut state, LxInput::Enter);
     assert_eq!(panel(&state, pane).current, 1);
     assert_eq!(panel(&state, pane).answers_at(0), vec!["A".to_string()]);
-    // 末题：回车选中并把焦点移到提交按钮，不自动提交。
+    // 末题：回车选中并进入 Submit 汇总，不自动提交。
     press(&mut state, LxInput::Enter);
-    assert!(ask_present(&state, pane), "末题必须聚焦提交按钮再提交");
+    assert!(ask_present(&state, pane), "必须进入 Submit 汇总再提交");
     let ask = panel(&state, pane);
     assert_eq!(ask.answers_at(1), vec!["B".to_string()]);
-    assert_eq!(Some(ask.highlight[1]), ask.submit_row());
+    assert!(ask.is_confirm());
     // 再回车才真正提交。
     press(&mut state, LxInput::Enter);
     assert!(!ask_present(&state, pane));
     let answers = answer_effect(&state).expect("AnswerAsk");
     assert_eq!(answers.get("a"), Some(&vec!["A".to_string()]));
     assert_eq!(answers.get("b"), Some(&vec!["B".to_string()]));
+}
+
+#[test]
+fn tab_keys_cycle_between_questions_and_the_submit_tab() {
+    let (mut state, pane, _key) = asking(vec![
+        question("a", false, &["A"]),
+        question("b", false, &["B"]),
+    ]);
+    press(&mut state, LxInput::Tab);
+    assert_eq!(panel(&state, pane).current, 1);
+    press(&mut state, LxInput::Tab);
+    assert!(panel(&state, pane).is_confirm(), "Tab 前进到 Submit 汇总");
+    press(&mut state, LxInput::Tab);
+    assert_eq!(panel(&state, pane).current, 0, "汇总循环回第一题");
+    assert!(!panel(&state, pane).is_confirm());
+    // Shift+Tab（`PrevStep`）与 ← 反向循环。
+    press(&mut state, LxInput::PrevStep);
+    assert!(panel(&state, pane).is_confirm());
+    press(&mut state, LxInput::Left);
+    assert_eq!(panel(&state, pane).current, 1, "汇总后退落到末题");
+    press(&mut state, LxInput::Right);
+    assert!(panel(&state, pane).is_confirm());
+}
+
+#[test]
+fn single_select_question_has_no_tab_cycling() {
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A", "B"])]);
+    assert!(!press(&mut state, LxInput::Tab));
+    assert!(!press(&mut state, LxInput::PrevStep));
+    assert!(!panel(&state, pane).is_confirm());
+}
+
+#[test]
+fn digit_shortcut_selects_and_confirms_a_single_select_answer() {
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A", "B"])]);
+    press(&mut state, LxInput::Char('2'));
+    assert!(!ask_present(&state, pane), "数字键选中后立即提交");
+    assert_eq!(
+        answer_effect(&state).and_then(|answers| answers.get("q").cloned()),
+        Some(vec!["B".to_string()])
+    );
 }
 
 #[test]
@@ -213,17 +253,14 @@ fn submit_with_unanswered_questions_toasts_and_jumps_back() {
         question("a", false, &["A"]),
         question("b", false, &["B"]),
     ]);
-    // 直接跳到末题作答并聚焦提交按钮：第 1 题仍未答。
+    // 直接跳到末题作答并进入 Submit 汇总：第 1 题仍未答。
     assert!(crate::app::update::apply_ask_click(
         &mut state,
         pane,
         AskHit::Tab(1)
     ));
     press(&mut state, LxInput::Enter);
-    assert_eq!(
-        Some(panel(&state, pane).highlight[1]),
-        panel(&state, pane).submit_row()
-    );
+    assert!(panel(&state, pane).is_confirm());
     press(&mut state, LxInput::Enter);
     assert!(ask_present(&state, pane), "未答完不得提交");
     assert_eq!(
@@ -231,6 +268,7 @@ fn submit_with_unanswered_questions_toasts_and_jumps_back() {
         Some(crate::ui::text::agent::ASK_TOAST_ANSWER_REQUIRED)
     );
     assert_eq!(panel(&state, pane).current, 0, "自动跳回首个未答题");
+    assert!(!panel(&state, pane).is_confirm());
 }
 
 #[test]
@@ -262,16 +300,45 @@ fn space_on_the_submit_row_behaves_like_enter() {
 }
 
 #[test]
-fn page_keys_scroll_preview_only() {
+fn confirm_tab_arrows_scroll_the_review_instead_of_moving_the_highlight() {
+    let (mut state, pane, _key) = asking(vec![
+        question("a", false, &["A"]),
+        question("b", false, &["B"]),
+    ]);
+    press(&mut state, LxInput::Tab);
+    press(&mut state, LxInput::Tab);
+    assert!(panel(&state, pane).is_confirm());
+    {
+        let ask = state
+            .pane_mut_anywhere(pane)
+            .and_then(|target| target.lx.ask.as_mut())
+            .expect("ask");
+        ask.sync_list_window(0, 20, 5);
+    }
+    press(&mut state, LxInput::Down);
+    assert_eq!(panel(&state, pane).viewport(), Some(1), "汇总里 ↓ 是滚动");
+    press(&mut state, LxInput::Up);
+    assert_eq!(panel(&state, pane).viewport(), Some(0));
+}
+
+#[test]
+fn page_keys_scroll_the_unified_list() {
     let mut q = question("q", false, &["A", "B"]);
     q.options[0].preview = Some("1\n2\n3\n4\n5\n6".into());
     let (mut state, pane, _key) = asking(vec![q]);
-    assert_eq!(panel(&state, pane).highlight[0], 0);
+    // 事件循环每帧把几何落进状态；测试里手动落同一份窗口（内容 20 行 / 视口 5 行）。
+    {
+        let ask = state
+            .pane_mut_anywhere(pane)
+            .and_then(|target| target.lx.ask.as_mut())
+            .expect("ask");
+        ask.sync_list_window(0, 20, 5);
+    }
     press(&mut state, LxInput::PageDown);
-    assert_eq!(panel(&state, pane).preview_scroll[0], 3);
-    press(&mut state, LxInput::PageUp);
-    assert_eq!(panel(&state, pane).preview_scroll[0], 0);
+    assert_eq!(panel(&state, pane).viewport(), Some(5), "PageDown 前进一屏");
     assert_eq!(panel(&state, pane).highlight[0], 0, "翻页不动高亮");
+    press(&mut state, LxInput::PageUp);
+    assert_eq!(panel(&state, pane).viewport(), Some(0));
 }
 
 // ===== 编辑态（design §4.3.4）=====
@@ -335,16 +402,35 @@ fn edit_mode_newline_and_escape_keep_the_text() {
 }
 
 #[test]
-fn edit_mode_swallows_tab_and_keeps_question() {
+fn edit_mode_tab_commits_and_moves_to_the_next_tab() {
     let (mut state, pane, _key) = asking(vec![
         question("a", false, &["A"]),
         question("b", false, &["B"]),
     ]);
     press(&mut state, LxInput::Down);
     press(&mut state, LxInput::Enter);
+    for ch in "自己写".chars() {
+        press(&mut state, LxInput::Char(ch));
+    }
     press(&mut state, LxInput::Tab);
-    assert_eq!(panel(&state, pane).current, 0, "编辑态 Tab 不切题");
-    assert!(panel(&state, pane).editing);
+    let ask = panel(&state, pane);
+    assert!(!ask.editing, "Tab 先离开编辑框");
+    assert_eq!(ask.current, 1, "再切到下一题");
+    assert_eq!(ask.answers_at(0), vec!["自己写".to_string()]);
+}
+
+#[test]
+fn typing_on_the_other_row_starts_editing_with_that_character() {
+    let (mut state, pane, _key) = asking(vec![question("q", true, &["A"])]);
+    press(&mut state, LxInput::Down);
+    assert_eq!(
+        panel(&state, pane).highlight[0],
+        panel(&state, pane).other_row()
+    );
+    press(&mut state, LxInput::Char('x'));
+    let ask = panel(&state, pane);
+    assert!(ask.editing, "在 Other 行直接键入即开始编辑");
+    assert_eq!(ask.custom[0].text(), "x", "首字符不能丢");
 }
 
 #[test]
@@ -612,13 +698,20 @@ fn click_other_enters_edit_and_click_tab_commits_and_switches() {
     ));
     assert_eq!(panel(&state, pane).current, 1);
     assert!(!panel(&state, pane).editing, "切题退出编辑态");
-    // 越界题号钳到末题（不再有 Confirm，也不会回到前题）。
-    assert!(!crate::app::update::apply_ask_click(
+    // 越界 tab 进入 Submit 汇总（不再钳到末题）。
+    assert!(crate::app::update::apply_ask_click(
         &mut state,
         pane,
         AskHit::Tab(9)
     ));
-    assert_eq!(panel(&state, pane).current, 1, "越界题号钳到末题");
+    assert!(panel(&state, pane).is_confirm());
+    assert!(crate::app::update::apply_ask_click(
+        &mut state,
+        pane,
+        AskHit::Tab(0)
+    ));
+    assert_eq!(panel(&state, pane).current, 0);
+    assert!(!panel(&state, pane).is_confirm());
 }
 
 #[test]
@@ -636,10 +729,11 @@ fn click_submit_requires_every_answer() {
         Some(crate::ui::text::agent::ASK_TOAST_ANSWER_REQUIRED)
     );
     assert_eq!(panel(&state, pane).current, 0);
-    // 逐题作答后提交按钮才放行。
-    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Option(0));
+    // 逐题作答（单选点击后自动前进），进入汇总后提交才放行。
     crate::app::update::apply_ask_click(&mut state, pane, AskHit::Option(0));
     assert_eq!(panel(&state, pane).current, 1);
+    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Option(0));
+    assert!(panel(&state, pane).is_confirm(), "末题答完进入 Submit 汇总");
     crate::app::update::apply_ask_click(&mut state, pane, AskHit::Submit);
     assert!(!ask_present(&state, pane));
     assert!(state.effects.iter().any(|effect| matches!(
@@ -649,32 +743,28 @@ fn click_submit_requires_every_answer() {
 }
 
 #[test]
-fn wheel_preview_scrolls_and_options_scroll_the_list_without_moving_the_highlight() {
+fn wheel_scrolls_the_unified_list_without_moving_the_highlight() {
     let mut q = question("q", false, &["A", "B"]);
     q.options[0].preview = Some("1\n2\n3\n4\n5\n6\n7\n8".into());
     let (mut state, pane, _key) = asking(vec![q]);
+    // 选项与角色画预览共用一个视口：两个分区走同一条滚动。
     assert!(crate::app::update::apply_ask_wheel(
         &mut state,
         pane,
         AskWheelZone::Preview,
         1,
-        None
+        Some((0, 20, 5))
     ));
-    assert_eq!(panel(&state, pane).preview_scroll[0], 3);
-    assert_eq!(panel(&state, pane).highlight[0], 0, "预览滚轮不改高亮");
-
-    // 选项区：只滚列表视口，高亮原地不动（与 `@`/`/` 面板同语义）。
-    let window = Some((0usize, 20usize, 5usize));
+    assert_eq!(panel(&state, pane).viewport(), Some(3));
     assert!(crate::app::update::apply_ask_wheel(
         &mut state,
         pane,
         AskWheelZone::Options,
         1,
-        window
+        Some((3, 20, 5))
     ));
-    assert_eq!(panel(&state, pane).highlight[0], 0, "选项滚轮绝不动高亮");
-    assert_eq!(panel(&state, pane).viewport, Some(3), "滚轮推进显式视口");
-    assert_eq!(panel(&state, pane).preview_scroll[0], 3, "选项滚轮不改预览");
+    assert_eq!(panel(&state, pane).viewport(), Some(6));
+    assert_eq!(panel(&state, pane).highlight[0], 0, "滚轮绝不动高亮");
 
     // 内容装得下时滚轮不产生位移，也不记视口。
     assert!(!crate::app::update::apply_ask_wheel(
@@ -683,6 +773,14 @@ fn wheel_preview_scrolls_and_options_scroll_the_list_without_moving_the_highligh
         AskWheelZone::Options,
         1,
         Some((0, 4, 8))
+    ));
+    // 拿不到几何时吞掉滚轮，绝不猜基准。
+    assert!(!crate::app::update::apply_ask_wheel(
+        &mut state,
+        pane,
+        AskWheelZone::Options,
+        1,
+        None
     ));
 }
 
@@ -709,19 +807,18 @@ fn keyboard_navigation_clears_the_explicit_viewport() {
 fn ask_branch_precedes_history_browsing() {
     let (mut state, pane, _key) = asking(vec![question("q", false, &["A", "B"])]);
     // 草稿有内容、光标在末尾：无 ask 时 ↑ 会被历史接管；有 ask 时必须归面板。
+    press(&mut state, LxInput::Down);
+    assert_eq!(panel(&state, pane).highlight[0], 1, "↓ 归面板");
     press(&mut state, LxInput::Up);
     assert_eq!(panel(&state, pane).highlight[0], 0, "↑ 归面板");
-    press(&mut state, LxInput::Down);
-    assert_eq!(panel(&state, pane).highlight[0], 1);
     let target = state.pane_anywhere(pane).expect("pane");
     assert_eq!(target.lx.input, "草稿 abc", "面板接管期间草稿不变");
     assert_eq!(target.lx.cursor, "草稿 abc".len());
 }
 
 #[test]
-fn pressing_an_arrow_at_the_boundary_restores_the_follow_window() {
-    // 高亮被滚出视口后，按到边界的方向键必须把窗口交还给高亮：
-    // 否则键盘"没反应"，用户只能继续盲目滚轮。
+fn arrow_after_mouse_scroll_restores_the_follow_window() {
+    // 高亮被滚出视口后按方向键：窗口必须交还给高亮，否则键盘"没反应"。
     let (mut state, pane, _key) = asking(vec![question("q", false, &["A", "B", "C"])]);
     assert!(crate::app::update::apply_ask_wheel(
         &mut state,
@@ -731,8 +828,6 @@ fn pressing_an_arrow_at_the_boundary_restores_the_follow_window() {
         Some((0, 20, 5))
     ));
     assert!(panel(&state, pane).viewport().is_some());
-    // 高亮已在首行，再按 ↑ 不会移动，但窗口必须回来。
     press(&mut state, LxInput::Up);
-    assert_eq!(panel(&state, pane).highlight[0], 0, "已在首行");
     assert_eq!(panel(&state, pane).viewport(), None, "窗口交还给高亮");
 }

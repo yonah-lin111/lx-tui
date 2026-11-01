@@ -449,7 +449,12 @@ pub const ASK_OTHER_LABEL: &str = "Other...";
 pub const ASK_SUBMIT_BUTTON: &str = " ↵ submit ";
 /// 预览区占位提示（题目有预览时高亮移到 Other / 提交按钮才会出现）。
 pub const ASK_NO_PREVIEW: &str = "(no preview)";
-pub const ASK_FOOTER_KEYS: &str = "↑↓ select · enter submit";
+/// 底栏键位：带 tab 的流程、单题单选、`Submit` 汇总三种形态。
+pub const ASK_FOOTER_KEYS: &str = "⇆ tab · ↑↓ select · ↵ submit";
+pub const ASK_FOOTER_KEYS_SINGLE: &str = "↑↓ select · ↵ submit";
+pub const ASK_FOOTER_KEYS_CONFIRM: &str = "⇆ tab · ↑↓ scroll · ↵ submit";
+/// tab 栏最后一格：问答回顾 + 提交。
+pub const ASK_TAB_SUBMIT: &str = " Submit ";
 pub const ASK_FOOTER_CANCEL: &str = "esc cancel";
 pub const ASK_FOOTER_CANCEL_ARMED: &str = "esc again to cancel";
 /// 提交按钮放行失败：还有题目没作答。

@@ -242,21 +242,21 @@ pub fn resolve_task_agents_visible(
     changed
 }
 
-/// 每轮把 `ask` 预览区的可见行数落状态（滚动上限钳制用）。
+/// 每轮把 `ask` 统一列表的 `(滚动起点, 总行数, 可视行数)` 落状态。
 ///
-/// 与 [`resolve_task_output_visible`] 同款：渲染层只读，几何由事件循环在绘制前写入，
-/// 状态里的偏移因此永远落在「真的能滚到」的范围内。
-pub fn resolve_ask_preview_visible(
+/// 与 [`resolve_task_output_visible`] 同款：渲染层只读，几何由事件循环在绘制前写入。
+/// `PageUp`/`PageDown` 在 `app/` 层拿不到窗格矩形，只能消费这里落下的上一帧窗口。
+pub fn resolve_ask_list_window(
     state: &mut AppState,
     rects: &[(PaneId, ratatui::layout::Rect)],
 ) -> bool {
     let mut changed = false;
     for (pane, rect) in rects {
         let inner = crate::layout::pane_inner_rect(*rect);
-        let Some(visible) = state
+        let Some((scroll, total, visible)) = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
-            .and_then(|target| crate::ui::main_content::lx::ask_preview_rows(inner, &target.lx))
+            .and_then(|target| crate::ui::main_content::lx::ask_list_window(inner, &target.lx))
         else {
             continue;
         };
@@ -264,7 +264,7 @@ pub fn resolve_ask_preview_visible(
             .pane_mut_anywhere(*pane)
             .and_then(|target| target.lx.ask.as_mut())
         {
-            changed |= ask.resize_preview(visible);
+            changed |= ask.sync_list_window(scroll, total, visible);
         }
     }
     changed

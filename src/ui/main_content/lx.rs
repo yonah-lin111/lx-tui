@@ -938,14 +938,7 @@ pub fn task_agents_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
     task::agents_rows(area, lx)
 }
 
-/// `ask` 预览区的可见行数（滚动上限钳制用）；无面板或无预览区返回 None。
-///
-/// 与渲染共用 [`ask::layout`] 的同一份几何，因此"能滚多远"与"画到哪停"是同一个数。
-pub fn ask_preview_rows(area: Rect, lx: &Lx) -> Option<usize> {
-    ask::preview_rows(area, lx)
-}
-
-/// `ask` 选项列表的 `(窗口起点, 总行数, 可视行数)`；滚轮基准与绘制同源。
+/// `ask` 统一列表的 `(窗口起点, 总行数, 可视行数)`；滚轮基准与绘制同源。
 pub fn ask_list_window(area: Rect, lx: &Lx) -> Option<(usize, usize, usize)> {
     ask::list_window(area, lx)
 }
