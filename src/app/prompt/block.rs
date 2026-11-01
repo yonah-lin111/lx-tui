@@ -88,15 +88,19 @@ impl Prompt {
         self.splice_text(del_from, del_to, "");
 
         let scan = markdown::block_scan(&self.text);
+        // 页内存在未闭合块时不插入：落点会落在未闭合块内部，新块会被吞掉或误闭合前一块。
+        if scan.spans.iter().any(|span| !span.closed) {
+            return;
+        }
         let anchor_line = scan
             .spans
             .iter()
             .rev()
-            .find(|span| span.kind == BlockKind::Supple)
+            .find(|span| span.kind == BlockKind::Supple && span.closed)
             .or_else(|| {
                 scan.spans
                     .iter()
-                    .find(|span| span.kind == BlockKind::Template)
+                    .find(|span| span.kind == BlockKind::Template && span.closed)
             })
             .map(|span| span.end);
 

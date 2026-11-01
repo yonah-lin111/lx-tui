@@ -431,7 +431,7 @@ fn mouse_click_prompt_pin_toggles_pin() {
     let pin = layout::prompt_toolbar_button_rect(
         geo.view.prompt,
         layout::PromptToolbarButton::Pin,
-        false,
+        PromptMode::Editor,
     )
     .expect("pin visible");
     handle_terminal_event(
@@ -449,7 +449,7 @@ fn mouse_click_prompt_pin_toggles_pin() {
     let unpin = layout::prompt_toolbar_button_rect(
         geo.view.prompt,
         layout::PromptToolbarButton::Pin,
-        false,
+        PromptMode::Editor,
     )
     .expect("pin visible");
     dirty = false;

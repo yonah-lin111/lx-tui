@@ -1719,24 +1719,24 @@ fn prompt_pin_button_sits_left_of_save_and_tracks_state() {
     let pin = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::Pin,
-        false,
+        PromptMode::Editor,
     )
     .expect("pin visible");
     let save = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::Save,
-        false,
+        PromptMode::Editor,
     )
     .expect("save visible");
     assert_eq!(pin.width, text::PROMPT_PINNED_LABEL.chars().count() as u16);
     assert_eq!(pin.y, bar.y, "位于功能按钮行");
     assert_eq!(save.x - pin.right(), 1, "紧邻保存点左侧，间隔 1 列");
     assert_eq!(
-        crate::layout::prompt_toolbar_button_at(view.prompt, pin.x, pin.y, false),
+        crate::layout::prompt_toolbar_button_at(view.prompt, pin.x, pin.y, PromptMode::Editor),
         Some(crate::layout::PromptToolbarButton::Pin)
     );
     assert_eq!(
-        crate::layout::prompt_toolbar_button_at(view.prompt, pin.x, pin.y - 1, false),
+        crate::layout::prompt_toolbar_button_at(view.prompt, pin.x, pin.y - 1, PromptMode::Editor),
         None,
         "分割线行不命中"
     );
@@ -1745,7 +1745,7 @@ fn prompt_pin_button_sits_left_of_save_and_tracks_state() {
     let pinned = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::Pin,
-        false,
+        PromptMode::Editor,
     )
     .expect("pin visible");
     assert_eq!(pinned, pin, "两态同宽同位（仅符号变化）");
@@ -1756,7 +1756,7 @@ fn prompt_pin_button_sits_left_of_save_and_tracks_state() {
         crate::layout::prompt_toolbar_button_rect(
             collapsed.prompt,
             crate::layout::PromptToolbarButton::Pin,
-            false
+            PromptMode::Editor
         ),
         None,
         "折叠态无表头不显示"
@@ -1770,7 +1770,7 @@ fn prompt_pin_button_renders_state_symbol_in_accent() {
     let pin = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::Pin,
-        false,
+        PromptMode::Editor,
     )
     .expect("pin visible");
     let buffer = render_buffer(&state);
@@ -1798,13 +1798,13 @@ fn prompt_pin_button_follows_tree_toolbar_left_of_temp_prompt() {
     let pin = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::Pin,
-        true,
+        PromptMode::Tree,
     )
     .expect("pin visible in tree view");
     let temp = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::TempPrompt,
-        true,
+        PromptMode::Tree,
     )
     .expect("temp prompt visible");
     assert_eq!(temp.x - pin.right(), 1, "树视图紧邻 [+] 左侧");
@@ -1850,7 +1850,7 @@ fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     let undo = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::Undo,
-        false,
+        PromptMode::Editor,
     )
     .expect("undo button visible");
     let undo_x = undo.x;

@@ -64,12 +64,6 @@ pub enum PromptMode {
     Pages,
 }
 
-impl From<bool> for PromptMode {
-    fn from(tree: bool) -> Self {
-        if tree { Self::Tree } else { Self::Editor }
-    }
-}
-
 /// prompt 工具栏按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptToolbarButton {
@@ -181,9 +175,8 @@ pub fn prompt_divider_rect(panel: Rect) -> Option<Rect> {
 pub fn prompt_toolbar_button_rect(
     panel: Rect,
     button: PromptToolbarButton,
-    mode: impl Into<PromptMode>,
+    mode: PromptMode,
 ) -> Option<Rect> {
-    let mode = mode.into();
     let bar = prompt_toolbar_rect(panel)?;
     let inner = pane_inner_rect(panel);
     let undo_x = bar.x + PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP;
@@ -290,9 +283,8 @@ pub fn prompt_toolbar_button_at(
     panel: Rect,
     column: u16,
     row: u16,
-    mode: impl Into<PromptMode>,
+    mode: PromptMode,
 ) -> Option<PromptToolbarButton> {
-    let mode = mode.into();
     let bar = prompt_toolbar_rect(panel)?;
     if row != bar.y {
         return None;

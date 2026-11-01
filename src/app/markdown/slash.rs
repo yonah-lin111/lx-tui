@@ -106,9 +106,9 @@ pub const WORKTREE_COMMAND_LINE: &str = "/gitWorkTree ";
 ///
 /// 可见范围由块上下文与本页是否已有 `&&&` 决定：内置模板命令与自定义 `AgentBlock`
 /// 仅在普通正文且本页尚无 `&&&` 时出现；`/supplement` 与自定义 `SuppleBlock` 任意位置
-/// 可见；`/gitWorkTree` 仅在 `&&&`/`+++` 内且有 git 元数据时出现。globally 作用域的
-/// 自定义 Markdown 任意位置出现，template 作用域仅在 `&&&`/`+++` 内。空查询返回全部，
-/// 排序稳定按打分降序，同分内置优先。
+/// 可见（页内存在未闭合块时隐藏）；`/gitWorkTree` 仅在 `&&&`/`+++` 内且有 git 元数据时出现。
+/// globally 作用域的自定义 Markdown 任意位置出现，template 作用域仅在 `&&&`/`+++` 内。
+/// 空查询返回全部，排序稳定按打分降序，同分内置优先。
 pub fn slash_filter(custom: &[SlashItem], context: SlashContext, query: &str) -> Vec<SlashItem> {
     let query = query.to_lowercase();
     let mut candidates: Vec<SlashItem> = Vec::new();
@@ -117,10 +117,14 @@ pub fn slash_filter(custom: &[SlashItem], context: SlashContext, query: &str) ->
             if !context.template_present {
                 candidates.extend(SlashCommandId::ALL.into_iter().map(SlashItem::builtin));
             }
-            candidates.push(SlashItem::builtin_supplement());
+            if !context.unclosed_block {
+                candidates.push(SlashItem::builtin_supplement());
+            }
         }
         BlockContext::Template | BlockContext::Supple => {
-            candidates.push(SlashItem::builtin_supplement());
+            if !context.unclosed_block {
+                candidates.push(SlashItem::builtin_supplement());
+            }
             if context.worktree_available {
                 candidates.push(SlashItem::worktree());
             }
@@ -134,8 +138,9 @@ pub fn slash_filter(custom: &[SlashItem], context: SlashContext, query: &str) ->
                 SlashInsertion::AgentBlock { .. } => {
                     context.context == BlockContext::Normal && !context.template_present
                 }
-                // 完整 `+++` 补充块：任意位置可见（确认时追加到固定落点）。
-                SlashInsertion::SuppleBlock { .. } => true,
+                // 完整 `+++` 补充块：任意位置可见（确认时追加到固定落点）；
+                // 页内存在未闭合块时隐藏，避免新块被吞进未闭合块内部。
+                SlashInsertion::SuppleBlock { .. } => !context.unclosed_block,
                 // template 作用域的 Markdown：仅在 `&&&`/`+++` 内。
                 SlashInsertion::Raw(_) => match item.scope {
                     SlashScope::Global => true,
@@ -561,6 +566,8 @@ pub struct SlashContext {
     pub worktree_available: bool,
     /// 本页已有 `&&&`（含未闭合）：隐藏一切生成 `&&&` 的命令。
     pub template_present: bool,
+    /// 本页存在未闭合块：隐藏 `+++` 补充块命令，避免新块被吞进未闭合块。
+    pub unclosed_block: bool,
 }
 
 /// 斜杠面板的显示模式：候选命令或二级 worktree 选择器。

@@ -314,8 +314,6 @@ pub enum MenuCommand {
     CopyPath,
     /// 页列表：打开该页（切页并回编辑视图）。
     OpenPage,
-    /// 页列表：重命名该页（`Overlay::Rename`）。
-    RenamePage,
     /// 页列表：复制该页全文。
     CopyPageContent,
     /// 页列表：末尾新建页并打开。
@@ -341,27 +339,13 @@ impl MenuCommand {
     }
 }
 
-/// 重命名作用目标：工作区、标签、提示词树节点或页；窗格不可重命名，因此不在此枚举内。
+/// 重命名作用目标：工作区、标签或提示词树节点；窗格与页不可重命名，因此不在此枚举内。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameTarget {
     Workspace(usize),
-    Tab {
-        workspace: usize,
-        tab: usize,
-    },
-    PromptFolder {
-        workspace: usize,
-        folder_id: i64,
-    },
-    PromptItem {
-        workspace: usize,
-        item_id: i64,
-    },
-    PromptPage {
-        workspace: usize,
-        owner: PromptEditing,
-        page: PromptPageId,
-    },
+    Tab { workspace: usize, tab: usize },
+    PromptFolder { workspace: usize, folder_id: i64 },
+    PromptItem { workspace: usize, item_id: i64 },
 }
 
 /// 重命名浮层：目标与单行输入。

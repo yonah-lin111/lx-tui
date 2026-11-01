@@ -1,7 +1,7 @@
 # Prompt 块结构与页列表重构 — 设计
 
-- 状态：**已实施**（P1–P5 已在 `feat/prompt-block-restyle` 完成并验证通过）。
-- 后续调整：`&&&` 状态不再染 edit 区外框，改为标题行页控件左侧的状态标签（`[todo]`/`[run]`/`[done]`，按状态取蓝/黄/绿）；§6 的边框染色仅作历史记录。
+- 状态：**已实施**（P1–P5、P6 交互与视觉打磨、P7 Code Review 缺陷修复均已在 `feat/prompt-block-restyle` 完成并验证通过）。
+- 后续调整：`&&&` 色条 `▎` 与块内分割线固定为 lx 品牌粉（`style::LX_PINK` / `Indexed 218`），不随状态变色；块内 `[status]` 按钮与外框染色均已移除，状态改由编辑视图标题行页控件左侧的可点击 `[todo]`/`[run]`/`[done]` 标签承担（§6）。
 - 分支 / 工作区：`feat/prompt-block-restyle` @ `.worktrees/prompt-block-restyle`（基于 `dev` `c59c4bbd`）。
 - 范围：`src/app/markdown/`、`src/app/prompt/`、`src/app/update/`、`src/ui/prompt*`、`src/ui/overlay/`、`src/ui/right_panel.rs`、`src/layout/prompt.rs`、`src/input/mod.rs`、`src/event/`、`assets/settings.js`。
 - 取代：`docs/feature/prompt-block-focus/`（块聚焦）、`docs/feature/prompt-supplement-fold/`（补充块折叠）、`docs/feature/prompt-pagination/` 中的「页码菜单」与「标题行页名重命名」部分。旧文档保留，在顶部加「已被 prompt-block-restyle 取代」标注。
@@ -27,12 +27,12 @@
 | R1 | 一页只能有一个 `&&&`，可以有多个 `+++` | 只认第一个 `&&&`；入口隐藏 `&&&` 命令 |
 | R2 | `+++` 不在 `&&&` 里；新建追加到最后一个 `+++` 后面，空一行并滚动到可见 | `+++` 改为顶层平级块，按固定落点追加 |
 | R3 | 移除块边框，改用其他区分方式 | 左侧 1 列色条 `▎` 加分割细线 |
-| R4 | `&&&` 状态色用作 edit 区边框 | 从分割线往下的容器边框跟随状态色 |
+| R4 | `&&&` 状态色用作标题行状态标签 | 编辑视图页控件左侧显示可点击的 `[todo]`/`[run]`/`[done]`，不染外框 |
 | R5 | 移除块聚焦按钮，快捷键改为切页 | `Ctrl/Cmd+←/→` 切换上一页/下一页 |
 | R6 | 移除 `+++` 的折叠 | 折叠整套删除 |
 | R7 | 页列表右侧加状态圆点，标题取 `&&&` 的 title | 新增 `PromptMode::Pages` 视图 |
 | R8 | 页列表交互对齐 prompt list | 搜索、单击选中、双击打开、右键菜单 |
-| R9 | `Ctrl/Cmd+L` 打开 prompt list，`Ctrl/Cmd+P` 打开 page list；再按一次或按 Esc 返回 | 切换矩阵见 §7 |
+| R9 | `Ctrl/Cmd+L` 打开 prompt list，`Ctrl/Cmd+P` 打开 page list；再按一次返回 | Tree / Pages 视图按 `Esc` 返回编辑视图，编辑视图的 `Esc` 只关闭浮层/补全面板；切换矩阵见 §7 |
 | R10 | 评估 settings 的影响 | 只改一条文案（§10） |
 
 ---
@@ -43,21 +43,21 @@
 |---|---|---|
 | 1 | `+++` 结构 | `+++` 是顶层块，**只**能出现在 `&&&` 外面。`&&&` 内部出现的 `+++` 行当普通文本处理。旧数据不迁移 |
 | 2 | 单 `&&&` 约束 | 入口：页面已有 `&&&` 时，斜杠面板隐藏所有生成 `&&&` 的命令。解析：只认第一个 `&&&`，后面的起止行一律当普通文本。不拦截输入或粘贴，也不弹提示 |
-| 3 | `+++` 新建 | 任意位置都能触发（围栏内除外）。触发的命令行整行删除。落点依次判断：最后一个 `+++` 之后 → `&&&` 之后 → 文末，中间补空行。光标落到 `{title: }` 的 `}` 前，滚动到新块可见。整个操作记一步撤销 |
-| 4 | 去边框 | 左侧 1 列色条 `▎`：`&&&` 按状态着色，`+++` 固定品红。右侧槽位改为 0 列。删除未使用的 `template_block_bg` / `supple_block_bg` |
-| 5 | 块内分割线 | 保留，画成色条 `▎` 加满行 `─`，不画端点，颜色跟随所在块 |
-| 6 | 边框染色 | 染色范围是分割线（`├─┤`）、内容区左右竖边和底边。tab 行和按钮行保持灰色。颜色取本页 `&&&` 的状态色（todo 蓝 / in_progress 黄 / done 绿）。没有 `&&&`、处于 Tree/Pages 视图或当前是 Todo tab 时保持灰色 |
+| 3 | `+++` 新建 | 任意位置都能触发（围栏内除外）。触发的命令行整行删除。落点依次判断：最后一个已闭合 `+++` 之后 → 已闭合 `&&&` 之后 → 文末，中间补空行；存在未闭合块时不插入。光标落到 `{title: }` 的 `}` 前，滚动到新块可见。整个操作记一步撤销 |
+| 4 | 去边框 | 左侧 1 列色条 `▎`：`&&&` 与 `+++` 均固定为品牌粉/品红（`&&&` 为 lx 品牌粉 `Indexed 218`，`+++` 为品红），不随状态变色。右侧槽位改为 0 列。删除未使用的 `template_block_bg` / `supple_block_bg` |
+| 5 | 块内分割线 | 保留，画成色条 `▎` 加满行 `─`，不画端点，颜色固定跟随块类型（`&&&` 为 lx 品牌粉、`+++` 为品红） |
+| 6 | 状态标签 | 不染外框。编辑视图本页存在已闭合 `&&&` 时，在页控件 `‹ n/m ›` 左侧 1 列渲染可点击的状态标签 `[todo]`/`[run]`/`[done]`，颜色取状态色（todo 蓝 / in_progress 黄 / done 绿）；未闭合 `&&&`、Tree 视图与 Pages 视图不显示 |
 | 7 | 切页快捷键 | `Ctrl/Cmd+←/→` 等价于 `switch_prompt_page(∓1)`，边界处原地不动、不循环。按词移动改用 `Alt+←/→` 和 `Alt+B/F`。块聚焦整套删除。`Pin` 改为以 `Save` 为锚点 |
 | 9 | 页列表形态 | 新增 `PromptMode::Pages`，删除 `Overlay::PageMenu`。必须先有编辑目标才能进入 |
-| 11 | 页右键菜单 | 页行菜单：`Open / Rename / Copy content / New page / Delete`。空白区菜单：`New page`。Rename 复用 `Overlay::Rename`。Delete 用菜单行内二次确认。删除标题行的行内重命名。右键不改变选中行 |
+| 11 | 页右键菜单 | 页行菜单：`Open / Copy content / New page / Delete`（单页时隐藏 `Delete`）。空白区菜单：`New page`。页标题由正文 `&&&` 的 `{title:}` / 模板名派生，无 `&&&` 时显示 `Page N`；不再提供 `Rename`。Delete 用菜单行内二次确认。删除标题行的行内重命名。右键不改变选中行 |
 | 11+ | 鼠标 | 单击选中，双击打开该页（复用 `prompt_row_double_click`，窗口期 400ms） |
-| 12 | 快捷键范围 | 只在 prompt 获得焦点时生效，按 §7 的切换矩阵执行。补全面板打开时先关面板再切换视图。未绑定编辑目标时 `Esc` 保持现状 |
-| 13 | 页行内容 | `❯ 标题 … ●`。标题依次取独立 `{title:}` → 行内 `{title:}` → 模板名 → 页名 → 占位名。圆点：todo 空心灰、in_progress 黄实心、done 绿实心，没有 `&&&` 时不画。当前编辑页加粗。按显示标题搜索。Tree 视图的 `n|m|x` 计数不动 |
+| 12 | 快捷键范围 | 只在 prompt 获得焦点时生效，按 §7 的切换矩阵执行。补全面板打开时先关面板再切换视图。编辑视图的 `Esc` 只关闭已打开的面板/浮层，不再退回 Tree；未绑定编辑目标时 `Esc` 保持现状 |
+| 13 | 页行内容 | `❯ 标题 … ●`。标题依次取独立 `{title:}` → 行内 `{title:}` → 模板名 → `Page N`（不再回退 `page.name`）。圆点：todo 空心灰、in_progress 黄实心、done 绿实心，没有 `&&&` 时不画。当前编辑页加粗。按显示标题搜索。Tree 视图的 `n|m|x` 计数不动 |
 | 14 | 折叠 | 整套删除 |
-| 15 | Pages 视图头部 | 工具栏：`[/]` 加钉住按钮。标题行：`条目名 · pages`，**隐藏 `‹ ›`**，计数显示选中行的序号，点击计数返回 Editor。编辑器状态原样保留，不做暂存 |
+| 15 | Pages 视图头部 | 工具栏：`[/]` 加钉住按钮。标题行：`条目名 · pages`，**隐藏 `‹ ›`**，计数显示选中行的序号，搜索过滤结果为空时显示 `0/m`，点击计数返回 Editor。编辑视图标题行只显示条目名（临时提示词为 `Temp prompt`），不再显示 `· 页名`。编辑器状态原样保留，不做暂存 |
 | 16 | 新建页位置 | 统一追加到末尾，DB 层不改 |
 | 17 | 复制 | `[copy]` 只复制当前这一块。删除 `copy_template_content` 中跳过嵌套 `+++` 的分支 |
-| 18 | 交付 | 在 worktree 中分 P1–P4 四个代码阶段实施，再加一个 P5 文档与 settings 文案阶段，每个阶段自行 commit。只迁移本次改动涉及的测试。不自行合并到 `dev` |
+| 18 | 交付 | 在 worktree 中分 P1–P4 四个代码阶段、P5 文档与 settings 文案阶段、P6 交互与视觉打磨、P7 Code Review 缺陷修复实施，每个阶段自行 commit。只迁移本次改动涉及的测试。不自行合并到 `dev` |
 | 19 | settings | `md_scope=template` 的语义不变。文案改为 `Inside blocks (&&& / +++)` |
 | 20 | 扫描器统一 | `block_scan` 作为唯一的块结构来源。`template_line_infos` 系列函数和 `ui::markdown::scan` 都改为从它投影。规则对 lx 输入框和 file_diff 高亮同样生效 |
 
@@ -207,10 +207,12 @@ pub struct SlashContext {
     pub worktree_available: bool,
     /// 本页已有 `&&&`（含未闭合）：隐藏一切生成 `&&&` 的命令。
     pub template_present: bool,
+    /// 本页存在未闭合块（`&&&` / `+++`）：隐藏所有生成 `+++` 的命令。
+    pub unclosed_block: bool,
 }
 ```
 
-`Prompt::refresh_slash_panel`（`panel.rs:400`）在组装上下文时，用 `block_scan(&self.text).spans.iter().any(|s| s.kind == Template)` 填入这个字段。
+`Prompt::refresh_slash_panel`（`panel.rs:400`）在组装上下文时，用 `block_scan(&self.text).spans.iter().any(|s| s.kind == Template)` 填入 `template_present`，用 `block_scan(&self.text).spans.iter().any(|s| !s.closed)` 填入 `unclosed_block`。
 
 新的可见性矩阵：
 
@@ -218,13 +220,13 @@ pub struct SlashContext {
 |---|---|---|---|
 | 内置模板命令 `SlashCommandId::ALL` | 只在 `!template_present` 时显示 | ✗ | ✗ |
 | 自定义 `AgentBlock`（`&&&`） | 只在 `!template_present` 时显示 | ✗ | ✗ |
-| 内置 `/supplement` | ✓ | ✓ | ✓ |
-| 自定义 `SuppleBlock` | ✓ | ✓ | ✓ |
+| 内置 `/supplement` | 只在 `!unclosed_block` 时显示 | 同上 | 同上 |
+| 自定义 `SuppleBlock` | 只在 `!unclosed_block` 时显示 | 同上 | 同上 |
 | `/gitWorkTree` | ✗ | 需要 `worktree_available` | 需要 `worktree_available` |
 | `Raw` + `Global` | ✓ | ✓ | ✓ |
 | `Raw` + `Template` | ✗ | ✓ | ✓ |
 
-> `/supplement` 在 Normal 上下文中也可见，这是新增的。代码围栏内本来就不会触发斜杠面板（`slash_trigger`），不需要改。
+> `/supplement` 在 Normal 上下文中也可见，这是新增的。代码围栏内本来就不会触发斜杠面板（`slash_trigger`），不需要改。页面存在未闭合的 `&&&` 或 `+++` 时，插入新的 `+++` 只会被吞进未闭合块或破坏其闭合，因此斜杠面板直接隐藏全部 `SuppleBlock` 候选。
 
 ### 3.5 `+++` 插入落点（`src/app/prompt/panel.rs::slash_confirm`）
 
@@ -255,7 +257,8 @@ _ => {
 ```rust
 /// 删除斜杠命令行后，把补充块追加到固定落点；调用方已记录撤销快照。
 ///
-/// 落点：最后一个 `+++` 结束行之后 → `&&&` 结束行之后 → 文末；
+/// 落点：最后一个已闭合 `+++` 结束行之后 → 已闭合 `&&&` 结束行之后 → 文末；
+/// 存在未闭合块时不插入（调用方已在斜杠面板隐藏候选，此处再兜底）。
 /// 与前文之间恰好隔一个空行，光标落在新块标题值（`{title: }` 的 `}` 前）。
 pub(super) fn append_supple_block(&mut self, trigger: &SlashTrigger, content: &str, cursor: usize)
 ```
@@ -263,9 +266,9 @@ pub(super) fn append_supple_block(&mut self, trigger: &SlashTrigger, content: &s
 算法：
 
 1. **删除命令行**：删掉 `trigger.line_start..trigger.line_end` 这段字节，再连同其后的一个换行一起删除（如果命令行是最后一行，就删除其前面的换行）。这样原位置不会留下空行。复用 `block_deletion_range` 的思路，但只吸收一侧的换行。
-2. **在删除后的文本上**重新 `block_scan`，取锚点行：
-   - `spans` 中最后一个 `kind == Supple` 的 `end`；
-   - 没有的话，取 `kind == Template` 的 `end`；
+2. **在删除后的文本上**重新 `block_scan`：若 `spans` 中存在 `closed == false` 的块，直接返回不插入；否则取锚点行：
+   - `spans` 中最后一个 `kind == Supple && closed` 的 `end`；
+   - 没有的话，取 `kind == Template && closed` 的 `end`；
    - 再没有的话，取文末。
 3. **计算插入偏移**：锚点行之后的位置是 `line_end_at(anchor) `。
    - 锚点之后**还有内容**：插入文本 `"\n\n" + content`，插在锚点行行尾。如果锚点下一行已经是空行，就只插 `"\n" + content + "\n"`，保证与上下文各隔一个空行。实施时用测试覆盖这三种空行组合。
@@ -387,6 +390,14 @@ Rect::new(
 
 `prompt_toolbar_button_at` 的遍历数组中删掉 `BlockFocus`。`layout/tests.rs` 中与块聚焦相关的几何用例删除，Pin 的阈值和坐标用例改用新常量。
 
+### 4.5 `Shift+Tab` 改为循环块状态
+
+`Shift+Tab`（`EditorCommand::Outdent`）在编辑视图页内任意光标位置生效：
+
+- 本页存在**已闭合**的 `&&&` 模板块时，调用 `Prompt::cycle_template_status()` 循环该块状态 `todo → in_progress → done → todo`（单步可撤销、清除选区、不移动光标）；
+- 没有已闭合 `&&&` 时回退为原有的反缩进；
+- 未闭合的 `&&&` 不参与轮转（`toggle_template_status` 找不到合法结束行会返回 `false`），此时仍执行反缩进。
+
 ---
 
 ## 5. 块渲染（P3）
@@ -408,7 +419,7 @@ pub const PROMPT_BLOCK_GUTTER_LEFT: u16 = 1;
 ### 5.2 文案常量（`src/ui/text.rs`）
 
 ```rust
-/// prompt 块左侧色条字形（`&&&` 状态色 / `+++` 品红）。
+/// prompt 块左侧色条字形（`&&&` 品牌粉 / `+++` 品红）。
 pub const PROMPT_BLOCK_BAR: &str = "▎";
 /// 块结构分割线（标题下 / 绑定行上的空行）。
 pub const PROMPT_BLOCK_RULE: char = '─';
@@ -419,7 +430,7 @@ pub const PROMPT_BLOCK_RULE: char = '─';
 现状每行调用 `paint_block_border(… role, folded, painted, buttons_start)`，按角色画 `┌ │ └ ┐ ┘` 和补线。改为：
 
 ```rust
-/// 块行左侧色条：每个视觉行（含软换行续行）首列画 `▎`，色随块类型/状态。
+/// 块行左侧色条：每个视觉行（含软换行续行）首列画 `▎`，色随块类型。
 fn paint_block_bar(buf: &mut Buffer, area: Rect, y: u16, info: BlockLineInfo) {
     if let Some(cell) = buf.cell_mut((area.x, y)) {
         cell.reset();
@@ -428,10 +439,11 @@ fn paint_block_bar(buf: &mut Buffer, area: Rect, y: u16, info: BlockLineInfo) {
     }
 }
 
-/// 块颜色：`&&&` 按状态（`style::template_border`）、`+++` 固定品红（`style::supple_border`）。
+/// 块颜色：`&&&` 固定 lx 品牌粉（`style::template_block_bar` / `Indexed 218`）、
+/// `+++` 固定品红（`style::supple_border`），均不随状态变色。
 fn block_color(info: BlockLineInfo) -> Style {
     match info.kind {
-        BlockKind::Template => style::template_border(info.status),
+        BlockKind::Template => style::template_block_bar(),
         BlockKind::Supple => style::supple_border(),
     }
 }
@@ -443,8 +455,8 @@ fn block_color(info: BlockLineInfo) -> Style {
 
 ### 5.4 按钮组
 
-- `&&&`：`[status] [copy] [clean] [del]` 不变，右对齐到 `area.right()`。
-- `+++`：`[copy] [clean] [del]`，删除 Fold。
+- `&&&`：仅 `[❐]`、`[⌫]`、`[✕]` 3 个动作按钮（复制/清理/删除）；状态标签已移到编辑视图标题行，块起始行不再有 `[status]` 按钮。按钮右对齐到 `area.right()`。
+- `+++`：`[❐]`、`[⌫]`、`[✕]`，删除 Fold。
 - `SUPPLE_BUTTONS` 改为 3 个元素。`block_buttons_start` 的右边界从 `area.right() - 1`（原来要给右边框 `┐` 留位置）改为 `area.right()`。
 - `template_buttons()` 改为从 `block_scan` 投影的 `template_line_infos` 获取信息。只有第一个 `&&&` 有按钮，这一点由 §3.3 自动保证。
 
@@ -452,60 +464,38 @@ fn block_color(info: BlockLineInfo) -> Style {
 
 `style.rs` 中的 `template_block_bg`（698 行）、`supple_block_bg`（985 行），以及 328 行引用它们的注释，全部删除。`style/tests.rs` 中相关的用例一并删除。
 
+### 5.6 浮动面板让开色条槽
+
+`ui/prompt/panels.rs::panel_content_area` 把面板可布局区域向右缩进 `PROMPT_BLOCK_GUTTER_LEFT`（1 列），`/`、`@`、块命令、粘贴与引用面板统一复用，避免面板左边缘盖住块的 `▎` 色条。缩进量取 `PROMPT_BLOCK_GUTTER_LEFT.min(area.width)`，宽度不足时不越界。
+
 ---
 
-## 6. edit 区边框跟随状态色（P3，决策 6）
+## 6. 标题行状态标签与交互（P6，决策 6）
 
-### 6.1 染色范围
+### 6.1 渲染与位置
+
+编辑视图外框保持暗灰、不随 `&&&` 状态染色；本页任务状态改由标题行页控件左侧的状态标签表达：
 
 ```text
-┌ Prompt ─ Todo ───────────────────┐   y = panel.y          灰（tab 行，Block 画）
-│ [≡] [←] [→] [all]  [refDir] [○] ●│   y = panel.y+1        竖边灰
-├─ item · page ─────────── ‹ 1/3 › ┤   y = divider          状态色（├ ─ ┤）
-│ ▎&&& refactorTemplate --start    │   y ∈ (divider, bottom)  竖边状态色
-└──────────────────────────────────┘   y = panel.bottom-1   状态色（└ ─ ┘，底边内容保持原样式）
+├─ item name              [run] ‹ 1/3 › ┤
+├──────────────────────────────────────┤
+│ ▎&&& refactorTemplate --start        │
+└──────────────────────────────────────┘
 ```
 
-### 6.2 颜色派生（只读，不写状态）
+- 只在本页存在**已闭合**的 `&&&` 块（`span.closed == true`）时渲染标签；未闭合 `&&&` 不显示，避免出现「标签可点但改不动结束行」的死锁。
+- 文案 `[todo]` / `[run]` / `[done]`，颜色取 `style::template_border`：todo 蓝（`LightBlue`）、in_progress 黄（`Yellow`）、done 绿（`Green`）。
+- 标签右对齐贴页控件 `‹ n/m ›` 左侧 1 列；标题区至少保留 2 列，空间不足时隐藏。Tree 视图与 Pages 视图不渲染。
 
-`ui/prompt_frame.rs`：
+### 6.2 点击与 tooltip
 
-```rust
-/// edit 区边框色：编辑视图 + Prompt tab + 本页存在 `&&&` 时取其状态色；否则 None（保持灰）。
-pub(crate) fn edit_border_style(state: &AppState) -> Option<Style> {
-    if state.right_tab != RightTab::Prompt
-        || state.prompt_owner().prompt_panel.mode != PromptMode::Editor
-    {
-        return None;
-    }
-    crate::app::markdown::block_spans(state.prompt.text())
-        .into_iter()
-        .find(|span| span.kind == BlockKind::Template)
-        .map(|span| style::template_border(span.status))
-}
-```
+- 点击标签循环切换本页 `&&&` 结束行状态 `todo → in_progress → done → todo`：单步可撤销、清除选区、不移动正文光标。
+- 悬停显示 `cycle block status` tooltip。
+- 键盘等价入口是 `Shift+Tab`（§4.5）；未闭合 `&&&` 两者都不生效，回退为反缩进。
 
-> 未闭合的 `&&&`，`status` 是 `Todo`（蓝），与页列表的圆点规则一致。
+### 6.3 外框染色方案已移除
 
-### 6.3 绘制顺序（`ui/right_panel.rs::render`）
-
-1. `Block::bordered().border_style(style::border(focused))` 照常画整圈灰色外框。
-2. `prompt_frame::render_body` 画工具栏、分割线（`render_divider` → `render_rule`）和正文。
-3. **新增**：`render_body` 返回之后，如果 `edit_border_style(state)` 是 `Some(color)`，调用
-
-```rust
-/// 用 `color` 重绘分割线行至底边的外框字形（左右竖边、底边 `─` 与两角）；
-/// 只改前景色，不改字形与单元格内容，底边已绘制的文字/控件不覆盖。
-fn tint_edit_border(buf: &mut Buffer, panel: Rect, from_y: u16, color: Style)
-```
-
-- `from_y = prompt_divider_rect(panel).y`；
-- 左右两列 `x = panel.x` 与 `x = panel.right()-1`，从 `from_y` 到 `panel.bottom()-1` 的每一格都 `set_style(color)`；
-- 分割线行与底边行的内部 `x`，只给字形为 `─`、`├`、`┤`、`└`、`┘` 的单元格 `set_style(color)`。这样 `render_bottom` 画在底边上的文字、折叠按钮等都保持原来的样式。
-
-这个函数放在 `ui/right_panel.rs`，因为外框是在这个文件里画的。颜色由 `prompt_frame::edit_border_style` 派生，渲染层只读状态。
-
-> 分割线由 `render_rule` 画成 `style::border(focused)`，`tint` 只覆盖它的前景色，标题行之后叠加的 `条目名 · 页名 ‹ n/m ›` 文字由 `paint_title_row` 画，字形不是边框字符，所以不会被染色。
+`ui/prompt_frame.rs::edit_border_style` 与 `ui/right_panel.rs::tint_edit_border` 已删除：分割线以下的外框（左右竖边、底边）恒为 `style::border(focused)`，不再跟随 `&&&` 状态，也不再需要为底边文字/控件保留样式的特殊处理。
 
 ---
 
@@ -591,22 +581,23 @@ pub fn page_row_double_click(...)  // 复用 PROMPT_DOUBLE_CLICK_WINDOW，记点
 
 ### 7.3 切换矩阵（决策 12）
 
-| 当前 | `Ctrl/Cmd+L` | `Ctrl/Cmd+P` | `Esc` | `[≡]/[/]` 按钮 | 点击标题行计数 |
-|---|---|---|---|---|---|
-| Editor | `show_prompt_tree` | `show_prompt_pages`（没有编辑目标时无反应） | 保持现状（绑定目标 → Tree） | → Tree | → Pages |
-| Tree | `toggle_prompt_panel_mode`（→ Editor） | 无反应 | → Editor | → Editor | 不显示 |
-| Pages | `hide_prompt_pages` + `show_prompt_tree` | `hide_prompt_pages` | `hide_prompt_pages` | → Editor | → Editor |
+| 当前 | `Ctrl/Cmd+L` | `Ctrl/Cmd+P` | `Ctrl/Cmd+Shift+Right` | `Esc` | `[≡]/[/]` 按钮 | 点击标题行计数 |
+|---|---|---|---|---|---|---|
+| Editor | `show_prompt_tree` | `show_prompt_pages`（没有编辑目标时无反应） | `create_or_toast_new_page`（切到新页/已有空白页） | 只关闭已打开的面板/浮层，保持编辑视图 | → Tree | → Pages |
+| Tree | `toggle_prompt_panel_mode`（→ Editor） | 无反应 | 无反应 | → Editor | → Editor | 不显示 |
+| Pages | `hide_prompt_pages` + `show_prompt_tree` | `hide_prompt_pages` | 无反应（用页行/空白区菜单 `New page`） | `hide_prompt_pages` | → Editor | → Editor |
 
-> Pages 视图的模式按钮显示 `[/]`（与 Tree 相同，表示「回编辑」）。
+> Pages 视图的模式按钮显示 `[/]`（与 Tree 相同，表示「回编辑」）。编辑视图的 `Esc` 不再退回 Tree，避免误触丢失编辑上下文；返回列表统一用 `Ctrl/Cmd+L`、`[≡]` 或点击计数。
 
 输入层（`src/input/mod.rs`）：
 
-- `editor_command` 新增两项，同时接受 `CONTROL` 和 `SUPER`，排除 `ALT`：
+- `editor_command` 新增三项，同时接受 `CONTROL` 和 `SUPER`，排除 `ALT`；`Shift+Right` 必须在普通 `Right` 之前匹配：
   ```rust
   KeyCode::Char('l' | 'L') => Some(EditorCommand::TogglePromptList),
   KeyCode::Char('p' | 'P') => Some(EditorCommand::TogglePageList),
+  KeyCode::Right if shift => Some(EditorCommand::NewPage),
   ```
-  Ctrl 分支加在 `(true, false, KeyCode::Char(ch))` 的 match 中，Super 分支加在 `SUPER` 的 match 中。
+  Ctrl 分支加在 `(true, false, KeyCode::Char(ch))` 与 `(true, false, KeyCode::Right)` 的 match 中，Super 分支加在 `SUPER` 的 match 中。
 - 只有 `focus == Prompt` 时才会进入 `editor_command`（`route` 的现有结构），终端和 lx 窗格不受影响。
 
 update 层（`apply_editor` 的最前面，在 Tree/Pages 路由之前）：
@@ -619,7 +610,12 @@ match command {
 }
 ```
 
-> 这两个命令必须在 `route_panel` 之前处理，保证「补全面板打开时先关面板再切换」。树视图的 `route_prompt_tree` 和页视图的 `route_prompt_pages` 收不到这两个命令，所以不会被当作搜索字符写入。
+`EditorCommand::NewPage` 在 `route_panel` 之后分派到 `create_or_toast_new_page`（与 Pages 列表右键 `New page` 同一入口）：
+
+- 页面已有空白页：编辑视图切到该空白页并弹 Warning Toast `Already have a new page`；Pages 视图留在列表、清空搜索、选中该页并滚入视口，同样弹 Warning Toast；
+- 没有空白页：新建页，编辑视图切入新页、Pages 视图留在列表并清空搜索、选中新页滚入视口，均弹 Default Toast `New page created`。
+
+> 这两个切换命令必须在 `route_panel` 之前处理，保证「补全面板打开时先关面板再切换」。树视图的 `route_prompt_tree` 和页视图的 `route_prompt_pages` 收不到这两个命令，所以不会被当作搜索字符写入。
 
 ### 7.4 页视图按键路由（`route_prompt_pages`，放在 `editor.rs`，与 `route_prompt_tree` 对称）
 
@@ -650,7 +646,7 @@ pub struct PageRow {
     pub current: bool,
 }
 
-/// 页正文的显示标题与状态：独立 `{title:}` → 行内 `{title:}` → 模板名 → None（调用方回退页名）。
+/// 页正文的显示标题与状态：独立 `{title:}` → 行内 `{title:}` → 模板名 → None（调用方回退 `Page N`）。
 pub fn page_title_status(content: &str) -> (Option<String>, Option<TemplateStatus>)
 
 /// 页列表全部行（按页顺序），按显示标题过滤（大小写不敏感子串，复用 `name_matches`）。
@@ -675,7 +671,7 @@ let title = standalone.or(inline).or(command).map(str::to_string);
 (title, Some(span.status))
 ```
 
-页名的回退在 `page_rows` 中处理：`title.unwrap_or(page.name)`，页名为空时用 `text::default_page_name(序号)`，与现有的占位逻辑一致。
+页名的回退在 `page_rows` 中处理：`title` 为 None 时按页序号显示 `Page N`（`text::default_page_name(序号)`），不再回退 `page.name`；页名仅保留在数据层，界面不展示、也不再支持右键 `Rename`。
 
 > `name_matches` 目前是 `tree/panel.rs:486` 中的私有函数，提升为 `pub(crate)`，或者移到 `app/prompt/tree.rs` 让两处共用。
 
@@ -710,7 +706,9 @@ pub fn page_row_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Op
 
 - `render_toolbar` 的 `tree: bool` 参数改为 `mode: PromptMode`。Pages 视图的按钮集合是 `[/]` 加 `Pin`，`Pin` 的位置与 Tree 视图一致，但不显示 `[tmp]`。`layout::prompt_toolbar_button_rect` 的 `tree: bool` 同步改为 `mode`；`Pin` 在 Pages 视图下贴右侧（`bar.right() - 1 - PIN_WIDTH`）。
 - `prompt_frame::title_source` 增加分支 `PromptMode::Pages => TitleSource::Pages { title, page }`。
-- 标题行：左侧是 `条目名`，后面跟灰字 ` · pages`（`text::PROMPT_PAGES_LABEL = "pages"`），右侧是**只有计数**的 `n/m`，没有 `‹ ›`。`n` 为选中行在**未过滤**列表中的序号（从 1 起），`m` 为总页数。
+- 标题行：
+  - 编辑视图只显示 `条目名`（临时提示词为 `Temp prompt`），不再显示 ` · 页名`；页名从此只存在于数据层。
+  - 页列表视图显示 `条目名 · pages`（`text::PROMPT_PAGES_LABEL = "pages"`），右侧是**只有计数**的 `n/m`，没有 `‹ ›`。`n` 为选中行在**未过滤**列表中的序号（从 1 起），`m` 为总页数；搜索过滤结果为空（`rows.is_empty()`）时 `current = 0`，显示 `0/m`，不回退当前页序号。
   - `header::page_controls` 增加 `arrows: bool` 参数。Pages 视图传 `false`，只排布 counter；这时 `prev`/`next` 的 rect 宽度为 0，命中自然失效。
 - 点击计数：Editor 视图 → `show_prompt_pages`；Pages 视图 → `hide_prompt_pages`（`event/mouse/press.rs:420` 处改写）。
 
@@ -720,13 +718,13 @@ pub fn page_row_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Op
 |---|---|
 | `app/prompt/tree/panel.rs` | `PageRename`、`page_rename` 字段及其 6 个方法 |
 | `app/update/prompt/pages.rs` | `begin_page_rename`、`page_rename_active`、`apply_page_rename_key`、`cancel_page_rename`、`finish_page_rename`；`open_new_page` / `open_created_page` 中的 `start_page_rename`（新建页后**不再**自动进入命名） |
-| `ui/prompt/header.rs` | `PageHeaderData.rename`、`rename_input_span`、`paint_rename_input`、`rename_cursor`；`PageControl::Name`（页名变成纯展示） |
+| `ui/prompt/header.rs` | `PageHeaderData.rename`、`rename_input_span`、`paint_rename_input`、`rename_cursor`；`PageControl::Name`（页名不再展示，从枚举中删除） |
 | `ui/prompt_frame.rs` | `PromptPageHeader.rename` 与重命名硬件光标分支 |
 | `input/mod.rs` | `page_rename_key` |
 | `event/input.rs`、`event/mouse/press.rs:398` | 重命名路由与点击提交分支 |
 | `app/update/{focus,right_panel,draft,update}.rs` | 调用 `finish/cancel_page_rename` 的地方，逐个删除 |
 
-> 页名仍然在标题行展示（`条目名 · 页名`），只是不能点击编辑。改名统一用 Pages 视图右键 → Rename。
+> 页名不再在标题行展示，也不能点击编辑。页列表的显示标题统一由正文 `&&&` 的 `{title:}` / 模板名派生，无 `&&&` 时按序号显示 `Page N`。`page.name` 仍保留在数据库与页数据中，但界面不再提供 `Rename` 入口。
 
 ### 8.5 删除 `PageMenu` 浮层
 
@@ -753,13 +751,11 @@ pub enum MenuCommand {
     // …现有…
     /// 页列表：打开该页（切页并回编辑视图）。
     OpenPage,
-    /// 页列表：重命名该页（`Overlay::Rename`）。
-    RenamePage,
     /// 页列表：复制该页全文。
     CopyPageContent,
-    /// 页列表：末尾新建页并打开。
+    /// 页列表：末尾新建页（已有空白页时切到该空白页）。
     NewPage,
-    /// 页列表：删除该页（行内二次确认；仅剩一页时置灰）。
+    /// 页列表：删除该页（行内二次确认；仅剩一页时不放入菜单）。
     DeletePage,
 }
 
@@ -768,21 +764,15 @@ pub enum OverlayTarget {
     /// 页列表空白区域。
     PromptPages { workspace: usize, owner: PromptEditing },
 }
-
-pub enum RenameTarget {
-    // …现有…
-    PromptPage { workspace: usize, owner: PromptEditing, page: PromptPageId },
-}
 ```
 
 - `MenuCommand::requires_confirm` 中加入 `DeletePage`。
-- **置灰**：`Menu` 目前没有 disabled 能力，需要用 grep 确认。推荐的做法是：只剩一页时 `open_page_menu` **不放入** `DeletePage`。这样不必给菜单新增 disabled 状态，与 `open_prompt_folder_menu` 按条件 push `NewSubFolder` 的做法一致。
-  > 这与决策 11 中「置灰」的字面意思有偏差，但效果相同：用户都无法在只剩一页时删除。不新增菜单 disabled 能力，可以避免为一个菜单项改动菜单浮层的渲染和命中。**审核时请确认。**
+- **单页隐藏**：`Menu` 没有 disabled 能力，只剩一页时 `open_page_menu` **不放入** `DeletePage`，与 `open_prompt_folder_menu` 按条件 push `NewSubFolder` 的做法一致。
 
 ### 9.2 打开（`app/update/prompt/pages_view.rs`）
 
 ```rust
-/// 页行右键菜单：打开、重命名、复制、新建、删除（仅多页时）；不改动选中行。
+/// 页行右键菜单：打开、复制、新建、删除（仅多页时）；不改动选中行。
 pub fn open_page_menu(state: &mut AppState, page: PromptPageId, anchor: (u16, u16))
 
 /// 页列表空白区域菜单：新建页。
@@ -811,17 +801,15 @@ if update::prompt_panel_active(state) && update::prompt_pages_mode(state) {
 | 命令 | 目标 | 行为 |
 |---|---|---|
 | `OpenPage` | `PromptPage { page, .. }` | `hide_prompt_pages` 后调用 `select_prompt_page(page)` |
-| `RenamePage` | `PromptPage` | `Overlay::Rename { target: RenameTarget::PromptPage, input: 页名 }` |
 | `CopyPageContent` | `PromptPage` | 取该页 `content`。如果是当前页，取 `state.prompt.text()`。进入 Pages 前已经 commit，两者相同，取页 content 即可。然后调用 `copy_with_toast`，toast 锚定 prompt 面板 |
-| `NewPage` | `PromptPage` / `PromptPages` | 先 `hide_prompt_pages`，再走现有的 `open_new_page`。正式条目走 `Effect::CreatePage`，成功回调 `open_created_page` 切到新页；临时提示词直接追加。两条路径都**去掉 `start_page_rename`** |
-| `DeletePage` | `PromptPage` | 行内确认后调用 `perform_delete_page(workspace, owner, page)`；**留在 Pages 视图**，`pages_view.selected` 钳到 `min(原行, 行数-1)` |
-
-`commit_prompt_rename`（`prompt.rs` 约 776 行）增加 `RenameTarget::PromptPage` 分支：内容就是现在 `finish_page_rename` 中的 `with_panel(... page.name = name)`，再加上 `Effect::RenamePage`，trim 后为空则拒绝。这样可以复用浮层原有的「空名拒绝、浮层保持打开」语义。
+| `NewPage` | `PromptPage` / `PromptPages` | 与 `Ctrl/Cmd+Shift+Right` 统一调用 `create_or_toast_new_page`：已有空白页时不新建——Pages 视图留在列表、清空搜索、选中该空白页并滚入视口，编辑视图切到该空白页，均弹 Warning Toast `Already have a new page`；否则新建页，正式条目走 `Effect::CreatePage`、临时提示词直接追加，Pages 视图留在列表并清空搜索、选中新页滚入视口，编辑视图切入新页，均弹 Default Toast `New page created`。两条路径都**去掉 `start_page_rename`** |
+| `DeletePage` | `PromptPage` | 行内确认后调用 `perform_delete_page(workspace, owner, page)`；**留在 Pages 视图**。删除前记录选中行的 `PromptPageId`，删除的不是选中页时在新行列表中按 id 重新定位选中行并 `clamp_page_view`，删除当前页时按「下一页优先」切换 |
 
 `perform_delete_page` 的改动：
 
 - 删除 `panel.page_rename()` 相关的清理（行内重命名已删除）。
 - `reload_editor_from_active_page` 的条件放宽到 `mode != Tree`。被删的是当前页时，编辑缓冲会重载为新的当前页；被删的是非当前页时，`active_page` 不变，重载等价于用同一份正文 `set_text`。**要避免这次无谓的重载把撤销栈冲掉**：仅当 `page == 原 active` 时才调用 `reload_editor_from_active_page`。
+- `Ctrl+C` 清空页搜索时，先记录当前选中行的 `PromptPageId`（无则取 `active_page`），清空搜索词后在新行列表中重新定位并调用 `clamp_page_view`。
 
 删除旧流程：`delete_current_page`、`confirm_delete_page`、`ConfirmClose { target: OverlayTarget::PromptPage }` 的分支（`dialog.rs` 中的确认回调）。删除确认统一为菜单行内确认。
 
@@ -829,7 +817,6 @@ if update::prompt_panel_active(state) && update::prompt_pages_mode(state) {
 
 ```rust
 pub const MENU_PAGE_OPEN: &str = "Open";
-pub const MENU_PAGE_RENAME: &str = "Rename";      // 可直接复用 MENU_PROMPT_RENAME
 pub const MENU_PAGE_COPY: &str = "Copy content";  // 可直接复用 MENU_PROMPT_COPY
 pub const MENU_PAGE_NEW: &str = "New page";
 pub const MENU_PAGE_DELETE: &str = "Delete";      // 可直接复用 MENU_PROMPT_DELETE
@@ -838,9 +825,11 @@ pub const PROMPT_PAGES_SEARCH_PLACEHOLDER: &str = "search pages";
 pub const PROMPT_PAGES_NO_MATCHES: &str = "no matching pages";
 pub const PAGE_STATUS_OPEN: &str = "○";
 pub const PAGE_STATUS_DOT: &str = "●";
+pub const TOAST_PAGE_ALREADY_NEW: &str = "Already have a new page";
+pub const TOAST_PAGE_CREATED: &str = "New page created";
 ```
 
-能复用的文案就直接复用，不新增同值常量。`ui/overlay/menu.rs` 的命令到文案映射增加以上分支，`DeletePage` 的确认态文案复用现有删除确认文案。
+能复用的文案就直接复用，不新增同值常量。页行菜单只有 `Open / Copy content / New page / Delete` 四项，不再有 `Rename`。`ui/overlay/menu.rs` 的命令到文案映射增加以上分支，`DeletePage` 的确认态文案复用现有删除确认文案。
 
 ### 9.5 鼠标（`event/mouse/press.rs`、`drag.rs`、`hover.rs`、`wheel.rs`）
 
@@ -889,9 +878,9 @@ pub const PAGE_STATUS_DOT: &str = "●";
 | 一页有多个 `&&&` 的旧数据 | 第二个及之后的 `&&&` 变成普通文本，页列表只统计第一个 | 决策 2 已经接受。Tree 视图的 `n|m|x` 跨页聚合会随之变少（`template_counts` 只数第一个） |
 | 三套扫描器统一后，lx 输入框的高亮行为变化 | lx 输入框中嵌套的 `+++` 不再高亮 | 决策 20 已经接受 |
 | `Ctrl+←/→` 不再按词移动 | 习惯用 Ctrl 按词跳的用户会意外切页 | 决策 7 已经接受。`Alt+←/→` 可以替代 |
-| macOS 系统或终端拦截 `Ctrl/Cmd+←/→`、`Cmd+L/P` | 快捷键收不到 | 鼠标入口（`‹ ›`、计数、`[≡]`）都保留 |
+| macOS 系统或终端拦截 `Ctrl/Cmd+←/→`、`Cmd+L/P`、`Ctrl/Cmd+Shift+→` | 快捷键收不到 | 鼠标入口（`‹ ›`、计数、`[≡]`、`New page` 菜单）都保留 |
 | 删除非当前页时编辑缓冲被重载 | 撤销栈丢失 | §9.3：只有删除当前页时才重载 |
-| 边框染色覆盖底边控件 | 底边文字变色 | §6.3：只给边框字形染色 |
+| 标题行状态标签挤占条目名 | 窄面板下条目名被截断 | §6.1：空间不足时隐藏标签，页控件优先 |
 
 回退：这次没有 DB 变更，回退就是不合并分支。各阶段的 commit 相互独立，可以按阶段 revert。
 
@@ -899,6 +888,7 @@ pub const PAGE_STATUS_DOT: &str = "●";
 
 ## 13. 实施差异
 
-- `PromptMode` 枚举定义在 `src/layout/prompt.rs` 并由 `src/app/prompt/tree/panel.rs` 重新导出，同时实现 `From<bool>`（`true => Tree, false => Editor`），从而在不违反 `layout -> ratatui/std` 依赖方向的前提下让 `prompt_toolbar_button_rect` / `prompt_toolbar_button_at` 直接按 `PromptMode` 计算 `Editor / Tree / Pages` 三态工具栏布局。
+- `PromptMode` 枚举定义在 `src/layout/prompt.rs` 并由 `src/app/prompt/tree/panel.rs` 重新导出，`prompt_toolbar_button_rect` / `prompt_toolbar_button_at` 直接按 `PromptMode` 计算 `Editor / Tree / Pages` 三态工具栏布局；迁移期的 `From<bool>` 兼容壳已删除。
 - `edit_touches_title_line`（`src/app/markdown/template.rs`）保留原有对所有 `parse_template_start_line` 下一行 `{title:}` 的结构保护判定，与单 `&&&` 块扫描解耦。
-- `right_panel::tint_edit_border` 在对分割线以下外框染色时，跳过主区与右栏之间的 `<>` 交换按钮所在单元格，保证交换按钮字形与样式不被覆盖。
+- `&&&` 色条与块内分割线最终固定为 `style::template_block_bar()`（`LX_PINK` / `Indexed 218`），状态只由标题行标签表达；`[status]` 块按钮与 `edit_border_style` / `tint_edit_border` 外框染色均已全部删除。
+- 编辑视图 `Esc` 不再返回 Tree，只有 Tree / Pages 视图把 `Esc` 当作返回编辑视图；新建页统一由 `create_or_toast_new_page` 处理空白页防重与 Toast。

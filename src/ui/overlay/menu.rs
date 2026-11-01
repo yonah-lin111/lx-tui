@@ -126,9 +126,7 @@ pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
                 MenuCommand::NewPrompt => text::MENU_PROMPT_NEW_PROMPT,
                 MenuCommand::NewFolder => text::MENU_PROMPT_NEW_FOLDER,
                 MenuCommand::NewSubFolder => text::MENU_PROMPT_NEW_SUBFOLDER,
-                MenuCommand::RenameFolder | MenuCommand::RenamePrompt | MenuCommand::RenamePage => {
-                    text::MENU_PROMPT_RENAME
-                }
+                MenuCommand::RenameFolder | MenuCommand::RenamePrompt => text::MENU_PROMPT_RENAME,
                 MenuCommand::DeleteFolder | MenuCommand::DeletePrompt | MenuCommand::DeletePage => {
                     if confirming {
                         text::MENU_CONFIRM_DELETE

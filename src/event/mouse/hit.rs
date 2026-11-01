@@ -402,9 +402,11 @@ pub(crate) fn apply_template_button(state: &mut AppState, hit: ui::prompt::Templ
             }
         }
         ui::prompt::TemplateBlockButton::Clean => {
+            update::clear_selection(state);
             update::clean_template_block(state, hit.line);
         }
         ui::prompt::TemplateBlockButton::Delete => {
+            update::clear_selection(state);
             update::delete_template_block(state, hit.line);
         }
     }
@@ -439,9 +441,11 @@ pub(crate) fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockBut
             }
         }
         (BlockKind::Supple, BlockButton::Clean) => {
+            update::clear_selection(state);
             update::clean_supple_block(state, hit.line);
         }
         (BlockKind::Supple, BlockButton::Delete) => {
+            update::clear_selection(state);
             update::delete_supple_block(state, hit.line);
         }
         _ => {}

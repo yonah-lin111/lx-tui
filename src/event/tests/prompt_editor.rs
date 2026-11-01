@@ -271,6 +271,120 @@ fn mouse_template_status_label_and_block_buttons() {
 }
 
 #[test]
+fn unclosed_template_block_hides_status_label_and_falls_back_to_outdent() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.prompt_width = 80;
+    state.prompt.resize(78, 16);
+    crate::app::update::focus_prompt(&mut state);
+    crate::app::update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertText(
+            "&&& addTemplate --start\n{title: T}\n    body".into(),
+        ),
+    );
+    let geo = geometry(&state, &config, Rect::new(0, 0, 220, 30));
+    assert!(
+        crate::ui::prompt_frame::prompt_status_rect(geo.view.prompt, &state).is_none(),
+        "未闭合 &&& 不显示标题行状态标签"
+    );
+
+    // Shift+Tab 回退为反缩进，而不是静默吞键。
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
+    state
+        .prompt
+        .set_cursor_offset_for_test(state.prompt.text().len());
+    crate::app::update::apply_editor(&mut state, crate::app::actions::EditorCommand::Outdent);
+    assert!(
+        state.prompt.text().ends_with("\n  body"),
+        "未闭合块应回退为反缩进（4 空格减到 2）: {:?}",
+        state.prompt.text()
+    );
+}
+
+#[test]
+fn mouse_status_label_and_clean_button_clear_selection() {
+    let (mut state, config, geo, area) = template_button_state();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let click = |state: &mut AppState,
+                 sessions: &mut HashMap<PaneId, PtySession>,
+                 dirty: &mut bool,
+                 x: u16,
+                 y: u16| {
+        handle_terminal_event(
+            mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+            state,
+            sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            dirty,
+        );
+    };
+
+    // 标题行状态标签：清除旧选区。
+    state.select_all_prompt();
+    assert!(state.selection.is_some());
+    let status =
+        crate::ui::prompt_frame::prompt_status_rect(geo.view.prompt, &state).expect("status label");
+    click(
+        &mut state,
+        &mut sessions,
+        &mut dirty,
+        status.x + 1,
+        status.y,
+    );
+    assert!(state.selection.is_none(), "点击状态标签清除选区");
+
+    // 清理按钮：清除旧选区。
+    state.select_all_prompt();
+    let clean = crate::ui::prompt::template_buttons(&state.prompt, area)
+        .into_iter()
+        .find(|hit| hit.button == crate::ui::prompt::TemplateBlockButton::Clean)
+        .expect("clean button");
+    click(
+        &mut state,
+        &mut sessions,
+        &mut dirty,
+        clean.rect.x + 1,
+        clean.rect.y,
+    );
+    assert!(state.selection.is_none(), "点击清理按钮清除选区");
+}
+
+#[test]
+fn page_control_hit_requires_prompt_tab() {
+    let config = Config::default();
+    let mut state = paged_prompt_state();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    let title = ui::prompt_frame::title_row(geo.view.prompt).expect("title row");
+    let hit = (title.x..title.right())
+        .find(|x| {
+            ui::prompt_frame::prompt_page_control_at(geo.view.prompt, &state, *x, title.y).is_some()
+        })
+        .expect("page control visible in Prompt tab");
+    state.right_tab = crate::app::state::RightTab::Todo;
+    assert!(
+        ui::prompt_frame::prompt_page_control_at(geo.view.prompt, &state, hit, title.y).is_none(),
+        "Todo 标签页下不得命中隐藏的页控件"
+    );
+}
+
+#[test]
+fn pages_header_shows_zero_when_filter_has_no_match() {
+    let mut state = paged_prompt_state();
+    assert!(crate::app::update::show_prompt_pages(&mut state));
+    crate::app::update::apply_page_search(
+        &mut state,
+        &crate::app::actions::EditorCommand::InsertText("zzz".into()),
+    );
+    let header = crate::ui::prompt_frame::prompt_page_header(&state).expect("pages header");
+    assert_eq!(header.current, 0, "无匹配行时计数为 0/m");
+    assert_eq!(header.total, 2);
+}
+
+#[test]
 fn mouse_supple_copy_button_writes_clipboard_toast() {
     let config = Config::default();
     let mut state = AppState::demo();

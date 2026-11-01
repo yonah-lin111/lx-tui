@@ -4,9 +4,7 @@ use std::time::Instant;
 
 use crate::app::actions::EditorCommand;
 use crate::app::effects::Effect;
-use crate::app::overlay::{
-    Menu, MenuCommand, Overlay, OverlayTarget, Rename, RenameTarget, TextInput,
-};
+use crate::app::overlay::{Menu, MenuCommand, Overlay, OverlayTarget};
 use crate::app::prompt::{PromptEditing, PromptMode, PromptPageId, PromptPanel, page_rows};
 use crate::app::state::AppState;
 use crate::ui::text;
@@ -190,7 +188,7 @@ pub fn apply_page_search(state: &mut AppState, command: &EditorCommand) -> bool 
     true
 }
 
-/// 清空页列表搜索过滤词（`Ctrl+C`）。
+/// 清空页列表搜索过滤词（`Ctrl+C`）：按清空前的选中页（无则当前页）重定位。
 pub fn clear_page_search(state: &mut AppState) -> bool {
     let workspace = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
@@ -201,12 +199,22 @@ pub fn clear_page_search(state: &mut AppState) -> bool {
     if panel.pages_view.search.text().is_empty() {
         return false;
     }
+    let Some((pages, active)) = panel.editing_pages() else {
+        return false;
+    };
+    let selected = page_rows(pages, active, panel.pages_view.search.text())
+        .get(panel.pages_view.selected)
+        .map(|row| row.page)
+        .unwrap_or(active);
     panel.pages_view.search.clear();
-    let len = panel
-        .editing_pages()
-        .map(|(pages, active)| page_rows(pages, active, "").len())
-        .unwrap_or(0);
-    clamp_page_view(panel, len, visible);
+    let Some((pages, active)) = panel.editing_pages() else {
+        return false;
+    };
+    let rows = page_rows(pages, active, "");
+    if let Some(pos) = rows.iter().position(|row| row.page == selected) {
+        panel.pages_view.selected = pos;
+    }
+    clamp_page_view(panel, rows.len(), visible);
     true
 }
 
@@ -271,7 +279,6 @@ pub fn open_page_menu(state: &mut AppState, page: PromptPageId, anchor: (u16, u1
     };
     let mut commands = vec![
         MenuCommand::OpenPage,
-        MenuCommand::RenamePage,
         MenuCommand::CopyPageContent,
         MenuCommand::NewPage,
     ];
@@ -307,35 +314,6 @@ pub fn open_pages_blank_menu(state: &mut AppState, anchor: (u16, u16)) {
         commands: vec![MenuCommand::NewPage],
         selected: 0,
         confirming: false,
-    }));
-}
-
-/// 打开页重命名浮层（预填当前页名）。
-pub fn open_page_rename(
-    state: &mut AppState,
-    workspace: usize,
-    owner: PromptEditing,
-    page: PromptPageId,
-) {
-    let Some(name) = state.workspaces.get(workspace).and_then(|ws| {
-        let pages = match owner {
-            PromptEditing::Item(id) => &ws.prompt_panel.tree.item(id)?.pages,
-            PromptEditing::Temp(id) => &ws.prompt_panel.temp(id)?.pages,
-        };
-        pages
-            .iter()
-            .find(|candidate| candidate.id == page)
-            .map(|candidate| candidate.name.clone())
-    }) else {
-        return;
-    };
-    state.overlay = Some(Overlay::Rename(Rename {
-        target: RenameTarget::PromptPage {
-            workspace,
-            owner,
-            page,
-        },
-        input: TextInput::new(name),
     }));
 }
 
@@ -378,7 +356,7 @@ pub fn copy_page_content(
 }
 
 /// 钳制页列表选中行与滚动偏移，使选中行在视口内可见。
-pub(super) fn clamp_page_view(panel: &mut PromptPanel, rows_len: usize, visible: usize) {
+pub(crate) fn clamp_page_view(panel: &mut PromptPanel, rows_len: usize, visible: usize) {
     let visible = visible.max(1);
     if rows_len == 0 {
         panel.pages_view.selected = 0;

@@ -10,7 +10,7 @@ use crate::app::prompt::{
 use crate::app::state::AppState;
 use crate::ui::text;
 
-use super::pages_view::{clamp_page_view, hide_prompt_pages};
+use super::pages_view::{clamp_page_view, hide_prompt_pages, prompt_pages_mode};
 use super::{commit_editing_prompt, prompt_tree_visible_rows};
 
 /// 相对切页（标题行箭头与 `Ctrl/Cmd+←/→`）；越界或无法切页返回 false。
@@ -121,6 +121,7 @@ fn set_active_page(
 /// 新建页：处于页列表视图时保留在列表并选中新页；处于编辑视图时切到新页。
 pub fn open_new_page(state: &mut AppState) -> bool {
     let workspace = state.prompt_workspace();
+    let visible = prompt_tree_visible_rows(state);
     let Some(target) = state
         .workspaces
         .get(workspace)
@@ -169,24 +170,39 @@ pub fn open_new_page(state: &mut AppState) -> bool {
                 let page_id = panel.alloc_temp_page_id();
                 let page = PromptPageId::Temp(page_id);
                 let mode = panel.mode;
-                let search_text = panel.pages_view.search.text().to_string();
-                let Some(temp) = panel.temp_mut(id) else {
-                    return false;
-                };
-                temp.pages.push(PromptPage::temp(page_id, &name, ""));
-                if mode == PromptMode::Pages {
-                    let rows = crate::app::prompt::pages_list::page_rows(
-                        &temp.pages,
-                        temp.active_page,
-                        &search_text,
-                    );
-                    if let Some(pos) = rows.iter().position(|row| row.page == page) {
-                        panel.pages_view.selected = pos;
+                let position = {
+                    if mode == PromptMode::Pages {
+                        // 列表视图：新页标题不匹配过滤词，先清空搜索。
+                        panel.pages_view.search.clear();
                     }
-                    return true;
+                    let Some(temp) = panel.temp_mut(id) else {
+                        return false;
+                    };
+                    temp.pages.push(PromptPage::temp(page_id, &name, ""));
+                    if mode != PromptMode::Pages {
+                        temp.active_page = page;
+                        None
+                    } else {
+                        // 按完整列表（无搜索词）定位新页。
+                        let rows = crate::app::prompt::pages_list::page_rows(
+                            &temp.pages,
+                            temp.active_page,
+                            "",
+                        );
+                        let pos = rows
+                            .iter()
+                            .position(|row| row.page == page)
+                            .unwrap_or(rows.len().saturating_sub(1));
+                        Some((pos, rows.len()))
+                    }
+                };
+                match position {
+                    Some((pos, rows_len)) => {
+                        panel.pages_view.selected = pos;
+                        clamp_page_view(panel, rows_len, visible);
+                    }
+                    None => panel.mode = PromptMode::Editor,
                 }
-                temp.active_page = page;
-                panel.mode = PromptMode::Editor;
                 true
             });
             if !added {
@@ -206,15 +222,32 @@ pub fn open_new_page(state: &mut AppState) -> bool {
 pub fn create_or_toast_new_page(state: &mut AppState) -> bool {
     state.prompt.clear_panel();
     commit_editing_prompt(state);
+    let workspace = state.prompt_workspace();
+    let visible = prompt_tree_visible_rows(state);
     let Some((pages, active)) = displayed_prompt_pages(state) else {
         return false;
     };
     let anchor = Some(state.prompt.id());
     if let Some(empty) = pages.iter().find(|page| page.content.trim().is_empty()) {
         let empty_id = empty.id;
-        if empty_id != active {
+        if prompt_pages_mode(state) {
+            // 列表视图：清空搜索并把该空白页滚入视口，不切回编辑视图。
+            with_panel(state, workspace, |panel| {
+                panel.pages_view.search.clear();
+                let Some((pages, active)) = panel.editing_pages() else {
+                    return false;
+                };
+                let rows = page_rows(pages, active, "");
+                if let Some(pos) = rows.iter().position(|row| row.page == empty_id) {
+                    panel.pages_view.selected = pos;
+                }
+                clamp_page_view(panel, rows.len(), visible);
+                true
+            });
+        } else if empty_id != active {
             select_prompt_page(state, empty_id);
         }
+        state.overlay = None;
         super::super::show_toast_at(
             state,
             anchor,
@@ -252,10 +285,10 @@ pub fn open_created_page(
     _name: &str,
 ) -> bool {
     let page = PromptPageId::Saved(page_id);
+    let visible = prompt_tree_visible_rows(state);
     let mut was_pages = false;
     let opened = with_panel(state, workspace, |panel| {
         let mode = panel.mode;
-        let search_text = panel.pages_view.search.text().to_string();
         let Some(item) = panel.tree.item_mut(item_id) else {
             return false;
         };
@@ -264,14 +297,18 @@ pub fn open_created_page(
         }
         if mode == PromptMode::Pages {
             was_pages = true;
-            let rows = crate::app::prompt::pages_list::page_rows(
-                &item.pages,
-                item.active_page,
-                &search_text,
-            );
-            if let Some(pos) = rows.iter().position(|row| row.page == page) {
-                panel.pages_view.selected = pos;
-            }
+            // 列表视图：新页标题不匹配过滤词，先清空搜索再按完整列表定位并滚入视口。
+            panel.pages_view.search.clear();
+            let (pos, rows_len) = {
+                let rows = page_rows(&item.pages, item.active_page, "");
+                let pos = rows
+                    .iter()
+                    .position(|row| row.page == page)
+                    .unwrap_or(rows.len().saturating_sub(1));
+                (pos, rows.len())
+            };
+            panel.pages_view.selected = pos;
+            clamp_page_view(panel, rows_len, visible);
             return true;
         }
         item.active_page = page;
@@ -373,42 +410,54 @@ pub fn perform_delete_page(
     let visible = prompt_tree_visible_rows(state);
     let mut was_active = false;
     let deleted = with_panel(state, workspace, |panel| {
-        let (pages, active) = match owner {
-            PromptEditing::Item(id) => {
-                let Some(item) = panel.tree.item_mut(id) else {
-                    return false;
-                };
-                (&mut item.pages, &mut item.active_page)
-            }
-            PromptEditing::Temp(id) => {
-                let Some(temp) = panel.temp_mut(id) else {
-                    return false;
-                };
-                (&mut temp.pages, &mut temp.active_page)
-            }
-        };
-        let Some(index) = pages.iter().position(|candidate| candidate.id == page) else {
-            return false;
-        };
-        if pages.len() <= 1 {
-            return false;
-        }
-        was_active = *active == page;
-        pages.remove(index);
-        if was_active {
-            let next = pages
-                .get(index)
-                .or_else(|| pages.last())
-                .map(|candidate| candidate.id);
-            let Some(next) = next else {
+        let query = panel.pages_view.search.text().to_string();
+        let selected_index = panel.pages_view.selected;
+        let (rows_len, target_pos) = {
+            let (pages, active) = match owner {
+                PromptEditing::Item(id) => {
+                    let Some(item) = panel.tree.item_mut(id) else {
+                        return false;
+                    };
+                    (&mut item.pages, &mut item.active_page)
+                }
+                PromptEditing::Temp(id) => {
+                    let Some(temp) = panel.temp_mut(id) else {
+                        return false;
+                    };
+                    (&mut temp.pages, &mut temp.active_page)
+                }
+            };
+            let Some(index) = pages.iter().position(|candidate| candidate.id == page) else {
                 return false;
             };
-            *active = next;
+            if pages.len() <= 1 {
+                return false;
+            }
+            was_active = *active == page;
+            // 删除前记录选中行对应的页：被删行位于其上方时按 id 重定位，避免选中箭头漂移。
+            let selected_page = page_rows(pages, *active, &query)
+                .get(selected_index)
+                .map(|row| row.page);
+            pages.remove(index);
+            if was_active {
+                let next = pages
+                    .get(index)
+                    .or_else(|| pages.last())
+                    .map(|candidate| candidate.id);
+                let Some(next) = next else {
+                    return false;
+                };
+                *active = next;
+            }
+            let rows = page_rows(pages, *active, &query);
+            let target_pos = (selected_page != Some(page))
+                .then(|| selected_page.and_then(|id| rows.iter().position(|row| row.page == id)))
+                .flatten();
+            (rows.len(), target_pos)
+        };
+        if let Some(pos) = target_pos {
+            panel.pages_view.selected = pos;
         }
-        let rows_len = panel
-            .editing_pages()
-            .map(|(pages, active)| page_rows(pages, active, panel.pages_view.search.text()).len())
-            .unwrap_or(0);
         clamp_page_view(panel, rows_len, visible);
         true
     });

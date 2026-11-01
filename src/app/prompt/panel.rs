@@ -405,6 +405,8 @@ impl Prompt {
                 .spans
                 .iter()
                 .any(|span| span.kind == markdown::BlockKind::Template),
+            // 未闭合块下隐藏 `/supplement`：新块会被吞进未闭合块内部。
+            unclosed_block: scan.spans.iter().any(|span| !span.closed),
         };
         let line_changed =
             self.slash.as_ref().map(|panel| panel.trigger().line_start) != Some(trigger.line_start);

@@ -7,6 +7,7 @@ use ratatui::backend::TestBackend;
 use ratatui::style::Color;
 
 use super::*;
+use crate::app::prompt::PromptMode;
 use crate::app::tooltip::{BlockButtonKind, TOOLTIP_DELAY, TemplateButtonKind, Tooltip};
 use crate::config::Config;
 
@@ -133,16 +134,22 @@ fn hits_prompt_toolbar_and_pin_but_not_when_collapsed() {
     let mut state = AppState::demo();
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
-    let undo =
-        layout::prompt_toolbar_button_rect(view.prompt, layout::PromptToolbarButton::Undo, false)
-            .expect("undo button visible");
+    let undo = layout::prompt_toolbar_button_rect(
+        view.prompt,
+        layout::PromptToolbarButton::Undo,
+        PromptMode::Editor,
+    )
+    .expect("undo button visible");
     assert_eq!(
         target_at(&view, &state, &rects, SCREEN, undo.x, undo.y),
         Some(TooltipTarget::PromptUndo)
     );
-    let pin =
-        layout::prompt_toolbar_button_rect(view.prompt, layout::PromptToolbarButton::Pin, false)
-            .expect("pin button visible");
+    let pin = layout::prompt_toolbar_button_rect(
+        view.prompt,
+        layout::PromptToolbarButton::Pin,
+        PromptMode::Editor,
+    )
+    .expect("pin button visible");
     assert_eq!(
         target_at(&view, &state, &rects, SCREEN, pin.x, pin.y),
         Some(TooltipTarget::PromptPin)

@@ -362,7 +362,6 @@ pub const PROMPT_PAGES_SEARCH_PLACEHOLDER: &str = "search pages";
 pub const PROMPT_PAGES_NO_MATCHES: &str = "no matching pages";
 pub const PAGE_STATUS_OPEN: &str = "○";
 pub const PAGE_STATUS_DOT: &str = "●";
-pub const RENAME_PAGE_TITLE: &str = "Rename page";
 
 /// 模板块状态计数分隔符：`|`。
 const TEMPLATE_COUNT_SEPARATOR: &str = "|";

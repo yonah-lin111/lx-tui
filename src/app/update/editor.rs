@@ -2,15 +2,15 @@
 
 use crate::app::actions::EditorCommand;
 use crate::app::markdown::MentionEntry;
-use crate::app::prompt::{PromptEditing, PromptMode};
+use crate::app::prompt::{PromptEditing, PromptMode, page_rows};
 use crate::app::state::{AppState, FocusedContainer};
 use crate::layout::PaneId;
 
 use super::prompt::{
-    activate_prompt_row, apply_page_search, apply_prompt_search, commit_prompt_buffer,
-    hide_prompt_pages, move_page_selection, move_prompt_selection, open_selected_page,
-    prompt_pages_mode, prompt_tree_mode, prompt_tree_visible_rows, select_prompt_item,
-    show_prompt_tree, toggle_prompt_pages, toggle_prompt_panel_mode,
+    activate_prompt_row, apply_page_search, apply_prompt_search, clamp_page_view,
+    commit_prompt_buffer, hide_prompt_pages, move_page_selection, move_prompt_selection,
+    open_selected_page, prompt_pages_mode, prompt_tree_mode, prompt_tree_visible_rows,
+    select_prompt_item, show_prompt_tree, toggle_prompt_pages, toggle_prompt_panel_mode,
 };
 use super::selection::{
     WHEEL_LINES, clear_selection, prompt_selection_bounds, scroll_prompt_selection,
@@ -358,9 +358,25 @@ pub(crate) fn restore_prompt_view(state: &mut AppState, index: usize) {
     };
     let panel = &workspace.prompt_panel;
     if matches!(panel.mode, PromptMode::Editor | PromptMode::Pages) {
+        let prev_mode = panel.mode;
         match panel.editing {
             Some(PromptEditing::Item(id)) if panel.tree.item(id).is_some() => {
                 select_prompt_item(state, index, id);
+                // 正式条目也要保留 Pages 视图：`select_prompt_item` 会无条件切回 Editor。
+                if prev_mode == PromptMode::Pages {
+                    let visible = prompt_tree_visible_rows(state);
+                    if let Some(workspace) = state.workspaces.get_mut(index) {
+                        let panel = &mut workspace.prompt_panel;
+                        panel.mode = PromptMode::Pages;
+                        let rows_len = panel
+                            .editing_pages()
+                            .map(|(pages, active)| {
+                                page_rows(pages, active, panel.pages_view.search.text()).len()
+                            })
+                            .unwrap_or(0);
+                        clamp_page_view(panel, rows_len, visible);
+                    }
+                }
                 return;
             }
             Some(PromptEditing::Temp(id)) if panel.temp(id).is_some() => return,

@@ -17,11 +17,13 @@ pub(crate) fn prompt_edit_title(state: &AppState) -> Option<String> {
     }
 }
 
-/// 本页 `&&&` 模板块状态（编辑视图标题行的状态标签；无块时 None）。
+/// 本页 `&&&` 模板块状态（编辑视图标题行的状态标签；无闭合块时 None）。
+///
+/// 未闭合的 `&&&` 不显示标签：`toggle_template_status` 无法改写缺少合法 `--end` 的块。
 fn prompt_template_status(state: &AppState) -> Option<crate::app::markdown::TemplateStatus> {
     crate::app::markdown::block_spans(state.prompt.text())
         .into_iter()
-        .find(|span| span.kind == crate::app::markdown::BlockKind::Template)
+        .find(|span| span.kind == crate::app::markdown::BlockKind::Template && span.closed)
         .map(|span| span.status)
 }
 
@@ -96,16 +98,14 @@ pub(crate) fn prompt_page_header(state: &AppState) -> Option<PromptPageHeader> {
         }
         PromptMode::Pages => {
             let rows = page_rows(pages, active, panel.pages_view.search.text());
-            let selected_page = rows
+            // 无匹配行时计数为 `0/m`，与列表正文的 `no matching pages` 保持一致。
+            let current = rows
                 .get(panel.pages_view.selected)
-                .map(|row| row.page)
-                .unwrap_or(active);
-            let index = pages
-                .iter()
-                .position(|page| page.id == selected_page)
+                .and_then(|row| pages.iter().position(|page| page.id == row.page))
+                .map(|index| index + 1)
                 .unwrap_or(0);
             Some(PromptPageHeader {
-                current: index + 1,
+                current,
                 total: pages.len(),
                 name: text::PROMPT_PAGES_LABEL.to_string(),
                 arrows: false,
@@ -135,7 +135,7 @@ pub fn prompt_page_control_at(
     column: u16,
     row: u16,
 ) -> Option<prompt::PageControl> {
-    if state.prompt_collapsed {
+    if state.prompt_collapsed || state.right_tab != RightTab::Prompt {
         return None;
     }
     let area = title_row(panel)?;

@@ -12,9 +12,9 @@ use crate::layout::PaneId;
 
 use super::pane::toggle_pane_view;
 use super::prompt::{
-    copy_page_content, copy_prompt_content, copy_prompt_temp_content, delete_prompt_folder,
-    delete_prompt_item, delete_prompt_temp, edit_prompt_item, edit_prompt_temp, hide_prompt_pages,
-    open_new_folder, open_new_page, open_new_prompt, open_page_rename, open_prompt_rename,
+    copy_page_content, copy_prompt_content, copy_prompt_temp_content, create_or_toast_new_page,
+    delete_prompt_folder, delete_prompt_item, delete_prompt_temp, edit_prompt_item,
+    edit_prompt_temp, hide_prompt_pages, open_new_folder, open_new_prompt, open_prompt_rename,
     perform_delete_page, select_prompt_page,
 };
 use super::selection::clear_selection;
@@ -447,16 +447,6 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
             select_prompt_page(state, page);
         }
         (
-            Some(MenuCommand::RenamePage),
-            OverlayTarget::PromptPage {
-                workspace,
-                owner,
-                page,
-            },
-        ) => {
-            open_page_rename(state, workspace, owner, page);
-        }
-        (
             Some(MenuCommand::CopyPageContent),
             OverlayTarget::PromptPage {
                 workspace,
@@ -470,7 +460,7 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
             Some(MenuCommand::NewPage),
             OverlayTarget::PromptPage { .. } | OverlayTarget::PromptPages { .. },
         ) => {
-            open_new_page(state);
+            create_or_toast_new_page(state);
         }
         (
             Some(MenuCommand::DeletePage),

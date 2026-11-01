@@ -226,7 +226,6 @@ fn rename_title(target: RenameTarget) -> &'static str {
         RenameTarget::Tab { .. } => text::RENAME_TAB_TITLE,
         RenameTarget::PromptFolder { .. } => text::RENAME_FOLDER_TITLE,
         RenameTarget::PromptItem { .. } => text::RENAME_PROMPT_TITLE,
-        RenameTarget::PromptPage { .. } => text::RENAME_PAGE_TITLE,
     }
 }
 

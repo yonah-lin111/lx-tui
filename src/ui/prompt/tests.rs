@@ -649,7 +649,7 @@ fn renders_toolbar_buttons_and_divider() {
     let undo = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Undo,
-        false,
+        PromptMode::Editor,
     )
     .expect("undo visible");
     assert_eq!(render_label(&buf, undo), text::PROMPT_UNDO_LABEL);
@@ -659,7 +659,7 @@ fn renders_toolbar_buttons_and_divider() {
     let redo = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Redo,
-        false,
+        PromptMode::Editor,
     )
     .expect("redo visible");
     assert_eq!(render_label(&buf, redo), text::PROMPT_REDO_LABEL);
@@ -668,7 +668,7 @@ fn renders_toolbar_buttons_and_divider() {
     let select_all = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::SelectAll,
-        false,
+        PromptMode::Editor,
     )
     .expect("select all visible");
     assert_eq!(
@@ -679,7 +679,7 @@ fn renders_toolbar_buttons_and_divider() {
     let save = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Save,
-        false,
+        PromptMode::Editor,
     )
     .expect("save visible");
     let save_x = save.x;
@@ -774,13 +774,13 @@ fn toolbar_pin_renders_hollow_then_filled_left_of_save() {
     let pin = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Pin,
-        false,
+        PromptMode::Editor,
     )
     .expect("pin visible");
     let save = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Save,
-        false,
+        PromptMode::Editor,
     )
     .expect("save visible");
     assert_eq!(pin.y, bar.y, "钉住按钮在功能按钮行");
@@ -818,7 +818,7 @@ fn toolbar_folders_button_renders_left_of_pin_and_hides_in_tree() {
     let folders = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Folders,
-        false,
+        PromptMode::Editor,
     )
     .expect("folders visible");
     let mut buf = Buffer::empty(panel);
@@ -850,7 +850,7 @@ fn toolbar_folders_button_renders_left_of_pin_and_hides_in_tree() {
     let tree_folders = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Folders,
-        true,
+        PromptMode::Tree,
     );
     assert!(tree_folders.is_none());
 }
@@ -1645,7 +1645,7 @@ fn pin_label_fills_its_three_column_slot() {
     let pin = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Pin,
-        false,
+        PromptMode::Editor,
     )
     .expect("pin visible");
     assert_eq!(pin.width, 3, "单字图标恒占 3 列");
@@ -1675,13 +1675,13 @@ fn toolbar_select_all_renders_right_of_redo() {
     let redo = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Redo,
-        false,
+        PromptMode::Editor,
     )
     .expect("redo visible");
     let select_all = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::SelectAll,
-        false,
+        PromptMode::Editor,
     )
     .expect("select all visible");
     assert_eq!(select_all.x, redo.right() + 1);

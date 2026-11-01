@@ -1619,6 +1619,17 @@ fn cycle_status_cycles_from_anywhere_in_page_when_template_present() {
 }
 
 #[test]
+fn cycle_status_returns_false_for_unclosed_template_block() {
+    let mut editor = prompt(40, 8);
+    editor.set_text("&&& addTemplate --start\n{title: T}\n    body");
+    assert!(
+        !editor.cycle_template_status(),
+        "未闭合 &&& 无合法 --end，返回 false 交给反缩进"
+    );
+    assert!(!editor.text().contains("--end"));
+}
+
+#[test]
 fn clean_template_block_removes_empty_items_and_undoes_once() {
     let mut prompt = prompt(60, 20);
     with_add_template(&mut prompt);

@@ -388,6 +388,7 @@ pub(crate) fn handle_mouse_down_left(
     {
         // 标题行的状态标签是控件：循环本页模板块状态，不移动正文光标。
         update::focus_prompt(state);
+        update::clear_selection(state);
         update::cycle_page_template_status(state);
         *dirty = true;
     } else if let Some(control) = (!state.prompt_collapsed)

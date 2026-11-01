@@ -94,12 +94,6 @@ pub enum Effect {
         id: i64,
         name: String,
     },
-    /// 重命名一页。
-    RenamePage {
-        workspace: PathBuf,
-        page_id: i64,
-        name: String,
-    },
     /// 删除一页（最后一页不可删除由应用层阻止）。
     DeletePage {
         workspace: PathBuf,

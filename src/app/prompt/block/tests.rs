@@ -168,6 +168,31 @@ fn single_undo_restores_command_line_and_removes_appended_block() {
 }
 
 #[test]
+fn unclosed_block_hides_supplement_command_and_skips_append() {
+    let mut p = prompt_with(60, 20, "&&& addTemplate --start\n{title: T}\nbody");
+    p.set_cursor_offset(p.text().len());
+    p.insert_char('\n');
+    for ch in "/supplement".chars() {
+        p.insert_char(ch);
+    }
+    assert!(p.slash_panel().is_none(), "未闭合块下不提供 /supplement");
+    assert!(!p.slash_confirm(), "无候选可确认");
+
+    // 即使绕过面板直接追加也不插入：落点会落在未闭合块内部（命令行按触发语义删除）。
+    let cursor = p.cursor();
+    let trigger = markdown::SlashTrigger {
+        line_start: cursor - "/supplement".len(),
+        line_end: cursor,
+        cursor,
+        query: "supplement".to_string(),
+    };
+    let (content, cursor_in_block) = markdown::supple_block_content("supplement", None, "");
+    p.append_supple_block(&trigger, &content, cursor_in_block);
+    assert_eq!(p.text(), "&&& addTemplate --start\n{title: T}\nbody");
+    assert!(!p.text().contains("+++"), "未闭合块下不得追加补充块");
+}
+
+#[test]
 fn supplement_scrolls_viewport_so_new_block_start_line_is_visible() {
     let mut lines = vec![
         "&&& addTemplate --start".to_string(),

@@ -640,6 +640,7 @@ fn outside_context() -> SlashContext {
         context: BlockContext::Normal,
         worktree_available: false,
         template_present: false,
+        unclosed_block: false,
     }
 }
 
@@ -729,6 +730,7 @@ fn slash_filter_scopes_custom_commands_by_block_context() {
             context: BlockContext::Normal,
             worktree_available: false,
             template_present: true,
+            unclosed_block: false,
         },
         "",
     );
@@ -754,6 +756,7 @@ fn slash_filter_scopes_custom_commands_by_block_context() {
             context: BlockContext::Template,
             worktree_available: false,
             template_present: true,
+            unclosed_block: false,
         },
         "",
     );
@@ -768,6 +771,32 @@ fn slash_filter_scopes_custom_commands_by_block_context() {
 }
 
 #[test]
+fn slash_filter_hides_supple_commands_when_unclosed_block_present() {
+    let names = slash_filter(
+        &custom_items(),
+        SlashContext {
+            context: BlockContext::Normal,
+            worktree_available: false,
+            template_present: true,
+            unclosed_block: true,
+        },
+        "",
+    )
+    .into_iter()
+    .map(|item| item.name)
+    .collect::<Vec<_>>();
+    assert!(
+        !names.contains(&"supplement".to_string()),
+        "未闭合块下隐藏内置 /supplement: {names:?}"
+    );
+    assert!(
+        !names.contains(&"extra".to_string()),
+        "未闭合块下隐藏自定义 SuppleBlock: {names:?}"
+    );
+    assert!(names.contains(&"lint".to_string()), "{names:?}");
+}
+
+#[test]
 fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
     let inside = slash_filter(
         &[],
@@ -775,6 +804,7 @@ fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
             context: BlockContext::Template,
             worktree_available: true,
             template_present: true,
+            unclosed_block: false,
         },
         "work",
     );
@@ -786,6 +816,7 @@ fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
             context: BlockContext::Template,
             worktree_available: false,
             template_present: true,
+            unclosed_block: false,
         },
         "work",
     );
@@ -796,6 +827,7 @@ fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
             context: BlockContext::Normal,
             worktree_available: true,
             template_present: false,
+            unclosed_block: false,
         },
         "work",
     );
@@ -1364,6 +1396,7 @@ fn filter_names_in(ctx: BlockContext, query: &str) -> Vec<String> {
             context: ctx,
             worktree_available: false,
             template_present: false,
+            unclosed_block: false,
         },
         query,
     )
@@ -1447,6 +1480,7 @@ fn slash_filter_offers_worktree_and_supplement_in_supple_context() {
             context: BlockContext::Supple,
             worktree_available: true,
             template_present: false,
+            unclosed_block: false,
         },
         "",
     );

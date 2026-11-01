@@ -753,43 +753,8 @@ pub fn open_prompt_rename(state: &mut AppState, target: RenameTarget) {
     }));
 }
 
-/// 提交提示词树或页重命名；空名拒绝（浮层保持打开）。
+/// 提交提示词树重命名；空名拒绝（浮层保持打开）。
 pub fn commit_prompt_rename(state: &mut AppState, target: RenameTarget, name: String) {
-    if let RenameTarget::PromptPage {
-        workspace,
-        owner,
-        page,
-    } = target
-    {
-        let renamed = state
-            .workspaces
-            .get_mut(workspace)
-            .is_some_and(|ws| match owner {
-                PromptEditing::Item(id) => ws
-                    .prompt_panel
-                    .tree
-                    .item_mut(id)
-                    .and_then(|item| item.page_mut(page))
-                    .map(|target_page| target_page.name.clone_from(&name))
-                    .is_some(),
-                PromptEditing::Temp(id) => ws
-                    .prompt_panel
-                    .temp_mut(id)
-                    .and_then(|temp| temp.page_mut(page))
-                    .map(|target_page| target_page.name.clone_from(&name))
-                    .is_some(),
-            });
-        if renamed
-            && let (Some(page_id), Some(cwd)) = (page.saved(), workspace_cwd(state, workspace))
-        {
-            state.effects.push(Effect::RenamePage {
-                workspace: cwd,
-                page_id,
-                name,
-            });
-        }
-        return;
-    }
     let workspace = state.prompt_workspace();
     let Some(cwd) = displayed_workspace_cwd(state) else {
         return;
