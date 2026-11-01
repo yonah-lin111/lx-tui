@@ -25,7 +25,7 @@ use crate::platform::EnvironmentFacts;
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
-pub const PROMPT_VERSION: &str = "lx-7";
+pub const PROMPT_VERSION: &str = "lx-8";
 
 /// 环境快照单字段最大字符数（转义前）。
 const MAX_FIELD_CHARS: usize = 240;
@@ -120,10 +120,10 @@ Seven tools let you coordinate subagents: `spawn_agent`, `send_input`, `resume_a
 Each subagent starts with a clean context. It sees only its role prompt, the environment
 snapshot, and the task or ordered `items` you send — not this conversation.
 
-- `explorer` — read-only investigation. It has `read` and `search` and nothing else. Use it
-  for specific questions about the codebase: where a flow lives, who calls something, how a
-  module is wired.
-- `executor` — implementation with a boundary. It has the file and process tools, no `ask`,
+- `explorer` — read-only investigation. It has `read`, `search`, and `web_search`. Use it for
+  specific questions about the codebase or the public internet: where a flow lives, who calls
+  something, how a module is wired.
+- `executor` — implementation with a boundary. It has the file, process, and web tools, no `ask`,
   no plan tool, and no ability to spawn agents. Use it for one well-defined change or fix.
 
 Delegate when the work is independent, has a clear boundary, and would otherwise fill your
@@ -164,7 +164,7 @@ Rules:
 
 # Tools
 
-You can call these tools: `read`, `search`, `edit`, `write`, `exec_command`, `write_stdin`, `update_plan`, `ask`, `curr_time`, `spawn_agent`, `send_input`, `resume_agent`, `wait_agent`, `close_agent`, `list_agents`, and `cancel_agent_input`.
+You can call these tools: `read`, `search`, `web_search`, `edit`, `write`, `exec_command`, `write_stdin`, `update_plan`, `ask`, `curr_time`, `spawn_agent`, `send_input`, `resume_agent`, `wait_agent`, `close_agent`, `list_agents`, and `cancel_agent_input`.
 - Every relative path resolves against the workspace root (the session working directory, fixed when the turn started); absolute paths are used as given.
 - `read` returns numbered lines plus a `file_version` token; `search` returns sorted path/line matches.
 - `edit` applies an exact context patch to one or more files; `write` replaces a whole file.
@@ -172,6 +172,13 @@ You can call these tools: `read`, `search`, `edit`, `write`, `exec_command`, `wr
 - A non-zero exit code means the command ran and failed: report it, do not pretend it succeeded.
 - `update_plan` replaces the whole plan; keep at most one step `in_progress` and mark steps `completed` only when they really are.
 - `curr_time` returns the real-time UTC clock (`YYYY-MM-DD HH:MM:SS UTC`).
+
+## Web search (`web_search`)
+
+- Use `web_search` for anything that may have changed or is not in the workspace: news, releases, library/API docs, prices, schedules, or facts you are not fully certain about. Obey explicit search requests.
+- Batch related lookups with `queries` (up to 4 per call) instead of sequential calls.
+- Cite every web-backed claim inline as `[descriptive source title](https://...)` right after the sentence it supports. No bare URLs, no links to search pages, no citation list at the end.
+- Keep quotes under 25 words per source and paraphrase the rest.
 
 ## Shell commands
 
@@ -538,12 +545,29 @@ mod tests {
                 "提示缺少 ask 规则 `{needle}`"
             );
         }
-        assert_eq!(PROMPT_VERSION, "lx-7");
+        assert_eq!(PROMPT_VERSION, "lx-8");
         assert!(
             LX_SYSTEM_PROMPT.contains("You can call these tools:")
                 && LX_SYSTEM_PROMPT.contains("`ask`"),
             "工具清单必须含 ask"
         );
+    }
+
+    /// 联网搜索的决策边界与内联引用规范必须写进提示。
+    #[test]
+    fn prompt_documents_web_search_citations() {
+        for needle in [
+            "## Web search (`web_search`)",
+            "`queries`",
+            "[descriptive source title](https://...)",
+            "No bare URLs",
+            "under 25 words",
+        ] {
+            assert!(
+                LX_SYSTEM_PROMPT.contains(needle),
+                "提示缺少 web_search 规则 `{needle}`"
+            );
+        }
     }
 
     /// 防御性规则必须写进提示：先读后改、最小修改、结果真实、错误不可伪造、验证命令、
@@ -603,6 +627,7 @@ mod tests {
             "## Ambition vs. precision",
             "## Presenting your work and final message",
             "# Tools",
+            "## Web search (`web_search`)",
             "# Workspace and platform",
         ] {
             assert!(

@@ -304,6 +304,92 @@ fn result_json_covers_every_variant() {
     assert_eq!(value["changes"], serde_json::json!([]));
 }
 
+/// 联网搜索结果：正文原样进模型文本，摘要只带首个查询词与查询条数，落库键名稳定。
+#[test]
+fn web_search_text_summary_and_json() {
+    use crate::chat::tools::web_search::{
+        QuerySearchOutcome, SearchDepth, WebSearchProvider, WebSearchToolResult,
+    };
+
+    let result = ToolExecutionResult::WebSearch(Box::new(WebSearchToolResult {
+        queries: vec!["first".into(), "second".into()],
+        num_results: 4,
+        search_type: SearchDepth::Deep,
+        provider: WebSearchProvider::Tavily,
+        outcomes: vec![
+            QuerySearchOutcome {
+                query: "first".into(),
+                provider: Some(WebSearchProvider::Tavily),
+                output: "first body".into(),
+                error: None,
+            },
+            QuerySearchOutcome {
+                query: "second".into(),
+                provider: None,
+                output: String::new(),
+                error: Some("boom".into()),
+            },
+        ],
+        text: "### 1. \"first\"\nfirst body\n\n### 2. \"second\"\n[Search failed: boom]".into(),
+        truncated: false,
+        duration_ms: 840,
+    }));
+
+    assert_eq!(
+        format_for_model(&result),
+        "### 1. \"first\"\nfirst body\n\n### 2. \"second\"\n[Search failed: boom]"
+    );
+
+    let summary = to_summary(&result);
+    assert_eq!(summary.path.as_deref(), Some("first"));
+    assert_eq!(summary.matches, Some(2));
+    assert!(!summary.truncated);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&to_result_json(&result).expect("json")).expect("parse");
+    assert_eq!(value["tool"], "web_search");
+    assert_eq!(value["queries"], serde_json::json!(["first", "second"]));
+    assert_eq!(value["num_results"], 4);
+    assert_eq!(value["search_type"], "deep");
+    assert_eq!(value["provider"], "tavily");
+    assert_eq!(value["truncated"], false);
+    assert_eq!(value["duration_ms"], 840);
+    assert!(
+        value["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("first body")
+    );
+}
+
+/// 超大搜索结果：只裁 `text` 正文，查询与提供商元数据保留，并标记截断。
+#[test]
+fn oversized_web_search_json_shrinks_text_only() {
+    use crate::chat::tools::web_search::{SearchDepth, WebSearchProvider, WebSearchToolResult};
+
+    let result = ToolExecutionResult::WebSearch(Box::new(WebSearchToolResult {
+        queries: vec!["huge".into()],
+        num_results: 8,
+        search_type: SearchDepth::Auto,
+        provider: WebSearchProvider::Exa,
+        outcomes: Vec::new(),
+        text: "x".repeat(super::MAX_TOOL_RESULT_BYTES + 1024),
+        truncated: true,
+        duration_ms: 1200,
+    }));
+
+    let json = to_result_json(&result).expect("json");
+    assert!(
+        json.len() <= super::MAX_TOOL_RESULT_BYTES,
+        "json: {}",
+        json.len()
+    );
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    assert_eq!(value["truncated"], true);
+    assert_eq!(value["provider"], "exa");
+    assert_eq!(value["queries"], serde_json::json!(["huge"]));
+}
+
 /// 超大 read 结果的 JSON 被截断并显式标记 `truncated: true`。
 #[test]
 fn oversized_result_json_is_truncated_with_flag() {

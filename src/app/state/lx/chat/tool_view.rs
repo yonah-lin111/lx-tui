@@ -305,10 +305,12 @@ impl AskDetailView {
 }
 
 mod mcp;
+mod web_search;
 pub use mcp::{McpDetailView, McpImageView};
+pub use web_search::WebSearchDetailView;
 
 /// 工具详情视图：进程/计划/提问走各自快照，文件工具走**已解码的差异**，
-/// `search` 走可复制的命中行。
+/// `search` 走可复制的命中行，`web_search` 走查询词与结果窗口。
 ///
 /// 文件分支与摘要并存：摘要回答"哪个文件、多少行"，详情回答"哪几行变成什么"；
 /// `search` 的摘要回答搜了什么/命中多少，详情回答具体命中行。
@@ -322,6 +324,7 @@ pub enum ToolDetailView {
     Subagent(SubagentDetailView),
     Search(SearchDetailView),
     Mcp(McpDetailView),
+    WebSearch(WebSearchDetailView),
 }
 
 /// `search` 的单条命中：文件、1-based 行号与命中行文本。
@@ -706,10 +709,13 @@ impl ToolDetailView {
         }
     }
 
-    /// 工具结果 + 调用参数（MCP 卡片需要两者；其余工具只看结果体）。
+    /// 工具结果 + 调用参数（MCP 与联网搜索卡片需要两者；其余工具只看结果体）。
     pub fn from_tool(result_json: Option<&str>, arguments_json: &str) -> Option<Self> {
         McpDetailView::from_parts(result_json, arguments_json)
             .map(Self::Mcp)
+            .or_else(|| {
+                WebSearchDetailView::from_parts(result_json, arguments_json).map(Self::WebSearch)
+            })
             .or_else(|| Self::from_result_json(result_json))
     }
 
@@ -807,6 +813,10 @@ impl ToolDetailView {
                 SubagentDetailView::from_outcome_value(&value)?,
             )),
             "search" => Some(Self::Search(SearchDetailView::from_value(&value)?)),
+            "web_search" => Some(Self::WebSearch(WebSearchDetailView::from_parts(
+                Some(result_json?),
+                "{}",
+            )?)),
             _ => None,
         }
     }

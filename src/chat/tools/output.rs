@@ -82,6 +82,8 @@ pub fn format_for_model(result: &ToolExecutionResult) -> String {
             }
             text
         }
+        // 联网搜索：组合文本已在执行层按查询分段生成，正文原样回放。
+        ToolExecutionResult::WebSearch(result) => result.text.clone(),
         ToolExecutionResult::CurrentTime { current_time } => {
             format!("current_time: {current_time}\n")
         }
@@ -560,6 +562,13 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
             truncated: result.truncated,
             ..ToolSummary::default()
         },
+        // 联网搜索：摘要只带首个查询词与查询条数，正文不进摘要。
+        ToolExecutionResult::WebSearch(result) => ToolSummary {
+            path: result.queries.first().cloned(),
+            matches: Some(result.queries.len()),
+            truncated: result.truncated,
+            ..ToolSummary::default()
+        },
         ToolExecutionResult::CurrentTime { current_time } => ToolSummary {
             path: Some(current_time.clone()),
             ..ToolSummary::default()
@@ -686,6 +695,16 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
                 }))
                 .collect::<Vec<_>>(),
         }),
+        ToolExecutionResult::WebSearch(result) => json!({
+            "tool": "web_search",
+            "queries": result.queries,
+            "num_results": result.num_results,
+            "search_type": result.search_type.as_str(),
+            "provider": result.provider.as_str(),
+            "text": result.text,
+            "truncated": result.truncated,
+            "duration_ms": result.duration_ms,
+        }),
     };
     let text = serde_json::to_string(&value).ok()?;
     if text.len() <= MAX_TOOL_RESULT_BYTES {
@@ -718,6 +737,10 @@ fn shrink_json_text(mut value: Value) -> Option<String> {
         // 进程结果：正文在 `output` 字段，同样只截断正文、保留区间与状态。
         if let Some(Value::String(output)) = object.get_mut("output") {
             *output = truncate_chars(output, budget);
+        }
+        // 联网搜索：正文在 `text` 字段，保留查询与提供商元数据。
+        if let Some(Value::String(text)) = object.get_mut("text") {
+            *text = truncate_chars(text, budget);
         }
         if let Some(Value::Array(matches)) = object.get_mut("matches") {
             let mut used = 0usize;

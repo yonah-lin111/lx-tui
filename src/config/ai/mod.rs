@@ -1,7 +1,7 @@
 //! 模型配置（`config/ai.json`）：类型、校验、原子保存与 lx-agent 一次性导入。
 //!
 //! 与 `settings.json`（布局整数）完全分离；模型配置是 `ai` 节点下的
-//! providers/enabled_providers/defaultModel/streamIdleTimeoutMs。
+//! providers/enabled_providers/defaultModel/streamIdleTimeoutMs/webSearch。
 //! 解析用 `serde`/`serde_json`；未知字段往返保留，已知字段严格校验。
 //! API Key 只在内存与权限受控文件中保存，永不进入日志与 Web 响应。
 
@@ -18,6 +18,52 @@ use super::{ConfigError, user_data_root};
 /// 60s 对大上下文预填充和慢供应商太短：最新子 agent session 里就有一次
 /// 685k input tokens 的预填充被 60s 空闲超时直接杀掉（`error_code=timeout`）。
 pub const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
+
+/// 默认内置的 Exa API Key（复制自 lx-agent `ai.webSearch.exaApiKey`）。
+pub const DEFAULT_EXA_API_KEY: &str = "515df894-bc88-4bee-a2ff-f20451c63516";
+
+/// 默认内置的 Tavily API Key（复制自 lx-agent `ai.webSearch.tavilyApiKey`）。
+pub const DEFAULT_TAVILY_API_KEY: &str =
+    "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";
+
+fn default_exa_api_key() -> String {
+    DEFAULT_EXA_API_KEY.to_string()
+}
+
+fn default_tavily_api_key() -> String {
+    DEFAULT_TAVILY_API_KEY.to_string()
+}
+
+/// 联网搜索配置（对应 `config/ai.json` 的 `ai.webSearch` 节点，与 lx-agent 同构）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSearchConfig {
+    /// Exa MCP API Key；允许为空字符串（表示用户显式清空，仅走匿名直连或回退 Tavily）。
+    #[serde(default = "default_exa_api_key")]
+    pub exa_api_key: String,
+    /// Tavily Search API Key；允许为空字符串。
+    #[serde(default = "default_tavily_api_key")]
+    pub tavily_api_key: String,
+}
+
+impl Default for WebSearchConfig {
+    fn default() -> Self {
+        Self {
+            exa_api_key: default_exa_api_key(),
+            tavily_api_key: default_tavily_api_key(),
+        }
+    }
+}
+
+impl WebSearchConfig {
+    /// 归一化（去除首尾空白）。
+    pub fn normalized(&self) -> Self {
+        Self {
+            exa_api_key: self.exa_api_key.trim().to_string(),
+            tavily_api_key: self.tavily_api_key.trim().to_string(),
+        }
+    }
+}
 
 /// 供应商传输协议。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +241,9 @@ pub struct AiSettings {
         skip_serializing_if = "Option::is_none"
     )]
     pub stream_idle_timeout_ms: Option<u64>,
+    /// 联网搜索 API Key 配置（`ai.webSearch`）。
+    #[serde(default, rename = "webSearch")]
+    pub web_search: WebSearchConfig,
     /// 未知字段往返保留（如 lx-agent 的 titleSummary 等，导入时丢弃、
     /// 本项目保存时不回写这些字段）。
     #[serde(flatten)]
@@ -209,6 +258,7 @@ impl AiSettings {
             providers: BTreeMap::new(),
             default_model: None,
             stream_idle_timeout_ms: None,
+            web_search: WebSearchConfig::default(),
             extra: serde_json::Map::new(),
         }
     }

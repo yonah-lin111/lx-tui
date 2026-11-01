@@ -17,9 +17,9 @@ mod tests;
 /// 内置子 agent 角色。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentRole {
-    /// 只读调查：`read` / `search`。
+    /// 只读调查：`read` / `search` / `web_search`。
     Explorer,
-    /// 有边界的实现：文件与进程工具，无 `ask`、无计划槽、无递归。
+    /// 有边界的实现：文件、进程与联网检索工具，无 `ask`、无计划槽、无递归。
     Executor,
 }
 
@@ -61,7 +61,7 @@ impl AgentRole {
 /// 工具面：决定一次请求声明哪些工具。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSurface {
-    /// 主 agent：现有 8 项 + 3 个控制工具。
+    /// 主 agent：现有内置工具 + 7 个控制工具。
     Main,
     /// 只读调查。
     Explorer,
@@ -70,9 +70,10 @@ pub enum ToolSurface {
 }
 
 /// 主 agent 工具名（顺序即呈现顺序）。
-const MAIN_TOOLS: [&str; 16] = [
+const MAIN_TOOLS: [&str; 17] = [
     "read",
     "search",
+    "web_search",
     "edit",
     "write",
     "exec_command",
@@ -90,12 +91,13 @@ const MAIN_TOOLS: [&str; 16] = [
 ];
 
 /// explorer 工具名。
-const EXPLORER_TOOLS: [&str; 2] = ["read", "search"];
+const EXPLORER_TOOLS: [&str; 3] = ["read", "search", "web_search"];
 
 /// executor 工具名。
-const EXECUTOR_TOOLS: [&str; 6] = [
+const EXECUTOR_TOOLS: [&str; 7] = [
     "read",
     "search",
+    "web_search",
     "edit",
     "write",
     "exec_command",
@@ -735,11 +737,12 @@ pub fn compose_subagent_prompt(
 pub const EXPLORER_PROMPT: &str = r#"You are an explorer: a read-only investigator working inside the user's workspace.
 
 You answer one specific question about the codebase or inspect images attached to your task.
-You have `read`, `search`, and any MCP tools listed for this turn — you cannot modify files, run
-commands, or spawn agents. MCP tools may have side effects: as an explorer, only call MCP tools
-that read data; never create, update or delete anything through them. Any image passed in your
-user message is already attached directly to this conversation: inspect and describe it directly
-from the message without calling `read`.
+You have `read`, `search`, `web_search`, and any MCP tools listed for this turn — you cannot modify
+files, run commands, or spawn agents. `web_search` reaches the public internet; when your answer
+relies on an external source, cite it inline as `[title](url)`. MCP tools may have side effects: as
+an explorer, only call MCP tools that read data; never create, update or delete anything through
+them. Any image passed in your user message is already attached directly to this conversation:
+inspect and describe it directly from the message without calling `read`.
 
 # How you work
 
@@ -779,6 +782,8 @@ it and work with the current content.
 
 - Read before you change: `edit` and `write` reject a file you have not read in this session or
   that changed on disk after the read.
+- When an external library or API contract decides the fix, call `web_search` to verify it instead
+  of guessing, and cite the source inline as `[title](url)`.
 - Prefer the smallest exact `edit` over rewriting a file. Do not refactor, rename, or reformat
   anything the task did not ask for.
 - Fix the root cause instead of the symptom.

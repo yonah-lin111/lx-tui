@@ -559,6 +559,198 @@ async fn state_returns_config_defaults() {
 }
 
 #[tokio::test]
+async fn web_search_settings_page_exposes_fields_and_script() {
+    let (service, _events, _dir) = start("web-search-page").await;
+    let port = service.port();
+    let token = service.token().to_string();
+
+    let html = body(&request(port, &get(&format!("/?token={token}"))).await).to_string();
+    for entry in [
+        "Web Search",
+        "id=\"web_search_exa_api_key\"",
+        "id=\"web_search_tavily_api_key\"",
+        "id=\"exa-key-reveal\"",
+        "id=\"tavily-key-reveal\"",
+    ] {
+        assert!(html.contains(entry), "web search field: {entry}");
+    }
+    // 与 Models 视图的 Key 输入框同构：密码框 + 小眼睛按钮。
+    let key_inputs = html
+        .split("id=\"web_search_exa_api_key\"")
+        .nth(1)
+        .expect("exa input present");
+    assert!(
+        key_inputs.starts_with(" type=\"password\""),
+        "exa key masked by default"
+    );
+
+    let js = body(&request(port, &get("/settings.js")).await).to_string();
+    assert!(js.contains("WEB_SEARCH_KEYS"), "web search keys wired");
+    assert!(
+        js.contains("bindPasswordReveal") && js.contains("exa-key-reveal"),
+        "reveal handlers wired"
+    );
+    assert!(
+        js.contains("exa_api_key") && js.contains("tavily_api_key"),
+        "payload fields wired"
+    );
+    assert!(js.contains("web_search"), "save payload wired");
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn web_search_state_and_config_round_trip_preserves_models() {
+    let (service, mut events, _dir) = start("web-search-api").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let origin = Some(format!("http://127.0.0.1:{port}"));
+    let url = format!("/api/config?token={token}");
+
+    // 无 ai.json 时 GET /api/state 返回内置默认 Key。
+    let state = body(&request(port, &get(&format!("/api/state?token={token}"))).await).to_string();
+    assert!(
+        state.contains(&format!(
+            "\"exa_api_key\":\"{}\"",
+            crate::config::ai::DEFAULT_EXA_API_KEY
+        )),
+        "{state}"
+    );
+    assert!(
+        state.contains(&format!(
+            "\"tavily_api_key\":\"{}\"",
+            crate::config::ai::DEFAULT_TAVILY_API_KEY
+        )),
+        "{state}"
+    );
+
+    // 预置一份含 provider 的模型配置，模拟用户已有模型设置。
+    let root = service.user_root_for_tests();
+    let ai_path = root.join("config").join("ai.json");
+    std::fs::create_dir_all(ai_path.parent().expect("config dir")).expect("config dir");
+    std::fs::write(
+        &ai_path,
+        r#"{"ai":{"enabled_providers":["edge"],"defaultModel":{"provider":"edge","model":"edge-chat"},"providers":{"edge":{"id":"edge","type":"openai-compatible","name":"Edge","options":{"apiKey":"keep-me","baseURL":"https://api.edge.invalid/v1"},"models":{"edge-chat":{"id":"edge-chat","name":"Edge Chat"}}}}}}"#,
+    )
+    .expect("seed ai.json");
+
+    // PUT 同时带 config 与 web_search：Key 做 trim 后落盘。
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &url,
+            "{\"config\":{\"sidebar_width\":30},\"web_search\":{\"exa_api_key\":\"  new-exa  \",\"tavily_api_key\":\"new-tavily\"}}",
+            origin.as_deref(),
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{saved}");
+    match events.try_recv() {
+        Ok(SettingsEvent::ConfigChanged(config)) => assert_eq!(config.sidebar_width, 30),
+        other => panic!("expected ConfigChanged, got {other:?}"),
+    }
+    match events.try_recv() {
+        Ok(SettingsEvent::ModelsChanged(ai)) => {
+            assert_eq!(ai.web_search.exa_api_key, "new-exa");
+            assert_eq!(ai.web_search.tavily_api_key, "new-tavily");
+            assert!(ai.providers.contains_key("edge"), "providers preserved");
+        }
+        other => panic!("expected ModelsChanged, got {other:?}"),
+    }
+    let text = std::fs::read_to_string(&ai_path).expect("read ai.json");
+    assert!(text.contains("\"webSearch\""), "{text}");
+    assert!(text.contains("\"exaApiKey\": \"new-exa\""), "{text}");
+    assert!(text.contains("\"tavilyApiKey\": \"new-tavily\""), "{text}");
+    // 既有模型配置不能被 General 页的保存覆盖。
+    assert!(text.contains("keep-me"), "{text}");
+    assert!(text.contains("edge-chat"), "{text}");
+    assert!(text.contains("\"enabled_providers\": ["), "{text}");
+
+    // 只带其中一个 Key：另一个保持磁盘上的当前值。
+    let partial = request(
+        port,
+        &write(
+            "PUT",
+            &url,
+            "{\"config\":{\"sidebar_width\":30},\"web_search\":{\"exa_api_key\":\"exa-only\"}}",
+            origin.as_deref(),
+        ),
+    )
+    .await;
+    assert_eq!(status(&partial), 200, "{partial}");
+    match events.try_recv() {
+        Ok(SettingsEvent::ConfigChanged(config)) => assert_eq!(config.sidebar_width, 30),
+        other => panic!("expected ConfigChanged, got {other:?}"),
+    }
+    match events.try_recv() {
+        Ok(SettingsEvent::ModelsChanged(ai)) => {
+            assert_eq!(ai.web_search.exa_api_key, "exa-only");
+            assert_eq!(
+                ai.web_search.tavily_api_key, "new-tavily",
+                "缺失字段保持当前值"
+            );
+        }
+        other => panic!("expected ModelsChanged, got {other:?}"),
+    }
+    let text = std::fs::read_to_string(&ai_path).expect("re-read after partial");
+    assert!(text.contains("\"tavilyApiKey\": \"new-tavily\""), "{text}");
+
+    // 不带 web_search 的旧请求仍然可用，且不改动 ai.json。
+    let config_only = request(
+        port,
+        &write(
+            "PUT",
+            &url,
+            "{\"config\":{\"sidebar_width\":26}}",
+            origin.as_deref(),
+        ),
+    )
+    .await;
+    assert_eq!(status(&config_only), 200, "{config_only}");
+    match events.try_recv() {
+        Ok(SettingsEvent::ConfigChanged(config)) => assert_eq!(config.sidebar_width, 26),
+        other => panic!("expected ConfigChanged, got {other:?}"),
+    }
+    assert!(
+        events.try_recv().is_err(),
+        "no ModelsChanged without web_search"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&ai_path).expect("re-read"),
+        text,
+        "config-only save leaves ai.json untouched"
+    );
+
+    // 显式清空 Key：空字符串原样保留，不回落到默认值。
+    let cleared = request(
+        port,
+        &write(
+            "PUT",
+            &url,
+            "{\"config\":{\"sidebar_width\":26},\"web_search\":{\"exa_api_key\":\"\",\"tavily_api_key\":\"\"}}",
+            origin.as_deref(),
+        ),
+    )
+    .await;
+    assert_eq!(status(&cleared), 200, "{cleared}");
+    match events.try_recv() {
+        Ok(SettingsEvent::ConfigChanged(_)) => {}
+        other => panic!("expected ConfigChanged, got {other:?}"),
+    }
+    match events.try_recv() {
+        Ok(SettingsEvent::ModelsChanged(ai)) => {
+            assert_eq!(ai.web_search.exa_api_key, "");
+            assert_eq!(ai.web_search.tavily_api_key, "");
+        }
+        other => panic!("expected ModelsChanged, got {other:?}"),
+    }
+    let state = body(&request(port, &get(&format!("/api/state?token={token}"))).await).to_string();
+    assert!(state.contains("\"exa_api_key\":\"\""), "{state}");
+    assert!(state.contains("\"tavily_api_key\":\"\""), "{state}");
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn config_save_validates_origin_and_values() {
     let (service, mut events, dir) = start("config").await;
     let port = service.port();

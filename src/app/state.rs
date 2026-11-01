@@ -36,7 +36,7 @@ pub use lx::{
     RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand, SlashEntry,
     SlashPanel, SnapshotState, StartupCount, StartupCounts, SubagentDetailView, SubagentReportView,
     SubagentRun, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary,
-    UserShellView,
+    UserShellView, WebSearchDetailView,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};

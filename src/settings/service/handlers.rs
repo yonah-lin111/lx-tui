@@ -293,17 +293,50 @@ fn origin_ok(request: &Request, _state: &ServiceState) -> bool {
 fn state_json(state: &ServiceState) -> Response {
     let config = crate::config::load_or_default(state.config_path()).unwrap_or_default();
     let commands = state.commands();
+    // 页面需要能展示当前 Key；读取失败时退回默认 Key，不让整个设置页失效。
+    let web_search = load_ai_settings(state)
+        .map(|settings| settings.web_search)
+        .unwrap_or_default();
     Response::json(
         200,
         format!(
-            "{{\"config\":{},\"commands\":[{}],\"project_available\":false}}",
+            "{{\"config\":{},\"web_search\":{},\"commands\":[{}],\"project_available\":false}}",
             config_json(&config),
+            web_search_json(&web_search),
             commands
                 .iter()
                 .map(command_view_json)
                 .collect::<Vec<_>>()
                 .join(",")
         ),
+    )
+}
+
+/// 模型配置文件（`config/ai.json`）路径；与 `models` 的路由解析保持一致。
+fn ai_path(state: &ServiceState) -> std::path::PathBuf {
+    state
+        .user_root()
+        .map(|root| root.join("config").join("ai.json"))
+        .unwrap_or_else(|| {
+            crate::config::ai::ai_config_path()
+                .unwrap_or_else(|_| std::path::PathBuf::from("config/ai.json"))
+        })
+}
+
+/// 读取磁盘上的 `AiSettings`；文件缺失时回落为空配置的结构（默认 Key 仍在）。
+fn load_ai_settings(
+    state: &ServiceState,
+) -> Result<crate::config::ai::AiSettings, crate::config::ai::AiConfigError> {
+    Ok(crate::config::ai::load_ai(&ai_path(state))?
+        .unwrap_or_else(crate::config::ai::AiSettings::empty))
+}
+
+/// 联网搜索配置 → JSON（键序固定，键名 snake_case 对齐页面字段）。
+fn web_search_json(config: &crate::config::ai::WebSearchConfig) -> String {
+    format!(
+        "{{\"exa_api_key\":{},\"tavily_api_key\":{}}}",
+        json_string(&config.exa_api_key),
+        json_string(&config.tavily_api_key),
     )
 }
 
@@ -324,6 +357,9 @@ fn commands_json(state: &ServiceState) -> Response {
 }
 
 /// `PUT /api/config`：校验并原子保存；成功投递事件。
+///
+/// body 可同时携带 `web_search`：此时把两个 Key 合并进 `ai.json`（保留现有
+/// providers / defaultModel 等全部模型配置）并广播 `ModelsChanged`。
 fn put_config(request: &Request, state: &ServiceState) -> Response {
     let Some(config_entries) = json_object_field(&request.body, "config") else {
         return Response::error(422, "body must contain a config object");
@@ -336,7 +372,48 @@ fn put_config(request: &Request, state: &ServiceState) -> Response {
         return Response::error(422, &error.to_string());
     }
     let _ = state.sender().send(SettingsEvent::ConfigChanged(config));
+    if let Some(web_search_entries) = json_object_field(&request.body, "web_search") {
+        // 先完成校验与落盘，失败时不再继续（settings.json 已保存，保持旧行为）。
+        let mut ai = match load_ai_settings(state) {
+            Ok(ai) => ai,
+            Err(error) => return Response::error(422, &error.to_string()),
+        };
+        let web_search = match merge_web_search(&web_search_entries, &ai.web_search) {
+            Ok(web_search) => web_search,
+            Err(message) => return Response::error(422, &message),
+        };
+        ai.web_search = web_search;
+        if let Err(error) = crate::config::ai::save_ai(&ai_path(state), &ai) {
+            let status = match error {
+                crate::config::ai::AiConfigError::Invalid(_) => 422,
+                _ => 500,
+            };
+            return Response::error(status, &error.to_string());
+        }
+        let _ = state
+            .sender()
+            .send(SettingsEvent::ModelsChanged(Box::new(ai)));
+    }
     Response::json(200, "{\"ok\":true}")
+}
+
+/// `web_search` 字段合并：缺失的 Key 沿用当前值，存在的做 trim（空串保留）。
+fn merge_web_search(
+    entries: &[(String, JsonValue)],
+    current: &crate::config::ai::WebSearchConfig,
+) -> Result<crate::config::ai::WebSearchConfig, String> {
+    let mut config = current.normalized();
+    for (key, value) in entries {
+        let slot = match key.as_str() {
+            "exa_api_key" => &mut config.exa_api_key,
+            "tavily_api_key" => &mut config.tavily_api_key,
+            _ => continue,
+        };
+        *slot = value
+            .as_string()
+            .ok_or_else(|| format!("{key} must be a string"))?;
+    }
+    Ok(config.normalized())
 }
 
 /// 解析 8 个已知键；未知键忽略，非法值报错。

@@ -35,6 +35,7 @@ fn tool_surfaces_are_exact() {
         &[
             "read",
             "search",
+            "web_search",
             "edit",
             "write",
             "exec_command",
@@ -51,12 +52,16 @@ fn tool_surfaces_are_exact() {
             "cancel_agent_input",
         ]
     );
-    assert_eq!(ToolSurface::Explorer.names(), &["read", "search"]);
+    assert_eq!(
+        ToolSurface::Explorer.names(),
+        &["read", "search", "web_search"]
+    );
     assert_eq!(
         ToolSurface::Executor.names(),
         &[
             "read",
             "search",
+            "web_search",
             "edit",
             "write",
             "exec_command",

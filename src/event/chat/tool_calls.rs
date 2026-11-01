@@ -374,6 +374,13 @@ pub(crate) fn detail_of(
         ToolExecutionResult::Mcp(result) => Some(crate::app::state::ToolDetailView::Mcp(
             crate::app::state::McpDetailView::from_result(result, arguments_json.unwrap_or("{}")),
         )),
+        // 联网搜索：与落库结果体同源（超限裁切后的正文就是卡片要显示的那份）；
+        // 没有结果体（取消/序列化失败）时回退到调用参数，查询词不丢。
+        ToolExecutionResult::WebSearch(_) => crate::app::state::WebSearchDetailView::from_tool(
+            result_json,
+            arguments_json.unwrap_or("{}"),
+        )
+        .map(crate::app::state::ToolDetailView::WebSearch),
         _ => None,
     }
 }

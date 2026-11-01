@@ -296,6 +296,7 @@ pub fn on_subagent_tool_settled(
                 Some(
                     crate::app::state::ToolDetailView::Mcp(_)
                         | crate::app::state::ToolDetailView::Subagent(_)
+                        | crate::app::state::ToolDetailView::WebSearch(_)
                 )
             ))
         && call.detail.as_deref() != detail.as_ref()

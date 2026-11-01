@@ -17,6 +17,21 @@ pub const RUNNING_TOOLS_LABEL: &str = "Running tools...";
 pub const WAITING_AGENTS_LABEL: &str = "Waiting for agents...";
 /// `/compact` 正在执行时的阶段文案（摘要请求没有流式输出，需要自带进度反馈）。
 pub const COMPACTING_LABEL: &str = "Compacting context...";
+/// 当前 assistant 正在联网搜索、但查询词还没解析出来时的阶段文案。
+pub const SEARCHING_WEB_LABEL: &str = "Searching the web...";
+/// 联网搜索阶段文案的前缀（后面接带引号的查询词）。
+const SEARCHING_WEB_PREFIX: &str = "Searching the web: ";
+
+/// 联网搜索阶段文案：`Searching the web: "query"`。
+///
+/// `extra` 是同一次调用里第一条之外的查询条数（批量检索时让用户知道还有几路在跑）。
+pub fn searching_web_query_label(query: &str, extra: usize) -> String {
+    if extra > 0 {
+        format!("{SEARCHING_WEB_PREFIX}\"{query}\" (+{extra} more)")
+    } else {
+        format!("{SEARCHING_WEB_PREFIX}\"{query}\"")
+    }
+}
 
 /// 计划步骤原文 → 状态栏**单行**文案。
 ///
@@ -233,6 +248,24 @@ mod stats_tests {
             assert_eq!(label, format!("({expected})"), "{ms}ms");
             assert!(!label.contains("ms"), "不得出现毫秒：{label}");
         }
+    }
+}
+
+#[cfg(test)]
+mod web_search_label_tests {
+    use super::*;
+
+    #[test]
+    fn searching_web_label_shows_the_query_and_extra_count() {
+        assert_eq!(SEARCHING_WEB_LABEL, "Searching the web...");
+        assert_eq!(
+            searching_web_query_label("ratatui 0.29", 0),
+            "Searching the web: \"ratatui 0.29\""
+        );
+        assert_eq!(
+            searching_web_query_label("ratatui 0.29", 2),
+            "Searching the web: \"ratatui 0.29\" (+2 more)"
+        );
     }
 }
 

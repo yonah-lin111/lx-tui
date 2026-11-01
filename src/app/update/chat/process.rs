@@ -55,6 +55,7 @@ pub fn settle_tool_detail(
                 Some(
                     crate::app::state::ToolDetailView::Mcp(_)
                         | crate::app::state::ToolDetailView::Subagent(_)
+                        | crate::app::state::ToolDetailView::WebSearch(_)
                 )
             )
         {
@@ -655,6 +656,13 @@ pub fn open_task_for_selected_tool(state: &mut AppState, pane: PaneId) -> bool {
         Some(crate::app::state::ToolDetailView::Search(_))
         | Some(crate::app::state::ToolDetailView::Subagent(_)) => {
             Some(crate::app::state::CardSection::Body)
+        }
+        Some(crate::app::state::ToolDetailView::WebSearch(view)) => {
+            if view.result.is_empty() && call.error.is_none() {
+                Some(crate::app::state::CardSection::Body)
+            } else {
+                Some(crate::app::state::CardSection::Output)
+            }
         }
         _ => None,
     }) {

@@ -638,6 +638,21 @@ fn tool_signature(
                 hash.write_u8(u8::from(hit.line_truncated));
             }
         }
+        Some(ToolDetailView::WebSearch(view)) => {
+            hash.write_u8(9);
+            hash.write_str(&view.search_type);
+            hash.write_usize(view.num_results);
+            hash.write_str(view.provider.as_deref().unwrap_or(""));
+            hash.write_usize(view.result.len());
+            hash.write_str(&view.result.join("\n"));
+            hash.write_usize(view.result_more);
+            hash.write_u64(view.duration_ms.unwrap_or(u64::MAX));
+            hash.write_u8(u8::from(view.truncated));
+            hash.write_usize(view.queries.len());
+            for query in &view.queries {
+                hash.write_str(query);
+            }
+        }
         Some(ToolDetailView::File(view)) => {
             hash.write_u8(4);
             hash.write_usize(view.files.len());
