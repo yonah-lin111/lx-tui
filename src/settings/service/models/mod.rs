@@ -12,16 +12,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::handlers::{Request, Response};
-use super::{ServiceState, SettingsEvent};
-
-/// 模型配置文件（`config/ai.json`）路径。
-fn ai_path(state: &ServiceState) -> std::path::PathBuf {
-    match state.user_root() {
-        Some(root) => root.join("config").join("ai.json"),
-        None => crate::config::ai::ai_config_path()
-            .unwrap_or_else(|_| std::path::PathBuf::from("config/ai.json")),
-    }
-}
+use super::{ServiceState, SettingsEvent, ai_path};
 
 /// `/api/models` 系列入口。
 pub async fn route(request: &Request, state: &ServiceState) -> Response {
@@ -34,9 +25,17 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
 }
 
 /// 计算当前配置的 revision（内容哈希前 16 hex）。
+///
+/// 只覆盖模型相关字段：`webSearch` 等非模型配置不参与乐观锁，否则在 General
+/// 页保存 Key 后，已打开的 Models 页会拿着旧 revision 误报 409。
 fn revision_of(settings: &crate::config::ai::AiSettings) -> String {
-    let value = serde_json::to_string(settings).unwrap_or_default();
-    revision_hash(&value)
+    let value = json!({
+        "defaultModel": &settings.default_model,
+        "enabledProviders": &settings.enabled_providers,
+        "providers": &settings.providers,
+        "streamIdleTimeoutMs": settings.stream_idle_timeout_ms,
+    });
+    revision_hash(&value.to_string())
 }
 
 /// 稳定内容哈希（FNV-1a 64 位，hex 16 位）。

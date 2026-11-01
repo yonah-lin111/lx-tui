@@ -14,6 +14,8 @@ mod skills;
 mod tests;
 #[cfg(test)]
 mod tests_helpers;
+#[cfg(test)]
+mod tests_web_search;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -200,6 +202,18 @@ impl ServiceState {
         self.projects()
             .into_iter()
             .find(|project| project.root == root)
+    }
+}
+
+/// 模型配置文件（`config/ai.json`）路径：测试注入的用户根优先。
+///
+/// `handlers`（General 页保存 Key）与 `models`（模型页读写）共用同一份推导。
+pub(super) fn ai_path(state: &ServiceState) -> PathBuf {
+    match state.user_root() {
+        Some(root) => root.join("config").join("ai.json"),
+        None => {
+            crate::config::ai::ai_config_path().unwrap_or_else(|_| PathBuf::from("config/ai.json"))
+        }
     }
 }
 

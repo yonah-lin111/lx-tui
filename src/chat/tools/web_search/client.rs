@@ -1,13 +1,14 @@
 //! `web_search` 双引擎执行链：Exa MCP 优先、Tavily REST 兜底。
 //!
 //! 单条查询按 `Exa (带 Key) → Exa (匿名) → Tavily` 顺序回退；匿名 Exa 被
-//! `401/403` 拒绝后进程内熔断（配置了非空 Key 即解除）。多条查询并发执行，
+//! `401/403` 拒绝后进程内熔断，只有匿名调用真正成功才解除。多条查询并发执行，
 //! 至少一条成功即算工具成功；收到取消信号立即返回 `Cancelled`。
 //!
-//! 安全约束：端点 URL 可能带 `exaApiKey` 查询参数，任何错误消息与日志都只报
-//! 静态端点标签与 HTTP 状态码，绝不回显完整 URL 或 Key。
+//! 安全约束：端点 URL 可能带 `exaApiKey` 查询参数。错误消息只报静态端点标签、
+//! HTTP 状态码与响应体里脱敏后的简短原因，绝不回显完整 URL 或 Key。
 
 use std::future::Future;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -16,8 +17,8 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use super::{
-    QuerySearchOutcome, SearchDepth, WEB_SEARCH_TIMEOUT_MS, WebSearchProvider, WebSearchToolResult,
-    format_outcomes, parse_arguments,
+    NO_RESULTS, QuerySearchOutcome, SearchDepth, WEB_SEARCH_TIMEOUT_MS, WebSearchProvider,
+    WebSearchToolResult, format_outcomes, parse_arguments,
 };
 use crate::chat::tools::types::{ToolErrorCode, ToolExecutionResult, ToolFailure};
 
@@ -30,11 +31,24 @@ pub const DEFAULT_TAVILY_URL: &str = "https://api.tavily.com/search";
 /// 单次响应体硬上限：异常端点返回无限流时立即失败，不撑爆内存。
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
-/// 无结果时的统一文案（与 lx-agent 一致）。
-pub(crate) const NO_RESULTS: &str = "No search results found. Please try a different query.";
+/// 错误摘要的最大字符数（非 2xx 响应体只保留一小段可读原因）。
+const MAX_ERROR_DETAIL_CHARS: usize = 160;
 
 /// 匿名 Exa 被 `401/403` 拒绝后的进程内熔断标记。
 static EXA_ANON_BLOCKED: AtomicBool = AtomicBool::new(false);
+
+/// 进程级复用的 HTTP 客户端（连接池跨调用共享）。
+fn http_client() -> Option<&'static reqwest::Client> {
+    static CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .user_agent(concat!("lx-tui/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .ok()
+        })
+        .as_ref()
+}
 
 /// 可注入的引擎端点（默认指向公网；测试注入本地回环 server）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,11 +66,12 @@ impl Default for WebSearchEndpoints {
     }
 }
 
-/// 单引擎失败：`status` 用于判断是否值得回退。
+/// 单引擎失败：`status` 用于判断是否值得回退，`timed_out` 用于汇总错误码。
 #[derive(Debug)]
 struct SearchError {
     message: String,
     status: Option<u16>,
+    timed_out: bool,
 }
 
 impl SearchError {
@@ -64,26 +79,77 @@ impl SearchError {
         Self {
             message: message.into(),
             status: None,
+            timed_out: false,
         }
     }
 
-    fn status(provider: &str, status: reqwest::StatusCode) -> Self {
+    /// 非 2xx：状态码 + 响应体里已脱敏的简短原因。
+    fn http(provider: &str, status: reqwest::StatusCode, body: &str, secrets: &[&str]) -> Self {
+        let mut message = format!("{provider} returned HTTP {status}");
+        if let Some(detail) = error_detail(body, secrets) {
+            message.push_str(": ");
+            message.push_str(&detail);
+        }
         Self {
-            message: format!("{provider} returned HTTP {status}"),
+            message,
             status: Some(status.as_u16()),
+            timed_out: false,
         }
     }
 
     fn timed_out(provider: &str) -> Self {
-        Self::new(format!(
-            "{provider} did not respond within {WEB_SEARCH_TIMEOUT_MS} ms"
-        ))
+        Self {
+            message: format!("{provider} did not respond within {WEB_SEARCH_TIMEOUT_MS} ms"),
+            status: None,
+            timed_out: true,
+        }
     }
 
     /// 鉴权/额度类失败：可以尝试匿名 Exa，再回退 Tavily。
     fn is_credential_failure(&self) -> bool {
         matches!(self.status, Some(401 | 402 | 403 | 429))
     }
+}
+
+/// 从非 2xx 响应体提取 `error.message` / `error` / `detail.error` / `message`，
+/// 剥掉控制字符、脱敏 Key 并截断到 [`MAX_ERROR_DETAIL_CHARS`]。
+fn error_detail(body: &str, secrets: &[&str]) -> Option<String> {
+    let value: Value = serde_json::from_str(body.trim()).ok()?;
+    let candidate = value
+        .get("error")
+        .and_then(|error| {
+            error
+                .get("message")
+                .and_then(Value::as_str)
+                .or_else(|| error.as_str())
+        })
+        .or_else(|| {
+            value
+                .get("detail")
+                .and_then(|detail| detail.get("error").and_then(Value::as_str))
+        })
+        .or_else(|| value.get("message").and_then(Value::as_str))?
+        .trim();
+    if candidate.is_empty() {
+        return None;
+    }
+    Some(sanitize_detail(candidate, secrets))
+}
+
+/// 单行化错误摘要：去除控制字符、脱敏 Key 查询串与 Key 值本身。
+fn sanitize_detail(detail: &str, secrets: &[&str]) -> String {
+    let mut text: String = detail.chars().filter(|ch| !ch.is_control()).collect();
+    for secret in secrets.iter().copied().filter(|secret| !secret.is_empty()) {
+        text = text.replace(secret, "<redacted>");
+    }
+    let text = text.replace("exaApiKey=", "<redacted>");
+    let text = text.trim();
+    if text.chars().count() <= MAX_ERROR_DETAIL_CHARS {
+        return text.to_string();
+    }
+    let mut capped: String = text.chars().take(MAX_ERROR_DETAIL_CHARS).collect();
+    capped.push('…');
+    capped
 }
 
 /// 执行一次 `web_search`（生产入口：使用公网端点）。
@@ -111,26 +177,24 @@ pub async fn execute_with_endpoints(
     endpoints: &WebSearchEndpoints,
     mut cancel: watch::Receiver<bool>,
 ) -> ToolExecutionResult {
+    // 已取消的调用不解析参数、不建任务、不发请求。
+    if *cancel.borrow() {
+        return cancelled_result();
+    }
     let args = match parse_arguments(arguments_json) {
         Ok(args) => args,
         Err(failure) => return failure.into_result(Vec::new()),
     };
-    let client = match reqwest::Client::builder()
-        .user_agent(concat!("lx-tui/", env!("CARGO_PKG_VERSION")))
-        .build()
-    {
-        Ok(client) => client,
-        Err(_) => {
-            return ToolFailure::new(ToolErrorCode::Io, "failed to initialize the HTTP client")
-                .into_result(Vec::new());
-        }
+    let Some(client) = http_client() else {
+        return ToolFailure::new(ToolErrorCode::Io, "failed to initialize the HTTP client")
+            .into_result(Vec::new());
     };
 
     let started = Instant::now();
     let mut tasks = JoinSet::new();
     for (index, query) in args.queries.iter().enumerate() {
         let request = QueryRequest {
-            client: client.clone(),
+            client,
             endpoints: endpoints.clone(),
             exa_api_key: exa_api_key.trim().to_string(),
             tavily_api_key: tavily_api_key.trim().to_string(),
@@ -148,8 +212,7 @@ pub async fn execute_with_endpoints(
             biased;
             () = wait_cancelled(&mut cancel) => {
                 tasks.abort_all();
-                return ToolFailure::new(ToolErrorCode::Cancelled, "cancelled")
-                    .into_result(Vec::new());
+                return cancelled_result();
             }
             joined = tasks.join_next() => match joined {
                 Some(Ok((index, outcome))) => slots[index] = Some(outcome),
@@ -174,24 +237,20 @@ pub async fn execute_with_endpoints(
                 provider: None,
                 output: String::new(),
                 error: Some("search task failed".to_string()),
+                timed_out: false,
             })
         })
         .collect();
 
     if outcomes.iter().all(|outcome| outcome.error.is_some()) {
-        return ToolFailure::new(
-            ToolErrorCode::Io,
-            "Web search failed across all providers (Exa, Tavily). Please try again later or \
-             check your Exa/Tavily API keys in Settings -> General.",
-        )
-        .into_result(Vec::new());
+        return all_failed_failure(&outcomes).into_result(Vec::new());
     }
 
     let provider = outcomes
         .iter()
         .find_map(|outcome| outcome.provider)
         .unwrap_or(WebSearchProvider::Exa);
-    let text = format_outcomes(&outcomes);
+    let (text, truncated) = format_outcomes(&outcomes);
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     ToolExecutionResult::WebSearch(Box::new(WebSearchToolResult {
         queries: args.queries,
@@ -200,14 +259,44 @@ pub async fn execute_with_endpoints(
         provider,
         outcomes,
         text,
-        truncated: false,
+        truncated,
         duration_ms,
     }))
 }
 
+/// 取消结果（入口短路与运行中取消共用同一文案与错误码）。
+fn cancelled_result() -> ToolExecutionResult {
+    ToolFailure::new(ToolErrorCode::Cancelled, "cancelled").into_result(Vec::new())
+}
+
+/// 全量失败：保留去重后的真实错误摘要；全部超时则返回 `Timeout`。
+pub(super) fn all_failed_failure(outcomes: &[QuerySearchOutcome]) -> ToolFailure {
+    let mut details: Vec<&str> = Vec::new();
+    for outcome in outcomes {
+        let Some(error) = outcome.error.as_deref().map(str::trim) else {
+            continue;
+        };
+        if !error.is_empty() && !details.contains(&error) {
+            details.push(error);
+        }
+    }
+    let all_timed_out = outcomes.iter().all(|outcome| outcome.timed_out);
+    let code = if all_timed_out {
+        ToolErrorCode::Timeout
+    } else {
+        ToolErrorCode::Io
+    };
+    let message = format!(
+        "Web search failed across all providers (Exa, Tavily): {}. Please try again later or \
+         check your Exa/Tavily API keys in Settings -> General.",
+        details.join(" | ")
+    );
+    ToolFailure::new(code, message)
+}
+
 /// 单条查询的一次执行（拥有所有权，便于放进并发任务）。
 struct QueryRequest {
-    client: reqwest::Client,
+    client: &'static reqwest::Client,
     endpoints: WebSearchEndpoints,
     exa_api_key: String,
     tavily_api_key: String,
@@ -224,34 +313,37 @@ impl QueryRequest {
                 provider: Some(provider),
                 output,
                 error: None,
+                timed_out: false,
             },
             Err(error) => QuerySearchOutcome {
                 query: self.query.clone(),
                 provider: None,
                 output: String::new(),
                 error: Some(error.message),
+                timed_out: error.timed_out,
             },
         }
     }
 
     /// 逐级回退：带 Key 的 Exa → 匿名 Exa → Tavily。
+    ///
+    /// 匿名熔断只在匿名 Exa 真正成功时解除；带 Key 的请求无论成败都不清零，
+    /// 否则失效 Key 会让每次调用都重复白跑一次注定 401/403 的匿名请求。
     async fn search(&self) -> Result<(WebSearchProvider, String), SearchError> {
         let mut exa_error: Option<SearchError> = None;
         if self.exa_api_key.is_empty() {
-            if !EXA_ANON_BLOCKED.load(Ordering::Relaxed) {
+            if !EXA_ANON_BLOCKED.load(Ordering::Acquire) {
                 match self.call_exa(None).await {
                     Ok(text) => return Ok((WebSearchProvider::Exa, text)),
                     Err(error) => exa_error = Some(error),
                 }
             }
         } else {
-            // 配置了非空 Key：匿名熔断解除。
-            EXA_ANON_BLOCKED.store(false, Ordering::Relaxed);
             match self.call_exa(Some(&self.exa_api_key)).await {
                 Ok(text) => return Ok((WebSearchProvider::Exa, text)),
                 Err(error) => {
                     let retry_anonymous =
-                        error.is_credential_failure() && !EXA_ANON_BLOCKED.load(Ordering::Relaxed);
+                        error.is_credential_failure() && !EXA_ANON_BLOCKED.load(Ordering::Acquire);
                     exa_error = Some(error);
                     if retry_anonymous {
                         match self.call_exa(None).await {
@@ -266,6 +358,8 @@ impl QueryRequest {
         match self.call_tavily().await {
             Ok(text) => Ok((WebSearchProvider::Tavily, text)),
             Err(tavily_error) => {
+                let timed_out = exa_error.as_ref().is_some_and(|error| error.timed_out)
+                    && tavily_error.timed_out;
                 let exa_message = exa_error.map_or_else(
                     || {
                         "Exa anonymous access is disabled after an authentication failure"
@@ -273,10 +367,11 @@ impl QueryRequest {
                     },
                     |error| error.message,
                 );
-                Err(SearchError::new(format!(
-                    "{exa_message}; {}",
-                    tavily_error.message
-                )))
+                Err(SearchError {
+                    message: format!("{exa_message}; {}", tavily_error.message),
+                    status: None,
+                    timed_out,
+                })
             }
         }
     }
@@ -315,15 +410,31 @@ impl QueryRequest {
         if !status.is_success() {
             // 匿名被拒：熔断，避免后续每次调用都白跑一次 401。
             if api_key.is_none() && matches!(status.as_u16(), 401 | 403) {
-                EXA_ANON_BLOCKED.store(true, Ordering::Relaxed);
+                EXA_ANON_BLOCKED.store(true, Ordering::Release);
             }
-            return Err(SearchError::status("Exa", status));
+            return Err(self.http_error("Exa", status, &text));
         }
-        parse_exa_body(&text).map_err(SearchError::new)
+        let output = parse_exa_body(&text).map_err(SearchError::new)?;
+        // 匿名通道确实可用时才解除熔断。
+        if api_key.is_none() {
+            EXA_ANON_BLOCKED.store(false, Ordering::Release);
+        }
+        Ok(output)
+    }
+
+    /// 非 2xx 状态错误：始终用两个 Key 做脱敏集合。
+    fn http_error(&self, provider: &str, status: reqwest::StatusCode, body: &str) -> SearchError {
+        let secrets = [self.exa_api_key.as_str(), self.tavily_api_key.as_str()];
+        SearchError::http(provider, status, body, &secrets)
     }
 
     /// Tavily REST 搜索；`Deep` 映射为 `advanced`，其余为 `basic`。
+    ///
+    /// Tavily 没有匿名通道：空 Key 直接短路，不发明知必败的无认证请求。
     async fn call_tavily(&self) -> Result<String, SearchError> {
+        if self.tavily_api_key.is_empty() {
+            return Err(SearchError::new("Tavily API key is not configured"));
+        }
         let body = json!({
             "query": self.query,
             "max_results": self.num_results,
@@ -333,17 +444,15 @@ impl QueryRequest {
             },
             "include_answer": false,
         });
-        let mut request = self
+        let request = self
             .client
             .post(&self.endpoints.tavily_url)
             .header(reqwest::header::ACCEPT, "application/json")
+            .bearer_auth(&self.tavily_api_key)
             .json(&body);
-        if !self.tavily_api_key.is_empty() {
-            request = request.bearer_auth(&self.tavily_api_key);
-        }
         let (status, text) = with_timeout("Tavily", post_json("Tavily", request)).await?;
         if !status.is_success() {
-            return Err(SearchError::status("Tavily", status));
+            return Err(self.http_error("Tavily", status, &text));
         }
         parse_tavily_body(&text).map_err(SearchError::new)
     }
@@ -542,11 +651,11 @@ async fn wait_cancelled(cancel: &mut watch::Receiver<bool>) {
 }
 
 #[cfg(test)]
-pub(super) fn reset_anonymous_state() {
-    EXA_ANON_BLOCKED.store(false, Ordering::Relaxed);
+pub(super) fn reset_circuit_breaker() {
+    EXA_ANON_BLOCKED.store(false, Ordering::Release);
 }
 
 #[cfg(test)]
 pub(super) fn anonymous_blocked() -> bool {
-    EXA_ANON_BLOCKED.load(Ordering::Relaxed)
+    EXA_ANON_BLOCKED.load(Ordering::Acquire)
 }

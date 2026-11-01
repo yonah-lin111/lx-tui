@@ -304,7 +304,7 @@ fn result_json_covers_every_variant() {
     assert_eq!(value["changes"], serde_json::json!([]));
 }
 
-/// 联网搜索结果：正文原样进模型文本，摘要只带首个查询词与查询条数，落库键名稳定。
+/// 联网搜索结果：正文原样进模型文本，摘要只带查询条数，落库键名稳定。
 #[test]
 fn web_search_text_summary_and_json() {
     use crate::chat::tools::web_search::{
@@ -322,12 +322,14 @@ fn web_search_text_summary_and_json() {
                 provider: Some(WebSearchProvider::Tavily),
                 output: "first body".into(),
                 error: None,
+                timed_out: false,
             },
             QuerySearchOutcome {
                 query: "second".into(),
                 provider: None,
                 output: String::new(),
                 error: Some("boom".into()),
+                timed_out: false,
             },
         ],
         text: "### 1. \"first\"\nfirst body\n\n### 2. \"second\"\n[Search failed: boom]".into(),
@@ -341,7 +343,10 @@ fn web_search_text_summary_and_json() {
     );
 
     let summary = to_summary(&result);
-    assert_eq!(summary.path.as_deref(), Some("first"));
+    assert_eq!(
+        summary.path, None,
+        "查询词不得进 path（path 会被当成文件路径相对化）"
+    );
     assert_eq!(summary.matches, Some(2));
     assert!(!summary.truncated);
 
@@ -360,6 +365,44 @@ fn web_search_text_summary_and_json() {
             .unwrap_or_default()
             .contains("first body")
     );
+}
+
+/// 同批次混合命中 Exa 与 Tavily：落库 `provider` 必须是 `exa+tavily`。
+#[test]
+fn mixed_provider_batch_reports_both_engines_in_json() {
+    use crate::chat::tools::web_search::{
+        QuerySearchOutcome, SearchDepth, WebSearchProvider, WebSearchToolResult,
+    };
+
+    let result = ToolExecutionResult::WebSearch(Box::new(WebSearchToolResult {
+        queries: vec!["exa one".into(), "tavily two".into()],
+        num_results: 4,
+        search_type: SearchDepth::Auto,
+        provider: WebSearchProvider::Exa,
+        outcomes: vec![
+            QuerySearchOutcome {
+                query: "exa one".into(),
+                provider: Some(WebSearchProvider::Exa),
+                output: "exa body".into(),
+                error: None,
+                timed_out: false,
+            },
+            QuerySearchOutcome {
+                query: "tavily two".into(),
+                provider: Some(WebSearchProvider::Tavily),
+                output: "tavily body".into(),
+                error: None,
+                timed_out: false,
+            },
+        ],
+        text: "### 1. \"exa one\"\nexa body\n\n### 2. \"tavily two\"\ntavily body".into(),
+        truncated: false,
+        duration_ms: 12,
+    }));
+
+    let value: serde_json::Value =
+        serde_json::from_str(&to_result_json(&result).expect("json")).expect("parse");
+    assert_eq!(value["provider"], "exa+tavily");
 }
 
 /// 超大搜索结果：只裁 `text` 正文，查询与提供商元数据保留，并标记截断。

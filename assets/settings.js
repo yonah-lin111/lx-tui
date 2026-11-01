@@ -21,6 +21,7 @@ function api(path, options) {
 }
 
 function showTab(name) {
+  resetWebSearchReveals();
   const tabs = {general: 'tab-general', commands: 'tab-commands', models: 'tab-models', mcp: 'tab-mcp', skills: 'tab-skills'};
   const views = {general: 'view-general', commands: 'view-commands', models: 'view-models', mcp: 'view-mcp', skills: 'view-skills'};
   for (const key of Object.keys(tabs)) {
@@ -354,6 +355,7 @@ function generalDirty() {
 }
 
 function resetGeneral() {
+  resetWebSearchReveals();
   if (generalBaseline === null) { return; }
   for (const key of CONFIG_KEYS) {
     document.getElementById(key).value = generalBaseline[key];
@@ -384,6 +386,7 @@ async function saveGeneral() {
 }
 
 function applyGeneralData(data) {
+  resetWebSearchReveals();
   for (const key of CONFIG_KEYS) {
     document.getElementById(key).value = data.config[key];
   }
@@ -408,6 +411,23 @@ function bindPasswordReveal(inputId, buttonId) {
     button.setAttribute('aria-label', show ? 'Hide API key' : 'Show API key');
     input.focus();
   });
+}
+
+// 收起明文：数据重填、Reset 与切换 Tab 时强制回到 password，避免明文残留。
+function resetWebSearchReveals() {
+  for (const [inputId, buttonId] of [
+    ['web_search_exa_api_key', 'exa-key-reveal'],
+    ['web_search_tavily_api_key', 'tavily-key-reveal']
+  ]) {
+    const input = document.getElementById(inputId);
+    const button = document.getElementById(buttonId);
+    if (input) { input.type = 'password'; }
+    if (button) {
+      button.classList.remove('revealed');
+      button.setAttribute('aria-pressed', 'false');
+      button.setAttribute('aria-label', 'Show API key');
+    }
+  }
 }
 
 bindPasswordReveal('web_search_exa_api_key', 'exa-key-reveal');

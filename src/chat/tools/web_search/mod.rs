@@ -19,11 +19,20 @@ use super::types::{ToolFailure, ToolResult};
 /// 稳定工具名（schema、错误消息与提示共用）。
 pub const WEB_SEARCH_TOOL: &str = "web_search";
 
-/// 单次调用的查询条数上限（并发执行）。
+/// 单次调用的查询条数上限（去重后，并发执行）。
 pub const MAX_QUERIES: usize = 4;
+
+/// 去重前的原始查询条数防御上限（防止模型塞入超大数组）。
+pub const MAX_RAW_QUERIES: usize = 16;
 
 /// 单条查询的字符上限。
 pub const MAX_QUERY_CHARS: usize = 500;
+
+/// 单条查询输出的字符预算（超出截断并显式标记）。
+pub const MAX_QUERY_OUTPUT_CHARS: usize = 12_000;
+
+/// 无结果时的统一文案（与 lx-agent 一致）。
+pub const NO_RESULTS: &str = "No search results found. Please try a different query.";
 
 /// 每条查询的结果数下限。
 pub const MIN_NUM_RESULTS: usize = 1;
@@ -118,6 +127,9 @@ pub struct QuerySearchOutcome {
     pub output: String,
     /// 失败时的单行错误说明。
     pub error: Option<String>,
+    /// 该查询是否因引擎超时而失败（全量失败时用于选择 `Timeout` 错误码）。
+    #[serde(default)]
+    pub timed_out: bool,
 }
 
 /// 整次 `web_search` 调用的结构化结果。
@@ -134,6 +146,25 @@ pub struct WebSearchToolResult {
     pub text: String,
     pub truncated: bool,
     pub duration_ms: u64,
+}
+
+impl WebSearchToolResult {
+    /// 展示用提供商标签：同批次混合命中 Exa 与 Tavily 时返回 `"exa+tavily"`。
+    pub fn provider_label(&self) -> &'static str {
+        let mut exa = false;
+        let mut tavily = false;
+        for provider in self.outcomes.iter().filter_map(|outcome| outcome.provider) {
+            match provider {
+                WebSearchProvider::Exa => exa = true,
+                WebSearchProvider::Tavily => tavily = true,
+            }
+        }
+        if exa && tavily {
+            "exa+tavily"
+        } else {
+            self.provider.as_str()
+        }
+    }
 }
 
 /// 解析并校验 `web_search` 参数（严格白名单，不信任模型遵守 schema）。
@@ -180,9 +211,9 @@ pub fn parse_arguments(arguments_json: &str) -> ToolResult<WebSearchArgs> {
         }
     }
 
-    if raw_queries.len() > MAX_QUERIES {
+    if raw_queries.len() > MAX_RAW_QUERIES {
         return Err(ToolFailure::invalid(format!(
-            "web_search accepts at most {MAX_QUERIES} queries per call"
+            "web_search accepts at most {MAX_RAW_QUERIES} raw queries per call"
         )));
     }
 
@@ -197,6 +228,12 @@ pub fn parse_arguments(arguments_json: &str) -> ToolResult<WebSearchArgs> {
         return Err(ToolFailure::invalid(
             "web_search requires `query` or non-empty `queries`",
         ));
+    }
+    // 上限按去重后的条数计算：重复项不占预算。
+    if queries.len() > MAX_QUERIES {
+        return Err(ToolFailure::invalid(format!(
+            "web_search accepts at most {MAX_QUERIES} queries per call"
+        )));
     }
 
     let num_results = match (
@@ -267,23 +304,29 @@ fn read_num_results(value: Option<&Value>) -> ToolResult<Option<usize>> {
 }
 
 /// 组合多条查询的模型可见文本：单条直接返回正文，多条按查询编号分段。
-pub fn format_outcomes(outcomes: &[QuerySearchOutcome]) -> String {
-    match outcomes {
-        [single] => outcome_body(single),
+///
+/// 每条查询的正文按 [`MAX_QUERY_OUTPUT_CHARS`] 单独裁剪，返回
+/// `(text, truncated)`；任一条被裁剪即 `truncated = true`。
+pub fn format_outcomes(outcomes: &[QuerySearchOutcome]) -> (String, bool) {
+    let mut truncated = false;
+    let text = match outcomes {
+        [single] => {
+            let (body, cut) = bounded_body(single);
+            truncated |= cut;
+            body
+        }
         _ => outcomes
             .iter()
             .enumerate()
             .map(|(index, outcome)| {
-                format!(
-                    "### {}. \"{}\"\n{}",
-                    index + 1,
-                    outcome.query,
-                    outcome_body(outcome)
-                )
+                let (body, cut) = bounded_body(outcome);
+                truncated |= cut;
+                format!("### {}. \"{}\"\n{}", index + 1, outcome.query, body)
             })
             .collect::<Vec<_>>()
             .join("\n\n"),
-    }
+    };
+    (text, truncated)
 }
 
 /// 单条结局的正文：失败项显式写出原因，不静默丢弃。
@@ -292,7 +335,18 @@ fn outcome_body(outcome: &QuerySearchOutcome) -> String {
         return format!("[Search failed: {error}]");
     }
     if outcome.output.is_empty() {
-        return client::NO_RESULTS.to_string();
+        return NO_RESULTS.to_string();
     }
     outcome.output.clone()
+}
+
+/// 按单条查询预算裁剪正文（按字符计，不切断 UTF-8），超出追加截断标记。
+fn bounded_body(outcome: &QuerySearchOutcome) -> (String, bool) {
+    let body = outcome_body(outcome);
+    if body.chars().count() <= MAX_QUERY_OUTPUT_CHARS {
+        return (body, false);
+    }
+    let mut capped: String = body.chars().take(MAX_QUERY_OUTPUT_CHARS).collect();
+    capped.push_str("\n[...truncated]");
+    (capped, true)
 }

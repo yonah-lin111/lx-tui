@@ -11,6 +11,9 @@ use crate::chat::tools::web_search::{DEFAULT_NUM_RESULTS, SearchDepth};
 /// 结果区保留的最大行数（更长的部分只计数，展开也补不回来）。
 const RESULT_LINES: usize = 40;
 
+/// 结果单行保留的最大字符数（超限截断并补 `…`；与渲染层取样上限共用）。
+pub const MAX_RESULT_LINE_CHARS: usize = 8_000;
+
 /// `web_search` 工具卡片详情视图。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebSearchDetailView {
@@ -97,11 +100,7 @@ impl WebSearchDetailView {
             .filter(|provider| !provider.is_empty())
             .map(str::to_string);
         let text = value.get("text").and_then(Value::as_str).unwrap_or("");
-        view.result = text
-            .lines()
-            .take(RESULT_LINES)
-            .map(str::to_string)
-            .collect();
+        view.result = text.lines().take(RESULT_LINES).map(result_line).collect();
         view.result_more = text.lines().count().saturating_sub(RESULT_LINES);
         view.duration_ms = value.get("duration_ms").and_then(Value::as_u64);
         view.truncated = value
@@ -149,6 +148,17 @@ fn push_query(queries: &mut Vec<String>, raw: &str) {
         return;
     }
     queries.push(query.to_string());
+}
+
+/// 结果单行取样：剥离行尾 `\r`，超过 [`MAX_RESULT_LINE_CHARS`] 字符时截断并补 `…`。
+fn result_line(line: &str) -> String {
+    let line = line.trim_end_matches('\r');
+    let mut chars = line.chars();
+    let mut text: String = chars.by_ref().take(MAX_RESULT_LINE_CHARS).collect();
+    if chars.next().is_some() {
+        text.push('…');
+    }
+    text
 }
 
 /// `num_results` / `numResults` → 结果条数（缺失或非正整数为 None）。

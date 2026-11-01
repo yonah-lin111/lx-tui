@@ -562,9 +562,10 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
             truncated: result.truncated,
             ..ToolSummary::default()
         },
-        // 联网搜索：摘要只带首个查询词与查询条数，正文不进摘要。
+        // 联网搜索：摘要只带查询条数，正文不进摘要。查询词不放 `path`：
+        // `path` 会被 `ToolCallView::relativize_paths` 当作文件路径改写。
         ToolExecutionResult::WebSearch(result) => ToolSummary {
-            path: result.queries.first().cloned(),
+            path: None,
             matches: Some(result.queries.len()),
             truncated: result.truncated,
             ..ToolSummary::default()
@@ -700,7 +701,7 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
             "queries": result.queries,
             "num_results": result.num_results,
             "search_type": result.search_type.as_str(),
-            "provider": result.provider.as_str(),
+            "provider": result.provider_label(),
             "text": result.text,
             "truncated": result.truncated,
             "duration_ms": result.duration_ms,

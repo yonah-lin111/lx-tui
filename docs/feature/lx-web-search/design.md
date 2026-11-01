@@ -202,10 +202,12 @@ pub struct AiSettings {
    }
    ```
 2. **`PUT /api/config`**：
-   - 解析并保存 `config` 到 `settings.json`（保持原有逻辑不变，向后兼容只传 `{"config": ...}` 的现有测试）；
-   - 若请求体中同时携带 `"web_search"` 对象（`{"exa_api_key": "...", "tavily_api_key": "..."}`），则加载当前 `ai_path(state)` 的 `AiSettings`（不存在时取 `AiSettings::empty()`），更新 `ai_settings.web_search = WebSearchConfig { exa_api_key, tavily_api_key }.normalized()`，调用 `crate::config::ai::save_ai(&ai_path, &ai_settings)` 原子落盘（0600 权限），并发送 `SettingsEvent::ModelsChanged(Box::new(ai_settings))` 通知事件循环实时更新内存配置。
+   - 先执行纯校验与合并：解析 `config` 并校验 `"web_search"` 字段（若字段存在但非 JSON Object，或 Key 字符串含控制字符，立即返回 `422`，不写任何文件）；
+   - 若携带 `"web_search"` 对象（`{"exa_api_key": "...", "tavily_api_key": "..."}`），预加载当前 `ai_path(state)` 的 `AiSettings`（文件不存在或 JSON 损坏时记录 `tracing::warn!` 并以 `AiSettings::empty()` 为基底修复），合并更新 `ai_settings.web_search`（保留 `webSearch` 内未知扩展字段 `extra`），先调用 `crate::config::ai::save_ai(&ai_path, &ai_settings)`（使用带进程 ID + 原子序号的唯一 `.tmp` 文件原子落盘，0600 权限）；
+   - 随后保存 `config` 到 `settings.json`，最后统一发送 `SettingsEvent::ConfigChanged(config)` 与 `SettingsEvent::ModelsChanged(Box::new(ai_settings))` 通知事件循环实时更新内存配置。
 3. **`GET /api/models/settings` 与 `PUT /api/models/settings`**：
-   - `merge_settings` 基于 `current.unwrap_or_default()` 修改 `providers` / `default_model`，天然保留 `settings.web_search` 不被覆盖。
+   - `merge_settings` 基于 `current.unwrap_or_default()` 修改 `providers` / `default_model`，天然保留 `settings.web_search` 不被覆盖；
+   - `revision_of` 仅对模型相关字段（`default_model`、`enabled_providers`、`providers`、`stream_idle_timeout_ms`）计算乐观锁哈希，使 General 页修改 `web_search` 不会导致已打开的 Models 页产生假 409 冲突。
 
 ### 4.3 浏览器设置页前端（`assets/settings.html` & `assets/settings.js`）
 
@@ -505,13 +507,14 @@ pub struct WebSearchToolResult {
      - 先尝试将完整 body 作为 JSON 解析 `McpToolCallResponse`；若 `error.message` 存在则返回错误；否则提取 `result.content` 中首个 `type == "text"` 的非空文本；
      - 若整段非直接 JSON，按行扫描 `data: ` 前缀的 SSE 行并解析，取首个非空文本；
      - HTTP 200 但内容为空时，返回 `"No search results found. Please try a different query."`。
-2. **匿名直连熔断机制**：
-   - 维护进程内原子标记 `EXA_ANON_BLOCKED: AtomicBool` 与 `TAVILY_ANON_BLOCKED: AtomicBool`；
-   - 当无 Key 匿名请求收到 HTTP `401` 或 `403` 时，将该引擎的匿名标记置为 `true`；一旦后续调用传入了非空 API Key，自动重置该标记为 `false`；
-   - 若调用时配置了 Exa Key，但因 Key 失效/超额返回 `401`/`402`/`403`/`429` 且 `EXA_ANON_BLOCKED` 为 `false`，先尝试一次 Exa 无 Key 匿名直连，再回退到 Tavily。
+2. **匿名直连熔断与空 Key 短路机制**：
+   - 维护进程内原子标记 `EXA_ANON_BLOCKED: AtomicBool`；
+   - 当无 Key 匿名 Exa 请求收到 HTTP `401` 或 `403` 时，将 `EXA_ANON_BLOCKED` 置为 `true`；仅当后续匿名 Exa 请求成功（2xx）时重置为 `false`（配置非空 Key 失败回退时绝不清空已触发的匿名熔断，防止每次查询重复触发必败的匿名 403 请求）；
+   - 若调用时配置了 Exa Key，但因 Key 失效/超额返回 `401`/`402`/`403`/`429` 且 `EXA_ANON_BLOCKED` 为 `false`，先尝试一次 Exa 无 Key 匿名直连，再回退到 Tavily；
+   - Tavily 要求必须提供非空 `tavily_api_key`，若为空则直接短路返回 `"Tavily API key is not configured"`，不发起无认证请求。
 3. **Tavily REST 调用（`search_with_tavily`）**：
    - Endpoint：`https://api.tavily.com/search`
-   - Headers：`Accept: application/json`、`Content-Type: application/json`，若 `tavily_api_key` 非空则附加 `Authorization: Bearer <tavily_api_key>`
+   - Headers：`Accept: application/json`、`Content-Type: application/json`、`Authorization: Bearer <tavily_api_key>`
    - Body：
      ```json
      {
@@ -525,14 +528,16 @@ pub struct WebSearchToolResult {
    - 响应解析（`parse_tavily_response`）：
      - 若顶层 `answer` 为非空字符串，作为第一段；
      - 遍历 `results` 数组，每项按 `{index + 1}. {title}\n{url}\n{content}` 组装，以 `\n\n` 连接；
-     - 若无结果，返回 `"No search results found. Please try a different query."`。
+     - 若无结果，返回 `"No search results found."`。
 4. **超时与 `Esc` 取消**：
-   - 每次单引擎请求使用 `tokio::time::timeout(Duration::from_millis(25_000), request_future)`；
-   - 外层包裹 `tokio::select! { biased; _ = wait_cancelled(&mut cancel) => return Err(SearchError::Cancelled), res = search_future => res }`；
+   - 入口先检查 `*cancel.borrow()`，若已取消则零请求直接返回 `ToolErrorCode::Cancelled`；
+   - 每次单引擎请求复用进程级 `OnceLock<reqwest::Client>` 连接池，并使用 `tokio::time::timeout(Duration::from_millis(25_000), request_future)`；
+   - 外层包裹 `tokio::select! { biased; _ = wait_cancelled(&mut cancel) => return cancelled_result(), res = search_future => res }`；
    - 一旦收到取消信号，立即返回 `ToolErrorCode::Cancelled`，`run_agent_turn` 据此将工具调用落库为 `cancelled` 并立即结束当前轮次（`TurnSummary::interrupted`）。
-5. **批量并发与部分成功聚合**：
+5. **批量并发、单条预算与部分成功聚合**：
+   - 每条查询输出受 `MAX_QUERY_OUTPUT_CHARS = 12_000` 预算保护（超出时在单条末尾追加 `\n[...truncated]` 并将 `WebSearchToolResult.truncated` 置为 `true`），确保 4 条并发查询合计稳态落在 64 KiB 回放预算内；
    - 当 `queries.len() == 1` 时，`text` 直接为单条查询的 `output`；
-   - 当 `queries.len() > 1` 时，使用 `futures` / `tokio::JoinSet`（或 `tokio::spawn` 并发）同时发起所有查询，按原始 `queries` 顺序聚合成清晰的分段 Markdown：
+   - 当 `queries.len() > 1` 时，使用 `tokio::task::JoinSet` 同时发起所有查询，按原始 `queries` 顺序聚合成清晰的分段 Markdown：
      ```markdown
      ### 1. "ratatui 0.29 migration guide"
      <output of query 1>
@@ -540,8 +545,9 @@ pub struct WebSearchToolResult {
      ### 2. "ratatui 0.29 breaking changes"
      <output of query 2>
      ```
+   - 若同一批次中同时命中了 `Exa` 与 `Tavily`，`WebSearchToolResult::provider_label()` 返回 `"exa+tavily"`，卡片标题据实展示双引擎标识；
    - 若其中某条查询失败但至少有 1 条成功，失败项输出 `[Search failed: <error>]`，整次调用仍返回 `ToolExecutionResult::WebSearch`（状态为 `Completed`）；
-   - 若所有查询全部失败，返回 `ToolFailure::new(ToolErrorCode::Io, "Web search failed across all providers (Exa, Tavily). Please try again later or check your Exa/Tavily API keys in Settings -> General.")`。
+   - 若所有查询全部失败，汇总去重后的脱敏错误详情附在提示后；若全部因超时失败则返回 `ToolErrorCode::Timeout`，否则返回 `ToolErrorCode::Io`。
 
 ### 5.4 系统提示词更新（`src/chat/prompt.rs` & `src/chat/agent.rs`）
 
@@ -608,7 +614,9 @@ pub struct WebSearchDetailView {
       "duration_ms": 840
     }
     ```
-  - `WebSearchDetailView::from_tool(result_json, arguments_json)` 从落库 JSON 与调用参数还原完整视图（即使失败/取消没有 `result_json`，也能回退到 `from_arguments` 保留查询词展示）。
+  - **实时结算保活与历史重载回退**：
+    - 实时流中若工具失败或被取消（`detail == None`），`process.rs` 与 `subagent.rs` 通过 `ToolDetailView::preserves_on_empty_settle()` 保留 `accept_arguments` 阶段构建的 `WebSearchDetailView`（查询词不丢失）；
+    - 历史重载（`view.rs`）调用 `WebSearchDetailView::from_tool(result_json, arguments_json)` 从落库 JSON 与调用参数还原完整视图（每行结果按 `MAX_RESULT_LINE_CHARS = 8_000` 截断补 `…`，`history/cache.rs` 逐行 `write_edges` 零分配计算指纹）。
 
 ### 6.2 历史工具卡片布局（`src/ui/main_content/lx/history/tool/web_search.rs`）
 
@@ -660,42 +668,48 @@ pub struct WebSearchDetailView {
 
 ---
 
-## 7. 涉及文件与单文件行数预算核查
+## 7. 涉及文件与实测单文件行数核查
 
-遵守 `docs/standards/code-writing-standards.md`：「生产代码单文件上限 1000 行，超限必须按职责拆分，拆分子文件控制在 500 行左右」。
+遵守 `docs/standards/code-writing-standards.md`：「生产代码单文件上限 1000 行，超限必须按职责拆分，拆分子文件控制在 500 行左右；测试文件严格跟随子模块拆分」。
 
-| 文件路径 | 当前行数 | 预计变更后行数 | 职责与拆分说明 |
-|----------|----------|----------------|----------------|
-| `src/config/ai/mod.rs` | ~310 行 | ~360 行 | 新增 `WebSearchConfig`、`DEFAULT_EXA_API_KEY`、`DEFAULT_TAVILY_API_KEY` 及 `AiSettings.web_search` |
-| `src/settings/service/handlers.rs` | ~590 行 | ~640 行 | `state_json` 增加 `web_search` 输出，`put_config` 支持保存 `web_search` 到 `ai.json` 并广播 `ModelsChanged` |
-| `assets/settings.html` | 405 行 | ~435 行 | General 页新增 `Web Search` fieldset（Exa / Tavily 密码框 + 显隐按钮） |
-| `assets/settings.js` | 924 行 | ~960 行 | General 读写与脏检测纳入两个 Web Search Key，绑定明文切换按钮 |
-| `src/chat/tools/web_search/mod.rs` | **新建** | ~220 行 | `web_search` 参数模型 `WebSearchArgs`、`SearchDepth`、严格白名单解析与结果格式化 |
-| `src/chat/tools/web_search/client.rs` | **新建** | ~320 行 | Exa MCP + Tavily REST 异步请求、SSE/JSON 解析、匿名 401/403 熔断、超时与 `Esc` 取消、并发聚合 |
-| `src/chat/tools/web_search/tests.rs` | **新建** | ~350 行 | 参数校验、Exa JSON/SSE 解析、Tavily 解析、回退与熔断、部分成功、取消单测 |
-| `src/chat/tools/schema.rs` | ~520 行 | ~565 行 | `TOOLS` 16→17，新增 `web_search` `ToolSpec` 与 `web_search_parameters` |
-| `src/chat/tools/types.rs` | ~450 行 | ~465 行 | `TOOL_NAMES` 增加 `"web_search"`，`ToolExecutionResult` 新增 `WebSearch(Box<WebSearchToolResult>)` |
-| `src/chat/tools/mod.rs` | ~196 行 | ~210 行 | 导出 `web_search` 模块，`execute_with` 守卫分支包含 `WEB_SEARCH_TOOL` |
-| `src/chat/tools/output.rs` | 767 行 | ~815 行 | `format_for_model`、`to_summary`、`to_result_json` 处理 `ToolExecutionResult::WebSearch` |
-| `src/chat/agent.rs` | 795 行 | ~815 行 | `MAIN_TOOLS` (16→17)、`EXPLORER_TOOLS` (2→3)、`EXECUTOR_TOOLS` (6→7) 及子 Agent 提示词更新 |
-| `src/chat/prompt.rs` | ~480 行 | ~500 行 | `PROMPT_VERSION` `lx-7`→`lx-8`，`LX_SYSTEM_PROMPT` 增加 `web_search` 工具与内联引用规范 |
-| `src/chat/agent_loop/executor.rs` | ~490 行 | ~535 行 | `AgentTools` 注入 `WebSearchConfig`，在 `execute_mcp_cancellable` 与 `run` 中分派 `web_search` |
-| `src/app/state/lx/chat/tool_view/web_search.rs` | **新建** | ~210 行 | `WebSearchDetailView`：从参数与 `result_json` 构造详情视图 |
-| `src/app/state/lx/chat/tool_view.rs` | 869 行 | ~885 行 | 挂载 `mod web_search; pub use web_search::WebSearchDetailView;` 与 `ToolDetailView::WebSearch` |
-| `src/ui/main_content/lx/history/tool/web_search.rs` | **新建** | ~240 行 | `web_search` 卡片布局、标题状态、`├─` 查询块与 `└─` 压暗 Markdown 结果块渲染与点击区域 |
-| `src/ui/main_content/lx/history/tool.rs` | 777 行 | ~805 行 | 分派 `ToolDetailView::WebSearch` 的 `rows`、`draw_animated`、`has_expandable_content`、`card_regions` |
-| `src/ui/main_content/lx/chat_bar.rs` | ~450 行 | ~485 行 | `ActivityLabel` 新增 `SearchingWeb(Option<String>)`，展示 `Searching the web: ...` |
-| `src/ui/text/agent.rs` & `src/ui/text/chat.rs` | ~350 行 | ~375 行 | 新增 `VERB_TOOL_WEB_SEARCH = "Web search"`、`WEB_SEARCHING = "Searching…"` 等英文文案常量 |
+| 文件路径 | 实测行数 | 职责与拆分说明 |
+|----------|----------|----------------|
+| `src/config/ai/mod.rs` | 499 行 | 新增 `WebSearchConfig`（含 `extra` 未知字段保留）、`DEFAULT_EXA_API_KEY`、`DEFAULT_TAVILY_API_KEY`、唯一 `.tmp` 原子落盘 |
+| `src/settings/service.rs` | 451 行 | 提取共享 `ai_path` 辅助函数，挂载 `tests_web_search` |
+| `src/settings/service/handlers.rs` | 940 行 | `state_json` 输出 `web_search`；`put_config` 先校验合并、再写 `ai.json` 与 `settings.json`、最后广播事件 |
+| `src/settings/service/tests_web_search.rs` | **新建** 335 行 | 独立 Web Search 设置服务集成测试（原子校验、损坏修复、模型配置保留） |
+| `assets/settings.html` | 432 行 | General 页新增 `Web Search` fieldset（Exa / Tavily 密码框 + 显隐按钮） |
+| `assets/settings.js` | 978 行 | General 读写与脏检测纳入两个 Web Search Key，绑定明文切换按钮与 `resetWebSearchReveals` 自动复位 |
+| `src/chat/tools/web_search/mod.rs` | **新建** 352 行 | `web_search` 参数模型 `WebSearchArgs`、`SearchDepth`、去重后条数校验、单条 `12_000` 字符预算裁剪与 `provider_label` |
+| `src/chat/tools/web_search/client.rs` | **新建** 661 行 | `OnceLock<Client>` 复用、Exa MCP + Tavily REST 异步请求、SSE/JSON 解析、匿名 401/403 熔断、错误摘要提取与 `Esc` 取消 |
+| `src/chat/tools/web_search/tests.rs` | **新建** 864 行 | 参数校验、Exa JSON/SSE、Tavily、回退与持续熔断、单条预算截断、混合引擎、预取消与超时单测 |
+| `src/chat/tools/schema.rs` | 583 行 | `TOOLS` 16→17，新增 `web_search` `ToolSpec` 与 `web_search_parameters` |
+| `src/chat/tools/types.rs` | 541 行 | `TOOL_NAMES` 增加 `"web_search"`，`ToolExecutionResult` 新增 `WebSearch(Box<WebSearchToolResult>)` |
+| `src/chat/tools/mod.rs` | 201 行 | 导出 `web_search` 模块，`execute_with` 守卫分支包含 `WEB_SEARCH_TOOL` |
+| `src/chat/tools/output.rs` | 791 行 | `format_for_model`、`to_summary`（`path: None`）、`to_result_json`（`provider_label`）与 `shrink_json_text` |
+| `src/chat/agent.rs` | 800 行 | `MAIN_TOOLS` (16→17)、`EXPLORER_TOOLS` (2→3)、`EXECUTOR_TOOLS` (6→7) 及子 Agent 提示词更新 |
+| `src/chat/prompt.rs` | 836 行 | `PROMPT_VERSION` `lx-7`→`lx-8`，`LX_SYSTEM_PROMPT` 增加 `web_search` 工具与内联引用规范 |
+| `src/chat/agent_loop/executor.rs` | 582 行 | `AgentTools` 注入 `with_web_search_keys`，在 `execute_mcp_cancellable` 与 `run` 中分派 `web_search` |
+| `src/app/state/lx/chat/tool_view/web_search.rs` | **新建** 175 行 | `WebSearchDetailView`：从参数与 `result_json` 构造详情视图（单行上限 `8_000` 字符补 `…`） |
+| `src/app/state/lx/chat/tool_view/web_search/tests.rs` | **新建** 107 行 | `WebSearchDetailView` 参数解析、结果窗口与超长行截断单测 |
+| `src/app/state/lx/chat/tool_view.rs` | 885 行 | 挂载 `WebSearchDetailView`、`ToolDetailView::WebSearch` 与 `preserves_on_empty_settle` |
+| `src/ui/main_content/lx/history/tool/web_search.rs` | **新建** 273 行 | `web_search` 卡片布局、标题状态、`├─` 查询块与 `└─` 压暗 Markdown 结果块渲染与点击区域 |
+| `src/ui/main_content/lx/history/tool/web_search/tests.rs` | **新建** 320 行 | 卡片渲染、独立折叠点击区域、空查询回退偏移与窄宽度（36 列）折行单测 |
+| `src/ui/main_content/lx/history/tool.rs` | 832 行 | 分派 `ToolDetailView::WebSearch` 的 `rows`、`draw_animated`、`has_expandable_content`、`card_regions` |
+| `src/ui/main_content/lx/history/cache.rs` | 856 行 | `ToolDetailView::WebSearch` 逐行 `write_edges` 零分配有界哈希指纹 |
+| `src/ui/main_content/lx/chat_bar.rs` | 600 行 | `ActivityLabel` 新增 `SearchingWeb(Option<String>)`，展示 `Searching the web: ...` |
+| `src/event/chat/mod.rs` | 971 行 | 注入 `web_search` Key 并收敛冗余行数，保持在 1000 行上限以内 |
 
 ---
 
 ## 8. 异常、安全与边界条件
 
 1. **API Key 安全与脱敏**：
-   - 日志（`tracing`）严禁打印 `exa_api_key` 或 `tavily_api_key`（注意 Exa 的 Key 在 URL query 参数 `?exaApiKey=...` 中，记录请求错误日志时只能记录静态端点 `https://mcp.exa.ai/mcp` 与 HTTP 状态码，绝不能把完整 `url` 写入日志或返回给模型）。
-   - `config/ai.json` 保存时继续走 `platform::write_file_atomic` 保持 `0600` 权限。
+   - 日志（`tracing`）与返回给模型的错误消息严禁包含 `exa_api_key`、`tavily_api_key` 或 `?exaApiKey=...`（`transport_message` 与 `error_detail` 双重清洗脱敏）。
+   - `config/ai.json` 保存时使用带进程 ID + 原子序号的唯一临时文件并走 `platform::write_file_atomic` 保持 `0600` 权限。
 2. **超大响应截断保护**：
    - 单次 HTTP 响应体读取上限设为 `2 MiB`，防止异常端点返回无限流撑爆内存；
-   - `to_result_json` 沿用 `MAX_TOOL_RESULT_BYTES`（512 KiB）与 `shrink_json_text` 截断保护；模型回放沿用 `MAX_TOOL_RESULT_REPLAY_BYTES`（64 KiB）。
+   - 单条查询结果上限 `MAX_QUERY_OUTPUT_CHARS = 12_000` 字符（4 条并发稳态 ≤ 48 KiB）；
+   - `to_result_json` 沿用 `MAX_RESULT_JSON_BYTES`（1 MiB）与 `shrink_json_text` 截断保护；模型回放沿用 `MAX_TOOL_RESULT_REPLAY_BYTES`（64 KiB）。
 3. **测试隔离（禁止单测发起真实外网请求）**：
-   - `web_search::client` 支持注入本地回环测试 URL 或自定义 `SearchTransport` / 本地 `TcpListener` 假服务，所有单元测试均在本地回环或内存假实现上完成，零外网依赖、毫秒级执行。
+   - `web_search::client` 支持通过 `WebSearchEndpoints` 注入本地回环 `TcpListener` 假服务，所有单元测试均在本地回环或内存假实现上完成，零外网依赖、毫秒级执行。

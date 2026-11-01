@@ -307,7 +307,7 @@ impl AskDetailView {
 mod mcp;
 mod web_search;
 pub use mcp::{McpDetailView, McpImageView};
-pub use web_search::WebSearchDetailView;
+pub use web_search::{MAX_RESULT_LINE_CHARS, WebSearchDetailView};
 
 /// 工具详情视图：进程/计划/提问走各自快照，文件工具走**已解码的差异**，
 /// `search` 走可复制的命中行，`web_search` 走查询词与结果窗口。
@@ -667,6 +667,12 @@ impl SubagentDetailView {
 }
 
 impl ToolDetailView {
+    /// 参数阶段即生成的卡片详情（MCP / 子 agent / 联网搜索）：
+    /// 当工具因失败或取消而未产出结算详情（`detail == None`）时，保留已有视图以继续展示入参。
+    pub const fn preserves_on_empty_settle(&self) -> bool {
+        matches!(self, Self::Mcp(_) | Self::Subagent(_) | Self::WebSearch(_))
+    }
+
     /// 由进程结果构造（`exec_command` 与 `write_stdin` 共用同一份形状解析）。
     pub fn from_process(result: &ProcessResult) -> Self {
         let state = ProcessStateView::from(result.state.clone());

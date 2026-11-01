@@ -72,6 +72,24 @@ fn from_parts_caps_the_result_window_and_counts_the_rest() {
 }
 
 #[test]
+fn from_parts_caps_each_result_line_and_keeps_the_marker() {
+    let long = "x".repeat(MAX_RESULT_LINE_CHARS + 10);
+    let exact = "y".repeat(MAX_RESULT_LINE_CHARS);
+    let text = format!("{long}\r\n{exact}\nshort\r");
+    let result_json = serde_json::json!({"tool": "web_search", "text": text}).to_string();
+    let view = WebSearchDetailView::from_parts(Some(&result_json), "{}").expect("result");
+    assert_eq!(
+        view.result[0].chars().count(),
+        MAX_RESULT_LINE_CHARS + 1,
+        "超限行截断后必须补省略号"
+    );
+    assert!(view.result[0].ends_with('…'));
+    assert!(!view.result[0].contains('\r'));
+    assert_eq!(view.result[1], exact, "恰好上限的行不截断");
+    assert_eq!(view.result[2], "short", "行尾 \\r 必须剥离");
+}
+
+#[test]
 fn from_parts_rejects_other_tools_and_garbage() {
     assert!(WebSearchDetailView::from_parts(None, "{}").is_none());
     assert!(WebSearchDetailView::from_parts(Some("not json"), "{}").is_none());

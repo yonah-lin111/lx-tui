@@ -248,6 +248,60 @@ fn expanding_the_query_block_keeps_bar_and_leaf_uses_padding() {
 }
 
 #[test]
+fn result_only_card_registers_a_single_region_from_the_header() {
+    // 失败且查询词为空：只有结果块，点击面必须从标题行起算。
+    let mut call = call();
+    call.status = ToolStatus::Failed;
+    call.error = Some("web search failed across all providers".into());
+    let mut view = view();
+    view.queries.clear();
+    view.provider = None;
+    view.duration_ms = None;
+    view.result = (0..10).map(|index| format!("line {index}")).collect();
+    view.result_more = 7;
+    call.detail = Some(Box::new(ToolDetailView::WebSearch(view.clone())));
+    let folds = Folds::default();
+    let card = layout(&call, &view, 100, folds);
+    assert_eq!(card.queries_rows, 0);
+    assert!(card.result_rows > 0);
+    let total = rows(&call, &view, 100, folds);
+    let regions = super::super::card_regions(&call, 100, folds, total);
+    assert_eq!(regions.len(), 1, "没有查询块时只登记结果点击面");
+    assert_eq!(regions[0].section, crate::app::state::CardSection::Output);
+    assert_eq!(regions[0].card.offset, 0, "结果块紧接标题行");
+    assert_eq!(regions[0].card.rows, total);
+    assert!(regions[0].card.offset + regions[0].card.rows <= total);
+    assert!(regions[0].clickable);
+}
+
+#[test]
+fn narrow_width_keeps_draw_rows_in_sync_with_rows() {
+    let mut call = call();
+    call.status = ToolStatus::Failed;
+    call.error = Some("web search failed across all providers: upstream timeout".into());
+    let mut view = view();
+    view.queries = vec!["a long query that wraps on a narrow card".into()];
+    view.result = (0..6)
+        .map(|index| format!("line {index} with `code_{index}` and a very long tail to wrap"))
+        .collect();
+    view.result_more = 4;
+    view.provider = None;
+    view.duration_ms = None;
+    let folded = render_with(&call, &view, 36, Folds::default());
+    assert!(folded.contains("line 0"), "{folded}");
+    let expanded = render_with(
+        &call,
+        &view,
+        36,
+        Folds {
+            body: true,
+            output: true,
+        },
+    );
+    assert!(expanded.contains("line 5"), "{expanded}");
+}
+
+#[test]
 fn failed_card_surfaces_the_error_in_the_result_block() {
     let mut call = call();
     call.status = ToolStatus::Failed;

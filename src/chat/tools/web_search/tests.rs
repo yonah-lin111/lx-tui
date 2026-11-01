@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
-use super::client::{self, NO_RESULTS, WebSearchEndpoints};
+use super::client::{self, WebSearchEndpoints};
 use super::*;
 use crate::chat::tools::types::{ToolErrorCode, ToolExecutionResult};
 
@@ -40,6 +40,26 @@ fn batch_merges_query_and_queries_and_dedupes() {
     assert_eq!(args.queries, vec!["a", "b", "c"]);
     assert_eq!(args.num_results, 3);
     assert_eq!(args.search_type, SearchDepth::Deep);
+}
+
+#[test]
+fn deduplication_happens_before_the_query_limit() {
+    // 重复项不占 4 条预算：去重后正好 4 条仍然合法。
+    let args =
+        parse_arguments(r#"{"query":"a","queries":["a","b","c","d"]}"#).expect("4 after dedup");
+    assert_eq!(args.queries, vec!["a", "b", "c", "d"]);
+
+    let failure = parse_arguments(r#"{"queries":["a","b","c","d","e"]}"#).expect_err("5 unique");
+    assert!(failure.message.contains("at most 4"), "{}", failure.message);
+
+    // 去重前仍有 16 条防御上限，防止模型塞入超大数组。
+    let raw = serde_json::json!({ "queries": vec!["x"; MAX_RAW_QUERIES + 1] }).to_string();
+    let failure = parse_arguments(&raw).expect_err("raw cap");
+    assert!(
+        failure.message.contains("at most 16 raw queries"),
+        "{}",
+        failure.message
+    );
 }
 
 #[test]
@@ -194,19 +214,52 @@ fn outcomes_format_single_and_batch_text() {
         provider: Some(WebSearchProvider::Exa),
         output: "body a".into(),
         error: None,
+        timed_out: false,
     };
-    assert_eq!(format_outcomes(std::slice::from_ref(&ok)), "body a");
+    assert_eq!(
+        format_outcomes(std::slice::from_ref(&ok)),
+        ("body a".to_string(), false)
+    );
 
     let failed = QuerySearchOutcome {
         query: "b".into(),
         provider: None,
         output: String::new(),
         error: Some("boom".into()),
+        timed_out: false,
     };
-    let text = format_outcomes(&[ok, failed]);
+    let (text, truncated) = format_outcomes(&[ok, failed]);
+    assert!(!truncated);
     assert_eq!(
         text,
         "### 1. \"a\"\nbody a\n\n### 2. \"b\"\n[Search failed: boom]"
+    );
+}
+
+#[test]
+fn per_query_output_is_capped_and_flagged() {
+    let huge = QuerySearchOutcome {
+        query: "huge".into(),
+        provider: Some(WebSearchProvider::Exa),
+        output: "x".repeat(MAX_QUERY_OUTPUT_CHARS + 1),
+        error: None,
+        timed_out: false,
+    };
+    let small = QuerySearchOutcome {
+        query: "small".into(),
+        provider: Some(WebSearchProvider::Tavily),
+        output: "small body".into(),
+        error: None,
+        timed_out: false,
+    };
+    let (text, truncated) = format_outcomes(&[huge, small]);
+    assert!(truncated, "超预算必须置 truncated = true");
+    assert!(text.contains("[...truncated]"), "{text}");
+    assert!(text.contains("small body"), "其它查询不得被一起裁掉");
+    assert!(
+        text.chars().count() < MAX_QUERY_OUTPUT_CHARS + 200,
+        "{}",
+        text.chars().count()
     );
 }
 
@@ -445,7 +498,7 @@ async fn exa_failure_falls_back_to_tavily() {
 #[tokio::test]
 async fn anonymous_exa_401_trips_the_breaker() {
     let _guard = NET_LOCK.lock().await;
-    client::reset_anonymous_state();
+    client::reset_circuit_breaker();
     let (exa_url, exa_requests) = spawn_server(|_| (401, String::new())).await;
     let (tavily_url, tavily_requests) = spawn_server(|_| (200, tavily_body("anonymous"))).await;
     let targets = endpoints(&exa_url, &tavily_url);
@@ -471,7 +524,7 @@ async fn anonymous_exa_401_trips_the_breaker() {
     assert_eq!(request_count(&tavily_requests), 2);
     assert!(client::anonymous_blocked());
 
-    // 配置了非空 Key 即解除熔断：下一次重新尝试带 Key 的 Exa（失败后再匿名兜底）。
+    // 带 Key 的失败**不**解除熔断：只多打一次带 Key 的 Exa，不再重试匿名 Exa。
     let _ = client::execute_with_endpoints(
         r#"{"query":"with key"}"#,
         "exa-key",
@@ -480,8 +533,53 @@ async fn anonymous_exa_401_trips_the_breaker() {
         watch::channel(false).1,
     )
     .await;
+    assert_eq!(request_count(&exa_requests), 2);
+    assert!(client::anonymous_blocked());
+    client::reset_circuit_breaker();
+}
+
+#[tokio::test]
+async fn invalid_key_401_then_anonymous_403_keeps_the_breaker_tripped() {
+    let _guard = NET_LOCK.lock().await;
+    client::reset_circuit_breaker();
+    let (exa_url, exa_requests) = spawn_server(|request| {
+        if request.contains("exaApiKey=") {
+            (401, String::new())
+        } else {
+            (403, String::new())
+        }
+    })
+    .await;
+    let (tavily_url, tavily_requests) = spawn_server(|_| (200, tavily_body("fallback"))).await;
+    let targets = endpoints(&exa_url, &tavily_url);
+
+    for _ in 0..2 {
+        let result = client::execute_with_endpoints(
+            r#"{"query":"keyed"}"#,
+            "exa-bad-key",
+            "tavily-key",
+            &targets,
+            watch::channel(false).1,
+        )
+        .await;
+        let ToolExecutionResult::WebSearch(result) = result else {
+            panic!("credential fallback must succeed through Tavily");
+        };
+        assert_eq!(result.provider, WebSearchProvider::Tavily);
+    }
+
+    // 第一次：带 Key 401 + 匿名 403；第二次：只重试带 Key 的 401，不再打匿名 Exa。
     assert_eq!(request_count(&exa_requests), 3);
-    client::reset_anonymous_state();
+    assert_eq!(request_count(&tavily_requests), 2);
+    assert!(client::anonymous_blocked());
+    let anonymous = exa_requests
+        .lock()
+        .expect("requests")
+        .iter()
+        .filter(|request| !request.contains("exaApiKey="))
+        .count();
+    assert_eq!(anonymous, 1, "匿名 Exa 只允许被尝试一次");
+    client::reset_circuit_breaker();
 }
 
 #[tokio::test]
@@ -539,7 +637,169 @@ async fn all_queries_failing_returns_an_error() {
     .await;
 
     assert_eq!(result.error_code(), Some(ToolErrorCode::Io));
-    assert!(crate::chat::tools::format_for_model(&result).contains("failed across all providers"));
+    let text = crate::chat::tools::format_for_model(&result);
+    assert!(text.contains("failed across all providers"));
+    // 真实失败原因必须保留，不能只剩静态文案。
+    assert!(text.contains("Exa returned HTTP 500"), "{text}");
+    assert!(text.contains("Tavily returned HTTP 500"), "{text}");
+}
+
+#[tokio::test]
+async fn failure_details_are_sanitized_and_redacted() {
+    let _guard = NET_LOCK.lock().await;
+    client::reset_circuit_breaker();
+    let (exa_url, _) = spawn_server(|_| {
+        (
+            401,
+            r#"{"error":{"message":"invalid api key exa-secret-key; see exaApiKey=leak"}}"#
+                .to_string(),
+        )
+    })
+    .await;
+    let (tavily_url, _) = spawn_server(|_| {
+        (
+            401,
+            r#"{"detail":{"error":"bad key tavily-secret-key"}}"#.to_string(),
+        )
+    })
+    .await;
+
+    let result = client::execute_with_endpoints(
+        r#"{"query":"secret"}"#,
+        "exa-secret-key",
+        "tavily-secret-key",
+        &endpoints(&exa_url, &tavily_url),
+        watch::channel(false).1,
+    )
+    .await;
+
+    assert_eq!(result.error_code(), Some(ToolErrorCode::Io));
+    let text = crate::chat::tools::format_for_model(&result);
+    assert!(
+        text.contains("Exa returned HTTP 401 Unauthorized: invalid api key"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Tavily returned HTTP 401 Unauthorized: bad key"),
+        "{text}"
+    );
+    assert!(text.contains("<redacted>"), "{text}");
+    for needle in ["exa-secret-key", "tavily-secret-key", "exaApiKey="] {
+        assert!(!text.contains(needle), "泄露 {needle}: {text}");
+    }
+    client::reset_circuit_breaker();
+}
+
+#[test]
+fn all_timeout_failures_report_the_timeout_code() {
+    let outcome = |timed_out: bool| QuerySearchOutcome {
+        query: "slow".into(),
+        provider: None,
+        output: String::new(),
+        error: Some("Exa did not respond within 25000 ms".into()),
+        timed_out,
+    };
+    assert_eq!(
+        client::all_failed_failure(&[outcome(true), outcome(true)]).code,
+        ToolErrorCode::Timeout
+    );
+    assert_eq!(
+        client::all_failed_failure(&[outcome(true), outcome(false)]).code,
+        ToolErrorCode::Io,
+        "只要有一条不是超时，错误码就不能谎报超时"
+    );
+}
+
+#[tokio::test]
+async fn oversized_query_output_sets_truncated() {
+    let _guard = NET_LOCK.lock().await;
+    client::reset_circuit_breaker();
+    let big = "x".repeat(MAX_QUERY_OUTPUT_CHARS + 4_000);
+    let big_chars = big.chars().count();
+    let (exa_url, _) = spawn_server(move |request| {
+        if request.contains("big") {
+            (200, exa_body(&big))
+        } else {
+            (200, exa_body("small result"))
+        }
+    })
+    .await;
+    let tavily_url = spawn_server(|_| (500, String::new())).await.0;
+
+    let result = client::execute_with_endpoints(
+        r#"{"queries":["big","small"]}"#,
+        "exa-key",
+        "tavily-key",
+        &endpoints(&exa_url, &tavily_url),
+        watch::channel(false).1,
+    )
+    .await;
+
+    let ToolExecutionResult::WebSearch(result) = result else {
+        panic!("oversized output must still succeed");
+    };
+    assert!(result.truncated);
+    assert!(
+        result.text.contains("[...truncated]"),
+        "{}",
+        result.text.len()
+    );
+    assert!(result.text.contains("small result"));
+    assert!(
+        result.text.chars().count() < big_chars,
+        "单条预算必须生效：{} >= {big_chars}",
+        result.text.chars().count()
+    );
+}
+
+#[tokio::test]
+async fn mixed_provider_batch_reports_both_engines() {
+    let _guard = NET_LOCK.lock().await;
+    client::reset_circuit_breaker();
+    let (exa_url, _) = spawn_server(|request| {
+        if request.contains("exa-query") {
+            (200, exa_body("exa body"))
+        } else {
+            (500, String::new())
+        }
+    })
+    .await;
+    let (tavily_url, _) = spawn_server(|_| (200, tavily_body("tavily"))).await;
+
+    let result = client::execute_with_endpoints(
+        r#"{"queries":["exa-query","tavily-query"]}"#,
+        "exa-key",
+        "tavily-key",
+        &endpoints(&exa_url, &tavily_url),
+        watch::channel(false).1,
+    )
+    .await;
+
+    let ToolExecutionResult::WebSearch(result) = result else {
+        panic!("mixed batch must succeed");
+    };
+    assert_eq!(result.provider, WebSearchProvider::Exa);
+    assert_eq!(result.provider_label(), "exa+tavily");
+}
+
+#[tokio::test]
+async fn pre_cancelled_call_never_hits_the_network() {
+    let _guard = NET_LOCK.lock().await;
+    let (exa_url, exa_requests) = spawn_server(|_| (200, exa_body("never"))).await;
+    let (tavily_url, _) = spawn_server(|_| (200, tavily_body("never"))).await;
+    let (_tx, cancel) = watch::channel(true);
+
+    let result = client::execute_with_endpoints(
+        r#"{"query":"never"}"#,
+        "exa-key",
+        "tavily-key",
+        &endpoints(&exa_url, &tavily_url),
+        cancel,
+    )
+    .await;
+
+    assert_eq!(result.error_code(), Some(ToolErrorCode::Cancelled));
+    assert_eq!(request_count(&exa_requests), 0);
 }
 
 #[tokio::test]

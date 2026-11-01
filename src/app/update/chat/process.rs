@@ -50,14 +50,10 @@ pub fn settle_tool_detail(
             return false;
         };
         if detail.is_none()
-            && matches!(
-                call.detail.as_deref(),
-                Some(
-                    crate::app::state::ToolDetailView::Mcp(_)
-                        | crate::app::state::ToolDetailView::Subagent(_)
-                        | crate::app::state::ToolDetailView::WebSearch(_)
-                )
-            )
+            && call
+                .detail
+                .as_deref()
+                .is_some_and(crate::app::state::ToolDetailView::preserves_on_empty_settle)
         {
             return false;
         }

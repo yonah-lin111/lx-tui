@@ -6,6 +6,7 @@
 
 use ratatui::layout::Rect;
 
+use crate::app::state::lx::chat::tool_view::MAX_RESULT_LINE_CHARS;
 use crate::app::state::{ToolCallView, ToolStatus, WebSearchDetailView};
 use crate::chat::tools::web_search::MAX_QUERY_CHARS;
 use crate::ui::{style, text};
@@ -15,8 +16,6 @@ use super::tree::{self, Node, Preview, Section};
 use super::{Folds, Segment, header_with_verb, muted_markdown_lines, put_segments, single_line};
 
 const BLOCK_PREVIEW_ROWS: usize = 3;
-/// 结果单行取样上限：超长行先截断再交给 markdown 按列折行。
-const MAX_RESULT_LINE_CHARS: usize = 8_000;
 /// 失败/中断原因最多保留的行数。
 const MAX_ERROR_LINES: usize = 20;
 
@@ -73,14 +72,17 @@ fn queries_section(view: &WebSearchDetailView, expanded: bool) -> Option<Section
     ))
 }
 
-/// 结果单行净化：控制字符转空格（`markdown_render` 不接受裸控制字符），去尾部空白。
+/// 结果单行净化：控制字符转空格（`markdown_render` 不接受裸控制字符），超长截断补 `…`。
 fn sanitize_result_line(line: &str) -> String {
-    line.chars()
-        .take(MAX_RESULT_LINE_CHARS)
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
-        .collect::<String>()
-        .trim_end()
-        .to_string()
+    let mut text = String::with_capacity(line.len().min(MAX_RESULT_LINE_CHARS + 4));
+    for (count, ch) in line.chars().enumerate() {
+        if count == MAX_RESULT_LINE_CHARS {
+            text.push('…');
+            break;
+        }
+        text.push(if ch.is_control() { ' ' } else { ch });
+    }
+    text.trim_end().to_string()
 }
 
 fn result_section(
