@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::chat::tools::ToolExecutionResult;
 
+pub mod exec;
 mod instructions;
 mod model_switch;
 mod parse;
@@ -84,6 +85,8 @@ pub enum ToolSurface {
     Explorer,
     /// 有边界的实现。
     Executor,
+    /// CLI exec 无头主 agent：剔除交互式 ask 后的全部主工具（16 项）。
+    ExecMain,
 }
 
 /// 主 agent 工具名（顺序即呈现顺序）。
@@ -97,6 +100,26 @@ const MAIN_TOOLS: [&str; 17] = [
     "write_stdin",
     "update_plan",
     "ask",
+    "curr_time",
+    "spawn_agent",
+    "send_input",
+    "resume_agent",
+    "wait_agent",
+    "close_agent",
+    "list_agents",
+    "cancel_agent_input",
+];
+
+/// exec 无头主 agent 工具名：`MAIN_TOOLS` 去掉交互式 `ask`，顺序保持一致。
+const EXEC_MAIN_TOOLS: [&str; 16] = [
+    "read",
+    "search",
+    "web_search",
+    "edit",
+    "write",
+    "exec_command",
+    "write_stdin",
+    "update_plan",
     "curr_time",
     "spawn_agent",
     "send_input",
@@ -128,6 +151,7 @@ impl ToolSurface {
             Self::Main => &MAIN_TOOLS,
             Self::Explorer => &EXPLORER_TOOLS,
             Self::Executor => &EXECUTOR_TOOLS,
+            Self::ExecMain => &EXEC_MAIN_TOOLS,
         }
     }
 
@@ -174,6 +198,9 @@ pub const INPUT_NOT_FOUND_CODE: &str = "subagent input not found";
 pub const IMAGE_MISSING_CODE: &str = "image_missing";
 /// 子 agent 内禁止控制工具的稳定错误码。
 pub const UNAVAILABLE_CODE: &str = "subagent tools unavailable";
+/// exec 无头模式不支持交互式 `ask` 的稳定错误码。
+pub const EXEC_ASK_UNSUPPORTED_CODE: &str =
+    "ask is not supported in exec mode; proceed with best-effort assumptions";
 
 /// `wait_agent` 的完成条件。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

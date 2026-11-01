@@ -378,6 +378,48 @@ fn every_wire_shape_respects_tool_surface() {
     }
 }
 
+/// exec 轮次：工具面为 16 项主工具（无交互式 `ask`），四协议一致。
+#[test]
+fn exec_turn_declares_main_tools_without_ask() {
+    use crate::chat::events::RequestPurpose;
+    assert_eq!(
+        RequestPurpose::ExecTurn.tools_surface(),
+        Some(ToolSurface::ExecMain)
+    );
+    let tools = crate::chat::tools::builtin_tools(ToolSurface::ExecMain);
+    assert_eq!(tools.len(), 16);
+    let names = |tools: &Value| -> Vec<String> {
+        tools
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|tool| {
+                tool.get("function")
+                    .and_then(|function| function.get("name"))
+                    .or_else(|| tool.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect()
+    };
+    let expected: Vec<String> = ToolSurface::ExecMain
+        .names()
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    assert!(!expected.iter().any(|name| name == "ask"));
+    for names in [
+        names(&openai_chat_tools(&tools)),
+        names(&openai_responses_tools(&tools)),
+        names(&anthropic_tools(&tools)),
+        names(&google_tools(&tools)[0]["functionDeclarations"]),
+    ] {
+        assert_eq!(names.len(), 16);
+        assert_eq!(names, expected);
+    }
+}
+
 /// explorer 的工具面里不存在任何写工具 schema。
 #[test]
 fn explorer_surface_has_no_mutating_tools() {
