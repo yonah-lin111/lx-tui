@@ -2,7 +2,7 @@
 
 - 分支：`feat/lx-exec`（独立 worktree `.worktrees/lx-exec`）
 - 基线：功能分支基于 `dev @ b8df8c0d`（`SCHEMA_VERSION = 22`，`PROMPT_VERSION = "lx-9"`）
-- 状态：**已在 `feat/lx-exec` 实现并通过验证（2026-11-01），待用户确认合并**
+- 状态：**已全部完成并合入 `dev` 分支（2026-11-01）**
 - 参考：`codex-main/codex-rs/exec/`（`cli.rs`、`lib.rs`、`event_processor.rs`、`event_processor_with_human_output.rs`、`event_processor_with_jsonl_output.rs`、`exec_events.rs`）
 
 ---

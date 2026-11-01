@@ -2,7 +2,7 @@
 
 > 工作区：`.worktrees/lx-exec`（分支 `feat/lx-exec`，基线 `dev @ b8df8c0d`）
 > 范围：CLI 入口与装配（`src/main.rs`、`src/chat/agent/exec/mod.rs`、`src/chat/agent/exec/cli.rs`）、无头宿主运行器、文件变更持久化桥与子 Agent 池（`src/chat/agent/exec/runner.rs`、`src/chat/agent/exec/mutation.rs`、`src/chat/agent/exec/subagent/{mod,turn,settle}.rs`）、事件与输出处理器（`src/chat/agent/exec/events.rs`、`src/chat/agent/exec/processor.rs`）、工具面与内存库（`src/chat/agent/mod.rs`、`src/chat/events.rs`、`src/db/mod.rs`）、拆分后的单元测试（`src/chat/agent/exec/tests/{cli_tests,processor_tests,events_tests,runner_tests,subagent_tests}.rs`）及特性文档（`design.md`、`task.md`）。
-> 状态：已完成全部 P0–P3 问题定位、修复与回归测试验证。
+> 状态：已完成全部 P0–P3 问题定位、修复与回归测试验证，已合入主工作区 `dev` 分支。
 
 ---
 
