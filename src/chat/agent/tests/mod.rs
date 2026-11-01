@@ -82,6 +82,28 @@ fn tool_surfaces_are_exact() {
     assert_eq!(AgentRole::Explorer.tools(), ToolSurface::Explorer.names());
 }
 
+/// exec 工具面 = 主工具面去掉交互式 `ask`，顺序与其保持一致。
+#[test]
+fn exec_main_surface_drops_only_ask() {
+    let names = ToolSurface::ExecMain.names();
+    assert_eq!(names.len(), 16);
+    assert!(!names.contains(&"ask"));
+    let expected: Vec<&str> = ToolSurface::Main
+        .names()
+        .iter()
+        .copied()
+        .filter(|name| *name != "ask")
+        .collect();
+    assert_eq!(names, expected.as_slice());
+    assert!(!EXEC_ASK_UNSUPPORTED_CODE.is_empty());
+    assert!(!has_cjk(EXEC_ASK_UNSUPPORTED_CODE));
+    assert!(
+        EXEC_ASK_UNSUPPORTED_CODE.is_ascii(),
+        "{}",
+        EXEC_ASK_UNSUPPORTED_CODE
+    );
+}
+
 #[test]
 fn parse_control_accepts_valid_arguments() {
     assert_eq!(

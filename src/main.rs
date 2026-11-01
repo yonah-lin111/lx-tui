@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use lx_tui::app::state::AppState;
+use lx_tui::chat::agent::exec::{CliAction, EXIT_ERR, EXIT_OK, help_text, parse_cli, run_main};
 use lx_tui::config::Config;
 use lx_tui::db::is_dev_environment;
 use lx_tui::db::service::Persistence;
@@ -12,19 +13,49 @@ use lx_tui::tui::Tui;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    if let Err(error) = run() {
-        tracing::error!(error = %error, "lx-tui exited with error");
-        // 顶层错误需要让用户看到；终端已恢复，这不是调试输出。
-        eprintln!("lx-tui: {error}");
-        std::process::exit(1);
+    match run() {
+        Ok(EXIT_OK) => {}
+        Ok(code) => std::process::exit(code),
+        Err(error) => {
+            tracing::error!(error = %error, "lx-tui exited with error");
+            // 顶层错误需要让用户看到；终端已恢复，这不是调试输出。
+            eprintln!("lx-tui: {error}");
+            std::process::exit(EXIT_ERR);
+        }
     }
 }
 
-/// 启动编排：日志 -> 配置 -> 信任页（行内）-> 终端 -> 事件循环。
-fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// 入口分发：帮助/版本/无头 exec 直接返回退出码，无参数进入 TUI。
+fn run() -> Result<i32, Box<dyn std::error::Error>> {
     init_tracing()?;
     tracing::info!("lx-tui starting");
 
+    let action = match parse_cli(std::env::args_os()) {
+        Ok(action) => action,
+        Err(usage_error) => {
+            eprintln!("lx-tui: {usage_error}");
+            return Ok(EXIT_ERR);
+        }
+    };
+    match action {
+        CliAction::Help(topic) => {
+            print!("{}", help_text(topic));
+            Ok(EXIT_OK)
+        }
+        CliAction::Version => {
+            println!("lx-tui {}", env!("CARGO_PKG_VERSION"));
+            Ok(EXIT_OK)
+        }
+        CliAction::Exec(cli) => run_main(cli, database_worktree().as_deref()),
+        CliAction::Tui => {
+            run_tui()?;
+            Ok(EXIT_OK)
+        }
+    }
+}
+
+/// TUI 启动编排：配置 -> 信任页（行内）-> 终端 -> 事件循环。
+fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::default();
     if let Ok(root) = lx_tui::config::user_data_root() {
         let _ = lx_tui::chat::agent::ensure_global_agents_md(&root);
