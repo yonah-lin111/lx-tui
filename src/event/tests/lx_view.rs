@@ -1069,7 +1069,7 @@ fn lx_paste_image_path_opens_panel_and_confirms_refer_image() {
 }
 
 #[test]
-fn ask_click_selects_option_and_does_not_reach_history() {
+fn ask_click_submits_a_single_select_question_and_does_not_reach_history() {
     let config = Config::default();
     let (mut state, pane) = busy_ask_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -1085,12 +1085,21 @@ fn ask_click_selects_option_and_does_not_reach_history() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    let ask = state
-        .pane_anywhere(pane)
-        .and_then(|pane| pane.lx.ask.as_ref())
-        .expect("面板仍在（busy 不会被 sweep）");
-    assert_eq!(ask.selected[0], vec![0], "单击选项即选中（单选独占）");
-    assert!(!ask.editing, "点选项不提交、不进入编辑");
+    // 单题单选：没有提交按钮，单击选项立即选中并提交整题。
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|pane| pane.lx.ask.as_ref())
+            .is_none(),
+        "单题单选单击即提交，面板随之关闭"
+    );
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::AnswerAsk { call_id, .. } if call_id == "call"
+        )),
+        "点击必须推作答效应"
+    );
     assert!(dirty, "点击必须重绘");
     assert!(
         state.lx_card_press.is_none(),

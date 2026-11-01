@@ -195,3 +195,4 @@ mod compacting;
 mod label;
 mod layout;
 mod stop_and_lifecycle;
+mod task_panel;

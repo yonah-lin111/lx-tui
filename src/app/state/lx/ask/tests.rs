@@ -104,6 +104,62 @@ fn zero_option_question_only_has_the_other_row() {
 }
 
 #[test]
+fn submit_row_only_exists_for_multi_select_or_the_last_question() {
+    // 单题单选：没有提交按钮，选中即提交。
+    let single = state(vec![question("q", false, &["A", "B"])]);
+    assert!(!single.has_submit_row());
+    assert_eq!(single.submit_row(), None);
+    assert_eq!(single.row_count(), 3, "2 选项 + Other");
+
+    // 单题多选：Other 下方是提交按钮。
+    let multi = state(vec![question("q", true, &["A", "B"])]);
+    assert!(multi.has_submit_row());
+    assert_eq!(multi.other_row(), 2);
+    assert_eq!(multi.submit_row(), Some(3));
+    assert_eq!(multi.row_count(), 4, "2 选项 + Other + Submit");
+
+    // 多题：前 N-1 题无按钮，最后一题固定有按钮。
+    let mut flow = state(vec![
+        question("a", false, &["A1", "A2"]),
+        question("b", false, &["B1"]),
+    ]);
+    assert!(!flow.has_submit_row());
+    assert_eq!(flow.submit_row(), None);
+    assert!(flow.next_step());
+    assert!(flow.has_submit_row(), "多题末题固定显示提交按钮");
+    assert_eq!(flow.submit_row(), Some(2));
+}
+
+#[test]
+fn question_has_preview_ignores_blank_previews() {
+    let mut plain = question("q", false, &["A"]);
+    plain.options[0].preview = Some("   ".into());
+    let ask = state(vec![plain]);
+    assert!(!ask.question_has_preview(), "空白 preview 不占预览区");
+
+    let mut previewed = question("q", false, &["A", "B"]);
+    previewed.options[1].preview = Some("┌──┐".into());
+    let ask = state(vec![previewed]);
+    assert!(ask.question_has_preview());
+}
+
+#[test]
+fn goto_tab_clamps_and_resets_the_edit_state() {
+    let mut ask = state(vec![
+        question("a", false, &["A1"]),
+        question("b", false, &["B1"]),
+    ]);
+    assert!(ask.begin_edit());
+    ask.preview_scroll[0] = 2;
+    assert!(ask.goto_tab(9), "越界题号钳到末题");
+    assert_eq!(ask.current, 1);
+    assert!(!ask.editing, "切题退出编辑态");
+    assert!(ask.goto_tab(0));
+    assert_eq!(ask.preview_scroll[0], 0, "切题重置预览滚动");
+    assert!(!ask.goto_tab(0), "同题不产生变化");
+}
+
+#[test]
 fn navigation_keeps_per_question_state_and_is_clamped() {
     let mut ask = state(vec![
         question("a", false, &["A1", "A2"]),
@@ -113,12 +169,9 @@ fn navigation_keeps_per_question_state_and_is_clamped() {
     assert!(ask.next_step());
     ask.choose(0);
     assert_eq!(ask.current, 1);
-    assert!(ask.next_step(), "末题之后进入 Confirm");
-    assert!(ask.is_confirm());
-    assert!(!ask.next_step(), "Confirm 已是最后一步");
-    assert!(ask.prev_step(), "Confirm 回到末题");
-    assert!(!ask.is_confirm());
-    assert!(ask.prev_step());
+    assert!(!ask.next_step(), "末题已是最后一步，提交按钮收尾");
+    assert_eq!(ask.current, 1);
+    assert!(ask.goto_tab(0));
     assert_eq!(
         ask.current_answers(),
         vec!["A2".to_string()],
@@ -130,6 +183,21 @@ fn navigation_keeps_per_question_state_and_is_clamped() {
     assert_eq!(ask.highlight[0], 0);
     assert!(ask.move_highlight(9));
     assert_eq!(ask.highlight[0], ask.row_count() - 1);
+}
+
+#[test]
+fn started_at_is_recorded_and_compensated_into_the_turn_clock() {
+    let ask = state(vec![question("q", false, &["A"])]);
+    let now = crate::db::now_ms();
+    assert!(
+        (now - ask.started_at_ms).abs() < 5_000,
+        "创建面板必须记录挂起起点"
+    );
+    let mut chat = crate::app::state::LxChat::new();
+    chat.turn_started_at_ms = Some(now);
+    ask.compensate_turn_clock(&mut chat);
+    let started = chat.turn_started_at_ms.expect("起点仍在");
+    assert!(started >= now, "补偿后起点不早于提问开始");
 }
 
 #[test]

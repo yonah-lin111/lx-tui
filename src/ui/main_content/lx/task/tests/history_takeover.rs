@@ -450,11 +450,10 @@ fn shrinking_output_clamps_but_keeps_the_read_position() {
 // ===== bug 回归：面板里不得出现「↓ jump to bottom」 =====
 
 #[test]
-fn task_panel_hides_the_jump_to_bottom_bar() {
-    // 真实 bug：面板打开时输出容器已接管历史区，聊天栏却还画着
-    // `↓ jump to bottom`——那是消息列表的控件，此时点了只会滚动看不见的历史。
+fn task_panel_hides_main_history_jump_to_bottom_and_shows_for_task_output() {
+    // 面板打开时输出容器接管历史区：主聊天历史未触底不会让面板误现 `↓ jump to bottom`，
+    // 而当面板自身输出区上滚离开底部时，才在列表顶边上方一行显示 `↓ jump to bottom` 并让出 1 行输出高度。
     let mut lx = lx_with_messages();
-    // 构造"上滚未跟随底部"状态：平时正是它让聊天栏出现。
     lx.chat.follow_bottom = false;
     lx.chat.history_scroll = 0;
     let closed = render_lines(&lx, 70, 24).join("\n");
@@ -463,11 +462,33 @@ fn task_panel_hides_the_jump_to_bottom_bar() {
         "前提：关闭态确实显示回到底部控件：{closed}"
     );
 
-    lx.task = Some(page_with(vec![entry(1, "npm run dev")]));
+    let mut page = page_with(vec![entry(1, "npm run dev")]);
+    page.output = (0..40).map(|i| format!("log line {i}")).collect();
+    page.output_visible = 10;
+    page.pin_output_to_tail();
+    lx.task = Some(page);
+    let area = Rect::new(0, 0, 70, 24);
+    let rects_at_bottom = crate::ui::main_content::lx::task_rects(area, &lx).expect("面板已打开");
     let opened = render_lines(&lx, 70, 24).join("\n");
     assert!(
         !opened.contains(text::LX_JUMP_BOTTOM_HINT),
-        "面板打开时不得显示回到底部控件：{opened}"
+        "面板输出处于底部时不得泄漏主历史的回到底部控件：{opened}"
+    );
+
+    // 面板输出上翻离开底部：显示 `↓ jump to bottom` 且输出区让出 1 行。
+    if let Some(page) = lx.task.as_mut() {
+        page.scroll_output(-5);
+    }
+    let rects_scrolled = crate::ui::main_content::lx::task_rects(area, &lx).expect("面板已打开");
+    assert_eq!(
+        rects_scrolled.output.height + 1,
+        rects_at_bottom.output.height,
+        "显示回到底部栏时输出容器让出 1 行"
+    );
+    let scrolled = render_lines(&lx, 70, 24).join("\n");
+    assert!(
+        scrolled.contains(text::LX_JUMP_BOTTOM_HINT),
+        "面板输出离开底部时显示回到底部控件：{scrolled}"
     );
 
     // 关闭面板后恢复（历史区回来，控件也跟着回来）。

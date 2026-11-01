@@ -1,0 +1,108 @@
+# Todo 面板折行缩进、后台任务回到底部与 Ask 交互重构 — 执行任务清单
+
+> **状态**：全部阶段（阶段 0 ~ 阶段 4）均已完成并通过验证（待用户确认后合并回 `dev`）
+> **关联设计文档**：`docs/feature/todo-task-and-ask-ux/design.md`
+> **执行策略**：使用最多 3 个并行 subagent 按模块边界推进，完成后统一执行编译、Clippy 与针对性单元测试校验。
+
+---
+
+## 阶段划分与详细任务清单
+
+### 阶段 0：需求盘问与技术设计（已完成）
+- [x] **0.1 代码检索与现状摸底**：结合 `codegraph` 与 `codebase-memory-mcp` 检索 `src/ui/right_panel/todo/`、`src/ui/main_content/lx/`、`src/chat/agent/` 与 `opencode-dev` 表单实现。
+- [x] **0.2 Grill Me 边界盘问（共 7 轮全部确认）**：
+  - [x] Q1：确认 Todo 条目最多显示 3 行、续行 9 列缩进对齐、第 3 行末 `…` 截断、整块高亮底色，以及行内编辑 1~3 行软折行与视口内滚动。
+  - [x] Q2：确认后台任务面板「回到底部」按钮同时覆盖 `Processes` 与 `Agents` 两个 Tab，复用 `chat_bar` 位置与样式，点击回到最底部并恢复跟随。
+  - [x] Q3：确认 Ask 面板取消左右分栏、选项描述缩进 6 列完整换行、`preview` 移至所有选项正下方且无 `preview` 时完全隐藏（不显示 `(no preview)`）。
+  - [x] Q4：确认单选移除提交按钮（点击或回车直接选中提交/下一题），多选显示弹窗同款实心胶囊按钮 ` ↵ submit `（`button_primary` / `button_secondary`）。
+  - [x] Q5：确认 Ask 自定义输入（`Other...`）移除底部独立编辑框，原地变为 6 列缩进的 1~3 行行内输入框。
+  - [x] Q6：确认 Ask 面板仅保留 `↑`/`↓` 键切换 item、移除多题 `Confirm` 汇总 Tab、多题时在最后一题底部显示提交按钮，且多选/末题需聚焦提交按钮按 `Enter`（或点击按钮）才提交。
+  - [x] Q7：确认 Ask 期间隐藏 `chat_bar` loading 与计时、停止历史步骤方块呼吸，并在 Ask 结束/取消时将等待耗时补偿进 `turn_started_at_ms`。
+- [x] **0.3 编写设计文档与任务文档**：输出 `docs/feature/todo-task-and-ask-ux/design.md` 与 `docs/feature/todo-task-and-ask-ux/task.md`。
+
+---
+
+### 阶段 1：右侧 Todo 面板条目最多 3 行折行缩进与行内多行编辑
+**目标文件**：`src/ui/widgets/input.rs`、`src/ui/right_panel/todo.rs`、`src/app/state/todo.rs`、`src/app/update/todo.rs`、`src/ui/right_panel/todo/tests.rs`
+
+- [x] **1.1 多行软折行与 3 行截断/视口计算原语（`src/ui/widgets/input.rs`）**
+  - 实现 `wrap_clamped_lines(text: &str, width: usize, max_rows: usize) -> Vec<String>`：按 `UnicodeWidthChar` 计算列宽软折行，超过 `max_rows`（3 行）时在第 3 行末尾留出显示宽度追加 `…`。
+  - 实现 `multiline_view(text: &str, cursor: usize, width: usize, max_rows: usize) -> MultilineInputView`：将编辑文本按 `width` 软折行为视觉行列表（含每行起止字节与字符索引），计算光标所在视觉行与列，并在超过 3 行时以 `cursor_row` 为基准计算可见的 `1..=3` 行滑动窗口。
+  - 实现 `multiline_char_index_at(text: &str, cursor: usize, width: usize, max_rows: usize, visual_row_offset: usize, col: u16) -> usize`：将鼠标点击的行偏移与列偏移还原为全文字符索引。
+
+- [x] **1.2 Todo 列表动态 1~3 行布局与渲染（`src/ui/right_panel/todo.rs`）**
+  - 定义 `pub const MAX_TODO_ITEM_ROWS: usize = 3`。
+  - 构建统一的行几何计算函数：为可见范围内的每条 Todo（含新建幽灵行）计算占用的视觉行数 `1..=3` 及起始 `y` 坐标。
+  - 更新 `render_row` 与 `render_edit_row`：
+    - 选中或悬停时，将该条目占用的 `1..=3` 行矩形整块铺设 `style::selection()`；
+    - 首行绘制 `❯`、`[ ]`/`[~]`/`[x]`、`P0`..`P3` 徽标及第 1 行正文；
+    - 第 2、3 行左侧 9 列留空（与 `row_text_x(list)` 对齐），绘制后续折行正文或编辑框可见行及选区高亮，并返回硬件光标坐标。
+  - 同步更新命中测试函数 `row_at`、`priority_at`（仅首行徽标列命中）、`edit_input_char_at`（支持多行点击/拖拽选区）。
+
+- [x] **1.3 Todo 单元测试更新与新增（`src/ui/right_panel/todo/tests.rs`）**
+  - 新增 2~3 行自动折行与 9 列缩进对齐断言测试；
+  - 新增超 3 行文本末尾 `…` 截断断言测试；
+  - 新增多行编辑态展开、超 3 行视口滚动及光标坐标测试。
+
+---
+
+### 阶段 2：后台任务面板（Processes · Agents）内容区「回到底部」按钮
+**目标文件**：`src/app/state/lx/task.rs`、`src/ui/main_content/lx/chat_bar.rs`、`src/ui/main_content/lx/history_hit.rs`、`src/app/update/chat/viewport.rs`、`src/app/update/pane/task_page.rs`、`src/event/mouse/`
+
+- [x] **2.1 后台任务面板触底状态判定（`src/app/state/lx/task.rs`）**
+  - 实现 `TaskPage::is_at_bottom(&self, agents: &AgentsState) -> bool`：
+    - `TaskTab::Processes`：`self.output_visible == 0 || self.output_scroll >= self.output_max_scroll()`；
+    - `TaskTab::Agents`：当前选中 `SubagentRun` 消息为空或 `run.follow == true`。
+
+- [x] **2.2 `chat_bar` 在后台任务面板下的显隐与布局（`src/ui/main_content/lx/chat_bar.rs`）**
+  - 修改 `chat_bar::visible(lx)` 与 `chat_bar::jump_visible(lx)`：当 `lx.task.is_some()` 时，若 `!page.is_at_bottom(&lx.agents)` 则显示 `chat_bar` 并绘制右侧 `↓ jump to bottom` 按钮（此时 `lx.rs::layout` 中的 `out.task_output` 自动让出底部 1 行）。
+
+- [x] **2.3 鼠标悬停、点击触发与滚轮接线（`src/ui/main_content/lx/history_hit.rs`、`src/app/update/chat/viewport.rs`、`src/event/mouse/`）**
+  - 更新 `jump_lx_history_bottom(state, pane)`：当 `target.lx.task` 打开时，按当前 Tab 执行 `page.pin_output_to_tail()`（Processes）或将当前子 Agent 的 `run.follow` 设为 `true`（Agents），并重置 `jump_bottom_hover = false`；
+  - 在 `event/mouse/press.rs`、`event/mouse/hover.rs` 与 `event/mouse/wheel.rs` 中接入后台任务面板的 `jump_bottom_hit` 点击/悬停，以及 `Processes` 输出区的鼠标滚轮上下滚动。
+
+- [x] **2.4 后台任务面板回到底部单元测试（`src/ui/main_content/lx/chat_bar/tests/`、`src/ui/main_content/lx/tests.rs`）**
+  - 测试 `Processes` 日志上翻后出现 `↓ jump to bottom`、点击后回到尾部且按钮消失；
+  - 测试 `Agents` 子 Agent 消息流上翻后出现 `↓ jump to bottom`、点击后恢复 `follow = true`。
+
+---
+
+### 阶段 3：Ask 工具交互全面重构与暂停计时/Loading
+**目标文件**：`src/app/state/lx/ask.rs`、`src/ui/main_content/lx/ask.rs`、`src/app/update/chat/ask.rs`、`src/app/update/chat/mod.rs`、`src/event/chat/ask.rs`、`src/ui/main_content/lx/chat_bar.rs`、`src/ui/main_content/lx/history.rs`、`src/ui/text/agent.rs`
+
+- [x] **3.1 重构 `AskState` 状态模型（`src/app/state/lx/ask.rs`）**
+  - 移除 `confirm: bool` 字段及相关复核步方法，`tab_len()` 恒为 `questions.len()`；
+  - 新增 `started_at_ms: i64`（初始化为 `crate::db::now_ms()`）；
+  - 新增 `has_submit_row(&self) -> bool`（单题仅多选为 `true`，多题仅最后一题为 `true`）、`submit_row(&self) -> Option<usize>`、`question_has_preview(&self) -> bool`；
+  - 更新 `row_count(&self)` 为 `options.len() + 1 + usize::from(has_submit_row())`，使提交按钮成为最后一个可通过 `↑`/`↓` 聚焦的逻辑项；
+  - 更新 `MAX_OTHER_EDIT_ROWS = 3` 行内编辑高度同步。
+
+- [x] **3.2 重构 Ask 面板布局与渲染（`src/ui/main_content/lx/ask.rs`、`src/ui/text/agent.rs`）**
+  - 移除左右分栏（`SPLIT_MIN_WIDTH`）与底部独立编辑框（`lay.editor`、`draw_editor`）；
+  - **选项描述完整换行**：将 `RowKind::OptionDesc` 按 `options.width - ROW_PREFIX` 全宽软折行展开为多行，每行缩进 6 列绘制；
+  - **Other 原地行内编辑**：将 `RowKind::Other` 在编辑态或有内容时按 `1..=3` 行展开，左侧 6 列绘制 `❯ (•) ` / `❯ [x] `，右侧原地绘制 `AskEditor` 的 1~3 行软折行内容、空态占位符 `Other...`、选区反显，并返回硬件光标坐标；
+  - **弹窗胶囊样式提交按钮**：在 `has_submit_row()` 为真时，于 `Other` 下方渲染 `RowKind::Submit`（文案 ` ↵ submit `，就绪时 `style::button_primary()`、未就绪时 `style::button_secondary()`，聚焦时行首带 `❯`）；
+  - **Preview 置底且按需显隐**：仅当 `ask.question_has_preview()` 为真时，在所有选项行下方分配 `lay.preview`；本题无任何 `preview` 时完全隐藏预览区。
+
+- [x] **3.3 重构 Ask 键盘与鼠标交互（`src/app/update/chat/ask.rs`）**
+  - 列表态仅保留 `↑`/`↓` 切换高亮（移除 `Tab`/`Shift+Tab`/`←`/`→`/`j`/`k`/`1..9`）；
+  - 单选题（无提交按钮时）在选项上按 `Enter` 或鼠标单击：立即选中并提交（单题）或切到下一题（多题非末题）；
+  - 多选题或多题最后一题：在选项上按 `Enter`/`Space`/鼠标点击仅切换选中态，必须在焦点位于 ` ↵ submit ` 按钮时按 `Enter`（或鼠标点击按钮）才触发提交；若尚有未作答题目，弹 Toast 并自动跳转到第一个未作答题目；
+  - 行内编辑态按 `Enter`：提交手写文本（单题单选直接提交整题，多题非末题单选进入下一题，多选或末题退出编辑并勾选）；按 `Shift+Enter`/`Ctrl+Enter` 换行；按 `Esc` 退出行内编辑。
+
+- [x] **3.4 Ask 过程中暂停 Agent 计时与 Loading（`src/ui/main_content/lx/chat_bar.rs`、`src/ui/main_content/lx/history.rs`、`src/app/update/chat/mod.rs`、`src/event/chat/ask.rs`）**
+  - `chat_bar::loading_visible`：当 `lx.ask.is_some()` 时返回 `false`；
+  - `history.rs`：当 `lx.ask.is_some()` 时 `animating = false`，停止步骤方块呼吸动画；
+  - `advance_lx_loading`：当 `target.lx.ask.is_some()` 时跳过 `turn_elapsed_ms` 刷新与主会话 `loading_frame` 递增；
+  - 在 `submit_all` 与 `event::chat::ask::clear` 中，将 `now_ms() - ask.started_at_ms` 累加补偿进 `turn_started_at_ms`。
+
+- [x] **3.5 Ask 单元测试与回归测试更新（`src/ui/main_content/lx/ask/tests.rs`、`src/app/update/chat/tests/ask.rs`、`src/app/state/lx/ask/tests.rs`）**
+  - 更新既有测试以匹配移除 `Confirm` Tab、仅 `↑`/`↓` 切项、单选无 Submit 按钮、多选/末题聚焦 Submit 按钮提交、原地行内编辑、Preview 置底及暂停计时的最新行为。
+
+---
+
+### 阶段 4：规范文档同步与全链路精确验证
+- [x] **4.1 同步更新 `docs/standards/tui-design-requirements.md`**
+- [x] **4.2 执行代码格式化检查**：`rtk cargo fmt --check`
+- [x] **4.3 执行 Clippy 静态检查**：`rtk cargo clippy --all-targets -- -D warnings`
+- [x] **4.4 执行针对性测试套件**：`rtk cargo test todo`、`rtk cargo test ask`、`rtk cargo test chat_bar`、`rtk cargo test task`

@@ -1,11 +1,14 @@
 //! `ask` 面板的按键、鼠标与提交：纯状态迁移，只登记 `Effect`，不碰 IO。
 //!
-//! 交互对齐 opencode 的提问面板（用户指定）：
+//! 交互对齐 opencode 的提问面板（design §4.3）：
 //!
-//! - **单题**：单选 `Enter` 选中高亮项后**立即提交**；多选 `Space` 勾选、`Enter` 提交。
-//! - **多题**：单选 `Enter` 选中并进入下一题；多选 `Space` 勾选、`Enter` 下一题；
-//!   末题之后进入 `Confirm` 步，只有全部题目都作答，`Confirm` 上按 `Enter` 才提交。
-//! - 当前题还没有答案就按 `Enter`：**窗格内 toast** 提示先作答，不前进、不提交。
+//! - **列表态只认 `↑`/`↓`**：切高亮（含「其他」与底部提交按钮），没有 `j`/`k`、
+//!   `Tab`、`←`/`→`、`1..9`——多题切题只靠鼠标点 tab 或单选答完自动前进。
+//! - **单选**：在选项上按 `Enter` 立即选中并完成本题（单题提交、多题进下一题、
+//!   末题把焦点移到提交按钮）。
+//! - **多选 / 多题末题**：选项只勾选，必须聚焦底部 ` ↵ submit ` 按 `Enter`
+//!   （或鼠标点击按钮）才提交。
+//! - **提交按钮**：未答完时给窗格内 toast，并跳到第一个未作答的题目。
 //!
 //! 两条硬约束：
 //!
@@ -22,18 +25,23 @@ use crate::app::state::lx::{AskHit, AskWheelZone};
 use crate::app::state::{AppState, AskState};
 use crate::app::toast::{Toast, ToastKind};
 use crate::layout::PaneId;
+use crate::ui::text::agent::ASK_TOAST_ANSWER_REQUIRED;
 
 use super::super::WHEEL_LINES;
 use super::escape_stop;
-
-/// 回车时当前题还没有答案的 toast 文案。
-pub const ASK_HINT_EMPTY: &str = "select an answer first";
 
 /// 手写答案超过字节上限、写入被拒时的 toast 文案。
 pub const ASK_HINT_TOO_LONG: &str = "answer is too long";
 
 /// 预览滚动的单次步长（`PgUp`/`PgDn` 与滚轮共用）。
 const PREVIEW_STEP: isize = WHEEL_LINES;
+
+/// 单选题的收尾动作（完成后需要跳出 `ask` 的可变借用）。
+enum Follow {
+    Submit,
+    Next,
+    None,
+}
 
 /// ask 面板接管 lx 输入；返回是否产生状态变化。
 pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
@@ -47,31 +55,20 @@ pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool
         // 插入类按键先按字节预算判定：超限拒绝写入（绝不截断），并给出窗格内提示。
         let rejected = inserted_bytes(&command)
             .is_some_and(|bytes| ask.editor().is_some_and(|editor| !editor.can_insert(bytes)));
-        let changed = apply_edit_input(ask, command);
+        let changed = apply_edit_input(state, pane, command);
         if rejected {
             hint(state, pane, ASK_HINT_TOO_LONG);
         }
         return changed;
     }
     match command {
-        // ↑↓ / j / k：移动高亮（含「其他」行）。
-        LxInput::Up | LxInput::Char('k') => ask.move_highlight(-1),
-        LxInput::Down | LxInput::Char('j') => ask.move_highlight(1),
-        // Space：勾选/取消（多选）或独占选中（单选）；「其他」行进入编辑态。
-        LxInput::Char(' ') => {
-            if ask.is_confirm() {
-                false
-            } else {
-                ask.choose(ask.highlight[ask.current])
-            }
-        }
-        // 1–9：直选第 N 项（同 Space 的选择语义；多选再按同一数字取消）。
-        LxInput::Char(digit @ '1'..='9') => choose_row(ask, digit),
-        // Enter：选中/前进一步/提交流程见 [`enter`]。
+        // 列表导航只剩 ↑↓：不再有 j/k、Tab、←/→、1..9。
+        LxInput::Up => ask.move_highlight(-1),
+        LxInput::Down => ask.move_highlight(1),
+        // Space：选项勾选、「其他」进入行内编辑、提交行等价 Enter。
+        LxInput::Char(' ') => space(state, pane),
+        // Enter：选中/前进/提交，规则见 [`enter`]。
         LxInput::Enter => enter(state, pane),
-        // Tab/→ 下一步（含 Confirm），Shift+Tab/← 上一步。
-        LxInput::Tab | LxInput::Right => ask.next_step(),
-        LxInput::PrevStep | LxInput::Left => ask.prev_step(),
         LxInput::PageUp => ask.scroll_preview(-PREVIEW_STEP),
         LxInput::PageDown => ask.scroll_preview(PREVIEW_STEP),
         // Esc：沿用双击确认（第一次只待命，第二次取消整轮）。
@@ -81,7 +78,32 @@ pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool
     }
 }
 
-/// `Enter` 的统一入口：先满足当前题的作答条件，再决定提交还是前进。
+/// `Space`：普通选项勾选/独占选择，「其他」进入编辑，提交行等价 Enter。
+fn space(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(ask) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.ask.as_ref())
+    else {
+        return false;
+    };
+    let highlight = ask.highlight.get(ask.current).copied().unwrap_or(0);
+    if Some(highlight) == ask.submit_row() {
+        return enter(state, pane);
+    }
+    let on_other = highlight == ask.other_row();
+    let Some(ask) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.ask.as_mut())
+    else {
+        return false;
+    };
+    if on_other {
+        return ask.begin_edit();
+    }
+    ask.choose(highlight)
+}
+
+/// `Enter` 的统一入口：提交按钮 > 其他 > 普通选项。
 fn enter(state: &mut AppState, pane: PaneId) -> bool {
     let Some(ask) = state
         .pane_anywhere(pane)
@@ -89,58 +111,58 @@ fn enter(state: &mut AppState, pane: PaneId) -> bool {
     else {
         return false;
     };
-    if ask.is_confirm() {
-        return if ask.all_answered() {
-            submit_all(state, pane)
-        } else {
-            empty_hint(state, pane)
-        };
+    let highlight = ask.highlight.get(ask.current).copied().unwrap_or(0);
+    // 焦点在提交按钮：全部作答才提交，否则提示并跳到第一个未答题。
+    if Some(highlight) == ask.submit_row() {
+        let ready = ask.all_answered();
+        let first_unanswered = (0..ask.questions.len()).find(|index| !ask.answered(*index));
+        if ready {
+            return submit_all(state, pane);
+        }
+        hint(state, pane, ASK_TOAST_ANSWER_REQUIRED);
+        if let Some(index) = first_unanswered
+            && let Some(ask) = state
+                .pane_mut_anywhere(pane)
+                .and_then(|target| target.lx.ask.as_mut())
+        {
+            ask.goto_tab(index);
+        }
+        return true;
     }
-    let (answered, single) = {
-        let Some(ask) = state
+    // 焦点在「其他」：原地进入行内编辑（再次回车才确认文本）。
+    if highlight == ask.other_row() {
+        return state
             .pane_mut_anywhere(pane)
             .and_then(|target| target.lx.ask.as_mut())
-        else {
-            return false;
-        };
-        let Some(question) = ask.question() else {
-            return false;
-        };
-        let highlight = ask.highlight[ask.current];
-        let on_other = highlight == question.options.len();
-        let other_committed = ask.custom_on.get(ask.current).copied().unwrap_or(false);
-        // 高亮「其他」且尚未提交手写文本：回车进入编辑（再次回车才视为作答）。
-        if on_other && !other_committed {
-            return ask.begin_edit();
-        }
-        // 单选：回车即选中高亮项（opencode 语义）；多选靠 Space 勾选。
-        if !on_other && !question.multi_select {
-            ask.choose(highlight);
-        }
-        (
-            !ask.answers_at(ask.current).is_empty(),
-            ask.questions.len() == 1,
-        )
-    };
-    if !answered {
-        return empty_hint(state, pane);
+            .is_some_and(AskState::begin_edit);
     }
-    if single {
-        return submit_all(state, pane);
-    }
-    state
+    let multi = ask.question().is_some_and(|question| question.multi_select);
+    let single = ask.questions.len() == 1;
+    let has_submit = ask.has_submit_row();
+    let Some(ask) = state
         .pane_mut_anywhere(pane)
         .and_then(|target| target.lx.ask.as_mut())
-        .is_some_and(AskState::next_step)
+    else {
+        return false;
+    };
+    // 单选：回车即选中高亮项；多选：只切换勾选，绝不自动提交。
+    if !ask.choose(highlight) {
+        return false;
+    }
+    if multi {
+        return true;
+    }
+    if has_submit {
+        ask.focus_submit();
+        return true;
+    }
+    if !single {
+        return ask.next_step();
+    }
+    submit_all(state, pane)
 }
 
 /// 空答案提示：窗格内 toast（不抢全局槽、不写草稿）。
-fn empty_hint(state: &mut AppState, pane: PaneId) -> bool {
-    hint(state, pane, ASK_HINT_EMPTY);
-    true
-}
-
-/// 提问面板的窗格内提示（从不占用全局 toast 槽）。
 fn hint(state: &mut AppState, pane: PaneId, message: &'static str) {
     crate::app::update::show_lx_toast(
         state,
@@ -159,23 +181,71 @@ fn inserted_bytes(command: &LxInput) -> Option<usize> {
 }
 
 /// 编辑态按键：编辑子集转发给独立缓冲，`Enter` 提交文本，`Esc` 只退出编辑。
-fn apply_edit_input(ask: &mut AskState, command: LxInput) -> bool {
+fn apply_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
     match command {
-        // Enter：提交手写文本为本题答案并退出编辑（不提交整题）。
-        LxInput::Enter => ask.commit_edit(),
+        LxInput::Enter => commit_edit(state, pane),
         // Shift+Enter / Ctrl+Enter：换行。
-        LxInput::Newline | LxInput::EnterFolder => ask.editor_mut().is_some_and(|editor| {
-            editor.newline();
-            true
-        }),
+        LxInput::Newline | LxInput::EnterFolder => state
+            .pane_mut_anywhere(pane)
+            .and_then(|target| target.lx.ask.as_mut())
+            .is_some_and(|ask| {
+                ask.editor_mut().is_some_and(|editor| {
+                    editor.newline();
+                    true
+                })
+            }),
         // Esc：退出编辑，文本保留，不取消整轮。
-        LxInput::Escape => ask.cancel_edit(),
+        LxInput::Escape => state
+            .pane_mut_anywhere(pane)
+            .and_then(|target| target.lx.ask.as_mut())
+            .is_some_and(AskState::cancel_edit),
         // Tab：编辑态吞掉（不切题，避免误操作）。
         LxInput::Tab => false,
-        command => ask
-            .editor_mut()
-            .is_some_and(|editor| super::super::pane::apply_editor_edit(editor, command)),
+        command => state
+            .pane_mut_anywhere(pane)
+            .and_then(|target| target.lx.ask.as_mut())
+            .is_some_and(|ask| {
+                ask.editor_mut()
+                    .is_some_and(|editor| super::super::pane::apply_editor_edit(editor, command))
+            }),
     }
+}
+
+/// `Enter` 提交手写文本：非空且单选时完成本题（提交或前进），多选/末题退出编辑并勾选。
+fn commit_edit(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(ask) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.ask.as_ref())
+    else {
+        return false;
+    };
+    let multi = ask.question().is_some_and(|question| question.multi_select);
+    let single = ask.questions.len() == 1;
+    let has_submit = ask.has_submit_row();
+    let mut submit = false;
+    let changed = {
+        let Some(ask) = state
+            .pane_mut_anywhere(pane)
+            .and_then(|target| target.lx.ask.as_mut())
+        else {
+            return false;
+        };
+        let committed = ask.commit_edit();
+        if committed && !multi {
+            if has_submit {
+                ask.focus_submit();
+            } else if single {
+                submit = true;
+            } else {
+                ask.next_step();
+            }
+        }
+        committed
+    };
+    if submit {
+        return submit_all(state, pane);
+    }
+    changed
 }
 
 /// 粘贴：仅编辑态写入手写缓冲；超过单题上限**整次拒绝**（绝不截断造假）。
@@ -205,54 +275,94 @@ pub fn apply_ask_paste(state: &mut AppState, pane: PaneId, text: &str) -> bool {
 
 /// 面板内鼠标点击（几何由渲染层 `layout()` 提供，事件层不重算）。
 pub fn apply_ask_click(state: &mut AppState, pane: PaneId, hit: AskHit) -> bool {
-    if hit == AskHit::Submit {
-        // Submit / Confirm：单题直接提交；多题的 Confirm 只有全部作答才放行。
-        let (confirm, on_other, ready) = {
+    match hit {
+        AskHit::Tab(index) => {
             let Some(ask) = state
-                .pane_anywhere(pane)
-                .and_then(|target| target.lx.ask.as_ref())
+                .pane_mut_anywhere(pane)
+                .and_then(|target| target.lx.ask.as_mut())
             else {
                 return false;
             };
-            let on_other = ask
-                .question()
-                .is_some_and(|question| ask.highlight[ask.current] == question.options.len())
-                && !ask.custom_on.get(ask.current).copied().unwrap_or(false);
-            (ask.is_confirm(), on_other, ask.all_answered())
-        };
-        if !confirm && on_other {
-            return state
+            let left_edit = ask.editing && ask.commit_edit();
+            let switched = ask.goto_tab(index);
+            left_edit | switched
+        }
+        AskHit::Option(index) => click_option(state, pane, index),
+        AskHit::Other => {
+            let Some(ask) = state
                 .pane_mut_anywhere(pane)
                 .and_then(|target| target.lx.ask.as_mut())
-                .is_some_and(AskState::begin_edit);
+            else {
+                return false;
+            };
+            let moved = ask.set_highlight(ask.other_row());
+            let editing = ask.begin_edit();
+            moved | editing
         }
-        return if ready {
-            submit_all(state, pane)
-        } else {
-            empty_hint(state, pane)
-        };
+        AskHit::Submit => submit_hit(state, pane),
     }
-    let Some(ask) = state
+}
+
+/// 鼠标点选项：先确认可能存在的行内编辑，再选中；单选无提交按钮时立即收尾。
+fn click_option(state: &mut AppState, pane: PaneId, index: usize) -> bool {
+    let (changed, follow) = {
+        let Some(ask) = state
+            .pane_mut_anywhere(pane)
+            .and_then(|target| target.lx.ask.as_mut())
+        else {
+            return false;
+        };
+        let left_edit = ask.editing && ask.commit_edit();
+        let moved = ask.set_highlight(index);
+        let chosen = ask.choose(index);
+        let multi = ask.question().is_some_and(|question| question.multi_select);
+        let has_submit = ask.has_submit_row();
+        let single = ask.questions.len() == 1;
+        let follow = if chosen && !multi && !has_submit {
+            if single { Follow::Submit } else { Follow::Next }
+        } else {
+            Follow::None
+        };
+        (left_edit | moved | chosen, follow)
+    };
+    match follow {
+        Follow::Submit => submit_all(state, pane),
+        Follow::Next => {
+            let advanced = state
+                .pane_mut_anywhere(pane)
+                .and_then(|target| target.lx.ask.as_mut())
+                .is_some_and(AskState::next_step);
+            changed | advanced
+        }
+        Follow::None => changed,
+    }
+}
+
+/// 鼠标点提交按钮：先确认行内编辑，再按「全部作答」决定提交或提示跳题。
+fn submit_hit(state: &mut AppState, pane: PaneId) -> bool {
+    let committed = state
         .pane_mut_anywhere(pane)
         .and_then(|target| target.lx.ask.as_mut())
+        .is_some_and(|ask| ask.editing && ask.commit_edit());
+    let Some(ask) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.ask.as_ref())
     else {
-        return false;
+        return committed;
     };
-    match hit {
-        // 选项行：高亮该项（切换预览）并选中；**绝不提交**（Enter/Submit 才是提交入口）。
-        //
-        // 点击列表即离开编辑态：用户已经从手写框点回列表，不再算「正在输入」。
-        AskHit::Option(index) => {
-            let moved = ask.set_highlight(index);
-            let left_edit = std::mem::replace(&mut ask.editing, false);
-            moved | left_edit | ask.click_option(index)
-        }
-        // 「其他」行：进入编辑态，光标落到文本末尾。
-        AskHit::Other => ask.begin_edit(),
-        // 题目标签（含 Confirm）：切 step，状态保留。
-        AskHit::Tab(index) => ask.goto_tab(index),
-        AskHit::Submit => false,
+    if ask.all_answered() {
+        return submit_all(state, pane);
     }
+    let first_unanswered = (0..ask.questions.len()).find(|index| !ask.answered(*index));
+    hint(state, pane, ASK_TOAST_ANSWER_REQUIRED);
+    if let Some(index) = first_unanswered
+        && let Some(ask) = state
+            .pane_mut_anywhere(pane)
+            .and_then(|target| target.lx.ask.as_mut())
+    {
+        ask.goto_tab(index);
+    }
+    true
 }
 
 /// 面板内的滚轮：预览区只滚预览，选项区只滚列表视口。
@@ -287,11 +397,14 @@ pub fn apply_ask_wheel(
 }
 
 /// 唯一提交入口：全部题目都有答案才组装 `AskAnswers`、清面板并推效应。
+///
+/// 关面板前把用户作答等待时长补偿进本轮起点：`ask` 期间计时冻结，恢复后从
+/// 提问前的已耗秒数继续，最终 `duration_ms` / `tok/s` 不含思考时间。
 pub fn submit_all(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    let Some(ask) = target.lx.ask.as_mut() else {
+    let Some(ask) = target.lx.ask.as_ref() else {
         return false;
     };
     if !ask.all_answered() {
@@ -303,20 +416,14 @@ pub fn submit_all(state: &mut AppState, pane: PaneId) -> bool {
     }
     let key = ask.key.clone();
     let call_id = ask.call_id.clone();
-    target.lx.ask = None;
+    let Some(ask) = target.lx.ask.take() else {
+        return false;
+    };
+    ask.compensate_turn_clock(&mut target.lx.chat);
     state.effects.push(Effect::AnswerAsk {
         key,
         call_id,
         answers,
     });
     true
-}
-
-/// 数字键直选：`1`–`9` 映射到第 N 行；越界吞掉。
-fn choose_row(ask: &mut AskState, digit: char) -> bool {
-    let index = usize::from(digit as u8 - b'1');
-    if index > ask.other_row() {
-        return false;
-    }
-    ask.choose(index)
 }

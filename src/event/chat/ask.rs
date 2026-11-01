@@ -81,6 +81,9 @@ pub(crate) fn cancel(state: &mut AppState, streams: &mut ChatStreams, key: &Requ
 }
 
 /// 只清该窗格的 ask 面板（必须属于同一个 request key）。
+///
+/// 清面板时把用户作答等待时长补偿进本轮起点：`ask` 期间计时冻结，
+/// 取消/扫尾同样不能把思考时间算进 Agent 耗时。
 pub(crate) fn clear(state: &mut AppState, key: &RequestKey) -> bool {
     let Some(pane) = state.pane_mut_anywhere(key.pane) else {
         return false;
@@ -89,7 +92,9 @@ pub(crate) fn clear(state: &mut AppState, key: &RequestKey) -> bool {
     if !mine {
         return false;
     }
-    pane.lx.ask = None;
+    if let Some(ask) = pane.lx.ask.take() {
+        ask.compensate_turn_clock(&mut pane.lx.chat);
+    }
     true
 }
 

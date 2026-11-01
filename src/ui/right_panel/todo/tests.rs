@@ -482,31 +482,208 @@ fn scrollbar_track_stops_above_stats() {
     );
 }
 
-/// 编辑行复用 `widgets::input` 的视口：长文本横向滚动后光标仍在输入区右缘内。
+/// 编辑行复用 `widgets::input::multiline_view` 的视口：长文本软折行，光标落在末行剩余宽度处。
 #[test]
-fn edit_row_reuses_input_view_scrolling() {
+fn edit_row_reuses_multiline_view_scrolling() {
     let mut state = AppState::demo();
     let area = panel(30);
     state
         .todo
         .replace(vec![TodoRecord::new("seed", TodoStatus::Todo, 0)]);
     let id = state.todo.items()[0].id.clone();
-    let long = "x".repeat(80);
+    let width = edit_row_width(area);
+    let long = "x".repeat(width.saturating_add(3));
     begin_edit(&mut state, TodoEdit::new(Some(id), long, 0));
 
     let (_, cursor) = render_panel(&state, area);
     let (x, y) = cursor.expect("编辑行必须返回光标坐标");
     let list = list_rect(area);
-    assert_eq!(y, list.y);
-    assert!(
-        x < list.right(),
-        "光标 {x} 不得越过列表右缘 {:?}",
-        list.right()
-    );
+    assert_eq!(y, list.y + 1, "两行文本：光标落在第二行");
+    assert_eq!(x, row_text_x(list) + 3, "光标列 = 末行剩余字符宽度");
+    assert!(x < list.right(), "光标 {x} 不得越过列表右缘");
+}
+
+/// 列表正文可用显示列数。
+fn text_width(list: Rect) -> usize {
+    usize::from(list.right().saturating_sub(row_text_x(list)))
+}
+
+/// 中长文本折为 2~3 行：续行从 `row_text_x` 起与首行正文对齐，左侧 9 列留空。
+#[test]
+fn long_todo_wraps_with_nine_column_continuation_indent() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    let list = list_rect(area);
+    let width = text_width(list).max(1);
+    let text_x = row_text_x(list);
+    let text = format!("{}{}", "a".repeat(width), "tail");
+    state
+        .todo
+        .replace(vec![TodoRecord::new(text, TodoStatus::Todo, 0)]);
+
+    let layout = layout_visible_items(area, &state);
+    assert_eq!(layout.items[0].rendered_rows, 2, "两行文本占 2 行");
+    let (buffer, _) = render_panel(&state, area);
+    assert_eq!(buffer[(text_x, list.y)].symbol(), "a");
     assert_eq!(
-        x,
-        list.right() - 1,
-        "文本长于输入区时视口滚到末尾、光标贴右缘"
+        buffer[(text_x, list.y + 1)].symbol(),
+        "t",
+        "续行正文必须从 text_x 起"
+    );
+    for x in list.x..text_x {
+        assert_eq!(
+            buffer[(x, list.y + 1)].symbol(),
+            " ",
+            "续行第 {x} 列必须留空（9 列缩进）"
+        );
+    }
+}
+
+/// 超 3 行在第 3 行末尾以 `…` 截断，条目总高固定 3 行。
+#[test]
+fn overlong_todo_truncates_third_line_with_ellipsis() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    let list = list_rect(area);
+    let width = text_width(list).max(1);
+    let text = "a".repeat(width.saturating_mul(4));
+    state
+        .todo
+        .replace(vec![TodoRecord::new(text, TodoStatus::Todo, 0)]);
+
+    let layout = layout_visible_items(area, &state);
+    assert_eq!(layout.items[0].rendered_rows, 3, "最多 3 行");
+    let (buffer, _) = render_panel(&state, area);
+    assert_eq!(
+        buffer[(
+            row_text_x(list) + u16::try_from(width).unwrap_or(u16::MAX) - 1,
+            list.y + 2
+        )]
+            .symbol(),
+        "…",
+        "第 3 行末列必须是省略号"
+    );
+}
+
+/// 选中/悬停底色铺满条目的全部 1~3 个视觉行，续行前缀也保留底色。
+#[test]
+fn selected_wrapped_item_fills_all_visual_rows() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    let list = list_rect(area);
+    let width = text_width(list).max(1);
+    let selection = style::selection().bg;
+    state.todo.replace(vec![TodoRecord::new(
+        "a".repeat(width.saturating_mul(3)),
+        TodoStatus::Todo,
+        0,
+    )]);
+    state.set_focus(crate::app::state::FocusedContainer::Todo);
+
+    let (buffer, _) = render_panel(&state, area);
+    let text_x = row_text_x(list);
+    for row in 0..3u16 {
+        for x in [list.x, text_x, list.right() - 1] {
+            assert_eq!(
+                buffer[(x, list.y + row)].bg,
+                selection.unwrap_or(Color::Reset),
+                "第 {row} 个视觉行第 {x} 列必须铺选中底色"
+            );
+        }
+    }
+
+    // 悬停同样铺满整块。
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
+    state.todo_hover = Some(0);
+    let (buffer, _) = render_panel(&state, area);
+    for row in 0..3u16 {
+        assert_eq!(
+            buffer[(list.x, list.y + row)].bg,
+            selection.unwrap_or(Color::Reset),
+            "悬停第 {row} 个视觉行必须铺底色"
+        );
+    }
+}
+
+/// 行内编辑在 1~3 行间自适应展开；超过 3 行固定 3 行并随光标滚动视口。
+#[test]
+fn edit_row_expands_to_three_lines_and_scrolls_with_cursor() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    let list = list_rect(area);
+    let width = edit_row_width(area).max(1);
+    state.todo.replace(vec![
+        TodoRecord::new("a", TodoStatus::Todo, 0),
+        TodoRecord::new("b", TodoStatus::Todo, 1),
+    ]);
+    let id = state.todo.items()[0].id.clone();
+
+    // 1 行：高 1，下一条目紧跟其后。
+    begin_edit(
+        &mut state,
+        TodoEdit::new(Some(id.clone()), "x".repeat(width), 0),
+    );
+    let layout = layout_visible_items(area, &state);
+    assert_eq!(layout.items[0].rendered_rows, 1);
+    assert_eq!(layout.items[1].y, list.y + 1, "单行编辑不占多余行");
+
+    // 2 行：高 2。
+    begin_edit(
+        &mut state,
+        TodoEdit::new(Some(id.clone()), "x".repeat(width + 1), 0),
+    );
+    let layout = layout_visible_items(area, &state);
+    assert_eq!(layout.items[0].rendered_rows, 2);
+    assert_eq!(layout.items[1].y, list.y + 2);
+
+    // 4 行文本：固定 3 行，光标在第 4 行 → 视口从第 2 行开始。
+    let long = "x".repeat(width.saturating_mul(3).saturating_add(3));
+    begin_edit(&mut state, TodoEdit::new(Some(id), long, 0));
+    let layout = layout_visible_items(area, &state);
+    assert_eq!(layout.items[0].rendered_rows, 3);
+    assert_eq!(layout.items[1].y, list.y + 3, "超过 3 行仍只占 3 行");
+
+    let (_, cursor) = render_panel(&state, area);
+    let (x, y) = cursor.expect("编辑行必须返回光标坐标");
+    assert_eq!(y, list.y + 2, "光标在第 3 个可见行");
+    assert_eq!(x, row_text_x(list) + 3, "光标列 = 末行剩余字符宽度");
+}
+
+/// 多行编辑的命中测试：任意可见行都命中同一条目，优先级只在首行，点击定位按行偏移换算。
+#[test]
+fn multiline_item_hits_rows_and_cursor_position() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    let list = list_rect(area);
+    let width = edit_row_width(area).max(1);
+    let text_x = row_text_x(list);
+    state.todo.replace(vec![
+        TodoRecord::new("a", TodoStatus::Todo, 0),
+        TodoRecord::new("b", TodoStatus::Todo, 1),
+    ]);
+    let id = state.todo.items()[0].id.clone();
+    let long = "x".repeat(width.saturating_mul(3).saturating_add(3));
+    begin_edit(&mut state, TodoEdit::new(Some(id), long, 0));
+
+    // 三个可见行都命中条目 0。
+    for row in 0..3u16 {
+        assert_eq!(
+            row_at(area, &state, text_x, list.y + row),
+            Some(0),
+            "第 {row} 个视觉行命中条目 0"
+        );
+    }
+    assert_eq!(row_at(area, &state, text_x, list.y + 3), Some(1));
+
+    // 优先级徽标只在首行命中。
+    let px = row_priority_x(list);
+    assert_eq!(priority_at(area, &state, px, list.y), Some(0));
+    assert_eq!(priority_at(area, &state, px, list.y + 1), None);
+
+    // 光标在第 4 行 → 可见窗口为第 2~4 行；点击第 2 个可见行第 2 列 → 第 3 行第 2 个字符。
+    assert_eq!(
+        edit_input_char_at(area, &state, text_x + 2, list.y + 1),
+        Some(width.saturating_mul(2).saturating_add(2))
     );
 }
 

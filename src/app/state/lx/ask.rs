@@ -38,9 +38,9 @@ pub struct AskState {
     pub call_id: String,
     pub questions: Vec<AskQuestion>,
     pub current: usize,
-    /// 多题流程的最后一步：复核 + 确认提交（`current` 此时仍停在末题）。
-    pub confirm: bool,
-    /// 每题高亮行：`0..options.len()`，最后一行固定是「其他」。
+    /// 提问挂起开始的毫秒时间戳：结束时把用户作答耗时从本轮耗时里剔除。
+    pub started_at_ms: i64,
+    /// 每题高亮行：`0..options.len()`，最后是「其他」，可提交时再跟一行提交按钮。
     pub highlight: Vec<usize>,
     /// 每题已勾选项（按下标保存，顺序即勾选顺序）。
     pub selected: Vec<Vec<usize>>,
@@ -65,6 +65,9 @@ pub struct AskState {
 }
 
 impl AskState {
+    /// 「其他」行内输入框最多占用的视觉行数。
+    pub const MAX_OTHER_EDIT_ROWS: usize = 3;
+
     /// 以题目列表构造面板；每题初始高亮第 0 行、无勾选、无手写。
     pub fn new(key: RequestKey, call_id: String, questions: Vec<AskQuestion>) -> Self {
         let count = questions.len();
@@ -73,7 +76,7 @@ impl AskState {
             call_id,
             questions,
             current: 0,
-            confirm: false,
+            started_at_ms: crate::db::now_ms(),
             highlight: vec![0; count],
             selected: vec![Vec::new(); count],
             custom: (0..count).map(|_| AskEditor::new()).collect(),
@@ -90,15 +93,59 @@ impl AskState {
         self.questions.get(self.current)
     }
 
-    /// 当前题的行数：选项 + 固定的「其他」行（0 选项题只剩这一行）。
-    pub fn row_count(&self) -> usize {
-        self.question()
-            .map_or(0, |question| question.options.len() + 1)
+    /// 当前题是否显示底部「提交」按钮：
+    ///
+    /// - 单题：只有多选需要按钮（单选选中即提交）；
+    /// - 多题：只有最后一题需要按钮，前 `N-1` 题答完自动前进。
+    pub fn has_submit_row(&self) -> bool {
+        let Some(question) = self.question() else {
+            return false;
+        };
+        if self.questions.len() > 1 {
+            self.current + 1 == self.questions.len()
+        } else {
+            question.multi_select
+        }
     }
 
-    /// 「其他」行的下标（恒为最后一行）。
+    /// 当前题可被 `↑`/`↓` 高亮的逻辑条目数：选项 + 「其他」 + 可能存在的提交按钮。
+    pub fn row_count(&self) -> usize {
+        self.question().map_or(0, |question| {
+            question.options.len() + 1 + usize::from(self.has_submit_row())
+        })
+    }
+
+    /// 「其他」行的逻辑下标。
     pub fn other_row(&self) -> usize {
-        self.row_count().saturating_sub(1)
+        self.question().map_or(0, |question| question.options.len())
+    }
+
+    /// 提交按钮行的逻辑下标；不显示按钮时为 None。
+    pub fn submit_row(&self) -> Option<usize> {
+        self.has_submit_row()
+            .then(|| self.other_row().saturating_add(1))
+    }
+
+    /// 把高亮移到提交按钮行，并让列表窗口重新跟随高亮；无按钮时不动。
+    pub fn focus_submit(&mut self) -> bool {
+        let Some(row) = self.submit_row() else {
+            return false;
+        };
+        self.highlight[self.current] = row;
+        self.viewport = None;
+        true
+    }
+
+    /// 当前题是否有任何选项配置了非空 preview（决定预览区是否占位）。
+    pub fn question_has_preview(&self) -> bool {
+        self.question().is_some_and(|question| {
+            question.options.iter().any(|option| {
+                option
+                    .preview
+                    .as_deref()
+                    .is_some_and(|p| !p.trim().is_empty())
+            })
+        })
     }
 
     /// 当前题当前答案：勾选项按勾选顺序在前，手写文本（若有）在最后，已去重。
@@ -141,9 +188,6 @@ impl AskState {
     /// 单选：设为唯一勾选并清空该题手写答案（先勾后写、先写后勾都只留一个答案）。
     /// 多选：切换该选项，勾选与手写可共存。
     pub fn choose(&mut self, index: usize) -> bool {
-        if self.confirm {
-            return false;
-        }
         let Some(question) = self.question() else {
             return false;
         };
@@ -170,28 +214,8 @@ impl AskState {
         true
     }
 
-    /// 鼠标点选项行：高亮该项并选中，但**绝不提交**（design §7.3）。
-    ///
-    /// 单选按下标独占选择，多选切换。单选若只高亮不选中，纯鼠标用户永远交不出
-    /// 答案（Submit 只会得到空答案提示）——单击选中、Submit 提交是唯一可行的鼠标路径。
-    pub fn click_option(&mut self, index: usize) -> bool {
-        if self.confirm {
-            return false;
-        }
-        let Some(question) = self.question() else {
-            return false;
-        };
-        if index >= question.options.len() {
-            return false;
-        }
-        self.choose(index)
-    }
-
     /// 移动高亮（钳制在 `0..row_count`，不循环）；返回是否移动。
     pub fn move_highlight(&mut self, delta: isize) -> bool {
-        if self.confirm {
-            return false;
-        }
         let len = self.row_count();
         if len == 0 {
             return false;
@@ -213,7 +237,7 @@ impl AskState {
 
     /// 设置高亮行（鼠标点击）；越界返回 false。
     pub fn set_highlight(&mut self, index: usize) -> bool {
-        if self.confirm || index >= self.row_count() || index == self.highlight[self.current] {
+        if index >= self.row_count() || index == self.highlight[self.current] {
             return false;
         }
         self.highlight[self.current] = index;
@@ -224,7 +248,7 @@ impl AskState {
 
     /// 进入「其他」编辑态，光标落在文本末尾。
     pub fn begin_edit(&mut self) -> bool {
-        if self.confirm || self.row_count() == 0 {
+        if self.row_count() == 0 {
             return false;
         }
         self.highlight[self.current] = self.other_row();
@@ -268,14 +292,9 @@ impl AskState {
         std::mem::replace(&mut self.editing, false)
     }
 
-    /// 是否处于多题流程的复核步。
-    pub fn is_confirm(&self) -> bool {
-        self.confirm
-    }
-
-    /// tab 总数：多题时最后多一个 Confirm。
+    /// tab 总数：只按题目数量（没有 Confirm 汇总 Tab）。
     pub fn tab_len(&self) -> usize {
-        self.questions.len() + usize::from(self.questions.len() > 1)
+        self.questions.len()
     }
 
     /// 指定题是否已有答案（勾选或已提交的手写文本）。
@@ -283,26 +302,23 @@ impl AskState {
         !self.answers_at(index).is_empty()
     }
 
-    /// 是否全部题目都已作答（Confirm 的放行条件）。
+    /// 是否全部题目都已作答（提交按钮的放行条件）。
     pub fn all_answered(&self) -> bool {
         (0..self.questions.len()).all(|index| self.answered(index))
     }
 
-    /// 切到指定 tab（题目或 Confirm）；同位置返回 false。
+    /// 切到指定题目 tab；越界钳到末题，同位置返回 false。
     pub fn goto_tab(&mut self, index: usize) -> bool {
-        if index >= self.tab_len() {
+        let index = index.min(self.questions.len().saturating_sub(1));
+        if index == self.current {
             return false;
         }
-        let confirm = index >= self.questions.len();
-        if confirm == self.confirm && (confirm || index == self.current) {
-            return false;
-        }
-        if !confirm {
-            self.current = index;
-        }
-        self.confirm = confirm;
+        self.current = index;
         self.editing = false;
         self.viewport = None;
+        if let Some(scroll) = self.preview_scroll.get_mut(index) {
+            *scroll = 0;
+        }
         self.restore_highlight();
         true
     }
@@ -310,9 +326,6 @@ impl AskState {
     /// 回到某题时把高亮落到已选答案上（opencode 的 `pickFocus`）：
     /// 否则回车会默认选中第 1 项，悄悄覆盖用户之前的选择。
     fn restore_highlight(&mut self) {
-        if self.confirm {
-            return;
-        }
         let current = self.current;
         let highlight = if self.custom_on.get(current).copied().unwrap_or(false) {
             self.other_row()
@@ -327,55 +340,22 @@ impl AskState {
         }
     }
 
-    /// 前进到下一题；末题之后进入 Confirm（仅多题）。已是 Confirm 返回 false。
+    /// 前进到下一题（末题返回 false，由提交按钮收尾）。
     pub fn next_step(&mut self) -> bool {
-        if self.confirm {
+        if self.current + 1 >= self.questions.len() {
             return false;
         }
-        if self.current + 1 < self.questions.len() {
-            self.current += 1;
-            self.editing = false;
-            self.viewport = None;
-            self.restore_highlight();
-            return true;
-        }
-        if self.questions.len() > 1 {
-            self.confirm = true;
-            self.editing = false;
-            self.viewport = None;
-            return true;
-        }
-        false
-    }
-
-    /// 后退：Confirm → 末题；末题 → 上一题。
-    pub fn prev_step(&mut self) -> bool {
-        if self.confirm {
-            self.confirm = false;
-            self.viewport = None;
-            return true;
-        }
-        if self.current == 0 {
-            return false;
-        }
-        self.current -= 1;
+        self.current += 1;
         self.editing = false;
         self.viewport = None;
         self.restore_highlight();
         true
     }
 
-    /// 当前高亮选项的预览文本（Confirm 步没有预览）。
+    /// 当前高亮选项的预览文本（高亮在 `Other` / 提交按钮时没有预览）。
     pub fn preview(&self) -> Option<&str> {
-        if self.confirm {
-            return None;
-        }
-        let question = self.question()?;
-        question
-            .options
-            .get(self.highlight[self.current])?
-            .preview
-            .as_deref()
+        let highlight = *self.highlight.get(self.current)?;
+        self.question()?.options.get(highlight)?.preview.as_deref()
     }
 
     /// 当前预览的最大滚动偏移：总行数减可视行数（不足一屏时为 0）。
@@ -424,7 +404,7 @@ impl AskState {
         total: usize,
         visible: usize,
     ) -> bool {
-        if self.confirm || total == 0 || visible == 0 || total <= visible {
+        if total == 0 || visible == 0 || total <= visible {
             return false;
         }
         let max = total.saturating_sub(visible);
@@ -443,9 +423,6 @@ impl AskState {
 
     /// 滚动预览（正数向下）；返回偏移是否变化。
     pub fn scroll_preview(&mut self, delta: isize) -> bool {
-        if self.confirm {
-            return false;
-        }
         let max = self.preview_max_scroll();
         let next = (self.preview_scroll[self.current] as isize)
             .saturating_add(delta)
@@ -468,10 +445,23 @@ impl AskState {
     /// 同步全部手写缓冲的软换行宽度与可视高度。
     ///
     /// 渲染宽度与折行宽度必须同源：创建面板时按输入框宽度初始化，窗格 resize 时
-    /// 由 `resize_panes` 用面板内编辑框的真实宽度再同步一次。
+    /// 由 `resize_panes` 用面板内行内输入框的真实宽度再同步一次。
+    ///
+    /// 可视高度恒夹在 `1..=MAX_OTHER_EDIT_ROWS`：`Other` 原地最多展开 3 行。
     pub fn resize_editor(&mut self, width: u16, height: u16) {
+        let rows = height.clamp(1, Self::MAX_OTHER_EDIT_ROWS as u16);
         for editor in &mut self.custom {
-            editor.resize(width, height);
+            editor.resize(width, rows);
+        }
+    }
+
+    /// 把用户作答等待时长补偿进本轮起点：`ask` 期间不计入 Agent 耗时与 tok/s。
+    pub fn compensate_turn_clock(&self, chat: &mut super::LxChat) {
+        let paused_ms = crate::db::now_ms()
+            .saturating_sub(self.started_at_ms)
+            .max(0);
+        if let Some(started) = chat.turn_started_at_ms.as_mut() {
+            *started = started.saturating_add(paused_ms);
         }
     }
 

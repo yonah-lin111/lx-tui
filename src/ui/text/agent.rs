@@ -443,19 +443,17 @@ pub const ASK_SINGLE_OFF: &str = "( )";
 pub const ASK_MULTI_ON: &str = "[x]";
 pub const ASK_MULTI_OFF: &str = "[ ]";
 pub const ASK_CURSOR: &str = "❯";
-/// 固定最后一行的「其他」与单题提交入口。
-pub const ASK_OTHER: &str = "Other...";
-pub const ASK_OTHER_PREFIX: &str = "Other: ";
-pub const ASK_SUBMIT: &str = "[ Submit ]";
-/// 多题最后一步：复核作答 + 确认提交（tab 与行各一份文案）。
-pub const ASK_REVIEW: &str = "Review your answers";
-pub const ASK_CONFIRM_TAB: &str = "Confirm";
-pub const ASK_CONFIRM: &str = "[ Confirm ]";
-/// 预览区占位与降级提示。
+/// 原地行内输入的「其他」占位符（编辑态为空、非编辑态无内容时显示）。
+pub const ASK_OTHER_LABEL: &str = "Other...";
+/// 提交按钮（弹窗同款实心胶囊，前后各留一列；就绪状态决定按钮配色）。
+pub const ASK_SUBMIT_BUTTON: &str = " ↵ submit ";
+/// 预览区占位提示（题目有预览时高亮移到 Other / 提交按钮才会出现）。
 pub const ASK_NO_PREVIEW: &str = "(no preview)";
-pub const ASK_FOOTER_KEYS: &str = "enter select/next · space toggle · tab switch";
+pub const ASK_FOOTER_KEYS: &str = "↑↓ select · enter submit";
 pub const ASK_FOOTER_CANCEL: &str = "esc cancel";
 pub const ASK_FOOTER_CANCEL_ARMED: &str = "esc again to cancel";
+/// 提交按钮放行失败：还有题目没作答。
+pub const ASK_TOAST_ANSWER_REQUIRED: &str = "select an answer first";
 /// 卡片状态文字：等待作答（运行中）。
 pub const ASK_WAITING: &str = "waiting for you";
 /// 历史里的空答案（异常数据兜底，不画成空行）。

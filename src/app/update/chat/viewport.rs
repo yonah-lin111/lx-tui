@@ -287,12 +287,45 @@ pub fn jump_lx_history_to_prompt(state: &mut AppState, pane: PaneId, target_row:
     before != target_row || was_following
 }
 
-/// 回到底部：把历史视口钉到最新一屏（跟随底部）并清除悬停态；返回是否发生变化。
+/// 回到底部：把当前视图钉到最新一屏并清除悬停态；返回是否发生变化。
+///
+/// 后台任务面板打开时按**当前页签的上方内容区**执行：`Processes` 贴输出尾部，
+/// `Agents` 恢复选中子 agent 的跟随（并同步滚动偏移）。
 pub fn jump_lx_history_bottom(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
+    if target.view != crate::app::state::PaneView::Lx {
+        return false;
+    }
+    if let Some(page) = target.lx.task.as_mut() {
+        target.lx.chat.jump_bottom_hover = false;
+        return match page.tab {
+            crate::app::state::TaskTab::Processes => {
+                let before = page.output_scroll;
+                page.pin_output_to_tail();
+                page.output_scroll != before
+            }
+            crate::app::state::TaskTab::Agents => {
+                page.agents_follow = true;
+                page.agents_scroll = usize::MAX;
+                target
+                    .lx
+                    .agents
+                    .runs
+                    .get_mut(page.agents_window.active)
+                    .is_some_and(|run| {
+                        let changed = !run.follow;
+                        run.follow = true;
+                        if run.visible > 0 {
+                            run.scroll = run.total_rows.saturating_sub(run.visible);
+                        }
+                        changed
+                    })
+            }
+        };
+    }
+    if target.lx.chat.messages.is_empty() {
         return false;
     }
     let changed = !target.lx.chat.follow_bottom || target.lx.chat.jump_bottom_hover;

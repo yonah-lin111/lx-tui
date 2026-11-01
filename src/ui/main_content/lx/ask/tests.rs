@@ -1,4 +1,5 @@
-//! `ask` 面板几何与绘制：无边框、70% 高度上限与滚动、双行选项、tab 常驻、命中一致。
+//! `ask` 面板几何与绘制：无边框、70% 高度上限与滚动、描述完整折行、预览置底、
+//! 原地 Other 输入与弹窗胶囊提交按钮。
 
 use super::*;
 use crate::app::state::RequestKey;
@@ -57,7 +58,7 @@ fn surface(width: u16, height: u16) -> Rect {
 
 fn computed(lx: &Lx, area: Rect) -> AskLayout {
     let rect = rect(area, lx).expect("ask rect");
-    AskLayout::compute(rect, area.height, lx.ask.as_ref().expect("ask"))
+    AskLayout::compute(rect, lx.ask.as_ref().expect("ask"))
 }
 
 fn row_text(grid: &Grid, area: Rect, y: u16) -> String {
@@ -67,6 +68,18 @@ fn row_text(grid: &Grid, area: Rect, y: u16) -> String {
             if ch == '\0' { ' ' } else { ch }
         })
         .collect()
+}
+
+fn paint(lx: &Lx, area: Rect) -> Grid {
+    let mut grid = Grid::new(area);
+    let _ = draw(
+        &mut grid,
+        rect(area, lx).expect("ask rect"),
+        area.height,
+        lx,
+        true,
+    );
+    grid
 }
 
 #[test]
@@ -130,62 +143,149 @@ fn tabs_are_always_visible_in_short_panes() {
         question("layout", false, vec![option("a", "d", None)]),
         question("theme", false, vec![option("b", "d", None)]),
     ]);
-    // 14 行窗格 → 面板最多 9 行；tab 行仍然必须存在（含 Confirm）。
+    // 14 行窗格 → 面板最多 9 行；tab 行仍然必须存在（每题一个，没有 Confirm）。
     let lay = computed(&lx, surface(80, 14));
-    assert_eq!(lay.tabs.len(), 3, "两题 + Confirm 的 tab 必须常驻");
-    assert_eq!(lay.tabs.last().map(|(index, _)| *index), Some(2));
+    assert_eq!(lay.tabs.len(), 2, "两题两个 tab，且不再有 Confirm");
+    assert_eq!(lay.tabs.last().map(|(index, _)| *index), Some(1));
 }
 
 #[test]
-fn options_use_two_lines_with_description_below() {
+fn options_take_the_full_width_and_put_preview_below_them() {
+    let lx = lx_with(sample());
+    let area = surface(80, 30);
+    let panel = rect(area, &lx).expect("ask rect");
+    let lay = computed(&lx, area);
+    assert_eq!(lay.options.width, panel.width, "取消左右分栏，选项占满全宽");
+    let preview = lay.preview.expect("有 preview 的题目必须分配预览区");
+    assert!(preview.y >= lay.options.bottom(), "预览必须在选项下方");
+    assert_eq!(preview.x, lay.options.x);
+    assert_eq!(preview.height, PREVIEW_MAX_ROWS);
+    let grid = paint(&lx, area);
+    assert!(row_text(&grid, area, preview.y).contains("┌──┬──┐"));
+}
+
+#[test]
+fn questions_without_any_preview_reserve_no_space_at_all() {
+    let lx = lx_with(vec![question(
+        "q",
+        false,
+        vec![option("a", "da", None), option("b", "db", None)],
+    )]);
+    let area = surface(80, 30);
+    let lay = computed(&lx, area);
+    assert!(lay.preview.is_none(), "无 preview 时不得预占任何高度");
+    assert_eq!(
+        lay.options.bottom(),
+        lay.footer.y,
+        "选项区吃掉剩余高度，不被预览挤占"
+    );
+    let grid = paint(&lx, area);
+    let text: String = (lay.options.y..lay.options.bottom())
+        .map(|y| row_text(&grid, area, y))
+        .collect();
+    assert!(
+        !text.contains(a::ASK_NO_PREVIEW),
+        "无预览时绝不渲染 (no preview)"
+    );
+}
+
+#[test]
+fn preview_shows_placeholder_when_highlight_leaves_the_previewed_option() {
+    let mut first = question(
+        "q",
+        false,
+        vec![option("A", "da", None), option("B", "db", None)],
+    );
+    first.options[0].preview = Some("left".into());
+    let mut lx = lx_with(vec![first]);
+    {
+        let ask = lx.ask.as_mut().expect("ask");
+        ask.begin_edit();
+    }
+    let area = surface(80, 30);
+    let lay = computed(&lx, area);
+    let preview = lay.preview.expect("预览区仍然占位");
+    let grid = paint(&lx, area);
+    assert!(
+        row_text(&grid, area, preview.y).contains(a::ASK_NO_PREVIEW),
+        "高亮 Other 时预览区显示占位，面板高度不抖动"
+    );
+}
+
+#[test]
+fn long_descriptions_wrap_at_full_width_and_every_line_hits_the_option() {
+    let long = "描述文字非常长，需要按全宽自动折行完整显示，绝不截断任何一段内容。";
+    let lx = lx_with(vec![question("q", false, vec![option("A", long, None)])]);
+    let area = surface(44, 30);
+    let lay = computed(&lx, area);
+    let lines: Vec<&VisualRow> = lay
+        .rows
+        .iter()
+        .filter(|row| matches!(row.kind, RowKind::OptionDesc { index: 0, .. }))
+        .collect();
+    assert!(
+        lines.len() > 1,
+        "长描述必须折成多行，实际 {} 行",
+        lines.len()
+    );
+    let grid = paint(&lx, area);
+    let mut rendered = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        assert_eq!(
+            hit(area, &lx, line.rect.x + ROW_PREFIX, line.rect.y),
+            Some(AskHit::Option(0)),
+            "第 {index} 行描述也必须命中该选项"
+        );
+        let text = row_text(&grid, area, line.rect.y);
+        let text: String = text.chars().skip(usize::from(ROW_PREFIX)).collect();
+        rendered.push_str(text.trim_end());
+    }
+    assert!(
+        rendered
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>()
+            .contains("绝不截断"),
+        "折行后的全部内容都必须画出来：{rendered:?}"
+    );
+}
+
+#[test]
+fn descriptions_are_indented_six_columns() {
     let lx = lx_with(sample());
     let area = surface(80, 30);
     let lay = computed(&lx, area);
-    let kinds: Vec<&RowKind> = lay.rows.iter().map(|row| &row.kind).collect();
-    assert!(matches!(kinds.first(), Some(RowKind::OptionLabel(0))));
-    assert!(matches!(kinds.get(1), Some(RowKind::OptionDesc(0))));
-    // 描述行与标签行同属选项 0：点描述也算选中该选项。
-    let desc = &lay.rows[1];
-    assert_eq!(desc.hit, Some(AskHit::Option(0)));
-    assert_eq!(
-        hit(area, &lx, desc.rect.x + 2, desc.rect.y),
-        Some(AskHit::Option(0))
-    );
-    // 描述缩进到标签列（左侧括号只在第一行）。
-    let mut grid = Grid::new(area);
-    let _ = draw(
-        &mut grid,
-        rect(area, &lx).expect("ask rect"),
-        area.height,
-        &lx,
-        true,
-    );
-    let label_row = row_text(&grid, area, lay.rows[0].rect.y);
-    let desc_row = row_text(&grid, area, lay.rows[1].rect.y);
-    assert!(
-        label_row.contains("( ) two columns"),
-        "标签行：{label_row:?}"
-    );
-    assert!(
-        !desc_row.contains('('),
-        "描述行左侧不得出现括号：{desc_row:?}"
-    );
-    assert!(label_row.find("two columns").is_some());
+    let desc = lay
+        .rows
+        .iter()
+        .find(|row| matches!(row.kind, RowKind::OptionDesc { index: 0, line: 0 }))
+        .expect("描述行");
+    let grid = paint(&lx, area);
+    let row = row_text(&grid, area, desc.rect.y);
     let rect = rect(area, &lx).expect("ask rect");
     assert_eq!(
-        desc_row.find("left list"),
+        row.find("left list"),
         Some(usize::from(rect.x + ROW_PREFIX)),
-        "描述必须缩进到标签列"
+        "描述必须缩进 6 列"
+    );
+    assert!(
+        !row.chars()
+            .take(usize::from(ROW_PREFIX))
+            .any(|ch| ch == '('),
+        "描述行左侧不得出现选项括号"
     );
 }
 
 #[test]
 fn no_border_only_a_top_rule() {
-    let lx = lx_with(sample());
+    let lx = lx_with(vec![question(
+        "q",
+        false,
+        vec![option("a", "da", None), option("b", "db", None)],
+    )]);
     let area = surface(80, 30);
     let rect = rect(area, &lx).expect("ask rect");
-    let mut grid = Grid::new(area);
-    let _ = draw(&mut grid, rect, area.height, &lx, true);
+    let grid = paint(&lx, area);
     let rule = row_text(&grid, area, rect.y);
     let rule: String = rule
         .chars()
@@ -208,130 +308,111 @@ fn no_border_only_a_top_rule() {
 }
 
 #[test]
-fn wide_pane_splits_preview_and_keeps_it_verbatim() {
-    let lx = lx_with(sample());
-    let area = surface(80, 30);
-    let lay = computed(&lx, area);
-    let preview = lay.preview.expect("wide pane keeps preview");
-    assert!(preview.x > lay.options.x, "宽窗格左右分栏");
-    let mut grid = Grid::new(area);
-    let _ = draw(
-        &mut grid,
-        rect(area, &lx).expect("ask rect"),
-        area.height,
-        &lx,
-        true,
-    );
-    let first = row_text(&grid, area, preview.y);
-    assert!(first.contains("┌──┬──┐"), "预览必须原样：{first:?}");
-}
-
-#[test]
-fn narrow_pane_stacks_preview_below_options() {
-    let lx = lx_with(sample());
-    let lay = computed(&lx, surface(50, 30));
-    let preview = lay.preview.expect("stacked preview");
-    assert!(preview.y > lay.options.y);
-    assert_eq!(preview.x, lay.options.x);
-}
-
-#[test]
-fn scrolling_follows_the_highlight_and_keeps_every_row_hittable() {
-    let mut q = question(
+fn single_select_has_no_submit_button() {
+    let lx = lx_with(vec![question(
         "q",
         false,
-        vec![
-            option("a", "da", None),
-            option("b", "db", None),
-            option("c", "dc", None),
-            option("d", "dd", None),
-        ],
+        vec![option("A", "da", None), option("B", "db", None)],
+    )]);
+    let lay = computed(&lx, surface(80, 30));
+    assert!(
+        !lay.rows
+            .iter()
+            .any(|row| matches!(row.kind, RowKind::Submit)),
+        "单选没有提交按钮"
     );
-    q.question = "很长的题干 ".repeat(40);
-    let mut lx = lx_with(vec![q]);
-    let area = surface(80, 16);
+}
+
+#[test]
+fn multi_select_renders_the_submit_capsule_after_other() {
+    let mut lx = lx_with(vec![question("q", true, vec![option("A", "da", None)])]);
     {
         let ask = lx.ask.as_mut().expect("ask");
-        ask.set_highlight(3);
+        // 未作答：暗色胶囊同样必须画出来。
+        ask.highlight[0] = ask.submit_row().expect("提交行");
     }
+    let area = surface(80, 30);
     let lay = computed(&lx, area);
+    let submit = lay
+        .rows
+        .iter()
+        .find(|row| matches!(row.kind, RowKind::Submit))
+        .expect("多选必须有提交行");
+    let grid = paint(&lx, area);
+    let row = row_text(&grid, area, submit.rect.y);
     assert!(
-        lay.content_rows > usize::from(lay.options.height),
-        "内容必须超出可视区（否则测不到滚动）"
+        row.contains(a::ASK_SUBMIT_BUTTON.trim_end()),
+        "提交按钮必须显示胶囊文案：{row:?}"
     );
-    assert!(lay.scroll > 0, "高亮末项必须把列表向下滚动");
-    for row in &lay.rows {
-        if let Some(expected) = row.hit {
-            assert_eq!(
-                hit(area, &lx, row.rect.x + 1, row.rect.y),
-                Some(expected),
-                "滚动后命中必须与绘制一致"
-            );
+    let arrow = row.chars().position(|ch| ch == '↵').expect("胶囊符号");
+    assert_eq!(
+        arrow,
+        usize::from(submit.rect.x + ROW_PREFIX + 1),
+        "胶囊必须从第 6 列起"
+    );
+    assert_eq!(
+        grid.cell(submit.rect.x, submit.rect.y).ch,
+        '❯',
+        "聚焦有箭头"
+    );
+    assert_eq!(
+        hit(area, &lx, submit.rect.x + 1, submit.rect.y),
+        Some(AskHit::Submit)
+    );
+}
+
+#[test]
+fn last_question_of_a_multi_question_flow_gets_the_submit_button() {
+    let mut lx = lx_with(vec![
+        question("layout", false, vec![option("a", "d", None)]),
+        question("theme", false, vec![option("b", "d", None)]),
+    ]);
+    let first = computed(&lx, surface(80, 30));
+    assert!(
+        !first
+            .rows
+            .iter()
+            .any(|row| matches!(row.kind, RowKind::Submit)),
+        "非末题没有提交按钮"
+    );
+    {
+        let ask = lx.ask.as_mut().expect("ask");
+        assert!(ask.goto_tab(1));
+    }
+    let last = computed(&lx, surface(80, 30));
+    assert!(
+        last.rows
+            .iter()
+            .any(|row| matches!(row.kind, RowKind::Submit)),
+        "多题末题必须固定显示提交按钮"
+    );
+    assert_eq!(last.tabs.len(), 2, "仍是两个题目 tab，没有 Confirm");
+}
+
+#[test]
+fn editing_expands_other_in_place_and_returns_the_cursor() {
+    let mut lx = lx_with(sample());
+    let width = computed(&lx, surface(80, 30)).options.width;
+    {
+        let ask = lx.ask.as_mut().expect("ask");
+        ask.resize_editor(width.saturating_sub(ROW_PREFIX), 3);
+        ask.begin_edit();
+        let editor = ask.editor_mut().expect("editor");
+        let long = "第一行文字很长需要折行".repeat(6);
+        for ch in long.chars() {
+            editor.insert_char(ch);
         }
     }
-}
-
-#[test]
-fn submit_row_stays_visible_when_the_other_row_is_highlighted() {
-    // 单题 4 个带描述的选项 + 题干 → 内容超出一屏；高亮停在「其他」时，
-    // 紧跟其后的 Submit 必须仍落在可视区（否则纯鼠标用户永远点不到提交）。
-    let options = (0..4)
-        .map(|index| option(&format!("o{index}"), "desc", None))
+    let area = surface(80, 30);
+    let lay = computed(&lx, area);
+    let others: Vec<&VisualRow> = lay
+        .rows
+        .iter()
+        .filter(|row| matches!(row.kind, RowKind::Other { .. }))
         .collect();
-    let mut lx = lx_with(vec![question("q", false, options)]);
-    {
-        let ask = lx.ask.as_mut().expect("ask");
-        let rows = ask.row_count();
-        ask.set_highlight(rows - 1);
-        assert_eq!(ask.highlight[0], 4, "高亮「其他」");
-    }
-    let area = surface(80, 16);
-    let lay = computed(&lx, area);
-    assert!(
-        lay.content_rows > usize::from(lay.options.height),
-        "必须溢出"
-    );
-    assert!(
-        lay.rows.iter().any(|row| row.hit == Some(AskHit::Submit)),
-        "Submit 行必须留在可视区"
-    );
-}
-
-#[test]
-fn confirm_tab_renders_review_rows_and_commit() {
-    let mut lx = lx_with(vec![
-        question("layout", false, vec![option("a", "da", None)]),
-        question("theme", false, vec![option("b", "db", None)]),
-    ]);
-    {
-        let ask = lx.ask.as_mut().expect("ask");
-        ask.goto_tab(2);
-        assert!(ask.is_confirm());
-    }
-    let area = surface(80, 30);
-    let lay = computed(&lx, area);
-    assert!(lay.preview.is_none(), "Confirm 步没有预览");
-    assert!(
-        lay.rows
-            .iter()
-            .any(|row| matches!(row.kind, RowKind::Review(1)))
-    );
-    assert!(lay.rows.iter().any(|row| row.hit == Some(AskHit::Submit)));
-    let (index, tab) = *lay.tabs.last().expect("confirm tab");
-    assert_eq!(index, 2);
-    assert_eq!(hit(area, &lx, tab.x + 1, tab.y), Some(AskHit::Tab(2)));
-}
-
-#[test]
-fn editing_returns_cursor_inside_the_editor_area() {
-    let mut lx = lx_with(sample());
-    {
-        let ask = lx.ask.as_mut().expect("ask");
-        ask.begin_edit();
-        ask.editor_mut().expect("editor").insert_str("custom");
-    }
-    let area = surface(80, 30);
-    let (row, column) = {
+    assert!(others.len() > 1, "编辑态必须原地展开成多行输入框");
+    assert!(others.len() <= AskState::MAX_OTHER_EDIT_ROWS);
+    let (cursor_row, cursor_column) = {
         let mut grid = Grid::new(area);
         draw(
             &mut grid,
@@ -342,23 +423,65 @@ fn editing_returns_cursor_inside_the_editor_area() {
         )
         .expect("编辑态光标")
     };
-    let lay = computed(&lx, area);
-    let editor = lay.editor.expect("editor rect");
     assert!(
-        editor.contains((column, row).into()),
-        "光标 {row},{column} 必须落在编辑区内"
+        others
+            .iter()
+            .any(|row| row.rect.contains((cursor_column, cursor_row).into())),
+        "光标 {cursor_row},{cursor_column} 必须落在原地输入框内"
     );
-    // 未聚焦不画光标。
-    let mut grid = Grid::new(area);
     assert!(
-        draw(
-            &mut grid,
-            rect(area, &lx).expect("ask rect"),
-            area.height,
-            &lx,
-            false
-        )
-        .is_none()
+        lay.options.bottom() <= lay.footer.y,
+        "没有底部独立编辑框：选项列表直接接底栏"
+    );
+}
+
+#[test]
+fn other_click_maps_back_to_the_active_editor_cell() {
+    let mut lx = lx_with(sample());
+    let area = surface(80, 30);
+    let width = computed(&lx, area).options.width;
+    {
+        let ask = lx.ask.as_mut().expect("ask");
+        ask.resize_editor(width.saturating_sub(ROW_PREFIX), 3);
+        ask.begin_edit();
+        ask.editor_mut().expect("editor").insert_str("click me");
+    }
+    let lay = computed(&lx, area);
+    let other = lay
+        .rows
+        .iter()
+        .find(|row| matches!(row.kind, RowKind::Other { line: 0 }))
+        .expect("Other 行");
+    let cell = ask_editor_cell_at(area, &lx, other.rect.x + ROW_PREFIX + 2, other.rect.y)
+        .expect("落在输入框正文");
+    assert_eq!(cell, (0, 2));
+    assert!(
+        ask_editor_cell_at(area, &lx, other.rect.x + 1, other.rect.y).is_none(),
+        "前缀列不属于输入框正文"
+    );
+}
+
+#[test]
+fn other_without_custom_text_stays_a_single_row() {
+    let lx = lx_with(sample());
+    let area = surface(80, 30);
+    let lay = computed(&lx, area);
+    let others = lay
+        .rows
+        .iter()
+        .filter(|row| matches!(row.kind, RowKind::Other { .. }))
+        .count();
+    assert_eq!(others, 1);
+    let grid = paint(&lx, area);
+    let other = lay
+        .rows
+        .iter()
+        .find(|row| matches!(row.kind, RowKind::Other { .. }))
+        .expect("Other 行");
+    let row = row_text(&grid, area, other.rect.y);
+    assert!(
+        row.contains(a::ASK_OTHER_LABEL),
+        "空态显示 Other...：{row:?}"
     );
 }
 
@@ -441,4 +564,30 @@ fn list_window_matches_the_rendered_geometry() {
     assert_eq!(scroll, lay.scroll);
     assert_eq!(total, lay.content_rows);
     assert_eq!(visible, usize::from(lay.options.height));
+}
+
+#[test]
+fn submit_row_stays_visible_when_the_other_row_is_highlighted() {
+    // 多选 4 个带描述的选项 + 题干 → 内容超出一屏；高亮停在「其他」时，
+    // 紧跟其后的提交按钮必须仍落在可视区（否则纯鼠标用户永远点不到提交）。
+    let options = (0..4)
+        .map(|index| option(&format!("o{index}"), "desc", None))
+        .collect();
+    let mut lx = lx_with(vec![question("q", true, options)]);
+    {
+        let ask = lx.ask.as_mut().expect("ask");
+        let rows = ask.row_count();
+        ask.set_highlight(rows - 2);
+        assert_eq!(ask.highlight[0], ask.other_row(), "高亮「其他」");
+    }
+    let area = surface(80, 16);
+    let lay = computed(&lx, area);
+    assert!(
+        lay.content_rows > usize::from(lay.options.height),
+        "必须溢出"
+    );
+    assert!(
+        lay.rows.iter().any(|row| row.hit == Some(AskHit::Submit)),
+        "提交按钮必须留在可视区"
+    );
 }

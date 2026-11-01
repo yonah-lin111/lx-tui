@@ -1,4 +1,4 @@
-//! 单元测试；仅测试构建编译。
+//! 单行视口、多行软折行/3 行截断与点击定位的单元测试。
 
 use super::*;
 use ratatui::Terminal;
@@ -103,6 +103,99 @@ fn char_index_at_col_computes_exact_char_index() {
     assert_eq!(char_index_at_col(text, 0, 30, 6), 6); // '中' 的位置
     assert_eq!(char_index_at_col(text, 0, 30, 7), 6); // '中' 的第二半列仍算 '中'
     assert_eq!(char_index_at_col(text, 0, 30, 8), 7); // '文'
+}
+
+#[test]
+fn wrap_clamped_lines_keeps_short_text_on_one_line() {
+    assert_eq!(wrap_clamped_lines("abc", 10, 3), vec!["abc".to_string()]);
+    assert_eq!(wrap_clamped_lines("", 10, 3), vec![String::new()]);
+}
+
+#[test]
+fn wrap_clamped_lines_wraps_by_display_width() {
+    assert_eq!(
+        wrap_clamped_lines("abcdef", 3, 3),
+        vec!["abc".to_string(), "def".to_string()]
+    );
+    // 宽字符按两列计：宽 3 列只放得下一个 `中`。
+    assert_eq!(
+        wrap_clamped_lines("中文", 3, 3),
+        vec!["中".to_string(), "文".to_string()]
+    );
+}
+
+#[test]
+fn wrap_clamped_lines_respects_explicit_newlines() {
+    assert_eq!(
+        wrap_clamped_lines("a\nbc", 5, 3),
+        vec!["a".to_string(), "bc".to_string()]
+    );
+}
+
+#[test]
+fn wrap_clamped_lines_truncates_after_max_rows_with_ellipsis() {
+    let lines = wrap_clamped_lines("abcdefghij", 3, 3);
+    assert_eq!(
+        lines,
+        vec!["abc".to_string(), "def".to_string(), "gh…".to_string()],
+        "超 3 行保留前 3 行，末行留 1 列给省略号"
+    );
+    assert_eq!(
+        unicode_width::UnicodeWidthStr::width(lines[2].as_str()),
+        3,
+        "末行显示宽度不得超过 width"
+    );
+}
+
+#[test]
+fn wrap_clamped_lines_ellipsis_keeps_wide_chars_whole() {
+    let lines = wrap_clamped_lines("中文字", 4, 1);
+    assert_eq!(lines, vec!["中…".to_string()], "不得切出半个宽字符");
+    assert_eq!(unicode_width::UnicodeWidthStr::width(lines[0].as_str()), 3);
+}
+
+#[test]
+fn multiline_view_places_cursor_at_wrap_boundary_on_next_line() {
+    let view = multiline_view("abcdef", 5, 5, 3);
+    assert_eq!(view.visible_lines.len(), 2);
+    assert_eq!(view.cursor_row_offset, 1, "软折行边界归下一行");
+    assert_eq!(view.cursor_col, 0);
+    assert_eq!(view.visible_lines[1].text, "f");
+    assert_eq!(view.visible_lines[1].start_char, 5);
+}
+
+#[test]
+fn multiline_view_keeps_cursor_before_hard_break_on_current_line() {
+    let view = multiline_view("abc\ndef", 3, 5, 3);
+    assert_eq!(view.visible_lines.len(), 2);
+    assert_eq!(view.cursor_row_offset, 0);
+    assert_eq!(view.cursor_col, 3, "硬换行前停在行尾");
+    assert_eq!(view.visible_lines[1].text, "def");
+}
+
+#[test]
+fn multiline_view_scrolls_window_to_keep_cursor_visible() {
+    let view = multiline_view("abcdefghij", 9, 3, 3);
+    assert_eq!(view.visible_lines.len(), 3, "超过 3 行时视口固定 3 行");
+    assert_eq!(view.cursor_row_offset, 2, "光标在可见窗口最后一行");
+    assert_eq!(view.cursor_col, 0);
+    assert_eq!(view.visible_lines[0].start_char, 3, "窗口从第 2 行开始");
+}
+
+#[test]
+fn multiline_char_index_at_maps_rows_back_to_char_index() {
+    let text = "abcdefghij";
+    assert_eq!(multiline_char_index_at(text, 0, 3, 3, 0, 0), 0);
+    assert_eq!(multiline_char_index_at(text, 0, 3, 3, 1, 1), 4);
+    assert_eq!(multiline_char_index_at(text, 0, 3, 3, 2, 99), 9);
+}
+
+#[test]
+fn multiline_char_index_at_uses_visible_window() {
+    let text = "abcdefghij";
+    // 光标在第 4 行 → 视口从第 2 行开始，行偏移按可见窗口换算。
+    assert_eq!(multiline_char_index_at(text, 9, 3, 3, 0, 0), 3);
+    assert_eq!(multiline_char_index_at(text, 9, 3, 3, 1, 2), 8);
 }
 
 #[test]

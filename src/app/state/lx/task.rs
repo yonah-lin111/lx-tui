@@ -131,6 +131,22 @@ impl TaskPage {
         self.len(agents) == 0
     }
 
+    /// 当前激活页签的上方内容区是否处于最底部。
+    ///
+    /// 只读派生，供 `chat_bar` 决定是否显示「回到底部」按钮：`Processes` 看输出偏移，
+    /// `Agents` 看选中子 agent 的 `follow`（消息为空时没有可滚动的历史，视为触底）。
+    pub fn is_at_bottom(&self, agents: &AgentsState) -> bool {
+        match self.tab {
+            TaskTab::Processes => {
+                self.output_visible == 0 || self.output_scroll >= self.output_max_scroll()
+            }
+            TaskTab::Agents => agents
+                .runs
+                .get(self.agents_window.active)
+                .is_none_or(|run| run.chat.messages.is_empty() || run.follow),
+        }
+    }
+
     /// 高亮当前的进程条目（`Processes` tab 且索引有效时）。
     pub fn selected(&self) -> Option<&ProcessEntry> {
         matches!(self.tab, TaskTab::Processes)
