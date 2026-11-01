@@ -81,6 +81,8 @@ pub const VERB_TOOL_READ: &str = VERB_READ;
 pub const VERB_TOOL_SEARCH: &str = "Search";
 pub const VERB_TOOL_EDIT: &str = "Edit";
 pub const VERB_TOOL_WRITE: &str = "Write";
+/// `web_search` 卡片动词。
+pub const VERB_TOOL_WEB_SEARCH: &str = "Web search";
 
 /// 工具行 diff 计数的前缀（绿 `+N` / 红 `-N`）。
 pub const TOOL_DIFF_ADD_PREFIX: &str = "+";
@@ -88,6 +90,27 @@ pub const TOOL_DIFF_REMOVE_PREFIX: &str = "-";
 
 /// `search` 截断提示：不内联到摘要行，展开后单独显示在下方。
 pub const SEARCH_TRUNCATED: &str = "results truncated";
+
+/// `web_search` 运行中的标题状态（多条查询时前面再拼 `N queries`）。
+pub const WEB_SEARCHING: &str = "Searching…";
+
+/// 联网搜索的查询条数：`2 queries` / `1 query`。
+pub fn queries_label(count: usize) -> String {
+    if count == 1 {
+        "1 query".to_string()
+    } else {
+        format!("{count} queries")
+    }
+}
+
+/// 联网搜索请求的结果条数：`8 results` / `1 result`。
+pub fn results_count_label(count: usize) -> String {
+    if count == 1 {
+        "1 result".to_string()
+    } else {
+        format!("{count} results")
+    }
+}
 
 /// `edit` 部分成功的尾部标记：本次补丁里有 hunk 应用后内容与原文相同（无实际变更）。
 pub const TOOL_PARTIAL: &str = "partial";

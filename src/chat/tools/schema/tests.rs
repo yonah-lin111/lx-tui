@@ -1,4 +1,4 @@
-//! Schema 测试：十一工具名、工具面过滤、严格对象与字段白名单。
+//! Schema 测试：十七工具名、工具面过滤、严格对象与字段白名单。
 
 use super::*;
 
@@ -10,6 +10,7 @@ fn tool_order_and_names_are_fixed() {
         vec![
             "read",
             "search",
+            "web_search",
             "edit",
             "write",
             "exec_command",
@@ -28,7 +29,7 @@ fn tool_order_and_names_are_fixed() {
     );
 }
 
-/// 主工具面顺序 == 现有 8 项 + 3 个控制工具；子角色只拿到各自白名单。
+/// 主工具面顺序 == `TOOL_NAMES` + 控制工具；子角色只拿到各自白名单。
 #[test]
 fn tools_for_filters_by_surface() {
     use crate::chat::agent::ToolSurface;
@@ -47,7 +48,7 @@ fn tools_for_filters_by_surface() {
         .iter()
         .map(|s| s.name)
         .collect();
-    assert_eq!(explorer, vec!["read", "search"]);
+    assert_eq!(explorer, vec!["read", "search", "web_search"]);
     let executor: Vec<&str> = tools_for(ToolSurface::Executor)
         .iter()
         .map(|s| s.name)
@@ -57,6 +58,7 @@ fn tools_for_filters_by_surface() {
         vec![
             "read",
             "search",
+            "web_search",
             "edit",
             "write",
             "exec_command",

@@ -38,6 +38,7 @@ mod plan;
 mod search;
 mod subagent;
 pub(crate) mod tree;
+mod web_search;
 
 #[cfg(test)]
 use file_summary::{fallback_parse_count, reset_fallback_parse_count};
@@ -109,6 +110,9 @@ pub(super) fn rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
             search::rows(call, view, width, folds.body)
         }
         Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp::rows(call, view, width, folds),
+        Some(crate::app::state::ToolDetailView::WebSearch(view)) => {
+            web_search::rows(call, view, width, folds)
+        }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::rows(call, width, folds.body)
         }
@@ -318,6 +322,20 @@ pub(super) fn draw_animated(
             );
             return;
         }
+        Some(crate::app::state::ToolDetailView::WebSearch(view)) => {
+            web_search::draw(
+                grid,
+                rect,
+                scroll,
+                row_index,
+                call,
+                view,
+                loading_frame,
+                folds,
+                animating,
+            );
+            return;
+        }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::draw(
                 grid,
@@ -384,6 +402,9 @@ pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
             search::has_more(call, view, width)
         }
         Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp::has_more(call, view, width),
+        Some(crate::app::state::ToolDetailView::WebSearch(view)) => {
+            web_search::has_more(call, view, width)
+        }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::has_more_content(call, width)
         }
@@ -412,27 +433,58 @@ fn mcp_regions(
     folds: Folds,
 ) -> Vec<CardRegion> {
     let layout = mcp::layout(call, view, width, folds);
+    split_regions(
+        layout.arguments_rows,
+        layout.result_rows,
+        layout.arguments_expandable,
+        layout.result_expandable,
+    )
+}
+
+/// 联网搜索卡片的点击面：查询块（Body）与结果块（Output）各自独立折叠。
+fn web_search_regions(
+    call: &ToolCallView,
+    view: &crate::app::state::WebSearchDetailView,
+    width: u16,
+    folds: Folds,
+) -> Vec<CardRegion> {
+    let layout = web_search::layout(call, view, width, folds);
+    split_regions(
+        layout.queries_rows,
+        layout.result_rows,
+        layout.queries_expandable,
+        layout.result_expandable,
+    )
+}
+
+/// 两块独立折叠卡片的点击面几何：第一块连同标题行，第二块紧随其后。
+fn split_regions(
+    first_rows: usize,
+    second_rows: usize,
+    first_expandable: bool,
+    second_expandable: bool,
+) -> Vec<CardRegion> {
     let mut regions = Vec::new();
     let mut offset = 0usize;
-    if layout.arguments_rows > 0 {
-        let rows = HEADER_ROWS + layout.arguments_rows;
+    if first_rows > 0 {
+        let rows = HEADER_ROWS + first_rows;
         regions.push(CardRegion {
             section: CardSection::Body,
             card: RowSpan { offset: 0, rows },
-            clickable: layout.arguments_expandable,
+            clickable: first_expandable,
         });
         offset = rows;
     }
-    if layout.result_rows > 0 {
+    if second_rows > 0 {
         let rows = if offset == 0 {
-            HEADER_ROWS + layout.result_rows
+            HEADER_ROWS + second_rows
         } else {
-            layout.result_rows
+            second_rows
         };
         regions.push(CardRegion {
             section: CardSection::Output,
             card: RowSpan { offset, rows },
-            clickable: layout.result_expandable,
+            clickable: second_expandable,
         });
     }
     regions
@@ -511,6 +563,9 @@ pub(super) fn card_regions(
             }]
         }
         Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp_regions(call, view, width, folds),
+        Some(crate::app::state::ToolDetailView::WebSearch(view)) => {
+            web_search_regions(call, view, width, folds)
+        }
         Some(crate::app::state::ToolDetailView::File(_)) | None => {
             // 展开前后行数不变就不登记：留下一个点了没反应的点击面只会误导。
             if !has_expandable_content(call, width) {

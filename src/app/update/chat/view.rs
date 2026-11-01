@@ -118,6 +118,12 @@ fn tool_view_of(tool: &ToolCallRecord) -> ToolCallView {
             &tool.arguments_json,
         )
         .map(ToolDetailView::Mcp)
+    } else if tool.name == crate::chat::tools::WEB_SEARCH_TOOL {
+        crate::app::state::WebSearchDetailView::from_tool(
+            tool.result_json.as_deref(),
+            &tool.arguments_json,
+        )
+        .map(ToolDetailView::WebSearch)
     } else {
         ToolDetailView::from_tool(tool.result_json.as_deref(), &tool.arguments_json)
             .or_else(|| ToolDetailView::file_detail(tool.result_json.as_deref()))

@@ -755,3 +755,110 @@ async fn first_save_on_fresh_install_accepts_get_revision() {
     );
     service.shutdown();
 }
+
+#[tokio::test]
+async fn models_save_preserves_web_search_settings() {
+    // 回归：Models 页保存只覆盖模型字段，`webSearch`（含未知字段）必须原样保留。
+    let (service, _events, _dir) = start_models("models-web-search-keep").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let ai_path = state_user_root(&service).join("config").join("ai.json");
+    std::fs::create_dir_all(ai_path.parent().expect("config dir")).expect("config dir");
+    std::fs::write(
+        &ai_path,
+        r#"{"ai":{"webSearch":{"exaApiKey":"exa-custom","tavilyApiKey":"tavily-custom","futureSearch":{"depth":"deep"}}}}"#,
+    )
+    .expect("seed ai.json");
+
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &put_body(),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{}", body(&saved));
+
+    let text = std::fs::read_to_string(&ai_path).expect("read ai.json");
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert_eq!(
+        parsed["ai"]["webSearch"]["exaApiKey"],
+        serde_json::json!("exa-custom"),
+        "{text}"
+    );
+    assert_eq!(
+        parsed["ai"]["webSearch"]["tavilyApiKey"],
+        serde_json::json!("tavily-custom"),
+        "{text}"
+    );
+    assert_eq!(
+        parsed["ai"]["webSearch"]["futureSearch"]["depth"],
+        serde_json::json!("deep"),
+        "未知字段往返保留：{text}"
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn web_search_save_does_not_invalidate_models_revision() {
+    // 回归：General 页保存 Key 不得改变 Models 页的乐观锁 revision，
+    // 否则已打开的 Models 页会用旧 revision 保存并误报 409。
+    let (service, _events, _dir) = start_models("models-web-search-revision").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let origin = Some(format!("http://127.0.0.1:{port}"));
+
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &put_body(),
+            origin.as_deref(),
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{}", body(&saved));
+
+    let before = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    let revision = revision_of(body(&before)).expect("revision");
+
+    let config_saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/config?token={token}"),
+            r#"{"config":{"sidebar_width":24},"web_search":{"exa_api_key":"exa-kept","tavily_api_key":"tavily-kept"}}"#,
+            origin.as_deref(),
+        ),
+    )
+    .await;
+    assert_eq!(status(&config_saved), 200, "{}", body(&config_saved));
+
+    let after = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    assert_eq!(
+        revision_of(body(&after)).as_deref(),
+        Some(revision.as_str()),
+        "webSearch 不参与模型 revision"
+    );
+
+    let payload = put_body().replace(
+        "\"revision\": \"\"",
+        &format!("\"revision\": \"{revision}\""),
+    );
+    let resaved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &payload,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&resaved), 200, "{}", body(&resaved));
+    service.shutdown();
+}

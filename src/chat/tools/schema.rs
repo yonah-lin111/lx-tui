@@ -1,4 +1,4 @@
-//! 八工具的模型可见规格：稳定英文名、英文描述与严格 JSON Schema。
+//! 全部内置工具的模型可见规格：稳定英文名、英文描述与严格 JSON Schema。
 //!
 //! Schema 只声明工具真正接受的字段（`additionalProperties: false`），`read` 的
 //! `offset` 明确写为 1-based；运行时仍会重新校验，不信任模型遵守 schema。
@@ -22,7 +22,7 @@ use crate::chat::process::{
 };
 
 /// 固定工具表：顺序即给模型的呈现顺序。
-static TOOLS: [ToolSpec; 16] = [
+static TOOLS: [ToolSpec; 17] = [
     ToolSpec::new(
         "read",
         "Read a UTF-8 text file, view an image file (PNG, JPEG, GIF, WebP, BMP, TIFF), or list a directory. \
@@ -47,6 +47,17 @@ static TOOLS: [ToolSpec; 16] = [
          by path and line. Truncation (limit, file cap, depth cap or timeout) is reported \
          explicitly via `truncated`.",
         search_parameters,
+    ),
+    ToolSpec::new(
+        "web_search",
+        "Search the public internet for up-to-date, external, or specialized information not present in \
+         the local workspace (such as recent releases, news, documentation, API changes, prices, or \
+         facts that may have changed). Pass either a single `query` string or `queries` (1-4 distinct \
+         queries executed concurrently in one call). Prefer batching related queries in `queries` to \
+         gather evidence faster. When your final response relies on web results, cite every supported \
+         claim inline with a Markdown link `[descriptive source title](https://...)` placed right after \
+         the sentence or clause — never use bare URLs and never collect links at the end of the message.",
+        web_search_parameters,
     ),
     ToolSpec::new(
         "edit",
@@ -135,7 +146,7 @@ static TOOLS: [ToolSpec; 16] = [
     super::subagent::cancel_agent_input_spec(),
 ];
 
-/// 全部可用工具规格（固定十六个）。
+/// 全部可用工具规格（固定十七个）。
 pub fn available_tools() -> &'static [ToolSpec] {
     &TOOLS
 }
@@ -273,6 +284,49 @@ fn search_parameters() -> Value {
             }
         },
         "required": ["pattern"],
+        "additionalProperties": false
+    })
+}
+
+/// `web_search` 参数 schema：`query` / `queries` 均为可选，运行时至少提供一个。
+fn web_search_parameters() -> Value {
+    use super::web_search::{
+        DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS, MAX_QUERIES, MAX_QUERY_CHARS, MIN_NUM_RESULTS,
+    };
+    json!({
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": format!(
+                    "Single search query (1-{MAX_QUERY_CHARS} chars). Provide either `query` or `queries`."
+                )
+            },
+            "queries": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_QUERIES,
+                "items": { "type": "string" },
+                "description": format!(
+                    "Batch of 1-{MAX_QUERIES} search queries executed concurrently in a single call. \
+                     Use this when you need to look up multiple topics or angles at once."
+                )
+            },
+            "num_results": {
+                "type": "integer",
+                "minimum": MIN_NUM_RESULTS,
+                "maximum": MAX_NUM_RESULTS,
+                "description": format!(
+                    "Maximum number of results per query ({MIN_NUM_RESULTS}-{MAX_NUM_RESULTS}, default {DEFAULT_NUM_RESULTS})."
+                )
+            },
+            "type": {
+                "type": "string",
+                "enum": ["auto", "fast", "deep"],
+                "description": "Search depth mode: `auto` (default), `fast`, or `deep`."
+            }
+        },
+        "required": [],
         "additionalProperties": false
     })
 }

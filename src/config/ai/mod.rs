@@ -1,13 +1,18 @@
-//! 模型配置（`config/ai.json`）：类型、校验、原子保存与 lx-agent 一次性导入。
+//! 模型配置（`config/ai.json`）：类型、校验与原子保存。
 //!
 //! 与 `settings.json`（布局整数）完全分离；模型配置是 `ai` 节点下的
-//! providers/enabled_providers/defaultModel/streamIdleTimeoutMs。
+//! providers/enabled_providers/defaultModel/streamIdleTimeoutMs/webSearch。
 //! 解析用 `serde`/`serde_json`；未知字段往返保留，已知字段严格校验。
-//! API Key 只在内存与权限受控文件中保存，永不进入日志与 Web 响应。
+//!
+//! API Key 只存在于内存快照与 0600 权限的 `ai.json` 中，永不写入日志或错误
+//! 消息；唯一出口是只监听回环 `127.0.0.1` 且需 capability token 的设置页 JSON
+//! 接口（`GET /api/state`、`GET /api/models/settings`）。内置默认 Key 编译在
+//! 二进制内，用户未配置时直接生效。
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +23,57 @@ use super::{ConfigError, user_data_root};
 /// 60s 对大上下文预填充和慢供应商太短：最新子 agent session 里就有一次
 /// 685k input tokens 的预填充被 60s 空闲超时直接杀掉（`error_code=timeout`）。
 pub const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
+
+/// 默认内置的 Exa API Key（复制自 lx-agent `ai.webSearch.exaApiKey`）。
+pub const DEFAULT_EXA_API_KEY: &str = "515df894-bc88-4bee-a2ff-f20451c63516";
+
+/// 默认内置的 Tavily API Key（复制自 lx-agent `ai.webSearch.tavilyApiKey`）。
+pub const DEFAULT_TAVILY_API_KEY: &str =
+    "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";
+
+fn default_exa_api_key() -> String {
+    DEFAULT_EXA_API_KEY.to_string()
+}
+
+fn default_tavily_api_key() -> String {
+    DEFAULT_TAVILY_API_KEY.to_string()
+}
+
+/// 联网搜索配置（对应 `config/ai.json` 的 `ai.webSearch` 节点，与 lx-agent 同构）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSearchConfig {
+    /// Exa MCP API Key；允许为空字符串（表示用户显式清空，仅走匿名直连或回退 Tavily）。
+    #[serde(default = "default_exa_api_key")]
+    pub exa_api_key: String,
+    /// Tavily Search API Key；允许为空字符串。
+    #[serde(default = "default_tavily_api_key")]
+    pub tavily_api_key: String,
+    /// 未知字段往返保留（保存时不丢弃 lx-agent 的其它节点）。
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+impl Default for WebSearchConfig {
+    fn default() -> Self {
+        Self {
+            exa_api_key: default_exa_api_key(),
+            tavily_api_key: default_tavily_api_key(),
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+impl WebSearchConfig {
+    /// 归一化（去除首尾空白）。
+    pub fn normalized(&self) -> Self {
+        Self {
+            exa_api_key: self.exa_api_key.trim().to_string(),
+            tavily_api_key: self.tavily_api_key.trim().to_string(),
+            extra: self.extra.clone(),
+        }
+    }
+}
 
 /// 供应商传输协议。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +251,9 @@ pub struct AiSettings {
         skip_serializing_if = "Option::is_none"
     )]
     pub stream_idle_timeout_ms: Option<u64>,
+    /// 联网搜索 API Key 配置（`ai.webSearch`）。
+    #[serde(default, rename = "webSearch")]
+    pub web_search: WebSearchConfig,
     /// 未知字段往返保留（如 lx-agent 的 titleSummary 等，导入时丢弃、
     /// 本项目保存时不回写这些字段）。
     #[serde(flatten)]
@@ -209,6 +268,7 @@ impl AiSettings {
             providers: BTreeMap::new(),
             default_model: None,
             stream_idle_timeout_ms: None,
+            web_search: WebSearchConfig::default(),
             extra: serde_json::Map::new(),
         }
     }
@@ -371,6 +431,7 @@ pub fn parse_ai(text: &str) -> Result<AiSettings, AiConfigError> {
 /// 原子保存 `ai.json`：同目录临时文件 + flush + rename；Unix 权限 0600。
 ///
 /// 目录权限交由 `ensure_config_dir`（0700）；保存失败不破坏旧文件。
+/// 临时文件名带进程 ID 与进程内原子序号，并发保存互不覆盖。
 pub fn save_ai(path: &Path, settings: &AiSettings) -> Result<(), AiConfigError> {
     settings.validate()?;
     let mut root = serde_json::Map::new();
@@ -385,7 +446,8 @@ pub fn save_ai(path: &Path, settings: &AiSettings) -> Result<(), AiConfigError> 
     if let Some(parent) = path.parent() {
         create_private_dir(parent)?;
     }
-    let temp = path.with_extension("json.tmp");
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let temp = path.with_extension(format!("json.{}.{seq}.tmp", std::process::id()));
     std::fs::write(&temp, body.as_bytes())?;
     crate::platform::restrict_file_permissions(&temp)?;
     if let Err(error) = std::fs::rename(&temp, path) {
@@ -394,6 +456,9 @@ pub fn save_ai(path: &Path, settings: &AiSettings) -> Result<(), AiConfigError> 
     }
     Ok(())
 }
+
+/// 进程内临时文件序号：并发保存时避免临时文件互相覆盖。
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// 创建（或收紧）私有配置目录：Unix 下 0700。
 pub fn create_private_dir(dir: &Path) -> Result<(), AiConfigError> {

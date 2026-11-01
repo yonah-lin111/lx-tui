@@ -735,3 +735,37 @@ fn replay_without_process_records_leaves_the_card_alone() {
     }
     assert!(!reconcile_process_records(&mut state, pane, &[]));
 }
+
+#[test]
+fn reload_keeps_web_search_detail_and_interrupted_fallback() {
+    let call = reloaded(
+        "web_search",
+        r#"{"queries":["ratatui 0.29","tokio 1.40"],"num_results":5,"type":"deep"}"#,
+        r#"{"tool":"web_search","queries":["ratatui 0.29","tokio 1.40"],"num_results":5,"search_type":"deep","provider":"exa","text":"1. Ratatui\nhttps://ratatui.rs","truncated":false,"duration_ms":840}"#,
+    );
+    let Some(ToolDetailView::WebSearch(detail)) = call.detail.as_deref() else {
+        panic!("expected WebSearchDetailView");
+    };
+    assert_eq!(detail.queries, vec!["ratatui 0.29", "tokio 1.40"]);
+    assert_eq!(detail.num_results, 5);
+    assert_eq!(detail.search_type, "deep");
+    assert_eq!(detail.provider.as_deref(), Some("exa"));
+    assert_eq!(detail.duration_ms, Some(840));
+    assert_eq!(detail.result, vec!["1. Ratatui", "https://ratatui.rs"]);
+
+    // 中断/取消无 result_json 时，仍从 arguments_json 恢复查询词供卡片展示。
+    let mut interrupted = tool(1, "call-2", "web_search", "interrupted");
+    interrupted.arguments_json = r#"{"query":"rust async"}"#.into();
+    interrupted.result_json = None;
+    let view = view_message_of(
+        &message(Vec::new(), vec![interrupted]),
+        &ModelsSnapshot::default(),
+    );
+    let call = view.tool("call-2").expect("interrupted web_search");
+    let Some(ToolDetailView::WebSearch(detail)) = call.detail.as_deref() else {
+        panic!("expected WebSearchDetailView from arguments fallback");
+    };
+    assert_eq!(detail.queries, vec!["rust async"]);
+    assert_eq!(detail.provider, None);
+    assert!(detail.result.is_empty());
+}

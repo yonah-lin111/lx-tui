@@ -155,9 +155,14 @@ fn save_ai_is_atomic_and_enforces_permissions() {
     let settings = sample_settings();
     save_ai(&path, &settings).expect("save");
     assert!(path.exists());
-    // 保存后无临时文件残留。
-    let temp = path.with_extension("json.tmp");
-    assert!(!temp.exists(), "临时文件已重命名");
+    // 保存后无临时文件残留（临时文件形如 `ai.json.<pid>.<seq>.tmp`）。
+    let leftovers: Vec<String> = std::fs::read_dir(&dir)
+        .expect("read dir")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "临时文件已清理: {leftovers:?}");
     // 文件可解析且一致。
     let loaded = load_ai(&path).expect("load").expect("exists");
     assert_eq!(loaded, settings);
@@ -397,6 +402,128 @@ fn sample_with_no_variant_model_skips_variant_requirement() {
         "无 variants 模型不强制 variant"
     );
     assert_eq!(settings.idle_timeout_ms(), DEFAULT_STREAM_IDLE_TIMEOUT_MS);
+}
+
+#[test]
+fn web_search_defaults_when_node_missing() {
+    // 缺失 `webSearch` 节点时取内置默认 Key（零配置开箱即用）。
+    let settings = parse_ai(r#"{"ai":{"providers":{}}}"#).expect("minimal parses");
+    assert_eq!(settings.web_search, WebSearchConfig::default());
+    assert_eq!(settings.web_search.exa_api_key, DEFAULT_EXA_API_KEY);
+    assert_eq!(settings.web_search.tavily_api_key, DEFAULT_TAVILY_API_KEY);
+    // `AiSettings::empty()` 同样是默认 Key，而不是空字符串。
+    assert_eq!(AiSettings::empty().web_search, WebSearchConfig::default());
+    // 部分字段缺失时，仅缺失的那个回落到默认值。
+    let partial = parse_ai(r#"{"ai":{"providers":{},"webSearch":{"exaApiKey":"explicit-exa"}}}"#)
+        .expect("partial parses");
+    assert_eq!(partial.web_search.exa_api_key, "explicit-exa");
+    assert_eq!(
+        partial.web_search.tavily_api_key, DEFAULT_TAVILY_API_KEY,
+        "缺失的 tavilyApiKey 回落到默认值"
+    );
+}
+
+#[test]
+fn web_search_preserves_explicit_empty_keys() {
+    // 用户显式清空 Key 时保留空字符串，而不是回落到默认值。
+    let settings =
+        parse_ai(r#"{"ai":{"providers":{},"webSearch":{"exaApiKey":"","tavilyApiKey":""}}}"#)
+            .expect("empty keys parse");
+    assert_eq!(settings.web_search.exa_api_key, "");
+    assert_eq!(settings.web_search.tavily_api_key, "");
+}
+
+#[test]
+fn web_search_preserves_unknown_fields() {
+    // `webSearch` 内的未知字段必须往返保留，避免保存 Key 时丢掉 lx-agent 的其它节点。
+    let settings = parse_ai(
+        r#"{"ai":{"providers":{},"webSearch":{"exaApiKey":"exa","tavilyApiKey":"tv","futureSearch":{"depth":"deep"}}}}"#,
+    )
+    .expect("unknown field parses");
+    assert_eq!(
+        settings.web_search.extra.get("futureSearch"),
+        Some(&serde_json::json!({"depth": "deep"})),
+        "unknown webSearch field kept"
+    );
+    // trim 归一化不丢未知字段。
+    assert!(
+        settings
+            .web_search
+            .normalized()
+            .extra
+            .contains_key("futureSearch"),
+        "normalized keeps extra"
+    );
+
+    let serialized = serde_json::to_value(&settings.web_search).expect("serialize");
+    assert_eq!(
+        serialized.get("futureSearch"),
+        Some(&serde_json::json!({"depth": "deep"})),
+        "round trip keeps unknown webSearch field"
+    );
+    let dir = temp_dir("web-search-extra");
+    let path = dir.join("ai.json");
+    let mut all = sample_settings();
+    all.web_search = settings.web_search;
+    save_ai(&path, &all).expect("save");
+    let loaded = load_ai(&path).expect("load").expect("exists");
+    assert_eq!(loaded.web_search, all.web_search);
+}
+
+#[test]
+fn web_search_round_trips_through_save_and_load() {
+    let dir = temp_dir("web-search-round-trip");
+    let path = dir.join("ai.json");
+    let mut settings = sample_settings();
+    settings.web_search = WebSearchConfig {
+        exa_api_key: "exa-kept".into(),
+        tavily_api_key: "tavily-kept".into(),
+        ..WebSearchConfig::default()
+    };
+    save_ai(&path, &settings).expect("save");
+    let text = std::fs::read_to_string(&path).expect("read");
+    // 落盘字段与 lx-agent 同构：camelCase `webSearch.exaApiKey`。
+    assert!(text.contains("\"webSearch\""), "{text}");
+    assert!(text.contains("\"exaApiKey\": \"exa-kept\""), "{text}");
+    assert!(text.contains("\"tavilyApiKey\": \"tavily-kept\""), "{text}");
+    let loaded = load_ai(&path).expect("load").expect("exists");
+    assert_eq!(loaded.web_search, settings.web_search);
+    // 未知字段往返保留不受新字段影响。
+    assert!(
+        serde_json::to_string(&loaded)
+            .expect("json")
+            .contains("futureField")
+    );
+}
+
+#[test]
+fn web_search_normalized_trims_and_clearing_survives_save() {
+    let config = WebSearchConfig {
+        exa_api_key: "  exa  ".into(),
+        tavily_api_key: "\ttavily\n".into(),
+        ..WebSearchConfig::default()
+    };
+    assert_eq!(
+        config.normalized(),
+        WebSearchConfig {
+            exa_api_key: "exa".into(),
+            tavily_api_key: "tavily".into(),
+            ..WebSearchConfig::default()
+        }
+    );
+    // 清空后的空字符串必须原样落盘并被读回为空，不能被默认值覆盖。
+    let dir = temp_dir("web-search-cleared");
+    let path = dir.join("ai.json");
+    let mut settings = sample_settings();
+    settings.web_search = WebSearchConfig {
+        exa_api_key: String::new(),
+        tavily_api_key: "tavily".into(),
+        ..WebSearchConfig::default()
+    };
+    save_ai(&path, &settings).expect("save");
+    let loaded = load_ai(&path).expect("load").expect("exists");
+    assert_eq!(loaded.web_search.exa_api_key, "");
+    assert_eq!(loaded.web_search.tavily_api_key, "tavily");
 }
 
 /// Path 辅助：临时文件清理（测试目录由系统清理，无需显式删除）。

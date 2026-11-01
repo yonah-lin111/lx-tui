@@ -1,10 +1,11 @@
 //! 设置服务路由与处理器：请求解析、token/同源校验、配置与命令 CRUD。
 
 use super::models;
-use super::{MAX_BODY_BYTES, MAX_HEADER_BYTES, ServiceState, SettingsEvent, page};
+use super::{MAX_BODY_BYTES, MAX_HEADER_BYTES, ServiceState, SettingsEvent, ai_path, page};
 use std::collections::HashMap;
 
 use crate::config::Config;
+use crate::config::ai::{AiConfigError, AiSettings, WebSearchConfig};
 use crate::settings::commands::{
     self, BlockType, CommandKind, CommandRecord, CommandScope, MdScope,
 };
@@ -293,17 +294,36 @@ fn origin_ok(request: &Request, _state: &ServiceState) -> bool {
 fn state_json(state: &ServiceState) -> Response {
     let config = crate::config::load_or_default(state.config_path()).unwrap_or_default();
     let commands = state.commands();
+    // 页面需要能展示当前 Key；读取失败时退回默认 Key，不让整个设置页失效。
+    let web_search = load_ai_settings(state)
+        .map(|settings| settings.web_search)
+        .unwrap_or_default();
     Response::json(
         200,
         format!(
-            "{{\"config\":{},\"commands\":[{}],\"project_available\":false}}",
+            "{{\"config\":{},\"web_search\":{},\"commands\":[{}],\"project_available\":false}}",
             config_json(&config),
+            web_search_json(&web_search),
             commands
                 .iter()
                 .map(command_view_json)
                 .collect::<Vec<_>>()
                 .join(",")
         ),
+    )
+}
+
+/// 读取磁盘上的 `AiSettings`；文件缺失时回落为空配置的结构（默认 Key 仍在）。
+fn load_ai_settings(state: &ServiceState) -> Result<AiSettings, AiConfigError> {
+    Ok(crate::config::ai::load_ai(&ai_path(state))?.unwrap_or_else(AiSettings::empty))
+}
+
+/// 联网搜索配置 → JSON（键序固定，键名 snake_case 对齐页面字段）。
+fn web_search_json(config: &WebSearchConfig) -> String {
+    format!(
+        "{{\"exa_api_key\":{},\"tavily_api_key\":{}}}",
+        json_string(&config.exa_api_key),
+        json_string(&config.tavily_api_key),
     )
 }
 
@@ -324,19 +344,108 @@ fn commands_json(state: &ServiceState) -> Response {
 }
 
 /// `PUT /api/config`：校验并原子保存；成功投递事件。
+///
+/// body 可同时携带 `web_search`：此时把两个 Key 合并进 `ai.json`（保留现有
+/// providers / defaultModel 等全部模型配置）并广播 `ModelsChanged`。
+///
+/// 顺序不可交换：先解析布局配置、校验 `web_search` 字段并预合并 `ai.json`，
+/// 全部通过后才落盘；任何一步失败都不写 `settings.json`、不投递事件。
 fn put_config(request: &Request, state: &ServiceState) -> Response {
-    let Some(config_entries) = json_object_field(&request.body, "config") else {
-        return Response::error(422, "body must contain a config object");
+    let config_entries = match json_object_field(&request.body, "config") {
+        Ok(Some(entries)) => entries,
+        _ => return Response::error(422, "body must contain a config object"),
     };
     let config = match config_from_json(config_entries) {
         Ok(config) => config,
         Err(message) => return Response::error(422, &message),
     };
+    // 字段缺失 = 不改 ai.json；对象 = 合并；其它类型 = 422。
+    let web_search_entries = match json_object_field(&request.body, "web_search") {
+        Ok(entries) => entries,
+        Err(message) => return Response::error(422, &message),
+    };
+    let ai_update = match web_search_entries {
+        Some(entries) => {
+            // `ai.json` 损坏时按空配置修复（与 `GET /api/state` 的降级一致），
+            // 让用户能通过保存 Key 把文件重写为合法内容；IO/HOME 错误仍返回 500。
+            let mut ai = match load_ai_settings(state) {
+                Ok(ai) => ai,
+                Err(AiConfigError::Invalid(message)) => {
+                    tracing::warn!(
+                        error = %message,
+                        "ai.json is invalid; rewriting it from an empty config with new web search settings"
+                    );
+                    AiSettings::empty()
+                }
+                Err(error) => return Response::error(500, &error.to_string()),
+            };
+            let web_search = match merge_web_search(&entries, &ai.web_search) {
+                Ok(web_search) => web_search,
+                Err(message) => return Response::error(422, &message),
+            };
+            ai.web_search = web_search;
+            Some(ai)
+        }
+        None => None,
+    };
+    // 全部校验通过：先写 ai.json（失败则 settings.json 保持原样），再写布局配置。
+    if let Some(ai) = ai_update.as_ref()
+        && let Err(error) = crate::config::ai::save_ai(&ai_path(state), ai)
+    {
+        let status = match error {
+            AiConfigError::Invalid(_) => 422,
+            _ => 500,
+        };
+        return Response::error(status, &error.to_string());
+    }
     if let Err(error) = crate::config::save(state.config_path(), &config) {
+        if ai_update.is_some() {
+            tracing::warn!(
+                error = %error,
+                "ai.json saved but settings.json write failed; the layout change was not applied"
+            );
+        }
         return Response::error(422, &error.to_string());
     }
     let _ = state.sender().send(SettingsEvent::ConfigChanged(config));
+    if let Some(ai) = ai_update {
+        let _ = state
+            .sender()
+            .send(SettingsEvent::ModelsChanged(Box::new(ai)));
+    }
     Response::json(200, "{\"ok\":true}")
+}
+
+/// `web_search` 字段合并：缺失的 Key 沿用当前值，存在的做 trim（空串保留）。
+///
+/// 只接受字符串或 `null`（视同缺失）；trim 后含控制字符的 Key 直接拒绝。
+fn merge_web_search(
+    entries: &[(String, JsonValue)],
+    current: &WebSearchConfig,
+) -> Result<WebSearchConfig, String> {
+    let mut config = current.normalized();
+    for (key, value) in entries {
+        let slot = match key.as_str() {
+            "exa_api_key" => &mut config.exa_api_key,
+            "tavily_api_key" => &mut config.tavily_api_key,
+            _ => continue,
+        };
+        match value {
+            JsonValue::String(text) => *slot = text.clone(),
+            JsonValue::Null => continue,
+            _ => return Err(format!("{key} must be a string")),
+        }
+    }
+    let config = config.normalized();
+    for (key, value) in [
+        ("exa_api_key", &config.exa_api_key),
+        ("tavily_api_key", &config.tavily_api_key),
+    ] {
+        if value.chars().any(char::is_control) {
+            return Err(format!("{key} must not contain control characters"));
+        }
+    }
+    Ok(config)
 }
 
 /// 解析 8 个已知键；未知键忽略，非法值报错。
@@ -593,12 +702,13 @@ pub fn json_string(text: &str) -> String {
     out
 }
 
-/// 极简 JSON 值：数字、字符串、对象与其它（数组/布尔/空）。
+/// 极简 JSON 值：数字、字符串、对象、null 与其它（数组/布尔）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum JsonValue {
     Number(u64),
     String(String),
     Object(Vec<(String, JsonValue)>),
+    Null,
     Other,
 }
 
@@ -626,19 +736,26 @@ pub fn json_object_pairs(text: &str) -> Option<Vec<(String, JsonValue)>> {
     Some(entries)
 }
 
-/// 取顶层对象的某个嵌套对象字段；供 `config` 字段提取。
-fn json_object_field(text: &str, field: &str) -> Option<Vec<(String, JsonValue)>> {
+/// 取顶层对象的某个嵌套对象字段。
+///
+/// 字段缺失 → `Ok(None)`；是对象 → `Ok(Some(entries))`；其它类型 → `Err`。
+fn json_object_field(text: &str, field: &str) -> Result<Option<Vec<(String, JsonValue)>>, String> {
     let mut parser = JsonParser::new(text);
-    let entries = parser.object().ok()?;
+    let entries = parser
+        .object()
+        .map_err(|_| "invalid JSON body".to_string())?;
+    parser
+        .finish()
+        .map_err(|_| "invalid JSON body".to_string())?;
     for (key, value) in entries {
         if key == field {
             return match value {
-                JsonValue::Object(entries) => Some(entries),
-                _ => None,
+                JsonValue::Object(entries) => Ok(Some(entries)),
+                _ => Err(format!("invalid JSON: expected object for field {field}")),
             };
         }
     }
-    None
+    Ok(None)
 }
 
 /// 极简 JSON 解析器：支持对象、数组、字符串（含转义）、整数、布尔与 null。
@@ -697,10 +814,16 @@ impl<'a> JsonParser<'a> {
             Some(byte) if byte.is_ascii_digit() => self.number().map(JsonValue::Number),
             Some(b'-') => Err(()),
             Some(byte) if byte.is_ascii_alphabetic() => {
+                let start = self.index;
                 while self.peek().is_some_and(|byte| byte.is_ascii_alphanumeric()) {
                     self.index += 1;
                 }
-                Ok(JsonValue::Other)
+                let word = std::str::from_utf8(&self.bytes[start..self.index]).map_err(|_| ())?;
+                Ok(if word == "null" {
+                    JsonValue::Null
+                } else {
+                    JsonValue::Other
+                })
             }
             _ => Err(()),
         }

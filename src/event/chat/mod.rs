@@ -1,15 +1,10 @@
 //! lx 聊天轮次编排：取走网络效应、装配上下文、启动 agent turn 任务并回投结果。
 //!
-//! 本模块是**唯一**负责“DB 落库 → 状态 → 回执”顺序的地方：
-//!
-//! - [`pump_chat_streams`] 把 `StartChatStream` 效应变成一次 [`crate::chat::agent_loop`]
-//!   任务（多步采样 + 串行工具调度）；取消句柄、冻结工作区都在这里维护。
-//! - 后台任务只通过 `mpsc::UnboundedSender<AppEvent>` 投递**纯数据**，通过 oneshot 等待
-//!   事件层回执；网络模块与 loop 都不修改 `AppState`。
-//! - [`handle_agent_host_event`] 执行工具调用的持久化门槛：`BeginTool` 必须先提交 pending
-//!   事务、再让 UI 显示 pending、最后（可见窗格还要等该帧绘制）才回执 ticket；
-//!   `FinishTool` 必须先原子写真实结果、再更新状态、最后回执。
-//! - delta 与整轮终态仍按 `(pane, session, generation)` 过滤，旧 generation 事件一律丢弃。
+//! 本模块是**唯一**负责“DB 落库 → 状态 → 回执”顺序的地方：[`pump_chat_streams`] 把
+//! `StartChatStream` 效应变成一次 [`crate::chat::agent_loop`] 任务（多步采样 + 串行工具
+//! 调度），后台任务只投递纯数据并经 oneshot 等回执；[`handle_agent_host_event`] 守住
+//! 工具持久化门槛（`BeginTool` 先提交 pending、`FinishTool` 先原子写结果，最后回执）。
+//! delta 与整轮终态仍按 `(pane, session, generation)` 过滤，旧 generation 一律丢弃。
 
 pub mod ask;
 pub mod compact;
@@ -44,8 +39,7 @@ pub(crate) use tool_calls::{begin_tool, finish_tool, flush_pending_tool_begins};
 
 /// 停止本轮进程（D9）：本轮新建集合 ∪ 当前正在等待/交互的进程。
 ///
-/// 此前启动、本轮未操作的旧服务保持运行：只有“这一轮动过的”和“此刻正在等的”
-/// 才随 Esc 停止一起清理。停止在后台任务执行，事件循环继续响应输入与渲染。
+/// 此前启动、本轮未操作的旧服务保持运行；停止在后台任务执行，事件循环继续渲染与响应输入。
 pub fn stop_turn_processes(streams: &mut ChatStreams, key: &RequestKey) {
     let Some(runtime) = streams.runtimes.get(&key.session) else {
         return;
@@ -116,10 +110,8 @@ pub struct ChatStreams {
     cancels: HashMap<RequestKey, watch::Sender<bool>>,
     /// checkpoint 合并状态：最近一次落盘时刻 + 累计字节。
     checkpoints: HashMap<RequestKey, (std::time::Instant, usize)>,
-    /// 会话的 **DB 工作区键**（`/resume` 共享键，通常是仓库主 checkout）。
-    ///
-    /// 不是工具执行 cwd：linked worktree 里执行时，会话仍存在共享键下；
-    /// 用执行 cwd 落库会报 `workspace missing` 并中断本轮。
+    /// 会话的 **DB 工作区键**（`/resume` 共享键，通常是仓库主 checkout），不是工具执行
+    /// cwd：linked worktree 里执行时仍用共享键落库，用执行 cwd 会报 `workspace missing`。
     db_workspaces: HashMap<RequestKey, PathBuf>,
     /// 本轮持有的跨进程 session guard；直到终态才释放。
     guards: HashMap<RequestKey, crate::platform::FileGuard>,
@@ -226,12 +218,10 @@ impl ChatStreams {
 
     /// 请求取消一轮（Esc / 窗格关闭 / 会话切换）。返回是否确有在途轮次。
     ///
-    /// 只发出取消信号：已提交 pending、尚未执行的调用由 loop 在下一检查点结算为
-    /// `cancelled`（**不执行**文件 IO），回执通道保持可用以便它完成该结算。
-    /// 挂起的 `ask` 在这里被唤醒为 `Err(Cancelled)`，否则 loop 会永久阻塞在作答上。
+    /// 只发出取消信号：已提交 pending 的调用由 loop 在下一检查点结算为 `cancelled`
+    /// （**不执行**文件 IO）；挂起的 `ask` 在这里唤醒为 `Err(Cancelled)`，否则永久阻塞。
     fn cancel(&mut self, key: &RequestKey) -> bool {
         // Esc 只停主轮；子 agent 不级联取消（用户可在 Agents 面板按选中项停止）。
-        // 挂起提问先唤醒：它没有「下一检查点」，不唤醒就永远等不到。
         let woke = self.wake_ask(key);
         let Some(cancel) = self.cancels.get(key) else {
             return woke;
@@ -277,23 +267,14 @@ impl ChatStreams {
 
     /// 抽取某 key 尚未回执的 BeginTool（窗格关闭 / 会话切换 / `/new` 时）。
     ///
-    /// **不能直接丢掉**：`begin_tool` 已经把 `agent_tool_call` 写成 `pending` 并提交，
-    /// 直接丢条目会让 `reply` 被 drop，loop 拿 `Err(RecvError)` 直接返回——`finish_tool`
-    /// 永远不会再被调用，库里那一行**永久停在 `pending`**（重开会话时卡片一直显示
-    /// Pending，直到整进程重启的恢复逻辑才纠正）。
-    ///
-    /// 正确做法是把它们交给调用方，由 [`settle_begin`] 走「无归属 → `cancel_pending`」
+    /// **不能直接丢掉**：`begin_tool` 已把 `agent_tool_call` 写成 `pending` 并提交，丢条目会让
+    /// `reply` 被 drop、loop 拿 `Err(RecvError)` 返回，`finish_tool` 永不再调用，库里那一行
+    /// **永久停在 `pending`**。所以交给调用方，由 [`settle_begin`] 走「无归属 → `cancel_pending`」
     /// 那条唯一合法的 pending→cancelled 落库路径。
     fn take_pending(&mut self, key: &RequestKey) -> Vec<PendingBegin> {
-        let mut taken = Vec::new();
-        let mut kept = Vec::with_capacity(self.pending_begins.len());
-        for pending in std::mem::take(&mut self.pending_begins) {
-            if &pending.key == key {
-                taken.push(pending);
-            } else {
-                kept.push(pending);
-            }
-        }
+        let (taken, kept) = std::mem::take(&mut self.pending_begins)
+            .into_iter()
+            .partition(|pending| &pending.key == key);
         self.pending_begins = kept;
         taken
     }
@@ -381,9 +362,8 @@ pub fn pump_chat_streams(
 
 /// 在 `BeginChatTurn` 落库之前取得/复核 session guard。
 ///
-/// 续轮的 guard 必须早于 `begin_turn` 事务：否则另一实例可以在事务提交与流启动之间
-/// 插入同一会话，revision 只能事后发现。取不到或存在未完成撤销时移除该效应，
-/// 状态回到 Idle、草稿保留，并提示原因。
+/// 续轮的 guard 必须早于 `begin_turn` 事务：否则另一实例可在事务提交与流启动之间插入同一
+/// 会话，revision 只能事后发现。取不到或存在未完成撤销时移除效应、回到 Idle 并提示原因。
 pub fn guard_begin_turns(
     state: &mut AppState,
     streams: &mut ChatStreams,
@@ -552,11 +532,8 @@ fn start_stream(
     if streams.cancels.contains_key(&key) {
         return false;
     }
-    // 冻结模型快照：从窗格当前消息流状态读取该轮的选择（发送时冻结语义：
-    // Committing 已把模型写入 DB；流启动时按窗格 effective_selection 重解析——
-    // 在途请求持有启动时快照，设置页中途保存不影响本轮）。
-    // 必须走 `effective_selection`：它会把模型默认思考等级（variant）补上，
-    // 否则「未显式选等级」的窗格请求不会带思考参数（reasoning 恒为空）。
+    // 冻结模型快照：从窗格当前消息流状态读取该轮的选择（发送时冻结语义：Committing 已把
+    // 模型写入 DB；流启动时按 `effective_selection` 重解析，补上默认 variant 后再冻结）。
     let (frozen, assembled, current_plan, mcp_snapshot, skill_omitted) = {
         let Some(pane) = state.pane_anywhere(key.pane) else {
             return false;
@@ -716,8 +693,7 @@ fn start_stream(
     // 取消通道；sender 由 ChatStreams 持有。
     let (cancel_sender, cancel) = watch::channel(false);
     streams.cancels.insert(key.clone(), cancel_sender);
-    // DB 归属键与执行 cwd 分离：linked worktree / 非工作区写入时，工具行与快照仍
-    // 存在会话所属工作区下，不能拿 `prepared.cwd` 去查 workspace。
+    // DB 归属键与执行 cwd 分离：linked worktree 下工具行与快照仍存在会话所属工作区。
     let session_key = state
         .chat_session_key_for_pane(key.pane)
         .unwrap_or_else(|| prepared.cwd.clone());
@@ -760,6 +736,10 @@ fn start_stream(
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads)
         .with_image_support(frozen.supports_image_input)
+        .with_web_search_keys(
+            state.models.settings.web_search.exa_api_key.clone(),
+            state.models.settings.web_search.tavily_api_key.clone(),
+        )
         .with_mcp(
             crate::mcp::global_manager().clone(),
             mcp_snapshot,
@@ -895,12 +875,9 @@ pub fn handle_net_event(
 
 /// 工具调用请求（BeginTool / FinishTool）的事件层处理：**唯一**写库与状态来源。
 ///
-/// 顺序不可交换：
-///
-/// - `BeginTool`：① `begin_tool_call`（pending 事务提交）→ ② 状态转 `Pending` 并安排下一帧
-///   → ③（可见窗格在该帧绘制后）`mark_tool_running` + 状态转 `Running` → 回执 ticket。
-/// - `FinishTool`：① `finish_tool_call`（真实结果原子落库）→ ② 状态转终态 + 摘要
-///   → ③ 回执 `Ok`。落库失败时回执 `Err`，本轮失败且**不重试**写入。
+/// 顺序不可交换：`BeginTool` 先提交 pending 事务、再转 `Pending`、（可见窗格待该帧绘制后）
+/// 转 `Running` 并回执 ticket；`FinishTool` 先原子写真实结果、再转终态、最后回执 `Ok`。
+/// 落库失败时回执 `Err`，本轮失败且**不重试**写入。
 pub fn handle_agent_host_event(
     state: &mut AppState,
     streams: &mut ChatStreams,

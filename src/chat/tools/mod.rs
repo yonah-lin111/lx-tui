@@ -33,6 +33,7 @@ mod search;
 mod subagent;
 mod text;
 mod types;
+pub mod web_search;
 mod write;
 
 #[cfg(test)]
@@ -65,6 +66,9 @@ pub use types::{
     ArchivedImage, FileChange, FileChangeKind, McpToolResult, ReadKind, SUBAGENT_TOOL_NAMES,
     SearchMatch, TOOL_NAMES, ToolContext, ToolDecl, ToolErrorCode, ToolExecutionResult,
     ToolFailure, ToolResultPublic, ToolSpec, ToolSummary,
+};
+pub use web_search::{
+    SearchDepth, WEB_SEARCH_TOOL, WebSearchArgs, WebSearchProvider, WebSearchToolResult,
 };
 
 use types::ToolResult;
@@ -155,11 +159,13 @@ pub fn execute_with(
         "write" => write::run_with(ctx, arguments_json, recorder),
         "curr_time" => wrap(run_curr_time(ctx, arguments_json)),
         // 需要长期进程句柄/会话状态：本入口不执行，返回明确的错误而不是静默成功。
-        "exec_command" | "write_stdin" | "update_plan" | ASK_TOOL => ToolFailure::new(
-            ToolErrorCode::UnknownTool,
-            format!("tool '{name}' must be executed by the agent loop, not the file executor"),
-        )
-        .into_result(Vec::new()),
+        "exec_command" | "write_stdin" | "update_plan" | ASK_TOOL | web_search::WEB_SEARCH_TOOL => {
+            ToolFailure::new(
+                ToolErrorCode::UnknownTool,
+                format!("tool '{name}' must be executed by the agent loop, not the file executor"),
+            )
+            .into_result(Vec::new())
+        }
         other => {
             // 只回显截断后的名字：模型可能塞入超长内容，错误消息不得被撑爆。
             let shown: String = other.chars().take(64).collect();

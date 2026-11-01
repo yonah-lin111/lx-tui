@@ -95,6 +95,10 @@ pub struct AgentTools {
     reads: Option<Arc<crate::chat::tools::ReadRegistry>>,
     /// 当前模型是否支持图像输入模态。
     supports_image_input: bool,
+    /// Exa MCP API Key（联网搜索优先引擎）。
+    exa_api_key: String,
+    /// Tavily REST API Key（联网搜索回退引擎）。
+    tavily_api_key: String,
     /// rtk 后端（外部优先，缺失时内置过滤）；随执行器复用检测结果。
     rtk: Rtk,
     /// 本轮的 MCP 管理器与冻结快照；None = 本轮没有 MCP。
@@ -129,6 +133,8 @@ impl AgentTools {
             recorder: None,
             reads: None,
             supports_image_input: true,
+            exa_api_key: crate::config::ai::DEFAULT_EXA_API_KEY.to_string(),
+            tavily_api_key: crate::config::ai::DEFAULT_TAVILY_API_KEY.to_string(),
             rtk: Rtk::detect(),
             mcp: None,
             session_id: String::new(),
@@ -150,6 +156,17 @@ impl AgentTools {
     /// 注入当前模型是否支持图像输入（生产路径按 `FrozenModel` 设置）。
     pub fn with_image_support(mut self, supports: bool) -> Self {
         self.supports_image_input = supports;
+        self
+    }
+
+    /// 注入联网搜索的两把 API Key（生产路径取当前 `AiSettings.web_search`）。
+    pub fn with_web_search_keys(
+        mut self,
+        exa_api_key: impl Into<String>,
+        tavily_api_key: impl Into<String>,
+    ) -> Self {
+        self.exa_api_key = exa_api_key.into();
+        self.tavily_api_key = tavily_api_key.into();
         self
     }
 
@@ -425,6 +442,14 @@ impl ToolExecutor for AgentTools {
             "list_resources" | "list_resource_templates" | "read_resource"
         ) {
             self.execute_mcp_resource(call, cancel).await
+        } else if call.name == crate::chat::tools::WEB_SEARCH_TOOL {
+            crate::chat::tools::web_search::execute(
+                &call.arguments_json,
+                &self.exa_api_key,
+                &self.tavily_api_key,
+                cancel,
+            )
+            .await
         } else {
             return None;
         };
@@ -460,6 +485,17 @@ impl AgentTools {
             "list_resources" | "list_resource_templates" | "read_resource" => {
                 let (_tx, cancel) = tokio::sync::watch::channel(false);
                 self.execute_mcp_resource(call, cancel).await
+            }
+            name if name == crate::chat::tools::WEB_SEARCH_TOOL => {
+                // 无取消信号的测试入口：通道永不取消，由单次引擎超时兜底。
+                let (_tx, cancel) = tokio::sync::watch::channel(false);
+                crate::chat::tools::web_search::execute(
+                    &call.arguments_json,
+                    &self.exa_api_key,
+                    &self.tavily_api_key,
+                    cancel,
+                )
+                .await
             }
             "update_plan" => {
                 // 修订号先取号后校验：校验失败不消耗可观察的提交（顶层不落库）。

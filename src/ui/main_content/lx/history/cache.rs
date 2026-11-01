@@ -644,7 +644,7 @@ fn tool_signature(
             }
         }
         Some(ToolDetailView::Search(view)) => {
-            hash.write_u8(8);
+            hash.write_u8(9);
             hash.write_u8(u8::from(view.truncated));
             hash.write_usize(view.files_scanned);
             hash.write_usize(view.matches.len());
@@ -653,6 +653,25 @@ fn tool_signature(
                 hash.write_usize(hit.line);
                 hash.write_str(&hit.text);
                 hash.write_u8(u8::from(hit.line_truncated));
+            }
+        }
+        Some(ToolDetailView::WebSearch(view)) => {
+            hash.write_u8(10);
+            hash.write_str(&view.search_type);
+            hash.write_usize(view.num_results);
+            hash.write_str(view.provider.as_deref().unwrap_or(""));
+            // 逐行写长度与首尾字节：不 `join`、不扫全文，仍能区分行边界变化。
+            hash.write_usize(view.result.len());
+            for line in &view.result {
+                hash.write_usize(line.len());
+                hash.write_edges(line);
+            }
+            hash.write_usize(view.result_more);
+            hash.write_u64(view.duration_ms.unwrap_or(u64::MAX));
+            hash.write_u8(u8::from(view.truncated));
+            hash.write_usize(view.queries.len());
+            for query in &view.queries {
+                hash.write_str(query);
             }
         }
         Some(ToolDetailView::File(view)) => {

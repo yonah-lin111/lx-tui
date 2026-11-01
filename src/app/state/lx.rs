@@ -35,7 +35,7 @@ pub use chat::{
     McpImageView, ModelsSnapshot, PendingShell, PlanSnapshotView, PlanStepView,
     ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey, RequestState,
     SearchDetailView, SearchMatchView, SubagentDetailView, ToolCallView, ToolDetailView,
-    ToolStatus, ToolSummary, UserShellView,
+    ToolStatus, ToolSummary, UserShellView, WebSearchDetailView,
 };
 pub use compact::{CompactNoticeView, LxCompact};
 pub use mention::{LxMention, LxMentionView};

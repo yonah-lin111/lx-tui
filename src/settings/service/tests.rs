@@ -22,7 +22,7 @@ fn temp_dir(name: &str) -> PathBuf {
 }
 
 /// 启动测试服务：注入隔离的 settings.json 路径。
-async fn start(
+pub(super) async fn start(
     name: &str,
 ) -> (
     SettingsService,

@@ -7,9 +7,10 @@
 use std::path::PathBuf;
 
 /// 稳定工具名清单（错误消息、系统提示与测试共用一份，不各写一遍）。
-pub const TOOL_NAMES: [&str; 9] = [
+pub const TOOL_NAMES: [&str; 10] = [
     "read",
     "search",
+    "web_search",
     "edit",
     "write",
     "exec_command",
@@ -328,6 +329,8 @@ pub enum ToolExecutionResult {
     CurrentTime { current_time: String },
     /// MCP 工具或 resources 工具的结果（文本 + 已归档图片）。
     Mcp(Box<McpToolResult>),
+    /// 联网搜索结果（Exa / Tavily 双引擎回退后的逐条查询结局）。
+    WebSearch(Box<super::web_search::WebSearchToolResult>),
     /// 失败；`changes` 保留多文件补丁中**已经提交**的变更，绝不谎报整体回滚。
     Failed {
         code: ToolErrorCode,
@@ -431,8 +434,8 @@ pub type ToolResultPublic<T> = Result<T, ToolFailure>;
 /// 工具规格：稳定英文名、英文描述与 JSON Schema 生成函数（用函数指针保持 `'static`）。
 #[derive(Debug, Clone, Copy)]
 pub struct ToolSpec {
-    /// 稳定工具名（`read` / `search` / `edit` / `write` / `exec_command` / `write_stdin` /
-    /// `update_plan` / `ask`）。
+    /// 稳定工具名（内置工具见 [`TOOL_NAMES`]，子 agent 控制工具见
+    /// [`SUBAGENT_TOOL_NAMES`]）。
     pub name: &'static str,
     /// 英文描述（同时作为模型可见文档）。
     pub description: &'static str,

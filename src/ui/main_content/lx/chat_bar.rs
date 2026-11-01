@@ -23,7 +23,7 @@ use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::state::{
-    AssistantStepView, ChatMessageView, Lx, PlanStepView, RequestState, ToolStatus,
+    AssistantStepView, ChatMessageView, Lx, PlanStepView, RequestState, ToolDetailView, ToolStatus,
 };
 use crate::ui::{style, text};
 
@@ -115,7 +115,7 @@ fn jump_rect(bar: Rect) -> Option<Rect> {
 }
 
 /// 输入框上方那一行的展示文案（只读派生，不缓存）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ActivityLabel<'a> {
     /// `/compact` 正在执行：摘要请求没有流式输出，优先级最高（此时聊天必然空闲）。
     Compacting,
@@ -123,6 +123,8 @@ enum ActivityLabel<'a> {
     Todo(&'a str),
     /// 当前 assistant 最后一步是开放思考块。
     Thinking,
+    /// 联网搜索进行中；已解析出查询词时带现成文案（否则只有阶段词）。
+    SearchingWeb(Option<String>),
     /// 当前 assistant 有 Pending/Running 工具。
     RunningTools,
     /// 子 agent 仍在后台运行（主轮次可能已经 idle）。
@@ -138,6 +140,9 @@ impl ActivityLabel<'_> {
             Self::Compacting => text::chat::COMPACTING_LABEL.to_string(),
             Self::Todo(todo) => (*todo).to_string(),
             Self::Thinking => text::chat::THINKING_LABEL.to_string(),
+            Self::SearchingWeb(label) => label
+                .clone()
+                .unwrap_or_else(|| text::chat::SEARCHING_WEB_LABEL.to_string()),
             Self::RunningTools => text::chat::RUNNING_TOOLS_LABEL.to_string(),
             Self::WaitingAgents => text::chat::WAITING_AGENTS_LABEL.to_string(),
             Self::Working => text::chat::LOADING_LABEL.to_string(),
@@ -172,6 +177,14 @@ fn activity_label<'a>(lx: &'a Lx, plan_text: Option<&'a str>) -> ActivityLabel<'
     }) {
         return ActivityLabel::WaitingAgents;
     }
+    // 联网搜索在跑时先报「在搜什么」：泛化的 Running tools 会丢掉这条最有用的信息。
+    if let Some(call) = message.tools().find(|call| {
+        matches!(call.status, ToolStatus::Pending | ToolStatus::Running)
+            && call.name == crate::chat::tools::web_search::WEB_SEARCH_TOOL
+    }) {
+        let label = web_search_label(call);
+        return ActivityLabel::SearchingWeb(label);
+    }
     if message
         .tools()
         .any(|call| matches!(call.status, ToolStatus::Pending | ToolStatus::Running))
@@ -187,6 +200,18 @@ fn activity_label<'a>(lx: &'a Lx, plan_text: Option<&'a str>) -> ActivityLabel<'
         }
         _ => ActivityLabel::Working,
     }
+}
+
+/// 联网搜索阶段的文案：取第一条查询词（净化后），其余条数折算成 `(+N more)`。
+fn web_search_label(call: &crate::app::state::ToolCallView) -> Option<String> {
+    let Some(ToolDetailView::WebSearch(view)) = call.detail.as_deref() else {
+        return None;
+    };
+    let query = view.queries.first()?;
+    Some(text::chat::searching_web_query_label(
+        &text::chat::single_line_label(query),
+        view.queries.len().saturating_sub(1),
+    ))
 }
 
 /// 当前仍在流转的 assistant 消息；仅在 `Streaming` 时按 `assistant_id` 定位。
@@ -450,6 +475,125 @@ pub fn jump_bottom_hit(
             .filter(|area| area.contains((column, row).into()))
             .map(|_| *id)
     })
+}
+
+#[cfg(test)]
+mod web_search_tests {
+    use super::*;
+    use crate::app::state::{
+        ChatPartView, RequestKey, ToolCallView, ToolSummary, WebSearchDetailView,
+    };
+    use crate::chat::events::PartKind;
+    use crate::layout::PaneId;
+
+    /// 只带一个工具步骤的流中 lx。
+    fn streaming_lx(call: ToolCallView) -> Lx {
+        let message = ChatMessageView {
+            id: "assistant".into(),
+            sequence: 0,
+            kind: "chat".into(),
+            role: "assistant".into(),
+            status: "streaming".into(),
+            turn_index: 0,
+            shell: None,
+            steps: vec![AssistantStepView::Tool { position: 0, call }],
+            model_label: None,
+            error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
+            reports: Vec::new(),
+            attachments: Vec::new(),
+        };
+        let mut lx = Lx::new();
+        lx.chat.messages.push(message);
+        lx.chat.request = RequestState::Streaming {
+            key: RequestKey {
+                pane: PaneId::alloc(),
+                session: "session".into(),
+                generation: 1,
+            },
+            assistant_id: "assistant".into(),
+        };
+        lx.chat.status.streaming = true;
+        lx
+    }
+
+    /// 带查询词的 `web_search` 工具步骤。
+    fn search_call(status: ToolStatus, queries: &[&str]) -> ToolCallView {
+        ToolCallView {
+            call_id: "call-web".into(),
+            name: "web_search".into(),
+            position: 0,
+            arguments_json: "{}".into(),
+            status,
+            summary: Some(Box::new(ToolSummary::default())),
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::WebSearch(WebSearchDetailView {
+                queries: queries.iter().map(|query| (*query).to_string()).collect(),
+                search_type: "auto".into(),
+                num_results: 8,
+                provider: None,
+                result: Vec::new(),
+                result_more: 0,
+                duration_ms: None,
+                truncated: false,
+            }))),
+        }
+    }
+
+    #[test]
+    fn running_web_search_wins_over_the_generic_running_tools_label() {
+        let lx = streaming_lx(search_call(
+            ToolStatus::Running,
+            &["ratatui 0.29", "tokio 1.40"],
+        ));
+        assert_eq!(
+            activity_label(&lx, None).text(),
+            "Searching the web: \"ratatui 0.29\" (+1 more)"
+        );
+        let lx = streaming_lx(search_call(ToolStatus::Pending, &["ratatui 0.29"]));
+        assert_eq!(
+            activity_label(&lx, None).text(),
+            "Searching the web: \"ratatui 0.29\""
+        );
+    }
+
+    #[test]
+    fn web_search_without_parsed_queries_falls_back_to_the_plain_label() {
+        let mut call = search_call(ToolStatus::Running, &[]);
+        call.detail = None;
+        let lx = streaming_lx(call);
+        assert_eq!(
+            activity_label(&lx, None).text(),
+            text::chat::SEARCHING_WEB_LABEL
+        );
+    }
+
+    #[test]
+    fn finished_web_search_does_not_claim_the_status_bar() {
+        let mut lx = streaming_lx(search_call(ToolStatus::Completed, &["ratatui 0.29"]));
+        if let Some(message) = lx.chat.messages.last_mut() {
+            message.steps.push(AssistantStepView::Part {
+                position: 1,
+                part: ChatPartView {
+                    kind: PartKind::Text,
+                    content: String::new(),
+                    provider_metadata_json: None,
+                    started_at_ms: None,
+                    ended_at_ms: None,
+                    completed_at_ms: None,
+                },
+            });
+        }
+        assert_eq!(
+            activity_label(&lx, None).text(),
+            text::chat::LOADING_LABEL,
+            "工具已结算：不再显示联网搜索文案"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -21,6 +21,7 @@ function api(path, options) {
 }
 
 function showTab(name) {
+  resetWebSearchReveals();
   const tabs = {general: 'tab-general', commands: 'tab-commands', models: 'tab-models', mcp: 'tab-mcp', skills: 'tab-skills'};
   const views = {general: 'view-general', commands: 'view-commands', models: 'view-models', mcp: 'view-mcp', skills: 'view-skills'};
   for (const key of Object.keys(tabs)) {
@@ -334,12 +335,17 @@ document.addEventListener('change', refreshActionBars);
 // ===== General view =====
 
 const CONFIG_KEYS = ['sidebar_width','sidebar_min_width','sidebar_max_width','narrow_width','min_width','min_height','min_pane_width','min_pane_height'];
+const WEB_SEARCH_KEYS = ['web_search_exa_api_key', 'web_search_tavily_api_key'];
 let generalBaseline = null;
 
 function generalValues() {
   const values = {};
   for (const key of CONFIG_KEYS) {
     values[key] = document.getElementById(key).value;
+  }
+  for (const key of WEB_SEARCH_KEYS) {
+    const el = document.getElementById(key);
+    values[key] = el ? el.value : '';
   }
   return values;
 }
@@ -349,9 +355,14 @@ function generalDirty() {
 }
 
 function resetGeneral() {
+  resetWebSearchReveals();
   if (generalBaseline === null) { return; }
   for (const key of CONFIG_KEYS) {
     document.getElementById(key).value = generalBaseline[key];
+  }
+  for (const key of WEB_SEARCH_KEYS) {
+    const el = document.getElementById(key);
+    if (el) { el.value = generalBaseline[key] || ''; }
   }
 }
 
@@ -360,8 +371,12 @@ async function saveGeneral() {
   for (const key of CONFIG_KEYS) {
     config[key] = Number(document.getElementById(key).value);
   }
+  const web_search = {
+    exa_api_key: (document.getElementById('web_search_exa_api_key').value || '').trim(),
+    tavily_api_key: (document.getElementById('web_search_tavily_api_key').value || '').trim()
+  };
   try {
-    await api('/api/config', {method: 'PUT', body: JSON.stringify({config})});
+    await api('/api/config', {method: 'PUT', body: JSON.stringify({config, web_search})});
     showToast('Settings saved', 'ok');
     await loadGeneral();
   } catch (error) {
@@ -371,13 +386,52 @@ async function saveGeneral() {
 }
 
 function applyGeneralData(data) {
+  resetWebSearchReveals();
   for (const key of CONFIG_KEYS) {
     document.getElementById(key).value = data.config[key];
   }
+  const webSearch = data.web_search || {};
+  document.getElementById('web_search_exa_api_key').value = webSearch.exa_api_key || '';
+  document.getElementById('web_search_tavily_api_key').value = webSearch.tavily_api_key || '';
   generalBaseline = generalValues();
   document.getElementById('general-status').textContent = 'Settings loaded';
   document.getElementById('general-status').className = 'status ok';
 }
+
+// 小眼睛：在 password / text 之间切换，只影响本次显示，不改动输入值。
+function bindPasswordReveal(inputId, buttonId) {
+  const input = document.getElementById(inputId);
+  const button = document.getElementById(buttonId);
+  if (!input || !button) { return; }
+  button.addEventListener('click', () => {
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    button.classList.toggle('revealed', show);
+    button.setAttribute('aria-pressed', show ? 'true' : 'false');
+    button.setAttribute('aria-label', show ? 'Hide API key' : 'Show API key');
+    input.focus();
+  });
+}
+
+// 收起明文：数据重填、Reset 与切换 Tab 时强制回到 password，避免明文残留。
+function resetWebSearchReveals() {
+  for (const [inputId, buttonId] of [
+    ['web_search_exa_api_key', 'exa-key-reveal'],
+    ['web_search_tavily_api_key', 'tavily-key-reveal']
+  ]) {
+    const input = document.getElementById(inputId);
+    const button = document.getElementById(buttonId);
+    if (input) { input.type = 'password'; }
+    if (button) {
+      button.classList.remove('revealed');
+      button.setAttribute('aria-pressed', 'false');
+      button.setAttribute('aria-label', 'Show API key');
+    }
+  }
+}
+
+bindPasswordReveal('web_search_exa_api_key', 'exa-key-reveal');
+bindPasswordReveal('web_search_tavily_api_key', 'tavily-key-reveal');
 
 function loadGeneral() {
   return api('/api/state').then((data) => {

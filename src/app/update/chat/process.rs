@@ -50,13 +50,10 @@ pub fn settle_tool_detail(
             return false;
         };
         if detail.is_none()
-            && matches!(
-                call.detail.as_deref(),
-                Some(
-                    crate::app::state::ToolDetailView::Mcp(_)
-                        | crate::app::state::ToolDetailView::Subagent(_)
-                )
-            )
+            && call
+                .detail
+                .as_deref()
+                .is_some_and(crate::app::state::ToolDetailView::preserves_on_empty_settle)
         {
             return false;
         }
@@ -655,6 +652,13 @@ pub fn open_task_for_selected_tool(state: &mut AppState, pane: PaneId) -> bool {
         Some(crate::app::state::ToolDetailView::Search(_))
         | Some(crate::app::state::ToolDetailView::Subagent(_)) => {
             Some(crate::app::state::CardSection::Body)
+        }
+        Some(crate::app::state::ToolDetailView::WebSearch(view)) => {
+            if view.result.is_empty() && call.error.is_none() {
+                Some(crate::app::state::CardSection::Body)
+            } else {
+                Some(crate::app::state::CardSection::Output)
+            }
         }
         _ => None,
     }) {

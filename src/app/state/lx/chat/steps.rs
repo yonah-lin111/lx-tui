@@ -559,7 +559,12 @@ impl ToolCallView {
             return false;
         }
         self.summary = Some(Box::new(ToolSummary::from_arguments(&self.arguments_json)));
-        if crate::chat::tools::SUBAGENT_TOOL_NAMES.contains(&self.name.as_str()) {
+        if self.name == crate::chat::tools::web_search::WEB_SEARCH_TOOL {
+            self.detail =
+                super::tool_view::WebSearchDetailView::from_arguments(&self.arguments_json)
+                    .map(super::tool_view::ToolDetailView::WebSearch)
+                    .map(Box::new);
+        } else if crate::chat::tools::SUBAGENT_TOOL_NAMES.contains(&self.name.as_str()) {
             self.detail = super::tool_view::SubagentDetailView::from_arguments(
                 &self.name,
                 &self.arguments_json,
@@ -597,7 +602,8 @@ impl ToolCallView {
             | super::tool_view::ToolDetailView::Ask(_)
             | super::tool_view::ToolDetailView::Subagent(_)
             | super::tool_view::ToolDetailView::Search(_)
-            | super::tool_view::ToolDetailView::Mcp(_) => None,
+            | super::tool_view::ToolDetailView::Mcp(_)
+            | super::tool_view::ToolDetailView::WebSearch(_) => None,
         }
     }
 

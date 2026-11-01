@@ -807,6 +807,10 @@ fn launch_child_turn(
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads)
         .with_image_support(frozen.supports_image_input)
+        .with_web_search_keys(
+            state.models.settings.web_search.exa_api_key.clone(),
+            state.models.settings.web_search.tavily_api_key.clone(),
+        )
         .with_mcp(
             crate::mcp::global_manager().clone(),
             mcp_snapshot,

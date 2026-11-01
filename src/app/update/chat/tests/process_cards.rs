@@ -515,6 +515,46 @@ fn settle_tool_detail_writes_the_typed_view() {
 }
 
 #[test]
+fn settle_tool_detail_keeps_argument_derived_web_search_view() {
+    // 失败/取消结算时 `detail` 为 None：入参阶段立起来的 WebSearch 卡片必须保留，
+    // 否则查询词会从失败卡片上消失（只剩标题与错误行）。
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let mut call = ToolCallView::new("call-ws", "web_search", 0);
+    assert!(
+        call.accept_arguments(r#"{"queries":["ratatui 0.29","tokio 1.40"],"type":"deep"}"#.into())
+    );
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.lx.chat.messages = vec![message_with(call)];
+    let key = crate::app::state::RequestKey {
+        pane,
+        session: "s".into(),
+        generation: 1,
+    };
+    state.pane_mut_anywhere(pane).expect("pane").lx.chat.request =
+        crate::app::state::RequestState::Streaming {
+            key: key.clone(),
+            assistant_id: "msg-1".into(),
+        };
+    assert!(
+        !settle_tool_detail(&mut state, &key, "call-ws", None),
+        "空结算不得清空参数派生视图"
+    );
+    let detail = state.pane_anywhere(pane).expect("pane").lx.chat.messages[0]
+        .tool("call-ws")
+        .expect("tool")
+        .detail
+        .clone()
+        .expect("detail preserved");
+    let ToolDetailView::WebSearch(view) = detail.as_ref() else {
+        panic!("expected web_search view, got {detail:?}");
+    };
+    assert_eq!(view.queries, ["ratatui 0.29", "tokio 1.40"]);
+    assert_eq!(view.search_type, "deep");
+    assert!(view.result.is_empty());
+}
+
+#[test]
 fn process_owner_is_not_confused_with_the_chat_session() {
     // `process_session_id` 是模型见到的 ID，与聊天会话/OS PID 都不是同一个东西。
     let owner = ProcessOwner {
