@@ -145,8 +145,42 @@ fn project_doc_budget_truncates_at_32_kib_boundary() {
 
     let loaded = load_instructions(None, Some(root), Some(&sub), true);
     assert_eq!(loaded.project_sources, vec![root.join("AGENTS.md")]);
-    assert_eq!(loaded.body.len(), MAX_PROJECT_DOC_BYTES);
+    assert!(
+        loaded.body.ends_with("\n…[truncated]"),
+        "超预算截断必须显式标记: {:?}",
+        &loaded.body[loaded.body.len().saturating_sub(40)..]
+    );
+    assert_eq!(
+        loaded.body.trim_end_matches("\n…[truncated]").len(),
+        MAX_PROJECT_DOC_BYTES,
+        "截断保留 32 KiB 原始前缀"
+    );
     assert!(!loaded.body.contains("Should not fit"));
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_cwd_still_walks_the_project_root_ancestor_chain() {
+    let workspace = TempDir::new("symlink");
+    let root = workspace.path().join("real");
+    let sub = root.join("nested");
+    std::fs::create_dir_all(&sub).expect("mkdir sub");
+    std::fs::write(root.join("AGENTS.md"), "Root rule").expect("root doc");
+    std::fs::write(sub.join("AGENTS.md"), "Nested rule").expect("sub doc");
+    let alias = workspace.path().join("alias");
+    std::os::unix::fs::symlink(&root, &alias).expect("symlink");
+
+    // cwd 走软链别名：字面前缀比较失败，规范化后仍必须扫描到项目根。
+    let loaded = load_instructions(None, Some(&root), Some(&alias.join("nested")), true);
+    let canon_root = std::fs::canonicalize(&root).expect("canon root");
+    assert_eq!(
+        loaded.project_sources,
+        vec![
+            canon_root.join("AGENTS.md"),
+            canon_root.join("nested/AGENTS.md")
+        ]
+    );
+    assert_eq!(loaded.body, "Root rule\n\nNested rule");
 }
 
 #[test]

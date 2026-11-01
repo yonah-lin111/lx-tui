@@ -811,24 +811,27 @@ pub(crate) fn compact_block_signature(
     hash.finish()
 }
 
-/// 模型切换提示条目的指纹。
+/// 模型切换提示条目的指纹（覆盖整个合并区间，含 `is_variant_only` 的判定）。
 pub(crate) fn model_switch_block_signature(
-    notice: &crate::app::state::ModelSwitchNoticeView,
-    from_override: Option<&str>,
-    count: usize,
+    slice: &[crate::app::state::ModelSwitchNoticeView],
     expanded: bool,
 ) -> u64 {
     let mut hash = Fnv::new();
-    hash.write_str(&notice.id);
-    hash.write_str(from_override.unwrap_or(""));
-    hash.write_str(&notice.to_label);
-    hash.write_str(notice.to_variant.as_deref().unwrap_or(""));
-    hash.write_i64(notice.created_at_ms);
-    hash.write_str(&notice.injected_prompt);
-    for src in &notice.updated_sources {
-        hash.write_str(src);
+    for notice in slice {
+        hash.write_str(&notice.id);
+        hash.write_str(notice.from_label.as_deref().unwrap_or(""));
+        hash.write_str(&notice.to_label);
+        hash.write_str(notice.to_variant.as_deref().unwrap_or(""));
+        hash.write_u8(u8::from(notice.is_variant_only()));
+        for src in &notice.updated_sources {
+            hash.write_str(src);
+        }
+        hash.write_i64(notice.created_at_ms);
+        if expanded {
+            hash.write_str(&notice.injected_prompt);
+        }
     }
-    hash.write_usize(count);
+    hash.write_usize(slice.len());
     hash.write_u8(u8::from(expanded));
     hash.finish()
 }

@@ -1,6 +1,6 @@
 # lx Agent 系统提示词（AGENTS.md）注入与模型切换逻辑 — 执行任务清单
 
-> 状态：**已实现并通过验证（待合并入 `dev`）**（2026-11-01）
+> 状态：**已实现；评审 P0/P1/P2 共 11 项问题已全部修复并补充回归测试（待合并入 `dev`）**（2026-11-01）
 > 设计依据：[design.md](design.md)
 > 阶段划分：P0（开工准备）→ P1（`src/chat/agent/` 拆分与 `AGENTS.md` 注入）→ P2（模型身份与切换持久化 v22）→ P3（状态层、上下文注入与跨模型清洗）→ P4（TUI 历史渲染与 `compact` 样式对齐）→ P5（定向与全量验证）。
 
@@ -39,25 +39,26 @@
 - [x] 在 `src/db/mod.rs` 将 `SCHEMA_VERSION` 升至 `22`。
 - [x] 在 `src/db/migration.rs` 新增 v22 迁移：创建 `agent_model_switch` 表及索引 `idx_agent_model_switch_session_seq`（外键关联 `agent_session(external_id) ON DELETE CASCADE`）。
 - [x] 新增 `src/db/chat/model_switch.rs`：
-  - 定义 `ModelSwitchRecord` 与 `ModelSwitchCommit`。
-  - 实现 `Database::record_model_switch(&self, workspace, commit) -> Result<Option<ModelSwitchRecord>>`：
-    - 在同一写事务内更新 `agent_session` 的 `model_provider` / `model_id` / `variant` 三列与 `revision`；
+  - 定义 `ModelSwitchRecord` 与 `ModelSwitchCommit`（后者携带 `cwd: Option<PathBuf>` 与 `to_identity: crate::chat::agent::ModelIdentity`，供 `Effect::SetChatSessionModel` 用窗格真实 `cwd` 重新渲染权威 `injected_prompt`）。
+  - 实现 `Database::record_model_switch(&self, workspace, commit: &ModelSwitchCommit) -> Result<Option<ModelSwitchRecord>>`：
+    - 在同一写事务内更新 `agent_session` 的 `model_provider` / `model_id` / `variant` 三列（不递增 `revision`，避免打断在途 `/rewind` 或 `/compact` 的 CAS）；
     - 若该会话尚无任何 `agent_message`（空白会话），只更新 `agent_session` 三列，不插入 `agent_model_switch` 行；
     - 若会话已有消息且模型/思考等级实际发生变化，分配联合单调 `sequence` 插入 `agent_model_switch` 行并返回记录。
   - 实现 `Database::model_switches(&self, workspace, session_id) -> Result<Vec<ModelSwitchRecord>>` 按 `sequence` 升序加载。
 - [x] 更新 `src/db/chat/mod.rs`、`src/db/chat/rewind.rs`、`src/db/chat/compact.rs` 中的 `sequence` 联合取号 SQL，将 `SELECT sequence FROM agent_model_switch WHERE session_id = ?1` 纳入 `UNION ALL`。
-- [x] 在 `src/db/chat/tests.rs` 与 `src/db/migration/tests.rs` 补充 v22 迁移与 `record_model_switch` / `model_switches` 单元测试，并在开发库副本上验证迁移完整性。
+- [x] 在 `src/db/chat/model_switch/tests.rs` 与 `src/db/migration/tests.rs` 补充 v21→v22 迁移、级联删除与 `record_model_switch` / `model_switches` 单元测试，并在开发库副本上验证迁移完整性。
 
 ---
 
 ## P3. 状态层、事件层接线与上下文/跨模型适配（`src/app/`、`src/event/`、`src/chat/context/`）
 
 - [x] 在 `src/app/state/lx/` 新增 `model_switch.rs`：
-  - 定义 `ModelSwitchNoticeView`（含 `id`、`sequence`、`from_label`、`to_provider`、`to_model`、`to_variant`、`to_label`、`updated_sources`、`injected_prompt`、`created_at_ms`）与 `LxModelSwitch`（管理 `switches: Vec<ModelSwitchNoticeView>` 与 `expanded: Vec<String>` 折叠状态）。
+  - 定义 `ModelSwitchNoticeView`（含 `id`、`sequence`、`from_provider`、`from_model`、`from_variant`、`to_provider`、`to_model`、`to_variant`、`from_label`、`to_label`、`updated_sources`、`injected_prompt`、`created_at_ms`）与 `LxModelSwitch`（管理 `switches: Vec<ModelSwitchNoticeView>` 与 `expanded: Vec<String>` 折叠状态，提供 `is_expanded` / `is_range_expanded` / `toggle` / `replace` / `reset`）。
   - 在 `Lx` 状态结构中挂载 `pub model_switch: LxModelSwitch`，并在 `reset_session_view` / 会话切换时同步重置。
-- [x] 更新 `src/app/update/chat/session.rs` 与 `src/db/service.rs`：
+- [x] 更新 `src/app/update/chat/session.rs` 与 `src/db/service/chat.rs`：
   - 在 `finish_model_selection` 中对比切换前后的有效 `ModelSelection`；若已绑定会话且发生变化，构造 `ModelIdentity`、变更源列表 `updated_sources`（如 `core/model`、`core/reasoning_effort`、`core/agents_md`）与 `injected_prompt`，通过 `Effect::SetChatSessionModel` 落库并同步更新 `pane.lx.model_switch`。
-  - 在 `Effect::LoadChatSession` 中同步调用 `db.model_switches(&workspace, &session_id)`，通过 `update::set_model_switches(state, pane, &switches)` 回填历史切换条目。
+  - `Effect::SetChatSessionModel` 用窗格真实 `cwd`（回退工作区根）加载 `LoadedInstructions`，补齐 `core/agents_md` 后重新渲染权威 `injected_prompt` 再落库。
+  - 在 `Effect::LoadChatSession` 中同步调用 `db.model_switches(&workspace, &session_id)`，通过 `update::set_model_switches`（`app/update/chat/model_switch.rs::set_switches` 的对外别名）回填历史切换条目。
 - [x] 更新 `src/event/chat/mod.rs` 与 `src/event/chat/subagent/context.rs`：
   - 在主会话 `start_stream` 与子 Agent `assemble_child_context` 的 turn 起点，调用 `chat::agent::load_instructions` 加载全局 `~/.lx-t[-dev]` 与项目 `AGENTS.md`，并构造当前 `ModelIdentity` 传入 `PromptParts`。
 - [x] 更新 `src/chat/context/mod.rs`：
@@ -76,12 +77,13 @@
 - [x] 更新 `src/ui/main_content/lx/history/compact.rs`：
   - 将展开态的 `range_line` 与 `summary` 统一接入思考块同款的 `  └─ ` 树形前缀（`style::chat_notice_connector()`，缩进 `thinking_body_indent(width)`）+ `tool::muted_markdown_lines`（`markdown_render::render_wrapped_literal_rules` + `span_style.patch(style::muted())`），保证 `rows()` 与 `draw()` 严格一致。
 - [x] 新增 `src/ui/main_content/lx/history/model_switch.rs`：
-  - 实现折叠态 2 行（`-- Model switched --` + `model: ...` / `variant: ...`）与展开态（`  └─ ` 树形连接符 + 压暗 Markdown 渲染切换对比及注入提示词）。
+  - 实现折叠态 2 行（`-- Model switched --` + `model: ...` / `variant: ...`）与展开态（`  └─ ` 树形连接符 + 5 列正文缩进 + 压暗 Markdown 渲染切换对比及注入提示词）。
+  - 渲染入口统一接收合并区间切片：`rows(slice: &[ModelSwitchNoticeView], width, expanded)` / `draw(grid, slice, expanded, content, scroll, row_index)`；描述行汇总区间内去重保序的全部 `updated_sources`，展开首行渲染完整跃迁链（`switched A -> B -> A`）。
 - [x] 接线历史时间线、快照缓存与点击交互：
   - `src/ui/main_content/lx/history/source.rs`：`HistorySource` 借用 `switches: &'a [ModelSwitchNoticeView]` 与 `model_switch: &'a LxModelSwitch`。
-  - `src/ui/main_content/lx/history/timeline.rs`：`TimelineEntry` 新增 `ModelSwitch { last: usize, count: usize }`，按 `sequence` 升序合并，并将相邻连续的模型切换自动合并为一条 `xN`。
-  - `src/ui/main_content/lx/history/cards.rs`、`snapshot.rs`、`paint.rs`、`cache.rs`：新增 `CardKind::ModelSwitch { switch_id, expanded }`、`SnapEntryKind::ModelSwitch`、`BlockSource::ModelSwitch`，并在 `app/update/chat/viewport.rs` 的 `toggle_lx_card` 中支持点击展开/折叠。
-- [x] 在 `src/ui/main_content/lx/history/tests/` 下新增 `model_switch.rs` 并更新 `compact.rs` 测试，验证折叠/展开行数一致性、连续合并 `xN`、`  └─ ` 树形前缀与压暗 Markdown 样式。
+  - `src/ui/main_content/lx/history/timeline.rs`：`TimelineEntry` 新增 `ModelSwitch { first: usize, last: usize, count: usize }`，按 `sequence` 升序合并，并将相邻连续的模型切换自动合并为一条 `xN`。
+  - `src/ui/main_content/lx/history/cards.rs`、`snapshot.rs`、`paint.rs`、`cache.rs`：新增 `CardKind::ModelSwitch { switch_id, expanded }`、`SnapEntryKind::ModelSwitch`、`BlockSource::ModelSwitch`，展开态按 `switches[first..=last]` 区间判定（`LxModelSwitch::is_range_expanded`）并以区间首条 `id` 作为点击锚点；`model_switch_block_signature` 对区间内每条记录的 `id` / `from_label` / `to_label` / `to_variant` / `is_variant_only()` / `updated_sources` / `created_at_ms` 计哈希；`app/update/chat/viewport.rs` 的 `toggle_lx_card` 支持点击展开/折叠。
+- [x] 在 `src/ui/main_content/lx/history/tests/` 下新增 `model_switch.rs` 并更新 `compact.rs` 测试，验证折叠/展开行数一致性、连续合并 `xN`、追加切换保持展开、完整跃迁链、`  └─ ` 树形前缀与 5 列缩进及压暗 Markdown 样式。
 
 ---
 
@@ -98,3 +100,8 @@
   - `rtk cargo clippy --all-targets -- -D warnings`
   - `rtk cargo test`
 - [x] 检查所有新增/修改的生产代码文件行数均 `< 1000` 行（子模块控制在 500 行左右），且无中文泄漏进模型提示词或 TUI 文案。
+- [x] 评审整改（[review.md](review.md)，P0 2 项 / P1 6 项 / P2 3 项全部修复并锁回归）：
+  - P1-1：`compact.rs` / `model_switch.rs` 展开态统一 `  └─ ` 树形前缀 + `thinking_body_indent(width)` 缩进 + 压暗 Markdown（`tree_body_geometry`），`rows()` 与 `draw()` 同源。
+  - P1-2：连续切换按 `switches[first..=last]` 区间判定展开态（`is_range_expanded`，锚定 `switches[first].id`），折叠描述汇总区间内全部 `updated_sources`，展开首行渲染完整跃迁链。
+  - P2-2：`model_switch_block_signature` 覆盖区间内每条记录及 `is_variant_only()`。
+  - 回归测试：`ui::main_content::lx::history::tests::model_switch::expanded_renders_tree_leaf_prefix_and_indented_muted_markdown`、`consecutive_switches_merge_into_xn_and_keep_expanded_and_chain`。

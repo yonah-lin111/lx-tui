@@ -24,6 +24,8 @@ pub const MAX_PROJECT_DOC_BYTES: usize = 32 * 1024;
 pub const MAX_GLOBAL_DOC_BYTES: usize = 16 * 1024;
 /// 全局与项目级文档之间的分隔符（对齐 Codex `AGENTS_MD_SEPARATOR`）。
 pub const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
+/// 文档超出字节预算被截断时追加的显式标记（与工具结果回放同一形态）。
+const TRUNCATED_MARKER: &str = "\n…[truncated]";
 
 /// 已加载并合并的 `AGENTS.md` 指令快照（在 turn 起点冻结）。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -157,15 +159,24 @@ fn collect_search_dirs(project_root: Option<&Path>, cwd: Option<&Path>) -> Vec<P
     let Some(root) = project_root else {
         return vec![start.to_path_buf()];
     };
-    if !start.starts_with(root) {
-        return vec![start.to_path_buf()];
-    }
+    // 软链（如 macOS `/tmp` -> `/private/tmp`）会让字面前缀比较失败：两侧规范化后重试，
+    // 仍然不在祖先链上才退化为只扫描 `cwd` 单目录。
+    let (walk_start, walk_root) = if start.starts_with(root) {
+        (start.to_path_buf(), root.to_path_buf())
+    } else {
+        match (std::fs::canonicalize(start), std::fs::canonicalize(root)) {
+            (Ok(canon_start), Ok(canon_root)) if canon_start.starts_with(&canon_root) => {
+                (canon_start, canon_root)
+            }
+            _ => return vec![start.to_path_buf()],
+        }
+    };
 
     let mut chain = Vec::new();
-    let mut current = Some(start);
+    let mut current = Some(walk_start.as_path());
     while let Some(dir) = current {
         chain.push(dir.to_path_buf());
-        if dir == root || dir.join(".git").exists() {
+        if dir == walk_root || dir.join(".git").exists() {
             break;
         }
         current = dir.parent();
@@ -227,13 +238,23 @@ fn read_first_non_empty_in_dir(dir: &Path, budget: usize) -> Option<(PathBuf, St
 }
 
 /// 读取文件前 `budget` 字节并在 UTF-8 字符边界安全截断；空白文件返回 `None`。
+///
+/// 多读 1 字节只用于判定「文件确实超出预算」：超出时必须显式追加 `…[truncated]`，
+/// 不能把截断伪装成完整文件交给模型。
 fn read_file_within_budget(path: &Path, budget: usize) -> Option<(String, usize)> {
     let file = std::fs::File::open(path).ok()?;
     let mut buffer = Vec::new();
-    file.take(budget as u64).read_to_end(&mut buffer).ok()?;
+    file.take(budget.saturating_add(1) as u64)
+        .read_to_end(&mut buffer)
+        .ok()?;
     if buffer.is_empty() {
         return None;
     }
+    let truncated = buffer.len() > budget;
+    if truncated {
+        buffer.truncate(budget);
+    }
+    let used = buffer.len();
     let valid_text = match std::str::from_utf8(&buffer) {
         Ok(text) => text.to_string(),
         Err(err) => {
@@ -243,10 +264,13 @@ fn read_file_within_budget(path: &Path, budget: usize) -> Option<(String, usize)
                 .to_string()
         }
     };
-    let used = valid_text.len();
     let trimmed = valid_text.trim();
     if trimmed.is_empty() {
         return None;
     }
-    Some((trimmed.to_string(), used))
+    let mut text = trimmed.to_string();
+    if truncated {
+        text.push_str(TRUNCATED_MARKER);
+    }
+    Some((text, used))
 }

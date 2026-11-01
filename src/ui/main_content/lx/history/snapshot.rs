@@ -290,25 +290,20 @@ impl Builder<'_> {
     /// 模型切换提示条目（连续多条合并为一条 `xN`）。
     fn model_switch(&mut self, source: HistorySource<'_>, first: usize, last: usize, count: usize) {
         let start = self.rows;
-        let notice = &source.switches[last];
-        let from_override = source
-            .switches
-            .get(first)
-            .and_then(|item| item.from_label.as_deref());
-        let expanded = source.model_switch.is_expanded(&notice.id);
+        let slice = &source.switches[first..=last];
+        let expanded = source.model_switch.is_range_expanded(slice);
         let key = BlockKey {
             message_index: last,
             step_index: super::cache::MODEL_SWITCH_SLOT_BLOCK,
             width: self.width,
-            sig: model_switch_block_signature(notice, from_override, count, expanded),
+            sig: model_switch_block_signature(slice, expanded),
         };
-        let rows = model_switch::rows(notice, from_override, count, self.width, expanded);
+        let rows = model_switch::rows(slice, self.width, expanded);
         let block = self.block(
             key,
             BlockSource::ModelSwitch {
                 first,
                 last,
-                count,
                 expanded,
             },
             start,
@@ -320,7 +315,8 @@ impl Builder<'_> {
         self.rows += block.rows;
         self.snapshot.cards.push(CardRegion {
             kind: CardKind::ModelSwitch {
-                switch_id: notice.id.clone(),
+                // 锚定区间首条：追加切换时 `first` 不变，展开态天然保持。
+                switch_id: source.switches[first].id.clone(),
                 expanded,
             },
             card_start: start,

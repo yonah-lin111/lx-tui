@@ -556,7 +556,7 @@ fn v18_upgrade_migrates_legacy_reports_and_creates_queue_tables() {
         .connection()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("version");
-    assert_eq!(version, 20);
+    assert_eq!(version, crate::db::SCHEMA_VERSION_FOR_TESTS);
 
     let pending = database
         .pending_reports(&workspace, &parent)

@@ -2,6 +2,8 @@
 //!
 //! 与 [`super::rewind`] 同一套口径：标题带 `-- Context compacted --`，描述行给出
 //! 实际摘要模型与时间；默认折叠只显示两行头部，展开后追加覆盖范围与摘要正文。
+//! 展开正文与思考块同款：左起 `  └─ ` 树形连接符（[`text::agent::TREE_LEAF`]）+
+//! 5 列正文缩进（[`super::thinking_body_indent`]）+ 压暗 Markdown。
 //! 不是 user/assistant 消息，不进入复制选区与模型上下文；窄屏按列换行。
 //!
 //! 行数计算 [`rows`] 与绘制 [`draw`] 必须使用同一份 `wrap`，否则滚动条与视口锚点会漂移。
@@ -15,13 +17,32 @@ use crate::ui::text;
 use super::visible_row;
 use crate::ui::main_content::lx::Grid;
 
+/// 展开正文几何：树形前缀占满 [`super::thinking_body_indent`] 列，正文按剩余宽度换行。
+fn tree_body_geometry(width: u16) -> (u16, u16) {
+    let indent = super::thinking_body_indent(width);
+    let body_width = width.saturating_sub(indent).max(1);
+    (indent, body_width)
+}
+
+/// 展开正文首个物理行前的树形连接符（与思考块同款 `  └─ `）。
+fn put_tree_leaf(grid: &mut Grid, content: Rect, y: u16) {
+    grid.put_clipped(
+        content.x,
+        y,
+        text::agent::TREE_LEAF,
+        style::chat_notice_connector(),
+        content.width,
+    );
+}
+
 /// 提示占用的行数（与 [`draw`] 同口径）。
 pub(super) fn rows(notice: &CompactNoticeView, count: usize, width: u16, expanded: bool) -> usize {
     let mut total = super::wrap(&title(count), width).len();
     total += super::wrap(&description(notice), width).len();
     if expanded {
-        total += super::wrap(&range_line(notice), width).len();
-        total += super::tool::muted_markdown_lines(&notice.summary, width).len();
+        let (_, body_width) = tree_body_geometry(width);
+        total += super::wrap(&range_line(notice), body_width).len();
+        total += super::tool::muted_markdown_lines(&notice.summary, body_width).len();
     }
     total
 }
@@ -79,16 +100,40 @@ pub(super) fn draw(
     if !expanded {
         return;
     }
-    for line in super::wrap(&range_line(notice), content.width) {
+    let (indent, body_width) = tree_body_geometry(content.width);
+    let tree = super::thinking_tree(content.width);
+    // 只有展开态的第一个物理行画连接符；首行被滚出视口时不再补画。
+    let mut first_expanded_row = true;
+    for line in super::wrap(&range_line(notice), body_width) {
         if let Some(y) = visible_row(content, scroll, *row_index) {
-            grid.put_clipped(content.x, y, &line, style::muted(), content.width);
+            if first_expanded_row && tree {
+                put_tree_leaf(grid, content, y);
+            }
+            grid.put_clipped(
+                content.x.saturating_add(indent),
+                y,
+                &line,
+                style::muted(),
+                body_width,
+            );
         }
+        first_expanded_row = false;
         *row_index += 1;
     }
-    for segments in super::tool::muted_markdown_lines(&notice.summary, content.width) {
+    for segments in super::tool::muted_markdown_lines(&notice.summary, body_width) {
         if let Some(y) = visible_row(content, scroll, *row_index) {
-            super::tool::put_segments(grid, content.x, y, content.width, &segments);
+            if first_expanded_row && tree {
+                put_tree_leaf(grid, content, y);
+            }
+            super::tool::put_segments(
+                grid,
+                content.x.saturating_add(indent),
+                y,
+                body_width,
+                &segments,
+            );
         }
+        first_expanded_row = false;
         *row_index += 1;
     }
 }

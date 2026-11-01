@@ -47,6 +47,10 @@ pub struct ModelSwitchCommit {
     pub to_label: String,
     pub updated_sources: Vec<String>,
     pub injected_prompt: String,
+    /// 发起切换的窗格实际工作目录：持久化层据此探测 worktree/子目录独有的 `AGENTS.md`。
+    pub cwd: Option<std::path::PathBuf>,
+    /// 切换后的模型身份：持久化层补齐指令来源后据此重新渲染权威 `injected_prompt`。
+    pub to_identity: crate::chat::agent::ModelIdentity,
 }
 
 impl Database {

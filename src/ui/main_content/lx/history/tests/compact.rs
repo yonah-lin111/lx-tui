@@ -77,6 +77,21 @@ fn compact_entry_expands_to_summary() {
         .join("\n");
     assert!(text.contains("covered"), "展开显示覆盖范围：{text}");
     assert!(text.contains("Condensed context"), "{text}");
+
+    // 展开首行带思考块同款 `  └─ ` 树形连接符（与 model_switch 同一套几何）
+    let range_row = (area.y..area.bottom())
+        .find(|&y| {
+            let line: String = (area.x..area.right()).map(|x| grid.cell(x, y).ch).collect();
+            line.contains("covered")
+        })
+        .expect("range row");
+    let range_text: String = (area.x..area.right())
+        .map(|x| grid.cell(x, range_row).ch)
+        .collect();
+    assert!(
+        range_text.starts_with("  └─ "),
+        "展开范围行必须先画树形连接符：{range_text:?}"
+    );
 }
 
 /// 检查点与消息按 sequence 排序合并（不插在末尾）。
@@ -204,9 +219,9 @@ fn expanded_compact_summary_uses_muted_markdown_styles() {
             line.contains("Summary with inline_code")
         })
         .expect("summary row");
-    assert_eq!(grid.cell(0, summary_y).style, style::muted());
+    assert_eq!(grid.cell(5, summary_y).style, style::muted());
     assert_eq!(
-        grid.cell(13, summary_y).style,
+        grid.cell(18, summary_y).style,
         style::md_read_inline_code().patch(style::muted())
     );
 }

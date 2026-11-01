@@ -741,6 +741,40 @@ impl Database {
                 session_deleted: true,
             });
         }
+        if commit.delete_conversation {
+            // 会话存活但历史被截断：模型三列必须回滚到剩余历史实际对应的模型，
+            // 否则状态行与下一轮上下文会停留在被删轮次的模型上。
+            // 优先取最后一条存活的显式切换记录，其次取最后一条带模型的 assistant 消息。
+            let surviving_switch: Option<(String, String, Option<String>)> = transaction
+                .query_row(
+                    r#"SELECT to_provider, to_model, to_variant
+                       FROM agent_model_switch
+                       WHERE session_id = ?1
+                       ORDER BY sequence DESC, id DESC
+                       LIMIT 1"#,
+                    params![commit.session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            let surviving_message: Option<(String, String, Option<String>)> = transaction
+                .query_row(
+                    r#"SELECT model_provider, model_id, variant
+                       FROM agent_message
+                       WHERE session_id = ?1 AND role = 'assistant'
+                         AND model_provider IS NOT NULL AND model_id IS NOT NULL
+                       ORDER BY sequence DESC
+                       LIMIT 1"#,
+                    params![commit.session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            if let Some((provider, model, variant)) = surviving_switch.or(surviving_message) {
+                transaction.execute(
+                    "UPDATE agent_session SET model_provider = ?1, model_id = ?2, variant = ?3 WHERE external_id = ?4",
+                    params![provider, model, variant, commit.session_id],
+                )?;
+            }
+        }
         let now = now_ms();
         transaction.execute(
             r#"INSERT INTO agent_session_notice

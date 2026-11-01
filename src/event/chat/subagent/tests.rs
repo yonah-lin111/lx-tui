@@ -38,7 +38,18 @@ fn setup_parent() -> (
     String,
 ) {
     let fixture = Fixture::new("subagent-codex");
-    let (state, key, persistence, _session) = streaming_state(&fixture);
+    let (mut state, key, persistence, _session) = streaming_state(&fixture);
+    // 模型声明图片输入：唤醒轮从窗格配置解析快照（`resolve_frozen_for_pane`）时必须与
+    // 下方手工冻结的 `supports_image_input` 一致，否则会拒绝已归档图片。
+    if let Some(model) = state
+        .models
+        .settings
+        .providers
+        .get_mut("p")
+        .and_then(|provider| provider.models.get_mut("m"))
+    {
+        model.modalities = Some(serde_json::json!({ "input": ["text", "image"] }));
+    }
     let mut frozen = crate::app::state::FrozenModel::resolve(
         &state.models,
         &crate::config::ai::ModelSelection {
@@ -1161,6 +1172,106 @@ async fn p1_send_input_to_idle_agent_at_concurrency_limit_does_not_leave_orphan_
     assert!(
         next.is_none(),
         "并发受阻报错时不得在数据库遗留孤儿 queued 项"
+    );
+}
+
+#[tokio::test]
+async fn resumed_subagent_inherits_updated_parent_pane_model() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = setup_parent();
+    // 增加第二个模型供父窗格切换（模拟用户执行 `/model`）。
+    {
+        let provider = state
+            .models
+            .settings
+            .providers
+            .get_mut("p")
+            .expect("provider p");
+        let base = provider.models.get("m").cloned().expect("model m");
+        provider.models.insert(
+            "m2".into(),
+            crate::config::ai::ModelConfig {
+                id: "m2".into(),
+                name: "M2".into(),
+                ..base
+            },
+        );
+    }
+    let SubagentOutcome::Spawned { agent_id, .. } = run_op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        Some("c-spawn-model"),
+        SubagentOp::Spawn {
+            role: AgentRole::Explorer,
+            title: "Model inheritance".into(),
+            task: "turn 1".into(),
+            items: Vec::new(),
+        },
+    )
+    .await
+    .expect("spawn") else {
+        panic!("expected spawned");
+    };
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|h| h.agent_id == agent_id)
+        .map(|h| h.child_session_id.clone())
+        .expect("child");
+    assert_eq!(
+        streams.frozen.get(&child_session).map(|f| f.model.as_str()),
+        Some("m"),
+        "spawn 时子会话缓存父会话当时的模型"
+    );
+
+    // 排队第 2 轮输入，随后父窗格切到 m2。
+    run_op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        Some("c-send-model"),
+        SubagentOp::SendInput {
+            target: agent_id.clone(),
+            items: vec![SubagentInputItem::Text {
+                text: "turn 2".into(),
+            }],
+            interrupt: false,
+        },
+    )
+    .await
+    .expect("queue turn 2");
+    {
+        let target = state.pane_mut_anywhere(key.pane).expect("pane");
+        target.lx.chat.selection = Some(crate::config::ai::ModelSelection {
+            provider: "p".into(),
+            model: "m2".into(),
+            variant: None,
+        });
+    }
+
+    // 第 1 轮结束自动接续第 2 轮：必须使用父窗格当前模型，而不是子会话旧缓存。
+    finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session.clone(),
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    assert!(
+        streams.subagents.contains_key(&child_session),
+        "排队输入应接续启动第 2 轮"
+    );
+    assert_eq!(
+        streams.frozen.get(&child_session).map(|f| f.model.as_str()),
+        Some("m2"),
+        "唤醒的子 Agent 必须继承父窗格切换后的模型"
     );
 }
 

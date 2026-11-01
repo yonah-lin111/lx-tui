@@ -10,7 +10,6 @@ use crate::app::state::{
     AppState, AssistantStepView, ChatMessageView, ChatPartView, FrozenModel, InputHintLevel,
     RequestKey, RequestState, ToolStatus, ToolSummary,
 };
-use crate::app::toast::{Toast, ToastKind};
 use crate::chat::events::{ChatDelta, PartKind, StopReason};
 use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
 use crate::layout::PaneId;
@@ -51,6 +50,8 @@ pub use rewind::{
 };
 #[cfg(test)]
 pub(crate) use session::finish_model_selection;
+pub(crate) use session::show_lx_hint;
+use session::unknown_slash_command;
 pub use session::{
     apply_models_changed, apply_slash_command, apply_slash_enter, close_task_page, delete_session,
     new_session, on_history_listed, on_process_listed, on_session_deleted, on_session_loaded,
@@ -769,65 +770,6 @@ pub(super) fn next_generation(state: &AppState, pane: PaneId) -> u64 {
         .map(|counter| counter.wrapping_add(1))
         .unwrap_or(1)
         .max(1)
-}
-
-/// 在**指定窗格**内展示一条 lx 反馈（错误红 / 警告黄）。
-///
-/// lx 页的所有反馈都走这里，落在**该窗格自己的 toast 槽**里，2 秒后自动消失。
-///
-/// 用户要求「lx 页的 toast 都要在 lx 中显示，不要用全局的」：全局 toast 只有一个槽，
-/// 锚点容器放不下时还会降级到屏幕顶部居中、横跨整个窗口；lx 的反馈只属于某个 lx 窗格，
-/// 越界就失去指代（也会被别的页的提示互相覆盖）。
-pub(crate) fn show_lx_hint(
-    state: &mut AppState,
-    pane: PaneId,
-    level: InputHintLevel,
-    message: impl Into<String>,
-) {
-    let kind = match level {
-        InputHintLevel::Error => ToastKind::Danger,
-        InputHintLevel::Warning => ToastKind::Warning,
-    };
-    let toast = Toast::new(kind, message, Some(pane), Instant::now());
-    crate::app::update::show_lx_toast(state, pane, toast);
-}
-
-/// 草稿是「行首 `/` 开头的一行命令」但**不是**任何内置命令时，返回那段命令文本。
-///
-/// 判定口径与命令面板一致（复用 [`slash_trigger`] 与 [`SlashPanel::commands_matching`]），
-/// 保证「面板里能选中的」永远不会被这里拦下：
-/// - 只有**单行**命令算数：多行草稿可能是用户在写 markdown 引用或路径；
-/// - **带空格一律不拦**：`/q a`、`/path/to/file.rs 说明` 这种是普通输入，不是命令；
-/// - 围栏代码块内不拦（`slash_trigger` 已经处理）。
-///
-/// 返回值保留用户输入的原文（含 `/`），由 `text::lx_unknown_command` 负责截断与拼句。
-fn unknown_slash_command(draft: &str) -> Option<String> {
-    use crate::app::state::lx::slash::{SlashPanel, slash_trigger};
-    // 只处理「整段就是一行」的草稿。
-    let line = draft.trim();
-    if line.contains('\n') {
-        return None;
-    }
-    // 与面板同口径：光标在末尾时的触发前缀。
-    let query = slash_trigger(line, line.len())?;
-    let trimmed = query.trim();
-    // 单独一个 `/` 说明用户还没敲完；不拦（面板此时是完整列表）。
-    if trimmed == "/" {
-        return None;
-    }
-    // **带空格一律不拦**（`/q a`、`/path/to/file.rs 说明`、`/etc/hosts 是什么`）：
-    // 用户在敲命令时不会带空格（面板采纳的是一条无参命令），带空格说明这是
-    // 普通输入（路径、引用、`/` 开头的自然语言），按内容原样发送。
-    let name = trimmed.trim_start_matches('/');
-    if name.is_empty() || name.contains(char::is_whitespace) || name.contains('/') {
-        return None;
-    }
-    // 面板能匹配到就交给面板（用户可能想选中后 Enter）。
-    if !SlashPanel::commands_matching(&format!("/{name}")).is_empty() {
-        return None;
-    }
-    // 回显整段原文（含参数），让用户确认自己敲了什么。
-    Some(trimmed.to_string())
 }
 
 /// 测试钩子：直接完成模型选择（绕过两级面板交互）。

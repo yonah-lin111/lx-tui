@@ -36,11 +36,10 @@ pub(crate) enum BlockSource {
     Rewind { last: usize, count: usize },
     /// 时间线里的 compact 检查点。
     Compact { index: usize, expanded: bool },
-    /// 时间线里的模型切换提示（合并后的起止下标与条数）。
+    /// 时间线里的模型切换提示（合并后的起止下标与展开状态）。
     ModelSwitch {
         first: usize,
         last: usize,
-        count: usize,
         expanded: bool,
     },
     /// 消息内的汇报块（第 `index` 份）。
@@ -632,26 +631,12 @@ fn draw_legacy(
         BlockSource::ModelSwitch {
             first,
             last,
-            count,
             expanded,
         } => {
-            let Some(notice) = history.switches.get(last) else {
+            let Some(slice) = history.switches.get(first..=last) else {
                 return;
             };
-            let from_override = history
-                .switches
-                .get(first)
-                .and_then(|item| item.from_label.as_deref());
-            super::model_switch::draw(
-                grid,
-                notice,
-                from_override,
-                count,
-                expanded,
-                rect,
-                scroll,
-                &mut row,
-            );
+            super::model_switch::draw(grid, slice, expanded, rect, scroll, &mut row);
         }
         BlockSource::Report {
             message_index,

@@ -1,6 +1,6 @@
 # lx Agent 系统提示词（AGENTS.md）注入与模型切换逻辑 — 设计文档
 
-> 状态：**待审核（Draft for Review）**（2026-11-01）
+> 状态：**已实现并通过评审**（P0/P1/P2 共 11 项评审问题已全部修复，待合并入 `dev`）（2026-11-01）
 > 参考实现：
 > - `/Users/yonah/projects/agent/codex-main`（`codex-rs/codex-home/src/instructions/mod.rs`、`codex-rs/core/src/agents_md.rs`、`codex-rs/core/src/context/user_instructions.rs`）
 > - `/Users/yonah/projects/agent/opencode-dev`（`packages/core/src/plugin/identity.ts`、`packages/core/src/session/instruction-state.ts`、`packages/core/src/session/runner/to-llm-message.ts`、`packages/tui/src/util/model.ts`）
@@ -36,15 +36,17 @@
 
 ## 2. 模块拆分与目录结构
 
-将原 `src/chat/agent.rs`（795 行）重构为 `src/chat/agent/` 目录模块，保持对外 `crate::chat::agent::*` 导出完全兼容，且每个生产文件控制在 300～500 行以内：
+将原 `src/chat/agent.rs`（795 行）重构为 `src/chat/agent/` 目录模块，保持对外 `crate::chat::agent::*` 导出完全兼容，且每个生产文件均低于 1000 行红线（细分文件约 125～440 行，`mod.rs` 收敛在 650 行左右）：
 
 ```text
 src/
   chat/
     agent/
-      mod.rs                子 Agent 角色（AgentRole）、工具面（ToolSurface）、子 Agent 协议结构与 compose_subagent_prompt（~480 行）
-      instructions.rs       AGENTS.md / agent.md 双层发现、默认模板初始化、预算截断与 <INSTRUCTIONS> 格式化（~260 行）
-      model_switch.rs       # Your Model 身份段生成、模型切换对比计算、指令源指纹对比与 <system-update> 注入构建（~280 行）
+      mod.rs                子 Agent 角色（AgentRole）、工具面（ToolSurface）、子 Agent 协议结构与 compose_subagent_prompt（~650 行）
+      instructions.rs       AGENTS.md / agent.md 双层发现、默认模板初始化、预算截断与 <INSTRUCTIONS> 格式化（~280 行）
+      model_switch.rs       # Your Model 身份段生成、模型切换对比计算、指令源指纹对比与 <system-update> 注入构建（~125 行）
+      parse.rs              子 agent 控制工具参数白名单解析与校验（~440 行）
+      report.rs             子 agent 汇报视图与 <subagent_report> XML 信封序列化（~160 行）
       tests/
         mod.rs              原 agent/tests.rs 用例 + 子模块测试入口
         instructions.rs     AGENTS.md 发现优先级、信任门控、32 KiB 预算截断、自动创建 ~/.lx-t[-dev]/AGENTS.md 测试
@@ -57,22 +59,24 @@ src/
     chat/
       model_switch.rs       新：ModelSwitchRecord / ModelSwitchCommit 的持久化读写与连续切换合并查询
       mod.rs                联合 sequence 取号纳入 agent_model_switch
-    service.rs              Effect::SetChatSessionModel 原子落库模型切换记录并回投 UI；LoadChatSession 同步加载 model_switches
+    service/
+      chat.rs               聊天会话/历史/模型切换/压缩等 Effect 处理；Effect::SetChatSessionModel 用窗格真实 cwd 重新渲染注入提示词
   app/
     state/lx/
-      model_switch.rs       新：ModelSwitchNoticeView 与 LxModelSwitch（列表 + expanded 折叠态集合）
+      model_switch.rs       新：ModelSwitchNoticeView 与 LxModelSwitch（列表 + expanded 折叠态集合 + is_range_expanded）
     update/chat/
+      model_switch.rs       set_switches 回填切换列表、toggle_model_switch 切换展开态
       session.rs            finish_model_selection 识别会话内切换并更新内存/持久化
       viewport.rs           toggle_lx_card 支持 CardKind::ModelSwitch 展开/折叠
   ui/
     text.rs                 新增模型切换相关英文文案常量与格式化函数
     main_content/lx/
       history/
-        compact.rs          升级展开态为思考块同款 `  └─ ` 树形前缀 + 压暗 Markdown 渲染
-        model_switch.rs     新：`-- Model switched --` 折叠/展开物理行计算与绘制（与 compact 共用思考块压暗 Markdown 树形布局）
-        timeline.rs         TimelineEntry 新增 ModelSwitch { last, count }，按 sequence 升序合并连续模型切换
-        snapshot.rs         SnapEntryKind / BlockSource 接入 ModelSwitch 并登记 CardKind::ModelSwitch 点击面
-        paint.rs            draw_legacy 分派 BlockSource::ModelSwitch
+        compact.rs          升级展开态为思考块同款 `  └─ ` 树形前缀 + 5 列缩进 + 压暗 Markdown 渲染
+        model_switch.rs     新：`-- Model switched --` 折叠/展开物理行计算与绘制（区间切片 + 树形压暗 Markdown）
+        timeline.rs         TimelineEntry 新增 ModelSwitch { first, last, count }，按 sequence 升序合并连续模型切换
+        snapshot.rs         SnapEntryKind / BlockSource 接入 ModelSwitch，按区间判定展开态并登记 CardKind::ModelSwitch 点击面
+        paint.rs            draw_legacy 分派 BlockSource::ModelSwitch（传入 switches[first..=last] 切片）
 ```
 
 ---
@@ -297,7 +301,8 @@ impl ModelIdentity {
      - 若当前工作区 `AGENTS.md` 内容与会话已应用快照存在差异或非空：包含 `"core/agents_md"`。
 2. **连续切换合并（Coalescing）**：
    - 若用户在发送下一条用户消息之前**连续切换了多次模型**（即当前会话最新一条时间线事件就是尚未被新 `agent_message` 隔开的 `agent_model_switch`）：
-   - 数据库保留或合并计数 `switch_count`，界面按连续条目合并规则显示为 `-- Model switched xN --`，描述行与展开内容以**最后一次生效的目标模型**为准，起点 `from` 保留连续切换前的初始模型。
+   - 数据库保留全部切换记录（每条独立一行、各自分配 `sequence`），界面按连续条目合并规则显示为 `-- Model switched xN --`，描述行与展开内容以**最后一次生效的目标模型**为准，起点 `from` 保留连续切换前的初始模型。
+   - 合并卡片以 `switches[first..=last]` 区间整体判定展开态（`LxModelSwitch::is_range_expanded`）：追加新切换时 `first` 不变，已展开的卡片不会被重置关闭；折叠描述行汇总区间内去重保序的全部 `updated_sources`；展开首行按区间渲染完整跃迁链（`switched A -> B -> A`），不会退化为 `switched A -> A`。
 3. **向模型上下文注入 `<system-update>`**：
    - 在 `chat::context::assemble` 组装历史轮次时，按 `sequence` 顺序将位于已完成轮次之后的 `ModelSwitchRecord` 转换为一条合成的 `ModelItem::UserText`（置于下一轮用户消息之前，包装在 `<system-update>...</system-update>` 内，与 OpenCode `wrapSystemUpdate` 机制一致）：
    ```rust
@@ -306,18 +311,15 @@ impl ModelIdentity {
        from_label: Option<&str>,
        to_identity: &ModelIdentity,
        updated_sources: &[String],
-       instructions_summary: Option<&str>,
+       instruction_sources: &[String],
    ) -> String {
        let mut lines = Vec::new();
-       match from_label {
+       let target_label = to_identity.label_with_variant();
+       match from_label.filter(|label| !label.trim().is_empty()) {
            Some(prev) => lines.push(format!(
-               "Model switched from {prev} to {}.Earlier assistant turns in this conversation were generated by {prev}; continue the conversation seamlessly as `lx` using your current model.",
-               to_identity.label_with_variant()
+               "Model switched from {prev} to {target_label}. Earlier assistant turns in this conversation were generated by {prev}; continue the conversation seamlessly as `lx` using your current model."
            )),
-           None => lines.push(format!(
-               "Active model set to {}.",
-               to_identity.label_with_variant()
-           )),
+           None => lines.push(format!("Active model set to {target_label}.")),
        }
        if !updated_sources.is_empty() {
            lines.push(format!(
@@ -325,19 +327,21 @@ impl ModelIdentity {
                updated_sources.join(", ")
            ));
        }
+       if !instruction_sources.is_empty() {
+           lines.push(format!(
+               "Active instruction files: {}",
+               instruction_sources.join(", ")
+           ));
+       }
        lines.push(String::new());
        lines.push(to_identity.render_prompt_section());
-       if let Some(summary) = instructions_summary.filter(|s| !s.trim().is_empty()) {
-           lines.push(String::new());
-           lines.push(summary.to_string());
-       }
        lines.join("\n")
    }
 
    /// 包装为发给模型的 `<system-update>` 块（内部转义 `</system-update>` 防止闭合逃逸）。
    pub fn wrap_system_update(content: &str) -> String {
        let safe = content.replace("</system-update>", "&lt;/system-update&gt;");
-       format!("<system-update>\n{safe}\n</system-update>")
+       format!("<system-update>\n{}\n</system-update>", safe.trim())
    }
    ```
 
@@ -396,7 +400,25 @@ impl ModelIdentity {
    CREATE INDEX IF NOT EXISTS idx_agent_model_switch_session_seq
        ON agent_model_switch(session_id, sequence);
    ```
-3. **联合 `sequence` 取号**：
+3. **写入请求 `ModelSwitchCommit`**（`src/db/chat/model_switch.rs`）：
+   ```rust
+   /// 一次模型切换的写入请求。
+   #[derive(Debug, Clone, PartialEq, Eq)]
+   pub struct ModelSwitchCommit {
+       pub session_id: String,
+       pub model: ModelSnapshot,
+       pub from_label: Option<String>,
+       pub to_label: String,
+       pub updated_sources: Vec<String>,
+       pub injected_prompt: String,
+       /// 窗格真实工作目录（`Effect::SetChatSessionModel` 用它探测该目录链上的 `AGENTS.md`）。
+       pub cwd: Option<std::path::PathBuf>,
+       /// 目标模型身份（服务层重新渲染 `injected_prompt` 时复用）。
+       pub to_identity: crate::chat::agent::ModelIdentity,
+   }
+   ```
+   `Effect::SetChatSessionModel` 在 `src/db/service/chat.rs` 中以 `commit.cwd`（回退工作区根）加载 `LoadedInstructions`；若加载到指令，补齐 `core/agents_md` 后调用 `render_model_switch_update(commit.from_label.as_deref(), &commit.to_identity, &commit.updated_sources, &loaded_inst.source_labels())` 重新生成权威 `injected_prompt`，再落库并经 `update::set_model_switches`（`app/update/chat/model_switch.rs::set_switches` 的对外别名）刷新窗格状态。
+4. **联合 `sequence` 取号**：
    在 `db/chat/mod.rs`（`begin_turn`）、`db/chat/rewind.rs`（`commit_rewind`）、`db/chat/compact.rs`（`commit_compact`）与新增的 `db/chat/model_switch.rs`（`record_model_switch`）中，提取统一的辅助函数 `next_session_sequence(transaction, session_id)`：
    ```sql
    SELECT COALESCE(MAX(sequence) + 1, 0) FROM (
@@ -409,7 +431,7 @@ impl ModelIdentity {
        SELECT sequence FROM agent_model_switch WHERE session_id = ?1
    )
    ```
-4. **Rewind 联动**：
+5. **Rewind 联动**：
    当 `/rewind` 删除最后一轮消息且会话内不再剩余任何 `agent_message` 时，`DELETE FROM agent_session WHERE external_id = ?1` 通过 `ON DELETE CASCADE` 自动清理关联的 `agent_model_switch` 记录，不留空壳会话。
 
 ---
@@ -450,6 +472,7 @@ impl ModelIdentity {
          - Reasoning Effort / Variant: max
     ```
     其中第 3 行起采用思考块同款的 `  └─ ` 树形连接符（`style::chat_notice_connector()`）与 `tool::muted_markdown_lines`（即 `markdown_render::render_wrapped_literal_rules` + `span_style.patch(style::muted())`），所有续行缩进 `thinking_body_indent(width)`（5 列，窄屏 `<= 5` 列时回退 2 列）。
+    连续切换合并为 `xN` 时，描述行汇总区间内去重保序的全部 `updated_sources`，展开首行渲染完整跃迁链（`switched A -> B -> A`，不回退为 `A -> A`），卡片展开态按 `switches[first..=last]` 区间判定，追加新切换不会重置已展开状态。
 
 #### 3.5.2 关键渲染代码（`src/ui/main_content/lx/history/model_switch.rs`）
 
@@ -469,79 +492,118 @@ use crate::ui::{style, text};
 
 use super::visible_row;
 
-/// 计算展开态树形正文区的可用列宽与起始列偏移（与思考块 `thinking_body_indent` 同口径）。
-fn tree_body_geometry(width: u16) -> (bool, u16, u16) {
-    let has_tree = super::thinking_tree(width);
-    let indent = if has_tree {
-        super::thinking_body_indent(width)
-    } else {
-        0
-    };
+/// 展开正文几何：树形前缀占满 [`super::thinking_body_indent`] 列，正文按剩余宽度换行。
+fn tree_body_geometry(width: u16) -> (u16, u16) {
+    let indent = super::thinking_body_indent(width);
     let body_width = width.saturating_sub(indent).max(1);
-    (has_tree, indent, body_width)
+    (indent, body_width)
 }
 
-/// 组装展开态的 Markdown 源文本（首段为前后模型对比，其后为注入的提示词块）。
-fn expanded_markdown_source(notice: &ModelSwitchNoticeView) -> String {
-    let transition = notice.transition_line();
-    if notice.injected_prompt.trim().is_empty() {
+/// 展开正文首个物理行前的树形连接符（与思考块同款 `  └─ `）。
+fn put_tree_leaf(grid: &mut Grid, content: Rect, y: u16) {
+    grid.put_clipped(
+        content.x,
+        y,
+        text::agent::TREE_LEAF,
+        style::chat_notice_connector(),
+        content.width,
+    );
+}
+
+/// 合并区间内去重保序的变更指令源（中间切换的 `core/model` 不能丢）。
+fn merged_sources(slice: &[ModelSwitchNoticeView]) -> Vec<String> {
+    let mut sources: Vec<String> = Vec::new();
+    for notice in slice {
+        for source in &notice.updated_sources {
+            if !sources.iter().any(|seen| seen == source) {
+                sources.push(source.clone());
+            }
+        }
+    }
+    sources
+}
+
+/// 构造展开态的 Markdown 源文本（首行为完整跃迁链，其后为最后一次注入的提示词）。
+fn expanded_markdown(slice: &[ModelSwitchNoticeView]) -> String {
+    let Some(last) = slice.last() else {
+        return String::new();
+    };
+    let transition = if slice.len() <= 1 {
+        last.transition_line(None)
+    } else {
+        // 连续切换记录完整链：`A -> B -> A`，而不是退化成 `switched A -> A`。
+        let mut chain = String::from("switched");
+        if let Some(start) = slice[0]
+            .from_label
+            .as_deref()
+            .filter(|label| !label.trim().is_empty())
+        {
+            chain.push(' ');
+            chain.push_str(start);
+        }
+        for notice in slice {
+            chain.push_str(" -> ");
+            chain.push_str(&notice.target_display_with_variant());
+        }
+        chain
+    };
+    if last.injected_prompt.trim().is_empty() {
         transition
     } else {
-        format!("{transition}\n\n{}", notice.injected_prompt.trim())
+        format!("{transition}\n\n{}", last.injected_prompt.trim())
     }
 }
 
-/// 提示占用的物理行数（与 [`draw`] 严格同源）。
-pub(super) fn rows(
-    notice: &ModelSwitchNoticeView,
-    count: usize,
-    width: u16,
-    expanded: bool,
-) -> usize {
-    let mut total = super::wrap(&title(count), width).len();
-    total += super::wrap(&description(notice), width).len();
+/// 提示占用的物理行数（与 [`draw`] 严格同口径）。
+pub(super) fn rows(slice: &[ModelSwitchNoticeView], width: u16, expanded: bool) -> usize {
+    let mut total = super::wrap(&title(slice.len()), width).len();
+    total += super::wrap(&description(slice), width).len();
     if expanded {
-        let (_, _, body_width) = tree_body_geometry(width);
-        let md_source = expanded_markdown_source(notice);
-        total += super::tool::muted_markdown_lines(&md_source, body_width).len();
+        let (_, body_width) = tree_body_geometry(width);
+        total += super::tool::muted_markdown_lines(&expanded_markdown(slice), body_width).len();
     }
     total
 }
 
-/// 标题行文案。
+/// 标题（连续多条合并为 `-- Model switched xN --`）。
 pub(super) fn title(count: usize) -> String {
     text::model_switch_notice_title(count)
 }
 
-/// 描述行文案。
-pub(super) fn description(notice: &ModelSwitchNoticeView) -> String {
-    let time = crate::platform::local_time_label(notice.created_at_ms);
+/// 头部描述：模型/思考等级、时间与区间内去重保序的全部变更指令源。
+pub(super) fn description(slice: &[ModelSwitchNoticeView]) -> String {
+    let Some(last) = slice.last() else {
+        return String::new();
+    };
+    let variant_only = slice.len() == 1 && last.is_variant_only();
     text::model_switch_notice_desc(
-        notice.is_variant_only(),
-        &notice.to_label,
-        notice.to_variant.as_deref(),
-        &time,
-        &notice.updated_sources,
+        variant_only,
+        &last.to_label,
+        last.to_variant.as_deref(),
+        &crate::platform::local_time_label(last.created_at_ms),
+        &merged_sources(slice),
     )
 }
 
-/// 绘制模型切换条目并推进 `row_index`。
+/// 绘制模型切换提示并推进内容行号。
 pub(super) fn draw(
     grid: &mut Grid,
-    notice: &ModelSwitchNoticeView,
-    count: usize,
+    slice: &[ModelSwitchNoticeView],
     expanded: bool,
     content: Rect,
     scroll: usize,
     row_index: &mut usize,
 ) {
-    for line in super::wrap(&title(count), content.width) {
+    if slice.is_empty() {
+        return;
+    }
+    for line in super::wrap(&title(slice.len()), content.width) {
         if let Some(y) = visible_row(content, scroll, *row_index) {
             grid.put_clipped(content.x, y, &line, style::accent(), content.width);
         }
         *row_index += 1;
     }
-    for line in super::wrap(&description(notice), content.width) {
+    for line in super::wrap(&description(slice), content.width) {
         if let Some(y) = visible_row(content, scroll, *row_index) {
             grid.put_clipped(content.x, y, &line, style::muted(), content.width);
         }
@@ -550,30 +612,24 @@ pub(super) fn draw(
     if !expanded {
         return;
     }
-    let (has_tree, indent, body_width) = tree_body_geometry(content.width);
-    let md_source = expanded_markdown_source(notice);
-    for (idx, segments) in super::tool::muted_markdown_lines(&md_source, body_width)
-        .into_iter()
-        .enumerate()
-    {
+    let (indent, body_width) = tree_body_geometry(content.width);
+    let tree = super::thinking_tree(content.width);
+    // 只有展开态的第一个物理行画连接符；首行被滚出视口时不再补画。
+    let mut first_expanded_row = true;
+    for segments in super::tool::muted_markdown_lines(&expanded_markdown(slice), body_width) {
         if let Some(y) = visible_row(content, scroll, *row_index) {
-            if has_tree && idx == 0 {
-                let connector = text::agent::TREE_LEAF;
-                let avail = content
-                    .width
-                    .min(u16::try_from(connector.chars().count()).unwrap_or(u16::MAX));
-                grid.put_clipped(
-                    content.x,
-                    y,
-                    connector,
-                    style::chat_notice_connector(),
-                    avail,
-                );
+            if first_expanded_row && tree {
+                put_tree_leaf(grid, content, y);
             }
-            let x = content.x.saturating_add(indent);
-            let avail = content.width.saturating_sub(indent);
-            super::tool::put_segments(grid, x, y, avail, &segments);
+            super::tool::put_segments(
+                grid,
+                content.x.saturating_add(indent),
+                y,
+                body_width,
+                &segments,
+            );
         }
+        first_expanded_row = false;
         *row_index += 1;
     }
 }
@@ -588,4 +644,4 @@ pub(super) fn draw(
 3. **未信任工作区安全隔离**：未信任工作区绝不读取项目目录内的 `AGENTS.override.md` / `AGENTS.md` / `agent.md`，仅读取用户自己的 `~/.lx-t[-dev]/` 全局指令。
 4. **空白会话不刷屏**：未绑定会话或消息列表为空时切换模型，只更新窗格 `selection` 与 `ai.json` 的 `defaultModel`，不产生 `-- Model switched --` 时间线条目。
 5. **渲染只读与行号严格一致**：`ui/main_content/lx/history/model_switch.rs` 与 `compact.rs` 的 `rows()` 和 `draw()` 共享完全相同的 `wrap` 与 `muted_markdown_lines` 计算，块间空行仅由 `history::snapshot` 累加。
-6. **生产文件行数红线**：拆分后 `src/chat/agent/` 下各文件及新增的 `model_switch` 相关模块均严格控制在 500 行左右，绝不超过 1000 行上限；单元测试同步按子模块拆分。
+6. **生产文件行数红线**：拆分后 `src/chat/agent/` 下各文件及新增的 `model_switch` 相关模块均控制在 700 行以内，绝不超过 1000 行上限；单元测试同步按子模块拆分。

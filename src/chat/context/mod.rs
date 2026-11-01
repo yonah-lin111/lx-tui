@@ -228,11 +228,39 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         count * 1600
     };
     let draft_tokens = (estimate_tokens(input.draft) as u64).saturating_add(draft_image_tokens);
+    // 系统提示词动态注入段（model_identity / AGENTS.md / skills / mcp / compact）也占上下文窗口：
+    // 先装配出真实系统提示词，并将动态注入段的 token 开销从历史预算扣除。
+    let system_prompt =
+        crate::chat::prompt::compose_system_prompt(crate::chat::prompt::PromptParts {
+            model_identity: input.model_identity,
+            environment: input.environment,
+            instructions: input.instructions,
+            skills: input.skills,
+            mcp: input.mcp,
+            compact: input.compact.map(CompactContext::as_prompt).as_deref(),
+        });
+    let extra_system_reserve: u64 = [
+        input.model_identity,
+        input.instructions,
+        input.skills,
+        input.mcp,
+    ]
+    .into_iter()
+    .flatten()
+    .map(|section| estimate_tokens(section) as u64)
+    .sum::<u64>()
+    .saturating_add(
+        input
+            .compact
+            .map(|c| estimate_tokens(&c.as_prompt()) as u64)
+            .unwrap_or(0),
+    );
     let output_reserve = input.output_limit.unwrap_or(0).min(8192);
     let budget = input.context_limit.map(|context| {
         context
             .saturating_sub(output_reserve)
             .saturating_sub(ENVELOPE_RESERVE_TOKENS)
+            .saturating_sub(extra_system_reserve)
             .saturating_sub(USER_SHELL_INJECTION_RESERVE_TOKENS)
     });
     // 从近到远纳入，直到预算耗尽；整轮为最小单位（丢一轮即丢该轮全部 items）。
@@ -260,11 +288,24 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
     } else {
         start_after
     };
-    let retained_switches: Vec<&crate::db::chat::ModelSwitchRecord> = input
+    // 首轮之前的切换记录即使随旧轮次被裁掉，也要保留最后一条：接管当前历史的新模型
+    // 必须收到 `<system-update>`，否则它不知道自己是从中途开始接手的。
+    let prior_switch = if omitted_turns > 0 {
+        input
+            .model_switches
+            .iter()
+            .rfind(|sw| sw.sequence > start_after && sw.sequence < min_switch_sequence)
+    } else {
+        None
+    };
+    let mut retained_switches: Vec<&crate::db::chat::ModelSwitchRecord> = input
         .model_switches
         .iter()
         .filter(|sw| sw.sequence > min_switch_sequence)
         .collect();
+    if let Some(prior) = prior_switch {
+        retained_switches.insert(0, prior);
+    }
     let mut switch_cursor = 0usize;
 
     for turn in &kept {
@@ -365,15 +406,6 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
     for block in input.skill_blocks {
         items.push(ModelItem::UserText(block.clone()));
     }
-    let system_prompt =
-        crate::chat::prompt::compose_system_prompt(crate::chat::prompt::PromptParts {
-            model_identity: input.model_identity,
-            environment: input.environment,
-            instructions: input.instructions,
-            skills: input.skills,
-            mcp: input.mcp,
-            compact: input.compact.map(CompactContext::as_prompt).as_deref(),
-        });
     Assembly {
         request: ChatRequest {
             turns,

@@ -491,13 +491,14 @@ pub(crate) fn schedule_next_queued_input_with_done(
         return Err(LIMIT_REACHED_CODE.to_string());
     }
 
-    let frozen = streams
-        .frozen
-        .get(&record.child_session_id)
-        .or_else(|| streams.frozen.get(&parent_session))
-        .cloned()
-        .or_else(|| resolve_frozen_for_pane(state, parent_key.pane))
-        .ok_or_else(|| "subagent model snapshot unavailable".to_string())?;
+    // 子 Agent 继承父会话最新模型：父窗格当前选择 > 父会话冻结快照 > 子会话旧缓存。
+    // 把子会话缓存放在首位会让父会话 `/model` 切换后唤醒的子 Agent 永远沿用旧模型。
+    let Some(frozen) = resolve_frozen_for_pane(state, parent_key.pane)
+        .or_else(|| streams.frozen.get(&parent_session).cloned())
+        .or_else(|| streams.frozen.get(&record.child_session_id).cloned())
+    else {
+        return Err("subagent model snapshot unavailable".to_string());
+    };
     streams
         .frozen
         .insert(record.child_session_id.clone(), frozen.clone());

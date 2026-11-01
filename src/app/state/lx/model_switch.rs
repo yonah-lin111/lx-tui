@@ -122,6 +122,14 @@ impl LxModelSwitch {
         self.expanded.iter().any(|item| item == id)
     }
 
+    /// 合并区间（`switches[first..=last]`）内是否有任一条记录展开。
+    ///
+    /// 连续切换在时间线上合并成一张卡片，展开状态按区间整体判定：追加新切换时
+    /// 区间首条 `id` 不变，已展开的卡片因此保持展开。
+    pub fn is_range_expanded(&self, slice: &[ModelSwitchNoticeView]) -> bool {
+        slice.iter().any(|notice| self.is_expanded(&notice.id))
+    }
+
     /// 切换指定记录的展开状态；返回是否命中有效记录。
     pub fn toggle(&mut self, id: &str) -> bool {
         if !self.switches.iter().any(|item| item.id == id) {
