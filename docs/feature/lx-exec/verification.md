@@ -46,7 +46,7 @@
 
 - **输入内容**：
   ```bash
-  cargo run -- exec --ephemeral --resume
+  cargo run -- exec --ephemeral resume --last "hi"
   cargo run -- exec "Run 'sleep 30' via exec_command"
   ```
 - **验证步骤**：
