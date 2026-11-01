@@ -1085,7 +1085,7 @@ impl Persistence {
                     // 若工作区或全局存在有效 AGENTS.md，补充 core/agents_md 与实际文件路径到持久化记录中。
                     let user_root = crate::config::user_data_root().ok();
                     let project_root = prompt_key_for(state, &workspace);
-                    let trusted = self.is_trusted(&workspace);
+                    let trusted = self.is_trusted(&workspace) || self.is_trusted(&project_root);
                     let loaded_inst = crate::chat::agent::load_instructions(
                         user_root.as_deref(),
                         Some(&project_root),

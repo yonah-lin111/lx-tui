@@ -533,7 +533,7 @@ pub(crate) fn schedule_next_queued_input_with_done(
         crate::config::user_data_root().ok().as_deref(),
         Some(workspace),
         Some(&cwd),
-        persistence.is_trusted(&cwd),
+        persistence.is_trusted(&cwd) || persistence.is_trusted(workspace),
     )
     .render_prompt_section();
     if let Err(err) = assemble_child_context(
@@ -658,7 +658,7 @@ fn launch_child_turn(
         crate::config::user_data_root().ok().as_deref(),
         Some(workspace),
         Some(cwd),
-        persistence.is_trusted(cwd),
+        persistence.is_trusted(cwd) || persistence.is_trusted(workspace),
     )
     .render_prompt_section();
     let context = assemble_child_context(

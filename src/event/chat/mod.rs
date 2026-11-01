@@ -614,7 +614,10 @@ fn start_stream(
         .render_prompt_section();
         let workspace_trusted = workspace_root
             .as_deref()
-            .is_some_and(|cwd| persistence.is_trusted(cwd));
+            .is_some_and(|cwd| persistence.is_trusted(cwd))
+            || config_root
+                .as_deref()
+                .is_some_and(|root| persistence.is_trusted(root));
         let instructions = crate::chat::agent::load_instructions(
             crate::config::user_data_root().ok().as_deref(),
             config_root.as_deref(),
