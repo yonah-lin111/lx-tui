@@ -222,11 +222,12 @@ pub enum Effect {
         workspace: PathBuf,
         session_id: String,
     },
-    /// 更新已保存会话的当前模型选择三列。
+    /// 更新已保存会话的当前模型选择三列，并在会话已有消息时记录切换时间线。
     SetChatSessionModel {
         workspace: PathBuf,
         session_id: String,
         model: crate::db::chat::ModelSnapshot,
+        commit: Option<crate::db::chat::ModelSwitchCommit>,
     },
     /// 把当前选择的模型写回 `config/ai.json` 的 `defaultModel`（下次启动沿用）。
     SaveDefaultModel {

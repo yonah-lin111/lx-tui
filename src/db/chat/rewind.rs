@@ -687,31 +687,23 @@ impl Database {
             return Err(DbError::RewindTargetChanged);
         }
         // 目标必须仍是最新用户消息。
-        let latest: Option<(String, i64)> = transaction
+        let latest: Option<(String, i64, i64)> = transaction
             .query_row(
-                r#"SELECT external_id, turn_index FROM agent_message
+                r#"SELECT external_id, turn_index, sequence FROM agent_message
                    WHERE session_id = ?1 AND role = 'user' AND kind <> 'user_shell'
                    ORDER BY sequence DESC LIMIT 1"#,
                 params![commit.session_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        let Some((latest_id, turn_index)) = latest else {
+        let Some((latest_id, turn_index, target_sequence)) = latest else {
             return Err(DbError::RewindTargetChanged);
         };
         if latest_id != commit.target_user_message_id {
             return Err(DbError::RewindTargetChanged);
         }
         // 在删除之前取联合新序号：保留的 tip 必须保住高水位。
-        let next_sequence: i64 = transaction.query_row(
-            r#"SELECT COALESCE(MAX(sequence) + 1, 0) FROM (
-                   SELECT sequence FROM agent_message WHERE session_id = ?1
-                   UNION ALL
-                   SELECT sequence FROM agent_session_notice WHERE session_id = ?1
-               )"#,
-            params![commit.session_id],
-            |row| row.get(0),
-        )?;
+        let next_sequence = super::next_session_sequence(&transaction, &commit.session_id)?;
         let user_text: String = transaction
             .query_row(
                 "SELECT content FROM agent_message_part WHERE message_id = ?1 AND kind = 'text' ORDER BY position LIMIT 1",
@@ -724,6 +716,10 @@ impl Database {
             transaction.execute(
                 "DELETE FROM agent_message WHERE session_id = ?1 AND turn_index >= ?2",
                 params![commit.session_id, turn_index],
+            )?;
+            transaction.execute(
+                "DELETE FROM agent_model_switch WHERE session_id = ?1 AND sequence >= ?2",
+                params![commit.session_id, target_sequence],
             )?;
         }
         // 删掉最后一轮后会话只剩提示（或什么都没有）：整体移除会话及其提示、快照、
@@ -744,6 +740,40 @@ impl Database {
                 executed: true,
                 session_deleted: true,
             });
+        }
+        if commit.delete_conversation {
+            // 会话存活但历史被截断：模型三列必须回滚到剩余历史实际对应的模型，
+            // 否则状态行与下一轮上下文会停留在被删轮次的模型上。
+            // 优先取最后一条存活的显式切换记录，其次取最后一条带模型的 assistant 消息。
+            let surviving_switch: Option<(String, String, Option<String>)> = transaction
+                .query_row(
+                    r#"SELECT to_provider, to_model, to_variant
+                       FROM agent_model_switch
+                       WHERE session_id = ?1
+                       ORDER BY sequence DESC, id DESC
+                       LIMIT 1"#,
+                    params![commit.session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            let surviving_message: Option<(String, String, Option<String>)> = transaction
+                .query_row(
+                    r#"SELECT model_provider, model_id, variant
+                       FROM agent_message
+                       WHERE session_id = ?1 AND role = 'assistant'
+                         AND model_provider IS NOT NULL AND model_id IS NOT NULL
+                       ORDER BY sequence DESC
+                       LIMIT 1"#,
+                    params![commit.session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            if let Some((provider, model, variant)) = surviving_switch.or(surviving_message) {
+                transaction.execute(
+                    "UPDATE agent_session SET model_provider = ?1, model_id = ?2, variant = ?3 WHERE external_id = ?4",
+                    params![provider, model, variant, commit.session_id],
+                )?;
+            }
         }
         let now = now_ms();
         transaction.execute(

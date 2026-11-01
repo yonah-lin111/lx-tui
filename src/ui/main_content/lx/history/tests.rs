@@ -21,6 +21,7 @@ mod tool_geometry;
 // 按主题拆出的子模块（单文件行数上限）；构造器都在本模块，子模块用 `use super::*`。
 mod cards;
 mod compact;
+mod model_switch;
 mod rewind;
 mod sticky;
 mod transcript;

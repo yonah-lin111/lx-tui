@@ -14,24 +14,32 @@ use crate::app::state::{AssistantStepView, UserShellView};
 use crate::ui::markdown_render;
 
 use super::cache::{
-    BlockKey, PaneCache, SHELL_SLOT_BLOCK, compact_block_signature, notice_block_signature,
-    part_block_signature, report_block_signature, rewind_block_signature, shell_block_signature,
-    stats_block_signature,
+    BlockKey, PaneCache, SHELL_SLOT_BLOCK, compact_block_signature, model_switch_block_signature,
+    notice_block_signature, part_block_signature, report_block_signature, rewind_block_signature,
+    shell_block_signature, stats_block_signature,
 };
 use super::paint::{BlockPaint, BlockSource, CardSpan, UserRefLine};
 use super::source::{HistorySource, is_legacy_report_row};
 use super::timeline::{TimelineEntry, timeline};
 use super::{
-    CardKind, Folds, MessageRows, compact, folds_of, notice, report_block, rewind, shell_folds,
-    stats_line, tool, tool_rows, user_shell, wrap,
+    CardKind, Folds, MessageRows, compact, folds_of, model_switch, notice, report_block, rewind,
+    shell_folds, stats_line, tool, tool_rows, user_shell, wrap,
 };
 
 /// 时间线条目类别（与 [`TimelineEntry`] 一一对应，但可跨帧独立持有）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SnapEntryKind {
     Message(usize),
-    Notices { last: usize, count: usize },
+    Notices {
+        last: usize,
+        count: usize,
+    },
     Compact(usize),
+    ModelSwitch {
+        first: usize,
+        last: usize,
+        count: usize,
+    },
 }
 
 /// 快照里的一个块：起止行 + 绘制数据。
@@ -138,6 +146,9 @@ pub(crate) fn build(
         match entry {
             TimelineEntry::Notices { last, count } => builder.notices(source, *last, *count),
             TimelineEntry::Compact(index) => builder.compact(source, *index),
+            TimelineEntry::ModelSwitch { first, last, count } => {
+                builder.model_switch(source, *first, *last, *count)
+            }
             TimelineEntry::Message(message_index) => builder.message(source, *message_index),
         }
     }
@@ -272,6 +283,50 @@ impl Builder<'_> {
             start,
             end: self.rows,
             kind: SnapEntryKind::Compact(index),
+            blocks: vec![block],
+        });
+    }
+
+    /// 模型切换提示条目（连续多条合并为一条 `xN`）。
+    fn model_switch(&mut self, source: HistorySource<'_>, first: usize, last: usize, count: usize) {
+        let start = self.rows;
+        let slice = &source.switches[first..=last];
+        let expanded = source.model_switch.is_range_expanded(slice);
+        let key = BlockKey {
+            message_index: last,
+            step_index: super::cache::MODEL_SWITCH_SLOT_BLOCK,
+            width: self.width,
+            sig: model_switch_block_signature(slice, expanded),
+        };
+        let rows = model_switch::rows(slice, self.width, expanded);
+        let block = self.block(
+            key,
+            BlockSource::ModelSwitch {
+                first,
+                last,
+                expanded,
+            },
+            start,
+            || BlockPaint::Legacy {
+                rows,
+                spans: Vec::new(),
+            },
+        );
+        self.rows += block.rows;
+        self.snapshot.cards.push(CardRegion {
+            kind: CardKind::ModelSwitch {
+                // 锚定区间首条：追加切换时 `first` 不变，展开态天然保持。
+                switch_id: source.switches[first].id.clone(),
+                expanded,
+            },
+            card_start: start,
+            card_rows: block.rows,
+            clickable: true,
+        });
+        self.snapshot.entries.push(SnapEntry {
+            start,
+            end: self.rows,
+            kind: SnapEntryKind::ModelSwitch { first, last, count },
             blocks: vec![block],
         });
     }

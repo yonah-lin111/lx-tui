@@ -112,6 +112,115 @@ pub(crate) fn chat_part_views_to_db(
     crate::db::chat::chat_message_views_to_db(messages)
 }
 
+/// 由窗格消息视图装配本轮请求（兼容旧 7 参数签名，不带模型身份/AGENTS.md/切换记录）。
+#[cfg(test)]
+pub(crate) fn assemble_turn_request(
+    messages: &[crate::app::state::ChatMessageView],
+    frozen: &crate::app::state::FrozenModel,
+    compact: Option<&context::CompactContext>,
+    environment: Option<&str>,
+    skills: Option<&str>,
+    mcp: Option<&str>,
+    skill_blocks: &[String],
+) -> AssembledTurn {
+    assemble_turn_request_with_context(
+        messages,
+        frozen,
+        compact,
+        None,
+        environment,
+        None,
+        skills,
+        mcp,
+        &[],
+        skill_blocks,
+    )
+}
+
+/// 由窗格消息视图装配本轮完整请求（含模型身份声明、AGENTS.md 指令段与模型切换记录）。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn assemble_turn_request_with_context(
+    messages: &[crate::app::state::ChatMessageView],
+    frozen: &crate::app::state::FrozenModel,
+    compact: Option<&context::CompactContext>,
+    model_identity: Option<&str>,
+    environment: Option<&str>,
+    instructions: Option<&str>,
+    skills: Option<&str>,
+    mcp: Option<&str>,
+    model_switches: &[crate::db::chat::ModelSwitchRecord],
+    skill_blocks: &[String],
+) -> AssembledTurn {
+    let (draft, draft_attachments) = latest_user_draft_and_attachments(messages);
+    let db_messages = chat_part_views_to_db(messages);
+    let model = crate::db::chat::ModelSnapshot {
+        provider: frozen.provider.clone(),
+        model: frozen.model.clone(),
+        variant: frozen.variant.clone(),
+    };
+    let assembly = context::assemble(&AssemblyInput {
+        messages: &db_messages,
+        draft: &draft,
+        draft_attachments: &draft_attachments,
+        model: &model,
+        context_limit: frozen.context_limit,
+        output_limit: frozen.output_limit,
+        variant_params: frozen.variant_params.clone(),
+        compact,
+        model_identity,
+        environment,
+        instructions,
+        skills,
+        mcp,
+        model_switches,
+        skill_blocks,
+        supports_image_input: frozen.supports_image_input,
+    });
+    AssembledTurn {
+        request: ChatRequest {
+            turns: assembly.request.turns,
+            items: assembly.request.items,
+            model,
+            variant_params: frozen.variant_params.clone(),
+            purpose: crate::chat::events::RequestPurpose::Chat,
+            // 装配出的系统提示已包含冻结环境与 compact 摘要：请求不再现场采集。
+            system_prompt: Some(assembly.system_prompt),
+            tools: assembly.request.tools,
+        },
+        omitted_turns: assembly.omitted_turns,
+        draft_exceeds: assembly.draft_exceeds,
+        item_image_attachments: assembly.item_image_attachments,
+    }
+}
+
+/// 装配结果：请求 + 需要调用方处理的两种信号。
+pub(crate) struct AssembledTurn {
+    pub request: ChatRequest,
+    /// 省略的完整轮次数（一次性提示）。
+    pub omitted_turns: usize,
+    /// 当前用户消息单独超限：调用方报错，**不截断**用户输入。
+    pub draft_exceeds: bool,
+    /// 选中的每个 UserContent 步骤对应的图片附件列表。
+    pub item_image_attachments: Vec<(usize, Vec<context::ItemImageAttachment>)>,
+}
+
+/// 当前用户消息超出模型上下文预算时的稳定错误码（调用方报错，不截断输入）。
+pub const DRAFT_EXCEEDS_CONTEXT_CODE: &str = "message exceeds model context";
+
+/// 一轮的可执行快照：冻结的上下文 + 冻结的工作区根。
+///
+/// 与 spawn 分离，使测试能用假 transport 直接驱动同一 agent turn（不经真实 HTTP）。
+pub(crate) struct PreparedTurn {
+    pub context: ModelContext,
+    pub cwd: PathBuf,
+}
+
+/// 由已装配请求与冻结 cwd 构造可执行快照。
+pub(crate) fn prepare_turn(request: ChatRequest, cwd: PathBuf) -> PreparedTurn {
+    let context = ModelContext::new(request, cwd.clone());
+    PreparedTurn { context, cwd }
+}
+
 /// 按需从本地路径加载用户图片字节并写入 `request.items`：
 /// - 当前轮缺图或模型不支持图片：返回 `Err(稳定错误码)`；
 /// - 历史轮次缺图：跳过该图片；模型不支持图片时降级为显式提示文本。

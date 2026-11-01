@@ -31,6 +31,8 @@ pub enum CardKind {
         checkpoint_id: String,
         expanded: bool,
     },
+    /// 模型切换提示条目：整块可点击展开/折叠详情与注入提示词。
+    ModelSwitch { switch_id: String, expanded: bool },
     /// 子 agent 汇报块：整块可点击展开/折叠正文。
     Report {
         message_id: String,

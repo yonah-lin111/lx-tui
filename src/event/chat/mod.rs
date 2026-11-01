@@ -34,9 +34,10 @@ pub use process_page::{
 };
 pub use user_shell::pump_user_shells;
 // 工具握手与时间线辅助的实现在子模块；本模块保留唯一入口。
+pub use timeline::DRAFT_EXCEEDS_CONTEXT_CODE;
 #[cfg(test)]
-pub(crate) use timeline::latest_user_draft_for_test;
-pub(crate) use timeline::{chat_part_views_to_db, schedule_checkpoint};
+pub(crate) use timeline::{assemble_turn_request, latest_user_draft_for_test};
+pub(crate) use timeline::{assemble_turn_request_with_context, prepare_turn, schedule_checkpoint};
 #[cfg(test)]
 pub(crate) use tool_calls::view_summary;
 pub(crate) use tool_calls::{begin_tool, finish_tool, flush_pending_tool_begins};
@@ -518,73 +519,6 @@ pub(crate) fn active_assistant_id(state: &AppState, key: &RequestKey) -> Option<
     }
 }
 
-/// 由窗格消息视图装配本轮请求；返回（请求，省略的完整轮次数，草稿是否单独超限）。
-///
-/// 装配来源固定为**窗格内存视图**（经 [`chat_part_views_to_db`] 映射为记录）：
-/// 本轮草稿取最近一条 user 消息；只有 user 与 assistant 均 complete 的轮次参与回放；
-/// 工具步骤一并映射，使已完成轮次的 call/result 能成对回放。
-pub(crate) fn assemble_turn_request(
-    messages: &[crate::app::state::ChatMessageView],
-    frozen: &crate::app::state::FrozenModel,
-    compact: Option<&context::CompactContext>,
-    environment: Option<&str>,
-    skills: Option<&str>,
-    mcp: Option<&str>,
-    skill_blocks: &[String],
-) -> AssembledTurn {
-    let (draft, draft_attachments) = timeline::latest_user_draft_and_attachments(messages);
-    let db_messages = chat_part_views_to_db(messages);
-    let model = crate::db::chat::ModelSnapshot {
-        provider: frozen.provider.clone(),
-        model: frozen.model.clone(),
-        variant: frozen.variant.clone(),
-    };
-    let assembly = context::assemble(&AssemblyInput {
-        messages: &db_messages,
-        draft: &draft,
-        draft_attachments: &draft_attachments,
-        model: &model,
-        context_limit: frozen.context_limit,
-        output_limit: frozen.output_limit,
-        variant_params: frozen.variant_params.clone(),
-        compact,
-        environment,
-        skills,
-        mcp,
-        skill_blocks,
-        supports_image_input: frozen.supports_image_input,
-    });
-    AssembledTurn {
-        request: ChatRequest {
-            turns: assembly.request.turns,
-            items: assembly.request.items,
-            model,
-            variant_params: frozen.variant_params.clone(),
-            purpose: crate::chat::events::RequestPurpose::Chat,
-            // 装配出的系统提示已包含冻结环境与 compact 摘要：请求不再现场采集。
-            system_prompt: Some(assembly.system_prompt),
-            tools: assembly.request.tools,
-        },
-        omitted_turns: assembly.omitted_turns,
-        draft_exceeds: assembly.draft_exceeds,
-        item_image_attachments: assembly.item_image_attachments,
-    }
-}
-
-/// 装配结果：请求 + 需要调用方处理的两种信号。
-pub(crate) struct AssembledTurn {
-    pub request: ChatRequest,
-    /// 省略的完整轮次数（一次性提示）。
-    pub omitted_turns: usize,
-    /// 当前用户消息单独超限：调用方报错，**不截断**用户输入。
-    pub draft_exceeds: bool,
-    /// 选中的每个 UserContent 步骤对应的图片附件列表。
-    pub item_image_attachments: Vec<(usize, Vec<context::ItemImageAttachment>)>,
-}
-
-/// 当前用户消息超出模型上下文预算时的稳定错误码（调用方报错，不截断输入）。
-pub const DRAFT_EXCEEDS_CONTEXT_CODE: &str = "message exceeds model context";
-
 /// 启动一轮：装配上下文、冻结模型与工作区并 spawn agent turn。
 fn start_stream(
     state: &mut AppState,
@@ -668,13 +602,46 @@ fn start_stream(
         let skill_blocks = skills::reference_blocks(&draft_text);
         let mcp_snapshot = mcp::snapshot_for_turn(persistence, config_root.as_deref());
         let mcp_prompt = mcp_snapshot.instructions_prompt();
-        let mut assembled = assemble_turn_request(
+        let model_identity = crate::chat::agent::ModelIdentity {
+            display_name: state
+                .models
+                .model_display_name(&frozen.provider, &frozen.model),
+            provider_id: frozen.provider.clone(),
+            model_id: frozen.model.clone(),
+            variant: frozen.variant.clone(),
+            supports_image_input: frozen.supports_image_input,
+        }
+        .render_prompt_section();
+        let workspace_trusted = workspace_root
+            .as_deref()
+            .is_some_and(|cwd| persistence.is_trusted(cwd))
+            || config_root
+                .as_deref()
+                .is_some_and(|root| persistence.is_trusted(root));
+        let instructions = crate::chat::agent::load_instructions(
+            crate::config::user_data_root().ok().as_deref(),
+            config_root.as_deref(),
+            workspace_root.as_deref(),
+            workspace_trusted,
+        )
+        .render_prompt_section();
+        let model_switches: Vec<crate::db::chat::ModelSwitchRecord> = pane
+            .lx
+            .model_switch
+            .switches
+            .iter()
+            .map(crate::app::state::ModelSwitchNoticeView::to_record)
+            .collect();
+        let mut assembled = assemble_turn_request_with_context(
             &pane.lx.chat.messages,
             &frozen,
             compact.as_ref(),
+            Some(&model_identity),
             Some(&environment),
+            instructions.as_deref(),
             skills.as_deref(),
             mcp_prompt.as_deref(),
+            &model_switches,
             &skill_blocks,
         );
         assembled.request.tools = std::sync::Arc::new(crate::chat::tools::turn_tools(
@@ -856,20 +823,6 @@ fn start_stream(
         report_turn(net_sender, stream_key, summary);
     });
     true
-}
-
-/// 一轮的可执行快照：冻结的上下文 + 冻结的工作区根。
-///
-/// 与 spawn 分离，使测试能用假 transport 直接驱动同一 agent turn（不经真实 HTTP）。
-pub(crate) struct PreparedTurn {
-    pub context: ModelContext,
-    pub cwd: PathBuf,
-}
-
-/// 由已装配请求与冻结 cwd 构造可执行快照。
-pub(crate) fn prepare_turn(request: ChatRequest, cwd: PathBuf) -> PreparedTurn {
-    let context = ModelContext::new(request, cwd.clone());
-    PreparedTurn { context, cwd }
 }
 
 /// 启动前失败：直接回投整轮失败终态。

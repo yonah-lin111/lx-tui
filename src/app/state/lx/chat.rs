@@ -328,6 +328,8 @@ pub enum CardTarget {
     },
     /// compact 检查点条目（按检查点 ID 定位；默认折叠）。
     Compact { checkpoint_id: String },
+    /// 模型切换提示条目（按切换记录 ID 定位；默认折叠）。
+    ModelSwitch { switch_id: String },
     /// 子 agent 汇报块（按消息 ID + agent ID 定位；槽位 `report:<agent_id>`）。
     Report {
         message_id: String,

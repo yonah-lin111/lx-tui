@@ -370,3 +370,148 @@ fn resume_ensures_unregistered_repo_root_before_listing() {
     let count = open_history_list(&mut service, &mut state);
     assert_eq!(count, 1, "未登记主 checkout 也要能列出共享会话");
 }
+
+#[test]
+fn resume_restores_persisted_model_switches() {
+    let (mut service, mut state, cwd, _) = trusted_service("resume-model-switches");
+    let session_id = seed_session(service.db.as_ref().expect("db"), &cwd, "initial turn");
+    let pane = focused_pane(&state);
+
+    // 先加载会话到窗格
+    open_history_list(&mut service, &mut state);
+    crate::app::update::apply_slash_enter(&mut state, pane);
+    service.pump(&mut state);
+
+    // 切换模型并通过 Persistence::pump 持久化到 agent_model_switch 表
+    crate::app::update::finish_model_selection(
+        &mut state,
+        pane,
+        crate::config::ai::ModelSelection {
+            provider: "9router".into(),
+            model: "deepseek-v4.1-flash".into(),
+            variant: Some("max".into()),
+        },
+    );
+    service.pump(&mut state);
+
+    // 开启新会话清空窗格内存，再通过 /resume 重新加载原会话
+    crate::app::update::new_session(&mut state, pane);
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .model_switch
+            .is_empty()
+    );
+    open_history_list(&mut service, &mut state);
+    crate::app::update::apply_slash_enter(&mut state, pane);
+    service.pump(&mut state);
+
+    let switches = &state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .model_switch
+        .switches;
+    assert_eq!(
+        switches.len(),
+        1,
+        "/resume 后必须从数据库恢复模型切换时间线"
+    );
+    assert_eq!(switches[0].to_provider, "9router");
+    assert_eq!(switches[0].to_model, "deepseek-v4.1-flash");
+    assert_eq!(switches[0].to_variant.as_deref(), Some("max"));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .session_id
+            .as_deref(),
+        Some(session_id.as_str())
+    );
+}
+
+/// 切换模型时持久化层必须用窗格真实 cwd 探测 `AGENTS.md`，补齐 `core/agents_md` 后
+/// 重新渲染权威 `injected_prompt`，并把时间线与模型选择同步到共享同一会话的所有窗格。
+#[test]
+fn set_chat_session_model_injects_agents_md_sources_into_prompt_and_syncs_panes() {
+    let (mut service, mut state, cwd, _) = trusted_service("model-switch-agents-md");
+    std::fs::create_dir_all(&cwd).expect("cwd");
+    std::fs::write(cwd.join("AGENTS.md"), "Project rules from the pane cwd.\n").expect("agents");
+    let session_id = seed_session(service.db.as_ref().expect("db"), &cwd, "hello");
+
+    let pane_a = focused_pane(&state);
+    open_history_list(&mut service, &mut state);
+    assert!(crate::app::update::apply_slash_enter(&mut state, pane_a));
+    service.pump(&mut state);
+
+    // 第二个窗格绑定同一会话：切换模型后两边的选择与时间线都必须同步。
+    let pane_b = state
+        .active_tab_mut()
+        .split_pane(pane_a, ratatui::layout::Direction::Vertical)
+        .expect("split");
+    {
+        let target = state.pane_mut_anywhere(pane_b).expect("pane b");
+        target.lx.chat.session_id = Some(session_id.clone());
+        target.lx.chat.selection = Some(crate::config::ai::ModelSelection {
+            provider: "example".into(),
+            model: "example-chat".into(),
+            variant: Some("high".into()),
+        });
+    }
+
+    let selection = crate::config::ai::ModelSelection {
+        provider: "9router".into(),
+        model: "deepseek-v4.1-flash".into(),
+        variant: Some("max".into()),
+    };
+    crate::app::update::finish_model_selection(&mut state, pane_a, selection.clone());
+    service.pump(&mut state);
+
+    let switches = service
+        .db
+        .as_ref()
+        .expect("db")
+        .model_switches(&cwd, &session_id)
+        .expect("switches");
+    assert_eq!(switches.len(), 1, "切换必须落库");
+    let switch = &switches[0];
+    assert!(
+        switch
+            .updated_sources
+            .iter()
+            .any(|source| source == crate::chat::agent::SOURCE_CORE_AGENTS_MD),
+        "updated_sources 必须补齐 core/agents_md: {:?}",
+        switch.updated_sources
+    );
+    assert!(
+        switch.injected_prompt.contains("Active instruction files:"),
+        "落库提示词必须包含指令文件来源: {}",
+        switch.injected_prompt
+    );
+    assert!(
+        switch
+            .injected_prompt
+            .contains(&cwd.join("AGENTS.md").display().to_string()),
+        "落库提示词必须包含窗格 cwd 下的 AGENTS.md: {}",
+        switch.injected_prompt
+    );
+
+    for pane in [pane_a, pane_b] {
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert_eq!(
+            target.lx.chat.selection.as_ref(),
+            Some(&selection),
+            "所有同会话窗格都必须同步模型选择"
+        );
+        assert_eq!(
+            target.lx.model_switch.switches.len(),
+            1,
+            "所有同会话窗格都必须拿到真实切换记录"
+        );
+        assert_eq!(target.lx.model_switch.switches[0].id, switch.id);
+    }
+}

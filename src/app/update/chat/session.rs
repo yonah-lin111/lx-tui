@@ -3,14 +3,17 @@
 //! 只改纯状态、只入队效应；DB/HTTP 由事件层执行。展示历史一律由
 //! [`super::view::view_message_of`] 把 DB 的 parts 与 tools 按 position 合并成唯一步骤时间线。
 
+use std::time::Instant;
+
 use crate::app::state::lx::slash::{SlashCommand, SlashPanel};
 use crate::app::state::{AppState, InputHintLevel, ModelPicker, ModelPickerStage};
+use crate::app::toast::{Toast, ToastKind};
 use crate::config::ai::ModelSelection;
 use crate::db::chat::{ChatMessage, ModelSnapshot};
 use crate::layout::PaneId;
 use crate::ui::text;
 
-use super::{refresh_all_lx_status, refresh_lx_status, show_lx_hint, stop_stream, view_message_of};
+use super::{refresh_all_lx_status, refresh_lx_status, stop_stream, view_message_of};
 
 /// `/new`：解绑当前窗格会话；在途请求继续按原 session 完成写入。
 pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
@@ -27,6 +30,7 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.chat.reset_session_view();
     target.lx.clear_agents();
     target.lx.compact.reset();
+    target.lx.model_switch.reset();
     target.lx.clear_rewind();
     crate::app::update::clear_lx_selection_for(state, pane);
     refresh_lx_status(state, pane);
@@ -402,14 +406,19 @@ pub fn on_session_loaded_full(
         }
     }
     target.lx.chat.session_id = Some(session_id.to_string());
-    // 切会话：先清空 compact 状态（检查点列表随后由加载回执回填）。
+    // 切会话：先清空 compact 与 model_switch 状态（列表随后由加载回执回填）。
     target.lx.compact.reset();
+    target.lx.model_switch.reset();
     target.lx.clear_rewind();
     // 切换会话：未执行的命令与排队项不得漂移到新会话。
     target.lx.chat.pending_shells.clear();
     target.lx.chat.queue.clear();
     if let Some(selection) = selection {
         target.lx.chat.selection = Some(selection);
+    } else if session_changed {
+        // `/resume` 到一个没有模型列的会话（如纯本地命令会话）：必须清掉上一会话残留的
+        // 选择，否则状态行显示的模型与历史实际对应的模型脱节。同会话重载保留现有选择。
+        target.lx.chat.selection = None;
     }
     target.lx.chat.messages = messages
         .iter()
@@ -504,6 +513,9 @@ pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) 
     if target.lx.chat.session_id.as_deref() == Some(session_id) {
         target.lx.chat.reset_session_view();
         target.lx.clear_agents();
+        target.lx.compact.reset();
+        target.lx.model_switch.reset();
+        target.lx.clear_rewind();
         crate::app::update::clear_lx_selection_for(state, pane);
         return true;
     }
@@ -633,37 +645,142 @@ fn default_variant_index(
         .unwrap_or(0)
 }
 
-/// 选择完成后写入窗格选择；已保存 session 同步 DB 三列；并写回配置默认（下次启动沿用）。
+/// 选择完成后写入窗格选择；已保存 session 同步 DB 三列与切换时间线；并写回配置默认（下次启动沿用）。
 pub(crate) fn finish_model_selection(
     state: &mut AppState,
     pane: PaneId,
     selection: ModelSelection,
 ) {
+    let models = state.models.clone();
+    let workspace = state.chat_session_key_for_pane(pane);
+    // 窗格真实 cwd 必须在可变借用窗格之前取：持久化层用它探测该目录（worktree/子目录）
+    // 独有的 `AGENTS.md`，不能用主仓库根替代。
+    let pane_cwd = state.workspace_cwd_for_pane(pane);
+    let normalized = models.normalize_selection(selection.clone());
     if let Some(target) = state.pane_mut_anywhere(pane) {
+        let previous = target.lx.chat.effective_selection(&models).or_else(|| {
+            target
+                .lx
+                .chat
+                .selection
+                .as_ref()
+                .map(|sel| models.normalize_selection(sel.clone()))
+        });
         target.lx.slash = None;
         target.lx.chat.selection = Some(selection.clone());
         // 切模型时旧分子清空。
         target.lx.chat.input_tokens_reset();
-        // 已保存 session：选择动作排队写 DB。
-        if let Some(session_id) = target.lx.chat.session_id.clone()
-            && let Some(workspace) = state.chat_session_key_for_pane(pane)
-        {
-            state
-                .effects
-                .push(crate::app::effects::Effect::SetChatSessionModel {
-                    workspace,
-                    session_id,
-                    model: ModelSnapshot {
-                        provider: selection.provider.clone(),
-                        model: selection.model.clone(),
-                        variant: selection.variant.clone(),
-                    },
+
+        if let Some(session_id) = target.lx.chat.session_id.clone() {
+            let model_snapshot = ModelSnapshot {
+                provider: normalized.provider.clone(),
+                model: normalized.model.clone(),
+                variant: normalized.variant.clone(),
+            };
+            let has_messages = !target.lx.chat.messages.is_empty();
+            let changed = previous.as_ref() != Some(&normalized);
+            let commit = if has_messages && changed {
+                let from_snapshot = previous.as_ref().map(|prev| ModelSnapshot {
+                    provider: prev.provider.clone(),
+                    model: prev.model.clone(),
+                    variant: prev.variant.clone(),
                 });
+                let from_label = previous.as_ref().map(|prev| {
+                    let name = models.model_display_name(&prev.provider, &prev.model);
+                    match prev.variant.as_deref().filter(|v| !v.is_empty()) {
+                        Some(variant) => format!("{name} ({variant})"),
+                        None => name,
+                    }
+                });
+                let to_label = models.model_display_name(&normalized.provider, &normalized.model);
+                let supports_image_input =
+                    crate::app::state::FrozenModel::resolve(&models, &normalized)
+                        .is_some_and(|frozen| frozen.supports_image_input);
+                let to_identity = crate::chat::agent::ModelIdentity {
+                    display_name: to_label.clone(),
+                    provider_id: normalized.provider.clone(),
+                    model_id: normalized.model.clone(),
+                    variant: normalized.variant.clone(),
+                    supports_image_input,
+                };
+                let updated_sources = crate::chat::agent::compute_updated_sources(
+                    from_snapshot.as_ref(),
+                    &model_snapshot,
+                    false,
+                );
+                let injected_prompt = crate::chat::agent::render_model_switch_update(
+                    from_label.as_deref(),
+                    &to_identity,
+                    &updated_sources,
+                    &[],
+                );
+                let next_seq = next_pane_sequence(&target.lx);
+                target
+                    .lx
+                    .model_switch
+                    .switches
+                    .push(crate::app::state::ModelSwitchNoticeView {
+                        id: crate::db::new_external_id("msw"),
+                        sequence: next_seq,
+                        from_provider: from_snapshot.as_ref().map(|s| s.provider.clone()),
+                        from_model: from_snapshot.as_ref().map(|s| s.model.clone()),
+                        from_variant: from_snapshot.as_ref().and_then(|s| s.variant.clone()),
+                        to_provider: model_snapshot.provider.clone(),
+                        to_model: model_snapshot.model.clone(),
+                        to_variant: model_snapshot.variant.clone(),
+                        from_label: from_label.clone(),
+                        to_label: to_label.clone(),
+                        updated_sources: updated_sources.clone(),
+                        injected_prompt: injected_prompt.clone(),
+                        created_at_ms: crate::db::now_ms(),
+                    });
+                Some(crate::db::chat::ModelSwitchCommit {
+                    session_id: session_id.clone(),
+                    model: model_snapshot.clone(),
+                    from_label,
+                    to_label,
+                    updated_sources,
+                    injected_prompt,
+                    cwd: pane_cwd,
+                    to_identity,
+                })
+            } else {
+                None
+            };
+            if let Some(workspace) = workspace {
+                state
+                    .effects
+                    .push(crate::app::effects::Effect::SetChatSessionModel {
+                        workspace,
+                        session_id,
+                        model: model_snapshot,
+                        commit,
+                    });
+            }
         }
     }
     // 持久化：写回 `ai.json` defaultModel（关闭重开仍是这个模型）。
     persist_default_model(state, &selection);
     refresh_lx_status(state, pane);
+}
+
+/// 计算窗格当前内存时间线中的下一个单调 `sequence`。
+fn next_pane_sequence(lx: &crate::app::state::Lx) -> i64 {
+    let max_msg = lx
+        .chat
+        .messages
+        .iter()
+        .enumerate()
+        .map(|(idx, m)| m.sequence.max(idx as i64))
+        .max();
+    let max_notice = lx.chat.notices.iter().map(|n| n.sequence).max();
+    let max_compact = lx.compact.checkpoints.iter().map(|c| c.sequence).max();
+    let max_switch = lx.model_switch.switches.iter().map(|s| s.sequence).max();
+    [max_msg, max_notice, max_compact, max_switch]
+        .into_iter()
+        .flatten()
+        .max()
+        .map_or(0, |max| max.saturating_add(1))
 }
 
 /// 模型的 variants 键列表。
@@ -792,4 +909,63 @@ pub fn try_submit_rename_command(state: &mut AppState, pane: PaneId) -> bool {
         text::chat::session_renamed(title),
     );
     true
+}
+
+/// 在**指定窗格**内展示一条 lx 反馈（错误红 / 警告黄）。
+///
+/// lx 页的所有反馈都走这里，落在**该窗格自己的 toast 槽**里，2 秒后自动消失。
+///
+/// 用户要求「lx 页的 toast 都要在 lx 中显示，不要用全局的」：全局 toast 只有一个槽，
+/// 锚点容器放不下时还会降级到屏幕顶部居中、横跨整个窗口；lx 的反馈只属于某个 lx 窗格，
+/// 越界就失去指代（也会被别的页的提示互相覆盖）。
+pub(crate) fn show_lx_hint(
+    state: &mut AppState,
+    pane: PaneId,
+    level: InputHintLevel,
+    message: impl Into<String>,
+) {
+    let kind = match level {
+        InputHintLevel::Error => ToastKind::Danger,
+        InputHintLevel::Warning => ToastKind::Warning,
+    };
+    let toast = Toast::new(kind, message, Some(pane), Instant::now());
+    crate::app::update::show_lx_toast(state, pane, toast);
+}
+
+/// 草稿是「行首 `/` 开头的一行命令」但**不是**任何内置命令时，返回那段命令文本。
+///
+/// 判定口径与命令面板一致（复用 `slash_trigger` 与 `SlashPanel::commands_matching`），
+/// 保证「面板里能选中的」永远不会被这里拦下：
+/// - 只有**单行**命令算数：多行草稿可能是用户在写 markdown 引用或路径；
+/// - **带空格一律不拦**：`/q a`、`/path/to/file.rs 说明` 这种是普通输入，不是命令；
+/// - 围栏代码块内不拦（`slash_trigger` 已经处理）。
+///
+/// 返回值保留用户输入的原文（含 `/`），由 `text::lx_unknown_command` 负责截断与拼句。
+pub(super) fn unknown_slash_command(draft: &str) -> Option<String> {
+    use crate::app::state::lx::slash::slash_trigger;
+    // 只处理「整段就是一行」的草稿。
+    let line = draft.trim();
+    if line.contains('\n') {
+        return None;
+    }
+    // 与面板同口径：光标在末尾时的触发前缀。
+    let query = slash_trigger(line, line.len())?;
+    let trimmed = query.trim();
+    // 单独一个 `/` 说明用户还没敲完；不拦（面板此时是完整列表）。
+    if trimmed == "/" {
+        return None;
+    }
+    // **带空格一律不拦**（`/q a`、`/path/to/file.rs 说明`、`/etc/hosts 是什么`）：
+    // 用户在敲命令时不会带空格（面板采纳的是一条无参命令），带空格说明这是
+    // 普通输入（路径、引用、`/` 开头的自然语言），按内容原样发送。
+    let name = trimmed.trim_start_matches('/');
+    if name.is_empty() || name.contains(char::is_whitespace) || name.contains('/') {
+        return None;
+    }
+    // 面板能匹配到就交给面板（用户可能想选中后 Enter）。
+    if !SlashPanel::commands_matching(&format!("/{name}")).is_empty() {
+        return None;
+    }
+    // 回显整段原文（含参数），让用户确认自己敲了什么。
+    Some(trimmed.to_string())
 }

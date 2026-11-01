@@ -491,13 +491,14 @@ pub(crate) fn schedule_next_queued_input_with_done(
         return Err(LIMIT_REACHED_CODE.to_string());
     }
 
-    let frozen = streams
-        .frozen
-        .get(&record.child_session_id)
-        .or_else(|| streams.frozen.get(&parent_session))
-        .cloned()
-        .or_else(|| resolve_frozen_for_pane(state, parent_key.pane))
-        .ok_or_else(|| "subagent model snapshot unavailable".to_string())?;
+    // 子 Agent 继承父会话最新模型：父窗格当前选择 > 父会话冻结快照 > 子会话旧缓存。
+    // 把子会话缓存放在首位会让父会话 `/model` 切换后唤醒的子 Agent 永远沿用旧模型。
+    let Some(frozen) = resolve_frozen_for_pane(state, parent_key.pane)
+        .or_else(|| streams.frozen.get(&parent_session).cloned())
+        .or_else(|| streams.frozen.get(&record.child_session_id).cloned())
+    else {
+        return Err("subagent model snapshot unavailable".to_string());
+    };
     streams
         .frozen
         .insert(record.child_session_id.clone(), frozen.clone());
@@ -519,6 +520,23 @@ pub(crate) fn schedule_next_queued_input_with_done(
     );
     let (skills, _) = super::super::skills::catalog_prompt(persistence, Some(workspace), true);
     let mcp_snapshot = super::super::mcp::snapshot_for_turn(persistence, Some(workspace));
+    let model_identity = crate::chat::agent::ModelIdentity {
+        display_name: state
+            .models
+            .model_display_name(&frozen.provider, &frozen.model),
+        provider_id: frozen.provider.clone(),
+        model_id: frozen.model.clone(),
+        variant: frozen.variant.clone(),
+        supports_image_input: frozen.supports_image_input,
+    }
+    .render_prompt_section();
+    let instructions = crate::chat::agent::load_instructions(
+        crate::config::user_data_root().ok().as_deref(),
+        Some(workspace),
+        Some(&cwd),
+        persistence.is_trusted(&cwd) || persistence.is_trusted(workspace),
+    )
+    .render_prompt_section();
     if let Err(err) = assemble_child_context(
         database,
         workspace,
@@ -527,9 +545,13 @@ pub(crate) fn schedule_next_queued_input_with_done(
         &record.child_session_id,
         "",
         record.role,
-        &environment,
-        skills.as_deref(),
-        &mcp_snapshot,
+        super::context::ChildPromptContext {
+            model_identity: Some(&model_identity),
+            environment: &environment,
+            instructions: instructions.as_deref(),
+            skills: skills.as_deref(),
+            mcp: &mcp_snapshot,
+        },
         &cwd,
         &model,
         frozen.variant_params.clone(),
@@ -623,6 +645,23 @@ fn launch_child_turn(
     );
     let (skills, _) = super::super::skills::catalog_prompt(persistence, Some(workspace), true);
     let mcp_snapshot = super::super::mcp::snapshot_for_turn(persistence, Some(workspace));
+    let model_identity = crate::chat::agent::ModelIdentity {
+        display_name: state
+            .models
+            .model_display_name(&frozen.provider, &frozen.model),
+        provider_id: frozen.provider.clone(),
+        model_id: frozen.model.clone(),
+        variant: frozen.variant.clone(),
+        supports_image_input: frozen.supports_image_input,
+    }
+    .render_prompt_section();
+    let instructions = crate::chat::agent::load_instructions(
+        crate::config::user_data_root().ok().as_deref(),
+        Some(workspace),
+        Some(cwd),
+        persistence.is_trusted(cwd) || persistence.is_trusted(workspace),
+    )
+    .render_prompt_section();
     let context = assemble_child_context(
         database,
         workspace,
@@ -631,9 +670,13 @@ fn launch_child_turn(
         &record.child_session_id,
         child_user_message_id,
         record.role,
-        &environment,
-        skills.as_deref(),
-        &mcp_snapshot,
+        super::context::ChildPromptContext {
+            model_identity: Some(&model_identity),
+            environment: &environment,
+            instructions: instructions.as_deref(),
+            skills: skills.as_deref(),
+            mcp: &mcp_snapshot,
+        },
         cwd,
         &model,
         frozen.variant_params.clone(),

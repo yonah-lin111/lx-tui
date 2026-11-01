@@ -168,18 +168,8 @@ impl Database {
         if revision != commit.expected_revision {
             return Err(DbError::RewindTargetChanged);
         }
-        // 取号：与消息、撤销提示共用同一空间。
-        let sequence: i64 = transaction.query_row(
-            r#"SELECT COALESCE(MAX(sequence) + 1, 0) FROM (
-                   SELECT sequence FROM agent_message WHERE session_id = ?1
-                   UNION ALL
-                   SELECT sequence FROM agent_session_notice WHERE session_id = ?1
-                   UNION ALL
-                   SELECT sequence FROM agent_compact_checkpoint WHERE session_id = ?1
-               )"#,
-            params![commit.session_id],
-            |row| row.get(0),
-        )?;
+        // 取号：与消息、撤销提示、模型切换共用同一空间。
+        let sequence = super::next_session_sequence(&transaction, &commit.session_id)?;
         let now = now_ms();
         let id = new_external_id("compact");
         transaction.execute(

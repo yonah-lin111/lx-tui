@@ -33,6 +33,7 @@ mod cards;
 mod compact;
 #[cfg(test)]
 mod layout;
+mod model_switch;
 mod paint;
 mod render;
 pub(crate) mod report;

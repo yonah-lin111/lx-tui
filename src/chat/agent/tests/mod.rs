@@ -4,8 +4,11 @@ use serde_json::json;
 
 use super::*;
 
+mod instructions;
+mod model_switch;
+
 /// 是否含 CJK 字符（模型可见文本必须全英文）。
-fn has_cjk(text: &str) -> bool {
+pub(super) fn has_cjk(text: &str) -> bool {
     text.chars().any(|ch| {
         matches!(ch as u32,
             0x3000..=0x303F

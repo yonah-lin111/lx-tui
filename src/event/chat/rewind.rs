@@ -187,7 +187,7 @@ pub fn handle_rewind_finished(
             restored_files: _,
             already_restored: _,
             user_text,
-            deleted: _,
+            deleted,
             session_deleted,
         } => {
             // 删空会话：先回填发起 pane，再解绑所有绑定该会话的 pane（保留草稿）。
@@ -200,6 +200,8 @@ pub fn handle_rewind_finished(
                     }) && let Some(target) = state.pane_mut_anywhere(target_pane)
                     {
                         target.lx.chat.reset_session_view();
+                        target.lx.compact.reset();
+                        target.lx.model_switch.reset();
                         target.lx.clear_rewind();
                     }
                 }
@@ -208,6 +210,21 @@ pub fn handle_rewind_finished(
             // 先重载数据库真相，再回填；其他绑定 pane 保留各自草稿。
             // workspace 必须用请求里的冻结值：执行期间切换工作区不能让已成功的撤销误报失败。
             let loaded = persistence.load_rewind_view(workspace, session_id);
+            // 删除对话后 `agent_session` 的模型列已回滚到剩余历史：把窗格选择同步回来，
+            // 否则状态行仍显示被删轮次的模型。
+            let restored_selection = if deleted {
+                persistence
+                    .with_db(|db| db.chat_session_model(workspace, session_id))
+                    .flatten()
+                    .map(|snapshot| crate::config::ai::ModelSelection {
+                        provider: snapshot.provider,
+                        model: snapshot.model,
+                        variant: snapshot.variant,
+                    })
+                    .map(|selection| state.models.normalize_selection(selection))
+            } else {
+                None
+            };
             match loaded {
                 Ok(view) => {
                     let panes = state.all_pane_ids();
@@ -229,6 +246,12 @@ pub fn handle_rewind_finished(
                                 other,
                                 &view.checkpoints,
                             );
+                            crate::app::update::set_model_switches(state, other, &view.switches);
+                            if let Some(selection) = &restored_selection
+                                && let Some(target) = state.pane_mut_anywhere(other)
+                            {
+                                target.lx.chat.selection = Some(selection.clone());
+                            }
                         }
                     }
                     crate::app::update::on_rewind_succeeded(state, pane, action, &user_text);

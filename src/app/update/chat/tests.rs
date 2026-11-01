@@ -4,6 +4,7 @@
 mod ask;
 mod compact;
 mod history;
+mod model_switch;
 mod process_cards;
 mod prompt_history;
 mod rewind;
