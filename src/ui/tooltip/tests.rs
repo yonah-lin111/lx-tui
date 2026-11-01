@@ -339,8 +339,11 @@ fn hint_flips_with_state() {
         text::tooltip_hint(TooltipTarget::PaneToggle(pane), &state),
         "switch to terminal"
     );
+    assert_eq!(
+        text::tooltip_hint(TooltipTarget::PromptTemplateStatus, &state),
+        "cycle block status"
+    );
     for (button, hint) in [
-        (TemplateButtonKind::Status, "cycle block status"),
         (TemplateButtonKind::Copy, "copy block"),
         (TemplateButtonKind::Clean, "clean block"),
         (TemplateButtonKind::Delete, "delete block"),
@@ -363,7 +366,7 @@ fn hits_template_block_buttons_via_prompt_text_area() {
     let rects = pane_rects(&state, &view);
     let area = layout::prompt_text_rect(view.prompt);
     let hits = ui::prompt::template_buttons(&state.prompt, area);
-    assert_eq!(hits.len(), 4, "状态、复制、清理、删除按钮可见");
+    assert_eq!(hits.len(), 3, "复制、清理、删除按钮可见");
     let copy = hits
         .iter()
         .find(|hit| hit.button == ui::prompt::TemplateBlockButton::Copy)
@@ -379,6 +382,22 @@ fn hits_template_block_buttons_via_prompt_text_area() {
         target_at(&view, &state, &rects, SCREEN, 0, 0),
         None,
         "边框角不命中"
+    );
+}
+
+#[test]
+fn hits_title_row_template_status_label() {
+    let mut state = AppState::demo();
+    state.prompt_width = 56;
+    state
+        .prompt
+        .set_text("&&& addTemplate --start\nbody\n&&& addTemplate --end");
+    let view = view_for(&state);
+    let rects = pane_rects(&state, &view);
+    let rect = ui::prompt_frame::prompt_status_rect(view.prompt, &state).expect("status label");
+    assert_eq!(
+        target_at(&view, &state, &rects, SCREEN, rect.x, rect.y),
+        Some(TooltipTarget::PromptTemplateStatus)
     );
 }
 

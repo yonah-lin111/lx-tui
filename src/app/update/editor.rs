@@ -552,6 +552,11 @@ pub fn toggle_template_status(state: &mut AppState, start_line: usize) -> bool {
     state.prompt.toggle_template_status(start_line)
 }
 
+/// 循环本页 `&&&` 模板块状态（标题行状态标签点击）；无块时返回 false。
+pub fn cycle_page_template_status(state: &mut AppState) -> bool {
+    state.prompt.cycle_template_status()
+}
+
 /// 清理补充块内未填写的空项（单步撤销）；返回是否产生变更。
 pub fn clean_supple_block(state: &mut AppState, start_line: usize) -> bool {
     state.prompt.clean_supple_block(start_line)

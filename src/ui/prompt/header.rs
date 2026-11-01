@@ -117,9 +117,24 @@ fn title_text_rect(
     }
 }
 
+/// 标题行页控件几何（渲染、命中与状态标签共用）。
+fn controls_for(area: Rect, data: &TitleRowData<'_>) -> Option<PromptPageControls> {
+    let page = data.page.as_ref()?;
+    page_controls_with(
+        area,
+        &text::page_counter(page.current, page.total),
+        page.arrows,
+    )
+}
+
+/// 本页模板块状态标签矩形（渲染、点击命中与 tooltip 共用）；无空间时 None。
+pub fn status_rect(area: Rect, data: &TitleRowData<'_>, status: TemplateStatus) -> Option<Rect> {
+    status_rect_in(area, controls_for(area, data).as_ref(), status).map(|(rect, _)| rect)
+}
+
 /// 本页模板块状态标签：右对齐贴页控件左侧、与标题区隔 1 列；
 /// 标题区至少保留 2 列，空间不足时隐藏。
-fn status_rect(
+fn status_rect_in(
     area: Rect,
     controls: Option<&PromptPageControls>,
     status: TemplateStatus,
@@ -207,14 +222,8 @@ pub fn paint_title_row(
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let controls = data.page.as_ref().and_then(|page| {
-        page_controls_with(
-            area,
-            &text::page_counter(page.current, page.total),
-            page.arrows,
-        )
-    });
-    let status_area = status.and_then(|status| status_rect(area, controls.as_ref(), status));
+    let controls = controls_for(area, data);
+    let status_area = status.and_then(|status| status_rect_in(area, controls.as_ref(), status));
     let title_area = title_text_rect(
         area,
         controls.as_ref(),

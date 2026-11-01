@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::app::markdown::MentionEntry;
+use crate::app::markdown::TemplateStatus;
 use crate::app::state::AppState;
 use crate::app::update;
 use crate::layout::PaneId;
@@ -1053,18 +1054,19 @@ fn template_buttons_render_and_hit_test() {
         "&&& addTemplate --start {title: }\n# Add\n&&& addTemplate --end",
     );
     let buttons = template_buttons(&prompt, area);
-    assert_eq!(buttons.len(), 4, "状态、复制、清理、删除");
-    assert_eq!(buttons[0].button, TemplateBlockButton::Status);
-    assert_eq!(buttons[1].button, TemplateBlockButton::Copy);
-    assert_eq!(buttons[2].button, TemplateBlockButton::Clean);
-    assert_eq!(buttons[3].button, TemplateBlockButton::Delete);
-    assert_eq!(buttons[3].status, TemplateStatus::Todo);
-    assert_eq!(buttons[3].rect.right(), 70, "按钮组右对齐到文本区右边界");
+    assert_eq!(buttons.len(), 3, "复制、清理、删除");
+    assert_eq!(buttons[0].button, TemplateBlockButton::Copy);
+    assert_eq!(buttons[1].button, TemplateBlockButton::Clean);
+    assert_eq!(buttons[2].button, TemplateBlockButton::Delete);
+    assert_eq!(buttons[2].rect.right(), 70, "按钮组右对齐到文本区右边界");
 
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
     let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
-    assert!(row.contains(text::TEMPLATE_BUTTON_TODO), "{row}");
+    assert!(
+        !row.contains(text::TEMPLATE_BUTTON_TODO),
+        "状态标签不在块内: {row}"
+    );
     assert!(row.contains(text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_CLEAN), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_DEL), "{row}");
@@ -1089,12 +1091,12 @@ fn template_buttons_stay_visible_and_text_ellipsizes() {
         "&&& addTemplate --start {title: }\n&&& addTemplate --end",
     );
     let buttons = template_buttons(&editor, area);
-    assert_eq!(buttons.len(), 4, "窄屏按钮不隐藏");
+    assert_eq!(buttons.len(), 3, "窄屏按钮不隐藏");
     assert!(buttons[0].rect.x > area.x, "按钮让开左侧色条");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
     let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
-    assert!(row.contains(text::TEMPLATE_BUTTON_TODO), "{row}");
+    assert!(row.contains(text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_DEL), "{row}");
     let text_side: String = (0..buttons[0].rect.x)
         .map(|x| buf[(x, 0)].symbol())
@@ -1114,33 +1116,29 @@ fn template_buttons_stay_visible_and_text_ellipsizes() {
     let mut buf = Buffer::empty(narrow);
     render(narrow, &mut buf, &narrow_prompt, None);
     let row: String = (0..narrow.width).map(|x| buf[(x, 0)].symbol()).collect();
-    assert!(row.contains("[todo]"), "{row}");
+    assert!(row.contains(text::TEMPLATE_BUTTON_DEL), "{row}");
 }
 
 #[test]
-fn template_status_button_label_follows_block_status() {
+fn block_row_never_renders_template_status_label() {
     let area = Rect::new(0, 0, 70, 10);
-    let done = prompt(
-        70,
-        10,
-        "&&& bugTemplate --start {title: }\n&&& bugTemplate --end done",
-    );
-    let buttons = template_buttons(&done, area);
-    let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &done, None);
-    let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
-    assert!(row.contains(text::TEMPLATE_BUTTON_DONE), "{row}");
-    assert_eq!(buttons[0].button, TemplateBlockButton::Status);
-
-    let run = prompt(
-        70,
-        10,
-        "&&& bugTemplate --start {title: }\n&&& bugTemplate --end in_progress",
-    );
-    let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &run, None);
-    let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
-    assert!(row.contains(text::TEMPLATE_BUTTON_RUN), "{row}");
+    for (text, status_label) in [
+        (
+            "&&& bugTemplate --start {title: }\n&&& bugTemplate --end done",
+            text::TEMPLATE_BUTTON_DONE,
+        ),
+        (
+            "&&& bugTemplate --start {title: }\n&&& bugTemplate --end in_progress",
+            text::TEMPLATE_BUTTON_RUN,
+        ),
+    ] {
+        let prompt = prompt(70, 10, text);
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &prompt, None);
+        let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+        assert!(!row.contains(status_label), "状态标签只出现在标题行: {row}");
+        assert_eq!(template_buttons(&prompt, area).len(), 3);
+    }
 }
 
 // ===== 粘贴/字母快捷面板 =====

@@ -167,6 +167,9 @@ fn targets(
             }
         }
         if mode == crate::app::prompt::PromptMode::Editor {
+            if let Some(rect) = ui::prompt_frame::prompt_status_rect(view.prompt, state) {
+                targets.push((TooltipTarget::PromptTemplateStatus, rect));
+            }
             let text_area = crate::layout::prompt_content_rect(view.prompt);
             for hit in ui::prompt::template_buttons(&state.prompt, text_area) {
                 targets.push((
@@ -194,7 +197,6 @@ fn targets(
 /// app 侧目标枚举与 ui 按钮种类的映射。
 fn template_button_kind(button: ui::prompt::TemplateBlockButton) -> TemplateButtonKind {
     match button {
-        ui::prompt::TemplateBlockButton::Status => TemplateButtonKind::Status,
         ui::prompt::TemplateBlockButton::Copy => TemplateButtonKind::Copy,
         ui::prompt::TemplateBlockButton::Clean => TemplateButtonKind::Clean,
         ui::prompt::TemplateBlockButton::Delete => TemplateButtonKind::Delete,

@@ -9,10 +9,9 @@ use crate::layout::PaneId;
 /// 悬停停留多久后显示。
 pub const TOOLTIP_DELAY: Duration = Duration::from_millis(400);
 
-/// 模板块按钮种类；与 ui 侧 `TemplateBlockButton` 一一对应，避免 app 依赖 ui。
+/// 模板块动作按钮种类；与 ui 侧 `TemplateBlockButton` 一一对应，避免 app 依赖 ui。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemplateButtonKind {
-    Status,
     Copy,
     Clean,
     Delete,
@@ -58,6 +57,8 @@ pub enum TooltipTarget {
     ReferencedSearchCopyPath,
     /// 右侧容器 Todo 面板的工具栏按钮。
     TodoButton(TodoButton),
+    /// prompt 标题行页控件左侧的模板块状态标签（点击循环状态）。
+    PromptTemplateStatus,
     /// prompt 文本区内的模板块按钮；`line` 为块起始逻辑行。
     TemplateButton {
         line: usize,

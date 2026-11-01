@@ -407,9 +407,6 @@ pub(crate) fn apply_template_button(state: &mut AppState, hit: ui::prompt::Templ
         ui::prompt::TemplateBlockButton::Delete => {
             update::delete_template_block(state, hit.line);
         }
-        ui::prompt::TemplateBlockButton::Status => {
-            update::toggle_template_status(state, hit.line);
-        }
     }
 }
 

@@ -99,7 +99,7 @@ fn start_row_buttons_right_align_to_area_edge_and_ellipsize_long_text() {
         "&&& addTemplate --start {title: very long title text}\n&&& addTemplate --end",
     );
     let hits = template_buttons(&prompt, area);
-    assert_eq!(hits.len(), 4);
+    assert_eq!(hits.len(), 3);
     assert_eq!(
         hits.last().unwrap().rect.right(),
         area.right(),
@@ -129,7 +129,7 @@ fn second_template_block_has_no_bar_and_no_buttons() {
         ),
     );
     let hits = template_buttons(&prompt, area);
-    assert_eq!(hits.len(), 4, "只有第一个 &&& 产生 4 个按钮");
+    assert_eq!(hits.len(), 3, "只有第一个 &&& 产生 3 个按钮");
     assert!(hits.iter().all(|hit| hit.line == 0));
 
     let mut buf = Buffer::empty(area);

@@ -19,7 +19,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::markdown::{BlockKind, BlockLineInfo, BlockRole, TemplateStatus, block_line_infos};
+use crate::app::markdown::{BlockKind, BlockLineInfo, BlockRole, block_line_infos};
 use crate::app::prompt::{Prompt, PromptMode, VisualRow};
 use crate::app::selection::Selection;
 use crate::layout::{self, PromptToolbarButton};
@@ -257,21 +257,19 @@ fn paint_placeholder(buf: &mut Buffer, area: Rect) {
     }
 }
 
-/// 模板块操作按钮种类。
+/// 模板块操作按钮种类（状态切换到标题行的状态标签，块内只保留动作按钮）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemplateBlockButton {
-    Status,
     Copy,
     Clean,
     Delete,
 }
 
-/// 模板块操作按钮命中：起始逻辑行索引、按钮、所属块状态与绘制矩形。
+/// 模板块操作按钮命中：起始逻辑行索引、按钮与绘制矩形。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TemplateButtonHit {
     pub line: usize,
     pub button: TemplateBlockButton,
-    pub status: TemplateStatus,
     pub rect: Rect,
 }
 
@@ -292,9 +290,8 @@ pub struct BlockButtonHit {
     pub rect: Rect,
 }
 
-/// 按钮组顺序：状态、复制、清理、删除。
-const TEMPLATE_BUTTONS: [TemplateBlockButton; 4] = [
-    TemplateBlockButton::Status,
+/// 按钮组顺序：复制、清理、删除。
+const TEMPLATE_BUTTONS: [TemplateBlockButton; 3] = [
     TemplateBlockButton::Copy,
     TemplateBlockButton::Clean,
     TemplateBlockButton::Delete,
@@ -313,13 +310,13 @@ fn block_gutter(block: bool) -> u16 {
     }
 }
 
-/// 按钮组文案（按块类型与状态）。
+/// 按钮组文案（按块类型）。
 fn block_button_labels(info: Option<BlockLineInfo>) -> Vec<&'static str> {
     let Some(info) = info else {
         return Vec::new();
     };
     match info.kind {
-        BlockKind::Template => template_button_labels(info.status).to_vec(),
+        BlockKind::Template => template_button_labels().to_vec(),
         BlockKind::Supple => SUPPLE_BUTTONS
             .iter()
             .map(|button| block_button_label(*button))
@@ -378,7 +375,7 @@ pub fn template_buttons(prompt: &Prompt, area: Rect) -> Vec<TemplateButtonHit> {
         if info.role != crate::app::markdown::TemplateLineRole::Start {
             continue;
         }
-        let labels = template_button_labels(info.status);
+        let labels = template_button_labels();
         let start = block_buttons_start(area, block_buttons_total(&labels));
         let y = area.y + visible as u16;
         let mut x = start;
@@ -387,7 +384,6 @@ pub fn template_buttons(prompt: &Prompt, area: Rect) -> Vec<TemplateButtonHit> {
             hits.push(TemplateButtonHit {
                 line: row.line,
                 button: *button,
-                status: info.status,
                 rect: Rect::new(x, y, width, 1),
             });
             x = x.saturating_add(width + 1);
@@ -465,10 +461,9 @@ pub fn block_button_at(
         .find(|hit| hit.rect.contains((column, row).into()))
 }
 
-/// 模板块按钮文案：状态按钮按模板块当前状态取标签。
-fn template_button_label(button: TemplateBlockButton, status: TemplateStatus) -> &'static str {
+/// 模板块动作按钮文案（状态标签在标题行渲染）。
+fn template_button_label(button: TemplateBlockButton) -> &'static str {
     match button {
-        TemplateBlockButton::Status => text::template_status_label(status),
         TemplateBlockButton::Copy => text::TEMPLATE_BUTTON_COPY,
         TemplateBlockButton::Clean => text::TEMPLATE_BUTTON_CLEAN,
         TemplateBlockButton::Delete => text::TEMPLATE_BUTTON_DEL,
@@ -484,9 +479,9 @@ fn block_button_label(button: BlockButton) -> &'static str {
     }
 }
 
-/// 按钮组文案（状态标签 + 复制/清理/删除）。
-fn template_button_labels(status: TemplateStatus) -> [&'static str; 4] {
-    TEMPLATE_BUTTONS.map(|button| template_button_label(button, status))
+/// 按钮组文案（复制/清理/删除）。
+fn template_button_labels() -> [&'static str; 3] {
+    TEMPLATE_BUTTONS.map(template_button_label)
 }
 
 /// 块颜色：`&&&` 固定 lx 粉（`style::template_block_bar`）、`+++` 固定品红（`style::supple_border`）。
@@ -522,11 +517,8 @@ fn paint_block_separator(buf: &mut Buffer, area: Rect, y: u16, info: BlockLineIn
 /// 绘制模板块操作按钮。
 fn render_template_buttons(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
     for hit in template_buttons(prompt, area) {
-        let label = template_button_label(hit.button, hit.status);
-        let button_style = match hit.button {
-            TemplateBlockButton::Status => style::template_status(hit.status),
-            _ => style::template_button(),
-        };
+        let label = template_button_label(hit.button);
+        let button_style = style::template_button();
         for (offset, symbol) in label.chars().enumerate() {
             if let Some(cell) = buf.cell_mut((hit.rect.x + offset as u16, hit.rect.y)) {
                 cell.reset();

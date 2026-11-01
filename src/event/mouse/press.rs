@@ -383,6 +383,13 @@ pub(crate) fn handle_mouse_down_left(
             _ => {}
         }
         *dirty = true;
+    } else if !state.prompt_collapsed
+        && ui::prompt_frame::prompt_status_at(view.prompt, state, mouse.column, mouse.row).is_some()
+    {
+        // 标题行的状态标签是控件：循环本页模板块状态，不移动正文光标。
+        update::focus_prompt(state);
+        update::cycle_page_template_status(state);
+        *dirty = true;
     } else if let Some(control) = (!state.prompt_collapsed)
         .then(|| ui::prompt_page_control_at(view.prompt, state, mouse.column, mouse.row))
         .flatten()

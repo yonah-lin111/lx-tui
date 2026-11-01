@@ -141,11 +141,11 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
         }
     }
 
-    // 按钮组常显。
+    // 块内动作按钮常显；状态标签只在标题行。
     let buttons = ui::prompt::template_buttons(&state.prompt, area);
-    assert_eq!(buttons.len(), 4, "宽屏下状态与动作按钮可见");
+    assert_eq!(buttons.len(), 3, "宽屏下复制/清理/删除按钮可见");
     let row = line_text(&terminal, area.y);
-    assert!(row.contains(ui::text::TEMPLATE_BUTTON_TODO), "{row}");
+    assert!(!row.contains(ui::text::TEMPLATE_BUTTON_TODO), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_CLEAN), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_DEL), "{row}");
@@ -174,7 +174,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
 fn narrow_prompt_keeps_buttons_and_ellipsizes_header() {
     let config = Config::default();
     let mut state = AppState::demo();
-    state.prompt_width = 40;
+    state.prompt_width = 32;
     let screen = Rect::new(0, 0, WIDTH, HEIGHT);
     let view = ui::layout::compute(
         screen,
@@ -201,7 +201,10 @@ fn narrow_prompt_keeps_buttons_and_ellipsizes_header() {
     let area = layout::prompt_text_rect(view.prompt);
     let terminal = draw(&state, &config);
     let row = line_text(&terminal, area.y);
-    assert!(row.contains("[todo]"), "窄屏按钮不隐藏: {row}");
+    assert!(
+        row.contains(ui::text::TEMPLATE_BUTTON_COPY),
+        "窄屏动作按钮不隐藏: {row}"
+    );
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_DEL), "{row}");
     assert!(row.contains('…'), "左上内容省略号截断: {row}");
     assert!(!row.contains("--start"), "正文让位按钮: {row}");
@@ -248,17 +251,15 @@ fn template_buttons_drive_clean_status_delete_with_single_undo() {
     assert!(body.starts_with("# Add Requirement"), "{body}");
     assert!(!body.contains("&&&"));
 
-    // 状态按钮 todo → in_progress，渲染出 [run]。
+    // 标题行状态标签：循环 todo → in_progress，标签变为 [run]。
     let buttons = ui::prompt::template_buttons(&state.prompt, area);
-    let status = buttons
-        .iter()
-        .find(|hit| hit.button == ui::prompt::TemplateBlockButton::Status)
-        .copied()
-        .expect("status button");
-    update::toggle_template_status(&mut state, status.line);
+    assert!(update::cycle_page_template_status(&mut state));
     assert!(state.prompt.text().contains("--end in_progress"));
     let terminal = draw(&state, &config);
-    assert!(line_text(&terminal, area.y).contains("[run]"));
+    let title_y = crate::ui::prompt_frame::title_row(view.prompt)
+        .expect("title row")
+        .y;
+    assert!(line_text(&terminal, title_y).contains("[run]"));
 
     // 清理按钮：移除未填写的空项，保留正文标题与结束行。
     let clean = buttons

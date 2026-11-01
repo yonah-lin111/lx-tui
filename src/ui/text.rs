@@ -1003,8 +1003,8 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptPin => "pin prompt",
         TooltipTarget::SwapPromptSide => "swap prompt side",
         TooltipTarget::SidebarSettings => "open settings",
+        TooltipTarget::PromptTemplateStatus => "cycle block status",
         TooltipTarget::TemplateButton { button, .. } => match button {
-            TemplateButtonKind::Status => "cycle block status",
             TemplateButtonKind::Copy => "copy block",
             TemplateButtonKind::Clean => "clean block",
             TemplateButtonKind::Delete => "delete block",

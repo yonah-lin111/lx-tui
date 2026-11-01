@@ -171,10 +171,10 @@ fn mouse_interacts_with_slash_panel() {
 }
 
 #[test]
-fn mouse_template_buttons_clean_status_and_delete() {
+fn mouse_template_status_label_and_block_buttons() {
     let (mut state, config, geo, area) = template_button_state();
     let buttons = crate::ui::prompt::template_buttons(&state.prompt, area);
-    assert_eq!(buttons.len(), 4, "宽屏下按钮可见");
+    assert_eq!(buttons.len(), 3, "块内只保留复制/清理/删除");
     let hit = |button| {
         buttons
             .iter()
@@ -185,13 +185,14 @@ fn mouse_template_buttons_clean_status_and_delete() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    // 状态按钮：todo → in_progress。
-    let status = hit(crate::ui::prompt::TemplateBlockButton::Status);
+    // 标题行状态标签：todo → in_progress（点击不移动正文光标）。
+    let status =
+        crate::ui::prompt_frame::prompt_status_rect(geo.view.prompt, &state).expect("status label");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
-            status.rect.x + 1,
-            status.rect.y,
+            status.x + 1,
+            status.y,
         ),
         &mut state,
         &mut sessions,
@@ -206,6 +207,24 @@ fn mouse_template_buttons_clean_status_and_delete() {
             .text()
             .contains("&&& addTemplate --end in_progress")
     );
+
+    // 再点一次：in_progress → done。
+    let status =
+        crate::ui::prompt_frame::prompt_status_rect(geo.view.prompt, &state).expect("status label");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            status.x + 1,
+            status.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.prompt.text().contains("&&& addTemplate --end done"));
 
     // 清理按钮：移除未填写空项。
     let clean = hit(crate::ui::prompt::TemplateBlockButton::Clean);
@@ -224,10 +243,8 @@ fn mouse_template_buttons_clean_status_and_delete() {
     );
     assert!(!state.prompt.text().contains("- Reference: "));
     assert!(
-        state
-            .prompt
-            .text()
-            .contains("&&& addTemplate --end in_progress")
+        state.prompt.text().contains("&&& addTemplate --end done"),
+        "两次点击状态标签把 todo 循环到 done"
     );
 
     // 删除按钮：整块消失。

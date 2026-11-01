@@ -154,6 +154,36 @@ pub fn prompt_page_control_at(
     prompt::page_control_at(area, &data, column, row)
 }
 
+/// 标题行状态标签矩形（渲染、点击命中与 tooltip 共用）；编辑视图且本页存在 `&&&` 时非空。
+pub fn prompt_status_rect(panel: Rect, state: &AppState) -> Option<Rect> {
+    if state.prompt_collapsed || state.right_tab != RightTab::Prompt {
+        return None;
+    }
+    let area = title_row(panel)?;
+    let TitleSource::Editor {
+        title,
+        draft,
+        page,
+        status,
+    } = title_source(state)
+    else {
+        return None;
+    };
+    let status = status?;
+    let data = prompt::TitleRowData {
+        title: Some(title.as_deref().unwrap_or("")),
+        draft,
+        page: page_header_data(page.as_ref()),
+    };
+    prompt::status_rect(area, &data, status)
+}
+
+/// 命中标题行状态标签时返回其矩形（点击循环块状态，不移动正文光标）。
+pub fn prompt_status_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<Rect> {
+    let rect = prompt_status_rect(panel, state)?;
+    rect.contains((column, row).into()).then_some(rect)
+}
+
 /// Prompt 面板体：编辑视图渲染 markdown 编辑器、树视图渲染提示词管理器、页视图渲染页目录。
 pub(crate) fn render_body(
     frame: &mut Frame<'_>,
