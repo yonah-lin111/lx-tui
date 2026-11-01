@@ -80,17 +80,25 @@ src/
     agent/
       mod.rs                        修改：ToolSurface 新增 ExecMain（16 项，不含 ask），导出 exec 子模块
       exec/
-        mod.rs                      新增：exec 顶层入口 run_main、工作区/模型/数据库初始化、Ctrl+C 信号与退出码收敛（~350 行）
-        cli.rs                      新增：零依赖命令行参数解析（ExecCli / ExecCommand / ColorMode）与 stdin 提示词合成（~420 行）
-        events.rs                   新增：JSONL 强类型事件定义（ThreadEvent / ThreadItem / ThreadItemDetails / ExecUsage）（~280 行）
-        processor.rs                新增：EventProcessor trait、HumanOutputProcessor（stderr 进度 + stdout 终态）与 JsonlOutputProcessor（~480 行）
-        runner.rs                   新增：ExecHost（实现 AgentHost）+ 无头会话状态机（直接驱动 Database、ProcessManager、McpManager 与子 agent）（~520 行）
-        subagent.rs                 新增：exec 模式下的无头子 agent 调度器（spawn / send_input / resume / wait / close / list / cancel_input）（~450 行）
+        mod.rs                      新增：exec 顶层入口 run_main、工作区/模型/数据库初始化、历史图片水合、
+                                     Skills 目录与 `$skill` 引用块注入、Ctrl+C 信号与退出码收敛
+        cli.rs                      新增：零依赖命令行参数解析（ExecCli / ExecCommand / ColorMode）与 stdin 提示词合成
+        events.rs                   新增：JSONL 强类型事件定义（ThreadEvent / ThreadItem / ThreadItemDetails / ExecUsage）
+        processor.rs                新增：EventProcessor trait、HumanOutputProcessor（stderr 进度 + stdout 终态）与 JsonlOutputProcessor
+        runner.rs                   新增：ExecHost（实现 AgentHost）+ 无头会话状态机（直接驱动 Database、ProcessManager、McpManager 与子 agent）
+        mutation.rs                 新增：文件变更持久化桥（ExecMutationEvent 与 MutationRecorderFactory）
+        subagent/
+          mod.rs                    新增：无头子 agent 池状态与控制入口（spawn / send_input / resume / wait / close / list / cancel_input）
+          turn.rs                   新增：子轮上下文装配、四段提示词注入、图片归档与历史图片回放
+          settle.rs                 新增：`wait_agent` 超时续等 `auto_continue`、子轮终态结算与批量关闭
         tests/
           mod.rs                    新增：单元测试入口
+          fixtures.rs               新增：运行器与子 agent 测试共用脚手架（TestDir / ScriptedFactory / PNG 夹具）
           cli_tests.rs              新增：CLI 参数、stdin 组合、resume 参数解析测试
           processor_tests.rs        新增：Human / JSONL 输出格式化与 stdout/stderr 隔离测试
-          runner_tests.rs           新增：假模型流下的单轮、工具调用、ask 拒绝、子 agent 协同、ephemeral、resume 与 Ctrl+C 中断测试
+          events_tests.rs           新增：JSONL 事件形状与工具摘要映射测试
+          runner_tests.rs           新增：假模型流下的单轮、工具调用、ask 拒绝、ephemeral、resume 与 Ctrl+C 中断测试
+          subagent_tests.rs         新增：子 agent 派发、并发上限、等待续等与结算测试
 ```
 
 ### 依赖方向核对
@@ -470,6 +478,40 @@ pub trait ExecEventProcessor: Send {
 }
 ```
 
+`JsonlOutputProcessor` 维护在途工具映射，保证同一工具调用的 `item.started` 与 `item.completed` 使用同一个稳定 `item.id`：
+
+```rust
+pub struct JsonlOutputProcessor<WOut: Write + Send> {
+    stdout: WOut,
+    last_message_file: Option<PathBuf>,
+    next_item_id: u64,
+    last_emitted_text: Option<String>,
+    /// 在途工具调用：`call.call_id -> item.id`，保证 started / completed 同 id。
+    active_tool_items: HashMap<String, String>,
+}
+
+impl<WOut: Write + Send> JsonlOutputProcessor<WOut> {
+    fn on_tool_started(&mut self, call: &ReadyToolCall) {
+        let id = self.next_item_id();
+        self.active_tool_items.insert(call.call_id.clone(), id.clone());
+        self.emit(&ThreadEvent::ItemStarted {
+            item: ThreadItem { id, details: item_details_for_start(call) },
+        });
+    }
+
+    fn on_tool_finished(&mut self, call: &ReadyToolCall, outcome: &ToolOutcome, _duration_ms: i64) {
+        // 同一 call_id 复用 started 分配的 id；无前置 started 时回退新分配。
+        let id = self
+            .active_tool_items
+            .remove(&call.call_id)
+            .unwrap_or_else(|| self.next_item_id());
+        self.emit(&ThreadEvent::ItemCompleted {
+            item: ThreadItem { id, details: item_details_for_finish(call, outcome) },
+        });
+    }
+}
+```
+
 **人类可读模式（`HumanOutputProcessor`）在 `stderr` 的输出样式（对齐 Codex `EventProcessorWithHumanOutput` 与 `lx` 步骤标记语义）**：
 
 ```text
@@ -515,7 +557,7 @@ tokens used: 2,140 (in 1,980 · cached 1,024 · out 160)
 
 ---
 
-## 5. 关键数据流與无头宿主状态机（`runner.rs` & `subagent.rs`）
+## 5. 关键数据流与无头宿主状态机（`runner.rs` & `mutation.rs` & `subagent/`）
 
 ### 5.1 整体时序图
 
@@ -527,11 +569,12 @@ main()
              └─> exec::run_main(exec_cli)
                    1. 解析 cwd（-C 优先，回退 current_dir）并规范化
                    2. 解析 prompt + 管道 stdin + -i 图片附件（prepare_user_message）
-                   3. 加载 AiSettings 与 ModelsSnapshot，按 -m 或默认配置解析 FrozenModel
-                   4. 打开 Database（--ephemeral 走 open_in_memory，否则走 open_default(linked_worktree)）
+                   3. 加载 AiSettings 与 ModelsSnapshot，按 -m、会话模型或默认配置解析 FrozenModel
+                   4. 解析 linked worktree（缺省时按 cwd 推导隔离库）并打开 Database（--ephemeral 走 open_in_memory）
                    5. 若为 resume：定位目标 session_id（--last 取 list_chat_sessions 首条），校验会话锁
-                   6. 开启轮次：database.begin_turn_with_attachments(...) -> TurnCommitted
-                   7. 装配系统提示（compose_system_prompt）、AGENTS.md 指令、Skills、MCP 快照与历史上下文
+                   6. 构建 Tokio runtime，await mcp_snapshot_for_turn_async（McpManager::snapshot_for）取真实 MCP 快照
+                   7. assemble_exec_turn_with_snapshot：开启轮次 begin_turn_with_attachments、装配系统提示（compose_system_prompt）、
+                      AGENTS.md 指令、skills_catalog_prompt 与 $skill 引用块、历史上下文，并 hydrate_turn_images 水合历史图片
                    8. 启动 ExecRunner（持有 Database、ProcessManager、ReadRegistry、SubagentPool、EventProcessor）
                    9. tokio::spawn(run_agent_turn(context, ExecHost, AgentTools, stream_one, cancel_rx))
                   10. 主循环 select! 处理：
@@ -555,11 +598,11 @@ main()
 /// loop 与无头 ExecRunner 之间的内部消息。
 pub(crate) enum ExecLoopEvent {
     /// 主 agent 单步流式增量（用于实时记录 text / reasoning part 并定期 checkpoint）。
-    MainDelta(ChatDelta),
+    MainDelta(Vec<ChatDelta>),
     /// AgentHost 请求（BeginTool / FinishTool / AskUser / Subagent / UserShellUpdates）。
     Host(AgentHostRequest),
-    /// 文件修改前后快照记录（供 `/rewind` 撤销使用）。
-    Mutation(crate::event::chat::file_snapshots::MutationHostEvent),
+    /// 文件修改前后快照记录（`mutation.rs` 的持久化桥，供 `/rewind` 撤销使用）。
+    Mutation(ExecMutationEvent),
     /// 运行时自动压缩通知。
     AutoCompact {
         notice: AutoCompactNotice,
@@ -639,19 +682,33 @@ fn handle_finish_tool(
 }
 ```
 
-### 5.3 无头子 Agent 调度（`src/chat/agent/exec/subagent.rs`）
+### 5.3 无头子 Agent 调度（`src/chat/agent/exec/subagent/`）
 
-在 `exec` 模式下，主 agent 调用 `spawn_agent`、`wait_agent`、`send_input`、`resume_agent`、`close_agent`、`list_agents`、`cancel_agent_input` 时，由 `ExecRunner` 内的 `ExecSubagentPool` 处理：
+在 `exec` 模式下，主 agent 调用 `spawn_agent`、`wait_agent`、`send_input`、`resume_agent`、`close_agent`、`list_agents`、`cancel_agent_input` 时，由 `ExecRunner` 内的 `ExecSubagentPool` 处理（池状态与控制入口在 `subagent/mod.rs`，子轮上下文装配与图片归档在 `subagent/turn.rs`，等待续等与终态结算在 `subagent/settle.rs`）：
 1. **并发控制**：严格执行 `MAX_CONCURRENT_SUBAGENTS = 3`（运行中子 agent 达 3 个时返回 `LIMIT_REACHED_CODE`）。
 2. **独立隔离**：每个子 agent 拥有：
    - 独立的 SQLite 子会话（`database.begin_subagent_turn_with_items`，`source = 'subagent'`）；
    - 独立的 `ProcessManager` 与 `ReadRegistry`（通过 `crate::chat::tools::read_registry(&child_session_id)`）；
    - 按角色裁剪的 `ToolSurface::from_role(role)`（`Explorer` 仅 3 个只读工具，`Executor` 7 个工具，均无控制工具，杜绝递归）。
 3. **等待与结算（`wait_agent`）**：
-   - 挂起等待通道 `PendingWait { targets, mode, deadline, reply }`；
-   - 当任一目标子 agent 结束（或全部结束、或 `tokio::time::sleep_until(deadline)` 到期）时唤醒，读取子会话最终报告 `ReportPayload`，标记 `mark_report_delivered` 并构造 `SubagentOutcome::Waited` 返回给主 agent。
+   - 挂起等待通道 `PendingWait { targets, mode, auto_continue, timeout_ms, deadline, reply }`；
+   - 当任一目标子 agent 结束（或全部结束、或 `tokio::time::sleep_until(deadline)` 到期）时唤醒，读取子会话最终报告 `ReportPayload`，标记 `mark_report_delivered` 并构造 `SubagentOutcome::Waited` 返回给主 agent；
+   - `wait_agent(all)` 且 `mode == WaitMode::All` 时启用 `auto_continue`：单次超时到期但仍有目标在途时自动重新派生等待任务，不向模型返回 `timed_out: true`；
+   - `send_input(interrupt = true)` 打断运行中子轮时记录 `interrupted` 标记，`finish` 据此立即调度队首排队输入；`close_agent` 时清理该标记，避免被取消的子轮继续消费队列。
 4. **主轮结束清理**：
    - 当主 agent 轮次结束或收到 `Ctrl+C` 时，对所有仍在运行的子 agent 发送 `cancel.send(true)`，等待其异步任务收尾并关闭其专属 `ProcessManager`。
+
+### 5.4 Review 修复后的装配与结算约束（P0-2 / P0-3 / P1-1 / P1-2 / P1-5）
+
+**主轮自动压缩必须落库检查点**：`ExecLoopEvent::AutoCompact` 分支不再只打印告警，而是由 `commit_main_compact` 读取会话最大 `sequence`、`db.active_checkpoint` 与 `db.session_revision`，构造 `CompactCommit` 后调用 `db.commit_compact(&workspace, &commit)`；落库成功才 `processor.on_warning(...)`，失败向 `reply` 回传 `Err(HostError::Failed)`，让 loop 感知检查点未持久化。`ExecHost` 上不保留 `run_compact_summary` 等无调用方的方法与字段。
+
+**最终回复只认最后一个工具之后的文本**：`ExecRunner` 维护 `last_tool_position: Option<i64>`（工具启动时更新为当前 `position`）。`final_message()` 仅在 `TurnOutcome::Complete` 且 `part.position > last_tool_position` 时提取最后一个非空 `PartKind::Text`；工具前的说明文字已在工具启动时刷到 `stderr`，不再重复写入 `stdout` / `-o` 文件。
+
+**冷启动装配顺序**：`run_main` 先构建 Tokio 多线程 runtime，再在运行时内 `block_on(mcp_snapshot_for_turn_async(...))`（内部调用 `McpManager::snapshot_for(&workspace, &servers, cancel)` 等待 MCP 握手完成）取得真实快照，最后才调用 `assemble_exec_turn_with_snapshot` 开轮装配；不得在 runtime 创建前或依赖后台 `prewarm` 拿快照。
+
+**路径与上下文基准**：`-i / --image` 相对路径一律按解析后的 `-C` 目录以 `cwd.join(path)` 加载；`linked_worktree` 缺省时在开发环境按 `cwd` 调用 `git::linked_worktree_root` 推导隔离库；`assemble_exec_turn_with_snapshot` 调用 `hydrate_turn_images` 水合历史轮次图片（模型不支持图片时降级为 `ERROR: Cannot read "..."` 文本），并在装配时注入 `skills_catalog_prompt(workspace, false)` 与用户 `$skill` 点名正文块。
+
+文件变更持久化桥独立在 `mutation.rs`：worker 在路径锁内同步等待 `ExecMutationEvent::Prepare` / `Commit` 回执，事件循环消失时按取消收尾，避免 worker 永久阻塞。
 
 ---
 
@@ -799,7 +856,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
    - 在 `--json` 模式下，`stdout` 每一行必须是合法的单行 `ThreadEvent` JSON 对象。
 5. **生产代码质量红线**：
    - 生产代码严禁出现 `unwrap()` / `expect()`；
-   - 单文件行数严格 ≤ 1000 行（各子模块控制在 300~520 行）；
+   - 生产代码单文件行数严格 ≤ 1000 行（按职责拆分子模块）；测试文件跟随被测子模块拆分，单文件 < 1000 行；
    - 所有模型可见文本与终端用户可见文案（CLI help、报错提示、进度标签）一律使用英文，中文仅用于代码注释与 `tracing` 说明。
 
 ---
@@ -813,10 +870,10 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
    - `exec resume sess-123 "continue"`、`exec resume --last "continue"` 解析
    - 非法 flag、`--ephemeral` 与 `resume` 互斥、空 prompt、TTY 下未传 prompt 的报错信息断言
    - `resolve_prompt_input`：仅位置参数、仅管道 stdin、`"-"` 强制 stdin、位置参数 + 管道 stdin 自动拼接 `<stdin>...</stdin>`
-2. **输出处理器测试（`src/chat/agent/exec/tests/processor_tests.rs`）**：
+2. **输出处理器与事件映射测试（`src/chat/agent/exec/tests/processor_tests.rs` & `events_tests.rs`）**：
    - `HumanOutputProcessor`：捕获内存 `stderr` 与 `stdout` 缓冲区，验证 `stdout_is_terminal = false` 时过程全在 `stderr`、`stdout` 仅有最终回复正文；验证 `--color never` 下不含 `\x1b[` ANSI 转义序列
    - `-o / --output-last-message`：验证最终回复原子写入目标文件
-   - `JsonlOutputProcessor`：验证输出的每一行均可反序列化为 `ThreadEvent`，顺序符合 `thread.started` → `turn.started` → `item.*` → `turn.completed`
+   - `JsonlOutputProcessor`：验证输出的每一行均可反序列化为 `ThreadEvent`，顺序符合 `thread.started` → `turn.started` → `item.*` → `turn.completed`，且同一 `call_id` 的 `item.started` / `item.completed` 共享同一 `item.id`
 3. **工具面与 Schema 测试（`src/chat/agent/tests.rs` & `src/chat/transport/tools/tests.rs`）**：
    - `ToolSurface::ExecMain.names()` 包含 16 项，确切不含 `"ask"`，包含 `"spawn_agent"` 等全部 16 项
    - 四种协议（OpenAI / Responses / Anthropic / Google）在 `ExecMain` 下生成的工具声明不含 `"ask"`
@@ -829,6 +886,10 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
      - `--ephemeral` 模式 → 磁盘 DB 无新增会话，内存正常跑完
      - `exec resume --last` → 在第一轮会话基础上续跑第二轮，`turn_index` 递增且历史上下文可回放
      - `Ctrl+C` 取消信号触发 → 在途轮次立即中断，DB 状态为 `interrupted`，返回退出码 `130`
+5. **子 Agent 池测试（`src/chat/agent/exec/tests/subagent_tests.rs`）**：
+   - `wait_agent(all)` 超时且仍有在途子轮 → `auto_continue` 续等，不返回 `timed_out`
+   - `send_input(interrupt = true)` 打断活跃子轮后，排队输入在 `finish` 中立即调度；`close_agent` 后不再消费队列
+   - 并发上限、`resume_agent`、`cancel_agent_input` 与报告领取路径
 
 ---
 
@@ -858,7 +919,7 @@ Phase 2: CLI 解析器（src/chat/agent/exec/cli.rs）+ Stdin 合成 + 单元测
 Phase 3: 输出事件与双模式处理器（events.rs + processor.rs：Human / JSONL / -o 文件落盘）
    │
    ▼
-Phase 4: 无头宿主与子 Agent 调度（runner.rs + subagent.rs：ExecHost + ExecRunner + ExecSubagentPool）
+Phase 4: 无头宿主与子 Agent 调度（runner.rs + mutation.rs + subagent/{mod,turn,settle}.rs：ExecHost + ExecRunner + ExecSubagentPool）
    │
    ▼
 Phase 5: 顶层编排与入口接线（exec/mod.rs + src/main.rs）+ 端到端回归测试

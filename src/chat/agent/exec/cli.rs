@@ -349,7 +349,9 @@ impl ExecParser {
     fn push_positional(&mut self, value: String) -> Result<(), String> {
         if let Some(resume) = self.resume.as_mut() {
             if resume.last {
-                if resume.prompt.is_some() {
+                // `resume --last` 之后的位置参数只可能是提示词；把 `sess-` 开头的
+                // 会话 ID 当提示词是笔误，直接拒绝而不是发给模型。
+                if resume.prompt.is_some() || value.starts_with("sess-") {
                     return Err("cannot specify both '--last' and a session ID".to_string());
                 }
                 resume.prompt = Some(value);
@@ -459,10 +461,11 @@ fn split_images(raw: &OsStr, flag: &str) -> Result<Vec<PathBuf>, String> {
     };
     text.split(',')
         .map(|part| {
-            if part.trim().is_empty() {
+            let trimmed = part.trim();
+            if trimmed.is_empty() {
                 Err(format!("empty image path in '{text}'"))
             } else {
-                Ok(PathBuf::from(part))
+                Ok(PathBuf::from(trimmed))
             }
         })
         .collect()

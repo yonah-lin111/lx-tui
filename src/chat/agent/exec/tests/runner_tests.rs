@@ -1,305 +1,28 @@
-//! `exec` 运行器端到端测试：脚本化模型流驱动真实数据库、真实工具与子 agent。
+//! `exec` 运行器端到端测试：脚本化模型流驱动真实数据库、真实工具与真实装配路径。
 //!
-//! 不触网：模型流由 [`ScriptedFactory`] 按请求用途（主轮 / 子 agent 轮）回放脚本。
-//! 其余全部走生产路径——`assemble_exec_turn` 装配、`run_exec_turn` 事件循环、
-//! `AgentTools` 真实文件 IO 与 SQLite 落库。
+//! 不触网：模型流由 [`ScriptedFactory`] 回放脚本；其余全部走生产路径。
+//! 子 agent 协同场景见 `subagent_tests`。
 
-use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use tokio::sync::watch;
 
-use super::super::cli::{ExecModelTarget, ResumeArgs};
-use super::super::runner::{BoxStreamFuture, ExecStreamFactory};
+use super::super::cli::ResumeArgs;
+use super::super::runner::ExecStreamFactory;
 use super::super::{
-    ExecTurnConfig, HumanOutputProcessor, JsonlOutputProcessor, RealStreamFactory,
-    assemble_exec_turn_with_snapshot, resolve_resume_session, run_exec_turn,
+    HumanOutputProcessor, JsonlOutputProcessor, RealStreamFactory, resolve_resume_session,
+    run_exec_turn,
+};
+use super::fixtures::{
+    ScriptedFactory, Step, TestDir, assemble, assemble_images, image_model_target, manual_turn,
+    manual_turn_with, model_target, session_messages, text_step, tool_result_texts, tool_step,
+    tool_step_with_text, write_test_png,
 };
 use crate::chat::agent::EXEC_ASK_UNSUPPORTED_CODE;
-use crate::chat::agent_loop::{ModelContext, TurnOutcome};
-use crate::chat::client::StreamOutcome;
-use crate::chat::events::{
-    ChatDelta, ChatRequest, ChatTurn, ModelItem, ModelStepStop, PartDelta, PartKind,
-    RequestPurpose, StopReason,
-};
+use crate::chat::agent_loop::TurnOutcome;
+use crate::chat::events::{ModelItem, RequestPurpose, StopReason};
 use crate::db::Database;
-
-// ===== 夹具 =====
-
-/// 每个测试独立的临时目录（仓库未引入 `tempfile` 依赖）。
-struct TestDir {
-    path: PathBuf,
-}
-
-impl TestDir {
-    fn new(label: &str) -> Self {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|value| value.as_nanos())
-            .unwrap_or_default();
-        let path = std::env::temp_dir().join(format!(
-            "lx-exec-runner-{}-{label}-{nanos}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&path).expect("create temp dir");
-        Self { path }
-    }
-
-    fn join(&self, name: &str) -> PathBuf {
-        self.path.join(name)
-    }
-}
-
-impl Drop for TestDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
-
-fn model_target() -> ExecModelTarget {
-    ExecModelTarget {
-        provider: "test-provider".to_string(),
-        model: "test-model".to_string(),
-        variant: None,
-        display_name: "Test Model".to_string(),
-        transport: "openai".to_string(),
-        base_url: "http://127.0.0.1:1".to_string(),
-        api_key: "test-key".to_string(),
-        context_limit: Some(200_000),
-        output_limit: Some(8_192),
-        variant_params: None,
-        idle_timeout_ms: 1_000,
-        supports_image_input: false,
-    }
-}
-
-/// 一次脚本化模型响应。
-enum Step {
-    Response {
-        deltas: Vec<ChatDelta>,
-        stop: StopReason,
-    },
-    /// 只等取消（`Ctrl+C` 中断测试）。
-    Hang,
-}
-
-fn text_step(text: &str) -> Step {
-    Step::Response {
-        deltas: vec![
-            ChatDelta::Part(PartDelta {
-                kind: PartKind::Text,
-                text: text.to_string(),
-                metadata: None,
-            }),
-            ChatDelta::ResponseFinished {
-                stop: ModelStepStop::Final,
-            },
-            ChatDelta::Finished {
-                reason: StopReason::Complete,
-            },
-        ],
-        stop: StopReason::Complete,
-    }
-}
-
-/// 一次要求执行工具的响应；`calls` 为 `(call_id, 工具名, 参数 JSON)`。
-fn tool_step(calls: &[(&str, &str, &str)]) -> Step {
-    let mut deltas = Vec::new();
-    for (ordinal, (call_id, name, arguments)) in calls.iter().enumerate() {
-        deltas.push(ChatDelta::ToolInputStarted {
-            call_id: (*call_id).to_string(),
-            name: (*name).to_string(),
-            ordinal,
-        });
-        deltas.push(ChatDelta::ToolInputDelta {
-            call_id: (*call_id).to_string(),
-            chunk: (*arguments).to_string(),
-        });
-        deltas.push(ChatDelta::ToolInputEnded {
-            call_id: (*call_id).to_string(),
-            arguments_json: (*arguments).to_string(),
-        });
-    }
-    deltas.push(ChatDelta::ResponseFinished {
-        stop: ModelStepStop::ToolCalls,
-    });
-    deltas.push(ChatDelta::Finished {
-        reason: StopReason::Complete,
-    });
-    Step::Response {
-        deltas,
-        stop: StopReason::Complete,
-    }
-}
-
-/// 脚本化模型流：主轮与子 agent 轮各自一条队列，顺带记录全部请求快照。
-#[derive(Default)]
-struct ScriptedFactory {
-    main: Mutex<VecDeque<Step>>,
-    subagent: Mutex<VecDeque<Step>>,
-    requests: Mutex<Vec<ChatRequest>>,
-}
-
-impl ScriptedFactory {
-    fn new(main: Vec<Step>, subagent: Vec<Step>) -> Arc<Self> {
-        Arc::new(Self {
-            main: Mutex::new(main.into()),
-            subagent: Mutex::new(subagent.into()),
-            requests: Mutex::new(Vec::new()),
-        })
-    }
-
-    fn requests(&self) -> Vec<ChatRequest> {
-        self.requests
-            .lock()
-            .map(|requests| requests.clone())
-            .unwrap_or_default()
-    }
-
-    fn main_requests(&self) -> Vec<ChatRequest> {
-        self.requests()
-            .into_iter()
-            .filter(|request| !matches!(request.purpose, RequestPurpose::Subagent(_)))
-            .collect()
-    }
-
-    fn take(&self, purpose: RequestPurpose) -> Step {
-        let queue = match purpose {
-            RequestPurpose::Subagent(_) => &self.subagent,
-            _ => &self.main,
-        };
-        queue
-            .lock()
-            .ok()
-            .and_then(|mut queue| queue.pop_front())
-            .unwrap_or(Step::Response {
-                deltas: Vec::new(),
-                stop: StopReason::Failed {
-                    code: "script exhausted".to_string(),
-                },
-            })
-    }
-}
-
-impl ExecStreamFactory for ScriptedFactory {
-    fn stream(
-        &self,
-        _model: &ExecModelTarget,
-        request: ChatRequest,
-        cancel: watch::Receiver<bool>,
-        mut on_delta: Box<dyn FnMut(&[ChatDelta]) + Send>,
-    ) -> BoxStreamFuture {
-        if let Ok(mut requests) = self.requests.lock() {
-            requests.push(request.clone());
-        }
-        let step = self.take(request.purpose);
-        Box::pin(async move {
-            match step {
-                Step::Response { deltas, stop } => {
-                    on_delta(&deltas);
-                    StreamOutcome { deltas, stop }
-                }
-                Step::Hang => hang_until_cancelled(cancel).await,
-            }
-        })
-    }
-}
-
-async fn hang_until_cancelled(mut cancel: watch::Receiver<bool>) -> StreamOutcome {
-    while !*cancel.borrow() {
-        if cancel.changed().await.is_err() {
-            // 发送端已释放：不会再有取消，按失败收尾而不是无限等待。
-            return StreamOutcome {
-                deltas: Vec::new(),
-                stop: StopReason::Failed {
-                    code: "script hang released".to_string(),
-                },
-            };
-        }
-    }
-    StreamOutcome {
-        deltas: Vec::new(),
-        stop: StopReason::Cancelled,
-    }
-}
-
-/// 走生产装配路径（MCP 快照注入空实现，测试不启动任何 server）。
-fn assemble(
-    db: &Database,
-    dir: &TestDir,
-    prompt: &str,
-    existing_session: Option<&str>,
-) -> ExecTurnConfig {
-    assemble_exec_turn_with_snapshot(
-        db,
-        &dir.path,
-        &dir.path,
-        existing_session,
-        prompt,
-        &[],
-        &model_target(),
-        Arc::new(crate::mcp::McpToolSnapshot::default()),
-    )
-    .expect("assemble exec turn")
-}
-
-/// 手工装配一轮（工具面可覆盖）：用于验证 exec 宿主自己的 `ask` 兜底。
-fn manual_turn(db: &Database, dir: &TestDir, prompt: &str) -> ExecTurnConfig {
-    let model = model_target();
-    let committed = db
-        .begin_turn(&dir.path, None, prompt, &model.snapshot())
-        .expect("begin turn");
-    let request = ChatRequest {
-        turns: vec![ChatTurn {
-            role: "user".into(),
-            text: prompt.to_string(),
-            reasoning_metadata: None,
-        }],
-        items: vec![ModelItem::UserText(prompt.to_string())],
-        model: model.snapshot(),
-        variant_params: None,
-        purpose: RequestPurpose::ExecTurn,
-        system_prompt: Some("test system prompt".to_string()),
-        tools: Arc::new(crate::chat::tools::builtin_tools(
-            crate::chat::agent::ToolSurface::Main,
-        )),
-    };
-    ExecTurnConfig {
-        workspace: dir.path.clone(),
-        cwd: dir.path.clone(),
-        session_id: committed.session_id,
-        user_message_id: committed.user_message_id,
-        assistant_id: committed.assistant_message_id,
-        prompt_display: prompt.to_string(),
-        model,
-        context: ModelContext::new(request, dir.path.clone()),
-        exa_api_key: String::new(),
-        tavily_api_key: String::new(),
-        mcp_snapshot: Arc::new(crate::mcp::McpToolSnapshot::default()),
-    }
-}
-
-fn session_messages(
-    db: &Database,
-    workspace: &Path,
-    session_id: &str,
-) -> Vec<crate::db::chat::ChatMessage> {
-    db.load_chat_session(workspace, session_id)
-        .expect("load session")
-        .expect("session exists")
-}
-
-fn tool_result_texts(request: &ChatRequest) -> Vec<String> {
-    request
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            ModelItem::ToolResult { content, .. } => Some(content.clone()),
-            _ => None,
-        })
-        .collect()
-}
 
 // ===== 1. 单步纯文本 =====
 
@@ -491,107 +214,7 @@ async fn exec_host_rejects_ask_with_the_stable_exec_code() {
     );
 }
 
-// ===== 4. 子 agent 协同 =====
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explorer_subagent_reads_a_file_and_reports_back() {
-    let dir = TestDir::new("subagent");
-    let notes = dir.join("notes.txt");
-    std::fs::write(&notes, "the answer is 42\n").expect("write notes");
-
-    let db = Database::open_in_memory().expect("in-memory db");
-    let spawn_args = r#"{"role":"explorer","title":"scan notes","task":"read notes.txt and report what it says"}"#;
-    let wait_args = r#"{"timeout_ms":10000}"#;
-    let read_args = format!(r#"{{"path":"{}"}}"#, notes.display());
-    let config = assemble(&db, &dir, "delegate the reading to an explorer", None);
-    let session_id = config.session_id.clone();
-    let factory = ScriptedFactory::new(
-        vec![
-            tool_step(&[("call-spawn", "spawn_agent", spawn_args)]),
-            tool_step(&[("call-wait", "wait_agent", wait_args)]),
-            text_step("parent finished"),
-        ],
-        vec![
-            tool_step(&[("child-read", "read", read_args.as_str())]),
-            text_step("report from scanner: notes say the answer is 42"),
-        ],
-    );
-
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
-    let (_cancel_tx, cancel_rx) = watch::channel(false);
-    let summary = run_exec_turn(&db, config, &mut processor, factory.clone(), cancel_rx).await;
-
-    assert_eq!(summary.outcome, TurnOutcome::Complete);
-    assert_eq!(stdout, b"parent finished\n");
-
-    let requests = factory.requests();
-    let child_requests = requests
-        .iter()
-        .filter(|request| matches!(request.purpose, RequestPurpose::Subagent(_)))
-        .count();
-    assert_eq!(child_requests, 2, "child turns: {child_requests}");
-    let main = factory.main_requests();
-    assert_eq!(main.len(), 3, "parent turns: {}", main.len());
-    let waited = tool_result_texts(&main[2]);
-    assert!(
-        waited
-            .iter()
-            .any(|text| text.contains("report from scanner: notes say the answer is 42")),
-        "wait_agent results: {waited:?}"
-    );
-
-    // 父会话完整：spawn / wait 两条工具记录都已结算。
-    let messages = session_messages(&db, &dir.path, &session_id);
-    let names: Vec<&str> = messages
-        .iter()
-        .flat_map(|message| message.tools.iter())
-        .map(|tool| tool.name.as_str())
-        .collect();
-    assert_eq!(names, ["spawn_agent", "wait_agent"]);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawning_a_fourth_concurrent_subagent_is_rejected_with_limit_reached() {
-    let dir = TestDir::new("subagent-limit");
-    let db = Database::open_in_memory().expect("in-memory db");
-    let spawn_1 = r#"{"role":"explorer","title":"a1","task":"task 1"}"#;
-    let spawn_2 = r#"{"role":"explorer","title":"a2","task":"task 2"}"#;
-    let spawn_3 = r#"{"role":"explorer","title":"a3","task":"task 3"}"#;
-    let spawn_4 = r#"{"role":"explorer","title":"a4","task":"task 4"}"#;
-    let config = assemble(&db, &dir, "spawn four explorers", None);
-    let factory = ScriptedFactory::new(
-        vec![
-            tool_step(&[
-                ("call-s1", "spawn_agent", spawn_1),
-                ("call-s2", "spawn_agent", spawn_2),
-                ("call-s3", "spawn_agent", spawn_3),
-                ("call-s4", "spawn_agent", spawn_4),
-            ]),
-            text_step("observed limit"),
-        ],
-        // 3 个子 agent 全部挂起直到主轮结束被清理，确保第 4 个 spawn 时前 3 个仍在运行。
-        vec![Step::Hang, Step::Hang, Step::Hang],
-    );
-
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
-    let (_cancel_tx, cancel_rx) = watch::channel(false);
-    let summary = run_exec_turn(&db, config, &mut processor, factory.clone(), cancel_rx).await;
-
-    assert_eq!(summary.outcome, TurnOutcome::Complete);
-    let main = factory.main_requests();
-    assert_eq!(main.len(), 2);
-    let results = tool_result_texts(&main[1]);
-    assert_eq!(results.len(), 4, "results: {results:?}");
-    assert!(
-        results[3].contains(crate::chat::agent::LIMIT_REACHED_CODE),
-        "4th spawn result: {}",
-        results[3]
-    );
-}
+// ===== 4. 临时内存库 =====
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ephemeral_in_memory_turn_does_not_touch_the_disk_database() {
@@ -828,6 +451,231 @@ async fn cancel_interrupts_an_in_flight_turn_and_persists_it() {
     let events = String::from_utf8(output).expect("utf8");
     assert!(events.contains("\"type\":\"turn.failed\""), "{events}");
     assert!(events.contains("turn interrupted"), "{events}");
+}
+
+// ===== 7. Review 回归（P0-2 / P0-3 / P1-1 / P1-2 / P1-5）=====
+
+/// P0-2：主 runner 收到 `AutoCompact` 必须把摘要落成检查点，而不是只打印告警。
+///
+/// 自动压缩只在子 agent 上下文启用；这里让同一主 runner 执行该上下文的轮次，
+/// 直接覆盖 `ExecLoopEvent::AutoCompact` 的持久化分支。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn main_turn_auto_compact_persists_a_checkpoint() {
+    let dir = TestDir::new("auto-compact");
+    let db = Database::open_in_memory().expect("in-memory db");
+    let config = manual_turn_with(
+        &db,
+        &dir,
+        "investigate the directory",
+        RequestPurpose::Subagent(crate::chat::agent::AgentRole::Explorer),
+        Some(1),
+    );
+    let session_id = config.session_id.clone();
+    // 上下文按 Subagent 用途路由：主轮采样走子 agent 队列，摘要请求走主队列。
+    let factory = ScriptedFactory::new(
+        vec![text_step("summary of the investigation")],
+        vec![
+            tool_step(&[("call-read", "read", r#"{"path":"."}"#)]),
+            text_step("done"),
+        ],
+    );
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let summary = run_exec_turn(&db, config, &mut processor, factory, cancel_rx).await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    let checkpoints = db
+        .compact_checkpoints(&dir.path, &session_id)
+        .expect("compact checkpoints");
+    assert_eq!(checkpoints.len(), 1, "checkpoints: {checkpoints:?}");
+    assert_eq!(checkpoints[0].summary_text, "summary of the investigation");
+    assert!(checkpoints[0].is_active());
+}
+
+/// P0-3 + P1-5：相对 `-i` 按 `-C` 解析；resume 时历史图片必须回填字节，
+/// 切换到不支持图片的模型时降级为显式提示文本。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_hydrates_historical_images_and_degrades_for_text_only_models() {
+    let dir = TestDir::new("resume-images");
+    let db = Database::open_in_memory().expect("in-memory db");
+    write_test_png(&dir.join("rel.png"));
+
+    let image_model = image_model_target();
+    let first = assemble_images(
+        &db,
+        &dir,
+        "first image question",
+        None,
+        &[PathBuf::from("rel.png")],
+        &image_model,
+    );
+    let session_id = first.session_id.clone();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let summary = run_exec_turn(
+        &db,
+        first,
+        &mut processor,
+        ScriptedFactory::new(vec![text_step("first answer")], Vec::new()),
+        cancel_rx,
+    )
+    .await;
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+
+    // 图片模型 resume：历史 UserContent 带回非空图片字节。
+    let second = assemble_images(
+        &db,
+        &dir,
+        "second question",
+        Some(&session_id),
+        &[],
+        &image_model,
+    );
+    let factory = ScriptedFactory::new(vec![text_step("second answer")], Vec::new());
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let summary = run_exec_turn(&db, second, &mut processor, factory.clone(), cancel_rx).await;
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+
+    let request = &factory.main_requests()[0];
+    let images = request
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ModelItem::UserContent { text, images } if text == "first image question" => {
+                Some(images.clone())
+            }
+            _ => None,
+        })
+        .expect("historical user content with images");
+    assert!(!images.is_empty(), "history images must be hydrated");
+    assert!(!images[0].bytes.is_empty(), "image bytes must be non-empty");
+    assert_eq!(images[0].mime, "image/png");
+
+    // 文本模型 resume：历史图片降级为提示文本，且当前轮仍可正常发送。
+    let third = assemble_images(
+        &db,
+        &dir,
+        "third question",
+        Some(&session_id),
+        &[],
+        &model_target(),
+    );
+    let factory = ScriptedFactory::new(vec![text_step("third answer")], Vec::new());
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let summary = run_exec_turn(&db, third, &mut processor, factory.clone(), cancel_rx).await;
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+
+    let degraded = factory.main_requests()[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ModelItem::UserText(text) if text.starts_with("first image question") => {
+                Some(text.clone())
+            }
+            _ => None,
+        })
+        .expect("degraded historical text");
+    assert!(degraded.contains("ERROR: Cannot read"), "{degraded}");
+    assert!(
+        degraded.contains("does not support image input"),
+        "{degraded}"
+    );
+    crate::platform::remove_session_images(&session_id);
+}
+
+/// P1-1：项目 skill 目录进入系统提示，`$skill-name` 正文作为当轮块注入。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_skill_catalog_and_dollar_reference_are_injected() {
+    let dir = TestDir::new("skills");
+    let db = Database::open_in_memory().expect("in-memory db");
+    let root = crate::config::skills::project_skills_root(&dir.path).expect("project skills root");
+    let skill_dir = root.join("my-skill");
+    std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: my-skill\ndescription: Handle the special task.\n---\nUse the special procedure.\n",
+    )
+    .expect("write skill");
+
+    let config = assemble(&db, &dir, "please use $my-skill now", None);
+    let factory = ScriptedFactory::new(vec![text_step("skill applied")], Vec::new());
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let summary = run_exec_turn(&db, config, &mut processor, factory.clone(), cancel_rx).await;
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+
+    let request = &factory.main_requests()[0];
+    let system = request.system_prompt.as_deref().unwrap_or_default();
+    assert!(system.contains("## Skills"), "{system}");
+    assert!(system.contains("my-skill"), "{system}");
+    assert!(
+        request.items.iter().any(|item| matches!(
+            item,
+            ModelItem::UserText(text)
+                if text.contains("<skill>")
+                    && text.contains("<name>my-skill</name>")
+                    && text.contains("Use the special procedure.")
+        )),
+        "items: {:?}",
+        request.items
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// P1-2：工具前说明只作为中间步骤输出，失败轮次不得把它当最终回复写 stdout/-o。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_preamble_text_is_not_reused_as_the_final_message() {
+    let dir = TestDir::new("tool-preamble");
+    let db = Database::open_in_memory().expect("in-memory db");
+    let config = assemble(&db, &dir, "inspect the directory", None);
+    let factory = ScriptedFactory::new(
+        vec![
+            tool_step_with_text(
+                "I will run a tool",
+                &[("call-read", "read", r#"{"path":"."}"#)],
+            ),
+            Step::Response {
+                deltas: Vec::new(),
+                stop: StopReason::Failed {
+                    code: "stream failed".to_string(),
+                },
+            },
+        ],
+        Vec::new(),
+    );
+    let last_message = dir.join("final.txt");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut processor = HumanOutputProcessor::new(
+        &mut stdout,
+        &mut stderr,
+        false,
+        false,
+        Some(last_message.clone()),
+    );
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let summary = run_exec_turn(&db, config, &mut processor, factory, cancel_rx).await;
+
+    assert!(matches!(summary.outcome, TurnOutcome::Failed { .. }));
+    assert_eq!(stdout, b"");
+    assert_eq!(
+        std::fs::read_to_string(&last_message).unwrap_or_default(),
+        ""
+    );
+    let progress = String::from_utf8(stderr).expect("utf8");
+    assert!(progress.contains("I will run a tool"), "{progress}");
 }
 
 // 真实网络流只在生产路径用到：此处仅锁定它仍可被构造成 trait object。

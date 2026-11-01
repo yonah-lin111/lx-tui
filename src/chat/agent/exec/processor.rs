@@ -8,6 +8,7 @@
 //!
 //! 两个处理器都通过泛型 `Write` 注入输出句柄，单元测试用 `Vec<u8>` 捕获字节。
 
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -175,13 +176,12 @@ impl<WOut: Write + Send, WErr: Write + Send> ExecEventProcessor
         if text.trim().is_empty() {
             return;
         }
-        match &mut self.pending_text {
-            Some(existing) => {
-                existing.push_str("\n\n");
-                existing.push_str(text);
-            }
-            None => self.pending_text = Some(text.to_string()),
+        // 每次回调都是一段已闭合正文：前一段没有别的机会输出，先按中间步骤落盘，
+        // 只把最新一段留作最终回复候选。
+        if self.pending_text.is_some() {
+            self.flush_pending_text();
         }
+        self.pending_text = Some(text.to_string());
     }
 
     fn on_tool_started(&mut self, call: &ReadyToolCall) {
@@ -266,6 +266,9 @@ pub struct JsonlOutputProcessor<WOut: Write + Send> {
     last_message_file: Option<PathBuf>,
     next_item_id: u64,
     last_emitted_text: Option<String>,
+    /// 在途工具调用：`call.call_id -> item.id`，保证同一调用的
+    /// `item.started` 与 `item.completed` 携带相同且稳定的 id。
+    active_tool_items: HashMap<String, String>,
 }
 
 impl<WOut: Write + Send> JsonlOutputProcessor<WOut> {
@@ -275,6 +278,7 @@ impl<WOut: Write + Send> JsonlOutputProcessor<WOut> {
             last_message_file,
             next_item_id: 0,
             last_emitted_text: None,
+            active_tool_items: HashMap::new(),
         }
     }
 
@@ -297,13 +301,17 @@ impl<WOut: Write + Send> JsonlOutputProcessor<WOut> {
         self.stdout.flush()
     }
 
-    fn next_item(&mut self, details: super::events::ThreadItemDetails) -> ThreadItem {
-        let item = ThreadItem {
-            id: format!("item_{}", self.next_item_id),
-            details,
-        };
+    fn next_item_id(&mut self) -> String {
+        let id = format!("item_{}", self.next_item_id);
         self.next_item_id = self.next_item_id.saturating_add(1);
-        item
+        id
+    }
+
+    fn next_item(&mut self, details: super::events::ThreadItemDetails) -> ThreadItem {
+        ThreadItem {
+            id: self.next_item_id(),
+            details,
+        }
     }
 }
 
@@ -334,12 +342,25 @@ impl<WOut: Write + Send> ExecEventProcessor for JsonlOutputProcessor<WOut> {
     }
 
     fn on_tool_started(&mut self, call: &ReadyToolCall) {
-        let item = self.next_item(item_details_for_start(call));
+        let id = self.next_item_id();
+        self.active_tool_items
+            .insert(call.call_id.clone(), id.clone());
+        let item = ThreadItem {
+            id,
+            details: item_details_for_start(call),
+        };
         self.emit(&ThreadEvent::ItemStarted { item });
     }
 
     fn on_tool_finished(&mut self, call: &ReadyToolCall, outcome: &ToolOutcome, _duration_ms: i64) {
-        let item = self.next_item(item_details_for_finish(call, outcome));
+        let id = match self.active_tool_items.remove(&call.call_id) {
+            Some(id) => id,
+            None => self.next_item_id(),
+        };
+        let item = ThreadItem {
+            id,
+            details: item_details_for_finish(call, outcome),
+        };
         self.emit(&ThreadEvent::ItemCompleted { item });
     }
 

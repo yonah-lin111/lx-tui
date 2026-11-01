@@ -1,27 +1,24 @@
-//! `exec` 输出层测试：人类模式 stdout/stderr 分流、JSONL 事件序列与工具 → 事件映射。
+//! `exec` 输出层测试：人类模式 stdout/stderr 分流与 JSONL 事件序列。
+//!
+//! 工具结果夹具与 `events_tests` 共用（后者复用本文件的构造器）。
 
 use std::path::PathBuf;
 
-use super::super::events::{
-    ExecUsage, FileChangeEntry, ItemStatus, ThreadEvent, ThreadItemDetails, format_tool_header,
-    format_tool_outcome_line, item_details_for_finish, item_details_for_start,
-};
+use super::super::events::{ExecUsage, ItemStatus, ThreadEvent, ThreadItemDetails};
 use super::super::processor::{
     ExecEventProcessor, HumanOutputProcessor, JsonlOutputProcessor, SessionHeader,
 };
-use crate::chat::agent::{AgentRole, SubagentOutcome};
+use crate::chat::agent::{AgentListItemView, AgentRole, AgentStatusView, SubagentOutcome};
 use crate::chat::agent_loop::{ReadyToolCall, ToolOutcome, TurnSummary};
-use crate::chat::plan::{PlanSnapshot, PlanStep, PlanStepStatus};
 use crate::chat::process::{ProcessResult, ProcessResultKind, ProcessState};
 use crate::chat::tools::{
-    FileChange, FileChangeKind, McpToolResult, ReadKind, SearchDepth, ToolErrorCode,
-    ToolExecutionResult, WebSearchProvider, WebSearchToolResult,
+    ReadKind, SearchDepth, ToolExecutionResult, WebSearchProvider, WebSearchToolResult,
 };
 use crate::db::chat::Usage;
 
 // ===== 夹具 =====
 
-fn call(name: &str, arguments: &str) -> ReadyToolCall {
+pub(super) fn call(name: &str, arguments: &str) -> ReadyToolCall {
     ReadyToolCall {
         call_id: format!("call-{name}"),
         name: name.to_string(),
@@ -30,11 +27,11 @@ fn call(name: &str, arguments: &str) -> ReadyToolCall {
     }
 }
 
-fn read_call() -> ReadyToolCall {
+pub(super) fn read_call() -> ReadyToolCall {
     call("read", r#"{"path":"Cargo.toml"}"#)
 }
 
-fn read_result() -> ToolExecutionResult {
+pub(super) fn read_result() -> ToolExecutionResult {
     ToolExecutionResult::Read {
         path: PathBuf::from("/work/Cargo.toml"),
         kind: ReadKind::File,
@@ -49,7 +46,7 @@ fn read_result() -> ToolExecutionResult {
     }
 }
 
-fn process_result(state: ProcessState) -> ToolExecutionResult {
+pub(super) fn process_result(state: ProcessState) -> ToolExecutionResult {
     ToolExecutionResult::Process(Box::new(ProcessResult {
         kind: ProcessResultKind::ExecCommand,
         session_id: 7,
@@ -69,6 +66,48 @@ fn process_result(state: ProcessState) -> ToolExecutionResult {
         chunk_id: "0a1b2c".to_string(),
         wall_time_ms: 420,
     }))
+}
+
+pub(super) fn web_search_result(num_results: usize) -> ToolExecutionResult {
+    ToolExecutionResult::WebSearch(Box::new(WebSearchToolResult {
+        queries: vec!["ratatui".to_string(), "tokio".to_string()],
+        num_results,
+        search_type: SearchDepth::Auto,
+        provider: WebSearchProvider::Exa,
+        outcomes: Vec::new(),
+        text: String::new(),
+        truncated: false,
+        duration_ms: 840,
+    }))
+}
+
+pub(super) fn agent_status(
+    agent_id: &str,
+    role: AgentRole,
+    title: &str,
+    status: &str,
+) -> AgentStatusView {
+    AgentStatusView {
+        agent_id: agent_id.to_string(),
+        title: title.to_string(),
+        role,
+        status: status.to_string(),
+        report: None,
+    }
+}
+
+pub(super) fn agent_list_item(agent_id: &str, role: AgentRole, title: &str) -> AgentListItemView {
+    AgentListItemView {
+        agent_id: agent_id.to_string(),
+        role,
+        title: title.to_string(),
+        status: "completed".to_string(),
+        queued_count: 0,
+    }
+}
+
+pub(super) fn subagent_outcome(outcome: SubagentOutcome) -> ToolOutcome {
+    ToolOutcome::Executed(ToolExecutionResult::Subagent(Box::new(outcome)))
 }
 
 fn usage() -> Usage {
@@ -97,6 +136,15 @@ fn parse_events(bytes: &[u8]) -> Vec<ThreadEvent> {
         .lines()
         .map(|line| serde_json::from_str(line).expect("thread event"))
         .collect()
+}
+
+/// 事件项的工具身份标签（起始与结算用同一份口径比较）。
+fn tool_label(details: &ThreadItemDetails) -> String {
+    match details {
+        ThreadItemDetails::ToolCall { name, .. } => name.clone(),
+        ThreadItemDetails::CommandExecution { command, .. } => command.clone(),
+        other => format!("{other:?}"),
+    }
 }
 
 /// 每个测试独立的临时目录（仓库未引入 `tempfile` 依赖）。
@@ -246,6 +294,28 @@ fn human_intermediate_text_goes_to_stderr() {
     assert!(stderr.contains("lx\nLet me check the manifest first."));
 }
 
+/// 连续两段正文：前一段已闭合、只可能是中间说明，先落 stderr；最终回复不重复。
+#[test]
+fn human_consecutive_text_parts_flush_the_earlier_one() {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    {
+        let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
+        let workdir = PathBuf::from("/work");
+        processor.on_session_started(&header(&workdir));
+        processor.on_assistant_text("Step 1 note");
+        processor.on_assistant_text("Final answer");
+        processor
+            .on_turn_finished(&TurnSummary::complete(usage()), Some("Final answer"))
+            .expect("turn finished");
+    }
+
+    assert_eq!(stdout, b"Final answer\n");
+    let stderr = String::from_utf8(stderr).expect("utf8");
+    assert_eq!(stderr.matches("Step 1 note").count(), 1, "{stderr}");
+    assert!(!stderr.contains("Final answer"), "{stderr}");
+}
+
 /// `-o` 落盘：自动创建父目录，写入纯文本（无额外换行）。
 #[test]
 fn human_writes_last_message_file_atomically() {
@@ -362,7 +432,8 @@ fn jsonl_emits_events_in_the_documented_order() {
     }
     match &events[4] {
         ThreadEvent::ItemCompleted { item } => {
-            assert_eq!(item.id, "item_2");
+            // 同一工具调用的 started/completed 必须共用同一个 item.id。
+            assert_eq!(item.id, "item_1");
             assert!(matches!(
                 &item.details,
                 ThreadItemDetails::ToolCall {
@@ -395,6 +466,61 @@ fn jsonl_emits_events_in_the_documented_order() {
         ),
         other => panic!("expected turn completion, got {other:?}"),
     }
+}
+
+/// 并发工具调用：即使完成顺序与启动顺序相反，各调用仍保持自己的 `item.id`。
+#[test]
+fn jsonl_concurrent_tool_calls_keep_their_item_ids() {
+    let mut stdout = Vec::new();
+    {
+        let mut processor = JsonlOutputProcessor::new(&mut stdout, None);
+        let workdir = PathBuf::from("/work");
+        processor.on_session_started(&header(&workdir));
+        let mut read = read_call();
+        read.call_id = "call-a".to_string();
+        let mut command = call("exec_command", r#"{"cmd":"cargo check"}"#);
+        command.call_id = "call-b".to_string();
+        processor.on_tool_started(&read);
+        processor.on_tool_started(&command);
+        processor.on_tool_finished(
+            &command,
+            &ToolOutcome::Executed(process_result(ProcessState::Exited { code: Some(0) })),
+            30,
+        );
+        processor.on_tool_finished(&read, &ToolOutcome::Executed(read_result()), 12);
+        processor
+            .on_turn_finished(&TurnSummary::complete(usage()), None)
+            .expect("turn finished");
+    }
+
+    let events = parse_events(&stdout);
+    let mut started = Vec::new();
+    let mut completed = Vec::new();
+    for event in &events {
+        match event {
+            ThreadEvent::ItemStarted { item } => {
+                started.push((item.id.clone(), tool_label(&item.details)))
+            }
+            ThreadEvent::ItemCompleted { item } => {
+                completed.push((item.id.clone(), tool_label(&item.details)))
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        started,
+        vec![
+            ("item_0".to_string(), "read".to_string()),
+            ("item_1".to_string(), "cargo check".to_string())
+        ]
+    );
+    assert_eq!(
+        completed,
+        vec![
+            ("item_1".to_string(), "cargo check".to_string()),
+            ("item_0".to_string(), "read".to_string())
+        ]
+    );
 }
 
 #[test]
@@ -497,388 +623,4 @@ fn jsonl_final_message_is_emitted_when_no_assistant_block_was_streamed() {
             if matches!(&item.details, ThreadItemDetails::AgentMessage { text } if text == "only at the end")
     ));
     assert!(matches!(events[3], ThreadEvent::TurnCompleted { .. }));
-}
-
-// ===== 工具 → 事件映射 =====
-
-#[test]
-fn command_execution_is_mapped_from_start_to_finish() {
-    let call = call("exec_command", r#"{"cmd":"cargo check","workdir":"/work"}"#);
-    match item_details_for_start(&call) {
-        ThreadItemDetails::CommandExecution {
-            command,
-            aggregated_output,
-            exit_code,
-            status,
-        } => {
-            assert_eq!(command, "cargo check");
-            assert!(aggregated_output.is_empty());
-            assert_eq!(exit_code, None);
-            assert_eq!(status, ItemStatus::InProgress);
-        }
-        other => panic!("expected command execution, got {other:?}"),
-    }
-
-    let outcome = ToolOutcome::Executed(process_result(ProcessState::Exited { code: Some(0) }));
-    match item_details_for_finish(&call, &outcome) {
-        ThreadItemDetails::CommandExecution {
-            command,
-            aggregated_output,
-            exit_code,
-            status,
-        } => {
-            assert_eq!(command, "cargo check");
-            assert_eq!(aggregated_output, "ok\n");
-            assert_eq!(exit_code, Some(0));
-            assert_eq!(status, ItemStatus::Completed);
-        }
-        other => panic!("expected command execution, got {other:?}"),
-    }
-
-    let timed_out = ToolOutcome::Executed(process_result(ProcessState::TimedOut));
-    match item_details_for_finish(&call, &timed_out) {
-        ThreadItemDetails::CommandExecution { status, .. } => {
-            assert_eq!(status, ItemStatus::Failed);
-        }
-        other => panic!("expected command execution, got {other:?}"),
-    }
-}
-
-#[test]
-fn file_changes_are_mapped_for_edit_and_write() {
-    let edit = call(
-        "edit",
-        "{\"patch\":\"*** Begin Patch\\n*** Update File: a.rs\\n*** Add File: b.rs\\n*** End Patch\"}",
-    );
-    match item_details_for_start(&edit) {
-        ThreadItemDetails::FileChange { changes, status } => {
-            assert_eq!(status, ItemStatus::InProgress);
-            assert_eq!(
-                changes,
-                vec![
-                    FileChangeEntry {
-                        path: "a.rs".to_string(),
-                        kind: "updated".to_string(),
-                    },
-                    FileChangeEntry {
-                        path: "b.rs".to_string(),
-                        kind: "added".to_string(),
-                    },
-                ]
-            );
-        }
-        other => panic!("expected file change, got {other:?}"),
-    }
-
-    let executed = ToolOutcome::Executed(ToolExecutionResult::Edit {
-        changes: vec![FileChange {
-            path: PathBuf::from("/work/a.rs"),
-            added: 2,
-            removed: 1,
-            kind: FileChangeKind::Updated,
-            diff: None,
-        }],
-        partial: false,
-    });
-    match item_details_for_finish(&edit, &executed) {
-        ThreadItemDetails::FileChange { changes, status } => {
-            assert_eq!(status, ItemStatus::Completed);
-            assert_eq!(
-                changes,
-                vec![FileChangeEntry {
-                    path: "/work/a.rs".to_string(),
-                    kind: "updated".to_string(),
-                }]
-            );
-        }
-        other => panic!("expected file change, got {other:?}"),
-    }
-
-    let write = call("write", r#"{"path":"notes.md","content":"x"}"#);
-    let executed = ToolOutcome::Executed(ToolExecutionResult::Write {
-        path: PathBuf::from("/work/notes.md"),
-        created: true,
-        added: 1,
-        removed: 0,
-        diff: None,
-    });
-    match item_details_for_finish(&write, &executed) {
-        ThreadItemDetails::FileChange { changes, status } => {
-            assert_eq!(status, ItemStatus::Completed);
-            assert_eq!(
-                changes,
-                vec![FileChangeEntry {
-                    path: "/work/notes.md".to_string(),
-                    kind: "added".to_string(),
-                }]
-            );
-        }
-        other => panic!("expected file change, got {other:?}"),
-    }
-}
-
-#[test]
-fn web_search_and_plan_are_mapped_to_their_own_shapes() {
-    let search = call("web_search", r#"{"queries":["ratatui","tokio"]}"#);
-    match item_details_for_start(&search) {
-        ThreadItemDetails::WebSearch { query, status } => {
-            assert_eq!(query, "ratatui, tokio");
-            assert_eq!(status, ItemStatus::InProgress);
-        }
-        other => panic!("expected web search, got {other:?}"),
-    }
-    let executed = ToolOutcome::Executed(ToolExecutionResult::WebSearch(Box::new(
-        WebSearchToolResult {
-            queries: vec!["ratatui".to_string(), "tokio".to_string()],
-            num_results: 8,
-            search_type: SearchDepth::Auto,
-            provider: WebSearchProvider::Exa,
-            outcomes: Vec::new(),
-            text: String::new(),
-            truncated: false,
-            duration_ms: 840,
-        },
-    )));
-    match item_details_for_finish(&search, &executed) {
-        ThreadItemDetails::WebSearch { query, status } => {
-            assert_eq!(query, "ratatui, tokio");
-            assert_eq!(status, ItemStatus::Completed);
-        }
-        other => panic!("expected web search, got {other:?}"),
-    }
-
-    let plan = call(
-        "update_plan",
-        r#"{"plan":[{"step":"inspect","status":"completed"}]}"#,
-    );
-    match item_details_for_start(&plan) {
-        ThreadItemDetails::TodoList { items } => {
-            assert_eq!(items.len(), 1);
-            assert_eq!(items[0].step, "inspect");
-            assert_eq!(items[0].status, "completed");
-        }
-        other => panic!("expected todo list, got {other:?}"),
-    }
-    let executed = ToolOutcome::Executed(ToolExecutionResult::Plan(PlanSnapshot {
-        explanation: None,
-        steps: vec![
-            PlanStep {
-                step: "inspect".to_string(),
-                status: PlanStepStatus::Completed,
-            },
-            PlanStep {
-                step: "patch".to_string(),
-                status: PlanStepStatus::InProgress,
-            },
-        ],
-        revision: 1,
-    }));
-    match item_details_for_finish(&plan, &executed) {
-        ThreadItemDetails::TodoList { items } => {
-            assert_eq!(items.len(), 2);
-            assert_eq!(items[1].step, "patch");
-            assert_eq!(items[1].status, "in_progress");
-        }
-        other => panic!("expected todo list, got {other:?}"),
-    }
-}
-
-#[test]
-fn mcp_calls_are_split_into_server_and_tool() {
-    let call = call("mcp__exa__search", r#"{"query":"rust"}"#);
-    match item_details_for_start(&call) {
-        ThreadItemDetails::McpToolCall {
-            server,
-            tool,
-            status,
-            error,
-            ..
-        } => {
-            assert_eq!(server, "exa");
-            assert_eq!(tool, "search");
-            assert_eq!(status, ItemStatus::InProgress);
-            assert!(error.is_none());
-        }
-        other => panic!("expected MCP tool call, got {other:?}"),
-    }
-
-    let executed = ToolOutcome::Executed(ToolExecutionResult::Mcp(Box::new(McpToolResult {
-        server: "exa".to_string(),
-        tool: "search".to_string(),
-        text: "result".to_string(),
-        images: Vec::new(),
-        images_omitted: 0,
-        duration_ms: Some(12),
-        truncated: false,
-    })));
-    match item_details_for_finish(&call, &executed) {
-        ThreadItemDetails::McpToolCall {
-            server,
-            tool,
-            status,
-            error,
-            ..
-        } => {
-            assert_eq!(server, "exa");
-            assert_eq!(tool, "search");
-            assert_eq!(status, ItemStatus::Completed);
-            assert!(error.is_none());
-        }
-        other => panic!("expected MCP tool call, got {other:?}"),
-    }
-
-    let failed = ToolOutcome::Executed(ToolExecutionResult::Failed {
-        code: ToolErrorCode::McpError,
-        message: "server unavailable".to_string(),
-        changes: Vec::new(),
-    });
-    match item_details_for_finish(&call, &failed) {
-        ThreadItemDetails::McpToolCall { status, error, .. } => {
-            assert_eq!(status, ItemStatus::Failed);
-            assert_eq!(error.as_deref(), Some("server unavailable"));
-        }
-        other => panic!("expected MCP tool call, got {other:?}"),
-    }
-}
-
-#[test]
-fn collab_calls_carry_the_agent_identity() {
-    let call = call(
-        "spawn_agent",
-        r#"{"role":"explorer","title":"inspect cli"}"#,
-    );
-    match item_details_for_start(&call) {
-        ThreadItemDetails::CollabToolCall {
-            tool,
-            role,
-            title,
-            status,
-            ..
-        } => {
-            assert_eq!(tool, "spawn_agent");
-            assert_eq!(role.as_deref(), Some("explorer"));
-            assert_eq!(title.as_deref(), Some("inspect cli"));
-            assert_eq!(status, ItemStatus::InProgress);
-        }
-        other => panic!("expected collab tool call, got {other:?}"),
-    }
-
-    let executed = ToolOutcome::Executed(ToolExecutionResult::Subagent(Box::new(
-        SubagentOutcome::Spawned {
-            agent_id: "sub-1".to_string(),
-            role: AgentRole::Explorer,
-            title: "inspect cli".to_string(),
-        },
-    )));
-    match item_details_for_finish(&call, &executed) {
-        ThreadItemDetails::CollabToolCall {
-            tool,
-            agent_id,
-            role,
-            title,
-            status,
-        } => {
-            assert_eq!(tool, "spawn_agent");
-            assert_eq!(agent_id.as_deref(), Some("sub-1"));
-            assert_eq!(role.as_deref(), Some("explorer"));
-            assert_eq!(title.as_deref(), Some("inspect cli"));
-            assert_eq!(status, ItemStatus::Completed);
-        }
-        other => panic!("expected collab tool call, got {other:?}"),
-    }
-}
-
-#[test]
-fn generic_tools_carry_a_summary_and_cancelled_status() {
-    let read = read_call();
-    let executed = ToolOutcome::Executed(read_result());
-    match item_details_for_finish(&read, &executed) {
-        ThreadItemDetails::ToolCall {
-            name,
-            summary,
-            status,
-            ..
-        } => {
-            assert_eq!(name, "read");
-            assert_eq!(summary.as_deref(), Some("Read 57 lines"));
-            assert_eq!(status, ItemStatus::Completed);
-        }
-        other => panic!("expected generic tool call, got {other:?}"),
-    }
-
-    match item_details_for_finish(&read, &ToolOutcome::Cancelled) {
-        ThreadItemDetails::ToolCall {
-            status, summary, ..
-        } => {
-            assert_eq!(status, ItemStatus::Cancelled);
-            assert!(summary.is_none());
-        }
-        other => panic!("expected generic tool call, got {other:?}"),
-    }
-
-    let cancelled = call("exec_command", r#"{"cmd":"sleep 10"}"#);
-    match item_details_for_finish(&cancelled, &ToolOutcome::Cancelled) {
-        ThreadItemDetails::CommandExecution {
-            command, status, ..
-        } => {
-            assert_eq!(command, "sleep 10");
-            assert_eq!(status, ItemStatus::Cancelled);
-        }
-        other => panic!("expected command execution, got {other:?}"),
-    }
-}
-
-// ===== 人类可读单行格式 =====
-
-#[test]
-fn headers_name_the_tool_and_its_primary_argument() {
-    assert_eq!(format_tool_header(&read_call()), "read Cargo.toml");
-    assert_eq!(
-        format_tool_header(&call(
-            "exec_command",
-            r#"{"cmd":"cargo check","workdir":"/work"}"#
-        )),
-        "exec_command `cargo check` in /work"
-    );
-    assert_eq!(
-        format_tool_header(&call(
-            "edit",
-            r#"{"patch":"*** Update File: a.rs\n*** End Patch"}"#
-        )),
-        "edit a.rs"
-    );
-    assert_eq!(
-        format_tool_header(&call("mcp__exa__search", "{}")),
-        "mcp exa/search"
-    );
-}
-
-#[test]
-fn outcome_lines_report_duration_and_failure() {
-    let call = read_call();
-    let (line, is_error) =
-        format_tool_outcome_line(&call, &ToolOutcome::Executed(read_result()), 12);
-    assert_eq!(line, "Read 57 lines (12ms)");
-    assert!(!is_error);
-
-    let failed = ToolOutcome::Executed(ToolExecutionResult::Failed {
-        code: ToolErrorCode::Io,
-        message: "disk full".to_string(),
-        changes: Vec::new(),
-    });
-    let (line, is_error) = format_tool_outcome_line(&call, &failed, 5);
-    assert_eq!(line, "io: disk full (5ms)");
-    assert!(is_error);
-
-    let (line, is_error) = format_tool_outcome_line(
-        &call,
-        &ToolOutcome::Executed(process_result(ProcessState::Exited { code: Some(0) })),
-        420,
-    );
-    assert_eq!(line, "succeeded in 420ms");
-    assert!(!is_error);
-
-    let (line, is_error) = format_tool_outcome_line(&call, &ToolOutcome::Cancelled, 0);
-    assert_eq!(line, "cancelled");
-    assert!(!is_error);
 }

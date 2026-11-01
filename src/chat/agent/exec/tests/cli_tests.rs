@@ -175,6 +175,33 @@ fn repeated_and_comma_separated_images_accumulate() {
 }
 
 #[test]
+fn comma_separated_images_trim_padding() {
+    let cli = parse_exec(&["exec", "-i", "a.png, b.png ,  c.png ", "go"]);
+    assert_eq!(
+        cli.images,
+        vec![
+            PathBuf::from("a.png"),
+            PathBuf::from("b.png"),
+            PathBuf::from("c.png")
+        ]
+    );
+}
+
+#[test]
+fn last_with_a_session_id_prompt_is_rejected() {
+    let expected = "cannot specify both '--last' and a session ID";
+    assert_eq!(
+        parse(&["exec", "resume", "--last", "sess-123"]).expect_err("conflict"),
+        expected
+    );
+    // `--last` 之后不以 `sess-` 开头的文本仍是普通提示词。
+    let args = resume_args(
+        parse(&["exec", "resume", "--last", "continue"]).expect("prompt is not a session id"),
+    );
+    assert_eq!(args.prompt.as_deref(), Some("continue"));
+}
+
+#[test]
 fn dash_prompt_is_kept_literal() {
     let cli = parse_exec(&["exec", "-"]);
     assert_eq!(cli.prompt.as_deref(), Some("-"));

@@ -2,10 +2,7 @@
 //!
 //! 模块边界（design §9）：只依赖 `chat` / `config` / `db` / `mcp` / `git` / `platform`，
 //! 绝不导入 `app` / `ui` / `tui` / `event`——无头路径不初始化终端，也不经过事件循环。
-//!
-//! 本文件只做顶层编排：工作目录与工作区解析、提示词/图片准备、模型冻结、
-//! 会话恢复、轮次装配、Tokio 运行时与 Ctrl+C 取消。协议与输出分别由
-//! [`events`] / [`processor`] 负责，无头宿主状态机由 [`runner`] 与 [`subagent`] 负责。
+//! 本文件只做顶层编排；协议、输出与宿主状态机分别由 `events` / `processor` / `runner` 负责。
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -13,12 +10,13 @@ use std::sync::Arc;
 
 use crate::chat::agent_loop::{ModelContext, TurnOutcome};
 use crate::chat::events::RequestPurpose;
-use crate::chat::{DraftImageAttachment, context};
+use crate::chat::{DraftImageAttachment, ModelImage, ModelItem, context};
 use crate::db::Database;
 use crate::db::chat::{ModelSnapshot, ModelSwitchCommit};
 
 pub mod cli;
 pub mod events;
+mod mutation;
 pub mod processor;
 pub mod runner;
 mod subagent;
@@ -126,10 +124,11 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
     model: &ExecModelTarget,
     mcp_snapshot: Arc<crate::mcp::McpToolSnapshot>,
 ) -> Result<ExecTurnConfig, String> {
-    let draft_images = load_draft_images(image_paths, model)?;
+    let draft_images = load_draft_images(cwd, image_paths, model)?;
     let prepared = crate::chat::prepare_user_message(cwd, raw_prompt, &draft_images)
         .map_err(|error| format!("failed to prepare prompt: {}", error.code()))?;
-
+    let skills = skills_catalog_prompt(workspace, false);
+    let skill_blocks = skill_reference_blocks(workspace, raw_prompt);
     let mut messages = Vec::new();
     if let Some(session_id) = existing_session {
         messages = db
@@ -205,10 +204,10 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
         model_identity: Some(&model_identity),
         environment: Some(&environment),
         instructions: instructions.as_deref(),
-        skills: None,
+        skills: skills.as_deref(),
         mcp: mcp_prompt.as_deref(),
         model_switches: &model_switches,
-        skill_blocks: &[],
+        skill_blocks: &skill_blocks,
         supports_image_input: model.supports_image_input,
     });
     if assembly.draft_exceeds {
@@ -226,7 +225,15 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
     }
 
     let mut request = assembly.request;
-    hydrate_current_turn_images(&mut request.items, &prepared.model_images);
+    hydrate_turn_images(
+        db,
+        workspace,
+        &committed.session_id,
+        model.supports_image_input,
+        &assembly.item_image_attachments,
+        &prepared.model_images,
+        &mut request.items,
+    );
     request.purpose = RequestPurpose::ExecTurn;
     request.system_prompt = Some(assembly.system_prompt);
     request.tools = Arc::new(crate::chat::tools::turn_tools(
@@ -268,10 +275,15 @@ pub fn run_main(
     let prompt = resolve_prompt_input(prompt_arg, std::io::stdin().is_terminal(), read_stdin)?;
 
     let settings = load_ai_settings()?;
+    let effective_worktree = linked_worktree.map(Path::to_path_buf).or_else(|| {
+        crate::db::is_dev_environment()
+            .then(|| crate::git::linked_worktree_root(&cwd))
+            .flatten()
+    });
     let db = if cli.ephemeral {
         Database::open_in_memory()?
     } else {
-        Database::open_default(linked_worktree)?
+        Database::open_default(effective_worktree.as_deref())?
     };
 
     let resumed = match &cli.command {
@@ -279,15 +291,13 @@ pub fn run_main(
         None => None,
     };
     // 已有会话的锁必须在开轮前取得：另一个进程正在写同一会话时立即失败。
-    let resumed_lock = match resumed.as_deref() {
-        Some(session_id) => Some(lock_session(session_id)?),
-        None => None,
-    };
+    let resumed_lock = resumed.as_deref().map(lock_session).transpose()?;
 
-    let session_model = match resumed.as_deref() {
-        Some(session_id) => last_assistant_model(&db, &workspace, session_id)?,
-        None => None,
-    };
+    let session_model = resumed
+        .as_deref()
+        .map(|session_id| last_assistant_model(&db, &workspace, session_id))
+        .transpose()?
+        .flatten();
     let model = resolve_model_target(
         &settings,
         cli.model.as_deref(),
@@ -300,7 +310,15 @@ pub fn run_main(
         }),
     )?;
 
-    let turn_config = assemble_exec_turn(
+    // MCP 冷启动必须先有 Tokio 运行时：同步 prewarm 在短命 CLI 进程里永远只能拿到空快照。
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    let snapshot = mcp_snapshot_for_turn_async(&db, &workspace, cancel_rx.clone());
+    let mcp_snapshot = runtime.block_on(snapshot);
+
+    let turn_config = assemble_exec_turn_with_snapshot(
         &db,
         &workspace,
         &cwd,
@@ -308,17 +326,24 @@ pub fn run_main(
         &prompt,
         images,
         &model,
+        mcp_snapshot,
     )?;
-    // 新会话的 id 只有开轮后才知道：此时补上会话锁。
-    let new_session_lock = match resumed_lock {
-        Some(guard) => Some(guard),
-        None => Some(lock_session(&turn_config.session_id)?),
+    // 新会话的 id 只有开轮后才知道：此时补上会话锁；失败时结算刚开的轮次。
+    let _session_lock = match resumed_lock {
+        Some(guard) => guard,
+        None => lock_session(&turn_config.session_id).inspect_err(|_| {
+            let _ = db.finish(
+                &workspace,
+                &turn_config.assistant_id,
+                &[],
+                &crate::db::chat::TurnOutcome::Failed {
+                    error_code: "session lock failed".to_string(),
+                },
+                crate::db::chat::Usage::default(),
+            );
+        })?,
     };
-    let _session_lock = new_session_lock;
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
     let stdout_is_terminal = std::io::stdout().is_terminal();
     let use_color = cli
         .color
@@ -337,7 +362,6 @@ pub fn run_main(
         )
     };
     let summary = runtime.block_on(async {
-        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
         tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
                 let _ = cancel_tx.send(true);
@@ -516,26 +540,102 @@ fn load_instructions(workspace: &Path, cwd: &Path) -> Option<String> {
         .render_prompt_section()
 }
 
-/// 本 turn 冻结的 MCP 快照：读配置、后台预热、取最近一次缓存。
-///
-/// 首轮 server 尚未就绪时本轮不带 MCP 工具，与 TUI 同源行为。
-fn mcp_snapshot_for_turn(db: &Database, workspace: &Path) -> Arc<crate::mcp::McpToolSnapshot> {
-    use crate::config::mcp::{effective_servers, load_mcp, project_mcp_path, user_mcp_path};
-    let user = user_mcp_path()
+/// 本 turn 冻结的 skills 目录段；exec 无交互信任门，项目 roots 恒生效。
+pub(crate) fn skills_catalog_prompt(workspace: &Path, subagent: bool) -> Option<String> {
+    let catalog = discover_workspace_skills(workspace);
+    crate::skills::render_catalog_with_omitted(&catalog.entries, subagent).0
+}
+
+/// 用户草稿里 `$skill-name` 点名的正文块（只注入当轮，不落库）。
+fn skill_reference_blocks(workspace: &Path, raw_prompt: &str) -> Vec<String> {
+    let catalog = discover_workspace_skills(workspace);
+    let mut blocks = Vec::new();
+    for token in raw_prompt.split_whitespace() {
+        let Some(name) = token.strip_prefix('$').filter(|name| {
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+        }) else {
+            continue;
+        };
+        let Some(entry) = catalog.entries.iter().find(|entry| {
+            entry.enabled && entry.shadowed_by.is_none() && entry.name.eq_ignore_ascii_case(name)
+        }) else {
+            continue;
+        };
+        blocks.push(match crate::skills::load_skill_body(&entry.path) {
+            Ok(body) => {
+                crate::skills::render_injection(
+                    &entry.name,
+                    &entry.path,
+                    &body,
+                    crate::skills::MAX_SKILL_INJECTION_BYTES,
+                )
+                .0
+            }
+            Err(error) => format!("[skill {} could not be loaded: {error}]", entry.name),
+        });
+    }
+    blocks
+}
+
+fn discover_workspace_skills(workspace: &Path) -> crate::skills::SkillCatalog {
+    use crate::config::skills as cfg;
+    let (disabled, enabled) = cfg::skills_config_path()
         .ok()
-        .and_then(|path| load_mcp(&path).ok().flatten());
-    let project = project_mcp_path(workspace)
+        .and_then(|path| cfg::load_skills(&path).ok().flatten())
+        .map(|file| (file.disabled_set(), file.enabled_set()))
+        .unwrap_or_default();
+    let disabled: std::collections::HashSet<PathBuf> = disabled.into_iter().collect();
+    let enabled: std::collections::HashSet<PathBuf> = enabled.into_iter().collect();
+    let (Ok(user_root), Ok(user_agents)) =
+        (cfg::user_skills_root(), cfg::user_agents_skills_root())
+    else {
+        return crate::skills::SkillCatalog::default();
+    };
+    let project = cfg::project_skills_root(workspace)
         .ok()
-        .and_then(|path| load_mcp(&path).ok().flatten());
-    let trusted = db.is_trusted(workspace).unwrap_or(false);
-    let servers = effective_servers(user.as_ref(), project.as_ref(), trusted, Some(workspace));
+        .map(|lx| crate::skills::ProjectSkillRoots::for_project(workspace, lx));
+    crate::skills::discover(
+        &user_root,
+        &user_agents,
+        project.as_ref(),
+        &disabled,
+        &enabled,
+    )
+}
+
+fn mcp_snapshot_for_turn(_db: &Database, workspace: &Path) -> Arc<crate::mcp::McpToolSnapshot> {
     let manager = crate::mcp::global_manager();
-    manager.prewarm(workspace.to_path_buf(), servers);
+    manager.prewarm(workspace.to_path_buf(), effective_mcp_servers(workspace));
     manager.cached_snapshot(workspace)
 }
 
-/// 读取并校验 `-i/--image` 附件；模型不接受图片时提前失败（不发半轮）。
+async fn mcp_snapshot_for_turn_async(
+    _db: &Database,
+    workspace: &Path,
+    cancel: tokio::sync::watch::Receiver<bool>,
+) -> Arc<crate::mcp::McpToolSnapshot> {
+    let manager = crate::mcp::global_manager();
+    let servers = effective_mcp_servers(workspace);
+    if servers.iter().any(|server| server.config.enabled) {
+        Arc::new(manager.snapshot_for(workspace, &servers, cancel).await)
+    } else {
+        manager.cached_snapshot(workspace)
+    }
+}
+
+fn effective_mcp_servers(workspace: &Path) -> Vec<crate::config::mcp::EffectiveServer> {
+    use crate::config::mcp::{effective_servers, load_mcp, project_mcp_path, user_mcp_path};
+    let load = |path: Option<PathBuf>| path.and_then(|path| load_mcp(&path).ok().flatten());
+    let user = load(user_mcp_path().ok());
+    let project = load(project_mcp_path(workspace).ok());
+    effective_servers(user.as_ref(), project.as_ref(), true, Some(workspace))
+}
+
 fn load_draft_images(
+    cwd: &Path,
     image_paths: &[PathBuf],
     model: &ExecModelTarget,
 ) -> Result<Vec<DraftImageAttachment>, String> {
@@ -549,32 +649,96 @@ fn load_draft_images(
         .iter()
         .enumerate()
         .map(|(index, path)| {
-            crate::platform::load_and_process_image_file(path)
+            // `join` 对绝对路径直接取后者，相对路径以本轮 `-C` 为基准。
+            let resolved = cwd.join(path);
+            crate::platform::load_and_process_image_file(&resolved)
                 .map(|image| DraftImageAttachment {
                     id: format!("exec-image-{index}"),
                     image,
                 })
                 .map_err(|error| {
-                    format!("failed to load image {}: {}", path.display(), error.code())
+                    format!(
+                        "failed to load image {}: {}",
+                        resolved.display(),
+                        error.code()
+                    )
                 })
         })
         .collect()
 }
 
-/// 把本轮图片字节挂到当前用户消息上（装配只产出引用描述，不读文件）。
-fn hydrate_current_turn_images(
-    items: &mut [crate::chat::ModelItem],
-    model_images: &[crate::chat::ModelImage],
+#[allow(clippy::too_many_arguments)]
+fn hydrate_turn_images(
+    db: &Database,
+    workspace: &Path,
+    session_id: &str,
+    supports_image_input: bool,
+    attachments: &[(usize, Vec<context::ItemImageAttachment>)],
+    model_images: &[ModelImage],
+    items: &mut [ModelItem],
 ) {
-    if model_images.is_empty() {
+    if attachments.is_empty() {
+        if !model_images.is_empty()
+            && let Some(ModelItem::UserContent { images, .. }) = items
+                .iter_mut()
+                .rev()
+                .find(|item| matches!(item, ModelItem::UserContent { .. }))
+        {
+            images.extend_from_slice(model_images);
+        }
         return;
     }
-    let Some(crate::chat::ModelItem::UserContent { images, .. }) = items
-        .iter_mut()
-        .rev()
-        .find(|item| matches!(item, crate::chat::ModelItem::UserContent { .. }))
-    else {
-        return;
-    };
-    images.extend_from_slice(model_images);
+    let total_items = items.len();
+    for (item_idx, atts) in attachments {
+        let Some(item) = items.get_mut(*item_idx) else {
+            continue;
+        };
+        if *item_idx + 1 == total_items {
+            if let ModelItem::UserContent { images, .. } = item {
+                images.extend_from_slice(model_images);
+            }
+            continue;
+        }
+        if !supports_image_input {
+            if let ModelItem::UserContent { text, .. } = item {
+                let mut replaced = std::mem::take(text);
+                let notes: Vec<String> = atts
+                    .iter()
+                    .map(|att| {
+                        format!(
+                            "ERROR: Cannot read \"{}\" (this model does not support image input). Inform the user.",
+                            att.label
+                        )
+                    })
+                    .collect();
+                if !replaced.is_empty() {
+                    replaced.push('\n');
+                }
+                replaced.push_str(&notes.join("\n"));
+                *item = ModelItem::UserText(replaced);
+            }
+            continue;
+        }
+        let mut loaded: Vec<ModelImage> = Vec::new();
+        for att in atts {
+            if let Ok(mut map) = db.load_image_payloads(workspace, session_id, &[att.id.as_str()])
+                && let Some(bytes) = map.remove(&att.id)
+                && !loaded
+                    .iter()
+                    .any(|existing| existing.bytes.as_slice() == bytes.as_slice())
+            {
+                loaded.push(ModelImage {
+                    mime: att.mime.clone(),
+                    bytes: Arc::new(bytes),
+                });
+            }
+        }
+        if let ModelItem::UserContent { text, images } = item {
+            if loaded.is_empty() {
+                *item = ModelItem::UserText(std::mem::take(text));
+            } else {
+                *images = loaded;
+            }
+        }
+    }
 }

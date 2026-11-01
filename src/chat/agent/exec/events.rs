@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::chat::agent::SubagentOutcome;
 use crate::chat::agent_loop::{ReadyToolCall, ToolOutcome};
+use crate::chat::process::ProcessResultKind;
 use crate::chat::tools::{FileChange, FileChangeKind, ReadKind, ToolExecutionResult, to_summary};
 use crate::db::chat::Usage;
 
@@ -168,13 +169,16 @@ pub fn item_details_for_start(call: &ReadyToolCall) -> ThreadItemDetails {
         "update_plan" => ThreadItemDetails::TodoList {
             items: plan_items(&arguments),
         },
-        name if is_collab_tool(name) => ThreadItemDetails::CollabToolCall {
-            tool: name.to_string(),
-            agent_id: arg_str(&arguments, "agent_id").map(str::to_string),
-            role: arg_str(&arguments, "role").map(str::to_string),
-            title: arg_str(&arguments, "title").map(str::to_string),
-            status: ItemStatus::InProgress,
-        },
+        name if is_collab_tool(name) => {
+            let (agent_id, role, title) = collab_start_identity(name, &arguments);
+            ThreadItemDetails::CollabToolCall {
+                tool: name.to_string(),
+                agent_id,
+                role,
+                title,
+                status: ItemStatus::InProgress,
+            }
+        }
         name if crate::mcp::is_mcp_tool(name) => {
             let (server, tool) = mcp_parts(name, None);
             ThreadItemDetails::McpToolCall {
@@ -268,13 +272,12 @@ pub fn item_details_for_finish(call: &ReadyToolCall, outcome: &ToolOutcome) -> T
                     ToolExecutionResult::Subagent(outcome) => Some(collab_identity(outcome)),
                     _ => None,
                 })
-                .unwrap_or_else(|| {
-                    (
-                        arg_str(&arguments, "agent_id").map(str::to_string),
-                        arg_str(&arguments, "role").map(str::to_string),
-                        arg_str(&arguments, "title").map(str::to_string),
-                    )
-                });
+                .unwrap_or_else(|| collab_start_identity(name, &arguments));
+            let status = if collab_wait_failed(result) {
+                ItemStatus::Failed
+            } else {
+                status
+            };
             ThreadItemDetails::CollabToolCall {
                 tool: name.to_string(),
                 agent_id,
@@ -344,16 +347,25 @@ pub fn format_tool_header(call: &ReadyToolCall) -> String {
         "web_search" => format!("web_search \"{}\"", web_queries(&arguments).join(", ")),
         "update_plan" => format!("update_plan ({} steps)", plan_items(&arguments).len()),
         name if is_collab_tool(name) => {
-            let mut header = name.to_string();
-            if let Some(role) = arg_str(&arguments, "role") {
-                header.push(' ');
-                header.push_str(role);
+            let (agent_id, role, title) = collab_start_identity(name, &arguments);
+            if role.is_some() || title.is_some() {
+                let mut header = name.to_string();
+                if let Some(role) = role {
+                    header.push(' ');
+                    header.push_str(&role);
+                }
+                if let Some(title) = title {
+                    header.push_str(" · ");
+                    header.push_str(&title);
+                }
+                header
+            } else if let Some(target) = agent_id {
+                format!("{name} {target}")
+            } else if name == "wait_agent" {
+                "wait_agent (all)".to_string()
+            } else {
+                name.to_string()
             }
-            if let Some(title) = arg_str(&arguments, "title") {
-                header.push_str(" · ");
-                header.push_str(title);
-            }
-            header
         }
         name if crate::mcp::is_mcp_tool(name) => {
             let (server, tool) = mcp_parts(name, None);
@@ -369,16 +381,27 @@ pub fn format_tool_header(call: &ReadyToolCall) -> String {
 
 /// 人类可读的结算行（不含 `└─` 前缀）与是否按错误着色。
 pub fn format_tool_outcome_line(
-    _call: &ReadyToolCall,
+    call: &ReadyToolCall,
     outcome: &ToolOutcome,
     duration_ms: i64,
 ) -> (String, bool) {
     match outcome {
         ToolOutcome::Cancelled => ("cancelled".to_string(), false),
         ToolOutcome::Executed(result) => {
-            let is_error = result.is_failure();
+            let is_error = result.is_failure() || collab_wait_failed(Some(result));
             let line = match result {
-                ToolExecutionResult::Process(process) => process_summary_line(process),
+                // `write_stdin` 只读回后台进程的一段输出：耗时属于本次交互，
+                // 而不是进程自启动以来的总生存时间。
+                ToolExecutionResult::Process(process)
+                    if matches!(process.kind, ProcessResultKind::WriteStdin)
+                        || call.name == "write_stdin" =>
+                {
+                    process_summary_line(process, duration_ms.max(0))
+                }
+                ToolExecutionResult::Process(process) => {
+                    let elapsed = i64::try_from(process.wall_time_ms).unwrap_or(i64::MAX);
+                    process_summary_line(process, elapsed)
+                }
                 _ => format!("{} ({}ms)", summarize_result(result), duration_ms.max(0)),
             };
             (truncate(&line, MAX_SUMMARY_CHARS), is_error)
@@ -443,7 +466,11 @@ fn summarize_result(result: &ToolExecutionResult) -> String {
             format!("{} · {} completed", details.server, details.tool)
         }
         ToolExecutionResult::WebSearch(search) => {
-            format!("Searched \"{}\"", search.queries.join(", "))
+            format!(
+                "Searched \"{}\" · {}",
+                search.queries.join(", "),
+                result_count_label(search.num_results)
+            )
         }
         ToolExecutionResult::Failed { code, message, .. } => {
             format!("{}: {message}", code.as_str())
@@ -464,9 +491,9 @@ fn process_summary(process: &crate::chat::process::ProcessResult) -> String {
     }
 }
 
-fn process_summary_line(process: &crate::chat::process::ProcessResult) -> String {
+fn process_summary_line(process: &crate::chat::process::ProcessResult, elapsed_ms: i64) -> String {
     use crate::chat::process::ProcessState;
-    let elapsed = process.wall_time_ms;
+    let elapsed = elapsed_ms.max(0);
     match &process.state {
         ProcessState::Starting | ProcessState::Running => {
             format!("running in background ({elapsed}ms)")
@@ -524,16 +551,104 @@ fn collab_identity(outcome: &SubagentOutcome) -> (Option<String>, Option<String>
         | SubagentOutcome::Resumed { agent_id, .. }
         | SubagentOutcome::Closed { agent_id, .. }
         | SubagentOutcome::InputCancelled { agent_id, .. } => (Some(agent_id.clone()), None, None),
-        SubagentOutcome::Waited { agents, .. } => {
-            agents.first().map_or((None, None, None), |agent| {
-                (
-                    Some(agent.agent_id.clone()),
-                    Some(agent.role.as_str().to_string()),
-                    Some(agent.title.clone()),
-                )
-            })
+        SubagentOutcome::Waited { agents, .. } => match agents.as_slice() {
+            [] => (None, None, None),
+            [agent] => (
+                Some(agent.agent_id.clone()),
+                Some(agent.role.as_str().to_string()),
+                Some(agent.title.clone()),
+            ),
+            agents => {
+                let ids: Vec<&str> = agents.iter().map(|agent| agent.agent_id.as_str()).collect();
+                // 角色只在全体一致时才有意义，否则留空避免误导。
+                let role = agents
+                    .first()
+                    .map(|agent| agent.role)
+                    .filter(|role| agents.iter().all(|agent| agent.role == *role))
+                    .map(|role| role.as_str().to_string());
+                let titles: Vec<&str> = agents
+                    .iter()
+                    .map(|agent| agent.title.as_str())
+                    .filter(|title| !title.is_empty())
+                    .collect();
+                let title = if titles.is_empty() {
+                    None
+                } else {
+                    Some(titles.join(", "))
+                };
+                (Some(ids.join(", ")), role, title)
+            }
+        },
+        SubagentOutcome::Listed { agents } => {
+            let ids: Vec<&str> = agents.iter().map(|agent| agent.agent_id.as_str()).collect();
+            if ids.is_empty() {
+                (None, None, None)
+            } else {
+                (Some(ids.join(", ")), None, None)
+            }
         }
-        SubagentOutcome::Listed { .. } => (None, None, None),
+    }
+}
+
+/// 子 agent 控制工具的起始标识：各工具 schema 的目标字段名并不统一。
+fn collab_start_identity(
+    name: &str,
+    arguments: &Value,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let agent_id = arg_str(arguments, "agent_id")
+        .or_else(|| arg_str(arguments, "target"))
+        .or_else(|| arg_str(arguments, "id"))
+        .or_else(|| arg_str(arguments, "submission_id"))
+        .map(str::to_string)
+        .or_else(|| wait_targets(name, arguments));
+    (
+        agent_id,
+        arg_str(arguments, "role").map(str::to_string),
+        arg_str(arguments, "title").map(str::to_string),
+    )
+}
+
+/// `wait_agent` 的 `targets` 数组；空数组代表「全部」，不产生目标标识。
+fn wait_targets(name: &str, arguments: &Value) -> Option<String> {
+    if name != "wait_agent" {
+        return None;
+    }
+    let targets: Vec<&str> = arguments
+        .get("targets")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|target| !target.is_empty())
+        .collect();
+    if targets.is_empty() {
+        None
+    } else {
+        Some(targets.join(", "))
+    }
+}
+
+/// `wait_agent` 超时且没有任何子 agent 结束：按失败处理。
+fn collab_wait_failed(result: Option<&ToolExecutionResult>) -> bool {
+    matches!(
+        result,
+        Some(ToolExecutionResult::Subagent(outcome))
+            if matches!(
+                outcome.as_ref(),
+                SubagentOutcome::Waited {
+                    timed_out: true,
+                    agents,
+                    ..
+                } if agents.is_empty()
+            )
+    )
+}
+
+/// `web_search` 命中数文案。
+fn result_count_label(count: usize) -> String {
+    if count == 1 {
+        "1 result".to_string()
+    } else {
+        format!("{count} results")
     }
 }
 

@@ -124,7 +124,10 @@ lx-tui/
       agent/mod.rs              agent 角色（Explorer/Executor）、工具面（Main/ExecMain/Explorer/Executor）与子 agent 控制契约
       agent/exec/               无头 CLI 执行模式（`lx-tui exec`）：零依赖参数解析与 stdin 合成（cli.rs）、
                                 强类型 JSONL 事件与工具摘要映射（events.rs）、人类可读 stderr+stdout 分流与
-                                JSONL 输出处理器（processor.rs）、无头宿主运行器（runner.rs）与子 agent 池（subagent.rs）
+                                JSONL 输出处理器（processor.rs）、无头宿主运行器与主轮事件循环（runner.rs）、
+                                文件变更持久化桥（mutation.rs）、子 agent 池状态与控制入口及子轮装配/结算
+                                （subagent/{mod,turn,settle}.rs）；单元测试按被测模块拆在
+                                tests/{cli,processor,events,runner,subagent}_tests.rs
     settings/                   设置与命令文件持久化，及本地回环设置 Web 服务
       commands.rs               自定义命令 Markdown 文件的读写
       service.rs                回环 HTTP 服务：静态设置页、JSON API 与事件投递（路由 async，禁止在运行时内再建运行时）

@@ -6,10 +6,11 @@
 //!
 //! 子 agent 池由 [`super::subagent::ExecSubagentPool`] 实现：`handle_op` 处理控制工具，
 //! `handle_event` 处理子轮事件，`shutdown_all` 在主轮结束时收割全部子 agent。
+//! 文件 mutation 的持久化桥在 `super::mutation`。
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -20,25 +21,20 @@ use crate::chat::agent_loop::{
     AgentHost, AgentHostRequest, AgentTools, HostError, ModelContext, ReadyToolCall, ToolOutcome,
     TurnExecution, TurnSummary, run_agent_turn,
 };
-use crate::chat::client::uncancellable;
 use crate::chat::compact::AutoCompactNotice;
-use crate::chat::events::{ChatDelta, ChatRequest, PartKind, RequestPurpose, StopReason};
+use crate::chat::events::{ChatDelta, ChatRequest, PartKind};
 use crate::chat::process::{ProcessManager, ProcessOwner};
-use crate::chat::tools::{
-    MutationError, MutationRecorder, MutationRecorderFactory, MutationTicket, ObservedMutation,
-    PathMutation, PreparedMutation, ToolExecutionResult, read_registry,
-};
+use crate::chat::tools::{ToolExecutionResult, read_registry};
 use crate::db::Database;
-use crate::db::chat::{
-    ChatPart, ImageWrite, ObservedWrite, PathMutationWrite, ToolCallResult, ToolTerminalStatus,
-    Usage,
-};
-use crate::git::{WorktreeIdentity, identify, write_blob};
-use crate::platform::{RawImage, RawKind};
+use crate::db::chat::{ChatPart, CompactCommit, ToolCallResult, ToolTerminalStatus, Usage};
 
 use super::cli::ExecModelTarget;
 use super::processor::{ExecEventProcessor, SessionHeader};
 use super::subagent::{ExecSubagentEvent, ExecSubagentPool};
+
+pub(crate) use super::mutation::{
+    ExecMutationEvent, handle_mutation_event, new_mutation_recorder_factory,
+};
 
 /// 一次模型流的 future（boxed，便于注入脚本化假实现）。
 pub type BoxStreamFuture =
@@ -88,25 +84,6 @@ impl ExecStreamFactory for RealStreamFactory {
     }
 }
 
-/// 文件 mutation 的持久化请求（worker 在路径锁内同步等待回执）。
-pub(crate) enum ExecMutationEvent {
-    Prepare {
-        workspace: PathBuf,
-        session_id: String,
-        user_message_id: String,
-        tool_call_id: String,
-        changes: Vec<PathMutationWrite>,
-        reply: oneshot::Sender<Result<MutationTicket, MutationError>>,
-    },
-    Commit {
-        workspace: PathBuf,
-        session_id: String,
-        ticket: MutationTicket,
-        observed: Vec<ObservedWrite>,
-        reply: oneshot::Sender<Result<(), MutationError>>,
-    },
-}
-
 /// loop / 子 agent 池与无头事件循环之间的内部消息。
 pub(crate) enum ExecLoopEvent {
     MainDelta(Vec<ChatDelta>),
@@ -127,65 +104,13 @@ const FINISH_TOOL_FAILED_CODE: &str = "tool result persistence failed";
 const AGENT_TURN_ABORTED_CODE: &str = "agent turn aborted";
 
 /// loop 的无头宿主：请求经唯一事件循环落库后回执。
-///
-/// `model` / `stream_factory` 只服务于 [`Self::run_compact_summary`]；该入口预留给
-/// 子 agent 的摘要请求，当前子池用 [`crate::db::Database::commit_compact`] 落检查点。
-#[allow(dead_code)]
 struct ExecHost {
     sender: mpsc::UnboundedSender<ExecLoopEvent>,
-    model: ExecModelTarget,
-    stream_factory: Arc<dyn ExecStreamFactory>,
 }
 
 impl ExecHost {
-    fn new(
-        sender: mpsc::UnboundedSender<ExecLoopEvent>,
-        model: ExecModelTarget,
-        stream_factory: Arc<dyn ExecStreamFactory>,
-    ) -> Self {
-        Self {
-            sender,
-            model,
-            stream_factory,
-        }
-    }
-
-    /// 独立执行一次压缩摘要请求（子 agent 运行时压缩复用同一模型目标）。
-    ///
-    /// 摘要请求不可取消；发送端必须活到请求结束，否则会被当成用户取消。
-    #[allow(dead_code)]
-    pub(crate) async fn run_compact_summary(&mut self, prompt: String) -> Result<String, String> {
-        let request = ChatRequest {
-            turns: Vec::new(),
-            items: Vec::new(),
-            model: self.model.snapshot(),
-            variant_params: self.model.variant_params.clone(),
-            purpose: RequestPurpose::CompactSummary,
-            system_prompt: Some(prompt),
-            tools: Arc::new(Vec::new()),
-        };
-        let (_cancel_sender, cancel) = uncancellable();
-        let outcome = self
-            .stream_factory
-            .stream(&self.model, request, cancel, Box::new(|_| {}))
-            .await;
-        match &outcome.stop {
-            StopReason::Failed { code } => return Err(code.clone()),
-            StopReason::Cancelled => return Err("cancelled".to_string()),
-            StopReason::Complete => {}
-        }
-        let mut text = String::new();
-        for delta in &outcome.deltas {
-            if let ChatDelta::Part(part) = delta
-                && part.kind == PartKind::Text
-            {
-                text.push_str(&part.text);
-            }
-        }
-        if text.trim().is_empty() {
-            return Err("empty compact summary".to_string());
-        }
-        Ok(text)
+    fn new(sender: mpsc::UnboundedSender<ExecLoopEvent>) -> Self {
+        Self { sender }
     }
 }
 
@@ -228,6 +153,7 @@ struct ExecRunner<'a> {
     next_position: i64,
     open_part_index: Option<usize>,
     active_calls: HashMap<String, ReadyToolCall>,
+    last_tool_position: Option<i64>,
     uncheckpointed_bytes: usize,
     last_checkpoint: Instant,
 }
@@ -248,6 +174,7 @@ impl ExecRunner<'_> {
             next_position: 0,
             open_part_index: None,
             active_calls: HashMap::new(),
+            last_tool_position: None,
             uncheckpointed_bytes: 0,
             last_checkpoint: Instant::now(),
         }
@@ -260,11 +187,18 @@ impl ExecRunner<'_> {
             ExecLoopEvent::Host(request) => self.handle_host(request, processor),
             ExecLoopEvent::Mutation(event) => handle_mutation_event(self.db, event),
             ExecLoopEvent::AutoCompact { notice, reply } => {
-                processor.on_warning(&format!(
-                    "context compacted: ~{} tokens in use (limit {})",
-                    notice.estimated_tokens, notice.context_limit
-                ));
-                let _ = reply.send(Ok(()));
+                let result =
+                    commit_main_compact(self.db, &self.workspace, &self.session_id, &notice)
+                        .map_err(|error| HostError::Failed {
+                            code: format!("auto-compact persist failed: {}", error.code()),
+                        });
+                if result.is_ok() {
+                    processor.on_warning(&format!(
+                        "context compacted: ~{} tokens in use (limit {})",
+                        notice.estimated_tokens, notice.context_limit
+                    ));
+                }
+                let _ = reply.send(result);
             }
             ExecLoopEvent::Subagent(_) => {
                 tracing::warn!(target: "lx::exec", "subagent event reached the main runner");
@@ -344,6 +278,10 @@ impl ExecRunner<'_> {
         };
         // 后续 part 必须严格落在该工具之后：SQLite 侧位置已由 begin_tool_call 占用。
         self.next_position = self.next_position.max(ticket.position.saturating_add(1));
+        self.last_tool_position = Some(
+            self.last_tool_position
+                .map_or(ticket.position, |previous| previous.max(ticket.position)),
+        );
         if let Err(error) = self.db.mark_tool_running(&self.workspace, &ticket) {
             tracing::warn!(target: "lx::exec", call_id = %ticket.call_id, code = error.code(), "tool running record failed");
             return fail_reply(reply, RUNNING_TOOL_FAILED_CODE, error.code());
@@ -403,11 +341,23 @@ impl ExecRunner<'_> {
         self.last_checkpoint = Instant::now();
     }
 
-    fn final_message(&self) -> Option<String> {
+    /// 整轮最终回复：仅正常完成且文本位于最后一次工具调用之后时才算数。
+    ///
+    /// 工具前的说明文字在工具启动时已刷到 `stderr`，不能再次作为最终回复输出。
+    fn final_message(&self, outcome: &crate::chat::agent_loop::TurnOutcome) -> Option<String> {
+        if !matches!(outcome, crate::chat::agent_loop::TurnOutcome::Complete) {
+            return None;
+        }
         self.parts
             .iter()
             .rev()
-            .find(|part| part.kind == PartKind::Text.as_str() && !part.content.trim().is_empty())
+            .find(|part| {
+                part.kind == PartKind::Text.as_str()
+                    && !part.content.trim().is_empty()
+                    && self
+                        .last_tool_position
+                        .is_none_or(|tool_position| part.position > tool_position)
+            })
             .map(|part| part.content.clone())
     }
 }
@@ -497,7 +447,7 @@ pub async fn run_exec_turn(
         sender.clone(),
         Arc::clone(&stream_factory),
     );
-    let host = ExecHost::new(sender.clone(), model.clone(), Arc::clone(&stream_factory));
+    let host = ExecHost::new(sender.clone());
     let stream_one = {
         let factory = Arc::clone(&stream_factory);
         let sender = sender.clone();
@@ -566,7 +516,7 @@ pub async fn run_exec_turn(
     }
 
     runner.close_open_part(processor);
-    let final_message = runner.final_message();
+    let final_message = runner.final_message(&summary.outcome);
     let parts = std::mem::take(&mut runner.parts);
     drop(runner);
 
@@ -583,6 +533,43 @@ pub async fn run_exec_turn(
     }
     let _ = processor.on_turn_finished(&summary, final_message.as_deref());
     summary
+}
+
+/// 主轮自动压缩：把摘要写成会话检查点（与子 agent 同口径）。
+///
+/// 内存历史已被 loop 裁剪；不落库会让 `exec resume` / TUI 恢复时丢失检查点。
+fn commit_main_compact(
+    db: &Database,
+    workspace: &Path,
+    session_id: &str,
+    notice: &AutoCompactNotice,
+) -> Result<(), crate::db::DbError> {
+    let messages = db
+        .load_chat_session(workspace, session_id)?
+        .unwrap_or_default();
+    let end_sequence = messages
+        .iter()
+        .map(|message| message.sequence)
+        .max()
+        .unwrap_or(0);
+    let base_checkpoint_id = db
+        .active_checkpoint(workspace, session_id)?
+        .map(|checkpoint| checkpoint.id);
+    let expected_revision = db.session_revision(session_id)?;
+    db.commit_compact(
+        workspace,
+        &CompactCommit {
+            session_id: session_id.to_string(),
+            expected_revision,
+            base_checkpoint_id,
+            start_sequence: 0,
+            end_sequence,
+            summary_text: notice.summary.clone(),
+            model_label: notice.model_label.clone(),
+            operation_id: crate::db::new_external_id("autocompact"),
+        },
+    )?;
+    Ok(())
 }
 
 /// loop 结局 → DB 终态（`complete` 的 stop reason 与事件层同口径）。
@@ -756,203 +743,5 @@ fn failure_text(execution: &ToolExecutionResult) -> Option<String> {
             .failure_message()
             .map(|message| message.chars().take(512).collect()),
         _ => None,
-    }
-}
-
-/// 事件层 mutation 请求的直连 DB 处理；回执丢失由 recorder 按取消收尾。
-pub(crate) fn handle_mutation_event(db: &Database, event: ExecMutationEvent) {
-    match event {
-        ExecMutationEvent::Prepare {
-            workspace,
-            session_id,
-            user_message_id,
-            tool_call_id,
-            changes,
-            reply,
-        } => {
-            let result = db
-                .prepare_mutations(
-                    &workspace,
-                    &session_id,
-                    &user_message_id,
-                    &tool_call_id,
-                    &changes,
-                )
-                .map(|ticket| MutationTicket { ids: ticket.ids })
-                .map_err(mutation_error);
-            let _ = reply.send(result);
-        }
-        ExecMutationEvent::Commit {
-            workspace,
-            session_id,
-            ticket,
-            observed,
-            reply,
-        } => {
-            let result = db
-                .commit_mutations(
-                    &workspace,
-                    &session_id,
-                    &crate::db::chat::PreparedTicket { ids: ticket.ids },
-                    &observed,
-                )
-                .map_err(mutation_error);
-            let _ = reply.send(result);
-        }
-    }
-}
-
-fn mutation_error(error: crate::db::DbError) -> MutationError {
-    let code = match error {
-        crate::db::DbError::RewindLimit => "limit",
-        crate::db::DbError::StaleRead => "stale_read",
-        _ => "persist",
-    };
-    MutationError::new(
-        code,
-        format!("failed to persist file snapshot: {}", error.code()),
-    )
-}
-
-/// 每轮构造一次的 recorder 工厂；每次调用克隆出按 `call_id` 绑定的 recorder。
-/// worker 线程在路径锁内同步等待事件循环的 DB 回执。
-#[derive(Clone)]
-struct ExecRecorder {
-    sender: mpsc::UnboundedSender<ExecLoopEvent>,
-    workspace: PathBuf,
-    session_id: String,
-    user_message_id: String,
-    tool_call_id: String,
-}
-
-impl MutationRecorderFactory for ExecRecorder {
-    fn for_call(&self, call_id: &str) -> Arc<dyn MutationRecorder> {
-        Arc::new(Self {
-            tool_call_id: call_id.to_string(),
-            ..self.clone()
-        })
-    }
-}
-
-impl MutationRecorder for ExecRecorder {
-    fn prepare(&self, mutation: &PreparedMutation) -> Result<MutationTicket, MutationError> {
-        let changes = mutation.paths.iter().map(change_write).collect();
-        let (reply, receiver) = oneshot::channel();
-        let event = ExecMutationEvent::Prepare {
-            workspace: self.workspace.clone(),
-            session_id: self.session_id.clone(),
-            user_message_id: self.user_message_id.clone(),
-            tool_call_id: self.tool_call_id.clone(),
-            changes,
-            reply,
-        };
-        if self.sender.send(ExecLoopEvent::Mutation(event)).is_err() {
-            return Err(MutationError::new(
-                "cancelled",
-                "the exec event loop is gone; file mutation was not started",
-            ));
-        }
-        receiver
-            .blocking_recv()
-            .map_err(|_| MutationError::new("cancelled", "snapshot acknowledgement lost"))?
-    }
-
-    fn commit(
-        &self,
-        ticket: MutationTicket,
-        observed: &ObservedMutation,
-    ) -> Result<(), MutationError> {
-        let observed = observed
-            .paths
-            .iter()
-            .map(|item| ObservedWrite {
-                actual_after: image_write(&item.actual_after, None, false),
-                success: item.success,
-            })
-            .collect();
-        let (reply, receiver) = oneshot::channel();
-        let event = ExecMutationEvent::Commit {
-            workspace: self.workspace.clone(),
-            session_id: self.session_id.clone(),
-            ticket,
-            observed,
-            reply,
-        };
-        if self.sender.send(ExecLoopEvent::Mutation(event)).is_err() {
-            return Err(MutationError::new(
-                "cancelled",
-                "the exec event loop is gone; file mutation was not committed",
-            ));
-        }
-        receiver
-            .blocking_recv()
-            .map_err(|_| MutationError::new("cancelled", "mutation acknowledgement lost"))?
-    }
-}
-
-/// 注入生产 recorder 工厂（每轮一次，按 call_id 绑定所有权）。
-pub(crate) fn new_mutation_recorder_factory(
-    sender: mpsc::UnboundedSender<ExecLoopEvent>,
-    workspace: PathBuf,
-    session_id: String,
-    user_message_id: String,
-) -> Arc<dyn MutationRecorderFactory> {
-    Arc::new(ExecRecorder {
-        sender,
-        workspace,
-        session_id,
-        user_message_id,
-        tool_call_id: String::new(),
-    })
-}
-
-/// 工具侧 mutation → DB 写入参数；Git blob 在调用线程（worker）完成。
-fn change_write(change: &PathMutation) -> PathMutationWrite {
-    let identity = identify(&change.target);
-    let anchor = crate::platform::path_anchor(&change.target);
-    PathMutationWrite {
-        operation: change.operation.as_str().to_string(),
-        path: crate::platform::encode_path(&change.path),
-        target_path: crate::platform::encode_path(&change.target),
-        anchor_path: anchor
-            .as_ref()
-            .map(|(lexical, _)| crate::platform::encode_path(lexical)),
-        anchor_canonical: anchor
-            .as_ref()
-            .map(|(_, canonical)| crate::platform::encode_path(canonical)),
-        before: image_write(&change.before, identity.as_ref(), true),
-        planned_after: image_write(&change.planned_after, identity.as_ref(), true),
-        expected_version: change.expected_version.clone(),
-    }
-}
-
-/// 原始镜像 → DB 镜像；`with_git` 为真时写入项目对象库（失败降级为纯字节）。
-fn image_write(
-    image: &RawImage,
-    identity: Option<&WorktreeIdentity>,
-    with_git: bool,
-) -> ImageWrite {
-    let git_oid = if with_git && image.kind == RawKind::Regular {
-        identity.and_then(|identity| write_blob(identity, &image.bytes))
-    } else {
-        None
-    };
-    ImageWrite {
-        kind: match image.kind {
-            RawKind::Missing => "missing".to_string(),
-            RawKind::Regular => "regular".to_string(),
-            RawKind::Symlink => "symlink".to_string(),
-        },
-        bytes: (image.kind == RawKind::Regular).then(|| image.bytes.clone()),
-        mode: image.mode.map(i64::from),
-        link_target: image
-            .link_target
-            .as_ref()
-            .map(|target| crate::platform::encode_path(target)),
-        git_oid,
-        worktree_root: identity.map(|identity| crate::platform::encode_path(&identity.root)),
-        git_dir: identity.map(|identity| crate::platform::encode_path(&identity.git_dir)),
-        head_ref: identity.and_then(|identity| identity.head_ref.clone()),
-        head_oid: identity.and_then(|identity| identity.head_oid.clone()),
     }
 }
