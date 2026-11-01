@@ -39,11 +39,8 @@ pub fn render(
     let command_panel_open = state.prompt.mention().is_some()
         || state.prompt.slash_panel().is_some()
         || state.prompt.panel().is_some();
-    // 边框按钮提示例外（页码菜单、引用文件夹内容弹窗）：由调用方在浮层之后渲染（覆盖浮层）。
-    let border_tooltip_open = matches!(
-        state.overlay,
-        Some(Overlay::PageMenu(_) | Overlay::ReferencedFolderSearch(_))
-    );
+    // 边框按钮提示例外（引用文件夹内容弹窗）：由调用方在浮层之后渲染（覆盖浮层）。
+    let border_tooltip_open = matches!(state.overlay, Some(Overlay::ReferencedFolderSearch(_)));
     if command_panel_open || (state.overlay.is_some() && !border_tooltip_open) {
         return None;
     }
@@ -76,21 +73,12 @@ pub fn render(
 }
 
 /// 全部可提示按钮及其矩形；渲染与鼠标命中共用同一几何。
-///
-/// 页码菜单打开时只返回其边框按钮（浮层是模态，其余按钮不可达）。
 fn targets(
     view: &ViewLayout,
     state: &AppState,
     pane_rects: &[(PaneId, Rect)],
     screen: Rect,
 ) -> Vec<(TooltipTarget, Rect)> {
-    if let Some(Overlay::PageMenu(menu)) = &state.overlay {
-        let layout = ui::overlay::page_menu_layout(state, screen, menu);
-        return vec![
-            (TooltipTarget::PageMenuAdd, layout.new_rect),
-            (TooltipTarget::PageMenuDelete, layout.delete_rect),
-        ];
-    }
     if let Some(Overlay::ReferencedFolderSearch(search)) = &state.overlay {
         let Some(layout) = ui::overlay::referenced_search_layout(screen, search) else {
             return Vec::new();
@@ -152,7 +140,7 @@ fn targets(
         }
     }
     if !state.prompt_collapsed && state.right_tab == RightTab::Prompt {
-        let tree = state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Tree;
+        let mode = state.prompt_owner().prompt_panel.mode;
         for (button, target) in [
             (layout::PromptToolbarButton::Mode, TooltipTarget::PromptMode),
             (
@@ -160,10 +148,6 @@ fn targets(
                 TooltipTarget::PromptFolders,
             ),
             (layout::PromptToolbarButton::Pin, TooltipTarget::PromptPin),
-            (
-                layout::PromptToolbarButton::BlockFocus,
-                TooltipTarget::PromptBlockFocus,
-            ),
             (
                 layout::PromptToolbarButton::TempPrompt,
                 TooltipTarget::PromptTempPrompt,
@@ -176,28 +160,33 @@ fn targets(
             ),
             (layout::PromptToolbarButton::Save, TooltipTarget::PromptSave),
         ] {
-            if let Some(area) = layout::prompt_toolbar_button_rect(view.prompt, button, tree) {
+            if let Some(area) = layout::prompt_toolbar_button_rect(view.prompt, button, mode) {
                 targets.push((target, area));
             }
         }
-        let text_area = crate::layout::prompt_content_rect(view.prompt);
-        for hit in ui::prompt::template_buttons(&state.prompt, text_area) {
-            targets.push((
-                TooltipTarget::TemplateButton {
-                    line: hit.line,
-                    button: template_button_kind(hit.button),
-                },
-                hit.rect,
-            ));
-        }
-        for hit in ui::prompt::block_buttons(&state.prompt, text_area) {
-            targets.push((
-                TooltipTarget::BlockButton {
-                    line: hit.line,
-                    button: block_button_kind(hit.button),
-                },
-                hit.rect,
-            ));
+        if mode == crate::app::prompt::PromptMode::Editor {
+            if let Some(rect) = ui::prompt_frame::prompt_status_rect(view.prompt, state) {
+                targets.push((TooltipTarget::PromptTemplateStatus, rect));
+            }
+            let text_area = crate::layout::prompt_content_rect(view.prompt);
+            for hit in ui::prompt::template_buttons(&state.prompt, text_area) {
+                targets.push((
+                    TooltipTarget::TemplateButton {
+                        line: hit.line,
+                        button: template_button_kind(hit.button),
+                    },
+                    hit.rect,
+                ));
+            }
+            for hit in ui::prompt::block_buttons(&state.prompt, text_area) {
+                targets.push((
+                    TooltipTarget::BlockButton {
+                        line: hit.line,
+                        button: block_button_kind(hit.button),
+                    },
+                    hit.rect,
+                ));
+            }
         }
     }
     targets
@@ -206,7 +195,6 @@ fn targets(
 /// app 侧目标枚举与 ui 按钮种类的映射。
 fn template_button_kind(button: ui::prompt::TemplateBlockButton) -> TemplateButtonKind {
     match button {
-        ui::prompt::TemplateBlockButton::Status => TemplateButtonKind::Status,
         ui::prompt::TemplateBlockButton::Copy => TemplateButtonKind::Copy,
         ui::prompt::TemplateBlockButton::Clean => TemplateButtonKind::Clean,
         ui::prompt::TemplateBlockButton::Delete => TemplateButtonKind::Delete,
@@ -216,7 +204,6 @@ fn template_button_kind(button: ui::prompt::TemplateBlockButton) -> TemplateButt
 /// 补充块按钮 → app 侧种类。
 fn block_button_kind(button: ui::prompt::BlockButton) -> BlockButtonKind {
     match button {
-        ui::prompt::BlockButton::Fold => BlockButtonKind::Fold,
         ui::prompt::BlockButton::Copy => BlockButtonKind::Copy,
         ui::prompt::BlockButton::Clean => BlockButtonKind::Clean,
         ui::prompt::BlockButton::Delete => BlockButtonKind::Delete,

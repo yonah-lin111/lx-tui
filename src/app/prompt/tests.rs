@@ -249,15 +249,15 @@ fn selection_preserves_leading_indentation_and_accounts_for_block_gutter() {
         Some("first")
     );
 
-    // 模板块内（左边框占 2 列）：从块内正文起点（col 2）或首个非空白字符（col 4）拖选均保留缩进。
+    // 模板块内（左侧色条占 1 列）：从块内正文起点（col 1）或首个非空白字符（col 3）拖选均保留缩进。
     let mut block = prompt(40, 6);
     block.set_text("&&& addTemplate --start\n  - item1\n\n    - item2\n&&& addTemplate --end");
     assert_eq!(
-        block.selection_text((1, 2), (3, 15)).as_deref(),
+        block.selection_text((1, 1), (3, 15)).as_deref(),
         Some("  - item1\n\n    - item2")
     );
     assert_eq!(
-        block.selection_text((1, 4), (3, 15)).as_deref(),
+        block.selection_text((1, 3), (3, 15)).as_deref(),
         Some("  - item1\n\n    - item2")
     );
 }
@@ -1447,7 +1447,7 @@ fn slash_panel_opens_filters_and_closes_off_line_end() {
     let mut prompt = prompt(40, 8);
     type_text(&mut prompt, "/");
     let panel = prompt.slash_panel().expect("panel on bare slash");
-    assert_eq!(panel.items().len(), 5, "5 个内置模板");
+    assert_eq!(panel.items().len(), 6, "5 个内置模板 + supplement");
     assert_eq!(panel.trigger().query, "");
 
     type_text(&mut prompt, "ref");
@@ -1581,9 +1581,9 @@ fn copy_text_at_cursor_extracts_supple_block_body() {
     let mut editor = prompt(60, 20);
     type_text(
         &mut editor,
-        "&&& x --start\n+++ supplement --start\n{title: Review}\n\n- keep me\n+++ supplement --end\n&&& x --end",
+        "&&& x --start\n&&& x --end\n\n+++ supplement --start\n{title: Review}\n\n- keep me\n+++ supplement --end",
     );
-    // 光标在最内层 `+++` 块内：复制其正文（剔除标题占位行）。
+    // 光标在顶层 `+++` 块内：复制其正文（剔除标题占位行）。
     let offset = editor.text().find("keep me").expect("body line");
     editor.set_cursor_offset_for_test(offset);
     assert_eq!(
@@ -1592,34 +1592,41 @@ fn copy_text_at_cursor_extracts_supple_block_body() {
         "光标在 `+++` 内复制补充块正文"
     );
     assert_eq!(
-        editor.supple_block_body(1).as_deref(),
+        editor.supple_block_body(3).as_deref(),
         Some("{title: Review}\n\n- keep me"),
         "补充块正文含标题行（复制语义再剔除）"
     );
 }
 
 #[test]
-fn cycle_status_at_cursor_cycles_inside_block() {
+fn cycle_status_cycles_from_anywhere_in_page_when_template_present() {
     let mut editor = prompt(60, 20);
-    with_add_template(&mut editor);
-    assert!(editor.cycle_template_status_at_cursor());
-    assert!(
-        editor.text().contains("--end in_progress"),
-        "{}",
-        editor.text()
+    editor.set_text(
+        "plain text header\n&&& addTemplate --start\nbody\n&&& addTemplate --end\nplain text footer",
     );
-    assert!(editor.cycle_template_status_at_cursor());
-    assert!(editor.text().contains("--end done"), "{}", editor.text());
-    assert!(editor.cycle_template_status_at_cursor());
-    assert!(
-        editor.text().trim_end().ends_with("--end"),
-        "回到 todo：{}",
-        editor.text()
-    );
+    editor.set_cursor_offset(0); // 在页面首行，完全位于 &&& 块外部
+    assert!(editor.cycle_template_status());
+    assert!(editor.text().contains("--end in_progress"));
+    editor.set_cursor_offset(editor.text().len()); // 在页面末尾，完全位于 &&& 块外部
+    assert!(editor.cycle_template_status());
+    assert!(editor.text().contains("--end done"));
+    assert!(editor.cycle_template_status());
+    assert!(editor.text().contains("&&& addTemplate --end\n"));
 
     let mut plain = prompt(40, 8);
-    type_text(&mut plain, "plain");
-    assert!(!plain.cycle_template_status_at_cursor(), "不在块内不处理");
+    plain.set_text("plain text only");
+    assert!(!plain.cycle_template_status(), "无 &&& 任务块时返回 false");
+}
+
+#[test]
+fn cycle_status_returns_false_for_unclosed_template_block() {
+    let mut editor = prompt(40, 8);
+    editor.set_text("&&& addTemplate --start\n{title: T}\n    body");
+    assert!(
+        !editor.cycle_template_status(),
+        "未闭合 &&& 无合法 --end，返回 false 交给反缩进"
+    );
+    assert!(!editor.text().contains("--end"));
 }
 
 #[test]
@@ -1739,11 +1746,15 @@ fn template_block_lines_shift_cursor_and_mouse_mapping() {
     let mut editor = prompt(40, 10);
     editor.insert_str("&&& addTemplate --start {title: }\n# Add\n&&& addTemplate --end\nplain");
 
-    // 块内行：渲染列 = 左边框槽 2 + 文本列；点击左边框（col 0/1）落到文本行首。
-    editor.set_cursor_from_cell(1, 2);
-    assert_eq!(editor.cursor_cell(), Some((1, 2)), "块行文本首列映射");
+    // 块内行：渲染列 = 左侧色条槽 1 + 文本列；点击左侧色条（col 0）落到文本行首。
+    editor.set_cursor_from_cell(1, 1);
+    assert_eq!(editor.cursor_cell(), Some((1, 1)), "块行文本首列映射");
     editor.set_cursor_from_cell(1, 0);
-    assert_eq!(editor.cursor_cell(), Some((1, 2)), "点击左边框钳到文本行首");
+    assert_eq!(
+        editor.cursor_cell(),
+        Some((1, 1)),
+        "点击左侧色条钳到文本行首"
+    );
     editor.set_cursor_from_cell(1, 4);
     assert_eq!(editor.cursor_cell(), Some((1, 4)));
 
@@ -1758,12 +1769,12 @@ fn template_block_lines_wrap_inside_border_gutters() {
     editor.insert_str("&&& addTemplate --start {title: }");
     let rows = editor.visual_rows();
     let block_rows: Vec<_> = rows.iter().filter(|row| row.line == 0).collect();
-    assert!(block_rows.len() > 1, "块行按扣除边框槽后的宽度换行");
+    assert!(block_rows.len() > 1, "块行按扣除色条槽后的宽度换行");
     assert!(
         block_rows
             .iter()
-            .all(|row| display_width(&editor.text()[row.start..row.end]) <= 10 - 3),
-        "换行宽度扣除左右边框槽"
+            .all(|row| display_width(&editor.text()[row.start..row.end]) < 10),
+        "换行宽度扣除左侧色条槽"
     );
 }
 
@@ -1835,13 +1846,10 @@ fn template_scoped_markdown_only_inside_blocks_and_block_command_only_outside() 
     );
     assert!(!names.contains(&"add"), "builtins hidden inside: {names:?}");
 
-    // 块外（已闭合块之后）：显示内置与模板块命令，隐藏 template 作用域 Markdown。
+    // 块外（尚无 &&&）：显示内置与模板块命令，隐藏 template 作用域 Markdown。
     let mut outside = prompt(80, 12);
     outside.set_custom_commands(custom_items());
-    type_text(
-        &mut outside,
-        "&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end\n/",
-    );
+    type_text(&mut outside, "/");
     let names: Vec<&str> = outside
         .slash_panel()
         .expect("panel outside block")
@@ -1855,6 +1863,25 @@ fn template_scoped_markdown_only_inside_blocks_and_block_command_only_outside() 
         !names.contains(&"notes"),
         "template markdown hidden outside: {names:?}"
     );
+
+    // 块外但已有 &&&：内置与模板块命令全部隐藏，仅保留 supplement 与全局 Markdown。
+    let mut after_template = prompt(80, 12);
+    after_template.set_custom_commands(custom_items());
+    type_text(
+        &mut after_template,
+        "&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end\n/",
+    );
+    let names: Vec<&str> = after_template
+        .slash_panel()
+        .expect("panel after template")
+        .items()
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
+    assert!(!names.contains(&"triage"), "{names:?}");
+    assert!(!names.contains(&"add"), "{names:?}");
+    assert!(names.contains(&"supplement"), "{names:?}");
+    assert!(names.contains(&"lint"), "{names:?}");
 }
 
 #[test]
@@ -2829,7 +2856,9 @@ fn backspace_removes_short_ref_as_one_block() {
 #[test]
 fn slash_supplement_offered_inside_template_and_inserts_subblock() {
     let mut prompt = prompt(60, 12);
-    type_text(&mut prompt, "&&& addTemplate --start {title: }\n");
+    prompt.set_text("&&& addTemplate --start {title: }\n\n&&& addTemplate --end");
+    let inside = prompt.text().find("\n&&& addTemplate --end").unwrap();
+    prompt.set_cursor_offset_for_test(inside);
     type_text(&mut prompt, "/supplement");
     let panel = prompt
         .slash_panel()
@@ -2841,10 +2870,6 @@ fn slash_supplement_offered_inside_template_and_inserts_subblock() {
         prompt.text().contains("+++ supplement --start"),
         "{}",
         prompt.text()
-    );
-    assert!(
-        prompt.folded_blocks().is_empty(),
-        "新建补充块默认展开，光标落在标题内可见"
     );
     assert_eq!(
         markdown::block_context(
@@ -2860,22 +2885,23 @@ fn supple_clean_and_delete_are_single_steps() {
     let text = concat!(
         "&&& x --start\n",
         "{title: }\n",
+        "&&& x --end\n",
+        "\n",
         "+++ supplement --start\n",
         "- Reference: \n",
         "- Requirements: \n",
         "  - \n",
-        "+++ supplement --end\n",
-        "&&& x --end",
+        "+++ supplement --end",
     );
     let mut prompt = prompt(60, 20);
     prompt.set_text(text);
-    assert!(prompt.clean_supple_block(2));
+    assert!(prompt.clean_supple_block(4));
     assert!(!prompt.text().contains("- Reference:"));
     assert!(prompt.text().contains("+++ supplement --end"));
     prompt.undo();
     assert_eq!(prompt.text(), text, "clean is one undo step");
 
-    assert!(prompt.delete_supple_block(2));
+    assert!(prompt.delete_supple_block(4));
     assert!(!prompt.text().contains("+++ supplement"));
     assert!(prompt.text().contains("&&& x --end"));
     prompt.undo();
@@ -2886,7 +2912,7 @@ fn supple_clean_and_delete_are_single_steps() {
 fn slash_panel_offers_git_worktree_inside_supple_block() {
     let mut editor = prompt(60, 12);
     editor.set_text(
-        "&&& x --start\n{title: }\n+++ supplement --start\nbody\n/w\n+++ supplement --end\n&&& x --end",
+        "&&& x --start\n{title: }\n&&& x --end\n\n+++ supplement --start\nbody\n/w\n+++ supplement --end",
     );
     editor.set_worktree_repo(Some(PathBuf::from("/repo")));
     let at = editor.text().find("/w").unwrap() + 2;
@@ -2902,261 +2928,4 @@ fn slash_panel_offers_git_worktree_inside_supple_block() {
             .map(|item| item.name.clone())
             .collect::<Vec<_>>()
     );
-}
-
-// ===== 块聚焦模式 =====
-
-const THREE_BLOCKS: &str = "intro\n\
-&&& a --start\n\
-{title: A}\n\
-body-a\n\
-&&& a --end\n\
-mid\n\
-&&& b --start\n\
-{title: B}\n\
-body-b\n\
-&&& b --end\n\
-outro";
-
-fn focus_prompt(text: &str) -> Prompt {
-    let mut editor = prompt(80, 20);
-    editor.set_text(text);
-    editor
-}
-
-fn line_start(text: &str, line: usize) -> usize {
-    text.split('\n')
-        .take(line)
-        .map(|segment| segment.len() + 1)
-        .sum()
-}
-
-#[test]
-fn enter_focus_prefers_cursor_block() {
-    let mut editor = focus_prompt(THREE_BLOCKS);
-    let cursor = editor.text().find("body-b").expect("body") + 2;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert_eq!(editor.focus_block, Some(6), "光标在块 B 内");
-    assert_eq!(editor.cursor(), cursor, "进入时保留块内光标");
-}
-
-#[test]
-fn enter_focus_falls_back_to_first_block() {
-    let mut editor = focus_prompt(THREE_BLOCKS);
-    let cursor = editor.text().find("intro").expect("intro");
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert_eq!(editor.focus_block, Some(1));
-    let brace = editor.text().find('}').expect("title end");
-    assert_eq!(editor.cursor(), brace, "光标落到标题值内");
-}
-
-#[test]
-fn enter_focus_returns_false_without_blocks() {
-    let mut editor = focus_prompt("plain text");
-    assert!(!editor.enter_block_focus());
-    assert_eq!(editor.focus_block, None);
-}
-
-#[test]
-fn adjacent_block_clamps_at_ends() {
-    let mut editor = focus_prompt(THREE_BLOCKS);
-    let cursor = editor.text().find("body-a").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert!(!editor.focus_adjacent_block(-1), "首块再往前钳制");
-    assert_eq!(editor.focus_block, Some(1));
-    assert!(editor.focus_adjacent_block(1));
-    assert_eq!(editor.focus_block, Some(6));
-    assert!(!editor.focus_adjacent_block(1), "末块再往后钳制");
-    assert_eq!(editor.focus_block, Some(6));
-}
-
-#[test]
-fn adjacent_block_skips_supple_and_fence() {
-    let text = "&&& a --start\nbody-a\n+++ supple --start\nsupple\n+++ supple --end\n\
-                ```\n&&& fake --start\n```\n&&& a --end\n\
-                &&& b --start\nbody-b\n&&& b --end";
-    let mut editor = focus_prompt(text);
-    let cursor = editor.text().find("body-a").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert!(editor.focus_adjacent_block(1));
-    assert_eq!(
-        editor.focus_block,
-        Some(9),
-        "只停在顶层 &&&，跳过 +++ 与围栏"
-    );
-}
-
-#[test]
-fn adjacent_block_includes_unclosed() {
-    let text = "&&& a --start\nbody-a\n&&& a --end\n&&& b --start\nbody-b";
-    let mut editor = focus_prompt(text);
-    let cursor = editor.text().find("body-a").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert!(editor.focus_adjacent_block(1));
-    assert_eq!(editor.focus_block, Some(3), "末尾未闭合块也算一块");
-}
-
-#[test]
-fn visual_rows_only_contains_focus_range() {
-    let mut editor = focus_prompt(THREE_BLOCKS);
-    let cursor = editor.text().find("body-a").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    let rows = editor.visual_rows();
-    assert!(!rows.is_empty());
-    for row in rows {
-        assert!((1..=4).contains(&row.line), "行 {} 在块 A 外", row.line);
-    }
-}
-
-#[test]
-fn cursor_cell_and_click_agree_under_focus() {
-    let mut editor = focus_prompt(THREE_BLOCKS);
-    let cursor = editor.text().find("body-a").expect("body") + 2;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    let (row, col) = editor.cursor_cell().expect("cursor visible");
-    editor.set_cursor_from_cell(row, col);
-    assert_eq!(editor.cursor(), cursor, "光标单元格与点击映射互为逆");
-}
-
-#[test]
-fn selection_bounds_clamped_to_focus_block() {
-    let mut editor = focus_prompt(THREE_BLOCKS);
-    let cursor = editor.text().find("body-a").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    let (from, to) = editor
-        .selection_bounds((0, 0), (u16::MAX, u16::MAX))
-        .expect("selection");
-    let selected = &editor.text()[from..to];
-    assert!(selected.starts_with("&&& a --start"), "{selected}");
-    assert!(selected.ends_with("&&& a --end"), "{selected}");
-    assert!(!selected.contains("intro"));
-    assert!(!selected.contains("mid"));
-    assert!(!selected.contains("body-b"));
-}
-
-#[test]
-fn empty_rows_queries_do_not_panic() {
-    let mut editor = focus_prompt(THREE_BLOCKS);
-    let cursor = editor.text().find("body-a").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    let start = line_start(editor.text(), 1);
-    assert!(editor.delete_template_block(1));
-    editor.focus_after_block_removed(1);
-    // 块删除后的同一帧：这些查询都必须能容忍空/失效视口。
-    let _ = editor.cursor_cell();
-    editor.set_cursor_from_cell(0, 0);
-    let _ = editor.selection_text((0, 0), (3, 3));
-    editor.scroll_to(usize::MAX);
-    let _ = editor.visual_rows();
-    let _ = start;
-}
-
-#[test]
-fn delete_current_block_focuses_next() {
-    let mut editor = focus_prompt(THREE_BLOCKS);
-    let cursor = editor.text().find("body-a").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert!(editor.delete_template_block(1));
-    editor.focus_after_block_removed(1);
-    assert_eq!(editor.focus_block, Some(2), "删除后的下一个块顶替了原行号");
-}
-
-#[test]
-fn delete_current_block_focuses_previous() {
-    let mut editor = focus_prompt(THREE_BLOCKS);
-    let cursor = editor.text().find("body-b").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert!(editor.delete_template_block(6));
-    editor.focus_after_block_removed(6);
-    assert_eq!(editor.focus_block, Some(1), "末块删除后回到上一块");
-}
-
-#[test]
-fn delete_last_block_exits_focus() {
-    let mut editor = focus_prompt("&&& only --start\nbody\n&&& only --end");
-    let cursor = editor.text().find("body").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert!(editor.delete_template_block(0));
-    editor.focus_after_block_removed(0);
-    assert_eq!(editor.focus_block, None);
-}
-
-#[test]
-fn undo_restores_block_focus() {
-    let mut editor = focus_prompt(THREE_BLOCKS);
-    let cursor = editor.text().find("body-a").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert!(editor.delete_template_block(1));
-    editor.focus_after_block_removed(1);
-    assert_eq!(editor.focus_block, Some(2));
-    editor.undo();
-    assert!(editor.text().contains("body-a"));
-    assert_eq!(editor.focus_block, Some(1), "撤销删除后原块重新聚焦");
-}
-
-#[test]
-fn edit_inside_block_keeps_focus_and_outside_exits() {
-    let mut editor = focus_prompt(THREE_BLOCKS);
-    let cursor = editor.text().find("body-a").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    editor.insert_char('!');
-    assert_eq!(editor.focus_block, Some(1), "块内编辑保持聚焦");
-
-    let outside = editor.text().find("outro").expect("outro") + 1;
-    editor.set_cursor_offset_for_test(outside);
-    editor.insert_char('?');
-    assert_eq!(editor.focus_block, None, "光标落到块外即退出");
-}
-
-#[test]
-fn focus_relocates_when_recorded_line_invalid() {
-    let mut editor = focus_prompt(THREE_BLOCKS);
-    editor.focus_block = Some(999);
-    let cursor = editor.text().find("body-b").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    editor.reconcile_block_focus();
-    assert_eq!(editor.focus_block, Some(6), "失效行按光标所在块重定位");
-}
-
-#[test]
-fn delete_current_block_focuses_adjacent_next_that_shifts_up() {
-    let text = "&&& a --start\nbody-a\n&&& a --end\n&&& b --start\nbody-b\n&&& b --end";
-    let mut editor = focus_prompt(text);
-    let cursor = editor.text().find("body-a").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert!(editor.delete_template_block(0));
-    editor.focus_after_block_removed(0);
-    assert_eq!(
-        editor.focus_block,
-        Some(0),
-        "紧邻的下一块顶到原起始行仍须聚焦"
-    );
-}
-
-#[test]
-fn clean_and_status_toggle_keep_focus_on_same_block() {
-    let mut editor = focus_prompt("&&& a --start\n{title: A}\n- \nbody\n&&& a --end");
-    let cursor = editor.text().find("body").expect("body") + 1;
-    editor.set_cursor_offset_for_test(cursor);
-    assert!(editor.enter_block_focus());
-    assert!(editor.clean_template_block(0));
-    assert_eq!(editor.focus_block, Some(0), "清理空项后仍在原块");
-    assert!(editor.toggle_template_status(0));
-    assert_eq!(editor.focus_block, Some(0), "状态轮转后仍在原块");
-    assert!(editor.block_focus_active());
 }

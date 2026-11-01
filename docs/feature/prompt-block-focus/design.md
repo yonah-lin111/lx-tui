@@ -1,5 +1,7 @@
 # Prompt 单模板块聚焦模式 — 设计
 
+> **已被 `docs/feature/prompt-block-restyle/` 全部取代**（单模板块聚焦模式已移除，`Ctrl/Cmd+←/→` 改为切换上一页/下一页）。
+>
 > 状态：**已实施并合并**（2026-10-26 实施，2026-10-27 合入 `dev`，见 §13）。
 >
 > 任务目录：`docs/feature/prompt-block-focus/`

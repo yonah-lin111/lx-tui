@@ -325,7 +325,7 @@ pub fn directory() -> Style {
 //
 // 用 `Color::Rgb` 而不是 256 色：GitHub 的十六进制值经过 256 色 cube 量化会明显偏色
 // （例如 `#a5d6ff` 会落到 `#afd7ff`），而且用户主题对 Indexed 的重映射会让它不再是
-// GitHub。固定 RGB 与 [`template_block_bg`] 同一条理由。
+// GitHub。
 //
 // GitHub Dark 的结构几乎**没有强调色**：标题/粗体/斜体/引用都只是正文色 + 修饰符，
 // 颜色只出现在链接（`#4493f8`）与代码 token 上。因此本组不会重新变成“花里胡哨”。
@@ -598,7 +598,7 @@ pub fn template_command(id: Option<SlashCommandId>) -> Style {
     Style::default().fg(color).add_modifier(Modifier::BOLD)
 }
 
-/// 模板块标题占位符 `{title: …}`：Cyan 下划线（与状态色边框、@ 提及黄区分）。
+/// 模板块标题占位符 `{title: …}`：Cyan 下划线（与状态标签色、@ 提及黄区分）。
 pub fn template_title() -> Style {
     Style::default()
         .fg(Color::Cyan)
@@ -683,25 +683,19 @@ pub fn template_status(status: TemplateStatus) -> Style {
     }
 }
 
-/// 模板块边框：按状态分色（todo 靛蓝 / in_progress 黄 / done 绿）。
+/// &&& 模板块色条与分割线：固定为 lx 品牌粉（`Indexed 218`），不随状态变色；
+/// 与 +++（品红）及三态色（蓝/黄/绿）保持区分。
+pub fn template_block_bar() -> Style {
+    Style::default().fg(LX_PINK)
+}
+
+/// 模板块状态标签：按状态分色（todo 靛蓝 / in_progress 黄 / done 绿）。
 pub fn template_border(status: TemplateStatus) -> Style {
     match status {
         TemplateStatus::Todo => Style::default().fg(Color::LightBlue),
         TemplateStatus::InProgress => Style::default().fg(Color::Yellow),
         TemplateStatus::Done => Style::default().fg(Color::Green),
     }
-}
-
-/// 模板块整行底色：按状态铺低饱和暗色底（todo 暗灰蓝 / in_progress 暗灰琥珀 / done 暗灰绿）。
-///
-/// 固定 RGB，不受终端 256 色主题映射影响；只设置背景，前景与修饰符由各单元格自身样式决定。
-pub fn template_block_bg(status: TemplateStatus) -> Style {
-    let color = match status {
-        TemplateStatus::Todo => Color::Rgb(35, 40, 56),
-        TemplateStatus::InProgress => Color::Rgb(51, 41, 28),
-        TemplateStatus::Done => Color::Rgb(29, 46, 36),
-    };
-    Style::default().bg(color)
 }
 
 /// 补充块 `+++` 结构标记：次要信息。
@@ -981,15 +975,13 @@ pub fn supple_border() -> Style {
     Style::default().fg(Color::LightMagenta)
 }
 
-/// 补充块整行底色：固定暗紫（覆盖父 `&&&` 状态底色）。
-pub fn supple_block_bg() -> Style {
-    Style::default().bg(Color::Rgb(46, 32, 54))
-}
-
 /// 块操作按钮（补充块）：常态次要信息。
 pub fn block_button() -> Style {
     muted()
 }
+
+/// lx 页品牌主粉：logo `p` 像素与 Native 入口渐变起点（`Indexed 218`）。
+pub const LX_PINK: Color = Color::Indexed(218);
 
 /// lx 页品牌 logo 像素色：按像素字符映射 256 色（仅 lx 页使用，不影响其余区域的 ANSI 槽位规则）。
 ///
@@ -997,7 +989,7 @@ pub fn block_button() -> Style {
 pub fn logo_pixel(ch: char) -> Option<Color> {
     match ch {
         'k' => Some(Color::Indexed(17)),
-        'p' => Some(Color::Indexed(218)),
+        'p' => Some(LX_PINK),
         'n' => Some(Color::Indexed(168)),
         'b' => Some(Color::Indexed(117)),
         'c' => Some(Color::Indexed(195)),
@@ -1014,7 +1006,7 @@ pub fn lx_entry_border(selected: bool) -> Style {
 /// lx 页入口标签的渐变端点色（粉 → 蓝），取该入口 logo 的两主色（字标 L 侧粉、X 侧蓝）。
 pub fn lx_entry_gradient(entry: LxEntry) -> (Color, Color) {
     match entry {
-        LxEntry::Native => (Color::Indexed(218), Color::Indexed(117)),
+        LxEntry::Native => (LX_PINK, Color::Indexed(117)),
         LxEntry::Hybrid => (Color::Indexed(168), Color::Indexed(195)),
         LxEntry::Automation => (Color::Indexed(195), Color::Indexed(168)),
     }

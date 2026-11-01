@@ -392,6 +392,15 @@ pub(crate) fn handle_mouse_wheel(
                     ) {
                         *dirty = true;
                     }
+                } else if update::prompt_pages_mode(state) {
+                    let visible = update::prompt_tree_visible_rows(state);
+                    if update::scroll_page_list(
+                        state,
+                        direction.saturating_mul(WHEEL_LINES),
+                        visible,
+                    ) {
+                        *dirty = true;
+                    }
                 } else {
                     // 无滚动条时上限为 0，滚轮不产生位移、也不触发重绘。
                     if update::scroll_prompt(state, direction) {

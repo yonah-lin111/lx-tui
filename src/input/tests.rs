@@ -239,12 +239,12 @@ fn prompt_focus_maps_readline_shortcuts() {
         (
             KeyCode::Left,
             KeyModifiers::CONTROL,
-            EditorCommand::BlockPrev { cmd: false },
+            EditorCommand::PagePrev,
         ),
         (
             KeyCode::Right,
             KeyModifiers::CONTROL,
-            EditorCommand::BlockNext { cmd: false },
+            EditorCommand::PageNext,
         ),
         (
             KeyCode::Char('b'),
@@ -278,30 +278,30 @@ fn prompt_focus_maps_readline_shortcuts() {
 }
 
 #[test]
-fn ctrl_arrows_map_to_block_navigation() {
+fn ctrl_arrows_map_to_page_navigation() {
     let route_prompt =
         |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
     assert_eq!(
         route_prompt(KeyCode::Left, KeyModifiers::CONTROL),
-        Some(Routed::Editor(EditorCommand::BlockPrev { cmd: false }))
+        Some(Routed::Editor(EditorCommand::PagePrev))
     );
     assert_eq!(
         route_prompt(KeyCode::Right, KeyModifiers::CONTROL),
-        Some(Routed::Editor(EditorCommand::BlockNext { cmd: false }))
+        Some(Routed::Editor(EditorCommand::PageNext))
     );
 }
 
 #[test]
-fn cmd_arrows_map_to_block_navigation() {
+fn cmd_arrows_map_to_page_navigation() {
     let route_prompt =
         |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
     assert_eq!(
         route_prompt(KeyCode::Left, KeyModifiers::SUPER),
-        Some(Routed::Editor(EditorCommand::BlockPrev { cmd: true }))
+        Some(Routed::Editor(EditorCommand::PagePrev))
     );
     assert_eq!(
         route_prompt(KeyCode::Right, KeyModifiers::SUPER),
-        Some(Routed::Editor(EditorCommand::BlockNext { cmd: true }))
+        Some(Routed::Editor(EditorCommand::PageNext))
     );
 }
 
@@ -1064,88 +1064,44 @@ fn save_draft_overlay_routes_navigation_only() {
     );
 }
 
-// ===== 分页：页码菜单与页重命名输入路由 =====
+// ===== 列表切换快捷键路由（Ctrl/Cmd+L 与 Ctrl/Cmd+P） =====
 
 #[test]
-fn page_menu_overlay_routes_navigation_keys_only() {
-    let overlay = Some(OverlayKind::PageMenu);
+fn ctrl_and_cmd_l_p_map_to_list_toggles_while_alt_chords_are_ignored() {
+    let route_prompt =
+        |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+        assert_eq!(
+            route_prompt(KeyCode::Char('l'), modifiers),
+            Some(Routed::Editor(EditorCommand::TogglePromptList))
+        );
+        assert_eq!(
+            route_prompt(KeyCode::Char('L'), modifiers),
+            Some(Routed::Editor(EditorCommand::TogglePromptList))
+        );
+        assert_eq!(
+            route_prompt(KeyCode::Char('p'), modifiers),
+            Some(Routed::Editor(EditorCommand::TogglePageList))
+        );
+        assert_eq!(
+            route_prompt(KeyCode::Char('P'), modifiers),
+            Some(Routed::Editor(EditorCommand::TogglePageList))
+        );
+    }
     assert_eq!(
-        super::route(
-            key(KeyCode::Esc),
-            TermMode::empty(),
-            crate::app::state::FocusedContainer::Panes,
-            overlay,
-            false
-        ),
-        Some(Routed::Overlay(OverlayKey::Esc))
-    );
-    assert_eq!(
-        super::route(
-            key(KeyCode::Down),
-            TermMode::empty(),
-            crate::app::state::FocusedContainer::Panes,
-            overlay,
-            false
-        ),
-        Some(Routed::Overlay(OverlayKey::Down))
-    );
-    assert_eq!(
-        super::route(
-            key(KeyCode::Up),
-            TermMode::empty(),
-            crate::app::state::FocusedContainer::Panes,
-            overlay,
-            false
-        ),
-        Some(Routed::Overlay(OverlayKey::Up))
-    );
-    assert_eq!(
-        super::route(
-            key(KeyCode::Enter),
-            TermMode::empty(),
-            crate::app::state::FocusedContainer::Panes,
-            overlay,
-            false
-        ),
-        Some(Routed::Overlay(OverlayKey::Enter))
-    );
-    assert_eq!(
-        super::route(
-            key(KeyCode::Char('x')),
-            TermMode::empty(),
-            crate::app::state::FocusedContainer::Panes,
-            overlay,
-            false
+        route_prompt(
+            KeyCode::Char('l'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT
         ),
         None,
-        "其余按键吞掉"
-    );
-}
-
-#[test]
-fn page_rename_key_maps_single_line_input_semantics() {
-    assert_eq!(
-        page_rename_key(key(KeyCode::Enter)),
-        Some(OverlayKey::Enter)
-    );
-    assert_eq!(page_rename_key(key(KeyCode::Esc)), Some(OverlayKey::Esc));
-    assert_eq!(
-        page_rename_key(key(KeyCode::Char('a'))),
-        Some(OverlayKey::Char('a'))
+        "Ctrl+Alt+L 不映射"
     );
     assert_eq!(
-        page_rename_key(key(KeyCode::Backspace)),
-        Some(OverlayKey::Backspace)
-    );
-    assert_eq!(page_rename_key(key(KeyCode::Left)), Some(OverlayKey::Left));
-    assert_eq!(
-        page_rename_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-        Some(OverlayKey::Clear)
-    );
-    assert_eq!(
-        page_rename_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
+        route_prompt(
+            KeyCode::Char('p'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT
+        ),
         None,
-        "Ctrl 组合不进入输入（Ctrl+Q 由上层退出）"
+        "Ctrl+Alt+P 不映射"
     );
-    assert_eq!(page_rename_key(key(KeyCode::Tab)), None);
 }

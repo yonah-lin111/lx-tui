@@ -1401,7 +1401,10 @@ fn prompt_editor_divider_shows_editing_title() {
     let border = prompt_line(&lines, &view, y);
     assert!(border.contains(text::PROMPT_DRAFT_TITLE), "{border}");
     assert!(!border.contains("[tmp]"), "标题不带 tmp 标识: {border}");
-    assert!(border.contains("Page 1"), "内嵌当前页名: {border}");
+    assert!(
+        !border.contains("Page 1"),
+        "编辑区域左上角不显示页名: {border}"
+    );
     assert!(border.contains('‹') && border.contains('›'), "{border}");
     assert!(border.contains("1/1"), "{border}");
     // 标题为未聚焦灰（muted）：前景默认、DIM，即使 prompt 持有焦点。
@@ -1558,7 +1561,7 @@ fn prompt_renders_toolbar_and_divider_rows() {
     assert!(divider.contains(text::DIVIDER_RIGHT_JOIN), "{divider}");
     assert!(divider.contains(text::DIVIDER_MID), "{divider}");
     assert!(divider.contains(text::PROMPT_DRAFT_TITLE), "{divider}");
-    assert!(divider.contains("Page 1"), "{divider}");
+    assert!(!divider.contains("Page 1"), "{divider}");
     assert!(divider.contains("1/1"), "{divider}");
     // 顶边框只承载容器 tab。
     let border = prompt_line(&lines, &view, view.prompt.y);
@@ -1709,35 +1712,31 @@ fn prompt_bottom_identity_degrades_before_hiding() {
 }
 
 #[test]
-fn prompt_pin_button_sits_left_of_block_focus_and_tracks_state() {
+fn prompt_pin_button_sits_left_of_save_and_tracks_state() {
     let mut state = AppState::demo();
     let view = view_for(&state);
     let bar = crate::layout::prompt_toolbar_rect(view.prompt).expect("toolbar visible");
     let pin = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::Pin,
-        false,
+        PromptMode::Editor,
     )
     .expect("pin visible");
-    let block_focus = crate::layout::prompt_toolbar_button_rect(
+    let save = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
-        crate::layout::PromptToolbarButton::BlockFocus,
-        false,
+        crate::layout::PromptToolbarButton::Save,
+        PromptMode::Editor,
     )
-    .expect("block focus visible");
+    .expect("save visible");
     assert_eq!(pin.width, text::PROMPT_PINNED_LABEL.chars().count() as u16);
     assert_eq!(pin.y, bar.y, "位于功能按钮行");
+    assert_eq!(save.x - pin.right(), 1, "紧邻保存点左侧，间隔 1 列");
     assert_eq!(
-        block_focus.x - pin.right(),
-        1,
-        "紧邻块聚焦按钮左侧，间隔 1 列"
-    );
-    assert_eq!(
-        crate::layout::prompt_toolbar_button_at(view.prompt, pin.x, pin.y, false),
+        crate::layout::prompt_toolbar_button_at(view.prompt, pin.x, pin.y, PromptMode::Editor),
         Some(crate::layout::PromptToolbarButton::Pin)
     );
     assert_eq!(
-        crate::layout::prompt_toolbar_button_at(view.prompt, pin.x, pin.y - 1, false),
+        crate::layout::prompt_toolbar_button_at(view.prompt, pin.x, pin.y - 1, PromptMode::Editor),
         None,
         "分割线行不命中"
     );
@@ -1746,7 +1745,7 @@ fn prompt_pin_button_sits_left_of_block_focus_and_tracks_state() {
     let pinned = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::Pin,
-        false,
+        PromptMode::Editor,
     )
     .expect("pin visible");
     assert_eq!(pinned, pin, "两态同宽同位（仅符号变化）");
@@ -1757,7 +1756,7 @@ fn prompt_pin_button_sits_left_of_block_focus_and_tracks_state() {
         crate::layout::prompt_toolbar_button_rect(
             collapsed.prompt,
             crate::layout::PromptToolbarButton::Pin,
-            false
+            PromptMode::Editor
         ),
         None,
         "折叠态无表头不显示"
@@ -1771,7 +1770,7 @@ fn prompt_pin_button_renders_state_symbol_in_accent() {
     let pin = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::Pin,
-        false,
+        PromptMode::Editor,
     )
     .expect("pin visible");
     let buffer = render_buffer(&state);
@@ -1799,13 +1798,13 @@ fn prompt_pin_button_follows_tree_toolbar_left_of_temp_prompt() {
     let pin = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::Pin,
-        true,
+        PromptMode::Tree,
     )
     .expect("pin visible in tree view");
     let temp = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::TempPrompt,
-        true,
+        PromptMode::Tree,
     )
     .expect("temp prompt visible");
     assert_eq!(temp.x - pin.right(), 1, "树视图紧邻 [+] 左侧");
@@ -1851,7 +1850,7 @@ fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     let undo = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::Undo,
-        false,
+        PromptMode::Editor,
     )
     .expect("undo button visible");
     let undo_x = undo.x;
@@ -2315,6 +2314,7 @@ fn prompt_bottom_prefix_ignores_focus() {
 fn prompt_page_name_ignores_focus() {
     let mut state = AppState::demo();
     state.prompt_width = 56;
+    update::show_prompt_pages(&mut state);
     let view = view_for(&state);
     let mut styles = Vec::new();
     for focused in [false, true] {

@@ -125,6 +125,11 @@ pub(crate) fn handle_mouse_drag(
             if update::set_prompt_tree_scroll(state, offset, visible) {
                 *dirty = true;
             }
+        } else if update::prompt_pages_mode(state) {
+            let visible = update::prompt_tree_visible_rows(state);
+            if update::set_page_list_scroll(state, offset, visible) {
+                *dirty = true;
+            }
         } else if update::set_prompt_scroll(state, offset) {
             *dirty = true;
         }

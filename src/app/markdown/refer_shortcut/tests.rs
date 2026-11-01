@@ -69,23 +69,18 @@ fn trigger_blocked_on_title_and_wt_structural_lines() {
 
 #[test]
 fn scope_isolates_template_blocks() {
-    let text = "outside @abc\n&&& one\n@one\n&&& one --end\n&&& two\n@two\n&&& two --end";
+    let text = "outside @abc\n&&& one\n@one\n&&& one --end\noutside @two";
     let first = cursor_after(text, "@one");
     let scope = refer_scope(text, first).expect("block scope");
     let candidates = refer_candidates(text, &scope, &(first..first), &[]);
     let texts: Vec<&str> = candidates.iter().map(|item| item.text.as_str()).collect();
     assert_eq!(texts, vec!["@one"], "块内只取本块正文");
-    let other = cursor_after(text, "@two");
-    let scope = refer_scope(text, other).expect("block scope");
-    let candidates = refer_candidates(text, &scope, &(other..other), &[]);
-    let texts: Vec<&str> = candidates.iter().map(|item| item.text.as_str()).collect();
-    assert_eq!(texts, vec!["@two"], "其他块的内容不可见");
     // 块外作用域只收块外候选：块内引用不泄漏。
     let outside = text.find("outside").expect("outside") + 3;
     let whole = refer_scope(text, outside).expect("plain scope");
     let candidates = refer_candidates(text, &whole, &(outside..outside), &[]);
     let texts: Vec<&str> = candidates.iter().map(|item| item.text.as_str()).collect();
-    assert_eq!(texts, vec!["@abc"], "块内 @one / @two 不泄漏到块外");
+    assert_eq!(texts, vec!["@abc", "@two"], "块内 @one 不泄漏到块外");
 }
 
 #[test]

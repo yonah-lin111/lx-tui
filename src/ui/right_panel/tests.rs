@@ -369,3 +369,73 @@ fn bottom_identity_survives_tab_switch() {
         "底边框（身份标签 + 折叠按钮）不得随 tab 变化"
     );
 }
+
+#[test]
+fn edit_border_stays_grey_regardless_of_template_status() {
+    let mut state = AppState::demo();
+    state.prompt_width = 56;
+    state
+        .prompt
+        .set_text("&&& addTemplate --start\n{title: T}\n&&& addTemplate --end in_progress");
+    let view = view_for(&state);
+    let panel = view.prompt;
+    let buffer = render_buffer(&state);
+    let divider_y = crate::layout::prompt_divider_rect(panel)
+        .expect("divider")
+        .y;
+    let bottom_y = panel.bottom() - 1;
+
+    // 外框不随模板块状态染色：分割线两端与两侧竖边保持暗灰。
+    assert_eq!(buffer[(panel.x, divider_y)].symbol(), "\u{251c}");
+    assert!(
+        buffer[(panel.x, divider_y)]
+            .modifier
+            .contains(Modifier::DIM),
+        "分割线左端保持灰色"
+    );
+    assert!(
+        buffer[(panel.right() - 1, divider_y)]
+            .modifier
+            .contains(Modifier::DIM),
+        "分割线右端保持灰色"
+    );
+    for y in (divider_y + 1)..bottom_y {
+        let cell = &buffer[(panel.x, y)];
+        if cell.symbol() == "\u{2502}" {
+            assert!(
+                cell.modifier.contains(Modifier::DIM),
+                "左竖边 y={y} 保持灰色"
+            );
+        }
+    }
+}
+
+#[test]
+fn title_row_shows_template_status_label_only_in_editor_view() {
+    let mut state = AppState::demo();
+    state.prompt_width = 56;
+    state
+        .prompt
+        .set_text("&&& addTemplate --start\n{title: T}\n&&& addTemplate --end in_progress");
+    let view = view_for(&state);
+    let panel = view.prompt;
+    let row_y = crate::layout::prompt_divider_rect(panel)
+        .expect("divider")
+        .y;
+    let buffer = render_buffer(&state);
+    let row = panel_row(&buffer, &view, row_y);
+    assert!(row.contains(text::TEMPLATE_BUTTON_RUN), "{row}");
+    let byte = row.find(text::TEMPLATE_BUTTON_RUN).expect("status label");
+    let col = panel.x + u16::try_from(row[..byte].chars().count()).expect("col fits");
+    assert_eq!(
+        buffer[(col, row_y)].fg,
+        Color::Yellow,
+        "in_progress 状态标签为黄色"
+    );
+
+    // Tree 视图：标题行不显示状态标签。
+    state.workspaces[0].prompt_panel.mode = crate::app::prompt::PromptMode::Tree;
+    let buffer = render_buffer(&state);
+    let row = panel_row(&buffer, &view, row_y);
+    assert!(!row.contains(text::TEMPLATE_BUTTON_RUN), "{row}");
+}

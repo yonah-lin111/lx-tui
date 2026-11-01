@@ -12,9 +12,8 @@ pub const PROMPT_DIVIDER_HEIGHT: u16 = 1;
 pub const PROMPT_HEADER_HEIGHT: u16 = PROMPT_TOOLBAR_HEIGHT + PROMPT_DIVIDER_HEIGHT;
 /// 树视图顶部固定行数（搜索框 + 分割线）。
 pub const PROMPT_TREE_HEADER_HEIGHT: u16 = 2;
-/// prompt 模板块边框占位：左侧（`╭─`/`│ `/`╰─`）与右侧竖线（`╮`/`│`/`╯`）列数。
-pub const PROMPT_TEMPLATE_GUTTER_LEFT: u16 = 2;
-pub const PROMPT_TEMPLATE_GUTTER_RIGHT: u16 = 1;
+/// prompt 块左侧色条占位（`▎` + 0 列间隔）；右侧不再占位。
+pub const PROMPT_BLOCK_GUTTER_LEFT: u16 = 1;
 
 /// 模式按钮（`[≡]` / `[/]`）宽度（列）。
 const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 3;
@@ -39,37 +38,43 @@ pub(crate) const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = PROMPT_TOOLBAR_BUTTON_WIDTH
     + PROMPT_SELECT_ALL_WIDTH
     + PROMPT_TOOLBAR_BUTTON_GAP
     + 1;
-/// 块聚焦按钮宽度（列）：`[⊞]` / `[⊡]`，与 `[all]` 同层右组。
-const PROMPT_BLOCK_FOCUS_WIDTH: u16 = 3;
-/// 显示块聚焦按钮所需的最小内容区宽度（列）：左组 17 + 1 + `[⊡]` 3 + 1 + `●` 1。
-pub(crate) const PROMPT_BLOCK_FOCUS_MIN_WIDTH_EDITOR: u16 =
-    PROMPT_SELECT_ALL_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_BLOCK_FOCUS_WIDTH;
 /// 钉住按钮宽度（列）：单字图标 `[○]` / `[◉]` 恒为 3，两态同宽同址。
 pub(crate) const PROMPT_PIN_WIDTH: u16 = 3;
-/// 显示钉住按钮所需的最小内容区宽度（列）：编辑视图在块聚焦按钮左侧、树视图在 `[tmp]` 左侧。
+/// 显示钉住按钮所需的最小内容区宽度（列）：编辑视图在保存点左侧、树视图在 `[tmp]` 左侧、页视图在模式按钮右侧。
 pub(crate) const PROMPT_PIN_MIN_WIDTH_EDITOR: u16 =
-    PROMPT_BLOCK_FOCUS_MIN_WIDTH_EDITOR + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
+    PROMPT_SELECT_ALL_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
 pub(crate) const PROMPT_PIN_MIN_WIDTH_TREE: u16 =
     PROMPT_TEMP_PROMPT_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
+const PROMPT_PIN_MIN_WIDTH_PAGES: u16 =
+    PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH + 1;
 /// 引用文件夹按钮（`[refDir]`）宽度（列）；仅编辑视图显示、位于钉住按钮左侧。
 pub const PROMPT_FOLDERS_WIDTH: u16 = 8;
 /// 显示引用文件夹按钮所需的最小内容区宽度（列）：在钉住按钮左侧再让出宽度与间距。
 pub(crate) const PROMPT_FOLDERS_MIN_WIDTH_EDITOR: u16 =
     PROMPT_PIN_MIN_WIDTH_EDITOR + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_FOLDERS_WIDTH;
 
+/// 提示词面板视图模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptMode {
+    /// 树状管理器：文件夹与条目列表。
+    Tree,
+    /// 编辑视图：编辑选中条目正文。
+    Editor,
+    /// 页列表：当前编辑目标的页目录（编辑绑定保留，编辑缓冲原样驻留不渲染）。
+    Pages,
+}
+
 /// prompt 工具栏按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptToolbarButton {
     /// 视图模式切换：编辑视图显示 `[≡]`、树视图显示 `[/]`。
     Mode,
-    /// 钉住切换：未钉 `[○]`、已钉 `[◉]`（编辑视图在块聚焦按钮左侧、树视图在 `[tmp]` 左侧）。
+    /// 钉住切换：未钉 `[○]`、已钉 `[◉]`（编辑视图在保存点左侧、树视图在 `[tmp]` 左侧）。
     Pin,
     /// 树视图 `[tmp]`：新建临时提示词编辑视图（仅树视图显示、不入库）。
     TempPrompt,
     /// 编辑视图 `[dir]`：打开引用文件夹菜单（仅编辑视图显示，位于钉住按钮左侧）。
     Folders,
-    /// 编辑视图 `[⊞]` / `[⊡]`：切换「单模板块聚焦」模式（仅编辑视图显示）。
-    BlockFocus,
     Undo,
     Redo,
     SelectAll,
@@ -165,12 +170,12 @@ pub fn prompt_divider_rect(panel: Rect) -> Option<Rect> {
     })
 }
 
-/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[all]` / `[⊡]` / `[○]` / `[dir]`
-/// 各自按阈值独立隐藏；树视图与编辑视图各自的按钮集不同，`tree` 为是否树视图）。
+/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[all]` / `[○]` / `[dir]`
+/// 各自按阈值独立隐藏；各视图模式的按钮集不同）。
 pub fn prompt_toolbar_button_rect(
     panel: Rect,
     button: PromptToolbarButton,
-    tree: bool,
+    mode: PromptMode,
 ) -> Option<Rect> {
     let bar = prompt_toolbar_rect(panel)?;
     let inner = pane_inner_rect(panel);
@@ -179,27 +184,48 @@ pub fn prompt_toolbar_button_rect(
     let select_all_x = redo_x + PROMPT_UNDO_REDO_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP;
     let rect = match button {
         PromptToolbarButton::Mode => Rect::new(bar.x, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1),
-        PromptToolbarButton::Pin => {
-            let (anchor_button, min_width) = if tree {
-                (PromptToolbarButton::TempPrompt, PROMPT_PIN_MIN_WIDTH_TREE)
-            } else {
-                (PromptToolbarButton::BlockFocus, PROMPT_PIN_MIN_WIDTH_EDITOR)
-            };
-            if inner.width < min_width {
-                return None;
+        PromptToolbarButton::Pin => match mode {
+            PromptMode::Tree => {
+                if inner.width < PROMPT_PIN_MIN_WIDTH_TREE {
+                    return None;
+                }
+                let anchor =
+                    prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, mode)?;
+                Rect::new(
+                    anchor
+                        .x
+                        .saturating_sub(PROMPT_PIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP),
+                    bar.y,
+                    PROMPT_PIN_WIDTH,
+                    1,
+                )
             }
-            let anchor = prompt_toolbar_button_rect(panel, anchor_button, tree)?;
-            Rect::new(
-                anchor
-                    .x
-                    .saturating_sub(PROMPT_PIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP),
-                bar.y,
-                PROMPT_PIN_WIDTH,
-                1,
-            )
-        }
+            PromptMode::Pages => {
+                if inner.width < PROMPT_PIN_MIN_WIDTH_PAGES {
+                    return None;
+                }
+                Rect::new(
+                    bar.right().saturating_sub(PROMPT_PIN_WIDTH + 1),
+                    bar.y,
+                    PROMPT_PIN_WIDTH,
+                    1,
+                )
+            }
+            PromptMode::Editor => {
+                if inner.width < PROMPT_PIN_MIN_WIDTH_EDITOR {
+                    return None;
+                }
+                Rect::new(
+                    bar.right()
+                        .saturating_sub(1 + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH),
+                    bar.y,
+                    PROMPT_PIN_WIDTH,
+                    1,
+                )
+            }
+        },
         PromptToolbarButton::TempPrompt => {
-            if !tree || inner.width < PROMPT_TEMP_PROMPT_MIN_WIDTH {
+            if mode != PromptMode::Tree || inner.width < PROMPT_TEMP_PROMPT_MIN_WIDTH {
                 return None;
             }
             Rect::new(
@@ -210,10 +236,10 @@ pub fn prompt_toolbar_button_rect(
             )
         }
         PromptToolbarButton::Folders => {
-            if tree || inner.width < PROMPT_FOLDERS_MIN_WIDTH_EDITOR {
+            if mode != PromptMode::Editor || inner.width < PROMPT_FOLDERS_MIN_WIDTH_EDITOR {
                 return None;
             }
-            let anchor = prompt_toolbar_button_rect(panel, PromptToolbarButton::Pin, tree)?;
+            let anchor = prompt_toolbar_button_rect(panel, PromptToolbarButton::Pin, mode)?;
             Rect::new(
                 anchor
                     .x
@@ -223,39 +249,27 @@ pub fn prompt_toolbar_button_rect(
                 1,
             )
         }
-        PromptToolbarButton::BlockFocus => {
-            if tree || inner.width < PROMPT_BLOCK_FOCUS_MIN_WIDTH_EDITOR {
-                return None;
-            }
-            Rect::new(
-                bar.right()
-                    .saturating_sub(1 + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_BLOCK_FOCUS_WIDTH),
-                bar.y,
-                PROMPT_BLOCK_FOCUS_WIDTH,
-                1,
-            )
-        }
         PromptToolbarButton::Undo => {
-            if tree {
+            if mode != PromptMode::Editor {
                 return None;
             }
             Rect::new(undo_x, bar.y, PROMPT_UNDO_REDO_WIDTH, 1)
         }
         PromptToolbarButton::Redo => {
-            if tree {
+            if mode != PromptMode::Editor {
                 return None;
             }
             Rect::new(redo_x, bar.y, PROMPT_UNDO_REDO_WIDTH, 1)
         }
         PromptToolbarButton::SelectAll => {
-            if tree || inner.width < PROMPT_SELECT_ALL_MIN_WIDTH {
+            if mode != PromptMode::Editor || inner.width < PROMPT_SELECT_ALL_MIN_WIDTH {
                 return None;
             }
             // 左组 `[≡] [←] [→] [all]`：紧贴 `[→]` 右侧。
             Rect::new(select_all_x, bar.y, PROMPT_SELECT_ALL_WIDTH, 1)
         }
         PromptToolbarButton::Save => {
-            if tree {
+            if mode != PromptMode::Editor {
                 return None;
             }
             Rect::new(bar.right().saturating_sub(1), bar.y, 1, 1)
@@ -264,12 +278,12 @@ pub fn prompt_toolbar_button_rect(
     (rect.right() <= bar.right()).then_some(rect)
 }
 
-/// 命中 prompt 工具栏按钮；表头隐藏、非工具栏行或未命中时为 None；`tree` 为是否树视图。
+/// 命中 prompt 工具栏按钮；表头隐藏、非工具栏行或未命中时为 None。
 pub fn prompt_toolbar_button_at(
     panel: Rect,
     column: u16,
     row: u16,
-    tree: bool,
+    mode: PromptMode,
 ) -> Option<PromptToolbarButton> {
     let bar = prompt_toolbar_rect(panel)?;
     if row != bar.y {
@@ -279,7 +293,6 @@ pub fn prompt_toolbar_button_at(
         PromptToolbarButton::Mode,
         PromptToolbarButton::Folders,
         PromptToolbarButton::Pin,
-        PromptToolbarButton::BlockFocus,
         PromptToolbarButton::TempPrompt,
         PromptToolbarButton::Undo,
         PromptToolbarButton::Redo,
@@ -288,7 +301,7 @@ pub fn prompt_toolbar_button_at(
     ]
     .into_iter()
     .find(|button| {
-        prompt_toolbar_button_rect(panel, *button, tree)
+        prompt_toolbar_button_rect(panel, *button, mode)
             .is_some_and(|rect| rect.contains((column, row).into()))
     })
 }

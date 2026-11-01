@@ -362,7 +362,6 @@ pub fn finish_draft_save(state: &mut AppState, workspace: usize) {
         if let Some(PromptEditing::Temp(id)) = workspace_state.prompt_panel.editing {
             workspace_state.prompt_panel.remove_temp(id);
         }
-        workspace_state.prompt_panel.cancel_page_rename();
         workspace_state.prompt_panel.search.clear();
     }
 }

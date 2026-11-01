@@ -509,7 +509,7 @@ function initCommandSelects() {
     value: 'global',
     options: [
       {value: 'global', label: 'Global (everywhere)'},
-      {value: 'template', label: 'Template only'}
+      {value: 'template', label: 'Inside blocks (&&& / +++)'}
     ]
   });
   commandSelects.blockType = createSelect(document.getElementById('cmd-block-type-select'), {

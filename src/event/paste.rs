@@ -18,8 +18,8 @@ use crate::ui;
 /// 没有正文可插入，直接忽略。
 pub(super) fn handle_terminal_paste(state: &mut AppState, text: String) {
     state.prompt.paste_cancel();
-    // 树视图没有正文提案入口：文本按搜索框语义处理。
-    if update::prompt_tree_mode(state) {
+    // 树视图与页列表视图没有正文提案入口：文本按搜索框语义处理。
+    if update::prompt_tree_mode(state) || update::prompt_pages_mode(state) {
         update::apply_editor(state, EditorCommand::InsertText(text));
         return;
     }

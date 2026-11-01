@@ -736,14 +736,6 @@ impl Persistence {
                 });
                 changed || activated
             }
-            Effect::RenamePage {
-                workspace,
-                page_id,
-                name,
-            } => {
-                self.with_db(|db| db.rename_prompt_page(page_id, &name));
-                self.reload_tree(state, &prompt_key_for(state, &workspace))
-            }
             Effect::DeletePage {
                 workspace,
                 id,

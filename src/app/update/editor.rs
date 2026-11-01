@@ -2,14 +2,15 @@
 
 use crate::app::actions::EditorCommand;
 use crate::app::markdown::MentionEntry;
-use crate::app::prompt::{PromptEditing, PromptMode};
+use crate::app::prompt::{PromptEditing, PromptMode, page_rows};
 use crate::app::state::{AppState, FocusedContainer};
 use crate::layout::PaneId;
 
 use super::prompt::{
-    activate_prompt_row, apply_prompt_search, commit_prompt_buffer, move_prompt_selection,
-    prompt_tree_mode, prompt_tree_visible_rows, select_prompt_item, show_prompt_tree,
-    toggle_prompt_panel_mode,
+    activate_prompt_row, apply_page_search, apply_prompt_search, clamp_page_view,
+    commit_prompt_buffer, hide_prompt_pages, move_page_selection, move_prompt_selection,
+    open_selected_page, prompt_pages_mode, prompt_tree_mode, prompt_tree_visible_rows,
+    select_prompt_item, show_prompt_tree, toggle_prompt_pages, toggle_prompt_panel_mode,
 };
 use super::selection::{
     WHEEL_LINES, clear_selection, prompt_selection_bounds, scroll_prompt_selection,
@@ -21,7 +22,7 @@ use super::selection::{
 /// 紧跟的 Enter 会把这段正文替换成候选原文（把刚粘贴的路径吃掉）。
 pub fn apply_pasted_text(state: &mut AppState, text: String) {
     apply_editor(state, EditorCommand::InsertText(text));
-    if !prompt_tree_mode(state) {
+    if !prompt_tree_mode(state) && !prompt_pages_mode(state) {
         state.prompt.suppress_completion_panels();
     }
 }
@@ -31,23 +32,40 @@ pub fn apply_pasted_text(state: &mut AppState, text: String) {
 /// prompt 存在选区时：输入类命令用新内容替换选区，Backspace/Delete 删除选区，
 /// 其余命令先清除选区再执行（选区删除/替换作为一步撤销）。
 pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
-    // 树视图轻量接管按键：上下移动、回车激活、左右展开折叠，其余吞掉。
+    match command {
+        EditorCommand::TogglePromptList => {
+            state.prompt.clear_panel();
+            if prompt_pages_mode(state) {
+                hide_prompt_pages(state);
+                show_prompt_tree(state);
+            } else {
+                toggle_prompt_panel_mode(state);
+            }
+            return;
+        }
+        EditorCommand::TogglePageList => {
+            state.prompt.clear_panel();
+            toggle_prompt_pages(state);
+            return;
+        }
+        _ => {}
+    }
+    // 树视图轻量接管按键：上下移动、回车激活、左右展开折叠，其余进入搜索框。
     if prompt_tree_mode(state) {
         route_prompt_tree(state, &command);
         return;
     }
-    sync_mention_root(state);
-    if route_panel(state, &command) {
-        report_fold_blocked(state);
+    // 页列表视图接管按键：上下移动、回车打开、Esc 返回编辑，其余进入页搜索框。
+    if prompt_pages_mode(state) {
+        route_prompt_pages(state, &command);
         return;
     }
-    // 编辑绑定条目时 Esc 返回树视图并提交内容；无绑定时保持既有行为。
-    if command == EditorCommand::Escape && prompt_editing(state) {
-        show_prompt_tree(state);
+    sync_mention_root(state);
+    if route_panel(state, &command) {
         return;
     }
     if let Some((start, end)) = prompt_selection_bounds(state) {
-        // 写入类命令替换选区；跨折叠块被拒时保留选区与原文，只给提示。
+        // 写入类命令替换选区。
         let write = match &command {
             EditorCommand::InsertChar(ch) => Some(ch.to_string()),
             EditorCommand::InsertText(text) => Some(text.clone()),
@@ -61,7 +79,6 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
             if state.prompt.replace_range(start, end, &insert) {
                 clear_selection(state);
             }
-            report_fold_blocked(state);
             return;
         }
         clear_selection(state);
@@ -90,43 +107,25 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::DeleteWordForward => state.prompt.delete_word_forward(),
         EditorCommand::Indent => state.prompt.indent(),
         EditorCommand::Outdent => {
-            if !state.prompt.cycle_template_status_at_cursor() {
+            if !state.prompt.cycle_template_status() {
                 state.prompt.outdent();
             }
         }
-        EditorCommand::BlockPrev { cmd } => {
-            if state.prompt.block_focus_active() {
-                state.prompt.focus_adjacent_block(-1);
-            } else if !cmd {
-                state.prompt.move_word_backward();
-            }
+        EditorCommand::PagePrev => {
+            state.prompt.clear_panel();
+            super::switch_prompt_page(state, -1);
         }
-        EditorCommand::BlockNext { cmd } => {
-            if state.prompt.block_focus_active() {
-                state.prompt.focus_adjacent_block(1);
-            } else if !cmd {
-                state.prompt.move_word_forward();
-            }
+        EditorCommand::PageNext => {
+            state.prompt.clear_panel();
+            super::switch_prompt_page(state, 1);
+        }
+        EditorCommand::NewPage => {
+            super::create_or_toast_new_page(state);
         }
         EditorCommand::Undo => state.prompt.undo(),
         EditorCommand::Redo => state.prompt.redo(),
-        EditorCommand::Escape => {}
-    }
-    report_fold_blocked(state);
-}
-
-/// 写入落在折叠补充块内被拒时给出可见提示；不改变正文、选区与历史。
-pub fn report_fold_blocked(state: &mut AppState) {
-    if state.prompt.take_fold_blocked() {
-        super::show_toast(
-            state,
-            crate::app::toast::Toast::new(
-                crate::app::toast::ToastKind::Danger,
-                crate::ui::text::SUPPLE_FOLD_BLOCKED,
-                Some(state.prompt.id()),
-                std::time::Instant::now(),
-            ),
-        );
+        EditorCommand::Escape | EditorCommand::TogglePromptList | EditorCommand::TogglePageList => {
+        }
     }
 }
 
@@ -261,12 +260,28 @@ fn route_prompt_tree(state: &mut AppState, command: &EditorCommand) {
     }
 }
 
-/// 显示中工作区是否处于已绑定条目的编辑视图。
-pub(crate) fn prompt_editing(state: &AppState) -> bool {
-    state
-        .workspaces
-        .get(state.prompt_workspace())
-        .is_some_and(|workspace| workspace.prompt_panel.editing.is_some())
+/// 页列表视图按键路由：上下移动选中、回车打开、Esc 返回编辑视图；
+/// `PagePrev`/`PageNext` 吞掉，其余可映射按键进入页搜索框。
+fn route_prompt_pages(state: &mut AppState, command: &EditorCommand) {
+    let visible = prompt_tree_visible_rows(state);
+    match command {
+        EditorCommand::Up => {
+            move_page_selection(state, -1, visible);
+        }
+        EditorCommand::Down => {
+            move_page_selection(state, 1, visible);
+        }
+        EditorCommand::Newline => {
+            open_selected_page(state);
+        }
+        EditorCommand::Escape => {
+            hide_prompt_pages(state);
+        }
+        EditorCommand::PagePrev | EditorCommand::PageNext => {}
+        _ => {
+            apply_page_search(state, command);
+        }
+    }
 }
 
 /// 显示中工作区是否处于已绑定条目的编辑视图（临时提示词不参与自动保存）。
@@ -314,7 +329,6 @@ pub(crate) fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) 
     commit_prompt_buffer(state, from);
     if let Some(workspace) = state.workspaces.get_mut(from) {
         workspace.prompt_panel.drop_blank_temp_binding();
-        workspace.prompt_panel.cancel_page_rename();
         // 跨越工作区的切换丢弃编辑状态暂存：列表往返的历史不再适用于返回目标。
         workspace.prompt_panel.clear_editor_stash();
     }
@@ -343,10 +357,26 @@ pub(crate) fn restore_prompt_view(state: &mut AppState, index: usize) {
         return;
     };
     let panel = &workspace.prompt_panel;
-    if panel.mode == PromptMode::Editor {
+    if matches!(panel.mode, PromptMode::Editor | PromptMode::Pages) {
+        let prev_mode = panel.mode;
         match panel.editing {
             Some(PromptEditing::Item(id)) if panel.tree.item(id).is_some() => {
                 select_prompt_item(state, index, id);
+                // 正式条目也要保留 Pages 视图：`select_prompt_item` 会无条件切回 Editor。
+                if prev_mode == PromptMode::Pages {
+                    let visible = prompt_tree_visible_rows(state);
+                    if let Some(workspace) = state.workspaces.get_mut(index) {
+                        let panel = &mut workspace.prompt_panel;
+                        panel.mode = PromptMode::Pages;
+                        let rows_len = panel
+                            .editing_pages()
+                            .map(|(pages, active)| {
+                                page_rows(pages, active, panel.pages_view.search.text()).len()
+                            })
+                            .unwrap_or(0);
+                        clamp_page_view(panel, rows_len, visible);
+                    }
+                }
                 return;
             }
             Some(PromptEditing::Temp(id)) if panel.temp(id).is_some() => return,
@@ -358,8 +388,6 @@ pub(crate) fn restore_prompt_view(state: &mut AppState, index: usize) {
         let id = workspace.prompt_panel.ensure_blank_temp();
         workspace.prompt_panel.editing = Some(PromptEditing::Temp(id));
     }
-    // 兜底空草稿与旧缓冲无绑定关系，块聚焦不得跨目标残留。
-    state.prompt.exit_block_focus();
     state.prompt.set_text("");
 }
 
@@ -531,21 +559,18 @@ pub fn clean_template_block(state: &mut AppState, start_line: usize) -> bool {
 }
 
 /// 删除整个模板块（单步撤销）；返回是否产生变更。
-///
-/// 删除前处于块聚焦时，按「下一个 → 上一个 → 退出」接续聚焦；
-/// 删除过程中的 `settle()` 可能已按光标重定位，因此先捕获原模式再结算接续。
 pub fn delete_template_block(state: &mut AppState, start_line: usize) -> bool {
-    let focused = state.prompt.block_focus_active();
-    let deleted = state.prompt.delete_template_block(start_line);
-    if deleted && focused {
-        state.prompt.focus_after_block_removed(start_line);
-    }
-    deleted
+    state.prompt.delete_template_block(start_line)
 }
 
 /// 切换模板块状态 todo → in_progress → done（单步撤销）；返回是否产生变更。
 pub fn toggle_template_status(state: &mut AppState, start_line: usize) -> bool {
     state.prompt.toggle_template_status(start_line)
+}
+
+/// 循环本页 `&&&` 模板块状态（标题行状态标签点击）；无块时返回 false。
+pub fn cycle_page_template_status(state: &mut AppState) -> bool {
+    state.prompt.cycle_template_status()
 }
 
 /// 清理补充块内未填写的空项（单步撤销）；返回是否产生变更。

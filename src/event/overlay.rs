@@ -49,22 +49,6 @@ pub(crate) fn handle_overlay_click(
         }
     }
     match state.overlay.as_ref() {
-        Some(Overlay::PageMenu(menu)) => {
-            let layout = ui::overlay::page_menu_layout(state, screen, menu);
-            match ui::overlay::page_menu_item_at(state, screen, menu, column, row) {
-                Some(index) => {
-                    update::set_page_menu_selection(state, index);
-                    update::activate_page_menu_row(state);
-                }
-                // 点击菜单内部空白保持打开；仅点击菜单之外关闭。
-                None => {
-                    if !layout.area.contains((column, row).into()) {
-                        update::close_overlay(state);
-                    }
-                }
-            }
-            None
-        }
         Some(Overlay::Menu(menu)) => {
             let layout = ui::overlay::menu_layout(state, screen, menu);
             match ui::widgets::menu::item_at(&layout, column, row) {
@@ -537,6 +521,24 @@ pub(crate) fn open_right_click_menu(
         if list_rect.contains((column, row).into()) {
             let display = ui::right_panel::todo::row_at(view.prompt, state, column, row);
             update::right_click_todo_list(state, display, (column, row));
+            return true;
+        }
+    }
+    // 页列表视图：行上打开页菜单，空白区域打开新建页菜单。
+    if update::prompt_panel_active(state) && update::prompt_pages_mode(state) {
+        let area = paste::prompt_text_area(view);
+        if area.contains((column, row).into()) {
+            match ui::prompt::pages::page_row_at(
+                area,
+                &state.prompt_owner().prompt_panel,
+                column,
+                row,
+            )
+            .and_then(|index| update::page_id_at_row(state, index))
+            {
+                Some(page) => update::open_page_menu(state, page, (column, row)),
+                None => update::open_pages_blank_menu(state, (column, row)),
+            }
             return true;
         }
     }

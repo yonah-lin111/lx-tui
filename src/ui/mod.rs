@@ -98,12 +98,11 @@ pub(crate) fn render_cached(
     controls::render_swap_button(frame, &view);
     controls::render_panel_buttons(frame, &view, state);
     controls::render_resize_hint(frame, &view, state);
-    // 页码菜单/引用文件夹浮层的边框按钮 tooltip 需绘制在浮层之上（常规 tooltip 早于浮层绘制会被盖住）。
+    // 引用文件夹浮层的边框按钮 tooltip 需绘制在浮层之上（常规 tooltip 早于浮层绘制会被盖住）。
     let border_tooltip_open = matches!(
         state.overlay,
         Some(
-            crate::app::overlay::Overlay::PageMenu(_)
-                | crate::app::overlay::Overlay::ReferencedFolderMenu(_)
+            crate::app::overlay::Overlay::ReferencedFolderMenu(_)
                 | crate::app::overlay::Overlay::ReferencedFolderSearch(_)
         )
     );

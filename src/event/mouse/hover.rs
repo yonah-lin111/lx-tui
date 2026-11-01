@@ -96,20 +96,6 @@ pub(crate) fn handle_mouse_moved(
                 *dirty = true;
             }
         }
-        if let Some(Overlay::PageMenu(menu)) = state.overlay.as_ref() {
-            let layout = ui::overlay::page_menu_layout(state, *screen, menu);
-            if let Some(index) =
-                ui::overlay::page_menu_item_at(state, *screen, menu, mouse.column, mouse.row)
-            {
-                if update::set_page_menu_selection(state, index) {
-                    *dirty = true;
-                }
-            } else if !layout.area.contains((mouse.column, mouse.row).into())
-                && update::clear_menu_hover(state)
-            {
-                *dirty = true;
-            }
-        }
         if let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() {
             // 悬停只铺悬停底色，不移动 `❯` 选中标记（对齐 prompt 树列表）；离开弹窗清空。
             let hover = ui::overlay::referenced_menu_row_at(*screen, menu, mouse.column, mouse.row);
@@ -130,11 +116,8 @@ pub(crate) fn handle_mouse_moved(
         if update::set_todo_hover(state, None) {
             *dirty = true;
         }
-        // 页码菜单与引用文件夹内容弹窗的边框按钮可提示；其余浮层抑制 tooltip。
-        let tooltip_target = if matches!(
-            state.overlay,
-            Some(Overlay::PageMenu(_) | Overlay::ReferencedFolderSearch(_))
-        ) {
+        // 引用文件夹内容弹窗的边框按钮可提示；其余浮层抑制 tooltip。
+        let tooltip_target = if matches!(state.overlay, Some(Overlay::ReferencedFolderSearch(_))) {
             ui::tooltip::target_at(view, state, rects, *screen, mouse.column, mouse.row)
         } else {
             None
@@ -304,21 +287,27 @@ pub(crate) fn handle_mouse_moved(
     if update::set_todo_hover(state, todo_hover) {
         *dirty = true;
     }
-    // 提示词列表悬停：仅树视图且在文本区内；指针离开即清空。
-    let tree_hover = if hovering_toast
-        || state.prompt_drag.is_some()
-        || !update::prompt_panel_active(state)
-        || !update::prompt_tree_mode(state)
-    {
-        None
-    } else {
-        ui::prompt::tree::row_at(
-            crate::layout::prompt_text_rect(view.prompt),
-            &state.prompt_owner().prompt_panel,
-            mouse.column,
-            mouse.row,
-        )
-    };
+    // 提示词树/页列表悬停：仅树视图或页视图且在文本区内；指针离开即清空。
+    let tree_hover =
+        if hovering_toast || state.prompt_drag.is_some() || !update::prompt_panel_active(state) {
+            None
+        } else if update::prompt_tree_mode(state) {
+            ui::prompt::tree::row_at(
+                crate::layout::prompt_text_rect(view.prompt),
+                &state.prompt_owner().prompt_panel,
+                mouse.column,
+                mouse.row,
+            )
+        } else if update::prompt_pages_mode(state) {
+            ui::prompt::pages::page_row_at(
+                crate::layout::prompt_text_rect(view.prompt),
+                &state.prompt_owner().prompt_panel,
+                mouse.column,
+                mouse.row,
+            )
+        } else {
+            None
+        };
     if update::set_prompt_tree_hover(state, tree_hover) {
         *dirty = true;
     }

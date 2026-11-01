@@ -6,7 +6,6 @@
 use crate::app::state::{AppState, FocusedContainer};
 use crate::layout::PaneId;
 
-use super::prompt::cancel_page_rename;
 use super::selection::clear_selection;
 use super::todo::commit_todo_edit;
 
@@ -30,10 +29,9 @@ pub fn focus_panes(state: &mut AppState) -> bool {
     state.set_focus(FocusedContainer::Panes)
 }
 
-/// 点击终端窗格：焦点回到窗格，prompt 失焦并关闭块命令面板与页重命名输入。
+/// 点击终端窗格：焦点回到窗格，prompt 失焦并关闭块命令面板。
 pub fn focus_pane(state: &mut AppState, id: PaneId) {
     focus_panes(state);
     state.prompt.clear_panel();
-    cancel_page_rename(state);
     state.active_tab_mut().layout.focus_pane(id);
 }

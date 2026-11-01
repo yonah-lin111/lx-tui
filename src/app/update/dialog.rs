@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use crate::app::actions::OverlayKey;
 use crate::app::effects::Effect;
-use crate::app::overlay::{Overlay, OverlayKind, OverlayTarget, RenameTarget, TextInput};
+use crate::app::overlay::{Overlay, OverlayKind, RenameTarget, TextInput};
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::trust::TrustTrigger;
@@ -13,10 +13,7 @@ use crate::ui::text;
 
 use super::interaction::show_toast;
 use super::menu::{activate_menu, close_overlay, move_menu_selection};
-use super::prompt::{
-    activate_page_menu_row, apply_new_node_key, apply_save_draft_key, commit_prompt_rename,
-    confirm_delete_page,
-};
+use super::prompt::{apply_new_node_key, apply_save_draft_key, commit_prompt_rename};
 use super::trust::apply_trust_decision;
 use super::workspace::{create_workspace_with_cwd, parse_workspace_path};
 use super::worktree::apply_worktree_open_key;
@@ -177,10 +174,6 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 confirm_close(state);
                 None
             }
-            Some(OverlayKind::PageMenu) => {
-                activate_page_menu_row(state);
-                None
-            }
             Some(
                 OverlayKind::WorktreeOpen
                 | OverlayKind::TrustWorkspace
@@ -337,17 +330,7 @@ fn commit_rename(state: &mut AppState) {
     state.overlay = None;
 }
 
-/// 确认删除非空提示词页（工作区、标签、窗格与提示词树节点的关闭/删除已全部由右键菜单行内确认执行）。
+/// 确认关闭浮层回调。
 fn confirm_close(state: &mut AppState) {
-    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.take() else {
-        return;
-    };
-    if let OverlayTarget::PromptPage {
-        workspace,
-        owner,
-        page,
-    } = confirm.target
-    {
-        confirm_delete_page(state, workspace, owner, page);
-    }
+    let _ = state.overlay.take();
 }

@@ -22,6 +22,7 @@ mod mouse_drag;
 mod overlay;
 mod prompt_editor;
 mod prompt_menu;
+mod prompt_pages;
 mod prompt_tree;
 mod terminal;
 mod todo;

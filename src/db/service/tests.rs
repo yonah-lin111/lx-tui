@@ -926,18 +926,12 @@ fn page_switch_effect_persists_active_and_syncs_shared_panels() {
 }
 
 #[test]
-fn create_page_effect_appends_activates_and_starts_rename() {
+fn create_page_effect_appends_and_activates_in_editor() {
     let (mut service, mut state, repo_root, _) = trusted_service("page-create-effect");
     let worktree = workspace_path("page-create-effect-wt");
     let id = seed_paged_prompt(&mut service, &mut state, &repo_root, &worktree);
     assert!(crate::app::update::edit_prompt_item(&mut state, 0, id));
-    // 打开页码菜单并选择首行 `New page`。
-    assert!(crate::app::update::open_prompt_page_menu(
-        &mut state,
-        (5, 5)
-    ));
-    assert!(crate::app::update::set_page_menu_selection(&mut state, 0));
-    assert!(crate::app::update::activate_page_menu_row(&mut state));
+    assert!(crate::app::update::open_new_page(&mut state));
     service.pump(&mut state);
     let panel = &state.workspaces[0].prompt_panel;
     let item = panel.tree.item(id).expect("item");
@@ -945,8 +939,6 @@ fn create_page_effect_appends_activates_and_starts_rename() {
     assert_eq!(item.pages[2].name, "Page 3", "下一个未使用的默认页名");
     assert_eq!(item.active_page, item.pages[2].id, "新页立即成为当前页");
     assert_eq!(state.prompt.text(), "", "新页正文为空");
-    let rename = panel.page_rename().expect("进入默认名编辑");
-    assert_eq!(rename.input.text(), "Page 3");
     let record = service
         .db
         .as_ref()
@@ -964,10 +956,19 @@ fn delete_page_effect_rebinds_editor_to_next_page() {
     let worktree = workspace_path("page-delete-effect-wt");
     let id = seed_paged_prompt(&mut service, &mut state, &repo_root, &worktree);
     assert!(crate::app::update::edit_prompt_item(&mut state, 0, id));
-    // 非空页删除先二次确认；确认后服务落库并重绑原下一页。
-    assert!(crate::app::update::delete_current_page(&mut state));
-    assert!(matches!(state.overlay, Some(Overlay::ConfirmClose(_))));
-    crate::app::update::apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    let first_page = state.workspaces[0]
+        .prompt_panel
+        .tree
+        .item(id)
+        .unwrap()
+        .pages[0]
+        .id;
+    assert!(crate::app::update::perform_delete_page(
+        &mut state,
+        0,
+        crate::app::prompt::PromptEditing::Item(id),
+        first_page,
+    ));
     service.pump(&mut state);
     let panel = &state.workspaces[0].prompt_panel;
     let item = panel.tree.item(id).expect("item");
@@ -1039,14 +1040,8 @@ fn page_save_ack_only_confirms_matching_page_and_revision() {
 fn save_draft_carries_all_temp_pages_to_formal_item() {
     let (mut service, mut state, repo_root, _) = trusted_service("draft-pages");
     state.prompt.insert_str("first");
-    assert!(crate::app::update::open_prompt_page_menu(
-        &mut state,
-        (5, 5)
-    ));
-    assert!(crate::app::update::set_page_menu_selection(&mut state, 0));
-    assert!(crate::app::update::activate_page_menu_row(&mut state));
+    assert!(crate::app::update::open_new_page(&mut state));
     state.prompt.insert_str("second");
-    crate::app::update::apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Esc);
     crate::app::update::save_prompt_now(&mut state);
     crate::app::update::apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
     service.pump(&mut state);

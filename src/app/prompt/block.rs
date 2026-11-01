@@ -67,4 +67,80 @@ impl Prompt {
         self.replace_span(range.start, range.end, "");
         true
     }
+
+    /// 删除斜杠命令行后，把补充块追加到固定落点；调用方已记录撤销快照。
+    ///
+    /// 落点：最后一个 `+++` 结束行之后 → `&&&` 结束行之后 → 文末；
+    /// 与前文之间恰好隔一个空行，光标落在新块标题值（`{title: }` 的 `}` 前）。
+    pub(super) fn append_supple_block(
+        &mut self,
+        trigger: &markdown::SlashTrigger,
+        content: &str,
+        cursor: usize,
+    ) {
+        let (del_from, del_to) = if trigger.line_end < self.text.len() {
+            (trigger.line_start, trigger.line_end + 1)
+        } else if trigger.line_start > 0 {
+            (trigger.line_start - 1, trigger.line_end)
+        } else {
+            (0, self.text.len())
+        };
+        self.splice_text(del_from, del_to, "");
+
+        let scan = markdown::block_scan(&self.text);
+        // 页内存在未闭合块时不插入：落点会落在未闭合块内部，新块会被吞掉或误闭合前一块。
+        if scan.spans.iter().any(|span| !span.closed) {
+            return;
+        }
+        let anchor_line = scan
+            .spans
+            .iter()
+            .rev()
+            .find(|span| span.kind == BlockKind::Supple && span.closed)
+            .or_else(|| {
+                scan.spans
+                    .iter()
+                    .find(|span| span.kind == BlockKind::Template && span.closed)
+            })
+            .map(|span| span.end);
+
+        let block_start = match anchor_line.and_then(|line| self.line_bounds(line)) {
+            Some((_, anchor_end)) => {
+                let after = &self.text[anchor_end..];
+                let newlines = after.bytes().take_while(|byte| *byte == b'\n').count();
+                let tail = &after[newlines..];
+                if tail.is_empty() {
+                    let base = self.text[..anchor_end + newlines]
+                        .trim_end_matches('\n')
+                        .len();
+                    let insert = format!("\n\n{content}");
+                    self.splice_text(base, self.text.len(), &insert);
+                    base + 2
+                } else {
+                    let insert = format!("\n\n{content}\n\n");
+                    self.splice_text(anchor_end, anchor_end + newlines, &insert);
+                    anchor_end + 2
+                }
+            }
+            None => {
+                if self.text.trim_matches('\n').is_empty() {
+                    self.splice_text(0, self.text.len(), content);
+                    0
+                } else {
+                    let base = self.text.trim_end_matches('\n').len();
+                    let insert = format!("\n\n{content}");
+                    self.splice_text(base, self.text.len(), &insert);
+                    base + 2
+                }
+            }
+        };
+
+        self.cursor = block_start + cursor;
+        let start_line = self.text[..block_start].matches('\n').count();
+        let end_line = start_line + content.matches('\n').count();
+        self.scroll_lines_into_view(start_line, end_line);
+    }
 }
+
+#[cfg(test)]
+mod tests;

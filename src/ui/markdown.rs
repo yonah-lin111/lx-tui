@@ -70,22 +70,26 @@ pub struct Token {
 
 /// 扫描全文，返回每条逻辑行的 token，与 `text.split('\n')` 一一对应。
 pub fn scan(text: &str) -> Vec<Vec<Token>> {
+    let blocks = markdown::block_line_infos(text);
     let mut state = ScanState::default();
     text.split('\n')
-        .map(|line| scan_line(line, &mut state))
+        .enumerate()
+        .map(|(index, line)| scan_line(line, blocks.get(index).copied().flatten(), &mut state))
         .collect()
 }
 
-/// 跨行扫描状态：围栏、`&&&`、`+++` 的开合。
+/// 跨行扫描状态：围栏的开合（块归属由 `block_scan` 提供）。
 #[derive(Debug, Default, Clone, Copy)]
 struct ScanState {
     fence: bool,
-    template: bool,
-    supple: bool,
 }
 
 /// 扫描单行，按围栏/块状态产出 token。
-fn scan_line(line: &str, state: &mut ScanState) -> Vec<Token> {
+fn scan_line(
+    line: &str,
+    block: Option<markdown::BlockLineInfo>,
+    state: &mut ScanState,
+) -> Vec<Token> {
     let mut tokens = Vec::new();
     if is_fence(line) {
         state.fence = !state.fence;
@@ -96,35 +100,39 @@ fn scan_line(line: &str, state: &mut ScanState) -> Vec<Token> {
         push(&mut tokens, 0..line.len(), TokenKind::CodeBlock);
         return tokens;
     }
-    if scan_template_end(line, &mut tokens) {
-        state.template = false;
-        return tokens;
-    }
-    if scan_template_start(line, &mut tokens) {
-        state.template = true;
-        return tokens;
-    }
-    if state.template {
-        if scan_supple_end(line, &mut tokens) {
-            state.supple = false;
-            return tokens;
-        }
-        if scan_supple_start(line, &mut tokens) {
-            state.supple = true;
-            return tokens;
-        }
-        if let Some(range) = standalone_title(line) {
-            push(&mut tokens, range, TokenKind::TemplateTitle);
-            return tokens;
-        }
-        if markdown::parse_worktree_line(line).is_some() {
-            let start = line.len() - line.trim_start().len();
-            push(
-                &mut tokens,
-                start..line.trim_end().len(),
-                TokenKind::TemplateMarker,
-            );
-            return tokens;
+    if let Some(info) = block {
+        match (info.kind, info.role) {
+            (markdown::BlockKind::Template, markdown::BlockRole::Start) => {
+                scan_template_start(line, &mut tokens);
+                return tokens;
+            }
+            (markdown::BlockKind::Template, markdown::BlockRole::End) => {
+                scan_template_end(line, &mut tokens);
+                return tokens;
+            }
+            (markdown::BlockKind::Supple, markdown::BlockRole::Start) => {
+                scan_supple_start(line, &mut tokens);
+                return tokens;
+            }
+            (markdown::BlockKind::Supple, markdown::BlockRole::End) => {
+                scan_supple_end(line, &mut tokens);
+                return tokens;
+            }
+            (_, markdown::BlockRole::Middle) => {
+                if let Some(range) = standalone_title(line) {
+                    push(&mut tokens, range, TokenKind::TemplateTitle);
+                    return tokens;
+                }
+                if markdown::parse_worktree_line(line).is_some() {
+                    let start = line.len() - line.trim_start().len();
+                    push(
+                        &mut tokens,
+                        start..line.trim_end().len(),
+                        TokenKind::TemplateMarker,
+                    );
+                    return tokens;
+                }
+            }
         }
     }
     if let Some(marker_end) = heading(line) {

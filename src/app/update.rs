@@ -59,7 +59,6 @@ pub fn apply(action: Action, state: &mut AppState) {
                 state.set_focus(FocusedContainer::Panes);
                 clear_selection(state);
                 state.prompt.clear_panel();
-                cancel_page_rename(state);
             }
         }
         Action::TogglePanes => state.panes_collapsed = !state.panes_collapsed,

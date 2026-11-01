@@ -225,15 +225,14 @@ impl Prompt {
                 self.slash = None;
                 self.break_group();
                 self.record(EditKind::Other);
-                let supple = content.starts_with("+++");
-                self.splice_text(trigger.line_start, trigger.line_end, &content);
-                if supple {
-                    // 新建补充块默认展开：光标落在标题内，折叠会把它藏起来。
-                    self.expanded_supplements.insert(trigger.line_start);
+                if matches!(item.insertion, markdown::SlashInsertion::SuppleBlock { .. }) {
+                    self.append_supple_block(&trigger, &content, cursor);
+                } else {
+                    self.splice_text(trigger.line_start, trigger.line_end, &content);
+                    self.cursor = trigger.line_start + cursor;
+                    self.scroll_cursor_into_view();
                 }
-                self.cursor = trigger.line_start + cursor;
                 self.panel_suppressed = true;
-                self.scroll_cursor_into_view();
                 true
             }
         }
@@ -396,11 +395,18 @@ impl Prompt {
             self.slash = None;
             return;
         };
+        let scan = markdown::block_scan(&self.text);
         let context = markdown::SlashContext {
             context: markdown::block_context(&self.text, self.cursor),
             // 绑定行需要锚定已闭合的结束行：块未闭合时不提供 `/gitWorkTree`。
             worktree_available: self.worktree_available
                 && markdown::block_end_line_at(&self.text, self.cursor).is_some(),
+            template_present: scan
+                .spans
+                .iter()
+                .any(|span| span.kind == markdown::BlockKind::Template),
+            // 未闭合块下隐藏 `/supplement`：新块会被吞进未闭合块内部。
+            unclosed_block: scan.spans.iter().any(|span| !span.closed),
         };
         let line_changed =
             self.slash.as_ref().map(|panel| panel.trigger().line_start) != Some(trigger.line_start);

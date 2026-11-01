@@ -236,6 +236,8 @@ pub struct AppState {
     pub task_agents_scroll_drag: Option<(PaneId, u16)>,
     /// prompt 树行最近一次左键点击（可见行索引、时刻）；双击判定用。
     pub prompt_row_click: Option<(usize, Instant)>,
+    /// prompt 页列表行最近一次左键点击（可见行索引、时刻）；双击判定用。
+    pub page_row_click: Option<(usize, Instant)>,
     /// 引用文件夹目录弹窗最近一次左键点击（行下标、时刻）；双击判定用。
     pub referenced_menu_click: Option<(usize, Instant)>,
     /// 拖拽引用文件夹搜索弹窗滚动条 thumb 时相对顶部的抓取偏移。
@@ -395,6 +397,7 @@ impl AppState {
             task_scroll_drag: None,
             task_agents_scroll_drag: None,
             prompt_row_click: None,
+            page_row_click: None,
             referenced_menu_click: None,
             referenced_search_scroll_drag: None,
             referenced_menu_scroll_drag: None,

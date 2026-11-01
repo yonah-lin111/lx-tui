@@ -304,7 +304,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     // 输入草稿内容后点保存点 → 文件夹选择器。
     app.send(b"hello draft");
     assert!(app.wait_for("hello draft"), "draft typed");
-    app.click_after(text::PROMPT_BLOCK_FOCUS_ALL_LABEL, text::PROMPT_DRAFT_DOT);
+    app.click_after(text::PROMPT_UNPINNED_LABEL, text::PROMPT_DRAFT_DOT);
     assert!(
         app.wait_for("Save prompt to folder"),
         "picker: \n{}",
@@ -388,7 +388,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     );
     app.send(b"second draft");
     assert!(app.wait_for("second draft"), "second draft typed");
-    app.click_after(text::PROMPT_BLOCK_FOCUS_ALL_LABEL, text::PROMPT_DRAFT_DOT);
+    app.click_after(text::PROMPT_UNPINNED_LABEL, text::PROMPT_DRAFT_DOT);
     assert!(app.wait_for("+ New folder"), "picker reopened");
     // 点击动作行 → 命名浮层；清空预填名后输入 notes，回车建库并恢复选择器（选中新文件夹）。
     app.click("+ New folder");
@@ -435,29 +435,33 @@ fn page_controls_create_switch_and_rename_via_real_mouse_and_keys() {
     app.send(b"page one body");
     assert!(app.wait_for("page one body"), "first page typed");
 
-    // 点击计数打开页码菜单：New page / Delete page 与页行。
+    // 点击计数进入页列表视图：右键弹出菜单新建页并切回编辑视图。
     app.click("1/1");
     assert!(
-        app.wait_for(text::MENU_PAGE_NEW),
-        "page menu: \n{}",
+        app.wait_for(text::PROMPT_PAGES_SEARCH_PLACEHOLDER),
+        "pages view: \n{}",
         app.screen()
     );
-    assert!(app.wait_for(text::MENU_PAGE_DELETE));
-
-    // 点击 New page：追加末尾、立即切换并进入默认名编辑
-    // （正文为空；输入落入页名而不是编辑器）。
+    let (col, row) = app.find("Page 1").expect("page 1 row");
+    app.right_click(col, row);
+    assert!(
+        app.wait_for(text::MENU_PAGE_NEW),
+        "page context menu: \n{}",
+        app.screen()
+    );
     app.click(text::MENU_PAGE_NEW);
     assert!(
         app.wait_for("2/2"),
-        "switched to new page: \n{}",
+        "created new page in list: \n{}",
         app.screen()
     );
-    app.send(b"XYZ");
-    app.send(b"\x1b");
-    app.settle();
+    assert!(app.screen().contains("Page 2"), "新页显示在列表中");
+
+    // 新建页留在 Pages 列表，回车打开选中的新页。
+    app.send(b"\r");
     assert!(
-        app.screen().contains("Write your prompt"),
-        "重命名输入不写入正文，新页正文为空: \n{}",
+        app.wait_for("Write your prompt"),
+        "新页正文为空: \n{}",
         app.screen()
     );
     assert!(!app.screen().contains("page one body"), "新页正文为空");
@@ -468,50 +472,6 @@ fn page_controls_create_switch_and_rename_via_real_mouse_and_keys() {
     assert!(
         app.wait_for("page one body"),
         "page one content kept: \n{}",
-        app.screen()
-    );
-}
-
-#[test]
-fn block_focus_survives_prompt_list_roundtrip_via_real_mouse() {
-    let app = spawn_trusted("block-focus-roundtrip");
-    assert!(
-        app.wait_for("Write your prompt"),
-        "app started: \n{}",
-        app.screen()
-    );
-    // 启动时焦点在主区；先点 prompt 文本区，确保粘贴进入编辑器而不是 lx 输入。
-    app.click("Write your prompt");
-    let body = "intro\n&&& a --start\n{title: A}\ninside-a\n&&& a --end\n\
-                &&& b --start\ninside-b\n&&& b --end\noutro";
-    app.send(format!("\x1b[200~{body}\x1b[201~").as_bytes());
-    assert!(app.wait_for("outro"), "text typed: \n{}", app.screen());
-
-    app.click(text::PROMPT_BLOCK_FOCUS_ALL_LABEL);
-    assert!(
-        app.wait_for(text::PROMPT_BLOCK_FOCUS_ONE_LABEL),
-        "进入块聚焦: \n{}",
-        app.screen()
-    );
-    assert!(app.wait_for("inside-a"), "当前块可见");
-    assert!(!app.screen().contains("inside-b"), "块外文本不渲染");
-
-    app.click(text::PROMPT_MODE_LIST_LABEL);
-    assert!(
-        app.wait_for(text::PROMPT_MODE_EDIT_LABEL),
-        "进入列表: \n{}",
-        app.screen()
-    );
-    app.click(text::PROMPT_MODE_EDIT_LABEL);
-    assert!(
-        app.wait_for(text::PROMPT_BLOCK_FOCUS_ONE_LABEL),
-        "返回编辑仍处于块聚焦: \n{}",
-        app.screen()
-    );
-    assert!(app.wait_for("inside-a"), "当前块仍可见");
-    assert!(
-        !app.screen().contains("inside-b"),
-        "列表往返后不退回全文: \n{}",
         app.screen()
     );
 }

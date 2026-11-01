@@ -62,7 +62,9 @@ pub(crate) fn menu_title(state: &AppState, menu: &Menu) -> String {
                 .unwrap_or_else(|| text::MENU_TITLE_PROMPT.to_string())
         }
         OverlayTarget::PromptTree { .. } => text::MENU_TITLE_PROMPT_TREE.to_string(),
-        OverlayTarget::PromptPage { .. } => text::MENU_TITLE_PAGES.to_string(),
+        OverlayTarget::PromptPage { .. } | OverlayTarget::PromptPages { .. } => {
+            text::MENU_TITLE_PAGES.to_string()
+        }
         OverlayTarget::WorkspaceList => text::MENU_TITLE_WORKSPACES.to_string(),
         OverlayTarget::TodoItem { id } => state
             .todo
@@ -134,7 +136,7 @@ pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
                 MenuCommand::NewFolder => text::MENU_PROMPT_NEW_FOLDER,
                 MenuCommand::NewSubFolder => text::MENU_PROMPT_NEW_SUBFOLDER,
                 MenuCommand::RenameFolder | MenuCommand::RenamePrompt => text::MENU_PROMPT_RENAME,
-                MenuCommand::DeleteFolder | MenuCommand::DeletePrompt => {
+                MenuCommand::DeleteFolder | MenuCommand::DeletePrompt | MenuCommand::DeletePage => {
                     if confirming {
                         text::MENU_CONFIRM_DELETE
                     } else {
@@ -143,7 +145,9 @@ pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
                 }
                 MenuCommand::DeleteTemp => text::MENU_PROMPT_DELETE,
                 MenuCommand::EditPrompt => text::MENU_PROMPT_EDIT,
-                MenuCommand::CopyPromptContent => text::MENU_PROMPT_COPY,
+                MenuCommand::CopyPromptContent | MenuCommand::CopyPageContent => {
+                    text::MENU_PROMPT_COPY
+                }
                 MenuCommand::CopyPath => text::MENU_COPY_PATH,
                 MenuCommand::NewTodo => text::MENU_TODO_NEW,
                 MenuCommand::EditTodo => text::MENU_TODO_EDIT,
@@ -156,6 +160,8 @@ pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
                     }
                 }
                 MenuCommand::SortTodos => text::MENU_TODO_SORT,
+                MenuCommand::OpenPage => text::MENU_PAGE_OPEN,
+                MenuCommand::NewPage => text::MENU_PAGE_NEW,
             }
         })
         .collect()

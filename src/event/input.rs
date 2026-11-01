@@ -32,20 +32,6 @@ pub(crate) fn handle_key_event(
         return;
     }
 
-    // 页重命名输入优先于编辑器：除 Ctrl+Q 外的按键按单行输入语义消费。
-    let quit = key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL);
-    if !quit
-        && state.overlay.is_none()
-        && state.prompt_focused()
-        && update::page_rename_active(state)
-    {
-        if let Some(overlay_key) = input::page_rename_key(key) {
-            update::apply_page_rename_key(state, overlay_key);
-        }
-        *dirty = true;
-        return;
-    }
-
     let mode = state
         .active_pane()
         .map(|pane| pane.terminal.mode())
@@ -114,6 +100,9 @@ pub(crate) fn handle_key_event(
             if update::prompt_tree_mode(state) {
                 // 树视图 Ctrl+C 与模态输入框一致：清空搜索过滤。
                 update::clear_prompt_search(state);
+                *dirty = true;
+            } else if update::prompt_pages_mode(state) {
+                update::clear_page_search(state);
                 *dirty = true;
             } else if let Some(text) = update::prompt_copy_text(state) {
                 let anchor = Some(state.prompt.id());

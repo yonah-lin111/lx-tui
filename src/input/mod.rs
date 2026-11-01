@@ -255,30 +255,6 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
     }
 }
 
-/// 页重命名输入键映射：Enter/Esc 结束、单行编辑键、Ctrl+C 清空；其余返回 None（吞掉）。
-///
-/// 与重命名浮层同一套语义，但不依赖 `Overlay`（页重命名是标题行内联输入）。
-pub fn page_rename_key(key: KeyEvent) -> Option<OverlayKey> {
-    let plain = !key
-        .modifiers
-        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-    match key.code {
-        KeyCode::Esc => Some(OverlayKey::Esc),
-        KeyCode::Enter => Some(OverlayKey::Enter),
-        KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(OverlayKey::Clear)
-        }
-        KeyCode::Backspace => Some(OverlayKey::Backspace),
-        KeyCode::Delete => Some(OverlayKey::Delete),
-        KeyCode::Left if plain => Some(OverlayKey::Left),
-        KeyCode::Right if plain => Some(OverlayKey::Right),
-        KeyCode::Home => Some(OverlayKey::Home),
-        KeyCode::End => Some(OverlayKey::End),
-        KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
-        _ => None,
-    }
-}
-
 /// 浮层按键映射：只放行该浮层支持的键，其余返回 None（吞掉）。
 fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
     // Super/Cmd 组合同样视为非纯文本输入（终端支持 kitty 协议时可达）。
@@ -291,7 +267,7 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
         && !key.modifiers.contains(KeyModifiers::ALT);
     match kind {
-        OverlayKind::Menu | OverlayKind::PageMenu => match key.code {
+        OverlayKind::Menu => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
@@ -443,20 +419,23 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
 /// （对齐 lx-agent 的 `Ctrl/Cmd+Shift+Enter`）。
 /// Ctrl/Alt 组合同 opencode/readline：Ctrl+U 删除到逻辑行首（已在行首时删除前一个换行）、
 /// Ctrl+K 删除到行尾、Ctrl+W 向前删词、
-/// Ctrl+A/E 逻辑行首尾、Ctrl+D 正向删除、Ctrl+←/→ 按词移动；撤销/重做用
+/// Ctrl+A/E 逻辑行首尾、Ctrl+D 正向删除、Ctrl/Cmd+←/→ 切换上一页/下一页；撤销/重做用
 /// Ctrl+Z / Ctrl+Y（legacy 终端可靠），并对齐 opencode 接受 Ctrl+Shift+Z、Ctrl+-、
-/// Ctrl+. 与 Super 组合（终端支持才收得到）；Alt+B/F、Alt+D 作为别名；
+/// Ctrl+. 与 Super 组合（终端支持才收得到）；Alt+B/F、Alt+←/→ 按词移动，Alt+D 向前删词；
 /// Tab/BackTab 缩进/反缩进；其余 Ctrl/Alt 组合吞掉。
 fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
     let modifiers = key.modifiers;
     let ctrl = modifiers.contains(KeyModifiers::CONTROL);
     let alt = modifiers.contains(KeyModifiers::ALT);
     let shift = modifiers.contains(KeyModifiers::SHIFT);
-    if modifiers.contains(KeyModifiers::SUPER) {
+    if modifiers.contains(KeyModifiers::SUPER) && !alt {
         return match key.code {
             KeyCode::Enter => Some(EditorCommand::NewlineBelow),
-            KeyCode::Left => Some(EditorCommand::BlockPrev { cmd: true }),
-            KeyCode::Right => Some(EditorCommand::BlockNext { cmd: true }),
+            KeyCode::Left => Some(EditorCommand::PagePrev),
+            KeyCode::Right if shift => Some(EditorCommand::NewPage),
+            KeyCode::Right => Some(EditorCommand::PageNext),
+            KeyCode::Char('l' | 'L') if !shift => Some(EditorCommand::TogglePromptList),
+            KeyCode::Char('p' | 'P') if !shift => Some(EditorCommand::TogglePageList),
             KeyCode::Char('z' | 'Z') if shift => Some(EditorCommand::Redo),
             KeyCode::Char('z' | 'Z') => Some(EditorCommand::Undo),
             KeyCode::Char('y' | 'Y') => Some(EditorCommand::Redo),
@@ -466,6 +445,8 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
     let command = match (ctrl, alt, key.code) {
         (true, false, KeyCode::Enter) => Some(EditorCommand::NewlineBelow),
         (true, false, KeyCode::Char(ch)) => match ch {
+            'l' | 'L' if !shift => Some(EditorCommand::TogglePromptList),
+            'p' | 'P' if !shift => Some(EditorCommand::TogglePageList),
             'u' | 'U' => Some(EditorCommand::DeleteToLineStart),
             'k' | 'K' => Some(EditorCommand::DeleteToLineEnd),
             'w' | 'W' => Some(EditorCommand::DeleteWordBackward),
@@ -478,8 +459,9 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
         },
         (true, false, KeyCode::Backspace) => Some(EditorCommand::DeleteWordBackward),
         (true, false, KeyCode::Delete) => Some(EditorCommand::DeleteWordForward),
-        (true, false, KeyCode::Left) => Some(EditorCommand::BlockPrev { cmd: false }),
-        (true, false, KeyCode::Right) => Some(EditorCommand::BlockNext { cmd: false }),
+        (true, false, KeyCode::Left) => Some(EditorCommand::PagePrev),
+        (true, false, KeyCode::Right) if shift => Some(EditorCommand::NewPage),
+        (true, false, KeyCode::Right) => Some(EditorCommand::PageNext),
         (false, true, KeyCode::Char('b')) => Some(EditorCommand::WordLeft),
         (false, true, KeyCode::Char('f')) => Some(EditorCommand::WordRight),
         (false, true, KeyCode::Char('d')) => Some(EditorCommand::DeleteWordForward),

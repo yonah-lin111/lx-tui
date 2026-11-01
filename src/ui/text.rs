@@ -100,9 +100,6 @@ pub const PROMPT_DRAFT_DOT: &str = "○";
 /// 不再使用 `[pin]`/`[unpin]` 英文单词，避免 7 列占位与右对齐补空格）。
 pub const PROMPT_UNPINNED_LABEL: &str = "[○]";
 pub const PROMPT_PINNED_LABEL: &str = "[◉]";
-/// 块聚焦模式按钮：未进入 `[⊞]`（全部块）、已进入 `[⊡]`（聚焦单块）。
-pub const PROMPT_BLOCK_FOCUS_ALL_LABEL: &str = "[⊞]";
-pub const PROMPT_BLOCK_FOCUS_ONE_LABEL: &str = "[⊡]";
 /// prompt 视图模式按钮：编辑视图显示 `[≡]`（切到列表）、树视图显示 `[/]`（切到编辑）。
 pub const PROMPT_MODE_LIST_LABEL: &str = "[≡]";
 pub const PROMPT_MODE_EDIT_LABEL: &str = "[/]";
@@ -356,10 +353,15 @@ pub fn default_page_name(index: usize) -> String {
     format!("Page {index}")
 }
 
-/// 页菜单动作项与标题。
-pub const MENU_PAGE_NEW: &str = "[add]";
-pub const MENU_PAGE_DELETE: &str = "[del]";
+/// 页列表与页右键菜单文案。
+pub const MENU_PAGE_OPEN: &str = "Open";
+pub const MENU_PAGE_NEW: &str = "New page";
 pub const MENU_TITLE_PAGES: &str = "Pages";
+pub const PROMPT_PAGES_LABEL: &str = "pages";
+pub const PROMPT_PAGES_SEARCH_PLACEHOLDER: &str = "search pages";
+pub const PROMPT_PAGES_NO_MATCHES: &str = "no matching pages";
+pub const PAGE_STATUS_OPEN: &str = "○";
+pub const PAGE_STATUS_DOT: &str = "●";
 
 /// 模板块状态计数分隔符：`|`。
 const TEMPLATE_COUNT_SEPARATOR: &str = "|";
@@ -545,6 +547,10 @@ pub const TOAST_PROMPT_MOVE_FAILED: &str = "Failed to move; unchanged";
 pub const TOAST_PROMPT_MOVE_DEPTH: &str = "Cannot move: folders support two levels";
 /// 被拖文件夹内含子文件夹，不能整体移入另一文件夹。
 pub const TOAST_PROMPT_MOVE_NESTED: &str = "Cannot move: folder contains subfolders";
+/// 已有未编辑的空页提示。
+pub const TOAST_PAGE_ALREADY_NEW: &str = "Already have a new page";
+/// 新页创建成功提示。
+pub const TOAST_PAGE_CREATED: &str = "New page created";
 
 /// lx 聊天相关提示与状态文案。
 ///
@@ -981,10 +987,10 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::TabScrollRight => "scroll tabs right",
         TooltipTarget::Exit => "quit lx-tui",
         TooltipTarget::PromptMode => {
-            if state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Tree {
-                "open editor"
-            } else {
+            if state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Editor {
                 "open prompt list"
+            } else {
+                "open editor"
             }
         }
         TooltipTarget::PromptTempPrompt => "open temp prompt",
@@ -994,18 +1000,14 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptSave => "mark saved",
         TooltipTarget::PromptPin if state.prompt_pinned.is_some() => "unpin prompt",
         TooltipTarget::PromptPin => "pin prompt",
-        TooltipTarget::PromptBlockFocus if state.prompt.block_focus_active() => "show all blocks",
-        TooltipTarget::PromptBlockFocus => "focus template block",
         TooltipTarget::SwapPromptSide => "swap prompt side",
         TooltipTarget::SidebarSettings => "open settings",
+        TooltipTarget::PromptTemplateStatus => "cycle block status",
         TooltipTarget::TemplateButton { button, .. } => match button {
-            TemplateButtonKind::Status => "cycle block status",
             TemplateButtonKind::Copy => "copy block",
             TemplateButtonKind::Clean => "clean block",
             TemplateButtonKind::Delete => "delete block",
         },
-        TooltipTarget::PageMenuAdd => "add page",
-        TooltipTarget::PageMenuDelete => "delete page",
         TooltipTarget::PromptFolders => "referenced folders",
         TooltipTarget::TodoButton(button) => match button {
             crate::app::tooltip::TodoButton::New => TODO_TOOLTIP_NEW,
@@ -1013,7 +1015,6 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         },
         TooltipTarget::ReferencedSearchCopyPath => "copy path",
         TooltipTarget::BlockButton { button, .. } => match button {
-            BlockButtonKind::Fold => "fold/unfold block",
             BlockButtonKind::Copy => "copy block",
             BlockButtonKind::Clean => "clean block",
             BlockButtonKind::Delete => "delete block",
@@ -1076,14 +1077,13 @@ pub fn template_status_label(status: TemplateStatus) -> &'static str {
     }
 }
 
-/// 补充块操作按钮：折叠/展开、清理与删除（清理/删除复用模板块图标）。
-/// 折叠态显示 `▸`，展开态显示 `▾`。
-pub const SUPPLE_BUTTON_FOLD_CLOSED: &str = "[▸]";
-pub const SUPPLE_BUTTON_FOLD_OPEN: &str = "[▾]";
+/// 补充块操作按钮：清理与删除复用模板块图标。
 pub const SUPPLE_BUTTON_CLEAN: &str = TEMPLATE_BUTTON_CLEAN;
 pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
-/// 写入落在折叠补充块内被拒绝时的提示。
-pub const SUPPLE_FOLD_BLOCKED: &str = "Folded supplement; unfold to edit";
+/// prompt 块左侧色条字形（`&&&` 状态色 / `+++` 品红）。
+pub const PROMPT_BLOCK_BAR: &str = "▎";
+/// 块结构分割线（标题下 / 绑定行上的空行）。
+pub const PROMPT_BLOCK_RULE: char = '─';
 
 /// @ 面板与命令面板底边快捷键提示（Prompt 右栏带边框面板使用）。
 pub const MENTION_FOOTER_FILES: &str = "←→ tab · ↑↓ select · ↵ confirm · ⇧↵ enter · esc cancel";

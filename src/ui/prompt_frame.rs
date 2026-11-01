@@ -1,9 +1,9 @@
-//! Prompt 面板体：工具栏、标题行、正文/树视图、滚动条与页码控件命中。
+//! Prompt 面板体：工具栏、标题行、正文/树/页列表视图、滚动条与页码控件命中。
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app::prompt::{PromptEditing, PromptMode};
+use crate::app::prompt::{PromptEditing, PromptMode, page_rows};
 use crate::app::state::{AppState, RightTab};
 
 use super::{layout, prompt, text, widgets};
@@ -17,10 +17,26 @@ pub(crate) fn prompt_edit_title(state: &AppState) -> Option<String> {
     }
 }
 
-/// 标题行标题来源：树视图无标题（纯分割线）。
+/// 本页 `&&&` 模板块状态（编辑视图标题行的状态标签；无闭合块时 None）。
+///
+/// 未闭合的 `&&&` 不显示标签：`toggle_template_status` 无法改写缺少合法 `--end` 的块。
+fn prompt_template_status(state: &AppState) -> Option<crate::app::markdown::TemplateStatus> {
+    crate::app::markdown::block_spans(state.prompt.text())
+        .into_iter()
+        .find(|span| span.kind == crate::app::markdown::BlockKind::Template && span.closed)
+        .map(|span| span.status)
+}
+
+/// 标题行标题来源：树视图无标题（纯分割线），编辑视图与页列表视图展示标题与页信息。
 enum TitleSource {
     Tree,
     Editor {
+        title: Option<String>,
+        draft: bool,
+        page: Option<PromptPageHeader>,
+        status: Option<crate::app::markdown::TemplateStatus>,
+    },
+    Pages {
         title: Option<String>,
         draft: bool,
         page: Option<PromptPageHeader>,
@@ -30,11 +46,18 @@ enum TitleSource {
 /// 读当前面板的标题行来源（名称与页信息按所有权持有，供调用方借用组装）。
 fn title_source(state: &AppState) -> TitleSource {
     let panel = &state.prompt_owner().prompt_panel;
+    let draft = matches!(panel.editing, Some(PromptEditing::Temp(_)));
     match panel.mode {
         PromptMode::Tree => TitleSource::Tree,
         PromptMode::Editor => TitleSource::Editor {
             title: prompt_edit_title(state),
-            draft: matches!(panel.editing, Some(PromptEditing::Temp(_))),
+            draft,
+            page: prompt_page_header(state),
+            status: prompt_template_status(state),
+        },
+        PromptMode::Pages => TitleSource::Pages {
+            title: prompt_edit_title(state),
+            draft,
             page: prompt_page_header(state),
         },
     }
@@ -46,57 +69,52 @@ fn page_header_data(page: Option<&PromptPageHeader>) -> Option<prompt::PageHeade
         current: page.current,
         total: page.total,
         name: &page.name,
-        rename: page
-            .rename
-            .as_ref()
-            .map(|(input, cursor)| (input.as_str(), *cursor)),
+        arrows: page.arrows,
     })
 }
 
-/// 显示中编辑目标的页信息：当前序号（1 起）、总页数、页名与重命名现场。
+/// 显示中编辑目标的页信息：当前序号（1 起）、总页数、副标题（页名或 `pages`）与是否显示箭头。
 pub(crate) struct PromptPageHeader {
     pub(crate) current: usize,
     pub(crate) total: usize,
     pub(crate) name: String,
-    pub(crate) rename: Option<(String, usize)>,
+    pub(crate) arrows: bool,
 }
 
-/// 读显示中编辑目标的页信息；非编辑视图或未绑定目标时为 None。
+/// 读显示中编辑目标的页信息；树视图或未绑定目标时为 None。
 pub(crate) fn prompt_page_header(state: &AppState) -> Option<PromptPageHeader> {
     let panel = &state.workspaces.get(state.prompt_workspace())?.prompt_panel;
-    if panel.mode != PromptMode::Editor {
-        return None;
+    let (pages, active) = panel.editing_pages()?;
+    match panel.mode {
+        PromptMode::Tree => None,
+        PromptMode::Editor => {
+            let index = pages.iter().position(|page| page.id == active).unwrap_or(0);
+            Some(PromptPageHeader {
+                current: index + 1,
+                total: pages.len(),
+                name: String::new(),
+                arrows: true,
+            })
+        }
+        PromptMode::Pages => {
+            let rows = page_rows(pages, active, panel.pages_view.search.text());
+            // 无匹配行时计数为 `0/m`，与列表正文的 `no matching pages` 保持一致。
+            let current = rows
+                .get(panel.pages_view.selected)
+                .and_then(|row| pages.iter().position(|page| page.id == row.page))
+                .map(|index| index + 1)
+                .unwrap_or(0);
+            Some(PromptPageHeader {
+                current,
+                total: pages.len(),
+                name: text::PROMPT_PAGES_LABEL.to_string(),
+                arrows: false,
+            })
+        }
     }
-    let (pages, active) = match panel.editing? {
-        PromptEditing::Item(id) => {
-            let item = panel.tree.item(id)?;
-            (item.pages.as_slice(), item.active_page)
-        }
-        PromptEditing::Temp(id) => {
-            let temp = panel.temp(id)?;
-            (temp.pages.as_slice(), temp.active_page)
-        }
-    };
-    let index = pages.iter().position(|page| page.id == active).unwrap_or(0);
-    let name = pages
-        .get(index)
-        .map(|page| page.name.clone())
-        .unwrap_or_default();
-    let rename = panel
-        .page_rename()
-        .map(|rename| (rename.input.text().to_string(), rename.input.cursor()));
-    Some(PromptPageHeader {
-        current: index + 1,
-        total: pages.len(),
-        name,
-        rename,
-    })
 }
 
 /// 标题行几何：工具栏下一行**整行**（含两侧边框列）；表头隐藏时为 None。
-///
-/// 用整行而不是 `prompt_divider_rect` 的内容区矩形，是为了让页控件"距右边角留 1 列
-/// 边框线"的算术与旧顶边框版本完全一致（`next = area.right() - 3`）。
 pub fn title_row(panel: Rect) -> Option<Rect> {
     crate::layout::prompt_divider_rect(panel).map(|row| Rect {
         x: panel.x,
@@ -110,20 +128,22 @@ pub fn prompt_title_at(panel: Rect, column: u16, row: u16) -> bool {
     title_row(panel).is_some_and(|title| title.contains((column, row).into()))
 }
 
-/// 命中 prompt 标题行页控件（编辑视图）；
-/// 页重命名输入期间命中输入区（`PageControl::Name`），条目名与空白返回 None。
+/// 命中 prompt 标题行页控件（编辑视图与页列表视图）。
 pub fn prompt_page_control_at(
     panel: Rect,
     state: &AppState,
     column: u16,
     row: u16,
 ) -> Option<prompt::PageControl> {
-    if state.prompt_collapsed {
+    if state.prompt_collapsed || state.right_tab != RightTab::Prompt {
         return None;
     }
     let area = title_row(panel)?;
-    let TitleSource::Editor { title, page, .. } = title_source(state) else {
-        return None;
+    let (title, page) = match title_source(state) {
+        TitleSource::Editor { title, page, .. } | TitleSource::Pages { title, page, .. } => {
+            (title, page)
+        }
+        TitleSource::Tree => return None,
     };
     let page = page.as_ref()?;
     let data = prompt::TitleRowData {
@@ -134,12 +154,37 @@ pub fn prompt_page_control_at(
     prompt::page_control_at(area, &data, column, row)
 }
 
-/// Prompt 面板体：编辑视图渲染 markdown 编辑器（聚焦时可输入、可选择复制）、
-/// 树视图渲染提示词管理器。外框、tab 与底边框由容器（`ui::right_panel`）负责。
-///
-/// 先画工具栏与分割线，再把标题/页控件覆盖到分割线行上（顺序不可交换）。
-/// 文本区固定预留最右 1 列作滚动条槽。
-/// 返回编辑视图聚焦时的硬件光标位置：终端把 IME 预输入绘制在硬件光标处，需与编辑器光标同步。
+/// 标题行状态标签矩形（渲染、点击命中与 tooltip 共用）；编辑视图且本页存在 `&&&` 时非空。
+pub fn prompt_status_rect(panel: Rect, state: &AppState) -> Option<Rect> {
+    if state.prompt_collapsed || state.right_tab != RightTab::Prompt {
+        return None;
+    }
+    let area = title_row(panel)?;
+    let TitleSource::Editor {
+        title,
+        draft,
+        page,
+        status,
+    } = title_source(state)
+    else {
+        return None;
+    };
+    let status = status?;
+    let data = prompt::TitleRowData {
+        title: Some(title.as_deref().unwrap_or("")),
+        draft,
+        page: page_header_data(page.as_ref()),
+    };
+    prompt::status_rect(area, &data, status)
+}
+
+/// 命中标题行状态标签时返回其矩形（点击循环块状态，不移动正文光标）。
+pub fn prompt_status_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<Rect> {
+    let rect = prompt_status_rect(panel, state)?;
+    rect.contains((column, row).into()).then_some(rect)
+}
+
+/// Prompt 面板体：编辑视图渲染 markdown 编辑器、树视图渲染提示词管理器、页视图渲染页目录。
 pub(crate) fn render_body(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -151,10 +196,21 @@ pub(crate) fn render_body(
     let focused = state.prompt_focused();
     let mode = state.prompt_owner().prompt_panel.mode;
     let title = title_source(state);
-    let (title_text, draft, page) = match &title {
-        TitleSource::Tree => (None, false, None),
-        TitleSource::Editor { title, draft, page } => {
-            (title.as_deref().or(Some("")), *draft, page.as_ref())
+    let (title_text, draft, page, status) = match &title {
+        TitleSource::Tree => (None, false, None, None),
+        TitleSource::Editor {
+            title,
+            draft,
+            page,
+            status,
+        } => (
+            title.as_deref().or(Some("")),
+            *draft,
+            page.as_ref(),
+            *status,
+        ),
+        TitleSource::Pages { title, draft, page } => {
+            (title.as_deref().or(Some("")), *draft, page.as_ref(), None)
         }
     };
     let page_data = prompt::TitleRowData {
@@ -162,10 +218,6 @@ pub(crate) fn render_body(
         draft,
         page: page_header_data(page),
     };
-    let block_focus_available = crate::app::markdown::block_scan(state.prompt.text())
-        .spans
-        .iter()
-        .any(|span| span.kind == crate::app::markdown::BlockKind::Template);
     prompt::render_header(
         area,
         frame.buffer_mut(),
@@ -174,14 +226,12 @@ pub(crate) fn render_body(
         mode,
         draft,
         state.prompt_pinned.is_some(),
-        state.prompt.block_focus_active(),
-        block_focus_available,
     );
     if let Some(row) = title_row(area) {
-        prompt::paint_title_row(frame.buffer_mut(), row, &page_data);
+        prompt::paint_title_row(frame.buffer_mut(), row, &page_data, status);
     }
     let text_area = crate::layout::prompt_text_rect(area);
-    let tree_cursor = match mode {
+    let list_cursor = match mode {
         PromptMode::Tree => prompt::tree::render(
             text_area,
             frame.buffer_mut(),
@@ -189,6 +239,13 @@ pub(crate) fn render_body(
             focused,
             state.prompt_tree_hover,
             state.prompt_drag.filter(|drag| drag.dragging),
+        ),
+        PromptMode::Pages => prompt::pages::render(
+            text_area,
+            frame.buffer_mut(),
+            &state.prompt_owner().prompt_panel,
+            focused,
+            state.prompt_tree_hover,
         ),
         PromptMode::Editor => {
             prompt::render(
@@ -203,28 +260,9 @@ pub(crate) fn render_body(
     if let Some(scrollbar) = prompt_scrollbar_for(area, state) {
         widgets::scrollbar::render(frame, &scrollbar);
     }
-    if mode == PromptMode::Tree {
-        // 树视图硬件光标落在搜索框输入位置（与模态输入框一致），未聚焦不显示。
-        return focused.then_some(tree_cursor).flatten();
-    }
-    if let (Some(page), Some(row)) = (page.filter(|page| page.rename.is_some()), title_row(area)) {
-        return focused
-            .then(|| {
-                prompt::rename_cursor(
-                    row,
-                    title_text,
-                    &prompt::PageHeaderData {
-                        current: page.current,
-                        total: page.total,
-                        name: &page.name,
-                        rename: page
-                            .rename
-                            .as_ref()
-                            .map(|(input, cursor)| (input.as_str(), *cursor)),
-                    },
-                )
-            })
-            .flatten();
+    if matches!(mode, PromptMode::Tree | PromptMode::Pages) {
+        // 树/页列表视图硬件光标落在搜索框输入位置（与模态输入框一致），未聚焦不显示。
+        return focused.then_some(list_cursor).flatten();
     }
     let (row, col) = focused.then(|| state.prompt.cursor_cell()).flatten()?;
     Some((
@@ -256,6 +294,11 @@ fn prompt_scrollbar_for(
             crate::layout::prompt_tree_scrollbar_rect(panel)?,
             owner.prompt_panel.rows().len(),
             owner.prompt_panel.scroll,
+        ),
+        PromptMode::Pages => (
+            crate::layout::prompt_tree_scrollbar_rect(panel)?,
+            prompt::pages::panel_page_rows(&owner.prompt_panel).len(),
+            owner.prompt_panel.pages_view.scroll,
         ),
         PromptMode::Editor => (
             crate::layout::prompt_scrollbar_rect(panel)?,

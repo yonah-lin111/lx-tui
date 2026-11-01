@@ -1,6 +1,4 @@
-//! prompt 光标移动与光标相对删除：上下左右、行内、按词与折叠区吸附。
-//!
-//! 纯状态更新；折叠补充块的隐藏行不进入视觉行序，字符/按词移动越过整块。
+//! prompt 光标移动与光标相对删除：上下左右、行内与按词。
 
 use super::text::*;
 use super::{EditKind, Prompt};
@@ -9,16 +7,14 @@ impl Prompt {
     /// 光标左移一个字符。
     pub fn move_left(&mut self) {
         self.break_group();
-        let at = prev_boundary(&self.text, self.cursor);
-        self.cursor = self.snap_visible(at, false);
+        self.cursor = prev_boundary(&self.text, self.cursor);
         self.settle();
     }
 
     /// 光标右移一个字符。
     pub fn move_right(&mut self) {
         self.break_group();
-        let at = next_boundary(&self.text, self.cursor);
-        self.cursor = self.snap_visible(at, true);
+        self.cursor = next_boundary(&self.text, self.cursor);
         self.settle();
     }
 
@@ -101,16 +97,14 @@ impl Prompt {
     /// 光标左移到前一个词的词首。
     pub fn move_word_backward(&mut self) {
         self.break_group();
-        let at = self.word_start_before(self.cursor);
-        self.cursor = self.snap_visible(at, false);
+        self.cursor = self.word_start_before(self.cursor);
         self.settle();
     }
 
     /// 光标右移到下一个词的词尾（readline M-f 语义）。
     pub fn move_word_forward(&mut self) {
         self.break_group();
-        let at = self.word_end_after(self.cursor);
-        self.cursor = self.snap_visible(at, true);
+        self.cursor = self.word_end_after(self.cursor);
         self.settle();
     }
 

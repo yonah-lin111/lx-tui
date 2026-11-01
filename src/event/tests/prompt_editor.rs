@@ -171,10 +171,10 @@ fn mouse_interacts_with_slash_panel() {
 }
 
 #[test]
-fn mouse_template_buttons_clean_status_and_delete() {
+fn mouse_template_status_label_and_block_buttons() {
     let (mut state, config, geo, area) = template_button_state();
     let buttons = crate::ui::prompt::template_buttons(&state.prompt, area);
-    assert_eq!(buttons.len(), 4, "宽屏下按钮可见");
+    assert_eq!(buttons.len(), 3, "块内只保留复制/清理/删除");
     let hit = |button| {
         buttons
             .iter()
@@ -185,13 +185,14 @@ fn mouse_template_buttons_clean_status_and_delete() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    // 状态按钮：todo → in_progress。
-    let status = hit(crate::ui::prompt::TemplateBlockButton::Status);
+    // 标题行状态标签：todo → in_progress（点击不移动正文光标）。
+    let status =
+        crate::ui::prompt_frame::prompt_status_rect(geo.view.prompt, &state).expect("status label");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
-            status.rect.x + 1,
-            status.rect.y,
+            status.x + 1,
+            status.y,
         ),
         &mut state,
         &mut sessions,
@@ -206,6 +207,24 @@ fn mouse_template_buttons_clean_status_and_delete() {
             .text()
             .contains("&&& addTemplate --end in_progress")
     );
+
+    // 再点一次：in_progress → done。
+    let status =
+        crate::ui::prompt_frame::prompt_status_rect(geo.view.prompt, &state).expect("status label");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            status.x + 1,
+            status.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.prompt.text().contains("&&& addTemplate --end done"));
 
     // 清理按钮：移除未填写空项。
     let clean = hit(crate::ui::prompt::TemplateBlockButton::Clean);
@@ -224,10 +243,8 @@ fn mouse_template_buttons_clean_status_and_delete() {
     );
     assert!(!state.prompt.text().contains("- Reference: "));
     assert!(
-        state
-            .prompt
-            .text()
-            .contains("&&& addTemplate --end in_progress")
+        state.prompt.text().contains("&&& addTemplate --end done"),
+        "两次点击状态标签把 todo 循环到 done"
     );
 
     // 删除按钮：整块消失。
@@ -254,6 +271,120 @@ fn mouse_template_buttons_clean_status_and_delete() {
 }
 
 #[test]
+fn unclosed_template_block_hides_status_label_and_falls_back_to_outdent() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.prompt_width = 80;
+    state.prompt.resize(78, 16);
+    crate::app::update::focus_prompt(&mut state);
+    crate::app::update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertText(
+            "&&& addTemplate --start\n{title: T}\n    body".into(),
+        ),
+    );
+    let geo = geometry(&state, &config, Rect::new(0, 0, 220, 30));
+    assert!(
+        crate::ui::prompt_frame::prompt_status_rect(geo.view.prompt, &state).is_none(),
+        "未闭合 &&& 不显示标题行状态标签"
+    );
+
+    // Shift+Tab 回退为反缩进，而不是静默吞键。
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
+    state
+        .prompt
+        .set_cursor_offset_for_test(state.prompt.text().len());
+    crate::app::update::apply_editor(&mut state, crate::app::actions::EditorCommand::Outdent);
+    assert!(
+        state.prompt.text().ends_with("\n  body"),
+        "未闭合块应回退为反缩进（4 空格减到 2）: {:?}",
+        state.prompt.text()
+    );
+}
+
+#[test]
+fn mouse_status_label_and_clean_button_clear_selection() {
+    let (mut state, config, geo, area) = template_button_state();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let click = |state: &mut AppState,
+                 sessions: &mut HashMap<PaneId, PtySession>,
+                 dirty: &mut bool,
+                 x: u16,
+                 y: u16| {
+        handle_terminal_event(
+            mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+            state,
+            sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            dirty,
+        );
+    };
+
+    // 标题行状态标签：清除旧选区。
+    state.select_all_prompt();
+    assert!(state.selection.is_some());
+    let status =
+        crate::ui::prompt_frame::prompt_status_rect(geo.view.prompt, &state).expect("status label");
+    click(
+        &mut state,
+        &mut sessions,
+        &mut dirty,
+        status.x + 1,
+        status.y,
+    );
+    assert!(state.selection.is_none(), "点击状态标签清除选区");
+
+    // 清理按钮：清除旧选区。
+    state.select_all_prompt();
+    let clean = crate::ui::prompt::template_buttons(&state.prompt, area)
+        .into_iter()
+        .find(|hit| hit.button == crate::ui::prompt::TemplateBlockButton::Clean)
+        .expect("clean button");
+    click(
+        &mut state,
+        &mut sessions,
+        &mut dirty,
+        clean.rect.x + 1,
+        clean.rect.y,
+    );
+    assert!(state.selection.is_none(), "点击清理按钮清除选区");
+}
+
+#[test]
+fn page_control_hit_requires_prompt_tab() {
+    let config = Config::default();
+    let mut state = paged_prompt_state();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    let title = ui::prompt_frame::title_row(geo.view.prompt).expect("title row");
+    let hit = (title.x..title.right())
+        .find(|x| {
+            ui::prompt_frame::prompt_page_control_at(geo.view.prompt, &state, *x, title.y).is_some()
+        })
+        .expect("page control visible in Prompt tab");
+    state.right_tab = crate::app::state::RightTab::Todo;
+    assert!(
+        ui::prompt_frame::prompt_page_control_at(geo.view.prompt, &state, hit, title.y).is_none(),
+        "Todo 标签页下不得命中隐藏的页控件"
+    );
+}
+
+#[test]
+fn pages_header_shows_zero_when_filter_has_no_match() {
+    let mut state = paged_prompt_state();
+    assert!(crate::app::update::show_prompt_pages(&mut state));
+    crate::app::update::apply_page_search(
+        &mut state,
+        &crate::app::actions::EditorCommand::InsertText("zzz".into()),
+    );
+    let header = crate::ui::prompt_frame::prompt_page_header(&state).expect("pages header");
+    assert_eq!(header.current, 0, "无匹配行时计数为 0/m");
+    assert_eq!(header.total, 2);
+}
+
+#[test]
 fn mouse_supple_copy_button_writes_clipboard_toast() {
     let config = Config::default();
     let mut state = AppState::demo();
@@ -263,7 +394,7 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
     crate::app::update::apply_editor(
         &mut state,
         crate::app::actions::EditorCommand::InsertText(
-            "&&& x --start\n+++ supplement --start\n{title: Review}\n\n- keep me\n+++ supplement --end\n&&& x --end"
+            "&&& x --start\n&&& x --end\n\n+++ supplement --start\n{title: Review}\n\n- keep me\n+++ supplement --end"
                 .into(),
         ),
     );
@@ -317,52 +448,6 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
 }
 
 #[test]
-fn mouse_supple_fold_button_toggles_without_editing_text() {
-    let config = Config::default();
-    let mut state = AppState::demo();
-    state.prompt_width = 80;
-    state.prompt.resize(78, 16);
-    crate::app::update::focus_prompt(&mut state);
-    crate::app::update::apply_editor(
-        &mut state,
-        crate::app::actions::EditorCommand::InsertText(
-            "&&& x --start\n+++ supplement --start\n{title: Review}\n\n- keep me\n+++ supplement --end\n&&& x --end"
-                .into(),
-        ),
-    );
-    state.prompt.mark_saved();
-    let geo = geometry(&state, &config, Rect::new(0, 0, 220, 30));
-    let area = crate::layout::prompt_text_rect(geo.view.prompt);
-    let text = state.prompt.text().to_string();
-    let mut sessions = HashMap::new();
-    let mut dirty = false;
-
-    for folded in [false, true] {
-        let fold = crate::ui::prompt::block_buttons(&state.prompt, area)
-            .into_iter()
-            .find(|hit| hit.button == crate::ui::prompt::BlockButton::Fold)
-            .expect("supple fold button visible");
-        assert_eq!(fold.folded, !folded, "按钮字形跟随折叠态");
-        handle_terminal_event(
-            mouse(
-                MouseEventKind::Down(MouseButton::Left),
-                fold.rect.x,
-                fold.rect.y,
-            ),
-            &mut state,
-            &mut sessions,
-            &geo,
-            &config,
-            &mut ui::RenderCache::default(),
-            &mut dirty,
-        );
-        assert_eq!(state.prompt.supple_folded_at(1), folded);
-        assert_eq!(state.prompt.text(), text, "折叠不修改正文");
-        assert!(state.prompt.is_saved(), "折叠不置脏");
-    }
-}
-
-#[test]
 fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
     let config = Config::default();
     let mut state = paged_prompt_state();
@@ -409,7 +494,7 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
     );
     assert_eq!(state.prompt.text(), "beta");
     assert!(state.prompt_focused());
-    // 计数：打开页码菜单。
+    // 计数：切换到页列表视图；Esc 返回编辑视图。
     let controls = ui::prompt::page_controls(title, "2/2").expect("controls");
     handle_terminal_event(
         mouse(
@@ -424,8 +509,7 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert!(matches!(state.overlay, Some(Overlay::PageMenu(_))));
-    // Esc 关闭菜单且不穿透编辑器。
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Pages);
     handle_terminal_event(
         TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         &mut state,
@@ -435,70 +519,8 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
     assert_eq!(state.prompt.text(), "beta");
-}
-
-#[test]
-fn mouse_click_prompt_page_name_starts_rename_and_keys_commit() {
-    let config = Config::default();
-    let mut state = paged_prompt_state();
-    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
-    let mut sessions = HashMap::new();
-    let mut dirty = false;
-    let title = ui::prompt_frame::title_row(geo.view.prompt).expect("title row");
-    assert_eq!(
-        title.y,
-        crate::layout::pane_inner_rect(geo.view.prompt).y + 1,
-        "页名已下移到标题行（工具栏下一行），不再是容器顶边框"
-    );
-    // 标题行 `├─ paged · Page 1 `：点击页名起始后两列。
-    let name_col = title.x + 2 + " paged ".len() as u16 + 2;
-    handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), name_col, title.y),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
-    assert!(
-        crate::app::update::page_rename_active(&state),
-        "点击页名进入重命名"
-    );
-    assert_eq!(state.prompt.text(), "alpha", "重命名不改正文");
-    handle_terminal_event(
-        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE)),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
-    assert_eq!(
-        state.workspaces[0]
-            .prompt_panel
-            .page_rename()
-            .expect("rename active")
-            .input
-            .text(),
-        "Page 1X",
-        "字符输入进入页名"
-    );
-    handle_terminal_event(
-        TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
-    assert!(!crate::app::update::page_rename_active(&state));
-    let item = state.workspaces[0].prompt_panel.tree.item(7).expect("item");
-    assert_eq!(item.pages[0].name, "Page 1X");
 }
 
 #[test]
@@ -532,53 +554,6 @@ fn mouse_click_prompt_padding_only_focuses_without_moving_cursor() {
         0,
         "点击留白不移动光标到不存在的文本行"
     );
-}
-
-#[test]
-fn mouse_click_current_tab_commits_page_rename() {
-    // 设计：tab 与工具栏按钮同属控件，点一下即离开重命名输入态。
-    // 点**当前** tab 时 `select_right_tab` 会因同 tab 早退，提交必须由 press 自己完成。
-    let config = Config::default();
-    let mut state = paged_prompt_state();
-    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
-    assert!(crate::app::update::begin_page_rename(&mut state));
-    crate::app::update::apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Clear);
-    for ch in "Intro".chars() {
-        crate::app::update::apply_page_rename_key(
-            &mut state,
-            crate::app::actions::OverlayKey::Char(ch),
-        );
-    }
-    assert!(
-        crate::app::update::page_rename_active(&state),
-        "前提：重命名中"
-    );
-    let mut sessions = HashMap::new();
-    let mut dirty = false;
-
-    let prompt_tab = right_tab_rect(&geo, RightTab::Prompt);
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            prompt_tab.x,
-            prompt_tab.y,
-        ),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
-
-    assert_eq!(state.right_tab, RightTab::Prompt, "点的就是当前 tab");
-    assert!(
-        !crate::app::update::page_rename_active(&state),
-        "提交并退出输入态"
-    );
-    let item = state.workspaces[0].prompt_panel.tree.item(7).expect("item");
-    assert_eq!(item.pages[0].name, "Intro", "非空页名写回");
-    assert!(dirty);
 }
 
 #[test]

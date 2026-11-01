@@ -1,121 +1,19 @@
-//! 提示词分页行为：切页、页码菜单、新建/重命名/删除与当前页持久化。
+//! 提示词分页行为：切页、新建/删除与当前页持久化。
 //!
 //! 所有离开当前正文的路径共享同一结算顺序：先提交编辑缓冲到当前页，
 //! 再关闭正文相关面板/选区，最后切换当前页 id 并载入目标正文。
 
-use crate::app::actions::OverlayKey;
 use crate::app::effects::Effect;
-use crate::app::overlay::{ConfirmClose, Overlay, OverlayTarget, PageMenu, PageMenuRow};
-use crate::app::prompt::{PromptEditing, PromptMode, PromptPage, PromptPageId, PromptPanel};
+use crate::app::prompt::{
+    PromptEditing, PromptMode, PromptPage, PromptPageId, PromptPanel, page_rows,
+};
 use crate::app::state::AppState;
 use crate::ui::text;
 
-use super::commit_editing_prompt;
+use super::pages_view::{clamp_page_view, hide_prompt_pages, prompt_pages_mode};
+use super::{commit_editing_prompt, prompt_tree_visible_rows};
 
-/// 页码菜单行激活：新建、切页或删除当前页。
-pub fn activate_page_menu_row(state: &mut AppState) -> bool {
-    let Some(Overlay::PageMenu(menu)) = state.overlay.as_ref() else {
-        return false;
-    };
-    let Some(row) = menu.rows.get(menu.selected).cloned() else {
-        return false;
-    };
-    match row {
-        PageMenuRow::NewPage => open_new_page(state),
-        PageMenuRow::Page { page, .. } => {
-            state.overlay = None;
-            select_prompt_page(state, page)
-        }
-        PageMenuRow::DeletePage { enabled: true } => delete_current_page(state),
-        PageMenuRow::DeletePage { enabled: false } => false,
-    }
-}
-
-/// 页码菜单上下移动高亮；越界钳制。
-pub fn move_page_menu_selection(state: &mut AppState, delta: isize) -> bool {
-    let Some(Overlay::PageMenu(menu)) = state.overlay.as_mut() else {
-        return false;
-    };
-    let len = menu.rows.len();
-    if len == 0 {
-        return false;
-    }
-    let next = (menu.selected as isize + delta).clamp(0, len as isize - 1) as usize;
-    if next == menu.selected && state.menu_hover {
-        return false;
-    }
-    menu.selected = next;
-    // 键盘移动同样显示高亮反馈。
-    state.menu_hover = true;
-    true
-}
-
-/// 悬停/点击选中页码菜单行；越界忽略。
-pub fn set_page_menu_selection(state: &mut AppState, index: usize) -> bool {
-    let Some(Overlay::PageMenu(menu)) = state.overlay.as_mut() else {
-        return false;
-    };
-    if index >= menu.rows.len() {
-        return false;
-    }
-    let changed = menu.selected != index || !state.menu_hover;
-    menu.selected = index;
-    state.menu_hover = true;
-    changed
-}
-
-/// 打开页码菜单：先结算当前页，再按内存最新正文生成逐页统计快照。
-pub fn open_prompt_page_menu(state: &mut AppState, anchor: (u16, u16)) -> bool {
-    finish_page_rename(state);
-    let workspace = state.prompt_workspace();
-    let Some(target) = state
-        .workspaces
-        .get(workspace)
-        .and_then(|workspace| workspace.prompt_panel.editing)
-    else {
-        return false;
-    };
-    commit_editing_prompt(state);
-    let Some(panel) = state
-        .workspaces
-        .get(workspace)
-        .map(|workspace| &workspace.prompt_panel)
-    else {
-        return false;
-    };
-    let Some((pages, active)) = editing_pages(panel) else {
-        return false;
-    };
-    let mut rows = vec![PageMenuRow::NewPage];
-    let mut selected = 0;
-    for page in pages {
-        let current = page.id == active;
-        if current {
-            selected = rows.len();
-        }
-        rows.push(PageMenuRow::Page {
-            page: page.id,
-            current,
-            empty: page.content.trim().is_empty(),
-            counts: crate::app::markdown::template_counts(&page.content),
-        });
-    }
-    rows.push(PageMenuRow::DeletePage {
-        enabled: pages.len() > 1,
-    });
-    state.overlay = Some(Overlay::PageMenu(PageMenu {
-        anchor,
-        workspace,
-        target,
-        rows,
-        selected,
-    }));
-    // 菜单锚定在点击处：指针位于容器内，初始显示反馈。
-    state.menu_hover = true;
-    true
-}
-
-/// 相对切页（标题行箭头）；越界或无法切页返回 false。
+/// 相对切页（标题行箭头与 `Ctrl/Cmd+←/→`）；越界或无法切页返回 false。
 pub fn switch_prompt_page(state: &mut AppState, delta: isize) -> bool {
     let Some((pages, active)) = displayed_prompt_pages(state) else {
         return false;
@@ -220,9 +118,10 @@ fn set_active_page(
     }
 }
 
-/// 新建页：正式条目走 DB 效应（成功后载入）；临时提示词直接追加并进入命名。
-fn open_new_page(state: &mut AppState) -> bool {
+/// 新建页：处于页列表视图时保留在列表并选中新页；处于编辑视图时切到新页。
+pub fn open_new_page(state: &mut AppState) -> bool {
     let workspace = state.prompt_workspace();
+    let visible = prompt_tree_visible_rows(state);
     let Some(target) = state
         .workspaces
         .get(workspace)
@@ -230,6 +129,10 @@ fn open_new_page(state: &mut AppState) -> bool {
     else {
         return false;
     };
+    let in_pages = state.prompt_owner().prompt_panel.mode == PromptMode::Pages;
+    if !in_pages {
+        hide_prompt_pages(state);
+    }
     commit_editing_prompt(state);
     state.prompt.clear_panel();
     state.selection = None;
@@ -266,48 +169,156 @@ fn open_new_page(state: &mut AppState) -> bool {
             let added = with_panel(state, workspace, |panel| {
                 let page_id = panel.alloc_temp_page_id();
                 let page = PromptPageId::Temp(page_id);
-                let Some(temp) = panel.temp_mut(id) else {
-                    return false;
+                let mode = panel.mode;
+                let position = {
+                    if mode == PromptMode::Pages {
+                        // 列表视图：新页标题不匹配过滤词，先清空搜索。
+                        panel.pages_view.search.clear();
+                    }
+                    let Some(temp) = panel.temp_mut(id) else {
+                        return false;
+                    };
+                    temp.pages.push(PromptPage::temp(page_id, &name, ""));
+                    if mode != PromptMode::Pages {
+                        temp.active_page = page;
+                        None
+                    } else {
+                        // 按完整列表（无搜索词）定位新页。
+                        let rows = crate::app::prompt::pages_list::page_rows(
+                            &temp.pages,
+                            temp.active_page,
+                            "",
+                        );
+                        let pos = rows
+                            .iter()
+                            .position(|row| row.page == page)
+                            .unwrap_or(rows.len().saturating_sub(1));
+                        Some((pos, rows.len()))
+                    }
                 };
-                temp.pages.push(PromptPage::temp(page_id, &name, ""));
-                temp.active_page = page;
-                panel.start_page_rename(page, &name);
+                match position {
+                    Some((pos, rows_len)) => {
+                        panel.pages_view.selected = pos;
+                        clamp_page_view(panel, rows_len, visible);
+                    }
+                    None => panel.mode = PromptMode::Editor,
+                }
                 true
             });
             if !added {
                 return false;
             }
-            reload_editor_from_active_page(state, workspace);
+            if !in_pages {
+                reload_editor_from_active_page(state, workspace);
+            }
             true
         }
     }
 }
 
-/// 服务回调：正式条目新页已落库并重载；立即切换并进入默认名编辑。
+/// 快捷键新建页（`Ctrl/Cmd+Shift+→`）：
+/// 若已有未填写的空页，切到该空页并 Toast 提示已有新页；
+/// 否则新建页、切入并 Toast 提示已新建。
+pub fn create_or_toast_new_page(state: &mut AppState) -> bool {
+    state.prompt.clear_panel();
+    commit_editing_prompt(state);
+    let workspace = state.prompt_workspace();
+    let visible = prompt_tree_visible_rows(state);
+    let Some((pages, active)) = displayed_prompt_pages(state) else {
+        return false;
+    };
+    let anchor = Some(state.prompt.id());
+    if let Some(empty) = pages.iter().find(|page| page.content.trim().is_empty()) {
+        let empty_id = empty.id;
+        if prompt_pages_mode(state) {
+            // 列表视图：清空搜索并把该空白页滚入视口，不切回编辑视图。
+            with_panel(state, workspace, |panel| {
+                panel.pages_view.search.clear();
+                let Some((pages, active)) = panel.editing_pages() else {
+                    return false;
+                };
+                let rows = page_rows(pages, active, "");
+                if let Some(pos) = rows.iter().position(|row| row.page == empty_id) {
+                    panel.pages_view.selected = pos;
+                }
+                clamp_page_view(panel, rows.len(), visible);
+                true
+            });
+        } else if empty_id != active {
+            select_prompt_page(state, empty_id);
+        }
+        state.overlay = None;
+        super::super::show_toast_at(
+            state,
+            anchor,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Warning,
+                text::TOAST_PAGE_ALREADY_NEW,
+                anchor,
+                std::time::Instant::now(),
+            ),
+        );
+        return true;
+    }
+    let created = open_new_page(state);
+    if created {
+        super::super::show_toast_at(
+            state,
+            anchor,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Default,
+                text::TOAST_PAGE_CREATED,
+                anchor,
+                std::time::Instant::now(),
+            ),
+        );
+    }
+    created
+}
+
+/// 服务回调：正式条目新页已落库并重载；页列表视图下保持在列表，编辑视图下切到新页。
 pub fn open_created_page(
     state: &mut AppState,
     workspace: usize,
     item_id: i64,
     page_id: i64,
-    name: &str,
+    _name: &str,
 ) -> bool {
     let page = PromptPageId::Saved(page_id);
+    let visible = prompt_tree_visible_rows(state);
+    let mut was_pages = false;
     let opened = with_panel(state, workspace, |panel| {
+        let mode = panel.mode;
         let Some(item) = panel.tree.item_mut(item_id) else {
             return false;
         };
         if item.page(page).is_none() {
             return false;
         }
+        if mode == PromptMode::Pages {
+            was_pages = true;
+            // 列表视图：新页标题不匹配过滤词，先清空搜索再按完整列表定位并滚入视口。
+            panel.pages_view.search.clear();
+            let (pos, rows_len) = {
+                let rows = page_rows(&item.pages, item.active_page, "");
+                let pos = rows
+                    .iter()
+                    .position(|row| row.page == page)
+                    .unwrap_or(rows.len().saturating_sub(1));
+                (pos, rows.len())
+            };
+            panel.pages_view.selected = pos;
+            clamp_page_view(panel, rows_len, visible);
+            return true;
+        }
         item.active_page = page;
-        panel.cancel_page_rename();
-        panel.start_page_rename(page, name);
+        panel.mode = PromptMode::Editor;
         true
     });
     if !opened {
         return false;
     }
-    if workspace == state.prompt_workspace() {
+    if !was_pages && workspace == state.prompt_workspace() {
         reload_editor_from_active_page(state, workspace);
         state.prompt_collapsed = false;
         super::super::focus_prompt(state);
@@ -357,16 +368,30 @@ pub fn open_saved_draft(
     super::edit_prompt_item(state, workspace, item_id)
 }
 
-/// 服务回调：页删除已落库并重载；把编辑缓冲切换到新的当前页。
+/// 服务回调：页删除已落库并重载；若当前编辑页正文已变化则同步编辑缓冲。
 pub fn rebind_after_page_delete(state: &mut AppState, workspace: usize, item_id: i64) -> bool {
     if workspace != state.prompt_workspace() {
         return false;
     }
-    let editing = state.workspaces.get(workspace).is_some_and(|workspace| {
-        workspace.prompt_panel.editing == Some(PromptEditing::Item(item_id))
-            && workspace.prompt_panel.mode == PromptMode::Editor
-    });
-    if !editing {
+    let needs_reload = state
+        .workspaces
+        .get(workspace)
+        .and_then(|ws| {
+            let panel = &ws.prompt_panel;
+            if panel.editing != Some(PromptEditing::Item(item_id)) || panel.mode == PromptMode::Tree
+            {
+                return None;
+            }
+            let (pages, active) = editing_pages(panel)?;
+            let content = pages
+                .iter()
+                .find(|page| page.id == active)?
+                .content
+                .as_str();
+            Some(state.prompt.text() != content)
+        })
+        .unwrap_or(false);
+    if !needs_reload {
         return false;
     }
     state.prompt.clear_panel();
@@ -374,253 +399,66 @@ pub fn rebind_after_page_delete(state: &mut AppState, workspace: usize, item_id:
     reload_editor_from_active_page(state, workspace)
 }
 
-/// 当前页名控件：进入预填页名的重命名输入态。
-pub fn begin_page_rename(state: &mut AppState) -> bool {
-    let workspace = state.prompt_workspace();
-    let Some((name, page)) = state
-        .workspaces
-        .get(workspace)
-        .and_then(|workspace| editing_pages(&workspace.prompt_panel))
-        .and_then(|(pages, active)| {
-            pages
-                .iter()
-                .find(|page| page.id == active)
-                .map(|page| (page.name.clone(), page.id))
-        })
-    else {
-        return false;
-    };
-    commit_editing_prompt(state);
-    with_panel(state, workspace, |panel| {
-        panel.start_page_rename(page, &name);
-        true
-    })
-}
-
-/// 显示中面板是否存在页重命名输入态。
-pub fn page_rename_active(state: &AppState) -> bool {
-    state
-        .workspaces
-        .get(state.prompt_workspace())
-        .is_some_and(|workspace| workspace.prompt_panel.page_rename().is_some())
-}
-
-/// 页重命名按键：Enter 提交（空名拒绝并保持输入态）、Esc 保留旧名，其余为单行编辑。
-pub fn apply_page_rename_key(state: &mut AppState, key: OverlayKey) {
-    match key {
-        OverlayKey::Esc => cancel_page_rename(state),
-        OverlayKey::Enter => {
-            let empty = state
-                .workspaces
-                .get(state.prompt_workspace())
-                .and_then(|workspace| workspace.prompt_panel.page_rename())
-                .is_some_and(|rename| rename.input.text().trim().is_empty());
-            if !empty {
-                finish_page_rename(state);
-            }
-        }
-        OverlayKey::Char(_)
-        | OverlayKey::Clear
-        | OverlayKey::Backspace
-        | OverlayKey::Delete
-        | OverlayKey::Left
-        | OverlayKey::Right
-        | OverlayKey::Home
-        | OverlayKey::End
-        | OverlayKey::LineStart
-        | OverlayKey::LineEnd
-        | OverlayKey::DeleteToLineStart
-        | OverlayKey::DeleteToLineEnd
-        | OverlayKey::Undo
-        | OverlayKey::Redo => edit_page_rename_input(state, key),
-        OverlayKey::Up
-        | OverlayKey::Down
-        | OverlayKey::EnterFolder
-        | OverlayKey::Back
-        | OverlayKey::Copy
-        | OverlayKey::Remove
-        | OverlayKey::PageUp
-        | OverlayKey::PageDown => {}
-    }
-}
-
-/// 页重命名字符输入。
-fn edit_page_rename_input(state: &mut AppState, key: OverlayKey) {
-    let workspace = state.prompt_workspace();
-    let Some(rename) = state
-        .workspaces
-        .get_mut(workspace)
-        .and_then(|workspace| workspace.prompt_panel.page_rename_mut())
-    else {
-        return;
-    };
-    let input = &mut rename.input;
-    match key {
-        OverlayKey::Char(ch) => input.insert_char(ch),
-        OverlayKey::Clear => input.clear(),
-        OverlayKey::Backspace => input.backspace(),
-        OverlayKey::Delete => input.delete(),
-        OverlayKey::Left => input.move_left(),
-        OverlayKey::Right => input.move_right(),
-        OverlayKey::Home | OverlayKey::LineStart => input.move_home(),
-        OverlayKey::End | OverlayKey::LineEnd => input.move_end(),
-        OverlayKey::DeleteToLineStart => input.delete_to_line_start(),
-        OverlayKey::DeleteToLineEnd => input.delete_to_line_end(),
-        OverlayKey::Undo => {
-            input.undo();
-        }
-        OverlayKey::Redo => {
-            input.redo();
-        }
-        _ => {}
-    }
-}
-
-/// 取消页重命名输入态（保留旧名）。
-pub fn cancel_page_rename(state: &mut AppState) {
-    let workspace = state.prompt_workspace();
-    with_panel(state, workspace, |panel| {
-        panel.cancel_page_rename();
-        false
-    });
-}
-
-/// 结束页重命名：非空输入写入（正式页登记 DB 效应），空名保留旧名。
-pub fn finish_page_rename(state: &mut AppState) -> bool {
-    let workspace = state.prompt_workspace();
-    let Some(rename) = state
-        .workspaces
-        .get_mut(workspace)
-        .and_then(|workspace| workspace.prompt_panel.take_page_rename())
-    else {
-        return false;
-    };
-    let page = rename.page;
-    let name = rename.input.text().trim().to_string();
-    if name.is_empty() {
-        return false;
-    }
-    let renamed = with_panel(state, workspace, |panel| match panel.editing {
-        Some(PromptEditing::Item(id)) => panel
-            .tree
-            .item_mut(id)
-            .and_then(|item| item.page_mut(page))
-            .map(|page| page.name.clone_from(&name))
-            .is_some(),
-        Some(PromptEditing::Temp(id)) => panel
-            .temp_mut(id)
-            .and_then(|temp| temp.page_mut(page))
-            .map(|page| page.name.clone_from(&name))
-            .is_some(),
-        None => false,
-    });
-    if !renamed {
-        return false;
-    }
-    if let (Some(page_id), Some(cwd)) = (page.saved(), workspace_cwd(state, workspace)) {
-        state.effects.push(Effect::RenamePage {
-            workspace: cwd,
-            page_id,
-            name,
-        });
-    }
-    true
-}
-
-/// 删除当前页：含内容页先二次确认，空白页直接删除；最后一页不可删除。
-pub fn delete_current_page(state: &mut AppState) -> bool {
-    let workspace = state.prompt_workspace();
-    let Some(panel) = state
-        .workspaces
-        .get(workspace)
-        .map(|workspace| &workspace.prompt_panel)
-    else {
-        return false;
-    };
-    let Some(target) = panel.editing else {
-        return false;
-    };
-    let Some((pages, active)) = editing_pages(panel) else {
-        return false;
-    };
-    if pages.len() <= 1 {
-        return false;
-    }
-    let Some(page) = pages.iter().find(|page| page.id == active).cloned() else {
-        return false;
-    };
-    state.overlay = None;
-    if !page.content.trim().is_empty() {
-        state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-            target: OverlayTarget::PromptPage {
-                workspace,
-                owner: target,
-                page: page.id,
-            },
-        }));
-        return true;
-    }
-    perform_delete_page(state, workspace, target, page.id)
-}
-
-/// 确认浮层回调：执行页删除。
-pub fn confirm_delete_page(
+/// 删除页的内存变更与持久化效应；删除当前页时按「下一页优先，末页取上一页」接续并重载编辑缓冲，
+/// 删除非当前页时保持 `active_page` 与编辑缓冲（含撤销栈）不变。
+pub fn perform_delete_page(
     state: &mut AppState,
     workspace: usize,
     owner: PromptEditing,
     page: PromptPageId,
 ) -> bool {
-    state.overlay = None;
-    perform_delete_page(state, workspace, owner, page)
-}
-
-/// 删除页的内存变更与持久化效应；删除后优先下一页，末页删除后前一页。
-fn perform_delete_page(
-    state: &mut AppState,
-    workspace: usize,
-    owner: PromptEditing,
-    page: PromptPageId,
-) -> bool {
+    let visible = prompt_tree_visible_rows(state);
+    let mut was_active = false;
     let deleted = with_panel(state, workspace, |panel| {
-        let pages = match owner {
-            PromptEditing::Item(id) => panel.tree.item_mut(id).map(|item| &mut item.pages),
-            PromptEditing::Temp(id) => panel.temp_mut(id).map(|temp| &mut temp.pages),
-        };
-        let Some(pages) = pages else {
-            return false;
-        };
-        let Some(index) = pages.iter().position(|candidate| candidate.id == page) else {
-            return false;
-        };
-        if pages.len() <= 1 {
-            return false;
-        }
-        pages.remove(index);
-        let next = pages
-            .get(index)
-            .or_else(|| pages.last())
-            .map(|page| page.id);
-        let Some(next) = next else {
-            return false;
-        };
-        match owner {
-            PromptEditing::Item(id) => {
-                if let Some(item) = panel.tree.item_mut(id) {
-                    item.active_page = next;
+        let query = panel.pages_view.search.text().to_string();
+        let selected_index = panel.pages_view.selected;
+        let (rows_len, target_pos) = {
+            let (pages, active) = match owner {
+                PromptEditing::Item(id) => {
+                    let Some(item) = panel.tree.item_mut(id) else {
+                        return false;
+                    };
+                    (&mut item.pages, &mut item.active_page)
                 }
-            }
-            PromptEditing::Temp(id) => {
-                if let Some(temp) = panel.temp_mut(id) {
-                    temp.active_page = next;
+                PromptEditing::Temp(id) => {
+                    let Some(temp) = panel.temp_mut(id) else {
+                        return false;
+                    };
+                    (&mut temp.pages, &mut temp.active_page)
                 }
+            };
+            let Some(index) = pages.iter().position(|candidate| candidate.id == page) else {
+                return false;
+            };
+            if pages.len() <= 1 {
+                return false;
             }
+            was_active = *active == page;
+            // 删除前记录选中行对应的页：被删行位于其上方时按 id 重定位，避免选中箭头漂移。
+            let selected_page = page_rows(pages, *active, &query)
+                .get(selected_index)
+                .map(|row| row.page);
+            pages.remove(index);
+            if was_active {
+                let next = pages
+                    .get(index)
+                    .or_else(|| pages.last())
+                    .map(|candidate| candidate.id);
+                let Some(next) = next else {
+                    return false;
+                };
+                *active = next;
+            }
+            let rows = page_rows(pages, *active, &query);
+            let target_pos = (selected_page != Some(page))
+                .then(|| selected_page.and_then(|id| rows.iter().position(|row| row.page == id)))
+                .flatten();
+            (rows.len(), target_pos)
+        };
+        if let Some(pos) = target_pos {
+            panel.pages_view.selected = pos;
         }
-        if panel
-            .page_rename()
-            .is_some_and(|rename| rename.page == page)
-        {
-            panel.cancel_page_rename();
-        }
+        clamp_page_view(panel, rows_len, visible);
         true
     });
     if !deleted {
@@ -637,13 +475,15 @@ fn perform_delete_page(
             page_id,
         });
     }
-    state.prompt.clear_panel();
-    state.selection = None;
-    reload_editor_from_active_page(state, workspace);
+    if was_active {
+        state.prompt.clear_panel();
+        state.selection = None;
+        reload_editor_from_active_page(state, workspace);
+    }
     true
 }
 
-/// 用编辑目标的当前页内容重装编辑缓冲（切换/删除/新建后）。
+/// 用编辑目标的当前页内容重装编辑缓冲（切换/删除当前页/新建后；Pages 与 Editor 视图下均生效）。
 pub fn reload_editor_from_active_page(state: &mut AppState, workspace: usize) -> bool {
     if workspace != state.prompt_workspace() {
         return false;
@@ -656,7 +496,7 @@ pub fn reload_editor_from_active_page(state: &mut AppState, workspace: usize) ->
         else {
             return false;
         };
-        if panel.mode != PromptMode::Editor {
+        if panel.mode == PromptMode::Tree {
             return false;
         }
         editing_pages(panel).and_then(|(pages, active)| {
@@ -669,28 +509,19 @@ pub fn reload_editor_from_active_page(state: &mut AppState, workspace: usize) ->
     let Some(content) = content else {
         return false;
     };
-    state.prompt.exit_block_focus();
     state.prompt.set_text(&content);
     true
 }
 
 /// 编辑目标的页集合与当前页 id。
 pub(super) fn editing_pages(panel: &PromptPanel) -> Option<(&[PromptPage], PromptPageId)> {
-    match panel.editing? {
-        PromptEditing::Item(id) => panel
-            .tree
-            .item(id)
-            .map(|item| (item.pages.as_slice(), item.active_page)),
-        PromptEditing::Temp(id) => panel
-            .temp(id)
-            .map(|temp| (temp.pages.as_slice(), temp.active_page)),
-    }
+    panel.editing_pages()
 }
 
 /// 显示中面板的编辑目标页集合与当前页 id。
 fn displayed_prompt_pages(state: &AppState) -> Option<(&[PromptPage], PromptPageId)> {
     let panel = &state.workspaces.get(state.prompt_workspace())?.prompt_panel;
-    editing_pages(panel)
+    panel.editing_pages()
 }
 
 /// 下一个未使用的默认页名 `Page N`。
@@ -706,7 +537,7 @@ pub(super) fn next_default_page_name(pages: &[PromptPage]) -> String {
 }
 
 /// 工作区 cwd；工作区已关闭时为 None。
-fn workspace_cwd(state: &AppState, workspace: usize) -> Option<std::path::PathBuf> {
+pub(super) fn workspace_cwd(state: &AppState, workspace: usize) -> Option<std::path::PathBuf> {
     state
         .workspaces
         .get(workspace)

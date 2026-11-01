@@ -1,46 +1,22 @@
-//! prompt 视口几何与坐标映射：软换行、折叠隐藏、滚动、选区与单元格/字节换算。
-//!
-//! 折叠的补充块只保留起始行；隐藏行不进入视觉行序，因此光标、点击、选区与滚动
-//! 共用同一份可见行口径。
+//! prompt 视口几何与坐标映射：软换行、滚动、选区与单元格/字节换算。
 
 use super::super::markdown;
-use super::fold;
 use super::{Prompt, VisualRow, char_width, display_width};
 
 /// 多击选词/选行返回的（单元格闭区间，字节半开区间）。
 pub type UnitCellSpan = (((i32, u16), (i32, u16)), (usize, usize));
 
 impl Prompt {
-    /// 按内容宽度软换行得到的可见视觉行；块行扣除左右边框槽后再换行，
-    /// 折叠补充块的隐藏行整体跳过。
+    /// 按内容宽度软换行得到的可见视觉行；块行扣除左侧色条槽后再换行。
     pub fn visual_rows(&self) -> Vec<VisualRow> {
         let width = usize::from(self.width.max(1));
-        let margins = usize::from(
-            crate::layout::PROMPT_TEMPLATE_GUTTER_LEFT
-                + crate::layout::PROMPT_TEMPLATE_GUTTER_RIGHT,
-        );
+        let margins = usize::from(crate::layout::PROMPT_BLOCK_GUTTER_LEFT);
         let scan = markdown::block_scan(&self.text);
         let lines: Vec<&str> = self.text.split('\n').collect();
-        // 块聚焦时只保留该块的逻辑行区间（含起止行）；范围失效时退回普通视图。
-        let focus = self.focused_block_range(&scan);
-        let mut hidden = vec![false; lines.len()];
-        for block in fold::folded_blocks_from(&scan, &self.text, &self.expanded_supplements) {
-            for line in block.hidden_from_line..=block.end_line {
-                if let Some(slot) = hidden.get_mut(line) {
-                    *slot = true;
-                }
-            }
-        }
         let mut rows = Vec::new();
         let mut line_start = 0;
         for (line, segment) in lines.iter().enumerate() {
             let line_end = line_start + segment.len();
-            // 聚焦块外的逻辑行整体跳过（软换行判定在块内照旧）。
-            let outside_focus = focus.is_some_and(|(start, end)| line < start || line > end);
-            if hidden.get(line).copied().unwrap_or(false) || outside_focus {
-                line_start = line_end + 1;
-                continue;
-            }
             let info = scan.infos.get(line).copied().flatten();
             let width = if info.is_some() {
                 width.saturating_sub(margins).max(1)
@@ -366,10 +342,10 @@ impl Prompt {
         }
         visual.end
     }
-    /// 块行左边框槽宽度；非块行为 0（渲染、光标与鼠标坐标映射共用）。
+    /// 块行左侧色条槽宽度；非块行为 0（渲染、光标与鼠标坐标映射共用）。
     fn line_gutter(&self, line: usize) -> u16 {
         if markdown::block_span_at_line(&self.text, line).is_some() {
-            crate::layout::PROMPT_TEMPLATE_GUTTER_LEFT
+            crate::layout::PROMPT_BLOCK_GUTTER_LEFT
         } else {
             0
         }
@@ -387,6 +363,29 @@ impl Prompt {
             self.scroll = row;
         } else if row >= self.scroll + height {
             self.scroll = row + 1 - height;
+        }
+        self.scroll = self.scroll.min(self.max_scroll());
+    }
+    /// 让逻辑行区间 `[start_line, end_line]` 尽量完整可见；块高于视口时保证起始行可见。
+    pub(super) fn scroll_lines_into_view(&mut self, start_line: usize, end_line: usize) {
+        let rows = self.visual_rows();
+        if rows.is_empty() {
+            self.scroll = 0;
+            return;
+        }
+        let Some(first) = rows.iter().position(|row| row.line >= start_line) else {
+            return;
+        };
+        let last = rows
+            .iter()
+            .rposition(|row| row.line <= end_line)
+            .unwrap_or(first);
+        let height = usize::from(self.height.max(1));
+        let span = last.saturating_sub(first) + 1;
+        if span >= height || first < self.scroll {
+            self.scroll = first;
+        } else if last >= self.scroll + height {
+            self.scroll = last + 1 - height;
         }
         self.scroll = self.scroll.min(self.max_scroll());
     }
