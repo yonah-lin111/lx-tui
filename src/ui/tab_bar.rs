@@ -208,7 +208,7 @@ pub fn render(frame: &mut Frame<'_>, view: &ViewLayout, state: &AppState) {
         if pending {
             spans.push(Span::styled(
                 format!("{} ", text::TAB_ASK_MARKER),
-                style::accent(),
+                label_style.patch(style::tab_ask_marker()),
             ));
         }
         spans.push(Span::styled(text::TAB_SEPARATOR, style::muted()));

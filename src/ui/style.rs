@@ -81,6 +81,13 @@ pub fn selected_item() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// 标签内挂起 `ask` 的 `?` 标记：深琥珀/暗砖红（`Indexed 166` `#d75f00`，显式去掉继承的 DIM），背景跟随标签底色。
+pub fn tab_ask_marker() -> Style {
+    Style::default()
+        .fg(Color::Indexed(166))
+        .remove_modifier(Modifier::DIM)
+}
+
 /// 列表/菜单当前项：高亮中灰底（Indexed 240）纯白字（Indexed 255）；侧栏悬停/拖拽与终端选区使用，与右键菜单 hover 对齐。
 pub fn selection() -> Style {
     Style::default()
