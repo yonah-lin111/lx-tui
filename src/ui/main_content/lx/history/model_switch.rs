@@ -15,11 +15,11 @@ use ratatui::layout::Rect;
 use crate::app::state::ModelSwitchNoticeView;
 use crate::ui::main_content::lx::Grid;
 use crate::ui::main_content::lx::history::tool::Segment;
-use crate::ui::main_content::lx::history::tool::tree::{Node, Preview, Section};
+use crate::ui::main_content::lx::history::tool::tree::Node;
 use crate::ui::main_content::lx::history::{StepKind, StepMark};
 use crate::ui::{style, text};
 
-use super::system_event::{CONTENT_PREVIEW_ROWS, SystemCard, body_width};
+use super::system_event::{SystemCard, body_width};
 
 /// 合并区间内去重保序的变更指令源（中间切换的 `core/model` 不能丢）。
 fn merged_sources(slice: &[ModelSwitchNoticeView]) -> Vec<String> {
@@ -82,15 +82,7 @@ pub(super) fn build(slice: &[ModelSwitchNoticeView], width: u16, expanded: bool)
         meta.insert(1, Node::text(sources, style::muted()));
     }
     let prompt = super::tool::muted_markdown_lines(injected_prompt(slice), body_width(width));
-    let foldable = prompt.len() > CONTENT_PREVIEW_ROWS;
-    let mut sections = vec![Section::fixed(meta)];
-    if !prompt.is_empty() {
-        sections.push(Section::new(
-            vec![Node::block(prompt)],
-            (!expanded).then(|| Preview::head(CONTENT_PREVIEW_ROWS)),
-        ));
-    }
-    SystemCard::new(width, header, sections, foldable)
+    SystemCard::new(width, header, meta, prompt, expanded)
 }
 
 /// 标题（连续多条合并为 `Model switched xN`）。

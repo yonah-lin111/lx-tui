@@ -61,11 +61,18 @@ fn model_switch_keeps_meta_and_folds_prompt() {
     assert_eq!(drawn, folded_layout.total_rows);
     // 标题 + 模型 + 指令源 + 跃迁链 + 提示词预览 2 行 + 剩余行数 + 呼吸行。
     assert_eq!(folded_layout.total_rows, 8);
+    let hit = folded_layout
+        .cards
+        .first()
+        .cloned()
+        .expect("提示词超出折叠预算时必须登记点击面");
+    assert!(hit.clickable);
     assert_eq!(
-        folded_layout.cards.first().map(|card| card.clickable),
-        Some(true),
-        "提示词超出折叠预算时必须登记点击面"
+        hit.card.y,
+        area.y + 4,
+        "点击面必须从提示词首行开始（标题+三行元信息之后），不是整卡"
     );
+    assert_eq!(hit.card.height, 3, "点击面覆盖预览 2 行 + 折叠提示行");
 
     let folded_text: String = rows_text(&grid, area).join("\n");
     assert!(folded_text.contains("Model switched"), "{folded_text}");

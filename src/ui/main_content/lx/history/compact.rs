@@ -16,11 +16,11 @@ use ratatui::layout::Rect;
 use crate::app::state::{CompactNoticeView, LxCompact};
 use crate::ui::main_content::lx::Grid;
 use crate::ui::main_content::lx::history::tool::Segment;
-use crate::ui::main_content::lx::history::tool::tree::{Node, Preview, Section};
+use crate::ui::main_content::lx::history::tool::tree::Node;
 use crate::ui::main_content::lx::history::{StepKind, StepMark};
 use crate::ui::{style, text};
 
-use super::system_event::{CONTENT_PREVIEW_ROWS, SystemCard, body_width};
+use super::system_event::{SystemCard, body_width};
 use super::visible_row;
 
 /// 已完成检查点的卡片（折叠 / 展开同一构造器）。
@@ -35,19 +35,12 @@ pub(super) fn build(
         format!("{mark}{}", title(count)),
         style::accent(),
     )];
-    let summary = super::tool::muted_markdown_lines(&notice.summary, body_width(width));
-    let foldable = summary.len() > CONTENT_PREVIEW_ROWS;
-    let mut sections = vec![Section::fixed(vec![
+    let fixed = vec![
         Node::text(description(notice), style::muted()),
         Node::text(range_line(notice), style::muted()),
-    ])];
-    if !summary.is_empty() {
-        sections.push(Section::new(
-            vec![Node::block(summary)],
-            (!expanded).then(|| Preview::head(CONTENT_PREVIEW_ROWS)),
-        ));
-    }
-    SystemCard::new(width, header, sections, foldable)
+    ];
+    let summary = super::tool::muted_markdown_lines(&notice.summary, body_width(width));
+    SystemCard::new(width, header, fixed, summary, expanded)
 }
 
 /// 运行中压缩请求的单行分段。

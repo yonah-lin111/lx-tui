@@ -10,7 +10,7 @@ use ratatui::layout::Rect;
 use crate::app::state::RewindNoticeView;
 use crate::ui::main_content::lx::Grid;
 use crate::ui::main_content::lx::history::tool::Segment;
-use crate::ui::main_content::lx::history::tool::tree::{Node, Section};
+use crate::ui::main_content::lx::history::tool::tree::Node;
 use crate::ui::main_content::lx::history::{StepKind, StepMark};
 use crate::ui::{style, text};
 
@@ -23,11 +23,8 @@ fn card(notice: &RewindNoticeView, count: usize, width: u16) -> SystemCard {
         format!("{mark}{}", title(count)),
         style::accent(),
     )];
-    let sections = vec![Section::fixed(vec![Node::text(
-        description(notice),
-        style::muted(),
-    )])];
-    SystemCard::new(width, header, sections, false)
+    let fixed = vec![Node::text(description(notice), style::muted())];
+    SystemCard::new(width, header, fixed, Vec::new(), false)
 }
 
 /// 提示占用的行数（与 [`draw`] 同口径）；`count > 1` 表示合并后的连续提示。

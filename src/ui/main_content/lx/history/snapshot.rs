@@ -272,16 +272,18 @@ impl Builder<'_> {
             }
         });
         self.rows += block.rows;
-        // 元信息常显，点击面只在正文确有折叠预算之外的内容时登记。
-        self.snapshot.cards.push(CardRegion {
-            kind: CardKind::Compact {
-                checkpoint_id: notice.id.clone(),
-                expanded,
-            },
-            card_start: start,
-            card_rows: block.rows,
-            clickable: card.foldable(),
-        });
+        // 点击面只覆盖可折叠正文（标题与元信息不响应）；正文未超预算时不登记。
+        if let Some((offset, height)) = card.click_span() {
+            self.snapshot.cards.push(CardRegion {
+                kind: CardKind::Compact {
+                    checkpoint_id: notice.id.clone(),
+                    expanded,
+                },
+                card_start: start + offset,
+                card_rows: height,
+                clickable: true,
+            });
+        }
         self.snapshot.entries.push(SnapEntry {
             start,
             end: self.rows,
@@ -342,16 +344,19 @@ impl Builder<'_> {
             },
         );
         self.rows += block.rows;
-        self.snapshot.cards.push(CardRegion {
-            kind: CardKind::ModelSwitch {
-                // 锚定区间首条：追加切换时 `first` 不变，展开态天然保持。
-                switch_id: source.switches[first].id.clone(),
-                expanded,
-            },
-            card_start: start,
-            card_rows: block.rows,
-            clickable: card.foldable(),
-        });
+        // 点击面只覆盖注入提示词（标题、模型与跃迁链不响应）。
+        if let Some((offset, height)) = card.click_span() {
+            self.snapshot.cards.push(CardRegion {
+                kind: CardKind::ModelSwitch {
+                    // 锚定区间首条：追加切换时 `first` 不变，展开态天然保持。
+                    switch_id: source.switches[first].id.clone(),
+                    expanded,
+                },
+                card_start: start + offset,
+                card_rows: height,
+                clickable: true,
+            });
+        }
         self.snapshot.entries.push(SnapEntry {
             start,
             end: self.rows,

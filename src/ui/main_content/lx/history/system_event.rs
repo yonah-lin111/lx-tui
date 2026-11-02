@@ -11,13 +11,14 @@
 //! 标题是唯一不带连接符的行（菱形标记 + 事件名，accent）；元信息节点始终可见，
 //! 只有正文内容（压缩摘要 / 注入提示词）按工具卡同一套预算折叠：折叠态保留前
 //! [`super::tool::tree::Preview`] 行 + `… N more lines`，展开后铺开全部。
-//! 树体走 [`tree`]（`├─` / `└─` / `│`），行数、绘制与快照都从同一份 [`SystemCard`]
-//! 取，避免滚动条与视口锚点漂移。
+//! 树体走 [`tree`]（`├─` / `└─` / `│`），行数、点击面与绘制都从同一份 [`SystemCard`]
+//! 取：点击面只覆盖可折叠正文（与命令卡片参数/输出的点击区同一口径），标题与元信息
+//! 不响应点击。
 
 use ratatui::layout::Rect;
 
 use crate::ui::main_content::lx::Grid;
-use crate::ui::main_content::lx::history::tool::tree::{self, Layout, Section};
+use crate::ui::main_content::lx::history::tool::tree::{self, Layout, Node, Preview, Section};
 use crate::ui::main_content::lx::history::tool::{Segment, put_segments, wrap_spans};
 
 use super::visible_row;
@@ -29,23 +30,41 @@ pub(super) const CONTENT_PREVIEW_ROWS: usize = 2;
 pub(super) struct SystemCard {
     header: Vec<Vec<Segment>>,
     body: Layout,
-    /// 正文是否超出折叠预算：决定整卡是否登记点击面。
-    foldable: bool,
+    /// 可折叠正文在卡片内的行区间（相对卡首，含 `… N more lines` 提示行）。
+    click: Option<(usize, usize)>,
 }
 
 impl SystemCard {
-    /// 按宽度排版标题与树体分块；`foldable` 表示正文存在折叠预算之外的
-    /// 物理行（展开态点一下仍应收起）。
+    /// 按宽度排版标题与树体分块；`fixed` 是常显元信息，`content` 是可折叠正文
+    /// （已按 [`tree::content_width`] 折好的物理行，空表示没有正文）。
     pub(super) fn new(
         width: u16,
         header: Vec<Segment>,
-        sections: Vec<Section>,
-        foldable: bool,
+        fixed: Vec<Node>,
+        content: Vec<Vec<Segment>>,
+        expanded: bool,
     ) -> Self {
+        let foldable = content.len() > CONTENT_PREVIEW_ROWS;
+        let fixed_count = fixed.len();
+        let mut sections = vec![Section::fixed(fixed)];
+        if !content.is_empty() {
+            sections.push(Section::new(
+                vec![Node::block(content)],
+                (!expanded).then(|| Preview::head(CONTENT_PREVIEW_ROWS)),
+            ));
+        }
+        let header = wrap_spans(&header, usize::from(width));
+        let body = tree::layout(&sections, width);
+        // 只有正文确实超出折叠预算时才登记点击面：点击区从正文首个物理行到卡片末尾
+        // （含折叠提示行），标题与元信息保持不可点击。
+        let click = foldable.then(|| {
+            let first = body.node_rows.get(fixed_count).copied().unwrap_or(0);
+            (header.len() + first, body.rows.len() - first)
+        });
         Self {
-            header: wrap_spans(&header, usize::from(width)),
-            body: tree::layout(&sections, width),
-            foldable,
+            header,
+            body,
+            click,
         }
     }
 
@@ -54,9 +73,9 @@ impl SystemCard {
         self.header.len() + self.body.rows.len()
     }
 
-    /// 正文是否有可折叠内容（没有时不登记点击面）。
-    pub(super) fn foldable(&self) -> bool {
-        self.foldable
+    /// 可折叠正文的点击区（相对卡首的起始行与行数）；没有可折叠内容时为 None。
+    pub(super) fn click_span(&self) -> Option<(usize, usize)> {
+        self.click
     }
 
     /// 绘制并推进内容行号；行数恒等于 [`Self::rows`]。

@@ -39,11 +39,7 @@ fn compact_entry_folds_to_header_and_meta_rows() {
     assert_eq!(drawn, layout.total_rows, "布局与渲染行数必须一致");
     // 标题 + 模型 + 覆盖范围 + 摘要（1 行未超预算）+ 末尾呼吸行。
     assert_eq!(layout.total_rows, 5, "折叠态只占标题+元信息+摘要+呼吸行");
-    assert_eq!(
-        layout.cards.first().map(|card| card.clickable),
-        Some(false),
-        "正文未超出折叠预算时不登记点击面"
-    );
+    assert!(layout.cards.is_empty(), "正文未超出折叠预算时不登记点击面");
     let text: String = (area.y..area.bottom())
         .map(|y| {
             (area.x..area.right())
@@ -80,14 +76,18 @@ fn compact_content_folds_to_preview_and_expands() {
     let mut grid = Grid::new(area);
     let drawn = render(&mut grid, area, &lx, 0, &mut cache());
     assert_eq!(drawn, folded, "折叠态布局与渲染行数必须一致");
+    let hit = layout(area, &lx, &mut cache())
+        .cards
+        .first()
+        .cloned()
+        .expect("正文超出折叠预算时必须登记点击面");
+    assert!(hit.clickable);
     assert_eq!(
-        layout(area, &lx, &mut cache())
-            .cards
-            .first()
-            .map(|card| card.clickable),
-        Some(true),
-        "正文超出折叠预算时必须登记点击面"
+        hit.card.y,
+        area.y + 3,
+        "点击面必须从正文首行开始（标题+两行元信息之后），不是整卡"
     );
+    assert_eq!(hit.card.height, 3, "点击面覆盖预览 2 行 + 折叠提示行");
     let folded_text: String = (area.y..area.bottom())
         .map(|y| {
             (area.x..area.right())
