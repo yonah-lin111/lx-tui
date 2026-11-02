@@ -46,6 +46,11 @@ impl LoadedInstructions {
         self.body.trim().is_empty()
     }
 
+    /// 命中的有效（非空）指令文件总数（全局 + 项目级）。
+    pub fn active_count(&self) -> usize {
+        usize::from(self.global_source.is_some()) + self.project_sources.len()
+    }
+
     /// 命中的来源简短标签列表（用于模型切换提示词与详情展示）。
     pub fn source_labels(&self) -> Vec<String> {
         let mut labels = Vec::new();

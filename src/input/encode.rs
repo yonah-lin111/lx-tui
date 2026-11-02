@@ -5,20 +5,38 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventK
 
 /// 把按键编码为写入 PTY 的字节；不支持的按键返回 None。
 ///
-/// Super（Cmd）组合只属于应用级快捷键，绝不写入 PTY；kitty 键盘协议下尤其重要，
-/// 否则 Cmd+C 会被当作普通 `c` 打进 shell。
+/// Legacy 终端下拦截全部 Super（Cmd）组合，防止把 Cmd+C/Cmd+Z 当成普通字符打进 shell；
+/// Kitty 键盘协议（`DISAMBIGUATE_ESC_CODES` / `REPORT_ALL_KEYS_AS_ESC`）激活时，除纯 Super+C
+/// 保留给宿主复制选区外，其余 Super 组合（如 Super+Z 撤销、Super+Shift+Z 重做、Super+A 全选）
+/// 按 `CSI u` 编码转发给子 TUI。
 pub fn encode_key(key: KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
+    let kitty =
+        mode.intersects(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALL_KEYS_AS_ESC);
+    let report_all = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
+
     if key.modifiers.contains(KeyModifiers::SUPER) {
-        return None;
+        // Legacy 终端无法表达 Super（Cmd），直接丢弃以免把 Cmd+C/Cmd+Z 当成普通字符打进 shell；
+        // Kitty 协议下除纯 Super+C（保留给宿主复制选区兜底、避免在 claude 中误插入 `c`）外，
+        // 其余 Super 组合（如 Super+Z 撤销、Super+Shift+Z 重做、Super+A 全选）按 CSI u 编码转发。
+        if !kitty
+            || (key.modifiers == KeyModifiers::SUPER
+                && matches!(key.code, KeyCode::Char('c' | 'C')))
+        {
+            return None;
+        }
     }
-    let modifiers = key.modifiers;
-    match key.code {
-        KeyCode::Char(c) => Some(encode_char(c, modifiers)),
-        KeyCode::Enter => Some(vec![b'\r']),
-        KeyCode::Backspace => Some(vec![0x7f]),
-        KeyCode::Tab => Some(vec![b'\t']),
-        KeyCode::BackTab => Some(b"\x1b[Z".to_vec()),
-        KeyCode::Esc => Some(vec![0x1b]),
+
+    let (code, modifiers) = match key.code {
+        KeyCode::BackTab => (KeyCode::Tab, key.modifiers | KeyModifiers::SHIFT),
+        other => (other, key.modifiers),
+    };
+
+    match code {
+        KeyCode::Char(c) => Some(encode_char(c, modifiers, kitty, report_all)),
+        KeyCode::Enter => Some(encode_enter(modifiers, kitty, report_all)),
+        KeyCode::Backspace => Some(encode_backspace(modifiers, kitty, report_all)),
+        KeyCode::Tab => Some(encode_tab(modifiers, kitty, report_all)),
+        KeyCode::Esc => Some(encode_esc(modifiers, kitty, report_all)),
         KeyCode::Up => Some(cursor_key(b'A', modifiers, mode)),
         KeyCode::Down => Some(cursor_key(b'B', modifiers, mode)),
         KeyCode::Right => Some(cursor_key(b'C', modifiers, mode)),
@@ -145,13 +163,139 @@ fn push_mouse_codepoint(bytes: &mut Vec<u8>, value: u32) -> Option<()> {
     Some(())
 }
 
-fn encode_char(c: char, modifiers: KeyModifiers) -> Vec<u8> {
+fn csi_u(codepoint: u32, modifiers: KeyModifiers) -> Vec<u8> {
+    let param = modifier_param(modifiers);
+    if param == 1 {
+        format!("\x1b[{codepoint}u").into_bytes()
+    } else {
+        format!("\x1b[{codepoint};{param}u").into_bytes()
+    }
+}
+
+fn modify_other_key(codepoint: u32, modifiers: KeyModifiers) -> Vec<u8> {
+    let param = modifier_param(modifiers);
+    format!("\x1b[27;{param};{codepoint}~").into_bytes()
+}
+
+fn encode_enter(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
+    if modifiers.is_empty() {
+        return if report_all {
+            csi_u(13, modifiers)
+        } else {
+            vec![b'\r']
+        };
+    }
+    if kitty {
+        return csi_u(13, modifiers);
+    }
+    if modifiers == KeyModifiers::ALT {
+        vec![0x1b, b'\r']
+    } else {
+        modify_other_key(13, modifiers)
+    }
+}
+
+fn encode_tab(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
+    if modifiers.is_empty() {
+        return if report_all {
+            csi_u(9, modifiers)
+        } else {
+            vec![b'\t']
+        };
+    }
+    if kitty {
+        return csi_u(9, modifiers);
+    }
+    if modifiers == KeyModifiers::SHIFT {
+        b"\x1b[Z".to_vec()
+    } else if modifiers == KeyModifiers::ALT {
+        vec![0x1b, b'\t']
+    } else {
+        modify_other_key(9, modifiers)
+    }
+}
+
+fn encode_backspace(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
+    if modifiers.is_empty() {
+        return if report_all {
+            csi_u(127, modifiers)
+        } else {
+            vec![0x7f]
+        };
+    }
+    if kitty {
+        return csi_u(127, modifiers);
+    }
+    if modifiers == KeyModifiers::ALT {
+        vec![0x1b, 0x7f]
+    } else if modifiers == KeyModifiers::CONTROL {
+        vec![0x08]
+    } else if modifiers == (KeyModifiers::ALT | KeyModifiers::CONTROL) {
+        vec![0x1b, 0x08]
+    } else {
+        modify_other_key(127, modifiers)
+    }
+}
+
+fn encode_esc(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
+    if kitty || report_all {
+        return csi_u(27, modifiers);
+    }
+    if modifiers.is_empty() {
+        vec![0x1b]
+    } else if modifiers == KeyModifiers::ALT {
+        vec![0x1b, 0x1b]
+    } else {
+        modify_other_key(27, modifiers)
+    }
+}
+
+fn encode_char(c: char, modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
+    let has_ctrl = modifiers.contains(KeyModifiers::CONTROL);
+    let has_alt = modifiers.contains(KeyModifiers::ALT);
+    let has_super = modifiers.contains(KeyModifiers::SUPER);
+    let has_shift = modifiers.contains(KeyModifiers::SHIFT);
+
+    // 无 Ctrl/Alt/Super 的普通或 Shift 可打印字符：除非开启 REPORT_ALL_KEYS_AS_ESC，一律发 UTF-8 文本。
+    if !has_ctrl && !has_alt && !has_super {
+        if report_all {
+            let base = if has_shift && c.is_ascii_uppercase() {
+                c.to_ascii_lowercase() as u32
+            } else {
+                c as u32
+            };
+            return csi_u(base, modifiers);
+        }
+        let mut buffer = [0u8; 4];
+        return c.encode_utf8(&mut buffer).as_bytes().to_vec();
+    }
+
+    let base_codepoint = if c.is_ascii_alphabetic() {
+        c.to_ascii_lowercase() as u32
+    } else {
+        c as u32
+    };
+
+    // Kitty 协议激活时（或 Legacy 下的 Ctrl+Shift+<char>）：对齐 Ghostty 与 herdr，
+    // 所有带 Ctrl / Alt / Super 的字符键统一编码为 CSI u（如 Super+Z -> \x1b[122;9u，
+    // Ctrl+Z -> \x1b[122;5u，Ctrl+- -> \x1b[45;5u）。
+    if kitty || (has_ctrl && has_shift) {
+        return csi_u(base_codepoint, modifiers);
+    }
+
     let mut bytes = Vec::new();
-    if modifiers.contains(KeyModifiers::ALT) {
+    if has_alt {
         bytes.push(0x1b);
     }
-    if modifiers.contains(KeyModifiers::CONTROL) {
-        bytes.push(control_byte(c));
+    if has_ctrl {
+        let Some(ctrl) = control_byte(c) else {
+            return if c.is_ascii() {
+                csi_u(base_codepoint, modifiers)
+            } else {
+                Vec::new()
+            };
+        };
+        bytes.push(ctrl);
     } else {
         let mut buffer = [0u8; 4];
         bytes.extend_from_slice(c.encode_utf8(&mut buffer).as_bytes());
@@ -159,18 +303,18 @@ fn encode_char(c: char, modifiers: KeyModifiers) -> Vec<u8> {
     bytes
 }
 
-fn control_byte(c: char) -> u8 {
-    match c.to_ascii_uppercase() {
-        ' ' | '@' => 0x00,
+fn control_byte(c: char) -> Option<u8> {
+    Some(match c.to_ascii_uppercase() {
+        ' ' | '@' | '`' | '2' => 0x00,
         'A'..='Z' => (c.to_ascii_uppercase() as u8) - 0x40,
-        '[' => 0x1b,
-        '\\' => 0x1c,
-        ']' => 0x1d,
-        '^' => 0x1e,
-        '_' => 0x1f,
-        '?' => 0x7f,
-        other => other as u8,
-    }
+        '[' | '3' => 0x1b,
+        '\\' | '4' => 0x1c,
+        ']' | '5' => 0x1d,
+        '^' | '~' | '6' => 0x1e,
+        '_' | '-' | '/' | '7' => 0x1f,
+        '?' | '8' => 0x7f,
+        _ => return None,
+    })
 }
 
 fn modifier_param(modifiers: KeyModifiers) -> u8 {
@@ -183,6 +327,15 @@ fn modifier_param(modifiers: KeyModifiers) -> u8 {
     }
     if modifiers.contains(KeyModifiers::CONTROL) {
         value += 4;
+    }
+    if modifiers.contains(KeyModifiers::SUPER) {
+        value += 8;
+    }
+    if modifiers.contains(KeyModifiers::HYPER) {
+        value += 16;
+    }
+    if modifiers.contains(KeyModifiers::META) {
+        value += 32;
     }
     value
 }

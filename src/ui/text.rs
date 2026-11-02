@@ -225,10 +225,10 @@ pub const LX_ENTRY_AUTOMATION: &str = "Automation Agent";
 pub const LX_ENTRY_SEPARATOR: &str = "·";
 /// lx 页入口 Tip 提示前缀；前缀强调色、句子 muted。
 pub const LX_TIP_PREFIX: &str = "Tip:";
-/// 首页资源计数：MCP / skills / loading / error。
+/// 首页资源计数：AGENTS.md / MCP / skills / error。
+pub const LX_HOME_AGENTS_MD: &str = "AGENTS.md";
 pub const LX_HOME_MCP: &str = "mcp";
 pub const LX_HOME_SKILLS: &str = "skills";
-pub const LX_HOME_LOADING: &str = "loading";
 pub const LX_HOME_ERROR: &str = "error";
 pub const LX_HOME_ERRORS: &str = "errors";
 /// lx 页入口 Tip 提示行：选中入口一句话描述。

@@ -234,3 +234,25 @@ fn tail_lines_handles_wide_chars_and_control_cells() {
     assert_eq!(lines[0], "好a");
     assert_eq!(term.tail_lines(0), Vec::<String>::new());
 }
+
+#[test]
+fn responds_to_kitty_keyboard_query_and_maintains_mode_stack() {
+    let mut term = Terminal::new(20, 4);
+    assert!(!term.mode().intersects(TermMode::KITTY_KEYBOARD_PROTOCOL));
+
+    // 子 Agent（opencode / codex）启动时发送 `CSI ? u` 探测：必须返回 `\x1b[?0u`。
+    let response = term.feed(b"\x1b[?u");
+    assert_eq!(response, b"\x1b[?0u");
+
+    // 子 Agent 压入 flags = 5（DISAMBIGUATE_ESC_CODES | REPORT_ALTERNATE_KEYS）。
+    term.feed(b"\x1b[>5u");
+    assert!(
+        term.mode()
+            .contains(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS)
+    );
+    assert_eq!(term.feed(b"\x1b[?u"), b"\x1b[?5u");
+
+    // 子 Agent 退出时弹出模式栈 `CSI < u`，恢复为 Legacy 模式。
+    term.feed(b"\x1b[<u");
+    assert!(!term.mode().intersects(TermMode::KITTY_KEYBOARD_PROTOCOL));
+}
