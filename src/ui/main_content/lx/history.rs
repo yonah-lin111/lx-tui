@@ -86,8 +86,9 @@ pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
 
 /// assistant 步骤左侧状态标记的语义状态（思考 / 工具调用 / 正文块共用）。
 ///
-/// 字形按 [`StepKind`] 分派（见 [`Self::glyph`]）：文字数据（正文 / 思考 / 通知）为
-/// 圆点 `●`/`○`，工具调用为方块 `■`/`□`，子 agent 主动汇报为上三角 `▲`/`△`。
+/// 字形按 [`StepKind`] 分派（见 [`Self::glyph`]）：文字数据（正文 / 思考）为
+/// 圆点 `●`/`○`，工具调用为方块 `■`/`□`，子 agent 主动汇报为上三角 `▲`/`△`，
+/// 系统事件（及其消息级通知）为菱形 `◆`/`◇`。
 /// 运行中为实心/空心两帧呼吸（相位由 `LxChat::loading_frame` 决定，约 400ms 一相）；
 /// 终态一律停为**实心**标记、仅以颜色区分：失败（红）、中断（黄）。取消不再特殊化：
 /// 标记与动词同用角色色（用户要求「方块和 title 统一」，空心/白色方块都会显得这张卡
@@ -98,7 +99,8 @@ pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
 /// - [`StepKind::Thinking`]（思考块）：折叠浅粉 `Indexed 182`、展开亮粉 `Indexed 218`
 ///   （鼠标悬停不改变颜色）；
 /// - [`StepKind::Tool`]（工具调用）：翡翠绿 `Indexed 42`；
-/// - [`StepKind::Report`]（子 agent 汇报）：沿用工具档颜色，仅字形改为上三角。
+/// - [`StepKind::Report`]（子 agent 汇报）：沿用工具档颜色，仅字形改为上三角；
+/// - [`StepKind::System`]（系统事件）：完成态 accent、运行中橙黄，字形为菱形。
 ///
 /// 失败 / 中断是**跨角色的语义状态**，一律覆盖角色色（红 / 黄），保证「出问题了」
 /// 比「是哪类步骤」更先被看到；取消不是错误，沿用角色色，只由详情行的 `cancelled` 说明。

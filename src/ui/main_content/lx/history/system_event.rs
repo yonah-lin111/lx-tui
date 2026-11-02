@@ -27,7 +27,8 @@ use super::visible_row;
 pub(super) const CONTENT_PREVIEW_ROWS: usize = 2;
 
 /// 一张系统事件卡片：标题行（已折行）+ 树体（已排版）。
-pub(super) struct SystemCard {
+#[derive(Debug)]
+pub(crate) struct SystemCard {
     header: Vec<Vec<Segment>>,
     body: Layout,
     /// 可折叠正文在卡片内的行区间（相对卡首，含 `… N more lines` 提示行）。
@@ -57,10 +58,12 @@ impl SystemCard {
         let body = tree::layout(&sections, width);
         // 只有正文确实超出折叠预算时才登记点击面：点击区从正文首个物理行到卡片末尾
         // （含折叠提示行），标题与元信息保持不可点击。
-        let click = foldable.then(|| {
-            let first = body.node_rows.get(fixed_count).copied().unwrap_or(0);
-            (header.len() + first, body.rows.len() - first)
-        });
+        let click = foldable
+            .then(|| {
+                let first = body.node_rows.get(fixed_count).copied().unwrap_or(0);
+                (header.len() + first, body.rows.len().saturating_sub(first))
+            })
+            .filter(|(_, rows)| *rows > 0);
         Self {
             header,
             body,

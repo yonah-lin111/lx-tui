@@ -239,10 +239,10 @@ fn every_block_is_separated_by_a_blank_row() {
     }
 }
 
-/// 圆点给文字（正文 / 思考 / 通知），方块只给工具调用，上三角只给子 agent 汇报；
-/// 终态（含取消）一律实心。
+/// 圆点给文字（正文 / 思考），方块只给工具调用，上三角只给子 agent 汇报，
+/// 菱形给系统事件；终态（含取消）一律实心。
 #[test]
-fn step_marks_use_dots_squares_and_report_triangles() {
+fn step_marks_use_dots_squares_triangles_and_diamonds() {
     use crate::ui::text;
     for kind in [super::StepKind::Body, super::StepKind::Thinking] {
         assert_eq!(

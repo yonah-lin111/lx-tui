@@ -5,6 +5,8 @@
 //!
 //! `rows()` 与绘制共用同一份数据：快照行数、滚动条几何、点击面几何都从这里取。
 
+use std::sync::Arc;
+
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_width::UnicodeWidthChar;
@@ -90,6 +92,11 @@ pub(crate) enum BlockPaint {
     Thinking { body: Vec<MdLine> },
     /// 完全静态的单色行块（统计行）。
     Static { lines: Vec<String>, style: Style },
+    /// 系统事件卡片（compact / 模型切换 / rewind）：标题与树体已排版，
+    /// 绘制直接复用，不再每帧重跑 Markdown 与树体排版。
+    SystemEvent {
+        card: Arc<super::system_event::SystemCard>,
+    },
     /// 尚未接入内容缓存的块：缓存行数与点击面几何，绘制仍走原路径。
     Legacy { rows: usize, spans: Vec<CardSpan> },
 }
@@ -106,6 +113,7 @@ impl BlockPaint {
             Self::Markdown { lines } => lines.len(),
             Self::Thinking { body } => 1 + body.len(),
             Self::Static { lines, .. } => lines.len(),
+            Self::SystemEvent { card } => card.rows(),
             Self::Legacy { rows, .. } => *rows,
         }
     }
@@ -117,7 +125,8 @@ impl BlockPaint {
             Self::UserText { .. }
             | Self::Markdown { .. }
             | Self::Thinking { .. }
-            | Self::Static { .. } => &[],
+            | Self::Static { .. }
+            | Self::SystemEvent { .. } => &[],
         }
     }
 
@@ -136,6 +145,8 @@ impl BlockPaint {
             Self::Static { lines, .. } => lines.iter().map(|line| line.len() + 24).sum::<usize>(),
             Self::Markdown { lines } => md_bytes(lines),
             Self::Thinking { body } => md_bytes(body),
+            // 系统事件卡片的正文已排版进 `SystemCard`，按行数记近似值。
+            Self::SystemEvent { card } => card.rows() * 64,
             // 旧路径没有缓存正文，不占二级缓存预算（行数已在一级快照里）；
             // 点击面几何是小结构，按条数记个近似值。
             Self::Legacy { spans, .. } => spans.len() * std::mem::size_of::<CardSpan>(),
@@ -202,6 +213,10 @@ impl BlockPaint {
                         grid.put_clipped(rect.x, y, line, *style, rect.width);
                     }
                 }
+            }
+            Self::SystemEvent { card } => {
+                let mut row = start;
+                card.draw(grid, rect, scroll, &mut row);
             }
             Self::Legacy { .. } => draw_legacy(grid, rect, history, source, scroll, start),
         }
@@ -618,18 +633,11 @@ fn draw_legacy(
             };
             super::notice::draw(grid, &notice, rect, scroll, &mut row);
         }
-        BlockSource::Rewind { last, count } => {
-            let Some(notice) = history.chat.notices.get(last) else {
-                return;
-            };
-            super::rewind::draw(grid, notice, count, rect, scroll, &mut row);
-        }
-        BlockSource::Compact { index, expanded } => {
-            let Some(notice) = history.compact.checkpoints.get(index) else {
-                return;
-            };
-            super::compact::draw(grid, notice, 1, expanded, rect, scroll, &mut row);
-        }
+        // compact / 模型切换 / rewind 已由 `BlockPaint::SystemEvent` 承载：
+        // Legacy 路径不再构造这三个来源，保留空分支只为穷尽匹配。
+        BlockSource::Rewind { .. }
+        | BlockSource::Compact { .. }
+        | BlockSource::ModelSwitch { .. } => {}
         BlockSource::RunningCompact => {
             super::compact::draw_running(
                 grid,
@@ -640,16 +648,6 @@ fn draw_legacy(
                 history.chat.loading_frame,
                 history.animating,
             );
-        }
-        BlockSource::ModelSwitch {
-            first,
-            last,
-            expanded,
-        } => {
-            let Some(slice) = history.switches.get(first..=last) else {
-                return;
-            };
-            super::model_switch::draw(grid, slice, expanded, rect, scroll, &mut row);
         }
         BlockSource::Report {
             message_index,

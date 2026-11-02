@@ -397,3 +397,33 @@ fn consecutive_model_switches_coalesce_into_x_count() {
         "合并后展开首行应显示完整跃迁链：{text}"
     );
 }
+
+/// 折叠态也展示提示词预览：正文变化必须让已缓存的卡片失效。
+#[test]
+fn prompt_change_invalidates_cached_collapsed_preview() {
+    let mut lx = Lx::new();
+    let mut notice = switch_view(
+        2,
+        "Claude Sonnet 4 (high)",
+        "9router",
+        "deepseek-v4.1-flash",
+        Some("max"),
+        "DeepSeek V4.1 Flash",
+    );
+    notice.injected_prompt = "First prompt\nline two\nline three".into();
+    lx.model_switch.replace(vec![notice.clone()]);
+    let area = Rect::new(0, 0, 80, 14);
+    let mut pane_cache = cache();
+    let mut grid = Grid::new(area);
+    render(&mut grid, area, &lx, 0, &mut pane_cache);
+    let first = rows_text(&grid, area).join("\n");
+    assert!(first.contains("First prompt"), "{first}");
+
+    notice.injected_prompt = "Second prompt\nline two\nline three".into();
+    lx.model_switch.replace(vec![notice]);
+    let mut grid2 = Grid::new(area);
+    render(&mut grid2, area, &lx, 0, &mut pane_cache);
+    let second = rows_text(&grid2, area).join("\n");
+    assert!(second.contains("Second prompt"), "{second}");
+    assert!(!second.contains("First prompt"), "{second}");
+}

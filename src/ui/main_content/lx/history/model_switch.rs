@@ -8,12 +8,9 @@
 //!   [`super::system_event::CONTENT_PREVIEW_ROWS`] 行 + `… N more lines`，
 //!   展开后铺开全部（压暗 Markdown，与工具输出同一套交互）。
 //!
-//! 行数、可点击性与绘制都从 [`SystemCard`] 取。
-
-use ratatui::layout::Rect;
+//! 快照行数、点击面与绘制数据都从 [`SystemCard`] 取。
 
 use crate::app::state::ModelSwitchNoticeView;
-use crate::ui::main_content::lx::Grid;
 use crate::ui::main_content::lx::history::tool::Segment;
 use crate::ui::main_content::lx::history::tool::tree::Node;
 use crate::ui::main_content::lx::history::{StepKind, StepMark};
@@ -102,19 +99,4 @@ pub(super) fn head_line(slice: &[ModelSwitchNoticeView]) -> String {
         last.to_variant.as_deref(),
         &crate::platform::local_time_label(last.created_at_ms),
     )
-}
-
-/// 绘制模型切换提示并推进内容行号。
-pub(super) fn draw(
-    grid: &mut Grid,
-    slice: &[ModelSwitchNoticeView],
-    expanded: bool,
-    content: Rect,
-    scroll: usize,
-    row_index: &mut usize,
-) {
-    if slice.is_empty() {
-        return;
-    }
-    build(slice, content.width, expanded).draw(grid, content, scroll, row_index);
 }

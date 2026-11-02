@@ -9,7 +9,7 @@
 //!   展开后铺开全部（压暗 Markdown，与工具输出同一套交互）；
 //! - 运行中仍是单行状态：`◇ Compacting context... · 3s`。
 //!
-//! 行数、可点击性与绘制都从 [`SystemCard`] 取，绝不各算一份。
+//! 快照行数、点击面与绘制数据都从 [`SystemCard`] 取，绝不各算一份。
 
 use ratatui::layout::Rect;
 
@@ -94,19 +94,6 @@ fn range_line(notice: &CompactNoticeView) -> String {
         notice.range_label()
     };
     format!("{} {range}", text::LX_COMPACT_RANGE_LABEL)
-}
-
-/// 绘制提示并推进内容行号；`count` 为合并的连续提示数。
-pub(super) fn draw(
-    grid: &mut Grid,
-    notice: &CompactNoticeView,
-    count: usize,
-    expanded: bool,
-    content: Rect,
-    scroll: usize,
-    row_index: &mut usize,
-) {
-    build(notice, count, content.width, expanded).draw(grid, content, scroll, row_index);
 }
 
 /// 绘制正在运行的压缩提示并推进行号。

@@ -831,8 +831,11 @@ pub(crate) fn compact_block_signature(
     hash.write_str(&notice.id);
     hash.write_str(&notice.model_label);
     hash.write_i64(notice.created_at_ms);
+    hash.write_i64(notice.start_sequence);
+    hash.write_i64(notice.end_sequence);
     hash.write_str(&notice.summary);
     hash.write_u8(u8::from(notice.active));
+    hash.write_u8(u8::from(notice.auto));
     hash.write_u8(u8::from(expanded));
     hash.finish()
 }
@@ -861,9 +864,8 @@ pub(crate) fn model_switch_block_signature(
             hash.write_str(src);
         }
         hash.write_i64(notice.created_at_ms);
-        if expanded {
-            hash.write_str(&notice.injected_prompt);
-        }
+        // 折叠态也渲染提示词预览，正文必须一直参与指纹。
+        hash.write_str(&notice.injected_prompt);
     }
     hash.write_usize(slice.len());
     hash.write_u8(u8::from(expanded));

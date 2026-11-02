@@ -308,3 +308,42 @@ fn running_compact_displays_breathing_glyph_and_elapsed() {
         "呼吸相位必须为空心菱形：{text_hollow}"
     );
 }
+
+/// 折叠态也展示覆盖范围：范围变化必须让已缓存的卡片失效。
+#[test]
+fn compact_range_change_invalidates_cached_card() {
+    let mut lx = Lx::new();
+    let mut notice = checkpoint(4, true);
+    notice.start_sequence = 1;
+    notice.end_sequence = 3;
+    lx.compact.replace(vec![notice.clone()]);
+    let area = Rect::new(0, 0, 60, 12);
+    let mut pane_cache = cache();
+    let mut grid = Grid::new(area);
+    render(&mut grid, area, &lx, 0, &mut pane_cache);
+    let first: String = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| grid.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(first.contains("covered sequence 1–3"), "{first}");
+
+    notice.start_sequence = 5;
+    notice.end_sequence = 9;
+    lx.compact.replace(vec![notice]);
+    let mut grid2 = Grid::new(area);
+    render(&mut grid2, area, &lx, 0, &mut pane_cache);
+    let second: String = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| grid2.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(second.contains("covered sequence 5–9"), "{second}");
+    assert!(!second.contains("covered sequence 1–3"), "{second}");
+}

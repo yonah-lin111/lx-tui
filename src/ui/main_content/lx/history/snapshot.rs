@@ -236,11 +236,10 @@ impl Builder<'_> {
             width: self.width,
             sig: rewind_block_signature(&source.notices[last], count),
         };
-        let rows = rewind::rows(&source.notices[last], count, self.width);
+        let card = rewind::build(&source.notices[last], count, self.width);
         let block = self.block(key, BlockSource::Rewind { last, count }, start, || {
-            BlockPaint::Legacy {
-                rows,
-                spans: Vec::new(),
+            BlockPaint::SystemEvent {
+                card: Arc::new(card),
             }
         });
         self.rows += block.rows;
@@ -264,16 +263,15 @@ impl Builder<'_> {
             sig: compact_block_signature(notice, expanded),
         };
         let card = compact::build(notice, 1, self.width, expanded);
-        let rows = card.rows();
+        let click = card.click_span();
         let block = self.block(key, BlockSource::Compact { index, expanded }, start, || {
-            BlockPaint::Legacy {
-                rows,
-                spans: Vec::new(),
+            BlockPaint::SystemEvent {
+                card: Arc::new(card),
             }
         });
         self.rows += block.rows;
         // 点击面只覆盖可折叠正文（标题与元信息不响应）；正文未超预算时不登记。
-        if let Some((offset, height)) = card.click_span() {
+        if let Some((offset, height)) = click {
             self.snapshot.cards.push(CardRegion {
                 kind: CardKind::Compact {
                     checkpoint_id: notice.id.clone(),
@@ -329,7 +327,7 @@ impl Builder<'_> {
             sig: model_switch_block_signature(slice, expanded),
         };
         let card = model_switch::build(slice, self.width, expanded);
-        let rows = card.rows();
+        let click = card.click_span();
         let block = self.block(
             key,
             BlockSource::ModelSwitch {
@@ -338,14 +336,13 @@ impl Builder<'_> {
                 expanded,
             },
             start,
-            || BlockPaint::Legacy {
-                rows,
-                spans: Vec::new(),
+            || BlockPaint::SystemEvent {
+                card: Arc::new(card),
             },
         );
         self.rows += block.rows;
         // 点击面只覆盖注入提示词（标题、模型与跃迁链不响应）。
-        if let Some((offset, height)) = card.click_span() {
+        if let Some((offset, height)) = click {
             self.snapshot.cards.push(CardRegion {
                 kind: CardKind::ModelSwitch {
                     // 锚定区间首条：追加切换时 `first` 不变，展开态天然保持。
