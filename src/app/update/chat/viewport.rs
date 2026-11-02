@@ -230,12 +230,24 @@ pub fn resolve_task_agents_visible(
             continue;
         };
         let total = total.unwrap_or(run.total_rows);
-        if run.visible != visible || run.total_rows != total || run.rows_dirty {
+        let max = total.saturating_sub(visible);
+        let should_follow = run.follow || total <= visible.saturating_add(1) || run.scroll >= max;
+        let next_scroll = if should_follow {
+            max
+        } else {
+            run.scroll.min(max)
+        };
+        if run.visible != visible
+            || run.total_rows != total
+            || run.rows_dirty
+            || run.follow != should_follow
+            || run.scroll != next_scroll
+        {
             run.visible = visible;
             run.total_rows = total;
             run.rows_dirty = false;
-            let max = total.saturating_sub(visible);
-            run.scroll = if run.follow { max } else { run.scroll.min(max) };
+            run.follow = should_follow;
+            run.scroll = next_scroll;
             changed = true;
         }
     }
@@ -306,23 +318,19 @@ pub fn jump_lx_history_bottom(state: &mut AppState, pane: PaneId) -> bool {
                 page.pin_output_to_tail();
                 page.output_scroll != before
             }
-            crate::app::state::TaskTab::Agents => {
-                page.agents_follow = true;
-                page.agents_scroll = usize::MAX;
-                target
-                    .lx
-                    .agents
-                    .runs
-                    .get_mut(page.agents_window.active)
-                    .is_some_and(|run| {
-                        let changed = !run.follow;
-                        run.follow = true;
-                        if run.visible > 0 {
-                            run.scroll = run.total_rows.saturating_sub(run.visible);
-                        }
-                        changed
-                    })
-            }
+            crate::app::state::TaskTab::Agents => target
+                .lx
+                .agents
+                .runs
+                .get_mut(page.agents_window.active)
+                .is_some_and(|run| {
+                    let changed = !run.follow;
+                    run.follow = true;
+                    if run.visible > 0 {
+                        run.scroll = run.total_rows.saturating_sub(run.visible);
+                    }
+                    changed
+                }),
         };
     }
     if target.lx.chat.messages.is_empty() {

@@ -41,7 +41,7 @@ pub struct AskState {
     pub current: usize,
     /// 提问挂起开始的毫秒时间戳：结束时把用户作答耗时从本轮耗时里剔除。
     pub started_at_ms: i64,
-    /// 每题高亮行：`0..options.len()`，最后是「其他」，可提交时再跟一行提交按钮。
+    /// 每题高亮行：`0..options.len()`，最后一行是「其他」。
     pub highlight: Vec<usize>,
     /// 每题已勾选项（按下标保存，顺序即勾选顺序）。
     pub selected: Vec<Vec<usize>>,
@@ -62,6 +62,8 @@ pub struct AskState {
     pub list_scroll: usize,
     pub list_total: usize,
     pub list_visible: usize,
+    /// 未扣减右侧滚动条列的行内编辑框基准宽度（列）；列表溢出时自动减 1 列与渲染对齐。
+    base_editor_width: Option<u16>,
     /// 选项列表的显式滚动起点（行）；`None` 表示窗口跟随高亮。
     ///
     /// 语义与 `@` 提及面板、`/` 命令面板的 `PanelWindow.viewport` 一致：
@@ -92,6 +94,7 @@ impl AskState {
             list_scroll: 0,
             list_total: 0,
             list_visible: 0,
+            base_editor_width: None,
             viewport: None,
         }
     }
@@ -202,6 +205,7 @@ impl AskState {
             self.selected[current] = vec![index];
             self.clear_custom(current);
         }
+        self.viewport = None;
         true
     }
 
@@ -225,14 +229,17 @@ impl AskState {
         moved || had_viewport
     }
 
-    /// 设置高亮行（鼠标点击）；越界返回 false。
+    /// 设置高亮行（鼠标点击 / 快捷键）；越界返回 false。
     pub fn set_highlight(&mut self, index: usize) -> bool {
-        if index >= self.row_count() || index == self.highlight[self.current] {
+        if index >= self.row_count() {
             return false;
         }
-        self.highlight[self.current] = index;
         // 选中/悬停高亮后窗口跟随高亮，滚轮留下的显式视口作废。
-        self.viewport = None;
+        let scrolled = self.viewport.take().is_some();
+        if index == self.highlight[self.current] {
+            return scrolled;
+        }
+        self.highlight[self.current] = index;
         true
     }
 
@@ -242,7 +249,9 @@ impl AskState {
             return false;
         }
         self.highlight[self.current] = self.other_row();
+        self.viewport = None;
         if let Some(editor) = self.custom.get_mut(self.current) {
+            editor.clear_text_selection();
             editor.set_cursor_end();
         }
         self.editing = true;
@@ -258,6 +267,9 @@ impl AskState {
         }
         self.editing = false;
         let current = self.current;
+        if let Some(editor) = self.custom.get_mut(current) {
+            editor.clear_text_selection();
+        }
         let text = self
             .custom
             .get(current)
@@ -279,6 +291,9 @@ impl AskState {
 
     /// 退出编辑态，文本保留（`Esc` 语义）。
     pub fn cancel_edit(&mut self) -> bool {
+        if let Some(editor) = self.custom.get_mut(self.current) {
+            editor.clear_text_selection();
+        }
         std::mem::replace(&mut self.editing, false)
     }
 
@@ -296,7 +311,7 @@ impl AskState {
         !self.answers_at(index).is_empty()
     }
 
-    /// 是否全部题目都已作答（提交按钮的放行条件）。
+    /// 是否全部题目都已作答（提交汇总的放行条件）。
     pub fn all_answered(&self) -> bool {
         (0..self.questions.len()).all(|index| self.answered(index))
     }
@@ -310,6 +325,9 @@ impl AskState {
             if self.confirm {
                 return false;
             }
+            if let Some(editor) = self.custom.get_mut(self.current) {
+                editor.clear_text_selection();
+            }
             self.confirm = true;
             self.editing = false;
             self.viewport = None;
@@ -318,6 +336,9 @@ impl AskState {
         let index = index.min(self.questions.len().saturating_sub(1));
         if index == self.current && !self.confirm {
             return false;
+        }
+        if let Some(editor) = self.custom.get_mut(self.current) {
+            editor.clear_text_selection();
         }
         self.current = index;
         self.confirm = false;
@@ -376,19 +397,44 @@ impl AskState {
         }
     }
 
-    /// 当前高亮选项的预览文本（高亮在 `Other` / 提交按钮时没有预览）。
+    /// 当前高亮选项的预览文本（高亮在 `Other` 时没有预览）。
     pub fn preview(&self) -> Option<&str> {
         let highlight = *self.highlight.get(self.current)?;
         self.question()?.options.get(highlight)?.preview.as_deref()
     }
 
     /// 同步统一列表的 `(滚动起点, 总行数, 可视行数)`（事件循环按几何写入）。
+    ///
+    /// 列表溢出出现右侧滚动条时，行宽收窄 1 列：这里同步调整 `AskEditor` 的软折行宽度，
+    /// 保证 `editor.visual_rows()` 与 `draw_other` 的正文列宽严格同源。
     pub fn sync_list_window(&mut self, scroll: usize, total: usize, visible: usize) -> bool {
-        let changed =
+        let mut changed =
             self.list_scroll != scroll || self.list_total != total || self.list_visible != visible;
         self.list_scroll = scroll;
         self.list_total = total;
         self.list_visible = visible;
+        if let Some(base) = self.base_editor_width {
+            let effective = if visible > 0 && total > visible {
+                base.saturating_sub(1).max(1)
+            } else {
+                base
+            };
+            changed |= self.sync_editor_width(effective);
+        }
+        changed
+    }
+
+    /// 直接将手写缓冲宽度同步为渲染层给出的精确正文列宽（已含滚动条列扣减）。
+    pub fn sync_editor_width(&mut self, width: u16) -> bool {
+        let width = width.max(1);
+        let rows = Self::MAX_OTHER_EDIT_ROWS as u16;
+        let mut changed = false;
+        for editor in &mut self.custom {
+            if editor.width() != width {
+                editor.resize(width, rows);
+                changed = true;
+            }
+        }
         changed
     }
 
@@ -445,13 +491,21 @@ impl AskState {
     /// 同步全部手写缓冲的软换行宽度与可视高度。
     ///
     /// 渲染宽度与折行宽度必须同源：创建面板时按输入框宽度初始化，窗格 resize 时
-    /// 由 `resize_panes` 用面板内行内输入框的真实宽度再同步一次。
+    /// 由 `resize_panes` 用面板内行内输入框的基准宽度同步，绘制前再由 `sync_list_window`
+    /// 按是否溢出出现滚动条扣减 1 列。
     ///
     /// 可视高度恒夹在 `1..=MAX_OTHER_EDIT_ROWS`：`Other` 原地最多展开 3 行。
     pub fn resize_editor(&mut self, width: u16, height: u16) {
+        let base = width.max(1);
+        self.base_editor_width = Some(base);
+        let effective = if self.list_visible > 0 && self.list_total > self.list_visible {
+            base.saturating_sub(1).max(1)
+        } else {
+            base
+        };
         let rows = height.clamp(1, Self::MAX_OTHER_EDIT_ROWS as u16);
         for editor in &mut self.custom {
-            editor.resize(width, rows);
+            editor.resize(effective, rows);
         }
     }
 
@@ -490,7 +544,9 @@ impl Default for AskEditor {
 
 impl AskEditor {
     pub fn new() -> Self {
-        Self(Lx::plain())
+        let mut lx = Lx::plain();
+        lx.resize(u16::MAX, AskState::MAX_OTHER_EDIT_ROWS as u16);
+        Self(lx)
     }
 
     /// 当前文本：与 [`Self::visual_rows`]/[`Self::cursor_visual`] 同一份原始缓冲。
@@ -504,6 +560,11 @@ impl AskEditor {
     /// 光标字节偏移（渲染层计算编辑框内光标用；只读，禁止外部改写）。
     pub fn cursor(&self) -> usize {
         self.0.cursor
+    }
+
+    /// 视口首视觉行索引（由内部 `Lx` 按 3 行滑动窗口维护）。
+    pub fn scroll(&self) -> usize {
+        self.0.scroll()
     }
 
     /// 软换行后的视觉行（渲染编辑框用；宽度由 [`Self::resize`] 同步）。
@@ -528,7 +589,8 @@ impl AskEditor {
 
     /// 光标落到文本末尾（进入编辑态时调用）。
     pub fn set_cursor_end(&mut self) {
-        self.0.end();
+        self.0.cursor = self.0.input.len();
+        self.0.scroll_cursor_into_view();
     }
 
     /// 还能否再插入 `bytes` 字节：手写答案的硬上限在**写入处**执行，
@@ -719,7 +781,8 @@ impl AskEditor {
     }
 
     /// 拖拽扩展文本选区。
-    pub fn drag_text_selection(&mut self, row: usize, col: u16) {
+    pub fn drag_text_selection(&mut self, row: usize, col: impl TryInto<u16>) {
+        let col = col.try_into().unwrap_or(u16::MAX);
         self.0.drag_text_selection(row, col);
     }
 

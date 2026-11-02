@@ -109,7 +109,6 @@ fn clicking_the_button_restores_agent_follow() {
     let run = &target.lx.agents.runs[0];
     assert!(run.follow, "恢复跟随");
     assert_eq!(run.scroll, 90, "滚动偏移钉到尾部");
-    assert!(target.lx.task.as_ref().expect("task").agents_follow);
 }
 
 #[test]
@@ -151,5 +150,123 @@ fn ask_waiting_hides_the_loading_row_but_keeps_the_button() {
     assert!(
         jump_bottom_rect(area(), &lx).is_some(),
         "`ask` 面板替换了输入框，按钮命中区仍要跟着栏位"
+    );
+}
+
+#[test]
+fn agents_detail_recovers_follow_on_boundary_scroll_and_keyboard_switch() {
+    let mut state = crate::app::state::AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        let mut r0 = agent_run(false);
+        r0.scroll = 89; // 距 max (90) 仅差 1 行（即 chat_bar 占用的 1 行）
+        let mut r1 = agent_run(false);
+        r1.agent_id = "a2".into();
+        r1.scroll = 40;
+        target.lx.agents.runs.push(r0);
+        target.lx.agents.runs.push(r1);
+        target.lx.task = Some(crate::app::state::TaskPage {
+            tab: crate::app::state::TaskTab::Agents,
+            ..Default::default()
+        });
+    }
+    // 向下滚轮跨越 1 行边界时吸回 max 并恢复 follow = true。
+    assert!(crate::app::update::scroll_agents_detail(
+        &mut state, pane, 1
+    ));
+    assert!(state.pane_anywhere(pane).expect("pane").lx.agents.runs[0].follow);
+
+    // 已经钳在 max 但 follow == false 时，向下滚轮仍恢复 follow = true。
+    {
+        let run = &mut state.pane_mut_anywhere(pane).expect("pane").lx.agents.runs[0];
+        run.follow = false;
+        run.scroll = 90;
+    }
+    assert!(crate::app::update::scroll_agents_detail(
+        &mut state, pane, 3
+    ));
+    assert!(state.pane_anywhere(pane).expect("pane").lx.agents.runs[0].follow);
+
+    // 键盘 Down 切换到第 2 个子 agent 时，同样恢复其 follow = true。
+    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::Down);
+    let run1 = &state.pane_anywhere(pane).expect("pane").lx.agents.runs[1];
+    assert!(run1.follow, "键盘切换子 agent 高亮恢复跟随");
+}
+
+#[test]
+fn reloaded_message_subtracts_ask_tool_waiting_duration() {
+    let mut state = crate::app::state::AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .runs
+        .push(crate::app::state::SubagentRun::from_record(
+            &crate::db::chat::SubagentRecord {
+                agent_id: "a1".into(),
+                child_session_id: "s1".into(),
+                parent_session_id: "sess-1".into(),
+                spawn_message_id: None,
+                role: crate::chat::agent::AgentRole::Explorer,
+                status: "completed".into(),
+                title: "investigate".into(),
+                created_at_ms: 0,
+                completed_at_ms: None,
+                report_json: None,
+                report_delivered: false,
+            },
+        ));
+    let message = crate::db::chat::ChatMessage {
+        external_id: "m1".into(),
+        sequence: 1,
+        turn_index: 0,
+        kind: "chat".into(),
+        user_shell: None,
+        subagent_reports: None,
+        role: "assistant".into(),
+        status: "complete".into(),
+        model_provider: None,
+        model_id: None,
+        variant: None,
+        stop_reason: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
+        created_at_ms: 1_000,
+        completed_at_ms: Some(15_000),
+        parts: Vec::new(),
+        tools: vec![crate::db::chat::ToolCallRecord {
+            call_id: "c-ask".into(),
+            message_id: "m1".into(),
+            name: crate::chat::tools::ask::ASK_TOOL.into(),
+            arguments_json: "{}".into(),
+            position: 0,
+            status: "completed".into(),
+            result_json: None,
+            error_text: None,
+            started_at_ms: 2_000,
+            completed_at_ms: Some(12_000),
+            duration_ms: Some(10_000),
+        }],
+        attachments: Vec::new(),
+    };
+    assert!(crate::app::update::on_subagent_loaded(
+        &mut state,
+        pane,
+        "a1",
+        &[message]
+    ));
+    let view = &state.pane_anywhere(pane).expect("pane").lx.agents.runs[0]
+        .chat
+        .messages[0];
+    assert_eq!(
+        view.duration_ms,
+        Some(4_000),
+        "重载会话的回合总耗时应扣除 ask 等待时长"
     );
 }

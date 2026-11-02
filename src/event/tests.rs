@@ -15,6 +15,7 @@ use super::*;
 pub(crate) mod test_support;
 
 mod focus_and_paste;
+mod lx_ask_task;
 mod lx_toast;
 mod lx_view;
 mod mouse_click;

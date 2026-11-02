@@ -455,12 +455,13 @@ pub(crate) fn handle_mouse_wheel(
                 }
                 return;
             }
-            // 后台任务面板的输出容器：滚轮滚动输出视口（不穿透到下方 item 列表）。
+            // 后台任务面板的输出容器（含下方一行的聊天栏「回到底部」）：
+            // 滚轮滚动输出视口（不穿透到下方 item 列表或隐藏输入框）。
             if let Some(delta) = vertical_wheel_delta(mouse.kind)
                 && let Some(task_rects) = state
                     .pane_anywhere(pane)
                     .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
-                && task_rects.output.contains((mouse.column, mouse.row).into())
+                && (task_rects.output.y..task_rects.list.y).contains(&mouse.row)
             {
                 update::resolve_task_output_visible(state, rects);
                 update::resolve_task_agents_visible(state, rects);

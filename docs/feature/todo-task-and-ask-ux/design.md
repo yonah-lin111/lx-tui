@@ -21,10 +21,10 @@
    - 现状：主 Agent 历史消息列表向上滚动后，在输入框上沿有 `↓ jump to bottom` 按钮；但打开后台任务面板（`Processes · Agents`）并在上方日志或子 Agent 详情区向上翻阅后，没有「回到底部」按钮，且 `chat_bar` 在任务面板打开时被整体隐藏。
    - 目标：参考主 Agent 的按钮样式与位置，在后台任务面板下方列表顶部分隔线正上方一行（`chat_bar` 位置），当 `Processes` 日志输出区或 `Agents` 消息详情区离开最底部时显示 `↓ jump to bottom` 按钮，点击后立即滚回最底部并恢复自动跟随。
 3. **Ask 工具交互全面重构（`src/ui/main_content/lx/` & `src/chat/agent/`）**：
-   - **Preview 移至所有问题选项下方 + 选项描述完整换行**：移除原有的左右分栏（`SPLIT_MIN_WIDTH`），选项列表占满全宽；选项描述（`description`）在缩进 6 列后支持自动多行换行完整显示；当题目中有选项包含 `preview` 时，将 `preview` 区域放置在所有选项（含 `Other` 与提交按钮）的正下方，若当前题没有任何选项带 `preview` 则完全隐藏预览区（不再渲染无意义的 `(no preview)`）。
-   - **提交按钮规则、多题流转与键盘导航收敛**：移除多题的 `Confirm` 汇总 Tab；单题单选不显示提交按钮（选中即提交），单题多选在 `Other` 下方显示提交按钮；多题时前 `N-1` 题不显示提交按钮，**最后一题底部显示提交按钮**；按钮采用弹窗同款实心胶囊样式（` ↵ submit `，`style::button_primary()` / `style::button_secondary()`）；面板内**只保留 `↑`/`↓` 方向键切换条目**（含聚焦到底部提交按钮），移除 `Tab`/`←`/`→`/`j`/`k`/`1..9` 快捷键，多选或最后一题必须将焦点移至提交按钮按 `Enter`（或鼠标点击提交按钮）才执行提交。
-   - **自定义输入（`Other...`）原地变为多行输入框**：参考 `opencode-dev` 与 Todo item，选中 `Other...` 时不再在面板底部弹出独立分割线编辑框（移除 `lay.editor`），而是直接将 `Other` 这一项原地变成缩进对齐的 1~3 行软折行输入框。
-   - **Ask 等待期间暂停 Agent 计时与 Loading**：当 `ask` 面板打开等待用户作答时，隐藏 `chat_bar` 的 `Running tools... (1m 17s · ↓86 tok)` loading 行，停止历史步骤方块呼吸动画，并暂停/补偿轮次计时，确保用户思考作答耗时不计入 Agent 执行耗时与 `tok/s`。
+   - **Preview 移至所有问题选项下方 + 选项描述完整换行 + 统一滚动条**：移除原有的左右分栏（`SPLIT_MIN_WIDTH`），选项列表占满全宽；选项描述（`description`）在缩进 6 列后支持自动多行换行完整显示；当题目中有选项包含 `preview` 时，将 `preview` 区域放置在所有选项（含 `Other...`）的正下方，并移除独立的字符图滚动条，使问题选项与字符图预览共用面板最右侧唯一一条滚动条；若当前题没有任何选项带 `preview` 则完全隐藏预览区（不再渲染无意义的 `(no preview)`）。
+   - **对齐 `opencode-dev` 的 Tab 流转与无按钮纯键盘/直点交互**：所有题目（单选/多选）与 `Submit` 汇总页均不渲染行内提交按钮，直接使用键盘操作；单题单选不显示顶部 Tab，按 `Enter`、`1..9` 或鼠标单击选项立即选中并完成提交；多题或单题多选在顶部显示 `1 题一  2 题二  Submit` Tab 栏，支持 `←`/`→`、`Tab`/`Shift+Tab` 循环切换，单选按 `Enter` 或鼠标单击选中并自动进入下一 Tab，多选按 `Enter`/`Space` 切换勾选，在 `Submit` 汇总页按 `Enter` 提交全部答案。
+   - **自定义输入（`Other...`）原地变为多行输入框**：参考 `opencode-dev` 与 Todo item，选中 `Other...` 时不再在面板底部弹出独立分割线编辑框（移除 `lay.editor`），而是直接将 `Other` 这一项原地变成缩进对齐的 1~3 行软折行输入框；高亮停在 `Other...` 时直接敲击任意可打印字符（含数字 `1..9`）即可自动进入行内编辑并写入首字符。
+   - **Ask 等待期间暂停 Agent 计时与 Loading**：当 `ask` 面板打开等待用户作答时，隐藏 `chat_bar` 的 `Running tools... (1m 17s · ↓86 tok)` loading 行，停止历史步骤方块呼吸动画，并暂停/补偿轮次计时（含会话重载路径），确保用户思考作答耗时不计入 Agent 执行耗时与 `tok/s`。
 
 ---
 
@@ -279,11 +279,11 @@ pub fn wrap_clamped_lines(text: &str, width: usize, max_rows: usize) -> Vec<Stri
 
 ### 4.3 特性三：Ask 工具交互重构与暂停计时/Loading
 
-#### 4.3.1 整体垂直布局（取消左右分栏、完整折行描述、Preview 置底、行内 Other 输入、胶囊提交按钮）
+#### 4.3.1 整体垂直布局（取消左右分栏、完整折行描述、Preview 置底、行内 Other 输入、统一滚动条）
 
 ```text
 ────────────────────────────────────────────────────────────────────  ← 面板顶部分隔线 (1 行)
- 1 布局   2 数据库                                                    ← 多题时的题目 Tabs (仅多题显示，移除 Confirm 汇总 Tab)
+ 1 布局   2 数据库   Submit                                           ← 多题或单题多选时的顶部 Tabs（单题单选隐藏该行）
 请选择你期望的界面布局方案：                                          ← 题干 (1~3 行软折行)
 ❯ (•) 选项 A                                                          ← 选项标题行 (6 列前缀 `❯ (•) `)
       推荐项，测试默认首选项的渲染。如果描述文字非常长，会自动在      ← 选项描述行 (缩进 6 列，按全宽自动换行完整显示)
@@ -297,24 +297,21 @@ pub fn wrap_clamped_lines(text: &str, width: usize, max_rows: usize) -> Vec<Stri
       │ ❯ (•) 我希望采用上下分栏，并且支持快捷键折叠第一栏，       │
       │       同时记住上次关闭时的高度比例|                        │
       └────────────────────────────────────────────────────────────┘
-       ↵ submit                                                       ← 实心胶囊提交按钮（仅在「单题多选」或「多题的最后一题」显示）
 
-  ┌────────────────────────────────────────────────────────────────┐  ← Preview 预览区（仅当本题任一选项含 preview 时显示在所有选项下方）
-  │ +-------------------+                                          │
-  │ |     Header        |                                          │
-  │ +-------------------+                                          │
-  └────────────────────────────────────────────────────────────────┘
-↑↓ select · enter submit                              esc cancel      ← 底栏按键提示 (1 行)
+  +-------------------+                                               ← Preview 预览行（纳入同一列表模型，共用最右侧唯一滚动条）
+  |     Header        |
+  +-------------------+
+⇆ tab · ↑↓ select · ↵ confirm                         esc cancel      ← 底栏按键提示 (1 行)
 ```
 
-#### 4.3.2 关键变更点 1：选项描述完整换行与 Preview 移至下方
+#### 4.3.2 关键变更点 1：选项描述完整换行与 Preview 移至下方共用同一滚动条
 1. **取消左右分栏**：
    - 在 `src/ui/main_content/lx/ask.rs` 中删除 `SPLIT_MIN_WIDTH` 与 `OPTIONS_MIN_COLS` 的左右分栏分支；`lay.options` 的宽度恒为 `inner.width`。
 2. **选项描述（`OptionDesc`）完整多行折行**：
-   - 描述文本可用宽度为 `desc_width = inner.width.saturating_sub(ROW_PREFIX).max(1)`（其中 `ROW_PREFIX = 6`，即 `❯ ( ) ` 的宽度）；
-   - 在 `rows_model(ask, width)` 与 `draw_rows` 中，对每个非空的 `option.description` 调用 `wrap(&option.description, usize::from(desc_width))`；
+   - 描述文本可用宽度为 `desc_width = row_width.saturating_sub(ROW_PREFIX).max(1)`（其中 `ROW_PREFIX = 6`，即 `❯ ( ) ` 的宽度）；
+   - 在 `rows_model(ask, width)` 与 `draw_rows` 中，对每个非空的 `option.description` 调用 `wrap(&option.description, desc_width)`；
    - 将 `RowKind::OptionDesc { index: usize, line: usize }` 展开为对应数量的视觉行（每行高度 1，缩进 `ROW_PREFIX` 列绘制），使描述内容无论多长都能完整换行显示，且每一行点击都命中 `AskHit::Option(index)`。
-3. **Preview 置于所有选项下方且按需显隐**：
+3. **Preview 置于所有选项下方且共用唯一滚动条**：
    - 在 `AskState` 中增加辅助方法 `pub fn question_has_preview(&self) -> bool`：
      ```rust
      /// 当前题目是否有任何选项配置了非空 preview。
@@ -326,77 +323,24 @@ pub fn wrap_clamped_lines(text: &str, width: usize, max_rows: usize) -> Vec<Stri
          })
      }
      ```
-   - 当 `!ask.question_has_preview()` 时：`lay.preview = None`，不预留任何预览高度，也不渲染 `(no preview)`；
-   - 当 `ask.question_has_preview()` 为 `true` 时：在 `lay.options`（包含所有选项、`Other` 及可能存在的提交按钮）的**正下方**留出 1 行间距（`PREVIEW_GAP = 1`），分配 `lay.preview`（高度最多 8 行，或按剩余空间分配）；若当前高亮项有 `preview` 则渲染其内容，若当前高亮项无 `preview`（例如高亮移到了 `Other` 或提交按钮）则在 `lay.preview` 中渲染 `(no preview)`，保证切换高亮时面板高度恒定不抖动。
+   - 当 `!ask.question_has_preview()` 时：完全不生成任何预览行，也不渲染 `(no preview)`；
+   - 当 `ask.question_has_preview()` 为 `true` 时：在 `rows_model` 的 `Other` 行之后直接追加 `RowKind::PreviewGap` 与 `RowKind::PreviewLine(line)`（若当前高亮在 `Other` 等无预览项则追加 `RowKind::PreviewPlaceholder` `(no preview)`），使问题选项、`Other` 与字符画预览处于同一个可滚动列表中，共用面板最右侧唯一一条滚动条。
 
-#### 4.3.3 关键变更点 2：移除汇总 Tab、收敛提交按钮与键盘导航
-1. **移除多题 `Confirm` 汇总 Tab**：
-   - 删除 `AskState.confirm` 字段及 `RowKind::Review` / `RowKind::Confirm`；
-   - `AskState::tab_len(&self) -> usize` 直接返回 `self.questions.len()`（仅当 `questions.len() > 1` 时在顶部渲染 `1 Header`、`2 Header` ... 题目 Tab）。
-2. **提交按钮的显隐条件（`has_submit_row`）**：
-   - 单题（`questions.len() == 1`）：仅在多选（`question.multi_select == true`）时显示提交按钮；单选不显示提交按钮。
-   - 多题（`questions.len() > 1`）：前 `N-1` 题（`current + 1 < questions.len()`）不显示提交按钮；**最后一题（`current + 1 == questions.len()`）固定显示提交按钮**。
-   ```rust
-   impl AskState {
-       /// 当前题目底部是否显示「提交」按钮行。
-       pub fn has_submit_row(&self) -> bool {
-           let Some(question) = self.question() else {
-               return false;
-           };
-           if self.questions.len() > 1 {
-               self.current + 1 == self.questions.len()
-           } else {
-               question.multi_select
-           }
-       }
-
-       /// 当前题可被 ↑/↓ 高亮的条目总数：options.len() + 1 (Other) + usize::from(has_submit_row())。
-       pub fn row_count(&self) -> usize {
-           self.question().map_or(0, |question| {
-               question.options.len() + 1 + usize::from(self.has_submit_row())
-           })
-       }
-
-       /// 「其他」行的逻辑下标。
-       pub fn other_row(&self) -> usize {
-           self.question().map_or(0, |question| question.options.len())
-       }
-
-       /// 提交按钮行的逻辑下标（仅当 `has_submit_row()` 为真时存在）。
-       pub fn submit_row(&self) -> Option<usize> {
-           self.has_submit_row()
-               .then(|| self.other_row().saturating_add(1))
-       }
-   }
-   ```
-3. **提交按钮的弹窗胶囊样式渲染**：
-   - 文案常量：`pub const ASK_SUBMIT_BUTTON: &str = " ↵ submit ";`（复用 `ui::text::key::ENTER` 符号 `↵`，与模态弹窗按钮 ` ↵ confirm `、` ↵ save ` 风格完全一致）。
-   - 样式选择：
-     - 当满足提交条件（`ask.all_answered()` 为 `true`）时，按钮胶囊采用 `style::button_primary()`（实心青底 `Color::Cyan`、黑字 `Color::Black`、加粗 `Modifier::BOLD`）；
-     - 当尚未满足提交条件时，按钮胶囊采用 `style::button_secondary()`（实心暗灰底 `Color::Indexed(238)`、白字 `Color::Indexed(255)`、加粗 `Modifier::BOLD`）；
-     - 当 `↑`/`↓` 焦点落在该提交按钮行（`highlight == submit_row`）时，行首第 0 列同样绘制 `❯`（`style::accent()`），第 `ROW_PREFIX`（6）列起绘制实心胶囊 ` ↵ submit `。
-4. **键盘导航与回车/点击提交规则**：
-   - **列表态（`!ask.editing`）按键收敛**：
-     - 仅保留 `LxInput::Up`（`move_highlight(-1)`）与 `LxInput::Down`（`move_highlight(1)`）切换聚焦 item；
-     - 移除 `j`/`k`、`Tab`/`Shift+Tab`、`Left`/`Right`、`1..=9` 数字键切项或切题；
-     - 保留 `Space`（在普通选项上勾选/选中，在 `Other` 上进入行内编辑态）、`Enter`、`PageUp`/`PageDown`（滚预览）、`Escape`（双击取消）。
-   - **列表态 `Enter` 规则**：
-     - 若高亮在 `Submit` 按钮行（`Some(highlight) == ask.submit_row()`）：
-       - 检查 `ask.all_answered()`：若全部题目均已作答，立即调用 `submit_all(state, pane)` 提交全部答案；
-       - 若存在未作答的题目，弹出窗格内 Warning Toast `"select an answer first"`，并将 `ask.current` 自动切换到第一个未作答的题目 Tab，方便用户补答。
-     - 若高亮在 `Other` 行（`highlight == ask.other_row()`）：
-       - 调用 `ask.begin_edit()` 原地进入 `Other` 行内编辑态。
-     - 若高亮在普通选项行（`highlight < question.options.len()`）：
-       - **多选题（`question.multi_select == true`）**：按 `Enter` 只切换该选项的勾选状态（`ask.choose(highlight)`），**绝不直接提交**（必须移到提交按钮按 `Enter` 或点提交按钮才提交）；
-       - **单选题（`question.multi_select == false`）**：
-         - 选中当前高亮项 `ask.choose(highlight)`；
-         - 若当前是单题模式（`questions.len() == 1`）：立即调用 `submit_all(state, pane)` 提交完成；
-         - 若当前是多题模式的非最后一题（`current + 1 < questions.len()`）：自动推进到下一题 `ask.next_step()`；
-         - 若当前是多题模式的最后一题（底部有 ` ↵ submit ` 按钮）：选中该项并将焦点自动移到底部 ` ↵ submit ` 按钮（或由用户按 `↓` 移到按钮再按 `Enter` 提交，严格遵守「聚焦在提交按钮时按 Enter 才能提交」）。
-   - **鼠标点击规则**：
-     - 点击顶部题目 Tab：若当前在编辑态先 `commit_edit()`，然后切换到目标题目 `goto_tab(index)`；
-     - 点击普通选项：若在单选且无提交按钮的题（单题单选，或多题非末题单选），选中该项并立即提交/进入下一题；若在多选题或多题末题，选中/切换勾选该项（需点击 ` ↵ submit ` 按钮提交）；
-     - 点击 ` ↵ submit ` 按钮：若 `all_answered()` 则 `submit_all`，否则弹 Toast 并跳到首个未作答题。
+#### 4.3.3 关键变更点 2：对齐 `opencode-dev` 的 Tab 流转、无行内提交按钮与键盘导航
+1. **单题单选 vs 多题/多选的 Tab 结构（`is_single_select_only`）**：
+   - 单题单选（`questions.len() == 1 && !questions[0].multi_select`）：`is_single_select_only() == true`，隐藏顶部 Tab 栏（`tab_len() == 1`），无 `Submit` 汇总页；
+   - 多题或单题多选：`is_single_select_only() == false`，顶部渲染各题 Tab 加末尾 `Submit` 汇总 Tab（`tab_len() = questions.len() + 1`）；
+   - 所有题目（单选/多选）与 `Submit` 汇总页均不渲染行内提交按钮，`row_count()` 在题目页恒为 `options.len() + 1`（选项 + `Other`），在 `Submit` 汇总页恒为 `0`。
+2. **键盘与鼠标交互规则（对齐 `opencode-dev` `packages/tui/src/routes/session/form.tsx`）**：
+   - **Tab 切换**：多题或单题多选下，`Tab`/`→` 与 `Shift+Tab`/`←` 在各题与 `Submit` 汇总 Tab 之间循环切换（若当前处于 `Other` 编辑态，先自动保存非空文本再切换）；
+   - **列表态 `↑`/`↓`**：在题目页循环移动高亮（`0..row_count()`）；在 `Submit` 汇总页上下滚动回顾列表；
+   - **数字快捷键 `1..9`**：当高亮停在普通选项行时，按 `1..9` 直接定位到对应选项并执行 `Enter` 确认动作；当高亮停在 `Other...` 行时，按任意可打印字符（含 `'1'..'9'`）直接原地进入 `Other` 行内编辑并写入该字符；
+   - **列表态 `Enter` 与鼠标点击规则**：
+     - 在 `Submit` 汇总页按 `Enter`（或 `Space` / 再次点击 `Submit` Tab）：若 `ask.all_answered()` 为真则立即调用 `submit_all(state, pane)` 提交全部答案；否则弹出窗格内 Warning Toast `"select an answer first"` 并自动跳转到第一个未作答的题目；
+     - 在 `Other` 行按 `Enter` 或点击：原地进入 `Other` 行内编辑态；
+     - 在普通选项行按 `Enter` 或点击：
+       - **单选题**：选中该项；若为单题单选则立即提交，若为多题则自动推进到下一 Tab（末题推进到 `Submit` 汇总 Tab）；
+       - **多选题**：切换该项的 `[x]`/`[ ]` 勾选状态（不自动跳题或提交，用户选完后按 `Tab`/`→` 切到下一题或 `Submit` Tab 提交）。
 
 #### 4.3.4 关键变更点 3：自定义输入（`Other...`）原地变为 1~3 行输入框
 1. **移除底部独立编辑框 `lay.editor`**：
@@ -477,9 +421,9 @@ pub fn wrap_clamped_lines(text: &str, width: usize, max_rows: usize) -> Vec<Stri
 | **Todo 状态与更新** | `src/app/state/todo.rs`<br>`src/app/update/todo.rs` | 适配多行编辑视口与滚动可见性计算 |
 | **后台任务面板状态** | `src/app/state/lx/task.rs` | 新增 `TaskPage::is_at_bottom(&self, agents)` 判定 |
 | **聊天栏与回到底部** | `src/ui/main_content/lx/chat_bar.rs`<br>`src/ui/main_content/lx/history_hit.rs`<br>`src/app/update/chat/viewport.rs`<br>`src/event/mouse/` | 支持后台任务面板打开且未触底时显示 `↓ jump to bottom`，点击跳回 `Processes` 日志尾部或 `Agents` 消息流底部；支持 `Processes` 输出区滚轮滚动 |
-| **Ask 状态机** | `src/app/state/lx/ask.rs` | 移除 `confirm` 步；新增 `has_submit_row()`、`submit_row()`、`question_has_preview()`、`started_at_ms`；更新 `row_count()` |
-| **Ask 面板 UI** | `src/ui/main_content/lx/ask.rs`<br>`src/ui/text/agent.rs` | 移除左右分栏与底部独立 `lay.editor`；选项描述 6 列缩进完整换行；`Other` 原地 1~3 行行内编辑；` ↵ submit ` 实心胶囊按钮；`preview` 移至所有选项正下方且无预览时完全隐藏 |
-| **Ask 交互与计时暂停** | `src/app/update/chat/ask.rs`<br>`src/app/update/chat/mod.rs`<br>`src/event/chat/ask.rs`<br>`src/ui/main_content/lx/history.rs` | 仅保留 `↑`/`↓` 导航；聚焦提交按钮按 `Enter` 提交；单选直接选中提交/下一题；`ask` 期间隐藏 loading、停止方块呼吸、暂停并补偿 `turn_started_at_ms` |
+| **Ask 状态机** | `src/app/state/lx/ask.rs` | 对齐 `opencode-dev`：新增 `is_single_select_only()`、`question_has_preview()`、`started_at_ms`、`compensate_turn_clock()`；移除行内提交按钮与独立预览滚动状态，统一使用单一 `viewport` |
+| **Ask 面板 UI** | `src/ui/main_content/lx/ask.rs`<br>`src/ui/text/agent.rs` | 移除左右分栏、底部独立 `lay.editor` 与行内提交按钮；选项描述 6 列缩进完整换行；`Other` 原地 1~3 行行内编辑；`preview` 纳入统一 `rows_model` 置底且共用唯一滚动条 |
+| **Ask 交互与计时暂停** | `src/app/update/chat/ask.rs`<br>`src/app/update/chat/mod.rs`<br>`src/app/update/chat/view.rs`<br>`src/event/chat/ask.rs`<br>`src/ui/main_content/lx/history/source.rs` | 对齐 `opencode-dev` 的 Tab 循环、`1..9` 快捷键与 `Other` 原地直打；`ask` 期间隐藏 loading、停止方块呼吸、暂停并补偿 `turn_started_at_ms` 与会话重载耗时 |
 | **开发规范同步** | `docs/standards/tui-design-requirements.md` | 同步更新 Todo 折行、后台面板回到底部与 Ask 交互规范描述 |
 
 ---
@@ -489,18 +433,18 @@ pub fn wrap_clamped_lines(text: &str, width: usize, max_rows: usize) -> Vec<Stri
 1. **Todo 面板单元测试（`src/ui/right_panel/todo/tests.rs`、`src/app/update/todo/tests.rs`）**：
    - 验证短文本占 1 行、中长文本折为 2~3 行且第 2、3 行精确缩进 9 列（与首行正文对齐）；
    - 验证超 3 行文本在第 3 行末尾以 `…` 截断，总高不超过 3 行；
+   - 验证多条多行待办溢出视口时键盘 `↓` 导航自动滚入视口、滚动条正确显示；
    - 验证选中与悬停高亮底色完整覆盖该条目的全部 1~3 行，且优先级徽标不被污染；
-   - 验证行内编辑在 1~3 行间自适应展开、超过 3 行时在 3 行视口内随光标滚动，以及多行下的鼠标点击定位字符与硬件光标位置。
-2. **后台任务面板回到底部测试（`src/ui/main_content/lx/chat_bar/tests/`、`src/ui/main_content/lx/tests.rs`）**：
+   - 验证行内编辑在 1~3 行间自适应展开、超过 3 行时在 3 行滑动视口内随光标滚动，以及多行下的鼠标点击定位字符、越界钳制拖拽选区与硬件光标位置。
+2. **后台任务面板回到底部测试（`src/ui/main_content/lx/chat_bar/tests/`、`src/ui/main_content/lx/task/tests/`）**：
    - 验证 `Processes` 输出在底部时不显示 `↓ jump to bottom`，向上滚动后显示按钮且输出区高度让出 1 行，点击按钮后 `output_scroll` 回到 `output_max_scroll()`；
-   - 验证 `Agents` 详情 `follow == true` 时不显示按钮，`follow == false` 时显示按钮，点击后恢复 `follow = true`。
+   - 验证 `Agents` 详情 `follow == true` 时不显示按钮，`follow == false` 时显示按钮，点击或内容收起/滚回底部后自动恢复 `follow = true`。
 3. **Ask 面板与暂停计时测试（`src/ui/main_content/lx/ask/tests.rs`、`src/app/update/chat/tests/ask.rs`、`src/ui/main_content/lx/chat_bar/tests/`）**：
    - 验证选项描述超长时按全宽缩进 6 列完整换行显示；
-   - 验证无 `preview` 时不分配预览矩形、不渲染 `(no preview)`；有 `preview` 时预览矩形位于所有选项矩形下方 (`preview.y >= options.bottom()`)；
-   - 验证单题单选无提交按钮、回车或单击选项直接提交；单题多选显示 ` ↵ submit ` 胶囊按钮且需聚焦到按钮按回车或点击按钮才提交；
-   - 验证多题无 `Confirm` Tab、最后一题底部显示 ` ↵ submit ` 按钮，未答完前题时点击提交弹 Toast 并跳回未答题；
-   - 验证 `Other` 原地变成 1~3 行输入框，不再出现底部独立 `lay.editor`；
-   - 验证 `lx.ask.is_some()` 时 `chat_bar` 不显示 `Running tools...` 与耗时，且作答结束/取消后 `turn_started_at_ms` 正确补偿等待时间。
+   - 验证无 `preview` 时不生成预览行、不渲染 `(no preview)`；有 `preview` 时预览行位于所有选项下方且共用唯一滚动条；
+   - 验证单题单选无顶部 Tab、回车或单击选项直接提交；多题或单题多选通过 `Submit` 汇总 Tab 按回车提交，无行内提交按钮；
+   - 验证高亮在 `Other...` 时键入任意字符（含数字 `'1'..'9'`）原地进入 1~3 行输入框且折行宽度与渲染宽度逐列一致；
+   - 验证 `lx.ask.is_some()` 时 `chat_bar` 不显示 `Running tools...` 与耗时，且作答结束/取消及会话重载后正确剔除等待时间。
 4. **静态检查与格式化**：
    - `cargo fmt --check`
    - `cargo clippy --all-targets -- -D warnings`

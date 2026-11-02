@@ -23,6 +23,13 @@ pub fn view_message_of(message: &ChatMessage, models: &ModelsSnapshot) -> ChatMe
     }));
     // 位置唯一（DB 事务保证），稳定排序后即为唯一时间线顺序。
     steps.sort_by_key(AssistantStepView::position);
+    let ask_wait_ms: i64 = message
+        .tools
+        .iter()
+        .filter(|tool| tool.name == crate::chat::tools::ask::ASK_TOOL)
+        .filter_map(|tool| tool.duration_ms)
+        .map(|ms| ms.max(0))
+        .fold(0i64, i64::saturating_add);
     ChatMessageView {
         sequence: message.sequence,
         id: message.external_id.clone(),
@@ -41,9 +48,12 @@ pub fn view_message_of(message: &ChatMessage, models: &ModelsSnapshot) -> ChatMe
         input_tokens: message.input_tokens,
         output_tokens: message.output_tokens,
         cache_read_tokens: message.cache_read_tokens,
-        duration_ms: message
-            .completed_at_ms
-            .map(|completed| completed.saturating_sub(message.created_at_ms).max(0)),
+        duration_ms: message.completed_at_ms.map(|completed| {
+            completed
+                .saturating_sub(message.created_at_ms)
+                .saturating_sub(ask_wait_ms)
+                .max(0)
+        }),
         // 报告 JSON 损坏不应让整条消息渲染失败：按「没有报告」处理。
         reports: message
             .subagent_reports

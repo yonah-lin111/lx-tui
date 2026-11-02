@@ -339,3 +339,79 @@ fn ask_editor_selection_overflow_preserves_text_and_undo() {
     editor.undo();
     assert!(editor.text().starts_with("aaaaaaaaaa"));
 }
+
+#[test]
+fn ask_editor_maintains_three_row_sliding_scroll_window() {
+    let mut editor = AskEditor::new();
+    editor.insert_str("line0\nline1\nline2\nline3");
+    assert_eq!(editor.visual_rows().len(), 4);
+    assert_eq!(
+        editor.scroll(),
+        1,
+        "4 行时滑动窗口起点应为 1（显示 1..=3 行）"
+    );
+
+    // 点击当前可见顶行（row 1）：光标落在 row 1，但窗口起点保持 1 不跳回 0。
+    editor.begin_text_selection(1, 0);
+    assert_eq!(editor.cursor_visual().0, 1);
+    assert_eq!(editor.scroll(), 1, "点击可见顶行不得导致窗口跳回第 0 行");
+
+    // 继续上移到 row 0 时窗口才滚回 0。
+    editor.move_up();
+    assert_eq!(editor.cursor_visual().0, 0);
+    assert_eq!(editor.scroll(), 0);
+}
+
+#[test]
+fn begin_edit_choose_and_set_highlight_clear_viewport_and_selection() {
+    let mut ask = state(vec![question("q", true, &["A", "B"])]);
+    ask.sync_list_window(0, 20, 5);
+    assert!(ask.scroll_page(1));
+    assert_eq!(ask.viewport(), Some(5));
+
+    // set_highlight 即使下标未变也必须清掉滚轮留下的显式视口。
+    assert!(ask.set_highlight(0));
+    assert_eq!(ask.viewport(), None);
+
+    assert!(ask.scroll_page(1));
+    assert_eq!(ask.viewport(), Some(5));
+    assert!(ask.choose(1));
+    assert_eq!(ask.viewport(), None);
+
+    assert!(ask.scroll_page(1));
+    assert_eq!(ask.viewport(), Some(5));
+    assert!(ask.begin_edit());
+    assert_eq!(ask.viewport(), None);
+
+    // 编辑态产生选区后，commit_edit / cancel_edit / begin_edit 均会清除残留选区。
+    let editor = ask.editor_mut().expect("editor");
+    editor.insert_str("hello world");
+    editor.begin_text_selection(0, 0);
+    editor.drag_text_selection(0, 5);
+    assert!(editor.has_text_selection());
+    assert!(ask.commit_edit());
+    assert!(!ask.editor().expect("editor").has_text_selection());
+
+    assert!(ask.begin_edit());
+    let editor = ask.editor_mut().expect("editor");
+    editor.begin_text_selection(0, 0);
+    editor.drag_text_selection(0, 5);
+    assert!(editor.has_text_selection());
+    assert!(ask.cancel_edit());
+    assert!(!ask.editor().expect("editor").has_text_selection());
+}
+
+#[test]
+fn sync_list_window_adjusts_editor_width_for_scrollbar() {
+    let mut ask = state(vec![question("q", false, &["A", "B"])]);
+    ask.resize_editor(50, 3);
+    assert_eq!(ask.editor().expect("editor").width(), 50);
+
+    // 列表溢出时右侧让出 1 列滚动条，编辑器折行宽度同步减 1。
+    assert!(ask.sync_list_window(0, 12, 6));
+    assert_eq!(ask.editor().expect("editor").width(), 49);
+
+    // 列表不再溢出时恢复基准宽度。
+    assert!(ask.sync_list_window(0, 6, 6));
+    assert_eq!(ask.editor().expect("editor").width(), 50);
+}

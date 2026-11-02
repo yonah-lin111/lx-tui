@@ -427,6 +427,66 @@ fn typing_on_the_other_row_starts_editing_with_that_character() {
 }
 
 #[test]
+fn typing_digit_on_the_other_row_starts_editing_instead_of_selecting_option() {
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A", "B"])]);
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Down);
+    assert_eq!(
+        panel(&state, pane).highlight[0],
+        panel(&state, pane).other_row()
+    );
+    press(&mut state, LxInput::Char('1'));
+    assert!(
+        ask_present(&state, pane),
+        "高亮在 Other 时按 '1' 不得误选第 1 项并提交面板"
+    );
+    let ask = panel(&state, pane);
+    assert!(ask.editing, "高亮在 Other 时按数字键必须进入行内编辑");
+    assert_eq!(ask.custom[0].text(), "1", "数字首字符必须写入 AskEditor");
+    assert!(ask.selected[0].is_empty(), "普通选项不得被误选");
+}
+
+#[test]
+fn editing_or_pasting_after_wheel_scroll_resets_the_explicit_viewport() {
+    let (mut state, pane, _key) = asking(vec![question("q", true, &["A"])]);
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Enter);
+    assert!(panel(&state, pane).editing);
+
+    assert!(crate::app::update::apply_ask_wheel(
+        &mut state,
+        pane,
+        AskWheelZone::Options,
+        1,
+        Some((0, 20, 5))
+    ));
+    assert_eq!(panel(&state, pane).viewport(), Some(3));
+
+    press(&mut state, LxInput::Char('a'));
+    assert_eq!(
+        panel(&state, pane).viewport(),
+        None,
+        "行内输入必须清掉滚轮视口"
+    );
+
+    assert!(crate::app::update::apply_ask_wheel(
+        &mut state,
+        pane,
+        AskWheelZone::Options,
+        1,
+        Some((0, 20, 5))
+    ));
+    assert_eq!(panel(&state, pane).viewport(), Some(3));
+    assert!(crate::app::update::apply_ask_paste(&mut state, pane, "bc"));
+    assert_eq!(
+        panel(&state, pane).viewport(),
+        None,
+        "行内粘贴必须清掉滚轮视口"
+    );
+    assert_eq!(panel(&state, pane).custom[0].text(), "abc");
+}
+
+#[test]
 fn custom_text_stops_at_the_byte_limit_with_a_toast() {
     let limit = crate::chat::tools::ask::MAX_ASK_CUSTOM_BYTES;
     let (mut state, pane, _key) = asking(vec![question("q", true, &["A"])]);

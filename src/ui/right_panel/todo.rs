@@ -253,6 +253,54 @@ impl VisibleList {
     }
 }
 
+/// 计算当前面板宽度下的 Todo 列表视口度量：`(列表可见物理行数, 各显示条目视觉行高, 编辑视口起始行)`。
+///
+/// 供 `resolve_todo_viewport` 与 `scrollbar` 复用同一份多行折行高度与最大滚动偏移。
+pub fn viewport_metrics(panel: Rect, state: &AppState) -> (usize, Vec<u16>, Option<usize>) {
+    let list = effective_list_rect(panel, state);
+    let rows = visible_rows_for(panel, state);
+    let text_x = row_text_x(list);
+    let text_width = usize::from(list.right().saturating_sub(text_x)).max(1);
+    let ghost = state
+        .todo
+        .editing()
+        .filter(|edit| edit.target.is_none())
+        .map(|edit| edit.at);
+    let total = state.todo.display_len();
+    let heights = (0..total)
+        .map(|display| item_rows(state, display, ghost, text_width))
+        .collect();
+    let edit_scroll_row = state
+        .todo
+        .editing()
+        .map(|edit| edit_view(edit, text_width).start_row);
+    (rows, heights, edit_scroll_row)
+}
+
+/// 根据可见物理行数与各显示条目的视觉行高，计算能完整露出末尾条目的最大起始条目下标。
+fn max_scroll_for(rows: usize, item_rows: &[u16]) -> usize {
+    let total = item_rows.len();
+    if total == 0 {
+        return 0;
+    }
+    if rows == 0 {
+        return total.saturating_sub(1);
+    }
+    let mut used = 0usize;
+    for index in (0..total).rev() {
+        let height = usize::from(item_rows[index]).max(1);
+        if used + height > rows {
+            return if index == total - 1 {
+                total - 1
+            } else {
+                index + 1
+            };
+        }
+        used += height;
+    }
+    0
+}
+
 /// 从 `state.todo.scroll()` 起按每条目的实际视觉行高向下排布，直到列表底边。
 ///
 /// 只读状态：无 IO、无副作用；渲染与命中共用同一份几何，避免「看到」与「点到」错位。
@@ -313,13 +361,19 @@ fn edit_rows(edit: &TodoEdit, text_width: usize) -> u16 {
     if edit.input.text().is_empty() && edit.target.is_none() {
         return 1;
     }
-    let view = widgets::input::multiline_view(
+    let view = edit_view(edit, text_width);
+    rows_of(view.visible_lines.len())
+}
+
+/// 编辑现场的多行输入视口（复用 `edit.scroll_row` 保持滑动窗口稳定）。
+fn edit_view(edit: &TodoEdit, text_width: usize) -> widgets::input::MultilineInputView<'_> {
+    widgets::input::multiline_view_scrolled(
         edit.input.text(),
         edit.input.cursor(),
         text_width,
         MAX_TODO_ITEM_ROWS,
-    );
-    rows_of(view.visible_lines.len())
+        edit.scroll_row,
+    )
 }
 
 /// 视觉行数钳制到 `1..=MAX_TODO_ITEM_ROWS`。
@@ -388,13 +442,56 @@ pub fn edit_input_char_at(panel: Rect, state: &AppState, column: u16, row: u16) 
     if column < layout.text_x || column >= layout.list.right() {
         return None;
     }
-    Some(widgets::input::multiline_char_index_at(
+    Some(widgets::input::multiline_char_index_at_scrolled(
         edit.input.text(),
         edit.input.cursor(),
         layout.text_width,
         MAX_TODO_ITEM_ROWS,
+        edit.scroll_row,
         usize::from(row - item.y),
         column - layout.text_x,
+    ))
+}
+
+/// 拖拽选区时将鼠标坐标钳制到正在编辑的 Todo 文本区边界并换算为全文字符索引。
+///
+/// 行号钳制到该编辑项的可见行范围 `[item.y, item.y + item.rendered_rows - 1]`，
+/// 列号落入左侧 9 列缩进区时钳为 `0`（行首），越过列表右缘时钳为 `u16::MAX`（行尾）。
+pub fn edit_input_drag_char_at(
+    panel: Rect,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let edit = state.todo.editing()?;
+    let display = match &edit.target {
+        None => edit.at,
+        Some(id) => state.todo.items().iter().position(|item| item.id == *id)?,
+    };
+    let layout = layout_visible_items(panel, state);
+    let item = layout.items.iter().find(|item| item.display == display)?;
+    if item.rendered_rows == 0 || layout.list.right() <= layout.text_x {
+        return None;
+    }
+    let clamped_row = row.clamp(
+        item.y,
+        item.y.saturating_add(item.rendered_rows.saturating_sub(1)),
+    );
+    let rel_col = if column < layout.text_x {
+        0
+    } else if column >= layout.list.right() {
+        u16::MAX
+    } else {
+        column - layout.text_x
+    };
+    Some(widgets::input::multiline_char_index_at_scrolled(
+        edit.input.text(),
+        edit.input.cursor(),
+        layout.text_width,
+        MAX_TODO_ITEM_ROWS,
+        edit.scroll_row,
+        usize::from(clamped_row - item.y),
+        rel_col,
     ))
 }
 
@@ -409,12 +506,14 @@ pub fn scrollbar(panel: Rect, state: &AppState) -> Option<widgets::scrollbar::Sc
     }
     let list = effective_list_rect(panel, state);
     let slot = Rect::new(list.right(), list.y, 1, list.height);
-    widgets::scrollbar::layout(
-        slot,
-        state.todo.display_len(),
-        visible_rows_for(panel, state),
-        state.todo.scroll(),
-    )
+    let (visible, item_rows, _) = viewport_metrics(panel, state);
+    let max_scroll = max_scroll_for(visible, &item_rows);
+    let total = if max_scroll > 0 {
+        visible.saturating_add(max_scroll)
+    } else {
+        0
+    };
+    widgets::scrollbar::layout(slot, total, visible, state.todo.scroll())
 }
 
 /// 状态框文案。
@@ -685,7 +784,7 @@ fn editing_row<'a>(state: &'a AppState, record: &TodoRecord) -> Option<&'a TodoE
 
 /// 绘制行内编辑：1~3 行软折行、续行与正文左对齐，并返回硬件光标坐标。
 ///
-/// 与行内多行输入共用 `widgets::input::multiline_view` 的视口与光标算法。
+/// 与行内多行输入共用 `widgets::input::multiline_view_scrolled` 的视口与光标算法。
 fn render_edit_item(
     buf: &mut Buffer,
     layout: &VisibleList,
@@ -694,6 +793,9 @@ fn render_edit_item(
 ) -> Option<(u16, u16)> {
     let list = layout.list;
     let text_x = layout.text_x;
+    if list.right() <= text_x {
+        return None;
+    }
     let text = edit.input.text();
     if text.is_empty() && edit.target.is_none() {
         write_string_in(
@@ -706,12 +808,7 @@ fn render_edit_item(
         );
         return Some((text_x.min(list.right().saturating_sub(1)), item.y));
     }
-    let view = widgets::input::multiline_view(
-        text,
-        edit.input.cursor(),
-        layout.text_width,
-        MAX_TODO_ITEM_ROWS,
-    );
+    let view = edit_view(edit, layout.text_width);
     for (offset, line) in view
         .visible_lines
         .iter()

@@ -843,12 +843,13 @@ pub fn apply_todo_button(state: &mut AppState, button: TodoButton) -> bool {
     changed
 }
 
-/// 每轮绘制前把 Todo 列表的可见行数落状态（键盘移动/删除后的视口钳制与滚入）。
+/// 每轮绘制前把 Todo 列表的可见行数、各条目视觉行高与多行编辑视口起点同步落状态。
 ///
 /// `app/` 拿不到布局，几何只有渲染层一个来源；这里只做一次纯算术。
 pub fn resolve_todo_viewport(state: &mut AppState, panel: ratatui::layout::Rect) -> bool {
-    let rows = crate::ui::right_panel::todo::visible_rows_for(panel, state);
-    state.todo.set_viewport_rows(rows)
+    let (rows, item_rows, edit_scroll_row) =
+        crate::ui::right_panel::todo::viewport_metrics(panel, state);
+    state.todo.sync_viewport(rows, item_rows, edit_scroll_row)
 }
 
 #[cfg(test)]

@@ -86,11 +86,13 @@ pub struct WrappedLine<'a> {
     pub end_char: usize,
 }
 
-/// 多行输入视口：可见视觉行、光标相对可见首行的偏移及光标列。
+/// 多行输入视口：可见视觉行、窗口起始行、光标相对可见首行的偏移及光标列。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultilineInputView<'a> {
     /// 当前视口可见的 `1..=max_rows` 行。
     pub visible_lines: Vec<WrappedLine<'a>>,
+    /// 当前可见窗口在全部折行中的起始行号。
+    pub start_row: usize,
     /// 光标相对于可见首行的行偏移（`0..visible_lines.len()`）。
     pub cursor_row_offset: u16,
     /// 光标在当前视觉行内的显示列偏移。
@@ -120,18 +122,37 @@ pub fn multiline_view(
     width: usize,
     max_rows: usize,
 ) -> MultilineInputView<'_> {
+    multiline_view_scrolled(text, cursor, width, max_rows, 0)
+}
+
+/// 计算带既有滚动行偏移 `scroll_row` 的多行输入视口。
+///
+/// 仅当光标滚出 `[scroll_row, scroll_row + max_rows)` 时才上下推动窗口，
+/// 避免在超 `max_rows` 行编辑中点击视口首行导致视口跳回第 0 行。
+pub fn multiline_view_scrolled(
+    text: &str,
+    cursor: usize,
+    width: usize,
+    max_rows: usize,
+    scroll_row: usize,
+) -> MultilineInputView<'_> {
+    let width = width.max(1);
     let max_rows = max_rows.max(1);
-    let lines = wrapped_lines(text, width.max(1));
+    let lines = wrapped_lines(text, width);
     let (cursor_row, cursor_col) = cursor_position(&lines, cursor);
     let visible_count = lines.len().clamp(1, max_rows);
-    let start_row = if cursor_row >= visible_count {
-        cursor_row + 1 - visible_count
-    } else {
-        0
-    };
+    let max_start = lines.len().saturating_sub(visible_count);
+    let mut start_row = scroll_row.min(max_start);
+    if cursor_row < start_row {
+        start_row = cursor_row;
+    } else if cursor_row >= start_row + visible_count {
+        start_row = cursor_row + 1 - visible_count;
+    }
+    start_row = start_row.min(max_start);
     let end_row = start_row.saturating_add(visible_count).min(lines.len());
     MultilineInputView {
         visible_lines: lines[start_row..end_row].to_vec(),
+        start_row,
         cursor_row_offset: u16::try_from(cursor_row.saturating_sub(start_row)).unwrap_or(u16::MAX),
         cursor_col: u16::try_from(cursor_col).unwrap_or(u16::MAX),
     }
@@ -146,11 +167,28 @@ pub fn multiline_char_index_at(
     visual_row_offset: usize,
     rel_col: u16,
 ) -> usize {
-    let view = multiline_view(text, cursor, width, max_rows);
+    multiline_char_index_at_scrolled(text, cursor, width, max_rows, 0, visual_row_offset, rel_col)
+}
+
+/// 在给定 `scroll_row` 的多行视口下，将视觉行偏移与列偏移换算回全文字符索引。
+pub fn multiline_char_index_at_scrolled(
+    text: &str,
+    cursor: usize,
+    width: usize,
+    max_rows: usize,
+    scroll_row: usize,
+    visual_row_offset: usize,
+    rel_col: u16,
+) -> usize {
+    let view = multiline_view_scrolled(text, cursor, width, max_rows, scroll_row);
     let Some(line) = view.visible_lines.get(visual_row_offset) else {
         return view.visible_lines.last().map_or(0, |line| line.end_char);
     };
     let target_col = usize::from(rel_col);
+    let line_width: usize = line.text.chars().map(char_cells).sum();
+    if target_col >= line_width {
+        return line.end_char;
+    }
     let mut current_col = 0usize;
     for (index, ch) in line.text.chars().enumerate() {
         let cells = char_cells(ch);
@@ -219,6 +257,13 @@ fn wrapped_lines(text: &str, width: usize) -> Vec<WrappedLine<'_>> {
                 start_char,
                 end_char: char_index,
             });
+            if width > 1 && col == width {
+                lines.push(WrappedLine {
+                    text: "",
+                    start_char: char_index,
+                    end_char: char_index,
+                });
+            }
             start_byte = byte + ch.len_utf8();
             start_char = char_index + 1;
             char_index += 1;
@@ -244,6 +289,13 @@ fn wrapped_lines(text: &str, width: usize) -> Vec<WrappedLine<'_>> {
         start_char,
         end_char: char_index,
     });
+    if width > 1 && col == width {
+        lines.push(WrappedLine {
+            text: "",
+            start_char: char_index,
+            end_char: char_index,
+        });
+    }
     lines
 }
 

@@ -316,11 +316,21 @@ pub fn clear_selection(state: &mut AppState) {
     state.lx_history_scroll_drag = None;
     state.task_agents_scroll_drag = None;
     state.lx_input_drag = None;
+    state.ask_input_drag = None;
+    state.todo_input_drag = false;
+    if let Some(input) = state.todo.edit_input_mut() {
+        input.clear_selection();
+    }
     for workspace in &mut state.workspaces {
         for tab in &mut workspace.tabs {
             for id in tab.layout.pane_ids() {
                 if let Some(target) = tab.pane_mut(id) {
                     target.lx.clear_text_selection();
+                    if let Some(ask) = target.lx.ask.as_mut()
+                        && let Some(editor) = ask.editor_mut()
+                    {
+                        editor.clear_text_selection();
+                    }
                 }
             }
         }

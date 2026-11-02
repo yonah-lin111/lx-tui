@@ -38,6 +38,24 @@ fn task_active_len(state: &AppState, pane: PaneId) -> usize {
         .unwrap_or(0)
 }
 
+/// 键盘 `↑`/`↓` 切换高亮子 agent 后，与鼠标点选一致重置详情跟随与滚动。
+fn reset_active_agent_follow(state: &mut AppState, pane: PaneId) {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return;
+    };
+    let Some(page) = target.lx.task.as_ref() else {
+        return;
+    };
+    if page.tab != crate::app::state::TaskTab::Agents {
+        return;
+    }
+    let active = page.agents_window.active;
+    if let Some(run) = target.lx.agents.runs.get_mut(active) {
+        run.follow = true;
+        run.scroll = usize::MAX;
+    }
+}
+
 pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command: LxInput) {
     // `PageUp`/`PageDown`：翻输出区（`↑`/`↓` 已经归任务列表高亮）。
     if let Some(delta) = task_output_delta(command) {
@@ -73,6 +91,7 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
                 .and_then(|target| target.lx.task.as_mut())
                 .is_some_and(|page| page.move_active_len(len, -1));
             if moved {
+                reset_active_agent_follow(state, pane);
                 crate::app::update::clear_lx_selection_for(state, pane);
             } else {
                 chat::close_task_page(state, pane);
@@ -85,6 +104,7 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
                 .and_then(|target| target.lx.task.as_mut())
                 .is_some_and(|page| page.move_active_len(len, 1));
             if moved {
+                reset_active_agent_follow(state, pane);
                 crate::app::update::clear_lx_selection_for(state, pane);
             }
         }

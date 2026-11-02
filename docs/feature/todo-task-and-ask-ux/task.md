@@ -13,11 +13,11 @@
 - [x] **0.2 Grill Me 边界盘问（共 7 轮全部确认）**：
   - [x] Q1：确认 Todo 条目最多显示 3 行、续行 9 列缩进对齐、第 3 行末 `…` 截断、整块高亮底色，以及行内编辑 1~3 行软折行与视口内滚动。
   - [x] Q2：确认后台任务面板「回到底部」按钮同时覆盖 `Processes` 与 `Agents` 两个 Tab，复用 `chat_bar` 位置与样式，点击回到最底部并恢复跟随。
-  - [x] Q3：确认 Ask 面板取消左右分栏、选项描述缩进 6 列完整换行、`preview` 移至所有选项正下方且无 `preview` 时完全隐藏（不显示 `(no preview)`）。
-  - [x] Q4：确认单选移除提交按钮（点击或回车直接选中提交/下一题），多选显示弹窗同款实心胶囊按钮 ` ↵ submit `（`button_primary` / `button_secondary`）。
-  - [x] Q5：确认 Ask 自定义输入（`Other...`）移除底部独立编辑框，原地变为 6 列缩进的 1~3 行行内输入框。
-  - [x] Q6：确认 Ask 面板仅保留 `↑`/`↓` 键切换 item、移除多题 `Confirm` 汇总 Tab、多题时在最后一题底部显示提交按钮，且多选/末题需聚焦提交按钮按 `Enter`（或点击按钮）才提交。
-  - [x] Q7：确认 Ask 期间隐藏 `chat_bar` loading 与计时、停止历史步骤方块呼吸，并在 Ask 结束/取消时将等待耗时补偿进 `turn_started_at_ms`。
+  - [x] Q3：确认 Ask 面板取消左右分栏、选项描述缩进 6 列完整换行、`preview` 移至所有选项正下方且共用面板右侧唯一一条滚动条（无 `preview` 时完全隐藏，不显示 `(no preview)`）。
+  - [x] Q4：确认所有题目（单选/多选）与 `Submit` 汇总页均移除行内提交按钮，直接使用键盘操作；单题单选点击或回车直接选中提交，多题或单题多选通过 `Submit` 汇总 Tab 按 `Enter` 提交。
+  - [x] Q5：确认 Ask 自定义输入（`Other...`）移除底部独立编辑框，原地变为 6 列缩进的 1~3 行行内输入框；高亮在 `Other...` 时键入任意字符（含数字 `1..9`）自动进入行内编辑。
+  - [x] Q6：确认 Ask 面板对齐 `opencode-dev`：单题单选无顶部 Tab，多题或单题多选显示 `1 题一  2 题二  Submit` Tab 栏，支持 `←`/`→`、`Tab`/`Shift+Tab` 循环切换与 `↑`/`↓`、`1..9` 选项导航。
+  - [x] Q7：确认 Ask 期间隐藏 `chat_bar` loading 与计时、停止历史步骤方块呼吸，并在 Ask 结束/取消及会话重载时将等待耗时从轮次耗时中剔除。
 - [x] **0.3 编写设计文档与任务文档**：输出 `docs/feature/todo-task-and-ask-ux/design.md` 与 `docs/feature/todo-task-and-ask-ux/task.md`。
 
 ---
@@ -94,12 +94,12 @@
   - 在 `submit_all` 与 `event::chat::ask::clear` 中，将 `now_ms() - ask.started_at_ms` 累加补偿进 `turn_started_at_ms`。
 
 - [x] **3.5 Ask 单元测试与回归测试更新（`src/ui/main_content/lx/ask/tests.rs`、`src/app/update/chat/tests/ask.rs`、`src/app/state/lx/ask/tests.rs`）**
-  - 更新既有测试以匹配移除 `Confirm` Tab、仅 `↑`/`↓` 切项、单选无 Submit 按钮、多选/末题聚焦 Submit 按钮提交、原地行内编辑、Preview 置底及暂停计时的最新行为。
+  - 更新既有测试以匹配对齐 `opencode-dev` 的 `Submit` 汇总 Tab、无行内提交按钮、原地行内 `Other...` 编辑（含数字直打与折行同源）、Preview 置底共用统一滚动条及暂停计时的最新行为。
 
 ---
 
-### 阶段 4：规范文档同步与全链路精确验证
+### 阶段 4：规范文档同步、Code Review 与全链路修复验证
 - [x] **4.1 同步更新 `docs/standards/tui-design-requirements.md`**
-- [x] **4.2 执行代码格式化检查**：`rtk cargo fmt --check`
-- [x] **4.3 执行 Clippy 静态检查**：`rtk cargo clippy --all-targets -- -D warnings`
-- [x] **4.4 执行针对性测试套件**：`rtk cargo test todo`、`rtk cargo test ask`、`rtk cargo test chat_bar`、`rtk cargo test task`
+- [x] **4.2 输出代码审查报告 `docs/feature/todo-task-and-ask-ux/review.md`（按 P0 ~ P2 排序）**
+- [x] **4.3 按 `review.md` 逐项修复 P0 ~ P2 问题并拆分超限文件**
+- [x] **4.4 执行代码格式化、Clippy 静态检查与全量测试套件验证**

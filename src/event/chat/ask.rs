@@ -57,15 +57,16 @@ pub(crate) fn request(
         return false;
     }
     let mut ask = AskState::new(key.clone(), call_id.clone(), questions);
-    // 先给一个近似宽度（输入框宽度减去面板内缩），**首帧绘制前**由 `resize_panes`
-    // 用 `layout::lx_ask_editor_size` 换成精确值（它还要扣窗格 margin）。两处相差
-    // 最多两列，只影响创建到首次 resize 之间，用户看不到。
-    ask.resize_editor(
-        pane.lx
-            .input_width()
-            .saturating_sub(crate::layout::LX_ASK_EDITOR_INSET),
-        crate::layout::LX_ASK_EDITOR_ROWS,
-    );
+    // 按面板全宽（输入框内容宽补回前缀与滚动条列）扣掉 6 列行前缀初始化编辑框宽度，
+    // 绘制前再由布局按是否出现滚动条同步精确值。
+    let editor_width = pane
+        .lx
+        .input_width()
+        .saturating_add(crate::layout::LX_INPUT_PREFIX)
+        .saturating_add(crate::layout::LX_INPUT_SCROLLBAR)
+        .saturating_sub(crate::layout::LX_ASK_EDITOR_INSET)
+        .max(1);
+    ask.resize_editor(editor_width, crate::layout::LX_ASK_EDITOR_ROWS);
     pane.lx.ask = Some(ask);
     streams.asks.insert(key, PendingAsk { call_id, reply });
     true

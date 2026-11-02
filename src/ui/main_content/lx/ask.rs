@@ -14,15 +14,14 @@
 //!       推荐项，描述按全宽自动换行，续行缩进 6 列。
 //!   ( ) 单栏
 //!   ( ) Other...                       ← 激活后原地变成 1~3 行输入框
-//!        ↵ submit                      ← 多选 / Submit 汇总
 //!                                      ← 空行
 //!   ┌──┬──┐                             ← 角色画预览与选项共用同一个滚动列表
 //!   │a │b │
 //!   └──┴──┘
-//! ⇆ tab · ↑↓ select · ↵ submit                esc cancel
+//! ⇆ tab · ↑↓ select · ↵ confirm               esc cancel
 //! ```
 //!
-//! `Submit` 汇总 tab 用问答回顾行替代选项，并同样以 ` ↵ submit ` 胶囊收尾。
+//! `Submit` 汇总 tab 用问答回顾行替代选项，按 `Enter` 直接提交（无行内提交按钮）。
 //! 内容超过「窗格高度 70%」时整块列表内部滚动（右侧**一个**滚动条），顶部 tab 始终保留。
 
 use ratatui::layout::Rect;
@@ -75,8 +74,10 @@ pub(super) struct AskLayout {
     /// 顶部可选中的题目 tab：`(题目下标, 矩形)`；`questions.len()` 是 `Submit` 汇总。
     tabs: Vec<(usize, Rect)>,
     question: Rect,
-    /// 统一可滚列表（选项 / Other / 提交按钮 / 预览 / 回顾），恒占满全宽。
+    /// 统一可滚列表（选项 / Other / 预览 / 回顾），恒占满全宽。
     options: Rect,
+    /// 列表行实际宽度（溢出出现滚动条时已扣减 1 列）。
+    row_width: u16,
     /// 列表区可视行（已按滚动窗口裁剪）。
     rows: Vec<VisualRow>,
     /// 列表内容总行数（滚动条用）。
@@ -100,6 +101,7 @@ impl AskLayout {
             tabs: Vec::new(),
             question: Rect::new(inner.x, inner.y, inner.width, 0),
             options: Rect::new(inner.x, inner.y, inner.width, 0),
+            row_width: inner.width,
             rows: Vec::new(),
             content_rows: 0,
             scroll: 0,
@@ -204,21 +206,70 @@ pub(crate) fn ask_editor_cell_at(
         .rows
         .iter()
         .find(|line| matches!(line.kind, RowKind::Other { .. }) && line.rect.contains(point))?;
-    let RowKind::Other { line } = target.kind else {
-        return None;
-    };
     let content_x = target.rect.x.saturating_add(ROW_PREFIX);
     if column < content_x {
         return None;
     }
+    let (visual_row, col) = ask_editor_drag_cell_at(area, lx, column, row)?;
+    Some((visual_row, u16::try_from(col).unwrap_or(u16::MAX)))
+}
+
+/// 拖拽选区时把鼠标坐标钳制到可见 `Other` 行与正文列范围 `[rect.x + ROW_PREFIX, rect.right()]`，
+/// 返回 `(visual_row, content_col)`。
+pub fn ask_editor_drag_cell_at(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+) -> Option<(usize, usize)> {
+    let ask = lx.ask.as_ref()?;
+    if !ask.editing {
+        return None;
+    }
+    let rect = rect(area, lx)?;
+    let lay = AskLayout::compute(rect, ask);
+    let first = lay
+        .rows
+        .iter()
+        .find(|line| matches!(line.kind, RowKind::Other { .. }))?;
+    let last = lay
+        .rows
+        .iter()
+        .rev()
+        .find(|line| matches!(line.kind, RowKind::Other { .. }))?;
+    let clamped_row = row.clamp(first.rect.y, last.rect.y);
+    let target = lay
+        .rows
+        .iter()
+        .find(|line| matches!(line.kind, RowKind::Other { .. }) && line.rect.y == clamped_row)?;
+    let RowKind::Other { line } = target.kind else {
+        return None;
+    };
+    let content_x = target.rect.x.saturating_add(ROW_PREFIX);
+    if target.rect.right() <= content_x {
+        return None;
+    }
+    let clamped_col = column.clamp(content_x, target.rect.right());
     let (start, _) = other_window(ask);
-    Some((start.saturating_add(line), column.saturating_sub(content_x)))
+    Some((
+        start.saturating_add(line),
+        usize::from(clamped_col.saturating_sub(content_x)),
+    ))
+}
+
+/// 行内 `Other` 输入框的精确正文列宽（已扣减 `ROW_PREFIX` 与右侧滚动条列）。
+pub fn editor_content_width(area: Rect, lx: &Lx) -> Option<u16> {
+    let ask = lx.ask.as_ref()?;
+    let rect = rect(area, lx)?;
+    let lay = AskLayout::compute(rect, ask);
+    Some(lay.row_width.saturating_sub(ROW_PREFIX).max(1))
 }
 
 /// 选项列表的 `(窗口起点, 总行数, 可视行数)`；面板未激活或无列表区返回 None。
 ///
 /// 与渲染共用 [`AskLayout::compute`] 的同一份几何，因此滚轮的基准与绘制永远一致。
 pub(super) fn list_window(area: Rect, lx: &Lx) -> Option<(usize, usize, usize)> {
+    let _ = editor_content_width(area, lx)?;
     let ask = lx.ask.as_ref()?;
     let rect = rect(area, lx)?;
     let lay = AskLayout::compute(rect, ask);
@@ -320,7 +371,7 @@ fn draw_question(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
     }
 }
 
-/// 列表：选项（标签 + 完整折行描述）/ 原地 Other / 提交按钮 / 预览 / 回顾。
+/// 列表：选项（标签 + 完整折行描述）/ 原地 Other / 预览 / 回顾。
 ///
 /// 行宽已在 [`place_rows`] 里统一收窄过：内容溢出时右侧让出一列给滚动条，
 /// `▐` 绝不压住文本的最后一格。
@@ -501,24 +552,25 @@ fn draw_other(grid: &mut Grid, rect: Rect, ask: &AskState, line: usize) {
     }
 }
 
-/// 行内编辑光标：`(行, 列)` 绝对坐标；未聚焦或未编辑返回 None。
+/// 行内编辑光标：`(行, 列)` 绝对坐标；未聚焦、未编辑或光标所在行已滚出视口返回 None。
 fn cursor_cell(lay: &AskLayout, ask: &AskState, focused: bool) -> Option<(u16, u16)> {
     if !focused || !ask.editing {
         return None;
     }
-    let target = lay
-        .rows
-        .iter()
-        .find(|line| matches!(line.kind, RowKind::Other { line: 0 }))?;
     let editor = ask.editor()?;
     let (start, _) = other_window(ask);
     let (cursor_row, cursor_col) = editor.cursor_visual();
-    let line = u16::try_from(cursor_row.saturating_sub(start)).unwrap_or(u16::MAX);
-    let y = target.rect.y.saturating_add(line);
-    let x = target
-        .rect
-        .x
-        .saturating_add(ROW_PREFIX)
+    let line = cursor_row.checked_sub(start)?;
+    let target = lay
+        .rows
+        .iter()
+        .find(|row| matches!(row.kind, RowKind::Other { line: l } if l == line))?;
+    let content_x = target.rect.x.saturating_add(ROW_PREFIX);
+    if target.rect.right() <= content_x {
+        return None;
+    }
+    let y = target.rect.y;
+    let x = content_x
         .saturating_add(u16::try_from(cursor_col).unwrap_or(u16::MAX))
         .min(target.rect.right().saturating_sub(1));
     Some((y, x))
@@ -777,19 +829,14 @@ fn other_text(ask: &AskState) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// 行内输入框的可见窗口：`(起始视觉行, 可见行数)`；光标始终落在窗口内。
+/// 行内输入框的可见窗口：`(起始视觉行, 可见行数)`；复用编辑器的 3 行滑动视口。
 fn other_window(ask: &AskState) -> (usize, usize) {
     let Some(editor) = ask.editor() else {
         return (0, 1);
     };
     let total = editor.visual_rows().len().max(1);
     let visible = total.clamp(1, AskState::MAX_OTHER_EDIT_ROWS);
-    let (cursor_row, _) = editor.cursor_visual();
-    let start = if cursor_row >= visible {
-        cursor_row + 1 - visible
-    } else {
-        0
-    };
+    let start = editor.scroll().min(total.saturating_sub(visible));
     (start, visible)
 }
 
@@ -816,6 +863,7 @@ fn place_rows(lay: &mut AskLayout, ask: &AskState) {
         width = width.saturating_sub(1);
         model = rows_model(ask, width);
     }
+    lay.row_width = width;
     let total = model.len();
     lay.content_rows = total;
     if visible == 0 || total == 0 {

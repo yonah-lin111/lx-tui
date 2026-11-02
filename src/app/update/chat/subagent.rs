@@ -782,15 +782,19 @@ pub fn scroll_agents_detail(state: &mut AppState, pane: PaneId, delta: isize) ->
     let visible = run.visible.max(1);
     let max = run.total_rows.saturating_sub(visible);
     let current = if run.follow { max } else { run.scroll.min(max) };
-    let next = (current as isize)
+    let mut next = (current as isize)
         .saturating_add(delta)
         .clamp(0, max as isize) as usize;
-    let moved = next != current || (run.follow && next < max);
+    if delta > 0 && next.saturating_add(1) >= max {
+        next = max;
+    }
+    let next_follow = next >= max;
+    let moved = next != current || run.follow != next_follow;
     if !moved {
         return false;
     }
     run.scroll = next;
-    run.follow = next >= max;
+    run.follow = next_follow;
     true
 }
 

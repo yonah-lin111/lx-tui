@@ -199,6 +199,52 @@ fn multiline_char_index_at_uses_visible_window() {
 }
 
 #[test]
+fn multiline_view_wraps_full_width_line_end_cursor_to_next_row() {
+    // 满宽行末尾（ASCII 与 CJK）光标软折到下一视觉行首列，避免与末字符重叠。
+    let ascii = multiline_view("abcde", 5, 5, 3);
+    assert_eq!(ascii.visible_lines.len(), 2);
+    assert_eq!(ascii.visible_lines[0].text, "abcde");
+    assert_eq!(ascii.visible_lines[1].text, "");
+    assert_eq!(ascii.cursor_row_offset, 1);
+    assert_eq!(ascii.cursor_col, 0);
+
+    let cjk = multiline_view("中文字", 3, 6, 3);
+    assert_eq!(cjk.visible_lines.len(), 2);
+    assert_eq!(cjk.cursor_row_offset, 1);
+    assert_eq!(cjk.cursor_col, 0);
+
+    // 拖选/点击越过满宽行右缘时可到达 `line.end_char` 覆盖末字符。
+    assert_eq!(multiline_char_index_at("abcde", 0, 5, 3, 0, 5), 5);
+    assert_eq!(multiline_char_index_at("中文字", 0, 6, 3, 0, 6), 3);
+}
+
+#[test]
+fn multiline_view_scrolled_keeps_window_stable_when_clicking_top_visible_row() {
+    // 4 行文本（每行 3 列），当 `scroll_row = 1` 显示第 1..=3 行时，
+    // 点击可见第 0 行（全文第 1 行，cursor = 4）不应把 `start_row` 跳回 0。
+    let text = "abcdefghij";
+    let initial = multiline_view_scrolled(text, 9, 3, 3, 0);
+    assert_eq!(initial.start_row, 1);
+    assert_eq!(initial.cursor_row_offset, 2);
+
+    let clicked_char = multiline_char_index_at_scrolled(text, 9, 3, 3, initial.start_row, 0, 1);
+    assert_eq!(clicked_char, 4, "可见首行第 1 列对应 'e'");
+
+    let after_click = multiline_view_scrolled(text, clicked_char, 3, 3, initial.start_row);
+    assert_eq!(
+        after_click.start_row, 1,
+        "点击可见首行后视口起点保持在 1，不跳回 0"
+    );
+    assert_eq!(after_click.cursor_row_offset, 0);
+    assert_eq!(after_click.cursor_col, 1);
+
+    // 继续上移光标到第 0 行（cursor = 1）时才上滚回 0。
+    let scrolled_up = multiline_view_scrolled(text, 1, 3, 3, after_click.start_row);
+    assert_eq!(scrolled_up.start_row, 0);
+    assert_eq!(scrolled_up.cursor_row_offset, 0);
+}
+
+#[test]
 fn render_with_selection_highlights_reversed() {
     let mut terminal = Terminal::new(TestBackend::new(20, 1)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| {

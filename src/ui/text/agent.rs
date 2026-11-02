@@ -434,9 +434,6 @@ pub const WAIT_REPORT: &str = "Report";
 pub const REPORT_LABEL: &str = "Report:";
 pub const AGENT_ID_LABEL: &str = "agent_id:";
 pub const PREVIOUS_STATUS_LABEL: &str = "previous:";
-/// 面板标题：`ASK 1/2 · 布局`。
-pub const ASK_TITLE: &str = "ASK";
-pub const ASK_TITLE_SEP: &str = " · ";
 /// 选项标记：单选圆点、多选方框、高亮前缀。
 pub const ASK_SINGLE_ON: &str = "(•)";
 pub const ASK_SINGLE_OFF: &str = "( )";
@@ -477,9 +474,4 @@ pub fn ask_question_prefix(index: usize) -> String {
 /// 问答对的答案前缀（1-based）：`A1: `。
 pub fn ask_answer_prefix(index: usize) -> String {
     format!("A{}: ", index.saturating_add(1))
-}
-
-/// 面板标题位置：`1/2`。
-pub fn ask_position(current: usize, total: usize) -> String {
-    format!("{}/{total}", current + 1)
 }

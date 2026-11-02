@@ -270,19 +270,25 @@ pub(crate) fn handle_mouse_drag(
             .lx_selection
             .is_none_or(|selection| !selection.is_dragging())
         && state.lx_input_drag.is_none()
+        && !state.todo_input_drag
+        && state.ask_input_drag.is_none()
         && let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row)
         && forward_pane_mouse_event(state, sessions, pane, inner, mouse)
     {
         *dirty = true;
         return;
     }
-    if state.todo_input_drag
-        && let Some(char_idx) =
-            ui::right_panel::todo::edit_input_char_at(view.prompt, state, mouse.column, mouse.row)
-        && let Some(input) = state.todo.edit_input_mut()
-    {
-        input.drag_selection(char_idx);
-        *dirty = true;
+    if state.todo_input_drag {
+        if let Some(char_idx) = ui::right_panel::todo::edit_input_drag_char_at(
+            view.prompt,
+            state,
+            mouse.column,
+            mouse.row,
+        ) && let Some(input) = state.todo.edit_input_mut()
+        {
+            input.drag_selection(char_idx);
+            *dirty = true;
+        }
         return;
     }
     if let Some(pane) = state.ask_input_drag {
@@ -291,8 +297,12 @@ pub(crate) fn handle_mouse_drag(
         };
         let inner = layout::pane_inner_rect(*rect);
         if let Some(target) = state.pane_anywhere(pane)
-            && let Some((visual_row, col)) =
-                ui::main_content::lx::ask_editor_cell_at(inner, &target.lx, mouse.column, mouse.row)
+            && let Some((visual_row, col)) = ui::main_content::lx::ask_editor_drag_cell_at(
+                inner,
+                &target.lx,
+                mouse.column,
+                mouse.row,
+            )
             && let Some(target_mut) = state.pane_mut_anywhere(pane)
             && let Some(ask_mut) = target_mut.lx.ask.as_mut()
             && let Some(editor) = ask_mut.editor_mut()
@@ -486,6 +496,12 @@ pub(crate) fn handle_mouse_up_left(
     // 没有本地选区时，鼠标上报模式的应用自己处理释放（对齐 herdr）。
     if state.terminal_selection.is_none()
         && state.selection.is_none()
+        && !state.todo_input_drag
+        && state.ask_input_drag.is_none()
+        && state.lx_input_drag.is_none()
+        && state
+            .lx_selection
+            .is_none_or(|selection| !selection.is_dragging())
         && let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row)
         && forward_pane_mouse_event(state, sessions, pane, inner, mouse)
     {

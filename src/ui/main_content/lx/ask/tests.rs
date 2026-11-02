@@ -1,5 +1,5 @@
 //! `ask` 面板几何与绘制：无边框、70% 高度上限与滚动、描述完整折行、预览置底、
-//! 原地 Other 输入与弹窗胶囊提交按钮。
+//! 原地 Other 输入与 Submit 汇总回顾。
 
 use super::*;
 use crate::app::state::RequestKey;
@@ -645,5 +645,167 @@ fn preview_scrolls_together_with_the_options_through_the_same_viewport() {
         lx.ask.as_ref().expect("ask").highlight[0],
         0,
         "滚轮/翻页绝不动高亮"
+    );
+}
+
+#[test]
+fn ask_editor_width_matches_draw_other_content_width_without_clipping_line_ends() {
+    let mut lx = lx_with(sample());
+    let pane_rect = Rect::new(0, 0, 42, 30);
+    let area = crate::layout::pane_inner_rect(pane_rect);
+    let (editor_w, editor_rows) = crate::layout::lx_ask_editor_size(pane_rect);
+    assert_eq!(editor_rows, AskState::MAX_OTHER_EDIT_ROWS as u16);
+
+    let exact_w = editor_content_width(area, &lx).expect("editor content width");
+    assert_eq!(
+        editor_w, exact_w,
+        "lx_ask_editor_size 宽度必须与无滚动条时的 draw_other content_w 一致"
+    );
+
+    // 构造一段长度超过 1 行、恰好在第 1 行末尾落字符的文本，验证编辑态与提交后不丢字。
+    let first_line = "A".repeat(usize::from(exact_w));
+    let second_line = "TAIL";
+    let full = format!("{first_line}{second_line}");
+    {
+        let ask = lx.ask.as_mut().expect("ask");
+        ask.resize_editor(editor_w, editor_rows);
+        ask.begin_edit();
+        ask.editor_mut().expect("editor").insert_str(&full);
+    }
+
+    let lay = computed(&lx, area);
+    let other_rows: Vec<&VisualRow> = lay
+        .rows
+        .iter()
+        .filter(|row| matches!(row.kind, RowKind::Other { .. }))
+        .collect();
+    assert_eq!(other_rows.len(), 2);
+    assert_eq!(other_rows[0].rect.width.saturating_sub(ROW_PREFIX), exact_w);
+
+    let grid = paint(&lx, area);
+    let mut rendered = String::new();
+    for row in &other_rows {
+        let line = row_text(&grid, area, row.rect.y);
+        let content: String = line
+            .chars()
+            .skip(usize::from(row.rect.x - area.x + ROW_PREFIX))
+            .take(usize::from(exact_w))
+            .collect();
+        rendered.push_str(content.trim_end());
+    }
+    assert_eq!(
+        rendered, full,
+        "行内 Other 编辑态不得裁掉折行行尾的任何字符"
+    );
+}
+
+#[test]
+fn clicking_top_visible_line_of_four_line_other_keeps_sliding_window_stable() {
+    let mut lx = lx_with(sample());
+    let area = surface(60, 30);
+    let content_w = editor_content_width(area, &lx).expect("content width");
+    {
+        let ask = lx.ask.as_mut().expect("ask");
+        ask.resize_editor(content_w, 3);
+        ask.begin_edit();
+        ask.editor_mut()
+            .expect("editor")
+            .insert_str("row0\nrow1\nrow2\nrow3");
+    }
+    assert_eq!(other_window(lx.ask.as_ref().expect("ask")), (1, 3));
+
+    let lay = computed(&lx, area);
+    let top_other = lay
+        .rows
+        .iter()
+        .find(|row| matches!(row.kind, RowKind::Other { line: 0 }))
+        .expect("top visible other row");
+    let (visual_row, col) = ask_editor_cell_at(
+        area,
+        &lx,
+        top_other.rect.x + ROW_PREFIX + 1,
+        top_other.rect.y,
+    )
+    .expect("hit top visible other row");
+    assert_eq!(visual_row, 1, "顶部可见行对应第 1 个视觉行");
+
+    {
+        let editor = lx.ask.as_mut().expect("ask").editor_mut().expect("editor");
+        editor.begin_text_selection(visual_row, col);
+    }
+    assert_eq!(
+        other_window(lx.ask.as_ref().expect("ask")),
+        (1, 3),
+        "点击可见顶行后滑动窗口起点保持为 1，不得跳回 0"
+    );
+}
+
+#[test]
+fn cursor_cell_never_lands_on_footer_and_drag_cell_clamps_to_other_bounds() {
+    let mut q = question(
+        "q",
+        false,
+        (0..5)
+            .map(|i| option(&format!("o{i}"), "desc", None))
+            .collect(),
+    );
+    q.options[0].preview = Some("p1\np2\np3\np4\np5".into());
+    let mut lx = lx_with(vec![q]);
+    let area = surface(60, 14);
+    let content_w = editor_content_width(area, &lx).expect("content width");
+    {
+        let ask = lx.ask.as_mut().expect("ask");
+        ask.resize_editor(content_w, 3);
+        ask.begin_edit();
+        ask.editor_mut().expect("editor").insert_str("line0\nline1");
+    }
+    // 手动设置显式视口，使 Other 只有 line: 0 落在列表底行，line: 1（光标所在行）在视口外。
+    let lay = computed(&lx, area);
+    let visible = usize::from(lay.options.height);
+    let other0_idx = rows_model(lx.ask.as_ref().expect("ask"), lay.row_width)
+        .iter()
+        .position(|kind| matches!(kind, RowKind::Other { line: 0 }))
+        .expect("other0");
+    let start = (other0_idx + 1).saturating_sub(visible);
+    lx.ask.as_mut().expect("ask").viewport = Some(start);
+    let lay = computed(&lx, area);
+    let cursor = cursor_cell(&lay, lx.ask.as_ref().expect("ask"), true);
+    assert!(
+        cursor.is_none_or(|(y, _)| y < lay.footer.y),
+        "光标绝不能越界画在底栏 footer 上：{cursor:?} vs footer.y={}",
+        lay.footer.y
+    );
+
+    // 恢复跟随视口后测试 ask_editor_drag_cell_at 的行列钳制。
+    lx.ask.as_mut().expect("ask").viewport = None;
+    let lay = computed(&lx, area);
+    let first_other = lay
+        .rows
+        .iter()
+        .find(|row| matches!(row.kind, RowKind::Other { line: 0 }))
+        .expect("first other");
+    let last_other = lay
+        .rows
+        .iter()
+        .rev()
+        .find(|row| matches!(row.kind, RowKind::Other { .. }))
+        .expect("last other");
+    assert_eq!(
+        ask_editor_drag_cell_at(area, &lx, 0, 0),
+        Some((0, 0)),
+        "拖到左上方越界时应钳制到首个可见 Other 行首列"
+    );
+    assert_eq!(
+        ask_editor_drag_cell_at(area, &lx, 999, 999),
+        Some((
+            1,
+            usize::from(
+                last_other
+                    .rect
+                    .right()
+                    .saturating_sub(first_other.rect.x + ROW_PREFIX)
+            )
+        )),
+        "拖到右下方越界时应钳制到末个可见 Other 行右缘"
     );
 }

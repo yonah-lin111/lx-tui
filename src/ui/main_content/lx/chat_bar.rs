@@ -113,7 +113,7 @@ pub(crate) fn jump_bottom_rect(area: Rect, lx: &Lx) -> Option<Rect> {
 /// 此时为 None，只有 `ask` 矩形）。
 fn bar_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     let layout = super::layout(area, lx);
-    rect(area, layout.input.or(layout.ask)?)
+    rect(area, layout.input.or(layout.ask).or(layout.task_list)?)
 }
 
 /// 栏内「回到底部」控件矩形（整体右对齐）。

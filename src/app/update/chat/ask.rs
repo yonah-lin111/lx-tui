@@ -7,8 +7,8 @@
 //! - **列表态**：`↑`/`↓` 循环移动高亮；`1..9` 直接选中并确认；在 `Other` 行直接
 //!   键入会就地开始编辑并写入首字符（`opencode` 的 custom 拦截器）。
 //! - **单选**：在选项上按 `Enter` 立即选中并完成本题（单题提交、多题进下一题）。
-//! - **多选**：选项只勾选，必须聚焦选项列表底部的 ` ↵ submit `（或 `Submit` tab）
-//!   才提交；`Space` 切换勾选。
+//! - **多选**：选项只勾选，切到顶部 `Submit` 汇总 tab 按 `Enter`/`Space` 才提交；
+//!   `Space` 切换勾选。
 //! - **提交**：未答完时给窗格内 toast，并跳到第一个未作答的题目。
 //!
 //! 两条硬约束：
@@ -99,8 +99,8 @@ fn type_key(state: &mut AppState, pane: PaneId, ch: char) -> bool {
         return false;
     }
     let on_other = ask.highlight.get(ask.current).copied().unwrap_or(0) == ask.other_row();
-    if on_other && !('1'..='9').contains(&ch) {
-        // 「其他」行直接键入即开始编辑：首字符不能丢，也不能先去按 Enter。
+    if on_other {
+        // 「其他」行直接键入即开始编辑（含 1..9 数字）：首字符不能丢，也不能误触选项快捷键。
         let Some(ask) = state
             .pane_mut_anywhere(pane)
             .and_then(|target| target.lx.ask.as_mut())
@@ -163,6 +163,7 @@ fn space(state: &mut AppState, pane: PaneId) -> bool {
             let current = ask.current;
             let next = !ask.custom_on.get(current).copied().unwrap_or(false);
             ask.custom_on[current] = next;
+            ask.viewport = None;
             return true;
         }
         return ask.begin_edit();
@@ -268,7 +269,11 @@ fn inserted_bytes(command: &LxInput) -> Option<usize> {
 /// `Tab`/`Shift+Tab` 与 `↑` 在首个视觉行都会先离开编辑框，再按 `opencode` 的
 /// 行为切 tab / 上移高亮；文本非空即提交（空文本视为放弃）。
 fn apply_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
-    match command {
+    let scrolled = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.ask.as_mut())
+        .is_some_and(|ask| ask.viewport.take().is_some());
+    let changed = match command {
         LxInput::Enter => commit_edit(state, pane),
         // Shift+Enter / Ctrl+Enter：换行。
         LxInput::Newline | LxInput::EnterFolder => editor_edit(state, pane, command),
@@ -283,7 +288,7 @@ fn apply_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) -> boo
                 .and_then(AskState::editor)
                 .is_some_and(|editor| editor.cursor_visual().0 == 0);
             if !at_top {
-                return editor_edit(state, pane, command);
+                return editor_edit(state, pane, command) || scrolled;
             }
             let left = leave_edit(state, pane);
             let moved = state
@@ -298,7 +303,8 @@ fn apply_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) -> boo
             .and_then(|target| target.lx.ask.as_mut())
             .is_some_and(AskState::cancel_edit),
         command => editor_edit(state, pane, command),
-    }
+    };
+    changed || scrolled
 }
 
 /// 把编辑类命令转发给手写缓冲。
@@ -386,6 +392,7 @@ pub fn apply_ask_paste(state: &mut AppState, pane: PaneId, text: &str) -> bool {
     if !ask.editing {
         return false;
     }
+    ask.viewport = None;
     let Some(editor) = ask.editor_mut() else {
         return false;
     };

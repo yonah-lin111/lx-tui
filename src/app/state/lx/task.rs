@@ -111,10 +111,6 @@ pub struct TaskPage {
     pub agents_window: PanelWindow,
     /// 一次性的 agent 定位请求（点击卡片链接时写入；列表回投后消费）。
     pub agents_focus: Option<String>,
-    /// Agents 详情区滚动偏移（渲染回写）。
-    pub agents_scroll: usize,
-    /// 是否跟随 Agents 详情区底部（用户上翻即停）。
-    pub agents_follow: bool,
 }
 
 impl TaskPage {
@@ -143,7 +139,12 @@ impl TaskPage {
             TaskTab::Agents => agents
                 .runs
                 .get(self.agents_window.active)
-                .is_none_or(|run| run.chat.messages.is_empty() || run.follow),
+                .is_none_or(|run| {
+                    run.chat.messages.is_empty()
+                        || run.follow
+                        || (run.visible > 0
+                            && run.scroll >= run.total_rows.saturating_sub(run.visible))
+                }),
         }
     }
 
@@ -242,14 +243,9 @@ impl TaskPage {
         window.active = next;
         window.anchor = next;
         window.viewport = None;
-        match tab {
+        if tab == TaskTab::Processes {
             // 换任务就把输出贴到尾部：用户点开/切到某条任务，关心的是它**最新**的输出。
-            TaskTab::Processes => self.pin_output_to_tail(),
-            // 子 agent 详情跟随最新消息，滚轮上翻后停跟。
-            TaskTab::Agents => {
-                self.agents_follow = true;
-                self.agents_scroll = usize::MAX;
-            }
+            self.pin_output_to_tail();
         }
         true
     }
@@ -303,7 +299,7 @@ impl TaskPage {
         let was_at_tail = self.output_scroll >= self.output_max_scroll();
         self.output_visible = visible;
         let max = self.output_max_scroll();
-        self.output_scroll = if was_at_tail {
+        self.output_scroll = if was_at_tail || self.output.len() <= visible.saturating_add(1) {
             max
         } else {
             self.output_scroll.min(max)
@@ -325,9 +321,12 @@ impl TaskPage {
     pub fn scroll_output(&mut self, delta: isize) -> bool {
         let max = self.output_max_scroll();
         let current = self.output_scroll.min(max);
-        let next = (current as isize)
+        let mut next = (current as isize)
             .saturating_add(delta)
             .clamp(0, max as isize) as usize;
+        if delta > 0 && next.saturating_add(1) >= max {
+            next = max;
+        }
         let moved = next != self.output_scroll;
         self.output_scroll = next;
         moved
