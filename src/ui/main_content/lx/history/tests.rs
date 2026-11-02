@@ -233,8 +233,8 @@ fn failed_message_shows_error_notice_with_code_at_bottom() {
     assert!(rows[0].contains("出错了"), "正文：{rows:?}");
     assert_eq!(rows[1], "", "与正文隔一行");
     assert_eq!(
-        rows[2], "● Failed",
-        "行首为圆点（文字类通知与步骤标记同款）"
+        rows[2], "◆ Failed",
+        "行首为菱形（系统事件通知与步骤标记同款）"
     );
     assert_eq!(rows[3], "  └─ http 503");
     assert!(
@@ -254,7 +254,7 @@ fn failed_message_without_code_uses_fallback_reason() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let rows: Vec<String> = (0..4).map(|row| row_text(&buf, area, row)).collect();
-    assert_eq!(rows[2], "● Failed");
+    assert_eq!(rows[2], "◆ Failed");
     assert_eq!(
         rows[3], "  └─ no error details provided",
         "无码时给一句话兜底"
@@ -274,7 +274,7 @@ fn interrupted_message_shows_warning_notice_above_stats_line() {
     let rows: Vec<String> = (0..6).map(|row| row_text(&buf, area, row)).collect();
     assert!(rows[0].contains("半截回答"), "正文：{rows:?}");
     assert_eq!(rows[1], "", "通知与正文隔一行");
-    assert_eq!(rows[2], "● Interrupted", "中断用黄色警告通知 + 圆点标记");
+    assert_eq!(rows[2], "◆ Interrupted", "中断用黄色警告通知 + 菱形标记");
     assert_eq!(
         rows[3], "  └─ interrupted before completion",
         "固定一句话原因"

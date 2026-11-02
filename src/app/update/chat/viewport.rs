@@ -394,9 +394,9 @@ fn toggle_report_card(
 
 /// 点击卡片（未拖动）：切换该块的折叠状态。
 ///
-/// 用户要求「点击折叠内容后展开，点击展开内容后重新折叠」：整张卡片都是点击面，
-/// 不再有单独的动作按钮，也没有 hover 高亮。与键盘入口（`^o` / `^t`）共用同一份
-/// 展开状态与视口锚定实现。
+/// 用户要求「点击折叠内容后展开，点击展开内容后重新折叠」：工具卡按块登记点击面，
+/// 系统事件只登记可折叠正文（标题与元信息不响应）；没有单独的动作按钮，也没有 hover
+/// 高亮。与键盘入口（`^o` / `^t`）共用同一份展开状态与视口锚定实现。
 pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) -> bool {
     let changed = match target {
         CardTarget::Tool {

@@ -24,6 +24,8 @@ pub(super) enum TimelineEntry {
         last: usize,
         count: usize,
     },
+    /// 正在执行的 compact 压缩请求（动态 loading 条目）。
+    RunningCompact,
 }
 
 /// 是否有可绘制的历史（消息为空但提示/检查点非空时仍显示历史，不退回欢迎页）。
@@ -123,6 +125,9 @@ pub(super) fn timeline(source: HistorySource<'_>) -> Vec<TimelineEntry> {
             last: switch_idx - 1,
             count,
         });
+    }
+    if source.compact.is_running() {
+        out.push(TimelineEntry::RunningCompact);
     }
     out
 }

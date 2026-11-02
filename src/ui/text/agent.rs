@@ -71,6 +71,8 @@ pub const STEP_MARK_DOT_FILLED: char = '●';
 pub const STEP_MARK_DOT_HOLLOW: char = '○';
 pub const STEP_MARK_TRIANGLE_FILLED: char = '▲';
 pub const STEP_MARK_TRIANGLE_HOLLOW: char = '△';
+pub const STEP_MARK_DIAMOND_FILLED: char = '◆';
+pub const STEP_MARK_DIAMOND_HOLLOW: char = '◇';
 pub const STEP_BREATH_TICKS: usize = 4;
 
 /// 真实工具步骤行的固定动词（设计 §10：`Read` / `Search` / `Edit` / `Write`）。

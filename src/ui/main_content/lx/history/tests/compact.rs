@@ -27,9 +27,9 @@ fn compact_only_history_stays_on_history_view() {
     assert!(view.total_rows > 0);
 }
 
-/// 折叠态：只画标题+描述两行，布局与渲染行数一致。
+/// 折叠态：元信息常显，短摘要按预览行展示（未超出预算时不登记点击面）。
 #[test]
-fn compact_entry_folds_to_header_rows() {
+fn compact_entry_folds_to_header_and_meta_rows() {
     let mut lx = Lx::new();
     lx.compact.replace(vec![checkpoint(1, true)]);
     let area = Rect::new(0, 0, 60, 10);
@@ -37,8 +37,9 @@ fn compact_entry_folds_to_header_rows() {
     let mut grid = Grid::new(area);
     let drawn = render(&mut grid, area, &lx, 0, &mut cache());
     assert_eq!(drawn, layout.total_rows, "布局与渲染行数必须一致");
-    // 标题 + 描述 + 末尾呼吸行（与其它历史条目同一口径）。
-    assert_eq!(layout.total_rows, 3, "折叠态只占标题+描述+呼吸行");
+    // 标题 + 模型 + 覆盖范围 + 摘要（1 行未超预算）+ 末尾呼吸行。
+    assert_eq!(layout.total_rows, 5, "折叠态只占标题+元信息+摘要+呼吸行");
+    assert!(layout.cards.is_empty(), "正文未超出折叠预算时不登记点击面");
     let text: String = (area.y..area.bottom())
         .map(|y| {
             (area.x..area.right())
@@ -47,27 +48,47 @@ fn compact_entry_folds_to_header_rows() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("-- Context compacted --"), "{text}");
-    assert!(text.contains("gpt-5"), "必须显示实际模型名：{text}");
+    assert!(text.contains("Context compacted"), "{text}");
+    assert!(text.contains('◆'), "系统事件包含菱形标记：{text}");
     assert!(
-        !text.contains("Condensed context"),
-        "默认折叠不得显示摘要正文：{text}"
+        text.contains("  ├─ model: gpt-5"),
+        "模型行挂在 `├─` 下：{text}"
+    );
+    assert!(
+        text.contains("  ├─ covered sequence 0"),
+        "覆盖范围默认可见：{text}"
+    );
+    assert!(
+        text.contains("  └─ Condensed context"),
+        "摘要节点由 `└─` 收口：{text}"
     );
 }
 
-/// 展开态：追加范围行与摘要正文，行数与渲染仍然一致。
+/// 长摘要折叠为预览 + 剩余行数；展开后铺开全部内容。
 #[test]
-fn compact_entry_expands_to_summary() {
+fn compact_content_folds_to_preview_and_expands() {
     let mut lx = Lx::new();
-    lx.compact.replace(vec![checkpoint(4, true)]);
-    lx.compact.toggle("compact-4");
-    let area = Rect::new(0, 0, 60, 14);
-    let layout = layout(area, &lx, &mut cache());
+    let mut notice = checkpoint(4, true);
+    notice.summary = "Condensed line one.\nLine two.\nLine three.\nLine four.".into();
+    lx.compact.replace(vec![notice]);
+    let area = Rect::new(0, 0, 60, 20);
+    let folded = layout(area, &lx, &mut cache()).total_rows;
     let mut grid = Grid::new(area);
     let drawn = render(&mut grid, area, &lx, 0, &mut cache());
-    assert_eq!(drawn, layout.total_rows, "展开后仍必须一致");
-    assert!(layout.total_rows > 2, "展开必须有更多行");
-    let text: String = (area.y..area.bottom())
+    assert_eq!(drawn, folded, "折叠态布局与渲染行数必须一致");
+    let hit = layout(area, &lx, &mut cache())
+        .cards
+        .first()
+        .cloned()
+        .expect("正文超出折叠预算时必须登记点击面");
+    assert!(hit.clickable);
+    assert_eq!(
+        hit.card.y,
+        area.y + 3,
+        "点击面必须从正文首行开始（标题+两行元信息之后），不是整卡"
+    );
+    assert_eq!(hit.card.height, 3, "点击面覆盖预览 2 行 + 折叠提示行");
+    let folded_text: String = (area.y..area.bottom())
         .map(|y| {
             (area.x..area.right())
                 .map(|x| grid.cell(x, y).ch)
@@ -75,22 +96,34 @@ fn compact_entry_expands_to_summary() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("covered"), "展开显示覆盖范围：{text}");
-    assert!(text.contains("Condensed context"), "{text}");
-
-    // 展开首行带思考块同款 `  └─ ` 树形连接符（与 model_switch 同一套几何）
-    let range_row = (area.y..area.bottom())
-        .find(|&y| {
-            let line: String = (area.x..area.right()).map(|x| grid.cell(x, y).ch).collect();
-            line.contains("covered")
-        })
-        .expect("range row");
-    let range_text: String = (area.x..area.right())
-        .map(|x| grid.cell(x, range_row).ch)
-        .collect();
+    assert!(folded_text.contains("Condensed line one"), "{folded_text}");
     assert!(
-        range_text.starts_with("  └─ "),
-        "展开范围行必须先画树形连接符：{range_text:?}"
+        !folded_text.contains("Line four"),
+        "折叠态不绘制预算之外的正文：{folded_text}"
+    );
+    assert!(
+        folded_text.contains("… 2 more lines"),
+        "折叠提示给出隐藏行数：{folded_text}"
+    );
+
+    lx.compact.toggle("compact-4");
+    let expanded = layout(area, &lx, &mut cache()).total_rows;
+    let mut grid2 = Grid::new(area);
+    let drawn2 = render(&mut grid2, area, &lx, 0, &mut cache());
+    assert_eq!(drawn2, expanded, "展开后仍必须一致");
+    assert!(expanded > folded, "展开必须增加行数");
+    let expanded_text: String = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| grid2.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(expanded_text.contains("Line four"), "{expanded_text}");
+    assert!(
+        !expanded_text.contains("more lines"),
+        "展开后不再出现折叠提示：{expanded_text}"
     );
 }
 
@@ -115,7 +148,7 @@ fn compact_entry_is_interleaved_by_sequence() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let compact_at = text.find("-- Context compacted --").expect("compact title");
+    let compact_at = text.find("Context compacted").expect("compact title");
     let message_at = text.find("after").expect("message body");
     assert!(
         compact_at < message_at,
@@ -141,7 +174,7 @@ fn consecutive_compacts_are_not_merged() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(
-        text.matches("-- Context compacted --").count(),
+        text.matches("Context compacted").count(),
         2,
         "每条检查点都需要独立展开：{text}"
     );
@@ -192,7 +225,9 @@ fn compact_entry_wraps_on_narrow_width() {
 #[test]
 fn compact_fold_toggle_changes_row_count_consistently() {
     let mut lx = Lx::new();
-    lx.compact.replace(vec![checkpoint(4, true)]);
+    let mut notice = checkpoint(4, true);
+    notice.summary = "One.\nTwo.\nThree.\nFour.".into();
+    lx.compact.replace(vec![notice]);
     let area = Rect::new(0, 0, 50, 20);
     let folded = layout(area, &lx, &mut cache()).total_rows;
     lx.compact.toggle("compact-4");
@@ -224,4 +259,91 @@ fn expanded_compact_summary_uses_muted_markdown_styles() {
         grid.cell(18, summary_y).style,
         style::md_read_inline_code().patch(style::muted())
     );
+}
+
+/// 正在执行的压缩请求在时间线末尾显示动态呼吸条目及耗时。
+#[test]
+fn running_compact_displays_breathing_glyph_and_elapsed() {
+    let mut lx = Lx::new();
+    lx.compact.start("compact-op-1".into(), 1_000);
+    lx.compact.elapsed_ms = Some(3_200);
+    assert!(has_history(&lx), "压缩进行中应当有可绘制历史");
+
+    let area = Rect::new(0, 0, 60, 10);
+    let layout = layout(area, &lx, &mut cache());
+    // 运行条目 1 行 + 末尾呼吸位 1 行 = 2 行
+    assert_eq!(layout.total_rows, 2, "运行中只占单行条目+呼吸行");
+
+    // 相位 0（实心菱形）
+    lx.chat.loading_frame = 0;
+    let mut grid = Grid::new(area);
+    let drawn = render(&mut grid, area, &lx, 0, &mut cache());
+    assert_eq!(drawn, layout.total_rows);
+    let text: String = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| grid.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Compacting context..."), "{text}");
+    assert!(text.contains('◆'), "相位 0 必须为实心菱形：{text}");
+    assert!(text.contains("3.2s"), "耗时格式化为秒：{text}");
+
+    // 相位 4（呼吸到空心菱形）
+    lx.chat.loading_frame = crate::ui::text::agent::STEP_BREATH_TICKS;
+    let mut grid_hollow = Grid::new(area);
+    render(&mut grid_hollow, area, &lx, 0, &mut cache());
+    let text_hollow: String = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| grid_hollow.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text_hollow.contains('◇'),
+        "呼吸相位必须为空心菱形：{text_hollow}"
+    );
+}
+
+/// 折叠态也展示覆盖范围：范围变化必须让已缓存的卡片失效。
+#[test]
+fn compact_range_change_invalidates_cached_card() {
+    let mut lx = Lx::new();
+    let mut notice = checkpoint(4, true);
+    notice.start_sequence = 1;
+    notice.end_sequence = 3;
+    lx.compact.replace(vec![notice.clone()]);
+    let area = Rect::new(0, 0, 60, 12);
+    let mut pane_cache = cache();
+    let mut grid = Grid::new(area);
+    render(&mut grid, area, &lx, 0, &mut pane_cache);
+    let first: String = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| grid.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(first.contains("covered sequence 1–3"), "{first}");
+
+    notice.start_sequence = 5;
+    notice.end_sequence = 9;
+    lx.compact.replace(vec![notice]);
+    let mut grid2 = Grid::new(area);
+    render(&mut grid2, area, &lx, 0, &mut pane_cache);
+    let second: String = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| grid2.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(second.contains("covered sequence 5–9"), "{second}");
+    assert!(!second.contains("covered sequence 1–3"), "{second}");
 }

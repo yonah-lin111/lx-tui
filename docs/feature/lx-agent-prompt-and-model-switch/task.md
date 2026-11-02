@@ -2,6 +2,7 @@
 
 > 状态：**已完成并合并入 `dev`**（评审 P0/P1/P2 共 11 项问题已全部修复并补充回归测试）（2026-11-01）
 > 设计依据：[design.md](design.md)
+> 注：`compact` / 模型切换提示 / 撤销提示的时间线渲染已由 [`docs/feature/system-event-cards/`](../system-event-cards/design.md) 取代；本文件保留系统提示词注入、模型身份与切换业务逻辑的原始设计。
 > 阶段划分：P0（开工准备）→ P1（`src/chat/agent/` 拆分与 `AGENTS.md` 注入）→ P2（模型身份与切换持久化 v22）→ P3（状态层、上下文注入与跨模型清洗）→ P4（TUI 历史渲染与 `compact` 样式对齐）→ P5（定向与全量验证）。
 
 ---

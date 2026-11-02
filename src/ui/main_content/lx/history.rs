@@ -6,10 +6,10 @@
 //! - 用户消息：`> ` 前缀（占用整块底色，图标用输入框同款强调色）+ 整块浅底色
 //!   （`style::chat_user_bg`），正文按显示列软换行。
 //! - assistant 消息：每个步骤（思考 / 工具调用 / 正文块）首行以左侧状态标记起头
-//!   （见 [`StepMark`]：文字数据用圆点 `●`/`○`、工具调用用方块 `■`/`□`；运行中两帧
-//!   呼吸、终态静态并按语义着色），标记右侧
-//!   的内容（含续行、展开的思考正文）整体缩进 [`STEP_GUTTER`] 列；正文用共享阅读
-//!   渲染器（`ui::markdown_render`，与 UI 页 agent 回答同款；表格按宽度收缩自适应），
+//!   （见 [`StepMark`]：文字数据用圆点 `●`/`○`、工具调用用方块 `■`/`□`、系统事件用
+//!   菱形 `◆`/`◇`；运行中两帧呼吸、终态静态并按语义着色），标记右侧的内容（含续行、
+//!   展开的思考正文）整体缩进 [`STEP_GUTTER`] 列；正文用共享阅读渲染器
+//!   （`ui::markdown_render`，与 UI 页 agent 回答同款；表格按宽度收缩自适应），
 //!   不显示标题行；失败/中断在**消息底部**（统计行上方）插入一条通知（见 `notice.rs`），
 //!   流中不插入（改用输入框上方 loading 行）。
 //! - thinking：头部为圆点 + `Thinking`（生成中）/ `Thought · 6.3s`（完成后，无折叠
@@ -42,6 +42,7 @@ mod rows;
 mod snapshot;
 mod stats;
 mod sticky;
+mod system_event;
 mod timeline;
 pub(crate) mod tool;
 pub(crate) mod user_shell;
@@ -85,8 +86,9 @@ pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
 
 /// assistant 步骤左侧状态标记的语义状态（思考 / 工具调用 / 正文块共用）。
 ///
-/// 字形按 [`StepKind`] 分派（见 [`Self::glyph`]）：文字数据（正文 / 思考 / 通知）为
-/// 圆点 `●`/`○`，工具调用为方块 `■`/`□`，子 agent 主动汇报为上三角 `▲`/`△`。
+/// 字形按 [`StepKind`] 分派（见 [`Self::glyph`]）：文字数据（正文 / 思考）为
+/// 圆点 `●`/`○`，工具调用为方块 `■`/`□`，子 agent 主动汇报为上三角 `▲`/`△`，
+/// 系统事件（及其消息级通知）为菱形 `◆`/`◇`。
 /// 运行中为实心/空心两帧呼吸（相位由 `LxChat::loading_frame` 决定，约 400ms 一相）；
 /// 终态一律停为**实心**标记、仅以颜色区分：失败（红）、中断（黄）。取消不再特殊化：
 /// 标记与动词同用角色色（用户要求「方块和 title 统一」，空心/白色方块都会显得这张卡
@@ -97,7 +99,8 @@ pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
 /// - [`StepKind::Thinking`]（思考块）：折叠浅粉 `Indexed 182`、展开亮粉 `Indexed 218`
 ///   （鼠标悬停不改变颜色）；
 /// - [`StepKind::Tool`]（工具调用）：翡翠绿 `Indexed 42`；
-/// - [`StepKind::Report`]（子 agent 汇报）：沿用工具档颜色，仅字形改为上三角。
+/// - [`StepKind::Report`]（子 agent 汇报）：沿用工具档颜色，仅字形改为上三角；
+/// - [`StepKind::System`]（系统事件）：完成态 accent、运行中橙黄，字形为菱形。
 ///
 /// 失败 / 中断是**跨角色的语义状态**，一律覆盖角色色（红 / 黄），保证「出问题了」
 /// 比「是哪类步骤」更先被看到；取消不是错误，沿用角色色，只由详情行的 `cancelled` 说明。
@@ -130,12 +133,14 @@ impl StepMark {
             }
             Self::Done | Self::Failed | Self::Interrupted | Self::Cancelled => true,
         };
-        // 文字数据用圆点、工具调用用方块、子 agent 汇报用上三角。
+        // 文字数据用圆点、工具调用用方块、子 agent 汇报用上三角、系统事件用菱形。
         match (kind, filled) {
             (StepKind::Tool, true) => text::agent::STEP_MARK_FILLED,
             (StepKind::Tool, false) => text::agent::STEP_MARK_HOLLOW,
             (StepKind::Report, true) => text::agent::STEP_MARK_TRIANGLE_FILLED,
             (StepKind::Report, false) => text::agent::STEP_MARK_TRIANGLE_HOLLOW,
+            (StepKind::System, true) => text::agent::STEP_MARK_DIAMOND_FILLED,
+            (StepKind::System, false) => text::agent::STEP_MARK_DIAMOND_HOLLOW,
             (_, true) => text::agent::STEP_MARK_DOT_FILLED,
             (_, false) => text::agent::STEP_MARK_DOT_HOLLOW,
         }
@@ -182,6 +187,8 @@ pub(super) enum StepKind {
     Tool,
     /// 子 agent 主动汇报块。
     Report,
+    /// 系统事件（压缩、模型切换、撤销）。
+    System,
 }
 
 impl StepKind {
@@ -192,7 +199,7 @@ impl StepKind {
             Self::Thinking => style::chat_step_mark_running_thinking(expanded),
             // 运行中的工具统一橙黄（与 `Alive` 同档）：用户要求"所有正在运行中的
             // tool 的方块和 title 统一为黄色，完成才显示绿色"。
-            Self::Tool | Self::Report => style::chat_step_mark_alive(),
+            Self::Tool | Self::Report | Self::System => style::chat_step_mark_alive(),
         }
     }
 
@@ -202,6 +209,7 @@ impl StepKind {
             Self::Body => style::chat_step_mark_done_body(),
             Self::Thinking => style::chat_step_mark_done_thinking(expanded),
             Self::Tool | Self::Report => style::chat_step_mark_done(),
+            Self::System => style::accent(),
         }
     }
 
@@ -214,6 +222,8 @@ impl StepKind {
             (Self::Thinking, false) => style::chat_step_label_done_thinking(expanded),
             (Self::Tool | Self::Report, true) => style::chat_step_label_running(),
             (Self::Tool | Self::Report, false) => style::chat_step_label_done(),
+            (Self::System, true) => style::chat_tool_verb_running(),
+            (Self::System, false) => style::accent(),
         }
     }
 }

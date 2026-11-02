@@ -682,12 +682,12 @@ pub const LX_REWIND_SNAPSHOT_LOADING: &str = "Checking file snapshot...";
 /// 该轮文件此前已恢复：动作仍可用（幂等/只删对话），但要让用户知道不会再次写文件。
 pub const LX_REWIND_FILES_ALREADY_RESTORED: &str = "Files already restored";
 /// 撤销提示标题（独立于 user/assistant）。
-pub const LX_REWIND_NOTICE_TITLE: &str = "-- Rewind --";
+pub const LX_REWIND_NOTICE_TITLE: &str = "Rewind";
 
-/// 撤销提示标题：连续多条合并时把数量放进两侧装饰之间（`-- Rewind x2 --`）。
+/// 撤销提示标题：连续多条合并时带数量（`Rewind x2`）。
 pub fn rewind_notice_title(count: usize) -> String {
     if count > 1 {
-        format!("-- Rewind x{count} --")
+        format!("Rewind x{count}")
     } else {
         LX_REWIND_NOTICE_TITLE.to_string()
     }
@@ -757,47 +757,49 @@ pub const LX_COMPACT_REWOUND: &str = "Context restored to the previous checkpoin
 /// compact 撤销面板的唯一动作文案。
 pub const LX_COMPACT_ACTION_RESTORE: &str = "Restore the context before this checkpoint";
 /// 检查点条目标题（独立时间线条目）。
-pub const LX_COMPACT_NOTICE_TITLE: &str = "-- Context compacted --";
+pub const LX_COMPACT_NOTICE_TITLE: &str = "Context compacted";
 /// 展开态的范围标签。
 pub const LX_COMPACT_RANGE_LABEL: &str = "covered";
 /// 子 agent 运行时自动压缩的范围文案（没有真实消息 sequence）。
 pub const LX_COMPACT_AUTO_RANGE: &str = "auto · this run";
 
-/// 检查点条目标题：连续多条合并时带数量（`-- Context compacted x2 --`）。
+/// 检查点条目标题：连续多条合并时带数量（`Context compacted x2`）。
 pub fn compact_notice_title(count: usize) -> String {
     if count > 1 {
-        format!("-- Context compacted x{count} --")
+        format!("Context compacted x{count}")
     } else {
         LX_COMPACT_NOTICE_TITLE.to_string()
     }
 }
 
-/// 检查点条目描述：`模型：gpt-5 · 10:42`（时间只到分钟，由状态层传入已格式化值）。
+/// 检查点条目描述：`model: gpt-5 · 10:42`（时间只到分钟，由状态层传入已格式化值）。
 pub fn compact_notice(model: &str, time: &str) -> String {
     format!("model: {model} · {time}")
 }
 
 /// 模型切换提示条目标题（独立时间线条目）。
-pub const LX_MODEL_SWITCH_NOTICE_TITLE: &str = "-- Model switched --";
+pub const LX_MODEL_SWITCH_NOTICE_TITLE: &str = "Model switched";
 
-/// 模型切换提示条目标题：连续多条合并时带数量（`-- Model switched x2 --`）。
+/// 模型切换提示条目标题：连续多条合并时带数量（`Model switched x2`）。
 pub fn model_switch_notice_title(count: usize) -> String {
     if count > 1 {
-        format!("-- Model switched x{count} --")
+        format!("Model switched x{count}")
     } else {
         LX_MODEL_SWITCH_NOTICE_TITLE.to_string()
     }
 }
 
-/// 模型切换提示条目描述行（英文，对齐 compact 描述风格）。
-pub fn model_switch_notice_desc(
+/// 模型切换提示条目的目标行：`model: DeepSeek V4.1 Flash (max) · 16:59`。
+///
+/// 仅思考等级变化时改成 `variant: max (DeepSeek V4.1 Flash) · 16:59`，把变化的
+/// 那一维放在行首。
+pub fn model_switch_notice_head(
     variant_only: bool,
     model_label: &str,
     variant: Option<&str>,
     time: &str,
-    updated_sources: &[String],
 ) -> String {
-    let base = if variant_only {
+    if variant_only {
         let level = variant.filter(|v| !v.is_empty()).unwrap_or("default");
         format!("variant: {level} ({model_label}) · {time}")
     } else {
@@ -806,12 +808,12 @@ pub fn model_switch_notice_desc(
             None => model_label.to_string(),
         };
         format!("model: {model_display} · {time}")
-    };
-    if updated_sources.is_empty() {
-        base
-    } else {
-        format!("{base} · instructions: {}", updated_sources.join(", "))
     }
+}
+
+/// 模型切换提示条目的指令源行；没有变更来源时整行省略。
+pub fn model_switch_notice_sources(updated_sources: &[String]) -> Option<String> {
+    (!updated_sources.is_empty()).then(|| format!("instructions: {}", updated_sources.join(", ")))
 }
 /// `/resume` 命令描述。
 pub const LX_RESUME_COMMAND_DESC: &str = "Resume a previous session in this workspace";

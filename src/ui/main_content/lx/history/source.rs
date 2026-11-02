@@ -43,7 +43,9 @@ impl<'a> From<&'a Lx> for HistorySource<'a> {
             chat: &lx.chat,
             // ask 等待用户作答期间不推进呼吸相位：步骤方块保持静态实心，
             // 不再一闪一闪（用户思考的时间不属于 Agent 执行过程）。
-            animating: (lx.chat.status.streaming || lx.chat.has_running_shell())
+            animating: (lx.chat.status.streaming
+                || lx.chat.has_running_shell()
+                || lx.compact.is_running())
                 && lx.ask.is_none(),
             compact: &lx.compact,
             model_switch: &lx.model_switch,
@@ -67,7 +69,7 @@ impl<'a> HistorySource<'a> {
             checkpoints: &compact.checkpoints,
             switches: &[],
             chat,
-            animating: chat.status.streaming,
+            animating: chat.status.streaming || compact.is_running(),
             compact,
             model_switch: &EMPTY_MODEL_SWITCH,
             selected_user_message: None,
@@ -83,6 +85,7 @@ impl<'a> HistorySource<'a> {
             .any(|(index, _)| !is_legacy_report_row(self.messages, index))
             || !self.notices.is_empty()
             || !self.compact.is_empty()
+            || self.compact.is_running()
             || !self.model_switch.is_empty()
     }
 }

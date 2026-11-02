@@ -35,6 +35,7 @@ pub(crate) enum SnapEntryKind {
         count: usize,
     },
     Compact(usize),
+    RunningCompact,
     ModelSwitch {
         first: usize,
         last: usize,
@@ -146,6 +147,7 @@ pub(crate) fn build(
         match entry {
             TimelineEntry::Notices { last, count } => builder.notices(source, *last, *count),
             TimelineEntry::Compact(index) => builder.compact(source, *index),
+            TimelineEntry::RunningCompact => builder.running_compact(source),
             TimelineEntry::ModelSwitch { first, last, count } => {
                 builder.model_switch(source, *first, *last, *count)
             }
@@ -234,11 +236,10 @@ impl Builder<'_> {
             width: self.width,
             sig: rewind_block_signature(&source.notices[last], count),
         };
-        let rows = rewind::rows(&source.notices[last], count, self.width);
+        let card = rewind::build(&source.notices[last], count, self.width);
         let block = self.block(key, BlockSource::Rewind { last, count }, start, || {
-            BlockPaint::Legacy {
-                rows,
-                spans: Vec::new(),
+            BlockPaint::SystemEvent {
+                card: Arc::new(card),
             }
         });
         self.rows += block.rows;
@@ -261,28 +262,55 @@ impl Builder<'_> {
             width: self.width,
             sig: compact_block_signature(notice, expanded),
         };
-        let rows = compact::rows(notice, 1, self.width, expanded);
+        let card = compact::build(notice, 1, self.width, expanded);
+        let click = card.click_span();
         let block = self.block(key, BlockSource::Compact { index, expanded }, start, || {
+            BlockPaint::SystemEvent {
+                card: Arc::new(card),
+            }
+        });
+        self.rows += block.rows;
+        // 点击面只覆盖可折叠正文（标题与元信息不响应）；正文未超预算时不登记。
+        if let Some((offset, height)) = click {
+            self.snapshot.cards.push(CardRegion {
+                kind: CardKind::Compact {
+                    checkpoint_id: notice.id.clone(),
+                    expanded,
+                },
+                card_start: start + offset,
+                card_rows: height,
+                clickable: true,
+            });
+        }
+        self.snapshot.entries.push(SnapEntry {
+            start,
+            end: self.rows,
+            kind: SnapEntryKind::Compact(index),
+            blocks: vec![block],
+        });
+    }
+
+    /// 正在压缩中的 loading 条目。
+    fn running_compact(&mut self, source: HistorySource<'_>) {
+        let start = self.rows;
+        let key = BlockKey {
+            message_index: super::cache::RUNNING_COMPACT_SLOT_MESSAGE,
+            step_index: super::cache::RUNNING_COMPACT_SLOT_BLOCK,
+            width: self.width,
+            sig: super::cache::running_compact_block_signature(source.compact),
+        };
+        let rows = compact::running_rows(source.compact, self.width);
+        let block = self.block(key, BlockSource::RunningCompact, start, || {
             BlockPaint::Legacy {
                 rows,
                 spans: Vec::new(),
             }
         });
         self.rows += block.rows;
-        // 整块都是点击面：折叠态只有头部两行，点哪里都应能展开。
-        self.snapshot.cards.push(CardRegion {
-            kind: CardKind::Compact {
-                checkpoint_id: notice.id.clone(),
-                expanded,
-            },
-            card_start: start,
-            card_rows: block.rows,
-            clickable: true,
-        });
         self.snapshot.entries.push(SnapEntry {
             start,
             end: self.rows,
-            kind: SnapEntryKind::Compact(index),
+            kind: SnapEntryKind::RunningCompact,
             blocks: vec![block],
         });
     }
@@ -298,7 +326,8 @@ impl Builder<'_> {
             width: self.width,
             sig: model_switch_block_signature(slice, expanded),
         };
-        let rows = model_switch::rows(slice, self.width, expanded);
+        let card = model_switch::build(slice, self.width, expanded);
+        let click = card.click_span();
         let block = self.block(
             key,
             BlockSource::ModelSwitch {
@@ -307,22 +336,24 @@ impl Builder<'_> {
                 expanded,
             },
             start,
-            || BlockPaint::Legacy {
-                rows,
-                spans: Vec::new(),
+            || BlockPaint::SystemEvent {
+                card: Arc::new(card),
             },
         );
         self.rows += block.rows;
-        self.snapshot.cards.push(CardRegion {
-            kind: CardKind::ModelSwitch {
-                // 锚定区间首条：追加切换时 `first` 不变，展开态天然保持。
-                switch_id: source.switches[first].id.clone(),
-                expanded,
-            },
-            card_start: start,
-            card_rows: block.rows,
-            clickable: true,
-        });
+        // 点击面只覆盖注入提示词（标题、模型与跃迁链不响应）。
+        if let Some((offset, height)) = click {
+            self.snapshot.cards.push(CardRegion {
+                kind: CardKind::ModelSwitch {
+                    // 锚定区间首条：追加切换时 `first` 不变，展开态天然保持。
+                    switch_id: source.switches[first].id.clone(),
+                    expanded,
+                },
+                card_start: start + offset,
+                card_rows: height,
+                clickable: true,
+            });
+        }
         self.snapshot.entries.push(SnapEntry {
             start,
             end: self.rows,

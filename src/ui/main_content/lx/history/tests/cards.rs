@@ -239,10 +239,10 @@ fn every_block_is_separated_by_a_blank_row() {
     }
 }
 
-/// 圆点给文字（正文 / 思考 / 通知），方块只给工具调用，上三角只给子 agent 汇报；
-/// 终态（含取消）一律实心。
+/// 圆点给文字（正文 / 思考），方块只给工具调用，上三角只给子 agent 汇报，
+/// 菱形给系统事件；终态（含取消）一律实心。
 #[test]
-fn step_marks_use_dots_squares_and_report_triangles() {
+fn step_marks_use_dots_squares_triangles_and_diamonds() {
     use crate::ui::text;
     for kind in [super::StepKind::Body, super::StepKind::Thinking] {
         assert_eq!(
@@ -276,6 +276,30 @@ fn step_marks_use_dots_squares_and_report_triangles() {
         super::StepMark::Cancelled.glyph(super::StepKind::Report, 0, false),
         text::agent::STEP_MARK_TRIANGLE_FILLED,
         "子 agent 汇报取消态也是实心上三角"
+    );
+    assert_eq!(
+        super::StepMark::Done.glyph(super::StepKind::System, 0, false),
+        text::agent::STEP_MARK_DIAMOND_FILLED,
+        "系统事件完成态必须是菱形"
+    );
+    assert_eq!(
+        super::StepMark::Cancelled.glyph(super::StepKind::System, 0, false),
+        text::agent::STEP_MARK_DIAMOND_FILLED,
+        "系统事件取消态也是实心菱形"
+    );
+    assert_eq!(
+        super::StepMark::Running.glyph(super::StepKind::System, 0, true),
+        text::agent::STEP_MARK_DIAMOND_FILLED,
+        "系统事件运行中帧 0 为实心菱形"
+    );
+    assert_eq!(
+        super::StepMark::Running.glyph(
+            super::StepKind::System,
+            text::agent::STEP_BREATH_TICKS,
+            true
+        ),
+        text::agent::STEP_MARK_DIAMOND_HOLLOW,
+        "系统事件运行中呼吸帧为空心菱形"
     );
 }
 

@@ -98,6 +98,7 @@ impl Section {
 }
 
 /// 一个物理行：连接符（可能为空）+ 内容。
+#[derive(Debug, Clone)]
 pub(crate) struct Row {
     pub(crate) prefix: &'static str,
     pub(crate) segments: Vec<Segment>,
@@ -108,6 +109,7 @@ pub(crate) struct Row {
 }
 
 /// 一次排版的结果。
+#[derive(Debug, Clone)]
 pub(crate) struct Layout {
     pub(crate) rows: Vec<Row>,
     /// 每个**可见**节点首行在 `rows` 中的下标（点击/链接几何用）。
