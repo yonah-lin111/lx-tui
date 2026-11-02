@@ -81,6 +81,39 @@ fn ask_request_lands_in_pane_state_and_streams() {
     assert_eq!(ask.key, key);
     assert_eq!(ask.questions.len(), 1);
     assert_eq!(streams.asks.len(), 1, "回执通道由 ChatStreams 持有");
+    assert!(
+        (crate::db::now_ms() - ask.started_at_ms).abs() < 5_000,
+        "面板创建即记录挂起起点"
+    );
+}
+
+#[test]
+fn clearing_the_panel_compensates_the_wait_time() {
+    let (mut state, key) = streaming_state();
+    let mut streams = ChatStreams::default();
+    let _reply = request(&mut state, &mut streams, key.clone(), "call-1");
+    let now = crate::db::now_ms();
+    {
+        let pane = state.pane_mut_anywhere(key.pane).expect("pane");
+        pane.lx.chat.turn_started_at_ms = Some(now);
+        pane.lx.ask.as_mut().expect("ask").started_at_ms = now - 5_000;
+    }
+    assert!(crate::event::chat::ask::cancel(
+        &mut state,
+        &mut streams,
+        &key
+    ));
+    let started = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .chat
+        .turn_started_at_ms
+        .expect("本轮起点仍在");
+    assert!(
+        started >= now + 4_000,
+        "取消提问同样要把等待时长从本轮耗时剔除"
+    );
 }
 
 #[test]

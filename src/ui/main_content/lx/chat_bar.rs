@@ -40,13 +40,16 @@ const SCAN_WINDOW: usize = 3;
 /// loading 文案与括号统计之间的空档（列）。
 const STATS_GAP: u16 = 1;
 
-/// 是否显示聊天栏：流中/压缩中（loading）或上滚未跟随底部（回到底部控件）。
+/// 是否显示聊天栏：流中/压缩中（loading）、上滚未跟随底部，或后台任务面板的内容区
+/// 未处于底部（回到底部控件）。
 ///
-/// **后台任务面板打开时不显示**：这一行属于聊天历史区（loading / 回到底部都是
-/// 针对消息列表的），而面板已经把历史区换成输出容器——此时漂一个
-/// `↓ jump to bottom` 出来既是错位信息，点了也只会滚动看不见的历史。
+/// **后台任务面板打开时只画「回到底部」**：这一行属于上方内容区（`Processes` 输出 /
+/// `Agents` 详情），loading 与消息列表无关，因此面板打开时不再显示 loading。
 pub(super) fn visible(lx: &Lx) -> bool {
-    if lx.task.is_some() || !super::history::has_history(lx) {
+    if lx.task.is_some() {
+        return jump_visible(lx);
+    }
+    if !super::history::has_history(lx) {
         return false;
     }
     loading_visible(lx) || !lx.chat.follow_bottom
@@ -57,9 +60,15 @@ pub(super) fn visible(lx: &Lx) -> bool {
 /// 压缩期间聊天请求是空闲的（没有 assistant 流），但它同样是一个要等几秒以上的
 /// 后台动作；用户要求这一行必须给出可见反馈，因此与流中同档显示。
 ///
+/// **`ask` 等待作答 / 后台任务面板打开时一律不画**：前者是用户在思考（计时与
+/// loading 都该冻结），后者这一行只承载「回到底部」。
+///
 /// **后台任务 / 子 agent 单独运行**时，只要主 agent 不是被用户显式停止，
 /// 就继续显示等待 loading；用户按 Esc 停止主 agent 后不再显示（它们仍在底边框计数）。
 fn loading_visible(lx: &Lx) -> bool {
+    if lx.ask.is_some() || lx.task.is_some() {
+        return false;
+    }
     if lx.compact.is_running() {
         return true;
     }
@@ -74,9 +83,15 @@ fn has_running_agents(lx: &Lx) -> bool {
     lx.agents.runs.iter().any(|run| run.is_running())
 }
 
-/// 是否需要画「回到底部」控件（上滚未跟随底部、有历史、面板未打开）。
+/// 是否需要画「回到底部」控件。
+///
+/// 后台任务面板打开时按**当前页签的上方内容区**是否触底判定（`Processes` 输出偏移 /
+/// `Agents` 详情 `follow`）；否则要求有历史且上滚未跟随底部。
 fn jump_visible(lx: &Lx) -> bool {
-    lx.task.is_none() && super::history::has_history(lx) && !lx.chat.follow_bottom
+    if let Some(page) = lx.task.as_ref() {
+        return !page.is_at_bottom(&lx.agents);
+    }
+    super::history::has_history(lx) && !lx.chat.follow_bottom
 }
 
 /// 由输入框矩形推导聊天栏矩形（贴其上沿）；上方空间不足时 None。
@@ -87,13 +102,18 @@ pub(super) fn rect(area: Rect, input: Rect) -> Option<Rect> {
 
 /// 回到底部控件矩形（未跟随底部、**无临时提示**且空间足够时）；供命中与测试。
 pub(crate) fn jump_bottom_rect(area: Rect, lx: &Lx) -> Option<Rect> {
-    // 面板打开时聊天栏整体不画（见 [`visible`]），命中区也必须一起消失，
-    // 否则会出现"看不见却能点"的穿透。
+    // 控件不画时命中区也必须一起消失，否则会出现"看不见却能点"的穿透。
     if !jump_visible(lx) {
         return None;
     }
-    let input = super::input_rect(area, lx)?;
-    jump_rect(rect(area, input)?)
+    jump_rect(bar_rect(area, lx)?)
+}
+
+/// 聊天栏所在行矩形：贴输入框上沿；`ask` 面板激活时贴面板上沿（`layout().input`
+/// 此时为 None，只有 `ask` 矩形）。
+fn bar_rect(area: Rect, lx: &Lx) -> Option<Rect> {
+    let layout = super::layout(area, lx);
+    rect(area, layout.input.or(layout.ask).or(layout.task_list)?)
 }
 
 /// 栏内「回到底部」控件矩形（整体右对齐）。

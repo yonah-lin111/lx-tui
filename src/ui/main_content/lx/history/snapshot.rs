@@ -454,7 +454,7 @@ impl Builder<'_> {
             shell,
             width,
             source.chat.loading_frame,
-            source.chat.status.streaming || shell.is_running(),
+            source.animating || shell.is_running(),
             folds,
         );
         let block = self.block(key, BlockSource::Shell { message_index }, start, || {

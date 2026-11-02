@@ -656,20 +656,19 @@ pub fn lx_input_size(rect: Rect) -> (u16, u16) {
 /// **只有上限、没有最小高度**（用户明确要求）：装不下时靠列表内部滚动，
 /// 极矮窗格由渲染层保证「至少留一行可选行」，而不是撑大面板挤掉历史。
 pub const LX_ASK_HEIGHT_PERCENT: u16 = 70;
-/// 面板内手写编辑框相对面板宽度的内缩（左右边框 + 内边距）与最多内容行数。
-pub const LX_ASK_EDITOR_INSET: u16 = 4;
-pub const LX_ASK_EDITOR_ROWS: u16 = 5;
+/// 面板内行内手写编辑框相对面板宽度的前缀内缩（6 列前缀）与最多内容行数。
+pub const LX_ASK_EDITOR_INSET: u16 = 6;
+pub const LX_ASK_EDITOR_ROWS: u16 = 3;
 
 /// `ask` 面板内编辑框尺寸：软换行宽度（列，与渲染同源）与最多内容行数。
 pub fn lx_ask_editor_size(rect: Rect) -> (u16, u16) {
-    let (cols, rows) = pane_inner_size(rect);
+    let (cols, _) = pane_inner_size(rect);
     let margin = if cols >= 24 { LX_INPUT_MARGIN } else { 0 };
     let width = cols
         .saturating_sub(margin.saturating_mul(2))
         .saturating_sub(LX_ASK_EDITOR_INSET)
         .max(1);
-    let panel_h = rows.saturating_mul(LX_ASK_HEIGHT_PERCENT) / 100;
-    let visible = LX_ASK_EDITOR_ROWS.min(panel_h.saturating_sub(6)).max(1);
+    let visible = LX_ASK_EDITOR_ROWS;
     (width, visible)
 }
 

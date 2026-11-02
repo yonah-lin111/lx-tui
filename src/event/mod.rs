@@ -483,8 +483,8 @@ async fn run_loop(
             update::resolve_task_output_visible(state, &geometry.rects);
             // Agents 详情区可见行数：与上一条同款。
             update::resolve_task_agents_visible(state, &geometry.rects);
-            // ask 预览区可见行数：同上，保证短预览滚不出空白。
-            update::resolve_ask_preview_visible(state, &geometry.rects);
+            // ask 统一列表窗口：同上，供 PageUp/PageDown 钳制滚动。
+            update::resolve_ask_list_window(state, &geometry.rects);
             // Todo 列表可见行数：本帧紧接着绘制，钳制结果直接生效，无需再置脏。
             update::resolve_todo_viewport(state, geometry.view.prompt);
             ui_cache.begin_frame();

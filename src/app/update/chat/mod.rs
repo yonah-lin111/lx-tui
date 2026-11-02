@@ -74,7 +74,7 @@ pub use user_shell::{
 pub(crate) use view::view_message_of;
 pub use viewport::{
     hover_lx_chat, hover_lx_jump_bottom, jump_lx_history_bottom, jump_lx_history_to_prompt,
-    resolve_ask_preview_visible, resolve_task_agents_visible, resolve_task_output_visible,
+    resolve_ask_list_window, resolve_task_agents_visible, resolve_task_output_visible,
     scroll_lx_history, set_lx_history_scroll, toggle_lx_card,
 };
 pub(crate) use viewport::{resolve_lx_history, resolve_lx_rewind_center};
@@ -905,6 +905,10 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
         if !streaming && !compacting && !agents_running {
             continue;
         }
+        // ask 等待用户作答：本轮耗时完全冻结，主会话的扫描帧也不再推进
+        // （历史里的工具方块因此保持静态实心）。子 agent 的详情动画不受影响。
+        let paused = target.lx.ask.is_some();
+        let mut advanced = false;
         // 压缩耗时：摘要请求没有任何流式输出，这一行只有计时能证明它还在跑。
         if compacting {
             target.lx.compact.elapsed_ms = target
@@ -912,6 +916,7 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
                 .compact
                 .started_at_ms
                 .map(|started| crate::db::now_ms().saturating_sub(started).max(0));
+            advanced = true;
         }
         if streaming {
             // 待命超时：提示消失（重新回到普通 `Working`）。
@@ -922,25 +927,33 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
                 .is_some_and(|at| at.elapsed() > STOP_ARM_WINDOW)
             {
                 target.lx.chat.stop_armed_at = None;
+                advanced = true;
             }
-            // 本轮耗时：时钟只在这里读（渲染层纯只读），随同一帧刷新。
-            target.lx.chat.turn_elapsed_ms = target
-                .lx
-                .chat
-                .turn_started_at_ms
-                .map(|started| crate::db::now_ms().saturating_sub(started).max(0));
+            if !paused {
+                // 本轮耗时：时钟只在这里读（渲染层纯只读），随同一帧刷新。
+                target.lx.chat.turn_elapsed_ms = target
+                    .lx
+                    .chat
+                    .turn_started_at_ms
+                    .map(|started| crate::db::now_ms().saturating_sub(started).max(0));
+                advanced = true;
+            }
         }
         // 扫描帧两种场景共用：压缩中的文案同样有扫描高亮。
-        target.lx.chat.loading_frame = target.lx.chat.loading_frame.wrapping_add(1);
-        if agents_running {
-            let frame = target.lx.chat.loading_frame;
-            for run in &mut target.lx.agents.runs {
-                if run.is_running() {
-                    run.chat.loading_frame = frame;
+        // ask 暂停期间只有压缩或子 agent 在跑才继续推进（见 [`paused`]）。
+        if !paused || compacting || agents_running {
+            target.lx.chat.loading_frame = target.lx.chat.loading_frame.wrapping_add(1);
+            if agents_running {
+                let frame = target.lx.chat.loading_frame;
+                for run in &mut target.lx.agents.runs {
+                    if run.is_running() {
+                        run.chat.loading_frame = frame;
+                    }
                 }
             }
+            advanced = true;
         }
-        changed = true;
+        changed |= advanced;
     }
     changed
 }

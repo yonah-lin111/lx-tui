@@ -5,26 +5,29 @@
 
 use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::markdown::BlockPanel;
-use crate::app::paste::PasteAction;
 use crate::app::selection::Selection;
 use crate::app::state::{Lx, LxEntry};
-use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView};
 use crate::ui::widgets::scrollbar;
 use crate::ui::{style, text};
 
 mod ask;
 mod input;
 mod mention;
+mod panels;
 mod refer;
 mod selection;
 
-pub(crate) use ask::{ask_editor_cell_at, rect as ask_rect};
+pub(crate) use ask::{ask_editor_cell_at, ask_editor_drag_cell_at, rect as ask_rect};
 pub(crate) use mention::{
     item_at as mention_item_at, layout as mention_layout, tab_at as mention_tab_at,
+};
+pub(crate) use panels::{
+    command_panel_contains, input_geom, input_rect, input_scrollbar, paste_item_at, paste_layout,
+};
+use panels::{
+    draw_panel, panel_width, render_input_scrollbar, render_paste_panel, render_slash_panel,
 };
 pub(crate) use refer::{item_at as refer_item_at, layout as refer_layout};
 pub use selection::copy_text;
@@ -147,24 +150,6 @@ pub(crate) fn toast_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     toast::rect(area, lx.toast.as_ref()?)
 }
 
-/// 绘制 `/` 命令面板（几何/条目见 `slash` 子模块）。
-fn render_slash_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
-    if lx.slash.is_none() {
-        return;
-    }
-    slash::render(area, buf, lx);
-}
-
-/// 绘制输入框滚动条：软换行后的视觉行溢出可视高度时，覆盖在最右预留列。
-fn render_input_scrollbar(area: Rect, buf: &mut Buffer, lx: &Lx) {
-    if lx.input.is_empty() {
-        return;
-    }
-    if let Some(bar) = input_scrollbar(area, lx) {
-        scrollbar::render_buffer(buf, &bar);
-    }
-}
-
 /// 把历史滚动条渲染到网格（贴右缘一列；轨道留空、只画 thumb）。
 ///
 /// 与公共 `scrollbar` 组件同口径：轨道不画符号，只保留占位列与命中几何。
@@ -172,56 +157,6 @@ fn render_history_scrollbar(grid: &mut Grid, bar: &scrollbar::ScrollbarLayout) {
     for y in bar.thumb.y..bar.thumb.bottom() {
         grid.set(bar.thumb.x, y, '▐', style::text());
     }
-}
-
-/// lx 输入框文本区几何（绝对屏幕坐标）；供鼠标命中与拖拽选择换算。
-pub(crate) struct InputGeom {
-    text_top: u16,
-    content_x: u16,
-    content_w: u16,
-    visible: usize,
-    scroll: usize,
-}
-
-impl InputGeom {
-    /// 输入框文本内容区左上角单元格（绝对屏幕坐标）；仅测试使用。
-    #[cfg(test)]
-    pub(crate) fn text_origin(&self) -> (u16, u16) {
-        (self.content_x, self.text_top)
-    }
-
-    /// 坐标是否落在输入框文本内容区内。
-    pub(crate) fn contains(&self, column: u16, row: u16) -> bool {
-        self.content_w > 0
-            && row >= self.text_top
-            && row
-                < self
-                    .text_top
-                    .saturating_add(u16::try_from(self.visible).unwrap_or(u16::MAX))
-            && column >= self.content_x
-            && column < self.content_x.saturating_add(self.content_w)
-    }
-
-    /// 单元格 →（视觉行索引，内容列）；行、列各自钳到可视区。
-    pub(crate) fn cell(&self, column: u16, row: u16) -> (usize, u16) {
-        let bottom = self
-            .text_top
-            .saturating_add(u16::try_from(self.visible).unwrap_or(u16::MAX))
-            .saturating_sub(1);
-        let local = row.clamp(self.text_top, bottom);
-        let visual_row = self.scroll + usize::from(local - self.text_top);
-        let right = self
-            .content_x
-            .saturating_add(self.content_w)
-            .saturating_sub(1);
-        let col = column.clamp(self.content_x, right) - self.content_x;
-        (visual_row, col)
-    }
-}
-
-/// lx 输入框几何（含边框）；（绝对屏幕坐标）；供提及面板贴附计算。
-pub(crate) fn input_rect(area: Rect, lx: &Lx) -> Option<Rect> {
-    layout(area, lx).input
 }
 
 /// `ask` 面板命中：选项行 / Other / Submit / 题目标签；面板未激活为 None。
@@ -242,172 +177,6 @@ pub(crate) fn ask_wheel_zone(
     row: u16,
 ) -> Option<crate::app::state::AskWheelZone> {
     ask::wheel_zone(area, lx, column, row)
-}
-
-/// lx 输入框文本区几何；`area` 为窗格内容区。
-pub(crate) fn input_geom(area: Rect, lx: &Lx) -> Option<InputGeom> {
-    let lay = layout(area, lx);
-    let input = lay.input?;
-    if lay.input_visible == 0 {
-        return None;
-    }
-    Some(InputGeom {
-        text_top: input.y + 1,
-        content_x: input.x + INPUT_PREFIX,
-        content_w: input
-            .width
-            .saturating_sub(INPUT_PREFIX)
-            .saturating_sub(INPUT_SCROLLBAR),
-        visible: lay.input_visible,
-        scroll: lay.input_scroll,
-    })
-}
-
-/// lx 输入框滚动条几何；内容未溢出时为 None。
-pub(crate) fn input_scrollbar(area: Rect, lx: &Lx) -> Option<scrollbar::ScrollbarLayout> {
-    let lay = layout(area, lx);
-    let input = lay.input?;
-    if lay.input_visible == 0 {
-        return None;
-    }
-    let track = Rect::new(
-        input.x,
-        input.y + 1,
-        input.width,
-        u16::try_from(lay.input_visible).unwrap_or(u16::MAX),
-    );
-    scrollbar::layout(
-        track,
-        lx.visual_rows().len(),
-        lay.input_visible,
-        lay.input_scroll,
-    )
-}
-
-/// `lx` 路径粘贴面板渲染数据。
-struct PastePanelData {
-    area: Rect,
-    rows: Vec<(String, String)>,
-    active: usize,
-}
-
-/// 构造粘贴面板的条目列表与可用区域；面板未打开或空间不足返回 None。
-fn paste_panel_rows(area: Rect, lx: &Lx) -> Option<PastePanelData> {
-    let panel = lx.paste_panel()?;
-    let input = layout(area, lx).input?;
-    let margin: u16 = if area.width >= 24 { MARGIN } else { 0 };
-    let content_x = area.x + margin;
-    let content_w = area.width.saturating_sub(margin.saturating_mul(2));
-    let region_h = input.y.saturating_sub(area.y);
-    if region_h < 3 {
-        return None;
-    }
-    let count = text::paste_item_count(panel.candidates.len());
-    let rows: Vec<(String, String)> = PasteAction::ALL
-        .iter()
-        .map(|action| match action {
-            PasteAction::Reference => (
-                text::PASTE_ACTION_REFERENCE.to_string(),
-                if panel.reference_enabled() {
-                    count.clone()
-                } else {
-                    text::PASTE_REFERENCE_UNSUPPORTED.to_string()
-                },
-            ),
-            PasteAction::Path => (text::PASTE_ACTION_PATH.to_string(), count.clone()),
-        })
-        .collect();
-    let panel_area = Rect::new(content_x, area.y, content_w, region_h);
-    Some(PastePanelData {
-        area: panel_area,
-        rows,
-        active: panel.active(),
-    })
-}
-
-/// 组装粘贴面板视图。
-fn paste_view<'a>(
-    items: &'a [CommandItem<'a>],
-    active: usize,
-    panel_area: Rect,
-) -> CommandPanelView<'a> {
-    CommandPanelView {
-        items,
-        active,
-        current: None,
-        window_anchor: Some(active),
-        window_start: None,
-        anchor_row: panel_area.height,
-        max_height: None,
-        title: Some(text::PASTE_PANEL_TITLE),
-        right_title: None,
-        footer: Some(text::LX_PASTE_PANEL_FOOTER),
-        width: Some(panel_area.width),
-        placement: command_panel::PanelPlacement::Above,
-        borderless: true,
-        ..Default::default()
-    }
-}
-
-/// `lx` 路径粘贴面板布局；面板未打开或空间不足返回 None。
-pub(crate) fn paste_layout(area: Rect, lx: &Lx) -> Option<command_panel::PanelLayout> {
-    let data = paste_panel_rows(area, lx)?;
-    let items: Vec<CommandItem<'_>> = data
-        .rows
-        .iter()
-        .map(|(label, preview)| CommandItem::Inline {
-            label,
-            preview,
-            tag: "",
-        })
-        .collect();
-    command_panel::layout(data.area, &paste_view(&items, data.active, data.area))
-}
-
-/// `lx` 路径粘贴面板条目命中：返回被点中的操作索引；未打开或未命中返回 None。
-pub(crate) fn paste_item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
-    let data = paste_panel_rows(area, lx)?;
-    let items: Vec<CommandItem<'_>> = data
-        .rows
-        .iter()
-        .map(|(label, preview)| CommandItem::Inline {
-            label,
-            preview,
-            tag: "",
-        })
-        .collect();
-    let layout = command_panel::layout(data.area, &paste_view(&items, data.active, data.area))?;
-    command_panel::item_at(&layout, &items, column, row)
-}
-
-/// 坐标是否落在任意已打开的 `lx` 输入框命令面板（粘贴 / `@` 提及 / 快捷引用 / `/` 斜杠）矩形内。
-///
-/// 浮层打开期间，落在面板顶栏横线、空状态占位行或滚动条列上的点击必须由浮层拦截吞掉，
-/// 严禁穿透到底层欢迎页入口、历史卡片或文本选区。
-pub(crate) fn command_panel_contains(area: Rect, lx: &Lx, column: u16, row: u16) -> bool {
-    let pos = (column, row).into();
-    paste_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
-        || mention_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
-        || refer_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
-        || slash_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
-        || layout(area, lx).panel.is_some_and(|r| r.contains(pos))
-}
-
-/// 绘制路径粘贴参照面板：锚定输入框上沿、复用命令面板渲染（只读状态）。
-fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
-    let Some(data) = paste_panel_rows(area, lx) else {
-        return;
-    };
-    let items: Vec<CommandItem<'_>> = data
-        .rows
-        .iter()
-        .map(|(label, preview)| CommandItem::Inline {
-            label,
-            preview,
-            tag: "",
-        })
-        .collect();
-    command_panel::render(data.area, buf, &paste_view(&items, data.active, data.area));
 }
 
 /// 命中测试：坐标落在某个入口标签内则返回该入口。
@@ -541,12 +310,17 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     );
 
     let mut out = Layout::empty(false);
-    if ask_active {
-        out.ask = Some(input);
-    } else {
-        out.input = Some(input);
-        out.input_scroll = scroll;
-        out.input_visible = visible;
+    // 后台任务页打开时输入框被 `task_list` 替换，`out.input` 与 `out.ask` 一律置 None，
+    // 保证锚定在 `input_rect` 上的 `@` 提及 / `/` 斜杠 / `refer` / `paste` 浮层同时隐藏，
+    // 不会叠画在后台任务页上或拦截 `↓ jump to bottom` 点击。
+    if lx.task.is_none() {
+        if ask_active {
+            out.ask = Some(input);
+        } else {
+            out.input = Some(input);
+            out.input_scroll = scroll;
+            out.input_visible = visible;
+        }
     }
 
     // 输入框上方一行的聊天栏：流中显示 loading 转轮，或上滚未跟随底部时显示回到底部按钮。
@@ -576,9 +350,11 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         out.task_list = Some(input);
     }
 
-    // md 格式面板：贴输入框上方（聊天栏之上）；放不下则省略。
+    // md 格式面板：贴输入框上方（聊天栏之上）；后台任务页打开时或放不下则省略。
     let panel_base = out.chat_bar.map_or(input.y, |bar| bar.y);
-    if let Some(panel) = lx.panel.as_ref() {
+    if lx.task.is_none()
+        && let Some(panel) = lx.panel.as_ref()
+    {
         let rows = panel.items().len();
         let panel_h = u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(6);
         let panel_w = panel_width(panel, content_w);
@@ -672,22 +448,6 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         }
     }
     out
-}
-
-/// md 面板宽度：最宽条目（标签 + 预览）与底栏提示取大 + 边框与内边距，夹取到内容区宽度。
-fn panel_width(panel: &BlockPanel, content_w: u16) -> u16 {
-    let inner = panel
-        .items()
-        .iter()
-        .map(|id| {
-            let (label, preview) = text::block_command_text(*id);
-            label.width() + 2 + preview.width()
-        })
-        .max()
-        .unwrap_or(0)
-        .max(text::COMMAND_PANEL_FOOTER.width())
-        .max(text::LX_BLOCK_PANEL_TITLE.width());
-    u16::try_from(inner + 4).unwrap_or(u16::MAX).min(content_w)
 }
 
 /// 放置入口标签：横排整体居中、竖排逐行居中。
@@ -800,8 +560,8 @@ fn build_chat(
     cache: &mut PaneCache,
 ) -> (Grid, Option<(u16, u16)>, Option<history::StickyRow>) {
     let mut grid = Grid::new(area);
-    // 输入框与 ask 面板占据同一矩形：历史区上沿与宽度都跟它走。
-    let bottom_box = lay.input.or(lay.ask);
+    // 输入框、ask 面板与后台任务列表占据同一矩形：历史区上沿与宽度都跟它走。
+    let bottom_box = lay.input.or(lay.ask).or(lay.task_list);
     let history_bottom = if bottom_box.is_some() {
         lay.chat_bar.map_or_else(
             || bottom_box.map(|input| input.y).unwrap_or(area.bottom()),
@@ -882,7 +642,7 @@ pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
         return None;
     }
     let lay = layout(area, lx);
-    let bottom_box = lay.input.or(lay.ask);
+    let bottom_box = lay.input.or(lay.ask).or(lay.task_list);
     // 历史区上沿到输入框（有聊天栏时为其上沿）。
     let bottom = lay.chat_bar.map_or_else(
         || bottom_box.map(|input| input.y).unwrap_or(area.bottom()),
@@ -938,93 +698,9 @@ pub fn task_agents_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
     task::agents_rows(area, lx)
 }
 
-/// `ask` 预览区的可见行数（滚动上限钳制用）；无面板或无预览区返回 None。
-///
-/// 与渲染共用 [`ask::layout`] 的同一份几何，因此"能滚多远"与"画到哪停"是同一个数。
-pub fn ask_preview_rows(area: Rect, lx: &Lx) -> Option<usize> {
-    ask::preview_rows(area, lx)
-}
-
-/// `ask` 选项列表的 `(窗口起点, 总行数, 可视行数)`；滚轮基准与绘制同源。
+/// `ask` 统一列表的 `(窗口起点, 总行数, 可视行数)`；滚轮基准与绘制同源。
 pub fn ask_list_window(area: Rect, lx: &Lx) -> Option<(usize, usize, usize)> {
     ask::list_window(area, lx)
-}
-
-/// md 格式面板：强调色直角边框 + 内框粗体标题 + 候选行（选中项整行高亮）+ 底栏快捷键行（对齐 herdr 面板）。
-fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
-    draw_box(grid, rect, style::accent());
-    let inner_w = rect.width.saturating_sub(4);
-    if inner_w == 0 {
-        return;
-    }
-    let text_x = rect.x + 2;
-    let text_right = text_x.saturating_add(inner_w);
-    grid.put_clipped(
-        text_x,
-        rect.y + 1,
-        text::LX_BLOCK_PANEL_TITLE,
-        style::strong(),
-        inner_w,
-    );
-    for (index, id) in panel.items().iter().enumerate() {
-        let y = rect.y + 3 + index as u16;
-        let (label, preview) = text::block_command_text(*id);
-        let active = index == panel.active();
-        if active {
-            for x in rect.x + 1..rect.right().saturating_sub(1) {
-                grid.set(x, y, ' ', style::overlay_selection());
-            }
-        }
-        let base = if active {
-            style::overlay_selection()
-        } else {
-            style::text()
-        };
-        grid.put_clipped(text_x, y, &label, base, inner_w);
-        let preview_x = text_x + u16::try_from(label.width()).unwrap_or(0) + 2;
-        if preview_x < text_right {
-            grid.put_clipped(
-                preview_x,
-                y,
-                &preview,
-                base.patch(style::muted()),
-                text_right - preview_x,
-            );
-        }
-    }
-    grid.put_clipped(
-        text_x,
-        rect.bottom() - 2,
-        text::COMMAND_PANEL_FOOTER,
-        style::muted(),
-        inner_w,
-    );
-}
-
-/// 直角细线边框与内部清底（md 面板用）。
-fn draw_box(grid: &mut Grid, rect: Rect, border: Style) {
-    if rect.width < 2 || rect.height < 2 {
-        return;
-    }
-    let right = rect.right() - 1;
-    let bottom = rect.bottom() - 1;
-    for y in rect.y + 1..bottom {
-        for x in rect.x + 1..right {
-            grid.set(x, y, ' ', Style::default());
-        }
-    }
-    grid.set(rect.x, rect.y, '┌', border);
-    grid.set(right, rect.y, '┐', border);
-    grid.set(rect.x, bottom, '└', border);
-    grid.set(right, bottom, '┘', border);
-    for x in rect.x + 1..right {
-        grid.set(x, rect.y, '─', border);
-        grid.set(x, bottom, '─', border);
-    }
-    for y in rect.y + 1..bottom {
-        grid.set(rect.x, y, '│', border);
-        grid.set(right, y, '│', border);
-    }
 }
 
 /// 测试辅助：仅构建聊天历史网格并 blit（不含输入框与面板）。

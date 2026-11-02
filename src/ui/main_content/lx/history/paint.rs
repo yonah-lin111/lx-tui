@@ -434,7 +434,7 @@ fn draw_markdown(
                 mark.glyph(
                     StepKind::Body,
                     history.chat.loading_frame,
-                    history.chat.status.streaming,
+                    history.animating,
                 ),
                 mark.style(StepKind::Body, false),
             );
@@ -495,7 +495,7 @@ fn draw_thinking(
             mark.glyph(
                 StepKind::Thinking,
                 history.chat.loading_frame,
-                history.chat.status.streaming,
+                history.animating,
             ),
             mark.style(StepKind::Thinking, expanded),
         );
@@ -586,7 +586,7 @@ fn draw_legacy(
                 call,
                 history.chat.loading_frame,
                 folds_at(history, message_index, call),
-                history.chat.status.streaming,
+                history.animating,
             );
         }
         BlockSource::Shell { message_index } => {
@@ -603,7 +603,7 @@ fn draw_legacy(
                 &mut row,
                 shell,
                 history.chat.loading_frame,
-                history.chat.status.streaming || shell.is_running(),
+                history.animating || shell.is_running(),
                 super::shell_folds(history, &message.id),
             );
         }
@@ -658,7 +658,7 @@ fn draw_legacy(
                 scroll,
                 &mut row,
                 history.chat.loading_frame,
-                history.chat.status.streaming,
+                history.animating,
                 expanded,
                 more_steps,
             );

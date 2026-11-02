@@ -30,6 +30,8 @@ pub struct TodoEdit {
     pub input: TextInput,
     /// 新建时的插入位置（提交时用）。
     pub at: usize,
+    /// 多行编辑视口的首行偏移（由 `resolve_todo_viewport` 随光标滑动更新）。
+    pub scroll_row: usize,
 }
 
 impl TodoEdit {
@@ -39,6 +41,7 @@ impl TodoEdit {
             target,
             input: TextInput::new(text),
             at,
+            scroll_row: 0,
         }
     }
 }
@@ -120,6 +123,10 @@ pub struct TodoPanel {
     pending_g: bool,
     /// 最近一次渲染的可见行数；0 表示尚未渲染（此时不钳制视口）。
     rows: usize,
+    /// 最近一帧同步的各显示条目视觉行高（`1..=3`）；空切片时退回按单行估算。
+    item_rows: Vec<u16>,
+    /// 是否自动将选中/编辑项滚入视口（键盘移动/选中/编辑时置 true，手动滚轮/滚动条置 false）。
+    follow_selected: bool,
     /// 当前激活的统计图表类型。
     active_chart: TodoChartKind,
     /// 是否已在当前会话中忽略历史未完成顺延提醒。
@@ -147,6 +154,8 @@ impl TodoPanel {
             undo: None,
             pending_g: false,
             rows: 0,
+            item_rows: Vec::new(),
+            follow_selected: true,
             active_chart: TodoChartKind::StatusAndRate,
             rollover_dismissed: false,
         }
@@ -202,6 +211,8 @@ impl TodoPanel {
         self.editing = None;
         self.undo = None;
         self.pending_g = false;
+        self.item_rows.clear();
+        self.follow_selected = true;
         true
     }
 
@@ -352,6 +363,7 @@ impl TodoPanel {
         if !moved_records.is_empty() {
             self.items.extend(moved_records);
             self.normalize_positions();
+            self.item_rows.clear();
             if self.selected.is_none() && !self.items.is_empty() {
                 self.selected = Some(0);
             }
@@ -417,11 +429,95 @@ impl TodoPanel {
             return false;
         }
         self.rows = rows;
-        let max = self.display_len().saturating_sub(rows);
+        let max = self.max_scroll();
         if self.scroll > max {
             self.scroll = max;
         }
         true
+    }
+
+    /// 同步当前视口的物理行数、各显示条目的视觉行高（`1..=3`）与多行编辑视口起点，
+    /// 并按需钳制 `scroll` 或跟随焦点项。
+    pub fn sync_viewport(
+        &mut self,
+        rows: usize,
+        item_rows: Vec<u16>,
+        edit_scroll_row: Option<usize>,
+    ) -> bool {
+        let mut changed = self.rows != rows || self.item_rows != item_rows;
+        self.rows = rows;
+        self.item_rows = item_rows;
+        if let (Some(edit), Some(scroll_row)) = (self.editing.as_mut(), edit_scroll_row)
+            && edit.scroll_row != scroll_row
+        {
+            edit.scroll_row = scroll_row;
+            changed = true;
+        }
+        let max = self.max_scroll();
+        if self.scroll > max {
+            self.scroll = max;
+            changed = true;
+        }
+        if self.follow_selected {
+            if self.is_editing() {
+                changed |= self.scroll_to_edit();
+            } else {
+                changed |= self.scroll_into_view(self.rows);
+            }
+        }
+        changed
+    }
+
+    /// 单个显示槽位的视觉行高（未同步时默认 1 行）。
+    fn item_height(&self, display: usize) -> usize {
+        if self.item_rows.len() == self.display_len() {
+            return usize::from(self.item_rows[display]).max(1);
+        }
+        if let Some(edit) = self.editing.as_ref().filter(|e| e.target.is_none())
+            && self.item_rows.len() + 1 == self.display_len()
+        {
+            if display == edit.at {
+                return 1;
+            }
+            let idx = if display < edit.at {
+                display
+            } else {
+                display - 1
+            };
+            return usize::from(self.item_rows[idx]).max(1);
+        }
+        self.item_rows
+            .get(display)
+            .copied()
+            .map_or(1, |h| usize::from(h).max(1))
+    }
+
+    /// 当前视口下能完整显示末尾条目的最大起始条目下标。
+    pub fn max_scroll(&self) -> usize {
+        self.max_scroll_for_rows(self.rows)
+    }
+
+    fn max_scroll_for_rows(&self, rows: usize) -> usize {
+        let total = self.display_len();
+        if total == 0 {
+            return 0;
+        }
+        if rows == 0 {
+            return total.saturating_sub(1);
+        }
+        let mut used = 0usize;
+        for index in (0..total).rev() {
+            let height = self.item_height(index);
+            if used + height > rows {
+                return if index == total - 1 {
+                    total - 1
+                } else {
+                    index + 1
+                };
+            }
+            used += height;
+        }
+        0
     }
 
     /// 编辑现场。
@@ -502,6 +598,8 @@ impl TodoPanel {
         self.editing = None;
         self.undo = None;
         self.pending_g = false;
+        self.item_rows.clear();
+        self.follow_selected = true;
         self.rollover_dismissed = false;
     }
 
@@ -520,6 +618,7 @@ impl TodoPanel {
         } else {
             self.selected = Some(0);
         }
+        self.follow_selected = true;
         self.scroll_into_view(self.rows);
     }
 
@@ -539,6 +638,7 @@ impl TodoPanel {
             return false;
         }
         self.selected = Some(next);
+        self.follow_selected = true;
         self.scroll_into_view(self.rows);
         true
     }
@@ -549,18 +649,15 @@ impl TodoPanel {
             return false;
         }
         self.selected = Some(index);
+        self.follow_selected = true;
         self.scroll_into_view(self.rows);
         true
     }
 
     /// 视口滚到目标偏移（钳制到 `0..=max`，含新建幽灵行槽位）。
     pub fn set_scroll(&mut self, offset: usize) -> bool {
-        let total = self.display_len();
-        let max = if self.rows == 0 {
-            total.saturating_sub(1)
-        } else {
-            total.saturating_sub(self.rows)
-        };
+        self.follow_selected = false;
+        let max = self.max_scroll();
         let next = offset.min(max);
         if next == self.scroll {
             return false;
@@ -584,26 +681,16 @@ impl TodoPanel {
         let Some(edit) = self.editing.as_ref() else {
             return false;
         };
-        let ghost = usize::from(edit.target.is_none());
-        let target = edit.at.min(self.items.len() + ghost);
-        if self.rows == 0 {
-            return false;
-        }
-        let total = self.items.len() + ghost;
-        let max = total.saturating_sub(self.rows);
-        let next = if target < self.scroll {
-            target
-        } else if target >= self.scroll.saturating_add(self.rows) {
-            target.saturating_add(1).saturating_sub(self.rows)
-        } else {
-            self.scroll
+        let target = match &edit.target {
+            None => edit.at,
+            Some(id) => self
+                .items
+                .iter()
+                .position(|item| item.id == *id)
+                .unwrap_or(edit.at),
         };
-        let next = next.min(max);
-        if next == self.scroll {
-            return false;
-        }
-        self.scroll = next;
-        true
+        self.follow_selected = true;
+        self.scroll_target_into_view(target, self.rows)
     }
 
     /// 保证选中行在视口内（键盘移动后调用）。
@@ -611,17 +698,38 @@ impl TodoPanel {
         let Some(selected) = self.selected else {
             return false;
         };
-        if rows == 0 {
+        let shift = self
+            .editing
+            .as_ref()
+            .is_some_and(|edit| edit.target.is_none() && edit.at <= selected);
+        let target = selected + usize::from(shift);
+        self.follow_selected = true;
+        self.scroll_target_into_view(target, rows)
+    }
+
+    fn scroll_target_into_view(&mut self, target: usize, rows: usize) -> bool {
+        let total = self.display_len();
+        if rows == 0 || total == 0 {
             return false;
         }
-        let max = self.items.len().saturating_sub(rows);
-        let next = if selected < self.scroll {
-            selected
-        } else if selected >= self.scroll.saturating_add(rows) {
-            selected.saturating_add(1).saturating_sub(rows)
+        let target = target.min(total - 1);
+        let next = if target < self.scroll {
+            target
         } else {
-            self.scroll
+            let mut used = 0usize;
+            let mut min_start = target;
+            for index in (self.scroll..=target).rev() {
+                let height = self.item_height(index);
+                if used + height > rows {
+                    min_start = if index == target { target } else { index + 1 };
+                    break;
+                }
+                used += height;
+                min_start = index;
+            }
+            min_start
         };
+        let max = self.max_scroll_for_rows(rows);
         let next = next.min(max);
         if next == self.scroll {
             return false;
@@ -634,6 +742,7 @@ impl TodoPanel {
     pub fn begin_edit(&mut self, edit: TodoEdit) {
         self.editing = Some(edit);
         self.pending_g = false;
+        self.follow_selected = true;
     }
 
     /// 结束编辑并返回现场。
@@ -643,6 +752,9 @@ impl TodoPanel {
 
     /// 当前编辑输入（若有）。
     pub fn edit_input_mut(&mut self) -> Option<&mut TextInput> {
+        if self.editing.is_some() {
+            self.follow_selected = true;
+        }
         self.editing.as_mut().map(|edit| &mut edit.input)
     }
 
@@ -653,6 +765,7 @@ impl TodoPanel {
         record.position = at as i64;
         self.items.insert(at, record);
         self.normalize_positions();
+        self.item_rows.clear();
         at
     }
 
@@ -663,6 +776,11 @@ impl TodoPanel {
         }
         let removed = self.items.remove(index);
         self.normalize_positions();
+        if self.item_rows.len() == self.items.len() + 1 && index < self.item_rows.len() {
+            self.item_rows.remove(index);
+        } else {
+            self.item_rows.clear();
+        }
         Some(removed)
     }
 
@@ -716,6 +834,7 @@ impl TodoPanel {
             left.id.cmp(&right.id)
         });
         self.normalize_positions();
+        self.item_rows.clear();
         if let Some(id) = selected_id
             && let Some(new_index) = self.items.iter().position(|item| item.id == id)
         {
@@ -754,6 +873,7 @@ impl TodoPanel {
             }
         }
         self.normalize_positions();
+        self.item_rows.clear();
     }
 
     /// 写入撤销槽（覆盖上一条）。

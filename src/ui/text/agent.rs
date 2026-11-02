@@ -434,28 +434,27 @@ pub const WAIT_REPORT: &str = "Report";
 pub const REPORT_LABEL: &str = "Report:";
 pub const AGENT_ID_LABEL: &str = "agent_id:";
 pub const PREVIOUS_STATUS_LABEL: &str = "previous:";
-/// 面板标题：`ASK 1/2 · 布局`。
-pub const ASK_TITLE: &str = "ASK";
-pub const ASK_TITLE_SEP: &str = " · ";
 /// 选项标记：单选圆点、多选方框、高亮前缀。
 pub const ASK_SINGLE_ON: &str = "(•)";
 pub const ASK_SINGLE_OFF: &str = "( )";
 pub const ASK_MULTI_ON: &str = "[x]";
 pub const ASK_MULTI_OFF: &str = "[ ]";
 pub const ASK_CURSOR: &str = "❯";
-/// 固定最后一行的「其他」与单题提交入口。
-pub const ASK_OTHER: &str = "Other...";
-pub const ASK_OTHER_PREFIX: &str = "Other: ";
-pub const ASK_SUBMIT: &str = "[ Submit ]";
-/// 多题最后一步：复核作答 + 确认提交（tab 与行各一份文案）。
-pub const ASK_REVIEW: &str = "Review your answers";
-pub const ASK_CONFIRM_TAB: &str = "Confirm";
-pub const ASK_CONFIRM: &str = "[ Confirm ]";
-/// 预览区占位与降级提示。
+/// 原地行内输入的「其他」占位符（编辑态为空、非编辑态无内容时显示）。
+pub const ASK_OTHER_LABEL: &str = "Other...";
+/// 预览区占位提示（题目有预览时高亮移到 Other 才会出现）。
 pub const ASK_NO_PREVIEW: &str = "(no preview)";
-pub const ASK_FOOTER_KEYS: &str = "enter select/next · space toggle · tab switch";
+/// 底栏键位：带 tab 的单选/多选流程、单题单选、`Submit` 汇总四种形态。
+pub const ASK_FOOTER_KEYS: &str = "⇆ tab · ↑↓ select · ↵ confirm";
+pub const ASK_FOOTER_KEYS_MULTI: &str = "⇆ tab · ↑↓ select · ↵ toggle";
+pub const ASK_FOOTER_KEYS_SINGLE: &str = "↑↓ select · ↵ submit";
+pub const ASK_FOOTER_KEYS_CONFIRM: &str = "⇆ tab · ↑↓ scroll · ↵ submit";
+/// tab 栏最后一格：问答回顾 + 提交。
+pub const ASK_TAB_SUBMIT: &str = " Submit ";
 pub const ASK_FOOTER_CANCEL: &str = "esc cancel";
 pub const ASK_FOOTER_CANCEL_ARMED: &str = "esc again to cancel";
+/// 提交按钮放行失败：还有题目没作答。
+pub const ASK_TOAST_ANSWER_REQUIRED: &str = "select an answer first";
 /// 卡片状态文字：等待作答（运行中）。
 pub const ASK_WAITING: &str = "waiting for you";
 /// 历史里的空答案（异常数据兜底，不画成空行）。
@@ -475,9 +474,4 @@ pub fn ask_question_prefix(index: usize) -> String {
 /// 问答对的答案前缀（1-based）：`A1: `。
 pub fn ask_answer_prefix(index: usize) -> String {
     format!("A{}: ", index.saturating_add(1))
-}
-
-/// 面板标题位置：`1/2`。
-pub fn ask_position(current: usize, total: usize) -> String {
-    format!("{}/{total}", current + 1)
 }

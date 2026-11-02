@@ -21,6 +21,8 @@ pub(crate) struct HistorySource<'a> {
     pub switches: &'a [ModelSwitchNoticeView],
     /// 折叠状态 / loading 相位。
     pub chat: &'a LxChat,
+    /// 呼吸动画是否推进：`ask` 等待用户作答时冻结（方块保持静态实心）。
+    pub animating: bool,
     /// compact 状态。
     pub compact: &'a LxCompact,
     /// 模型切换状态。
@@ -39,6 +41,10 @@ impl<'a> From<&'a Lx> for HistorySource<'a> {
             checkpoints: &lx.compact.checkpoints,
             switches: &lx.model_switch.switches,
             chat: &lx.chat,
+            // ask 等待用户作答期间不推进呼吸相位：步骤方块保持静态实心，
+            // 不再一闪一闪（用户思考的时间不属于 Agent 执行过程）。
+            animating: (lx.chat.status.streaming || lx.chat.has_running_shell())
+                && lx.ask.is_none(),
             compact: &lx.compact,
             model_switch: &lx.model_switch,
             selected_user_message: lx
@@ -61,6 +67,7 @@ impl<'a> HistorySource<'a> {
             checkpoints: &compact.checkpoints,
             switches: &[],
             chat,
+            animating: chat.status.streaming,
             compact,
             model_switch: &EMPTY_MODEL_SWITCH,
             selected_user_message: None,

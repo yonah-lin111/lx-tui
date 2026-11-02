@@ -35,6 +35,8 @@ const MARKER_WIDTH: u16 = 1;
 const STATUS_WIDTH: u16 = 3;
 /// 优先级徽标宽度（列）：`P0` / `P1` / `P2` / `P3` 均为 2。
 const PRIORITY_WIDTH: u16 = 2;
+/// 单个待办条目最多占用的视觉行数；超出时在末行用 `…` 截断。
+pub const MAX_TODO_ITEM_ROWS: usize = 3;
 /// 主体区低于此行数时不上下两分：列表独占，统计块整块隐藏。
 const MIN_SPLIT_BODY: u16 = 7;
 /// 统计块的最少行数：摘要 1 行 + 柱区 1 行 + 轴标签 1 行。
@@ -222,29 +224,191 @@ fn row_text_x(list: Rect) -> u16 {
         .saturating_add(1)
 }
 
-/// 行命中的**显示**下标（含幽灵行槽位）；落在列表区之外或越界时为 None。
-pub fn row_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<usize> {
-    let list = effective_list_rect(panel, state);
-    if !list.contains((column, row).into()) {
-        return None;
+/// 可见列表项的纯几何：渲染、`row_at`、`priority_at` 与 `edit_input_char_at` 共用。
+#[derive(Debug, Clone)]
+struct VisibleList {
+    list: Rect,
+    /// 正文起始列：续行同样从这里开始，左侧 9 列留空。
+    text_x: u16,
+    /// 正文可用显示列数（至少 1，避免折行退化为死循环）。
+    text_width: usize,
+    items: Vec<VisibleItem>,
+}
+
+/// 单个可见条目：显示下标、首行 Y 与按列表底边裁剪后的绘制行数。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VisibleItem {
+    display: usize,
+    y: u16,
+    rendered_rows: u16,
+}
+
+impl VisibleList {
+    /// 屏幕行命中的条目（点击条目的任意视觉行都返回同一个条目）。
+    fn item_at(&self, row: u16) -> Option<VisibleItem> {
+        self.items
+            .iter()
+            .copied()
+            .find(|item| row >= item.y && row < item.y.saturating_add(item.rendered_rows))
     }
-    let offset = usize::from(row.saturating_sub(list.y));
-    let index = state.todo.scroll().saturating_add(offset);
+}
+
+/// 计算当前面板宽度下的 Todo 列表视口度量：`(列表可见物理行数, 各显示条目视觉行高, 编辑视口起始行)`。
+///
+/// 供 `resolve_todo_viewport` 与 `scrollbar` 复用同一份多行折行高度与最大滚动偏移。
+pub fn viewport_metrics(panel: Rect, state: &AppState) -> (usize, Vec<u16>, Option<usize>) {
+    let list = effective_list_rect(panel, state);
+    let rows = visible_rows_for(panel, state);
+    let text_x = row_text_x(list);
+    let text_width = usize::from(list.right().saturating_sub(text_x)).max(1);
     let ghost = state
         .todo
         .editing()
-        .is_some_and(|edit| edit.target.is_none());
-    let total = state.todo.len() + usize::from(ghost);
-    (index < total).then_some(index)
+        .filter(|edit| edit.target.is_none())
+        .map(|edit| edit.at);
+    let total = state.todo.display_len();
+    let heights = (0..total)
+        .map(|display| item_rows(state, display, ghost, text_width))
+        .collect();
+    let edit_scroll_row = state
+        .todo
+        .editing()
+        .map(|edit| edit_view(edit, text_width).start_row);
+    (rows, heights, edit_scroll_row)
+}
+
+/// 根据可见物理行数与各显示条目的视觉行高，计算能完整露出末尾条目的最大起始条目下标。
+fn max_scroll_for(rows: usize, item_rows: &[u16]) -> usize {
+    let total = item_rows.len();
+    if total == 0 {
+        return 0;
+    }
+    if rows == 0 {
+        return total.saturating_sub(1);
+    }
+    let mut used = 0usize;
+    for index in (0..total).rev() {
+        let height = usize::from(item_rows[index]).max(1);
+        if used + height > rows {
+            return if index == total - 1 {
+                total - 1
+            } else {
+                index + 1
+            };
+        }
+        used += height;
+    }
+    0
+}
+
+/// 从 `state.todo.scroll()` 起按每条目的实际视觉行高向下排布，直到列表底边。
+///
+/// 只读状态：无 IO、无副作用；渲染与命中共用同一份几何，避免「看到」与「点到」错位。
+fn layout_visible_items(panel: Rect, state: &AppState) -> VisibleList {
+    let list = effective_list_rect(panel, state);
+    let text_x = row_text_x(list);
+    let text_width = usize::from(list.right().saturating_sub(text_x)).max(1);
+    let ghost = state
+        .todo
+        .editing()
+        .filter(|edit| edit.target.is_none())
+        .map(|edit| edit.at);
+    let total = state.todo.len() + usize::from(ghost.is_some());
+    let mut items = Vec::new();
+    let mut y = list.y;
+    while y < list.bottom() {
+        let display = state.todo.scroll().saturating_add(items.len());
+        if display >= total {
+            break;
+        }
+        let height = item_rows(state, display, ghost, text_width);
+        let rendered_rows = height.min(list.bottom().saturating_sub(y));
+        items.push(VisibleItem {
+            display,
+            y,
+            rendered_rows,
+        });
+        y = y.saturating_add(height);
+    }
+    VisibleList {
+        list,
+        text_x,
+        text_width,
+        items,
+    }
+}
+
+/// 单个显示条目占用的视觉行数（`1..=MAX_TODO_ITEM_ROWS`）。
+fn item_rows(state: &AppState, display: usize, ghost: Option<usize>, text_width: usize) -> u16 {
+    if ghost == Some(display) {
+        return state
+            .todo
+            .editing()
+            .map_or(1, |edit| edit_rows(edit, text_width));
+    }
+    let Some(record) = display_record(state, display) else {
+        return 1;
+    };
+    if let Some(edit) = editing_row(state, record) {
+        return edit_rows(edit, text_width);
+    }
+    let lines = widgets::input::wrap_clamped_lines(&record.text, text_width, MAX_TODO_ITEM_ROWS);
+    rows_of(lines.len())
+}
+
+/// 编辑态的视觉行数：空的新建幽灵行按 1 行占位，其余跟随软折行（上限 3 行）。
+fn edit_rows(edit: &TodoEdit, text_width: usize) -> u16 {
+    if edit.input.text().is_empty() && edit.target.is_none() {
+        return 1;
+    }
+    let view = edit_view(edit, text_width);
+    rows_of(view.visible_lines.len())
+}
+
+/// 编辑现场的多行输入视口（复用 `edit.scroll_row` 保持滑动窗口稳定）。
+fn edit_view(edit: &TodoEdit, text_width: usize) -> widgets::input::MultilineInputView<'_> {
+    widgets::input::multiline_view_scrolled(
+        edit.input.text(),
+        edit.input.cursor(),
+        text_width,
+        MAX_TODO_ITEM_ROWS,
+        edit.scroll_row,
+    )
+}
+
+/// 视觉行数钳制到 `1..=MAX_TODO_ITEM_ROWS`。
+fn rows_of(lines: usize) -> u16 {
+    u16::try_from(lines.clamp(1, MAX_TODO_ITEM_ROWS)).unwrap_or(1)
+}
+
+/// 显示下标 → 既有条目（幽灵行返回 None）。
+fn display_record(state: &AppState, display: usize) -> Option<&TodoRecord> {
+    let index = list_index(state, display)?;
+    state.todo.items().get(index)
+}
+
+/// 行命中的**显示**下标（含幽灵行槽位）；落在列表区之外或越界时为 None。
+pub fn row_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<usize> {
+    let layout = layout_visible_items(panel, state);
+    if !layout.list.contains((column, row).into()) {
+        return None;
+    }
+    layout.item_at(row).map(|item| item.display)
 }
 
 /// 命中某行的优先级徽标区域（返回显示下标；幽灵行不命中）。
+///
+/// 只有条目的**首行**承载徽标：点击续行同一列不算优先级。
 pub fn priority_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<usize> {
-    let display = row_at(panel, state, column, row)?;
-    let _record_index = list_index(state, display)?;
-    let list = effective_list_rect(panel, state);
-    let px = row_priority_x(list);
-    (column >= px && column < px.saturating_add(PRIORITY_WIDTH)).then_some(display)
+    let layout = layout_visible_items(panel, state);
+    if !layout.list.contains((column, row).into()) {
+        return None;
+    }
+    let item = layout.item_at(row)?;
+    list_index(state, item.display)?;
+    let px = row_priority_x(layout.list);
+    (row == item.y && column >= px && column < px.saturating_add(PRIORITY_WIDTH))
+        .then_some(item.display)
 }
 
 /// 显示下标 → 列表下标；落在幽灵行上返回 None（它不是任何条目）。
@@ -262,35 +426,71 @@ pub fn list_index(state: &AppState, display: usize) -> Option<usize> {
 }
 
 /// 若鼠标落在正在编辑的 Todo 文本输入框内，返回其字符索引。
+///
+/// 命中编辑条目的任意可见行，按行偏移与列偏移换算回全文字符索引（支持多行点击/拖拽）。
 pub fn edit_input_char_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<usize> {
     let edit = state.todo.editing()?;
-    let list = effective_list_rect(panel, state);
-    if !list.contains((column, row).into()) {
-        return None;
-    }
-    let display_idx = match &edit.target {
+    let display = match &edit.target {
         None => edit.at,
         Some(id) => state.todo.items().iter().position(|item| item.id == *id)?,
     };
-    let scroll = state.todo.scroll();
-    if display_idx < scroll {
+    let layout = layout_visible_items(panel, state);
+    let item = layout.items.iter().find(|item| item.display == display)?;
+    if row < item.y || row >= item.y.saturating_add(item.rendered_rows) {
         return None;
     }
-    let offset = display_idx - scroll;
-    let y = list.y.checked_add(u16::try_from(offset).ok()?)?;
-    if row != y {
+    if column < layout.text_x || column >= layout.list.right() {
         return None;
     }
-    let text_x = row_text_x(list);
-    if column < text_x || column >= list.right() {
-        return None;
-    }
-    let width = usize::from(list.right().saturating_sub(text_x));
-    let rel_col = column.saturating_sub(text_x);
-    Some(widgets::input::char_index_at_col(
+    Some(widgets::input::multiline_char_index_at_scrolled(
         edit.input.text(),
         edit.input.cursor(),
-        width,
+        layout.text_width,
+        MAX_TODO_ITEM_ROWS,
+        edit.scroll_row,
+        usize::from(row - item.y),
+        column - layout.text_x,
+    ))
+}
+
+/// 拖拽选区时将鼠标坐标钳制到正在编辑的 Todo 文本区边界并换算为全文字符索引。
+///
+/// 行号钳制到该编辑项的可见行范围 `[item.y, item.y + item.rendered_rows - 1]`，
+/// 列号落入左侧 9 列缩进区时钳为 `0`（行首），越过列表右缘时钳为 `u16::MAX`（行尾）。
+pub fn edit_input_drag_char_at(
+    panel: Rect,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let edit = state.todo.editing()?;
+    let display = match &edit.target {
+        None => edit.at,
+        Some(id) => state.todo.items().iter().position(|item| item.id == *id)?,
+    };
+    let layout = layout_visible_items(panel, state);
+    let item = layout.items.iter().find(|item| item.display == display)?;
+    if item.rendered_rows == 0 || layout.list.right() <= layout.text_x {
+        return None;
+    }
+    let clamped_row = row.clamp(
+        item.y,
+        item.y.saturating_add(item.rendered_rows.saturating_sub(1)),
+    );
+    let rel_col = if column < layout.text_x {
+        0
+    } else if column >= layout.list.right() {
+        u16::MAX
+    } else {
+        column - layout.text_x
+    };
+    Some(widgets::input::multiline_char_index_at_scrolled(
+        edit.input.text(),
+        edit.input.cursor(),
+        layout.text_width,
+        MAX_TODO_ITEM_ROWS,
+        edit.scroll_row,
+        usize::from(clamped_row - item.y),
         rel_col,
     ))
 }
@@ -306,12 +506,14 @@ pub fn scrollbar(panel: Rect, state: &AppState) -> Option<widgets::scrollbar::Sc
     }
     let list = effective_list_rect(panel, state);
     let slot = Rect::new(list.right(), list.y, 1, list.height);
-    widgets::scrollbar::layout(
-        slot,
-        state.todo.display_len(),
-        visible_rows_for(panel, state),
-        state.todo.scroll(),
-    )
+    let (visible, item_rows, _) = viewport_metrics(panel, state);
+    let max_scroll = max_scroll_for(visible, &item_rows);
+    let total = if max_scroll > 0 {
+        visible.saturating_add(max_scroll)
+    } else {
+        0
+    };
+    widgets::scrollbar::layout(slot, total, visible, state.todo.scroll())
 }
 
 /// 状态框文案。
@@ -393,7 +595,8 @@ fn render_toolbar(panel: Rect, buf: &mut Buffer, state: &AppState) {
 
 /// 绘制可见列表行；返回编辑光标坐标。
 fn render_rows(panel: Rect, buf: &mut Buffer, state: &AppState) -> Option<(u16, u16)> {
-    let list = effective_list_rect(panel, state);
+    let layout = layout_visible_items(panel, state);
+    let list = layout.list;
     if list.width == 0 || list.height == 0 {
         return None;
     }
@@ -406,72 +609,71 @@ fn render_rows(panel: Rect, buf: &mut Buffer, state: &AppState) -> Option<(u16, 
     if state.todo.is_empty() && pending_new.is_none() {
         return render_empty(list, buf);
     }
-    let visible = usize::from(list.height);
-    let start = state.todo.scroll();
-    let total = state.todo.len() + usize::from(pending_new.is_some());
     let mut cursor = None;
-    for (slot, index) in (start..start.saturating_add(visible)).enumerate() {
-        if index >= total {
-            break;
-        }
-        let y = list.y.saturating_add(slot as u16);
-        if pending_new == Some(index) {
-            cursor = cursor.or(render_row(
-                buf,
-                list,
-                y,
-                RowView {
-                    status: TodoStatus::Todo,
-                    priority: TodoPriority::P1,
-                    text: "",
-                    selected: false,
-                    marker: state.todo_focused(),
-                    edit: state.todo.editing(),
-                },
-            ));
+    for item in &layout.items {
+        let Some(row) = row_view(state, *item, pending_new, layout.text_width) else {
             continue;
-        }
-        let record_index = if pending_new.is_some_and(|at| index > at) {
-            index - 1
-        } else {
-            index
         };
-        let Some(record) = state.todo.items().get(record_index) else {
-            break;
-        };
-        let row_selected = state.todo_focused() && state.todo.selected() == Some(record_index);
-        let hovered = state.todo_hover == Some(record_index);
-        cursor = cursor.or(render_row(
-            buf,
-            list,
-            y,
-            RowView {
-                status: record.status,
-                priority: record.priority,
-                text: &record.text,
-                selected: row_selected || hovered,
-                marker: state.todo.selected() == Some(record_index),
-                edit: editing_row(state, record),
-            },
-        ));
+        cursor = cursor.or(render_item(buf, &layout, *item, &row));
     }
     cursor
 }
 
-/// 一行的绘制数据。
+/// 一个条目的绘制数据。
 struct RowView<'a> {
     status: TodoStatus,
     priority: TodoPriority,
-    text: &'a str,
+    /// 非编辑态：折行后的正文（`1..=MAX_TODO_ITEM_ROWS` 行）。
+    lines: Vec<String>,
     selected: bool,
     marker: bool,
     edit: Option<&'a TodoEdit>,
 }
 
-/// 绘制一整行：标记 + 状态框 + 优先级徽标 + 文本（或编辑输入）；返回编辑光标坐标。
-fn render_row(buf: &mut Buffer, list: Rect, y: u16, row: RowView<'_>) -> Option<(u16, u16)> {
+/// 组装单个条目的绘制数据（幽灵行与既有条目同构）。
+fn row_view<'a>(
+    state: &'a AppState,
+    item: VisibleItem,
+    pending_new: Option<usize>,
+    text_width: usize,
+) -> Option<RowView<'a>> {
+    if pending_new == Some(item.display) {
+        return Some(RowView {
+            status: TodoStatus::Todo,
+            priority: TodoPriority::P1,
+            lines: vec![String::new()],
+            selected: false,
+            marker: state.todo_focused(),
+            edit: state.todo.editing(),
+        });
+    }
+    let index = list_index(state, item.display)?;
+    let record = state.todo.items().get(index)?;
+    let row_selected = state.todo_focused() && state.todo.selected() == Some(index);
+    let hovered = state.todo_hover == Some(index);
+    Some(RowView {
+        status: record.status,
+        priority: record.priority,
+        lines: widgets::input::wrap_clamped_lines(&record.text, text_width, MAX_TODO_ITEM_ROWS),
+        selected: row_selected || hovered,
+        marker: state.todo.selected() == Some(index),
+        edit: editing_row(state, record),
+    })
+}
+
+/// 绘制一个条目：整块选中底色 + 首行前缀 + 折行正文（或行内编辑）。
+fn render_item(
+    buf: &mut Buffer,
+    layout: &VisibleList,
+    item: VisibleItem,
+    row: &RowView<'_>,
+) -> Option<(u16, u16)> {
+    let list = layout.list;
     if row.selected {
-        buf.set_style(Rect::new(list.x, y, list.width, 1), style::selection());
+        buf.set_style(
+            Rect::new(list.x, item.y, list.width, item.rendered_rows),
+            style::selection(),
+        );
     }
     let marker = if row.marker {
         text::AGENT_SELECTED_MARKER
@@ -481,7 +683,7 @@ fn render_row(buf: &mut Buffer, list: Rect, y: u16, row: RowView<'_>) -> Option<
     write_cell(
         buf,
         list.x,
-        y,
+        item.y,
         marker,
         if row.selected {
             style::selection()
@@ -494,19 +696,44 @@ fn render_row(buf: &mut Buffer, list: Rect, y: u16, row: RowView<'_>) -> Option<
         buf,
         list,
         status_x,
-        y,
+        item.y,
         status_label(row.status),
         status_style(row.status),
     );
-    let priority_x = row_priority_x(list);
-    render_priority_badge(buf, list, priority_x, y, row.priority, row.status);
-    let text_x = row_text_x(list);
+    render_priority_badge(
+        buf,
+        list,
+        row_priority_x(list),
+        item.y,
+        row.priority,
+        row.status,
+    );
     match row.edit {
-        Some(edit) => render_edit_row(buf, list, text_x, y, edit),
+        Some(edit) => render_edit_item(buf, layout, item, edit),
         None => {
-            write_string_in(buf, list, text_x, y, row.text, text_style(row.status));
+            render_wrapped_text(buf, layout, item, &row.lines, text_style(row.status));
             None
         }
+    }
+}
+
+/// 逐行绘制折行正文：首行与续行都从 `text_x` 起，续行左侧 9 列保持空白。
+fn render_wrapped_text(
+    buf: &mut Buffer,
+    layout: &VisibleList,
+    item: VisibleItem,
+    lines: &[String],
+    cell_style: Style,
+) {
+    for (offset, line) in lines
+        .iter()
+        .enumerate()
+        .take(usize::from(item.rendered_rows))
+    {
+        let y = item
+            .y
+            .saturating_add(u16::try_from(offset).unwrap_or(u16::MAX));
+        write_string_in(buf, layout.list, layout.text_x, y, line, cell_style);
     }
 }
 
@@ -555,35 +782,44 @@ fn editing_row<'a>(state: &'a AppState, record: &TodoRecord) -> Option<&'a TodoE
     (edit.target.as_deref() == Some(record.id.as_str())).then_some(edit)
 }
 
-/// 绘制编辑行：与页重命名/浮层输入共用 `widgets::input` 的视口与光标算法。
-fn render_edit_row(
+/// 绘制行内编辑：1~3 行软折行、续行与正文左对齐，并返回硬件光标坐标。
+///
+/// 与行内多行输入共用 `widgets::input::multiline_view_scrolled` 的视口与光标算法。
+fn render_edit_item(
     buf: &mut Buffer,
-    list: Rect,
-    text_x: u16,
-    y: u16,
+    layout: &VisibleList,
+    item: VisibleItem,
     edit: &TodoEdit,
 ) -> Option<(u16, u16)> {
-    let width = usize::from(list.right().saturating_sub(text_x));
-    if width == 0 {
+    let list = layout.list;
+    let text_x = layout.text_x;
+    if list.right() <= text_x {
         return None;
     }
     let text = edit.input.text();
-    let input = widgets::input::view(text, edit.input.cursor(), width);
     if text.is_empty() && edit.target.is_none() {
         write_string_in(
             buf,
             list,
             text_x,
-            y,
+            item.y,
             text::TODO_EDIT_PLACEHOLDER,
             style::muted(),
         );
-    } else {
-        let spans = widgets::input::build_styled_spans(
-            input.visible,
-            input.start_char,
-            edit.input.selection(),
-        );
+        return Some((text_x.min(list.right().saturating_sub(1)), item.y));
+    }
+    let view = edit_view(edit, layout.text_width);
+    for (offset, line) in view
+        .visible_lines
+        .iter()
+        .enumerate()
+        .take(usize::from(item.rendered_rows))
+    {
+        let y = item
+            .y
+            .saturating_add(u16::try_from(offset).unwrap_or(u16::MAX));
+        let spans =
+            widgets::input::build_styled_spans(line.text, line.start_char, edit.input.selection());
         let mut cur_x = text_x;
         for span in spans {
             if cur_x >= list.right() {
@@ -596,12 +832,14 @@ fn render_edit_row(
             cur_x = cur_x.saturating_add(span_width);
         }
     }
-    Some((
-        text_x
-            .saturating_add(input.cursor_col)
-            .min(list.right().saturating_sub(1)),
-        y,
-    ))
+    let cursor_x = text_x
+        .saturating_add(view.cursor_col)
+        .min(list.right().saturating_sub(1));
+    let cursor_y = item
+        .y
+        .saturating_add(view.cursor_row_offset)
+        .min(list.bottom().saturating_sub(1));
+    Some((cursor_x, cursor_y))
 }
 
 /// 在 `row` 矩形内从 `x` 起顺序写入一段文本，返回写完后的下一列坐标。

@@ -1,4 +1,5 @@
-//! 单行输入组件：按显示宽度计算视口与光标列；不依赖应用领域数据。
+//! 单行输入组件与多行软折行视口助手：按显示宽度计算视口、光标列与点击定位；
+//! 不依赖应用领域数据。
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -75,6 +76,246 @@ pub fn char_index_at_col(text: &str, cursor: usize, width: usize, col: u16) -> u
         current_col += cells;
     }
     input.start_char + input.visible.chars().count()
+}
+
+/// 多行视口中的一个视觉行：文本切片与它在全文中的字符区间。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WrappedLine<'a> {
+    pub text: &'a str,
+    pub start_char: usize,
+    pub end_char: usize,
+}
+
+/// 多行输入视口：可见视觉行、窗口起始行、光标相对可见首行的偏移及光标列。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultilineInputView<'a> {
+    /// 当前视口可见的 `1..=max_rows` 行。
+    pub visible_lines: Vec<WrappedLine<'a>>,
+    /// 当前可见窗口在全部折行中的起始行号。
+    pub start_row: usize,
+    /// 光标相对于可见首行的行偏移（`0..visible_lines.len()`）。
+    pub cursor_row_offset: u16,
+    /// 光标在当前视觉行内的显示列偏移。
+    pub cursor_col: u16,
+}
+
+/// 按显示列宽折行并限制最多 `max_rows` 行；超出时在末行尾部用 `…` 截断。
+///
+/// 支持文本内换行符 `\n` 与按显示宽度的软折行；返回 `1..=max_rows` 行。
+pub fn wrap_clamped_lines(text: &str, width: usize, max_rows: usize) -> Vec<String> {
+    let width = width.max(1);
+    let max_rows = max_rows.max(1);
+    let mut lines = wrap_text(text, width);
+    if lines.len() > max_rows {
+        lines.truncate(max_rows);
+        if let Some(last) = lines.last_mut() {
+            *last = truncate_with_ellipsis(last, width);
+        }
+    }
+    lines
+}
+
+/// 计算多行输入视口：软折行、光标位置与跟随光标的滑动窗口。
+pub fn multiline_view(
+    text: &str,
+    cursor: usize,
+    width: usize,
+    max_rows: usize,
+) -> MultilineInputView<'_> {
+    multiline_view_scrolled(text, cursor, width, max_rows, 0)
+}
+
+/// 计算带既有滚动行偏移 `scroll_row` 的多行输入视口。
+///
+/// 仅当光标滚出 `[scroll_row, scroll_row + max_rows)` 时才上下推动窗口，
+/// 避免在超 `max_rows` 行编辑中点击视口首行导致视口跳回第 0 行。
+pub fn multiline_view_scrolled(
+    text: &str,
+    cursor: usize,
+    width: usize,
+    max_rows: usize,
+    scroll_row: usize,
+) -> MultilineInputView<'_> {
+    let width = width.max(1);
+    let max_rows = max_rows.max(1);
+    let lines = wrapped_lines(text, width);
+    let (cursor_row, cursor_col) = cursor_position(&lines, cursor);
+    let visible_count = lines.len().clamp(1, max_rows);
+    let max_start = lines.len().saturating_sub(visible_count);
+    let mut start_row = scroll_row.min(max_start);
+    if cursor_row < start_row {
+        start_row = cursor_row;
+    } else if cursor_row >= start_row + visible_count {
+        start_row = cursor_row + 1 - visible_count;
+    }
+    start_row = start_row.min(max_start);
+    let end_row = start_row.saturating_add(visible_count).min(lines.len());
+    MultilineInputView {
+        visible_lines: lines[start_row..end_row].to_vec(),
+        start_row,
+        cursor_row_offset: u16::try_from(cursor_row.saturating_sub(start_row)).unwrap_or(u16::MAX),
+        cursor_col: u16::try_from(cursor_col).unwrap_or(u16::MAX),
+    }
+}
+
+/// 将点击的视觉行偏移与列偏移换算回全文字符索引。
+pub fn multiline_char_index_at(
+    text: &str,
+    cursor: usize,
+    width: usize,
+    max_rows: usize,
+    visual_row_offset: usize,
+    rel_col: u16,
+) -> usize {
+    multiline_char_index_at_scrolled(text, cursor, width, max_rows, 0, visual_row_offset, rel_col)
+}
+
+/// 在给定 `scroll_row` 的多行视口下，将视觉行偏移与列偏移换算回全文字符索引。
+pub fn multiline_char_index_at_scrolled(
+    text: &str,
+    cursor: usize,
+    width: usize,
+    max_rows: usize,
+    scroll_row: usize,
+    visual_row_offset: usize,
+    rel_col: u16,
+) -> usize {
+    let view = multiline_view_scrolled(text, cursor, width, max_rows, scroll_row);
+    let Some(line) = view.visible_lines.get(visual_row_offset) else {
+        return view.visible_lines.last().map_or(0, |line| line.end_char);
+    };
+    let target_col = usize::from(rel_col);
+    let line_width: usize = line.text.chars().map(char_cells).sum();
+    if target_col >= line_width {
+        return line.end_char;
+    }
+    let mut current_col = 0usize;
+    for (index, ch) in line.text.chars().enumerate() {
+        let cells = char_cells(ch);
+        if current_col + cells > target_col {
+            return line.start_char + index;
+        }
+        current_col += cells;
+    }
+    line.end_char
+}
+
+/// 按显示列宽完整折行（含 `\n`），不做行数限制。
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for raw_line in text.split('\n') {
+        let mut current = String::new();
+        let mut col = 0usize;
+        for ch in raw_line.chars() {
+            let cells = char_cells(ch);
+            if col + cells > width && col > 0 {
+                lines.push(std::mem::take(&mut current));
+                col = 0;
+            }
+            current.push(ch);
+            col += cells;
+        }
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// 保留不超过 `width` 的显示宽度，末列换成省略号 `…`。
+fn truncate_with_ellipsis(line: &str, width: usize) -> String {
+    const ELLIPSIS: char = '…';
+    if width == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in line.chars() {
+        let cells = char_cells(ch);
+        if used + cells > width - 1 {
+            break;
+        }
+        out.push(ch);
+        used += cells;
+    }
+    out.push(ELLIPSIS);
+    out
+}
+
+/// 完整视觉行分片：记录每行的文本切片与字符区间。
+fn wrapped_lines(text: &str, width: usize) -> Vec<WrappedLine<'_>> {
+    let mut lines = Vec::new();
+    let mut start_byte = 0usize;
+    let mut start_char = 0usize;
+    let mut char_index = 0usize;
+    let mut col = 0usize;
+    for (byte, ch) in text.char_indices() {
+        if ch == '\n' {
+            lines.push(WrappedLine {
+                text: &text[start_byte..byte],
+                start_char,
+                end_char: char_index,
+            });
+            if width > 1 && col == width {
+                lines.push(WrappedLine {
+                    text: "",
+                    start_char: char_index,
+                    end_char: char_index,
+                });
+            }
+            start_byte = byte + ch.len_utf8();
+            start_char = char_index + 1;
+            char_index += 1;
+            col = 0;
+            continue;
+        }
+        let cells = char_cells(ch);
+        if col + cells > width && col > 0 {
+            lines.push(WrappedLine {
+                text: &text[start_byte..byte],
+                start_char,
+                end_char: char_index,
+            });
+            start_byte = byte;
+            start_char = char_index;
+            col = 0;
+        }
+        col += cells;
+        char_index += 1;
+    }
+    lines.push(WrappedLine {
+        text: &text[start_byte..],
+        start_char,
+        end_char: char_index,
+    });
+    if width > 1 && col == width {
+        lines.push(WrappedLine {
+            text: "",
+            start_char: char_index,
+            end_char: char_index,
+        });
+    }
+    lines
+}
+
+/// 光标所在视觉行与列：软折行边界归下一行，硬换行前的行尾归当前行。
+fn cursor_position(lines: &[WrappedLine<'_>], cursor: usize) -> (usize, usize) {
+    let mut row = lines.len().saturating_sub(1);
+    for (index, line) in lines.iter().enumerate() {
+        let at_end = cursor == line.end_char;
+        let hard_break = lines
+            .get(index + 1)
+            .is_none_or(|next| next.start_char > line.end_char);
+        if cursor < line.end_char || (at_end && hard_break) {
+            row = index;
+            break;
+        }
+    }
+    let line = &lines[row];
+    let offset = cursor.min(line.end_char).saturating_sub(line.start_char);
+    let col = line.text.chars().take(offset).map(char_cells).sum();
+    (row, col)
 }
 
 /// 渲染单行输入文本；空文本且有占位时渲染暗色输入说明；

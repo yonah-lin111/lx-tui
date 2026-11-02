@@ -124,6 +124,9 @@ pub fn sticky_prompt_jump(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<
 /// 只在没有面板时画）。命中若照旧按历史几何作答，输出区就成了一个巨大的点击穿透面：
 /// 点置顶行会跳一块看不见的历史、点代码块 `[❐]` 会复制看不见的代码、点 thinking
 /// 头部会展开看不见的块。把判定收在这里，避免每个入口各写一遍、反复漏。
+///
+/// 聊天栏「回到底部」**不属于**历史几何：面板打开时它照样是活的，`chat_hit`
+/// 因此先判它、再问这个。
 pub(super) fn chat_geometry_is_live(lx: &Lx) -> bool {
     lx.task.is_none() && super::history::has_history(lx)
 }
@@ -135,14 +138,15 @@ pub fn chat_hit(
     row: u16,
     cache: &mut PaneCache,
 ) -> Option<LxChatHit> {
-    if !chat_geometry_is_live(lx) {
-        return None;
-    }
-    // 输入框上方聊天栏右端的「回到底部」控件。
+    // 输入框上方聊天栏右端的「回到底部」控件：**必须先于**历史几何判定——后台任务
+    // 面板打开时历史没画（`chat_geometry_is_live` 为 false），但这一行上的按钮是活的。
     if let Some(rect) = chat_bar::jump_bottom_rect(area, lx)
         && rect.contains((column, row).into())
     {
         return Some(LxChatHit::JumpBottom);
+    }
+    if !chat_geometry_is_live(lx) {
+        return None;
     }
     let view = history_view(area, lx, cache)?;
     // 置顶行（表现层，整区第 0 行整宽）：点击跳回该 prompt。

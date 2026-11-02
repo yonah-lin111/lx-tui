@@ -11,6 +11,9 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
 
+mod charts;
+mod schedule;
+
 /// 面板高度：足够容纳表头两行与列表区。
 const PANEL_HEIGHT: u16 = 14;
 
@@ -316,197 +319,208 @@ fn edit_row_returns_cursor_position() {
     );
 }
 
-/// 列表与统计块平分主体区：两者高度最多差 1 行（分割线吃掉余数）。
+/// 编辑行复用 `widgets::input::multiline_view` 的视口：长文本软折行，光标落在末行剩余宽度处。
 #[test]
-fn list_and_stats_split_body_evenly() {
-    let area = panel(38);
-    let strip = week_strip_rect(area).expect("周感知带可见");
-    let list = list_rect(area);
-    let divider = stats_divider_rect(area).expect("统计块可见");
-    let stats = stats_rect(area).expect("统计块可见");
-    let body = crate::layout::prompt_body_rect(crate::layout::pane_inner_rect(area));
-
-    assert_eq!(strip.y, body.y, "周感知带贴主体区顶边");
-    assert_eq!(list.y, strip.bottom(), "列表紧贴周感知带下方");
-    assert_eq!(
-        u32::from(strip.height) + u32::from(list.height) + u32::from(stats.height) + 1,
-        u32::from(body.height),
-        "周感知带 + 列表 + 分割线 + 统计 == 主体区高度"
-    );
-    let diff = list.height.abs_diff(stats.height);
-    assert!(
-        diff <= 1,
-        "两者高度差 {diff} 超过 1 行：{list:?} / {stats:?}"
-    );
-    assert_eq!(divider.y, list.bottom(), "分割线紧贴列表底部");
-    assert_eq!(stats.y, divider.bottom(), "统计块紧贴分割线下方");
-    assert_eq!(stats.bottom(), body.bottom(), "统计块贴主体区底部");
-    assert_eq!(list.right(), body.right() - 1, "列表让出最右 1 列滚动条槽");
-}
-
-/// 主体区太矮时不切分：列表独占整块，统计块整块隐藏。
-#[test]
-fn stats_hidden_when_body_too_short() {
-    for height in 0..MIN_SPLIT_BODY {
-        let area = Rect::new(0, 0, 40, height);
-        assert!(stats_divider_rect(area).is_none(), "高度 {height} 无分割线");
-        assert!(stats_rect(area).is_none(), "高度 {height} 无统计块");
-        let body = crate::layout::prompt_body_rect(crate::layout::pane_inner_rect(area));
-        assert_eq!(
-            list_rect(area).height,
-            body.height,
-            "高度 {height} 列表独占"
-        );
-    }
-}
-
-/// 统计块首行是摘要 `total N · doing N · done N N%`。
-#[test]
-fn stats_summary_row_shows_counts_and_percent() {
-    let mut state = AppState::demo();
-    let area = panel(46);
-    state.todo.replace(vec![
-        TodoRecord::new("a", TodoStatus::Todo, 0),
-        TodoRecord::new("b", TodoStatus::InProgress, 1),
-        TodoRecord::new("c", TodoStatus::Done, 2),
-        TodoRecord::new("d", TodoStatus::Done, 3),
-    ]);
-
-    let (buffer, _) = render_panel(&state, area);
-    let stats = stats_rect(area).expect("统计块可见");
-    let text: String = (stats.x..stats.right())
-        .map(|x| buffer[(x, stats.y)].symbol())
-        .collect();
-    assert_eq!(
-        text.trim_end(),
-        format!(
-            "{total} 4{sep}{doing} 1{sep}{done_label} 2 50%",
-            total = text::TODO_STATS_TOTAL_LABEL,
-            sep = text::TODO_STATS_SEPARATOR,
-            doing = text::TODO_STATS_DOING_LABEL,
-            done_label = text::TODO_STATS_DONE_LABEL,
-        ),
-        "`total 4 · doing 1 · done 2 50%`（标签 muted、数值正文色，段间 ` · `）"
-    );
-}
-
-/// 柱图按三态各占一槽，柱子自下而上堆叠 `█`；轴标签行在统计块最后一行。
-#[test]
-fn stats_chart_draws_bars_per_status() {
-    let mut state = AppState::demo();
-    let area = panel(46);
-    state.todo.replace(vec![
-        TodoRecord::new("a", TodoStatus::Todo, 0),
-        TodoRecord::new("b", TodoStatus::Todo, 1),
-        TodoRecord::new("c", TodoStatus::Done, 2),
-    ]);
-
-    let (buffer, _) = render_panel(&state, area);
-    let stats = stats_rect(area).expect("统计块可见");
-    assert!(
-        stats.height >= MIN_STATS_ROWS,
-        "统计块高度 {}",
-        stats.height
-    );
-
-    // 轴标签行：三段文案都在，且各带自己的计数。
-    let axis: String = (stats.x..stats.right())
-        .map(|x| buffer[(x, stats.bottom() - 1)].symbol())
-        .collect();
-    for label in [
-        text::TODO_STATS_OPEN_LABEL,
-        text::TODO_STATS_DOING_LABEL,
-        text::TODO_STATS_DONE_LABEL,
-    ] {
-        assert!(axis.contains(label), "轴标签缺 {label}: {axis:?}");
-    }
-    assert!(axis.contains("open 2"), "未开始计数: {axis:?}");
-    assert!(axis.contains("done 1"), "已完成计数: {axis:?}");
-
-    // 柱区：`█` 出现在轴标签之上的行里，且未开始（2 条）比已完成（1 条）高。
-    let chart_top = stats.y + 1;
-    let chart_bottom = stats.bottom() - 2;
-    let column_height = |x_test: &dyn Fn(u16) -> bool| -> usize {
-        (chart_top..=chart_bottom)
-            .filter(|y| {
-                (stats.x..stats.right())
-                    .any(|x| x_test(x) && buffer[(x, *y)].symbol() == text::TODO_BAR_FILLED)
-            })
-            .count()
-    };
-    let total_filled = column_height(&|_| true);
-    assert!(total_filled > 0, "柱区必须有柱子");
-
-    // 三种柱子分别用各自的状态色：至少存在一绿（done）一非绿（open / doing）。
-    let has_green = (chart_top..=chart_bottom).any(|y| {
-        (stats.x..stats.right()).any(|x| {
-            let cell = &buffer[(x, y)];
-            cell.symbol() == text::TODO_BAR_FILLED && cell.fg == Color::Green
-        })
-    });
-    assert!(has_green, "已完成柱必须用 Green");
-}
-
-#[test]
-fn empty_list_still_shows_zero_stats() {
-    let state = AppState::demo();
-    let area = panel(46);
-    let (buffer, _) = render_panel(&state, area);
-    let stats = stats_rect(area).expect("统计块可见");
-    let text: String = (stats.x..stats.right())
-        .map(|x| buffer[(x, stats.y)].symbol())
-        .collect();
-    assert!(text.contains("total 0"), "空列表统计归零: {text:?}");
-    assert!(text.contains("done 0 0%"), "空列表百分比为 0: {text:?}");
-    let filled = (stats.y..stats.bottom())
-        .flat_map(|y| (stats.x..stats.right()).map(move |x| (x, y)))
-        .filter(|(x, y)| buffer[(*x, *y)].symbol() == text::TODO_BAR_FILLED)
-        .count();
-    assert_eq!(filled, 0, "空列表不画柱子");
-}
-
-/// 统计行不得覆盖到滚动条槽：列表溢出时 thumb 与统计行同屏并存。
-#[test]
-fn scrollbar_track_stops_above_stats() {
-    let area = panel(38);
-    let mut state = AppState::demo();
-    state.right_tab = crate::app::state::RightTab::Todo;
-    let visible = visible_rows(area);
-    state.todo.replace(records(visible.saturating_add(4)));
-    let bar = scrollbar(area, &state).expect("溢出时出现滚动条");
-    let list = list_rect(area);
-    assert_eq!(bar.track.bottom(), list.bottom(), "轨道只在列表区");
-    assert!(
-        bar.track.bottom() <= stats_divider_rect(area).expect("统计块可见").y,
-        "轨道不得压到分割线"
-    );
-}
-
-/// 编辑行复用 `widgets::input` 的视口：长文本横向滚动后光标仍在输入区右缘内。
-#[test]
-fn edit_row_reuses_input_view_scrolling() {
+fn edit_row_reuses_multiline_view_scrolling() {
     let mut state = AppState::demo();
     let area = panel(30);
     state
         .todo
         .replace(vec![TodoRecord::new("seed", TodoStatus::Todo, 0)]);
     let id = state.todo.items()[0].id.clone();
-    let long = "x".repeat(80);
+    let width = edit_row_width(area);
+    let long = "x".repeat(width.saturating_add(3));
     begin_edit(&mut state, TodoEdit::new(Some(id), long, 0));
 
     let (_, cursor) = render_panel(&state, area);
     let (x, y) = cursor.expect("编辑行必须返回光标坐标");
     let list = list_rect(area);
-    assert_eq!(y, list.y);
-    assert!(
-        x < list.right(),
-        "光标 {x} 不得越过列表右缘 {:?}",
-        list.right()
-    );
+    assert_eq!(y, list.y + 1, "两行文本：光标落在第二行");
+    assert_eq!(x, row_text_x(list) + 3, "光标列 = 末行剩余字符宽度");
+    assert!(x < list.right(), "光标 {x} 不得越过列表右缘");
+}
+
+/// 列表正文可用显示列数。
+fn text_width(list: Rect) -> usize {
+    usize::from(list.right().saturating_sub(row_text_x(list)))
+}
+
+/// 中长文本折为 2~3 行：续行从 `row_text_x` 起与首行正文对齐，左侧 9 列留空。
+#[test]
+fn long_todo_wraps_with_nine_column_continuation_indent() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    let list = list_rect(area);
+    let width = text_width(list).max(1);
+    let text_x = row_text_x(list);
+    let text = format!("{}{}", "a".repeat(width), "tail");
+    state
+        .todo
+        .replace(vec![TodoRecord::new(text, TodoStatus::Todo, 0)]);
+
+    let layout = layout_visible_items(area, &state);
+    assert_eq!(layout.items[0].rendered_rows, 2, "两行文本占 2 行");
+    let (buffer, _) = render_panel(&state, area);
+    assert_eq!(buffer[(text_x, list.y)].symbol(), "a");
     assert_eq!(
-        x,
-        list.right() - 1,
-        "文本长于输入区时视口滚到末尾、光标贴右缘"
+        buffer[(text_x, list.y + 1)].symbol(),
+        "t",
+        "续行正文必须从 text_x 起"
+    );
+    for x in list.x..text_x {
+        assert_eq!(
+            buffer[(x, list.y + 1)].symbol(),
+            " ",
+            "续行第 {x} 列必须留空（9 列缩进）"
+        );
+    }
+}
+
+/// 超 3 行在第 3 行末尾以 `…` 截断，条目总高固定 3 行。
+#[test]
+fn overlong_todo_truncates_third_line_with_ellipsis() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    let list = list_rect(area);
+    let width = text_width(list).max(1);
+    let text = "a".repeat(width.saturating_mul(4));
+    state
+        .todo
+        .replace(vec![TodoRecord::new(text, TodoStatus::Todo, 0)]);
+
+    let layout = layout_visible_items(area, &state);
+    assert_eq!(layout.items[0].rendered_rows, 3, "最多 3 行");
+    let (buffer, _) = render_panel(&state, area);
+    assert_eq!(
+        buffer[(
+            row_text_x(list) + u16::try_from(width).unwrap_or(u16::MAX) - 1,
+            list.y + 2
+        )]
+            .symbol(),
+        "…",
+        "第 3 行末列必须是省略号"
+    );
+}
+
+/// 选中/悬停底色铺满条目的全部 1~3 个视觉行，续行前缀也保留底色。
+#[test]
+fn selected_wrapped_item_fills_all_visual_rows() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    let list = list_rect(area);
+    let width = text_width(list).max(1);
+    let selection = style::selection().bg;
+    state.todo.replace(vec![TodoRecord::new(
+        "a".repeat(width.saturating_mul(3)),
+        TodoStatus::Todo,
+        0,
+    )]);
+    state.set_focus(crate::app::state::FocusedContainer::Todo);
+
+    let (buffer, _) = render_panel(&state, area);
+    let text_x = row_text_x(list);
+    for row in 0..3u16 {
+        for x in [list.x, text_x, list.right() - 1] {
+            assert_eq!(
+                buffer[(x, list.y + row)].bg,
+                selection.unwrap_or(Color::Reset),
+                "第 {row} 个视觉行第 {x} 列必须铺选中底色"
+            );
+        }
+    }
+
+    // 悬停同样铺满整块。
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
+    state.todo_hover = Some(0);
+    let (buffer, _) = render_panel(&state, area);
+    for row in 0..3u16 {
+        assert_eq!(
+            buffer[(list.x, list.y + row)].bg,
+            selection.unwrap_or(Color::Reset),
+            "悬停第 {row} 个视觉行必须铺底色"
+        );
+    }
+}
+
+/// 行内编辑在 1~3 行间自适应展开；超过 3 行固定 3 行并随光标滚动视口。
+#[test]
+fn edit_row_expands_to_three_lines_and_scrolls_with_cursor() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    let list = list_rect(area);
+    let width = edit_row_width(area).max(1);
+    state.todo.replace(vec![
+        TodoRecord::new("a", TodoStatus::Todo, 0),
+        TodoRecord::new("b", TodoStatus::Todo, 1),
+    ]);
+    let id = state.todo.items()[0].id.clone();
+
+    // 1 行：高 1，下一条目紧跟其后。
+    begin_edit(
+        &mut state,
+        TodoEdit::new(Some(id.clone()), "x".repeat(width - 1), 0),
+    );
+    let layout = layout_visible_items(area, &state);
+    assert_eq!(layout.items[0].rendered_rows, 1);
+    assert_eq!(layout.items[1].y, list.y + 1, "单行编辑不占多余行");
+
+    // 2 行：高 2。
+    begin_edit(
+        &mut state,
+        TodoEdit::new(Some(id.clone()), "x".repeat(width + 1), 0),
+    );
+    let layout = layout_visible_items(area, &state);
+    assert_eq!(layout.items[0].rendered_rows, 2);
+    assert_eq!(layout.items[1].y, list.y + 2);
+
+    // 4 行文本：固定 3 行，光标在第 4 行 → 视口从第 2 行开始。
+    let long = "x".repeat(width.saturating_mul(3).saturating_add(3));
+    begin_edit(&mut state, TodoEdit::new(Some(id), long, 0));
+    let layout = layout_visible_items(area, &state);
+    assert_eq!(layout.items[0].rendered_rows, 3);
+    assert_eq!(layout.items[1].y, list.y + 3, "超过 3 行仍只占 3 行");
+
+    let (_, cursor) = render_panel(&state, area);
+    let (x, y) = cursor.expect("编辑行必须返回光标坐标");
+    assert_eq!(y, list.y + 2, "光标在第 3 个可见行");
+    assert_eq!(x, row_text_x(list) + 3, "光标列 = 末行剩余字符宽度");
+}
+
+/// 多行编辑的命中测试：任意可见行都命中同一条目，优先级只在首行，点击定位按行偏移换算。
+#[test]
+fn multiline_item_hits_rows_and_cursor_position() {
+    let mut state = AppState::demo();
+    let area = panel(38);
+    let list = list_rect(area);
+    let width = edit_row_width(area).max(1);
+    let text_x = row_text_x(list);
+    state.todo.replace(vec![
+        TodoRecord::new("a", TodoStatus::Todo, 0),
+        TodoRecord::new("b", TodoStatus::Todo, 1),
+    ]);
+    let id = state.todo.items()[0].id.clone();
+    let long = "x".repeat(width.saturating_mul(3).saturating_add(3));
+    begin_edit(&mut state, TodoEdit::new(Some(id), long, 0));
+
+    // 三个可见行都命中条目 0。
+    for row in 0..3u16 {
+        assert_eq!(
+            row_at(area, &state, text_x, list.y + row),
+            Some(0),
+            "第 {row} 个视觉行命中条目 0"
+        );
+    }
+    assert_eq!(row_at(area, &state, text_x, list.y + 3), Some(1));
+
+    // 优先级徽标只在首行命中。
+    let px = row_priority_x(list);
+    assert_eq!(priority_at(area, &state, px, list.y), Some(0));
+    assert_eq!(priority_at(area, &state, px, list.y + 1), None);
+
+    // 光标在第 4 行 → 可见窗口为第 2~4 行；点击第 2 个可见行第 2 列 → 第 3 行第 2 个字符。
+    assert_eq!(
+        edit_input_char_at(area, &state, text_x + 2, list.y + 1),
+        Some(width.saturating_mul(2).saturating_add(2))
     );
 }
 
@@ -564,44 +578,6 @@ fn edit_row_cursor_uses_display_width() {
     // 文本也确实按两列一格铺开。
     assert_eq!(buffer[(text_x, list.y)].symbol(), "中");
     assert_eq!(buffer[(text_x + 4, list.y)].symbol(), "名");
-}
-
-/// 摘要行放不下时整行不画（分割线与柱图仍在），绝不允许后面的短段顶到前面拼出残句。
-#[test]
-fn stats_summary_hidden_whole_when_too_narrow() {
-    let mut state = AppState::demo();
-    state.todo.replace(vec![
-        TodoRecord::new("a", TodoStatus::Todo, 0),
-        TodoRecord::new("b", TodoStatus::Done, 1),
-    ]);
-
-    // 足够宽：整句可见。
-    let wide = panel(46);
-    let (buffer, _) = render_panel(&state, wide);
-    let stats = stats_rect(wide).expect("统计块可见");
-    let text: String = (stats.x..stats.right())
-        .map(|x| buffer[(x, stats.y)].symbol())
-        .collect();
-    assert!(
-        text.trim_end().ends_with("done 1 50%"),
-        "宽面板整句: {text:?}"
-    );
-
-    // 恰好差一列：整行不画，不得留下半句。
-    let needed = text.trim_end().chars().count();
-    let narrow = panel(u16::try_from(needed).unwrap_or(u16::MAX) - 1);
-    let (buffer, _) = render_panel(&state, narrow);
-    let stats = stats_rect(narrow).expect("统计块可见");
-    let text: String = (stats.x..stats.right())
-        .map(|x| buffer[(x, stats.y)].symbol())
-        .collect();
-    assert_eq!(text.trim(), "", "放不下时摘要整行不画: {text:?}");
-    // 分割线仍在：统计块的高度不随内容有无而变化。
-    let divider = stats_divider_rect(narrow).expect("统计块可见");
-    assert_eq!(
-        buffer[(narrow.x, divider.y)].symbol(),
-        text::DIVIDER_LEFT_JOIN
-    );
 }
 
 /// 编辑首行、后面还有行时，光标不能让后面那些「无光标」的行覆盖掉。
@@ -737,188 +713,6 @@ fn priority_badges_have_distinct_backgrounds_and_high_contrast_foregrounds() {
 }
 
 #[test]
-fn week_strip_and_rollover_banner_hit_and_render() {
-    let mut state = AppState::demo();
-    let area = panel(46);
-    state.todo.set_today_date("2026-10-31");
-    state.todo.replace(vec![
-        TodoRecord::new_on(
-            "2026-10-30",
-            "yesterday-open",
-            TodoStatus::Todo,
-            TodoPriority::P0,
-            0,
-        ),
-        TodoRecord::new_on(
-            "2026-10-31",
-            "today-open",
-            TodoStatus::Todo,
-            TodoPriority::P1,
-            0,
-        ),
-    ]);
-
-    let (buffer, _) = render_panel(&state, area);
-    let header = crate::layout::prompt_header_rect(area).expect("header");
-    let divider_y = header.y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
-    let divider_text: String = (area.x..area.right())
-        .map(|x| buffer[(x, divider_y)].symbol())
-        .collect();
-    assert!(
-        divider_text.contains("2026/10/31"),
-        "周感知带上方左侧边框包含 yyyy/mm/dd: {divider_text:?}"
-    );
-    assert!(
-        divider_text.contains("26-01"),
-        "周感知带上方右侧边框包含周跨度 26-01: {divider_text:?}"
-    );
-
-    let strip = week_strip_rect(area).expect("周感知带可见");
-    let strip_text: String = (strip.x..strip.right())
-        .map(|x| buffer[(x, strip.y)].symbol())
-        .collect();
-    assert!(
-        strip_text.contains("Mon") && strip_text.contains("Sat"),
-        "周感知带包含英文星期缩写: {strip_text:?}"
-    );
-    assert!(
-        !strip_text.contains("30") && !strip_text.contains("31"),
-        "周感知带已移除日期号数字: {strip_text:?}"
-    );
-    assert_eq!(
-        week_strip_hit_at(area, &state, strip.x, strip.y),
-        Some(WeekStripHit::PrevWeek)
-    );
-    assert_eq!(
-        week_strip_hit_at(area, &state, strip.right() - 1, strip.y),
-        Some(WeekStripHit::NextWeek)
-    );
-
-    let banner = rollover_banner_rect(area, &state).expect("顺延横幅可见");
-    let banner_text: String = (banner.x..banner.right())
-        .map(|x| buffer[(x, banner.y)].symbol())
-        .collect();
-    assert!(
-        banner_text.contains("past"),
-        "横幅提示历史未完成: {banner_text:?}"
-    );
-    let (action_rect, dismiss_rect) =
-        schedule::rollover_button_rects(area, &state).expect("横幅按钮可见");
-    assert_eq!(
-        rollover_hit_at(area, &state, action_rect.x, action_rect.y),
-        Some(RolloverHit::MoveToToday)
-    );
-    assert_eq!(
-        rollover_hit_at(area, &state, dismiss_rect.x, dismiss_rect.y),
-        Some(RolloverHit::Dismiss)
-    );
-}
-
-#[test]
-fn chart_switcher_and_three_chart_modes_render() {
-    let mut state = AppState::demo();
-    let area = panel(46);
-    state.todo.set_today_date("2026-10-31");
-    state.todo.replace(vec![
-        TodoRecord::new_on("2026-10-30", "d1", TodoStatus::Done, TodoPriority::P0, 0),
-        TodoRecord::new_on("2026-10-31", "t1", TodoStatus::Todo, TodoPriority::P0, 0),
-        TodoRecord::new_on("2026-10-31", "t2", TodoStatus::Done, TodoPriority::P2, 1),
-    ]);
-
-    let stats = stats_rect(area).expect("统计块可见");
-    let (whole, prev_btn, next_btn) =
-        charts::chart_switcher_rects(area, &state).expect("切图器可见");
-    let (buffer, _) = render_panel(&state, area);
-    let switcher_text: String = (whole.x..whole.right())
-        .map(|x| buffer[(x, whole.y)].symbol())
-        .collect();
-    assert!(
-        switcher_text.contains("today · status 1/3"),
-        "切图器注明当天: {switcher_text:?}"
-    );
-    assert_eq!(
-        chart_switch_hit_at(area, &state, prev_btn.x, prev_btn.y),
-        Some(ChartSwitchHit::Prev)
-    );
-    assert_eq!(
-        chart_switch_hit_at(area, &state, next_btn.x, next_btn.y),
-        Some(ChartSwitchHit::Next)
-    );
-
-    // Chart 2: Priority
-    state
-        .todo
-        .set_chart(crate::app::state::TodoChartKind::Priority);
-    let (buffer, _) = render_panel(&state, area);
-    let (whole2, _, _) = charts::chart_switcher_rects(area, &state).expect("switcher2");
-    let switcher2_text: String = (whole2.x..whole2.right())
-        .map(|x| buffer[(x, whole2.y)].symbol())
-        .collect();
-    assert!(
-        switcher2_text.contains("today · priority 2/3"),
-        "切图器注明优先级为当天: {switcher2_text:?}"
-    );
-    let summary: String = (stats.x..stats.right())
-        .map(|x| buffer[(x, stats.y)].symbol())
-        .collect();
-    assert!(summary.contains("P0 1"), "优先级统计摘要: {summary:?}");
-    assert!(summary.contains("P2 1"), "优先级统计摘要: {summary:?}");
-
-    // Chart 3: 7-Day Trend
-    state
-        .todo
-        .set_chart(crate::app::state::TodoChartKind::Trend7Day);
-    let (buffer, _) = render_panel(&state, area);
-    let (whole3, prev3, next3) = charts::chart_switcher_rects(area, &state).expect("switcher3");
-    let switcher3_text: String = (whole3.x..whole3.right())
-        .map(|x| buffer[(x, whole3.y)].symbol())
-        .collect();
-    assert!(
-        switcher3_text.contains("week · 7d trend 3/3"),
-        "切图器注明趋势为一周: {switcher3_text:?}"
-    );
-    let divider = stats_divider_rect(area).expect("divider");
-    // 左右两侧边框线的字符与样式必须完全一致（无色差）：
-    assert_eq!(buffer[(prev3.x - 1, divider.y)].symbol(), "─");
-    assert_eq!(buffer[(next3.x + 1, divider.y)].symbol(), "─");
-    assert_eq!(
-        buffer[(prev3.x - 1, divider.y)].modifier,
-        buffer[(next3.x + 1, divider.y)].modifier,
-        "切图按钮左侧边框与右侧边框 modifier 必须完全一致"
-    );
-    assert_eq!(
-        buffer[(prev3.x - 1, divider.y)].fg,
-        buffer[(next3.x + 1, divider.y)].fg,
-        "切图按钮左侧边框与右侧边框前景色必须完全一致"
-    );
-    // 切图按钮 `<` / `>` 本身已重置底层 DIM，只保留 BOLD 强调色：
-    assert!(
-        !buffer[(prev3.x, divider.y)]
-            .modifier
-            .contains(Modifier::DIM),
-        "切图按钮左箭头不应继承分割线的 DIM"
-    );
-    assert!(
-        !buffer[(next3.x, divider.y)]
-            .modifier
-            .contains(Modifier::DIM),
-        "切图按钮右箭头不应继承分割线的 DIM"
-    );
-
-    let summary: String = (stats.x..stats.right())
-        .map(|x| buffer[(x, stats.y)].symbol())
-        .collect();
-    assert!(
-        summary.contains("plan 3"),
-        "7日趋势摘要包含计划总数: {summary:?}"
-    );
-    assert!(
-        summary.contains("done 2"),
-        "7日趋势摘要包含完成总数: {summary:?}"
-    );
-}
-
-#[test]
 fn ghost_row_before_selected_keeps_selection_highlight_aligned_and_scrollbar_counts_ghost() {
     let mut state = AppState::demo();
     let area = panel(44);
@@ -952,4 +746,127 @@ fn ghost_row_before_selected_keeps_selection_highlight_aligned_and_scrollbar_cou
         style::selection().bg.unwrap_or(Color::Reset),
         "选中的 row-1 必须同时拥有 ❯ 标记与选中背景色"
     );
+}
+
+#[test]
+fn multiline_items_scroll_into_view_on_down_and_render_scrollbar() {
+    let mut state = AppState::demo();
+    state.right_tab = RightTab::Todo;
+    state.set_focus(crate::app::state::FocusedContainer::Todo);
+    let area = panel(38);
+    let list = list_rect(area);
+    let width = text_width(list).max(1);
+    // 列表高度约 4 行，放入 4 条各占 3 行的待办（逻辑条数 4 <= list.height，但总视觉行数 12 > list.height）：
+    let three_line = "m".repeat(width.saturating_mul(3));
+    state.todo.replace(
+        (0..4)
+            .map(|idx| TodoRecord::new(format!("{idx}-{three_line}"), TodoStatus::Todo, idx))
+            .collect(),
+    );
+
+    crate::app::update::resolve_todo_viewport(&mut state, area);
+    let bar0 = scrollbar(area, &state).expect("多行展开总行高溢出列表高度时必须显示滚动条");
+    assert_eq!(state.todo.scroll(), 0);
+    assert_eq!(bar0.thumb.y, bar0.track.y, "初始 thumb 贴顶");
+
+    // 连续按 ↓ 导航到末项 3：必须逐项推进 scroll，使末项完整落入视口且滚动条到底。
+    for expected in 1..=3 {
+        assert!(crate::app::update::move_todo_selection(&mut state, 1));
+        crate::app::update::resolve_todo_viewport(&mut state, area);
+        assert_eq!(state.todo.selected(), Some(expected));
+        let layout = layout_visible_items(area, &state);
+        let item = layout
+            .items
+            .iter()
+            .find(|item| item.display == expected)
+            .expect("选中条目必须在可见列表内");
+        assert_eq!(
+            item.rendered_rows, 3,
+            "选中条目 {expected} 的全部 3 个视觉行必须完整可见，不得被底边裁剪"
+        );
+    }
+    let bar_end = scrollbar(area, &state).expect("末项仍显示滚动条");
+    assert_eq!(
+        bar_end.thumb.bottom(),
+        bar_end.track.bottom(),
+        "滚到最大偏移时 thumb 触底"
+    );
+
+    // 手动滚轮上滚到顶部后，resolve_todo_viewport 不得把视口强行拉回 selected (3)。
+    assert!(crate::app::update::scroll_todo(&mut state, -10));
+    assert_eq!(state.todo.scroll(), 0);
+    crate::app::update::resolve_todo_viewport(&mut state, area);
+    assert_eq!(
+        state.todo.scroll(),
+        0,
+        "手动滚轮滚动后不应被自动吸附回选中项"
+    );
+}
+
+#[test]
+fn multiline_edit_keeps_top_click_stable_and_clamps_drag_coordinates() {
+    let mut state = AppState::demo();
+    state.right_tab = RightTab::Todo;
+    state.set_focus(crate::app::state::FocusedContainer::Todo);
+    let area = panel(38);
+    let list = list_rect(area);
+    let width = edit_row_width(area).max(1);
+    let text_x = row_text_x(list);
+    state
+        .todo
+        .replace(vec![TodoRecord::new("seed", TodoStatus::Todo, 0)]);
+    let id = state.todo.items()[0].id.clone();
+
+    // 4 行文本，初始光标在末尾（第 4 行，scroll_row = 1，显示第 1..=3 行）：
+    let long = format!(
+        "{}{}{}{}",
+        "a".repeat(width),
+        "b".repeat(width),
+        "c".repeat(width),
+        "de"
+    );
+    begin_edit(&mut state, TodoEdit::new(Some(id), long, 0));
+    crate::app::update::resolve_todo_viewport(&mut state, area);
+    assert_eq!(state.todo.editing().expect("edit").scroll_row, 1);
+
+    // 点击可见第 0 行（对应第 1 行 'b' 段）第 1 列：
+    let clicked = edit_input_char_at(area, &state, text_x + 1, list.y).expect("hit row 0");
+    assert_eq!(clicked, width + 1);
+    state
+        .todo
+        .edit_input_mut()
+        .expect("input")
+        .begin_selection(clicked);
+    crate::app::update::resolve_todo_viewport(&mut state, area);
+    assert_eq!(
+        state.todo.editing().expect("edit").scroll_row,
+        1,
+        "点击可见首行后视口不得跳回第 0 行"
+    );
+
+    // 拖拽进入左侧 9 列缩进区钳为该可见行行首（width），越过右缘钳为该可见行行尾（width * 2）：
+    assert_eq!(
+        edit_input_drag_char_at(area, &state, list.x, list.y),
+        Some(width),
+        "拖入左侧缩进区延伸到当前可见行首"
+    );
+    assert_eq!(
+        edit_input_drag_char_at(area, &state, list.right() + 5, list.y),
+        Some(width * 2),
+        "拖出列表右缘延伸到满宽行行尾（覆盖末字符）"
+    );
+    // 向上拖出编辑项顶边钳到可见第 0 行，向下拖出编辑项底边钳到可见末行（第 2 行）：
+    assert_eq!(
+        edit_input_drag_char_at(area, &state, text_x + 2, list.y.saturating_sub(3)),
+        Some(width + 2)
+    );
+    assert_eq!(
+        edit_input_drag_char_at(area, &state, list.right() + 5, list.y + 99),
+        Some(width * 3 + 2)
+    );
+
+    // 极窄面板（list.right() <= text_x）下 render_edit_item 安全返回 None：
+    let narrow = Rect::new(0, 0, 8, PANEL_HEIGHT);
+    let (_, narrow_cursor) = render_panel(&state, narrow);
+    assert!(narrow_cursor.is_none(), "极窄宽度无正文列时不返回越界光标");
 }

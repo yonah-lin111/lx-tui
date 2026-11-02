@@ -230,33 +230,45 @@ pub fn resolve_task_agents_visible(
             continue;
         };
         let total = total.unwrap_or(run.total_rows);
-        if run.visible != visible || run.total_rows != total || run.rows_dirty {
+        let max = total.saturating_sub(visible);
+        let should_follow = run.follow || total <= visible.saturating_add(1) || run.scroll >= max;
+        let next_scroll = if should_follow {
+            max
+        } else {
+            run.scroll.min(max)
+        };
+        if run.visible != visible
+            || run.total_rows != total
+            || run.rows_dirty
+            || run.follow != should_follow
+            || run.scroll != next_scroll
+        {
             run.visible = visible;
             run.total_rows = total;
             run.rows_dirty = false;
-            let max = total.saturating_sub(visible);
-            run.scroll = if run.follow { max } else { run.scroll.min(max) };
+            run.follow = should_follow;
+            run.scroll = next_scroll;
             changed = true;
         }
     }
     changed
 }
 
-/// 每轮把 `ask` 预览区的可见行数落状态（滚动上限钳制用）。
+/// 每轮把 `ask` 统一列表的 `(滚动起点, 总行数, 可视行数)` 落状态。
 ///
-/// 与 [`resolve_task_output_visible`] 同款：渲染层只读，几何由事件循环在绘制前写入，
-/// 状态里的偏移因此永远落在「真的能滚到」的范围内。
-pub fn resolve_ask_preview_visible(
+/// 与 [`resolve_task_output_visible`] 同款：渲染层只读，几何由事件循环在绘制前写入。
+/// `PageUp`/`PageDown` 在 `app/` 层拿不到窗格矩形，只能消费这里落下的上一帧窗口。
+pub fn resolve_ask_list_window(
     state: &mut AppState,
     rects: &[(PaneId, ratatui::layout::Rect)],
 ) -> bool {
     let mut changed = false;
     for (pane, rect) in rects {
         let inner = crate::layout::pane_inner_rect(*rect);
-        let Some(visible) = state
+        let Some((scroll, total, visible)) = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
-            .and_then(|target| crate::ui::main_content::lx::ask_preview_rows(inner, &target.lx))
+            .and_then(|target| crate::ui::main_content::lx::ask_list_window(inner, &target.lx))
         else {
             continue;
         };
@@ -264,7 +276,7 @@ pub fn resolve_ask_preview_visible(
             .pane_mut_anywhere(*pane)
             .and_then(|target| target.lx.ask.as_mut())
         {
-            changed |= ask.resize_preview(visible);
+            changed |= ask.sync_list_window(scroll, total, visible);
         }
     }
     changed
@@ -287,12 +299,41 @@ pub fn jump_lx_history_to_prompt(state: &mut AppState, pane: PaneId, target_row:
     before != target_row || was_following
 }
 
-/// 回到底部：把历史视口钉到最新一屏（跟随底部）并清除悬停态；返回是否发生变化。
+/// 回到底部：把当前视图钉到最新一屏并清除悬停态；返回是否发生变化。
+///
+/// 后台任务面板打开时按**当前页签的上方内容区**执行：`Processes` 贴输出尾部，
+/// `Agents` 恢复选中子 agent 的跟随（并同步滚动偏移）。
 pub fn jump_lx_history_bottom(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
+    if target.view != crate::app::state::PaneView::Lx {
+        return false;
+    }
+    if let Some(page) = target.lx.task.as_mut() {
+        target.lx.chat.jump_bottom_hover = false;
+        return match page.tab {
+            crate::app::state::TaskTab::Processes => {
+                let before = page.output_scroll;
+                page.pin_output_to_tail();
+                page.output_scroll != before
+            }
+            crate::app::state::TaskTab::Agents => target
+                .lx
+                .agents
+                .runs
+                .get_mut(page.agents_window.active)
+                .is_some_and(|run| {
+                    let changed = !run.follow;
+                    run.follow = true;
+                    if run.visible > 0 {
+                        run.scroll = run.total_rows.saturating_sub(run.visible);
+                    }
+                    changed
+                }),
+        };
+    }
+    if target.lx.chat.messages.is_empty() {
         return false;
     }
     let changed = !target.lx.chat.follow_bottom || target.lx.chat.jump_bottom_hover;

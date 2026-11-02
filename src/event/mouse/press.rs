@@ -293,6 +293,7 @@ pub(crate) fn handle_mouse_down_left(
                 mouse.row,
                 Instant::now(),
             );
+            update::clear_selection(state);
             if let Some(input) = state.todo.edit_input_mut() {
                 input.begin_selection_with_clicks(char_idx, clicks);
                 state.todo_input_drag = true;
@@ -542,6 +543,7 @@ pub(crate) fn handle_mouse_down_left(
                         mouse.row,
                         Instant::now(),
                     );
+                    update::clear_selection(state);
                     if let Some(target_mut) = state.pane_mut_anywhere(pane)
                         && let Some(ask_mut) = target_mut.lx.ask.as_mut()
                         && let Some(editor) = ask_mut.editor_mut()
