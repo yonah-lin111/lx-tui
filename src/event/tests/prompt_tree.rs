@@ -428,12 +428,7 @@ fn mouse_click_prompt_pin_toggles_pin() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    let pin = layout::prompt_toolbar_button_rect(
-        geo.view.prompt,
-        layout::PromptToolbarButton::Pin,
-        PromptMode::Editor,
-    )
-    .expect("pin visible");
+    let pin = ui::prompt_pin_button(geo.view.prompt, false).expect("pin visible");
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), pin.x, pin.y),
         &mut state,
@@ -446,12 +441,7 @@ fn mouse_click_prompt_pin_toggles_pin() {
     assert_eq!(state.prompt_pinned, Some(state.active_workspace));
     assert!(dirty);
 
-    let unpin = layout::prompt_toolbar_button_rect(
-        geo.view.prompt,
-        layout::PromptToolbarButton::Pin,
-        PromptMode::Editor,
-    )
-    .expect("pin visible");
+    let unpin = ui::prompt_pin_button(geo.view.prompt, true).expect("unpin visible");
     dirty = false;
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), unpin.x, unpin.y),
@@ -538,45 +528,6 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
 }
 
 #[test]
-fn mouse_click_prompt_toolbar_select_all_then_typing_replaces_text() {
-    let mut state = demo_terminal();
-    let (config, geo) = toolbar_geometry(&mut state);
-    let mut sessions = HashMap::new();
-    let mut dirty = false;
-
-    state.prompt.insert_str("first\nsecond");
-    let select_all = toolbar_button(&geo, layout::PromptToolbarButton::SelectAll);
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            select_all.x,
-            select_all.y,
-        ),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
-    assert!(
-        state
-            .selection
-            .is_some_and(|selection| selection.pane() == state.prompt.id())
-    );
-    assert_eq!(
-        update::prompt_selection_text(&state).as_deref(),
-        Some("first\nsecond")
-    );
-
-    update::apply_editor(
-        &mut state,
-        crate::app::actions::EditorCommand::InsertText("new".into()),
-    );
-    assert_eq!(state.prompt.text(), "new", "全选后输入替换全文");
-}
-
-#[test]
 fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
@@ -585,8 +536,8 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
     let mut dirty = false;
 
     let bar = layout::prompt_toolbar_rect(geo.view.prompt).expect("toolbar visible");
-    let select_all = toolbar_button(&geo, layout::PromptToolbarButton::SelectAll);
-    let blank_x = select_all.x - 1;
+    let redo = toolbar_button(&geo, layout::PromptToolbarButton::Redo);
+    let blank_x = redo.x - 1;
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), blank_x, bar.y),
         &mut state,
@@ -599,7 +550,7 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
-            select_all.right() + 2,
+            redo.right() + 2,
             bar.y,
         ),
         &mut state,

@@ -399,9 +399,11 @@ impl Persistence {
                 workspace,
                 id,
                 name,
+                content,
             } => {
                 let key = prompt_key_for(state, &workspace);
-                let Some(page_id) = self.with_db(|db| db.create_prompt_page(id, &name)) else {
+                let Some(page_id) = self.with_db(|db| db.create_prompt_page(id, &name, &content))
+                else {
                     return false;
                 };
                 let changed = self.reload_tree(state, &key);

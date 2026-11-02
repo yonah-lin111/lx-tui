@@ -157,6 +157,36 @@ fn agents_button(view: &layout::ViewLayout, agents_collapsed: bool) -> Option<Co
     })
 }
 
+/// prompt 底边钉住按钮：展开态位于底边折叠按钮左侧（间隔 1 列 `─`）；折叠态或空间不足返回 None。
+///
+/// 标签宽度随钉住态变化（未钉 `[pin]` 5 列 / 已钉 `[unpin]` 7 列），右缘固定贴折叠按钮左侧。
+pub fn prompt_pin_button(panel: Rect, pinned: bool) -> Option<Rect> {
+    if panel.width <= COLLAPSED_STRIP || panel.height == 0 {
+        return None;
+    }
+    let label = if pinned {
+        text::PROMPT_PINNED_LABEL
+    } else {
+        text::PROMPT_UNPINNED_LABEL
+    };
+    let width = u16::try_from(label.chars().count()).unwrap_or(u16::MAX);
+    let collapse_x = panel
+        .right()
+        .saturating_sub(PANEL_BUTTON_WIDTH + PANEL_BUTTON_MARGIN);
+    let x = collapse_x.checked_sub(width.saturating_add(1))?;
+    if x <= panel.x {
+        return None;
+    }
+    Some(Rect::new(x, panel.bottom().saturating_sub(1), width, 1))
+}
+
+/// 钉住按钮命中：坐标是否落在右侧容器底边钉住按钮内。
+pub fn prompt_pin_at(view: &layout::ViewLayout, state: &AppState, column: u16, row: u16) -> bool {
+    !state.prompt_collapsed
+        && prompt_pin_button(view.prompt, state.prompt_pinned.is_some())
+            .is_some_and(|area| area.contains((column, row).into()))
+}
+
 /// 在面板底边与 agents 表头绘制折叠按钮与 prompt 钉住按钮，必须晚于面板内容渲染。
 ///
 /// 折叠态面板标签恰好占满 3 个内容列（水平居中），其余按钮贴所在行右端。
@@ -188,6 +218,31 @@ pub(crate) fn render_panel_buttons(
                 cell.set_char(symbol);
                 cell.set_style(style::accent());
             }
+        }
+    }
+    render_prompt_pin(frame, view, state);
+}
+
+/// 绘制 prompt 底边钉住按钮：未钉 `[pin]`、已钉 `[unpin]`，逐格强调色。
+fn render_prompt_pin(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
+    if state.prompt_collapsed {
+        return;
+    }
+    let pinned = state.prompt_pinned.is_some();
+    let Some(area) = prompt_pin_button(view.prompt, pinned) else {
+        return;
+    };
+    let label = if pinned {
+        text::PROMPT_PINNED_LABEL
+    } else {
+        text::PROMPT_UNPINNED_LABEL
+    };
+    for (offset, symbol) in label.chars().enumerate() {
+        let x = area.x + offset as u16;
+        if let Some(cell) = frame.buffer_mut().cell_mut((x, area.y)) {
+            cell.reset();
+            cell.set_char(symbol);
+            cell.set_style(style::accent());
         }
     }
 }

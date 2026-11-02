@@ -200,6 +200,18 @@ impl Selection {
         }
     }
 
+    /// 构造包含两端单元格的程序化静态选区（使用 `SelectionUnit::Word` 以保证单字符选区如 `{title: A}` 同样生效）。
+    pub fn programmatic_range(pane: PaneId, start: (i32, u16), end: (i32, u16)) -> Self {
+        Self {
+            pane,
+            anchor: start,
+            cursor: end,
+            origin: (start, end),
+            unit: SelectionUnit::Word,
+            dragging: false,
+        }
+    }
+
     /// 所属窗格。
     pub fn pane(&self) -> PaneId {
         self.pane

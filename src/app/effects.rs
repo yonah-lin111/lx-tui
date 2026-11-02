@@ -93,6 +93,8 @@ pub enum Effect {
         workspace: PathBuf,
         id: i64,
         name: String,
+        /// 新页初始正文（普通新建为空串，Fork 为克隆正文）。
+        content: String,
     },
     /// 删除一页（最后一页不可删除由应用层阻止）。
     DeletePage {

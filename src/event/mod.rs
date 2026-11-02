@@ -272,9 +272,11 @@ async fn run_loop(
     chat_streams.set_process_sender(process_sender);
     chat_streams.set_event_sender(sender.clone());
     commands::seed_git_requests(state);
-    // 进入应用即装载资源：MCP 后台预热、skill 目录后台扫描；首页先显示 loading。
+    // 进入应用即装载资源：AGENTS.md 计数、MCP 后台预热、skill 目录后台扫描。
     let mut mcp_roots = chat::mcp::project_roots(state);
     let mut skill_roots = inventory::skill_roots(state);
+    let mut agents_scopes = inventory::agents_md_scopes(state, persistence);
+    inventory::refresh_agents_md(state, persistence);
     inventory::initialize_mcp(state, persistence, &mcp_roots);
     inventory::spawn_skills_preload(state, persistence, &sender);
 
@@ -352,6 +354,8 @@ async fn run_loop(
         commands_reload = false;
         if skills_reload {
             skills_reload = false;
+            agents_scopes = inventory::agents_md_scopes(state, persistence);
+            inventory::refresh_agents_md(state, persistence);
             inventory::spawn_skills_preload(state, persistence, &sender);
         }
         // 撤销效应先取走：预检同步、执行转后台；持久化泵不再看到它们。
@@ -368,6 +372,13 @@ async fn run_loop(
         }
         // 执行 app 层效应出箱（信任检查/授予、提示词 CRUD 与剪贴板）并载入提示词树。
         if persistence.pump(state) {
+            dirty = true;
+        }
+        // 工作区集合、cwd（含 linked worktree / 子目录）或信任状态变化时精准刷新 AGENTS.md 计数。
+        let current_agents_scopes = inventory::agents_md_scopes(state, persistence);
+        if current_agents_scopes != agents_scopes {
+            agents_scopes = current_agents_scopes;
+            inventory::refresh_agents_md(state, persistence);
             dirty = true;
         }
         // 双 Esc 待命超时：3 秒窗口外自动失效（不产生历史记录）。

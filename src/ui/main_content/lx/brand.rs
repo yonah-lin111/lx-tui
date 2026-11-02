@@ -135,23 +135,39 @@ fn pixel_glyph(top: char, bottom: char) -> Option<(char, Style)> {
     }
 }
 
-/// 首页资源计数：`4 mcp · 3 skills`；加载中显示 `loading mcp`，失败追加 `1 error`。
+/// 首页资源计数：`1 AGENTS.md · 4 mcp · 3 skills`；失败追加 `1 error`。
+/// 窄窗格容不下全段时优先省略左侧 `AGENTS.md`，保留核心 `mcp · skills`。
 pub(super) fn draw_inventory(grid: &mut Grid, rect: Rect, counts: StartupCounts) {
     if rect.width == 0 {
         return;
     }
+    let sep = (format!(" {} ", text::LX_ENTRY_SEPARATOR), style::muted());
+    let agents_md = (
+        format!("{} {}", counts.agents_md, text::LX_HOME_AGENTS_MD),
+        style::chat_agents_md(),
+    );
     let mcp = inventory_parts(counts.mcp, text::LX_HOME_MCP, style::chat_tool_verb());
     let skills = inventory_parts(
         counts.skills,
         text::LX_HOME_SKILLS,
         style::chat_tool_param(),
     );
-    let mut segments: Vec<(String, Style)> = mcp;
-    segments.push((format!(" {} ", text::LX_ENTRY_SEPARATOR), style::muted()));
-    segments.extend(skills);
+    let mut core_segments: Vec<(String, Style)> = mcp;
+    core_segments.push(sep.clone());
+    core_segments.extend(skills);
+
+    let mut full_segments: Vec<(String, Style)> = vec![agents_md, sep];
+    full_segments.extend(core_segments.iter().cloned());
+
+    let full_width: usize = full_segments.iter().map(|(value, _)| value.width()).sum();
+    let segments = if full_width <= usize::from(rect.width) {
+        full_segments
+    } else {
+        core_segments
+    };
     let width: usize = segments.iter().map(|(value, _)| value.width()).sum();
     let width = u16::try_from(width).unwrap_or(u16::MAX);
-    // 超宽时从左边起画，后面的段由 Grid 自然裁掉。
+    // 放得下时居中绘制；极窄超宽时从左起按剩余列宽截断。
     let mut x = if width > rect.width {
         rect.x
     } else {
@@ -174,12 +190,6 @@ pub(super) fn draw_inventory(grid: &mut Grid, rect: Rect, counts: StartupCounts)
 }
 
 fn inventory_parts(count: StartupCount, label: &str, color: Style) -> Vec<(String, Style)> {
-    if count.loading {
-        return vec![(
-            format!("{} {label}", text::LX_HOME_LOADING),
-            style::chat_tool_verb_running(),
-        )];
-    }
     let mut parts = vec![(format!("{} {label}", count.ready), color)];
     if count.errors > 0 {
         let label = if count.errors == 1 {

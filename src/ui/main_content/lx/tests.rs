@@ -199,6 +199,7 @@ fn home_shows_mcp_and_skill_counts() {
     let area = Rect::new(0, 0, 100, 60);
     let mut lx = Lx::new();
     lx.startup = StartupCounts {
+        agents_md: 2,
         mcp: StartupCount {
             total: 4,
             ready: 4,
@@ -215,16 +216,20 @@ fn home_shows_mcp_and_skill_counts() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
-    assert!(text.contains("4 mcp · 3 skills"), "{text}");
+    assert!(text.contains("2 AGENTS.md · 4 mcp · 3 skills"), "{text}");
 
+    // 后台连接/扫描仍在途时，不再显示阻塞性的 `loading mcp`，而是实时展示当前已就绪数量。
+    lx.startup.mcp.ready = 1;
     lx.startup.mcp.loading = true;
     lx.startup.skills.loading = true;
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
-    assert!(text.contains("loading mcp · loading skills"), "{text}");
+    assert!(text.contains("2 AGENTS.md · 1 mcp · 3 skills"), "{text}");
+    assert!(!text.contains("loading"), "{text}");
 
     lx.startup = StartupCounts {
+        agents_md: 1,
         mcp: StartupCount {
             total: 4,
             ready: 3,
@@ -241,7 +246,28 @@ fn home_shows_mcp_and_skill_counts() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
-    assert!(text.contains("3 mcp 1 error · 3 skills"), "{text}");
+    assert!(
+        text.contains("1 AGENTS.md · 3 mcp 1 error · 3 skills"),
+        "{text}"
+    );
+
+    // 窄窗格容不下全段（34 列 < 38 列）时，优先省略左侧 AGENTS.md，完整保留 mcp 1 error · skills。
+    let narrow = Rect::new(0, 0, 34, 60);
+    let mut narrow_buf = Buffer::empty(narrow);
+    let _ = render(
+        narrow,
+        &mut narrow_buf,
+        &lx,
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
+    let narrow_text = buffer_text(&narrow_buf);
+    assert!(
+        narrow_text.contains("3 mcp 1 error · 3 skills"),
+        "{narrow_text}"
+    );
+    assert!(!narrow_text.contains("AGENTS.md"), "{narrow_text}");
 }
 
 #[test]

@@ -225,7 +225,6 @@ pub(crate) fn render_body(
         focused,
         mode,
         draft,
-        state.prompt_pinned.is_some(),
     );
     if let Some(row) = title_row(area) {
         prompt::paint_title_row(frame.buffer_mut(), row, &page_data, status);

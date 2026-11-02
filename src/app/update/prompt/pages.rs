@@ -118,8 +118,27 @@ fn set_active_page(
     }
 }
 
-/// 新建页：处于页列表视图时保留在列表并选中新页；处于编辑视图时切到新页。
+/// `Ctrl/Cmd+Shift+→`：非末页时切换到下一页；末页时新建页（或跳转到已有空白页并 Toast）。
+pub fn advance_or_create_prompt_page(state: &mut AppState) -> bool {
+    let Some((pages, active)) = displayed_prompt_pages(state) else {
+        return false;
+    };
+    let index = pages.iter().position(|page| page.id == active).unwrap_or(0);
+    if index + 1 < pages.len() {
+        state.prompt.clear_panel();
+        return switch_prompt_page(state, 1);
+    }
+    create_or_toast_new_page(state)
+}
+
+/// 新建空页。
 pub fn open_new_page(state: &mut AppState) -> bool {
+    open_new_page_with_content(state, String::new())
+}
+
+/// 新建页并载入初始正文（Fork 复用）：处于页列表视图时保留在列表并选中新页；
+/// 处于编辑视图时切到新页。
+pub fn open_new_page_with_content(state: &mut AppState, content: String) -> bool {
     let workspace = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
     let Some(target) = state
@@ -133,8 +152,12 @@ pub fn open_new_page(state: &mut AppState) -> bool {
     if !in_pages {
         hide_prompt_pages(state);
     }
-    commit_editing_prompt(state);
+    // 先取消粘贴提案，再做结算判定；调用方（快捷键新建 / Fork）可能已结算过当前缓冲，
+    // 内容与当前页一致时再提交只会向已 `page_pending` 的页重复登记同一条 `SavePromptContent`。
     state.prompt.clear_panel();
+    if !buffer_matches_active_page(state) {
+        commit_editing_prompt(state);
+    }
     state.selection = None;
     state.overlay = None;
     match target {
@@ -154,6 +177,7 @@ pub fn open_new_page(state: &mut AppState) -> bool {
                 workspace: cwd,
                 id,
                 name,
+                content,
             });
             true
         }
@@ -178,7 +202,7 @@ pub fn open_new_page(state: &mut AppState) -> bool {
                     let Some(temp) = panel.temp_mut(id) else {
                         return false;
                     };
-                    temp.pages.push(PromptPage::temp(page_id, &name, ""));
+                    temp.pages.push(PromptPage::temp(page_id, &name, content));
                     if mode != PromptMode::Pages {
                         temp.active_page = page;
                         None
@@ -221,7 +245,9 @@ pub fn open_new_page(state: &mut AppState) -> bool {
 /// 否则新建页、切入并 Toast 提示已新建。
 pub fn create_or_toast_new_page(state: &mut AppState) -> bool {
     state.prompt.clear_panel();
-    commit_editing_prompt(state);
+    if !buffer_matches_active_page(state) {
+        commit_editing_prompt(state);
+    }
     let workspace = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
     let Some((pages, active)) = displayed_prompt_pages(state) else {
@@ -274,6 +300,169 @@ pub fn create_or_toast_new_page(state: &mut AppState) -> bool {
         );
     }
     created
+}
+
+/// Fork 页：结算当前缓冲；源页为空时复用空页防呆，否则复制正文（标题追加 `(fork)`）
+/// 到末尾新页并切入，最后弹出 `Page forked`。
+pub fn fork_prompt_page(
+    state: &mut AppState,
+    workspace: usize,
+    owner: PromptEditing,
+    page: PromptPageId,
+) -> bool {
+    if workspace != state.prompt_workspace() {
+        return false;
+    }
+    // 只处理显示中面板正在编辑且在页集合中的目标：避免提交别的缓冲后才发现目标无效。
+    let valid = state.workspaces.get(workspace).is_some_and(|ws| {
+        let panel = &ws.prompt_panel;
+        if panel.editing != Some(owner) {
+            return false;
+        }
+        let pages = match owner {
+            PromptEditing::Item(id) => panel.tree.item(id).map(|item| &item.pages),
+            PromptEditing::Temp(id) => panel.temp(id).map(|temp| &temp.pages),
+        };
+        pages.is_some_and(|pages| pages.iter().any(|candidate| candidate.id == page))
+    });
+    if !valid {
+        return false;
+    }
+    let in_pages = prompt_pages_mode(state);
+    commit_editing_prompt(state);
+    let Some(content) = state.workspaces.get(workspace).and_then(|ws| {
+        let pages = match owner {
+            PromptEditing::Item(id) => &ws.prompt_panel.tree.item(id)?.pages,
+            PromptEditing::Temp(id) => &ws.prompt_panel.temp(id)?.pages,
+        };
+        pages
+            .iter()
+            .find(|candidate| candidate.id == page)
+            .map(|candidate| candidate.content.clone())
+    }) else {
+        return false;
+    };
+    if content.trim().is_empty() {
+        return create_or_toast_new_page(state);
+    }
+    if in_pages {
+        hide_prompt_pages(state);
+    }
+    let anchor = Some(state.prompt.id());
+    let created =
+        open_new_page_with_content(state, crate::app::markdown::fork_page_content(&content));
+    if created {
+        super::super::show_toast_at(
+            state,
+            anchor,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Default,
+                text::TOAST_PAGE_FORKED,
+                anchor,
+                std::time::Instant::now(),
+            ),
+        );
+    }
+    created
+}
+
+/// 重命名页标题：回到编辑视图并选中目标页，滚回顶部后按首个模板块的 `{title: ...}`
+/// 选中标题值、定位光标或补入 `{title: }`；页面无模板块时弹出 Warning Toast。
+pub fn rename_prompt_page_title(
+    state: &mut AppState,
+    workspace: usize,
+    owner: PromptEditing,
+    page: PromptPageId,
+) -> bool {
+    if workspace != state.prompt_workspace() {
+        return false;
+    }
+    let Some(active) = state.workspaces.get(workspace).and_then(|ws| {
+        let panel = &ws.prompt_panel;
+        if panel.editing != Some(owner) {
+            return None;
+        }
+        let owned = match owner {
+            PromptEditing::Item(id) => panel
+                .tree
+                .item(id)
+                .is_some_and(|item| item.pages.iter().any(|candidate| candidate.id == page)),
+            PromptEditing::Temp(id) => panel
+                .temp(id)
+                .is_some_and(|temp| temp.pages.iter().any(|candidate| candidate.id == page)),
+        };
+        if !owned {
+            return None;
+        }
+        panel.editing_pages().map(|(_, active)| active)
+    }) else {
+        return false;
+    };
+    // 先切到目标页（失败即放弃），再离开页列表：顺序反了会在失败时把用户留在编辑视图。
+    if active != page && !select_prompt_page(state, page) {
+        return false;
+    }
+    if prompt_pages_mode(state) {
+        hide_prompt_pages(state);
+    }
+    super::super::focus_prompt(state);
+    state.prompt.clear_panel();
+    state.selection = None;
+    let lookup = crate::app::markdown::find_first_template_title_span(state.prompt.text());
+    match lookup {
+        crate::app::markdown::TemplateTitleLookup::Found {
+            value_start,
+            value_end,
+        } => {
+            // 先回顶部，再按光标定位：标题在首屏内时钉住顶部，超出首屏时由 settle 滚入视口。
+            state.prompt.scroll_to(0);
+            if value_start == value_end {
+                state.prompt.set_cursor_offset(value_start);
+            } else if let Some((start, end)) = state
+                .prompt
+                .cell_range_for_byte_span(value_start, value_end)
+            {
+                state.selection = Some(crate::app::selection::Selection::programmatic_range(
+                    state.prompt.id(),
+                    start,
+                    end,
+                ));
+                state.prompt.set_cursor_offset(value_end);
+                if usize::try_from(end.0).unwrap_or(0) < usize::from(state.prompt.size().1) {
+                    state.prompt.scroll_to(0);
+                }
+            } else {
+                state.prompt.set_cursor_offset(value_end);
+            }
+            true
+        }
+        crate::app::markdown::TemplateTitleLookup::MissingTitleLine { start_line_end } => {
+            // 先回顶部再插入：新标题仍在首屏时保持顶部，长前置正文下保留滚入视口的位置。
+            state.prompt.scroll_to(0);
+            let cursor = state.prompt.insert_template_title_line(start_line_end);
+            state.prompt.set_cursor_offset(cursor);
+            let settled = state.prompt.scroll();
+            state.prompt.scroll_to(0);
+            if state.prompt.cursor_cell().is_none() {
+                state.prompt.scroll_to(settled);
+            }
+            true
+        }
+        crate::app::markdown::TemplateTitleLookup::NoTemplateBlock => {
+            let anchor = Some(state.prompt.id());
+            super::super::show_toast_at(
+                state,
+                anchor,
+                crate::app::toast::Toast::new(
+                    crate::app::toast::ToastKind::Warning,
+                    text::TOAST_PAGE_NO_TITLE,
+                    anchor,
+                    std::time::Instant::now(),
+                ),
+            );
+            false
+        }
+    }
 }
 
 /// 服务回调：正式条目新页已落库并重载；页列表视图下保持在列表，编辑视图下切到新页。
@@ -522,6 +711,16 @@ pub(super) fn editing_pages(panel: &PromptPanel) -> Option<(&[PromptPage], Promp
 fn displayed_prompt_pages(state: &AppState) -> Option<(&[PromptPage], PromptPageId)> {
     let panel = &state.workspaces.get(state.prompt_workspace())?.prompt_panel;
     panel.editing_pages()
+}
+
+/// 编辑缓冲是否已与当前页正文一致；一致时再次提交只会向已待确认的页重复登记保存。
+fn buffer_matches_active_page(state: &AppState) -> bool {
+    displayed_prompt_pages(state).is_some_and(|(pages, active)| {
+        pages
+            .iter()
+            .find(|page| page.id == active)
+            .is_some_and(|page| page.content == state.prompt.text())
+    })
 }
 
 /// 下一个未使用的默认页名 `Page N`。

@@ -344,6 +344,11 @@ fn prompt_focus_maps_history_and_indent_keys() {
             EditorCommand::Redo,
         ),
         (
+            KeyCode::Char('z'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            EditorCommand::Redo,
+        ),
+        (
             KeyCode::Char('y'),
             KeyModifiers::CONTROL,
             EditorCommand::Redo,

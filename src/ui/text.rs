@@ -91,15 +91,13 @@ pub const PROMPT_WORKTREE_PREFIX: &str = "wt:";
 /// prompt 工具栏按钮与保存状态点。
 pub const PROMPT_UNDO_LABEL: &str = "[←]";
 pub const PROMPT_REDO_LABEL: &str = "[→]";
-pub const PROMPT_SELECT_ALL_LABEL: &str = "[all]";
 /// 条目保存状态点：已保存实心绿、未保存实心黄。
 pub const PROMPT_SAVE_DOT: &str = "●";
 /// 临时草稿保存状态点：空心（与空闲 agent 状态圆点一致），恒灰。
 pub const PROMPT_DRAFT_DOT: &str = "○";
-/// prompt 钉住按钮：未钉 `[○]`、已钉 `[◉]`（单字图标，两态同宽同址；
-/// 不再使用 `[pin]`/`[unpin]` 英文单词，避免 7 列占位与右对齐补空格）。
-pub const PROMPT_UNPINNED_LABEL: &str = "[○]";
-pub const PROMPT_PINNED_LABEL: &str = "[◉]";
+/// prompt 底边钉住按钮：未钉显示 `[pin]`、已钉显示 `[unpin]`。
+pub const PROMPT_UNPINNED_LABEL: &str = "[pin]";
+pub const PROMPT_PINNED_LABEL: &str = "[unpin]";
 /// prompt 视图模式按钮：编辑视图显示 `[≡]`（切到列表）、树视图显示 `[/]`（切到编辑）。
 pub const PROMPT_MODE_LIST_LABEL: &str = "[≡]";
 pub const PROMPT_MODE_EDIT_LABEL: &str = "[/]";
@@ -225,10 +223,10 @@ pub const LX_ENTRY_AUTOMATION: &str = "Automation Agent";
 pub const LX_ENTRY_SEPARATOR: &str = "·";
 /// lx 页入口 Tip 提示前缀；前缀强调色、句子 muted。
 pub const LX_TIP_PREFIX: &str = "Tip:";
-/// 首页资源计数：MCP / skills / loading / error。
+/// 首页资源计数：AGENTS.md / MCP / skills / error。
+pub const LX_HOME_AGENTS_MD: &str = "AGENTS.md";
 pub const LX_HOME_MCP: &str = "mcp";
 pub const LX_HOME_SKILLS: &str = "skills";
-pub const LX_HOME_LOADING: &str = "loading";
 pub const LX_HOME_ERROR: &str = "error";
 pub const LX_HOME_ERRORS: &str = "errors";
 /// lx 页入口 Tip 提示行：选中入口一句话描述。
@@ -355,7 +353,10 @@ pub fn default_page_name(index: usize) -> String {
 
 /// 页列表与页右键菜单文案。
 pub const MENU_PAGE_OPEN: &str = "Open";
-pub const MENU_PAGE_NEW: &str = "New page";
+pub const MENU_PAGE_SELECT_ALL: &str = "Select All";
+pub const MENU_PAGE_RENAME: &str = "Rename Page";
+pub const MENU_PAGE_NEW: &str = "New Page";
+pub const MENU_PAGE_FORK: &str = "Fork Page";
 pub const MENU_TITLE_PAGES: &str = "Pages";
 pub const PROMPT_PAGES_LABEL: &str = "pages";
 pub const PROMPT_PAGES_SEARCH_PLACEHOLDER: &str = "search pages";
@@ -551,6 +552,10 @@ pub const TOAST_PROMPT_MOVE_NESTED: &str = "Cannot move: folder contains subfold
 pub const TOAST_PAGE_ALREADY_NEW: &str = "Already have a new page";
 /// 新页创建成功提示。
 pub const TOAST_PAGE_CREATED: &str = "New page created";
+/// 页面 Fork 成功提示。
+pub const TOAST_PAGE_FORKED: &str = "Page forked";
+/// 当前页面未找到可重命名的 `{title:}` 提示。
+pub const TOAST_PAGE_NO_TITLE: &str = "No {title:} found in current page";
 /// Prompt 模板块 `/title` 生成中占位与提示文案（英文）。
 pub const PROMPT_TITLE_GENERATING: &str = "Generating title...";
 pub const PROMPT_TITLE_EMPTY_BLOCK: &str = "Template block is empty";
@@ -1038,7 +1043,6 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptTempPrompt => "open temp prompt",
         TooltipTarget::PromptUndo => "undo (^z)",
         TooltipTarget::PromptRedo => "redo (^y)",
-        TooltipTarget::PromptSelectAll => "select all",
         TooltipTarget::PromptSave => "mark saved",
         TooltipTarget::PromptPin if state.prompt_pinned.is_some() => "unpin prompt",
         TooltipTarget::PromptPin => "pin prompt",

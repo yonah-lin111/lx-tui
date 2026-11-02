@@ -915,6 +915,11 @@ pub fn chat_step_label_done() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
 }
 
+/// 首页 `AGENTS.md` 资源计数：品牌冰蓝（与 `mcp` 翡翠绿、`skills` 浅黄区分）。
+pub fn chat_agents_md() -> Style {
+    Style::default().fg(LX_SKY_BLUE)
+}
+
 /// 工具行的固定动词（`Read` / `Search` / `Edit` / `Write`）：**已完成**——翡翠绿、
 /// 不加粗（与紧邻的加粗方块靠字重区分开）。
 pub fn chat_tool_verb() -> Style {
@@ -990,6 +995,9 @@ pub fn block_button() -> Style {
 /// lx 页品牌主粉：logo `p` 像素与 Native 入口渐变起点（`Indexed 218`）。
 pub const LX_PINK: Color = Color::Indexed(218);
 
+/// lx 页品牌天空蓝：logo `b` 像素、Native 入口渐变终点与首页 `AGENTS.md` 计数（`Indexed 117`）。
+pub const LX_SKY_BLUE: Color = Color::Indexed(117);
+
 /// lx 页品牌 logo 像素色：按像素字符映射 256 色（仅 lx 页使用，不影响其余区域的 ANSI 槽位规则）。
 ///
 /// `k` 描边藏青、`p` 主体粉、`n` 深粉、`b` 天空蓝、`c` 冰蓝高光、`w` 高光白；其余字符视为透明。
@@ -998,7 +1006,7 @@ pub fn logo_pixel(ch: char) -> Option<Color> {
         'k' => Some(Color::Indexed(17)),
         'p' => Some(LX_PINK),
         'n' => Some(Color::Indexed(168)),
-        'b' => Some(Color::Indexed(117)),
+        'b' => Some(LX_SKY_BLUE),
         'c' => Some(Color::Indexed(195)),
         'w' => Some(Color::Indexed(231)),
         _ => None,
@@ -1013,7 +1021,7 @@ pub fn lx_entry_border(selected: bool) -> Style {
 /// lx 页入口标签的渐变端点色（粉 → 蓝），取该入口 logo 的两主色（字标 L 侧粉、X 侧蓝）。
 pub fn lx_entry_gradient(entry: LxEntry) -> (Color, Color) {
     match entry {
-        LxEntry::Native => (LX_PINK, Color::Indexed(117)),
+        LxEntry::Native => (LX_PINK, LX_SKY_BLUE),
         LxEntry::Hybrid => (Color::Indexed(168), Color::Indexed(195)),
         LxEntry::Automation => (Color::Indexed(195), Color::Indexed(168)),
     }

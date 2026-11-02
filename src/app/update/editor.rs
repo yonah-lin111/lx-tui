@@ -120,7 +120,7 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
             super::switch_prompt_page(state, 1);
         }
         EditorCommand::NewPage => {
-            super::create_or_toast_new_page(state);
+            super::advance_or_create_prompt_page(state);
         }
         EditorCommand::Undo => state.prompt.undo(),
         EditorCommand::Redo => state.prompt.redo(),

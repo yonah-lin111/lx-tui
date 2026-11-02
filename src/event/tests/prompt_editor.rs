@@ -863,3 +863,106 @@ fn clicking_prompt_command_panel_chrome_does_not_penetrate_to_editor_cursor() {
         "点击面板非条目区不得穿透移动底层编辑器光标"
     );
 }
+
+#[test]
+fn right_click_prompt_editor_opens_menu_and_select_all_replaces_text() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    state.prompt.insert_str("first\nsecond");
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let area = crate::event::paste::prompt_text_area(&geo.view);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    assert!(!state.prompt_focused(), "初始焦点落在主区窗格");
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            area.x + 2,
+            area.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(dirty);
+    assert!(state.prompt_focused(), "右键打开编辑页菜单即聚焦 prompt");
+    let Some(crate::app::overlay::Overlay::Menu(menu)) = &state.overlay else {
+        panic!("expected prompt editor context menu");
+    };
+    assert_eq!(
+        menu.commands.first(),
+        Some(&crate::app::overlay::MenuCommand::SelectAll)
+    );
+
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
+    update::activate_menu(&mut state);
+    assert!(state.prompt_focused(), "Select All 后键盘焦点交给 prompt");
+    assert_eq!(
+        update::prompt_selection_text(&state).as_deref(),
+        Some("first\nsecond")
+    );
+    update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertText("replaced".into()),
+    );
+    assert_eq!(state.prompt.text(), "replaced");
+}
+
+#[test]
+fn right_click_prompt_editor_keeps_pending_paste_proposal() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let dir = paste_temp_dir("prompt-editor-menu");
+    let file = dir.join("note.txt");
+    std::fs::write(&file, b"note").expect("file");
+    update::focus_prompt(&mut state);
+    paste::handle_terminal_paste(&mut state, file.display().to_string());
+    let before = state.prompt.text().to_string();
+    assert!(state.prompt.paste_panel().is_some(), "粘贴提案已打开");
+
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let area = crate::event::paste::prompt_text_area(&geo.view);
+    let panel = crate::ui::prompt::paste_panel_rect(&state.prompt, area).expect("paste panel");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 面板内右键被拦截：不弹底层编辑页菜单，提案保持打开。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            panel.x + 1,
+            panel.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none(), "命令面板内右键不得穿透弹底层菜单");
+    assert!(state.prompt.paste_panel().is_some(), "被拦截时提案保持");
+
+    // 面板外右键：只关补全面板，待确认的粘贴提案不得回滚。
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Right), area.x + 2, area.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(
+        matches!(state.overlay, Some(crate::app::overlay::Overlay::Menu(_))),
+        "弹出编辑页右键菜单"
+    );
+    assert!(state.prompt.paste_panel().is_some(), "右键不得取消粘贴提案");
+    assert_eq!(state.prompt.text(), before.as_str(), "粘贴占位文本保持原样");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

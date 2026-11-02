@@ -9,7 +9,7 @@ use crate::app::overlay::Overlay;
 use crate::app::prompt::PromptRowKind;
 use crate::app::state::{AppState, RightTab};
 use crate::app::update;
-use crate::layout::PaneId;
+use crate::layout::{self, PaneId};
 use crate::ui;
 
 use super::mouse::hit::pane_at;
@@ -540,6 +540,23 @@ pub(crate) fn open_right_click_menu(
                 None => update::open_pages_blank_menu(state, (column, row)),
             }
             return true;
+        }
+    }
+    // 编辑视图：正文区右键打开页菜单（全选/复制/重命名/新建/Fork/删除）。
+    if update::prompt_panel_active(state)
+        && !update::prompt_tree_mode(state)
+        && !update::prompt_pages_mode(state)
+    {
+        // 已打开的候选面板优先拦截：右键落在面板内不得穿透关闭面板。
+        if super::mouse::hit::prompt_command_panel_contains(state, view, column, row) {
+            return false;
+        }
+        // 命中区域含滚动条列；候选面板只关面板，待确认的粘贴提案必须保留。
+        let area = layout::prompt_body_rect(layout::pane_inner_rect(view.prompt));
+        if area.contains((column, row).into()) {
+            update::focus_prompt(state);
+            state.prompt.dismiss_completion_panels();
+            return update::open_prompt_editor_menu(state, (column, row));
         }
     }
     if let Some((pane, _)) = pane_at(rects, column, row)

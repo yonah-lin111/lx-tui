@@ -26,32 +26,19 @@ const PROMPT_TEMP_PROMPT_WIDTH: u16 = 5;
 /// 显示 `[tmp]`（右对齐）所需的最小内容区宽度（列）：不足时隐藏，避免与左侧模式按钮重叠。
 const PROMPT_TEMP_PROMPT_MIN_WIDTH: u16 =
     PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_TEMP_PROMPT_WIDTH + 1;
-/// `[all]` 标签宽度（列）；位于左组 `[≡] [←] [→]` 右侧。
-const PROMPT_SELECT_ALL_WIDTH: u16 = 5;
-/// 显示 `[all]` 所需的最小内容区宽度（列）：左组总宽 17 + 1 列间隔 + 1 列余量。
-pub(crate) const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = PROMPT_TOOLBAR_BUTTON_WIDTH
+/// 引用文件夹按钮（`[refDir]`）宽度（列）；仅编辑视图显示、位于保存点左侧。
+pub const PROMPT_FOLDERS_WIDTH: u16 = 8;
+/// 编辑视图左组 `[≡] [←] [→]` 所需的最小内容区宽度（列）：左组总宽 11 + 1 列间隔 + 1 列保存点 = 13。
+const PROMPT_LEFT_GROUP_MIN_WIDTH: u16 = PROMPT_TOOLBAR_BUTTON_WIDTH
     + PROMPT_TOOLBAR_BUTTON_GAP
     + PROMPT_UNDO_REDO_WIDTH
     + PROMPT_TOOLBAR_BUTTON_GAP
     + PROMPT_UNDO_REDO_WIDTH
-    + PROMPT_TOOLBAR_BUTTON_GAP
-    + PROMPT_SELECT_ALL_WIDTH
     + PROMPT_TOOLBAR_BUTTON_GAP
     + 1;
-/// 钉住按钮宽度（列）：单字图标 `[○]` / `[◉]` 恒为 3，两态同宽同址。
-pub(crate) const PROMPT_PIN_WIDTH: u16 = 3;
-/// 显示钉住按钮所需的最小内容区宽度（列）：编辑视图在保存点左侧、树视图在 `[tmp]` 左侧、页视图在模式按钮右侧。
-pub(crate) const PROMPT_PIN_MIN_WIDTH_EDITOR: u16 =
-    PROMPT_SELECT_ALL_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
-pub(crate) const PROMPT_PIN_MIN_WIDTH_TREE: u16 =
-    PROMPT_TEMP_PROMPT_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
-const PROMPT_PIN_MIN_WIDTH_PAGES: u16 =
-    PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH + 1;
-/// 引用文件夹按钮（`[refDir]`）宽度（列）；仅编辑视图显示、位于钉住按钮左侧。
-pub const PROMPT_FOLDERS_WIDTH: u16 = 8;
-/// 显示引用文件夹按钮所需的最小内容区宽度（列）：在钉住按钮左侧再让出宽度与间距。
+/// 显示引用文件夹按钮 `[refDir]`（8 列）所需的最小内容区宽度（列）：在保存点左侧让出宽度与间距（13 + 1 + 8 = 22）。
 pub(crate) const PROMPT_FOLDERS_MIN_WIDTH_EDITOR: u16 =
-    PROMPT_PIN_MIN_WIDTH_EDITOR + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_FOLDERS_WIDTH;
+    PROMPT_LEFT_GROUP_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_FOLDERS_WIDTH;
 
 /// 提示词面板视图模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,15 +56,12 @@ pub enum PromptMode {
 pub enum PromptToolbarButton {
     /// 视图模式切换：编辑视图显示 `[≡]`、树视图显示 `[/]`。
     Mode,
-    /// 钉住切换：未钉 `[○]`、已钉 `[◉]`（编辑视图在保存点左侧、树视图在 `[tmp]` 左侧）。
-    Pin,
     /// 树视图 `[tmp]`：新建临时提示词编辑视图（仅树视图显示、不入库）。
     TempPrompt,
-    /// 编辑视图 `[dir]`：打开引用文件夹菜单（仅编辑视图显示，位于钉住按钮左侧）。
+    /// 编辑视图 `[refDir]`：打开引用文件夹菜单（仅编辑视图显示，位于保存点左侧）。
     Folders,
     Undo,
     Redo,
-    SelectAll,
     Save,
 }
 
@@ -170,7 +154,7 @@ pub fn prompt_divider_rect(panel: Rect) -> Option<Rect> {
     })
 }
 
-/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[all]` / `[○]` / `[dir]`
+/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[refDir]` / `[tmp]`
 /// 各自按阈值独立隐藏；各视图模式的按钮集不同）。
 pub fn prompt_toolbar_button_rect(
     panel: Rect,
@@ -181,49 +165,8 @@ pub fn prompt_toolbar_button_rect(
     let inner = pane_inner_rect(panel);
     let undo_x = bar.x + PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP;
     let redo_x = undo_x + PROMPT_UNDO_REDO_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP;
-    let select_all_x = redo_x + PROMPT_UNDO_REDO_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP;
     let rect = match button {
         PromptToolbarButton::Mode => Rect::new(bar.x, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1),
-        PromptToolbarButton::Pin => match mode {
-            PromptMode::Tree => {
-                if inner.width < PROMPT_PIN_MIN_WIDTH_TREE {
-                    return None;
-                }
-                let anchor =
-                    prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, mode)?;
-                Rect::new(
-                    anchor
-                        .x
-                        .saturating_sub(PROMPT_PIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP),
-                    bar.y,
-                    PROMPT_PIN_WIDTH,
-                    1,
-                )
-            }
-            PromptMode::Pages => {
-                if inner.width < PROMPT_PIN_MIN_WIDTH_PAGES {
-                    return None;
-                }
-                Rect::new(
-                    bar.right().saturating_sub(PROMPT_PIN_WIDTH + 1),
-                    bar.y,
-                    PROMPT_PIN_WIDTH,
-                    1,
-                )
-            }
-            PromptMode::Editor => {
-                if inner.width < PROMPT_PIN_MIN_WIDTH_EDITOR {
-                    return None;
-                }
-                Rect::new(
-                    bar.right()
-                        .saturating_sub(1 + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH),
-                    bar.y,
-                    PROMPT_PIN_WIDTH,
-                    1,
-                )
-            }
-        },
         PromptToolbarButton::TempPrompt => {
             if mode != PromptMode::Tree || inner.width < PROMPT_TEMP_PROMPT_MIN_WIDTH {
                 return None;
@@ -239,11 +182,9 @@ pub fn prompt_toolbar_button_rect(
             if mode != PromptMode::Editor || inner.width < PROMPT_FOLDERS_MIN_WIDTH_EDITOR {
                 return None;
             }
-            let anchor = prompt_toolbar_button_rect(panel, PromptToolbarButton::Pin, mode)?;
             Rect::new(
-                anchor
-                    .x
-                    .saturating_sub(PROMPT_FOLDERS_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP),
+                bar.right()
+                    .saturating_sub(1 + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_FOLDERS_WIDTH),
                 bar.y,
                 PROMPT_FOLDERS_WIDTH,
                 1,
@@ -260,13 +201,6 @@ pub fn prompt_toolbar_button_rect(
                 return None;
             }
             Rect::new(redo_x, bar.y, PROMPT_UNDO_REDO_WIDTH, 1)
-        }
-        PromptToolbarButton::SelectAll => {
-            if mode != PromptMode::Editor || inner.width < PROMPT_SELECT_ALL_MIN_WIDTH {
-                return None;
-            }
-            // 左组 `[≡] [←] [→] [all]`：紧贴 `[→]` 右侧。
-            Rect::new(select_all_x, bar.y, PROMPT_SELECT_ALL_WIDTH, 1)
         }
         PromptToolbarButton::Save => {
             if mode != PromptMode::Editor {
@@ -292,11 +226,9 @@ pub fn prompt_toolbar_button_at(
     [
         PromptToolbarButton::Mode,
         PromptToolbarButton::Folders,
-        PromptToolbarButton::Pin,
         PromptToolbarButton::TempPrompt,
         PromptToolbarButton::Undo,
         PromptToolbarButton::Redo,
-        PromptToolbarButton::SelectAll,
         PromptToolbarButton::Save,
     ]
     .into_iter()

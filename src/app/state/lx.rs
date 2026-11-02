@@ -76,9 +76,11 @@ pub struct StartupCount {
     pub loading: bool,
 }
 
-/// 首页展示的 MCP 与 skill 启动计数。
+/// 首页展示的 AGENTS.md、MCP 与 skill 启动计数。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StartupCounts {
+    /// 当前工作区生效（非空）的全局 + 项目级 AGENTS.md 文件数量。
+    pub agents_md: usize,
     pub mcp: StartupCount,
     pub skills: StartupCount,
 }

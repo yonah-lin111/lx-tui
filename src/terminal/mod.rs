@@ -111,6 +111,7 @@ impl Terminal {
         let term = Term::new(
             EmulatorConfig {
                 scrolling_history: SCROLLBACK_LINES,
+                kitty_keyboard: true,
                 ..EmulatorConfig::default()
             },
             &size,
