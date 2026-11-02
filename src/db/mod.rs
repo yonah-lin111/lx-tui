@@ -755,7 +755,7 @@ impl Database {
     }
 
     /// 追加一页到末尾（`position` 取最大加一）并设为当前页，返回新页 id。
-    pub fn create_prompt_page(&self, prompt_id: i64, name: &str) -> Result<i64> {
+    pub fn create_prompt_page(&self, prompt_id: i64, name: &str, content: &str) -> Result<i64> {
         let transaction = self.conn.unchecked_transaction()?;
         let exists: Option<i64> = transaction
             .query_row(
@@ -774,8 +774,8 @@ impl Database {
         )?;
         transaction.execute(
             r#"INSERT INTO workspace_prompt_page (prompt_id, position, name, content, created_at, updated_at)
-               VALUES (?1, ?2, ?3, '', datetime('now'), datetime('now'))"#,
-            params![prompt_id, position, name],
+               VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))"#,
+            params![prompt_id, position, name, content],
         )?;
         let id = transaction.last_insert_rowid();
         transaction.execute(

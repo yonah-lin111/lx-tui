@@ -48,7 +48,6 @@ pub enum TooltipTarget {
     PromptFolders,
     PromptUndo,
     PromptRedo,
-    PromptSelectAll,
     PromptSave,
     PromptPin,
     /// 侧栏底边框左侧设置按钮。

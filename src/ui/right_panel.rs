@@ -145,7 +145,7 @@ fn prompt_identity(state: &AppState) -> Option<WorkspaceIdentity> {
 }
 
 /// 容器底边框：整段左对齐的身份标签 `项目 · b:分支 · wt:工作区名`（与 lx 窗格同款），
-/// 右侧只保留折叠按钮；放不下时按同一降级阶梯省略。不随标签页变化。
+/// 右侧保留钉住按钮与折叠按钮；放不下时按同一降级阶梯省略。不随标签页变化。
 fn render_bottom(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -155,9 +155,11 @@ fn render_bottom(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     };
     let row = area.bottom().saturating_sub(1);
     let start = area.x.saturating_add(2);
-    let end = area
-        .right()
-        .saturating_sub(PANEL_BUTTON_WIDTH + PANEL_BUTTON_MARGIN);
+    let end = super::controls::prompt_pin_button(area, state.prompt_pinned.is_some()).map_or(
+        area.right()
+            .saturating_sub(PANEL_BUTTON_WIDTH + PANEL_BUTTON_MARGIN),
+        |pin| pin.x.saturating_sub(1),
+    );
     if end <= start {
         return;
     }

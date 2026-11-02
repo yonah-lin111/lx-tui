@@ -264,7 +264,44 @@ pub fn page_row_double_click(state: &mut AppState, row: usize, now: Instant) -> 
     double
 }
 
-/// 页行右键菜单：打开、重命名、复制、新建、删除（仅多页时）；不改动选中行。
+/// 编辑视图正文区右键菜单：全选、复制全文、重命名页、新建页、Fork 页、删除页（仅多页时）。
+///
+/// 返回是否成功打开；无编辑目标或当前页缺失时不弹菜单。
+pub fn open_prompt_editor_menu(state: &mut AppState, anchor: (u16, u16)) -> bool {
+    let workspace = state.prompt_workspace();
+    let Some((owner, page, page_count)) = state.workspaces.get(workspace).and_then(|ws| {
+        let owner = ws.prompt_panel.editing?;
+        let (pages, active) = ws.prompt_panel.editing_pages()?;
+        let page = pages.iter().find(|candidate| candidate.id == active)?.id;
+        Some((owner, page, pages.len()))
+    }) else {
+        return false;
+    };
+    let mut commands = vec![
+        MenuCommand::SelectAll,
+        MenuCommand::CopyPageContent,
+        MenuCommand::RenamePage,
+        MenuCommand::NewPage,
+        MenuCommand::ForkPage,
+    ];
+    if page_count > 1 {
+        commands.push(MenuCommand::DeletePage);
+    }
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor,
+        target: OverlayTarget::PromptPage {
+            workspace,
+            owner,
+            page,
+        },
+        commands,
+        selected: 0,
+        confirming: false,
+    }));
+    true
+}
+
+/// 页行右键菜单：打开、重命名、复制、新建、Fork、删除（仅多页时）；不改动选中行。
 pub fn open_page_menu(state: &mut AppState, page: PromptPageId, anchor: (u16, u16)) {
     let workspace = state.prompt_workspace();
     let Some((owner, page_count)) = state.workspaces.get(workspace).and_then(|ws| {
@@ -279,8 +316,10 @@ pub fn open_page_menu(state: &mut AppState, page: PromptPageId, anchor: (u16, u1
     };
     let mut commands = vec![
         MenuCommand::OpenPage,
+        MenuCommand::RenamePage,
         MenuCommand::CopyPageContent,
         MenuCommand::NewPage,
+        MenuCommand::ForkPage,
     ];
     if page_count > 1 {
         commands.push(MenuCommand::DeletePage);

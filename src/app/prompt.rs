@@ -484,6 +484,14 @@ impl Prompt {
         self.panel_suppressed = false;
     }
 
+    /// 关闭 `#`、`/`、`@` 与快捷引用补全面板，但不回滚待确认的粘贴提案（供编辑区右键菜单使用）。
+    pub fn dismiss_completion_panels(&mut self) {
+        self.panel = None;
+        self.slash = None;
+        self.mention.clear();
+        self.refer = None;
+    }
+
     /// 当前文件提及面板；未打开时为 None。
     pub fn mention(&self) -> Option<&MentionPanel> {
         self.mention.panel()
@@ -798,6 +806,28 @@ impl Prompt {
         self.cursor = start + sanitized.len();
         self.settle();
         true
+    }
+
+    /// 在指定字节偏移（模板块起始行行尾）处插入 `\n{title: }`，并将光标置于 `}` 之前，返回新光标字节偏移。
+    ///
+    /// 新行继承起始行的前导空格缩进，模板块缩进与正文保持一致。
+    pub fn insert_template_title_line(&mut self, line_end_byte: usize) -> usize {
+        let pos = self
+            .text
+            .floor_char_boundary(line_end_byte.min(self.text.len()));
+        let line_start = self.text[..pos].rfind('\n').map_or(0, |idx| idx + 1);
+        let indent: String = self.text[line_start..pos]
+            .chars()
+            .take_while(|ch| *ch == ' ')
+            .collect();
+        self.break_group();
+        self.record(EditKind::Other);
+        let snippet = format!("\n{indent}{{title: }}");
+        let cursor_offset = pos + 1 + indent.len() + "{title: ".len();
+        self.splice_text(pos, pos, &snippet);
+        self.cursor = cursor_offset;
+        self.settle();
+        self.cursor
     }
 
     /// 测试辅助：把光标移到字节偏移（不触发 settle 的面板语义）。

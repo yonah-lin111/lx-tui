@@ -926,6 +926,115 @@ fn page_switch_effect_persists_active_and_syncs_shared_panels() {
 }
 
 #[test]
+fn parked_shared_workspace_buffer_follows_page_switch_and_fork() {
+    let (mut service, mut state, repo_root, _) = trusted_service("parked-sync");
+    let worktree = workspace_path("parked-sync-wt");
+    let id = seed_paged_prompt(&mut service, &mut state, &repo_root, &worktree);
+    let pages: Vec<_> = state.workspaces[0]
+        .prompt_panel
+        .tree
+        .item(id)
+        .expect("item")
+        .pages
+        .iter()
+        .map(|page| page.id)
+        .collect();
+
+    // 工作区 1（linked worktree）打开同一条目后切走：缓冲停泊在 Workspace.prompt。
+    crate::app::update::switch_workspace(&mut state, 1);
+    assert!(crate::app::update::edit_prompt_item(&mut state, 1, id));
+    assert_eq!(state.prompt.text(), "alpha");
+    crate::app::update::switch_workspace(&mut state, 0);
+    let parked_text = |state: &AppState| {
+        state.workspaces[1]
+            .prompt
+            .as_ref()
+            .expect("parked draft")
+            .editor
+            .text()
+            .to_string()
+    };
+    assert_eq!(parked_text(&state), "alpha", "切走后停泊缓冲保留旧页正文");
+
+    // 工作区 0（主 checkout）绑定同一条目并保存新正文：停泊缓冲跟随保存回执。
+    assert!(crate::app::update::edit_prompt_item(&mut state, 0, id));
+    state.prompt.insert_str("!");
+    crate::app::update::commit_editing_prompt(&mut state);
+    service.pump(&mut state);
+    assert_eq!(parked_text(&state), "alpha!", "保存回执同步同键停泊缓冲");
+    assert!(
+        state.workspaces[1]
+            .prompt
+            .as_ref()
+            .expect("parked draft")
+            .editor
+            .is_saved(),
+        "同步后停泊缓冲回到已保存态"
+    );
+
+    // 工作区 0 切页：停泊缓冲跟随新的当前页正文。
+    assert!(crate::app::update::select_prompt_page(&mut state, pages[1]));
+    assert_eq!(state.prompt.text(), "beta");
+    service.pump(&mut state);
+    assert_eq!(parked_text(&state), "beta", "切页同步同键停泊缓冲");
+
+    // 工作区 0 Fork 第一页：停泊缓冲跟随新当前页。
+    assert!(crate::app::update::fork_prompt_page(
+        &mut state,
+        0,
+        PromptEditing::Item(id),
+        pages[0],
+    ));
+    service.pump(&mut state);
+    let forked = state.workspaces[0]
+        .prompt_panel
+        .tree
+        .item(id)
+        .expect("item")
+        .active_page;
+    let forked_content = state.workspaces[0]
+        .prompt_panel
+        .tree
+        .item(id)
+        .and_then(|item| item.page(forked))
+        .map(|page| page.content.clone())
+        .expect("forked page");
+    assert_eq!(forked_content, "alpha!", "Fork 复制源页正文");
+    assert_eq!(state.prompt.text(), forked_content);
+    assert_eq!(parked_text(&state), forked_content, "Fork 新页同步停泊缓冲");
+
+    // 0 -> 1 -> 0 往返：不得把旧页正文覆盖进新当前页。
+    crate::app::update::switch_workspace(&mut state, 1);
+    assert_eq!(
+        state.prompt.text(),
+        forked_content,
+        "切回工作区 1 显示新页正文"
+    );
+    crate::app::update::switch_workspace(&mut state, 0);
+    service.pump(&mut state);
+    assert_eq!(state.prompt.text(), forked_content);
+    let record = service
+        .db
+        .as_ref()
+        .expect("db")
+        .list_prompts(&repo_root)
+        .expect("list")
+        .remove(0);
+    let forked_id = forked.saved().expect("saved page");
+    assert_eq!(
+        record
+            .pages
+            .iter()
+            .find(|page| page.id == forked_id)
+            .expect("forked page")
+            .content,
+        forked_content,
+        "往返后新页正文未被旧页覆盖"
+    );
+    assert_eq!(record.active_page_id, Some(forked_id));
+}
+
+#[test]
 fn create_page_effect_appends_and_activates_in_editor() {
     let (mut service, mut state, repo_root, _) = trusted_service("page-create-effect");
     let worktree = workspace_path("page-create-effect-wt");

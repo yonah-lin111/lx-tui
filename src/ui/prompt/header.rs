@@ -303,13 +303,12 @@ pub fn render_header(
     focused: bool,
     mode: PromptMode,
     draft: bool,
-    pinned: bool,
 ) {
     let Some(header) = crate::layout::prompt_header_rect(panel) else {
         return;
     };
     render_divider(panel, header, buf, focused);
-    render_toolbar(panel, buf, prompt, mode, draft, pinned);
+    render_toolbar(panel, buf, prompt, mode, draft);
 }
 
 /// 绘制页控件：`‹` / `›` 在边界处置灰（`arrows == false` 时不绘制）；计数用边框标题色。
