@@ -1,6 +1,7 @@
 # Prompt 编辑页快捷键调整、右键菜单与工具栏/底边按钮优化代码审查 (Code Review)
 
-> **分支**：`feat/prompt-page-menu-and-shortcut`（worktree `.worktrees/prompt-page-menu-and-shortcut`）
+> **状态**：**全部 P0–P2 项已修复验证并合入 `dev` 分支**（2026-11-02）
+> **原评审工作区**：`.worktrees/prompt-page-menu-and-shortcut`（分支 `feat/prompt-page-menu-and-shortcut`，已合并至 `dev` 并清理）
 > **关联文档**：`docs/feature/prompt-page-menu-and-shortcut/design.md`、`docs/feature/prompt-page-menu-and-shortcut/task.md`
 
 本次 Review 覆盖工作区分支 `feat/prompt-page-menu-and-shortcut` 引入的全部改动（`Cmd/Ctrl + Shift + →` 切页/末页新建、编辑页与页列表右键菜单 `Select All / Copy / Rename Page / New Page / Fork Page / Delete`、移除工具栏 `[all]` 并将 `Pin` 按钮移至底边框折叠按钮左侧改为英文 `[pin]`/`[unpin]`）。

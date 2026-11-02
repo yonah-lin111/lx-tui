@@ -1,7 +1,7 @@
 # Prompt 编辑页快捷键调整、右键菜单与工具栏/底边按钮优化实施任务
 
-- 状态：**已完成**
-- 关联设计：`docs/feature/prompt-page-menu-and-shortcut/design.md`
+- 状态：**已完成并合入 `dev` 分支，工作区与特性分支已清理**（2026-11-02）
+- 关联设计：`docs/feature/prompt-page-menu-and-shortcut/design.md` | 评审记录：`docs/feature/prompt-page-menu-and-shortcut/review.md`
 
 ---
 

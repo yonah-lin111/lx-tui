@@ -1,6 +1,6 @@
 # Prompt 编辑页快捷键调整、右键菜单与工具栏/底边按钮优化设计
 
-- 状态：**已完成**
+- 状态：**已完成并合入 `dev` 分支，工作区与特性分支已清理**（2026-11-02）
 - 适用范围：`src/input/`、`src/event/`、`src/layout/prompt.rs`、`src/app/`（`overlay.rs`、`effects.rs`、`prompt/`、`markdown/template.rs`、`update/`）、`src/db/`、`src/ui/`（`prompt.rs`、`prompt_frame.rs`、`controls.rs`、`right_panel.rs`、`overlay/menu.rs`、`text.rs`、`tooltip.rs`）。
 - 架构约束：保持 `app/`（纯状态与更新）、`ui/`（纯渲染只读状态）、`layout/`（纯几何计算）与 `db/`（SQLite 持久化）边界清晰；所有用户可见界面文案与 Toast 统一使用英文并集中定义在 `src/ui/text.rs`；生产代码严禁 `unwrap()` / `expect()`。
 
