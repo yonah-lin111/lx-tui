@@ -532,6 +532,7 @@ fn ai_settings(
             variant: variant.map(str::to_string),
         }),
         title_summary: None,
+        title_language: None,
         stream_idle_timeout_ms: Some(4_321),
         web_search: WebSearchConfig::default(),
         extra: serde_json::Map::new(),

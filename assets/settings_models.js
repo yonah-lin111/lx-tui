@@ -5,6 +5,14 @@
 
 const INPUT_MODALITIES = ['text', 'image', 'audio', 'video', 'pdf'];
 const OUTPUT_MODALITIES = ['text', 'image', 'audio', 'video'];
+const TITLE_LANGUAGE_OPTIONS = [
+  {value: 'zh-CN', label: 'Simplified Chinese'},
+  {value: 'auto', label: 'Auto (follow input)'},
+  {value: 'en', label: 'English'},
+  {value: 'zh-TW', label: 'Traditional Chinese'},
+  {value: 'ja', label: 'Japanese'},
+  {value: 'ko', label: 'Korean'}
+];
 const VARIANT_PRESETS = {
   openai: {low: {reasoningEffort: 'low'}, medium: {reasoningEffort: 'medium'}, high: {reasoningEffort: 'high'}},
   openrouter: {low: {reasoning: {effort: 'low'}}, medium: {reasoning: {effort: 'medium'}}, high: {reasoning: {effort: 'high'}}},
@@ -39,10 +47,12 @@ function isModelSettingsDirty() {
   if (!modelsDraft || !modelsBaseline) { return false; }
   return JSON.stringify({
     defaultModel: modelsDraft.defaultModel,
-    titleSummary: modelsDraft.titleSummary
+    titleSummary: modelsDraft.titleSummary,
+    titleLanguage: modelsDraft.titleLanguage
   }) !== JSON.stringify({
     defaultModel: modelsBaseline.defaultModel,
-    titleSummary: modelsBaseline.titleSummary
+    titleSummary: modelsBaseline.titleSummary,
+    titleLanguage: modelsBaseline.titleLanguage
   });
 }
 
@@ -138,6 +148,7 @@ function snapshotToDraft(snapshot) {
     streamIdleTimeoutMs: snapshot.streamIdleTimeoutMs,
     defaultModel: snapshot.defaultModel || null,
     titleSummary: snapshot.titleSummary || null,
+    titleLanguage: snapshot.titleLanguage || 'zh-CN',
     providers: (snapshot.providers || []).map((provider) => ({
       key: provider.key,
       id: provider.id,
@@ -590,6 +601,10 @@ function renderDefaultModel() {
   if (modelSelects.titleModel) {
     modelSelects.titleModel.setOptions(options, titleValue);
   }
+  if (modelSelects.titleLanguage) {
+    const lang = modelsDraft.titleLanguage || 'zh-CN';
+    modelSelects.titleLanguage.setOptions(TITLE_LANGUAGE_OPTIONS, lang);
+  }
 }
 
 function buildVariants(model) {
@@ -708,6 +723,7 @@ function buildPayload() {
     enabledProviders: enabledProviders,
     defaultModel: defaultModel,
     titleSummary: titleSummary,
+    titleLanguage: modelsDraft.titleLanguage || 'zh-CN',
     streamIdleTimeoutMs: modelsDraft.streamIdleTimeoutMs,
     revision: modelsDraft.revision
   };
@@ -884,6 +900,16 @@ function initModelsView() {
       }
       const parts = value.split('\u0000');
       modelsDraft.titleSummary = {provider: parts[0], model: parts[1], variant: null};
+      markModelsDirty();
+    }
+  });
+  modelSelects.titleLanguage = createSelect(document.getElementById('title-language-host'), {
+    ariaLabel: 'Title language',
+    value: 'zh-CN',
+    options: TITLE_LANGUAGE_OPTIONS,
+    onChange: (value) => {
+      if (!modelsDraft) { return; }
+      modelsDraft.titleLanguage = value || 'zh-CN';
       markModelsDirty();
     }
   });

@@ -230,6 +230,55 @@ pub struct ModelSelection {
     pub variant: Option<String>,
 }
 
+/// 标题生成输出语言（`ai.titleLanguage`；缺省使用简体中文 `zh-CN`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TitleLanguage {
+    /// 强制使用简体中文（默认）。
+    #[default]
+    #[serde(rename = "zh-CN", alias = "zh")]
+    SimplifiedChinese,
+    /// 自动跟随用户输入正文的自然语言。
+    #[serde(rename = "auto")]
+    Auto,
+    /// 强制使用英文。
+    #[serde(rename = "en")]
+    English,
+    /// 强制使用繁体中文。
+    #[serde(rename = "zh-TW")]
+    TraditionalChinese,
+    /// 强制使用日文。
+    #[serde(rename = "ja")]
+    Japanese,
+    /// 强制使用韩文。
+    #[serde(rename = "ko")]
+    Korean,
+}
+
+impl TitleLanguage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SimplifiedChinese => "zh-CN",
+            Self::Auto => "auto",
+            Self::English => "en",
+            Self::TraditionalChinese => "zh-TW",
+            Self::Japanese => "ja",
+            Self::Korean => "ko",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "zh-CN" | "zh" => Some(Self::SimplifiedChinese),
+            "auto" => Some(Self::Auto),
+            "en" => Some(Self::English),
+            "zh-TW" => Some(Self::TraditionalChinese),
+            "ja" => Some(Self::Japanese),
+            "ko" => Some(Self::Korean),
+            _ => None,
+        }
+    }
+}
+
 /// `ai.json` 的 `ai` 节点。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AiSettings {
@@ -252,6 +301,13 @@ pub struct AiSettings {
         skip_serializing_if = "Option::is_none"
     )]
     pub title_summary: Option<ModelSelection>,
+    /// 标题生成输出语言（`titleLanguage`，缺省按 `SimplifiedChinese` 处理）。
+    #[serde(
+        default,
+        rename = "titleLanguage",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub title_language: Option<TitleLanguage>,
     /// 流式空闲超时毫秒（lx-agent 写作 camelCase `streamIdleTimeoutMs`）。
     #[serde(
         rename = "streamIdleTimeoutMs",
@@ -274,10 +330,16 @@ impl AiSettings {
             providers: BTreeMap::new(),
             default_model: None,
             title_summary: None,
+            title_language: None,
             stream_idle_timeout_ms: None,
             web_search: WebSearchConfig::default(),
             extra: serde_json::Map::new(),
         }
+    }
+
+    /// 有效标题生成语言；未显式配置时默认使用简体中文（`SimplifiedChinese`）。
+    pub fn effective_title_language(&self) -> TitleLanguage {
+        self.title_language.unwrap_or_default()
     }
 
     /// 有效空闲超时；未配置取默认值。

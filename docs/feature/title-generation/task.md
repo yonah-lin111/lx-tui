@@ -28,7 +28,7 @@
      - `merge_settings` 解析并合并 `"titleSummary"`。
   4. **`assets/settings.html`、`assets/settings.js`、`assets/settings_models.js`**：
      - 左侧导航栏拆分为 `Model`（`#tab-model` $\to$ `#view-model`）与 `Provider`（`#tab-provider` $\to$ `#view-provider`）。
-     - `#view-model` 内含 `Default model`（`#default-model-host`）与 `Title model`（`#title-model-host`）两个自定义下拉组件及 `#actions-model` 操作条。
+     - `#view-model` 内含 `Default model`（`#default-model-host`）、`Title model`（`#title-model-host`）与 `Title language`（`#title-language-host`，默认 `zh-CN` 简体中文，支持 `auto` / `en` / `zh-TW` / `ja` / `ko`）下拉组件及 `#actions-model` 操作条。
      - `#view-provider` 承接原供应商与模型 CRUD 界面及 `#actions-provider` 操作条。
      - 更新 `src/settings/service/tests.rs` 与 `src/settings/service/models/tests.rs` 断言。
 

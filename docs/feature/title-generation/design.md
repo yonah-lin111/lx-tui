@@ -30,7 +30,7 @@
 1. **设置页拆分 `Model` 与 `Provider` Tab**：
    - 将浏览器设置页左侧 Tab 拆分为 `General`、`Commands`、`Model`、`Provider`、`MCP`、`Skills`。
    - 原 `Models` 页的供应商与模型列表管理调整至 `Provider` Tab（`#tab-provider` / `#view-provider`）。
-   - 新增独立的 `Model` Tab（`#tab-model` / `#view-model`），集中管理全局模型配置：**`Default model`**（`defaultModel`）与 **`Title model`**（JSON 键名 `titleSummary`，与 `lx-agent` 保持兼容）。
+   - 新增独立的 `Model` Tab（`#tab-model` / `#view-model`），集中管理全局模型与标题配置：**`Default model`**（`defaultModel`）、**`Title model`**（JSON 键名 `titleSummary`，与 `lx-agent` 保持兼容）以及 **`Title language`**（JSON 键名 `titleLanguage`，默认 `zh-CN` 简体中文，可选 `auto`、`en`、`zh-TW`、`ja`、`ko`）。
 2. **`lx` 新对话自动生成标题（参考 `codex-main`）**：
    - 当新会话首轮用户消息落库成功（`on_turn_committed` 且 `turn_index == 1`）时，立即在后台并行发起无工具、轻量级的标题生成请求，不阻塞主对话流式输出。
    - 生成前数据库保留首条消息前 60 字符作为初始兜底标题；生成成功后静默更新 `agent_session.title` 及已打开的 `/resume` 历史列表。

@@ -32,6 +32,7 @@ fn revision_of(settings: &crate::config::ai::AiSettings) -> String {
     let value = json!({
         "defaultModel": &settings.default_model,
         "titleSummary": &settings.title_summary,
+        "titleLanguage": settings.effective_title_language().as_str(),
         "enabledProviders": &settings.enabled_providers,
         "providers": &settings.providers,
         "streamIdleTimeoutMs": settings.stream_idle_timeout_ms,
@@ -114,6 +115,7 @@ fn get_settings(state: &ServiceState) -> Response {
         "enabledProviders": settings.enabled_providers,
         "defaultModel": default_model,
         "titleSummary": title_summary,
+        "titleLanguage": settings.effective_title_language().as_str(),
         "streamIdleTimeoutMs": settings.idle_timeout_ms(),
         "revision": revision_of(&settings),
     });
@@ -327,9 +329,18 @@ fn merge_settings(
         .into_iter()
         .filter(|id| settings.providers.contains_key(id))
         .collect();
-    // 默认模型与标题模型选择。
+    // 默认模型、标题模型与标题语言选择。
     settings.default_model = parse_model_selection_field(body, "defaultModel")?;
     settings.title_summary = parse_model_selection_field(body, "titleSummary")?;
+    settings.title_language = match body.get("titleLanguage") {
+        Some(Value::Null) | None => None,
+        Some(Value::String(raw)) if raw.trim().is_empty() => None,
+        Some(Value::String(raw)) => Some(
+            crate::config::ai::TitleLanguage::parse(raw)
+                .ok_or_else(|| format!("unsupported titleLanguage '{raw}'"))?,
+        ),
+        Some(_) => return Err("titleLanguage must be a string".into()),
+    };
     if let Some(timeout) = body.get("streamIdleTimeoutMs").and_then(Value::as_u64) {
         settings.stream_idle_timeout_ms = Some(timeout);
     }

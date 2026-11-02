@@ -190,6 +190,11 @@ impl ModelsSnapshot {
         self.settings.idle_timeout_ms()
     }
 
+    /// 标题生成语言配置（缺省为简体中文 `SimplifiedChinese`）。
+    pub fn title_language(&self) -> crate::config::ai::TitleLanguage {
+        self.settings.effective_title_language()
+    }
+
     /// 该模型选择是否支持图像输入（严格按 `modalities.input` 含 `"image"` 判定）。
     pub fn supports_image_input_of(&self, selection: &ModelSelection) -> bool {
         self.settings

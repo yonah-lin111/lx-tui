@@ -46,7 +46,8 @@ pub fn maybe_schedule_session_title(
     } else {
         display_text.as_str()
     };
-    let Some(prompt) = crate::chat::title::session_title_prompt(source_text) else {
+    let language = state.models.title_language();
+    let Some(prompt) = crate::chat::title::session_title_prompt_for(source_text, language) else {
         return;
     };
     let initial_title =
@@ -129,7 +130,10 @@ pub fn flush_prompt_title_action(state: &mut AppState) -> bool {
                 );
                 return true;
             };
-            let Some(prompt) = crate::chat::title::template_block_title_prompt(&content) else {
+            let language = state.models.title_language();
+            let Some(prompt) =
+                crate::chat::title::template_block_title_prompt_for(&content, language)
+            else {
                 state
                     .prompt
                     .set_block_title(block_start_line, original_title.as_deref());
@@ -395,6 +399,7 @@ mod tests {
                     model: "title-fast".to_string(),
                     variant: None,
                 }),
+                title_language: None,
                 stream_idle_timeout_ms: None,
                 web_search: Default::default(),
                 extra: serde_json::Map::new(),

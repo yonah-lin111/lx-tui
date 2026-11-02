@@ -1,11 +1,13 @@
 //! 会话与模板块标题生成的提示词组装、请求构造与响应清洗（对齐 codex `thread_title.rs`）。
 //!
-//! 保持纯函数与零 IO：提示词统一使用英文指令，要求输出跟随用户语言、单行、
-//! 不超过 36 个字符且不含引号、Markdown 或末尾标点。
+//! 保持纯函数与零 IO：提示词统一使用英文编写（遵守模型提示词全英文规范），
+//! 按配置的 `TitleLanguage`（默认简体中文 `SimplifiedChinese`，或指定其它语言 / 自动跟随）
+//! 明确约束模型输出对应语言的简洁单行标题。
 
 use std::sync::Arc;
 
 use crate::chat::events::{ChatRequest, ChatTurn, ModelItem, RequestPurpose};
+use crate::config::ai::TitleLanguage;
 use crate::db::chat::ModelSnapshot;
 
 /// 标题最大字符数（按 Unicode 标量值计数，对齐 codex `THREAD_TITLE_MAX_CHARS = 36`）。
@@ -17,13 +19,73 @@ pub const TITLE_TIMEOUT_SECS: u64 = 30;
 /// 标题响应流最大累计字节数（8 KiB）。
 pub const TITLE_MAX_OUTPUT_BYTES: usize = 8 * 1024;
 
-/// 基础英文指令（对齐 codex `thread_title_instructions`）。
+/// 默认标题生成指令（简体中文输出）。
 pub fn title_instructions() -> &'static str {
-    "Generate a concise, single-line task title of at most 36 characters and under five words \
-where possible. Start with an imperative verb. Capitalize only the first word unless the user's \
-language, proper nouns, acronyms, or code terms require otherwise. Preserve ticket references \
-exactly. Write in the user's language. Do not use quotes, markdown, or trailing punctuation. \
-Do not answer the request. Output only the title text."
+    title_instructions_for(TitleLanguage::SimplifiedChinese, "")
+}
+
+/// 按配置的 `TitleLanguage` 与输入样本文本返回对应的英文系统指令。
+pub fn title_instructions_for(language: TitleLanguage, sample_text: &str) -> &'static str {
+    let resolved = match language {
+        TitleLanguage::Auto => {
+            if contains_cjk(sample_text) {
+                TitleLanguage::SimplifiedChinese
+            } else {
+                TitleLanguage::Auto
+            }
+        }
+        other => other,
+    };
+    match resolved {
+        TitleLanguage::SimplifiedChinese => {
+            "Generate a concise, single-line task title in Simplified Chinese (at most 20 Chinese \
+characters). You MUST write the title in Simplified Chinese regardless of whether the input \
+contains English template labels, code snippets, or file paths. Preserve ticket references and \
+key code identifiers when necessary. Do not use quotes, markdown, braces, or trailing \
+punctuation. Do not answer the request. Output only the title text."
+        }
+        TitleLanguage::TraditionalChinese => {
+            "Generate a concise, single-line task title in Traditional Chinese (at most 20 \
+Chinese characters). You MUST write the title in Traditional Chinese regardless of whether the \
+input contains English template labels, code snippets, or file paths. Preserve ticket references \
+and key code identifiers when necessary. Do not use quotes, markdown, braces, or trailing \
+punctuation. Do not answer the request. Output only the title text."
+        }
+        TitleLanguage::Japanese => {
+            "Generate a concise, single-line task title in Japanese (at most 24 characters). \
+You MUST write the title in Japanese regardless of whether the input contains English template \
+labels, code snippets, or file paths. Preserve ticket references and key code identifiers when \
+necessary. Do not use quotes, markdown, braces, or trailing punctuation. Do not answer the \
+request. Output only the title text."
+        }
+        TitleLanguage::Korean => {
+            "Generate a concise, single-line task title in Korean (at most 24 characters). \
+You MUST write the title in Korean regardless of whether the input contains English template \
+labels, code snippets, or file paths. Preserve ticket references and key code identifiers when \
+necessary. Do not use quotes, markdown, braces, or trailing punctuation. Do not answer the \
+request. Output only the title text."
+        }
+        TitleLanguage::English => {
+            "Generate a concise, single-line task title in English of at most 36 characters and \
+under five words where possible. Start with an imperative verb. Capitalize only the first word \
+unless proper nouns, acronyms, or code terms require otherwise. Preserve ticket references \
+exactly. You MUST write the title in English. Do not use quotes, markdown, braces, or trailing \
+punctuation. Do not answer the request. Output only the title text."
+        }
+        TitleLanguage::Auto => {
+            "Generate a concise, single-line task title of at most 36 characters. Ignore English \
+template field labels (such as '- Description:', '- Requirements:', '- Reference:', '- Location:', \
+'- Notes:'), file paths, and code identifiers when determining the user's language, and write the \
+title in the natural language used by the user. Preserve ticket references exactly. Do not use \
+quotes, markdown, braces, or trailing punctuation. Do not answer the request. Output only the \
+title text."
+        }
+    }
+}
+
+fn contains_cjk(text: &str) -> bool {
+    text.chars()
+        .any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
 }
 
 /// 按 UTF-8 字符边界安全截断字符串字节数。
@@ -38,13 +100,19 @@ pub fn truncate_utf8_bytes(text: &str, max_bytes: usize) -> &str {
     &text[..boundary]
 }
 
-/// 组装新对话标题生成 Prompt（总长钳制在 960 字节内）。
+/// 组装新对话标题生成 Prompt（默认语言）。
 pub fn session_title_prompt(user_message: &str) -> Option<String> {
+    session_title_prompt_for(user_message, TitleLanguage::default())
+}
+
+/// 按指定语言组装新对话标题生成 Prompt（总长钳制在 960 字节内）。
+pub fn session_title_prompt_for(user_message: &str, language: TitleLanguage) -> Option<String> {
     let trimmed = user_message.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let prefix = format!("{}\n\nUser prompt:\n", title_instructions());
+    let instructions = title_instructions_for(language, trimmed);
+    let prefix = format!("{instructions}\n\nUser prompt:\n");
     let budget = TITLE_PROMPT_MAX_BYTES.saturating_sub(prefix.len());
     let body = truncate_utf8_bytes(trimmed, budget).trim_end();
     if body.is_empty() {
@@ -53,13 +121,22 @@ pub fn session_title_prompt(user_message: &str) -> Option<String> {
     Some(format!("{prefix}{body}"))
 }
 
-/// 组装 Prompt 模板块（`&&&` / `+++`）标题生成 Prompt（总长钳制在 960 字节内）。
+/// 组装 Prompt 模板块（`&&&` / `+++`）标题生成 Prompt（默认语言）。
 pub fn template_block_title_prompt(block_content: &str) -> Option<String> {
+    template_block_title_prompt_for(block_content, TitleLanguage::default())
+}
+
+/// 按指定语言组装 Prompt 模板块（`&&&` / `+++`）标题生成 Prompt（总长钳制在 960 字节内）。
+pub fn template_block_title_prompt_for(
+    block_content: &str,
+    language: TitleLanguage,
+) -> Option<String> {
     let trimmed = block_content.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let prefix = format!("{}\n\nTask template content:\n", title_instructions());
+    let instructions = title_instructions_for(language, trimmed);
+    let prefix = format!("{instructions}\n\nTask template content:\n");
     let budget = TITLE_PROMPT_MAX_BYTES.saturating_sub(prefix.len());
     let body = truncate_utf8_bytes(trimmed, budget).trim_end();
     if body.is_empty() {
@@ -193,10 +270,26 @@ mod tests {
         let prompt = session_title_prompt(&long_cjk).expect("prompt");
         assert!(prompt.len() <= TITLE_PROMPT_MAX_BYTES);
         assert!(prompt.starts_with(title_instructions()));
+        assert!(prompt.contains("Simplified Chinese"));
 
-        let tpl_prompt = template_block_title_prompt(&long_cjk).expect("template prompt");
+        let tpl_prompt =
+            template_block_title_prompt_for(&long_cjk, TitleLanguage::English).expect("en prompt");
         assert!(tpl_prompt.len() <= TITLE_PROMPT_MAX_BYTES);
+        assert!(tpl_prompt.contains("You MUST write the title in English"));
         assert!(tpl_prompt.contains("Task template content:"));
+    }
+
+    #[test]
+    fn auto_language_detects_cjk_in_sample_text() {
+        let cjk_prompt =
+            template_block_title_prompt_for("- Description: 优化标题生成语言", TitleLanguage::Auto)
+                .expect("auto cjk");
+        assert!(cjk_prompt.contains("Simplified Chinese"));
+
+        let en_prompt =
+            template_block_title_prompt_for("- Description: Fix memory leak", TitleLanguage::Auto)
+                .expect("auto non-cjk");
+        assert!(en_prompt.contains("Ignore English template field labels"));
     }
 
     #[test]

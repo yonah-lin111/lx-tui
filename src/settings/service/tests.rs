@@ -60,6 +60,7 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(html.contains("view-provider"), "provider view container");
     assert!(html.contains("default-model-host"), "default model host");
     assert!(html.contains("title-model-host"), "title model host");
+    assert!(html.contains("title-language-host"), "title language host");
     assert!(html.contains("provider-list"), "provider list container");
     assert!(html.contains("prov-api-key"), "api key input present");
     assert!(html.contains("MCP"), "mcp tab present");
