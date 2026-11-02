@@ -448,6 +448,8 @@ fn step_mark_glyphs_are_single_width_and_non_pua() {
         ("STEP_MARK_DOT_HOLLOW", a::STEP_MARK_DOT_HOLLOW),
         ("STEP_MARK_TRIANGLE_FILLED", a::STEP_MARK_TRIANGLE_FILLED),
         ("STEP_MARK_TRIANGLE_HOLLOW", a::STEP_MARK_TRIANGLE_HOLLOW),
+        ("STEP_MARK_DIAMOND_FILLED", a::STEP_MARK_DIAMOND_FILLED),
+        ("STEP_MARK_DIAMOND_HOLLOW", a::STEP_MARK_DIAMOND_HOLLOW),
     ] {
         assert_eq!(glyph.width(), Some(1), "{name} 必须严格占 1 列宽");
         let cp = glyph as u32;

@@ -35,6 +35,7 @@ pub(crate) enum SnapEntryKind {
         count: usize,
     },
     Compact(usize),
+    RunningCompact,
     ModelSwitch {
         first: usize,
         last: usize,
@@ -146,6 +147,7 @@ pub(crate) fn build(
         match entry {
             TimelineEntry::Notices { last, count } => builder.notices(source, *last, *count),
             TimelineEntry::Compact(index) => builder.compact(source, *index),
+            TimelineEntry::RunningCompact => builder.running_compact(source),
             TimelineEntry::ModelSwitch { first, last, count } => {
                 builder.model_switch(source, *first, *last, *count)
             }
@@ -283,6 +285,31 @@ impl Builder<'_> {
             start,
             end: self.rows,
             kind: SnapEntryKind::Compact(index),
+            blocks: vec![block],
+        });
+    }
+
+    /// 正在压缩中的 loading 条目。
+    fn running_compact(&mut self, source: HistorySource<'_>) {
+        let start = self.rows;
+        let key = BlockKey {
+            message_index: super::cache::RUNNING_COMPACT_SLOT_MESSAGE,
+            step_index: super::cache::RUNNING_COMPACT_SLOT_BLOCK,
+            width: self.width,
+            sig: super::cache::running_compact_block_signature(source.compact),
+        };
+        let rows = compact::running_rows(source.compact, self.width);
+        let block = self.block(key, BlockSource::RunningCompact, start, || {
+            BlockPaint::Legacy {
+                rows,
+                spans: Vec::new(),
+            }
+        });
+        self.rows += block.rows;
+        self.snapshot.entries.push(SnapEntry {
+            start,
+            end: self.rows,
+            kind: SnapEntryKind::RunningCompact,
             blocks: vec![block],
         });
     }

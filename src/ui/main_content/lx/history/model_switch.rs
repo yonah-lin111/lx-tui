@@ -1,8 +1,8 @@
 //! 模型切换提示（model switch notice）的物理行布局与绘制。
 //!
-//! 与 [`super::compact`] 同一套口径：
-//! - 第 1 行（`style::accent()`）：`-- Model switched --`（连续多条合并为 `-- Model switched xN --`）；
-//! - 第 2 行（`style::muted()`）：目标模型（或思考等级）、时间与合并区间内全部变更指令源；
+//! 系统事件步骤卡片：
+//! - 折叠态为单行紧凑条目：行首菱形标记 `◆`（`StepKind::System`）+ 标题（accent）+
+//!   ` · ` 分隔的描述（muted），如 `◆ Model switched · model: gpt-5 · 10:42`；
 //! - 展开态：思考块同款的 `  └─ ` 树形连接符（[`text::agent::TREE_LEAF`]）+ 5 列正文缩进
 //!   （[`super::thinking_body_indent`]）+ 压暗 Markdown（[`super::tool::muted_markdown_lines`]），
 //!   渲染完整跃迁链（`A -> B -> A` 不退化）与最后一次注入的系统提示词。
@@ -13,6 +13,8 @@ use ratatui::layout::Rect;
 
 use crate::app::state::ModelSwitchNoticeView;
 use crate::ui::main_content::lx::Grid;
+use crate::ui::main_content::lx::history::tool::Segment;
+use crate::ui::main_content::lx::history::{StepKind, StepMark};
 use crate::ui::{style, text};
 
 use super::visible_row;
@@ -79,13 +81,23 @@ fn expanded_markdown(slice: &[ModelSwitchNoticeView]) -> String {
     }
 }
 
+/// 组装头部单行分段。
+fn header_segments(slice: &[ModelSwitchNoticeView]) -> Vec<Segment> {
+    let mark = StepMark::Done.segment(StepKind::System, 0, false);
+    let title = title(slice.len());
+    let desc = description(slice);
+    vec![
+        Segment::new(format!("{mark}{title}"), style::accent()),
+        Segment::new(format!(" · {desc}"), style::muted()),
+    ]
+}
+
 /// 提示占用的物理行数（与 [`draw`] 严格同口径）。
 pub(super) fn rows(slice: &[ModelSwitchNoticeView], width: u16, expanded: bool) -> usize {
     if slice.is_empty() {
         return 0;
     }
-    let mut total = super::wrap(&title(slice.len()), width).len();
-    total += super::wrap(&description(slice), width).len();
+    let mut total = super::tool::wrap_spans(&header_segments(slice), usize::from(width)).len();
     if expanded {
         let (_, body_width) = tree_body_geometry(width);
         total += super::tool::muted_markdown_lines(&expanded_markdown(slice), body_width).len();
@@ -93,7 +105,7 @@ pub(super) fn rows(slice: &[ModelSwitchNoticeView], width: u16, expanded: bool) 
     total
 }
 
-/// 标题（连续多条合并为 `-- Model switched xN --`）。
+/// 标题（连续多条合并为 `Model switched xN`）。
 pub(super) fn title(count: usize) -> String {
     text::model_switch_notice_title(count)
 }
@@ -125,15 +137,9 @@ pub(super) fn draw(
     if slice.is_empty() {
         return;
     }
-    for line in super::wrap(&title(slice.len()), content.width) {
+    for line in super::tool::wrap_spans(&header_segments(slice), usize::from(content.width)) {
         if let Some(y) = visible_row(content, scroll, *row_index) {
-            grid.put_clipped(content.x, y, &line, style::accent(), content.width);
-        }
-        *row_index += 1;
-    }
-    for line in super::wrap(&description(slice), content.width) {
-        if let Some(y) = visible_row(content, scroll, *row_index) {
-            grid.put_clipped(content.x, y, &line, style::muted(), content.width);
+            super::tool::put_segments(grid, content.x, y, content.width, &line);
         }
         *row_index += 1;
     }

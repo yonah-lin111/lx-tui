@@ -50,19 +50,17 @@ fn model_switch_folds_to_two_header_rows_and_expands_with_muted_markdown() {
         Some("max"),
         "DeepSeek V4.1 Flash",
     )]);
-    let area = Rect::new(0, 0, 100, 14);
+    let area = Rect::new(0, 0, 130, 14);
     let folded_layout = layout(area, &lx, &mut cache());
     let mut grid = Grid::new(area);
     let drawn = render(&mut grid, area, &lx, 0, &mut cache());
     assert_eq!(drawn, folded_layout.total_rows);
-    // 标题 + 描述 + 末尾呼吸行 = 3 行
-    assert_eq!(folded_layout.total_rows, 3);
+    // 标题 + 末尾呼吸行 = 2 行（宽屏单行）
+    assert_eq!(folded_layout.total_rows, 2);
 
     let folded_text: String = rows_text(&grid, area).join("\n");
-    assert!(
-        folded_text.contains("-- Model switched --"),
-        "{folded_text}"
-    );
+    assert!(folded_text.contains("Model switched"), "{folded_text}");
+    assert!(folded_text.contains('◆'), "包含菱形标记：{folded_text}");
     assert!(
         folded_text.contains("model: DeepSeek V4.1 Flash (max)"),
         "{folded_text}"
@@ -252,7 +250,7 @@ fn consecutive_switches_merge_into_xn_and_keep_expanded_and_chain() {
 
     let text = rows_text(&grid, area).join("\n");
     assert!(
-        text.contains("-- Model switched x2 --"),
+        text.contains("Model switched x2"),
         "连续切换应合并为 x2：{text}"
     );
     assert!(
@@ -307,7 +305,7 @@ fn consecutive_model_switches_coalesce_into_x_count() {
 
     let text = rows_text(&grid, area).join("\n");
     assert!(
-        text.contains("-- Model switched x2 --"),
+        text.contains("Model switched x2"),
         "连续切换应合并为 x2：{text}"
     );
     assert!(

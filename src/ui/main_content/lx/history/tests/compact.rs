@@ -37,8 +37,8 @@ fn compact_entry_folds_to_header_rows() {
     let mut grid = Grid::new(area);
     let drawn = render(&mut grid, area, &lx, 0, &mut cache());
     assert_eq!(drawn, layout.total_rows, "布局与渲染行数必须一致");
-    // 标题 + 描述 + 末尾呼吸行（与其它历史条目同一口径）。
-    assert_eq!(layout.total_rows, 3, "折叠态只占标题+描述+呼吸行");
+    // 标题 + 末尾呼吸行（与其它历史条目同一口径）。
+    assert_eq!(layout.total_rows, 2, "折叠态只占单行头部+呼吸行");
     let text: String = (area.y..area.bottom())
         .map(|y| {
             (area.x..area.right())
@@ -47,7 +47,8 @@ fn compact_entry_folds_to_header_rows() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("-- Context compacted --"), "{text}");
+    assert!(text.contains("Context compacted"), "{text}");
+    assert!(text.contains('◆'), "系统事件包含菱形标记：{text}");
     assert!(text.contains("gpt-5"), "必须显示实际模型名：{text}");
     assert!(
         !text.contains("Condensed context"),
@@ -115,7 +116,7 @@ fn compact_entry_is_interleaved_by_sequence() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let compact_at = text.find("-- Context compacted --").expect("compact title");
+    let compact_at = text.find("Context compacted").expect("compact title");
     let message_at = text.find("after").expect("message body");
     assert!(
         compact_at < message_at,
@@ -141,7 +142,7 @@ fn consecutive_compacts_are_not_merged() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(
-        text.matches("-- Context compacted --").count(),
+        text.matches("Context compacted").count(),
         2,
         "每条检查点都需要独立展开：{text}"
     );
@@ -223,5 +224,53 @@ fn expanded_compact_summary_uses_muted_markdown_styles() {
     assert_eq!(
         grid.cell(18, summary_y).style,
         style::md_read_inline_code().patch(style::muted())
+    );
+}
+
+/// 正在执行的压缩请求在时间线末尾显示动态呼吸条目及耗时。
+#[test]
+fn running_compact_displays_breathing_glyph_and_elapsed() {
+    let mut lx = Lx::new();
+    lx.compact.start("compact-op-1".into(), 1_000);
+    lx.compact.elapsed_ms = Some(3_200);
+    assert!(has_history(&lx), "压缩进行中应当有可绘制历史");
+
+    let area = Rect::new(0, 0, 60, 10);
+    let layout = layout(area, &lx, &mut cache());
+    // 运行条目 1 行 + 末尾呼吸位 1 行 = 2 行
+    assert_eq!(layout.total_rows, 2, "运行中只占单行条目+呼吸行");
+
+    // 相位 0（实心菱形）
+    lx.chat.loading_frame = 0;
+    let mut grid = Grid::new(area);
+    let drawn = render(&mut grid, area, &lx, 0, &mut cache());
+    assert_eq!(drawn, layout.total_rows);
+    let text: String = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| grid.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Compacting context..."), "{text}");
+    assert!(text.contains('◆'), "相位 0 必须为实心菱形：{text}");
+    assert!(text.contains("3.2s"), "耗时格式化为秒：{text}");
+
+    // 相位 4（呼吸到空心菱形）
+    lx.chat.loading_frame = crate::ui::text::agent::STEP_BREATH_TICKS;
+    let mut grid_hollow = Grid::new(area);
+    render(&mut grid_hollow, area, &lx, 0, &mut cache());
+    let text_hollow: String = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| grid_hollow.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text_hollow.contains('◇'),
+        "呼吸相位必须为空心菱形：{text_hollow}"
     );
 }

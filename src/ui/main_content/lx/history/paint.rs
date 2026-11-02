@@ -36,6 +36,8 @@ pub(crate) enum BlockSource {
     Rewind { last: usize, count: usize },
     /// 时间线里的 compact 检查点。
     Compact { index: usize, expanded: bool },
+    /// 时间线里的正在压缩 loading 条目。
+    RunningCompact,
     /// 时间线里的模型切换提示（合并后的起止下标与展开状态）。
     ModelSwitch {
         first: usize,
@@ -627,6 +629,17 @@ fn draw_legacy(
                 return;
             };
             super::compact::draw(grid, notice, 1, expanded, rect, scroll, &mut row);
+        }
+        BlockSource::RunningCompact => {
+            super::compact::draw_running(
+                grid,
+                history.compact,
+                rect,
+                scroll,
+                &mut row,
+                history.chat.loading_frame,
+                history.animating,
+            );
         }
         BlockSource::ModelSwitch {
             first,

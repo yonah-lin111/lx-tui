@@ -130,12 +130,14 @@ impl StepMark {
             }
             Self::Done | Self::Failed | Self::Interrupted | Self::Cancelled => true,
         };
-        // 文字数据用圆点、工具调用用方块、子 agent 汇报用上三角。
+        // 文字数据用圆点、工具调用用方块、子 agent 汇报用上三角、系统事件用菱形。
         match (kind, filled) {
             (StepKind::Tool, true) => text::agent::STEP_MARK_FILLED,
             (StepKind::Tool, false) => text::agent::STEP_MARK_HOLLOW,
             (StepKind::Report, true) => text::agent::STEP_MARK_TRIANGLE_FILLED,
             (StepKind::Report, false) => text::agent::STEP_MARK_TRIANGLE_HOLLOW,
+            (StepKind::System, true) => text::agent::STEP_MARK_DIAMOND_FILLED,
+            (StepKind::System, false) => text::agent::STEP_MARK_DIAMOND_HOLLOW,
             (_, true) => text::agent::STEP_MARK_DOT_FILLED,
             (_, false) => text::agent::STEP_MARK_DOT_HOLLOW,
         }
@@ -182,6 +184,8 @@ pub(super) enum StepKind {
     Tool,
     /// 子 agent 主动汇报块。
     Report,
+    /// 系统事件（压缩、模型切换、撤销）。
+    System,
 }
 
 impl StepKind {
@@ -192,7 +196,7 @@ impl StepKind {
             Self::Thinking => style::chat_step_mark_running_thinking(expanded),
             // 运行中的工具统一橙黄（与 `Alive` 同档）：用户要求"所有正在运行中的
             // tool 的方块和 title 统一为黄色，完成才显示绿色"。
-            Self::Tool | Self::Report => style::chat_step_mark_alive(),
+            Self::Tool | Self::Report | Self::System => style::chat_step_mark_alive(),
         }
     }
 
@@ -202,6 +206,7 @@ impl StepKind {
             Self::Body => style::chat_step_mark_done_body(),
             Self::Thinking => style::chat_step_mark_done_thinking(expanded),
             Self::Tool | Self::Report => style::chat_step_mark_done(),
+            Self::System => style::accent(),
         }
     }
 
@@ -214,6 +219,8 @@ impl StepKind {
             (Self::Thinking, false) => style::chat_step_label_done_thinking(expanded),
             (Self::Tool | Self::Report, true) => style::chat_step_label_running(),
             (Self::Tool | Self::Report, false) => style::chat_step_label_done(),
+            (Self::System, true) => style::chat_tool_verb_running(),
+            (Self::System, false) => style::accent(),
         }
     }
 }

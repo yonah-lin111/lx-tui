@@ -46,6 +46,9 @@ pub(crate) const COMPACT_SLOT_BLOCK: usize = usize::MAX - 4;
 pub(crate) const REPORT_SLOT_BLOCK: usize = usize::MAX - 5;
 /// 时间线里的模型切换提示。
 pub(crate) const MODEL_SWITCH_SLOT_BLOCK: usize = usize::MAX - 6;
+/// 时间线里的正在压缩 loading 条目。
+pub(crate) const RUNNING_COMPACT_SLOT_MESSAGE: usize = usize::MAX;
+pub(crate) const RUNNING_COMPACT_SLOT_BLOCK: usize = usize::MAX - 7;
 
 /// 二级缓存项。
 #[derive(Debug)]
@@ -390,6 +393,10 @@ pub(crate) fn list_signature_source(source: super::source::HistorySource<'_>, wi
                 .iter()
                 .any(|id| id == &checkpoint.id),
         ));
+    }
+    if let Some(running_id) = &source.compact.running {
+        hash.write_str(running_id);
+        hash.write_i64(source.compact.elapsed_ms.unwrap_or(0) / 1000);
     }
     for sw in source.switches {
         hash.write_str(&sw.id);
@@ -827,6 +834,14 @@ pub(crate) fn compact_block_signature(
     hash.write_str(&notice.summary);
     hash.write_u8(u8::from(notice.active));
     hash.write_u8(u8::from(expanded));
+    hash.finish()
+}
+
+/// 正在执行的 compact 压缩请求指纹。
+pub(crate) fn running_compact_block_signature(compact: &crate::app::state::LxCompact) -> u64 {
+    let mut hash = Fnv::new();
+    hash.write_str(compact.running.as_deref().unwrap_or(""));
+    hash.write_i64(compact.elapsed_ms.unwrap_or(0) / 1000);
     hash.finish()
 }
 

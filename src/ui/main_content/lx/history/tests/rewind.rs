@@ -79,16 +79,13 @@ fn consecutive_rewind_notices_merge_with_count() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(
-        text.contains("-- Rewind x3 --"),
-        "连续提示合并为 xN：{text}"
-    );
+    assert!(text.contains("Rewind x3"), "连续提示合并为 xN：{text}");
     assert_eq!(
-        text.matches("-- Rewind").count(),
+        text.matches("Rewind").count(),
         1,
         "三条连续提示只画一条标题"
     );
-    assert_eq!(layout.total_rows, 3, "合并后只占标题+描述+空行");
+    assert_eq!(layout.total_rows, 2, "合并后只占单行头部+空行");
 }
 
 #[test]
@@ -112,7 +109,7 @@ fn notices_separated_by_messages_are_not_merged() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(
-        text.matches("-- Rewind").count(),
+        text.matches("Rewind").count(),
         2,
         "被消息分隔的提示各自显示：{text}"
     );
