@@ -1,6 +1,6 @@
 # 会话与模板块标题生成（含 Settings Model/Provider 拆分）：设计方案
 
-> 状态：**已在工作树 `.worktrees/title-generation`（分支 `feat/title-generation`）完成实现、Code Review（`review.md` P0–P3 全量修复）与测试，待用户确认合并**
+> 状态：**已完成并合并至主工作区 `dev` 分支（原工作区 `.worktrees/title-generation` 与分支 `feat/title-generation` 已清理）**
 >
 > 关联文档：
 > - 任务清单：`docs/feature/title-generation/task.md`

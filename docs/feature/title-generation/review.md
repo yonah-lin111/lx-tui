@@ -2,7 +2,8 @@
 
 ## 1. 评审范围与概览
 
-- **评审工作区**：`.worktrees/title-generation`（分支 `feat/title-generation`）
+- **状态**：**全部 P0–P3 项已修复验证并合入 `dev` 分支**（2026-11-02）
+- **原评审工作区**：`.worktrees/title-generation`（分支 `feat/title-generation`，已合并至 `dev` 并清理）
 - **关联文档**：
   - `docs/feature/title-generation/design.md`
   - `docs/feature/title-generation/task.md`
