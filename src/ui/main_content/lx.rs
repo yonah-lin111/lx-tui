@@ -96,8 +96,9 @@ pub fn render(
         for dx in 0..area.width {
             let glyph = grid.cell(area.x + dx, area.y + dy);
             if let Some(cell) = buf.cell_mut((area.x + dx, area.y + dy)) {
-                // 宽字符的后续列标记为 diff 跳过，禁止渲染出半个字符。
+                // 宽字符的后续列标记为 diff 跳过，禁止渲染出半个字符；同时同步写入 style 以保留背景/前景色。
                 if glyph.ch == CONTINUATION {
+                    cell.set_style(glyph.style);
                     cell.set_diff_option(CellDiffOption::Skip);
                     continue;
                 }

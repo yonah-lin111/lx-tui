@@ -494,6 +494,45 @@ pub struct LxChat {
     pub queue: Vec<QueuedSubmission>,
     /// 当前所属项目根目录（用于剥离工具卡片里的当前项目绝对路径前缀）。
     pub project_root: Option<std::path::PathBuf>,
+    /// 当前会话在输入框顶边框右上角展示的标题胶囊文本（自动生成完成、手动 `/rename` 或 `/resume` 恢复时写入）。
+    pub session_title: Option<String>,
+    /// 当前会话标题胶囊锁定的配色槽位（`0..SESSION_TITLE_PALETTE_COUNT`），同一会话跨帧重绘保持稳定。
+    pub session_title_palette: u8,
+}
+
+/// 会话标题胶囊配色槽位总数（与 `ui::main_content::lx::input::SESSION_TITLE_PALETTE` 对齐）。
+pub const SESSION_TITLE_PALETTE_COUNT: u8 = 8;
+
+/// 为新赋标题的会话随机选取一个与上一次不同的配色槽位。
+fn next_random_title_palette(session_id: Option<&str>) -> u8 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    static LAST_PALETTE: AtomicU64 = AtomicU64::new(u64::MAX);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325 ^ nanos.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    if let Some(id) = session_id {
+        for byte in id.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    hash ^= seq.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    hash ^= hash >> 31;
+    let count = u64::from(SESSION_TITLE_PALETTE_COUNT);
+    let mut chosen = hash % count;
+    let prev = LAST_PALETTE.load(Ordering::Relaxed);
+    if chosen == prev && count > 1 {
+        let step = 1 + ((hash >> 8) % (count - 1));
+        chosen = (chosen + step) % count;
+    }
+    LAST_PALETTE.store(chosen, Ordering::Relaxed);
+    chosen as u8
 }
 
 impl Default for LxChat {
@@ -537,7 +576,25 @@ impl LxChat {
             pending_shells: Vec::new(),
             queue: Vec::new(),
             project_root: None,
+            session_title: None,
+            session_title_palette: 0,
         }
+    }
+
+    /// 设置或更新当前会话标题；首次为该会话赋标题时随机锁定一套配色槽位，同会话后续改名保持配色不变。
+    pub fn set_session_title(&mut self, title: Option<String>) -> bool {
+        let normalized = title
+            .map(|raw| crate::ui::text::chat::single_line_label(&raw).into_owned())
+            .filter(|clean| !clean.is_empty());
+        if self.session_title == normalized {
+            return false;
+        }
+        let was_none = self.session_title.is_none();
+        self.session_title = normalized;
+        if was_none && self.session_title.is_some() {
+            self.session_title_palette = next_random_title_palette(self.session_id.as_deref());
+        }
+        true
     }
 
     /// 同步当前项目根目录，并将消息中的工具展示路径收短为相对路径。
@@ -585,6 +642,8 @@ impl LxChat {
         self.pending_shells.clear();
         self.queue.clear();
         self.expanded_user_messages.clear();
+        self.session_title = None;
+        self.session_title_palette = 0;
     }
 
     /// 用户消息是否处于展开状态。

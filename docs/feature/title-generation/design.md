@@ -33,7 +33,8 @@
    - 新增独立的 `Model` Tab（`#tab-model` / `#view-model`），集中管理全局模型与标题配置：**`Default model`**（`defaultModel`）、**`Title model`**（JSON 键名 `titleSummary`，与 `lx-agent` 保持兼容）以及 **`Title language`**（JSON 键名 `titleLanguage`，默认 `auto` 自动跟随用户输入语言，可选 `zh-CN`、`en`、`zh-TW`、`ja`、`ko`）。
 2. **`lx` 新对话自动生成标题（参考 `codex-main`）**：
    - 当新会话首轮用户消息落库成功（`on_turn_committed` 且 `turn_index == 1`）时，立即在后台并行发起无工具、轻量级的标题生成请求，不阻塞主对话流式输出。
-   - 生成前数据库保留首条消息前 60 字符作为初始兜底标题；生成成功后静默更新 `agent_session.title` 及已打开的 `/resume` 历史列表。
+   - 生成前数据库保留首条消息前 60 字符作为初始兜底标题；生成成功后静默更新 `agent_session.title`、已打开的 `/resume` 历史列表，并在 **`lx` 输入框右上角顶边框内（`rect.y` 最右内缩 1 列 `─`）** 显示带背景色与高对比加粗字体色的会话标题胶囊（` <title> `）。
+   - 胶囊配色参考 Claude Code Subagent 胶囊色系与 LX 品牌 Logo 色调，预置 8 套高对比度 256-Cube `(bg, fg)` 主题（对比度均 ≥ 7:1，显式剥离 `DIM` / `REVERSED`），按每个会话随机选取一套并锁定（相邻会话保证不同色、同一会话重绘不闪烁）；`/rename` 改名与 `/resume` 恢复历史会话同步显示，`/new` 新建或删除会话时清空隐藏。
    - 严格遵循手动命名优先（防覆盖）：若后台生成期间用户已通过 `/rename`（或 `/resume` 编辑弹窗）手动改名，自动生成的标题直接丢弃。
 3. **Prompt 模板块（`&&&` 和 `+++`）新增 `/title` 命令**：
    - 当光标位于 `&&&`（`BlockContext::Template`）或 `+++`（`BlockContext::Supple`）块内时，`/` 候选面板提供内置命令 `/title`。

@@ -215,7 +215,7 @@ fn set_edit_hint(state: &mut AppState, message: &str) {
     }
 }
 
-/// 改名成功回执：就地更新 `/resume` 列表该行标题（不关闭面板、不动高亮）。
+/// 改名成功回执：同步更新绑定该会话窗格的顶边框标题胶囊，并就地更新打开中的 `/resume` 列表行。
 pub fn on_session_renamed(
     state: &mut AppState,
     pane: PaneId,
@@ -225,21 +225,21 @@ pub fn on_session_renamed(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    let Some(SlashPanel::History(panel)) = target.lx.slash.as_mut() else {
-        return false;
-    };
-    let Some(entry) = panel
-        .entries
-        .iter_mut()
-        .find(|entry| entry.session_id == session_id)
-    else {
-        return false;
-    };
-    if entry.title == title {
-        return false;
+    let mut changed = false;
+    if target.lx.chat.session_id.as_deref() == Some(session_id) {
+        changed |= target.lx.chat.set_session_title(Some(title.to_string()));
     }
-    entry.title = title.to_string();
-    true
+    if let Some(SlashPanel::History(panel)) = target.lx.slash.as_mut()
+        && let Some(entry) = panel
+            .entries
+            .iter_mut()
+            .find(|entry| entry.session_id == session_id)
+        && entry.title != title
+    {
+        entry.title = title.to_string();
+        changed = true;
+    }
+    changed
 }
 
 /// 删除成功回执：从 `/resume` 列表就地移除该行，高亮顺位落到下一行（末尾则回退）。

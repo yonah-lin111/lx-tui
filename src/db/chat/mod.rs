@@ -749,6 +749,22 @@ impl Database {
         user_shell::session_model(&self.conn, &external, session_id)
     }
 
+    /// 读取指定会话当前的标题（恢复会话时回填输入框顶边框标题胶囊）。
+    pub fn chat_session_title(&self, workspace: &Path, session_id: &str) -> Result<Option<String>> {
+        let Some(external) = self.workspace_external_id(workspace)? else {
+            return Ok(None);
+        };
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT title FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
+                params![session_id, external],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .filter(|title| !title.trim().is_empty()))
+    }
+
     /// 异常重启恢复：把遗留 `streaming` assistant 标记为 `interrupted`，
     /// 同事务补齐这些消息里仍缺完成时刻的 reasoning part。
     ///

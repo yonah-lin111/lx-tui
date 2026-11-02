@@ -99,6 +99,10 @@ fn resume_selected_session_loads_history_into_pane() {
         !target.lx.chat.messages.is_empty(),
         "历史消息必须真的装回窗格，而不是空视图"
     );
+    assert!(
+        target.lx.chat.session_title.is_some(),
+        "恢复会话后应将数据库中的会话标题同步回填至窗格顶边框标题槽"
+    );
     assert!(target.lx.slash.is_none(), "面板关闭");
 }
 

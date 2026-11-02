@@ -467,6 +467,51 @@ mod tests {
             !take_pending_session_title(&mut state, "sess-title-1"),
             "手动重命名后自动标题已被作废"
         );
+
+        // 自动标题落库回执或手动重命名回执更新窗格顶边框标题胶囊，且同会话再次改名保持配色槽位稳定
+        assert!(apply_generated_session_title(
+            &mut state,
+            "sess-title-1",
+            "Auto Title"
+        ));
+        let palette_first = {
+            let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+            assert_eq!(chat.session_title.as_deref(), Some("Auto Title"));
+            chat.session_title_palette
+        };
+        assert!(crate::app::update::on_session_renamed(
+            &mut state,
+            pane,
+            "sess-title-1",
+            "Manual Name"
+        ));
+        {
+            let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+            assert_eq!(chat.session_title.as_deref(), Some("Manual Name"));
+            assert_eq!(
+                chat.session_title_palette, palette_first,
+                "同会话改名保持配色槽位稳定不闪烁"
+            );
+        }
+
+        // /new 解绑会话时清空顶边框标题胶囊，下一次新会话分配不同的配色槽位
+        assert!(crate::app::update::new_session(&mut state, pane));
+        assert_eq!(
+            state
+                .pane_anywhere(pane)
+                .expect("pane")
+                .lx
+                .chat
+                .session_title,
+            None
+        );
+        let next_chat = &mut state.pane_mut_anywhere(pane).expect("pane").lx.chat;
+        next_chat.session_id = Some("sess-title-2".into());
+        assert!(next_chat.set_session_title(Some("Second Session".into())));
+        assert_ne!(
+            next_chat.session_title_palette, palette_first,
+            "相邻新会话应随机选取不同的配色槽位"
+        );
     }
 
     #[test]
