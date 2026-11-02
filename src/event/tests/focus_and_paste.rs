@@ -248,6 +248,83 @@ fn focusing_sidebar_releases_other_containers() {
     assert!(!state.panes_focused(), "主区让出焦点");
 }
 
+/// 真实鼠标点击右侧容器与侧栏空白区时，当前激活窗格的 Agent 条目仍保留 `❯` 标记。
+#[test]
+fn clicking_other_containers_keeps_selected_agent_marker() {
+    use crate::detect::{AgentKind, AgentState, PaneAgentSnapshot};
+    use ratatui::Terminal as RatatuiTerminal;
+    use ratatui::backend::TestBackend;
+
+    let mut state = demo_terminal();
+    let pane = state.active_tab().layout.focus();
+    assert!(crate::app::update::update_pane_agent(
+        &mut state,
+        pane,
+        Some(PaneAgentSnapshot {
+            kind: AgentKind::Claude,
+            state: AgentState::Working,
+            title: None,
+        }),
+    ));
+    let (config, geo) = toolbar_geometry(&mut state);
+    let sections = ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed)
+        .expect("sidebar sections visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 1. 点击右侧 Prompt 文本框。
+    let prompt_area = crate::layout::prompt_text_rect(geo.view.prompt);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            prompt_area.x + 1,
+            prompt_area.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.prompt_focused());
+
+    let mut terminal = RatatuiTerminal::new(TestBackend::new(120, 30)).expect("backend");
+    terminal
+        .draw(|frame| ui::render(frame, &state, &config))
+        .expect("draw");
+    assert_eq!(
+        terminal.backend().buffer()[(sections.agents.x, sections.agents.y)].symbol(),
+        ui::text::AGENT_SELECTED_MARKER,
+        "点击 Prompt 后 Agent 标记不消失"
+    );
+
+    // 2. 点击侧栏 Agents 分区下方空白处。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            sections.agents.x,
+            sections.agents.y + sections.agents.height.saturating_sub(1),
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.sidebar_focused());
+
+    terminal
+        .draw(|frame| ui::render(frame, &state, &config))
+        .expect("draw");
+    assert_eq!(
+        terminal.backend().buffer()[(sections.agents.x, sections.agents.y)].symbol(),
+        ui::text::AGENT_SELECTED_MARKER,
+        "点击侧栏空白后 Agent 标记不消失"
+    );
+}
+
 /// 侧栏持焦点时按键全部吞掉，绝不写进 PTY 或其它输入框。
 #[test]
 fn sidebar_focus_swallows_all_keys() {

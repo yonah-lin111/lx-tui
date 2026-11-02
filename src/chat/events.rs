@@ -190,6 +190,8 @@ pub enum RequestPurpose {
     CompactSummary,
     /// 子 agent 轮次：工具面由角色决定（explorer 只读）。
     Subagent(crate::chat::agent::AgentRole),
+    /// CLI exec 无头对话轮次（16 工具，不含交互式 ask）。
+    ExecTurn,
 }
 
 impl RequestPurpose {
@@ -198,6 +200,7 @@ impl RequestPurpose {
         match self {
             Self::Chat => Some(crate::chat::agent::ToolSurface::Main),
             Self::Subagent(role) => Some(crate::chat::agent::ToolSurface::from_role(role)),
+            Self::ExecTurn => Some(crate::chat::agent::ToolSurface::ExecMain),
             Self::CompactSummary => None,
         }
     }

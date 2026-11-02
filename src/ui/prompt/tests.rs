@@ -358,11 +358,11 @@ fn template_separator_renders_block_border_line() {
     editor.set_text("&&& addTemplate --start\n{title: }\n\nbody\n&&& addTemplate --end\n");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
-    // 分割线首列画色条 `▎`，其余列画满 `─`。
-    let row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
+    // y = 0 为顶边行，y = 3 为标题下分割线：首列画色条 `▎`，其余列画满 `─`。
+    let row: String = (0..area.width).map(|x| buf[(x, 3)].symbol()).collect();
     assert!(row.starts_with("▎──"), "{row}");
     assert!(row.ends_with("─"), "{row}");
-    assert_eq!(buf[(8, 2)].fg, style::LX_PINK, "&&& 分割线为 lx 粉");
+    assert_eq!(buf[(8, 3)].fg, style::LX_PINK, "&&& 分割线为 lx 粉");
 }
 
 #[test]
@@ -371,13 +371,13 @@ fn template_bottom_gap_renders_as_plain_blank_row() {
     let editor = prompt(30, 8, "&&& x --start\n{title: }\n\nbody\n\n&&& x --end");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
-    // 标题下空行渲染为分割线；结束行上方的块底部空行按普通空行渲染（只有首列色条）。
-    let title_sep: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
+    // 标题下空行（y = 3）渲染为分割线；结束行上方的块底部空行（y = 5）按普通空行渲染（只有首列色条）。
+    let title_sep: String = (0..area.width).map(|x| buf[(x, 3)].symbol()).collect();
     assert!(title_sep.starts_with("▎──"), "{title_sep}");
     assert!(title_sep.ends_with("─"), "{title_sep}");
-    let bottom_row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
-    assert_eq!(buf[(0, 4)].symbol(), "▎", "{bottom_row}");
-    assert_eq!(buf[(29, 4)].symbol(), " ", "{bottom_row}");
+    let bottom_row: String = (0..area.width).map(|x| buf[(x, 5)].symbol()).collect();
+    assert_eq!(buf[(0, 5)].symbol(), "▎", "{bottom_row}");
+    assert_eq!(buf[(29, 5)].symbol(), " ", "{bottom_row}");
     assert!(
         !bottom_row.contains('─'),
         "底部空行不画分割线: {bottom_row}"
@@ -946,82 +946,86 @@ fn slash_panel_renders_templates_title_and_hit_tests_items() {
 
 #[test]
 fn template_command_and_title_and_mention_styles() {
-    let area = Rect::new(0, 0, 60, 4);
+    let area = Rect::new(0, 0, 60, 5);
     let editor = prompt(
         60,
-        4,
+        5,
         "&&& addTemplate --start {title: }\n&&& addTemplate --end\n@src/app.rs",
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
-    // 模板块左侧色条占第 0 列，固定为 lx 品牌粉。
-    assert_eq!(buf[(0, 0)].symbol(), "▎");
-    assert_eq!(buf[(0, 0)].fg, style::LX_PINK, "&&& 色条固定 lx 粉");
+    // y = 0 为顶部边框，y = 1 为模板块起始文本行（左侧色条占第 0 列，固定为 lx 品牌粉）。
+    assert_eq!(buf[(0, 0)].symbol(), text::PROMPT_BLOCK_TOP_BORDER);
+    assert_eq!(buf[(0, 0)].fg, style::LX_PINK);
+    assert_eq!(buf[(0, 1)].symbol(), "▎");
+    assert_eq!(buf[(0, 1)].fg, style::LX_PINK, "&&& 色条固定 lx 粉");
 
-    assert!(buf[(1, 0)].modifier.contains(Modifier::DIM), "&&& 为 dim");
-    assert_eq!(buf[(5, 0)].symbol(), "a");
-    assert_eq!(buf[(5, 0)].fg, Color::Green, "add 命令为绿色");
-    assert!(buf[(5, 0)].modifier.contains(Modifier::BOLD));
-    assert_eq!(buf[(17, 0)].symbol(), "-", "--start 为 dim 标记");
-    assert!(buf[(17, 0)].modifier.contains(Modifier::DIM));
+    assert!(buf[(1, 1)].modifier.contains(Modifier::DIM), "&&& 为 dim");
+    assert_eq!(buf[(5, 1)].symbol(), "a");
+    assert_eq!(buf[(5, 1)].fg, Color::Green, "add 命令为绿色");
+    assert!(buf[(5, 1)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buf[(17, 1)].symbol(), "-", "--start 为 dim 标记");
+    assert!(buf[(17, 1)].modifier.contains(Modifier::DIM));
 
-    assert_eq!(buf[(25, 0)].symbol(), "{");
-    assert_eq!(buf[(25, 0)].fg, Color::Cyan, "标题占位符为 Cyan");
-    assert!(buf[(25, 0)].modifier.contains(Modifier::UNDERLINED));
+    assert_eq!(buf[(25, 1)].symbol(), "{");
+    assert_eq!(buf[(25, 1)].fg, Color::Cyan, "标题占位符为 Cyan");
+    assert!(buf[(25, 1)].modifier.contains(Modifier::UNDERLINED));
 
     // 非模板块行不缩进、无色条。
-    assert_eq!(buf[(0, 2)].symbol(), "@");
+    assert_eq!(buf[(0, 3)].symbol(), "@");
     assert_eq!(
-        buf[(0, 2)].fg,
+        buf[(0, 3)].fg,
         style::markdown_file_mention().fg.unwrap_or(Color::Reset),
         "@文件与其它引用共用一档灰绿"
     );
-    assert!(buf[(0, 2)].modifier.contains(Modifier::UNDERLINED));
+    assert!(buf[(0, 3)].modifier.contains(Modifier::UNDERLINED));
 }
 
 #[test]
 fn template_block_draws_status_colored_bar() {
-    let area = Rect::new(0, 0, 60, 4);
+    let area = Rect::new(0, 0, 60, 5);
     let running = prompt(
         60,
-        4,
+        5,
         "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end in_progress",
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &running, None);
 
-    for y in 0..3 {
+    assert_eq!(buf[(0, 0)].symbol(), text::PROMPT_BLOCK_TOP_BORDER);
+    assert_eq!(buf[(0, 0)].fg, style::LX_PINK);
+    for y in 1..4 {
         assert_eq!(buf[(0, y)].symbol(), "▎");
         assert_eq!(buf[(0, y)].fg, style::LX_PINK, "&&& 色条固定 lx 粉");
     }
-    assert_eq!(buf[(59, 1)].symbol(), " ", "右侧不再绘制竖框");
-    assert_eq!(buf[(40, 2)].symbol(), " ", "结束行不再补 ─");
-    assert_eq!(buf[(0, 3)].symbol(), " ");
+    assert_eq!(buf[(59, 2)].symbol(), " ", "右侧不再绘制竖框");
+    assert_eq!(buf[(40, 3)].symbol(), " ", "结束行不再补 ─");
+    assert_eq!(buf[(0, 4)].symbol(), " ");
 
     let done = prompt(
         60,
-        4,
+        5,
         "&&& bugTemplate --start {title: }\n&&& bugTemplate --end done",
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &done, None);
-    assert_eq!(buf[(0, 0)].fg, style::LX_PINK, "&&& 色条固定 lx 粉");
-    assert_eq!(buf[(0, 1)].fg, style::LX_PINK);
+    assert_eq!(buf[(0, 1)].fg, style::LX_PINK, "&&& 色条固定 lx 粉");
+    assert_eq!(buf[(0, 2)].fg, style::LX_PINK);
 }
 
 #[test]
 fn template_block_keeps_transparent_background() {
-    let area = Rect::new(0, 0, 60, 4);
+    let area = Rect::new(0, 0, 60, 5);
     for text in [
         "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end",
         "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end in_progress",
         "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end done",
     ] {
-        let editor = prompt(60, 4, text);
+        let editor = prompt(60, 5, text);
         let mut buf = Buffer::empty(area);
         render(area, &mut buf, &editor, None);
-        for y in 0..4 {
+        for y in 0..5 {
             for x in 0..area.width {
                 assert_eq!(buf[(x, y)].bg, Color::Reset, "{text:?} ({x},{y})");
             }
@@ -1031,18 +1035,18 @@ fn template_block_keeps_transparent_background() {
 
 #[test]
 fn template_block_selection_uses_reversed_modifier_on_transparent_background() {
-    let area = Rect::new(0, 0, 60, 4);
+    let area = Rect::new(0, 0, 60, 5);
     let editor = prompt(
         60,
-        4,
+        5,
         "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end in_progress",
     );
-    let selection = selection(&editor, (1, 3), (1, 8));
+    let selection = selection(&editor, (2, 3), (2, 8));
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, Some(&selection));
-    assert_eq!(buf[(5, 1)].bg, Color::Reset);
-    assert!(buf[(5, 1)].modifier.contains(Modifier::REVERSED));
-    assert_eq!(buf[(20, 1)].bg, Color::Reset);
+    assert_eq!(buf[(5, 2)].bg, Color::Reset);
+    assert!(buf[(5, 2)].modifier.contains(Modifier::REVERSED));
+    assert_eq!(buf[(20, 2)].bg, Color::Reset);
 }
 
 #[test]
@@ -1062,7 +1066,7 @@ fn template_buttons_render_and_hit_test() {
 
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
-    let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+    let row: String = (0..area.width).map(|x| buf[(x, 1)].symbol()).collect();
     assert!(
         !row.contains(text::TEMPLATE_BUTTON_TODO),
         "状态标签不在块内: {row}"
@@ -1070,7 +1074,7 @@ fn template_buttons_render_and_hit_test() {
     assert!(row.contains(text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_CLEAN), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_DEL), "{row}");
-    assert_eq!(buf[(69, 0)].symbol(), "]");
+    assert_eq!(buf[(69, 1)].symbol(), "]");
 
     for hit in &buttons {
         let cell = hit.rect;
@@ -1079,7 +1083,7 @@ fn template_buttons_render_and_hit_test() {
             Some(*hit)
         );
     }
-    assert_eq!(template_button_at(&prompt, area, 0, 0), None);
+    assert_eq!(template_button_at(&prompt, area, 0, 1), None);
 }
 
 #[test]
@@ -1095,11 +1099,11 @@ fn template_buttons_stay_visible_and_text_ellipsizes() {
     assert!(buttons[0].rect.x > area.x, "按钮让开左侧色条");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
-    let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+    let row: String = (0..area.width).map(|x| buf[(x, 1)].symbol()).collect();
     assert!(row.contains(text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_DEL), "{row}");
     let text_side: String = (0..buttons[0].rect.x)
-        .map(|x| buf[(x, 0)].symbol())
+        .map(|x| buf[(x, 1)].symbol())
         .collect();
     assert!(
         text_side.contains('…'),
@@ -1115,7 +1119,7 @@ fn template_buttons_stay_visible_and_text_ellipsizes() {
     );
     let mut buf = Buffer::empty(narrow);
     render(narrow, &mut buf, &narrow_prompt, None);
-    let row: String = (0..narrow.width).map(|x| buf[(x, 0)].symbol()).collect();
+    let row: String = (0..narrow.width).map(|x| buf[(x, 1)].symbol()).collect();
     assert!(row.contains(text::TEMPLATE_BUTTON_DEL), "{row}");
 }
 
@@ -1135,7 +1139,7 @@ fn block_row_never_renders_template_status_label() {
         let prompt = prompt(70, 10, text);
         let mut buf = Buffer::empty(area);
         render(area, &mut buf, &prompt, None);
-        let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+        let row: String = (0..area.width).map(|x| buf[(x, 1)].symbol()).collect();
         assert!(!row.contains(status_label), "状态标签只出现在标题行: {row}");
         assert_eq!(template_buttons(&prompt, area).len(), 3);
     }
@@ -1184,10 +1188,10 @@ fn refer_panel_hit_maps_candidates() {
 #[test]
 fn supple_block_renders_magenta_and_three_buttons() {
     use crate::app::markdown::BlockKind;
-    let area = Rect::new(0, 0, 60, 8);
+    let area = Rect::new(0, 0, 60, 10);
     let prompt = prompt(
         60,
-        8,
+        10,
         concat!(
             "&&& x --start\n",
             "{title: }\n",
@@ -1200,9 +1204,11 @@ fn supple_block_renders_magenta_and_three_buttons() {
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
-    assert_eq!(buf[(0, 0)].fg, style::LX_PINK, "模板块固定 lx 粉");
-    assert_eq!(buf[(0, 4)].fg, Color::LightMagenta, "+++ 品红色");
-    assert_eq!(buf[(2, 5)].bg, Color::Reset, "补充块保持透明底色");
+    assert_eq!(buf[(0, 0)].fg, style::LX_PINK, "模板块顶边固定 lx 粉");
+    assert_eq!(buf[(0, 1)].fg, style::LX_PINK, "模板块固定 lx 粉");
+    assert_eq!(buf[(0, 5)].fg, Color::LightMagenta, "+++ 顶边品红色");
+    assert_eq!(buf[(0, 6)].fg, Color::LightMagenta, "+++ 品红色");
+    assert_eq!(buf[(2, 7)].bg, Color::Reset, "补充块保持透明底色");
 
     let hits = block_buttons(&prompt, area);
     assert_eq!(hits.len(), 3, "补充块复制、清理与删除三个按钮");
@@ -1269,7 +1275,7 @@ fn supple_block_renders_title_separator_like_template() {
     let prompt = prompt(40, 12, text);
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
-    assert_full_width_separator(&buf, 40, 2);
+    assert_full_width_separator(&buf, 40, 3);
 }
 
 // ===== 标题行标题与页控件 =====

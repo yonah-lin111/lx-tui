@@ -68,7 +68,7 @@ impl Prompt {
         true
     }
 
-    /// 删除斜杠命令行后，把补充块追加到固定落点；调用方已记录撤销快照。
+    /// 清空斜杠命令行内容（保留该空行）后，把补充块追加到固定落点；调用方已记录撤销快照。
     ///
     /// 落点：最后一个 `+++` 结束行之后 → `&&&` 结束行之后 → 文末；
     /// 与前文之间恰好隔一个空行，光标落在新块标题值（`{title: }` 的 `}` 前）。
@@ -78,14 +78,7 @@ impl Prompt {
         content: &str,
         cursor: usize,
     ) {
-        let (del_from, del_to) = if trigger.line_end < self.text.len() {
-            (trigger.line_start, trigger.line_end + 1)
-        } else if trigger.line_start > 0 {
-            (trigger.line_start - 1, trigger.line_end)
-        } else {
-            (0, self.text.len())
-        };
-        self.splice_text(del_from, del_to, "");
+        self.splice_text(trigger.line_start, trigger.line_end, "");
 
         let scan = markdown::block_scan(&self.text);
         // 页内存在未闭合块时不插入：落点会落在未闭合块内部，新块会被吞掉或误闭合前一块。

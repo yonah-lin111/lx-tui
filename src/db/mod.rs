@@ -267,6 +267,16 @@ impl Database {
         Ok(database)
     }
 
+    /// 打开纯内存数据库并完成迁移（供 `exec --ephemeral` 与无盘测试使用）。
+    pub fn open_in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let mut database = Self { conn };
+        database.migrate()?;
+        Ok(database)
+    }
+
     /// 按环境探测路径打开默认数据库；`LX_TUI_DB_PATH` 显式覆盖优先（测试隔离用）。
     ///
     /// `linked_worktree` 由入口传入：开发环境在 linked worktree 内使用独立库文件，

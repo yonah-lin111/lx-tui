@@ -27,11 +27,11 @@ impl Prompt {
             return;
         }
         let (index, col) = self.cursor_visual_in(&rows);
-        if index == 0 {
-            self.cursor = rows[0].start;
-        } else {
-            let target = rows[index - 1];
+        if let Some(prev) = (0..index).rev().find(|&i| !rows[i].top_border) {
+            let target = rows[prev];
             self.cursor = target.start + offset_at_col(&self.text[target.start..target.end], col);
+        } else {
+            self.cursor = rows[index].start;
         }
         self.settle();
     }
@@ -45,11 +45,11 @@ impl Prompt {
             return;
         }
         let (index, col) = self.cursor_visual_in(&rows);
-        if index + 1 >= rows.len() {
-            self.cursor = rows[rows.len() - 1].end;
-        } else {
-            let target = rows[index + 1];
+        if let Some(next) = ((index + 1)..rows.len()).find(|&i| !rows[i].top_border) {
+            let target = rows[next];
             self.cursor = target.start + offset_at_col(&self.text[target.start..target.end], col);
+        } else {
+            self.cursor = rows[index].end;
         }
         self.settle();
     }

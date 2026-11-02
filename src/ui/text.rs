@@ -282,7 +282,7 @@ pub const TAB_SEPARATOR: &str = "│";
 pub const TAB_SCROLL_LEFT_LABEL: &str = "[<]";
 pub const TAB_SCROLL_RIGHT_LABEL: &str = "[>]";
 pub const TAB_ITEM_ICON: &str = "▪";
-/// 该标签有窗格挂着 `ask` 面板时的标记（标签标题后追加，强调色）。
+/// 该标签有窗格挂着 `ask` 面板时的标记（标签标题后追加，位于标签背景内部）。
 pub const TAB_ASK_MARKER: &str = "?";
 
 /// 初始工作区标记：不可移除，跟随启动工作区。
@@ -1119,6 +1119,8 @@ pub const SUPPLE_BUTTON_CLEAN: &str = TEMPLATE_BUTTON_CLEAN;
 pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
 /// prompt 块左侧色条字形（`&&&` 状态色 / `+++` 品红）。
 pub const PROMPT_BLOCK_BAR: &str = "▎";
+/// prompt 块顶部边框字形：下 1/4 块（与左侧 `▎` 等厚，紧贴起始行顶部）。
+pub const PROMPT_BLOCK_TOP_BORDER: &str = "▂";
 /// 块结构分割线（标题下 / 绑定行上的空行）。
 pub const PROMPT_BLOCK_RULE: char = '─';
 

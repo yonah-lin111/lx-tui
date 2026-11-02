@@ -99,6 +99,52 @@ fn migration_creates_schema_and_is_idempotent() {
 }
 
 #[test]
+fn in_memory_database_migrates_and_supports_a_full_turn() {
+    let database = Database::open_in_memory().expect("in-memory database opens");
+    let version: i64 = database
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("user_version readable");
+    assert_eq!(version, SCHEMA_VERSION);
+    let workspace = workspace_path("in-memory");
+    database.trust_workspace(&workspace, "ws").expect("trust");
+    let committed = database
+        .begin_turn(&workspace, None, "hi", &v7_model_snapshot())
+        .expect("begin");
+    let ticket = database
+        .begin_tool_call(
+            &workspace,
+            &committed.session_id,
+            &committed.assistant_message_id,
+            "call-1",
+            "read",
+            "{}",
+        )
+        .expect("tool call begins");
+    database
+        .mark_tool_running(&workspace, &ticket)
+        .expect("tool call running");
+    database
+        .finish_tool_call(
+            &workspace,
+            &ticket,
+            &chat::ToolCallResult::completed(Some("{}".into())),
+        )
+        .expect("tool call finishes");
+    database
+        .finish(
+            &workspace,
+            &committed.assistant_message_id,
+            &[],
+            &chat::TurnOutcome::Complete {
+                stop_reason: Some("stop".into()),
+            },
+            chat::Usage::default(),
+        )
+        .expect("turn finishes");
+}
+
+#[test]
 fn trust_is_scoped_per_workspace_path() {
     let (database, _) = open_test_database("trust");
     let trusted = workspace_path("trusted");

@@ -94,6 +94,8 @@ pub struct VisualRow {
     pub line: usize,
     pub start: usize,
     pub end: usize,
+    /// 是否为块起始行上方的纯视觉顶边行（不对应可编辑文本，`start == end`）。
+    pub top_border: bool,
 }
 
 /// 历史快照：文本与光标位置。

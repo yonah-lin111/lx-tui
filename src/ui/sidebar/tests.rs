@@ -44,11 +44,16 @@ fn render_lines(state: &AppState) -> Vec<String> {
         .collect()
 }
 
-/// Agents 分区某一行的内容文本（去侧栏边框与内边距）。
+/// Agents 分区首行的内容文本（去侧栏边框与内边距）。
 fn agents_row_text(state: &AppState) -> String {
+    agents_row_text_at(state, 0)
+}
+
+/// Agents 分区指定行偏移的内容文本（去侧栏边框与内边距）。
+fn agents_row_text_at(state: &AppState, row_offset: u16) -> String {
     let view = view_for(state);
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
-    render_lines(state)[sections.agents.y as usize]
+    render_lines(state)[usize::from(sections.agents.y + row_offset)]
         .chars()
         .skip(view.sidebar.x as usize + 1)
         .take(view.sidebar.width as usize - 2)
@@ -137,8 +142,22 @@ fn selected_agent_row_uses_symbol_marker_without_color() {
         "marker has no background"
     );
 
-    // prompt 持有键盘焦点时窗格不处于聚焦态，标记让位为空列。
-    state.set_focus(crate::app::state::FocusedContainer::Prompt);
+    // 切换到其他容器（Prompt / Todo / Sidebar）时，当前激活窗格的 Agent 仍保留行首 `❯` 标记。
+    for container in [
+        crate::app::state::FocusedContainer::Prompt,
+        crate::app::state::FocusedContainer::Todo,
+        crate::app::state::FocusedContainer::Sidebar,
+    ] {
+        state.set_focus(container);
+        let row = agents_row_text(&state);
+        assert!(
+            row.starts_with(&format!("{} ", text::AGENT_SELECTED_MARKER)),
+            "active pane agent must keep marker when {container:?} is focused: {row:?}"
+        );
+    }
+
+    // 切换到其它无该 Agent 的标签/窗格时，非当前聚焦窗格的条目让出标记列为空格。
+    update::create_tab(&mut state);
     let row = agents_row_text(&state);
     assert!(
         !row.contains(text::AGENT_SELECTED_MARKER),
@@ -147,6 +166,77 @@ fn selected_agent_row_uses_symbol_marker_without_color() {
     assert!(
         row.starts_with(&format!("  {} ", text::AGENT_STATUS_DOT)),
         "marker column stays reserved: {row:?}"
+    );
+
+    // 切回原标签后，该标签的焦点窗格重新显示 `❯` 标记。
+    update::switch_tab(&mut state, 0);
+    let row = agents_row_text(&state);
+    assert!(
+        row.starts_with(&format!("{} ", text::AGENT_SELECTED_MARKER)),
+        "switching back to agent tab restores marker: {row:?}"
+    );
+}
+
+#[test]
+fn split_pane_agent_marker_tracks_active_pane_across_container_focus() {
+    let mut state = AppState::demo();
+    let first = add_agent(&mut state, AgentKind::Claude, AgentState::Working);
+    let second = state
+        .active_tab_mut()
+        .split_pane(first, ratatui::layout::Direction::Horizontal)
+        .expect("split succeeds");
+    assert_eq!(state.active_tab().layout.focus(), second);
+
+    // 焦点在同标签的无 Agent 兄弟分屏上时，首个分屏的 Agent 不标 `❯`。
+    for container in [
+        crate::app::state::FocusedContainer::Panes,
+        crate::app::state::FocusedContainer::Prompt,
+    ] {
+        state.set_focus(container);
+        let row = agents_row_text_at(&state, 0);
+        assert!(
+            !row.contains(text::AGENT_SELECTED_MARKER),
+            "sibling non-agent pane focus must not mark first agent ({container:?}): {row:?}"
+        );
+    }
+
+    // 第二个分屏也挂载 Agent：仅当前焦点分屏（second）带 `❯`，且跨容器失焦后保持。
+    update::update_pane_agent(
+        &mut state,
+        second,
+        Some(agent_snapshot(AgentKind::OpenCode, AgentState::Idle)),
+    );
+    for container in [
+        crate::app::state::FocusedContainer::Panes,
+        crate::app::state::FocusedContainer::Prompt,
+        crate::app::state::FocusedContainer::Todo,
+        crate::app::state::FocusedContainer::Sidebar,
+    ] {
+        state.set_focus(container);
+        let first_row = agents_row_text_at(&state, 0);
+        let second_row = agents_row_text_at(&state, 1);
+        assert!(
+            !first_row.contains(text::AGENT_SELECTED_MARKER),
+            "first pane is not focused ({container:?}): {first_row:?}"
+        );
+        assert!(
+            second_row.starts_with(&format!("{} ", text::AGENT_SELECTED_MARKER)),
+            "second pane keeps marker ({container:?}): {second_row:?}"
+        );
+    }
+
+    // 焦点切回第一个分屏后再点击其他容器，标记同步切回第一个分屏并保持。
+    update::focus_pane(&mut state, first);
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
+    let first_row = agents_row_text_at(&state, 0);
+    let second_row = agents_row_text_at(&state, 1);
+    assert!(
+        first_row.starts_with(&format!("{} ", text::AGENT_SELECTED_MARKER)),
+        "first pane keeps marker after focus switch: {first_row:?}"
+    );
+    assert!(
+        !second_row.contains(text::AGENT_SELECTED_MARKER),
+        "second pane loses marker after focus switch: {second_row:?}"
     );
 }
 

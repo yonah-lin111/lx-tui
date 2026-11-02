@@ -353,7 +353,7 @@ pub(super) fn apply_editor_edit(lx: &mut Lx, command: LxInput) -> bool
 
 - `Lx::has_pending_ask()` → `ask.is_some()`；`AppState` 提供「该标签页是否任一窗格有 ask」的只读判断（不加全局状态）。
 - 标签宽度计算、绘制、命中同步 +2 列；无 ask 时布局与现状逐字段一致。
-- 标记文案常量 `TAB_ASK_MARKER = "?"`，强调色。
+- 标记文案常量 `TAB_ASK_MARKER = "?"`，使用 `style::tab_ask_marker`（深琥珀/暗砖红 `Indexed 166` 前景，叠加在标签背景内部）。
 
 **测试**：`cargo test ui::tab_bar`
 

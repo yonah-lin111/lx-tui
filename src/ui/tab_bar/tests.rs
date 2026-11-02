@@ -230,4 +230,22 @@ fn tab_with_pending_ask_is_two_columns_wider_and_shows_marker() {
         .map(|x| buffer[(x, rect.y)].symbol().to_string())
         .collect();
     assert!(row.contains('?'), "标签标题必须显示 `?` 标记：{row:?}");
+    let q_x = (rect.x..rect.right())
+        .find(|&x| buffer[(x, rect.y)].symbol() == "?")
+        .expect("question mark cell");
+    assert_eq!(
+        buffer[(q_x, rect.y)].bg,
+        Color::Cyan,
+        "`?` 必须位于激活标签的青色背景内部"
+    );
+    assert_eq!(
+        buffer[(q_x + 1, rect.y)].bg,
+        Color::Cyan,
+        "`?` 右侧内边距空格同样位于青色背景内部"
+    );
+    assert_eq!(
+        buffer[(q_x, rect.y)].fg,
+        Color::Indexed(166),
+        "`?` 字体颜色必须使用深琥珀色，不得与背景或普通黑字混同"
+    );
 }
