@@ -61,6 +61,11 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(html.contains("default-model-host"), "default model host");
     assert!(html.contains("title-model-host"), "title model host");
     assert!(html.contains("title-language-host"), "title language host");
+    assert!(
+        html.contains("<legend>Default Model</legend>")
+            && html.contains("<legend>Title Generation</legend>"),
+        "default model and title generation separated into distinct fieldsets"
+    );
     assert!(html.contains("provider-list"), "provider list container");
     assert!(html.contains("prov-api-key"), "api key input present");
     assert!(html.contains("MCP"), "mcp tab present");
