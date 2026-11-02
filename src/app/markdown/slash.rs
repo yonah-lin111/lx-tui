@@ -122,6 +122,7 @@ pub fn slash_filter(custom: &[SlashItem], context: SlashContext, query: &str) ->
             }
         }
         BlockContext::Template | BlockContext::Supple => {
+            candidates.push(SlashItem::builtin_title());
             if !context.unclosed_block {
                 candidates.push(SlashItem::builtin_supplement());
             }
@@ -267,7 +268,8 @@ pub fn slash_insertion(item: &SlashItem) -> Option<(String, usize)> {
         } => Some(supple_block_content(command, title.as_deref(), body)),
         SlashInsertion::WorktreeChooser
         | SlashInsertion::WorktreeBinding { .. }
-        | SlashInsertion::Placeholder => None,
+        | SlashInsertion::Placeholder
+        | SlashInsertion::GenerateBlockTitle => None,
     }
 }
 
@@ -391,6 +393,8 @@ pub enum SlashInsertion {
     WorktreeBinding { branch: String, is_main: bool },
     /// 选择器占位行：不可确认。
     Placeholder,
+    /// `/title`：为光标所在的 `&&&` 模板块或 `+++` 补充块生成标题（保留命令所在空行）。
+    GenerateBlockTitle,
 }
 
 /// 自定义命令的 Markdown 插入范围。
@@ -503,6 +507,18 @@ impl SlashItem {
                 body: SUPPLEMENT_BODY.to_string(),
             },
             preview: "supple".to_string(),
+            scope: SlashScope::Template,
+            selectable: true,
+        }
+    }
+
+    /// 内置 `/title` 候选（仅在 `&&&` 与 `+++` 块内可见）。
+    pub fn builtin_title() -> Self {
+        Self {
+            name: "title".to_string(),
+            source: CommandSource::BuiltIn,
+            insertion: SlashInsertion::GenerateBlockTitle,
+            preview: "Generate block title".to_string(),
             scope: SlashScope::Template,
             selectable: true,
         }

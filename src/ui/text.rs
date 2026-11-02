@@ -556,6 +556,11 @@ pub const TOAST_PAGE_CREATED: &str = "New page created";
 pub const TOAST_PAGE_FORKED: &str = "Page forked";
 /// 当前页面未找到可重命名的 `{title:}` 提示。
 pub const TOAST_PAGE_NO_TITLE: &str = "No {title:} found in current page";
+/// Prompt 模板块 `/title` 生成中占位与提示文案（英文）。
+pub const PROMPT_TITLE_GENERATING: &str = "Generating title...";
+pub const PROMPT_TITLE_EMPTY_BLOCK: &str = "Template block is empty";
+pub const PROMPT_TITLE_NO_MODEL: &str = "No title model or default model configured";
+pub const PROMPT_TITLE_FAILED: &str = "Failed to generate title";
 
 /// lx 聊天相关提示与状态文案。
 ///

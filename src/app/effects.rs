@@ -255,6 +255,26 @@ pub enum Effect {
     ExecuteCompact(CompactRequest),
     /// 撤销一次 compact 检查点（只切状态与指针，不触碰文件）。
     RevertCompact(CompactRevertRequest),
+    /// 后台生成新对话标题（首轮提交后并行触发，不阻塞主对话流）。
+    GenerateSessionTitle {
+        workspace: PathBuf,
+        session_id: String,
+        /// 首轮入库时的初始兜底标题：回写前核对，若已被用户手动改名则放弃覆盖。
+        initial_title: String,
+        prompt: String,
+        model: crate::app::state::FrozenModel,
+    },
+    /// 后台生成 Prompt 模板块（`&&&` / `+++`）标题。
+    GeneratePromptBlockTitle {
+        request_id: u64,
+        workspace_index: usize,
+        editing: crate::app::prompt::PromptEditing,
+        page_id: crate::app::prompt::PromptPageId,
+        block_start_line: usize,
+        original_title: Option<String>,
+        prompt: String,
+        model: crate::app::state::FrozenModel,
+    },
     /// 提交一条本地命令：事件层先落库预登记，成功后才 spawn。
     ///
     /// 不占用模型 `RequestState`；`workspace` 是会话 DB 键，`cwd` 是冻结的执行目录。

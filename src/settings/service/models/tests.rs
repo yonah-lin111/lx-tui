@@ -862,3 +862,90 @@ async fn web_search_save_does_not_invalidate_models_revision() {
     assert_eq!(status(&resaved), 200, "{}", body(&resaved));
     service.shutdown();
 }
+
+#[tokio::test]
+async fn put_and_get_round_trip_title_summary_model() {
+    let (service, _events, _dir) = start_models("models-title-summary").await;
+    let port = service.port();
+    let token = service.token().to_string();
+
+    let payload = format!(
+        r#"{{
+  "providers": [{{
+    "key": "p", "id": "p", "type": "openai-compatible", "name": "P",
+    "baseUrl": "https://api.example.invalid/v1",
+    "apiKey": "{FAKE_KEY}",
+    "models": [
+      {{"key": "m1", "id": "m1", "name": "M1", "limit": {{"context": 1000, "output": 100}}}},
+      {{"key": "m2", "id": "m2", "name": "M2", "limit": {{"context": 1000, "output": 100}}}}
+    ]
+  }}],
+  "enabledProviders": ["p"],
+  "defaultModel": {{"provider": "p", "model": "m1"}},
+  "titleSummary": {{"provider": "p", "model": "m2"}},
+  "titleLanguage": "en",
+  "streamIdleTimeoutMs": 60000,
+  "revision": ""
+}}"#
+    );
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &payload,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{}", body(&saved));
+
+    let got = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    assert_eq!(status(&got), 200);
+    let parsed: serde_json::Value = serde_json::from_str(body(&got)).expect("json");
+    assert_eq!(
+        parsed["defaultModel"],
+        serde_json::json!({"provider": "p", "model": "m1", "variant": null})
+    );
+    assert_eq!(
+        parsed["titleSummary"],
+        serde_json::json!({"provider": "p", "model": "m2", "variant": null})
+    );
+    assert_eq!(parsed["titleLanguage"], serde_json::json!("en"));
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn models_save_preserves_unknown_top_level_ai_fields() {
+    let (service, _events, _dir) = start_models("models-top-extra-keep").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let ai_path = state_user_root(&service).join("config").join("ai.json");
+    std::fs::create_dir_all(ai_path.parent().expect("config dir")).expect("config dir");
+    std::fs::write(
+        &ai_path,
+        r#"{"ai":{"providers":{},"suggestedQuestionsEnabled":true}}"#,
+    )
+    .expect("seed ai.json");
+
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &put_body(),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{}", body(&saved));
+
+    let text = std::fs::read_to_string(&ai_path).expect("read ai.json");
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert_eq!(
+        parsed["ai"]["suggestedQuestionsEnabled"],
+        serde_json::json!(true),
+        "顶层未知字段往返保留：{text}"
+    );
+    service.shutdown();
+}

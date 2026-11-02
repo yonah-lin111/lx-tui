@@ -46,6 +46,19 @@ const INDENT_UNIT: usize = 2;
 /// 撤销/重做快照栈上限。
 const HISTORY_LIMIT: usize = 200;
 
+/// `/title` 命令在编辑器内触发后的待办动作（由 `app::update` 消费）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptTitleAction {
+    /// 目标模板块或补充块无有效正文。
+    EmptyBlock,
+    /// 发起后台标题生成请求。
+    Generate {
+        block_start_line: usize,
+        original_title: Option<String>,
+        content: String,
+    },
+}
+
 /// prompt 右栏：全局面板标识与可编辑 markdown 文本状态。
 #[derive(Debug)]
 pub struct Prompt {
@@ -78,6 +91,8 @@ pub struct Prompt {
     paste: PasteState,
     /// 字母快捷输入面板；由正文已出现的引用候选生成。
     refer: Option<crate::app::markdown::ReferPanel>,
+    /// `/title` 确认后暂存的待办动作。
+    pending_title_action: Option<PromptTitleAction>,
     /// 面板压制标记：Esc 关闭或确认插入后，等待下一次编辑/移动再重算。
     panel_suppressed: bool,
     /// 当前是否处于已保存状态；任何文本写操作置 false。
@@ -169,6 +184,7 @@ impl Prompt {
             mention: MentionState::default(),
             paste: PasteState::default(),
             refer: None,
+            pending_title_action: None,
             panel_suppressed: false,
             is_saved: true,
             revision: 0,
@@ -179,6 +195,11 @@ impl Prompt {
     /// 面板标识；文本选择按此标识归属。
     pub fn id(&self) -> PaneId {
         self.id
+    }
+
+    /// 取走待处理的 `/title` 动作。
+    pub fn take_title_action(&mut self) -> Option<PromptTitleAction> {
+        self.pending_title_action.take()
     }
 
     /// 当前文本。

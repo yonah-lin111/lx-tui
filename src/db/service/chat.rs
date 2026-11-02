@@ -29,6 +29,25 @@ type LoadedSession = (
 );
 
 impl Persistence {
+    /// 条件更新会话标题（仅当数据库当前标题仍等于 `expected_title` 时改名）。
+    pub fn rename_chat_session_if_title_matches(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        expected_title: &str,
+        new_title: &str,
+    ) -> bool {
+        self.with_db(|db| {
+            db.rename_chat_session_if_title_matches(
+                workspace,
+                session_id,
+                expected_title,
+                new_title,
+            )
+        })
+        .unwrap_or(false)
+    }
+
     /// 最新用户轮次（撤销目标与 revision）。
     pub fn latest_user_turn(
         &self,
@@ -514,6 +533,9 @@ impl Persistence {
                     model: snapshot.model,
                     variant: snapshot.variant,
                 });
+                let session_title = self
+                    .with_db(|db| db.chat_session_title(&workspace, &session_id))
+                    .flatten();
                 let changed = update::on_session_loaded_full(
                     state,
                     pane,
@@ -523,6 +545,9 @@ impl Persistence {
                     revision,
                     selection,
                 );
+                let title_changed = state
+                    .pane_mut_anywhere(pane)
+                    .is_some_and(|target| target.lx.chat.set_session_title(session_title));
                 // 检查点与模型切换列表随会话一起回填（渲染与撤销都依赖它）。
                 let checkpoints_changed =
                     update::set_compact_checkpoints(state, pane, &checkpoints);
@@ -531,6 +556,7 @@ impl Persistence {
                 let drains = update::request_report_drain_if_idle(state, pane);
                 update::reconcile_process_records(state, pane, &processes)
                     | changed
+                    | title_changed
                     | checkpoints_changed
                     | switches_changed
                     | drains

@@ -108,6 +108,25 @@ fn validate_rejects_dangling_default_selection() {
         settings.validate().is_err(),
         "默认 variant 必须存在于模型 variants"
     );
+
+    let mut settings = sample_settings();
+    settings.title_summary = Some(ModelSelection {
+        provider: "missing".into(),
+        model: "example-chat".into(),
+        variant: None,
+    });
+    assert!(
+        settings.validate().is_err(),
+        "titleSummary 必须指向已定义供应商"
+    );
+
+    let mut settings = sample_settings();
+    settings.title_summary = Some(ModelSelection {
+        provider: "example".into(),
+        model: "example-chat".into(),
+        variant: Some("high".into()),
+    });
+    assert!(settings.validate().is_ok());
 }
 
 #[test]
@@ -524,6 +543,36 @@ fn web_search_normalized_trims_and_clearing_survives_save() {
     let loaded = load_ai(&path).expect("load").expect("exists");
     assert_eq!(loaded.web_search.exa_api_key, "");
     assert_eq!(loaded.web_search.tavily_api_key, "tavily");
+}
+
+#[test]
+fn parse_ai_sanitizes_dangling_title_summary_and_unknown_language_on_load() {
+    let json = format!(
+        r#"{{
+  "ai": {{
+    "enabled_providers": ["example"],
+    "defaultModel": {{"provider": "example", "model": "example-chat"}},
+    "titleSummary": {{"provider": "deleted-prov", "model": "missing"}},
+    "titleLanguage": "unknown-locale",
+    "providers": {{
+      "example": {{
+        "id": "example",
+        "type": "openai-compatible",
+        "name": "Example",
+        "options": {{"apiKey": "{FAKE_KEY}", "baseURL": "https://api.example.invalid/v1"}},
+        "models": {{
+          "example-chat": {{"id": "example-chat", "name": "Example Chat"}}
+        }}
+      }}
+    }}
+  }}
+}}"#
+    );
+    let settings = parse_ai(&json).expect("dangling titleSummary must not break ai.json load");
+    assert!(settings.providers.contains_key("example"));
+    assert!(settings.title_summary.is_none());
+    assert_eq!(settings.title_language, None);
+    assert_eq!(settings.effective_title_language(), TitleLanguage::Auto);
 }
 
 /// Path 辅助：临时文件清理（测试目录由系统清理，无需显式删除）。

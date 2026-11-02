@@ -125,3 +125,43 @@ fn parse_trailing_title(rest: &str) -> Option<Option<&str>> {
     }
     None
 }
+
+/// 查找光标字节偏移所在的 `+++` 补充块（支持独立块或嵌套在 `&&&` 内）；
+/// 返回 `(start_line, end_line, closed)`。不在 `+++` 内返回 None。
+pub fn find_enclosing_supple_block(text: &str, cursor: usize) -> Option<(usize, usize, bool)> {
+    if cursor > text.len() || !text.is_char_boundary(cursor) {
+        return None;
+    }
+    let cursor_line = text[..cursor].matches('\n').count();
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut fence: Option<(u8, usize)> = None;
+    let mut current_start: Option<usize> = None;
+    let mut supple_spans = Vec::new();
+
+    for (index, line) in lines.iter().enumerate() {
+        if let Some((marker, length)) = fence {
+            if super::fence_delimiter(line).is_some_and(|(m, l)| m == marker && l >= length) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(delim) = super::fence_delimiter(line) {
+            fence = Some(delim);
+            continue;
+        }
+        if let Some(start) = current_start {
+            if parse_supple_end_line(line).is_some() {
+                supple_spans.push((start, index, true));
+                current_start = None;
+            }
+        } else if parse_supple_start_line(line).is_some() {
+            current_start = Some(index);
+        }
+    }
+    if let Some(start) = current_start {
+        supple_spans.push((start, lines.len().saturating_sub(1), false));
+    }
+    supple_spans
+        .into_iter()
+        .find(|&(start, end, _)| cursor_line >= start && cursor_line <= end)
+}

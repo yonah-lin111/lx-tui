@@ -183,6 +183,8 @@ pub enum AppEvent {
         message_id: String,
         code: String,
     },
+    /// `lx` 会话自动标题或 Prompt 模板块 `/title` 后台生成完成。
+    TitleGenerated(chat::TitleGeneratedEvent),
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -385,6 +387,10 @@ async fn run_loop(
         }
         // 聊天网络效应：取走并在 Tokio 任务执行（结果按 key 回投）。
         if chat::pump_chat_streams(state, &mut chat_streams, &sender, persistence) {
+            dirty = true;
+        }
+        // 后台标题生成效应：轻量无工具流转入后台任务。
+        if chat::apply_title_effects(state, &sender) {
             dirty = true;
         }
         if chat::prune_pending_guards(state, &mut chat_streams) {
@@ -833,6 +839,9 @@ fn handle_app_event(
                 &operation_id,
                 outcome,
             );
+        }
+        AppEvent::TitleGenerated(event) => {
+            chat::handle_title_generated(state, persistence, event);
         }
         AppEvent::RewindFinished {
             pane,

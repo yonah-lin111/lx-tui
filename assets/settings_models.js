@@ -5,6 +5,14 @@
 
 const INPUT_MODALITIES = ['text', 'image', 'audio', 'video', 'pdf'];
 const OUTPUT_MODALITIES = ['text', 'image', 'audio', 'video'];
+const TITLE_LANGUAGE_OPTIONS = [
+  {value: 'auto', label: 'Auto (follow input)'},
+  {value: 'zh-CN', label: 'Simplified Chinese'},
+  {value: 'en', label: 'English'},
+  {value: 'zh-TW', label: 'Traditional Chinese'},
+  {value: 'ja', label: 'Japanese'},
+  {value: 'ko', label: 'Korean'}
+];
 const VARIANT_PRESETS = {
   openai: {low: {reasoningEffort: 'low'}, medium: {reasoningEffort: 'medium'}, high: {reasoningEffort: 'high'}},
   openrouter: {low: {reasoning: {effort: 'low'}}, medium: {reasoning: {effort: 'medium'}}, high: {reasoning: {effort: 'high'}}},
@@ -15,7 +23,6 @@ const VARIANT_PRESETS = {
 let modelsDraft = null;      // 全局编辑草稿
 let modelsBaseline = null;   // 最近一次加载/保存的快照（Reset 回填基准）
 let selectedProviderKey = null;
-let modelsDirty = false;
 const modelSelects = {};
 const expandedModels = new Set();
 
@@ -35,19 +42,29 @@ function isProviderDirty(provider) {
   return JSON.stringify(provider) !== JSON.stringify(base);
 }
 
-function computeModelsDirty() {
+function isModelSettingsDirty() {
   if (!modelsDraft || !modelsBaseline) { return false; }
   return JSON.stringify({
     defaultModel: modelsDraft.defaultModel,
-    providers: modelsDraft.providers
+    titleSummary: modelsDraft.titleSummary,
+    titleLanguage: modelsDraft.titleLanguage
   }) !== JSON.stringify({
     defaultModel: modelsBaseline.defaultModel,
-    providers: modelsBaseline.providers
+    titleSummary: modelsBaseline.titleSummary,
+    titleLanguage: modelsBaseline.titleLanguage
   });
 }
 
+function isProviderSettingsDirty() {
+  if (!modelsDraft || !modelsBaseline) { return false; }
+  return JSON.stringify(modelsDraft.providers) !== JSON.stringify(modelsBaseline.providers);
+}
+
+function computeModelsDirty() {
+  return isModelSettingsDirty() || isProviderSettingsDirty();
+}
+
 function updateProviderDirtyDots() {
-  modelsDirty = computeModelsDirty();
   const list = document.getElementById('provider-list');
   if (!list || !modelsDraft) { return; }
   const rows = list.querySelectorAll('.nav-item');
@@ -59,7 +76,6 @@ function updateProviderDirtyDots() {
 }
 
 function markModelsDirty() {
-  modelsDirty = computeModelsDirty();
   updateModelsStatus();
   updateProviderDirtyDots();
   refreshActionBars();
@@ -67,8 +83,17 @@ function markModelsDirty() {
 
 function updateModelsStatus() {
   const count = ((modelsDraft && modelsDraft.providers) || []).length;
-  document.getElementById('models-status').textContent = count + ' provider(s)';
-  document.getElementById('models-status').className = 'status ok';
+  const text = count + ' provider(s)';
+  const statusEl = document.getElementById('models-status');
+  if (statusEl) {
+    statusEl.textContent = text;
+    statusEl.className = 'status ok';
+  }
+  const modelStatusEl = document.getElementById('model-settings-status');
+  if (modelStatusEl) {
+    modelStatusEl.textContent = text;
+    modelStatusEl.className = 'status ok';
+  }
 }
 
 // Reset：把草稿回填为最近一次加载/保存的快照。
@@ -76,7 +101,6 @@ function resetModels() {
   if (modelsBaseline === null) { return; }
   hideFetchCandidates();
   modelsDraft = JSON.parse(JSON.stringify(modelsBaseline));
-  modelsDirty = false;
   if (!modelsDraft.providers.some((provider) => provider.key === selectedProviderKey)) {
     selectedProviderKey = null;
   }
@@ -91,21 +115,25 @@ function loadModels() {
     if (!modelsDraft.providers.some((provider) => provider.key === selectedProviderKey)) {
       selectedProviderKey = null;
     }
-    modelsDirty = false;
     renderModelsView();
-    document.getElementById('models-revision').textContent = 'revision ' + String(data.revision || '').slice(0, 8);
+    const revEl = document.getElementById('models-revision');
+    if (revEl) { revEl.textContent = 'revision ' + String(data.revision || '').slice(0, 8); }
     refreshActionBars();
   }).catch((error) => {
-    document.getElementById('models-status').textContent = 'Failed to load: ' + error.message;
-    document.getElementById('models-status').className = 'status error';
+    const msg = 'Failed to load: ' + error.message;
+    const statusEl = document.getElementById('models-status');
+    if (statusEl) { statusEl.textContent = msg; statusEl.className = 'status error'; }
+    const modelStatusEl = document.getElementById('model-settings-status');
+    if (modelStatusEl) { modelStatusEl.textContent = msg; modelStatusEl.className = 'status error'; }
   });
 }
 
 // 409 后只刷新 revision，保留用户草稿（再次点击 Save 即覆盖）。
 function refreshRevision() {
-  api('/api/models/settings').then((data) => {
+  return api('/api/models/settings').then((data) => {
     if (modelsDraft) { modelsDraft.revision = data.revision || ''; }
-    document.getElementById('models-revision').textContent = 'revision ' + String(data.revision || '').slice(0, 8);
+    const revEl = document.getElementById('models-revision');
+    if (revEl) { revEl.textContent = 'revision ' + String(data.revision || '').slice(0, 8); }
   }).catch((error) => {
     showToast(error.message, 'error');
   });
@@ -116,6 +144,8 @@ function snapshotToDraft(snapshot) {
     revision: snapshot.revision || '',
     streamIdleTimeoutMs: snapshot.streamIdleTimeoutMs,
     defaultModel: snapshot.defaultModel || null,
+    titleSummary: snapshot.titleSummary || null,
+    titleLanguage: snapshot.titleLanguage || 'auto',
     providers: (snapshot.providers || []).map((provider) => ({
       key: provider.key,
       id: provider.id,
@@ -254,6 +284,10 @@ function deleteProvider() {
     modelsDraft.defaultModel = null;
     showToast('Default model cleared', 'info');
   }
+  if (modelsDraft.titleSummary && modelsDraft.titleSummary.provider === provider.id) {
+    modelsDraft.titleSummary = null;
+    showToast('Title model cleared', 'info');
+  }
   selectedProviderKey = null;
   markModelsDirty();
   renderModelsView();
@@ -269,6 +303,7 @@ function addModel() {
   });
   markModelsDirty();
   renderModelList();
+  renderDefaultModel();
 }
 
 function duplicateModel(provider, model) {
@@ -285,9 +320,13 @@ function duplicateModel(provider, model) {
 function removeModel(provider, model) {
   const index = provider.models.indexOf(model);
   if (index >= 0) { provider.models.splice(index, 1); }
-  if (modelsDraft.defaultModel && modelsDraft.defaultModel.provider === provider.key && modelsDraft.defaultModel.model === model.id) {
+  if (modelsDraft.defaultModel && modelsDraft.defaultModel.provider === provider.id && modelsDraft.defaultModel.model === model.id) {
     modelsDraft.defaultModel = null;
     showToast('Default model cleared', 'info');
+  }
+  if (modelsDraft.titleSummary && modelsDraft.titleSummary.provider === provider.id && modelsDraft.titleSummary.model === model.id) {
+    modelsDraft.titleSummary = null;
+    showToast('Title model cleared', 'info');
   }
   markModelsDirty();
   renderModelList();
@@ -325,7 +364,7 @@ function modelCard(provider, model) {
   const idField = labeledInput('Model ID', model.id, (value) => { model.id = value; markModelsDirty(); });
   idField.input.addEventListener('change', () => { renderDefaultModel(); });
   const nameField = labeledInput('Display name', model.name, (value) => { model.name = value; markModelsDirty(); });
-  nameField.input.addEventListener('change', () => { renderProviders(); });
+  nameField.input.addEventListener('change', () => { renderProviders(); renderDefaultModel(); });
   const tools = element('div', 'model-tools');
   const expanded = expandedModels.has(key);
   const advanced = element('button', 'ghost', expanded ? 'Hide' : 'Advanced');
@@ -535,10 +574,11 @@ function renderDefaultModel() {
   if (!modelsDraft) { return; }
   const options = [{value: '', label: '(none)'}];
   for (const provider of modelsDraft.providers) {
+    if (!provider.enabled) { continue; }
     for (const model of provider.models) {
       options.push({
         value: provider.id + '\u0000' + model.id,
-        label: (provider.name || provider.id) + ' / ' + (model.name || model.id) + (provider.enabled ? '' : ' (off)')
+        label: (provider.name || provider.id) + ' / ' + (model.name || model.id)
       });
     }
   }
@@ -548,7 +588,22 @@ function renderDefaultModel() {
     value = '';
     showToast('Default model cleared (its model was renamed or removed)', 'info');
   }
-  modelSelects.defaultModel.setOptions(options, value);
+  if (modelSelects.defaultModel) {
+    modelSelects.defaultModel.setOptions(options, value);
+  }
+  let titleValue = modelsDraft.titleSummary ? modelsDraft.titleSummary.provider + '\u0000' + modelsDraft.titleSummary.model : '';
+  if (titleValue && !options.some((option) => option.value === titleValue)) {
+    modelsDraft.titleSummary = null;
+    titleValue = '';
+    showToast('Title model cleared (its model was renamed or removed)', 'info');
+  }
+  if (modelSelects.titleModel) {
+    modelSelects.titleModel.setOptions(options, titleValue);
+  }
+  if (modelSelects.titleLanguage) {
+    const lang = modelsDraft.titleLanguage || 'auto';
+    modelSelects.titleLanguage.setOptions(TITLE_LANGUAGE_OPTIONS, lang);
+  }
 }
 
 function buildVariants(model) {
@@ -593,6 +648,15 @@ function modalitiesOf(model) {
   const output = model.modalities.output.filter((value) => OUTPUT_MODALITIES.includes(value));
   if (input.length === 0 && output.length === 0) { return null; }
   return {input: input, output: output};
+}
+
+function resolveSelectionVariant(selection, model) {
+  if (selection && selection.variant && Array.isArray(model.variantRows)) {
+    if (model.variantRows.some((row) => (row.key || '').trim() === selection.variant)) {
+      return selection.variant;
+    }
+  }
+  return model.variant || null;
 }
 
 function buildPayload() {
@@ -640,6 +704,7 @@ function buildPayload() {
       };
       providers.push(entry);
     } catch (error) {
+      error.tab = 'provider';
       selectedProviderKey = provider.key;
       renderModelsView();
       throw error;
@@ -648,16 +713,26 @@ function buildPayload() {
   const enabledProviders = modelsDraft.providers.filter((provider) => provider.enabled).map((provider) => provider.id.trim());
   let defaultModel = null;
   if (modelsDraft.defaultModel) {
-    const provider = modelsDraft.providers.find((item) => item.id === modelsDraft.defaultModel.provider);
+    const provider = modelsDraft.providers.find((item) => item.enabled && item.id === modelsDraft.defaultModel.provider);
     const model = provider && provider.models.find((item) => item.id.trim() === modelsDraft.defaultModel.model);
     if (provider && model) {
-      defaultModel = {provider: provider.id, model: model.id.trim(), variant: model.variant || null};
+      defaultModel = {provider: provider.id, model: model.id.trim(), variant: resolveSelectionVariant(modelsDraft.defaultModel, model)};
+    }
+  }
+  let titleSummary = null;
+  if (modelsDraft.titleSummary) {
+    const provider = modelsDraft.providers.find((item) => item.enabled && item.id === modelsDraft.titleSummary.provider);
+    const model = provider && provider.models.find((item) => item.id.trim() === modelsDraft.titleSummary.model);
+    if (provider && model) {
+      titleSummary = {provider: provider.id, model: model.id.trim(), variant: resolveSelectionVariant(modelsDraft.titleSummary, model)};
     }
   }
   return {
     providers: providers,
     enabledProviders: enabledProviders,
     defaultModel: defaultModel,
+    titleSummary: titleSummary,
+    titleLanguage: modelsDraft.titleLanguage || 'auto',
     streamIdleTimeoutMs: modelsDraft.streamIdleTimeoutMs,
     revision: modelsDraft.revision
   };
@@ -675,14 +750,13 @@ async function saveModels() {
   try {
     await api('/api/models/settings', {method: 'PUT', body: JSON.stringify(payload)});
     showToast('Saved', 'ok');
-    modelsDirty = false;
     await loadModels();
   } catch (error) {
     // 409：磁盘配置已被别处改动。只刷新 revision，保留草稿，再点一次即覆盖。
     if (error.status === 409) {
       showToast('Configuration changed elsewhere; revision refreshed — click Save again', 'error');
-      refreshRevision();
-      return;
+      await refreshRevision();
+      throw error;
     }
     showToast(error.message, 'error');
     throw error;
@@ -730,6 +804,7 @@ function renderFetchCandidates(models) {
         });
         markModelsDirty();
         renderModelList();
+        renderDefaultModel();
       }
       add.textContent = 'Added';
     };
@@ -773,10 +848,14 @@ function initProviderFields() {
     const provider = currentProvider();
     if (!provider) { return; }
     provider.enabled = event.target.checked;
-    // 关掉默认模型所属 provider 时清空默认选择，避免后端校验 422。
+    // 关掉默认模型或标题模型所属 provider 时清空对应选择，避免后端校验 422。
     if (!provider.enabled && modelsDraft.defaultModel && modelsDraft.defaultModel.provider === provider.id) {
       modelsDraft.defaultModel = null;
       showToast('Default model cleared (its provider was turned off)', 'info');
+    }
+    if (!provider.enabled && modelsDraft.titleSummary && modelsDraft.titleSummary.provider === provider.id) {
+      modelsDraft.titleSummary = null;
+      showToast('Title model cleared (its provider was turned off)', 'info');
     }
     markModelsDirty();
     renderProviders();
@@ -816,11 +895,43 @@ function initModelsView() {
       markModelsDirty();
     }
   });
+  modelSelects.titleModel = createSelect(document.getElementById('title-model-host'), {
+    ariaLabel: 'Title model',
+    placeholder: '(none)',
+    value: '',
+    options: [{value: '', label: '(none)'}],
+    onChange: (value) => {
+      if (!modelsDraft) { return; }
+      if (!value) {
+        modelsDraft.titleSummary = null;
+        markModelsDirty();
+        return;
+      }
+      const parts = value.split('\u0000');
+      modelsDraft.titleSummary = {provider: parts[0], model: parts[1], variant: null};
+      markModelsDirty();
+    }
+  });
+  modelSelects.titleLanguage = createSelect(document.getElementById('title-language-host'), {
+    ariaLabel: 'Title language',
+    value: 'auto',
+    options: TITLE_LANGUAGE_OPTIONS,
+    onChange: (value) => {
+      if (!modelsDraft) { return; }
+      modelsDraft.titleLanguage = value || 'auto';
+      markModelsDirty();
+    }
+  });
   initProviderFields();
 }
 
-actionBars.models = createActionBar('actions-models', {
-  isDirty: computeModelsDirty,
+actionBars.model = createActionBar('actions-model', {
+  isDirty: isModelSettingsDirty,
+  save: saveModels,
+  reset: resetModels
+});
+actionBars.provider = createActionBar('actions-provider', {
+  isDirty: isProviderSettingsDirty,
   save: saveModels,
   reset: resetModels
 });

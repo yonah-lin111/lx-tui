@@ -278,3 +278,134 @@ fn block_top_border_row_is_skipped_by_navigation_and_kept_in_view_when_scrolling
     assert_eq!(top_block.scroll(), 0, "上移到块起始行时连同顶边行滚入视口");
     assert_eq!(top_block.cursor_cell(), Some((1, 1)));
 }
+
+#[test]
+fn slash_title_only_visible_inside_template_and_supple_blocks() {
+    // 块外：不含 /title
+    let mut outside = prompt_with(80, 12, "/title");
+    outside.set_cursor_offset(outside.text().len());
+    let outside_names: Vec<&str> = outside
+        .slash_panel()
+        .map(|panel| {
+            panel
+                .items()
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(!outside_names.contains(&"title"), "块外不显示 /title");
+
+    // &&& 块内：包含 /title
+    let tpl =
+        "&&& addTemplate --start\n{title: }\n\n- Description: fix auth\n/ti\n&&& addTemplate --end";
+    let mut in_tpl = prompt_with(80, 12, tpl);
+    let cursor = tpl.find("/ti").expect("slash") + 3;
+    in_tpl.set_cursor_offset(cursor);
+    let tpl_names: Vec<&str> = in_tpl
+        .slash_panel()
+        .expect("panel")
+        .items()
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
+    assert!(tpl_names.contains(&"title"), "&&& 块内应显示 /title");
+
+    // +++ 块内：包含 /title
+    let sup = "+++ supplement --start\n{title: }\n\n- Notes: add tests\n/ti\n+++ supplement --end";
+    let mut in_sup = prompt_with(80, 12, sup);
+    let sup_cursor = sup.find("/ti").expect("slash") + 3;
+    in_sup.set_cursor_offset(sup_cursor);
+    let sup_names: Vec<&str> = in_sup
+        .slash_panel()
+        .expect("panel")
+        .items()
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
+    assert!(sup_names.contains(&"title"), "+++ 块内应显示 /title");
+}
+
+#[test]
+fn slash_title_preserves_empty_line_and_sets_generating_placeholder() {
+    let text = "&&& addTemplate --start\n{title: Old}\n\n- Description: Add OAuth login\n/title\n&&& addTemplate --end";
+    let line_count_before = text.lines().count();
+    let mut p = prompt_with(80, 14, text);
+    let cursor = text.find("/title").expect("slash") + "/title".len();
+    p.set_cursor_offset(cursor);
+
+    assert!(p.slash_confirm(), "确认 /title");
+    assert_eq!(
+        p.text().lines().count(),
+        line_count_before,
+        "确认 /title 后不得删除命令所在的空白行（总行数保持不变）"
+    );
+    assert_eq!(
+        p.text(),
+        "&&& addTemplate --start\n{title: Generating title...}\n\n- Description: Add OAuth login\n\n&&& addTemplate --end"
+    );
+    // 光标应停在被清空的原 /title 空行行首
+    let expected_cursor = p
+        .text()
+        .find("- Description: Add OAuth login\n")
+        .expect("desc")
+        + "- Description: Add OAuth login\n".len();
+    assert_eq!(p.cursor(), expected_cursor);
+
+    let action = p.take_title_action().expect("title action");
+    assert_eq!(
+        action,
+        crate::app::prompt::PromptTitleAction::Generate {
+            block_start_line: 0,
+            original_title: Some("Old".to_string()),
+            content: "- Description: Add OAuth login".to_string(),
+        }
+    );
+}
+
+#[test]
+fn slash_title_in_supple_block_targets_supple_and_preserves_empty_line() {
+    let text = "&&& addTemplate --start\n{title: Main}\n\n- Description: Main task\n\n&&& addTemplate --end\n\n+++ supplement --start\n{title: }\n\n- Notes: Extra detail\n/title\n+++ supplement --end";
+    let line_count_before = text.lines().count();
+    let mut p = prompt_with(80, 18, text);
+    let cursor = text.find("/title").expect("slash") + "/title".len();
+    p.set_cursor_offset(cursor);
+
+    assert!(p.slash_confirm(), "在 +++ 块内确认 /title");
+    assert_eq!(p.text().lines().count(), line_count_before);
+    assert!(
+        p.text().contains("&&& addTemplate --start\n{title: Main}"),
+        "外层 &&& 标题不受影响"
+    );
+    assert!(
+        p.text()
+            .contains("+++ supplement --start\n{title: Generating title...}"),
+        "内层/补充 +++ 标题更新为 Generating title..."
+    );
+    let action = p.take_title_action().expect("title action");
+    assert_eq!(
+        action,
+        crate::app::prompt::PromptTitleAction::Generate {
+            block_start_line: 7,
+            original_title: Some(String::new()),
+            content: "- Notes: Extra detail".to_string(),
+        }
+    );
+}
+
+#[test]
+fn slash_title_on_empty_boilerplate_block_keeps_empty_line_and_reports_empty() {
+    let text = "&&& addTemplate --start\n{title: }\n\n# Add Requirement\n\n- Reference: \n- Description: \n/title\n&&& addTemplate --end";
+    let line_count_before = text.lines().count();
+    let mut p = prompt_with(80, 16, text);
+    let cursor = text.find("/title").expect("slash") + "/title".len();
+    p.set_cursor_offset(cursor);
+
+    assert!(p.slash_confirm());
+    assert_eq!(p.text().lines().count(), line_count_before);
+    assert!(!p.text().contains("/title"));
+    assert_eq!(
+        p.take_title_action(),
+        Some(crate::app::prompt::PromptTitleAction::EmptyBlock)
+    );
+}

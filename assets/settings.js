@@ -22,14 +22,20 @@ function api(path, options) {
 
 function showTab(name) {
   resetWebSearchReveals();
-  const tabs = {general: 'tab-general', commands: 'tab-commands', models: 'tab-models', mcp: 'tab-mcp', skills: 'tab-skills'};
-  const views = {general: 'view-general', commands: 'view-commands', models: 'view-models', mcp: 'view-mcp', skills: 'view-skills'};
+  const tabs = {general: 'tab-general', commands: 'tab-commands', model: 'tab-model', provider: 'tab-provider', mcp: 'tab-mcp', skills: 'tab-skills'};
+  const views = {general: 'view-general', commands: 'view-commands', model: 'view-model', provider: 'view-provider', mcp: 'view-mcp', skills: 'view-skills'};
   for (const key of Object.keys(tabs)) {
     const active = key === name;
     document.getElementById(tabs[key]).classList.toggle('active', active);
     document.getElementById(views[key]).classList.toggle('hidden', !active);
   }
-  if (name === 'models' && modelsDraft === null) { loadModels(); }
+  if (name === 'model' || name === 'provider') {
+    if (typeof modelsDraft === 'undefined' || modelsDraft === null) {
+      loadModels();
+    } else if (name === 'model' && typeof renderDefaultModel === 'function') {
+      renderDefaultModel();
+    }
+  }
   if (name === 'mcp' && (typeof mcpState === 'undefined' || mcpState === null)) { loadMcp(); }
   if (name === 'skills' && (typeof skillsState === 'undefined' || skillsState === null)) { loadSkills(); }
   refreshActionBars();
@@ -224,7 +230,7 @@ function element(tag, className, text) {
 // 页面内不再有其它保存入口。状态圆点：绿=已保存，白=未保存，红=保存失败，灰脉冲=保存中。
 
 const actionBars = {};
-const TAB_KEYS = ['general', 'commands', 'models', 'mcp', 'skills'];
+const TAB_KEYS = ['general', 'commands', 'model', 'provider', 'mcp', 'skills'];
 let settingsSaving = false;
 let settingsFailed = false;
 
@@ -241,9 +247,13 @@ function saveAllDirty() {
   settingsFailed = false;
   refreshActionBars();
   let chain = Promise.resolve();
+  const seenSaves = new Set();
   for (const key of dirty) {
-    chain = chain.then(() => actionBars[key].save().catch((error) => {
-      showTab(key);
+    const saveFn = actionBars[key].save;
+    if (seenSaves.has(saveFn)) { continue; }
+    seenSaves.add(saveFn);
+    chain = chain.then(() => saveFn().catch((error) => {
+      showTab((error && error.tab) || key);
       throw error;
     }));
   }
@@ -417,7 +427,8 @@ function bindPasswordReveal(inputId, buttonId) {
 function resetWebSearchReveals() {
   for (const [inputId, buttonId] of [
     ['web_search_exa_api_key', 'exa-key-reveal'],
-    ['web_search_tavily_api_key', 'tavily-key-reveal']
+    ['web_search_tavily_api_key', 'tavily-key-reveal'],
+    ['prov-api-key', 'prov-key-reveal']
   ]) {
     const input = document.getElementById(inputId);
     const button = document.getElementById(buttonId);

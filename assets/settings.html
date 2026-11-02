@@ -11,7 +11,8 @@
   <h1>lx-tui</h1>
   <button id="tab-general" class="active" onclick="showTab('general')">General</button>
   <button id="tab-commands" onclick="showTab('commands')">Commands</button>
-  <button id="tab-models" onclick="showTab('models')">Models</button>
+  <button id="tab-model" onclick="showTab('model')">Model</button>
+  <button id="tab-provider" onclick="showTab('provider')">Provider</button>
   <button id="tab-mcp" onclick="showTab('mcp')">MCP</button>
   <button id="tab-skills" onclick="showTab('skills')">Skills</button>
 </nav>
@@ -142,15 +143,46 @@
     </div>
   </section>
 
-  <section id="view-models" class="view hidden">
+  <section id="view-model" class="view hidden">
     <div class="view-head">
-      <h2>Models</h2>
-      <div id="actions-models" class="view-actions"></div>
+      <h2>Model</h2>
+      <div id="actions-model" class="view-actions"></div>
     </div>
     <div class="models-toolbar">
       <button class="ghost" onclick="loadModels()">Reload</button>
-      <label>Default model</label>
-      <div id="default-model-host" class="select-host models-toolbar-select"></div>
+      <span class="status" id="model-settings-status">Loading…</span>
+    </div>
+    <fieldset>
+      <legend>Default Model</legend>
+      <div class="field-grid">
+        <div class="field-wide">
+          <label>Default model</label>
+          <div id="default-model-host" class="select-host"></div>
+        </div>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Title Generation</legend>
+      <div class="field-grid">
+        <div class="field-wide">
+          <label>Title model</label>
+          <div id="title-model-host" class="select-host"></div>
+        </div>
+        <div class="field-wide">
+          <label>Title language</label>
+          <div id="title-language-host" class="select-host"></div>
+        </div>
+      </div>
+    </fieldset>
+  </section>
+
+  <section id="view-provider" class="view hidden">
+    <div class="view-head">
+      <h2>Provider</h2>
+      <div id="actions-provider" class="view-actions"></div>
+    </div>
+    <div class="models-toolbar">
+      <button class="ghost" onclick="loadModels()">Reload</button>
       <span class="status" id="models-status">Loading…</span>
       <span class="status" id="models-revision"></span>
     </div>

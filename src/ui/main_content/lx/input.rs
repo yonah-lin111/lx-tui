@@ -17,6 +17,40 @@ use crate::ui::{style, text};
 use super::grid::{CONTINUATION, Grid};
 use super::{INPUT_PREFIX, INPUT_SCROLLBAR, RULE};
 
+/// 输入框顶边框右上角会话标题胶囊的最大正文显示列宽（不含左右各 1 列内边距空格）。
+const SESSION_TITLE_MAX_COLS: u16 = 40;
+
+/// 在输入框顶边框（`rect.y`）右上角边框内部绘制当前会话标题胶囊（如 ` 标题 `，最右侧保留 1 列 `─`）。
+fn draw_session_title_badge(grid: &mut Grid, rect: ratatui::layout::Rect, lx: &Lx) {
+    let Some(raw_title) = lx.chat.session_title.as_deref() else {
+        return;
+    };
+    let clean = text::chat::single_line_label(raw_title);
+    if clean.is_empty() {
+        return;
+    }
+    // 左侧至少留 INPUT_PREFIX (2) 列 `─`，右侧留 1 列 `─`，胶囊左右各 1 列空格内边距（共扣 5 列）。
+    let avail = rect
+        .width
+        .saturating_sub(INPUT_PREFIX.saturating_add(3))
+        .min(SESSION_TITLE_MAX_COLS);
+    if avail < 2 {
+        return;
+    }
+    let truncated = text::truncate_to_width(&clean, usize::from(avail));
+    if truncated.is_empty() {
+        return;
+    }
+    let badge = format!(" {truncated} ");
+    let badge_w = u16::try_from(display_width(&badge)).unwrap_or(u16::MAX);
+    if rect.width <= badge_w.saturating_add(INPUT_PREFIX) {
+        return;
+    }
+    let x = rect.right().saturating_sub(badge_w).saturating_sub(1);
+    let badge_style = style::session_title_badge(lx.chat.session_title_palette);
+    grid.put(x, rect.y, &badge, badge_style);
+}
+
 /// 绘制输入框并返回光标绝对坐标（`(row, column)`）；未聚焦时为 None。
 pub(super) fn draw(
     grid: &mut Grid,
@@ -32,6 +66,7 @@ pub(super) fn draw(
         grid.set(x, rect.y, RULE, style::muted());
         grid.set(x, bottom_rule, RULE, style::muted());
     }
+    draw_session_title_badge(grid, rect, lx);
 
     let content_x = rect.x + INPUT_PREFIX;
     let content_w = rect
@@ -214,3 +249,6 @@ fn paint_line(
 fn display_width(content: &str) -> usize {
     content.chars().map(|ch| ch.width().unwrap_or(0)).sum()
 }
+
+#[cfg(test)]
+mod tests;

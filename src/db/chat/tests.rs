@@ -434,6 +434,49 @@ fn begin_turn_rejects_blank_and_oversized_drafts() {
 }
 
 #[test]
+fn rename_chat_session_if_title_matches_guards_against_manual_rename() {
+    let (database, workspace, _) = database_with_two_workspaces("cond-rename");
+    let committed = database
+        .begin_turn(&workspace, None, "initial question text", &model())
+        .expect("begin");
+
+    // 标题仍等于初始值时，自动改名成功
+    assert!(
+        database
+            .rename_chat_session_if_title_matches(
+                &workspace,
+                &committed.session_id,
+                "initial question text",
+                "Auto Generated Title",
+            )
+            .expect("cond rename")
+    );
+    let sessions = database
+        .list_chat_sessions(&workspace, 0, 10)
+        .expect("list");
+    assert_eq!(sessions[0].title, "Auto Generated Title");
+
+    // 用户手动改名后，若迟到的自动标题再以旧标题去条件更新，则不覆盖
+    database
+        .rename_chat_session(&workspace, &committed.session_id, "User Manual Title")
+        .expect("manual rename");
+    assert!(
+        !database
+            .rename_chat_session_if_title_matches(
+                &workspace,
+                &committed.session_id,
+                "initial question text",
+                "Late Auto Title",
+            )
+            .expect("cond rename after manual")
+    );
+    let sessions = database
+        .list_chat_sessions(&workspace, 0, 10)
+        .expect("list");
+    assert_eq!(sessions[0].title, "User Manual Title");
+}
+
+#[test]
 fn begin_turn_on_unknown_session_fails_without_half_turn() {
     let (database, workspace, _) = database_with_two_workspaces("unknown-session");
     let error = database

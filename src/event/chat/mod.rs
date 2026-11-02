@@ -19,6 +19,7 @@ mod runtime;
 pub(crate) mod skills;
 mod subagent;
 mod timeline;
+pub mod title;
 mod tool_calls;
 pub mod user_shell;
 
@@ -74,6 +75,7 @@ pub(crate) use subagent::{
     apply_subagent_effects, finish_subagent, handle_subagent_auto_compact,
     handle_subagent_net_event, handle_subagent_wait_ready,
 };
+pub use title::{TitleGeneratedEvent, apply_title_effects, handle_title_generated};
 
 use std::collections::HashMap;
 use std::path::PathBuf;

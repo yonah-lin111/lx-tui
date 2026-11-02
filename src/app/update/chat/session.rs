@@ -400,6 +400,8 @@ pub fn on_session_loaded_full(
         target.lx.clear_agents();
         target.lx.chat.main_stopped = false;
         target.lx.chat.stop_armed_at = None;
+        target.lx.chat.session_title = None;
+        target.lx.chat.session_title_palette = 0;
         if let Some(page) = target.lx.task.as_mut() {
             page.agents_window = Default::default();
             page.agents_focus = None;
@@ -470,6 +472,7 @@ pub fn on_session_loaded_full(
 
 /// 重命名会话。
 pub fn rename_session(state: &mut AppState, pane: PaneId, session_id: &str, title: &str) -> bool {
+    super::title::cancel_session_title(state, session_id);
     let Some(workspace) = state.chat_session_key_for_pane(pane) else {
         return false;
     };
@@ -485,6 +488,7 @@ pub fn rename_session(state: &mut AppState, pane: PaneId, session_id: &str, titl
 
 /// 删除会话（有确认；先取消在途请求，等最终写入后事务级删除）。
 pub fn delete_session(state: &mut AppState, pane: PaneId, session_id: &str) -> bool {
+    super::title::cancel_session_title(state, session_id);
     // 在途请求先取消（事件层等 finish 后再删除）。
     if let Some(target) = state.pane_mut_anywhere(pane)
         && target.lx.chat.session_id.as_deref() == Some(session_id)

@@ -217,6 +217,10 @@ impl Prompt {
             markdown::SlashInsertion::WorktreeBinding { branch, is_main } => {
                 self.confirm_worktree_binding(&branch, is_main)
             }
+            markdown::SlashInsertion::GenerateBlockTitle => {
+                self.slash = None;
+                self.confirm_generate_block_title(&trigger)
+            }
             markdown::SlashInsertion::Placeholder => false,
             _ => {
                 let Some((content, cursor)) = markdown::slash_insertion(&item) else {
@@ -311,6 +315,54 @@ impl Prompt {
             }
         }
         self.cursor = cursor.min(self.text.len());
+    }
+
+    /// `/title` 确认：清空命令行文本但保留该空行，提取当前所在块（优先 `+++` 补充块，
+    /// 其次 `&&&` 模板块）正文，非空时写入 `{title: Generating title...}` 并登记生成请求。
+    fn confirm_generate_block_title(&mut self, trigger: &markdown::SlashTrigger) -> bool {
+        let target_block = if let Some((start, _, _)) =
+            markdown::find_enclosing_supple_block(&self.text, self.cursor)
+        {
+            Some((start, markdown::BlockKind::Supple))
+        } else {
+            markdown::template_block_start_at(&self.text, self.cursor)
+                .map(|start| (start, markdown::BlockKind::Template))
+        };
+        let Some((start_line, kind)) = target_block else {
+            return false;
+        };
+
+        self.break_group();
+        self.record(EditKind::Other);
+        // 清空斜杠命令行文字，保留行尾换行符（不删空行），光标停在该空行行首。
+        self.splice_text(trigger.line_start, trigger.line_end, "");
+        self.cursor = trigger.line_start;
+
+        let raw_body = match kind {
+            markdown::BlockKind::Supple => self.supple_body_at_start(start_line),
+            markdown::BlockKind::Template => self.template_block_body(start_line),
+        };
+        let cleaned = raw_body
+            .map(|body| markdown::extract_block_title_source(&body))
+            .unwrap_or_default();
+
+        if cleaned.is_empty() {
+            self.pending_title_action = Some(super::PromptTitleAction::EmptyBlock);
+            self.panel_suppressed = true;
+            self.settle();
+            return true;
+        }
+
+        let original_title = markdown::block_title_value_at_line(&self.text, start_line);
+        self.set_block_title(start_line, Some(crate::ui::text::PROMPT_TITLE_GENERATING));
+        self.pending_title_action = Some(super::PromptTitleAction::Generate {
+            block_start_line: start_line,
+            original_title,
+            content: cleaned,
+        });
+        self.panel_suppressed = true;
+        self.settle();
+        true
     }
 
     /// 打开二级 worktree 选择器：光标处必须有模板块（绑定目标即该块结束行）。

@@ -1,7 +1,7 @@
 //! 模型配置（`config/ai.json`）：类型、校验与原子保存。
 //!
 //! 与 `settings.json`（布局整数）完全分离；模型配置是 `ai` 节点下的
-//! providers/enabled_providers/defaultModel/streamIdleTimeoutMs/webSearch。
+//! providers/enabled_providers/defaultModel/titleSummary/titleLanguage/streamIdleTimeoutMs/webSearch。
 //! 解析用 `serde`/`serde_json`；未知字段往返保留，已知字段严格校验。
 //!
 //! API Key 只存在于内存快照与 0600 权限的 `ai.json` 中，永不写入日志或错误
@@ -230,6 +230,81 @@ pub struct ModelSelection {
     pub variant: Option<String>,
 }
 
+/// 标题生成输出语言（`ai.titleLanguage`；缺省使用 `auto` 自动跟随输入语言）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TitleLanguage {
+    /// 自动跟随用户输入正文的自然语言（默认）。
+    #[default]
+    #[serde(rename = "auto")]
+    Auto,
+    /// 强制使用简体中文。
+    #[serde(rename = "zh-CN", alias = "zh")]
+    SimplifiedChinese,
+    /// 强制使用英文。
+    #[serde(rename = "en")]
+    English,
+    /// 强制使用繁体中文。
+    #[serde(rename = "zh-TW")]
+    TraditionalChinese,
+    /// 强制使用日文。
+    #[serde(rename = "ja")]
+    Japanese,
+    /// 强制使用韩文。
+    #[serde(rename = "ko")]
+    Korean,
+}
+
+impl TitleLanguage {
+    /// 转换为持久化与接口传输的字符串表示。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SimplifiedChinese => "zh-CN",
+            Self::Auto => "auto",
+            Self::English => "en",
+            Self::TraditionalChinese => "zh-TW",
+            Self::Japanese => "ja",
+            Self::Korean => "ko",
+        }
+    }
+
+    /// 解析语言编码字符串（未知值返回 `None`）。
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "zh-CN" | "zh" => Some(Self::SimplifiedChinese),
+            "auto" => Some(Self::Auto),
+            "en" => Some(Self::English),
+            "zh-TW" => Some(Self::TraditionalChinese),
+            "ja" => Some(Self::Japanese),
+            "ko" => Some(Self::Korean),
+            _ => None,
+        }
+    }
+}
+
+fn deserialize_title_language<'de, D>(deserializer: D) -> Result<Option<TitleLanguage>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    match TitleLanguage::parse(trimmed) {
+        Some(lang) => Ok(Some(lang)),
+        None => {
+            tracing::warn!(
+                title_language = %trimmed,
+                "unsupported titleLanguage in ai.json; falling back to auto"
+            );
+            Ok(None)
+        }
+    }
+}
+
 /// `ai.json` 的 `ai` 节点。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AiSettings {
@@ -245,6 +320,21 @@ pub struct AiSettings {
         skip_serializing_if = "Option::is_none"
     )]
     pub default_model: Option<ModelSelection>,
+    /// 标题生成模型选择（兼容 lx-agent 的 camelCase `titleSummary`）。
+    #[serde(
+        default,
+        rename = "titleSummary",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub title_summary: Option<ModelSelection>,
+    /// 标题生成输出语言（`titleLanguage`，缺省按 `Auto` 自动跟随输入语言处理）。
+    #[serde(
+        default,
+        rename = "titleLanguage",
+        deserialize_with = "deserialize_title_language",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub title_language: Option<TitleLanguage>,
     /// 流式空闲超时毫秒（lx-agent 写作 camelCase `streamIdleTimeoutMs`）。
     #[serde(
         rename = "streamIdleTimeoutMs",
@@ -254,8 +344,7 @@ pub struct AiSettings {
     /// 联网搜索 API Key 配置（`ai.webSearch`）。
     #[serde(default, rename = "webSearch")]
     pub web_search: WebSearchConfig,
-    /// 未知字段往返保留（如 lx-agent 的 titleSummary 等，导入时丢弃、
-    /// 本项目保存时不回写这些字段）。
+    /// 未知字段往返保留。
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -267,10 +356,34 @@ impl AiSettings {
             enabled_providers: Vec::new(),
             providers: BTreeMap::new(),
             default_model: None,
+            title_summary: None,
+            title_language: None,
             stream_idle_timeout_ms: None,
             web_search: WebSearchConfig::default(),
             extra: serde_json::Map::new(),
         }
+    }
+
+    /// 有效标题生成语言；未显式配置时默认使用 `Auto` 自动跟随用户输入语言。
+    pub fn effective_title_language(&self) -> TitleLanguage {
+        self.title_language.unwrap_or_default()
+    }
+
+    /// 加载容错：当磁盘上的可选选择项（如 `titleSummary`）指向已移除/未启用的供应商或模型时，
+    /// 清理悬空引用而不让整份 `ai.json` 失效。
+    pub fn sanitize_optional_selections(&mut self) {
+        let enabled: std::collections::HashSet<String> = self
+            .enabled_providers
+            .iter()
+            .filter(|id| self.providers.contains_key(*id))
+            .cloned()
+            .collect();
+        sanitize_selection_slot(
+            "title model",
+            &mut self.title_summary,
+            &self.providers,
+            &enabled,
+        );
     }
 
     /// 有效空闲超时；未配置取默认值。
@@ -325,34 +438,98 @@ impl AiSettings {
             }
         }
         if let Some(selection) = &self.default_model {
-            let Some(provider) = self.providers.get(&selection.provider) else {
-                return Err(AiConfigError::Invalid(format!(
-                    "default model provider '{}' is not defined",
-                    selection.provider
-                )));
-            };
-            if !enabled.contains(&selection.provider) {
-                return Err(AiConfigError::Invalid(format!(
-                    "default model provider '{}' is not enabled",
-                    selection.provider
-                )));
-            }
-            let Some(model) = provider.models.get(&selection.model) else {
-                return Err(AiConfigError::Invalid(format!(
-                    "default model '{}' is not defined on provider '{}'",
-                    selection.model, selection.provider
-                )));
-            };
-            if let Some(variant) = &selection.variant
-                && !model.variants.contains_key(variant)
-            {
-                return Err(AiConfigError::Invalid(format!(
-                    "default model variant '{variant}' is not in model variants"
-                )));
-            }
+            validate_selection("default model", selection, &self.providers, &enabled)?;
+        }
+        if let Some(selection) = &self.title_summary {
+            validate_selection("title model", selection, &self.providers, &enabled)?;
         }
         Ok(())
     }
+}
+
+fn sanitize_selection_slot(
+    role: &str,
+    slot: &mut Option<ModelSelection>,
+    providers: &BTreeMap<String, ProviderConfig>,
+    enabled: &std::collections::HashSet<String>,
+) {
+    let Some(selection) = slot.as_mut() else {
+        return;
+    };
+    let Some(provider) = providers.get(&selection.provider) else {
+        tracing::warn!(
+            role,
+            provider = %selection.provider,
+            "dropping dangling model selection on load: provider is not defined"
+        );
+        *slot = None;
+        return;
+    };
+    if !enabled.contains(&selection.provider) {
+        tracing::warn!(
+            role,
+            provider = %selection.provider,
+            "dropping model selection on load: provider is not enabled"
+        );
+        *slot = None;
+        return;
+    }
+    let Some(model) = provider.models.get(&selection.model) else {
+        tracing::warn!(
+            role,
+            provider = %selection.provider,
+            model = %selection.model,
+            "dropping dangling model selection on load: model is not defined"
+        );
+        *slot = None;
+        return;
+    };
+    if let Some(variant) = &selection.variant
+        && !model.variants.contains_key(variant)
+    {
+        tracing::warn!(
+            role,
+            provider = %selection.provider,
+            model = %selection.model,
+            variant = %variant,
+            "clearing unknown variant on model selection during load"
+        );
+        selection.variant = None;
+    }
+}
+
+fn validate_selection(
+    role: &str,
+    selection: &ModelSelection,
+    providers: &BTreeMap<String, ProviderConfig>,
+    enabled: &std::collections::HashSet<String>,
+) -> Result<(), AiConfigError> {
+    let Some(provider) = providers.get(&selection.provider) else {
+        return Err(AiConfigError::Invalid(format!(
+            "{role} provider '{}' is not defined",
+            selection.provider
+        )));
+    };
+    if !enabled.contains(&selection.provider) {
+        return Err(AiConfigError::Invalid(format!(
+            "{role} provider '{}' is not enabled",
+            selection.provider
+        )));
+    };
+    let Some(model) = provider.models.get(&selection.model) else {
+        return Err(AiConfigError::Invalid(format!(
+            "{role} '{}' is not defined on provider '{}'",
+            selection.model, selection.provider
+        )));
+    };
+    if let Some(variant) = &selection.variant
+        && !model.variants.contains_key(variant)
+    {
+        return Err(AiConfigError::Invalid(format!(
+            "{role} variant '{variant}' is not in model variants"
+        )));
+    }
+    Ok(())
 }
 
 impl Default for AiSettings {
@@ -422,8 +599,9 @@ pub fn parse_ai(text: &str) -> Result<AiSettings, AiConfigError> {
     struct Root {
         ai: AiSettings,
     }
-    let root: Root = serde_json::from_str(text)
+    let mut root: Root = serde_json::from_str(text)
         .map_err(|error| AiConfigError::Invalid(format!("malformed json: {error}")))?;
+    root.ai.sanitize_optional_selections();
     root.ai.validate()?;
     Ok(root.ai)
 }

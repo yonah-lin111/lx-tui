@@ -145,6 +145,18 @@ pub enum FocusedContainer {
     Todo,
 }
 
+/// 在途的 Prompt 模板块 `/title` 生成请求（保存在内存中，生成完成前不将占位符持久化入库）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPromptTitle {
+    pub request_id: u64,
+    pub workspace_cwd: Option<PathBuf>,
+    pub workspace_index: usize,
+    pub editing: super::prompt::PromptEditing,
+    pub page_id: super::prompt::PromptPageId,
+    pub block_start_line: usize,
+    pub original_title: Option<String>,
+}
+
 /// prompt 面板为全局右栏，显示激活（或钉住）工作区的草稿。
 #[derive(Debug)]
 pub struct AppState {
@@ -282,6 +294,12 @@ pub struct AppState {
     pub settings_open_requested: bool,
     /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
     pub models: ModelsSnapshot,
+    /// 在途的新会话自动标题生成（session_id 集合；手动 `/rename`、`/resume` 改名或删除立即移除）。
+    pub pending_session_titles: std::collections::HashSet<String>,
+    /// 在途的 Prompt 模板块 `/title` 生成请求映射（按 `request_id` 索引）。
+    pub pending_prompt_titles: std::collections::HashMap<u64, PendingPromptTitle>,
+    /// Prompt 模板块 `/title` 生成请求代号计数器。
+    pub prompt_title_request_counter: u64,
     /// 按工作区实际目录（`workspace.cwd`）汇总的生效 AGENTS.md 文件计数；None 表示无可用工作区目录。
     pub agents_md_inventory: BTreeMap<Option<PathBuf>, usize>,
     /// 按项目根汇总的 MCP 装载计数；首页按窗格所属工作区取用。
@@ -422,6 +440,9 @@ impl AppState {
             settings_available: false,
             settings_open_requested: false,
             models: ModelsSnapshot::default(),
+            pending_session_titles: std::collections::HashSet::new(),
+            pending_prompt_titles: std::collections::HashMap::new(),
+            prompt_title_request_counter: 0,
             agents_md_inventory: BTreeMap::new(),
             mcp_inventory: BTreeMap::new(),
             skill_inventory: BTreeMap::new(),

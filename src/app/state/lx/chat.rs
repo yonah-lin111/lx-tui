@@ -35,7 +35,16 @@ pub struct ModelsSnapshot {
 impl ModelsSnapshot {
     /// 是否存在可发送的有效默认模型（provider 启用、模型存在、有 Key）。
     pub fn default_selection(&self) -> Option<ModelSelection> {
-        let selection = self.settings.default_model.as_ref()?;
+        self.validated_selection(self.settings.default_model.as_ref())
+    }
+
+    /// 是否存在可发送的有效标题模型（provider 启用、模型存在、有 Key）。
+    pub fn title_selection(&self) -> Option<ModelSelection> {
+        self.validated_selection(self.settings.title_summary.as_ref())
+    }
+
+    fn validated_selection(&self, selection: Option<&ModelSelection>) -> Option<ModelSelection> {
+        let selection = selection?;
         let provider = self.settings.providers.get(&selection.provider)?;
         if !self
             .settings
@@ -59,6 +68,41 @@ impl ModelsSnapshot {
             .as_ref()
             .is_none_or(|variant| model.variants.contains_key(variant));
         variant_ok.then(|| selection.clone())
+    }
+
+    /// 为 Prompt 模板块 `/title` 解析有效模型：优先 `titleSummary`，回退 `defaultModel`。
+    pub fn resolve_prompt_title_model(&self) -> Option<FrozenModel> {
+        if let Some(selection) = self.title_selection() {
+            let normalized = self.normalize_selection(selection);
+            if let Some(frozen) = FrozenModel::resolve(self, &normalized) {
+                return Some(frozen);
+            }
+        }
+        let selection = self.default_selection()?;
+        let normalized = self.normalize_selection(selection);
+        FrozenModel::resolve(self, &normalized)
+    }
+
+    /// 为 `lx` 新会话自动标题解析有效模型：优先 `titleSummary`，回退会话当前生效选择，再回退 `defaultModel`。
+    pub fn resolve_session_title_model(
+        &self,
+        fallback_selection: Option<&ModelSelection>,
+    ) -> Option<FrozenModel> {
+        if let Some(selection) = self.title_selection() {
+            let normalized = self.normalize_selection(selection);
+            if let Some(frozen) = FrozenModel::resolve(self, &normalized) {
+                return Some(frozen);
+            }
+        }
+        if let Some(selection) = self.validated_selection(fallback_selection) {
+            let normalized = self.normalize_selection(selection);
+            if let Some(frozen) = FrozenModel::resolve(self, &normalized) {
+                return Some(frozen);
+            }
+        }
+        let selection = self.default_selection()?;
+        let normalized = self.normalize_selection(selection);
+        FrozenModel::resolve(self, &normalized)
     }
 
     /// 该选择对应模型的有效 transport（模型级覆盖优先）。
@@ -148,6 +192,11 @@ impl ModelsSnapshot {
     /// 流式空闲超时。
     pub fn idle_timeout_ms(&self) -> u64 {
         self.settings.idle_timeout_ms()
+    }
+
+    /// 标题生成语言配置（缺省为 `Auto` 自动跟随用户输入语言）。
+    pub fn title_language(&self) -> crate::config::ai::TitleLanguage {
+        self.settings.effective_title_language()
     }
 
     /// 该模型选择是否支持图像输入（严格按 `modalities.input` 含 `"image"` 判定）。
@@ -449,6 +498,63 @@ pub struct LxChat {
     pub queue: Vec<QueuedSubmission>,
     /// 当前所属项目根目录（用于剥离工具卡片里的当前项目绝对路径前缀）。
     pub project_root: Option<std::path::PathBuf>,
+    /// 当前会话在输入框顶边框右上角展示的标题胶囊文本（自动生成完成、手动 `/rename` 或 `/resume` 恢复时写入）。
+    pub session_title: Option<String>,
+    /// 当前会话标题胶囊锁定的配色槽位（`0..SESSION_TITLE_PALETTE_COUNT`），同一会话跨帧重绘保持稳定。
+    pub session_title_palette: u8,
+}
+
+pub use crate::ui::style::SESSION_TITLE_PALETTE_COUNT;
+
+/// 为会话选取一个与上一次不同的确定性配色槽位（不依赖时钟，且保证连续会话不撞色）。
+fn next_title_palette(session_id: Option<&str>) -> u8 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    static LAST_PALETTE: AtomicU64 = AtomicU64::new(u64::MAX);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    if let Some(id) = session_id {
+        for byte in id.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+    } else {
+        hash ^= seq.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    }
+    hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    hash ^= hash >> 31;
+    let count = u64::from(SESSION_TITLE_PALETTE_COUNT);
+    let mut chosen = hash % count;
+    let prev = LAST_PALETTE.load(Ordering::Relaxed);
+    if chosen == prev && count > 1 {
+        let step = 1 + ((hash >> 8) % (count - 1));
+        chosen = (chosen + step) % count;
+    }
+    LAST_PALETTE.store(chosen, Ordering::Relaxed);
+    chosen as u8
+}
+
+fn normalize_session_title(raw: &str) -> Option<String> {
+    let mut cleaned = String::new();
+    let mut prev_space = false;
+    for ch in raw.chars() {
+        if ch.is_whitespace() || ch.is_control() {
+            if !cleaned.is_empty() && !prev_space {
+                cleaned.push(' ');
+                prev_space = true;
+            }
+        } else {
+            cleaned.push(ch);
+            prev_space = false;
+        }
+    }
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 impl Default for LxChat {
@@ -492,7 +598,23 @@ impl LxChat {
             pending_shells: Vec::new(),
             queue: Vec::new(),
             project_root: None,
+            session_title: None,
+            session_title_palette: 0,
         }
+    }
+
+    /// 设置或更新当前会话标题；首次为该会话赋标题时锁定一套配色槽位，同会话后续改名保持配色不变。
+    pub fn set_session_title(&mut self, title: Option<String>) -> bool {
+        let normalized = title.and_then(|raw| normalize_session_title(&raw));
+        if self.session_title == normalized {
+            return false;
+        }
+        let was_none = self.session_title.is_none();
+        self.session_title = normalized;
+        if was_none && self.session_title.is_some() {
+            self.session_title_palette = next_title_palette(self.session_id.as_deref());
+        }
+        true
     }
 
     /// 同步当前项目根目录，并将消息中的工具展示路径收短为相对路径。
@@ -540,6 +662,8 @@ impl LxChat {
         self.pending_shells.clear();
         self.queue.clear();
         self.expanded_user_messages.clear();
+        self.session_title = None;
+        self.session_title_palette = 0;
     }
 
     /// 用户消息是否处于展开状态。

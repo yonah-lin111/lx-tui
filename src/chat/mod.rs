@@ -16,6 +16,7 @@ pub mod process;
 pub mod prompt;
 pub mod sse;
 pub mod thinking;
+pub mod title;
 pub mod tools;
 pub mod transport;
 

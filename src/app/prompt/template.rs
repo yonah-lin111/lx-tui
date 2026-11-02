@@ -12,6 +12,56 @@ impl Prompt {
         Some(self.text[from..to].to_string())
     }
 
+    /// 提取起始行处的 `+++` 补充块正文（支持独立块或嵌套在 `&&&` 内的补充块）。
+    pub fn supple_body_at_start(&self, start_line: usize) -> Option<String> {
+        let (_, start_end) = self.line_bounds(start_line)?;
+        let lines: Vec<&str> = self.text.split('\n').collect();
+        markdown::parse_supple_start_line(lines.get(start_line)?)?;
+        let mut end_line = lines.len().saturating_sub(1);
+        let mut closed = false;
+        let mut fence: Option<(u8, usize)> = None;
+        for (idx, line) in lines.iter().enumerate().skip(start_line + 1) {
+            if let Some((marker, length)) = fence {
+                if markdown::fence_delimiter(line).is_some_and(|(m, l)| m == marker && l >= length)
+                {
+                    fence = None;
+                }
+                continue;
+            }
+            if let Some(delim) = markdown::fence_delimiter(line) {
+                fence = Some(delim);
+                continue;
+            }
+            if markdown::parse_supple_end_line(line).is_some() {
+                end_line = idx;
+                closed = true;
+                break;
+            }
+        }
+        let (end_start, _) = self.line_bounds(end_line)?;
+        let to = if closed {
+            end_start.checked_sub(1)?
+        } else {
+            self.text.len()
+        };
+        let from = start_end + 1;
+        (from <= to && to <= self.text.len()).then_some(self.text[from..to].to_string())
+    }
+
+    /// 更新或恢复指定块起始行下一行的 `{title: ...}`，并自动平移光标。
+    pub fn set_block_title(&mut self, start_line: usize, new_title: Option<&str>) -> bool {
+        let Some((range, replacement)) =
+            markdown::set_block_title_edit(&self.text, start_line, new_title)
+        else {
+            return false;
+        };
+        if self.text.get(range.clone()) == Some(replacement.as_str()) {
+            return false;
+        }
+        self.replace_span(range.start, range.end, &replacement);
+        true
+    }
+
     /// 复制快捷键用正文：光标所在模板块或补充块按复制语义提取；不在块内返回 None。
     ///
     /// `+++` 是 `&&&` 的内层块：光标在内层时优先复制内层正文。

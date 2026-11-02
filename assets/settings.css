@@ -50,7 +50,7 @@ nav.side button.active { background: var(--active); color: var(--text); font-wei
 main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; padding: 24px; }
 .view { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
 .view.hidden { display: none; }
-#view-general { overflow-y: auto; }
+#view-general, #view-model { overflow-y: auto; }
 h2 { font-size: 16px; margin: 0 0 16px; }
 .view-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
 .view-head h2 { margin: 0; }
@@ -156,7 +156,6 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 /* ===== Models view ===== */
 .models-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
 .models-toolbar label { margin: 0; }
-.models-toolbar-select { flex: 1 1 260px; min-width: 200px; max-width: 440px; }
 .models-grid { display: grid; flex: 1 1 auto; min-height: 0; grid-template-columns: var(--models-list-width, 220px) 5px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 8px; align-items: stretch; }
 .models-nav { display: flex; min-height: 0; flex-direction: column; gap: 2px; }
 .models-resizer { position: relative; cursor: col-resize; }

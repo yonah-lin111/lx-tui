@@ -61,11 +61,14 @@ impl Grid {
         }
     }
 
-    /// 逐字符写入；宽字符按显示宽度占位，后续列为占位标记。
+    /// 逐字符写入；宽字符按显示宽度占位，后续列为占位标记，零宽组合字符不独立占格。
     pub(super) fn put(&mut self, x: u16, y: u16, content: &str, style: Style) {
         let mut cx = x;
         for ch in content.chars() {
-            let width = ch.width().unwrap_or(1).max(1);
+            let width = ch.width().unwrap_or(0);
+            if width == 0 {
+                continue;
+            }
             self.set(cx, y, ch, style);
             for offset in 1..width {
                 self.set(cx.saturating_add(offset as u16), y, CONTINUATION, style);
