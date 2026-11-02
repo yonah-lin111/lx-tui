@@ -6,7 +6,7 @@
   - 右侧 Todo 面板：`src/ui/right_panel/todo.rs`、`src/ui/widgets/input.rs`、`src/app/state/todo.rs`、`src/app/update/todo.rs`、`src/event/mouse/`
   - 后台任务面板与聊天栏：`src/ui/main_content/lx.rs`、`src/ui/main_content/lx/chat_bar.rs`、`src/ui/main_content/lx/task.rs`、`src/ui/main_content/lx/history_hit.rs`、`src/app/state/lx/task.rs`、`src/app/update/pane/task_page.rs`、`src/app/update/chat/viewport.rs`
   - Ask 工具交互与计时控制：`src/ui/main_content/lx/ask.rs`、`src/app/state/lx/ask.rs`、`src/app/update/chat/ask.rs`、`src/app/update/chat/mod.rs`、`src/event/chat/ask.rs`、`src/ui/main_content/lx/history.rs`、`src/ui/text.rs`、`src/ui/text/agent.rs`
-- **状态**：已完成并通过全部验证（待用户确认后合并回 `dev`）
+- **状态**：已完成、通过 Code Review 修复并合并入 `dev`
 
 ---
 

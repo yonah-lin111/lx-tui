@@ -1,6 +1,6 @@
 # lx `ask` 工具设计
 
-> 状态：待用户审核（未开始编码）
+> 状态：已实施（后续全宽折行描述、原地 1~3 行 `Other...` 编辑、置底 `preview` 统一滚动条、对齐 `opencode-dev` Tab 流转与等待期暂停计时见 `docs/feature/todo-task-and-ask-ux/design.md`）
 > 参考：codex `request_user_input`（`codex-rs/core/src/tools/handlers/request_user_input*.rs`、`codex-rs/collaboration-mode-templates/templates/default.md`）、Claude Code `AskUserQuestion`（选项 `preview` 字符画）
 > 适用分支：`dev`，主 checkout
 
