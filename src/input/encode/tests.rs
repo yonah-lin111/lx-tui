@@ -363,13 +363,63 @@ fn encodes_kitty_csi_u_keys_for_opencode_codex_and_claude() {
         ),
         Some(b"A".to_vec())
     );
-    // Ctrl+J 保持 0x0a（兼容 claude 的 Ctrl+J 换行），有歧义的 Ctrl+I / Ctrl+M 走 CSI u。
+    // Kitty 模式下 Ctrl / Super 快捷键（含 opencode 撤销 Super+Z / Ctrl+Z / Ctrl+- 与重做 Super+Shift+Z / Ctrl+.）。
     assert_eq!(
         encode_key(
-            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('z'), KeyModifiers::SUPER),
             kitty
         ),
-        Some(vec![0x0a])
+        Some(b"\x1b[122;9u".to_vec())
+    );
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(
+                KeyCode::Char('Z'),
+                KeyModifiers::SUPER | KeyModifiers::SHIFT
+            ),
+            kitty
+        ),
+        Some(b"\x1b[122;10u".to_vec())
+    );
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
+            kitty
+        ),
+        Some(b"\x1b[122;5u".to_vec())
+    );
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('-'), KeyModifiers::CONTROL),
+            kitty
+        ),
+        Some(b"\x1b[45;5u".to_vec())
+    );
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('.'), KeyModifiers::CONTROL),
+            kitty
+        ),
+        Some(b"\x1b[46;5u".to_vec())
+    );
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER),
+            kitty
+        ),
+        Some(b"\x1b[97;9u".to_vec())
+    );
+    assert_eq!(
+        encode_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SUPER), kitty),
+        Some(b"\x1b[1;9D".to_vec())
+    );
+    // 纯 Super+C 在无选区时仍不透传，避免在 claude 中误输入 `c`。
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER),
+            kitty
+        ),
+        None
     );
     assert_eq!(
         encode_key(

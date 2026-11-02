@@ -8,15 +8,25 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventK
 /// Super（Cmd）组合只属于应用级快捷键，绝不写入 PTY；kitty 键盘协议下尤其重要，
 /// 否则 Cmd+C 会被当作普通 `c` 打进 shell。
 pub fn encode_key(key: KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
+    let kitty = mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL);
+    let report_all = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
+
     if key.modifiers.contains(KeyModifiers::SUPER) {
-        return None;
+        // Legacy 终端无法表达 Super（Cmd），直接丢弃以免把 Cmd+C/Cmd+Z 当成普通字符打进 shell；
+        // Kitty 协议下除纯 Super+C（保留给宿主复制选区兜底、避免在 claude 中误插入 `c`）外，
+        // 其余 Super 组合（如 Super+Z 撤销、Super+Shift+Z 重做、Super+A 全选）按 CSI u 编码转发。
+        if !kitty
+            || (key.modifiers == KeyModifiers::SUPER
+                && matches!(key.code, KeyCode::Char('c' | 'C')))
+        {
+            return None;
+        }
     }
+
     let (code, modifiers) = match key.code {
         KeyCode::BackTab => (KeyCode::Tab, key.modifiers | KeyModifiers::SHIFT),
         other => (other, key.modifiers),
     };
-    let kitty = mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL);
-    let report_all = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
 
     match code {
         KeyCode::Char(c) => Some(encode_char(c, modifiers, kitty, report_all)),
@@ -245,10 +255,11 @@ fn encode_esc(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8>
 fn encode_char(c: char, modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
     let has_ctrl = modifiers.contains(KeyModifiers::CONTROL);
     let has_alt = modifiers.contains(KeyModifiers::ALT);
+    let has_super = modifiers.contains(KeyModifiers::SUPER);
     let has_shift = modifiers.contains(KeyModifiers::SHIFT);
 
-    // 无 Ctrl/Alt 的普通或 Shift 可打印字符：除非开启 REPORT_ALL_KEYS_AS_ESC，一律发 UTF-8 文本。
-    if !has_ctrl && !has_alt {
+    // 无 Ctrl/Alt/Super 的普通或 Shift 可打印字符：除非开启 REPORT_ALL_KEYS_AS_ESC，一律发 UTF-8 文本。
+    if !has_ctrl && !has_alt && !has_super {
         if report_all {
             let base = if has_shift && c.is_ascii_uppercase() {
                 c.to_ascii_lowercase() as u32
@@ -267,20 +278,11 @@ fn encode_char(c: char, modifiers: KeyModifiers, kitty: bool, report_all: bool) 
         c as u32
     };
 
-    // Ctrl+Shift+<char>：Legacy C0 无法表达 Shift，对齐 Ghostty 统一走 CSI u。
-    if has_ctrl && has_shift {
+    // Kitty 协议激活时（或 Legacy 下的 Ctrl+Shift+<char>）：对齐 Ghostty 与 herdr，
+    // 所有带 Ctrl / Alt / Super 的字符键统一编码为 CSI u（如 Super+Z -> \x1b[122;9u，
+    // Ctrl+Z -> \x1b[122;5u，Ctrl+- -> \x1b[45;5u）。
+    if kitty || (has_ctrl && has_shift) {
         return csi_u(base_codepoint, modifiers);
-    }
-
-    // Kitty 协议激活时：
-    // - 开启 REPORT_ALL_KEYS_AS_ESC：所有 Ctrl/Alt 组合均走 CSI u；
-    // - 仅开启 DISAMBIGUATE_ESC_CODES：Alt 组合与存在歧义的 Ctrl+I / Ctrl+M / Ctrl+[ 走 CSI u，
-    //   其余单纯 Ctrl+a..z 保持 C0 控制字节（确保 claude 的 Ctrl+J = 0x0a 换行及 shell 信号兼容）。
-    if kitty {
-        let ambiguous_ctrl = matches!(c.to_ascii_lowercase(), 'i' | 'm' | '[');
-        if report_all || has_alt || ambiguous_ctrl {
-            return csi_u(base_codepoint, modifiers);
-        }
     }
 
     let mut bytes = Vec::new();
@@ -298,14 +300,14 @@ fn encode_char(c: char, modifiers: KeyModifiers, kitty: bool, report_all: bool) 
 
 fn control_byte(c: char) -> u8 {
     match c.to_ascii_uppercase() {
-        ' ' | '@' => 0x00,
+        ' ' | '@' | '2' => 0x00,
         'A'..='Z' => (c.to_ascii_uppercase() as u8) - 0x40,
-        '[' => 0x1b,
-        '\\' => 0x1c,
-        ']' => 0x1d,
-        '^' => 0x1e,
-        '_' => 0x1f,
-        '?' => 0x7f,
+        '[' | '3' => 0x1b,
+        '\\' | '4' => 0x1c,
+        ']' | '5' => 0x1d,
+        '^' | '6' => 0x1e,
+        '_' | '-' | '/' | '7' => 0x1f,
+        '?' | '8' => 0x7f,
         other => other as u8,
     }
 }
@@ -320,6 +322,15 @@ fn modifier_param(modifiers: KeyModifiers) -> u8 {
     }
     if modifiers.contains(KeyModifiers::CONTROL) {
         value += 4;
+    }
+    if modifiers.contains(KeyModifiers::SUPER) {
+        value += 8;
+    }
+    if modifiers.contains(KeyModifiers::HYPER) {
+        value += 16;
+    }
+    if modifiers.contains(KeyModifiers::META) {
+        value += 32;
     }
     value
 }
