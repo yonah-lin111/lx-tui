@@ -234,17 +234,19 @@ impl Prompt {
         let start_gutter = self.line_gutter(rows[start_idx].line);
         let start_col = start_gutter
             .saturating_add(display_width(&self.text[rows[start_idx].start..start_byte]) as u16);
-        let last_char_byte = super::text::prev_boundary(&self.text, end_byte);
+        // 末字符取最后一个**实际占列**的字符：尾随变体选择符/ZWJ（如 `❤️` 的 `U+FE0F`）
+        // 显示宽度为 0，若据其计算列宽会把 `end_col` 推到右花括号所在格，选区越过 `}`。
+        let slice = &self.text[start_byte..end_byte];
+        let (last_rel, last_ch) = slice
+            .char_indices()
+            .rfind(|(_, ch)| char_width(*ch) > 0)
+            .or_else(|| slice.char_indices().next_back())?;
+        let last_char_byte = start_byte + last_rel;
         let end_idx = row_at(last_char_byte).unwrap_or(start_idx);
-        let ch_width = self.text[last_char_byte..]
-            .chars()
-            .next()
-            .map_or(1, char_width)
-            .max(1) as u16;
         let end_gutter = self.line_gutter(rows[end_idx].line);
         let end_col = end_gutter
             .saturating_add(display_width(&self.text[rows[end_idx].start..last_char_byte]) as u16)
-            .saturating_add(ch_width - 1);
+            .saturating_add(char_width(last_ch).saturating_sub(1) as u16);
         Some((
             (i32::try_from(start_idx).unwrap_or(0), start_col),
             (i32::try_from(end_idx).unwrap_or(0), end_col),

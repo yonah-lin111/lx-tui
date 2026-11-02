@@ -9,7 +9,7 @@ use crate::app::overlay::Overlay;
 use crate::app::prompt::PromptRowKind;
 use crate::app::state::{AppState, RightTab};
 use crate::app::update;
-use crate::layout::PaneId;
+use crate::layout::{self, PaneId};
 use crate::ui;
 
 use super::mouse::hit::pane_at;
@@ -547,11 +547,16 @@ pub(crate) fn open_right_click_menu(
         && !update::prompt_tree_mode(state)
         && !update::prompt_pages_mode(state)
     {
-        let area = paste::prompt_text_area(view);
+        // 已打开的候选面板优先拦截：右键落在面板内不得穿透关闭面板。
+        if super::mouse::hit::prompt_command_panel_contains(state, view, column, row) {
+            return false;
+        }
+        // 命中区域含滚动条列；候选面板只关面板，待确认的粘贴提案必须保留。
+        let area = layout::prompt_body_rect(layout::pane_inner_rect(view.prompt));
         if area.contains((column, row).into()) {
-            state.prompt.clear_panel();
-            update::open_prompt_editor_menu(state, (column, row));
-            return true;
+            update::focus_prompt(state);
+            state.prompt.dismiss_completion_panels();
+            return update::open_prompt_editor_menu(state, (column, row));
         }
     }
     if let Some((pane, _)) = pane_at(rects, column, row)

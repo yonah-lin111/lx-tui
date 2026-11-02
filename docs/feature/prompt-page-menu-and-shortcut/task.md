@@ -89,3 +89,26 @@
   - `cargo fmt --check`
   - `cargo clippy --all-targets -- -D warnings`
   - `cargo test`
+
+---
+
+## 4. Code Review 修复任务（关联 `review.md`）
+
+- [x] **[P0-1] 编辑页右键与页菜单动作聚焦修复**：
+  - `src/event/overlay.rs`：编辑页右键打开菜单时调用 `update::focus_prompt(state)`；
+  - `src/app/update/menu.rs`：`SelectAll`、`OpenPage`、`NewPage`、`ForkPage`、`DeletePage`（Editor 模式下）确保聚焦 Prompt 面板。
+- [x] **[P0-2] 共享 `repo_key` 后台停泊工作区缓冲同步**：
+  - `src/app/update/prompt.rs`：`apply_prompt_tree` 在 `!displayed` 且 `editing == Some(PromptEditing::Item(id))` 时同步刷新已保存的停泊 `Workspace.prompt` 缓冲。
+- [x] **[P1-1] `Rename Page` 尾随零宽字符选区与超首屏滚动保底**：
+  - `src/app/prompt/viewport.rs`：`cell_range_for_byte_span` 按区间内最后一个非零宽字符计算 `end_col`；
+  - `src/app/update/prompt/pages.rs`：`rename_prompt_page_title` 先 `scroll_to(0)` 再确保超首屏标题滚入视口。
+- [x] **[P1-2] `dismiss_completion_panels` 与命令面板右键拦截**：
+  - `src/app/prompt.rs`：新增 `dismiss_completion_panels`（不触发 `paste_cancel`）；
+  - `src/event/overlay.rs` & `src/app/update/prompt/pages_view.rs`：拦截命令面板内右键、覆盖 `prompt_body_rect`、`open_prompt_editor_menu` 返回 `bool`。
+- [x] **[P2-1] 消除重复 `SavePromptContent`、补齐守卫与缩进**：
+  - `src/app/update/prompt/pages.rs`：避免二次 `commit_editing_prompt` 重复入队 `SavePromptContent`，补齐 `editing == Some(owner)` 守卫；
+  - `src/app/prompt.rs` & `src/app/selection.rs`：`insert_template_title_line` 继承起始行前导空格，`Selection::programmatic_range` 设置 `origin: (start, end)`。
+- [x] **[P2-2] 移除 `_pinned` 死参数、更新规范文档并拆分 `markdown/tests.rs`**：
+  - `src/ui/prompt.rs`、`src/ui/prompt/header.rs`、`src/ui/prompt_frame.rs`、`src/ui/prompt/tests.rs`：移除 `_pinned: bool` 参数；
+  - `docs/standards/tui-design-requirements.md`：同步更新页右键菜单项描述；
+  - `src/app/markdown/template/tests.rs` & `src/app/markdown/tests.rs`：将模板测试拆分至子模块，使单测试文件低于 1500 行上限。

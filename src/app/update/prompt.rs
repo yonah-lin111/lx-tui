@@ -147,6 +147,24 @@ pub fn apply_prompt_tree(
             repairs.push((id, first));
         }
     }
+    // 后台停泊工作区：同键面板切页或正文更新后刷新停泊缓冲，切回时才不会把
+    // 旧页正文提交进新的当前页。
+    if !displayed
+        && let Some(PromptEditing::Item(id)) = workspace_state.prompt_panel.editing
+        && let Some(item) = workspace_state.prompt_panel.tree.item(id)
+    {
+        let active_content = item.active_content().to_string();
+        if let Some(draft) = state
+            .workspaces
+            .get_mut(workspace)
+            .and_then(|workspace| workspace.prompt.as_mut())
+            && (page_switched
+                || (draft.editor.is_saved() && draft.editor.text() != active_content.as_str()))
+        {
+            draft.editor.set_text(&active_content);
+            draft.editor.mark_saved();
+        }
+    }
     if displayed && page_switched {
         state.prompt.clear_panel();
         state.selection = None;
@@ -556,6 +574,7 @@ pub(super) fn clear_search_for(state: &mut AppState, workspace: usize) {
 /// 保存成功回执：仅当编辑器仍显示对应（条目、页）时按修订确认保存点。
 ///
 /// 旧页保存完成不得把新页的保存点误标为已保存；页内容与待确认标记照常清除。
+/// 同键停泊工作区绑定该页时，其缓冲随保存正文刷新（回报到达前已切走的工作区）。
 pub fn mark_prompt_page_persisted(
     state: &mut AppState,
     id: i64,
@@ -564,6 +583,19 @@ pub fn mark_prompt_page_persisted(
     prompt: crate::layout::PaneId,
     revision: u64,
 ) -> bool {
+    // 本次保存的归属键：由持有该编辑器的显示态或停泊工作区决定；同键工作区共享正文，
+    // 其停泊缓冲也须跟随刷新，否则切回后会拿旧正文覆盖已保存内容。
+    let source_key = state
+        .workspaces
+        .iter()
+        .find(|workspace| {
+            workspace
+                .prompt
+                .as_ref()
+                .is_some_and(|draft| draft.editor.id() == prompt)
+        })
+        .or_else(|| state.workspaces.get(state.prompt_workspace()))
+        .and_then(|workspace| workspace.repo_key().map(Path::to_path_buf));
     let mut found = false;
     for workspace in &mut state.workspaces {
         if let Some(page) = workspace
@@ -576,6 +608,21 @@ pub fn mark_prompt_page_persisted(
             found = true;
         }
         workspace.prompt_panel.clear_page_pending(id, page_id);
+        let sharing = workspace.repo_key() == source_key.as_deref()
+            && workspace.prompt_panel.editing == Some(PromptEditing::Item(id))
+            && workspace
+                .prompt_panel
+                .tree
+                .item(id)
+                .is_some_and(|item| item.active_page == PromptPageId::Saved(page_id));
+        if sharing
+            && let Some(draft) = workspace.prompt.as_mut()
+            && draft.editor.is_saved()
+            && draft.editor.text() != content
+        {
+            draft.editor.set_text(content);
+            draft.editor.mark_saved();
+        }
     }
     let editing_page = |workspace: &crate::app::state::Workspace| {
         workspace.prompt_panel.editing == Some(PromptEditing::Item(id))

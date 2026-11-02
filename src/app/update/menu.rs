@@ -10,6 +10,7 @@ use crate::app::state::{AppState, PaneView, TodoEditTarget, tab_label};
 use crate::app::trust::TrustTrigger;
 use crate::layout::PaneId;
 
+use super::focus_prompt;
 use super::pane::toggle_pane_view;
 use super::prompt::{
     commit_editing_prompt, copy_page_content, copy_prompt_content, copy_prompt_temp_content,
@@ -480,9 +481,11 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
         (Some(MenuCommand::OpenPage), OverlayTarget::PromptPage { page, .. }) => {
             hide_prompt_pages(state);
             select_prompt_page(state, page);
+            focus_prompt(state);
         }
         (Some(MenuCommand::SelectAll), OverlayTarget::PromptPage { .. }) => {
             state.select_all_prompt();
+            focus_prompt(state);
         }
         (
             Some(MenuCommand::CopyPageContent),
@@ -514,12 +517,14 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
             },
         ) => {
             fork_prompt_page(state, workspace, owner, page);
+            focus_prompt_when_editor(state);
         }
         (
             Some(MenuCommand::NewPage),
             OverlayTarget::PromptPage { .. } | OverlayTarget::PromptPages { .. },
         ) => {
             create_or_toast_new_page(state);
+            focus_prompt_when_editor(state);
         }
         (
             Some(MenuCommand::DeletePage),
@@ -530,10 +535,19 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
             },
         ) => {
             perform_delete_page(state, workspace, owner, page);
+            focus_prompt_when_editor(state);
         }
         _ => {}
     }
     None
+}
+
+/// 菜单动作后仍处于编辑视图时把键盘焦点交给 prompt：全选/切页/增删页后
+/// 打字、退格与复制必须落在编辑器，而不是此前的终端或侧栏。
+fn focus_prompt_when_editor(state: &mut AppState) {
+    if state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Editor {
+        focus_prompt(state);
+    }
 }
 
 /// 在目标窗格处按方向分割并聚焦新窗格；新窗格继承源窗格视图。

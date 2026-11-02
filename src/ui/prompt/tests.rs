@@ -630,15 +630,7 @@ fn renders_toolbar_buttons_and_divider() {
     editor.resize(36, 6);
     editor.insert_str("hi");
     let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        false,
-        PromptMode::Editor,
-        false,
-        false,
-    );
+    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, false);
 
     let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar visible");
     let render_label = |buf: &Buffer, rect: Rect| -> String {
@@ -686,28 +678,12 @@ fn renders_toolbar_buttons_and_divider() {
 
     editor.mark_saved();
     let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        false,
-        PromptMode::Editor,
-        false,
-        false,
-    );
+    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, false);
     assert_eq!(buf[(save_x, bar.y)].fg, Color::Green, "保存后绿点");
 
     // 临时草稿：空心点（与空闲 agent 状态一致），恒灰。
     let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        false,
-        PromptMode::Editor,
-        true,
-        false,
-    );
+    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, true);
     assert_eq!(buf[(save_x, bar.y)].symbol(), text::PROMPT_DRAFT_DOT);
     assert_eq!(buf[(save_x, bar.y)].fg, Color::DarkGray, "草稿恒灰空心点");
 }
@@ -727,15 +703,7 @@ fn divider_stays_plain_and_border_carries_the_title() {
     };
 
     let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        false,
-        PromptMode::Editor,
-        false,
-        false,
-    );
+    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, false);
     let row = divider_row(&buf);
     assert_eq!(
         row,
@@ -767,15 +735,7 @@ fn toolbar_folders_button_renders_left_of_save_and_hides_in_tree() {
     .expect("save visible");
     assert_eq!(folders.right() + 1, save.x, "紧邻保存点左侧");
     let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        false,
-        PromptMode::Editor,
-        false,
-        false,
-    );
+    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, false);
     let label: String = (folders.x..folders.right())
         .map(|x| buf[(x, folders.y)].symbol())
         .collect();
@@ -783,15 +743,7 @@ fn toolbar_folders_button_renders_left_of_save_and_hides_in_tree() {
 
     // 树视图不显示引用文件夹按钮。
     let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        false,
-        PromptMode::Tree,
-        false,
-        false,
-    );
+    render_header(panel, &mut buf, &editor, false, PromptMode::Tree, false);
     let tree_folders = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Folders,
@@ -811,15 +763,7 @@ fn divider_stays_muted_across_focus_states() {
 
     for focused in [true, false] {
         let mut buf = Buffer::empty(panel);
-        render_header(
-            panel,
-            &mut buf,
-            &editor,
-            focused,
-            PromptMode::Editor,
-            false,
-            false,
-        );
+        render_header(panel, &mut buf, &editor, focused, PromptMode::Editor, false);
         for x in [panel.x, 5, panel.right() - 1] {
             let cell = &buf[(x, divider_y)];
             assert_ne!(cell.fg, Color::Cyan, "分割线恒为暗灰、不随焦点变色: x={x}");
@@ -836,15 +780,7 @@ fn toolbar_hidden_when_prompt_too_short() {
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
     editor.insert_str("hi");
     let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        false,
-        PromptMode::Editor,
-        false,
-        false,
-    );
+    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, false);
     assert_eq!(buf[(1, 1)].symbol(), " ", "内容区过矮不绘制工具栏");
     assert_eq!(buf[(2, 1)].symbol(), " ");
 }

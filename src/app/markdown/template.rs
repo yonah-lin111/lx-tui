@@ -663,3 +663,6 @@ fn is_ascii_command(token: &str) -> bool {
     };
     first.is_ascii_alphabetic() && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
+
+#[cfg(test)]
+mod tests;

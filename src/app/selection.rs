@@ -206,7 +206,7 @@ impl Selection {
             pane,
             anchor: start,
             cursor: end,
-            origin: (start, start),
+            origin: (start, end),
             unit: SelectionUnit::Word,
             dragging: false,
         }

@@ -467,3 +467,23 @@ pub fn find_first_template_title_span(text: &str) -> TemplateTitleLookup {
 | `src/app/effects.rs`、`src/db/mod.rs`、`src/db/service.rs` | `Effect::CreatePage` 与 `create_prompt_page` 支持初始 `content` | ~+8 行 |
 | `src/app/update/editor.rs`、`src/app/update/prompt/pages.rs`、`src/app/update/prompt/pages_view.rs`、`src/app/update/menu.rs` | 实现 `advance_or_create_prompt_page`、`rename_prompt_page_title`、`fork_prompt_page`、`open_prompt_editor_menu` 及菜单分派 | ~+180 行 |
 | `docs/standards/tui-design-requirements.md` | 同步更新工具栏与底边框钉住按钮规范说明 | ~+4 / -4 行 |
+
+---
+
+## 6. Code Review 补充设计与边界收敛（详见 `review.md`）
+
+1. **[P0-1] 编辑页右键与页菜单动作自动聚焦 Prompt 面板**：
+   - 在 `src/event/overlay.rs` 的 `PromptMode::Editor` 右键分支中，若未命中已打开的 `#`/`/`/`@` 补全面板（`!prompt_command_panel_contains`），先调用 `update::focus_prompt(state)` 聚焦编辑器并调用 `state.prompt.dismiss_completion_panels()`（不回滚粘贴提案），再打开页菜单。
+   - 在 `src/app/update/menu.rs::activate_menu` 的 `OverlayTarget::PromptPage` 分支中，对 `SelectAll`、`OpenPage`、`NewPage`、`ForkPage`、`DeletePage`（当处于 `PromptMode::Editor` 时）确保调用 `focus_prompt(state)`，保证全选或切页后打字/退格/`Ctrl+C` 作用于 Prompt 而非终端 PTY。
+2. **[P0-2] 共享 `repo_key` 后台停泊工作区的 `Workspace.prompt` 缓冲同步刷新**：
+   - 在 `src/app/update/prompt.rs::apply_prompt_tree` 中，当 `!displayed`（工作区处于后台停泊态）且 `editing == Some(PromptEditing::Item(id))` 时，若 `page_switched` 或新树中当前 `active_page` 的正文发生变化且停泊缓冲 `draft.editor.is_saved()`，同步将 `workspaces[index].prompt` 停泊缓冲刷新为新 `active_page` 的正文并 `mark_saved()`，防止切回该工作区再切走时将旧页缓冲覆盖写回新页。
+3. **[P1-1] `Rename Page` 超首屏标题可见性保底与尾随零宽字符（VS16/ZWJ）选区修正**：
+   - `Prompt::cell_range_for_byte_span` 逆序查找 `start_byte..end_byte` 内最后一个显示列宽 `> 0` 的字符计算 `end_col`，防止 Emoji 变体选择符（`U+FE0F`，列宽为 `0`）把 `end_col` 推到右花括号 `}` 上导致替换被拒。
+   - `rename_prompt_page_title` 先执行 `state.prompt.scroll_to(0)`，当目标标题行位于首屏内时保持 `scroll == 0`，当首个模板块前有超过一屏的前置文本时通过 `set_cursor_offset` 自动将标题滚入可见视口。
+4. **[P1-2] `Prompt::dismiss_completion_panels` 与滚动条列右键覆盖**：
+   - 新增 `Prompt::dismiss_completion_panels(&mut self)`（仅清理 `panel`/`slash`/`mention`/`refer`，不触发 `paste_cancel()`），避免右键菜单误回滚未确认的粘贴内容；
+   - 编辑页右键命中区域使用 `layout::prompt_body_rect(layout::pane_inner_rect(view.prompt))` 覆盖右侧滚动条列，且 `open_prompt_editor_menu` 返回 `bool`。
+5. **[P2-1 & P2-2] 去重 `SavePromptContent`、守卫补齐、死参数清理与测试拆分**：
+   - `open_new_page_with_content` 仅在 `state.prompt.is_dirty()` 时调用 `commit_editing_prompt`，消除 `Fork Page` / `New Page` 重复产生两条相同 `SavePromptContent` 的问题；
+   - `rename_prompt_page_title` 与 `fork_prompt_page` 校验 `ws.prompt_panel.editing == Some(owner)`，且 `insert_template_title_line` 继承模板起始行前导空格缩进；
+   - 移除 `render_header` 与 `render_toolbar` 未使用的 `_pinned: bool` 参数；将模板单元测试拆分为 `src/app/markdown/template/tests.rs`，使 `src/app/markdown/tests.rs` 控制在 1500 行上限以内。

@@ -605,3 +605,123 @@ fn fork_page_clones_content_appends_fork_to_title_and_switches_to_new_page() {
         Some(crate::ui::text::TOAST_PAGE_FORKED)
     );
 }
+
+#[test]
+fn editor_menu_select_all_focuses_prompt() {
+    let mut state = state_with_three_pages();
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
+    open_prompt_editor_menu(&mut state, (10, 10));
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.selected = 0; // SelectAll
+    }
+    activate_menu(&mut state);
+
+    assert!(state.prompt_focused(), "Select All 后焦点必须交给 prompt");
+    assert!(state.selection.is_some(), "构造覆盖全文的选区");
+}
+
+#[test]
+fn rename_page_selects_title_ending_with_variation_selector_without_crossing_brace() {
+    let mut state = AppState::demo();
+    state.prompt.resize(60, 6);
+    state
+        .prompt
+        .set_text("&&& addTemplate --start\n{title: Heart ❤️}\nbody line\n&&& addTemplate --end");
+
+    open_prompt_editor_menu(&mut state, (10, 10));
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.selected = 2; // RenamePage
+    }
+    activate_menu(&mut state);
+
+    let selected = crate::app::update::prompt_selection_text(&state).expect("标题选区");
+    assert!(
+        !selected.contains('}'),
+        "选区不得越过右花括号：{selected:?}"
+    );
+    assert!(selected.contains('❤'), "选区覆盖标题值：{selected:?}");
+
+    crate::app::update::apply_editor(&mut state, EditorCommand::InsertText("Beat".into()));
+    let text = state.prompt.text();
+    assert!(!text.contains('❤'), "打字替换标题值：{text:?}");
+    assert!(
+        text.contains("{title: Beat"),
+        "替换文本写回标题行：{text:?}"
+    );
+    assert!(text.contains('}'), "右花括号保留：{text:?}");
+}
+
+#[test]
+fn rename_page_keeps_title_cursor_visible_when_template_is_below_first_screen() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 4);
+    let mut text = String::new();
+    for index in 0..12 {
+        text.push_str(&format!("line {index}\n"));
+    }
+    text.push_str("&&& addTemplate --start\n{title: Deep Title}\nbody\n&&& addTemplate --end");
+    state.prompt.set_text(&text);
+    state.prompt.scroll_to(0);
+
+    open_prompt_editor_menu(&mut state, (10, 10));
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.selected = 2; // RenamePage
+    }
+    activate_menu(&mut state);
+
+    assert!(state.prompt.scroll() > 0, "长正文下不得把标题滚出视口");
+    assert!(
+        state.prompt.cursor_cell().is_some(),
+        "标题行必须留在视口内：scroll={}",
+        state.prompt.scroll()
+    );
+    assert_eq!(
+        crate::app::update::prompt_selection_text(&state).as_deref(),
+        Some("Deep Title")
+    );
+}
+
+#[test]
+fn rename_page_inserts_title_line_with_start_line_indent_when_missing() {
+    let mut state = AppState::demo();
+    state.prompt.resize(60, 8);
+    state
+        .prompt
+        .set_text("    &&& addTemplate --start\nbody line\n    &&& addTemplate --end");
+
+    open_prompt_editor_menu(&mut state, (10, 10));
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.selected = 2; // RenamePage
+    }
+    activate_menu(&mut state);
+
+    assert!(
+        state
+            .prompt
+            .text()
+            .contains("    &&& addTemplate --start\n    {title: }"),
+        "标题行继承起始行缩进：{:?}",
+        state.prompt.text()
+    );
+    assert_eq!(state.prompt.scroll(), 0, "标题仍在首屏时保持顶部");
+}
+
+#[test]
+fn fork_page_commits_dirty_saved_prompt_once() {
+    let mut state = state_with_three_pages();
+    state.prompt.insert_char('!');
+    state.effects.clear();
+
+    open_prompt_editor_menu(&mut state, (10, 10));
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.selected = 4; // ForkPage
+    }
+    activate_menu(&mut state);
+
+    let saves = state
+        .effects
+        .iter()
+        .filter(|effect| matches!(effect, Effect::SavePromptContent { .. }))
+        .count();
+    assert_eq!(saves, 1, "Fork 只登记一次当前页保存：{:?}", state.effects);
+}

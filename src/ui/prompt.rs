@@ -62,14 +62,7 @@ pub(crate) fn render_rule(panel: Rect, y: u16, buf: &mut Buffer, focused: bool) 
 
 /// 工具栏：模式切换按钮常显；编辑视图左组为 `[≡] [←] [→]`，
 /// 右组自右向左为 `● [refDir]`；树视图为 `[/]` + `[tmp]`；页列表视图为 `[/]`。
-fn render_toolbar(
-    panel: Rect,
-    buf: &mut Buffer,
-    prompt: &Prompt,
-    mode: PromptMode,
-    draft: bool,
-    _pinned: bool,
-) {
+fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt, mode: PromptMode, draft: bool) {
     let mode_label = match mode {
         PromptMode::Editor => text::PROMPT_MODE_LIST_LABEL,
         PromptMode::Tree | PromptMode::Pages => text::PROMPT_MODE_EDIT_LABEL,
