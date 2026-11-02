@@ -5,6 +5,7 @@
 > - `/Users/yonah/projects/agent/codex-main`（`codex-rs/codex-home/src/instructions/mod.rs`、`codex-rs/core/src/agents_md.rs`、`codex-rs/core/src/context/user_instructions.rs`）
 > - `/Users/yonah/projects/agent/opencode-dev`（`packages/core/src/plugin/identity.ts`、`packages/core/src/session/instruction-state.ts`、`packages/core/src/session/runner/to-llm-message.ts`、`packages/tui/src/util/model.ts`）
 > 执行任务清单见 [task.md](task.md)。
+> 注：`compact` / 模型切换提示 / 撤销提示的时间线渲染已由 [`docs/feature/system-event-cards/`](../system-event-cards/design.md) 取代；本文件保留系统提示词注入、模型身份与切换业务逻辑的原始设计。
 
 ---
 
