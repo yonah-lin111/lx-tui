@@ -1,8 +1,12 @@
 //! 浮层模型：右键菜单、重命名输入、关闭确认与 worktree 对话框；同一时刻最多存在一个浮层。
 
+mod text_input;
+
 use std::path::PathBuf;
 
 use crate::layout::PaneId;
+
+pub use text_input::TextInput;
 
 use super::prompt::{PromptEditing, PromptPageId};
 use super::trust::TrustWorkspace;
@@ -66,6 +70,36 @@ impl Overlay {
             Self::ReferencedFolderSearch(_) => OverlayKind::ReferencedFolderSearch,
             Self::ReferencedFolderDelete(_) => OverlayKind::ReferencedFolderDelete,
             Self::ResumeSessionEdit(_) => OverlayKind::ResumeSessionEdit,
+        }
+    }
+
+    /// 浮层内的单行输入框；无输入框的浮层返回 None。
+    pub fn input(&self) -> Option<&TextInput> {
+        match self {
+            Self::Rename(r) => Some(&r.input),
+            Self::NewWorkspace(ws) => Some(&ws.input),
+            Self::WorktreeOpen(w) => Some(&w.query),
+            Self::NewNode(n) => Some(&n.name),
+            Self::SaveDraft(d) => Some(&d.name),
+            Self::ReferencedFolderInput(i) => Some(&i.input),
+            Self::ReferencedFolderSearch(s) => Some(&s.query),
+            Self::ResumeSessionEdit(r) => Some(&r.input),
+            _ => None,
+        }
+    }
+
+    /// 浮层内的单行输入框可变引用；无输入框的浮层返回 None。
+    pub fn input_mut(&mut self) -> Option<&mut TextInput> {
+        match self {
+            Self::Rename(r) => Some(&mut r.input),
+            Self::NewWorkspace(ws) => Some(&mut ws.input),
+            Self::WorktreeOpen(w) => Some(&mut w.query),
+            Self::NewNode(n) => Some(&mut n.name),
+            Self::SaveDraft(d) => Some(&mut d.name),
+            Self::ReferencedFolderInput(i) => Some(&mut i.input),
+            Self::ReferencedFolderSearch(s) => Some(&mut s.query),
+            Self::ResumeSessionEdit(r) => Some(&mut r.input),
+            _ => None,
         }
     }
 }
@@ -523,343 +557,6 @@ impl WorktreeOpen {
             .position(|index| *index == current)
             .unwrap_or(0);
         self.selected = indices[(position + 1).min(indices.len().saturating_sub(1))];
-    }
-}
-
-/// 单行文本输入：字符缓冲与字符索引光标（范围 `0..=字符数`），可选选区锚点与撤销/重做栈。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TextInput {
-    text: String,
-    cursor: usize,
-    selection_anchor: Option<usize>,
-    undo_stack: Vec<(String, usize)>,
-    redo_stack: Vec<(String, usize)>,
-}
-
-impl TextInput {
-    /// 构造输入并预填文本，光标落在末尾。
-    pub fn new(text: impl Into<String>) -> Self {
-        let text = text.into();
-        let cursor = text.chars().count();
-        Self {
-            text,
-            cursor,
-            selection_anchor: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-        }
-    }
-
-    /// 登记当前文本和光标到撤销栈（文本发生实质变动前调用）。
-    fn push_undo(&mut self) {
-        if self.undo_stack.last().map(|(t, _)| t.as_str()) != Some(&self.text) {
-            self.undo_stack.push((self.text.clone(), self.cursor));
-            self.redo_stack.clear();
-        }
-    }
-
-    /// 撤销上一次文本修改；成功返回 true。
-    pub fn undo(&mut self) -> bool {
-        let Some((prev_text, prev_cursor)) = self.undo_stack.pop() else {
-            return false;
-        };
-        self.redo_stack.push((self.text.clone(), self.cursor));
-        self.text = prev_text;
-        self.cursor = prev_cursor.min(self.text.chars().count());
-        self.selection_anchor = None;
-        true
-    }
-
-    /// 重做上一次撤销的文本修改；成功返回 true。
-    pub fn redo(&mut self) -> bool {
-        let Some((next_text, next_cursor)) = self.redo_stack.pop() else {
-            return false;
-        };
-        self.undo_stack.push((self.text.clone(), self.cursor));
-        self.text = next_text;
-        self.cursor = next_cursor.min(self.text.chars().count());
-        self.selection_anchor = None;
-        true
-    }
-
-    /// 当前文本。
-    pub fn text(&self) -> &str {
-        &self.text
-    }
-
-    /// 光标字符索引。
-    pub fn cursor(&self) -> usize {
-        self.cursor
-    }
-
-    /// 当前选区字符范围 `[start, end)`；无选区或空选区返回 None。
-    pub fn selection(&self) -> Option<(usize, usize)> {
-        let anchor = self.selection_anchor?;
-        (anchor != self.cursor).then_some((anchor.min(self.cursor), anchor.max(self.cursor)))
-    }
-
-    /// 是否存在有效选区。
-    pub fn has_selection(&self) -> bool {
-        self.selection().is_some()
-    }
-
-    /// 获取当前选中的文本；无有效选区返回 None。
-    pub fn selected_text(&self) -> Option<String> {
-        let (start, end) = self.selection()?;
-        let start_byte = self.byte_offset(start);
-        let end_byte = self.byte_offset(end);
-        Some(self.text[start_byte..end_byte].to_string())
-    }
-
-    /// 清除选区。
-    pub fn clear_selection(&mut self) {
-        self.selection_anchor = None;
-    }
-
-    /// 直接设置选区字符区间。
-    pub fn set_selection(&mut self, start: usize, end: usize) {
-        let len = self.text.chars().count();
-        let start = start.min(len);
-        let end = end.min(len);
-        self.selection_anchor = Some(start);
-        self.cursor = end;
-    }
-
-    /// 在指定字符索引处开始选区。
-    pub fn begin_selection(&mut self, char_index: usize) {
-        let char_index = char_index.min(self.text.chars().count());
-        self.cursor = char_index;
-        self.selection_anchor = Some(char_index);
-    }
-
-    /// 按点击次数在指定字符处开始选择（1=落光标、2=选词、3=全选）。
-    pub fn begin_selection_with_clicks(&mut self, char_index: usize, clicks: u8) {
-        match clicks {
-            2 => self.select_word_at(char_index),
-            clicks if clicks >= 3 => self.select_all(),
-            _ => self.begin_selection(char_index),
-        }
-    }
-
-    /// 拖拽延伸选区到指定字符索引。
-    pub fn drag_selection(&mut self, char_index: usize) {
-        let char_index = char_index.min(self.text.chars().count());
-        if self.selection_anchor.is_none() {
-            self.selection_anchor = Some(self.cursor);
-        }
-        self.cursor = char_index;
-    }
-
-    /// 全选当前文本。
-    pub fn select_all(&mut self) {
-        self.selection_anchor = Some(0);
-        self.cursor = self.text.chars().count();
-    }
-
-    /// 选中指定字符所在单词。
-    pub fn select_word_at(&mut self, char_index: usize) {
-        let total = self.text.chars().count();
-        if total == 0 {
-            self.clear_selection();
-            self.cursor = 0;
-            return;
-        }
-        let char_index = char_index.min(total.saturating_sub(1));
-        let chars: Vec<char> = self.text.chars().collect();
-        let is_word_char = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
-        let target_word = is_word_char(chars[char_index]);
-        let mut start = char_index;
-        while start > 0
-            && is_word_char(chars[start - 1]) == target_word
-            && !chars[start - 1].is_whitespace()
-        {
-            start -= 1;
-        }
-        let mut end = char_index + 1;
-        while end < total && is_word_char(chars[end]) == target_word && !chars[end].is_whitespace()
-        {
-            end += 1;
-        }
-        self.selection_anchor = Some(start);
-        self.cursor = end;
-    }
-
-    /// 删除选中的文本区间，并把光标重置到选区起点。有选区删除返回 true。
-    pub fn delete_selected(&mut self) -> bool {
-        let Some((start, end)) = self.selection() else {
-            self.selection_anchor = None;
-            return false;
-        };
-        let start_byte = self.byte_offset(start);
-        let end_byte = self.byte_offset(end);
-        self.text.replace_range(start_byte..end_byte, "");
-        self.cursor = start;
-        self.selection_anchor = None;
-        true
-    }
-
-    /// 在光标处插入字符（有选区时先替换选区）。
-    pub fn insert_char(&mut self, ch: char) {
-        self.push_undo();
-        if let Some((start, end)) = self.selection() {
-            let start_byte = self.byte_offset(start);
-            let end_byte = self.byte_offset(end);
-            self.text.replace_range(start_byte..end_byte, "");
-            self.cursor = start;
-            self.selection_anchor = None;
-        }
-        let at = self.byte_offset(self.cursor);
-        self.text.insert(at, ch);
-        self.cursor += 1;
-    }
-
-    /// 在光标处插入一段文本（单行语义：换行与制表符替换为空格；有选区时先替换）；
-    /// 返回是否实际插入。
-    pub fn insert_str(&mut self, value: &str) -> bool {
-        let cleaned: String = value
-            .chars()
-            .map(|ch| {
-                if matches!(ch, '\n' | '\r' | '\t') {
-                    ' '
-                } else {
-                    ch
-                }
-            })
-            .filter(|ch| !ch.is_control())
-            .collect();
-        if cleaned.is_empty() {
-            return false;
-        }
-        self.push_undo();
-        if let Some((start, end)) = self.selection() {
-            let start_byte = self.byte_offset(start);
-            let end_byte = self.byte_offset(end);
-            self.text.replace_range(start_byte..end_byte, "");
-            self.cursor = start;
-            self.selection_anchor = None;
-        }
-        let at = self.byte_offset(self.cursor);
-        self.text.insert_str(at, &cleaned);
-        self.cursor += cleaned.chars().count();
-        true
-    }
-
-    /// 清空文本并把光标移到开头，清除选区。
-    pub fn clear(&mut self) {
-        if self.text.is_empty() {
-            self.selection_anchor = None;
-            return;
-        }
-        self.push_undo();
-        self.text.clear();
-        self.cursor = 0;
-        self.selection_anchor = None;
-    }
-
-    /// 删除光标前一个字符（有选区时删除整段选区）。
-    pub fn backspace(&mut self) {
-        if self.has_selection() {
-            self.push_undo();
-            self.delete_selected();
-            return;
-        }
-        if self.cursor == 0 {
-            return;
-        }
-        self.push_undo();
-        let start = self.byte_offset(self.cursor - 1);
-        let end = self.byte_offset(self.cursor);
-        self.text.replace_range(start..end, "");
-        self.cursor -= 1;
-    }
-
-    /// 删除光标处字符（有选区时删除整段选区）。
-    pub fn delete(&mut self) {
-        if self.has_selection() {
-            self.push_undo();
-            self.delete_selected();
-            return;
-        }
-        if self.cursor >= self.text.chars().count() {
-            return;
-        }
-        self.push_undo();
-        let start = self.byte_offset(self.cursor);
-        let end = self.byte_offset(self.cursor + 1);
-        self.text.replace_range(start..end, "");
-    }
-
-    /// 删除光标到行首的内容（Ctrl+U；有选区时删除选区）。
-    pub fn delete_to_line_start(&mut self) {
-        if self.has_selection() {
-            self.push_undo();
-            self.delete_selected();
-            return;
-        }
-        if self.cursor == 0 {
-            return;
-        }
-        self.push_undo();
-        let end = self.byte_offset(self.cursor);
-        self.text.replace_range(0..end, "");
-        self.cursor = 0;
-    }
-
-    /// 删除光标到行尾的内容（Ctrl+K；有选区时删除选区）。
-    pub fn delete_to_line_end(&mut self) {
-        if self.has_selection() {
-            self.push_undo();
-            self.delete_selected();
-            return;
-        }
-        let total = self.text.chars().count();
-        if self.cursor >= total {
-            return;
-        }
-        self.push_undo();
-        let start = self.byte_offset(self.cursor);
-        self.text.replace_range(start.., "");
-    }
-
-    /// 光标左移（有选区时折叠到选区开头）。
-    pub fn move_left(&mut self) {
-        if let Some((start, _)) = self.selection() {
-            self.cursor = start;
-            self.selection_anchor = None;
-        } else {
-            self.cursor = self.cursor.saturating_sub(1);
-        }
-    }
-
-    /// 光标右移（有选区时折叠到选区结尾）。
-    pub fn move_right(&mut self) {
-        if let Some((_, end)) = self.selection() {
-            self.cursor = end;
-            self.selection_anchor = None;
-        } else if self.cursor < self.text.chars().count() {
-            self.cursor += 1;
-        }
-    }
-
-    /// 光标移到开头（清除选区）。
-    pub fn move_home(&mut self) {
-        self.clear_selection();
-        self.cursor = 0;
-    }
-
-    /// 光标移到末尾（清除选区）。
-    pub fn move_end(&mut self) {
-        self.clear_selection();
-        self.cursor = self.text.chars().count();
-    }
-
-    /// 字符索引到字节偏移；越界返回文本长度。
-    fn byte_offset(&self, char_index: usize) -> usize {
-        self.text
-            .char_indices()
-            .nth(char_index)
-            .map(|(byte, _)| byte)
-            .unwrap_or(self.text.len())
     }
 }
 

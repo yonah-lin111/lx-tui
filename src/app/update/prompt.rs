@@ -983,4 +983,6 @@ pub(super) fn workspace_cwd(state: &AppState, workspace: usize) -> Option<std::p
 }
 
 #[cfg(test)]
+mod search_tests;
+#[cfg(test)]
 mod tests;

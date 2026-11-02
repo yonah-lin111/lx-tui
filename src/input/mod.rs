@@ -21,6 +21,8 @@ pub enum Routed {
     Overlay(OverlayKey),
     /// 复制 prompt 选区（无选区为全文）到系统剪贴板。
     Copy,
+    /// 剪切 prompt 选区（树/页搜索框或正文）到系统剪贴板。
+    Cut,
     /// 立即保存 prompt（Ctrl/Cmd+S）：条目落库；临时提示词走保存选择器。
     SavePrompt,
     /// 复制光标所在模板块/补充块正文到系统剪贴板。
@@ -70,6 +72,16 @@ pub enum TodoKey {
     Redo,
     /// Ctrl/Cmd+C：编辑态清空输入（列表态吞掉）。
     Clear,
+    /// Ctrl/Cmd+X：编辑态剪切选区（列表态吞掉）。
+    Cut,
+    /// Ctrl/Alt+← / Alt+B：左移一个词。
+    WordLeft,
+    /// Ctrl/Alt+→ / Alt+F：右移一个词。
+    WordRight,
+    /// Ctrl+W / Ctrl/Alt+Backspace：向前删词。
+    DeleteWordBackward,
+    /// Alt+D / Ctrl+Delete：向后删词。
+    DeleteWordForward,
 }
 
 /// todo 按键映射：只做逐键翻译；未识别的键返回 None（由 `route` 吞掉）。
@@ -83,20 +95,29 @@ fn todo_key(key: KeyEvent) -> Option<TodoKey> {
         KeyCode::Char('z' | 'Z') if ctrl && !alt => Some(TodoKey::Undo),
         KeyCode::Char('y' | 'Y') if ctrl && !alt => Some(TodoKey::Redo),
         KeyCode::Char('c' | 'C') if ctrl && !alt => Some(TodoKey::Clear),
+        KeyCode::Char('x' | 'X') if ctrl && !alt => Some(TodoKey::Cut),
         KeyCode::Char('a' | 'A') if ctrl && !alt => Some(TodoKey::LineStart),
         KeyCode::Char('e' | 'E') if ctrl && !alt => Some(TodoKey::LineEnd),
         KeyCode::Char('u' | 'U') if ctrl && !alt => Some(TodoKey::DeleteToLineStart),
         KeyCode::Char('k' | 'K') if ctrl && !alt => Some(TodoKey::DeleteToLineEnd),
+        KeyCode::Char('w' | 'W') if ctrl && !alt => Some(TodoKey::DeleteWordBackward),
+        KeyCode::Char('b' | 'B') if alt && !ctrl => Some(TodoKey::WordLeft),
+        KeyCode::Char('f' | 'F') if alt && !ctrl => Some(TodoKey::WordRight),
+        KeyCode::Char('d' | 'D') if alt && !ctrl => Some(TodoKey::DeleteWordForward),
         KeyCode::Char(' ') if !ctrl && !alt => Some(TodoKey::Space),
         KeyCode::Char(ch) if !ctrl && !alt => Some(TodoKey::Char(ch)),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => Some(TodoKey::ShiftEnter),
         KeyCode::Enter => Some(TodoKey::Enter),
         KeyCode::Esc => Some(TodoKey::Esc),
         KeyCode::Tab => Some(TodoKey::Tab),
+        KeyCode::Backspace if ctrl || alt => Some(TodoKey::DeleteWordBackward),
+        KeyCode::Delete if ctrl => Some(TodoKey::DeleteWordForward),
         KeyCode::Backspace => Some(TodoKey::Backspace),
         KeyCode::Delete => Some(TodoKey::Delete),
-        KeyCode::Left if !ctrl && !alt => Some(TodoKey::Left),
-        KeyCode::Right if !ctrl && !alt => Some(TodoKey::Right),
+        KeyCode::Left if ctrl || alt => Some(TodoKey::WordLeft),
+        KeyCode::Right if ctrl || alt => Some(TodoKey::WordRight),
+        KeyCode::Left => Some(TodoKey::Left),
+        KeyCode::Right => Some(TodoKey::Right),
         KeyCode::Up => Some(TodoKey::Up),
         KeyCode::Down => Some(TodoKey::Down),
         KeyCode::Home => Some(TodoKey::Home),
@@ -145,6 +166,15 @@ pub fn route(
             }
             return Some(Routed::Copy);
         }
+        let cut_chord = matches!(key.code, KeyCode::Char('x' | 'X'))
+            && (key.modifiers.contains(KeyModifiers::CONTROL)
+                || key.modifiers.contains(KeyModifiers::SUPER))
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT);
+        if cut_chord {
+            return Some(Routed::Cut);
+        }
         let save_chord = matches!(key.code, KeyCode::Char('s' | 'S'))
             && (key.modifiers.contains(KeyModifiers::CONTROL)
                 || key.modifiers.contains(KeyModifiers::SUPER))
@@ -189,6 +219,8 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
             // Cmd+C 与 Ctrl+C 落到同一命令：是否「清空」还是「复制」由 update 层按
             // 当前面板决定，输入层不感知状态。
             KeyCode::Char('c' | 'C') => Some(LxInput::Clear),
+            // Cmd+X：剪切输入框选区。
+            KeyCode::Char('x' | 'X') => Some(LxInput::Cut),
             _ => None,
         };
     }
@@ -203,6 +235,7 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
             'e' | 'E' => Some(LxInput::LineEnd),
             'd' | 'D' => Some(LxInput::StopProcess),
             'c' | 'C' => Some(LxInput::Clear),
+            'x' | 'X' => Some(LxInput::Cut),
             't' | 'T' => Some(LxInput::ToggleThinking),
             'z' | 'Z' if shift => Some(LxInput::Redo),
             'z' | '-' => Some(LxInput::Undo),
@@ -256,13 +289,48 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
     }
 }
 
-/// 浮层按键映射：只放行该浮层支持的键，其余返回 None（吞掉）。
-fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
-    // Super/Cmd 组合同样视为非纯文本输入（终端支持 kitty 协议时可达）。
+/// 单行输入浮层共用的文本编辑按键映射。
+fn overlay_text_edit_key(key: KeyEvent) -> Option<OverlayKey> {
     let plain = !key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let ctrl = key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
+        && !key.modifiers.contains(KeyModifiers::ALT);
+    let alt_only = key.modifiers == KeyModifiers::ALT;
+    match key.code {
+        KeyCode::Char('z' | 'Z') if ctrl && shift => Some(OverlayKey::Redo),
+        KeyCode::Char('z' | 'Z') if ctrl => Some(OverlayKey::Undo),
+        KeyCode::Char('y' | 'Y') if ctrl => Some(OverlayKey::Redo),
+        KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
+        KeyCode::Char('x' | 'X') if ctrl => Some(OverlayKey::Cut),
+        KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
+        KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
+        KeyCode::Char('u' | 'U') if ctrl => Some(OverlayKey::DeleteToLineStart),
+        KeyCode::Char('k' | 'K') if ctrl => Some(OverlayKey::DeleteToLineEnd),
+        KeyCode::Char('w' | 'W') if ctrl => Some(OverlayKey::DeleteWordBackward),
+        KeyCode::Char('b' | 'B') if alt_only => Some(OverlayKey::WordLeft),
+        KeyCode::Char('f' | 'F') if alt_only => Some(OverlayKey::WordRight),
+        KeyCode::Char('d' | 'D') if alt_only => Some(OverlayKey::DeleteWordForward),
+        KeyCode::Backspace if ctrl || alt_only => Some(OverlayKey::DeleteWordBackward),
+        KeyCode::Delete if ctrl => Some(OverlayKey::DeleteWordForward),
+        KeyCode::Backspace => Some(OverlayKey::Backspace),
+        KeyCode::Delete => Some(OverlayKey::Delete),
+        KeyCode::Left if ctrl || alt_only => Some(OverlayKey::WordLeft),
+        KeyCode::Right if ctrl || alt_only => Some(OverlayKey::WordRight),
+        KeyCode::Left if plain => Some(OverlayKey::Left),
+        KeyCode::Right if plain => Some(OverlayKey::Right),
+        KeyCode::Home => Some(OverlayKey::Home),
+        KeyCode::End => Some(OverlayKey::End),
+        KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
+        _ => None,
+    }
+}
+
+/// 浮层按键映射：只放行该浮层支持的键，其余返回 None（吞掉）。
+fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
     let ctrl = key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
@@ -295,119 +363,44 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         OverlayKind::ReferencedFolderInput => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
-            KeyCode::Char('z' | 'Z') if ctrl && shift => Some(OverlayKey::Redo),
-            KeyCode::Char('z' | 'Z') if ctrl => Some(OverlayKey::Undo),
-            KeyCode::Char('y' | 'Y') if ctrl => Some(OverlayKey::Redo),
-            KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
-            KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
-            KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
-            KeyCode::Char('u' | 'U') if ctrl => Some(OverlayKey::DeleteToLineStart),
-            KeyCode::Char('k' | 'K') if ctrl => Some(OverlayKey::DeleteToLineEnd),
-            KeyCode::Backspace => Some(OverlayKey::Backspace),
-            KeyCode::Delete => Some(OverlayKey::Delete),
-            KeyCode::Left if plain => Some(OverlayKey::Left),
-            KeyCode::Right if plain => Some(OverlayKey::Right),
-            KeyCode::Home => Some(OverlayKey::Home),
-            KeyCode::End => Some(OverlayKey::End),
-            KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
-            _ => None,
+            _ => overlay_text_edit_key(key),
         },
+        // 内容搜索：Shift+Enter 进目录，Ctrl/Cmd+C 复制高亮项引用（有选区时由事件层
+        // 优先复制选区）；其余编辑键统一走单行输入映射（Ctrl+Z 优先撤销搜索词）。
         OverlayKind::ReferencedFolderSearch => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
-            KeyCode::Enter if shift => Some(OverlayKey::EnterFolder),
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                Some(OverlayKey::EnterFolder)
+            }
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
-            // Ctrl/Cmd+Z：回退上层搜索范围（终端支持 kitty 协议时 Cmd 组合可达）。
-            KeyCode::Char('z' | 'Z') if ctrl => Some(OverlayKey::Back),
-            // Ctrl/Cmd+C：沿用参考面板语义复制高亮项引用（单行搜索框不另设选区模型）。
             KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Copy),
-            KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
-            KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
-            KeyCode::Char('u' | 'U') if ctrl => Some(OverlayKey::DeleteToLineStart),
-            KeyCode::Char('k' | 'K') if ctrl => Some(OverlayKey::DeleteToLineEnd),
-            KeyCode::Backspace => Some(OverlayKey::Backspace),
-            KeyCode::Delete => Some(OverlayKey::Delete),
-            KeyCode::Left if plain => Some(OverlayKey::Left),
-            KeyCode::Right if plain => Some(OverlayKey::Right),
-            KeyCode::Home => Some(OverlayKey::Home),
-            KeyCode::End => Some(OverlayKey::End),
-            KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
-            _ => None,
+            _ => overlay_text_edit_key(key),
         },
         OverlayKind::ConfirmClose | OverlayKind::TrustWorkspace => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
             _ => None,
         },
-        OverlayKind::Rename
-        | OverlayKind::NewWorkspace
-        | OverlayKind::NewNode
-        | OverlayKind::ResumeSessionEdit => match key.code {
+        OverlayKind::ResumeSessionEdit => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
-            KeyCode::Char('z' | 'Z') if ctrl && shift => Some(OverlayKey::Redo),
-            KeyCode::Char('z' | 'Z') if ctrl => Some(OverlayKey::Undo),
-            KeyCode::Char('y' | 'Y') if ctrl => Some(OverlayKey::Redo),
-            KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
-            KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
-            KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
-            KeyCode::Char('u' | 'U') if ctrl => Some(OverlayKey::DeleteToLineStart),
-            KeyCode::Char('k' | 'K') if ctrl => Some(OverlayKey::DeleteToLineEnd),
-            // `^D` 进入删除确认 / 确认删除（`/resume` 编辑模态）。
+            // `^D` 进入删除确认 / 确认删除。
             KeyCode::Char('d' | 'D') if ctrl => Some(OverlayKey::Remove),
-            KeyCode::Backspace => Some(OverlayKey::Backspace),
-            KeyCode::Delete => Some(OverlayKey::Delete),
-            KeyCode::Left if plain => Some(OverlayKey::Left),
-            KeyCode::Right if plain => Some(OverlayKey::Right),
-            KeyCode::Home => Some(OverlayKey::Home),
-            KeyCode::End => Some(OverlayKey::End),
-            KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
-            _ => None,
+            _ => overlay_text_edit_key(key),
         },
-        OverlayKind::WorktreeOpen => match key.code {
+        OverlayKind::Rename | OverlayKind::NewWorkspace | OverlayKind::NewNode => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            _ => overlay_text_edit_key(key),
+        },
+        OverlayKind::WorktreeOpen | OverlayKind::SaveDraft => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
-            KeyCode::Char('z' | 'Z') if ctrl && shift => Some(OverlayKey::Redo),
-            KeyCode::Char('z' | 'Z') if ctrl => Some(OverlayKey::Undo),
-            KeyCode::Char('y' | 'Y') if ctrl => Some(OverlayKey::Redo),
-            KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
-            KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
-            KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
-            KeyCode::Char('u' | 'U') if ctrl => Some(OverlayKey::DeleteToLineStart),
-            KeyCode::Char('k' | 'K') if ctrl => Some(OverlayKey::DeleteToLineEnd),
-            KeyCode::Backspace => Some(OverlayKey::Backspace),
-            KeyCode::Delete => Some(OverlayKey::Delete),
-            KeyCode::Left if plain => Some(OverlayKey::Left),
-            KeyCode::Right if plain => Some(OverlayKey::Right),
-            KeyCode::Home => Some(OverlayKey::Home),
-            KeyCode::End => Some(OverlayKey::End),
-            KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
-            _ => None,
-        },
-        OverlayKind::SaveDraft => match key.code {
-            KeyCode::Esc => Some(OverlayKey::Esc),
-            KeyCode::Enter => Some(OverlayKey::Enter),
-            KeyCode::Up => Some(OverlayKey::Up),
-            KeyCode::Down => Some(OverlayKey::Down),
-            KeyCode::Char('z' | 'Z') if ctrl && shift => Some(OverlayKey::Redo),
-            KeyCode::Char('z' | 'Z') if ctrl => Some(OverlayKey::Undo),
-            KeyCode::Char('y' | 'Y') if ctrl => Some(OverlayKey::Redo),
-            KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
-            KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
-            KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
-            KeyCode::Char('u' | 'U') if ctrl => Some(OverlayKey::DeleteToLineStart),
-            KeyCode::Char('k' | 'K') if ctrl => Some(OverlayKey::DeleteToLineEnd),
-            KeyCode::Backspace => Some(OverlayKey::Backspace),
-            KeyCode::Delete => Some(OverlayKey::Delete),
-            KeyCode::Left if plain => Some(OverlayKey::Left),
-            KeyCode::Right if plain => Some(OverlayKey::Right),
-            KeyCode::Home => Some(OverlayKey::Home),
-            KeyCode::End => Some(OverlayKey::End),
-            KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
-            _ => None,
+            _ => overlay_text_edit_key(key),
         },
     }
 }

@@ -445,6 +445,28 @@ impl Lx {
             .map(|(start, end)| self.input[start..end].to_string())
     }
 
+    /// 删除输入框当前选中的文本区间并记录一步撤销；无选区返回 false。
+    pub fn delete_selected(&mut self) -> bool {
+        let Some((start, end)) = self.text_selection_range() else {
+            self.text_selection = None;
+            return false;
+        };
+        self.refer_suppressed = false;
+        self.snapshot();
+        self.input.replace_range(start..end, "");
+        self.cursor = start;
+        self.adopt_shell_prefix();
+        self.refresh_panel();
+        true
+    }
+
+    /// 剪切输入框当前选中的文本：返回被剪切文本并将删除记入一步撤销；无选区返回 None。
+    pub fn cut_selected(&mut self) -> Option<String> {
+        let text = self.selected_text()?;
+        self.delete_selected();
+        Some(text)
+    }
+
     /// 视口单元格（视觉行、内容列）→ 输入缓冲字节偏移；越界钳到最近位置。
     pub fn offset_at_cell(&self, row: usize, col: u16) -> usize {
         let rows = self.visual_rows();

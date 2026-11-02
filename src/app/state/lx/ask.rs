@@ -820,6 +820,13 @@ impl AskEditor {
         self.0.scroll_cursor_into_view();
         true
     }
+
+    /// 剪切选中文本：返回被剪切文本并将删除记入一步撤销；无选区返回 None。
+    pub fn cut_selected(&mut self) -> Option<String> {
+        let text = self.selected_text()?;
+        self.delete_selected();
+        Some(text)
+    }
 }
 
 #[cfg(test)]

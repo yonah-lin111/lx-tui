@@ -188,6 +188,8 @@ pub struct AppState {
     pub overlay_input_drag: bool,
     /// 正在拖拽选择的 Todo 编辑输入框。
     pub todo_input_drag: bool,
+    /// 正在拖拽选择的 Prompt 树/页搜索框。
+    pub prompt_search_drag: bool,
     /// 正在拖拽选择的 Ask 手写答案输入框所在窗格。
     pub ask_input_drag: Option<PaneId>,
     /// 按下时落在**已展开卡片正文**上的目标：松开若未拖动（无选区范围）即折叠该块。
@@ -377,6 +379,7 @@ impl AppState {
             lx_input_drag: None,
             overlay_input_drag: false,
             todo_input_drag: false,
+            prompt_search_drag: false,
             ask_input_drag: None,
             lx_card_press: None,
             selection_click: None,

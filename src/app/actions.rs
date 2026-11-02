@@ -20,10 +20,16 @@ pub enum OverlayKey {
     Enter,
     Char(char),
     Clear,
+    /// Ctrl/Cmd+X：剪切当前选区（复制到剪贴板并删除，记一步撤销）。
+    Cut,
     Backspace,
     Delete,
     Left,
     Right,
+    /// Ctrl/Alt+← / Alt+B：左移一个词。
+    WordLeft,
+    /// Ctrl/Alt+→ / Alt+F：右移一个词。
+    WordRight,
     Home,
     End,
     /// Ctrl+A：移到行首。
@@ -34,6 +40,10 @@ pub enum OverlayKey {
     DeleteToLineStart,
     /// Ctrl+K：删除至行尾。
     DeleteToLineEnd,
+    /// Ctrl+W / Ctrl/Alt+Backspace：向前删词。
+    DeleteWordBackward,
+    /// Alt+D / Ctrl+Delete：向后删词。
+    DeleteWordForward,
     /// Ctrl/Cmd+Z：撤销文本编辑。
     Undo,
     /// Ctrl+Shift+Z / Ctrl+Y：重做文本编辑。
@@ -89,6 +99,8 @@ pub enum LxInput {
     Redo,
     /// Ctrl/Cmd+C：清空输入框；`/resume` 历史面板打开时改为复制高亮会话 id。
     Clear,
+    /// Ctrl/Cmd+X：剪切输入框选区（复制到剪贴板并删除，记一步撤销）。
+    Cut,
     /// Tab：md 面板打开时采纳高亮候选。
     Tab,
     /// Shift+Tab：ask 面板「上一步」（Confirm → 末题 → 上一题）。

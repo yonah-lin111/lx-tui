@@ -345,6 +345,8 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
             super::chat::open_task_page(state, pane_id);
         }
         LxInput::Down => lx.move_down(),
+        // 剪切由事件层完成（需要系统剪贴板）；此处保留为无副作用占位。
+        LxInput::Cut => {}
         // 翻页只在后台任务面板里有对象；聊天页不消费。
         LxInput::PageUp | LxInput::PageDown => {}
         // 停止进程只在后台任务面板里有对象；聊天页不消费（Ctrl+D 原本也无动作）。
@@ -562,11 +564,12 @@ fn edits_text(command: LxInput) -> bool {
             | LxInput::Undo
             | LxInput::Redo
             | LxInput::Clear
+            | LxInput::Cut
     )
 }
 
 /// 编辑后刷新 `/` 命令候选面板：行首命令位置输入 `/` 时打开/过滤。
-fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
+pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
     // Shell 模式：`/` 是命令字面值，不打开任何内置面板。
     if state
         .pane_anywhere(pane)

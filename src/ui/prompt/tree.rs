@@ -166,13 +166,70 @@ fn paint_search_row(buf: &mut Buffer, area: Rect, panel: &PromptPanel) -> Option
     x = paint_text(buf, x, area.y, " ", style::text(), area.right());
     let width = usize::from(area.right().saturating_sub(x));
     let input = widgets::input::view(panel.search.text(), panel.search.cursor(), width);
-    let (visible, text_style) = if panel.search.text().is_empty() {
-        (text::PROMPT_TREE_SEARCH_PLACEHOLDER, style::muted())
+    if panel.search.text().is_empty() {
+        paint_text(
+            buf,
+            x,
+            area.y,
+            text::PROMPT_TREE_SEARCH_PLACEHOLDER,
+            style::muted(),
+            area.right(),
+        );
     } else {
-        (input.visible, style::text())
-    };
-    paint_text(buf, x, area.y, visible, text_style, area.right());
+        paint_search_spans(
+            buf,
+            x,
+            area.y,
+            input.visible,
+            input.start_char,
+            panel.search.selection(),
+            area.right(),
+        );
+    }
     Some((x.saturating_add(input.cursor_col), area.y))
+}
+
+/// 绘制搜索框文本（含选区反色）；返回右端列。
+pub(super) fn paint_search_spans(
+    buf: &mut Buffer,
+    x: u16,
+    y: u16,
+    visible: &str,
+    start_char: usize,
+    selection: Option<(usize, usize)>,
+    right: u16,
+) -> u16 {
+    let mut x = x;
+    for span in widgets::input::build_styled_spans(visible, start_char, selection) {
+        x = paint_text(buf, x, y, span.content.as_ref(), span.style, right);
+    }
+    x
+}
+
+/// 搜索框点击列对应的全文字符索引；落在前缀图标区返回 None。
+pub fn input_char_at(area: Rect, text: &str, cursor: usize, column: u16) -> Option<usize> {
+    let text_x = area
+        .x
+        .saturating_add(width_of(text::INPUT_PREFIX_ICON) as u16)
+        .saturating_add(1);
+    if column < text_x {
+        return None;
+    }
+    let width = usize::from(area.right().saturating_sub(text_x));
+    Some(widgets::input::char_index_at_col(
+        text,
+        cursor,
+        width,
+        column - text_x,
+    ))
+}
+
+/// 树搜索框点击列对应的全文字符索引；搜索框行之外返回 None。
+pub fn search_char_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Option<usize> {
+    if !area.contains((column, row).into()) || row != area.y {
+        return None;
+    }
+    input_char_at(area, panel.search.text(), panel.search.cursor(), column)
 }
 
 /// 行前缀：各祖先层的续接线（`│` 或空格）+ 本行连接符（`├─` / `└─`）；根层为空。

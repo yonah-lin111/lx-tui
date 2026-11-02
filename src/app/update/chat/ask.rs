@@ -297,6 +297,15 @@ fn apply_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) -> boo
                 .is_some_and(|ask| ask.move_highlight(-1));
             left | moved
         }
+        // ↓ 在手写编辑框内：下移一个视觉行（已在末行时停在末尾，不离开编辑框）。
+        LxInput::Down => state
+            .pane_mut_anywhere(pane)
+            .and_then(|target| target.lx.ask.as_mut())
+            .and_then(AskState::editor_mut)
+            .is_some_and(|editor| {
+                editor.move_down();
+                true
+            }),
         // Esc：退出编辑，文本保留，不取消整轮。
         LxInput::Escape => state
             .pane_mut_anywhere(pane)

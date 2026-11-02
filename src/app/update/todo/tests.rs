@@ -984,3 +984,58 @@ fn delete_resets_double_click_sequence_and_clamps_hover() {
         "删除导致行上移后，同坐标单击不得被误判为双击进入编辑"
     );
 }
+
+#[test]
+fn todo_edit_word_operations_and_cut() {
+    let mut state = todo_state(&["hello world"]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
+
+    assert!(apply_todo_key(&mut state, TodoKey::DeleteWordBackward));
+    assert_eq!(state.todo.editing().unwrap().input.text(), "hello ");
+    assert!(apply_todo_key(&mut state, TodoKey::WordLeft));
+    assert_eq!(state.todo.editing().unwrap().input.cursor(), 0);
+    assert!(apply_todo_key(&mut state, TodoKey::WordRight));
+    assert_eq!(state.todo.editing().unwrap().input.cursor(), 5);
+
+    state.todo.edit_input_mut().unwrap().clear();
+    state
+        .todo
+        .edit_input_mut()
+        .unwrap()
+        .insert_str("hello world");
+    state.todo.edit_input_mut().unwrap().set_selection(5, 5);
+    assert!(apply_todo_key(&mut state, TodoKey::DeleteWordForward));
+    assert_eq!(state.todo.editing().unwrap().input.text(), "hello");
+
+    state.todo.edit_input_mut().unwrap().clear();
+    state
+        .todo
+        .edit_input_mut()
+        .unwrap()
+        .insert_str("hello world");
+    state.todo.edit_input_mut().unwrap().set_selection(0, 5);
+    assert!(apply_todo_key(&mut state, TodoKey::Cut));
+    assert_eq!(state.todo.editing().unwrap().input.text(), " world");
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::CopyToClipboard { text, .. } if text == "hello"
+    )));
+}
+
+#[test]
+fn todo_edit_up_down_moves_across_wrapped_rows() {
+    let mut state = todo_state(&["abcdefghij"]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
+    assert!(state.todo.sync_viewport(5, vec![1], Some(0), 5));
+    assert_eq!(state.todo.edit_text_width(), 5);
+
+    assert!(apply_todo_key(&mut state, TodoKey::Up));
+    assert_eq!(state.todo.editing().unwrap().input.cursor(), 5);
+    assert!(apply_todo_key(&mut state, TodoKey::Up));
+    assert_eq!(state.todo.editing().unwrap().input.cursor(), 0);
+    assert!(apply_todo_key(&mut state, TodoKey::Down));
+    assert_eq!(state.todo.editing().unwrap().input.cursor(), 5);
+    assert!(apply_todo_key(&mut state, TodoKey::Down));
+    assert_eq!(state.todo.editing().unwrap().input.cursor(), 10);
+    assert!(state.todo.is_editing(), "上下移动不得退出编辑态");
+}

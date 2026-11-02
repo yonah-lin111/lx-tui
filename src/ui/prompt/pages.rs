@@ -97,13 +97,36 @@ fn paint_search_row(buf: &mut Buffer, area: Rect, panel: &PromptPanel) -> Option
     let width = usize::from(area.right().saturating_sub(x));
     let search = &panel.pages_view.search;
     let input = widgets::input::view(search.text(), search.cursor(), width);
-    let (visible, text_style) = if search.text().is_empty() {
-        (text::PROMPT_PAGES_SEARCH_PLACEHOLDER, style::muted())
+    if search.text().is_empty() {
+        tree::paint_text(
+            buf,
+            x,
+            area.y,
+            text::PROMPT_PAGES_SEARCH_PLACEHOLDER,
+            style::muted(),
+            area.right(),
+        );
     } else {
-        (input.visible, style::text())
-    };
-    tree::paint_text(buf, x, area.y, visible, text_style, area.right());
+        tree::paint_search_spans(
+            buf,
+            x,
+            area.y,
+            input.visible,
+            input.start_char,
+            search.selection(),
+            area.right(),
+        );
+    }
     Some((x.saturating_add(input.cursor_col), area.y))
+}
+
+/// 页搜索框点击列对应的全文字符索引；搜索框行之外返回 None。
+pub fn search_char_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Option<usize> {
+    if !area.contains((column, row).into()) || row != area.y {
+        return None;
+    }
+    let search = &panel.pages_view.search;
+    tree::input_char_at(area, search.text(), search.cursor(), column)
 }
 
 /// 绘制单行页条目：`❯ ` + 标题（当前页加粗）+ 右对齐状态圆点。

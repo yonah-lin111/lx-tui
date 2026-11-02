@@ -1,6 +1,7 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
+use crate::app::actions::OverlayKey;
 
 #[test]
 fn text_input_prefills_cursor_at_end() {
@@ -371,4 +372,93 @@ fn menu_command_requires_confirm_for_destructive_and_cwd_actions() {
             "{cmd:?} should execute immediately without inline confirm"
         );
     }
+}
+
+#[test]
+fn text_input_word_movement_and_deletion() {
+    let mut input = TextInput::new("hello world foo");
+    input.move_word_left();
+    assert_eq!(input.cursor(), 12);
+    input.move_word_left();
+    assert_eq!(input.cursor(), 6);
+    input.move_word_right();
+    assert_eq!(input.cursor(), 11);
+    input.move_word_right();
+    assert_eq!(input.cursor(), 15);
+
+    input.move_home();
+    input.delete_word_forward();
+    assert_eq!(input.text(), " world foo");
+    input.move_end();
+    input.delete_word_backward();
+    assert_eq!(input.text(), " world ");
+}
+
+#[test]
+fn text_input_word_deletion_prefers_selection() {
+    let mut input = TextInput::new("hello world");
+    input.set_selection(6, 11);
+    input.delete_word_backward();
+    assert_eq!(input.text(), "hello ");
+
+    input.insert_str("world");
+    input.set_selection(0, 6);
+    input.delete_word_forward();
+    assert_eq!(input.text(), "world");
+}
+
+#[test]
+fn text_input_cut_selected_is_one_undo_step() {
+    let mut input = TextInput::new("hello world");
+    assert!(!input.can_undo());
+    input.set_selection(6, 11);
+    assert_eq!(input.cut_selected().as_deref(), Some("world"));
+    assert_eq!(input.text(), "hello ");
+    assert!(input.can_undo());
+    assert!(input.undo());
+    assert_eq!(input.text(), "hello world");
+    input.reset_history();
+    assert!(!input.can_undo());
+    assert!(!input.undo());
+}
+
+#[test]
+fn text_input_wrapped_up_down_moves_between_visual_rows() {
+    let mut input = TextInput::new("abcdefghij");
+    input.move_up_wrapped(5);
+    assert_eq!(input.cursor(), 5);
+    input.move_up_wrapped(5);
+    assert_eq!(input.cursor(), 0);
+    input.move_up_wrapped(5);
+    assert_eq!(input.cursor(), 0);
+
+    input.move_down_wrapped(5);
+    assert_eq!(input.cursor(), 5);
+    input.move_down_wrapped(5);
+    assert_eq!(input.cursor(), 10);
+    input.move_down_wrapped(5);
+    assert_eq!(input.cursor(), 10);
+}
+
+#[test]
+fn text_input_wrapped_up_down_respects_hard_breaks() {
+    let mut input = TextInput::new("ab\ncdef");
+    input.move_end();
+    input.move_up_wrapped(5);
+    assert_eq!(input.cursor(), 2);
+    input.move_down_wrapped(5);
+    assert_eq!(input.cursor(), 5);
+}
+
+#[test]
+fn text_input_apply_edit_key_covers_word_and_history_commands() {
+    let mut input = TextInput::new("one two");
+    assert!(input.apply_edit_key(OverlayKey::WordLeft));
+    assert_eq!(input.cursor(), 4);
+    assert!(input.apply_edit_key(OverlayKey::DeleteWordBackward));
+    assert_eq!(input.text(), "two");
+    assert!(input.apply_edit_key(OverlayKey::Undo));
+    assert_eq!(input.text(), "one two");
+    assert!(input.apply_edit_key(OverlayKey::Redo));
+    assert_eq!(input.text(), "two");
 }

@@ -47,6 +47,24 @@ pub(crate) fn handle_mouse_drag(
         *dirty = true;
         return;
     }
+    if state.prompt_search_drag {
+        let area = layout::prompt_content_rect(view.prompt);
+        let tree_mode = update::prompt_tree_mode(state);
+        let workspace = state.prompt_workspace();
+        if let Some(ws) = state.workspaces.get_mut(workspace) {
+            let input = if tree_mode {
+                &mut ws.prompt_panel.search
+            } else {
+                &mut ws.prompt_panel.pages_view.search
+            };
+            let char_idx =
+                ui::prompt::tree::input_char_at(area, input.text(), input.cursor(), mouse.column)
+                    .unwrap_or(0);
+            input.drag_selection(char_idx);
+            *dirty = true;
+        }
+        return;
+    }
     if let Some(grab) = state.referenced_search_scroll_drag {
         if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref()
             && let Some(layout) = ui::overlay::referenced_search_layout(geometry.screen, search)
@@ -437,6 +455,23 @@ pub(crate) fn handle_mouse_up_left(
             && !input.has_selection()
         {
             input.clear_selection();
+        }
+        *dirty = true;
+        return;
+    }
+    if state.prompt_search_drag {
+        state.prompt_search_drag = false;
+        let tree_mode = update::prompt_tree_mode(state);
+        let workspace = state.prompt_workspace();
+        if let Some(ws) = state.workspaces.get_mut(workspace) {
+            let input = if tree_mode {
+                &mut ws.prompt_panel.search
+            } else {
+                &mut ws.prompt_panel.pages_view.search
+            };
+            if !input.has_selection() {
+                input.clear_selection();
+            }
         }
         *dirty = true;
         return;
