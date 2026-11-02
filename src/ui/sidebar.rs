@@ -573,6 +573,7 @@ fn agent_list_items<'a>(
     items: &[AgentListItem],
     width: usize,
 ) -> Vec<ListItem<'a>> {
+    let active_tab = state.active_workspace().active_tab;
     let focused = state.active_tab().layout.focus();
     let mut rows = Vec::with_capacity(items.len());
     for (slot, item) in items.iter().enumerate() {
@@ -582,7 +583,7 @@ fn agent_list_items<'a>(
         } else {
             Style::default()
         };
-        let marker = if item.pane_id == focused {
+        let marker = if item.tab_index == active_tab && item.pane_id == focused {
             format!("{} ", text::AGENT_SELECTED_MARKER)
         } else {
             "  ".to_string()
