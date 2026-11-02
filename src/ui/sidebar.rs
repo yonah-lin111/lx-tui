@@ -573,11 +573,7 @@ fn agent_list_items<'a>(
     items: &[AgentListItem],
     width: usize,
 ) -> Vec<ListItem<'a>> {
-    // 只有主区真正持有焦点时，Agents 列表才标出「当前聚焦窗格」；
-    // 右侧容器或侧栏自己持焦点时主区没有焦点，不该再标。
-    let focused = state
-        .panes_focused()
-        .then(|| state.active_tab().layout.focus());
+    let focused = state.active_tab().layout.focus();
     let mut rows = Vec::with_capacity(items.len());
     for (slot, item) in items.iter().enumerate() {
         let snapshot = &item.snapshot;
@@ -586,7 +582,7 @@ fn agent_list_items<'a>(
         } else {
             Style::default()
         };
-        let marker = if focused == Some(item.pane_id) {
+        let marker = if item.pane_id == focused {
             format!("{} ", text::AGENT_SELECTED_MARKER)
         } else {
             "  ".to_string()

@@ -137,8 +137,22 @@ fn selected_agent_row_uses_symbol_marker_without_color() {
         "marker has no background"
     );
 
-    // prompt 持有键盘焦点时窗格不处于聚焦态，标记让位为空列。
-    state.set_focus(crate::app::state::FocusedContainer::Prompt);
+    // 切换到其他容器（Prompt / Todo / Sidebar）时，当前激活窗格的 Agent 仍保留行首 `❯` 标记。
+    for container in [
+        crate::app::state::FocusedContainer::Prompt,
+        crate::app::state::FocusedContainer::Todo,
+        crate::app::state::FocusedContainer::Sidebar,
+    ] {
+        state.set_focus(container);
+        let row = agents_row_text(&state);
+        assert!(
+            row.starts_with(&format!("{} ", text::AGENT_SELECTED_MARKER)),
+            "active pane agent must keep marker when {container:?} is focused: {row:?}"
+        );
+    }
+
+    // 切换到其它无该 Agent 的标签/窗格时，非当前聚焦窗格的条目让出标记列为空格。
+    update::create_tab(&mut state);
     let row = agents_row_text(&state);
     assert!(
         !row.contains(text::AGENT_SELECTED_MARKER),
