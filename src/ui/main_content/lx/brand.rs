@@ -136,6 +136,7 @@ fn pixel_glyph(top: char, bottom: char) -> Option<(char, Style)> {
 }
 
 /// 首页资源计数：`1 AGENTS.md · 4 mcp · 3 skills`；失败追加 `1 error`。
+/// 窄窗格容不下全段时优先省略左侧 `AGENTS.md`，保留核心 `mcp · skills`。
 pub(super) fn draw_inventory(grid: &mut Grid, rect: Rect, counts: StartupCounts) {
     if rect.width == 0 {
         return;
@@ -151,13 +152,22 @@ pub(super) fn draw_inventory(grid: &mut Grid, rect: Rect, counts: StartupCounts)
         text::LX_HOME_SKILLS,
         style::chat_tool_param(),
     );
-    let mut segments: Vec<(String, Style)> = vec![agents_md, sep.clone()];
-    segments.extend(mcp);
-    segments.push(sep);
-    segments.extend(skills);
+    let mut core_segments: Vec<(String, Style)> = mcp;
+    core_segments.push(sep.clone());
+    core_segments.extend(skills);
+
+    let mut full_segments: Vec<(String, Style)> = vec![agents_md, sep];
+    full_segments.extend(core_segments.iter().cloned());
+
+    let full_width: usize = full_segments.iter().map(|(value, _)| value.width()).sum();
+    let segments = if full_width <= usize::from(rect.width) {
+        full_segments
+    } else {
+        core_segments
+    };
     let width: usize = segments.iter().map(|(value, _)| value.width()).sum();
     let width = u16::try_from(width).unwrap_or(u16::MAX);
-    // 超宽时从左边起画，后面的段由 Grid 自然裁掉。
+    // 放得下时居中绘制；极窄超宽时从左起按剩余列宽截断。
     let mut x = if width > rect.width {
         rect.x
     } else {

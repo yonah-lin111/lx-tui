@@ -145,7 +145,7 @@
 - `ui/` 只接收 `&AppState`（及只读派生），命中几何与绘制共享纯函数；不在渲染中读取数据库、配置文件或执行网络请求。历史增量以 buffer/geometry 测试覆盖宽/窄/极矮、中文宽字符、长模型名、折叠 thinking、在途流与用量未知；实际终端观感由用户 `cargo run` 确认。
 
 - **工具树折叠/展开与配色**：每个可折叠块独立，点击一块只切换该块（参数块与结果块不得整卡联动）；`├─` 块展开后的续行保留 `│`，`└─` 块展开后的续行使用等宽空白、不补 `│`；`└─` 输出与汇报内容（命令输出、MCP 结果、子 agent 汇报、压缩摘要）在折叠与展开态下统一采用思考块同款的压暗 markdown 格式（`markdown_render::render_wrapped` + `span_style.patch(style::muted())`），`search` 命中行与附属标签（`Report:`、`Send input` 输入预览、`(no output)`）恒定保持 `style::muted()`，移除展开后恢复为默认亮白前景 `style::text()` 的行为。MCP 卡片的参数块用 `CardSection::Body`、结果块用 `CardSection::Output`，两者点击面互不覆盖。该规则对所有工具卡片生效。
-- **首页资源计数**：logo 与 Tip 之间的空行实时显示 `K AGENTS.md · N mcp · M skills`（`AGENTS.md` 品牌冰蓝、`mcp` 翡翠绿、`skills` 浅黄）；MCP 与 skills 随后台握手/扫描完成实时递增，不阻塞显示 `loading mcp`，失败或待登录追加 `N mcp E error(s)`（错误为红色）。输入框上方 loading 行不再承载 MCP/skill 装载状态。
+- **首页资源计数**：logo 与 Tip 之间的空行实时显示 `K AGENTS.md · N mcp · M skills`（`AGENTS.md` 品牌冰蓝、`mcp` 翡翠绿、`skills` 浅黄）；不再显示阻塞式的 `loading mcp`，直接展示当前已就绪数量并在后台握手/扫描更新时响应式刷新，失败或待登录追加 `N mcp E error(s)`（错误为红色）；窄窗格容不下全段时优先省略左侧 `AGENTS.md`，完整保留 `mcp · skills`。输入框上方 loading 行不再承载 MCP/skill 装载状态。
 - **Skill 候选归属**：`/` 命令面板只列保留命令；skill 由 `@` 面板列出（`◆` 图标 + `Skill · description`），确认后插入 `@[refer-skill](<SKILL.md 绝对路径>)`，不再写入普通文件提及。
 
 ## lx 本地命令（shell 模式）

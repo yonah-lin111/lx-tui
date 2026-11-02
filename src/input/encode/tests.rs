@@ -296,6 +296,29 @@ fn encodes_ghostty_aligned_legacy_modified_keys_for_tui_agents() {
         ),
         Some(vec![0x08])
     );
+    // Ctrl+- 映射为 0x1f（兼容 claude / readline 撤销），Ctrl+~ 映射为 0x1e，
+    // 无 C0 映射的 Ctrl+. 回退发 CSI u（\x1b[46;5u）避免误输入 `.`。
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('-'), KeyModifiers::CONTROL),
+            legacy
+        ),
+        Some(vec![0x1f])
+    );
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('~'), KeyModifiers::CONTROL),
+            legacy
+        ),
+        Some(vec![0x1e])
+    );
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('.'), KeyModifiers::CONTROL),
+            legacy
+        ),
+        Some(b"\x1b[46;5u".to_vec())
+    );
     // Ctrl+Shift+<字母> 走 fixterms CSI u。
     assert_eq!(
         encode_key(
@@ -325,8 +348,12 @@ fn encodes_kitty_csi_u_keys_for_opencode_codex_and_claude() {
         encode_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL), kitty),
         Some(b"\x1b[13;5u".to_vec())
     );
-    // 无修饰 Enter 保持 `\r`，避免破坏普通交互。
+    // 无修饰 Enter 保持 `\r`，避免破坏普通交互；无修饰 Esc 在 Kitty 模式下编码为 `\x1b[27u` 消除前缀歧义。
     assert_eq!(encode_key(key(KeyCode::Enter), kitty), Some(b"\r".to_vec()));
+    assert_eq!(
+        encode_key(key(KeyCode::Esc), kitty),
+        Some(b"\x1b[27u".to_vec())
+    );
     // Shift+Tab（Tab+SHIFT 与 BackTab）在 Kitty 下编码为 `\x1b[9;2u`。
     assert_eq!(
         encode_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT), kitty),

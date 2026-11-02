@@ -43,7 +43,7 @@
 src/
   chat/
     agent/
-      instructions.rs         新增 count_active_instructions(user_root, project_root, cwd, workspace_trusted) -> usize 辅助函数（复用 load_instructions）
+      instructions.rs         LoadedInstructions 新增 pub fn active_count(&self) -> usize 方法（与 load_instructions 同源统计生效指令文件数）
   app/
     state/
       lx.rs                   StartupCounts 新增 pub agents_md: usize 字段；更新注释
@@ -256,21 +256,45 @@ pub(crate) fn update_mcp_status(
     );
 }
 
+/// 当前所有打开工作区的 `AGENTS.md` 作用域指纹（`(config_root, workspace_root, trusted)`），
+/// 与 `chat::start_stream` 的指令加载口径完全一致。
+pub(crate) fn agents_md_scopes(
+    state: &AppState,
+    persistence: &Persistence,
+) -> Vec<(Option<PathBuf>, Option<PathBuf>, bool)> {
+    let mut scopes = Vec::with_capacity(state.workspaces.len());
+    for workspace in &state.workspaces {
+        let config_root = workspace
+            .repo_key()
+            .map(Path::to_path_buf)
+            .or_else(|| workspace.cwd.clone());
+        let workspace_root = workspace.cwd.clone();
+        let trusted = workspace_root
+            .as_deref()
+            .is_some_and(|cwd| persistence.is_trusted(cwd))
+            || config_root
+                .as_deref()
+                .is_some_and(|root| persistence.is_trusted(root));
+        let entry = (config_root, workspace_root, trusted);
+        if !scopes.contains(&entry) {
+            scopes.push(entry);
+        }
+    }
+    scopes
+}
+
 /// 刷新所有打开工作区的生效 `AGENTS.md` 文件数量（全局 `~/.lx-t[-dev]` + 已信任项目目录链）。
 pub(crate) fn refresh_agents_md(state: &mut AppState, persistence: &Persistence) {
     let user_root = crate::config::user_data_root().ok();
-    for root in skill_roots(state) {
-        let trusted = root
-            .as_deref()
-            .is_some_and(|path| persistence.is_trusted(path));
-        let loaded = crate::chat::agent::load_instructions(
+    for (config_root, workspace_root, trusted) in agents_md_scopes(state, persistence) {
+        let count = crate::chat::agent::load_instructions(
             user_root.as_deref(),
-            root.as_deref(),
-            root.as_deref(),
+            config_root.as_deref(),
+            workspace_root.as_deref(),
             trusted,
-        );
-        let count = usize::from(loaded.global_source.is_some()) + loaded.project_sources.len();
-        state.agents_md_inventory.insert(root, count);
+        )
+        .active_count();
+        state.agents_md_inventory.insert(workspace_root, count);
     }
 }
 ```
@@ -283,14 +307,15 @@ pub(crate) fn refresh_agents_md(state: &mut AppState, persistence: &Persistence)
   ```
 - 在 `src/ui/style.rs` 新增：
   ```rust
+  pub const LX_SKY_BLUE: Color = Color::Indexed(117);
+
   /// 首页 `AGENTS.md` 资源计数：品牌冰蓝（与 `mcp` 翡翠绿、`skills` 浅黄区分）。
   pub fn chat_agents_md() -> Style {
-      Style::default().fg(Color::Indexed(117))
+      Style::default().fg(LX_SKY_BLUE)
   }
   ```
-- 在 `src/ui/main_content/lx/brand.rs` 中重构 `draw_inventory` 与 `inventory_parts`：
+- 在 `src/ui/main_content/lx/brand.rs` 中重构 `draw_inventory` 与 `inventory_parts`（窄窗格容不下全段时优先省略左侧 `AGENTS.md`，完整保留 `mcp · skills`）：
   ```rust
-  /// 首页资源计数：`1 AGENTS.md · 4 mcp · 3 skills`；失败追加 `1 error`。
   pub(super) fn draw_inventory(grid: &mut Grid, rect: Rect, counts: StartupCounts) {
       if rect.width == 0 {
           return;
@@ -306,13 +331,21 @@ pub(crate) fn refresh_agents_md(state: &mut AppState, persistence: &Persistence)
           text::LX_HOME_SKILLS,
           style::chat_tool_param(),
       );
-      let mut segments: Vec<(String, Style)> = vec![agents_md, sep.clone()];
-      segments.extend(mcp);
-      segments.push(sep);
-      segments.extend(skills);
+      let mut core_segments: Vec<(String, Style)> = mcp;
+      core_segments.push(sep.clone());
+      core_segments.extend(skills);
+
+      let mut full_segments: Vec<(String, Style)> = vec![agents_md, sep];
+      full_segments.extend(core_segments.iter().cloned());
+
+      let full_width: usize = full_segments.iter().map(|(value, _)| value.width()).sum();
+      let segments = if full_width <= usize::from(rect.width) {
+          full_segments
+      } else {
+          core_segments
+      };
       let width: usize = segments.iter().map(|(value, _)| value.width()).sum();
       let width = u16::try_from(width).unwrap_or(u16::MAX);
-      // 超宽时从左边起画，后面的段由 Grid 自然裁掉。
       let mut x = if width > rect.width {
           rect.x
       } else {
@@ -389,60 +422,51 @@ let term = Term::new(
 对齐 Ghostty（`src/input/key_encode.zig`、`src/input/function_keys.zig`、`src/input/kitty.zig`）与 `herdr`（`src/input/encode.rs`）：
 
 1. **前置过滤**：
-   - `KeyModifiers::SUPER`（macOS `Cmd`）继续返回 `None`，绝不泄漏进 PTY；
+   - Legacy 模式下，`KeyModifiers::SUPER`（macOS `Cmd`）直接返回 `None`，绝不泄漏进普通 shell；
+   - Kitty 协议激活时（`DISAMBIGUATE_ESC_CODES | REPORT_ALL_KEYS_AS_ESC`），除纯 `Super+C`（无选区时不透传以免在 `claude` 中误插入 `'c'`）外，其余 `Super` 组合键（如 `opencode` 的 `Super+Z` 撤销、`Super+Shift+Z` 重做、`Super+A` 全选、`Super+方向键`）按 `CSI u`（modifier `+8`）完整转发；
    - `KeyEventKind::Release` 继续在路由层丢弃（宿主 `crossterm` 仅开启 `DISAMBIGUATE_ESCAPE_CODES`，不订阅 `Release`）。
 2. **`KeyCode::BackTab` 归一化**：
    - 宿主终端在 Kitty 模式下按下 `Shift+Tab` 可能由 `crossterm` 报告为 `KeyCode::BackTab`（带或不带 `SHIFT`）或 `KeyCode::Tab` + `KeyModifiers::SHIFT`。统一将 `KeyCode::BackTab` 归一化为 `KeyCode::Tab` + `modifiers | KeyModifiers::SHIFT` 处理。
-3. **当子终端启用了 Kitty 协议（`mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL)`）**：
-   - **普通文本直接输出**：当 `KeyCode::Char(c)` 不含 `CONTROL` 与 `ALT`（即 `modifiers.is_empty()` 或 `modifiers == KeyModifiers::SHIFT`），且未开启 `TermMode::REPORT_ALL_KEYS_AS_ESC` 时，直接输出 `c` 的 UTF-8 字节（确保大写字母与 `!@#$%^&*()` 等上档符号原样输入）；
-   - **无修饰基础键保持传统兼容编码**：当 `modifiers.is_empty()` 且未开启 `TermMode::REPORT_ALL_KEYS_AS_ESC` 时，`Enter` → `\r`、`Tab` → `\t`、`Backspace` → `0x7f`（`Esc` 在 `DISAMBIGUATE_ESC_CODES` 下或带修饰键时编码为 `\x1b[27u` / `\x1b[27;{mod}u`，无修饰时 `\x1b` 亦可被所有 TUI 识别，保持 `\x1b` 最兼容）；
+3. **当子终端启用了 Kitty 协议（`mode.intersects(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALL_KEYS_AS_ESC)`）**：
+   - **普通文本直接输出**：当 `KeyCode::Char(c)` 不含 `CONTROL`、`ALT`、`SUPER`（即 `modifiers.is_empty()` 或 `modifiers == KeyModifiers::SHIFT`），且未开启 `TermMode::REPORT_ALL_KEYS_AS_ESC` 时，直接输出 `c` 的 UTF-8 字节（确保大写字母与 `!@#$%^&*()` 等上档符号原样输入）；
+   - **无修饰基础键保持传统兼容编码**：当 `modifiers.is_empty()` 且未开启 `TermMode::REPORT_ALL_KEYS_AS_ESC` 时，`Enter` → `\r`、`Tab` → `\t`、`Backspace` → `0x7f`；`Esc` 在 Kitty 模式下统一编码为 `\x1b[27u`（消除与 `Alt+<key>` 前缀的 20ms 歧义）；
    - **方向键 / 导航键 / F1–F12**：继续使用全终端通用的 xterm 修饰格式（`\x1b[1;{mod}A..D`、`\x1b[{code};{mod}~`）；
-   - **带修饰键的 `Enter` / `Tab` / `Backspace` / `Esc` / `Char`**：编码为标准 `CSI u` 格式 `\x1b[{codepoint};{param}u`：
+   - **带修饰键的 `Enter` / `Tab` / `Backspace` / `Esc` / `Char`**：对齐 Ghostty 与 `herdr` 统一编码为标准 `CSI u` 格式 `\x1b[{codepoint};{param}u`：
      - `Enter` = `13`（如 `Shift+Enter` → `\x1b[13;2u`、`Alt+Enter` → `\x1b[13;3u`、`Ctrl+Enter` → `\x1b[13;5u`）
      - `Tab` = `9`（如 `Shift+Tab` → `\x1b[9;2u`）
      - `Backspace` = `127`（如 `Alt+Backspace` → `\x1b[127;3u`、`Ctrl+Backspace` → `\x1b[127;5u`）
-     - `Esc` = `27`（如 `Shift+Esc` → `\x1b[27;2u`、`Alt+Esc` → `\x1b[27;3u`）
-     - `Char(c)`：基准码点取 `c.to_ascii_lowercase() as u32`（ASCII 字母）或 `c as u32`；注意：**对于单纯的 `Ctrl+J`（`KeyCode::Char('j')` + `KeyModifiers::CONTROL`），在未开启 `REPORT_ALL_KEYS_AS_ESC` 时保留经典的 `0x0a` (`\n`) 或在 Kitty 下发 `\x1b[106;5u`？**
-       - 核查结论：在 `opencode` 与 `codex` 中，`0x0a` (`\n`) 和 `\x1b[106;5u` 都能触发换行；而在 `claude`（`openclaude`）中，如果开启了 `\x1b[>1u`（仅 `DISAMBIGUATE_ESC_CODES`），`claude` 的 `handleCtrl` 未绑定 `'j'`，收到 `\x1b[106;5u` 会被吞掉，只有收到 `0x0a` (`\n`) 才会换行！更重要的是，按照 Kitty 键盘协议官方规范（[Kitty Keyboard Protocol — Disambiguate escape codes](https://sw.kovidgoyal.net/kitty/keyboard-protocol/#disambiguate-escape-codes)），在仅开启 `DISAMBIGUATE_ESC_CODES` 时，`Ctrl+a..z` 的 legacy C0 控制码只有与传统键冲突的 `Ctrl+I` (Tab)、`Ctrl+M` (Enter)、`Ctrl+[` (Esc) 以及带 `Shift`/`Alt` 的组合键（如 `Ctrl+Shift+A`）才必须转成 `CSI u`，其余单纯的 `Ctrl+<a..z>`（不含 `Shift`/`Alt`）只有在开启 `REPORT_ALL_KEYS_AS_ESC` 时才转 `CSI u`！
-       - 这意味着：**当仅含 `CONTROL`（无 `SHIFT`、无 `ALT`）且未开启 `REPORT_ALL_KEYS_AS_ESC` 时，普通 `Ctrl+A..Z`（除 `i`/`m`/`[` 外）继续发送标准 C0 控制字节（`Ctrl+C` = `0x03`, `Ctrl+J` = `0x0a`, `Ctrl+D` = `0x04`, `Ctrl+Z` = `0x1a` 等），而 `Ctrl+Shift+<char>`、`Ctrl+Alt+<char>`、`Ctrl+I`、`Ctrl+M` 则发送 `CSI u`（`\x1b[{cp};{mod}u`）！** 这样既 100% 兼容 `claude` 的 `Ctrl+J` 与 C0 控制键，又让 `Ctrl+Shift+<key>`、`Ctrl+M`、`Ctrl+I`、`Shift+Enter`、`Alt+Enter`、`Shift+Tab`、`Alt+Backspace` 在三大 Agent 中全部完美工作！
-4. **当子终端处于 Legacy 模式（`!mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL)`）**：
+     - `Esc` = `27`（如无修饰 `Esc` → `\x1b[27u`、`Shift+Esc` → `\x1b[27;2u`、`Alt+Esc` → `\x1b[27;3u`）
+     - `Char(c)`：基准码点取 `c.to_ascii_lowercase() as u32`（ASCII 字母）或 `c as u32`，所有带 `Ctrl` / `Alt` / `Super` 修饰的字符键统一编码为 `CSI u`（如 `Super+Z` → `\x1b[122;9u`、`Super+Shift+Z` → `\x1b[122;10u`、`Ctrl+Z` → `\x1b[122;5u`、`Ctrl+-` → `\x1b[45;5u`、`Ctrl+.` → `\x1b[46;5u`）。
+4. **当子终端处于 Legacy 模式（未开启 `DISAMBIGUATE_ESC_CODES | REPORT_ALL_KEYS_AS_ESC`）**：
    - 对齐 Ghostty `src/input/function_keys.zig` 的默认表：
-     - `Enter`：
-       - 无修饰 → `\r`
-       - `ALT`（无 `SHIFT`/`CONTROL`）→ `\x1b\r`
-       - 含 `SHIFT` 或 `CONTROL`（如 `Shift+Enter`、`Ctrl+Enter`、`Ctrl+Shift+Enter`、`Alt+Shift+Enter`）→ `\x1b[27;{param};13~`（其中 `Shift+Enter` 为 `\x1b[27;2;13~`，`Ctrl+Enter` 为 `\x1b[27;5;13~`）
-     - `Tab` / `BackTab`：
-       - 无修饰 → `\t`
-       - 含 `SHIFT`（`Shift+Tab` / `BackTab`）→ `\x1b[Z`
-       - 仅 `ALT` → `\x1b\t`
-       - 含 `CONTROL` → `\x1b[27;{param};9~`
-     - `Backspace`：
-       - 无修饰 → `0x7f`
-       - `ALT` + `CONTROL` → `\x1b\x08`
-       - 仅 `ALT` → `\x1b\x7f`
-       - 仅 `CONTROL` → `\x08`
-       - 含 `SHIFT` → `\x1b[27;{param};127~`
-     - `Esc`：
-       - 无修饰 → `\x1b`
-       - 仅 `ALT` → `\x1b\x1b`
-       - 含 `SHIFT` 或 `CONTROL` → `\x1b[27;{param};27~`
-     - `Char(c)`：
-       - 若同时含 `CONTROL` 与 `SHIFT`（如 `Ctrl+Shift+A`）：对齐 Ghostty `legacy()` 的 fixterms 分支，编码为 `\x1b[{lower_cp};{param}u`（如 `\x1b[97;6u`）；
-       - 否则保持标准 Legacy 编码（含 `ALT` 前置 `0x1b`，含 `CONTROL` 走 `control_byte(c)`）。
+     - `Enter`：无修饰 → `\r`；仅 `ALT` → `\x1b\r`；含 `SHIFT` 或 `CONTROL` → `\x1b[27;{param};13~`
+     - `Tab` / `BackTab`：无修饰 → `\t`；仅 `SHIFT` → `\x1b[Z`；仅 `ALT` → `\x1b\t`；含 `CONTROL` → `\x1b[27;{param};9~`
+     - `Backspace`：无修饰 → `0x7f`；`ALT+CONTROL` → `\x1b\x08`；仅 `ALT` → `\x1b\x7f`；仅 `CONTROL` → `\x08`；含 `SHIFT` → `\x1b[27;{param};127~`
+     - `Esc`：无修饰 → `\x1b`；仅 `ALT` → `\x1b\x1b`；含 `SHIFT` 或 `CONTROL` → `\x1b[27;{param};27~`
+     - `Char(c)`：若同时含 `CONTROL` 与 `SHIFT` 或无传统 C0 控制码的 ASCII 符号（如 `Ctrl+.`），回退发 `\x1b[{lower_cp};{param}u`；否则发送标准 C0 控制字节（含 `'~' -> 0x1e`、`'-' -> 0x1f`）。
 
 #### 3.2.4 关键代码实现（`src/input/encode.rs`）
 
 ```rust
 pub fn encode_key(key: KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
+    let kitty = mode.intersects(
+        TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALL_KEYS_AS_ESC,
+    );
+    let report_all = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
+
     if key.modifiers.contains(KeyModifiers::SUPER) {
-        return None;
+        if !kitty
+            || (key.modifiers == KeyModifiers::SUPER
+                && matches!(key.code, KeyCode::Char('c' | 'C')))
+        {
+            return None;
+        }
     }
+
     let (code, modifiers) = match key.code {
         KeyCode::BackTab => (KeyCode::Tab, key.modifiers | KeyModifiers::SHIFT),
         other => (other, key.modifiers),
     };
-    let kitty = mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL);
-    let report_all = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
 
     match code {
         KeyCode::Char(c) => Some(encode_char(c, modifiers, kitty, report_all)),
@@ -463,152 +487,6 @@ pub fn encode_key(key: KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
         KeyCode::F(number) => function_key(number, modifiers),
         _ => None,
     }
-}
-
-fn csi_u(codepoint: u32, modifiers: KeyModifiers) -> Vec<u8> {
-    let param = modifier_param(modifiers);
-    if param == 1 {
-        format!("\x1b[{codepoint}u").into_bytes()
-    } else {
-        format!("\x1b[{codepoint};{param}u").into_bytes()
-    }
-}
-
-fn modify_other_key(codepoint: u32, modifiers: KeyModifiers) -> Vec<u8> {
-    let param = modifier_param(modifiers);
-    format!("\x1b[27;{param};{codepoint}~").into_bytes()
-}
-
-fn encode_enter(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
-    if modifiers.is_empty() {
-        return if report_all {
-            csi_u(13, modifiers)
-        } else {
-            vec![b'\r']
-        };
-    }
-    if kitty {
-        return csi_u(13, modifiers);
-    }
-    if modifiers == KeyModifiers::ALT {
-        vec![0x1b, b'\r']
-    } else {
-        modify_other_key(13, modifiers)
-    }
-}
-
-fn encode_tab(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
-    if modifiers.is_empty() {
-        return if report_all {
-            csi_u(9, modifiers)
-        } else {
-            vec![b'\t']
-        };
-    }
-    if kitty {
-        return csi_u(9, modifiers);
-    }
-    if modifiers == KeyModifiers::SHIFT {
-        b"\x1b[Z".to_vec()
-    } else if modifiers == KeyModifiers::ALT {
-        vec![0x1b, b'\t']
-    } else {
-        modify_other_key(9, modifiers)
-    }
-}
-
-fn encode_backspace(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
-    if modifiers.is_empty() {
-        return if report_all {
-            csi_u(127, modifiers)
-        } else {
-            vec![0x7f]
-        };
-    }
-    if kitty {
-        return csi_u(127, modifiers);
-    }
-    if modifiers == KeyModifiers::ALT {
-        vec![0x1b, 0x7f]
-    } else if modifiers == KeyModifiers::CONTROL {
-        vec![0x08]
-    } else if modifiers == (KeyModifiers::ALT | KeyModifiers::CONTROL) {
-        vec![0x1b, 0x08]
-    } else {
-        modify_other_key(127, modifiers)
-    }
-}
-
-fn encode_esc(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
-    if modifiers.is_empty() {
-        return if report_all {
-            csi_u(27, modifiers)
-        } else {
-            vec![0x1b]
-        };
-    }
-    if kitty {
-        return csi_u(27, modifiers);
-    }
-    if modifiers == KeyModifiers::ALT {
-        vec![0x1b, 0x1b]
-    } else {
-        modify_other_key(27, modifiers)
-    }
-}
-
-fn encode_char(c: char, modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
-    let has_ctrl = modifiers.contains(KeyModifiers::CONTROL);
-    let has_alt = modifiers.contains(KeyModifiers::ALT);
-    let has_shift = modifiers.contains(KeyModifiers::SHIFT);
-
-    // 无 Ctrl/Alt 的普通或 Shift 可打印字符：除非开启 REPORT_ALL_KEYS_AS_ESC，一律发 UTF-8 文本。
-    if !has_ctrl && !has_alt {
-        if report_all {
-            let base = if has_shift && c.is_ascii_uppercase() {
-                c.to_ascii_lowercase() as u32
-            } else {
-                c as u32
-            };
-            return csi_u(base, modifiers);
-        }
-        let mut buffer = [0u8; 4];
-        return c.encode_utf8(&mut buffer).as_bytes().to_vec();
-    }
-
-    let base_codepoint = if c.is_ascii_alphabetic() {
-        c.to_ascii_lowercase() as u32
-    } else {
-        c as u32
-    };
-
-    // Ctrl+Shift+<char>：Legacy C0 无法表达 Shift，对齐 Ghostty 统一走 CSI u。
-    if has_ctrl && has_shift {
-        return csi_u(base_codepoint, modifiers);
-    }
-
-    // Kitty 协议激活时：
-    // - 开启 REPORT_ALL_KEYS_AS_ESC：所有 Ctrl/Alt 组合均走 CSI u；
-    // - 仅开启 DISAMBIGUATE_ESC_CODES：Alt 组合与存在歧义的 Ctrl+I / Ctrl+M / Ctrl+[ 走 CSI u，
-    //   其余单纯 Ctrl+a..z 保持 C0 控制字节（确保 claude 的 Ctrl+J = 0x0a 换行及 shell 信号兼容）。
-    if kitty {
-        let ambiguous_ctrl = matches!(c.to_ascii_lowercase(), 'i' | 'm' | '[');
-        if report_all || has_alt || ambiguous_ctrl {
-            return csi_u(base_codepoint, modifiers);
-        }
-    }
-
-    let mut bytes = Vec::new();
-    if has_alt {
-        bytes.push(0x1b);
-    }
-    if has_ctrl {
-        bytes.push(control_byte(c));
-    } else {
-        let mut buffer = [0u8; 4];
-        bytes.extend_from_slice(c.encode_utf8(&mut buffer).as_bytes());
-    }
-    bytes
 }
 ```
 

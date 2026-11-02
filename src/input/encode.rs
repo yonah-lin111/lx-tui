@@ -5,10 +5,13 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventK
 
 /// 把按键编码为写入 PTY 的字节；不支持的按键返回 None。
 ///
-/// Super（Cmd）组合只属于应用级快捷键，绝不写入 PTY；kitty 键盘协议下尤其重要，
-/// 否则 Cmd+C 会被当作普通 `c` 打进 shell。
+/// Legacy 终端下拦截全部 Super（Cmd）组合，防止把 Cmd+C/Cmd+Z 当成普通字符打进 shell；
+/// Kitty 键盘协议（`DISAMBIGUATE_ESC_CODES` / `REPORT_ALL_KEYS_AS_ESC`）激活时，除纯 Super+C
+/// 保留给宿主复制选区外，其余 Super 组合（如 Super+Z 撤销、Super+Shift+Z 重做、Super+A 全选）
+/// 按 `CSI u` 编码转发给子 TUI。
 pub fn encode_key(key: KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
-    let kitty = mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL);
+    let kitty =
+        mode.intersects(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALL_KEYS_AS_ESC);
     let report_all = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
 
     if key.modifiers.contains(KeyModifiers::SUPER) {
@@ -235,17 +238,12 @@ fn encode_backspace(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> V
 }
 
 fn encode_esc(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
-    if modifiers.is_empty() {
-        return if report_all {
-            csi_u(27, modifiers)
-        } else {
-            vec![0x1b]
-        };
-    }
-    if kitty {
+    if kitty || report_all {
         return csi_u(27, modifiers);
     }
-    if modifiers == KeyModifiers::ALT {
+    if modifiers.is_empty() {
+        vec![0x1b]
+    } else if modifiers == KeyModifiers::ALT {
         vec![0x1b, 0x1b]
     } else {
         modify_other_key(27, modifiers)
@@ -290,7 +288,14 @@ fn encode_char(c: char, modifiers: KeyModifiers, kitty: bool, report_all: bool) 
         bytes.push(0x1b);
     }
     if has_ctrl {
-        bytes.push(control_byte(c));
+        let Some(ctrl) = control_byte(c) else {
+            return if c.is_ascii() {
+                csi_u(base_codepoint, modifiers)
+            } else {
+                Vec::new()
+            };
+        };
+        bytes.push(ctrl);
     } else {
         let mut buffer = [0u8; 4];
         bytes.extend_from_slice(c.encode_utf8(&mut buffer).as_bytes());
@@ -298,18 +303,18 @@ fn encode_char(c: char, modifiers: KeyModifiers, kitty: bool, report_all: bool) 
     bytes
 }
 
-fn control_byte(c: char) -> u8 {
-    match c.to_ascii_uppercase() {
-        ' ' | '@' | '2' => 0x00,
+fn control_byte(c: char) -> Option<u8> {
+    Some(match c.to_ascii_uppercase() {
+        ' ' | '@' | '`' | '2' => 0x00,
         'A'..='Z' => (c.to_ascii_uppercase() as u8) - 0x40,
         '[' | '3' => 0x1b,
         '\\' | '4' => 0x1c,
         ']' | '5' => 0x1d,
-        '^' | '6' => 0x1e,
+        '^' | '~' | '6' => 0x1e,
         '_' | '-' | '/' | '7' => 0x1f,
         '?' | '8' => 0x7f,
-        other => other as u8,
-    }
+        _ => return None,
+    })
 }
 
 fn modifier_param(modifiers: KeyModifiers) -> u8 {

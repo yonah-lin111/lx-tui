@@ -534,7 +534,15 @@ fn start_stream(
     }
     // 冻结模型快照：从窗格当前消息流状态读取该轮的选择（发送时冻结语义：Committing 已把
     // 模型写入 DB；流启动时按 `effective_selection` 重解析，补上默认 variant 后再冻结）。
-    let (frozen, assembled, current_plan, mcp_snapshot, skill_omitted) = {
+    let (
+        frozen,
+        assembled,
+        current_plan,
+        mcp_snapshot,
+        skill_omitted,
+        workspace_root,
+        agents_md_count,
+    ) = {
         let Some(pane) = state.pane_anywhere(key.pane) else {
             return false;
         };
@@ -595,13 +603,14 @@ fn start_stream(
             || config_root
                 .as_deref()
                 .is_some_and(|root| persistence.is_trusted(root));
-        let instructions = crate::chat::agent::load_instructions(
+        let loaded_instructions = crate::chat::agent::load_instructions(
             crate::config::user_data_root().ok().as_deref(),
             config_root.as_deref(),
             workspace_root.as_deref(),
             workspace_trusted,
-        )
-        .render_prompt_section();
+        );
+        let agents_md_count = loaded_instructions.active_count();
+        let instructions = loaded_instructions.render_prompt_section();
         let model_switches: Vec<crate::db::chat::ModelSwitchRecord> = pane
             .lx
             .model_switch
@@ -627,8 +636,19 @@ fn start_stream(
         ));
         // 计划快照先克隆：运行上下文摘要要在后面的可变借用窗外拼装。
         let current_plan = pane.lx.chat.plan.clone();
-        (frozen, assembled, current_plan, mcp_snapshot, skill_omitted)
+        (
+            frozen,
+            assembled,
+            current_plan,
+            mcp_snapshot,
+            skill_omitted,
+            workspace_root,
+            agents_md_count,
+        )
     };
+    state
+        .agents_md_inventory
+        .insert(workspace_root, agents_md_count);
     if skill_omitted > 0 {
         update::show_lx_toast(
             state,

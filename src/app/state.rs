@@ -282,7 +282,7 @@ pub struct AppState {
     pub settings_open_requested: bool,
     /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
     pub models: ModelsSnapshot,
-    /// 按工作区根汇总的生效 AGENTS.md 文件计数；None 表示无可用工作区根。
+    /// 按工作区实际目录（`workspace.cwd`）汇总的生效 AGENTS.md 文件计数；None 表示无可用工作区目录。
     pub agents_md_inventory: BTreeMap<Option<PathBuf>, usize>,
     /// 按项目根汇总的 MCP 装载计数；首页按窗格所属工作区取用。
     pub mcp_inventory: BTreeMap<PathBuf, StartupCount>,
@@ -443,24 +443,29 @@ impl AppState {
         &mut self.workspaces[self.active_workspace]
     }
 
-    /// 把按项目汇总的 MCP/skill 计数同步到所有窗格；新窗格、切换工作区与
+    /// 把按项目/工作区汇总的 AGENTS.md、MCP、skill 计数同步到所有窗格；新窗格、切换工作区与
     /// 状态事件都走这一条路径，避免窗格自己维护第二份真相。
     pub fn sync_lx_inventory(&mut self) -> bool {
-        let roots: Vec<Option<PathBuf>> = self
+        let counts: Vec<StartupCounts> = self
             .workspaces
             .iter()
-            .map(|workspace| workspace.repo_key().map(Path::to_path_buf))
-            .collect();
-        let counts: Vec<StartupCounts> = roots
-            .into_iter()
-            .map(|root| StartupCounts {
-                agents_md: self.agents_md_inventory.get(&root).copied().unwrap_or(0),
-                mcp: root
-                    .as_ref()
-                    .and_then(|root| self.mcp_inventory.get(root))
+            .map(|workspace| {
+                let root = workspace.repo_key().map(Path::to_path_buf);
+                let agents_md = self
+                    .agents_md_inventory
+                    .get(&workspace.cwd)
+                    .or_else(|| self.agents_md_inventory.get(&root))
                     .copied()
-                    .unwrap_or_default(),
-                skills: self.skill_inventory.get(&root).copied().unwrap_or_default(),
+                    .unwrap_or(0);
+                StartupCounts {
+                    agents_md,
+                    mcp: root
+                        .as_ref()
+                        .and_then(|root| self.mcp_inventory.get(root))
+                        .copied()
+                        .unwrap_or_default(),
+                    skills: self.skill_inventory.get(&root).copied().unwrap_or_default(),
+                }
             })
             .collect();
         let mut changed = false;

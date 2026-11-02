@@ -250,6 +250,24 @@ fn home_shows_mcp_and_skill_counts() {
         text.contains("1 AGENTS.md · 3 mcp 1 error · 3 skills"),
         "{text}"
     );
+
+    // 窄窗格容不下全段（34 列 < 38 列）时，优先省略左侧 AGENTS.md，完整保留 mcp 1 error · skills。
+    let narrow = Rect::new(0, 0, 34, 60);
+    let mut narrow_buf = Buffer::empty(narrow);
+    let _ = render(
+        narrow,
+        &mut narrow_buf,
+        &lx,
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
+    let narrow_text = buffer_text(&narrow_buf);
+    assert!(
+        narrow_text.contains("3 mcp 1 error · 3 skills"),
+        "{narrow_text}"
+    );
+    assert!(!narrow_text.contains("AGENTS.md"), "{narrow_text}");
 }
 
 #[test]
