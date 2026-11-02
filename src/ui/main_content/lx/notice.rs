@@ -1,11 +1,12 @@
-//! 消息底部通知：`● <标题>` + `  └─ <原因>`（对齐 ui 页 `agent` 分组的 error 步骤）。
+//! 消息底部通知：`◆ <标题>` + `  └─ <原因>`（对齐 ui 页 `agent` 分组的 error 步骤）。
 //!
 //! 标题是**固定枚举**（[`NoticeTitle`]）：文案与配色都由枚举决定，调用点只给一句原因，
 //! 不允许随手拼自由标题。标题整行着色只有两档——失败红 + 粗、中断黄 + 粗（没有灰色档）；
 //! 原因行连接符用供应商灰 + 粗、正文正常色。
 //!
-//! **行首标记与聊天步骤共用同一套字形**（[`StepMark`]）：失败为红色实心圆点 `●`、中断为
-//! 黄色实心圆点 `●`，与思考头 / 正文块同为文字类标记（1 列字形 + 1 列空格，缩进一致）。
+//! **行首标记与聊天步骤共用同一套字形**（[`StepMark`]）：失败为红色实心菱形 `◆`、
+//! 中断为黄色实心菱形 `◆`——通知是系统事件，取 `StepKind::System` 的菱形，而不是
+//! 正文 / 思考的文字圆点。
 //!
 //! **不含统计**——本轮统计行由 `history::stats_line` 负责，显示在通知下方（空一行）。
 
@@ -33,7 +34,7 @@ pub(crate) enum NoticeTitle {
 }
 
 impl NoticeTitle {
-    /// 标题文案（渲染为 `● <label>`）。
+    /// 标题文案（渲染为 `◆ <label>`）。
     fn label(self) -> &'static str {
         match self {
             Self::Failed => text::LX_CHAT_NOTICE_FAILED,
@@ -41,10 +42,10 @@ impl NoticeTitle {
         }
     }
 
-    /// 行首圆点（与文字类步骤共用标记：失败红实心、中断黄实心）。
+    /// 行首菱形（系统事件标记：失败红实心、中断黄实心）。
     ///
     /// 通知只在**终态**渲染（流中不出通知），因此没有"运行中"的呼吸态，
-    /// 直接取 [`StepMark`] 的两个终态。通知是文字数据，与正文/思考同档，字形取圆点；
+    /// 直接取 [`StepMark`] 的两个终态。通知是系统事件，字形取菱形；
     /// `Failed` / `Interrupted` 的跨角色覆盖色优先于角色色。
     fn mark(self) -> StepMark {
         match self {
@@ -55,7 +56,7 @@ impl NoticeTitle {
 
     /// 通知标记样式：状态色（红/黄）优先，与角色无关。
     fn mark_style(self) -> Style {
-        self.mark().style(StepKind::Body, false)
+        self.mark().style(StepKind::System, false)
     }
 
     /// 标题文案样式（不含行首标记：标记自带状态色）。
@@ -66,12 +67,12 @@ impl NoticeTitle {
         }
     }
 
-    /// 标题整行的标记段：`● `（圆点 + 1 列空格，与 [`super::history::STEP_GUTTER`] 同宽）。
+    /// 标题整行的标记段：`◆ `（菱形 + 1 列空格，与 [`super::history::STEP_GUTTER`] 同宽）。
     ///
     /// 通知只在终态渲染，[`StepMark::Failed`] / [`StepMark::Interrupted`] 的字形与
-    /// 呼吸相位无关（恒为实心 `●`），因此这里固定传 0 帧。
+    /// 呼吸相位无关（恒为实心 `◆`），因此这里固定传 0 帧。
     fn marker_segment(self) -> String {
-        self.mark().segment(StepKind::Body, 0, false)
+        self.mark().segment(StepKind::System, 0, false)
     }
 }
 
@@ -109,16 +110,16 @@ pub(super) fn rows(notice: &Notice, width: u16) -> usize {
     title_rows + reason_rows
 }
 
-/// 标题整行文本（`● <label>`）；宽度口径与 [`draw`] 共用。
+/// 标题整行文本（`◆ <label>`）；宽度口径与 [`draw`] 共用。
 fn title_line(title: NoticeTitle) -> String {
     format!("{}{}", title.marker_segment(), title.label())
 }
 
 /// 绘制通知并推进内容行号；宽度不够放前缀时原因行退回整宽（不画连接符）。
 ///
-/// 行首圆点用 [`StepMark`] 的状态色单独绘制（红/黄），其后的标题文案用
+/// 行首菱形用 [`StepMark`] 的状态色单独绘制（红/黄），其后的标题文案用
 /// [`NoticeTitle::style`]——两者在当前配色下同色同字重，但分开画才能保证
-/// 「圆点永远是步骤圆点的样子」，不受标题样式改动影响。
+/// 「菱形永远是系统事件标记的样子」，不受标题样式改动影响。
 pub(super) fn draw(
     grid: &mut Grid,
     notice: &Notice,
@@ -130,7 +131,7 @@ pub(super) fn draw(
     let marker = notice.title.marker_segment();
     let marker_width = u16::try_from(marker.width()).unwrap_or(u16::MAX);
     let label = notice.title.label();
-    // 标题行按「圆点 + 文案」整体换行，但首行要把圆点单独着状态色。
+    // 标题行按「菱形 + 文案」整体换行，但首行要把菱形单独着状态色。
     for (index, line) in wrap(&title_line(notice.title), content.width)
         .into_iter()
         .enumerate()

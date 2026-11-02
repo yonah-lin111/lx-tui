@@ -1,34 +1,35 @@
 //! 独立撤销提示（persisted tip）的物理行布局与绘制。
 //!
-//! 系统事件步骤卡片：
-//! - 折叠态为单行紧凑条目：行首菱形标记 `◆`（`StepKind::System`）+ 标题（accent）+
-//!   ` · ` 分隔的描述（muted），如 `◆ Rewind · restored 3 files`；
-//! - 窄屏按列换行，路径不拼进未净化文本。
+//! 系统事件步骤卡片（与 [`super::compact`] / [`super::model_switch`] 共用
+//! [`super::system_event::SystemCard`]）：
+//! - 标题行：菱形标记 `◆`（`StepKind::System`）+ `Rewind`（accent）；
+//! - 详情行：`  └─ <一句话描述>`（muted），窄屏按列折行、路径不拼进未净化文本。
 
 use ratatui::layout::Rect;
 
 use crate::app::state::RewindNoticeView;
 use crate::ui::main_content::lx::Grid;
 use crate::ui::main_content::lx::history::tool::Segment;
+use crate::ui::main_content::lx::history::tool::tree::Node;
 use crate::ui::main_content::lx::history::{StepKind, StepMark};
 use crate::ui::{style, text};
 
-use super::visible_row;
+use super::system_event::SystemCard;
 
-/// 组装头部单行分段。
-fn header_segments(notice: &RewindNoticeView, count: usize) -> Vec<Segment> {
+/// 卡片（折叠态没有展开内容）。
+fn card(notice: &RewindNoticeView, count: usize, width: u16) -> SystemCard {
     let mark = StepMark::Done.segment(StepKind::System, 0, false);
-    let title = title(count);
-    let desc = description(notice);
-    vec![
-        Segment::new(format!("{mark}{title}"), style::accent()),
-        Segment::new(format!(" · {desc}"), style::muted()),
-    ]
+    let header = vec![Segment::new(
+        format!("{mark}{}", title(count)),
+        style::accent(),
+    )];
+    let nodes = vec![Node::text(description(notice), style::muted())];
+    SystemCard::new(width, header, nodes)
 }
 
 /// 提示占用的行数（与 [`draw`] 同口径）；`count > 1` 表示合并后的连续提示。
 pub(super) fn rows(notice: &RewindNoticeView, count: usize, width: u16) -> usize {
-    super::tool::wrap_spans(&header_segments(notice, count), usize::from(width)).len()
+    card(notice, count, width).rows()
 }
 
 /// 提示标题（连续提示合并为 `Rewind xN`）。
@@ -54,11 +55,5 @@ pub(super) fn draw(
     scroll: usize,
     row_index: &mut usize,
 ) {
-    for line in super::tool::wrap_spans(&header_segments(notice, count), usize::from(content.width))
-    {
-        if let Some(y) = visible_row(content, scroll, *row_index) {
-            super::tool::put_segments(grid, content.x, y, content.width, &line);
-        }
-        *row_index += 1;
-    }
+    card(notice, count, content.width).draw(grid, content, scroll, row_index);
 }

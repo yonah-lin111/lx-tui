@@ -85,7 +85,11 @@ fn consecutive_rewind_notices_merge_with_count() {
         1,
         "三条连续提示只画一条标题"
     );
-    assert_eq!(layout.total_rows, 2, "合并后只占单行头部+空行");
+    assert!(
+        text.contains("  └─ Conversation undone"),
+        "描述行必须挂在树体连接符下：{text}"
+    );
+    assert_eq!(layout.total_rows, 3, "合并后占标题+详情+空行");
 }
 
 #[test]

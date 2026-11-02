@@ -6,10 +6,10 @@
 //! - 用户消息：`> ` 前缀（占用整块底色，图标用输入框同款强调色）+ 整块浅底色
 //!   （`style::chat_user_bg`），正文按显示列软换行。
 //! - assistant 消息：每个步骤（思考 / 工具调用 / 正文块）首行以左侧状态标记起头
-//!   （见 [`StepMark`]：文字数据用圆点 `●`/`○`、工具调用用方块 `■`/`□`；运行中两帧
-//!   呼吸、终态静态并按语义着色），标记右侧
-//!   的内容（含续行、展开的思考正文）整体缩进 [`STEP_GUTTER`] 列；正文用共享阅读
-//!   渲染器（`ui::markdown_render`，与 UI 页 agent 回答同款；表格按宽度收缩自适应），
+//!   （见 [`StepMark`]：文字数据用圆点 `●`/`○`、工具调用用方块 `■`/`□`、系统事件用
+//!   菱形 `◆`/`◇`；运行中两帧呼吸、终态静态并按语义着色），标记右侧的内容（含续行、
+//!   展开的思考正文）整体缩进 [`STEP_GUTTER`] 列；正文用共享阅读渲染器
+//!   （`ui::markdown_render`，与 UI 页 agent 回答同款；表格按宽度收缩自适应），
 //!   不显示标题行；失败/中断在**消息底部**（统计行上方）插入一条通知（见 `notice.rs`），
 //!   流中不插入（改用输入框上方 loading 行）。
 //! - thinking：头部为圆点 + `Thinking`（生成中）/ `Thought · 6.3s`（完成后，无折叠
@@ -42,6 +42,7 @@ mod rows;
 mod snapshot;
 mod stats;
 mod sticky;
+mod system_event;
 mod timeline;
 pub(crate) mod tool;
 pub(crate) mod user_shell;

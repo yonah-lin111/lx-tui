@@ -1,54 +1,45 @@
 //! 上下文压缩提示（compact checkpoint）的物理行布局与绘制。
 //!
-//! 系统事件步骤卡片：
-//! - 折叠态为单行紧凑条目：行首菱形标记 `◆`（`StepKind::System`）+ 标题（accent）+
-//!   ` · ` 分隔的描述（muted），如 `◆ Context compacted · model: gpt-5 · 10:42`；
-//! - 运行中为琥珀色动态呼吸条目：`◇ Compacting context... · 3s`；
-//! - 展开态下挂思考块同款树形连接符（`  └─ `）+ 5 列正文缩进 + 压暗 Markdown，
-//!   追加覆盖范围与摘要正文。
+//! 系统事件步骤卡片（与 [`super::model_switch`] / [`super::rewind`] 共用
+//! [`super::system_event::SystemCard`]）：
+//! - 标题行：菱形标记 `◆`（`StepKind::System`）+ `Context compacted`（accent）；
+//! - 折叠态：标题下挂一行详情 `  └─ model: gpt-5 · 10:42`（muted）；
+//! - 展开态：追加覆盖范围与压暗 Markdown 摘要，多个节点走 `├─` / `└─` 树体；
+//! - 运行中仍是单行状态：`◇ Compacting context... · 3s`。
 //!
-//! 行数计算 [`rows`] 与绘制 [`draw`] 严格共用同一套 `wrap_spans`。
+//! 行数计算 [`rows`] 与绘制 [`draw`] 都从 [`SystemCard`] 取，绝不各算一份。
 
 use ratatui::layout::Rect;
 
 use crate::app::state::{CompactNoticeView, LxCompact};
 use crate::ui::main_content::lx::Grid;
 use crate::ui::main_content::lx::history::tool::Segment;
+use crate::ui::main_content::lx::history::tool::tree::Node;
 use crate::ui::main_content::lx::history::{StepKind, StepMark};
 use crate::ui::{style, text};
 
+use super::system_event::{SystemCard, body_width};
 use super::visible_row;
 
-/// 展开正文几何：树形前缀占满 [`super::thinking_body_indent`] 列，正文按剩余宽度换行。
-fn tree_body_geometry(width: u16) -> (u16, u16) {
-    let indent = super::thinking_body_indent(width);
-    let body_width = width.saturating_sub(indent).max(1);
-    (indent, body_width)
-}
-
-/// 展开正文首个物理行前的树形连接符（与思考块同款 `  └─ `）。
-fn put_tree_leaf(grid: &mut Grid, content: Rect, y: u16) {
-    grid.put_clipped(
-        content.x,
-        y,
-        text::agent::TREE_LEAF,
-        style::chat_notice_connector(),
-        content.width,
-    );
-}
-
-/// 已完成检查点的头部单行分段。
-fn header_segments(notice: &CompactNoticeView, count: usize) -> Vec<Segment> {
+/// 已完成检查点的卡片（折叠 / 展开同一构造器）。
+fn card(notice: &CompactNoticeView, count: usize, width: u16, expanded: bool) -> SystemCard {
     let mark = StepMark::Done.segment(StepKind::System, 0, false);
-    let title = title(count);
-    let desc = description(notice);
-    vec![
-        Segment::new(format!("{mark}{title}"), style::accent()),
-        Segment::new(format!(" · {desc}"), style::muted()),
-    ]
+    let header = vec![Segment::new(
+        format!("{mark}{}", title(count)),
+        style::accent(),
+    )];
+    let mut nodes = vec![Node::text(description(notice), style::muted())];
+    if expanded {
+        nodes.push(Node::text(range_line(notice), style::muted()));
+        nodes.push(Node::block(super::tool::muted_markdown_lines(
+            &notice.summary,
+            body_width(width),
+        )));
+    }
+    SystemCard::new(width, header, nodes)
 }
 
-/// 运行中压缩请求的头部单行分段。
+/// 运行中压缩请求的单行分段。
 fn running_header_segments(
     compact: &LxCompact,
     loading_frame: usize,
@@ -69,14 +60,7 @@ fn running_header_segments(
 
 /// 提示占用的行数（与 [`draw`] 同口径）。
 pub(super) fn rows(notice: &CompactNoticeView, count: usize, width: u16, expanded: bool) -> usize {
-    let mut total =
-        super::tool::wrap_spans(&header_segments(notice, count), usize::from(width)).len();
-    if expanded {
-        let (_, body_width) = tree_body_geometry(width);
-        total += super::wrap(&range_line(notice), body_width).len();
-        total += super::tool::muted_markdown_lines(&notice.summary, body_width).len();
-    }
-    total
+    card(notice, count, width, expanded).rows()
 }
 
 /// 运行中压缩占用的行数（与 [`draw_running`] 同口径）。
@@ -123,52 +107,7 @@ pub(super) fn draw(
     scroll: usize,
     row_index: &mut usize,
 ) {
-    for line in super::tool::wrap_spans(&header_segments(notice, count), usize::from(content.width))
-    {
-        if let Some(y) = visible_row(content, scroll, *row_index) {
-            super::tool::put_segments(grid, content.x, y, content.width, &line);
-        }
-        *row_index += 1;
-    }
-    if !expanded {
-        return;
-    }
-    let (indent, body_width) = tree_body_geometry(content.width);
-    let tree = super::thinking_tree(content.width);
-    // 只有展开态的第一个物理行画连接符；首行被滚出视口时不再补画。
-    let mut first_expanded_row = true;
-    for line in super::wrap(&range_line(notice), body_width) {
-        if let Some(y) = visible_row(content, scroll, *row_index) {
-            if first_expanded_row && tree {
-                put_tree_leaf(grid, content, y);
-            }
-            grid.put_clipped(
-                content.x.saturating_add(indent),
-                y,
-                &line,
-                style::muted(),
-                body_width,
-            );
-        }
-        first_expanded_row = false;
-        *row_index += 1;
-    }
-    for segments in super::tool::muted_markdown_lines(&notice.summary, body_width) {
-        if let Some(y) = visible_row(content, scroll, *row_index) {
-            if first_expanded_row && tree {
-                put_tree_leaf(grid, content, y);
-            }
-            super::tool::put_segments(
-                grid,
-                content.x.saturating_add(indent),
-                y,
-                body_width,
-                &segments,
-            );
-        }
-        first_expanded_row = false;
-        *row_index += 1;
-    }
+    card(notice, count, content.width, expanded).draw(grid, content, scroll, row_index);
 }
 
 /// 绘制正在运行的压缩提示并推进行号。

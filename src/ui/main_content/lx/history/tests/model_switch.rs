@@ -1,4 +1,4 @@
-//! 模型切换提示条目（`-- Model switched --`）：折叠/展开、连续 `xN` 合并、压暗 Markdown 样式与按 sequence 交错。
+//! 模型切换提示条目（`◆ Model switched`）：树体详情、折叠/展开、连续 `xN` 合并、压暗 Markdown 样式与按 sequence 交错。
 
 use super::*;
 
@@ -55,8 +55,8 @@ fn model_switch_folds_to_two_header_rows_and_expands_with_muted_markdown() {
     let mut grid = Grid::new(area);
     let drawn = render(&mut grid, area, &lx, 0, &mut cache());
     assert_eq!(drawn, folded_layout.total_rows);
-    // 标题 + 末尾呼吸行 = 2 行（宽屏单行）
-    assert_eq!(folded_layout.total_rows, 2);
+    // 标题 + 两行树体详情 + 末尾呼吸行 = 4 行（宽屏单行）
+    assert_eq!(folded_layout.total_rows, 4);
 
     let folded_text: String = rows_text(&grid, area).join("\n");
     assert!(folded_text.contains("Model switched"), "{folded_text}");
@@ -66,8 +66,12 @@ fn model_switch_folds_to_two_header_rows_and_expands_with_muted_markdown() {
         "{folded_text}"
     );
     assert!(
-        folded_text.contains("instructions: core/model, core/agents_md"),
-        "{folded_text}"
+        folded_text.contains("  ├─ model: DeepSeek V4.1 Flash (max)"),
+        "目标模型行挂在 `├─` 下：{folded_text}"
+    );
+    assert!(
+        folded_text.contains("  └─ instructions: core/model, core/agents_md"),
+        "指令源行由 `└─` 收口：{folded_text}"
     );
     assert!(
         !folded_text.contains("switched Claude Sonnet 4"),
@@ -198,6 +202,44 @@ fn expanded_renders_tree_leaf_prefix_and_indented_muted_markdown() {
                 .add_modifier
                 .contains(ratatui::style::Modifier::DIM),
             "展开正文从第 5 列起必须保持压暗：{line:?}"
+        );
+    }
+}
+
+/// 非末节点折行时续行保留 `│` 树干，末节点用等宽空白收口。
+#[test]
+fn wrapped_system_detail_keeps_tree_bar() {
+    let mut lx = Lx::new();
+    let mut notice = switch_view(
+        2,
+        "Claude Sonnet 4 (high)",
+        "9router",
+        "deepseek-v4.1-flash",
+        Some("max"),
+        "DeepSeek V4.1 Flash with a very long display name",
+    );
+    notice.updated_sources = vec!["core/model".into()];
+    lx.model_switch.replace(vec![notice]);
+
+    let area = Rect::new(0, 0, 40, 14);
+    let mut grid = Grid::new(area);
+    let drawn = render(&mut grid, area, &lx, 0, &mut cache());
+    assert_eq!(drawn, layout(area, &lx, &mut cache()).total_rows);
+
+    let lines = rows_text(&grid, area);
+    let branch = lines
+        .iter()
+        .position(|line| line.starts_with(text::agent::TREE_BRANCH))
+        .expect("branch row");
+    let leaf = lines
+        .iter()
+        .position(|line| line.starts_with(text::agent::TREE_LEAF))
+        .expect("leaf row");
+    assert!(leaf > branch + 1, "首个节点必须折行：{lines:?}");
+    for line in &lines[branch + 1..leaf] {
+        assert!(
+            line.starts_with(text::agent::TREE_BAR),
+            "非末节点续行必须保留 `│` 树干：{line:?}"
         );
     }
 }

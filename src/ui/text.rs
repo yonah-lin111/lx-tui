@@ -789,15 +789,17 @@ pub fn model_switch_notice_title(count: usize) -> String {
     }
 }
 
-/// 模型切换提示条目描述行（英文，对齐 compact 描述风格）。
-pub fn model_switch_notice_desc(
+/// 模型切换提示条目的目标行：`model: DeepSeek V4.1 Flash (max) · 16:59`。
+///
+/// 仅思考等级变化时改成 `variant: max (DeepSeek V4.1 Flash) · 16:59`，把变化的
+/// 那一维放在行首。
+pub fn model_switch_notice_head(
     variant_only: bool,
     model_label: &str,
     variant: Option<&str>,
     time: &str,
-    updated_sources: &[String],
 ) -> String {
-    let base = if variant_only {
+    if variant_only {
         let level = variant.filter(|v| !v.is_empty()).unwrap_or("default");
         format!("variant: {level} ({model_label}) · {time}")
     } else {
@@ -806,12 +808,12 @@ pub fn model_switch_notice_desc(
             None => model_label.to_string(),
         };
         format!("model: {model_display} · {time}")
-    };
-    if updated_sources.is_empty() {
-        base
-    } else {
-        format!("{base} · instructions: {}", updated_sources.join(", "))
     }
+}
+
+/// 模型切换提示条目的指令源行；没有变更来源时整行省略。
+pub fn model_switch_notice_sources(updated_sources: &[String]) -> Option<String> {
+    (!updated_sources.is_empty()).then(|| format!("instructions: {}", updated_sources.join(", ")))
 }
 /// `/resume` 命令描述。
 pub const LX_RESUME_COMMAND_DESC: &str = "Resume a previous session in this workspace";

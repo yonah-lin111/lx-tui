@@ -27,7 +27,7 @@ fn compact_only_history_stays_on_history_view() {
     assert!(view.total_rows > 0);
 }
 
-/// 折叠态：只画标题+描述两行，布局与渲染行数一致。
+/// 折叠态：标题 + 一行树体详情，布局与渲染行数一致。
 #[test]
 fn compact_entry_folds_to_header_rows() {
     let mut lx = Lx::new();
@@ -37,8 +37,8 @@ fn compact_entry_folds_to_header_rows() {
     let mut grid = Grid::new(area);
     let drawn = render(&mut grid, area, &lx, 0, &mut cache());
     assert_eq!(drawn, layout.total_rows, "布局与渲染行数必须一致");
-    // 标题 + 末尾呼吸行（与其它历史条目同一口径）。
-    assert_eq!(layout.total_rows, 2, "折叠态只占单行头部+呼吸行");
+    // 标题 + 详情 + 末尾呼吸行（与其它历史条目同一口径）。
+    assert_eq!(layout.total_rows, 3, "折叠态只占标题+详情+呼吸行");
     let text: String = (area.y..area.bottom())
         .map(|y| {
             (area.x..area.right())
@@ -50,6 +50,10 @@ fn compact_entry_folds_to_header_rows() {
     assert!(text.contains("Context compacted"), "{text}");
     assert!(text.contains('◆'), "系统事件包含菱形标记：{text}");
     assert!(text.contains("gpt-5"), "必须显示实际模型名：{text}");
+    assert!(
+        text.contains("  └─ model: gpt-5"),
+        "详情行必须挂在树体连接符下：{text}"
+    );
     assert!(
         !text.contains("Condensed context"),
         "默认折叠不得显示摘要正文：{text}"
@@ -79,7 +83,7 @@ fn compact_entry_expands_to_summary() {
     assert!(text.contains("covered"), "展开显示覆盖范围：{text}");
     assert!(text.contains("Condensed context"), "{text}");
 
-    // 展开首行带思考块同款 `  └─ ` 树形连接符（与 model_switch 同一套几何）
+    // 范围与摘要各占一个树体节点：范围是 `├─`（后面还有摘要），摘要是 `└─`。
     let range_row = (area.y..area.bottom())
         .find(|&y| {
             let line: String = (area.x..area.right()).map(|x| grid.cell(x, y).ch).collect();
@@ -90,8 +94,21 @@ fn compact_entry_expands_to_summary() {
         .map(|x| grid.cell(x, range_row).ch)
         .collect();
     assert!(
-        range_text.starts_with("  └─ "),
-        "展开范围行必须先画树形连接符：{range_text:?}"
+        range_text.starts_with("  ├─ "),
+        "展开范围行必须画树形连接符：{range_text:?}"
+    );
+    let summary_row = (area.y..area.bottom())
+        .find(|&y| {
+            let line: String = (area.x..area.right()).map(|x| grid.cell(x, y).ch).collect();
+            line.contains("Condensed context")
+        })
+        .expect("summary row");
+    let summary_text = (area.x..area.right())
+        .map(|x| grid.cell(x, summary_row).ch)
+        .collect::<String>();
+    assert!(
+        summary_text.starts_with("  └─ "),
+        "摘要节点必须由 `└─` 收口：{summary_text:?}"
     );
 }
 
