@@ -3,22 +3,23 @@
 //! 系统事件步骤卡片（与 [`super::compact`] / [`super::rewind`] 共用
 //! [`super::system_event::SystemCard`]）：
 //! - 标题行：菱形标记 `◆`（`StepKind::System`）+ `Model switched`（accent）；
-//! - 折叠态：`  ├─ model: X (level) · 16:59` + `  └─ instructions: core/model, …`；
-//! - 展开态：末尾追加完整跃迁链（`A -> B -> A` 不退化）与最后一次注入的系统提示词，
-//!   正文采用思考块同款的压暗 Markdown。
+//! - 元信息默认可见：目标模型/时间、指令源、完整跃迁链（`A -> B -> A` 不退化）；
+//! - 正文只有注入的系统提示词是折叠项：折叠态保留前
+//!   [`super::system_event::CONTENT_PREVIEW_ROWS`] 行 + `… N more lines`，
+//!   展开后铺开全部（压暗 Markdown，与工具输出同一套交互）。
 //!
-//! 行数计算 [`rows`] 与绘制 [`draw`] 都从 [`SystemCard`] 取。
+//! 行数、可点击性与绘制都从 [`SystemCard`] 取。
 
 use ratatui::layout::Rect;
 
 use crate::app::state::ModelSwitchNoticeView;
 use crate::ui::main_content::lx::Grid;
 use crate::ui::main_content::lx::history::tool::Segment;
-use crate::ui::main_content::lx::history::tool::tree::Node;
+use crate::ui::main_content::lx::history::tool::tree::{Node, Preview, Section};
 use crate::ui::main_content::lx::history::{StepKind, StepMark};
 use crate::ui::{style, text};
 
-use super::system_event::{SystemCard, body_width};
+use super::system_event::{CONTENT_PREVIEW_ROWS, SystemCard, body_width};
 
 /// 合并区间内去重保序的变更指令源（中间切换的 `core/model` 不能丢）。
 fn merged_sources(slice: &[ModelSwitchNoticeView]) -> Vec<String> {
@@ -33,63 +34,63 @@ fn merged_sources(slice: &[ModelSwitchNoticeView]) -> Vec<String> {
     sources
 }
 
-/// 构造展开态的 Markdown 源文本（首行为完整跃迁链，其后为最后一次注入的提示词）。
-fn expanded_markdown(slice: &[ModelSwitchNoticeView]) -> String {
+/// 完整跃迁链（首行元信息，不随正文折叠）：`switched A -> B -> A`。
+fn transition_line(slice: &[ModelSwitchNoticeView]) -> String {
     let Some(last) = slice.last() else {
         return String::new();
     };
-    let transition = if slice.len() <= 1 {
-        last.transition_line(None)
-    } else {
-        // 连续切换记录完整链：`A -> B -> A`，而不是退化成 `switched A -> A`。
-        let mut chain = String::from("switched");
-        if let Some(start) = slice[0]
-            .from_label
-            .as_deref()
-            .filter(|label| !label.trim().is_empty())
-        {
-            chain.push(' ');
-            chain.push_str(start);
-        }
-        for notice in slice {
-            chain.push_str(" -> ");
-            chain.push_str(&notice.target_display_with_variant());
-        }
-        chain
-    };
-    if last.injected_prompt.trim().is_empty() {
-        transition
-    } else {
-        format!("{transition}\n\n{}", last.injected_prompt.trim())
+    if slice.len() <= 1 {
+        return last.transition_line(None);
     }
+    // 连续切换记录完整链：`A -> B -> A`，而不是退化成 `switched A -> A`。
+    let mut chain = String::from("switched");
+    if let Some(start) = slice[0]
+        .from_label
+        .as_deref()
+        .filter(|label| !label.trim().is_empty())
+    {
+        chain.push(' ');
+        chain.push_str(start);
+    }
+    for notice in slice {
+        chain.push_str(" -> ");
+        chain.push_str(&notice.target_display_with_variant());
+    }
+    chain
+}
+
+/// 最后一次注入的系统提示词（正文折叠项）。
+fn injected_prompt(slice: &[ModelSwitchNoticeView]) -> &str {
+    slice
+        .last()
+        .map(|notice| notice.injected_prompt.trim())
+        .unwrap_or("")
 }
 
 /// 卡片（折叠 / 展开同一构造器）。
-fn card(slice: &[ModelSwitchNoticeView], width: u16, expanded: bool) -> SystemCard {
+pub(super) fn build(slice: &[ModelSwitchNoticeView], width: u16, expanded: bool) -> SystemCard {
     let mark = StepMark::Done.segment(StepKind::System, 0, false);
     let header = vec![Segment::new(
         format!("{mark}{}", title(slice.len())),
         style::accent(),
     )];
-    let mut nodes = vec![Node::text(head_line(slice), style::muted())];
+    let mut meta = vec![
+        Node::text(head_line(slice), style::muted()),
+        Node::text(transition_line(slice), style::muted()),
+    ];
     if let Some(sources) = text::model_switch_notice_sources(&merged_sources(slice)) {
-        nodes.push(Node::text(sources, style::muted()));
+        meta.insert(1, Node::text(sources, style::muted()));
     }
-    if expanded {
-        nodes.push(Node::block(super::tool::muted_markdown_lines(
-            &expanded_markdown(slice),
-            body_width(width),
-        )));
+    let prompt = super::tool::muted_markdown_lines(injected_prompt(slice), body_width(width));
+    let foldable = prompt.len() > CONTENT_PREVIEW_ROWS;
+    let mut sections = vec![Section::fixed(meta)];
+    if !prompt.is_empty() {
+        sections.push(Section::new(
+            vec![Node::block(prompt)],
+            (!expanded).then(|| Preview::head(CONTENT_PREVIEW_ROWS)),
+        ));
     }
-    SystemCard::new(width, header, nodes)
-}
-
-/// 提示占用的物理行数（与 [`draw`] 严格同口径）。
-pub(super) fn rows(slice: &[ModelSwitchNoticeView], width: u16, expanded: bool) -> usize {
-    if slice.is_empty() {
-        return 0;
-    }
-    card(slice, width, expanded).rows()
+    SystemCard::new(width, header, sections, foldable)
 }
 
 /// 标题（连续多条合并为 `Model switched xN`）。
@@ -123,5 +124,5 @@ pub(super) fn draw(
     if slice.is_empty() {
         return;
     }
-    card(slice, content.width, expanded).draw(grid, content, scroll, row_index);
+    build(slice, content.width, expanded).draw(grid, content, scroll, row_index);
 }

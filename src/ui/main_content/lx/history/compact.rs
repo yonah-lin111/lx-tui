@@ -3,40 +3,51 @@
 //! 系统事件步骤卡片（与 [`super::model_switch`] / [`super::rewind`] 共用
 //! [`super::system_event::SystemCard`]）：
 //! - 标题行：菱形标记 `◆`（`StepKind::System`）+ `Context compacted`（accent）；
-//! - 折叠态：标题下挂一行详情 `  └─ model: gpt-5 · 10:42`（muted）；
-//! - 展开态：追加覆盖范围与压暗 Markdown 摘要，多个节点走 `├─` / `└─` 树体；
+//! - 元信息默认可见：`  ├─ model: gpt-5 · 10:42` + `  ├─ covered sequence 0–7`；
+//! - 正文只有压缩摘要是折叠项：折叠态保留前
+//!   [`super::system_event::CONTENT_PREVIEW_ROWS`] 行 + `… N more lines`，
+//!   展开后铺开全部（压暗 Markdown，与工具输出同一套交互）；
 //! - 运行中仍是单行状态：`◇ Compacting context... · 3s`。
 //!
-//! 行数计算 [`rows`] 与绘制 [`draw`] 都从 [`SystemCard`] 取，绝不各算一份。
+//! 行数、可点击性与绘制都从 [`SystemCard`] 取，绝不各算一份。
 
 use ratatui::layout::Rect;
 
 use crate::app::state::{CompactNoticeView, LxCompact};
 use crate::ui::main_content::lx::Grid;
 use crate::ui::main_content::lx::history::tool::Segment;
-use crate::ui::main_content::lx::history::tool::tree::Node;
+use crate::ui::main_content::lx::history::tool::tree::{Node, Preview, Section};
 use crate::ui::main_content::lx::history::{StepKind, StepMark};
 use crate::ui::{style, text};
 
-use super::system_event::{SystemCard, body_width};
+use super::system_event::{CONTENT_PREVIEW_ROWS, SystemCard, body_width};
 use super::visible_row;
 
 /// 已完成检查点的卡片（折叠 / 展开同一构造器）。
-fn card(notice: &CompactNoticeView, count: usize, width: u16, expanded: bool) -> SystemCard {
+pub(super) fn build(
+    notice: &CompactNoticeView,
+    count: usize,
+    width: u16,
+    expanded: bool,
+) -> SystemCard {
     let mark = StepMark::Done.segment(StepKind::System, 0, false);
     let header = vec![Segment::new(
         format!("{mark}{}", title(count)),
         style::accent(),
     )];
-    let mut nodes = vec![Node::text(description(notice), style::muted())];
-    if expanded {
-        nodes.push(Node::text(range_line(notice), style::muted()));
-        nodes.push(Node::block(super::tool::muted_markdown_lines(
-            &notice.summary,
-            body_width(width),
-        )));
+    let summary = super::tool::muted_markdown_lines(&notice.summary, body_width(width));
+    let foldable = summary.len() > CONTENT_PREVIEW_ROWS;
+    let mut sections = vec![Section::fixed(vec![
+        Node::text(description(notice), style::muted()),
+        Node::text(range_line(notice), style::muted()),
+    ])];
+    if !summary.is_empty() {
+        sections.push(Section::new(
+            vec![Node::block(summary)],
+            (!expanded).then(|| Preview::head(CONTENT_PREVIEW_ROWS)),
+        ));
     }
-    SystemCard::new(width, header, nodes)
+    SystemCard::new(width, header, sections, foldable)
 }
 
 /// 运行中压缩请求的单行分段。
@@ -56,11 +67,6 @@ fn running_header_segments(
         segments.push(Segment::new(format!(" · {dur}"), style::muted()));
     }
     segments
-}
-
-/// 提示占用的行数（与 [`draw`] 同口径）。
-pub(super) fn rows(notice: &CompactNoticeView, count: usize, width: u16, expanded: bool) -> usize {
-    card(notice, count, width, expanded).rows()
 }
 
 /// 运行中压缩占用的行数（与 [`draw_running`] 同口径）。
@@ -87,7 +93,7 @@ pub(super) fn description(notice: &CompactNoticeView) -> String {
     }
 }
 
-/// 展开后的覆盖范围行。
+/// 覆盖范围行。
 fn range_line(notice: &CompactNoticeView) -> String {
     let range = if notice.auto {
         text::LX_COMPACT_AUTO_RANGE.to_string()
@@ -107,7 +113,7 @@ pub(super) fn draw(
     scroll: usize,
     row_index: &mut usize,
 ) {
-    card(notice, count, content.width, expanded).draw(grid, content, scroll, row_index);
+    build(notice, count, content.width, expanded).draw(grid, content, scroll, row_index);
 }
 
 /// 绘制正在运行的压缩提示并推进行号。

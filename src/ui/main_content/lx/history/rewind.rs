@@ -10,21 +10,24 @@ use ratatui::layout::Rect;
 use crate::app::state::RewindNoticeView;
 use crate::ui::main_content::lx::Grid;
 use crate::ui::main_content::lx::history::tool::Segment;
-use crate::ui::main_content::lx::history::tool::tree::Node;
+use crate::ui::main_content::lx::history::tool::tree::{Node, Section};
 use crate::ui::main_content::lx::history::{StepKind, StepMark};
 use crate::ui::{style, text};
 
 use super::system_event::SystemCard;
 
-/// 卡片（折叠态没有展开内容）。
+/// 卡片（描述是唯一详情，没有可折叠正文）。
 fn card(notice: &RewindNoticeView, count: usize, width: u16) -> SystemCard {
     let mark = StepMark::Done.segment(StepKind::System, 0, false);
     let header = vec![Segment::new(
         format!("{mark}{}", title(count)),
         style::accent(),
     )];
-    let nodes = vec![Node::text(description(notice), style::muted())];
-    SystemCard::new(width, header, nodes)
+    let sections = vec![Section::fixed(vec![Node::text(
+        description(notice),
+        style::muted(),
+    )])];
+    SystemCard::new(width, header, sections, false)
 }
 
 /// 提示占用的行数（与 [`draw`] 同口径）；`count > 1` 表示合并后的连续提示。

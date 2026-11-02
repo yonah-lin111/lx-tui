@@ -263,7 +263,8 @@ impl Builder<'_> {
             width: self.width,
             sig: compact_block_signature(notice, expanded),
         };
-        let rows = compact::rows(notice, 1, self.width, expanded);
+        let card = compact::build(notice, 1, self.width, expanded);
+        let rows = card.rows();
         let block = self.block(key, BlockSource::Compact { index, expanded }, start, || {
             BlockPaint::Legacy {
                 rows,
@@ -271,7 +272,7 @@ impl Builder<'_> {
             }
         });
         self.rows += block.rows;
-        // 整块都是点击面：折叠态只有头部两行，点哪里都应能展开。
+        // 元信息常显，点击面只在正文确有折叠预算之外的内容时登记。
         self.snapshot.cards.push(CardRegion {
             kind: CardKind::Compact {
                 checkpoint_id: notice.id.clone(),
@@ -279,7 +280,7 @@ impl Builder<'_> {
             },
             card_start: start,
             card_rows: block.rows,
-            clickable: true,
+            clickable: card.foldable(),
         });
         self.snapshot.entries.push(SnapEntry {
             start,
@@ -325,7 +326,8 @@ impl Builder<'_> {
             width: self.width,
             sig: model_switch_block_signature(slice, expanded),
         };
-        let rows = model_switch::rows(slice, self.width, expanded);
+        let card = model_switch::build(slice, self.width, expanded);
+        let rows = card.rows();
         let block = self.block(
             key,
             BlockSource::ModelSwitch {
@@ -348,7 +350,7 @@ impl Builder<'_> {
             },
             card_start: start,
             card_rows: block.rows,
-            clickable: true,
+            clickable: card.foldable(),
         });
         self.snapshot.entries.push(SnapEntry {
             start,
