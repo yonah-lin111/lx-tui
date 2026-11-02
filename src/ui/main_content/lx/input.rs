@@ -20,39 +20,37 @@ use super::{INPUT_PREFIX, INPUT_SCROLLBAR, RULE};
 /// 输入框顶边框右上角会话标题胶囊的最大正文显示列宽（不含左右各 1 列内边距空格）。
 const SESSION_TITLE_MAX_COLS: u16 = 40;
 
-/// 会话标题胶囊配色池（结合 Claude Code Subagent 胶囊色系与 LX 品牌 Logo 色调）。
+/// 会话标题胶囊柔和暗色配色池（结合 Claude Code 暗色胶囊风格与 LX 品牌 Logo 色调）。
 ///
-/// 每组均为 `(背景色 bg, 字体色 fg)` 256 色 Cube 固定色值（16..=231，不受终端 ANSI 16 色主题重映射影响）：
-/// 亮色/粉彩底固定配极深藏青 `Indexed(17)` 或纯黑 `Indexed(16)`，深色底固定配纯白 `Indexed(231)` 或冰蓝 `Indexed(195)`，
-/// 确保任意终端主题下对比度均 ≥ 7:1，绝不出现背景覆盖文字或撞色。
+/// 针对暗色终端优化：采用**低饱和深色底（`bg`，亮度与用户消息底条接近，不刺眼）+ 柔和粉彩字（`fg`）**，
+/// 保持 ~6.5:1 清晰对比度的同时彻底消除高亮浅色块在暗色背景下的眩光感。
 pub(crate) const SESSION_TITLE_PALETTE: [(Color, Color); 8] = [
-    // 0: LX Logo 主体粉 (218 #ffafd7) 底 + Logo 描边深藏青 (17 #00005f) 字
-    (Color::Indexed(218), Color::Indexed(17)),
-    // 1: LX Logo 天空蓝 (117 #87d7ff) 底 + Logo 描边深藏青 (17 #00005f) 字
-    (Color::Indexed(117), Color::Indexed(17)),
-    // 2: LX Logo 深玫红 (89 #87005f) 底 + Logo 高光纯白 (231 #ffffff) 字
-    (Color::Indexed(89), Color::Indexed(231)),
-    // 3: LX Logo 冰蓝高光 (195 #d7ffff) 底 + Logo 描边深藏青 (17 #00005f) 字
-    (Color::Indexed(195), Color::Indexed(17)),
-    // 4: Claude Code 翡翠薄荷绿 (114 #87d787) 底 + 纯黑 (16 #000000) 字
-    (Color::Indexed(114), Color::Indexed(16)),
-    // 5: Claude Code 皇家紫 (54 #5f0087) 底 + 浅薰衣草白 (225 #ffd7ff) 字
-    (Color::Indexed(54), Color::Indexed(225)),
-    // 6: Claude Code 琥珀金 (222 #ffd787) 底 + 纯黑 (16 #000000) 字
-    (Color::Indexed(222), Color::Indexed(16)),
-    // 7: Claude Code 丁香紫 (183 #d7afff) 底 + 纯黑 (16 #000000) 字
-    (Color::Indexed(183), Color::Indexed(16)),
+    // 0: LX 品牌柔樱粉：暗暮粉紫底 (#2e1e29) + 柔樱粉字 (#e8a6c4)
+    (Color::Rgb(0x2e, 0x1e, 0x29), Color::Rgb(0xe8, 0xa6, 0xc4)),
+    // 1: LX 品牌柔天蓝：暗海蓝底 (#1b2a38) + 柔天蓝字 (#8fc7e8)
+    (Color::Rgb(0x1b, 0x2a, 0x38), Color::Rgb(0x8f, 0xc7, 0xe8)),
+    // 2: LX 品牌柔冰青：暗松石青底 (#1a2e30) + 柔冰青字 (#88d4d6)
+    (Color::Rgb(0x1a, 0x2e, 0x30), Color::Rgb(0x88, 0xd4, 0xd6)),
+    // 3: LX 品牌柔薰衣草紫：暗夜紫底 (#272138) + 柔薰衣草紫字 (#baaee8)
+    (Color::Rgb(0x27, 0x21, 0x38), Color::Rgb(0xba, 0xae, 0xe8)),
+    // 4: Claude 柔薄荷绿：暗苔绿底 (#1d2f24) + 柔薄荷绿字 (#8fcfa2)
+    (Color::Rgb(0x1d, 0x2f, 0x24), Color::Rgb(0x8f, 0xcf, 0xa2)),
+    // 5: Claude 柔暖琥珀：暗琥珀棕底 (#32261a) + 柔暖金字 (#e2b882)
+    (Color::Rgb(0x32, 0x26, 0x1a), Color::Rgb(0xe2, 0xb8, 0x82)),
+    // 6: Claude 柔珊瑚粉：暗绯红底 (#342022) + 柔珊瑚粉字 (#e4a29e)
+    (Color::Rgb(0x34, 0x20, 0x22), Color::Rgb(0xe4, 0xa2, 0x9e)),
+    // 7: Claude 柔雾蓝紫：暗靛蓝底 (#202538) + 柔雾蓝字 (#9eb4e8)
+    (Color::Rgb(0x20, 0x25, 0x38), Color::Rgb(0x9e, 0xb4, 0xe8)),
 ];
 
-/// 按会话配色槽位生成标题胶囊样式：显式绑定高对比 `fg` + `bg` 并加粗，
-/// 同时显式剥离 `DIM` / `REVERSED` / `HIDDEN`，防止继承分割线的压暗属性或反色导致背景覆盖文字。
+/// 按会话配色槽位生成标题胶囊样式：使用柔和暗底 + 柔和亮字（常规字重，避免中文笔画粘连刺眼），
+/// 并显式剥离 `DIM` / `REVERSED` / `HIDDEN`，防止继承分割线的压暗属性或反色导致背景覆盖文字。
 pub(crate) fn session_title_badge_style(palette_index: u8) -> Style {
     let (bg, fg) = SESSION_TITLE_PALETTE[usize::from(palette_index) % SESSION_TITLE_PALETTE.len()];
     Style::default()
         .fg(fg)
         .bg(bg)
-        .add_modifier(Modifier::BOLD)
-        .remove_modifier(Modifier::DIM | Modifier::REVERSED | Modifier::HIDDEN)
+        .remove_modifier(Modifier::BOLD | Modifier::DIM | Modifier::REVERSED | Modifier::HIDDEN)
 }
 
 /// 在输入框顶边框（`rect.y`）右上角边框内部绘制当前会话标题胶囊（如 ` 标题 `，最右侧保留 1 列 `─`）。

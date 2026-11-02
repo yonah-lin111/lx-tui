@@ -6,25 +6,14 @@ use super::*;
 use crate::ui::main_content::lx::history::PaneCache;
 use crate::ui::main_content::lx::{layout, render};
 
-/// 256 色 Cube 索引（16..=231）转换为 RGB。
-fn indexed_rgb(color: Color) -> (u8, u8, u8) {
-    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
-    let Color::Indexed(idx) = color else {
-        panic!("expected 256-color Indexed slot, got {color:?}");
-    };
-    let val = idx
-        .checked_sub(16)
-        .expect("palette slot must be in 6x6x6 cube (16..=231)");
-    assert!(val <= 215, "palette slot must be in 6x6x6 cube (16..=231)");
-    (
-        LEVELS[usize::from(val / 36)],
-        LEVELS[usize::from((val % 36) / 6)],
-        LEVELS[usize::from(val % 6)],
-    )
+fn color_rgb(color: Color) -> (u8, u8, u8) {
+    match color {
+        Color::Rgb(r, g, b) => (r, g, b),
+        other => panic!("expected Color::Rgb, got {other:?}"),
+    }
 }
 
-/// 计算 WCAG 2.1 相对亮度对比度。
-fn contrast_ratio(a: Color, b: Color) -> f64 {
+fn relative_luminance((r, g, b): (u8, u8, u8)) -> f64 {
     fn channel(c: u8) -> f64 {
         let s = f64::from(c) / 255.0;
         if s <= 0.03928 {
@@ -33,28 +22,34 @@ fn contrast_ratio(a: Color, b: Color) -> f64 {
             ((s + 0.055) / 1.055).powf(2.4)
         }
     }
-    fn luminance((r, g, b): (u8, u8, u8)) -> f64 {
-        0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
-    }
-    let l1 = luminance(indexed_rgb(a));
-    let l2 = luminance(indexed_rgb(b));
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+/// 计算 WCAG 2.1 相对亮度对比度。
+fn contrast_ratio(a: Color, b: Color) -> f64 {
+    let l1 = relative_luminance(color_rgb(a));
+    let l2 = relative_luminance(color_rgb(b));
     let (bright, dark) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
     (bright + 0.05) / (dark + 0.05)
 }
 
 #[test]
-fn session_title_palette_guarantees_high_contrast_and_never_dims_or_reverses() {
+fn session_title_palette_uses_soft_dark_bg_and_clear_pastel_fg() {
     for (idx, &(bg, fg)) in SESSION_TITLE_PALETTE.iter().enumerate() {
         assert_ne!(bg, fg, "slot {idx}: bg and fg must differ");
+        let bg_lum = relative_luminance(color_rgb(bg));
+        assert!(
+            bg_lum <= 0.04,
+            "slot {idx}: background must stay dark and non-glaring (lum <= 0.04), got {bg_lum:.4} for {bg:?}"
+        );
         let ratio = contrast_ratio(bg, fg);
         assert!(
-            ratio >= 7.0,
-            "slot {idx}: WCAG AAA contrast >= 7.0 required, got {ratio:.2} for bg={bg:?}, fg={fg:?}"
+            (5.5..=10.0).contains(&ratio),
+            "slot {idx}: contrast must be clear yet soft (5.5..=10.0), got {ratio:.2} for bg={bg:?}, fg={fg:?}"
         );
         let style = session_title_badge_style(idx as u8);
         assert_eq!(style.bg, Some(bg));
         assert_eq!(style.fg, Some(fg));
-        assert!(style.add_modifier.contains(Modifier::BOLD));
         assert!(style.sub_modifier.contains(Modifier::DIM));
         assert!(style.sub_modifier.contains(Modifier::REVERSED));
         assert!(style.sub_modifier.contains(Modifier::HIDDEN));
@@ -103,7 +98,7 @@ fn session_title_badge_renders_inside_top_right_border_with_bg_and_fg() {
         "左上角应保留边框线 `─`"
     );
 
-    // 验证胶囊区域的单元格均携带预期的高对比背景色与前景色，且不含 DIM
+    // 验证胶囊区域的单元格均携带预期的柔和暗底与柔亮前景，且不含 DIM
     let (expected_bg, expected_fg) = SESSION_TITLE_PALETTE[0];
     let badge_w = display_width(" 修复标题生成问题 ") as u16;
     let badge_start_x = input.right() - 1 - badge_w;
@@ -116,10 +111,6 @@ fn session_title_badge_renders_inside_top_right_border_with_bg_and_fg() {
         assert_eq!(
             cell.fg, expected_fg,
             "列 {x} 应带胶囊字体色 {expected_fg:?}"
-        );
-        assert!(
-            cell.modifier.contains(Modifier::BOLD),
-            "列 {x} 标题文字应加粗"
         );
         assert!(
             !cell.modifier.contains(Modifier::DIM),

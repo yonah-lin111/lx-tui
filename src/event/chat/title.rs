@@ -103,6 +103,10 @@ pub fn handle_session_title_generated(
         return false;
     }
     let Some(new_title) = title.filter(|value| !value.trim().is_empty()) else {
+        // 模型失败或拒答被过滤时，回退使用首轮干净预览标题更新窗格顶边框胶囊。
+        if let Some(fallback) = title::parse_generated_title(initial_title) {
+            return update::apply_generated_session_title(state, session_id, &fallback);
+        }
         return false;
     };
     // 2. 数据库级校验：仅当当前标题仍等于首轮初始兜底标题时更新。

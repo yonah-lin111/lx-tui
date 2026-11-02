@@ -1,8 +1,8 @@
-//! 会话与模板块标题生成的提示词组装、请求构造与响应清洗（对齐 codex `thread_title.rs`）。
+//! 会话与模板块标题生成的提示词组装、请求构造与响应清洗（对齐 codex `thread_title.rs` 与 lx-agent `titleGenerator.ts`）。
 //!
 //! 保持纯函数与零 IO：提示词统一使用英文编写（遵守模型提示词全英文规范），
-//! 按配置的 `TitleLanguage`（默认简体中文 `SimplifiedChinese`，或指定其它语言 / 自动跟随）
-//! 明确约束模型输出对应语言的简洁单行标题。
+//! 按配置的 `TitleLanguage`（默认 `Auto` 自动跟随用户输入语言，或强制指定语言）
+//! 明确约束模型输出对应语言的简洁单行标题，并拦截模型拒答或元解释文本。
 
 use std::sync::Arc;
 
@@ -42,47 +42,54 @@ pub fn title_instructions_for(language: TitleLanguage, sample_text: &str) -> &'s
     };
     match resolved {
         TitleLanguage::SimplifiedChinese => {
-            "Generate a concise, single-line task title in Simplified Chinese (at most 20 Chinese \
-characters). You MUST write the title in Simplified Chinese regardless of whether the input \
-contains English template labels, code snippets, or file paths. Preserve ticket references and \
-key code identifiers when necessary. Do not use quotes, markdown, braces, or trailing \
-punctuation. Do not answer the request. Output only the title text."
+            "Generate a concise, single-line title in Simplified Chinese (at most 20 Chinese \
+characters) that summarizes the topic or intent of the input. Whether the input is a coding task, \
+a technical question, a casual greeting, or an identity query (such as '你是谁' or '你好'), \
+always summarize its topic into a short title (e.g., '身份询问' or '日常问候'). You MUST write \
+the title in Simplified Chinese regardless of English template labels, code snippets, or file \
+paths. NEVER refuse, and NEVER output meta-explanations such as '无法生成标题' or '输入不是任务描述'. \
+Do not use quotes, markdown, braces, or trailing punctuation. Do not answer the request. Output \
+only the title text."
         }
         TitleLanguage::TraditionalChinese => {
-            "Generate a concise, single-line task title in Traditional Chinese (at most 20 \
-Chinese characters). You MUST write the title in Traditional Chinese regardless of whether the \
-input contains English template labels, code snippets, or file paths. Preserve ticket references \
-and key code identifiers when necessary. Do not use quotes, markdown, braces, or trailing \
+            "Generate a concise, single-line title in Traditional Chinese (at most 20 Chinese \
+characters) that summarizes the topic or intent of the input. Whether the input is a coding task, \
+a question, or a casual greeting, always summarize its topic into a short title. You MUST write \
+the title in Traditional Chinese regardless of English template labels, code snippets, or file \
+paths. NEVER refuse or output meta-explanations. Do not use quotes, markdown, braces, or trailing \
 punctuation. Do not answer the request. Output only the title text."
         }
         TitleLanguage::Japanese => {
-            "Generate a concise, single-line task title in Japanese (at most 24 characters). \
-You MUST write the title in Japanese regardless of whether the input contains English template \
-labels, code snippets, or file paths. Preserve ticket references and key code identifiers when \
-necessary. Do not use quotes, markdown, braces, or trailing punctuation. Do not answer the \
-request. Output only the title text."
+            "Generate a concise, single-line title in Japanese (at most 24 characters) that \
+summarizes the topic or intent of the input. Whether the input is a coding task, a question, or a \
+casual greeting, always summarize its topic into a short title. You MUST write the title in \
+Japanese regardless of English template labels, code snippets, or file paths. NEVER refuse or \
+output meta-explanations. Do not use quotes, markdown, braces, or trailing punctuation. Do not \
+answer the request. Output only the title text."
         }
         TitleLanguage::Korean => {
-            "Generate a concise, single-line task title in Korean (at most 24 characters). \
-You MUST write the title in Korean regardless of whether the input contains English template \
-labels, code snippets, or file paths. Preserve ticket references and key code identifiers when \
-necessary. Do not use quotes, markdown, braces, or trailing punctuation. Do not answer the \
-request. Output only the title text."
+            "Generate a concise, single-line title in Korean (at most 24 characters) that \
+summarizes the topic or intent of the input. Whether the input is a coding task, a question, or a \
+casual greeting, always summarize its topic into a short title. You MUST write the title in \
+Korean regardless of English template labels, code snippets, or file paths. NEVER refuse or \
+output meta-explanations. Do not use quotes, markdown, braces, or trailing punctuation. Do not \
+answer the request. Output only the title text."
         }
         TitleLanguage::English => {
-            "Generate a concise, single-line task title in English of at most 36 characters and \
-under five words where possible. Start with an imperative verb. Capitalize only the first word \
-unless proper nouns, acronyms, or code terms require otherwise. Preserve ticket references \
-exactly. You MUST write the title in English. Do not use quotes, markdown, braces, or trailing \
-punctuation. Do not answer the request. Output only the title text."
+            "Generate a concise, single-line title in English of at most 36 characters and under \
+five words where possible that summarizes the topic or intent of the input. Whether the input is \
+a coding task, a question, or a casual greeting, always summarize its topic into a short title. \
+You MUST write the title in English. NEVER refuse or output meta-explanations. Do not use quotes, \
+markdown, braces, or trailing punctuation. Do not answer the request. Output only the title text."
         }
         TitleLanguage::Auto => {
-            "Generate a concise, single-line task title of at most 36 characters. Ignore English \
-template field labels (such as '- Description:', '- Requirements:', '- Reference:', '- Location:', \
-'- Notes:'), file paths, and code identifiers when determining the user's language, and write the \
-title in the natural language used by the user. Preserve ticket references exactly. Do not use \
-quotes, markdown, braces, or trailing punctuation. Do not answer the request. Output only the \
-title text."
+            "Generate a concise, single-line title of at most 36 characters that summarizes the \
+topic or intent of the input. Whether the input is a coding task, a question, or a casual \
+greeting, always summarize its topic into a short title. Ignore English template field labels \
+(such as '- Description:', '- Requirements:', '- Reference:', '- Location:', '- Notes:'), file \
+paths, and code identifiers when determining the user's language, and write the title in the \
+natural language used by the user. NEVER refuse or output meta-explanations. Do not use quotes, \
+markdown, braces, or trailing punctuation. Do not answer the request. Output only the title text."
         }
     }
 }
@@ -126,7 +133,7 @@ pub fn session_title_prompt_for(user_message: &str, language: TitleLanguage) -> 
         return None;
     }
     let instructions = title_instructions_for(language, trimmed);
-    let prefix = format!("{instructions}\n\nUser prompt:\n");
+    let prefix = format!("{instructions}\n\nConversation content:\n");
     let budget = TITLE_PROMPT_MAX_BYTES.saturating_sub(prefix.len());
     let body = truncate_utf8_bytes(trimmed, budget).trim_end();
     if body.is_empty() {
@@ -205,7 +212,7 @@ fn next_think_tag(text: &str) -> Option<(usize, &'static str)> {
     }
 }
 
-/// 解析并清洗模型返回的标题文本（兼容 JSON `{"title":"..."}` 与纯文本首行）。
+/// 解析并清洗模型返回的标题文本（兼容 JSON `{"title":"..."}` 与纯文本首行，并拦截拒答文本）。
 pub fn parse_generated_title(raw: &str) -> Option<String> {
     let stripped = strip_think_blocks(raw);
     let trimmed = stripped.trim();
@@ -224,7 +231,11 @@ pub fn parse_generated_title(raw: &str) -> Option<String> {
     } else {
         first_non_empty_line(trimmed).to_string()
     };
-    sanitize_title(&candidate)
+    let sanitized = sanitize_title(&candidate)?;
+    if is_refusal_title(&sanitized) {
+        return None;
+    }
+    Some(sanitized)
 }
 
 fn first_non_empty_line(text: &str) -> &str {
@@ -232,6 +243,34 @@ fn first_non_empty_line(text: &str) -> &str {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .unwrap_or("")
+}
+
+/// 检测模型是否输出了「无法生成任务标题：输入不是任务描述」之类的拒答或元解释话术。
+fn is_refusal_title(title: &str) -> bool {
+    const CJK_REFUSALS: &[&str] = &[
+        "无法生成",
+        "不能生成",
+        "无法提炼",
+        "无法总结",
+        "无法概括",
+        "不是任务描述",
+        "未提供任务",
+        "无有效任务",
+        "无任务描述",
+    ];
+    if CJK_REFUSALS.iter().any(|pat| title.contains(pat)) {
+        return true;
+    }
+    let lower = title.to_ascii_lowercase();
+    const EN_REFUSALS: &[&str] = &[
+        "cannot generate",
+        "can't generate",
+        "unable to generate",
+        "not a task",
+        "no task description",
+        "cannot summarize",
+    ];
+    EN_REFUSALS.iter().any(|pat| lower.contains(pat))
 }
 
 fn sanitize_title(text: &str) -> Option<String> {
@@ -287,6 +326,7 @@ mod tests {
             prompt.contains("Simplified Chinese"),
             "默认 Auto 检测到中文输入应要求输出简体中文"
         );
+        assert!(prompt.contains("Conversation content:"));
 
         let tpl_prompt =
             template_block_title_prompt_for(&long_cjk, TitleLanguage::English).expect("en prompt");
@@ -314,6 +354,13 @@ mod tests {
         assert!(template_block_title_prompt("").is_none());
         assert!(parse_generated_title("   ").is_none());
         assert!(parse_generated_title("<think>only thoughts</think>").is_none());
+    }
+
+    #[test]
+    fn parse_generated_title_rejects_refusal_phrases() {
+        assert!(parse_generated_title("无法生成任务标题：输入不是任务描述").is_none());
+        assert!(parse_generated_title("不能生成标题：未提供任务描述").is_none());
+        assert!(parse_generated_title("Cannot generate title: input is not a task").is_none());
     }
 
     #[test]
