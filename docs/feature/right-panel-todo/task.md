@@ -235,7 +235,7 @@
 - [x] 侧栏：边框随 `sidebar_focused()` 描边；新增 `focus_sidebar()`；点侧栏内任意位置（条目、
       Agents 分区、列表空白、边框）都让侧栏进入选中态（兜底分支必须排在所有侧栏控件之后，
       否则会吃掉条目点击）。
-- [x] 主区：`panes.rs` 焦点判定改 `state.panes_focused()`；Agents 条目 `❯` 标记同源。
+- [x] 主区：`panes.rs` 焦点判定改 `state.panes_focused()`；Agents 条目 `❯` 标记跟随当前激活标签的焦点窗格（不随容器失焦消失）。
 - [x] `switch_workspace` 只在 **Prompt** 持焦点时交回主区：Todo 焦点按设计不随工作区变化，
       侧栏刚点下去的也不该被抢走。
 - [x] 把 `focus_sidebar` / `focus_pane` 从 `pane.rs`（本就 1074 行、已超 1000 上限）拆到新模块
