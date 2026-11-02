@@ -344,7 +344,6 @@ fn merge_settings(
     if let Some(timeout) = body.get("streamIdleTimeoutMs").and_then(Value::as_u64) {
         settings.stream_idle_timeout_ms = Some(timeout);
     }
-    settings.extra.clear();
     settings.validate().map_err(|error| error.to_string())?;
     Ok(settings)
 }

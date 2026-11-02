@@ -1,6 +1,6 @@
 //! 后台轻量流式请求：执行会话标题与模板块标题生成并回投 `AppEvent`。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -15,6 +15,28 @@ use crate::chat::title::{self, TITLE_MAX_OUTPUT_BYTES, TITLE_TIMEOUT_SECS};
 use crate::db::chat::ModelSnapshot;
 use crate::db::service::Persistence;
 use crate::event::AppEvent;
+
+/// 会话自动标题与 Prompt 模板块 `/title` 生成完成事件载荷。
+#[derive(Debug, Clone)]
+pub enum TitleGeneratedEvent {
+    /// `lx` 新会话后台自动生成标题完成。
+    Session {
+        workspace: PathBuf,
+        session_id: String,
+        initial_title: String,
+        title: Option<String>,
+    },
+    /// Prompt 模板块 `/title` 后台生成标题完成。
+    PromptBlock {
+        request_id: u64,
+        workspace_index: usize,
+        editing: PromptEditing,
+        page_id: PromptPageId,
+        block_start_line: usize,
+        original_title: Option<String>,
+        title: Option<String>,
+    },
+}
 
 /// 抽取并后台执行标题生成效应（不阻塞主对话流或事件循环）。
 pub fn apply_title_effects(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) -> bool {
@@ -51,12 +73,12 @@ pub fn apply_title_effects(state: &mut AppState, sender: &mpsc::UnboundedSender<
                 let sender = sender.clone();
                 tokio::spawn(async move {
                     let title = execute_title_stream(&prompt, &model).await;
-                    let _ = sender.send(AppEvent::SessionTitleGenerated {
+                    let _ = sender.send(AppEvent::TitleGenerated(TitleGeneratedEvent::Session {
                         workspace,
                         session_id,
                         initial_title,
                         title,
-                    });
+                    }));
                 });
             }
             Effect::GeneratePromptBlockTitle {
@@ -72,15 +94,16 @@ pub fn apply_title_effects(state: &mut AppState, sender: &mpsc::UnboundedSender<
                 let sender = sender.clone();
                 tokio::spawn(async move {
                     let title = execute_title_stream(&prompt, &model).await;
-                    let _ = sender.send(AppEvent::PromptBlockTitleGenerated {
-                        request_id,
-                        workspace_index,
-                        editing,
-                        page_id,
-                        block_start_line,
-                        original_title,
-                        title,
-                    });
+                    let _ =
+                        sender.send(AppEvent::TitleGenerated(TitleGeneratedEvent::PromptBlock {
+                            request_id,
+                            workspace_index,
+                            editing,
+                            page_id,
+                            block_start_line,
+                            original_title,
+                            title,
+                        }));
                 });
             }
             _ => {}
@@ -89,7 +112,48 @@ pub fn apply_title_effects(state: &mut AppState, sender: &mpsc::UnboundedSender<
     true
 }
 
-/// 处理新会话后台自动标题生成完成事件（双重防覆盖校验后静默落库并更新 `/resume` 列表）。
+/// 统一分发会话与模板块标题生成完成事件。
+pub fn handle_title_generated(
+    state: &mut AppState,
+    persistence: &Persistence,
+    event: TitleGeneratedEvent,
+) -> bool {
+    match event {
+        TitleGeneratedEvent::Session {
+            workspace,
+            session_id,
+            initial_title,
+            title,
+        } => handle_session_title_generated(
+            state,
+            persistence,
+            &workspace,
+            &session_id,
+            &initial_title,
+            title.as_deref(),
+        ),
+        TitleGeneratedEvent::PromptBlock {
+            request_id,
+            workspace_index,
+            editing,
+            page_id,
+            block_start_line,
+            original_title,
+            title,
+        } => handle_prompt_block_title_generated(
+            state,
+            request_id,
+            workspace_index,
+            editing,
+            page_id,
+            block_start_line,
+            original_title.as_deref(),
+            title.as_deref(),
+        ),
+    }
+}
+
+/// 处理新会话后台自动标题生成完成事件（双重防覆盖校验后静默落库并更新 `/resume` 列表与顶边框胶囊）。
 pub fn handle_session_title_generated(
     state: &mut AppState,
     persistence: &Persistence,
@@ -98,7 +162,7 @@ pub fn handle_session_title_generated(
     initial_title: &str,
     title: Option<&str>,
 ) -> bool {
-    // 1. 内存级校验：若已不在 pending 集合中，说明用户期间手动改过名。
+    // 1. 内存级校验：若已不在 pending 集合中，说明用户期间手动改过名或已删除会话。
     if !update::take_pending_session_title(state, session_id) {
         return false;
     }
@@ -122,8 +186,10 @@ pub fn handle_session_title_generated(
 }
 
 /// 处理 Prompt 模板块 `/title` 生成完成事件。
+#[allow(clippy::too_many_arguments)]
 pub fn handle_prompt_block_title_generated(
     state: &mut AppState,
+    request_id: u64,
     workspace_index: usize,
     editing: PromptEditing,
     page_id: PromptPageId,
@@ -133,6 +199,7 @@ pub fn handle_prompt_block_title_generated(
 ) -> bool {
     update::on_prompt_block_title_generated(
         state,
+        request_id,
         workspace_index,
         editing,
         page_id,
@@ -159,10 +226,16 @@ async fn execute_title_stream(prompt: &str, model: &FrozenModel) -> Option<Strin
         cancel,
         |_| {},
     );
-    let outcome = tokio::time::timeout(Duration::from_secs(TITLE_TIMEOUT_SECS), stream_fut)
-        .await
-        .ok()?;
+    let outcome =
+        match tokio::time::timeout(Duration::from_secs(TITLE_TIMEOUT_SECS), stream_fut).await {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                tracing::debug!(model = %model.model, "title generation timed out");
+                return None;
+            }
+        };
     if outcome.stop != StopReason::Complete {
+        tracing::debug!(model = %model.model, stop = ?outcome.stop, "title generation stopped early");
         return None;
     }
     let mut raw_text = String::new();
@@ -180,67 +253,4 @@ async fn execute_title_stream(prompt: &str, model: &FrozenModel) -> Option<Strin
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db::Database;
-    use crate::db::chat::ModelSnapshot;
-
-    #[test]
-    fn handle_session_title_generated_updates_db_and_respects_manual_rename() {
-        let db = Database::open_in_memory().expect("in memory db");
-        let workspace = std::path::PathBuf::from("/tmp/lx-title-test-ws");
-        let model = ModelSnapshot {
-            provider: "p".into(),
-            model: "m".into(),
-            variant: None,
-        };
-        let committed = db
-            .begin_turn(&workspace, None, "First long message from user", &model)
-            .expect("begin turn");
-        let persistence = Persistence::with_database(db);
-        let mut state = AppState::demo();
-        state
-            .pending_session_titles
-            .insert(committed.session_id.clone());
-
-        // 自动标题正常返回：更新数据库标题
-        handle_session_title_generated(
-            &mut state,
-            &persistence,
-            &workspace,
-            &committed.session_id,
-            "First long message from user",
-            Some("Concise Generated Title"),
-        );
-        let sessions = persistence
-            .database()
-            .expect("db")
-            .list_chat_sessions(&workspace, 0, 10)
-            .expect("list");
-        assert_eq!(sessions[0].title, "Concise Generated Title");
-
-        // 若已被消费或被手动重命名，再次回投不得覆盖
-        persistence
-            .database()
-            .expect("db")
-            .rename_chat_session(&workspace, &committed.session_id, "User Manual Title")
-            .expect("manual rename");
-        state
-            .pending_session_titles
-            .insert(committed.session_id.clone());
-        handle_session_title_generated(
-            &mut state,
-            &persistence,
-            &workspace,
-            &committed.session_id,
-            "First long message from user",
-            Some("Stale Auto Title"),
-        );
-        let sessions = persistence
-            .database()
-            .expect("db")
-            .list_chat_sessions(&workspace, 0, 10)
-            .expect("list");
-        assert_eq!(sessions[0].title, "User Manual Title");
-    }
-}
+mod tests;

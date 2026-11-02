@@ -914,3 +914,38 @@ async fn put_and_get_round_trip_title_summary_model() {
     assert_eq!(parsed["titleLanguage"], serde_json::json!("en"));
     service.shutdown();
 }
+
+#[tokio::test]
+async fn models_save_preserves_unknown_top_level_ai_fields() {
+    let (service, _events, _dir) = start_models("models-top-extra-keep").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let ai_path = state_user_root(&service).join("config").join("ai.json");
+    std::fs::create_dir_all(ai_path.parent().expect("config dir")).expect("config dir");
+    std::fs::write(
+        &ai_path,
+        r#"{"ai":{"providers":{},"suggestedQuestionsEnabled":true}}"#,
+    )
+    .expect("seed ai.json");
+
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &put_body(),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{}", body(&saved));
+
+    let text = std::fs::read_to_string(&ai_path).expect("read ai.json");
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert_eq!(
+        parsed["ai"]["suggestedQuestionsEnabled"],
+        serde_json::json!(true),
+        "顶层未知字段往返保留：{text}"
+    );
+    service.shutdown();
+}

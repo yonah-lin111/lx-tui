@@ -83,7 +83,7 @@ impl ModelsSnapshot {
         FrozenModel::resolve(self, &normalized)
     }
 
-    /// 为 `lx` 新会话自动标题解析有效模型：优先 `titleSummary`，回退会话当前生效选择。
+    /// 为 `lx` 新会话自动标题解析有效模型：优先 `titleSummary`，回退会话当前生效选择，再回退 `defaultModel`。
     pub fn resolve_session_title_model(
         &self,
         fallback_selection: Option<&ModelSelection>,
@@ -94,10 +94,14 @@ impl ModelsSnapshot {
                 return Some(frozen);
             }
         }
-        let fallback = fallback_selection
-            .cloned()
-            .or_else(|| self.default_selection())?;
-        let normalized = self.normalize_selection(fallback);
+        if let Some(selection) = self.validated_selection(fallback_selection) {
+            let normalized = self.normalize_selection(selection);
+            if let Some(frozen) = FrozenModel::resolve(self, &normalized) {
+                return Some(frozen);
+            }
+        }
+        let selection = self.default_selection()?;
+        let normalized = self.normalize_selection(selection);
         FrozenModel::resolve(self, &normalized)
     }
 
@@ -190,7 +194,7 @@ impl ModelsSnapshot {
         self.settings.idle_timeout_ms()
     }
 
-    /// 标题生成语言配置（缺省为简体中文 `SimplifiedChinese`）。
+    /// 标题生成语言配置（缺省为 `Auto` 自动跟随用户输入语言）。
     pub fn title_language(&self) -> crate::config::ai::TitleLanguage {
         self.settings.effective_title_language()
     }
@@ -500,27 +504,23 @@ pub struct LxChat {
     pub session_title_palette: u8,
 }
 
-/// 会话标题胶囊配色槽位总数（与 `ui::main_content::lx::input::SESSION_TITLE_PALETTE` 对齐）。
-pub const SESSION_TITLE_PALETTE_COUNT: u8 = 8;
+pub use crate::ui::style::SESSION_TITLE_PALETTE_COUNT;
 
-/// 为新赋标题的会话随机选取一个与上一次不同的配色槽位。
-fn next_random_title_palette(session_id: Option<&str>) -> u8 {
+/// 为会话选取一个与上一次不同的确定性配色槽位（不依赖时钟，且保证连续会话不撞色）。
+fn next_title_palette(session_id: Option<&str>) -> u8 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     static LAST_PALETTE: AtomicU64 = AtomicU64::new(u64::MAX);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325 ^ nanos.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     if let Some(id) = session_id {
         for byte in id.as_bytes() {
             hash ^= u64::from(*byte);
             hash = hash.wrapping_mul(0x0100_0000_01b3);
         }
+    } else {
+        hash ^= seq.wrapping_mul(0x9e37_79b9_7f4a_7c15);
     }
-    hash ^= seq.wrapping_mul(0xbf58_476d_1ce4_e5b9);
     hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     hash ^= hash >> 31;
@@ -533,6 +533,28 @@ fn next_random_title_palette(session_id: Option<&str>) -> u8 {
     }
     LAST_PALETTE.store(chosen, Ordering::Relaxed);
     chosen as u8
+}
+
+fn normalize_session_title(raw: &str) -> Option<String> {
+    let mut cleaned = String::new();
+    let mut prev_space = false;
+    for ch in raw.chars() {
+        if ch.is_whitespace() || ch.is_control() {
+            if !cleaned.is_empty() && !prev_space {
+                cleaned.push(' ');
+                prev_space = true;
+            }
+        } else {
+            cleaned.push(ch);
+            prev_space = false;
+        }
+    }
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 impl Default for LxChat {
@@ -581,18 +603,16 @@ impl LxChat {
         }
     }
 
-    /// 设置或更新当前会话标题；首次为该会话赋标题时随机锁定一套配色槽位，同会话后续改名保持配色不变。
+    /// 设置或更新当前会话标题；首次为该会话赋标题时锁定一套配色槽位，同会话后续改名保持配色不变。
     pub fn set_session_title(&mut self, title: Option<String>) -> bool {
-        let normalized = title
-            .map(|raw| crate::ui::text::chat::single_line_label(&raw).into_owned())
-            .filter(|clean| !clean.is_empty());
+        let normalized = title.and_then(|raw| normalize_session_title(&raw));
         if self.session_title == normalized {
             return false;
         }
         let was_none = self.session_title.is_none();
         self.session_title = normalized;
         if was_none && self.session_title.is_some() {
-            self.session_title_palette = next_random_title_palette(self.session_id.as_deref());
+            self.session_title_palette = next_title_palette(self.session_id.as_deref());
         }
         true
     }

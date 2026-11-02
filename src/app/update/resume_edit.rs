@@ -187,6 +187,7 @@ fn delete_target(state: &mut AppState) -> bool {
         return false;
     }
     close_overlay(state);
+    crate::app::update::cancel_session_title(state, &session_id);
     state.effects.push(Effect::DeleteChatSession {
         workspace,
         session_id,

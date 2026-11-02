@@ -75,9 +75,7 @@ pub(crate) use subagent::{
     apply_subagent_effects, finish_subagent, handle_subagent_auto_compact,
     handle_subagent_net_event, handle_subagent_wait_ready,
 };
-pub use title::{
-    apply_title_effects, handle_prompt_block_title_generated, handle_session_title_generated,
-};
+pub use title::{TitleGeneratedEvent, apply_title_effects, handle_title_generated};
 
 use std::collections::HashMap;
 use std::path::PathBuf;

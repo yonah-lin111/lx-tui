@@ -5,6 +5,7 @@ use ratatui::style::{Color, Modifier};
 use super::*;
 use crate::ui::main_content::lx::history::PaneCache;
 use crate::ui::main_content::lx::{layout, render};
+use crate::ui::style::{SESSION_TITLE_PALETTE, session_title_badge};
 
 fn color_rgb(color: Color) -> (u8, u8, u8) {
     match color {
@@ -47,13 +48,31 @@ fn session_title_palette_uses_soft_dark_bg_and_clear_pastel_fg() {
             (5.5..=10.0).contains(&ratio),
             "slot {idx}: contrast must be clear yet soft (5.5..=10.0), got {ratio:.2} for bg={bg:?}, fg={fg:?}"
         );
-        let style = session_title_badge_style(idx as u8);
+        let style = session_title_badge(idx as u8);
         assert_eq!(style.bg, Some(bg));
         assert_eq!(style.fg, Some(fg));
         assert!(style.sub_modifier.contains(Modifier::DIM));
         assert!(style.sub_modifier.contains(Modifier::REVERSED));
         assert!(style.sub_modifier.contains(Modifier::HIDDEN));
     }
+}
+
+#[test]
+fn session_title_badge_with_zero_width_variation_selector_preserves_right_border() {
+    let area = Rect::new(0, 0, 50, 14);
+    let mut lx = Lx::new();
+    lx.chat.session_id = Some("sess-zw".into());
+    lx.chat.set_session_title(Some("Fix ❤️ bug".into()));
+
+    let input = layout(area, &lx).input.expect("input rect");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+
+    assert_eq!(
+        buf[(input.right() - 1, input.y)].symbol(),
+        "─",
+        "含 VS16 (U+FE0F) 零宽字符时右上角最右 1 列仍须保留 `─`"
+    );
 }
 
 #[test]

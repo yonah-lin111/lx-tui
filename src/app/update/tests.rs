@@ -219,8 +219,8 @@ fn prompt_click_dismisses_worktree_chooser_without_text_change() {
     assert!(state.prompt.slash_confirm(), "opens chooser");
     assert!(state.prompt.worktree_chooser_open());
     let before = state.prompt.text().to_string();
-    // 点击同一命令行：锚定不变，选择器保持打开。
-    place_prompt_cursor(&mut state, 2, 4);
+    // 点击同一命令行（视觉第 0 行为块顶边框，第 1 行为起始行，第 2 行为 body，第 3 行为 `/gitWorkTree `）：锚定不变，选择器保持打开。
+    place_prompt_cursor(&mut state, 3, 4);
     assert!(
         state.prompt.worktree_chooser_open(),
         "同一行内点击不关闭: {}",

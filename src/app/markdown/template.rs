@@ -404,14 +404,29 @@ pub fn extract_block_title_source(body: &str) -> String {
         .to_string()
 }
 
-/// 读取目标块起始行下一行的 `{title: ...}` 标题值；若不存在标题行返回 None。
+/// 读取目标块起始行下一行的 `{title: ...}` 标题值（或起始行内联标题）；若不存在标题返回 None。
 pub fn block_title_value_at_line(text: &str, start_line: usize) -> Option<String> {
     let lines: Vec<&str> = text.split('\n').collect();
-    let next_line = lines.get(start_line + 1)?;
-    parse_title_line(next_line).map(|title| title.trim().to_string())
+    if let Some(next_line) = lines.get(start_line + 1)
+        && let Some(title) = parse_title_line(next_line)
+    {
+        return Some(title.trim().to_string());
+    }
+    let start_str = lines.get(start_line)?;
+    if let Some(parsed) = parse_template_start_line(start_str)
+        && let Some(title) = parsed.title
+    {
+        return Some(title.trim().to_string());
+    }
+    if let Some(parsed) = super::supple::parse_supple_start_line(start_str)
+        && let Some(title) = parsed.title
+    {
+        return Some(title.trim().to_string());
+    }
+    None
 }
 
-/// 计算设置/替换/移除块标题行所需的替换字节区间与替换文本。
+/// 计算设置/替换/移除块标题行所需的替换字节区间与替换文本（同时兼容起始行内联标题与下一行独立标题行）。
 pub fn set_block_title_edit(
     text: &str,
     start_line: usize,
@@ -419,11 +434,20 @@ pub fn set_block_title_edit(
 ) -> Option<(std::ops::Range<usize>, String)> {
     let lines: Vec<&str> = text.split('\n').collect();
     let start_str = lines.get(start_line)?;
-    if parse_template_start_line(start_str).is_none()
-        && super::supple::parse_supple_start_line(start_str).is_none()
+    let inline_title_idx = if parse_template_start_line(start_str)
+        .is_some_and(|s| s.title.is_some())
+        || super::supple::parse_supple_start_line(start_str).is_some_and(|s| s.title.is_some())
     {
+        start_str
+            .find("{title:")
+            .or_else(|| start_str.find("「title:"))
+    } else if parse_template_start_line(start_str).is_some()
+        || super::supple::parse_supple_start_line(start_str).is_some()
+    {
+        None
+    } else {
         return None;
-    }
+    };
     let indent = &start_str[..start_str.len() - start_str.trim_start_matches(' ').len()];
 
     let mut line_starts = Vec::with_capacity(lines.len() + 1);
@@ -444,6 +468,14 @@ pub fn set_block_title_edit(
                 let t_start = line_starts[start_line + 1];
                 let t_end = t_start + lines[start_line + 1].len();
                 Some((t_start..t_end, format!("{indent}{{title: {safe_title}}}")))
+            } else if let Some(inline_idx) = inline_title_idx {
+                let head = start_str[..inline_idx].trim_end_matches(' ');
+                let s_start = line_starts[start_line];
+                let s_end = s_start + start_str.len();
+                Some((
+                    s_start..s_end,
+                    format!("{head}\n{indent}{{title: {safe_title}}}"),
+                ))
             } else {
                 let insert_at = line_starts[start_line] + start_str.len();
                 Some((
@@ -457,6 +489,11 @@ pub fn set_block_title_edit(
                 let t_start = line_starts[start_line + 1];
                 let t_end = line_starts[start_line + 2].min(text.len());
                 Some((t_start..t_end, String::new()))
+            } else if let Some(inline_idx) = inline_title_idx {
+                let head = start_str[..inline_idx].trim_end_matches(' ');
+                let s_start = line_starts[start_line];
+                let s_end = s_start + start_str.len();
+                Some((s_start..s_end, head.to_string()))
             } else {
                 None
             }

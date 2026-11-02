@@ -18,11 +18,8 @@ pub const TITLE_PROMPT_MAX_BYTES: usize = 960;
 pub const TITLE_TIMEOUT_SECS: u64 = 30;
 /// 标题响应流最大累计字节数（8 KiB）。
 pub const TITLE_MAX_OUTPUT_BYTES: usize = 8 * 1024;
-
-/// 默认标题生成指令（Auto 自动跟随用户输入语言）。
-pub fn title_instructions() -> &'static str {
-    title_instructions_for(TitleLanguage::Auto, "")
-}
+/// 标题生成专用非空系统提示词（避免各 Transport 发送空字符串 system 块导致 400）。
+pub const TITLE_SYSTEM_PROMPT: &str = "You are a concise conversation and task title generator. Output only a single-line title text with no quotes, markdown, braces, or trailing punctuation. Never refuse and never answer the user's request.";
 
 /// 按配置的 `TitleLanguage` 与输入样本文本返回对应的英文系统指令。
 pub fn title_instructions_for(language: TitleLanguage, sample_text: &str) -> &'static str {
@@ -32,6 +29,8 @@ pub fn title_instructions_for(language: TitleLanguage, sample_text: &str) -> &'s
                 TitleLanguage::Japanese
             } else if contains_korean_hangul(sample_text) {
                 TitleLanguage::Korean
+            } else if contains_traditional_cjk(sample_text) {
+                TitleLanguage::TraditionalChinese
             } else if contains_cjk(sample_text) {
                 TitleLanguage::SimplifiedChinese
             } else {
@@ -44,12 +43,12 @@ pub fn title_instructions_for(language: TitleLanguage, sample_text: &str) -> &'s
         TitleLanguage::SimplifiedChinese => {
             "Generate a concise, single-line title in Simplified Chinese (at most 20 Chinese \
 characters) that summarizes the topic or intent of the input. Whether the input is a coding task, \
-a technical question, a casual greeting, or an identity query (such as '你是谁' or '你好'), \
-always summarize its topic into a short title (e.g., '身份询问' or '日常问候'). You MUST write \
-the title in Simplified Chinese regardless of English template labels, code snippets, or file \
-paths. NEVER refuse, and NEVER output meta-explanations such as '无法生成标题' or '输入不是任务描述'. \
-Do not use quotes, markdown, braces, or trailing punctuation. Do not answer the request. Output \
-only the title text."
+a technical question, a casual greeting, or an identity query (such as asking who you are or \
+saying hello), always summarize its topic into a short title (such as an identity inquiry or \
+casual greeting). You MUST write the title in Simplified Chinese regardless of English template \
+labels, code snippets, or file paths. NEVER refuse, and NEVER output meta-explanations stating \
+that a title cannot be generated or that the input is not a task description. Do not use quotes, \
+markdown, braces, or trailing punctuation. Do not answer the request. Output only the title text."
         }
         TitleLanguage::TraditionalChinese => {
             "Generate a concise, single-line title in Traditional Chinese (at most 20 Chinese \
@@ -95,18 +94,32 @@ markdown, braces, or trailing punctuation. Do not answer the request. Output onl
 }
 
 fn contains_cjk(text: &str) -> bool {
-    text.chars()
-        .any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
+    text.chars().any(|ch| {
+        ('\u{4e00}'..='\u{9fff}').contains(&ch) || ('\u{3400}'..='\u{4dbf}').contains(&ch)
+    })
+}
+
+fn contains_traditional_cjk(text: &str) -> bool {
+    const TRADITIONAL_ONLY: &str =
+        "體國學發會經開關見長門問間題點現實機電語網設訂優頁塊標傳遞處裡應當為與專業顯態誤歷紀錄產";
+    const SIMPLIFIED_ONLY: &str =
+        "体国学发会经开关见长门问间题点现实机电语网设订优页块标传递处里应当为与专业显态误历纪录产";
+    let has_trad = text.chars().any(|ch| TRADITIONAL_ONLY.contains(ch));
+    let has_simp = text.chars().any(|ch| SIMPLIFIED_ONLY.contains(ch));
+    has_trad && !has_simp
 }
 
 fn contains_japanese_kana(text: &str) -> bool {
-    text.chars()
-        .any(|ch| ('\u{3040}'..='\u{30ff}').contains(&ch))
+    // 仅匹配平假名 (3041..=3096) 与片假名音节 (30A1..=30FA)，排除中点 `・` (U+30FB) 等共用标点。
+    text.chars().any(|ch| {
+        ('\u{3041}'..='\u{3096}').contains(&ch) || ('\u{30a1}'..='\u{30fa}').contains(&ch)
+    })
 }
 
 fn contains_korean_hangul(text: &str) -> bool {
-    text.chars()
-        .any(|ch| ('\u{ac00}'..='\u{d7af}').contains(&ch))
+    text.chars().any(|ch| {
+        ('\u{ac00}'..='\u{d7af}').contains(&ch) || ('\u{3131}'..='\u{318e}').contains(&ch)
+    })
 }
 
 /// 按 UTF-8 字符边界安全截断字符串字节数。
@@ -166,19 +179,26 @@ pub fn template_block_title_prompt_for(
     Some(format!("{prefix}{body}"))
 }
 
-/// 构造无工具、无额外系统提示开销的轻量级 `ChatRequest`。
+/// 构造无工具、带轻量非空系统提示词的 `ChatRequest`。
 pub fn build_title_request(prompt: &str, model: &ModelSnapshot) -> ChatRequest {
     ChatRequest {
-        turns: vec![ChatTurn {
-            role: "user".into(),
-            text: prompt.to_string(),
-            reasoning_metadata: None,
-        }],
+        turns: vec![
+            ChatTurn {
+                role: "system".into(),
+                text: TITLE_SYSTEM_PROMPT.to_string(),
+                reasoning_metadata: None,
+            },
+            ChatTurn {
+                role: "user".into(),
+                text: prompt.to_string(),
+                reasoning_metadata: None,
+            },
+        ],
         items: vec![ModelItem::UserText(prompt.to_string())],
         model: model.clone(),
         variant_params: None,
         purpose: RequestPurpose::CompactSummary,
-        system_prompt: Some(String::new()),
+        system_prompt: Some(TITLE_SYSTEM_PROMPT.to_string()),
         tools: Arc::new(Vec::new()),
     }
 }
@@ -212,25 +232,40 @@ fn next_think_tag(text: &str) -> Option<(usize, &'static str)> {
     }
 }
 
-/// 解析并清洗模型返回的标题文本（兼容 JSON `{"title":"..."}` 与纯文本首行，并拦截拒答文本）。
+/// 剥离外层 Markdown 代码块围栏（如 ```` ```json ... ``` ````）。
+fn strip_code_fences(text: &str) -> &str {
+    let trimmed = text.trim();
+    let Some(rest) = trimmed.strip_prefix("```") else {
+        return trimmed;
+    };
+    let after_lang = match rest.find('\n') {
+        Some(idx) => &rest[idx + 1..],
+        None => return trimmed,
+    };
+    after_lang.strip_suffix("```").unwrap_or(after_lang).trim()
+}
+
+/// 解析并清洗模型返回的标题文本（兼容代码围栏、JSON `{"title":"..."}` 与纯文本首行，并拦截拒答文本）。
 pub fn parse_generated_title(raw: &str) -> Option<String> {
     let stripped = strip_think_blocks(raw);
-    let trimmed = stripped.trim();
-    if trimmed.is_empty() {
+    let unfenced = strip_code_fences(&stripped);
+    if unfenced.is_empty() {
         return None;
     }
-    let candidate = if trimmed.starts_with('{') {
-        serde_json::from_str::<serde_json::Value>(trimmed)
-            .ok()
-            .and_then(|val| {
-                val.get("title")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| first_non_empty_line(trimmed).to_string())
+    let candidate = if unfenced.starts_with('{') {
+        match serde_json::from_str::<serde_json::Value>(unfenced) {
+            Ok(val) => val
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)?,
+            Err(_) => first_non_empty_line(unfenced).to_string(),
+        }
     } else {
-        first_non_empty_line(trimmed).to_string()
+        first_non_empty_line(unfenced).to_string()
     };
+    if is_refusal_title(&candidate) {
+        return None;
+    }
     let sanitized = sanitize_title(&candidate)?;
     if is_refusal_title(&sanitized) {
         return None;
@@ -241,36 +276,87 @@ pub fn parse_generated_title(raw: &str) -> Option<String> {
 fn first_non_empty_line(text: &str) -> &str {
     text.lines()
         .map(str::trim)
-        .find(|line| !line.is_empty())
+        .find(|line| !line.is_empty() && !line.starts_with("```"))
         .unwrap_or("")
 }
 
 /// 检测模型是否输出了「无法生成任务标题：输入不是任务描述」之类的拒答或元解释话术。
 fn is_refusal_title(title: &str) -> bool {
-    const CJK_REFUSALS: &[&str] = &[
+    const DIRECT_REFUSALS: &[&str] = &[
+        "无法生成标题",
+        "无法生成任务标题",
+        "不能生成标题",
+        "不能生成任务标题",
+        "无法提炼标题",
+        "无法总结标题",
+        "无法概括标题",
+        "不是任务描述",
+        "未提供任务",
+        "无有效任务",
+        "无任务描述",
+        "無法生成標題",
+        "無法生成任務標題",
+        "不能生成標題",
+        "不是任務描述",
+        "未提供任務",
+        "タイトルを生成できません",
+        "タイトルを作成できません",
+        "要約できません",
+        "제목을 생성할 수 없습니다",
+        "제목을 만들 수 없습니다",
+        "요약할 수 없습니다",
+    ];
+    if DIRECT_REFUSALS.iter().any(|pat| title.contains(pat)) {
+        return true;
+    }
+    let has_cjk_cannot = [
         "无法生成",
         "不能生成",
         "无法提炼",
         "无法总结",
         "无法概括",
-        "不是任务描述",
-        "未提供任务",
-        "无有效任务",
-        "无任务描述",
-    ];
-    if CJK_REFUSALS.iter().any(|pat| title.contains(pat)) {
+        "無法生成",
+    ]
+    .iter()
+    .any(|pat| title.starts_with(pat));
+    let has_cjk_meta = ["标题", "標題", "任务", "任務", "输入", "輸入"]
+        .iter()
+        .any(|pat| title.contains(pat));
+    if has_cjk_cannot && has_cjk_meta {
         return true;
     }
     let lower = title.to_ascii_lowercase();
     const EN_REFUSALS: &[&str] = &[
-        "cannot generate",
-        "can't generate",
-        "unable to generate",
-        "not a task",
+        "cannot generate title",
+        "cannot generate a title",
+        "can't generate title",
+        "can't generate a title",
+        "unable to generate title",
+        "unable to generate a title",
+        "not a task description",
+        "input is not a task",
         "no task description",
         "cannot summarize",
     ];
     EN_REFUSALS.iter().any(|pat| lower.contains(pat))
+}
+
+fn strip_title_label_prefix(text: &str) -> &str {
+    let trimmed = text.trim();
+    for prefix in [
+        "Title:",
+        "title:",
+        "TITLE:",
+        "标题：",
+        "标题:",
+        "標題：",
+        "標題:",
+    ] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            return rest.trim();
+        }
+    }
+    trimmed
 }
 
 fn sanitize_title(text: &str) -> Option<String> {
@@ -278,6 +364,7 @@ fn sanitize_title(text: &str) -> Option<String> {
     const QUOTES: &[char] = &['"', '\'', '`', '“', '”', '‘', '’'];
     s = s.trim_matches(QUOTES).trim();
     s = s.trim_start_matches('#').trim();
+    s = strip_title_label_prefix(s);
     s = s.trim_matches(QUOTES).trim();
     const TRAILING_PUNCT: &[char] = &['.', '?', '!', '。', '？', '！', ':', '：', ';', '；'];
     s = s.trim_end_matches(TRAILING_PUNCT).trim();
@@ -314,75 +401,4 @@ fn sanitize_title(text: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn prompt_clamps_within_byte_limit_on_utf8_boundary() {
-        let long_cjk = "修复设置页模型与供应商拆分以及自动生成标题问题".repeat(40);
-        let prompt = session_title_prompt(&long_cjk).expect("prompt");
-        assert!(prompt.len() <= TITLE_PROMPT_MAX_BYTES);
-        assert!(
-            prompt.contains("Simplified Chinese"),
-            "默认 Auto 检测到中文输入应要求输出简体中文"
-        );
-        assert!(prompt.contains("Conversation content:"));
-
-        let tpl_prompt =
-            template_block_title_prompt_for(&long_cjk, TitleLanguage::English).expect("en prompt");
-        assert!(tpl_prompt.len() <= TITLE_PROMPT_MAX_BYTES);
-        assert!(tpl_prompt.contains("You MUST write the title in English"));
-        assert!(tpl_prompt.contains("Task template content:"));
-    }
-
-    #[test]
-    fn auto_language_detects_cjk_in_sample_text() {
-        let cjk_prompt =
-            template_block_title_prompt_for("- Description: 优化标题生成语言", TitleLanguage::Auto)
-                .expect("auto cjk");
-        assert!(cjk_prompt.contains("Simplified Chinese"));
-
-        let en_prompt =
-            template_block_title_prompt_for("- Description: Fix memory leak", TitleLanguage::Auto)
-                .expect("auto non-cjk");
-        assert!(en_prompt.contains("Ignore English template field labels"));
-    }
-
-    #[test]
-    fn empty_input_returns_none() {
-        assert!(session_title_prompt("   \n\t ").is_none());
-        assert!(template_block_title_prompt("").is_none());
-        assert!(parse_generated_title("   ").is_none());
-        assert!(parse_generated_title("<think>only thoughts</think>").is_none());
-    }
-
-    #[test]
-    fn parse_generated_title_rejects_refusal_phrases() {
-        assert!(parse_generated_title("无法生成任务标题：输入不是任务描述").is_none());
-        assert!(parse_generated_title("不能生成标题：未提供任务描述").is_none());
-        assert!(parse_generated_title("Cannot generate title: input is not a task").is_none());
-    }
-
-    #[test]
-    fn parse_generated_title_handles_think_tags_json_and_punctuation() {
-        let raw = "<think>\nLet me summarize this.\n</think>\n\"# Fix login token refresh!\"";
-        assert_eq!(
-            parse_generated_title(raw).as_deref(),
-            Some("Fix login token refresh")
-        );
-
-        let json_raw = r#"{"title": "重构设置页 Model 与 Provider 标签。"}"#;
-        assert_eq!(
-            parse_generated_title(json_raw).as_deref(),
-            Some("重构设置页 Model 与 Provider 标签")
-        );
-    }
-
-    #[test]
-    fn parse_generated_title_strips_braces_and_truncates_to_36_chars() {
-        let raw = "Implement {title: test} with a very long title exceeding thirty six characters";
-        let parsed = parse_generated_title(raw).expect("parsed");
-        assert!(!parsed.contains('{') && !parsed.contains('}'));
-        assert!(parsed.chars().count() <= TITLE_MAX_CHARS);
-    }
-}
+mod tests;

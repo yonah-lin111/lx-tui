@@ -183,23 +183,8 @@ pub enum AppEvent {
         message_id: String,
         code: String,
     },
-    /// `lx` 新会话后台自动生成标题完成。
-    SessionTitleGenerated {
-        workspace: PathBuf,
-        session_id: String,
-        initial_title: String,
-        title: Option<String>,
-    },
-    /// Prompt 模板块 `/title` 后台生成标题完成。
-    PromptBlockTitleGenerated {
-        request_id: u64,
-        workspace_index: usize,
-        editing: crate::app::prompt::PromptEditing,
-        page_id: crate::app::prompt::PromptPageId,
-        block_start_line: usize,
-        original_title: Option<String>,
-        title: Option<String>,
-    },
+    /// `lx` 会话自动标题或 Prompt 模板块 `/title` 后台生成完成。
+    TitleGenerated(chat::TitleGeneratedEvent),
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -844,39 +829,8 @@ fn handle_app_event(
                 outcome,
             );
         }
-        AppEvent::SessionTitleGenerated {
-            workspace,
-            session_id,
-            initial_title,
-            title,
-        } => {
-            chat::handle_session_title_generated(
-                state,
-                persistence,
-                &workspace,
-                &session_id,
-                &initial_title,
-                title.as_deref(),
-            );
-        }
-        AppEvent::PromptBlockTitleGenerated {
-            request_id: _,
-            workspace_index,
-            editing,
-            page_id,
-            block_start_line,
-            original_title,
-            title,
-        } => {
-            chat::handle_prompt_block_title_generated(
-                state,
-                workspace_index,
-                editing,
-                page_id,
-                block_start_line,
-                original_title.as_deref(),
-                title.as_deref(),
-            );
+        AppEvent::TitleGenerated(event) => {
+            chat::handle_title_generated(state, persistence, event);
         }
         AppEvent::RewindFinished {
             pane,

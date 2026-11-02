@@ -23,7 +23,6 @@ const VARIANT_PRESETS = {
 let modelsDraft = null;      // 全局编辑草稿
 let modelsBaseline = null;   // 最近一次加载/保存的快照（Reset 回填基准）
 let selectedProviderKey = null;
-let modelsDirty = false;
 const modelSelects = {};
 const expandedModels = new Set();
 
@@ -66,7 +65,6 @@ function computeModelsDirty() {
 }
 
 function updateProviderDirtyDots() {
-  modelsDirty = computeModelsDirty();
   const list = document.getElementById('provider-list');
   if (!list || !modelsDraft) { return; }
   const rows = list.querySelectorAll('.nav-item');
@@ -78,7 +76,6 @@ function updateProviderDirtyDots() {
 }
 
 function markModelsDirty() {
-  modelsDirty = computeModelsDirty();
   updateModelsStatus();
   updateProviderDirtyDots();
   refreshActionBars();
@@ -104,7 +101,6 @@ function resetModels() {
   if (modelsBaseline === null) { return; }
   hideFetchCandidates();
   modelsDraft = JSON.parse(JSON.stringify(modelsBaseline));
-  modelsDirty = false;
   if (!modelsDraft.providers.some((provider) => provider.key === selectedProviderKey)) {
     selectedProviderKey = null;
   }
@@ -119,9 +115,9 @@ function loadModels() {
     if (!modelsDraft.providers.some((provider) => provider.key === selectedProviderKey)) {
       selectedProviderKey = null;
     }
-    modelsDirty = false;
     renderModelsView();
-    document.getElementById('models-revision').textContent = 'revision ' + String(data.revision || '').slice(0, 8);
+    const revEl = document.getElementById('models-revision');
+    if (revEl) { revEl.textContent = 'revision ' + String(data.revision || '').slice(0, 8); }
     refreshActionBars();
   }).catch((error) => {
     const msg = 'Failed to load: ' + error.message;
@@ -134,9 +130,10 @@ function loadModels() {
 
 // 409 后只刷新 revision，保留用户草稿（再次点击 Save 即覆盖）。
 function refreshRevision() {
-  api('/api/models/settings').then((data) => {
+  return api('/api/models/settings').then((data) => {
     if (modelsDraft) { modelsDraft.revision = data.revision || ''; }
-    document.getElementById('models-revision').textContent = 'revision ' + String(data.revision || '').slice(0, 8);
+    const revEl = document.getElementById('models-revision');
+    if (revEl) { revEl.textContent = 'revision ' + String(data.revision || '').slice(0, 8); }
   }).catch((error) => {
     showToast(error.message, 'error');
   });
@@ -306,6 +303,7 @@ function addModel() {
   });
   markModelsDirty();
   renderModelList();
+  renderDefaultModel();
 }
 
 function duplicateModel(provider, model) {
@@ -322,11 +320,11 @@ function duplicateModel(provider, model) {
 function removeModel(provider, model) {
   const index = provider.models.indexOf(model);
   if (index >= 0) { provider.models.splice(index, 1); }
-  if (modelsDraft.defaultModel && modelsDraft.defaultModel.provider === provider.key && modelsDraft.defaultModel.model === model.id) {
+  if (modelsDraft.defaultModel && modelsDraft.defaultModel.provider === provider.id && modelsDraft.defaultModel.model === model.id) {
     modelsDraft.defaultModel = null;
     showToast('Default model cleared', 'info');
   }
-  if (modelsDraft.titleSummary && modelsDraft.titleSummary.provider === provider.key && modelsDraft.titleSummary.model === model.id) {
+  if (modelsDraft.titleSummary && modelsDraft.titleSummary.provider === provider.id && modelsDraft.titleSummary.model === model.id) {
     modelsDraft.titleSummary = null;
     showToast('Title model cleared', 'info');
   }
@@ -366,7 +364,7 @@ function modelCard(provider, model) {
   const idField = labeledInput('Model ID', model.id, (value) => { model.id = value; markModelsDirty(); });
   idField.input.addEventListener('change', () => { renderDefaultModel(); });
   const nameField = labeledInput('Display name', model.name, (value) => { model.name = value; markModelsDirty(); });
-  nameField.input.addEventListener('change', () => { renderProviders(); });
+  nameField.input.addEventListener('change', () => { renderProviders(); renderDefaultModel(); });
   const tools = element('div', 'model-tools');
   const expanded = expandedModels.has(key);
   const advanced = element('button', 'ghost', expanded ? 'Hide' : 'Advanced');
@@ -576,10 +574,11 @@ function renderDefaultModel() {
   if (!modelsDraft) { return; }
   const options = [{value: '', label: '(none)'}];
   for (const provider of modelsDraft.providers) {
+    if (!provider.enabled) { continue; }
     for (const model of provider.models) {
       options.push({
         value: provider.id + '\u0000' + model.id,
-        label: (provider.name || provider.id) + ' / ' + (model.name || model.id) + (provider.enabled ? '' : ' (off)')
+        label: (provider.name || provider.id) + ' / ' + (model.name || model.id)
       });
     }
   }
@@ -651,6 +650,15 @@ function modalitiesOf(model) {
   return {input: input, output: output};
 }
 
+function resolveSelectionVariant(selection, model) {
+  if (selection && selection.variant && Array.isArray(model.variantRows)) {
+    if (model.variantRows.some((row) => (row.key || '').trim() === selection.variant)) {
+      return selection.variant;
+    }
+  }
+  return model.variant || null;
+}
+
 function buildPayload() {
   const seenProviders = new Set();
   const providers = [];
@@ -696,6 +704,7 @@ function buildPayload() {
       };
       providers.push(entry);
     } catch (error) {
+      error.tab = 'provider';
       selectedProviderKey = provider.key;
       renderModelsView();
       throw error;
@@ -704,18 +713,18 @@ function buildPayload() {
   const enabledProviders = modelsDraft.providers.filter((provider) => provider.enabled).map((provider) => provider.id.trim());
   let defaultModel = null;
   if (modelsDraft.defaultModel) {
-    const provider = modelsDraft.providers.find((item) => item.id === modelsDraft.defaultModel.provider);
+    const provider = modelsDraft.providers.find((item) => item.enabled && item.id === modelsDraft.defaultModel.provider);
     const model = provider && provider.models.find((item) => item.id.trim() === modelsDraft.defaultModel.model);
     if (provider && model) {
-      defaultModel = {provider: provider.id, model: model.id.trim(), variant: model.variant || null};
+      defaultModel = {provider: provider.id, model: model.id.trim(), variant: resolveSelectionVariant(modelsDraft.defaultModel, model)};
     }
   }
   let titleSummary = null;
   if (modelsDraft.titleSummary) {
-    const provider = modelsDraft.providers.find((item) => item.id === modelsDraft.titleSummary.provider);
+    const provider = modelsDraft.providers.find((item) => item.enabled && item.id === modelsDraft.titleSummary.provider);
     const model = provider && provider.models.find((item) => item.id.trim() === modelsDraft.titleSummary.model);
     if (provider && model) {
-      titleSummary = {provider: provider.id, model: model.id.trim(), variant: model.variant || null};
+      titleSummary = {provider: provider.id, model: model.id.trim(), variant: resolveSelectionVariant(modelsDraft.titleSummary, model)};
     }
   }
   return {
@@ -741,14 +750,13 @@ async function saveModels() {
   try {
     await api('/api/models/settings', {method: 'PUT', body: JSON.stringify(payload)});
     showToast('Saved', 'ok');
-    modelsDirty = false;
     await loadModels();
   } catch (error) {
     // 409：磁盘配置已被别处改动。只刷新 revision，保留草稿，再点一次即覆盖。
     if (error.status === 409) {
       showToast('Configuration changed elsewhere; revision refreshed — click Save again', 'error');
-      refreshRevision();
-      return;
+      await refreshRevision();
+      throw error;
     }
     showToast(error.message, 'error');
     throw error;
@@ -796,6 +804,7 @@ function renderFetchCandidates(models) {
         });
         markModelsDirty();
         renderModelList();
+        renderDefaultModel();
       }
       add.textContent = 'Added';
     };

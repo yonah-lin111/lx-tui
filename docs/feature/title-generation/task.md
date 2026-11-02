@@ -1,150 +1,69 @@
 # 会话与模板块标题生成（含 Settings Model/Provider 拆分）：执行任务清单
 
-- 状态：**已在工作树 `.worktrees/title-generation`（分支 `feat/title-generation`）完成全部任务与测试，待用户确认合并**
-- 关联设计：`docs/feature/title-generation/design.md`
+- 状态：**已在工作树 `.worktrees/title-generation`（分支 `feat/title-generation`）完成全部任务、Code Review（`review.md` P0–P3 修复）与测试，待用户确认合并**
+- 关联文档：
+  - 设计方案：`docs/feature/title-generation/design.md`
+  - 代码审查：`docs/feature/title-generation/review.md`
 
 ---
 
-## Task 1：扩展 `AiSettings.title_summary` 与设置页 `Model` / `Provider` Tab 拆分
+## Task 1：扩展 `AiSettings.{title_summary, title_language}` 与设置页 `Model` / `Provider` Tab 拆分
 
-- **目标文件**：
-  - `src/config/ai/mod.rs`
-  - `src/app/state/lx/chat.rs`
-  - `src/settings/service/models/mod.rs`
-  - `assets/settings.html`
-  - `assets/settings.js`
-  - `assets/settings_models.js`
-  - `src/settings/service/tests.rs`
-  - `src/settings/service/models/tests.rs`
-- **关键改动点**：
-  1. **`src/config/ai/mod.rs`**：
-     - 在 `AiSettings` 中新增 `#[serde(default, rename = "titleSummary", skip_serializing_if = "Option::is_none")] pub title_summary: Option<ModelSelection>`。
-     - 提取 `validate_selection(role: &str, selection: &ModelSelection, providers: &BTreeMap<String, ProviderConfig>, enabled: &HashSet<String>) -> Result<(), AiConfigError>`，同时校验 `default_model` 与 `title_summary`。
-  2. **`src/app/state/lx/chat.rs`**：
-     - 在 `ModelsSnapshot` 新增 `title_selection()`、`default_selection()`、`resolve_prompt_title_model()` 与 `resolve_session_title_model(fallback: &ModelSnapshot)`。
-  3. **`src/settings/service/models/mod.rs`**：
-     - `revision_of` 纳入 `"titleSummary": &settings.title_summary`。
-     - `get_settings` 响应 JSON 新增 `"titleSummary"`。
-     - `merge_settings` 解析并合并 `"titleSummary"`。
-  4. **`assets/settings.html`、`assets/settings.js`、`assets/settings_models.js`**：
-     - 左侧导航栏拆分为 `Model`（`#tab-model` $\to$ `#view-model`）与 `Provider`（`#tab-provider` $\to$ `#view-provider`）。
-     - `#view-model` 将 `Default Model`（`#default-model-host`）与 `Title Generation`（`#title-model-host` + `#title-language-host`，默认 `auto` 自动跟随输入语言，支持 `zh-CN` / `en` / `zh-TW` / `ja` / `ko`）拆分为两个上下分隔的独立 `<fieldset>` 卡片区域，并挂载 `#actions-model` 操作条。
-     - `#view-provider` 承接原供应商与模型 CRUD 界面及 `#actions-provider` 操作条。
-     - 更新 `src/settings/service/tests.rs` 与 `src/settings/service/models/tests.rs` 断言。
+- [x] **`src/config/ai/mod.rs` & `src/config/ai/tests.rs`**：
+  - 新增 `TitleLanguage` 枚举（默认 `Auto`，支持 `zh-CN`、`en`、`zh-TW`、`ja`、`ko`）与容错反序列化（未知值降级回退 `Auto`）。
+  - 在 `AiSettings` 中新增 `title_summary: Option<ModelSelection>` 与 `title_language: Option<TitleLanguage>`。
+  - 实现 `sanitize_optional_selections`（磁盘加载阶段自动清理悬空的 `titleSummary` 或失效 `variant`，不阻塞整份 `ai.json` 加载）与 `validate_selection`（保存阶段严格校验）。
+- [x] **`src/app/state/lx/chat.rs`**：
+  - 在 `ModelsSnapshot` 新增 `title_selection()`、`default_selection()`、`title_language()`、`resolve_prompt_title_model()`（`titleSummary` $\to$ `defaultModel`）与 `resolve_session_title_model()`（`titleSummary` $\to$ 窗格当前有效模型 $\to$ `defaultModel`）。
+- [x] **`src/settings/service/models/mod.rs` & `tests.rs`**：
+  - `GET`/`PUT` `/api/models/settings` 支持 `titleSummary` 与 `titleLanguage` 读写及 `revision` 计算，移除 `settings.extra.clear()` 以保留顶层未知扩展字段。
+- [x] **`assets/settings.html`、`assets/settings.js`、`assets/settings_models.js`、`assets/settings.css`**：
+  - 左侧导航栏拆分为 `Model`（`#tab-model` $\to$ `#view-model`）与 `Provider`（`#tab-provider` $\to$ `#view-provider`）。
+  - `#view-model` 将 `Default Model` 与 `Title Generation`（`Title model` + `Title language`）拆为两个独立 `<fieldset>`。
+  - `Provider` 页新增/抓取/重命名模型后自动刷新 `Model` 页下拉框；仅列出已启用 provider 的模型；保存时保留合法的自定义 `variant` 并对共享的 `saveModels` 去重。
 
 ---
 
-## Task 2：实现标题生成核心模块 `src/chat/title.rs`（对齐 `codex-main`）
+## Task 2：实现标题生成核心模块 `src/chat/title.rs` 与 `src/chat/title/tests.rs`
 
-- **目标文件**：
-  - `src/chat/title.rs`（新建）
-  - `src/chat/mod.rs`
-  - `src/ui/text.rs`
-- **关键改动点**：
-  1. **在 `src/ui/text.rs` 新增英文文案常量**：
-     - `PROMPT_TITLE_GENERATING: &str = "Generating title..."`
-     - `PROMPT_TITLE_EMPTY_BLOCK: &str = "Template block is empty"`
-     - `PROMPT_TITLE_NO_MODEL: &str = "No title model or default model configured"`
-     - `PROMPT_TITLE_FAILED: &str = "Failed to generate title"`
-  2. **新建 `src/chat/title.rs`**：
-     - 实现 `title_instructions()`、`session_title_prompt(user_message)`、`template_block_title_prompt(block_content)`（按 `TITLE_PROMPT_MAX_BYTES = 960` 在 UTF-8 字符边界安全截断）。
-     - 实现 `build_title_request(prompt, model)`（无工具、无系统提示、`max_output_tokens: Some(128)`、`variant_params: None`）。
-     - 实现 `parse_generated_title(raw)`（剥离 `<think>` / `<thinking>` 标签、支持 JSON `{"title": "..."}` 与纯文本首行提取、剥离引号与末尾标点、过滤 `{` / `}`、按 `TITLE_MAX_CHARS = 36` 截断）。
-     - 编写完整单元测试（覆盖中英文、超长截断、`<think>` 标签、JSON/纯文本、引号与标点剥离、空输入等场景）。
+- [x] **`src/ui/text.rs`**：
+  - 新增英文文案常量 `PROMPT_TITLE_GENERATING`、`PROMPT_TITLE_EMPTY_BLOCK`、`PROMPT_TITLE_NO_MODEL`、`PROMPT_TITLE_FAILED`。
+- [x] **`src/chat/title.rs` & `src/chat/title/tests.rs`**：
+  - 实现纯英文系统提示词 `TITLE_SYSTEM_PROMPT` 与 `title_instructions_for(language, sample_text)`（支持 `Auto` 自动识别简中、繁中、日文假名、韩文谚文与英文，排除中文间隔号 `・` `U+30FB` 误判，且明确要求对问候/身份询问同样提炼简短标题、严禁拒答）。
+  - 实现 `session_title_prompt_for` 与 `template_block_title_prompt_for`（按 `TITLE_PROMPT_MAX_BYTES = 960` 在 UTF-8 字符边界安全截断）。
+  - 实现 `build_title_request(prompt, model)`（携带非空 `TITLE_SYSTEM_PROMPT`，避免空 system 块在部分 Provider 上触发 HTTP 400）。
+  - 实现 `parse_generated_title(raw)`（剥离 `<think>`、```` ```json ```` 代码块围栏、`Title:` / `标题：` 前缀，在 36 字符截断前执行多语言拒答元解释拦截，避免误杀合法技术标题）。
 
 ---
 
 ## Task 3：实现 Prompt 模板块（`&&&` 与 `+++`）的 `/title` 命令与空行保留
 
-- **目标文件**：
-  - `src/app/markdown/slash.rs`
-  - `src/app/markdown/supple.rs`
-  - `src/app/markdown/template.rs`
-  - `src/app/markdown/mod.rs`
-  - `src/app/prompt.rs`
-  - `src/app/prompt/panel.rs`
-  - `src/app/prompt/template.rs`
-  - `src/settings/commands.rs`
-- **关键改动点**：
-  1. **斜杠候选注册（`src/app/markdown/slash.rs` & `src/settings/commands.rs`）**：
-     - `SlashInsertion` 新增 `GenerateBlockTitle`。
-     - `SlashItem::builtin_title()` 创建 `/title` 候选。
-     - `slash_filter` 在 `BlockContext::Template | BlockContext::Supple` 分支加入 `SlashItem::builtin_title()`（`BlockContext::Normal` 不展示）。
-     - `src/settings/commands.rs` 确认 `"title"` 在保留字列表中，防止自定义命令重名冲突。
-  2. **块定位与标题行读写（`src/app/markdown/supple.rs` & `src/app/markdown/template.rs`）**：
-     - 在 `supple.rs` 新增 `find_enclosing_supple_block(text: &str, cursor: usize) -> Option<(usize, usize, bool)>`，支持识别独立或嵌套在 `&&&` 内的 `+++` 补充块。
-     - 在 `template.rs` 扩展 `title_markers` 同时保护 `+++` 起始行下一行的 `{title: ...}`。
-     - 在 `template.rs` 新增 `block_title_value_at_line(text: &str, start_line: usize) -> Option<String>` 与 `set_block_title_edit(text: &str, start_line: usize, new_title: Option<&str>) -> Option<(Range<usize>, String)>`。
-  3. **确认 `/title` 保留空行与写入加载态（`src/app/prompt/panel.rs` & `src/app/prompt/template.rs`）**：
-     - 在 `Prompt` 新增 `pending_title_action: Option<PromptTitleAction>` 及 `take_title_action(&mut self) -> Option<PromptTitleAction>`。
-     - 在 `slash_confirm` 处理 `SlashInsertion::GenerateBlockTitle`：
-       - 先用 `self.splice_text(trigger.line_start, trigger.line_end, "")` **仅清空命令行字符、保留行末 `\n` 空行**，光标置于 `trigger.line_start`；
-       - 提取当前块正文并调用 `copy_template_content` 清洗（同时剔除残留空模板壳）；
-       - 若正文为空，记录 `PromptTitleAction::EmptyBlock`；
-       - 若正文非空，记录原 `{title: ...}` 值，将块的标题行更新为 `{title: Generating title...}`（同步平移 `self.cursor` 保持在原空行行首），并记录 `PromptTitleAction::Generate { block_start_line, original_title, content }`。
+- [x] **`src/app/markdown/{slash,supple,template}.rs`**：
+  - 注册 `/title`（`SlashInsertion::GenerateBlockTitle`），仅在 `BlockContext::Template | BlockContext::Supple` 内可见；在 `src/settings/commands.rs` 将 `"title"` 列入保留字。
+  - 新增 `find_enclosing_supple_block` 支持定位独立或嵌套在 `&&&` 内的 `+++` 补充块。
+  - 实现 `block_title_value_at_line` 与 `set_block_title_edit`，同时兼容起始行内联 `{title: ...}` 与下一行独立 `{title: ...}` 行，并继承起始行缩进。
+- [x] **`src/app/prompt/{mod,panel,template}.rs`**：
+  - 确认 `/title` 时仅替换 `trigger.line_start..trigger.line_end` 为 `""`，严格保留行尾 `\n` 空行并将光标停在该空行行首。
+  - 清洗块正文并剔除默认空模板标题行，正文为空时触发 `"Template block is empty"` Toast，非空时在内存写入 `{title: Generating title...}` 并平移光标。
 
 ---
 
-## Task 4：实现后台异步标题生成与状态回填（`lx` 新对话 + Prompt 模板块）
+## Task 4：实现后台异步标题生成、防覆盖回填与输入框右上角柔和标题胶囊
 
-- **目标文件**：
-  - `src/app/effects.rs`
-  - `src/app/state/mod.rs`
-  - `src/app/update/chat/title.rs`（新建）
-  - `src/app/update/chat/mod.rs`
-  - `src/app/update/ chat/session.rs`
-  - `src/app/update/resume_edit.rs`
-  - `src/app/update/editor.rs`
-  - `src/event/chat/title.rs`（新建）
-  - `src/event/chat/mod.rs`
-  - `src/event/mod.rs`
-  - `src/db/chat/mod.rs`
-- **关键改动点**：
-  1. **数据库层防覆盖更新（`src/db/chat/mod.rs`）**：
-     - 新增 `Database::rename_chat_session_if_title_matches(&self, workspace: &Path, session_id: &str, expected_title: &str, new_title: &str) -> Result<bool>`。
-     - 在 `TurnCommitted` 中携带首轮创建的 `initial_title: Option<String>`（或由 `single_line_preview` 同口径得出）。
-  2. **`lx` 新对话自动标题调度与回填（`src/app/update/chat/title.rs`）**：
-     - 在 `on_turn_committed` 中当 `committed.turn_index == 1` 时调用 `title::maybe_schedule_session_title`，登记 `state.pending_session_titles` 并入队 `Effect::GenerateSessionTitle`。
-     - 在 `rename_session` 与 `submit_resume_session_edit` 中调用 `title::cancel_session_title(&mut state, &session_id)`，确保手动改名立即作废在途自动标题。
-     - 实现 `on_session_title_generated`：校验仍在 `pending_session_titles` 后调用 `db.rename_chat_session_if_title_matches` 并刷新打开中的 `/resume` 列表。
-  3. **Prompt `/title` 调度与回填（`src/app/update/chat/title.rs` & `src/app/update/editor.rs`）**：
-     - 在键盘 `apply_editor` 与鼠标 `select_slash` 后调用 `title::flush_prompt_title_action(state)`：
-       - `EmptyBlock` $\to$ 弹全局 Warning Toast `"Template block is empty"`；
-       - `Generate` $\to$ 调用 `state.models.resolve_prompt_title_model()`：
-         - 若为 `None`，立即回滚 `{title: Generating title...}` 为 `original_title`，弹全局 Warning Toast `"No title model or default model configured"`；
-         - 若为 `Some(frozen)`，调用 `commit_editing_prompt(state)` 并入队 `Effect::GeneratePromptBlockTitle`。
-     - 实现 `on_prompt_block_title_generated`：
-       - 成功返回 `Some(title)` 时，将目标页对应块的 `{title: Generating title...}` 替换为 `{title: <title>}`，并提交持久化；
-       - 失败返回 `None` 时，将 `{title: Generating title...}` 恢复为 `original_title`，提交持久化并弹出 Warning Toast `"Failed to generate title"`。
-  4. **事件层后台流执行（`src/event/chat/title.rs` & `src/event/mod.rs`）**：
-     - `apply_title_effects(state, &sender)` 拦截 `Effect::GenerateSessionTitle` 与 `Effect::GeneratePromptBlockTitle`；
-     - 在 `tokio::spawn` 中使用 `tokio::time::timeout(Duration::from_secs(30), ...)` 调用 `crate::chat::client::run_stream` 收集文本增量，解析标题后发送 `AppEvent::SessionTitleGenerated` / `AppEvent::PromptBlockTitleGenerated`。
+- [x] **`src/db/chat/mod.rs` & `src/db/service/chat.rs`**：
+  - 新增 `Database::chat_session_title`（`/resume` 加载会话时回显标题）与 `Database::rename_chat_session_if_title_matches`（仅当 DB 标题仍等于首轮初始标题时才更新）。
+- [x] **`src/app/state.rs`、`src/app/update/chat/title.rs` & `src/event/chat/title.rs`**：
+  - 首轮 `on_turn_committed`（`turn_index == 0`）调度 `Effect::GenerateSessionTitle`；手动 `/rename`、`/resume` 改名或删除会话立即调用 `cancel_session_title`。
+  - 在 `AppState` 维护 `pending_prompt_titles: HashMap<u64, PendingPromptTitle>`：触发 `/title` 时不提前将 `Generating title...` 持久化入库，回填时校验 `request_id` 并同步 `Editor` / `Pages` 模式与停泊工作区缓冲。
+  - 将标题完成事件收口为 `AppEvent::TitleGenerated(TitleGeneratedEvent)`，保持 `src/event/mod.rs` 在 1000 行上限以内。
+- [x] **`src/ui/style.rs`、`src/ui/main_content/lx/{input,grid}.rs` & `src/ui/main_content/lx/input/tests.rs`**：
+  - 在 `src/ui/style.rs` 定义 8 套柔和暗底粉彩字配色 `SESSION_TITLE_PALETTE` 与 `session_title_badge(palette_index)`。
+  - 在 `src/ui/main_content/lx/input.rs` 的 `draw_session_title_badge` 中将当前会话标题渲染在输入框顶边框右上角内侧（最右留 1 列 `─`），对齐 `Grid::put` 零宽字符宽度计算并在 `lx::render` 中保留宽字符 `CONTINUATION` 延续格样式。
 
 ---
 
-## Task 5：单元测试与受影响模块精确验证
+## Task 5：Code Review（`review.md`）与全量验证
 
-- **目标文件**：
-  - `src/chat/title.rs`（内置单测）
-  - `src/app/prompt/tests.rs`（或子模块测试）
-  - `src/app/update/chat/tests/`
-  - `src/settings/service/tests.rs`
-  - `src/settings/service/models/tests.rs`
-- **具体测试项**：
-  1. **设置页与配置测试**：
-     - `AiSettings` 序列化/反序列化 `titleSummary` 往返保留，非法 provider/model/variant 校验报错；
-     - `GET / PUT /api/models/settings` 支持 `titleSummary` 读写与 `revision` 乐观锁；
-     - `settings.html` 包含 `tab-model`、`view-model`、`tab-provider`、`view-provider`、`default-model-host`、`title-model-host`。
-  2. **Prompt `/title` 命令测试**：
-     - 光标在 `&&&` 块外时 `/` 面板不含 `/title`；光标在 `&&&` 或 `+++` 块内时 `/` 面板包含 `/title`；
-     - 在块内空行输入 `/title` 按回车确认后，`/title` 文字被清空，但**该空行本身保留（行数不减少）**，光标停在该空行行首；
-     - 块内容为空（或仅有未填写的模板项）时确认 `/title`，保留空行并触发 `"Template block is empty"` Toast；
-     - 块内容非空且配置了模型时，标题行先变为 `{title: Generating title...}` 并入队 `Effect::GeneratePromptBlockTitle`；回投成功时更新为 `{title: <新标题>}`，回投失败时恢复原 `{title: ...}`。
-  3. **`lx` 新对话自动标题测试**：
-     - 首轮 `on_turn_committed`（`turn_index == 1`）自动入队 `Effect::GenerateSessionTitle`，续轮（`turn_index > 1`）不入队；
-     - 自动标题返回后更新 DB `agent_session.title` 及已打开的 `/resume` 列表；
-     - 若返回前用户已执行 `/rename`，自动标题被丢弃，手动标题保留。
-  4. **精确验证命令**：
-     - `rtk cargo fmt --check`
-     - `rtk cargo clippy --all-targets -- -D warnings`
-     - `rtk cargo test`（针对 `chat::title`、`settings`、`prompt`、`update::chat` 等受影响模块执行测试）
+- [x] 编写 `docs/feature/title-generation/review.md`，按 `P0` $\to$ `P3` 梳理关键点、错误原因与修复方案，并完成全部问题修复。
+- [x] 将 `src/chat/title`、`src/app/update/chat/title`、`src/event/chat/title`、`src/ui/main_content/lx/input` 的单元测试拆分为符合规范的独立 `tests.rs` 子文件。
+- [x] 执行 `rtk cargo fmt --check`、`rtk cargo clippy --all-targets -- -D warnings` 与 `rtk cargo test` 全量通过。

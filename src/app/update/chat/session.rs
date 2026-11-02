@@ -488,6 +488,7 @@ pub fn rename_session(state: &mut AppState, pane: PaneId, session_id: &str, titl
 
 /// 删除会话（有确认；先取消在途请求，等最终写入后事务级删除）。
 pub fn delete_session(state: &mut AppState, pane: PaneId, session_id: &str) -> bool {
+    super::title::cancel_session_title(state, session_id);
     // 在途请求先取消（事件层等 finish 后再删除）。
     if let Some(target) = state.pane_mut_anywhere(pane)
         && target.lx.chat.session_id.as_deref() == Some(session_id)
