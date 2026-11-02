@@ -282,6 +282,8 @@ pub struct AppState {
     pub settings_open_requested: bool,
     /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
     pub models: ModelsSnapshot,
+    /// 按工作区根汇总的生效 AGENTS.md 文件计数；None 表示无可用工作区根。
+    pub agents_md_inventory: BTreeMap<Option<PathBuf>, usize>,
     /// 按项目根汇总的 MCP 装载计数；首页按窗格所属工作区取用。
     pub mcp_inventory: BTreeMap<PathBuf, StartupCount>,
     /// 按工作区根汇总的 skill 计数；None 表示无可用工作区根。
@@ -420,6 +422,7 @@ impl AppState {
             settings_available: false,
             settings_open_requested: false,
             models: ModelsSnapshot::default(),
+            agents_md_inventory: BTreeMap::new(),
             mcp_inventory: BTreeMap::new(),
             skill_inventory: BTreeMap::new(),
             prompt_history: PromptHistory::new(),
@@ -451,6 +454,7 @@ impl AppState {
         let counts: Vec<StartupCounts> = roots
             .into_iter()
             .map(|root| StartupCounts {
+                agents_md: self.agents_md_inventory.get(&root).copied().unwrap_or(0),
                 mcp: root
                     .as_ref()
                     .and_then(|root| self.mcp_inventory.get(root))

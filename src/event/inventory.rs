@@ -71,7 +71,7 @@ pub(crate) fn drain_settings_events(
             SettingsEvent::McpChanged => {
                 let roots = super::chat::mcp::project_roots(state);
                 prune_mcp_statuses(persistence, &roots, mcp_statuses);
-                refresh_mcp(state, persistence, &roots);
+                refresh_mcp(state, persistence, &roots, mcp_statuses);
             }
             SettingsEvent::McpRestart { server } => {
                 let roots = super::chat::mcp::project_roots(state);
@@ -246,8 +246,13 @@ pub(crate) fn prune_mcp_statuses(
     statuses.retain(|key, _| known.contains(key));
 }
 
-/// 配置变化后刷新总数与 `@` 面板候选：保留已结算的 ready/error，只为新增 server 打开 loading。
-pub(crate) fn refresh_mcp(state: &mut AppState, persistence: &Persistence, roots: &[PathBuf]) {
+/// 配置变化后刷新总数、状态聚合与 `@` 面板候选。
+pub(crate) fn refresh_mcp(
+    state: &mut AppState,
+    persistence: &Persistence,
+    roots: &[PathBuf],
+    statuses: &std::collections::BTreeMap<(PathBuf, String), McpStatusView>,
+) {
     for root in roots {
         let effective = super::chat::mcp::effective_for_root(persistence, root);
         let mentions: Vec<crate::app::prompt::McpMentionEntry> = effective
@@ -262,41 +267,31 @@ pub(crate) fn refresh_mcp(state: &mut AppState, persistence: &Persistence, roots
             .collect();
         apply_mcp_mentions(state, root, &mentions);
         let total = mentions.len();
-        let current = state.mcp_inventory.get(root).copied().unwrap_or_default();
-        let errors = current.errors.min(total);
-        let ready = current.ready.min(total.saturating_sub(errors));
-        state.mcp_inventory.insert(
-            root.clone(),
-            StartupCount {
-                total,
-                ready,
-                errors,
-                loading: total > 0 && ready.saturating_add(errors) < total,
-            },
-        );
+        state.mcp_inventory.entry(root.clone()).or_default().total = total;
+        update_mcp_status(state, root, statuses);
     }
     super::chat::mcp::prewarm_projects(persistence, roots);
 }
 
-/// 单个 server 状态变化后，按项目重算 ready / error / loading。
+/// 单个 server 状态或配置变化后，按项目重算 ready / error / loading。
 pub(crate) fn update_mcp_status(
     state: &mut AppState,
     project: &Path,
     statuses: &std::collections::BTreeMap<(PathBuf, String), McpStatusView>,
 ) {
-    let mut ready = 0;
-    let mut errors = 0;
-    let mut loading = false;
-    let mut total = 0;
+    let mut ready: usize = 0;
+    let mut errors: usize = 0;
+    let mut starting: usize = 0;
+    let mut tracked: usize = 0;
     for ((root, _), status) in statuses {
         if root.as_path() != project {
             continue;
         }
-        total += 1;
+        tracked += 1;
         match status.status.as_str() {
             "ready" => ready += 1,
             "failed" | "needs_login" => errors += 1,
-            "starting" => loading = true,
+            "starting" => starting += 1,
             _ => {}
         }
     }
@@ -305,13 +300,15 @@ pub(crate) fn update_mcp_status(
         .get(project)
         .copied()
         .unwrap_or_default();
+    let total = current.total.max(tracked);
+    let settled = ready.saturating_add(errors);
     state.mcp_inventory.insert(
         project.to_path_buf(),
         StartupCount {
-            total: current.total.max(total),
+            total,
             ready,
             errors,
-            loading: loading || current.loading,
+            loading: starting > 0 || (total > 0 && settled < total),
         },
     );
 }
@@ -424,6 +421,24 @@ pub(crate) fn sync_prompt_mcp_mentions(state: &mut AppState, persistence: &Persi
             })
             .collect();
     state.prompt.set_mention_mcp_servers(mentions);
+}
+
+/// 刷新所有已打开工作区的生效 `AGENTS.md` 文件数量（全局 `~/.lx-t[-dev]` + 已信任项目目录链）。
+pub(crate) fn refresh_agents_md(state: &mut AppState, persistence: &Persistence) {
+    let user_root = crate::config::user_data_root().ok();
+    for root in skill_roots(state) {
+        let trusted = root
+            .as_deref()
+            .is_some_and(|path| persistence.is_trusted(path));
+        let count = crate::chat::agent::load_instructions(
+            user_root.as_deref(),
+            root.as_deref(),
+            root.as_deref(),
+            trusted,
+        )
+        .active_count();
+        state.agents_md_inventory.insert(root, count);
+    }
 }
 
 #[cfg(test)]

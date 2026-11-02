@@ -908,6 +908,11 @@ pub fn chat_step_label_done() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
 }
 
+/// 首页 `AGENTS.md` 资源计数：品牌冰蓝（与 `mcp` 翡翠绿、`skills` 浅黄区分）。
+pub fn chat_agents_md() -> Style {
+    Style::default().fg(Color::Indexed(117))
+}
+
 /// 工具行的固定动词（`Read` / `Search` / `Edit` / `Write`）：**已完成**——翡翠绿、
 /// 不加粗（与紧邻的加粗方块靠字重区分开）。
 pub fn chat_tool_verb() -> Style {

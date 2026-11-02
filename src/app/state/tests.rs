@@ -640,6 +640,7 @@ fn inventory_sync_fills_new_panes_from_project_map() {
         .repo_key()
         .map(Path::to_path_buf)
         .expect("workspace root");
+    state.agents_md_inventory.insert(Some(root.clone()), 2);
     state.mcp_inventory.insert(
         root.clone(),
         StartupCount {
@@ -671,6 +672,7 @@ fn inventory_sync_fills_new_panes_from_project_map() {
         .startup = StartupCounts::default();
     assert!(state.sync_lx_inventory());
     let counts = state.pane_anywhere(second).expect("new pane").lx.startup;
+    assert_eq!(counts.agents_md, 2);
     assert_eq!(counts.mcp.ready, 3);
     assert_eq!(counts.mcp.errors, 1);
     assert_eq!(counts.skills.ready, 2);

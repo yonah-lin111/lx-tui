@@ -258,3 +258,131 @@ fn encodes_special_keys() {
         Some(b"\x1b[Z".to_vec())
     );
 }
+
+#[test]
+fn encodes_ghostty_aligned_legacy_modified_keys_for_tui_agents() {
+    let legacy = TermMode::empty();
+    // Shift+Enter / Ctrl+Enter / Alt+Enter（opencode、claude、codex 在 Legacy 模式下的换行序列）。
+    assert_eq!(
+        encode_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT), legacy),
+        Some(b"\x1b[27;2;13~".to_vec())
+    );
+    assert_eq!(
+        encode_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL), legacy),
+        Some(b"\x1b[27;5;13~".to_vec())
+    );
+    assert_eq!(
+        encode_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT), legacy),
+        Some(b"\x1b\r".to_vec())
+    );
+    // Shift+Tab（无论宿主以 BackTab 还是 Tab+SHIFT 到达）。
+    assert_eq!(
+        encode_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT), legacy),
+        Some(b"\x1b[Z".to_vec())
+    );
+    assert_eq!(
+        encode_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT), legacy),
+        Some(b"\x1b[Z".to_vec())
+    );
+    // Alt+Backspace 与 Ctrl+Backspace 整词删除。
+    assert_eq!(
+        encode_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT), legacy),
+        Some(vec![0x1b, 0x7f])
+    );
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL),
+            legacy
+        ),
+        Some(vec![0x08])
+    );
+    // Ctrl+Shift+<字母> 走 fixterms CSI u。
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(
+                KeyCode::Char('P'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            ),
+            legacy
+        ),
+        Some(b"\x1b[112;6u".to_vec())
+    );
+}
+
+#[test]
+fn encodes_kitty_csi_u_keys_for_opencode_codex_and_claude() {
+    let kitty = TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS;
+    // Shift+Enter / Alt+Enter / Ctrl+Enter。
+    assert_eq!(
+        encode_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT), kitty),
+        Some(b"\x1b[13;2u".to_vec())
+    );
+    assert_eq!(
+        encode_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT), kitty),
+        Some(b"\x1b[13;3u".to_vec())
+    );
+    assert_eq!(
+        encode_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL), kitty),
+        Some(b"\x1b[13;5u".to_vec())
+    );
+    // 无修饰 Enter 保持 `\r`，避免破坏普通交互。
+    assert_eq!(encode_key(key(KeyCode::Enter), kitty), Some(b"\r".to_vec()));
+    // Shift+Tab（Tab+SHIFT 与 BackTab）在 Kitty 下编码为 `\x1b[9;2u`。
+    assert_eq!(
+        encode_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT), kitty),
+        Some(b"\x1b[9;2u".to_vec())
+    );
+    assert_eq!(
+        encode_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT), kitty),
+        Some(b"\x1b[9;2u".to_vec())
+    );
+    // Alt+Backspace / Ctrl+Backspace。
+    assert_eq!(
+        encode_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT), kitty),
+        Some(b"\x1b[127;3u".to_vec())
+    );
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL),
+            kitty
+        ),
+        Some(b"\x1b[127;5u".to_vec())
+    );
+    // 普通大写与上档符号保持 UTF-8 原样输出。
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::SHIFT),
+            kitty
+        ),
+        Some(b"!".to_vec())
+    );
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
+            kitty
+        ),
+        Some(b"A".to_vec())
+    );
+    // Ctrl+J 保持 0x0a（兼容 claude 的 Ctrl+J 换行），有歧义的 Ctrl+I / Ctrl+M 走 CSI u。
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+            kitty
+        ),
+        Some(vec![0x0a])
+    );
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('m'), KeyModifiers::CONTROL),
+            kitty
+        ),
+        Some(b"\x1b[109;5u".to_vec())
+    );
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::CONTROL),
+            kitty
+        ),
+        Some(b"\x1b[105;5u".to_vec())
+    );
+}

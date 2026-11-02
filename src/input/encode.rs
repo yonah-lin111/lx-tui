@@ -11,14 +11,19 @@ pub fn encode_key(key: KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
     if key.modifiers.contains(KeyModifiers::SUPER) {
         return None;
     }
-    let modifiers = key.modifiers;
-    match key.code {
-        KeyCode::Char(c) => Some(encode_char(c, modifiers)),
-        KeyCode::Enter => Some(vec![b'\r']),
-        KeyCode::Backspace => Some(vec![0x7f]),
-        KeyCode::Tab => Some(vec![b'\t']),
-        KeyCode::BackTab => Some(b"\x1b[Z".to_vec()),
-        KeyCode::Esc => Some(vec![0x1b]),
+    let (code, modifiers) = match key.code {
+        KeyCode::BackTab => (KeyCode::Tab, key.modifiers | KeyModifiers::SHIFT),
+        other => (other, key.modifiers),
+    };
+    let kitty = mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL);
+    let report_all = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
+
+    match code {
+        KeyCode::Char(c) => Some(encode_char(c, modifiers, kitty, report_all)),
+        KeyCode::Enter => Some(encode_enter(modifiers, kitty, report_all)),
+        KeyCode::Backspace => Some(encode_backspace(modifiers, kitty, report_all)),
+        KeyCode::Tab => Some(encode_tab(modifiers, kitty, report_all)),
+        KeyCode::Esc => Some(encode_esc(modifiers, kitty, report_all)),
         KeyCode::Up => Some(cursor_key(b'A', modifiers, mode)),
         KeyCode::Down => Some(cursor_key(b'B', modifiers, mode)),
         KeyCode::Right => Some(cursor_key(b'C', modifiers, mode)),
@@ -145,12 +150,144 @@ fn push_mouse_codepoint(bytes: &mut Vec<u8>, value: u32) -> Option<()> {
     Some(())
 }
 
-fn encode_char(c: char, modifiers: KeyModifiers) -> Vec<u8> {
+fn csi_u(codepoint: u32, modifiers: KeyModifiers) -> Vec<u8> {
+    let param = modifier_param(modifiers);
+    if param == 1 {
+        format!("\x1b[{codepoint}u").into_bytes()
+    } else {
+        format!("\x1b[{codepoint};{param}u").into_bytes()
+    }
+}
+
+fn modify_other_key(codepoint: u32, modifiers: KeyModifiers) -> Vec<u8> {
+    let param = modifier_param(modifiers);
+    format!("\x1b[27;{param};{codepoint}~").into_bytes()
+}
+
+fn encode_enter(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
+    if modifiers.is_empty() {
+        return if report_all {
+            csi_u(13, modifiers)
+        } else {
+            vec![b'\r']
+        };
+    }
+    if kitty {
+        return csi_u(13, modifiers);
+    }
+    if modifiers == KeyModifiers::ALT {
+        vec![0x1b, b'\r']
+    } else {
+        modify_other_key(13, modifiers)
+    }
+}
+
+fn encode_tab(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
+    if modifiers.is_empty() {
+        return if report_all {
+            csi_u(9, modifiers)
+        } else {
+            vec![b'\t']
+        };
+    }
+    if kitty {
+        return csi_u(9, modifiers);
+    }
+    if modifiers == KeyModifiers::SHIFT {
+        b"\x1b[Z".to_vec()
+    } else if modifiers == KeyModifiers::ALT {
+        vec![0x1b, b'\t']
+    } else {
+        modify_other_key(9, modifiers)
+    }
+}
+
+fn encode_backspace(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
+    if modifiers.is_empty() {
+        return if report_all {
+            csi_u(127, modifiers)
+        } else {
+            vec![0x7f]
+        };
+    }
+    if kitty {
+        return csi_u(127, modifiers);
+    }
+    if modifiers == KeyModifiers::ALT {
+        vec![0x1b, 0x7f]
+    } else if modifiers == KeyModifiers::CONTROL {
+        vec![0x08]
+    } else if modifiers == (KeyModifiers::ALT | KeyModifiers::CONTROL) {
+        vec![0x1b, 0x08]
+    } else {
+        modify_other_key(127, modifiers)
+    }
+}
+
+fn encode_esc(modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
+    if modifiers.is_empty() {
+        return if report_all {
+            csi_u(27, modifiers)
+        } else {
+            vec![0x1b]
+        };
+    }
+    if kitty {
+        return csi_u(27, modifiers);
+    }
+    if modifiers == KeyModifiers::ALT {
+        vec![0x1b, 0x1b]
+    } else {
+        modify_other_key(27, modifiers)
+    }
+}
+
+fn encode_char(c: char, modifiers: KeyModifiers, kitty: bool, report_all: bool) -> Vec<u8> {
+    let has_ctrl = modifiers.contains(KeyModifiers::CONTROL);
+    let has_alt = modifiers.contains(KeyModifiers::ALT);
+    let has_shift = modifiers.contains(KeyModifiers::SHIFT);
+
+    // 无 Ctrl/Alt 的普通或 Shift 可打印字符：除非开启 REPORT_ALL_KEYS_AS_ESC，一律发 UTF-8 文本。
+    if !has_ctrl && !has_alt {
+        if report_all {
+            let base = if has_shift && c.is_ascii_uppercase() {
+                c.to_ascii_lowercase() as u32
+            } else {
+                c as u32
+            };
+            return csi_u(base, modifiers);
+        }
+        let mut buffer = [0u8; 4];
+        return c.encode_utf8(&mut buffer).as_bytes().to_vec();
+    }
+
+    let base_codepoint = if c.is_ascii_alphabetic() {
+        c.to_ascii_lowercase() as u32
+    } else {
+        c as u32
+    };
+
+    // Ctrl+Shift+<char>：Legacy C0 无法表达 Shift，对齐 Ghostty 统一走 CSI u。
+    if has_ctrl && has_shift {
+        return csi_u(base_codepoint, modifiers);
+    }
+
+    // Kitty 协议激活时：
+    // - 开启 REPORT_ALL_KEYS_AS_ESC：所有 Ctrl/Alt 组合均走 CSI u；
+    // - 仅开启 DISAMBIGUATE_ESC_CODES：Alt 组合与存在歧义的 Ctrl+I / Ctrl+M / Ctrl+[ 走 CSI u，
+    //   其余单纯 Ctrl+a..z 保持 C0 控制字节（确保 claude 的 Ctrl+J = 0x0a 换行及 shell 信号兼容）。
+    if kitty {
+        let ambiguous_ctrl = matches!(c.to_ascii_lowercase(), 'i' | 'm' | '[');
+        if report_all || has_alt || ambiguous_ctrl {
+            return csi_u(base_codepoint, modifiers);
+        }
+    }
+
     let mut bytes = Vec::new();
-    if modifiers.contains(KeyModifiers::ALT) {
+    if has_alt {
         bytes.push(0x1b);
     }
-    if modifiers.contains(KeyModifiers::CONTROL) {
+    if has_ctrl {
         bytes.push(control_byte(c));
     } else {
         let mut buffer = [0u8; 4];

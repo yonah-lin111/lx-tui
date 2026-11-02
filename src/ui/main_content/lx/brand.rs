@@ -135,19 +135,25 @@ fn pixel_glyph(top: char, bottom: char) -> Option<(char, Style)> {
     }
 }
 
-/// 首页资源计数：`4 mcp · 3 skills`；加载中显示 `loading mcp`，失败追加 `1 error`。
+/// 首页资源计数：`1 AGENTS.md · 4 mcp · 3 skills`；失败追加 `1 error`。
 pub(super) fn draw_inventory(grid: &mut Grid, rect: Rect, counts: StartupCounts) {
     if rect.width == 0 {
         return;
     }
+    let sep = (format!(" {} ", text::LX_ENTRY_SEPARATOR), style::muted());
+    let agents_md = (
+        format!("{} {}", counts.agents_md, text::LX_HOME_AGENTS_MD),
+        style::chat_agents_md(),
+    );
     let mcp = inventory_parts(counts.mcp, text::LX_HOME_MCP, style::chat_tool_verb());
     let skills = inventory_parts(
         counts.skills,
         text::LX_HOME_SKILLS,
         style::chat_tool_param(),
     );
-    let mut segments: Vec<(String, Style)> = mcp;
-    segments.push((format!(" {} ", text::LX_ENTRY_SEPARATOR), style::muted()));
+    let mut segments: Vec<(String, Style)> = vec![agents_md, sep.clone()];
+    segments.extend(mcp);
+    segments.push(sep);
     segments.extend(skills);
     let width: usize = segments.iter().map(|(value, _)| value.width()).sum();
     let width = u16::try_from(width).unwrap_or(u16::MAX);
@@ -174,12 +180,6 @@ pub(super) fn draw_inventory(grid: &mut Grid, rect: Rect, counts: StartupCounts)
 }
 
 fn inventory_parts(count: StartupCount, label: &str, color: Style) -> Vec<(String, Style)> {
-    if count.loading {
-        return vec![(
-            format!("{} {label}", text::LX_HOME_LOADING),
-            style::chat_tool_verb_running(),
-        )];
-    }
     let mut parts = vec![(format!("{} {label}", count.ready), color)];
     if count.errors > 0 {
         let label = if count.errors == 1 {
