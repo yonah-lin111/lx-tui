@@ -230,16 +230,16 @@ pub struct ModelSelection {
     pub variant: Option<String>,
 }
 
-/// 标题生成输出语言（`ai.titleLanguage`；缺省使用简体中文 `zh-CN`）。
+/// 标题生成输出语言（`ai.titleLanguage`；缺省使用 `auto` 自动跟随输入语言）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TitleLanguage {
-    /// 强制使用简体中文（默认）。
+    /// 自动跟随用户输入正文的自然语言（默认）。
     #[default]
-    #[serde(rename = "zh-CN", alias = "zh")]
-    SimplifiedChinese,
-    /// 自动跟随用户输入正文的自然语言。
     #[serde(rename = "auto")]
     Auto,
+    /// 强制使用简体中文。
+    #[serde(rename = "zh-CN", alias = "zh")]
+    SimplifiedChinese,
     /// 强制使用英文。
     #[serde(rename = "en")]
     English,

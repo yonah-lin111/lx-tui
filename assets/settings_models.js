@@ -6,8 +6,8 @@
 const INPUT_MODALITIES = ['text', 'image', 'audio', 'video', 'pdf'];
 const OUTPUT_MODALITIES = ['text', 'image', 'audio', 'video'];
 const TITLE_LANGUAGE_OPTIONS = [
-  {value: 'zh-CN', label: 'Simplified Chinese'},
   {value: 'auto', label: 'Auto (follow input)'},
+  {value: 'zh-CN', label: 'Simplified Chinese'},
   {value: 'en', label: 'English'},
   {value: 'zh-TW', label: 'Traditional Chinese'},
   {value: 'ja', label: 'Japanese'},
@@ -148,7 +148,7 @@ function snapshotToDraft(snapshot) {
     streamIdleTimeoutMs: snapshot.streamIdleTimeoutMs,
     defaultModel: snapshot.defaultModel || null,
     titleSummary: snapshot.titleSummary || null,
-    titleLanguage: snapshot.titleLanguage || 'zh-CN',
+    titleLanguage: snapshot.titleLanguage || 'auto',
     providers: (snapshot.providers || []).map((provider) => ({
       key: provider.key,
       id: provider.id,
@@ -602,7 +602,7 @@ function renderDefaultModel() {
     modelSelects.titleModel.setOptions(options, titleValue);
   }
   if (modelSelects.titleLanguage) {
-    const lang = modelsDraft.titleLanguage || 'zh-CN';
+    const lang = modelsDraft.titleLanguage || 'auto';
     modelSelects.titleLanguage.setOptions(TITLE_LANGUAGE_OPTIONS, lang);
   }
 }
@@ -723,7 +723,7 @@ function buildPayload() {
     enabledProviders: enabledProviders,
     defaultModel: defaultModel,
     titleSummary: titleSummary,
-    titleLanguage: modelsDraft.titleLanguage || 'zh-CN',
+    titleLanguage: modelsDraft.titleLanguage || 'auto',
     streamIdleTimeoutMs: modelsDraft.streamIdleTimeoutMs,
     revision: modelsDraft.revision
   };
@@ -905,11 +905,11 @@ function initModelsView() {
   });
   modelSelects.titleLanguage = createSelect(document.getElementById('title-language-host'), {
     ariaLabel: 'Title language',
-    value: 'zh-CN',
+    value: 'auto',
     options: TITLE_LANGUAGE_OPTIONS,
     onChange: (value) => {
       if (!modelsDraft) { return; }
-      modelsDraft.titleLanguage = value || 'zh-CN';
+      modelsDraft.titleLanguage = value || 'auto';
       markModelsDirty();
     }
   });

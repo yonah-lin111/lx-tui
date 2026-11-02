@@ -19,16 +19,20 @@ pub const TITLE_TIMEOUT_SECS: u64 = 30;
 /// 标题响应流最大累计字节数（8 KiB）。
 pub const TITLE_MAX_OUTPUT_BYTES: usize = 8 * 1024;
 
-/// 默认标题生成指令（简体中文输出）。
+/// 默认标题生成指令（Auto 自动跟随用户输入语言）。
 pub fn title_instructions() -> &'static str {
-    title_instructions_for(TitleLanguage::SimplifiedChinese, "")
+    title_instructions_for(TitleLanguage::Auto, "")
 }
 
 /// 按配置的 `TitleLanguage` 与输入样本文本返回对应的英文系统指令。
 pub fn title_instructions_for(language: TitleLanguage, sample_text: &str) -> &'static str {
     let resolved = match language {
         TitleLanguage::Auto => {
-            if contains_cjk(sample_text) {
+            if contains_japanese_kana(sample_text) {
+                TitleLanguage::Japanese
+            } else if contains_korean_hangul(sample_text) {
+                TitleLanguage::Korean
+            } else if contains_cjk(sample_text) {
                 TitleLanguage::SimplifiedChinese
             } else {
                 TitleLanguage::Auto
@@ -86,6 +90,16 @@ title text."
 fn contains_cjk(text: &str) -> bool {
     text.chars()
         .any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
+}
+
+fn contains_japanese_kana(text: &str) -> bool {
+    text.chars()
+        .any(|ch| ('\u{3040}'..='\u{30ff}').contains(&ch))
+}
+
+fn contains_korean_hangul(text: &str) -> bool {
+    text.chars()
+        .any(|ch| ('\u{ac00}'..='\u{d7af}').contains(&ch))
 }
 
 /// 按 UTF-8 字符边界安全截断字符串字节数。
@@ -269,8 +283,10 @@ mod tests {
         let long_cjk = "修复设置页模型与供应商拆分以及自动生成标题问题".repeat(40);
         let prompt = session_title_prompt(&long_cjk).expect("prompt");
         assert!(prompt.len() <= TITLE_PROMPT_MAX_BYTES);
-        assert!(prompt.starts_with(title_instructions()));
-        assert!(prompt.contains("Simplified Chinese"));
+        assert!(
+            prompt.contains("Simplified Chinese"),
+            "默认 Auto 检测到中文输入应要求输出简体中文"
+        );
 
         let tpl_prompt =
             template_block_title_prompt_for(&long_cjk, TitleLanguage::English).expect("en prompt");
