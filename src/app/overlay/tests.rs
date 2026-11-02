@@ -461,4 +461,7 @@ fn text_input_apply_edit_key_covers_word_and_history_commands() {
     assert_eq!(input.text(), "one two");
     assert!(input.apply_edit_key(OverlayKey::Redo));
     assert_eq!(input.text(), "two");
+    let all = input.text().to_string();
+    assert!(input.apply_edit_key(OverlayKey::SelectAll));
+    assert_eq!(input.selected_text().as_deref(), Some(all.as_str()));
 }

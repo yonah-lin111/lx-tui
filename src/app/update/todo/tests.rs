@@ -1039,3 +1039,22 @@ fn todo_edit_up_down_moves_across_wrapped_rows() {
     assert_eq!(state.todo.editing().unwrap().input.cursor(), 10);
     assert!(state.todo.is_editing(), "上下移动不得退出编辑态");
 }
+
+#[test]
+fn todo_edit_select_all_and_replace() {
+    let mut state = todo_state(&["abc"]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
+    assert!(apply_todo_key(&mut state, TodoKey::SelectAll));
+    assert_eq!(
+        state
+            .todo
+            .editing()
+            .unwrap()
+            .input
+            .selected_text()
+            .as_deref(),
+        Some("abc")
+    );
+    assert!(apply_todo_key(&mut state, TodoKey::Char('x')));
+    assert_eq!(state.todo.editing().unwrap().input.text(), "x");
+}

@@ -747,9 +747,29 @@ impl AskEditor {
         self.0.select_down();
     }
 
-    /// Ctrl+A：全选。
+    /// Ctrl/Cmd+Shift+A：全选。
     pub fn select_all(&mut self) {
         self.0.select_all();
+    }
+
+    /// Ctrl+Home / Cmd+↑：移到开头。
+    pub fn doc_start(&mut self) {
+        self.0.doc_start();
+    }
+
+    /// Ctrl+End / Cmd+↓：移到末尾。
+    pub fn doc_end(&mut self) {
+        self.0.doc_end();
+    }
+
+    /// Ctrl+Shift+Home / Cmd+Shift+↑：扩展到开头。
+    pub fn select_doc_start(&mut self) {
+        self.0.select_doc_start();
+    }
+
+    /// Ctrl+Shift+End / Cmd+Shift+↓：扩展到末尾。
+    pub fn select_doc_end(&mut self) {
+        self.0.select_doc_end();
     }
 
     pub fn home(&mut self) {

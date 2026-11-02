@@ -779,3 +779,23 @@ fn page_search_supports_paste_word_ops_and_cut() {
     );
     assert!(page_search_selection(&state).is_none());
 }
+
+#[test]
+fn page_search_select_all_covers_query() {
+    let mut state = state_with_three_pages();
+    assert!(show_prompt_pages(&mut state));
+    assert!(apply_page_search(
+        &mut state,
+        &EditorCommand::InsertText("abc".into())
+    ));
+    assert!(apply_page_search(&mut state, &EditorCommand::SelectAll));
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .pages_view
+            .search
+            .selected_text()
+            .as_deref(),
+        Some("abc")
+    );
+}

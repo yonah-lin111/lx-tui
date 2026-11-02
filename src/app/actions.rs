@@ -34,6 +34,8 @@ pub enum OverlayKey {
     End,
     /// Ctrl+A：移到行首。
     LineStart,
+    /// Ctrl/Cmd+Shift+A：全选输入框。
+    SelectAll,
     /// Ctrl+E：移到行尾。
     LineEnd,
     /// Ctrl+U：删除至行首。
@@ -97,8 +99,16 @@ pub enum LxInput {
     SelectUp,
     /// Shift+↓：向下扩展一个视觉行。
     SelectDown,
-    /// Ctrl+A：全选输入框。
+    /// Ctrl/Cmd+Shift+A：全选输入框。
     SelectAll,
+    /// Ctrl+Home / Cmd+↑：移到输入框开头。
+    DocStart,
+    /// Ctrl+End / Cmd+↓：移到输入框末尾。
+    DocEnd,
+    /// Ctrl+Shift+Home / Cmd+Shift+↑：扩展到输入框开头。
+    SelectDocStart,
+    /// Ctrl+Shift+End / Cmd+Shift+↓：扩展到输入框末尾。
+    SelectDocEnd,
     /// Ctrl+← / Alt+B：左移一个词。
     WordLeft,
     /// Ctrl+→ / Alt+F：右移一个词。
@@ -164,6 +174,8 @@ pub enum EditorCommand {
     End,
     LineStart,
     LineEnd,
+    /// Ctrl/Cmd+Shift+A：全选。
+    SelectAll,
     WordLeft,
     WordRight,
     DeleteToLineStart,

@@ -188,6 +188,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         | OverlayKey::Home
         | OverlayKey::End
         | OverlayKey::LineStart
+        | OverlayKey::SelectAll
         | OverlayKey::LineEnd
         | OverlayKey::DeleteToLineStart
         | OverlayKey::DeleteToLineEnd

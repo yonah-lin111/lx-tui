@@ -99,6 +99,7 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::End => state.prompt.move_end(),
         EditorCommand::LineStart => state.prompt.move_line_start(),
         EditorCommand::LineEnd => state.prompt.move_line_end(),
+        EditorCommand::SelectAll => state.select_all_prompt(),
         EditorCommand::WordLeft => state.prompt.move_word_backward(),
         EditorCommand::WordRight => state.prompt.move_word_forward(),
         EditorCommand::DeleteToLineStart => state.prompt.delete_to_line_start(),

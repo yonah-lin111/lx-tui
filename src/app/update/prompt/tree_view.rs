@@ -210,6 +210,7 @@ pub fn apply_prompt_search(state: &mut AppState, command: &EditorCommand) -> boo
         EditorCommand::Right => panel.search.move_right(),
         EditorCommand::Home | EditorCommand::LineStart => panel.search.move_home(),
         EditorCommand::End | EditorCommand::LineEnd => panel.search.move_end(),
+        EditorCommand::SelectAll => panel.search.select_all(),
         EditorCommand::DeleteToLineStart => panel.search.delete_to_line_start(),
         EditorCommand::DeleteToLineEnd => panel.search.delete_to_line_end(),
         EditorCommand::WordLeft => panel.search.move_word_left(),

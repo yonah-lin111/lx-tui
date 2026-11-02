@@ -754,6 +754,13 @@ fn rename_overlay_routes_editing_keys() {
         Some(Routed::Overlay(OverlayKey::LineStart))
     );
     assert_eq!(
+        route_rename(
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT
+        ),
+        Some(Routed::Overlay(OverlayKey::SelectAll))
+    );
+    assert_eq!(
         route_rename(KeyCode::Char('e'), KeyModifiers::CONTROL),
         Some(Routed::Overlay(OverlayKey::LineEnd))
     );
@@ -919,7 +926,7 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
             true,
         )
     };
-    assert_eq!(ctrl('a'), Some(Routed::Lx(LxInput::SelectAll)));
+    assert_eq!(ctrl('a'), Some(Routed::Lx(LxInput::LineStart)));
     assert_eq!(ctrl('e'), Some(Routed::Lx(LxInput::LineEnd)));
     assert_eq!(ctrl('u'), Some(Routed::Lx(LxInput::DeleteToLineStart)));
     assert_eq!(ctrl('k'), Some(Routed::Lx(LxInput::DeleteToLineEnd)));
@@ -1206,6 +1213,16 @@ fn todo_key_routes_word_ops_and_cut() {
         (KeyCode::Right, KeyModifiers::CONTROL, TodoKey::WordRight),
         (KeyCode::Char('f'), KeyModifiers::ALT, TodoKey::WordRight),
         (KeyCode::Char('x'), KeyModifiers::CONTROL, TodoKey::Cut),
+        (
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            TodoKey::SelectAll,
+        ),
+        (
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL,
+            TodoKey::LineStart,
+        ),
     ];
     for (code, modifiers, expected) in cases {
         assert_eq!(
@@ -1293,6 +1310,114 @@ fn lx_view_routes_shift_selection_chords() {
     );
     assert_eq!(
         route(KeyCode::Char('a'), KeyModifiers::CONTROL),
+        Some(Routed::Lx(LxInput::LineStart))
+    );
+    assert_eq!(
+        route(
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT
+        ),
         Some(Routed::Lx(LxInput::SelectAll))
     );
+}
+
+#[test]
+fn lx_view_routes_document_and_macos_edit_chords() {
+    let route = |code, modifiers| {
+        super::route(
+            KeyEvent::new(code, modifiers),
+            TermMode::empty(),
+            crate::app::state::FocusedContainer::Panes,
+            None,
+            true,
+        )
+    };
+    assert_eq!(
+        route(KeyCode::Home, KeyModifiers::CONTROL),
+        Some(Routed::Lx(LxInput::DocStart))
+    );
+    assert_eq!(
+        route(KeyCode::End, KeyModifiers::CONTROL),
+        Some(Routed::Lx(LxInput::DocEnd))
+    );
+    assert_eq!(
+        route(KeyCode::Home, KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+        Some(Routed::Lx(LxInput::SelectDocStart))
+    );
+    assert_eq!(
+        route(KeyCode::End, KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+        Some(Routed::Lx(LxInput::SelectDocEnd))
+    );
+
+    let cmd = |code, modifiers| route(code, modifiers | KeyModifiers::SUPER);
+    assert_eq!(
+        cmd(KeyCode::Char('a'), KeyModifiers::NONE),
+        Some(Routed::Lx(LxInput::LineStart))
+    );
+    assert_eq!(
+        cmd(KeyCode::Char('a'), KeyModifiers::SHIFT),
+        Some(Routed::Lx(LxInput::SelectAll))
+    );
+    assert_eq!(
+        cmd(KeyCode::Left, KeyModifiers::NONE),
+        Some(Routed::Lx(LxInput::LineStart))
+    );
+    assert_eq!(
+        cmd(KeyCode::Right, KeyModifiers::NONE),
+        Some(Routed::Lx(LxInput::LineEnd))
+    );
+    assert_eq!(
+        cmd(KeyCode::Up, KeyModifiers::NONE),
+        Some(Routed::Lx(LxInput::DocStart))
+    );
+    assert_eq!(
+        cmd(KeyCode::Down, KeyModifiers::NONE),
+        Some(Routed::Lx(LxInput::DocEnd))
+    );
+    assert_eq!(
+        cmd(KeyCode::Left, KeyModifiers::SHIFT),
+        Some(Routed::Lx(LxInput::SelectHome))
+    );
+    assert_eq!(
+        cmd(KeyCode::Right, KeyModifiers::SHIFT),
+        Some(Routed::Lx(LxInput::SelectEnd))
+    );
+    assert_eq!(
+        cmd(KeyCode::Up, KeyModifiers::SHIFT),
+        Some(Routed::Lx(LxInput::SelectDocStart))
+    );
+    assert_eq!(
+        cmd(KeyCode::Down, KeyModifiers::SHIFT),
+        Some(Routed::Lx(LxInput::SelectDocEnd))
+    );
+    assert_eq!(
+        cmd(KeyCode::Backspace, KeyModifiers::NONE),
+        Some(Routed::Lx(LxInput::DeleteToLineStart))
+    );
+    assert_eq!(
+        cmd(KeyCode::Delete, KeyModifiers::NONE),
+        Some(Routed::Lx(LxInput::DeleteToLineEnd))
+    );
+}
+
+#[test]
+fn prompt_ctrl_or_cmd_shift_a_selects_all_while_ctrl_a_keeps_line_start() {
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+        assert_eq!(
+            route(
+                KeyEvent::new(KeyCode::Char('a'), modifiers),
+                TermMode::empty(),
+                true
+            ),
+            Some(Routed::Editor(EditorCommand::LineStart))
+        );
+        assert_eq!(
+            route(
+                KeyEvent::new(KeyCode::Char('a'), modifiers | KeyModifiers::SHIFT),
+                TermMode::empty(),
+                true
+            ),
+            Some(Routed::Editor(EditorCommand::SelectAll))
+        );
+    }
 }

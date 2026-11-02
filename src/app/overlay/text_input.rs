@@ -438,6 +438,7 @@ impl TextInput {
             OverlayKey::Left => self.move_left(),
             OverlayKey::Right => self.move_right(),
             OverlayKey::Home | OverlayKey::LineStart => self.move_home(),
+            OverlayKey::SelectAll => self.select_all(),
             OverlayKey::End | OverlayKey::LineEnd => self.move_end(),
             OverlayKey::WordLeft => self.move_word_left(),
             OverlayKey::WordRight => self.move_word_right(),

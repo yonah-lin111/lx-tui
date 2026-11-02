@@ -39,3 +39,22 @@ fn tree_search_supports_paste_word_ops_and_cut() {
     assert_eq!(state.workspaces[0].prompt_panel.search.text(), " beta");
     assert!(prompt_search_selection(&state).is_none());
 }
+
+#[test]
+fn tree_search_select_all_covers_query() {
+    let mut state = AppState::demo();
+    show_prompt_tree(&mut state);
+    assert!(apply_prompt_search(
+        &mut state,
+        &EditorCommand::InsertText("abc".into())
+    ));
+    assert!(apply_prompt_search(&mut state, &EditorCommand::SelectAll));
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .search
+            .selected_text()
+            .as_deref(),
+        Some("abc")
+    );
+}

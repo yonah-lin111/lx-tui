@@ -436,6 +436,10 @@ pub(crate) trait TextEdit {
     fn select_up(&mut self);
     fn select_down(&mut self);
     fn select_all(&mut self);
+    fn doc_start(&mut self);
+    fn doc_end(&mut self);
+    fn select_doc_start(&mut self);
+    fn select_doc_end(&mut self);
     fn delete_to_line_start(&mut self);
     fn delete_to_line_end(&mut self);
     fn delete_word_backward(&mut self);
@@ -469,6 +473,10 @@ macro_rules! impl_text_edit {
                 fn select_up(&mut self) { <$ty>::select_up(self); }
                 fn select_down(&mut self) { <$ty>::select_down(self); }
                 fn select_all(&mut self) { <$ty>::select_all(self); }
+                fn doc_start(&mut self) { <$ty>::doc_start(self); }
+                fn doc_end(&mut self) { <$ty>::doc_end(self); }
+                fn select_doc_start(&mut self) { <$ty>::select_doc_start(self); }
+                fn select_doc_end(&mut self) { <$ty>::select_doc_end(self); }
                 fn delete_to_line_start(&mut self) { <$ty>::delete_to_line_start(self); }
                 fn delete_to_line_end(&mut self) { <$ty>::delete_to_line_end(self); }
                 fn delete_word_backward(&mut self) { <$ty>::delete_word_backward(self); }
@@ -510,6 +518,10 @@ pub(crate) fn apply_editor_edit<T: TextEdit>(target: &mut T, command: LxInput) -
         LxInput::SelectUp => target.select_up(),
         LxInput::SelectDown => target.select_down(),
         LxInput::SelectAll => target.select_all(),
+        LxInput::DocStart => target.doc_start(),
+        LxInput::DocEnd => target.doc_end(),
+        LxInput::SelectDocStart => target.select_doc_start(),
+        LxInput::SelectDocEnd => target.select_doc_end(),
         LxInput::DeleteToLineStart => target.delete_to_line_start(),
         LxInput::DeleteToLineEnd => target.delete_to_line_end(),
         LxInput::DeleteWordBackward => target.delete_word_backward(),

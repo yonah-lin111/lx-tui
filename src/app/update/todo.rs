@@ -414,6 +414,13 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
             input.move_end();
             input.cursor() != before || had_sel
         }
+        TodoKey::SelectAll => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            input.select_all();
+            true
+        }
         TodoKey::DeleteToLineStart => {
             let Some(input) = state.todo.edit_input_mut() else {
                 return false;
@@ -564,6 +571,7 @@ fn apply_todo_list_key(state: &mut AppState, key: TodoKey) -> bool {
         | TodoKey::End
         | TodoKey::LineStart
         | TodoKey::LineEnd
+        | TodoKey::SelectAll
         | TodoKey::DeleteToLineStart
         | TodoKey::DeleteToLineEnd
         | TodoKey::DeleteWordBackward

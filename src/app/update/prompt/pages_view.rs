@@ -167,6 +167,7 @@ pub fn apply_page_search(state: &mut AppState, command: &EditorCommand) -> bool 
         EditorCommand::Right => panel.pages_view.search.move_right(),
         EditorCommand::Home | EditorCommand::LineStart => panel.pages_view.search.move_home(),
         EditorCommand::End | EditorCommand::LineEnd => panel.pages_view.search.move_end(),
+        EditorCommand::SelectAll => panel.pages_view.search.select_all(),
         EditorCommand::DeleteToLineStart => panel.pages_view.search.delete_to_line_start(),
         EditorCommand::DeleteToLineEnd => panel.pages_view.search.delete_to_line_end(),
         EditorCommand::WordLeft => panel.pages_view.search.move_word_left(),

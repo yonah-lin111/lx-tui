@@ -557,7 +557,7 @@ impl Lx {
         self.extend_selection_to(target);
     }
 
-    /// Ctrl+A：全选输入框。
+    /// Ctrl/Cmd+Shift+A：全选输入框。
     pub fn select_all(&mut self) {
         if self.input.is_empty() {
             self.text_selection = None;
@@ -569,6 +569,31 @@ impl Lx {
         self.panel = None;
         self.mention.suppress();
         self.scroll_cursor_into_view();
+    }
+
+    /// Ctrl+Home / Cmd+↑：移到输入框开头。
+    pub fn doc_start(&mut self) {
+        self.refer_suppressed = false;
+        self.cursor = 0;
+        self.refresh_panel();
+    }
+
+    /// Ctrl+End / Cmd+↓：移到输入框末尾。
+    pub fn doc_end(&mut self) {
+        self.refer_suppressed = false;
+        self.cursor = self.input.len();
+        self.refresh_panel();
+    }
+
+    /// Ctrl+Shift+Home / Cmd+Shift+↑：扩展到输入框开头。
+    pub fn select_doc_start(&mut self) {
+        self.extend_selection_to(0);
+    }
+
+    /// Ctrl+Shift+End / Cmd+Shift+↓：扩展到输入框末尾。
+    pub fn select_doc_end(&mut self) {
+        let target = self.input.len();
+        self.extend_selection_to(target);
     }
 
     /// 视口单元格（视觉行、内容列）→ 输入缓冲字节偏移；越界钳到最近位置。

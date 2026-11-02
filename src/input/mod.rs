@@ -60,6 +60,8 @@ pub enum TodoKey {
     End,
     /// Ctrl+A：移到行首。
     LineStart,
+    /// Ctrl/Cmd+Shift+A：全选。
+    SelectAll,
     /// Ctrl+E：移到行尾。
     LineEnd,
     /// Ctrl+U：删除至行首。
@@ -96,6 +98,7 @@ fn todo_key(key: KeyEvent) -> Option<TodoKey> {
         KeyCode::Char('y' | 'Y') if ctrl && !alt => Some(TodoKey::Redo),
         KeyCode::Char('c' | 'C') if ctrl && !alt => Some(TodoKey::Clear),
         KeyCode::Char('x' | 'X') if ctrl && !alt => Some(TodoKey::Cut),
+        KeyCode::Char('a' | 'A') if ctrl && shift && !alt => Some(TodoKey::SelectAll),
         KeyCode::Char('a' | 'A') if ctrl && !alt => Some(TodoKey::LineStart),
         KeyCode::Char('e' | 'E') if ctrl && !alt => Some(TodoKey::LineEnd),
         KeyCode::Char('u' | 'U') if ctrl && !alt => Some(TodoKey::DeleteToLineStart),
@@ -221,10 +224,23 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
             KeyCode::Char('c' | 'C') => Some(LxInput::Clear),
             // Cmd+X：剪切输入框选区。
             KeyCode::Char('x' | 'X') => Some(LxInput::Cut),
+            // macOS 原生编辑：Cmd+A 回行首，Cmd+Shift+A 全选；Cmd+←/→ 行首尾、Cmd+↑/↓ 文首尾。
+            KeyCode::Char('a' | 'A') if shift => Some(LxInput::SelectAll),
+            KeyCode::Char('a' | 'A') => Some(LxInput::LineStart),
+            KeyCode::Left if shift => Some(LxInput::SelectHome),
+            KeyCode::Right if shift => Some(LxInput::SelectEnd),
+            KeyCode::Left => Some(LxInput::LineStart),
+            KeyCode::Right => Some(LxInput::LineEnd),
+            KeyCode::Up if shift => Some(LxInput::SelectDocStart),
+            KeyCode::Down if shift => Some(LxInput::SelectDocEnd),
+            KeyCode::Up | KeyCode::Home => Some(LxInput::DocStart),
+            KeyCode::Down | KeyCode::End => Some(LxInput::DocEnd),
+            KeyCode::Backspace => Some(LxInput::DeleteToLineStart),
+            KeyCode::Delete => Some(LxInput::DeleteToLineEnd),
             _ => None,
         };
     }
-    // Shift 选区：方向键扩展光标；Ctrl/Alt+Shift+方向键按词扩展。
+    // Shift 选区：方向键扩展光标；Ctrl/Alt+Shift+方向键按词扩展，Home/End 扩到文首尾。
     if shift {
         match (ctrl || alt, key.code) {
             (true, KeyCode::Left) | (true, KeyCode::Char('b' | 'B')) => {
@@ -233,6 +249,9 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
             (true, KeyCode::Right) | (true, KeyCode::Char('f' | 'F')) => {
                 return Some(LxInput::SelectWordRight);
             }
+            (true, KeyCode::Home) => return Some(LxInput::SelectDocStart),
+            (true, KeyCode::End) => return Some(LxInput::SelectDocEnd),
+            (true, KeyCode::Char('a' | 'A')) => return Some(LxInput::SelectAll),
             (false, KeyCode::Left) => return Some(LxInput::SelectLeft),
             (false, KeyCode::Right) => return Some(LxInput::SelectRight),
             (false, KeyCode::Up) => return Some(LxInput::SelectUp),
@@ -244,12 +263,14 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
     }
     let mapped = match (ctrl, alt, key.code) {
         (true, false, KeyCode::Enter) => Some(LxInput::Newline),
+        (true, false, KeyCode::Home) => Some(LxInput::DocStart),
+        (true, false, KeyCode::End) => Some(LxInput::DocEnd),
         (true, false, KeyCode::Char(ch)) => match ch {
             'o' | 'O' => Some(LxInput::ToggleToolDetail),
             'u' | 'U' => Some(LxInput::DeleteToLineStart),
             'k' | 'K' => Some(LxInput::DeleteToLineEnd),
             'w' | 'W' => Some(LxInput::DeleteWordBackward),
-            'a' | 'A' => Some(LxInput::SelectAll),
+            'a' | 'A' => Some(LxInput::LineStart),
             'e' | 'E' => Some(LxInput::LineEnd),
             'd' | 'D' => Some(LxInput::StopProcess),
             'c' | 'C' => Some(LxInput::Clear),
@@ -324,6 +345,7 @@ fn overlay_text_edit_key(key: KeyEvent) -> Option<OverlayKey> {
         KeyCode::Char('y' | 'Y') if ctrl => Some(OverlayKey::Redo),
         KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Clear),
         KeyCode::Char('x' | 'X') if ctrl => Some(OverlayKey::Cut),
+        KeyCode::Char('a' | 'A') if ctrl && shift => Some(OverlayKey::SelectAll),
         KeyCode::Char('a' | 'A') if ctrl => Some(OverlayKey::LineStart),
         KeyCode::Char('e' | 'E') if ctrl => Some(OverlayKey::LineEnd),
         KeyCode::Char('u' | 'U') if ctrl => Some(OverlayKey::DeleteToLineStart),
@@ -451,6 +473,8 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
             KeyCode::Char('z' | 'Z') if shift => Some(EditorCommand::Redo),
             KeyCode::Char('z' | 'Z') => Some(EditorCommand::Undo),
             KeyCode::Char('y' | 'Y') => Some(EditorCommand::Redo),
+            KeyCode::Char('a' | 'A') if shift => Some(EditorCommand::SelectAll),
+            KeyCode::Char('a' | 'A') => Some(EditorCommand::LineStart),
             _ => None,
         };
     }
@@ -462,6 +486,7 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
             'u' | 'U' => Some(EditorCommand::DeleteToLineStart),
             'k' | 'K' => Some(EditorCommand::DeleteToLineEnd),
             'w' | 'W' => Some(EditorCommand::DeleteWordBackward),
+            'a' | 'A' if shift => Some(EditorCommand::SelectAll),
             'a' | 'A' => Some(EditorCommand::LineStart),
             'e' | 'E' => Some(EditorCommand::LineEnd),
             'd' | 'D' => Some(EditorCommand::Delete),

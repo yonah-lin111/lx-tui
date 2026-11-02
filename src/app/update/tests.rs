@@ -4206,6 +4206,10 @@ fn apply_editor_edit_matches_lx_input_for_every_editor_command() {
         LxInput::SelectUp,
         LxInput::SelectDown,
         LxInput::SelectAll,
+        LxInput::DocStart,
+        LxInput::DocEnd,
+        LxInput::SelectDocStart,
+        LxInput::SelectDocEnd,
         LxInput::DeleteToLineStart,
         LxInput::DeleteToLineEnd,
         LxInput::DeleteWordBackward,
@@ -5392,4 +5396,38 @@ fn select_right_tab_same_tab_is_noop() {
     assert!(!select_right_tab(&mut state, RightTab::Todo), "已是 Todo");
     assert!(state.effects.is_empty(), "幂等：不产生任何 Effect");
     assert_eq!(state.right_tab, RightTab::Todo);
+}
+
+#[test]
+fn lx_document_navigation_and_document_selection() {
+    let mut state = AppState::demo();
+    for ch in "first\nsecond".chars() {
+        apply_lx_input(
+            &mut state,
+            if ch == '\n' {
+                LxInput::Newline
+            } else {
+                LxInput::Char(ch)
+            },
+        );
+    }
+    apply_lx_input(&mut state, LxInput::DocStart);
+    assert_eq!(state.active_pane().expect("pane").lx.cursor, 0);
+    apply_lx_input(&mut state, LxInput::DocEnd);
+    assert_eq!(
+        state.active_pane().expect("pane").lx.cursor,
+        "first\nsecond".len()
+    );
+    apply_lx_input(&mut state, LxInput::SelectDocStart);
+    assert_eq!(
+        state
+            .active_pane()
+            .expect("pane")
+            .lx
+            .selected_text()
+            .as_deref(),
+        Some("first\nsecond")
+    );
+    apply_lx_input(&mut state, LxInput::Delete);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "");
 }
