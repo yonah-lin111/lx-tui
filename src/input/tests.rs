@@ -919,7 +919,7 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
             true,
         )
     };
-    assert_eq!(ctrl('a'), Some(Routed::Lx(LxInput::LineStart)));
+    assert_eq!(ctrl('a'), Some(Routed::Lx(LxInput::SelectAll)));
     assert_eq!(ctrl('e'), Some(Routed::Lx(LxInput::LineEnd)));
     assert_eq!(ctrl('u'), Some(Routed::Lx(LxInput::DeleteToLineStart)));
     assert_eq!(ctrl('k'), Some(Routed::Lx(LxInput::DeleteToLineEnd)));
@@ -1246,4 +1246,53 @@ fn prompt_focus_routes_cut_chord() {
             Some(Routed::Cut)
         );
     }
+}
+
+#[test]
+fn lx_view_routes_shift_selection_chords() {
+    let route = |code, modifiers| {
+        super::route(
+            KeyEvent::new(code, modifiers),
+            TermMode::empty(),
+            crate::app::state::FocusedContainer::Panes,
+            None,
+            true,
+        )
+    };
+    for (code, expected) in [
+        (KeyCode::Left, LxInput::SelectLeft),
+        (KeyCode::Right, LxInput::SelectRight),
+        (KeyCode::Up, LxInput::SelectUp),
+        (KeyCode::Down, LxInput::SelectDown),
+        (KeyCode::Home, LxInput::SelectHome),
+        (KeyCode::End, LxInput::SelectEnd),
+    ] {
+        assert_eq!(
+            route(code, KeyModifiers::SHIFT),
+            Some(Routed::Lx(expected)),
+            "{code:?}"
+        );
+    }
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+        assert_eq!(
+            route(KeyCode::Left, KeyModifiers::SHIFT | modifiers),
+            Some(Routed::Lx(LxInput::SelectWordLeft))
+        );
+        assert_eq!(
+            route(KeyCode::Right, KeyModifiers::SHIFT | modifiers),
+            Some(Routed::Lx(LxInput::SelectWordRight))
+        );
+    }
+    assert_eq!(
+        route(KeyCode::Char('b'), KeyModifiers::SHIFT | KeyModifiers::ALT),
+        Some(Routed::Lx(LxInput::SelectWordLeft))
+    );
+    assert_eq!(
+        route(KeyCode::Char('f'), KeyModifiers::SHIFT | KeyModifiers::ALT),
+        Some(Routed::Lx(LxInput::SelectWordRight))
+    );
+    assert_eq!(
+        route(KeyCode::Char('a'), KeyModifiers::CONTROL),
+        Some(Routed::Lx(LxInput::SelectAll))
+    );
 }

@@ -73,3 +73,14 @@
 - [x] 4.2 运行代码格式与静态检查：
   - `cargo fmt --check`
   - `cargo clippy --all-targets -- -D warnings`
+
+---
+
+## 阶段 5：`Lx` 主输入框键盘选区与选择删除
+
+- [x] 5.1 新增 `LxInput` 选区命令：`SelectLeft/Right`、`SelectWordLeft/Right`、`SelectHome/End`、`SelectUp/Down`、`SelectAll`
+- [x] 5.2 `lx_input_key` 映射：`Shift+←/→/↑/↓/Home/End` 扩展选区；`Shift+Ctrl/Alt+←/→` 与 `Shift+Alt+B/F` 按词扩展；`Ctrl+A` 改为全选
+- [x] 5.3 `Lx` 增加选区扩展方法（保留鼠标选区模型，按字符/词/视觉行扩展，不触发面板刷新清空选区）
+- [x] 5.4 `Backspace`/`Delete`/`Ctrl+U`/`Ctrl+K`/`Ctrl+W`/`Alt+D` 优先删除选区；输入字符、粘贴、换行替换选区并只记一步撤销
+- [x] 5.5 `AskEditor` 同步委托选区方法，共享同一套 `LxInput` 编辑分派
+- [x] 5.6 补充测试：键盘选区删除/替换、Shift 路由、Ask 选区删除，以及 `apply_editor_edit` 全命令一致性

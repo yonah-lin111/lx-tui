@@ -224,6 +224,24 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
             _ => None,
         };
     }
+    // Shift 选区：方向键扩展光标；Ctrl/Alt+Shift+方向键按词扩展。
+    if shift {
+        match (ctrl || alt, key.code) {
+            (true, KeyCode::Left) | (true, KeyCode::Char('b' | 'B')) => {
+                return Some(LxInput::SelectWordLeft);
+            }
+            (true, KeyCode::Right) | (true, KeyCode::Char('f' | 'F')) => {
+                return Some(LxInput::SelectWordRight);
+            }
+            (false, KeyCode::Left) => return Some(LxInput::SelectLeft),
+            (false, KeyCode::Right) => return Some(LxInput::SelectRight),
+            (false, KeyCode::Up) => return Some(LxInput::SelectUp),
+            (false, KeyCode::Down) => return Some(LxInput::SelectDown),
+            (false, KeyCode::Home) => return Some(LxInput::SelectHome),
+            (false, KeyCode::End) => return Some(LxInput::SelectEnd),
+            _ => {}
+        }
+    }
     let mapped = match (ctrl, alt, key.code) {
         (true, false, KeyCode::Enter) => Some(LxInput::Newline),
         (true, false, KeyCode::Char(ch)) => match ch {
@@ -231,7 +249,7 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
             'u' | 'U' => Some(LxInput::DeleteToLineStart),
             'k' | 'K' => Some(LxInput::DeleteToLineEnd),
             'w' | 'W' => Some(LxInput::DeleteWordBackward),
-            'a' | 'A' => Some(LxInput::LineStart),
+            'a' | 'A' => Some(LxInput::SelectAll),
             'e' | 'E' => Some(LxInput::LineEnd),
             'd' | 'D' => Some(LxInput::StopProcess),
             'c' | 'C' => Some(LxInput::Clear),

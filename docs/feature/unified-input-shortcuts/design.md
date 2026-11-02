@@ -30,7 +30,8 @@
 1. **全量输入框覆盖（12 处单行/内联输入框 + 主输入框剪切）**：
    - 8 个模态弹窗：`Rename`、`NewWorkspace`、`NewNode`、`SaveDraft`、`WorktreeOpen`、`ReferencedFolderInput`、`ReferencedFolderSearch`、`ResumeSessionEdit`；
    - 4 个面板内联输入框：右侧 `Todo` 编辑框、`Ask` 工具手写输入框、右侧 `Prompt` 树搜索框、右侧 `Prompt` 页搜索框；
-   - `Lx` 主输入框与 `Prompt` 正文编辑器：保持现有全部交互与特殊路由不变，仅补充有选区时的 `Ctrl+X` / `Cmd+X` 剪切能力。
+   - `Lx` 主输入框：保持现有历史/任务页/面板路由不变，补充 `Ctrl+X` 剪切、`Ctrl+A` 全选、`Shift+方向键` 键盘选区，以及选区的删除/替换语义。
+   - `Prompt` 正文编辑器：保持现有全部交互与特殊路由不变，仅补充有选区时的 `Ctrl+X` / `Cmd+X` 剪切能力。
 2. **统一快捷键与鼠标选区基线**：
    - 终端粘贴 `Event::Paste` 全覆盖（有选区时替换选区并记一步 `Undo`）；
    - `Ctrl/Cmd+Z` 撤销，`Ctrl+Y` / `Ctrl/Cmd+Shift+Z` 重做；
@@ -45,7 +46,7 @@
 
 | 编号 | 决策项 | 结论与具体行为 |
 | --- | --- | --- |
-| **D1** | **输入框统一范围与 `Lx` 隔离保护** | 覆盖全部 8 个弹窗输入框、`Todo` 编辑框、`Ask` 手写框、`Prompt` 树/页搜索框；**绝不改动 `Lx` 主输入框现有的 `Up/Down` 历史/任务页路由、`/` 与 `@` 面板优先级**，仅为其增量挂载选区 `Ctrl+X` 剪切。 |
+| **D1** | **输入框统一范围与 `Lx` 隔离保护** | 覆盖全部 8 个弹窗输入框、`Todo` 编辑框、`Ask` 手写框、`Prompt` 树/页搜索框；**绝不改动 `Lx` 主输入框现有的 `Up/Down` 历史/任务页路由、`/` 与 `@` 面板优先级**。`Lx` 增量支持 `Ctrl+X` 剪切、`Ctrl+A` 全选、`Shift+方向键` 选区扩展（含按词、行首尾与跨视觉行），并让 `Backspace`/`Delete`/删词/删行与输入、粘贴、换行优先作用于选区。 |
 | **D2** | **`ReferencedFolderSearch` 的 `Ctrl+Z` / `Ctrl+C` 优先级** | 采用“输入框有状态时优先输入框，否则回落列表操作”：<br>1. **`Ctrl/Cmd+Z`**：当 `search.query.can_undo()` 为真时，优先撤销搜索框文本并重算过滤；当撤销栈为空时，才执行 `referenced_search_back` 回退上一级目录。`Shift+Enter` 进入子目录或回退目录时重置 `query` 历史。<br>2. **`Ctrl/Cmd+C`**：当 `search.query.has_selection()` 为真时，优先复制搜索框选中文本；无选区时保持复制下方列表高亮项的 Markdown 引用。 |
 | **D3** | **`Ask` 与 `Todo` 折行多行框的 `↑`/`↓` 行为** | 1. **`Ask` 手写框**：在 `apply_edit_input`（`src/app/update/chat/ask.rs`）内单独处理 `LxInput::Down`（调用 `editor.move_down()`），不触碰 `apply_editor_edit`，避免影响 `Lx` 主输入框。<br>2. **`Todo` 编辑框**：在 `TodoPanel` 同步记录编辑框可用列宽 `edit_text_width`，按 `↑`/`↓` 时在软折行视觉行间移动光标（首行再按 `↑` 落行首、末行再按 `↓` 落行尾），绝不退出编辑态或切换待办项。 |
 | **D4** | **`Ctrl/Cmd+X` 选区剪切与 `Prompt` 搜索框鼠标选区** | 1. 所有输入框（含 `Lx` 主输入框、`Ask`、`Todo`、8 个弹窗、`Prompt` 树/页搜索框及 `Prompt` 编辑器）在存在有效选区时，按 `Ctrl/Cmd+X` 将选中文本复制到剪贴板（弹 Toast）并删除选区（记入一步 `Undo`）；无选区时 `Ctrl/Cmd+X` 为 no-op。<br>2. 为 `Prompt` 树搜索框与页搜索框补齐鼠标单击落点、双击选词、三击全选、拖拽选区及选区反色渲染。 |

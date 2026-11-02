@@ -921,3 +921,25 @@ fn down_moves_cursor_across_wrapped_custom_rows() {
     press(&mut state, LxInput::Up);
     assert_eq!(cursor(&state), 0);
 }
+
+#[test]
+fn ask_custom_input_supports_keyboard_selection_and_delete() {
+    let (mut state, pane, _key) = asking(vec![question("q", true, &["A"])]);
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Char(' '));
+    for ch in "abc".chars() {
+        press(&mut state, LxInput::Char(ch));
+    }
+    press(&mut state, LxInput::SelectLeft);
+    press(&mut state, LxInput::SelectLeft);
+    assert_eq!(
+        panel(&state, pane).custom[0].selected_text().as_deref(),
+        Some("bc")
+    );
+    press(&mut state, LxInput::Delete);
+    assert_eq!(panel(&state, pane).custom[0].text(), "a");
+
+    press(&mut state, LxInput::SelectAll);
+    press(&mut state, LxInput::Char('x'));
+    assert_eq!(panel(&state, pane).custom[0].text(), "x");
+}

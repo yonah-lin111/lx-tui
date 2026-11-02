@@ -707,6 +707,51 @@ impl AskEditor {
         self.0.move_down();
     }
 
+    /// Shift+←：向左扩展选区。
+    pub fn select_left(&mut self) {
+        self.0.select_left();
+    }
+
+    /// Shift+→：向右扩展选区。
+    pub fn select_right(&mut self) {
+        self.0.select_right();
+    }
+
+    /// Shift+Ctrl/Alt+←：向左扩展一个词。
+    pub fn select_word_left(&mut self) {
+        self.0.select_word_left();
+    }
+
+    /// Shift+Ctrl/Alt+→：向右扩展一个词。
+    pub fn select_word_right(&mut self) {
+        self.0.select_word_right();
+    }
+
+    /// Shift+Home：扩展到视觉行首。
+    pub fn select_home(&mut self) {
+        self.0.select_home();
+    }
+
+    /// Shift+End：扩展到视觉行尾。
+    pub fn select_end(&mut self) {
+        self.0.select_end();
+    }
+
+    /// Shift+↑：向上扩展一个视觉行。
+    pub fn select_up(&mut self) {
+        self.0.select_up();
+    }
+
+    /// Shift+↓：向下扩展一个视觉行。
+    pub fn select_down(&mut self) {
+        self.0.select_down();
+    }
+
+    /// Ctrl+A：全选。
+    pub fn select_all(&mut self) {
+        self.0.select_all();
+    }
+
     pub fn home(&mut self) {
         self.clear_text_selection();
         self.0.home();

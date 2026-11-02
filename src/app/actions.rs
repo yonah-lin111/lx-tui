@@ -77,10 +77,28 @@ pub enum LxInput {
     Down,
     Home,
     End,
-    /// Ctrl+A：移到逻辑行首。
+    /// 逻辑行首（Home 同义；保留给直接编辑分派）。
     LineStart,
     /// Ctrl+E：移到逻辑行尾。
     LineEnd,
+    /// Shift+←：向左扩展一个字符的选区。
+    SelectLeft,
+    /// Shift+→：向右扩展一个字符的选区。
+    SelectRight,
+    /// Shift+Ctrl/Alt+← / Shift+Alt+B：向左扩展一个词的选区。
+    SelectWordLeft,
+    /// Shift+Ctrl/Alt+→ / Shift+Alt+F：向右扩展一个词的选区。
+    SelectWordRight,
+    /// Shift+Home：扩展到视觉行首。
+    SelectHome,
+    /// Shift+End：扩展到视觉行尾。
+    SelectEnd,
+    /// Shift+↑：向上扩展一个视觉行。
+    SelectUp,
+    /// Shift+↓：向下扩展一个视觉行。
+    SelectDown,
+    /// Ctrl+A：全选输入框。
+    SelectAll,
     /// Ctrl+← / Alt+B：左移一个词。
     WordLeft,
     /// Ctrl+→ / Alt+F：右移一个词。

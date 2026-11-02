@@ -467,6 +467,110 @@ impl Lx {
         Some(text)
     }
 
+    /// 首次键盘扩展选区时以当前光标为锚点；关闭块面板并压制提及。
+    fn begin_keyboard_selection(&mut self) {
+        if self.text_selection.is_none() {
+            self.text_selection = Some((self.cursor, self.cursor, SelectionUnit::Character));
+            self.panel = None;
+            self.mention.suppress();
+        }
+    }
+
+    /// 把选区光标扩展到 `target`；无现有选区且目标未移动时不建立空锚点。
+    fn extend_selection_to(&mut self, target: usize) {
+        let target = target.min(self.input.len());
+        if self.text_selection.is_none() && target == self.cursor {
+            return;
+        }
+        self.refer_suppressed = false;
+        self.begin_keyboard_selection();
+        self.cursor = target;
+        self.scroll_cursor_into_view();
+    }
+
+    /// Shift+←：向左扩展一个字符。
+    pub fn select_left(&mut self) {
+        let target = text::prev_boundary(&self.input, self.cursor);
+        self.extend_selection_to(target);
+    }
+
+    /// Shift+→：向右扩展一个字符。
+    pub fn select_right(&mut self) {
+        let target = self.input[self.cursor..]
+            .chars()
+            .next()
+            .map_or(self.cursor, |ch| self.cursor + ch.len_utf8());
+        self.extend_selection_to(target);
+    }
+
+    /// Shift+Ctrl/Alt+←：向左扩展一个词。
+    pub fn select_word_left(&mut self) {
+        let target = text::word_start_before(&self.input, self.cursor);
+        self.extend_selection_to(target);
+    }
+
+    /// Shift+Ctrl/Alt+→：向右扩展一个词。
+    pub fn select_word_right(&mut self) {
+        let target = text::word_end_after(&self.input, self.cursor);
+        self.extend_selection_to(target);
+    }
+
+    /// Shift+Home：扩展到当前视觉行行首。
+    pub fn select_home(&mut self) {
+        let rows = self.visual_rows();
+        let (index, _) = self.cursor_visual_in(&rows);
+        let target = rows[index].start;
+        self.extend_selection_to(target);
+    }
+
+    /// Shift+End：扩展到当前视觉行行尾。
+    pub fn select_end(&mut self) {
+        let rows = self.visual_rows();
+        let (index, _) = self.cursor_visual_in(&rows);
+        let target = rows[index].end;
+        self.extend_selection_to(target);
+    }
+
+    /// Shift+↑：向上扩展一个视觉行。
+    pub fn select_up(&mut self) {
+        let rows = self.visual_rows();
+        let (index, col) = self.cursor_visual_in(&rows);
+        let target = if index == 0 {
+            rows[0].start
+        } else {
+            let row = rows[index - 1];
+            row.start + text::offset_at_col(&self.input[row.start..row.end], col)
+        };
+        self.extend_selection_to(target);
+    }
+
+    /// Shift+↓：向下扩展一个视觉行。
+    pub fn select_down(&mut self) {
+        let rows = self.visual_rows();
+        let (index, col) = self.cursor_visual_in(&rows);
+        let target = if index + 1 >= rows.len() {
+            rows[rows.len() - 1].end
+        } else {
+            let row = rows[index + 1];
+            row.start + text::offset_at_col(&self.input[row.start..row.end], col)
+        };
+        self.extend_selection_to(target);
+    }
+
+    /// Ctrl+A：全选输入框。
+    pub fn select_all(&mut self) {
+        if self.input.is_empty() {
+            self.text_selection = None;
+            self.cursor = 0;
+            return;
+        }
+        self.text_selection = Some((0, self.input.len(), SelectionUnit::Character));
+        self.cursor = self.input.len();
+        self.panel = None;
+        self.mention.suppress();
+        self.scroll_cursor_into_view();
+    }
+
     /// 视口单元格（视觉行、内容列）→ 输入缓冲字节偏移；越界钳到最近位置。
     pub fn offset_at_cell(&self, row: usize, col: u16) -> usize {
         let rows = self.visual_rows();
@@ -557,10 +661,15 @@ impl Lx {
         self.touch();
     }
 
-    /// 在光标处插入一个字符。
+    /// 在光标处插入一个字符（有选区时替换选区）。
     pub fn insert_char(&mut self, ch: char) {
         self.refer_suppressed = false;
+        let selection = self.text_selection_range();
         self.snapshot();
+        if let Some((start, end)) = selection {
+            self.input.replace_range(start..end, "");
+            self.cursor = start;
+        }
         self.input.insert(self.cursor, ch);
         self.cursor += ch.len_utf8();
         self.adopt_shell_prefix();
@@ -576,7 +685,12 @@ impl Lx {
         if sanitized.is_empty() {
             return;
         }
+        let selection = self.text_selection_range();
         self.snapshot();
+        if let Some((start, end)) = selection {
+            self.input.replace_range(start..end, "");
+            self.cursor = start;
+        }
         self.input.insert_str(self.cursor, &sanitized);
         self.cursor += sanitized.len();
         self.adopt_shell_prefix();
@@ -589,6 +703,18 @@ impl Lx {
 
     /// 在光标处换行；列表项自动续写标记（对齐 prompt 编辑器）。
     pub fn newline(&mut self) {
+        // 有选区时先替换整段选区，再插入换行（一步撤销）。
+        if let Some((start, end)) = self.text_selection_range() {
+            self.snapshot();
+            self.input.replace_range(start..end, "\n");
+            self.cursor = start + 1;
+            if self.plain || self.input_mode == LxInputMode::Shell {
+                self.scroll_cursor_into_view();
+            } else {
+                self.refresh_panel();
+            }
+            return;
+        }
         // 纯文本缓冲：换行就是换行，不续写列表标记、不刷新面板。
         if self.plain {
             self.snapshot();
@@ -625,6 +751,9 @@ impl Lx {
     /// （对齐 prompt 的 `mention_deletion_range` 语义）；面板打开时按普通退格编辑查询。
     pub fn backspace(&mut self) {
         self.refer_suppressed = false;
+        if self.delete_selected() {
+            return;
+        }
         // Shell 正文起点退格：退出模式并保留正文（不再吞字符）；压一次快照，
         // 使 undo 能恢复模式与正文。
         if self.input_mode == LxInputMode::Shell && self.cursor == 0 {
@@ -667,6 +796,9 @@ impl Lx {
     /// 删除光标处字符。
     pub fn delete(&mut self) {
         self.refer_suppressed = false;
+        if self.delete_selected() {
+            return;
+        }
         if self.cursor < self.input.len() {
             self.snapshot();
             self.input.remove(self.cursor);
@@ -850,6 +982,9 @@ impl Lx {
     /// 删除光标到逻辑行首；光标已在行首时删除前一个换行（与上一行合并）。
     pub fn delete_to_line_start(&mut self) {
         self.refer_suppressed = false;
+        if self.delete_selected() {
+            return;
+        }
         if self.cursor == 0 {
             return;
         }
@@ -869,6 +1004,9 @@ impl Lx {
     /// 删除光标到逻辑行尾。
     pub fn delete_to_line_end(&mut self) {
         self.refer_suppressed = false;
+        if self.delete_selected() {
+            return;
+        }
         let end = text::line_end(&self.input, self.cursor);
         if self.cursor < end {
             self.snapshot();
@@ -880,6 +1018,9 @@ impl Lx {
     /// 向前删除一个词。
     pub fn delete_word_backward(&mut self) {
         self.refer_suppressed = false;
+        if self.delete_selected() {
+            return;
+        }
         let start = text::word_start_before(&self.input, self.cursor);
         if start < self.cursor {
             self.snapshot();
@@ -894,6 +1035,9 @@ impl Lx {
     /// 曾经把光标设成删除前的 `end`，缓冲区缩短后光标越界，下一次编辑直接 panic。
     pub fn delete_word_forward(&mut self) {
         self.refer_suppressed = false;
+        if self.delete_selected() {
+            return;
+        }
         let end = text::word_end_after(&self.input, self.cursor);
         if self.cursor < end {
             self.snapshot();
