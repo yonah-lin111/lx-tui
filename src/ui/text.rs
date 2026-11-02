@@ -282,15 +282,8 @@ pub const TAB_SEPARATOR: &str = "│";
 pub const TAB_SCROLL_LEFT_LABEL: &str = "[<]";
 pub const TAB_SCROLL_RIGHT_LABEL: &str = "[>]";
 pub const TAB_ITEM_ICON: &str = "▪";
-/// 标签栏工作态旋转帧（单宽 Braille 字符，与 `TAB_ITEM_ICON` 等宽替换）。
-pub const TAB_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-/// 该标签有窗格挂着 `ask` 面板时的标记（标签标题后追加，位于标签背景内部）。
+/// 该标签有窗格挂着 `ask` 面板时的标记（标签标题后追加，强调色）。
 pub const TAB_ASK_MARKER: &str = "?";
-
-/// 按帧号取标签栏旋转图标。
-pub fn tab_spinner_frame(frame: usize) -> &'static str {
-    TAB_SPINNER_FRAMES[frame % TAB_SPINNER_FRAMES.len()]
-}
 
 /// 初始工作区标记：不可移除，跟随启动工作区。
 pub const INITIAL_WORKSPACE_MARKER: &str = " *";
@@ -1026,7 +1019,6 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             None => "switch view",
         },
         TooltipTarget::AddWorkspace => "new workspace",
-        TooltipTarget::Tab(_) => "",
         TooltipTarget::AddTab => "new tab",
         TooltipTarget::TabScrollLeft => "scroll tabs left",
         TooltipTarget::TabScrollRight => "scroll tabs right",

@@ -197,11 +197,7 @@ pub fn render(frame: &mut Frame<'_>, view: &ViewLayout, state: &AppState) {
         let pending = tab.has_pending_ask();
         let content_width = usize::from(rect.width).saturating_sub(TAB_PADDING + TAB_SEPARATOR);
         let marker_width = if pending { ASK_MARKER_WIDTH } else { 0 };
-        let icon = match tab.loading_frame() {
-            Some(frame) => text::tab_spinner_frame(frame),
-            None => text::TAB_ITEM_ICON,
-        };
-        let tab_content = format!("{icon} {label}");
+        let tab_content = format!("{} {label}", text::TAB_ITEM_ICON);
         let content_text =
             text::ellipsize(&tab_content, content_width.saturating_sub(marker_width));
         let pad = content_width

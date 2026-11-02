@@ -36,8 +36,6 @@ pub enum TooltipTarget {
     /// 窗格顶边框的视图切换按钮。
     PaneToggle(PaneId),
     AddWorkspace,
-    /// 顶部标签栏中含有已识别外部 Agent 的标签。
-    Tab(usize),
     AddTab,
     TabScrollLeft,
     TabScrollRight,

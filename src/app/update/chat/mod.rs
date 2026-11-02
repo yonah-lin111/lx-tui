@@ -891,6 +891,9 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
         let Some(target) = state.pane_mut_anywhere(pane) else {
             continue;
         };
+        if target.view != crate::app::state::PaneView::Lx {
+            continue;
+        }
         let streaming = target.lx.chat.status.streaming
             || target.lx.chat.request.is_busy()
             || target.lx.chat.has_running_shell();
@@ -899,11 +902,7 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
         // 以及主轮自然结束后的“Waiting for agents...”等待行；用户显式停止主轮后
         // 等待行隐藏，但详情动画仍继续。
         let agents_running = target.lx.agents.runs.iter().any(|run| run.is_running());
-        let external_working = target
-            .agent
-            .as_ref()
-            .is_some_and(|agent| agent.state == crate::detect::AgentState::Working);
-        if !streaming && !compacting && !agents_running && !external_working {
+        if !streaming && !compacting && !agents_running {
             continue;
         }
         // 压缩耗时：摘要请求没有任何流式输出，这一行只有计时能证明它还在跑。

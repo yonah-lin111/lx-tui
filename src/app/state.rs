@@ -611,8 +611,8 @@ impl AppState {
             .collect()
     }
 
-    /// 是否存在需要 loading 心跳的窗格：lx 生成中、本地命令在跑、`/compact`
-    /// 正在执行，或终端外部 Agent 正在工作（驱动顶栏标签旋转动画）。
+    /// 是否存在需要 loading 心跳的 lx 窗格：生成中、本地命令在跑，或 `/compact`
+    /// 正在执行（摘要请求没有流式输出，但输入框上方那一行要显示压缩进度）。
     pub fn has_streaming_lx(&self) -> bool {
         self.all_pane_ids().into_iter().any(|pane| {
             self.pane_anywhere(pane).is_some_and(|target| {
@@ -621,7 +621,6 @@ impl AppState {
                     || target.lx.compact.is_running()
                     // 子 agent 在后台跑时主 loading 也要扫描，即使 Agents 面板没开。
                     || target.lx.agents.runs.iter().any(|run| run.is_running())
-                    || target.is_working()
             })
         })
     }

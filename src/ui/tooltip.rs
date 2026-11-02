@@ -51,9 +51,6 @@ pub fn render(
     let anchor = targets(view, state, pane_rects, screen)
         .into_iter()
         .find_map(|(target, area)| (target == tooltip.target).then_some(area))?;
-    if let TooltipTarget::Tab(tab_index) = tooltip.target {
-        return render_tab_agents(frame, screen, anchor, state, tab_index);
-    }
     let title = text::TOOLTIP_TITLE;
     let hint = text::tooltip_hint(tooltip.target, state);
     let area = rect(screen, anchor, title, hint)?;
@@ -72,67 +69,6 @@ pub fn render(
         .alignment(Alignment::Center),
         inner,
     );
-    Some(area)
-}
-
-/// 绘制标签页悬停时的外部 Agent 垂直列表 tooltip（每行一个 `● <agent>`，不含原生 lx）。
-fn render_tab_agents(
-    frame: &mut Frame<'_>,
-    screen: Rect,
-    anchor: Rect,
-    state: &AppState,
-    tab_index: usize,
-) -> Option<Rect> {
-    let agents = state
-        .active_workspace()
-        .tabs
-        .get(tab_index)
-        .map(|tab| tab.agents())?;
-    if agents.is_empty() {
-        return None;
-    }
-    let content_width = agents
-        .iter()
-        .map(|agent| {
-            text::agent_status_dot(agent.state).chars().count()
-                + 1
-                + text::agent_label(agent.kind).chars().count()
-        })
-        .max()
-        .unwrap_or(0);
-    let width = u16::try_from(content_width.saturating_add(4))
-        .unwrap_or(u16::MAX)
-        .min(screen.width);
-    let height = u16::try_from(agents.len().saturating_add(2))
-        .unwrap_or(u16::MAX)
-        .min(screen.height);
-    let area = box_rect(screen, anchor, width, height)?;
-    clear::render(frame, area);
-    let block = Block::bordered().border_style(style::muted());
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.width == 0 || inner.height == 0 {
-        return Some(area);
-    }
-    let avail = usize::from(inner.width).saturating_sub(1);
-    let lines: Vec<Line<'_>> = agents
-        .into_iter()
-        .take(usize::from(inner.height))
-        .map(|agent| {
-            let dot = format!("{} ", text::agent_status_dot(agent.state));
-            let dot_width = dot.chars().count();
-            let name = text::ellipsize(
-                text::agent_label(agent.kind),
-                avail.saturating_sub(dot_width),
-            );
-            Line::from(vec![
-                Span::styled(" ", style::text()),
-                Span::styled(dot, style::agent_status(agent.state)),
-                Span::styled(name, style::text()),
-            ])
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines), inner);
     Some(area)
 }
 
@@ -177,17 +113,7 @@ fn targets(
     if let Some(area) = ui::settings_button(view, state) {
         targets.push((TooltipTarget::SidebarSettings, area));
     }
-    let workspace = state.active_workspace();
-    let bar = tab_bar::layout(view, workspace, state.tab_scroll);
-    for (index, area) in &bar.tabs {
-        if workspace
-            .tabs
-            .get(*index)
-            .is_some_and(|tab| !tab.agents().is_empty())
-        {
-            targets.push((TooltipTarget::Tab(*index), *area));
-        }
-    }
+    let bar = tab_bar::layout(view, state.active_workspace(), state.tab_scroll);
     if let Some(area) = bar.add {
         targets.push((TooltipTarget::AddTab, area));
     }
@@ -294,15 +220,10 @@ fn rect(screen: Rect, anchor: Rect, title: &str, hint: &str) -> Option<Rect> {
     let width = u16::try_from(text.saturating_add(4))
         .unwrap_or(u16::MAX)
         .min(screen.width);
-    let height = 3.min(screen.height);
-    box_rect(screen, anchor, width, height)
-}
-
-/// 给定宽高在锚点下/上方居中并夹取进屏幕。
-fn box_rect(screen: Rect, anchor: Rect, width: u16, height: u16) -> Option<Rect> {
-    if screen.width == 0 || screen.height == 0 || width == 0 || height == 0 {
+    if width == 0 {
         return None;
     }
+    let height = 3.min(screen.height);
     let below = anchor.y.saturating_add(1);
     let y = if below.saturating_add(height) <= screen.bottom() {
         below

@@ -648,15 +648,18 @@ fn loading_scan_cycles_native_agent_label_colors() {
 fn tab_ask_marker_preserves_tab_background_and_uses_distinct_foreground() {
     let active = selected_item().patch(tab_ask_marker());
     assert_eq!(active.bg, Some(Color::Cyan), "激活标签保留青底");
-    assert_eq!(active.fg, Some(Color::Indexed(208)), "符号改用醒目橘色前景");
-    assert!(active.add_modifier.contains(Modifier::BOLD));
+    assert_eq!(
+        active.fg,
+        Some(Color::Indexed(166)),
+        "符号改用深琥珀/暗砖红前景"
+    );
 
     let hovered = selection().patch(tab_ask_marker());
     assert_eq!(hovered.bg, Some(Color::Indexed(240)), "悬停标签保留深灰底");
-    assert_eq!(hovered.fg, Some(Color::Indexed(208)));
+    assert_eq!(hovered.fg, Some(Color::Indexed(166)));
 
     let inactive = muted().patch(tab_ask_marker());
     assert_eq!(inactive.bg, None, "未激活标签不额外铺底");
-    assert_eq!(inactive.fg, Some(Color::Indexed(208)));
+    assert_eq!(inactive.fg, Some(Color::Indexed(166)));
     assert!(inactive.sub_modifier.contains(Modifier::DIM));
 }

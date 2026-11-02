@@ -81,11 +81,10 @@ pub fn selected_item() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// 标签内挂起 `ask` 的 `?` 标记：琥珀橘色加粗（显式去掉继承的 DIM），背景跟随标签底色。
+/// 标签内挂起 `ask` 的 `?` 标记：深琥珀/暗砖红（`Indexed 166` `#d75f00`，显式去掉继承的 DIM），背景跟随标签底色。
 pub fn tab_ask_marker() -> Style {
     Style::default()
-        .fg(Color::Indexed(208))
-        .add_modifier(Modifier::BOLD)
+        .fg(Color::Indexed(166))
         .remove_modifier(Modifier::DIM)
 }
 
