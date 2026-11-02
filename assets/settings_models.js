@@ -35,15 +35,24 @@ function isProviderDirty(provider) {
   return JSON.stringify(provider) !== JSON.stringify(base);
 }
 
-function computeModelsDirty() {
+function isModelSettingsDirty() {
   if (!modelsDraft || !modelsBaseline) { return false; }
   return JSON.stringify({
     defaultModel: modelsDraft.defaultModel,
-    providers: modelsDraft.providers
+    titleSummary: modelsDraft.titleSummary
   }) !== JSON.stringify({
     defaultModel: modelsBaseline.defaultModel,
-    providers: modelsBaseline.providers
+    titleSummary: modelsBaseline.titleSummary
   });
+}
+
+function isProviderSettingsDirty() {
+  if (!modelsDraft || !modelsBaseline) { return false; }
+  return JSON.stringify(modelsDraft.providers) !== JSON.stringify(modelsBaseline.providers);
+}
+
+function computeModelsDirty() {
+  return isModelSettingsDirty() || isProviderSettingsDirty();
 }
 
 function updateProviderDirtyDots() {
@@ -67,8 +76,17 @@ function markModelsDirty() {
 
 function updateModelsStatus() {
   const count = ((modelsDraft && modelsDraft.providers) || []).length;
-  document.getElementById('models-status').textContent = count + ' provider(s)';
-  document.getElementById('models-status').className = 'status ok';
+  const text = count + ' provider(s)';
+  const statusEl = document.getElementById('models-status');
+  if (statusEl) {
+    statusEl.textContent = text;
+    statusEl.className = 'status ok';
+  }
+  const modelStatusEl = document.getElementById('model-settings-status');
+  if (modelStatusEl) {
+    modelStatusEl.textContent = text;
+    modelStatusEl.className = 'status ok';
+  }
 }
 
 // Reset：把草稿回填为最近一次加载/保存的快照。
@@ -96,8 +114,11 @@ function loadModels() {
     document.getElementById('models-revision').textContent = 'revision ' + String(data.revision || '').slice(0, 8);
     refreshActionBars();
   }).catch((error) => {
-    document.getElementById('models-status').textContent = 'Failed to load: ' + error.message;
-    document.getElementById('models-status').className = 'status error';
+    const msg = 'Failed to load: ' + error.message;
+    const statusEl = document.getElementById('models-status');
+    if (statusEl) { statusEl.textContent = msg; statusEl.className = 'status error'; }
+    const modelStatusEl = document.getElementById('model-settings-status');
+    if (modelStatusEl) { modelStatusEl.textContent = msg; modelStatusEl.className = 'status error'; }
   });
 }
 
@@ -116,6 +137,7 @@ function snapshotToDraft(snapshot) {
     revision: snapshot.revision || '',
     streamIdleTimeoutMs: snapshot.streamIdleTimeoutMs,
     defaultModel: snapshot.defaultModel || null,
+    titleSummary: snapshot.titleSummary || null,
     providers: (snapshot.providers || []).map((provider) => ({
       key: provider.key,
       id: provider.id,
@@ -254,6 +276,10 @@ function deleteProvider() {
     modelsDraft.defaultModel = null;
     showToast('Default model cleared', 'info');
   }
+  if (modelsDraft.titleSummary && modelsDraft.titleSummary.provider === provider.id) {
+    modelsDraft.titleSummary = null;
+    showToast('Title model cleared', 'info');
+  }
   selectedProviderKey = null;
   markModelsDirty();
   renderModelsView();
@@ -288,6 +314,10 @@ function removeModel(provider, model) {
   if (modelsDraft.defaultModel && modelsDraft.defaultModel.provider === provider.key && modelsDraft.defaultModel.model === model.id) {
     modelsDraft.defaultModel = null;
     showToast('Default model cleared', 'info');
+  }
+  if (modelsDraft.titleSummary && modelsDraft.titleSummary.provider === provider.key && modelsDraft.titleSummary.model === model.id) {
+    modelsDraft.titleSummary = null;
+    showToast('Title model cleared', 'info');
   }
   markModelsDirty();
   renderModelList();
@@ -548,7 +578,18 @@ function renderDefaultModel() {
     value = '';
     showToast('Default model cleared (its model was renamed or removed)', 'info');
   }
-  modelSelects.defaultModel.setOptions(options, value);
+  if (modelSelects.defaultModel) {
+    modelSelects.defaultModel.setOptions(options, value);
+  }
+  let titleValue = modelsDraft.titleSummary ? modelsDraft.titleSummary.provider + '\u0000' + modelsDraft.titleSummary.model : '';
+  if (titleValue && !options.some((option) => option.value === titleValue)) {
+    modelsDraft.titleSummary = null;
+    titleValue = '';
+    showToast('Title model cleared (its model was renamed or removed)', 'info');
+  }
+  if (modelSelects.titleModel) {
+    modelSelects.titleModel.setOptions(options, titleValue);
+  }
 }
 
 function buildVariants(model) {
@@ -654,10 +695,19 @@ function buildPayload() {
       defaultModel = {provider: provider.id, model: model.id.trim(), variant: model.variant || null};
     }
   }
+  let titleSummary = null;
+  if (modelsDraft.titleSummary) {
+    const provider = modelsDraft.providers.find((item) => item.id === modelsDraft.titleSummary.provider);
+    const model = provider && provider.models.find((item) => item.id.trim() === modelsDraft.titleSummary.model);
+    if (provider && model) {
+      titleSummary = {provider: provider.id, model: model.id.trim(), variant: model.variant || null};
+    }
+  }
   return {
     providers: providers,
     enabledProviders: enabledProviders,
     defaultModel: defaultModel,
+    titleSummary: titleSummary,
     streamIdleTimeoutMs: modelsDraft.streamIdleTimeoutMs,
     revision: modelsDraft.revision
   };
@@ -773,10 +823,14 @@ function initProviderFields() {
     const provider = currentProvider();
     if (!provider) { return; }
     provider.enabled = event.target.checked;
-    // 关掉默认模型所属 provider 时清空默认选择，避免后端校验 422。
+    // 关掉默认模型或标题模型所属 provider 时清空对应选择，避免后端校验 422。
     if (!provider.enabled && modelsDraft.defaultModel && modelsDraft.defaultModel.provider === provider.id) {
       modelsDraft.defaultModel = null;
       showToast('Default model cleared (its provider was turned off)', 'info');
+    }
+    if (!provider.enabled && modelsDraft.titleSummary && modelsDraft.titleSummary.provider === provider.id) {
+      modelsDraft.titleSummary = null;
+      showToast('Title model cleared (its provider was turned off)', 'info');
     }
     markModelsDirty();
     renderProviders();
@@ -816,11 +870,33 @@ function initModelsView() {
       markModelsDirty();
     }
   });
+  modelSelects.titleModel = createSelect(document.getElementById('title-model-host'), {
+    ariaLabel: 'Title model',
+    placeholder: '(none)',
+    value: '',
+    options: [{value: '', label: '(none)'}],
+    onChange: (value) => {
+      if (!modelsDraft) { return; }
+      if (!value) {
+        modelsDraft.titleSummary = null;
+        markModelsDirty();
+        return;
+      }
+      const parts = value.split('\u0000');
+      modelsDraft.titleSummary = {provider: parts[0], model: parts[1], variant: null};
+      markModelsDirty();
+    }
+  });
   initProviderFields();
 }
 
-actionBars.models = createActionBar('actions-models', {
-  isDirty: computeModelsDirty,
+actionBars.model = createActionBar('actions-model', {
+  isDirty: isModelSettingsDirty,
+  save: saveModels,
+  reset: resetModels
+});
+actionBars.provider = createActionBar('actions-provider', {
+  isDirty: isProviderSettingsDirty,
   save: saveModels,
   reset: resetModels
 });

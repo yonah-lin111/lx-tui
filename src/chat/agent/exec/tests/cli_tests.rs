@@ -531,6 +531,7 @@ fn ai_settings(
             model: model.to_string(),
             variant: variant.map(str::to_string),
         }),
+        title_summary: None,
         stream_idle_timeout_ms: Some(4_321),
         web_search: WebSearchConfig::default(),
         extra: serde_json::Map::new(),

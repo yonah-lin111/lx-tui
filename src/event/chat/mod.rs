@@ -19,6 +19,7 @@ mod runtime;
 pub(crate) mod skills;
 mod subagent;
 mod timeline;
+pub mod title;
 mod tool_calls;
 pub mod user_shell;
 
@@ -73,6 +74,9 @@ pub use rewind::{RewindOutcome, apply_rewind_effects, handle_rewind_finished};
 pub(crate) use subagent::{
     apply_subagent_effects, finish_subagent, handle_subagent_auto_compact,
     handle_subagent_net_event, handle_subagent_wait_ready,
+};
+pub use title::{
+    apply_title_effects, handle_prompt_block_title_generated, handle_session_title_generated,
 };
 
 use std::collections::HashMap;

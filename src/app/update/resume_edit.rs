@@ -163,6 +163,7 @@ fn commit_resume_session_rename(state: &mut AppState) -> bool {
     let workspace = edit.workspace.clone();
     let session_id = edit.session_id.clone();
     let pane = edit.pane;
+    crate::app::update::cancel_session_title(state, &session_id);
     close_overlay(state);
     state.effects.push(Effect::RenameChatSession {
         workspace,

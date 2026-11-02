@@ -29,6 +29,25 @@ type LoadedSession = (
 );
 
 impl Persistence {
+    /// 条件更新会话标题（仅当数据库当前标题仍等于 `expected_title` 时改名）。
+    pub fn rename_chat_session_if_title_matches(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        expected_title: &str,
+        new_title: &str,
+    ) -> bool {
+        self.with_db(|db| {
+            db.rename_chat_session_if_title_matches(
+                workspace,
+                session_id,
+                expected_title,
+                new_title,
+            )
+        })
+        .unwrap_or(false)
+    }
+
     /// 最新用户轮次（撤销目标与 revision）。
     pub fn latest_user_turn(
         &self,

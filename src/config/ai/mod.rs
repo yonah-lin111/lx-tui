@@ -245,6 +245,13 @@ pub struct AiSettings {
         skip_serializing_if = "Option::is_none"
     )]
     pub default_model: Option<ModelSelection>,
+    /// 标题生成模型选择（兼容 lx-agent 的 camelCase `titleSummary`）。
+    #[serde(
+        default,
+        rename = "titleSummary",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub title_summary: Option<ModelSelection>,
     /// 流式空闲超时毫秒（lx-agent 写作 camelCase `streamIdleTimeoutMs`）。
     #[serde(
         rename = "streamIdleTimeoutMs",
@@ -254,8 +261,7 @@ pub struct AiSettings {
     /// 联网搜索 API Key 配置（`ai.webSearch`）。
     #[serde(default, rename = "webSearch")]
     pub web_search: WebSearchConfig,
-    /// 未知字段往返保留（如 lx-agent 的 titleSummary 等，导入时丢弃、
-    /// 本项目保存时不回写这些字段）。
+    /// 未知字段往返保留。
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -267,6 +273,7 @@ impl AiSettings {
             enabled_providers: Vec::new(),
             providers: BTreeMap::new(),
             default_model: None,
+            title_summary: None,
             stream_idle_timeout_ms: None,
             web_search: WebSearchConfig::default(),
             extra: serde_json::Map::new(),
@@ -325,34 +332,47 @@ impl AiSettings {
             }
         }
         if let Some(selection) = &self.default_model {
-            let Some(provider) = self.providers.get(&selection.provider) else {
-                return Err(AiConfigError::Invalid(format!(
-                    "default model provider '{}' is not defined",
-                    selection.provider
-                )));
-            };
-            if !enabled.contains(&selection.provider) {
-                return Err(AiConfigError::Invalid(format!(
-                    "default model provider '{}' is not enabled",
-                    selection.provider
-                )));
-            }
-            let Some(model) = provider.models.get(&selection.model) else {
-                return Err(AiConfigError::Invalid(format!(
-                    "default model '{}' is not defined on provider '{}'",
-                    selection.model, selection.provider
-                )));
-            };
-            if let Some(variant) = &selection.variant
-                && !model.variants.contains_key(variant)
-            {
-                return Err(AiConfigError::Invalid(format!(
-                    "default model variant '{variant}' is not in model variants"
-                )));
-            }
+            validate_selection("default model", selection, &self.providers, &enabled)?;
+        }
+        if let Some(selection) = &self.title_summary {
+            validate_selection("title model", selection, &self.providers, &enabled)?;
         }
         Ok(())
     }
+}
+
+fn validate_selection(
+    role: &str,
+    selection: &ModelSelection,
+    providers: &BTreeMap<String, ProviderConfig>,
+    enabled: &std::collections::HashSet<String>,
+) -> Result<(), AiConfigError> {
+    let Some(provider) = providers.get(&selection.provider) else {
+        return Err(AiConfigError::Invalid(format!(
+            "{role} provider '{}' is not defined",
+            selection.provider
+        )));
+    };
+    if !enabled.contains(&selection.provider) {
+        return Err(AiConfigError::Invalid(format!(
+            "{role} provider '{}' is not enabled",
+            selection.provider
+        )));
+    };
+    let Some(model) = provider.models.get(&selection.model) else {
+        return Err(AiConfigError::Invalid(format!(
+            "{role} '{}' is not defined on provider '{}'",
+            selection.model, selection.provider
+        )));
+    };
+    if let Some(variant) = &selection.variant
+        && !model.variants.contains_key(variant)
+    {
+        return Err(AiConfigError::Invalid(format!(
+            "{role} variant '{variant}' is not in model variants"
+        )));
+    }
+    Ok(())
 }
 
 impl Default for AiSettings {

@@ -54,8 +54,12 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     let html = body(&ok);
     assert!(html.contains("General"), "tabs present");
     assert!(html.contains("Commands"), "commands tab present");
-    assert!(html.contains("Models"), "models tab present");
-    assert!(html.contains("view-models"), "models view container");
+    assert!(html.contains("tab-model"), "model tab present");
+    assert!(html.contains("view-model"), "model view container");
+    assert!(html.contains("tab-provider"), "provider tab present");
+    assert!(html.contains("view-provider"), "provider view container");
+    assert!(html.contains("default-model-host"), "default model host");
+    assert!(html.contains("title-model-host"), "title model host");
     assert!(html.contains("provider-list"), "provider list container");
     assert!(html.contains("prov-api-key"), "api key input present");
     assert!(html.contains("MCP"), "mcp tab present");
@@ -398,7 +402,12 @@ async fn page_header_actions_fill_width_and_resizers() {
     let js = body(&request(port, &get("/settings.js")).await).to_string();
 
     // 保存入口统一到每个视图标题行右侧的全局操作条；页面内不再有独立保存按钮。
-    for id in ["actions-general", "actions-commands", "actions-models"] {
+    for id in [
+        "actions-general",
+        "actions-commands",
+        "actions-model",
+        "actions-provider",
+    ] {
         assert!(
             html.contains(&format!("id=\"{id}\"")),
             "action bar host: {id}"
@@ -1018,6 +1027,8 @@ async fn page_preserves_subtab_drafts_and_dirty_dots_across_views() {
     }
     for symbol in [
         "isProviderDirty",
+        "isModelSettingsDirty",
+        "isProviderSettingsDirty",
         "computeModelsDirty",
         "updateProviderDirtyDots",
         "cancelProvider",

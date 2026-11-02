@@ -407,38 +407,20 @@ impl Database {
                 let session_id = new_external_id("sess");
                 let display_text =
                     crate::chat::strip_references_from_inputs(user_text, attachments);
-                let title = if display_text.is_empty() {
-                    let image_count = attachments
-                        .iter()
-                        .filter(|att| att.kind == MessageAttachmentKind::Image)
-                        .count();
-                    if image_count > 0 {
-                        crate::ui::text::chat::image_message_preview(image_count).to_string()
-                    } else {
-                        attachments.first().map_or_else(
-                            || single_line_preview(user_text, 60),
-                            |att| att.label.clone(),
-                        )
-                    }
-                } else {
-                    single_line_preview(&display_text, 60)
-                };
-                let preview = if display_text.is_empty() {
-                    let image_count = attachments
-                        .iter()
-                        .filter(|att| att.kind == MessageAttachmentKind::Image)
-                        .count();
-                    if image_count > 0 {
-                        crate::ui::text::chat::image_message_preview(image_count).to_string()
-                    } else {
-                        attachments.first().map_or_else(
-                            || single_line_preview(user_text, PREVIEW_CHARS),
-                            |att| att.label.clone(),
-                        )
-                    }
-                } else {
-                    single_line_preview(&display_text, PREVIEW_CHARS)
-                };
+                let image_count = attachments
+                    .iter()
+                    .filter(|att| att.kind == MessageAttachmentKind::Image)
+                    .count();
+                let first_label = attachments.first().map(|att| att.label.as_str());
+                let title =
+                    compute_initial_title(&display_text, user_text, image_count, first_label, 60);
+                let preview = compute_initial_title(
+                    &display_text,
+                    user_text,
+                    image_count,
+                    first_label,
+                    PREVIEW_CHARS,
+                );
                 transaction.execute(
                     r#"INSERT INTO agent_session
                            (external_id, workspace_id, source, title, first_user_message,
@@ -694,6 +676,29 @@ impl Database {
         Ok(())
     }
 
+    /// 条件重命名会话：仅当数据库中的当前 `title` 仍等于 `expected_title` 时更新为 `new_title`
+    /// （供后台自动标题生成使用，防止覆盖用户在生成期间执行的手动 `/rename`）。
+    pub fn rename_chat_session_if_title_matches(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        expected_title: &str,
+        new_title: &str,
+    ) -> Result<bool> {
+        let workspace_external = self
+            .workspace_external_id(workspace)?
+            .ok_or(DbError::WorkspaceMissing)?;
+        let new_title = single_line_preview(new_title, 200);
+        if new_title.is_empty() {
+            return Ok(false);
+        }
+        let updated = self.conn.execute(
+            "UPDATE agent_session SET title = ?1 WHERE external_id = ?2 AND workspace_id = ?3 AND title = ?4",
+            params![new_title, session_id, workspace_external, expected_title],
+        )?;
+        Ok(updated > 0)
+    }
+
     /// 删除会话：双条件校验后级联删除消息/parts/工具/子 Agent 关系与子会话。
     ///
     /// 子会话的 `agent_session` 行没有指向父会话的外键（它属于同一 workspace），
@@ -904,6 +909,38 @@ fn single_line_preview(text: &str, max_chars: usize) -> String {
         }
     }
     out.trim().to_string()
+}
+
+fn compute_initial_title(
+    display_text: &str,
+    user_text: &str,
+    image_count: usize,
+    first_label: Option<&str>,
+    max_chars: usize,
+) -> String {
+    if display_text.is_empty() {
+        if image_count > 0 {
+            crate::ui::text::chat::image_message_preview(image_count).to_string()
+        } else {
+            first_label.map_or_else(|| single_line_preview(user_text, max_chars), str::to_string)
+        }
+    } else {
+        single_line_preview(display_text, max_chars)
+    }
+}
+
+/// 计算首轮入库时的初始会话兜底标题（与 `begin_turn_with_attachments` 同口径）。
+pub fn initial_session_title_for_meta(
+    user_text: &str,
+    attachments: &[MessageAttachmentMeta],
+) -> String {
+    let display_text = crate::chat::strip_references_for_display(user_text, attachments);
+    let image_count = attachments
+        .iter()
+        .filter(|att| att.kind == MessageAttachmentKind::Image)
+        .count();
+    let first_label = attachments.first().map(|att| att.label.as_str());
+    compute_initial_title(&display_text, user_text, image_count, first_label, 60)
 }
 
 /// 联合分配会话内下一个单调递增 `sequence`（消息、撤销提示、compact 检查点、模型切换共用编号空间）。

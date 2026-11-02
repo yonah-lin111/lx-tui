@@ -371,7 +371,7 @@ pub(super) fn line_end_at(text: &str, line: usize) -> usize {
 }
 
 /// 代码围栏定界行：至多 3 个前导空格后的至少 3 个同种 `` ` ``/`~`。
-fn fence_delimiter(line: &str) -> Option<(u8, usize)> {
+pub fn fence_delimiter(line: &str) -> Option<(u8, usize)> {
     let trimmed = line.trim_start_matches(' ');
     if line.len() - trimmed.len() > 3 {
         return None;

@@ -470,6 +470,7 @@ pub fn on_session_loaded_full(
 
 /// 重命名会话。
 pub fn rename_session(state: &mut AppState, pane: PaneId, session_id: &str, title: &str) -> bool {
+    super::title::cancel_session_title(state, session_id);
     let Some(workspace) = state.chat_session_key_for_pane(pane) else {
         return false;
     };

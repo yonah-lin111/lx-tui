@@ -108,6 +108,25 @@ fn validate_rejects_dangling_default_selection() {
         settings.validate().is_err(),
         "默认 variant 必须存在于模型 variants"
     );
+
+    let mut settings = sample_settings();
+    settings.title_summary = Some(ModelSelection {
+        provider: "missing".into(),
+        model: "example-chat".into(),
+        variant: None,
+    });
+    assert!(
+        settings.validate().is_err(),
+        "titleSummary 必须指向已定义供应商"
+    );
+
+    let mut settings = sample_settings();
+    settings.title_summary = Some(ModelSelection {
+        provider: "example".into(),
+        model: "example-chat".into(),
+        variant: Some("high".into()),
+    });
+    assert!(settings.validate().is_ok());
 }
 
 #[test]

@@ -183,6 +183,23 @@ pub enum AppEvent {
         message_id: String,
         code: String,
     },
+    /// `lx` 新会话后台自动生成标题完成。
+    SessionTitleGenerated {
+        workspace: PathBuf,
+        session_id: String,
+        initial_title: String,
+        title: Option<String>,
+    },
+    /// Prompt 模板块 `/title` 后台生成标题完成。
+    PromptBlockTitleGenerated {
+        request_id: u64,
+        workspace_index: usize,
+        editing: crate::app::prompt::PromptEditing,
+        page_id: crate::app::prompt::PromptPageId,
+        block_start_line: usize,
+        original_title: Option<String>,
+        title: Option<String>,
+    },
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -374,6 +391,10 @@ async fn run_loop(
         }
         // 聊天网络效应：取走并在 Tokio 任务执行（结果按 key 回投）。
         if chat::pump_chat_streams(state, &mut chat_streams, &sender, persistence) {
+            dirty = true;
+        }
+        // 后台标题生成效应：轻量无工具流转入后台任务。
+        if chat::apply_title_effects(state, &sender) {
             dirty = true;
         }
         if chat::prune_pending_guards(state, &mut chat_streams) {
@@ -821,6 +842,40 @@ fn handle_app_event(
                 &workspace,
                 &operation_id,
                 outcome,
+            );
+        }
+        AppEvent::SessionTitleGenerated {
+            workspace,
+            session_id,
+            initial_title,
+            title,
+        } => {
+            chat::handle_session_title_generated(
+                state,
+                persistence,
+                &workspace,
+                &session_id,
+                &initial_title,
+                title.as_deref(),
+            );
+        }
+        AppEvent::PromptBlockTitleGenerated {
+            request_id: _,
+            workspace_index,
+            editing,
+            page_id,
+            block_start_line,
+            original_title,
+            title,
+        } => {
+            chat::handle_prompt_block_title_generated(
+                state,
+                workspace_index,
+                editing,
+                page_id,
+                block_start_line,
+                original_title.as_deref(),
+                title.as_deref(),
             );
         }
         AppEvent::RewindFinished {

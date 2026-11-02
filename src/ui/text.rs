@@ -551,6 +551,11 @@ pub const TOAST_PROMPT_MOVE_NESTED: &str = "Cannot move: folder contains subfold
 pub const TOAST_PAGE_ALREADY_NEW: &str = "Already have a new page";
 /// 新页创建成功提示。
 pub const TOAST_PAGE_CREATED: &str = "New page created";
+/// Prompt 模板块 `/title` 生成中占位与提示文案（英文）。
+pub const PROMPT_TITLE_GENERATING: &str = "Generating title...";
+pub const PROMPT_TITLE_EMPTY_BLOCK: &str = "Template block is empty";
+pub const PROMPT_TITLE_NO_MODEL: &str = "No title model or default model configured";
+pub const PROMPT_TITLE_FAILED: &str = "Failed to generate title";
 
 /// lx 聊天相关提示与状态文案。
 ///

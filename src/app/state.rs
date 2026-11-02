@@ -282,6 +282,10 @@ pub struct AppState {
     pub settings_open_requested: bool,
     /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
     pub models: ModelsSnapshot,
+    /// 在途的新会话自动标题生成（session_id 集合；手动 `/rename` 或 `/resume` 改名立即移除）。
+    pub pending_session_titles: std::collections::HashSet<String>,
+    /// Prompt 模板块 `/title` 生成请求代号计数器。
+    pub prompt_title_request_counter: u64,
     /// 按项目根汇总的 MCP 装载计数；首页按窗格所属工作区取用。
     pub mcp_inventory: BTreeMap<PathBuf, StartupCount>,
     /// 按工作区根汇总的 skill 计数；None 表示无可用工作区根。
@@ -420,6 +424,8 @@ impl AppState {
             settings_available: false,
             settings_open_requested: false,
             models: ModelsSnapshot::default(),
+            pending_session_titles: std::collections::HashSet::new(),
+            prompt_title_request_counter: 0,
             mcp_inventory: BTreeMap::new(),
             skill_inventory: BTreeMap::new(),
             prompt_history: PromptHistory::new(),

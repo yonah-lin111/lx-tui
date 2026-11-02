@@ -562,12 +562,14 @@ impl Persistence {
                 tracing::warn!("process effect reached persistence pump");
                 false
             }
-            // 撤销/压缩效应由事件层取走；此处只兜底忽略。
+            // 撤销/压缩/标题生成效应由事件层取走；此处只兜底忽略。
             Effect::PrepareRewind { .. }
             | Effect::ExecuteRewind(_)
             | Effect::ExecuteCompact(_)
-            | Effect::RevertCompact(_) => {
-                tracing::warn!("rewind/compact effect reached persistence pump");
+            | Effect::RevertCompact(_)
+            | Effect::GenerateSessionTitle { .. }
+            | Effect::GeneratePromptBlockTitle { .. } => {
+                tracing::warn!("rewind/compact/title effect reached persistence pump");
                 false
             }
             Effect::BeginUserShell { .. } | Effect::CancelUserShells { .. } => {
@@ -756,6 +758,8 @@ fn is_network_effect(effect: &Effect) -> bool {
             | Effect::ExecuteRewind(_)
             | Effect::ExecuteCompact(_)
             | Effect::RevertCompact(_)
+            | Effect::GenerateSessionTitle { .. }
+            | Effect::GeneratePromptBlockTitle { .. }
             | Effect::BeginUserShell { .. }
             | Effect::CancelUserShells { .. }
     )

@@ -31,6 +31,7 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
 fn revision_of(settings: &crate::config::ai::AiSettings) -> String {
     let value = json!({
         "defaultModel": &settings.default_model,
+        "titleSummary": &settings.title_summary,
         "enabledProviders": &settings.enabled_providers,
         "providers": &settings.providers,
         "streamIdleTimeoutMs": settings.stream_idle_timeout_ms,
@@ -97,10 +98,22 @@ fn get_settings(state: &ServiceState) -> Response {
             })
         })
         .unwrap_or(Value::Null);
+    let title_summary = settings
+        .title_summary
+        .as_ref()
+        .map(|selection| {
+            json!({
+                "provider": selection.provider,
+                "model": selection.model,
+                "variant": selection.variant,
+            })
+        })
+        .unwrap_or(Value::Null);
     let body = json!({
         "providers": providers,
         "enabledProviders": settings.enabled_providers,
         "defaultModel": default_model,
+        "titleSummary": title_summary,
         "streamIdleTimeoutMs": settings.idle_timeout_ms(),
         "revision": revision_of(&settings),
     });
@@ -147,8 +160,7 @@ fn merge_settings(
     body: &Value,
 ) -> Result<crate::config::ai::AiSettings, String> {
     use crate::config::ai::{
-        ModelConfig, ModelLimit, ModelSelection, ModelTransport, ProviderConfig, ProviderOptions,
-        ProviderTransport,
+        ModelConfig, ModelLimit, ModelTransport, ProviderConfig, ProviderOptions, ProviderTransport,
     };
     let mut settings = current.unwrap_or_default();
     let Some(providers_value) = body.get("providers").and_then(Value::as_array) else {
@@ -315,38 +327,47 @@ fn merge_settings(
         .into_iter()
         .filter(|id| settings.providers.contains_key(id))
         .collect();
-    // 默认选择。
-    settings.default_model = match body.get("defaultModel") {
-        Some(Value::Null) | None => None,
-        Some(selection) => {
-            let provider = selection
-                .get("provider")
-                .and_then(Value::as_str)
-                .ok_or("defaultModel.provider is required")?
-                .to_string();
-            let model = selection
-                .get("model")
-                .and_then(Value::as_str)
-                .ok_or("defaultModel.model is required")?
-                .to_string();
-            let variant = selection
-                .get("variant")
-                .and_then(Value::as_str)
-                .filter(|variant| !variant.is_empty())
-                .map(str::to_string);
-            Some(ModelSelection {
-                provider,
-                model,
-                variant,
-            })
-        }
-    };
+    // 默认模型与标题模型选择。
+    settings.default_model = parse_model_selection_field(body, "defaultModel")?;
+    settings.title_summary = parse_model_selection_field(body, "titleSummary")?;
     if let Some(timeout) = body.get("streamIdleTimeoutMs").and_then(Value::as_u64) {
         settings.stream_idle_timeout_ms = Some(timeout);
     }
     settings.extra.clear();
     settings.validate().map_err(|error| error.to_string())?;
     Ok(settings)
+}
+
+fn parse_model_selection_field(
+    body: &Value,
+    field_name: &str,
+) -> Result<Option<crate::config::ai::ModelSelection>, String> {
+    use crate::config::ai::ModelSelection;
+    match body.get(field_name) {
+        Some(Value::Null) | None => Ok(None),
+        Some(selection) => {
+            let provider = selection
+                .get("provider")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("{field_name}.provider is required"))?
+                .to_string();
+            let model = selection
+                .get("model")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("{field_name}.model is required"))?
+                .to_string();
+            let variant = selection
+                .get("variant")
+                .and_then(Value::as_str)
+                .filter(|variant| !variant.is_empty())
+                .map(str::to_string);
+            Ok(Some(ModelSelection {
+                provider,
+                model,
+                variant,
+            }))
+        }
+    }
 }
 
 /// Key 三态合并：字段缺失保持旧 Key，空字符串清除，非空替换。

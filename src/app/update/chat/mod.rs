@@ -22,6 +22,7 @@ mod process;
 pub mod rewind;
 mod session;
 mod subagent;
+pub mod title;
 pub mod user_shell;
 mod view;
 mod viewport;
@@ -65,6 +66,10 @@ pub use subagent::{
     on_subagent_tool_pending, on_subagent_tool_running, on_subagent_tool_settled, open_agent_page,
     refresh_subagent_cards, scroll_agents_detail, select_task_agent, set_subagent_list,
     set_task_agents_scroll, stop_selected_subagent, toggle_agent_card,
+};
+pub use title::{
+    apply_generated_session_title, cancel_session_title, flush_prompt_title_action,
+    maybe_schedule_session_title, on_prompt_block_title_generated, take_pending_session_title,
 };
 pub use user_shell::{
     apply_user_shell_snapshot, cancel_user_shells, on_user_shell_begun, on_user_shell_cancelled,
@@ -267,6 +272,8 @@ pub fn on_turn_committed(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    let is_first_turn = target.lx.chat.session_id.is_none() && committed.turn_index == 0;
+    let draft_for_title = frozen_draft.clone();
     // 只清仍与冻结草稿相同的输入（期间用户编辑则保留新草稿）。
     if target.lx.input.trim() == frozen_draft.trim() {
         target.lx.clear();
@@ -347,6 +354,9 @@ pub fn on_turn_committed(
             key,
             assistant_id: committed.assistant_message_id.clone(),
         });
+    if is_first_turn {
+        title::maybe_schedule_session_title(state, pane, committed, &draft_for_title);
+    }
     true
 }
 

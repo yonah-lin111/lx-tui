@@ -381,6 +381,89 @@ pub fn is_title_line(line: &str) -> bool {
     parse_title_line(line).is_some()
 }
 
+/// 内置模板默认章节标题：单独存在且无其它实质内容时不视为有效标题提炼输入。
+const DEFAULT_TEMPLATE_HEADINGS: [&str; 6] = [
+    "# Add Requirement",
+    "# Fix Bug",
+    "# Execute Task",
+    "# Refactor Feature",
+    "# Design Style",
+    "## Supplementary Requirements",
+];
+
+/// 提取用于 `/title` 生成的模板块有效正文：
+/// 经过 `copy_template_content` 清洗后，进一步剔除仅存的内置模板默认大标题行。
+pub fn extract_block_title_source(body: &str) -> String {
+    let copied = copy_template_content(body);
+    copied
+        .lines()
+        .filter(|line| !DEFAULT_TEMPLATE_HEADINGS.contains(&line.trim()))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+/// 读取目标块起始行下一行的 `{title: ...}` 标题值；若不存在标题行返回 None。
+pub fn block_title_value_at_line(text: &str, start_line: usize) -> Option<String> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let next_line = lines.get(start_line + 1)?;
+    parse_title_line(next_line).map(|title| title.trim().to_string())
+}
+
+/// 计算设置/替换/移除块标题行所需的替换字节区间与替换文本。
+pub fn set_block_title_edit(
+    text: &str,
+    start_line: usize,
+    new_title: Option<&str>,
+) -> Option<(std::ops::Range<usize>, String)> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let start_str = lines.get(start_line)?;
+    if parse_template_start_line(start_str).is_none()
+        && super::supple::parse_supple_start_line(start_str).is_none()
+    {
+        return None;
+    }
+    let indent = &start_str[..start_str.len() - start_str.trim_start_matches(' ').len()];
+
+    let mut line_starts = Vec::with_capacity(lines.len() + 1);
+    let mut offset = 0;
+    for line in &lines {
+        line_starts.push(offset);
+        offset += line.len() + 1;
+    }
+    line_starts.push(offset);
+
+    let has_title_next = lines.get(start_line + 1).is_some_and(|l| is_title_line(l));
+
+    match new_title {
+        Some(raw_title) => {
+            let safe_title = raw_title.replace(['{', '}'], "");
+            let safe_title = safe_title.trim();
+            if has_title_next {
+                let t_start = line_starts[start_line + 1];
+                let t_end = t_start + lines[start_line + 1].len();
+                Some((t_start..t_end, format!("{indent}{{title: {safe_title}}}")))
+            } else {
+                let insert_at = line_starts[start_line] + start_str.len();
+                Some((
+                    insert_at..insert_at,
+                    format!("\n{indent}{{title: {safe_title}}}"),
+                ))
+            }
+        }
+        None => {
+            if has_title_next {
+                let t_start = line_starts[start_line + 1];
+                let t_end = line_starts[start_line + 2].min(text.len());
+                Some((t_start..t_end, String::new()))
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// 结构性标题行（模板块起始行下一行）的标记区间：受保护的 `{title:` 前缀
 /// 与收尾 `}` 及其后区域，之间的值为可编辑区。
 struct TitleMarker {
@@ -401,7 +484,9 @@ fn title_markers(text: &str) -> Vec<TitleMarker> {
     }
     let mut markers = Vec::new();
     for (index, line) in lines.iter().enumerate() {
-        if parse_template_start_line(line).is_none() {
+        if parse_template_start_line(line).is_none()
+            && super::supple::parse_supple_start_line(line).is_none()
+        {
             continue;
         }
         let Some(next) = lines.get(index + 1) else {

@@ -1412,10 +1412,10 @@ fn slash_filter_scopes_builtin_by_context() {
     assert!(normal.contains(&"supplement".to_string()));
 
     let template = filter_names_in(BlockContext::Template, "");
-    assert_eq!(template, vec!["supplement"]);
+    assert_eq!(template, vec!["title", "supplement"]);
 
     let supple = filter_names_in(BlockContext::Supple, "");
-    assert_eq!(supple, vec!["supplement"]);
+    assert_eq!(supple, vec!["title", "supplement"]);
 }
 
 #[test]
@@ -1489,7 +1489,7 @@ fn slash_filter_offers_worktree_and_supplement_in_supple_context() {
             .iter()
             .map(|item| item.name.clone())
             .collect::<Vec<_>>(),
-        vec!["supplement", "gitWorkTree"]
+        vec!["title", "supplement", "gitWorkTree"]
     );
 }
 

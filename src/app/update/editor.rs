@@ -204,7 +204,13 @@ fn route_slash_panel(state: &mut AppState, command: &EditorCommand) -> bool {
     match command {
         EditorCommand::Up => state.prompt.slash_move(-1),
         EditorCommand::Down => state.prompt.slash_move(1),
-        EditorCommand::Newline => state.prompt.slash_confirm(),
+        EditorCommand::Newline => {
+            let confirmed = state.prompt.slash_confirm();
+            if confirmed {
+                crate::app::update::flush_prompt_title_action(state);
+            }
+            confirmed
+        }
         EditorCommand::Escape => state.prompt.slash_escape(),
         _ => false,
     }
@@ -524,6 +530,7 @@ pub fn hover_slash(state: &mut AppState, index: usize) -> bool {
 /// 鼠标点选斜杠命令条目：确认插入模板。
 pub fn select_slash(state: &mut AppState, index: usize) {
     state.prompt.slash_confirm_at(index);
+    crate::app::update::flush_prompt_title_action(state);
 }
 
 /// 滚轮在斜杠命令面板上滚动可见窗口：`base` 为当前窗口起点；高亮不动。

@@ -35,7 +35,16 @@ pub struct ModelsSnapshot {
 impl ModelsSnapshot {
     /// 是否存在可发送的有效默认模型（provider 启用、模型存在、有 Key）。
     pub fn default_selection(&self) -> Option<ModelSelection> {
-        let selection = self.settings.default_model.as_ref()?;
+        self.validated_selection(self.settings.default_model.as_ref())
+    }
+
+    /// 是否存在可发送的有效标题模型（provider 启用、模型存在、有 Key）。
+    pub fn title_selection(&self) -> Option<ModelSelection> {
+        self.validated_selection(self.settings.title_summary.as_ref())
+    }
+
+    fn validated_selection(&self, selection: Option<&ModelSelection>) -> Option<ModelSelection> {
+        let selection = selection?;
         let provider = self.settings.providers.get(&selection.provider)?;
         if !self
             .settings
@@ -59,6 +68,37 @@ impl ModelsSnapshot {
             .as_ref()
             .is_none_or(|variant| model.variants.contains_key(variant));
         variant_ok.then(|| selection.clone())
+    }
+
+    /// 为 Prompt 模板块 `/title` 解析有效模型：优先 `titleSummary`，回退 `defaultModel`。
+    pub fn resolve_prompt_title_model(&self) -> Option<FrozenModel> {
+        if let Some(selection) = self.title_selection() {
+            let normalized = self.normalize_selection(selection);
+            if let Some(frozen) = FrozenModel::resolve(self, &normalized) {
+                return Some(frozen);
+            }
+        }
+        let selection = self.default_selection()?;
+        let normalized = self.normalize_selection(selection);
+        FrozenModel::resolve(self, &normalized)
+    }
+
+    /// 为 `lx` 新会话自动标题解析有效模型：优先 `titleSummary`，回退会话当前生效选择。
+    pub fn resolve_session_title_model(
+        &self,
+        fallback_selection: Option<&ModelSelection>,
+    ) -> Option<FrozenModel> {
+        if let Some(selection) = self.title_selection() {
+            let normalized = self.normalize_selection(selection);
+            if let Some(frozen) = FrozenModel::resolve(self, &normalized) {
+                return Some(frozen);
+            }
+        }
+        let fallback = fallback_selection
+            .cloned()
+            .or_else(|| self.default_selection())?;
+        let normalized = self.normalize_selection(fallback);
+        FrozenModel::resolve(self, &normalized)
     }
 
     /// 该选择对应模型的有效 transport（模型级覆盖优先）。
