@@ -2,8 +2,8 @@
 
 ## 1. 评审范围与概览
 
-- **状态**：**P1–P3 全部修复并验证（分支 `feat/system-event-cards`，待合并 `dev`）**
-- **评审工作区**：`.worktrees/lx-system-event-cards`
+- **状态**：**P1–P3 全部修复并验证，已合并至 `dev`（merge commit `a3ae1e13`）**
+- **评审工作区**：`.worktrees/lx-system-event-cards`（已清理）
 - **关联文档**：
   - `docs/feature/system-event-cards/design.md`
   - `docs/feature/system-event-cards/task.md`

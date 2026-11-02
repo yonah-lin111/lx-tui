@@ -1,6 +1,6 @@
 # 消息列表系统事件卡片（`/compact`、`/model`、`/rewind`）：执行任务清单
 
-- 状态：**已完成（分支 `feat/system-event-cards`，待合并 `dev`）**
+- 状态：**已完成并合并至主工作区 `dev` 分支（merge commit `a3ae1e13`；原工作区 `.worktrees/lx-system-event-cards` 与分支 `feat/system-event-cards` 已清理）**
 - 关联文档：
   - 设计方案：`docs/feature/system-event-cards/design.md`
   - 代码审查：`docs/feature/system-event-cards/review.md`
