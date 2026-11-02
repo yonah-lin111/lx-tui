@@ -800,6 +800,19 @@ impl Prompt {
         true
     }
 
+    /// 在指定字节偏移（模板块起始行行尾）处插入 `\n{title: }`，并将光标置于 `}` 之前，返回新光标字节偏移。
+    pub fn insert_template_title_line(&mut self, line_end_byte: usize) -> usize {
+        let pos = self
+            .text
+            .floor_char_boundary(line_end_byte.min(self.text.len()));
+        self.break_group();
+        self.record(EditKind::Other);
+        self.splice_text(pos, pos, "\n{title: }");
+        self.cursor = pos + "\n{title: ".len();
+        self.settle();
+        self.cursor
+    }
+
     /// 测试辅助：把光标移到字节偏移（不触发 settle 的面板语义）。
     #[cfg(test)]
     pub(crate) fn set_cursor_offset_for_test(&mut self, offset: usize) {

@@ -325,10 +325,16 @@ pub enum MenuCommand {
     SortTodos,
     /// 页列表：打开该页（切页并回编辑视图）。
     OpenPage,
-    /// 页列表：复制该页全文。
+    /// 编辑视图：全选当前页正文。
+    SelectAll,
+    /// 编辑视图/页列表：重命名页标题（滚回顶部并选中 `{title: ...}`）。
+    RenamePage,
+    /// 编辑视图/页列表：复制该页全文。
     CopyPageContent,
-    /// 页列表：末尾新建页并打开。
+    /// 编辑视图/页列表：末尾新建页并打开。
     NewPage,
+    /// 编辑视图/页列表：基于目标页克隆新页并切入。
+    ForkPage,
     /// 页列表：删除该页（行内二次确认）。
     DeletePage,
 }

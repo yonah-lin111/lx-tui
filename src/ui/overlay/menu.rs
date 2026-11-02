@@ -161,7 +161,10 @@ pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
                 }
                 MenuCommand::SortTodos => text::MENU_TODO_SORT,
                 MenuCommand::OpenPage => text::MENU_PAGE_OPEN,
+                MenuCommand::SelectAll => text::MENU_PAGE_SELECT_ALL,
+                MenuCommand::RenamePage => text::MENU_PAGE_RENAME,
                 MenuCommand::NewPage => text::MENU_PAGE_NEW,
+                MenuCommand::ForkPage => text::MENU_PAGE_FORK,
             }
         })
         .collect()

@@ -1536,3 +1536,103 @@ fn template_counts_merge_sums_pages() {
     assert_eq!(merged.done, 1);
     assert!(!merged.is_empty());
 }
+
+// ===== 模板块标题定位与 Fork 正文 =====
+
+/// 断言 `title` 在 `text` 中的字节区间被识别为首个模板块标题值。
+fn assert_title_span(text: &str, title: &str) {
+    let value_start = text.find(title).expect("title value");
+    assert_eq!(
+        find_first_template_title_span(text),
+        TemplateTitleLookup::Found {
+            value_start,
+            value_end: value_start + title.len(),
+        }
+    );
+}
+
+#[test]
+fn find_first_template_title_span_prefers_standalone_title_line() {
+    let text = "&&& addTemplate --start\n  {title: 登录接口重构}\n\nbody\n&&& addTemplate --end\n";
+    assert_title_span(text, "登录接口重构");
+}
+
+#[test]
+fn find_first_template_title_span_reads_inline_title() {
+    let text = "&&& addTemplate --start {title: Inline Title}\nbody";
+    assert_title_span(text, "Inline Title");
+}
+
+#[test]
+fn find_first_template_title_span_trims_padding() {
+    let text = "&&& addTemplate --start\n{title:   padded   }\n&&& addTemplate --end\n";
+    assert_title_span(text, "padded");
+    let (start, end) = title_value_byte_range("{title: a}", 0).expect("range");
+    assert_eq!((start, end), (8, 9));
+}
+
+#[test]
+fn find_first_template_title_span_empty_value_points_at_brace() {
+    let text = "&&& addTemplate --start\n{title: }\n&&& addTemplate --end\n";
+    let brace = text.find('}').expect("closing brace");
+    assert_eq!(
+        find_first_template_title_span(text),
+        TemplateTitleLookup::Found {
+            value_start: brace,
+            value_end: brace,
+        }
+    );
+}
+
+#[test]
+fn find_first_template_title_span_reports_missing_title_line() {
+    let text = "&&& addTemplate --start\nbody\n&&& addTemplate --end\n";
+    assert_eq!(
+        find_first_template_title_span(text),
+        TemplateTitleLookup::MissingTitleLine {
+            start_line_end: "&&& addTemplate --start".len(),
+        }
+    );
+}
+
+#[test]
+fn find_first_template_title_span_without_template_block() {
+    assert_eq!(
+        find_first_template_title_span("plain text\n{title: loose}\n"),
+        TemplateTitleLookup::NoTemplateBlock
+    );
+    assert_eq!(
+        find_first_template_title_span(""),
+        TemplateTitleLookup::NoTemplateBlock
+    );
+}
+
+#[test]
+fn fork_page_content_appends_suffix_to_nonempty_title() {
+    let standalone = "&&& addTemplate --start\n{title: Refactor}\n\nbody\n&&& addTemplate --end\n";
+    assert_eq!(
+        fork_page_content(standalone),
+        "&&& addTemplate --start\n{title: Refactor (fork)}\n\nbody\n&&& addTemplate --end\n"
+    );
+    assert_eq!(
+        fork_page_content("&&& addTemplate --start {title: Inline}\nbody"),
+        "&&& addTemplate --start {title: Inline (fork)}\nbody"
+    );
+    // 追加紧贴标题值末尾，原有尾随空白保持不变。
+    assert_eq!(
+        fork_page_content("&&& x --start\n{title:  Padded  }\n&&& x --end"),
+        "&&& x --start\n{title:  Padded (fork)  }\n&&& x --end"
+    );
+}
+
+#[test]
+fn fork_page_content_copies_when_title_empty_or_missing() {
+    for text in [
+        "",
+        "plain text",
+        "&&& addTemplate --start\n{title: }\n&&& addTemplate --end\n",
+        "&&& addTemplate --start\nbody\n&&& addTemplate --end\n",
+    ] {
+        assert_eq!(fork_page_content(text), text);
+    }
+}

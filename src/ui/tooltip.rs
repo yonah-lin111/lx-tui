@@ -95,6 +95,11 @@ fn targets(
         };
         targets.push((target, button.area));
     }
+    if !state.prompt_collapsed
+        && let Some(area) = ui::prompt_pin_button(view.prompt, state.prompt_pinned.is_some())
+    {
+        targets.push((TooltipTarget::PromptPin, area));
+    }
     for (pane, rect) in pane_rects {
         // 仅 Terminal 窗格有按钮（对齐 `pane_toggle_button_at`；prompt 栏与占位窗格无）。
         if !state
@@ -147,17 +152,12 @@ fn targets(
                 layout::PromptToolbarButton::Folders,
                 TooltipTarget::PromptFolders,
             ),
-            (layout::PromptToolbarButton::Pin, TooltipTarget::PromptPin),
             (
                 layout::PromptToolbarButton::TempPrompt,
                 TooltipTarget::PromptTempPrompt,
             ),
             (layout::PromptToolbarButton::Undo, TooltipTarget::PromptUndo),
             (layout::PromptToolbarButton::Redo, TooltipTarget::PromptRedo),
-            (
-                layout::PromptToolbarButton::SelectAll,
-                TooltipTarget::PromptSelectAll,
-            ),
             (layout::PromptToolbarButton::Save, TooltipTarget::PromptSave),
         ] {
             if let Some(area) = layout::prompt_toolbar_button_rect(view.prompt, button, mode) {

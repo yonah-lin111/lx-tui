@@ -159,7 +159,7 @@ fn page_context_menu_items_and_selection_preservation() {
     show_prompt_pages(&mut state);
     assert_eq!(state.workspaces[0].prompt_panel.pages_view.selected, 1);
 
-    // 右键第 3 页：不改变 selected（仍为 1），多页时包含 4 项命令。
+    // 右键第 3 页：不改变 selected（仍为 1），多页时包含 6 项命令。
     open_page_menu(&mut state, PromptPageId::Saved(12), (10, 10));
     assert_eq!(state.workspaces[0].prompt_panel.pages_view.selected, 1);
     let Some(Overlay::Menu(menu)) = &state.overlay else {
@@ -169,13 +169,15 @@ fn page_context_menu_items_and_selection_preservation() {
         menu.commands,
         vec![
             MenuCommand::OpenPage,
+            MenuCommand::RenamePage,
             MenuCommand::CopyPageContent,
             MenuCommand::NewPage,
+            MenuCommand::ForkPage,
             MenuCommand::DeletePage,
         ]
     );
 
-    // 只有一页时不包含 DeletePage（3 项）。
+    // 只有一页时不包含 DeletePage（5 项）。
     let mut single = AppState::demo();
     show_prompt_pages(&mut single);
     let only_page = single.workspaces[0].prompt_panel.temps()[0].pages[0].id;
@@ -187,8 +189,10 @@ fn page_context_menu_items_and_selection_preservation() {
         menu.commands,
         vec![
             MenuCommand::OpenPage,
+            MenuCommand::RenamePage,
             MenuCommand::CopyPageContent,
             MenuCommand::NewPage,
+            MenuCommand::ForkPage,
         ]
     );
 }
@@ -204,7 +208,7 @@ fn page_menu_delete_requires_inline_confirm_and_preserves_undo_when_deleting_non
     // 右键删除非选中页（第 3 页，id=12）：当前页是第 2 页（id=11），选中行保持第 2 页。
     open_page_menu(&mut state, PromptPageId::Saved(12), (10, 10));
     if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
-        menu.selected = 3; // DeletePage
+        menu.selected = 5; // DeletePage
     }
     // 第一次触发：进入行内确认态，不删除。
     activate_menu(&mut state);
@@ -236,7 +240,7 @@ fn page_menu_delete_requires_inline_confirm_and_preserves_undo_when_deleting_non
     // 删除当前页（第 2 页，id=11）：只剩第 1 页（id=10），active_page 变为 10，编辑缓冲载入第 1 页。
     open_page_menu(&mut state, PromptPageId::Saved(11), (10, 10));
     if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
-        menu.selected = 3;
+        menu.selected = 5;
     }
     activate_menu(&mut state);
     activate_menu(&mut state);
@@ -286,7 +290,7 @@ fn page_menu_new_page_and_copy_content() {
     show_prompt_pages(&mut state);
     open_page_menu(&mut state, PromptPageId::Saved(10), (10, 10));
     if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
-        menu.selected = 1; // CopyPageContent
+        menu.selected = 2; // CopyPageContent
     }
     state.effects.clear();
     activate_menu(&mut state);
@@ -384,7 +388,7 @@ fn delete_non_selected_page_above_selection_keeps_the_same_page_selected() {
 
     open_page_menu(&mut state, PromptPageId::Saved(10), (10, 10));
     if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
-        menu.selected = 3; // DeletePage
+        menu.selected = 5; // DeletePage
     }
     activate_menu(&mut state);
     activate_menu(&mut state);
@@ -441,5 +445,163 @@ fn item_pages_mode_survives_workspace_round_trip() {
         state.workspaces[0].prompt_panel.mode,
         PromptMode::Pages,
         "正式条目切回后仍保持 Pages 视图"
+    );
+}
+
+#[test]
+fn editor_context_menu_lists_all_commands_and_hides_delete_when_single_page() {
+    let mut state = state_with_three_pages();
+    open_prompt_editor_menu(&mut state, (12, 8));
+    let Some(Overlay::Menu(menu)) = &state.overlay else {
+        panic!("expected editor menu");
+    };
+    assert_eq!(
+        menu.commands,
+        vec![
+            MenuCommand::SelectAll,
+            MenuCommand::CopyPageContent,
+            MenuCommand::RenamePage,
+            MenuCommand::NewPage,
+            MenuCommand::ForkPage,
+            MenuCommand::DeletePage,
+        ]
+    );
+
+    let mut single = AppState::demo();
+    open_prompt_editor_menu(&mut single, (12, 8));
+    let Some(Overlay::Menu(menu)) = &single.overlay else {
+        panic!("expected editor menu");
+    };
+    assert_eq!(
+        menu.commands,
+        vec![
+            MenuCommand::SelectAll,
+            MenuCommand::CopyPageContent,
+            MenuCommand::RenamePage,
+            MenuCommand::NewPage,
+            MenuCommand::ForkPage,
+        ]
+    );
+}
+
+#[test]
+fn ctrl_shift_right_advances_to_next_page_until_last_page_then_creates_new() {
+    let mut state = AppState::demo();
+    state.prompt.set_text("p1");
+    assert!(crate::app::update::create_or_toast_new_page(&mut state));
+    state.prompt.set_text("p2");
+    assert!(crate::app::update::create_or_toast_new_page(&mut state));
+    state.prompt.set_text("p3");
+    assert!(crate::app::update::create_or_toast_new_page(&mut state));
+    state.prompt.set_text("p4");
+    assert!(crate::app::update::create_or_toast_new_page(&mut state));
+    state.prompt.set_text("p5");
+
+    // 切到第 3 页（共 5 页，索引 2）。
+    let page3_id = state.workspaces[0].prompt_panel.temps()[0].pages[2].id;
+    let page4_id = state.workspaces[0].prompt_panel.temps()[0].pages[3].id;
+    let page5_id = state.workspaces[0].prompt_panel.temps()[0].pages[4].id;
+    assert!(crate::app::update::select_prompt_page(&mut state, page3_id));
+    assert_eq!(state.prompt.text(), "p3");
+
+    // 在第 3 页按快捷键：切到第 4 页，页数保持 5。
+    assert!(crate::app::update::advance_or_create_prompt_page(
+        &mut state
+    ));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.temps()[0].active_page,
+        page4_id
+    );
+    assert_eq!(state.prompt.text(), "p4");
+    assert_eq!(state.workspaces[0].prompt_panel.temps()[0].pages.len(), 5);
+
+    // 在第 4 页按快捷键：切到第 5 页，页数保持 5。
+    assert!(crate::app::update::advance_or_create_prompt_page(
+        &mut state
+    ));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.temps()[0].active_page,
+        page5_id
+    );
+    assert_eq!(state.prompt.text(), "p5");
+    assert_eq!(state.workspaces[0].prompt_panel.temps()[0].pages.len(), 5);
+
+    // 在第 5 页（最后一页）按快捷键：新建第 6 页并切入。
+    assert!(crate::app::update::advance_or_create_prompt_page(
+        &mut state
+    ));
+    assert_eq!(state.workspaces[0].prompt_panel.temps()[0].pages.len(), 6);
+    assert_eq!(state.prompt.text(), "");
+}
+
+#[test]
+fn rename_page_scrolls_to_top_and_selects_title_value_or_handles_missing_title() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 4);
+    state.prompt.set_text(
+        "&&& addTemplate --start\n{title: Login Refactor}\nl1\nl2\nl3\nl4\nl5\nl6\n&&& addTemplate --end",
+    );
+    state.prompt.scroll_to(3);
+    assert!(state.prompt.scroll() > 0);
+
+    open_prompt_editor_menu(&mut state, (10, 10));
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.selected = 2; // RenamePage
+    }
+    activate_menu(&mut state);
+
+    assert_eq!(state.prompt.scroll(), 0, "滚动条回到顶部");
+    assert_eq!(
+        crate::app::update::prompt_selection_text(&state).as_deref(),
+        Some("Login Refactor"),
+        "精准选中冒号后标题内容"
+    );
+    crate::app::update::apply_editor(&mut state, EditorCommand::InsertText("Auth Flow".into()));
+    assert!(
+        state
+            .prompt
+            .text()
+            .starts_with("&&& addTemplate --start\n{title: Auth Flow}\n"),
+        "直接输入即可替换选中标题: {}",
+        state.prompt.text()
+    );
+
+    // 无模板块时弹 Warning Toast。
+    state.prompt.set_text("plain text without template");
+    state.toast = None;
+    open_prompt_editor_menu(&mut state, (10, 10));
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.selected = 2;
+    }
+    activate_menu(&mut state);
+    assert_eq!(
+        state.toast.as_ref().map(|t| t.message.as_str()),
+        Some(crate::ui::text::TOAST_PAGE_NO_TITLE)
+    );
+}
+
+#[test]
+fn fork_page_clones_content_appends_fork_to_title_and_switches_to_new_page() {
+    let mut state = AppState::demo();
+    state
+        .prompt
+        .set_text("&&& addTemplate --start\n{title: My Task}\nbody line\n&&& addTemplate --end");
+
+    open_prompt_editor_menu(&mut state, (10, 10));
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.selected = 4; // ForkPage
+    }
+    activate_menu(&mut state);
+
+    let temp = &state.workspaces[0].prompt_panel.temps()[0];
+    assert_eq!(temp.pages.len(), 2, "追加新页");
+    assert_eq!(temp.active_page, temp.pages[1].id, "立即切到新页");
+    assert_eq!(
+        state.prompt.text(),
+        "&&& addTemplate --start\n{title: My Task (fork)}\nbody line\n&&& addTemplate --end"
+    );
+    assert_eq!(
+        state.toast.as_ref().map(|t| t.message.as_str()),
+        Some(crate::ui::text::TOAST_PAGE_FORKED)
     );
 }

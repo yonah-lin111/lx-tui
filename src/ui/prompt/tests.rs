@@ -665,17 +665,6 @@ fn renders_toolbar_buttons_and_divider() {
     assert_eq!(render_label(&buf, redo), text::PROMPT_REDO_LABEL);
     assert!(buf[(redo.x, bar.y)].modifier.contains(Modifier::DIM));
 
-    let select_all = crate::layout::prompt_toolbar_button_rect(
-        panel,
-        crate::layout::PromptToolbarButton::SelectAll,
-        PromptMode::Editor,
-    )
-    .expect("select all visible");
-    assert_eq!(
-        render_label(&buf, select_all),
-        text::PROMPT_SELECT_ALL_LABEL
-    );
-
     let save = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Save,
@@ -761,58 +750,7 @@ fn divider_stays_plain_and_border_carries_the_title() {
 }
 
 #[test]
-fn toolbar_pin_renders_hollow_then_filled_left_of_save() {
-    let panel = toolbar_panel();
-    let editor = Prompt::new(PaneId::from_raw_for_test(1));
-    let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar visible");
-    let render_label = |buf: &Buffer, rect: Rect| -> String {
-        (rect.x..rect.right())
-            .map(|x| buf[(x, rect.y)].symbol())
-            .collect()
-    };
-
-    let pin = crate::layout::prompt_toolbar_button_rect(
-        panel,
-        crate::layout::PromptToolbarButton::Pin,
-        PromptMode::Editor,
-    )
-    .expect("pin visible");
-    let save = crate::layout::prompt_toolbar_button_rect(
-        panel,
-        crate::layout::PromptToolbarButton::Save,
-        PromptMode::Editor,
-    )
-    .expect("save visible");
-    assert_eq!(pin.y, bar.y, "钉住按钮在功能按钮行");
-    assert_eq!(pin.right() + 1, save.x, "紧邻保存点左侧");
-
-    let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        false,
-        PromptMode::Editor,
-        false,
-        false,
-    );
-    assert_eq!(render_label(&buf, pin), text::PROMPT_UNPINNED_LABEL);
-
-    let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        false,
-        PromptMode::Editor,
-        false,
-        true,
-    );
-    assert_eq!(render_label(&buf, pin), text::PROMPT_PINNED_LABEL);
-}
-
-#[test]
-fn toolbar_folders_button_renders_left_of_pin_and_hides_in_tree() {
+fn toolbar_folders_button_renders_left_of_save_and_hides_in_tree() {
     let panel = toolbar_panel();
     let editor = Prompt::new(PaneId::from_raw_for_test(1));
     let folders = crate::layout::prompt_toolbar_button_rect(
@@ -821,6 +759,13 @@ fn toolbar_folders_button_renders_left_of_pin_and_hides_in_tree() {
         PromptMode::Editor,
     )
     .expect("folders visible");
+    let save = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::Save,
+        PromptMode::Editor,
+    )
+    .expect("save visible");
+    assert_eq!(folders.right() + 1, save.x, "紧邻保存点左侧");
     let mut buf = Buffer::empty(panel);
     render_header(
         panel,
@@ -1641,68 +1586,4 @@ fn selection_reverse_keeps_inline_code_foreground() {
         Color::LightRed,
         "选区反显不覆盖行内代码前景"
     );
-}
-
-/// 钉住按钮恢复单字图标（3 列）：标签与槽位同宽，不需要左右补空格。
-#[test]
-fn pin_label_fills_its_three_column_slot() {
-    let panel = Rect::new(0, 0, 46, 14);
-    let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar");
-    let pin = crate::layout::prompt_toolbar_button_rect(
-        panel,
-        crate::layout::PromptToolbarButton::Pin,
-        PromptMode::Editor,
-    )
-    .expect("pin visible");
-    assert_eq!(pin.width, 3, "单字图标恒占 3 列");
-
-    let editor = Prompt::new(PaneId::from_raw_for_test(1));
-    let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        false,
-        PromptMode::Editor,
-        false,
-        false,
-    );
-    let rendered: String = (pin.x..pin.right())
-        .map(|x| buf[(x, pin.y)].symbol())
-        .collect();
-    assert_eq!(rendered, text::PROMPT_UNPINNED_LABEL);
-    assert_eq!(bar.y, pin.y);
-}
-
-#[test]
-fn toolbar_select_all_renders_right_of_redo() {
-    let panel = toolbar_panel();
-    let editor = Prompt::new(PaneId::from_raw_for_test(1));
-    let redo = crate::layout::prompt_toolbar_button_rect(
-        panel,
-        crate::layout::PromptToolbarButton::Redo,
-        PromptMode::Editor,
-    )
-    .expect("redo visible");
-    let select_all = crate::layout::prompt_toolbar_button_rect(
-        panel,
-        crate::layout::PromptToolbarButton::SelectAll,
-        PromptMode::Editor,
-    )
-    .expect("select all visible");
-    assert_eq!(select_all.x, redo.right() + 1);
-    let mut buf = Buffer::empty(panel);
-    render_header(
-        panel,
-        &mut buf,
-        &editor,
-        false,
-        PromptMode::Editor,
-        false,
-        false,
-    );
-    let rendered: String = (select_all.x..select_all.right())
-        .map(|x| buf[(x, select_all.y)].symbol())
-        .collect();
-    assert_eq!(rendered, text::PROMPT_SELECT_ALL_LABEL);
 }

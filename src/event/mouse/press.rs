@@ -188,6 +188,11 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
         return;
     }
+    if ui::prompt_pin_at(view, state, mouse.column, mouse.row) {
+        update::toggle_prompt_pin(state);
+        *dirty = true;
+        return;
+    }
     if let Some(target) =
         ui::collapse_button_at(view, state.agents_collapsed, mouse.column, mouse.row)
     {
@@ -400,14 +405,8 @@ pub(crate) fn handle_mouse_down_left(
             layout::PromptToolbarButton::Folders => {
                 update::open_referenced_folder_menu(state, (mouse.column, mouse.row));
             }
-            layout::PromptToolbarButton::Pin => {
-                update::toggle_prompt_pin(state);
-            }
             layout::PromptToolbarButton::Undo if editor_view => state.prompt.undo(),
             layout::PromptToolbarButton::Redo if editor_view => state.prompt.redo(),
-            layout::PromptToolbarButton::SelectAll if editor_view => {
-                state.select_all_prompt();
-            }
             layout::PromptToolbarButton::Save if editor_view => {
                 update::save_prompt_now(state);
             }

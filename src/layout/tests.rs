@@ -373,13 +373,6 @@ fn prompt_toolbar_buttons_hit_expected_cells() {
     assert_eq!(hit(bar.x, bar.y), Some(PromptToolbarButton::Mode));
     assert_eq!(hit(bar.x + 4, bar.y), Some(PromptToolbarButton::Undo));
     assert_eq!(hit(bar.x + 8, bar.y), Some(PromptToolbarButton::Redo));
-    let select_all =
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, PromptMode::Editor)
-            .expect("select all fits");
-    assert_eq!(
-        hit(select_all.x, bar.y),
-        Some(PromptToolbarButton::SelectAll)
-    );
     let save = prompt_toolbar_button_rect(panel, PromptToolbarButton::Save, PromptMode::Editor)
         .expect("save visible");
     assert_eq!(hit(save.x, bar.y), Some(PromptToolbarButton::Save));
@@ -388,46 +381,6 @@ fn prompt_toolbar_buttons_hit_expected_cells() {
         hit(bar.x + 1, bar.y + PROMPT_TOOLBAR_HEIGHT),
         None,
         "分割线行不命中按钮"
-    );
-}
-
-#[test]
-fn prompt_toolbar_hides_select_all_when_narrow() {
-    // 阈值是**内宽**（panel.width - 2），由 `PROMPT_SELECT_ALL_MIN_WIDTH` 推导；
-    // 这里直接引用常量，避免按钮文案从 `[*]` 改成 `[all]` 后测试里留一份会过期的魔法数。
-    assert_eq!(PROMPT_SELECT_ALL_MIN_WIDTH, 19, "[all] 的推导阈值");
-    // 内宽 18 < 19：隐藏 select all，保留模式/undo/redo 与保存点。
-    let panel = Rect::new(0, 0, PROMPT_SELECT_ALL_MIN_WIDTH, 8);
-    assert_eq!(
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, PromptMode::Editor),
-        None
-    );
-    assert!(
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::Mode, PromptMode::Editor).is_some()
-    );
-    assert!(
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::Undo, PromptMode::Editor).is_some()
-    );
-    assert!(
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::Redo, PromptMode::Editor).is_some()
-    );
-    let save = prompt_toolbar_button_rect(panel, PromptToolbarButton::Save, PromptMode::Editor)
-        .expect("save visible");
-    assert_eq!(
-        prompt_toolbar_button_at(
-            panel,
-            save.x,
-            prompt_toolbar_rect(panel).expect("toolbar").y,
-            PromptMode::Editor,
-        ),
-        Some(PromptToolbarButton::Save)
-    );
-
-    // 内宽 19：刚好容纳按钮组，select all 恢复显示。
-    let panel = Rect::new(0, 0, PROMPT_SELECT_ALL_MIN_WIDTH + 2, 8);
-    assert!(
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, PromptMode::Editor)
-            .is_some()
     );
 }
 
@@ -510,82 +463,17 @@ fn prompt_toolbar_tree_mode_shows_temp_prompt_only() {
 }
 
 #[test]
-fn prompt_toolbar_select_all_sits_right_of_redo() {
-    let panel = Rect::new(0, 0, 40, 8);
-    let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
-    let redo = prompt_toolbar_button_rect(panel, PromptToolbarButton::Redo, PromptMode::Editor)
-        .expect("redo visible");
-    let select_all =
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, PromptMode::Editor)
-            .expect("select all visible");
-    assert_eq!(select_all.x, redo.right() + 1, "[all] 紧贴 [→] 右侧");
-    assert_eq!(select_all.width, 5, "[all] 按钮宽度");
-    assert_eq!(
-        prompt_toolbar_button_at(panel, select_all.x, bar.y, PromptMode::Editor),
-        Some(PromptToolbarButton::SelectAll)
-    );
-}
-
-#[test]
-fn prompt_toolbar_pin_is_three_wide_left_of_save() {
-    let panel = Rect::new(0, 0, 40, 8);
-    let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
-    let pin = prompt_toolbar_button_rect(panel, PromptToolbarButton::Pin, PromptMode::Editor)
-        .expect("pin visible");
-    let save = prompt_toolbar_button_rect(panel, PromptToolbarButton::Save, PromptMode::Editor)
-        .expect("save visible");
-    assert_eq!(pin.y, bar.y, "与功能按钮同行");
-    assert_eq!(pin.width, 3, "[○] / [◉] 单字图标 3 列");
-    assert_eq!(pin.right() + 1, save.x, "紧邻保存点左侧");
-    assert_eq!(
-        prompt_toolbar_button_at(panel, pin.x, bar.y, PromptMode::Editor),
-        Some(PromptToolbarButton::Pin)
-    );
-
-    assert_eq!(PROMPT_SELECT_ALL_MIN_WIDTH, 19, "[all] 的推导阈值");
-    assert_eq!(PROMPT_PIN_MIN_WIDTH_EDITOR, 23, "pin 的推导阈值");
-    let narrow = Rect::new(0, 0, PROMPT_PIN_MIN_WIDTH_EDITOR, 8);
-    assert_eq!(
-        prompt_toolbar_button_rect(narrow, PromptToolbarButton::Pin, PromptMode::Editor),
-        None
-    );
-    assert!(
-        prompt_toolbar_button_rect(narrow, PromptToolbarButton::SelectAll, PromptMode::Editor)
-            .is_some(),
-        "窄屏时 [all] 仍在"
-    );
-
-    // 内宽 = 阈值：钉住按钮恢复显示。
-    let mid = Rect::new(0, 0, PROMPT_PIN_MIN_WIDTH_EDITOR + 2, 8);
-    assert!(
-        prompt_toolbar_button_rect(mid, PromptToolbarButton::Pin, PromptMode::Editor).is_some(),
-        "内宽达到阈值时钉住按钮可见"
-    );
-
-    // 极端窄屏：[all] 隐藏，保存点恒在。
-    let tiny = Rect::new(0, 0, PROMPT_SELECT_ALL_MIN_WIDTH + 1, 8);
-    assert_eq!(
-        prompt_toolbar_button_rect(tiny, PromptToolbarButton::SelectAll, PromptMode::Editor),
-        None
-    );
-    assert!(
-        prompt_toolbar_button_rect(tiny, PromptToolbarButton::Save, PromptMode::Editor).is_some(),
-        "保存点恒在"
-    );
-}
-
-#[test]
-fn prompt_toolbar_folders_sits_left_of_pin_in_editor_only() {
+fn prompt_toolbar_folders_sits_left_of_save_in_editor_only() {
     let panel = Rect::new(0, 0, 40, 8);
     let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
     let folders =
         prompt_toolbar_button_rect(panel, PromptToolbarButton::Folders, PromptMode::Editor)
             .expect("folders visible");
-    let pin = prompt_toolbar_button_rect(panel, PromptToolbarButton::Pin, PromptMode::Editor)
-        .expect("pin visible");
+    let save = prompt_toolbar_button_rect(panel, PromptToolbarButton::Save, PromptMode::Editor)
+        .expect("save visible");
     assert_eq!(folders.y, bar.y);
     assert_eq!(folders.width, 8);
-    assert_eq!(pin.x - folders.right(), 1, "紧邻钉住按钮左侧、间隔 1 列");
+    assert_eq!(save.x - folders.right(), 1, "紧邻保存点左侧、间隔 1 列");
     assert_eq!(
         prompt_toolbar_button_at(panel, folders.x, bar.y, PromptMode::Editor),
         Some(PromptToolbarButton::Folders)
@@ -595,43 +483,23 @@ fn prompt_toolbar_folders_sits_left_of_pin_in_editor_only() {
         prompt_toolbar_button_rect(panel, PromptToolbarButton::Folders, PromptMode::Tree),
         None
     );
-    assert_eq!(PROMPT_FOLDERS_MIN_WIDTH_EDITOR, 32, "[refDir] 的推导阈值");
+    assert_eq!(PROMPT_FOLDERS_MIN_WIDTH_EDITOR, 22, "[refDir] 的推导阈值");
+    // 内宽 = 阈值 - 1：隐藏引用文件夹按钮，保存点恒在。
     let narrow = Rect::new(0, 0, PROMPT_FOLDERS_MIN_WIDTH_EDITOR, 8);
     assert_eq!(
         prompt_toolbar_button_rect(narrow, PromptToolbarButton::Folders, PromptMode::Editor),
         None
     );
     assert!(
-        prompt_toolbar_button_rect(narrow, PromptToolbarButton::Pin, PromptMode::Editor).is_some(),
-        "窄屏时钉住按钮仍在"
+        prompt_toolbar_button_rect(narrow, PromptToolbarButton::Save, PromptMode::Editor).is_some(),
+        "窄屏时保存点仍在"
     );
-}
-
-#[test]
-fn prompt_toolbar_tree_pin_sits_left_of_temp_prompt() {
-    let panel = Rect::new(0, 0, 40, 8);
-    let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
-    let pin = prompt_toolbar_button_rect(panel, PromptToolbarButton::Pin, PromptMode::Tree)
-        .expect("pin visible");
-    let temp = prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, PromptMode::Tree)
-        .expect("temp prompt visible");
-    assert_eq!(pin.y, bar.y);
-    assert_eq!(temp.x - pin.right(), 1, "树视图紧邻 [+] 左侧");
-    assert_eq!(
-        prompt_toolbar_button_at(panel, pin.x, bar.y, PromptMode::Tree),
-        Some(PromptToolbarButton::Pin)
-    );
-
-    // 内容区宽度 11 < 12：钉住按钮随 [+] 一并隐藏。
-    let narrow = Rect::new(0, 0, 13, 8);
-    assert_eq!(
-        prompt_toolbar_button_rect(narrow, PromptToolbarButton::Pin, PromptMode::Tree),
-        None
-    );
+    // 内宽 = 阈值：引用文件夹按钮恢复显示。
+    let fits = Rect::new(0, 0, PROMPT_FOLDERS_MIN_WIDTH_EDITOR + 2, 8);
     assert!(
-        prompt_toolbar_button_rect(narrow, PromptToolbarButton::TempPrompt, PromptMode::Tree)
+        prompt_toolbar_button_rect(fits, PromptToolbarButton::Folders, PromptMode::Editor)
             .is_some(),
-        "窄屏时 [+] 仍在"
+        "内宽达到阈值时 [refDir] 可见"
     );
 }
 

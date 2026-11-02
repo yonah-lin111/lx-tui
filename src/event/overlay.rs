@@ -542,6 +542,18 @@ pub(crate) fn open_right_click_menu(
             return true;
         }
     }
+    // 编辑视图：正文区右键打开页菜单（全选/复制/重命名/新建/Fork/删除）。
+    if update::prompt_panel_active(state)
+        && !update::prompt_tree_mode(state)
+        && !update::prompt_pages_mode(state)
+    {
+        let area = paste::prompt_text_area(view);
+        if area.contains((column, row).into()) {
+            state.prompt.clear_panel();
+            update::open_prompt_editor_menu(state, (column, row));
+            return true;
+        }
+    }
     if let Some((pane, _)) = pane_at(rects, column, row)
         && state.active_tab().pane(pane).is_some()
     {

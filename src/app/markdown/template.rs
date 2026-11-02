@@ -381,6 +381,101 @@ pub fn is_title_line(line: &str) -> bool {
     parse_title_line(line).is_some()
 }
 
+/// 模板块标题定位结果（供 Rename Page 定位与选中）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateTitleLookup {
+    /// 找到了首个模板块的 `{title: ...}`，返回冒号后标题值的起止字节偏移（不含外侧 `{title:` 与 `}`）。
+    /// 若标题值为空（如 `{title: }`），`value_start == value_end` 指向 `}` 的字节偏移。
+    Found {
+        value_start: usize,
+        value_end: usize,
+    },
+    /// 存在 `&&&` 模板块，但起始行与下一行均无 `{title: ...}`；返回首个模板块起始行行尾字节偏移。
+    MissingTitleLine { start_line_end: usize },
+    /// 当前页面没有任何 `&&&` 模板块。
+    NoTemplateBlock,
+}
+
+/// 在 `line` 中查找 `{title: ...}` 的标题值区间（绝对字节偏移）；值去掉前导与尾随空白。
+///
+/// 空值（如 `{title: }`）返回 `value_start == value_end`，指向收尾 `}` 的字节偏移。
+pub fn title_value_byte_range(line: &str, line_offset: usize) -> Option<(usize, usize)> {
+    let marker = line.find("{title:")?;
+    let value_start = marker + "{title:".len();
+    let close = value_start + line[value_start..].find('}')?;
+    let raw = &line[value_start..close];
+    let start = value_start + (raw.len() - raw.trim_start().len());
+    let end = start + raw.trim().len();
+    Some((line_offset + start, line_offset + end))
+}
+
+/// 在正文中查找首个 `&&&` 模板块的 `{title: ...}` 值字节范围。
+pub fn find_first_template_title_span(text: &str) -> TemplateTitleLookup {
+    let scan = super::blocks::block_scan(text);
+    let Some(span) = scan
+        .spans
+        .iter()
+        .find(|span| span.kind == super::blocks::BlockKind::Template)
+    else {
+        return TemplateTitleLookup::NoTemplateBlock;
+    };
+    let lines: Vec<&str> = text.split('\n').collect();
+    let Some(start_line) = lines.get(span.start).copied() else {
+        return TemplateTitleLookup::NoTemplateBlock;
+    };
+    let mut offsets = Vec::with_capacity(lines.len());
+    let mut offset = 0;
+    for line in &lines {
+        offsets.push(offset);
+        offset += line.len() + 1;
+    }
+    let start_line_offset = offsets[span.start];
+
+    // 1. 优先检查下一行是否为独立 `{title: ...}` 行。
+    if let Some(next_line) = lines.get(span.start + 1).copied()
+        && is_title_line(next_line)
+        && let Some((value_start, value_end)) =
+            title_value_byte_range(next_line, start_line_offset + start_line.len() + 1)
+    {
+        return TemplateTitleLookup::Found {
+            value_start,
+            value_end,
+        };
+    }
+
+    // 2. 其次检查起始行内联 `{title: ...}`。
+    if parse_template_start_line(start_line).is_some_and(|start| start.title.is_some())
+        && let Some((value_start, value_end)) =
+            title_value_byte_range(start_line, start_line_offset)
+    {
+        return TemplateTitleLookup::Found {
+            value_start,
+            value_end,
+        };
+    }
+
+    TemplateTitleLookup::MissingTitleLine {
+        start_line_end: start_line_offset + start_line.len(),
+    }
+}
+
+/// 生成 Fork 页正文：若首个模板块有非空 `{title: xxx}`，则在 `xxx` 末尾追加 ` (fork)`；否则原样复制。
+pub fn fork_page_content(content: &str) -> String {
+    if let TemplateTitleLookup::Found {
+        value_start,
+        value_end,
+    } = find_first_template_title_span(content)
+        && value_end > value_start
+    {
+        let mut out = String::with_capacity(content.len() + 7);
+        out.push_str(&content[..value_end]);
+        out.push_str(" (fork)");
+        out.push_str(&content[value_end..]);
+        return out;
+    }
+    content.to_string()
+}
+
 /// 结构性标题行（模板块起始行下一行）的标记区间：受保护的 `{title:` 前缀
 /// 与收尾 `}` 及其后区域，之间的值为可编辑区。
 struct TitleMarker {

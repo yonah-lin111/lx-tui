@@ -863,3 +863,47 @@ fn clicking_prompt_command_panel_chrome_does_not_penetrate_to_editor_cursor() {
         "点击面板非条目区不得穿透移动底层编辑器光标"
     );
 }
+
+#[test]
+fn right_click_prompt_editor_opens_menu_and_select_all_replaces_text() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    state.prompt.insert_str("first\nsecond");
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let area = crate::event::paste::prompt_text_area(&geo.view);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            area.x + 2,
+            area.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(dirty);
+    let Some(crate::app::overlay::Overlay::Menu(menu)) = &state.overlay else {
+        panic!("expected prompt editor context menu");
+    };
+    assert_eq!(
+        menu.commands.first(),
+        Some(&crate::app::overlay::MenuCommand::SelectAll)
+    );
+
+    update::activate_menu(&mut state);
+    assert_eq!(
+        update::prompt_selection_text(&state).as_deref(),
+        Some("first\nsecond")
+    );
+    update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertText("replaced".into()),
+    );
+    assert_eq!(state.prompt.text(), "replaced");
+}

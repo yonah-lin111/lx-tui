@@ -1544,7 +1544,7 @@ fn prompt_renders_toolbar_and_divider_rows() {
     assert!(toolbar.contains(text::PROMPT_MODE_LIST_LABEL), "{toolbar}");
     assert!(toolbar.contains(text::PROMPT_UNDO_LABEL), "{toolbar}");
     assert!(toolbar.contains(text::PROMPT_REDO_LABEL), "{toolbar}");
-    assert!(toolbar.contains(text::PROMPT_SELECT_ALL_LABEL), "{toolbar}");
+    assert!(toolbar.contains(text::PROMPT_FOLDERS_LABEL), "{toolbar}");
     assert!(toolbar.contains(text::PROMPT_DRAFT_DOT), "{toolbar}");
     assert!(
         !toolbar.contains(text::DIVIDER_MID),
@@ -1712,67 +1712,49 @@ fn prompt_bottom_identity_degrades_before_hiding() {
 }
 
 #[test]
-fn prompt_pin_button_sits_left_of_save_and_tracks_state() {
+fn prompt_pin_button_sits_left_of_collapse_and_tracks_state() {
     let mut state = AppState::demo();
     let view = view_for(&state);
-    let bar = crate::layout::prompt_toolbar_rect(view.prompt).expect("toolbar visible");
-    let pin = crate::layout::prompt_toolbar_button_rect(
-        view.prompt,
-        crate::layout::PromptToolbarButton::Pin,
-        PromptMode::Editor,
-    )
-    .expect("pin visible");
-    let save = crate::layout::prompt_toolbar_button_rect(
-        view.prompt,
-        crate::layout::PromptToolbarButton::Save,
-        PromptMode::Editor,
-    )
-    .expect("save visible");
-    assert_eq!(pin.width, text::PROMPT_PINNED_LABEL.chars().count() as u16);
-    assert_eq!(pin.y, bar.y, "位于功能按钮行");
-    assert_eq!(save.x - pin.right(), 1, "紧邻保存点左侧，间隔 1 列");
+    let collapse = button_for(&view, CollapseTarget::Prompt);
+    let pin = prompt_pin_button(view.prompt, false).expect("pin visible");
     assert_eq!(
-        crate::layout::prompt_toolbar_button_at(view.prompt, pin.x, pin.y, PromptMode::Editor),
-        Some(crate::layout::PromptToolbarButton::Pin)
+        pin.width,
+        text::PROMPT_UNPINNED_LABEL.chars().count() as u16
     );
+    assert_eq!(pin.y, collapse.area.y, "位于底边框行");
     assert_eq!(
-        crate::layout::prompt_toolbar_button_at(view.prompt, pin.x, pin.y - 1, PromptMode::Editor),
-        None,
-        "分割线行不命中"
+        collapse.area.x - pin.right(),
+        1,
+        "紧邻折叠按钮左侧，间隔 1 列"
+    );
+    assert!(prompt_pin_at(&view, &state, pin.x, pin.y));
+    assert!(
+        !prompt_pin_at(&view, &state, pin.x, pin.y - 1),
+        "非底边行不命中"
     );
 
     state.prompt_pinned = Some(0);
-    let pinned = crate::layout::prompt_toolbar_button_rect(
-        view.prompt,
-        crate::layout::PromptToolbarButton::Pin,
-        PromptMode::Editor,
-    )
-    .expect("pin visible");
-    assert_eq!(pinned, pin, "两态同宽同位（仅符号变化）");
+    let pinned = prompt_pin_button(view.prompt, true).expect("pin visible");
+    assert_eq!(
+        pinned.width,
+        text::PROMPT_PINNED_LABEL.chars().count() as u16
+    );
+    assert_eq!(pinned.right(), pin.right(), "右缘对齐折叠按钮左侧");
 
     update::apply(Action::TogglePrompt, &mut state);
     let collapsed = view_for(&state);
     assert_eq!(
-        crate::layout::prompt_toolbar_button_rect(
-            collapsed.prompt,
-            crate::layout::PromptToolbarButton::Pin,
-            PromptMode::Editor
-        ),
+        prompt_pin_button(collapsed.prompt, false),
         None,
-        "折叠态无表头不显示"
+        "折叠态不显示"
     );
 }
 
 #[test]
-fn prompt_pin_button_renders_state_symbol_in_accent() {
+fn prompt_pin_button_renders_english_label_in_accent() {
     let mut state = AppState::demo();
     let view = view_for(&state);
-    let pin = crate::layout::prompt_toolbar_button_rect(
-        view.prompt,
-        crate::layout::PromptToolbarButton::Pin,
-        PromptMode::Editor,
-    )
-    .expect("pin visible");
+    let pin = prompt_pin_button(view.prompt, false).expect("pin visible");
     let buffer = render_buffer(&state);
     let rendered: String = (pin.x..pin.right())
         .map(|x| buffer[(x, pin.y)].symbol())
@@ -1783,31 +1765,12 @@ fn prompt_pin_button_renders_state_symbol_in_accent() {
     }
 
     state.prompt_pinned = Some(0);
+    let pinned = prompt_pin_button(view.prompt, true).expect("unpin visible");
     let buffer = render_buffer(&state);
-    let rendered: String = (pin.x..pin.right())
-        .map(|x| buffer[(x, pin.y)].symbol())
+    let rendered: String = (pinned.x..pinned.right())
+        .map(|x| buffer[(x, pinned.y)].symbol())
         .collect();
     assert_eq!(rendered.trim(), text::PROMPT_PINNED_LABEL);
-}
-
-#[test]
-fn prompt_pin_button_follows_tree_toolbar_left_of_temp_prompt() {
-    let mut state = AppState::demo();
-    state.workspaces[0].prompt_panel.mode = PromptMode::Tree;
-    let view = view_for(&state);
-    let pin = crate::layout::prompt_toolbar_button_rect(
-        view.prompt,
-        crate::layout::PromptToolbarButton::Pin,
-        PromptMode::Tree,
-    )
-    .expect("pin visible in tree view");
-    let temp = crate::layout::prompt_toolbar_button_rect(
-        view.prompt,
-        crate::layout::PromptToolbarButton::TempPrompt,
-        PromptMode::Tree,
-    )
-    .expect("temp prompt visible");
-    assert_eq!(temp.x - pin.right(), 1, "树视图紧邻 [+] 左侧");
 }
 
 #[test]

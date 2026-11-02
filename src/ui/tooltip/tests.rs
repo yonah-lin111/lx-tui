@@ -144,12 +144,8 @@ fn hits_prompt_toolbar_and_pin_but_not_when_collapsed() {
         target_at(&view, &state, &rects, SCREEN, undo.x, undo.y),
         Some(TooltipTarget::PromptUndo)
     );
-    let pin = layout::prompt_toolbar_button_rect(
-        view.prompt,
-        layout::PromptToolbarButton::Pin,
-        PromptMode::Editor,
-    )
-    .expect("pin button visible");
+    let pin = ui::prompt_pin_button(view.prompt, state.prompt_pinned.is_some())
+        .expect("pin button visible");
     assert_eq!(
         target_at(&view, &state, &rects, SCREEN, pin.x, pin.y),
         Some(TooltipTarget::PromptPin)
@@ -165,7 +161,6 @@ fn hits_prompt_toolbar_and_pin_but_not_when_collapsed() {
                 target,
                 TooltipTarget::PromptUndo
                     | TooltipTarget::PromptRedo
-                    | TooltipTarget::PromptSelectAll
                     | TooltipTarget::PromptSave
                     | TooltipTarget::PromptPin
             )),

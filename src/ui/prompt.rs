@@ -60,45 +60,30 @@ pub(crate) fn render_rule(panel: Rect, y: u16, buf: &mut Buffer, focused: bool) 
     }
 }
 
-/// 工具栏：模式切换按钮常显；编辑视图左组为 `[≡] [←] [→] [all]`，
-/// 右组自右向左为 `● [○/◉] [dir]`；树视图为 `[/]` + `[tmp]` + `[○/◉]`；
-/// 页列表视图为 `[/]` + `[○/◉]`。
+/// 工具栏：模式切换按钮常显；编辑视图左组为 `[≡] [←] [→]`，
+/// 右组自右向左为 `● [refDir]`；树视图为 `[/]` + `[tmp]`；页列表视图为 `[/]`。
 fn render_toolbar(
     panel: Rect,
     buf: &mut Buffer,
     prompt: &Prompt,
     mode: PromptMode,
     draft: bool,
-    pinned: bool,
+    _pinned: bool,
 ) {
     let mode_label = match mode {
         PromptMode::Editor => text::PROMPT_MODE_LIST_LABEL,
         PromptMode::Tree | PromptMode::Pages => text::PROMPT_MODE_EDIT_LABEL,
     };
-    let pin_button = (
-        PromptToolbarButton::Pin,
-        if pinned {
-            text::PROMPT_PINNED_LABEL
-        } else {
-            text::PROMPT_UNPINNED_LABEL
-        },
-        style::accent(),
-    );
     let mut buttons = vec![(PromptToolbarButton::Mode, mode_label, style::accent())];
     match mode {
         PromptMode::Tree => {
-            buttons.extend([
-                pin_button,
-                (
-                    PromptToolbarButton::TempPrompt,
-                    text::PROMPT_TEMP_PROMPT_LABEL,
-                    style::accent(),
-                ),
-            ]);
+            buttons.push((
+                PromptToolbarButton::TempPrompt,
+                text::PROMPT_TEMP_PROMPT_LABEL,
+                style::accent(),
+            ));
         }
-        PromptMode::Pages => {
-            buttons.push(pin_button);
-        }
+        PromptMode::Pages => {}
         PromptMode::Editor => {
             buttons.extend([
                 (
@@ -120,16 +105,10 @@ fn render_toolbar(
                     },
                 ),
                 (
-                    PromptToolbarButton::SelectAll,
-                    text::PROMPT_SELECT_ALL_LABEL,
-                    style::accent(),
-                ),
-                (
                     PromptToolbarButton::Folders,
                     text::PROMPT_FOLDERS_LABEL,
                     style::accent(),
                 ),
-                pin_button,
                 (
                     PromptToolbarButton::Save,
                     if draft {

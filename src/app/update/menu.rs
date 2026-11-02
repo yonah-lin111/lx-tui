@@ -12,10 +12,11 @@ use crate::layout::PaneId;
 
 use super::pane::toggle_pane_view;
 use super::prompt::{
-    copy_page_content, copy_prompt_content, copy_prompt_temp_content, create_or_toast_new_page,
-    delete_prompt_folder, delete_prompt_item, delete_prompt_temp, edit_prompt_item,
-    edit_prompt_temp, hide_prompt_pages, open_new_folder, open_new_prompt, open_prompt_rename,
-    perform_delete_page, select_prompt_page,
+    commit_editing_prompt, copy_page_content, copy_prompt_content, copy_prompt_temp_content,
+    create_or_toast_new_page, delete_prompt_folder, delete_prompt_item, delete_prompt_temp,
+    edit_prompt_item, edit_prompt_temp, fork_prompt_page, hide_prompt_pages, open_new_folder,
+    open_new_prompt, open_prompt_rename, perform_delete_page, rename_prompt_page_title,
+    select_prompt_page,
 };
 use super::selection::clear_selection;
 use super::todo::{
@@ -480,6 +481,9 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
             hide_prompt_pages(state);
             select_prompt_page(state, page);
         }
+        (Some(MenuCommand::SelectAll), OverlayTarget::PromptPage { .. }) => {
+            state.select_all_prompt();
+        }
         (
             Some(MenuCommand::CopyPageContent),
             OverlayTarget::PromptPage {
@@ -488,7 +492,28 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
                 page,
             },
         ) => {
+            commit_editing_prompt(state);
             copy_page_content(state, workspace, owner, page);
+        }
+        (
+            Some(MenuCommand::RenamePage),
+            OverlayTarget::PromptPage {
+                workspace,
+                owner,
+                page,
+            },
+        ) => {
+            rename_prompt_page_title(state, workspace, owner, page);
+        }
+        (
+            Some(MenuCommand::ForkPage),
+            OverlayTarget::PromptPage {
+                workspace,
+                owner,
+                page,
+            },
+        ) => {
+            fork_prompt_page(state, workspace, owner, page);
         }
         (
             Some(MenuCommand::NewPage),

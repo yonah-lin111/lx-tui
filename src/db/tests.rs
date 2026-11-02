@@ -1319,11 +1319,12 @@ fn page_crud_appends_renames_and_deletes_with_next_page_fallback() {
 
     // 追加页：position 取最大加一，并设为当前页。
     let appended = database
-        .create_prompt_page(prompt, "Page 3")
+        .create_prompt_page(prompt, "Page 3", "")
         .expect("append");
     let record = &database.list_prompts(&workspace).expect("list")[0];
     assert_eq!(record.pages.len(), 3);
     assert_eq!(record.pages[2].id, appended);
+    assert_eq!(record.pages[2].content, "", "普通新建页正文为空");
     assert_eq!(record.active_page_id, Some(appended), "新页立即成为当前页");
 
     // 重命名；空名由应用层拒绝，数据库只要求非空字符串。
@@ -1362,6 +1363,24 @@ fn page_crud_appends_renames_and_deletes_with_next_page_fallback() {
     let record = &database.list_prompts(&workspace).expect("list")[0];
     assert!(record.pages.is_empty());
     assert_eq!(record.active_page_id, None);
+}
+
+#[test]
+fn create_prompt_page_writes_initial_content() {
+    let (database, _) = open_test_database("page-create-content");
+    let workspace = workspace_path("page-create-content");
+    let prompt = database
+        .create_prompt(&workspace, None, "forked", &[])
+        .expect("create prompt");
+    let content = "&&& addTemplate --start\n{title: Title (fork)}\n\nbody\n&&& addTemplate --end\n";
+    let page = database
+        .create_prompt_page(prompt, "Page 2", content)
+        .expect("append with content");
+    let record = &database.list_prompts(&workspace).expect("list")[0];
+    assert_eq!(record.pages.len(), 2);
+    assert_eq!(record.pages[1].id, page);
+    assert_eq!(record.pages[1].content, content, "初始正文原样写入");
+    assert_eq!(record.active_page_id, Some(page));
 }
 
 #[test]

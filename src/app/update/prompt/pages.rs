@@ -118,8 +118,27 @@ fn set_active_page(
     }
 }
 
-/// 新建页：处于页列表视图时保留在列表并选中新页；处于编辑视图时切到新页。
+/// `Ctrl/Cmd+Shift+→`：非末页时切换到下一页；末页时新建页（或跳转到已有空白页并 Toast）。
+pub fn advance_or_create_prompt_page(state: &mut AppState) -> bool {
+    let Some((pages, active)) = displayed_prompt_pages(state) else {
+        return false;
+    };
+    let index = pages.iter().position(|page| page.id == active).unwrap_or(0);
+    if index + 1 < pages.len() {
+        state.prompt.clear_panel();
+        return switch_prompt_page(state, 1);
+    }
+    create_or_toast_new_page(state)
+}
+
+/// 新建空页。
 pub fn open_new_page(state: &mut AppState) -> bool {
+    open_new_page_with_content(state, String::new())
+}
+
+/// 新建页并载入初始正文（Fork 复用）：处于页列表视图时保留在列表并选中新页；
+/// 处于编辑视图时切到新页。
+pub fn open_new_page_with_content(state: &mut AppState, content: String) -> bool {
     let workspace = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
     let Some(target) = state
@@ -154,6 +173,7 @@ pub fn open_new_page(state: &mut AppState) -> bool {
                 workspace: cwd,
                 id,
                 name,
+                content,
             });
             true
         }
@@ -178,7 +198,7 @@ pub fn open_new_page(state: &mut AppState) -> bool {
                     let Some(temp) = panel.temp_mut(id) else {
                         return false;
                     };
-                    temp.pages.push(PromptPage::temp(page_id, &name, ""));
+                    temp.pages.push(PromptPage::temp(page_id, &name, content));
                     if mode != PromptMode::Pages {
                         temp.active_page = page;
                         None
@@ -274,6 +294,140 @@ pub fn create_or_toast_new_page(state: &mut AppState) -> bool {
         );
     }
     created
+}
+
+/// Fork 页：结算当前缓冲；源页为空时复用空页防呆，否则复制正文（标题追加 `(fork)`）
+/// 到末尾新页并切入，最后弹出 `Page forked`。
+pub fn fork_prompt_page(
+    state: &mut AppState,
+    workspace: usize,
+    owner: PromptEditing,
+    page: PromptPageId,
+) -> bool {
+    if workspace != state.prompt_workspace() {
+        return false;
+    }
+    commit_editing_prompt(state);
+    let Some(content) = state.workspaces.get(workspace).and_then(|ws| {
+        let pages = match owner {
+            PromptEditing::Item(id) => &ws.prompt_panel.tree.item(id)?.pages,
+            PromptEditing::Temp(id) => &ws.prompt_panel.temp(id)?.pages,
+        };
+        pages
+            .iter()
+            .find(|candidate| candidate.id == page)
+            .map(|candidate| candidate.content.clone())
+    }) else {
+        return false;
+    };
+    if content.trim().is_empty() {
+        return create_or_toast_new_page(state);
+    }
+    if prompt_pages_mode(state) {
+        hide_prompt_pages(state);
+    }
+    let anchor = Some(state.prompt.id());
+    let created =
+        open_new_page_with_content(state, crate::app::markdown::fork_page_content(&content));
+    if created {
+        super::super::show_toast_at(
+            state,
+            anchor,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Default,
+                text::TOAST_PAGE_FORKED,
+                anchor,
+                std::time::Instant::now(),
+            ),
+        );
+    }
+    created
+}
+
+/// 重命名页标题：回到编辑视图并选中目标页，滚回顶部后按首个模板块的 `{title: ...}`
+/// 选中标题值、定位光标或补入 `{title: }`；页面无模板块时弹出 Warning Toast。
+pub fn rename_prompt_page_title(
+    state: &mut AppState,
+    workspace: usize,
+    owner: PromptEditing,
+    page: PromptPageId,
+) -> bool {
+    if workspace != state.prompt_workspace() {
+        return false;
+    }
+    let Some(active) = state.workspaces.get(workspace).and_then(|ws| {
+        let panel = &ws.prompt_panel;
+        let owned = match owner {
+            PromptEditing::Item(id) => panel
+                .tree
+                .item(id)
+                .is_some_and(|item| item.pages.iter().any(|candidate| candidate.id == page)),
+            PromptEditing::Temp(id) => panel
+                .temp(id)
+                .is_some_and(|temp| temp.pages.iter().any(|candidate| candidate.id == page)),
+        };
+        if !owned {
+            return None;
+        }
+        panel.editing_pages().map(|(_, active)| active)
+    }) else {
+        return false;
+    };
+    if prompt_pages_mode(state) {
+        hide_prompt_pages(state);
+    }
+    if active != page && !select_prompt_page(state, page) {
+        return false;
+    }
+    super::super::focus_prompt(state);
+    state.prompt.clear_panel();
+    state.selection = None;
+    let lookup = crate::app::markdown::find_first_template_title_span(state.prompt.text());
+    match lookup {
+        crate::app::markdown::TemplateTitleLookup::Found {
+            value_start,
+            value_end,
+        } => {
+            if value_start == value_end {
+                state.prompt.set_cursor_offset(value_start);
+            } else if let Some((start, end)) = state
+                .prompt
+                .cell_range_for_byte_span(value_start, value_end)
+            {
+                state.selection = Some(crate::app::selection::Selection::programmatic_range(
+                    state.prompt.id(),
+                    start,
+                    end,
+                ));
+                state.prompt.set_cursor_offset(value_end);
+            } else {
+                state.prompt.set_cursor_offset(value_end);
+            }
+            // 光标定位可能把视口带离顶部，最后显式滚回顶部（选区按内容坐标，不受滚动影响）。
+            state.prompt.scroll_to(0);
+            true
+        }
+        crate::app::markdown::TemplateTitleLookup::MissingTitleLine { start_line_end } => {
+            let cursor = state.prompt.insert_template_title_line(start_line_end);
+            state.prompt.set_cursor_offset(cursor);
+            state.prompt.scroll_to(0);
+            true
+        }
+        crate::app::markdown::TemplateTitleLookup::NoTemplateBlock => {
+            let anchor = Some(state.prompt.id());
+            super::super::show_toast_at(
+                state,
+                anchor,
+                crate::app::toast::Toast::new(
+                    crate::app::toast::ToastKind::Warning,
+                    text::TOAST_PAGE_NO_TITLE,
+                    anchor,
+                    std::time::Instant::now(),
+                ),
+            );
+            false
+        }
+    }
 }
 
 /// 服务回调：正式条目新页已落库并重载；页列表视图下保持在列表，编辑视图下切到新页。
