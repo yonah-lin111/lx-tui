@@ -1,7 +1,7 @@
 # lx 欢迎页 AGENTS.md / MCP 计数重构与内嵌终端 Ghostty 键位对齐 — 执行任务清单
 
-> 状态：**已在 `.worktrees/lx-home-counts-and-terminal-keys` 全部完成并通过验证**（2026-11-02）
-> 设计依据：[design.md](design.md)
+> 状态：**已完成并合入 `dev` 分支，工作区与特性分支已清理**（2026-11-02）
+> 设计依据：[design.md](design.md) | 评审记录：[review.md](review.md)
 > 阶段划分：P0（开工门槛与基线核对）→ P1（MCP 实时计数重构与 `AGENTS.md` 计数状态接入）→ P2（`lx` 欢迎页 UI 渲染更新）→ P3（内嵌终端 Kitty 协议握手与 Ghostty 键位编码修复）→ P4（定向与全量验证）。
 
 ---

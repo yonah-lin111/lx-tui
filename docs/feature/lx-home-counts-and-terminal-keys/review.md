@@ -2,7 +2,8 @@
 
 ## 1. 评审范围与概览
 
-- **评审工作区**：`.worktrees/lx-home-counts-and-terminal-keys`（分支 `feat/lx-home-counts-and-terminal-keys`）
+- **状态**：**全部 P0–P3 项已修复验证并合入 `dev` 分支**（2026-11-02）
+- **原评审工作区**：`.worktrees/lx-home-counts-and-terminal-keys`（分支 `feat/lx-home-counts-and-terminal-keys`，已合并至 `dev` 并清理）
 - **对标参考**：
   - `/Users/yonah/projects/agent/opencode-dev`（首页 MCP 实时状态与快捷键绑定）
   - `/Users/yonah/projects/agent/openclaude-main`（Ink 终端按键解析）

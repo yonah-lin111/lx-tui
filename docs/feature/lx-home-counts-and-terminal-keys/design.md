@@ -1,6 +1,6 @@
 # lx 欢迎页 AGENTS.md / MCP 计数重构与内嵌终端 Ghostty 键位对齐 — 设计文档
 
-> 状态：**已在 `.worktrees/lx-home-counts-and-terminal-keys` 实现并通过验证**（2026-11-02）
+> 状态：**已完成并合入 `dev` 分支，工作区与特性分支已清理**（2026-11-02）
 > 参考实现：
 > - `/Users/yonah/projects/agent/opencode-dev`（`packages/core/src/mcp/index.ts`、`packages/tui/src/feature-plugins/home/footer.tsx`、`packages/tui/src/feature-plugins/sidebar/mcp.tsx`、`packages/core/src/config/plugin/instruction.ts`）
 > - `/Users/yonah/projects/agent/codex-main`（`codex-rs/tui/src/terminal_probe.rs`、`codex-rs/tui/src/tui/keyboard_modes.rs`、`codex-rs/tui/src/keymap.rs`）
