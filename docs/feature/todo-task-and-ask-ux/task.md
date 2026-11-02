@@ -72,15 +72,14 @@
 
 - [x] **3.1 重构 `AskState` 状态模型（`src/app/state/lx/ask.rs`）**
   - 对齐 `opencode-dev`：新增 `is_single_select_only()`；单题单选无顶部 Tab，多题或单题多选包含 `Submit` 汇总 Tab（`tab_len() = questions.len() + 1`）；
-  - 新增 `started_at_ms: i64`（初始化为 `crate::db::now_ms()`）；
-  - 新增 `has_submit_row(&self) -> bool`（多选与 `Submit` 汇总页为 `true`）、`submit_row(&self) -> Option<usize>`、`question_has_preview(&self) -> bool`；
+  - 移除行内提交按钮（`has_submit_row` / `submit_row` / `RowKind::Submit` / `AskHit::Submit`）；
+  - 新增 `started_at_ms: i64`（初始化为 `crate::db::now_ms()`）与 `question_has_preview(&self) -> bool`；
   - 更新 `MAX_OTHER_EDIT_ROWS = 3` 行内编辑高度同步，移除独立的 `preview_scroll` 与 `preview_visible`，统一使用单一 `viewport` 滚动。
 
 - [x] **3.2 重构 Ask 面板布局与渲染（`src/ui/main_content/lx/ask.rs`、`src/ui/text/agent.rs`）**
-  - 移除左右分栏（`SPLIT_MIN_WIDTH`）与底部独立编辑框（`lay.editor`、`draw_editor`）；
+  - 移除左右分栏（`SPLIT_MIN_WIDTH`）、底部独立编辑框（`lay.editor`、`draw_editor`）与行内提交按钮；
   - **选项描述完整换行**：将 `RowKind::OptionDesc` 按 `options.width - ROW_PREFIX` 全宽软折行展开为多行，每行缩进 6 列绘制；
   - **Other 原地行内编辑**：将 `RowKind::Other` 在编辑态或有内容时按 `1..=3` 行展开，左侧 6 列绘制 `❯ (•) ` / `❯ [x] `，右侧原地绘制 `AskEditor` 的 1~3 行软折行内容、空态占位符 `Other...`、选区反显，并返回硬件光标坐标；
-  - **弹窗胶囊样式提交按钮**：在 `has_submit_row()` 为真时渲染 `RowKind::Submit`（文案 ` ↵ submit `，就绪时 `style::button_primary()`、未就绪时 `style::button_secondary()`，聚焦时行首带 `❯`）；
   - **Preview 置底且与问题选项共用唯一滚动条**：移除字符图独立滚动条，将 `PreviewGap` / `PreviewLine` / `PreviewPlaceholder` 直接纳入统一的 `rows_model`，使问题选项与字符图共用面板最右侧唯一一条滚动条；本题无任何 `preview` 时完全隐藏预览区。
 
 - [x] **3.3 重构 Ask 键盘与鼠标交互（对齐 `opencode-dev`，`src/app/update/chat/ask.rs`）**

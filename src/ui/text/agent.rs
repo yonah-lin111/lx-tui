@@ -445,12 +445,11 @@ pub const ASK_MULTI_OFF: &str = "[ ]";
 pub const ASK_CURSOR: &str = "❯";
 /// 原地行内输入的「其他」占位符（编辑态为空、非编辑态无内容时显示）。
 pub const ASK_OTHER_LABEL: &str = "Other...";
-/// 提交按钮（弹窗同款实心胶囊，前后各留一列；就绪状态决定按钮配色）。
-pub const ASK_SUBMIT_BUTTON: &str = " ↵ submit ";
-/// 预览区占位提示（题目有预览时高亮移到 Other / 提交按钮才会出现）。
+/// 预览区占位提示（题目有预览时高亮移到 Other 才会出现）。
 pub const ASK_NO_PREVIEW: &str = "(no preview)";
-/// 底栏键位：带 tab 的流程、单题单选、`Submit` 汇总三种形态。
-pub const ASK_FOOTER_KEYS: &str = "⇆ tab · ↑↓ select · ↵ submit";
+/// 底栏键位：带 tab 的单选/多选流程、单题单选、`Submit` 汇总四种形态。
+pub const ASK_FOOTER_KEYS: &str = "⇆ tab · ↑↓ select · ↵ confirm";
+pub const ASK_FOOTER_KEYS_MULTI: &str = "⇆ tab · ↑↓ select · ↵ toggle";
 pub const ASK_FOOTER_KEYS_SINGLE: &str = "↑↓ select · ↵ submit";
 pub const ASK_FOOTER_KEYS_CONFIRM: &str = "⇆ tab · ↑↓ scroll · ↵ submit";
 /// tab 栏最后一格：问答回顾 + 提交。

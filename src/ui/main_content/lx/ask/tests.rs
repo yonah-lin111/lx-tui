@@ -334,72 +334,41 @@ fn no_border_only_a_top_rule() {
 }
 
 #[test]
-fn single_select_has_no_submit_button() {
-    let lx = lx_with(vec![question(
+fn single_and_multi_select_have_no_submit_button_row() {
+    let single = lx_with(vec![question(
         "q",
         false,
         vec![option("A", "da", None), option("B", "db", None)],
     )]);
-    let lay = computed(&lx, surface(80, 30));
-    assert!(
-        !lay.rows
-            .iter()
-            .any(|row| matches!(row.kind, RowKind::Submit)),
-        "单选没有提交按钮"
+    let lay_single = computed(&single, surface(80, 30));
+    assert_eq!(lay_single.tabs.len(), 0, "单题单选无顶部 tab");
+    assert_eq!(
+        lay_single.rows.len(),
+        5,
+        "2 个带描述选项 (4行) + Other (1行)，无提交按钮行"
+    );
+
+    let multi = lx_with(vec![question("q", true, vec![option("A", "da", None)])]);
+    let lay_multi = computed(&multi, surface(80, 30));
+    assert_eq!(lay_multi.tabs.len(), 2, "单题多选顶部显示题目与 Submit tab");
+    assert_eq!(
+        lay_multi.rows.len(),
+        3,
+        "1 个带描述选项 (2行) + Other (1行)，列表底部无提交按钮行"
     );
 }
 
 #[test]
-fn multi_select_renders_the_submit_capsule_after_other() {
-    let mut lx = lx_with(vec![question("q", true, vec![option("A", "da", None)])]);
-    {
-        let ask = lx.ask.as_mut().expect("ask");
-        // 未作答：暗色胶囊同样必须画出来。
-        ask.highlight[0] = ask.submit_row().expect("提交行");
-    }
-    let area = surface(80, 30);
-    let lay = computed(&lx, area);
-    let submit = lay
-        .rows
-        .iter()
-        .find(|row| matches!(row.kind, RowKind::Submit))
-        .expect("多选必须有提交行");
-    let grid = paint(&lx, area);
-    let row = row_text(&grid, area, submit.rect.y);
-    assert!(
-        row.contains(a::ASK_SUBMIT_BUTTON.trim_end()),
-        "提交按钮必须显示胶囊文案：{row:?}"
-    );
-    let arrow = row.chars().position(|ch| ch == '↵').expect("胶囊符号");
-    assert_eq!(
-        arrow,
-        usize::from(submit.rect.x + ROW_PREFIX + 1),
-        "胶囊必须从第 6 列起"
-    );
-    assert_eq!(
-        grid.cell(submit.rect.x, submit.rect.y).ch,
-        '❯',
-        "聚焦有箭头"
-    );
-    assert_eq!(
-        hit(area, &lx, submit.rect.x + 1, submit.rect.y),
-        Some(AskHit::Submit)
-    );
-}
-
-#[test]
-fn multi_question_flow_uses_a_submit_tab_instead_of_a_per_question_button() {
+fn multi_question_flow_uses_submit_tab_review_without_submit_button() {
     let mut lx = lx_with(vec![
         question("layout", false, vec![option("a", "d", None)]),
         question("theme", false, vec![option("b", "d", None)]),
     ]);
     let first = computed(&lx, surface(80, 30));
-    assert!(
-        !first
-            .rows
-            .iter()
-            .any(|row| matches!(row.kind, RowKind::Submit)),
-        "题目 tab 上没有选项底部提交按钮（单选回车即前进）"
+    assert_eq!(
+        first.rows.len(),
+        3,
+        "题目 tab 只有选项与 Other，无提交按钮行"
     );
     {
         let ask = lx.ask.as_mut().expect("ask");
@@ -411,15 +380,8 @@ fn multi_question_flow_uses_a_submit_tab_instead_of_a_per_question_button() {
         review
             .rows
             .iter()
-            .any(|row| matches!(row.kind, RowKind::Submit)),
-        "Submit 汇总 tab 底部固定显示提交胶囊"
-    );
-    assert!(
-        review
-            .rows
-            .iter()
-            .any(|row| matches!(row.kind, RowKind::Review { index: 0, line: 0 })),
-        "汇总 tab 逐题回顾答案"
+            .all(|row| matches!(row.kind, RowKind::Review { .. })),
+        "Submit 汇总 tab 仅渲染问答回顾行，不渲染提交胶囊按钮"
     );
     assert_eq!(review.tabs.len(), 3, "两题 + Submit 汇总");
     let grid = paint(&lx, surface(80, 30));

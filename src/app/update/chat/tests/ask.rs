@@ -230,17 +230,16 @@ fn digit_shortcut_selects_and_confirms_a_single_select_answer() {
 }
 
 #[test]
-fn multi_select_enter_only_toggles_and_the_submit_row_commits() {
+fn multi_select_enter_only_toggles_and_submit_tab_commits() {
     let (mut state, pane, _key) = asking(vec![question("q", true, &["A", "B"])]);
     press(&mut state, LxInput::Enter);
     assert_eq!(panel(&state, pane).selected[0], vec![0]);
     assert!(ask_present(&state, pane), "多选回车绝不自动提交");
-    // 移到提交按钮（选项 2 + Other + Submit）。
-    while panel(&state, pane).highlight[0] != panel(&state, pane).submit_row().expect("submit") {
-        press(&mut state, LxInput::Down);
-    }
+    // 切到 Submit tab 按回车提交。
+    press(&mut state, LxInput::Tab);
+    assert!(panel(&state, pane).is_confirm());
     press(&mut state, LxInput::Enter);
-    assert!(!ask_present(&state, pane), "聚焦提交按钮才提交");
+    assert!(!ask_present(&state, pane), "在 Submit tab 按回车提交");
     assert_eq!(
         answer_effect(&state).and_then(|answers| answers.get("q").cloned()),
         Some(vec!["A".to_string()])
@@ -284,19 +283,13 @@ fn enter_on_other_row_enters_edit_instead_of_submitting() {
 }
 
 #[test]
-fn space_on_the_submit_row_behaves_like_enter() {
+fn space_in_confirm_tab_behaves_like_enter() {
     let (mut state, pane, _key) = asking(vec![question("q", true, &["A"])]);
     press(&mut state, LxInput::Char(' '));
-    let submit = panel(&state, pane).submit_row().expect("submit");
-    {
-        let ask = state
-            .pane_mut_anywhere(pane)
-            .and_then(|target| target.lx.ask.as_mut())
-            .expect("ask");
-        ask.highlight[0] = submit;
-    }
+    press(&mut state, LxInput::Tab);
+    assert!(panel(&state, pane).is_confirm());
     press(&mut state, LxInput::Char(' '));
-    assert!(!ask_present(&state, pane), "提交行 Space 等价回车");
+    assert!(!ask_present(&state, pane), "Submit 汇总页 Space 等价回车");
 }
 
 #[test]
@@ -517,9 +510,7 @@ fn submit_never_touches_the_draft() {
         press(&mut state, LxInput::Char(ch));
     }
     press(&mut state, LxInput::Enter);
-    while panel(&state, pane).highlight[0] != panel(&state, pane).submit_row().expect("submit") {
-        press(&mut state, LxInput::Down);
-    }
+    press(&mut state, LxInput::Tab);
     press(&mut state, LxInput::Enter);
     let after = {
         let target = state.pane_anywhere(pane).expect("pane");
@@ -715,26 +706,27 @@ fn click_other_enters_edit_and_click_tab_commits_and_switches() {
 }
 
 #[test]
-fn click_submit_requires_every_answer() {
+fn submit_tab_requires_every_answer() {
     let (mut state, pane, _key) = asking(vec![
         question("a", false, &["A"]),
         question("b", false, &["B"]),
     ]);
-    // 跳过第 1 题点提交：全部作答未满足 → toast + 跳回未答题。
-    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Tab(1));
-    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Submit);
+    // 跳过第 1 题切到 Submit tab 再点一次（或按回车）：全部作答未满足 → toast + 跳回未答题。
+    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Tab(2));
+    assert!(panel(&state, pane).is_confirm());
+    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Tab(2));
     assert!(ask_present(&state, pane));
     assert_eq!(
         toast_message(&state, pane).as_deref(),
         Some(crate::ui::text::agent::ASK_TOAST_ANSWER_REQUIRED)
     );
     assert_eq!(panel(&state, pane).current, 0);
-    // 逐题作答（单选点击后自动前进），进入汇总后提交才放行。
+    // 逐题作答（单选点击后自动前进），进入汇总后按回车（或再点 Submit tab）才放行。
     crate::app::update::apply_ask_click(&mut state, pane, AskHit::Option(0));
     assert_eq!(panel(&state, pane).current, 1);
     crate::app::update::apply_ask_click(&mut state, pane, AskHit::Option(0));
     assert!(panel(&state, pane).is_confirm(), "末题答完进入 Submit 汇总");
-    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Submit);
+    press(&mut state, LxInput::Enter);
     assert!(!ask_present(&state, pane));
     assert!(state.effects.iter().any(|effect| matches!(
         effect,

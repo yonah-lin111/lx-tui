@@ -104,41 +104,32 @@ fn zero_option_question_only_has_the_other_row() {
 }
 
 #[test]
-fn submit_row_follows_the_tab_style() {
-    // 单题单选：没有 tab、没有提交胶囊，选中即提交。
+fn tab_style_and_row_count_never_include_a_submit_button() {
+    // 单题单选：没有 tab，选中即提交。
     let single = state(vec![question("q", false, &["A", "B"])]);
     assert!(single.is_single_select_only());
     assert_eq!(single.tab_len(), 1);
     assert!(!single.is_confirm());
-    assert!(!single.has_submit_row());
-    assert_eq!(single.submit_row(), None);
     assert_eq!(single.row_count(), 3, "2 选项 + Other");
 
-    // 单题多选：题目 + Submit 两个 tab，选项底部有提交胶囊。
+    // 单题多选：题目 + Submit 两个 tab，但列表内无提交按钮（切到 Submit tab 按回车提交）。
     let multi = state(vec![question("q", true, &["A", "B"])]);
     assert!(!multi.is_single_select_only());
     assert_eq!(multi.tab_len(), 2);
-    assert!(multi.has_submit_row());
     assert_eq!(multi.other_row(), 2);
-    assert_eq!(multi.submit_row(), Some(3));
-    assert_eq!(multi.row_count(), 4, "2 选项 + Other + Submit");
+    assert_eq!(multi.row_count(), 3, "2 选项 + Other（无提交按钮行）");
 
-    // 多题：每题一个 tab，末尾是 Submit 汇总；单选的题目没有选项底部按钮。
+    // 多题：每题一个 tab，末尾是 Submit 汇总；汇总 tab 只展示回顾行。
     let mut flow = state(vec![
         question("a", false, &["A1", "A2"]),
         question("b", false, &["B1"]),
     ]);
     assert_eq!(flow.tab_len(), 3, "两题 + Submit");
-    assert!(!flow.has_submit_row());
-    assert_eq!(flow.submit_row(), None);
     assert!(flow.next_step());
     assert_eq!(flow.current, 1);
-    assert!(!flow.has_submit_row(), "多题里的单选不显示选项提交按钮");
     assert!(flow.next_step());
     assert!(flow.is_confirm(), "末题前进到 Submit 汇总");
-    assert!(flow.has_submit_row(), "汇总 tab 显示提交胶囊");
     assert_eq!(flow.row_count(), 0, "汇总 tab 没有可高亮项");
-    assert_eq!(flow.submit_row(), None, "汇总 tab 的胶囊不是高亮行");
 }
 
 #[test]

@@ -17,8 +17,6 @@ pub enum AskHit {
     Option(usize),
     /// 固定最后一行的「其他」。
     Other,
-    /// `Submit` 行（等价 `Enter`）。
-    Submit,
     /// 题目标签（切到该题，状态保留）。
     Tab(usize),
 }
@@ -113,36 +111,20 @@ impl AskState {
         !self.is_single_select_only() && self.confirm
     }
 
-    /// 当前题是否显示选项列表底部的「提交」胶囊：
-    ///
-    /// `Submit` 汇总 tab 恒显示；其余情况只有多选需要按钮（单选选中即前进/提交）。
-    pub fn has_submit_row(&self) -> bool {
-        self.is_confirm()
-            || self
-                .question()
-                .is_some_and(|question| question.multi_select)
-    }
-
-    /// 当前题可被 `↑`/`↓` 高亮的逻辑条目数：选项 + 「其他」 + 可能存在的提交按钮。
+    /// 当前题可被 `↑`/`↓` 高亮的逻辑条目数：选项 + 「其他」。
     ///
     /// `Submit` 汇总 tab 没有任何可高亮项（`↑`/`↓` 在那里是滚动）。
     pub fn row_count(&self) -> usize {
         if self.is_confirm() {
             return 0;
         }
-        self.question().map_or(0, |question| {
-            question.options.len() + 1 + usize::from(self.has_submit_row())
-        })
+        self.question()
+            .map_or(0, |question| question.options.len() + 1)
     }
 
     /// 「其他」行的逻辑下标。
     pub fn other_row(&self) -> usize {
         self.question().map_or(0, |question| question.options.len())
-    }
-
-    /// 提交按钮行的逻辑下标；不显示按钮（含 `Submit` 汇总 tab）时为 None。
-    pub fn submit_row(&self) -> Option<usize> {
-        (!self.is_confirm() && self.has_submit_row()).then(|| self.other_row().saturating_add(1))
     }
 
     /// 当前题是否有任何选项配置了非空 preview（决定预览区是否占位）。

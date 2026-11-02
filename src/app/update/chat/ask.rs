@@ -136,7 +136,7 @@ fn type_key(state: &mut AppState, pane: PaneId, ch: char) -> bool {
     enter(state, pane)
 }
 
-/// `Space`：普通选项勾选，「其他」进入编辑（多选已写文本则切换计入），提交等价 Enter。
+/// `Space`：普通选项勾选，「其他」进入编辑（多选已写文本则切换计入），`Submit` 汇总页等价 Enter。
 fn space(state: &mut AppState, pane: PaneId) -> bool {
     let Some(ask) = state
         .pane_anywhere(pane)
@@ -144,10 +144,10 @@ fn space(state: &mut AppState, pane: PaneId) -> bool {
     else {
         return false;
     };
-    let highlight = ask.highlight.get(ask.current).copied().unwrap_or(0);
-    if ask.is_confirm() || Some(highlight) == ask.submit_row() {
+    if ask.is_confirm() {
         return enter(state, pane);
     }
+    let highlight = ask.highlight.get(ask.current).copied().unwrap_or(0);
     let on_other = highlight == ask.other_row();
     let multi = ask.question().is_some_and(|question| question.multi_select);
     let custom = ask.editor().map(|editor| editor.text()).unwrap_or_default();
@@ -170,7 +170,7 @@ fn space(state: &mut AppState, pane: PaneId) -> bool {
     ask.choose(highlight)
 }
 
-/// `Enter` 的统一入口：提交门 > 其他 > 普通选项。
+/// `Enter` 的统一入口：`Submit` 汇总 tab > 其他 > 普通选项。
 fn enter(state: &mut AppState, pane: PaneId) -> bool {
     let Some(ask) = state
         .pane_anywhere(pane)
@@ -178,11 +178,11 @@ fn enter(state: &mut AppState, pane: PaneId) -> bool {
     else {
         return false;
     };
-    let highlight = ask.highlight.get(ask.current).copied().unwrap_or(0);
-    // 焦点在提交按钮（或 `Submit` 汇总）：全部作答才提交，否则提示并跳到第一个未答题。
-    if ask.is_confirm() || Some(highlight) == ask.submit_row() {
+    // 在 `Submit` 汇总 tab 按 Enter：全部作答才提交，否则提示并跳到第一个未答题。
+    if ask.is_confirm() {
         return submit_or_warn(state, pane);
     }
+    let highlight = ask.highlight.get(ask.current).copied().unwrap_or(0);
     // 焦点在「其他」：原地进入行内编辑（再次回车才确认文本）。
     if highlight == ask.other_row() {
         return state
@@ -403,6 +403,13 @@ pub fn apply_ask_click(state: &mut AppState, pane: PaneId, hit: AskHit) -> bool 
     match hit {
         AskHit::Tab(index) => {
             let left = leave_edit(state, pane);
+            let already_on_confirm = state
+                .pane_anywhere(pane)
+                .and_then(|target| target.lx.ask.as_ref())
+                .is_some_and(|ask| ask.is_confirm() && index >= ask.questions.len());
+            if already_on_confirm {
+                return left | submit_or_warn(state, pane);
+            }
             let switched = state
                 .pane_mut_anywhere(pane)
                 .and_then(|target| target.lx.ask.as_mut())
@@ -420,10 +427,6 @@ pub fn apply_ask_click(state: &mut AppState, pane: PaneId, hit: AskHit) -> bool 
             let moved = ask.set_highlight(ask.other_row());
             let editing = ask.begin_edit();
             moved | editing
-        }
-        AskHit::Submit => {
-            let left = leave_edit(state, pane);
-            left | submit_or_warn(state, pane)
         }
     }
 }

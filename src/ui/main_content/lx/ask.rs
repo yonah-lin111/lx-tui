@@ -53,8 +53,6 @@ enum RowKind {
     OptionDesc { index: usize, line: usize },
     /// 「其他」行原地输入框的第 `line` 个视觉行。
     Other { line: usize },
-    /// 提交按钮行（仅 `has_submit_row()` 时存在）。
-    Submit,
     /// 角色画预览前的空行。
     PreviewGap,
     /// 角色画预览的第 `line` 行。
@@ -334,7 +332,6 @@ fn draw_rows(grid: &mut Grid, lay: &AskLayout, ask: &AskState) {
                 draw_option_desc(grid, row.rect, ask, index, line);
             }
             RowKind::Other { line } => draw_other(grid, row.rect, ask, line),
-            RowKind::Submit => draw_submit(grid, row.rect, ask),
             RowKind::PreviewGap => {}
             RowKind::PreviewLine(index) => draw_preview_line(grid, row.rect, ask, index),
             RowKind::PreviewPlaceholder => grid.put_clipped(
@@ -504,26 +501,6 @@ fn draw_other(grid: &mut Grid, rect: Rect, ask: &AskState, line: usize) {
     }
 }
 
-/// 提交按钮：弹窗同款实心胶囊；就绪与否决定配色，聚焦时行首带 `❯`。
-fn draw_submit(grid: &mut Grid, rect: Rect, ask: &AskState) {
-    let pointed = ask.submit_row() == ask.highlight.get(ask.current).copied();
-    if pointed {
-        grid.put_clipped(rect.x, rect.y, a::ASK_CURSOR, style::accent(), 2);
-    }
-    let button = if ask.all_answered() {
-        style::button_primary()
-    } else {
-        style::button_secondary()
-    };
-    grid.put_clipped(
-        rect.x.saturating_add(ROW_PREFIX),
-        rect.y,
-        a::ASK_SUBMIT_BUTTON,
-        button,
-        rect.width.saturating_sub(ROW_PREFIX),
-    );
-}
-
 /// 行内编辑光标：`(行, 列)` 绝对坐标；未聚焦或未编辑返回 None。
 fn cursor_cell(lay: &AskLayout, ask: &AskState, focused: bool) -> Option<(u16, u16)> {
     if !focused || !ask.editing {
@@ -658,6 +635,7 @@ fn draw_footer(grid: &mut Grid, lay: &AskLayout, lx: &Lx) {
     let keys = match lx.ask.as_ref() {
         Some(ask) if ask.is_single_select_only() => a::ASK_FOOTER_KEYS_SINGLE,
         Some(ask) if ask.is_confirm() => a::ASK_FOOTER_KEYS_CONFIRM,
+        Some(ask) if ask.question().is_some_and(|q| q.multi_select) => a::ASK_FOOTER_KEYS_MULTI,
         _ => a::ASK_FOOTER_KEYS,
     };
     let right_w = u16::try_from(right.width()).unwrap_or(u16::MAX);
@@ -715,7 +693,7 @@ fn place_tabs(ask: &AskState, x: u16, y: u16, width: u16) -> Vec<(usize, Rect)> 
 
 /// 列表模型：每个视觉行一条（绘制、滚动与命中共用同一份几何）。
 ///
-/// 选项、`Other`、提交胶囊、空行、角色画预览与 `Submit` 回顾都在**同一个**可滚
+/// 选项、`Other`、空行、角色画预览与 `Submit` 回顾都在**同一个**可滚
 /// 列表里，因此只可能有一条滚动条，滚轮/翻页也只会同时挪动整块内容。
 fn rows_model(ask: &AskState, width: u16) -> Vec<RowKind> {
     if ask.is_confirm() {
@@ -725,7 +703,6 @@ fn rows_model(ask: &AskState, width: u16) -> Vec<RowKind> {
                 out.push(RowKind::Review { index, line });
             }
         }
-        out.push(RowKind::Submit);
         return out;
     }
     let Some(question) = ask.question() else {
@@ -743,9 +720,6 @@ fn rows_model(ask: &AskState, width: u16) -> Vec<RowKind> {
     }
     for line in 0..other_rows(ask, desc_w) {
         out.push(RowKind::Other { line });
-    }
-    if ask.has_submit_row() {
-        out.push(RowKind::Submit);
     }
     if ask.question_has_preview() {
         out.push(RowKind::PreviewGap);
@@ -826,7 +800,6 @@ fn item_index(ask: &AskState, kind: RowKind) -> Option<usize> {
     match kind {
         RowKind::OptionLabel(index) | RowKind::OptionDesc { index, .. } => Some(index),
         RowKind::Other { .. } => Some(ask.other_row()),
-        RowKind::Submit => ask.submit_row(),
         RowKind::PreviewGap | RowKind::PreviewLine(_) | RowKind::PreviewPlaceholder => None,
         RowKind::Review { .. } => None,
     }
@@ -875,7 +848,6 @@ fn place_rows(lay: &mut AskLayout, ask: &AskState) {
                 Some(AskHit::Option(*i))
             }
             RowKind::Other { .. } => Some(AskHit::Other),
-            RowKind::Submit => Some(AskHit::Submit),
             RowKind::PreviewGap
             | RowKind::PreviewLine(_)
             | RowKind::PreviewPlaceholder
