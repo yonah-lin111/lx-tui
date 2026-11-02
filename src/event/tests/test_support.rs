@@ -272,7 +272,7 @@ pub(crate) fn overflow_prompt(state: &mut AppState, view: &ui::layout::ViewLayou
 
 /// prompt 工具栏按钮矩形（按几何取，避免硬编码列）。
 pub(crate) fn toolbar_button(geo: &Geometry, button: layout::PromptToolbarButton) -> Rect {
-    layout::prompt_toolbar_button_rect(geo.view.prompt, button, PromptMode::Editor)
+    layout::prompt_toolbar_button_rect(geo.view.prompt, button, PromptMode::Editor, Some("1/2"))
         .expect("toolbar button visible")
 }
 

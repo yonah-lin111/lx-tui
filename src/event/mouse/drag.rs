@@ -115,6 +115,16 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if let Some(grab) = state.prompt_recent_scroll_drag {
+        let Some(bar) = ui::prompt_frame::prompt_recent_scrollbar(view.prompt, state) else {
+            return;
+        };
+        let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+        if update::set_prompt_recent_scroll(state, offset, bar.visible, bar.total) {
+            *dirty = true;
+        }
+        return;
+    }
     if let Some(grab) = state.prompt_scroll_drag {
         let Some(bar) = ui::prompt_scrollbar(view, state) else {
             return;
@@ -445,6 +455,9 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     if state.workspace_scroll_drag.take().is_some() {
+        return;
+    }
+    if state.prompt_recent_scroll_drag.take().is_some() {
         return;
     }
     if state.prompt_scroll_drag.take().is_some() {

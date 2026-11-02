@@ -1,7 +1,8 @@
 //! 集成测试：右侧容器的 tab、prompt 标题行 / 页名 / 页控件（真实 AppState + 渲染 + 命中几何）。
 //!
-//! 覆盖需求：编辑视图的条目 title 与分页控件内嵌在**功能按钮行下方的分割线**上，
-//! 树视图标题行为纯 `─`、不显示任何分页控件；容器顶边框只承载 `Prompt` / `Todo` 标签页。
+//! 覆盖需求：编辑视图的条目 title 与页名内嵌在**功能按钮行下方的分割线**上，
+//! 页控件 `‹ n/m ›` 位于工具栏 `[refDir]` 与保存点之间；树视图标题行为纯 `─`；
+//! 容器顶边框只承载 `Prompt` / `Todo` 标签页。
 
 use lx_tui::app::prompt::{PromptItem, PromptPage};
 use lx_tui::app::state::AppState;
@@ -77,13 +78,18 @@ fn border_row(terminal: &Terminal<TestBackend>, view: &ui::layout::ViewLayout) -
     panel_row(terminal, view, view.prompt.y)
 }
 
-/// 标题行（工具栏下一行，承载条目名/页名/页控件）。
+/// 标题行（工具栏下一行，承载条目名/页名）。
 fn title_row(terminal: &Terminal<TestBackend>, view: &ui::layout::ViewLayout) -> String {
     panel_row(
         terminal,
         view,
         layout::pane_inner_rect(view.prompt).y + layout::PROMPT_TOOLBAR_HEIGHT,
     )
+}
+
+/// 工具栏行（承载模式、`[rec]`、页控件与保存点）。
+fn toolbar_row(terminal: &Terminal<TestBackend>, view: &ui::layout::ViewLayout) -> String {
+    panel_row(terminal, view, layout::pane_inner_rect(view.prompt).y)
 }
 
 /// 字符串首字符在屏幕上的列。
@@ -106,17 +112,19 @@ fn editor_title_row_shows_item_title_page_name_and_pager() {
     assert!(border.contains(text::RIGHT_TAB_PROMPT_LABEL), "{border}");
     assert!(border.contains(text::RIGHT_TAB_TODO_LABEL), "{border}");
 
-    // 条目名、页名与页控件都落在那条分割线上。
+    // 条目名与页名都落在那条分割线上。
     let title = title_row(&terminal, &view);
     assert!(title.starts_with(text::DIVIDER_LEFT_JOIN), "{title}");
     assert!(title.ends_with(text::DIVIDER_RIGHT_JOIN), "{title}");
     assert!(title.contains(" paged "), "条目名进标题行: {title}");
-    assert!(
-        !title.contains("Page 1"),
-        "编辑区域左上角不显示页名: {title}"
-    );
-    assert!(title.contains("1/2"), "页控件进标题行: {title}");
-    assert!(title.contains('‹') && title.contains('›'), "{title}");
+    assert!(title.contains("· Page 1"), "当前页名进标题行: {title}");
+    assert!(!title.contains("1/2"), "页控件已移到工具栏: {title}");
+    assert!(!title.contains('‹') && !title.contains('›'), "{title}");
+
+    // 页控件位于工具栏 `[refDir]` 与保存点之间。
+    let toolbar = toolbar_row(&terminal, &view);
+    assert!(toolbar.contains("1/2"), "页控件进工具栏: {toolbar}");
+    assert!(toolbar.contains('‹') && toolbar.contains('›'), "{toolbar}");
 
     // 旧的固定标题彻底消失。
     let all: String = {
@@ -137,7 +145,8 @@ fn toolbar_row_carries_buttons_not_title() {
 
     assert!(toolbar.contains(text::PROMPT_MODE_LIST_LABEL), "{toolbar}");
     assert!(!toolbar.contains(" paged "), "工具栏不承载标题: {toolbar}");
-    assert!(!toolbar.contains("1/2"), "工具栏不承载页控件: {toolbar}");
+    assert!(toolbar.contains("1/2"), "工具栏承载页控件: {toolbar}");
+    assert!(toolbar.contains('‹') && toolbar.contains('›'), "{toolbar}");
     assert!(
         !toolbar.contains(text::DIVIDER_MID),
         "分割线不穿过工具栏: {toolbar}"
@@ -150,45 +159,46 @@ fn border_pager_hit_matches_rendered_columns() {
     paged_prompt(&mut state);
     update::focus_prompt(&mut state);
     let terminal = draw(&state, &config);
-    let border = title_row(&terminal, &view);
-    let row = layout::pane_inner_rect(view.prompt).y + layout::PROMPT_TOOLBAR_HEIGHT;
+    let toolbar = toolbar_row(&terminal, &view);
+    let row = layout::pane_inner_rect(view.prompt).y;
 
     // 由真实渲染结果反推控件列：`‹` 切上一页、`›` 切下一页、`n/m` 开页菜单。
-    let prev_col = column_of(&border, text::PROMPT_PAGE_PREV, view.prompt.x);
-    let next_col = column_of(&border, text::PROMPT_PAGE_NEXT, view.prompt.x);
-    let counter_col = column_of(&border, "1/2", view.prompt.x);
+    let prev_col = column_of(&toolbar, text::PROMPT_PAGE_PREV, view.prompt.x);
+    let next_col = column_of(&toolbar, text::PROMPT_PAGE_NEXT, view.prompt.x);
+    let counter_col = column_of(&toolbar, "1/2", view.prompt.x);
 
     assert_eq!(
         ui::prompt_page_control_at(view.prompt, &state, prev_col, row),
         Some(ui::prompt::PageControl::Prev),
-        "左箭头命中: {border}"
+        "左箭头命中: {toolbar}"
     );
     assert_eq!(
         ui::prompt_page_control_at(view.prompt, &state, next_col, row),
         Some(ui::prompt::PageControl::Next),
-        "右箭头命中: {border}"
+        "右箭头命中: {toolbar}"
     );
     assert_eq!(
         ui::prompt_page_control_at(view.prompt, &state, counter_col, row),
         Some(ui::prompt::PageControl::Counter),
-        "页码命中（打开页菜单）: {border}"
+        "页码命中（打开页菜单）: {toolbar}"
     );
 
     // 条目名与边框空白不产生控件。
     assert_eq!(
         ui::prompt_page_control_at(view.prompt, &state, view.prompt.x + 3, row),
         None,
-        "条目名不响应: {border}"
+        "模式按钮不响应: {toolbar}"
     );
     assert_eq!(
         ui::prompt_page_control_at(view.prompt, &state, view.prompt.x, row),
         None,
-        "左端 `├` 不响应: {border}"
+        "左端 `│` 不响应: {toolbar}"
     );
+    let title_y = layout::pane_inner_rect(view.prompt).y + layout::PROMPT_TOOLBAR_HEIGHT;
     assert_eq!(
-        ui::prompt_page_control_at(view.prompt, &state, prev_col, row - 1),
+        ui::prompt_page_control_at(view.prompt, &state, prev_col, title_y),
         None,
-        "工具栏行无页控件命中: {border}"
+        "标题行无页控件命中: {toolbar}"
     );
 }
 
@@ -201,24 +211,25 @@ fn border_switches_page_and_rename_roundtrip() {
     assert!(update::switch_prompt_page(&mut state, 1));
     assert_eq!(state.prompt.text(), "beta");
     let terminal = draw(&state, &config);
-    let border = title_row(&terminal, &view);
-    assert!(!border.contains("Page 2"), "{border}");
-    assert!(border.contains("2/2"), "{border}");
+    let title = title_row(&terminal, &view);
+    assert!(title.contains("Page 2"), "标题行展示当前页名: {title}");
+    let toolbar = toolbar_row(&terminal, &view);
+    assert!(toolbar.contains("2/2"), "{toolbar}");
 
     // 末页右箭头置灰（Reset 前景），左箭头可用（Cyan）。
     let buffer = terminal.backend().buffer();
-    let row = layout::pane_inner_rect(view.prompt).y + layout::PROMPT_TOOLBAR_HEIGHT;
-    let next_col = column_of(&border, text::PROMPT_PAGE_NEXT, view.prompt.x);
-    let prev_col = column_of(&border, text::PROMPT_PAGE_PREV, view.prompt.x);
+    let row = layout::pane_inner_rect(view.prompt).y;
+    let next_col = column_of(&toolbar, text::PROMPT_PAGE_NEXT, view.prompt.x);
+    let prev_col = column_of(&toolbar, text::PROMPT_PAGE_PREV, view.prompt.x);
     assert_eq!(
         buffer[(next_col, row)].fg,
         ratatui::style::Color::Reset,
-        "末页右箭头置灰: {border}"
+        "末页右箭头置灰: {toolbar}"
     );
     assert_eq!(
         buffer[(prev_col, row)].fg,
         ratatui::style::Color::Cyan,
-        "左箭头可用: {border}"
+        "左箭头可用: {toolbar}"
     );
 }
 
@@ -263,8 +274,9 @@ fn border_title_truncates_item_title_when_narrow() {
     update::focus_prompt(&mut state);
     let terminal = draw(&state, &config);
     let border = title_row(&terminal, &view);
+    let toolbar = toolbar_row(&terminal, &view);
 
-    assert!(border.contains("1/1"), "页控件完整: {border}");
+    assert!(toolbar.contains("1/1"), "页控件在工具栏: {toolbar}");
     assert!(!border.contains(&long_title), "条目名过长被截断: {border}");
     assert!(border.contains('…'), "条目名以省略号收尾: {border}");
 }

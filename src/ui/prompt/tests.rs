@@ -630,7 +630,15 @@ fn renders_toolbar_buttons_and_divider() {
     editor.resize(36, 6);
     editor.insert_str("hi");
     let mut buf = Buffer::empty(panel);
-    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, false);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        false,
+        None,
+    );
 
     let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar visible");
     let render_label = |buf: &Buffer, rect: Rect| -> String {
@@ -642,6 +650,7 @@ fn renders_toolbar_buttons_and_divider() {
         panel,
         crate::layout::PromptToolbarButton::Undo,
         PromptMode::Editor,
+        Some("1/2"),
     )
     .expect("undo visible");
     assert_eq!(render_label(&buf, undo), text::PROMPT_UNDO_LABEL);
@@ -652,6 +661,7 @@ fn renders_toolbar_buttons_and_divider() {
         panel,
         crate::layout::PromptToolbarButton::Redo,
         PromptMode::Editor,
+        Some("1/2"),
     )
     .expect("redo visible");
     assert_eq!(render_label(&buf, redo), text::PROMPT_REDO_LABEL);
@@ -661,6 +671,7 @@ fn renders_toolbar_buttons_and_divider() {
         panel,
         crate::layout::PromptToolbarButton::Save,
         PromptMode::Editor,
+        Some("1/2"),
     )
     .expect("save visible");
     let save_x = save.x;
@@ -678,12 +689,28 @@ fn renders_toolbar_buttons_and_divider() {
 
     editor.mark_saved();
     let mut buf = Buffer::empty(panel);
-    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, false);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        false,
+        None,
+    );
     assert_eq!(buf[(save_x, bar.y)].fg, Color::Green, "保存后绿点");
 
     // 临时草稿：空心点（与空闲 agent 状态一致），恒灰。
     let mut buf = Buffer::empty(panel);
-    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, true);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        true,
+        None,
+    );
     assert_eq!(buf[(save_x, bar.y)].symbol(), text::PROMPT_DRAFT_DOT);
     assert_eq!(buf[(save_x, bar.y)].fg, Color::DarkGray, "草稿恒灰空心点");
 }
@@ -703,7 +730,15 @@ fn divider_stays_plain_and_border_carries_the_title() {
     };
 
     let mut buf = Buffer::empty(panel);
-    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, false);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        false,
+        None,
+    );
     let row = divider_row(&buf);
     assert_eq!(
         row,
@@ -718,24 +753,35 @@ fn divider_stays_plain_and_border_carries_the_title() {
 }
 
 #[test]
-fn toolbar_folders_button_renders_left_of_save_and_hides_in_tree() {
+fn toolbar_folders_button_renders_left_of_page_controls_and_hides_in_tree() {
     let panel = toolbar_panel();
     let editor = Prompt::new(PaneId::from_raw_for_test(1));
+    let page = page_data(1, 2, "Page 1");
+    let counter = Some("1/2");
     let folders = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Folders,
         PromptMode::Editor,
+        counter,
     )
     .expect("folders visible");
-    let save = crate::layout::prompt_toolbar_button_rect(
-        panel,
-        crate::layout::PromptToolbarButton::Save,
-        PromptMode::Editor,
+    let controls = toolbar_page_controls(
+        crate::layout::prompt_toolbar_rect(panel).expect("bar"),
+        "1/2",
+        true,
     )
-    .expect("save visible");
-    assert_eq!(folders.right() + 1, save.x, "紧邻保存点左侧");
+    .expect("controls visible");
+    assert_eq!(folders.right() + 1, controls.prev.x, "紧邻页控件左侧");
     let mut buf = Buffer::empty(panel);
-    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, false);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        false,
+        Some(&page),
+    );
     let label: String = (folders.x..folders.right())
         .map(|x| buf[(x, folders.y)].symbol())
         .collect();
@@ -743,11 +789,20 @@ fn toolbar_folders_button_renders_left_of_save_and_hides_in_tree() {
 
     // 树视图不显示引用文件夹按钮。
     let mut buf = Buffer::empty(panel);
-    render_header(panel, &mut buf, &editor, false, PromptMode::Tree, false);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Tree,
+        false,
+        None,
+    );
     let tree_folders = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Folders,
         PromptMode::Tree,
+        None,
     );
     assert!(tree_folders.is_none());
 }
@@ -763,7 +818,15 @@ fn divider_stays_muted_across_focus_states() {
 
     for focused in [true, false] {
         let mut buf = Buffer::empty(panel);
-        render_header(panel, &mut buf, &editor, focused, PromptMode::Editor, false);
+        render_header(
+            panel,
+            &mut buf,
+            &editor,
+            focused,
+            PromptMode::Editor,
+            false,
+            None,
+        );
         for x in [panel.x, 5, panel.right() - 1] {
             let cell = &buf[(x, divider_y)];
             assert_ne!(cell.fg, Color::Cyan, "分割线恒为暗灰、不随焦点变色: x={x}");
@@ -780,7 +843,15 @@ fn toolbar_hidden_when_prompt_too_short() {
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
     editor.insert_str("hi");
     let mut buf = Buffer::empty(panel);
-    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, false);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        false,
+        None,
+    );
     assert_eq!(buf[(1, 1)].symbol(), " ", "内容区过矮不绘制工具栏");
     assert_eq!(buf[(2, 1)].symbol(), " ");
 }
@@ -1197,7 +1268,7 @@ fn page_data(current: usize, total: usize, name: &str) -> PageHeaderData<'_> {
 }
 
 #[test]
-fn title_row_shows_item_name_page_name_and_controls() {
+fn title_row_shows_item_name_and_page_title_only() {
     let panel = Rect::new(0, 0, 56, 8);
     let row = title_row_render(
         panel,
@@ -1209,122 +1280,67 @@ fn title_row_shows_item_name_page_name_and_controls() {
     );
     assert!(row.contains(" named prompt "), "{row}");
     assert!(row.contains("· Intro"), "页名跟随条目名: {row}");
-    assert!(row.contains("2/4"), "页码: {row}");
-    assert!(row.contains('‹') && row.contains('›'), "左右箭头: {row}");
+    assert!(!row.contains("2/4"), "页码已移到工具栏: {row}");
+    assert!(
+        !row.contains('‹') && !row.contains('›'),
+        "标题行无箭头: {row}"
+    );
     // 落在分割线行上：两端以 `├` / `┤` 衔接边框。
     assert!(row.starts_with(text::DIVIDER_LEFT_JOIN), "{row}");
     assert!(row.ends_with(text::DIVIDER_RIGHT_JOIN), "{row}");
 }
 
 #[test]
-fn page_control_hit_areas() {
+fn toolbar_page_control_hit_areas() {
     let panel = Rect::new(0, 0, 56, 8);
-    let border = crate::ui::prompt_frame::title_row(panel).expect("title row");
+    let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar");
     let data = TitleRowData {
         title: Some("named prompt"),
         draft: false,
         page: Some(page_data(2, 4, "Intro")),
     };
-    let controls = page_controls(border, "2/4").expect("controls visible");
-    let row = border.y;
+    let controls = toolbar_page_controls(bar, "2/4", true).expect("controls visible");
     for (rect, expected) in [
         (controls.prev, PageControl::Prev),
         (controls.counter, PageControl::Counter),
         (controls.next, PageControl::Next),
     ] {
-        assert_eq!(page_control_at(border, &data, rect.x, row), Some(expected));
+        assert_eq!(page_control_at(bar, &data, rect.x, bar.y), Some(expected));
     }
-    // 页名段为纯展示，点击不产生控件命中。
-    let row_text = title_row_render(panel, &data);
-    let byte = row_text.find("· Intro").expect("name visible");
-    let name_col = border.x + u16::try_from(row_text[..byte].chars().count()).expect("col") + 2;
+    // 标题行页名为纯展示；工具栏左侧空白也不产生控件命中。
+    let title = crate::ui::prompt_frame::title_row(panel).expect("title row");
     assert_eq!(
-        page_control_at(border, &data, name_col, row),
+        page_control_at(bar, &data, bar.x + 3, bar.y),
         None,
-        "页名为纯展示，不命中: row={row_text}"
-    );
-    // 条目名与边框空白不产生控件命中。
-    assert_eq!(
-        page_control_at(border, &data, border.x + 3, row),
-        None,
-        "条目名不响应"
+        "左侧按钮区不响应页控件"
     );
     assert_eq!(
-        page_control_at(border, &data, border.x, row),
+        page_control_at(bar, &data, controls.prev.x, title.y),
         None,
-        "左端 `├` 不响应"
-    );
-    assert_eq!(
-        page_control_at(border, &data, controls.prev.x, row + 1),
-        None,
-        "非标题行不响应"
+        "非工具栏行不响应"
     );
 }
 
 #[test]
-fn arrows_grey_out_at_page_edges() {
-    let panel = Rect::new(0, 0, 56, 8);
-    let border = crate::ui::prompt_frame::title_row(panel).expect("title row");
-    let controls = page_controls(border, "1/2").expect("controls");
-
-    let mut buf = Buffer::empty(panel);
-    paint_title_row(
-        &mut buf,
-        border,
-        &TitleRowData {
-            title: Some("t"),
-            draft: false,
-            page: Some(page_data(1, 2, "Page 1")),
-        },
-        None,
-    );
-    assert_eq!(
-        buf[(controls.prev.x, border.y)].fg,
-        Color::Reset,
-        "第一页左箭头置灰"
-    );
-    assert_eq!(
-        buf[(controls.next.x, border.y)].fg,
-        Color::Cyan,
-        "右箭头可用"
-    );
-
-    let mut buf = Buffer::empty(panel);
-    paint_title_row(
-        &mut buf,
-        border,
-        &TitleRowData {
-            title: Some("t"),
-            draft: false,
-            page: Some(page_data(2, 2, "Page 2")),
-        },
-        None,
-    );
-    assert_eq!(
-        buf[(controls.next.x, border.y)].fg,
-        Color::Reset,
-        "末页右箭头置灰"
-    );
-    assert_eq!(buf[(controls.prev.x, border.y)].fg, Color::Cyan);
-}
-
-#[test]
-fn page_controls_hide_when_too_narrow() {
-    let narrow = crate::ui::prompt_frame::title_row(Rect::new(0, 0, 12, 8)).expect("title row");
-    assert!(page_controls(narrow, "1/2").is_none(), "放不下整组时隐藏");
-    let wide = crate::ui::prompt_frame::title_row(Rect::new(0, 0, 56, 8)).expect("title row");
-    assert!(page_controls(wide, "1/2").is_some());
+fn toolbar_page_controls_degrade_when_narrow() {
+    let narrow = crate::layout::prompt_toolbar_rect(Rect::new(0, 0, 12, 8)).expect("toolbar");
     assert!(
-        page_controls(wide, "999/1000").is_some(),
+        toolbar_page_controls(narrow, "1/2", true).is_none(),
+        "放不下整组时隐藏"
+    );
+    let wide = crate::layout::prompt_toolbar_rect(Rect::new(0, 0, 56, 8)).expect("toolbar");
+    assert!(toolbar_page_controls(wide, "1/2", true).is_some());
+    assert!(
+        toolbar_page_controls(wide, "999/1000", true).is_some(),
         "页码变宽仍完整容纳"
     );
 }
 
 #[test]
 fn title_row_degrades_page_name_before_item_name() {
-    // 宽面板：条目名与页名都完整。
+    // 宽面板：条目名完整，超长页名被截断。
     let wide = Rect::new(0, 0, 56, 8);
-    let long_name = "y".repeat(40);
+    let long_name = "y".repeat(80);
     let row = title_row_render(
         wide,
         &TitleRowData {
@@ -1334,14 +1350,11 @@ fn title_row_degrades_page_name_before_item_name() {
         },
     );
     assert!(row.contains(" item "), "条目名优先完整: {row}");
-    assert!(row.contains("1/3"), "页控件完整: {row}");
     assert!(!row.contains(&long_name), "页名被截断: {row}");
     assert!(row.contains('…'), "页名以省略号收尾: {row}");
 
-    // 极窄：页控件整组隐藏，只剩截断的条目名，两端衔接符不被压到。
+    // 极窄：只剩截断的条目名，两端衔接符不被压到。
     let narrow = Rect::new(0, 0, 10, 8);
-    let border = crate::ui::prompt_frame::title_row(narrow).expect("title row");
-    assert!(page_controls(border, "1/3").is_none());
     let row = title_row_render(
         narrow,
         &TitleRowData {
@@ -1352,7 +1365,7 @@ fn title_row_degrades_page_name_before_item_name() {
     );
     assert!(row.starts_with(text::DIVIDER_LEFT_JOIN), "{row}");
     assert!(row.ends_with(text::DIVIDER_RIGHT_JOIN), "{row}");
-    assert!(!row.contains("1/3"), "页控件整组隐藏: {row}");
+    assert!(!row.contains("1/3"), "标题行不承载页码: {row}");
     assert!(row.contains('…'), "条目名截断: {row}");
 }
 
@@ -1379,10 +1392,9 @@ fn title_row_draft_uses_muted_style() {
 }
 
 #[test]
-fn title_row_draws_status_label_left_of_page_controls() {
+fn title_row_status_label_sits_at_right_edge() {
     let panel = Rect::new(0, 0, 56, 8);
     let border = crate::ui::prompt_frame::title_row(panel).expect("title row");
-    let controls = page_controls(border, "2/4").expect("controls");
     let data = TitleRowData {
         title: Some("item"),
         draft: false,
@@ -1399,7 +1411,11 @@ fn title_row_draws_status_label_left_of_page_controls() {
     let x = panel.x + u16::try_from(row[..byte].chars().count()).expect("col fits");
     assert_eq!(buf[(x, border.y)].fg, Color::Yellow, "in_progress 标签黄色");
     let width = u16::try_from(text::TEMPLATE_BUTTON_RUN.chars().count()).expect("width");
-    assert_eq!(x + width + 1, controls.prev.x, "标签右侧留 1 列再排箭头");
+    assert_eq!(
+        x + width + 1,
+        panel.right() - 1,
+        "标签贴右端、留 1 列边框线"
+    );
 
     // 三态各自颜色：todo 蓝、done 绿（与旧边框语义一致）。
     for (status, color) in [
@@ -1411,21 +1427,15 @@ fn title_row_draws_status_label_left_of_page_controls() {
         assert_eq!(buf[(x, border.y)].fg, color, "{status:?} 标签颜色");
     }
 
-    // 极窄：隐藏状态标签，优先保留页控件与标题。
-    let narrow = Rect::new(0, 0, 20, 8);
+    // 极窄：隐藏状态标签，优先保留标题。
+    let narrow = Rect::new(0, 0, 10, 8);
     let narrow_border = crate::ui::prompt_frame::title_row(narrow).expect("title row");
-    let data = TitleRowData {
-        title: Some("i"),
-        draft: false,
-        page: Some(page_data(1, 1, "P")),
-    };
     let mut buf = Buffer::empty(narrow);
     paint_title_row(&mut buf, narrow_border, &data, Some(TemplateStatus::Todo));
     let row: String = (narrow.x..narrow.right())
         .map(|x| buf[(x, narrow_border.y)].symbol())
         .collect();
     assert!(!row.contains(text::TEMPLATE_BUTTON_TODO), "{row}");
-    assert!(row.contains("1/1"), "{row}");
 }
 
 #[test]

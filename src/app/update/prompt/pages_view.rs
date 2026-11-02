@@ -34,6 +34,7 @@ pub fn show_prompt_pages(state: &mut AppState) -> bool {
     state.prompt.clear_panel();
     state.selection = None;
     state.prompt_tree_hover = None;
+    state.prompt_recent_hover = None;
     let visible = prompt_tree_visible_rows(state);
     let Some(ws) = state.workspaces.get_mut(workspace) else {
         return false;
@@ -65,6 +66,7 @@ pub fn hide_prompt_pages(state: &mut AppState) -> bool {
     };
     ws.prompt_panel.mode = PromptMode::Editor;
     state.prompt_tree_hover = None;
+    state.prompt_recent_hover = None;
     true
 }
 

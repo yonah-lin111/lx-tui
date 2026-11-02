@@ -103,7 +103,9 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
 
     // 高亮：命令名绿色加粗；标题独立成行 Cyan 下划线；左侧色条固定 lx 粉。
     let terminal = draw(&state, &config);
-    let start_row = area.y;
+    let start_row = (area.y..area.bottom())
+        .find(|y| line_text(&terminal, *y).contains("addTemplate"))
+        .expect("template start row visible");
     let row = line_text(&terminal, start_row);
     assert_eq!(
         terminal.backend().buffer()[(area.x, start_row)].symbol(),
@@ -144,7 +146,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     // 块内动作按钮常显；状态标签只在标题行。
     let buttons = ui::prompt::template_buttons(&state.prompt, area);
     assert_eq!(buttons.len(), 3, "宽屏下复制/清理/删除按钮可见");
-    let row = line_text(&terminal, area.y);
+    let row = line_text(&terminal, start_row);
     assert!(!row.contains(ui::text::TEMPLATE_BUTTON_TODO), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_CLEAN), "{row}");
@@ -200,7 +202,10 @@ fn narrow_prompt_keeps_buttons_and_ellipsizes_header() {
 
     let area = layout::prompt_text_rect(view.prompt);
     let terminal = draw(&state, &config);
-    let row = line_text(&terminal, area.y);
+    let start_row = (area.y..area.bottom())
+        .find(|y| line_text(&terminal, *y).contains(ui::text::TEMPLATE_BUTTON_COPY))
+        .expect("窄屏动作按钮行可见");
+    let row = line_text(&terminal, start_row);
     assert!(
         row.contains(ui::text::TEMPLATE_BUTTON_COPY),
         "窄屏动作按钮不隐藏: {row}"

@@ -629,6 +629,7 @@ fn item_rows_with_different_digit_counts_align_vertical_bars() {
             id: crate::app::prompt::PromptPageId::Saved(100 + index),
             name: format!("todo-{index}"),
             content: "&&& a --start\n&&& a --end".into(),
+            updated_at: 0,
         });
     }
     for index in 0..20 {
@@ -636,6 +637,7 @@ fn item_rows_with_different_digit_counts_align_vertical_bars() {
             id: crate::app::prompt::PromptPageId::Saved(200 + index),
             name: format!("done-{index}"),
             content: "&&& b --start\n&&& b --end done".into(),
+            updated_at: 0,
         });
     }
 

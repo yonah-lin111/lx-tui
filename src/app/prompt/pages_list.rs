@@ -38,6 +38,19 @@ pub fn page_title_status(content: &str) -> (Option<String>, Option<TemplateStatu
     (title, Some(span.status))
 }
 
+/// 页显示标题：优先块标题，其次页名，空页名回退 `Page N`。
+pub fn page_display_title(page: &PromptPage, index: usize, content: &str) -> String {
+    let (block_title, _) = page_title_status(content);
+    block_title.unwrap_or_else(|| {
+        let trimmed = page.name.trim();
+        if trimmed.is_empty() {
+            text::default_page_name(index + 1)
+        } else {
+            trimmed.to_string()
+        }
+    })
+}
+
 /// 页列表全部行（按页顺序），按显示标题过滤（大小写不敏感子串，复用 `name_matches`）。
 pub fn page_rows(pages: &[PromptPage], active: PromptPageId, query: &str) -> Vec<PageRow> {
     let query = query.trim().to_lowercase();
@@ -45,15 +58,8 @@ pub fn page_rows(pages: &[PromptPage], active: PromptPageId, query: &str) -> Vec
         .iter()
         .enumerate()
         .filter_map(|(index, page)| {
-            let (block_title, status) = page_title_status(&page.content);
-            let title = block_title.unwrap_or_else(|| {
-                let trimmed = page.name.trim();
-                if trimmed.is_empty() {
-                    text::default_page_name(index + 1)
-                } else {
-                    trimmed.to_string()
-                }
-            });
+            let title = page_display_title(page, index, &page.content);
+            let (_, status) = page_title_status(&page.content);
             name_matches(&title, &query).then_some(PageRow {
                 page: page.id,
                 title,

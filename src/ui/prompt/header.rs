@@ -1,8 +1,7 @@
 //! prompt 标题行与页控件：只读状态，无 IO。
 //!
-//! 编辑视图在**工具栏下方的分割线**上内嵌 `条目名 · 页名`（左侧）、
-//! 状态标签 `[todo]`/`[run]`/`[done]`（页控件左侧，按状态着色）与 `‹ n/m ›`（右侧），
-//! 页列表视图内嵌 `条目名 · pages`（左侧）与无箭头的 `n/m`（右侧），
+//! 工具栏行：左组 `[≡]/[/] [rec] [←] [→]`，右组 `[refDir] ‹ n/m › ●`（页视图为 `n/m`）；
+//! 分割线标题行：左侧 `条目名 · 页名`，右侧状态标签 `[todo]`/`[run]`/`[done]`；
 //! 树视图的标题行为纯 `─`、不显示状态与页控件。
 //! 抢宽度时的优先级为 页控件 → 状态标签 → 条目名 → 页名（页控件永不截断）。
 
@@ -14,6 +13,10 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::markdown::TemplateStatus;
 use crate::app::prompt::{Prompt, PromptMode};
 use crate::ui::{style, text};
+
+pub use crate::layout::{
+    PageControl, PromptPageControls, page_controls, page_controls_with, toolbar_page_controls,
+};
 
 use super::{render_divider, render_toolbar};
 
@@ -32,81 +35,11 @@ pub struct TitleRowData<'a> {
     pub page: Option<PageHeaderData<'a>>,
 }
 
-/// 标题行页控件几何：左箭头、计数、右箭头（`arrows == false` 时左右箭头宽度为 0）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PromptPageControls {
-    pub prev: Rect,
-    pub counter: Rect,
-    pub next: Rect,
-}
-
-/// 标题行控件命中种类。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PageControl {
-    Prev,
-    Next,
-    Counter,
-}
-
-/// 标题行页控件几何（带左右箭头 `‹ 2/4 ›`）。
-pub fn page_controls(area: Rect, counter: &str) -> Option<PromptPageControls> {
-    page_controls_with(area, counter, true)
-}
-
-/// 标题行页控件几何：`arrows` 为真时排布 `‹ n/m ›`，为假时仅排布计数 `n/m`（`prev`/`next` 宽 0）。
-///
-/// 左边框之后至少要有 2 列留给标题/页名，否则整组隐藏（返回 None）；
-/// 页控件是最高优先级，可用时永不截断。
-pub fn page_controls_with(area: Rect, counter: &str, arrows: bool) -> Option<PromptPageControls> {
-    if area.width == 0 {
-        return None;
-    }
-    let counter_width = u16::try_from(UnicodeWidthStr::width(counter)).unwrap_or(u16::MAX);
-    let title_start = area.x.saturating_add(2);
-    if arrows {
-        // 右边角前一列留 `─`，再往左才是 `›`。
-        let next = Rect::new(area.right().saturating_sub(3), area.y, 1, 1);
-        let counter_rect = Rect::new(
-            next.x.saturating_sub(1).saturating_sub(counter_width),
-            area.y,
-            counter_width,
-            1,
-        );
-        let prev = Rect::new(counter_rect.x.saturating_sub(2), area.y, 1, 1);
-        let title_width = prev.x.saturating_sub(1).saturating_sub(title_start);
-        (title_width >= 2 && prev.x >= title_start).then_some(PromptPageControls {
-            prev,
-            counter: counter_rect,
-            next,
-        })
-    } else {
-        let right_edge = area.right().saturating_sub(2);
-        let counter_x = right_edge.saturating_sub(counter_width);
-        let counter_rect = Rect::new(counter_x, area.y, counter_width, 1);
-        let prev = Rect::new(counter_x, area.y, 0, 1);
-        let next = Rect::new(right_edge, area.y, 0, 1);
-        let title_width = prev.x.saturating_sub(1).saturating_sub(title_start);
-        (title_width >= 2 && prev.x >= title_start).then_some(PromptPageControls {
-            prev,
-            counter: counter_rect,
-            next,
-        })
-    }
-}
-
-/// 标题行左侧标题区（页控件与状态标签之前）；无控件时到右边角前一列。
-fn title_text_rect(
-    area: Rect,
-    controls: Option<&PromptPageControls>,
-    status_x: Option<u16>,
-) -> Rect {
-    let end = match controls {
-        Some(controls) => controls.prev.x.saturating_sub(1),
-        None => area.right().saturating_sub(1),
-    };
+/// 标题行左侧标题区（状态标签之前）；无状态标签时到右边角前一列。
+fn title_text_rect(area: Rect, status_x: Option<u16>) -> Rect {
     let end = match status_x {
         Some(x) => x.saturating_sub(1),
-        None => end,
+        None => area.right().saturating_sub(1),
     };
     let x = area.x.saturating_add(2);
     Rect {
@@ -117,34 +50,17 @@ fn title_text_rect(
     }
 }
 
-/// 标题行页控件几何（渲染、命中与状态标签共用）。
-fn controls_for(area: Rect, data: &TitleRowData<'_>) -> Option<PromptPageControls> {
-    let page = data.page.as_ref()?;
-    page_controls_with(
-        area,
-        &text::page_counter(page.current, page.total),
-        page.arrows,
-    )
-}
-
 /// 本页模板块状态标签矩形（渲染、点击命中与 tooltip 共用）；无空间时 None。
-pub fn status_rect(area: Rect, data: &TitleRowData<'_>, status: TemplateStatus) -> Option<Rect> {
-    status_rect_in(area, controls_for(area, data).as_ref(), status).map(|(rect, _)| rect)
+pub fn status_rect(area: Rect, status: TemplateStatus) -> Option<Rect> {
+    status_rect_in(area, status).map(|(rect, _)| rect)
 }
 
-/// 本页模板块状态标签：右对齐贴页控件左侧、与标题区隔 1 列；
+/// 本页模板块状态标签：右对齐到分割线标题行右端（距边框 `┤` 留 1 列 `─`）；
 /// 标题区至少保留 2 列，空间不足时隐藏。
-fn status_rect_in(
-    area: Rect,
-    controls: Option<&PromptPageControls>,
-    status: TemplateStatus,
-) -> Option<(Rect, Style)> {
+fn status_rect_in(area: Rect, status: TemplateStatus) -> Option<(Rect, Style)> {
     let label = text::template_status_label(status);
     let width = u16::try_from(UnicodeWidthStr::width(label)).ok()?;
-    let right = match controls {
-        Some(controls) => controls.prev.x.saturating_sub(1),
-        None => area.right().saturating_sub(1),
-    };
+    let right = area.right().saturating_sub(2);
     let x = right.checked_sub(width)?;
     (x >= area.x.saturating_add(5)).then(|| {
         (
@@ -209,10 +125,10 @@ fn border_title_style(draft: bool) -> Style {
     }
 }
 
-/// 绘制标题行标题、状态标签与页控件；须在面板边框绘制之后调用（覆盖 `─`）。
+/// 绘制标题行标题与状态标签；须在面板边框绘制之后调用（覆盖 `─`）。
 ///
-/// `status` 为本页 `&&&` 模板块状态：`Some` 时在页控件左侧画 `[todo]`/`[run]`/`[done]`，
-/// 颜色按状态（蓝/黄/绿）；空间不足时隐藏标签，优先保留页控件与标题。
+/// `status` 为本页 `&&&` 模板块状态：`Some` 时在标题行最右侧画 `[todo]`/`[run]`/`[done]`，
+/// 颜色按状态（蓝/黄/绿）；空间不足时隐藏标签，优先保留标题。
 pub fn paint_title_row(
     buf: &mut Buffer,
     area: Rect,
@@ -222,13 +138,8 @@ pub fn paint_title_row(
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let controls = controls_for(area, data);
-    let status_area = status.and_then(|status| status_rect_in(area, controls.as_ref(), status));
-    let title_area = title_text_rect(
-        area,
-        controls.as_ref(),
-        status_area.as_ref().map(|(rect, _)| rect.x),
-    );
+    let status_area = status.and_then(|status| status_rect_in(area, status));
+    let title_area = title_text_rect(area, status_area.as_ref().map(|(rect, _)| rect.x));
     let title_style = border_title_style(data.draft);
     if title_area.width > 0 {
         paint_border_text(buf, title_area, data, title_style);
@@ -236,9 +147,6 @@ pub fn paint_title_row(
     if let (Some(status), Some((rect, status_style))) = (status, status_area) {
         let label = text::template_status_label(status);
         buf.set_stringn(rect.x, rect.y, label, usize::from(rect.width), status_style);
-    }
-    if let (Some(controls), Some(page)) = (controls.as_ref(), data.page.as_ref()) {
-        paint_page_controls(buf, controls, page);
     }
 }
 
@@ -265,19 +173,19 @@ fn paint_border_text(buf: &mut Buffer, area: Rect, data: &TitleRowData<'_>, titl
     }
 }
 
-/// 命中标题行页控件：仅箭头與计数响应，页名与条目名为纯展示（返回 None）。
+/// 命中工具栏页控件：仅箭头与计数响应，页名与条目名为纯展示（返回 None）。
 pub fn page_control_at(
-    area: Rect,
+    bar: Rect,
     data: &TitleRowData<'_>,
     column: u16,
     row: u16,
 ) -> Option<PageControl> {
-    if row != area.y {
+    if row != bar.y {
         return None;
     }
     let page = data.page.as_ref()?;
-    let controls = page_controls_with(
-        area,
+    let controls = toolbar_page_controls(
+        bar,
         &text::page_counter(page.current, page.total),
         page.arrows,
     )?;
@@ -286,7 +194,7 @@ pub fn page_control_at(
         (controls.counter, PageControl::Counter),
         (controls.next, PageControl::Next),
     ] {
-        if rect.contains((column, row).into()) {
+        if rect.width > 0 && rect.contains((column, row).into()) {
             return Some(control);
         }
     }
@@ -295,7 +203,8 @@ pub fn page_control_at(
 
 /// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制。
 ///
-/// 分割线先画成空行；调用方随后用 `paint_title_row` 把标题/页控件覆盖上去。
+/// 分割线先画成空行；调用方随后用 `paint_title_row` 把标题/状态标签覆盖上去，
+/// 工具栏页控件（`‹ n/m ›` / `n/m`）由本函数覆盖绘制。
 pub fn render_header(
     panel: Rect,
     buf: &mut Buffer,
@@ -303,12 +212,22 @@ pub fn render_header(
     focused: bool,
     mode: PromptMode,
     draft: bool,
+    page: Option<&PageHeaderData<'_>>,
 ) {
     let Some(header) = crate::layout::prompt_header_rect(panel) else {
         return;
     };
     render_divider(panel, header, buf, focused);
-    render_toolbar(panel, buf, prompt, mode, draft);
+    let counter = page.map(|page| text::page_counter(page.current, page.total));
+    render_toolbar(panel, buf, prompt, mode, draft, counter.as_deref());
+    if let (Some(page), Some(counter), Some(bar)) = (
+        page,
+        counter.as_deref(),
+        crate::layout::prompt_toolbar_rect(panel),
+    ) && let Some(controls) = toolbar_page_controls(bar, counter, page.arrows)
+    {
+        paint_page_controls(buf, &controls, page);
+    }
 }
 
 /// 绘制页控件：`‹` / `›` 在边界处置灰（`arrows == false` 时不绘制）；计数用边框标题色。

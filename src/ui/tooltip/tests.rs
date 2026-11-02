@@ -138,6 +138,7 @@ fn hits_prompt_toolbar_and_pin_but_not_when_collapsed() {
         view.prompt,
         layout::PromptToolbarButton::Undo,
         PromptMode::Editor,
+        Some("1/2"),
     )
     .expect("undo button visible");
     assert_eq!(

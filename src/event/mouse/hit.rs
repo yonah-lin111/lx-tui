@@ -68,6 +68,29 @@ pub(crate) fn handle_prompt_scrollbar_press(
     true
 }
 
+/// 最近页面抽屉滚动条按下：thumb 开始拖拽，轨道点击跳转；返回是否命中。
+pub(crate) fn handle_prompt_recent_scrollbar_press(
+    state: &mut AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some(bar) = ui::prompt_frame::prompt_recent_scrollbar(view.prompt, state) else {
+        return false;
+    };
+    if !bar.track.contains((column, row).into()) {
+        return false;
+    }
+    match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+        Some(grab) => state.prompt_recent_scroll_drag = Some(grab),
+        None => {
+            let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+            update::set_prompt_recent_scroll(state, offset, bar.visible, bar.total);
+        }
+    }
+    true
+}
+
 /// Agents 滚动条按下：thumb 开始拖拽，轨道点击跳转；不改变焦点；返回是否命中。
 pub(crate) fn handle_agent_scrollbar_press(
     state: &mut AppState,
@@ -537,7 +560,9 @@ pub(crate) fn pane_content_inner(
         if !update::prompt_panel_active(state) {
             return Rect::ZERO;
         }
-        paste::prompt_text_area(view)
+        let panel = &state.prompt_owner().prompt_panel;
+        let recent_count = crate::app::prompt::recent_page_count(panel);
+        crate::layout::prompt_body_split(view.prompt, panel.recent_open, recent_count).main
     } else {
         inner
     }

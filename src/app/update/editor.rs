@@ -48,6 +48,11 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
             toggle_prompt_pages(state);
             return;
         }
+        EditorCommand::ToggleRecentPages => {
+            state.prompt.clear_panel();
+            crate::app::update::toggle_prompt_recent(state);
+            return;
+        }
         _ => {}
     }
     // 树视图轻量接管按键：上下移动、回车激活、左右展开折叠，其余进入搜索框。
@@ -124,8 +129,10 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         }
         EditorCommand::Undo => state.prompt.undo(),
         EditorCommand::Redo => state.prompt.redo(),
-        EditorCommand::Escape | EditorCommand::TogglePromptList | EditorCommand::TogglePageList => {
-        }
+        EditorCommand::Escape
+        | EditorCommand::TogglePromptList
+        | EditorCommand::TogglePageList
+        | EditorCommand::ToggleRecentPages => {}
     }
 }
 

@@ -152,6 +152,8 @@ pub enum EditorCommand {
     TogglePromptList,
     /// Ctrl/Cmd+P：切换页列表视图与编辑视图。
     TogglePageList,
+    /// Ctrl/Cmd+R：开关底部最近修改页面抽屉。
+    ToggleRecentPages,
     Undo,
     Redo,
     Escape,

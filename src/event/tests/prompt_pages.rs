@@ -153,12 +153,12 @@ fn clicking_title_counter_toggles_between_editor_and_pages() {
     let config = Config::default();
     let mut state = paged_prompt_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
-    let title = ui::prompt_frame::title_row(geo.view.prompt).expect("title row");
+    let bar = crate::layout::prompt_toolbar_rect(geo.view.prompt).expect("toolbar");
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
     // Editor 视图下点击计数：进入 Pages 视图。
-    let editor_controls = ui::prompt::page_controls(title, "1/2").expect("controls");
+    let editor_controls = ui::prompt::toolbar_page_controls(bar, "1/2", true).expect("controls");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -175,7 +175,7 @@ fn clicking_title_counter_toggles_between_editor_and_pages() {
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Pages);
 
     // Pages 视图下点击计数（无箭头几何）：返回 Editor 视图。
-    let pages_controls = ui::prompt::page_controls_with(title, "1/2", false).expect("controls");
+    let pages_controls = ui::prompt::toolbar_page_controls(bar, "1/2", false).expect("controls");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),

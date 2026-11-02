@@ -82,3 +82,19 @@ fn network_probe_is_bounded() {
         started.elapsed()
     );
 }
+
+#[test]
+fn relative_time_labels_cover_each_bucket() {
+    let now = 1_700_000_000;
+    assert_eq!(format_relative_time(0, now), "[now]");
+    assert_eq!(format_relative_time(now + 10, now), "[now]");
+    assert_eq!(format_relative_time(now - 59, now), "[now]");
+    assert_eq!(format_relative_time(now - 60, now), "[1m]");
+    assert_eq!(format_relative_time(now - 5 * 60, now), "[5m]");
+    assert_eq!(format_relative_time(now - 3_600, now), "[1h]");
+    assert_eq!(format_relative_time(now - 2 * 3_600, now), "[2h]");
+    assert_eq!(format_relative_time(now - 86_400, now), "[1d]");
+    assert_eq!(format_relative_time(now - 3 * 86_400, now), "[3d]");
+    // 30 天起退化为固定月日（UTC）。
+    assert_eq!(format_relative_time(1_697_328_000, now), "[10-15]");
+}

@@ -288,19 +288,28 @@ pub(crate) fn handle_mouse_moved(
         *dirty = true;
     }
     // 提示词树/页列表悬停：仅树视图或页视图且在文本区内；指针离开即清空。
+    let prompt_main = {
+        let panel = &state.prompt_owner().prompt_panel;
+        crate::layout::prompt_body_split(
+            view.prompt,
+            panel.recent_open,
+            crate::app::prompt::recent_page_count(panel),
+        )
+        .main
+    };
     let tree_hover =
         if hovering_toast || state.prompt_drag.is_some() || !update::prompt_panel_active(state) {
             None
         } else if update::prompt_tree_mode(state) {
             ui::prompt::tree::row_at(
-                crate::layout::prompt_text_rect(view.prompt),
+                prompt_main,
                 &state.prompt_owner().prompt_panel,
                 mouse.column,
                 mouse.row,
             )
         } else if update::prompt_pages_mode(state) {
             ui::prompt::pages::page_row_at(
-                crate::layout::prompt_text_rect(view.prompt),
+                prompt_main,
                 &state.prompt_owner().prompt_panel,
                 mouse.column,
                 mouse.row,
@@ -309,6 +318,15 @@ pub(crate) fn handle_mouse_moved(
             None
         };
     if update::set_prompt_tree_hover(state, tree_hover) {
+        *dirty = true;
+    }
+    // 最近页面抽屉条目悬停：两行同时高亮；指针离开即清空。
+    let recent_hover = if hovering_toast || state.prompt_drag.is_some() {
+        None
+    } else {
+        ui::prompt_frame::prompt_recent_row_at(view.prompt, state, mouse.column, mouse.row)
+    };
+    if update::set_prompt_recent_hover(state, recent_hover) {
         *dirty = true;
     }
     // 按钮 tooltip：拖拽排序/列表拖拽或指针在 toast 上时不触发；目标变化重置显示计时。

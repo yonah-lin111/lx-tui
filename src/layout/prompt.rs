@@ -21,14 +21,30 @@ const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 3;
 const PROMPT_UNDO_REDO_WIDTH: u16 = 3;
 /// 工具栏按钮之间的空档（列）。
 const PROMPT_TOOLBAR_BUTTON_GAP: u16 = 1;
+/// `[rec]` 最近页面抽屉按钮宽度（列）。
+const PROMPT_RECENT_WIDTH: u16 = 5;
 /// 树视图 `[tmp]` 按钮宽度（列）。
 const PROMPT_TEMP_PROMPT_WIDTH: u16 = 5;
-/// 显示 `[tmp]`（右对齐）所需的最小内容区宽度（列）：不足时隐藏，避免与左侧模式按钮重叠。
-const PROMPT_TEMP_PROMPT_MIN_WIDTH: u16 =
-    PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_TEMP_PROMPT_WIDTH + 1;
-/// 引用文件夹按钮（`[refDir]`）宽度（列）；仅编辑视图显示、位于保存点左侧。
+/// 显示 `[tmp]`（右对齐）所需的最小内容区宽度（列）：不足时隐藏，避免与左侧按钮重叠。
+const PROMPT_TEMP_PROMPT_MIN_WIDTH: u16 = PROMPT_TOOLBAR_BUTTON_WIDTH
+    + PROMPT_TOOLBAR_BUTTON_GAP
+    + PROMPT_RECENT_WIDTH
+    + PROMPT_TOOLBAR_BUTTON_GAP
+    + PROMPT_TEMP_PROMPT_WIDTH
+    + 1;
+/// 引用文件夹按钮（`[refDir]`）宽度（列）；仅编辑视图显示、位于页控件左侧。
 pub const PROMPT_FOLDERS_WIDTH: u16 = 8;
-/// 编辑视图左组 `[≡] [←] [→]` 所需的最小内容区宽度（列）：左组总宽 11 + 1 列间隔 + 1 列保存点 = 13。
+/// 左侧按钮组（模式 + `[rec]` + 撤销/重做）所需的最小内容区宽度（列）。
+const PROMPT_LEFT_GROUP_WITH_RECENT_WIDTH: u16 = PROMPT_TOOLBAR_BUTTON_WIDTH
+    + PROMPT_TOOLBAR_BUTTON_GAP
+    + PROMPT_RECENT_WIDTH
+    + PROMPT_TOOLBAR_BUTTON_GAP
+    + PROMPT_UNDO_REDO_WIDTH
+    + PROMPT_TOOLBAR_BUTTON_GAP
+    + PROMPT_UNDO_REDO_WIDTH
+    + PROMPT_TOOLBAR_BUTTON_GAP
+    + 1;
+/// 窄屏收起 `[rec]` 后左侧按钮组（模式 + 撤销/重做）所需的最小内容区宽度（列）。
 const PROMPT_LEFT_GROUP_MIN_WIDTH: u16 = PROMPT_TOOLBAR_BUTTON_WIDTH
     + PROMPT_TOOLBAR_BUTTON_GAP
     + PROMPT_UNDO_REDO_WIDTH
@@ -36,9 +52,6 @@ const PROMPT_LEFT_GROUP_MIN_WIDTH: u16 = PROMPT_TOOLBAR_BUTTON_WIDTH
     + PROMPT_UNDO_REDO_WIDTH
     + PROMPT_TOOLBAR_BUTTON_GAP
     + 1;
-/// 显示引用文件夹按钮 `[refDir]`（8 列）所需的最小内容区宽度（列）：在保存点左侧让出宽度与间距（13 + 1 + 8 = 22）。
-pub(crate) const PROMPT_FOLDERS_MIN_WIDTH_EDITOR: u16 =
-    PROMPT_LEFT_GROUP_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_FOLDERS_WIDTH;
 
 /// 提示词面板视图模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +64,98 @@ pub enum PromptMode {
     Pages,
 }
 
+/// 工具栏页控件几何：左箭头、计数、右箭头（`arrows == false` 时左右箭头宽度为 0）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PromptPageControls {
+    pub prev: Rect,
+    pub counter: Rect,
+    pub next: Rect,
+}
+
+/// 工具栏页控件命中种类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageControl {
+    Prev,
+    Next,
+    Counter,
+}
+
+/// 标题行页控件几何（带左右箭头 `‹ 2/4 ›`）；历史 API，供旧测试与通用几何使用。
+pub fn page_controls(area: Rect, counter: &str) -> Option<PromptPageControls> {
+    page_controls_with(area, counter, true)
+}
+
+/// 标题行页控件几何：`arrows` 为真时排布 `‹ n/m ›`，为假时仅排布计数 `n/m`。
+///
+/// 左边框之后至少要有 2 列留给标题/页名，否则整组隐藏（返回 None）。
+pub fn page_controls_with(area: Rect, counter: &str, arrows: bool) -> Option<PromptPageControls> {
+    if area.width == 0 {
+        return None;
+    }
+    let counter_width =
+        u16::try_from(unicode_width::UnicodeWidthStr::width(counter)).unwrap_or(u16::MAX);
+    let title_start = area.x.saturating_add(2);
+    if arrows {
+        let next = Rect::new(area.right().saturating_sub(3), area.y, 1, 1);
+        let counter_rect = Rect::new(
+            next.x.saturating_sub(1).saturating_sub(counter_width),
+            area.y,
+            counter_width,
+            1,
+        );
+        let prev = Rect::new(counter_rect.x.saturating_sub(2), area.y, 1, 1);
+        let title_width = prev.x.saturating_sub(1).saturating_sub(title_start);
+        (title_width >= 2 && prev.x >= title_start).then_some(PromptPageControls {
+            prev,
+            counter: counter_rect,
+            next,
+        })
+    } else {
+        let right_edge = area.right().saturating_sub(2);
+        let counter_x = right_edge.saturating_sub(counter_width);
+        let counter_rect = Rect::new(counter_x, area.y, counter_width, 1);
+        let prev = Rect::new(counter_x, area.y, 0, 1);
+        let next = Rect::new(right_edge, area.y, 0, 1);
+        let title_width = prev.x.saturating_sub(1).saturating_sub(title_start);
+        (title_width >= 2 && prev.x >= title_start).then_some(PromptPageControls {
+            prev,
+            counter: counter_rect,
+            next,
+        })
+    }
+}
+
+/// 工具栏页控件几何（编辑视图 `‹ n/m ›`、页视图 `n/m`）；左侧至少留出模式按钮。
+pub fn toolbar_page_controls(bar: Rect, counter: &str, arrows: bool) -> Option<PromptPageControls> {
+    if bar.width == 0 {
+        return None;
+    }
+    let counter_width = u16::try_from(unicode_width::UnicodeWidthStr::width(counter)).ok()?;
+    let min_left = bar.x.saturating_add(4);
+    if arrows {
+        // 最右一列留给保存点 `●`，其左一列为空档，再左为 `›`。
+        let next = Rect::new(bar.right().checked_sub(3)?, bar.y, 1, 1);
+        let counter_x = next.x.checked_sub(1)?.checked_sub(counter_width)?;
+        let counter_rect = Rect::new(counter_x, bar.y, counter_width, 1);
+        let prev = Rect::new(counter_rect.x.checked_sub(2)?, bar.y, 1, 1);
+        (prev.x >= min_left).then_some(PromptPageControls {
+            prev,
+            counter: counter_rect,
+            next,
+        })
+    } else {
+        // 无保存点：计数右侧留 1 列空档到边框。
+        let right = bar.right().checked_sub(1)?;
+        let counter_x = right.checked_sub(counter_width)?;
+        let counter_rect = Rect::new(counter_x, bar.y, counter_width, 1);
+        (counter_x >= min_left).then_some(PromptPageControls {
+            prev: Rect::new(counter_x, bar.y, 0, 1),
+            counter: counter_rect,
+            next: Rect::new(right, bar.y, 0, 1),
+        })
+    }
+}
+
 /// prompt 工具栏按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptToolbarButton {
@@ -58,7 +163,9 @@ pub enum PromptToolbarButton {
     Mode,
     /// 树视图 `[tmp]`：新建临时提示词编辑视图（仅树视图显示、不入库）。
     TempPrompt,
-    /// 编辑视图 `[refDir]`：打开引用文件夹菜单（仅编辑视图显示，位于保存点左侧）。
+    /// `[rec]`：开关底部最近修改页面抽屉（三种视图常显）。
+    Recent,
+    /// 编辑视图 `[refDir]`：打开引用文件夹菜单（仅编辑视图显示，位于页控件左侧）。
     Folders,
     Undo,
     Redo,
@@ -154,19 +261,47 @@ pub fn prompt_divider_rect(panel: Rect) -> Option<Rect> {
     })
 }
 
-/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[refDir]` / `[tmp]`
-/// 各自按阈值独立隐藏；各视图模式的按钮集不同）。
+/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[refDir]` / `[tmp]` / `[rec]`
+/// 按阈值独立隐藏；各视图模式的按钮集不同）。
+///
+/// `counter` 为当前页计数（如 `2/4`）：`[refDir]` 紧贴页控件左侧，缺省时按无页控件处理。
 pub fn prompt_toolbar_button_rect(
     panel: Rect,
     button: PromptToolbarButton,
     mode: PromptMode,
+    counter: Option<&str>,
 ) -> Option<Rect> {
     let bar = prompt_toolbar_rect(panel)?;
     let inner = pane_inner_rect(panel);
-    let undo_x = bar.x + PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP;
+    let show_recent = match mode {
+        PromptMode::Editor => inner.width >= PROMPT_LEFT_GROUP_WITH_RECENT_WIDTH,
+        PromptMode::Tree | PromptMode::Pages => {
+            inner.width
+                >= PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_RECENT_WIDTH
+        }
+    };
+    let undo_x = bar.x
+        + PROMPT_TOOLBAR_BUTTON_WIDTH
+        + PROMPT_TOOLBAR_BUTTON_GAP
+        + if show_recent {
+            PROMPT_RECENT_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP
+        } else {
+            0
+        };
     let redo_x = undo_x + PROMPT_UNDO_REDO_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP;
     let rect = match button {
         PromptToolbarButton::Mode => Rect::new(bar.x, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1),
+        PromptToolbarButton::Recent => {
+            if !show_recent {
+                return None;
+            }
+            Rect::new(
+                bar.x + PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP,
+                bar.y,
+                PROMPT_RECENT_WIDTH,
+                1,
+            )
+        }
         PromptToolbarButton::TempPrompt => {
             if mode != PromptMode::Tree || inner.width < PROMPT_TEMP_PROMPT_MIN_WIDTH {
                 return None;
@@ -179,25 +314,41 @@ pub fn prompt_toolbar_button_rect(
             )
         }
         PromptToolbarButton::Folders => {
-            if mode != PromptMode::Editor || inner.width < PROMPT_FOLDERS_MIN_WIDTH_EDITOR {
+            if mode != PromptMode::Editor {
                 return None;
             }
-            Rect::new(
-                bar.right()
-                    .saturating_sub(1 + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_FOLDERS_WIDTH),
-                bar.y,
-                PROMPT_FOLDERS_WIDTH,
-                1,
-            )
+            let x = match counter {
+                Some(counter) => {
+                    let controls = toolbar_page_controls(bar, counter, true)?;
+                    controls
+                        .prev
+                        .x
+                        .checked_sub(1)?
+                        .checked_sub(PROMPT_FOLDERS_WIDTH)?
+                }
+                // 未绑定分页时 `[refDir]` 仍可用：回到保存点左侧的旧位置。
+                None => bar
+                    .right()
+                    .checked_sub(1 + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_FOLDERS_WIDTH)?,
+            };
+            let left_end = if show_recent {
+                redo_x + PROMPT_UNDO_REDO_WIDTH
+            } else {
+                undo_x + PROMPT_UNDO_REDO_WIDTH
+            };
+            if x <= left_end {
+                return None;
+            }
+            Rect::new(x, bar.y, PROMPT_FOLDERS_WIDTH, 1)
         }
         PromptToolbarButton::Undo => {
-            if mode != PromptMode::Editor {
+            if mode != PromptMode::Editor || inner.width < PROMPT_LEFT_GROUP_MIN_WIDTH {
                 return None;
             }
             Rect::new(undo_x, bar.y, PROMPT_UNDO_REDO_WIDTH, 1)
         }
         PromptToolbarButton::Redo => {
-            if mode != PromptMode::Editor {
+            if mode != PromptMode::Editor || inner.width < PROMPT_LEFT_GROUP_MIN_WIDTH {
                 return None;
             }
             Rect::new(redo_x, bar.y, PROMPT_UNDO_REDO_WIDTH, 1)
@@ -218,6 +369,7 @@ pub fn prompt_toolbar_button_at(
     column: u16,
     row: u16,
     mode: PromptMode,
+    counter: Option<&str>,
 ) -> Option<PromptToolbarButton> {
     let bar = prompt_toolbar_rect(panel)?;
     if row != bar.y {
@@ -225,6 +377,7 @@ pub fn prompt_toolbar_button_at(
     }
     [
         PromptToolbarButton::Mode,
+        PromptToolbarButton::Recent,
         PromptToolbarButton::Folders,
         PromptToolbarButton::TempPrompt,
         PromptToolbarButton::Undo,
@@ -233,7 +386,7 @@ pub fn prompt_toolbar_button_at(
     ]
     .into_iter()
     .find(|button| {
-        prompt_toolbar_button_rect(panel, *button, mode)
+        prompt_toolbar_button_rect(panel, *button, mode, counter)
             .is_some_and(|rect| rect.contains((column, row).into()))
     })
 }
@@ -242,4 +395,116 @@ pub fn prompt_toolbar_button_at(
 pub fn prompt_inner_size(rect: Rect) -> (u16, u16) {
     let text = prompt_text_rect(rect);
     (text.width.max(1), text.height.max(1))
+}
+
+/// 主视图与底部 recent 抽屉的上下分割几何。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PromptBodySplit {
+    /// 上方主视图（文本/列表，不含右侧滚动条槽）。
+    pub main: Rect,
+    /// 上方主视图右侧滚动条槽。
+    pub main_scrollbar: Option<Rect>,
+    /// 抽屉顶部分割线行（整行 `├─ recent ─┤`）；抽屉收起时 None。
+    pub recent_divider: Option<Rect>,
+    /// 抽屉内容区（不含右侧滚动条槽）。
+    pub recent_text: Option<Rect>,
+    /// 抽屉右侧独立滚动条槽。
+    pub recent_scrollbar: Option<Rect>,
+    /// 抽屉实际可见条目数（0 表示空态行）。
+    pub visible_entries: usize,
+}
+
+/// 分割主视图与底部抽屉：抽屉最多 3 条（1 行分割线 + 6 行内容），
+/// 且不超过内容区高度的一半；空间不足时优先保障主视图、逐条减少条目。
+pub fn prompt_body_split(panel: Rect, recent_open: bool, recent_count: usize) -> PromptBodySplit {
+    let inner = pane_inner_rect(panel);
+    let body = prompt_body_rect(inner);
+    let main = body_text_rect(body);
+    if !recent_open || body.height == 0 {
+        return PromptBodySplit {
+            main,
+            main_scrollbar: (body.width >= 2).then_some(Rect::new(
+                body.right() - 1,
+                main.y,
+                1,
+                main.height,
+            )),
+            recent_divider: None,
+            recent_text: None,
+            recent_scrollbar: None,
+            visible_entries: 0,
+        };
+    }
+    let max_height = body.height / 2;
+    let mut visible = recent_count.min(crate::app::prompt::RECENT_VISIBLE_ENTRIES);
+    let mut drawer_height = if recent_count == 0 {
+        2
+    } else {
+        1 + 2 * visible as u16
+    };
+    while visible > 0 && drawer_height > max_height {
+        visible -= 1;
+        drawer_height = 1 + 2 * visible as u16;
+    }
+    if (recent_count == 0 && drawer_height > max_height) || (recent_count > 0 && visible == 0) {
+        return PromptBodySplit {
+            main,
+            main_scrollbar: (body.width >= 2).then_some(Rect::new(
+                body.right() - 1,
+                main.y,
+                1,
+                main.height,
+            )),
+            recent_divider: None,
+            recent_text: None,
+            recent_scrollbar: None,
+            visible_entries: 0,
+        };
+    }
+    let divider_y = body.y + body.height - drawer_height;
+    let divider = Rect::new(body.x, divider_y, body.width, 1);
+    let content = Rect::new(
+        body.x,
+        divider_y + 1,
+        body.width,
+        drawer_height.saturating_sub(1),
+    );
+    let scrollbar =
+        (body.width >= 2).then_some(Rect::new(body.right() - 1, content.y, 1, content.height));
+    let recent_text = if body.width >= 2 {
+        Rect {
+            width: content.width - 1,
+            ..content
+        }
+    } else {
+        content
+    };
+    PromptBodySplit {
+        main: Rect {
+            height: main.height.saturating_sub(drawer_height),
+            ..main
+        },
+        main_scrollbar: (body.width >= 2).then_some(Rect::new(
+            body.right() - 1,
+            main.y,
+            1,
+            main.height.saturating_sub(drawer_height),
+        )),
+        recent_divider: Some(divider),
+        recent_text: Some(recent_text),
+        recent_scrollbar: scrollbar,
+        visible_entries: if recent_count == 0 { 0 } else { visible },
+    }
+}
+
+/// 内容区扣除右侧滚动条槽后的可绘制区域（宽 < 2 时不预留）。
+pub fn body_text_rect(body: Rect) -> Rect {
+    if body.width >= 2 {
+        Rect {
+            width: body.width - 1,
+            ..body
+        }
+    } else {
+        body
+    }
 }

@@ -109,6 +109,12 @@ pub const PROMPT_TREE_SEARCH_PLACEHOLDER: &str = "search prompts…";
 pub const PROMPT_TEMP_PROMPT_LABEL: &str = "[tmp]";
 /// 编辑视图引用文件夹按钮：打开引用文件夹菜单。
 pub const PROMPT_FOLDERS_LABEL: &str = "[refDir]";
+/// `[rec]`：开关底部最近修改页面抽屉（三种视图常显）。
+pub const PROMPT_RECENT_LABEL: &str = "[rec]";
+/// 抽屉顶部分割线标签。
+pub const PROMPT_RECENT_SECTION_LABEL: &str = " recent ";
+/// 抽屉空态。
+pub const PROMPT_RECENT_EMPTY: &str = "no recent pages";
 
 /// 引用文件夹弹窗文案。
 pub const MENU_TITLE_REFERENCED_FOLDERS: &str = "Folders";
@@ -1043,6 +1049,7 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             }
         }
         TooltipTarget::PromptTempPrompt => "open temp prompt",
+        TooltipTarget::PromptRecent => "recent pages (^r)",
         TooltipTarget::PromptUndo => "undo (^z)",
         TooltipTarget::PromptRedo => "redo (^y)",
         TooltipTarget::PromptSave => "mark saved",

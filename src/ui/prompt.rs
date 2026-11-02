@@ -3,6 +3,7 @@
 mod header;
 pub mod pages;
 mod panels;
+pub mod recent;
 pub mod tree;
 
 pub use header::*;
@@ -60,14 +61,27 @@ pub(crate) fn render_rule(panel: Rect, y: u16, buf: &mut Buffer, focused: bool) 
     }
 }
 
-/// 工具栏：模式切换按钮常显；编辑视图左组为 `[≡] [←] [→]`，
-/// 右组自右向左为 `● [refDir]`；树视图为 `[/]` + `[tmp]`；页列表视图为 `[/]`。
-fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt, mode: PromptMode, draft: bool) {
+/// 工具栏：模式切换按钮常显；三种视图都带 `[rec]`；编辑视图左组为
+/// `[≡] [rec] [←] [→]`，右组自右向左为 `● ‹ n/m › [refDir]`；
+/// 树视图为 `[/] [rec]` + `[tmp]`；页列表视图为 `[/] [rec]` + `n/m`。
+fn render_toolbar(
+    panel: Rect,
+    buf: &mut Buffer,
+    prompt: &Prompt,
+    mode: PromptMode,
+    draft: bool,
+    counter: Option<&str>,
+) {
     let mode_label = match mode {
         PromptMode::Editor => text::PROMPT_MODE_LIST_LABEL,
         PromptMode::Tree | PromptMode::Pages => text::PROMPT_MODE_EDIT_LABEL,
     };
     let mut buttons = vec![(PromptToolbarButton::Mode, mode_label, style::accent())];
+    buttons.push((
+        PromptToolbarButton::Recent,
+        text::PROMPT_RECENT_LABEL,
+        style::accent(),
+    ));
     match mode {
         PromptMode::Tree => {
             buttons.push((
@@ -119,7 +133,7 @@ fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt, mode: PromptMo
         }
     }
     for (button, label, button_style) in buttons {
-        let Some(rect) = layout::prompt_toolbar_button_rect(panel, button, mode) else {
+        let Some(rect) = layout::prompt_toolbar_button_rect(panel, button, mode, counter) else {
             continue;
         };
         // 整格重置：按钮槽位宽度固定，两态切换时不留旧字形残影。

@@ -7,12 +7,14 @@ mod draft;
 mod drag;
 mod pages;
 mod pages_view;
+mod recent;
 mod tree_view;
 
 pub use draft::*;
 pub use drag::*;
 pub use pages::*;
 pub use pages_view::*;
+pub use recent::*;
 pub use tree_view::*;
 
 use std::path::Path;
@@ -183,6 +185,10 @@ pub fn apply_prompt_tree(
             });
         }
     }
+    if displayed {
+        // 页数量可能变化：抽屉高度与编辑器视口需要按新高度重算。
+        state.prompt_resize_pending = true;
+    }
     true
 }
 
@@ -207,6 +213,7 @@ pub fn show_prompt_tree(state: &mut AppState) {
     state.prompt.clear_panel();
     state.selection = None;
     state.prompt_tree_hover = None;
+    state.prompt_recent_hover = None;
     select_tree_entry_row(state, index);
 }
 
@@ -257,6 +264,7 @@ fn select_tree_entry_row(state: &mut AppState, index: usize) {
 pub fn toggle_prompt_panel_mode(state: &mut AppState) {
     state.prompt_drag = None;
     state.prompt_tree_hover = None;
+    state.prompt_recent_hover = None;
     if prompt_tree_mode(state) {
         restore_or_edit_selected(state);
     } else if prompt_pages_mode(state) {
@@ -313,6 +321,7 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
     let content = state.prompt.text().to_string();
     let prompt = state.prompt.id();
     let revision = state.prompt.revision();
+    let now = crate::platform::current_unix_secs();
     match target {
         PromptEditing::Temp(id) => {
             let Some(temp) = state
@@ -362,6 +371,7 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
                     return;
                 }
                 page.content.clone_from(&content);
+                page.touch(now);
             }
             if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
                 workspace_state.prompt_panel.mark_page_pending(id, page_id);

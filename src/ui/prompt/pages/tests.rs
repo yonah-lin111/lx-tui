@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::app::prompt::{PromptEditing, PromptItem, PromptMode, PromptPage, PromptPageId};
-use crate::ui::prompt::{PageHeaderData, TitleRowData, paint_title_row};
+use crate::ui::prompt::{PageHeaderData, TitleRowData, paint_title_row, toolbar_page_controls};
 use ratatui::style::{Color, Modifier};
 
 fn demo_panel() -> PromptPanel {
@@ -92,7 +92,7 @@ fn long_title_ellipsizes_while_preserving_status_dot() {
 }
 
 #[test]
-fn title_row_in_pages_mode_hides_arrows_and_shows_pages_label_and_counter() {
+fn title_row_in_pages_mode_shows_pages_label_without_controls() {
     let panel = Rect::new(0, 0, 40, 8);
     let mut buf = Buffer::empty(panel);
     let block = ratatui::widgets::Block::bordered();
@@ -116,11 +116,18 @@ fn title_row_in_pages_mode_hides_arrows_and_shows_pages_label_and_counter() {
         .collect();
     assert!(rendered.contains("MyItem"), "{rendered:?}");
     assert!(rendered.contains("· pages"), "{rendered:?}");
-    assert!(rendered.contains("3/4"), "{rendered:?}");
+    assert!(!rendered.contains("3/4"), "页码已移到工具栏: {rendered:?}");
     assert!(
         !rendered.contains(text::PROMPT_PAGE_PREV) && !rendered.contains(text::PROMPT_PAGE_NEXT),
         "Pages 视图标题行不画 ‹ / ›: {rendered:?}"
     );
+
+    // 工具栏仍提供无箭头 `n/m` 计数。
+    let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar");
+    let controls = toolbar_page_controls(bar, "3/4", false).expect("counter visible");
+    assert_eq!(controls.counter.width, 3);
+    assert_eq!(controls.prev.width, 0);
+    assert_eq!(controls.next.width, 0);
 }
 
 #[test]

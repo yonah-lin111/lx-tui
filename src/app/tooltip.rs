@@ -44,6 +44,8 @@ pub enum TooltipTarget {
     SwapPromptSide,
     PromptMode,
     PromptTempPrompt,
+    /// `[rec]`：开关最近修改页面抽屉。
+    PromptRecent,
     /// 编辑视图工具栏的引用文件夹按钮。
     PromptFolders,
     PromptUndo,

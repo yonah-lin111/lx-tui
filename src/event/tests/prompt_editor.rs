@@ -358,15 +358,15 @@ fn page_control_hit_requires_prompt_tab() {
     let config = Config::default();
     let mut state = paged_prompt_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
-    let title = ui::prompt_frame::title_row(geo.view.prompt).expect("title row");
-    let hit = (title.x..title.right())
+    let bar = crate::layout::prompt_toolbar_rect(geo.view.prompt).expect("toolbar");
+    let hit = (bar.x..bar.right())
         .find(|x| {
-            ui::prompt_frame::prompt_page_control_at(geo.view.prompt, &state, *x, title.y).is_some()
+            ui::prompt_frame::prompt_page_control_at(geo.view.prompt, &state, *x, bar.y).is_some()
         })
         .expect("page control visible in Prompt tab");
     state.right_tab = crate::app::state::RightTab::Todo;
     assert!(
-        ui::prompt_frame::prompt_page_control_at(geo.view.prompt, &state, hit, title.y).is_none(),
+        ui::prompt_frame::prompt_page_control_at(geo.view.prompt, &state, hit, bar.y).is_none(),
         "Todo 标签页下不得命中隐藏的页控件"
     );
 }
@@ -454,15 +454,15 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     let mut sessions = HashMap::new();
     let mut dirty = false;
-    let title = ui::prompt_frame::title_row(geo.view.prompt).expect("title row");
+    let bar = crate::layout::prompt_toolbar_rect(geo.view.prompt).expect("toolbar");
     assert_eq!(
-        title.y,
-        crate::layout::pane_inner_rect(geo.view.prompt).y + 1,
-        "页控件已下移到标题行（工具栏下一行），不再是容器顶边框"
+        bar.y,
+        crate::layout::pane_inner_rect(geo.view.prompt).y,
+        "页控件位于工具栏首行"
     );
     // 第一页左箭头置灰：点击不切页、不移动正文光标。
     state.prompt.set_cursor_offset_for_test(0);
-    let controls = ui::prompt::page_controls(title, "1/2").expect("controls");
+    let controls = ui::prompt::toolbar_page_controls(bar, "1/2", true).expect("controls");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -495,7 +495,7 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
     assert_eq!(state.prompt.text(), "beta");
     assert!(state.prompt_focused());
     // 计数：切换到页列表视图；Esc 返回编辑视图。
-    let controls = ui::prompt::page_controls(title, "2/2").expect("controls");
+    let controls = ui::prompt::toolbar_page_controls(bar, "2/2", true).expect("controls");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),

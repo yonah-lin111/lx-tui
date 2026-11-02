@@ -1077,6 +1077,33 @@ fn update_page_content_writes_content_and_rejects_unknown_row() {
 }
 
 #[test]
+fn page_records_expose_updated_at_and_bump_on_update() {
+    let (database, _) = open_test_database("page-updated-at");
+    let workspace = workspace_path("page-updated-at");
+    database
+        .create_prompt(&workspace, None, "p", &[("Page 1".into(), "old".into())])
+        .expect("create");
+    let page = database.list_prompts(&workspace).expect("list")[0].pages[0].clone();
+    assert!(page.updated_at > 0, "新建页必须有修改时间");
+
+    database
+        .conn
+        .execute(
+            "UPDATE workspace_prompt_page SET updated_at = datetime('now', '-1 hour') WHERE id = ?1",
+            params![page.id],
+        )
+        .expect("age page");
+    let aged = database.list_prompts(&workspace).expect("list")[0].pages[0].updated_at;
+    assert!(aged < page.updated_at, "旧时间戳可被读回");
+
+    database
+        .update_page_content(page.id, "new")
+        .expect("update content");
+    let bumped = database.list_prompts(&workspace).expect("list")[0].pages[0].updated_at;
+    assert!(bumped > aged, "正文更新必须刷新 updated_at");
+}
+
+#[test]
 fn deleting_folder_cascades_prompts() {
     let (database, _) = open_test_database("folder-cascade");
     let workspace = workspace_path("folder-cascade");

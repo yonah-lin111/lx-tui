@@ -1402,11 +1402,12 @@ fn prompt_editor_divider_shows_editing_title() {
     assert!(border.contains(text::PROMPT_DRAFT_TITLE), "{border}");
     assert!(!border.contains("[tmp]"), "标题不带 tmp 标识: {border}");
     assert!(
-        !border.contains("Page 1"),
-        "编辑区域左上角不显示页名: {border}"
+        border.contains("Page 1"),
+        "编辑区域左上角展示当前页名: {border}"
     );
-    assert!(border.contains('‹') && border.contains('›'), "{border}");
-    assert!(border.contains("1/1"), "{border}");
+    let toolbar = prompt_line(&lines, &view, crate::layout::pane_inner_rect(view.prompt).y);
+    assert!(toolbar.contains('‹') && toolbar.contains('›'), "{toolbar}");
+    assert!(toolbar.contains("1/1"), "{toolbar}");
     // 标题为未聚焦灰（muted）：前景默认、DIM，即使 prompt 持有焦点。
     let buffer = render_buffer(&state);
     let title_byte = border.find(text::PROMPT_DRAFT_TITLE).expect("title col");
@@ -1546,6 +1547,8 @@ fn prompt_renders_toolbar_and_divider_rows() {
     assert!(toolbar.contains(text::PROMPT_REDO_LABEL), "{toolbar}");
     assert!(toolbar.contains(text::PROMPT_FOLDERS_LABEL), "{toolbar}");
     assert!(toolbar.contains(text::PROMPT_DRAFT_DOT), "{toolbar}");
+    assert!(toolbar.contains('‹') && toolbar.contains('›'), "{toolbar}");
+    assert!(toolbar.contains("1/1"), "{toolbar}");
     assert!(
         !toolbar.contains(text::DIVIDER_MID),
         "分割线不穿过按钮行: {toolbar}"
@@ -1561,8 +1564,8 @@ fn prompt_renders_toolbar_and_divider_rows() {
     assert!(divider.contains(text::DIVIDER_RIGHT_JOIN), "{divider}");
     assert!(divider.contains(text::DIVIDER_MID), "{divider}");
     assert!(divider.contains(text::PROMPT_DRAFT_TITLE), "{divider}");
-    assert!(!divider.contains("Page 1"), "{divider}");
-    assert!(divider.contains("1/1"), "{divider}");
+    assert!(divider.contains("Page 1"), "{divider}");
+    assert!(!divider.contains("1/1"), "页码已移到工具栏: {divider}");
     // 顶边框只承载容器 tab。
     let border = prompt_line(&lines, &view, view.prompt.y);
     assert!(border.contains(text::RIGHT_TAB_PROMPT_LABEL), "{border}");
@@ -1814,6 +1817,7 @@ fn prompt_toolbar_styles_reflect_undo_and_save_state() {
         view.prompt,
         crate::layout::PromptToolbarButton::Undo,
         PromptMode::Editor,
+        Some("1/2"),
     )
     .expect("undo button visible");
     let undo_x = undo.x;

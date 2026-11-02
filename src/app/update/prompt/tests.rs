@@ -44,6 +44,7 @@ fn demo_state() -> AppState {
                 position: 0,
                 name: "Page 1".into(),
                 content: "loose content".into(),
+                updated_at: 0,
             }],
         },
         PromptRecord {
@@ -57,6 +58,7 @@ fn demo_state() -> AppState {
                 position: 0,
                 name: "Page 1".into(),
                 content: "nested content".into(),
+                updated_at: 0,
             }],
         },
     ];
@@ -1576,6 +1578,7 @@ fn apply_tree_unbinds_editing_when_item_removed_by_sharing_panel() {
                 position: 0,
                 name: "Page 1".into(),
                 content: "c".into(),
+                updated_at: 0,
             }],
         }],
     );
@@ -1607,6 +1610,7 @@ fn reload_records(active: Option<i64>, first_content: &str, second: bool) -> Vec
         position: 0,
         name: "Page 1".into(),
         content: first_content.into(),
+        updated_at: 0,
     }];
     if second {
         pages.push(PromptPageRecord {
@@ -1614,6 +1618,7 @@ fn reload_records(active: Option<i64>, first_content: &str, second: bool) -> Vec
             position: 1,
             name: "Page 2".into(),
             content: "second page".into(),
+            updated_at: 0,
         });
     }
     vec![PromptRecord {
@@ -2379,11 +2384,13 @@ fn page_prev_and_next_switch_pages_and_clamp_at_boundaries() {
         id: p2,
         name: "P2".to_string(),
         content: "page 2".to_string(),
+        updated_at: 0,
     });
     temp.pages.push(PromptPage {
         id: p3,
         name: "P3".to_string(),
         content: "page 3".to_string(),
+        updated_at: 0,
     });
     temp.active_page = p2;
     state.prompt.set_text("page 2");
@@ -2419,6 +2426,7 @@ fn page_switch_shortcut_closes_open_slash_panel() {
         id: PromptPageId::Temp(2),
         name: "P2".to_string(),
         content: "page 2".to_string(),
+        updated_at: 0,
     });
     apply_editor(&mut state, EditorCommand::InsertChar('/'));
     assert!(state.prompt.slash_panel().is_some(), "前提：斜杠面板打开");

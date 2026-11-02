@@ -146,8 +146,14 @@ fn targets(
     }
     if !state.prompt_collapsed && state.right_tab == RightTab::Prompt {
         let mode = state.prompt_owner().prompt_panel.mode;
+        let counter = ui::prompt_frame::prompt_page_header(state)
+            .map(|page| text::page_counter(page.current, page.total));
         for (button, target) in [
             (layout::PromptToolbarButton::Mode, TooltipTarget::PromptMode),
+            (
+                layout::PromptToolbarButton::Recent,
+                TooltipTarget::PromptRecent,
+            ),
             (
                 layout::PromptToolbarButton::Folders,
                 TooltipTarget::PromptFolders,
@@ -160,7 +166,9 @@ fn targets(
             (layout::PromptToolbarButton::Redo, TooltipTarget::PromptRedo),
             (layout::PromptToolbarButton::Save, TooltipTarget::PromptSave),
         ] {
-            if let Some(area) = layout::prompt_toolbar_button_rect(view.prompt, button, mode) {
+            if let Some(area) =
+                layout::prompt_toolbar_button_rect(view.prompt, button, mode, counter.as_deref())
+            {
                 targets.push((target, area));
             }
         }

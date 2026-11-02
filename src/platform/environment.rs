@@ -160,6 +160,37 @@ pub fn format_utc_timestamp_secs(secs: i64) -> String {
     format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} UTC")
 }
 
+/// 当前 UTC Unix 秒数；系统时钟不可用时返回 0。
+pub fn current_unix_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| i64::try_from(elapsed.as_secs()).ok())
+        .unwrap_or(0)
+}
+
+/// 最近修改时间的简短英文标签：`[now]` / `[5m]` / `[2h]` / `[3d]` / `[10-15]`。
+///
+/// `updated_secs` 为 UTC Unix 秒数；非正值视为刚修改。未来时间按 `now` 处理。
+pub fn format_relative_time(updated_secs: i64, now_secs: i64) -> String {
+    if updated_secs <= 0 {
+        return "[now]".to_string();
+    }
+    let diff = now_secs.saturating_sub(updated_secs).max(0);
+    if diff < 60 {
+        "[now]".to_string()
+    } else if diff < 3_600 {
+        format!("[{}m]", diff / 60)
+    } else if diff < 86_400 {
+        format!("[{}h]", diff / 3_600)
+    } else if diff < 86_400 * 30 {
+        format!("[{}d]", diff / 86_400)
+    } else {
+        let (_, month, day) = civil_from_days(updated_secs.div_euclid(86_400));
+        format!("[{month:02}-{day:02}]")
+    }
+}
+
 /// 读取当前实时 UTC 时间（`YYYY-MM-DD HH:MM:SS UTC`）；系统时钟不可用时返回 None。
 pub fn current_utc_timestamp() -> Option<String> {
     let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;

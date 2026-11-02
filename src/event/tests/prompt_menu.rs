@@ -13,6 +13,7 @@ fn mouse_click_folders_button_opens_referenced_menu() {
         geo.view.prompt,
         layout::PromptToolbarButton::Folders,
         PromptMode::Editor,
+        Some("1/2"),
     )
     .expect("folders button visible");
     handle_terminal_event(
@@ -47,6 +48,7 @@ fn folders_button_no_op_without_project_key() {
         geo.view.prompt,
         layout::PromptToolbarButton::Folders,
         PromptMode::Editor,
+        Some("1/2"),
     )
     .expect("folders button visible");
     handle_terminal_event(
@@ -404,6 +406,7 @@ fn mouse_hover_after_opening_referenced_menu_backgrounds_row_without_marker() {
         geo.view.prompt,
         layout::PromptToolbarButton::Folders,
         PromptMode::Editor,
+        Some("1/2"),
     )
     .expect("folders button visible");
     handle_terminal_event(

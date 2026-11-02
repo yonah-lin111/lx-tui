@@ -24,6 +24,7 @@ mod overlay;
 mod prompt_editor;
 mod prompt_menu;
 mod prompt_pages;
+mod prompt_recent;
 mod prompt_tree;
 mod terminal;
 mod todo;

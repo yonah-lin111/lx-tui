@@ -383,6 +383,7 @@ fn confirm_question_wraps_and_dialog_grows() {
                 id: page_id,
                 name: name.to_string(),
                 content: "body".into(),
+                updated_at: 0,
             }],
             active_page: page_id,
         }],

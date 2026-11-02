@@ -380,6 +380,28 @@ pub(crate) fn handle_mouse_wheel(
             if !update::prompt_panel_active(state) {
                 return;
             }
+            // 最近页面抽屉：指针在抽屉区域时滚轮只滚抽屉，不穿透到上方视图。
+            if let Some(direction) = vertical_wheel_direction(mouse.kind) {
+                let recent_rows = ui::prompt_frame::recent_rows(state);
+                let split = crate::layout::prompt_body_split(
+                    view.prompt,
+                    state.prompt_owner().prompt_panel.recent_open,
+                    recent_rows.len(),
+                );
+                if let Some(divider) = split.recent_divider
+                    && mouse.row >= divider.y
+                {
+                    if update::scroll_prompt_recent(
+                        state,
+                        direction,
+                        split.visible_entries,
+                        recent_rows.len(),
+                    ) {
+                        *dirty = true;
+                    }
+                    return;
+                }
+            }
             update::clear_selection(state);
             if let Some(direction) = vertical_wheel_direction(mouse.kind) {
                 if update::prompt_tree_mode(state) {
