@@ -282,7 +282,7 @@ pub const TAB_SEPARATOR: &str = "│";
 pub const TAB_SCROLL_LEFT_LABEL: &str = "[<]";
 pub const TAB_SCROLL_RIGHT_LABEL: &str = "[>]";
 pub const TAB_ITEM_ICON: &str = "▪";
-/// 该标签有窗格挂着 `ask` 面板时的标记（标签标题后追加，强调色）。
+/// 该标签有窗格挂着 `ask` 面板时的标记（标签标题后追加，位于标签背景内部）。
 pub const TAB_ASK_MARKER: &str = "?";
 
 /// 初始工作区标记：不可移除，跟随启动工作区。
