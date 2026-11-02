@@ -242,6 +242,9 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
     }
     // Shift 选区：方向键扩展光标；Ctrl/Alt+Shift+方向键按词扩展，Home/End 扩到文首尾。
     if shift {
+        if ctrl && !alt && matches!(key.code, KeyCode::Char('a' | 'A')) {
+            return Some(LxInput::SelectAll);
+        }
         match (ctrl || alt, key.code) {
             (true, KeyCode::Left) | (true, KeyCode::Char('b' | 'B')) => {
                 return Some(LxInput::SelectWordLeft);
@@ -251,7 +254,6 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
             }
             (true, KeyCode::Home) => return Some(LxInput::SelectDocStart),
             (true, KeyCode::End) => return Some(LxInput::SelectDocEnd),
-            (true, KeyCode::Char('a' | 'A')) => return Some(LxInput::SelectAll),
             (false, KeyCode::Left) => return Some(LxInput::SelectLeft),
             (false, KeyCode::Right) => return Some(LxInput::SelectRight),
             (false, KeyCode::Up) => return Some(LxInput::SelectUp),

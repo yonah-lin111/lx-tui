@@ -190,6 +190,7 @@ pub fn apply_prompt_tree(
 /// 列表恒保留一条空白 default temp（缺失时补建），进入列表默认高亮当前编辑目标
 /// （条目或临时提示词），无有效绑定时高亮 default temp。
 pub fn show_prompt_tree(state: &mut AppState) {
+    state.prompt_search_drag = false;
     commit_editing_prompt(state);
     let index = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
@@ -256,6 +257,7 @@ fn select_tree_entry_row(state: &mut AppState, index: usize) {
 /// 工具栏模式按钮：树视图或页视图返回编辑，编辑视图切回树。
 pub fn toggle_prompt_panel_mode(state: &mut AppState) {
     state.prompt_drag = None;
+    state.prompt_search_drag = false;
     state.prompt_tree_hover = None;
     if prompt_tree_mode(state) {
         restore_or_edit_selected(state);

@@ -60,6 +60,7 @@
 
 遵循 `AGENTS.md` 与 `docs/standards/code-writing-standards.md`“生产代码单文件上限 1000 行，拆分后子文件控制在 500 行左右”的规范：
 - `src/app/overlay.rs` 当前已达 867 行，本次为 `TextInput` 扩展词操作、折行上下移动与通用按键分发后将接近上限，因此按职责将 `TextInput` 拆分为独立子模块 `src/app/overlay/text_input.rs`，由 `src/app/overlay.rs` 通过 `pub use text_input::TextInput;` 重导出，保持对外 API 零破坏。
+- `src/app/state/lx.rs` 因新增键盘选区与选择删除超过 1000 行，选区扩展、文档导航、`delete_selected`/`cut_selected` 拆至 `src/app/state/lx/selection.rs`。
 
 ```text
 src/app/
@@ -71,8 +72,9 @@ src/app/
   │   └── tests.rs                    <-- 补充词操作、剪切、折行上下移动、apply_edit_key 单元测试
   ├── state.rs                        <-- AppState 新增 prompt_search_drag: bool 标记
   ├── state/
-  │   ├── lx.rs                       <-- Lx 新增 delete_selected() / cut_selected()（不改任何现有路由）
-  │   ├── lx/ask.rs                   <-- AskEditor 新增 cut_selected()
+  │   ├── lx.rs                       <-- Lx 主体编辑模型（不改变历史/任务页/面板路由）
+  │   ├── lx/selection.rs             <-- 键盘选区、文档导航、delete_selected() / cut_selected()
+  │   ├── lx/ask.rs                   <-- AskEditor 代理选区与剪切方法
   │   └── todo.rs                     <-- TodoPanel 维护 edit_text_width: usize（由 sync_viewport 同步）
   └── update/
       ├── dialog.rs                   <-- 统一调用 apply_overlay_paste 与 TextInput::apply_edit_key，修复 ReferencedFolderInput 漏配
@@ -335,7 +337,7 @@ fn overlay_text_edit_key(key: KeyEvent) -> Option<OverlayKey> {
 }
 ```
 
-### 4.3 `Ask` 手写框下移修复与 `Lx` 剪切能力（`src/app/update/chat/ask.rs` & `src/app/state/lx.rs`）
+### 4.3 `Ask` 手写框下移修复与 `Lx` 选区/剪切能力（`src/app/update/chat/ask.rs` & `src/app/state/lx/selection.rs`）
 
 在 `src/app/update/chat/ask.rs` 的 `apply_edit_input` 中单独拦截 `LxInput::Down`：
 
@@ -351,7 +353,7 @@ fn overlay_text_edit_key(key: KeyEvent) -> Option<OverlayKey> {
             }),
 ```
 
-在 `src/app/state/lx.rs` 中为 `Lx` 新增 `delete_selected` 与 `cut_selected`（不触碰任何现有方法）：
+在 `src/app/state/lx/selection.rs` 中为 `Lx` 新增 `delete_selected`、`cut_selected` 与键盘选区方法（不触碰任何现有路由）：
 
 ```rust
     /// 删除输入框当前选中的文本区间并记录一步撤销；无选区返回 false。
@@ -376,6 +378,8 @@ fn overlay_text_edit_key(key: KeyEvent) -> Option<OverlayKey> {
         Some(text)
     }
 ```
+
+同一子模块还提供 `select_left/right`、`select_word_left/right`、`select_home/end`、`select_up/down`、`select_all`、`doc_start/end`、`select_doc_start/end`；`Ctrl/Cmd+Shift+A` 统一全选，`Ctrl+A` 始终回行首。详细审查与修复记录见 `review.md`。
 
 ---
 

@@ -1014,11 +1014,13 @@ fn todo_edit_word_operations_and_cut() {
         .unwrap()
         .insert_str("hello world");
     state.todo.edit_input_mut().unwrap().set_selection(0, 5);
+    let anchor = Some(state.prompt.id());
     assert!(apply_todo_key(&mut state, TodoKey::Cut));
     assert_eq!(state.todo.editing().unwrap().input.text(), " world");
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
-        Effect::CopyToClipboard { text, .. } if text == "hello"
+        Effect::CopyToClipboard { text, anchor: effect_anchor }
+            if text == "hello" && *effect_anchor == anchor
     )));
 }
 

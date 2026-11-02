@@ -460,9 +460,8 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
                 return false;
             };
             if !text.is_empty() {
-                state
-                    .effects
-                    .push(Effect::CopyToClipboard { text, anchor: None });
+                let anchor = Some(state.prompt.id());
+                state.effects.push(Effect::CopyToClipboard { text, anchor });
             }
             true
         }

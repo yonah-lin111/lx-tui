@@ -59,6 +59,7 @@ pub fn hide_prompt_pages(state: &mut AppState) -> bool {
     if !prompt_pages_mode(state) {
         return false;
     }
+    state.prompt_search_drag = false;
     let workspace = state.prompt_workspace();
     let Some(ws) = state.workspaces.get_mut(workspace) else {
         return false;

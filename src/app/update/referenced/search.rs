@@ -289,11 +289,15 @@ pub fn edit_referenced_search(state: &mut AppState, key: crate::app::actions::Ov
     let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_mut() else {
         return false;
     };
+    let before = search.query.text().to_string();
     if !search.query.apply_edit_key(key) {
         return false;
     }
-    let query = search.query.text().to_string();
-    search.refilter(&query);
+    // 仅文本变化时重算候选；光标移动/全选不能把下方高亮与滚动位置复位。
+    if search.query.text() != before {
+        let query = search.query.text().to_string();
+        search.refilter(&query);
+    }
     true
 }
 

@@ -780,3 +780,32 @@ fn referenced_duplicate_detects_canonical_match() {
         std::path::Path::new("/tmp/none")
     ));
 }
+
+#[test]
+fn cursor_move_keeps_search_highlight_and_viewport() {
+    use crate::app::actions::OverlayKey;
+
+    let mut state = state_with_folders();
+    let alpha = folder_path(&state, 1);
+    open_referenced_folder_search(&mut state, 1, alpha.clone(), (0, 0));
+    let id = scan_request(&state);
+    let outcome = ReferencedScanOutcome {
+        entries: vec![
+            entry(&alpha, "src/app.rs", false),
+            entry(&alpha, "src", true),
+            entry(&alpha, "README.md", false),
+        ],
+        truncated: false,
+    };
+    assert!(apply_referenced_scan(&mut state, id, outcome));
+    assert!(set_referenced_search_selection(&mut state, 2));
+    if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_mut() {
+        search.viewport = Some(1);
+    }
+    assert!(edit_referenced_search(&mut state, OverlayKey::Left));
+    let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref() else {
+        panic!("search");
+    };
+    assert_eq!(search.selected, 2, "光标移动不得复位高亮");
+    assert_eq!(search.viewport, Some(1), "光标移动不得复位视口");
+}

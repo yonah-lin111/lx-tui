@@ -122,6 +122,31 @@ fn event_input_paste_overlay_and_prompt_routing() {
     );
     assert!(!dirty, "浮层激活时粘贴被吞掉");
 
+    // 1b. 带单行输入框的浮层：粘贴写入当前浮层，不穿透。
+    state.overlay = Some(Overlay::Rename(crate::app::overlay::Rename {
+        target: crate::app::overlay::RenameTarget::Workspace(0),
+        input: crate::app::overlay::TextInput::new(""),
+    }));
+    handle_terminal_event(
+        TerminalEvent::Paste("renamed".to_string()),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(dirty, "输入类浮层粘贴使画面变脏");
+    assert_eq!(
+        state
+            .overlay
+            .as_ref()
+            .and_then(Overlay::input)
+            .unwrap()
+            .text(),
+        "renamed"
+    );
+
     // 2. prompt 聚焦时：粘贴进入 prompt 编辑器，dirty 置为 true。
     state.overlay = None;
     state.set_focus(crate::app::state::FocusedContainer::Prompt);
@@ -426,4 +451,40 @@ fn paste_panel_swallows_mouse_wheel_without_scrolling_underlying_views() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn overlay_cut_event_deletes_selection_and_emits_toast() {
+    let mut state = AppState::demo();
+    let config = Config::default();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 80, 24));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    state.overlay = Some(Overlay::Rename(crate::app::overlay::Rename {
+        target: crate::app::overlay::RenameTarget::Workspace(0),
+        input: crate::app::overlay::TextInput::new("hello world"),
+    }));
+    {
+        let input = state.overlay.as_mut().and_then(Overlay::input_mut).unwrap();
+        input.set_selection(6, 11);
+    }
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(
+        state
+            .overlay
+            .as_ref()
+            .and_then(Overlay::input)
+            .unwrap()
+            .text(),
+        "hello "
+    );
+    assert!(state.toast.is_some(), "剪切写入剪贴板结果应有 toast");
 }

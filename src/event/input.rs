@@ -75,7 +75,7 @@ pub(crate) fn handle_key_event(
             }
             if key == OverlayKey::Cut {
                 if let Some(text) = update::cut_overlay_selected_text(state)
-                    && !text.trim().is_empty()
+                    && !text.is_empty()
                 {
                     copy_with_toast(state, &text, None);
                 }
@@ -110,7 +110,7 @@ pub(crate) fn handle_key_event(
             if update::prompt_tree_mode(state) {
                 // 树视图 Ctrl+C：有搜索框选区时复制选区，否则清空搜索过滤。
                 if let Some(text) = update::prompt_search_selection(state) {
-                    if !text.trim().is_empty() {
+                    if !text.is_empty() {
                         copy_with_toast(state, &text, anchor);
                     }
                 } else {
@@ -119,7 +119,7 @@ pub(crate) fn handle_key_event(
                 *dirty = true;
             } else if update::prompt_pages_mode(state) {
                 if let Some(text) = update::page_search_selection(state) {
-                    if !text.trim().is_empty() {
+                    if !text.is_empty() {
                         copy_with_toast(state, &text, anchor);
                     }
                 } else {
@@ -135,23 +135,24 @@ pub(crate) fn handle_key_event(
             let anchor = Some(state.prompt.id());
             if update::prompt_tree_mode(state) {
                 if let Some(text) = update::cut_prompt_search(state)
-                    && !text.trim().is_empty()
+                    && !text.is_empty()
                 {
                     copy_with_toast(state, &text, anchor);
                 }
             } else if update::prompt_pages_mode(state) {
                 if let Some(text) = update::cut_page_search(state)
-                    && !text.trim().is_empty()
+                    && !text.is_empty()
                 {
                     copy_with_toast(state, &text, anchor);
                 }
             } else if let Some((start, end)) = update::prompt_selection_bounds(state)
                 && let Some(text) = state.prompt.text().get(start..end).map(str::to_string)
-                && !text.trim().is_empty()
                 && state.prompt.replace_range(start, end, "")
             {
                 update::clear_selection(state);
-                copy_with_toast(state, &text, anchor);
+                if !text.is_empty() {
+                    copy_with_toast(state, &text, anchor);
+                }
             }
             *dirty = true;
         }
@@ -309,10 +310,19 @@ fn copy_lx_selection(
     }) {
         return false;
     }
-    if let Some(text) = state
+    let request = state
         .pane_anywhere(pane)
-        .filter(|target| target.view == PaneView::Lx)
-        .and_then(|target| {
+        .filter(|target| target.view == PaneView::Lx);
+    let task_open = request.is_some_and(|target| target.lx.task.is_some());
+    let ask_blocked =
+        request.is_some_and(|target| target.lx.ask.as_ref().is_some_and(|ask| !ask.editing));
+    if ask_blocked {
+        // Ask 列表态没有可见输入框：绝不复制隐藏的底层草稿。
+        return false;
+    }
+    // 任务页占用输入框矩形时，底层草稿不可见：跳过输入框选区，仅保留主内容区复制。
+    if !task_open
+        && let Some(text) = request.and_then(|target| {
             if let Some(ask) = target.lx.ask.as_ref()
                 && ask.editing
             {
@@ -344,7 +354,7 @@ fn copy_lx_selection(
         return false;
     }
     let text = ui::main_content::lx::copy_text(area, &target.lx, range, cache.pane(pane));
-    if !text.trim().is_empty() {
+    if !text.is_empty() {
         copy_with_toast(state, &text, Some(pane));
     }
     true
@@ -364,7 +374,7 @@ fn cut_lx_selection(state: &mut AppState) -> bool {
     }
     if !state
         .pane_anywhere(pane)
-        .is_some_and(|target| target.view == PaneView::Lx)
+        .is_some_and(|target| target.view == PaneView::Lx && target.lx.task.is_none())
     {
         return false;
     }
@@ -399,7 +409,7 @@ fn cut_lx_selection(state: &mut AppState) -> bool {
     if !from_ask {
         update::refresh_slash_panel(state, pane);
     }
-    if !text.trim().is_empty() {
+    if !text.is_empty() {
         copy_with_toast(state, &text, Some(pane));
     }
     true

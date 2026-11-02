@@ -5,6 +5,9 @@ use unicode_width::UnicodeWidthChar;
 use crate::app::actions::OverlayKey;
 use crate::app::prompt::text::{offset_at_col, word_end_after, word_start_before};
 
+/// 单行输入撤销历史上限（与 prompt 编辑器的 HISTORY_LIMIT 对齐，防止长会话无界增长）。
+const MAX_UNDO_STEPS: usize = 200;
+
 /// 单行文本输入：字符缓冲与字符索引光标（范围 `0..=字符数`），可选选区锚点与撤销/重做栈。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextInput {
@@ -43,6 +46,9 @@ impl TextInput {
     /// 登记当前文本和光标到撤销栈（文本发生实质变动前调用）。
     fn push_undo(&mut self) {
         if self.undo_stack.last().map(|(t, _)| t.as_str()) != Some(&self.text) {
+            if self.undo_stack.len() >= MAX_UNDO_STEPS {
+                self.undo_stack.remove(0);
+            }
             self.undo_stack.push((self.text.clone(), self.cursor));
             self.redo_stack.clear();
         }

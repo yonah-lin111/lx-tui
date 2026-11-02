@@ -1319,6 +1319,11 @@ fn lx_view_routes_shift_selection_chords() {
         ),
         Some(Routed::Lx(LxInput::SelectAll))
     );
+    assert_eq!(
+        route(KeyCode::Char('a'), KeyModifiers::ALT | KeyModifiers::SHIFT),
+        None,
+        "Alt+Shift+A 是字符输入，不得触发全选"
+    );
 }
 
 #[test]

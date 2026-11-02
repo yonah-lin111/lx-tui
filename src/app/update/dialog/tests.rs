@@ -249,3 +249,29 @@ fn referenced_search_redo_and_cut_route_to_query() {
     };
     assert_eq!(search.query.text(), "c");
 }
+
+#[test]
+fn overlay_cut_keeps_whitespace_selection_text() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::Rename(Rename {
+        target: RenameTarget::Workspace(0),
+        input: TextInput::new("a   b"),
+    }));
+    {
+        let input = state.overlay.as_mut().and_then(Overlay::input_mut).unwrap();
+        input.set_selection(1, 4);
+    }
+    assert_eq!(
+        cut_overlay_selected_text(&mut state).as_deref(),
+        Some("   ")
+    );
+    assert_eq!(
+        state
+            .overlay
+            .as_ref()
+            .and_then(Overlay::input)
+            .unwrap()
+            .text(),
+        "ab"
+    );
+}

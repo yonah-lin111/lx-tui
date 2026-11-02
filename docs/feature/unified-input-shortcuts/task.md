@@ -1,6 +1,6 @@
 # 全应用输入框快捷键与交互统一开发任务
 
-状态：已完成并验证（lib 全部通过；3 个既有集成测试在基线同样失败，详见本次变更说明）。
+状态：已完成并验证；审查与 P1/P2/P3 修复记录见 `review.md`（3 个既有集成测试在基线同样失败）。
 对应设计：`docs/feature/unified-input-shortcuts/design.md`。
 
 ---
@@ -49,7 +49,7 @@
   - [x] `todo_key` 补齐词移动（`Ctrl/Alt+Left/Right`、`Alt+B/F`）、删词（`Ctrl+W`、`Ctrl/Alt+Backspace`、`Alt+D`、`Ctrl+Delete`）与 `Ctrl/Cmd+X`（`TodoKey::Cut`）
   - [x] `viewport_metrics` 与 `TodoPanel::sync_viewport` 同步 `edit_text_width: usize`
   - [x] `apply_todo_edit_key` 接入词移动、删词、`Cut` 以及 `TodoKey::Up` / `TodoKey::Down`（调用 `move_up_wrapped` / `move_down_wrapped`）
-  - [x] `event/input.rs` 中处理 `TodoKey::Cut` 复制选区至剪贴板并删除选区
+  - [x] `apply_todo_edit_key` 中处理 `TodoKey::Cut`：删除选区并以 Todo 面板为锚点登记剪贴板 Effect
 - [x] 3.2 修复 `Ask` 手写输入框并支持 `Lx` / `Ask` 剪切（`src/app/state/lx.rs`、`src/app/state/lx/ask.rs`、`src/app/update/chat/ask.rs`、`src/event/input.rs`）
   - [x] `src/app/update/chat/ask.rs`：在 `apply_edit_input` 中处理 `LxInput::Down` 调用 `editor.move_down()`（不改动 `apply_editor_edit` 与 `Lx` 主输入框路由）
   - [x] `src/app/state/lx.rs` & `src/app/state/lx/ask.rs`：新增 `delete_selected` / `cut_selected`
@@ -92,3 +92,16 @@
 - [x] 6.1 `Ctrl+A` 在所有输入框保持“回到行首”（含恢复 `Lx`、`Todo`、浮层、Prompt 搜索与编辑器）
 - [x] 6.2 `Ctrl/Cmd+Shift+A` 统一映射为全选：`TextInput` 浮层、`Todo` 编辑框、`Prompt` 树/页搜索框、`Prompt` 编辑器、`Lx` 与 `Ask`
 - [x] 6.3 补充路由与行为测试，确保 `Ctrl+A` / `Ctrl+Shift+A` 不再互相覆盖
+
+---
+
+## 阶段 7：Review 修复
+
+- [x] 7.1 P1：修复 `Alt+Shift+A` 误触发全选
+- [x] 7.2 P1：剪切空白选区仍写入剪贴板；Prompt 剪切先删除再复制
+- [x] 7.3 P1：任务页与 Ask 列表态不再穿透复制/剪切隐藏草稿
+- [x] 7.4 P2：ReferencedFolderSearch 仅文本变化时 refilter
+- [x] 7.5 P2：`prompt_search_drag` 模式切换防护
+- [x] 7.6 P2：`Lx` 方向键折叠选区；选区代码拆至 `lx/selection.rs`
+- [x] 7.7 P3：`TextInput` 撤销栈上限、Todo 剪切 Toast 锚点、事件级回归测试
+- [x] 7.8 同步 `design.md` / `task.md` / `review.md`

@@ -624,3 +624,40 @@ fn lx_paste_image_path_opens_panel_and_confirms_refer_image() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn task_page_does_not_cut_or_copy_hidden_composer_selection() {
+    use crate::app::state::{PaneView, TaskPage};
+
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 22));
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        target.lx.insert_str("abc");
+        target.lx.begin_text_selection(0, 0);
+        target.lx.drag_text_selection(0, 2);
+        target.lx.task = Some(TaskPage::default());
+        assert_eq!(target.lx.selected_text().as_deref(), Some("ab"));
+    }
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+    for code in [KeyCode::Char('x'), KeyCode::Char('c')] {
+        handle_terminal_event(
+            TerminalEvent::Key(KeyEvent::new(code, KeyModifiers::CONTROL)),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert!(target.lx.task.is_some(), "任务页仍打开");
+        assert_eq!(target.lx.input, "abc", "隐藏草稿不得被剪切/复制改写");
+        assert_eq!(target.lx.selected_text().as_deref(), Some("ab"));
+    }
+}

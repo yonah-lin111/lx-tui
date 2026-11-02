@@ -48,8 +48,13 @@ pub(crate) fn handle_mouse_drag(
         return;
     }
     if state.prompt_search_drag {
-        let area = layout::prompt_content_rect(view.prompt);
         let tree_mode = update::prompt_tree_mode(state);
+        if !tree_mode && !update::prompt_pages_mode(state) {
+            // 模式已切换（搜索框不再可见）：丢弃失联的拖拽，避免污染隐藏输入框。
+            state.prompt_search_drag = false;
+            return;
+        }
+        let area = layout::prompt_content_rect(view.prompt);
         let workspace = state.prompt_workspace();
         if let Some(ws) = state.workspaces.get_mut(workspace) {
             let input = if tree_mode {
