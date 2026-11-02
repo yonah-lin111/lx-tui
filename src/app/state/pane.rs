@@ -62,6 +62,30 @@ impl Tab {
         self.panes.values().any(|pane| pane.lx.has_pending_ask())
     }
 
+    /// 是否有窗格正在工作（原生 lx 执行中或终端 Agent 处于 Working）。
+    pub fn is_working(&self) -> bool {
+        self.panes.values().any(Pane::is_working)
+    }
+
+    /// 若本标签正在工作，返回驱动顶栏旋转动画的帧号；空闲或仅等待人工确认时返回 None。
+    pub fn loading_frame(&self) -> Option<usize> {
+        self.layout
+            .pane_ids()
+            .into_iter()
+            .filter_map(|id| self.panes.get(&id))
+            .find(|pane| pane.is_working())
+            .map(|pane| pane.lx.chat.loading_frame)
+    }
+
+    /// 当前标签内已探测到的外部 Agent 快照（按布局树序排列，不含原生 lx）。
+    pub fn agents(&self) -> Vec<&PaneAgentSnapshot> {
+        self.layout
+            .pane_ids()
+            .into_iter()
+            .filter_map(|id| self.panes.get(&id)?.agent.as_ref())
+            .collect()
+    }
+
     fn with_layout(name: Option<String>, layout: TileLayout) -> Self {
         let panes = layout
             .pane_ids()
@@ -130,6 +154,15 @@ impl Tab {
 }
 
 impl Pane {
+    /// 本窗格是否有正在工作的 Agent（原生 lx 执行中，或终端外部 Agent 处于 Working）。
+    pub fn is_working(&self) -> bool {
+        self.lx.is_working()
+            || self
+                .agent
+                .as_ref()
+                .is_some_and(|agent| agent.state == crate::detect::AgentState::Working)
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             kind: PaneKind::Terminal,

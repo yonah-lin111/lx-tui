@@ -271,6 +271,20 @@ impl Lx {
         self.ask.is_some()
     }
 
+    /// 本窗格 lx 是否正在执行任务（顶栏标签旋转动画判定用；挂起 `ask` 等待用户作答且无后台子任务时暂停）。
+    pub fn is_working(&self) -> bool {
+        if self.compact.is_running()
+            || self.chat.has_running_shell()
+            || self.agents.runs.iter().any(|run| run.is_running())
+        {
+            return true;
+        }
+        if self.chat.main_stopped || self.has_pending_ask() {
+            return false;
+        }
+        self.chat.status.streaming || self.chat.request.is_busy()
+    }
+
     /// 输入框视口首视觉行索引。
     pub fn scroll(&self) -> usize {
         self.scroll

@@ -223,7 +223,15 @@ fn ui_icons_are_single_width_and_non_pua() {
         ("TAB_ITEM_ICON", TAB_ITEM_ICON),
         ("WORKSPACE_GIT_ICON", WORKSPACE_GIT_ICON),
         ("WORKSPACE_NON_GIT_ICON", WORKSPACE_NON_GIT_ICON),
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        TAB_SPINNER_FRAMES
+            .iter()
+            .copied()
+            .map(|frame| ("TAB_SPINNER_FRAMES", frame)),
+    ) {
+        assert_eq!(icon.width(), 1, "{name} ({icon:?}) 必须严格占用 1 列宽");
         for ch in icon.chars() {
             let cp = ch as u32;
             let is_pua = (0xE000..=0xF8FF).contains(&cp)
@@ -235,6 +243,10 @@ fn ui_icons_are_single_width_and_non_pua() {
             );
         }
     }
+    assert_eq!(
+        tab_spinner_frame(TAB_SPINNER_FRAMES.len()),
+        TAB_SPINNER_FRAMES[0]
+    );
 }
 
 #[test]
