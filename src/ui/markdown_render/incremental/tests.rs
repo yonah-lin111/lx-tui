@@ -114,3 +114,58 @@ fn width_change_reflows_everything() {
     got.extend(tail);
     assert_eq!(got, render_wrapped(source, 20));
 }
+
+/// 确定性伪随机块序列：覆盖标题/列表/引用/围栏/表格/缩进代码/空行的交错组合。
+#[test]
+fn randomized_block_sequences_match_full_render() {
+    const PIECES: &[&str] = &[
+        "# 标题",
+        "## 二级标题",
+        "普通段落 with **粗体** and `code`",
+        "- 列表项",
+        "  - 嵌套项",
+        "1. 有序项",
+        "- [x] 任务",
+        "> 引用",
+        "---",
+        "```rust",
+        "```",
+        "    let x = 1;",
+        "| a | b |",
+        "| --- | --- |",
+        "| 1 | 2 |",
+        "    缩进代码",
+        "",
+    ];
+    // 线性同余发生器：固定种子保证可复现。
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    for case in 0..6 {
+        let mut source = String::new();
+        for _ in 0..120 {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            source.push_str(PIECES[(seed >> 33) as usize % PIECES.len()]);
+            source.push('\n');
+        }
+        let width = if case % 2 == 0 { 40 } else { 17 };
+        let mut state = IncrementalMarkdownState::default();
+        let mut checked = 0;
+        for end in (0..=source.len()).step_by(7) {
+            if !source.is_char_boundary(end) {
+                continue;
+            }
+            let piece = &source[..end];
+            let (prefix, _, tail) = state.update(piece, width);
+            let mut got = (*prefix).clone();
+            got.extend(tail);
+            assert_eq!(
+                got,
+                render_wrapped(piece, width),
+                "随机块序列 case={case} width={width} 前缀在第 {end} 字节处不一致"
+            );
+            checked += 1;
+        }
+        assert!(checked > 10, "必须覆盖足够多的流式前缀");
+    }
+}

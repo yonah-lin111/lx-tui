@@ -179,7 +179,7 @@ AssistantStepView::Part { part, .. } => {
 ```rust
 /// 思考块正文是否应当排版并展示（对齐 Claude Code：流式生成期间恒不流式渲染思考正文，
 /// 待该思考块完成后若处于展开态再一次性静态渲染）。
-pub(super) fn reasoning_body_visible(
+pub(crate) fn reasoning_body_visible(
     source: super::source::HistorySource<'_>,
     message_index: usize,
     step_index: usize,
@@ -478,13 +478,15 @@ pub(crate) fn snapshot_ready_source(
 }
 ```
 
-在 `src/ui/main_content/lx/history.rs` 与 `history_hit.rs` 中：
-- 新增只读快速视图入口 `history_view_ready`（内部使用 `snapshot_ready_source`），供以下高频鼠标交互路径使用：
+在 `src/ui/main_content/lx/history.rs` / `history_hit.rs` / `selection.rs` 中：
+- 新增只读快速视图入口（`history::view_ready` + `history_hit::history_view_ready`，内部使用 `snapshot_ready_source`），供以下高频鼠标交互路径使用：
   - `history_scrollbar`（滚动条拖拽 `drag.rs:237` 与按下检测）
   - `history_rows`（滚轮滚动 `wheel.rs:553`）
-  - `fold_target_at`（鼠标移动悬停 `hover.rs:241`）
-- 每一帧绘制前的 `resolve_lx_history`（`event/mod.rs:499`）与正式绘制 `lx::render`（`lx.rs:588`）仍然走完整校验签名的 `history::view`（`snapshot_source`）。
+  - `fold_target_at`（鼠标移动悬停 `hover.rs:251`）
+  - `content_geom`（拖选滚轮/拖选移动/按下开始选区，`wheel.rs` / `drag.rs` / `press.rs`）
+- 每一帧绘制前的 `resolve_lx_history`（`event/mod.rs`）与正式绘制 `lx::render`（`lx.rs`）仍然走完整校验签名的 `history::view`（`snapshot_source`）。
 - 若 `self.snapshot` 尚未初始化（如单元测试直接调 `history_scrollbar` 而未先 `render`），`snapshot_ready_source` 自动回退到 `snapshot_source`，保证所有单元测试 100% 兼容。
+- Agents 详情区的选区几何优先读 `resolve_task_agents_visible` 每帧维护的 `run.total_rows` / `run.scroll`（与绘制同口径）；仅在 `rows_dirty` 或尚未量行时回退完整视图。
 
 ### 8.2 用户滚离底部时的屏幕外流式节流（Offscreen Stream Coalescing）
 
@@ -496,6 +498,7 @@ pub(crate) fn snapshot_ready_source(
   - `snapshot_at: Option<Instant>`
   - `viewport_rows: usize`（由 `history::view` 每帧写入）
 - `snapshot_source` 命中以下全部条件时直接复用当前 `Arc<HistorySnapshot>`：
+  - `source.coalesce_offscreen`（主聊天为 true；Agents 详情滚动位在 `SubagentRun` 上，必须关闭）；
   - `!source.chat.follow_bottom`；
   - 已有同宽度快照，`non_stream_signature_source` 与构建时一致（只有流式末条消息在变）；
   - 快照末条消息起始行 `last.start >= history_scroll + viewport_rows`（整块在视口下方）；
@@ -541,6 +544,10 @@ pub(crate) fn snapshot_ready_source(
    - `offscreen_stream_coalesces_within_window`：滚离底部且流式消息在视口下方时窗口内增量合并，其他消息变化立即重建。
 5. **更新既有测试断言（`src/ui/main_content/lx/history/tests/transcript.rs`）**：
    - `transcript_lays_out_step_marks_with_two_column_gutter` 的思考块补上 `completed_at_ms`（真实流式下进入正文/工具步骤时前序思考已关闭），展开态仍渲染思考正文。
+6. **评审补充测试（`review.md` P1/P2）**：
+   - `selection_geometry_reads_ready_snapshot`：内容变化后选区几何不触发快照重建；
+   - `long_markdown_scroll_reads_prefix_and_tail`：80 行稳定前缀 + 尾部表格，滚动到交界处断言实际绘制的行；
+   - `randomized_block_sequences_match_full_render`：确定性伪随机块序列（标题/列表/引用/围栏/表格/缩进代码/空行）按采样步长验证 `prefix + tail == render_wrapped`。
 
 ### 10.2 Release 性能基准测试（`src/ui/main_content/lx/history/tests/perf.rs`）
 
@@ -561,17 +568,18 @@ pub(crate) fn snapshot_ready_source(
 - 思考块按 Claude Code 口径隔离：流式期间 `reasoning_body_visible == false`，正文与时间戳不进入指纹；`streaming_thinking_deltas_do_not_rebuild` 验证 200 次思考 delta 期间快照重建次数不增加。
 - 增量 Markdown：`ParserState` 块级状态机 + 安全边界固化；表格/缩进代码块未闭合时 Holdback，围栏代码行换行即固化；逐字节等价性测试通过。
 - `PaneCache.blocks` 改为 `BlockSlot` 槽位键 + `BlockEntry.sig`，流式块原地覆写；`md_streams` 与块同生命周期。
-- 鼠标滚轮/滚动条拖拽/Hover/点击读取 `snapshot_ready_source`；滚离底部且流式消息在视口下方时按 80ms（生产）合并快照。
+- 鼠标滚轮/滚动条拖拽/Hover/点击/**选区几何**读取 `snapshot_ready_source`；滚离底部且流式消息在视口下方时按 80ms（生产）合并快照，Agents 详情显式关闭合并（滚动位在 `SubagentRun`）。
+- 评审补强（详见 `review.md`）：修复选区几何漏走就绪快照；性能夹具恢复 102,900 行；新增前缀/尾部交界像素级回归与随机块序列等价性测试。
 
 ### 11.2 Release 实测
 
 | 场景 | 规模 | 优化后结果 | 预算 |
 |------|------|------------|------|
-| 长思考流式 | 30,000 字符 / 500 帧 | P95 ≈ **0.21ms**，重建 **0** 次 | ≤ 2ms |
+| 长思考流式 | 30,000 字符 / 500 帧 | P95 ≈ **0.11ms**，重建 **0** 次 | ≤ 2ms |
 | 长正文流式 + 滚动 | 1,500 行 / 300 帧 | P95 ≈ **0.19ms** | ≤ 8ms |
-| 大历史热缓存滚动 | 64,400 行 / 120 帧 | P95 ≈ **2.00ms** | ≤ 16ms |
-| 大历史流式追加 | 120 帧 | P95 ≈ **3.89ms** | ≤ 16ms |
-| 展开 2000 行文件差异滚动 | 2,106 行 / 120 帧 | P95 ≈ **6.61ms** | ≤ 16ms |
+| 大历史热缓存滚动 | 102,900 行 / 120 帧 | P95 ≈ **1.92ms** | ≤ 16ms |
+| 大历史流式追加 | 120 帧 | P95 ≈ **3.72ms** | ≤ 16ms |
+| 展开 2000 行文件差异滚动 | 2,106 行 / 120 帧 | P95 ≈ **6.29ms** | ≤ 16ms |
 
 命令：
 
@@ -579,5 +587,6 @@ pub(crate) fn snapshot_ready_source(
 cargo test --release --lib -- --ignored perf_lx --nocapture
 ```
 
-> 说明：既有 `perf_lx_history` 的「约 10 万行」断言在本次改动前的 dev 分支已失效
-> （用户消息默认折叠后实际 64,400 行），本次一并把阈值修正为 > 60,000，行为未变。
+> 说明：`perf_lx_history` 的性能夹具在用户消息折叠后只剩 64,400 行，原「> 90,000」
+> 断言在 dev 分支已失效；评审修复将 `BODY_LINES` 调回 125（102,900 行）恢复原有
+> 压力规模，而不是降低阈值。

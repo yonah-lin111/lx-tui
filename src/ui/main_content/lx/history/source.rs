@@ -31,6 +31,11 @@ pub(crate) struct HistorySource<'a> {
     pub selected_user_message: Option<&'a str>,
     /// 本会话仍有子 agent 在跑：统计行是任务收尾信息，必须等它们全部结束。
     pub subagents_running: bool,
+    /// 是否允许「滚离底部时屏幕外流式合并」。
+    ///
+    /// 主聊天用 `LxChat::history_scroll` 作为视口位置；子 agent 详情用的是
+    /// `SubagentRun::scroll`（不在 `LxChat` 里），拿不到真实视口，必须关闭合并。
+    pub coalesce_offscreen: bool,
 }
 
 impl<'a> From<&'a Lx> for HistorySource<'a> {
@@ -55,6 +60,7 @@ impl<'a> From<&'a Lx> for HistorySource<'a> {
                 .as_ref()
                 .map(|target| target.user_message_id.as_str()),
             subagents_running: lx.agents.runs.iter().any(|run| run.is_running()),
+            coalesce_offscreen: true,
         }
     }
 }
@@ -74,6 +80,8 @@ impl<'a> HistorySource<'a> {
             model_switch: &EMPTY_MODEL_SWITCH,
             selected_user_message: None,
             subagents_running: false,
+            // 详情区的滚动位在 `SubagentRun` 上，`LxChat` 里没有真实视口。
+            coalesce_offscreen: false,
         }
     }
 

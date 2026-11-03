@@ -19,7 +19,7 @@ use crate::app::state::{
 use crate::chat::tools::{DiffLineKind, FileChangeKind};
 
 /// 每条正文块的行数；乘以消息数用来逼近 10 万渲染行。
-const BODY_LINES: usize = 70;
+const BODY_LINES: usize = 125;
 /// 单帧预算（60fps）。
 const FRAME_BUDGET: Duration = Duration::from_millis(16);
 /// 采样的帧数。
@@ -142,7 +142,7 @@ fn perf_lx_history() {
     let cold = Instant::now();
     let total = layout(area, &lx, &mut cache).total_rows;
     let cold_elapsed = cold.elapsed();
-    assert!(total > 60_000, "压力会话应有数万行，实际 {total}");
+    assert!(total > 90_000, "压力会话应有约 10 万行，实际 {total}");
 
     // 预热：先画一帧，让视口周边的块进缓存。
     let _ = render(&mut grid, area, &lx, 0, &mut cache);

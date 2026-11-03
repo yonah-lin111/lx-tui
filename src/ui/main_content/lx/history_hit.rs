@@ -39,7 +39,11 @@ pub(crate) fn history_view(
 }
 
 /// 高频鼠标交互用的视图：只读已就绪快照，不在事件回调里同步重排。
-fn history_view_ready(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<history::HistoryView> {
+pub(super) fn history_view_ready(
+    area: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+) -> Option<history::HistoryView> {
     let history_rect = history_rect(area, lx)?;
     Some(history::view_ready(history_rect, lx, cache))
 }

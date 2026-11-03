@@ -266,7 +266,10 @@ impl PaneCache {
         width: u16,
         source: super::source::HistorySource<'_>,
     ) -> bool {
-        if self.offscreen_coalesce.is_zero() || source.chat.follow_bottom || self.viewport_rows == 0
+        if self.offscreen_coalesce.is_zero()
+            || !source.coalesce_offscreen
+            || source.chat.follow_bottom
+            || self.viewport_rows == 0
         {
             return false;
         }

@@ -722,3 +722,24 @@ fn offscreen_stream_coalesces_within_window() {
     let _ = view(area, &lx, &mut cache);
     assert!(cache.builds() > builds, "非流式尾部变化必须立即重建");
 }
+
+/// 选区几何（滚轮/拖拽选区每帧调用）必须读取就绪快照。
+#[test]
+fn selection_geometry_reads_ready_snapshot() {
+    let mut lx = lx_with(vec![message(
+        "a1",
+        "assistant",
+        "streaming",
+        vec![text_part("回答")],
+    )]);
+    let area = Rect::new(0, 0, 40, 20);
+    let mut cache = PaneCache::default();
+    let _ = crate::ui::main_content::lx::content_geom(area, &lx, &mut cache).expect("选区几何");
+    let builds = cache.builds();
+    let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[0].steps[0] else {
+        panic!("首个步骤应是正文块");
+    };
+    part.content.push_str("\n继续输出，内容变长");
+    let _ = crate::ui::main_content::lx::content_geom(area, &lx, &mut cache).expect("选区几何");
+    assert_eq!(cache.builds(), builds, "选区几何必须读取就绪快照");
+}

@@ -533,3 +533,35 @@ fn a_part_step_separates_two_file_cards() {
         layout(area, &lx, &mut cache()).total_rows
     );
 }
+
+/// 长 markdown 正文滚动：绘制必须从增量前缀与活跃尾部无缝读取。
+///
+/// 正文 80 行（全部固化进稳定前缀）+ 末尾表格（未闭合前留在尾部），
+/// 滚动到前缀/尾部交界处，屏幕行必须与源码行一一对应。
+#[test]
+fn long_markdown_scroll_reads_prefix_and_tail() {
+    let mut body = (0..80)
+        .map(|index| format!("line {index:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    body.push_str("\n\n| 名称 | 数值 |\n| --- | ---: |\n| 甲 | 1 |");
+    let lx = lx_with(vec![message(
+        "assistant",
+        "complete",
+        vec![text_part(&body)],
+    )]);
+    let area = Rect::new(0, 0, 40, 10);
+    let mut cache = cache();
+    let mut grid = Grid::new(area);
+    // 先在顶部建快照与增量前缀，再滚到交界处：共享同一份缓存。
+    let _ = render(&mut grid, area, &lx, 0, &mut cache);
+    let mut grid = Grid::new(area);
+    let _ = render(&mut grid, area, &lx, 78, &mut cache);
+    let rows: Vec<String> = (0..area.height)
+        .map(|y| (0..area.width).map(|x| grid.cell(x, y).ch).collect())
+        .collect();
+    assert!(rows[0].contains("line 78"), "{rows:?}");
+    assert!(rows[1].contains("line 79"), "{rows:?}");
+    assert!(rows[2].contains('┌'), "表格尾部紧跟前缀：{rows:?}");
+    assert!(rows.iter().any(|row| row.contains('甲')), "{rows:?}");
+}
