@@ -40,7 +40,7 @@
 | **2. 抽屉高度与点击行为** | 1. **高度自适应与上限**：抽屉最大高度为 **7 行**（1 行 `├─ recent ───┤` 分割线 + 最多同时显示 **3 个双行条目** = 6 行内容），且不超过 `prompt_body_rect` 总高度的一半；若条目数不足 2 条，也保留 2 条高度（5 行）；无记录时显示 1 行分割线 + 1 行空态 `no recent pages`（共 2 行）。<br>2. **点击跳转**：鼠标左键**单击**某条记录，立即提交当前未保存修改、切换到 `Editor` 模式并定位到对应的 `Prompt + Page`；跳转后**抽屉保持展开**。 |
 | **3. 数据范围、排序、时间格式与状态点** | 1. **数据范围与排序**：取当前工作区所有已入库 `PromptItem` 的全部 `PromptPage`（不含 `tmp` 临时草稿），按每个 Page 的 `updated_at`（Unix 秒数）全局倒序排列（相同时按 `page.id` 倒序），最多取前 **20 条**。保存或新建 Page 时实时刷新内存与数据库的 `updated_at`。<br>2. **`[时间]` 格式**：极简英文相对时间：`[now]`（`< 60s`）、`[Nm]`（`1..=59m`）、`[Nh]`（`1..=23h`）、`[Nd]`（`1..=29d`）、`[MM-DD]`（`>= 30d`）。<br>3. **Page 名称与状态圆点**：复用 `page_title_status(&page.content)`，优先取 `{title: xxx}` 否则回退 `page.name`；有 `&&&` 模板块时绘制 `○`（Todo）或 `●`（InProgress/Done），无模板块不画圆点。 |
 | **4. 顶部两行表头控件排布与页面 Title** | 1. **第 1 行（工具栏行）**：<br>   - `Editor`：左组 `[≡] [rec] [←] [→]`，右组 `[refDir] ‹ n/m › ●`（`‹ n/m ›` 位于 `[refDir]` 与 `●` 中间，间隔 1 列）。窄屏空间不足时按 `[refDir]` → `[rec]` → `[←] [→]` 顺序隐藏。<br>   - `Tree`：左组 `[/] [rec]`，右组 `[tmp]`。<br>   - `Pages`：左组 `[/] [rec]`，右组在与 `Editor` 对应的页码位置显示无箭头的 `n/m`（点击 `n/m` 切回 `Editor`）。<br>2. **第 2 行（分割线标题行 `title_row`）**：<br>   - `Editor`：左侧显示 ` prompt名称 · 当前页面title `（实时从当前编辑器缓冲 `state.prompt.text()` 提取 `{title:}` 或回退 `page.name`）；右侧原页控件位置（`area.right() - 2` 向左）放置模板块状态按钮 `[todo]`/`[run]`/`[done]`。<br>   - `Pages`：左侧显示 ` prompt名称 · pages `，右侧为纯分割线 `─`。 |
-| **5. 焦点配合与双行悬停** | 1. **不抢占键盘焦点**：展开 `recent` 抽屉后，键盘焦点仍留在上方视图（`Editor` 正常打字、`Tree`/`Pages` 正常上下移动和搜索）。<br>2. **高亮与悬停**：抽屉中与当前正在编辑的 `(PromptItem.id, PromptPageId)` 匹配的条目在第 1 行左侧显示 `❯ ` 且标题加粗；鼠标悬停在某条目的第 1 行或第 2 行时，该条目的**两行同时铺选中底色**。 |
+| **5. 焦点配合与双行悬停** | 1. **键盘归抽屉**：展开 `recent` 抽屉后键盘操作全部由抽屉接管，默认选中当前编辑页（不在列表内则第一条）；`↑`/`↓` 移动选中、`Enter` 打开、`Esc` / `Ctrl/Cmd+R` 收起，其余按键与粘贴全部吞掉，不再编辑或搜索上方视图。<br>2. **关闭按钮**：抽屉分割线右上角显示 `[x]`，点击收起抽屉并回到原视图。<br>3. **高亮与悬停**：抽屉中与当前正在编辑的 `(PromptItem.id, PromptPageId)` 匹配的条目在第 1 行左侧显示 `❯ ` 且标题加粗；键盘选中项与鼠标悬停项的两行同时铺选中底色，鼠标悬停优先。 |
 
 ---
 
@@ -445,7 +445,8 @@ pub fn render(
 | 工具栏页控件 | `layout::toolbar_page_controls`（Editor 带箭头、Pages 仅 `n/m`）；`render_header` 内绘制 |
 | 标题行 | 左侧 `条目名 · 页名`；右侧状态标签 `[todo]/[run]/[done]`（`ui::prompt::header::paint_title_row`） |
 | 视口同步 | `AppState.prompt_resize_pending` + `event::resize_panes` 按 `prompt_body_split().main` 更新编辑器尺寸 |
-| 鼠标 | 工具栏 `[rec]` 点击、抽屉条目单击、双行悬停、抽屉独立滚动条点击/拖拽、滚轮不穿透 |
+| 鼠标 | 工具栏 `[rec]` 点击、抽屉条目单击、双行悬停、抽屉独立滚动条点击/拖拽、滚轮不穿透、右上角 `[x]` 关闭 |
+| 键盘 | 抽屉展开时全部接管：`↑`/`↓` 选择、`Enter` 打开、`Esc`/`Ctrl+R` 收起，其余键与粘贴吞掉 |
 | 快捷键 | `EditorCommand::ToggleRecentPages` ← `Ctrl/Cmd+R`（Tree/Editor/Pages 均生效） |
 
 ### 测试覆盖
@@ -455,6 +456,6 @@ pub fn render(
 - `layout::tests`：抽屉高度上限/半屏压缩/空态行。
 - `ui::prompt::recent::tests`：双行渲染、时间/状态点、双行悬停、空态与滚动窗口。
 - `ui::prompt::tests` / `ui::prompt::pages::tests`：标题行无页控件、工具栏页控件命中、状态标签右对齐、窄屏降级。
-- `event::tests::prompt_recent`：三种模式 Ctrl+R、`[rec]` 点击、条目单击跳转、悬停清除、滚轮不穿透。
+- `event::tests::prompt_recent`：三种模式 Ctrl+R、`[rec]` 点击、条目单击跳转、悬停清除、滚轮不穿透、默认选中当前页、键盘导航/打开/Esc 收起、其余键吞掉、`[x]` 关闭。
 - `db::tests`：`PromptPageRecord.updated_at` 读取与正文更新后递增。
 - `tests/prompt_border_title.rs`：真实渲染下的两行表头、页控件位置、箭头置灰与标题截断。

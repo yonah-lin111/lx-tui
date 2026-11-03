@@ -113,6 +113,8 @@ pub const PROMPT_FOLDERS_LABEL: &str = "[refDir]";
 pub const PROMPT_RECENT_LABEL: &str = "[rec]";
 /// 抽屉顶部分割线标签。
 pub const PROMPT_RECENT_SECTION_LABEL: &str = " recent ";
+/// 抽屉右上角关闭按钮。
+pub const PROMPT_RECENT_CLOSE: &str = "[x]";
 /// 抽屉空态。
 pub const PROMPT_RECENT_EMPTY: &str = "no recent pages";
 

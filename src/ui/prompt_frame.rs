@@ -265,6 +265,7 @@ pub(crate) fn render_body(
                 visible_entries: split.visible_entries,
                 focused,
                 hover: state.prompt_recent_hover,
+                active: state.prompt_owner().prompt_panel.recent_active,
             },
         );
     }
@@ -279,6 +280,10 @@ pub(crate) fn render_body(
         )
     {
         widgets::scrollbar::render(frame, &scrollbar);
+    }
+    // 抽屉展开时键盘归 recent：不再在上方编辑器/搜索框绘制硬件光标。
+    if split.recent_divider.is_some() {
+        return None;
     }
     if matches!(mode, PromptMode::Tree | PromptMode::Pages) {
         // 树/页列表视图硬件光标落在搜索框输入位置（与模态输入框一致），未聚焦不显示。
@@ -330,6 +335,25 @@ pub fn prompt_recent_contains(panel: Rect, state: &AppState, column: u16, row: u
     };
     let inner = crate::layout::pane_inner_rect(panel);
     divider.x <= column && column < inner.right() && divider.y <= row && row < inner.bottom()
+}
+
+/// 命中最近页面抽屉右上角关闭按钮。
+pub fn prompt_recent_close_at(panel: Rect, state: &AppState, column: u16, row: u16) -> bool {
+    prompt_recent_close_rect(panel, state).is_some_and(|area| area.contains((column, row).into()))
+}
+
+/// 最近页面抽屉右上角关闭按钮矩形；抽屉收起、空间不足或宽度不够时为 None。
+pub fn prompt_recent_close_rect(panel: Rect, state: &AppState) -> Option<Rect> {
+    if state.prompt_collapsed || state.right_tab != RightTab::Prompt {
+        return None;
+    }
+    let panel_state = &state.prompt_owner().prompt_panel;
+    if !panel_state.recent_open {
+        return None;
+    }
+    let rows = recent_rows(state);
+    let split = crate::layout::prompt_body_split(panel, true, rows.len());
+    prompt::recent::close_rect(split.recent_divider?)
 }
 
 /// 命中最近页面抽屉条目（返回条目下标）；抽屉未展开、空态或不在内容区时为 None。

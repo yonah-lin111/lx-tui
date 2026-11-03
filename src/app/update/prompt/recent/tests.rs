@@ -56,9 +56,15 @@ fn toggle_opens_and_resets_scroll() {
     assert!(toggle_prompt_recent(&mut state));
     assert!(state.workspaces[0].prompt_panel.recent_open);
     assert_eq!(state.workspaces[0].prompt_panel.recent_scroll, 0);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.recent_active,
+        Some(0),
+        "无当前编辑页时默认选中第一条"
+    );
     assert!(state.prompt_resize_pending);
     assert!(toggle_prompt_recent(&mut state));
     assert!(!state.workspaces[0].prompt_panel.recent_open);
+    assert_eq!(state.workspaces[0].prompt_panel.recent_active, None);
 }
 
 #[test]
@@ -80,6 +86,15 @@ fn open_recent_page_commits_current_and_switches_target() {
     assert_eq!(panel.mode, PromptMode::Editor);
     assert_eq!(panel.editing, Some(PromptEditing::Item(12)));
     assert!(panel.recent_open, "点击后抽屉保持展开");
+    let after = prompt_recent_rows(&state);
+    let active = after
+        .get(panel.recent_active.expect("recent active"))
+        .expect("active row");
+    assert_eq!(
+        active.page_id,
+        PromptPageId::Saved(12),
+        "选中项跟随打开的页"
+    );
     assert_eq!(state.prompt.text(), "beta");
     // 旧页正文已提交到内存。
     let alpha = panel
@@ -112,13 +127,20 @@ fn toggle_reduces_editor_viewport_after_resize() {
 fn scroll_is_clamped_to_entry_window() {
     let mut state = demo_state();
     state.workspaces[0].prompt_panel.recent_open = true;
+    state.workspaces[0].prompt_panel.recent_active = Some(0);
     assert!(scroll_prompt_recent(&mut state, 1, 1, 3));
     assert_eq!(state.workspaces[0].prompt_panel.recent_scroll, 1);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.recent_active,
+        Some(1),
+        "滚动后键盘选中项收进可见窗口"
+    );
     assert!(scroll_prompt_recent(&mut state, 5, 1, 3));
     assert_eq!(
         state.workspaces[0].prompt_panel.recent_scroll, 2,
         "越界钳制到 total - visible"
     );
+    assert_eq!(state.workspaces[0].prompt_panel.recent_active, Some(2));
     assert!(!scroll_prompt_recent(&mut state, 1, 1, 3));
     assert!(
         !set_prompt_recent_scroll(&mut state, 9, 1, 3),

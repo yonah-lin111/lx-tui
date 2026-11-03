@@ -1,4 +1,4 @@
-//! 最近页面抽屉事件测试：快捷键/按钮开关、单击跳转、悬停与滚轮。
+//! 最近页面抽屉事件测试：快捷键/按钮开关、键盘接管、单击跳转、悬停与滚轮。
 
 use super::test_support::*;
 use super::*;
@@ -116,6 +116,7 @@ fn clicking_recent_entry_opens_page_and_keeps_drawer() {
         panel.tree.item(7).map(|item| item.active_page),
         Some(crate::app::prompt::PromptPageId::Saved(70))
     );
+    assert_eq!(panel.recent_active, Some(beta), "点击后高亮跟随目标");
 }
 
 #[test]
@@ -169,6 +170,9 @@ fn recent_scrollbar_supports_track_click_and_thumb_drag() {
     update::focus_prompt(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    // 本用例只验证滚动条：把键盘选中与滚动归零，确保轨道点击从顶部开始。
+    state.workspaces[0].prompt_panel.recent_active = None;
+    state.workspaces[0].prompt_panel.recent_scroll = 0;
     let bar = ui::prompt_frame::prompt_recent_scrollbar(geo.view.prompt, &state)
         .expect("recent scrollbar");
     // 轨道点击：跳转到非零偏移。
@@ -215,6 +219,122 @@ fn recent_scrollbar_supports_track_click_and_thumb_drag() {
         &mut dirty,
     );
     assert!(state.prompt_recent_scroll_drag.is_none());
+}
+
+#[test]
+fn keyboard_defaults_to_current_page_and_navigates_to_open() {
+    let config = Config::default();
+    let mut state = paged_prompt_state();
+    update::focus_prompt(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    let panel = &state.workspaces[0].prompt_panel;
+    assert_eq!(panel.recent_active, Some(1), "默认选中当前编辑页");
+
+    key(&mut state, &geo, KeyCode::Up, KeyModifiers::NONE);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.recent_active,
+        Some(0),
+        "↑ 移动到上一条"
+    );
+    key(&mut state, &geo, KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(state.prompt.text(), "beta", "Enter 打开高亮记录");
+    assert!(state.workspaces[0].prompt_panel.recent_open);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.recent_active,
+        Some(0),
+        "打开后高亮跟随目标"
+    );
+
+    key(&mut state, &geo, KeyCode::Esc, KeyModifiers::NONE);
+    assert!(!state.workspaces[0].prompt_panel.recent_open);
+    assert_eq!(state.workspaces[0].prompt_panel.recent_active, None);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.mode,
+        PromptMode::Editor,
+        "Esc 回到原视图"
+    );
+    assert_eq!(state.prompt.text(), "beta", "收起抽屉不改正文");
+}
+
+#[test]
+fn keyboard_takes_over_and_swallows_editor_keys() {
+    let config = Config::default();
+    let mut state = paged_prompt_state();
+    update::focus_prompt(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    let before = state.prompt.text().to_string();
+    key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    for (code, modifiers) in [
+        (KeyCode::Char('z'), KeyModifiers::NONE),
+        (KeyCode::Char('l'), KeyModifiers::CONTROL),
+        (KeyCode::Char('p'), KeyModifiers::CONTROL),
+        (KeyCode::Char('s'), KeyModifiers::CONTROL),
+    ] {
+        key(&mut state, &geo, code, modifiers);
+    }
+    assert_eq!(state.prompt.text(), before, "抽屉展开时按键不写入正文");
+    assert_eq!(
+        state.workspaces[0].prompt_panel.mode,
+        PromptMode::Editor,
+        "视图切换快捷键同样被抽屉吞掉"
+    );
+}
+
+#[test]
+fn close_button_and_escape_restore_previous_view() {
+    let config = Config::default();
+    let mut state = paged_prompt_state();
+    update::focus_prompt(&mut state);
+    update::show_prompt_tree(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    let close = ui::prompt_frame::prompt_recent_close_rect(geo.view.prompt, &state)
+        .expect("drawer close button");
+    click(&mut state, &geo, close.x + 1, close.y);
+    assert!(!state.workspaces[0].prompt_panel.recent_open);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.mode,
+        PromptMode::Tree,
+        "关闭按钮回到 Tree 视图"
+    );
+    assert_eq!(state.workspaces[0].prompt_panel.recent_active, None);
+}
+
+#[test]
+fn keyboard_navigation_keeps_selection_visible() {
+    use crate::app::prompt::{PromptItem, PromptPage};
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let mut item = PromptItem::single(7, None, "paged", "alpha");
+    for index in 1..6 {
+        item.pages.push(PromptPage::saved(
+            70 + index,
+            format!("Page {}", index + 1),
+            format!("body {index}"),
+        ));
+    }
+    state.workspaces[0]
+        .prompt_panel
+        .tree
+        .replace(vec![], vec![item]);
+    assert!(update::edit_prompt_item(&mut state, 0, 7));
+    update::focus_prompt(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    let rows = ui::prompt_frame::recent_rows(&state);
+    let visible =
+        crate::layout::prompt_body_split(geo.view.prompt, true, rows.len()).visible_entries;
+    for _ in 0..3 {
+        key(&mut state, &geo, KeyCode::Up, KeyModifiers::NONE);
+        let panel = &state.workspaces[0].prompt_panel;
+        let active = panel.recent_active.expect("active recent");
+        assert!(
+            active >= panel.recent_scroll && active < panel.recent_scroll + visible,
+            "选中项必须保持在可见窗口内：active={active} scroll={} visible={visible}",
+            panel.recent_scroll
+        );
+    }
 }
 
 #[test]

@@ -55,6 +55,11 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         }
         _ => {}
     }
+    // 抽屉展开时键盘归 recent（事件层负责导航与打开）；这里兜底吞掉，
+    // 防止直接调用编辑命令时改到被抽屉遮住的上方视图。
+    if crate::app::update::prompt_recent_open(state) {
+        return;
+    }
     // 树视图轻量接管按键：上下移动、回车激活、左右展开折叠，其余进入搜索框。
     if prompt_tree_mode(state) {
         route_prompt_tree(state, &command);

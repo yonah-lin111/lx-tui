@@ -1,4 +1,4 @@
-//! 最近修改页面抽屉：分割线、双行条目、状态圆点与悬停高亮；只读状态。
+//! 最近修改页面抽屉：分割线、关闭按钮、双行条目、状态圆点与键盘/悬停高亮；只读状态。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -22,6 +22,19 @@ pub struct RecentRender<'a> {
     pub visible_entries: usize,
     pub focused: bool,
     pub hover: Option<usize>,
+    /// 键盘选中项；鼠标悬停时悬停项优先。
+    pub active: Option<usize>,
+}
+
+/// 抽屉右上角关闭按钮矩形；宽度不足或与 ` recent ` 标签重叠时为 None。
+pub fn close_rect(divider: Rect) -> Option<Rect> {
+    let width = u16::try_from(text::PROMPT_RECENT_CLOSE.width()).ok()?;
+    let x = divider.right().checked_sub(width + 1)?;
+    let label_right = divider
+        .x
+        .saturating_add(2)
+        .saturating_add(text::PROMPT_RECENT_SECTION_LABEL.width() as u16);
+    (x > label_right).then_some(Rect::new(x, divider.y, width, 1))
 }
 
 /// 绘制 `├─ recent ───┤` 分割线、空态或双行条目列表。
@@ -35,6 +48,7 @@ pub fn render(buf: &mut Buffer, data: &RecentRender<'_>) {
         visible_entries,
         focused,
         hover,
+        active,
     } = *data;
     super::render_rule(panel, divider.y, buf, focused);
     let label = text::PROMPT_RECENT_SECTION_LABEL;
@@ -46,6 +60,15 @@ pub fn render(buf: &mut Buffer, data: &RecentRender<'_>) {
             label,
             label.width(),
             style::muted_on_border(),
+        );
+    }
+    if let Some(close) = close_rect(divider) {
+        buf.set_stringn(
+            close.x,
+            close.y,
+            text::PROMPT_RECENT_CLOSE,
+            usize::from(close.width),
+            style::text_on_border(),
         );
     }
     if area.width == 0 || area.height == 0 {
@@ -63,12 +86,13 @@ pub fn render(buf: &mut Buffer, data: &RecentRender<'_>) {
         return;
     }
     let start = scroll.min(rows.len().saturating_sub(visible_entries));
+    let selected = hover.or(active);
     for (offset, row) in rows.iter().enumerate().skip(start).take(visible_entries) {
         let y = area.y + (offset - start) as u16 * 2;
         if y + 1 >= area.bottom() {
             break;
         }
-        paint_entry(buf, area, y, row, hover == Some(offset));
+        paint_entry(buf, area, y, row, selected == Some(offset));
     }
 }
 

@@ -445,6 +445,11 @@ pub(crate) fn handle_mouse_down_left(
             }
         }
         *dirty = true;
+    } else if ui::prompt_frame::prompt_recent_close_at(view.prompt, state, mouse.column, mouse.row)
+    {
+        // 抽屉右上角关闭按钮：收起抽屉，键盘交还上方视图。
+        update::close_prompt_recent(state);
+        *dirty = true;
     } else if let Some(index) =
         ui::prompt_frame::prompt_recent_row_at(view.prompt, state, mouse.column, mouse.row)
     {
