@@ -361,7 +361,7 @@ pub enum TurnOutcome {
     Failed { code: String },
 }
 
-/// 一轮结算：终态 + **整轮累计** usage（多次采样求和，未知保持 None）。
+/// 一轮结算：终态 + **最后一次模型响应**的 usage（上下文占用口径，不跨步累加）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnSummary {
     pub outcome: TurnOutcome,
@@ -641,7 +641,7 @@ fn compact_summary_prompt(summary: &str) -> String {
 ///
 /// `stream_one` 只执行**一次**模型流并返回其全部增量与结束原因（生产实现为
 /// [`crate::chat::client::run_stream`]，测试可注入脚本化假 transport）。
-/// 返回 [`TurnSummary`]：调用方据此提交整轮终态与累计 usage。
+/// 返回 [`TurnSummary`]：调用方据此提交整轮终态与最后一次响应的 usage。
 pub async fn run_agent_turn<H, E, S, F>(
     context: ModelContext,
     mut host: H,
@@ -677,7 +677,10 @@ where
             };
         }
         let outcome = stream_one(context.next_request(), cancel.clone()).await;
-        add_usage(&mut usage, &outcome.deltas);
+        // 上下文占用只认最后一次模型响应的 usage；多步工具循环不跨步累加 input。
+        if let Some(latest) = step_usage(&outcome.deltas) {
+            usage = latest;
+        }
         match &outcome.stop {
             StopReason::Cancelled => return TurnSummary::interrupted(usage),
             StopReason::Failed { code } => return TurnSummary::failed(code.clone(), usage),
@@ -953,23 +956,30 @@ fn assistant_text(deltas: &[ChatDelta]) -> String {
     text
 }
 
-/// 累加一次响应的 usage：多次采样求和；未知（None）不写 0 冒充真实值。
-fn add_usage(total: &mut Usage, deltas: &[ChatDelta]) {
+/// 合并单次模型响应内分帧到达的 usage（后到的非 None 字段覆盖先到的）。
+///
+/// 同一次 HTTP 响应可能先报 input、再报 output（Anthropic / Google）；这里合并成
+/// 一个完整快照。返回 None 表示该次响应没有任何 usage 帧。
+fn step_usage(deltas: &[ChatDelta]) -> Option<Usage> {
+    let mut step = Usage::default();
+    let mut seen = false;
     for delta in deltas {
-        let ChatDelta::Usage(step) = delta else {
+        let ChatDelta::Usage(part) = delta else {
             continue;
         };
-        total.input = add_optional(total.input, step.input);
-        total.output = add_optional(total.output, step.output);
-        total.cache_read = add_optional(total.cache_read, step.cache_read);
-        total.cache_write = add_optional(total.cache_write, step.cache_write);
+        seen = true;
+        if part.input.is_some() {
+            step.input = part.input;
+        }
+        if part.output.is_some() {
+            step.output = part.output;
+        }
+        if part.cache_read.is_some() {
+            step.cache_read = part.cache_read;
+        }
+        if part.cache_write.is_some() {
+            step.cache_write = part.cache_write;
+        }
     }
-}
-
-/// 可选数值累加：两侧都未知时为 None。
-fn add_optional(total: Option<i64>, step: Option<i64>) -> Option<i64> {
-    match (total, step) {
-        (None, None) => None,
-        (total, step) => Some(total.unwrap_or(0).saturating_add(step.unwrap_or(0))),
-    }
+    seen.then_some(step)
 }

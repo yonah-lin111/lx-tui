@@ -11,6 +11,7 @@ mod process;
 pub mod rewind;
 mod subagent;
 mod tools;
+mod usage;
 mod user_shell;
 mod view_map;
 
@@ -35,6 +36,7 @@ pub use tools::{
     INTERRUPTED_ERROR_CODE, MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_RESULT_BYTES, ToolCallRecord,
     ToolCallResult, ToolCallTicket, ToolTerminalStatus,
 };
+pub use usage::Usage;
 pub use user_shell::{MAX_USER_SHELL_OUTPUT_BYTES, UserShellCommitted, UserShellRecord};
 pub use view_map::{
     chat_message_part_views, chat_message_tool_views, chat_message_views_to_db, chat_part_views,
@@ -155,15 +157,6 @@ pub enum TurnOutcome {
         /// 裁剪后的稳定错误码；不含密钥或原始响应体。
         error_code: String,
     },
-}
-
-/// 供应商返回的用量；未知字段保持 None，不写 0 冒充真实值。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Usage {
-    pub input: Option<i64>,
-    pub output: Option<i64>,
-    pub cache_read: Option<i64>,
-    pub cache_write: Option<i64>,
 }
 
 /// 历史列表分页大小。

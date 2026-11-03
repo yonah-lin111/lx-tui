@@ -532,16 +532,19 @@ pub fn on_session_reloaded(
     if target.lx.rewind.executing.is_none() {
         target.lx.clear_rewind();
     }
-    // 用量按剩余消息重算，避免残留被删轮次。
+    // 用量按剩余消息与生效压缩边界重算，避免残留被删轮次或压缩前的高占用。
     let recent = messages.iter().rev().find(|message| {
         message.role == "assistant"
             && (message.input_tokens.is_some() || message.output_tokens.is_some())
     });
-    target.lx.chat.context_tokens = recent.map(|message| {
-        let input = message.input_tokens.unwrap_or(0).max(0);
-        let output = message.output_tokens.unwrap_or(0).max(0);
-        u64::try_from(input.saturating_add(output)).unwrap_or(u64::MAX)
+    target.lx.chat.last_tokens_model = recent.and_then(|message| {
+        message
+            .model_provider
+            .as_deref()
+            .zip(message.model_id.as_deref())
+            .map(|(provider, model)| format!("{provider}/{model}"))
     });
+    target.lx.chat.recompute_context_tokens(&target.lx.compact);
     // 计划从剩余消息的最后一条成功 update_plan 重建：revert_only 时对话未变，
     // 计划卡片与下一轮运行上下文都不能因重载而丢。
     let restored_messages = target.lx.chat.messages.clone();

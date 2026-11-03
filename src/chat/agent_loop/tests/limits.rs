@@ -1,4 +1,4 @@
-//! 限额、取消与 usage 累加的编排测试（与 `tests.rs` 共用同一套可控 host/executor）。
+//! 限额、取消与单步 usage 的编排测试（与 `tests.rs` 共用同一套可控 host/executor）。
 
 use super::*;
 use crate::chat::events::RequestPurpose;
@@ -32,15 +32,34 @@ async fn steps_are_not_capped_at_the_old_limit() {
     assert_eq!(script.request_count(), 31);
 }
 
-/// usage 跨采样累加；未知保持 None（不写 0 冒充真实值）。
+/// 多步工具循环只保留**最后一次**响应的 usage；未知保持 None（不写 0 冒充真实值）。
 #[tokio::test]
-async fn usage_accumulates_across_steps_and_keeps_none() {
+async fn usage_keeps_last_step_only_and_merges_split_frames() {
     let fixture = Fixture::new("usage");
     let read_args = r#"{"path":"."}"#.to_string();
+    // 第二步在同一次响应内分帧上报：先 input、再 output，必须合并成一个快照。
+    let split_final = vec![
+        ChatDelta::Part(PartDelta {
+            kind: PartKind::Text,
+            text: "done".into(),
+            metadata: None,
+        }),
+        ChatDelta::Usage(Usage {
+            input: Some(5),
+            ..Default::default()
+        }),
+        ChatDelta::Usage(Usage {
+            output: Some(7),
+            ..Default::default()
+        }),
+        ChatDelta::ResponseFinished {
+            stop: ModelStepStop::Final,
+        },
+    ];
     let script = Script::new(
         vec![
             tool_calls(&[("c1", "read", &read_args, 0)], Some((10, 2))),
-            final_response("done", Some((5, 7))),
+            split_final,
         ],
         StopReason::Complete,
     );
@@ -55,9 +74,36 @@ async fn usage_accumulates_across_steps_and_keeps_none() {
     )
     .await;
     assert_eq!(summary.outcome, TurnOutcome::Complete);
-    assert_eq!(summary.usage.input, Some(15));
-    assert_eq!(summary.usage.output, Some(9));
+    assert_eq!(summary.usage.input, Some(5), "只取最后一步的 input");
+    assert_eq!(summary.usage.output, Some(7), "分帧 output 已合并");
     assert_eq!(summary.usage.cache_read, None, "未知保持 None");
+}
+
+/// 最后一步在产出 usage 前结束：保留上一步已完成的单步 usage，不写成 0。
+#[tokio::test]
+async fn usage_keeps_previous_step_when_last_step_reports_nothing() {
+    let fixture = Fixture::new("usage-preserve");
+    let read_args = r#"{"path":"."}"#.to_string();
+    let script = Script::new(
+        vec![
+            tool_calls(&[("c1", "read", &read_args, 0)], Some((10, 2))),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::new();
+    let executor = RecordingExecutor::new();
+    let summary = run_agent_turn(
+        context(fixture.path()),
+        host,
+        executor,
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert_eq!(summary.usage.input, Some(10));
+    assert_eq!(summary.usage.output, Some(2));
 }
 
 /// usage 全部未知时整轮仍为 None（不写 0）。

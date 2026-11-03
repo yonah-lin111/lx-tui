@@ -145,6 +145,8 @@ pub fn on_compact_finished(
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.chat.follow_bottom = true;
         target.lx.chat.suppressed_prompt_header = None;
+        // 生效边界已推进：边界内旧轮次的用量不再代表当前上下文。
+        target.lx.chat.recompute_context_tokens(&target.lx.compact);
     }
     refresh_lx_status(state, pane);
     true
@@ -231,6 +233,8 @@ pub fn on_compact_reverted(
             }
         }
     }
+    // 边界回退：按新的生效检查点重算占用（撤销后恢复压缩前的最后一条回复）。
+    target.lx.chat.recompute_context_tokens(&target.lx.compact);
     target.lx.rewind.clear();
     if matches!(
         target.lx.slash,
@@ -268,6 +272,9 @@ pub fn set_checkpoints(
         return false;
     }
     target.lx.compact.replace(views);
+    // 会话加载时检查点晚于消息到达：此处按生效边界重算，避免压缩前的高占用残留。
+    target.lx.chat.recompute_context_tokens(&target.lx.compact);
+    refresh_lx_status(state, pane);
     true
 }
 

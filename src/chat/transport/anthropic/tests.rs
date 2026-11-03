@@ -355,14 +355,18 @@ fn usage_from_message_start_and_delta() {
     let deltas = decode_all(
         &mut decoder,
         &[
-            r#"{"type":"message_start","message":{"usage":{"input_tokens":50,"cache_read_input_tokens":7}}}"#,
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":50,"cache_read_input_tokens":7,"cache_creation_input_tokens":3}}}"#,
             r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":9}}"#,
             r#"{"type":"message_stop"}"#,
         ],
     );
+    // 完整 Prompt 输入 = 未缓存尾部 + 缓存读取 + 缓存写入（与 OpenAI/Gemini 口径一致）。
     assert!(deltas.iter().any(|delta| matches!(
         delta,
-        ChatDelta::Usage(usage) if usage.input == Some(50) && usage.cache_read == Some(7)
+        ChatDelta::Usage(usage)
+            if usage.input == Some(60)
+                && usage.cache_read == Some(7)
+                && usage.cache_write == Some(3)
     )));
     assert!(deltas.iter().any(|delta| matches!(
         delta,
@@ -693,7 +697,7 @@ fn hosted_tool_blocks_are_rejected() {
     assert!(error.contains("server_tool_use"), "{error}");
 }
 
-/// 用量只报**本响应**的实际值：两次采样各自解码，由上层累加。
+/// 用量只报**本响应**的实际值：两次采样各自解码，由上层取最后一次响应。
 #[test]
 fn usage_is_reported_per_response_only() {
     let mut first = Decoder::default();

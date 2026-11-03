@@ -414,12 +414,9 @@ pub fn on_stream_delta(state: &mut AppState, key: &RequestKey, deltas: &[ChatDel
                 );
             }
             ChatDelta::Usage(usage) => {
-                // 上下文占用按 codex 口径：上一轮请求的输入 + 输出（下一轮请求的输入近似
-                // 为其上一轮输入加上该轮输出）。切模型时分子清空（键由 refresh 维护）。
-                if let Some(input) = usage.input {
-                    let context = input.saturating_add(usage.output.unwrap_or(0));
-                    target.lx.chat.context_tokens = Some(context.max(0) as u64);
-                }
+                // 上下文占用只认单步 input + output：同一次响应内分帧到达的字段先在
+                // step_usage 里合并，绝不跨工具步累加 input（多步循环不再撑爆 100%）。
+                target.lx.chat.absorb_usage_delta(usage);
                 changed = true;
             }
             ChatDelta::ReasoningEnded { item_id } => {
@@ -518,6 +515,10 @@ pub fn on_stream_finished(
         message.output_tokens = usage.output;
         message.cache_read_tokens = usage.cache_read;
         message.duration_ms = duration_ms;
+    }
+    // 终态 usage 是最后一次响应的权威单步值：同步上下文占用（未知时保留流中已知值）。
+    if let Some(context) = usage.context_tokens() {
+        target.lx.chat.context_tokens = Some(context);
     }
     if matches!(reason, StopReason::Cancelled) {
         target.lx.chat.main_stopped = true;

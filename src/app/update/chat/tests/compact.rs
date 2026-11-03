@@ -21,6 +21,28 @@ fn checkpoint(id: &str, sequence: i64, state: &str) -> CompactCheckpoint {
     }
 }
 
+/// 仅用于上下文重算的最小 assistant 消息。
+fn assistant_message(sequence: i64, input: i64, output: i64) -> crate::app::state::ChatMessageView {
+    crate::app::state::ChatMessageView {
+        id: format!("a{sequence}"),
+        sequence,
+        kind: "chat".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        shell: None,
+        steps: Vec::new(),
+        model_label: None,
+        error_code: None,
+        input_tokens: Some(input),
+        output_tokens: Some(output),
+        cache_read_tokens: None,
+        duration_ms: None,
+        reports: Vec::new(),
+        attachments: Vec::new(),
+    }
+}
+
 /// 绑定会话的 lx 窗格（空闲、有模型）。
 fn ready_compact_state() -> (AppState, PaneId) {
     let mut state = ready_state("");
@@ -169,6 +191,85 @@ fn success_backfills_checkpoints_and_model_label() {
     assert!(target.lx.chat.follow_bottom);
     // 默认折叠。
     assert!(!target.lx.compact.is_expanded("c1"));
+}
+
+/// 压缩完成：新边界覆盖旧轮次时立即清空上下文占用（状态行同步）。
+#[test]
+fn success_clears_context_covered_by_new_boundary() {
+    let (mut state, pane) = ready_compact_state();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.messages = vec![assistant_message(3, 1_000, 100)];
+        target.lx.chat.context_tokens = Some(1_100);
+    }
+    assert!(on_compact_finished(
+        &mut state,
+        pane,
+        "sess-compact",
+        Some(vec![checkpoint("c1", 4, COMPACT_ACTIVE)])
+    ));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.chat.context_tokens, None,
+        "边界覆盖全部消息后不得显示旧占用"
+    );
+    assert_eq!(target.lx.chat.status.input_tokens, None, "状态行同步清空");
+}
+
+/// 撤销压缩：边界回退后恢复压缩前最后一条回复的占用。
+#[test]
+fn revert_restores_context_after_boundary() {
+    let (mut state, pane) = ready_compact_state();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.messages =
+            vec![assistant_message(1, 100, 10), assistant_message(3, 200, 20)];
+        target
+            .lx
+            .compact
+            .replace(vec![crate::app::state::CompactNoticeView::from_record(
+                &checkpoint("c1", 4, COMPACT_ACTIVE),
+            )]);
+        target.lx.chat.context_tokens = None;
+    }
+    assert!(on_compact_reverted(
+        &mut state,
+        pane,
+        "sess-compact",
+        Some("c1"),
+        Some(vec![checkpoint("c1", 4, COMPACT_REVERTED)])
+    ));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.chat.context_tokens,
+        Some(220),
+        "撤销后按剩余消息取最后一条 assistant"
+    );
+    assert_eq!(target.lx.chat.status.input_tokens, Some(220));
+}
+
+/// 会话加载的检查点回填晚于消息：set_checkpoints 必须按边界重算占用。
+#[test]
+fn reloading_checkpoints_recomputes_context() {
+    let (mut state, pane) = ready_compact_state();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.messages =
+            vec![assistant_message(1, 100, 10), assistant_message(3, 200, 20)];
+        target.lx.chat.context_tokens = Some(220);
+    }
+    assert!(set_compact_checkpoints(
+        &mut state,
+        pane,
+        &[checkpoint("c1", 2, COMPACT_ACTIVE)]
+    ));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.chat.context_tokens,
+        Some(220),
+        "边界只覆盖 seq 1，seq 3 仍有效"
+    );
+    assert_eq!(target.lx.chat.status.input_tokens, Some(220));
 }
 
 /// 失败：清执行态、保留已有检查点与展开状态（不写检查点）。

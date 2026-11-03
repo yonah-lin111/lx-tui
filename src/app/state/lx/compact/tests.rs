@@ -77,12 +77,15 @@ fn replace_keeps_expansion_for_surviving_ids() {
 fn active_is_the_latest_active_checkpoint() {
     let mut compact = LxCompact::default();
     assert!(compact.active().is_none());
+    assert_eq!(compact.active_upto_sequence(), None);
     compact.replace(vec![
         checkpoint("c1", 4, true),
         checkpoint("c2", 6, false),
         checkpoint("c3", 8, true),
     ]);
     assert_eq!(compact.active().map(|item| item.id.as_str()), Some("c3"));
+    // 边界是检查点覆盖的最后一条原始消息（sequence - 1）。
+    assert_eq!(compact.active_upto_sequence(), Some(7));
 }
 
 /// 忙碌标记：重置会话时清掉，避免新会话继承“压缩中”。

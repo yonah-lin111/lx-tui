@@ -155,6 +155,13 @@ impl LxCompact {
         self.checkpoints.iter().rev().find(|item| item.active)
     }
 
+    /// 生效压缩边界覆盖的最后一条原始消息 sequence（无生效检查点时为 None）。
+    ///
+    /// 计算上下文占用时只考虑该边界之后的消息：摘要已取代边界内的原始轮次。
+    pub fn active_upto_sequence(&self) -> Option<i64> {
+        self.active().map(|checkpoint| checkpoint.end_sequence)
+    }
+
     /// 回执读库失败时的本地兜底：把目标检查点标成已撤销。
     ///
     /// 撤销事务已经提交，上下文指针必须立刻回退；继续用旧摘要会让下一轮拿到
