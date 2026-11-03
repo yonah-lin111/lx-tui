@@ -1,6 +1,6 @@
 # Prompt 顶部控件换位、页面标题展示与底部 Recent Pages 抽屉设计
 
-- 状态：**已实现（待合并）**（2026-11-02）
+- 状态：**已实现并合入 `dev`**（2026-11-03）
 - 适用范围：`src/input/`、`src/event/`、`src/layout/prompt.rs`、`src/db/`、`src/app/prompt/`、`src/app/update/`、`src/ui/prompt/`、`src/ui/prompt_frame.rs`、`src/ui/text.rs`、`src/ui/tooltip.rs`、`src/platform/environment.rs`。
 - 架构约束：
   - 保持 `app/`（纯状态与更新）、`ui/`（纯渲染只读状态）、`layout/`（纯几何计算）与 `db/`（SQLite 持久化）边界清晰；
@@ -14,17 +14,18 @@
 针对 `src/ui/prompt/` 及其关联状态/布局模块，本次迭代包含以下三项核心改造：
 
 1. **顶部两行表头控件换位（工具栏行 ↔ 分割线标题行）**：
-   - 将原位于第 2 行（分割线标题行 `title_row`）右侧的**切换页面控件（`‹ n/m ›` / `n/m`）**上移至第 1 行（工具栏行），放置在 `[refDir]` 按钮与保存状态圆点 `●` 的**中间位置**（即右组从左到右为 `[refDir] ‹ n/m › ●`）。
-   - 将原位于切换页面控件左侧的**模板块状态按钮（`[todo]` / `[run]` / `[done]`）**移动到原来切换页面控件所在的第 2 行（分割线标题行）最右侧（距右边框 `┤` 留 1 列 `─`）。
-   - 在第 1 行工具栏左侧紧跟模式切换按钮（`[≡]` / `[/]`）之后新增 **`[rec]`** 按钮（在 `Tree`、`Editor`、`Pages` 三种模式下常显），并绑定快捷键 **`Ctrl/Cmd + r`**，用于开关底部 Recent Pages 抽屉。
+   - 将原位于第 2 行（分割线标题行 `title_row`）右侧的**切换页面控件（`‹ n/m ›` / `n/m`）**上移至第 1 行（工具栏行），放置在 `[refDir]` 按钮与保存状态圆点 `●` 的**中间位置**（即右组从左到右为 `[refDir] ‹ n/m › ●`；`n/m` 在 `Editor` 视图下用 `style::text_on_border()` 默认亮白、在 `Pages` 视图下用 `style::accent()` 青色高亮，`‹`、`n/m`、`›` 均支持 Tooltip）。
+   - 移除第 2 行（分割线标题行）右侧的 `[todo]` / `[run]` / `[done]` 状态按钮，改为根据本页首个已闭合 `&&&` 模板块状态直接为标题行中的**当前页面 Title** 文字着色（无闭合块暗灰，`Todo` 亮白、`InProgress` 黄、`Done` 绿，与 Recent Pages 状态圆点语义对齐），悬停该页面 Title 提示 `cycle block status`、左键点击直接循环切换状态。
+   - 在第 1 行工具栏左侧紧跟模式切换按钮（`[≡]` / `[/]`）之后新增 **`[rec]`** 按钮（在 `Tree`、`Editor`、`Pages` 三种模式下常显；未展开抽屉时为 `style::text()` 默认亮白，抽屉实际展开可见时为 `style::accent()` 青色高亮），并绑定快捷键 **`Ctrl/Cmd + r`**，用于开关底部 Recent Pages 抽屉。
 
 2. **分割线标题行展示当前页面 Title（`prompt名称 · 当前页面title`）**：
    - 在 `PromptMode::Editor` 下，左侧标题行在提示词条目名称右侧添加当前页面的显示标题，使用 ` · ` 分隔（例如 ` API Design · Auth Flow `）。
-   - 页面显示标题解析规则与 `Pages` 列表统一：优先提取当前页首个闭合 `&&&` 模板块的 `{title: xxx}` 标题，未定义时回退为 `page.name`（如 `Page 1`）。
+   - 页面显示标题解析规则与 `Pages` 列表统一：优先提取当前页首个已闭合 `&&&` 模板块的 `{title: xxx}` 标题，未定义时回退为 `page.name`（如 `Page 1`）。
 
-3. **底部 Recent Pages 抽屉（支持全部视图模式打开、双行条目、独立滚动条与单击跳转）**：
-   - 在 `Tree`、`Editor`、`Pages` 任一模式下，可通过点击顶部 `[rec]` 按钮或按快捷键 `Ctrl/Cmd + r` 在 Prompt 面板下方展开/收起类似抽屉的 `recent` 区域（不覆盖全屏，上方原视图按剩余高度自适应收缩）。
-   - 抽屉内展示当前工作区所有已保存提示词（`PromptItem`）下的 Page，按页面最后修改时间 `updated_at` **全局倒序排列**（同一个 Prompt 若有多个最近修改的 Page，均各自作为独立条目按最新更新顺序显示，上限 20 条）。
+3. **底部 Recent Pages 抽屉（支持全部视图模式打开、双行条目、键盘接管、`[x]` 关闭按钮、独立滚动条与单击/回车跳转）**：
+   - 在 `Tree`、`Editor`、`Pages` 任一模式下，可通过点击顶部 `[rec]` 按钮或按快捷键 `Ctrl/Cmd + r` 在 Prompt 面板下方展开/收起类似抽屉的 `recent` 区域（不覆盖全屏，上方原视图按剩余高度自适应收缩；分割线右端提供 `[x]` 关闭按钮并带 Tooltip）。
+   - 抽屉展开期间接管全部 Prompt 键盘与粘贴输入：`↑`/`↓` 移动选中项、`Enter` 打开选中页、`Esc` 或 `Ctrl/Cmd + r` 收起抽屉，其余按键与粘贴一律吞掉，同时隐藏上方视图硬件光标。
+   - 抽屉内展示当前工作区所有已保存提示词（`PromptItem`）下的 Page，按页面最后修改时间 `updated_at` **全局倒序排列**（同一个 Prompt 若有多个最近修改的 Page，均各自作为独立条目按最新更新顺序显示，上限 20 条）；高度保底 2 条（5 行）、上限 3 条（7 行）且不超过内容区高度的一半。
    - 每个条目占 **2 行**：
      - 第 1 行：`prompt名称`（左对齐，当前正在编辑的页前置 `❯ ` 并加粗） + `[时间]`（右对齐，如 `[now]`、`[5m]`、`[2h]`、`[3d]`、`[10-15]`）。
      - 第 2 行：`最新的page名称`（左对齐，带 2 列缩进） + `状态小圆点`（右对齐，`Todo` 为灰色 `○`，`InProgress`/`Done` 为黄/绿 `●`，无模板块则留空）。
@@ -53,8 +54,7 @@
 │     Left : [≡]/[/] (Mode) -> [rec] (Recent) -> [←] (Undo) -> [→] (Redo)            │
 │     Right: [refDir] (Folders) -> ‹ n/m › (PageControls) -> ● (SaveDot)             │
 │   Row 2 (Divider / Title Row):                                                     │
-│     Left : ├─ {prompt_name} · {active_page_title} ──                               │
-│     Right: ─────────────────────────── [todo]/[run]/[done] ─┤                      │
+│     Left : ├─ {prompt_name} · {active_page_title (按模板状态着色/点击切状态)} ────┤│
 ├────────────────────────────────────────────────────────────────────────────────────┤
 │ 2. Recent Pages 时间戳与派生数据流                                                 │
 │   SQLite `workspace_prompt_page.updated_at` (strftime('%s', updated_at))           │
@@ -64,18 +64,19 @@
 │     ──► app::prompt::recent::recent_page_rows(panel, current_editor, now_secs)     │
 │           └─ 收集所有 PromptItem 的全部 Page ──► 按 updated_at DESC 排序 (Top 20)   │
 ├────────────────────────────────────────────────────────────────────────────────────┤
-│ 3. 底部 Recent 抽屉布局、滚轮与点击链路                                            │
+│ 3. 底部 Recent 抽屉布局、键盘接管、滚轮与点击链路                                  │
 │   Ctrl/Cmd + R 或点击工具栏 `[rec]`                                                │
 │     ──► update::toggle_prompt_recent(state)                                        │
-│           ├─ 切换 `prompt_panel.recent_open = !recent_open`                        │
-│           └─ 同步重算上方编辑器视口高度 (`sync_prompt_Editor_size`)                │
-│   layout::prompt_split_body(panel, recent_entry_count):                            │
-│     ├─ 上方主视图区域 (`main_text_rect` + `main_scrollbar_rect`)                   │
-│     └─ 下方抽屉区域 (`recent_divider_rect` + `recent_list_rect` + `scrollbar`)     │
-│   鼠标命中 (`event::mouse`):                                                       │
+│           ├─ 切换 `prompt_panel.recent_open`、初始化 `recent_active`               │
+│           └─ 同步重算上方编辑器视口高度 (`resize_panes` -> `split.main`)           │
+│   layout::prompt_body_split(panel, recent_open, recent_count):                     │
+│     ├─ 上方主视图区域 (`main` + `main_scrollbar`)                                  │
+│     └─ 下方抽屉区域 (`recent_divider` [含 `[x]`] + `recent_text` + `scrollbar`)    │
+│   键盘与鼠标命中 (`event::input` / `event::mouse`):                                │
+│     ├─ Key    ──► `apply_prompt_recent_key` (`↑`/`↓` 选择, `Enter` 打开, `Esc` 关) │
 │     ├─ Hover  ──► `state.prompt_recent_hover = Some(entry_index)` (双行同时高亮)   │
-│     ├─ Wheel  ──► 指针在抽屉内时滚动 `prompt_panel.recent_scroll`                  │
-│     └─ Click  ──► `update::open_recent_page(state, index)` ──► 切入对应 Prompt+Page│
+│     ├─ Wheel  ──► 指针在抽屉内时滚动 `prompt_panel.recent_scroll` 并钳制 `active`  │
+│     └─ Click  ──► 条目触发 `open_recent_page`，右上角 `[x]` 触发 `close_prompt_recent`│
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -161,35 +162,35 @@ pub fn format_relative_time(updated_secs: i64, now_secs: i64) -> String {
 
 ---
 
-### 4.2 顶部两行表头重排：工具栏 `[rec]` + 页控件 `‹ n/m ›`、标题行 `· PageTitle` + 模板状态按钮
+### 4.2 顶部两行表头重排：工具栏 `[rec]` + 页控件 `‹ n/m ›`、标题行 `· PageTitle` 按模板状态着色与点击切换
 
 #### 关键点
 1. **工具栏按钮与页控件几何（`src/layout/prompt.rs` & `src/ui/prompt/header.rs`）**：
-   - `PromptToolbarButton` 新增 `Recent`（文案 `PROMPT_RECENT_LABEL = "[rec]"`，宽 5 列）。
+   - `PromptToolbarButton` 新增 `Recent`（文案 `PROMPT_RECENT_LABEL = "[rec]"`，宽 5 列；抽屉未展开时为 `style::text()` 默认亮白，抽屉实际可见时为 `style::accent()` 青色高亮）。
    - **左组按钮坐标**：
      - `Mode` (`[≡]` / `[/]`)：`x = bar.x`，宽 3 列。
-     - `Recent` (`[rec]`)：`x = bar.x + 4`，宽 5 列（当面板内宽能够容纳时显示）。
+     - `Recent` (`[rec]`)：`x = bar.x + 4`，宽 5 列（当面板内宽与右侧页控件留足间距时显示）。
      - `Undo` (`[←]`)：`x = recent_right + 1`（若 `Recent` 隐藏则紧跟 `Mode`），宽 3 列。
      - `Redo` (`[→]`)：`x = undo.right() + 1`，宽 3 列。
    - **右组控件坐标（从右往左）**：
      - **Editor 模式**：
        - 最右 1 列：`Save` (`●` / `○`)，`x = bar.right() - 1`，宽 1 列。
-       - 保存点左侧（隔 1 列）：页切换控件 `‹ n/m ›`（`next` 在 `save.x - 2`，`counter` 在 `next.x - 1 - counter_width`，`prev` 在 `counter.x - 2`）。
+       - 保存点左侧（隔 1 列）：页切换控件 `‹ n/m ›`（`next` 在 `save.x - 2`，`counter` 在 `next.x - 1 - counter_width`，`prev` 在 `counter.x - 2`；`n/m` 用 `style::text_on_border()` 默认亮白；`‹`、`n/m`、`›` 分别接入 `PromptPagePrev`、`PromptPageCounter`、`PromptPageNext` Tooltip）。
        - 页切换控件左侧（隔 1 列）：`Folders` (`[refDir]`，宽 8 列)，`x = prev.x - 1 - PROMPT_FOLDERS_WIDTH`。
      - **Pages 模式**：
-       - 无 `Save` 圆点与 `[refDir]`，页码计数 `n/m`（无左右箭头）放置在工具栏右侧 `bar.right() - 1 - counter_width` 处，点击该 `n/m` 直接触发 `toggle_prompt_pages` 返回 `Editor`。
+       - 无 `Save` 圆点与 `[refDir]`，页码计数 `n/m`（无左右箭头，用 `style::accent()` 青色高亮）放置在工具栏右侧 `bar.right() - 1 - counter_width` 处，点击该 `n/m` 直接触发 `toggle_prompt_pages` 返回 `Editor`。
      - **Tree 模式**：
        - 左组 `[/] [rec]`，右组 `[tmp]`（`bar.right() - 1 - 5`）。
    - **窄屏裁剪优先级（工具栏行）**：
      - 最高优先级保留 `Mode`、`Save` 与页控件 `‹ n/m ›`；
-     - 宽度不足时先隐藏 `[refDir]`，再隐藏 `[rec]`，再隐藏 `[←] [→]`，最后隐藏页控件。
+     - 宽度不足或与页控件碰撞时严格按 `[refDir]` → `[rec]` → `[←] [→]` 顺序隐藏，最后隐藏页控件。
 2. **分割线标题行（`src/ui/prompt_frame.rs` & `src/ui/prompt/header.rs`）**：
    - 在 `prompt_frame.rs` 的 `prompt_page_header(state)` 中：
-     - 当处于 `PromptMode::Editor` 时，从当前实时文本 `state.prompt.text()` 调用 `page_title_status` 提取块标题，若为 `None` 则取 `pages[index].name`（为空时兜底 `default_page_name(index + 1)`），赋给 `PromptPageHeader.name`。
-     - 由此 `border_text` 会自动渲染出 ` {prompt_name} · {page_title} `（`prompt_name` 用 `border_title` 色，`· {page_title}` 用 `muted_on_border` 色）。
-   - 模板块状态按钮 `[todo]` / `[run]` / `[done]` 的 `status_rect_in(area, status)`：
-     - 直接右对齐到分割线标题行原来的页控件位置：`right = area.right().saturating_sub(2)`（即右边角 `┤` 左数留 1 列 `─`），`x = right.checked_sub(width)`。
-     - 左侧标题区 `title_text_rect` 的右边界直接避让 `status_rect.x - 1`（无状态按钮时延伸到 `area.right() - 1`）。
+     - 当处于 `PromptMode::Editor` 时，从当前实时文本 `state.prompt.text()` 调用 `page_display_title` 提取首个已闭合 `&&&` 模板块标题，若为 `None` 则取 `pages[index].name`（为空时兜底 `default_page_name(index + 1)`），赋给 `PromptPageHeader.name`。
+     - 由此 `border_text` 会渲染出 ` {prompt_name} · {page_title} `（`prompt_name` 用 `border_title` 色，分隔符 `· ` 恒用 `muted_on_border` 色）。
+   - 移除标题行右侧 `[todo]` / `[run]` / `[done]` 状态按钮：
+     - 当本页存在已闭合 `&&&` 模板块时，`paint_title_row` 按 `style::template_border(status)` 为 `· ` 之后的 `{page_title}` 着色（`Todo` 默认亮白 `Color::Reset`、`InProgress` 黄色、`Done` 绿色，显式移除 `DIM` 与 `BOLD`）；无闭合模板块时使用 `style::muted_on_border()` 暗灰。
+     - `status_rect(area, data)` 精确返回标题行 `{page_title}` 的可见文字矩形，供 `PromptTemplateStatus` Tooltip（`cycle block status`）与鼠标左键点击循环切换模板状态共用。
 
 #### 关键代码
 
@@ -275,19 +276,19 @@ pub fn toolbar_page_controls(
     }
 }
 
-/// 分割线标题行上的模板块状态按钮：置于原切换页控件所在的右侧位置（距右边框 `┤` 留 1 列 `─`）。
-fn status_rect_in(area: Rect, status: TemplateStatus) -> Option<(Rect, Style)> {
-    let label = text::template_status_label(status);
-    let width = u16::try_from(UnicodeWidthStr::width(label)).ok()?;
-    let right = area.right().saturating_sub(2);
-    let x = right.checked_sub(width)?;
-    // 左侧至少留出 `├─ ` + 2 列标题空间
-    (x >= area.x.saturating_add(5)).then(|| {
-        (
-            Rect::new(x, area.y, width, 1),
-            style::template_border(status),
-        )
-    })
+/// 本页标题行页名矩形（编辑视图且本页存在已闭合 `&&&` 时用于点击切换状态与 tooltip）；
+/// 页名被窄屏完全挤掉时返回 None。
+pub fn status_rect(area: Rect, data: &TitleRowData<'_>) -> Option<Rect> {
+    if area.width == 0 || area.height == 0 {
+        return None;
+    }
+    let title_area = title_text_rect(area);
+    if title_area.width == 0 {
+        return None;
+    }
+    let layout = border_text(title_area, data.title.unwrap_or(""), data.page.as_ref());
+    let (_, name_x, hit_width) = layout.name?;
+    (hit_width > 0).then_some(Rect::new(name_x, title_area.y, hit_width, 1))
 }
 ```
 
@@ -320,50 +321,58 @@ fn status_rect_in(area: Rect, status: TemplateStatus) -> Option<(Rect, Style)> {
    - `PromptPanel` 新增：
      - `pub recent_open: bool`（默认 `false`）
      - `pub recent_scroll: usize`（以**条目数**为单位的滚动偏移，每条占 2 行）
+     - `pub recent_active: Option<usize>`（抽屉展开时的键盘选中项，展开时默认定位到当前编辑页，不在列表内则选第 0 条）
    - `AppState` 新增：
-     - `pub prompt_recent_hover: Option<usize>`（鼠标悬停的 recent 条目索引）
+     - `pub prompt_recent_hover: Option<usize>`（鼠标悬停的 recent 条目索引，视觉与 `Enter` 优先级高于 `recent_active`）
 3. **几何分割计算（`src/layout/prompt.rs`）**：
    - 定义 `PromptBodySplit`：
      ```rust
      #[derive(Debug, Clone, Copy, PartialEq, Eq)]
      pub struct PromptBodySplit {
-         /// 上方主视图区域（含最右 1 列滚动条槽）。
-         pub main_body: Rect,
-         /// 抽屉顶部分割线行（`├─ recent ───┤`，横跨面板外框 `panel.x..panel.right()`，高 1 行）。
+         /// 上方主视图（文本/列表，不含右侧滚动条槽）。
+         pub main: Rect,
+         /// 上方主视图右侧滚动条槽。
+         pub main_scrollbar: Option<Rect>,
+         /// 抽屉顶部分割线行（整行 `├─ recent ─┤`）；抽屉收起时 None。
          pub recent_divider: Option<Rect>,
-         /// 抽屉内部区域（不含最右 1 列滚动条槽，高为 `2 * visible_entries` 或空态 1 行）。
+         /// 抽屉内容区（不含右侧滚动条槽）。
          pub recent_text: Option<Rect>,
-         /// 抽屉右侧滚动条槽（最右 1 列）。
+         /// 抽屉右侧独立滚动条槽。
          pub recent_scrollbar: Option<Rect>,
+         /// 抽屉实际可见条目数（0 表示空态行）。
+         pub visible_entries: usize,
      }
      ```
    - 高度计算规则：
-     - 当 `!recent_open` 时，`main_body = prompt_body_rect(inner)`，其余为 `None`。
+     - 当 `!recent_open` 时，`main = body_text_rect(body)`，其余为 `None`。
      - 当 `recent_open` 时：
        - 若 `recent_count == 0`：抽屉需要 `1（分割线）+ 1（空状态行）= 2 行`；
-       - 若 `recent_count > 0`：展示 `visible_entries = recent_count.clamp(2, 3)` 条，抽屉高度 `drawer_h = 1 + (visible_entries as u16) * 2`（即至少 5 行、最多 7 行，记录不足 2 条时留空）；
-       - 同时限制 `drawer_h <= body.height / 2`（若最低 2 条即 5 行都放不下则不展开抽屉），确保上方主视图永远至少保有一半高度。
-   - **重要联动**：当 `recent_open` 切换或条目数变化导致上方 `main_body` 高度变化时，通过 `prompt_text_rect_with_drawer` 同步更新 `state.prompt.set_size(w, h)`，使编辑器的软换行与光标滚动自动适应收缩后的高度。
+       - 若 `recent_count > 0`：展示 `visible_entries = recent_count.clamp(RECENT_MIN_VISIBLE_ENTRIES, RECENT_VISIBLE_ENTRIES)`（`2..=3` 条），抽屉高度 `drawer_h = 1 + (visible_entries as u16) * 2`（即至少 5 行、最多 7 行，记录不足 2 条时留空）；
+       - 同时限制 `drawer_h <= body.height / 2`（若最低 2 条即 5 行都放不下则自动压制收起抽屉），确保上方主视图永远至少保有一半高度。
+   - **重要联动**：当 `recent_open` 切换或条目数变化导致上方 `main` 高度变化时，通过 `resize_panes` 同步更新 `state.prompt.resize(w, h)`，且所有主视图命中（块按钮、命令面板、右键菜单、树拖拽、Tooltip）统一使用 `ui::prompt_frame::prompt_main_rect`。
 4. **抽屉渲染（新建 `src/ui/prompt/recent.rs`）**：
-   - **分割线标题行**：调用 `render_rule(panel, divider.y, buf, focused)` 画 `├────┤`，并在 `panel.x + 2` 处用 `style::muted_on_border()` 覆盖绘制 ` recent `。
+   - **分割线标题行与关闭按钮**：调用 `render_rule(panel, divider.y, buf, focused)` 画 `├────┤`，在 `panel.x + 2` 处用 `style::muted_on_border()` 覆盖绘制 ` recent `，并在右端 `divider.right() - 4` 处用 `style::text_on_border()` 绘制 `[x]` 关闭按钮（`close_rect(divider)`，接入 `PromptRecentClose` Tooltip `close recent (esc)`）。
    - **双行条目绘制**：
      - 每个可见条目 `row` 占用 `y` 和 `y + 1` 两行：
-     - 若 `hovered`（`prompt_recent_hover == Some(idx)`），对 `y` 和 `y + 1` 两行整行调用 `fill_row(buf, area.x, y, area.width)` 铺选中底色。
+     - 若 `selected`（`hover.or(active) == Some(idx)`），对 `y` 和 `y + 1` 两行整行调用 `fill_row(buf, area.x, y, area.width)` 铺选中底色。
      - **第 1 行（`y`）**：
        - 左起 2 列：`row.current` 为真时画 `❯ `（`style::selection_marker()`），否则画 `"  "`；
-       - 右端贴边绘制 `row.time_label`（如 `[5m]`，样式 `style::muted()`，悬停时为 `style::selection()`）；
+       - 右端在保证左侧名称至少保留 4 列的前提下贴边绘制 `row.time_label`（如 `[5m]`，样式 `style::muted()`，选中时叠加底色）；
        - 中间绘制 `row.prompt_name`（`row.current` 时 `style::strong()`，否则 `style::text()`），超宽时在时间标签前留 1 列间隔并截断加 `…`。
      - **第 2 行（`y + 1`）**：
        - 左起 2 列固定缩进 `"  "`；
-       - 右端：若 `row.status` 为 `Some(status)`，贴右缘 1 列绘制状态小圆点（`Todo` 为 `○` + `style::muted()`；`InProgress`/`Done` 为 `●` + `style::template_border(status)`）；
+       - 右端：若 `row.status` 为 `Some(status)`，贴右缘 1 列绘制状态小圆点（`Todo` 为 `○` + `style::muted()`；`InProgress`/`Done` 为 `●` + `style::template_status(status)`）；
        - 中间绘制 `row.page_title`（样式 `style::muted()`，让第 1 行 Prompt 名与第 2 行 Page 名主次分明），超宽时在圆点前截断加 `…`。
-5. **快捷键与鼠标事件（`src/input/mod.rs`、`src/event/mouse/`、`src/app/update/prompt/`）**：
+5. **键盘接管、快捷键与鼠标事件（`src/event/input.rs`、`src/event/mouse/`、`src/app/update/prompt/recent.rs`）**：
    - `src/input/mod.rs`：`EditorCommand` 新增 `ToggleRecentPages`，在 `editor_command` 中将 `Ctrl/Cmd + r`（不带 Shift/Alt）映射为 `EditorCommand::ToggleRecentPages`。
+   - `src/event/input.rs`：当 `prompt_recent_visible` 为真时，拦截全部发往 Prompt 的键盘与粘贴事件，转交 `update::apply_prompt_recent_key`（`Up`/`Down` 移动 `recent_active` 并自动滚窗、`Newline` 打开选中页、`Escape`/`ToggleRecentPages` 收起抽屉，其余键与粘贴一律吞掉）。
    - `src/event/mouse/press.rs`：
      - 点击工具栏 `PromptToolbarButton::Recent` → 调用 `update::toggle_prompt_recent(state)`；
-     - 点击 `recent` 抽屉内条目 → 调用 `update::open_recent_page(state, entry_index)`（先提交当前未保存修改，将 `panel.editing` 绑定为 `PromptEditing::Item(row.item_id)`，将该 Item 的 `active_page` 设为 `row.page_id` 并持久化 `Effect::SetActivePage`，加载该页正文到编辑器，切换 `panel.mode = PromptMode::Editor`，保持 `recent_open = true`）。
+     - 点击抽屉右上角 `[x]` → 调用 `update::close_prompt_recent(state)`；
+     - 点击 `recent` 抽屉内条目 → 调用 `update::open_recent_page(state, entry_index)`；
+     - 抽屉区域优先于编辑器块按钮与命令面板命中，且右键在抽屉内直接吞掉不穿透。
    - `src/event/mouse/wheel.rs` & `drag.rs` & `motion.rs`：
-     - 鼠标位于 `recent` 抽屉矩形内时，滚轮滚动 `panel.recent_scroll`；
+     - 鼠标位于 `recent` 抽屉矩形内时，滚轮滚动 `panel.recent_scroll` 并通过 `clamp_recent_active` 将 `recent_active` 钳入可见窗口；
      - 拖拽 `recent` 抽屉右侧滚动条时，按条目总数更新 `panel.recent_scroll`；
      - 鼠标移动时更新 `state.prompt_recent_hover`。
 
@@ -442,8 +451,8 @@ pub fn render(
 | 抽屉几何 | `layout::prompt_body_split`（最多 3 条/7 行、至少 2 条/5 行，不超过内容区一半，空间不足先降到 2 条再收起） |
 | 抽屉渲染 | `ui::prompt::recent::render`（`RecentRender` 输入：分割线、双行条目、状态点、双行悬停） |
 | 抽屉行为 | `update::toggle_prompt_recent` / `open_recent_page` / `scroll_prompt_recent` / `set_prompt_recent_scroll` |
-| 工具栏页控件 | `layout::toolbar_page_controls`（Editor 带箭头、Pages 仅 `n/m`）；`render_header` 内绘制 |
-| 标题行 | 左侧 `条目名 · 页名`；右侧状态标签 `[todo]/[run]/[done]`（`ui::prompt::header::paint_title_row`） |
+| 工具栏页控件 | `layout::toolbar_page_controls`（Editor 带箭头且 `n/m` 亮白、Pages 仅 `n/m` 且亮青）；`render_header` 内绘制，`‹`/`n/m`/`›` 均支持 Tooltip |
+| 标题行 | 左侧 `条目名 · 页名`；移除右侧 `[todo]/[run]/[done]` 按钮，本页有闭合 `&&&` 时页名按状态（亮白/黄/绿）着色并支持 hover Tooltip 与左键点击循环切换状态（`ui::prompt::header::paint_title_row` / `status_rect`） |
 | 视口同步 | `AppState.prompt_resize_pending` + `event::resize_panes` 按 `prompt_body_split().main` 更新编辑器尺寸 |
 | 鼠标 | 工具栏 `[rec]` 点击、抽屉条目单击、双行悬停、抽屉独立滚动条点击/拖拽、滚轮不穿透、右上角 `[x]` 关闭 |
 | 键盘 | 抽屉展开时全部接管：`↑`/`↓` 选择、`Enter` 打开、`Esc`/`Ctrl+R` 收起，其余键与粘贴吞掉 |
@@ -455,7 +464,7 @@ pub fn render(
 - `app::update::prompt::recent::tests`：开关与滚动钳制、单击切换且抽屉保持展开、旧页正文先提交。
 - `layout::tests`：抽屉高度上限/半屏压缩/空态行。
 - `ui::prompt::recent::tests`：双行渲染、时间/状态点、双行悬停、空态与滚动窗口。
-- `ui::prompt::tests` / `ui::prompt::pages::tests`：标题行无页控件、工具栏页控件命中、状态标签右对齐、窄屏降级。
+- `ui::prompt::header::tests` / `ui::prompt::pages::tests`：标题行无页控件与无右侧状态按钮、页名按模板状态着色与命中、工具栏页控件命中与窄屏避让降级。
 - `event::tests::prompt_recent`：三种模式 Ctrl+R、`[rec]` 点击、条目单击跳转、悬停清除、滚轮不穿透、默认选中当前页、键盘导航/打开/Esc 收起、其余键吞掉、`[x]` 关闭。
 - `db::tests`：`PromptPageRecord.updated_at` 读取与正文更新后递增。
 - `tests/prompt_border_title.rs`：真实渲染下的两行表头、页控件位置、箭头置灰与标题截断。

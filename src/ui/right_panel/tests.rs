@@ -424,10 +424,7 @@ fn title_row_colors_page_title_by_template_status_in_editor_view() {
         .y;
     let buffer = render_buffer(&state);
     let row = panel_row(&buffer, &view, row_y);
-    assert!(
-        !row.contains(text::TEMPLATE_BUTTON_RUN),
-        "不绘制 [run] 按钮: {row}"
-    );
+    assert!(!row.contains("[run]"), "不绘制 [run] 按钮: {row}");
     let rect = crate::ui::prompt_frame::prompt_status_rect(panel, &state).expect("page title rect");
     assert_eq!(
         buffer[(rect.x, row_y)].fg,

@@ -267,6 +267,7 @@ pub fn switch_workspace(state: &mut AppState, index: usize) {
     }
     clear_selection(state);
     state.prompt_drag = None; // 拖拽现场不跨工作区存活
+    state.prompt_recent_hover = None;
     // 编辑中切工作区走提交；todo 的列表/选中/滚动/焦点**不随工作区变化**（全局列表）。
     commit_todo_edit(state);
     // 只有 Prompt 持焦点时才交回主区：Todo 焦点按设计不随工作区变化，

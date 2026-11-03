@@ -17,7 +17,12 @@ pub struct PageRow {
 /// 页正文的显示标题与状态：独立 `{title:}` → 行内 `{title:}` → 模板名 → None（调用方回退页名）。
 pub fn page_title_status(content: &str) -> (Option<String>, Option<TemplateStatus>) {
     let scan = markdown::block_scan(content);
-    let Some(span) = scan.spans.iter().find(|s| s.kind == BlockKind::Template) else {
+    let Some(span) = scan
+        .spans
+        .iter()
+        .find(|s| s.kind == BlockKind::Template && s.closed)
+        .or_else(|| scan.spans.iter().find(|s| s.kind == BlockKind::Template))
+    else {
         return (None, None);
     };
     let lines: Vec<&str> = content.split('\n').collect();

@@ -147,7 +147,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     let buttons = ui::prompt::template_buttons(&state.prompt, area);
     assert_eq!(buttons.len(), 3, "宽屏下复制/清理/删除按钮可见");
     let row = line_text(&terminal, start_row);
-    assert!(!row.contains(ui::text::TEMPLATE_BUTTON_TODO), "{row}");
+    assert!(!row.contains("[todo]"), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_CLEAN), "{row}");
     assert!(row.contains(ui::text::TEMPLATE_BUTTON_DEL), "{row}");

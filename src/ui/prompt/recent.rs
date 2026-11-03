@@ -114,7 +114,8 @@ fn paint_entry(buf: &mut Buffer, area: Rect, y: u16, row: &RecentPageRow, hovere
     let x = tree::paint_text(buf, area.x, y, &marker, base, area.right());
     let time_width = row.time_label.width();
     let time_x = area.right().saturating_sub(time_width as u16);
-    if time_x > x {
+    // 至少给左侧条目名保留 4 列（首字符 + 省略号），窄屏优先保留条目名。
+    let name_right = if time_x >= x.saturating_add(5) {
         tree::paint_text(
             buf,
             time_x,
@@ -123,8 +124,10 @@ fn paint_entry(buf: &mut Buffer, area: Rect, y: u16, row: &RecentPageRow, hovere
             style::muted().patch(highlight),
             area.right(),
         );
-    }
-    let name_right = time_x.saturating_sub(1).max(x);
+        time_x.saturating_sub(1)
+    } else {
+        area.right()
+    };
     let name_style = if row.current {
         style::strong().patch(highlight)
     } else {

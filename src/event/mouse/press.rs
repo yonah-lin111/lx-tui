@@ -356,6 +356,20 @@ pub(crate) fn handle_mouse_down_left(
         && view.prompt.contains((mouse.column, mouse.row).into())
     {
         // 折叠态容器：一律吞掉，不聚焦、不穿透到窗格。
+    } else if ui::prompt_frame::prompt_recent_close_at(view.prompt, state, mouse.column, mouse.row)
+    {
+        // 抽屉右上角关闭按钮：优先于上方编辑器控件，收起抽屉并交还键盘焦点。
+        update::close_prompt_recent(state);
+        *dirty = true;
+    } else if let Some(index) =
+        ui::prompt_frame::prompt_recent_row_at(view.prompt, state, mouse.column, mouse.row)
+    {
+        // 最近页面抽屉条目：单击直接打开对应条目 + 页，抽屉保持展开。
+        update::open_recent_page(state, index);
+        *dirty = true;
+    } else if ui::prompt_frame::prompt_recent_contains(view.prompt, state, mouse.column, mouse.row)
+    {
+        // 抽屉分割线/空态/滚动条槽：吞掉点击，绝不穿透到被遮住的正文或块按钮。
     } else if let Some(index) = paste::paste_item_at(state, view, mouse.column, mouse.row) {
         update::select_paste(state, index);
         *dirty = true;
@@ -404,6 +418,11 @@ pub(crate) fn handle_mouse_down_left(
             }
             layout::PromptToolbarButton::Recent => {
                 update::toggle_prompt_recent(state);
+                if update::prompt_recent_open(state)
+                    && !ui::prompt_frame::prompt_recent_visible(view.prompt, state)
+                {
+                    update::close_prompt_recent(state);
+                }
             }
             layout::PromptToolbarButton::TempPrompt => {
                 update::open_temp_prompt(state);
@@ -445,20 +464,6 @@ pub(crate) fn handle_mouse_down_left(
             }
         }
         *dirty = true;
-    } else if ui::prompt_frame::prompt_recent_close_at(view.prompt, state, mouse.column, mouse.row)
-    {
-        // 抽屉右上角关闭按钮：收起抽屉，键盘交还上方视图。
-        update::close_prompt_recent(state);
-        *dirty = true;
-    } else if let Some(index) =
-        ui::prompt_frame::prompt_recent_row_at(view.prompt, state, mouse.column, mouse.row)
-    {
-        // 最近页面抽屉条目：单击直接打开对应条目 + 页，抽屉保持展开。
-        update::open_recent_page(state, index);
-        *dirty = true;
-    } else if ui::prompt_frame::prompt_recent_contains(view.prompt, state, mouse.column, mouse.row)
-    {
-        // 抽屉分割线/空态/滚动条槽：吞掉点击，不穿透到被遮住的正文或列表。
     } else if !state.prompt_collapsed && ui::prompt_title_at(view.prompt, mouse.column, mouse.row) {
         // 标题行是控件区：点条目名/空白只把焦点交给编辑器，不移动正文光标。
         update::focus_prompt(state);

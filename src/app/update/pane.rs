@@ -798,6 +798,9 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
                 )
             };
             let split = layout::prompt_body_split(*rect, recent_open, recent_count);
+            if recent_open && split.recent_divider.is_none() {
+                super::close_prompt_recent(state);
+            }
             let (cols, rows) = (split.main.width.max(1), split.main.height.max(1));
             if state.prompt.size() != (cols, rows) {
                 clear_selection(state);

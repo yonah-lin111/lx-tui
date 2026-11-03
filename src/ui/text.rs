@@ -1127,22 +1127,10 @@ pub const SLASH_WORKTREE_PREVIEW: &str = "bind a worktree to this block";
 /// 设置按钮文案（纯 ASCII，宽度稳定、无 emoji 呈现）。
 pub const SETTINGS_LABEL: &str = "[SET]";
 
-/// 模板块操作按钮文案；状态按钮按当前状态取标签，动作按钮为图标。
-pub const TEMPLATE_BUTTON_TODO: &str = "[todo]";
-pub const TEMPLATE_BUTTON_RUN: &str = "[run]";
-pub const TEMPLATE_BUTTON_DONE: &str = "[done]";
+/// 模板块操作按钮文案（复制/清理/删除图标）。
 pub const TEMPLATE_BUTTON_COPY: &str = "[❐]";
 pub const TEMPLATE_BUTTON_CLEAN: &str = "[⌫]";
 pub const TEMPLATE_BUTTON_DEL: &str = "[✕]";
-
-/// 状态按钮标签：todo / run / done。
-pub fn template_status_label(status: TemplateStatus) -> &'static str {
-    match status {
-        TemplateStatus::Todo => TEMPLATE_BUTTON_TODO,
-        TemplateStatus::InProgress => TEMPLATE_BUTTON_RUN,
-        TemplateStatus::Done => TEMPLATE_BUTTON_DONE,
-    }
-}
 
 /// 补充块操作按钮：清理与删除复用模板块图标。
 pub const SUPPLE_BUTTON_CLEAN: &str = TEMPLATE_BUTTON_CLEAN;

@@ -9,7 +9,6 @@ use crate::app::actions::EditorCommand;
 use crate::app::prompt::{PasteAnchor, PasteCandidate, PasteCandidateKind};
 use crate::app::state::{AppState, PaneView};
 use crate::app::update;
-use crate::layout;
 use crate::ui;
 
 /// 终端 `Paste(text)`：整段是存在的路径集合时打开提案，否则按普通文本插入。
@@ -119,7 +118,7 @@ pub(super) fn paste_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::paste_item_at(&state.prompt, area, column, row)
 }
 
@@ -130,11 +129,12 @@ pub(super) fn refer_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::refer_item_at(&state.prompt, area, column, row)
 }
 
-/// prompt 文本区。
+/// prompt 文本区（仅供事件层测试定位未展开抽屉时的基础编辑区）。
+#[cfg(test)]
 pub(super) fn prompt_text_area(view: &ui::layout::ViewLayout) -> ratatui::layout::Rect {
-    layout::prompt_content_rect(view.prompt)
+    crate::layout::prompt_content_rect(view.prompt)
 }

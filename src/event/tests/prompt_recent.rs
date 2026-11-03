@@ -410,3 +410,105 @@ fn wheel_over_drawer_scrolls_entries_without_touching_editor() {
     assert!(state.workspaces[0].prompt_panel.recent_scroll > 0);
     assert_eq!(state.prompt.scroll(), scroll_before, "不穿透滚动编辑器");
 }
+
+#[test]
+fn drawer_blocks_ghost_template_buttons_and_right_click_menu() {
+    let config = Config::default();
+    let mut state = paged_prompt_state();
+    update::focus_prompt(&mut state);
+    // 构造一条落入底部 recent 抽屉遮挡区的模板块起始行。
+    let mut lines: Vec<String> = (0..18).map(|idx| format!("line {idx}")).collect();
+    lines.push("&&& addTemplate --start".to_string());
+    lines.push("{title: Hidden}".to_string());
+    lines.push("&&& addTemplate --end".to_string());
+    let text_with_block = lines.join("\n");
+    state.prompt.set_text(&text_with_block);
+
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    let (drawer_area, _) = drawer_rects(&state, &geo);
+
+    // 抽屉覆盖区内不得命中模板块按钮。
+    for y in drawer_area.y..drawer_area.bottom() {
+        for x in drawer_area.x..drawer_area.right() {
+            assert!(
+                crate::event::mouse::hit::template_button_at(&state, &geo.view, x, y).is_none(),
+                "抽屉内 ({x},{y}) 不得命中被遮住的模板块按钮"
+            );
+        }
+    }
+
+    // 在抽屉内右键一律吞掉，不穿透打开上方编辑器菜单。
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            drawer_area.x + 2,
+            drawer_area.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none(), "抽屉内右键不穿透打开编辑器菜单");
+}
+
+#[test]
+fn short_terminal_suppresses_drawer_without_swallowing_typing() {
+    let config = Config::default();
+    let mut state = paged_prompt_state();
+    update::focus_prompt(&mut state);
+    // 矮屏：body.height / 2 < 5，抽屉被半屏规则压制不可见。
+    let short_geo = geometry(&state, &config, Rect::new(0, 0, 140, 10));
+    key(
+        &mut state,
+        &short_geo,
+        KeyCode::Char('r'),
+        KeyModifiers::CONTROL,
+    );
+    assert!(
+        !state.workspaces[0].prompt_panel.recent_open,
+        "矮屏无法展示抽屉时自动保持关闭"
+    );
+    key(
+        &mut state,
+        &short_geo,
+        KeyCode::Char('!'),
+        KeyModifiers::NONE,
+    );
+    assert!(
+        state.prompt.text().contains('!'),
+        "矮屏下输入不应被不可见抽屉吞掉: {:?}",
+        state.prompt.text()
+    );
+}
+
+#[test]
+fn deleting_item_clamps_recent_active_into_bounds() {
+    use crate::app::prompt::PromptItem;
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let item1 = PromptItem::single(1, None, "first", "one");
+    let item2 = PromptItem::single(2, None, "second", "two");
+    state.workspaces[0]
+        .prompt_panel
+        .tree
+        .replace(vec![], vec![item1, item2]);
+    assert!(update::edit_prompt_item(&mut state, 0, 1));
+    update::focus_prompt(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    key(&mut state, &geo, KeyCode::Down, KeyModifiers::NONE);
+    assert_eq!(state.workspaces[0].prompt_panel.recent_active, Some(1));
+
+    update::delete_prompt_item(&mut state, 0, 1);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.recent_active,
+        Some(0),
+        "删除条目后 recent_active 钳制回有效范围"
+    );
+}

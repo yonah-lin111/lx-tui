@@ -65,6 +65,7 @@ pub fn toggle_prompt_recent(state: &mut AppState) -> bool {
     panel.recent_open = true;
     panel.recent_scroll = active.map(|index| index.saturating_sub(1)).unwrap_or(0);
     panel.recent_active = active;
+    state.prompt.clear_panel();
     state.prompt_recent_hover = None;
     state.prompt_resize_pending = true;
     true
@@ -261,7 +262,7 @@ pub fn scroll_prompt_recent(
         return false;
     }
     workspace.prompt_panel.recent_scroll = next;
-    clamp_recent_active(&mut workspace.prompt_panel, next, visible);
+    clamp_recent_active(&mut workspace.prompt_panel, next, visible, total);
     state.prompt_recent_hover = None;
     true
 }
@@ -281,16 +282,80 @@ pub fn set_prompt_recent_scroll(
     let next = offset.min(max);
     let moved = next != workspace.prompt_panel.recent_scroll;
     workspace.prompt_panel.recent_scroll = next;
-    clamp_recent_active(&mut workspace.prompt_panel, next, visible);
+    clamp_recent_active(&mut workspace.prompt_panel, next, visible, total);
     state.prompt_recent_hover = None;
     moved
 }
 
-/// 滚动后把键盘选中项收进当前可见窗口，避免 Enter 打开屏幕外的旧选中项。
-fn clamp_recent_active(panel: &mut crate::app::prompt::PromptPanel, scroll: usize, visible: usize) {
+/// 滚动后把键盘选中项收进当前可见窗口与有效行范围内，避免 Enter 打开屏幕外或越界项。
+fn clamp_recent_active(
+    panel: &mut crate::app::prompt::PromptPanel,
+    scroll: usize,
+    visible: usize,
+    total: usize,
+) {
+    if total == 0 {
+        panel.recent_active = None;
+        return;
+    }
     if let Some(active) = panel.recent_active {
-        let last = scroll.saturating_add(visible.max(1).saturating_sub(1));
-        panel.recent_active = Some(active.clamp(scroll, last));
+        let last = scroll
+            .saturating_add(visible.max(1).saturating_sub(1))
+            .min(total - 1);
+        let first = scroll.min(last);
+        panel.recent_active = Some(active.clamp(first, last));
+    }
+}
+
+/// 当前键盘选中条目对应的 `(item_id, page_id)`（抽屉展开时用于跨重排/删除保位）。
+pub(crate) fn current_recent_target(
+    state: &AppState,
+) -> Option<(i64, crate::app::prompt::PromptPageId)> {
+    let panel = &state.prompt_owner().prompt_panel;
+    if !panel.recent_open {
+        return None;
+    }
+    let rows = prompt_recent_rows(state);
+    let index = panel.recent_active?;
+    rows.get(index).map(|row| (row.item_id, row.page_id))
+}
+
+/// 在自动保存重排或条目/页面增删后同步 `recent_active` 与 `recent_scroll`。
+pub(crate) fn sync_prompt_recent_selection(
+    state: &mut AppState,
+    target: Option<(i64, crate::app::prompt::PromptPageId)>,
+) {
+    if !prompt_recent_open(state) {
+        return;
+    }
+    let rows = prompt_recent_rows(state);
+    let workspace = state.prompt_workspace();
+    let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
+        return;
+    };
+    let panel = &mut workspace_state.prompt_panel;
+    if rows.is_empty() {
+        panel.recent_active = None;
+        panel.recent_scroll = 0;
+        state.prompt_recent_hover = None;
+        return;
+    }
+    let matched = target.and_then(|(item_id, page_id)| {
+        rows.iter()
+            .position(|row| row.item_id == item_id && row.page_id == page_id)
+    });
+    let next = matched
+        .or(panel.recent_active)
+        .unwrap_or(0)
+        .min(rows.len() - 1);
+    let visible = crate::app::prompt::RECENT_VISIBLE_ENTRIES;
+    panel.recent_active = Some(next);
+    panel.recent_scroll = keep_visible(panel.recent_scroll, next, visible, rows.len());
+    if state
+        .prompt_recent_hover
+        .is_some_and(|hover| hover >= rows.len())
+    {
+        state.prompt_recent_hover = None;
     }
 }
 

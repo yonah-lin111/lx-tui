@@ -1,9 +1,9 @@
 //! prompt 标题行与页控件：只读状态，无 IO。
 //!
 //! 工具栏行：左组 `[≡]/[/] [rec] [←] [→]`，右组 `[refDir] ‹ n/m › ●`（页视图为 `n/m`）；
-//! 分割线标题行：左侧 `条目名 · 页名`，右侧状态标签 `[todo]`/`[run]`/`[done]`；
-//! 树视图的标题行为纯 `─`、不显示状态与页控件。
-//! 抢宽度时的优先级为 页控件 → 状态标签 → 条目名 → 页名（页控件永不截断）。
+//! 分割线标题行：左侧 `条目名 · 页名`，有已闭合 `&&&` 模板块时页名按状态着色并支持点击切换；
+//! 树视图的标题行为纯 `─`、不显示页名与页控件。
+//! 抢宽度时的优先级为 页控件 → 条目名 → 页名（页控件永不截断）。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -14,9 +14,7 @@ use crate::app::markdown::TemplateStatus;
 use crate::app::prompt::{Prompt, PromptMode};
 use crate::ui::{style, text};
 
-pub use crate::layout::{
-    PageControl, PromptPageControls, page_controls, page_controls_with, toolbar_page_controls,
-};
+pub use crate::layout::{PageControl, PromptPageControls, toolbar_page_controls};
 
 use super::{render_divider, render_toolbar};
 
@@ -49,7 +47,7 @@ fn title_text_rect(area: Rect) -> Rect {
 
 /// 本页标题行页名矩形（编辑视图且本页存在已闭合 `&&&` 时用于点击切换状态与 tooltip）；
 /// 页名被窄屏完全挤掉时返回 None。
-pub fn status_rect(area: Rect, data: &TitleRowData<'_>, _status: TemplateStatus) -> Option<Rect> {
+pub fn status_rect(area: Rect, data: &TitleRowData<'_>) -> Option<Rect> {
     if area.width == 0 || area.height == 0 {
         return None;
     }
@@ -285,3 +283,6 @@ fn paint_page_controls(buf: &mut Buffer, controls: &PromptPageControls, page: &P
         counter_style,
     );
 }
+
+#[cfg(test)]
+mod tests;

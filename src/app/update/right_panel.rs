@@ -24,6 +24,7 @@ pub fn select_right_tab(state: &mut AppState, tab: RightTab) -> bool {
         clear_selection(state); // prompt 选区
         state.prompt.clear_panel(); // 块/斜杠/提及/引用/粘贴面板
         state.prompt_tree_hover = None; // 列表悬停行
+        state.prompt_recent_hover = None; // recent 抽屉悬停行
     }
     true
 }

@@ -170,19 +170,41 @@ pub fn prompt_status_rect(panel: Rect, state: &AppState) -> Option<Rect> {
     else {
         return None;
     };
-    let status = status?;
+    let _status = status?;
     let data = prompt::TitleRowData {
         title: title.as_deref().or(Some("")),
         draft,
         page: page_header_data(page.as_ref()),
     };
-    prompt::status_rect(area, &data, status)
+    prompt::status_rect(area, &data)
 }
 
 /// 命中标题行状态标签时返回其矩形（点击循环块状态，不移动正文光标）。
 pub fn prompt_status_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<Rect> {
     let rect = prompt_status_rect(panel, state)?;
     rect.contains((column, row).into()).then_some(rect)
+}
+
+/// 上方主视图实际可交互/渲染区域（已扣除表头、滚动条槽及底部 recent 抽屉）。
+pub fn prompt_main_rect(panel: Rect, state: &AppState) -> Rect {
+    let panel_state = &state.prompt_owner().prompt_panel;
+    let recent_count = crate::app::prompt::recent_page_count(panel_state);
+    crate::layout::prompt_body_split(panel, panel_state.recent_open, recent_count).main
+}
+
+/// 底部最近页面抽屉当前是否实际展开可见（打开标志为真且高度未被半屏规则压制）。
+pub fn prompt_recent_visible(panel: Rect, state: &AppState) -> bool {
+    if state.prompt_collapsed || state.right_tab != RightTab::Prompt {
+        return false;
+    }
+    let panel_state = &state.prompt_owner().prompt_panel;
+    if !panel_state.recent_open {
+        return false;
+    }
+    let recent_count = crate::app::prompt::recent_page_count(panel_state);
+    crate::layout::prompt_body_split(panel, true, recent_count)
+        .recent_divider
+        .is_some()
 }
 
 /// Prompt 面板体：编辑视图渲染 markdown 编辑器、树视图渲染提示词管理器、页视图渲染页目录。
@@ -231,7 +253,7 @@ pub(crate) fn render_body(
         draft,
         page_data.page.as_ref(),
     );
-    if panel.recent_open {
+    if split.recent_divider.is_some() {
         let counter = page_data
             .page
             .as_ref()

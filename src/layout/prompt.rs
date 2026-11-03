@@ -80,51 +80,6 @@ pub enum PageControl {
     Counter,
 }
 
-/// 标题行页控件几何（带左右箭头 `‹ 2/4 ›`）；历史 API，供旧测试与通用几何使用。
-pub fn page_controls(area: Rect, counter: &str) -> Option<PromptPageControls> {
-    page_controls_with(area, counter, true)
-}
-
-/// 标题行页控件几何：`arrows` 为真时排布 `‹ n/m ›`，为假时仅排布计数 `n/m`。
-///
-/// 左边框之后至少要有 2 列留给标题/页名，否则整组隐藏（返回 None）。
-pub fn page_controls_with(area: Rect, counter: &str, arrows: bool) -> Option<PromptPageControls> {
-    if area.width == 0 {
-        return None;
-    }
-    let counter_width =
-        u16::try_from(unicode_width::UnicodeWidthStr::width(counter)).unwrap_or(u16::MAX);
-    let title_start = area.x.saturating_add(2);
-    if arrows {
-        let next = Rect::new(area.right().saturating_sub(3), area.y, 1, 1);
-        let counter_rect = Rect::new(
-            next.x.saturating_sub(1).saturating_sub(counter_width),
-            area.y,
-            counter_width,
-            1,
-        );
-        let prev = Rect::new(counter_rect.x.saturating_sub(2), area.y, 1, 1);
-        let title_width = prev.x.saturating_sub(1).saturating_sub(title_start);
-        (title_width >= 2 && prev.x >= title_start).then_some(PromptPageControls {
-            prev,
-            counter: counter_rect,
-            next,
-        })
-    } else {
-        let right_edge = area.right().saturating_sub(2);
-        let counter_x = right_edge.saturating_sub(counter_width);
-        let counter_rect = Rect::new(counter_x, area.y, counter_width, 1);
-        let prev = Rect::new(counter_x, area.y, 0, 1);
-        let next = Rect::new(right_edge, area.y, 0, 1);
-        let title_width = prev.x.saturating_sub(1).saturating_sub(title_start);
-        (title_width >= 2 && prev.x >= title_start).then_some(PromptPageControls {
-            prev,
-            counter: counter_rect,
-            next,
-        })
-    }
-}
-
 /// 工具栏页控件几何（编辑视图 `‹ n/m ›`、页视图 `n/m`）；左侧至少留出模式按钮。
 pub fn toolbar_page_controls(bar: Rect, counter: &str, arrows: bool) -> Option<PromptPageControls> {
     if bar.width == 0 {
@@ -272,14 +227,49 @@ pub fn prompt_toolbar_button_rect(
     counter: Option<&str>,
 ) -> Option<Rect> {
     let bar = prompt_toolbar_rect(panel)?;
+    if bar.width == 0 {
+        return None;
+    }
     let inner = pane_inner_rect(panel);
-    let show_recent = match mode {
-        PromptMode::Editor => inner.width >= PROMPT_LEFT_GROUP_WITH_RECENT_WIDTH,
-        PromptMode::Tree | PromptMode::Pages => {
-            inner.width
-                >= PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_RECENT_WIDTH
-        }
+    // 右侧保留控件（页控件 `‹ n/m ›` 或保存点 `●`）的左边界：左组按钮的 `right()` 不得越过该列。
+    let right_limit = match (mode, counter) {
+        (PromptMode::Editor, Some(counter)) => toolbar_page_controls(bar, counter, true)
+            .map(|controls| controls.prev.x.saturating_sub(1))
+            .unwrap_or_else(|| bar.right().saturating_sub(2)),
+        (PromptMode::Editor, None) => bar.right().saturating_sub(2),
+        (PromptMode::Pages, Some(counter)) => toolbar_page_controls(bar, counter, false)
+            .map(|controls| controls.counter.x.saturating_sub(1))
+            .unwrap_or(bar.right()),
+        (PromptMode::Pages, None) => bar.right(),
+        (PromptMode::Tree, _) => bar.right(),
     };
+    let full_editor_left = PROMPT_TOOLBAR_BUTTON_WIDTH
+        + PROMPT_TOOLBAR_BUTTON_GAP
+        + PROMPT_RECENT_WIDTH
+        + PROMPT_TOOLBAR_BUTTON_GAP
+        + PROMPT_UNDO_REDO_WIDTH
+        + PROMPT_TOOLBAR_BUTTON_GAP
+        + PROMPT_UNDO_REDO_WIDTH;
+    let compact_editor_left = PROMPT_TOOLBAR_BUTTON_WIDTH
+        + PROMPT_TOOLBAR_BUTTON_GAP
+        + PROMPT_UNDO_REDO_WIDTH
+        + PROMPT_TOOLBAR_BUTTON_GAP
+        + PROMPT_UNDO_REDO_WIDTH;
+    let tree_recent_left =
+        PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_RECENT_WIDTH;
+    let show_recent = match mode {
+        PromptMode::Editor => {
+            inner.width >= PROMPT_LEFT_GROUP_WITH_RECENT_WIDTH
+                && bar.x.saturating_add(full_editor_left) <= right_limit
+        }
+        PromptMode::Pages => {
+            inner.width >= tree_recent_left && bar.x.saturating_add(tree_recent_left) <= right_limit
+        }
+        PromptMode::Tree => inner.width >= tree_recent_left,
+    };
+    let show_undo_redo = mode == PromptMode::Editor
+        && inner.width >= PROMPT_LEFT_GROUP_MIN_WIDTH
+        && bar.x.saturating_add(compact_editor_left) <= right_limit;
     let undo_x = bar.x
         + PROMPT_TOOLBAR_BUTTON_WIDTH
         + PROMPT_TOOLBAR_BUTTON_GAP
@@ -331,10 +321,12 @@ pub fn prompt_toolbar_button_rect(
                     .right()
                     .checked_sub(1 + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_FOLDERS_WIDTH)?,
             };
-            let left_end = if show_recent {
+            let left_end = if show_undo_redo {
                 redo_x + PROMPT_UNDO_REDO_WIDTH
+            } else if show_recent {
+                bar.x + tree_recent_left
             } else {
-                undo_x + PROMPT_UNDO_REDO_WIDTH
+                bar.x + PROMPT_TOOLBAR_BUTTON_WIDTH
             };
             if x <= left_end {
                 return None;
@@ -342,13 +334,13 @@ pub fn prompt_toolbar_button_rect(
             Rect::new(x, bar.y, PROMPT_FOLDERS_WIDTH, 1)
         }
         PromptToolbarButton::Undo => {
-            if mode != PromptMode::Editor || inner.width < PROMPT_LEFT_GROUP_MIN_WIDTH {
+            if !show_undo_redo {
                 return None;
             }
             Rect::new(undo_x, bar.y, PROMPT_UNDO_REDO_WIDTH, 1)
         }
         PromptToolbarButton::Redo => {
-            if mode != PromptMode::Editor || inner.width < PROMPT_LEFT_GROUP_MIN_WIDTH {
+            if !show_undo_redo {
                 return None;
             }
             Rect::new(redo_x, bar.y, PROMPT_UNDO_REDO_WIDTH, 1)

@@ -263,7 +263,7 @@ pub(crate) fn handle_mouse_drag(
     // prompt 列表拖拽：必须在窗格转发之前 return，否则拖动会被当成终端选区/输入。
     if state.prompt_drag.is_some() {
         let hit = ui::prompt::tree::drop_hit_at(
-            layout::prompt_content_rect(view.prompt),
+            ui::prompt_frame::prompt_main_rect(view.prompt, state),
             &state.prompt_owner().prompt_panel,
             mouse.column,
             mouse.row,
@@ -430,7 +430,7 @@ pub(crate) fn handle_mouse_up_left(
     // 未跨行时这里走点击/双击语义（折叠与打开编辑器都发生在松开）。
     if state.prompt_drag.is_some() {
         let hit = ui::prompt::tree::drop_hit_at(
-            layout::prompt_content_rect(view.prompt),
+            ui::prompt_frame::prompt_main_rect(view.prompt, state),
             &state.prompt_owner().prompt_panel,
             mouse.column,
             mouse.row,

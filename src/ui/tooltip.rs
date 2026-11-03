@@ -197,7 +197,7 @@ fn targets(
             if let Some(rect) = ui::prompt_frame::prompt_status_rect(view.prompt, state) {
                 targets.push((TooltipTarget::PromptTemplateStatus, rect));
             }
-            let text_area = crate::layout::prompt_content_rect(view.prompt);
+            let text_area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
             for hit in ui::prompt::template_buttons(&state.prompt, text_area) {
                 targets.push((
                     TooltipTarget::TemplateButton {
