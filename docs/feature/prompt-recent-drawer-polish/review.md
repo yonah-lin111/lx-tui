@@ -3,6 +3,7 @@
 - 复审对象：`03c35d7f feat(prompt): grow recent drawer to half height and close on select`
 - 复审范围：Recent 抽屉布局、选择/关闭、条目渲染、可见窗口缓存、相关测试与设计文档
 - 结论：无 P0；发现 P1 1 项、P2 2 项、P3 2 项，均已修复并补测试。
+- 合并状态：已随 `aa264643` 合并到 `dev`。
 - 关联设计：`docs/feature/prompt-recent-drawer-polish/design.md`
 - 关联任务：`docs/feature/prompt-recent-drawer-polish/task.md`
 
@@ -156,3 +157,12 @@ if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
 - `cargo test --lib ui::prompt::recent`
 - `cargo test --lib layout::tests::prompt_body_split`
 - `cargo test`
+
+---
+
+## 合并记录
+
+- 2026-11-03：以 `--no-ff` 合并到 `dev`，合并提交 `aa264643`；无冲突。
+- 合并后验证：`cargo test --lib app::update::prompt::recent::tests` 通过，`cargo test` 全量通过。
+- 清理：`feat/prompt-recent-drawer-polish` 分支已删除，`.worktrees/prompt-recent-drawer-polish` 工作区已移除，
+  `~/.lx-t-dev/db/worktrees/prompt-recent-drawer-polish-5e704e45` 隔离库已删除。

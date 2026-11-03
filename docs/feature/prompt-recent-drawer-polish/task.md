@@ -1,6 +1,6 @@
 # Prompt Recent 抽屉高度、选择行为与条目布局调整实施任务
 
-- 状态：**已复审并修复（待合并）**
+- 状态：**已合并到 dev（aa264643）**
 - 关联设计：`docs/feature/prompt-recent-drawer-polish/design.md`
 - 复审报告：`docs/feature/prompt-recent-drawer-polish/review.md`
 - 日期：2026-11-03
@@ -326,6 +326,8 @@ cargo test
   - P2-1：当前页快速路径恢复 prompt 键盘焦点；
   - P2-2：补充 Pages 当前页、焦点/光标/修订号、目标页 `updated_at`、动态可见窗口、`Esc`、悬停状态色测试；
   - P3-1/P3-2：同步 `recent_page_count` 注释、设计/任务文档与测试名。
+- 2026-11-03（合并）：以 `--no-ff` 合并到 `dev`，合并提交 `aa264643`，无冲突；随后删除
+  `feat/prompt-recent-drawer-polish` 分支、`.worktrees/prompt-recent-drawer-polish` 工作区与对应隔离库。
 - 验证结果：
   - `cargo fmt --check` 通过；
   - `cargo clippy --all-targets -- -D warnings` 通过；

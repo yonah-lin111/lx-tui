@@ -1,6 +1,6 @@
 # Prompt Recent 抽屉高度、选择行为与条目布局调整设计
 
-- 状态：**已复审并修复（待合并）**
+- 状态：**已合并到 dev（aa264643）**
 - 关联任务：`docs/feature/prompt-recent-drawer-polish/task.md`
 - 复审报告：`docs/feature/prompt-recent-drawer-polish/review.md`
 - 日期：2026-11-03
