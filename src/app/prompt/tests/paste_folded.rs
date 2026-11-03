@@ -20,13 +20,13 @@ fn confirm_collapse_and_full_insert_as_single_undo_steps_and_cancel_leaves_buffe
     assert!(p.text_paste_panel().is_none());
     assert_eq!(p.text(), "prefix");
 
-    // Confirm Collapse inserts token with surrounding spaces and is 1 undo step.
+    // Confirm Text inserts `<pasted-text>` token with surrounding spaces and is 1 undo step.
     assert!(p.begin_text_paste(
         "line 1\nline 2\nline 3".into(),
         "line 1\nline 2\nline 3".into(),
         PasteAnchor::at_cursor(p.cursor()),
     ));
-    assert!(p.text_paste_confirm(TextPasteAction::Collapse));
+    assert!(p.text_paste_confirm(TextPasteAction::Text));
     assert!(p.text_paste_panel().is_none());
     let expected_token = encode_pasted_text("line 1\nline 2\nline 3");
     assert_eq!(p.text(), format!("prefix {expected_token} "));
@@ -36,13 +36,13 @@ fn confirm_collapse_and_full_insert_as_single_undo_steps_and_cancel_leaves_buffe
     p.redo();
     assert_eq!(p.text(), format!("prefix {expected_token} "));
 
-    // Confirm Full replaces selection with full_text.
+    // Confirm Raw replaces selection with full_text.
     let anchor = PasteAnchor {
         selection: Some((0, p.text().len())),
         cursor: p.cursor(),
     };
     assert!(p.begin_text_paste("a\nb\nc".into(), "  a\nb\nc  ".into(), anchor,));
-    assert!(p.text_paste_confirm(TextPasteAction::Full));
+    assert!(p.text_paste_confirm(TextPasteAction::Raw));
     assert_eq!(p.text(), "  a\nb\nc  ");
 }
 

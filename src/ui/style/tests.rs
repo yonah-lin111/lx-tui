@@ -665,14 +665,24 @@ fn tab_ask_marker_preserves_tab_background_and_uses_distinct_foreground() {
 }
 
 #[test]
-fn pasted_chip_and_bg_share_indexed_236_background_and_yellow_bold_chip() {
-    let chip = pasted_chip();
-    assert_eq!(chip.fg, Some(Color::Yellow));
-    assert_eq!(chip.bg, Some(Color::Indexed(236)));
-    assert!(chip.add_modifier.contains(Modifier::BOLD));
+fn pasted_chip_and_bg_provide_distinct_foreground_and_background_per_kind() {
+    use crate::app::paste::FoldedKind;
 
-    let bg = pasted_bg();
-    assert_eq!(bg.fg, None);
-    assert_eq!(bg.bg, Some(Color::Indexed(236)));
-    assert!(!bg.add_modifier.contains(Modifier::BOLD));
+    let text_chip = pasted_chip(FoldedKind::Text);
+    assert_eq!(text_chip.fg, Some(Color::Yellow));
+    assert_eq!(text_chip.bg, Some(Color::Indexed(236)));
+    assert!(text_chip.add_modifier.contains(Modifier::BOLD));
+    assert_eq!(pasted_bg(FoldedKind::Text).bg, Some(Color::Indexed(236)));
+
+    let code_chip = pasted_chip(FoldedKind::Code);
+    assert_eq!(code_chip.fg, Some(Color::Cyan));
+    assert_eq!(code_chip.bg, Some(Color::Indexed(23)));
+    assert!(code_chip.add_modifier.contains(Modifier::BOLD));
+    assert_eq!(pasted_bg(FoldedKind::Code).bg, Some(Color::Indexed(23)));
+
+    let log_chip = pasted_chip(FoldedKind::Log);
+    assert_eq!(log_chip.fg, Some(Color::LightGreen));
+    assert_eq!(log_chip.bg, Some(Color::Indexed(22)));
+    assert!(log_chip.add_modifier.contains(Modifier::BOLD));
+    assert_eq!(pasted_bg(FoldedKind::Log).bg, Some(Color::Indexed(22)));
 }

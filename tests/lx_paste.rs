@@ -131,8 +131,14 @@ fn bracketed_paste_inserts_text_into_lx_input() {
     let app = App::spawn();
     app.send(&bracketed_paste("LXMARKERPASTE"));
     assert!(
+        app.wait_for("Paste raw"),
+        "每次粘贴必须弹出四项粘贴面板:\n{}",
+        screen_text(&app.emulator.lock().unwrap())
+    );
+    app.send(b"\r");
+    assert!(
         app.wait_for("LXMARKERPASTE"),
-        "粘贴文本必须进入 lx 输入框:\n{}",
+        "确认原文粘贴后文本必须进入 lx 输入框:\n{}",
         screen_text(&app.emulator.lock().unwrap())
     );
 }
@@ -155,12 +161,12 @@ fn long_paste_wraps_and_shows_input_scrollbar() {
     let long = "L".repeat(20000);
     app.send(&bracketed_paste(&long));
     assert!(
-        app.wait_for("Collapse paste"),
-        "长文本粘贴必须先弹出折叠/原文选择面板:\n{}",
+        app.wait_for("Paste raw"),
+        "文本粘贴必须先弹出粘贴选择面板:\n{}",
         screen_text(&app.emulator.lock().unwrap())
     );
-    // 选择第二项 `Paste full text` 并回车确认。
-    app.send(b"\x1b[B\r");
+    // 默认高亮首项 `Paste raw`，直接回车确认。
+    app.send(b"\r");
     // 滚动条只画 thumb（`▐`）：轨道不再绘制 `▕` 竖线。
     assert!(
         app.wait_for("▐"),
@@ -174,11 +180,8 @@ fn wheel_scrolls_lx_input_viewport() {
     let app = App::spawn();
     let body = format!("HEADMARK{}", "L".repeat(20000));
     app.send(&bracketed_paste(&body));
-    assert!(
-        app.wait_for("Collapse paste"),
-        "长文本粘贴必须先弹出折叠/原文选择面板"
-    );
-    app.send(b"\x1b[B\r");
+    assert!(app.wait_for("Paste raw"), "文本粘贴必须先弹出粘贴选择面板");
+    app.send(b"\r");
     assert!(app.wait_for("▐"), "溢出时显示滚动条");
     assert!(
         !screen_text(&app.emulator.lock().unwrap()).contains("HEADMARK"),

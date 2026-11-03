@@ -1,7 +1,7 @@
 //! Prompt 编辑器的长文本折叠粘贴集成：面板状态、显示投影、芯片命中与展开区选区。
 
 use crate::app::paste::{
-    ChipHit, PasteAnchor, Projection, TextPasteAction, TextPastePanel, encode_pasted_text,
+    ChipHit, PasteAnchor, Projection, TextPasteAction, TextPastePanel, encode_pasted_kind,
     mask_pasted_text, snap_pasted_range,
 };
 use crate::app::selection::SelectionUnit;
@@ -64,7 +64,7 @@ impl Prompt {
         self.text_paste_cancel()
     }
 
-    /// 确认长文本粘贴面板操作：`Collapse` 插入折叠 token（补空格），`Full` 插入原文；一步撤销。
+    /// 确认文本粘贴面板操作：折叠类（`Text` / `Code` / `Log`）插入对应折叠 token（补空格），`Raw` 插入原文；一步撤销。
     pub fn text_paste_confirm(&mut self, action: TextPasteAction) -> bool {
         let Some(panel) = self.text_paste.panel().cloned() else {
             return false;
@@ -74,12 +74,12 @@ impl Prompt {
         }
         let (start, end) = panel.anchor.range();
         let range = snap_pasted_range(&self.text, start..end.min(self.text.len()));
-        let insertion = match action {
-            TextPasteAction::Collapse => {
-                let token = encode_pasted_text(&panel.content);
+        let insertion = match action.folded_kind() {
+            Some(kind) => {
+                let token = encode_pasted_kind(kind, &panel.content);
                 self.paste_insertion(range.start, &[token])
             }
-            TextPasteAction::Full => panel.full_text,
+            None => panel.full_text,
         };
         if !self.replace_at(range.start, range.end, &insertion) {
             return false;

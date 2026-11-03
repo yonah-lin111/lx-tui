@@ -217,9 +217,15 @@ fn paint_line(
         let seg = proj.segment_at(disp_pos);
         let mut cell_style = match seg.map(|s| s.kind) {
             Some(SegmentKind::Chip {
-                expanded: false, ..
-            }) => style::pasted_chip(),
-            Some(SegmentKind::Chip { expanded: true, .. }) => style::pasted_bg(),
+                kind,
+                expanded: false,
+                ..
+            }) => style::pasted_chip(kind),
+            Some(SegmentKind::Chip {
+                kind,
+                expanded: true,
+                ..
+            }) => style::pasted_bg(kind),
             _ => {
                 let raw_pos = proj.display_to_raw(disp_pos);
                 let raw_line = raw_line_starts

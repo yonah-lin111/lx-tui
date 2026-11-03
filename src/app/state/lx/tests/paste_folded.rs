@@ -28,7 +28,7 @@ fn lx_text_paste_panel_respects_chat_mode_fences_and_plain_mode() {
     assert_eq!(lx.input, "check");
 
     assert!(lx.begin_text_paste("a\nb\nc".into(), "a\nb\nc".into()));
-    assert!(lx.text_paste_confirm(TextPasteAction::Collapse));
+    assert!(lx.text_paste_confirm(TextPasteAction::Text));
     let tok = encode_pasted_text("a\nb\nc");
     assert_eq!(lx.input, format!("check {tok} "));
     assert_eq!(lx.expanded_input(), "check a\nb\nc ");

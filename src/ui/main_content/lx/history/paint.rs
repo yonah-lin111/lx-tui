@@ -344,8 +344,8 @@ fn draw_user_text(
             }
             let span_style = match span.kind {
                 UserSpanKind::Plain => bg,
-                UserSpanKind::CollapsedChip => style::pasted_chip(),
-                UserSpanKind::ExpandedChip => style::pasted_bg(),
+                UserSpanKind::CollapsedChip(kind) => style::pasted_chip(kind),
+                UserSpanKind::ExpandedChip(kind) => style::pasted_bg(kind),
             };
             grid.put_clipped(
                 cx,

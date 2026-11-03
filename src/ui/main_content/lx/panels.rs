@@ -131,10 +131,10 @@ struct PastePanelData {
     area: Rect,
     rows: Vec<(String, String)>,
     active: usize,
-    disabled: Option<[bool; 2]>,
+    disabled: Option<[bool; 4]>,
 }
 
-/// 构造长文本粘贴面板的条目列表与可用区域；面板未打开或空间不足返回 None。
+/// 构造文本粘贴面板的条目列表与可用区域；面板未打开或空间不足返回 None。
 fn text_paste_panel_rows(area: Rect, lx: &Lx) -> Option<PastePanelData> {
     let panel = lx.text_paste_panel()?;
     let input = layout(area, lx).input?;
@@ -146,19 +146,25 @@ fn text_paste_panel_rows(area: Rect, lx: &Lx) -> Option<PastePanelData> {
         return None;
     }
     let count = text::text_paste_lines(panel.line_count);
+    let fold_hint = if panel.collapse_enabled() {
+        count.clone()
+    } else {
+        text::TEXT_PASTE_TOO_LARGE.to_string()
+    };
     let rows: Vec<(String, String)> = crate::app::paste::TextPasteAction::ALL
         .iter()
         .map(|action| match action {
-            crate::app::paste::TextPasteAction::Collapse => (
-                text::TEXT_PASTE_ACTION_COLLAPSE.to_string(),
-                if panel.collapse_enabled() {
-                    count.clone()
-                } else {
-                    text::TEXT_PASTE_TOO_LARGE.to_string()
-                },
-            ),
-            crate::app::paste::TextPasteAction::Full => {
-                (text::TEXT_PASTE_ACTION_FULL.to_string(), count.clone())
+            crate::app::paste::TextPasteAction::Raw => {
+                (text::TEXT_PASTE_ACTION_RAW.to_string(), count.clone())
+            }
+            crate::app::paste::TextPasteAction::Text => {
+                (text::TEXT_PASTE_ACTION_TEXT.to_string(), fold_hint.clone())
+            }
+            crate::app::paste::TextPasteAction::Code => {
+                (text::TEXT_PASTE_ACTION_CODE.to_string(), fold_hint.clone())
+            }
+            crate::app::paste::TextPasteAction::Log => {
+                (text::TEXT_PASTE_ACTION_LOG.to_string(), fold_hint.clone())
             }
         })
         .collect();

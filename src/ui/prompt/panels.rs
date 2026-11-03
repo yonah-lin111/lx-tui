@@ -15,26 +15,26 @@ struct PastePanelData {
     rows: Vec<(String, String)>,
     active: usize,
     anchor_row: u16,
-    disabled: Option<[bool; 2]>,
+    disabled: Option<[bool; 4]>,
 }
 
-/// 长文本粘贴面板渲染数据；面板未打开或光标滚出视口返回 None。
+/// 文本粘贴面板渲染数据；面板未打开或光标滚出视口返回 None。
 fn text_paste_panel_data(prompt: &Prompt) -> Option<PastePanelData> {
     let panel = prompt.text_paste_panel()?;
     let (anchor_row, _) = prompt.cursor_cell()?;
     let count = text::text_paste_lines(panel.line_count);
+    let fold_hint = if panel.collapse_enabled() {
+        count.clone()
+    } else {
+        text::TEXT_PASTE_TOO_LARGE.to_string()
+    };
     let rows = TextPasteAction::ALL
         .iter()
         .map(|action| match action {
-            TextPasteAction::Collapse => (
-                text::TEXT_PASTE_ACTION_COLLAPSE.to_string(),
-                if panel.collapse_enabled() {
-                    count.clone()
-                } else {
-                    text::TEXT_PASTE_TOO_LARGE.to_string()
-                },
-            ),
-            TextPasteAction::Full => (text::TEXT_PASTE_ACTION_FULL.to_string(), count.clone()),
+            TextPasteAction::Raw => (text::TEXT_PASTE_ACTION_RAW.to_string(), count.clone()),
+            TextPasteAction::Text => (text::TEXT_PASTE_ACTION_TEXT.to_string(), fold_hint.clone()),
+            TextPasteAction::Code => (text::TEXT_PASTE_ACTION_CODE.to_string(), fold_hint.clone()),
+            TextPasteAction::Log => (text::TEXT_PASTE_ACTION_LOG.to_string(), fold_hint.clone()),
         })
         .collect();
     Some(PastePanelData {

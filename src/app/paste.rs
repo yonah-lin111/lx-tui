@@ -12,15 +12,15 @@ pub mod folded;
 pub mod text;
 
 pub use folded::{
-    ChipHit, ExpandedPastes, FoldedToken, MAX_FOLDED_BYTES, Projection, Segment, SegmentKind,
-    clamp_cursor, encode as encode_pasted_text, escape_body, expand_all as expand_pasted_text,
-    mask as mask_pasted_text, next_boundary as next_pasted_boundary,
-    prev_boundary as prev_pasted_boundary, snap_range as snap_pasted_range, token_ending_at,
-    token_starting_at, tokens as folded_tokens, unescape_body,
+    ChipHit, ExpandedPastes, FoldedKind, FoldedToken, MAX_FOLDED_BYTES, Projection, Segment,
+    SegmentKind, clamp_cursor, encode as encode_pasted_text, encode_kind as encode_pasted_kind,
+    escape_body, expand_all as expand_pasted_text, mask as mask_pasted_text,
+    next_boundary as next_pasted_boundary, prev_boundary as prev_pasted_boundary,
+    snap_range as snap_pasted_range, token_ending_at, token_starting_at, tokens as folded_tokens,
+    unescape_body,
 };
 pub use text::{
-    FOLD_CHAR_THRESHOLD, FOLD_LINE_THRESHOLD, TextPasteAction, TextPasteCandidate, TextPastePanel,
-    TextPasteState, text_paste_candidate,
+    TextPasteAction, TextPasteCandidate, TextPastePanel, TextPasteState, text_paste_candidate,
 };
 
 /// 粘贴候选种类。

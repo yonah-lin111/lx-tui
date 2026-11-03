@@ -36,7 +36,7 @@ fn lx_view_edits_input_and_pastes_text() {
         "按键不得吸回隐藏终端的滚动位置"
     );
 
-    // 普通文本粘贴进入 lx 输入框，不写入隐藏终端。
+    // 普通文本粘贴弹出 lx 文本粘贴面板，回车确认首项（Paste raw）进入 lx 输入框，不写入隐藏终端。
     dirty = false;
     handle_terminal_event(
         TerminalEvent::Paste("bc".to_string()),
@@ -48,6 +48,15 @@ fn lx_view_edits_input_and_pastes_text() {
         &mut dirty,
     );
     assert!(dirty, "lx 视图粘贴产生重绘");
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .text_paste_panel()
+            .is_some()
+    );
+    update::apply_lx_input(&mut state, crate::app::actions::LxInput::Enter);
     assert_eq!(
         state.pane_anywhere(pane).expect("pane").lx.input,
         "abc",

@@ -1,5 +1,7 @@
 use super::*;
-use crate::app::paste::{PasteAnchor, TextPasteAction, encode_pasted_text, folded_tokens};
+use crate::app::paste::{
+    FoldedKind, PasteAnchor, TextPasteAction, encode_pasted_kind, encode_pasted_text, folded_tokens,
+};
 
 #[test]
 fn renders_collapsed_chip_with_yellow_bold_on_indexed_236_and_expanded_only_tints_pasted_text() {
@@ -72,5 +74,37 @@ fn renders_text_paste_panel_and_hits_items() {
         paste_item_at(&p, area, layout.content.x + 2, item1_y),
         Some(1)
     );
-    assert!(p.text_paste_confirm(TextPasteAction::Collapse));
+    assert!(p.text_paste_confirm(TextPasteAction::Text));
+}
+
+#[test]
+fn renders_text_code_and_log_chips_with_distinct_colors_and_labels() {
+    let area = Rect::new(0, 0, 50, 6);
+    let mut p = Prompt::new(PaneId::from_raw_for_test(1));
+    p.resize(area.width, area.height);
+    let t1 = encode_pasted_kind(FoldedKind::Text, "one");
+    let t2 = encode_pasted_kind(FoldedKind::Code, "fn a()\nfn b()");
+    let t3 = encode_pasted_kind(FoldedKind::Log, "L1\nL2\nL3");
+    p.set_text(&format!("{t1}\n{t2}\n{t3}"));
+
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &p, None);
+
+    // Row 0: `[Pasted text 1 line]` -> Yellow on Indexed(236)
+    assert_eq!(buf[(0, 0)].symbol(), "[");
+    assert_eq!(buf[(8, 0)].symbol(), "t");
+    assert_eq!(buf[(0, 0)].fg, Color::Yellow);
+    assert_eq!(buf[(0, 0)].bg, Color::Indexed(236));
+
+    // Row 1: `[Pasted code 2 lines]` -> Cyan on Indexed(23)
+    assert_eq!(buf[(0, 1)].symbol(), "[");
+    assert_eq!(buf[(8, 1)].symbol(), "c");
+    assert_eq!(buf[(0, 1)].fg, Color::Cyan);
+    assert_eq!(buf[(0, 1)].bg, Color::Indexed(23));
+
+    // Row 2: `[Pasted log 3 lines]` -> LightGreen on Indexed(22)
+    assert_eq!(buf[(0, 2)].symbol(), "[");
+    assert_eq!(buf[(8, 2)].symbol(), "l");
+    assert_eq!(buf[(0, 2)].fg, Color::LightGreen);
+    assert_eq!(buf[(0, 2)].bg, Color::Indexed(22));
 }

@@ -1338,6 +1338,6 @@ fn try_send_persists_folded_paste_tokens_in_turn_and_prompt_history_for_recall()
     assert_eq!(lx.input, expected_draft);
     assert_eq!(
         lx.projection().text(),
-        "Please analyze [Pasted 3 lines: line 1]"
+        "Please analyze [Pasted text 3 lines]"
     );
 }

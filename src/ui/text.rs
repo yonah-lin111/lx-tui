@@ -997,10 +997,12 @@ pub const PASTE_PANEL_TITLE: &str = "Paste";
 pub const PASTE_ACTION_REFERENCE: &str = "Insert reference";
 pub const PASTE_ACTION_PATH: &str = "Insert path";
 pub const PASTE_REFERENCE_UNSUPPORTED: &str = "path cannot be referenced";
-/// 长文本粘贴二级面板文案。
+/// 文本粘贴二级面板文案。
 pub const TEXT_PASTE_PANEL_TITLE: &str = "Paste";
-pub const TEXT_PASTE_ACTION_COLLAPSE: &str = "Collapse paste";
-pub const TEXT_PASTE_ACTION_FULL: &str = "Paste full text";
+pub const TEXT_PASTE_ACTION_RAW: &str = "Paste raw";
+pub const TEXT_PASTE_ACTION_TEXT: &str = "Paste text";
+pub const TEXT_PASTE_ACTION_CODE: &str = "Paste code";
+pub const TEXT_PASTE_ACTION_LOG: &str = "Paste log";
 pub const TEXT_PASTE_TOO_LARGE: &str = "too large to collapse";
 
 /// 长文本粘贴行数说明。

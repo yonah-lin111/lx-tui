@@ -1,32 +1,38 @@
-//! 长文本粘贴二级面板状态机与候选检测。
+//! 文本粘贴二级面板状态机与候选检测。
 
 use super::PasteAnchor;
-use super::folded::MAX_FOLDED_BYTES;
+use super::folded::{FoldedKind, MAX_FOLDED_BYTES};
 
-/// 触发长文本粘贴面板的最小逻辑行数（`>= 3`）。
-pub const FOLD_LINE_THRESHOLD: usize = 3;
-
-/// 触发长文本粘贴面板的字符数阈值（`> 150` Unicode 字符）。
-pub const FOLD_CHAR_THRESHOLD: usize = 150;
-
-/// 长文本粘贴面板操作；固定顺序。
+/// 文本粘贴面板操作；固定顺序：原文粘贴、文本粘贴、代码粘贴、日志粘贴。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextPasteAction {
-    Collapse,
-    Full,
+    Raw,
+    Text,
+    Code,
+    Log,
 }
 
 impl TextPasteAction {
     /// 面板固定顺序。
-    pub const ALL: [Self; 2] = [Self::Collapse, Self::Full];
+    pub const ALL: [Self; 4] = [Self::Raw, Self::Text, Self::Code, Self::Log];
+
+    /// 若为折叠粘贴动作，返回对应的折叠语义类型。
+    pub const fn folded_kind(self) -> Option<FoldedKind> {
+        match self {
+            Self::Raw => None,
+            Self::Text => Some(FoldedKind::Text),
+            Self::Code => Some(FoldedKind::Code),
+            Self::Log => Some(FoldedKind::Log),
+        }
+    }
 }
 
-/// 经过净化与阈值判定后的长文本粘贴候选。
+/// 经过净化后的文本粘贴候选。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextPasteCandidate {
     /// 用于折叠编码的 `trim()` 后正文（已 sanitize）。
     pub content: String,
-    /// 用于 `Paste full text` 的完整正文（已 sanitize，保留首尾空白）。
+    /// 用于 `Paste raw` 的完整正文（已 sanitize，保留首尾空白）。
     pub full_text: String,
     /// `content` 的逻辑行数。
     pub line_count: usize,
@@ -34,7 +40,7 @@ pub struct TextPasteCandidate {
     pub too_large: bool,
 }
 
-/// 检测一段粘贴文本是否满足长文本面板触发阈值（`>= 3` 行或 `> 150` Unicode 字符）。
+/// 检测一段粘贴文本是否包含非空白有效内容（每次非空白文本粘贴均弹出面板）。
 pub fn text_paste_candidate(raw: &str) -> Option<TextPasteCandidate> {
     let full_text = crate::app::prompt::text::sanitize(raw);
     let trimmed = full_text.trim();
@@ -42,10 +48,6 @@ pub fn text_paste_candidate(raw: &str) -> Option<TextPasteCandidate> {
         return None;
     }
     let line_count = trimmed.split('\n').count();
-    let char_count = trimmed.chars().count();
-    if line_count < FOLD_LINE_THRESHOLD && char_count <= FOLD_CHAR_THRESHOLD {
-        return None;
-    }
     let too_large = trimmed.len() > MAX_FOLDED_BYTES;
     Some(TextPasteCandidate {
         content: trimmed.to_string(),
@@ -55,7 +57,7 @@ pub fn text_paste_candidate(raw: &str) -> Option<TextPasteCandidate> {
     })
 }
 
-/// 长文本粘贴二级面板。
+/// 文本粘贴二级面板。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextPastePanel {
     /// 用于折叠的 `trim()` 后正文。
@@ -72,7 +74,7 @@ pub struct TextPastePanel {
 }
 
 impl TextPastePanel {
-    /// 组装长文本粘贴面板并把高亮落在首个可用项。
+    /// 组装文本粘贴面板并把高亮落在首个可用项（默认 `Paste raw`）。
     pub fn new(content: String, full_text: String, anchor: PasteAnchor) -> Self {
         let line_count = content.split('\n').count().max(1);
         let too_large = content.len() > MAX_FOLDED_BYTES;
@@ -96,17 +98,16 @@ impl TextPastePanel {
     /// 指定操作是否可用。
     pub fn enabled(&self, action: TextPasteAction) -> bool {
         match action {
-            TextPasteAction::Collapse => self.collapse_enabled(),
-            TextPasteAction::Full => !self.full_text.is_empty(),
+            TextPasteAction::Raw => !self.full_text.is_empty(),
+            TextPasteAction::Text | TextPasteAction::Code | TextPasteAction::Log => {
+                self.collapse_enabled()
+            }
         }
     }
 
     /// 供 `CommandPanelView.disabled` 使用的禁用掩码。
-    pub fn disabled_mask(&self) -> [bool; 2] {
-        [
-            !self.enabled(TextPasteAction::Collapse),
-            !self.enabled(TextPasteAction::Full),
-        ]
+    pub fn disabled_mask(&self) -> [bool; 4] {
+        TextPasteAction::ALL.map(|action| !self.enabled(action))
     }
 
     /// 当前高亮索引。

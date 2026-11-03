@@ -12,21 +12,22 @@ fn escape_and_unescape_preserve_code_and_roundtrip_closing_tags() {
     assert!(encoded.ends_with("</pasted-text>"));
     let parsed = tokens(&encoded);
     assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].kind, FoldedKind::Text);
     assert_eq!(parsed[0].line_count, 3);
     assert_eq!(parsed[0].body, raw);
-    assert_eq!(
-        parsed[0].label(),
-        "[Pasted 3 lines: fn call(a: usize, b: (u8, u8)) {]"
-    );
+    assert_eq!(parsed[0].label(), "[Pasted text 3 lines]");
 
-    // Text containing `</pasted-text>` and `<\/pasted-text>` roundtrips cleanly.
-    let tricky = "before </pasted-text> middle <\\/pasted-text> after";
+    // Text containing `</pasted-text>`, `</pasted-code>`, `</pasted-log>` and `<\/pasted-text>` roundtrips cleanly.
+    let tricky =
+        "before </pasted-text> mid </pasted-code> and </pasted-log> tail <\\/pasted-text> after";
     let escaped = escape_body(tricky);
     assert_eq!(
         escaped,
-        "before <\\/pasted-text> middle <\\\\/pasted-text> after"
+        "before <\\/pasted-text> mid <\\/pasted-code> and <\\/pasted-log> tail <\\\\/pasted-text> after"
     );
     assert!(!escaped.contains("</pasted-text>"));
+    assert!(!escaped.contains("</pasted-code>"));
+    assert!(!escaped.contains("</pasted-log>"));
     assert_eq!(unescape_body(&escaped), tricky);
 }
 
@@ -88,14 +89,18 @@ fn fence_tracking_skips_tokens_inside_fences_and_ignores_fences_inside_token_bod
 }
 
 #[test]
-fn preview_uses_first_non_empty_line_and_truncates_at_40_columns() {
-    let body = "\n   \n0123456789012345678901234567890123456789EXTRA\ntail";
-    let tok = &tokens(&encode(body))[0];
-    assert_eq!(tok.preview, "0123456789012345678901234567890123456789…");
+fn kind_specific_tokens_encode_and_format_labels_for_text_code_and_log() {
+    let text_tok = &tokens(&encode_kind(FoldedKind::Text, "single"))[0];
+    assert_eq!(text_tok.kind, FoldedKind::Text);
+    assert_eq!(text_tok.label(), "[Pasted text 1 line]");
 
-    let cjk = "一二三四五六七八九十一二三四五六七八九十多出的字\n第二行\n第三行";
-    let tok_cjk = &tokens(&encode(cjk))[0];
-    assert_eq!(tok_cjk.preview, "一二三四五六七八九十一二三四五六七八九十…");
+    let code_tok = &tokens(&encode_kind(FoldedKind::Code, "fn main() {\n}"))[0];
+    assert_eq!(code_tok.kind, FoldedKind::Code);
+    assert_eq!(code_tok.label(), "[Pasted code 2 lines]");
+
+    let log_tok = &tokens(&encode_kind(FoldedKind::Log, "INFO 1\nWARN 2\nERROR 3"))[0];
+    assert_eq!(log_tok.kind, FoldedKind::Log);
+    assert_eq!(log_tok.label(), "[Pasted log 3 lines]");
 }
 
 #[test]
@@ -133,7 +138,7 @@ fn projection_handles_collapsed_expanded_and_duplicate_tokens_independently() {
     // Initially both collapsed.
     let proj0 = Projection::new(&raw, &expanded);
     let label = proj0.tokens()[0].label();
-    assert_eq!(label, "[Pasted 3 lines: alpha]");
+    assert_eq!(label, "[Pasted text 3 lines]");
     assert_eq!(proj0.text(), format!("A {label} B {label} C"));
 
     // Expand only the second occurrence (occurrence = 1).

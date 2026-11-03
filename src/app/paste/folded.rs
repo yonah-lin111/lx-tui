@@ -3,48 +3,86 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use unicode_width::UnicodeWidthChar;
-
 use crate::app::markdown::fence_delimiter;
 
 /// 单个折叠粘贴块允许的最大正文 UTF-8 字节数（256 KiB）。
 pub const MAX_FOLDED_BYTES: usize = 256 * 1024;
 
-/// 折叠态首行预览的最大显示列宽。
-const PREVIEW_MAX_WIDTH: usize = 40;
-
-/// 折叠 token 起始前缀。
-const TOKEN_PREFIX: &str = "<pasted-text lines=\"";
+/// 折叠 token 公共检测前缀。
+const TOKEN_COMMON_PREFIX: &str = "<pasted-";
 
 /// 折叠 token 起始标签结尾。
 const TOKEN_OPEN_END: &str = "\">";
 
-/// 折叠 token 闭合标签。
-const TOKEN_CLOSE: &str = "</pasted-text>";
+/// 闭合标签在 `<` 之后的后缀集合（用于转义/反转义判定）。
+const CLOSE_TAG_SUFFIXES: [&str; 3] = ["/pasted-text>", "/pasted-code>", "/pasted-log>"];
 
-/// 闭合标签在 `<` 之后的后缀（用于转义/反转义判定）。
-const CLOSE_TAG_SUFFIX: &str = "/pasted-text>";
+/// 折叠粘贴块的语义类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FoldedKind {
+    Text,
+    Code,
+    Log,
+}
+
+impl FoldedKind {
+    /// 底层 XML 标签名。
+    pub const fn tag_name(self) -> &'static str {
+        match self {
+            Self::Text => "pasted-text",
+            Self::Code => "pasted-code",
+            Self::Log => "pasted-log",
+        }
+    }
+
+    /// 折叠芯片中展示的类型短词。
+    pub const fn chip_word(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Code => "code",
+            Self::Log => "log",
+        }
+    }
+
+    /// 起始标签前缀。
+    const fn open_prefix(self) -> &'static str {
+        match self {
+            Self::Text => "<pasted-text lines=\"",
+            Self::Code => "<pasted-code lines=\"",
+            Self::Log => "<pasted-log lines=\"",
+        }
+    }
+
+    /// 闭合标签。
+    const fn close_tag(self) -> &'static str {
+        match self {
+            Self::Text => "</pasted-text>",
+            Self::Code => "</pasted-code>",
+            Self::Log => "</pasted-log>",
+        }
+    }
+}
 
 /// 一个已解析的折叠粘贴 token（`range` 指向原始缓冲区字节区间）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FoldedToken {
     pub range: Range<usize>,
+    pub kind: FoldedKind,
     pub line_count: usize,
     /// 已反转义的原始正文。
     pub body: String,
-    /// 折叠态展示的首行预览（已截断）。
-    pub preview: String,
-    /// 正文与行数的稳定哈希（进程内身份）。
+    /// 类型、正文与行数的稳定哈希（进程内身份）。
     pub id: u64,
 }
 
 impl FoldedToken {
-    /// 折叠态显示的芯片文本：`[Pasted N lines: preview]`。
+    /// 折叠态显示的芯片文本：`[Pasted <text|code|log> N lines]`（单行为 `1 line`）。
     pub fn label(&self) -> String {
+        let word = self.kind.chip_word();
         if self.line_count == 1 {
-            format!("[Pasted 1 line: {}]", self.preview)
+            format!("[Pasted {word} 1 line]")
         } else {
-            format!("[Pasted {} lines: {}]", self.line_count, self.preview)
+            format!("[Pasted {word} {} lines]", self.line_count)
         }
     }
 }
@@ -93,6 +131,7 @@ impl ExpandedPastes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChipHit {
     pub token_index: usize,
+    pub kind: FoldedKind,
     pub id: u64,
     pub occurrence: usize,
     pub expanded: bool,
@@ -114,6 +153,7 @@ pub enum SegmentKind {
     Plain,
     Chip {
         token: usize,
+        kind: FoldedKind,
         expanded: bool,
         occurrence: usize,
     },
@@ -175,6 +215,7 @@ impl<'a> Projection<'a> {
                 raw: tok.range.clone(),
                 kind: SegmentKind::Chip {
                     token: index,
+                    kind: tok.kind,
                     expanded: is_expanded,
                     occurrence,
                 },
@@ -299,12 +340,14 @@ impl<'a> Projection<'a> {
             SegmentKind::Plain => None,
             SegmentKind::Chip {
                 token,
+                kind,
                 expanded,
                 occurrence,
             } => {
                 let tok = self.tokens.get(token)?;
                 Some(ChipHit {
                     token_index: token,
+                    kind,
                     id: tok.id,
                     occurrence,
                     expanded,
@@ -364,10 +407,10 @@ impl<'a> Projection<'a> {
     }
 }
 
-/// 原文 → token 正文：仅转义闭合标签序列 `</pasted-text>`（及 `<` + `\`* + `/pasted-text>`），
+/// 原文 → token 正文：仅转义闭合标签序列 `</pasted-text>` / `</pasted-code>` / `</pasted-log>`，
 /// 普通反斜杠与括号保持原样，确保发送给 LLM 时正文无转义噪音。
 pub fn escape_body(text: &str) -> String {
-    if !text.contains(CLOSE_TAG_SUFFIX) {
+    if !CLOSE_TAG_SUFFIXES.iter().any(|s| text.contains(s)) {
         return text.to_string();
     }
     let mut out = String::with_capacity(text.len() + 8);
@@ -379,7 +422,10 @@ pub fn escape_body(text: &str) -> String {
         if ch == '<' {
             let after_lt = &text[pos + 1..];
             let slashes = after_lt.bytes().take_while(|&b| b == b'\\').count();
-            if after_lt[slashes..].starts_with(CLOSE_TAG_SUFFIX) {
+            if CLOSE_TAG_SUFFIXES
+                .iter()
+                .any(|s| after_lt[slashes..].starts_with(s))
+            {
                 out.push_str("<\\");
                 pos += 1;
                 continue;
@@ -391,9 +437,9 @@ pub fn escape_body(text: &str) -> String {
     out
 }
 
-/// token 正文 → 原文：反转义 `<\/pasted-text>`（及 `<` + `\`+ + `/pasted-text>`），其余原样保留。
+/// token 正文 → 原文：反转义 `<\/pasted-text>` / `<\/pasted-code>` / `<\/pasted-log>`，其余原样保留。
 pub fn unescape_body(body: &str) -> String {
-    if !body.contains(CLOSE_TAG_SUFFIX) {
+    if !CLOSE_TAG_SUFFIXES.iter().any(|s| body.contains(s)) {
         return body.to_string();
     }
     let mut out = String::with_capacity(body.len());
@@ -405,7 +451,11 @@ pub fn unescape_body(body: &str) -> String {
         if ch == '<' {
             let after_lt = &body[pos + 1..];
             let slashes = after_lt.bytes().take_while(|&b| b == b'\\').count();
-            if slashes >= 1 && after_lt[slashes..].starts_with(CLOSE_TAG_SUFFIX) {
+            if slashes >= 1
+                && CLOSE_TAG_SUFFIXES
+                    .iter()
+                    .any(|s| after_lt[slashes..].starts_with(s))
+            {
                 out.push('<');
                 // 跳过紧跟在 `<` 后面的那一个转义反斜杠。
                 pos += 2;
@@ -418,21 +468,27 @@ pub fn unescape_body(body: &str) -> String {
     out
 }
 
-/// 原文 → 自包含折叠 token `<pasted-text lines="N">转义正文</pasted-text>`。
-pub fn encode(content: &str) -> String {
+/// 原文 → 指定类型的自包含折叠 token `<pasted-{text|code|log} lines="N">转义正文</pasted-...>`。
+pub fn encode_kind(kind: FoldedKind, content: &str) -> String {
     let line_count = content.split('\n').count().max(1);
+    let tag = kind.tag_name();
     format!(
-        "<pasted-text lines=\"{line_count}\">{}</pasted-text>",
+        "<{tag} lines=\"{line_count}\">{}</{tag}>",
         escape_body(content)
     )
 }
 
+/// 原文 → 默认文本折叠 token `<pasted-text lines="N">转义正文</pasted-text>`。
+pub fn encode(content: &str) -> String {
+    encode_kind(FoldedKind::Text, content)
+}
+
 /// 扫描全文，返回所有在代码围栏外的合法折叠 token。
 ///
-/// 扫描器自行维护行首围栏状态：围栏内的 `@[pasted:...]` 字面量被忽略，
+/// 扫描器自行维护行首围栏状态：围栏内的 `<pasted-...>` 字面量被忽略，
 /// 而 token 正文内部换行后的 ``` 不会开启或关闭外层围栏。
 pub fn tokens(text: &str) -> Vec<FoldedToken> {
-    if !text.contains(TOKEN_PREFIX) {
+    if !text.contains(TOKEN_COMMON_PREFIX) {
         return Vec::new();
     }
     let mut out = Vec::new();
@@ -462,7 +518,7 @@ pub fn tokens(text: &str) -> Vec<FoldedToken> {
         }
 
         if fence.is_none()
-            && text[pos..].starts_with(TOKEN_PREFIX)
+            && text[pos..].starts_with(TOKEN_COMMON_PREFIX)
             && let Some(token) = try_parse_token(text, pos)
         {
             pos = token.range.end;
@@ -613,9 +669,15 @@ pub fn next_boundary(text: &str, offset: usize) -> usize {
     next
 }
 
-/// 尝试在 `start` 处解析一个 `<pasted-text lines="N">...</pasted-text>` token。
+/// 尝试在 `start` 处解析一个 `<pasted-{text|code|log} lines="N">...</pasted-...>` token。
 fn try_parse_token(text: &str, start: usize) -> Option<FoldedToken> {
-    let after_prefix = start.checked_add(TOKEN_PREFIX.len())?;
+    let slice = text.get(start..)?;
+    let kind = [FoldedKind::Text, FoldedKind::Code, FoldedKind::Log]
+        .into_iter()
+        .find(|k| slice.starts_with(k.open_prefix()))?;
+    let prefix = kind.open_prefix();
+    let close_tag = kind.close_tag();
+    let after_prefix = start.checked_add(prefix.len())?;
     let rest = text.get(after_prefix..)?;
     let digit_len = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
     if digit_len == 0 {
@@ -631,58 +693,32 @@ fn try_parse_token(text: &str, start: usize) -> Option<FoldedToken> {
     }
     let body_start = after_prefix + digit_len + TOKEN_OPEN_END.len();
     let body_rest = text.get(body_start..)?;
-    let rel_end = body_rest.find(TOKEN_CLOSE)?;
+    let rel_end = body_rest.find(close_tag)?;
     let body_end = body_start + rel_end;
     if body_end <= body_start {
         return None;
     }
-    let token_end = body_end + TOKEN_CLOSE.len();
+    let token_end = body_end + close_tag.len();
     let body = unescape_body(&text[body_start..body_end]);
     if body.is_empty() {
         return None;
     }
-    let preview = compute_preview(&body, line_count);
-    let id = compute_id(line_count, &body);
+    let id = compute_id(kind, line_count, &body);
 
     Some(FoldedToken {
         range: start..token_end,
+        kind,
         line_count,
         body,
-        preview,
         id,
     })
 }
 
-/// 计算折叠态首行预览：取第一条非空行并截断到 40 列。
-fn compute_preview(body: &str, line_count: usize) -> String {
-    let first_non_empty = body
-        .split('\n')
-        .map(|line| line.trim_end())
-        .find(|line| !line.trim().is_empty());
-    let Some(line) = first_non_empty else {
-        return format!("{line_count} lines");
-    };
-    let mut out = String::new();
-    let mut width = 0;
-    let mut truncated = false;
-    for ch in line.chars() {
-        let w = ch.width().unwrap_or(0);
-        if width + w > PREVIEW_MAX_WIDTH {
-            truncated = true;
-            break;
-        }
-        width += w;
-        out.push(ch);
-    }
-    if truncated {
-        out.push('…');
-    }
-    out
-}
-
-/// 稳定 FNV-1a 64 位哈希：相同 `(line_count, body)` 恒产出相同 `id`。
-fn compute_id(line_count: usize, body: &str) -> u64 {
+/// 稳定 FNV-1a 64 位哈希：相同 `(kind, line_count, body)` 恒产出相同 `id`。
+fn compute_id(kind: FoldedKind, line_count: usize, body: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    hash ^= kind as u64;
+    hash = hash.wrapping_mul(0x0100_0000_01b3);
     for b in (line_count as u64).to_le_bytes() {
         hash ^= u64::from(b);
         hash = hash.wrapping_mul(0x0100_0000_01b3);

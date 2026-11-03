@@ -568,17 +568,26 @@ pub fn markdown_code_block() -> Style {
     text()
 }
 
-/// 折叠粘贴芯片：黄色加粗文字 + 深灰底（256 色 Indexed 236）。
-pub fn pasted_chip() -> Style {
-    Style::default()
-        .fg(Color::Yellow)
-        .bg(Color::Indexed(236))
-        .add_modifier(Modifier::BOLD)
+/// 折叠粘贴芯片：按语义类型区分前景色与深色背景（Text 黄字深灰底、Code 青字深蓝底、Log 亮绿字深绿底）。
+pub fn pasted_chip(kind: crate::app::paste::FoldedKind) -> Style {
+    use crate::app::paste::FoldedKind;
+    let (fg, bg) = match kind {
+        FoldedKind::Text => (Color::Yellow, Color::Indexed(236)),
+        FoldedKind::Code => (Color::Cyan, Color::Indexed(23)),
+        FoldedKind::Log => (Color::LightGreen, Color::Indexed(22)),
+    };
+    Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD)
 }
 
-/// 折叠粘贴展开区：与芯片同一底色（Indexed 236），正常前景。
-pub fn pasted_bg() -> Style {
-    Style::default().bg(Color::Indexed(236))
+/// 折叠粘贴展开区：与对应类型芯片共用同一深色背景，正常前景。
+pub fn pasted_bg(kind: crate::app::paste::FoldedKind) -> Style {
+    use crate::app::paste::FoldedKind;
+    let bg = match kind {
+        FoldedKind::Text => Color::Indexed(236),
+        FoldedKind::Code => Color::Indexed(23),
+        FoldedKind::Log => Color::Indexed(22),
+    };
+    Style::default().bg(bg)
 }
 
 /// markdown 引用内容：亮品红斜体。

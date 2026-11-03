@@ -6,7 +6,7 @@
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::paste::{ExpandedPastes, Projection, SegmentKind};
+use crate::app::paste::{ExpandedPastes, FoldedKind, Projection, SegmentKind};
 
 use super::{SCROLLBAR_COLUMNS, tool};
 
@@ -14,8 +14,8 @@ use super::{SCROLLBAR_COLUMNS, tool};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UserSpanKind {
     Plain,
-    CollapsedChip,
-    ExpandedChip,
+    CollapsedChip(FoldedKind),
+    ExpandedChip(FoldedKind),
 }
 
 /// 用户消息单行内的连续同样式文本段。
@@ -174,9 +174,15 @@ pub(crate) fn wrap_user_projection(
             let disp_pos = row_start + offset;
             let kind = match proj.segment_at(disp_pos).map(|s| s.kind) {
                 Some(SegmentKind::Chip {
-                    expanded: false, ..
-                }) => UserSpanKind::CollapsedChip,
-                Some(SegmentKind::Chip { expanded: true, .. }) => UserSpanKind::ExpandedChip,
+                    kind,
+                    expanded: false,
+                    ..
+                }) => UserSpanKind::CollapsedChip(kind),
+                Some(SegmentKind::Chip {
+                    kind,
+                    expanded: true,
+                    ..
+                }) => UserSpanKind::ExpandedChip(kind),
                 _ => UserSpanKind::Plain,
             };
             if let Some(last) = spans.last_mut().filter(|s| s.kind == kind) {
@@ -196,6 +202,7 @@ pub(crate) fn wrap_user_projection(
             token,
             expanded: chip_exp,
             occurrence,
+            ..
         } = seg.kind
         else {
             continue;

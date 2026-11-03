@@ -2,7 +2,7 @@
 
 use crate::app::paste::{
     ChipHit, PasteAnchor, Projection, TextPasteAction, TextPastePanel, clamp_cursor,
-    encode_pasted_text, expand_pasted_text, folded_tokens, mask_pasted_text, snap_pasted_range,
+    encode_pasted_kind, expand_pasted_text, folded_tokens, mask_pasted_text, snap_pasted_range,
 };
 use crate::app::prompt::{list, text};
 use crate::app::selection::SelectionUnit;
@@ -52,7 +52,7 @@ impl Lx {
             .is_some_and(|paste| paste.panel.set_active(index))
     }
 
-    /// 确认长文本粘贴面板：`Collapse` 插入折叠 token（补空格），`Full` 插入原文；一步撤销。
+    /// 确认文本粘贴面板：折叠类（`Text` / `Code` / `Log`）插入对应折叠 token（补空格），`Raw` 插入原文；一步撤销。
     pub fn text_paste_confirm(&mut self, action: TextPasteAction) -> bool {
         let Some(paste) = self.text_paste.as_ref() else {
             return false;
@@ -64,12 +64,12 @@ impl Lx {
         self.text_paste = None;
         let (start, end) = panel.anchor.range();
         let range = snap_pasted_range(&self.input, start..end.min(self.input.len()));
-        let insertion = match action {
-            TextPasteAction::Collapse => {
-                let token = encode_pasted_text(&panel.content);
+        let insertion = match action.folded_kind() {
+            Some(kind) => {
+                let token = encode_pasted_kind(kind, &panel.content);
                 self.paste_insertion_at(range.start, &[token])
             }
-            TextPasteAction::Full => panel.full_text,
+            None => panel.full_text,
         };
         self.snapshot();
         self.input.replace_range(range.clone(), &insertion);
