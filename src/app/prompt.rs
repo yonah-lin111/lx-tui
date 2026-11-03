@@ -15,8 +15,8 @@ pub mod tree;
 
 pub use pages_list::{PageRow, page_display_title, page_rows, page_title_status};
 pub use recent::{
-    LiveEditor, MAX_RECENT_PAGES, RECENT_VISIBLE_ENTRIES, RecentPageRow, recent_page_count,
-    recent_page_rows,
+    LiveEditor, MAX_RECENT_PAGES, RECENT_MIN_VISIBLE_ENTRIES, RECENT_VISIBLE_ENTRIES,
+    RecentPageRow, recent_page_count, recent_page_rows,
 };
 pub use tree::{
     PageListView, PromptDropHit, PromptEditing, PromptFolder, PromptItem, PromptMode, PromptPage,

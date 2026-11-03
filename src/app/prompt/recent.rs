@@ -7,6 +7,8 @@ use super::{PromptEditing, PromptPageId, PromptPanel, page_display_title, page_t
 
 /// 抽屉最多展示的条目数（每项占 2 行）。
 pub const RECENT_VISIBLE_ENTRIES: usize = 3;
+/// 抽屉展开时至少保留的条目高度；记录不足时也留出第二行位置。
+pub const RECENT_MIN_VISIBLE_ENTRIES: usize = 2;
 /// 参与排序的最近页面上限。
 pub const MAX_RECENT_PAGES: usize = 20;
 

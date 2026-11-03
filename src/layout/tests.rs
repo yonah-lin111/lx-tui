@@ -612,21 +612,32 @@ fn prompt_body_split_reserves_drawer_rows() {
     let capped = prompt_body_split(panel, true, 10);
     assert_eq!(capped.visible_entries, 3, "最多同时显示 3 条");
     assert_eq!(capped.main.height, body.height - 7);
+
+    let one = prompt_body_split(panel, true, 1);
+    assert_eq!(one.visible_entries, 2, "仅 1 条记录也保留 2 条高度");
+    assert_eq!(one.main.height, body.height - 5);
+    assert_eq!(one.recent_text.expect("content").height, 4);
 }
 
 #[test]
-fn prompt_body_split_shrinks_by_half_height_then_suppresses() {
-    // 内容区 8 行：抽屉上限 4 行，只能容纳 1 条（1+2）。
-    let panel = Rect::new(0, 0, 40, 12);
+fn prompt_body_split_shrinks_to_minimum_two_then_suppresses() {
+    // 内容区 10 行：抽屉上限 5 行，3 条放不下，降到最低 2 条（1+4）。
+    let panel = Rect::new(0, 0, 40, 14);
     let split = prompt_body_split(panel, true, 10);
-    assert_eq!(split.visible_entries, 1);
-    let shorter = Rect::new(0, 0, 40, 10);
-    let split = prompt_body_split(shorter, true, 10);
-    assert_eq!(split.visible_entries, 1, "逐条减少到不超过半屏");
-    let body = prompt_body_rect(pane_inner_rect(shorter));
-    assert_eq!(split.main.height, body.height - 3);
+    assert_eq!(split.visible_entries, 2);
+    let body = prompt_body_rect(pane_inner_rect(panel));
+    assert_eq!(split.main.height, body.height - 5);
 
-    // 内容区 4 行：半屏 2 行连 1 条都放不下，直接收起抽屉。
+    // 内容区 8 行：半屏 4 行连最低 2 条（5 行）都放不下，直接收起抽屉。
+    let shorter = Rect::new(0, 0, 40, 12);
+    let split = prompt_body_split(shorter, true, 10);
+    assert!(split.recent_divider.is_none());
+    assert_eq!(
+        split.main,
+        body_text_rect(prompt_body_rect(pane_inner_rect(shorter)))
+    );
+
+    // 内容区 4 行：同样收起。
     let tiny = Rect::new(0, 0, 40, 8);
     let split = prompt_body_split(tiny, true, 10);
     assert!(split.recent_divider.is_none());

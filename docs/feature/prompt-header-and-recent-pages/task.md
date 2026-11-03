@@ -8,7 +8,7 @@
 ## 1. 需求与边界确认（Grill Me 已完成）
 
 - [x] **问题 1（Recent 面板位置与打开方式）**：顶部工具栏新增 `[rec]` 按钮（`Tree` / `Editor` / `Pages` 三种模式常显），绑定快捷键 `Ctrl/Cmd + r`；以底部抽屉形式在 Prompt 面板下方展开，顶部带 `├─ recent ───┤` 分割线，不完全覆盖上方内容。
-- [x] **问题 2（抽屉高度与点击行为）**：抽屉最大显示 3 个双行条目（1 行分割线 + 6 行内容 = 7 行），少于 3 条时自适应高度（1 条 3 行、2 条 5 行），且最多不超过面板内容区高度的一半；鼠标左键单击条目直接跳转到对应 `Prompt + Page` 进入编辑视图，跳转后抽屉保持展开。
+- [x] **问题 2（抽屉高度与点击行为）**：抽屉最大显示 3 个双行条目（1 行分割线 + 6 行内容 = 7 行），记录不足 2 条时仍保留 2 条高度（5 行），且最多不超过面板内容区高度的一半；鼠标左键单击条目直接跳转到对应 `Prompt + Page` 进入编辑视图，跳转后抽屉保持展开。
 - [x] **问题 3（数据范围、排序、时间格式与状态点）**：汇总当前工作区所有已入库 `PromptItem` 的全部 `PromptPage`（不含 `tmp` 草稿），按 `updated_at` 全局倒序排列（上限 20 条）；时间格式采用 `[now]` / `[5m]` / `[2h]` / `[3d]` / `[MM-DD]`；Page 标题与状态小圆点（`○` / `●`）复用 `page_title_status` 规则。
 - [x] **问题 4（顶部两行表头重排与当前页面 Title）**：
   - 第 1 行（工具栏）：左组为 `[≡]/[/] [rec] [←] [→]`，右组为 `[refDir] ‹ n/m › ●`（`‹ n/m ›` 移至 `[refDir]` 与保存圆点 `●` 中间；`Pages` 模式在对应位置显示无箭头的 `n/m`）。
@@ -66,7 +66,7 @@
 - [x] **4.1 主视图与底部抽屉几何分割（`src/layout/prompt.rs` & `src/ui/prompt_frame.rs`）**
   - 在 `src/layout/prompt.rs` 新增 `PromptBodySplit` 与 `prompt_body_split(panel: Rect, recent_open: bool, recent_entries: usize) -> PromptBodySplit`：
     - 计算上方主内容区 `main_text_rect` / `main_scrollbar_rect`；
-    - 计算下方抽屉 `recent_divider_rect`、`recent_text_rect` 与 `recent_scrollbar_rect`（最多 3 条/7 行，且不超过 `body.height / 2`）。
+    - 计算下方抽屉 `recent_divider_rect`、`recent_text_rect` 与 `recent_scrollbar_rect`（最多 3 条/7 行、至少 2 条/5 行，且不超过 `body.height / 2`）。
 - [x] **4.2 底部抽屉渲染（新建 `src/ui/prompt/recent.rs` & 更新 `src/ui/prompt_frame.rs`）**
   - 在 `src/ui/prompt/recent.rs` 实现：
     - `render`：绘制 `├─ recent ───┤` 分割线、空态 `no recent pages` 或双行条目列表；
