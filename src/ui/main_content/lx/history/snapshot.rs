@@ -620,98 +620,117 @@ impl Builder<'_> {
         };
         let width = self.width;
         let is_user = message.role == "user";
-        let expanded = history.chat.reasoning_expanded(message_index, step_index);
+        let content_width = width.saturating_sub(super::STEP_GUTTER);
         let user_expanded = history.chat.user_message_expanded(&message.id);
         let start = self.rows;
-        let snap_block = self.block(key, block_source, 0, || match step {
-            AssistantStepView::Part { part, .. } => match part.kind {
-                crate::chat::events::PartKind::Text if is_user => {
-                    let display_text = crate::chat::strip_references_for_display(
-                        &part.content,
-                        &message.attachments,
-                    );
-                    let display_text = if display_text.is_empty() && !message.attachments.is_empty()
-                    {
-                        let image_count = message
+        let snap_block = match step {
+            // 助手正文走增量 Markdown：稳定前缀跨帧复用，流式只重排尾部。
+            AssistantStepView::Part { part, .. }
+                if !is_user && part.kind == crate::chat::events::PartKind::Text =>
+            {
+                let paint = self.cache.markdown_block(key, &part.content, content_width);
+                let rows = paint.rows();
+                SnapBlock {
+                    start: 0,
+                    rows,
+                    paint,
+                    key,
+                    source: block_source,
+                }
+            }
+            _ => self.block(key, block_source, 0, || match step {
+                AssistantStepView::Part { part, .. } => match part.kind {
+                    crate::chat::events::PartKind::Text if is_user => {
+                        let display_text = crate::chat::strip_references_for_display(
+                            &part.content,
+                            &message.attachments,
+                        );
+                        let display_text =
+                            if display_text.is_empty() && !message.attachments.is_empty() {
+                                let image_count = message
+                                    .attachments
+                                    .iter()
+                                    .filter(|att| {
+                                        att.kind == crate::db::chat::MessageAttachmentKind::Image
+                                    })
+                                    .count();
+                                if image_count > 0 {
+                                    crate::ui::text::chat::image_message_preview(image_count)
+                                        .to_string()
+                                } else {
+                                    display_text
+                                }
+                            } else {
+                                display_text
+                            };
+                        let expanded_pastes = history.chat.user_expanded_pastes(&message.id);
+                        let has_expanded_paste = !expanded_pastes.is_empty();
+                        let (wrapped, paste_spans) = super::rows::wrap_user_projection(
+                            &display_text,
+                            &expanded_pastes,
+                            width.saturating_sub(super::USER_INDENT),
+                        );
+                        let (text_lines, fold_hint) = if wrapped.len() > 5 && !has_expanded_paste {
+                            if user_expanded {
+                                (wrapped, Some("less lines".to_string()))
+                            } else {
+                                let remaining = wrapped.len() - 5;
+                                (
+                                    wrapped[..5].to_vec(),
+                                    Some(format!("… {remaining} more lines")),
+                                )
+                            }
+                        } else {
+                            (wrapped, None)
+                        };
+                        let display_attachments: Vec<_> = message
                             .attachments
                             .iter()
-                            .filter(|att| att.kind == crate::db::chat::MessageAttachmentKind::Image)
-                            .count();
-                        if image_count > 0 {
-                            crate::ui::text::chat::image_message_preview(image_count).to_string()
-                        } else {
-                            display_text
+                            .filter(|att| {
+                                !att.label
+                                    .starts_with(crate::app::markdown::REF_CONTENT_PREFIX)
+                            })
+                            .collect();
+                        let ref_lines = display_attachments
+                            .iter()
+                            .enumerate()
+                            .map(|(i, att)| UserRefLine {
+                                is_last: i + 1 == display_attachments.len(),
+                                kind: att.kind,
+                                label: att.label.clone(),
+                            })
+                            .collect();
+                        BlockPaint::UserText {
+                            text_lines,
+                            paste_spans,
+                            fold_hint,
+                            ref_lines,
                         }
-                    } else {
-                        display_text
-                    };
-                    let expanded_pastes = history.chat.user_expanded_pastes(&message.id);
-                    let has_expanded_paste = !expanded_pastes.is_empty();
-                    let (wrapped, paste_spans) = super::rows::wrap_user_projection(
-                        &display_text,
-                        &expanded_pastes,
-                        width.saturating_sub(super::USER_INDENT),
-                    );
-                    let (text_lines, fold_hint) = if wrapped.len() > 5 && !has_expanded_paste {
-                        if user_expanded {
-                            (wrapped, Some("less lines".to_string()))
-                        } else {
-                            let remaining = wrapped.len() - 5;
-                            (
-                                wrapped[..5].to_vec(),
-                                Some(format!("… {remaining} more lines")),
-                            )
-                        }
-                    } else {
-                        (wrapped, None)
-                    };
-                    let display_attachments: Vec<_> = message
-                        .attachments
-                        .iter()
-                        .filter(|att| {
-                            !att.label
-                                .starts_with(crate::app::markdown::REF_CONTENT_PREFIX)
-                        })
-                        .collect();
-                    let ref_lines = display_attachments
-                        .iter()
-                        .enumerate()
-                        .map(|(i, att)| UserRefLine {
-                            is_last: i + 1 == display_attachments.len(),
-                            kind: att.kind,
-                            label: att.label.clone(),
-                        })
-                        .collect();
-                    BlockPaint::UserText {
-                        text_lines,
-                        paste_spans,
-                        fold_hint,
-                        ref_lines,
                     }
-                }
-                crate::chat::events::PartKind::Text => BlockPaint::Markdown {
-                    lines: markdown_render::render_wrapped(
-                        &part.content,
-                        width.saturating_sub(super::STEP_GUTTER),
-                    ),
-                },
-                crate::chat::events::PartKind::Reasoning => BlockPaint::Thinking {
-                    body: if expanded {
-                        markdown_render::render_wrapped(
-                            &part.content,
-                            width.saturating_sub(super::STEP_GUTTER),
-                        )
-                    } else {
-                        Vec::new()
+                    crate::chat::events::PartKind::Text => BlockPaint::Markdown {
+                        prefix: Arc::new(Vec::new()),
+                        prefix_bytes: 0,
+                        tail: markdown_render::render_wrapped(&part.content, content_width),
+                    },
+                    crate::chat::events::PartKind::Reasoning => BlockPaint::Thinking {
+                        body: if super::cache::reasoning_body_visible(
+                            history,
+                            message_index,
+                            step_index,
+                        ) {
+                            markdown_render::render_wrapped(&part.content, content_width)
+                        } else {
+                            Vec::new()
+                        },
                     },
                 },
-            },
-            AssistantStepView::Tool { call, .. } => {
-                let folds = folds_of(history, &message.id, call);
-                let rows = tool_rows(call, width, folds);
-                legacy(rows, tool::card_regions(call, width, folds, rows), folds)
-            }
-        });
+                AssistantStepView::Tool { call, .. } => {
+                    let folds = folds_of(history, &message.id, call);
+                    let rows = tool_rows(call, width, folds);
+                    legacy(rows, tool::card_regions(call, width, folds, rows), folds)
+                }
+            }),
+        };
 
         if is_user
             && let BlockPaint::UserText {

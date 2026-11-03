@@ -5,14 +5,23 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use crate::app::state::{
-    AssistantStepView, CardSection, ChatMessageView, Lx, ToolCallView, ToolDetailView,
-};
+use crate::app::state::Lx;
 use crate::layout::PaneId;
+use crate::ui::markdown_render::IncrementalMarkdownState;
 
 use super::paint::BlockPaint;
 use super::snapshot::{self, HistorySnapshot};
+
+mod block_signature;
+mod signature;
+#[cfg(test)]
+mod tests;
+mod tool_signature;
+
+pub(crate) use block_signature::*;
+pub(crate) use signature::*;
 
 /// 二级缓存（绘制数据）的字节上限，**所有 lx 窗格共享**；超限按 `last_frame` 淘汰。
 ///
@@ -30,6 +39,25 @@ pub(crate) struct BlockKey {
     pub(crate) step_index: usize,
     pub(crate) width: u16,
     pub(crate) sig: u64,
+}
+
+impl BlockKey {
+    /// 物理槽位：指纹变化时原地覆写，不堆积流式中间版本。
+    fn slot(self) -> BlockSlot {
+        BlockSlot {
+            message_index: self.message_index,
+            step_index: self.step_index,
+            width: self.width,
+        }
+    }
+}
+
+/// 块在缓存中的物理槽位（不含内容指纹；同一槽位始终只保留最新绘制数据）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct BlockSlot {
+    message_index: usize,
+    step_index: usize,
+    width: u16,
 }
 
 /// 消息级本地命令卡片（一条消息一个块）。
@@ -50,9 +78,17 @@ pub(crate) const MODEL_SWITCH_SLOT_BLOCK: usize = usize::MAX - 6;
 pub(crate) const RUNNING_COMPACT_SLOT_MESSAGE: usize = usize::MAX;
 pub(crate) const RUNNING_COMPACT_SLOT_BLOCK: usize = usize::MAX - 7;
 
+/// 滚离底部时，屏幕外流式增量的快照合并窗口（约 5 帧 @60fps）。
+#[cfg(not(test))]
+const OFFSCREEN_STREAM_COALESCE: Duration = Duration::from_millis(80);
+#[cfg(test)]
+const OFFSCREEN_STREAM_COALESCE: Duration = Duration::ZERO;
+
 /// 二级缓存项。
 #[derive(Debug)]
 struct BlockEntry {
+    /// 当前内容指纹（命中时校验）。
+    sig: u64,
     paint: Arc<BlockPaint>,
     bytes: usize,
     /// 最近一次被**绘制路径**命中的帧号（构建快照不算使用）。
@@ -114,9 +150,21 @@ pub(crate) struct PaneCache {
     /// 本帧帧号（由 [`RenderCache::pane`] 写入）。
     frame: u64,
     snapshot: Option<(u64, Arc<HistorySnapshot>)>,
+    /// 当前快照的内容宽度（`snapshot` 为 None 时无意义）。
+    snapshot_width: Option<u16>,
+    /// 构建快照时「除流式末条消息外」的列表指纹（屏幕外节流判定用）。
+    snapshot_non_stream: u64,
+    /// 最近一次快照构建时刻。
+    snapshot_at: Option<Instant>,
+    /// 历史视口行数（`history::view` 每帧写入；0 = 未知，不做屏幕外节流）。
+    viewport_rows: usize,
+    /// 屏幕外流式合并窗口（测试可调；生产固定 80ms）。
+    offscreen_coalesce: Duration,
     /// 快照重建次数；仅供测试断言「同一份状态只重建一次」。
     builds: u64,
-    blocks: HashMap<BlockKey, BlockEntry>,
+    blocks: HashMap<BlockSlot, BlockEntry>,
+    /// 流式 Markdown 的增量解析状态（按物理槽位，含已固化前缀）。
+    md_streams: HashMap<BlockSlot, IncrementalMarkdownState>,
     /// 已缓存绘制数据的近似字节数。
     bytes: usize,
     /// 二级缓存字节上限（生产恒为 [`MAX_CACHED_BYTES`]；测试可调小）。
@@ -128,8 +176,14 @@ impl Default for PaneCache {
         Self {
             frame: 0,
             snapshot: None,
+            snapshot_width: None,
+            snapshot_non_stream: 0,
+            snapshot_at: None,
+            viewport_rows: 0,
+            offscreen_coalesce: OFFSCREEN_STREAM_COALESCE,
             builds: 0,
             blocks: HashMap::new(),
+            md_streams: HashMap::new(),
             bytes: 0,
             limit: MAX_CACHED_BYTES,
         }
@@ -160,11 +214,90 @@ impl PaneCache {
         {
             return Arc::clone(snapshot);
         }
+        if self.offscreen_stream_throttled(width, source)
+            && let Some((_, snapshot)) = &self.snapshot
+        {
+            return Arc::clone(snapshot);
+        }
+        // 先释放上一帧快照持有的 `BlockPaint`（含增量 Markdown 前缀），
+        // 让 `IncrementalMarkdownState::update` 的 `Arc::make_mut` 能原地追加。
+        self.snapshot = None;
         let snapshot = Arc::new(snapshot::build(width, source, self));
         self.builds = self.builds.saturating_add(1);
         self.snapshot = Some((signature, Arc::clone(&snapshot)));
+        self.snapshot_width = Some(width);
+        self.snapshot_non_stream = non_stream_signature_source(source, width);
+        self.snapshot_at = Some(Instant::now());
         self.evict();
         snapshot
+    }
+
+    /// 读取当前宽度下**已就绪**的几何快照（供高频鼠标滚轮、拖拽、Hover 调用）。
+    ///
+    /// 已有同宽度快照时直接 O(1) 克隆返回，绝不在鼠标事件回调内同步扫描指纹与重排
+    /// Markdown；仅在冷启动或宽度变化尚未构建快照时回退到完整构建。
+    pub(crate) fn snapshot_ready_source(
+        &mut self,
+        width: u16,
+        source: super::source::HistorySource<'_>,
+    ) -> Arc<HistorySnapshot> {
+        if self.snapshot_width == Some(width)
+            && let Some((_, snapshot)) = &self.snapshot
+        {
+            return Arc::clone(snapshot);
+        }
+        self.snapshot_source(width, source)
+    }
+
+    /// 记录历史视口行数（屏幕外流式节流用）。
+    pub(crate) fn set_viewport_rows(&mut self, rows: usize) {
+        self.viewport_rows = rows;
+    }
+
+    /// 调小屏幕外流式合并窗口（测试用；0 = 关闭节流）。
+    #[cfg(test)]
+    pub(crate) fn set_offscreen_coalesce(&mut self, interval: Duration) {
+        self.offscreen_coalesce = interval;
+    }
+
+    /// 仅当变化局限在**视口下方**的流式末条消息时才允许合并更新。
+    fn offscreen_stream_throttled(
+        &self,
+        width: u16,
+        source: super::source::HistorySource<'_>,
+    ) -> bool {
+        if self.offscreen_coalesce.is_zero()
+            || !source.coalesce_offscreen
+            || source.chat.follow_bottom
+            || self.viewport_rows == 0
+        {
+            return false;
+        }
+        let Some((_, snapshot)) = &self.snapshot else {
+            return false;
+        };
+        if self.snapshot_width != Some(width) {
+            return false;
+        }
+        let Some(built_at) = self.snapshot_at else {
+            return false;
+        };
+        if built_at.elapsed() >= self.offscreen_coalesce {
+            return false;
+        }
+        // 只有流式末条消息变了（未读界面的其他状态一律不合并）。
+        if non_stream_signature_source(source, width) != self.snapshot_non_stream {
+            return false;
+        }
+        let Some(last) = snapshot.messages.last() else {
+            return false;
+        };
+        // 流式消息整块位于视口下方：重排不会改变可见像素。
+        last.start
+            >= source
+                .chat
+                .history_scroll
+                .saturating_add(self.viewport_rows)
     }
 
     /// 取块级绘制数据：命中直接复用；未命中调用 `build` 并记账。
@@ -177,10 +310,41 @@ impl PaneCache {
         key: BlockKey,
         build: impl FnOnce() -> Arc<BlockPaint>,
     ) -> Arc<BlockPaint> {
-        if let Some(entry) = self.blocks.get(&key) {
+        if let Some(entry) = self.blocks.get(&key.slot())
+            && entry.sig == key.sig
+        {
             return Arc::clone(&entry.paint);
         }
         let paint = build();
+        let bytes = paint.bytes();
+        self.insert_block(key, Arc::clone(&paint), bytes);
+        paint
+    }
+
+    /// 助手正文的增量 Markdown 绘制数据：同一槽位原地覆写，只重排尾部。
+    pub(crate) fn markdown_block(
+        &mut self,
+        key: BlockKey,
+        content: &str,
+        width: u16,
+    ) -> Arc<BlockPaint> {
+        let slot = key.slot();
+        if let Some(entry) = self.blocks.get(&slot)
+            && entry.sig == key.sig
+        {
+            return Arc::clone(&entry.paint);
+        }
+        // 旧绘制数据持有前缀 `Arc`：必须先释放，`Arc::make_mut` 才能原地追加。
+        if let Some(previous) = self.blocks.remove(&slot) {
+            self.bytes = self.bytes.saturating_sub(previous.bytes);
+        }
+        let state = self.md_streams.entry(slot).or_default();
+        let (prefix, prefix_bytes, tail) = state.update(content, width);
+        let paint = Arc::new(BlockPaint::Markdown {
+            prefix,
+            prefix_bytes,
+            tail,
+        });
         let bytes = paint.bytes();
         self.insert_block(key, Arc::clone(&paint), bytes);
         paint
@@ -195,7 +359,7 @@ impl PaneCache {
     /// 标记该块本帧被绘制过（刷新 LRU 时间戳）。
     pub(crate) fn mark_used(&mut self, key: BlockKey) {
         let frame = self.frame;
-        if let Some(entry) = self.blocks.get_mut(&key) {
+        if let Some(entry) = self.blocks.get_mut(&key.slot()) {
             entry.last_frame = frame;
         }
     }
@@ -204,8 +368,9 @@ impl PaneCache {
         // 新块算「本帧使用过一次」：本帧正在构建的快照不许在插入过程中被自己淘汰。
         let last_frame = self.frame;
         if let Some(previous) = self.blocks.insert(
-            key,
+            key.slot(),
             BlockEntry {
+                sig: key.sig,
                 paint,
                 bytes,
                 last_frame,
@@ -244,6 +409,9 @@ impl PaneCache {
             };
             if let Some(entry) = self.blocks.remove(&victim) {
                 self.bytes = self.bytes.saturating_sub(entry.bytes);
+                // 增量状态与块同生命周期：块被回收后前缀不再与任何绘制数据共享，
+                // 留着只会白占内存。
+                self.md_streams.remove(&victim);
             }
         }
     }
@@ -266,659 +434,3 @@ impl PaneCache {
         self.builds
     }
 }
-
-/// FNV-1a 64 位哈希（不引第三方依赖）。
-struct Fnv(u64);
-
-impl Fnv {
-    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-
-    fn new() -> Self {
-        Self(Self::OFFSET_BASIS)
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            self.0 ^= u64::from(*byte);
-            self.0 = self.0.wrapping_mul(Self::PRIME);
-        }
-    }
-
-    fn write_u8(&mut self, value: u8) {
-        self.write(&[value]);
-    }
-
-    fn write_u16(&mut self, value: u16) {
-        self.write(&value.to_le_bytes());
-    }
-
-    fn write_u64(&mut self, value: u64) {
-        self.write(&value.to_le_bytes());
-    }
-
-    fn write_usize(&mut self, value: usize) {
-        self.write(&(value as u64).to_le_bytes());
-    }
-
-    fn write_i64(&mut self, value: i64) {
-        self.write(&value.to_le_bytes());
-    }
-
-    fn write_str(&mut self, value: &str) {
-        self.write_usize(value.len());
-        self.write(value.as_bytes());
-    }
-
-    /// 只写首尾各 64 字节：流式追加、环形缓冲裁剪都必然改变其一，且不扫全文。
-    fn write_edges(&mut self, value: &str) {
-        let bytes = value.as_bytes();
-        let head = &bytes[..bytes.len().min(64)];
-        let tail = &bytes[bytes.len().saturating_sub(64)..];
-        self.write(head);
-        self.write(tail);
-    }
-
-    fn finish(self) -> u64 {
-        self.0
-    }
-}
-
-/// 列表指纹：只读状态、O(步骤数)，覆盖一切影响行数或正文的字段。
-///
-/// **不**包含：hover、loading 帧、跟随底部、视口位置、置顶抑制记忆、滚动位置。
-/// 数据源版本的列表指纹。
-pub(crate) fn list_signature_source(source: super::source::HistorySource<'_>, width: u16) -> u64 {
-    let mut hash = Fnv::new();
-    hash.write_u16(width);
-    // 统计行是否可见取决于「是否仍有子 agent 在跑」；状态变化不经过消息本身。
-    hash.write_u8(u8::from(source.subagents_running));
-    hash.write_usize(source.messages.len());
-    hash.write_usize(source.notices.len());
-    hash.write_usize(source.checkpoints.len());
-    for (index, message) in source.messages.iter().enumerate() {
-        hash.write_usize(index);
-        hash.write_str(&message.id);
-        hash.write_i64(message.sequence);
-        hash.write_str(&message.role);
-        hash.write_str(&message.status);
-        hash.write_str(&message.kind);
-        hash.write_str(message.model_label.as_deref().unwrap_or(""));
-        hash.write_str(message.error_code.as_deref().unwrap_or(""));
-        hash.write_i64(message.input_tokens.unwrap_or(-1));
-        hash.write_i64(message.output_tokens.unwrap_or(-1));
-        hash.write_i64(message.cache_read_tokens.unwrap_or(-1));
-        hash.write_i64(message.duration_ms.unwrap_or(-1));
-        if let Some(shell) = &message.shell {
-            shell_signature(&mut hash, source, message, shell);
-        } else {
-            hash.write_u8(0);
-        }
-        hash.write_usize(message.reports.len());
-        for report in &message.reports {
-            report_signature(&mut hash, report);
-            let slot = format!("report:{}", report.agent_id);
-            // 汇报块的展开状态与已追加批次都会改变行数；漏进列表指纹会让快照
-            // 停留在旧几何，而绘制按新状态多写行，正文就会溢出/盖住后面的块。
-            hash.write_u8(u8::from(source.chat.detail_is_expanded(&message.id, &slot)));
-            hash.write_usize(source.chat.report_expand_steps(&message.id, &slot));
-        }
-        hash.write_usize(message.steps.len());
-        for (step_index, step) in message.steps.iter().enumerate() {
-            hash.write_usize(step_index);
-            step_signature(&mut hash, source, message, index, step_index, step);
-        }
-    }
-    for notice in source.notices {
-        hash.write_str(&notice.id);
-        hash.write_i64(notice.sequence);
-        hash.write_str(&notice.kind);
-        hash.write_usize(notice.restored_file_count);
-        hash.write_u8(u8::from(notice.files_already_restored));
-    }
-    for checkpoint in source.checkpoints {
-        hash.write_str(&checkpoint.id);
-        hash.write_i64(checkpoint.sequence);
-        hash.write_str(&checkpoint.model_label);
-        hash.write_i64(checkpoint.created_at_ms);
-        hash.write_i64(checkpoint.start_sequence);
-        hash.write_i64(checkpoint.end_sequence);
-        hash.write_str(&checkpoint.summary);
-        hash.write_u8(u8::from(checkpoint.active));
-        hash.write_u8(u8::from(checkpoint.auto));
-        hash.write_u8(u8::from(
-            source
-                .compact
-                .expanded
-                .iter()
-                .any(|id| id == &checkpoint.id),
-        ));
-    }
-    if let Some(running_id) = &source.compact.running {
-        hash.write_str(running_id);
-        hash.write_i64(source.compact.elapsed_ms.unwrap_or(0) / 1000);
-    }
-    for sw in source.switches {
-        hash.write_str(&sw.id);
-        hash.write_i64(sw.sequence);
-        hash.write_str(sw.from_label.as_deref().unwrap_or(""));
-        hash.write_str(&sw.to_provider);
-        hash.write_str(&sw.to_model);
-        hash.write_str(sw.to_variant.as_deref().unwrap_or(""));
-        hash.write_str(&sw.to_label);
-        hash.write_i64(sw.created_at_ms);
-        hash.write_str(&sw.injected_prompt);
-        for src in &sw.updated_sources {
-            hash.write_str(src);
-        }
-        hash.write_u8(u8::from(source.model_switch.is_expanded(&sw.id)));
-    }
-    hash.finish()
-}
-
-/// 本地命令卡片：正文与折叠状态影响行数。
-fn shell_signature(
-    hash: &mut Fnv,
-    source: super::source::HistorySource<'_>,
-    message: &ChatMessageView,
-    shell: &crate::app::state::UserShellView,
-) {
-    hash.write_u8(1);
-    // 参数区/输出区各自独立折叠，必须进指纹。
-    hash.write_u8(u8::from(source.chat.section_is_expanded(
-        &message.id,
-        crate::app::state::SHELL_SLOT,
-        CardSection::Body,
-    )));
-    hash.write_u8(u8::from(source.chat.section_is_expanded(
-        &message.id,
-        crate::app::state::SHELL_SLOT,
-        CardSection::Output,
-    )));
-    hash.write_str(&shell.command);
-    hash.write_str(shell.state.as_str());
-    hash.write_i64(shell.exit_code.map_or(-1, i64::from));
-    hash.write_u64(shell.duration_ms.unwrap_or(u64::MAX));
-    hash.write_usize(shell.output.len());
-    hash.write_edges(&shell.output);
-    hash.write_u64(shell.dropped_bytes);
-    hash.write_u8(u8::from(shell.truncated));
-    hash.write_u64(shell.revision);
-}
-
-/// 单个步骤：Part 覆盖正文长度与首尾字节；Tool 覆盖调用身份、状态、折叠与详情量。
-fn step_signature(
-    hash: &mut Fnv,
-    source: super::source::HistorySource<'_>,
-    message: &ChatMessageView,
-    message_index: usize,
-    step_index: usize,
-    step: &AssistantStepView,
-) {
-    match step {
-        AssistantStepView::Part { part, .. } => {
-            hash.write_u8(0);
-            hash.write_u8(match part.kind {
-                crate::chat::events::PartKind::Text => 0,
-                crate::chat::events::PartKind::Reasoning => 1,
-            });
-            hash.write_usize(part.content.len());
-            hash.write_edges(&part.content);
-            hash.write_i64(part.started_at_ms.unwrap_or(-1));
-            hash.write_i64(part.ended_at_ms.unwrap_or(-1));
-            hash.write_i64(part.completed_at_ms.unwrap_or(-1));
-            hash.write_u8(u8::from(
-                source.chat.reasoning_expanded(message_index, step_index),
-            ));
-            if message.role == "user" {
-                hash.write_u8(u8::from(source.chat.user_message_expanded(&message.id)));
-                for (msg, slot, part, is_exp) in &source.chat.detail_expanded {
-                    if msg == &message.id
-                        && *part == CardSection::Body
-                        && *is_exp
-                        && slot.starts_with("paste:")
-                    {
-                        hash.write_str(slot);
-                    }
-                }
-                hash.write_usize(message.attachments.len());
-                for att in &message.attachments {
-                    hash.write_u8(att.kind as u8);
-                    hash.write_edges(&att.label);
-                    hash.write_i64(att.position);
-                    hash.write_usize(att.marker_start.unwrap_or(usize::MAX));
-                    hash.write_usize(att.marker_end.unwrap_or(usize::MAX));
-                }
-            }
-        }
-        AssistantStepView::Tool { call, .. } => {
-            hash.write_u8(1);
-            tool_signature(hash, source, message, call);
-        }
-    }
-}
-
-/// 工具调用：身份、状态、折叠状态与详情中会改变行数的量。
-fn tool_signature(
-    hash: &mut Fnv,
-    source: super::source::HistorySource<'_>,
-    message: &ChatMessageView,
-    call: &ToolCallView,
-) {
-    hash.write_str(&call.call_id);
-    hash.write_str(&call.name);
-    hash.write_u8(tool_status_code(call.status));
-    // 折叠状态：参数区（Body）与输出区（Output）各自独立。
-    hash.write_u8(u8::from(source.chat.section_is_expanded(
-        &message.id,
-        &call.call_id,
-        CardSection::Body,
-    )));
-    hash.write_u8(u8::from(source.chat.section_is_expanded(
-        &message.id,
-        &call.call_id,
-        CardSection::Output,
-    )));
-    // 摘要：文件工具的详情行正文由它决定（路径/计数/截断/省略文件数）。
-    if let Some(summary) = call.summary.as_deref() {
-        hash.write_u8(1);
-        hash.write_str(summary.path.as_deref().unwrap_or(""));
-        hash.write_usize(summary.range.map_or(usize::MAX, |(start, _)| start));
-        hash.write_usize(summary.range.map_or(usize::MAX, |(_, end)| end));
-        hash.write_usize(summary.added.unwrap_or(usize::MAX));
-        hash.write_usize(summary.removed.unwrap_or(usize::MAX));
-        hash.write_usize(summary.matches.unwrap_or(usize::MAX));
-        hash.write_str(summary.pattern.as_deref().unwrap_or(""));
-        hash.write_u8(match summary.read_kind {
-            None => 0,
-            Some(crate::chat::tools::ReadKind::File) => 1,
-            Some(crate::chat::tools::ReadKind::Directory) => 2,
-            Some(crate::chat::tools::ReadKind::Image) => 3,
-        });
-        hash.write_usize(summary.read_lines.unwrap_or(usize::MAX));
-        hash.write_usize(summary.total_lines.unwrap_or(usize::MAX));
-        hash.write_u8(u8::from(summary.truncated));
-        hash.write_u8(u8::from(summary.partial));
-        hash.write_u8(u8::from(summary.counts_known));
-        hash.write_u8(u8::from(summary.simplified));
-        hash.write_usize(summary.omitted_files);
-    } else {
-        hash.write_u8(0);
-    }
-    hash.write_str(call.error.as_deref().unwrap_or(""));
-    // 参数 JSON：文件工具的摘要缺字段时会回退解析它（首尾字节限住成本）。
-    hash.write_usize(call.arguments_json.len());
-    hash.write_edges(&call.arguments_json);
-    match call.detail.as_deref() {
-        None => hash.write_u8(0),
-        Some(ToolDetailView::Mcp(view)) => {
-            hash.write_u8(8);
-            hash.write_str(&view.server);
-            hash.write_str(&view.tool);
-            hash.write_str(&view.arguments.join("\n"));
-            hash.write_str(&view.result.join("\n"));
-            hash.write_usize(view.result_more);
-            hash.write_usize(view.arguments_more);
-            hash.write_usize(
-                view.duration_ms
-                    .map(|duration| duration as usize)
-                    .unwrap_or(0),
-            );
-            hash.write_usize(view.images.len());
-            hash.write_usize(view.images_omitted);
-        }
-        Some(ToolDetailView::Subagent(view)) => {
-            hash.write_u8(7);
-            hash.write_str(view.role.map_or("", |role| role.as_str()));
-            hash.write_str(view.title.as_deref().unwrap_or(""));
-            hash.write_str(view.task.as_deref().unwrap_or(""));
-            hash.write_str(view.agent_id.as_deref().unwrap_or(""));
-            hash.write_str(view.agent_status.as_deref().unwrap_or(""));
-            hash.write_usize(view.targets.len());
-            for target in &view.targets {
-                hash.write_str(target);
-            }
-            hash.write_u8(u8::from(view.all));
-            hash.write_str(view.mode.as_str());
-            hash.write_u64(view.timeout_ms.unwrap_or(0));
-            hash.write_u8(u8::from(view.timed_out));
-            hash.write_usize(view.agents.len());
-            for agent in &view.agents {
-                hash.write_str(&agent.agent_id);
-                hash.write_str(&agent.title);
-                hash.write_str(agent.role.as_str());
-                hash.write_str(&agent.status);
-                if let Some(report) = &agent.report {
-                    hash.write_u8(1);
-                    hash.write_str(report);
-                } else {
-                    hash.write_u8(0);
-                }
-            }
-            if let Some(report) = &view.report {
-                hash.write_u8(1);
-                hash.write_str(&report.agent_id);
-                hash.write_str(&report.title);
-                hash.write_str(report.role.as_str());
-                hash.write_str(&report.status);
-                hash.write_str(&report.body);
-            } else {
-                hash.write_u8(0);
-            }
-            hash.write_str(view.closed_status.as_deref().unwrap_or(""));
-        }
-        Some(ToolDetailView::Command(view)) => {
-            hash.write_u8(1);
-            hash.write_str(&view.command);
-            hash.write_str(&view.cwd);
-            hash.write_u8(u8::from(view.tty));
-            process_state_signature(hash, view.state);
-            hash.write_u8(u8::from(view.truncated));
-            hash.write_u64(view.dropped_bytes);
-            hash.write_usize(view.output_tail.len());
-            hash.write_edges(&view.output_tail);
-            hash.write_i64(view.started_at_ms.unwrap_or(-1));
-            hash.write_i64(view.ended_at_ms.unwrap_or(-1));
-            hash.write_u64(view.duration_ms.unwrap_or(u64::MAX));
-            hash.write_u64(view.process_session_id.unwrap_or(u64::MAX));
-        }
-        Some(ToolDetailView::Interaction(view)) => {
-            hash.write_u8(2);
-            hash.write_str(view.action.as_str());
-            hash.write_u64(view.process_session_id);
-            hash.write_str(&view.command);
-            hash.write_str(view.input_preview.as_deref().unwrap_or(""));
-            hash.write_usize(view.output.len());
-            hash.write_edges(&view.output);
-            process_state_signature(hash, view.state);
-            hash.write_i64(view.exit_code.map_or(-1, i64::from));
-            hash.write_u64(view.duration_ms.unwrap_or(u64::MAX));
-            hash.write_u8(u8::from(view.truncated));
-            hash.write_u64(view.dropped_bytes);
-        }
-        Some(ToolDetailView::Plan(view)) => {
-            hash.write_u8(3);
-            hash.write_u64(view.revision);
-            hash.write_str(view.explanation.as_deref().unwrap_or(""));
-            hash.write_usize(view.steps.len());
-            for (step, status) in &view.steps {
-                hash.write_str(step);
-                hash.write_u8(plan_status_code(*status));
-            }
-        }
-        Some(ToolDetailView::Ask(view)) => {
-            // `ask` 的行数取决于题干/答案的折行，文本必须全进指纹（题干限 500 字）。
-            hash.write_u8(5);
-            hash.write_usize(view.questions.len());
-            for question in &view.questions {
-                hash.write_str(&question.header);
-                hash.write_str(&question.question);
-                hash.write_usize(question.answers.len());
-                for answer in &question.answers {
-                    hash.write_str(answer);
-                }
-            }
-        }
-        Some(ToolDetailView::Search(view)) => {
-            hash.write_u8(9);
-            hash.write_u8(u8::from(view.truncated));
-            hash.write_usize(view.files_scanned);
-            hash.write_usize(view.matches.len());
-            for hit in &view.matches {
-                hash.write_str(&hit.path);
-                hash.write_usize(hit.line);
-                hash.write_str(&hit.text);
-                hash.write_u8(u8::from(hit.line_truncated));
-            }
-        }
-        Some(ToolDetailView::WebSearch(view)) => {
-            hash.write_u8(10);
-            hash.write_str(&view.search_type);
-            hash.write_usize(view.num_results);
-            hash.write_str(view.provider.as_deref().unwrap_or(""));
-            // 逐行写长度与首尾字节：不 `join`、不扫全文，仍能区分行边界变化。
-            hash.write_usize(view.result.len());
-            for line in &view.result {
-                hash.write_usize(line.len());
-                hash.write_edges(line);
-            }
-            hash.write_usize(view.result_more);
-            hash.write_u64(view.duration_ms.unwrap_or(u64::MAX));
-            hash.write_u8(u8::from(view.truncated));
-            hash.write_usize(view.queries.len());
-            for query in &view.queries {
-                hash.write_str(query);
-            }
-        }
-        Some(ToolDetailView::File(view)) => {
-            hash.write_u8(4);
-            hash.write_usize(view.files.len());
-            hash.write_usize(view.files_total);
-            hash.write_usize(view.added.unwrap_or(usize::MAX));
-            hash.write_usize(view.removed.unwrap_or(usize::MAX));
-            hash.write_u8(u8::from(view.simplified));
-            hash.write_usize(view.omitted_files);
-            hash.write_u8(u8::from(view.single));
-            for file in &view.files {
-                hash.write_str(&file.path);
-                hash.write_str(file.to.as_deref().unwrap_or(""));
-                file_kind_signature(hash, &file.kind);
-                hash.write_usize(file.added.unwrap_or(usize::MAX));
-                hash.write_usize(file.removed.unwrap_or(usize::MAX));
-                hash.write_u8(u8::from(file.counts_known));
-                hash.write_u8(u8::from(file.simplified));
-                match &file.diff {
-                    None => hash.write_u8(0),
-                    Some(crate::app::state::FileDiffView::Unavailable { reason }) => {
-                        hash.write_u8(1);
-                        hash.write_str(reason);
-                    }
-                    Some(
-                        crate::app::state::FileDiffView::Complete { hunks, simplified }
-                        | crate::app::state::FileDiffView::Truncated { hunks, simplified },
-                    ) => {
-                        // 缓存的 `Legacy` 块存的是**行数**，而差异正文的行数取决于
-                        // 每行文本按列宽折行后的物理行数。只哈希 hunk/行数会让
-                        // 「同形状、不同文本宽度」的两份差异撞指纹 → 命中旧块 → 行数
-                        // 停在旧值，后续块整体错位。所以每行还要写文本长度与 kind：
-                        // 仍是 O(行数) 的整数哈希，不扫全文。
-                        hash.write_u8(2);
-                        hash.write_u8(u8::from(*simplified));
-                        hash.write_usize(hunks.len());
-                        for hunk in hunks {
-                            hash.write_usize(hunk.lines.len());
-                            for line in &hunk.lines {
-                                hash.write_usize(line.text.len());
-                                hash.write_u8(match line.kind {
-                                    crate::chat::tools::DiffLineKind::Context => 0,
-                                    crate::chat::tools::DiffLineKind::Added => 1,
-                                    crate::chat::tools::DiffLineKind::Removed => 2,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// 单个步骤块的指纹（宽度由 [`BlockKey::width`] 承担，这里不含宽度）。
-pub(crate) fn part_block_signature(
-    source: super::source::HistorySource<'_>,
-    message: &ChatMessageView,
-    message_index: usize,
-    step_index: usize,
-    step: &AssistantStepView,
-) -> u64 {
-    let mut hash = Fnv::new();
-    step_signature(&mut hash, source, message, message_index, step_index, step);
-    hash.finish()
-}
-
-/// 本地命令卡片的指纹（不含宽度）。
-pub(crate) fn shell_block_signature(
-    source: super::source::HistorySource<'_>,
-    message: &ChatMessageView,
-    shell: &crate::app::state::UserShellView,
-) -> u64 {
-    let mut hash = Fnv::new();
-    shell_signature(&mut hash, source, message, shell);
-    hash.finish()
-}
-
-/// 汇报块的列表指纹字段（展开状态另由块指纹承担）。
-fn report_signature(hash: &mut Fnv, report: &crate::app::state::SubagentReportView) {
-    hash.write_str(&report.agent_id);
-    hash.write_str(&report.title);
-    hash.write_str(report.role.as_str());
-    hash.write_str(&report.status);
-    hash.write_usize(report.files_changed);
-    hash.write_i64(report.duration_ms.unwrap_or(-1));
-    hash.write_usize(report.body.len());
-    hash.write_edges(&report.body);
-}
-
-/// 汇报块指纹：身份、状态、计数、耗时与正文长度 + 展开状态。
-pub(crate) fn report_block_signature(
-    report: &crate::app::state::SubagentReportView,
-    expanded: bool,
-    more_steps: usize,
-) -> u64 {
-    let mut hash = Fnv::new();
-    hash.write_str(&report.agent_id);
-    hash.write_str(&report.title);
-    hash.write_str(report.role.as_str());
-    hash.write_str(&report.status);
-    hash.write_usize(report.files_changed);
-    hash.write_i64(report.duration_ms.unwrap_or(-1));
-    hash.write_usize(report.body.len());
-    hash.write_edges(&report.body);
-    hash.write_u8(u8::from(expanded));
-    hash.write_usize(more_steps);
-    hash.finish()
-}
-
-/// 消息底部通知的指纹（命中消息通知文案）。
-pub(crate) fn notice_block_signature(notice: &super::notice::Notice) -> u64 {
-    let mut hash = Fnv::new();
-    hash.write_u8(match notice.title {
-        super::notice::NoticeTitle::Failed => 0,
-        super::notice::NoticeTitle::Interrupted => 1,
-    });
-    hash.write_str(&notice.reason);
-    hash.finish()
-}
-
-/// 统计行的指纹。
-pub(crate) fn stats_block_signature(line: &str) -> u64 {
-    let mut hash = Fnv::new();
-    hash.write_str(line);
-    hash.finish()
-}
-
-/// 撤销提示条目的指纹。
-pub(crate) fn rewind_block_signature(
-    notice: &crate::app::state::RewindNoticeView,
-    count: usize,
-) -> u64 {
-    let mut hash = Fnv::new();
-    hash.write_usize(count);
-    hash.write_str(&notice.id);
-    hash.write_str(&notice.kind);
-    hash.write_usize(notice.restored_file_count);
-    hash.write_u8(u8::from(notice.files_already_restored));
-    hash.finish()
-}
-
-/// compact 检查点条目的指纹。
-pub(crate) fn compact_block_signature(
-    notice: &crate::app::state::CompactNoticeView,
-    expanded: bool,
-) -> u64 {
-    let mut hash = Fnv::new();
-    hash.write_str(&notice.id);
-    hash.write_str(&notice.model_label);
-    hash.write_i64(notice.created_at_ms);
-    hash.write_i64(notice.start_sequence);
-    hash.write_i64(notice.end_sequence);
-    hash.write_str(&notice.summary);
-    hash.write_u8(u8::from(notice.active));
-    hash.write_u8(u8::from(notice.auto));
-    hash.write_u8(u8::from(expanded));
-    hash.finish()
-}
-
-/// 正在执行的 compact 压缩请求指纹。
-pub(crate) fn running_compact_block_signature(compact: &crate::app::state::LxCompact) -> u64 {
-    let mut hash = Fnv::new();
-    hash.write_str(compact.running.as_deref().unwrap_or(""));
-    hash.write_i64(compact.elapsed_ms.unwrap_or(0) / 1000);
-    hash.finish()
-}
-
-/// 模型切换提示条目的指纹（覆盖整个合并区间，含 `is_variant_only` 的判定）。
-pub(crate) fn model_switch_block_signature(
-    slice: &[crate::app::state::ModelSwitchNoticeView],
-    expanded: bool,
-) -> u64 {
-    let mut hash = Fnv::new();
-    for notice in slice {
-        hash.write_str(&notice.id);
-        hash.write_str(notice.from_label.as_deref().unwrap_or(""));
-        hash.write_str(&notice.to_label);
-        hash.write_str(notice.to_variant.as_deref().unwrap_or(""));
-        hash.write_u8(u8::from(notice.is_variant_only()));
-        for src in &notice.updated_sources {
-            hash.write_str(src);
-        }
-        hash.write_i64(notice.created_at_ms);
-        // 折叠态也渲染提示词预览，正文必须一直参与指纹。
-        hash.write_str(&notice.injected_prompt);
-    }
-    hash.write_usize(slice.len());
-    hash.write_u8(u8::from(expanded));
-    hash.finish()
-}
-
-/// 进程状态（含退出码，标题会显示 `exit N`）。
-fn process_state_signature(hash: &mut Fnv, state: crate::app::state::ProcessStateView) {
-    hash.write_str(state.as_str());
-    hash.write_i64(state.exit_code().map_or(-1, i64::from));
-}
-
-/// 文件变更种类（`Moved` 的目标路径会出现在文件头）。
-fn file_kind_signature(hash: &mut Fnv, kind: &crate::chat::tools::FileChangeKind) {
-    match kind {
-        crate::chat::tools::FileChangeKind::Added => hash.write_u8(0),
-        crate::chat::tools::FileChangeKind::Updated => hash.write_u8(1),
-        crate::chat::tools::FileChangeKind::Deleted => hash.write_u8(2),
-        crate::chat::tools::FileChangeKind::Moved { to } => {
-            hash.write_u8(3);
-            hash.write_str(&to.to_string_lossy());
-        }
-    }
-}
-
-fn tool_status_code(status: crate::app::state::ToolStatus) -> u8 {
-    match status {
-        crate::app::state::ToolStatus::InputStreaming => 0,
-        crate::app::state::ToolStatus::Pending => 1,
-        crate::app::state::ToolStatus::Running => 2,
-        crate::app::state::ToolStatus::Completed => 3,
-        crate::app::state::ToolStatus::Failed => 4,
-        crate::app::state::ToolStatus::Cancelled => 5,
-        crate::app::state::ToolStatus::Interrupted => 6,
-    }
-}
-
-fn plan_status_code(status: crate::app::state::PlanStepView) -> u8 {
-    match status {
-        crate::app::state::PlanStepView::Pending => 0,
-        crate::app::state::PlanStepView::InProgress => 1,
-        crate::app::state::PlanStepView::Completed => 2,
-    }
-}
-
-#[cfg(test)]
-mod tests;

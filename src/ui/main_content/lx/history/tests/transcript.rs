@@ -107,13 +107,14 @@ fn tool_only_message_still_occupies_rows() {
 fn transcript_lays_out_step_marks_with_two_column_gutter() {
     // 一份完整观感锁定：用户消息 `> `、每个步骤的方块标记与 2 列内容缩进
     // （思考头 / 思考正文 / 正文块 / 工具行）、块间空行。
+    // 思考块已完成（completed_at_ms 已写入）：展开时正文一次性静态渲染。
+    // 仍在流式生成的思考块只显示单行头部，不流式渲染正文（见 cache 签名测试）。
+    let mut thinking = reasoning_part("思考甲\n思考乙");
+    thinking.completed_at_ms = Some(2_000);
     let mut assistant = message(
         "assistant",
         "streaming",
-        vec![
-            reasoning_part("思考甲\n思考乙"),
-            text_part("正文第一行\n正文第二行"),
-        ],
+        vec![thinking, text_part("正文第一行\n正文第二行")],
     );
     assistant.steps.push(tool_step(2));
     let mut lx = lx_with(vec![
@@ -134,7 +135,7 @@ fn transcript_lays_out_step_marks_with_two_column_gutter() {
         vec![
             "> 用户问题",
             "",
-            "○ Thinking",
+            "● Thought",
             "  └─ 思考甲",
             "     思考乙",
             "",

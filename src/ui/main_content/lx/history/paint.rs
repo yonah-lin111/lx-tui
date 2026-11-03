@@ -14,7 +14,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::app::state::{AssistantStepView, CardSection, ChatMessageView, ToolCallView};
 
 use super::source::HistorySource;
-use crate::ui::markdown_render::MdLine;
+use crate::ui::markdown_render::{MdLine, md_bytes};
 use crate::ui::style;
 
 use super::super::Grid;
@@ -88,8 +88,12 @@ pub(crate) enum BlockPaint {
         fold_hint: Option<String>,
         ref_lines: Vec<UserRefLine>,
     },
-    /// 助手正文：markdown 渲染后的行。
-    Markdown { lines: Vec<MdLine> },
+    /// 助手正文：已固化的稳定前缀 + 尾部动态行（流式时只重排尾部）。
+    Markdown {
+        prefix: Arc<Vec<MdLine>>,
+        prefix_bytes: usize,
+        tail: Vec<MdLine>,
+    },
     /// thinking：头部之外只有正文行（折叠时为空；头部文案在绘制时算）。
     Thinking { body: Vec<MdLine> },
     /// 完全静态的单色行块（统计行）。
@@ -113,7 +117,7 @@ impl BlockPaint {
                 ref_lines,
                 ..
             } => text_lines.len() + (fold_hint.is_some() as usize) + ref_lines.len(),
-            Self::Markdown { lines } => lines.len(),
+            Self::Markdown { prefix, tail, .. } => prefix.len() + tail.len(),
             Self::Thinking { body } => 1 + body.len(),
             Self::Static { lines, .. } => lines.len(),
             Self::SystemEvent { card } => card.rows(),
@@ -147,7 +151,9 @@ impl BlockPaint {
                     + ref_lines.iter().map(|r| r.label.len() + 24).sum::<usize>()
             }
             Self::Static { lines, .. } => lines.iter().map(|line| line.len() + 24).sum::<usize>(),
-            Self::Markdown { lines } => md_bytes(lines),
+            Self::Markdown {
+                prefix_bytes, tail, ..
+            } => prefix_bytes.saturating_add(md_bytes(tail)),
             Self::Thinking { body } => md_bytes(body),
             // 系统事件卡片的正文已排版进 `SystemCard`，按行数记近似值。
             Self::SystemEvent { card } => card.rows() * 64,
@@ -188,7 +194,7 @@ impl BlockPaint {
                 fold_hint.as_deref(),
                 ref_lines,
             ),
-            Self::Markdown { lines } => draw_markdown(
+            Self::Markdown { prefix, tail, .. } => draw_markdown(
                 grid,
                 rect,
                 history,
@@ -196,7 +202,8 @@ impl BlockPaint {
                 scroll,
                 start,
                 viewport_end,
-                lines,
+                prefix,
+                tail,
             ),
             Self::Thinking { body } => draw_thinking(
                 grid,
@@ -226,21 +233,6 @@ impl BlockPaint {
             Self::Legacy { .. } => draw_legacy(grid, rect, history, source, scroll, start),
         }
     }
-}
-
-/// markdown 行的近似字节数。
-fn md_bytes(lines: &[MdLine]) -> usize {
-    lines
-        .iter()
-        .map(|line| {
-            std::mem::size_of::<MdLine>()
-                + line
-                    .spans
-                    .iter()
-                    .map(|(text, _)| text.len() + 24)
-                    .sum::<usize>()
-        })
-        .sum()
 }
 
 /// thinking 块耗时（毫秒）：首个增量到最后一个增量的时间差；时间戳缺失返回 None。
@@ -440,7 +432,8 @@ fn draw_markdown(
     scroll: usize,
     start: usize,
     viewport_end: usize,
-    lines: &[MdLine],
+    prefix: &[MdLine],
+    tail: &[MdLine],
 ) {
     let BlockSource::Step {
         message_index,
@@ -458,13 +451,19 @@ fn draw_markdown(
     } else {
         StepMark::Done
     };
-    for (offset, line) in lines.iter().enumerate().skip(scroll.saturating_sub(start)) {
+    let total = prefix.len().saturating_add(tail.len());
+    for offset in scroll.saturating_sub(start)..total {
         let row = start.saturating_add(offset);
         if row >= viewport_end {
             break;
         }
         let Some(y) = visible_row(rect, scroll, row) else {
             continue;
+        };
+        let line = if offset < prefix.len() {
+            &prefix[offset]
+        } else {
+            &tail[offset.saturating_sub(prefix.len())]
         };
         if offset == 0 {
             grid.put_char(

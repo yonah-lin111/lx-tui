@@ -66,6 +66,24 @@ pub(crate) fn content_geom(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option
                     total_rows: 1,
                 });
             }
+            // 选区几何优先走 `resolve_task_agents_visible` 每帧维护的 run 字段：
+            // 与绘制同一口径，且不在滚轮/拖拽回调里重新量行。
+            // 尚未量过（冷启动/测试直接构造）时回退到完整视图，保证几何正确。
+            if !run.rows_dirty && run.total_rows > 0 {
+                let rect = history::content_rect(output_rect);
+                if rect.width == 0 || rect.height == 0 {
+                    return None;
+                }
+                let total = run.total_rows;
+                let visible = usize::from(rect.height);
+                let max = total.saturating_sub(visible);
+                let scroll = if run.follow { max } else { run.scroll.min(max) };
+                return Some(ContentGeom {
+                    rect,
+                    scroll,
+                    total_rows: total,
+                });
+            }
             let source = history::HistorySource::from_chat(&run.chat, &run.compact);
             let view = history::view_source_plain(output_rect, source, cache);
             let rect = history::content_rect(view.body);
@@ -98,7 +116,8 @@ pub(crate) fn content_geom(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option
             total_rows,
         });
     }
-    let view = super::history_view(area, lx, cache)?;
+    // 选区几何在滚轮/拖拽事件里每帧都要算：只读已就绪快照，不在此同步重排。
+    let view = super::history_hit::history_view_ready(area, lx, cache)?;
     let rect = history::content_rect(view.body);
     if rect.width == 0 || rect.height == 0 || view.total_rows == 0 {
         return None;
