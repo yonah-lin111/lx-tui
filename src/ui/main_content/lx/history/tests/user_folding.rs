@@ -306,3 +306,48 @@ fn user_message_folded_paste_chip_renders_and_toggles_independently() {
     let snap_col = cache.snapshot(60, &lx);
     assert_eq!(snap_col.entries[0].blocks[0].rows, 1);
 }
+
+#[test]
+fn user_message_inline_paste_chips_record_exact_column_ranges_for_multiple_chips_on_same_row() {
+    let tok1 = crate::app::paste::encode_pasted_kind(crate::app::paste::FoldedKind::Text, "one");
+    let tok2 = crate::app::paste::encode_pasted_kind(
+        crate::app::paste::FoldedKind::Code,
+        "fn a()\nfn b()",
+    );
+    let id1 = crate::app::paste::folded_tokens(&tok1)[0].id;
+    let id2 = crate::app::paste::folded_tokens(&tok2)[0].id;
+    // "请看：" is 6 display columns; after USER_INDENT (2), tok1 starts at col 8.
+    // tok1 label is `[Pasted text 1 line]` (20 cols) -> cols 8..28.
+    // Space at col 28 -> tok2 label `[Pasted code 2 lines]` (21 cols) -> cols 29..50.
+    let msg = user_msg_with_text("u-multi", &format!("请看：{tok1} {tok2} 结束"));
+    let lx = lx_with(vec![msg]);
+    let mut cache = cache();
+    let snap = cache.snapshot(60, &lx);
+
+    let paste_cards: Vec<_> = snap
+        .cards
+        .iter()
+        .filter(|c| matches!(c.kind, CardKind::UserPaste { .. }))
+        .collect();
+    assert_eq!(paste_cards.len(), 2);
+    assert_eq!(paste_cards[0].card_cols, Some((8, 28)));
+    assert_eq!(paste_cards[1].card_cols, Some((29, 50)));
+    assert_eq!(
+        paste_cards[0].kind,
+        CardKind::UserPaste {
+            message_id: "u-multi".into(),
+            paste_id: id1,
+            occurrence: 0,
+            expanded: false,
+        }
+    );
+    assert_eq!(
+        paste_cards[1].kind,
+        CardKind::UserPaste {
+            message_id: "u-multi".into(),
+            paste_id: id2,
+            occurrence: 0,
+            expanded: false,
+        }
+    );
+}

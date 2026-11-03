@@ -261,7 +261,11 @@ impl Lx {
         let start = self.cursor;
         self.input.insert_str(start, &insertion);
         self.cursor = start + insertion.len();
+        self.text_paste = None;
+        self.clear_preview_selection();
         self.panel = None;
+        self.slash = None;
+        self.refer = None;
         self.mention.suppress();
         self.paste = Some(LxPaste {
             panel: PastePanel::new(0, candidates, start..start + insertion.len(), reference),

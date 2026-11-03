@@ -31,7 +31,10 @@ impl Lx {
             return false;
         }
         self.paste_cancel();
+        self.clear_preview_selection();
         self.panel = None;
+        self.slash = None;
+        self.refer = None;
         self.mention.suppress();
         let panel = TextPastePanel::new(content, full_text, anchor);
         self.text_paste = Some(LxTextPaste { panel });
@@ -216,6 +219,11 @@ impl Lx {
                 let body_slice = &proj.text()[hit.display_range.clone()];
                 let rel = disp_pos.saturating_sub(hit.display_range.start);
                 let (s, e) = unit.byte_range(body_slice, rel);
+                if s == e {
+                    self.preview_selection = None;
+                    self.preview_drag = None;
+                    return true;
+                }
                 self.preview_selection =
                     Some((hit.display_range.start + s, hit.display_range.start + e));
             }
@@ -234,7 +242,7 @@ impl Lx {
         };
         let bounds = bounds.clone();
         let probe = self.display_offset_at_cell(row, col, false);
-        let raw_cursor = if probe >= anchor {
+        let raw_cursor = if probe > anchor {
             self.display_offset_at_cell(row, col, true)
         } else {
             probe

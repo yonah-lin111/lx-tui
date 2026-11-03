@@ -581,4 +581,22 @@ fn long_text_paste_opens_panel_in_prompt_and_lx_and_up_key_does_not_trigger_hist
     let lx = &state.pane_anywhere(pane_id).unwrap().lx;
     assert!(lx.text_paste_panel().is_none());
     assert!(lx.input.starts_with("<pasted-log lines=\"3\">"));
+
+    // 3. Selecting all in Prompt, pasting and confirming clears `AppState.selection`
+    // so subsequent typing does not overwrite the newly inserted chip.
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
+    state.select_all_prompt();
+    assert!(state.selection.is_some());
+    paste::handle_terminal_paste(&mut state, "replaced\nby\nchip".to_string());
+    update::select_paste(&mut state, 1); // Paste text
+    assert!(
+        state.selection.is_none(),
+        "Confirming paste must clear AppState.selection"
+    );
+    update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertChar('Z'),
+    );
+    assert!(state.prompt.text().ends_with("Z"));
+    assert!(state.prompt.text().starts_with("<pasted-text lines=\"3\">"));
 }

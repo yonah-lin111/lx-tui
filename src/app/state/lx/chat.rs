@@ -972,13 +972,13 @@ impl LxChat {
                     results.push((trimmed.to_string(), is_dir));
                 }
             }
-            // 2. 从正文中提取显式 @ 提及与 @[ref-content]/
+            // 2. 从正文中提取显式 @ 提及与 @[ref-content]/（先遮蔽折叠粘贴块正文）
             for step in &msg.steps {
                 if let AssistantStepView::Part { part, .. } = step
                     && part.kind == crate::chat::events::PartKind::Text
                 {
-                    for (path, is_dir) in crate::app::markdown::extract_mention_paths(&part.content)
-                    {
+                    let masked = crate::app::paste::mask_pasted_text(&part.content);
+                    for (path, is_dir) in crate::app::markdown::extract_mention_paths(&masked) {
                         let trimmed = path.trim_matches('/');
                         if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
                             results.push((trimmed.to_string(), is_dir));

@@ -612,6 +612,7 @@ impl AppState {
     /// 全选 prompt 文本：按视觉行数与文本区宽度构造覆盖全文的选区；
     /// 文本为空时构造空选区（无高亮、无脏状态）。
     pub fn select_all_prompt(&mut self) {
+        self.prompt.clear_preview_selection();
         let rows = self.prompt.visual_rows().len();
         let (width, _) = self.prompt.size();
         let max_row = rows.saturating_sub(1) as i32;

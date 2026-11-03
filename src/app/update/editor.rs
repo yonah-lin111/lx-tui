@@ -178,7 +178,9 @@ fn route_paste_panel(state: &mut AppState, command: &EditorCommand) -> bool {
                     .text_paste_panel()
                     .and_then(|panel| panel.active_action())
                 {
-                    state.prompt.text_paste_confirm(action);
+                    if state.prompt.text_paste_confirm(action) {
+                        clear_selection(state);
+                    }
                 } else {
                     state.prompt.text_paste_cancel();
                 }
@@ -206,7 +208,9 @@ fn route_paste_panel(state: &mut AppState, command: &EditorCommand) -> bool {
                 .paste_panel()
                 .and_then(|panel| panel.active_action())
             {
-                state.prompt.paste_confirm(action);
+                if state.prompt.paste_confirm(action) {
+                    clear_selection(state);
+                }
             } else {
                 state.prompt.paste_cancel();
             }
@@ -520,13 +524,17 @@ pub fn hover_paste(state: &mut AppState, index: usize) -> bool {
 /// 鼠标点选粘贴面板操作项：按该项执行。
 pub fn select_paste(state: &mut AppState, index: usize) {
     if state.prompt.text_paste_panel().is_some() {
-        if let Some(action) = crate::app::prompt::TextPasteAction::ALL.get(index).copied() {
-            state.prompt.text_paste_confirm(action);
+        if let Some(action) = crate::app::prompt::TextPasteAction::ALL.get(index).copied()
+            && state.prompt.text_paste_confirm(action)
+        {
+            clear_selection(state);
         }
         return;
     }
-    if let Some(action) = crate::app::prompt::PasteAction::ALL.get(index).copied() {
-        state.prompt.paste_confirm(action);
+    if let Some(action) = crate::app::prompt::PasteAction::ALL.get(index).copied()
+        && state.prompt.paste_confirm(action)
+    {
+        clear_selection(state);
     }
 }
 

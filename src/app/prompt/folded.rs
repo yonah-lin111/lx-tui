@@ -36,6 +36,7 @@ impl Prompt {
         }
         self.paste_cancel();
         self.text_paste.cancel();
+        self.clear_other_panels();
         let normalized_anchor = PasteAnchor {
             selection: (start < end).then_some((start, end)),
             cursor: start,
@@ -201,6 +202,11 @@ impl Prompt {
                 let body_slice = &proj.text()[hit.display_range.clone()];
                 let rel = disp_pos.saturating_sub(hit.display_range.start);
                 let (s, e) = unit.byte_range(body_slice, rel);
+                if s == e {
+                    self.preview_selection = None;
+                    self.preview_drag = None;
+                    return true;
+                }
                 self.preview_selection =
                     Some((hit.display_range.start + s, hit.display_range.start + e));
             }
@@ -220,7 +226,7 @@ impl Prompt {
         let bounds = bounds.clone();
         let content_row = self.scroll.saturating_add(usize::from(viewport_row));
         let probe = self.display_content_offset_at(content_row, col, false);
-        let raw_cursor = if probe >= anchor {
+        let raw_cursor = if probe > anchor {
             self.display_content_offset_at(content_row, col, true)
         } else {
             probe

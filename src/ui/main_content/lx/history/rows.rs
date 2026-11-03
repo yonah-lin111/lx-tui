@@ -38,7 +38,7 @@ impl UserTextLine {
     }
 }
 
-/// 用户消息内一个折叠粘贴芯片在视觉行序列中的行区间（相对消息首行）。
+/// 用户消息内一个折叠粘贴芯片在视觉行序列中的行区间与起止列（相对消息首行与内容区左边缘）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct UserPasteSpan {
     pub paste_id: u64,
@@ -46,6 +46,8 @@ pub(crate) struct UserPasteSpan {
     pub expanded: bool,
     pub offset: usize,
     pub rows: usize,
+    /// `(首行起始列, 末行结束列)`，均已包含 `USER_INDENT` 偏移。
+    pub cols: (u16, u16),
 }
 
 /// 行数 → 矩形高度（饱和转换：极端长历史不会回绕成 0）。
@@ -218,12 +220,31 @@ pub(crate) fn wrap_user_projection(
             row_ranges.iter().position(overlaps),
             row_ranges.iter().rposition(overlaps),
         ) {
+            let (first_rs, first_re) = row_ranges[first];
+            let seg_first_start = seg.display.start.clamp(first_rs, first_re);
+            let prefix_w: usize = proj_text[first_rs..seg_first_start]
+                .chars()
+                .map(|ch| ch.width().unwrap_or(0))
+                .sum();
+            let first_col =
+                super::USER_INDENT.saturating_add(u16::try_from(prefix_w).unwrap_or(u16::MAX));
+
+            let (last_rs, last_re) = row_ranges[last];
+            let seg_last_end = seg.display.end.clamp(last_rs, last_re);
+            let end_w: usize = proj_text[last_rs..seg_last_end]
+                .chars()
+                .map(|ch| ch.width().unwrap_or(0))
+                .sum();
+            let last_col =
+                super::USER_INDENT.saturating_add(u16::try_from(end_w).unwrap_or(u16::MAX));
+
             paste_spans.push(UserPasteSpan {
                 paste_id: proj.tokens()[token].id,
                 occurrence,
                 expanded: chip_exp,
                 offset: first,
                 rows: last - first + 1,
+                cols: (first_col, last_col),
             });
         }
     }

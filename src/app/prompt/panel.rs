@@ -320,12 +320,13 @@ impl Prompt {
     /// `/title` 确认：清空命令行文本但保留该空行，提取当前所在块（优先 `+++` 补充块，
     /// 其次 `&&&` 模板块）正文，非空时写入 `{title: Generating title...}` 并登记生成请求。
     fn confirm_generate_block_title(&mut self, trigger: &markdown::SlashTrigger) -> bool {
+        let masked = crate::app::paste::mask_pasted_text(&self.text);
         let target_block = if let Some((start, _, _)) =
-            markdown::find_enclosing_supple_block(&self.text, self.cursor)
+            markdown::find_enclosing_supple_block(&masked, self.cursor)
         {
             Some((start, markdown::BlockKind::Supple))
         } else {
-            markdown::template_block_start_at(&self.text, self.cursor)
+            markdown::template_block_start_at(&masked, self.cursor)
                 .map(|start| (start, markdown::BlockKind::Template))
         };
         let Some((start_line, kind)) = target_block else {

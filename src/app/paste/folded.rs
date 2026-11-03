@@ -295,7 +295,7 @@ impl<'a> Projection<'a> {
                 return match seg.kind {
                     SegmentKind::Plain => seg.raw.start + display.saturating_sub(seg.display.start),
                     SegmentKind::Chip { .. } => {
-                        if after {
+                        if after && display > seg.display.start {
                             seg.raw.end
                         } else {
                             seg.raw.start
@@ -316,9 +316,12 @@ impl<'a> Projection<'a> {
             return raw..raw;
         }
         let mut raw_start = self.display_to_raw(start);
-        let mut raw_end = self.display_to_raw(end);
+        let mut raw_end = self.display_to_raw_directed(end, true);
         for seg in &self.segments {
-            if seg.display.start < end && seg.display.end > start {
+            if matches!(seg.kind, SegmentKind::Chip { .. })
+                && seg.display.start < end
+                && seg.display.end > start
+            {
                 raw_start = raw_start.min(seg.raw.start);
                 raw_end = raw_end.max(seg.raw.end);
             }
@@ -698,8 +701,18 @@ fn try_parse_token(text: &str, start: usize) -> Option<FoldedToken> {
     if body_end <= body_start {
         return None;
     }
+    let raw_body = &text[body_start..body_end];
+    if raw_body.len() > MAX_FOLDED_BYTES.saturating_mul(2) {
+        return None;
+    }
+    if raw_body.contains(prefix) {
+        let escaped_close = format!("<\\/{}>", kind.tag_name());
+        if raw_body.matches(prefix).count() > raw_body.matches(&escaped_close).count() {
+            return None;
+        }
+    }
     let token_end = body_end + close_tag.len();
-    let body = unescape_body(&text[body_start..body_end]);
+    let body = unescape_body(raw_body);
     if body.is_empty() {
         return None;
     }

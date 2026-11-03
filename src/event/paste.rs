@@ -32,8 +32,10 @@ pub(super) fn handle_terminal_paste(state: &mut AppState, text: String) {
     {
         let anchor = paste_anchor(state);
         let request = state.prompt.begin_paste_read(anchor);
-        state.prompt.paste_stage(request, candidates);
-        return;
+        if state.prompt.paste_stage(request, candidates) {
+            update::clear_selection(state);
+            return;
+        }
     }
     if let Some(candidate) = crate::app::paste::text_paste_candidate(&text) {
         let anchor = paste_anchor(state);
@@ -52,9 +54,6 @@ pub(super) fn handle_terminal_paste(state: &mut AppState, text: String) {
 ///
 /// 返回是否产生状态变化；空文本或非 lx 视图返回 false。
 pub(super) fn handle_lx_paste(state: &mut AppState, text: String) -> bool {
-    if text.is_empty() {
-        return false;
-    }
     let Some(pane) = state.active_pane_mut() else {
         return false;
     };
@@ -65,8 +64,11 @@ pub(super) fn handle_lx_paste(state: &mut AppState, text: String) -> bool {
     if pane.lx.rewind.is_executing() {
         return false;
     }
-    pane.lx.text_paste_cancel();
-    pane.lx.paste_cancel();
+    let canceled_text = pane.lx.text_paste_cancel();
+    let canceled_path = pane.lx.paste_cancel();
+    if text.is_empty() {
+        return canceled_text || canceled_path;
+    }
     // 粘贴也是编辑：让双 Esc 的待命/选中失效（设计 4.2 / D8）。
     pane.lx.clear_rewind();
     // Shell 模式：路径与长文本都是命令字面量，不弹参照/折叠面板。

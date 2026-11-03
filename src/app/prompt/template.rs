@@ -1,5 +1,7 @@
 //! prompt 模板块操作：正文提取、空项清理、整块删除与状态轮转，均接入撤销栈。
 
+use crate::app::paste::mask_pasted_text;
+
 use super::super::markdown::{self, TemplateBlockRange};
 use super::EditKind;
 use super::Prompt;
@@ -7,7 +9,8 @@ use super::Prompt;
 impl Prompt {
     /// 模板块纯净正文（起止行之间的内容）；非模板块或空正文返回 None。
     pub fn template_block_body(&self, start_line: usize) -> Option<String> {
-        let range = markdown::parse_template_block_at_line(&self.text, start_line)?;
+        let masked = mask_pasted_text(&self.text);
+        let range = markdown::parse_template_block_at_line(&masked, start_line)?;
         let (from, to, _) = self.inner_span(range)?;
         Some(self.text[from..to].to_string())
     }
@@ -15,7 +18,8 @@ impl Prompt {
     /// 提取起始行处的 `+++` 补充块正文（支持独立块或嵌套在 `&&&` 内的补充块）。
     pub fn supple_body_at_start(&self, start_line: usize) -> Option<String> {
         let (_, start_end) = self.line_bounds(start_line)?;
-        let lines: Vec<&str> = self.text.split('\n').collect();
+        let masked = mask_pasted_text(&self.text);
+        let lines: Vec<&str> = masked.split('\n').collect();
         markdown::parse_supple_start_line(lines.get(start_line)?)?;
         let mut end_line = lines.len().saturating_sub(1);
         let mut closed = false;
@@ -50,8 +54,9 @@ impl Prompt {
 
     /// 更新或恢复指定块起始行下一行的 `{title: ...}`，并自动平移光标。
     pub fn set_block_title(&mut self, start_line: usize, new_title: Option<&str>) -> bool {
+        let masked = mask_pasted_text(&self.text);
         let Some((range, replacement)) =
-            markdown::set_block_title_edit(&self.text, start_line, new_title)
+            markdown::set_block_title_edit(&masked, start_line, new_title)
         else {
             return false;
         };
@@ -66,12 +71,13 @@ impl Prompt {
     ///
     /// `+++` 是 `&&&` 的内层块：光标在内层时优先复制内层正文。
     pub fn copy_text_at_cursor(&self) -> Option<String> {
-        if let Some(start) = markdown::supple_block_start_at(&self.text, self.cursor)
+        let masked = mask_pasted_text(&self.text);
+        if let Some(start) = markdown::supple_block_start_at(&masked, self.cursor)
             && let Some(body) = self.supple_block_body(start)
         {
             return Some(markdown::copy_template_content(&body));
         }
-        let start = markdown::template_block_start_at(&self.text, self.cursor)?;
+        let start = markdown::template_block_start_at(&masked, self.cursor)?;
         let body = self.template_block_body(start)?;
         Some(markdown::copy_template_content(&body))
     }
@@ -82,7 +88,8 @@ impl Prompt {
     /// 无论光标位于页内何处，只要本页存在闭合的 &&& 任务块即轮转并返回 true；
     /// 本页无闭合 &&& 任务块时返回 false，由调用方回退为反缩进。
     pub fn cycle_template_status(&mut self) -> bool {
-        let scan = markdown::block_scan(&self.text);
+        let masked = mask_pasted_text(&self.text);
+        let scan = markdown::block_scan(&masked);
         let Some(template) = scan
             .spans
             .iter()
@@ -95,7 +102,8 @@ impl Prompt {
 
     /// 清理模板块内未填写的空项（单步撤销）；返回是否产生变更。
     pub fn clean_template_block(&mut self, start_line: usize) -> bool {
-        let Some(range) = markdown::parse_template_block_at_line(&self.text, start_line) else {
+        let masked = mask_pasted_text(&self.text);
+        let Some(range) = markdown::parse_template_block_at_line(&masked, start_line) else {
             return false;
         };
         let Some((from, to, closed)) = self.inner_span(range) else {
@@ -116,7 +124,8 @@ impl Prompt {
 
     /// 删除整个模板块（含结束行换行，单步撤销）；返回是否产生变更。
     pub fn delete_template_block(&mut self, start_line: usize) -> bool {
-        let Some(range) = markdown::parse_template_block_at_line(&self.text, start_line) else {
+        let masked = mask_pasted_text(&self.text);
+        let Some(range) = markdown::parse_template_block_at_line(&masked, start_line) else {
             return false;
         };
         let Some((from, _)) = self.line_bounds(range.start) else {
@@ -133,7 +142,8 @@ impl Prompt {
 
     /// 循环切换模板块状态 todo → in_progress → done（单步撤销）；返回是否产生变更。
     pub fn toggle_template_status(&mut self, start_line: usize) -> bool {
-        let Some(range) = markdown::parse_template_block_at_line(&self.text, start_line) else {
+        let masked = mask_pasted_text(&self.text);
+        let Some(range) = markdown::parse_template_block_at_line(&masked, start_line) else {
             return false;
         };
         let Some((from, to)) = self.line_bounds(range.end) else {
@@ -152,10 +162,11 @@ impl Prompt {
     ///
     /// 新行继承起始行的前导空格缩进，模板块缩进与正文保持一致。
     pub fn insert_template_title_line(&mut self, line_end_byte: usize) -> usize {
-        let pos = self
+        let raw_pos = self
             .text
             .floor_char_boundary(line_end_byte.min(self.text.len()));
-        let line_start = self.text[..pos].rfind('\n').map_or(0, |idx| idx + 1);
+        let pos = super::folded::clamp_line_end(&self.text, raw_pos);
+        let line_start = super::folded::clamp_line_start(&self.text, pos);
         let indent: String = self.text[line_start..pos]
             .chars()
             .take_while(|ch| *ch == ' ')

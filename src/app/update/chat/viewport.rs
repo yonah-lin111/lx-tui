@@ -435,6 +435,7 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
             paste_id,
             occurrence,
         } => {
+            super::pin_lx_viewport(state, pane);
             let Some(target) = state.pane_mut_anywhere(pane) else {
                 return false;
             };

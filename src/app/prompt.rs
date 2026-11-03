@@ -404,8 +404,8 @@ impl Prompt {
     /// 在当前逻辑行尾另起一行并保留行首缩进；不续写列表标记（lx-agent 的 Ctrl/Cmd+Shift+Enter）。
     pub fn newline_below(&mut self) {
         self.break_group();
-        let start = line_start(&self.text, self.cursor);
-        let end = line_end(&self.text, self.cursor);
+        let start = folded::clamp_line_start(&self.text, self.cursor);
+        let end = folded::clamp_line_end(&self.text, self.cursor);
         let indent = self.text[start..end]
             .bytes()
             .take_while(|byte| *byte == b' ')
@@ -545,6 +545,7 @@ impl Prompt {
         // 占位文本不得留在缓冲里被自动保存落库。
         self.paste_cancel();
         self.text_paste_cancel();
+        self.clear_preview_selection();
         self.panel = None;
         self.slash = None;
         self.mention.clear();

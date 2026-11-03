@@ -324,12 +324,12 @@ impl Prompt {
         let proj_text = proj.text();
         let first_row = usize::from(first.0).min(rows.len() - 1);
         let last_row = usize::from(last.0).min(rows.len() - 1);
-        let mut lines: Vec<String> = Vec::new();
+        let mut line_ranges: Vec<Option<(usize, usize)>> = Vec::new();
         let mut prev_end: Option<usize> = None;
         for (offset, row) in rows[first_row..=last_row].iter().enumerate() {
             if row.top_border {
                 if prev_end.is_none_or(|pe| row.start > pe) {
-                    lines.push(String::new());
+                    line_ranges.push(None);
                     prev_end = Some(row.start);
                 }
                 continue;
@@ -356,15 +356,26 @@ impl Prompt {
                 row.end
             };
             if prev_end.is_none_or(|pe| row.start > pe) {
-                lines.push(String::new());
+                line_ranges.push(None);
             }
             prev_end = Some(row.end);
             if from < to
-                && let Some(current) = lines.last_mut()
+                && let Some(slot) = line_ranges.last_mut()
             {
-                current.push_str(&proj.copy_display_range(from..to));
+                *slot = Some(match *slot {
+                    Some((start_disp, _)) => (start_disp, to),
+                    None => (from, to),
+                });
             }
         }
+        let mut lines: Vec<String> = line_ranges
+            .into_iter()
+            .map(|range| {
+                range
+                    .map(|(from, to)| proj.copy_display_range(from..to))
+                    .unwrap_or_default()
+            })
+            .collect();
         while lines.last().is_some_and(String::is_empty) {
             lines.pop();
         }

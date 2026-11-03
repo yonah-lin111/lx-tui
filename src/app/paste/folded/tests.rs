@@ -191,3 +191,20 @@ fn atomic_boundaries_skip_and_snap_across_tokens() {
     );
     assert_eq!(snap_range(&text, 1..(tok_start + 2)), 1..tok_end);
 }
+
+#[test]
+fn display_to_raw_directed_and_unclosed_literal_opening_tag_guard() {
+    let tok = encode("1\n2\n3");
+    let raw = format!("ab{tok}cd");
+    let proj = Projection::new(&raw, &ExpandedPastes::default());
+
+    // Selecting "ab" (display 0..2, right before chip at 2) must map to raw 0..2 without swallowing the chip.
+    assert_eq!(proj.display_to_raw_directed(2, true), 2);
+    assert_eq!(proj.display_range_to_raw(0..2), 0..2);
+
+    // Unclosed literal opening tag before a real token must not swallow the real token.
+    let unclosed = format!("literal <pasted-text lines=\"1\"> unclosed before {tok}");
+    let parsed = tokens(&unclosed);
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].body, "1\n2\n3");
+}

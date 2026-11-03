@@ -574,6 +574,7 @@ fn strip_marker_ranges(
     raw_text: &str,
     marker_ranges: impl IntoIterator<Item = (usize, usize)>,
 ) -> String {
+    let toks = crate::app::paste::folded_tokens(raw_text);
     let mut ranges: Vec<(usize, usize)> = marker_ranges
         .into_iter()
         .filter(|(s, e)| {
@@ -581,6 +582,9 @@ fn strip_marker_ranges(
                 && *e <= raw_text.len()
                 && raw_text.is_char_boundary(*s)
                 && raw_text.is_char_boundary(*e)
+                && !toks
+                    .iter()
+                    .any(|tok| *s < tok.range.end && *e > tok.range.start)
         })
         .collect();
 
@@ -595,15 +599,19 @@ fn strip_marker_ranges(
         text.replace_range(start..end, "");
     }
 
-    // 清理连续空格但保留换行
-    let mut lines = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            lines.push(trimmed);
+    let remaining_tokens = crate::app::paste::folded_tokens(&text);
+    if remaining_tokens.is_empty() {
+        let mut lines = Vec::new();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                lines.push(trimmed);
+            }
         }
+        return lines.join("\n");
     }
-    lines.join("\n")
+
+    text.trim().to_string()
 }
 
 #[cfg(test)]

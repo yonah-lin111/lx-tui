@@ -764,10 +764,11 @@ pub(crate) fn handle_mouse_down_left(
                     *dirty = true;
                     return;
                 }
-                if state
-                    .pane_mut_anywhere(pane)
-                    .is_some_and(|target| target.lx.text_paste_cancel())
-                {
+                if state.pane_mut_anywhere(pane).is_some_and(|target| {
+                    let canceled_text = target.lx.text_paste_cancel();
+                    let canceled_path = target.lx.paste_cancel();
+                    canceled_text || canceled_path
+                }) {
                     *dirty = true;
                     return;
                 }

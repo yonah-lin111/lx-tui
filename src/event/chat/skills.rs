@@ -225,7 +225,8 @@ fn spawn_refresh(job: ScanJob) {
 /// 从用户草稿里提取 `@[refer-skill]` 正文块（当轮注入，不走 DB）。
 pub(crate) fn reference_blocks(text: &str) -> Vec<String> {
     let mut blocks = Vec::new();
-    for reference in crate::app::markdown::parse_references(text) {
+    let masked = crate::app::paste::mask_pasted_text(text);
+    for reference in crate::app::markdown::parse_references(&masked) {
         if reference.kind != crate::app::markdown::ReferKind::Skill {
             continue;
         }

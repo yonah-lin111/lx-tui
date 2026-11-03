@@ -46,6 +46,7 @@ impl Lx {
         if self.text_selection.is_none() && target == self.cursor {
             return;
         }
+        self.clear_preview_selection();
         self.refer_suppressed = false;
         self.begin_keyboard_selection();
         self.cursor = target;
@@ -135,6 +136,7 @@ impl Lx {
 
     /// Ctrl/Cmd+Shift+A：全选输入框。
     pub fn select_all(&mut self) {
+        self.clear_preview_selection();
         if self.input.is_empty() {
             self.text_selection = None;
             self.cursor = 0;

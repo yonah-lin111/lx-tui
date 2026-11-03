@@ -655,7 +655,8 @@ pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
     // 二级面板（`/model`、`/resume`）的过滤词是**输入框全文**：任何编辑后都重算一次。
     refresh_slash_filter(state, pane);
     let query = state.pane_anywhere(pane).and_then(|target| {
-        super::super::state::lx::slash::slash_trigger(&target.lx.input, target.lx.cursor)
+        let masked = crate::app::paste::mask_pasted_text(&target.lx.input);
+        super::super::state::lx::slash::slash_trigger(&masked, target.lx.cursor)
     });
     let Some(query) = query else {
         // 离开命令位置时关闭命令候选面板（model/resume 面板不受影响）。
@@ -809,6 +810,7 @@ pub fn accept_slash_command(state: &mut AppState, pane: PaneId) -> bool {
 /// 切换 lx 页选中入口（仅鼠标点击触发）；切换入口会取消在途粘贴面板。
 pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::LxEntry) {
     if let Some(pane) = state.pane_mut_anywhere(id) {
+        pane.lx.text_paste_cancel();
         pane.lx.paste_cancel();
         pane.lx.entry = entry;
     }
@@ -824,6 +826,7 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
             PaneView::Terminal => PaneView::Lx,
         };
         // 切换视图时取消在途粘贴面板：隐藏的 lx 页不再持有悬空面板。
+        pane.lx.text_paste_cancel();
         pane.lx.paste_cancel();
         // 隐藏的 lx 页不得保留可点击的提及面板。
         pane.lx.mention_escape();

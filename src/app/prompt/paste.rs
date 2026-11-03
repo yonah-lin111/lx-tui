@@ -290,7 +290,8 @@ impl Prompt {
     }
 
     /// 清空互斥的编辑器面板；粘贴面板自身不由这里管理。
-    fn clear_other_panels(&mut self) {
+    pub(super) fn clear_other_panels(&mut self) {
+        self.clear_preview_selection();
         self.panel = None;
         self.slash = None;
         self.mention.clear();

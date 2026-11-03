@@ -158,4 +158,35 @@ fn token_body_with_template_or_fence_markers_does_not_corrupt_block_scan() {
         "Token body markers must not split or open extra blocks"
     );
     assert!(spans[0].closed);
+
+    // Deleting the supplement block removes the entire block cleanly without splitting at the token's internal `--end`.
+    assert!(p.delete_supple_block(0));
+    assert_eq!(p.text(), "");
+}
+
+#[test]
+fn selection_before_chip_and_soft_wrapped_chip_copy_and_newline_below_preserve_token() {
+    let tok = encode_pasted_text("line 1\nline 2\nline 3");
+    let mut p = prompt(40, 10);
+    p.set_text(&format!("ab{tok}cd"));
+
+    // Selecting cells (0, 0)..=(0, 1) ("ab") must NOT include the chip at col 2.
+    assert_eq!(p.selection_text((0, 0), (0, 1)).as_deref(), Some("ab"));
+    assert_eq!(p.selection_bounds((0, 0), (0, 1)), Some((0, 2)));
+
+    // `newline_below` when cursor is at col 1 ('b') on a line containing a multi-line token
+    // must insert the newline at the end of the line (after `cd`), never inside the token body.
+    p.set_cursor_from_cell(0, 1);
+    p.newline_below();
+    assert_eq!(p.text(), format!("ab{tok}cd\n"));
+
+    // Narrow prompt (width 10): `[Pasted text 3 lines]` wraps across 3 visual rows;
+    // selecting all rows copies the token once, not 3 times.
+    let mut narrow = prompt(10, 10);
+    narrow.set_text(&tok);
+    let last_row = narrow.visual_rows().len().saturating_sub(1) as u16;
+    assert_eq!(
+        narrow.selection_text((0, 0), (last_row, 9)).as_deref(),
+        Some(tok.as_str())
+    );
 }
