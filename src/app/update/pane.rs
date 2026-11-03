@@ -717,6 +717,7 @@ fn refresh_slash_filter(state: &mut AppState, pane: PaneId) {
     match target.lx.slash.as_mut() {
         Some(super::super::state::SlashPanel::History(panel)) => panel.refilter(&query),
         Some(super::super::state::SlashPanel::Model(picker)) => picker.refilter(&query),
+        Some(super::super::state::SlashPanel::Fork(panel)) => panel.refilter(&query),
         _ => {}
     }
 }

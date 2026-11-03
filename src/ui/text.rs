@@ -825,6 +825,16 @@ pub fn model_switch_notice_sources(updated_sources: &[String]) -> Option<String>
 }
 /// `/resume` 命令描述。
 pub const LX_RESUME_COMMAND_DESC: &str = "Resume a previous session in this workspace";
+/// `/fork` 命令、节点面板与反馈文案。
+pub const LX_FORK_COMMAND_DESC: &str = "Fork the session from an earlier message";
+pub const LX_FORK_PANEL_TITLE: &str = "Fork";
+pub const LX_FORK_PANEL_FOOTER: &str = "↑↓ select · ↵ fork · esc close";
+pub const LX_FORK_FULL_SESSION: &str = "Full session";
+pub const LX_FORK_EMPTY_MESSAGE: &str = "(empty message)";
+pub const LX_FORK_BUSY: &str = "Session busy — wait for the current turn to finish.";
+pub const LX_FORK_NOTHING: &str = "Nothing to fork yet.";
+pub const LX_FORK_FAILED: &str = "Fork failed.";
+pub const LX_FORKED: &str = "Forked session";
 /// `/rename` 命令描述、参数占位提示与反馈文案。
 pub const LX_RENAME_COMMAND_DESC: &str = "Rename the current session";
 pub const LX_RENAME_ARG_HINT: &str = "[name]";

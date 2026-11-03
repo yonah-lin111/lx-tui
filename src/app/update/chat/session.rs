@@ -615,6 +615,42 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
             }
             true
         }
+        SlashPanel::Fork(panel) => {
+            let Some(entry) = panel.active_entry() else {
+                return true;
+            };
+            let before = entry.message_id.clone();
+            let Some(session_id) = state
+                .pane_anywhere(pane)
+                .and_then(|target| target.lx.chat.session_id.clone())
+            else {
+                show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_FORK_NOTHING);
+                return true;
+            };
+            let Some(workspace) = state.chat_session_key_for_pane(pane) else {
+                show_lx_hint(
+                    state,
+                    pane,
+                    InputHintLevel::Error,
+                    text::LX_CHAT_NO_WORKSPACE,
+                );
+                return true;
+            };
+            // 二级面板是临时搜索框：选中即整框清空；源会话先保持绑定，等 DB 回执再切。
+            if let Some(target) = state.pane_mut_anywhere(pane) {
+                target.lx.slash = None;
+                target.lx.clear();
+            }
+            state
+                .effects
+                .push(crate::app::effects::Effect::ForkChatSession {
+                    pane,
+                    workspace,
+                    session_id,
+                    before,
+                });
+            true
+        }
         // 撤销动作面板：第二次 Enter 才执行（第一次 Enter 只是打开面板）。
         SlashPanel::Rewind(_) => super::rewind::apply_enter(state, pane),
     }
@@ -834,6 +870,7 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
     match command {
         SlashCommand::Model => open_model_picker(state, pane),
         SlashCommand::Resume => open_history(state, pane),
+        SlashCommand::Fork => super::fork::open_fork_panel(state, pane),
         SlashCommand::New => new_session(state, pane),
         SlashCommand::Rewind => super::rewind::open_from_command(state, pane),
         SlashCommand::Compact => super::compact::compact_command(state, pane),

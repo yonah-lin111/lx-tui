@@ -50,8 +50,8 @@ pub use rewind::{
     RewindTargetKind, SnapshotState,
 };
 pub use slash::{
-    HistoryEntry, HistoryPanel, ModelCandidate, ModelPicker, ModelPickerStage, PanelWindow,
-    SlashCommand, SlashEntry, SlashPanel,
+    ForkEntry, ForkPanel, HistoryEntry, HistoryPanel, ModelCandidate, ModelPicker,
+    ModelPickerStage, PanelWindow, SlashCommand, SlashEntry, SlashPanel,
 };
 pub use task::{ProcessEntry, TaskPage, TaskTab};
 

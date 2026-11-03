@@ -17,6 +17,7 @@ use crate::ui::text;
 
 pub mod ask;
 pub mod compact;
+mod fork;
 pub mod model_switch;
 mod process;
 pub mod rewind;
@@ -35,6 +36,7 @@ pub use compact::{
     on_compact_revert_failed, on_compact_reverted, set_checkpoints as set_compact_checkpoints,
     toggle_checkpoint,
 };
+pub use fork::{on_fork_completed, on_fork_failed, open_fork_panel};
 pub use model_switch::{set_switches as set_model_switches, toggle_model_switch};
 pub use process::{
     activate_tool_card, apply_interaction_exit, apply_process_exit, apply_process_output,

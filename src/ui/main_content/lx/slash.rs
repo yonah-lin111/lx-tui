@@ -102,6 +102,19 @@ pub(super) fn items<'a>(
                 })
                 .collect()
         }
+        SlashPanel::Fork(panel) => panel
+            .visible()
+            .into_iter()
+            .map(|entry| CommandItem::Inline {
+                label: if entry.is_full_session() {
+                    text::LX_FORK_FULL_SESSION
+                } else {
+                    entry.label.as_str()
+                },
+                preview: "",
+                tag: "",
+            })
+            .collect(),
         SlashPanel::Rewind(panel) => panel
             .actions
             .iter()
@@ -157,6 +170,7 @@ fn is_placeholder(panel: &crate::app::state::SlashPanel) -> bool {
     match panel {
         crate::app::state::SlashPanel::Model(p) => p.stage_len() == 0 || p.is_filter_empty(),
         crate::app::state::SlashPanel::History(h) => h.entries.is_empty() || h.is_filter_empty(),
+        crate::app::state::SlashPanel::Fork(_) => false,
         crate::app::state::SlashPanel::Commands { .. } => false,
         crate::app::state::SlashPanel::Rewind(_) => false,
     }
@@ -189,6 +203,11 @@ fn view<'a>(
             text::LX_HISTORY_PANEL_TITLE,
             history.window,
             text::LX_HISTORY_PANEL_FOOTER,
+        ),
+        SlashPanel::Fork(panel) => (
+            text::LX_FORK_PANEL_TITLE,
+            panel.window,
+            text::LX_FORK_PANEL_FOOTER,
         ),
         SlashPanel::Rewind(panel) => (
             text::LX_REWIND_PANEL_TITLE,

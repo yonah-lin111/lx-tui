@@ -226,3 +226,38 @@ fn data_url_and_strict_archive_verify_roundtrip_and_tamper_detection() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn fork_session_images_copies_flat_files() {
+    let dir = std::env::temp_dir().join(format!("lx-fork-images-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let root = dir.join("images");
+    let source_dir = session_image_dir(&root, "sess-source");
+    std::fs::create_dir_all(&source_dir).expect("source dir");
+    std::fs::write(source_dir.join("a.png"), b"alpha").expect("a");
+    std::fs::write(source_dir.join("b.png"), b"beta").expect("b");
+
+    assert!(
+        fork_session_images_in(&root, "sess-source", "sess-target").expect("fork images"),
+        "有文件时必须报告已复制"
+    );
+    let target_dir = session_image_dir(&root, "sess-target");
+    assert_eq!(
+        std::fs::read(target_dir.join("a.png")).expect("a"),
+        b"alpha"
+    );
+    assert_eq!(std::fs::read(target_dir.join("b.png")).expect("b"), b"beta");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn fork_session_images_missing_source_is_noop() {
+    let dir = std::env::temp_dir().join(format!("lx-fork-images-missing-{}", std::process::id()));
+    let root = dir.join("images");
+    assert!(
+        !fork_session_images_in(&root, "missing", "target").expect("missing source"),
+        "源目录不存在时不得创建目标目录"
+    );
+    assert!(!session_image_dir(&root, "target").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -60,6 +60,8 @@ pub enum DbError {
     UnsupportedSchema(i64),
     /// 目标聊天会话不存在（或不在指定工作区内）。
     SessionMissing,
+    /// fork 边界消息不存在、不属于源会话，或不是用户聊天消息。
+    ForkBoundaryMissing,
     /// 目标 assistant 消息不存在或已进入终态（checkpoint/finish 只作用于 streaming）。
     MessageNotStreaming,
     /// 会话正在被另一轮写入占用（同 session 的 begin_turn 串行化）。
@@ -124,6 +126,7 @@ impl fmt::Display for DbError {
                 )
             }
             Self::SessionMissing => write!(formatter, "chat session not found"),
+            Self::ForkBoundaryMissing => write!(formatter, "fork boundary message not found"),
             Self::MessageNotStreaming => write!(formatter, "assistant message is not streaming"),
             Self::SessionBusy => write!(formatter, "chat session is busy"),
             Self::InvalidDraft => write!(formatter, "empty draft"),
@@ -169,6 +172,7 @@ impl DbError {
             Self::ForeignKeyViolation => "foreign key violation",
             Self::UnsupportedSchema(_) => "unsupported schema",
             Self::SessionMissing => "session missing",
+            Self::ForkBoundaryMissing => "fork boundary missing",
             Self::MessageNotStreaming => "message not streaming",
             Self::SessionBusy => "session busy",
             Self::InvalidDraft => "invalid draft",

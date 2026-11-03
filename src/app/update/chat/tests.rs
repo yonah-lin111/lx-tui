@@ -3,6 +3,7 @@
 
 mod ask;
 mod compact;
+mod fork;
 mod history;
 mod model_switch;
 mod process_cards;

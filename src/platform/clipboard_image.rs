@@ -200,6 +200,56 @@ pub fn archive_session_image(
     archive_session_image_in(&root, session_id, source_path)
 }
 
+/// 把源会话的图片目录复制到目标会话（fork 用）。
+///
+/// 源目录不存在或没有可复制文件时返回 `Ok(false)`；目标目录按需创建。
+pub fn fork_session_images(
+    source_session: &str,
+    target_session: &str,
+) -> Result<bool, ImagePrepareError> {
+    let root = sessions_root_dir()?;
+    fork_session_images_in(&root, source_session, target_session)
+}
+
+/// 显式根版本的会话图片复制；供测试使用。
+pub fn fork_session_images_in(
+    sessions_root: &Path,
+    source_session: &str,
+    target_session: &str,
+) -> Result<bool, ImagePrepareError> {
+    if !valid_session_id(source_session) || !valid_session_id(target_session) {
+        return Ok(false);
+    }
+    let source_dir = session_image_dir(sessions_root, source_session);
+    if !source_dir.is_dir() {
+        return Ok(false);
+    }
+    let target_dir = session_image_dir(sessions_root, target_session);
+    let mut copied = false;
+    let entries = std::fs::read_dir(&source_dir).map_err(|_| ImagePrepareError::IoError)?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if !copied {
+            std::fs::create_dir_all(&target_dir).map_err(|_| ImagePrepareError::IoError)?;
+            let _ = super::restrict_dir_permissions(sessions_root);
+            let _ = super::restrict_dir_permissions(&target_dir);
+        }
+        let target = target_dir.join(entry.file_name());
+        std::fs::copy(&path, &target).map_err(|_| ImagePrepareError::IoError)?;
+        let _ = super::restrict_file_permissions(&target);
+        copied = true;
+    }
+    Ok(copied)
+}
+
+/// session id 只能是单段名字；拒绝空串、路径分隔符与 `.`。
+fn valid_session_id(session_id: &str) -> bool {
+    !session_id.is_empty() && !session_id.contains(['/', '\\', '.'])
+}
+
 /// 删除某会话已归档的图片目录 `.../session/<session_id>/image/`（用户主动删除会话时调用）。
 ///
 /// 只删除图片目录，再尝试删除空的会话目录：会话目录以后可能放别的数据。
