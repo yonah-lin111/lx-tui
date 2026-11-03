@@ -118,8 +118,9 @@ pub fn prepare_user_message(
         });
     }
 
-    // 2. 解析显式 `@[refer-*](path)` 引用
-    let explicit_refs = parse_references(raw_text);
+    // 2. 解析显式 `@[refer-*](path)` 引用（忽略折叠粘贴块内部内容）
+    let masked = crate::app::paste::mask_pasted_text(raw_text);
+    let explicit_refs = parse_references(&masked);
     for reference in &explicit_refs {
         let range_start = reference.range.start;
         let mut range_end = reference.range.end;
@@ -215,7 +216,7 @@ pub fn prepare_user_message(
     }
 
     // 3. 解析 `@相对路径` 引用
-    for range in markdown_mention_token_ranges(raw_text) {
+    for range in markdown_mention_token_ranges(&masked) {
         if claimed_ranges
             .iter()
             .any(|(s, e)| range.start < *e && range.end > *s)
@@ -274,7 +275,7 @@ pub fn prepare_user_message(
     }
 
     // 3.5. 解析 `@[ref-content]/` 快捷引用
-    for range in crate::app::markdown::ref_content_ranges(raw_text) {
+    for range in crate::app::markdown::ref_content_ranges(&masked) {
         if claimed_ranges
             .iter()
             .any(|(s, e)| range.start < *e && range.end > *s)
@@ -339,7 +340,7 @@ pub fn prepare_user_message(
     }
 
     // 4. 解析 `@ref/` 短引用
-    for (start, end, short_name) in parse_short_ref_tokens(raw_text) {
+    for (start, end, short_name) in parse_short_ref_tokens(&masked) {
         if claimed_ranges.iter().any(|(s, e)| start < *e && end > *s) {
             continue;
         }
@@ -548,13 +549,13 @@ pub fn strip_references_for_display(
     )
 }
 
-/// 移除尚未落库的附件输入对应的引用标记，供生成会话标题/预览与空正文回退使用。
-/// 快捷引用（`@[ref-content]/`）同样保留在正文中。
+/// 移除尚未落库的附件输入对应的引用标记，并将折叠粘贴 token 投影为紧凑标签，
+/// 供生成会话标题/预览与空正文回退使用。快捷引用（`@[ref-content]/`）同样保留在正文中。
 pub fn strip_references_from_inputs(
     raw_text: &str,
     attachments: &[crate::db::chat::MessageAttachmentInput],
 ) -> String {
-    strip_marker_ranges(
+    let stripped = strip_marker_ranges(
         raw_text,
         attachments
             .iter()
@@ -563,7 +564,10 @@ pub fn strip_references_from_inputs(
                     .starts_with(crate::app::markdown::REF_CONTENT_PREFIX)
             })
             .filter_map(|att| att.marker_start.zip(att.marker_end)),
-    )
+    );
+    crate::app::paste::Projection::new(&stripped, &crate::app::paste::ExpandedPastes::default())
+        .text()
+        .to_string()
 }
 
 fn strip_marker_ranges(

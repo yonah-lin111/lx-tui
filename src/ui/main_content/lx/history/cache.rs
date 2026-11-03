@@ -472,6 +472,15 @@ fn step_signature(
             ));
             if message.role == "user" {
                 hash.write_u8(u8::from(source.chat.user_message_expanded(&message.id)));
+                for (msg, slot, part, is_exp) in &source.chat.detail_expanded {
+                    if msg == &message.id
+                        && *part == CardSection::Body
+                        && *is_exp
+                        && slot.starts_with("paste:")
+                    {
+                        hash.write_str(slot);
+                    }
+                }
                 hash.write_usize(message.attachments.len());
                 for att in &message.attachments {
                     hash.write_u8(att.kind as u8);

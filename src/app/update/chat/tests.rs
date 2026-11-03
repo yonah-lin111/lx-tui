@@ -1296,9 +1296,10 @@ fn ctrl_o_on_mcp_card_toggles_section_instead_of_opening_task_page() {
 }
 
 #[test]
-fn try_send_expands_folded_paste_tokens_and_clears_input_on_commit() {
+fn try_send_persists_folded_paste_tokens_in_turn_and_prompt_history_for_recall() {
     let tok = crate::app::paste::encode_pasted_text("line 1\nline 2\nline 3");
-    let mut state = ready_state(&format!("Please analyze {tok}"));
+    let expected_draft = format!("Please analyze {tok}");
+    let mut state = ready_state(&expected_draft);
     let pane = focus_pane(&state);
 
     assert!(try_send(&mut state, pane));
@@ -1306,7 +1307,7 @@ fn try_send_expands_folded_paste_tokens_and_clears_input_on_commit() {
         RequestState::Committing { generation, draft } => (*generation, draft.clone()),
         other => panic!("expected Committing, got {other:?}"),
     };
-    assert_eq!(sent_draft, "Please analyze line 1\nline 2\nline 3");
+    assert_eq!(sent_draft, expected_draft);
 
     let begin_draft = state
         .effects
@@ -1316,9 +1317,9 @@ fn try_send_expands_folded_paste_tokens_and_clears_input_on_commit() {
             _ => None,
         })
         .expect("BeginChatTurn effect");
-    assert_eq!(begin_draft, "Please analyze line 1\nline 2\nline 3");
+    assert_eq!(begin_draft, expected_draft);
 
-    // On commit ack, input containing the raw token must be cleared because its expanded form matches frozen_draft.
+    // On commit ack, input is cleared and prompt_history records the folded token so ↑ recalls it folded.
     assert!(on_turn_committed(
         &mut state,
         pane,
@@ -1326,4 +1327,17 @@ fn try_send_expands_folded_paste_tokens_and_clears_input_on_commit() {
         &committed("sess-fold")
     ));
     assert_eq!(state.pane_anywhere(pane).unwrap().lx.input, "");
+    assert_eq!(
+        state.prompt_history.entries(),
+        std::slice::from_ref(&expected_draft)
+    );
+
+    // Pressing Up in Lx input box recalls the history entry with the folded token intact!
+    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::Up);
+    let lx = &state.pane_anywhere(pane).unwrap().lx;
+    assert_eq!(lx.input, expected_draft);
+    assert_eq!(
+        lx.projection().text(),
+        "Please analyze [Pasted 3 lines: line 1]"
+    );
 }

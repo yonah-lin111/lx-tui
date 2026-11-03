@@ -6,7 +6,48 @@
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
+use crate::app::paste::{ExpandedPastes, Projection, SegmentKind};
+
 use super::{SCROLLBAR_COLUMNS, tool};
+
+/// 用户消息行内片段样式种类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UserSpanKind {
+    Plain,
+    CollapsedChip,
+    ExpandedChip,
+}
+
+/// 用户消息单行内的连续同样式文本段。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UserTextSpan {
+    pub text: String,
+    pub kind: UserSpanKind,
+}
+
+/// 用户消息软换行后的单条视觉行（含展开芯片的 2 列左缩进）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UserTextLine {
+    pub indent: u16,
+    pub spans: Vec<UserTextSpan>,
+}
+
+impl UserTextLine {
+    /// 近似字节数（供二级缓存预算统计）。
+    pub(crate) fn byte_len(&self) -> usize {
+        self.spans.iter().map(|s| s.text.len() + 16).sum::<usize>() + 16
+    }
+}
+
+/// 用户消息内一个折叠粘贴芯片在视觉行序列中的行区间（相对消息首行）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct UserPasteSpan {
+    pub paste_id: u64,
+    pub occurrence: usize,
+    pub expanded: bool,
+    pub offset: usize,
+    pub rows: usize,
+}
 
 /// 行数 → 矩形高度（饱和转换：极端长历史不会回绕成 0）。
 pub(crate) fn rows_to_u16(rows: usize) -> u16 {
@@ -71,4 +112,118 @@ pub(crate) fn wrap(content: &str, width: u16) -> Vec<String> {
         out.push(current);
     }
     out
+}
+
+/// 将用户消息文本按折叠/展开投影与可用列宽软换行为视觉行，并计算每个粘贴芯片的行区间。
+pub(crate) fn wrap_user_projection(
+    display_text: &str,
+    expanded: &ExpandedPastes,
+    width: u16,
+) -> (Vec<UserTextLine>, Vec<UserPasteSpan>) {
+    if display_text.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let proj = Projection::new(display_text, expanded);
+    if !proj.has_tokens() {
+        let lines = wrap(display_text, width)
+            .into_iter()
+            .map(|text| UserTextLine {
+                indent: 0,
+                spans: if text.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![UserTextSpan {
+                        text,
+                        kind: UserSpanKind::Plain,
+                    }]
+                },
+            })
+            .collect();
+        return (lines, Vec::new());
+    }
+
+    let avail = usize::from(width.max(1));
+    let proj_text = proj.text();
+    let mut row_ranges: Vec<(usize, usize, u16)> = Vec::new();
+    let mut line_start = 0usize;
+
+    for segment in proj_text.split('\n') {
+        let line_end = line_start + segment.len();
+        let indent = proj.row_indent(line_start, line_end);
+        let row_width = avail.saturating_sub(usize::from(indent)).max(1);
+        if segment.is_empty() {
+            row_ranges.push((line_start, line_end, indent));
+        } else {
+            let mut row_start = line_start;
+            let mut col = 0usize;
+            for (offset, ch) in segment.char_indices() {
+                let absolute = line_start + offset;
+                let cell = ch.width().unwrap_or(1).max(1);
+                if col > 0 && col + cell > row_width {
+                    row_ranges.push((row_start, absolute, indent));
+                    row_start = absolute;
+                    col = 0;
+                }
+                col += cell;
+            }
+            row_ranges.push((row_start, line_end, indent));
+        }
+        line_start = line_end + 1;
+    }
+
+    let mut lines = Vec::with_capacity(row_ranges.len());
+    for &(row_start, row_end, indent) in &row_ranges {
+        let mut spans: Vec<UserTextSpan> = Vec::new();
+        for (offset, ch) in proj_text[row_start..row_end].char_indices() {
+            let disp_pos = row_start + offset;
+            let kind = match proj.segment_at(disp_pos).map(|s| s.kind) {
+                Some(SegmentKind::Chip {
+                    expanded: false, ..
+                }) => UserSpanKind::CollapsedChip,
+                Some(SegmentKind::Chip { expanded: true, .. }) => UserSpanKind::ExpandedChip,
+                _ => UserSpanKind::Plain,
+            };
+            if let Some(last) = spans.last_mut().filter(|s| s.kind == kind) {
+                last.text.push(ch);
+            } else {
+                let mut text = String::new();
+                text.push(ch);
+                spans.push(UserTextSpan { text, kind });
+            }
+        }
+        lines.push(UserTextLine { indent, spans });
+    }
+
+    let mut paste_spans = Vec::new();
+    for seg in proj.segments() {
+        let SegmentKind::Chip {
+            token,
+            expanded: chip_exp,
+            occurrence,
+        } = seg.kind
+        else {
+            continue;
+        };
+        let overlaps = |(rs, re, _): &(usize, usize, u16)| {
+            if *rs == *re {
+                *rs >= seg.display.start && *rs < seg.display.end
+            } else {
+                seg.display.start < *re && seg.display.end > *rs
+            }
+        };
+        if let (Some(first), Some(last)) = (
+            row_ranges.iter().position(overlaps),
+            row_ranges.iter().rposition(overlaps),
+        ) {
+            paste_spans.push(UserPasteSpan {
+                paste_id: proj.tokens()[token].id,
+                occurrence,
+                expanded: chip_exp,
+                offset: first,
+                rows: last - first + 1,
+            });
+        }
+    }
+
+    (lines, paste_spans)
 }

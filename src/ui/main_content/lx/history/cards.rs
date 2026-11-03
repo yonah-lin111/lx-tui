@@ -45,6 +45,13 @@ pub enum CardKind {
     AgentLink { agent_id: String },
     /// 用户消息正文折叠块（按稳定消息 ID 定位）。
     UserMessage { message_id: String, expanded: bool },
+    /// 用户消息内的折叠粘贴芯片（按消息 ID + 粘贴块哈希 + 出现序号定位）。
+    UserPaste {
+        message_id: String,
+        paste_id: u64,
+        occurrence: usize,
+        expanded: bool,
+    },
 }
 
 /// 一个可折叠块的矩形。

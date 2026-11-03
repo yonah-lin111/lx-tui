@@ -390,6 +390,12 @@ pub enum CardTarget {
     OpenAgent { agent_id: String },
     /// 用户消息正文折叠/展开（按稳定消息 ID 定位）。
     UserMessage { message_id: String },
+    /// 用户消息内的折叠粘贴芯片展开/折叠（按消息 ID + 粘贴块哈希 + 出现序号定位）。
+    UserPaste {
+        message_id: String,
+        paste_id: u64,
+        occurrence: usize,
+    },
 }
 
 /// 卡片内可独立折叠的区域。
@@ -664,21 +670,6 @@ impl LxChat {
         self.expanded_user_messages.clear();
         self.session_title = None;
         self.session_title_palette = 0;
-    }
-
-    /// 用户消息是否处于展开状态。
-    pub fn user_message_expanded(&self, message_id: &str) -> bool {
-        self.expanded_user_messages.contains(message_id)
-    }
-
-    /// 切换用户消息展开状态；返回是否改变。
-    pub fn toggle_user_message_expanded(&mut self, message_id: &str) -> bool {
-        if self.expanded_user_messages.contains(message_id) {
-            self.expanded_user_messages.remove(message_id);
-        } else {
-            self.expanded_user_messages.insert(message_id.to_string());
-        }
-        true
     }
 
     /// 是否仍有本地命令在途（已提交待 spawn 或消息仍显示运行中）。

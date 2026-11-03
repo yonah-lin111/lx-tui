@@ -430,6 +430,20 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
             };
             target.lx.chat.toggle_user_message_expanded(&message_id)
         }
+        CardTarget::UserPaste {
+            message_id,
+            paste_id,
+            occurrence,
+        } => {
+            let Some(target) = state.pane_mut_anywhere(pane) else {
+                return false;
+            };
+            target
+                .lx
+                .chat
+                .toggle_user_paste(&message_id, paste_id, occurrence);
+            true
+        }
     };
     if changed {
         crate::app::update::clear_lx_selection_for(state, pane);

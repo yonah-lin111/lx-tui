@@ -18,6 +18,7 @@ use crate::ui::markdown_render::MdLine;
 use crate::ui::style;
 
 use super::super::Grid;
+use super::rows::{UserPasteSpan, UserSpanKind, UserTextLine};
 use super::tool::{self, Folds};
 use super::user_shell;
 use super::{STEP_GUTTER, StepKind, StepMark, USER_INDENT, USER_PREFIX, visible_row};
@@ -80,9 +81,10 @@ pub(crate) struct UserRefLine {
 /// 一个块的绘制数据。
 #[derive(Debug)]
 pub(crate) enum BlockPaint {
-    /// 用户正文：软换行后的纯文本行、折叠提示与引用树。
+    /// 用户正文：软换行后的行（含折叠粘贴芯片样式与缩进）、芯片行区间、折叠提示与引用树。
     UserText {
-        text_lines: Vec<String>,
+        text_lines: Vec<UserTextLine>,
+        paste_spans: Vec<UserPasteSpan>,
         fold_hint: Option<String>,
         ref_lines: Vec<UserRefLine>,
     },
@@ -109,6 +111,7 @@ impl BlockPaint {
                 text_lines,
                 fold_hint,
                 ref_lines,
+                ..
             } => text_lines.len() + (fold_hint.is_some() as usize) + ref_lines.len(),
             Self::Markdown { lines } => lines.len(),
             Self::Thinking { body } => 1 + body.len(),
@@ -137,8 +140,9 @@ impl BlockPaint {
                 text_lines,
                 fold_hint,
                 ref_lines,
+                ..
             } => {
-                text_lines.iter().map(|line| line.len() + 24).sum::<usize>()
+                text_lines.iter().map(UserTextLine::byte_len).sum::<usize>()
                     + fold_hint.as_ref().map_or(0, |h| h.len() + 24)
                     + ref_lines.iter().map(|r| r.label.len() + 24).sum::<usize>()
             }
@@ -171,6 +175,7 @@ impl BlockPaint {
                 text_lines,
                 fold_hint,
                 ref_lines,
+                ..
             } => draw_user_text(
                 grid,
                 rect,
@@ -299,7 +304,7 @@ fn draw_user_text(
     scroll: usize,
     start: usize,
     viewport_end: usize,
-    text_lines: &[String],
+    text_lines: &[UserTextLine],
     fold_hint: Option<&str>,
     ref_lines: &[UserRefLine],
 ) {
@@ -316,6 +321,8 @@ fn draw_user_text(
         style::chat_user_bg()
     };
     let mut current_row = start;
+    let avail_w = rect.width.saturating_sub(USER_INDENT);
+    let right_limit = rect.x.saturating_add(USER_INDENT).saturating_add(avail_w);
 
     for (offset, line) in text_lines.iter().enumerate() {
         let row = current_row;
@@ -330,13 +337,39 @@ fn draw_user_text(
         if offset == 0 {
             grid.put(rect.x, y, USER_PREFIX, style::accent().patch(bg));
         }
-        grid.put_clipped(
-            rect.x.saturating_add(USER_INDENT),
-            y,
-            line,
-            bg,
-            rect.width.saturating_sub(USER_INDENT),
-        );
+        let mut cx = rect.x.saturating_add(USER_INDENT);
+        if line.indent > 0 && cx < right_limit {
+            let indent_spaces = " ".repeat(usize::from(line.indent));
+            grid.put_clipped(
+                cx,
+                y,
+                &indent_spaces,
+                style::pasted_bg(),
+                right_limit.saturating_sub(cx),
+            );
+            cx = cx.saturating_add(line.indent).min(right_limit);
+        }
+        for span in &line.spans {
+            if cx >= right_limit {
+                break;
+            }
+            let span_style = match span.kind {
+                UserSpanKind::Plain => bg,
+                UserSpanKind::CollapsedChip => style::pasted_chip(),
+                UserSpanKind::ExpandedChip => style::pasted_bg(),
+            };
+            grid.put_clipped(
+                cx,
+                y,
+                &span.text,
+                span_style,
+                right_limit.saturating_sub(cx),
+            );
+            let w: usize = span.text.chars().map(|ch| ch.width().unwrap_or(0)).sum();
+            cx = cx
+                .saturating_add(u16::try_from(w).unwrap_or(u16::MAX))
+                .min(right_limit);
+        }
     }
 
     if let Some(hint) = fold_hint {

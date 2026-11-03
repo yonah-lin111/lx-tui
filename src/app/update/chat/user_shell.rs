@@ -132,7 +132,7 @@ pub fn queue_chat_while_shell_runs(state: &mut AppState, pane: PaneId) -> bool {
     {
         return false;
     }
-    let draft = target.lx.expanded_input().trim().to_string();
+    let draft = target.lx.input.trim().to_string();
     if draft.is_empty() {
         return false;
     }

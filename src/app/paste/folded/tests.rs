@@ -1,33 +1,44 @@
 use super::*;
 
 #[test]
-fn escape_and_unescape_roundtrip_backslashes_parens_and_newlines() {
+fn escape_and_unescape_preserve_code_and_roundtrip_closing_tags() {
     let raw = "fn call(a: usize, b: (u8, u8)) {\n    println!(\"\\n\\\\)\");\n}";
-    let escaped = escape_body(raw);
-    assert_eq!(
-        escaped,
-        "fn call(a: usize, b: (u8, u8\\)\\) {\n    println!(\"\\\\n\\\\\\\\\\)\"\\);\n}"
-    );
-    assert_eq!(unescape_body(&escaped), raw);
+    // Normal code without `</pasted-text>` has zero escaping noise.
+    assert_eq!(escape_body(raw), raw);
+    assert_eq!(unescape_body(raw), raw);
 
     let encoded = encode(raw);
-    assert!(encoded.starts_with("@[pasted:3]("));
-    assert!(encoded.ends_with(')'));
+    assert!(encoded.starts_with("<pasted-text lines=\"3\">"));
+    assert!(encoded.ends_with("</pasted-text>"));
     let parsed = tokens(&encoded);
     assert_eq!(parsed.len(), 1);
     assert_eq!(parsed[0].line_count, 3);
     assert_eq!(parsed[0].body, raw);
+    assert_eq!(
+        parsed[0].label(),
+        "[Pasted 3 lines: fn call(a: usize, b: (u8, u8)) {]"
+    );
+
+    // Text containing `</pasted-text>` and `<\/pasted-text>` roundtrips cleanly.
+    let tricky = "before </pasted-text> middle <\\/pasted-text> after";
+    let escaped = escape_body(tricky);
+    assert_eq!(
+        escaped,
+        "before <\\/pasted-text> middle <\\\\/pasted-text> after"
+    );
+    assert!(!escaped.contains("</pasted-text>"));
+    assert_eq!(unescape_body(&escaped), tricky);
 }
 
 #[test]
 fn unescape_preserves_unknown_escape_sequences_and_trailing_backslash() {
     assert_eq!(unescape_body(r"hello \n \t world\"), r"hello \n \t world\");
-    assert_eq!(unescape_body(r"\\ and \)"), r"\ and )");
+    assert_eq!(unescape_body(r"\\ and \)"), r"\\ and \)");
 }
 
 #[test]
 fn tokens_parses_multiple_and_nested_literal_tokens() {
-    let inner = "@[pasted:2](inner\nliteral)";
+    let inner = "<pasted-text lines=\"2\">inner\nliteral</pasted-text>";
     let first = encode(&format!("outer line 1\n{inner}\nouter line 3"));
     let second = encode("second block\nline 2\nline 3");
     let text = format!("before {first} middle {second} after");
@@ -48,13 +59,9 @@ fn tokens_parses_multiple_and_nested_literal_tokens() {
 #[test]
 fn malformed_tokens_are_ignored_without_blocking_subsequent_valid_tokens() {
     let valid = encode("a\nb\nc");
-    let text =
-        format!("@[pasted:0](abc) @[pasted:abc](def) @[pasted:2]() @[pasted:3](unclosed {valid}");
-    let parsed = tokens(&text);
-    // Note: `@[pasted:3](unclosed @[pasted:3](a\nb\nc)` closes at the first unescaped `)`!
-    assert_eq!(parsed.len(), 1);
-
-    let clean = format!("@[pasted:0](abc) @[pasted:x](def) @[pasted:2]() {valid}");
+    let clean = format!(
+        "<pasted-text lines=\"0\">abc</pasted-text> <pasted-text lines=\"x\">def</pasted-text> <pasted-text lines=\"2\"></pasted-text> {valid}"
+    );
     let parsed_clean = tokens(&clean);
     assert_eq!(parsed_clean.len(), 1);
     assert_eq!(parsed_clean[0].body, "a\nb\nc");
@@ -126,6 +133,7 @@ fn projection_handles_collapsed_expanded_and_duplicate_tokens_independently() {
     // Initially both collapsed.
     let proj0 = Projection::new(&raw, &expanded);
     let label = proj0.tokens()[0].label();
+    assert_eq!(label, "[Pasted 3 lines: alpha]");
     assert_eq!(proj0.text(), format!("A {label} B {label} C"));
 
     // Expand only the second occurrence (occurrence = 1).

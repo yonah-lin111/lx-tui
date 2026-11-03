@@ -636,12 +636,14 @@ impl Builder<'_> {
                     } else {
                         display_text
                     };
-                    let wrapped = if display_text.is_empty() {
-                        Vec::new()
-                    } else {
-                        wrap(&display_text, width.saturating_sub(super::USER_INDENT))
-                    };
-                    let (text_lines, fold_hint) = if wrapped.len() > 5 {
+                    let expanded_pastes = history.chat.user_expanded_pastes(&message.id);
+                    let has_expanded_paste = !expanded_pastes.is_empty();
+                    let (wrapped, paste_spans) = super::rows::wrap_user_projection(
+                        &display_text,
+                        &expanded_pastes,
+                        width.saturating_sub(super::USER_INDENT),
+                    );
+                    let (text_lines, fold_hint) = if wrapped.len() > 5 && !has_expanded_paste {
                         if user_expanded {
                             (wrapped, Some("less lines".to_string()))
                         } else {
@@ -673,6 +675,7 @@ impl Builder<'_> {
                         .collect();
                     BlockPaint::UserText {
                         text_lines,
+                        paste_spans,
                         fold_hint,
                         ref_lines,
                     }
@@ -704,20 +707,41 @@ impl Builder<'_> {
         if is_user
             && let BlockPaint::UserText {
                 text_lines,
-                fold_hint: Some(_),
+                paste_spans,
+                fold_hint,
                 ..
             } = snap_block.paint.as_ref()
         {
-            let hint_offset = text_lines.len();
-            self.snapshot.cards.push(CardRegion {
-                kind: CardKind::UserMessage {
-                    message_id: message.id.clone(),
-                    expanded: user_expanded,
-                },
-                card_start: start.saturating_add(hint_offset),
-                card_rows: 1,
-                clickable: true,
-            });
+            for span in paste_spans {
+                if span.offset < text_lines.len() {
+                    let visible_rows = span.rows.min(text_lines.len() - span.offset);
+                    if visible_rows > 0 {
+                        self.snapshot.cards.push(CardRegion {
+                            kind: CardKind::UserPaste {
+                                message_id: message.id.clone(),
+                                paste_id: span.paste_id,
+                                occurrence: span.occurrence,
+                                expanded: span.expanded,
+                            },
+                            card_start: start.saturating_add(span.offset),
+                            card_rows: visible_rows,
+                            clickable: true,
+                        });
+                    }
+                }
+            }
+            if fold_hint.is_some() {
+                let hint_offset = text_lines.len();
+                self.snapshot.cards.push(CardRegion {
+                    kind: CardKind::UserMessage {
+                        message_id: message.id.clone(),
+                        expanded: user_expanded,
+                    },
+                    card_start: start.saturating_add(hint_offset),
+                    card_rows: 1,
+                    clickable: true,
+                });
+            }
         }
 
         snap_block

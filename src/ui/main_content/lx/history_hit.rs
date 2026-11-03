@@ -377,5 +377,15 @@ fn target_of(kind: &history::CardKind) -> CardTarget {
         history::CardKind::UserMessage { message_id, .. } => CardTarget::UserMessage {
             message_id: message_id.clone(),
         },
+        history::CardKind::UserPaste {
+            message_id,
+            paste_id,
+            occurrence,
+            ..
+        } => CardTarget::UserPaste {
+            message_id: message_id.clone(),
+            paste_id: *paste_id,
+            occurrence: *occurrence,
+        },
     }
 }

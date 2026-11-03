@@ -174,8 +174,8 @@ fn lx_input_renders_folded_chip_and_expanded_preview_with_indent_and_selection()
     let text_y = input.y + 1;
     let content_x = input.x + INPUT_PREFIX;
 
-    // Collapsed chip starts at content_x with Yellow BOLD on Indexed(236).
-    assert_eq!(buf[(content_x, text_y)].symbol(), "@");
+    // Collapsed chip starts at content_x with `[` in Yellow BOLD on Indexed(236).
+    assert_eq!(buf[(content_x, text_y)].symbol(), "[");
     assert_eq!(buf[(content_x, text_y)].fg, Color::Yellow);
     assert_eq!(buf[(content_x, text_y)].bg, Color::Indexed(236));
     assert!(buf[(content_x, text_y)].modifier.contains(Modifier::BOLD));

@@ -591,6 +591,8 @@ fn lx_history_route(state: &AppState, pane: PaneId, command: LxInput) -> LxHisto
     let lx = &pane.lx;
     // 与 `apply_lx_input` 完全一致的面板占用判定：任何面板可见都不让历史接管方向键。
     let panel_busy = lx.paste_panel().is_some()
+        || lx.text_paste_panel().is_some()
+        || lx.refer_active()
         || lx.mention_open()
         || lx.mention_visible()
         || lx.slash.is_some()

@@ -232,3 +232,79 @@ fn user_message_filters_ref_content_from_reference_tree_at_bottom() {
     // 正文 1 行（保留 @[ref-content]/src/ui/）+ 仅 1 行常规附件（src/main.rs），过滤掉 ref-content = 总共 2 行
     assert_eq!(snap.entries[0].blocks[0].rows, 2);
 }
+
+#[test]
+fn user_message_folded_paste_chip_renders_and_toggles_independently() {
+    let tok =
+        crate::app::paste::encode_pasted_text("alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta");
+    let paste_id = crate::app::paste::folded_tokens(&tok)[0].id;
+    let msg = user_msg_with_text("u-paste", &tok);
+    let mut lx = lx_with(vec![msg]);
+    let mut cache = cache();
+
+    // 1. Collapsed state: 1 row (`[Pasted 7 lines: alpha]`), registers `CardKind::UserPaste`.
+    let snap = cache.snapshot(60, &lx);
+    assert_eq!(snap.entries[0].blocks[0].rows, 1);
+    let card = snap
+        .cards
+        .iter()
+        .find(|c| matches!(c.kind, CardKind::UserPaste { .. }))
+        .expect("UserPaste card region");
+    assert_eq!(
+        card.kind,
+        CardKind::UserPaste {
+            message_id: "u-paste".into(),
+            paste_id,
+            occurrence: 0,
+            expanded: false,
+        }
+    );
+
+    let area = Rect::new(0, 0, 60, 10);
+    let mut grid = Grid::new(area);
+    let _ = render(&mut grid, area, &lx, 0, &mut cache);
+    // Column 2 (after `> `) starts `[Pasted 7 lines: alpha]` with Yellow BOLD on Indexed(236).
+    let chip_cell = grid.cell(2, 0);
+    assert_eq!(chip_cell.ch, '[');
+    assert_eq!(chip_cell.style.fg, Some(Color::Yellow));
+    assert_eq!(chip_cell.style.bg, Some(Color::Indexed(236)));
+    assert!(
+        chip_cell
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
+
+    // 2. Toggle paste chip to expanded: shows all 7 lines (not cut off by 5-line rule) with 2-col indent.
+    assert!(lx.chat.toggle_user_paste("u-paste", paste_id, 0));
+    let snap_exp = cache.snapshot(60, &lx);
+    assert_eq!(snap_exp.entries[0].blocks[0].rows, 7);
+    let card_exp = snap_exp
+        .cards
+        .iter()
+        .find(|c| matches!(c.kind, CardKind::UserPaste { .. }))
+        .expect("expanded UserPaste card region");
+    assert_eq!(card_exp.card_rows, 7);
+    assert_eq!(
+        card_exp.kind,
+        CardKind::UserPaste {
+            message_id: "u-paste".into(),
+            paste_id,
+            occurrence: 0,
+            expanded: true,
+        }
+    );
+
+    let mut grid_exp = Grid::new(area);
+    let _ = render(&mut grid_exp, area, &lx, 0, &mut cache);
+    // Columns 2..4 are the 2-column indent on Indexed(236), column 4 is 'a' of "alpha".
+    assert_eq!(grid_exp.cell(2, 0).ch, ' ');
+    assert_eq!(grid_exp.cell(2, 0).style.bg, Some(Color::Indexed(236)));
+    assert_eq!(grid_exp.cell(4, 0).ch, 'a');
+    assert_eq!(grid_exp.cell(4, 0).style.bg, Some(Color::Indexed(236)));
+
+    // 3. Toggle again collapses back to 1 row.
+    assert!(!lx.chat.toggle_user_paste("u-paste", paste_id, 0));
+    let snap_col = cache.snapshot(60, &lx);
+    assert_eq!(snap_col.entries[0].blocks[0].rows, 1);
+}

@@ -9,10 +9,10 @@ fn renders_collapsed_chip_with_yellow_bold_on_indexed_236_and_expanded_with_2_co
     let tok = encode_pasted_text("hello **world**\nsecond line\nthird line");
     p.set_text(&tok);
 
-    // 1. Collapsed state: renders `@[pasted:3](hello **world**)` with `style::pasted_chip()`.
+    // 1. Collapsed state: renders `[Pasted 3 lines: hello **world**]` with `style::pasted_chip()`.
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &p, None);
-    assert_eq!(buf[(0, 0)].symbol(), "@");
+    assert_eq!(buf[(0, 0)].symbol(), "[");
     assert_eq!(buf[(0, 0)].fg, Color::Yellow);
     assert_eq!(buf[(0, 0)].bg, Color::Indexed(236));
     assert!(buf[(0, 0)].modifier.contains(Modifier::BOLD));

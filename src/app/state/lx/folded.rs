@@ -77,6 +77,8 @@ impl Lx {
         self.adopt_shell_prefix();
         if self.input_mode == LxInputMode::Chat {
             self.panel = None;
+            self.refer = None;
+            self.refer_suppressed = true;
             self.mention.suppress();
         }
         self.scroll_cursor_into_view();
@@ -280,4 +282,55 @@ pub(super) fn clamp_line_end(text: &str, cursor: usize) -> usize {
         }
     }
     end
+}
+
+impl super::LxChat {
+    /// 用户消息是否处于展开状态。
+    pub fn user_message_expanded(&self, message_id: &str) -> bool {
+        self.expanded_user_messages.contains(message_id)
+    }
+
+    /// 切换用户消息展开状态；返回是否改变。
+    pub fn toggle_user_message_expanded(&mut self, message_id: &str) -> bool {
+        if self.expanded_user_messages.contains(message_id) {
+            self.expanded_user_messages.remove(message_id);
+        } else {
+            self.expanded_user_messages.insert(message_id.to_string());
+        }
+        true
+    }
+
+    /// 用户消息内指定折叠粘贴芯片是否处于展开状态（存 `detail_expanded` 的 `paste:<id>:<occ>` 槽位）。
+    pub fn user_paste_expanded(&self, message_id: &str, paste_id: u64, occurrence: usize) -> bool {
+        let slot = format!("paste:{paste_id}:{occurrence}");
+        self.detail_is_expanded(message_id, &slot)
+    }
+
+    /// 切换用户消息内指定折叠粘贴芯片的展开状态；返回切换后的状态（`true` = 已展开）。
+    pub fn toggle_user_paste(
+        &mut self,
+        message_id: &str,
+        paste_id: u64,
+        occurrence: usize,
+    ) -> bool {
+        let slot = format!("paste:{paste_id}:{occurrence}");
+        self.toggle_detail(message_id, &slot)
+    }
+
+    /// 构造指定用户消息当前已展开的折叠粘贴芯片集合。
+    pub fn user_expanded_pastes(&self, message_id: &str) -> crate::app::paste::ExpandedPastes {
+        let mut expanded = crate::app::paste::ExpandedPastes::default();
+        for (msg, slot, part, is_exp) in &self.detail_expanded {
+            if msg == message_id
+                && *part == super::CardSection::Body
+                && *is_exp
+                && let Some(rest) = slot.strip_prefix("paste:")
+                && let Some((id_str, occ_str)) = rest.split_once(':')
+                && let (Ok(id), Ok(occ)) = (id_str.parse::<u64>(), occ_str.parse::<usize>())
+            {
+                expanded.toggle(id, occ);
+            }
+        }
+        expanded
+    }
 }

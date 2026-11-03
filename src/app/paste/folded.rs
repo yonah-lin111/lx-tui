@@ -16,8 +16,17 @@ const PREVIEW_MAX_WIDTH: usize = 40;
 /// 展开态预览行的左缩进列数（2 列）。
 pub const EXPANDED_PASTE_INDENT: u16 = 2;
 
-/// 折叠 token 前缀。
-const TOKEN_PREFIX: &str = "@[pasted:";
+/// 折叠 token 起始前缀。
+const TOKEN_PREFIX: &str = "<pasted-text lines=\"";
+
+/// 折叠 token 起始标签结尾。
+const TOKEN_OPEN_END: &str = "\">";
+
+/// 折叠 token 闭合标签。
+const TOKEN_CLOSE: &str = "</pasted-text>";
+
+/// 闭合标签在 `<` 之后的后缀（用于转义/反转义判定）。
+const CLOSE_TAG_SUFFIX: &str = "/pasted-text>";
 
 /// 一个已解析的折叠粘贴 token（`range` 指向原始缓冲区字节区间）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,16 +35,20 @@ pub struct FoldedToken {
     pub line_count: usize,
     /// 已反转义的原始正文。
     pub body: String,
-    /// 折叠态括号内展示的首行预览（已截断）。
+    /// 折叠态展示的首行预览（已截断）。
     pub preview: String,
     /// 正文与行数的稳定哈希（进程内身份）。
     pub id: u64,
 }
 
 impl FoldedToken {
-    /// 折叠态显示的芯片文本：`@[pasted:N](preview)`。
+    /// 折叠态显示的芯片文本：`[Pasted N lines: preview]`。
     pub fn label(&self) -> String {
-        format!("@[pasted:{}]({})", self.line_count, self.preview)
+        if self.line_count == 1 {
+            format!("[Pasted 1 line: {}]", self.preview)
+        } else {
+            format!("[Pasted {} lines: {}]", self.line_count, self.preview)
+        }
     }
 }
 
@@ -371,45 +384,67 @@ impl<'a> Projection<'a> {
     }
 }
 
-/// 原文 → token 正文（只转义 `\` 与 `)`）。
+/// 原文 → token 正文：仅转义闭合标签序列 `</pasted-text>`（及 `<` + `\`* + `/pasted-text>`），
+/// 普通反斜杠与括号保持原样，确保发送给 LLM 时正文无转义噪音。
 pub fn escape_body(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            ')' => out.push_str("\\)"),
-            _ => out.push(ch),
-        }
+    if !text.contains(CLOSE_TAG_SUFFIX) {
+        return text.to_string();
     }
-    out
-}
-
-/// token 正文 → 原文（只反转义 `\\` 与 `\)`，其余反斜杠序列原样保留）。
-pub fn unescape_body(body: &str) -> String {
-    let mut out = String::with_capacity(body.len());
-    let mut chars = body.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            match chars.next() {
-                Some('\\') => out.push('\\'),
-                Some(')') => out.push(')'),
-                Some(other) => {
-                    out.push('\\');
-                    out.push(other);
-                }
-                None => out.push('\\'),
+    let mut out = String::with_capacity(text.len() + 8);
+    let mut pos = 0;
+    while pos < text.len() {
+        let Some(ch) = text[pos..].chars().next() else {
+            break;
+        };
+        if ch == '<' {
+            let after_lt = &text[pos + 1..];
+            let slashes = after_lt.bytes().take_while(|&b| b == b'\\').count();
+            if after_lt[slashes..].starts_with(CLOSE_TAG_SUFFIX) {
+                out.push_str("<\\");
+                pos += 1;
+                continue;
             }
-        } else {
-            out.push(ch);
         }
+        out.push(ch);
+        pos += ch.len_utf8();
     }
     out
 }
 
-/// 原文 → 自包含折叠 token `@[pasted:N](转义正文)`。
+/// token 正文 → 原文：反转义 `<\/pasted-text>`（及 `<` + `\`+ + `/pasted-text>`），其余原样保留。
+pub fn unescape_body(body: &str) -> String {
+    if !body.contains(CLOSE_TAG_SUFFIX) {
+        return body.to_string();
+    }
+    let mut out = String::with_capacity(body.len());
+    let mut pos = 0;
+    while pos < body.len() {
+        let Some(ch) = body[pos..].chars().next() else {
+            break;
+        };
+        if ch == '<' {
+            let after_lt = &body[pos + 1..];
+            let slashes = after_lt.bytes().take_while(|&b| b == b'\\').count();
+            if slashes >= 1 && after_lt[slashes..].starts_with(CLOSE_TAG_SUFFIX) {
+                out.push('<');
+                // 跳过紧跟在 `<` 后面的那一个转义反斜杠。
+                pos += 2;
+                continue;
+            }
+        }
+        out.push(ch);
+        pos += ch.len_utf8();
+    }
+    out
+}
+
+/// 原文 → 自包含折叠 token `<pasted-text lines="N">转义正文</pasted-text>`。
 pub fn encode(content: &str) -> String {
     let line_count = content.split('\n').count().max(1);
-    format!("@[pasted:{line_count}]({})", escape_body(content))
+    format!(
+        "<pasted-text lines=\"{line_count}\">{}</pasted-text>",
+        escape_body(content)
+    )
 }
 
 /// 扫描全文，返回所有在代码围栏外的合法折叠 token。
@@ -598,7 +633,7 @@ pub fn next_boundary(text: &str, offset: usize) -> usize {
     next
 }
 
-/// 尝试在 `start` 处解析一个 `@[pasted:N](...)` token。
+/// 尝试在 `start` 处解析一个 `<pasted-text lines="N">...</pasted-text>` token。
 fn try_parse_token(text: &str, start: usize) -> Option<FoldedToken> {
     let after_prefix = start.checked_add(TOKEN_PREFIX.len())?;
     let rest = text.get(after_prefix..)?;
@@ -611,32 +646,17 @@ fn try_parse_token(text: &str, start: usize) -> Option<FoldedToken> {
         return None;
     }
     let after_digits = rest.get(digit_len..)?;
-    if !after_digits.starts_with("](") {
+    if !after_digits.starts_with(TOKEN_OPEN_END) {
         return None;
     }
-    let body_start = after_prefix + digit_len + 2;
+    let body_start = after_prefix + digit_len + TOKEN_OPEN_END.len();
     let body_rest = text.get(body_start..)?;
-
-    let mut chars = body_rest.char_indices();
-    let mut body_end = None;
-    while let Some((rel_idx, ch)) = chars.next() {
-        match ch {
-            '\\' => {
-                chars.next();
-            }
-            ')' => {
-                body_end = Some(body_start + rel_idx);
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    let body_end = body_end?;
+    let rel_end = body_rest.find(TOKEN_CLOSE)?;
+    let body_end = body_start + rel_end;
     if body_end <= body_start {
         return None;
     }
-    let token_end = body_end + 1;
+    let token_end = body_end + TOKEN_CLOSE.len();
     let body = unescape_body(&text[body_start..body_end]);
     if body.is_empty() {
         return None;
