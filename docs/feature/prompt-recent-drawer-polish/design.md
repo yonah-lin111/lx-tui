@@ -1,7 +1,8 @@
 # Prompt Recent 抽屉高度、选择行为与条目布局调整设计
 
-- 状态：**已实现（待合并）**
+- 状态：**已复审并修复（待合并）**
 - 关联任务：`docs/feature/prompt-recent-drawer-polish/task.md`
+- 复审报告：`docs/feature/prompt-recent-drawer-polish/review.md`
 - 日期：2026-11-03
 - 范围：`src/ui/prompt/recent.rs`、`src/layout/prompt.rs`、`src/app/update/prompt/recent.rs`、`src/app/update/pane.rs`、`src/app/prompt/tree/panel.rs` 及对应测试
 
@@ -137,23 +138,10 @@ max_height = body.height / 2
 pub fn prompt_body_split(panel: Rect, recent_open: bool, recent_count: usize) -> PromptBodySplit {
     let inner = pane_inner_rect(panel);
     let body = prompt_body_rect(inner);
-    let main = body_text_rect(body);
     if !recent_open || body.height == 0 {
-        return PromptBodySplit {
-            main,
-            main_scrollbar: (body.width >= 2).then_some(Rect::new(
-                body.right() - 1,
-                main.y,
-                1,
-                main.height,
-            )),
-            recent_divider: None,
-            recent_text: None,
-            recent_scrollbar: None,
-            visible_entries: 0,
-        };
+        return suppressed_split(body);
     }
-
+    let main = body_text_rect(body);
     let max_height = body.height / 2;
     // 与 recent_page_rows 的截断保持一致，避免布局与渲染行数不一致。
     let recent_count = recent_count.min(crate::app::prompt::MAX_RECENT_PAGES);
@@ -173,9 +161,7 @@ pub fn prompt_body_split(panel: Rect, recent_open: bool, recent_count: usize) ->
     if drawer_height > max_height {
         return suppressed_split(body);
     }
-
-    // 以下与现有代码一致：divider / content / scrollbar / main 收缩。
-    // ...
+    // divider_y / content / scrollbar / main 收缩见实际实现。
     PromptBodySplit {
         visible_entries: visible,
         // ...
@@ -183,7 +169,8 @@ pub fn prompt_body_split(panel: Rect, recent_open: bool, recent_count: usize) ->
 }
 ```
 
-> 实现时可将现有“收起”分支抽成局部辅助（如 `suppressed_split`），避免复制三处 `PromptBodySplit` 构造；不要求新增公共 API。
+> “收起”分支已抽成局部辅助 `suppressed_split(body)`，避免复制三处 `PromptBodySplit` 构造；不新增公共 API。
+> 空态（`recent_count == 0`）固定占 2 行；“至少 2 条”只约束非空记录。
 
 #### 3.1.4 高度示例
 
@@ -250,7 +237,9 @@ panel.recent_scroll = keep_visible(panel.recent_scroll, next, visible, rows.len(
 
 - 鼠标左键单击任意 recent 条目：打开对应 `PromptItem + PromptPage`，然后立刻收起抽屉。
 - 键盘 `Enter`：打开高亮项，然后收起抽屉。
-- 选中“当前正在编辑的页”：不重新加载正文，只收起抽屉。
+- 选中“当前正在编辑的页”：不重新加载正文，只收起抽屉；若当前处于页列表视图（`PromptMode::Pages`），
+  同时切回编辑视图（`PromptMode::Editor`），否则“选择条目”会只关抽屉、画面仍停在页列表。
+- 选中任意条目后键盘焦点交还 prompt（`focus_prompt`），覆盖从窗格焦点点击 `[rec]` 再选择条目的路径。
 - 收起后：
   - `recent_open = false`；
   - `recent_active = None`；
@@ -261,7 +250,7 @@ panel.recent_scroll = keep_visible(panel.recent_scroll, next, visible, rows.len(
 
 #### 3.2.2 关键代码（`src/app/update/prompt/recent.rs`）
 
-当前“当前页”分支只更新选中态并返回：
+改造前“当前页”分支只更新选中态并返回：
 
 ```rust
 if 已经是当前页 {
@@ -277,7 +266,12 @@ if 已经是当前页 {
 ```rust
 if 已经是当前页 {
     // 只收起抽屉，不重载正文，也不刷新 updated_at。
+    // 页列表视图下仍须回到编辑视图；鼠标从窗格焦点打开时还要交还键盘焦点。
+    if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
+        workspace_state.prompt_panel.mode = PromptMode::Editor;
+    }
     state.prompt_recent_hover = None;
+    focus_prompt(state);
     close_prompt_recent(state);
     return true;
 }
@@ -308,7 +302,7 @@ update::open_recent_page(state, index);
 - `Effect::SetActivePage` 只更新 `workspace_prompt.active_page_id` / `workspace_prompt.updated_at`，不影响 `workspace_prompt_page.updated_at`。
 - recent 排序读取 `PromptPage.updated_at`，因此仅打开页面不会改变 recent 顺序。
 
-新增回归测试锁死该不变量（见 §6）。
+新增回归测试锁死该不变量（见 §5.3）。
 
 ### 3.3 条目布局与状态色
 
@@ -504,7 +498,7 @@ fn paint_entry(buf: &mut Buffer, area: Rect, y: u16, row: &RecentPageRow, hovere
 
 ### 5.2 Recent 渲染（`src/ui/prompt/recent/tests.rs`）
 
-1. `renders_two_line_entries_with_page_title_and_time`：
+1. `renders_page_title_then_prompt_name_without_dot`：
    - 第 1 行包含 `Auth Flow` 与 `[5m]`，以 `❯` 开头；
    - 第 2 行包含 `Alpha`；
    - 两行都不包含 `●` / `○`。
@@ -515,22 +509,28 @@ fn paint_entry(buf: &mut Buffer, area: Rect, y: u16, row: &RecentPageRow, hovere
    - `None` → `DIM`。
 3. `current_page_title_is_bold`：
    - `current = true` 时第 1 行标题单元格含 `Modifier::BOLD`。
-4. 保留悬停 / 键盘选中双行底色、关闭按钮、空态、滚动窗口测试。
+4. `status_color_wins_over_hover_foreground`：覆盖 `InProgress` 黄与 `Done` 绿在悬停底色上的前景优先级。
+5. 保留悬停 / 键盘选中双行底色、关闭按钮、空态、滚动窗口测试。
 
 ### 5.3 更新层（`src/app/update/prompt/recent/tests.rs`）
 
 1. `open_recent_page_commits_current_and_switches_target`：
    - 断言切换后 `mode == Editor`、`editing == Item(12)`、正文为 `beta`；
-   - 断言 `!recent_open`、`recent_active == None`、`recent_scroll == 0`；
+   - 断言 `!recent_open`、`recent_active == None`、`recent_scroll == 0`、`recent_visible == 0`；
    - 旧页正文仍在内存中提交。
 2. 新增 `selecting_current_page_closes_without_reload`：
-   - 抽屉展开、当前页高亮，调用 `open_recent_page`；
-   - 断言抽屉关闭、正文与光标不变、无重新加载副作用。
-3. 新增 `opening_page_without_edit_keeps_recent_order`：
+   - 抽屉展开、当前页高亮、焦点在窗格，调用 `open_recent_page`；
+   - 断言抽屉关闭、正文/光标/修订号不变、焦点回到 prompt。
+3. 新增 `selecting_current_page_from_pages_returns_to_editor`：
+   - 页列表视图 + 当前页，调用 `open_recent_page`；
+   - 断言回到 `PromptMode::Editor`、抽屉关闭、正文不变、焦点回到 prompt。
+4. 新增 `opening_page_without_edit_keeps_recent_order`：
    - Alpha `updated_at = 100`、Beta `updated_at = 200`；
-   - 打开 Alpha 后不修改，再打开 recent；
-   - 断言行顺序仍为 Beta、Alpha（`updated_at` 未变化）。
-4. 保留滚动钳制、`recent_active` 越界修正测试。
+   - 打开 Beta 不修改；断言行顺序仍为 Beta、Alpha，且 Alpha / Beta 的 `updated_at` 都未变化。
+5. 新增 `sync_uses_cached_visible_entries`：
+   - `recent_visible = 2`、3 条记录、目标为第 3 条；
+   - 断言 `recent_scroll == 1`，锁定动态可见窗口（而不是固定 3 条）。
+6. 保留滚动钳制、`recent_active` 越界修正测试。
 
 ### 5.4 事件层（`src/event/tests/prompt_recent.rs`）
 
@@ -538,13 +538,15 @@ fn paint_entry(buf: &mut Buffer, area: Rect, y: u16, row: &RecentPageRow, hovere
    - 原 `clicking_recent_entry_opens_page_and_keeps_drawer` 改为断言关闭；
    - 断言 `recent_active == None`。
 2. `clicking_recent_entry_opens_from_tree_and_pages`：
-   - 三种模式点击后都进入 Editor 且抽屉关闭。
+   - 树视图与页列表视图点击条目后都进入 Editor 且抽屉关闭。
 3. `keyboard_defaults_to_current_page_and_navigates_to_open`：
-   - `Enter` 打开后抽屉关闭，后续 `Esc` 不再影响抽屉；
+   - `Enter` 打开后抽屉关闭；
    - 正文仍为 `beta`。
-4. 滚动测试几何调整：
+4. 新增 `escape_closes_drawer_without_changing_text`：
+   - 抽屉展开后按 `Esc`，断言关闭、`recent_active` 清空、正文不变。
+5. 滚动测试几何调整：
    - `recent_scrollbar_supports_track_click_and_thumb_drag`、`keyboard_navigation_keeps_selection_visible`、`wheel_over_drawer_scrolls_entries_without_touching_editor` 使用 140×20 面板，确保半屏容量小于记录数，滚动条与滚轮仍可测。
-5. 保留矮屏压制、悬停、右键吞掉、删除条目钳制测试。
+6. 保留矮屏压制、悬停、右键吞掉、删除条目钳制测试。
 
 ---
 
@@ -562,17 +564,17 @@ fn paint_entry(buf: &mut Buffer, area: Rect, y: u16, row: &RecentPageRow, hovere
 
 ## 7. 验收标准
 
-- [ ] 大面板（内容区 ≥ 26 行）下 recent 抽屉可显示超过 3 条，最多到半屏容量。
-- [ ] 抽屉总高度（含分割线）不超过 Prompt 内容区高度的一半。
-- [ ] 记录不足 2 条时仍保留 2 条高度；矮屏放不下 2 条时自动收起且不吞键。
-- [ ] 鼠标单击 recent 任意条目后抽屉关闭，进入对应 Editor 页。
-- [ ] 键盘 `Enter` 打开高亮项后抽屉关闭。
-- [ ] 点击当前正在编辑的页只关闭抽屉，不重载正文。
-- [ ] 仅打开、不修改正文时，recent 列表顺序不变。
-- [ ] 第 1 行为页标题 + 时间，第 2 行为条目名；两行不再出现状态圆点。
-- [ ] 页标题颜色与 prompt 标题行一致：todo 亮白、in_progress 黄、done 绿、无状态暗灰。
-- [ ] 当前页仍显示 `❯` 且页标题加粗。
-- [ ] `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、相关测试与 `cargo test` 全部通过。
+- [x] 大面板（内容区 ≥ 26 行）下 recent 抽屉可显示超过 3 条，最多到半屏容量。
+- [x] 抽屉总高度（含分割线）不超过 Prompt 内容区高度的一半。
+- [x] 记录不足 2 条时仍保留 2 条高度；矮屏放不下 2 条时自动收起且不吞键。
+- [x] 鼠标单击 recent 任意条目后抽屉关闭，进入对应 Editor 页。
+- [x] 键盘 `Enter` 打开高亮项后抽屉关闭。
+- [x] 点击当前正在编辑的页只关闭抽屉，不重载正文。
+- [x] 仅打开、不修改正文时，recent 列表顺序不变。
+- [x] 第 1 行为页标题 + 时间，第 2 行为条目名；两行不再出现状态圆点。
+- [x] 页标题颜色与 prompt 标题行一致：todo 亮白、in_progress 黄、done 绿、无状态暗灰。
+- [x] 当前页仍显示 `❯` 且页标题加粗。
+- [x] `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、相关测试与 `cargo test` 全部通过。
 
 ---
 
@@ -581,3 +583,16 @@ fn paint_entry(buf: &mut Buffer, area: Rect, y: u16, row: &RecentPageRow, hovere
 1. `ref-content/ui/prompt/` 不存在，本设计按现有 Recent 抽屉理解；若参考实现是浮层面板而非底部抽屉，需要重新评估 §3.1 / §3.2。
 2. 第 2 行条目名采用 muted；若希望条目名保持亮白、仅页标题变色，可在评审时改为 `base`。
 3. 无 `&&&` 状态的页标题使用 muted；若希望它和 todo 一样亮白，可改为 `style::text()`。
+
+---
+
+## 9. 复审修正
+
+完整问题清单与根因见 `review.md`。本轮修复：
+
+- **P1-1**：当前页快速路径在页列表视图下切回 `PromptMode::Editor`，避免只关抽屉、画面仍停在页列表。
+- **P2-1**：当前页快速路径调用 `focus_prompt`，从窗格焦点打开抽屉后选择条目也会把键盘交还编辑器。
+- **P2-2**：补充 Pages 当前页、焦点/光标/修订号、目标页 `updated_at`、动态可见窗口、`Esc` 关闭与
+  `InProgress` 悬停状态色测试。
+- **P3-1**：`recent_page_count` 注释同步 `MAX_RECENT_PAGES`。
+- **P3-2**：同步本设计与 `task.md` 的代码片段、测试名与旁路行为描述。

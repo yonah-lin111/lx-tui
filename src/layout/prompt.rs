@@ -407,7 +407,7 @@ pub struct PromptBodySplit {
 }
 
 /// 分割主视图与底部抽屉：抽屉高度按内容区一半内的容量动态增长（1 行分割线 + 每条 2 行），
-/// 至少 2 条、至多 `MAX_RECENT_PAGES` 条；半屏放不下最低 2 条时收起抽屉。
+/// 非空记录至少 2 条、至多 `MAX_RECENT_PAGES` 条；空态固定占 2 行；半屏放不下最低 2 条时收起。
 pub fn prompt_body_split(panel: Rect, recent_open: bool, recent_count: usize) -> PromptBodySplit {
     let inner = pane_inner_rect(panel);
     let body = prompt_body_rect(inner);

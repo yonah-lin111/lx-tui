@@ -300,6 +300,22 @@ fn close_button_and_escape_restore_previous_view() {
 }
 
 #[test]
+fn escape_closes_drawer_without_changing_text() {
+    let config = Config::default();
+    let mut state = paged_prompt_state();
+    update::focus_prompt(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    let before = state.prompt.text().to_string();
+
+    key(&mut state, &geo, KeyCode::Esc, KeyModifiers::NONE);
+
+    assert!(!state.workspaces[0].prompt_panel.recent_open);
+    assert_eq!(state.workspaces[0].prompt_panel.recent_active, None);
+    assert_eq!(state.prompt.text(), before, "Esc 收起抽屉不改正文");
+}
+
+#[test]
 fn keyboard_navigation_keeps_selection_visible() {
     use crate::app::prompt::{PromptItem, PromptPage};
     let config = Config::default();

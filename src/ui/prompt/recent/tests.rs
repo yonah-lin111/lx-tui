@@ -102,18 +102,19 @@ fn current_page_title_is_bold() {
 
 #[test]
 fn status_color_wins_over_hover_foreground() {
-    let (buf, area) = draw(
-        &[row_with(Some(TemplateStatus::Done), false)],
-        Some(0),
-        None,
-    );
-    let cell = &buf[(area.x + 2, area.y)];
-    assert_eq!(cell.fg, Color::Green, "状态色优先于选中前景");
-    assert_eq!(
-        cell.bg,
-        style::selection().bg.expect("selection background"),
-        "选中底色保留"
-    );
+    for (status, color) in [
+        (TemplateStatus::InProgress, Color::Yellow),
+        (TemplateStatus::Done, Color::Green),
+    ] {
+        let (buf, area) = draw(&[row_with(Some(status), false)], Some(0), None);
+        let cell = &buf[(area.x + 2, area.y)];
+        assert_eq!(cell.fg, color, "{status:?} 状态色优先于选中前景");
+        assert_eq!(
+            cell.bg,
+            style::selection().bg.expect("selection background"),
+            "{status:?} 选中底色保留"
+        );
+    }
 }
 
 #[test]

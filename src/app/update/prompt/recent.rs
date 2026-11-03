@@ -90,7 +90,8 @@ pub fn close_prompt_recent(state: &mut AppState) -> bool {
     true
 }
 
-/// 单击抽屉条目：结算当前编辑，切换对应条目 + 页，随后收起抽屉。
+/// 单击抽屉条目：结算当前编辑，切换对应条目 + 页，随后收起抽屉；
+/// 选中当前页只收起抽屉并把焦点/视图交还编辑器。
 pub fn open_recent_page(state: &mut AppState, index: usize) -> bool {
     let workspace = state.prompt_workspace();
     let Some(target) = prompt_recent_rows(state).get(index).cloned() else {
@@ -107,8 +108,14 @@ pub fn open_recent_page(state: &mut AppState, index: usize) -> bool {
                 .item(target.item_id)
                 .is_some_and(|item| item.active_page == target.page_id)
     }) {
-        // 已经是当前页：不重载正文，只收起抽屉。
+        // 已经是当前页：不重载正文，只收起抽屉。页列表视图下仍须回到
+        // 编辑视图，否则“选中条目”只关了抽屉、画面还停在页列表。
+        if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
+            workspace_state.prompt_panel.mode = PromptMode::Editor;
+        }
         state.prompt_recent_hover = None;
+        // 抽屉可能由鼠标从窗格焦点打开；关闭后键盘焦点交还 prompt。
+        crate::app::update::focus_prompt(state);
         close_prompt_recent(state);
         return true;
     }

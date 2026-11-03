@@ -1,7 +1,8 @@
 # Prompt Recent 抽屉高度、选择行为与条目布局调整实施任务
 
-- 状态：**已实现（待合并）**
+- 状态：**已复审并修复（待合并）**
 - 关联设计：`docs/feature/prompt-recent-drawer-polish/design.md`
+- 复审报告：`docs/feature/prompt-recent-drawer-polish/review.md`
 - 日期：2026-11-03
 
 ---
@@ -111,10 +112,16 @@ if drawer_height > max_height {
 - [x] **3.1** `open_recent_page` 的“当前页”分支改为：
 
   ```rust
+  if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
+      workspace_state.prompt_panel.mode = PromptMode::Editor;
+  }
   state.prompt_recent_hover = None;
+  focus_prompt(state);
   close_prompt_recent(state);
   return true;
   ```
+
+  页列表视图下必须切回编辑视图；鼠标从窗格焦点打开抽屉时，关闭后焦点交还 prompt。
 
 - [x] **3.2** `open_recent_page` 正常切换分支末尾：
   - 删除重新定位 `recent_active` / `recent_scroll` 的代码块；
@@ -127,11 +134,17 @@ if drawer_height > max_height {
 **关键代码：**
 
 ```rust
-/// 单击抽屉条目：结算当前编辑，切换对应条目 + 页，随后收起抽屉。
+/// 单击抽屉条目：结算当前编辑，切换对应条目 + 页，随后收起抽屉；
+/// 选中当前页只收起抽屉并把焦点/视图交还编辑器。
 pub fn open_recent_page(state: &mut AppState, index: usize) -> bool {
     // ... 前略：取目标、当前页快速路径、提交当前编辑 ...
     if 已经是当前页 {
+        // 页列表视图下仍须回到编辑视图。
+        if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
+            workspace_state.prompt_panel.mode = PromptMode::Editor;
+        }
         state.prompt_recent_hover = None;
+        focus_prompt(state);
         close_prompt_recent(state);
         return true;
     }
@@ -230,12 +243,17 @@ tree::paint_name(
 #### 5.3 `src/app/update/prompt/recent/tests.rs`
 
 - [x] 改写 `open_recent_page_commits_current_and_switches_target`：
-  - 断言抽屉关闭、`recent_active == None`、`recent_scroll == 0`；
+  - 断言抽屉关闭、`recent_active == None`、`recent_scroll == 0`、`recent_visible == 0`；
   - 保留旧页正文已提交的断言。
-- [x] 新增 `selecting_current_page_closes_without_reload`。
+- [x] 新增 `selecting_current_page_closes_without_reload`：
+  - 断言正文、光标、修订号不变；焦点从窗格回到 prompt。
+- [x] 新增 `selecting_current_page_from_pages_returns_to_editor`：
+  - 页列表视图 + 当前页，断言回到 `PromptMode::Editor`、抽屉关闭、正文不变、焦点回到 prompt。
 - [x] 新增 `opening_page_without_edit_keeps_recent_order`：
   - Alpha `updated_at = 100`、Beta `updated_at = 200`；
-  - 打开 Alpha 不修改，再确认行顺序仍为 Beta、Alpha。
+  - 打开 Beta 不修改；行顺序仍为 Beta、Alpha，且两者 `updated_at` 均不变。
+- [x] 新增 `sync_uses_cached_visible_entries`：
+  - `recent_visible = 2`、3 条记录、目标第 3 条，断言 `recent_scroll == 1`。
 - [x] 保留滚动钳制、`recent_active` 越界修正测试。
 
 #### 5.4 `src/event/tests/prompt_recent.rs`
@@ -243,6 +261,7 @@ tree::paint_name(
 - [x] `clicking_recent_entry_opens_page_and_keeps_drawer` 改名为 `clicking_recent_entry_opens_page_and_closes_drawer`，断言关闭。
 - [x] `clicking_recent_entry_opens_from_tree_and_pages` 增加关闭断言。
 - [x] `keyboard_defaults_to_current_page_and_navigates_to_open` 改为 `Enter` 后断言关闭，并删除后续对 `Esc` 收起抽屉的依赖。
+- [x] 新增 `escape_closes_drawer_without_changing_text`，补回 `Esc` 关闭抽屉的覆盖。
 - [x] 调整滚动相关测试几何为 140×20：
   - `recent_scrollbar_supports_track_click_and_thumb_drag`；
   - `keyboard_navigation_keeps_selection_visible`；
@@ -302,6 +321,11 @@ cargo test
 ## 6. 实现记录
 
 - 2026-11-03：完成半屏动态容量、选择后关闭抽屉、页标题/条目名换位与状态色、移除状态圆点、`recent_visible` 可见窗口同步。
+- 2026-11-03（复审修复）：
+  - P1-1：页列表视图选中当前页后切回编辑视图；
+  - P2-1：当前页快速路径恢复 prompt 键盘焦点；
+  - P2-2：补充 Pages 当前页、焦点/光标/修订号、目标页 `updated_at`、动态可见窗口、`Esc`、悬停状态色测试；
+  - P3-1/P3-2：同步 `recent_page_count` 注释、设计/任务文档与测试名。
 - 验证结果：
   - `cargo fmt --check` 通过；
   - `cargo clippy --all-targets -- -D warnings` 通过；

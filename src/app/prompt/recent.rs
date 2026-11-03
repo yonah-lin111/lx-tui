@@ -75,7 +75,7 @@ pub fn recent_page_rows(
     rows
 }
 
-/// 已入库页总数（抽屉高度只关心前 3 条，超过 3 条按 3 条计）。
+/// 已入库页总数；抽屉几何会按 `MAX_RECENT_PAGES` 截断后再计算高度。
 pub fn recent_page_count(panel: &PromptPanel) -> usize {
     panel
         .tree
