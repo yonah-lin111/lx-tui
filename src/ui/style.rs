@@ -696,13 +696,19 @@ pub fn template_block_bar() -> Style {
     Style::default().fg(LX_PINK)
 }
 
-/// 模板块状态标签：按状态分色（todo 靛蓝 / in_progress 黄 / done 绿）。
+/// 标题行页名状态色（对齐 recent 页状态圆点：todo 默认亮字、in_progress 黄、done 绿）。
+///
+/// 叠加在 `DIM` 分割线上绘制，必须显式移除 `DIM` 与 `BOLD`。
 pub fn template_border(status: TemplateStatus) -> Style {
-    match status {
-        TemplateStatus::Todo => Style::default().fg(Color::LightBlue),
-        TemplateStatus::InProgress => Style::default().fg(Color::Yellow),
-        TemplateStatus::Done => Style::default().fg(Color::Green),
-    }
+    let fg = match status {
+        TemplateStatus::Todo => Color::Reset,
+        TemplateStatus::InProgress => Color::Yellow,
+        TemplateStatus::Done => Color::Green,
+    };
+    Style::default()
+        .fg(fg)
+        .remove_modifier(Modifier::DIM)
+        .remove_modifier(Modifier::BOLD)
 }
 
 /// 补充块 `+++` 结构标记：次要信息。

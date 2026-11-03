@@ -138,6 +138,16 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if let Some(grab) = state.prompt_recent_scroll_drag {
+        let Some(bar) = ui::prompt_frame::prompt_recent_scrollbar(view.prompt, state) else {
+            return;
+        };
+        let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+        if update::set_prompt_recent_scroll(state, offset, bar.visible, bar.total) {
+            *dirty = true;
+        }
+        return;
+    }
     if let Some(grab) = state.prompt_scroll_drag {
         let Some(bar) = ui::prompt_scrollbar(view, state) else {
             return;
@@ -276,7 +286,7 @@ pub(crate) fn handle_mouse_drag(
     // prompt 列表拖拽：必须在窗格转发之前 return，否则拖动会被当成终端选区/输入。
     if state.prompt_drag.is_some() {
         let hit = ui::prompt::tree::drop_hit_at(
-            layout::prompt_content_rect(view.prompt),
+            ui::prompt_frame::prompt_main_rect(view.prompt, state),
             &state.prompt_owner().prompt_panel,
             mouse.column,
             mouse.row,
@@ -443,7 +453,7 @@ pub(crate) fn handle_mouse_up_left(
     // 未跨行时这里走点击/双击语义（折叠与打开编辑器都发生在松开）。
     if state.prompt_drag.is_some() {
         let hit = ui::prompt::tree::drop_hit_at(
-            layout::prompt_content_rect(view.prompt),
+            ui::prompt_frame::prompt_main_rect(view.prompt, state),
             &state.prompt_owner().prompt_panel,
             mouse.column,
             mouse.row,
@@ -485,6 +495,9 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     if state.workspace_scroll_drag.take().is_some() {
+        return;
+    }
+    if state.prompt_recent_scroll_drag.take().is_some() {
         return;
     }
     if state.prompt_scroll_drag.take().is_some() {

@@ -832,11 +832,23 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
 pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
     for (id, rect) in pane_rects {
         if *id == state.prompt.id() {
-            let (cols, rows) = layout::prompt_inner_size(*rect);
+            let (recent_open, recent_count) = {
+                let panel = &state.prompt_owner().prompt_panel;
+                (
+                    panel.recent_open,
+                    crate::app::prompt::recent_page_count(panel),
+                )
+            };
+            let split = layout::prompt_body_split(*rect, recent_open, recent_count);
+            if recent_open && split.recent_divider.is_none() {
+                super::close_prompt_recent(state);
+            }
+            let (cols, rows) = (split.main.width.max(1), split.main.height.max(1));
             if state.prompt.size() != (cols, rows) {
                 clear_selection(state);
             }
             state.prompt.resize(cols, rows);
+            state.prompt_resize_pending = false;
         } else if let Some(pane) = state.pane_mut_anywhere(*id) {
             let (cols, rows) = layout::pane_inner_size(*rect);
             let old_size = pane.terminal.size();

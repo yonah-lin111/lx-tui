@@ -669,6 +669,11 @@ pub fn perform_delete_page(
         state.selection = None;
         reload_editor_from_active_page(state, workspace);
     }
+    if workspace == state.prompt_workspace() {
+        let target = super::recent::current_recent_target(state);
+        super::recent::sync_prompt_recent_selection(state, target);
+        state.prompt_resize_pending = true;
+    }
     true
 }
 

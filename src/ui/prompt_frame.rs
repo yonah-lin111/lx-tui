@@ -3,7 +3,7 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app::prompt::{PromptEditing, PromptMode, page_rows};
+use crate::app::prompt::{PromptEditing, PromptMode, page_display_title, page_rows};
 use crate::app::state::{AppState, RightTab};
 
 use super::{layout, prompt, text, widgets};
@@ -89,10 +89,11 @@ pub(crate) fn prompt_page_header(state: &AppState) -> Option<PromptPageHeader> {
         PromptMode::Tree => None,
         PromptMode::Editor => {
             let index = pages.iter().position(|page| page.id == active).unwrap_or(0);
+            let page = pages.get(index)?;
             Some(PromptPageHeader {
                 current: index + 1,
                 total: pages.len(),
-                name: String::new(),
+                name: page_display_title(page, index, state.prompt.text()),
                 arrows: true,
             })
         }
@@ -128,7 +129,7 @@ pub fn prompt_title_at(panel: Rect, column: u16, row: u16) -> bool {
     title_row(panel).is_some_and(|title| title.contains((column, row).into()))
 }
 
-/// 命中 prompt 标题行页控件（编辑视图与页列表视图）。
+/// 命中 prompt 工具栏页控件（编辑视图与页列表视图）。
 pub fn prompt_page_control_at(
     panel: Rect,
     state: &AppState,
@@ -138,7 +139,7 @@ pub fn prompt_page_control_at(
     if state.prompt_collapsed || state.right_tab != RightTab::Prompt {
         return None;
     }
-    let area = title_row(panel)?;
+    let bar = crate::layout::prompt_toolbar_rect(panel)?;
     let (title, page) = match title_source(state) {
         TitleSource::Editor { title, page, .. } | TitleSource::Pages { title, page, .. } => {
             (title, page)
@@ -151,10 +152,10 @@ pub fn prompt_page_control_at(
         draft: false,
         page: page_header_data(Some(page)),
     };
-    prompt::page_control_at(area, &data, column, row)
+    prompt::page_control_at(bar, &data, column, row)
 }
 
-/// 标题行状态标签矩形（渲染、点击命中与 tooltip 共用）；编辑视图且本页存在 `&&&` 时非空。
+/// 标题行页名状态矩形（渲染、点击切换状态与 tooltip 共用）；编辑视图且本页存在 `&&&` 时非空。
 pub fn prompt_status_rect(panel: Rect, state: &AppState) -> Option<Rect> {
     if state.prompt_collapsed || state.right_tab != RightTab::Prompt {
         return None;
@@ -169,19 +170,41 @@ pub fn prompt_status_rect(panel: Rect, state: &AppState) -> Option<Rect> {
     else {
         return None;
     };
-    let status = status?;
+    let _status = status?;
     let data = prompt::TitleRowData {
-        title: Some(title.as_deref().unwrap_or("")),
+        title: title.as_deref().or(Some("")),
         draft,
         page: page_header_data(page.as_ref()),
     };
-    prompt::status_rect(area, &data, status)
+    prompt::status_rect(area, &data)
 }
 
 /// 命中标题行状态标签时返回其矩形（点击循环块状态，不移动正文光标）。
 pub fn prompt_status_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<Rect> {
     let rect = prompt_status_rect(panel, state)?;
     rect.contains((column, row).into()).then_some(rect)
+}
+
+/// 上方主视图实际可交互/渲染区域（已扣除表头、滚动条槽及底部 recent 抽屉）。
+pub fn prompt_main_rect(panel: Rect, state: &AppState) -> Rect {
+    let panel_state = &state.prompt_owner().prompt_panel;
+    let recent_count = crate::app::prompt::recent_page_count(panel_state);
+    crate::layout::prompt_body_split(panel, panel_state.recent_open, recent_count).main
+}
+
+/// 底部最近页面抽屉当前是否实际展开可见（打开标志为真且高度未被半屏规则压制）。
+pub fn prompt_recent_visible(panel: Rect, state: &AppState) -> bool {
+    if state.prompt_collapsed || state.right_tab != RightTab::Prompt {
+        return false;
+    }
+    let panel_state = &state.prompt_owner().prompt_panel;
+    if !panel_state.recent_open {
+        return false;
+    }
+    let recent_count = crate::app::prompt::recent_page_count(panel_state);
+    crate::layout::prompt_body_split(panel, true, recent_count)
+        .recent_divider
+        .is_some()
 }
 
 /// Prompt 面板体：编辑视图渲染 markdown 编辑器、树视图渲染提示词管理器、页视图渲染页目录。
@@ -194,7 +217,10 @@ pub(crate) fn render_body(
         return None;
     }
     let focused = state.prompt_focused();
-    let mode = state.prompt_owner().prompt_panel.mode;
+    let panel = &state.prompt_owner().prompt_panel;
+    let mode = panel.mode;
+    let recent_rows = recent_rows(state);
+    let split = crate::layout::prompt_body_split(area, panel.recent_open, recent_rows.len());
     let title = title_source(state);
     let (title_text, draft, page, status) = match &title {
         TitleSource::Tree => (None, false, None, None),
@@ -225,11 +251,19 @@ pub(crate) fn render_body(
         focused,
         mode,
         draft,
+        page_data.page.as_ref(),
     );
+    if split.recent_divider.is_some() {
+        let counter = page_data
+            .page
+            .as_ref()
+            .map(|page| text::page_counter(page.current, page.total));
+        prompt::paint_recent_button(area, frame.buffer_mut(), mode, counter.as_deref(), true);
+    }
     if let Some(row) = title_row(area) {
         prompt::paint_title_row(frame.buffer_mut(), row, &page_data, status);
     }
-    let text_area = crate::layout::prompt_text_rect(area);
+    let text_area = split.main;
     let list_cursor = match mode {
         PromptMode::Tree => prompt::tree::render(
             text_area,
@@ -256,8 +290,40 @@ pub(crate) fn render_body(
             None
         }
     };
-    if let Some(scrollbar) = prompt_scrollbar_for(area, state) {
+    if let Some(scrollbar) = prompt_scrollbar_for(state, split.main_scrollbar) {
         widgets::scrollbar::render(frame, &scrollbar);
+    }
+    if let (Some(divider), Some(recent_text)) = (split.recent_divider, split.recent_text) {
+        prompt::recent::render(
+            frame.buffer_mut(),
+            &prompt::recent::RecentRender {
+                panel: area,
+                divider,
+                area: recent_text,
+                rows: &recent_rows,
+                scroll: state.prompt_owner().prompt_panel.recent_scroll,
+                visible_entries: split.visible_entries,
+                focused,
+                hover: state.prompt_recent_hover,
+                active: state.prompt_owner().prompt_panel.recent_active,
+            },
+        );
+    }
+    if let Some(gutter) = split.recent_scrollbar
+        && split.visible_entries > 0
+        && recent_rows.len() > split.visible_entries
+        && let Some(scrollbar) = widgets::scrollbar::layout(
+            gutter,
+            recent_rows.len(),
+            split.visible_entries,
+            state.prompt_owner().prompt_panel.recent_scroll,
+        )
+    {
+        widgets::scrollbar::render(frame, &scrollbar);
+    }
+    // 抽屉展开时键盘归 recent：不再在上方编辑器/搜索框绘制硬件光标。
+    if split.recent_divider.is_some() {
+        return None;
     }
     if matches!(mode, PromptMode::Tree | PromptMode::Pages) {
         // 树/页列表视图硬件光标落在搜索框输入位置（与模态输入框一致），未聚焦不显示。
@@ -266,8 +332,116 @@ pub(crate) fn render_body(
     let (row, col) = focused.then(|| state.prompt.cursor_cell()).flatten()?;
     Some((
         text_area.x + col.min(text_area.width.saturating_sub(1)),
-        text_area.y + row,
+        text_area.y + row.min(text_area.height.saturating_sub(1)),
     ))
+}
+
+/// 显示中编辑器的实时上下文（树视图无编辑绑定，不参与 recent 标题刷新）。
+fn live_editor(state: &AppState) -> Option<crate::app::prompt::LiveEditor<'_>> {
+    let panel = &state.prompt_owner().prompt_panel;
+    if panel.mode == PromptMode::Tree {
+        return None;
+    }
+    let editing = panel.editing?;
+    let page = match editing {
+        PromptEditing::Item(id) => panel.tree.item(id)?.active_page,
+        PromptEditing::Temp(id) => panel.temp(id)?.active_page,
+    };
+    Some((editing, page, state.prompt.text()))
+}
+
+/// 当前工作区的最近页面行（按修改时间倒序）。
+pub(crate) fn recent_rows(state: &AppState) -> Vec<crate::app::prompt::RecentPageRow> {
+    crate::app::prompt::recent_page_rows(
+        &state.prompt_owner().prompt_panel,
+        live_editor(state),
+        crate::platform::current_unix_secs(),
+    )
+}
+
+/// 指针是否落在最近页面抽屉区域（含分割线、空态与滚动条槽）。
+pub fn prompt_recent_contains(panel: Rect, state: &AppState, column: u16, row: u16) -> bool {
+    if state.prompt_collapsed || state.right_tab != RightTab::Prompt {
+        return false;
+    }
+    let panel_state = &state.prompt_owner().prompt_panel;
+    if !panel_state.recent_open {
+        return false;
+    }
+    let rows = recent_rows(state);
+    let split = crate::layout::prompt_body_split(panel, true, rows.len());
+    let Some(divider) = split.recent_divider else {
+        return false;
+    };
+    let inner = crate::layout::pane_inner_rect(panel);
+    divider.x <= column && column < inner.right() && divider.y <= row && row < inner.bottom()
+}
+
+/// 命中最近页面抽屉右上角关闭按钮。
+pub fn prompt_recent_close_at(panel: Rect, state: &AppState, column: u16, row: u16) -> bool {
+    prompt_recent_close_rect(panel, state).is_some_and(|area| area.contains((column, row).into()))
+}
+
+/// 最近页面抽屉右上角关闭按钮矩形；抽屉收起、空间不足或宽度不够时为 None。
+pub fn prompt_recent_close_rect(panel: Rect, state: &AppState) -> Option<Rect> {
+    if state.prompt_collapsed || state.right_tab != RightTab::Prompt {
+        return None;
+    }
+    let panel_state = &state.prompt_owner().prompt_panel;
+    if !panel_state.recent_open {
+        return None;
+    }
+    let rows = recent_rows(state);
+    let split = crate::layout::prompt_body_split(panel, true, rows.len());
+    prompt::recent::close_rect(split.recent_divider?)
+}
+
+/// 命中最近页面抽屉条目（返回条目下标）；抽屉未展开、空态或不在内容区时为 None。
+pub fn prompt_recent_row_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<usize> {
+    if state.prompt_collapsed || state.right_tab != RightTab::Prompt {
+        return None;
+    }
+    let panel_state = &state.prompt_owner().prompt_panel;
+    if !panel_state.recent_open {
+        return None;
+    }
+    let rows = recent_rows(state);
+    let split = crate::layout::prompt_body_split(panel, true, rows.len());
+    let area = split.recent_text?;
+    if !area.contains((column, row).into()) {
+        return None;
+    }
+    let visible = split.visible_entries.max(1);
+    let start = panel_state
+        .recent_scroll
+        .min(rows.len().saturating_sub(visible));
+    let index = start + usize::from(row - area.y) / 2;
+    (index < rows.len() && split.visible_entries > 0).then_some(index)
+}
+
+/// 最近页面抽屉独立滚动条几何（渲染与鼠标命中共用）。
+pub fn prompt_recent_scrollbar(
+    panel: Rect,
+    state: &AppState,
+) -> Option<widgets::scrollbar::ScrollbarLayout> {
+    if state.prompt_collapsed || state.right_tab != RightTab::Prompt {
+        return None;
+    }
+    let panel_state = &state.prompt_owner().prompt_panel;
+    if !panel_state.recent_open {
+        return None;
+    }
+    let rows = recent_rows(state);
+    let split = crate::layout::prompt_body_split(panel, true, rows.len());
+    if split.visible_entries == 0 || rows.len() <= split.visible_entries {
+        return None;
+    }
+    widgets::scrollbar::layout(
+        split.recent_scrollbar?,
+        rows.len(),
+        split.visible_entries,
+        panel_state.recent_scroll,
+    )
 }
 
 /// prompt 滚动条几何：文本溢出内容区时可见；渲染与鼠标命中共用。
@@ -280,27 +454,45 @@ pub fn prompt_scrollbar(
     if state.right_tab != RightTab::Prompt {
         return None;
     }
-    prompt_scrollbar_for(view.prompt, state)
+    let split = crate::layout::prompt_body_split(
+        view.prompt,
+        state.prompt_owner().prompt_panel.recent_open,
+        recent_rows(state).len(),
+    );
+    prompt_scrollbar_for(state, split.main_scrollbar)
 }
 
 fn prompt_scrollbar_for(
-    panel: Rect,
     state: &AppState,
+    gutter: Option<Rect>,
 ) -> Option<widgets::scrollbar::ScrollbarLayout> {
     let owner = state.prompt_owner();
-    let (gutter, total, offset) = match owner.prompt_panel.mode {
-        PromptMode::Tree => (
-            crate::layout::prompt_tree_scrollbar_rect(panel)?,
-            owner.prompt_panel.rows().len(),
-            owner.prompt_panel.scroll,
-        ),
+    let gutter = match owner.prompt_panel.mode {
+        // 树/页列表的搜索框与分割线固定不滚动：滚动条从主视图第 3 行开始。
+        PromptMode::Tree | PromptMode::Pages => {
+            let gutter = gutter?;
+            Rect {
+                y: gutter
+                    .y
+                    .saturating_add(crate::layout::PROMPT_TREE_HEADER_HEIGHT),
+                height: gutter
+                    .height
+                    .saturating_sub(crate::layout::PROMPT_TREE_HEADER_HEIGHT),
+                ..gutter
+            }
+        }
+        PromptMode::Editor => gutter?,
+    };
+    if gutter.height == 0 {
+        return None;
+    }
+    let (total, offset) = match owner.prompt_panel.mode {
+        PromptMode::Tree => (owner.prompt_panel.rows().len(), owner.prompt_panel.scroll),
         PromptMode::Pages => (
-            crate::layout::prompt_tree_scrollbar_rect(panel)?,
             prompt::pages::panel_page_rows(&owner.prompt_panel).len(),
             owner.prompt_panel.pages_view.scroll,
         ),
         PromptMode::Editor => (
-            crate::layout::prompt_scrollbar_rect(panel)?,
             state.prompt.visual_rows().len() + state.prompt.bottom_padding(),
             state.prompt.scroll(),
         ),

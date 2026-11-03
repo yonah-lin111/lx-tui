@@ -223,6 +223,8 @@ pub struct PromptPageRecord {
     pub position: i64,
     pub name: String,
     pub content: String,
+    /// 最后修改时间（UTC Unix 秒数）。
+    pub updated_at: i64,
 }
 
 /// 引用文件夹记录：项目级共享的磁盘目录引用；删除只移除记录、不动磁盘内容。
@@ -418,7 +420,8 @@ impl Database {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let mut pages_statement = self.conn.prepare(
-            r#"SELECT pg.prompt_id, pg.id, pg.position, pg.name, pg.content
+            r#"SELECT pg.prompt_id, pg.id, pg.position, pg.name, pg.content,
+                      COALESCE(CAST(strftime('%s', pg.updated_at) AS INTEGER), 0)
                FROM workspace_prompt_page pg
                JOIN workspace_prompt p ON p.id = pg.prompt_id
                WHERE p.workspace_id = ?1
@@ -434,6 +437,7 @@ impl Database {
                     position: row.get(2)?,
                     name: row.get(3)?,
                     content: row.get(4)?,
+                    updated_at: row.get(5)?,
                 },
             ))
         })?;

@@ -10,8 +10,6 @@ use crate::app::update;
 use crate::layout::{self, BoundaryHit, PaneId};
 use crate::ui;
 
-use super::super::paste;
-
 /// 工作区滚动条按下：thumb 开始拖拽，轨道点击跳转；返回是否命中。
 pub(crate) fn handle_workspace_scrollbar_press(
     state: &mut AppState,
@@ -63,6 +61,29 @@ pub(crate) fn handle_prompt_scrollbar_press(
             } else {
                 update::set_prompt_scroll(state, offset);
             }
+        }
+    }
+    true
+}
+
+/// 最近页面抽屉滚动条按下：thumb 开始拖拽，轨道点击跳转；返回是否命中。
+pub(crate) fn handle_prompt_recent_scrollbar_press(
+    state: &mut AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some(bar) = ui::prompt_frame::prompt_recent_scrollbar(view.prompt, state) else {
+        return false;
+    };
+    if !bar.track.contains((column, row).into()) {
+        return false;
+    }
+    match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+        Some(grab) => state.prompt_recent_scroll_drag = Some(grab),
+        None => {
+            let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+            update::set_prompt_recent_scroll(state, offset, bar.visible, bar.total);
         }
     }
     true
@@ -207,7 +228,7 @@ pub(crate) fn mention_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = paste::prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::mention_item_at(&state.prompt, area, column, row)
 }
 
@@ -218,7 +239,7 @@ pub(crate) fn mention_tab_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = paste::prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::mention_tab_at(&state.prompt, area, column, row)
 }
 
@@ -227,13 +248,13 @@ pub(crate) fn mention_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = paste::prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::mention_layout(&state.prompt, area)
 }
 
 /// 粘贴面板矩形；用于滚轮防穿透拦截。
 pub(crate) fn paste_panel_rect(state: &AppState, view: &ui::layout::ViewLayout) -> Option<Rect> {
-    let area = paste::prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::paste_panel_rect(&state.prompt, area)
 }
 
@@ -242,7 +263,7 @@ pub(crate) fn refer_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = paste::prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::refer_layout(&state.prompt, area)
 }
 
@@ -325,7 +346,7 @@ pub(crate) fn panel_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = paste::prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::panel_item_at(&state.prompt, area, column, row)
 }
 
@@ -334,7 +355,7 @@ pub(crate) fn block_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = paste::prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::panel_layout(&state.prompt, area)
 }
 
@@ -345,7 +366,7 @@ pub(crate) fn slash_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = paste::prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::slash_item_at(&state.prompt, area, column, row)
 }
 
@@ -354,7 +375,7 @@ pub(crate) fn slash_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = paste::prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::slash_layout(&state.prompt, area)
 }
 
@@ -371,7 +392,7 @@ pub(crate) fn prompt_command_panel_contains(
     {
         return false;
     }
-    let area = paste::prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::command_panel_contains(&state.prompt, area, column, row)
 }
 
@@ -388,7 +409,7 @@ pub(crate) fn template_button_at(
     {
         return None;
     }
-    let area = paste::prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::template_button_at(&state.prompt, area, column, row)
 }
 
@@ -425,7 +446,7 @@ pub(crate) fn block_button_at(
     {
         return None;
     }
-    let area = paste::prompt_text_area(view);
+    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
     ui::prompt::block_button_at(&state.prompt, area, column, row)
 }
 
@@ -537,7 +558,9 @@ pub(crate) fn pane_content_inner(
         if !update::prompt_panel_active(state) {
             return Rect::ZERO;
         }
-        paste::prompt_text_area(view)
+        let panel = &state.prompt_owner().prompt_panel;
+        let recent_count = crate::app::prompt::recent_page_count(panel);
+        crate::layout::prompt_body_split(view.prompt, panel.recent_open, recent_count).main
     } else {
         inner
     }

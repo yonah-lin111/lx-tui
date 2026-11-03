@@ -21,11 +21,12 @@ use super::super::session::{Geometry, ensure_workspace_visible, reveal_active_ta
 use super::hit::{
     apply_block_button, apply_template_button, block_button_at, dismiss_lx_toast_outside,
     handle_agent_scrollbar_press, handle_lx_history_scrollbar_press,
-    handle_lx_input_scrollbar_press, handle_prompt_scrollbar_press,
-    handle_task_agents_scrollbar_press, handle_terminal_scrollbar_press,
-    handle_todo_scrollbar_press, handle_workspace_scrollbar_press, lx_toast_at, mention_item_at,
-    mention_tab_at, pane_at, pane_boundary_draggable, pane_content_inner, pane_toggle_button_at,
-    panel_item_at, prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
+    handle_lx_input_scrollbar_press, handle_prompt_recent_scrollbar_press,
+    handle_prompt_scrollbar_press, handle_task_agents_scrollbar_press,
+    handle_terminal_scrollbar_press, handle_todo_scrollbar_press, handle_workspace_scrollbar_press,
+    lx_toast_at, mention_item_at, mention_tab_at, pane_at, pane_boundary_draggable,
+    pane_content_inner, pane_toggle_button_at, panel_item_at, prompt_boundary_hit,
+    prompt_header_at, slash_item_at, template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -214,6 +215,7 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
     } else if handle_workspace_scrollbar_press(state, view, mouse.column, mouse.row)
         || handle_prompt_scrollbar_press(state, view, mouse.column, mouse.row)
+        || handle_prompt_recent_scrollbar_press(state, view, mouse.column, mouse.row)
         || handle_todo_scrollbar_press(state, view, mouse.column, mouse.row)
         || handle_agent_scrollbar_press(state, view, mouse.column, mouse.row)
     {
@@ -354,6 +356,20 @@ pub(crate) fn handle_mouse_down_left(
         && view.prompt.contains((mouse.column, mouse.row).into())
     {
         // 折叠态容器：一律吞掉，不聚焦、不穿透到窗格。
+    } else if ui::prompt_frame::prompt_recent_close_at(view.prompt, state, mouse.column, mouse.row)
+    {
+        // 抽屉右上角关闭按钮：优先于上方编辑器控件，收起抽屉并交还键盘焦点。
+        update::close_prompt_recent(state);
+        *dirty = true;
+    } else if let Some(index) =
+        ui::prompt_frame::prompt_recent_row_at(view.prompt, state, mouse.column, mouse.row)
+    {
+        // 最近页面抽屉条目：单击直接打开对应条目 + 页，抽屉保持展开。
+        update::open_recent_page(state, index);
+        *dirty = true;
+    } else if ui::prompt_frame::prompt_recent_contains(view.prompt, state, mouse.column, mouse.row)
+    {
+        // 抽屉分割线/空态/滚动条槽：吞掉点击，绝不穿透到被遮住的正文或块按钮。
     } else if let Some(index) = paste::paste_item_at(state, view, mouse.column, mouse.row) {
         update::select_paste(state, index);
         *dirty = true;
@@ -390,6 +406,7 @@ pub(crate) fn handle_mouse_down_left(
             mouse.column,
             mouse.row,
             state.prompt_owner().prompt_panel.mode,
+            prompt_counter(state).as_deref(),
         )
     {
         // 工具栏按钮是控件：执行动作，不抢焦点、不移动文本光标。
@@ -398,6 +415,14 @@ pub(crate) fn handle_mouse_down_left(
         match button {
             layout::PromptToolbarButton::Mode => {
                 update::toggle_prompt_panel_mode(state);
+            }
+            layout::PromptToolbarButton::Recent => {
+                update::toggle_prompt_recent(state);
+                if update::prompt_recent_open(state)
+                    && !ui::prompt_frame::prompt_recent_visible(view.prompt, state)
+                {
+                    update::close_prompt_recent(state);
+                }
             }
             layout::PromptToolbarButton::TempPrompt => {
                 update::open_temp_prompt(state);
@@ -425,7 +450,7 @@ pub(crate) fn handle_mouse_down_left(
         .then(|| ui::prompt_page_control_at(view.prompt, state, mouse.column, mouse.row))
         .flatten()
     {
-        // 顶边框页控件是控件：不移动正文光标；命中后仍把焦点交给编辑器。
+        // 工具栏页控件是控件：不移动正文光标；命中后仍把焦点交给编辑器。
         update::focus_prompt(state);
         match control {
             ui::prompt::PageControl::Prev => {
@@ -902,6 +927,12 @@ pub(crate) fn handle_mouse_down_left(
     } else {
         update::clear_selection(state);
     }
+}
+
+/// 当前页计数字符串（`n/m`）；无页信息时为 None。
+fn prompt_counter(state: &AppState) -> Option<String> {
+    ui::prompt_frame::prompt_page_header(state)
+        .map(|page| ui::text::page_counter(page.current, page.total))
 }
 
 /// 鼠标右键按下事件处理。

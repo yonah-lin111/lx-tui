@@ -32,6 +32,16 @@ pub fn apply_pasted_text(state: &mut AppState, text: String) {
 /// prompt 存在选区时：输入类命令用新内容替换选区，Backspace/Delete 删除选区，
 /// 其余命令先清除选区再执行（选区删除/替换作为一步撤销）。
 pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
+    if command == EditorCommand::ToggleRecentPages {
+        state.prompt.clear_panel();
+        crate::app::update::toggle_prompt_recent(state);
+        return;
+    }
+    // 抽屉展开时键盘归 recent（事件层负责导航与打开）；这里兜底吞掉，
+    // 防止直接调用编辑命令时改到被抽屉遮住的上方视图。
+    if crate::app::update::prompt_recent_open(state) {
+        return;
+    }
     match command {
         EditorCommand::TogglePromptList => {
             state.prompt.clear_panel();
@@ -125,8 +135,10 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         }
         EditorCommand::Undo => state.prompt.undo(),
         EditorCommand::Redo => state.prompt.redo(),
-        EditorCommand::Escape | EditorCommand::TogglePromptList | EditorCommand::TogglePageList => {
-        }
+        EditorCommand::Escape
+        | EditorCommand::TogglePromptList
+        | EditorCommand::TogglePageList
+        | EditorCommand::ToggleRecentPages => {}
     }
 }
 

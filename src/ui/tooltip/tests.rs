@@ -138,6 +138,7 @@ fn hits_prompt_toolbar_and_pin_but_not_when_collapsed() {
         view.prompt,
         layout::PromptToolbarButton::Undo,
         PromptMode::Editor,
+        Some("1/2"),
     )
     .expect("undo button visible");
     assert_eq!(
@@ -388,19 +389,52 @@ fn hits_template_block_buttons_via_prompt_text_area() {
 }
 
 #[test]
-fn hits_title_row_template_status_label() {
+fn hits_title_row_page_title_and_page_controls_for_tooltips() {
     let mut state = AppState::demo();
     state.prompt_width = 56;
     state
         .prompt
-        .set_text("&&& addTemplate --start\nbody\n&&& addTemplate --end");
+        .set_text("&&& addTemplate --start\n{title: MyPage}\n&&& addTemplate --end");
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
-    let rect = ui::prompt_frame::prompt_status_rect(view.prompt, &state).expect("status label");
+    let rect = ui::prompt_frame::prompt_status_rect(view.prompt, &state).expect("page title rect");
     assert_eq!(
         target_at(&view, &state, &rects, SCREEN, rect.x, rect.y),
         Some(TooltipTarget::PromptTemplateStatus)
     );
+
+    let bar = layout::prompt_toolbar_rect(view.prompt).expect("toolbar");
+    let controls = layout::toolbar_page_controls(bar, "1/1", true).expect("page controls");
+    for (control_rect, expected, hint) in [
+        (
+            controls.prev,
+            TooltipTarget::PromptPagePrev,
+            "previous page (^←)",
+        ),
+        (
+            controls.counter,
+            TooltipTarget::PromptPageCounter,
+            "open page list (^p)",
+        ),
+        (
+            controls.next,
+            TooltipTarget::PromptPageNext,
+            "next page (^→)",
+        ),
+    ] {
+        assert_eq!(
+            target_at(
+                &view,
+                &state,
+                &rects,
+                SCREEN,
+                control_rect.x,
+                control_rect.y
+            ),
+            Some(expected)
+        );
+        assert_eq!(text::tooltip_hint(expected, &state), hint);
+    }
 }
 
 #[test]

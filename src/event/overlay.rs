@@ -13,7 +13,6 @@ use crate::layout::{self, PaneId};
 use crate::ui;
 
 use super::mouse::hit::pane_at;
-use super::paste;
 
 /// 浮层左键点击：菜单项与按钮执行命令，其余位置取消。
 ///
@@ -475,9 +474,13 @@ pub(crate) fn open_right_click_menu(
         update::open_workspace_list_menu(state, (column, row));
         return true;
     }
+    // 底部 recent 抽屉区域：右键一律吞掉，不穿透打开上方树/页列表/编辑器菜单。
+    if ui::prompt_frame::prompt_recent_contains(view.prompt, state, column, row) {
+        return false;
+    }
     // 提示词树：行上打开节点菜单，空白区域打开新建菜单；分区标签行不响应。
     if update::prompt_panel_active(state) && update::prompt_tree_mode(state) {
-        let area = paste::prompt_text_area(view);
+        let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
         if area.contains((column, row).into()) {
             let hit = {
                 let panel = &state.prompt_owner().prompt_panel;
@@ -526,7 +529,7 @@ pub(crate) fn open_right_click_menu(
     }
     // 页列表视图：行上打开页菜单，空白区域打开新建页菜单。
     if update::prompt_panel_active(state) && update::prompt_pages_mode(state) {
-        let area = paste::prompt_text_area(view);
+        let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
         if area.contains((column, row).into()) {
             match ui::prompt::pages::page_row_at(
                 area,
@@ -551,8 +554,10 @@ pub(crate) fn open_right_click_menu(
         if super::mouse::hit::prompt_command_panel_contains(state, view, column, row) {
             return false;
         }
-        // 命中区域含滚动条列；候选面板只关面板，待确认的粘贴提案必须保留。
-        let area = layout::prompt_body_rect(layout::pane_inner_rect(view.prompt));
+        // 命中区域含主滚动条列（不含底部 recent 抽屉）；候选面板只关面板，待确认的粘贴提案必须保留。
+        let main = ui::prompt_frame::prompt_main_rect(view.prompt, state);
+        let inner = layout::pane_inner_rect(view.prompt);
+        let area = ratatui::layout::Rect::new(inner.x, main.y, inner.width, main.height);
         if area.contains((column, row).into()) {
             update::focus_prompt(state);
             state.prompt.dismiss_completion_panels();

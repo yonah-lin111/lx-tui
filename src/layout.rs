@@ -5,8 +5,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use ratatui::layout::{Direction, Rect};
 
 mod prompt;
-#[cfg(test)]
-use prompt::PROMPT_FOLDERS_MIN_WIDTH_EDITOR;
 pub use prompt::*;
 
 /// 折叠窄条宽度：3 个内容列 + 1 列贴主区的分隔线。

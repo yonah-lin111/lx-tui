@@ -28,21 +28,34 @@ impl PromptPageId {
     }
 }
 
-/// 提示词页：稳定 id、名称与正文。
+/// 提示词页：稳定 id、名称、正文与最后修改时间（Unix 秒）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptPage {
     pub id: PromptPageId,
     pub name: String,
     pub content: String,
+    /// 最后修改时间（UTC Unix 秒）；未从数据库读取或临时页为 0。
+    pub updated_at: i64,
 }
 
 impl PromptPage {
     /// 正式页（id 来自数据库）。
     pub fn saved(id: i64, name: impl Into<String>, content: impl Into<String>) -> Self {
+        Self::saved_at(id, name, content, 0)
+    }
+
+    /// 正式页（带数据库最后修改时间）。
+    pub fn saved_at(
+        id: i64,
+        name: impl Into<String>,
+        content: impl Into<String>,
+        updated_at: i64,
+    ) -> Self {
         Self {
             id: PromptPageId::Saved(id),
             name: name.into(),
             content: content.into(),
+            updated_at,
         }
     }
 
@@ -52,7 +65,13 @@ impl PromptPage {
             id: PromptPageId::Temp(id),
             name: name.into(),
             content: content.into(),
+            updated_at: 0,
         }
+    }
+
+    /// 标记正文已修改（写入当前 Unix 秒数）。
+    pub fn touch(&mut self, updated_at: i64) {
+        self.updated_at = updated_at;
     }
 }
 
@@ -486,14 +505,15 @@ impl From<PromptRecord> for PromptItem {
         let mut pages: Vec<PromptPage> = record
             .pages
             .into_iter()
-            .map(|page| PromptPage::saved(page.id, page.name, page.content))
+            .map(|page| PromptPage::saved_at(page.id, page.name, page.content, page.updated_at))
             .collect();
         // 迁移后恒有页；直插旧数据兜底为第一页镜像（id 0 不会命中保存）。
         if pages.is_empty() {
-            pages.push(PromptPage::saved(
+            pages.push(PromptPage::saved_at(
                 0,
                 text::default_page_name(1),
                 record.content,
+                0,
             ));
         }
         let active_page = record
@@ -513,7 +533,7 @@ impl From<PromptRecord> for PromptItem {
 
 impl From<PromptPageRecord> for PromptPage {
     fn from(record: PromptPageRecord) -> Self {
-        Self::saved(record.id, record.name, record.content)
+        Self::saved_at(record.id, record.name, record.content, record.updated_at)
     }
 }
 

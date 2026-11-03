@@ -232,6 +232,12 @@ pub struct AppState {
     pub tab_hover: Option<usize>,
     /// 鼠标悬停的提示词列表行索引（树视图可见行）；None 表示未悬停。
     pub prompt_tree_hover: Option<usize>,
+    /// 鼠标悬停的最近修改页面抽屉条目索引；None 表示未悬停。
+    pub prompt_recent_hover: Option<usize>,
+    /// 拖拽最近修改页面抽屉滚动条 thumb 时相对顶部的抓取偏移。
+    pub prompt_recent_scroll_drag: Option<u16>,
+    /// prompt 视图几何需要按抽屉高度重算（切换抽屉/页数量变化时置位）。
+    pub prompt_resize_pending: bool,
     /// 正在拖动的提示词列表行；None 表示未拖拽。仅一次 Down→Up 内有效。
     pub prompt_drag: Option<PromptDrag>,
     /// 鼠标是否停留在当前右键菜单/页码菜单容器内；离开容器清除选中高亮反馈。
@@ -411,6 +417,9 @@ impl AppState {
             tab_scroll: 0,
             tab_hover: None,
             prompt_tree_hover: None,
+            prompt_recent_hover: None,
+            prompt_recent_scroll_drag: None,
+            prompt_resize_pending: false,
             prompt_drag: None,
             menu_hover: false,
             workspace_scroll: 0,

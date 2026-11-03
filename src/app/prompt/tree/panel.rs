@@ -83,6 +83,12 @@ pub struct PromptPanel {
     pub search: TextInput,
     /// 页列表视图专用状态（选中行、滚动与搜索过滤）。
     pub pages_view: PageListView,
+    /// 最近修改页面抽屉是否展开。
+    pub recent_open: bool,
+    /// 抽屉滚动偏移（以条目为单位，每条占 2 行）。
+    pub recent_scroll: usize,
+    /// 抽屉键盘选中项下标；抽屉收起时为 None。
+    pub recent_active: Option<usize>,
     /// 已更新内存但数据库尚未确认的页（条目 id、页 id）。
     pending_saves: Vec<(i64, i64)>,
     /// 离开编辑视图时的编辑状态暂存（切到列表时写入）；返回同一目标时恢复。
@@ -112,6 +118,9 @@ impl PromptPanel {
             tree_selection_touched: false,
             search: TextInput::new(""),
             pages_view: PageListView::default(),
+            recent_open: false,
+            recent_scroll: 0,
+            recent_active: None,
             pending_saves: Vec::new(),
             editor_stash: None,
         }

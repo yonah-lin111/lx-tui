@@ -7,12 +7,14 @@ mod draft;
 mod drag;
 mod pages;
 mod pages_view;
+mod recent;
 mod tree_view;
 
 pub use draft::*;
 pub use drag::*;
 pub use pages::*;
 pub use pages_view::*;
+pub use recent::*;
 pub use tree_view::*;
 
 use std::path::Path;
@@ -183,6 +185,12 @@ pub fn apply_prompt_tree(
             });
         }
     }
+    if displayed {
+        // 页数量可能变化：抽屉高度、选中下标与编辑器视口需要按新行集重算。
+        let target = recent::current_recent_target(state);
+        recent::sync_prompt_recent_selection(state, target);
+        state.prompt_resize_pending = true;
+    }
     true
 }
 
@@ -208,6 +216,7 @@ pub fn show_prompt_tree(state: &mut AppState) {
     state.prompt.clear_panel();
     state.selection = None;
     state.prompt_tree_hover = None;
+    state.prompt_recent_hover = None;
     select_tree_entry_row(state, index);
 }
 
@@ -259,6 +268,7 @@ pub fn toggle_prompt_panel_mode(state: &mut AppState) {
     state.prompt_drag = None;
     state.prompt_search_drag = false;
     state.prompt_tree_hover = None;
+    state.prompt_recent_hover = None;
     if prompt_tree_mode(state) {
         restore_or_edit_selected(state);
     } else if prompt_pages_mode(state) {
@@ -315,6 +325,7 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
     let content = state.prompt.text().to_string();
     let prompt = state.prompt.id();
     let revision = state.prompt.revision();
+    let now = crate::platform::current_unix_secs();
     match target {
         PromptEditing::Temp(id) => {
             let Some(temp) = state
@@ -349,6 +360,9 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
                 .workspaces
                 .get(workspace)
                 .is_some_and(|workspace| workspace.prompt_panel.page_pending(id, page_id));
+            let recent_target = (workspace == state.prompt_workspace())
+                .then(|| recent::current_recent_target(state))
+                .flatten();
             {
                 let Some(page) = state
                     .workspaces
@@ -364,6 +378,10 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
                     return;
                 }
                 page.content.clone_from(&content);
+                page.touch(now);
+            }
+            if workspace == state.prompt_workspace() {
+                recent::sync_prompt_recent_selection(state, recent_target);
             }
             if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
                 workspace_state.prompt_panel.mark_page_pending(id, page_id);
@@ -849,6 +867,9 @@ pub fn delete_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) 
         return;
     };
     let visible = prompt_tree_visible_rows(state);
+    let recent_target = (workspace == state.prompt_workspace())
+        .then(|| recent::current_recent_target(state))
+        .flatten();
     let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
         return;
     };
@@ -863,6 +884,8 @@ pub fn delete_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) 
     workspace_state.prompt_panel.clamp_selection(visible);
     if workspace == state.prompt_workspace() {
         state.prompt.clear_panel();
+        recent::sync_prompt_recent_selection(state, recent_target);
+        state.prompt_resize_pending = true;
     }
     state.effects.push(Effect::DeletePrompt {
         workspace: cwd,
@@ -876,6 +899,9 @@ pub fn delete_prompt_folder(state: &mut AppState, workspace: usize, folder_id: i
         return;
     };
     let visible = prompt_tree_visible_rows(state);
+    let recent_target = (workspace == state.prompt_workspace())
+        .then(|| recent::current_recent_target(state))
+        .flatten();
     let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
         return;
     };
@@ -915,6 +941,8 @@ pub fn delete_prompt_folder(state: &mut AppState, workspace: usize, folder_id: i
     workspace_state.prompt_panel.clamp_selection(visible);
     if workspace == state.prompt_workspace() {
         state.prompt.clear_panel();
+        recent::sync_prompt_recent_selection(state, recent_target);
+        state.prompt_resize_pending = true;
     }
     state.effects.push(Effect::DeleteFolder {
         workspace: cwd,

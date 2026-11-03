@@ -44,6 +44,14 @@ pub enum TooltipTarget {
     SwapPromptSide,
     PromptMode,
     PromptTempPrompt,
+    /// `[rec]`：开关最近修改页面抽屉。
+    PromptRecent,
+    /// 最近修改页面抽屉右上角 `[x]` 关闭按钮。
+    PromptRecentClose,
+    /// 工具栏页控件：上一页 `‹`、页码 `n/m`（开关页列表）、下一页 `›`。
+    PromptPagePrev,
+    PromptPageCounter,
+    PromptPageNext,
     /// 编辑视图工具栏的引用文件夹按钮。
     PromptFolders,
     PromptUndo,
@@ -56,7 +64,7 @@ pub enum TooltipTarget {
     ReferencedSearchCopyPath,
     /// 右侧容器 Todo 面板的工具栏按钮。
     TodoButton(TodoButton),
-    /// prompt 标题行页控件左侧的模板块状态标签（点击循环状态）。
+    /// prompt 标题行的页名（本页有已闭合 `&&&` 时点击循环状态）。
     PromptTemplateStatus,
     /// prompt 文本区内的模板块按钮；`line` 为块起始逻辑行。
     TemplateButton {

@@ -169,10 +169,11 @@ fn mouse_click_prompt_toolbar_ignored_on_todo_tab() {
         geo.view.prompt,
         layout::PromptToolbarButton::Mode,
         PromptMode::Editor,
+        None,
     )
     .expect("mode button visible");
     assert_eq!(
-        layout::prompt_toolbar_button_at(geo.view.prompt, mode.x, mode.y, PromptMode::Editor),
+        layout::prompt_toolbar_button_at(geo.view.prompt, mode.x, mode.y, PromptMode::Editor, None),
         Some(layout::PromptToolbarButton::Mode),
         "前提：该坐标确实命中工具栏按钮"
     );

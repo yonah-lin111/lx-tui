@@ -455,8 +455,9 @@ async fn run_loop(
         {
             dirty = true;
         }
-        if geometry.rects != last_rects {
+        if geometry.rects != last_rects || state.prompt_resize_pending {
             update::resize_panes(state, &geometry.rects);
+            state.prompt_resize_pending = false;
             // 窗格集合变化：清掉已关闭窗格的历史缓存，避免泄漏。
             let alive: Vec<PaneId> = geometry.rects.iter().map(|(id, _)| *id).collect();
             ui_cache.retain_panes(&alive);

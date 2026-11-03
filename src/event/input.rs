@@ -53,6 +53,23 @@ pub(crate) fn handle_key_event(
     let Some(routed) = input::route(key, mode, state.focus(), overlay, pane_lx) else {
         return;
     };
+    if update::prompt_recent_open(state)
+        && view.prompt.height > 0
+        && !ui::prompt_frame::prompt_recent_visible(view.prompt, state)
+    {
+        // 面板过矮无法展示 recent 抽屉时自动收起，避免不可见抽屉吞掉键盘输入。
+        update::close_prompt_recent(state);
+    }
+    // recent 抽屉展开时，prompt 的保存/复制/剪切快捷键同样由抽屉吞掉，
+    // 避免“键盘已归抽屉”却仍改到后方编辑器或写系统剪贴板。
+    if ui::prompt_frame::prompt_recent_visible(view.prompt, state)
+        && matches!(
+            &routed,
+            Routed::SavePrompt | Routed::Copy | Routed::Cut | Routed::CopyTemplateBlock
+        )
+    {
+        return;
+    }
 
     match routed {
         Routed::Action(action) => {
@@ -60,7 +77,21 @@ pub(crate) fn handle_key_event(
             *dirty = true;
         }
         Routed::Editor(command) => {
+            if ui::prompt_frame::prompt_recent_visible(view.prompt, state) {
+                // 抽屉展开时键盘归 recent：↑/↓ 选择、Enter 打开、Esc/Ctrl+R 收起，
+                // 其余键由 update 层的兜底吞掉，不改上方视图。
+                if update::apply_prompt_recent_key(state, &command, view.prompt) {
+                    *dirty = true;
+                }
+                return;
+            }
             update::apply_editor(state, command);
+            if update::prompt_recent_open(state)
+                && view.prompt.height > 0
+                && !ui::prompt_frame::prompt_recent_visible(view.prompt, state)
+            {
+                update::close_prompt_recent(state);
+            }
             *dirty = true;
         }
         Routed::Overlay(key) => {
@@ -232,6 +263,10 @@ pub(crate) fn handle_paste_event(
         return;
     }
     if state.prompt_focused() {
+        if update::prompt_recent_open(state) {
+            // 键盘/粘贴都归 recent：抽屉展开时不改动后方编辑器。
+            return;
+        }
         paste::handle_terminal_paste(state, text);
         *dirty = true;
         return;

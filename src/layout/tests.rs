@@ -368,13 +368,21 @@ fn prompt_header_hidden_when_body_too_short() {
 fn prompt_toolbar_buttons_hit_expected_cells() {
     let panel = Rect::new(0, 0, 40, 8);
     let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
-    let hit =
-        |column: u16, row: u16| prompt_toolbar_button_at(panel, column, row, PromptMode::Editor);
+    let counter = Some("1/2");
+    let hit = |column: u16, row: u16| {
+        prompt_toolbar_button_at(panel, column, row, PromptMode::Editor, counter)
+    };
     assert_eq!(hit(bar.x, bar.y), Some(PromptToolbarButton::Mode));
-    assert_eq!(hit(bar.x + 4, bar.y), Some(PromptToolbarButton::Undo));
-    assert_eq!(hit(bar.x + 8, bar.y), Some(PromptToolbarButton::Redo));
-    let save = prompt_toolbar_button_rect(panel, PromptToolbarButton::Save, PromptMode::Editor)
-        .expect("save visible");
+    assert_eq!(hit(bar.x + 4, bar.y), Some(PromptToolbarButton::Recent));
+    assert_eq!(hit(bar.x + 10, bar.y), Some(PromptToolbarButton::Undo));
+    assert_eq!(hit(bar.x + 14, bar.y), Some(PromptToolbarButton::Redo));
+    let save = prompt_toolbar_button_rect(
+        panel,
+        PromptToolbarButton::Save,
+        PromptMode::Editor,
+        counter,
+    )
+    .expect("save visible");
     assert_eq!(hit(save.x, bar.y), Some(PromptToolbarButton::Save));
     assert_eq!(hit(bar.x + 3, bar.y), None, "按钮空档不命中");
     assert_eq!(
@@ -382,6 +390,15 @@ fn prompt_toolbar_buttons_hit_expected_cells() {
         None,
         "分割线行不命中按钮"
     );
+
+    // 页控件位于保存点左侧：`[refDir] ‹ 1/2 › ●`。
+    let controls = toolbar_page_controls(bar, "1/2", true).expect("page controls visible");
+    assert_eq!(
+        prompt_toolbar_button_at(panel, controls.prev.x, bar.y, PromptMode::Editor, counter),
+        None,
+        "页控件不是工具栏按钮"
+    );
+    assert_eq!(controls.next.x + 2, save.x, "计数与保存点间隔 1 列");
 }
 
 #[test]
@@ -438,68 +455,123 @@ fn remove_pane_clears_collapse_when_collapsed_pane_removed() {
 }
 
 #[test]
-fn prompt_toolbar_tree_mode_shows_temp_prompt_only() {
+fn prompt_toolbar_tree_mode_shows_recent_and_temp_prompt_only() {
     let panel = Rect::new(0, 0, 40, 8);
     let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
-    let mode = prompt_toolbar_button_rect(panel, PromptToolbarButton::Mode, PromptMode::Tree)
+    let mode = prompt_toolbar_button_rect(panel, PromptToolbarButton::Mode, PromptMode::Tree, None)
         .expect("mode visible in tree");
     assert_eq!(mode.x, bar.x);
-    let temp = prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, PromptMode::Tree)
-        .expect("temp prompt visible in tree");
+    let recent =
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::Recent, PromptMode::Tree, None)
+            .expect("recent visible in tree");
+    assert_eq!(recent.x, bar.x + 4);
+    assert_eq!(recent.width, 5, "[rec] 按钮宽度");
+    let temp = prompt_toolbar_button_rect(
+        panel,
+        PromptToolbarButton::TempPrompt,
+        PromptMode::Tree,
+        None,
+    )
+    .expect("temp prompt visible in tree");
     assert_eq!(temp.right(), bar.right() - 1, "右对齐、与边框留 1 列");
     assert_eq!(temp.width, 5, "[tmp] 按钮宽度");
     assert_eq!(
-        prompt_toolbar_button_at(panel, temp.x, bar.y, PromptMode::Tree),
+        prompt_toolbar_button_at(panel, temp.x, bar.y, PromptMode::Tree, None),
         Some(PromptToolbarButton::TempPrompt)
     );
     assert_eq!(
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::Undo, PromptMode::Tree),
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::Undo, PromptMode::Tree, None),
         None
     );
     assert_eq!(
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, PromptMode::Editor),
+        prompt_toolbar_button_rect(
+            panel,
+            PromptToolbarButton::TempPrompt,
+            PromptMode::Editor,
+            None
+        ),
         None
     );
 }
 
 #[test]
-fn prompt_toolbar_folders_sits_left_of_save_in_editor_only() {
+fn prompt_toolbar_folders_sits_left_of_page_controls_in_editor_only() {
     let panel = Rect::new(0, 0, 40, 8);
     let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
-    let folders =
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::Folders, PromptMode::Editor)
-            .expect("folders visible");
-    let save = prompt_toolbar_button_rect(panel, PromptToolbarButton::Save, PromptMode::Editor)
-        .expect("save visible");
+    let counter = Some("1/2");
+    let folders = prompt_toolbar_button_rect(
+        panel,
+        PromptToolbarButton::Folders,
+        PromptMode::Editor,
+        counter,
+    )
+    .expect("folders visible");
+    let save = prompt_toolbar_button_rect(
+        panel,
+        PromptToolbarButton::Save,
+        PromptMode::Editor,
+        counter,
+    )
+    .expect("save visible");
+    let controls = toolbar_page_controls(bar, "1/2", true).expect("controls");
     assert_eq!(folders.y, bar.y);
     assert_eq!(folders.width, 8);
-    assert_eq!(save.x - folders.right(), 1, "紧邻保存点左侧、间隔 1 列");
+    assert_eq!(folders.right() + 1, controls.prev.x, "紧邻页控件左侧");
+    assert_eq!(controls.next.x + 2, save.x, "页控件与保存点间隔 1 列");
     assert_eq!(
-        prompt_toolbar_button_at(panel, folders.x, bar.y, PromptMode::Editor),
+        prompt_toolbar_button_at(panel, folders.x, bar.y, PromptMode::Editor, counter),
         Some(PromptToolbarButton::Folders)
     );
     // 树视图不显示引用文件夹按钮。
     assert_eq!(
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::Folders, PromptMode::Tree),
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::Folders, PromptMode::Tree, None),
         None
     );
-    assert_eq!(PROMPT_FOLDERS_MIN_WIDTH_EDITOR, 22, "[refDir] 的推导阈值");
-    // 内宽 = 阈值 - 1：隐藏引用文件夹按钮，保存点恒在。
-    let narrow = Rect::new(0, 0, PROMPT_FOLDERS_MIN_WIDTH_EDITOR, 8);
+    // 窄屏优先隐藏 [refDir]，保存点与页控件仍在。
+    let narrow = Rect::new(0, 0, 30, 8);
     assert_eq!(
-        prompt_toolbar_button_rect(narrow, PromptToolbarButton::Folders, PromptMode::Editor),
+        prompt_toolbar_button_rect(
+            narrow,
+            PromptToolbarButton::Folders,
+            PromptMode::Editor,
+            counter
+        ),
         None
     );
     assert!(
-        prompt_toolbar_button_rect(narrow, PromptToolbarButton::Save, PromptMode::Editor).is_some(),
+        prompt_toolbar_button_rect(
+            narrow,
+            PromptToolbarButton::Save,
+            PromptMode::Editor,
+            counter
+        )
+        .is_some(),
         "窄屏时保存点仍在"
     );
-    // 内宽 = 阈值：引用文件夹按钮恢复显示。
-    let fits = Rect::new(0, 0, PROMPT_FOLDERS_MIN_WIDTH_EDITOR + 2, 8);
+}
+
+#[test]
+fn prompt_toolbar_degrades_recent_before_undo_redo() {
+    // 内宽 16：放不下 `[rec]`（需 19），撤销/重做仍在（需 13）。
+    let narrow = Rect::new(0, 0, 18, 8);
+    assert_eq!(
+        prompt_toolbar_button_rect(
+            narrow,
+            PromptToolbarButton::Recent,
+            PromptMode::Editor,
+            None
+        ),
+        None
+    );
     assert!(
-        prompt_toolbar_button_rect(fits, PromptToolbarButton::Folders, PromptMode::Editor)
-            .is_some(),
-        "内宽达到阈值时 [refDir] 可见"
+        prompt_toolbar_button_rect(narrow, PromptToolbarButton::Undo, PromptMode::Editor, None)
+            .is_some()
+    );
+    // 内宽 10：撤销/重做也隐藏。
+    let tiny = Rect::new(0, 0, 12, 8);
+    assert_eq!(
+        prompt_toolbar_button_rect(tiny, PromptToolbarButton::Undo, PromptMode::Editor, None),
+        None
     );
 }
 
@@ -521,4 +593,65 @@ fn prompt_border_rect_covers_top_border_row() {
         None,
         "零高度无边框行"
     );
+}
+
+#[test]
+fn prompt_body_split_reserves_drawer_rows() {
+    let panel = Rect::new(0, 0, 40, 18);
+    let body = prompt_body_rect(pane_inner_rect(panel));
+    let closed = prompt_body_split(panel, false, 10);
+    assert_eq!(closed.main, body_text_rect(body));
+    assert!(closed.recent_divider.is_none());
+
+    let two = prompt_body_split(panel, true, 2);
+    assert_eq!(two.visible_entries, 2);
+    assert_eq!(two.main.height, body.height - 5, "1 行分割线 + 2 条双行");
+    assert_eq!(two.recent_text.expect("content").height, 4);
+    assert_eq!(two.recent_scrollbar.expect("scrollbar").height, 4);
+
+    let capped = prompt_body_split(panel, true, 10);
+    assert_eq!(capped.visible_entries, 3, "最多同时显示 3 条");
+    assert_eq!(capped.main.height, body.height - 7);
+
+    let one = prompt_body_split(panel, true, 1);
+    assert_eq!(one.visible_entries, 2, "仅 1 条记录也保留 2 条高度");
+    assert_eq!(one.main.height, body.height - 5);
+    assert_eq!(one.recent_text.expect("content").height, 4);
+}
+
+#[test]
+fn prompt_body_split_shrinks_to_minimum_two_then_suppresses() {
+    // 内容区 10 行：抽屉上限 5 行，3 条放不下，降到最低 2 条（1+4）。
+    let panel = Rect::new(0, 0, 40, 14);
+    let split = prompt_body_split(panel, true, 10);
+    assert_eq!(split.visible_entries, 2);
+    let body = prompt_body_rect(pane_inner_rect(panel));
+    assert_eq!(split.main.height, body.height - 5);
+
+    // 内容区 8 行：半屏 4 行连最低 2 条（5 行）都放不下，直接收起抽屉。
+    let shorter = Rect::new(0, 0, 40, 12);
+    let split = prompt_body_split(shorter, true, 10);
+    assert!(split.recent_divider.is_none());
+    assert_eq!(
+        split.main,
+        body_text_rect(prompt_body_rect(pane_inner_rect(shorter)))
+    );
+
+    // 内容区 4 行：同样收起。
+    let tiny = Rect::new(0, 0, 40, 8);
+    let split = prompt_body_split(tiny, true, 10);
+    assert!(split.recent_divider.is_none());
+    assert_eq!(
+        split.main,
+        body_text_rect(prompt_body_rect(pane_inner_rect(tiny)))
+    );
+}
+
+#[test]
+fn prompt_body_split_keeps_empty_state_row() {
+    let panel = Rect::new(0, 0, 40, 12);
+    let split = prompt_body_split(panel, true, 0);
+    assert_eq!(split.visible_entries, 0);
+    assert_eq!(split.recent_text.expect("empty row").height, 1);
+    assert!(split.recent_scrollbar.expect("gutter").height == 1);
 }
