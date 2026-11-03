@@ -6,12 +6,14 @@
 //! 同一 `position` 编号空间；流事件的状态转换见 [`stream`]。
 
 use crate::config::ai::{AiSettings, ModelSelection};
+use crate::db::chat::Usage;
 
 pub mod file_diff;
 pub mod shell;
 mod steps;
 mod stream;
 pub mod tool_view;
+mod usage;
 
 pub use file_diff::{DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView};
 pub use shell::{PendingShell, QueuedSubmission, UserShellView};
@@ -436,6 +438,11 @@ pub struct LxChat {
     pub context_tokens: Option<u64>,
     /// 该占用分子对应模型（切换模型时分子清空）。
     pub last_tokens_model: Option<String>,
+    /// 当前流式模型响应内分帧到达的 usage 聚合槽（`ResponseFinished` 时重置）。
+    ///
+    /// Anthropic 在 `message_start` 报 input、`message_delta` 报 output；必须先在
+    /// 同一步内合并，才能算出 `context_tokens = input + output`。
+    pub step_usage: Usage,
     /// 上下文裁剪省略提示（一次性显示；读取后清除）。
     pub omitted_turns_notice: Option<usize>,
     /// 窗格内请求代号计数器（单调递增）。
@@ -581,6 +588,7 @@ impl LxChat {
             follow_bottom: true,
             context_tokens: None,
             last_tokens_model: None,
+            step_usage: Usage::default(),
             omitted_turns_notice: None,
             generation_counter: 0,
             status: ChatStatus::default(),
@@ -826,45 +834,6 @@ impl LxChat {
             .push((message_index, step_index, next));
     }
 
-    /// 重算状态行展示数据：模型/供应商展示名、上限、用量与上下文百分比来自当前选择
-    /// （或默认）；输入 token 只在仍属同一模型时保留（切模型清空分子）。
-    pub fn refresh_status(&mut self, models: &ModelsSnapshot) {
-        let selection = self.effective_selection(models);
-        let (model_name, provider_name, variant, context_limit) = match &selection {
-            Some(selection) => {
-                let provider = models.settings.providers.get(&selection.provider);
-                let model = provider.and_then(|provider| provider.models.get(&selection.model));
-                let provider_name = provider.map(|provider| provider.name.clone());
-                let model_name = model
-                    .map(|model| model.name.clone())
-                    .or_else(|| Some(selection.model.clone()));
-                let limit = model.and_then(|model| model.limit.map(|limit| limit.context));
-                // 思考等级与模型名同源（都来自当前生效选择），保证两者永不漂移。
-                (model_name, provider_name, selection.variant.clone(), limit)
-            }
-            None => (None, None, None, None),
-        };
-        // 切模型清空分子：当前模型（provider/model 稳定键）与上次记录不一致时重置。
-        let token_key = selection
-            .as_ref()
-            .map(|selection| format!("{}/{}", selection.provider, selection.model));
-        if let Some(previous) = &self.last_tokens_model
-            && Some(previous) != token_key.as_ref()
-        {
-            self.input_tokens_reset();
-        }
-        self.last_tokens_model = token_key;
-        self.status = ChatStatus {
-            model_name,
-            provider_name,
-            variant,
-            context_limit,
-            input_tokens: self.context_tokens,
-            streaming: self.request.is_busy(),
-            omitted_turns: self.omitted_turns_notice.take(),
-        };
-    }
-
     /// 流中已产生的**输出 token 估算值**（rough）：ASCII 约 4 字符 1 token，
     /// 非 ASCII（CJK 等）约 1 字符 1 token；只统计正文与思考正文。
     ///
@@ -890,12 +859,6 @@ impl LxChat {
         }
         let tokens = ascii / 4 + wide;
         (tokens > 0).then_some(tokens)
-    }
-
-    /// 清空上下文占用分子（切模型/新建会话）。
-    pub fn input_tokens_reset(&mut self) {
-        self.context_tokens = None;
-        self.last_tokens_model = None;
     }
 
     /// 当前选择；无窗格级选择时回落配置默认。
@@ -990,3 +953,6 @@ impl LxChat {
         results
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -280,12 +280,18 @@ impl StreamDecoder for Decoder {
                     .get("message")
                     .and_then(|message| message.get("usage"))
                 {
-                    let input = json_i64(usage, "input_tokens");
+                    let raw_input = json_i64(usage, "input_tokens");
                     let cache_read = json_i64(usage, "cache_read_input_tokens");
                     let cache_write = json_i64(usage, "cache_creation_input_tokens");
-                    if input.is_some() || cache_read.is_some() || cache_write.is_some() {
+                    if raw_input.is_some() || cache_read.is_some() || cache_write.is_some() {
+                        // Anthropic 的 input_tokens 只是未命中/未写入缓存的尾部输入；
+                        // 完整 Prompt 输入 = 三者之和（对齐 OpenAI/Gemini 的 input 口径）。
+                        let input = raw_input
+                            .unwrap_or(0)
+                            .saturating_add(cache_read.unwrap_or(0))
+                            .saturating_add(cache_write.unwrap_or(0));
                         out.push(ChatDelta::Usage(crate::db::chat::Usage {
-                            input,
+                            input: Some(input),
                             output: None,
                             cache_read,
                             cache_write,

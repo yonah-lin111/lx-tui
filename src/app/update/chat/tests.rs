@@ -250,6 +250,70 @@ fn stream_deltas_update_matching_key_only() {
 }
 
 #[test]
+fn stream_usage_merges_split_frames_per_step() {
+    let mut state = ready_state("问");
+    let pane = focus_pane(&state);
+    try_send(&mut state, pane);
+    let generation = match &state.pane_anywhere(pane).unwrap().lx.chat.request {
+        RequestState::Committing { generation, .. } => *generation,
+        _ => panic!("committing"),
+    };
+    on_turn_committed(&mut state, pane, generation, &committed("sess-1"));
+    let key = RequestKey {
+        pane,
+        session: "sess-1".into(),
+        generation,
+    };
+    let context = |state: &AppState| state.pane_anywhere(pane).unwrap().lx.chat.context_tokens;
+    // Anthropic 口径：input 在 message_start、output 在 message_delta，同一步内合并。
+    on_stream_delta(
+        &mut state,
+        &key,
+        &[ChatDelta::Usage(Usage {
+            input: Some(100),
+            cache_read: Some(40),
+            ..Default::default()
+        })],
+    );
+    assert_eq!(context(&state), Some(100), "只有 input 时 output 按 0 计");
+    on_stream_delta(
+        &mut state,
+        &key,
+        &[ChatDelta::Usage(Usage {
+            output: Some(20),
+            ..Default::default()
+        })],
+    );
+    assert_eq!(context(&state), Some(120), "同一步分帧合并 input + output");
+    // 响应结束：聚合槽封口，下一步的 input 不得混入上一步 output。
+    on_stream_delta(
+        &mut state,
+        &key,
+        &[ChatDelta::ResponseFinished {
+            stop: crate::chat::events::ModelStepStop::Final,
+        }],
+    );
+    on_stream_delta(
+        &mut state,
+        &key,
+        &[ChatDelta::Usage(Usage {
+            input: Some(300),
+            ..Default::default()
+        })],
+    );
+    assert_eq!(context(&state), Some(300), "跨工具步不累加 input");
+    on_stream_delta(
+        &mut state,
+        &key,
+        &[ChatDelta::Usage(Usage {
+            output: Some(50),
+            ..Default::default()
+        })],
+    );
+    assert_eq!(context(&state), Some(350), "第二步 = 300 + 50");
+}
+
+#[test]
 fn finish_moves_to_finishing_then_idle_with_usage() {
     let mut state = ready_state("问");
     let pane = focus_pane(&state);

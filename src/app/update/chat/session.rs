@@ -448,11 +448,8 @@ pub fn on_session_loaded_full(
             .zip(message.model_id.as_deref())
             .map(|(provider, model)| format!("{provider}/{model}"))
     });
-    target.lx.chat.context_tokens = recent.map(|message| {
-        let input = message.input_tokens.unwrap_or(0).max(0);
-        let output = message.output_tokens.unwrap_or(0).max(0);
-        u64::try_from(input.saturating_add(output)).unwrap_or(u64::MAX)
-    });
+    // 压缩边界由随后的 `set_checkpoints` 回填后再次重算。
+    target.lx.chat.recompute_context_tokens(&target.lx.compact);
     target.lx.chat.follow_bottom = true;
     target.lx.chat.thinking_toggled.clear();
     target.lx.chat.turn_started_at_ms = None;

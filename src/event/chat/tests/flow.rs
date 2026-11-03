@@ -35,12 +35,12 @@ async fn write_then_read_then_final_answer_persists_in_order() {
     )
     .await;
 
-    // 整轮完成；终态恰好一条；usage 为两次采样之和。
+    // 整轮完成；终态恰好一条；usage 只取最后一次采样（上下文占用口径）。
     assert_eq!(driven.summary.outcome, TurnOutcome::Complete);
     let (reason, usage) = driven.finished.expect("exactly one terminal event");
     assert_eq!(reason, StopReason::Complete);
-    assert_eq!(usage.input, Some(14), "10 + 4");
-    assert_eq!(usage.output, Some(5), "2 + 3");
+    assert_eq!(usage.input, Some(4), "只取最后一步，不累加 10 + 4");
+    assert_eq!(usage.output, Some(3), "只取最后一步，不累加 2 + 3");
     assert_eq!(driven.unflushed, 0, "没有遗留未回执的 pending");
 
     // ① 可观测顺序：两个调用都先 begin（DB pending 已提交）再 finish。

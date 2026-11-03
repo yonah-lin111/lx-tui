@@ -306,6 +306,8 @@ impl LxChat {
     /// 本次**模型响应**结束（`ResponseFinished`）：只收尾思考与在途工具输入，
     /// 不结束消息、不产生工具结果。
     pub fn finish_response(&mut self, stop: ModelStepStop) -> bool {
+        // 单步 usage 到此封口：下一步采样的 input 不得与本步 output 混算。
+        self.reset_step_usage();
         let now = crate::db::now_ms();
         let root = self.project_root.clone();
         let Some(message) = self.streaming_message_mut() else {
@@ -324,6 +326,7 @@ impl LxChat {
     /// - `Failed`：同 `Interrupted`（结果未知，绝不伪造成功）。
     pub fn close_stream(&mut self, reason: &crate::chat::events::StopReason) -> bool {
         use crate::chat::events::StopReason;
+        self.reset_step_usage();
         let now = crate::db::now_ms();
         let root = self.project_root.clone();
         let Some(message) = self.streaming_message_mut() else {
