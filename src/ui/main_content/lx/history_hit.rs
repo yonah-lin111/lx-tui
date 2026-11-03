@@ -38,6 +38,12 @@ pub(crate) fn history_view(
     Some(history::view(history_rect, lx, cache))
 }
 
+/// 高频鼠标交互用的视图：只读已就绪快照，不在事件回调里同步重排。
+fn history_view_ready(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<history::HistoryView> {
+    let history_rect = history_rect(area, lx)?;
+    Some(history::view_ready(history_rect, lx, cache))
+}
+
 /// 把指定消息滚到视口居中所需的顶部行与可滚动上限；内容不足一屏时返回 None。
 ///
 /// 消息块高于视口时按起始行对齐（至少能看到开头）；其余情况上下留白尽量相等，
@@ -82,7 +88,7 @@ pub fn history_scrollbar(
     if !chat_geometry_is_live(lx) {
         return None;
     }
-    let view = history_view(area, lx, cache)?;
+    let view = history_view_ready(area, lx, cache)?;
     history::scrollbar(
         view.body,
         view.total_rows,
@@ -98,7 +104,7 @@ pub fn history_rows(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<(usize
     if !chat_geometry_is_live(lx) {
         return None;
     }
-    let view = history_view(area, lx, cache)?;
+    let view = history_view_ready(area, lx, cache)?;
     Some((view.total_rows, usize::from(view.body.height)))
 }
 
@@ -179,7 +185,7 @@ pub(crate) fn card_at_source(
         return None;
     }
     let width = history::content_rect(body).width;
-    let snapshot = cache.snapshot_source(width, source);
+    let snapshot = cache.snapshot_ready_source(width, source);
     let content_row = scroll.saturating_add(usize::from(row.saturating_sub(body.y)));
     let rel_col = column.saturating_sub(body.x);
     let region = snapshot.cards.iter().find(|region| {
@@ -255,7 +261,7 @@ pub fn card_at(
     if !chat_geometry_is_live(lx) {
         return None;
     }
-    let view = history_view(area, lx, cache)?;
+    let view = history_view_ready(area, lx, cache)?;
     card_at_source(
         view.body,
         view.scroll,
@@ -283,7 +289,7 @@ pub(crate) fn task_agents_card_target_at(
     let rect = task::task_output_rect(area, lx)?;
     let run = lx.agents.runs.get(page.agents_window.active)?;
     let source = history::HistorySource::from_chat(&run.chat, &run.compact);
-    let view = history::view_source_plain(rect, source, cache);
+    let view = history::view_source_plain_ready(rect, source, cache);
     let visible = usize::from(view.body.height);
     let max = view.total_rows.saturating_sub(visible);
     let top = if run.follow { max } else { run.scroll.min(max) };
@@ -303,7 +309,7 @@ pub(crate) fn task_agents_scrollbar(
     let rect = task::task_output_rect(area, lx)?;
     let run = lx.agents.runs.get(page.agents_window.active)?;
     let source = history::HistorySource::from_chat(&run.chat, &run.compact);
-    let view = history::view_source_plain(rect, source, cache);
+    let view = history::view_source_plain_ready(rect, source, cache);
     let visible = usize::from(view.body.height);
     let max = view.total_rows.saturating_sub(visible);
     let top = if run.follow { max } else { run.scroll.min(max) };

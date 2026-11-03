@@ -324,7 +324,21 @@ pub(super) fn view_source(
     source: HistorySource<'_>,
     cache: &mut PaneCache,
 ) -> HistoryView {
-    view_source_inner(area, source, cache, true)
+    view_source_inner(area, source, cache, true, false)
+}
+
+/// 命中侧的就绪视图：已有同宽度快照时直接复用，不在鼠标回调里同步重排。
+pub(super) fn view_ready(area: Rect, lx: &Lx, cache: &mut PaneCache) -> HistoryView {
+    view_source_ready(area, HistorySource::from(lx), cache)
+}
+
+/// 数据源版本的就绪视图（子 agent 详情复用）。
+pub(super) fn view_source_ready(
+    area: Rect,
+    source: HistorySource<'_>,
+    cache: &mut PaneCache,
+) -> HistoryView {
+    view_source_inner(area, source, cache, true, true)
 }
 
 /// 不计算置顶行的数据源视图：Agents 详情只画 transcript，没有置顶 prompt。
@@ -336,7 +350,16 @@ pub(super) fn view_source_plain(
     source: HistorySource<'_>,
     cache: &mut PaneCache,
 ) -> HistoryView {
-    view_source_inner(area, source, cache, false)
+    view_source_inner(area, source, cache, false, false)
+}
+
+/// Agents 详情命中侧的就绪视图。
+pub(super) fn view_source_plain_ready(
+    area: Rect,
+    source: HistorySource<'_>,
+    cache: &mut PaneCache,
+) -> HistoryView {
+    view_source_inner(area, source, cache, false, true)
 }
 
 fn view_source_inner(
@@ -344,9 +367,19 @@ fn view_source_inner(
     source: HistorySource<'_>,
     cache: &mut PaneCache,
     allow_sticky: bool,
+    ready: bool,
 ) -> HistoryView {
     // 生产路径只要行数与消息区间：直接读快照，不构造每张卡片的 `CardHit`。
-    let snapshot = cache.snapshot_source(content_rect(area).width, source);
+    let width = content_rect(area).width;
+    // 视口行数供「滚离底部时屏幕外流式合并」判定；命中侧不覆盖已记录的视口。
+    if !ready {
+        cache.set_viewport_rows(usize::from(area.height));
+    }
+    let snapshot = if ready {
+        cache.snapshot_ready_source(width, source)
+    } else {
+        cache.snapshot_source(width, source)
+    };
     let total = snapshot.total_rows;
     let full_height = area.height;
     let scroll_for = |height: u16| -> usize {

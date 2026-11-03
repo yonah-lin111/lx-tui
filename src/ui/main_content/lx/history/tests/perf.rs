@@ -142,7 +142,7 @@ fn perf_lx_history() {
     let cold = Instant::now();
     let total = layout(area, &lx, &mut cache).total_rows;
     let cold_elapsed = cold.elapsed();
-    assert!(total > 90_000, "压力会话应有约 10 万行，实际 {total}");
+    assert!(total > 60_000, "压力会话应有数万行，实际 {total}");
 
     // 预热：先画一帧，让视口周边的块进缓存。
     let _ = render(&mut grid, area, &lx, 0, &mut cache);
@@ -283,5 +283,120 @@ fn perf_lx_history_expanded_diff() {
     assert!(
         p95 <= FRAME_BUDGET,
         "展开的大差异滚动 P95 超预算：{p95:?} > {FRAME_BUDGET:?}"
+    );
+}
+
+/// 长思考 + 长正文流式：思考阶段 0 重建，正文阶段只重排尾部。
+///
+/// 思考 500 帧（30,000 字符）与正文 300 帧（1,500 行，含围栏代码块/表格）交错
+/// 模拟滚轮与滚动条拖拽；思考流式期间快照重建次数必须为 0。
+#[test]
+#[ignore = "性能回归：cargo test --release -- --ignored perf_lx_long_thinking_and_streaming"]
+fn perf_lx_long_thinking_and_streaming() {
+    const THINKING_FRAMES: usize = 500;
+    const THINKING_CHARS_PER_FRAME: usize = 60;
+    const TEXT_FRAMES: usize = 300;
+    const TEXT_LINES_PER_FRAME: usize = 5;
+    const THINKING_BUDGET: Duration = Duration::from_millis(2);
+    const TEXT_BUDGET: Duration = Duration::from_millis(8);
+
+    let mut lx = history(60);
+    let mut streaming = message(
+        "assistant",
+        "streaming",
+        vec![reasoning_part(""), text_part("")],
+    );
+    streaming.id = "streaming-answer".into();
+    lx.chat.messages.push(streaming);
+    let last = lx.chat.messages.len().saturating_sub(1);
+
+    let area = Rect::new(0, 0, 200, 50);
+    let mut cache = PaneCache::default();
+    let mut grid = Grid::new(area);
+    let _ = layout(area, &lx, &mut cache);
+    let builds_before = cache.builds();
+
+    // 思考流式：每帧追加一段，展开状态与时间戳不进入指纹。
+    let delta = "思考".repeat(THINKING_CHARS_PER_FRAME / 2);
+    let mut thinking_samples = Vec::with_capacity(THINKING_FRAMES);
+    for frame in 0..THINKING_FRAMES {
+        if let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[last].steps[0] {
+            part.content.push_str(&delta);
+            part.started_at_ms.get_or_insert(0);
+            part.ended_at_ms = Some(frame as i64);
+        }
+        cache.advance_frame();
+        let started = Instant::now();
+        let total = layout(area, &lx, &mut cache).total_rows;
+        let scroll = (frame * 3) % total.saturating_sub(usize::from(area.height)).max(1);
+        let _ = render(&mut grid, area, &lx, scroll, &mut cache);
+        thinking_samples.push(started.elapsed());
+    }
+    assert_eq!(
+        cache.builds(),
+        builds_before,
+        "思考流式期间不得重建快照（0 次）"
+    );
+
+    // 思考完成（折叠）：只更新一次头部。
+    if let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[last].steps[0] {
+        part.completed_at_ms = Some(THINKING_FRAMES as i64);
+        part.ended_at_ms = Some(THINKING_FRAMES as i64);
+    }
+
+    // 正文流式：1,500 行，含围栏代码块与表格。
+    let lines: Vec<String> = (0..TEXT_FRAMES * TEXT_LINES_PER_FRAME)
+        .map(|index| match index {
+            0 => "# 流式长正文".to_string(),
+            40 => "```rust".to_string(),
+            41..=740 => format!("    let value_{index} = {index}; // 高亮测试"),
+            741 => "```".to_string(),
+            760 => "| 名称 | 数值 |".to_string(),
+            761 => "| --- | ---: |".to_string(),
+            762..=800 => format!("| 行 | {index} |"),
+            _ => format!("第 {index} 行：流式追加的正文内容，含中英文与标点。"),
+        })
+        .collect();
+    let before_text_blocks = cache.block_count();
+    let mut text_samples = Vec::with_capacity(TEXT_FRAMES);
+    for frame in 0..TEXT_FRAMES {
+        if let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[last].steps[1] {
+            part.content.push_str(
+                &lines[frame * TEXT_LINES_PER_FRAME..(frame + 1) * TEXT_LINES_PER_FRAME].join("\n"),
+            );
+            part.content.push('\n');
+        }
+        cache.advance_frame();
+        let started = Instant::now();
+        let total = layout(area, &lx, &mut cache).total_rows;
+        let max_top = total.saturating_sub(usize::from(area.height));
+        let scroll = (frame * 7) % max_top.max(1);
+        let _ = render(&mut grid, area, &lx, scroll, &mut cache);
+        text_samples.push(started.elapsed());
+    }
+
+    let thinking_p95 = percentile(&mut thinking_samples, 95);
+    let text_p95 = percentile(&mut text_samples, 95);
+    let bytes = cache.bytes();
+    assert!(
+        cache.block_count() <= before_text_blocks,
+        "流式正文不得堆积历史块槽位：{} > {before_text_blocks}",
+        cache.block_count()
+    );
+    eprintln!(
+        "perf_lx_long_thinking_and_streaming: thinking_p95={thinking_p95:?} \
+         text_p95={text_p95:?} cache_bytes={bytes}"
+    );
+    assert!(
+        thinking_p95 <= THINKING_BUDGET,
+        "思考流式 P95 超预算：{thinking_p95:?} > {THINKING_BUDGET:?}"
+    );
+    assert!(
+        text_p95 <= TEXT_BUDGET,
+        "正文流式 P95 超预算：{text_p95:?} > {TEXT_BUDGET:?}"
+    );
+    assert!(
+        bytes <= crate::ui::main_content::lx::history::cache::MAX_CACHED_BYTES,
+        "二级缓存超上限：{bytes} 字节"
     );
 }

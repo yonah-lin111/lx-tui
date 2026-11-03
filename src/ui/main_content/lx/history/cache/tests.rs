@@ -1,6 +1,7 @@
 //! 几何快照缓存的失效口径测试。
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use ratatui::layout::Rect;
 
@@ -12,11 +13,22 @@ use crate::app::state::{
 use crate::chat::events::PartKind;
 use crate::ui::main_content::lx::history::paint::BlockPaint;
 use crate::ui::main_content::lx::history::snapshot::HistorySnapshot;
-use crate::ui::main_content::lx::history::{Grid, layout, render};
+use crate::ui::main_content::lx::history::{Grid, HistorySource, layout, render, view};
 
 fn text_part(content: &str) -> ChatPartView {
     ChatPartView {
         kind: PartKind::Text,
+        content: content.into(),
+        provider_metadata_json: None,
+        started_at_ms: None,
+        ended_at_ms: None,
+        completed_at_ms: None,
+    }
+}
+
+fn reasoning_part(content: &str) -> ChatPartView {
+    ChatPartView {
+        kind: PartKind::Reasoning,
         content: content.into(),
         provider_metadata_json: None,
         started_at_ms: None,
@@ -581,4 +593,132 @@ fn tool_card_geometry_is_cached_with_the_block() {
     let second = cache.snapshot(40, &lx);
     assert_eq!(cache.builds(), builds, "状态未变，不允许重建");
     assert_eq!(first.cards, second.cards, "点击面必须完全一致");
+}
+
+/// 思考块流式生成期间：正文与时间戳变化不进指纹，展开也只画单行头部。
+#[test]
+fn streaming_thinking_deltas_do_not_rebuild() {
+    let mut lx = lx_with(vec![message(
+        "a1",
+        "assistant",
+        "streaming",
+        vec![reasoning_part("")],
+    )]);
+    let mut cache = PaneCache::default();
+    let streaming = cache.snapshot(40, &lx);
+    assert_eq!(cache.builds(), 1);
+
+    for tick in 0..100i64 {
+        let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[0].steps[0] else {
+            panic!("首个步骤应是思考块");
+        };
+        part.content.push_str("思考");
+        part.started_at_ms.get_or_insert(0);
+        part.ended_at_ms = Some(tick);
+        let _ = cache.snapshot(40, &lx);
+    }
+    assert_eq!(cache.builds(), 1, "思考流式期间不得重建快照");
+
+    // 展开只改一次指纹：流式期间仍然不渲染正文。
+    lx.chat.toggle_reasoning(0, 0);
+    let expanded = cache.snapshot(40, &lx);
+    assert_eq!(cache.builds(), 2, "展开状态变化重建一次");
+    assert_eq!(
+        expanded.total_rows, streaming.total_rows,
+        "流式展开只显示单行 Thinking 头部"
+    );
+    for tick in 100..200i64 {
+        let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[0].steps[0] else {
+            panic!("首个步骤应是思考块");
+        };
+        part.content.push_str("思考");
+        part.ended_at_ms = Some(tick);
+        let _ = cache.snapshot(40, &lx);
+    }
+    assert_eq!(cache.builds(), 2, "展开后继续流式仍不得重建");
+
+    // 思考完成：展开态一次性渲染全文。
+    let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[0].steps[0] else {
+        panic!("首个步骤应是思考块");
+    };
+    part.completed_at_ms = Some(200);
+    let done = cache.snapshot(40, &lx);
+    assert_eq!(cache.builds(), 3, "完成后重建一次");
+    assert!(
+        done.total_rows > expanded.total_rows,
+        "完成后展开态显示思考正文"
+    );
+}
+
+/// 流式正文：同一 `(message, step, width)` 只占一个块槽位，不堆历史残影。
+#[test]
+fn streaming_text_replaces_one_block_slot() {
+    let mut lx = lx_with(vec![message(
+        "a1",
+        "assistant",
+        "streaming",
+        vec![text_part("")],
+    )]);
+    let mut cache = PaneCache::default();
+    let _ = cache.snapshot(40, &lx);
+    for index in 0..100 {
+        let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[0].steps[0] else {
+            panic!("首个步骤应是正文块");
+        };
+        part.content.push_str(&format!("第 {index} 行\n"));
+        let _ = cache.snapshot(40, &lx);
+    }
+    assert_eq!(cache.block_count(), 1, "流式块只能占一个槽位");
+}
+
+/// 鼠标命中读取已就绪快照：内容已变也不在事件回调里同步重排。
+#[test]
+fn ready_snapshot_does_not_rebuild() {
+    let mut lx = lx_with(vec![message(
+        "a1",
+        "assistant",
+        "streaming",
+        vec![text_part("回答")],
+    )]);
+    let mut cache = PaneCache::default();
+    let first = cache.snapshot(40, &lx);
+    let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[0].steps[0] else {
+        panic!("首个步骤应是正文块");
+    };
+    part.content.push_str("，继续输出");
+    let ready = cache.snapshot_ready_source(40, HistorySource::from(&lx));
+    assert_eq!(cache.builds(), 1, "就绪快照不得触发重建");
+    assert!(Arc::ptr_eq(&first, &ready), "返回同一份已就绪快照");
+}
+
+/// 滚离底部且流式消息整块在视口下方：窗口内的增量合并，不重排几何。
+#[test]
+fn offscreen_stream_coalesces_within_window() {
+    let body = (0..30)
+        .map(|index| format!("历史行 {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut lx = lx_with(vec![
+        message("m1", "assistant", "complete", vec![text_part(&body)]),
+        message("a1", "assistant", "streaming", vec![text_part("回答")]),
+    ]);
+    lx.chat.follow_bottom = false;
+    lx.chat.history_scroll = 0;
+    let area = Rect::new(0, 0, 40, 10);
+    let mut cache = PaneCache::default();
+    let _ = view(area, &lx, &mut cache);
+    let builds = cache.builds();
+    cache.set_offscreen_coalesce(Duration::from_secs(3_600));
+
+    let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[1].steps[0] else {
+        panic!("末条消息应是正文块");
+    };
+    part.content.push_str("\n屏幕外的流式增量");
+    let _ = view(area, &lx, &mut cache);
+    assert_eq!(cache.builds(), builds, "屏幕外流式必须按窗口合并");
+
+    // 其他消息变化（非流式尾部）不受合并影响。
+    lx.chat.messages[0].sequence += 1;
+    let _ = view(area, &lx, &mut cache);
+    assert!(cache.builds() > builds, "非流式尾部变化必须立即重建");
 }

@@ -17,10 +17,13 @@ use ratatui::style::Style;
 use crate::ui::style;
 
 mod highlight;
+mod incremental;
 mod table;
 
 /// 轻量词法高亮一行代码（文件差异卡片复用同一套分色，避免第二份实现）。
 pub(crate) use highlight::highlight_line;
+/// 流式 Markdown 增量渲染状态（稳定前缀 + 活跃尾部）。
+pub(crate) use incremental::IncrementalMarkdownState;
 
 /// 渲染出的一行：左缩进列 + 多色分段（拼接即该行纯文本）。
 #[derive(Debug, Clone, PartialEq)]
@@ -111,14 +114,49 @@ fn render_wrapped_with_options(source: &str, width: u16, expand_rules: bool) -> 
 
 /// 块级解析：`width` 为 Some 时表格按可用宽度收缩（其余块仍按自然宽度产出，由调用方换行）。
 fn render_blocks(source: &str, width: Option<usize>, expand_rules: bool) -> Vec<MdLine> {
+    render_blocks_stateful(source, width, expand_rules, &mut ParserState::default())
+}
+
+/// 块级解析的跨行状态：列表缩进档位栈 + 未闭合围栏语言。
+///
+/// 增量渲染的「稳定前缀 / 活跃尾部」两段共用它：尾部从中断处的状态继续解析，
+/// 保证与一次性全量渲染逐行一致。
+#[derive(Debug, Clone, Default)]
+struct ParserState {
+    /// 列表缩进档位栈：把源码缩进列数换算成层级，跨行维护，非列表行清空（空行不清，
+    /// 允许松散列表）。这样 2 空格（`- ` 对齐）与 3 空格（`1. ` 对齐）混用也能得到均匀层间距。
+    list_indents: Vec<usize>,
+    /// `Some(lang)` 表示位于未闭合围栏代码块内（空串 = 围栏未写语言）。
+    open_fence_lang: Option<String>,
+}
+
+/// 从给定跨行状态继续块级解析，返回新产出的行。
+fn render_blocks_stateful(
+    source: &str,
+    width: Option<usize>,
+    expand_rules: bool,
+    state: &mut ParserState,
+) -> Vec<MdLine> {
     let mut lines = Vec::new();
     let source_lines: Vec<&str> = source.split('\n').collect();
-    // 列表缩进档位栈：把源码缩进列数换算成层级，跨行维护，非列表行清空（空行不清，
-    // 允许松散列表）。这样 2 空格（`- ` 对齐）与 3 空格（`1. ` 对齐）混用也能得到均匀层间距。
-    let mut list_indents: Vec<usize> = Vec::new();
     let mut index = 0;
     while index < source_lines.len() {
         let line = source_lines[index];
+        // 未闭合围栏内部：每行都是独立代码行（闭合行只推进状态）。
+        if let Some(lang) = state.open_fence_lang.take() {
+            if line.trim_start().starts_with("```") {
+                index += 1;
+                continue;
+            }
+            render_code(
+                &[line],
+                (!lang.is_empty()).then_some(lang.as_str()),
+                &mut lines,
+            );
+            state.open_fence_lang = Some(lang);
+            index += 1;
+            continue;
+        }
         let trimmed = line.trim_end();
         if trimmed.is_empty() {
             index += 1;
@@ -126,17 +164,19 @@ fn render_blocks(source: &str, width: Option<usize>, expand_rules: bool) -> Vec<
         }
         let item = list_item(line);
         if item.is_none() {
-            list_indents.clear();
+            state.list_indents.clear();
         }
         if trimmed.trim_start().starts_with("```") {
-            index = fenced_code(&source_lines, index, &mut lines);
+            let lang = line.trim().trim_start_matches('`').trim();
+            state.open_fence_lang = Some(lang.to_string());
+            index += 1;
             continue;
         }
         // 缩进列表项优先于缩进代码块：模型常用 4 空格嵌套（`- xxx` 下接 `    - aaa`），
         // 若按 CommonMark 的 4 空格规则当成代码块，整段会被渲染成一坨 `│ - aaa` 贴最左，
         // 列表看起来就“没有缩进”。真代码块请用围栏（```）。
         if let Some(item) = item {
-            let depth = list_depth(&mut list_indents, item.indent());
+            let depth = list_depth(&mut state.list_indents, item.indent());
             lines.push(item.render(depth));
             index += 1;
             continue;
@@ -251,24 +291,6 @@ fn image(line: &str) -> Option<(&str, &str)> {
     let after = after.strip_prefix('(')?;
     let url_close = after.find(')')?;
     Some((&rest[..alt_close], &after[..url_close]))
-}
-
-/// 围栏代码块：从起始 ``` 行读到闭合 ```；隐藏围栏，显示语言标记。
-fn fenced_code(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
-    let fence = source[start].trim();
-    let lang = fence.trim_start_matches('`').trim();
-    let mut index = start + 1;
-    let mut body = Vec::new();
-    while index < source.len() {
-        if source[index].trim_start().starts_with("```") {
-            index += 1;
-            break;
-        }
-        body.push(source[index]);
-        index += 1;
-    }
-    render_code(&body, (!lang.is_empty()).then_some(lang), lines);
-    index
 }
 
 /// 缩进代码块：收集连续 4 空格缩进行。
@@ -623,6 +645,21 @@ fn link(rest: &str) -> Option<(&str, &str, usize)> {
 /// 字符串的显示宽度（按字符宽度求和）。
 pub fn display_width(value: &str) -> usize {
     value.chars().map(|ch| char_width(ch) as usize).sum()
+}
+
+/// 渲染行的近似字节数（二级缓存 LRU 记账用）。
+pub(crate) fn md_bytes(lines: &[MdLine]) -> usize {
+    lines
+        .iter()
+        .map(|line| {
+            std::mem::size_of::<MdLine>()
+                + line
+                    .spans
+                    .iter()
+                    .map(|(text, _)| text.len() + 24)
+                    .sum::<usize>()
+        })
+        .sum()
 }
 
 /// 把一条渲染行按可用宽度软换行（保留缩进；续行缩进到内容起始列）。
