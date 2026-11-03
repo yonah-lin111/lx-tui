@@ -80,7 +80,7 @@ fn render_toolbar(
     buttons.push((
         PromptToolbarButton::Recent,
         text::PROMPT_RECENT_LABEL,
-        style::muted(),
+        style::text(),
     ));
     match mode {
         PromptMode::Tree => {
@@ -158,7 +158,7 @@ fn render_toolbar(
     }
 }
 
-/// 按抽屉展开状态刷新工具栏 `[rec]` 按钮样式：未展开为 `muted`（无高亮），展开后为 `accent`（青色）。
+/// 按抽屉展开状态刷新工具栏 `[rec]` 按钮样式：未展开为默认文字色 `text`（无高亮），展开后为 `accent`（青色）。
 pub(crate) fn paint_recent_button(
     panel: Rect,
     buf: &mut Buffer,
@@ -171,11 +171,7 @@ pub(crate) fn paint_recent_button(
     else {
         return;
     };
-    let button_style = if open {
-        style::accent()
-    } else {
-        style::muted()
-    };
+    let button_style = if open { style::accent() } else { style::text() };
     for x in rect.x..rect.right() {
         if let Some(cell) = buf.cell_mut((x, rect.y)) {
             cell.set_style(button_style);

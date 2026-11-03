@@ -1052,6 +1052,16 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         }
         TooltipTarget::PromptTempPrompt => "open temp prompt",
         TooltipTarget::PromptRecent => "recent pages (^r)",
+        TooltipTarget::PromptRecentClose => "close recent (esc)",
+        TooltipTarget::PromptPagePrev => "previous page (^←)",
+        TooltipTarget::PromptPageCounter => {
+            if state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Pages {
+                "open editor"
+            } else {
+                "open page list (^p)"
+            }
+        }
+        TooltipTarget::PromptPageNext => "next page (^→)",
         TooltipTarget::PromptUndo => "undo (^z)",
         TooltipTarget::PromptRedo => "redo (^y)",
         TooltipTarget::PromptSave => "mark saved",

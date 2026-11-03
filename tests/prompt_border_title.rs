@@ -282,7 +282,7 @@ fn border_title_truncates_item_title_when_narrow() {
 }
 
 #[test]
-fn rec_button_is_muted_until_drawer_opens() {
+fn rec_and_page_counter_highlight_only_when_panel_opens() {
     let (mut state, config, view) = ready_state();
     paged_prompt(&mut state);
     update::focus_prompt(&mut state);
@@ -294,6 +294,8 @@ fn rec_button_is_muted_until_drawer_opens() {
         Some("1/2"),
     )
     .expect("recent button");
+    let bar = layout::prompt_toolbar_rect(view.prompt).expect("toolbar");
+    let controls = layout::toolbar_page_controls(bar, "1/2", true).expect("page controls");
 
     let closed = draw(&state, &config);
     let closed_cell = &closed.backend().buffer()[(rec.x, row)];
@@ -303,8 +305,20 @@ fn rec_button_is_muted_until_drawer_opens() {
         "抽屉未打开时 [rec] 不高亮青色"
     );
     assert!(
-        closed_cell.modifier.contains(ratatui::style::Modifier::DIM),
-        "抽屉未打开时 [rec] 使用 muted"
+        !closed_cell.modifier.contains(ratatui::style::Modifier::DIM),
+        "抽屉未打开时 [rec] 使用默认亮白文字、不置灰"
+    );
+    let counter_cell = &closed.backend().buffer()[(controls.counter.x, row)];
+    assert_eq!(
+        counter_cell.fg,
+        ratatui::style::Color::Reset,
+        "未打开页列表时 n/m 使用默认亮白文字"
+    );
+    assert!(
+        !counter_cell
+            .modifier
+            .contains(ratatui::style::Modifier::DIM),
+        "未打开页列表时 n/m 不置灰"
     );
 
     assert!(update::toggle_prompt_recent(&mut state));
@@ -320,5 +334,22 @@ fn rec_button_is_muted_until_drawer_opens() {
             .modifier
             .contains(ratatui::style::Modifier::BOLD),
         "抽屉展开后 [rec] 加粗强调"
+    );
+
+    assert!(update::close_prompt_recent(&mut state));
+    assert!(update::toggle_prompt_pages(&mut state));
+    let pages_controls = layout::toolbar_page_controls(bar, "1/2", false).expect("pages counter");
+    let pages_drawn = draw(&state, &config);
+    let pages_counter_cell = &pages_drawn.backend().buffer()[(pages_controls.counter.x, row)];
+    assert_eq!(
+        pages_counter_cell.fg,
+        ratatui::style::Color::Cyan,
+        "进入 Pages 视图后 n/m 变为青色高亮"
+    );
+    assert!(
+        pages_counter_cell
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD),
+        "进入 Pages 视图后 n/m 加粗强调"
     );
 }

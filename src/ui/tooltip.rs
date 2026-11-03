@@ -146,7 +146,9 @@ fn targets(
     }
     if !state.prompt_collapsed && state.right_tab == RightTab::Prompt {
         let mode = state.prompt_owner().prompt_panel.mode;
-        let counter = ui::prompt_frame::prompt_page_header(state)
+        let page_header = ui::prompt_frame::prompt_page_header(state);
+        let counter = page_header
+            .as_ref()
             .map(|page| text::page_counter(page.current, page.total));
         for (button, target) in [
             (layout::PromptToolbarButton::Mode, TooltipTarget::PromptMode),
@@ -171,6 +173,25 @@ fn targets(
             {
                 targets.push((target, area));
             }
+        }
+        if let (Some(page), Some(counter), Some(bar)) = (
+            page_header.as_ref(),
+            counter.as_deref(),
+            layout::prompt_toolbar_rect(view.prompt),
+        ) && let Some(controls) = layout::toolbar_page_controls(bar, counter, page.arrows)
+        {
+            for (rect, target) in [
+                (controls.prev, TooltipTarget::PromptPagePrev),
+                (controls.counter, TooltipTarget::PromptPageCounter),
+                (controls.next, TooltipTarget::PromptPageNext),
+            ] {
+                if rect.width > 0 {
+                    targets.push((target, rect));
+                }
+            }
+        }
+        if let Some(rect) = ui::prompt_frame::prompt_recent_close_rect(view.prompt, state) {
+            targets.push((TooltipTarget::PromptRecentClose, rect));
         }
         if mode == crate::app::prompt::PromptMode::Editor {
             if let Some(rect) = ui::prompt_frame::prompt_status_rect(view.prompt, state) {

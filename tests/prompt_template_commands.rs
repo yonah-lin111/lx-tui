@@ -256,7 +256,7 @@ fn template_buttons_drive_clean_status_delete_with_single_undo() {
     assert!(body.starts_with("# Add Requirement"), "{body}");
     assert!(!body.contains("&&&"));
 
-    // 标题行状态标签：循环 todo → in_progress，标签变为 [run]。
+    // 标题行页名状态：循环 todo → in_progress，不绘制 [run] 按钮，页名文字变为黄色。
     let buttons = ui::prompt::template_buttons(&state.prompt, area);
     assert!(update::cycle_page_template_status(&mut state));
     assert!(state.prompt.text().contains("--end in_progress"));
@@ -264,7 +264,14 @@ fn template_buttons_drive_clean_status_delete_with_single_undo() {
     let title_y = crate::ui::prompt_frame::title_row(view.prompt)
         .expect("title row")
         .y;
-    assert!(line_text(&terminal, title_y).contains("[run]"));
+    assert!(!line_text(&terminal, title_y).contains("[run]"));
+    let status_rect =
+        crate::ui::prompt_frame::prompt_status_rect(view.prompt, &state).expect("page title rect");
+    assert_eq!(
+        terminal.backend().buffer()[(status_rect.x, title_y)].fg,
+        ratatui::style::Color::Yellow,
+        "in_progress 页名文字变为黄色"
+    );
 
     // 清理按钮：移除未填写的空项，保留正文标题与结束行。
     let clean = buttons

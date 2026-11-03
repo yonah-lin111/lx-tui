@@ -411,7 +411,7 @@ fn edit_border_stays_grey_regardless_of_template_status() {
 }
 
 #[test]
-fn title_row_shows_template_status_label_only_in_editor_view() {
+fn title_row_colors_page_title_by_template_status_in_editor_view() {
     let mut state = AppState::demo();
     state.prompt_width = 56;
     state
@@ -424,18 +424,20 @@ fn title_row_shows_template_status_label_only_in_editor_view() {
         .y;
     let buffer = render_buffer(&state);
     let row = panel_row(&buffer, &view, row_y);
-    assert!(row.contains(text::TEMPLATE_BUTTON_RUN), "{row}");
-    let byte = row.find(text::TEMPLATE_BUTTON_RUN).expect("status label");
-    let col = panel.x + u16::try_from(row[..byte].chars().count()).expect("col fits");
+    assert!(
+        !row.contains(text::TEMPLATE_BUTTON_RUN),
+        "不绘制 [run] 按钮: {row}"
+    );
+    let rect = crate::ui::prompt_frame::prompt_status_rect(panel, &state).expect("page title rect");
     assert_eq!(
-        buffer[(col, row_y)].fg,
+        buffer[(rect.x, row_y)].fg,
         Color::Yellow,
-        "in_progress 状态标签为黄色"
+        "in_progress 页名文字为黄色"
     );
 
-    // Tree 视图：标题行不显示状态标签。
+    // Tree 视图：标题行不显示页名状态。
     state.workspaces[0].prompt_panel.mode = crate::app::prompt::PromptMode::Tree;
     let buffer = render_buffer(&state);
     let row = panel_row(&buffer, &view, row_y);
-    assert!(!row.contains(text::TEMPLATE_BUTTON_RUN), "{row}");
+    assert!(!row.contains("· T"), "{row}");
 }

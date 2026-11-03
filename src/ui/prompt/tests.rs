@@ -659,7 +659,10 @@ fn renders_toolbar_buttons_and_divider() {
         Color::Cyan,
         "未展开抽屉时不高亮青色"
     );
-    assert!(buf[(recent.x, bar.y)].modifier.contains(Modifier::DIM));
+    assert!(
+        !buf[(recent.x, bar.y)].modifier.contains(Modifier::DIM),
+        "未展开抽屉时使用默认亮白文字，不置灰"
+    );
     paint_recent_button(panel, &mut buf, PromptMode::Editor, Some("1/2"), true);
     assert_eq!(
         buf[(recent.x, bar.y)].fg,
@@ -1414,7 +1417,7 @@ fn title_row_draft_uses_muted_style() {
 }
 
 #[test]
-fn title_row_status_label_sits_at_right_edge() {
+fn title_row_colors_page_title_by_status_and_omits_status_button() {
     let panel = Rect::new(0, 0, 56, 8);
     let border = crate::ui::prompt_frame::title_row(panel).expect("title row");
     let data = TitleRowData {
@@ -1428,36 +1431,49 @@ fn title_row_status_label_sits_at_right_edge() {
     let row: String = (panel.x..panel.right())
         .map(|x| buf[(x, border.y)].symbol())
         .collect();
-    assert!(row.contains(text::TEMPLATE_BUTTON_RUN), "{row}");
-    let byte = row.find(text::TEMPLATE_BUTTON_RUN).expect("status label");
-    let x = panel.x + u16::try_from(row[..byte].chars().count()).expect("col fits");
-    assert_eq!(buf[(x, border.y)].fg, Color::Yellow, "in_progress 标签黄色");
-    let width = u16::try_from(text::TEMPLATE_BUTTON_RUN.chars().count()).expect("width");
+    assert!(
+        !row.contains(text::TEMPLATE_BUTTON_RUN)
+            && !row.contains(text::TEMPLATE_BUTTON_TODO)
+            && !row.contains(text::TEMPLATE_BUTTON_DONE),
+        "标题行不再绘制 [todo]/[run]/[done] 状态按钮: {row}"
+    );
+    let hit = crate::ui::prompt::status_rect(border, &data, TemplateStatus::InProgress)
+        .expect("page title status rect");
+    assert_eq!(hit.width, 6, "命中区精确包裹 `Page 2`");
     assert_eq!(
-        x + width + 1,
-        panel.right() - 1,
-        "标签贴右端、留 1 列边框线"
+        buf[(hit.x, border.y)].fg,
+        Color::Yellow,
+        "in_progress 页名黄色"
+    );
+    assert!(
+        !buf[(hit.x, border.y)].modifier.contains(Modifier::DIM),
+        "状态着色页名不继承分割线 dim"
     );
 
-    // 三态各自颜色：todo 蓝、done 绿（与旧边框语义一致）。
+    // 三态各自颜色：todo 默认亮白、done 绿（对齐 recent 页状态圆点）。
     for (status, color) in [
-        (TemplateStatus::Todo, Color::LightBlue),
+        (TemplateStatus::Todo, Color::Reset),
         (TemplateStatus::Done, Color::Green),
     ] {
         let mut buf = Buffer::empty(panel);
         paint_title_row(&mut buf, border, &data, Some(status));
-        assert_eq!(buf[(x, border.y)].fg, color, "{status:?} 标签颜色");
+        assert_eq!(buf[(hit.x, border.y)].fg, color, "{status:?} 页名颜色");
+        assert!(!buf[(hit.x, border.y)].modifier.contains(Modifier::DIM));
     }
 
-    // 极窄：隐藏状态标签，优先保留标题。
+    // 无模板块：页名为暗灰 muted_on_border。
+    let mut buf = Buffer::empty(panel);
+    paint_title_row(&mut buf, border, &data, None);
+    assert_eq!(buf[(hit.x, border.y)].fg, Color::Reset);
+    assert!(buf[(hit.x, border.y)].modifier.contains(Modifier::DIM));
+
+    // 极窄挤掉页名时：status_rect 为 None。
     let narrow = Rect::new(0, 0, 10, 8);
     let narrow_border = crate::ui::prompt_frame::title_row(narrow).expect("title row");
-    let mut buf = Buffer::empty(narrow);
-    paint_title_row(&mut buf, narrow_border, &data, Some(TemplateStatus::Todo));
-    let row: String = (narrow.x..narrow.right())
-        .map(|x| buf[(x, narrow_border.y)].symbol())
-        .collect();
-    assert!(!row.contains(text::TEMPLATE_BUTTON_TODO), "{row}");
+    assert!(
+        crate::ui::prompt::status_rect(narrow_border, &data, TemplateStatus::Todo).is_none(),
+        "页名被挤掉时无状态命中区"
+    );
 }
 
 #[test]

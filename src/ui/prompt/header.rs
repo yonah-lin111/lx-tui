@@ -35,12 +35,9 @@ pub struct TitleRowData<'a> {
     pub page: Option<PageHeaderData<'a>>,
 }
 
-/// 标题行左侧标题区（状态标签之前）；无状态标签时到右边角前一列。
-fn title_text_rect(area: Rect, status_x: Option<u16>) -> Rect {
-    let end = match status_x {
-        Some(x) => x.saturating_sub(1),
-        None => area.right().saturating_sub(1),
-    };
+/// 标题行文字区（距左端边框 2 列，到右端边框前 1 列）。
+fn title_text_rect(area: Rect) -> Rect {
+    let end = area.right().saturating_sub(1);
     let x = area.x.saturating_add(2);
     Rect {
         x,
@@ -50,35 +47,30 @@ fn title_text_rect(area: Rect, status_x: Option<u16>) -> Rect {
     }
 }
 
-/// 本页模板块状态标签矩形（渲染、点击命中与 tooltip 共用）；无空间时 None。
-pub fn status_rect(area: Rect, status: TemplateStatus) -> Option<Rect> {
-    status_rect_in(area, status).map(|(rect, _)| rect)
+/// 本页标题行页名矩形（编辑视图且本页存在已闭合 `&&&` 时用于点击切换状态与 tooltip）；
+/// 页名被窄屏完全挤掉时返回 None。
+pub fn status_rect(area: Rect, data: &TitleRowData<'_>, _status: TemplateStatus) -> Option<Rect> {
+    if area.width == 0 || area.height == 0 {
+        return None;
+    }
+    let title_area = title_text_rect(area);
+    if title_area.width == 0 {
+        return None;
+    }
+    let layout = border_text(title_area, data.title.unwrap_or(""), data.page.as_ref());
+    let (_, name_x, hit_width) = layout.name?;
+    (hit_width > 0).then_some(Rect::new(name_x, title_area.y, hit_width, 1))
 }
 
-/// 本页模板块状态标签：右对齐到分割线标题行右端（距边框 `┤` 留 1 列 `─`）；
-/// 标题区至少保留 2 列，空间不足时隐藏。
-fn status_rect_in(area: Rect, status: TemplateStatus) -> Option<(Rect, Style)> {
-    let label = text::template_status_label(status);
-    let width = u16::try_from(UnicodeWidthStr::width(label)).ok()?;
-    let right = area.right().saturating_sub(2);
-    let x = right.checked_sub(width)?;
-    (x >= area.x.saturating_add(5)).then(|| {
-        (
-            Rect::new(x, area.y, width, 1),
-            style::template_border(status),
-        )
-    })
-}
-
-/// 标题行排布结果：条目名段、页名段与其起点列。
+/// 标题行排布结果：条目名段、`· ` 分隔符段、页名段及其可见文字矩形宽度。
 struct BorderText {
     title: String,
-    name: Option<String>,
-    /// 页名段起点列；无页名时等于标题区起点。
-    name_x: u16,
+    sep: Option<(String, u16)>,
+    /// `(带尾部空格的绘制文本, 起点列, 可见页名列宽)`。
+    name: Option<(String, u16, u16)>,
 }
 
-/// 按可用宽度排布标题行。优先级：条目名 → 页名（页控件由调用方单独保证）。
+/// 按可用宽度排布标题行。优先级：条目名 → 页名。
 fn border_text(area: Rect, title: &str, page: Option<&PageHeaderData<'_>>) -> BorderText {
     let available = usize::from(area.width);
     let title_part = if title.is_empty() {
@@ -86,33 +78,38 @@ fn border_text(area: Rect, title: &str, page: Option<&PageHeaderData<'_>>) -> Bo
     } else {
         format!(" {title} ")
     };
-    let name_part = page
-        .map(|page| page.name)
-        .filter(|name| !name.is_empty())
-        .map(|name| format!("{} {name} ", text::PROMPT_PAGE_NAME_PREFIX))
-        .unwrap_or_default();
-    if title_part.width().saturating_add(name_part.width()) <= available {
-        let name_x = area.x.saturating_add(title_part.width() as u16);
-        return BorderText {
-            title: title_part,
-            name: (!name_part.is_empty()).then_some(name_part),
-            name_x,
-        };
-    }
-    let name_budget = available.saturating_sub(title_part.width());
-    if !name_part.is_empty() && name_budget >= 2 && title_part.width() <= available {
-        let name = text::truncate_to_width(&name_part, name_budget);
-        let name_x = area.x.saturating_add(title_part.width() as u16);
-        return BorderText {
-            title: title_part,
-            name: Some(name),
-            name_x,
-        };
+    let sep = format!("{} ", text::PROMPT_PAGE_NAME_PREFIX);
+    if let Some(raw_name) = page.map(|page| page.name).filter(|name| !name.is_empty()) {
+        let name_padded = format!("{raw_name} ");
+        let full_name_width = sep.width().saturating_add(name_padded.width());
+        if title_part.width().saturating_add(full_name_width) <= available {
+            let sep_x = area.x.saturating_add(title_part.width() as u16);
+            let name_x = sep_x.saturating_add(sep.width() as u16);
+            let hit_width = u16::try_from(raw_name.width()).unwrap_or(0);
+            return BorderText {
+                title: title_part,
+                sep: (hit_width > 0).then_some((sep, sep_x)),
+                name: (hit_width > 0).then_some((name_padded, name_x, hit_width)),
+            };
+        }
+        let name_budget = available.saturating_sub(title_part.width());
+        if name_budget > sep.width() && title_part.width() <= available {
+            let sep_x = area.x.saturating_add(title_part.width() as u16);
+            let name_x = sep_x.saturating_add(sep.width() as u16);
+            let page_budget = name_budget.saturating_sub(sep.width());
+            let truncated = text::truncate_to_width(&name_padded, page_budget);
+            let hit_width = u16::try_from(truncated.trim_end_matches(' ').width()).unwrap_or(0);
+            return BorderText {
+                title: title_part,
+                sep: (hit_width > 0).then_some((sep, sep_x)),
+                name: (hit_width > 0).then_some((truncated, name_x, hit_width)),
+            };
+        }
     }
     BorderText {
         title: text::truncate_to_width(&title_part, available),
+        sep: None,
         name: None,
-        name_x: area.x,
     }
 }
 
@@ -125,10 +122,10 @@ fn border_title_style(draft: bool) -> Style {
     }
 }
 
-/// 绘制标题行标题与状态标签；须在面板边框绘制之后调用（覆盖 `─`）。
+/// 绘制标题行 `条目名 · 页名`；须在面板分割线绘制之后调用（覆盖 `─`）。
 ///
-/// `status` 为本页 `&&&` 模板块状态：`Some` 时在标题行最右侧画 `[todo]`/`[run]`/`[done]`，
-/// 颜色按状态（蓝/黄/绿）；空间不足时隐藏标签，优先保留标题。
+/// `status` 为本页已闭合 `&&&` 模板块状态：`Some` 时按状态为页名（`· ` 之后）着色，
+/// `None` 时页名使用 `muted_on_border`。
 pub fn paint_title_row(
     buf: &mut Buffer,
     area: Rect,
@@ -138,20 +135,25 @@ pub fn paint_title_row(
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let status_area = status.and_then(|status| status_rect_in(area, status));
-    let title_area = title_text_rect(area, status_area.as_ref().map(|(rect, _)| rect.x));
+    let title_area = title_text_rect(area);
     let title_style = border_title_style(data.draft);
+    let name_style = match status {
+        Some(status) => style::template_border(status),
+        None => style::muted_on_border(),
+    };
     if title_area.width > 0 {
-        paint_border_text(buf, title_area, data, title_style);
-    }
-    if let (Some(status), Some((rect, status_style))) = (status, status_area) {
-        let label = text::template_status_label(status);
-        buf.set_stringn(rect.x, rect.y, label, usize::from(rect.width), status_style);
+        paint_border_text(buf, title_area, data, title_style, name_style);
     }
 }
 
-/// 绘制 `条目名 · 页名`：页名段固定在标题区右缘之后，条目名按剩余宽度截断。
-fn paint_border_text(buf: &mut Buffer, area: Rect, data: &TitleRowData<'_>, title_style: Style) {
+/// 绘制 `条目名 · 页名`：`· ` 恒为暗灰，页名按 `name_style` 着色。
+fn paint_border_text(
+    buf: &mut Buffer,
+    area: Rect,
+    data: &TitleRowData<'_>,
+    title_style: Style,
+    name_style: Style,
+) {
     let layout = border_text(area, data.title.unwrap_or(""), data.page.as_ref());
     if !layout.title.is_empty() {
         buf.set_stringn(
@@ -162,14 +164,11 @@ fn paint_border_text(buf: &mut Buffer, area: Rect, data: &TitleRowData<'_>, titl
             title_style,
         );
     }
-    if let Some(name) = layout.name.as_deref() {
-        buf.set_stringn(
-            layout.name_x,
-            area.y,
-            name,
-            name.width(),
-            style::muted_on_border(),
-        );
+    if let Some((sep, sep_x)) = layout.sep.as_ref() {
+        buf.set_stringn(*sep_x, area.y, sep, sep.width(), style::muted_on_border());
+    }
+    if let Some((name, name_x, _)) = layout.name.as_ref() {
+        buf.set_stringn(*name_x, area.y, name, name.width(), name_style);
     }
 }
 
@@ -273,11 +272,16 @@ fn paint_page_controls(buf: &mut Buffer, controls: &PromptPageControls, page: &P
         }
     }
     let counter = text::page_counter(page.current, page.total);
+    let counter_style = if page.arrows {
+        style::text_on_border()
+    } else {
+        style::accent()
+    };
     buf.set_stringn(
         controls.counter.x,
         y,
         &counter,
         usize::from(controls.counter.width),
-        style::border_title(),
+        counter_style,
     );
 }
