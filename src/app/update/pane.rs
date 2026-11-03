@@ -884,6 +884,10 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
                 clear_selection(state);
             }
             state.prompt.resize(cols, rows);
+            let workspace = state.prompt_workspace();
+            if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
+                workspace_state.prompt_panel.recent_visible = split.visible_entries;
+            }
             state.prompt_resize_pending = false;
         } else if let Some(pane) = state.pane_mut_anywhere(*id) {
             let (cols, rows) = layout::pane_inner_size(*rect);

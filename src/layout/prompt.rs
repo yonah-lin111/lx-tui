@@ -406,60 +406,32 @@ pub struct PromptBodySplit {
     pub visible_entries: usize,
 }
 
-/// 分割主视图与底部抽屉：抽屉最多 3 条（1 行分割线 + 6 行内容），
-/// 记录不足 2 条时仍保留 2 条高度（5 行），且不超过内容区高度的一半；
-/// 空间不足时优先保障主视图、从 3 条减少到 2 条，仍放不下则收起抽屉。
+/// 分割主视图与底部抽屉：抽屉高度按内容区一半内的容量动态增长（1 行分割线 + 每条 2 行），
+/// 非空记录至少 2 条、至多 `MAX_RECENT_PAGES` 条；空态固定占 2 行；半屏放不下最低 2 条时收起。
 pub fn prompt_body_split(panel: Rect, recent_open: bool, recent_count: usize) -> PromptBodySplit {
     let inner = pane_inner_rect(panel);
     let body = prompt_body_rect(inner);
-    let main = body_text_rect(body);
     if !recent_open || body.height == 0 {
-        return PromptBodySplit {
-            main,
-            main_scrollbar: (body.width >= 2).then_some(Rect::new(
-                body.right() - 1,
-                main.y,
-                1,
-                main.height,
-            )),
-            recent_divider: None,
-            recent_text: None,
-            recent_scrollbar: None,
-            visible_entries: 0,
-        };
+        return suppressed_split(body);
     }
+    let main = body_text_rect(body);
     let max_height = body.height / 2;
-    let mut visible = if recent_count == 0 {
-        0
+    // 与 recent_page_rows 的截断保持一致，避免布局与渲染行数不一致。
+    let recent_count = recent_count.min(crate::app::prompt::MAX_RECENT_PAGES);
+    let (visible, drawer_height) = if recent_count == 0 {
+        (0, 2)
     } else {
-        recent_count.clamp(
-            crate::app::prompt::RECENT_MIN_VISIBLE_ENTRIES,
-            crate::app::prompt::RECENT_VISIBLE_ENTRIES,
-        )
+        let capacity = usize::from(max_height.saturating_sub(1) / 2);
+        if capacity < crate::app::prompt::RECENT_MIN_VISIBLE_ENTRIES {
+            return suppressed_split(body);
+        }
+        let visible = recent_count
+            .max(crate::app::prompt::RECENT_MIN_VISIBLE_ENTRIES)
+            .min(capacity);
+        (visible, 1 + 2 * visible as u16)
     };
-    let mut drawer_height = if visible == 0 {
-        2
-    } else {
-        1 + 2 * visible as u16
-    };
-    while visible > crate::app::prompt::RECENT_MIN_VISIBLE_ENTRIES && drawer_height > max_height {
-        visible -= 1;
-        drawer_height = 1 + 2 * visible as u16;
-    }
     if drawer_height > max_height {
-        return PromptBodySplit {
-            main,
-            main_scrollbar: (body.width >= 2).then_some(Rect::new(
-                body.right() - 1,
-                main.y,
-                1,
-                main.height,
-            )),
-            recent_divider: None,
-            recent_text: None,
-            recent_scrollbar: None,
-            visible_entries: 0,
-        };
+        return suppressed_split(body);
     }
     let divider_y = body.y + body.height - drawer_height;
     let divider = Rect::new(body.x, divider_y, body.width, 1);
@@ -493,7 +465,25 @@ pub fn prompt_body_split(panel: Rect, recent_open: bool, recent_count: usize) ->
         recent_divider: Some(divider),
         recent_text: Some(recent_text),
         recent_scrollbar: scrollbar,
-        visible_entries: if recent_count == 0 { 0 } else { visible },
+        visible_entries: visible,
+    }
+}
+
+/// 抽屉收起或空间不足时的分割结果：主视图占满内容区。
+fn suppressed_split(body: Rect) -> PromptBodySplit {
+    let main = body_text_rect(body);
+    PromptBodySplit {
+        main,
+        main_scrollbar: (body.width >= 2).then_some(Rect::new(
+            body.right() - 1,
+            main.y,
+            1,
+            main.height,
+        )),
+        recent_divider: None,
+        recent_text: None,
+        recent_scrollbar: None,
+        visible_entries: 0,
     }
 }
 

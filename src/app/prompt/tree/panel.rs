@@ -89,6 +89,9 @@ pub struct PromptPanel {
     pub recent_scroll: usize,
     /// 抽屉键盘选中项下标；抽屉收起时为 None。
     pub recent_active: Option<usize>,
+    /// 抽屉当前可见条目数；由 resize_panes 按几何写入，抽屉收起时为 0。
+    /// 只供更新层判断选中窗口，渲染层不读取。
+    pub recent_visible: usize,
     /// 已更新内存但数据库尚未确认的页（条目 id、页 id）。
     pending_saves: Vec<(i64, i64)>,
     /// 离开编辑视图时的编辑状态暂存（切到列表时写入）；返回同一目标时恢复。
@@ -121,6 +124,7 @@ impl PromptPanel {
             recent_open: false,
             recent_scroll: 0,
             recent_active: None,
+            recent_visible: 0,
             pending_saves: Vec::new(),
             editor_stash: None,
         }

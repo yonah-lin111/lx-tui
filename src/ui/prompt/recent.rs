@@ -1,4 +1,4 @@
-//! 最近修改页面抽屉：分割线、关闭按钮、双行条目、状态圆点与键盘/悬停高亮；只读状态。
+//! 最近修改页面抽屉：分割线、关闭按钮、页标题/条目名双行条目、状态色与键盘/悬停高亮；只读状态。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -114,8 +114,8 @@ fn paint_entry(buf: &mut Buffer, area: Rect, y: u16, row: &RecentPageRow, hovere
     let x = tree::paint_text(buf, area.x, y, &marker, base, area.right());
     let time_width = row.time_label.width();
     let time_x = area.right().saturating_sub(time_width as u16);
-    // 至少给左侧条目名保留 4 列（首字符 + 省略号），窄屏优先保留条目名。
-    let name_right = if time_x >= x.saturating_add(5) {
+    // 至少给左侧页标题保留 4 列（首字符 + 省略号），窄屏优先保留标题。
+    let title_right = if time_x >= x.saturating_add(5) {
         tree::paint_text(
             buf,
             time_x,
@@ -128,52 +128,35 @@ fn paint_entry(buf: &mut Buffer, area: Rect, y: u16, row: &RecentPageRow, hovere
     } else {
         area.right()
     };
-    let name_style = if row.current {
-        style::strong().patch(highlight)
+    // 页标题按 &&& 状态着色：todo 默认亮白、in_progress 黄、done 绿、无状态暗灰。
+    let title_style = match row.status {
+        Some(TemplateStatus::Todo) => style::text(),
+        Some(status) => style::template_status(status),
+        None => style::muted(),
+    };
+    let title_style = if row.current {
+        title_style.patch(style::strong())
     } else {
-        base
+        title_style
     };
     tree::paint_name(
         buf,
         x,
         y,
-        &row.prompt_name,
-        name_style,
-        usize::from(name_right.saturating_sub(x)),
-        name_right,
+        &row.page_title,
+        base.patch(title_style),
+        usize::from(title_right.saturating_sub(x)),
+        title_right,
     );
-    let title_x = tree::paint_text(buf, area.x, y + 1, "  ", base, area.right());
-    let used_right = if let Some(status) = row.status {
-        let (dot, dot_style) = match status {
-            TemplateStatus::Todo => (text::PAGE_STATUS_OPEN, style::muted().patch(highlight)),
-            TemplateStatus::InProgress => (
-                text::PAGE_STATUS_DOT,
-                base.patch(style::template_status(TemplateStatus::InProgress)),
-            ),
-            TemplateStatus::Done => (
-                text::PAGE_STATUS_DOT,
-                base.patch(style::template_status(TemplateStatus::Done)),
-            ),
-        };
-        let dot_width = u16::try_from(dot.width()).unwrap_or(1);
-        let dot_x = area.right().saturating_sub(dot_width);
-        if dot_x >= title_x {
-            tree::paint_text(buf, dot_x, y + 1, dot, dot_style, area.right());
-            dot_x.saturating_sub(1)
-        } else {
-            area.right()
-        }
-    } else {
-        area.right()
-    };
+    let name_x = tree::paint_text(buf, area.x, y + 1, "  ", base, area.right());
     tree::paint_name(
         buf,
-        title_x,
+        name_x,
         y + 1,
-        &row.page_title,
+        &row.prompt_name,
         style::muted().patch(highlight),
-        usize::from(used_right.saturating_sub(title_x)),
-        used_right,
+        usize::from(area.right().saturating_sub(name_x)),
+        area.right(),
     );
 }
 

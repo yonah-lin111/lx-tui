@@ -2,18 +2,23 @@
 
 use super::*;
 use crate::app::prompt::PromptPageId;
+use ratatui::style::{Color, Modifier};
 
-fn row(current: bool) -> RecentPageRow {
+fn row_with(status: Option<TemplateStatus>, current: bool) -> RecentPageRow {
     RecentPageRow {
         item_id: 1,
         page_id: PromptPageId::Saved(1),
         prompt_name: "Alpha".into(),
         page_title: "Auth Flow".into(),
-        status: Some(TemplateStatus::InProgress),
+        status,
         updated_at: 100,
         time_label: "[5m]".into(),
         current,
     }
+}
+
+fn row(current: bool) -> RecentPageRow {
+    row_with(Some(TemplateStatus::InProgress), current)
 }
 
 fn draw(
@@ -52,16 +57,64 @@ fn line(buf: &ratatui::buffer::Buffer, y: u16, width: u16) -> String {
 }
 
 #[test]
-fn renders_two_line_entries_with_time_and_status_dot() {
+fn renders_page_title_then_prompt_name_without_dot() {
     let (buf, _) = draw(&[row(true)], None, None);
     assert!(line(&buf, 2, 40).contains("recent"), "分割线标签");
     let first = line(&buf, 3, 40);
     let second = line(&buf, 4, 40);
-    assert!(first.contains("Alpha"), "{first}");
+    assert!(first.contains("Auth Flow"), "{first}");
     assert!(first.contains("[5m]"), "{first}");
     assert!(first.trim_start().starts_with('❯'), "当前页标记：{first}");
-    assert!(second.contains("Auth Flow"), "{second}");
-    assert!(second.ends_with('●'), "状态圆点在右缘：{second}");
+    assert!(second.contains("Alpha"), "{second}");
+    for text in [&first, &second] {
+        assert!(
+            !text.contains('●') && !text.contains('○'),
+            "不再绘制状态圆点：{text}"
+        );
+    }
+}
+
+#[test]
+fn page_title_uses_status_colors() {
+    let cases = [
+        (TemplateStatus::Todo, Color::Reset, false),
+        (TemplateStatus::InProgress, Color::Yellow, false),
+        (TemplateStatus::Done, Color::Green, false),
+    ];
+    for (status, color, dim) in cases {
+        let (buf, area) = draw(&[row_with(Some(status), false)], None, None);
+        let cell = &buf[(area.x + 2, area.y)];
+        assert_eq!(cell.fg, color, "{status:?} 页标题颜色");
+        assert_eq!(cell.modifier.contains(Modifier::DIM), dim, "{status:?} DIM");
+    }
+
+    let (buf, area) = draw(&[row_with(None, false)], None, None);
+    let cell = &buf[(area.x + 2, area.y)];
+    assert!(cell.modifier.contains(Modifier::DIM), "无状态页标题压暗");
+}
+
+#[test]
+fn current_page_title_is_bold() {
+    let (buf, area) = draw(&[row(true)], None, None);
+    let cell = &buf[(area.x + 2, area.y)];
+    assert!(cell.modifier.contains(Modifier::BOLD), "当前页标题加粗");
+}
+
+#[test]
+fn status_color_wins_over_hover_foreground() {
+    for (status, color) in [
+        (TemplateStatus::InProgress, Color::Yellow),
+        (TemplateStatus::Done, Color::Green),
+    ] {
+        let (buf, area) = draw(&[row_with(Some(status), false)], Some(0), None);
+        let cell = &buf[(area.x + 2, area.y)];
+        assert_eq!(cell.fg, color, "{status:?} 状态色优先于选中前景");
+        assert_eq!(
+            cell.bg,
+            style::selection().bg.expect("selection background"),
+            "{status:?} 选中底色保留"
+        );
+    }
 }
 
 #[test]

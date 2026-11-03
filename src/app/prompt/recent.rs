@@ -5,8 +5,6 @@ use crate::platform::format_relative_time;
 
 use super::{PromptEditing, PromptPageId, PromptPanel, page_display_title, page_title_status};
 
-/// 抽屉最多展示的条目数（每项占 2 行）。
-pub const RECENT_VISIBLE_ENTRIES: usize = 3;
 /// 抽屉展开时至少保留的条目高度；记录不足时也留出第二行位置。
 pub const RECENT_MIN_VISIBLE_ENTRIES: usize = 2;
 /// 参与排序的最近页面上限。
@@ -77,7 +75,7 @@ pub fn recent_page_rows(
     rows
 }
 
-/// 已入库页总数（抽屉高度只关心前 3 条，超过 3 条按 3 条计）。
+/// 已入库页总数；抽屉几何会按 `MAX_RECENT_PAGES` 截断后再计算高度。
 pub fn recent_page_count(panel: &PromptPanel) -> usize {
     panel
         .tree

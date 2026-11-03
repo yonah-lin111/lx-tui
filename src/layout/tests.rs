@@ -610,7 +610,7 @@ fn prompt_body_split_reserves_drawer_rows() {
     assert_eq!(two.recent_scrollbar.expect("scrollbar").height, 4);
 
     let capped = prompt_body_split(panel, true, 10);
-    assert_eq!(capped.visible_entries, 3, "最多同时显示 3 条");
+    assert_eq!(capped.visible_entries, 3, "半屏容量 3 条");
     assert_eq!(capped.main.height, body.height - 7);
 
     let one = prompt_body_split(panel, true, 1);
@@ -620,8 +620,29 @@ fn prompt_body_split_reserves_drawer_rows() {
 }
 
 #[test]
+fn prompt_body_split_grows_to_half_height() {
+    // 面板 40x30：内容区 26 行，半屏 13 行，容量 (13-1)/2 = 6 条。
+    let panel = Rect::new(0, 0, 40, 30);
+    let body = prompt_body_rect(pane_inner_rect(panel));
+    let split = prompt_body_split(panel, true, 10);
+    assert_eq!(split.visible_entries, 6);
+    assert_eq!(split.main.height, body.height - 13);
+    assert_eq!(split.recent_text.expect("content").height, 12);
+    assert_eq!(split.recent_scrollbar.expect("scrollbar").height, 12);
+}
+
+#[test]
+fn prompt_body_split_caps_at_twenty_entries() {
+    // 面板足够高时，布局仍只按 MAX_RECENT_PAGES 条参与高度计算。
+    let panel = Rect::new(0, 0, 40, 100);
+    let split = prompt_body_split(panel, true, 25);
+    assert_eq!(split.visible_entries, 20);
+    assert_eq!(split.recent_text.expect("content").height, 40);
+}
+
+#[test]
 fn prompt_body_split_shrinks_to_minimum_two_then_suppresses() {
-    // 内容区 10 行：抽屉上限 5 行，3 条放不下，降到最低 2 条（1+4）。
+    // 内容区 10 行：抽屉上限 5 行，半屏容量 2 条（1+4）。
     let panel = Rect::new(0, 0, 40, 14);
     let split = prompt_body_split(panel, true, 10);
     assert_eq!(split.visible_entries, 2);
