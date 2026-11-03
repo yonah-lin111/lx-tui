@@ -220,6 +220,13 @@ pub(crate) fn render_body(
         draft,
         page_data.page.as_ref(),
     );
+    if panel.recent_open {
+        let counter = page_data
+            .page
+            .as_ref()
+            .map(|page| text::page_counter(page.current, page.total));
+        prompt::paint_recent_button(area, frame.buffer_mut(), mode, counter.as_deref(), true);
+    }
     if let Some(row) = title_row(area) {
         prompt::paint_title_row(frame.buffer_mut(), row, &page_data, status);
     }

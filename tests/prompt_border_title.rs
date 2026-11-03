@@ -280,3 +280,45 @@ fn border_title_truncates_item_title_when_narrow() {
     assert!(!border.contains(&long_title), "条目名过长被截断: {border}");
     assert!(border.contains('…'), "条目名以省略号收尾: {border}");
 }
+
+#[test]
+fn rec_button_is_muted_until_drawer_opens() {
+    let (mut state, config, view) = ready_state();
+    paged_prompt(&mut state);
+    update::focus_prompt(&mut state);
+    let row = layout::pane_inner_rect(view.prompt).y;
+    let rec = layout::prompt_toolbar_button_rect(
+        view.prompt,
+        layout::PromptToolbarButton::Recent,
+        lx_tui::app::prompt::PromptMode::Editor,
+        Some("1/2"),
+    )
+    .expect("recent button");
+
+    let closed = draw(&state, &config);
+    let closed_cell = &closed.backend().buffer()[(rec.x, row)];
+    assert_ne!(
+        closed_cell.fg,
+        ratatui::style::Color::Cyan,
+        "抽屉未打开时 [rec] 不高亮青色"
+    );
+    assert!(
+        closed_cell.modifier.contains(ratatui::style::Modifier::DIM),
+        "抽屉未打开时 [rec] 使用 muted"
+    );
+
+    assert!(update::toggle_prompt_recent(&mut state));
+    let opened = draw(&state, &config);
+    let opened_cell = &opened.backend().buffer()[(rec.x, row)];
+    assert_eq!(
+        opened_cell.fg,
+        ratatui::style::Color::Cyan,
+        "抽屉展开后 [rec] 变为青色"
+    );
+    assert!(
+        opened_cell
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD),
+        "抽屉展开后 [rec] 加粗强调"
+    );
+}

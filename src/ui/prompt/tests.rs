@@ -646,6 +646,28 @@ fn renders_toolbar_buttons_and_divider() {
             .map(|x| buf[(x, rect.y)].symbol())
             .collect()
     };
+    let recent = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::Recent,
+        PromptMode::Editor,
+        Some("1/2"),
+    )
+    .expect("recent visible");
+    assert_eq!(render_label(&buf, recent), text::PROMPT_RECENT_LABEL);
+    assert_ne!(
+        buf[(recent.x, bar.y)].fg,
+        Color::Cyan,
+        "未展开抽屉时不高亮青色"
+    );
+    assert!(buf[(recent.x, bar.y)].modifier.contains(Modifier::DIM));
+    paint_recent_button(panel, &mut buf, PromptMode::Editor, Some("1/2"), true);
+    assert_eq!(
+        buf[(recent.x, bar.y)].fg,
+        Color::Cyan,
+        "展开抽屉后高亮为青色"
+    );
+    assert!(buf[(recent.x, bar.y)].modifier.contains(Modifier::BOLD));
+
     let undo = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::Undo,
