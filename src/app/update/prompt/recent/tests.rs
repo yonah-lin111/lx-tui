@@ -85,16 +85,9 @@ fn open_recent_page_commits_current_and_switches_target() {
     let panel = &state.workspaces[0].prompt_panel;
     assert_eq!(panel.mode, PromptMode::Editor);
     assert_eq!(panel.editing, Some(PromptEditing::Item(12)));
-    assert!(panel.recent_open, "点击后抽屉保持展开");
-    let after = prompt_recent_rows(&state);
-    let active = after
-        .get(panel.recent_active.expect("recent active"))
-        .expect("active row");
-    assert_eq!(
-        active.page_id,
-        PromptPageId::Saved(12),
-        "选中项跟随打开的页"
-    );
+    assert!(!panel.recent_open, "选择后抽屉收起");
+    assert_eq!(panel.recent_active, None);
+    assert_eq!(panel.recent_scroll, 0);
     assert_eq!(state.prompt.text(), "beta");
     // 旧页正文已提交到内存。
     let alpha = panel
@@ -103,6 +96,64 @@ fn open_recent_page_commits_current_and_switches_target() {
         .and_then(|item| item.page(PromptPageId::Saved(10)))
         .expect("alpha page");
     assert_eq!(alpha.content, "alpha edited");
+}
+
+#[test]
+fn selecting_current_page_closes_without_reload() {
+    let mut state = demo_state();
+    state.workspaces[0].prompt_panel.recent_open = true;
+    state.workspaces[0].prompt_panel.mode = PromptMode::Editor;
+    state.workspaces[0].prompt_panel.editing = Some(PromptEditing::Item(10));
+    state.prompt.set_text("alpha edited");
+    let index = prompt_recent_rows(&state)
+        .iter()
+        .position(|row| row.page_id == PromptPageId::Saved(10))
+        .expect("current page in recent rows");
+
+    assert!(open_recent_page(&mut state, index));
+
+    let panel = &state.workspaces[0].prompt_panel;
+    assert!(!panel.recent_open, "当前页也收起抽屉");
+    assert_eq!(panel.editing, Some(PromptEditing::Item(10)));
+    assert_eq!(state.prompt.text(), "alpha edited", "当前页不重载正文");
+}
+
+#[test]
+fn opening_page_without_edit_keeps_recent_order() {
+    let mut state = demo_state();
+    state.workspaces[0].prompt_panel.recent_open = true;
+    state.workspaces[0].prompt_panel.mode = PromptMode::Editor;
+    state.workspaces[0].prompt_panel.editing = Some(PromptEditing::Item(10));
+    state.prompt.set_text("alpha");
+
+    let before: Vec<i64> = prompt_recent_rows(&state)
+        .iter()
+        .filter_map(|row| row.page_id.saved())
+        .collect();
+    assert_eq!(before, vec![12, 10], "Beta 更新时间更晚，应排在前");
+
+    let beta = prompt_recent_rows(&state)
+        .iter()
+        .position(|row| row.page_id == PromptPageId::Saved(12))
+        .expect("beta in recent rows");
+    assert!(open_recent_page(&mut state, beta));
+    assert_eq!(state.prompt.text(), "beta");
+
+    let after: Vec<i64> = prompt_recent_rows(&state)
+        .iter()
+        .filter_map(|row| row.page_id.saved())
+        .collect();
+    assert_eq!(after, before, "仅打开不修改不得重排 recent");
+    let panel = &state.workspaces[0].prompt_panel;
+    assert_eq!(
+        panel
+            .tree
+            .item(10)
+            .and_then(|item| item.page(PromptPageId::Saved(10)))
+            .map(|page| page.updated_at),
+        Some(100),
+        "未修改页的 updated_at 不变"
+    );
 }
 
 #[test]

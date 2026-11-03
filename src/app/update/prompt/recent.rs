@@ -84,12 +84,13 @@ pub fn close_prompt_recent(state: &mut AppState) -> bool {
     panel.recent_open = false;
     panel.recent_scroll = 0;
     panel.recent_active = None;
+    panel.recent_visible = 0;
     state.prompt_recent_hover = None;
     state.prompt_resize_pending = true;
     true
 }
 
-/// 单击抽屉条目：结算当前编辑，切换对应条目 + 页并保持抽屉展开。
+/// 单击抽屉条目：结算当前编辑，切换对应条目 + 页，随后收起抽屉。
 pub fn open_recent_page(state: &mut AppState, index: usize) -> bool {
     let workspace = state.prompt_workspace();
     let Some(target) = prompt_recent_rows(state).get(index).cloned() else {
@@ -106,13 +107,9 @@ pub fn open_recent_page(state: &mut AppState, index: usize) -> bool {
                 .item(target.item_id)
                 .is_some_and(|item| item.active_page == target.page_id)
     }) {
-        // 已经是当前页：不动历史与光标，但仍让选中态跟随点击/回车项。
-        if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
-            let panel = &mut workspace_state.prompt_panel;
-            panel.recent_active = Some(index);
-            panel.recent_scroll = index.saturating_sub(1);
-        }
+        // 已经是当前页：不重载正文，只收起抽屉。
         state.prompt_recent_hover = None;
+        close_prompt_recent(state);
         return true;
     }
     // 先把当前编辑写入内存/登记保存，避免切换后丢字。
@@ -159,17 +156,8 @@ pub fn open_recent_page(state: &mut AppState, index: usize) -> bool {
     state.selection = None;
     state.prompt_collapsed = false;
     crate::app::update::focus_prompt(state);
-    let rows = prompt_recent_rows(state);
-    if let Some(index) = rows
-        .iter()
-        .position(|row| row.item_id == target.item_id && row.page_id == target.page_id)
-        && let Some(workspace_state) = state.workspaces.get_mut(workspace)
-    {
-        let panel = &mut workspace_state.prompt_panel;
-        panel.recent_active = Some(index);
-        panel.recent_scroll = index.saturating_sub(1);
-    }
     state.prompt_recent_hover = None;
+    close_prompt_recent(state);
     true
 }
 
@@ -348,7 +336,7 @@ pub(crate) fn sync_prompt_recent_selection(
         .or(panel.recent_active)
         .unwrap_or(0)
         .min(rows.len() - 1);
-    let visible = crate::app::prompt::RECENT_VISIBLE_ENTRIES;
+    let visible = panel.recent_visible.max(1);
     panel.recent_active = Some(next);
     panel.recent_scroll = keep_visible(panel.recent_scroll, next, visible, rows.len());
     if state

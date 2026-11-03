@@ -90,7 +90,7 @@ fn clicking_rec_button_toggles_drawer() {
 }
 
 #[test]
-fn clicking_recent_entry_opens_page_and_keeps_drawer() {
+fn clicking_recent_entry_opens_page_and_closes_drawer() {
     let config = Config::default();
     let mut state = paged_prompt_state();
     update::focus_prompt(&mut state);
@@ -105,7 +105,8 @@ fn clicking_recent_entry_opens_page_and_keeps_drawer() {
     click(&mut state, &geo, area.x + 2, area.y + beta as u16 * 2);
 
     let panel = &state.workspaces[0].prompt_panel;
-    assert!(panel.recent_open, "跳转后抽屉保持展开");
+    assert!(!panel.recent_open, "选择后抽屉收起");
+    assert_eq!(panel.recent_active, None);
     assert_eq!(panel.mode, PromptMode::Editor);
     assert_eq!(
         panel.editing,
@@ -116,7 +117,6 @@ fn clicking_recent_entry_opens_page_and_keeps_drawer() {
         panel.tree.item(7).map(|item| item.active_page),
         Some(crate::app::prompt::PromptPageId::Saved(70))
     );
-    assert_eq!(panel.recent_active, Some(beta), "点击后高亮跟随目标");
 }
 
 #[test]
@@ -145,7 +145,10 @@ fn clicking_recent_entry_opens_from_tree_and_pages() {
             "{mode:?} 点击后进入编辑视图"
         );
         assert_eq!(state.prompt.text(), "beta", "{mode:?}");
-        assert!(state.workspaces[0].prompt_panel.recent_open, "{mode:?}");
+        assert!(
+            !state.workspaces[0].prompt_panel.recent_open,
+            "{mode:?} 选择后抽屉收起"
+        );
     }
 }
 
@@ -168,7 +171,7 @@ fn recent_scrollbar_supports_track_click_and_thumb_drag() {
         .replace(vec![], vec![item]);
     assert!(update::edit_prompt_item(&mut state, 0, 7));
     update::focus_prompt(&mut state);
-    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 20));
     key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
     // 本用例只验证滚动条：把键盘选中与滚动归零，确保轨道点击从顶部开始。
     state.workspaces[0].prompt_panel.recent_active = None;
@@ -239,20 +242,15 @@ fn keyboard_defaults_to_current_page_and_navigates_to_open() {
     );
     key(&mut state, &geo, KeyCode::Enter, KeyModifiers::NONE);
     assert_eq!(state.prompt.text(), "beta", "Enter 打开高亮记录");
-    assert!(state.workspaces[0].prompt_panel.recent_open);
-    assert_eq!(
-        state.workspaces[0].prompt_panel.recent_active,
-        Some(0),
-        "打开后高亮跟随目标"
+    assert!(
+        !state.workspaces[0].prompt_panel.recent_open,
+        "Enter 打开后抽屉收起"
     );
-
-    key(&mut state, &geo, KeyCode::Esc, KeyModifiers::NONE);
-    assert!(!state.workspaces[0].prompt_panel.recent_open);
     assert_eq!(state.workspaces[0].prompt_panel.recent_active, None);
     assert_eq!(
         state.workspaces[0].prompt_panel.mode,
         PromptMode::Editor,
-        "Esc 回到原视图"
+        "打开后回到编辑视图"
     );
     assert_eq!(state.prompt.text(), "beta", "收起抽屉不改正文");
 }
@@ -320,7 +318,7 @@ fn keyboard_navigation_keeps_selection_visible() {
         .replace(vec![], vec![item]);
     assert!(update::edit_prompt_item(&mut state, 0, 7));
     update::focus_prompt(&mut state);
-    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 20));
     key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
     let rows = ui::prompt_frame::recent_rows(&state);
     let visible =
@@ -392,7 +390,7 @@ fn wheel_over_drawer_scrolls_entries_without_touching_editor() {
         .replace(vec![], vec![item]);
     assert!(update::edit_prompt_item(&mut state, 0, 7));
     update::focus_prompt(&mut state);
-    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 20));
     key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
     let (area, _) = drawer_rects(&state, &geo);
     let scroll_before = state.prompt.scroll();

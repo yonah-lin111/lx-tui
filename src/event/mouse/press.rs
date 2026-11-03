@@ -364,7 +364,7 @@ pub(crate) fn handle_mouse_down_left(
     } else if let Some(index) =
         ui::prompt_frame::prompt_recent_row_at(view.prompt, state, mouse.column, mouse.row)
     {
-        // 最近页面抽屉条目：单击直接打开对应条目 + 页，抽屉保持展开。
+        // 最近页面抽屉条目：单击打开对应条目 + 页，随后收起抽屉。
         update::open_recent_page(state, index);
         *dirty = true;
     } else if ui::prompt_frame::prompt_recent_contains(view.prompt, state, mouse.column, mouse.row)
