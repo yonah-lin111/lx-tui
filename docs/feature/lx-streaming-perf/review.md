@@ -1,6 +1,7 @@
 # `lx-streaming-perf` 代码审查（review.md）
 
 > 审查范围：`feat/lx-streaming-perf` 分支相对 `dev` 的全部改动（提交 `062aed2b` + 本次 review 修复）。
+> 合并状态：已合并到 `dev`（合并提交 `980308ce`），P1/P2 修复与文档同步随分支一并落地。
 > 审查方式：`git diff` 逐文件阅读 + `codegraph` / `codebase-memory` 调用链核对 + 定向回归测试。
 > 结论：**无 P0**；发现 2 个 P1、2 个 P2、3 个 P3（P3 为可接受限制或文档漂移）。
 > 本文档按优先级记录「关键点 / 错误原因 / 修复与验证」，修复完成后回填结果。

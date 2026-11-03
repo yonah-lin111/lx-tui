@@ -1,6 +1,6 @@
 # lx 长思考与流式输出卡顿优化设计（`lx-streaming-perf`）
 
-> 状态：**设计待审核（用户确认后开始执行代码修改）**
+> 状态：**已合并到 dev**（2026-11-03，合并提交 `980308ce`）；自动验证通过（4391 passed / 3 ignored）。
 >
 > 参考仓库：
 > - `/Users/yonah/projects/agent/codex-main`（`codex-rs/tui`）

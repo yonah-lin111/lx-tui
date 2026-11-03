@@ -1,6 +1,6 @@
 # lx 长思考与流式输出卡顿优化任务清单（`lx-streaming-perf`）
 
-> 状态：**已实施、评审并修复（A/B/C/D/E 全部完成）**
+> 状态：**已合并到 dev**（2026-11-03，合并提交 `980308ce`）；自动验证通过（4391 passed / 3 ignored）。
 >
 > 对应设计文档：`docs/feature/lx-streaming-perf/design.md`
 
@@ -115,3 +115,11 @@
 | 长正文 Markdown + 代码块流式 + 滚动 | 1,500 行 / 300 帧 | 每帧全量重排全文 + 堆积 300 份缓存 | P95 0.19ms，单槽位 | 槽位 = 1，P95 ≤ 8ms |
 | 1400 条消息热缓存滚动（既有回归） | 102,900 行 / 120 帧 | P95 ~1.95ms | P95 1.92ms（流式追加 3.72ms） | P95 ≤ 16ms |
 | 展开 2000 行文件差异滚动 | 2,106 行 / 120 帧 | P95 ~6.4ms | P95 6.29ms | P95 ≤ 16ms |
+
+---
+
+## F. 合并与清理
+
+- [x] 合并回 `dev`（合并提交 `980308ce`），合并无冲突。
+- [x] 合并后 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全部通过（4391 passed / 3 ignored）。
+- [x] 移除 worktree `.worktrees/lx-streaming-perf`、分支 `feat/lx-streaming-perf` 及其隔离开发库 `~/.lx-t-dev/db/worktrees/lx-streaming-perf-0eed1bd8/`。
