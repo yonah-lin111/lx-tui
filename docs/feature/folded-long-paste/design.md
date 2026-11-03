@@ -1,6 +1,6 @@
 # 文本折叠粘贴（Prompt 编辑器、Lx 输入框与聊天历史用户消息）：设计方案
 
-> 状态：**已在工作区 `.worktrees/folded-long-paste`（分支 `feat/folded-long-paste`）完成实现、代码审查与修复验证，待用户确认合并**
+> 状态：**已完成实现、代码审查与修复验证，并合并入 `dev` 分支**
 >
 > 关联文档：
 > - 任务清单：`docs/feature/folded-long-paste/task.md`
