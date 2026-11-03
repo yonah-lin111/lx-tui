@@ -725,3 +725,77 @@ fn fork_page_commits_dirty_saved_prompt_once() {
         .count();
     assert_eq!(saves, 1, "Fork 只登记一次当前页保存：{:?}", state.effects);
 }
+
+#[test]
+fn page_search_supports_paste_word_ops_and_cut() {
+    let mut state = state_with_three_pages();
+    assert!(show_prompt_pages(&mut state));
+    assert!(apply_page_search(
+        &mut state,
+        &EditorCommand::InsertText("alpha beta".into())
+    ));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.pages_view.search.text(),
+        "alpha beta"
+    );
+
+    assert!(apply_page_search(
+        &mut state,
+        &EditorCommand::DeleteWordBackward
+    ));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.pages_view.search.text(),
+        "alpha "
+    );
+    assert!(apply_page_search(&mut state, &EditorCommand::WordLeft));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.pages_view.search.cursor(),
+        0
+    );
+    assert!(apply_page_search(
+        &mut state,
+        &EditorCommand::DeleteWordForward
+    ));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.pages_view.search.text(),
+        " "
+    );
+
+    state.workspaces[0].prompt_panel.pages_view.search.clear();
+    state.workspaces[0]
+        .prompt_panel
+        .pages_view
+        .search
+        .insert_str("alpha beta");
+    state.workspaces[0]
+        .prompt_panel
+        .pages_view
+        .search
+        .set_selection(0, 5);
+    assert_eq!(cut_page_search(&mut state).as_deref(), Some("alpha"));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.pages_view.search.text(),
+        " beta"
+    );
+    assert!(page_search_selection(&state).is_none());
+}
+
+#[test]
+fn page_search_select_all_covers_query() {
+    let mut state = state_with_three_pages();
+    assert!(show_prompt_pages(&mut state));
+    assert!(apply_page_search(
+        &mut state,
+        &EditorCommand::InsertText("abc".into())
+    ));
+    assert!(apply_page_search(&mut state, &EditorCommand::SelectAll));
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .pages_view
+            .search
+            .selected_text()
+            .as_deref(),
+        Some("abc")
+    );
+}

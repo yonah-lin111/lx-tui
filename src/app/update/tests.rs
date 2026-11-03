@@ -4102,6 +4102,80 @@ fn lx_input_edits_focused_pane_buffer() {
     assert_eq!(state.active_pane().expect("pane").lx.input, "!");
 }
 
+#[test]
+fn lx_keyboard_selection_deletes_and_replaces_selection() {
+    let mut state = AppState::demo();
+    for ch in "hello world".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    // Shift+Ctrl+← 选中最后一个词，Backspace 一步删净。
+    apply_lx_input(&mut state, LxInput::SelectWordLeft);
+    assert_eq!(
+        state
+            .active_pane()
+            .expect("pane")
+            .lx
+            .selected_text()
+            .as_deref(),
+        Some("world")
+    );
+    apply_lx_input(&mut state, LxInput::Backspace);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "hello ");
+
+    // Delete 同样优先删除选区。
+    apply_lx_input(&mut state, LxInput::SelectAll);
+    apply_lx_input(&mut state, LxInput::Delete);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "");
+
+    // 输入字符替换选区，并且整次替换只产生一步撤销。
+    for ch in "abc".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::SelectAll);
+    apply_lx_input(&mut state, LxInput::Char('x'));
+    assert_eq!(state.active_pane().expect("pane").lx.input, "x");
+    apply_lx_input(&mut state, LxInput::Undo);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "abc");
+}
+
+#[test]
+fn lx_shift_arrows_extend_selection_by_character_and_word() {
+    let mut state = AppState::demo();
+    for ch in "one two".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::SelectLeft);
+    assert_eq!(
+        state
+            .active_pane()
+            .expect("pane")
+            .lx
+            .selected_text()
+            .as_deref(),
+        Some("o")
+    );
+    apply_lx_input(&mut state, LxInput::SelectWordLeft);
+    assert_eq!(
+        state
+            .active_pane()
+            .expect("pane")
+            .lx
+            .selected_text()
+            .as_deref(),
+        Some("two")
+    );
+    apply_lx_input(&mut state, LxInput::SelectHome);
+    assert_eq!(
+        state
+            .active_pane()
+            .expect("pane")
+            .lx
+            .selected_text()
+            .as_deref(),
+        Some("one two")
+    );
+}
+
 /// 抽出的纯编辑分派必须与 `apply_lx_input` 的编辑结果逐字段一致。
 ///
 /// `Up`/`Down` 不在此列：它们在编辑分派**之前**被历史浏览路由接管，属于面板语义，
@@ -4123,6 +4197,19 @@ fn apply_editor_edit_matches_lx_input_for_every_editor_command() {
         LxInput::LineEnd,
         LxInput::WordLeft,
         LxInput::WordRight,
+        LxInput::SelectLeft,
+        LxInput::SelectRight,
+        LxInput::SelectWordLeft,
+        LxInput::SelectWordRight,
+        LxInput::SelectHome,
+        LxInput::SelectEnd,
+        LxInput::SelectUp,
+        LxInput::SelectDown,
+        LxInput::SelectAll,
+        LxInput::DocStart,
+        LxInput::DocEnd,
+        LxInput::SelectDocStart,
+        LxInput::SelectDocEnd,
         LxInput::DeleteToLineStart,
         LxInput::DeleteToLineEnd,
         LxInput::DeleteWordBackward,
@@ -5309,4 +5396,38 @@ fn select_right_tab_same_tab_is_noop() {
     assert!(!select_right_tab(&mut state, RightTab::Todo), "已是 Todo");
     assert!(state.effects.is_empty(), "幂等：不产生任何 Effect");
     assert_eq!(state.right_tab, RightTab::Todo);
+}
+
+#[test]
+fn lx_document_navigation_and_document_selection() {
+    let mut state = AppState::demo();
+    for ch in "first\nsecond".chars() {
+        apply_lx_input(
+            &mut state,
+            if ch == '\n' {
+                LxInput::Newline
+            } else {
+                LxInput::Char(ch)
+            },
+        );
+    }
+    apply_lx_input(&mut state, LxInput::DocStart);
+    assert_eq!(state.active_pane().expect("pane").lx.cursor, 0);
+    apply_lx_input(&mut state, LxInput::DocEnd);
+    assert_eq!(
+        state.active_pane().expect("pane").lx.cursor,
+        "first\nsecond".len()
+    );
+    apply_lx_input(&mut state, LxInput::SelectDocStart);
+    assert_eq!(
+        state
+            .active_pane()
+            .expect("pane")
+            .lx
+            .selected_text()
+            .as_deref(),
+        Some("first\nsecond")
+    );
+    apply_lx_input(&mut state, LxInput::Delete);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "");
 }

@@ -883,3 +883,63 @@ fn arrow_after_mouse_scroll_restores_the_follow_window() {
     press(&mut state, LxInput::Up);
     assert_eq!(panel(&state, pane).viewport(), None, "窗口交还给高亮");
 }
+
+#[test]
+fn down_moves_cursor_across_wrapped_custom_rows() {
+    let (mut state, pane, _key) = asking(vec![question("q", true, &["A"])]);
+    // 高亮移到 Other 行并按 Space 进入原地编辑。
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Char(' '));
+    {
+        let editor = state
+            .pane_mut_anywhere(pane)
+            .and_then(|target| target.lx.ask.as_mut())
+            .and_then(AskState::editor_mut)
+            .expect("编辑框");
+        editor.insert_str("abcdefghij");
+        editor.resize(5, 3);
+        assert_eq!(editor.visual_rows().len(), 2, "width={}", editor.width());
+        // 光标从末尾上移两次到全文开头（`home` 只到当前视觉行行首）。
+        editor.move_up();
+        editor.move_up();
+        assert_eq!(editor.cursor(), 0);
+    }
+    press(&mut state, LxInput::Down);
+    let cursor = |state: &AppState| {
+        state
+            .pane_anywhere(pane)
+            .and_then(|target| target.lx.ask.as_ref())
+            .and_then(AskState::editor)
+            .map(|editor| editor.cursor())
+            .expect("编辑框")
+    };
+    assert_eq!(cursor(&state), 5);
+    press(&mut state, LxInput::Down);
+    assert_eq!(cursor(&state), 10);
+    press(&mut state, LxInput::Up);
+    assert_eq!(cursor(&state), 5);
+    press(&mut state, LxInput::Up);
+    assert_eq!(cursor(&state), 0);
+}
+
+#[test]
+fn ask_custom_input_supports_keyboard_selection_and_delete() {
+    let (mut state, pane, _key) = asking(vec![question("q", true, &["A"])]);
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Char(' '));
+    for ch in "abc".chars() {
+        press(&mut state, LxInput::Char(ch));
+    }
+    press(&mut state, LxInput::SelectLeft);
+    press(&mut state, LxInput::SelectLeft);
+    assert_eq!(
+        panel(&state, pane).custom[0].selected_text().as_deref(),
+        Some("bc")
+    );
+    press(&mut state, LxInput::Delete);
+    assert_eq!(panel(&state, pane).custom[0].text(), "a");
+
+    press(&mut state, LxInput::SelectAll);
+    press(&mut state, LxInput::Char('x'));
+    assert_eq!(panel(&state, pane).custom[0].text(), "x");
+}

@@ -707,6 +707,71 @@ impl AskEditor {
         self.0.move_down();
     }
 
+    /// Shift+←：向左扩展选区。
+    pub fn select_left(&mut self) {
+        self.0.select_left();
+    }
+
+    /// Shift+→：向右扩展选区。
+    pub fn select_right(&mut self) {
+        self.0.select_right();
+    }
+
+    /// Shift+Ctrl/Alt+←：向左扩展一个词。
+    pub fn select_word_left(&mut self) {
+        self.0.select_word_left();
+    }
+
+    /// Shift+Ctrl/Alt+→：向右扩展一个词。
+    pub fn select_word_right(&mut self) {
+        self.0.select_word_right();
+    }
+
+    /// Shift+Home：扩展到视觉行首。
+    pub fn select_home(&mut self) {
+        self.0.select_home();
+    }
+
+    /// Shift+End：扩展到视觉行尾。
+    pub fn select_end(&mut self) {
+        self.0.select_end();
+    }
+
+    /// Shift+↑：向上扩展一个视觉行。
+    pub fn select_up(&mut self) {
+        self.0.select_up();
+    }
+
+    /// Shift+↓：向下扩展一个视觉行。
+    pub fn select_down(&mut self) {
+        self.0.select_down();
+    }
+
+    /// Ctrl/Cmd+Shift+A：全选。
+    pub fn select_all(&mut self) {
+        self.0.select_all();
+    }
+
+    /// Ctrl+Home / Cmd+↑：移到开头。
+    pub fn doc_start(&mut self) {
+        self.0.doc_start();
+    }
+
+    /// Ctrl+End / Cmd+↓：移到末尾。
+    pub fn doc_end(&mut self) {
+        self.0.doc_end();
+    }
+
+    /// Ctrl+Shift+Home / Cmd+Shift+↑：扩展到开头。
+    pub fn select_doc_start(&mut self) {
+        self.0.select_doc_start();
+    }
+
+    /// Ctrl+Shift+End / Cmd+Shift+↓：扩展到末尾。
+    pub fn select_doc_end(&mut self) {
+        self.0.select_doc_end();
+    }
+
     pub fn home(&mut self) {
         self.clear_text_selection();
         self.0.home();
@@ -819,6 +884,13 @@ impl AskEditor {
         self.0.touch();
         self.0.scroll_cursor_into_view();
         true
+    }
+
+    /// 剪切选中文本：返回被剪切文本并将删除记入一步撤销；无选区返回 None。
+    pub fn cut_selected(&mut self) -> Option<String> {
+        let text = self.selected_text()?;
+        self.delete_selected();
+        Some(text)
     }
 }
 

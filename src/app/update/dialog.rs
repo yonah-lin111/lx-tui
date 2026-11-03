@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use crate::app::actions::OverlayKey;
 use crate::app::effects::Effect;
-use crate::app::overlay::{Overlay, OverlayKind, RenameTarget, TextInput};
+use crate::app::overlay::{Overlay, OverlayKind, RenameTarget};
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::trust::TrustTrigger;
@@ -61,20 +61,12 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         match key {
             OverlayKey::Esc => super::close_overlay(state),
             OverlayKey::Enter => super::submit_referenced_folder_input(state),
-            OverlayKey::Clear => super::clear_referenced_input(state),
-            OverlayKey::Char(_)
-            | OverlayKey::Backspace
-            | OverlayKey::Delete
-            | OverlayKey::Left
-            | OverlayKey::Right
-            | OverlayKey::Home
-            | OverlayKey::End => super::edit_referenced_input(state, key),
-            _ => {}
+            _ => super::edit_referenced_input(state, key),
         }
         return None;
     }
     // 引用文件夹内容搜索：上下移动、回车复制引用、Shift+Enter 进入目录、Ctrl+Z 回退、Esc 关闭；
-    // 其余可映射按键进入搜索框。
+    // 其余可映射按键进入搜索框。Ctrl+Z 优先撤销搜索词，撤销栈为空时才回退目录。
     if matches!(state.overlay, Some(Overlay::ReferencedFolderSearch(_))) {
         match key {
             OverlayKey::Esc => {
@@ -95,23 +87,20 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             OverlayKey::Back => {
                 super::referenced_search_back(state);
             }
-            OverlayKey::Char(_)
-            | OverlayKey::Clear
-            | OverlayKey::Backspace
-            | OverlayKey::Delete
-            | OverlayKey::Left
-            | OverlayKey::Right
-            | OverlayKey::Home
-            | OverlayKey::End
-            | OverlayKey::LineStart
-            | OverlayKey::LineEnd
-            | OverlayKey::DeleteToLineStart
-            | OverlayKey::DeleteToLineEnd
-            | OverlayKey::Undo
-            | OverlayKey::Redo => {
+            OverlayKey::Undo => {
+                let can_undo = matches!(
+                    state.overlay.as_ref(),
+                    Some(Overlay::ReferencedFolderSearch(search)) if search.query.can_undo()
+                );
+                if can_undo {
+                    super::edit_referenced_search(state, key);
+                } else {
+                    super::referenced_search_back(state);
+                }
+            }
+            _ => {
                 super::edit_referenced_search(state, key);
             }
-            OverlayKey::Remove | OverlayKey::PageUp | OverlayKey::PageDown => {}
         }
         return None;
     }
@@ -187,56 +176,27 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             )
             | None => None,
         },
-        OverlayKey::Char(ch) => {
-            edit_text_input(state, |input| input.insert_char(ch));
-            None
-        }
-        OverlayKey::Clear => {
-            edit_text_input(state, TextInput::clear);
-            None
-        }
-        OverlayKey::Backspace => {
-            edit_text_input(state, TextInput::backspace);
-            None
-        }
-        OverlayKey::Delete => {
-            edit_text_input(state, TextInput::delete);
-            None
-        }
-        OverlayKey::Left => {
-            edit_text_input(state, TextInput::move_left);
-            None
-        }
-        OverlayKey::Right => {
-            edit_text_input(state, TextInput::move_right);
-            None
-        }
-        OverlayKey::Home | OverlayKey::LineStart => {
-            edit_text_input(state, TextInput::move_home);
-            None
-        }
-        OverlayKey::End | OverlayKey::LineEnd => {
-            edit_text_input(state, TextInput::move_end);
-            None
-        }
-        OverlayKey::DeleteToLineStart => {
-            edit_text_input(state, TextInput::delete_to_line_start);
-            None
-        }
-        OverlayKey::DeleteToLineEnd => {
-            edit_text_input(state, TextInput::delete_to_line_end);
-            None
-        }
-        OverlayKey::Undo => {
-            edit_text_input(state, |input| {
-                input.undo();
-            });
-            None
-        }
-        OverlayKey::Redo => {
-            edit_text_input(state, |input| {
-                input.redo();
-            });
+        OverlayKey::Char(_)
+        | OverlayKey::Clear
+        | OverlayKey::Cut
+        | OverlayKey::Backspace
+        | OverlayKey::Delete
+        | OverlayKey::Left
+        | OverlayKey::Right
+        | OverlayKey::WordLeft
+        | OverlayKey::WordRight
+        | OverlayKey::Home
+        | OverlayKey::End
+        | OverlayKey::LineStart
+        | OverlayKey::SelectAll
+        | OverlayKey::LineEnd
+        | OverlayKey::DeleteToLineStart
+        | OverlayKey::DeleteToLineEnd
+        | OverlayKey::DeleteWordBackward
+        | OverlayKey::DeleteWordForward
+        | OverlayKey::Undo
+        | OverlayKey::Redo => {
+            edit_text_input(state, key);
             None
         }
         // 引用文件夹浮层已在上方分支消费；此处不会到达。
@@ -250,11 +210,9 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
 }
 
 /// 对单行输入类浮层（重命名、新建工作区路径）执行一次编辑；其他浮层忽略。
-fn edit_text_input(state: &mut AppState, edit: impl FnOnce(&mut TextInput)) {
-    match state.overlay.as_mut() {
-        Some(Overlay::Rename(rename)) => edit(&mut rename.input),
-        Some(Overlay::NewWorkspace(new_ws)) => edit(&mut new_ws.input),
-        _ => {}
+fn edit_text_input(state: &mut AppState, key: OverlayKey) {
+    if let Some(input) = state.overlay.as_mut().and_then(Overlay::input_mut) {
+        input.apply_edit_key(key);
     }
 }
 
@@ -334,3 +292,68 @@ fn commit_rename(state: &mut AppState) {
 fn confirm_close(state: &mut AppState) {
     let _ = state.overlay.take();
 }
+
+/// 终端粘贴进入当前浮层的单行输入框；返回是否实际写入。
+///
+/// 无输入框的浮层与受保护状态（校验中、删除确认中）只吞掉粘贴，绝不穿透到底层终端。
+pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
+    let refresh_search = {
+        let Some(overlay) = state.overlay.as_mut() else {
+            return false;
+        };
+        match overlay {
+            Overlay::ReferencedFolderInput(input) if input.validating => return false,
+            Overlay::ResumeSessionEdit(edit) if edit.confirming_delete => return false,
+            _ => {}
+        }
+        let Some(input) = overlay.input_mut() else {
+            return false;
+        };
+        if !input.insert_str(text) {
+            return false;
+        }
+        match overlay {
+            Overlay::ReferencedFolderInput(input) => input.error = None,
+            Overlay::ResumeSessionEdit(edit) => edit.hint = None,
+            Overlay::WorktreeOpen(dialog) => dialog.normalize_selection(),
+            _ => {}
+        }
+        matches!(overlay, Overlay::ReferencedFolderSearch(_))
+    };
+    if refresh_search {
+        super::refresh_referenced_search(state);
+    }
+    true
+}
+
+/// 剪切当前浮层输入框的选区；返回被剪切文本（无选区返回 None）。
+///
+/// 删除记入输入框自身的一步撤销；列表类浮层同步重算高亮/过滤。
+pub fn cut_overlay_selected_text(state: &mut AppState) -> Option<String> {
+    let (text, refresh_search) = {
+        let overlay = state.overlay.as_mut()?;
+        match overlay {
+            Overlay::ReferencedFolderInput(input) if input.validating => return None,
+            Overlay::ResumeSessionEdit(edit) if edit.confirming_delete => return None,
+            _ => {}
+        }
+        let text = overlay.input_mut()?.cut_selected()?;
+        match overlay {
+            Overlay::ReferencedFolderInput(input) => input.error = None,
+            Overlay::ResumeSessionEdit(edit) => {
+                edit.hint = None;
+                edit.confirming_delete = false;
+            }
+            Overlay::WorktreeOpen(dialog) => dialog.normalize_selection(),
+            _ => {}
+        }
+        (text, matches!(overlay, Overlay::ReferencedFolderSearch(_)))
+    };
+    if refresh_search {
+        super::refresh_referenced_search(state);
+    }
+    Some(text)
+}
+
+#[cfg(test)]
+mod tests;

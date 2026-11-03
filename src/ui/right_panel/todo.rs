@@ -253,10 +253,11 @@ impl VisibleList {
     }
 }
 
-/// 计算当前面板宽度下的 Todo 列表视口度量：`(列表可见物理行数, 各显示条目视觉行高, 编辑视口起始行)`。
+/// 计算当前面板宽度下的 Todo 列表视口度量：
+/// `(列表可见物理行数, 各显示条目视觉行高, 编辑视口起始行, 编辑框可用列宽)`。
 ///
 /// 供 `resolve_todo_viewport` 与 `scrollbar` 复用同一份多行折行高度与最大滚动偏移。
-pub fn viewport_metrics(panel: Rect, state: &AppState) -> (usize, Vec<u16>, Option<usize>) {
+pub fn viewport_metrics(panel: Rect, state: &AppState) -> (usize, Vec<u16>, Option<usize>, usize) {
     let list = effective_list_rect(panel, state);
     let rows = visible_rows_for(panel, state);
     let text_x = row_text_x(list);
@@ -274,7 +275,7 @@ pub fn viewport_metrics(panel: Rect, state: &AppState) -> (usize, Vec<u16>, Opti
         .todo
         .editing()
         .map(|edit| edit_view(edit, text_width).start_row);
-    (rows, heights, edit_scroll_row)
+    (rows, heights, edit_scroll_row, text_width)
 }
 
 /// 根据可见物理行数与各显示条目的视觉行高，计算能完整露出末尾条目的最大起始条目下标。
@@ -506,7 +507,7 @@ pub fn scrollbar(panel: Rect, state: &AppState) -> Option<widgets::scrollbar::Sc
     }
     let list = effective_list_rect(panel, state);
     let slot = Rect::new(list.right(), list.y, 1, list.height);
-    let (visible, item_rows, _) = viewport_metrics(panel, state);
+    let (visible, item_rows, _, _) = viewport_metrics(panel, state);
     let max_scroll = max_scroll_for(visible, &item_rows);
     let total = if max_scroll > 0 {
         visible.saturating_add(max_scroll)

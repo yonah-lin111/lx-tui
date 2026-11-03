@@ -153,56 +153,15 @@ pub fn apply_new_node_key(state: &mut AppState, key: OverlayKey) {
     match key {
         OverlayKey::Esc => cancel_new_node(state),
         OverlayKey::Enter => commit_new_node(state),
-        OverlayKey::Char(_)
-        | OverlayKey::Clear
-        | OverlayKey::Backspace
-        | OverlayKey::Delete
-        | OverlayKey::Left
-        | OverlayKey::Right
-        | OverlayKey::Home
-        | OverlayKey::End
-        | OverlayKey::LineStart
-        | OverlayKey::LineEnd
-        | OverlayKey::DeleteToLineStart
-        | OverlayKey::DeleteToLineEnd
-        | OverlayKey::Undo
-        | OverlayKey::Redo => {
-            let Some(Overlay::NewNode(dialog)) = state.overlay.as_mut() else {
-                return;
-            };
-            let input = &mut dialog.name;
-            match key {
-                OverlayKey::Char(ch) => input.insert_char(ch),
-                OverlayKey::Clear => input.clear(),
-                OverlayKey::Backspace => input.backspace(),
-                OverlayKey::Delete => input.delete(),
-                OverlayKey::Left => input.move_left(),
-                OverlayKey::Right => input.move_right(),
-                OverlayKey::Home | OverlayKey::LineStart => input.move_home(),
-                OverlayKey::End | OverlayKey::LineEnd => input.move_end(),
-                OverlayKey::DeleteToLineStart => input.delete_to_line_start(),
-                OverlayKey::DeleteToLineEnd => input.delete_to_line_end(),
-                OverlayKey::Undo => {
-                    input.undo();
-                }
-                OverlayKey::Redo => {
-                    input.redo();
-                }
-                _ => {}
+        _ => {
+            if let Some(Overlay::NewNode(dialog)) = state.overlay.as_mut() {
+                dialog.name.apply_edit_key(key);
             }
         }
-        OverlayKey::Up
-        | OverlayKey::Down
-        | OverlayKey::PageUp
-        | OverlayKey::PageDown
-        | OverlayKey::EnterFolder
-        | OverlayKey::Back
-        | OverlayKey::Copy
-        | OverlayKey::Remove => {}
     }
 }
 
-/// 草稿保存选择器按键：上下移动、回车确认、Esc 关闭；字符输入归属顶部提示词名称。
+/// 草稿保存选择器按键：上下移动、回车确认、Esc 关闭；其余按键归属顶部提示词名称。
 pub fn apply_save_draft_key(state: &mut AppState, key: OverlayKey) {
     match key {
         OverlayKey::Esc => state.overlay = None,
@@ -213,26 +172,7 @@ pub fn apply_save_draft_key(state: &mut AppState, key: OverlayKey) {
             move_save_draft_selection(state, 1);
         }
         OverlayKey::Enter => commit_save_draft(state),
-        OverlayKey::Char(_)
-        | OverlayKey::Clear
-        | OverlayKey::Backspace
-        | OverlayKey::Delete
-        | OverlayKey::Left
-        | OverlayKey::Right
-        | OverlayKey::Home
-        | OverlayKey::End
-        | OverlayKey::LineStart
-        | OverlayKey::LineEnd
-        | OverlayKey::DeleteToLineStart
-        | OverlayKey::DeleteToLineEnd
-        | OverlayKey::Undo
-        | OverlayKey::Redo => edit_save_draft_input(state, key),
-        OverlayKey::EnterFolder
-        | OverlayKey::Back
-        | OverlayKey::Copy
-        | OverlayKey::Remove
-        | OverlayKey::PageUp
-        | OverlayKey::PageDown => {}
+        _ => edit_save_draft_input(state, key),
     }
 }
 
@@ -241,26 +181,7 @@ fn edit_save_draft_input(state: &mut AppState, key: OverlayKey) {
     let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_mut() else {
         return;
     };
-    let input = &mut dialog.name;
-    match key {
-        OverlayKey::Char(ch) => input.insert_char(ch),
-        OverlayKey::Clear => input.clear(),
-        OverlayKey::Backspace => input.backspace(),
-        OverlayKey::Delete => input.delete(),
-        OverlayKey::Left => input.move_left(),
-        OverlayKey::Right => input.move_right(),
-        OverlayKey::Home | OverlayKey::LineStart => input.move_home(),
-        OverlayKey::End | OverlayKey::LineEnd => input.move_end(),
-        OverlayKey::DeleteToLineStart => input.delete_to_line_start(),
-        OverlayKey::DeleteToLineEnd => input.delete_to_line_end(),
-        OverlayKey::Undo => {
-            input.undo();
-        }
-        OverlayKey::Redo => {
-            input.redo();
-        }
-        _ => {}
-    }
+    dialog.name.apply_edit_key(key);
 }
 
 /// 移动草稿保存选择器高亮；返回是否有变化。

@@ -64,10 +64,19 @@ pub(crate) fn handle_key_event(
             *dirty = true;
         }
         Routed::Overlay(key) => {
-            if key == OverlayKey::Clear
+            if matches!(key, OverlayKey::Clear | OverlayKey::Copy)
                 && let Some(text) = overlay_selected_text(state)
             {
                 if !text.trim().is_empty() {
+                    copy_with_toast(state, &text, None);
+                }
+                *dirty = true;
+                return;
+            }
+            if key == OverlayKey::Cut {
+                if let Some(text) = update::cut_overlay_selected_text(state)
+                    && !text.is_empty()
+                {
                     copy_with_toast(state, &text, None);
                 }
                 *dirty = true;
@@ -97,18 +106,55 @@ pub(crate) fn handle_key_event(
             *dirty = true;
         }
         Routed::Copy => {
+            let anchor = Some(state.prompt.id());
             if update::prompt_tree_mode(state) {
-                // 树视图 Ctrl+C 与模态输入框一致：清空搜索过滤。
-                update::clear_prompt_search(state);
+                // 树视图 Ctrl+C：有搜索框选区时复制选区，否则清空搜索过滤。
+                if let Some(text) = update::prompt_search_selection(state) {
+                    if !text.is_empty() {
+                        copy_with_toast(state, &text, anchor);
+                    }
+                } else {
+                    update::clear_prompt_search(state);
+                }
                 *dirty = true;
             } else if update::prompt_pages_mode(state) {
-                update::clear_page_search(state);
+                if let Some(text) = update::page_search_selection(state) {
+                    if !text.is_empty() {
+                        copy_with_toast(state, &text, anchor);
+                    }
+                } else {
+                    update::clear_page_search(state);
+                }
                 *dirty = true;
             } else if let Some(text) = update::prompt_copy_text(state) {
-                let anchor = Some(state.prompt.id());
                 copy_with_toast(state, &text, anchor);
                 *dirty = true;
             }
+        }
+        Routed::Cut => {
+            let anchor = Some(state.prompt.id());
+            if update::prompt_tree_mode(state) {
+                if let Some(text) = update::cut_prompt_search(state)
+                    && !text.is_empty()
+                {
+                    copy_with_toast(state, &text, anchor);
+                }
+            } else if update::prompt_pages_mode(state) {
+                if let Some(text) = update::cut_page_search(state)
+                    && !text.is_empty()
+                {
+                    copy_with_toast(state, &text, anchor);
+                }
+            } else if let Some((start, end)) = update::prompt_selection_bounds(state)
+                && let Some(text) = state.prompt.text().get(start..end).map(str::to_string)
+                && state.prompt.replace_range(start, end, "")
+            {
+                update::clear_selection(state);
+                if !text.is_empty() {
+                    copy_with_toast(state, &text, anchor);
+                }
+            }
+            *dirty = true;
         }
         Routed::CopyTemplateBlock => {
             if let Some(text) = update::copy_template_block_at_cursor(state) {
@@ -129,6 +175,10 @@ pub(crate) fn handle_key_event(
                 && copy_lx_selection(state, &geometry.rects, cache)
             {
                 *dirty = true;
+            } else if command == crate::app::actions::LxInput::Cut {
+                if cut_lx_selection(state) {
+                    *dirty = true;
+                }
             } else {
                 update::apply_lx_input(state, command);
                 *dirty = true;
@@ -162,26 +212,11 @@ pub(crate) fn handle_paste_event(
     sessions: &mut HashMap<PaneId, PtySession>,
     dirty: &mut bool,
 ) {
-    // 引用文件夹输入/搜索弹窗：粘贴进入对应单行输入框，不穿透到底层。
-    if let Some(overlay) = state.overlay.as_mut() {
-        match overlay {
-            Overlay::ReferencedFolderInput(input) => {
-                input.input.insert_str(&text);
-                *dirty = true;
-                return;
-            }
-            Overlay::ReferencedFolderSearch(search) => {
-                if search.query.insert_str(&text) {
-                    update::refresh_referenced_search(state);
-                    *dirty = true;
-                }
-                return;
-            }
-            _ => {}
-        }
-    }
-    // 浮层打开时粘贴吞掉，不穿透到底层终端（与键盘过滤一致）。
+    // 浮层打开时粘贴只进入当前浮层的单行输入框，绝不穿透到底层终端。
     if state.overlay.is_some() {
+        if update::apply_overlay_paste(state, &text) {
+            *dirty = true;
+        }
         return;
     }
     // 侧栏没有键盘交互（`input::route` 把它的按键全吞掉），粘贴必须同样吞掉：
@@ -275,10 +310,19 @@ fn copy_lx_selection(
     }) {
         return false;
     }
-    if let Some(text) = state
+    let request = state
         .pane_anywhere(pane)
-        .filter(|target| target.view == PaneView::Lx)
-        .and_then(|target| {
+        .filter(|target| target.view == PaneView::Lx);
+    let task_open = request.is_some_and(|target| target.lx.task.is_some());
+    let ask_blocked =
+        request.is_some_and(|target| target.lx.ask.as_ref().is_some_and(|ask| !ask.editing));
+    if ask_blocked {
+        // Ask 列表态没有可见输入框：绝不复制隐藏的底层草稿。
+        return false;
+    }
+    // 任务页占用输入框矩形时，底层草稿不可见：跳过输入框选区，仅保留主内容区复制。
+    if !task_open
+        && let Some(text) = request.and_then(|target| {
             if let Some(ask) = target.lx.ask.as_ref()
                 && ask.editing
             {
@@ -310,7 +354,62 @@ fn copy_lx_selection(
         return false;
     }
     let text = ui::main_content::lx::copy_text(area, &target.lx, range, cache.pane(pane));
-    if !text.trim().is_empty() {
+    if !text.is_empty() {
+        copy_with_toast(state, &text, Some(pane));
+    }
+    true
+}
+
+/// 剪切焦点 lx 窗格底部输入框（或 ask 手写框）的选区；无选区返回 false。
+fn cut_lx_selection(state: &mut AppState) -> bool {
+    let pane = state.active_tab().layout.focus();
+    // `/resume` 历史面板打开时 Ctrl/Cmd+X 无文本可剪。
+    if state.pane_anywhere(pane).is_some_and(|target| {
+        matches!(
+            target.lx.slash,
+            Some(crate::app::state::SlashPanel::History(_))
+        )
+    }) {
+        return false;
+    }
+    if !state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.view == PaneView::Lx && target.lx.task.is_none())
+    {
+        return false;
+    }
+    let (text, from_ask) = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
+        if target.lx.ask.as_ref().is_some_and(|ask| ask.editing) {
+            (
+                target
+                    .lx
+                    .ask
+                    .as_mut()
+                    .and_then(|ask| ask.editor_mut())
+                    .and_then(|editor| editor.cut_selected()),
+                true,
+            )
+        } else if target.lx.ask.is_some() {
+            // ask 面板非编辑态：隐藏的草稿不是用户当前操作对象，禁止剪切。
+            return false;
+        } else {
+            let text = target.lx.cut_selected();
+            if text.is_some() {
+                target.lx.end_history_browse();
+            }
+            (text, false)
+        }
+    };
+    let Some(text) = text else {
+        return false;
+    };
+    if !from_ask {
+        update::refresh_slash_panel(state, pane);
+    }
+    if !text.is_empty() {
         copy_with_toast(state, &text, Some(pane));
     }
     true

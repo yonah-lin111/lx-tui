@@ -414,6 +414,13 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
             input.move_end();
             input.cursor() != before || had_sel
         }
+        TodoKey::SelectAll => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            input.select_all();
+            true
+        }
         TodoKey::DeleteToLineStart => {
             let Some(input) = state.todo.edit_input_mut() else {
                 return false;
@@ -444,6 +451,56 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
             };
             input.redo()
         }
+        TodoKey::Cut => {
+            let text = state
+                .todo
+                .edit_input_mut()
+                .and_then(|input| input.cut_selected());
+            let Some(text) = text else {
+                return false;
+            };
+            if !text.is_empty() {
+                let anchor = Some(state.prompt.id());
+                state.effects.push(Effect::CopyToClipboard { text, anchor });
+            }
+            true
+        }
+        TodoKey::WordLeft => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            let before = input.cursor();
+            let had_sel = input.selection().is_some();
+            input.move_word_left();
+            input.cursor() != before || had_sel
+        }
+        TodoKey::WordRight => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            let before = input.cursor();
+            let had_sel = input.selection().is_some();
+            input.move_word_right();
+            input.cursor() != before || had_sel
+        }
+        TodoKey::DeleteWordBackward => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            let before_len = input.text().len();
+            let had_sel = input.selection().is_some();
+            input.delete_word_backward();
+            input.text().len() != before_len || had_sel
+        }
+        TodoKey::DeleteWordForward => {
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            let before_len = input.text().len();
+            let had_sel = input.selection().is_some();
+            input.delete_word_forward();
+            input.text().len() != before_len || had_sel
+        }
         TodoKey::Char(ch) => {
             let Some(input) = state.todo.edit_input_mut() else {
                 return false;
@@ -458,8 +515,24 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
         }
         // 编辑态 `Tab`：循环切换该条目的状态（不退出编辑），对齐列表态 `Space`。
         TodoKey::Tab => cycle_editing_status(state),
-        // 编辑态上下键：不退出编辑、不切行（单行输入框无多行可移）。
-        TodoKey::Up | TodoKey::Down => false,
+        // 编辑态上下键：在软折行视觉行间移动光标，不退出编辑、不切行。
+        TodoKey::Up | TodoKey::Down => {
+            let width = state.todo.edit_text_width();
+            if width == 0 {
+                return false;
+            }
+            let Some(input) = state.todo.edit_input_mut() else {
+                return false;
+            };
+            let before = input.cursor();
+            let had_sel = input.selection().is_some();
+            match key {
+                TodoKey::Up => input.move_up_wrapped(width),
+                TodoKey::Down => input.move_down_wrapped(width),
+                _ => {}
+            }
+            input.cursor() != before || had_sel
+        }
     }
 }
 
@@ -491,12 +564,18 @@ fn apply_todo_list_key(state: &mut AppState, key: TodoKey) -> bool {
         | TodoKey::Delete
         | TodoKey::Left
         | TodoKey::Right
+        | TodoKey::WordLeft
+        | TodoKey::WordRight
         | TodoKey::Home
         | TodoKey::End
         | TodoKey::LineStart
         | TodoKey::LineEnd
+        | TodoKey::SelectAll
         | TodoKey::DeleteToLineStart
-        | TodoKey::DeleteToLineEnd => false,
+        | TodoKey::DeleteToLineEnd
+        | TodoKey::DeleteWordBackward
+        | TodoKey::DeleteWordForward
+        | TodoKey::Cut => false,
         TodoKey::Char(ch) => apply_todo_command(state, ch),
     }
 }
@@ -847,9 +926,11 @@ pub fn apply_todo_button(state: &mut AppState, button: TodoButton) -> bool {
 ///
 /// `app/` 拿不到布局，几何只有渲染层一个来源；这里只做一次纯算术。
 pub fn resolve_todo_viewport(state: &mut AppState, panel: ratatui::layout::Rect) -> bool {
-    let (rows, item_rows, edit_scroll_row) =
+    let (rows, item_rows, edit_scroll_row, edit_text_width) =
         crate::ui::right_panel::todo::viewport_metrics(panel, state);
-    state.todo.sync_viewport(rows, item_rows, edit_scroll_row)
+    state
+        .todo
+        .sync_viewport(rows, item_rows, edit_scroll_row, edit_text_width)
 }
 
 #[cfg(test)]

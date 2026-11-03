@@ -184,35 +184,16 @@ pub fn clear_referenced_input(state: &mut AppState) {
     }
 }
 
-/// 路径输入弹窗的单行编辑键。
+/// 路径输入弹窗的单行编辑键；校验中拒绝编辑，编辑后清除旧错误提示。
 pub fn edit_referenced_input(state: &mut AppState, key: crate::app::actions::OverlayKey) {
     let Some(Overlay::ReferencedFolderInput(input)) = state.overlay.as_mut() else {
         return;
     };
-    edit_text_input(&mut input.input, key);
-}
-
-/// 单行输入的通用编辑键分发。
-fn edit_text_input(input: &mut TextInput, key: crate::app::actions::OverlayKey) {
-    use crate::app::actions::OverlayKey;
-    match key {
-        OverlayKey::Char(ch) => input.insert_char(ch),
-        OverlayKey::Clear => input.clear(),
-        OverlayKey::Backspace => input.backspace(),
-        OverlayKey::Delete => input.delete(),
-        OverlayKey::Left => input.move_left(),
-        OverlayKey::Right => input.move_right(),
-        OverlayKey::Home | OverlayKey::LineStart => input.move_home(),
-        OverlayKey::End | OverlayKey::LineEnd => input.move_end(),
-        OverlayKey::DeleteToLineStart => input.delete_to_line_start(),
-        OverlayKey::DeleteToLineEnd => input.delete_to_line_end(),
-        OverlayKey::Undo => {
-            input.undo();
-        }
-        OverlayKey::Redo => {
-            input.redo();
-        }
-        _ => {}
+    if input.validating {
+        return;
+    }
+    if input.input.apply_edit_key(key) {
+        input.error = None;
     }
 }
 

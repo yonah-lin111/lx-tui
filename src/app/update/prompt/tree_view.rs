@@ -201,12 +201,28 @@ pub fn apply_prompt_search(state: &mut AppState, command: &EditorCommand) -> boo
     let before = panel.search.text().to_string();
     match command {
         EditorCommand::InsertChar(ch) => panel.search.insert_char(*ch),
+        EditorCommand::InsertText(text) => {
+            panel.search.insert_str(text);
+        }
         EditorCommand::Backspace => panel.search.backspace(),
         EditorCommand::Delete => panel.search.delete(),
         EditorCommand::Left => panel.search.move_left(),
         EditorCommand::Right => panel.search.move_right(),
-        EditorCommand::Home => panel.search.move_home(),
-        EditorCommand::End => panel.search.move_end(),
+        EditorCommand::Home | EditorCommand::LineStart => panel.search.move_home(),
+        EditorCommand::End | EditorCommand::LineEnd => panel.search.move_end(),
+        EditorCommand::SelectAll => panel.search.select_all(),
+        EditorCommand::DeleteToLineStart => panel.search.delete_to_line_start(),
+        EditorCommand::DeleteToLineEnd => panel.search.delete_to_line_end(),
+        EditorCommand::WordLeft => panel.search.move_word_left(),
+        EditorCommand::WordRight => panel.search.move_word_right(),
+        EditorCommand::DeleteWordBackward => panel.search.delete_word_backward(),
+        EditorCommand::DeleteWordForward => panel.search.delete_word_forward(),
+        EditorCommand::Undo => {
+            panel.search.undo();
+        }
+        EditorCommand::Redo => {
+            panel.search.redo();
+        }
         EditorCommand::Escape => panel.search.clear(),
         _ => return false,
     }
@@ -225,6 +241,30 @@ pub fn apply_prompt_search(state: &mut AppState, command: &EditorCommand) -> boo
 /// 清空显示中树视图的搜索词（Ctrl+C 清空语义）；返回是否被消费。
 pub fn clear_prompt_search(state: &mut AppState) -> bool {
     apply_prompt_search(state, &EditorCommand::Escape)
+}
+
+/// 树搜索框当前选中的文本；无选区返回 None。
+pub fn prompt_search_selection(state: &AppState) -> Option<String> {
+    state
+        .workspaces
+        .get(state.prompt_workspace())
+        .and_then(|workspace| workspace.prompt_panel.search.selected_text())
+}
+
+/// 剪切树搜索框选区并重算过滤；返回被剪切文本。
+pub fn cut_prompt_search(state: &mut AppState) -> Option<String> {
+    let index = state.prompt_workspace();
+    let visible = prompt_tree_visible_rows(state);
+    let panel = &mut state.workspaces.get_mut(index)?.prompt_panel;
+    let text = panel.search.cut_selected()?;
+    if panel.search.text().trim().is_empty() {
+        panel.clamp_selection(visible);
+    } else {
+        panel.selected = 0;
+        panel.clamp_selection(visible);
+        scroll_selection_into_view(panel, visible);
+    }
+    Some(text)
 }
 
 /// 滚动树视口；越界钳制；返回是否变化。

@@ -59,6 +59,7 @@ pub fn hide_prompt_pages(state: &mut AppState) -> bool {
     if !prompt_pages_mode(state) {
         return false;
     }
+    state.prompt_search_drag = false;
     let workspace = state.prompt_workspace();
     let Some(ws) = state.workspaces.get_mut(workspace) else {
         return false;
@@ -167,8 +168,13 @@ pub fn apply_page_search(state: &mut AppState, command: &EditorCommand) -> bool 
         EditorCommand::Right => panel.pages_view.search.move_right(),
         EditorCommand::Home | EditorCommand::LineStart => panel.pages_view.search.move_home(),
         EditorCommand::End | EditorCommand::LineEnd => panel.pages_view.search.move_end(),
+        EditorCommand::SelectAll => panel.pages_view.search.select_all(),
         EditorCommand::DeleteToLineStart => panel.pages_view.search.delete_to_line_start(),
         EditorCommand::DeleteToLineEnd => panel.pages_view.search.delete_to_line_end(),
+        EditorCommand::WordLeft => panel.pages_view.search.move_word_left(),
+        EditorCommand::WordRight => panel.pages_view.search.move_word_right(),
+        EditorCommand::DeleteWordBackward => panel.pages_view.search.delete_word_backward(),
+        EditorCommand::DeleteWordForward => panel.pages_view.search.delete_word_forward(),
         EditorCommand::Undo => {
             panel.pages_view.search.undo();
         }
@@ -216,6 +222,29 @@ pub fn clear_page_search(state: &mut AppState) -> bool {
     }
     clamp_page_view(panel, rows.len(), visible);
     true
+}
+
+/// 页搜索框当前选中的文本；无选区返回 None。
+pub fn page_search_selection(state: &AppState) -> Option<String> {
+    state
+        .workspaces
+        .get(state.prompt_workspace())
+        .and_then(|workspace| workspace.prompt_panel.pages_view.search.selected_text())
+}
+
+/// 剪切页搜索框选区并重算过滤；返回被剪切文本。
+pub fn cut_page_search(state: &mut AppState) -> Option<String> {
+    let workspace = state.prompt_workspace();
+    let visible = prompt_tree_visible_rows(state);
+    let panel = &mut state.workspaces.get_mut(workspace)?.prompt_panel;
+    let text = panel.pages_view.search.cut_selected()?;
+    panel.pages_view.selected = 0;
+    let len = panel
+        .editing_pages()
+        .map(|(pages, active)| page_rows(pages, active, panel.pages_view.search.text()).len())
+        .unwrap_or(0);
+    clamp_page_view(panel, len, visible);
+    Some(text)
 }
 
 /// 滚轮滚动页列表视口：只动 `scroll`，不动选中行。

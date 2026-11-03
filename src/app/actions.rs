@@ -20,20 +20,32 @@ pub enum OverlayKey {
     Enter,
     Char(char),
     Clear,
+    /// Ctrl/Cmd+X：剪切当前选区（复制到剪贴板并删除，记一步撤销）。
+    Cut,
     Backspace,
     Delete,
     Left,
     Right,
+    /// Ctrl/Alt+← / Alt+B：左移一个词。
+    WordLeft,
+    /// Ctrl/Alt+→ / Alt+F：右移一个词。
+    WordRight,
     Home,
     End,
     /// Ctrl+A：移到行首。
     LineStart,
+    /// Ctrl/Cmd+Shift+A：全选输入框。
+    SelectAll,
     /// Ctrl+E：移到行尾。
     LineEnd,
     /// Ctrl+U：删除至行首。
     DeleteToLineStart,
     /// Ctrl+K：删除至行尾。
     DeleteToLineEnd,
+    /// Ctrl+W / Ctrl/Alt+Backspace：向前删词。
+    DeleteWordBackward,
+    /// Alt+D / Ctrl+Delete：向后删词。
+    DeleteWordForward,
     /// Ctrl/Cmd+Z：撤销文本编辑。
     Undo,
     /// Ctrl+Shift+Z / Ctrl+Y：重做文本编辑。
@@ -67,10 +79,36 @@ pub enum LxInput {
     Down,
     Home,
     End,
-    /// Ctrl+A：移到逻辑行首。
+    /// 逻辑行首（Home 同义；保留给直接编辑分派）。
     LineStart,
     /// Ctrl+E：移到逻辑行尾。
     LineEnd,
+    /// Shift+←：向左扩展一个字符的选区。
+    SelectLeft,
+    /// Shift+→：向右扩展一个字符的选区。
+    SelectRight,
+    /// Shift+Ctrl/Alt+← / Shift+Alt+B：向左扩展一个词的选区。
+    SelectWordLeft,
+    /// Shift+Ctrl/Alt+→ / Shift+Alt+F：向右扩展一个词的选区。
+    SelectWordRight,
+    /// Shift+Home：扩展到视觉行首。
+    SelectHome,
+    /// Shift+End：扩展到视觉行尾。
+    SelectEnd,
+    /// Shift+↑：向上扩展一个视觉行。
+    SelectUp,
+    /// Shift+↓：向下扩展一个视觉行。
+    SelectDown,
+    /// Ctrl/Cmd+Shift+A：全选输入框。
+    SelectAll,
+    /// Ctrl+Home / Cmd+↑：移到输入框开头。
+    DocStart,
+    /// Ctrl+End / Cmd+↓：移到输入框末尾。
+    DocEnd,
+    /// Ctrl+Shift+Home / Cmd+Shift+↑：扩展到输入框开头。
+    SelectDocStart,
+    /// Ctrl+Shift+End / Cmd+Shift+↓：扩展到输入框末尾。
+    SelectDocEnd,
     /// Ctrl+← / Alt+B：左移一个词。
     WordLeft,
     /// Ctrl+→ / Alt+F：右移一个词。
@@ -89,6 +127,8 @@ pub enum LxInput {
     Redo,
     /// Ctrl/Cmd+C：清空输入框；`/resume` 历史面板打开时改为复制高亮会话 id。
     Clear,
+    /// Ctrl/Cmd+X：剪切输入框选区（复制到剪贴板并删除，记一步撤销）。
+    Cut,
     /// Tab：md 面板打开时采纳高亮候选。
     Tab,
     /// Shift+Tab：ask 面板「上一步」（Confirm → 末题 → 上一题）。
@@ -134,6 +174,8 @@ pub enum EditorCommand {
     End,
     LineStart,
     LineEnd,
+    /// Ctrl/Cmd+Shift+A：全选。
+    SelectAll,
     WordLeft,
     WordRight,
     DeleteToLineStart,

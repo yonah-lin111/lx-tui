@@ -17,6 +17,7 @@ pub mod model_switch;
 mod panels;
 pub mod refer;
 pub mod rewind;
+mod selection;
 pub mod shell;
 pub mod slash;
 pub mod task;
@@ -535,10 +536,15 @@ impl Lx {
         self.touch();
     }
 
-    /// 在光标处插入一个字符。
+    /// 在光标处插入一个字符（有选区时替换选区）。
     pub fn insert_char(&mut self, ch: char) {
         self.refer_suppressed = false;
+        let selection = self.text_selection_range();
         self.snapshot();
+        if let Some((start, end)) = selection {
+            self.input.replace_range(start..end, "");
+            self.cursor = start;
+        }
         self.input.insert(self.cursor, ch);
         self.cursor += ch.len_utf8();
         self.adopt_shell_prefix();
@@ -554,7 +560,12 @@ impl Lx {
         if sanitized.is_empty() {
             return;
         }
+        let selection = self.text_selection_range();
         self.snapshot();
+        if let Some((start, end)) = selection {
+            self.input.replace_range(start..end, "");
+            self.cursor = start;
+        }
         self.input.insert_str(self.cursor, &sanitized);
         self.cursor += sanitized.len();
         self.adopt_shell_prefix();
@@ -567,6 +578,18 @@ impl Lx {
 
     /// 在光标处换行；列表项自动续写标记（对齐 prompt 编辑器）。
     pub fn newline(&mut self) {
+        // 有选区时先替换整段选区，再插入换行（一步撤销）。
+        if let Some((start, end)) = self.text_selection_range() {
+            self.snapshot();
+            self.input.replace_range(start..end, "\n");
+            self.cursor = start + 1;
+            if self.plain || self.input_mode == LxInputMode::Shell {
+                self.scroll_cursor_into_view();
+            } else {
+                self.refresh_panel();
+            }
+            return;
+        }
         // 纯文本缓冲：换行就是换行，不续写列表标记、不刷新面板。
         if self.plain {
             self.snapshot();
@@ -603,6 +626,9 @@ impl Lx {
     /// （对齐 prompt 的 `mention_deletion_range` 语义）；面板打开时按普通退格编辑查询。
     pub fn backspace(&mut self) {
         self.refer_suppressed = false;
+        if self.delete_selected() {
+            return;
+        }
         // Shell 正文起点退格：退出模式并保留正文（不再吞字符）；压一次快照，
         // 使 undo 能恢复模式与正文。
         if self.input_mode == LxInputMode::Shell && self.cursor == 0 {
@@ -645,6 +671,9 @@ impl Lx {
     /// 删除光标处字符。
     pub fn delete(&mut self) {
         self.refer_suppressed = false;
+        if self.delete_selected() {
+            return;
+        }
         if self.cursor < self.input.len() {
             self.snapshot();
             self.input.remove(self.cursor);
@@ -652,18 +681,28 @@ impl Lx {
         }
     }
 
-    /// 光标左移一个字符。
+    /// 光标左移一个字符；有选区时折叠到选区开头。
     pub fn move_left(&mut self) {
         self.refer_suppressed = false;
+        if let Some((start, _)) = self.text_selection_range() {
+            self.cursor = start;
+            self.refresh_panel();
+            return;
+        }
         if let Some(prev) = self.input[..self.cursor].chars().next_back() {
             self.cursor -= prev.len_utf8();
             self.refresh_panel();
         }
     }
 
-    /// 光标右移一个字符。
+    /// 光标右移一个字符；有选区时折叠到选区结尾。
     pub fn move_right(&mut self) {
         self.refer_suppressed = false;
+        if let Some((_, end)) = self.text_selection_range() {
+            self.cursor = end;
+            self.refresh_panel();
+            return;
+        }
         if let Some(next) = self.input[self.cursor..].chars().next() {
             self.cursor += next.len_utf8();
             self.refresh_panel();
@@ -811,16 +850,26 @@ impl Lx {
         self.refresh_panel();
     }
 
-    /// 光标左移一个词。
+    /// 光标左移一个词；有选区时折叠到选区开头。
     pub fn word_left(&mut self) {
         self.refer_suppressed = false;
+        if let Some((start, _)) = self.text_selection_range() {
+            self.cursor = start;
+            self.refresh_panel();
+            return;
+        }
         self.cursor = text::word_start_before(&self.input, self.cursor);
         self.refresh_panel();
     }
 
-    /// 光标右移一个词。
+    /// 光标右移一个词；有选区时折叠到选区结尾。
     pub fn word_right(&mut self) {
         self.refer_suppressed = false;
+        if let Some((_, end)) = self.text_selection_range() {
+            self.cursor = end;
+            self.refresh_panel();
+            return;
+        }
         self.cursor = text::word_end_after(&self.input, self.cursor);
         self.refresh_panel();
     }
@@ -828,6 +877,9 @@ impl Lx {
     /// 删除光标到逻辑行首；光标已在行首时删除前一个换行（与上一行合并）。
     pub fn delete_to_line_start(&mut self) {
         self.refer_suppressed = false;
+        if self.delete_selected() {
+            return;
+        }
         if self.cursor == 0 {
             return;
         }
@@ -847,6 +899,9 @@ impl Lx {
     /// 删除光标到逻辑行尾。
     pub fn delete_to_line_end(&mut self) {
         self.refer_suppressed = false;
+        if self.delete_selected() {
+            return;
+        }
         let end = text::line_end(&self.input, self.cursor);
         if self.cursor < end {
             self.snapshot();
@@ -858,6 +913,9 @@ impl Lx {
     /// 向前删除一个词。
     pub fn delete_word_backward(&mut self) {
         self.refer_suppressed = false;
+        if self.delete_selected() {
+            return;
+        }
         let start = text::word_start_before(&self.input, self.cursor);
         if start < self.cursor {
             self.snapshot();
@@ -872,6 +930,9 @@ impl Lx {
     /// 曾经把光标设成删除前的 `end`，缓冲区缩短后光标越界，下一次编辑直接 panic。
     pub fn delete_word_forward(&mut self) {
         self.refer_suppressed = false;
+        if self.delete_selected() {
+            return;
+        }
         let end = text::word_end_after(&self.input, self.cursor);
         if self.cursor < end {
             self.snapshot();

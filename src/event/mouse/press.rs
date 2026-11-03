@@ -469,29 +469,78 @@ pub(crate) fn handle_mouse_down_left(
                 // 粘贴面板打开时点击编辑区：关闭面板且不穿透、不移动光标。
                 state.prompt.paste_cancel();
             } else if update::prompt_tree_mode(state) {
-                // 树视图：按下只选中并登记拖拽起点；折叠/展开与双击判定推迟到松开。
-                let hit = ui::prompt::tree::row_at(
+                // 顶部搜索框：单击/双击/三击与拖拽选中文本。
+                let search_hit = ui::prompt::tree::search_char_at(
                     inner,
                     &state.prompt_owner().prompt_panel,
                     mouse.column,
                     mouse.row,
                 );
-                if let Some(index) = hit {
-                    update::begin_prompt_drag(state, index);
+                if let Some(char_idx) = search_hit {
+                    let clicks = crate::app::selection::next_click_count(
+                        &mut state.selection_click,
+                        mouse.column,
+                        mouse.row,
+                        Instant::now(),
+                    );
+                    update::clear_selection(state);
+                    let workspace = state.prompt_workspace();
+                    if let Some(ws) = state.workspaces.get_mut(workspace) {
+                        ws.prompt_panel
+                            .search
+                            .begin_selection_with_clicks(char_idx, clicks);
+                    }
+                    state.prompt_search_drag = true;
+                } else {
+                    // 树视图：按下只选中并登记拖拽起点；折叠/展开与双击判定推迟到松开。
+                    let hit = ui::prompt::tree::row_at(
+                        inner,
+                        &state.prompt_owner().prompt_panel,
+                        mouse.column,
+                        mouse.row,
+                    );
+                    if let Some(index) = hit {
+                        update::begin_prompt_drag(state, index);
+                    }
                 }
             } else if update::prompt_pages_mode(state) {
-                // 页列表视图：单击选中，400ms 内双击同一行打开该页（不支持拖拽）。
-                let hit = ui::prompt::pages::page_row_at(
+                // 顶部搜索框：单击/双击/三击与拖拽选中文本。
+                let search_hit = ui::prompt::pages::search_char_at(
                     inner,
                     &state.prompt_owner().prompt_panel,
                     mouse.column,
                     mouse.row,
                 );
-                if let Some(index) = hit {
-                    let now = Instant::now();
-                    update::select_page_row(state, index);
-                    if update::page_row_double_click(state, index, now) {
-                        update::open_selected_page(state);
+                if let Some(char_idx) = search_hit {
+                    let clicks = crate::app::selection::next_click_count(
+                        &mut state.selection_click,
+                        mouse.column,
+                        mouse.row,
+                        Instant::now(),
+                    );
+                    update::clear_selection(state);
+                    let workspace = state.prompt_workspace();
+                    if let Some(ws) = state.workspaces.get_mut(workspace) {
+                        ws.prompt_panel
+                            .pages_view
+                            .search
+                            .begin_selection_with_clicks(char_idx, clicks);
+                    }
+                    state.prompt_search_drag = true;
+                } else {
+                    // 页列表视图：单击选中，400ms 内双击同一行打开该页（不支持拖拽）。
+                    let hit = ui::prompt::pages::page_row_at(
+                        inner,
+                        &state.prompt_owner().prompt_panel,
+                        mouse.column,
+                        mouse.row,
+                    );
+                    if let Some(index) = hit {
+                        let now = Instant::now();
+                        update::select_page_row(state, index);
+                        if update::page_row_double_click(state, index, now) {
+                            update::open_selected_page(state);
+                        }
                     }
                 }
             } else {

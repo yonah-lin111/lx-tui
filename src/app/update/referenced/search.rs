@@ -99,6 +99,7 @@ fn goto_referenced_root(state: &mut AppState, folder: i64, root: PathBuf, push: 
     search.request = Some(id);
     search.root = root.clone();
     search.query.clear();
+    search.query.reset_history();
     search.entries.clear();
     search.items.clear();
     search.scan_truncated = false;
@@ -288,19 +289,15 @@ pub fn edit_referenced_search(state: &mut AppState, key: crate::app::actions::Ov
     let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_mut() else {
         return false;
     };
-    match key {
-        crate::app::actions::OverlayKey::Char(ch) => search.query.insert_char(ch),
-        crate::app::actions::OverlayKey::Clear => search.query.clear(),
-        crate::app::actions::OverlayKey::Backspace => search.query.backspace(),
-        crate::app::actions::OverlayKey::Delete => search.query.delete(),
-        crate::app::actions::OverlayKey::Left => search.query.move_left(),
-        crate::app::actions::OverlayKey::Right => search.query.move_right(),
-        crate::app::actions::OverlayKey::Home => search.query.move_home(),
-        crate::app::actions::OverlayKey::End => search.query.move_end(),
-        _ => return false,
+    let before = search.query.text().to_string();
+    if !search.query.apply_edit_key(key) {
+        return false;
     }
-    let query = search.query.text().to_string();
-    search.refilter(&query);
+    // 仅文本变化时重算候选；光标移动/全选不能把下方高亮与滚动位置复位。
+    if search.query.text() != before {
+        let query = search.query.text().to_string();
+        search.refilter(&query);
+    }
     true
 }
 
