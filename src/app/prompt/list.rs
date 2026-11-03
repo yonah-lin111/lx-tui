@@ -230,7 +230,8 @@ pub(crate) fn in_fence(text: &str, cursor: usize) -> bool {
 impl Prompt {
     /// 列表项续写换行；返回是否已按列表语义处理。
     pub(super) fn continue_list(&mut self) -> bool {
-        let Some(edit) = list_continuation(&self.text, self.cursor) else {
+        let masked = crate::app::paste::mask_pasted_text(&self.text);
+        let Some(edit) = list_continuation(&masked, self.cursor) else {
             return false;
         };
         self.record(EditKind::Other);
@@ -244,9 +245,10 @@ impl Prompt {
     /// 光标与分隔空格之间只剩空格时先删这些多余空格；在分隔空格处，
     /// 同列表非首项替换为等宽空格，列表首项整段删除（顶层含缩进，嵌套保留缩进）。
     pub(super) fn delete_list_markup(&mut self) -> bool {
-        let start = line_start(&self.text, self.cursor);
-        let end = line_end(&self.text, self.cursor);
-        let line = &self.text[start..end];
+        let masked = crate::app::paste::mask_pasted_text(&self.text);
+        let start = line_start(&masked, self.cursor);
+        let end = line_end(&masked, self.cursor);
+        let line = &masked[start..end];
         let Some(item) = parse_list_item(line) else {
             return false;
         };
@@ -264,8 +266,10 @@ impl Prompt {
         if offset < item.sep_end {
             return false;
         }
+        let ctx = list_context(&masked, start, &item);
+        drop(masked);
         self.record(EditKind::Delete);
-        match list_context(&self.text, start, &item) {
+        match ctx {
             ListContext::Sibling => {
                 let blanks = " ".repeat(item.sep_end - item.indent);
                 self.splice_text(start + item.indent, start + item.sep_end, &blanks);
@@ -285,6 +289,9 @@ impl Prompt {
     }
     /// 光标所在行是否位于未闭合的围栏代码块内。
     pub(super) fn in_fence(&self) -> bool {
-        in_fence(&self.text, self.cursor)
+        in_fence(
+            &crate::app::paste::mask_pasted_text(&self.text),
+            self.cursor,
+        )
     }
 }

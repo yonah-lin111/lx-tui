@@ -113,6 +113,8 @@ pub struct CommandPanelView<'a> {
     pub borderless: bool,
     /// 是否隐藏正在选择项（`active`）的 `❯` 标记（用于空态/加载占位行）。
     pub hide_active_marker: bool,
+    /// 禁用项掩码（下标与 `items` 对齐）：`true` 时该行用 `style::muted()` 置灰且不显示选择高亮与 `❯`。
+    pub disabled: Option<&'a [bool]>,
 }
 
 /// 面板布局：面板矩形、条目内容区、滚动条、首个可见条目与可见条目数。
@@ -669,13 +671,18 @@ fn render_items(buf: &mut Buffer, layout: &PanelLayout, view: &CommandPanelView<
         let index = layout.start + offset;
         let height = item_height(item);
         let row = Rect::new(layout.content.x, y, layout.content.width, height);
+        let is_disabled = view
+            .disabled
+            .and_then(|mask| mask.get(index))
+            .copied()
+            .unwrap_or(false);
         render_item(
             buf,
             row,
             item,
-            !view.hide_active_marker && index == view.active,
-            view.current == Some(index),
-            view.hide_active_marker,
+            !view.hide_active_marker && !is_disabled && index == view.active,
+            !is_disabled && view.current == Some(index),
+            view.hide_active_marker || is_disabled,
             marker,
             label_width,
             view.borderless,

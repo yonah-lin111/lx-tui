@@ -10,7 +10,8 @@ use crate::app::paste::refer_kind;
 use super::{EditKind, Prompt, Snapshot};
 
 pub use crate::app::paste::{
-    PasteAction, PasteAnchor, PasteCandidate, PasteCandidateKind, PastePanel,
+    ExpandedPastes, PasteAction, PasteAnchor, PasteCandidate, PasteCandidateKind, PastePanel,
+    TextPasteAction, TextPastePanel, TextPasteState,
 };
 
 /// 占位插入现场；取消时据此回滚（含撤销步、重做栈与保存态）。
@@ -242,7 +243,7 @@ impl Prompt {
     }
 
     /// 构造粘贴插入文本：左邻非空白先补空格，末尾补空格。
-    fn paste_insertion(&self, at: usize, parts: &[String]) -> String {
+    pub(super) fn paste_insertion(&self, at: usize, parts: &[String]) -> String {
         let mut insert = parts.join(" ");
         let left_blank = self.text[..at]
             .chars()
@@ -256,7 +257,7 @@ impl Prompt {
     }
 
     /// 占位插入/直接插入：一次可撤销编辑，并压制其他面板。
-    fn replace_at(&mut self, start: usize, end: usize, insert: &str) -> bool {
+    pub(super) fn replace_at(&mut self, start: usize, end: usize, insert: &str) -> bool {
         if start > end
             || !self.text.is_char_boundary(start)
             || !self.text.is_char_boundary(end)

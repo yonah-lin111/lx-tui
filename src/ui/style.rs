@@ -568,6 +568,19 @@ pub fn markdown_code_block() -> Style {
     text()
 }
 
+/// 折叠粘贴芯片：黄色加粗文字 + 深灰底（256 色 Indexed 236）。
+pub fn pasted_chip() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .bg(Color::Indexed(236))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 折叠粘贴展开区：与芯片同一底色（Indexed 236），正常前景。
+pub fn pasted_bg() -> Style {
+    Style::default().bg(Color::Indexed(236))
+}
+
 /// markdown 引用内容：亮品红斜体。
 pub fn markdown_quote() -> Style {
     Style::default()

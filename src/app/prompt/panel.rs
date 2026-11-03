@@ -414,7 +414,8 @@ impl Prompt {
 
     /// 重算块命令面板：触发标记决定候选列表，同类同位置保留高亮。
     pub(super) fn refresh_panel(&mut self) {
-        let Some(trigger) = markdown::block_trigger(&self.text, self.cursor) else {
+        let masked = crate::app::paste::mask_pasted_text(&self.text);
+        let Some(trigger) = markdown::block_trigger(&masked, self.cursor) else {
             self.panel = None;
             return;
         };
@@ -433,26 +434,27 @@ impl Prompt {
     /// 同步：光标离开该行或该行文本变化即关闭（对齐 lx-agent 的二级面板同步），
     /// 关闭不改文本（`Esc` 同样只关闭）。
     pub(super) fn refresh_slash_panel(&mut self) {
+        let masked = crate::app::paste::mask_pasted_text(&self.text);
         if self.worktree_chooser_open() {
             let anchored = self
                 .slash
                 .as_ref()
-                .is_some_and(|panel| panel.worktree_anchored(&self.text, self.cursor));
+                .is_some_and(|panel| panel.worktree_anchored(&masked, self.cursor));
             if anchored {
                 return;
             }
             self.slash = None;
         }
-        let Some(trigger) = markdown::slash_trigger(&self.text, self.cursor) else {
+        let Some(trigger) = markdown::slash_trigger(&masked, self.cursor) else {
             self.slash = None;
             return;
         };
-        let scan = markdown::block_scan(&self.text);
+        let scan = markdown::block_scan(&masked);
         let context = markdown::SlashContext {
-            context: markdown::block_context(&self.text, self.cursor),
+            context: markdown::block_context(&masked, self.cursor),
             // 绑定行需要锚定已闭合的结束行：块未闭合时不提供 `/gitWorkTree`。
             worktree_available: self.worktree_available
-                && markdown::block_end_line_at(&self.text, self.cursor).is_some(),
+                && markdown::block_end_line_at(&masked, self.cursor).is_some(),
             template_present: scan
                 .spans
                 .iter()

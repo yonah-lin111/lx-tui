@@ -305,6 +305,7 @@ pub fn commit_editing_prompt(state: &mut AppState) {
 /// 因此占位文本绝不落库；随后的提交只落粘贴前的正文，切换编辑目标/退出不丢编辑。
 pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
     state.prompt.paste_cancel();
+    state.prompt.text_paste_cancel();
     let Some(target) = state
         .workspaces
         .get(workspace)

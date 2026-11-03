@@ -1,5 +1,7 @@
 //! 单元测试；仅测试构建编译。
 
+mod paste_folded;
+
 use std::path::PathBuf;
 
 use super::*;

@@ -1,5 +1,7 @@
 //! lx 输入框粘贴单元测试：净化、撤销步、面板互斥与参照面板状态机。
 
+mod paste_folded;
+
 use std::path::PathBuf;
 
 use super::*;

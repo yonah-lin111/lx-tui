@@ -1,6 +1,9 @@
 //! `Lx` 输入框的键盘选区、选区删除与剪切：与鼠标选区共用同一份锚点模型。
 
 use super::Lx;
+use crate::app::paste::{
+    clamp_cursor, folded_tokens, next_pasted_boundary, prev_pasted_boundary, snap_pasted_range,
+};
 use crate::app::prompt::text;
 use crate::app::selection::SelectionUnit;
 
@@ -11,10 +14,11 @@ impl Lx {
             self.text_selection = None;
             return false;
         };
+        let range = snap_pasted_range(&self.input, start..end);
         self.refer_suppressed = false;
         self.snapshot();
-        self.input.replace_range(start..end, "");
-        self.cursor = start;
+        self.input.replace_range(range.clone(), "");
+        self.cursor = range.start;
         self.adopt_shell_prefix();
         self.refresh_panel();
         true
@@ -48,58 +52,68 @@ impl Lx {
         self.scroll_cursor_into_view();
     }
 
-    /// Shift+←：向左扩展一个字符。
+    /// Shift+←：向左扩展一个字符（遇到折叠 token 时整块跨过）。
     pub fn select_left(&mut self) {
-        let target = text::prev_boundary(&self.input, self.cursor);
+        let target = prev_pasted_boundary(&self.input, self.cursor);
         self.extend_selection_to(target);
     }
 
-    /// Shift+→：向右扩展一个字符。
+    /// Shift+→：向右扩展一个字符（遇到折叠 token 时整块跨过）。
     pub fn select_right(&mut self) {
-        let target = self.input[self.cursor..]
-            .chars()
-            .next()
-            .map_or(self.cursor, |ch| self.cursor + ch.len_utf8());
+        let target = next_pasted_boundary(&self.input, self.cursor);
         self.extend_selection_to(target);
     }
 
     /// Shift+Ctrl/Alt+←：向左扩展一个词。
     pub fn select_word_left(&mut self) {
-        let target = text::word_start_before(&self.input, self.cursor);
+        let target = clamp_cursor(
+            &self.input,
+            text::word_start_before(&self.input, self.cursor),
+        );
         self.extend_selection_to(target);
     }
 
     /// Shift+Ctrl/Alt+→：向右扩展一个词。
     pub fn select_word_right(&mut self) {
-        let target = text::word_end_after(&self.input, self.cursor);
+        let mut target = text::word_end_after(&self.input, self.cursor);
+        for tok in folded_tokens(&self.input) {
+            if tok.range.start < target && target < tok.range.end {
+                target = tok.range.end;
+                break;
+            }
+        }
         self.extend_selection_to(target);
     }
 
     /// Shift+Home：扩展到当前视觉行行首。
     pub fn select_home(&mut self) {
         let rows = self.visual_rows();
+        let proj = self.projection();
         let (index, _) = self.cursor_visual_in(&rows);
-        let target = rows[index].start;
+        let target = proj.display_to_raw_directed(rows[index].start, false);
         self.extend_selection_to(target);
     }
 
     /// Shift+End：扩展到当前视觉行行尾。
     pub fn select_end(&mut self) {
         let rows = self.visual_rows();
+        let proj = self.projection();
         let (index, _) = self.cursor_visual_in(&rows);
-        let target = rows[index].end;
+        let target = proj.display_to_raw_directed(rows[index].end, true);
         self.extend_selection_to(target);
     }
 
     /// Shift+↑：向上扩展一个视觉行。
     pub fn select_up(&mut self) {
         let rows = self.visual_rows();
+        let proj = self.projection();
         let (index, col) = self.cursor_visual_in(&rows);
         let target = if index == 0 {
-            rows[0].start
+            proj.display_to_raw_directed(rows[0].start, false)
         } else {
             let row = rows[index - 1];
-            row.start + text::offset_at_col(&self.input[row.start..row.end], col)
+            let disp = row.start + text::offset_at_col(&proj.text()[row.start..row.end], col);
+            proj.display_to_raw_directed(disp, false)
         };
         self.extend_selection_to(target);
     }
@@ -107,12 +121,14 @@ impl Lx {
     /// Shift+↓：向下扩展一个视觉行。
     pub fn select_down(&mut self) {
         let rows = self.visual_rows();
+        let proj = self.projection();
         let (index, col) = self.cursor_visual_in(&rows);
         let target = if index + 1 >= rows.len() {
-            rows[rows.len() - 1].end
+            proj.display_to_raw_directed(rows[rows.len() - 1].end, true)
         } else {
             let row = rows[index + 1];
-            row.start + text::offset_at_col(&self.input[row.start..row.end], col)
+            let disp = row.start + text::offset_at_col(&proj.text()[row.start..row.end], col);
+            proj.display_to_raw_directed(disp, true)
         };
         self.extend_selection_to(target);
     }

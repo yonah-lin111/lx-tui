@@ -488,3 +488,53 @@ fn overlay_cut_event_deletes_selection_and_emits_toast() {
     );
     assert!(state.toast.is_some(), "剪切写入剪贴板结果应有 toast");
 }
+
+#[test]
+fn long_text_paste_opens_panel_in_prompt_and_lx_and_submit_expands_tokens() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
+    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    state.prompt.resize(area.width, area.height);
+
+    // 1. Prompt focus: pasting 3 lines opens text paste panel without modifying buffer yet.
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
+    let long_text = "first line\nsecond line\nthird line".to_string();
+    paste::handle_terminal_paste(&mut state, long_text.clone());
+    assert!(state.prompt.text_paste_panel().is_some());
+    assert_eq!(state.prompt.text(), "");
+
+    // Confirming Collapse inserts `@[pasted:3](...)`.
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.prompt.text_paste_panel().is_none());
+    assert!(state.prompt.text().starts_with("@[pasted:3]("));
+
+    // 2. Lx focus: pasting 3 lines opens lx text paste panel, Enter confirms Collapse,
+    // and `expanded_input()` decodes the token for model submission.
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
+    let pane_id = state.active_tab().layout.focus();
+    assert!(paste::handle_lx_paste(&mut state, long_text.clone()));
+    assert!(
+        state
+            .pane_anywhere(pane_id)
+            .unwrap()
+            .lx
+            .text_paste_panel()
+            .is_some()
+    );
+    update::apply_lx_input(&mut state, crate::app::actions::LxInput::Enter);
+    let lx = &state.pane_anywhere(pane_id).unwrap().lx;
+    assert!(lx.text_paste_panel().is_none());
+    assert!(lx.input.starts_with("@[pasted:3]("));
+    assert_eq!(lx.expanded_input().trim(), long_text);
+}

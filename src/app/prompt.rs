@@ -19,6 +19,7 @@ pub use tree::{
     pages_template_counts,
 };
 
+mod folded;
 mod navigation;
 pub(crate) mod text;
 mod viewport;
@@ -89,6 +90,14 @@ pub struct Prompt {
     mention: MentionState,
     /// 粘贴提案状态机：在途读取、二级面板与待清理标记。
     paste: PasteState,
+    /// 长文本粘贴提案状态机：与路径粘贴面板互斥。
+    text_paste: TextPasteState,
+    /// 已展开的折叠粘贴芯片集合（纯视图状态，不落库、不入撤销栈）。
+    expanded_pastes: ExpandedPastes,
+    /// 展开芯片预览区内的选区（投影文本字节起止）。
+    preview_selection: Option<(usize, usize)>,
+    /// 正在按住/拖拽的展开芯片 `(id, occurrence, display_range)`。
+    preview_drag: Option<(u64, usize, std::ops::Range<usize>)>,
     /// 字母快捷输入面板；由正文已出现的引用候选生成。
     refer: Option<crate::app::markdown::ReferPanel>,
     /// `/title` 确认后暂存的待办动作。
@@ -183,6 +192,10 @@ impl Prompt {
             worktree_available: false,
             mention: MentionState::default(),
             paste: PasteState::default(),
+            text_paste: TextPasteState::default(),
+            expanded_pastes: ExpandedPastes::default(),
+            preview_selection: None,
+            preview_drag: None,
             refer: None,
             pending_title_action: None,
             panel_suppressed: false,
@@ -295,6 +308,10 @@ impl Prompt {
         self.mention.clear();
         self.refer = None;
         self.paste.close();
+        self.text_paste.cancel();
+        self.expanded_pastes.clear();
+        self.preview_selection = None;
+        self.preview_drag = None;
         self.panel_suppressed = false;
         self.is_saved = true;
         self.autosave = None;
@@ -340,6 +357,10 @@ impl Prompt {
         self.mention.clear();
         self.refer = None;
         self.paste.close();
+        self.text_paste.cancel();
+        self.expanded_pastes.clear();
+        self.preview_selection = None;
+        self.preview_drag = None;
         self.panel_suppressed = false;
         self.is_saved = history.is_saved;
         self.autosave = None;
@@ -405,6 +426,18 @@ impl Prompt {
         if self.cursor == 0 {
             return;
         }
+        if let Some(tok) = crate::app::paste::token_ending_at(&self.text, self.cursor) {
+            if self.protected_edit(tok.range.start, tok.range.end) {
+                return;
+            }
+            let start = tok.range.start;
+            self.break_group();
+            self.record(EditKind::Other);
+            self.splice_text(tok.range.start, tok.range.end, "");
+            self.cursor = start;
+            self.settle();
+            return;
+        }
         if self.mention.panel().is_none()
             && let Some(range) = markdown::ref_content_deletion_range(&self.text, self.cursor)
                 .or_else(|| markdown::mention_deletion_range(&self.text, self.cursor))
@@ -439,6 +472,18 @@ impl Prompt {
         if self.cursor >= self.text.len() {
             return;
         }
+        if let Some(tok) = crate::app::paste::token_starting_at(&self.text, self.cursor) {
+            if self.protected_edit(tok.range.start, tok.range.end) {
+                return;
+            }
+            let start = tok.range.start;
+            self.break_group();
+            self.record(EditKind::Other);
+            self.splice_text(tok.range.start, tok.range.end, "");
+            self.cursor = start;
+            self.settle();
+            return;
+        }
         let next = next_boundary(&self.text, self.cursor);
         if self.protected_edit(self.cursor, next) {
             return;
@@ -453,7 +498,7 @@ impl Prompt {
     /// 粘贴提案未收束时忽略（与键盘一致：面板打开时编辑器按键被吞掉），
     /// 否则会绕过面板改写缓冲、破坏提案登记的占位区间。
     pub fn undo(&mut self) {
-        if self.paste_panel().is_some() {
+        if self.paste_panel().is_some() || self.text_paste_panel().is_some() {
             return;
         }
         let Some(snapshot) = self.undo.pop() else {
@@ -462,12 +507,13 @@ impl Prompt {
         self.mark_dirty();
         let current = self.snapshot();
         push_bounded(&mut self.redo, current);
+        self.clear_expanded_pastes();
         self.restore(snapshot);
     }
 
     /// 重做；无可重做内容时 no-op。
     pub fn redo(&mut self) {
-        if self.paste_panel().is_some() {
+        if self.paste_panel().is_some() || self.text_paste_panel().is_some() {
             return;
         }
         let Some(snapshot) = self.redo.pop() else {
@@ -476,6 +522,7 @@ impl Prompt {
         self.mark_dirty();
         let current = self.snapshot();
         push_bounded(&mut self.undo, current);
+        self.clear_expanded_pastes();
         self.restore(snapshot);
     }
 
@@ -497,6 +544,7 @@ impl Prompt {
         // 失焦/收起编辑器等同“外部点击”：未确认的粘贴提案先回滚，
         // 占位文本不得留在缓冲里被自动保存落库。
         self.paste_cancel();
+        self.text_paste_cancel();
         self.panel = None;
         self.slash = None;
         self.mention.clear();
@@ -778,77 +826,22 @@ impl Prompt {
             .apply_entries(generation, entries, &self.text, self.cursor)
     }
 
-    /// 当前逻辑行整体右移一个缩进单位；围栏代码块内改为光标处插入空格。
-    pub fn indent(&mut self) {
-        if self.in_fence() {
-            self.insert_at(TAB_STOP);
-            return;
-        }
-        let start = line_start(&self.text, self.cursor);
-        if self.protected_edit(start, start) {
-            return;
-        }
-        self.record(EditKind::Other);
-        self.splice_text(start, start, TAB_STOP);
-        self.cursor += INDENT_UNIT;
-        self.settle();
-    }
-
-    /// 当前逻辑行整体左移一个缩进单位；行首无空格时 no-op。
-    pub fn outdent(&mut self) {
-        let start = line_start(&self.text, self.cursor);
-        let spaces = self.text[start..]
-            .bytes()
-            .take_while(|byte| *byte == b' ')
-            .count();
-        let remove = spaces.min(INDENT_UNIT);
-        if remove == 0 || self.protected_edit(start, start + remove) {
-            return;
-        }
-        self.record(EditKind::Other);
-        let offset = self.cursor - start;
-        self.splice_text(start, start + remove, "");
-        self.cursor = start + offset.saturating_sub(remove);
-        self.settle();
-    }
-
     /// 用插入文本替换字节范围（选区删除/替换）；文本会先净化，作为独立撤销步。
     pub fn replace_range(&mut self, start: usize, end: usize, insert: &str) -> bool {
         if start >= end || end > self.text.len() {
             return false;
         }
-        if self.protected_edit(start, end) {
+        let range = crate::app::paste::snap_pasted_range(&self.text, start..end);
+        if self.protected_edit(range.start, range.end) {
             return false;
         }
         let sanitized = sanitize(insert);
         self.break_group();
         self.record(EditKind::Insert);
-        self.splice_text(start, end, &sanitized);
-        self.cursor = start + sanitized.len();
+        self.splice_text(range.start, range.end, &sanitized);
+        self.cursor = range.start + sanitized.len();
         self.settle();
         true
-    }
-
-    /// 在指定字节偏移（模板块起始行行尾）处插入 `\n{title: }`，并将光标置于 `}` 之前，返回新光标字节偏移。
-    ///
-    /// 新行继承起始行的前导空格缩进，模板块缩进与正文保持一致。
-    pub fn insert_template_title_line(&mut self, line_end_byte: usize) -> usize {
-        let pos = self
-            .text
-            .floor_char_boundary(line_end_byte.min(self.text.len()));
-        let line_start = self.text[..pos].rfind('\n').map_or(0, |idx| idx + 1);
-        let indent: String = self.text[line_start..pos]
-            .chars()
-            .take_while(|ch| *ch == ' ')
-            .collect();
-        self.break_group();
-        self.record(EditKind::Other);
-        let snippet = format!("\n{indent}{{title: }}");
-        let cursor_offset = pos + 1 + indent.len() + "{title: ".len();
-        self.splice_text(pos, pos, &snippet);
-        self.cursor = cursor_offset;
-        self.settle();
-        self.cursor
     }
 
     /// 测试辅助：把光标移到字节偏移（不触发 settle 的面板语义）。
@@ -859,8 +852,9 @@ impl Prompt {
 
     /// 编辑是否触碰受保护的绑定行或标题行；触碰时拒绝该次编辑。
     fn protected_edit(&mut self, from: usize, to: usize) -> bool {
-        markdown::edit_touches_worktree_line(&self.text, from, to)
-            || markdown::edit_touches_title_line(&self.text, from, to)
+        let masked = crate::app::paste::mask_pasted_text(&self.text);
+        markdown::edit_touches_worktree_line(&masked, from, to)
+            || markdown::edit_touches_title_line(&masked, from, to)
     }
 
     /// 替换正文区间；调用方负责历史、光标与收尾。
@@ -870,6 +864,7 @@ impl Prompt {
 
     /// 在光标处插入已净化的文本并推进光标；触碰受保护绑定行时忽略。
     fn insert_at(&mut self, insert: &str) {
+        self.cursor = crate::app::paste::clamp_cursor(&self.text, self.cursor);
         if self.protected_edit(self.cursor, self.cursor) {
             return;
         }
@@ -928,9 +923,12 @@ impl Prompt {
 
     /// 面板互斥收敛与滚动跟随。
     fn settle_panels(&mut self) {
+        self.preview_selection = None;
+        self.preview_drag = None;
         self.panel_suppressed = false;
         self.scroll_cursor_into_view();
-        self.mention.refresh(&self.text, self.cursor);
+        let masked = crate::app::paste::mask_pasted_text(&self.text).into_owned();
+        self.mention.refresh(&masked, self.cursor);
         if self.mention.panel().is_some() {
             self.slash = None;
             self.panel = None;

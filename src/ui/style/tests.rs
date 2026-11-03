@@ -663,3 +663,16 @@ fn tab_ask_marker_preserves_tab_background_and_uses_distinct_foreground() {
     assert_eq!(inactive.fg, Some(Color::Indexed(166)));
     assert!(inactive.sub_modifier.contains(Modifier::DIM));
 }
+
+#[test]
+fn pasted_chip_and_bg_share_indexed_236_background_and_yellow_bold_chip() {
+    let chip = pasted_chip();
+    assert_eq!(chip.fg, Some(Color::Yellow));
+    assert_eq!(chip.bg, Some(Color::Indexed(236)));
+    assert!(chip.add_modifier.contains(Modifier::BOLD));
+
+    let bg = pasted_bg();
+    assert_eq!(bg.fg, None);
+    assert_eq!(bg.bg, Some(Color::Indexed(236)));
+    assert!(!bg.add_modifier.contains(Modifier::BOLD));
+}

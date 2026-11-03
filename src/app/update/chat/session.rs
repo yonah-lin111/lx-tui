@@ -32,6 +32,8 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.compact.reset();
     target.lx.model_switch.reset();
     target.lx.clear_rewind();
+    target.lx.text_paste_cancel();
+    target.lx.clear_expanded_pastes();
     crate::app::update::clear_lx_selection_for(state, pane);
     refresh_lx_status(state, pane);
     true
@@ -412,6 +414,8 @@ pub fn on_session_loaded_full(
     target.lx.compact.reset();
     target.lx.model_switch.reset();
     target.lx.clear_rewind();
+    target.lx.text_paste_cancel();
+    target.lx.clear_expanded_pastes();
     // 切换会话：未执行的命令与排队项不得漂移到新会话。
     target.lx.chat.pending_shells.clear();
     target.lx.chat.queue.clear();

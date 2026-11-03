@@ -327,6 +327,8 @@ fn copy_lx_selection(
                 && ask.editing
             {
                 ask.editor().and_then(|ed| ed.selected_text())
+            } else if let Some((start, end)) = target.lx.preview_selection() {
+                Some(target.lx.projection().copy_display_range(start..end))
             } else {
                 target.lx.selected_text()
             }

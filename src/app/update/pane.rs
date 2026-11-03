@@ -88,6 +88,7 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                 pane.lx.slash,
                 Some(super::super::state::SlashPanel::History(_))
             ) && (pane.lx.text_selection_range().is_some()
+                || pane.lx.preview_selection().is_some()
                 || state
                     .lx_selection
                     .is_some_and(|sel| sel.pane() == pane_id && sel.range().is_some()))
@@ -152,6 +153,33 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
     }
     let lx = &mut pane.lx;
     lx.sync_referenced_folders(&referenced_folders);
+    // 长文本粘贴面板优先：面板打开时仅响应上下移动、回车确认与 Esc 取消，其余按键吞掉。
+    if lx.text_paste_panel().is_some() {
+        match command {
+            LxInput::Up => {
+                lx.text_paste_move(-1);
+            }
+            LxInput::Down => {
+                lx.text_paste_move(1);
+            }
+            LxInput::Enter => match lx
+                .text_paste_panel()
+                .and_then(|panel| panel.active_action())
+            {
+                Some(action) => {
+                    lx.text_paste_confirm(action);
+                }
+                None => {
+                    lx.text_paste_cancel();
+                }
+            },
+            LxInput::Escape => {
+                lx.text_paste_cancel();
+            }
+            _ => {}
+        }
+        return;
+    }
     // 路径粘贴参照面板优先：与 md 块面板互斥；面板打开时其余按键按面板策略吞掉。
     if lx.paste_panel().is_some() {
         match command {
@@ -359,8 +387,11 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::Enter => {
             super::chat::try_send(state, pane_id);
         }
-        // 无面板：空 Shell 模式且无活动任务时 Esc 退出模式；否则走停止待命。
+        // 无面板：先清理展开芯片选区或收起全部展开芯片；再判空 Shell 退出或停止待命。
         LxInput::Escape => {
+            if lx.clear_preview_selection() || lx.clear_expanded_pastes() {
+                return;
+            }
             let idle_shell = state.pane_anywhere(pane_id).is_some_and(|target| {
                 target.lx.shell_mode()
                     // 与提交/排队的判空口径一致：只有空格也算空命令。

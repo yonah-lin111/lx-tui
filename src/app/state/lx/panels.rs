@@ -13,29 +13,33 @@ impl Lx {
     /// 编辑或移动光标后调用；同时清除输入框文本选区、解除提及面板的压制，按当前文本与根重新评估。
     pub fn refresh_panel(&mut self) {
         self.text_selection = None;
+        self.preview_selection = None;
+        self.preview_drag = None;
         // Shell 正文按原始脚本编辑：不弹 Markdown / 提及 / 斜杠 / 路径参照 / 快捷引用面板。
         if self.input_mode == LxInputMode::Shell {
             self.panel = None;
             self.slash = None;
             self.paste = None;
+            self.text_paste = None;
             self.refer = None;
             self.mention.suppress();
             self.scroll_cursor_into_view();
             return;
         }
+        let masked = crate::app::paste::mask_pasted_text(&self.input).into_owned();
         self.mention.unsuppress();
-        self.mention.refresh(&self.input, self.cursor);
+        self.mention.refresh(&masked, self.cursor);
         if self.mention.is_open() || self.mention_visible() {
             self.panel = None;
             self.refer = None;
-        } else if self.slash.is_some() || self.paste.is_some() {
+        } else if self.slash.is_some() || self.paste.is_some() || self.text_paste.is_some() {
             self.refer = None;
         } else {
             self.refresh_refer_panel();
             if self.refer.is_some() {
                 self.panel = None;
             } else {
-                self.panel = block_trigger(&self.input, self.cursor).map(|trigger| {
+                self.panel = block_trigger(&masked, self.cursor).map(|trigger| {
                     let items = block_commands(trigger.kind);
                     BlockPanel::new(trigger, items, 0)
                 });
@@ -313,8 +317,13 @@ impl Lx {
 
     /// 构造粘贴插入文本：左邻非空白先补空格，末尾补空格。
     fn paste_insertion(&self, parts: &[String]) -> String {
+        self.paste_insertion_at(self.cursor, parts)
+    }
+
+    /// 在指定偏移处构造粘贴插入文本：左邻非空白先补空格，末尾补空格。
+    pub(super) fn paste_insertion_at(&self, at: usize, parts: &[String]) -> String {
         let mut insert = parts.join(" ");
-        let left_blank = self.input[..self.cursor]
+        let left_blank = self.input[..at.min(self.input.len())]
             .chars()
             .next_back()
             .is_none_or(char::is_whitespace);

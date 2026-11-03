@@ -154,6 +154,13 @@ fn long_paste_wraps_and_shows_input_scrollbar() {
     let app = App::spawn();
     let long = "L".repeat(20000);
     app.send(&bracketed_paste(&long));
+    assert!(
+        app.wait_for("Collapse paste"),
+        "长文本粘贴必须先弹出折叠/原文选择面板:\n{}",
+        screen_text(&app.emulator.lock().unwrap())
+    );
+    // 选择第二项 `Paste full text` 并回车确认。
+    app.send(b"\x1b[B\r");
     // 滚动条只画 thumb（`▐`）：轨道不再绘制 `▕` 竖线。
     assert!(
         app.wait_for("▐"),
@@ -167,6 +174,11 @@ fn wheel_scrolls_lx_input_viewport() {
     let app = App::spawn();
     let body = format!("HEADMARK{}", "L".repeat(20000));
     app.send(&bracketed_paste(&body));
+    assert!(
+        app.wait_for("Collapse paste"),
+        "长文本粘贴必须先弹出折叠/原文选择面板"
+    );
+    app.send(b"\x1b[B\r");
     assert!(app.wait_for("▐"), "溢出时显示滚动条");
     assert!(
         !screen_text(&app.emulator.lock().unwrap()).contains("HEADMARK"),

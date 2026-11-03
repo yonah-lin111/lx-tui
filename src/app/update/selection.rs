@@ -113,6 +113,15 @@ pub fn begin_lx_input_selection_with_clicks(
 ) {
     clear_selection(state);
     if let Some(pane) = state.pane_mut_anywhere(id) {
+        if let Some(hit) = pane.lx.paste_hit_at(row, col) {
+            if !hit.expanded {
+                pane.lx.toggle_paste(hit.id, hit.occurrence);
+            } else {
+                pane.lx.begin_preview_selection(row, col, clicks);
+                state.lx_input_drag = Some(id);
+            }
+            return;
+        }
         pane.lx.begin_text_selection_with_clicks(row, col, clicks);
         state.lx_input_drag = Some(id);
     }
@@ -124,7 +133,11 @@ pub fn drag_lx_input_selection(state: &mut AppState, id: PaneId, row: usize, col
         return;
     }
     if let Some(pane) = state.pane_mut_anywhere(id) {
-        pane.lx.drag_text_selection(row, col);
+        if pane.lx.is_preview_dragging() {
+            pane.lx.drag_preview_selection(row, col);
+        } else {
+            pane.lx.drag_text_selection(row, col);
+        }
     }
 }
 
@@ -134,10 +147,14 @@ pub fn end_lx_input_selection_drag(state: &mut AppState) -> bool {
     let Some(id) = state.lx_input_drag.take() else {
         return false;
     };
-    if let Some(pane) = state.pane_mut_anywhere(id)
-        && pane.lx.text_selection_range().is_none()
-    {
-        pane.lx.clear_text_selection();
+    if let Some(pane) = state.pane_mut_anywhere(id) {
+        if pane.lx.is_preview_dragging() {
+            pane.lx.finish_preview_selection();
+            return true;
+        }
+        if pane.lx.text_selection_range().is_none() {
+            pane.lx.clear_text_selection();
+        }
     }
     true
 }
@@ -318,6 +335,7 @@ pub fn clear_selection(state: &mut AppState) {
     state.lx_input_drag = None;
     state.ask_input_drag = None;
     state.todo_input_drag = false;
+    state.prompt.clear_preview_selection();
     if let Some(input) = state.todo.edit_input_mut() {
         input.clear_selection();
     }
@@ -326,6 +344,7 @@ pub fn clear_selection(state: &mut AppState) {
             for id in tab.layout.pane_ids() {
                 if let Some(target) = tab.pane_mut(id) {
                     target.lx.clear_text_selection();
+                    target.lx.clear_preview_selection();
                     if let Some(ask) = target.lx.ask.as_mut()
                         && let Some(editor) = ask.editor_mut()
                     {
@@ -538,8 +557,14 @@ pub fn prompt_selection_text(state: &AppState) -> Option<String> {
         .selection_text_with(start, end, allow_single_cell)
 }
 
-/// prompt 复制文本：优先选区；无选区时复制全文；无内容返回 None。
+/// prompt 复制文本：优先展开区选区、普通选区；无选区时复制全文；无内容返回 None。
 pub fn prompt_copy_text(state: &AppState) -> Option<String> {
+    if let Some((start, end)) = state.prompt.preview_selection() {
+        let text = state.prompt.projection().copy_display_range(start..end);
+        if !text.is_empty() {
+            return Some(text);
+        }
+    }
     if let Some(text) = prompt_selection_text(state) {
         return Some(text);
     }

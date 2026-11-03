@@ -377,6 +377,19 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if state.prompt.is_preview_dragging() {
+        let pane = state.prompt.id();
+        if let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) {
+            let inner = pane_content_inner(state, view, pane, layout::pane_inner_rect(*rect));
+            if inner.width > 0 && inner.height > 0 {
+                let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
+                let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
+                state.prompt.drag_preview_selection(row, col);
+                *dirty = true;
+            }
+        }
+        return;
+    }
     // 终端拖拽选区：把终点更新到鼠标位置的内容；prompt 选区同时移动编辑器光标。
     let pane = if let Some(pane) = state.terminal_selection {
         pane
@@ -530,6 +543,11 @@ pub(crate) fn handle_mouse_up_left(
     }
     if state.resizing_prompt {
         update::end_prompt_resize(state);
+        *dirty = true;
+        return;
+    }
+    if state.prompt.is_preview_dragging() {
+        state.prompt.finish_preview_selection();
         *dirty = true;
         return;
     }

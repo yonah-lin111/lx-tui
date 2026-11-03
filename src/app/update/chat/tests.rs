@@ -1294,3 +1294,36 @@ fn ctrl_o_on_mcp_card_toggles_section_instead_of_opening_task_page() {
         crate::app::state::CardSection::Output
     ));
 }
+
+#[test]
+fn try_send_expands_folded_paste_tokens_and_clears_input_on_commit() {
+    let tok = crate::app::paste::encode_pasted_text("line 1\nline 2\nline 3");
+    let mut state = ready_state(&format!("Please analyze {tok}"));
+    let pane = focus_pane(&state);
+
+    assert!(try_send(&mut state, pane));
+    let (generation, sent_draft) = match &state.pane_anywhere(pane).unwrap().lx.chat.request {
+        RequestState::Committing { generation, draft } => (*generation, draft.clone()),
+        other => panic!("expected Committing, got {other:?}"),
+    };
+    assert_eq!(sent_draft, "Please analyze line 1\nline 2\nline 3");
+
+    let begin_draft = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::BeginChatTurn { draft, .. } => Some(draft.clone()),
+            _ => None,
+        })
+        .expect("BeginChatTurn effect");
+    assert_eq!(begin_draft, "Please analyze line 1\nline 2\nline 3");
+
+    // On commit ack, input containing the raw token must be cleared because its expanded form matches frozen_draft.
+    assert!(on_turn_committed(
+        &mut state,
+        pane,
+        generation,
+        &committed("sess-fold")
+    ));
+    assert_eq!(state.pane_anywhere(pane).unwrap().lx.input, "");
+}

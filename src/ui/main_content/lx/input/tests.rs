@@ -160,3 +160,56 @@ fn session_title_badge_is_hidden_when_none_and_truncates_when_narrow() {
     assert_eq!(buf2[(input.x, input.y)].symbol(), "─");
     assert_eq!(buf2[(input.right() - 1, input.y)].symbol(), "─");
 }
+
+#[test]
+fn lx_input_renders_folded_chip_and_expanded_preview_with_indent_and_selection() {
+    let area = Rect::new(0, 0, 50, 14);
+    let mut lx = Lx::new();
+    let tok = crate::app::paste::encode_pasted_text("alpha\nbeta\ngamma");
+    lx.insert_str(&tok);
+
+    let input = layout(area, &lx).input.expect("input rect");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let text_y = input.y + 1;
+    let content_x = input.x + INPUT_PREFIX;
+
+    // Collapsed chip starts at content_x with Yellow BOLD on Indexed(236).
+    assert_eq!(buf[(content_x, text_y)].symbol(), "@");
+    assert_eq!(buf[(content_x, text_y)].fg, Color::Yellow);
+    assert_eq!(buf[(content_x, text_y)].bg, Color::Indexed(236));
+    assert!(buf[(content_x, text_y)].modifier.contains(Modifier::BOLD));
+
+    // Expand chip and select "beta" on line 1.
+    let id = crate::app::paste::folded_tokens(&lx.input)[0].id;
+    lx.toggle_paste(id, 0);
+    lx.set_preview_selection(Some((6, 10)));
+
+    let input_exp = layout(area, &lx).input.expect("input rect");
+    let mut buf_exp = Buffer::empty(area);
+    let _ = render(
+        area,
+        &mut buf_exp,
+        &lx,
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
+    let exp_y0 = input_exp.y + 1;
+    let exp_y1 = input_exp.y + 2;
+
+    // Row 0 has 2-col indent with Indexed(236) bg, then "alpha".
+    assert_eq!(buf_exp[(content_x, exp_y0)].symbol(), " ");
+    assert_eq!(buf_exp[(content_x + 1, exp_y0)].symbol(), " ");
+    assert_eq!(buf_exp[(content_x, exp_y0)].bg, Color::Indexed(236));
+    assert_eq!(buf_exp[(content_x + 2, exp_y0)].symbol(), "a");
+    assert_eq!(buf_exp[(content_x + 2, exp_y0)].bg, Color::Indexed(236));
+
+    // Row 1 ("beta") has 2-col indent and REVERSED modifier from preview_selection.
+    assert_eq!(buf_exp[(content_x + 2, exp_y1)].symbol(), "b");
+    assert!(
+        buf_exp[(content_x + 2, exp_y1)]
+            .modifier
+            .contains(Modifier::REVERSED)
+    );
+}

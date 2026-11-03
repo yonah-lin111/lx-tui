@@ -109,7 +109,7 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
             return false;
         }
         let entry = target.lx.entry;
-        let draft = target.lx.input.trim().to_string();
+        let draft = target.lx.expanded_input().trim().to_string();
         // 压缩进行中同样不能发送：检查点提交会整体替换上下文指针。
         // 会话级：同一会话的其它 pane 在压缩/跑轮次时，本 pane 的发送会推进 revision，
         // 让那次压缩在 commit 阶段失败。
@@ -275,7 +275,7 @@ pub fn on_turn_committed(
     let is_first_turn = target.lx.chat.session_id.is_none() && committed.turn_index == 0;
     let draft_for_title = frozen_draft.clone();
     // 只清仍与冻结草稿相同的输入（期间用户编辑则保留新草稿）。
-    if target.lx.input.trim() == frozen_draft.trim() {
+    if target.lx.expanded_input().trim() == frozen_draft.trim() {
         target.lx.clear();
     }
     // 发送成功：退出历史浏览态，否则下一次 `↑` 会从旧游标继续而非最新一条。

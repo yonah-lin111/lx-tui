@@ -997,6 +997,20 @@ pub const PASTE_PANEL_TITLE: &str = "Paste";
 pub const PASTE_ACTION_REFERENCE: &str = "Insert reference";
 pub const PASTE_ACTION_PATH: &str = "Insert path";
 pub const PASTE_REFERENCE_UNSUPPORTED: &str = "path cannot be referenced";
+/// 长文本粘贴二级面板文案。
+pub const TEXT_PASTE_PANEL_TITLE: &str = "Paste";
+pub const TEXT_PASTE_ACTION_COLLAPSE: &str = "Collapse paste";
+pub const TEXT_PASTE_ACTION_FULL: &str = "Paste full text";
+pub const TEXT_PASTE_TOO_LARGE: &str = "too large to collapse";
+
+/// 长文本粘贴行数说明。
+pub fn text_paste_lines(count: usize) -> String {
+    if count == 1 {
+        "1 line".to_string()
+    } else {
+        format!("{count} lines")
+    }
+}
 /// 字母快捷候选面板标题。
 pub const REFER_PANEL_TITLE: &str = "References";
 /// 附件条：类型标签、缺失状态与移除按钮。

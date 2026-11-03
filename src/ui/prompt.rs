@@ -20,6 +20,7 @@ use ratatui::style::{Modifier, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::{BlockKind, BlockLineInfo, BlockRole, block_line_infos};
+use crate::app::paste::{Projection, SegmentKind, mask_pasted_text};
 use crate::app::prompt::{Prompt, PromptMode, VisualRow};
 use crate::app::selection::Selection;
 use crate::layout::{self, PromptToolbarButton};
@@ -153,15 +154,17 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         return;
     }
     let rows = prompt.visual_rows();
-    let tokens = markdown::scan(prompt.text());
-    let infos = block_line_infos(prompt.text());
-    let lines: Vec<&str> = prompt.text().split('\n').collect();
-    let mut line_starts = Vec::new();
+    let proj = prompt.projection();
+    let masked = mask_pasted_text(prompt.text());
+    let tokens = markdown::scan(&masked);
+    let infos = block_line_infos(&masked);
+    let mut raw_line_starts = Vec::new();
     let mut offset = 0;
-    for line in &lines {
-        line_starts.push(offset);
+    for line in prompt.text().split('\n') {
+        raw_line_starts.push(offset);
         offset += line.len() + 1;
     }
+    let preview_sel = prompt.preview_selection();
     let scroll = prompt.scroll().min(rows.len().saturating_sub(1));
     let mut separator_rows = Vec::new();
     for (index, row) in rows
@@ -181,8 +184,6 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
             }
             continue;
         }
-        let line_tokens = tokens.get(row.line).map(Vec::as_slice).unwrap_or_default();
-        let base = row.start - line_starts.get(row.line).copied().unwrap_or(row.start);
         let first = first_text_row(&rows, index);
         let last = index + 1 >= rows.len() || rows[index + 1].line != row.line;
         let start_row = info.is_some_and(|info| info.role == BlockRole::Start && first);
@@ -199,7 +200,16 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
             end_x: text_end,
             ellipsize: start_row,
         };
-        paint_row(buf, y, prompt.text(), row, line_tokens, base, geometry);
+        paint_row(
+            buf,
+            y,
+            &proj,
+            row,
+            &tokens,
+            &raw_line_starts,
+            preview_sel,
+            geometry,
+        );
         if let Some(selection) = selection {
             paint_selection(buf, area, y, index as u16, selection);
         }
@@ -343,7 +353,8 @@ pub fn template_buttons(prompt: &Prompt, area: Rect) -> Vec<TemplateButtonHit> {
         return Vec::new();
     }
     let rows = prompt.visual_rows();
-    let infos = crate::app::markdown::template_line_infos(prompt.text());
+    let masked = mask_pasted_text(prompt.text());
+    let infos = crate::app::markdown::template_line_infos(&masked);
     let scroll = prompt.scroll();
     let mut hits = Vec::new();
     for (index, row) in rows.iter().enumerate() {
@@ -397,7 +408,8 @@ pub fn block_buttons(prompt: &Prompt, area: Rect) -> Vec<BlockButtonHit> {
         return Vec::new();
     }
     let rows = prompt.visual_rows();
-    let infos = block_line_infos(prompt.text());
+    let masked = mask_pasted_text(prompt.text());
+    let infos = block_line_infos(&masked);
     let scroll = prompt.scroll();
     let mut hits = Vec::new();
     for (index, row) in rows.iter().enumerate() {
@@ -550,17 +562,17 @@ struct RowGeometry {
     ellipsize: bool,
 }
 
-/// 绘制一个视觉行：按 token 着色，宽字符占位单元格标记为跳过；
+/// 绘制一个视觉行：按投影段与 token 着色，宽字符占位单元格标记为跳过；
 /// 返回最后一个绘制单元格之后的 x（供边框补线）；`ellipsize` 时超宽以 `…` 收尾。
-///
-/// `base` 为视觉行起点在逻辑行内的字节偏移；token 区间按逻辑行计。
+#[allow(clippy::too_many_arguments)]
 fn paint_row(
     buf: &mut Buffer,
     y: u16,
-    text: &str,
+    proj: &Projection<'_>,
     row: &VisualRow,
-    tokens: &[Token],
-    base: usize,
+    tokens: &[Vec<Token>],
+    raw_line_starts: &[usize],
+    preview_selection: Option<(usize, usize)>,
     geometry: RowGeometry,
 ) -> u16 {
     let RowGeometry {
@@ -569,24 +581,54 @@ fn paint_row(
         ellipsize,
     } = geometry;
     let mut x = start_x;
-    let mut token_index = 0;
+    let indent = proj.row_indent(row.start, row.end);
+    if indent > 0 {
+        for _ in 0..indent {
+            if x >= end_x {
+                break;
+            }
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.reset();
+                cell.set_char(' ');
+                cell.set_style(style::pasted_bg());
+                cell.set_diff_option(CellDiffOption::None);
+            }
+            x += 1;
+        }
+    }
+    let text = proj.text();
     let mut clipped = false;
     for (offset, ch) in text[row.start..row.end].char_indices() {
         let width = ch.width().unwrap_or(0);
         if width == 0 {
             continue;
         }
-        let absolute = base + offset;
-        while tokens
-            .get(token_index)
-            .is_some_and(|token| token.range.end <= absolute)
-        {
-            token_index += 1;
+        let disp_pos = row.start + offset;
+        let mut style = match proj.segment_at(disp_pos).map(|seg| seg.kind) {
+            Some(SegmentKind::Chip {
+                expanded: false, ..
+            }) => style::pasted_chip(),
+            Some(SegmentKind::Chip { expanded: true, .. }) => style::pasted_bg(),
+            _ => {
+                let raw_pos = proj.display_to_raw(disp_pos);
+                let raw_line = raw_line_starts
+                    .partition_point(|&start| start <= raw_pos)
+                    .saturating_sub(1);
+                let line_start = raw_line_starts.get(raw_line).copied().unwrap_or(0);
+                let rel_raw = raw_pos.saturating_sub(line_start);
+                tokens
+                    .get(raw_line)
+                    .and_then(|line_tokens| {
+                        line_tokens
+                            .iter()
+                            .find(|token| token.range.contains(&rel_raw))
+                    })
+                    .map_or_else(style::text, |token| token_style(token.kind))
+            }
+        };
+        if preview_selection.is_some_and(|(s, e)| disp_pos >= s && disp_pos < e) {
+            style = style.add_modifier(Modifier::REVERSED);
         }
-        let style = tokens
-            .get(token_index)
-            .filter(|token| token.range.contains(&absolute))
-            .map_or_else(style::text, |token| token_style(token.kind));
         if x.saturating_add(width as u16) > end_x {
             clipped = true;
             break;
@@ -599,6 +641,7 @@ fn paint_row(
         }
         for dx in 1..width as u16 {
             if let Some(cell) = buf.cell_mut((x + dx, y)) {
+                cell.set_style(style);
                 cell.set_diff_option(CellDiffOption::Skip);
             }
         }

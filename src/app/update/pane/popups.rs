@@ -85,21 +85,31 @@ pub fn hover_lx_mention(state: &mut AppState, id: PaneId, index: usize) -> bool 
     })
 }
 
-/// 鼠标悬停 `lx` 路径粘贴面板操作项：仅接受可用项；返回是否变化。
+/// 鼠标悬停 `lx` 粘贴面板操作项：仅接受可用项；返回是否变化。
 pub fn hover_lx_paste(state: &mut AppState, id: PaneId, index: usize) -> bool {
-    state
-        .pane_mut_anywhere(id)
-        .is_some_and(|pane| pane.lx.paste_set_active(index))
+    state.pane_mut_anywhere(id).is_some_and(|pane| {
+        if pane.lx.text_paste_panel().is_some() {
+            return pane.lx.text_paste_set_active(index);
+        }
+        pane.lx.paste_set_active(index)
+    })
 }
 
-/// 鼠标点选 `lx` 路径粘贴面板操作项：按该项确认；返回是否消费。
+/// 鼠标点选 `lx` 粘贴面板操作项：按该项确认；返回是否消费。
 pub fn select_lx_paste(state: &mut AppState, id: PaneId, index: usize) -> bool {
+    let Some(pane) = state.pane_mut_anywhere(id) else {
+        return false;
+    };
+    if pane.lx.text_paste_panel().is_some() {
+        let Some(action) = crate::app::paste::TextPasteAction::ALL.get(index).copied() else {
+            return false;
+        };
+        return pane.lx.text_paste_confirm(action);
+    }
     let Some(action) = crate::app::paste::PasteAction::ALL.get(index).copied() else {
         return false;
     };
-    state
-        .pane_mut_anywhere(id)
-        .is_some_and(|pane| pane.lx.paste_confirm(action))
+    pane.lx.paste_confirm(action)
 }
 
 /// 鼠标点击 `@` 提及面板顶部 Tab：切换当前 Tab；返回是否变化。

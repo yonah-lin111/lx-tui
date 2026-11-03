@@ -31,7 +31,7 @@ fn submit(state: &mut AppState, pane: PaneId, frozen_cwd: Option<PathBuf>) -> bo
         return false;
     }
     // 只去掉模式前缀与首尾空白；正文中的换行/引号/管道原样交给 shell。
-    let command = target.lx.input.trim().to_string();
+    let command = target.lx.expanded_input().trim().to_string();
     if command.is_empty() {
         show_lx_hint(
             state,
@@ -132,7 +132,7 @@ pub fn queue_chat_while_shell_runs(state: &mut AppState, pane: PaneId) -> bool {
     {
         return false;
     }
-    let draft = target.lx.input.trim().to_string();
+    let draft = target.lx.expanded_input().trim().to_string();
     if draft.is_empty() {
         return false;
     }
