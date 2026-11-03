@@ -275,7 +275,7 @@ fn user_message_folded_paste_chip_renders_and_toggles_independently() {
             .contains(ratatui::style::Modifier::BOLD)
     );
 
-    // 2. Toggle paste chip to expanded: shows all 7 lines (not cut off by 5-line rule) with 2-col indent.
+    // 2. Toggle paste chip to expanded: shows all 7 lines (not cut off by 5-line rule).
     assert!(lx.chat.toggle_user_paste("u-paste", paste_id, 0));
     let snap_exp = cache.snapshot(60, &lx);
     assert_eq!(snap_exp.entries[0].blocks[0].rows, 7);
@@ -297,11 +297,9 @@ fn user_message_folded_paste_chip_renders_and_toggles_independently() {
 
     let mut grid_exp = Grid::new(area);
     let _ = render(&mut grid_exp, area, &lx, 0, &mut cache);
-    // Columns 2..4 are the 2-column indent on Indexed(236), column 4 is 'a' of "alpha".
-    assert_eq!(grid_exp.cell(2, 0).ch, ' ');
+    // Column 2 (right after `> `) starts 'a' of "alpha" on Indexed(236) background.
+    assert_eq!(grid_exp.cell(2, 0).ch, 'a');
     assert_eq!(grid_exp.cell(2, 0).style.bg, Some(Color::Indexed(236)));
-    assert_eq!(grid_exp.cell(4, 0).ch, 'a');
-    assert_eq!(grid_exp.cell(4, 0).style.bg, Some(Color::Indexed(236)));
 
     // 3. Toggle again collapses back to 1 row.
     assert!(!lx.chat.toggle_user_paste("u-paste", paste_id, 0));

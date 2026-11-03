@@ -149,8 +149,7 @@ pub(super) fn draw(
         );
         if row_index == cursor_row && focused {
             let disp_cursor = proj.raw_to_display(lx.cursor).clamp(row.start, row.end);
-            let indent = proj.row_indent(row.start, row.end);
-            let col = content_x.saturating_add(indent).saturating_add(
+            let col = content_x.saturating_add(
                 u16::try_from(display_width(&proj.text()[row.start..disp_cursor]))
                     .unwrap_or(u16::MAX),
             );
@@ -208,16 +207,6 @@ fn paint_line(
 ) {
     let right_limit = x.saturating_add(max_w);
     let mut cx = x;
-    let indent = proj.row_indent(row.start, row.end);
-    if indent > 0 {
-        for _ in 0..indent {
-            if cx >= right_limit {
-                break;
-            }
-            grid.set(cx, y, ' ', style::pasted_bg());
-            cx = cx.saturating_add(1);
-        }
-    }
     let disp_text = proj.text();
     for (offset, ch) in disp_text[row.start..row.end].char_indices() {
         let width = ch.width().unwrap_or(0);

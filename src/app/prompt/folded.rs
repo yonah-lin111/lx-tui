@@ -163,16 +163,13 @@ impl Prompt {
         if !proj.has_tokens() {
             return None;
         }
-        if let Some(hit) = proj.chip_at(visual.start)
-            && hit.expanded
-        {
-            return Some(hit);
-        }
-        let base_gutter = self.line_gutter(visual.line);
-        if col < base_gutter {
+        let gutter = self.line_gutter(visual.line);
+        if col < gutter {
             return None;
         }
-        let gutter = base_gutter + proj.row_indent(visual.start, visual.end);
+        if visual.start == visual.end {
+            return proj.chip_at(visual.start).filter(|hit| hit.expanded);
+        }
         let rel_col = usize::from(col.saturating_sub(gutter));
         let slice = &proj.text()[visual.start..visual.end];
         if rel_col >= display_width(slice) {

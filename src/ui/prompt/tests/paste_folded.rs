@@ -2,47 +2,49 @@ use super::*;
 use crate::app::paste::{PasteAnchor, TextPasteAction, encode_pasted_text, folded_tokens};
 
 #[test]
-fn renders_collapsed_chip_with_yellow_bold_on_indexed_236_and_expanded_with_2_col_indent() {
+fn renders_collapsed_chip_with_yellow_bold_on_indexed_236_and_expanded_only_tints_pasted_text() {
     let area = Rect::new(0, 0, 40, 6);
     let mut p = Prompt::new(PaneId::from_raw_for_test(1));
     p.resize(area.width, area.height);
     let tok = encode_pasted_text("hello **world**\nsecond line\nthird line");
-    p.set_text(&tok);
+    p.set_text(&format!("prefix {tok}"));
 
-    // 1. Collapsed state: renders `[Pasted 3 lines: hello **world**]` with `style::pasted_chip()`.
+    // 1. Collapsed state: "prefix " has default bg, chip starts at col 7 with `style::pasted_chip()`.
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &p, None);
-    assert_eq!(buf[(0, 0)].symbol(), "[");
-    assert_eq!(buf[(0, 0)].fg, Color::Yellow);
-    assert_eq!(buf[(0, 0)].bg, Color::Indexed(236));
-    assert!(buf[(0, 0)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buf[(0, 0)].symbol(), "p");
+    assert_eq!(buf[(0, 0)].bg, Color::Reset);
+    assert_eq!(buf[(7, 0)].symbol(), "[");
+    assert_eq!(buf[(7, 0)].fg, Color::Yellow);
+    assert_eq!(buf[(7, 0)].bg, Color::Indexed(236));
+    assert!(buf[(7, 0)].modifier.contains(Modifier::BOLD));
 
-    // 2. Expanded state: 2-column indent + plain text on `Indexed(236)` bg (no markdown bold on `**world**`).
+    // 2. Expanded state: "prefix " at col 0..7 keeps default bg (no black/gray block on its left!),
+    // while "hello **world**" at col 7.. and "second line" on row 1 have `Indexed(236)` bg.
     let id = folded_tokens(p.text())[0].id;
     p.toggle_paste(id, 0);
     let mut buf_exp = Buffer::empty(area);
     render(area, &mut buf_exp, &p, None);
 
-    // Columns 0..2 are the 2-column indent with `Indexed(236)` bg.
-    assert_eq!(buf_exp[(0, 0)].symbol(), " ");
-    assert_eq!(buf_exp[(1, 0)].symbol(), " ");
-    assert_eq!(buf_exp[(0, 0)].bg, Color::Indexed(236));
-    assert_eq!(buf_exp[(1, 0)].bg, Color::Indexed(236));
-
-    // Column 2 starts "hello **world**" with `Indexed(236)` bg and normal fg (not Yellow bold).
-    assert_eq!(buf_exp[(2, 0)].symbol(), "h");
-    assert_eq!(buf_exp[(2, 0)].bg, Color::Indexed(236));
+    assert_eq!(buf_exp[(0, 0)].symbol(), "p");
+    assert_eq!(
+        buf_exp[(0, 0)].bg,
+        Color::Reset,
+        "Plain prefix text must not have dark pasted background"
+    );
+    assert_eq!(buf_exp[(6, 0)].symbol(), " ");
+    assert_eq!(buf_exp[(6, 0)].bg, Color::Reset);
+    assert_eq!(buf_exp[(7, 0)].symbol(), "h");
+    assert_eq!(buf_exp[(7, 0)].bg, Color::Indexed(236));
     assert_ne!(
-        buf_exp[(10, 0)].fg,
+        buf_exp[(15, 0)].fg,
         Color::Yellow,
         "Expanded preview must not apply markdown strong styling"
     );
 
-    // Row 1 starts "second line" at column 2 after 2-column indent.
-    assert_eq!(buf_exp[(0, 1)].symbol(), " ");
-    assert_eq!(buf_exp[(1, 1)].symbol(), " ");
-    assert_eq!(buf_exp[(2, 1)].symbol(), "s");
-    assert_eq!(buf_exp[(2, 1)].bg, Color::Indexed(236));
+    // Row 1 starts "second line" at column 0 with `Indexed(236)` bg.
+    assert_eq!(buf_exp[(0, 1)].symbol(), "s");
+    assert_eq!(buf_exp[(0, 1)].bg, Color::Indexed(236));
 }
 
 #[test]

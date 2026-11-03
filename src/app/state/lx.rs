@@ -483,14 +483,12 @@ impl Lx {
         let mut line_start = 0;
         for segment in proj_text.split('\n') {
             let line_end = line_start + segment.len();
-            let indent = usize::from(proj.row_indent(line_start, line_end));
-            let row_width = width.saturating_sub(indent).max(1);
             let mut row_start = line_start;
             let mut col = 0;
             for (offset, ch) in segment.char_indices() {
                 let absolute = line_start + offset;
                 let cell = text::char_width(ch);
-                if col > 0 && col + cell > row_width {
+                if col > 0 && col + cell > width {
                     rows.push(LxRow {
                         start: row_start,
                         end: absolute,

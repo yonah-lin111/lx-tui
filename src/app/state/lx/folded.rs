@@ -156,13 +156,10 @@ impl Lx {
         if !proj.has_tokens() {
             return None;
         }
-        if let Some(hit) = proj.chip_at(visual.start)
-            && hit.expanded
-        {
-            return Some(hit);
+        if visual.start == visual.end {
+            return proj.chip_at(visual.start).filter(|hit| hit.expanded);
         }
-        let indent = proj.row_indent(visual.start, visual.end);
-        let rel_col = usize::from(col.saturating_sub(indent));
+        let rel_col = usize::from(col);
         let slice = &proj.text()[visual.start..visual.end];
         if rel_col >= text::display_width(slice) {
             return None;
@@ -180,8 +177,6 @@ impl Lx {
         let proj = self.projection();
         let index = row.min(rows.len() - 1);
         let visual = rows[index];
-        let indent = proj.row_indent(visual.start, visual.end);
-        let col = col.saturating_sub(indent);
         let slice = &proj.text()[visual.start..visual.end];
         let mut cell = 0;
         for (offset, ch) in slice.char_indices() {

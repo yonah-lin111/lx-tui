@@ -127,8 +127,8 @@ fn expand_and_collapse_do_not_bump_revision_or_dirty_and_reset_on_undo_or_set_te
 
     // Drag inside expanded preview selects decoded slice without collapsing.
     assert!(p.toggle_paste(parsed.id, 0));
-    assert!(p.begin_preview_selection(1, 2, 1)); // row 1 ("second"), after 2-col indent
-    assert!(p.drag_preview_selection(1, 4));
+    assert!(p.begin_preview_selection(1, 0, 1)); // row 1 ("second"), col 0..2
+    assert!(p.drag_preview_selection(1, 2));
     assert!(p.finish_preview_selection());
     assert!(p.has_expanded_pastes());
     let sel = p.preview_selection().expect("preview selection");

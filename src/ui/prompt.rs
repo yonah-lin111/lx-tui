@@ -581,21 +581,6 @@ fn paint_row(
         ellipsize,
     } = geometry;
     let mut x = start_x;
-    let indent = proj.row_indent(row.start, row.end);
-    if indent > 0 {
-        for _ in 0..indent {
-            if x >= end_x {
-                break;
-            }
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.reset();
-                cell.set_char(' ');
-                cell.set_style(style::pasted_bg());
-                cell.set_diff_option(CellDiffOption::None);
-            }
-            x += 1;
-        }
-    }
     let text = proj.text();
     let mut clipped = false;
     for (offset, ch) in text[row.start..row.end].char_indices() {

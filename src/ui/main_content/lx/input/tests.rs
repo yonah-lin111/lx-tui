@@ -162,11 +162,11 @@ fn session_title_badge_is_hidden_when_none_and_truncates_when_narrow() {
 }
 
 #[test]
-fn lx_input_renders_folded_chip_and_expanded_preview_with_indent_and_selection() {
+fn lx_input_renders_folded_chip_and_expanded_preview_with_selection() {
     let area = Rect::new(0, 0, 50, 14);
     let mut lx = Lx::new();
     let tok = crate::app::paste::encode_pasted_text("alpha\nbeta\ngamma");
-    lx.insert_str(&tok);
+    lx.insert_str(&format!("ask {tok}"));
 
     let input = layout(area, &lx).input.expect("input rect");
     let mut buf = Buffer::empty(area);
@@ -174,16 +174,22 @@ fn lx_input_renders_folded_chip_and_expanded_preview_with_indent_and_selection()
     let text_y = input.y + 1;
     let content_x = input.x + INPUT_PREFIX;
 
-    // Collapsed chip starts at content_x with `[` in Yellow BOLD on Indexed(236).
-    assert_eq!(buf[(content_x, text_y)].symbol(), "[");
-    assert_eq!(buf[(content_x, text_y)].fg, Color::Yellow);
-    assert_eq!(buf[(content_x, text_y)].bg, Color::Indexed(236));
-    assert!(buf[(content_x, text_y)].modifier.contains(Modifier::BOLD));
+    // Plain prefix "ask " has default bg, collapsed chip starts at content_x + 4 with `[` in Yellow BOLD on Indexed(236).
+    assert_eq!(buf[(content_x, text_y)].symbol(), "a");
+    assert_eq!(buf[(content_x, text_y)].bg, Color::Reset);
+    assert_eq!(buf[(content_x + 4, text_y)].symbol(), "[");
+    assert_eq!(buf[(content_x + 4, text_y)].fg, Color::Yellow);
+    assert_eq!(buf[(content_x + 4, text_y)].bg, Color::Indexed(236));
+    assert!(
+        buf[(content_x + 4, text_y)]
+            .modifier
+            .contains(Modifier::BOLD)
+    );
 
-    // Expand chip and select "beta" on line 1.
+    // Expand chip and select "beta" on line 1 (display offset 10..14 in "ask alpha\nbeta\ngamma").
     let id = crate::app::paste::folded_tokens(&lx.input)[0].id;
     lx.toggle_paste(id, 0);
-    lx.set_preview_selection(Some((6, 10)));
+    lx.set_preview_selection(Some((10, 14)));
 
     let input_exp = layout(area, &lx).input.expect("input rect");
     let mut buf_exp = Buffer::empty(area);
@@ -198,17 +204,17 @@ fn lx_input_renders_folded_chip_and_expanded_preview_with_indent_and_selection()
     let exp_y0 = input_exp.y + 1;
     let exp_y1 = input_exp.y + 2;
 
-    // Row 0 has 2-col indent with Indexed(236) bg, then "alpha".
-    assert_eq!(buf_exp[(content_x, exp_y0)].symbol(), " ");
-    assert_eq!(buf_exp[(content_x + 1, exp_y0)].symbol(), " ");
-    assert_eq!(buf_exp[(content_x, exp_y0)].bg, Color::Indexed(236));
-    assert_eq!(buf_exp[(content_x + 2, exp_y0)].symbol(), "a");
-    assert_eq!(buf_exp[(content_x + 2, exp_y0)].bg, Color::Indexed(236));
+    // Row 0 keeps "ask " with Reset bg, then "alpha" with Indexed(236) bg.
+    assert_eq!(buf_exp[(content_x, exp_y0)].symbol(), "a");
+    assert_eq!(buf_exp[(content_x, exp_y0)].bg, Color::Reset);
+    assert_eq!(buf_exp[(content_x + 4, exp_y0)].symbol(), "a");
+    assert_eq!(buf_exp[(content_x + 4, exp_y0)].bg, Color::Indexed(236));
 
-    // Row 1 ("beta") has 2-col indent and REVERSED modifier from preview_selection.
-    assert_eq!(buf_exp[(content_x + 2, exp_y1)].symbol(), "b");
+    // Row 1 ("beta") starts at content_x with Indexed(236) bg and REVERSED modifier from preview_selection.
+    assert_eq!(buf_exp[(content_x, exp_y1)].symbol(), "b");
+    assert_eq!(buf_exp[(content_x, exp_y1)].bg, Color::Indexed(236));
     assert!(
-        buf_exp[(content_x + 2, exp_y1)]
+        buf_exp[(content_x, exp_y1)]
             .modifier
             .contains(Modifier::REVERSED)
     );

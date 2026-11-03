@@ -36,11 +36,10 @@ impl Prompt {
                 });
             }
             prev_raw_line = Some(line);
-            let indent = usize::from(proj.row_indent(line_start, line_end));
             let row_width = if info.is_some() {
-                width.saturating_sub(margins + indent).max(1)
+                width.saturating_sub(margins).max(1)
             } else {
-                width.saturating_sub(indent).max(1)
+                width
             };
             let mut row_start = line_start;
             let mut col = 0;
@@ -79,15 +78,12 @@ impl Prompt {
         if rows.is_empty() {
             return None;
         }
-        let proj = self.projection();
         let (row, col) = self.cursor_visual_in(&rows);
         let visible = row.checked_sub(self.scroll)?;
         if visible >= usize::from(self.height) {
             return None;
         }
-        let gutter = usize::from(
-            self.line_gutter(rows[row].line) + proj.row_indent(rows[row].start, rows[row].end),
-        );
+        let gutter = usize::from(self.line_gutter(rows[row].line));
         let col = (col + gutter).min(usize::from(self.width) - 1);
         Some((visible as u16, col as u16))
     }
@@ -254,8 +250,7 @@ impl Prompt {
             })
         };
         let start_idx = row_at(start_byte)?;
-        let start_gutter = self.line_gutter(rows[start_idx].line)
-            + proj.row_indent(rows[start_idx].start, rows[start_idx].end);
+        let start_gutter = self.line_gutter(rows[start_idx].line);
         let start_col = start_gutter
             .saturating_add(display_width(&disp_text[rows[start_idx].start..start_byte]) as u16);
         let slice = &disp_text[start_byte..end_byte];
@@ -265,8 +260,7 @@ impl Prompt {
             .or_else(|| slice.char_indices().next_back())?;
         let last_char_byte = start_byte + last_rel;
         let end_idx = row_at(last_char_byte).unwrap_or(start_idx);
-        let end_gutter = self.line_gutter(rows[end_idx].line)
-            + proj.row_indent(rows[end_idx].start, rows[end_idx].end);
+        let end_gutter = self.line_gutter(rows[end_idx].line);
         let end_col = end_gutter
             .saturating_add(display_width(&disp_text[rows[end_idx].start..last_char_byte]) as u16)
             .saturating_add(char_width(last_ch).saturating_sub(1) as u16);
@@ -341,7 +335,7 @@ impl Prompt {
                 continue;
             }
             let index = first_row + offset;
-            let gutter = self.line_gutter(row.line) + proj.row_indent(row.start, row.end);
+            let gutter = self.line_gutter(row.line);
             let slice = &proj_text[row.start..row.end];
             let from = if index == first_row {
                 let col_offset = column_offset(slice, first.1.saturating_sub(gutter));
@@ -434,7 +428,7 @@ impl Prompt {
         let proj = self.projection();
         let index = index.min(rows.len() - 1);
         let visual = rows[index];
-        let gutter = self.line_gutter(visual.line) + proj.row_indent(visual.start, visual.end);
+        let gutter = self.line_gutter(visual.line);
         let col = col.saturating_sub(gutter);
         let slice = &proj.text()[visual.start..visual.end];
         let mut cell = 0;

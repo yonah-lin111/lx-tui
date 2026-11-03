@@ -25,10 +25,9 @@ pub(crate) struct UserTextSpan {
     pub kind: UserSpanKind,
 }
 
-/// 用户消息软换行后的单条视觉行（含展开芯片的 2 列左缩进）。
+/// 用户消息软换行后的单条视觉行。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UserTextLine {
-    pub indent: u16,
     pub spans: Vec<UserTextSpan>,
 }
 
@@ -128,7 +127,6 @@ pub(crate) fn wrap_user_projection(
         let lines = wrap(display_text, width)
             .into_iter()
             .map(|text| UserTextLine {
-                indent: 0,
                 spans: if text.is_empty() {
                     Vec::new()
                 } else {
@@ -144,35 +142,33 @@ pub(crate) fn wrap_user_projection(
 
     let avail = usize::from(width.max(1));
     let proj_text = proj.text();
-    let mut row_ranges: Vec<(usize, usize, u16)> = Vec::new();
+    let mut row_ranges: Vec<(usize, usize)> = Vec::new();
     let mut line_start = 0usize;
 
     for segment in proj_text.split('\n') {
         let line_end = line_start + segment.len();
-        let indent = proj.row_indent(line_start, line_end);
-        let row_width = avail.saturating_sub(usize::from(indent)).max(1);
         if segment.is_empty() {
-            row_ranges.push((line_start, line_end, indent));
+            row_ranges.push((line_start, line_end));
         } else {
             let mut row_start = line_start;
             let mut col = 0usize;
             for (offset, ch) in segment.char_indices() {
                 let absolute = line_start + offset;
                 let cell = ch.width().unwrap_or(1).max(1);
-                if col > 0 && col + cell > row_width {
-                    row_ranges.push((row_start, absolute, indent));
+                if col > 0 && col + cell > avail {
+                    row_ranges.push((row_start, absolute));
                     row_start = absolute;
                     col = 0;
                 }
                 col += cell;
             }
-            row_ranges.push((row_start, line_end, indent));
+            row_ranges.push((row_start, line_end));
         }
         line_start = line_end + 1;
     }
 
     let mut lines = Vec::with_capacity(row_ranges.len());
-    for &(row_start, row_end, indent) in &row_ranges {
+    for &(row_start, row_end) in &row_ranges {
         let mut spans: Vec<UserTextSpan> = Vec::new();
         for (offset, ch) in proj_text[row_start..row_end].char_indices() {
             let disp_pos = row_start + offset;
@@ -191,7 +187,7 @@ pub(crate) fn wrap_user_projection(
                 spans.push(UserTextSpan { text, kind });
             }
         }
-        lines.push(UserTextLine { indent, spans });
+        lines.push(UserTextLine { spans });
     }
 
     let mut paste_spans = Vec::new();
@@ -204,7 +200,7 @@ pub(crate) fn wrap_user_projection(
         else {
             continue;
         };
-        let overlaps = |(rs, re, _): &(usize, usize, u16)| {
+        let overlaps = |(rs, re): &(usize, usize)| {
             if *rs == *re {
                 *rs >= seg.display.start && *rs < seg.display.end
             } else {

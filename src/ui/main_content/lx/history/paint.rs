@@ -338,17 +338,6 @@ fn draw_user_text(
             grid.put(rect.x, y, USER_PREFIX, style::accent().patch(bg));
         }
         let mut cx = rect.x.saturating_add(USER_INDENT);
-        if line.indent > 0 && cx < right_limit {
-            let indent_spaces = " ".repeat(usize::from(line.indent));
-            grid.put_clipped(
-                cx,
-                y,
-                &indent_spaces,
-                style::pasted_bg(),
-                right_limit.saturating_sub(cx),
-            );
-            cx = cx.saturating_add(line.indent).min(right_limit);
-        }
         for span in &line.spans {
             if cx >= right_limit {
                 break;

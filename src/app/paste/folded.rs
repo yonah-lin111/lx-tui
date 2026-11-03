@@ -13,9 +13,6 @@ pub const MAX_FOLDED_BYTES: usize = 256 * 1024;
 /// 折叠态首行预览的最大显示列宽。
 const PREVIEW_MAX_WIDTH: usize = 40;
 
-/// 展开态预览行的左缩进列数（2 列）。
-pub const EXPANDED_PASTE_INDENT: u16 = 2;
-
 /// 折叠 token 起始前缀。
 const TOKEN_PREFIX: &str = "<pasted-text lines=\"";
 
@@ -267,23 +264,6 @@ impl<'a> Projection<'a> {
             }
         }
         self.raw_text.len()
-    }
-
-    /// 视觉行 `[row_start, row_end]` 是否处于展开芯片内（若是则返回 2 列左缩进，否则返回 0）。
-    pub fn row_indent(&self, row_start: usize, row_end: usize) -> u16 {
-        let has_expanded = self.segments.iter().any(|seg| {
-            matches!(seg.kind, SegmentKind::Chip { expanded: true, .. })
-                && if row_start == row_end {
-                    row_start >= seg.display.start && row_start < seg.display.end
-                } else {
-                    seg.display.start < row_end && seg.display.end > row_start
-                }
-        });
-        if has_expanded {
-            EXPANDED_PASTE_INDENT
-        } else {
-            0
-        }
     }
 
     /// 显示字节区间 → 原始字节区间；覆盖芯片时自动扩展到完整 token 边界。
