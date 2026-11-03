@@ -1,6 +1,6 @@
 # lx 上下文窗口统计单步重构：任务清单
 
-> 状态：**已实现并通过自动验证**（2026-11-03，worktree `fix/lx-context-usage`）；待用户决定是否合并。
+> 状态：**已合并到 dev**（2026-11-03，合并提交 `51f31675`）；自动验证与 CLI 实测通过。
 > 日期：2026-11-03。
 > 设计依据：[design.md](./design.md)。
 
@@ -74,5 +74,9 @@
 - [x] `cargo clippy --all-targets -- -D warnings` 通过。
 - [x] `cargo test` 全量通过（4375 passed / 0 failed / 2 ignored；`tests/prompt_copy.rs` 首次运行出现一次与本次改动无关的 pbcopy 时序抖动，单独重跑通过）。
 - [x] 生产文件行数复核：`src/app/state/lx/chat.rs` 958 行、`src/db/chat/mod.rs` 981 行，均 < 1000；新增子模块分别承载占用逻辑与 `Usage` 定义。
-- [x] 在 worktree 分支中提交代码（本分支提交）。
-- [ ] 用户确认后合并回主分支。
+- [x] 在 worktree 分支中提交代码（提交 `f22603fa`）。
+- [x] CLI 实测（`lx-tui exec`，默认 `gemini/gemini-3.8-flash`）：
+  - 3 次模型请求的多步工具轮次：`turn.completed.input_tokens = 23,486`（旧逻辑会累加约 6–7 万）。
+  - 2 次模型请求的持久化轮次：`turn.completed.input_tokens = 21,142`；隔离库 `agent_message.input_tokens = 21142`、`agent_session.total_input_tokens = 21142`，确认落库也是单步。
+- [x] 合并回 `dev`（合并提交 `51f31675`），合并后重新执行 `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 均通过。
+- [x] 移除 worktree `lx-context-usage-fix`、分支 `fix/lx-context-usage` 及其隔离开发库。
