@@ -586,8 +586,14 @@ fn lx_paste_cancels_rewind_arming() {
         target.lx.rewind.armed_at = Some(std::time::Instant::now());
     }
     assert!(paste::handle_lx_paste(&mut state, "pasted".into()));
-    let target = state.pane_anywhere(pane).expect("pane");
+    let target = state.pane_mut_anywhere(pane).expect("pane");
     assert!(target.lx.rewind.armed_at.is_none(), "粘贴必须清除撤销待命");
+    assert!(target.lx.text_paste_panel().is_some());
+    assert!(
+        target
+            .lx
+            .text_paste_confirm(crate::app::paste::TextPasteAction::Raw)
+    );
     assert_eq!(target.lx.input, "pasted");
 }
 

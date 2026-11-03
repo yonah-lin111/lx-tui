@@ -15,14 +15,15 @@ impl Prompt {
     /// 重算快捷面板：触发词、作用域与候选;无候选时不显示。
     pub(super) fn refresh_refer_panel(&mut self) {
         self.refer = None;
-        let Some(trigger) = markdown::refer_trigger(&self.text, self.cursor) else {
+        let masked = crate::app::paste::mask_pasted_text(&self.text);
+        let Some(trigger) = markdown::refer_trigger(&masked, self.cursor) else {
             return;
         };
-        let Some(scope) = markdown::refer_scope(&self.text, self.cursor) else {
+        let Some(scope) = markdown::refer_scope(&masked, self.cursor) else {
             return;
         };
         let candidates =
-            markdown::refer_candidates(&self.text, &scope, &trigger.range, self.mention.entries());
+            markdown::refer_candidates(&masked, &scope, &trigger.range, self.mention.entries());
         let filtered = markdown::filter_refer_candidates(candidates, &trigger.query);
         if filtered.is_empty() {
             return;

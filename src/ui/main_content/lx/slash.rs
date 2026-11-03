@@ -222,6 +222,7 @@ fn view<'a>(
         placement: PanelPlacement::Above,
         borderless: true,
         hide_active_marker: is_placeholder(panel),
+        disabled: None,
     }
 }
 

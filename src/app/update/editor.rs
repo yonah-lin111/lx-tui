@@ -135,8 +135,12 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         }
         EditorCommand::Undo => state.prompt.undo(),
         EditorCommand::Redo => state.prompt.redo(),
-        EditorCommand::Escape
-        | EditorCommand::TogglePromptList
+        EditorCommand::Escape => {
+            if !state.prompt.clear_preview_selection() {
+                state.prompt.clear_expanded_pastes();
+            }
+        }
+        EditorCommand::TogglePromptList
         | EditorCommand::TogglePageList
         | EditorCommand::ToggleRecentPages => {}
     }
@@ -170,8 +174,36 @@ fn route_panel(state: &mut AppState, command: &EditorCommand) -> bool {
 
 /// 粘贴二级面板按键：上下移动、回车确认、Esc 取消；面板打开时其余命令吞掉。
 ///
-/// 确认时按高亮可用项执行（引用改写占位文本 / 路径保持）；取消回滚占位插入。
+/// 长文本粘贴面板优先于路径粘贴面板；取消时不留下多余撤销步。
 fn route_paste_panel(state: &mut AppState, command: &EditorCommand) -> bool {
+    if state.prompt.text_paste_panel().is_some() {
+        match command {
+            EditorCommand::Up => {
+                state.prompt.text_paste_move(-1);
+            }
+            EditorCommand::Down => {
+                state.prompt.text_paste_move(1);
+            }
+            EditorCommand::Newline => {
+                if let Some(action) = state
+                    .prompt
+                    .text_paste_panel()
+                    .and_then(|panel| panel.active_action())
+                {
+                    if state.prompt.text_paste_confirm(action) {
+                        clear_selection(state);
+                    }
+                } else {
+                    state.prompt.text_paste_cancel();
+                }
+            }
+            EditorCommand::Escape => {
+                state.prompt.text_paste_cancel();
+            }
+            _ => {}
+        }
+        return true;
+    }
     if state.prompt.paste_panel().is_none() {
         return false;
     }
@@ -188,7 +220,9 @@ fn route_paste_panel(state: &mut AppState, command: &EditorCommand) -> bool {
                 .paste_panel()
                 .and_then(|panel| panel.active_action())
             {
-                state.prompt.paste_confirm(action);
+                if state.prompt.paste_confirm(action) {
+                    clear_selection(state);
+                }
             } else {
                 state.prompt.paste_cancel();
             }
@@ -493,13 +527,26 @@ pub fn scroll_refer(state: &mut AppState, delta: isize, base: usize) -> bool {
 
 /// 鼠标悬停粘贴面板操作项：仅接受可用项；返回是否变化。
 pub fn hover_paste(state: &mut AppState, index: usize) -> bool {
+    if state.prompt.text_paste_panel().is_some() {
+        return state.prompt.text_paste_set_active(index);
+    }
     state.prompt.paste_set_active(index)
 }
 
 /// 鼠标点选粘贴面板操作项：按该项执行。
 pub fn select_paste(state: &mut AppState, index: usize) {
-    if let Some(action) = crate::app::prompt::PasteAction::ALL.get(index).copied() {
-        state.prompt.paste_confirm(action);
+    if state.prompt.text_paste_panel().is_some() {
+        if let Some(action) = crate::app::prompt::TextPasteAction::ALL.get(index).copied()
+            && state.prompt.text_paste_confirm(action)
+        {
+            clear_selection(state);
+        }
+        return;
+    }
+    if let Some(action) = crate::app::prompt::PasteAction::ALL.get(index).copied()
+        && state.prompt.paste_confirm(action)
+    {
+        clear_selection(state);
     }
 }
 

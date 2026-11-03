@@ -181,30 +181,58 @@ pub(crate) fn card_at_source(
     let width = history::content_rect(body).width;
     let snapshot = cache.snapshot_source(width, source);
     let content_row = scroll.saturating_add(usize::from(row.saturating_sub(body.y)));
+    let rel_col = column.saturating_sub(body.x);
     let region = snapshot.cards.iter().find(|region| {
-        content_row >= region.card_start
-            && content_row < region.card_start.saturating_add(region.card_rows)
+        if content_row < region.card_start
+            || content_row >= region.card_start.saturating_add(region.card_rows)
+        {
+            return false;
+        }
+        let Some((first_col, last_col)) = region.card_cols else {
+            return true;
+        };
+        if rel_col >= width {
+            return false;
+        }
+        if region.card_rows <= 1 {
+            rel_col >= first_col && rel_col < last_col.min(width)
+        } else if content_row == region.card_start {
+            rel_col >= first_col && rel_col < width
+        } else if content_row + 1 == region.card_start.saturating_add(region.card_rows) {
+            rel_col >= history::USER_INDENT && rel_col < last_col.min(width)
+        } else {
+            rel_col >= history::USER_INDENT && rel_col < width
+        }
     })?;
     // 与 `layout(body, ...)` 同一套矩形口径：内容行 0 落在 body 顶。
     //
     // 裁剪必须在 **usize** 空间完成：`card_start` 是内容行绝对下标，直接交给
     // `rows_to_u16` 会在 65535 行处饱和，长历史（10 万行）里所有卡片都"落在视口外"，
     // 点击被静默丢弃。先裁出可见区间，再把**已裁剪的相对偏移**转 u16。
-    let clip = |start: usize, rows: usize| -> Option<Rect> {
+    let clip = |start: usize, rows: usize, cols: Option<(u16, u16)>| -> Option<Rect> {
         let first = start.max(scroll);
         let last = start
             .saturating_add(rows)
             .min(scroll.saturating_add(usize::from(body.height)));
         (last > first).then(|| {
+            let (rx, rw) = if rows <= 1
+                && let Some((c0, c1)) = cols
+            {
+                let x0 = c0.min(width);
+                let x1 = c1.min(width);
+                (body.x.saturating_add(x0), x1.saturating_sub(x0))
+            } else {
+                (body.x, width)
+            };
             Rect::new(
-                body.x,
+                rx,
                 body.y.saturating_add(history::rows_to_u16(first - scroll)),
-                width,
+                rw,
                 history::rows_to_u16(last - first),
             )
         })
     };
-    let card = clip(region.card_start, region.card_rows)?;
+    let card = clip(region.card_start, region.card_rows, region.card_cols)?;
     let hit = history::CardHit {
         kind: region.kind.clone(),
         card,
@@ -376,6 +404,16 @@ fn target_of(kind: &history::CardKind) -> CardTarget {
         },
         history::CardKind::UserMessage { message_id, .. } => CardTarget::UserMessage {
             message_id: message_id.clone(),
+        },
+        history::CardKind::UserPaste {
+            message_id,
+            paste_id,
+            occurrence,
+            ..
+        } => CardTarget::UserPaste {
+            message_id: message_id.clone(),
+            paste_id: *paste_id,
+            occurrence: *occurrence,
         },
     }
 }

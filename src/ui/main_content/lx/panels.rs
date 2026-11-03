@@ -126,15 +126,62 @@ pub(crate) fn input_scrollbar(area: Rect, lx: &Lx) -> Option<scrollbar::Scrollba
     )
 }
 
-/// `lx` 路径粘贴面板渲染数据。
+/// `lx` 粘贴面板渲染数据。
 struct PastePanelData {
     area: Rect,
     rows: Vec<(String, String)>,
     active: usize,
+    disabled: Option<[bool; 4]>,
+}
+
+/// 构造文本粘贴面板的条目列表与可用区域；面板未打开或空间不足返回 None。
+fn text_paste_panel_rows(area: Rect, lx: &Lx) -> Option<PastePanelData> {
+    let panel = lx.text_paste_panel()?;
+    let input = layout(area, lx).input?;
+    let margin: u16 = if area.width >= 24 { MARGIN } else { 0 };
+    let content_x = area.x + margin;
+    let content_w = area.width.saturating_sub(margin.saturating_mul(2));
+    let region_h = input.y.saturating_sub(area.y);
+    if region_h < 3 {
+        return None;
+    }
+    let count = text::text_paste_lines(panel.line_count);
+    let fold_hint = if panel.collapse_enabled() {
+        count.clone()
+    } else {
+        text::TEXT_PASTE_TOO_LARGE.to_string()
+    };
+    let rows: Vec<(String, String)> = crate::app::paste::TextPasteAction::ALL
+        .iter()
+        .map(|action| match action {
+            crate::app::paste::TextPasteAction::Raw => {
+                (text::TEXT_PASTE_ACTION_RAW.to_string(), count.clone())
+            }
+            crate::app::paste::TextPasteAction::Text => {
+                (text::TEXT_PASTE_ACTION_TEXT.to_string(), fold_hint.clone())
+            }
+            crate::app::paste::TextPasteAction::Code => {
+                (text::TEXT_PASTE_ACTION_CODE.to_string(), fold_hint.clone())
+            }
+            crate::app::paste::TextPasteAction::Log => {
+                (text::TEXT_PASTE_ACTION_LOG.to_string(), fold_hint.clone())
+            }
+        })
+        .collect();
+    let panel_area = Rect::new(content_x, area.y, content_w, region_h);
+    Some(PastePanelData {
+        area: panel_area,
+        rows,
+        active: panel.active(),
+        disabled: Some(panel.disabled_mask()),
+    })
 }
 
 /// 构造粘贴面板的条目列表与可用区域；面板未打开或空间不足返回 None。
 fn paste_panel_rows(area: Rect, lx: &Lx) -> Option<PastePanelData> {
+    if let Some(data) = text_paste_panel_rows(area, lx) {
+        return Some(data);
+    }
     let panel = lx.paste_panel()?;
     let input = layout(area, lx).input?;
     let margin: u16 = if area.width >= 24 { MARGIN } else { 0 };
@@ -164,6 +211,7 @@ fn paste_panel_rows(area: Rect, lx: &Lx) -> Option<PastePanelData> {
         area: panel_area,
         rows,
         active: panel.active(),
+        disabled: None,
     })
 }
 
@@ -172,6 +220,7 @@ fn paste_view<'a>(
     items: &'a [CommandItem<'a>],
     active: usize,
     panel_area: Rect,
+    disabled: Option<&'a [bool]>,
 ) -> CommandPanelView<'a> {
     CommandPanelView {
         items,
@@ -187,6 +236,7 @@ fn paste_view<'a>(
         width: Some(panel_area.width),
         placement: command_panel::PanelPlacement::Above,
         borderless: true,
+        disabled,
         ..Default::default()
     }
 }
@@ -203,7 +253,15 @@ pub(crate) fn paste_layout(area: Rect, lx: &Lx) -> Option<command_panel::PanelLa
             tag: "",
         })
         .collect();
-    command_panel::layout(data.area, &paste_view(&items, data.active, data.area))
+    command_panel::layout(
+        data.area,
+        &paste_view(
+            &items,
+            data.active,
+            data.area,
+            data.disabled.as_ref().map(|d| d.as_slice()),
+        ),
+    )
 }
 
 /// `lx` 路径粘贴面板条目命中：返回被点中的操作索引；未打开或未命中返回 None。
@@ -218,7 +276,15 @@ pub(crate) fn paste_item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Optio
             tag: "",
         })
         .collect();
-    let layout = command_panel::layout(data.area, &paste_view(&items, data.active, data.area))?;
+    let layout = command_panel::layout(
+        data.area,
+        &paste_view(
+            &items,
+            data.active,
+            data.area,
+            data.disabled.as_ref().map(|d| d.as_slice()),
+        ),
+    )?;
     command_panel::item_at(&layout, &items, column, row)
 }
 
@@ -249,7 +315,16 @@ pub(super) fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
             tag: "",
         })
         .collect();
-    command_panel::render(data.area, buf, &paste_view(&items, data.active, data.area));
+    command_panel::render(
+        data.area,
+        buf,
+        &paste_view(
+            &items,
+            data.active,
+            data.area,
+            data.disabled.as_ref().map(|d| d.as_slice()),
+        ),
+    );
 }
 
 /// md 面板宽度：最宽条目（标签 + 预览）与底栏提示取大 + 边框与内边距，夹取到内容区宽度。

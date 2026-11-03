@@ -280,5 +280,6 @@ fn view<'a>(
         placement: PanelPlacement::Above,
         borderless: true,
         hide_active_marker: !data.interactive,
+        disabled: None,
     }
 }

@@ -88,6 +88,7 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                 pane.lx.slash,
                 Some(super::super::state::SlashPanel::History(_))
             ) && (pane.lx.text_selection_range().is_some()
+                || pane.lx.preview_selection().is_some()
                 || state
                     .lx_selection
                     .is_some_and(|sel| sel.pane() == pane_id && sel.range().is_some()))
@@ -152,6 +153,33 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
     }
     let lx = &mut pane.lx;
     lx.sync_referenced_folders(&referenced_folders);
+    // 长文本粘贴面板优先：面板打开时仅响应上下移动、回车确认与 Esc 取消，其余按键吞掉。
+    if lx.text_paste_panel().is_some() {
+        match command {
+            LxInput::Up => {
+                lx.text_paste_move(-1);
+            }
+            LxInput::Down => {
+                lx.text_paste_move(1);
+            }
+            LxInput::Enter => match lx
+                .text_paste_panel()
+                .and_then(|panel| panel.active_action())
+            {
+                Some(action) => {
+                    lx.text_paste_confirm(action);
+                }
+                None => {
+                    lx.text_paste_cancel();
+                }
+            },
+            LxInput::Escape => {
+                lx.text_paste_cancel();
+            }
+            _ => {}
+        }
+        return;
+    }
     // 路径粘贴参照面板优先：与 md 块面板互斥；面板打开时其余按键按面板策略吞掉。
     if lx.paste_panel().is_some() {
         match command {
@@ -359,8 +387,11 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::Enter => {
             super::chat::try_send(state, pane_id);
         }
-        // 无面板：空 Shell 模式且无活动任务时 Esc 退出模式；否则走停止待命。
+        // 无面板：先清理展开芯片选区或收起全部展开芯片；再判空 Shell 退出或停止待命。
         LxInput::Escape => {
+            if lx.clear_preview_selection() || lx.clear_expanded_pastes() {
+                return;
+            }
             let idle_shell = state.pane_anywhere(pane_id).is_some_and(|target| {
                 target.lx.shell_mode()
                     // 与提交/排队的判空口径一致：只有空格也算空命令。
@@ -560,6 +591,8 @@ fn lx_history_route(state: &AppState, pane: PaneId, command: LxInput) -> LxHisto
     let lx = &pane.lx;
     // 与 `apply_lx_input` 完全一致的面板占用判定：任何面板可见都不让历史接管方向键。
     let panel_busy = lx.paste_panel().is_some()
+        || lx.text_paste_panel().is_some()
+        || lx.refer_active()
         || lx.mention_open()
         || lx.mention_visible()
         || lx.slash.is_some()
@@ -622,7 +655,8 @@ pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
     // 二级面板（`/model`、`/resume`）的过滤词是**输入框全文**：任何编辑后都重算一次。
     refresh_slash_filter(state, pane);
     let query = state.pane_anywhere(pane).and_then(|target| {
-        super::super::state::lx::slash::slash_trigger(&target.lx.input, target.lx.cursor)
+        let masked = crate::app::paste::mask_pasted_text(&target.lx.input);
+        super::super::state::lx::slash::slash_trigger(&masked, target.lx.cursor)
     });
     let Some(query) = query else {
         // 离开命令位置时关闭命令候选面板（model/resume 面板不受影响）。
@@ -776,6 +810,7 @@ pub fn accept_slash_command(state: &mut AppState, pane: PaneId) -> bool {
 /// 切换 lx 页选中入口（仅鼠标点击触发）；切换入口会取消在途粘贴面板。
 pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::LxEntry) {
     if let Some(pane) = state.pane_mut_anywhere(id) {
+        pane.lx.text_paste_cancel();
         pane.lx.paste_cancel();
         pane.lx.entry = entry;
     }
@@ -791,6 +826,7 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
             PaneView::Terminal => PaneView::Lx,
         };
         // 切换视图时取消在途粘贴面板：隐藏的 lx 页不再持有悬空面板。
+        pane.lx.text_paste_cancel();
         pane.lx.paste_cancel();
         // 隐藏的 lx 页不得保留可点击的提及面板。
         pane.lx.mention_escape();

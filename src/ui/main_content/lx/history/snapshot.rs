@@ -92,6 +92,8 @@ pub(crate) struct CardRegion {
     pub(crate) kind: CardKind,
     pub(crate) card_start: usize,
     pub(crate) card_rows: usize,
+    /// 行内芯片的 `(首行起始列, 末行结束列)`；`None` 表示整行宽。
+    pub(crate) card_cols: Option<(u16, u16)>,
     pub(crate) clickable: bool,
 }
 
@@ -279,6 +281,7 @@ impl Builder<'_> {
                 },
                 card_start: start + offset,
                 card_rows: height,
+                card_cols: None,
                 clickable: true,
             });
         }
@@ -351,6 +354,7 @@ impl Builder<'_> {
                 },
                 card_start: start + offset,
                 card_rows: height,
+                card_cols: None,
                 clickable: true,
             });
         }
@@ -441,6 +445,7 @@ impl Builder<'_> {
                     },
                     card_start: start.saturating_add(offset),
                     card_rows: 1,
+                    card_cols: None,
                     clickable: true,
                 });
             }
@@ -454,6 +459,7 @@ impl Builder<'_> {
                     },
                     card_start: start,
                     card_rows: block_rows,
+                    card_cols: None,
                     clickable: true,
                 });
             }
@@ -514,6 +520,7 @@ impl Builder<'_> {
                 },
                 card_start: entry_start + span.offset,
                 card_rows: span.rows,
+                card_cols: None,
                 clickable: span.clickable,
             });
         }
@@ -551,6 +558,7 @@ impl Builder<'_> {
                         kind: CardKind::AgentLink { agent_id },
                         card_start: block_start.saturating_add(offset),
                         card_rows: 1,
+                        card_cols: None,
                         clickable: true,
                     });
                 }
@@ -579,6 +587,7 @@ impl Builder<'_> {
                     },
                     card_start: block_start,
                     card_rows: block.rows,
+                    card_cols: None,
                     clickable: true,
                 });
             }
@@ -636,12 +645,14 @@ impl Builder<'_> {
                     } else {
                         display_text
                     };
-                    let wrapped = if display_text.is_empty() {
-                        Vec::new()
-                    } else {
-                        wrap(&display_text, width.saturating_sub(super::USER_INDENT))
-                    };
-                    let (text_lines, fold_hint) = if wrapped.len() > 5 {
+                    let expanded_pastes = history.chat.user_expanded_pastes(&message.id);
+                    let has_expanded_paste = !expanded_pastes.is_empty();
+                    let (wrapped, paste_spans) = super::rows::wrap_user_projection(
+                        &display_text,
+                        &expanded_pastes,
+                        width.saturating_sub(super::USER_INDENT),
+                    );
+                    let (text_lines, fold_hint) = if wrapped.len() > 5 && !has_expanded_paste {
                         if user_expanded {
                             (wrapped, Some("less lines".to_string()))
                         } else {
@@ -673,6 +684,7 @@ impl Builder<'_> {
                         .collect();
                     BlockPaint::UserText {
                         text_lines,
+                        paste_spans,
                         fold_hint,
                         ref_lines,
                     }
@@ -704,20 +716,48 @@ impl Builder<'_> {
         if is_user
             && let BlockPaint::UserText {
                 text_lines,
-                fold_hint: Some(_),
+                paste_spans,
+                fold_hint,
                 ..
             } = snap_block.paint.as_ref()
         {
-            let hint_offset = text_lines.len();
-            self.snapshot.cards.push(CardRegion {
-                kind: CardKind::UserMessage {
-                    message_id: message.id.clone(),
-                    expanded: user_expanded,
-                },
-                card_start: start.saturating_add(hint_offset),
-                card_rows: 1,
-                clickable: true,
-            });
+            for span in paste_spans {
+                if span.offset < text_lines.len() {
+                    let visible_rows = span.rows.min(text_lines.len() - span.offset);
+                    if visible_rows > 0 {
+                        let last_col = if visible_rows < span.rows {
+                            self.width
+                        } else {
+                            span.cols.1
+                        };
+                        self.snapshot.cards.push(CardRegion {
+                            kind: CardKind::UserPaste {
+                                message_id: message.id.clone(),
+                                paste_id: span.paste_id,
+                                occurrence: span.occurrence,
+                                expanded: span.expanded,
+                            },
+                            card_start: start.saturating_add(span.offset),
+                            card_rows: visible_rows,
+                            card_cols: Some((span.cols.0, last_col)),
+                            clickable: true,
+                        });
+                    }
+                }
+            }
+            if fold_hint.is_some() {
+                let hint_offset = text_lines.len();
+                self.snapshot.cards.push(CardRegion {
+                    kind: CardKind::UserMessage {
+                        message_id: message.id.clone(),
+                        expanded: user_expanded,
+                    },
+                    card_start: start.saturating_add(hint_offset),
+                    card_rows: 1,
+                    card_cols: None,
+                    clickable: true,
+                });
+            }
         }
 
         snap_block
@@ -751,6 +791,7 @@ impl Builder<'_> {
                 },
                 card_start: block_start + span.offset,
                 card_rows,
+                card_cols: None,
                 clickable: span.clickable,
             });
         }

@@ -62,7 +62,7 @@ pub(crate) use stats::{format_duration, stats_line};
 /// 用户消息前缀（`> `）。
 const USER_PREFIX: &str = "> ";
 /// 用户消息正文缩进列（与前缀等宽）。
-const USER_INDENT: u16 = 2;
+pub(super) const USER_INDENT: u16 = 2;
 /// 每个 assistant 步骤左侧状态标记占用的列数（1 列字形 + 1 列空格）；标记右侧的
 /// 内容（头部文案、续行、展开的思考正文、markdown 正文）一律缩进到该列之后，
 /// 与用户消息的 `> ` 缩进同宽。

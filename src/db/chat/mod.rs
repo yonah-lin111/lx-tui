@@ -950,7 +950,13 @@ pub fn initial_session_title_for_meta(
     user_text: &str,
     attachments: &[MessageAttachmentMeta],
 ) -> String {
-    let display_text = crate::chat::strip_references_for_display(user_text, attachments);
+    let stripped = crate::chat::strip_references_for_display(user_text, attachments);
+    let display_text = crate::app::paste::Projection::new(
+        &stripped,
+        &crate::app::paste::ExpandedPastes::default(),
+    )
+    .text()
+    .to_string();
     let image_count = attachments
         .iter()
         .filter(|att| att.kind == MessageAttachmentKind::Image)

@@ -16,7 +16,11 @@ use crate::ui;
 /// 新粘贴先取消旧提案（Choosing → Reading）；终端自身粘贴只承载位图时送来空内容，
 /// 没有正文可插入，直接忽略。
 pub(super) fn handle_terminal_paste(state: &mut AppState, text: String) {
+    state.prompt.text_paste_cancel();
     state.prompt.paste_cancel();
+    if update::prompt_recent_open(state) {
+        return;
+    }
     // 树视图与页列表视图没有正文提案入口：文本按搜索框语义处理。
     if update::prompt_tree_mode(state) || update::prompt_pages_mode(state) {
         update::apply_editor(state, EditorCommand::InsertText(text));
@@ -30,20 +34,28 @@ pub(super) fn handle_terminal_paste(state: &mut AppState, text: String) {
     {
         let anchor = paste_anchor(state);
         let request = state.prompt.begin_paste_read(anchor);
-        state.prompt.paste_stage(request, candidates);
-        return;
+        if state.prompt.paste_stage(request, candidates) {
+            update::clear_selection(state);
+            return;
+        }
+    }
+    if let Some(candidate) = crate::app::paste::text_paste_candidate(&text) {
+        let anchor = paste_anchor(state);
+        if state
+            .prompt
+            .begin_text_paste(candidate.content, candidate.full_text, anchor)
+        {
+            return;
+        }
     }
     // 普通文本：粘贴后压制补全面板，避免紧跟的 Enter 把尾部当触发词替换成候选原文。
     update::apply_pasted_text(state, text);
 }
 
-/// lx 输入框粘贴：整段是存在的路径集合时打开参照面板，否则按普通文本插入。
+/// lx 输入框粘贴：整段是存在的路径集合时打开参照面板，长文本打开折叠粘贴面板，否则按普通文本插入。
 ///
 /// 返回是否产生状态变化；空文本或非 lx 视图返回 false。
 pub(super) fn handle_lx_paste(state: &mut AppState, text: String) -> bool {
-    if text.is_empty() {
-        return false;
-    }
     let Some(pane) = state.active_pane_mut() else {
         return false;
     };
@@ -54,9 +66,14 @@ pub(super) fn handle_lx_paste(state: &mut AppState, text: String) -> bool {
     if pane.lx.rewind.is_executing() {
         return false;
     }
+    let canceled_text = pane.lx.text_paste_cancel();
+    let canceled_path = pane.lx.paste_cancel();
+    if text.is_empty() {
+        return canceled_text || canceled_path;
+    }
     // 粘贴也是编辑：让双 Esc 的待命/选中失效（设计 4.2 / D8）。
     pane.lx.clear_rewind();
-    // Shell 模式：路径就是命令字面量，不弹参照面板、不改写引用。
+    // Shell 模式：路径与长文本都是命令字面量，不弹参照/折叠面板。
     if pane.lx.shell_mode() {
         pane.lx.insert_str(&text);
         return true;
@@ -65,6 +82,13 @@ pub(super) fn handle_lx_paste(state: &mut AppState, text: String) -> bool {
         && let Some(candidates) = candidates_from_paths(&paths)
     {
         return pane.lx.paste_open(candidates);
+    }
+    if let Some(candidate) = crate::app::paste::text_paste_candidate(&text)
+        && pane
+            .lx
+            .begin_text_paste(candidate.content, candidate.full_text)
+    {
+        return true;
     }
     pane.lx.insert_str(&text);
     true

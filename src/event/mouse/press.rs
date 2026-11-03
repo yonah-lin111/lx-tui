@@ -490,9 +490,10 @@ pub(crate) fn handle_mouse_down_left(
         let col = mouse.column - inner.x;
         if pane == state.prompt.id() {
             update::focus_prompt(state);
-            if state.prompt.paste_panel().is_some() {
+            if state.prompt.paste_panel().is_some() || state.prompt.text_paste_panel().is_some() {
                 // 粘贴面板打开时点击编辑区：关闭面板且不穿透、不移动光标。
                 state.prompt.paste_cancel();
+                state.prompt.text_paste_cancel();
             } else if update::prompt_tree_mode(state) {
                 // 顶部搜索框：单击/双击/三击与拖拽选中文本。
                 let search_hit = ui::prompt::tree::search_char_at(
@@ -571,16 +572,33 @@ pub(crate) fn handle_mouse_down_left(
             } else {
                 // 底部虚拟空占位只聚焦编辑器，不把光标移到不存在的文本行。
                 if !state.prompt.row_in_padding(row) {
-                    let clicks = crate::app::selection::next_click_count(
-                        &mut state.selection_click,
-                        mouse.column,
-                        mouse.row,
-                        Instant::now(),
-                    );
-                    if clicks == 1 {
-                        update::place_prompt_cursor(state, row, col);
+                    if let Some(hit) = state.prompt.paste_hit_at(row, col) {
+                        if !hit.expanded {
+                            state.selection_click = None;
+                            update::clear_selection(state);
+                            state.prompt.toggle_paste(hit.id, hit.occurrence);
+                        } else {
+                            let clicks = crate::app::selection::next_click_count(
+                                &mut state.selection_click,
+                                mouse.column,
+                                mouse.row,
+                                Instant::now(),
+                            );
+                            update::clear_selection(state);
+                            state.prompt.begin_preview_selection(row, col, clicks);
+                        }
+                    } else {
+                        let clicks = crate::app::selection::next_click_count(
+                            &mut state.selection_click,
+                            mouse.column,
+                            mouse.row,
+                            Instant::now(),
+                        );
+                        if clicks == 1 {
+                            update::place_prompt_cursor(state, row, col);
+                        }
+                        update::begin_selection_with_clicks(state, pane, row, col, clicks);
                     }
-                    update::begin_selection_with_clicks(state, pane, row, col, clicks);
                 }
             }
             *dirty = true;
@@ -767,6 +785,14 @@ pub(crate) fn handle_mouse_down_left(
                         mouse.column,
                         mouse.row,
                     )
+                }) {
+                    *dirty = true;
+                    return;
+                }
+                if state.pane_mut_anywhere(pane).is_some_and(|target| {
+                    let canceled_text = target.lx.text_paste_cancel();
+                    let canceled_path = target.lx.paste_cancel();
+                    canceled_text || canceled_path
                 }) {
                     *dirty = true;
                     return;

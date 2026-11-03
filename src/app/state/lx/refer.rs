@@ -30,15 +30,16 @@ impl Lx {
             self.refer = None;
             return;
         }
-        let Some(trigger) = refer_trigger(&self.input, self.cursor) else {
+        let masked = crate::app::paste::mask_pasted_text(&self.input);
+        let Some(trigger) = refer_trigger(&masked, self.cursor) else {
             self.refer = None;
             return;
         };
 
         // 1. 从当前输入框正文提取候选
-        let scope = 0..self.input.len();
+        let scope = 0..masked.len();
         let mut candidates = refer_candidates(
-            &self.input,
+            &masked,
             std::slice::from_ref(&scope),
             &trigger.range,
             self.mention.entries(),

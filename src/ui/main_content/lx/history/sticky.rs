@@ -55,6 +55,12 @@ pub(super) fn sticky_candidate(
 pub(super) fn sticky_text(message: &crate::app::state::ChatMessageView) -> Option<String> {
     let part = message.text_parts().next()?;
     let stripped = crate::chat::strip_references_for_display(&part.content, &message.attachments);
+    let stripped = crate::app::paste::Projection::new(
+        &stripped,
+        &crate::app::paste::ExpandedPastes::default(),
+    )
+    .text()
+    .to_string();
     let display = if stripped.is_empty() && !message.attachments.is_empty() {
         let image_count = message
             .attachments

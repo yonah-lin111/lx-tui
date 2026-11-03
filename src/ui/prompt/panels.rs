@@ -6,19 +6,50 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::app::markdown::MentionEntry;
-use crate::app::prompt::{PasteAction, Prompt};
+use crate::app::prompt::{PasteAction, Prompt, TextPasteAction};
 use crate::ui::text;
 use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView, PanelLayout};
 
-/// 粘贴面板渲染数据：三行操作、高亮与锚点行。
+/// 粘贴面板渲染数据：操作行、高亮、禁用掩码与锚点行。
 struct PastePanelData {
     rows: Vec<(String, String)>,
     active: usize,
     anchor_row: u16,
+    disabled: Option<[bool; 4]>,
 }
 
-/// 粘贴面板渲染数据；面板未打开或光标滚出视口返回 None。
+/// 文本粘贴面板渲染数据；面板未打开或光标滚出视口返回 None。
+fn text_paste_panel_data(prompt: &Prompt) -> Option<PastePanelData> {
+    let panel = prompt.text_paste_panel()?;
+    let (anchor_row, _) = prompt.cursor_cell()?;
+    let count = text::text_paste_lines(panel.line_count);
+    let fold_hint = if panel.collapse_enabled() {
+        count.clone()
+    } else {
+        text::TEXT_PASTE_TOO_LARGE.to_string()
+    };
+    let rows = TextPasteAction::ALL
+        .iter()
+        .map(|action| match action {
+            TextPasteAction::Raw => (text::TEXT_PASTE_ACTION_RAW.to_string(), count.clone()),
+            TextPasteAction::Text => (text::TEXT_PASTE_ACTION_TEXT.to_string(), fold_hint.clone()),
+            TextPasteAction::Code => (text::TEXT_PASTE_ACTION_CODE.to_string(), fold_hint.clone()),
+            TextPasteAction::Log => (text::TEXT_PASTE_ACTION_LOG.to_string(), fold_hint.clone()),
+        })
+        .collect();
+    Some(PastePanelData {
+        rows,
+        active: panel.active(),
+        anchor_row,
+        disabled: Some(panel.disabled_mask()),
+    })
+}
+
+/// 路径粘贴面板渲染数据；面板未打开或光标滚出视口返回 None。
 fn paste_panel_data(prompt: &Prompt) -> Option<PastePanelData> {
+    if let Some(data) = text_paste_panel_data(prompt) {
+        return Some(data);
+    }
     let panel = prompt.paste_panel()?;
     let (anchor_row, _) = prompt.cursor_cell()?;
     let count = text::paste_item_count(panel.candidates.len());
@@ -40,6 +71,7 @@ fn paste_panel_data(prompt: &Prompt) -> Option<PastePanelData> {
         rows,
         active: panel.active(),
         anchor_row,
+        disabled: None,
     })
 }
 
@@ -56,7 +88,7 @@ fn paste_items<'a>(data: &'a PastePanelData) -> Vec<CommandItem<'a>> {
 }
 
 /// 粘贴面板视图：锚定光标行，标题固定；不设高度上限。
-fn paste_view<'a>(items: &'a [CommandItem<'a>], data: &PastePanelData) -> CommandPanelView<'a> {
+fn paste_view<'a>(items: &'a [CommandItem<'a>], data: &'a PastePanelData) -> CommandPanelView<'a> {
     CommandPanelView {
         current: None,
         items,
@@ -68,6 +100,7 @@ fn paste_view<'a>(items: &'a [CommandItem<'a>], data: &PastePanelData) -> Comman
         title: Some(text::PASTE_PANEL_TITLE),
         right_title: None,
         footer: Some(text::LX_PASTE_PANEL_FOOTER),
+        disabled: data.disabled.as_ref().map(|d| d.as_slice()),
         ..Default::default()
     }
 }

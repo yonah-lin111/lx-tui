@@ -68,7 +68,9 @@ pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> Rout
     if target.lx.slash.is_some()
         || target.lx.panel.is_some()
         || target.lx.mention_open()
+        || target.lx.refer_active()
         || target.lx.paste_panel().is_some()
+        || target.lx.text_paste_panel().is_some()
     {
         return Route::Pass;
     }

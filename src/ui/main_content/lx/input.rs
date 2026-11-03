@@ -1,4 +1,4 @@
-//! 底部多行输入框：上下 `─` 分割线 + 首行 `> ` 前缀 + markdown 高亮。
+//! 底部多行输入框：上下 `─` 分割线 + 首行 `> ` 前缀 + markdown 高亮与折叠粘贴芯片。
 //!
 //! 高亮只做**编辑器色板**（`style::markdown_*`，与阅读渲染的 GitHub Dark 色板
 //! 完全独立，见 `docs/standards/tui-design-requirements.md`）：token 来自
@@ -10,7 +10,9 @@
 use ratatui::style::Modifier;
 use unicode_width::UnicodeWidthChar;
 
+use crate::app::paste::{Projection, SegmentKind, mask_pasted_text};
 use crate::app::state::Lx;
+use crate::app::state::lx::LxRow;
 use crate::ui::markdown::Token;
 use crate::ui::{style, text};
 
@@ -29,7 +31,6 @@ fn draw_session_title_badge(grid: &mut Grid, rect: ratatui::layout::Rect, lx: &L
     if clean.is_empty() {
         return;
     }
-    // 左侧至少留 INPUT_PREFIX (2) 列 `─`，右侧留 1 列 `─`，胶囊左右各 1 列空格内边距（共扣 5 列）。
     let avail = rect
         .width
         .saturating_sub(INPUT_PREFIX.saturating_add(3))
@@ -74,14 +75,21 @@ pub(super) fn draw(
         .saturating_sub(INPUT_PREFIX)
         .saturating_sub(INPUT_SCROLLBAR);
     let rows = lx.visual_rows();
+    let proj = lx.projection();
     let shell = lx.shell_mode();
+    let masked = mask_pasted_text(&lx.input);
     // Shell 正文按原始脚本绘制：不做 Markdown 词法高亮。
     let tokens = if shell {
         Vec::new()
     } else {
-        crate::ui::markdown::scan(&lx.input)
+        crate::ui::markdown::scan(&masked)
     };
-    let lines: Vec<&str> = lx.input.split('\n').collect();
+    let mut raw_line_starts = Vec::new();
+    let mut offset = 0;
+    for line in lx.input.split('\n') {
+        raw_line_starts.push(offset);
+        offset += line.len() + 1;
+    }
     // 规则行右端的模式/排队提示：窄宽度先隐藏，绝不改变输入框高度。
     let queued = lx.chat.queue.len();
     let label = match (shell, queued) {
@@ -104,6 +112,7 @@ pub(super) fn draw(
     }
     let (cursor_row, _) = lx.cursor_visual();
     let selection = lx.text_selection_range();
+    let preview_sel = lx.preview_selection();
 
     let mut cursor = None;
     for i in 0..visible {
@@ -114,13 +123,6 @@ pub(super) fn draw(
             break;
         };
         let y = text_top + i as u16;
-        let line_index = lx.input[..row.start].matches('\n').count();
-        let Some(line) = lines.get(line_index) else {
-            break;
-        };
-        let line_start = lx.input[..row.start]
-            .rfind('\n')
-            .map_or(0, |offset| offset + 1);
         if row_index == 0 {
             if shell {
                 grid.put(
@@ -133,25 +135,24 @@ pub(super) fn draw(
                 grid.put(rect.x, y, text::LX_INPUT_PROMPT, style::accent());
             }
         }
-        let line_tokens = tokens
-            .get(line_index)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
         paint_line(
             grid,
             content_x,
             y,
-            line,
-            line_tokens,
-            row.start - line_start,
-            row.end - line_start,
+            &proj,
+            row,
+            &tokens,
+            &raw_line_starts,
             content_w,
-            line_start,
             selection,
+            preview_sel,
         );
         if row_index == cursor_row && focused {
-            let col = content_x
-                + u16::try_from(display_width(&lx.input[row.start..lx.cursor])).unwrap_or(u16::MAX);
+            let disp_cursor = proj.raw_to_display(lx.cursor).clamp(row.start, row.end);
+            let col = content_x.saturating_add(
+                u16::try_from(display_width(&proj.text()[row.start..disp_cursor]))
+                    .unwrap_or(u16::MAX),
+            );
             cursor = Some((y, col));
         }
     }
@@ -171,10 +172,9 @@ pub(super) fn draw(
         && rows.len() == 1
         && let Some(hint) = crate::app::state::lx::slash::active_argument_hint(&lx.input)
     {
-        // 在命令词（如 `/rename`）与 `[name]` 之间保持至少 2 列间距（1 列尾随空格 + 1 列光标/间隔）。
         let cmd_width = display_width(lx.input.trim());
         let min_offset = cmd_width.saturating_add(2);
-        let offset = display_width(&lx.input).max(min_offset);
+        let offset = display_width(proj.text()).max(min_offset);
         let offset_u16 = u16::try_from(offset).unwrap_or(u16::MAX);
         if offset_u16 < content_w {
             let avail = usize::from(content_w - offset_u16);
@@ -190,51 +190,86 @@ pub(super) fn draw(
     cursor
 }
 
-/// 按 token 高亮绘制一行 markdown 的 `[row_start, row_end)` 字节区间；
+/// 按投影段与 token 高亮绘制一行 `[row.start, row.end)` 字节区间；
 /// 落在选中字节范围内的字符额外反显；超宽截断。
 #[expect(clippy::too_many_arguments)]
 fn paint_line(
     grid: &mut Grid,
     x: u16,
     y: u16,
-    line: &str,
-    tokens: &[Token],
-    row_start: usize,
-    row_end: usize,
+    proj: &Projection<'_>,
+    row: &LxRow,
+    tokens: &[Vec<Token>],
+    raw_line_starts: &[usize],
     max_w: u16,
-    line_offset: usize,
     selection: Option<(usize, usize)>,
+    preview_selection: Option<(usize, usize)>,
 ) {
+    let right_limit = x.saturating_add(max_w);
     let mut cx = x;
-    let mut token_index = 0;
-    for (offset, ch) in line.char_indices() {
-        if offset < row_start {
-            continue;
-        }
-        if offset >= row_end {
-            break;
-        }
+    let disp_text = proj.text();
+    for (offset, ch) in disp_text[row.start..row.end].char_indices() {
         let width = ch.width().unwrap_or(0);
         if width == 0 {
             continue;
         }
-        while tokens
-            .get(token_index)
-            .is_some_and(|token| token.range.end <= offset)
-        {
-            token_index += 1;
-        }
-        let mut cell_style = tokens
-            .get(token_index)
-            .filter(|token| token.range.contains(&offset))
-            .map_or_else(style::text, |token| {
-                crate::ui::prompt::token_style(token.kind)
-            });
-        let absolute = line_offset + offset;
-        if selection.is_some_and(|(start, end)| absolute >= start && absolute < end) {
+        let disp_pos = row.start + offset;
+        let seg = proj.segment_at(disp_pos);
+        let mut cell_style = match seg.map(|s| s.kind) {
+            Some(SegmentKind::Chip {
+                kind,
+                expanded: false,
+                ..
+            }) => style::pasted_chip(kind),
+            Some(SegmentKind::Chip {
+                kind,
+                expanded: true,
+                ..
+            }) => style::pasted_bg(kind),
+            _ => {
+                let raw_pos = proj.display_to_raw(disp_pos);
+                let raw_line = raw_line_starts
+                    .partition_point(|&start| start <= raw_pos)
+                    .saturating_sub(1);
+                let line_start = raw_line_starts.get(raw_line).copied().unwrap_or(0);
+                let rel_raw = raw_pos.saturating_sub(line_start);
+                tokens
+                    .get(raw_line)
+                    .and_then(|line_tokens| {
+                        line_tokens
+                            .iter()
+                            .find(|token| token.range.contains(&rel_raw))
+                    })
+                    .map_or_else(style::text, |token| {
+                        crate::ui::prompt::token_style(token.kind)
+                    })
+            }
+        };
+        if preview_selection.is_some_and(|(s, e)| disp_pos >= s && disp_pos < e) {
             cell_style = cell_style.add_modifier(Modifier::REVERSED);
+        } else if let Some((sel_start, sel_end)) = selection {
+            let selected = match seg {
+                Some(seg)
+                    if matches!(
+                        seg.kind,
+                        SegmentKind::Chip {
+                            expanded: false,
+                            ..
+                        }
+                    ) =>
+                {
+                    seg.raw.start < sel_end && seg.raw.end > sel_start
+                }
+                _ => {
+                    let raw_pos = proj.display_to_raw(disp_pos);
+                    raw_pos >= sel_start && raw_pos < sel_end
+                }
+            };
+            if selected {
+                cell_style = cell_style.add_modifier(Modifier::REVERSED);
+            }
         }
-        if cx.saturating_add(width as u16) > x.saturating_add(max_w) {
+        if cx.saturating_add(width as u16) > right_limit {
             break;
         }
         grid.set(cx, y, ch, cell_style);

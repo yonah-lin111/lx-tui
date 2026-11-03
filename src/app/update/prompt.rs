@@ -315,6 +315,7 @@ pub fn commit_editing_prompt(state: &mut AppState) {
 /// 因此占位文本绝不落库；随后的提交只落粘贴前的正文，切换编辑目标/退出不丢编辑。
 pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
     state.prompt.paste_cancel();
+    state.prompt.text_paste_cancel();
     let Some(target) = state
         .workspaces
         .get(workspace)
@@ -543,7 +544,7 @@ fn edit_prompt_temp_row(state: &mut AppState, workspace: usize, row: PromptRow) 
 /// 立即保存（工具栏圆点）：条目提交落库；临时提示词提交缓冲后打开保存到文件夹选择器。
 pub fn save_prompt_now(state: &mut AppState) {
     // 粘贴提案未收束：占位文本不得落库，也不改已保存态（面板收束后再保存）。
-    if state.prompt.paste_panel().is_some() {
+    if state.prompt.paste_panel().is_some() || state.prompt.text_paste_panel().is_some() {
         return;
     }
     if prompt_temp_editing(state) {

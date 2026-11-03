@@ -1,16 +1,20 @@
 //! lx 页状态与多行文本输入编辑模型。
 
 use crate::app::markdown::BlockPanel;
-use crate::app::paste::PastePanel;
+use crate::app::paste::{
+    ExpandedPastes, PastePanel, TextPastePanel, clamp_cursor, snap_pasted_range,
+};
 #[cfg(test)]
 use crate::app::paste::{PasteAction, PasteCandidate};
-use crate::app::prompt::{list, text};
+use crate::app::prompt::text;
 use crate::app::selection::SelectionUnit;
 
 pub mod agent;
 pub mod ask;
 pub mod chat;
 pub mod compact;
+mod edit;
+mod folded;
 mod history;
 pub mod mention;
 pub mod model_switch;
@@ -111,6 +115,14 @@ pub struct Lx {
     pub panel: Option<BlockPanel>,
     /// 路径粘贴参照面板；与 `panel` 互斥，同一时刻至多一个打开。
     paste: Option<LxPaste>,
+    /// 长文本粘贴面板；与 `paste` / `panel` 互斥。
+    text_paste: Option<LxTextPaste>,
+    /// 已展开的折叠粘贴芯片集合（纯视图状态，不落库、不入撤销栈）。
+    expanded_pastes: ExpandedPastes,
+    /// 展开芯片预览区内的选区（投影文本字节起止）。
+    preview_selection: Option<(usize, usize)>,
+    /// 正在按住/拖拽的展开芯片 `(id, occurrence, display_range)`。
+    preview_drag: Option<(u64, usize, std::ops::Range<usize>)>,
     /// `@` 文件提及面板：扫描根、缓存与候选；与块面板/粘贴面板互斥。
     mention: LxMention,
     /// 字母快捷输入面板（由正文已出现的引用与会话历史生成候选）。
@@ -130,29 +142,14 @@ pub struct Lx {
     /// 会话中途模型切换记录与展开状态。
     pub model_switch: LxModelSwitch,
     /// 本页自己的 toast 槽；`Some` 时覆盖绘制在**窗格内容区内部**。
-    ///
-    /// lx 页的反馈一律落在本页里，不占用全局 `AppState.toast`：全局 toast 锚点
-    /// 容器放不下时会降级到屏幕顶部居中，横跨整个窗口（用户报的真实观感问题）。
-    /// 这里存 2 秒到期的普通 [`Toast`]，计时/悬停语义与全局完全一致，
-    /// 区别只在锚定与绘制范围（见 `ui::main_content::lx::toast`）。
     pub toast: Option<crate::app::toast::Toast>,
-    /// 后台任务页面；`Some` 表示当前窗格正停在该页（整页替换 lx 页的绘制，
-    /// 但 `Lx` 其余字段——会话、消息、草稿、滚动——全部原样保留，退出页面即复原）。
+    /// 后台任务页面；`Some` 表示当前窗格正停在该页。
     pub task: Option<TaskPage>,
     /// 当前挂起的 ask 面板；`None` 表示输入框正常显示。
-    ///
-    /// 面板占用输入框的位置与按键路由，但**绝不改** `input`/`cursor`（草稿不变量）。
     pub ask: Option<AskState>,
     /// 纯文本缓冲：不识别 shell 前缀、不弹 markdown/提及/斜杠面板。
-    ///
-    /// `ask` 的手写答案复用本结构做编辑；`!` 是答案文本的一部分，不能被吸成
-    /// Shell 模式（否则 `serialized_input()` 会补回 `!`、全角 `！` 变成半角，
-    /// 答案被静默改写，且与 `visual_rows()` 的字节偏移错位）。
     plain: bool,
     /// 本会话正在运行的后台任务数（底部状态行指标）。
-    ///
-    /// 由事件循环按运行实例刷新，与页面是否打开无关——用户不打开后台任务页也要
-    /// 能看见"还有几个服务在跑"，否则忘了清理就是这样发生的。
     pub background_tasks: usize,
     /// 首页资源计数：MCP server 与 skill 的加载/失败状态。
     pub startup: StartupCounts,
@@ -164,7 +161,7 @@ pub struct Lx {
     history: HistoryBrowse,
 }
 
-/// 软换行后的一个视觉行：输入缓冲中的字节区间 `[start, end)`。
+/// 软换行后的一个视觉行：投影显示文本中的字节区间 `[start, end)`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LxRow {
     pub start: usize,
@@ -177,6 +174,12 @@ struct LxPaste {
     panel: PastePanel,
     /// 占位插入前的重做栈；`snapshot` 会清空它，取消必须原样还回。
     redo: Vec<LxSnapshot>,
+}
+
+/// 在途长文本粘贴：选择面板（确认前不改动输入缓冲区）。
+#[derive(Debug)]
+struct LxTextPaste {
+    panel: TextPastePanel,
 }
 
 /// lx 输入缓冲的一份快照（文本 + 光标 + 模式），供撤销/重做。
@@ -202,9 +205,6 @@ impl Lx {
     }
 
     /// 纯文本缓冲：`!` 只是普通字符，也不触发任何面板（`ask` 手写答案用）。
-    ///
-    /// 只把输入当文本编辑的地方必须用它：Chat 模式会吸收首个 `!` 进 Shell 模式，
-    /// 那是给「执行命令」用的语义，答案里没有命令。
     pub fn plain() -> Self {
         Self::build(true)
     }
@@ -222,6 +222,10 @@ impl Lx {
             text_selection: None,
             panel: None,
             paste: None,
+            text_paste: None,
+            expanded_pastes: ExpandedPastes::default(),
+            preview_selection: None,
+            preview_drag: None,
             mention: LxMention::default(),
             refer: None,
             refer_suppressed: false,
@@ -248,8 +252,7 @@ impl Lx {
         self.agents = AgentsState::default();
     }
 
-    /// 清除撤销状态，并关闭 `/rewind` 动作面板（渲染与 Enter 判定都以 `slash` 为准，
-    /// 只清 `rewind` 会留下点不动的孤儿面板）。
+    /// 清除撤销状态，并关闭 `/rewind` 动作面板。
     pub fn clear_rewind(&mut self) {
         self.rewind.clear();
         if matches!(self.slash, Some(slash::SlashPanel::Rewind(_))) {
@@ -304,7 +307,6 @@ impl Lx {
         if self.input_mode != LxInputMode::Shell {
             return false;
         }
-        // 与正文起点 Backspace 一致：退出模式也要进撤销栈，undo 能恢复 Shell 模式。
         self.snapshot();
         self.input_mode = LxInputMode::Chat;
         self.refresh_panel();
@@ -313,6 +315,8 @@ impl Lx {
 
     /// 用完整文本替换草稿（历史召回、排队恢复共用同一模式识别）。
     pub fn import_full_text(&mut self, text: &str) {
+        self.text_paste = None;
+        self.clear_expanded_pastes();
         let (mode, body) = shell::split_mode(text);
         if self.input == body && self.input_mode == mode {
             self.cursor = self.input.len();
@@ -330,15 +334,12 @@ impl Lx {
     }
 
     /// 记录一次内容或模式改动（修订号只增不减）。
-    fn touch(&mut self) {
+    pub(super) fn touch(&mut self) {
         self.revision = self.revision.saturating_add(1);
     }
 
     /// 新插入的文本若以首个非空白 `!`/`！` 开头，吸收该标记并进入 shell 模式。
-    ///
-    /// 只检查整段输入的**首个非空白字符**；正文中间的符号永远不转换。
-    fn adopt_shell_prefix(&mut self) {
-        // 纯文本缓冲没有 Shell 语义：`!` 原样留在文本里（答案就是这么写的）。
+    pub(super) fn adopt_shell_prefix(&mut self) {
         if self.plain || self.input_mode == LxInputMode::Shell {
             return;
         }
@@ -355,6 +356,7 @@ impl Lx {
         self.input_mode = LxInputMode::Shell;
         self.panel = None;
         self.paste = None;
+        self.text_paste = None;
         self.slash = None;
         self.mention.suppress();
         self.text_selection = None;
@@ -373,12 +375,12 @@ impl Lx {
     }
 
     /// 真实内容的最大滚动偏移。
-    fn max_scroll(&self) -> usize {
+    pub(super) fn max_scroll(&self) -> usize {
         self.visual_rows().len().saturating_sub(self.height.max(1))
     }
 
     /// 调整滚动量，保证光标所在视觉行可见。
-    fn scroll_cursor_into_view(&mut self) {
+    pub(super) fn scroll_cursor_into_view(&mut self) {
         let (row, _) = self.cursor_visual();
         let height = self.height.max(1);
         if row < self.scroll {
@@ -401,11 +403,14 @@ impl Lx {
 
     /// 按连续点击次数（1=单字、2=选词、3=选逻辑行）在指定视觉行/内容列开始输入框文本选择。
     pub fn begin_text_selection_with_clicks(&mut self, row: usize, col: u16, clicks: u8) {
+        self.preview_selection = None;
+        self.preview_drag = None;
         let offset = self.offset_at_cell(row, col);
         let unit = SelectionUnit::from_clicks(clicks);
         let (start, end) = unit.byte_range(&self.input, offset);
-        self.cursor = end;
-        self.text_selection = Some((start, end, unit));
+        let snapped = snap_pasted_range(&self.input, start..end);
+        self.cursor = snapped.end;
+        self.text_selection = Some((snapped.start, snapped.end, unit));
         self.panel = None;
         self.mention.suppress();
         self.scroll_cursor_into_view();
@@ -416,9 +421,24 @@ impl Lx {
         let Some((origin_start, _origin_end, unit)) = self.text_selection else {
             return;
         };
-        let offset = self.offset_at_cell(row, col);
+        let proj = self.projection();
+        let disp = self.display_offset_at_cell(row, col, false);
+        let offset = if let Some(hit) = proj.chip_at(disp) {
+            if hit.raw_range.start >= origin_start {
+                hit.raw_range.end
+            } else {
+                hit.raw_range.start
+            }
+        } else {
+            proj.display_to_raw(disp)
+        };
         let (start, end) = unit.byte_range(&self.input, offset);
-        self.cursor = if start < origin_start { start } else { end };
+        let snapped = snap_pasted_range(&self.input, start..end);
+        self.cursor = if snapped.start < origin_start {
+            snapped.start
+        } else {
+            snapped.end
+        };
         self.scroll_cursor_into_view();
     }
 
@@ -437,7 +457,8 @@ impl Lx {
         let (origin_start, origin_end, _) = self.text_selection?;
         let start = origin_start.min(self.cursor);
         let end = origin_end.max(self.cursor);
-        (start < end).then_some((start, end))
+        let snapped = snap_pasted_range(&self.input, start..end);
+        (snapped.start < snapped.end).then_some((snapped.start, snapped.end))
     }
 
     /// 取输入框选中文本；空选区返回 None。
@@ -446,28 +467,21 @@ impl Lx {
             .map(|(start, end)| self.input[start..end].to_string())
     }
 
-    /// 视口单元格（视觉行、内容列）→ 输入缓冲字节偏移；越界钳到最近位置。
+    /// 视口单元格（视觉行、内容列）→ 输入缓冲原始字节偏移；越界钳到最近位置。
     pub fn offset_at_cell(&self, row: usize, col: u16) -> usize {
-        let rows = self.visual_rows();
-        let index = row.min(rows.len().saturating_sub(1));
-        let visual = rows[index];
-        let mut cell = 0;
-        for (offset, ch) in self.input[visual.start..visual.end].char_indices() {
-            let width = text::char_width(ch);
-            if usize::from(col) < cell + width {
-                return visual.start + offset;
-            }
-            cell += width;
-        }
-        visual.end
+        let disp = self.display_offset_at_cell(row, col, false);
+        let raw = self.projection().display_to_raw(disp);
+        clamp_cursor(&self.input, raw)
     }
 
-    /// 按内容宽度软换行得到的视觉行。
+    /// 按内容宽度软换行得到的视觉行（基于折叠/展开投影文本）。
     pub fn visual_rows(&self) -> Vec<LxRow> {
         let width = usize::from(self.width.max(1));
+        let proj = self.projection();
+        let proj_text = proj.text();
         let mut rows = Vec::new();
         let mut line_start = 0;
-        for segment in self.input.split('\n') {
+        for segment in proj_text.split('\n') {
             let line_end = line_start + segment.len();
             let mut row_start = line_start;
             let mut col = 0;
@@ -499,262 +513,29 @@ impl Lx {
         self.cursor_visual_in(&rows)
     }
 
-    fn cursor_visual_in(&self, rows: &[LxRow]) -> (usize, usize) {
+    pub(super) fn cursor_visual_in(&self, rows: &[LxRow]) -> (usize, usize) {
+        let proj = self.projection();
+        let disp_cursor = proj.raw_to_display(self.cursor);
+        let disp_text = proj.text();
         for (index, row) in rows.iter().enumerate() {
-            if self.cursor < row.end {
+            if disp_cursor < row.end {
                 return (
                     index,
-                    text::display_width(&self.input[row.start..self.cursor]),
+                    text::display_width(&disp_text[row.start..disp_cursor]),
                 );
             }
-            if self.cursor == row.end {
+            if disp_cursor == row.end {
                 let continues = rows
                     .get(index + 1)
                     .is_some_and(|next| next.start == row.end);
                 if !continues {
-                    return (index, text::display_width(&self.input[row.start..row.end]));
+                    return (index, text::display_width(&disp_text[row.start..row.end]));
                 }
             }
         }
         let index = rows.len().saturating_sub(1);
         let row = rows[index];
-        (index, text::display_width(&self.input[row.start..row.end]))
-    }
-
-    /// 记录一次编辑前的快照，并清空重做栈。
-    fn snapshot(&mut self) {
-        self.text_selection = None;
-        if self.undo.len() == LX_HISTORY_LIMIT {
-            self.undo.remove(0);
-        }
-        self.undo.push(LxSnapshot {
-            text: self.input.clone(),
-            cursor: self.cursor,
-            mode: self.input_mode,
-        });
-        self.redo.clear();
-        self.touch();
-    }
-
-    /// 在光标处插入一个字符（有选区时替换选区）。
-    pub fn insert_char(&mut self, ch: char) {
-        self.refer_suppressed = false;
-        let selection = self.text_selection_range();
-        self.snapshot();
-        if let Some((start, end)) = selection {
-            self.input.replace_range(start..end, "");
-            self.cursor = start;
-        }
-        self.input.insert(self.cursor, ch);
-        self.cursor += ch.len_utf8();
-        self.adopt_shell_prefix();
-        self.refresh_panel();
-    }
-
-    /// 在光标处插入一段文本；净化规则同 prompt 编辑器（换行归一、Tab 展开、丢弃控制字符）。
-    ///
-    /// 整段粘贴作为一步撤销。粘贴不是“正在输入”：不刷新 md 块面板，避免粘贴文本
-    /// 尾部的触发标记紧接着弹出面板、被下一次 Enter 误采纳（对齐 prompt 的粘贴语义）。
-    pub fn insert_str(&mut self, text: &str) {
-        let sanitized = text::sanitize(text);
-        if sanitized.is_empty() {
-            return;
-        }
-        let selection = self.text_selection_range();
-        self.snapshot();
-        if let Some((start, end)) = selection {
-            self.input.replace_range(start..end, "");
-            self.cursor = start;
-        }
-        self.input.insert_str(self.cursor, &sanitized);
-        self.cursor += sanitized.len();
-        self.adopt_shell_prefix();
-        if self.input_mode == LxInputMode::Chat {
-            self.panel = None;
-            self.mention.suppress();
-        }
-        self.scroll_cursor_into_view();
-    }
-
-    /// 在光标处换行；列表项自动续写标记（对齐 prompt 编辑器）。
-    pub fn newline(&mut self) {
-        // 有选区时先替换整段选区，再插入换行（一步撤销）。
-        if let Some((start, end)) = self.text_selection_range() {
-            self.snapshot();
-            self.input.replace_range(start..end, "\n");
-            self.cursor = start + 1;
-            if self.plain || self.input_mode == LxInputMode::Shell {
-                self.scroll_cursor_into_view();
-            } else {
-                self.refresh_panel();
-            }
-            return;
-        }
-        // 纯文本缓冲：换行就是换行，不续写列表标记、不刷新面板。
-        if self.plain {
-            self.snapshot();
-            self.input.insert(self.cursor, '\n');
-            self.cursor += 1;
-            self.scroll_cursor_into_view();
-            return;
-        }
-        if self.input_mode == LxInputMode::Shell {
-            self.snapshot();
-            self.input.insert(self.cursor, '\n');
-            self.cursor += 1;
-            self.scroll_cursor_into_view();
-            return;
-        }
-        if !list::in_fence(&self.input, self.cursor)
-            && let Some(edit) = list::list_continuation(&self.input, self.cursor)
-        {
-            self.snapshot();
-            self.input.replace_range(edit.range, &edit.replacement);
-            self.cursor = edit.cursor;
-            self.refresh_panel();
-            return;
-        }
-        self.snapshot();
-        self.input.insert(self.cursor, '\n');
-        self.cursor += 1;
-        self.refresh_panel();
-    }
-
-    /// 删除光标前一个字符。
-    ///
-    /// 光标紧跟 `@路径 ` 提及之后的空白、且提及面板未打开时，一次删净整块提及
-    /// （对齐 prompt 的 `mention_deletion_range` 语义）；面板打开时按普通退格编辑查询。
-    pub fn backspace(&mut self) {
-        self.refer_suppressed = false;
-        if self.delete_selected() {
-            return;
-        }
-        // Shell 正文起点退格：退出模式并保留正文（不再吞字符）；压一次快照，
-        // 使 undo 能恢复模式与正文。
-        if self.input_mode == LxInputMode::Shell && self.cursor == 0 {
-            self.snapshot();
-            self.input_mode = LxInputMode::Chat;
-            self.refresh_panel();
-            return;
-        }
-        if self.cursor == 0 {
-            return;
-        }
-        if !self.mention.is_open()
-            && self.refer.is_none()
-            && let Some(range) =
-                crate::app::markdown::ref_content_deletion_range(&self.input, self.cursor)
-                    .or_else(|| {
-                        crate::app::markdown::mention_deletion_range(&self.input, self.cursor)
-                    })
-                    .or_else(|| {
-                        crate::app::markdown::reference_deletion_range(&self.input, self.cursor)
-                    })
-                    .or_else(|| {
-                        crate::app::markdown::short_ref_deletion_range(&self.input, self.cursor)
-                    })
-        {
-            self.snapshot();
-            self.cursor = range.start;
-            self.input.replace_range(range, "");
-            self.refresh_panel();
-            return;
-        }
-        if let Some(prev) = self.input[..self.cursor].chars().next_back() {
-            self.snapshot();
-            self.cursor -= prev.len_utf8();
-            self.input.remove(self.cursor);
-            self.refresh_panel();
-        }
-    }
-
-    /// 删除光标处字符。
-    pub fn delete(&mut self) {
-        self.refer_suppressed = false;
-        if self.delete_selected() {
-            return;
-        }
-        if self.cursor < self.input.len() {
-            self.snapshot();
-            self.input.remove(self.cursor);
-            self.refresh_panel();
-        }
-    }
-
-    /// 光标左移一个字符；有选区时折叠到选区开头。
-    pub fn move_left(&mut self) {
-        self.refer_suppressed = false;
-        if let Some((start, _)) = self.text_selection_range() {
-            self.cursor = start;
-            self.refresh_panel();
-            return;
-        }
-        if let Some(prev) = self.input[..self.cursor].chars().next_back() {
-            self.cursor -= prev.len_utf8();
-            self.refresh_panel();
-        }
-    }
-
-    /// 光标右移一个字符；有选区时折叠到选区结尾。
-    pub fn move_right(&mut self) {
-        self.refer_suppressed = false;
-        if let Some((_, end)) = self.text_selection_range() {
-            self.cursor = end;
-            self.refresh_panel();
-            return;
-        }
-        if let Some(next) = self.input[self.cursor..].chars().next() {
-            self.cursor += next.len_utf8();
-            self.refresh_panel();
-        }
-    }
-
-    /// 光标移到当前视觉行行首。
-    pub fn home(&mut self) {
-        self.refer_suppressed = false;
-        let rows = self.visual_rows();
-        let (index, _) = self.cursor_visual_in(&rows);
-        self.cursor = rows[index].start;
-        self.refresh_panel();
-    }
-
-    /// 光标移到当前视觉行行尾。
-    pub fn end(&mut self) {
-        self.refer_suppressed = false;
-        let rows = self.visual_rows();
-        let (index, _) = self.cursor_visual_in(&rows);
-        self.cursor = rows[index].end;
-        self.refresh_panel();
-    }
-
-    /// 光标上移一个视觉行（保持显示列，越界钳到行尾）。
-    pub fn move_up(&mut self) {
-        self.refer_suppressed = false;
-        let rows = self.visual_rows();
-        let (index, col) = self.cursor_visual_in(&rows);
-        if index == 0 {
-            self.cursor = rows[0].start;
-        } else {
-            let target = rows[index - 1];
-            self.cursor =
-                target.start + text::offset_at_col(&self.input[target.start..target.end], col);
-        }
-        self.refresh_panel();
-    }
-
-    /// 光标下移一个视觉行（保持显示列，越界钳到行尾）。
-    pub fn move_down(&mut self) {
-        self.refer_suppressed = false;
-        let rows = self.visual_rows();
-        let (index, col) = self.cursor_visual_in(&rows);
-        if index + 1 >= rows.len() {
-            self.cursor = rows[rows.len() - 1].end;
-        } else {
-            let target = rows[index + 1];
-            self.cursor =
-                target.start + text::offset_at_col(&self.input[target.start..target.end], col);
-        }
-        self.refresh_panel();
+        (index, text::display_width(&disp_text[row.start..row.end]))
     }
 
     /// 是否正在浏览已发送 prompt 的历史。
@@ -763,17 +544,11 @@ impl Lx {
     }
 
     /// 结束历史浏览（不改输入框文本）。
-    ///
-    /// 任何编辑操作、`Esc` 和发送成功回执都会调用它；浏览态不保留任何隐藏文本。
     pub(crate) fn end_history_browse(&mut self) {
         self.history.end();
     }
 
     /// 只读判定：这次方向键是否由历史接管，以及要显示哪一条。
-    ///
-    /// `entries` 是全局历史（旧 → 新，末尾最新）。接管条件见 [`history::decide`]：
-    /// `↑` 只在光标位于全文最开头、`↓` 只在光标位于全文末尾时生效，否则返回 None
-    /// 交给调用方回落到光标移动。
     pub(crate) fn pending_history_move(
         &self,
         entries: &[String],
@@ -790,21 +565,17 @@ impl Lx {
                 text,
                 cursor_at_start,
             } => {
-                // 首次向上进入浏览：先暂存完整的序列化草稿（含 shell 前缀），
-                // 供越过末尾时按同一模式识别恢复。
                 if !self.history.browsing() {
                     self.history.begin(self.serialized_input());
                 }
                 self.history.set_index(index);
                 self.apply_history_text(&text);
-                // 光标落在文首/文末：连续同向按键才能继续切换（对齐 opencode）。
                 if cursor_at_start {
                     self.cursor = 0;
                 }
                 self.scroll_cursor_into_view();
             }
             HistoryMove::Draft => {
-                // 越过最新一条：恢复进入浏览前的草稿（光标置末尾）。
                 let draft = self.history.take_draft();
                 self.apply_history_text(&draft);
             }
@@ -812,11 +583,9 @@ impl Lx {
     }
 
     /// 一次性替换输入正文（撤销回填复用）：只压一次本地编辑撤销、光标置末尾，
-    /// 并关闭块面板、提及与路径粘贴面板。调用方负责关闭 `/` 面板与撤销状态。
+    /// 并关闭块面板、提及与粘贴面板。
     pub fn replace_input(&mut self, text: &str) {
         self.snapshot();
-        // 与历史召回同一判定：正文可能带 `!` 前缀，模式必须一起重算，
-        // 否则撤销回填的聊天原文会留在 shell 模式，下一次 Enter 被当命令执行。
         let (mode, body) = shell::split_mode(text);
         self.input = body;
         self.input_mode = mode;
@@ -824,6 +593,8 @@ impl Lx {
         self.text_selection = None;
         self.panel = None;
         self.paste = None;
+        self.text_paste = None;
+        self.clear_expanded_pastes();
         self.mention.suppress();
         self.end_history_browse();
         self.scroll_cursor_into_view();
@@ -831,9 +602,9 @@ impl Lx {
     }
 
     /// 把历史文本写回输入框：吸收首部 `!`/`！` 恢复模式，压一次撤销快照、光标置末尾。
-    ///
-    /// 序列化文本与当前内容完全相同时只移动光标，不产生无意义的撤销步。
     fn apply_history_text(&mut self, text: &str) {
+        self.text_paste = None;
+        self.clear_expanded_pastes();
         let (mode, body) = shell::split_mode(text);
         if self.input == body && self.input_mode == mode {
             self.cursor = self.input.len();
@@ -848,143 +619,6 @@ impl Lx {
         self.text_selection = None;
         self.scroll_cursor_into_view();
         self.refresh_panel();
-    }
-
-    /// 光标左移一个词；有选区时折叠到选区开头。
-    pub fn word_left(&mut self) {
-        self.refer_suppressed = false;
-        if let Some((start, _)) = self.text_selection_range() {
-            self.cursor = start;
-            self.refresh_panel();
-            return;
-        }
-        self.cursor = text::word_start_before(&self.input, self.cursor);
-        self.refresh_panel();
-    }
-
-    /// 光标右移一个词；有选区时折叠到选区结尾。
-    pub fn word_right(&mut self) {
-        self.refer_suppressed = false;
-        if let Some((_, end)) = self.text_selection_range() {
-            self.cursor = end;
-            self.refresh_panel();
-            return;
-        }
-        self.cursor = text::word_end_after(&self.input, self.cursor);
-        self.refresh_panel();
-    }
-
-    /// 删除光标到逻辑行首；光标已在行首时删除前一个换行（与上一行合并）。
-    pub fn delete_to_line_start(&mut self) {
-        self.refer_suppressed = false;
-        if self.delete_selected() {
-            return;
-        }
-        if self.cursor == 0 {
-            return;
-        }
-        let start = text::line_start(&self.input, self.cursor);
-        self.snapshot();
-        if start < self.cursor {
-            self.input.replace_range(start..self.cursor, "");
-            self.cursor = start;
-        } else {
-            let previous = text::prev_boundary(&self.input, self.cursor);
-            self.input.replace_range(previous..self.cursor, "");
-            self.cursor = previous;
-        }
-        self.refresh_panel();
-    }
-
-    /// 删除光标到逻辑行尾。
-    pub fn delete_to_line_end(&mut self) {
-        self.refer_suppressed = false;
-        if self.delete_selected() {
-            return;
-        }
-        let end = text::line_end(&self.input, self.cursor);
-        if self.cursor < end {
-            self.snapshot();
-            self.input.replace_range(self.cursor..end, "");
-            self.refresh_panel();
-        }
-    }
-
-    /// 向前删除一个词。
-    pub fn delete_word_backward(&mut self) {
-        self.refer_suppressed = false;
-        if self.delete_selected() {
-            return;
-        }
-        let start = text::word_start_before(&self.input, self.cursor);
-        if start < self.cursor {
-            self.snapshot();
-            self.input.replace_range(start..self.cursor, "");
-            self.cursor = start;
-        }
-    }
-
-    /// 向后删除一个词。
-    ///
-    /// 光标**不动**（readline M-d 语义）：被删区间在光标之后，删完光标位置仍然合法。
-    /// 曾经把光标设成删除前的 `end`，缓冲区缩短后光标越界，下一次编辑直接 panic。
-    pub fn delete_word_forward(&mut self) {
-        self.refer_suppressed = false;
-        if self.delete_selected() {
-            return;
-        }
-        let end = text::word_end_after(&self.input, self.cursor);
-        if self.cursor < end {
-            self.snapshot();
-            self.input.replace_range(self.cursor..end, "");
-        }
-    }
-
-    /// 清空输入框内容；空 Shell 模式也可借此退出。
-    pub fn clear(&mut self) {
-        self.refer_suppressed = false;
-        if self.input.is_empty() && self.input_mode == LxInputMode::Chat {
-            return;
-        }
-        self.snapshot();
-        self.input.clear();
-        self.cursor = 0;
-        self.input_mode = LxInputMode::Chat;
-        self.refresh_panel();
-    }
-
-    /// 撤销一步（恢复正文、光标与模式；修订号继续前进）。
-    pub fn undo(&mut self) {
-        self.refer_suppressed = false;
-        if let Some(snapshot) = self.undo.pop() {
-            let current = LxSnapshot {
-                text: std::mem::replace(&mut self.input, snapshot.text),
-                cursor: self.cursor,
-                mode: self.input_mode,
-            };
-            self.redo.push(current);
-            self.cursor = snapshot.cursor.min(self.input.len());
-            self.input_mode = snapshot.mode;
-            self.touch();
-            self.refresh_panel();
-        }
-    }
-
-    /// 重做一步（恢复正文、光标与模式；修订号继续前进）。
-    pub fn redo(&mut self) {
-        self.refer_suppressed = false;
-        if let Some(snapshot) = self.redo.pop() {
-            let current = LxSnapshot {
-                text: std::mem::replace(&mut self.input, snapshot.text),
-                cursor: self.cursor,
-                mode: self.input_mode,
-            };
-            self.undo.push(current);
-            self.cursor = snapshot.cursor.min(self.input.len());
-            self.input_mode = snapshot.mode;
-            self.touch();
-            self.refresh_panel();
-        }
     }
 }
 

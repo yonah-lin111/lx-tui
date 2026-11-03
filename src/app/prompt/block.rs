@@ -1,12 +1,15 @@
 //! 补充块操作：清理与删除；纯状态、无 IO。
 
+use crate::app::paste::mask_pasted_text;
+
 use super::super::markdown::{self, BlockKind, BlockSpan};
 use super::{EditKind, Prompt};
 
 impl Prompt {
     /// 起始行处、类型匹配的块范围。
     fn block_span_of(&self, start_line: usize, kind: BlockKind) -> Option<BlockSpan> {
-        let span = markdown::block_span_at_line(&self.text, start_line)?;
+        let masked = mask_pasted_text(&self.text);
+        let span = markdown::block_span_at_line(&masked, start_line)?;
         (span.kind == kind && span.start == start_line).then_some(span)
     }
 
@@ -61,7 +64,8 @@ impl Prompt {
         let Some(span) = self.block_span_of(start_line, BlockKind::Supple) else {
             return false;
         };
-        let range = markdown::block_deletion_range(&self.text, span);
+        let masked = mask_pasted_text(&self.text);
+        let range = markdown::block_deletion_range(&masked, span);
         self.break_group();
         self.record(EditKind::Other);
         self.replace_span(range.start, range.end, "");
@@ -80,7 +84,8 @@ impl Prompt {
     ) {
         self.splice_text(trigger.line_start, trigger.line_end, "");
 
-        let scan = markdown::block_scan(&self.text);
+        let masked = mask_pasted_text(&self.text);
+        let scan = markdown::block_scan(&masked);
         // 页内存在未闭合块时不插入：落点会落在未闭合块内部，新块会被吞掉或误闭合前一块。
         if scan.spans.iter().any(|span| !span.closed) {
             return;

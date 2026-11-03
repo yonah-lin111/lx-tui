@@ -824,3 +824,34 @@ fn bordered_panel_with_title_and_tabs_expands_width_and_omits_tabs_when_cramped(
         "退化态无独立顶栏行时不得在首条候选行上登记 Tab 命中区"
     );
 }
+
+#[test]
+fn disabled_row_renders_muted_without_selection_marker_or_highlight() {
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buf = Buffer::empty(area);
+    let items = inline(&[
+        ("Collapse paste", "too large to collapse"),
+        ("Paste full text", "10 lines"),
+    ]);
+    let disabled = [true, false];
+    let v = CommandPanelView {
+        items: &items,
+        active: 0,
+        anchor_row: 6,
+        width: Some(40),
+        placement: PanelPlacement::Above,
+        borderless: true,
+        disabled: Some(&disabled),
+        ..Default::default()
+    };
+    let l = layout(area, &v).expect("layout");
+    render(area, &mut buf, &v).expect("renders");
+    let row0_y = l.content.y;
+    // Disabled row 0 has no `❯` marker even if active == 0, and its label uses muted style.
+    assert_eq!(buf[(0, row0_y)].symbol(), " ");
+    assert_eq!(buf[(2, row0_y)].symbol(), "C");
+    assert_eq!(
+        buf[(2, row0_y)].fg,
+        style::muted().fg.unwrap_or(Color::Reset)
+    );
+}

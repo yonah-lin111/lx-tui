@@ -39,10 +39,21 @@ pub fn maybe_schedule_session_title(
     else {
         return;
     };
-    let display_text =
-        crate::chat::strip_references_for_display(frozen_draft, &committed.attachments);
+    let stripped = crate::chat::strip_references_for_display(frozen_draft, &committed.attachments);
+    let display_text = crate::app::paste::Projection::new(
+        &stripped,
+        &crate::app::paste::ExpandedPastes::default(),
+    )
+    .text()
+    .to_string();
+    let fallback_projected = crate::app::paste::Projection::new(
+        frozen_draft,
+        &crate::app::paste::ExpandedPastes::default(),
+    )
+    .text()
+    .to_string();
     let source_text = if display_text.trim().is_empty() {
-        frozen_draft
+        fallback_projected.as_str()
     } else {
         display_text.as_str()
     };

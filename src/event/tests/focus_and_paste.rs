@@ -12,9 +12,15 @@ fn terminal_paste_valid_paths_open_proposal_and_plain_text_inserts() {
     let panel = state.prompt.paste_panel().expect("proposal open");
     assert_eq!(panel.candidates.len(), 1);
     assert_eq!(panel.candidates[0].kind, PasteCandidateKind::File);
-    // 新粘贴先取消旧提案；普通文本仍同步插入。
+    // 新粘贴先取消旧提案；非路径文本弹出文本粘贴面板，默认选中首项 `Paste raw`。
     paste::handle_terminal_paste(&mut state, "/api/users".to_string());
     assert!(state.prompt.paste_panel().is_none());
+    assert!(state.prompt.text_paste_panel().is_some());
+    assert!(
+        state
+            .prompt
+            .text_paste_confirm(crate::app::paste::TextPasteAction::Raw)
+    );
     assert_eq!(state.prompt.text(), "/api/users");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -39,6 +45,12 @@ fn terminal_paste_missing_path_falls_back_to_text() {
     let _ = std::fs::remove_file(&missing);
     paste::handle_terminal_paste(&mut state, missing.display().to_string());
     assert!(state.prompt.paste_panel().is_none());
+    assert!(state.prompt.text_paste_panel().is_some());
+    assert!(
+        state
+            .prompt
+            .text_paste_confirm(crate::app::paste::TextPasteAction::Raw)
+    );
     assert_eq!(state.prompt.text(), missing.display().to_string());
 }
 
@@ -49,9 +61,14 @@ fn terminal_paste_plain_text_does_not_arm_completion_panel() {
     state
         .prompt
         .insert_str("see @[refer-file](/tmp/template.md) then ");
-    // 不存在且带 shell 转义的路径：按普通文本插入，且尾部 `a.md` 看起来像触发词。
+    // 不存在且带 shell 转义的路径：进入文本粘贴面板，确认原文插入后尾部 `a.md` 不触发补全面板。
     let pasted = "/missing/ai_agent_api\\(1\\).md a.md".to_string();
     paste::handle_terminal_paste(&mut state, pasted.clone());
+    assert!(
+        state
+            .prompt
+            .text_paste_confirm(crate::app::paste::TextPasteAction::Raw)
+    );
     assert!(
         state.prompt.text().ends_with(&pasted),
         "原文插入：{:?}",
@@ -147,7 +164,7 @@ fn event_input_paste_overlay_and_prompt_routing() {
         "renamed"
     );
 
-    // 2. prompt 聚焦时：粘贴进入 prompt 编辑器，dirty 置为 true。
+    // 2. prompt 聚焦时：粘贴打开文本粘贴面板，回车确认默认首项（Paste raw）写入 prompt 编辑器。
     state.overlay = None;
     state.set_focus(crate::app::state::FocusedContainer::Prompt);
     dirty = false;
@@ -161,6 +178,12 @@ fn event_input_paste_overlay_and_prompt_routing() {
         &mut dirty,
     );
     assert!(dirty, "prompt 聚焦时粘贴使画面变脏");
+    assert!(state.prompt.text_paste_panel().is_some());
+    assert!(
+        state
+            .prompt
+            .text_paste_confirm(crate::app::paste::TextPasteAction::Raw)
+    );
     assert!(state.prompt.text().contains("hello prompt"));
 }
 
@@ -487,4 +510,93 @@ fn overlay_cut_event_deletes_selection_and_emits_toast() {
         "hello "
     );
     assert!(state.toast.is_some(), "剪切写入剪贴板结果应有 toast");
+}
+
+#[test]
+fn long_text_paste_opens_panel_in_prompt_and_lx_and_up_key_does_not_trigger_history() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
+    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    state.prompt.resize(area.width, area.height);
+
+    // Seed prompt_history so we verify pressing Up in Lx paste panel never recalls history!
+    state.prompt_history.record("previous history entry");
+
+    // 1. Prompt focus: pasting 3 lines opens text paste panel without modifying buffer yet.
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
+    let long_text = "first line\nsecond line\nthird line".to_string();
+    paste::handle_terminal_paste(&mut state, long_text.clone());
+    assert!(state.prompt.text_paste_panel().is_some());
+    assert_eq!(state.prompt.text(), "");
+
+    // Select second item (`Paste text`, index 1) and press Enter to insert `<pasted-text lines="3">...</pasted-text>`.
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.prompt.text_paste_panel().is_none());
+    assert!(state.prompt.text().starts_with("<pasted-text lines=\"3\">"));
+
+    // 2. Lx focus: pasting 3 lines opens lx text paste panel (4 items: Raw, Text, Code, Log).
+    // Pressing Up while panel is open MUST move panel highlight to index 3 (`Paste log`), NOT recall prompt_history!
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
+    let pane_id = state.active_tab().layout.focus();
+    assert!(paste::handle_lx_paste(&mut state, long_text.clone()));
+    assert!(
+        state
+            .pane_anywhere(pane_id)
+            .unwrap()
+            .lx
+            .text_paste_panel()
+            .is_some()
+    );
+    update::apply_lx_input(&mut state, crate::app::actions::LxInput::Up);
+    let lx_after_up = &state.pane_anywhere(pane_id).unwrap().lx;
+    assert!(
+        lx_after_up.text_paste_panel().is_some(),
+        "Pressing Up while Paste panel is open must NOT close panel or trigger history recall"
+    );
+    assert_eq!(lx_after_up.input, "");
+    assert_eq!(lx_after_up.text_paste_panel().unwrap().active(), 3);
+
+    // Press Enter on index 3 (`Paste log`) to confirm `<pasted-log lines="3">`.
+    update::apply_lx_input(&mut state, crate::app::actions::LxInput::Enter);
+    let lx = &state.pane_anywhere(pane_id).unwrap().lx;
+    assert!(lx.text_paste_panel().is_none());
+    assert!(lx.input.starts_with("<pasted-log lines=\"3\">"));
+
+    // 3. Selecting all in Prompt, pasting and confirming clears `AppState.selection`
+    // so subsequent typing does not overwrite the newly inserted chip.
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
+    state.select_all_prompt();
+    assert!(state.selection.is_some());
+    paste::handle_terminal_paste(&mut state, "replaced\nby\nchip".to_string());
+    update::select_paste(&mut state, 1); // Paste text
+    assert!(
+        state.selection.is_none(),
+        "Confirming paste must clear AppState.selection"
+    );
+    update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertChar('Z'),
+    );
+    assert!(state.prompt.text().ends_with("Z"));
+    assert!(state.prompt.text().starts_with("<pasted-text lines=\"3\">"));
 }
