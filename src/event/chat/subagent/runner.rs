@@ -832,6 +832,7 @@ fn launch_child_turn(
                         code: "subagent session busy".into(),
                     },
                     usage: Usage::default(),
+                    billing: Usage::default(),
                 }));
                 return;
             }
@@ -878,6 +879,7 @@ fn launch_child_turn(
             key: stream_key,
             reason: summary.stop_reason(),
             usage: summary.usage,
+            billing: summary.billing,
         }));
     });
     Ok(())

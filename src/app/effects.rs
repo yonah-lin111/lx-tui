@@ -162,13 +162,16 @@ pub enum Effect {
         pane: crate::layout::PaneId,
         generation: u64,
     },
-    /// 终态写入：最后 parts、outcome 与 usage 同事务落库。
+    /// 终态写入：最后 parts、outcome、消息 usage 与整轮 billing 同事务落库。
     FinishChatTurn {
         key: crate::app::state::lx::RequestKey,
         assistant_id: String,
         parts: Vec<crate::db::chat::ChatPart>,
         outcome: crate::db::chat::TurnOutcome,
+        /// 最后一次模型响应：写入消息行（上下文/统计）。
         usage: crate::db::chat::Usage,
+        /// 整轮累计：写入会话账单。
+        billing: crate::db::chat::Usage,
     },
     /// 流中 checkpoint：完整 parts 快照幂等覆盖 streaming 行（≤500ms/4KiB 合并）。
     CheckpointChatTurn {

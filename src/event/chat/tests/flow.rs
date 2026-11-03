@@ -41,6 +41,9 @@ async fn write_then_read_then_final_answer_persists_in_order() {
     assert_eq!(reason, StopReason::Complete);
     assert_eq!(usage.input, Some(4), "只取最后一步，不累加 10 + 4");
     assert_eq!(usage.output, Some(3), "只取最后一步，不累加 2 + 3");
+    // 账单口径仍然跨步累计：CLI/会话统计不能被单步上下文覆盖。
+    assert_eq!(driven.summary.billing.input, Some(14), "10 + 4");
+    assert_eq!(driven.summary.billing.output, Some(5), "2 + 3");
     assert_eq!(driven.unflushed, 0, "没有遗留未回执的 pending");
 
     // ① 可观测顺序：两个调用都先 begin（DB pending 已提交）再 finish。

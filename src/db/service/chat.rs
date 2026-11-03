@@ -429,13 +429,22 @@ impl Persistence {
                 parts,
                 outcome,
                 usage,
+                billing,
             } => {
                 // workspace 按窗格当前归属解析（关闭窗格后仍按原 workspace 完成写入）。
                 let workspace = state
                     .chat_session_key_for_pane(key.pane)
                     .unwrap_or_else(|| std::path::PathBuf::from(""));
-                let success = self
-                    .with_db(|db| db.finish(&workspace, &assistant_id, &parts, &outcome, usage));
+                let success = self.with_db(|db| {
+                    db.finish_with_billing(
+                        &workspace,
+                        &assistant_id,
+                        &parts,
+                        &outcome,
+                        usage,
+                        billing,
+                    )
+                });
                 update::on_finish_ack(state, &key, success.is_some())
             }
             Effect::CheckpointChatTurn {

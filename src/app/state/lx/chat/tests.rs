@@ -121,3 +121,12 @@ fn recompute_without_checkpoint_uses_latest_assistant() {
     chat.recompute_context_tokens(&crate::app::state::LxCompact::default());
     assert_eq!(chat.context_tokens, Some(110));
 }
+
+/// 取消发生在 usage 之前：保留最后已知上下文，不写成 0/None。
+#[test]
+fn close_stream_without_usage_keeps_known_context() {
+    let mut chat = LxChat::new();
+    chat.context_tokens = Some(500);
+    chat.close_stream(&crate::chat::events::StopReason::Cancelled);
+    assert_eq!(chat.context_tokens, Some(500));
+}

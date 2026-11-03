@@ -110,6 +110,7 @@ pub enum AppEvent {
         key: crate::app::state::RequestKey,
         reason: crate::chat::events::StopReason,
         usage: crate::db::chat::Usage,
+        billing: crate::db::chat::Usage,
     },
     /// 子 agent 运行时自动压缩完成：把摘要作为 compact 检查点写入 DB 并挂到子 agent 面板。
     SubagentAutoCompact {
@@ -771,8 +772,21 @@ fn handle_app_event(
             // 工具调用握手：DB 落库门槛 → 状态 → 回执 ticket（顺序不可交换）。
             chat::handle_agent_host_event(state, chat_streams, persistence, event);
         }
-        AppEvent::SubagentFinished { key, reason, usage } => {
-            chat::finish_subagent(state, chat_streams, persistence, key, reason, usage);
+        AppEvent::SubagentFinished {
+            key,
+            reason,
+            usage,
+            billing,
+        } => {
+            chat::finish_subagent_with_billing(
+                state,
+                chat_streams,
+                persistence,
+                key,
+                reason,
+                usage,
+                billing,
+            );
         }
         AppEvent::SubagentAutoCompact { key, notice, reply } => {
             chat::handle_subagent_auto_compact(

@@ -71,8 +71,10 @@ pub use host::{
     AgentHostEvent, BEGIN_TOOL_FAILED_CODE, FINISH_TOOL_FAILED_CODE, RUNNING_TOOL_FAILED_CODE,
 };
 pub use rewind::{RewindOutcome, apply_rewind_effects, handle_rewind_finished};
+#[cfg(test)]
+pub(crate) use subagent::finish_subagent;
 pub(crate) use subagent::{
-    apply_subagent_effects, finish_subagent, handle_subagent_auto_compact,
+    apply_subagent_effects, finish_subagent_with_billing, handle_subagent_auto_compact,
     handle_subagent_net_event, handle_subagent_wait_ready,
 };
 pub use title::{TitleGeneratedEvent, apply_title_effects, handle_title_generated};
@@ -290,11 +292,14 @@ pub enum ChatNetEvent {
         key: RequestKey,
         deltas: Vec<ChatDelta>,
     },
-    /// 整轮结束（含终态原因与**累计** usage）。
+    /// 整轮结束（含终态原因、最后一次响应 usage 与整轮累计 billing）。
     Finished {
         key: RequestKey,
         reason: StopReason,
+        /// 最后一次模型响应：上下文占用与消息统计口径。
         usage: Usage,
+        /// 整轮累计：会话账单与 CLI 统计口径。
+        billing: Usage,
     },
 }
 
@@ -835,6 +840,7 @@ fn fail_turn(sender: &mpsc::UnboundedSender<AppEvent>, key: RequestKey, code: &s
             code: code.to_string(),
         },
         usage: Usage::default(),
+        billing: Usage::default(),
     }));
 }
 
@@ -852,6 +858,7 @@ fn report_turn(sender: mpsc::UnboundedSender<AppEvent>, key: RequestKey, summary
         key,
         reason: summary.stop_reason(),
         usage: summary.usage,
+        billing: summary.billing,
     }));
 }
 
@@ -884,12 +891,17 @@ pub fn handle_net_event(
             }
             update::on_stream_delta(state, &key, &deltas)
         }
-        ChatNetEvent::Finished { key, reason, usage } => {
+        ChatNetEvent::Finished {
+            key,
+            reason,
+            usage,
+            billing,
+        } => {
             // 清除在途取消句柄、checkpoint 与冻结工作区。
             streams.finish(&key);
             // 防御 sweep：流程走完时不应还剩面板；留下就是悬挂 sender。
             let cleared = ask::cancel(state, streams, &key);
-            let settled = update::on_stream_finished(state, &key, &reason, usage);
+            let settled = update::on_stream_finished(state, &key, &reason, usage, billing);
             settled | cleared
         }
     }

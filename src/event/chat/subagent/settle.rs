@@ -14,6 +14,7 @@ use crate::db::new_external_id;
 use crate::layout::PaneId;
 
 /// 子 turn 终态：落库、逐轮报告、按状态机决定继续消费队列或释放恢复标记。
+#[cfg(test)]
 pub(crate) fn finish_subagent(
     state: &mut AppState,
     streams: &mut ChatStreams,
@@ -21,6 +22,19 @@ pub(crate) fn finish_subagent(
     key: RequestKey,
     reason: StopReason,
     usage: Usage,
+) -> bool {
+    finish_subagent_with_billing(state, streams, persistence, key, reason, usage, usage)
+}
+
+/// 子 turn 终态（区分消息 usage 与会话 billing）。
+pub(crate) fn finish_subagent_with_billing(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+    key: RequestKey,
+    reason: StopReason,
+    usage: Usage,
+    billing: Usage,
 ) -> bool {
     let Some(mut handle) = streams.subagents.remove(&key.session) else {
         return false;
@@ -69,6 +83,7 @@ pub(crate) fn finish_subagent(
             &parts,
             &outcome,
             usage,
+            billing,
             Some(&payload),
         ) {
             tracing::warn!(%error, agent_id = %handle.agent_id, "subagent finish failed");
@@ -91,6 +106,7 @@ pub(crate) fn finish_subagent(
             &parts,
             &outcome,
             usage,
+            billing,
             None,
         )
     {

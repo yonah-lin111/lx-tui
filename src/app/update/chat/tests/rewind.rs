@@ -58,6 +58,39 @@ fn assistant_message(id: &str, sequence: i64) -> crate::app::state::ChatMessageV
     }
 }
 
+/// 最小 DB 消息行：只填上下文重算需要的字段。
+fn db_message(
+    sequence: i64,
+    role: &str,
+    input: Option<i64>,
+    output: Option<i64>,
+) -> crate::db::chat::ChatMessage {
+    crate::db::chat::ChatMessage {
+        external_id: format!("m{sequence}"),
+        sequence,
+        turn_index: 0,
+        kind: "chat".into(),
+        user_shell: None,
+        subagent_reports: None,
+        role: role.into(),
+        status: "complete".into(),
+        model_provider: Some("p".into()),
+        model_id: Some("m".into()),
+        variant: None,
+        stop_reason: Some("complete".into()),
+        error_code: None,
+        input_tokens: input,
+        output_tokens: output,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
+        created_at_ms: 0,
+        completed_at_ms: None,
+        parts: Vec::new(),
+        tools: Vec::new(),
+        attachments: Vec::new(),
+    }
+}
+
 fn rewound_state() -> (AppState, PaneId) {
     let mut state = ready_state("");
     let pane = focus_pane(&state);
@@ -662,5 +695,66 @@ fn shell_only_session_does_not_arm_rewind() {
             .armed_at
             .is_none(),
         "只有命令记录时没有可撤销的聊天轮次"
+    );
+}
+
+/// 撤销后的历史重载：上下文只取生效压缩边界之后的最后一条 assistant。
+#[test]
+fn reload_after_rewind_respects_compact_boundary() {
+    let (mut state, pane) = rewound_state();
+    let messages = vec![
+        db_message(0, "user", None, None),
+        db_message(1, "assistant", Some(100), Some(10)),
+        db_message(2, "user", None, None),
+        db_message(3, "assistant", Some(200), Some(20)),
+    ];
+    let checkpoint = |end_sequence: i64| crate::db::chat::CompactCheckpoint {
+        id: "c1".into(),
+        sequence: end_sequence + 1,
+        operation_id: "op".into(),
+        base_checkpoint_id: None,
+        start_sequence: 0,
+        end_sequence,
+        summary_text: "sum".into(),
+        model_label: "m".into(),
+        state: crate::db::chat::COMPACT_ACTIVE.into(),
+        created_at_ms: 0,
+    };
+    let view = |end_sequence: i64| {
+        crate::app::state::CompactNoticeView::from_record(&checkpoint(end_sequence))
+    };
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.compact.replace(vec![view(1)]);
+    }
+    assert!(on_rewind_session_reloaded(
+        &mut state,
+        pane,
+        "sess",
+        &messages,
+        &[],
+        2
+    ));
+    assert_eq!(
+        state.pane_anywhere(pane).unwrap().lx.chat.context_tokens,
+        Some(220),
+        "边界只覆盖 seq 1，seq 3 的 assistant 仍有效"
+    );
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.compact.replace(vec![view(3)]);
+    }
+    assert!(on_rewind_session_reloaded(
+        &mut state,
+        pane,
+        "sess",
+        &messages,
+        &[],
+        3
+    ));
+    assert_eq!(
+        state.pane_anywhere(pane).unwrap().lx.chat.context_tokens,
+        None,
+        "边界覆盖全部消息时清空"
     );
 }

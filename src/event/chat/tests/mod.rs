@@ -415,6 +415,7 @@ where
         key: key.clone(),
         reason: summary.stop_reason(),
         usage: summary.usage,
+        billing: summary.billing,
     });
     pump(
         fixture,
@@ -530,13 +531,23 @@ fn pump(
                 ChatNetEvent::Delta { key, deltas },
             );
         }
-        AppEvent::ChatNet(ChatNetEvent::Finished { key, reason, usage }) => {
+        AppEvent::ChatNet(ChatNetEvent::Finished {
+            key,
+            reason,
+            usage,
+            billing,
+        }) => {
             *finished = Some((reason.clone(), usage));
             handle_net_event(
                 state,
                 streams,
                 persistence,
-                ChatNetEvent::Finished { key, reason, usage },
+                ChatNetEvent::Finished {
+                    key,
+                    reason,
+                    usage,
+                    billing,
+                },
             );
         }
         _ => {}

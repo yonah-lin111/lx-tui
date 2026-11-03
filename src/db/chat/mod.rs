@@ -543,8 +543,8 @@ impl Database {
 
     /// 终态提交：写最后 parts、状态、usage 与 session 时间；重复 finish 幂等。
     ///
-    /// usage 只累计实际返回的 provider 值；重复投递同结果不重复累计 token。
-    /// 与 checkpoint 一致：保留传入 position 与 part 完成时刻，不动已落库的工具行。
+    /// `usage` 同时作为消息级与会话级口径（单步轮次的便捷入口）；需要区分上下文
+    /// 单步与会话账单时用 [`Self::finish_with_billing`]。
     pub fn finish(
         &self,
         workspace: &Path,
@@ -552,6 +552,29 @@ impl Database {
         parts: &[ChatPart],
         outcome: &TurnOutcome,
         usage: Usage,
+    ) -> Result<()> {
+        self.finish_with_billing(
+            workspace,
+            assistant_message_id,
+            parts,
+            outcome,
+            usage,
+            usage,
+        )
+    }
+
+    /// 终态提交：消息行写最后一次响应的 `usage`，会话账单累计整轮 `billing`。
+    ///
+    /// usage 只累计实际返回的 provider 值；重复投递同结果不重复累计 token。
+    /// 与 checkpoint 一致：保留传入 position 与 part 完成时刻，不动已落库的工具行。
+    pub fn finish_with_billing(
+        &self,
+        workspace: &Path,
+        assistant_message_id: &str,
+        parts: &[ChatPart],
+        outcome: &TurnOutcome,
+        usage: Usage,
+        billing: Usage,
     ) -> Result<()> {
         let workspace_external = self
             .workspace_external_id(workspace)?
@@ -603,8 +626,8 @@ impl Database {
                 assistant_message_id,
             ],
         )?;
-        // session 聚合只计实际返回的 usage；None 不贡献假 0。
-        if let (Some(input), Some(output)) = (usage.input, usage.output) {
+        // session 聚合只计实际返回的 usage；None 不贡献假 0。账单口径用整轮 billing。
+        if let (Some(input), Some(output)) = (billing.input, billing.output) {
             transaction.execute(
                 r#"UPDATE agent_session
                    SET total_input_tokens = total_input_tokens + ?1,

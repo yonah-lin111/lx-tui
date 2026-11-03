@@ -338,6 +338,8 @@ pub fn on_turn_committed(
         attachments: Vec::new(),
     });
     target.lx.chat.follow_bottom = true;
+    // 新轮从空聚合槽开始：上一轮终态若被丢弃，不能把旧 usage 带进第一次采样。
+    target.lx.chat.reset_step_usage();
     let key = RequestKey {
         pane,
         session: committed.session_id.clone(),
@@ -463,6 +465,7 @@ pub fn on_stream_finished(
     key: &RequestKey,
     reason: &StopReason,
     usage: Usage,
+    billing: Usage,
 ) -> bool {
     let Some(target) = state.pane_mut_anywhere(key.pane) else {
         return false;
@@ -544,6 +547,7 @@ pub fn on_stream_finished(
             parts,
             outcome,
             usage,
+            billing,
         });
     true
 }

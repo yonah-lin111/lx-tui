@@ -361,11 +361,14 @@ pub enum TurnOutcome {
     Failed { code: String },
 }
 
-/// 一轮结算：终态 + **最后一次模型响应**的 usage（上下文占用口径，不跨步累加）。
+/// 一轮结算：终态 + 最后一次模型响应的 usage（上下文/消息口径）与整轮累计 usage（账单口径）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnSummary {
     pub outcome: TurnOutcome,
+    /// 最后一次模型响应的 usage：上下文占用与消息统计只认它，不跨步累加。
     pub usage: Usage,
+    /// 整轮累计 usage：会话账单与 CLI 统计使用，跨步求和。
+    pub billing: Usage,
 }
 
 impl TurnSummary {
@@ -374,6 +377,7 @@ impl TurnSummary {
         Self {
             outcome: TurnOutcome::Complete,
             usage,
+            billing: usage,
         }
     }
 
@@ -382,6 +386,7 @@ impl TurnSummary {
         Self {
             outcome: TurnOutcome::Interrupted,
             usage,
+            billing: usage,
         }
     }
 
@@ -390,7 +395,14 @@ impl TurnSummary {
         Self {
             outcome: TurnOutcome::Failed { code: code.into() },
             usage,
+            billing: usage,
         }
+    }
+
+    /// 附加整轮累计 usage（账单口径）；默认与单步 usage 相同。
+    pub fn with_billing(mut self, billing: Usage) -> Self {
+        self.billing = billing;
+        self
     }
 
     /// 转成事件层使用的结束原因。
@@ -658,11 +670,12 @@ where
     let mut context = context;
     context.absorb_runtime_summary();
     let mut usage = Usage::default();
+    let mut billing = Usage::default();
     // 不设步数/调用数上限：子 agent 靠自动压缩控制上下文，主会话靠用户停止与
     // `/compact`。这里只保留取消与协议错误两类终止条件。
     loop {
         if *cancel.borrow() {
-            return TurnSummary::interrupted(usage);
+            return TurnSummary::interrupted(usage).with_billing(billing);
         }
         // 每次采样前吸收已落库的本地命令结果；不额外触发模型请求。
         for text in host.user_shell_updates().await {
@@ -672,39 +685,46 @@ where
         if let Err(error) = maybe_auto_compact(&mut context, &mut host, &stream_one, &cancel).await
         {
             return match error {
-                HostError::Cancelled => TurnSummary::interrupted(usage),
-                HostError::Failed { code } => TurnSummary::failed(code, usage),
+                HostError::Cancelled => TurnSummary::interrupted(usage).with_billing(billing),
+                HostError::Failed { code } => {
+                    TurnSummary::failed(code, usage).with_billing(billing)
+                }
             };
         }
         let outcome = stream_one(context.next_request(), cancel.clone()).await;
-        // 上下文占用只认最后一次模型响应的 usage；多步工具循环不跨步累加 input。
+        // 上下文占用只认最后一次模型响应的 usage；账单口径单独跨步累加。
         if let Some(latest) = step_usage(&outcome.deltas) {
+            add_usage(&mut billing, latest);
             usage = latest;
         }
         match &outcome.stop {
-            StopReason::Cancelled => return TurnSummary::interrupted(usage),
-            StopReason::Failed { code } => return TurnSummary::failed(code.clone(), usage),
+            StopReason::Cancelled => return TurnSummary::interrupted(usage).with_billing(billing),
+            StopReason::Failed { code } => {
+                return TurnSummary::failed(code.clone(), usage).with_billing(billing);
+            }
             StopReason::Complete => {}
         }
         // 参数未闭合 / 非法 JSON / call ID 冲突：绝不执行文件 IO，本轮失败。
         let calls = match ready_calls(&outcome.deltas) {
             Ok(calls) => calls,
-            Err(code) => return TurnSummary::failed(code, usage),
+            Err(code) => return TurnSummary::failed(code, usage).with_billing(billing),
         };
         context.push_response(assistant_text(&outcome.deltas), &calls);
         let stop = model_stop(&outcome.deltas);
         if calls.is_empty() {
             return match stop {
                 // 无工具的 Final（以及没有 `ResponseFinished` 的旧式纯文本流）即整轮完成。
-                Some(ModelStepStop::Final) | None => TurnSummary::complete(usage),
+                Some(ModelStepStop::Final) | None => {
+                    TurnSummary::complete(usage).with_billing(billing)
+                }
                 Some(
                     ModelStepStop::ToolCalls | ModelStepStop::Failed | ModelStepStop::Cancelled,
-                ) => TurnSummary::failed(UNEXPECTED_STOP_CODE, usage),
+                ) => TurnSummary::failed(UNEXPECTED_STOP_CODE, usage).with_billing(billing),
             };
         }
         // 新协议下“要求工具”的响应必须声明 ToolCalls；否则不猜、不执行。
         if stop != Some(ModelStepStop::ToolCalls) {
-            return TurnSummary::failed(UNEXPECTED_STOP_CODE, usage);
+            return TurnSummary::failed(UNEXPECTED_STOP_CODE, usage).with_billing(billing);
         }
         // 同一响应内**串行**执行，顺序即供应商 ordinal；前一结果对后一调用可见。
         let mut remaining = calls.into_iter();
@@ -713,19 +733,23 @@ where
                 // 未开始的调用：只在库里留下 `cancelled` 记录（pending → cancelled），
                 // **绝不执行**文件 IO，然后停止本轮。
                 cancel_unstarted(&mut host, std::iter::once(call).chain(remaining)).await;
-                return TurnSummary::interrupted(usage);
+                return TurnSummary::interrupted(usage).with_billing(billing);
             }
             // 门槛一：pending 已提交且可见 loading。ack 前不会有任何文件副作用。
             let ticket = match host.begin_tool(call.clone()).await {
                 Ok(ticket) => ticket,
-                Err(HostError::Cancelled) => return TurnSummary::interrupted(usage),
-                Err(HostError::Failed { code }) => return TurnSummary::failed(code, usage),
+                Err(HostError::Cancelled) => {
+                    return TurnSummary::interrupted(usage).with_billing(billing);
+                }
+                Err(HostError::Failed { code }) => {
+                    return TurnSummary::failed(code, usage).with_billing(billing);
+                }
             };
             if *cancel.borrow() {
                 // 已入库 pending 但尚未执行：结算为 cancelled，绝不执行文件 IO。
                 let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
                 cancel_unstarted(&mut host, remaining).await;
-                return TurnSummary::interrupted(usage);
+                return TurnSummary::interrupted(usage).with_billing(billing);
             }
             // 门槛二：running 已推进（事件层在 ack 内完成），此后才允许文件 IO。
             //
@@ -765,7 +789,7 @@ where
                             Err(HostError::Cancelled) => {
                                 let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
                                 cancel_unstarted(&mut host, remaining).await;
-                                return TurnSummary::interrupted(usage);
+                                return TurnSummary::interrupted(usage).with_billing(billing);
                             }
                             // 并发超限 / 目标不存在：工具级失败，轮次继续。
                             Err(HostError::Failed { code }) => {
@@ -787,7 +811,7 @@ where
                                 // 处理，不再采样。
                                 let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
                                 cancel_unstarted(&mut host, remaining).await;
-                                return TurnSummary::interrupted(usage);
+                                return TurnSummary::interrupted(usage).with_billing(billing);
                             }
                             Err(HostError::Failed { code }) => {
                                 let failure = crate::chat::tools::ToolFailure::new(
@@ -798,7 +822,7 @@ where
                                 let _ = host
                                     .finish_tool(ticket, ToolOutcome::Executed(failure))
                                     .await;
-                                return TurnSummary::failed(code, usage);
+                                return TurnSummary::failed(code, usage).with_billing(billing);
                             }
                         }
                     }
@@ -817,7 +841,7 @@ where
             if result.error_code() == Some(ToolErrorCode::Cancelled) {
                 let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
                 cancel_unstarted(&mut host, remaining).await;
-                return TurnSummary::interrupted(usage);
+                return TurnSummary::interrupted(usage).with_billing(billing);
             }
             let mut content = tools::format_for_model(&result);
             let is_error = result.is_failure();
@@ -832,8 +856,12 @@ where
                 .await
             {
                 Ok(()) => {}
-                Err(HostError::Cancelled) => return TurnSummary::interrupted(usage),
-                Err(HostError::Failed { code }) => return TurnSummary::failed(code, usage),
+                Err(HostError::Cancelled) => {
+                    return TurnSummary::interrupted(usage).with_billing(billing);
+                }
+                Err(HostError::Failed { code }) => {
+                    return TurnSummary::failed(code, usage).with_billing(billing);
+                }
             }
             context.push_tool_result(&call.call_id, content, is_error, tool_images);
         }
@@ -982,4 +1010,20 @@ fn step_usage(deltas: &[ChatDelta]) -> Option<Usage> {
         }
     }
     seen.then_some(step)
+}
+
+/// 累加整轮账单 usage：多次采样求和；未知（None）不写 0 冒充真实值。
+fn add_usage(total: &mut Usage, step: Usage) {
+    total.input = add_optional(total.input, step.input);
+    total.output = add_optional(total.output, step.output);
+    total.cache_read = add_optional(total.cache_read, step.cache_read);
+    total.cache_write = add_optional(total.cache_write, step.cache_write);
+}
+
+/// 可选数值累加：两侧都未知时为 None。
+fn add_optional(total: Option<i64>, step: Option<i64>) -> Option<i64> {
+    match (total, step) {
+        (None, None) => None,
+        (total, step) => Some(total.unwrap_or(0).saturating_add(step.unwrap_or(0))),
+    }
 }

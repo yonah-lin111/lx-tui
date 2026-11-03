@@ -222,6 +222,7 @@ fn finished_settles_reasoning_and_open_tools() {
         &StopReason::Failed {
             code: "timeout".into()
         },
+        Usage::default(),
         Usage::default()
     ));
     let target = state.pane_anywhere(pane).unwrap();
@@ -277,7 +278,13 @@ fn stale_generation_tool_events_do_not_pollute_new_turn() {
 #[test]
 fn events_after_finish_are_ignored() {
     let (mut state, pane, key) = streaming_state("sess-g2");
-    on_stream_finished(&mut state, &key, &StopReason::Complete, Usage::default());
+    on_stream_finished(
+        &mut state,
+        &key,
+        &StopReason::Complete,
+        Usage::default(),
+        Usage::default(),
+    );
     assert!(!on_stream_delta(
         &mut state,
         &key,
@@ -327,7 +334,13 @@ fn finish_snapshot_keeps_real_positions() {
         .map(|step| step.position())
         .collect();
     assert_eq!(positions, vec![0, 1, 2], "步骤位置连续唯一");
-    on_stream_finished(&mut state, &key, &StopReason::Complete, Usage::default());
+    on_stream_finished(
+        &mut state,
+        &key,
+        &StopReason::Complete,
+        Usage::default(),
+        Usage::default(),
+    );
     let parts = state
         .effects
         .iter()

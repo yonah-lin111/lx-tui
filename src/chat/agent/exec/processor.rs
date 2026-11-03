@@ -241,7 +241,7 @@ impl<WOut: Write + Send, WErr: Write + Send> ExecEventProcessor
                     writeln!(self.stdout, "{text}")?;
                     self.stdout.flush()?;
                 }
-                let usage = self.paint(DIM, &usage_line(&summary.usage));
+                let usage = self.paint(DIM, &usage_line(&summary.billing));
                 self.line(&usage);
             }
             TurnOutcome::Interrupted => {
@@ -388,7 +388,7 @@ impl<WOut: Write + Send> ExecEventProcessor for JsonlOutputProcessor<WOut> {
         }
         let event = match &summary.outcome {
             TurnOutcome::Complete => ThreadEvent::TurnCompleted {
-                usage: ExecUsage::from(summary.usage),
+                usage: ExecUsage::from(summary.billing),
             },
             TurnOutcome::Interrupted => ThreadEvent::TurnFailed {
                 error: ThreadError {

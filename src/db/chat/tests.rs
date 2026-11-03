@@ -290,6 +290,43 @@ fn duplicate_finish_is_idempotent_and_does_not_double_count_usage() {
 }
 
 #[test]
+fn finish_with_billing_keeps_message_usage_and_session_totals_separate() {
+    let (database, workspace, _) = database_with_two_workspaces("billing-split");
+    let committed = database
+        .begin_turn(&workspace, None, "hi", &model())
+        .expect("begin");
+    database
+        .finish_with_billing(
+            &workspace,
+            &committed.assistant_message_id,
+            &[part(0, "text", "done")],
+            &TurnOutcome::Complete { stop_reason: None },
+            Usage {
+                input: Some(4),
+                output: Some(3),
+                ..Default::default()
+            },
+            Usage {
+                input: Some(14),
+                output: Some(5),
+                ..Default::default()
+            },
+        )
+        .expect("finish");
+    let messages = database
+        .load_chat_session(&workspace, &committed.session_id)
+        .expect("load")
+        .expect("exists");
+    assert_eq!(messages[1].input_tokens, Some(4), "消息行只存最后一步");
+    assert_eq!(messages[1].output_tokens, Some(3));
+    let sessions = database
+        .list_chat_sessions(&workspace, 0, 10)
+        .expect("list");
+    assert_eq!(sessions[0].total_input_tokens, 14, "会话累计存整轮账单");
+    assert_eq!(sessions[0].total_output_tokens, 5);
+}
+
+#[test]
 fn unknown_usage_stays_null_not_fake_zero() {
     let (database, workspace, _) = database_with_two_workspaces("unknown-usage");
     let committed = database

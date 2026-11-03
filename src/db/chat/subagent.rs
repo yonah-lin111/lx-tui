@@ -259,6 +259,8 @@ impl Database {
     }
 
     /// 子 turn 终态：子 assistant 消息 finish + 输入行结算 + 逐轮报告 + `agent_subagent` 状态。
+    // 参数是同一事务的独立维度（消息、结算、账单、报告），拆结构体只会增加调用噪音。
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_subagent_turn(
         &self,
         workspace: &Path,
@@ -267,9 +269,17 @@ impl Database {
         parts: &[ChatPart],
         outcome: &TurnOutcome,
         usage: Usage,
+        billing: Usage,
         report: Option<&ReportPayload>,
     ) -> Result<()> {
-        self.finish(workspace, child_assistant_id, parts, outcome, usage)?;
+        self.finish_with_billing(
+            workspace,
+            child_assistant_id,
+            parts,
+            outcome,
+            usage,
+            billing,
+        )?;
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;

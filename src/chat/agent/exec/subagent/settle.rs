@@ -36,6 +36,7 @@ impl ExecSubagentPool {
                 &handle.parts,
                 &TurnOutcome::Interrupted,
                 Usage::default(),
+                Usage::default(),
                 None,
             ) {
                 tracing::warn!(target: "lx::exec", code = error.code(), "subagent shutdown finish failed");
@@ -87,6 +88,7 @@ impl ExecSubagentPool {
             &handle.parts,
             &outcome,
             summary.usage,
+            summary.billing,
             report.as_ref(),
         ) {
             tracing::warn!(target: "lx::exec", code = error.code(), "subagent finish failed");

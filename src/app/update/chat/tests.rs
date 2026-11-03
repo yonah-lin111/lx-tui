@@ -313,6 +313,47 @@ fn stream_usage_merges_split_frames_per_step() {
     assert_eq!(context(&state), Some(350), "第二步 = 300 + 50");
 }
 
+/// 新轮开始必须清空上一步残留的聚合槽；首帧只有 output 时不得拼上旧 input。
+#[test]
+fn turn_start_clears_stale_step_usage() {
+    let mut state = ready_state("问");
+    let pane = focus_pane(&state);
+    state.pane_mut_anywhere(pane).unwrap().lx.chat.step_usage = Usage {
+        input: Some(999),
+        output: Some(99),
+        ..Default::default()
+    };
+    try_send(&mut state, pane);
+    let generation = match &state.pane_anywhere(pane).unwrap().lx.chat.request {
+        RequestState::Committing { generation, .. } => *generation,
+        _ => panic!("committing"),
+    };
+    on_turn_committed(&mut state, pane, generation, &committed("sess-1"));
+    assert_eq!(
+        state.pane_anywhere(pane).unwrap().lx.chat.step_usage,
+        Usage::default(),
+        "新轮必须从空聚合槽开始"
+    );
+    let key = RequestKey {
+        pane,
+        session: "sess-1".into(),
+        generation,
+    };
+    on_stream_delta(
+        &mut state,
+        &key,
+        &[ChatDelta::Usage(Usage {
+            output: Some(5),
+            ..Default::default()
+        })],
+    );
+    assert_eq!(
+        state.pane_anywhere(pane).unwrap().lx.chat.context_tokens,
+        Some(5),
+        "不得拼上上一轮残留的 input"
+    );
+}
+
 #[test]
 fn finish_moves_to_finishing_then_idle_with_usage() {
     let mut state = ready_state("问");
@@ -346,7 +387,8 @@ fn finish_moves_to_finishing_then_idle_with_usage() {
             input: Some(42),
             output: Some(7),
             ..Default::default()
-        }
+        },
+        Usage::default()
     ));
     let target = state.pane_anywhere(pane).unwrap();
     assert!(matches!(
@@ -398,6 +440,7 @@ fn finish_ack_failure_keeps_partial_and_shows_error() {
             code: "http 500".into(),
         },
         Usage::default(),
+        Usage::default(),
     );
     assert!(on_finish_ack(&mut state, &key, false), "失败提示");
     // 仍处于 Finishing（保存失败）：不伪装成可恢复历史。
@@ -435,7 +478,13 @@ fn interrupted_partial_stays_visible_but_new_turn_can_start() {
     };
     // 流中停止。
     assert!(stop_stream(&mut state, pane));
-    on_stream_finished(&mut state, &key, &StopReason::Cancelled, Usage::default());
+    on_stream_finished(
+        &mut state,
+        &key,
+        &StopReason::Cancelled,
+        Usage::default(),
+        Usage::default(),
+    );
     assert!(on_finish_ack(&mut state, &key, true));
     // partial 保留展示。
     let target = state.pane_anywhere(pane).unwrap();
@@ -580,7 +629,13 @@ fn model_switch_only_affects_next_turn() {
         session: "sess-1".into(),
         generation,
     };
-    on_stream_finished(&mut state, &key, &StopReason::Complete, Usage::default());
+    on_stream_finished(
+        &mut state,
+        &key,
+        &StopReason::Complete,
+        Usage::default(),
+        Usage::default(),
+    );
     on_finish_ack(&mut state, &key, true);
     state.pane_mut_anywhere(pane).unwrap().lx.input = "第二问".into();
     try_send(&mut state, pane);
@@ -618,7 +673,13 @@ fn usage_unknown_shows_none_not_zero() {
         generation,
     };
     // 无 usage 完成流。
-    on_stream_finished(&mut state, &key, &StopReason::Complete, Usage::default());
+    on_stream_finished(
+        &mut state,
+        &key,
+        &StopReason::Complete,
+        Usage::default(),
+        Usage::default(),
+    );
     let target = state.pane_anywhere(pane).unwrap();
     assert_eq!(target.lx.chat.context_tokens, None, "未知不显示上下文");
 }
@@ -646,7 +707,13 @@ fn slash_new_unbinds_session_and_keeps_stream_writing() {
     };
     // 请求状态已被 new_session 重置？设计：解绑并取消其请求。
     // on_stream_finished 对不匹配状态返回 false，不写其它窗格。
-    let result = on_stream_finished(&mut state, &key, &StopReason::Complete, Usage::default());
+    let result = on_stream_finished(
+        &mut state,
+        &key,
+        &StopReason::Complete,
+        Usage::default(),
+        Usage::default(),
+    );
     // 无论状态如何，事件不串到新会话。
     assert_eq!(state.pane_anywhere(pane).unwrap().lx.chat.messages.len(), 0);
     let _ = result;

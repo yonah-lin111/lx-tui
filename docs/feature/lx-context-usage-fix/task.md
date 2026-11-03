@@ -1,6 +1,6 @@
 # lx 上下文窗口统计单步重构：任务清单
 
-> 状态：**已合并到 dev**（2026-11-03，合并提交 `51f31675`）；自动验证与 CLI 实测通过。
+> 状态：**已合并到 dev 并完成评审修复**（2026-11-03，合并提交 `51f31675`）；自动验证、CLI 实测与 [review.md](./review.md) 修复均通过。
 > 日期：2026-11-03。
 > 设计依据：[design.md](./design.md)。
 
@@ -80,3 +80,13 @@
   - 2 次模型请求的持久化轮次：`turn.completed.input_tokens = 21,142`；隔离库 `agent_message.input_tokens = 21142`、`agent_session.total_input_tokens = 21142`，确认落库也是单步。
 - [x] 合并回 `dev`（合并提交 `51f31675`），合并后重新执行 `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 均通过。
 - [x] 移除 worktree `lx-context-usage-fix`、分支 `fix/lx-context-usage` 及其隔离开发库。
+
+### Task 5：评审与修复（2026-11-03）
+
+- [x] 编写 [review.md](./review.md)，按 P1–P3 记录关键点与错误原因。
+- [x] P1-1：拆出 `TurnSummary.billing`（整轮累计）与 `usage`（最后一步）；消息行、会话账单、CLI 统计各用其口径；新增 DB 与事件流测试。
+- [x] P1-2：`on_turn_committed` 进入 Streaming 前清空 `step_usage`；新增脏槽回归测试。
+- [x] P2-1：同步 design/task 中的 `on_session_reloaded`、`LxCompact` 与 `last_tokens_model` 说明。
+- [x] P2-2：新增 `reload_after_rewind_respects_compact_boundary`。
+- [x] P3-1：统一 `Usage::default()` 写法；新增取消无 usage 时保留已知占用的断言。
+- [x] 验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（4442 passed / 0 failed / 2 ignored）全部通过。

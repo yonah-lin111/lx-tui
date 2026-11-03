@@ -103,6 +103,11 @@ impl Fixture {
                     output: Some(5),
                     ..Usage::default()
                 },
+                Usage {
+                    input: Some(10),
+                    output: Some(5),
+                    ..Usage::default()
+                },
                 report,
             )
             .expect("finish subagent");
@@ -722,6 +727,7 @@ fn enqueue_claim_cancel_and_interrupt_priority_ordering() {
                 &claimed.child_assistant_id,
                 &[part(0, "turn done")],
                 &TurnOutcome::Complete { stop_reason: None },
+                Usage::default(),
                 Usage::default(),
                 Some(&report()),
             )

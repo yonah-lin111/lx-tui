@@ -414,6 +414,7 @@ fn start_stream_fails_the_turn_when_draft_exceeds_context() {
             key: key.clone(),
             reason: reason.clone(),
             usage: Usage::default(),
+            billing: Usage::default(),
         }
     ));
     let message = assistant_message(&state, &key);

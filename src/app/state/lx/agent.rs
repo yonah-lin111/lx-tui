@@ -6,7 +6,7 @@
 pub use crate::chat::agent::SubagentReportView;
 
 use crate::chat::agent::AgentRole;
-use crate::db::chat::SubagentRecord;
+use crate::db::chat::{SubagentRecord, Usage};
 
 use super::chat::{AssistantStepView, ChatMessageView, ChatPartView, LxChat};
 use super::compact::LxCompact;
@@ -188,7 +188,7 @@ pub fn seed_chat_model(
         assistant_id: assistant_id.to_string(),
     };
     // 新一轮从空聚合槽开始：不能把上一轮的 output 带进第一次采样。
-    chat.step_usage = crate::db::chat::Usage::default();
+    chat.step_usage = Usage::default();
     // 子 agent 详情也走同一套步骤渲染：没有 status.streaming，运行中的步骤标记
     // 会被当成终态而不呼吸。终态由 `on_subagent_finished` 复位。
     chat.status.streaming = true;

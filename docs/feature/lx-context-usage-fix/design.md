@@ -1,6 +1,6 @@
 # lx 上下文窗口统计单步重构：设计方案
 
-> 状态：**已合并到 dev**（2026-11-03，合并提交 `51f31675`）；自动验证与 CLI 实测通过。
+> 状态：**已合并到 dev 并完成评审修复**（2026-11-03，合并提交 `51f31675`）；自动验证、CLI 实测与 [review.md](./review.md) 修复均通过。
 > 日期：2026-11-03。
 > 项目：`/Users/yonah/projects/agent/lx-tui`。
 > 配套执行清单：[task.md](./task.md)。
@@ -53,10 +53,10 @@
 
 | 编号 | 决策内容 | 用户确认 |
 | --- | --- | --- |
-| D1 | **单步重构**：对齐 OpenCode / Claude / Codex，消息级 `Usage`（`agent_message` 的 `input_tokens`、`output_tokens`、`cache_read_tokens`、`cache_write_tokens`）重构为记录**最近一次（最后一步）API 响应**的单步快照，不再跨工具步累加；历史测试脏数据无需兼容保留。 | 用户确认：“使用推荐”、“重构为单步的，之前的历史消息也可以不要了，反正也是测试消息” |
+| D1 | **单步重构 + 账单拆分**：对齐 OpenCode / Claude / Codex，消息级 `Usage`（`agent_message` 的四列）重构为记录最近一次 API 响应的单步快照，不再跨工具步累加；同时保留 `TurnSummary.billing` 作为整轮累计，供 `agent_session.total_*` 与 CLI 统计，两个口径不混用。历史测试脏数据无需兼容保留。 | 用户确认：“使用推荐”、“重构为单步的，之前的历史消息也可以不要了，反正也是测试消息” |
 | D2 | **Anthropic 输入归一化与单步分帧合并**：Anthropic 的 `Usage.input` 归一化为完整 Prompt 输入（`input_tokens + cache_read_input_tokens + cache_creation_input_tokens`），与 OpenAI / Gemini 口径统一；同一次 HTTP 响应内分帧到达的 `Usage` 合并为完整单步后再更新 `context_tokens = input + output`。 | 问题 2，用户回答“使用推荐” |
 | D3 | **压缩边界过滤（`/compact`）**：计算/恢复 `context_tokens` 时，严格过滤掉 `sequence <= active_upto_sequence`（已生效压缩边界及之前）的旧消息；刚完成 `/compact` 且尚无新回复时清空 `context_tokens`（隐藏旧百分比），撤销压缩时按新边界恢复。 | 问题 3，用户回答“使用推荐” |
-| D4 | **零数据库表结构变更**：复用现有 `agent_message` 四列存最后一步单步 `Usage`；`agent_session` 的 `total_input_tokens / total_output_tokens` 同样无需改表，不递增 `SCHEMA_VERSION`。 | 问题 4，用户确认重构为单步 |
+| D4 | **零数据库表结构变更**：复用现有 `agent_message` 四列存最后一步单步 `Usage`；`agent_session` 的 `total_input_tokens / total_output_tokens` 同样无需改表，由整轮 `billing` 写入，语义保持跨步求和；不递增 `SCHEMA_VERSION`。 | 问题 4，用户确认重构为单步 |
 
 ---
 
@@ -148,15 +148,19 @@ fn step_usage(deltas: &[ChatDelta]) -> Option<Usage> {
 ```rust
 let outcome = stream_one(context.next_request(), cancel.clone()).await;
 if let Some(latest) = step_usage(&outcome.deltas) {
+    // 上下文口径只保留最后一次响应；账单口径跨步累加。
+    add_usage(&mut billing, latest);
     usage = latest;
 }
 ```
+
+`TurnSummary { usage, billing }` 随事件层一路带到 `on_stream_finished`：消息行写 `usage`，`agent_session.total_*` 与 CLI 统计写 `billing`。
 
 ### 4.3 流式期间的分帧合并与单步重置（`src/app/state/lx/chat.rs` & `src/app/update/chat/mod.rs`）
 
 在 `LxChat` 中维护当前正在流式接收的模型采样步的临时 `step_usage: Usage`：
 
-1. 新轮次开始（`begin_turn` / `finish_response` / `close_stream`）时，`step_usage` 重置为 `Usage::default()`。
+1. 新轮次开始（`on_turn_committed` / `seed_chat_model` / `finish_response` / `close_stream`）时，`step_usage` 重置为 `Usage::default()`。
 2. `on_stream_delta` 收到 `ChatDelta::Usage(usage)` 时：
    - 将非 `None` 的 `input` / `output` / `cache_read` / `cache_write` 合入 `target.lx.chat.step_usage`；
    - 只要 `step_usage.input` 或 `step_usage.output` 有值，立即计算单步上下文占用：

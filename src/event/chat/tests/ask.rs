@@ -325,6 +325,7 @@ fn stream_finish_sweeps_the_pending_ask() {
             key: key.clone(),
             reason: StopReason::Cancelled,
             usage: Usage::default(),
+            billing: Usage::default(),
         },
     );
     assert!(changed);

@@ -19,7 +19,11 @@ mod tests;
 mod tools;
 mod wait;
 
-pub(crate) use settle::{drain_reports, finish_subagent, handle_subagent_auto_compact};
+#[cfg(test)]
+pub(crate) use settle::finish_subagent;
+pub(crate) use settle::{
+    drain_reports, finish_subagent_with_billing, handle_subagent_auto_compact,
+};
 pub(crate) use tools::{begin_child_tool, finish_child_tool};
 pub(crate) use wait::handle_subagent_wait_ready;
 #[cfg(test)]
@@ -446,9 +450,19 @@ pub(crate) fn handle_subagent_net_event(
             changed |= update::on_subagent_delta(state, &key.session, &deltas);
             changed
         }
-        ChatNetEvent::Finished { key, reason, usage } => {
+        ChatNetEvent::Finished {
+            key,
+            reason,
+            usage,
+            billing,
+        } => {
             if let Some(sender) = streams.event_sender.clone() {
-                let _ = sender.send(AppEvent::SubagentFinished { key, reason, usage });
+                let _ = sender.send(AppEvent::SubagentFinished {
+                    key,
+                    reason,
+                    usage,
+                    billing,
+                });
             }
             false
         }
