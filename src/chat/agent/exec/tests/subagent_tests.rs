@@ -9,6 +9,7 @@ use super::fixtures::{
     ScriptedFactory, Step, TestDir, assemble, delayed, session_messages, text_step,
     tool_result_texts, tool_step,
 };
+use crate::chat::agent::{SubagentReportView, format_report_envelope};
 use crate::chat::agent_loop::TurnOutcome;
 use crate::chat::events::RequestPurpose;
 use crate::db::Database;
@@ -227,4 +228,219 @@ async fn wait_agent_all_auto_continues_across_short_timeout_until_child_finishes
         .map(|tool| tool.name.as_str())
         .collect();
     assert_eq!(names, ["spawn_agent", "wait_agent"]);
+}
+
+// ===== 5. `task_name` 路径、`list_agents(path_prefix)` 与变更文件 =====
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_with_task_name_and_list_agents_prefix_and_changed_paths() {
+    let dir = TestDir::new("subagent-task-name");
+    let db = Database::open_in_memory().expect("in-memory db");
+    let spawn_args = r#"{"role":"executor","title":"patch the file","task":"write patched.txt","task_name":"patcher"}"#;
+    let list_args = r#"{"path_prefix":"patcher"}"#;
+    let wait_args = r#"{"targets":["/root/patcher"],"timeout_ms":10000}"#;
+    let write_args = r#"{"path":"patched.txt","content":"patched by child\n"}"#;
+    let config = assemble(&db, &dir, "delegate the file patch", None);
+    let session_id = config.session_id.clone();
+    let factory = ScriptedFactory::new(
+        vec![
+            tool_step(&[("call-spawn", "spawn_agent", spawn_args)]),
+            tool_step(&[("call-list", "list_agents", list_args)]),
+            tool_step(&[("call-wait", "wait_agent", wait_args)]),
+            text_step("parent finished"),
+        ],
+        vec![
+            tool_step(&[("child-write", "write", write_args)]),
+            text_step("patched ok"),
+        ],
+    );
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let summary = run_exec_turn(&db, config, &mut processor, factory.clone(), cancel_rx).await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert_eq!(stdout, b"parent finished\n");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("patched.txt")).expect("child write"),
+        "patched by child\n"
+    );
+
+    let main = factory.main_requests();
+    assert_eq!(main.len(), 4, "parent turns: {}", main.len());
+    let listed = tool_result_texts(&main[2]);
+    let listing = listed.last().expect("list_agents result");
+    assert!(
+        listing.contains("/root/patcher"),
+        "list_agents results: {listed:?}"
+    );
+    let waited = tool_result_texts(&main[3]);
+    let waited = waited.last().expect("wait_agent result");
+    assert!(
+        waited.contains("status=completed") && waited.contains("patched ok"),
+        "wait_agent results: {waited:?}"
+    );
+
+    // 变更路径必须同时进入报告载荷，并由父 agent 的等待结果回显。
+    let report = db
+        .resolve_owned_subagent(&dir.path, &session_id, "/root/patcher")
+        .expect("resolve patcher")
+        .expect("patcher record")
+        .report_json
+        .as_deref()
+        .and_then(SubagentReportView::from_json)
+        .expect("patcher report");
+    assert_eq!(report.changed_paths, ["patched.txt"]);
+    assert!(
+        format_report_envelope(&report).contains("Changed files: patched.txt"),
+        "report envelope: {}",
+        format_report_envelope(&report)
+    );
+    // 父 agent 的等待结果必须直接带出变更文件，而不是只留在 DB/信封里。
+    assert!(
+        waited.contains("Changed files: patched.txt"),
+        "wait_agent must include changed files: {waited:?}"
+    );
+}
+
+// ===== 6. `send_input(trigger_turn = false)` 仅入队 =====
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_input_with_trigger_turn_false_queues_without_waking_idle_subagent() {
+    let dir = TestDir::new("subagent-trigger-turn");
+    let db = Database::open_in_memory().expect("in-memory db");
+    let spawn_args =
+        r#"{"role":"explorer","title":"reader","task":"read the notes","task_name":"reader"}"#;
+    let wait_args = r#"{"timeout_ms":10000}"#;
+    let resume_args = r#"{"id":"/root/reader"}"#;
+    let send_args =
+        r#"{"target":"/root/reader","message":"queued follow-up","trigger_turn":false}"#;
+    let config = assemble(&db, &dir, "queue a follow-up for the reader", None);
+    let factory = ScriptedFactory::new(
+        vec![
+            tool_step(&[("call-spawn", "spawn_agent", spawn_args)]),
+            tool_step(&[("call-wait", "wait_agent", wait_args)]),
+            tool_step(&[("call-resume", "resume_agent", resume_args)]),
+            tool_step(&[("call-send", "send_input", send_args)]),
+            tool_step(&[("call-list", "list_agents", "{}")]),
+            text_step("parent finished"),
+        ],
+        vec![text_step("reader done")],
+    );
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let summary = run_exec_turn(&db, config, &mut processor, factory.clone(), cancel_rx).await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    let main = factory.main_requests();
+    assert_eq!(main.len(), 6, "parent turns: {}", main.len());
+    let sent = tool_result_texts(&main[4]);
+    let sent = sent.last().expect("send_input result");
+    assert!(
+        sent.contains("trigger_turn=false") && sent.contains("queued_count=1"),
+        "send_input results: {sent:?}"
+    );
+    let listed = tool_result_texts(&main[5]);
+    let listing = listed.last().expect("list_agents result");
+    assert!(
+        listing.contains("/root/reader")
+            && listing.contains("status=idle")
+            && listing.contains("queued_count=1"),
+        "list_agents results: {listed:?}"
+    );
+    let child_requests = factory
+        .requests()
+        .iter()
+        .filter(|request| matches!(request.purpose, RequestPurpose::Subagent(_)))
+        .count();
+    assert_eq!(
+        child_requests, 1,
+        "trigger_turn=false must not wake the idle subagent"
+    );
+}
+
+// ===== 7. `interrupt_agent` 半程汇报与 `close_agent` 抑制汇报 =====
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupt_agent_by_path_produces_partial_report_while_close_suppresses_report() {
+    let dir = TestDir::new("subagent-interrupt-close");
+    let db = Database::open_in_memory().expect("in-memory db");
+    let spawn_hanger = r#"{"role":"executor","title":"hanging worker","task":"wait forever","task_name":"hanger"}"#;
+    let spawn_closer =
+        r#"{"role":"executor","title":"closed worker","task":"wait forever","task_name":"closer"}"#;
+    let interrupt_args = r#"{"target":"/root/hanger"}"#;
+    let close_args = r#"{"target":"/root/closer"}"#;
+    let wait_args = r#"{"timeout_ms":10000}"#;
+    let config = assemble(&db, &dir, "stop the workers", None);
+    let session_id = config.session_id.clone();
+    let factory = ScriptedFactory::new(
+        vec![
+            tool_step(&[("call-spawn-hanger", "spawn_agent", spawn_hanger)]),
+            tool_step(&[("call-interrupt", "interrupt_agent", interrupt_args)]),
+            tool_step(&[("call-wait-hanger", "wait_agent", wait_args)]),
+            tool_step(&[("call-spawn-closer", "spawn_agent", spawn_closer)]),
+            tool_step(&[("call-close", "close_agent", close_args)]),
+            tool_step(&[("call-wait-closer", "wait_agent", wait_args)]),
+            text_step("parent finished"),
+        ],
+        vec![Step::Hang, Step::Hang],
+    );
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let summary = run_exec_turn(&db, config, &mut processor, factory.clone(), cancel_rx).await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    let main = factory.main_requests();
+    assert_eq!(main.len(), 7, "parent turns: {}", main.len());
+    let interrupted = tool_result_texts(&main[3]);
+    let interrupted = interrupted.last().expect("interrupt wait_agent result");
+    assert!(
+        interrupted.contains("/root/hanger")
+            && interrupted.contains("status=idle")
+            && interrupted.contains("[Partial report (interrupted)]"),
+        "interrupt wait_agent results: {interrupted:?}"
+    );
+    let closed = tool_result_texts(&main[6]);
+    let closed = closed.last().expect("close wait_agent result");
+    assert!(
+        closed.contains("/root/closer") && closed.contains("status=interrupted"),
+        "close wait_agent results: {closed:?}"
+    );
+    assert!(
+        !closed.contains("Partial report"),
+        "close_agent must not produce a report: {closed:?}"
+    );
+
+    let interrupted_report = db
+        .resolve_owned_subagent(&dir.path, &session_id, "/root/hanger")
+        .expect("resolve hanger")
+        .expect("hanger record")
+        .report_json
+        .as_deref()
+        .and_then(SubagentReportView::from_json)
+        .expect("partial report");
+    assert!(
+        interrupted_report
+            .body
+            .contains("[Partial report (interrupted)]"),
+        "partial body: {}",
+        interrupted_report.body
+    );
+    let closer = db
+        .resolve_owned_subagent(&dir.path, &session_id, "/root/closer")
+        .expect("resolve closer")
+        .expect("closer record");
+    assert!(
+        closer.report_json.is_none(),
+        "close must suppress the report: {:?}",
+        closer.report_json
+    );
 }

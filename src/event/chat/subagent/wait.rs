@@ -243,11 +243,7 @@ pub(crate) fn settle_wait(
     let tree = super::runner::load_subagent_tree(database, workspace, &key.session);
     let queue_states = super::runner::tree_queue_states(database, workspace, &tree);
     let records = tree.records;
-    let pending = database
-        .pending_reports(workspace, &key.session)
-        .unwrap_or_default();
     let mut agents = Vec::new();
-    let mut claimed_report_ids = Vec::new();
     for target in targets {
         let Some(record) = records.iter().find(|record| &record.agent_id == target) else {
             continue;
@@ -258,13 +254,24 @@ pub(crate) fn settle_wait(
             .any(|h| h.agent_id == *target && h.status == STATUS_RUNNING);
         let mut report_bodies = Vec::new();
         if !is_running {
+            let pending = database
+                .pending_reports(workspace, &record.parent_session_id)
+                .unwrap_or_default();
+            let mut claimed_report_ids = Vec::new();
             for item in pending.iter().filter(|r| &r.agent_id == target) {
                 if let Some(view) =
                     crate::app::state::SubagentReportView::from_json(&item.report_json)
                 {
-                    report_bodies.push(view.body);
+                    report_bodies.push(view.body_with_changed_paths());
                     claimed_report_ids.push(item.report_id.clone());
                 }
+            }
+            if !claimed_report_ids.is_empty() {
+                let _ = database.mark_reports_delivered_in_batch(
+                    workspace,
+                    &record.parent_session_id,
+                    &claimed_report_ids,
+                );
             }
         }
         let report = if report_bodies.is_empty() {
@@ -282,10 +289,6 @@ pub(crate) fn settle_wait(
             status,
             report,
         });
-    }
-    if !claimed_report_ids.is_empty() {
-        let _ =
-            database.mark_reports_delivered_in_batch(workspace, &key.session, &claimed_report_ids);
     }
     Ok(SubagentOutcome::Waited {
         timed_out,

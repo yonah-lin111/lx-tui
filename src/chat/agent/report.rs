@@ -106,6 +106,24 @@ impl SubagentReportView {
                 .unwrap_or_default(),
         })
     }
+
+    /// 供 `wait_agent` 回放给父模型的报告文本：有变更文件时在末尾附加 `Changed files:`。
+    pub fn body_with_changed_paths(&self) -> String {
+        if self.changed_paths.is_empty() {
+            return self.body.clone();
+        }
+        let shown: Vec<&str> = self
+            .changed_paths
+            .iter()
+            .take(MAX_REPORT_CHANGED_PATHS)
+            .map(|p| p.trim())
+            .filter(|p| !p.is_empty())
+            .collect();
+        if shown.is_empty() {
+            return self.body.clone();
+        }
+        format!("{}\nChanged files: {}", self.body, shown.join(", "))
+    }
 }
 
 /// 消息 `subagent_report_json` 反序列化：新格式为数组，旧格式为单对象。

@@ -217,9 +217,21 @@ impl ExecSubagentPool {
         reply: oneshot::Sender<Result<SubagentOutcome, HostError>>,
     ) {
         let all = requested.is_empty();
+        let (root_session, _, caller_path) = db
+            .resolve_session_tree_root(&self.workspace, &self.parent_session_id)
+            .unwrap_or_else(|_| {
+                (
+                    self.parent_session_id.clone(),
+                    0,
+                    crate::chat::agent::ROOT_AGENT_PATH.to_string(),
+                )
+            });
         let records = db
-            .list_subagents(&self.workspace, &self.parent_session_id)
-            .unwrap_or_default();
+            .list_subagent_tree(&self.workspace, &root_session)
+            .unwrap_or_else(|_| {
+                db.list_subagents(&self.workspace, &self.parent_session_id)
+                    .unwrap_or_default()
+            });
         let mut unique: Vec<String> = if all {
             records
                 .iter()
@@ -233,10 +245,13 @@ impl ExecSubagentPool {
                     records
                         .iter()
                         .find(|r| {
-                            r.agent_id == trimmed
-                                || r.nickname
-                                    .as_deref()
-                                    .is_some_and(|n| n.eq_ignore_ascii_case(trimmed))
+                            crate::chat::agent::matches_agent_target(
+                                &r.agent_id,
+                                r.nickname.as_deref(),
+                                Some(&r.agent_path),
+                                &caller_path,
+                                trimmed,
+                            )
                         })
                         .map(|r| r.agent_id.clone())
                         .unwrap_or(target)
@@ -424,24 +439,32 @@ impl ExecSubagentPool {
         let records = db
             .list_subagent_tree(&self.workspace, &root_session)
             .unwrap_or_default();
-        let pending = db
-            .pending_reports(&self.workspace, &self.parent_session_id)
-            .unwrap_or_default();
         let queues = db
             .subagent_queue_states(&self.workspace, &self.parent_session_id)
             .unwrap_or_default();
-        let (mut agents, mut claimed) = (Vec::new(), Vec::new());
+        let mut agents = Vec::new();
         for target in targets {
             let Some(record) = records.iter().find(|record| &record.agent_id == target) else {
                 continue;
             };
             let mut bodies = Vec::new();
             if !self.running.contains_key(target) {
+                let pending = db
+                    .pending_reports(&self.workspace, &record.parent_session_id)
+                    .unwrap_or_default();
+                let mut claimed = Vec::new();
                 for item in pending.iter().filter(|item| &item.agent_id == target) {
                     if let Some(view) = SubagentReportView::from_json(&item.report_json) {
-                        bodies.push(view.body);
+                        bodies.push(view.body_with_changed_paths());
                         claimed.push(item.report_id.clone());
                     }
+                }
+                if !claimed.is_empty() {
+                    let _ = db.mark_reports_delivered_in_batch(
+                        &self.workspace,
+                        &record.parent_session_id,
+                        &claimed,
+                    );
                 }
             }
             agents.push(AgentStatusView {
@@ -453,13 +476,6 @@ impl ExecSubagentPool {
                 status: self.projected_status(record, queues.get(target)),
                 report: (!bodies.is_empty()).then(|| bodies.join("\n\n")),
             });
-        }
-        if !claimed.is_empty() {
-            let _ = db.mark_reports_delivered_in_batch(
-                &self.workspace,
-                &self.parent_session_id,
-                &claimed,
-            );
         }
         Ok(SubagentOutcome::Waited {
             timed_out,

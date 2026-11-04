@@ -488,8 +488,30 @@ impl ExecSubagentPool {
             AgentHostRequest::AskUser { reply, .. } => {
                 let _ = reply.send(Err(failed("unsupported in subagent")));
             }
-            AgentHostRequest::Subagent { reply, .. } => {
-                let _ = reply.send(Err(failed("unsupported in subagent")));
+            AgentHostRequest::Subagent { call_id, op, reply } => {
+                let Some(cancel_rx) = self
+                    .running
+                    .get(agent_id)
+                    .filter(|h| {
+                        h.child_session_id == child_session_id
+                            && h.child_assistant_id == child_assistant_id
+                    })
+                    .map(|h| h.cancel_tx.subscribe())
+                else {
+                    let _ = reply.send(Err(HostError::Cancelled));
+                    return;
+                };
+                let saved_parent =
+                    std::mem::replace(&mut self.parent_session_id, child_session_id.to_string());
+                self.handle_op(
+                    db,
+                    child_assistant_id,
+                    call_id.as_deref(),
+                    op,
+                    &cancel_rx,
+                    reply,
+                );
+                self.parent_session_id = saved_parent;
             }
             AgentHostRequest::UserShellUpdates { reply } => {
                 let _ = reply.send(Vec::new());
