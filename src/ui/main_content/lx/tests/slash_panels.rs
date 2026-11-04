@@ -5,7 +5,7 @@ use crate::app::state::lx::slash::{HistoryEntry, HistoryPanel};
 use crate::app::state::{ModelCandidate, ModelPickerStage, SlashPanel};
 
 /// 把整页缓冲区拼成文本行。
-fn buffer_lines(buf: &Buffer, area: Rect) -> Vec<String> {
+pub(super) fn buffer_lines(buf: &Buffer, area: Rect) -> Vec<String> {
     (0..area.height)
         .map(|y| {
             (0..area.width)

@@ -24,7 +24,9 @@ pub fn open_fork_panel(state: &mut AppState, pane: PaneId) -> bool {
             .chat
             .messages
             .iter()
-            .filter(|message| message.role == "user" && message.kind == "chat")
+            .filter(|message| {
+                message.role == "user" && message.kind == "chat" && message.reports.is_empty()
+            })
             .rev()
             .map(|message| {
                 let text = message.text();
@@ -131,29 +133,19 @@ pub fn on_fork_failed(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
-/// 节点展示文本：单行化、剔除控制字符、超过 120 字符截断。
+/// 节点展示文本：单行化、剔除控制字符、按 60 显示列宽截断。
 fn fork_label(text: &str) -> String {
-    const MAX_CHARS: usize = 120;
     let mut out = String::new();
-    let mut truncated = false;
     for ch in text.chars() {
-        if out.chars().count() >= MAX_CHARS {
-            truncated = true;
-            break;
-        }
         match ch {
             '\n' | '\r' => out.push(' '),
             ch if (ch as u32) < 0x20 || ch == '\u{7f}' => {}
             ch => out.push(ch),
         }
     }
-    let out = out.trim();
-    if out.is_empty() {
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
         return text::LX_FORK_EMPTY_MESSAGE.to_string();
     }
-    if truncated {
-        format!("{out}…")
-    } else {
-        out.to_string()
-    }
+    crate::ui::text::truncate_to_width(trimmed, 60)
 }

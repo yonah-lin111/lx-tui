@@ -32,6 +32,7 @@ pub struct ForkEntry {
     /// None = Full session
     pub message_id: Option<String>,
     pub label: String,
+    pub created_at_ms: Option<i64>,
 }
 ```
 
@@ -44,14 +45,15 @@ pub struct ForkPanel {
     pub window: PanelWindow,
     pub filter: String,
     pub filtered: Vec<usize>,
+    pub now_ms: i64,
 }
 ```
 
 - [x] 实现 `ForkPanel::refilter`：
-  - 过滤词变化时重置 `window`；
+  - 过滤词变化时重置 `window`；有搜索词且命中消息时默认高亮第一条匹配项；
   - `filtered` 首项恒为 `0`（Full session）；
   - 其余按 `command_score(label.to_lowercase(), query)` 降序；
-  - 空查询恢复 `0..entries.len()`；
+  - 空查询恢复 `0..entries.len()` 且高亮首项；
   - 末尾 `clamp_window()`。
 - [x] 实现 `ForkPanel::active_entry`、`visible`、`clamp_window`。
 - [x] `SlashPanel` 增加 `Fork(Box<ForkPanel>)`。
@@ -275,6 +277,7 @@ pub const LX_FORK_BUSY: &str = "Session busy — wait for the current turn to fi
 pub const LX_FORK_NOTHING: &str = "Nothing to fork yet.";
 pub const LX_FORK_FAILED: &str = "Fork failed.";
 pub const LX_FORKED: &str = "Forked session";
+pub const LX_FORK_EMPTY_MESSAGE: &str = "(empty message)";
 ```
 
 - [x] 放在 `/resume` / `/model` 文案附近，保持 ASCII + 英文。
@@ -324,6 +327,7 @@ pub const LX_FORKED: &str = "Forked session";
 ### 6.3 App（`src/app/update/chat/tests/fork.rs`）
 
 - [x] `fork_panel_lists_full_session_then_user_messages_newest_first`
+- [x] `fork_panel_excludes_subagent_report_messages`
 - [x] `fork_panel_filter_keeps_full_session`
 - [x] `fork_busy_blocks_panel_and_shows_hint`
 - [x] `fork_without_session_or_messages_blocks`
@@ -336,11 +340,13 @@ pub const LX_FORKED: &str = "Forked session";
 - [x] `fork_selected_message_creates_and_loads_new_session`
 - [x] `fork_full_session_keeps_input_empty`
 - [x] `fork_failure_keeps_source_session_bound`
+- [x] `fork_pane_closed_before_load_does_not_panic`
 
 ### 6.5 UI（`src/ui/main_content/lx/tests/fork_panels.rs`）
 
 - [x] `fork_panel_items_render_full_session_and_message_labels`（含相对时间列）
-- [x] `fork_panel_empty_filter_keeps_all`
+- [x] `fork_panel_renders_time_tag_even_with_long_labels`
+- [x] `fork_panel_empty_filter_keeps_all_entries`
 
 ---
 

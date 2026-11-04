@@ -720,10 +720,19 @@ fn copy_switches(
     Ok(())
 }
 
-/// 受管图片路径前缀替换；没有复制图片目录时原样返回。
+/// 受管图片路径前缀替换；兼容裸路径与 JSON 转义形式；没有复制图片目录时原样返回。
 fn rewrite(value: &str, image_rewrite: &Option<(String, String)>) -> String {
     match image_rewrite {
-        Some((from, to)) => value.replace(from, to),
+        Some((from, to)) => {
+            let replaced = value.replace(from, to);
+            let from_escaped = from.replace('\\', "\\\\");
+            let to_escaped = to.replace('\\', "\\\\");
+            if from_escaped != *from {
+                replaced.replace(&from_escaped, &to_escaped)
+            } else {
+                replaced
+            }
+        }
         None => value.to_string(),
     }
 }

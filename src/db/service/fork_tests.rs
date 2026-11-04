@@ -180,3 +180,24 @@ fn fork_effect_is_routed_by_chat_service() {
         Some(toast) if toast.message == text::LX_FORKED
     ));
 }
+
+#[test]
+fn fork_pane_closed_before_load_does_not_panic() {
+    let (mut service, mut state, cwd, _) = trusted_service("fork-closed");
+    let database = service.db.as_ref().expect("db");
+    let first = seed_turn(database, &cwd, None, "q1");
+    let pane = focused_pane(&state);
+    state.effects.push(Effect::ForkChatSession {
+        pane: crate::layout::PaneId::alloc(), // 不在 state 中的窗格
+        workspace: cwd,
+        session_id: first.session_id,
+        before: Some(first.user_message_id),
+    });
+    // 不 panic，安全返回
+    service.pump(&mut state);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_ne!(
+        target.lx.toast.as_ref().map(|t| t.message.as_str()),
+        Some(text::LX_FORKED)
+    );
+}

@@ -747,10 +747,18 @@ fn render_item(
             preview,
             tag,
         } => {
-            let padding = label_width.saturating_sub(label.width());
-            let label = format!("{label}{}", " ".repeat(padding));
             let available = usize::from(inner.width);
             let tag_label = (!tag.is_empty()).then(|| format!("[{tag}]"));
+            let tag_width = tag_label.as_ref().map_or(0, |t| t.width());
+            let max_label_width = if tag_width > 0 {
+                available.saturating_sub(lead + marker + tag_width + 1)
+            } else {
+                available.saturating_sub(lead + marker)
+            };
+            let effective_label_width = label_width.min(max_label_width);
+            let truncated_label = crate::ui::text::truncate_to_width(label, effective_label_width);
+            let padding = effective_label_width.saturating_sub(truncated_label.width());
+            let label = format!("{truncated_label}{}", " ".repeat(padding));
             // 名称与标签优先；预览按剩余宽度截断，缺空间时整体省略。
             // 行首占前导空格 + 标记列 + 名称 + 间距 + 标签。
             let reserved = lead
@@ -785,9 +793,11 @@ fn render_item(
             }
             if let Some(tag) = tag_label {
                 let used: usize = spans.iter().map(|span| span.content.width()).sum();
-                let pad = available.saturating_sub(used).saturating_sub(tag.width());
-                if pad > 0 {
-                    spans.push(Span::raw(" ".repeat(pad)));
+                if used + tag.width() <= available {
+                    let pad = available - used - tag.width();
+                    if pad > 0 {
+                        spans.push(Span::raw(" ".repeat(pad)));
+                    }
                     spans.push(Span::styled(tag, style::muted()));
                 }
             }

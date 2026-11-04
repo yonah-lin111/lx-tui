@@ -186,17 +186,10 @@ SlashCommand::Fork => super::fork::open_fork_panel(state, pane),
    - 不是 shell 模式（`!target.lx.shell_mode()`）；
    - 全局占用：任一窗格绑定该 session 且 `request.is_busy() || has_running_shell()` → 提示 `LX_FORK_BUSY`；
    - 已绑定 `session_id` → 否则提示 `LX_FORK_NOTHING`；
-   - 至少一条 `role == "user" && kind == "chat"` 的消息 → 否则提示 `LX_FORK_NOTHING`。
+   - 至少一条 `role == "user" && kind == "chat"` 且 `reports.is_empty()` 的消息 → 否则提示 `LX_FORK_NOTHING`。
 5. 通过后构造面板骨架：
 
 ```rust
-pub struct ForkEntry {
-    /// None = Full session
-    pub message_id: Option<String>,
-    /// 单行截断后的展示文本
-    pub label: String,
-}
-
 pub struct ForkEntry {
     /// None = Full session
     pub message_id: Option<String>,
@@ -775,6 +768,7 @@ pub const LX_FORK_BUSY: &str = "Session busy — wait for the current turn to fi
 pub const LX_FORK_NOTHING: &str = "Nothing to fork yet.";
 pub const LX_FORK_FAILED: &str = "Fork failed.";
 pub const LX_FORKED: &str = "Forked session";
+pub const LX_FORK_EMPTY_MESSAGE: &str = "(empty message)";
 ```
 
 `LX_FORK_BUSY` 是独立文案，不复用 `LX_CHAT_SESSION_BUSY`（后者只有 `Session busy`，语义不足以说明“等本轮结束”）。
@@ -856,12 +850,14 @@ pub const LX_FORKED: &str = "Forked session";
    - `service.pump`；
    - 断言窗格 `session_id` 变为新会话、`chat.messages` 只剩复制消息、输入框回填原文、toast `Forked session`。
 2. `fork_full_session_keeps_input_empty`。
-3. `fork_failure_keeps_source_session_bound`：删除源会话后执行 fork，断言提示 `Fork failed.`，窗格仍绑定原 session（或按现有 `on_session_deleted` 变为空白）。
+3. `fork_failure_keeps_source_session_bound`：删除源会话后执行 fork，断言提示 `Fork failed.`，窗格仍绑定原 session。
+4. `fork_pane_closed_before_load_does_not_panic`。
 
 ### 7.5 UI 测试（`src/ui/main_content/lx/tests/fork_panels.rs`）
 
 1. `fork_panel_items_render_full_session_and_message_labels`：条目文本、`Full session` 标签与相对时间列。
-2. `fork_panel_empty_filter_keeps_all`。
+2. `fork_panel_renders_time_tag_even_with_long_labels`：超长 label 截断让位，时间标签稳定渲染。
+3. `fork_panel_empty_filter_keeps_all_entries`。
 
 ### 7.6 回归
 
@@ -908,8 +904,10 @@ pub const LX_FORKED: &str = "Forked session";
 | `src/app/state/lx/chat.rs` | `LxChat.message_times` 与读写方法；加载/重置/新轮同步 |
 | `src/app/state/lx.rs` / `src/app/state.rs` | 重导出 `ForkEntry` / `ForkPanel` |
 | `src/app/update/chat/fork.rs` | 新增：`open_fork_panel` / `on_fork_completed` / `on_fork_failed` |
-| `src/app/update/chat/session.rs` | `apply_slash_command` 增加 Fork；`apply_slash_enter` 增加 Fork 分支；加载时回填消息时间 |
-| `src/app/update/chat/mod.rs` | `mod fork;` + `pub use fork::*`；新轮提交写入消息时间 |
+| `src/app/update/chat/session.rs` | 会话生命周期（加载、重命名、删除、解绑） |
+| `src/app/update/chat/slash.rs` | 拆出：`apply_slash_command` 增加 Fork；`apply_slash_enter` 增加 Fork 分支 |
+| `src/app/update/chat/task_page.rs` | 拆出：后台任务页状态与操作 |
+| `src/app/update/chat/mod.rs` | 导出与路由连接 |
 | `src/app/update/pane.rs` | `refresh_slash_filter` 增加 Fork |
 | `src/app/update/interaction.rs` | `tick_slash_panel_clock` 刷新 Fork 的相对时间基准 |
 | `src/app/effects.rs` | `Effect::ForkChatSession` |

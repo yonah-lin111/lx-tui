@@ -501,6 +501,7 @@ fn shortcut_symbols_are_single_width_non_pua_and_used_consistently() {
     for (name, hint) in [
         ("slash panel", LX_SLASH_PANEL_FOOTER),
         ("history panel", LX_HISTORY_PANEL_FOOTER),
+        ("fork panel", LX_FORK_PANEL_FOOTER),
         ("rewind panel", LX_REWIND_PANEL_FOOTER),
         ("paste panel", LX_PASTE_PANEL_FOOTER),
         ("refer panel", LX_REFER_PANEL_FOOTER),

@@ -579,7 +579,11 @@ impl Persistence {
                     update::on_fork_failed(state, pane);
                     return true;
                 };
-                if !self.load_chat_session_into_pane(state, pane, &workspace, &forked.session_id) {
+                self.load_chat_session_into_pane(state, pane, &workspace, &forked.session_id);
+                let is_bound = state.pane_anywhere(pane).is_some_and(|target| {
+                    target.lx.chat.session_id.as_deref() == Some(&forked.session_id)
+                });
+                if !is_bound {
                     update::on_fork_failed(state, pane);
                     return true;
                 }

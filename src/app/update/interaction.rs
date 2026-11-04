@@ -371,7 +371,21 @@ pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let autosave = prompt_item_editing(state)
         .then(|| state.prompt.autosave_deadline(PROMPT_AUTOSAVE_DELAY))
         .flatten();
-    [toast, lx_toast, tooltip, autoscroll, autosave]
+    let slash_clock = state
+        .all_pane_ids()
+        .into_iter()
+        .filter_map(|pane| state.pane_anywhere(pane))
+        .any(|target| {
+            matches!(
+                target.lx.slash.as_ref(),
+                Some(
+                    crate::app::state::SlashPanel::History(_)
+                        | crate::app::state::SlashPanel::Fork(_)
+                )
+            )
+        })
+        .then(|| Instant::now() + std::time::Duration::from_secs(5));
+    [toast, lx_toast, tooltip, autoscroll, autosave, slash_clock]
         .into_iter()
         .flatten()
         .min()

@@ -443,23 +443,24 @@ pub struct ForkPanel {
 }
 
 impl ForkPanel {
-    /// 按 `query` 重算 `filtered`：`Full session` 恒定保留，其余按消息文本匹配。
+    /// 按 `query` 重算 `filtered`：`Full session` 恒定保留在首位，其余按消息文本匹配。
     ///
-    /// 空查询恢复全量顺序。过滤词变化时重置高亮，避免旧位置落到另一条消息上。
+    /// 空查询恢复全量顺序且高亮首项；有搜索词且命中消息时默认高亮第一条匹配项（避免回车误克隆全量）。
     pub fn refilter(&mut self, query: &str) {
-        if self.filter != query {
+        let filter_changed = self.filter != query;
+        if filter_changed {
             self.filter = query.to_string();
-            self.window = PanelWindow::default();
         }
         let mut filtered = if self.entries.is_empty() {
             Vec::new()
         } else {
             vec![0]
         };
-        if query.trim().is_empty() {
+        let query_trimmed = query.trim();
+        if query_trimmed.is_empty() {
             filtered.extend(1..self.entries.len());
         } else {
-            let query = query.trim().to_lowercase();
+            let query = query_trimmed.to_lowercase();
             let mut scored: Vec<(u32, usize)> = self
                 .entries
                 .iter()
@@ -473,6 +474,14 @@ impl ForkPanel {
             filtered.extend(scored.into_iter().map(|(_, index)| index));
         }
         self.filtered = filtered;
+        if filter_changed {
+            let default_active = if !query_trimmed.is_empty() && self.filtered.len() > 1 {
+                1
+            } else {
+                0
+            };
+            self.window = PanelWindow::new(default_active);
+        }
         self.clamp_window();
     }
 

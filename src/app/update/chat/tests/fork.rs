@@ -65,6 +65,51 @@ fn fork_panel_lists_full_session_then_user_messages_newest_first() {
 }
 
 #[test]
+fn fork_panel_excludes_subagent_report_messages() {
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.session_id = Some("sess".into());
+        let mut report_msg = user_message("u-report", "subagent report envelope");
+        report_msg
+            .reports
+            .push(crate::chat::agent::SubagentReportView {
+                agent_id: "agent-1".into(),
+                title: "report".into(),
+                role: crate::chat::agent::AgentRole::Explorer,
+                status: "completed".into(),
+                files_changed: 0,
+                duration_ms: None,
+                body: "done".into(),
+                delivered_at_ms: 1_000,
+            });
+        target.lx.chat.messages = vec![user_message("u1", "real message"), report_msg];
+    }
+    assert!(open_fork_panel(&mut state, pane));
+    let panel = fork_panel(&state, pane);
+    assert_eq!(panel.entries.len(), 2);
+    assert!(panel.entries[0].is_full_session());
+    assert_eq!(panel.entries[1].message_id.as_deref(), Some("u1"));
+}
+
+#[test]
+fn fork_escape_closes_and_clears() {
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.session_id = Some("sess".into());
+        target.lx.chat.messages = vec![user_message("u1", "first")];
+    }
+    assert!(open_fork_panel(&mut state, pane));
+    assert!(state.pane_anywhere(pane).unwrap().lx.slash.is_some());
+    // 模拟按 Esc：关闭二级面板并整框清空
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Escape);
+    let target = state.pane_anywhere(pane).unwrap();
+    assert!(target.lx.slash.is_none(), "Esc 必须关闭 Fork 面板");
+    assert!(target.lx.input.is_empty(), "Esc 必须清空输入框临时搜索词");
+}
+
+#[test]
 fn fork_panel_filter_keeps_full_session() {
     let mut panel = ForkPanel {
         entries: vec![
@@ -93,7 +138,8 @@ fn fork_panel_filter_keeps_full_session() {
     assert_eq!(panel.filtered, vec![0, 1], "Full session 恒在首位");
     assert_eq!(
         panel.active_entry().and_then(|e| e.message_id.clone()),
-        None
+        Some("u2".into()),
+        "有搜索词时默认高亮第一条匹配消息"
     );
     assert_eq!(panel.entries[1].time_label(panel.now_ms), "5m ago");
 }

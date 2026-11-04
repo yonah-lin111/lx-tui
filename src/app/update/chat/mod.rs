@@ -22,7 +22,9 @@ pub mod model_switch;
 mod process;
 pub mod rewind;
 mod session;
+mod slash;
 mod subagent;
+mod task_page;
 pub mod title;
 pub mod user_shell;
 mod view;
@@ -51,16 +53,17 @@ pub use rewind::{
     on_session_reloaded as on_rewind_session_reloaded, on_succeeded as on_rewind_succeeded,
     open_from_command as open_rewind_from_command, set_active as set_rewind_active,
 };
-#[cfg(test)]
-pub(crate) use session::finish_model_selection;
 pub(crate) use session::show_lx_hint;
-use session::unknown_slash_command;
 pub use session::{
-    apply_models_changed, apply_slash_command, apply_slash_enter, close_task_page, delete_session,
-    new_session, on_history_listed, on_process_listed, on_session_deleted, on_session_loaded,
-    on_session_loaded_full, on_task_output, open_history, open_model_picker, open_task_page,
-    open_task_page_at, persist_default_model, rename_session, resume_session, scroll_task_list,
-    scroll_task_output, select_task_tab, set_task_output_scroll, stop_selected_process,
+    delete_session, new_session, on_history_listed, on_session_deleted, on_session_loaded,
+    on_session_loaded_full, rename_session, resume_session,
+};
+#[cfg(test)]
+pub(crate) use slash::finish_model_selection;
+use slash::unknown_slash_command;
+pub use slash::{
+    apply_models_changed, apply_slash_command, apply_slash_enter, open_history, open_model_picker,
+    persist_default_model,
 };
 pub use subagent::{
     apply_deltas as apply_subagent_deltas, on_report_batch_committed, on_subagent_auto_compact,
@@ -68,6 +71,11 @@ pub use subagent::{
     on_subagent_tool_pending, on_subagent_tool_running, on_subagent_tool_settled, open_agent_page,
     refresh_subagent_cards, scroll_agents_detail, select_task_agent, set_subagent_list,
     set_task_agents_scroll, stop_selected_subagent, toggle_agent_card,
+};
+pub use task_page::{
+    close_task_page, on_process_listed, on_task_output, open_task_page, open_task_page_at,
+    scroll_task_list, scroll_task_output, select_task_tab, set_task_output_scroll,
+    stop_selected_process,
 };
 pub use title::{
     apply_generated_session_title, cancel_session_title, flush_prompt_title_action,
@@ -95,7 +103,7 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         return true;
     }
     // `/rename` 是纯元数据更新，同样早于入口/模型/busy 检查。
-    if session::try_submit_rename_command(state, pane) {
+    if slash::try_submit_rename_command(state, pane) {
         return true;
     }
     // 仅本地命令在跑：普通聊天冻结入队，等结果落库后再发送。
@@ -809,7 +817,7 @@ pub(crate) mod test_hooks {
         pane: PaneId,
         selection: ModelSelection,
     ) {
-        super::session::finish_model_selection(state, pane, selection)
+        super::slash::finish_model_selection(state, pane, selection)
     }
 }
 

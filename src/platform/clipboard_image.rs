@@ -217,7 +217,10 @@ pub fn fork_session_images_in(
     source_session: &str,
     target_session: &str,
 ) -> Result<bool, ImagePrepareError> {
-    if !valid_session_id(source_session) || !valid_session_id(target_session) {
+    if !valid_session_id(source_session)
+        || !valid_session_id(target_session)
+        || source_session == target_session
+    {
         return Ok(false);
     }
     let source_dir = session_image_dir(sessions_root, source_session);
@@ -227,7 +230,8 @@ pub fn fork_session_images_in(
     let target_dir = session_image_dir(sessions_root, target_session);
     let mut copied = false;
     let entries = std::fs::read_dir(&source_dir).map_err(|_| ImagePrepareError::IoError)?;
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.map_err(|_| ImagePrepareError::IoError)?;
         let path = entry.path();
         if !path.is_file() {
             continue;

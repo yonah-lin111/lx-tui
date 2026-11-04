@@ -495,6 +495,17 @@ fn fork_rewrites_managed_image_prefix() {
         super::rewrite("/root/session/source/image/a.png", &None),
         "/root/session/source/image/a.png"
     );
+    let win_rewrite = Some((
+        "C:\\sessions\\source\\image".to_string(),
+        "C:\\sessions\\target\\image".to_string(),
+    ));
+    assert_eq!(
+        super::rewrite(
+            r#"{"path":"C:\\sessions\\source\\image\\a.png"}"#,
+            &win_rewrite
+        ),
+        r#"{"path":"C:\\sessions\\target\\image\\a.png"}"#
+    );
 }
 
 #[test]
