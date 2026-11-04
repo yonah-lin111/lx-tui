@@ -33,15 +33,22 @@ pub(super) fn wait(
         return;
     };
     let parent = key.session.clone();
-    let records = persistence
+    let tree = persistence
         .database()
         .and_then(|database| {
             streams
                 .db_workspaces
                 .get(&key)
-                .and_then(|workspace| database.list_subagents(workspace, &parent).ok())
+                .map(|workspace| super::runner::load_subagent_tree(database, workspace, &parent))
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| super::runner::SubagentTree {
+            root_session: parent.clone(),
+            caller_depth: 0,
+            caller_path: crate::chat::agent::ROOT_AGENT_PATH.to_string(),
+            records: Vec::new(),
+        });
+    let root_session = tree.root_session.clone();
+    let records = tree.records.clone();
     let unique: Vec<String> = if all {
         records
             .iter()
@@ -51,27 +58,21 @@ pub(super) fn wait(
         let mut unique = Vec::new();
         for target in requested {
             let trimmed = target.trim();
-            let resolved = records
-                .iter()
-                .find(|record| {
-                    record.agent_id == trimmed
-                        || record
-                            .nickname
-                            .as_deref()
-                            .is_some_and(|n| n.eq_ignore_ascii_case(trimmed))
-                })
+            let resolved = super::runner::resolve_tree_target(&tree, trimmed)
                 .map(|record| record.agent_id.clone())
                 .or_else(|| {
                     streams
                         .subagents
                         .values()
                         .find(|handle| {
-                            handle.parent.session == parent
-                                && (handle.agent_id == trimmed
-                                    || handle
-                                        .nickname
-                                        .as_deref()
-                                        .is_some_and(|n| n.eq_ignore_ascii_case(trimmed)))
+                            handle.root_session == root_session
+                                && crate::chat::agent::matches_agent_target(
+                                    &handle.agent_id,
+                                    handle.nickname.as_deref(),
+                                    Some(&handle.agent_path),
+                                    &tree.caller_path,
+                                    trimmed,
+                                )
                         })
                         .map(|handle| handle.agent_id.clone())
                 })
@@ -89,14 +90,13 @@ pub(super) fn wait(
         return;
     }
     if !all {
-        // 显式目标必须属于本父会话（在册句柄或 DB 记录）。
-        let known = |agent_id: &str| {
-            streams
-                .subagents
-                .values()
-                .any(|handle| handle.agent_id == agent_id && handle.parent.session == parent)
-                || records.iter().any(|record| record.agent_id == agent_id)
-        };
+        // 显式目标必须属于本根会话树（在册句柄或 DB 记录）。
+        let known =
+            |agent_id: &str| {
+                streams.subagents.values().any(|handle| {
+                    handle.agent_id == agent_id && handle.root_session == root_session
+                }) || records.iter().any(|record| record.agent_id == agent_id)
+            };
         if unique.iter().any(|target| !known(target)) {
             let _ = reply.send(Err(HostError::Failed {
                 code: NOT_FOUND_CODE.to_string(),
@@ -240,16 +240,11 @@ pub(crate) fn settle_wait(
             code: NOT_FOUND_CODE.to_string(),
         });
     };
-    let records = database
-        .list_subagents(workspace, &key.session)
-        .map_err(|error| HostError::Failed {
-            code: error.code().to_string(),
-        })?;
+    let tree = super::runner::load_subagent_tree(database, workspace, &key.session);
+    let queue_states = super::runner::tree_queue_states(database, workspace, &tree);
+    let records = tree.records;
     let pending = database
         .pending_reports(workspace, &key.session)
-        .unwrap_or_default();
-    let queue_states = database
-        .subagent_queue_states(workspace, &key.session)
         .unwrap_or_default();
     let mut agents = Vec::new();
     let mut claimed_report_ids = Vec::new();
@@ -281,6 +276,7 @@ pub(crate) fn settle_wait(
         agents.push(AgentStatusView {
             agent_id: record.agent_id.clone(),
             nickname: record.nickname.clone(),
+            agent_path: Some(record.agent_path.clone()),
             title: record.title.clone(),
             role: record.role,
             status,
@@ -318,15 +314,25 @@ pub(crate) fn handle_subagent_wait_ready(
     reply: oneshot::Sender<Result<SubagentOutcome, HostError>>,
 ) -> bool {
     let parent = key.session.clone();
+    let root_session = persistence
+        .database()
+        .zip(streams.db_workspaces.get(&key))
+        .and_then(|(database, workspace)| {
+            database
+                .resolve_session_tree_root(workspace, &parent)
+                .ok()
+                .map(|(root, _, _)| root)
+        })
+        .unwrap_or(parent);
     let still_running = streams.subagents.values().any(|handle| {
-        handle.parent.session == parent
+        handle.root_session == root_session
             && handle.status == STATUS_RUNNING
             && (all || targets.iter().any(|target| target == &handle.agent_id))
     });
     let any_target_finished = !targets.is_empty()
         && targets.iter().any(|target| {
             !streams.subagents.values().any(|handle| {
-                handle.parent.session == parent
+                handle.root_session == root_session
                     && handle.agent_id == *target
                     && handle.status == STATUS_RUNNING
             })

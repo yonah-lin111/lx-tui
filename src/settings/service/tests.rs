@@ -999,7 +999,13 @@ async fn subagents_api_crud_and_events() {
     let list = request(port, &get(&url)).await;
     assert_eq!(status(&list), 200, "{list}");
     let listing = body(&list);
-    for entry in ["\"maxConcurrent\"", "\"defaults\"", "Turing"] {
+    for entry in [
+        "\"maxConcurrent\"",
+        "\"maxDepth\"",
+        "\"defaultMaxTokens\"",
+        "\"defaults\"",
+        "Turing",
+    ] {
         assert!(listing.contains(entry), "listing: {entry}");
     }
 
@@ -1103,6 +1109,147 @@ async fn subagents_put_partial_payload_preserves_custom_roles() {
     let response = request(port, &get(&format!("/api/subagents?token={token}"))).await;
     let listing = body(&response);
     assert!(listing.contains("\"name\":\"reviewer\""), "{listing}");
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn subagents_round_trip_depth_and_token_budget() {
+    let (service, mut events, _dir) = start("subagents-general-roundtrip").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let origin = format!("http://127.0.0.1:{port}");
+
+    // 默认值：并发 4、深度 2、预算不限。
+    let list = request(port, &get(&format!("/api/subagents?token={token}"))).await;
+    assert_eq!(status(&list), 200, "{list}");
+    let listing = body(&list);
+    assert!(listing.contains("\"maxConcurrent\":4"), "{listing}");
+    assert!(listing.contains("\"maxDepth\":2"), "{listing}");
+    assert!(listing.contains("\"defaultMaxTokens\":null"), "{listing}");
+
+    // general 端点：并发上限取到 12、深度 3、预算 100000。
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/subagents/general?token={token}"),
+            r#"{"maxConcurrent":12,"maxDepth":3,"defaultMaxTokens":100000}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{saved}");
+    match events.try_recv() {
+        Ok(SettingsEvent::SubagentsChanged(section)) => {
+            assert_eq!(section.max_concurrent, 12);
+            assert_eq!(section.max_depth, 3);
+            assert_eq!(section.default_max_tokens, Some(100_000));
+        }
+        other => panic!("expected SubagentsChanged, got {other:?}"),
+    }
+
+    // 全量 PUT 覆盖三个字段。
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/subagents?token={token}"),
+            r#"{"maxConcurrent":6,"maxDepth":1,"defaultMaxTokens":2500}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{saved}");
+    match events.try_recv() {
+        Ok(SettingsEvent::SubagentsChanged(section)) => {
+            assert_eq!(section.max_concurrent, 6);
+            assert_eq!(section.max_depth, 1);
+            assert_eq!(section.default_max_tokens, Some(2_500));
+        }
+        other => panic!("expected SubagentsChanged, got {other:?}"),
+    }
+
+    // 显式 null 清除预算，缺省的 maxDepth 保留原值。
+    let cleared = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/subagents?token={token}"),
+            r#"{"maxConcurrent":6,"defaultMaxTokens":null}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&cleared), 200, "{cleared}");
+    match events.try_recv() {
+        Ok(SettingsEvent::SubagentsChanged(section)) => {
+            assert_eq!(section.max_depth, 1, "omitted maxDepth keeps its value");
+            assert_eq!(section.default_max_tokens, None);
+        }
+        other => panic!("expected SubagentsChanged, got {other:?}"),
+    }
+
+    let after = request(port, &get(&format!("/api/subagents?token={token}"))).await;
+    let after_body = body(&after);
+    assert!(after_body.contains("\"maxConcurrent\":6"), "{after_body}");
+    assert!(after_body.contains("\"maxDepth\":1"), "{after_body}");
+    assert!(
+        after_body.contains("\"defaultMaxTokens\":null"),
+        "{after_body}"
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn subagents_reject_out_of_range_depth_and_concurrency() {
+    let (service, _events, _dir) = start("subagents-range").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let origin = format!("http://127.0.0.1:{port}");
+
+    for depth in [0, 4] {
+        let rejected = request(
+            port,
+            &write(
+                "PUT",
+                &format!("/api/subagents/general?token={token}"),
+                &format!(r#"{{"maxConcurrent":4,"maxDepth":{depth}}}"#),
+                Some(&origin),
+            ),
+        )
+        .await;
+        assert_eq!(status(&rejected), 422, "maxDepth {depth}: {rejected}");
+    }
+
+    let bad_all = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/subagents?token={token}"),
+            r#"{"maxConcurrent":4,"maxDepth":4}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&bad_all), 422, "{bad_all}");
+
+    let too_many = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/subagents?token={token}"),
+            r#"{"maxConcurrent":13,"maxDepth":2}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&too_many), 422, "{too_many}");
+
+    // 被拒绝的写入不改变已保存配置。
+    let list = request(port, &get(&format!("/api/subagents?token={token}"))).await;
+    let listing = body(&list);
+    assert!(listing.contains("\"maxDepth\":2"), "{listing}");
+    assert!(listing.contains("\"maxConcurrent\":4"), "{listing}");
     service.shutdown();
 }
 

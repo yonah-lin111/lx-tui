@@ -289,7 +289,7 @@ impl Database {
             ],
         )?;
 
-        let messages = load_messages(&transaction, source_session, boundary)?;
+        let messages = load_messages(&transaction, source_session, 0, boundary)?;
         let mut message_ids: HashMap<String, String> = HashMap::new();
         for message in &messages {
             let new_id = new_external_id("msg");
@@ -327,7 +327,14 @@ impl Database {
             message_ids.insert(message.external_id.clone(), new_id);
         }
 
-        copy_parts(&transaction, &message_ids, source_session, boundary)?;
+        copy_parts(
+            &transaction,
+            &message_ids,
+            source_session,
+            0,
+            boundary,
+            false,
+        )?;
         copy_tools(
             &transaction,
             new_session_id,
@@ -343,8 +350,8 @@ impl Database {
             boundary,
             image_rewrite,
         )?;
-        copy_checkpoints(&transaction, new_session_id, source_session, boundary)?;
-        copy_switches(&transaction, new_session_id, source_session, boundary)?;
+        copy_checkpoints(&transaction, new_session_id, source_session, 0, boundary)?;
+        copy_switches(&transaction, new_session_id, source_session, 0, boundary)?;
         transaction.commit()?;
         Ok(())
     }
@@ -396,6 +403,48 @@ pub(super) fn completed_boundary_sequence(conn: &Connection, session_id: &str) -
     Ok(i64::MAX)
 }
 
+/// 计算子会话分叉要克隆的已完成历史窗口 `[start_sequence, boundary_sequence)`。
+///
+/// - `fork_turns = None`：全部已完成轮次；
+/// - `fork_turns = Some(0)`：空窗口；
+/// - `fork_turns = Some(n)`：最近 `n` 个已完成的 `turn_index`，起点为该轮最小 `sequence`。
+pub(super) fn completed_fork_window(
+    conn: &Connection,
+    session_id: &str,
+    fork_turns: Option<u32>,
+) -> Result<(i64, i64)> {
+    let boundary = completed_boundary_sequence(conn, session_id)?;
+    let Some(turns) = fork_turns else {
+        return Ok((0, boundary));
+    };
+    if turns == 0 {
+        return Ok((boundary, boundary));
+    }
+    let mut statement = conn.prepare(
+        r#"SELECT DISTINCT turn_index
+           FROM agent_message
+           WHERE session_id = ?1 AND sequence < ?2 AND status <> 'streaming'
+           ORDER BY turn_index DESC
+           LIMIT ?3"#,
+    )?;
+    let turn_indices: Vec<i64> = statement
+        .query_map(params![session_id, boundary, i64::from(turns)], |row| {
+            row.get(0)
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let Some(&min_turn) = turn_indices.last() else {
+        return Ok((boundary, boundary));
+    };
+    let start_seq: i64 = conn.query_row(
+        r#"SELECT COALESCE(MIN(sequence), 0)
+           FROM agent_message
+           WHERE session_id = ?1 AND turn_index >= ?2 AND sequence < ?3"#,
+        params![session_id, min_turn, boundary],
+        |row| row.get(0),
+    )?;
+    Ok((start_seq, boundary))
+}
+
 /// 将源会话 `sequence < boundary` 的已完成历史轮次克隆到子会话，返回子会话下一轮可用的 `(next_sequence, next_turn_index)`。
 pub(super) fn copy_completed_history_to_child(
     transaction: &Connection,
@@ -404,7 +453,29 @@ pub(super) fn copy_completed_history_to_child(
     boundary: i64,
     image_rewrite: &Option<(String, String)>,
 ) -> Result<(i64, i64)> {
-    let messages = load_messages(transaction, source_session, boundary)?;
+    copy_completed_history_window_to_child(
+        transaction,
+        source_session,
+        child_session_id,
+        0,
+        boundary,
+        image_rewrite,
+    )
+}
+
+/// 将源会话 `sequence ∈ [start_seq, boundary)` 的已完成历史克隆到子会话。
+///
+/// 子 agent 分叉的强制清洗：克隆消息的 token 计费字段全部置 NULL、不复制
+/// `reasoning`/`thinking` 思考块、清除父级子 agent 汇报标记。
+pub(super) fn copy_completed_history_window_to_child(
+    transaction: &Connection,
+    source_session: &str,
+    child_session_id: &str,
+    start_seq: i64,
+    boundary: i64,
+    image_rewrite: &Option<(String, String)>,
+) -> Result<(i64, i64)> {
+    let messages = load_messages(transaction, source_session, start_seq, boundary)?;
     let mut message_ids: HashMap<String, String> = HashMap::new();
     let mut max_turn: Option<i64> = None;
     for message in &messages {
@@ -446,10 +517,10 @@ pub(super) fn copy_completed_history_to_child(
                 message.variant,
                 message.stop_reason,
                 message.error_code,
-                message.input_tokens,
-                message.output_tokens,
-                message.cache_read_tokens,
-                message.cache_write_tokens,
+                None::<i64>,
+                None::<i64>,
+                None::<i64>,
+                None::<i64>,
                 message.created_at_ms,
                 message.completed_at_ms,
                 kind,
@@ -462,7 +533,14 @@ pub(super) fn copy_completed_history_to_child(
     }
 
     if !message_ids.is_empty() {
-        copy_parts(transaction, &message_ids, source_session, boundary)?;
+        copy_parts(
+            transaction,
+            &message_ids,
+            source_session,
+            start_seq,
+            boundary,
+            true,
+        )?;
         copy_tools(
             transaction,
             child_session_id,
@@ -478,8 +556,20 @@ pub(super) fn copy_completed_history_to_child(
             boundary,
             image_rewrite,
         )?;
-        copy_checkpoints(transaction, child_session_id, source_session, boundary)?;
-        copy_switches(transaction, child_session_id, source_session, boundary)?;
+        copy_checkpoints(
+            transaction,
+            child_session_id,
+            source_session,
+            start_seq,
+            boundary,
+        )?;
+        copy_switches(
+            transaction,
+            child_session_id,
+            source_session,
+            start_seq,
+            boundary,
+        )?;
     }
 
     let next_seq = super::next_session_sequence(transaction, child_session_id)?;
@@ -507,17 +597,22 @@ fn copy_images(source_session: &str, new_session_id: &str) -> Option<(String, St
     }
 }
 
-fn load_messages(conn: &Connection, session_id: &str, boundary: i64) -> Result<Vec<MessageRow>> {
+fn load_messages(
+    conn: &Connection,
+    session_id: &str,
+    start_seq: i64,
+    boundary: i64,
+) -> Result<Vec<MessageRow>> {
     let mut statement = conn.prepare(
         r#"SELECT external_id, sequence, turn_index, role, status, model_provider, model_id,
                   variant, stop_reason, error_code, input_tokens, output_tokens,
                   cache_read_tokens, cache_write_tokens, created_at_ms, completed_at_ms,
                   kind, user_shell_json, subagent_report_json
            FROM agent_message
-           WHERE session_id = ?1 AND sequence < ?2
+           WHERE session_id = ?1 AND sequence >= ?2 AND sequence < ?3
            ORDER BY sequence"#,
     )?;
-    let rows = statement.query_map(params![session_id, boundary], |row| {
+    let rows = statement.query_map(params![session_id, start_seq, boundary], |row| {
         Ok(MessageRow {
             external_id: row.get(0)?,
             sequence: row.get(1)?,
@@ -548,7 +643,9 @@ fn copy_parts(
     conn: &Connection,
     message_ids: &HashMap<String, String>,
     source_session: &str,
+    start_seq: i64,
     boundary: i64,
+    sanitize_for_subagent: bool,
 ) -> Result<()> {
     let mut statement = conn.prepare(
         r#"SELECT p.message_id, p.position, p.kind, p.content,
@@ -556,11 +653,11 @@ fn copy_parts(
                   p.ended_at_ms, p.completed_at_ms
            FROM agent_message_part p
            JOIN agent_message m ON m.external_id = p.message_id
-           WHERE m.session_id = ?1 AND m.sequence < ?2
+           WHERE m.session_id = ?1 AND m.sequence >= ?2 AND m.sequence < ?3
            ORDER BY p.message_id, p.position"#,
     )?;
     let rows = statement
-        .query_map(params![source_session, boundary], |row| {
+        .query_map(params![source_session, start_seq, boundary], |row| {
             Ok(PartRow {
                 message_id: row.get(0)?,
                 position: row.get(1)?,
@@ -575,6 +672,9 @@ fn copy_parts(
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     for row in rows {
+        if sanitize_for_subagent && matches!(row.kind.as_str(), "reasoning" | "thinking") {
+            continue;
+        }
         let Some(message_id) = message_ids.get(&row.message_id) else {
             continue;
         };
@@ -729,17 +829,19 @@ fn copy_checkpoints(
     conn: &Connection,
     new_session_id: &str,
     source_session: &str,
+    start_seq: i64,
     boundary: i64,
 ) -> Result<()> {
     let mut statement = conn.prepare(
         r#"SELECT external_id, sequence, base_checkpoint_id, start_sequence, end_sequence,
                   summary_text, model_label, created_at_ms
            FROM agent_compact_checkpoint
-           WHERE session_id = ?1 AND state = 'active' AND end_sequence < ?2
+           WHERE session_id = ?1 AND state = 'active'
+             AND end_sequence >= ?2 AND end_sequence < ?3
            ORDER BY sequence"#,
     )?;
     let rows = statement
-        .query_map(params![source_session, boundary], |row| {
+        .query_map(params![source_session, start_seq, boundary], |row| {
             Ok(CheckpointRow {
                 external_id: row.get(0)?,
                 sequence: row.get(1)?,
@@ -786,6 +888,7 @@ fn copy_switches(
     conn: &Connection,
     new_session_id: &str,
     source_session: &str,
+    start_seq: i64,
     boundary: i64,
 ) -> Result<()> {
     let mut statement = conn.prepare(
@@ -793,11 +896,11 @@ fn copy_switches(
                   to_variant, from_label, to_label, updated_sources_json, injected_prompt,
                   created_at_ms
            FROM agent_model_switch
-           WHERE session_id = ?1 AND sequence < ?2
+           WHERE session_id = ?1 AND sequence >= ?2 AND sequence < ?3
            ORDER BY sequence"#,
     )?;
     let rows = statement
-        .query_map(params![source_session, boundary], |row| {
+        .query_map(params![source_session, start_seq, boundary], |row| {
             Ok(SwitchRow {
                 sequence: row.get(0)?,
                 from_provider: row.get(1)?,

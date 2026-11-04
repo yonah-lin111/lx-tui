@@ -350,6 +350,7 @@ fn page_keys_scroll_the_agents_detail_on_the_agents_tab() {
     let mut run = crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
         agent_id: "a1".into(),
         nickname: None,
+        agent_path: "/root/agent".into(),
         child_session_id: "s1".into(),
         parent_session_id: "sess-1".into(),
         spawn_message_id: None,
@@ -411,6 +412,7 @@ fn ctrl_d_on_agents_tab_stops_the_selected_subagent() {
         crate::app::state::lx::agent::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
             agent_id: "sub-a".into(),
             nickname: None,
+            agent_path: "/root/agent".into(),
             child_session_id: "sess-a".into(),
             parent_session_id: "sess-1".into(),
             spawn_message_id: None,
@@ -432,6 +434,7 @@ fn ctrl_d_on_agents_tab_stops_the_selected_subagent() {
         crate::app::state::lx::agent::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
             agent_id: "sub-b".into(),
             nickname: None,
+            agent_path: "/root/agent".into(),
             child_session_id: "sess-b".into(),
             parent_session_id: "sess-1".into(),
             spawn_message_id: None,
@@ -718,4 +721,95 @@ fn new_session_clears_the_previous_plan() {
     let chat = &state.pane_anywhere(pane).unwrap().lx.chat;
     assert!(chat.plan.is_none(), "新会话不得继承上一会话的计划");
     assert!(chat.selected_tool.is_none(), "选中态也要清");
+}
+
+/// 运行中的子 agent 记录（记录里带规范路径）。
+fn running_agent(agent_id: &str, child_session: &str) -> crate::app::state::SubagentRun {
+    crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+        agent_id: agent_id.into(),
+        nickname: None,
+        agent_path: format!("/root/{agent_id}"),
+        child_session_id: child_session.into(),
+        parent_session_id: "sess-1".into(),
+        spawn_message_id: None,
+        role: crate::chat::agent::AgentRole::Explorer,
+        model_provider: String::new(),
+        model_id: String::new(),
+        model_variant: None,
+        status: "running".into(),
+        title: "investigate".into(),
+        created_at_ms: 0,
+        completed_at_ms: None,
+        report_json: None,
+        report_delivered: false,
+    })
+}
+
+#[test]
+fn ctrl_a_on_agents_tab_stops_all_subagents() {
+    let (mut state, pane) = state_with_session("");
+    assert!(open_task_page(&mut state, pane));
+    if let Some(page) = state.pane_mut_anywhere(pane).unwrap().lx.task.as_mut() {
+        page.tab = TaskTab::Agents;
+    }
+    assert!(crate::app::update::on_subagent_started(
+        &mut state,
+        pane,
+        running_agent("sub-a", "sess-a")
+    ));
+    assert!(crate::app::update::on_subagent_started(
+        &mut state,
+        pane,
+        running_agent("sub-b", "sess-b")
+    ));
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::LineStart);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::CancelSubagents { session_id, agent_id }
+                if session_id == "sess-1" && agent_id.is_none()
+        )),
+        "^a 停止整棵会话树：{:?}",
+        state.effects
+    );
+    let toast = state
+        .pane_anywhere(pane)
+        .unwrap()
+        .lx
+        .toast
+        .as_ref()
+        .expect("toast");
+    assert!(
+        toast.message.contains('2'),
+        "提示全部 2 个：{}",
+        toast.message
+    );
+}
+
+#[test]
+fn subagents_slash_command_opens_the_agents_tab() {
+    assert_eq!(
+        crate::app::state::SlashPanel::commands_matching("/agents").first(),
+        Some(&crate::app::state::SlashCommand::Subagents),
+        "`/agents` 是 `/subagents` 的别名"
+    );
+    let (mut state, pane) = state_with_session("");
+    state.effects.clear();
+    assert!(crate::app::update::chat::apply_slash_command(
+        &mut state,
+        pane,
+        crate::app::state::SlashCommand::Subagents
+    ));
+    let page = page(&state, pane);
+    assert_eq!(page.tab, TaskTab::Agents);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::ListSubagents { pane: p, parent_session }
+                if *p == pane && parent_session == "sess-1"
+        )),
+        "打开面板即请求子 agent 列表：{:?}",
+        state.effects
+    );
 }

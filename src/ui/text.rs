@@ -901,10 +901,11 @@ pub const LX_TASK_HINTS_PROCESSES: [Hint; 4] = [
     hint("tabs", "←→"),
     hint("back", "esc"),
 ];
-/// 子代理 tab 的键位提示（与进程列表同一套动作）。
-pub const LX_TASK_HINTS_AGENTS: [Hint; 4] = [
+/// 子代理 tab 的键位提示（`^d` 停选中项、`^a` 停整树）。
+pub const LX_TASK_HINTS_AGENTS: [Hint; 5] = [
     hint("select", "↑↓"),
-    hint("stop all", "^d"),
+    hint("stop", "^d"),
+    hint("stop all", "^a"),
     hint("tabs", "←→"),
     hint("back", "esc"),
 ];

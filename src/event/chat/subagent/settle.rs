@@ -41,6 +41,8 @@ pub(crate) fn finish_subagent_with_billing(
     };
     let was_interrupted_by_input = streams.interrupted_subagents.remove(&handle.agent_id);
     let was_paused_by_interrupt = streams.paused_by_interrupt.remove(&handle.agent_id);
+    // `close_agent` / 用户停止 / 会话或应用关闭：即使本轮被取消也不生成报告。
+    let was_closed = handle.closed_without_report;
     handle.status = match reason {
         StopReason::Complete => STATUS_COMPLETED,
         StopReason::Cancelled => STATUS_CANCELLED,
@@ -59,24 +61,34 @@ pub(crate) fn finish_subagent_with_billing(
         },
     };
     let duration_ms = Some((crate::db::now_ms() - handle.started_at_ms).max(0));
+    let budget_hit = budget_exceeded(&reason, handle.max_tokens, usage);
     let mut report_view = None;
-    if !matches!(reason, StopReason::Cancelled)
-        && let Some(database) = persistence.database()
-    {
-        let body = report_body(&handle);
-        let files_changed = database
-            .count_changed_paths(
-                &handle.workspace,
-                &key.session,
-                &handle.child_user_message_id,
-            )
-            .unwrap_or_default();
-        let payload = ReportPayload {
-            title: handle.title.clone(),
-            body: body.clone(),
-            files_changed,
-            duration_ms,
-        };
+    if let Some(database) = persistence.database() {
+        let report = (!was_closed).then(|| {
+            let (files_changed, changed_paths) = database
+                .list_changed_paths(
+                    &handle.workspace,
+                    &key.session,
+                    &handle.child_user_message_id,
+                )
+                .unwrap_or_default();
+            let mut body = report_body(&handle);
+            if !matches!(reason, StopReason::Complete) && body.trim().is_empty() {
+                body = crate::chat::agent::synthesize_partial_report_body(
+                    &body,
+                    completed_tools(&handle.chat, &handle.child_assistant_id),
+                    &changed_paths,
+                    partial_reason_label(&reason, handle.max_tokens, usage),
+                );
+            }
+            ReportPayload {
+                title: handle.title.clone(),
+                body,
+                files_changed,
+                changed_paths,
+                duration_ms,
+            }
+        });
         if let Err(error) = database.finish_subagent_turn(
             &handle.workspace,
             &handle.agent_id,
@@ -85,34 +97,22 @@ pub(crate) fn finish_subagent_with_billing(
             &outcome,
             usage,
             billing,
-            Some(&payload),
+            report.as_ref(),
         ) {
             tracing::warn!(%error, agent_id = %handle.agent_id, "subagent finish failed");
         }
-        report_view = Some(SubagentReportView {
+        report_view = report.map(|payload| SubagentReportView {
             agent_id: handle.agent_id.clone(),
             nickname: handle.nickname.clone(),
             title: handle.title.clone(),
             role: handle.role,
             status: handle.status.to_string(),
-            files_changed,
-            duration_ms,
-            body,
+            files_changed: payload.files_changed,
+            changed_paths: payload.changed_paths,
+            duration_ms: payload.duration_ms,
+            body: payload.body,
             delivered_at_ms: crate::db::now_ms(),
         });
-    } else if let Some(database) = persistence.database()
-        && let Err(error) = database.finish_subagent_turn(
-            &handle.workspace,
-            &handle.agent_id,
-            &handle.child_assistant_id,
-            &parts,
-            &outcome,
-            usage,
-            billing,
-            None,
-        )
-    {
-        tracing::warn!(%error, agent_id = %handle.agent_id, "subagent cancel finish failed");
     }
 
     let _ = update::on_subagent_finished(state, &key.session, handle.status, report_view, usage);
@@ -186,8 +186,8 @@ pub(crate) fn finish_subagent_with_billing(
                 ) {
                     continued = true;
                 }
-            } else if was_paused_by_interrupt {
-                // `interrupt_agent`：保持 `idle` 活动态，暂停自动消费后续排队队列。
+            } else if was_paused_by_interrupt || budget_hit {
+                // `interrupt_agent` / 预算熔断：保持 `idle` 活动态，暂停自动消费后续排队队列。
                 streams.paused_by_interrupt.insert(handle.agent_id.clone());
                 streams.resumed_subagents.insert(handle.agent_id.clone());
                 if let Some(pane) = state.pane_mut_anywhere(handle.parent.pane)
@@ -380,6 +380,47 @@ fn report_body(handle: &SubagentHandle) -> String {
         .map(|message| message.text())
         .unwrap_or_default();
     crate::chat::agent::truncate_report_body(&text)
+}
+
+/// 本轮已结算的工具调用数（半程汇报正文用）。
+fn completed_tools(chat: &crate::app::state::LxChat, assistant_id: &str) -> usize {
+    chat.messages
+        .iter()
+        .find(|message| message.id == assistant_id)
+        .map(|message| {
+            message
+                .steps
+                .iter()
+                .filter(|step| matches!(step, crate::app::state::AssistantStepView::Tool { .. }))
+                .count()
+        })
+        .unwrap_or_default()
+}
+
+/// 交互式事件层拿不到 `TurnSummary.budget_exceeded`：用「被取消 + 本步用量已达预算」识别熔断。
+fn budget_exceeded(reason: &StopReason, max_tokens: Option<u64>, usage: Usage) -> bool {
+    matches!(reason, StopReason::Cancelled)
+        && max_tokens
+            .is_some_and(|limit| usage.context_tokens().is_some_and(|tokens| tokens >= limit))
+}
+
+/// 半程汇报的停止原因标签（英文稳定值，写进正文）。
+fn partial_reason_label(
+    reason: &StopReason,
+    max_tokens: Option<u64>,
+    usage: Usage,
+) -> &'static str {
+    if budget_exceeded(reason, max_tokens, usage) {
+        return "budget_exceeded";
+    }
+    match reason {
+        StopReason::Cancelled => "interrupted",
+        StopReason::Failed { code } if code == crate::chat::agent::BUDGET_EXCEEDED_CODE => {
+            "budget_exceeded"
+        }
+        StopReason::Failed { .. } => "failed",
+        StopReason::Complete => "complete",
+    }
 }
 
 /// 从子会话消息模型取 assistant 的 parts（位置来自同一时间线）。

@@ -7,7 +7,10 @@ let subagentBaseRoleSelect = null;
 let subagentModelSelect = null;
 let subagentEffortSelect = null;
 
-let subagentsBaselineMaxConcurrent = 3;
+let subagentsBaselineMaxConcurrent = 4;
+let subagentsBaselineMaxDepth = 2;
+let subagentsBaselineDefaultMaxTokens = null;
+let subagentsGeneralInputsWired = false;
 const subagentBaselines = new Map();
 const subagentDrafts = new Map();
 let subagentNewDraft = null;
@@ -107,10 +110,48 @@ function currentMaxConcurrentValue() {
   return el ? Number(el.value) : subagentsBaselineMaxConcurrent;
 }
 
+function currentMaxDepthValue() {
+  const el = document.getElementById('subagents-max-depth');
+  return el ? Number(el.value) : subagentsBaselineMaxDepth;
+}
+
+function currentDefaultMaxTokensValue() {
+  const el = document.getElementById('subagents-default-max-tokens');
+  if (!el) { return subagentsBaselineDefaultMaxTokens; }
+  const raw = (el.value || '').trim();
+  return raw === '' ? null : Number(raw);
+}
+
+function validateSubagentsGeneral(maxConcurrent, maxDepth, defaultMaxTokens) {
+  if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 12) {
+    return 'Max concurrent subagents must be an integer between 1 and 12';
+  }
+  if (!Number.isInteger(maxDepth) || maxDepth < 1 || maxDepth > 3) {
+    return 'Max delegation depth must be an integer between 1 and 3';
+  }
+  if (defaultMaxTokens !== null && (!Number.isInteger(defaultMaxTokens) || defaultMaxTokens < 1000)) {
+    return 'Default token budget must be empty or an integer of at least 1000';
+  }
+  return null;
+}
+
+function ensureSubagentsGeneralInputs() {
+  if (subagentsGeneralInputsWired) { return; }
+  subagentsGeneralInputsWired = true;
+  for (const id of ['subagents-max-concurrent', 'subagents-max-depth', 'subagents-default-max-tokens']) {
+    const el = document.getElementById(id);
+    if (!el) { continue; }
+    el.addEventListener('input', () => { refreshActionBars(); });
+    el.addEventListener('change', () => { refreshActionBars(); });
+  }
+}
+
 function subagentsDirty() {
   syncSubagentEditorToDraft();
   if (subagentsState === null) { return false; }
   if (currentMaxConcurrentValue() !== subagentsBaselineMaxConcurrent) { return true; }
+  if (currentMaxDepthValue() !== subagentsBaselineMaxDepth) { return true; }
+  if (currentDefaultMaxTokensValue() !== subagentsBaselineDefaultMaxTokens) { return true; }
   for (const name of subagentDrafts.keys()) {
     if (isSubagentRoleDirty(name)) { return true; }
   }
@@ -221,9 +262,20 @@ async function loadSubagents(showReloadToast) {
   try {
     const data = await api('/api/subagents');
     subagentsState = data;
-    subagentsBaselineMaxConcurrent = Number(data.maxConcurrent || 3);
+    ensureSubagentsGeneralInputs();
+    subagentsBaselineMaxConcurrent = Number(data.maxConcurrent || 4);
+    subagentsBaselineMaxDepth = Number(data.maxDepth || 2);
+    subagentsBaselineDefaultMaxTokens = (data.defaultMaxTokens === null || data.defaultMaxTokens === undefined)
+      ? null
+      : Number(data.defaultMaxTokens);
     const maxInput = document.getElementById('subagents-max-concurrent');
     if (maxInput) { maxInput.value = String(subagentsBaselineMaxConcurrent); }
+    const depthInput = document.getElementById('subagents-max-depth');
+    if (depthInput) { depthInput.value = String(subagentsBaselineMaxDepth); }
+    const tokensInput = document.getElementById('subagents-default-max-tokens');
+    if (tokensInput) {
+      tokensInput.value = subagentsBaselineDefaultMaxTokens === null ? '' : String(subagentsBaselineDefaultMaxTokens);
+    }
 
     const previousName = subagentsSelectedName;
     subagentBaselines.clear();
@@ -390,6 +442,12 @@ async function deleteSubagentRole() {
 function resetSubagents() {
   const maxInput = document.getElementById('subagents-max-concurrent');
   if (maxInput) { maxInput.value = String(subagentsBaselineMaxConcurrent); }
+  const depthInput = document.getElementById('subagents-max-depth');
+  if (depthInput) { depthInput.value = String(subagentsBaselineMaxDepth); }
+  const tokensInput = document.getElementById('subagents-default-max-tokens');
+  if (tokensInput) {
+    tokensInput.value = subagentsBaselineDefaultMaxTokens === null ? '' : String(subagentsBaselineDefaultMaxTokens);
+  }
   const keepName = (!subagentsNew && subagentsSelectedName && subagentBaselines.has(subagentsSelectedName))
     ? subagentsSelectedName
     : 'explorer';
@@ -427,6 +485,15 @@ async function saveSubagents() {
   syncSubagentEditorToDraft();
   if (!subagentsDirty()) { return; }
 
+  const maxConcurrent = currentMaxConcurrentValue();
+  const maxDepth = currentMaxDepthValue();
+  const defaultMaxTokens = currentDefaultMaxTokensValue();
+  const validationError = validateSubagentsGeneral(maxConcurrent, maxDepth, defaultMaxTokens);
+  if (validationError) {
+    showToast(validationError, 'error');
+    throw new Error(validationError);
+  }
+
   const defaults = (subagentsState && subagentsState.defaults) || {};
   const explorerRec = subagentDrafts.get('explorer') || subagentBaselines.get('explorer');
   const executorRec = subagentDrafts.get('executor') || subagentBaselines.get('executor');
@@ -445,7 +512,9 @@ async function saveSubagents() {
   }
 
   const payload = {
-    maxConcurrent: currentMaxConcurrentValue(),
+    maxConcurrent: maxConcurrent,
+    maxDepth: maxDepth,
+    defaultMaxTokens: defaultMaxTokens,
     builtins: {
       explorer: recordToBuiltinOverride(explorerRec, defaults.explorer),
       executor: recordToBuiltinOverride(executorRec, defaults.executor)

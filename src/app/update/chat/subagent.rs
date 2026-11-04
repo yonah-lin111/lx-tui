@@ -64,7 +64,9 @@ pub fn on_subagent_delta(state: &mut AppState, child_session: &str, deltas: &[Ch
     if changed {
         run.rows_dirty = true;
     }
-    changed
+    // 子 agent 的实时动作（在途工具 / 思考 / 正文）挂在父消息的 spawn 卡片上：
+    // 每次增量都要同步，否则要等下一次主轮事件才会刷新。
+    changed | refresh_subagent_cards(state, pane)
 }
 
 /// 子 agent 卡片状态回填：
@@ -76,11 +78,38 @@ pub fn refresh_subagent_cards(state: &mut AppState, pane: PaneId) -> bool {
     struct RunCardSnapshot {
         agent_id: String,
         nickname: Option<String>,
+        agent_path: String,
         role: AgentRole,
         title: String,
         status: String,
         report: Option<SubagentReportView>,
+        live_activity: Option<String>,
     }
+
+    impl RunCardSnapshot {
+        /// 由当前 run 快照生成 wait/list 共用的结算视图。
+        fn status_view(&self, reports: &[SubagentReportView]) -> AgentStatusView {
+            AgentStatusView {
+                agent_id: self.agent_id.clone(),
+                nickname: self.nickname.clone(),
+                agent_path: Some(self.agent_path.clone()),
+                title: self.title.clone(),
+                role: self.role,
+                status: self.status.clone(),
+                report: self
+                    .report
+                    .as_ref()
+                    .map(|report| report.body.clone())
+                    .or_else(|| {
+                        reports
+                            .iter()
+                            .find(|report| report.agent_id == self.agent_id)
+                            .map(|report| report.body.clone())
+                    }),
+            }
+        }
+    }
+
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -92,10 +121,12 @@ pub fn refresh_subagent_cards(state: &mut AppState, pane: PaneId) -> bool {
         .map(|run| RunCardSnapshot {
             agent_id: run.agent_id.clone(),
             nickname: run.nickname.clone(),
+            agent_path: run.agent_path.clone(),
             role: run.role,
             title: run.title.clone(),
             status: run.status.clone(),
             report: run.report.clone(),
+            live_activity: run.live_activity(),
         })
         .collect();
     // 历史会话不一定回投了 Agents 列表；父消息里的汇报同样带终态。
@@ -118,46 +149,51 @@ pub fn refresh_subagent_cards(state: &mut AppState, pane: PaneId) -> bool {
             };
             if call.name == "spawn_agent"
                 && let Some(agent_id) = view.agent_id.as_deref()
-                && let Some((nickname, title, status, report)) = runs
-                    .iter()
-                    .find(|r| r.agent_id == agent_id)
-                    .map(|r| {
-                        (
-                            r.nickname.clone(),
-                            r.title.clone(),
-                            r.status.clone(),
-                            r.report.clone(),
-                        )
-                    })
-                    .or_else(|| {
-                        reports
-                            .iter()
-                            .find(|report| report.agent_id == agent_id)
-                            .map(|report| {
-                                (
-                                    report.nickname.clone(),
-                                    report.title.clone(),
-                                    report.status.clone(),
-                                    Some(report.clone()),
-                                )
-                            })
-                    })
             {
-                if view.agent_status.as_deref() != Some(status.as_str()) {
-                    view.agent_status = Some(status);
-                    changed = true;
-                }
-                if view.nickname.is_none() && nickname.is_some() {
-                    view.nickname = nickname;
-                    changed = true;
-                }
-                if view.title.as_deref().unwrap_or("").is_empty() && !title.is_empty() {
-                    view.title = Some(title);
-                    changed = true;
-                }
-                if view.report != report {
-                    view.report = report;
-                    changed = true;
+                if let Some(run) = runs.iter().find(|r| r.agent_id == agent_id) {
+                    if view.agent_status.as_deref() != Some(run.status.as_str()) {
+                        view.agent_status = Some(run.status.clone());
+                        changed = true;
+                    }
+                    if view.nickname.is_none() && run.nickname.is_some() {
+                        view.nickname = run.nickname.clone();
+                        changed = true;
+                    }
+                    if view.agent_path.is_none() {
+                        view.agent_path = Some(run.agent_path.clone());
+                        changed = true;
+                    }
+                    if view.title.as_deref().unwrap_or("").is_empty() && !run.title.is_empty() {
+                        view.title = Some(run.title.clone());
+                        changed = true;
+                    }
+                    if view.report != run.report {
+                        view.report = run.report.clone();
+                        changed = true;
+                    }
+                    if view.live_activity != run.live_activity {
+                        view.live_activity = run.live_activity.clone();
+                        changed = true;
+                    }
+                } else if let Some(report) =
+                    reports.iter().find(|report| report.agent_id == agent_id)
+                {
+                    if view.agent_status.as_deref() != Some(report.status.as_str()) {
+                        view.agent_status = Some(report.status.clone());
+                        changed = true;
+                    }
+                    if view.nickname.is_none() && report.nickname.is_some() {
+                        view.nickname = report.nickname.clone();
+                        changed = true;
+                    }
+                    if view.title.as_deref().unwrap_or("").is_empty() && !report.title.is_empty() {
+                        view.title = Some(report.title.clone());
+                        changed = true;
+                    }
+                    if view.report.as_ref() != Some(report) {
+                        view.report = Some(report.clone());
+                        changed = true;
+                    }
                 }
             }
             if matches!(
@@ -185,37 +221,49 @@ pub fn refresh_subagent_cards(state: &mut AppState, pane: PaneId) -> bool {
             {
                 continue;
             }
+            let mut agents: Vec<AgentStatusView> = Vec::new();
             if view.all || view.targets.is_empty() {
-                continue;
+                // 全量等待：先刷新已有条目，再补上等待期间新派发的 run。
+                for existing in &view.agents {
+                    if let Some(run) = runs.iter().find(|run| run.agent_id == existing.agent_id) {
+                        agents.push(run.status_view(&reports));
+                    } else {
+                        agents.push(existing.clone());
+                    }
+                }
+                for run in &runs {
+                    if !agents.iter().any(|agent| agent.agent_id == run.agent_id) {
+                        agents.push(run.status_view(&reports));
+                    }
+                }
+            } else {
+                for target_key in &view.targets {
+                    if let Some(run) = runs.iter().find(|run| {
+                        crate::chat::agent::matches_agent_target(
+                            &run.agent_id,
+                            run.nickname.as_deref(),
+                            Some(&run.agent_path),
+                            crate::chat::agent::ROOT_AGENT_PATH,
+                            target_key,
+                        )
+                    }) {
+                        agents.push(run.status_view(&reports));
+                        continue;
+                    }
+                    // 目标已结束且不在活动列表里：保留上一次结算的快照。
+                    if let Some(existing) = view.agents.iter().find(|agent| {
+                        crate::chat::agent::matches_agent_target(
+                            &agent.agent_id,
+                            agent.nickname.as_deref(),
+                            agent.agent_path.as_deref(),
+                            crate::chat::agent::ROOT_AGENT_PATH,
+                            target_key,
+                        )
+                    }) {
+                        agents.push(existing.clone());
+                    }
+                }
             }
-            let agents: Vec<AgentStatusView> = view
-                .targets
-                .iter()
-                .filter_map(|target_key| {
-                    runs.iter()
-                        .find(|r| {
-                            r.agent_id == *target_key
-                                || r.nickname
-                                    .as_deref()
-                                    .is_some_and(|n| n.eq_ignore_ascii_case(target_key))
-                        })
-                        .map(|r| AgentStatusView {
-                            agent_id: r.agent_id.clone(),
-                            nickname: r.nickname.clone(),
-                            title: r.title.clone(),
-                            role: r.role,
-                            status: r.status.clone(),
-                            report: r.report.as_ref().map(|report| report.body.clone()).or_else(
-                                || {
-                                    reports
-                                        .iter()
-                                        .find(|report| report.agent_id == r.agent_id)
-                                        .map(|report| report.body.clone())
-                                },
-                            ),
-                        })
-                })
-                .collect();
             if view.agents != agents {
                 view.agents = agents;
                 changed = true;
@@ -272,7 +320,8 @@ pub fn on_subagent_tool_pending(state: &mut AppState, child_session: &str, call_
     else {
         return false;
     };
-    run.chat.mark_tool_pending(call_id)
+    let changed = run.chat.mark_tool_pending(call_id);
+    changed | refresh_subagent_cards(state, pane)
 }
 
 /// 工具 running（子会话）。
@@ -286,7 +335,8 @@ pub fn on_subagent_tool_running(state: &mut AppState, child_session: &str, call_
     else {
         return false;
     };
-    run.chat.mark_tool_running(call_id)
+    let changed = run.chat.mark_tool_running(call_id);
+    changed | refresh_subagent_cards(state, pane)
 }
 
 /// 工具结算（子会话）：写终态、摘要、结果体与类型化详情。
@@ -340,7 +390,7 @@ pub fn on_subagent_tool_settled(
         }
         changed = true;
     }
-    changed
+    changed | refresh_subagent_cards(state, pane)
 }
 
 /// 列表元数据回投（幂等：内容相同返回 false）。
@@ -450,6 +500,7 @@ fn consume_agent_focus(lx: &mut crate::app::state::Lx) -> bool {
                 .nickname
                 .as_deref()
                 .is_some_and(|n| n.eq_ignore_ascii_case(&agent_id))
+            || run.agent_path.eq_ignore_ascii_case(&agent_id)
     }) else {
         return false;
     };
@@ -873,7 +924,7 @@ pub fn set_task_agents_scroll(state: &mut AppState, pane: PaneId, offset: usize)
     before != clamped || was_following != run.follow
 }
 
-/// Agents 面板 `^d`：停止当前高亮的 running 子 agent。
+/// Agents 面板 `^d`：停止当前高亮的 running 子 agent（事件层沿 `agent_path` 级联停止后代）。
 ///
 /// Esc 只停主轮与正在等待的 wait 回执，所有 running 子 agent 继续跑；
 /// 这里按选中项单独停止，partial transcript 留在 Agents 面板，不自动重跑、不起报告轮。

@@ -519,6 +519,7 @@ fn stats_line_returns_after_the_last_report() {
         role: crate::chat::agent::AgentRole::Explorer,
         status: "completed".into(),
         files_changed: 0,
+        changed_paths: Vec::new(),
         duration_ms: Some(1_000),
         body: "done".into(),
         delivered_at_ms: 1,
@@ -549,6 +550,7 @@ fn report(agent_id: &str, title: &str, status: &str) -> crate::chat::agent::Suba
         role: crate::chat::agent::AgentRole::Explorer,
         status: status.into(),
         files_changed: 0,
+        changed_paths: Vec::new(),
         duration_ms: Some(1_000),
         body: "done".into(),
         delivered_at_ms: 1,
@@ -643,6 +645,7 @@ fn stats_follow_the_final_assistant_of_a_report_chain() {
             &crate::db::chat::SubagentRecord {
                 agent_id: "sub-3".into(),
                 nickname: None,
+                agent_path: "/root/agent".into(),
                 child_session_id: "child".into(),
                 parent_session_id: "parent".into(),
                 spawn_message_id: None,
@@ -698,6 +701,7 @@ fn stats_line_is_hidden_while_a_subagent_is_running() {
             &crate::db::chat::SubagentRecord {
                 agent_id: "sub-1".into(),
                 nickname: None,
+                agent_path: "/root/agent".into(),
                 child_session_id: "child".into(),
                 parent_session_id: "parent".into(),
                 spawn_message_id: None,

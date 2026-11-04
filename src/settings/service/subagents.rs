@@ -118,6 +118,8 @@ fn available_models_json(state: &ServiceState) -> serde_json::Value {
 fn build_response_json(section: &SubagentsSection, state: &ServiceState) -> Response {
     let body = json!({
         "maxConcurrent": section.max_concurrent,
+        "maxDepth": section.max_depth,
+        "defaultMaxTokens": section.default_max_tokens,
         "builtins": section.builtins,
         "roles": section.roles,
         "defaults": {
@@ -146,10 +148,24 @@ fn get_subagents(state: &ServiceState) -> Response {
     build_response_json(&file.subagents, state)
 }
 
+/// 区分「字段缺省」与「显式 null」：缺省得到 `None`，`null` 得到 `Some(None)`。
+fn deserialize_present_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PutAllPayload {
     max_concurrent: usize,
+    #[serde(default)]
+    max_depth: Option<usize>,
+    /// 三态：缺省表示保留原值，`null` 表示清除，数字表示设定上限。
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    default_max_tokens: Option<Option<u64>>,
     #[serde(default)]
     builtins: Option<crate::config::subagents::BuiltinRoleOverrides>,
     #[serde(default)]
@@ -166,6 +182,12 @@ fn put_subagents_all(request: &Request, state: &ServiceState) -> Response {
         Err(err) => return Response::error(400, &format!("invalid json: {err}")),
     };
     file.subagents.max_concurrent = payload.max_concurrent;
+    if let Some(depth) = payload.max_depth {
+        file.subagents.max_depth = depth;
+    }
+    if let Some(tokens) = payload.default_max_tokens {
+        file.subagents.default_max_tokens = tokens;
+    }
     if let Some(builtins) = payload.builtins {
         file.subagents.builtins = builtins;
     }
@@ -182,6 +204,10 @@ fn put_subagents_all(request: &Request, state: &ServiceState) -> Response {
 #[serde(rename_all = "camelCase")]
 struct GeneralPayload {
     max_concurrent: usize,
+    #[serde(default)]
+    max_depth: Option<usize>,
+    #[serde(default)]
+    default_max_tokens: Option<u64>,
 }
 
 fn put_general(request: &Request, state: &ServiceState) -> Response {
@@ -194,6 +220,10 @@ fn put_general(request: &Request, state: &ServiceState) -> Response {
         Err(err) => return Response::error(400, &format!("invalid json: {err}")),
     };
     file.subagents.max_concurrent = payload.max_concurrent;
+    if let Some(depth) = payload.max_depth {
+        file.subagents.max_depth = depth;
+    }
+    file.subagents.default_max_tokens = payload.default_max_tokens;
     match commit_and_notify(&path, &file, state) {
         Ok(saved) => build_response_json(&saved, state),
         Err(resp) => resp,

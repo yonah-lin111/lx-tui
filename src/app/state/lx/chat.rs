@@ -12,6 +12,7 @@ pub mod file_diff;
 pub mod shell;
 mod steps;
 mod stream;
+pub mod subagent_view;
 pub mod tool_view;
 mod usage;
 

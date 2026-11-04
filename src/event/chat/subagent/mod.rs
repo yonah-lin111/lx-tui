@@ -34,7 +34,7 @@ pub(crate) use wait::settle_wait;
 use crate::app::state::RequestKey;
 use crate::chat::agent::{
     AgentListItemView, AgentRole, FINISHED_CODE, INPUT_NOT_FOUND_CODE, NOT_FOUND_CODE,
-    SubagentInputItem, SubagentOp, SubagentOutcome, WaitMode,
+    SubagentInputItem, SubagentOp, SubagentOutcome, WaitMode, path_matches_prefix,
 };
 use crate::db::chat::{SubagentQueueState, SubagentRecord};
 use crate::event::AppEvent;
@@ -44,8 +44,6 @@ use crate::layout::PaneId;
 pub const STATUS_RUNNING: &str = "running";
 /// 已恢复空闲等待输入状态值。
 pub const STATUS_IDLE: &str = "idle";
-/// 队列头因图片缺失/损坏阻断状态值。
-pub const STATUS_BLOCKED: &str = "blocked";
 /// 完成状态值。
 pub const STATUS_COMPLETED: &str = "completed";
 /// 失败状态值。
@@ -63,6 +61,12 @@ pub(crate) struct SubagentHandle {
     pub agent_id: String,
     /// 可选唯一昵称。
     pub nickname: Option<String>,
+    /// 规范层级路径（如 `/root/turing`、`/root/turing/curie`）。
+    pub agent_path: String,
+    /// 所属根会话 id（整树并发计数与整树等待共用）。
+    pub root_session: String,
+    /// 当前层级深度（主 agent 派发为 1）。
+    pub depth: usize,
     /// 子会话 external id。
     pub child_session_id: String,
     /// 当前子轮落库的 assistant 行（子 turn 工具归属校验的锚点）。
@@ -83,6 +87,10 @@ pub(crate) struct SubagentHandle {
     pub status: &'static str,
     /// 启动时刻（UTC 毫秒）。
     pub started_at_ms: i64,
+    /// 本轮 Token 预算（spawn 覆写或全局默认）；None 表示不限。
+    pub max_tokens: Option<u64>,
+    /// `close_agent` / 窗格或应用关闭：结算时不生成半程汇报。
+    pub closed_without_report: bool,
     /// 子会话消息模型（持久化来源；窗格关闭后仍存在）。
     pub chat: crate::app::state::LxChat,
     /// 子会话 DB 工作区键。
@@ -95,25 +103,26 @@ pub(crate) fn projected_agent_status(
     record: &SubagentRecord,
     queue: Option<&SubagentQueueState>,
 ) -> String {
-    if streams
+    let running = streams
         .subagents
         .values()
-        .any(|handle| handle.agent_id == record.agent_id && handle.status == STATUS_RUNNING)
-    {
-        return STATUS_RUNNING.to_string();
-    }
-    if queue.and_then(|q| q.head_error_code.as_ref()).is_some() {
-        return STATUS_BLOCKED.to_string();
-    }
-    if streams.resumed_subagents.contains(&record.agent_id) {
-        return STATUS_IDLE.to_string();
-    }
-    if record.status == STATUS_CANCELLED
+        .any(|handle| handle.agent_id == record.agent_id && handle.status == STATUS_RUNNING);
+    let resumed_or_paused = streams.resumed_subagents.contains(&record.agent_id)
+        || streams.paused_by_interrupt.contains(&record.agent_id);
+    let has_blocked_head = queue.and_then(|q| q.head_error_code.as_ref()).is_some();
+    let projected = crate::chat::agent::projected_agent_status(
+        running,
+        resumed_or_paused,
+        has_blocked_head,
+        &record.status,
+    );
+    // 崩溃恢复/插队中断留下的 `cancelled + interrupted` 组合投影为中断态。
+    if projected == crate::chat::agent::AgentStatus::Cancelled
         && queue.and_then(|q| q.last_input_status.as_deref()) == Some(STATUS_INTERRUPTED)
     {
         return STATUS_INTERRUPTED.to_string();
     }
-    record.status.clone()
+    projected.as_str().to_string()
 }
 
 /// 处理控制工具请求（测试兼容无 `call_id` 入口）。
@@ -143,9 +152,12 @@ pub(crate) fn handle_subagent_op_with_call(
         SubagentOp::Spawn {
             role,
             title,
+            task_name,
             task,
             items,
             fork_context,
+            fork_turns,
+            max_tokens,
             model,
             reasoning_effort,
         } => {
@@ -162,9 +174,12 @@ pub(crate) fn handle_subagent_op_with_call(
                 call_id,
                 role,
                 &title,
+                task_name.as_deref(),
                 &task,
                 &effective_items,
                 fork_context,
+                fork_turns,
+                max_tokens,
                 model.as_deref(),
                 reasoning_effort.as_deref(),
             );
@@ -182,6 +197,7 @@ pub(crate) fn handle_subagent_op_with_call(
             target,
             items,
             interrupt,
+            trigger_turn,
         } => {
             let result = runner::send_input(
                 state,
@@ -192,6 +208,7 @@ pub(crate) fn handle_subagent_op_with_call(
                 &target,
                 &items,
                 interrupt,
+                trigger_turn,
             );
             let changed = result.is_ok();
             match result {
@@ -229,8 +246,8 @@ pub(crate) fn handle_subagent_op_with_call(
             let _ = reply.send(result);
             changed
         }
-        SubagentOp::List => {
-            let result = list_agents(streams, persistence, &key);
+        SubagentOp::List { path_prefix } => {
+            let result = list_agents(streams, persistence, &key, path_prefix.as_deref());
             let _ = reply.send(result);
             false
         }
@@ -263,7 +280,7 @@ pub(crate) fn handle_subagent_op_with_call(
     }
 }
 
-/// `interrupt_agent`：中止正在运行的轮次并保留已生成内容，维持 `idle` 活动态且暂停消费后续队列。
+/// `interrupt_agent`：中止目标及其正在运行的后代，保留已生成内容与半程汇报，维持 `idle`。
 fn interrupt(
     _state: &mut AppState,
     streams: &mut ChatStreams,
@@ -281,32 +298,38 @@ fn interrupt(
             code: NOT_FOUND_CODE.to_string(),
         });
     };
-    let Ok(Some(record)) = database.resolve_owned_subagent(&workspace, &key.session, target) else {
+    let tree = runner::load_subagent_tree(database, &workspace, &key.session);
+    let Some(record) = runner::resolve_tree_target(&tree, target).cloned() else {
         return Err(HostError::Failed {
             code: NOT_FOUND_CODE.to_string(),
         });
     };
     let canonical_id = record.agent_id.clone();
     let queued_count = database
-        .subagent_queue_states(&workspace, &key.session)
+        .subagent_queue_states(&workspace, &record.parent_session_id)
         .ok()
         .and_then(|map| map.get(&canonical_id).map(|q| q.queued_count))
         .unwrap_or(0);
+    let subtree = runner::subtree_paths(&tree.records, &record.agent_path);
 
-    if let Some(handle) = streams
-        .subagents
-        .values()
-        .find(|handle| handle.agent_id == canonical_id && handle.parent.session == key.session)
-        && handle.status == STATUS_RUNNING
-    {
-        streams.paused_by_interrupt.insert(canonical_id.clone());
-        streams.resumed_subagents.insert(canonical_id.clone());
-        streams.interrupted_subagents.remove(&canonical_id);
+    let mut previous_status = None;
+    for handle in streams.subagents.values_mut() {
+        if handle.status != STATUS_RUNNING || !subtree.contains(&handle.agent_path) {
+            continue;
+        }
+        streams.paused_by_interrupt.insert(handle.agent_id.clone());
+        streams.resumed_subagents.insert(handle.agent_id.clone());
+        streams.interrupted_subagents.remove(&handle.agent_id);
+        if handle.agent_id == canonical_id {
+            previous_status = Some(STATUS_RUNNING.to_string());
+        }
         let _ = handle.cancel.send(true);
+    }
+    if let Some(previous) = previous_status {
         return Ok(SubagentOutcome::Interrupted {
             agent_id: canonical_id,
             nickname: record.nickname,
-            previous_status: STATUS_RUNNING.to_string(),
+            previous_status: previous,
             queued_count,
         });
     }
@@ -326,7 +349,7 @@ fn interrupt(
     })
 }
 
-/// close：关闭活动运行或 idle 身份，保留子会话、队列和历史（后续可 `resume_agent`）。
+/// close：关闭目标及其整棵子树（不产生半程汇报），保留子会话、队列和历史（后续可 `resume_agent`）。
 fn close(
     state: &mut AppState,
     streams: &mut ChatStreams,
@@ -334,47 +357,6 @@ fn close(
     key: &RequestKey,
     target: &str,
 ) -> Result<SubagentOutcome, HostError> {
-    let resolved_id = persistence
-        .database()
-        .and_then(|db| {
-            streams.db_workspaces.get(key).and_then(|ws| {
-                db.resolve_owned_subagent(ws, &key.session, target)
-                    .ok()
-                    .flatten()
-                    .map(|r| r.agent_id)
-            })
-        })
-        .unwrap_or_else(|| target.to_string());
-    let target = resolved_id.as_str();
-
-    if let Some(handle) = streams.subagents.values().find(|handle| {
-        (handle.agent_id == target
-            || handle
-                .nickname
-                .as_deref()
-                .is_some_and(|n| n.eq_ignore_ascii_case(target)))
-            && handle.parent.session == key.session
-    }) {
-        let canonical_id = handle.agent_id.clone();
-        let previous = handle.status.to_string();
-        if handle.status != STATUS_RUNNING {
-            return Err(HostError::Failed {
-                code: FINISHED_CODE.to_string(),
-            });
-        }
-        streams.resumed_subagents.remove(&canonical_id);
-        streams.interrupted_subagents.remove(&canonical_id);
-        streams.paused_by_interrupt.remove(&canonical_id);
-        if handle.cancel.send(true).is_err() {
-            return Err(HostError::Failed {
-                code: FINISHED_CODE.to_string(),
-            });
-        }
-        return Ok(SubagentOutcome::Closed {
-            agent_id: canonical_id,
-            previous_status: previous,
-        });
-    }
     let Some(database) = persistence.database() else {
         return Err(HostError::Failed {
             code: NOT_FOUND_CODE.to_string(),
@@ -385,44 +367,115 @@ fn close(
             code: NOT_FOUND_CODE.to_string(),
         });
     };
-    let Ok(Some(record)) = database.resolve_owned_subagent(&workspace, &key.session, target) else {
+    let tree = runner::load_subagent_tree(database, &workspace, &key.session);
+    let Some(record) = runner::resolve_tree_target(&tree, target).cloned() else {
         return Err(HostError::Failed {
             code: NOT_FOUND_CODE.to_string(),
         });
     };
-    let canonical_id = record.agent_id;
-    if streams.resumed_subagents.remove(&canonical_id) {
-        streams.interrupted_subagents.remove(&canonical_id);
-        streams.paused_by_interrupt.remove(&canonical_id);
-        let _ = database.finish_input(
-            &workspace,
-            &key.session,
-            &canonical_id,
-            None,
-            STATUS_CANCELLED,
-            None,
-        );
-        let _ = database.close_idle_subagent(&workspace, &key.session, &canonical_id);
+    let canonical_id = record.agent_id.clone();
+    let subtree = runner::subtree_paths(&tree.records, &record.agent_path);
+    let handle_status = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == canonical_id)
+        .map(|handle| handle.status);
+    let idle = streams.resumed_subagents.contains(&canonical_id);
+    if handle_status.is_none() && !idle {
+        return Err(HostError::Failed {
+            code: FINISHED_CODE.to_string(),
+        });
+    }
+    let previous_status = handle_status.unwrap_or(STATUS_IDLE).to_string();
+
+    // 级联：目标自身及其所有存活后代都标记「关闭不产报告」并取消在途轮次。
+    for handle in streams.subagents.values_mut() {
+        if !subtree.contains(&handle.agent_path) {
+            continue;
+        }
+        streams.resumed_subagents.remove(&handle.agent_id);
+        streams.interrupted_subagents.remove(&handle.agent_id);
+        streams.paused_by_interrupt.remove(&handle.agent_id);
+        handle.closed_without_report = true;
+        let _ = handle.cancel.send(true);
+    }
+    let targets: Vec<SubagentRecord> = tree
+        .records
+        .iter()
+        .filter(|candidate| subtree.contains(&candidate.agent_path))
+        .cloned()
+        .collect();
+    for agent in &targets {
+        let _ = database.close_idle_subagent(&workspace, &agent.parent_session_id, &agent.agent_id);
+        streams.resumed_subagents.remove(&agent.agent_id);
+        streams.interrupted_subagents.remove(&agent.agent_id);
+        streams.paused_by_interrupt.remove(&agent.agent_id);
         if let Some(pane) = state.pane_mut_anywhere(key.pane)
-            && let Some(run) = pane.lx.agents.by_agent_mut(&canonical_id)
+            && let Some(run) = pane.lx.agents.by_agent_mut(&agent.agent_id)
+            && run.status == STATUS_IDLE
         {
             run.status = STATUS_CANCELLED.to_string();
         }
-        return Ok(SubagentOutcome::Closed {
-            agent_id: canonical_id,
-            previous_status: STATUS_IDLE.to_string(),
-        });
     }
-    Err(HostError::Failed {
-        code: FINISHED_CODE.to_string(),
+    Ok(SubagentOutcome::Closed {
+        agent_id: canonical_id,
+        previous_status,
     })
 }
 
-/// `list_agents`：仅列当前父会话与 workspace 下的子 agent 概览。
+/// 停止窗格所属整棵会话树里全部正在运行的子 agent（`Agents` 面板 `^a`）。
+pub(crate) fn stop_all_subagents_for_pane(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+    pane: PaneId,
+) -> usize {
+    let Some(session) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.session_id.clone())
+    else {
+        return 0;
+    };
+    let root_session = persistence
+        .database()
+        .zip(workspace_for_pane(state, pane))
+        .and_then(|(database, workspace)| {
+            database
+                .resolve_session_tree_root(&workspace, &session)
+                .ok()
+                .map(|(root, _, _)| root)
+        })
+        .unwrap_or_else(|| session.clone());
+
+    let mut stopped = 0usize;
+    let mut dead = Vec::new();
+    for (child, handle) in &mut streams.subagents {
+        if handle.root_session != root_session || handle.status != STATUS_RUNNING {
+            continue;
+        }
+        handle.closed_without_report = true;
+        streams.resumed_subagents.remove(&handle.agent_id);
+        streams.interrupted_subagents.remove(&handle.agent_id);
+        streams.paused_by_interrupt.remove(&handle.agent_id);
+        if handle.cancel.send(true).is_ok() {
+            stopped = stopped.saturating_add(1);
+        } else {
+            dead.push(child.clone());
+        }
+    }
+    for child in dead {
+        streams.subagents.remove(&child);
+        streams.frozen.remove(&child);
+    }
+    stopped
+}
+
+/// `list_agents`：列出根会话树下的子 agent 概览，可按 `path_prefix` 过滤。
 fn list_agents(
     streams: &ChatStreams,
     persistence: &Persistence,
     key: &RequestKey,
+    path_prefix: Option<&str>,
 ) -> Result<SubagentOutcome, HostError> {
     let Some(database) = persistence.database() else {
         return Err(HostError::Failed {
@@ -434,21 +487,20 @@ fn list_agents(
             code: "subagent workspace unavailable".into(),
         });
     };
-    let records = database
-        .list_subagents(workspace, &key.session)
-        .map_err(|error| HostError::Failed {
-            code: error.code().to_string(),
-        })?;
-    let queue_states = database
-        .subagent_queue_states(workspace, &key.session)
-        .unwrap_or_default();
-    let agents = records
+    let tree = runner::load_subagent_tree(database, workspace, &key.session);
+    let queue_states = runner::tree_queue_states(database, workspace, &tree);
+    let agents = tree
+        .records
         .iter()
+        .filter(|record| {
+            path_prefix.is_none_or(|prefix| path_matches_prefix(&record.agent_path, prefix))
+        })
         .map(|record| {
             let q = queue_states.get(&record.agent_id);
             AgentListItemView {
                 agent_id: record.agent_id.clone(),
                 nickname: record.nickname.clone(),
+                agent_path: Some(record.agent_path.clone()),
                 role: record.role,
                 title: record.title.clone(),
                 status: projected_agent_status(streams, record, q),
@@ -477,15 +529,40 @@ fn cancel_input(
             code: "subagent workspace unavailable".into(),
         });
     };
-    let outcome = database
-        .cancel_input(&workspace, &key.session, submission_id)
-        .map_err(|error| HostError::Failed {
-            code: error.code().to_string(),
-        })?;
-    let Some((agent_id, status, mut queued_count)) = outcome else {
+    // 输入行按目标的真实父会话归属：整树寻址时逐个候选父会话尝试。
+    let tree = runner::load_subagent_tree(database, &workspace, &key.session);
+    let mut parent_sessions = vec![key.session.clone()];
+    for record in &tree.records {
+        if !parent_sessions.contains(&record.parent_session_id) {
+            parent_sessions.push(record.parent_session_id.clone());
+        }
+    }
+    let mut cancelled = None;
+    let mut owner_session = key.session.clone();
+    for parent_session in parent_sessions {
+        match database.cancel_input(&workspace, &parent_session, submission_id) {
+            Ok(Some(result)) => {
+                owner_session = parent_session;
+                cancelled = Some(result);
+                break;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return Err(HostError::Failed {
+                    code: error.code().to_string(),
+                });
+            }
+        }
+    }
+    let Some((agent_id, status, mut queued_count)) = cancelled else {
         return Err(HostError::Failed {
             code: INPUT_NOT_FOUND_CODE.to_string(),
         });
+    };
+    let owner_key = RequestKey {
+        pane: key.pane,
+        session: owner_session.clone(),
+        generation: key.generation,
     };
     if status == STATUS_CANCELLED
         && !streams.paused_by_interrupt.contains(&agent_id)
@@ -494,7 +571,7 @@ fn cancel_input(
             state,
             streams,
             persistence,
-            key,
+            &owner_key,
             &workspace,
             &agent_id,
         )
@@ -507,7 +584,7 @@ fn cancel_input(
         persistence,
         key.pane,
         &workspace,
-        &key.session,
+        &owner_session,
     );
     Ok(SubagentOutcome::InputCancelled {
         submission_id: submission_id.to_string(),
@@ -570,37 +647,56 @@ pub(crate) fn handle_subagent_net_event(
     }
 }
 
-/// 会话被删除或用户手动停止：取消该会话下所有在册子 turn。
+/// 会话被删除或用户手动停止：取消该根会话树下所有在册子 turn（级联后代，不产报告）。
 pub(crate) fn cancel_for_session(
     streams: &mut ChatStreams,
     session_id: &str,
     agent_id: Option<&str>,
 ) -> bool {
-    let mut cancelled = false;
-    let mut dead = Vec::new();
-    let mut cleared_agents = Vec::new();
-    for (child, handle) in &streams.subagents {
-        let selected = agent_id.is_none_or(|target| handle.agent_id == target);
-        let belongs = match agent_id {
-            Some(_) => handle.parent.session == session_id,
+    // 种子：显式 agent 自身，或该会话直接相关的句柄；再沿 `agent_path` 前缀级联后代。
+    let seeds: Vec<String> = streams
+        .subagents
+        .values()
+        .filter(|handle| match agent_id {
+            Some(id) => handle.agent_id == id,
             None => handle.parent.session == session_id || handle.child_session_id == session_id,
-        };
-        if selected && belongs {
-            cleared_agents.push(handle.agent_id.clone());
-            if handle.cancel.send(true).is_ok() {
-                cancelled = true;
-            } else {
-                dead.push(child.clone());
-            }
+        })
+        .map(|handle| handle.agent_path.clone())
+        .collect();
+    let selected = |path: &str| {
+        seeds.iter().any(|seed| {
+            path.eq_ignore_ascii_case(seed)
+                || path
+                    .to_ascii_lowercase()
+                    .starts_with(&format!("{}/", seed.to_ascii_lowercase()))
+        })
+    };
+
+    let mut cancelled = false;
+    let mut cleared_agents = Vec::new();
+    let mut dead = Vec::new();
+    for (child, handle) in &mut streams.subagents {
+        if !selected(&handle.agent_path) {
+            continue;
+        }
+        cleared_agents.push(handle.agent_id.clone());
+        // 用户手动停止 / 会话删除 / 退出：不生成半程汇报。
+        handle.closed_without_report = true;
+        if handle.cancel.send(true).is_ok() {
+            cancelled = true;
+        } else {
+            dead.push(child.clone());
         }
     }
     for id in cleared_agents {
         streams.resumed_subagents.remove(&id);
         streams.interrupted_subagents.remove(&id);
+        streams.paused_by_interrupt.remove(&id);
     }
     if let Some(target) = agent_id {
         streams.resumed_subagents.remove(target);
         streams.interrupted_subagents.remove(target);
+        streams.paused_by_interrupt.remove(target);
     }
     for child in dead {
         streams.subagents.remove(&child);
@@ -654,33 +750,22 @@ pub fn apply_subagent_effects(
                 let Some(workspace) = workspace_for_pane(state, pane) else {
                     continue;
                 };
-                match database.list_subagents(&workspace, &parent_session) {
-                    Ok(mut records) => {
-                        let queue_states = database
-                            .subagent_queue_states(&workspace, &parent_session)
-                            .unwrap_or_default();
-                        for record in &mut records {
-                            record.status = projected_agent_status(
-                                streams,
-                                record,
-                                queue_states.get(&record.agent_id),
-                            );
-                        }
-                        changed |=
-                            update::set_subagent_list(state, pane, &parent_session, &records);
-                        runner::sync_agent_ui_queue(
-                            state,
-                            streams,
-                            persistence,
-                            pane,
-                            &workspace,
-                            &parent_session,
-                        );
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "listing subagents failed");
-                    }
+                let tree = runner::load_subagent_tree(database, &workspace, &parent_session);
+                let queue_states = runner::tree_queue_states(database, &workspace, &tree);
+                let mut records = tree.records;
+                for record in &mut records {
+                    record.status =
+                        projected_agent_status(streams, record, queue_states.get(&record.agent_id));
                 }
+                changed |= update::set_subagent_list(state, pane, &parent_session, &records);
+                runner::sync_agent_ui_queue(
+                    state,
+                    streams,
+                    persistence,
+                    pane,
+                    &workspace,
+                    &parent_session,
+                );
             }
             Effect::LoadSubagentSession {
                 pane,
@@ -720,7 +805,24 @@ pub fn apply_subagent_effects(
                 session_id,
                 agent_id,
             } => {
-                changed |= cancel_for_session(streams, &session_id, agent_id.as_deref());
+                changed |= match agent_id.as_deref() {
+                    Some(id) => cancel_for_session(streams, &session_id, Some(id)),
+                    None => {
+                        // 停全部：优先按窗格所属根会话树级联；找不到窗格时退回在册句柄。
+                        let pane = state.all_pane_ids().into_iter().find(|pane| {
+                            state
+                                .pane_anywhere(*pane)
+                                .and_then(|target| target.lx.chat.session_id.as_deref())
+                                == Some(session_id.as_str())
+                        });
+                        match pane {
+                            Some(pane) => {
+                                stop_all_subagents_for_pane(state, streams, persistence, pane) > 0
+                            }
+                            None => cancel_for_session(streams, &session_id, None),
+                        }
+                    }
+                };
             }
             Effect::DrainSubagentReports { pane } => {
                 changed |= drain_reports(state, persistence, pane);
@@ -769,8 +871,13 @@ pub(crate) fn running_subagent_lines(streams: &ChatStreams, parent_session: &str
             .filter(|nick| !nick.is_empty())
             .map(|nick| format!(" nickname={nick}"))
             .unwrap_or_default();
+        let depth = if handle.depth > 1 {
+            format!(" depth={}", handle.depth)
+        } else {
+            String::new()
+        };
         lines.push(format!(
-            "- agent_id={} role={}{nickname} · {head}",
+            "- agent_id={} role={}{nickname}{depth} · {head}",
             handle.agent_id,
             handle.role.as_str()
         ));

@@ -8,7 +8,10 @@ use std::sync::Arc;
 
 use tokio::sync::{Mutex, watch};
 
-use crate::chat::agent::{AgentRole, IMAGE_MISSING_CODE, ToolSurface};
+use crate::chat::agent::{
+    AgentRole, DEPTH_LIMIT_REACHED_CODE, ForkSpec, IMAGE_MISSING_CODE, ToolSurface,
+    allocate_child_path, joined_input_text,
+};
 use crate::chat::agent_loop::{AgentTools, ModelContext, TurnExecution};
 use crate::chat::events::{
     ChatDelta, ChatRequest, ChatTurn, ModelImage, ModelItem, RequestPurpose,
@@ -23,6 +26,8 @@ use super::*;
 
 impl ExecSubagentPool {
     /// 子轮请求：历史按已完成轮次回放（工具步骤与历史图片保留），末尾接当前输入。
+    // 子轮上下文需要工作区库、标识、角色、当前输入项与深度/预算护栏参数；保持显式传参比额外包装结构更直观。
+    #[allow(clippy::too_many_arguments)]
     fn child_context(
         &self,
         db: &Database,
@@ -30,6 +35,9 @@ impl ExecSubagentPool {
         child_session_id: &str,
         role: AgentRole,
         current_items: &[PersistedInputItem],
+        depth: usize,
+        max_depth: usize,
+        max_tokens: Option<u64>,
     ) -> Result<ModelContext, String> {
         let child_model = self
             .child_models
@@ -178,12 +186,14 @@ impl ExecSubagentPool {
             purpose: RequestPurpose::Subagent(role),
             system_prompt: Some(system_prompt),
             tools: Arc::new(crate::chat::tools::turn_tools(
-                ToolSurface::from_role(role),
+                ToolSurface::from_role_at_depth(role, depth, max_depth),
                 &self.mcp_snapshot,
             )),
         };
         let context = ModelContext::new(request, self.cwd.clone())
-            .with_context_limit(child_model.context_limit);
+            .with_context_limit(child_model.context_limit)
+            .with_subagent_depth(depth, max_depth)
+            .with_token_budget(max_tokens);
         Ok(match checkpoint {
             Some(checkpoint) => context.with_compact_summary(Some(checkpoint.summary_text)),
             None => context,
@@ -246,6 +256,10 @@ impl ExecSubagentPool {
         child_session_id: &str,
         child_assistant_id: &str,
         child_user_message_id: &str,
+        agent_path: &str,
+        depth: usize,
+        max_depth: usize,
+        max_tokens: Option<u64>,
         role: AgentRole,
         title: &str,
         started_at_ms: i64,
@@ -253,7 +267,16 @@ impl ExecSubagentPool {
         done_tx: watch::Sender<bool>,
     ) -> Result<(), HostError> {
         let context = self
-            .child_context(db, agent_id, child_session_id, role, current_items)
+            .child_context(
+                db,
+                agent_id,
+                child_session_id,
+                role,
+                current_items,
+                depth,
+                max_depth,
+                max_tokens,
+            )
             .map_err(|error| failed(&error))?;
         let processes = Arc::new(ProcessManager::new(
             ProcessOwner {
@@ -351,6 +374,7 @@ impl ExecSubagentPool {
                 child_session_id: child_session_id.to_string(),
                 child_assistant_id: child_assistant_id.to_string(),
                 child_user_message_id: child_user_message_id.to_string(),
+                agent_path: agent_path.to_string(),
                 role,
                 title: title.to_string(),
                 started_at_ms,
@@ -362,6 +386,7 @@ impl ExecSubagentPool {
                 processes,
                 join_handle: Some(join_handle),
                 uncheckpointed_bytes: 0,
+                closed_without_report: false,
             },
         );
         Ok(())
@@ -470,6 +495,288 @@ impl ExecSubagentPool {
                 let _ = reply.send(Vec::new());
             }
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn spawn(
+        &mut self,
+        db: &Database,
+        parent_assistant_id: &str,
+        call_id: Option<&str>,
+        role: AgentRole,
+        title: &str,
+        task_name: Option<&str>,
+        task: &str,
+        items: &[SubagentInputItem],
+        fork_context: bool,
+        fork_turns: Option<u32>,
+        max_tokens: Option<u64>,
+        model_override: Option<&str>,
+        reasoning_effort_override: Option<&str>,
+    ) -> Result<SubagentOutcome, HostError> {
+        let role_spec = self
+            .subagents_config
+            .resolve_role(role.as_str())
+            .ok_or_else(|| failed(&format!("unknown subagent role '{}'", role.as_str())))?;
+        let role = role.with_base(role_spec.base_role);
+        let (root_session, caller_depth, caller_path) = db
+            .resolve_session_tree_root(&self.workspace, &self.parent_session_id)
+            .unwrap_or_else(|_| {
+                (
+                    self.parent_session_id.clone(),
+                    0,
+                    crate::chat::agent::ROOT_AGENT_PATH.to_string(),
+                )
+            });
+        let max_depth = self
+            .subagents_config
+            .max_depth
+            .clamp(1, crate::config::subagents::MAX_AGENT_DEPTH_LIMIT);
+        let next_depth = caller_depth.saturating_add(1);
+        if next_depth > max_depth {
+            return Err(failed(DEPTH_LIMIT_REACHED_CODE));
+        }
+        let max_concurrent = self
+            .subagents_config
+            .max_concurrent
+            .clamp(1, crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT);
+        if self.running.len() >= max_concurrent {
+            return Err(failed(LIMIT_REACHED_CODE));
+        }
+        let child_target = self.resolve_child_model(
+            role_spec.default_model.as_ref(),
+            model_override,
+            reasoning_effort_override,
+        )?;
+        let tree_records = db
+            .list_subagent_tree(&self.workspace, &root_session)
+            .or_else(|_| db.list_subagents(&self.workspace, &self.parent_session_id))
+            .unwrap_or_default();
+        let used_nicknames: Vec<String> = tree_records
+            .iter()
+            .filter_map(|record| record.nickname.clone())
+            .collect();
+        let nickname =
+            crate::chat::agent::allocate_nickname(&used_nicknames, &role_spec.nickname_candidates);
+        let existing_paths: Vec<String> = tree_records
+            .iter()
+            .map(|record| record.agent_path.clone())
+            .collect();
+        let agent_path = allocate_child_path(
+            &caller_path,
+            task_name.unwrap_or(&nickname),
+            &existing_paths,
+        );
+        let fork_spec = ForkSpec::from_params(fork_context, fork_turns);
+        let effective_max_tokens = max_tokens.or(self.subagents_config.default_max_tokens);
+        let child_session_id = new_external_id("sess");
+        let image_rewrite = if fork_spec.is_enabled() {
+            crate::db::chat::copy_session_images(&self.parent_session_id, &child_session_id)
+        } else {
+            None
+        };
+        let source: Vec<SubagentInputItem> = if items.is_empty() {
+            vec![SubagentInputItem::Text {
+                text: task.to_string(),
+            }]
+        } else {
+            items.to_vec()
+        };
+        let persisted = match self.prepare_input_items(
+            &child_session_id,
+            &source,
+            child_target.supports_image_input,
+        ) {
+            Ok(persisted) => persisted,
+            Err(error) => {
+                crate::platform::remove_session_images(&child_session_id);
+                return Err(error);
+            }
+        };
+        let task_text = if task.trim().is_empty() {
+            joined_input_text(&source)
+        } else {
+            task.to_string()
+        };
+        if task_text.trim().is_empty() {
+            crate::platform::remove_session_images(&child_session_id);
+            return Err(failed("subagent task must not be empty"));
+        }
+        let title = if title.trim().is_empty() {
+            first_line_title(&task_text)
+        } else {
+            title.to_string()
+        };
+        let dedupe = call_id.map(|cid| {
+            format!(
+                "spawn:{}:{}:{cid}",
+                self.parent_session_id, parent_assistant_id
+            )
+        });
+        let committed = match db.begin_subagent_turn_with_full_options(
+            &self.workspace,
+            &self.parent_session_id,
+            Some(&child_session_id),
+            Some(&nickname),
+            role,
+            &title,
+            &task_text,
+            &persisted,
+            &child_target.snapshot(),
+            Some(parent_assistant_id),
+            dedupe.as_deref(),
+            call_id,
+            fork_spec.is_enabled(),
+            Some(&agent_path),
+            fork_spec.fork_turns(),
+            &image_rewrite,
+        ) {
+            Ok(committed) => committed,
+            Err(error) => {
+                crate::platform::remove_session_images(&child_session_id);
+                return Err(db_failed(error));
+            }
+        };
+        self.child_models
+            .insert(committed.child_session_id.clone(), child_target.clone());
+        self.resumed.insert(committed.agent_id.clone());
+        self.agent_budgets
+            .insert(committed.agent_id.clone(), effective_max_tokens);
+        let started = self.start_child(
+            db,
+            &committed.agent_id,
+            &committed.child_session_id,
+            &committed.child_assistant_id,
+            &committed.child_user_message_id,
+            &agent_path,
+            next_depth,
+            max_depth,
+            effective_max_tokens,
+            role,
+            &title,
+            committed.created_at_ms,
+            &persisted,
+            watch::channel(false).0,
+        );
+        if let Err(error) = started {
+            self.resumed.remove(&committed.agent_id);
+            return Err(error);
+        }
+        let model_label = if model_override.is_some()
+            || child_target.provider != self.model.provider
+            || child_target.model != self.model.model
+        {
+            Some(format!("{}/{}", child_target.provider, child_target.model))
+        } else {
+            None
+        };
+        let effort_label = if reasoning_effort_override.is_some()
+            || (role_spec.default_model.is_some() && child_target.variant != self.model.variant)
+        {
+            child_target.variant.clone()
+        } else {
+            None
+        };
+        Ok(SubagentOutcome::Spawned {
+            agent_id: committed.agent_id,
+            nickname: Some(nickname),
+            agent_path: Some(agent_path),
+            role,
+            title,
+            model: model_label,
+            reasoning_effort: effort_label,
+            fork_context: fork_spec.is_enabled(),
+            fork_turns: fork_spec.fork_turns(),
+            max_tokens: effective_max_tokens,
+        })
+    }
+
+    fn resolve_child_model(
+        &self,
+        role_default: Option<&crate::config::ai::ModelSelection>,
+        model_override: Option<&str>,
+        effort_override: Option<&str>,
+    ) -> Result<ExecModelTarget, HostError> {
+        let explicit_model = model_override.map(str::trim).filter(|s| !s.is_empty());
+        let explicit_effort = effort_override.map(str::trim).filter(|s| !s.is_empty());
+        if explicit_model.is_none() && explicit_effort.is_none() && role_default.is_none() {
+            return Ok(self.model.clone());
+        }
+        let settings = crate::config::ai::ai_config_path()
+            .ok()
+            .and_then(|path| crate::config::ai::load_ai(&path).ok().flatten())
+            .unwrap_or_else(crate::config::ai::AiSettings::empty);
+        if settings.providers.is_empty() {
+            // 只有单元测试环境（无 ai.json）才允许用父模型做兜底；真实运行中配置缺失
+            // 必须显式失败，不能把 `provider/model` 静默塞进 model 字段。
+            if !cfg!(test) {
+                return Err(failed("model configuration unavailable"));
+            }
+            let mut fallback = self.model.clone();
+            if let Some(m) = explicit_model {
+                apply_reference_to_target(&mut fallback, m);
+            } else if let Some(sel) = role_default {
+                fallback.provider = sel.provider.clone();
+                fallback.model = sel.model.clone();
+                if sel.variant.is_some() {
+                    fallback.variant = sel.variant.clone();
+                }
+            }
+            if let Some(e) = explicit_effort {
+                fallback.variant = Some(e.to_string());
+            }
+            return Ok(fallback);
+        }
+        let raw_spec = if let Some(m) = explicit_model {
+            match explicit_effort {
+                Some(e) => format!("{m}#{e}"),
+                None => m.to_string(),
+            }
+        } else if let Some(sel) = role_default {
+            let eff = explicit_effort.or(sel.variant.as_deref());
+            match eff {
+                Some(e) => format!("{}/{}#{e}", sel.provider, sel.model),
+                None => format!("{}/{}", sel.provider, sel.model),
+            }
+        } else {
+            let e = explicit_effort.unwrap_or_default();
+            format!("{}/{}#{e}", self.model.provider, self.model.model)
+        };
+        crate::chat::agent::exec::resolve_model_target(&settings, Some(&raw_spec), None)
+            .map_err(|err| failed(&err))
+    }
+
+    /// 子 agent 的模型目标：内存缓存 > 数据库持久化快照（重启后恢复）> 父模型。
+    pub(super) fn child_model_for(&mut self, record: &SubagentRecord) -> &ExecModelTarget {
+        let differs = !record.model_provider.trim().is_empty()
+            && !record.model_id.trim().is_empty()
+            && (record.model_provider != self.model.provider
+                || record.model_id != self.model.model
+                || record.model_variant != self.model.variant);
+        if differs && !self.child_models.contains_key(&record.child_session_id) {
+            let settings = crate::config::ai::ai_config_path()
+                .ok()
+                .and_then(|path| crate::config::ai::load_ai(&path).ok().flatten())
+                .unwrap_or_else(crate::config::ai::AiSettings::empty);
+            let reference = match record
+                .model_variant
+                .as_deref()
+                .map(str::trim)
+                .filter(|variant| !variant.is_empty())
+            {
+                Some(variant) => format!("{}/{}#{variant}", record.model_provider, record.model_id),
+                None => format!("{}/{}", record.model_provider, record.model_id),
+            };
+            if let Ok(target) =
+                crate::chat::agent::exec::resolve_model_target(&settings, Some(&reference), None)
+            {
+                self.child_models
+                    .insert(record.child_session_id.clone(), target);
+            }
+        }
+        self.child_models
+            .get(&record.child_session_id)
+            .unwrap_or(&self.model)
     }
 }
 
@@ -625,4 +932,15 @@ fn message_text(message: &crate::db::chat::ChatMessage) -> String {
         .map(|part| part.content.as_str())
         .collect::<Vec<_>>()
         .join("")
+}
+
+/// 测试兜底模型解析：`<provider>/<model>` 拆分写入 provider/model，纯模型 ID 只改 model。
+fn apply_reference_to_target(target: &mut ExecModelTarget, reference: &str) {
+    match reference.split_once('/') {
+        Some((provider, model)) if !provider.trim().is_empty() && !model.trim().is_empty() => {
+            target.provider = provider.trim().to_string();
+            target.model = model.trim().to_string();
+        }
+        _ => target.model = reference.trim().to_string(),
+    }
 }

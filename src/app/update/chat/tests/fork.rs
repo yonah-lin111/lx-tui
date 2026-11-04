@@ -80,6 +80,7 @@ fn fork_panel_excludes_subagent_report_messages() {
                 role: crate::chat::agent::AgentRole::Explorer,
                 status: "completed".into(),
                 files_changed: 0,
+                changed_paths: Vec::new(),
                 duration_ms: None,
                 body: "done".into(),
                 delivered_at_ms: 1_000,

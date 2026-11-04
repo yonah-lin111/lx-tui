@@ -13,12 +13,20 @@ use serde::{Deserialize, Serialize};
 use super::ai::ModelSelection;
 use super::{ConfigError, user_data_root};
 
-/// 默认单会话最大并发子 agent 数。
-pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 3;
-/// 单会话最大并发子 agent 数下限。
+/// 默认整棵根会话树最大并发子 agent 数。
+pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 4;
+/// 整棵根会话树最大并发子 agent 数下限。
 pub const MIN_CONCURRENT_SUBAGENTS: usize = 1;
-/// 单会话最大并发子 agent 数上限。
-pub const MAX_CONCURRENT_SUBAGENTS_LIMIT: usize = 8;
+/// 整棵根会话树最大并发子 agent 数上限。
+pub const MAX_CONCURRENT_SUBAGENTS_LIMIT: usize = 12;
+/// 允许配置的最小 Agent 递归深度（1 = 仅主 Agent 可派发子 Agent）。
+pub const MIN_AGENT_DEPTH: usize = 1;
+/// 默认 Agent 递归深度（2 = 主 Agent -> 子 Agent -> 孙 Agent）。
+pub const DEFAULT_MAX_AGENT_DEPTH: usize = 2;
+/// 允许配置的最大 Agent 递归深度上限。
+pub const MAX_AGENT_DEPTH_LIMIT: usize = 3;
+/// 单个子 agent 单轮 Token 预算的最小值。
+pub const MIN_SUBAGENT_MAX_TOKENS: u64 = 1_000;
 /// 角色名最大长度（字节/ASCII 字符）。
 pub const MAX_ROLE_NAME_LEN: usize = 32;
 /// 角色简短描述最大字符数。
@@ -39,6 +47,10 @@ pub const DEFAULT_EXECUTOR_DESCRIPTION: &str =
 
 const fn default_max_concurrent() -> usize {
     DEFAULT_MAX_CONCURRENT_SUBAGENTS
+}
+
+const fn default_max_depth() -> usize {
+    DEFAULT_MAX_AGENT_DEPTH
 }
 
 /// 子 agent 的底层安全权限档位（决定工具白名单与默认内置系统提示词）。
@@ -104,9 +116,15 @@ pub struct SubagentsConfigFile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentsSection {
-    /// 单父会话最大并发子 agent 数（`1..=8`，默认 `3`）。
+    /// 整棵根会话树的最大并发运行子 agent 数（`1..=12`，默认 `4`）。
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: usize,
+    /// 最大递归派发深度（`1..=3`，默认 `2`：主 agent -> 子 agent -> 孙 agent）。
+    #[serde(default = "default_max_depth")]
+    pub max_depth: usize,
+    /// 可选单轮默认 Token 预算上限（None 表示不限）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_max_tokens: Option<u64>,
     /// 内置角色（`explorer` / `executor`）的可选覆写项。
     #[serde(default)]
     pub builtins: BuiltinRoleOverrides,
@@ -119,6 +137,8 @@ impl Default for SubagentsSection {
     fn default() -> Self {
         Self {
             max_concurrent: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+            max_depth: DEFAULT_MAX_AGENT_DEPTH,
+            default_max_tokens: None,
             builtins: BuiltinRoleOverrides::default(),
             roles: Vec::new(),
         }
@@ -235,6 +255,8 @@ impl SubagentsSection {
     pub fn normalized(&self) -> Self {
         Self {
             max_concurrent: self.max_concurrent,
+            max_depth: self.max_depth,
+            default_max_tokens: self.default_max_tokens,
             builtins: BuiltinRoleOverrides {
                 explorer: self.builtins.explorer.normalized(),
                 executor: self.builtins.executor.normalized(),
@@ -254,6 +276,18 @@ impl SubagentsSection {
         {
             return Err(SubagentsConfigError::Invalid(format!(
                 "maxConcurrent must be between {MIN_CONCURRENT_SUBAGENTS} and {MAX_CONCURRENT_SUBAGENTS_LIMIT}"
+            )));
+        }
+        if !(MIN_AGENT_DEPTH..=MAX_AGENT_DEPTH_LIMIT).contains(&self.max_depth) {
+            return Err(SubagentsConfigError::Invalid(format!(
+                "maxDepth must be between {MIN_AGENT_DEPTH} and {MAX_AGENT_DEPTH_LIMIT}"
+            )));
+        }
+        if let Some(tokens) = self.default_max_tokens
+            && tokens < MIN_SUBAGENT_MAX_TOKENS
+        {
+            return Err(SubagentsConfigError::Invalid(format!(
+                "defaultMaxTokens must be at least {MIN_SUBAGENT_MAX_TOKENS}"
             )));
         }
         validate_override("explorer", &self.builtins.explorer)?;

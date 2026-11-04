@@ -76,15 +76,17 @@ async fn explorer_subagent_reads_a_file_and_reports_back() {
 
 // ===== 2. 并发上限 =====
 
+/// 整树并发上限（默认 4）：第 5 个并发 spawn 必须以 `LIMIT_REACHED_CODE` 拒绝。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawning_a_fourth_concurrent_subagent_is_rejected_with_limit_reached() {
+async fn spawning_a_fifth_concurrent_subagent_is_rejected_with_limit_reached() {
     let dir = TestDir::new("subagent-limit");
     let db = Database::open_in_memory().expect("in-memory db");
     let spawn_1 = r#"{"role":"explorer","title":"a1","task":"task 1"}"#;
     let spawn_2 = r#"{"role":"explorer","title":"a2","task":"task 2"}"#;
     let spawn_3 = r#"{"role":"explorer","title":"a3","task":"task 3"}"#;
     let spawn_4 = r#"{"role":"explorer","title":"a4","task":"task 4"}"#;
-    let config = assemble(&db, &dir, "spawn four explorers", None);
+    let spawn_5 = r#"{"role":"explorer","title":"a5","task":"task 5"}"#;
+    let config = assemble(&db, &dir, "spawn five explorers", None);
     let factory = ScriptedFactory::new(
         vec![
             tool_step(&[
@@ -92,11 +94,12 @@ async fn spawning_a_fourth_concurrent_subagent_is_rejected_with_limit_reached() 
                 ("call-s2", "spawn_agent", spawn_2),
                 ("call-s3", "spawn_agent", spawn_3),
                 ("call-s4", "spawn_agent", spawn_4),
+                ("call-s5", "spawn_agent", spawn_5),
             ]),
             text_step("observed limit"),
         ],
-        // 3 个子 agent 全部挂起直到主轮结束被清理，确保第 4 个 spawn 时前 3 个仍在运行。
-        vec![Step::Hang, Step::Hang, Step::Hang],
+        // 4 个子 agent 全部挂起直到主轮结束被清理，确保第 5 个 spawn 时前 4 个仍在运行。
+        vec![Step::Hang, Step::Hang, Step::Hang, Step::Hang],
     );
 
     let mut stdout = Vec::new();
@@ -109,11 +112,11 @@ async fn spawning_a_fourth_concurrent_subagent_is_rejected_with_limit_reached() 
     let main = factory.main_requests();
     assert_eq!(main.len(), 2);
     let results = tool_result_texts(&main[1]);
-    assert_eq!(results.len(), 4, "results: {results:?}");
+    assert_eq!(results.len(), 5, "results: {results:?}");
     assert!(
-        results[3].contains(crate::chat::agent::LIMIT_REACHED_CODE),
-        "4th spawn result: {}",
-        results[3]
+        results[4].contains(crate::chat::agent::LIMIT_REACHED_CODE),
+        "5th spawn result: {}",
+        results[4]
     );
 }
 

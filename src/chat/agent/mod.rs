@@ -8,14 +8,18 @@ use serde_json::{Value, json};
 
 use crate::chat::tools::ToolExecutionResult;
 
+mod budget;
 pub mod exec;
 mod instructions;
 mod model_switch;
 mod nickname;
 mod parse;
+mod path;
 mod report;
 mod role;
+mod status;
 
+pub use budget::*;
 pub use instructions::{
     AGENTS_MD_SEPARATOR, CANDIDATE_AGENT_FILENAMES, DEFAULT_AGENTS_MD_FILENAME,
     LOCAL_AGENTS_MD_FILENAME, LoadedInstructions, MAX_GLOBAL_DOC_BYTES, MAX_PROJECT_DOC_BYTES,
@@ -27,11 +31,13 @@ pub use model_switch::{
 };
 pub use nickname::{DEFAULT_NICKNAME_CANDIDATES, allocate_nickname, format_agent_identity};
 pub use parse::parse_control;
+pub use path::*;
 pub use report::{
-    SubagentReportView, format_report_envelope, reports_from_json, reports_to_json,
-    truncate_report_body,
+    MAX_REPORT_CHANGED_PATHS, SubagentReportView, format_report_envelope, reports_from_json,
+    reports_to_json, synthesize_partial_report_body, truncate_report_body,
 };
 pub use role::{AgentRole, BaseRole, MAX_ROLE_NAME_LEN, is_valid_role_name};
+pub use status::*;
 
 #[cfg(test)]
 mod tests;
@@ -43,8 +49,10 @@ pub enum ToolSurface {
     Main,
     /// 只读调查。
     Explorer,
-    /// 有边界的实现。
+    /// 有边界的实现（叶节点或已达 `max_depth`）。
     Executor,
+    /// 未达 `max_depth` 的实现者：7 项实现工具 + 8 项子 agent 控制工具（共 15 项）。
+    ExecutorCoordinator,
     /// CLI exec 无头主 agent：剔除交互式 ask 后的全部主工具（17 项）。
     ExecMain,
 }
@@ -106,6 +114,25 @@ const EXECUTOR_TOOLS: [&str; 7] = [
     "write_stdin",
 ];
 
+/// 协调型 executor 工具名：`EXECUTOR_TOOLS` + 8 个控制工具。
+const EXECUTOR_COORDINATOR_TOOLS: [&str; 15] = [
+    "read",
+    "search",
+    "web_search",
+    "edit",
+    "write",
+    "exec_command",
+    "write_stdin",
+    "spawn_agent",
+    "send_input",
+    "interrupt_agent",
+    "resume_agent",
+    "wait_agent",
+    "close_agent",
+    "list_agents",
+    "cancel_agent_input",
+];
+
 impl ToolSurface {
     /// 该工具面的工具名（逐字稳定，测试锁死）。
     pub const fn names(self) -> &'static [&'static str] {
@@ -113,6 +140,7 @@ impl ToolSurface {
             Self::Main => &MAIN_TOOLS,
             Self::Explorer => &EXPLORER_TOOLS,
             Self::Executor => &EXECUTOR_TOOLS,
+            Self::ExecutorCoordinator => &EXECUTOR_COORDINATOR_TOOLS,
             Self::ExecMain => &EXEC_MAIN_TOOLS,
         }
     }
@@ -124,10 +152,28 @@ impl ToolSurface {
             BaseRole::Executor => Self::Executor,
         }
     }
+
+    /// 角色在指定深度下的工具面：`Executor` 仅在 `depth < max_depth` 时获得控制工具。
+    pub const fn from_role_at_depth(role: AgentRole, depth: usize, max_depth: usize) -> Self {
+        match role.base() {
+            BaseRole::Explorer => Self::Explorer,
+            BaseRole::Executor => {
+                if depth < max_depth {
+                    Self::ExecutorCoordinator
+                } else {
+                    Self::Executor
+                }
+            }
+        }
+    }
 }
 
 /// 每会话并发上限（硬拒绝，不排队）。
-pub const MAX_CONCURRENT_SUBAGENTS: usize = 3;
+pub const MAX_CONCURRENT_SUBAGENTS: usize = 4;
+/// 单次 `spawn_agent` 允许指定的最大分叉轮次数。
+pub const MAX_FORK_TURNS: u32 = 64;
+/// Token 预算耗尽时的稳定停止原因码。
+pub const BUDGET_EXCEEDED_CODE: &str = "budget_exceeded";
 /// 单次 `wait_agent` 的目标数上限。
 pub const MAX_WAIT_TARGETS: usize = 8;
 /// `wait_agent` 默认超时（毫秒）。
@@ -191,6 +237,43 @@ impl WaitMode {
     }
 }
 
+/// 子 agent 历史分叉策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForkSpec {
+    /// 不继承父会话历史（默认）。
+    None,
+    /// 继承父会话当前流式轮次之前的全部已完成轮次。
+    AllCompleted,
+    /// 仅继承父会话当前流式轮次之前的最近 `N` 个已完成轮次（`1..=64`）。
+    RecentTurns(u32),
+}
+
+impl ForkSpec {
+    /// 是否启用历史分叉。
+    pub const fn is_enabled(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    /// 按轮次截取时的轮次数（`AllCompleted` / `None` 返回 None）。
+    pub const fn fork_turns(self) -> Option<u32> {
+        match self {
+            Self::RecentTurns(turns) => Some(turns),
+            Self::None | Self::AllCompleted => None,
+        }
+    }
+
+    /// 由 `fork_context` 与可选 `fork_turns` 归一化：`Some(0)` 等价于不分叉，
+    /// `Some(n > 0)` 隐含启用分叉。
+    pub fn from_params(fork_context: bool, fork_turns: Option<u32>) -> Self {
+        match fork_turns {
+            Some(0) => Self::None,
+            Some(turns) => Self::RecentTurns(turns.min(MAX_FORK_TURNS)),
+            None if fork_context => Self::AllCompleted,
+            None => Self::None,
+        }
+    }
+}
+
 /// 子 agent 结构化输入项（保持原始出现顺序，文本与图片可交错）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubagentInputItem {
@@ -232,6 +315,8 @@ pub fn joined_input_text(items: &[SubagentInputItem]) -> String {
 pub struct AgentListItemView {
     pub agent_id: String,
     pub nickname: Option<String>,
+    /// 规范路径（如 `/root/turing`）；旧记录为 None。
+    pub agent_path: Option<String>,
     pub role: AgentRole,
     pub title: String,
     pub status: String,
@@ -246,11 +331,17 @@ pub enum SubagentOp {
         role: AgentRole,
         /// 面向用户的短标题（不是 task 原文）。
         title: String,
+        /// 可选路径段（`[a-z0-9][a-z0-9_]{0,31}`）；未传时由昵称派生。
+        task_name: Option<String>,
         task: String,
         /// 有序结构化输入项（旧 `task` 参数走单条 `Text`）。
         items: Vec<SubagentInputItem>,
         /// 是否克隆父会话当前流式轮次之前的已完成历史。
         fork_context: bool,
+        /// 可选分叉轮次数（`0..=64`；`> 0` 时隐含 `fork_context = true`）。
+        fork_turns: Option<u32>,
+        /// 可选单轮 Token 预算覆写（至少 1000）。
+        max_tokens: Option<u64>,
         /// 可选模型覆写（`"provider/model"` 或 `"model"`）。
         model: Option<String>,
         /// 可选思考等级覆写（对应模型 `variants` key）。
@@ -261,6 +352,8 @@ pub enum SubagentOp {
         target: String,
         items: Vec<SubagentInputItem>,
         interrupt: bool,
+        /// 是否在子 agent 空闲时立即唤醒启动新轮次（默认 true；false 仅入队）。
+        trigger_turn: bool,
     },
     /// 中断正在运行的子 agent 当前轮次，保留其 `idle` 活动态并暂停消费后续排队输入。
     Interrupt { target: String },
@@ -275,8 +368,8 @@ pub enum SubagentOp {
     },
     /// 停止一个子 agent（不产生报告）。
     Close { target: String },
-    /// 列出当前父会话下的全部子 agent 状态与排队计数。
-    List,
+    /// 列出当前父会话（或指定路径前缀下）的子 agent 状态与排队计数。
+    List { path_prefix: Option<String> },
     /// 取消一条尚未开始的排队输入。
     CancelInput { submission_id: String },
 }
@@ -288,11 +381,17 @@ pub enum SubagentOutcome {
     Spawned {
         agent_id: String,
         nickname: Option<String>,
+        /// 规范路径（如 `/root/turing`）；旧记录为 None。
+        agent_path: Option<String>,
         role: AgentRole,
         title: String,
         model: Option<String>,
         reasoning_effort: Option<String>,
         fork_context: bool,
+        /// 按轮次分叉时的轮次数；未指定为 None。
+        fork_turns: Option<u32>,
+        /// 本次派发生效的 Token 预算上限；未指定为 None。
+        max_tokens: Option<u64>,
     },
     /// 输入已持久接收并入队（或立即启动）。
     InputAccepted {
@@ -301,6 +400,8 @@ pub enum SubagentOutcome {
         status: String,
         queued_count: usize,
         interrupt: bool,
+        /// 是否立即唤醒空闲子 agent（默认 true）。
+        trigger_turn: bool,
     },
     /// 已中断当前正在运行的轮次（保留半截输出、保持 `idle` 且暂停后续队列自动消费）。
     Interrupted {
@@ -347,6 +448,8 @@ pub struct AgentStatusView {
     pub agent_id: String,
     /// 可选唯一昵称。
     pub nickname: Option<String>,
+    /// 规范路径（如 `/root/turing`）；旧记录为 None。
+    pub agent_path: Option<String>,
     /// 面向用户的短标题；旧记录可能为空。
     pub title: String,
     /// 角色。
@@ -378,11 +481,14 @@ impl SubagentOutcome {
             Self::Spawned {
                 agent_id,
                 nickname,
+                agent_path,
                 role,
                 title,
                 model,
                 reasoning_effort,
                 fork_context,
+                fork_turns,
+                max_tokens,
             } => {
                 let mut obj = json!({
                     "tool": "spawn_agent",
@@ -394,6 +500,9 @@ impl SubagentOutcome {
                     if let Some(nick) = nickname.as_deref().filter(|s| !s.is_empty()) {
                         map.insert("nickname".into(), Value::String(nick.to_string()));
                     }
+                    if let Some(path) = agent_path.as_deref().filter(|s| !s.is_empty()) {
+                        map.insert("agent_path".into(), Value::String(path.to_string()));
+                    }
                     if let Some(m) = model.as_deref().filter(|s| !s.is_empty()) {
                         map.insert("model".into(), Value::String(m.to_string()));
                     }
@@ -402,6 +511,12 @@ impl SubagentOutcome {
                     }
                     if *fork_context {
                         map.insert("fork_context".into(), Value::Bool(true));
+                    }
+                    if let Some(turns) = fork_turns {
+                        map.insert("fork_turns".into(), Value::from(*turns));
+                    }
+                    if let Some(tokens) = max_tokens {
+                        map.insert("max_tokens".into(), Value::from(*tokens));
                     }
                 }
                 obj
@@ -412,6 +527,7 @@ impl SubagentOutcome {
                 status,
                 queued_count,
                 interrupt,
+                trigger_turn,
             } => json!({
                 "tool": "send_input",
                 "submission_id": submission_id,
@@ -419,6 +535,7 @@ impl SubagentOutcome {
                 "status": status,
                 "queued_count": queued_count,
                 "interrupt": interrupt,
+                "trigger_turn": trigger_turn,
             }),
             Self::Interrupted {
                 agent_id,
@@ -469,10 +586,14 @@ impl SubagentOutcome {
                             "status": agent.status,
                             "report": agent.report,
                         });
-                        if let Some(nick) = agent.nickname.as_deref().filter(|s| !s.is_empty())
-                            && let Some(map) = item.as_object_mut()
-                        {
-                            map.insert("nickname".into(), Value::String(nick.to_string()));
+                        if let Some(map) = item.as_object_mut() {
+                            if let Some(nick) = agent.nickname.as_deref().filter(|s| !s.is_empty()) {
+                                map.insert("nickname".into(), Value::String(nick.to_string()));
+                            }
+                            if let Some(path) = agent.agent_path.as_deref().filter(|s| !s.is_empty())
+                            {
+                                map.insert("agent_path".into(), Value::String(path.to_string()));
+                            }
                         }
                         item
                     })
@@ -498,10 +619,14 @@ impl SubagentOutcome {
                             "status": agent.status,
                             "queued_count": agent.queued_count,
                         });
-                        if let Some(nick) = agent.nickname.as_deref().filter(|s| !s.is_empty())
-                            && let Some(map) = item.as_object_mut()
-                        {
-                            map.insert("nickname".into(), Value::String(nick.to_string()));
+                        if let Some(map) = item.as_object_mut() {
+                            if let Some(nick) = agent.nickname.as_deref().filter(|s| !s.is_empty()) {
+                                map.insert("nickname".into(), Value::String(nick.to_string()));
+                            }
+                            if let Some(path) = agent.agent_path.as_deref().filter(|s| !s.is_empty())
+                            {
+                                map.insert("agent_path".into(), Value::String(path.to_string()));
+                            }
                         }
                         item
                     })
@@ -532,6 +657,11 @@ impl SubagentOutcome {
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
                     .map(str::to_string),
+                agent_path: value
+                    .get("agent_path")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
                 role: AgentRole::parse(value.get("role")?.as_str()?)?,
                 title: value
                     .get("title")
@@ -552,6 +682,11 @@ impl SubagentOutcome {
                     .get("fork_context")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                fork_turns: value
+                    .get("fork_turns")
+                    .and_then(Value::as_u64)
+                    .and_then(|turns| u32::try_from(turns).ok()),
+                max_tokens: value.get("max_tokens").and_then(Value::as_u64),
             }),
             "send_input" => Some(Self::InputAccepted {
                 submission_id: value.get("submission_id")?.as_str()?.to_string(),
@@ -568,6 +703,10 @@ impl SubagentOutcome {
                     .get("interrupt")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                trigger_turn: value
+                    .get("trigger_turn")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
             }),
             "interrupt_agent" => Some(Self::Interrupted {
                 agent_id: value.get("agent_id")?.as_str()?.to_string(),
@@ -611,6 +750,11 @@ impl SubagentOutcome {
                             .and_then(Value::as_str)
                             .filter(|s| !s.is_empty())
                             .map(str::to_string),
+                        agent_path: agent
+                            .get("agent_path")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string),
                         title: agent
                             .get("title")
                             .and_then(Value::as_str)
@@ -648,6 +792,11 @@ impl SubagentOutcome {
                         agent_id: entry.get("agent_id")?.as_str()?.to_string(),
                         nickname: entry
                             .get("nickname")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string),
+                        agent_path: entry
+                            .get("agent_path")
                             .and_then(Value::as_str)
                             .filter(|s| !s.is_empty())
                             .map(str::to_string),
@@ -758,6 +907,9 @@ You were given a goal, a boundary, and a deliverable (plus any images attached d
 user message, which you can inspect visually without calling `read`). Work inside that boundary.
 If the task turns out to need changes outside it, stop and report why instead of widening the
 scope yourself.
+
+You have only the tools listed in this turn's tool declarations. Unless subagent control tools
+are explicitly provided in your tool declarations, do not attempt to delegate further.
 
 You are not alone in this workspace. Other agents may be editing other files at the same time.
 Never revert, reformat, or overwrite changes you did not make; if a file changed under you, re-read

@@ -707,6 +707,7 @@ fn task_output_and_agents_copy_text_across_scroll_without_scrollbar() {
     let mut run = crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
         agent_id: "sub-1".into(),
         nickname: None,
+        agent_path: "/root/agent".into(),
         child_session_id: "sess-1".into(),
         parent_session_id: "parent".into(),
         spawn_message_id: None,
@@ -1619,6 +1620,7 @@ fn lx_with_running_subagent(main_stopped: bool) -> Lx {
             &crate::db::chat::SubagentRecord {
                 agent_id: "sub-a".into(),
                 nickname: None,
+                agent_path: "/root/agent".into(),
                 child_session_id: "sess-a".into(),
                 parent_session_id: "parent".into(),
                 spawn_message_id: None,

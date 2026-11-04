@@ -129,10 +129,19 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
                 list.width,
             );
         }
-        let row_x = list.x.saturating_add(super::MARKER_COLS);
-        let row_w = list.width.saturating_sub(super::MARKER_COLS);
+        let mut row_x = list.x.saturating_add(super::MARKER_COLS);
+        let mut row_w = list.width.saturating_sub(super::MARKER_COLS);
         if row_w == 0 {
             continue;
+        }
+        if let Some(prefix) = tree_prefix(run, &agents.runs, index) {
+            let prefix_w = u16::try_from(prefix.width()).unwrap_or(0);
+            grid.put_clipped(row_x, y, &prefix, style::chat_notice_connector(), row_w);
+            row_x = row_x.saturating_add(prefix_w);
+            row_w = row_w.saturating_sub(prefix_w);
+            if row_w == 0 {
+                continue;
+            }
         }
         let row_style = if selected {
             style::text()
@@ -167,12 +176,27 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         let status_w = u16::try_from(status_label.width())
             .unwrap_or(0)
             .max(STATUS_MIN);
-        let fixed = role_w
+        let base_fixed = role_w
             .saturating_add(CELL_GAP)
             .saturating_add(status_w)
             .saturating_add(CELL_GAP)
             .saturating_add(age_w)
             .saturating_add(CELL_GAP);
+        // Token 列只为「有用量」的 run 出现；窄窗格先牺牲它，身份/状态/时长不动。
+        let token_label = run
+            .total_tokens()
+            .map(|tokens| format!("{} tok", text::token_count(tokens as u64)));
+        let token_w = token_label
+            .as_ref()
+            .map_or(0, |token| u16::try_from(token.width()).unwrap_or(0));
+        let fixed_with_token = base_fixed.saturating_add(token_w).saturating_add(CELL_GAP);
+        let show_token =
+            token_label.is_some() && fixed_with_token.saturating_add(ROLE_MIN) <= row_w;
+        let fixed = if show_token {
+            fixed_with_token
+        } else {
+            base_fixed
+        };
         // 窄窗格：放不下身份 + 状态就整项丢弃（只留标记，与进程行同一规则）。
         if fixed.saturating_add(ROLE_MIN) > row_w {
             continue;
@@ -191,12 +215,45 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         let age_right = x.saturating_add(age_w);
         grid.put_clipped(x, y, &age, style::agent_step_detail(), age_right);
         x = age_right.saturating_add(CELL_GAP);
+        if show_token && let Some(token) = token_label.as_deref() {
+            let token_right = x.saturating_add(token_w);
+            grid.put_clipped(x, y, token, style::agent_step_detail(), token_right);
+            x = token_right.saturating_add(CELL_GAP);
+        }
         // 只显示短标题；绝不把 task 提示词塞进列表（旧记录没有标题则留空）。
         let title = run.display_title();
         if x < list.right() && !title.is_empty() {
             grid.put_clipped(x, y, title, row_style, list.right());
         }
     }
+}
+
+/// 树形缩进前缀：直接子 agent 不缩进；孙辈起用 `├─ `/`└─ ` 表示同级末项。
+fn tree_prefix(run: &SubagentRun, runs: &[SubagentRun], index: usize) -> Option<String> {
+    let depth = run.depth();
+    if depth < 2 {
+        return None;
+    }
+    let parent = parent_path(&run.agent_path)?;
+    let last = !runs.get(index.saturating_add(1)..).is_some_and(|rest| {
+        rest.iter()
+            .any(|other| other.depth() == depth && parent_path(&other.agent_path) == Some(parent))
+    });
+    let connector = if last {
+        text::agent::TREE_LEAF.trim_start()
+    } else {
+        text::agent::TREE_BRANCH.trim_start()
+    };
+    let indent = "  ".repeat(depth.saturating_sub(2));
+    Some(format!("{indent}{connector}"))
+}
+
+/// 父路径（`/root/turing/curie` -> `/root/turing`）。
+fn parent_path(agent_path: &str) -> Option<&str> {
+    agent_path
+        .trim_end_matches('/')
+        .rsplit_once('/')
+        .map(|(parent, _)| parent)
 }
 
 /// 列表窗口起点（与进程列表同口径）。

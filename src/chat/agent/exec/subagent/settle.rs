@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::sync::{oneshot, watch};
 
 use crate::chat::agent::{
-    AgentStatusView, MAX_WAIT_TARGETS, SubagentReportView, truncate_report_body,
+    AgentStatusView, MAX_WAIT_TARGETS, SubagentReportView, synthesize_partial_report_body,
 };
 use crate::chat::agent_loop::TurnOutcome as LoopOutcome;
 use crate::db::chat::{CompactCommit, ReportPayload};
@@ -50,6 +50,7 @@ impl ExecSubagentPool {
         self.resumed.clear();
         self.interrupted.clear();
         self.paused_by_interrupt.clear();
+        self.closed.clear();
     }
 
     pub(super) fn finish(
@@ -66,22 +67,35 @@ impl ExecSubagentPool {
         };
         let was_interrupted_by_input = self.interrupted.remove(agent_id);
         let was_paused_by_interrupt = self.paused_by_interrupt.remove(agent_id);
+        let was_closed = self.closed.remove(agent_id) || handle.closed_without_report;
         close_open_part(&mut handle.parts, &mut handle.open_part_index);
         tracing::debug!(
             target: "lx::exec", agent_id, role = handle.role.as_str(),
             child_user_message_id = %handle.child_user_message_id, "subagent turn finished",
         );
         let outcome = db_outcome(&summary.outcome);
-        let report = match &summary.outcome {
-            LoopOutcome::Interrupted => None,
-            _ => Some(ReportPayload {
+        let report = if was_closed {
+            None
+        } else {
+            let (files_changed, changed_paths) = db
+                .list_changed_paths(&self.workspace, child_session_id, child_user_message_id)
+                .unwrap_or_default();
+            let mut body = last_text_body(&handle.parts);
+            if !matches!(summary.outcome, LoopOutcome::Complete) && body.trim().is_empty() {
+                body = synthesize_partial_report_body(
+                    &body,
+                    completed_tools(db, &self.workspace, child_session_id, child_assistant_id),
+                    &changed_paths,
+                    partial_reason_label(&summary),
+                );
+            }
+            Some(ReportPayload {
                 title: handle.title.clone(),
-                body: truncate_report_body(&last_text_body(&handle.parts)),
-                files_changed: db
-                    .count_changed_paths(&self.workspace, child_session_id, child_user_message_id)
-                    .unwrap_or_default(),
+                body,
+                files_changed,
+                changed_paths,
                 duration_ms: Some(now_ms().saturating_sub(handle.started_at_ms).max(0)),
-            }),
+            })
         };
         if let Err(error) = db.finish_subagent_turn(
             &self.workspace,
@@ -96,45 +110,52 @@ impl ExecSubagentPool {
             tracing::warn!(target: "lx::exec", code = error.code(), "subagent finish failed");
         }
         let mut continued = false;
-        match &summary.outcome {
-            LoopOutcome::Complete => {
-                if was_paused_by_interrupt {
-                    // interrupt 与自然完成竞争：保持 idle，队列仍暂停等显式 resume/send_input。
-                    self.paused_by_interrupt.insert(agent_id.to_string());
-                    self.resumed.insert(agent_id.to_string());
-                } else if self.resumed.contains(agent_id) {
-                    match self.launch_next_queued(db, agent_id, Some(handle.done_tx.clone())) {
-                        Ok(true) => continued = true,
-                        Ok(false) => {
-                            self.resumed.remove(agent_id);
+        if was_closed {
+            self.resumed.remove(agent_id);
+        } else {
+            match &summary.outcome {
+                LoopOutcome::Complete => {
+                    if was_paused_by_interrupt {
+                        // interrupt 与自然完成竞争：保持 idle，队列仍暂停等显式 resume/send_input。
+                        self.paused_by_interrupt.insert(agent_id.to_string());
+                        self.resumed.insert(agent_id.to_string());
+                    } else if self.resumed.contains(agent_id) {
+                        match self.launch_next_queued(db, agent_id, Some(handle.done_tx.clone())) {
+                            Ok(true) => continued = true,
+                            Ok(false) => {
+                                self.resumed.remove(agent_id);
+                            }
+                            // 队首输入 blocked（如 image_missing）：保留队列，停止继续消费。
+                            Err(_) => {}
                         }
-                        // 队首输入 blocked（如 image_missing）：保留队列，停止继续消费。
-                        Err(_) => {}
                     }
                 }
-            }
-            LoopOutcome::Interrupted => {
-                if was_interrupted_by_input {
-                    self.resumed.insert(agent_id.to_string());
-                    match self.launch_next_queued(db, agent_id, Some(handle.done_tx.clone())) {
-                        Ok(true) => continued = true,
-                        Ok(false) => {
-                            self.resumed.remove(agent_id);
+                LoopOutcome::Interrupted => {
+                    if was_interrupted_by_input {
+                        self.resumed.insert(agent_id.to_string());
+                        match self.launch_next_queued(db, agent_id, Some(handle.done_tx.clone())) {
+                            Ok(true) => continued = true,
+                            Ok(false) => {
+                                self.resumed.remove(agent_id);
+                            }
+                            Err(_) => {}
                         }
-                        Err(_) => {}
+                    } else if was_paused_by_interrupt || summary.budget_exceeded {
+                        // 保留暂停标记：`cancel_input` 不得越过 interrupt / 预算熔断自动续跑队列。
+                        self.paused_by_interrupt.insert(agent_id.to_string());
+                        self.resumed.insert(agent_id.to_string());
+                    } else {
+                        self.resumed.remove(agent_id);
+                        let _ = db.close_idle_subagent(
+                            &self.workspace,
+                            &self.parent_session_id,
+                            agent_id,
+                        );
                     }
-                } else if was_paused_by_interrupt {
-                    // 保留暂停标记：`cancel_input` 不得越过 interrupt 自动续跑队列。
-                    self.paused_by_interrupt.insert(agent_id.to_string());
-                    self.resumed.insert(agent_id.to_string());
-                } else {
+                }
+                LoopOutcome::Failed { .. } => {
                     self.resumed.remove(agent_id);
-                    let _ =
-                        db.close_idle_subagent(&self.workspace, &self.parent_session_id, agent_id);
                 }
-            }
-            LoopOutcome::Failed { .. } => {
-                self.resumed.remove(agent_id);
             }
         }
         let processes = Arc::clone(&handle.processes);
@@ -391,9 +412,18 @@ impl ExecSubagentPool {
         all: bool,
         mode: WaitMode,
     ) -> Result<SubagentOutcome, HostError> {
+        let (root_session, _, _) = db
+            .resolve_session_tree_root(&self.workspace, &self.parent_session_id)
+            .unwrap_or_else(|_| {
+                (
+                    self.parent_session_id.clone(),
+                    0,
+                    crate::chat::agent::ROOT_AGENT_PATH.to_string(),
+                )
+            });
         let records = db
-            .list_subagents(&self.workspace, &self.parent_session_id)
-            .map_err(db_failed)?;
+            .list_subagent_tree(&self.workspace, &root_session)
+            .unwrap_or_default();
         let pending = db
             .pending_reports(&self.workspace, &self.parent_session_id)
             .unwrap_or_default();
@@ -417,6 +447,7 @@ impl ExecSubagentPool {
             agents.push(AgentStatusView {
                 agent_id: record.agent_id.clone(),
                 nickname: record.nickname.clone(),
+                agent_path: Some(record.agent_path.clone()),
                 title: record.title.clone(),
                 role: record.role,
                 status: self.projected_status(record, queues.get(target)),
@@ -504,4 +535,35 @@ fn last_text_body(parts: &[ChatPart]) -> String {
         .find(|part| part.kind == "text" && !part.content.trim().is_empty())
         .map(|part| part.content.clone())
         .unwrap_or_default()
+}
+
+/// 本轮已结算的工具调用数（半程汇报正文用）。
+fn completed_tools(
+    db: &Database,
+    workspace: &std::path::Path,
+    child_session: &str,
+    child_assistant_id: &str,
+) -> usize {
+    db.load_chat_session(workspace, child_session)
+        .ok()
+        .flatten()
+        .and_then(|messages| {
+            messages
+                .into_iter()
+                .find(|message| message.external_id == child_assistant_id)
+        })
+        .map(|message| message.tools.len())
+        .unwrap_or_default()
+}
+
+/// 半程汇报的停止原因标签（英文稳定值，写进正文）。
+fn partial_reason_label(summary: &TurnSummary) -> &'static str {
+    if summary.budget_exceeded {
+        return "budget_exceeded";
+    }
+    match summary.outcome {
+        LoopOutcome::Interrupted => "interrupted",
+        LoopOutcome::Failed { .. } => "failed",
+        LoopOutcome::Complete => "complete",
+    }
 }

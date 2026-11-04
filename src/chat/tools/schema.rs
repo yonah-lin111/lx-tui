@@ -153,6 +153,9 @@ pub fn available_tools() -> &'static [ToolSpec] {
 }
 
 /// 按工具面过滤：顺序跟随 [`TOOLS`]，集合等于 `surface.names()`。
+///
+/// 过滤只按名字集合进行，`ToolSurface::ExecutorCoordinator`（未达深度上限的实现者）
+/// 自动获得 7 项实现工具 + 8 项控制工具。
 pub fn tools_for(surface: crate::chat::agent::ToolSurface) -> Vec<&'static ToolSpec> {
     TOOLS
         .iter()

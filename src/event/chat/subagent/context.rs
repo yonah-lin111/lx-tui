@@ -159,6 +159,17 @@ pub(super) struct ChildPromptContext<'a> {
     pub mcp: &'a crate::mcp::McpToolSnapshot,
 }
 
+/// 子轮层级与预算：决定工具面（是否开放控制工具）与 Token 预算护栏。
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct ChildTurnLimits {
+    /// 当前子 agent 所处深度（根为 0，直接子 agent 为 1）。
+    pub depth: usize,
+    /// 配置的最大递归深度。
+    pub max_depth: usize,
+    /// 单轮 Token 预算；None 表示不限。
+    pub max_tokens: Option<u64>,
+}
+
 /// 采集子轮系统提示词所需的冻结输入段。
 pub(super) struct CapturedChildPromptInputs {
     pub system_prompt_override: Option<String>,
@@ -347,6 +358,7 @@ pub(super) fn assemble_child_context(
     output_limit: Option<u64>,
     supports_image_input: bool,
     current_items: &[PersistedInputItem],
+    limits: ChildTurnLimits,
 ) -> Result<ModelContext, String> {
     let current_model_items =
         replay_persisted_items(child_session_id, supports_image_input, true, current_items)?;
@@ -452,12 +464,18 @@ pub(super) fn assemble_child_context(
         purpose: RequestPurpose::Subagent(role),
         system_prompt: Some(system_prompt),
         tools: std::sync::Arc::new(crate::chat::tools::turn_tools(
-            crate::chat::agent::ToolSurface::from_role(role),
+            crate::chat::agent::ToolSurface::from_role_at_depth(
+                role,
+                limits.depth,
+                limits.max_depth,
+            ),
             prompt_ctx.mcp,
         )),
     };
     Ok(ModelContext::new(request, cwd.to_path_buf())
         .with_context_limit(context_limit)
+        .with_subagent_depth(limits.depth, limits.max_depth)
+        .with_token_budget(limits.max_tokens)
         .with_compact_summary(compact_summary))
 }
 

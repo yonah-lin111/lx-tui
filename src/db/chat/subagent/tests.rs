@@ -135,7 +135,81 @@ fn report() -> ReportPayload {
         title: "compact entry".into(),
         body: "found the entry point".into(),
         files_changed: 2,
+        changed_paths: Vec::new(),
         duration_ms: Some(1_200),
+    }
+}
+
+fn spawn_with_options(
+    fixture: &Fixture,
+    parent: &str,
+    nickname: Option<&str>,
+    role: AgentRole,
+    agent_path: Option<&str>,
+    fork_turns: Option<u32>,
+) -> SubagentCommitted {
+    let items = [PersistedInputItem::Text {
+        text: "child task".into(),
+    }];
+    fixture
+        .database
+        .begin_subagent_turn_with_full_options(
+            fixture.workspace(),
+            parent,
+            None,
+            nickname,
+            role,
+            "child task",
+            "child task",
+            &items,
+            &Fixture::model(),
+            None,
+            None,
+            None,
+            false,
+            agent_path,
+            fork_turns,
+            &None,
+        )
+        .expect("spawn with options")
+}
+
+fn reasoning_part(position: i64, text: &str) -> ChatPart {
+    ChatPart {
+        position,
+        kind: "reasoning".into(),
+        content: text.into(),
+        provider_metadata_json: None,
+        started_at_ms: None,
+        ended_at_ms: None,
+        completed_at_ms: None,
+    }
+}
+
+fn image_write(kind: &str, bytes: Option<&[u8]>) -> crate::db::chat::rewind::ImageWrite {
+    crate::db::chat::rewind::ImageWrite {
+        kind: kind.into(),
+        bytes: bytes.map(<[u8]>::to_vec),
+        mode: bytes.map(|_| 0o644),
+        link_target: None,
+        git_oid: None,
+        worktree_root: None,
+        git_dir: None,
+        head_ref: None,
+        head_oid: None,
+    }
+}
+
+fn created_path(path: &str) -> crate::db::chat::rewind::PathMutationWrite {
+    crate::db::chat::rewind::PathMutationWrite {
+        operation: "create".into(),
+        path: path.into(),
+        target_path: path.into(),
+        anchor_path: None,
+        anchor_canonical: None,
+        before: image_write("missing", None),
+        planned_after: image_write("regular", Some(b"after")),
+        expected_version: None,
     }
 }
 
@@ -826,6 +900,7 @@ fn begin_with_options_persists_nickname_and_custom_role_and_resolves_by_nickname
         .expect("list")[0]
         .clone();
     assert_eq!(record.nickname.as_deref(), Some("Turing"));
+    assert_eq!(record.agent_path, "/root/turing");
     assert_eq!(record.role, role);
     assert_eq!(record.role.base(), BaseRole::Explorer);
     assert!(!record.role.is_builtin());
@@ -843,7 +918,7 @@ fn begin_with_options_persists_nickname_and_custom_role_and_resolves_by_nickname
             .expect("child session identity");
     assert_eq!(nickname.as_deref(), Some("Turing"));
     assert_eq!(role_name.as_deref(), Some("reviewer"));
-    assert_eq!(agent_path.as_deref(), Some("explorer"));
+    assert_eq!(agent_path.as_deref(), Some("explorer:/root/turing"));
 
     let by_id = fixture
         .database
@@ -942,6 +1017,382 @@ fn fork_context_clones_only_completed_turns_before_the_streaming_turn() {
             .iter()
             .all(|part| part.content != "streaming question")
     }));
+    cleanup(fixture.root);
+}
+
+#[test]
+fn fork_turns_copies_only_recent_completed_turns_and_sanitizes_history() {
+    let fixture = Fixture::new("fork-turns-window");
+    let first = fixture
+        .database
+        .begin_turn(fixture.workspace(), None, "q1", &Fixture::model())
+        .expect("turn 1");
+    fixture
+        .database
+        .finish(
+            fixture.workspace(),
+            &first.assistant_message_id,
+            &[part(0, "a1"), reasoning_part(1, "thinking about q1")],
+            &TurnOutcome::Complete { stop_reason: None },
+            Usage {
+                input: Some(11),
+                output: Some(7),
+                cache_read: Some(3),
+                cache_write: Some(2),
+            },
+        )
+        .expect("finish turn 1");
+    let second = fixture
+        .database
+        .begin_turn(
+            fixture.workspace(),
+            Some(&first.session_id),
+            "q2",
+            &Fixture::model(),
+        )
+        .expect("turn 2");
+    fixture
+        .database
+        .finish(
+            fixture.workspace(),
+            &second.assistant_message_id,
+            &[part(0, "a2"), reasoning_part(1, "thinking about q2")],
+            &TurnOutcome::Complete { stop_reason: None },
+            Usage {
+                input: Some(22),
+                output: Some(8),
+                ..Usage::default()
+            },
+        )
+        .expect("finish turn 2");
+
+    let connection = fixture.database.connection();
+    assert_eq!(
+        super::super::fork::completed_fork_window(connection, &first.session_id, Some(1))
+            .expect("recent window"),
+        (2, i64::MAX)
+    );
+    let (empty_start, empty_boundary) =
+        super::super::fork::completed_fork_window(connection, &first.session_id, Some(0))
+            .expect("empty window");
+    assert_eq!(empty_start, empty_boundary, "fork_turns=0 返回空窗口");
+    assert_eq!(
+        super::super::fork::completed_fork_window(connection, &first.session_id, None)
+            .expect("all window")
+            .0,
+        0,
+        "fork_turns=None 从开头复制"
+    );
+
+    let committed = spawn_with_options(
+        &fixture,
+        &first.session_id,
+        Some("Curie"),
+        AgentRole::Executor,
+        Some("/root/turing/curie"),
+        Some(1),
+    );
+
+    let messages = fixture
+        .database
+        .load_chat_session(fixture.workspace(), &committed.child_session_id)
+        .expect("load")
+        .expect("child exists");
+    let summary: Vec<&str> = messages
+        .iter()
+        .map(|message| {
+            message
+                .parts
+                .first()
+                .map(|part| part.content.as_str())
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        vec!["q2", "a2", "child task", ""],
+        "fork_turns=1 只克隆最近一轮已完成历史"
+    );
+    assert!(messages.iter().all(|message| {
+        message
+            .parts
+            .iter()
+            .all(|part| part.kind != "reasoning" && part.kind != "thinking")
+    }));
+    let stale_tokens: i64 = fixture
+        .database
+        .connection()
+        .query_row(
+            r#"SELECT COUNT(*) FROM agent_message
+               WHERE session_id = ?1
+                 AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL
+                      OR cache_read_tokens IS NOT NULL OR cache_write_tokens IS NOT NULL)"#,
+            params![committed.child_session_id],
+            |row| row.get(0),
+        )
+        .expect("token count");
+    assert_eq!(stale_tokens, 0, "克隆消息不得继承父会话 token 计费");
+
+    let record = fixture
+        .database
+        .list_subagents(fixture.workspace(), &first.session_id)
+        .expect("list")[0]
+        .clone();
+    assert_eq!(record.agent_path, "/root/turing/curie");
+    let stored_path: String = fixture
+        .database
+        .connection()
+        .query_row(
+            "SELECT agent_path FROM agent_subagent WHERE external_id = ?1",
+            params![committed.agent_id],
+            |row| row.get(0),
+        )
+        .expect("stored path");
+    assert_eq!(stored_path, "executor:/root/turing/curie");
+
+    let empty = spawn_with_options(
+        &fixture,
+        &first.session_id,
+        Some("Euler"),
+        AgentRole::Explorer,
+        Some("/root/euler"),
+        Some(0),
+    );
+    let messages = fixture
+        .database
+        .load_chat_session(fixture.workspace(), &empty.child_session_id)
+        .expect("load")
+        .expect("child exists");
+    assert_eq!(messages.len(), 2, "fork_turns=0 不克隆任何历史");
+    assert_eq!(messages[0].sequence, 0);
+    cleanup(fixture.root);
+}
+
+#[test]
+fn session_tree_root_and_tree_listing_span_three_levels() {
+    let fixture = Fixture::new("tree");
+    let root = fixture.parent();
+    let child = spawn_with_options(
+        &fixture,
+        &root,
+        Some("Turing"),
+        AgentRole::Executor,
+        Some("/root/turing"),
+        None,
+    );
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let grandchild = spawn_with_options(
+        &fixture,
+        &child.child_session_id,
+        Some("Curie"),
+        AgentRole::Explorer,
+        Some("/root/turing/curie"),
+        None,
+    );
+
+    assert_eq!(
+        fixture
+            .database
+            .resolve_session_tree_root(fixture.workspace(), &root)
+            .expect("root"),
+        (root.clone(), 0, "/root".to_string())
+    );
+    assert_eq!(
+        fixture
+            .database
+            .resolve_session_tree_root(fixture.workspace(), &child.child_session_id)
+            .expect("child"),
+        (root.clone(), 1, "/root/turing".to_string())
+    );
+    assert_eq!(
+        fixture
+            .database
+            .resolve_session_tree_root(fixture.workspace(), &grandchild.child_session_id)
+            .expect("grandchild"),
+        (root.clone(), 2, "/root/turing/curie".to_string())
+    );
+
+    let tree = fixture
+        .database
+        .list_subagent_tree(fixture.workspace(), &root)
+        .expect("tree");
+    assert_eq!(
+        tree.iter()
+            .map(|record| record.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![child.agent_id.as_str(), grandchild.agent_id.as_str()],
+        "整树按创建顺序列出直接子节点与孙节点"
+    );
+    let subtree = fixture
+        .database
+        .list_subagent_tree(fixture.workspace(), &child.child_session_id)
+        .expect("subtree");
+    assert_eq!(subtree.len(), 1);
+    assert_eq!(subtree[0].agent_id, grandchild.agent_id);
+
+    let by_path = fixture
+        .database
+        .resolve_owned_subagent(fixture.workspace(), &root, "/root/turing/curie")
+        .expect("resolve by path")
+        .expect("found by path");
+    assert_eq!(by_path.agent_id, grandchild.agent_id);
+    let from_parent = fixture
+        .database
+        .resolve_owned_subagent(
+            fixture.workspace(),
+            &child.child_session_id,
+            "/root/turing/curie",
+        )
+        .expect("resolve from child")
+        .expect("found from child");
+    assert_eq!(from_parent.agent_id, grandchild.agent_id);
+    let by_nickname = fixture
+        .database
+        .resolve_owned_subagent(fixture.workspace(), &root, "curie")
+        .expect("resolve by nickname")
+        .expect("found by nickname");
+    assert_eq!(by_nickname.agent_id, grandchild.agent_id);
+    let by_relative = fixture
+        .database
+        .resolve_owned_subagent(fixture.workspace(), &root, "turing/curie")
+        .expect("resolve by relative path")
+        .expect("found by relative path");
+    assert_eq!(by_relative.agent_id, grandchild.agent_id);
+    cleanup(fixture.root);
+}
+
+#[test]
+fn legacy_agent_path_values_decode_with_fallback_paths() {
+    let fixture = Fixture::new("legacy-path");
+    let parent = fixture.parent();
+    let committed = fixture.spawn(&parent, AgentRole::Executor, "legacy task");
+    fixture
+        .database
+        .connection()
+        .execute(
+            "UPDATE agent_subagent SET agent_path = 'executor', nickname = 'Turing' \
+             WHERE external_id = ?1",
+            params![committed.agent_id],
+        )
+        .expect("downgrade stored path");
+    let record = fixture
+        .database
+        .list_subagents(fixture.workspace(), &parent)
+        .expect("list")[0]
+        .clone();
+    assert_eq!(
+        record.agent_path, "/root/turing",
+        "旧格式只有角色时按昵称回退规范路径"
+    );
+    assert_eq!(record.role.base(), BaseRole::Executor);
+
+    assert_eq!(
+        crate::chat::agent::encode_stored_role_and_path(BaseRole::Executor, "/root/turing"),
+        "executor:/root/turing"
+    );
+    assert_eq!(
+        crate::chat::agent::decode_stored_role_and_path(Some("explorer")),
+        (Some(BaseRole::Explorer), None)
+    );
+    assert_eq!(
+        crate::chat::agent::decode_stored_role_and_path(Some("executor:/root/turing")),
+        (Some(BaseRole::Executor), Some("/root/turing".to_string()))
+    );
+    assert_eq!(
+        crate::chat::agent::decode_stored_role_and_path(Some("/root/only-path")),
+        (None, Some("/root/only-path".to_string()))
+    );
+    assert_eq!(
+        crate::chat::agent::decode_stored_role_and_path(None),
+        (None, None)
+    );
+    cleanup(fixture.root);
+}
+
+#[test]
+fn list_changed_paths_relativizes_and_deduplicates_committed_paths() {
+    let fixture = Fixture::new("changed-paths");
+    let parent = fixture.parent();
+    let committed = fixture.spawn(&parent, AgentRole::Executor, "edit files");
+    let first = fixture
+        .workspace()
+        .join("src/a.rs")
+        .to_string_lossy()
+        .into_owned();
+    let second = fixture
+        .workspace()
+        .join("src/b.rs")
+        .to_string_lossy()
+        .into_owned();
+    let outside = fixture
+        .root
+        .join("outside.rs")
+        .to_string_lossy()
+        .into_owned();
+    let ticket = fixture
+        .database
+        .prepare_mutations(
+            fixture.workspace(),
+            &committed.child_session_id,
+            &committed.child_user_message_id,
+            "call-1",
+            &[
+                created_path(&first),
+                created_path(&second),
+                created_path(&first),
+                created_path(&outside),
+            ],
+        )
+        .expect("prepare");
+    fixture
+        .database
+        .commit_mutations(
+            fixture.workspace(),
+            &committed.child_session_id,
+            &ticket,
+            &(0..4)
+                .map(|_| crate::db::chat::rewind::ObservedWrite {
+                    actual_after: image_write("regular", Some(b"after")),
+                    success: true,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .expect("commit");
+
+    let (total, paths) = fixture
+        .database
+        .list_changed_paths(
+            fixture.workspace(),
+            &committed.child_session_id,
+            &committed.child_user_message_id,
+        )
+        .expect("changed paths");
+    assert_eq!(total, 3, "重复路径按 distinct 计数");
+    assert_eq!(
+        paths,
+        vec!["src/a.rs".to_string(), "src/b.rs".to_string(), outside]
+    );
+
+    fixture.finish_child(
+        &committed,
+        TurnOutcome::Complete { stop_reason: None },
+        Some(&ReportPayload {
+            title: "edit files".into(),
+            body: "done".into(),
+            files_changed: total,
+            changed_paths: paths.clone(),
+            duration_ms: None,
+        }),
+    );
+    let view = fixture
+        .database
+        .list_subagents(fixture.workspace(), &parent)
+        .expect("list")[0]
+        .report_json
+        .as_deref()
+        .and_then(crate::chat::agent::SubagentReportView::from_json)
+        .expect("report view");
+    assert_eq!(view.changed_paths, paths);
     cleanup(fixture.root);
 }
 

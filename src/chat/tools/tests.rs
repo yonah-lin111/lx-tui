@@ -322,6 +322,94 @@ fn curr_time_returns_exact_utc_format_and_rejects_extra_fields() {
     }
 }
 
+/// 新控制参数出现在 schema 中，且数字/枚举与常量同源。
+#[test]
+fn subagent_schemas_declare_hierarchy_and_budget_fields() {
+    use crate::chat::agent::MAX_FORK_TURNS;
+    use crate::config::subagents::MIN_SUBAGENT_MAX_TOKENS;
+
+    let spec = |name: &str| {
+        available_tools()
+            .iter()
+            .find(|spec| spec.name == name)
+            .map(|spec| spec.parameters())
+            .unwrap_or_else(|| panic!("{name}"))
+    };
+
+    let spawn = spec("spawn_agent");
+    assert_eq!(
+        spawn["properties"]["task_name"]["maxLength"],
+        crate::chat::agent::MAX_PATH_SEGMENT_LEN
+    );
+    assert_eq!(spawn["properties"]["fork_turns"]["maximum"], MAX_FORK_TURNS);
+    assert_eq!(
+        spawn["properties"]["max_tokens"]["minimum"],
+        MIN_SUBAGENT_MAX_TOKENS
+    );
+
+    let send = spec("send_input");
+    assert_eq!(send["properties"]["trigger_turn"]["type"], "boolean");
+    assert_eq!(send["properties"]["trigger_turn"]["default"], true);
+
+    let list = spec("list_agents");
+    assert_eq!(
+        list["properties"]["path_prefix"]["type"], "string",
+        "list_agents must expose path_prefix"
+    );
+
+    for tool in ["send_input", "interrupt_agent", "close_agent"] {
+        let tool_spec = spec(tool);
+        let target = tool_spec["properties"]["target"]["description"]
+            .as_str()
+            .expect("target description");
+        assert!(
+            target.contains("agent_path"),
+            "{tool} target description must mention agent_path: {target}"
+        );
+    }
+    let wait_spec = spec("wait_agent");
+    let wait_targets = wait_spec["properties"]["targets"]["description"]
+        .as_str()
+        .expect("wait targets description");
+    assert!(wait_targets.contains("agent_path"));
+}
+
+/// 未达深度上限的 executor 工具面包含控制工具，达到上限后收紧。
+#[test]
+fn executor_coordinator_surface_contains_control_tools() {
+    use crate::chat::agent::ToolSurface;
+
+    let names: Vec<&str> = tools_for(ToolSurface::ExecutorCoordinator)
+        .iter()
+        .map(|spec| spec.name)
+        .collect();
+    assert_eq!(names.len(), 15);
+    for expected in [
+        "read",
+        "search",
+        "web_search",
+        "edit",
+        "write",
+        "exec_command",
+        "write_stdin",
+        "spawn_agent",
+        "send_input",
+        "interrupt_agent",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+        "list_agents",
+        "cancel_agent_input",
+    ] {
+        assert!(names.contains(&expected), "missing {expected}");
+    }
+    for absent in ["ask", "update_plan", "curr_time"] {
+        assert!(!names.contains(&absent), "unexpected {absent}");
+    }
+    let declarations = builtin_tools(ToolSurface::ExecutorCoordinator);
+    assert_eq!(declarations.len(), 15);
+}
+
 /// 跨工具校验：schema 声明的属性与执行层白名单校验严格一致。
 #[test]
 fn schema_declarations_match_execution_layer_validation() {

@@ -143,7 +143,51 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
                 chat::stop_selected_process(state, pane);
             }
         }
+        // Agents 页签里的 `^a`：停止整棵根会话树下所有运行中的子 agent。
+        //
+        // 输入框的 `^a` 是行首（`LineStart`），但任务页整页接管输入、不存在草稿编辑，
+        // 因此这里复用同键位，不新增映射。
+        LxInput::LineStart => {
+            let agents_tab = state
+                .pane_anywhere(pane)
+                .and_then(|target| target.lx.task.as_ref())
+                .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
+            if agents_tab {
+                stop_all_subagents(state, pane);
+            }
+        }
         // 其余键不属于面板：吞掉，不落到草稿。
         _ => {}
     }
+}
+
+/// `^a`：停止根会话树下全部运行中的子 agent（事件层级联处理后代）。
+fn stop_all_subagents(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_anywhere(pane) else {
+        return false;
+    };
+    let running = target.lx.agents.running_count();
+    let Some(session_id) = target.lx.chat.session_id.clone() else {
+        return false;
+    };
+    if running == 0 {
+        return false;
+    }
+    state
+        .effects
+        .push(crate::app::effects::Effect::CancelSubagents {
+            session_id,
+            agent_id: None,
+        });
+    crate::app::update::show_lx_toast(
+        state,
+        pane,
+        crate::app::toast::Toast::new(
+            crate::app::toast::ToastKind::Default,
+            crate::ui::text::stopping_subagents(running),
+            Some(pane),
+            std::time::Instant::now(),
+        ),
+    );
+    true
 }

@@ -128,6 +128,14 @@ impl AgentRole {
     pub const fn tools(self) -> &'static [&'static str] {
         ToolSurface::from_role(self).names()
     }
+
+    /// 该角色在指定递归深度下的工具面。
+    ///
+    /// 仅 `BaseRole::Executor` 在 `depth < max_depth` 时获得子 agent 控制工具；
+    /// `explorer` 在任何深度都保持只读。
+    pub const fn tool_surface_at_depth(self, depth: usize, max_depth: usize) -> ToolSurface {
+        ToolSurface::from_role_at_depth(self, depth, max_depth)
+    }
 }
 
 /// 将已通过 [`is_valid_role_name`] 校验的自定义角色名驻留到去重静态池。

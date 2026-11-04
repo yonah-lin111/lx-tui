@@ -4,6 +4,9 @@ use serde_json::{Value, json};
 
 use super::{AgentRole, MAX_REPORT_BYTES};
 
+/// 单份报告最多附带的变更文件路径条数。
+pub const MAX_REPORT_CHANGED_PATHS: usize = 32;
+
 /// 汇报块数据源（父消息 `subagent_report_json` 反序列化）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubagentReportView {
@@ -19,6 +22,8 @@ pub struct SubagentReportView {
     pub status: String,
     /// 去重后的改动文件数。
     pub files_changed: usize,
+    /// 改动文件相对路径（最多 [`MAX_REPORT_CHANGED_PATHS`] 条；旧报告为空）。
+    pub changed_paths: Vec<String>,
     /// 子 turn 耗时（毫秒）。
     pub duration_ms: Option<i64>,
     /// 报告正文（已按上限截断）。
@@ -40,6 +45,7 @@ impl SubagentReportView {
             "role": self.role.as_str(),
             "status": self.status,
             "files_changed": self.files_changed,
+            "changed_paths": self.changed_paths,
             "duration_ms": self.duration_ms,
             "body": self.body,
             "delivered_at_ms": self.delivered_at_ms,
@@ -78,6 +84,20 @@ impl SubagentReportView {
                 .get("files_changed")
                 .and_then(Value::as_u64)
                 .unwrap_or_default() as usize,
+            changed_paths: value
+                .get("changed_paths")
+                .and_then(Value::as_array)
+                .map(|paths| {
+                    paths
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::trim)
+                        .filter(|path| !path.is_empty())
+                        .take(MAX_REPORT_CHANGED_PATHS)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
             duration_ms: value.get("duration_ms").and_then(Value::as_i64),
             body: value.get("body")?.as_str()?.to_string(),
             delivered_at_ms: value
@@ -110,7 +130,26 @@ pub fn reports_to_json(reports: &[SubagentReportView]) -> String {
 
 /// 注入父会话的报告文本：纯文本 + XML 包裹 + 元字符转义。
 pub fn format_report_envelope(report: &SubagentReportView) -> String {
-    let body = truncate_report_body(&sanitize_control(&report.body));
+    let mut body = escape_text(&truncate_report_body(&sanitize_control(&report.body)));
+    if !report.changed_paths.is_empty() {
+        let shown: Vec<String> = report
+            .changed_paths
+            .iter()
+            .take(MAX_REPORT_CHANGED_PATHS)
+            .map(|path| escape_text(&sanitize_control(path.trim())))
+            .filter(|path| !path.is_empty())
+            .collect();
+        if !shown.is_empty() {
+            body.push_str(&format!("\nChanged files: {}", shown.join(", ")));
+            let hidden = report
+                .changed_paths
+                .len()
+                .saturating_sub(MAX_REPORT_CHANGED_PATHS);
+            if hidden > 0 {
+                body.push_str(&format!(" (+{hidden} more)"));
+            }
+        }
+    }
     let duration = report
         .duration_ms
         .map(|value| format!("{value}"))
@@ -130,7 +169,31 @@ pub fn format_report_envelope(report: &SubagentReportView) -> String {
         escape_attribute(&report.status),
         report.files_changed,
         duration,
-        escape_text(&body),
+        body,
+    )
+}
+
+/// 生成半程汇报正文：优先保留已生成的最后文本，否则汇总工具进展与变更文件。
+pub fn synthesize_partial_report_body(
+    last_text: &str,
+    completed_tools: usize,
+    changed_paths: &[String],
+    reason_label: &str,
+) -> String {
+    if !last_text.trim().is_empty() {
+        return format!("[Partial report ({reason_label})]\n{}", last_text.trim());
+    }
+    let files_note = if changed_paths.is_empty() {
+        "no files modified".to_string()
+    } else {
+        format!(
+            "modified {} file(s): {}",
+            changed_paths.len(),
+            changed_paths.join(", ")
+        )
+    };
+    format!(
+        "[Partial report ({reason_label})] Completed {completed_tools} tool step(s); {files_note}."
     )
 }
 

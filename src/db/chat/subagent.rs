@@ -18,9 +18,7 @@ use std::path::Path;
 use rusqlite::{OptionalExtension, params};
 
 use super::{ChatPart, ModelSnapshot, TurnOutcome, Usage};
-use crate::chat::agent::{
-    AgentRole, BaseRole, MAX_REPORT_BYTES, SubagentReportView, truncate_report_body,
-};
+use crate::chat::agent::{AgentRole, MAX_REPORT_BYTES, SubagentReportView, truncate_report_body};
 use crate::db::{Database, DbError, Result, new_external_id, now_ms};
 
 impl Database {
@@ -109,6 +107,47 @@ impl Database {
         fork_context: bool,
         image_rewrite: &Option<(String, String)>,
     ) -> Result<SubagentCommitted> {
+        self.begin_subagent_turn_with_full_options(
+            workspace,
+            parent_session,
+            child_session_id,
+            nickname,
+            role,
+            title,
+            task,
+            items,
+            model,
+            spawn_message_id,
+            dedupe_key,
+            parent_call_id,
+            fork_context,
+            None,
+            None,
+            image_rewrite,
+        )
+    }
+
+    /// spawn（完整选项：规范 `agent_path` 与按轮次分叉 `fork_turns`）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_subagent_turn_with_full_options(
+        &self,
+        workspace: &Path,
+        parent_session: &str,
+        child_session_id: Option<&str>,
+        nickname: Option<&str>,
+        role: AgentRole,
+        title: &str,
+        task: &str,
+        items: &[PersistedInputItem],
+        model: &ModelSnapshot,
+        spawn_message_id: Option<&str>,
+        dedupe_key: Option<&str>,
+        parent_call_id: Option<&str>,
+        fork_context: bool,
+        agent_path: Option<&str>,
+        fork_turns: Option<u32>,
+        image_rewrite: &Option<(String, String)>,
+    ) -> Result<SubagentCommitted> {
         if task.trim().is_empty() && items.is_empty() {
             return Err(DbError::InvalidDraft);
         }
@@ -130,6 +169,22 @@ impl Database {
             .filter(|id| !id.trim().is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| new_external_id("sess"));
+        let canonical_path = agent_path
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                format!(
+                    "/root/{}",
+                    crate::chat::agent::slugify_segment(
+                        clean_nickname
+                            .as_deref()
+                            .unwrap_or(child_session_id.as_str()),
+                    )
+                )
+            });
+        let stored_agent_path =
+            crate::chat::agent::encode_stored_role_and_path(role.base(), &canonical_path);
         transaction.execute(
             r#"INSERT INTO agent_session
                    (external_id, workspace_id, source, title, first_user_message,
@@ -147,19 +202,31 @@ impl Database {
                 model.variant,
                 clean_nickname,
                 role.as_str(),
-                role.base().as_str(),
+                &stored_agent_path,
                 now,
             ],
         )?;
-        let (user_seq, turn_idx) = if fork_context {
-            let boundary = super::fork::completed_boundary_sequence(&transaction, parent_session)?;
-            super::fork::copy_completed_history_to_child(
-                &transaction,
-                parent_session,
-                &child_session_id,
-                boundary,
-                image_rewrite,
-            )?
+        let (user_seq, turn_idx) = if fork_context || fork_turns.is_some_and(|turns| turns > 0) {
+            let (start_seq, boundary) =
+                super::fork::completed_fork_window(&transaction, parent_session, fork_turns)?;
+            if start_seq == 0 {
+                super::fork::copy_completed_history_to_child(
+                    &transaction,
+                    parent_session,
+                    &child_session_id,
+                    boundary,
+                    image_rewrite,
+                )?
+            } else {
+                super::fork::copy_completed_history_window_to_child(
+                    &transaction,
+                    parent_session,
+                    &child_session_id,
+                    start_seq,
+                    boundary,
+                    image_rewrite,
+                )?
+            }
         } else {
             (0, 0)
         };
@@ -211,7 +278,7 @@ impl Database {
                 spawn_message_id,
                 clean_nickname,
                 role.as_str(),
-                role.base().as_str(),
+                stored_agent_path,
                 model.provider,
                 model.model,
                 model.variant,
@@ -311,7 +378,7 @@ impl Database {
         let Some((role, agent_path, nickname, child_session_id)) = row else {
             return Err(DbError::SessionMissing);
         };
-        let base_role = agent_path.as_deref().and_then(BaseRole::parse);
+        let (base_role, _) = crate::chat::agent::decode_stored_role_and_path(agent_path.as_deref());
         let role = role
             .as_deref()
             .and_then(|r| AgentRole::from_name_and_base(r, base_role))
@@ -359,15 +426,26 @@ impl Database {
                 role,
                 status: status.to_string(),
                 files_changed: payload.files_changed,
+                changed_paths: payload.changed_paths.clone(),
                 duration_ms: payload.duration_ms,
                 body: clean_body,
                 delivered_at_ms: now,
             }
             .to_json()
         });
+        // 半程汇报（interrupt / 预算熔断）也要落库，父 agent 才能在 `wait_agent`
+        // 或报告批次里读到被中断前的进展；`close_agent` 走 `report = None` 不产生报告。
+        //
+        // 报告行 `status` 列受 CHECK 约束只允许 `completed` / `failed`：中断态
+        // （`cancelled`）按 `failed` 归档，权威状态以 `report_json` 内的 `status` 为准。
         if let Some(ref json_text) = report_json
-            && matches!(status, "completed" | "failed")
+            && matches!(status, "completed" | "failed" | "cancelled")
         {
+            let row_status = if status == "cancelled" {
+                "failed"
+            } else {
+                status
+            };
             transaction.execute(
                 r#"INSERT INTO agent_subagent_report
                        (external_id, agent_id, child_user_message_id, status, report_json,
@@ -377,7 +455,7 @@ impl Database {
                     new_external_id("rep"),
                     agent_id,
                     child_user_message_id,
-                    status,
+                    row_status,
                     json_text,
                     now,
                 ],
@@ -435,7 +513,10 @@ impl Database {
         Ok(Some(record))
     }
 
-    /// 按 `agent_id` 精确匹配或按同父会话 `nickname`（ASCII 大小写不敏感）双向寻址子 agent。
+    /// 按 `agent_id` 精确匹配、昵称或规范路径（三合一）在根会话树内寻址子 agent。
+    ///
+    /// 直接子 agent 先用现有查询快路径解析；未命中时沿 `parent_session` 向上找到根
+    /// 会话，再在整棵子 agent 树中按 `matches_agent_target` 匹配绝对或相对路径。
     pub fn resolve_owned_subagent(
         &self,
         workspace: &Path,
@@ -449,11 +530,28 @@ impl Database {
         if let Some(record) = self.owned_subagent(workspace, parent_session, key)? {
             return Ok(Some(record));
         }
-        let all = self.list_subagents(workspace, parent_session)?;
-        Ok(all.into_iter().find(|rec| {
-            rec.nickname
-                .as_deref()
-                .is_some_and(|nick| nick.eq_ignore_ascii_case(key))
+        let direct = self.list_subagents(workspace, parent_session)?;
+        if let Some(record) = direct.into_iter().find(|rec| {
+            crate::chat::agent::matches_agent_target(
+                &rec.agent_id,
+                rec.nickname.as_deref(),
+                Some(&rec.agent_path),
+                crate::chat::agent::ROOT_AGENT_PATH,
+                key,
+            )
+        }) {
+            return Ok(Some(record));
+        }
+        let (root_session, _, _) = self.resolve_session_tree_root(workspace, parent_session)?;
+        let tree = self.list_subagent_tree(workspace, &root_session)?;
+        Ok(tree.into_iter().find(|rec| {
+            crate::chat::agent::matches_agent_target(
+                &rec.agent_id,
+                rec.nickname.as_deref(),
+                Some(&rec.agent_path),
+                crate::chat::agent::ROOT_AGENT_PATH,
+                key,
+            )
         }))
     }
 
@@ -489,6 +587,162 @@ impl Database {
             }
         }
         Ok(records)
+    }
+
+    /// 向上追溯会话所属根会话：返回 `(root_session_id, caller_depth, caller_agent_path)`。
+    ///
+    /// 根会话返回 `(session_id, 0, "/root")`；子会话返回其父/祖父链的根、深度与自身规范路径。
+    /// 最多向上追溯 8 跳防环。
+    pub fn resolve_session_tree_root(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+    ) -> Result<(String, usize, String)> {
+        let root_path = crate::chat::agent::ROOT_AGENT_PATH.to_string();
+        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
+            return Ok((session_id.to_string(), 0, root_path));
+        };
+        let mut current = session_id.to_string();
+        let mut depth = 0usize;
+        let mut current_path = root_path;
+        for _ in 0..8 {
+            let row: Option<(String, Option<String>, Option<String>)> = self
+                .conn
+                .query_row(
+                    r#"SELECT a.parent_session_id, a.agent_path, a.nickname
+                       FROM agent_subagent a
+                       JOIN agent_session p ON p.external_id = a.parent_session_id
+                       WHERE a.child_session_id = ?1 AND p.workspace_id = ?2"#,
+                    params![current, workspace_external],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            let Some((parent_id, stored_path, nickname)) = row else {
+                break;
+            };
+            if depth == 0 {
+                let (_, decoded_path) =
+                    crate::chat::agent::decode_stored_role_and_path(stored_path.as_deref());
+                current_path = decoded_path.unwrap_or_else(|| {
+                    format!(
+                        "{}/{}",
+                        crate::chat::agent::ROOT_AGENT_PATH,
+                        crate::chat::agent::slugify_segment(
+                            nickname.as_deref().unwrap_or(current.as_str())
+                        )
+                    )
+                });
+            }
+            current = parent_id;
+            depth = depth.saturating_add(1);
+        }
+        Ok((current, depth, current_path))
+    }
+
+    /// 列出同一根会话树下的全部子孙 `SubagentRecord`（按创建时间升序）。
+    pub fn list_subagent_tree(
+        &self,
+        workspace: &Path,
+        root_session: &str,
+    ) -> Result<Vec<SubagentRecord>> {
+        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
+            return Ok(Vec::new());
+        };
+        let mut statement = self.conn.prepare(
+            r#"WITH RECURSIVE tree(
+                   external_id, child_session_id, parent_session_id, spawn_message_id,
+                   role, status, title, created_at_ms, completed_at_ms, report_json,
+                   report_delivered, nickname, agent_path, model_provider, model_id, variant,
+                   depth
+               ) AS (
+                   SELECT a.external_id, a.child_session_id, a.parent_session_id, a.spawn_message_id,
+                          a.role, a.status, a.title, a.created_at_ms, a.completed_at_ms,
+                          a.report_json, a.report_delivered, a.nickname, a.agent_path,
+                          a.model_provider, a.model_id, a.variant, 1
+                   FROM agent_subagent a
+                   JOIN agent_session p ON p.external_id = a.parent_session_id
+                   WHERE a.parent_session_id = ?1 AND p.workspace_id = ?2
+                   UNION ALL
+                   SELECT c.external_id, c.child_session_id, c.parent_session_id, c.spawn_message_id,
+                          c.role, c.status, c.title, c.created_at_ms, c.completed_at_ms,
+                          c.report_json, c.report_delivered, c.nickname, c.agent_path,
+                          c.model_provider, c.model_id, c.variant, t.depth + 1
+                   FROM agent_subagent c
+                   JOIN tree t ON c.parent_session_id = t.child_session_id
+                   WHERE t.depth < 8
+               )
+               SELECT external_id, child_session_id, parent_session_id, spawn_message_id,
+                      role, status, title, created_at_ms, completed_at_ms, report_json,
+                      report_delivered, nickname, agent_path, model_provider, model_id, variant
+               FROM tree
+               ORDER BY created_at_ms ASC, external_id ASC"#,
+        )?;
+        let rows =
+            statement.query_map(params![root_session, workspace_external], read_subagent_row)?;
+        let mut records = Vec::new();
+        for row in rows {
+            let (record, role) = row?;
+            if role.as_deref().and_then(AgentRole::parse).is_some() {
+                records.push(record);
+            }
+        }
+        Ok(records)
+    }
+
+    /// 子轮已提交的变更文件路径：返回 `(去重总数, 最多 32 条相对 workspace 的路径)`。
+    ///
+    /// 按首次触碰顺序取 `target_path`，能用 `workspace` 前缀剥离时输出相对路径。
+    pub fn list_changed_paths(
+        &self,
+        workspace: &Path,
+        child_session: &str,
+        child_user_message_id: &str,
+    ) -> Result<(usize, Vec<String>)> {
+        let total = self.count_changed_paths(workspace, child_session, child_user_message_id)?;
+        if total == 0 {
+            return Ok((0, Vec::new()));
+        }
+        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
+            return Ok((total, Vec::new()));
+        };
+        let mut statement = self.conn.prepare(
+            r#"SELECT m.target_path
+               FROM agent_file_mutation m
+               JOIN agent_turn_file_scope s
+                 ON s.session_id = m.session_id AND s.user_message_id = m.user_message_id
+               WHERE m.session_id = ?1 AND m.user_message_id = ?2 AND m.state = 'committed'
+                 AND m.session_id IN (
+                     SELECT external_id FROM agent_session WHERE workspace_id = ?3
+                 )
+               GROUP BY m.target_path
+               ORDER BY MIN(m.id) ASC
+               LIMIT ?4"#,
+        )?;
+        let rows = statement.query_map(
+            params![
+                child_session,
+                child_user_message_id,
+                workspace_external,
+                crate::chat::agent::MAX_REPORT_CHANGED_PATHS as i64
+            ],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut paths = Vec::new();
+        for row in rows {
+            let raw = row?;
+            let relative = Path::new(&raw)
+                .strip_prefix(workspace)
+                .map(|path| {
+                    if path.as_os_str().is_empty() {
+                        ".".to_string()
+                    } else {
+                        path.display().to_string()
+                    }
+                })
+                .unwrap_or(raw);
+            paths.push(relative);
+        }
+        Ok((total, paths))
     }
 
     /// 子会话本轮**已提交**的改动路径数（去重；报告尾巴用）。

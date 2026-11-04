@@ -20,6 +20,8 @@ pub struct SubagentRun {
     pub agent_id: String,
     /// 可选唯一昵称（如 `"Turing"`；旧记录为 None）。
     pub nickname: Option<String>,
+    /// 规范层级路径（如 `"/root/turing"`、`"/root/turing/curie"`）。
+    pub agent_path: String,
     /// 子会话 external id（delta/工具回投的定位键）。
     pub child_session_id: String,
     /// 父会话 external id：切会话后拒绝迟到回投把旧 run 塞进新会话。
@@ -68,6 +70,7 @@ impl SubagentRun {
         Self {
             agent_id: record.agent_id.clone(),
             nickname: record.nickname.clone(),
+            agent_path: record.agent_path.clone(),
             child_session_id: record.child_session_id.clone(),
             parent_session_id: record.parent_session_id.clone(),
             role: record.role,
@@ -106,6 +109,78 @@ impl SubagentRun {
         self.status == "running"
     }
 
+    /// 层级深度：`/root` -> 0，`/root/turing` -> 1，`/root/turing/curie` -> 2。
+    pub fn depth(&self) -> usize {
+        crate::chat::agent::path_depth(&self.agent_path)
+    }
+
+    /// 本轮 token 总量：终态取回投的输入/输出，运行中读实时聚合槽。
+    pub fn total_tokens(&self) -> Option<i64> {
+        if self.input_tokens.is_some() || self.output_tokens.is_some() {
+            let total = self
+                .input_tokens
+                .unwrap_or(0)
+                .saturating_add(self.output_tokens.unwrap_or(0));
+            if total > 0 {
+                return Some(total);
+            }
+        }
+        if self.is_running() {
+            let step = &self.chat.step_usage;
+            let total = step
+                .input
+                .unwrap_or(0)
+                .saturating_add(step.output.unwrap_or(0));
+            if total > 0 {
+                return Some(total);
+            }
+        }
+        None
+    }
+
+    /// 运行中子 agent 的实时动作摘要（主历史 `spawn_agent` 卡片用）。
+    ///
+    /// 只读本地消息模型：先看最新 assistant 消息里是否还有在途工具，
+    /// 否则退回最后一步的思考/正文预览；终态返回 None。
+    pub fn live_activity(&self) -> Option<String> {
+        if !self.is_running() {
+            return None;
+        }
+        let message = self
+            .chat
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "assistant")?;
+        for step in message.steps.iter().rev() {
+            let AssistantStepView::Tool { call, .. } = step else {
+                continue;
+            };
+            if matches!(
+                call.status,
+                crate::app::state::ToolStatus::Pending | crate::app::state::ToolStatus::Running
+            ) {
+                return Some(tool_activity(call));
+            }
+        }
+        let Some(AssistantStepView::Part { part, .. }) = message.steps.last() else {
+            return None;
+        };
+        if part.reasoning_open() {
+            return Some("Thinking...".to_string());
+        }
+        if part.kind != PartKind::Text {
+            return None;
+        }
+        let line = part
+            .content
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())?
+            .trim();
+        (!line.is_empty()).then(|| line.to_string())
+    }
+
     /// 列表标题；旧记录没有单独标题时为空（不显示 task 提示词）。
     pub fn display_title(&self) -> &str {
         if self.title.is_empty() {
@@ -118,6 +193,49 @@ impl SubagentRun {
     /// 列表与卡片可读身份：`Turing [explorer]`（无昵称时回退 `explorer`）。
     pub fn display_identity(&self) -> String {
         crate::chat::agent::format_agent_identity(self.nickname.as_deref(), self.role.as_str())
+    }
+}
+
+/// 在途工具的单行动作摘要（`$ cmd` / `edit src/a.rs` / `search pat`）。
+fn tool_activity(call: &crate::app::state::ToolCallView) -> String {
+    match call.name.as_str() {
+        "exec_command" | "write_stdin" => {
+            let command = serde_json::from_str::<serde_json::Value>(&call.arguments_json)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("command")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                });
+            match command {
+                Some(command) => {
+                    let first = command.lines().next().unwrap_or_default().trim();
+                    if first.is_empty() {
+                        call.name.clone()
+                    } else {
+                        format!("$ {first}")
+                    }
+                }
+                None => call.name.clone(),
+            }
+        }
+        "read" | "edit" | "write" => call
+            .summary
+            .as_ref()
+            .and_then(|summary| summary.path.as_deref())
+            .map_or_else(|| call.name.clone(), |path| format!("{} {path}", call.name)),
+        "search" | "web_search" => call
+            .summary
+            .as_ref()
+            .and_then(|summary| summary.pattern.as_deref())
+            .map_or_else(
+                || "search".to_string(),
+                |pattern| format!("search {pattern}"),
+            ),
+        "spawn_agent" => "spawning subagent...".to_string(),
+        "wait_agent" => "waiting for subagents...".to_string(),
+        _ => call.name.clone(),
     }
 }
 

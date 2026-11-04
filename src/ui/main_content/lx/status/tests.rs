@@ -299,6 +299,7 @@ fn running_subagent(id: &str) -> crate::app::state::SubagentRun {
     crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
         agent_id: id.into(),
         nickname: None,
+        agent_path: "/root/agent".into(),
         child_session_id: format!("sess-{id}"),
         parent_session_id: "sess-parent".into(),
         spawn_message_id: None,

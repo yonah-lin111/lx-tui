@@ -87,19 +87,22 @@ pub enum SlashCommand {
     Rewind,
     /// `/compact`：把增量历史压缩成可撤销的检查点。
     Compact,
+    /// `/subagents`（别名 `/agents`）：打开后台子 agent 面板。
+    Subagents,
     /// `/rename`（别名 `/title`）：重命名当前会话。
     Rename,
 }
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 7] = [
+    pub const ALL: [SlashCommand; 8] = [
         SlashCommand::Model,
         SlashCommand::Resume,
         SlashCommand::Fork,
         SlashCommand::New,
         SlashCommand::Rewind,
         SlashCommand::Compact,
+        SlashCommand::Subagents,
         SlashCommand::Rename,
     ];
 
@@ -112,6 +115,7 @@ impl SlashCommand {
             Self::New => "new",
             Self::Rewind => "rewind",
             Self::Compact => "compact",
+            Self::Subagents => "subagents",
             Self::Rename => "rename",
         }
     }
@@ -125,6 +129,7 @@ impl SlashCommand {
             Self::New => &["clear"],
             Self::Rewind => &["undo"],
             Self::Compact => &["summarize"],
+            Self::Subagents => &["agents"],
             Self::Rename => &["title"],
         }
     }
@@ -138,6 +143,7 @@ impl SlashCommand {
             Self::New => "/new",
             Self::Rewind => "/rewind",
             Self::Compact => "/compact",
+            Self::Subagents => "/subagents",
             Self::Rename => "/rename",
         }
     }
@@ -151,6 +157,7 @@ impl SlashCommand {
             Self::New => "Start a fresh blank session",
             Self::Rewind => "Undo the latest turn (files and conversation)",
             Self::Compact => crate::ui::text::LX_COMPACT_COMMAND_DESC,
+            Self::Subagents => "Open background subagents panel",
             Self::Rename => crate::ui::text::LX_RENAME_COMMAND_DESC,
         }
     }
