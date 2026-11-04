@@ -274,24 +274,29 @@ impl HistoryEntry {
     ///
     /// 未来时间戳（时钟回拨）按 `just now` 处理，不显示负数。
     pub fn time_label(&self, now_ms: i64) -> String {
-        let elapsed = now_ms.saturating_sub(self.updated_at_ms);
-        if elapsed < 0 {
-            return "just now".to_string();
-        }
-        if elapsed < 60_000 {
-            return "just now".to_string();
-        }
-        if elapsed < 60 * 60 * 1000 {
-            return format!("{}m ago", elapsed / 60_000);
-        }
-        if elapsed < 24 * 60 * 60 * 1000 {
-            return format!("{}h ago", elapsed / (60 * 60 * 1000));
-        }
-        if elapsed < RELATIVE_TIME_LIMIT_MS {
-            return format!("{}d ago", elapsed / (24 * 60 * 60 * 1000));
-        }
-        format_date(self.updated_at_ms)
+        relative_time_label(self.updated_at_ms, now_ms)
     }
+}
+
+/// 相对时间列文案：7 天内相对、更早绝对日期；未来时间按 `just now`。
+fn relative_time_label(ms: i64, now_ms: i64) -> String {
+    let elapsed = now_ms.saturating_sub(ms);
+    if elapsed < 0 {
+        return "just now".to_string();
+    }
+    if elapsed < 60_000 {
+        return "just now".to_string();
+    }
+    if elapsed < 60 * 60 * 1000 {
+        return format!("{}m ago", elapsed / 60_000);
+    }
+    if elapsed < 24 * 60 * 60 * 1000 {
+        return format!("{}h ago", elapsed / (60 * 60 * 1000));
+    }
+    if elapsed < RELATIVE_TIME_LIMIT_MS {
+        return format!("{}d ago", elapsed / (24 * 60 * 60 * 1000));
+    }
+    format_date(ms)
 }
 
 /// 由 UTC 毫秒时间戳格式化为 `YYYY-MM-DD`（不引入时区依赖）。
@@ -404,12 +409,21 @@ pub struct ForkEntry {
     pub message_id: Option<String>,
     /// 单行截断后的展示文本；`Full session` 为空串。
     pub label: String,
+    /// 消息创建时间；`Full session` 或未知时间为 None。
+    pub created_at_ms: Option<i64>,
 }
 
 impl ForkEntry {
     /// 是否 `Full session`（复制全部消息、不回填输入框）。
     pub fn is_full_session(&self) -> bool {
         self.message_id.is_none()
+    }
+
+    /// 右侧时间列；`Full session` 或未知时间返回空串。
+    pub fn time_label(&self, now_ms: i64) -> String {
+        self.created_at_ms
+            .map(|created_at_ms| relative_time_label(created_at_ms, now_ms))
+            .unwrap_or_default()
     }
 }
 
@@ -424,6 +438,8 @@ pub struct ForkPanel {
     pub filter: String,
     /// 过滤后的条目索引视图；`Full session` 恒在首位。
     pub filtered: Vec<usize>,
+    /// 计算相对时间的"现在"（UTC 毫秒），由事件循环每轮 `tick` 刷新。
+    pub now_ms: i64,
 }
 
 impl ForkPanel {

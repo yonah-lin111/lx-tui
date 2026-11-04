@@ -424,6 +424,11 @@ pub struct LxChat {
     pub selection: Option<ModelSelection>,
     /// 展示用消息列表（含流中 partial；DB 恢复时重建）。
     pub messages: Vec<ChatMessageView>,
+    /// 消息创建时刻（message_id → UTC 毫秒）；供 `/fork` 面板时间列使用。
+    ///
+    /// 不塞进 `ChatMessageView` 是为了避免给大量测试/构造点补字段；加载会话时整体重建，
+    /// 新轮提交时追加。未知 id 返回 None，面板时间列留空。
+    pub message_times: std::collections::HashMap<String, i64>,
     /// 独立持久化的撤销提示（不进入 messages / 模型上下文）。
     pub notices: Vec<super::rewind::RewindNoticeView>,
     /// 会话 revision（撤销预检与迟到结果防护）。
@@ -582,6 +587,7 @@ impl LxChat {
             session_id: None,
             selection: None,
             messages: Vec::new(),
+            message_times: std::collections::HashMap::new(),
             notices: Vec::new(),
             revision: 0,
             request: RequestState::Idle,
@@ -615,6 +621,17 @@ impl LxChat {
             session_title: None,
             session_title_palette: 0,
         }
+    }
+
+    /// 记录消息创建时刻（供 `/fork` 面板时间列）。
+    pub fn set_message_time(&mut self, message_id: &str, created_at_ms: i64) {
+        self.message_times
+            .insert(message_id.to_string(), created_at_ms);
+    }
+
+    /// 查询消息创建时刻；未知 id 返回 None。
+    pub fn message_time(&self, message_id: &str) -> Option<i64> {
+        self.message_times.get(message_id).copied()
     }
 
     /// 设置或更新当前会话标题；首次为该会话赋标题时锁定一套配色槽位，同会话后续改名保持配色不变。
@@ -656,6 +673,7 @@ impl LxChat {
     pub fn reset_session_view(&mut self) {
         self.session_id = None;
         self.messages.clear();
+        self.message_times.clear();
         self.notices.clear();
         self.revision = 0;
         self.follow_bottom = true;

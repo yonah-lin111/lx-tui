@@ -31,6 +31,7 @@ pub fn open_fork_panel(state: &mut AppState, pane: PaneId) -> bool {
                 ForkEntry {
                     message_id: Some(message.id.clone()),
                     label: fork_label(&text),
+                    created_at_ms: target.lx.chat.message_time(&message.id),
                 }
             })
             .collect();
@@ -81,6 +82,7 @@ pub fn open_fork_panel(state: &mut AppState, pane: PaneId) -> bool {
         ForkEntry {
             message_id: None,
             label: String::new(),
+            created_at_ms: None,
         },
     );
     let filtered = (0..entries.len()).collect();
@@ -92,6 +94,7 @@ pub fn open_fork_panel(state: &mut AppState, pane: PaneId) -> bool {
         window: crate::app::state::PanelWindow::default(),
         filter: String::new(),
         filtered,
+        now_ms: crate::db::now_ms(),
     })));
     true
 }

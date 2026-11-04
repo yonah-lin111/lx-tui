@@ -83,12 +83,13 @@ pub struct ForkPanel {
   5. 构造 `ForkEntry`：
      - `message_id: Some(message.id.clone())`
      - `label: fork_label(&message.text())`（120 字符截断 + 换行转空格 + 控制字符剔除）
-  6. 插入 `ForkEntry { message_id: None, label: String::new() }` 到 `entries[0]`；
+     - `created_at_ms: target.lx.chat.message_time(&message.id)`
+  6. 插入 `ForkEntry { message_id: None, label: String::new(), created_at_ms: None }` 到 `entries[0]`；
   7. 其余消息 `rev()` 倒序追加；
-  8. `panel.filtered = 0..entries.len()`；
+  8. `panel.filtered = 0..entries.len()`，`panel.now_ms = crate::db::now_ms()`；
   9. `target.lx.slash = Some(SlashPanel::Fork(Box::new(panel)))`。
 
-> **注意**：不在 fork 面板显示时间列。`ChatMessageView`（`src/app/state/lx/chat/steps.rs:815`）没有 `created_at_ms`，给 85 处构造点补字段只为辅助列不划算；时间仍可在 `/resume` 查看。若后续确实需要，另行在 `LxChat` 建 message_id → created_at 映射，不动 `ChatMessageView`。
+> **时间来源**：`LxChat.message_times`（message_id → created_at_ms）在会话加载时整体重建，新轮提交时写入 user/assistant；`on_session_loaded_full`、`on_turn_committed`、`reset_session_view` 三处必须同步维护。
 
 - [x] `on_fork_completed(state, pane, restore_text)`：
   - `restore_text` 非空 → `target.lx.replace_input(text)`；
@@ -132,7 +133,19 @@ Some(super::super::state::SlashPanel::Fork(panel)) => panel.refilter(&query),
 - [x] Esc 分支不新增 Fork 专用处理：现有 `_ => { lx.slash = None; lx.clear(); }` 已符合 Q9。
   - 验证：输入框为空时 `Lx::clear()` 会提前 return，因此必须先 `lx.slash = None`（顺序不能反）。
 
-### 2.5 `src/app/effects.rs`
+### 2.5 消息时间索引
+
+- [x] `src/app/state/lx/chat.rs` 增加 `message_times: HashMap<String, i64>`，键为消息 id、值为 UTC 毫秒。
+- [x] 提供 `set_message_time` / `message_time`；不修改 `ChatMessageView` 的 85 处构造点。
+- [x] `on_session_loaded_full` 用加载消息整体重建映射。
+- [x] `on_turn_committed` 为用户消息与 assistant 占位各写一条。
+- [x] `reset_session_view` 清空映射。
+
+### 2.6 `src/app/update/interaction.rs`
+
+- [x] `tick_slash_panel_clock` 同时刷新 History 与 Fork 的 `now_ms`。
+
+### 2.7 `src/app/effects.rs`
 
 - [x] `Effect` 增加：
 
@@ -271,8 +284,8 @@ pub const LX_FORKED: &str = "Forked session";
 - [x] `items` 增加 Fork 分支：
   - `Full session` 用 `LX_FORK_FULL_SESSION`；
   - 其余用 `entry.label`；
-  - `tag` 留空（不显示时间列）。
-- [x] `history_time_labels` 保持只服务 History；Fork 分支不消费 `time_labels`。
+  - `tag` 用 `time_labels` 同序（`Full session` 为空）。
+- [x] `history_time_labels` 同时服务 History 与 Fork。
 - [x] `is_placeholder` 增加 `Fork(_) => false`。
 - [x] `view` 增加标题与 footer。
 - [x] 所有调用点改名（`layout` / `item_at` / `render` 内 3 处）。
@@ -326,7 +339,7 @@ pub const LX_FORKED: &str = "Forked session";
 
 ### 6.5 UI（`src/ui/main_content/lx/tests/fork_panels.rs`）
 
-- [x] `fork_panel_items_render_full_session_and_message_labels`
+- [x] `fork_panel_items_render_full_session_and_message_labels`（含相对时间列）
 - [x] `fork_panel_empty_filter_keeps_all`
 
 ---
@@ -365,7 +378,7 @@ cargo test
 ## 8. 完成定义（DoD）
 
 - [x] `/fork` 出现在 `/` 命令面板，描述正确。
-- [x] 面板首项 `Full session`，用户消息最新在上。
+- [x] 面板首项 `Full session`，用户消息最新在上，右侧显示相对时间。
 - [x] 选中节点后新会话标题 `(fork #N)`、消息范围正确、输入框回填原文。
 - [x] `Full session` 全量复制、输入框空。
 - [x] 第一条消息可 fork 成空会话。

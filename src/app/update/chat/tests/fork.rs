@@ -51,6 +51,8 @@ fn fork_panel_lists_full_session_then_user_messages_newest_first() {
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.chat.session_id = Some("sess".into());
         target.lx.chat.messages = vec![user_message("u1", "first"), user_message("u2", "second")];
+        target.lx.chat.set_message_time("u1", 1_000);
+        target.lx.chat.set_message_time("u2", 2_000);
     }
     assert!(open_fork_panel(&mut state, pane));
     let panel = fork_panel(&state, pane);
@@ -58,6 +60,8 @@ fn fork_panel_lists_full_session_then_user_messages_newest_first() {
     assert_eq!(panel.entries[1].message_id.as_deref(), Some("u2"));
     assert_eq!(panel.entries[2].message_id.as_deref(), Some("u1"));
     assert_eq!(panel.entries[1].label, "second");
+    assert_eq!(panel.entries[1].created_at_ms, Some(2_000));
+    assert!(panel.now_ms > 0);
 }
 
 #[test]
@@ -67,19 +71,23 @@ fn fork_panel_filter_keeps_full_session() {
             crate::app::state::ForkEntry {
                 message_id: None,
                 label: String::new(),
+                created_at_ms: None,
             },
             crate::app::state::ForkEntry {
                 message_id: Some("u2".into()),
                 label: "deploy the release".into(),
+                created_at_ms: Some(2_000),
             },
             crate::app::state::ForkEntry {
                 message_id: Some("u1".into()),
                 label: "write tests".into(),
+                created_at_ms: Some(1_000),
             },
         ],
         window: Default::default(),
         filter: String::new(),
         filtered: vec![0, 1, 2],
+        now_ms: 2_000 + 5 * 60_000,
     };
     panel.refilter("deploy");
     assert_eq!(panel.filtered, vec![0, 1], "Full session 恒在首位");
@@ -87,6 +95,7 @@ fn fork_panel_filter_keeps_full_session() {
         panel.active_entry().and_then(|e| e.message_id.clone()),
         None
     );
+    assert_eq!(panel.entries[1].time_label(panel.now_ms), "5m ago");
 }
 
 #[test]

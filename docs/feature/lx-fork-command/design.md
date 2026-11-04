@@ -197,6 +197,15 @@ pub struct ForkEntry {
     pub label: String,
 }
 
+pub struct ForkEntry {
+    /// None = Full session
+    pub message_id: Option<String>,
+    /// 单行截断后的展示文本
+    pub label: String,
+    /// 消息创建时间；Full session / 未知时间为 None
+    pub created_at_ms: Option<i64>,
+}
+
 pub struct ForkPanel {
     pub entries: Vec<ForkEntry>,
     pub window: PanelWindow,
@@ -204,12 +213,14 @@ pub struct ForkPanel {
     pub filter: String,
     /// 过滤后的 entries 索引；index 0（Full session）恒定保留
     pub filtered: Vec<usize>,
+    /// 相对时间基准，由事件循环 tick 刷新
+    pub now_ms: i64,
 }
-
-/// 面板右侧不显示时间列：`ChatMessageView` 当前没有 `created_at_ms`，
-/// 为一个辅助列给 85 处构造点加字段不划算；时间信息仍可在 `/resume` 查看。
-/// 若后续需要，单独在 `LxChat` 建 message_id → created_at 映射，不动 `ChatMessageView`。
 ```
+
+`ChatMessageView` 本身不增加时间字段；消息时间由 `LxChat.message_times`
+（message_id → UTC ms）承载：会话加载时整体重建，新轮提交时为用户/assistant 各写一条。
+`open_fork_panel` 按当前消息 id 取时间；未知时间只在测试/异常数据下出现，时间列留空。
 
 6. `target.lx.slash = Some(SlashPanel::Fork(Box::new(panel)))`。
 
@@ -738,14 +749,14 @@ SlashPanel::Fork(panel) => panel
             .as_ref()
             .map_or(text::LX_FORK_FULL_SESSION, |_| entry.label.as_str()),
         preview: "",
-        // 不显示时间列：ChatMessageView 没有 created_at_ms，避免为辅助信息扩大改动面。
-        tag: "",
+        tag: time_labels.get(index).map_or("", String::as_str),
     })
     .collect(),
 ```
 
-2. `history_time_labels` 不变（只服务 History）；Fork 分支不使用 `time_labels`。
-3. `is_placeholder`：`SlashPanel::Fork(_) => false`（Full session 恒在，不会空）。
+2. `history_time_labels` 同时服务 History 与 Fork：Fork 按 `entry.time_label(panel.now_ms)` 生成同序时间标签。
+3. `src/app/update/interaction.rs` 的 `tick_slash_panel_clock` 同时刷新 History 与 Fork 的 `now_ms`，面板停留期间相对时间自然推进。
+4. `is_placeholder`：`SlashPanel::Fork(_) => false`（Full session 恒在，不会空）。
 4. `view`：标题 `LX_FORK_PANEL_TITLE`，底边 `LX_FORK_PANEL_FOOTER`；`right_title` 保持 `None`。
 5. `CommandPanelView.disabled` 不使用（fork 所有项都可选）。
 
@@ -849,7 +860,7 @@ pub const LX_FORKED: &str = "Forked session";
 
 ### 7.5 UI 测试（`src/ui/main_content/lx/tests/fork_panels.rs`）
 
-1. `fork_panel_items_render_full_session_and_message_labels`：条目文本与 `Full session` 标签。
+1. `fork_panel_items_render_full_session_and_message_labels`：条目文本、`Full session` 标签与相对时间列。
 2. `fork_panel_empty_filter_keeps_all`。
 
 ### 7.6 回归
@@ -862,7 +873,7 @@ pub const LX_FORKED: &str = "Forked session";
 ## 8. 验收标准
 
 1. 输入 `/fork` 能看到命令候选，描述为 `Fork the session from an earlier message`。
-2. 回车后出现面板：首项 `Full session`，其后是用户聊天消息（最新在上）。
+2. 回车后出现面板：首项 `Full session`，其后是用户聊天消息（最新在上），右侧显示相对时间。
 3. 选中某条消息：
    - 当前窗格切到新标题 `源标题 (fork #N)`；
    - 新会话只含该消息之前的对话；
@@ -893,12 +904,14 @@ pub const LX_FORKED: &str = "Forked session";
 
 | 文件 | 改动 |
 | --- | --- |
-| `src/app/state/lx/slash.rs` | `SlashCommand::Fork`；`SlashPanel::Fork`；`ForkEntry` / `ForkPanel`；`SlashPanel` 方法分支 |
+| `src/app/state/lx/slash.rs` | `SlashCommand::Fork`；`SlashPanel::Fork`；`ForkEntry` / `ForkPanel`；`SlashPanel` 方法分支；相对时间 helper |
+| `src/app/state/lx/chat.rs` | `LxChat.message_times` 与读写方法；加载/重置/新轮同步 |
 | `src/app/state/lx.rs` / `src/app/state.rs` | 重导出 `ForkEntry` / `ForkPanel` |
 | `src/app/update/chat/fork.rs` | 新增：`open_fork_panel` / `on_fork_completed` / `on_fork_failed` |
-| `src/app/update/chat/session.rs` | `apply_slash_command` 增加 Fork；`apply_slash_enter` 增加 Fork 分支 |
-| `src/app/update/chat/mod.rs` | `mod fork;` + `pub use fork::*` |
+| `src/app/update/chat/session.rs` | `apply_slash_command` 增加 Fork；`apply_slash_enter` 增加 Fork 分支；加载时回填消息时间 |
+| `src/app/update/chat/mod.rs` | `mod fork;` + `pub use fork::*`；新轮提交写入消息时间 |
 | `src/app/update/pane.rs` | `refresh_slash_filter` 增加 Fork |
+| `src/app/update/interaction.rs` | `tick_slash_panel_clock` 刷新 Fork 的相对时间基准 |
 | `src/app/effects.rs` | `Effect::ForkChatSession` |
 | `src/db/chat/fork.rs` | 新增：`fork_chat_session`、`fork_title`、复制逻辑 |
 | `src/db/chat/fork/tests.rs` | 新增 DB 单元测试 |

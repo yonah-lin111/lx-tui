@@ -95,6 +95,14 @@ fn fork_selected_message_creates_and_loads_new_session() {
     assert_eq!(target.lx.chat.messages.len(), 2);
     assert_eq!(target.lx.chat.messages[0].role, "user");
     assert_eq!(target.lx.chat.messages[0].text(), "first question");
+    assert!(
+        target
+            .lx
+            .chat
+            .message_time(&target.lx.chat.messages[0].id)
+            .is_some(),
+        "fork 面板时间列依赖加载时回填的消息时间"
+    );
     assert_eq!(
         target.lx.chat.session_title.as_deref(),
         Some("first question (fork #1)")

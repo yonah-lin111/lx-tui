@@ -105,14 +105,15 @@ pub(super) fn items<'a>(
         SlashPanel::Fork(panel) => panel
             .visible()
             .into_iter()
-            .map(|entry| CommandItem::Inline {
+            .enumerate()
+            .map(|(index, entry)| CommandItem::Inline {
                 label: if entry.is_full_session() {
                     text::LX_FORK_FULL_SESSION
                 } else {
                     entry.label.as_str()
                 },
                 preview: "",
-                tag: "",
+                tag: time_labels.get(index).map_or("", String::as_str),
             })
             .collect(),
         SlashPanel::Rewind(panel) => panel
@@ -153,13 +154,18 @@ fn action_label(action: crate::app::state::RewindAction) -> &'static str {
     }
 }
 
-/// 历史条目的相对时间标签（与 `items` 的过滤视图同序）；非历史面板为空。
+/// 历史/分支条目的相对时间标签（与 `items` 的过滤视图同序）；其它面板为空。
 pub(super) fn history_time_labels(panel: &crate::app::state::SlashPanel) -> Vec<String> {
     match panel {
         crate::app::state::SlashPanel::History(history) => history
             .visible()
             .iter()
             .map(|entry| entry.time_label(history.now_ms))
+            .collect(),
+        crate::app::state::SlashPanel::Fork(fork) => fork
+            .visible()
+            .iter()
+            .map(|entry| entry.time_label(fork.now_ms))
             .collect(),
         _ => Vec::new(),
     }

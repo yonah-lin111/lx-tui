@@ -339,6 +339,14 @@ pub fn on_turn_committed(
         reports: Vec::new(),
         attachments: Vec::new(),
     });
+    target
+        .lx
+        .chat
+        .set_message_time(&committed.user_message_id, committed.created_at_ms);
+    target
+        .lx
+        .chat
+        .set_message_time(&committed.assistant_message_id, committed.created_at_ms);
     target.lx.chat.follow_bottom = true;
     // 新轮从空聚合槽开始：上一轮终态若被丢弃，不能把旧 usage 带进第一次采样。
     target.lx.chat.reset_step_usage();
