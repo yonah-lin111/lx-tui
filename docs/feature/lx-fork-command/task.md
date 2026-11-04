@@ -1,7 +1,8 @@
 # lx `/fork` 会话分支命令任务清单
 
 - 关联设计：`docs/feature/lx-fork-command/design.md`
-- 状态：**已实现（待合并）**
+- 复审报告：`docs/feature/lx-fork-command/review.md`
+- 状态：**已合并到 dev（c7184d86）**
 - 日期：2026-11-04
 
 ---
@@ -394,3 +395,11 @@ cargo test
 - [x] 无数据库迁移，`SCHEMA_VERSION` 不变。
 - [x] `cargo fmt` / `cargo clippy --all-targets -- -D warnings` / 受影响测试全绿。
 - [x] design.md 与最终实现一致；若实现中变更决策，先回写文档。
+
+---
+
+## 9. 合并与清理
+
+- [x] 2026-11-04：以 `--no-ff` 合并到 `dev`（合并提交 `c7184d86`），无合并冲突。
+- [x] 合并后验证：`cargo fmt --all -- --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全量通过（4430 passed / 3 ignored）。
+- [x] 清理：移除 `.worktrees/lx-fork-command` 工作区、删除 `lx-fork-command` 分支、删除隔离开发库 `~/.lx-t-dev/db/worktrees/lx-fork-command-07512440/`。

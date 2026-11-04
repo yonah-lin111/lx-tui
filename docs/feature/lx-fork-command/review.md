@@ -7,7 +7,7 @@
 ## 一、审查概述与基线
 
 - **功能目标**：在 lx-tui 中提供 `/fork` 命令，弹出二级选择面板，列出历史用户消息（最新在上，首项固定为 `Full session`，显示相对时间），选中后分支新会话并回填原文。
-- **当前状态**：核心 DB 事务复制、图片复制、应用状态机、Effects 分派与 TUI 渲染已初版完成。全量测试通过（4426 passed）。
+- **当前状态**：核心 DB 事务复制、图片复制、应用状态机、Effects 分派与 TUI 渲染已完成，review 修复全部落地并已合并到 `dev`（合并提交 `c7184d86`）。全量测试通过（4430 passed）。
 - **审查发现**：
   - **P0（致命/崩溃/数据损毁）**：0 项
   - **P1（硬上限违规/严重功能缺陷/UI破坏）**：3 项
@@ -142,3 +142,11 @@
    - [x] P3-1: 更新 `design.md` 与 `task.md`，修复结构体定义、文案清单、测试清单。
    - [x] P3-2 & P3-3: 消除重复测试辅助函数，优化 `fork_label`。
    - [x] P3-4: 补充缺失测试并跑通全部测试验证。
+
+---
+
+## 四、合并与清理记录
+
+- **合并提交**：2026-11-04 以 `--no-ff` 合并到 `dev`，合并提交 `c7184d86`，无冲突。
+- **合并后验证**：`cargo fmt --all -- --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全量通过（4430 passed / 3 ignored）。
+- **清理动作**：已停止工作区内 `lx-tui` 进程，移除 `.worktrees/lx-fork-command` 工作区，删除 `lx-fork-command` 分支，删除隔离库 `~/.lx-t-dev/db/worktrees/lx-fork-command-07512440/`。

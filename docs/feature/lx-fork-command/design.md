@@ -1,7 +1,8 @@
 # lx `/fork` 会话分支命令设计
 
-- 状态：**已实现（待合并）**
+- 状态：**已合并到 dev（c7184d86）**
 - 关联任务：`docs/feature/lx-fork-command/task.md`
+- 复审报告：`docs/feature/lx-fork-command/review.md`
 - 日期：2026-11-04
 - 范围：`src/app/state/lx/slash.rs`、`src/app/update/chat/{fork,session,mod}.rs`、`src/app/update/pane.rs`、`src/app/update/interaction.rs`、`src/app/effects.rs`、`src/db/chat/{fork,mod}.rs`、`src/db/mod.rs`、`src/db/service/chat.rs`、`src/db/service/fork_tests.rs`、`src/platform/clipboard_image.rs`、`src/ui/main_content/lx/{slash,panels}.rs`、`src/ui/text.rs` 及对应测试
 
