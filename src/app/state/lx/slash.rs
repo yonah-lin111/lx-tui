@@ -79,6 +79,8 @@ pub enum SlashCommand {
     Model,
     /// `/resume`：当前工作区历史列表。
     Resume,
+    /// `/fork`：从当前会话的某条用户消息之前分叉新会话。
+    Fork,
     /// `/new`：清当前窗格会话关联并回空白草稿。
     New,
     /// `/rewind`（别名 `/undo`）：撤销当前会话最新一轮。
@@ -91,9 +93,10 @@ pub enum SlashCommand {
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 6] = [
+    pub const ALL: [SlashCommand; 7] = [
         SlashCommand::Model,
         SlashCommand::Resume,
+        SlashCommand::Fork,
         SlashCommand::New,
         SlashCommand::Rewind,
         SlashCommand::Compact,
@@ -105,6 +108,7 @@ impl SlashCommand {
         match self {
             Self::Model => "model",
             Self::Resume => "resume",
+            Self::Fork => "fork",
             Self::New => "new",
             Self::Rewind => "rewind",
             Self::Compact => "compact",
@@ -117,6 +121,7 @@ impl SlashCommand {
         match self {
             Self::Model => &[],
             Self::Resume => &["session"],
+            Self::Fork => &[],
             Self::New => &["clear"],
             Self::Rewind => &["undo"],
             Self::Compact => &["summarize"],
@@ -129,6 +134,7 @@ impl SlashCommand {
         match self {
             Self::Model => "/model",
             Self::Resume => "/resume",
+            Self::Fork => "/fork",
             Self::New => "/new",
             Self::Rewind => "/rewind",
             Self::Compact => "/compact",
@@ -141,6 +147,7 @@ impl SlashCommand {
         match self {
             Self::Model => "Choose the model and reasoning level for the next turn",
             Self::Resume => crate::ui::text::LX_RESUME_COMMAND_DESC,
+            Self::Fork => crate::ui::text::LX_FORK_COMMAND_DESC,
             Self::New => "Start a fresh blank session",
             Self::Rewind => "Undo the latest turn (files and conversation)",
             Self::Compact => crate::ui::text::LX_COMPACT_COMMAND_DESC,
@@ -267,24 +274,29 @@ impl HistoryEntry {
     ///
     /// 未来时间戳（时钟回拨）按 `just now` 处理，不显示负数。
     pub fn time_label(&self, now_ms: i64) -> String {
-        let elapsed = now_ms.saturating_sub(self.updated_at_ms);
-        if elapsed < 0 {
-            return "just now".to_string();
-        }
-        if elapsed < 60_000 {
-            return "just now".to_string();
-        }
-        if elapsed < 60 * 60 * 1000 {
-            return format!("{}m ago", elapsed / 60_000);
-        }
-        if elapsed < 24 * 60 * 60 * 1000 {
-            return format!("{}h ago", elapsed / (60 * 60 * 1000));
-        }
-        if elapsed < RELATIVE_TIME_LIMIT_MS {
-            return format!("{}d ago", elapsed / (24 * 60 * 60 * 1000));
-        }
-        format_date(self.updated_at_ms)
+        relative_time_label(self.updated_at_ms, now_ms)
     }
+}
+
+/// 相对时间列文案：7 天内相对、更早绝对日期；未来时间按 `just now`。
+fn relative_time_label(ms: i64, now_ms: i64) -> String {
+    let elapsed = now_ms.saturating_sub(ms);
+    if elapsed < 0 {
+        return "just now".to_string();
+    }
+    if elapsed < 60_000 {
+        return "just now".to_string();
+    }
+    if elapsed < 60 * 60 * 1000 {
+        return format!("{}m ago", elapsed / 60_000);
+    }
+    if elapsed < 24 * 60 * 60 * 1000 {
+        return format!("{}h ago", elapsed / (60 * 60 * 1000));
+    }
+    if elapsed < RELATIVE_TIME_LIMIT_MS {
+        return format!("{}d ago", elapsed / (24 * 60 * 60 * 1000));
+    }
+    format_date(ms)
 }
 
 /// 由 UTC 毫秒时间戳格式化为 `YYYY-MM-DD`（不引入时区依赖）。
@@ -390,6 +402,110 @@ impl HistoryPanel {
     }
 }
 
+/// `/fork` 节点面板的一条候选项。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForkEntry {
+    /// 选中的用户消息 id；`None` 表示首项 `Full session`。
+    pub message_id: Option<String>,
+    /// 单行截断后的展示文本；`Full session` 为空串。
+    pub label: String,
+    /// 消息创建时间；`Full session` 或未知时间为 None。
+    pub created_at_ms: Option<i64>,
+}
+
+impl ForkEntry {
+    /// 是否 `Full session`（复制全部消息、不回填输入框）。
+    pub fn is_full_session(&self) -> bool {
+        self.message_id.is_none()
+    }
+
+    /// 右侧时间列；`Full session` 或未知时间返回空串。
+    pub fn time_label(&self, now_ms: i64) -> String {
+        self.created_at_ms
+            .map(|created_at_ms| relative_time_label(created_at_ms, now_ms))
+            .unwrap_or_default()
+    }
+}
+
+/// `/fork` 节点面板。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ForkPanel {
+    /// 首项固定 `Full session`，其余为用户聊天消息（最新在上）。
+    pub entries: Vec<ForkEntry>,
+    /// 窗口状态（高亮/锚点/显式视口）。
+    pub window: PanelWindow,
+    /// 过滤词（输入框全文快照）；空表示不过滤。
+    pub filter: String,
+    /// 过滤后的条目索引视图；`Full session` 恒在首位。
+    pub filtered: Vec<usize>,
+    /// 计算相对时间的"现在"（UTC 毫秒），由事件循环每轮 `tick` 刷新。
+    pub now_ms: i64,
+}
+
+impl ForkPanel {
+    /// 按 `query` 重算 `filtered`：`Full session` 恒定保留在首位，其余按消息文本匹配。
+    ///
+    /// 空查询恢复全量顺序且高亮首项；有搜索词且命中消息时默认高亮第一条匹配项（避免回车误克隆全量）。
+    pub fn refilter(&mut self, query: &str) {
+        let filter_changed = self.filter != query;
+        if filter_changed {
+            self.filter = query.to_string();
+        }
+        let mut filtered = if self.entries.is_empty() {
+            Vec::new()
+        } else {
+            vec![0]
+        };
+        let query_trimmed = query.trim();
+        if query_trimmed.is_empty() {
+            filtered.extend(1..self.entries.len());
+        } else {
+            let query = query_trimmed.to_lowercase();
+            let mut scored: Vec<(u32, usize)> = self
+                .entries
+                .iter()
+                .enumerate()
+                .skip(1)
+                .filter_map(|(index, entry)| {
+                    command_score(&entry.label.to_lowercase(), &query).map(|score| (score, index))
+                })
+                .collect();
+            scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+            filtered.extend(scored.into_iter().map(|(_, index)| index));
+        }
+        self.filtered = filtered;
+        if filter_changed {
+            let default_active = if !query_trimmed.is_empty() && self.filtered.len() > 1 {
+                1
+            } else {
+                0
+            };
+            self.window = PanelWindow::new(default_active);
+        }
+        self.clamp_window();
+    }
+
+    /// 过滤后可见的条目（按视图顺序）；供渲染与命中共用。
+    pub fn visible(&self) -> Vec<&ForkEntry> {
+        self.filtered
+            .iter()
+            .filter_map(|index| self.entries.get(*index))
+            .collect()
+    }
+
+    /// 当前高亮项。
+    pub fn active_entry(&self) -> Option<&ForkEntry> {
+        self.filtered
+            .get(self.window.active)
+            .and_then(|index| self.entries.get(*index))
+    }
+
+    /// 可见项数变化后把窗口三索引钳进新范围。
+    pub fn clamp_window(&mut self) {
+        self.window.clamp(self.filtered.len());
+    }
+}
+
 impl ModelPicker {
     /// 按 `query` 重算 `filtered`：只在**第一级**（模型列表）生效，匹配
     /// **模型名或 provider 名**。
@@ -479,6 +595,8 @@ pub enum SlashPanel {
     Model(Box<ModelPicker>),
     /// `/resume` 历史列表。
     History(Box<HistoryPanel>),
+    /// `/fork` 节点选择（首项 Full session + 用户聊天消息）。
+    Fork(Box<ForkPanel>),
     /// `/rewind` 四项动作面板。
     Rewind(Box<crate::app::state::lx::rewind::RewindPanel>),
 }
@@ -536,6 +654,7 @@ impl SlashPanel {
             Self::Commands { items, .. } => items.len(),
             Self::Model(picker) => picker.filtered.len(),
             Self::History(panel) => panel.filtered.len(),
+            Self::Fork(panel) => panel.filtered.len(),
             // 动作集按目标类型不同（普通轮次四项 / compact 两项），以面板为准。
             Self::Rewind(panel) => panel.len(),
         }
@@ -547,6 +666,7 @@ impl SlashPanel {
             Self::Commands { window, .. } => *window,
             Self::Model(picker) => picker.window,
             Self::History(panel) => panel.window,
+            Self::Fork(panel) => panel.window,
             Self::Rewind(panel) => panel.window,
         }
     }
@@ -569,6 +689,7 @@ impl SlashPanel {
                 let real = panel.current?;
                 panel.filtered.iter().position(|index| *index == real)
             }
+            Self::Fork(_) => None,
             Self::Rewind(_) => None,
         }
     }
@@ -581,6 +702,7 @@ impl SlashPanel {
             } => *current = window,
             Self::Model(picker) => picker.window = window,
             Self::History(panel) => panel.window = window,
+            Self::Fork(panel) => panel.window = window,
             Self::Rewind(panel) => panel.window = window,
         }
     }

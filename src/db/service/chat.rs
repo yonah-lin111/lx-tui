@@ -369,6 +369,87 @@ impl Persistence {
         db.load_processes_for_session(workspace, chat_session_id)
     }
 
+    /// 装载会话到窗格：消息、模型、进程、撤销提示、compact 检查点、模型切换与 revision。
+    ///
+    /// `/resume` 与 `/fork` 共用；返回状态是否有变化。失败时在窗格内提示会话忙。
+    fn load_chat_session_into_pane(
+        &self,
+        state: &mut AppState,
+        pane: crate::layout::PaneId,
+        workspace: &Path,
+        session_id: &str,
+    ) -> bool {
+        let _ = self.with_db(|db| db.ensure_workspace(workspace));
+        let loaded: Option<LoadedSession> = self.with_db(|db| {
+            let messages = db.load_chat_session(workspace, session_id)?;
+            let model = db.chat_session_model(workspace, session_id)?;
+            // 进程记录用来校正卡片状态：结果 JSON 写的是「结算那一刻」，
+            // 进程之后可能早已退出/被停止（见 `reconcile_process_records`）。
+            let processes = db
+                .load_processes_for_session(workspace, session_id)
+                .unwrap_or_default();
+            // 独立撤销提示、compact 检查点与 revision：三者都不进入 messages，
+            // 也不作为普通消息进模型上下文（检查点只投影为摘要前缀）。
+            let notices = db.load_notices(workspace, session_id).unwrap_or_default();
+            let checkpoints = db
+                .compact_checkpoints(workspace, session_id)
+                .unwrap_or_default();
+            let switches = db.model_switches(workspace, session_id).unwrap_or_default();
+            let revision = db.session_revision(session_id).unwrap_or(0);
+            Ok((
+                messages,
+                model,
+                processes,
+                notices,
+                checkpoints,
+                switches,
+                revision,
+            ))
+        });
+        let Some((Some(messages), model, processes, notices, checkpoints, switches, revision)) =
+            loaded
+        else {
+            // 加载失败发生在 lx 页：反馈落该窗格自己的槽（不占用全局覆盖层）。
+            update::show_lx_toast(
+                state,
+                pane,
+                Toast::new(
+                    ToastKind::Danger,
+                    text::LX_CHAT_SESSION_BUSY,
+                    Some(pane),
+                    Instant::now(),
+                ),
+            );
+            return true;
+        };
+        // DB 的模型快照三列 → 窗格选择（恢复后 `/resume` 保留最后保存的选择）。
+        let selection = model.map(|snapshot| ModelSelection {
+            provider: snapshot.provider,
+            model: snapshot.model,
+            variant: snapshot.variant,
+        });
+        let session_title = self
+            .with_db(|db| db.chat_session_title(workspace, session_id))
+            .flatten();
+        let changed = update::on_session_loaded_full(
+            state, pane, session_id, &messages, &notices, revision, selection,
+        );
+        let title_changed = state
+            .pane_mut_anywhere(pane)
+            .is_some_and(|target| target.lx.chat.set_session_title(session_title));
+        // 检查点与模型切换列表随会话一起回填（渲染与撤销都依赖它）。
+        let checkpoints_changed = update::set_compact_checkpoints(state, pane, &checkpoints);
+        let switches_changed = update::set_model_switches(state, pane, &switches);
+        // 会话视图建好之后再按进程记录校正（需要卡片已存在）。
+        let drains = update::request_report_drain_if_idle(state, pane);
+        update::reconcile_process_records(state, pane, &processes)
+            | changed
+            | title_changed
+            | checkpoints_changed
+            | switches_changed
+            | drains
+    }
+
     /// 执行 lx 聊天类效应；返回状态是否有变化。
     pub(super) fn execute_chat_effect(&mut self, state: &mut AppState, effect: Effect) -> bool {
         match effect {
@@ -484,91 +565,29 @@ impl Persistence {
                 let Some(workspace) = state.chat_session_key_for_pane(pane) else {
                     return false;
                 };
-                let _ = self.with_db(|db| db.ensure_workspace(&workspace));
-                let loaded: Option<LoadedSession> = self.with_db(|db| {
-                    let messages = db.load_chat_session(&workspace, &session_id)?;
-                    let model = db.chat_session_model(&workspace, &session_id)?;
-                    // 进程记录用来校正卡片状态：结果 JSON 写的是「结算那一刻」，
-                    // 进程之后可能早已退出/被停止（见 `reconcile_process_records`）。
-                    let processes = db
-                        .load_processes_for_session(&workspace, &session_id)
-                        .unwrap_or_default();
-                    // 独立撤销提示、compact 检查点与 revision：三者都不进入 messages，
-                    // 也不作为普通消息进模型上下文（检查点只投影为摘要前缀）。
-                    let notices = db.load_notices(&workspace, &session_id).unwrap_or_default();
-                    let checkpoints = db
-                        .compact_checkpoints(&workspace, &session_id)
-                        .unwrap_or_default();
-                    let switches = db
-                        .model_switches(&workspace, &session_id)
-                        .unwrap_or_default();
-                    let revision = db.session_revision(&session_id).unwrap_or(0);
-                    Ok((
-                        messages,
-                        model,
-                        processes,
-                        notices,
-                        checkpoints,
-                        switches,
-                        revision,
-                    ))
-                });
-                let Some((
-                    Some(messages),
-                    model,
-                    processes,
-                    notices,
-                    checkpoints,
-                    switches,
-                    revision,
-                )) = loaded
+                self.load_chat_session_into_pane(state, pane, &workspace, &session_id)
+            }
+            Effect::ForkChatSession {
+                pane,
+                workspace,
+                session_id,
+                before,
+            } => {
+                let Some(forked) = self
+                    .with_db(|db| db.fork_chat_session(&workspace, &session_id, before.as_deref()))
                 else {
-                    // 加载失败发生在 lx 页：反馈落该窗格自己的槽（不占用全局覆盖层）。
-                    update::show_lx_toast(
-                        state,
-                        pane,
-                        Toast::new(
-                            ToastKind::Danger,
-                            text::LX_CHAT_SESSION_BUSY,
-                            Some(pane),
-                            Instant::now(),
-                        ),
-                    );
+                    update::on_fork_failed(state, pane);
                     return true;
                 };
-                // DB 的模型快照三列 → 窗格选择（恢复后 `/resume` 保留最后保存的选择）。
-                let selection = model.map(|snapshot| ModelSelection {
-                    provider: snapshot.provider,
-                    model: snapshot.model,
-                    variant: snapshot.variant,
+                self.load_chat_session_into_pane(state, pane, &workspace, &forked.session_id);
+                let is_bound = state.pane_anywhere(pane).is_some_and(|target| {
+                    target.lx.chat.session_id.as_deref() == Some(&forked.session_id)
                 });
-                let session_title = self
-                    .with_db(|db| db.chat_session_title(&workspace, &session_id))
-                    .flatten();
-                let changed = update::on_session_loaded_full(
-                    state,
-                    pane,
-                    &session_id,
-                    &messages,
-                    &notices,
-                    revision,
-                    selection,
-                );
-                let title_changed = state
-                    .pane_mut_anywhere(pane)
-                    .is_some_and(|target| target.lx.chat.set_session_title(session_title));
-                // 检查点与模型切换列表随会话一起回填（渲染与撤销都依赖它）。
-                let checkpoints_changed =
-                    update::set_compact_checkpoints(state, pane, &checkpoints);
-                let switches_changed = update::set_model_switches(state, pane, &switches);
-                // 会话视图建好之后再按进程记录校正（需要卡片已存在）。
-                let drains = update::request_report_drain_if_idle(state, pane);
-                update::reconcile_process_records(state, pane, &processes)
-                    | changed
-                    | title_changed
-                    | checkpoints_changed
-                    | switches_changed
-                    | drains
+                if !is_bound {
+                    update::on_fork_failed(state, pane);
+                    return true;
+                }
+                update::on_fork_completed(state, pane, forked.restore_text.as_deref())
             }
             Effect::RenameChatSession {
                 workspace,
@@ -720,6 +739,7 @@ pub(super) fn handles(effect: &Effect) -> bool {
             | Effect::CheckpointChatTurn { .. }
             | Effect::ListChatSessions { .. }
             | Effect::LoadChatSession { .. }
+            | Effect::ForkChatSession { .. }
             | Effect::RenameChatSession { .. }
             | Effect::DeleteChatSession { .. }
             | Effect::SetChatSessionModel { .. }

@@ -216,6 +216,16 @@ pub enum Effect {
         pane: crate::layout::PaneId,
         session_id: String,
     },
+    /// 从当前会话的指定用户消息之前分叉出新会话并切换过去。
+    ///
+    /// `before = None` 表示 `Full session`（复制全部已结算消息、不回填输入框）；
+    /// `Some` 为边界消息 id（该消息不复制，正文回填到输入框）。
+    ForkChatSession {
+        pane: crate::layout::PaneId,
+        workspace: PathBuf,
+        session_id: String,
+        before: Option<String>,
+    },
     /// 重命名会话。
     RenameChatSession {
         workspace: PathBuf,

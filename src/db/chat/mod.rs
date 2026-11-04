@@ -6,6 +6,7 @@
 
 pub mod attachment;
 mod compact;
+mod fork;
 mod model_switch;
 mod process;
 pub mod rewind;
@@ -21,6 +22,7 @@ pub use compact::{
     COMPACT_ACTIVE, COMPACT_REVERTED, CompactCheckpoint, CompactCommit, CompactCommitted,
     CompactRevert,
 };
+pub use fork::ForkedChatSession;
 pub use model_switch::{ModelSwitchCommit, ModelSwitchRecord};
 pub use process::{NewProcess, OutputSnapshot, ProcessFinish, ProcessRecord};
 pub use rewind::{

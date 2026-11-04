@@ -3,6 +3,7 @@
 
 mod ask;
 mod compact;
+mod fork;
 mod history;
 mod model_switch;
 mod process_cards;
@@ -161,6 +162,8 @@ fn commit_ack_binds_session_clears_draft_and_starts_stream() {
     );
     assert_eq!(target.lx.chat.messages[0].role, "user");
     assert_eq!(target.lx.chat.messages[1].status, "streaming");
+    assert_eq!(target.lx.chat.message_time("sess-1-u"), Some(1_000));
+    assert_eq!(target.lx.chat.message_time("sess-1-a"), Some(1_000));
     // 状态进入 Streaming 且入队 StartChatStream。
     assert!(matches!(
         target.lx.chat.request,

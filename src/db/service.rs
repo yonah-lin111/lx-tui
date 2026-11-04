@@ -831,6 +831,8 @@ fn session_busy_feedback(state: &mut AppState, session_id: &str) {
 }
 
 #[cfg(test)]
+mod fork_tests;
+#[cfg(test)]
 mod resume_tests;
 #[cfg(test)]
 mod tests;

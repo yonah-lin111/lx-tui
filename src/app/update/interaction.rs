@@ -310,7 +310,7 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
     expired || lx_expired || revealed || saved || scrolled || retimed
 }
 
-/// 刷新打开中的 `/resume` 面板时间戳；返回是否有面板需要重绘。
+/// 刷新打开中的 `/resume` / `/fork` 面板时间戳；返回是否有面板需要重绘。
 ///
 /// 只改面板自身的时间快照，不触碰列表内容与窗口状态——渲染层据此得到新的相对时间。
 fn tick_slash_panel_clock(state: &mut AppState) -> bool {
@@ -321,14 +321,19 @@ fn tick_slash_panel_clock(state: &mut AppState) -> bool {
         let Some(pane) = state.pane_mut_anywhere(id) else {
             continue;
         };
-        let Some(crate::app::state::SlashPanel::History(panel)) = pane.lx.slash.as_mut() else {
-            continue;
+        let panel_changed = match pane.lx.slash.as_mut() {
+            Some(crate::app::state::SlashPanel::History(panel)) if panel.now_ms != now_ms => {
+                // 同一毫秒内不重复标记变化，避免空转重绘。
+                panel.now_ms = now_ms;
+                true
+            }
+            Some(crate::app::state::SlashPanel::Fork(panel)) if panel.now_ms != now_ms => {
+                panel.now_ms = now_ms;
+                true
+            }
+            _ => false,
         };
-        // 同一毫秒内不重复标记变化，避免空转重绘。
-        if panel.now_ms != now_ms {
-            panel.now_ms = now_ms;
-            changed = true;
-        }
+        changed |= panel_changed;
     }
     changed
 }
@@ -366,7 +371,21 @@ pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let autosave = prompt_item_editing(state)
         .then(|| state.prompt.autosave_deadline(PROMPT_AUTOSAVE_DELAY))
         .flatten();
-    [toast, lx_toast, tooltip, autoscroll, autosave]
+    let slash_clock = state
+        .all_pane_ids()
+        .into_iter()
+        .filter_map(|pane| state.pane_anywhere(pane))
+        .any(|target| {
+            matches!(
+                target.lx.slash.as_ref(),
+                Some(
+                    crate::app::state::SlashPanel::History(_)
+                        | crate::app::state::SlashPanel::Fork(_)
+                )
+            )
+        })
+        .then(|| Instant::now() + std::time::Duration::from_secs(5));
+    [toast, lx_toast, tooltip, autoscroll, autosave, slash_clock]
         .into_iter()
         .flatten()
         .min()
