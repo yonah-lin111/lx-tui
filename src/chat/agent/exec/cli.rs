@@ -680,53 +680,69 @@ fn resolve_raw_selection(
             ));
         }
         if let Some(provider) = settings.providers.get(provider_id) {
-            if !is_enabled(settings, provider_id) {
-                return Err(format!("provider '{provider_id}' is not enabled"));
+            let provider_error = if !is_enabled(settings, provider_id) {
+                format!("provider '{provider_id}' is not enabled")
+            } else if api_key_of(provider).is_none() {
+                format!("provider '{provider_id}' has no API key configured")
+            } else if !provider.models.contains_key(model_id) {
+                format!("model '{model_id}' is not defined on provider '{provider_id}'")
+            } else {
+                return Ok((provider_id.to_string(), model_id.to_string()));
+            };
+            // 兼容模型 ID 自身含 `/` 的情形（如供应商下模型名为 `gemini/gemini-3.8-flash`）：
+            // `provider/model` 拆分失败时，先把整串当模型 ID 解析，再返回 provider 错误。
+            if let Some(selection) = match_whole_model_id(settings, reference, true)? {
+                return Ok(selection);
             }
-            if api_key_of(provider).is_none() {
-                return Err(format!(
-                    "provider '{provider_id}' has no API key configured"
-                ));
-            }
-            if !provider.models.contains_key(model_id) {
-                return Err(format!(
-                    "model '{model_id}' is not defined on provider '{provider_id}'"
-                ));
-            }
-            return Ok((provider_id.to_string(), model_id.to_string()));
+            return Err(provider_error);
         }
-        // 兼容模型 ID 自身含 `/` 的情形（如供应商下模型名为 `gemini/gemini-3.8-flash`）。
-        if let Some(default) = settings.default_model.as_ref()
-            && default.model == reference
-            && usable_selection(settings, &default.provider, reference)
-        {
-            return Ok((default.provider.clone(), reference.to_string()));
-        }
-        for enabled_id in &settings.enabled_providers {
-            if let Some(provider) = usable_provider(settings, enabled_id)
-                && provider.models.contains_key(reference)
-            {
-                return Ok((enabled_id.clone(), reference.to_string()));
-            }
+        // 拆分出的 provider 不存在：同样先尝试整串模型 ID。
+        if let Some(selection) = match_whole_model_id(settings, reference, true)? {
+            return Ok(selection);
         }
         return Err(format!("provider '{provider_id}' is not defined"));
     }
-    if let Some(default) = settings.default_model.as_ref()
-        && default.model == reference
-        && usable_selection(settings, &default.provider, reference)
-    {
-        return Ok((default.provider.clone(), reference.to_string()));
-    }
-    for provider_id in &settings.enabled_providers {
-        if let Some(provider) = usable_provider(settings, provider_id)
-            && provider.models.contains_key(reference)
-        {
-            return Ok((provider_id.clone(), reference.to_string()));
-        }
+    if let Some(selection) = match_whole_model_id(settings, reference, false)? {
+        return Ok(selection);
     }
     Err(format!(
         "model '{reference}' was not found on any enabled provider"
     ))
+}
+
+/// 把整串 `reference` 当作模型 ID 在默认/已启用 provider 下匹配。
+///
+/// `reject_ambiguous` 为真时，多命中返回歧义错误（要求显式 `provider/model`）；
+/// 否则保持既有行为返回首个命中（短模型名路由）。
+fn match_whole_model_id(
+    settings: &AiSettings,
+    reference: &str,
+    reject_ambiguous: bool,
+) -> Result<Option<(String, String)>, String> {
+    if let Some(default) = settings.default_model.as_ref()
+        && default.model == reference
+        && usable_selection(settings, &default.provider, reference)
+    {
+        return Ok(Some((default.provider.clone(), reference.to_string())));
+    }
+    let matches: Vec<&String> = settings
+        .enabled_providers
+        .iter()
+        .filter(|id| usable_selection(settings, id, reference))
+        .collect();
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(Some((matches[0].clone(), reference.to_string()))),
+        _ if reject_ambiguous => Err(format!(
+            "model '{reference}' is ambiguous across enabled providers ({}); specify 'provider/model'",
+            matches
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        _ => Ok(Some((matches[0].clone(), reference.to_string()))),
+    }
 }
 
 fn is_enabled(settings: &AiSettings, provider_id: &str) -> bool {

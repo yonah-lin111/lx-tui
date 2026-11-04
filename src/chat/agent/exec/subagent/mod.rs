@@ -18,9 +18,8 @@ use std::sync::atomic::AtomicBool;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::chat::agent::{
-    AgentListItemView, AgentRole, INPUT_NOT_FOUND_CODE, LIMIT_REACHED_CODE,
-    MAX_CONCURRENT_SUBAGENTS, NOT_ACTIVE_CODE, NOT_FOUND_CODE, SubagentInputItem, SubagentOp,
-    SubagentOutcome, WaitMode, joined_input_text,
+    AgentListItemView, AgentRole, INPUT_NOT_FOUND_CODE, LIMIT_REACHED_CODE, NOT_ACTIVE_CODE,
+    NOT_FOUND_CODE, SubagentInputItem, SubagentOp, SubagentOutcome, WaitMode, joined_input_text,
 };
 use crate::chat::agent_loop::{
     AgentHost, AgentHostRequest, HostError, TurnSummary, run_agent_turn,
@@ -374,7 +373,11 @@ impl ExecSubagentPool {
         } else {
             items.to_vec()
         };
-        let persisted = match self.prepare_input_items(&child_session_id, &source) {
+        let persisted = match self.prepare_input_items(
+            &child_session_id,
+            &source,
+            child_target.supports_image_input,
+        ) {
             Ok(persisted) => persisted,
             Err(error) => {
                 crate::platform::remove_session_images(&child_session_id);
@@ -484,9 +487,14 @@ impl ExecSubagentPool {
             .and_then(|path| crate::config::ai::load_ai(&path).ok().flatten())
             .unwrap_or_else(crate::config::ai::AiSettings::empty);
         if settings.providers.is_empty() {
+            // 只有单元测试环境（无 ai.json）才允许用父模型做兜底；真实运行中配置缺失
+            // 必须显式失败，不能把 `provider/model` 静默塞进 model 字段。
+            if !cfg!(test) {
+                return Err(failed("model configuration unavailable"));
+            }
             let mut fallback = self.model.clone();
             if let Some(m) = explicit_model {
-                fallback.model = m.to_string();
+                apply_reference_to_target(&mut fallback, m);
             } else if let Some(sel) = role_default {
                 fallback.provider = sel.provider.clone();
                 fallback.model = sel.model.clone();
@@ -518,6 +526,39 @@ impl ExecSubagentPool {
             .map_err(|err| failed(&err))
     }
 
+    /// 子 agent 的模型目标：内存缓存 > 数据库持久化快照（重启后恢复）> 父模型。
+    fn child_model_for(&mut self, record: &SubagentRecord) -> &ExecModelTarget {
+        let differs = !record.model_provider.trim().is_empty()
+            && !record.model_id.trim().is_empty()
+            && (record.model_provider != self.model.provider
+                || record.model_id != self.model.model
+                || record.model_variant != self.model.variant);
+        if differs && !self.child_models.contains_key(&record.child_session_id) {
+            let settings = crate::config::ai::ai_config_path()
+                .ok()
+                .and_then(|path| crate::config::ai::load_ai(&path).ok().flatten())
+                .unwrap_or_else(crate::config::ai::AiSettings::empty);
+            let reference = match record
+                .model_variant
+                .as_deref()
+                .map(str::trim)
+                .filter(|variant| !variant.is_empty())
+            {
+                Some(variant) => format!("{}/{}#{variant}", record.model_provider, record.model_id),
+                None => format!("{}/{}", record.model_provider, record.model_id),
+            };
+            if let Ok(target) =
+                crate::chat::agent::exec::resolve_model_target(&settings, Some(&reference), None)
+            {
+                self.child_models
+                    .insert(record.child_session_id.clone(), target);
+            }
+        }
+        self.child_models
+            .get(&record.child_session_id)
+            .unwrap_or(&self.model)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn send_input(
         &mut self,
@@ -538,7 +579,9 @@ impl ExecSubagentPool {
             return Err(failed(NOT_ACTIVE_CODE));
         }
         let was_cancelling_from_interrupt = self.paused_by_interrupt.remove(target);
-        let persisted = self.prepare_input_items(&record.child_session_id, items)?;
+        let supports_image_input = self.child_model_for(&record).supports_image_input;
+        let persisted =
+            self.prepare_input_items(&record.child_session_id, items, supports_image_input)?;
         let dedupe = match call_id.filter(|cid| !cid.trim().is_empty()) {
             Some(cid) => format!(
                 "send:{}:{}:{cid}",
@@ -637,14 +680,18 @@ impl ExecSubagentPool {
             .map_err(db_failed)?
             .ok_or_else(|| failed(NOT_FOUND_CODE))?;
         let agent_id = record.agent_id.as_str();
-        self.paused_by_interrupt.remove(agent_id);
+        // 先判运行态：interrupt 取消未落定时，resume 只是把「恢复」意图交给结算路径。
+        let is_running = self.running.contains_key(agent_id);
+        if self.paused_by_interrupt.remove(agent_id) && is_running {
+            self.interrupted.insert(agent_id.to_string());
+        }
         let queued_count = db
             .subagent_queue_states(&self.workspace, &self.parent_session_id)
             .unwrap_or_default()
             .get(agent_id)
             .map_or(0, |state| state.queued_count);
-        self.resumed.insert(agent_id.to_string());
-        if self.running.contains_key(agent_id) {
+        if is_running {
+            self.resumed.insert(agent_id.to_string());
             return Ok(SubagentOutcome::Resumed {
                 agent_id: agent_id.to_string(),
                 status: STATUS_RUNNING.to_string(),
@@ -660,6 +707,7 @@ impl ExecSubagentPool {
         }
         db.recover_subagent_for_resume(&self.workspace, &self.parent_session_id, agent_id)
             .map_err(db_failed)?;
+        self.resumed.insert(agent_id.to_string());
         match self.claim_and_launch(db, agent_id, None)? {
             Some(claimed) => Ok(SubagentOutcome::Resumed {
                 agent_id: agent_id.to_string(),
@@ -680,8 +728,11 @@ impl ExecSubagentPool {
             .map_err(db_failed)?
             .ok_or_else(|| failed(NOT_FOUND_CODE))?;
         let target = record.agent_id.as_str();
-        let previous_status = if self.running.contains_key(target) {
+        let is_running = self.running.contains_key(target);
+        let previous_status = if is_running {
             STATUS_RUNNING.to_string()
+        } else if self.resumed.contains(target) {
+            STATUS_IDLE.to_string()
         } else {
             record.status
         };
@@ -691,6 +742,10 @@ impl ExecSubagentPool {
         self.interrupted.remove(target);
         self.paused_by_interrupt.remove(target);
         self.resumed.remove(target);
+        if !is_running {
+            // idle 关闭：DB 记录与排队输入一并置 cancelled，避免留下可被误恢复的孤儿队列。
+            let _ = db.close_idle_subagent(&self.workspace, &self.parent_session_id, target);
+        }
         Ok(SubagentOutcome::Closed {
             agent_id: target.to_string(),
             previous_status,
@@ -760,16 +815,21 @@ impl ExecSubagentPool {
         if let Some(code) = &next.error_code {
             return Err(failed(&format!("subagent input blocked: {code}")));
         }
-        if self.running.len() >= MAX_CONCURRENT_SUBAGENTS {
+        let max_concurrent = self
+            .subagents_config
+            .max_concurrent
+            .clamp(1, crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT);
+        if self.running.len() >= max_concurrent {
             return Err(failed(LIMIT_REACHED_CODE));
         }
+        let child_snapshot = self.child_model_for(&record).snapshot();
         let claimed = db
             .claim_input(
                 &self.workspace,
                 &self.parent_session_id,
                 agent_id,
                 &next.submission_id,
-                &self.model.snapshot(),
+                &child_snapshot,
             )
             .map_err(db_failed)?;
         self.start_child(
@@ -846,6 +906,17 @@ fn first_line_title(task: &str) -> String {
         .chars()
         .take(80)
         .collect()
+}
+
+/// 测试兜底模型解析：`<provider>/<model>` 拆分写入 provider/model，纯模型 ID 只改 model。
+fn apply_reference_to_target(target: &mut ExecModelTarget, reference: &str) {
+    match reference.split_once('/') {
+        Some((provider, model)) if !provider.trim().is_empty() && !model.trim().is_empty() => {
+            target.provider = provider.trim().to_string();
+            target.model = model.trim().to_string();
+        }
+        _ => target.model = reference.trim().to_string(),
+    }
 }
 
 fn close_open_part(parts: &mut [ChatPart], open_part_index: &mut Option<usize>) {

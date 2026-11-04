@@ -1061,6 +1061,52 @@ async fn subagents_api_crud_and_events() {
 }
 
 #[tokio::test]
+async fn subagents_put_partial_payload_preserves_custom_roles() {
+    let (service, mut events, _dir) = start("subagents-partial-put").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let origin = format!("http://127.0.0.1:{port}");
+
+    let created = request(
+        port,
+        &write(
+            "POST",
+            &format!("/api/subagents/roles?token={token}"),
+            r#"{"name":"reviewer","baseRole":"explorer","description":"Review code.","systemPrompt":"You review code."}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&created), 200, "{created}");
+    let _ = events.try_recv();
+
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/subagents?token={token}"),
+            r#"{"maxConcurrent":4}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{saved}");
+    match events.try_recv() {
+        Ok(SettingsEvent::SubagentsChanged(section)) => {
+            assert_eq!(section.max_concurrent, 4);
+            assert_eq!(section.roles.len(), 1, "partial PUT must keep custom roles");
+            assert_eq!(section.roles[0].name, "reviewer");
+        }
+        other => panic!("expected SubagentsChanged, got {other:?}"),
+    }
+
+    let response = request(port, &get(&format!("/api/subagents?token={token}"))).await;
+    let listing = body(&response);
+    assert!(listing.contains("\"name\":\"reviewer\""), "{listing}");
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn oauth_callback_rejects_unknown_state_without_token() {
     let (service, _events, _dir) = start("oauth-callback").await;
     let response = request(

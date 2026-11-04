@@ -3,8 +3,43 @@
 //! 2. 角色默认配置（`subagents.json` 中的 `model`）
 //! 3. 父会话当前冻结模型（`parent_frozen`）
 
-use crate::app::state::{FrozenModel, ModelsSnapshot};
+use crate::app::state::{AppState, FrozenModel, ModelsSnapshot};
 use crate::config::ai::ModelSelection;
+use crate::db::chat::SubagentRecord;
+use crate::event::chat::ChatStreams;
+
+/// 恢复子 agent 持久化的模型快照（TUI/exec 重启后子会话仍用自己的模型）。
+///
+/// 仅当记录中有完整 `(provider, model)` 且与父会话当前模型不同才返回解析结果；
+/// 解析失败（provider 关闭/缺 Key/模型下线）由调用方回退到父会话模型。
+pub(crate) fn recover_persisted_child_model(
+    models: &ModelsSnapshot,
+    parent_frozen: &FrozenModel,
+    record: &SubagentRecord,
+) -> Option<FrozenModel> {
+    let provider = record.model_provider.trim();
+    let model = record.model_id.trim();
+    if provider.is_empty() || model.is_empty() {
+        return None;
+    }
+    let variant = record
+        .model_variant
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if provider == parent_frozen.provider
+        && model == parent_frozen.model
+        && variant == parent_frozen.variant.as_deref()
+    {
+        return None;
+    }
+    let selection = models.normalize_selection(ModelSelection {
+        provider: provider.to_string(),
+        model: model.to_string(),
+        variant: variant.map(str::to_string),
+    });
+    FrozenModel::resolve(models, &selection)
+}
 
 /// 解析后的子 agent 模型快照及是否固定（显式覆写或角色绑定时为 `true`）。
 pub(crate) struct ResolvedSubagentModel {
@@ -115,31 +150,39 @@ pub(crate) fn resolve_subagent_model(
 }
 
 /// 解析 `"provider/model"` 或同 provider 下 `"model"` 简写。
+///
+/// 模型 ID 自身可能含 `/`（如 `gemini/gemini-4-argon`）：`provider/model` 拆分失败时，
+/// 先把整串当作模型 ID 在父 provider / 唯一启用的 provider 下查找，再返回 provider 错误。
 fn parse_model_override_str(
     models: &ModelsSnapshot,
     parent_provider: &str,
     raw: &str,
 ) -> Result<ModelSelection, String> {
+    let mut provider_error: Option<String> = None;
     if let Some((prov, rest)) = raw.split_once('/') {
         let prov = prov.trim();
         let rest = rest.trim();
         if !prov.is_empty()
             && !rest.is_empty()
             && let Some(p_cfg) = models.settings.providers.get(prov)
-            && p_cfg.models.contains_key(rest)
         {
             if !models.settings.enabled_providers.iter().any(|p| p == prov) {
-                return Err(format!("provider '{prov}' is disabled"));
+                provider_error = Some(format!("provider '{prov}' is disabled"));
+            } else if p_cfg.models.contains_key(rest) {
+                return Ok(models.normalize_selection(ModelSelection {
+                    provider: prov.to_string(),
+                    model: rest.to_string(),
+                    variant: None,
+                }));
+            } else {
+                provider_error = Some(format!(
+                    "model '{rest}' is not defined on provider '{prov}'"
+                ));
             }
-            return Ok(models.normalize_selection(ModelSelection {
-                provider: prov.to_string(),
-                model: rest.to_string(),
-                variant: None,
-            }));
         }
     }
 
-    // 1. 优先在父会话同一 provider 下精确匹配 model id（兼容含 `/` 的模型 ID 如 `gemini/gemini-4-argon`）。
+    // 1. 优先在父会话同一 provider 下精确匹配 model id（兼容含 `/` 的模型 ID）。
     if let Some(p_cfg) = models.settings.providers.get(parent_provider)
         && p_cfg.models.contains_key(raw)
     {
@@ -173,9 +216,8 @@ fn parse_model_override_str(
             model: raw.to_string(),
             variant: None,
         })),
-        0 => Err(format!(
-            "model '{raw}' is not found or its provider is disabled"
-        )),
+        0 => Err(provider_error
+            .unwrap_or_else(|| format!("model '{raw}' is not found or its provider is disabled"))),
         _ => Err(format!(
             "model '{raw}' is ambiguous across enabled providers ({}); specify 'provider/model'",
             matches.join(", ")
@@ -217,4 +259,36 @@ fn validate_role_model_selection(
         model: model.to_string(),
         variant: sel.variant.clone(),
     }))
+}
+
+/// 解析子会话本轮模型：已固定的子模型 > 数据库持久化的子 agent 模型（重新固定）> 父模型。
+///
+/// 只有内存里没有该子会话的冻结快照（进程重启/面板重开）时才从数据库恢复；
+/// 同进程内仍沿用「父窗格最新模型优先」的继承规则，避免把未固定的子 agent 钉在 spawn 旧模型上。
+pub(super) fn child_frozen_for(
+    state: &AppState,
+    streams: &mut ChatStreams,
+    record: &SubagentRecord,
+    parent_frozen: &crate::app::state::FrozenModel,
+) -> crate::app::state::FrozenModel {
+    if let Some(pinned) = streams
+        .pinned_subagent_models
+        .get(&record.child_session_id)
+        .cloned()
+    {
+        return pinned;
+    }
+    let has_cached_snapshot = streams.frozen.contains_key(&record.child_session_id);
+    if !has_cached_snapshot
+        && let Some(recovered) = recover_persisted_child_model(&state.models, parent_frozen, record)
+    {
+        streams
+            .frozen
+            .insert(record.child_session_id.clone(), recovered.clone());
+        streams
+            .pinned_subagent_models
+            .insert(record.child_session_id.clone(), recovered.clone());
+        return recovered;
+    }
+    parent_frozen.clone()
 }

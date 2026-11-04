@@ -32,8 +32,8 @@
   1. 写入上述 `subagents.json`（或通过设置页 `Subagents` 页签保存）。
   2. 执行 `cargo run -- exec --ephemeral --json -m gemini/gemini-4-argon "<Prompt>"`。
 - **期望结果**：
-  - `spawn_agent` 成功派发 `role="reviewer"`，分配专属昵称 `Dijkstra`，应用模型 `provider-alq374/cbcn/deepseek-v4.1-flash` 与 `reasoning_effort=low`。
-  - `wait_agent(targets=["dijkstra"])` 通过小写昵称成功匹配 `Dijkstra` 并返回报告 `[REVIEWER_OK]`（验证耗时通过）。
+  - `spawn_agent` 成功派发 `role="reviewer"`，JSONL `collab_tool_call` 事件输出 `"nickname":"Dijkstra"`、`"model":"provider-alq374/cbcn/deepseek-v4.1-flash (low)"`。
+  - `wait_agent(targets=["dijkstra"])` 通过小写昵称成功匹配 `Dijkstra` 并返回报告 `[REVIEWER_OK]`，且跨进程 `exec resume --last` 恢复该子 Agent 时仍保持绑定的 `cbcn/deepseek-v4.1-flash` 模型（验证通过）。
 
 ---
 

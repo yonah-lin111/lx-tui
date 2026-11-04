@@ -2,98 +2,26 @@
 //!
 //! 一个 subagent = 一个独立子会话（`source='subagent'`）挂到父会话；子会话的
 //! 消息/parts/tools 与普通会话同一套表，回看走 `load_chat_session`。
-//! 输入队列与有序输入项位于 [`queue`] 子模块；逐轮报告存于 `agent_subagent_report`。
+//! 输入队列与有序输入项位于 [`queue`] 子模块；记录读取位于 [`record`]；报告批量投递位于 [`report`]。
 
 mod queue;
+mod record;
+mod report;
 pub use queue::{
     ClaimedSubagentTurn, EnqueuedInput, PersistedInputItem, SubagentInputRecord, SubagentQueueState,
 };
+pub use record::{ReportPayload, SubagentCommitted, SubagentRecord, SubagentReportRecord};
+pub(super) use record::{ensure_session_owned, read_subagent_row};
 
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{OptionalExtension, params};
 
-use super::{ChatPart, ModelSnapshot, TurnCommitted, TurnOutcome, Usage};
+use super::{ChatPart, ModelSnapshot, TurnOutcome, Usage};
 use crate::chat::agent::{
     AgentRole, BaseRole, MAX_REPORT_BYTES, SubagentReportView, truncate_report_body,
 };
 use crate::db::{Database, DbError, Result, new_external_id, now_ms};
-
-/// 一个 subagent 的元数据行（列表用；不含消息流）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubagentRecord {
-    /// 稳定 agent id。
-    pub agent_id: String,
-    /// 可选唯一昵称（如 `"Turing"`；旧记录为 None）。
-    pub nickname: Option<String>,
-    /// 子会话 external id。
-    pub child_session_id: String,
-    /// 父会话 external id。
-    pub parent_session_id: String,
-    /// spawn 调用所在的主 agent assistant 消息 id。
-    pub spawn_message_id: Option<String>,
-    /// 角色。
-    pub role: AgentRole,
-    /// `pending` / `running` / `completed` / `failed` / `cancelled`。
-    pub status: String,
-    /// 面向用户的短标题；v17 之前的旧记录为空。
-    pub title: String,
-    /// 创建时刻（UTC 毫秒）。
-    pub created_at_ms: i64,
-    /// 完成时刻（未结束为 None）。
-    pub completed_at_ms: Option<i64>,
-    /// 最近一条报告 JSON（未生成或已关闭为 None）。
-    pub report_json: Option<String>,
-    /// 报告是否已被模型全部领取。
-    pub report_delivered: bool,
-}
-
-/// 一条逐轮报告记录（`agent_subagent_report`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubagentReportRecord {
-    /// 稳定报告 ID（`rep-...`）。
-    pub report_id: String,
-    /// 所属子 agent ID。
-    pub agent_id: String,
-    /// 对应子轮的用户消息 ID。
-    pub child_user_message_id: Option<String>,
-    /// `completed` / `failed`。
-    pub status: String,
-    /// 序列化后的 [`SubagentReportView`] JSON。
-    pub report_json: String,
-    /// 完成时刻（UTC 毫秒）。
-    pub completed_at_ms: i64,
-    /// 投递时刻（未投递为 None）。
-    pub delivered_at_ms: Option<i64>,
-}
-
-/// spawn 的提交结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubagentCommitted {
-    /// 稳定 agent id。
-    pub agent_id: String,
-    /// 子会话 external id。
-    pub child_session_id: String,
-    /// 子 assistant 消息 id（工具归属锚点）。
-    pub child_assistant_id: String,
-    /// 子 user 消息 id（文件 mutation 归属）。
-    pub child_user_message_id: String,
-    /// 创建时刻（UTC 毫秒）。
-    pub created_at_ms: i64,
-}
-
-/// 报告正文与尾巴（DB 在此组装成 [`SubagentReportView`] 的 JSON）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReportPayload {
-    /// 面向用户的短标题。
-    pub title: String,
-    /// 已按上限截断的正文。
-    pub body: String,
-    /// 去重后的改动文件数。
-    pub files_changed: usize,
-    /// 子 turn 耗时（毫秒）。
-    pub duration_ms: Option<i64>,
-}
 
 impl Database {
     /// spawn：一个事务内建子会话 + user 消息 + streaming assistant + agent_subagent 行。
@@ -488,7 +416,8 @@ impl Database {
             .query_row(
                 r#"SELECT a.external_id, a.child_session_id, a.parent_session_id, a.spawn_message_id,
                           a.role, a.status, a.title, a.created_at_ms, a.completed_at_ms,
-                          a.report_json, a.report_delivered, a.nickname, a.agent_path
+                          a.report_json, a.report_delivered, a.nickname, a.agent_path,
+                          a.model_provider, a.model_id, a.variant
                    FROM agent_subagent a
                    JOIN agent_session s ON s.external_id = a.child_session_id
                    JOIN agent_session p ON p.external_id = a.parent_session_id
@@ -540,7 +469,8 @@ impl Database {
         let mut statement = self.conn.prepare(
             r#"SELECT a.external_id, a.child_session_id, a.parent_session_id, a.spawn_message_id,
                       a.role, a.status, a.title, a.created_at_ms, a.completed_at_ms,
-                      a.report_json, a.report_delivered, a.nickname, a.agent_path
+                      a.report_json, a.report_delivered, a.nickname, a.agent_path,
+                      a.model_provider, a.model_id, a.variant
                FROM agent_subagent a
                JOIN agent_session s ON s.external_id = a.child_session_id
                JOIN agent_session p ON p.external_id = a.parent_session_id
@@ -559,268 +489,6 @@ impl Database {
             }
         }
         Ok(records)
-    }
-
-    /// 后台报告批量：一条 user 报告消息（数组 JSON）+ 同轮 assistant，
-    /// 并在同一事务内把对应 `agent_ids`（及 `agent_subagent_report`）标记为已投递。
-    pub fn begin_report_batch(
-        &self,
-        workspace: &Path,
-        session_id: &str,
-        envelope: &str,
-        reports_json: &str,
-        agent_ids: &[String],
-        model: &ModelSnapshot,
-    ) -> Result<TurnCommitted> {
-        self.begin_report_batch_with_ids(
-            workspace,
-            session_id,
-            envelope,
-            reports_json,
-            agent_ids,
-            &[],
-            model,
-        )
-    }
-
-    /// 按显式 `report_ids`（及所属 `agent_ids`）在同一事务内插入父会话报告消息并标记 delivered。
-    #[allow(clippy::too_many_arguments)]
-    pub fn begin_report_batch_with_ids(
-        &self,
-        workspace: &Path,
-        session_id: &str,
-        envelope: &str,
-        reports_json: &str,
-        agent_ids: &[String],
-        report_ids: &[String],
-        model: &ModelSnapshot,
-    ) -> Result<TurnCommitted> {
-        let workspace_external = self
-            .workspace_external_id(workspace)?
-            .ok_or(DbError::WorkspaceMissing)?;
-        let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
-        ensure_session_owned(&transaction, session_id, &workspace_external)?;
-        let user_sequence = super::next_session_sequence(&transaction, session_id)?;
-        let turn_index: i64 = transaction.query_row(
-            "SELECT COALESCE(MAX(turn_index) + 1, 0) FROM agent_message WHERE session_id = ?1",
-            params![session_id],
-            |row| row.get(0),
-        )?;
-        let user_message_id = new_external_id("msg");
-        let assistant_message_id = new_external_id("msg");
-        let assistant_sequence = user_sequence.saturating_add(1);
-        let revision: i64 = transaction.query_row(
-            "SELECT revision FROM agent_session WHERE external_id = ?1",
-            params![session_id],
-            |row| row.get(0),
-        )?;
-        transaction.execute(
-            r#"INSERT INTO agent_message
-                   (external_id, session_id, sequence, turn_index, role, status,
-                    subagent_report_json, created_at_ms)
-               VALUES (?1, ?2, ?3, ?4, 'user', 'complete', ?5, ?6)"#,
-            params![
-                user_message_id,
-                session_id,
-                user_sequence,
-                turn_index,
-                reports_json,
-                now
-            ],
-        )?;
-        transaction.execute(
-            r#"INSERT INTO agent_message_part
-                   (external_id, message_id, position, kind, content, created_at_ms)
-               VALUES (?1, ?2, 0, 'text', ?3, ?4)"#,
-            params![new_external_id("part"), user_message_id, envelope, now],
-        )?;
-        transaction.execute(
-            r#"INSERT INTO agent_message
-                   (external_id, session_id, sequence, turn_index, role, status,
-                    model_provider, model_id, variant, created_at_ms)
-               VALUES (?1, ?2, ?3, ?4, 'assistant', 'streaming', ?5, ?6, ?7, ?8)"#,
-            params![
-                assistant_message_id,
-                session_id,
-                assistant_sequence,
-                turn_index,
-                model.provider,
-                model.model,
-                model.variant,
-                now
-            ],
-        )?;
-        for report_id in report_ids {
-            transaction.execute(
-                r#"UPDATE agent_subagent_report SET delivered_at_ms = ?1
-                   WHERE external_id = ?2 AND delivered_at_ms IS NULL
-                     AND agent_id IN (
-                         SELECT external_id FROM agent_subagent WHERE parent_session_id = ?3
-                     )"#,
-                params![now, report_id, session_id],
-            )?;
-        }
-        for agent_id in agent_ids {
-            if report_ids.is_empty() {
-                transaction.execute(
-                    r#"UPDATE agent_subagent_report SET delivered_at_ms = ?1
-                       WHERE agent_id = ?2 AND delivered_at_ms IS NULL
-                         AND agent_id IN (
-                             SELECT external_id FROM agent_subagent WHERE parent_session_id = ?3
-                         )"#,
-                    params![now, agent_id, session_id],
-                )?;
-            }
-            sync_agent_report_delivered(&transaction, agent_id, session_id, now)?;
-        }
-        super::update_session_selection(&transaction, session_id, &workspace_external, model, now)?;
-        let revision = revision.saturating_add(1);
-        transaction.execute(
-            "UPDATE agent_session SET revision = ?1, updated_at_ms = ?2, last_message_at_ms = ?2 WHERE external_id = ?3",
-            params![revision, now, session_id],
-        )?;
-        transaction.commit()?;
-        Ok(TurnCommitted {
-            session_id: session_id.to_string(),
-            user_message_id,
-            assistant_message_id,
-            turn_index,
-            user_sequence,
-            assistant_sequence,
-            revision,
-            created_at_ms: now,
-            attachments: Vec::new(),
-        })
-    }
-
-    /// 批量把指定 `report_ids` 标记为已投递（`wait_agent` 按 `report_id` 领取时使用）。
-    pub fn mark_reports_delivered_in_batch(
-        &self,
-        workspace: &Path,
-        parent_session: &str,
-        report_ids: &[String],
-    ) -> Result<usize> {
-        if report_ids.is_empty() {
-            return Ok(0);
-        }
-        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
-            return Ok(0);
-        };
-        let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
-        ensure_session_owned(&transaction, parent_session, &workspace_external)?;
-        let mut count = 0usize;
-        let mut touched_agents = std::collections::BTreeSet::new();
-        for report_id in report_ids {
-            let agent_id: Option<String> = transaction
-                .query_row(
-                    r#"SELECT r.agent_id FROM agent_subagent_report r
-                       JOIN agent_subagent a ON a.external_id = r.agent_id
-                       WHERE r.external_id = ?1 AND a.parent_session_id = ?2"#,
-                    params![report_id, parent_session],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            let Some(agent_id) = agent_id else {
-                continue;
-            };
-            let updated = transaction.execute(
-                r#"UPDATE agent_subagent_report SET delivered_at_ms = ?1
-                   WHERE external_id = ?2 AND delivered_at_ms IS NULL"#,
-                params![now, report_id],
-            )?;
-            if updated > 0 {
-                count = count.saturating_add(updated);
-                touched_agents.insert(agent_id);
-            }
-        }
-        for agent_id in touched_agents {
-            sync_agent_report_delivered(&transaction, &agent_id, parent_session, now)?;
-        }
-        transaction.commit()?;
-        Ok(count)
-    }
-
-    /// 恰好一次：将该 agent 未投递的报告标为已投递；0 → 1 时返回 true，已全部投递返回 false（幂等）。
-    pub fn mark_report_delivered(&self, workspace: &Path, agent_id: &str) -> Result<bool> {
-        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
-            return Ok(false);
-        };
-        let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
-        let parent_session: Option<String> = transaction
-            .query_row(
-                r#"SELECT a.parent_session_id FROM agent_subagent a
-                   JOIN agent_session p ON p.external_id = a.parent_session_id
-                   WHERE a.external_id = ?1 AND p.workspace_id = ?2"#,
-                params![agent_id, workspace_external],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(parent_session) = parent_session else {
-            return Ok(false);
-        };
-        let updated_reports = transaction.execute(
-            r#"UPDATE agent_subagent_report SET delivered_at_ms = ?1
-               WHERE agent_id = ?2 AND delivered_at_ms IS NULL"#,
-            params![now, agent_id],
-        )?;
-        let updated_legacy = transaction.execute(
-            r#"UPDATE agent_subagent SET report_delivered = 1, updated_at_ms = ?1
-               WHERE external_id = ?2 AND parent_session_id = ?3 AND report_delivered = 0"#,
-            params![now, agent_id, parent_session],
-        )?;
-        transaction.commit()?;
-        Ok(updated_reports > 0 || updated_legacy > 0)
-    }
-
-    /// 按完成时间和稳定 ID 排序读取当前父会话下所有未投递的逐轮报告。
-    pub fn pending_reports(
-        &self,
-        workspace: &Path,
-        parent_session: &str,
-    ) -> Result<Vec<SubagentReportRecord>> {
-        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
-            return Ok(Vec::new());
-        };
-        sync_legacy_reports_for_parent(&self.conn, parent_session, &workspace_external)?;
-        let mut statement = self.conn.prepare(
-            r#"SELECT r.external_id, r.agent_id, r.child_user_message_id, r.status,
-                      r.report_json, r.completed_at_ms, r.delivered_at_ms
-               FROM agent_subagent_report r
-               JOIN agent_subagent a ON a.external_id = r.agent_id
-               JOIN agent_session p ON p.external_id = a.parent_session_id
-               WHERE a.parent_session_id = ?1 AND p.workspace_id = ?2
-                 AND r.delivered_at_ms IS NULL
-               ORDER BY r.completed_at_ms ASC, r.external_id ASC"#,
-        )?;
-        let rows = statement.query_map(params![parent_session, workspace_external], |row| {
-            Ok(SubagentReportRecord {
-                report_id: row.get(0)?,
-                agent_id: row.get(1)?,
-                child_user_message_id: row.get(2)?,
-                status: row.get(3)?,
-                report_json: row.get(4)?,
-                completed_at_ms: row.get(5)?,
-                delivered_at_ms: row.get(6)?,
-            })
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(DbError::from)
-    }
-
-    /// 未投递的报告（兼容入口）：`(agent_id, report_json)`。
-    pub fn pending_subagent_reports(
-        &self,
-        workspace: &Path,
-        parent_session: &str,
-    ) -> Result<Vec<(String, String)>> {
-        Ok(self
-            .pending_reports(workspace, parent_session)?
-            .into_iter()
-            .map(|record| (record.agent_id, record.report_json))
-            .collect())
     }
 
     /// 子会话本轮**已提交**的改动路径数（去重；报告尾巴用）。
@@ -871,96 +539,38 @@ impl Database {
         transaction.commit()?;
         Ok(updated)
     }
-}
 
-/// 读取一行 `SubagentRecord` 与其原始角色字符串。
-fn read_subagent_row(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<(SubagentRecord, Option<String>)> {
-    let role: Option<String> = row.get(4)?;
-    let nickname: Option<String> = row.get(11)?;
-    let agent_path: Option<String> = row.get(12)?;
-    let base_role = agent_path.as_deref().and_then(BaseRole::parse);
-    Ok((
-        SubagentRecord {
-            agent_id: row.get(0)?,
-            nickname: nickname
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty()),
-            child_session_id: row.get(1)?,
-            parent_session_id: row.get(2)?,
-            spawn_message_id: row.get(3)?,
-            role: role
-                .as_deref()
-                .and_then(|r| AgentRole::from_name_and_base(r, base_role))
-                .unwrap_or(AgentRole::Executor),
-            status: row.get(5)?,
-            title: row.get(6)?,
-            created_at_ms: row.get(7)?,
-            completed_at_ms: row.get(8)?,
-            report_json: row.get(9)?,
-            report_delivered: row.get::<_, i64>(10)? != 0,
-        },
-        role,
-    ))
-}
-
-/// 同步 `agent_subagent.report_delivered`：当且仅当该 agent 已无未投递报告时置 1。
-pub(super) fn sync_agent_report_delivered(
-    transaction: &Connection,
-    agent_id: &str,
-    parent_session: &str,
-    now: i64,
-) -> Result<()> {
-    transaction.execute(
-        r#"UPDATE agent_subagent
-           SET report_delivered = CASE
-                   WHEN EXISTS (
-                       SELECT 1 FROM agent_subagent_report r
-                       WHERE r.agent_id = ?1 AND r.delivered_at_ms IS NULL
-                   ) THEN 0
-                   ELSE 1
-               END,
-               updated_at_ms = ?2
-           WHERE external_id = ?1 AND parent_session_id = ?3"#,
-        params![agent_id, now, parent_session],
-    )?;
-    Ok(())
-}
-
-/// 将直接写 `agent_subagent.report_json`（如旧测试/旧记录）的未投递报告同步到 `agent_subagent_report`。
-fn sync_legacy_reports_for_parent(
-    conn: &Connection,
-    parent_session: &str,
-    workspace_external: &str,
-) -> Result<()> {
-    conn.execute(
-        r#"INSERT OR IGNORE INTO agent_subagent_report
-               (external_id, agent_id, child_user_message_id, status, report_json,
-                completed_at_ms, delivered_at_ms)
-           SELECT
-               'rep-legacy-' || a.external_id,
-               a.external_id,
-               (SELECT m.external_id FROM agent_message m
-                WHERE m.session_id = a.child_session_id AND m.role = 'user'
-                ORDER BY m.sequence DESC LIMIT 1),
-               CASE WHEN a.status = 'failed' THEN 'failed' ELSE 'completed' END,
-               a.report_json,
-               COALESCE(a.completed_at_ms, a.updated_at_ms, a.created_at_ms),
-               CASE WHEN a.report_delivered <> 0
-                    THEN COALESCE(a.completed_at_ms, a.updated_at_ms, a.created_at_ms)
-                    ELSE NULL
-               END
-           FROM agent_subagent a
-           JOIN agent_session p ON p.external_id = a.parent_session_id
-           WHERE a.parent_session_id = ?1 AND p.workspace_id = ?2
-             AND a.report_json IS NOT NULL AND a.report_json <> ''
-             AND NOT EXISTS (
-                 SELECT 1 FROM agent_subagent_report r WHERE r.agent_id = a.external_id
-             )"#,
-        params![parent_session, workspace_external],
-    )?;
-    Ok(())
+    /// 关闭 idle 子 agent：`agent_subagent` 置 `cancelled`，其全部 `queued` 输入同事务置 `cancelled`。
+    pub fn close_idle_subagent(
+        &self,
+        workspace: &Path,
+        parent_session_id: &str,
+        agent_id: &str,
+    ) -> Result<()> {
+        let workspace_external = self
+            .workspace_external_id(workspace)?
+            .ok_or(DbError::WorkspaceMissing)?;
+        let now = now_ms();
+        let transaction = self.conn.unchecked_transaction()?;
+        ensure_session_owned(&transaction, parent_session_id, &workspace_external)?;
+        let updated = transaction.execute(
+            r#"UPDATE agent_subagent
+               SET status = 'cancelled', completed_at_ms = ?1, updated_at_ms = ?1
+               WHERE external_id = ?2 AND parent_session_id = ?3"#,
+            params![now, agent_id, parent_session_id],
+        )?;
+        if updated == 0 {
+            return Err(DbError::SessionMissing);
+        }
+        transaction.execute(
+            r#"UPDATE agent_subagent_input
+               SET status = 'cancelled', completed_at_ms = ?1, error_code = NULL
+               WHERE agent_id = ?2 AND status IN ('queued', 'interrupted')"#,
+            params![now, agent_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
 }
 
 /// 剥离报告正文中的控制字符（保留换行和制表符）并限制长度。
@@ -972,22 +582,6 @@ fn sanitize_report_text(text: &str) -> String {
         }
     }
     out
-}
-
-/// 会话必须属于该工作区，否则按不存在处理。
-pub(super) fn ensure_session_owned(
-    transaction: &Connection,
-    session_id: &str,
-    workspace_external: &str,
-) -> Result<()> {
-    let owned: Option<i64> = transaction
-        .query_row(
-            "SELECT id FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
-            params![session_id, workspace_external],
-            |row| row.get(0),
-        )
-        .optional()?;
-    owned.map(|_| ()).ok_or(DbError::SessionMissing)
 }
 
 #[cfg(test)]

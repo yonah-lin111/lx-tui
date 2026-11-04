@@ -168,7 +168,7 @@ function rebuildEffortOptions(modelKey, selectedVariant) {
   const opts = [{value: '', label: 'Inherit / model default'}];
   const models = (subagentsState && Array.isArray(subagentsState.models)) ? subagentsState.models : [];
   const matched = models.find((m) => (m.provider + '::' + m.model) === modelKey);
-  const variants = (matched && Array.isArray(matched.variants)) ? matched.variants : ['low', 'medium', 'high', 'max'];
+  const variants = (matched && Array.isArray(matched.variants)) ? matched.variants : [];
   for (const v of variants) {
     opts.push({value: v, label: v});
   }
@@ -177,6 +177,7 @@ function rebuildEffortOptions(modelKey, selectedVariant) {
   }
   subagentEffortSelect.setOptions(opts);
   subagentEffortSelect.setValue(selectedVariant || '');
+  subagentEffortSelect.setDisabled(opts.length <= 1);
 }
 
 function readSubagentEditorValues() {
@@ -224,6 +225,7 @@ async function loadSubagents(showReloadToast) {
     const maxInput = document.getElementById('subagents-max-concurrent');
     if (maxInput) { maxInput.value = String(subagentsBaselineMaxConcurrent); }
 
+    const previousName = subagentsSelectedName;
     subagentBaselines.clear();
     subagentDrafts.clear();
     subagentNewDraft = null;
@@ -241,11 +243,10 @@ async function loadSubagents(showReloadToast) {
     const totalCustom = (data.roles || []).length;
     statusEl.textContent = '2 built-in + ' + totalCustom + ' custom role(s)';
 
-    if (subagentsSelectedName && subagentBaselines.has(subagentsSelectedName)) {
-      selectSubagentRole(subagentsSelectedName);
-    } else {
-      selectSubagentRole('explorer');
-    }
+    const keepName = (previousName && subagentBaselines.has(previousName)) ? previousName : 'explorer';
+    subagentsNew = false;
+    subagentsSelectedName = null;
+    selectSubagentRole(keepName, {skipSync: true});
     renderSubagentList();
     if (showReloadToast) { showToast('Subagents reloaded', 'info'); }
   } catch (error) {
@@ -293,8 +294,10 @@ function updateSubagentDirtyDots() {
   }
 }
 
-function selectSubagentRole(name) {
-  syncSubagentEditorToDraft();
+function selectSubagentRole(name, opts) {
+  if (!(opts && opts.skipSync)) {
+    syncSubagentEditorToDraft();
+  }
   const base = subagentBaselines.get(name);
   if (!base) { return; }
   subagentsNew = false;
@@ -360,6 +363,7 @@ async function resetBuiltinRoleToDefault() {
   try {
     await api('/api/subagents/builtins/' + encodeURIComponent(subagentsSelectedName), {method: 'DELETE'});
     showToast('Reset ' + subagentsSelectedName + ' to built-in defaults', 'ok');
+    hideSubagentEditor();
     await loadSubagents(false);
   } catch (error) {
     showToast(error.message, 'error');
@@ -376,7 +380,7 @@ async function deleteSubagentRole() {
   try {
     await api('/api/subagents/roles/' + encodeURIComponent(subagentsSelectedName), {method: 'DELETE'});
     showToast('Deleted custom role "' + subagentsSelectedName + '"', 'ok');
-    subagentsSelectedName = 'explorer';
+    hideSubagentEditor();
     await loadSubagents(false);
   } catch (error) {
     showToast(error.message, 'error');
@@ -386,14 +390,13 @@ async function deleteSubagentRole() {
 function resetSubagents() {
   const maxInput = document.getElementById('subagents-max-concurrent');
   if (maxInput) { maxInput.value = String(subagentsBaselineMaxConcurrent); }
+  const keepName = (!subagentsNew && subagentsSelectedName && subagentBaselines.has(subagentsSelectedName))
+    ? subagentsSelectedName
+    : 'explorer';
   subagentDrafts.clear();
   subagentNewDraft = null;
-  if (subagentsNew) {
-    subagentsNew = false;
-    selectSubagentRole('explorer');
-  } else if (subagentsSelectedName && subagentBaselines.has(subagentsSelectedName)) {
-    selectSubagentRole(subagentsSelectedName);
-  }
+  subagentsNew = false;
+  selectSubagentRole(keepName, {skipSync: true});
   renderSubagentList();
 }
 

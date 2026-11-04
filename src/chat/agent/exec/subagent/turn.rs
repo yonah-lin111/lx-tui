@@ -31,6 +31,11 @@ impl ExecSubagentPool {
         role: AgentRole,
         current_items: &[PersistedInputItem],
     ) -> Result<ModelContext, String> {
+        let child_model = self
+            .child_models
+            .get(child_session_id)
+            .unwrap_or(&self.model);
+        let supports_image_input = child_model.supports_image_input;
         let (mut turns, mut items) = (Vec::new(), Vec::new());
         let checkpoint = db
             .active_checkpoint(&self.workspace, child_session_id)
@@ -76,18 +81,41 @@ impl ExecSubagentPool {
                 text: message_text(assistant),
                 reasoning_metadata: None,
             });
-            let stored_images = turn_items
-                .get(&user.external_id)
-                .is_some_and(|stored| has_images(stored));
-            if stored_images && let Some(stored) = turn_items.get(&user.external_id) {
-                items.extend(replay_input_items(
-                    child_session_id,
-                    self.model.supports_image_input,
-                    false,
-                    stored,
-                )?);
-            } else {
-                items.push(ModelItem::UserText(user_text));
+            match turn_items.get(&user.external_id) {
+                Some(stored) if has_images(stored) => {
+                    items.extend(replay_input_items(
+                        child_session_id,
+                        supports_image_input,
+                        false,
+                        stored,
+                    )?);
+                }
+                None if supports_image_input => {
+                    // fork 克隆的历史轮次没有子输入项记录：回放消息附件里仍在磁盘上的图片。
+                    let attachments: Vec<&crate::db::chat::MessageAttachmentMeta> = user
+                        .attachments
+                        .iter()
+                        .filter(|att| {
+                            att.kind == crate::db::chat::MessageAttachmentKind::Image
+                                && att
+                                    .source_path
+                                    .as_deref()
+                                    .is_some_and(|path| Path::new(path).is_file())
+                        })
+                        .collect();
+                    if attachments.is_empty() {
+                        items.push(ModelItem::UserText(user_text));
+                    } else {
+                        items.extend(replay_message_attachments(
+                            db,
+                            &self.workspace,
+                            child_session_id,
+                            user_text,
+                            &attachments,
+                        ));
+                    }
+                }
+                _ => items.push(ModelItem::UserText(user_text)),
             }
             items.extend(crate::chat::context::assistant_items(assistant));
         }
@@ -99,14 +127,10 @@ impl ExecSubagentPool {
         });
         items.extend(replay_input_items(
             child_session_id,
-            self.model.supports_image_input,
+            supports_image_input,
             true,
             current_items,
         )?);
-        let child_model = self
-            .child_models
-            .get(child_session_id)
-            .unwrap_or(&self.model);
         let identity = crate::chat::agent::ModelIdentity {
             display_name: child_model.display_name.clone(),
             provider_id: child_model.provider.clone(),
@@ -171,6 +195,7 @@ impl ExecSubagentPool {
         &self,
         child_session_id: &str,
         items: &[SubagentInputItem],
+        supports_image_input: bool,
     ) -> Result<Vec<PersistedInputItem>, HostError> {
         if items.is_empty() {
             return Err(failed("subagent input items must not be empty"));
@@ -178,7 +203,7 @@ impl ExecSubagentPool {
         let has_images = items
             .iter()
             .any(|item| !matches!(item, SubagentInputItem::Text { .. }));
-        if has_images && !self.model.supports_image_input {
+        if has_images && !supports_image_input {
             return Err(failed("current model does not support image input"));
         }
         let mut out = Vec::with_capacity(items.len());
@@ -563,6 +588,33 @@ fn has_images(items: &[PersistedInputItem]) -> bool {
     items
         .iter()
         .any(|item| matches!(item, PersistedInputItem::Image { .. }))
+}
+
+/// 回放 fork 克隆历史轮的图片附件（这些消息没有 `agent_subagent_input` 记录）。
+fn replay_message_attachments(
+    db: &Database,
+    workspace: &Path,
+    child_session_id: &str,
+    text: String,
+    attachments: &[&crate::db::chat::MessageAttachmentMeta],
+) -> Vec<ModelItem> {
+    let ids: Vec<&str> = attachments.iter().map(|att| att.id.as_str()).collect();
+    let payloads = db
+        .load_image_payloads(workspace, child_session_id, &ids)
+        .unwrap_or_default();
+    let mut images = Vec::new();
+    for att in attachments {
+        if let Some(bytes) = payloads.get(&att.id) {
+            images.push(ModelImage {
+                mime: att.mime.clone().unwrap_or_else(|| "image/png".to_string()),
+                bytes: Arc::new(bytes.clone()),
+            });
+        }
+    }
+    if images.is_empty() {
+        return vec![ModelItem::UserText(text)];
+    }
+    vec![ModelItem::UserContent { text, images }]
 }
 
 fn message_text(message: &crate::db::chat::ChatMessage) -> String {

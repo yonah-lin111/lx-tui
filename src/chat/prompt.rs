@@ -25,7 +25,7 @@ use crate::platform::EnvironmentFacts;
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
-pub const PROMPT_VERSION: &str = "lx-9";
+pub const PROMPT_VERSION: &str = "lx-10";
 
 /// 环境快照单字段最大字符数（转义前）。
 const MAX_FIELD_CHARS: usize = 240;
@@ -125,7 +125,7 @@ Each subagent starts with a clean context by default (`fork_context: false`) and
 Delegate independent work with a clear boundary (goal + owned files/modules + deliverable) and a short `title` (3–8 words). Do not delegate trivial edits or questions needing user input.
 
 Rules:
-- At most 3 subagents may run at once per conversation; a fourth call is rejected.
+- At most 3 subagents may run at once per conversation by default (up to the configured limit shown in `spawn_agent`); calls beyond the limit are rejected.
 - Subagents share the workspace: tell each one not to revert or overwrite others' edits.
 - Each subagent gets a unique `nickname` (e.g. `Turing`) alongside `agent_id`; control tools accept either.
 - Start a subagent, keep working, and call `wait_agent` when needed (`wait_for: \"any\"` for first result; default `\"all\"` waits until done). Prefer long waits (minutes).
@@ -525,7 +525,7 @@ mod tests {
                 "提示缺少 ask 规则 `{needle}`"
             );
         }
-        assert_eq!(PROMPT_VERSION, "lx-9");
+        assert_eq!(PROMPT_VERSION, "lx-10");
         assert!(
             LX_SYSTEM_PROMPT.contains("You can call these tools:")
                 && LX_SYSTEM_PROMPT.contains("`ask`"),

@@ -86,6 +86,12 @@ pub enum ThreadItemDetails {
         agent_id: Option<String>,
         role: Option<String>,
         title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nickname: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fork_context: Option<bool>,
         status: ItemStatus,
     },
     WebSearch {
@@ -170,12 +176,15 @@ pub fn item_details_for_start(call: &ReadyToolCall) -> ThreadItemDetails {
             items: plan_items(&arguments),
         },
         name if is_collab_tool(name) => {
-            let (agent_id, role, title) = collab_start_identity(name, &arguments);
+            let identity = collab_start_identity(name, &arguments);
             ThreadItemDetails::CollabToolCall {
                 tool: name.to_string(),
-                agent_id,
-                role,
-                title,
+                agent_id: identity.agent_id,
+                role: identity.role,
+                title: identity.title,
+                nickname: identity.nickname,
+                model: identity.model,
+                fork_context: identity.fork_context,
                 status: ItemStatus::InProgress,
             }
         }
@@ -267,7 +276,7 @@ pub fn item_details_for_finish(call: &ReadyToolCall, outcome: &ToolOutcome) -> T
                 .unwrap_or_else(|| plan_items(&arguments)),
         },
         name if is_collab_tool(name) => {
-            let (agent_id, role, title) = result
+            let identity = result
                 .and_then(|result| match result {
                     ToolExecutionResult::Subagent(outcome) => Some(collab_identity(outcome)),
                     _ => None,
@@ -280,9 +289,12 @@ pub fn item_details_for_finish(call: &ReadyToolCall, outcome: &ToolOutcome) -> T
             };
             ThreadItemDetails::CollabToolCall {
                 tool: name.to_string(),
-                agent_id,
-                role,
-                title,
+                agent_id: identity.agent_id,
+                role: identity.role,
+                title: identity.title,
+                nickname: identity.nickname,
+                model: identity.model,
+                fork_context: identity.fork_context,
                 status,
             }
         }
@@ -347,19 +359,19 @@ pub fn format_tool_header(call: &ReadyToolCall) -> String {
         "web_search" => format!("web_search \"{}\"", web_queries(&arguments).join(", ")),
         "update_plan" => format!("update_plan ({} steps)", plan_items(&arguments).len()),
         name if is_collab_tool(name) => {
-            let (agent_id, role, title) = collab_start_identity(name, &arguments);
-            if role.is_some() || title.is_some() {
+            let identity = collab_start_identity(name, &arguments);
+            if identity.role.is_some() || identity.title.is_some() {
                 let mut header = name.to_string();
-                if let Some(role) = role {
+                if let Some(role) = identity.role {
                     header.push(' ');
                     header.push_str(&role);
                 }
-                if let Some(title) = title {
+                if let Some(title) = identity.title {
                     header.push_str(" · ");
                     header.push_str(&title);
                 }
                 header
-            } else if let Some(target) = agent_id {
+            } else if let Some(target) = identity.agent_id {
                 format!("{name} {target}")
             } else if name == "wait_agent" {
                 "wait_agent (all)".to_string()
@@ -512,14 +524,35 @@ fn process_summary_line(process: &crate::chat::process::ProcessResult, elapsed_m
 
 fn collab_summary(outcome: &SubagentOutcome) -> String {
     match outcome {
-        SubagentOutcome::Spawned { agent_id, role, .. } => {
-            format!("spawned {agent_id} ({})", role.as_str())
-        }
+        SubagentOutcome::Spawned {
+            agent_id,
+            nickname,
+            role,
+            ..
+        } => match clean_optional(nickname.as_deref()) {
+            Some(nickname) => format!(
+                "spawned {} ({agent_id})",
+                crate::chat::agent::format_agent_identity(Some(nickname.as_str()), role.as_str())
+            ),
+            None => format!("spawned {agent_id} ({})", role.as_str()),
+        },
         SubagentOutcome::InputAccepted { agent_id, .. } => {
             format!("input accepted for {agent_id}")
         }
-        SubagentOutcome::Interrupted { agent_id, .. } => {
-            format!("interrupted {agent_id}")
+        SubagentOutcome::Interrupted {
+            agent_id,
+            nickname,
+            previous_status,
+            queued_count,
+        } => {
+            let nickname = clean_optional(nickname.as_deref());
+            let target = nickname.as_deref().unwrap_or(agent_id.as_str());
+            let mut line = format!("interrupted {target} (was {previous_status}");
+            if *queued_count > 0 {
+                line.push_str(&format!(" · {queued_count} paused"));
+            }
+            line.push(')');
+            line
         }
         SubagentOutcome::Resumed { agent_id, .. } => format!("resumed {agent_id}"),
         SubagentOutcome::Waited {
@@ -539,30 +572,58 @@ fn collab_summary(outcome: &SubagentOutcome) -> String {
     }
 }
 
-fn collab_identity(outcome: &SubagentOutcome) -> (Option<String>, Option<String>, Option<String>) {
+/// 委派工具的展示身份：起始参数与结算结果都归一到同一形状。
+#[derive(Debug, Default)]
+struct CollabIdentity {
+    agent_id: Option<String>,
+    role: Option<String>,
+    title: Option<String>,
+    nickname: Option<String>,
+    model: Option<String>,
+    fork_context: Option<bool>,
+}
+
+fn collab_identity(outcome: &SubagentOutcome) -> CollabIdentity {
     match outcome {
         SubagentOutcome::Spawned {
             agent_id,
+            nickname,
             role,
             title,
-            ..
-        } => (
-            Some(agent_id.clone()),
-            Some(role.as_str().to_string()),
-            Some(title.clone()),
-        ),
+            model,
+            reasoning_effort,
+            fork_context,
+        } => CollabIdentity {
+            agent_id: Some(agent_id.clone()),
+            role: Some(role.as_str().to_string()),
+            title: Some(title.clone()),
+            nickname: clean_optional(nickname.as_deref()),
+            model: collab_model_label(model.as_deref(), reasoning_effort.as_deref()),
+            fork_context: (*fork_context).then_some(true),
+        },
+        SubagentOutcome::Interrupted {
+            agent_id, nickname, ..
+        } => CollabIdentity {
+            agent_id: Some(agent_id.clone()),
+            nickname: clean_optional(nickname.as_deref()),
+            ..CollabIdentity::default()
+        },
         SubagentOutcome::InputAccepted { agent_id, .. }
-        | SubagentOutcome::Interrupted { agent_id, .. }
         | SubagentOutcome::Resumed { agent_id, .. }
         | SubagentOutcome::Closed { agent_id, .. }
-        | SubagentOutcome::InputCancelled { agent_id, .. } => (Some(agent_id.clone()), None, None),
+        | SubagentOutcome::InputCancelled { agent_id, .. } => CollabIdentity {
+            agent_id: Some(agent_id.clone()),
+            ..CollabIdentity::default()
+        },
         SubagentOutcome::Waited { agents, .. } => match agents.as_slice() {
-            [] => (None, None, None),
-            [agent] => (
-                Some(agent.agent_id.clone()),
-                Some(agent.role.as_str().to_string()),
-                Some(agent.title.clone()),
-            ),
+            [] => CollabIdentity::default(),
+            [agent] => CollabIdentity {
+                agent_id: Some(agent.agent_id.clone()),
+                role: Some(agent.role.as_str().to_string()),
+                title: Some(agent.title.clone()),
+                nickname: clean_optional(agent.nickname.as_deref()),
+                ..CollabIdentity::default()
+            },
             agents => {
                 let ids: Vec<&str> = agents.iter().map(|agent| agent.agent_id.as_str()).collect();
                 // 角色只在全体一致时才有意义，否则留空避免误导。
@@ -581,36 +642,70 @@ fn collab_identity(outcome: &SubagentOutcome) -> (Option<String>, Option<String>
                 } else {
                     Some(titles.join(", "))
                 };
-                (Some(ids.join(", ")), role, title)
+                CollabIdentity {
+                    agent_id: Some(ids.join(", ")),
+                    role,
+                    title,
+                    ..CollabIdentity::default()
+                }
             }
         },
         SubagentOutcome::Listed { agents } => {
             let ids: Vec<&str> = agents.iter().map(|agent| agent.agent_id.as_str()).collect();
-            if ids.is_empty() {
-                (None, None, None)
-            } else {
-                (Some(ids.join(", ")), None, None)
+            CollabIdentity {
+                agent_id: if ids.is_empty() {
+                    None
+                } else {
+                    Some(ids.join(", "))
+                },
+                ..CollabIdentity::default()
             }
         }
     }
 }
 
 /// 子 agent 控制工具的起始标识：各工具 schema 的目标字段名并不统一。
-fn collab_start_identity(
-    name: &str,
-    arguments: &Value,
-) -> (Option<String>, Option<String>, Option<String>) {
+fn collab_start_identity(name: &str, arguments: &Value) -> CollabIdentity {
     let agent_id = arg_str(arguments, "agent_id")
         .or_else(|| arg_str(arguments, "target"))
         .or_else(|| arg_str(arguments, "id"))
         .or_else(|| arg_str(arguments, "submission_id"))
         .map(str::to_string)
         .or_else(|| wait_targets(name, arguments));
-    (
+    CollabIdentity {
         agent_id,
-        arg_str(arguments, "role").map(str::to_string),
-        arg_str(arguments, "title").map(str::to_string),
-    )
+        role: arg_str(arguments, "role").map(str::to_string),
+        title: arg_str(arguments, "title").map(str::to_string),
+        nickname: clean_optional(arg_str(arguments, "nickname")),
+        model: collab_model_label(
+            arg_str(arguments, "model"),
+            arg_str(arguments, "reasoning_effort"),
+        ),
+        fork_context: (arguments.get("fork_context").and_then(Value::as_bool) == Some(true))
+            .then_some(true),
+    }
+}
+
+/// 非空字符串（去首尾空白），否则 `None`。
+fn clean_optional(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// `model` + `reasoning_effort` → 紧凑展示标签（与 TUI 卡片同款）。
+fn collab_model_label(model: Option<&str>, reasoning_effort: Option<&str>) -> Option<String> {
+    let model = model.map(str::trim).filter(|value| !value.is_empty());
+    let effort = reasoning_effort
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match (model, effort) {
+        (Some(model), Some(effort)) => Some(format!("{model} ({effort})")),
+        (Some(model), None) => Some(model.to_string()),
+        (None, Some(effort)) => Some(format!("effort:{effort}")),
+        (None, None) => None,
+    }
 }
 
 /// `wait_agent` 的 `targets` 数组；空数组代表「全部」，不产生目标标识。

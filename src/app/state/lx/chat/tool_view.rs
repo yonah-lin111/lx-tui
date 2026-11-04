@@ -518,10 +518,43 @@ impl SubagentDetailView {
         }
     }
 
-    /// 由工具名 + 参数 + 落库结果 JSON 构造（实时结算与历史重载共用）。
+    /// 由工具名 + 参数 + 落库结果 JSON 构造（实时结算与历史重载共用）；结果体缺失时
+    /// 回退到调用参数，保证崩溃恢复后的 `interrupted`/失败工具仍保留昵称/目标/模型卡片。
     pub fn from_tool(name: &str, arguments_json: &str, result_json: Option<&str>) -> Option<Self> {
-        let value: Value = serde_json::from_str(result_json?).ok()?;
-        Self::from_outcome_with_arguments(&value, Some((name, arguments_json)))
+        let arguments = Self::from_arguments(name, arguments_json);
+        let outcome = result_json
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            .and_then(|value| {
+                Self::from_outcome_with_arguments(&value, Some((name, arguments_json)))
+            });
+        let Some(mut detail) = outcome else {
+            return arguments;
+        };
+        detail.fill_missing_from_arguments(arguments);
+        Some(detail)
+    }
+
+    /// 用调用参数补齐结果体里没有的字段（昵称、角色、标题、任务、模型、fork）。
+    fn fill_missing_from_arguments(&mut self, arguments: Option<Self>) {
+        let Some(arguments) = arguments else {
+            return;
+        };
+        // send_input / resume_agent / close_agent / interrupt_agent 允许用昵称寻址：
+        // 结果体只带解析后的 `sub-...` id，昵称要从参数里补回。
+        if self.nickname.is_none()
+            && let Some(target) = arguments.agent_id.as_deref()
+            && self.agent_id.as_deref() != Some(target)
+            && !target.starts_with("sub-")
+            && !target.starts_with("sub_")
+        {
+            self.nickname = Some(target.to_string());
+        }
+        self.nickname = self.nickname.take().or(arguments.nickname);
+        self.role = self.role.take().or(arguments.role);
+        self.title = self.title.take().or(arguments.title);
+        self.task = self.task.take().or(arguments.task);
+        self.model_label = self.model_label.take().or(arguments.model_label);
+        self.fork_context |= arguments.fork_context;
     }
 
     /// 由结果 JSON +（可选）调用参数构造。
@@ -648,9 +681,9 @@ impl SubagentDetailView {
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
                 view.closed_status = Some(if queued > 0 {
-                    format!("was {prev} · {queued} paused")
+                    format!("{prev} · {queued} paused")
                 } else {
-                    format!("was {prev}")
+                    prev.to_string()
                 });
             }
             "send_input" | "resume_agent" => {

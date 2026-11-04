@@ -243,10 +243,30 @@ fn report_node(body: &str, width: u16) -> Node {
     Node::block(lines)
 }
 
+/// 失败原因节点：工具结算失败且带错误摘要时补一行红字，避免只剩一个红方块。
+fn error_node(call: &ToolCallView) -> Option<Node> {
+    if call.status != ToolStatus::Failed {
+        return None;
+    }
+    let error = call
+        .error
+        .as_deref()
+        .map(str::trim)
+        .filter(|error| !error.is_empty())?;
+    Some(Node::text(
+        single_line(error, TEXT_SAMPLE_CHARS),
+        style::agent_fail(),
+    ))
+}
+
 /// 卡片节点与链接。
 fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
     let Some(view) = view(call) else {
-        return Built::new();
+        let mut built = Built::new();
+        if let Some(node) = error_node(call) {
+            built.nodes.push(node);
+        }
+        return built;
     };
     let mut built = Built::new();
     match call.name.as_str() {
@@ -341,6 +361,9 @@ fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
             }
         }
     }
+    if let Some(node) = error_node(call) {
+        built.nodes.push(node);
+    }
     built
 }
 
@@ -385,7 +408,8 @@ pub(super) fn agent_links(call: &ToolCallView, width: u16) -> Vec<(usize, String
 /// spawn 标题方块跟子 agent 状态走，而不是“spawn 工具已返回”的调用状态。
 fn agent_mark(view: &SubagentDetailView, call: &ToolCallView, loading_frame: usize) -> StepMark {
     match view.agent_status.as_deref() {
-        Some("completed" | "running" | "pending" | "blocked") => StepMark::Done,
+        Some("completed" | "running" | "pending") => StepMark::Done,
+        Some("blocked" | "interrupted") => StepMark::Interrupted,
         Some("failed") => StepMark::Failed,
         Some("cancelled") => StepMark::Cancelled,
         _ => mark_of(call.status, loading_frame),
@@ -683,12 +707,12 @@ mod tests {
             timed_out: false,
             agents: Vec::new(),
             report: None,
-            closed_status: Some("was running · 1 paused".into()),
+            closed_status: Some("running · 1 paused".into()),
         };
         let text = flat(&call("interrupt_agent", interrupt), 60, false);
         assert!(text.contains("Interrupt agent"), "{text}");
         assert!(text.contains("Turing"), "{text}");
-        assert!(text.contains("previous: was running · 1 paused"), "{text}");
+        assert!(text.contains("previous: running · 1 paused"), "{text}");
     }
 
     #[test]
@@ -721,5 +745,22 @@ mod tests {
             code_seg.style,
             style::md_read_inline_code().patch(style::muted())
         );
+    }
+
+    #[test]
+    fn failed_card_appends_the_error_reason() {
+        let mut call = call("spawn_agent", wait_view());
+        call.status = ToolStatus::Failed;
+        call.error = Some("model not found: ghost".into());
+        let text = flat(&call, 80, false);
+        assert!(text.contains("model not found: ghost"), "{text}");
+    }
+
+    #[test]
+    fn interrupted_agent_status_uses_the_interrupted_mark() {
+        let mut view = wait_view();
+        view.agent_status = Some("interrupted".into());
+        let call = call("spawn_agent", view.clone());
+        assert_eq!(agent_mark(&view, &call, 0), StepMark::Interrupted);
     }
 }

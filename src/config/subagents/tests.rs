@@ -133,4 +133,36 @@ fn validation_rejects_invalid_concurrency_reserved_or_duplicate_names() {
         ..SubagentsSection::default()
     };
     assert!(bad_syntax.validate().is_err());
+
+    let comma_nickname = SubagentsSection {
+        builtins: BuiltinRoleOverrides {
+            explorer: RoleOverrideConfig {
+                nickname_candidates: vec!["Turing,Ada".into()],
+                ..RoleOverrideConfig::default()
+            },
+            ..BuiltinRoleOverrides::default()
+        },
+        ..SubagentsSection::default()
+    };
+    assert!(comma_nickname.validate().is_err());
+
+    let incomplete_model = SubagentsConfigFile {
+        subagents: SubagentsSection {
+            builtins: BuiltinRoleOverrides {
+                explorer: RoleOverrideConfig {
+                    model: Some(ModelSelection {
+                        provider: "openai".into(),
+                        model: String::new(),
+                        variant: None,
+                    }),
+                    ..RoleOverrideConfig::default()
+                },
+                ..BuiltinRoleOverrides::default()
+            },
+            ..SubagentsSection::default()
+        },
+    };
+    let dir = temp_dir("incomplete-model");
+    assert!(save_subagents(&dir.join("subagents.json"), &incomplete_model).is_err());
+    let _ = std::fs::remove_dir_all(dir);
 }

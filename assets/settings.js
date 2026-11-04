@@ -38,7 +38,14 @@ function showTab(name) {
   }
   if (name === 'mcp' && (typeof mcpState === 'undefined' || mcpState === null)) { loadMcp(); }
   if (name === 'skills' && (typeof skillsState === 'undefined' || skillsState === null)) { loadSkills(); }
-  if (name === 'subagents' && (typeof subagentsState === 'undefined' || subagentsState === null)) { loadSubagents(); }
+  if (name === 'subagents') {
+    if (typeof subagentsState === 'undefined' || subagentsState === null) {
+      loadSubagents();
+    } else if (typeof subagentsDirty === 'function' && !subagentsDirty()) {
+      // 干净状态下重新进入 subagents：刷新缓存的角色与模型目录。
+      loadSubagents(false);
+    }
+  }
   refreshActionBars();
 }
 

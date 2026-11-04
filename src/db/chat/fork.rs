@@ -406,12 +406,25 @@ pub(super) fn copy_completed_history_to_child(
 ) -> Result<(i64, i64)> {
     let messages = load_messages(transaction, source_session, boundary)?;
     let mut message_ids: HashMap<String, String> = HashMap::new();
-    let mut max_seq: Option<i64> = None;
     let mut max_turn: Option<i64> = None;
     for message in &messages {
         if message.status == "streaming" {
             continue;
         }
+        // 父会话的子 agent 汇报卡片不属于子会话：只保留正文，清掉报告标记。
+        // `agent_message.kind` 的合法值为 `chat` / `user_shell`，汇报行本身就是 `chat`。
+        let is_subagent_report =
+            message.kind == "subagent_report" || message.subagent_report_json.is_some();
+        let kind = if message.kind == "subagent_report" {
+            "chat"
+        } else {
+            message.kind.as_str()
+        };
+        let subagent_report_json = if is_subagent_report {
+            None
+        } else {
+            message.subagent_report_json.as_deref()
+        };
         let new_id = new_external_id("msg");
         transaction.execute(
             r#"INSERT INTO agent_message
@@ -439,12 +452,11 @@ pub(super) fn copy_completed_history_to_child(
                 message.cache_write_tokens,
                 message.created_at_ms,
                 message.completed_at_ms,
-                message.kind,
+                kind,
                 message.user_shell_json,
-                message.subagent_report_json,
+                subagent_report_json,
             ],
         )?;
-        max_seq = Some(max_seq.map_or(message.sequence, |cur| cur.max(message.sequence)));
         max_turn = Some(max_turn.map_or(message.turn_index, |cur| cur.max(message.turn_index)));
         message_ids.insert(message.external_id.clone(), new_id);
     }
@@ -470,7 +482,7 @@ pub(super) fn copy_completed_history_to_child(
         copy_switches(transaction, child_session_id, source_session, boundary)?;
     }
 
-    let next_seq = max_seq.map_or(0, |s| s.saturating_add(1));
+    let next_seq = super::next_session_sequence(transaction, child_session_id)?;
     let next_turn = max_turn.map_or(0, |t| t.saturating_add(1));
     Ok((next_seq, next_turn))
 }

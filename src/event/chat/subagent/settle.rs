@@ -138,7 +138,16 @@ pub(crate) fn finish_subagent_with_billing(
     let mut continued = false;
     match &reason {
         StopReason::Complete => {
-            if streams.resumed_subagents.contains(&handle.agent_id) {
+            if was_paused_by_interrupt {
+                // interrupt 与自然完成竞争：保持 idle 并继续暂停队列，等显式 resume/send_input。
+                streams.paused_by_interrupt.insert(handle.agent_id.clone());
+                streams.resumed_subagents.insert(handle.agent_id.clone());
+                if let Some(pane) = state.pane_mut_anywhere(handle.parent.pane)
+                    && let Some(run) = pane.lx.agents.by_agent_mut(&handle.agent_id)
+                {
+                    run.status = STATUS_IDLE.to_string();
+                }
+            } else if streams.resumed_subagents.contains(&handle.agent_id) {
                 match schedule_next_queued_input_with_done(
                     state,
                     streams,
@@ -179,6 +188,7 @@ pub(crate) fn finish_subagent_with_billing(
                 }
             } else if was_paused_by_interrupt {
                 // `interrupt_agent`：保持 `idle` 活动态，暂停自动消费后续排队队列。
+                streams.paused_by_interrupt.insert(handle.agent_id.clone());
                 streams.resumed_subagents.insert(handle.agent_id.clone());
                 if let Some(pane) = state.pane_mut_anywhere(handle.parent.pane)
                     && let Some(run) = pane.lx.agents.by_agent_mut(&handle.agent_id)

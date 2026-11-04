@@ -61,12 +61,13 @@ fn commit_and_notify(
     file: &SubagentsConfigFile,
     state: &ServiceState,
 ) -> Result<SubagentsSection, Response> {
+    // 先校验原始输入，避免非法字段在 `save_subagents` 归一化时被静默丢弃。
+    if let Err(error) = save_subagents(path, file) {
+        return Err(Response::error(422, &error.to_string()));
+    }
     let normalized = SubagentsConfigFile {
         subagents: file.subagents.normalized(),
     };
-    if let Err(error) = save_subagents(path, &normalized) {
-        return Err(Response::error(422, &error.to_string()));
-    }
     let _ = state
         .sender()
         .send(SettingsEvent::SubagentsChanged(Box::new(
@@ -150,9 +151,9 @@ fn get_subagents(state: &ServiceState) -> Response {
 struct PutAllPayload {
     max_concurrent: usize,
     #[serde(default)]
-    builtins: crate::config::subagents::BuiltinRoleOverrides,
+    builtins: Option<crate::config::subagents::BuiltinRoleOverrides>,
     #[serde(default)]
-    roles: Vec<CustomRoleConfig>,
+    roles: Option<Vec<CustomRoleConfig>>,
 }
 
 fn put_subagents_all(request: &Request, state: &ServiceState) -> Response {
@@ -164,11 +165,13 @@ fn put_subagents_all(request: &Request, state: &ServiceState) -> Response {
         Ok(p) => p,
         Err(err) => return Response::error(400, &format!("invalid json: {err}")),
     };
-    file.subagents = SubagentsSection {
-        max_concurrent: payload.max_concurrent,
-        builtins: payload.builtins,
-        roles: payload.roles,
-    };
+    file.subagents.max_concurrent = payload.max_concurrent;
+    if let Some(builtins) = payload.builtins {
+        file.subagents.builtins = builtins;
+    }
+    if let Some(roles) = payload.roles {
+        file.subagents.roles = roles;
+    }
     match commit_and_notify(&path, &file, state) {
         Ok(saved) => build_response_json(&saved, state),
         Err(resp) => resp,

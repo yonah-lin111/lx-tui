@@ -98,7 +98,11 @@ impl ExecSubagentPool {
         let mut continued = false;
         match &summary.outcome {
             LoopOutcome::Complete => {
-                if self.resumed.contains(agent_id) {
+                if was_paused_by_interrupt {
+                    // interrupt 与自然完成竞争：保持 idle，队列仍暂停等显式 resume/send_input。
+                    self.paused_by_interrupt.insert(agent_id.to_string());
+                    self.resumed.insert(agent_id.to_string());
+                } else if self.resumed.contains(agent_id) {
                     match self.launch_next_queued(db, agent_id, Some(handle.done_tx.clone())) {
                         Ok(true) => continued = true,
                         Ok(false) => {
@@ -120,9 +124,13 @@ impl ExecSubagentPool {
                         Err(_) => {}
                     }
                 } else if was_paused_by_interrupt {
+                    // 保留暂停标记：`cancel_input` 不得越过 interrupt 自动续跑队列。
+                    self.paused_by_interrupt.insert(agent_id.to_string());
                     self.resumed.insert(agent_id.to_string());
                 } else {
                     self.resumed.remove(agent_id);
+                    let _ =
+                        db.close_idle_subagent(&self.workspace, &self.parent_session_id, agent_id);
                 }
             }
             LoopOutcome::Failed { .. } => {

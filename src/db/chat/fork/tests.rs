@@ -307,6 +307,77 @@ fn fork_copies_only_checkpoints_before_boundary() {
 }
 
 #[test]
+fn fork_normalizes_parent_subagent_report_rows() {
+    let (database, workspace) = database("subagent-report");
+    let first = complete_turn(&database, &workspace, None, "q1", "a1", Usage::default());
+    let revision = database
+        .session_revision(&first.session_id)
+        .expect("revision");
+    let checkpoint = database
+        .commit_compact(
+            &workspace,
+            &CompactCommit {
+                session_id: first.session_id.clone(),
+                expected_revision: revision,
+                base_checkpoint_id: None,
+                start_sequence: 0,
+                end_sequence: 1,
+                summary_text: "summary".into(),
+                model_label: "M".into(),
+                operation_id: "op-1".into(),
+            },
+        )
+        .expect("compact")
+        .checkpoint;
+    let report_json = r#"[{"agent_id":"agent-1","title":"work"}]"#;
+    database
+        .conn
+        .execute(
+            "UPDATE agent_message SET subagent_report_json = ?1 WHERE external_id = ?2",
+            params![report_json, first.user_message_id],
+        )
+        .expect("mark report");
+
+    let committed = database
+        .begin_subagent_turn_with_options(
+            &workspace,
+            &first.session_id,
+            None,
+            None,
+            crate::chat::agent::AgentRole::Explorer,
+            "inspect",
+            "follow up",
+            &[crate::db::chat::PersistedInputItem::Text {
+                text: "follow up".into(),
+            }],
+            &model(),
+            None,
+            None,
+            None,
+            true,
+            &None,
+        )
+        .expect("forked subagent");
+    let messages = database
+        .load_chat_session(&workspace, &committed.child_session_id)
+        .expect("load")
+        .expect("exists");
+    assert!(
+        messages[0].subagent_reports.is_none(),
+        "子会话不得继承父会话的子 agent 汇报卡片"
+    );
+    assert_eq!(
+        messages[0].parts[0].content, "q1",
+        "汇报正文仍需保留在子会话历史中"
+    );
+    assert_eq!(messages[2].parts[0].content, "follow up");
+    assert!(
+        messages[2].sequence > checkpoint.sequence,
+        "fork 后首条新消息的 sequence 必须大于已复制的检查点 sequence"
+    );
+}
+
+#[test]
 fn fork_copies_model_switches_before_boundary() {
     let (database, workspace) = database("switch");
     let first = complete_turn(&database, &workspace, None, "q1", "a1", Usage::default());

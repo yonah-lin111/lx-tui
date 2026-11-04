@@ -1336,18 +1336,24 @@ async fn interrupt_agent_keeps_idle_and_pauses_queue_until_send_input_or_resume(
     let spawn = ctx.run("i1", spawn_op(AgentRole::Explorer, "interrupt", "turn 1")).await;
     let agent_id = spawned(&spawn).0.to_string();
     let child = ctx.child(&agent_id);
+    let drop_sub = match ctx.run("i1_drop", SubagentOp::SendInput { target: agent_id.clone(), items: vec![text("q_drop")], interrupt: false }).await {
+        SubagentOutcome::InputAccepted { submission_id, .. } => submission_id,
+        other => panic!("expected InputAccepted, got {other:?}"),
+    };
     for (call_id, body) in [("i2", "q1"), ("i3", "q2")] {
         ctx.run(call_id, SubagentOp::SendInput { target: agent_id.clone(), items: vec![text(body)], interrupt: false }).await;
     }
     let cancel = ctx.streams.subagents.get(&child).expect("handle").cancel.subscribe();
     let interrupted = ctx.run("i4", SubagentOp::Interrupt { target: agent_id.clone() }).await;
-    assert!(matches!(interrupted, SubagentOutcome::Interrupted { previous_status, queued_count, .. } if previous_status == "running" && queued_count == 2));
+    assert!(matches!(interrupted, SubagentOutcome::Interrupted { previous_status, queued_count, .. } if previous_status == "running" && queued_count == 3));
     assert!(*cancel.borrow(), "当前轮收到取消信号");
 
-    // 被中断轮次封口后保持 idle，剩余 queued 输入不得自动消费。
+    // 被中断轮次封口后保持 idle，剩余 queued 输入不得自动消费，且 cancel_input 不得越过暂停自动拉起下一条。
     ctx.finish(&child, StopReason::Cancelled);
     assert!(!ctx.streams.subagents.contains_key(&child));
     assert!(ctx.streams.resumed_subagents.contains(&agent_id));
+    ctx.run("i4_cancel", SubagentOp::CancelInput { submission_id: drop_sub }).await;
+    assert!(!ctx.streams.subagents.contains_key(&child), "cancel_input must not bypass interrupt pause");
 
     // 后续 send_input 解除暂停并消费队首旧输入（不跳过队列）。
     let sent = ctx.run("i5", SubagentOp::SendInput { target: agent_id.clone(), items: vec![text("nudge")], interrupt: false }).await;
@@ -1395,9 +1401,16 @@ async fn subagent_model_resolution_prefers_explicit_then_role_then_parent() {
     let role = ctx.run("m2", spawn_op(AgentRole::Explorer, "role", "task")).await;
     assert!(matches!(&role, SubagentOutcome::Spawned { model: Some(model), reasoning_effort: Some(effort), .. } if model == "p/m2" && effort == "low"));
 
-    // 显式参数覆盖角色默认。
+    // 显式参数覆盖角色默认，且重启（清空内存缓存）后 resume 仍从 DB 恢复固定模型 m3。
     let explicit = ctx.run("m3", spawn_op_with(AgentRole::Explorer, "explicit", "task", Some("m3"), Some("high"))).await;
+    let explicit_id = spawned(&explicit).0.to_string();
+    let explicit_child = ctx.child(&explicit_id);
     assert!(matches!(&explicit, SubagentOutcome::Spawned { model: Some(model), reasoning_effort: Some(effort), .. } if model == "p/m3" && effort == "high"));
+    ctx.finish(&explicit_child, StopReason::Complete);
+    ctx.streams.frozen.remove(&explicit_child);
+    ctx.streams.pinned_subagent_models.remove(&explicit_child);
+    ctx.run("m4", SubagentOp::Resume { id: explicit_id.clone() }).await;
+    assert_eq!(ctx.streams.frozen.get(&explicit_child).map(|f| f.model.as_str()), Some("m3"));
 }
 
 #[rustfmt::skip]

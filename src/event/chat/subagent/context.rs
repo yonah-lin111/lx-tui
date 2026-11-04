@@ -297,6 +297,38 @@ pub(super) fn replay_persisted_items(
     Ok(out)
 }
 
+/// 回放 fork 克隆历史轮的图片附件（这些消息没有 `agent_subagent_input` 记录）。
+///
+/// 仅加载仍存在于磁盘的归档图片；全部不可读时退化为纯文本，不阻断本轮回放。
+fn historical_attachment_items(
+    database: &Database,
+    workspace: &Path,
+    child_session_id: &str,
+    user_text: &str,
+    attachments: &[&crate::db::chat::MessageAttachmentMeta],
+) -> Vec<ModelItem> {
+    let ids: Vec<&str> = attachments.iter().map(|att| att.id.as_str()).collect();
+    let payloads = database
+        .load_image_payloads(workspace, child_session_id, &ids)
+        .unwrap_or_default();
+    let mut images = Vec::new();
+    for att in attachments {
+        if let Some(bytes) = payloads.get(&att.id) {
+            images.push(ModelImage {
+                mime: att.mime.clone().unwrap_or_else(|| "image/png".to_string()),
+                bytes: Arc::new(bytes.clone()),
+            });
+        }
+    }
+    if images.is_empty() {
+        return vec![ModelItem::UserText(user_text.to_string())];
+    }
+    vec![ModelItem::UserContent {
+        text: user_text.to_string(),
+        images,
+    }]
+}
+
 /// 组装子会话新一轮的完整 `ModelContext`（含持久化压缩检查点、完整轮次预算裁剪与有序多模态输入）。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn assemble_child_context(
@@ -370,6 +402,13 @@ pub(super) fn assemble_child_context(
             Some(stored) => {
                 replay_persisted_items(child_session_id, supports_image_input, false, stored)?
             }
+            None if !turn.user_image_attachments.is_empty() => historical_attachment_items(
+                database,
+                workspace,
+                child_session_id,
+                &turn.user_text,
+                &turn.user_image_attachments,
+            ),
             None => vec![ModelItem::UserText(turn.user_text.clone())],
         };
         turns.push(ChatTurn {
@@ -426,12 +465,14 @@ struct PlannedChildTurn<'a> {
     user_text: String,
     assistant_text: String,
     stored_user_items: Option<&'a [PersistedInputItem]>,
+    /// 无 `agent_subagent_input` 记录（fork 克隆历史）时，从消息附件恢复的有序图片。
+    user_image_attachments: Vec<&'a crate::db::chat::MessageAttachmentMeta>,
     assistant_items: Vec<ModelItem>,
     tokens: u64,
 }
 
 fn plan_child_historical_turns<'a>(
-    messages: &[&ChatMessage],
+    messages: &'a [&'a ChatMessage],
     turn_items_map: &'a HashMap<String, Vec<PersistedInputItem>>,
     supports_image_input: bool,
 ) -> Vec<PlannedChildTurn<'a>> {
@@ -458,12 +499,28 @@ fn plan_child_historical_turns<'a>(
         }
         let user_text = message_text(user);
         let stored_user_items = turn_items_map.get(&user.external_id).map(Vec::as_slice);
+        // fork 克隆的历史轮次没有子输入项记录：回放消息附件里仍在磁盘上的图片。
+        let user_image_attachments = if stored_user_items.is_none() && supports_image_input {
+            user.attachments
+                .iter()
+                .filter(|att| {
+                    att.kind == crate::db::chat::MessageAttachmentKind::Image
+                        && att
+                            .source_path
+                            .as_deref()
+                            .is_some_and(|path| Path::new(path).is_file())
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let assistant_text = message_text(assistant);
         let assistant_items = crate::chat::context::assistant_items(assistant);
         planned.push(PlannedChildTurn {
             user_text,
             assistant_text,
             stored_user_items,
+            user_image_attachments,
             assistant_items,
             tokens: 0,
         });
@@ -475,7 +532,8 @@ fn plan_child_historical_turns<'a>(
     for turn in &mut planned {
         let user_tokens = match turn.stored_user_items {
             Some(stored) => estimate_persisted_items_tokens(stored),
-            None => crate::chat::context::estimate_tokens(&turn.user_text) as u64,
+            None => (crate::chat::context::estimate_tokens(&turn.user_text) as u64)
+                .saturating_add((turn.user_image_attachments.len() as u64) * 1600),
         };
         turn.tokens = user_tokens.saturating_add(estimate_items_tokens(&turn.assistant_items));
     }

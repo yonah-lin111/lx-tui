@@ -12,6 +12,7 @@ use tokio::sync::{oneshot, watch};
 use super::*;
 
 mod context;
+mod launch;
 mod model_resolve;
 mod runner;
 mod settle;
@@ -32,8 +33,8 @@ pub(crate) use wait::settle_wait;
 
 use crate::app::state::RequestKey;
 use crate::chat::agent::{
-    AgentListItemView, AgentRole, FINISHED_CODE, INPUT_NOT_FOUND_CODE, MAX_CONCURRENT_SUBAGENTS,
-    NOT_FOUND_CODE, SubagentInputItem, SubagentOp, SubagentOutcome, WaitMode,
+    AgentListItemView, AgentRole, FINISHED_CODE, INPUT_NOT_FOUND_CODE, NOT_FOUND_CODE,
+    SubagentInputItem, SubagentOp, SubagentOutcome, WaitMode,
 };
 use crate::db::chat::{SubagentQueueState, SubagentRecord};
 use crate::event::AppEvent;
@@ -401,6 +402,7 @@ fn close(
             STATUS_CANCELLED,
             None,
         );
+        let _ = database.close_idle_subagent(&workspace, &key.session, &canonical_id);
         if let Some(pane) = state.pane_mut_anywhere(key.pane)
             && let Some(run) = pane.lx.agents.by_agent_mut(&canonical_id)
         {
@@ -486,6 +488,7 @@ fn cancel_input(
         });
     };
     if status == STATUS_CANCELLED
+        && !streams.paused_by_interrupt.contains(&agent_id)
         && streams.resumed_subagents.contains(&agent_id)
         && let Ok(Some(claimed)) = runner::schedule_next_queued_input(
             state,
@@ -747,7 +750,10 @@ pub(crate) fn running_subagent_lines(streams: &ChatStreams, parent_session: &str
     }
     let mut lines =
         vec!["[local runtime] running subagents (use wait_agent / close_agent):".to_string()];
-    for handle in running.iter().take(MAX_CONCURRENT_SUBAGENTS) {
+    for handle in running
+        .iter()
+        .take(crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT)
+    {
         let head: String = handle
             .task
             .lines()
@@ -756,8 +762,15 @@ pub(crate) fn running_subagent_lines(streams: &ChatStreams, parent_session: &str
             .chars()
             .take(120)
             .collect();
+        let nickname = handle
+            .nickname
+            .as_deref()
+            .map(str::trim)
+            .filter(|nick| !nick.is_empty())
+            .map(|nick| format!(" nickname={nick}"))
+            .unwrap_or_default();
         lines.push(format!(
-            "- agent_id={} role={} · {head}",
+            "- agent_id={} role={}{nickname} · {head}",
             handle.agent_id,
             handle.role.as_str()
         ));

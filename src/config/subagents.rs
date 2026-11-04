@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -461,6 +462,11 @@ fn validate_nicknames(role_name: &str, list: &[String]) -> Result<(), SubagentsC
                 "role '{role_name}' nickname '{trimmed}' exceeds {MAX_NICKNAME_CHARS} characters"
             )));
         }
+        if trimmed.chars().any(|c| c == ',' || c.is_control()) {
+            return Err(SubagentsConfigError::Invalid(format!(
+                "role '{role_name}' nickname '{trimmed}' must not contain commas or control characters"
+            )));
+        }
     }
     Ok(())
 }
@@ -523,7 +529,11 @@ pub fn load_subagents_or_default() -> SubagentsSection {
     };
     match load_subagents(&path) {
         Ok(Some(file)) => file.subagents,
-        Ok(None) | Err(_) => SubagentsSection::default(),
+        Ok(None) => SubagentsSection::default(),
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to load subagents config, falling back to defaults");
+            SubagentsSection::default()
+        }
     }
 }
 
@@ -538,6 +548,7 @@ pub fn parse_subagents(text: &str) -> Result<SubagentsConfigFile, SubagentsConfi
 
 /// 原子保存：先归一化并校验，再写临时文件 → 0600 → `rename`。
 pub fn save_subagents(path: &Path, file: &SubagentsConfigFile) -> Result<(), SubagentsConfigError> {
+    file.subagents.validate()?;
     let normalized = SubagentsConfigFile {
         subagents: file.subagents.normalized(),
     };
@@ -549,7 +560,9 @@ pub fn save_subagents(path: &Path, file: &SubagentsConfigFile) -> Result<(), Sub
         std::fs::create_dir_all(parent)?;
         crate::platform::restrict_dir_permissions(parent)?;
     }
-    let temp = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temp = path.with_extension(format!("json.tmp.{}.{}", std::process::id(), sequence));
     std::fs::write(&temp, body.as_bytes())?;
     crate::platform::restrict_file_permissions(&temp)?;
     if let Err(error) = std::fs::rename(&temp, path) {

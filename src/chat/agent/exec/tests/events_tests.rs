@@ -292,12 +292,43 @@ fn collab_calls_carry_the_agent_identity() {
             role,
             title,
             status,
+            nickname,
+            model,
+            fork_context,
         } => {
             assert_eq!(tool, "spawn_agent");
             assert_eq!(agent_id.as_deref(), Some("sub-1"));
             assert_eq!(role.as_deref(), Some("explorer"));
             assert_eq!(title.as_deref(), Some("inspect cli"));
             assert_eq!(status, ItemStatus::Completed);
+            assert_eq!(nickname, None);
+            assert_eq!(model, None);
+            assert_eq!(fork_context, None);
+        }
+        other => panic!("expected collab tool call, got {other:?}"),
+    }
+
+    let rich = ToolOutcome::Executed(ToolExecutionResult::Subagent(Box::new(
+        SubagentOutcome::Spawned {
+            agent_id: "sub-2".to_string(),
+            nickname: Some("Dijkstra".to_string()),
+            role: AgentRole::parse("reviewer").expect("role"),
+            title: "audit auth".to_string(),
+            model: Some("openai/gpt-5".to_string()),
+            reasoning_effort: Some("high".to_string()),
+            fork_context: true,
+        },
+    )));
+    match item_details_for_finish(&call, &rich) {
+        ThreadItemDetails::CollabToolCall {
+            nickname,
+            model,
+            fork_context,
+            ..
+        } => {
+            assert_eq!(nickname.as_deref(), Some("Dijkstra"));
+            assert_eq!(model.as_deref(), Some("openai/gpt-5 (high)"));
+            assert_eq!(fork_context, Some(true));
         }
         other => panic!("expected collab tool call, got {other:?}"),
     }
