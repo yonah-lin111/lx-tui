@@ -248,7 +248,7 @@ pub(super) fn send_input(
     if !is_running && !is_resumed {
         return Err(NOT_ACTIVE_CODE.to_string());
     }
-    streams.paused_by_interrupt.remove(target);
+    let was_cancelling_from_interrupt = streams.paused_by_interrupt.remove(target);
     let max_concurrent = state
         .subagents_config
         .max_concurrent
@@ -312,7 +312,7 @@ pub(super) fn send_input(
         .map_err(|err| err.code().to_string())?;
 
     if is_running {
-        if interrupt && enqueued.created {
+        if (interrupt || was_cancelling_from_interrupt) && enqueued.created {
             streams.interrupted_subagents.insert(target.to_string());
             if let Some(handle) = streams
                 .subagents

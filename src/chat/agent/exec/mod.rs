@@ -234,11 +234,13 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
         &prepared.model_images,
         &mut request.items,
     );
+    let subagents_config = crate::config::subagents::load_subagents_or_default();
     request.purpose = RequestPurpose::ExecTurn;
     request.system_prompt = Some(assembly.system_prompt);
-    request.tools = Arc::new(crate::chat::tools::turn_tools(
+    request.tools = Arc::new(crate::chat::tools::turn_tools_with_subagents(
         crate::chat::agent::ToolSurface::ExecMain,
         &mcp_snapshot,
+        Some(&subagents_config),
     ));
     let context =
         ModelContext::new(request, cwd.to_path_buf()).with_context_limit(model.context_limit);

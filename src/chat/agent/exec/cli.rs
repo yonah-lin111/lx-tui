@@ -679,24 +679,37 @@ fn resolve_raw_selection(
                 "invalid model '{reference}': expected <provider>/<model>"
             ));
         }
-        let provider = settings
-            .providers
-            .get(provider_id)
-            .ok_or_else(|| format!("provider '{provider_id}' is not defined"))?;
-        if !is_enabled(settings, provider_id) {
-            return Err(format!("provider '{provider_id}' is not enabled"));
+        if let Some(provider) = settings.providers.get(provider_id) {
+            if !is_enabled(settings, provider_id) {
+                return Err(format!("provider '{provider_id}' is not enabled"));
+            }
+            if api_key_of(provider).is_none() {
+                return Err(format!(
+                    "provider '{provider_id}' has no API key configured"
+                ));
+            }
+            if !provider.models.contains_key(model_id) {
+                return Err(format!(
+                    "model '{model_id}' is not defined on provider '{provider_id}'"
+                ));
+            }
+            return Ok((provider_id.to_string(), model_id.to_string()));
         }
-        if api_key_of(provider).is_none() {
-            return Err(format!(
-                "provider '{provider_id}' has no API key configured"
-            ));
+        // 兼容模型 ID 自身含 `/` 的情形（如供应商下模型名为 `gemini/gemini-3.8-flash`）。
+        if let Some(default) = settings.default_model.as_ref()
+            && default.model == reference
+            && usable_selection(settings, &default.provider, reference)
+        {
+            return Ok((default.provider.clone(), reference.to_string()));
         }
-        if !provider.models.contains_key(model_id) {
-            return Err(format!(
-                "model '{model_id}' is not defined on provider '{provider_id}'"
-            ));
+        for enabled_id in &settings.enabled_providers {
+            if let Some(provider) = usable_provider(settings, enabled_id)
+                && provider.models.contains_key(reference)
+            {
+                return Ok((enabled_id.clone(), reference.to_string()));
+            }
         }
-        return Ok((provider_id.to_string(), model_id.to_string()));
+        return Err(format!("provider '{provider_id}' is not defined"));
     }
     if let Some(default) = settings.default_model.as_ref()
         && default.model == reference

@@ -103,12 +103,16 @@ impl ExecSubagentPool {
             true,
             current_items,
         )?);
+        let child_model = self
+            .child_models
+            .get(child_session_id)
+            .unwrap_or(&self.model);
         let identity = crate::chat::agent::ModelIdentity {
-            display_name: self.model.display_name.clone(),
-            provider_id: self.model.provider.clone(),
-            model_id: self.model.model.clone(),
-            variant: self.model.variant.clone(),
-            supports_image_input: self.model.supports_image_input,
+            display_name: child_model.display_name.clone(),
+            provider_id: child_model.provider.clone(),
+            model_id: child_model.model.clone(),
+            variant: child_model.variant.clone(),
+            supports_image_input: child_model.supports_image_input,
         }
         .render_prompt_section();
         let environment = crate::chat::prompt::environment_snapshot(
@@ -126,8 +130,13 @@ impl ExecSubagentPool {
         .render_prompt_section();
         let skills = super::super::skills_catalog_prompt(&self.workspace, true);
         let mcp_prompt = self.mcp_snapshot.instructions_prompt();
-        let system_prompt = crate::chat::agent::compose_subagent_prompt(
+        let custom_prompt = self
+            .subagents_config
+            .resolve_role(role.as_str())
+            .and_then(|r| r.system_prompt_override);
+        let system_prompt = crate::chat::agent::compose_subagent_prompt_with_override(
             role,
+            custom_prompt.as_deref(),
             PromptParts {
                 model_identity: Some(&identity),
                 environment: Some(&environment),
@@ -140,8 +149,8 @@ impl ExecSubagentPool {
         let request = ChatRequest {
             turns,
             items,
-            model: self.model.snapshot(),
-            variant_params: self.model.variant_params.clone(),
+            model: child_model.snapshot(),
+            variant_params: child_model.variant_params.clone(),
             purpose: RequestPurpose::Subagent(role),
             system_prompt: Some(system_prompt),
             tools: Arc::new(crate::chat::tools::turn_tools(
@@ -150,7 +159,7 @@ impl ExecSubagentPool {
             )),
         };
         let context = ModelContext::new(request, self.cwd.clone())
-            .with_context_limit(self.model.context_limit);
+            .with_context_limit(child_model.context_limit);
         Ok(match checkpoint {
             Some(checkpoint) => context.with_compact_summary(Some(checkpoint.summary_text)),
             None => context,
@@ -229,6 +238,11 @@ impl ExecSubagentPool {
             },
             None,
         ));
+        let child_model = self
+            .child_models
+            .get(child_session_id)
+            .cloned()
+            .unwrap_or_else(|| self.model.clone());
         let executor = AgentTools::new(
             Arc::clone(&processes),
             Arc::new(Mutex::new(TurnExecution::default())),
@@ -240,7 +254,7 @@ impl ExecSubagentPool {
             child_user_message_id.to_string(),
         ))
         .with_reads(crate::chat::tools::read_registry(child_session_id))
-        .with_image_support(self.model.supports_image_input)
+        .with_image_support(child_model.supports_image_input)
         .with_web_search_keys(self.exa_api_key.clone(), self.tavily_api_key.clone())
         .with_mcp(
             crate::mcp::global_manager().clone(),
@@ -250,7 +264,7 @@ impl ExecSubagentPool {
         let (cancel_tx, cancel_rx) = watch::channel(false);
         let stream = {
             let factory = Arc::clone(&self.stream_factory);
-            let model = self.model.clone();
+            let model = child_model;
             let sender = self.sender.clone();
             let ids = (
                 agent_id.to_string(),

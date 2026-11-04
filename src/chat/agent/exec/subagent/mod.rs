@@ -157,6 +157,7 @@ pub(crate) struct ExecSubagentPool {
     resumed: HashSet<String>,
     interrupted: HashSet<String>,
     paused_by_interrupt: HashSet<String>,
+    child_models: HashMap<String, ExecModelTarget>,
     subagents_config: crate::config::subagents::SubagentsSection,
     waits: HashMap<u64, PendingWait>,
     next_wait_id: u64,
@@ -189,6 +190,7 @@ impl ExecSubagentPool {
             resumed: HashSet::new(),
             interrupted: HashSet::new(),
             paused_by_interrupt: HashSet::new(),
+            child_models: HashMap::new(),
             subagents_config: crate::config::subagents::load_subagents_or_default(),
             waits: HashMap::new(),
             next_wait_id: 1,
@@ -345,6 +347,11 @@ impl ExecSubagentPool {
         if self.running.len() >= max_concurrent {
             return Err(failed(LIMIT_REACHED_CODE));
         }
+        let child_target = self.resolve_child_model(
+            role_spec.default_model.as_ref(),
+            model_override,
+            reasoning_effort_override,
+        )?;
         let existing_records = db
             .list_subagents(&self.workspace, &self.parent_session_id)
             .unwrap_or_default();
@@ -403,7 +410,7 @@ impl ExecSubagentPool {
             &title,
             &task_text,
             &persisted,
-            &self.model.snapshot(),
+            &child_target.snapshot(),
             Some(parent_assistant_id),
             dedupe.as_deref(),
             call_id,
@@ -416,6 +423,8 @@ impl ExecSubagentPool {
                 return Err(db_failed(error));
             }
         };
+        self.child_models
+            .insert(committed.child_session_id.clone(), child_target.clone());
         self.resumed.insert(committed.agent_id.clone());
         let started = self.start_child(
             db,
@@ -433,15 +442,80 @@ impl ExecSubagentPool {
             self.resumed.remove(&committed.agent_id);
             return Err(error);
         }
+        let model_label = if model_override.is_some()
+            || child_target.provider != self.model.provider
+            || child_target.model != self.model.model
+        {
+            Some(format!("{}/{}", child_target.provider, child_target.model))
+        } else {
+            None
+        };
+        let effort_label = if reasoning_effort_override.is_some()
+            || (role_spec.default_model.is_some() && child_target.variant != self.model.variant)
+        {
+            child_target.variant.clone()
+        } else {
+            None
+        };
         Ok(SubagentOutcome::Spawned {
             agent_id: committed.agent_id,
             nickname: Some(nickname),
             role,
             title,
-            model: model_override.map(str::to_string),
-            reasoning_effort: reasoning_effort_override.map(str::to_string),
+            model: model_label,
+            reasoning_effort: effort_label,
             fork_context,
         })
+    }
+
+    fn resolve_child_model(
+        &self,
+        role_default: Option<&crate::config::ai::ModelSelection>,
+        model_override: Option<&str>,
+        effort_override: Option<&str>,
+    ) -> Result<ExecModelTarget, HostError> {
+        let explicit_model = model_override.map(str::trim).filter(|s| !s.is_empty());
+        let explicit_effort = effort_override.map(str::trim).filter(|s| !s.is_empty());
+        if explicit_model.is_none() && explicit_effort.is_none() && role_default.is_none() {
+            return Ok(self.model.clone());
+        }
+        let settings = crate::config::ai::ai_config_path()
+            .ok()
+            .and_then(|path| crate::config::ai::load_ai(&path).ok().flatten())
+            .unwrap_or_else(crate::config::ai::AiSettings::empty);
+        if settings.providers.is_empty() {
+            let mut fallback = self.model.clone();
+            if let Some(m) = explicit_model {
+                fallback.model = m.to_string();
+            } else if let Some(sel) = role_default {
+                fallback.provider = sel.provider.clone();
+                fallback.model = sel.model.clone();
+                if sel.variant.is_some() {
+                    fallback.variant = sel.variant.clone();
+                }
+            }
+            if let Some(e) = explicit_effort {
+                fallback.variant = Some(e.to_string());
+            }
+            return Ok(fallback);
+        }
+        let raw_spec = if let Some(m) = explicit_model {
+            match explicit_effort {
+                Some(e) => format!("{m}#{e}"),
+                None => m.to_string(),
+            }
+        } else if let Some(sel) = role_default {
+            let eff = explicit_effort.or(sel.variant.as_deref());
+            match eff {
+                Some(e) => format!("{}/{}#{e}", sel.provider, sel.model),
+                None => format!("{}/{}", sel.provider, sel.model),
+            }
+        } else {
+            let e = explicit_effort.unwrap_or_default();
+            format!("{}/{}#{e}", self.model.provider, self.model.model)
+        };
+        crate::chat::agent::exec::resolve_model_target(&settings, Some(&raw_spec), None)
+            .map_err(|err| failed(&err))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -463,7 +537,7 @@ impl ExecSubagentPool {
         if !is_running && !self.resumed.contains(target) {
             return Err(failed(NOT_ACTIVE_CODE));
         }
-        self.paused_by_interrupt.remove(target);
+        let was_cancelling_from_interrupt = self.paused_by_interrupt.remove(target);
         let persisted = self.prepare_input_items(&record.child_session_id, items)?;
         let dedupe = match call_id.filter(|cid| !cid.trim().is_empty()) {
             Some(cid) => format!(
@@ -489,7 +563,10 @@ impl ExecSubagentPool {
             )
             .map_err(db_failed)?;
         if is_running {
-            if interrupt && enqueued.created && self.running.contains_key(target) {
+            if (interrupt || was_cancelling_from_interrupt)
+                && enqueued.created
+                && self.running.contains_key(target)
+            {
                 self.interrupted.insert(target.to_string());
                 if let Some(handle) = self.running.get(target) {
                     let _ = handle.cancel_tx.send(true);
