@@ -11,8 +11,8 @@ use super::*;
 use crate::app::state::lx::agent::{SubagentRun, seed_chat_model};
 use crate::app::state::{RequestKey, RequestState};
 use crate::chat::agent::{
-    AgentRole, IMAGE_MISSING_CODE, LIMIT_REACHED_CODE, MAX_CONCURRENT_SUBAGENTS, NOT_ACTIVE_CODE,
-    NOT_FOUND_CODE, SubagentInputItem, SubagentOutcome, joined_input_text,
+    AgentRole, IMAGE_MISSING_CODE, LIMIT_REACHED_CODE, NOT_ACTIVE_CODE, NOT_FOUND_CODE,
+    SubagentInputItem, SubagentOutcome, joined_input_text,
 };
 use crate::chat::events::{ChatRequest, RequestPurpose, StopReason};
 use crate::db::chat::{ModelSnapshot, PersistedInputItem, SubagentRecord};
@@ -20,7 +20,7 @@ use crate::db::new_external_id;
 use crate::event::AppEvent;
 use crate::layout::PaneId;
 
-/// spawn：并发检查 → 图片严格归档 → 事务落库 → 注册句柄并标记活动 → 启动首轮 → 回执。
+/// spawn：角色与模型校验 → 并发检查 → 图片严格归档 → 事务落库 → 注册句柄并标记活动 → 启动首轮 → 回执。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn(
     state: &mut AppState,
@@ -32,21 +32,43 @@ pub(super) fn spawn(
     title: &str,
     task: &str,
     items: &[SubagentInputItem],
+    fork_context: bool,
+    model_override: Option<&str>,
+    reasoning_effort_override: Option<&str>,
 ) -> Result<SubagentOutcome, String> {
     let _sender = streams
         .event_sender
         .as_ref()
         .ok_or_else(|| "subagent event channel unavailable".to_string())?;
+    let role_spec = state
+        .subagents_config
+        .resolve_role(role.as_str())
+        .ok_or_else(|| format!("unknown subagent role '{}'", role.as_str()))?;
+    let role = role.with_base(role_spec.base_role);
+
     let parent_session = key.session.clone();
+    let max_concurrent = state
+        .subagents_config
+        .max_concurrent
+        .clamp(1, crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT);
     let running = running_count_for_parent(streams, &parent_session);
-    if running >= MAX_CONCURRENT_SUBAGENTS {
+    if running >= max_concurrent {
         return Err(LIMIT_REACHED_CODE.to_string());
     }
-    let frozen = streams
+    let parent_frozen = streams
         .frozen
         .get(&parent_session)
         .cloned()
+        .or_else(|| resolve_frozen_for_pane(state, key.pane))
         .ok_or_else(|| "subagent model snapshot unavailable".to_string())?;
+    let resolved_model = super::model_resolve::resolve_subagent_model(
+        &state.models,
+        &parent_frozen,
+        role_spec.default_model.as_ref(),
+        model_override,
+        reasoning_effort_override,
+    )?;
+    let frozen = resolved_model.frozen;
     let workspace = streams
         .db_workspaces
         .get(key)
@@ -63,7 +85,22 @@ pub(super) fn spawn(
         return Err("process runtime unavailable".to_string());
     }
 
+    let existing_records = database
+        .list_subagents(&workspace, &parent_session)
+        .unwrap_or_default();
+    let used_nicknames: Vec<String> = existing_records
+        .into_iter()
+        .filter_map(|r| r.nickname)
+        .collect();
+    let nickname =
+        crate::chat::agent::allocate_nickname(&used_nicknames, &role_spec.nickname_candidates);
+
     let child_session_id = new_external_id("sess");
+    let image_rewrite = if fork_context {
+        crate::db::chat::copy_session_images(&parent_session, &child_session_id)
+    } else {
+        None
+    };
     let (persisted_items, _initial_model_items) =
         match prepare_input_items(&child_session_id, &cwd, frozen.supports_image_input, items) {
             Ok(prepared) => prepared,
@@ -101,10 +138,11 @@ pub(super) fn spawn(
         model: frozen.model.clone(),
         variant: frozen.variant.clone(),
     };
-    let committed = match database.begin_subagent_turn_with_items(
+    let committed = match database.begin_subagent_turn_with_options(
         &workspace,
         &parent_session,
         Some(&child_session_id),
+        Some(&nickname),
         role,
         &effective_title,
         &task_text,
@@ -113,6 +151,8 @@ pub(super) fn spawn(
         spawn_message_id.as_deref(),
         dedupe_key.as_deref(),
         call_id,
+        fork_context,
+        &image_rewrite,
     ) {
         Ok(committed) => committed,
         Err(error) => {
@@ -123,6 +163,7 @@ pub(super) fn spawn(
 
     let record = SubagentRecord {
         agent_id: committed.agent_id.clone(),
+        nickname: Some(nickname.clone()),
         child_session_id: committed.child_session_id.clone(),
         parent_session_id: parent_session.clone(),
         spawn_message_id,
@@ -138,6 +179,11 @@ pub(super) fn spawn(
     streams
         .frozen
         .insert(committed.child_session_id.clone(), frozen.clone());
+    if resolved_model.pinned {
+        streams
+            .pinned_subagent_models
+            .insert(committed.child_session_id.clone(), frozen.clone());
+    }
 
     launch_child_turn(
         state,
@@ -159,8 +205,12 @@ pub(super) fn spawn(
 
     Ok(SubagentOutcome::Spawned {
         agent_id: committed.agent_id,
+        nickname: Some(nickname),
         role,
         title: effective_title,
+        model: resolved_model.model_override_label,
+        reasoning_effort: resolved_model.effort_override_label,
+        fork_context,
     })
 }
 
@@ -186,9 +236,10 @@ pub(super) fn send_input(
         .database()
         .ok_or_else(|| "subagent persistence unavailable".to_string())?;
     let record = database
-        .owned_subagent(&workspace, &parent_session, target)
+        .resolve_owned_subagent(&workspace, &parent_session, target)
         .map_err(|err| err.code().to_string())?
         .ok_or_else(|| NOT_FOUND_CODE.to_string())?;
+    let target = record.agent_id.as_str();
 
     let is_running = streams.subagents.values().any(|h| {
         h.agent_id == target && h.parent.session == parent_session && h.status == STATUS_RUNNING
@@ -197,6 +248,11 @@ pub(super) fn send_input(
     if !is_running && !is_resumed {
         return Err(NOT_ACTIVE_CODE.to_string());
     }
+    streams.paused_by_interrupt.remove(target);
+    let max_concurrent = state
+        .subagents_config
+        .max_concurrent
+        .clamp(1, crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT);
 
     // P1-1：非运行态（idle）下入库前先校验队首未阻断且存在可用并发槽，避免入库后再报错遗留孤儿 queued 项。
     if !is_running {
@@ -205,14 +261,15 @@ pub(super) fn send_input(
         {
             return Err(format!("subagent input blocked: {code}"));
         }
-        if running_count_for_parent(streams, &parent_session) >= MAX_CONCURRENT_SUBAGENTS {
+        if running_count_for_parent(streams, &parent_session) >= max_concurrent {
             return Err(LIMIT_REACHED_CODE.to_string());
         }
     }
 
     let frozen = streams
-        .frozen
+        .pinned_subagent_models
         .get(&record.child_session_id)
+        .or_else(|| streams.frozen.get(&record.child_session_id))
         .or_else(|| streams.frozen.get(&parent_session))
         .cloned()
         .or_else(|| resolve_frozen_for_pane(state, key.pane))
@@ -340,9 +397,11 @@ pub(super) fn resume(
         .database()
         .ok_or_else(|| "subagent persistence unavailable".to_string())?;
     let record = database
-        .owned_subagent(&workspace, &parent_session, agent_id)
+        .resolve_owned_subagent(&workspace, &parent_session, agent_id)
         .map_err(|err| err.code().to_string())?
         .ok_or_else(|| NOT_FOUND_CODE.to_string())?;
+    let agent_id = record.agent_id.as_str();
+    streams.paused_by_interrupt.remove(agent_id);
 
     let queue_map = database
         .subagent_queue_states(&workspace, &parent_session)
@@ -361,9 +420,11 @@ pub(super) fn resume(
         });
     }
 
-    if queued_count > 0
-        && running_count_for_parent(streams, &parent_session) >= MAX_CONCURRENT_SUBAGENTS
-    {
+    let max_concurrent = state
+        .subagents_config
+        .max_concurrent
+        .clamp(1, crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT);
+    if queued_count > 0 && running_count_for_parent(streams, &parent_session) >= max_concurrent {
         return Err(LIMIT_REACHED_CODE.to_string());
     }
 
@@ -486,14 +547,22 @@ pub(crate) fn schedule_next_queued_input_with_done(
         return Err(format!("subagent input blocked: {code}"));
     }
 
+    let max_concurrent = state
+        .subagents_config
+        .max_concurrent
+        .clamp(1, crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT);
     let running = running_count_for_parent(streams, &parent_session);
-    if running >= MAX_CONCURRENT_SUBAGENTS {
+    if running >= max_concurrent {
         return Err(LIMIT_REACHED_CODE.to_string());
     }
 
-    // 子 Agent 继承父会话最新模型：父窗格当前选择 > 父会话冻结快照 > 子会话旧缓存。
-    // 把子会话缓存放在首位会让父会话 `/model` 切换后唤醒的子 Agent 永远沿用旧模型。
-    let Some(frozen) = resolve_frozen_for_pane(state, parent_key.pane)
+    // 若该子会话有显式/角色绑定的固定模型，优先沿用固定模型；
+    // 否则继承父会话最新模型：父窗格当前选择 > 父会话冻结快照 > 子会话旧缓存。
+    let Some(frozen) = streams
+        .pinned_subagent_models
+        .get(&record.child_session_id)
+        .cloned()
+        .or_else(|| resolve_frozen_for_pane(state, parent_key.pane))
         .or_else(|| streams.frozen.get(&parent_session).cloned())
         .or_else(|| streams.frozen.get(&record.child_session_id).cloned())
     else {
@@ -512,31 +581,14 @@ pub(crate) fn schedule_next_queued_input_with_done(
         model: frozen.model.clone(),
         variant: frozen.variant.clone(),
     };
-    let environment = crate::chat::prompt::environment_snapshot(
-        &crate::platform::EnvironmentFacts::capture(),
-        Some(&cwd),
-        Some(&cwd),
-        &[],
+    let inputs = super::context::capture_child_prompt_inputs(
+        state,
+        persistence,
+        workspace,
+        &cwd,
+        &frozen,
+        record.role,
     );
-    let (skills, _) = super::super::skills::catalog_prompt(persistence, Some(workspace), true);
-    let mcp_snapshot = super::super::mcp::snapshot_for_turn(persistence, Some(workspace));
-    let model_identity = crate::chat::agent::ModelIdentity {
-        display_name: state
-            .models
-            .model_display_name(&frozen.provider, &frozen.model),
-        provider_id: frozen.provider.clone(),
-        model_id: frozen.model.clone(),
-        variant: frozen.variant.clone(),
-        supports_image_input: frozen.supports_image_input,
-    }
-    .render_prompt_section();
-    let instructions = crate::chat::agent::load_instructions(
-        crate::config::user_data_root().ok().as_deref(),
-        Some(workspace),
-        Some(&cwd),
-        persistence.is_trusted(&cwd) || persistence.is_trusted(workspace),
-    )
-    .render_prompt_section();
     if let Err(err) = assemble_child_context(
         database,
         workspace,
@@ -546,11 +598,12 @@ pub(crate) fn schedule_next_queued_input_with_done(
         "",
         record.role,
         super::context::ChildPromptContext {
-            model_identity: Some(&model_identity),
-            environment: &environment,
-            instructions: instructions.as_deref(),
-            skills: skills.as_deref(),
-            mcp: &mcp_snapshot,
+            system_prompt_override: inputs.system_prompt_override.as_deref(),
+            model_identity: Some(&inputs.model_identity),
+            environment: &inputs.environment,
+            instructions: inputs.instructions.as_deref(),
+            skills: inputs.skills.as_deref(),
+            mcp: &inputs.mcp,
         },
         &cwd,
         &model,
@@ -637,31 +690,14 @@ fn launch_child_turn(
         model: frozen.model.clone(),
         variant: frozen.variant.clone(),
     };
-    let environment = crate::chat::prompt::environment_snapshot(
-        &crate::platform::EnvironmentFacts::capture(),
-        Some(cwd),
-        Some(cwd),
-        &[],
+    let inputs = super::context::capture_child_prompt_inputs(
+        state,
+        persistence,
+        workspace,
+        cwd,
+        frozen,
+        record.role,
     );
-    let (skills, _) = super::super::skills::catalog_prompt(persistence, Some(workspace), true);
-    let mcp_snapshot = super::super::mcp::snapshot_for_turn(persistence, Some(workspace));
-    let model_identity = crate::chat::agent::ModelIdentity {
-        display_name: state
-            .models
-            .model_display_name(&frozen.provider, &frozen.model),
-        provider_id: frozen.provider.clone(),
-        model_id: frozen.model.clone(),
-        variant: frozen.variant.clone(),
-        supports_image_input: frozen.supports_image_input,
-    }
-    .render_prompt_section();
-    let instructions = crate::chat::agent::load_instructions(
-        crate::config::user_data_root().ok().as_deref(),
-        Some(workspace),
-        Some(cwd),
-        persistence.is_trusted(cwd) || persistence.is_trusted(workspace),
-    )
-    .render_prompt_section();
     let context = assemble_child_context(
         database,
         workspace,
@@ -671,11 +707,12 @@ fn launch_child_turn(
         child_user_message_id,
         record.role,
         super::context::ChildPromptContext {
-            model_identity: Some(&model_identity),
-            environment: &environment,
-            instructions: instructions.as_deref(),
-            skills: skills.as_deref(),
-            mcp: &mcp_snapshot,
+            system_prompt_override: inputs.system_prompt_override.as_deref(),
+            model_identity: Some(&inputs.model_identity),
+            environment: &inputs.environment,
+            instructions: inputs.instructions.as_deref(),
+            skills: inputs.skills.as_deref(),
+            mcp: &inputs.mcp,
         },
         cwd,
         &model,
@@ -685,6 +722,7 @@ fn launch_child_turn(
         frozen.supports_image_input,
         items,
     )?;
+    let mcp_snapshot = inputs.mcp;
 
     let child_key = RequestKey {
         pane: parent_key.pane,
@@ -773,6 +811,7 @@ fn launch_child_turn(
     let handle = SubagentHandle {
         parent: parent_key.clone(),
         agent_id: record.agent_id.clone(),
+        nickname: record.nickname.clone(),
         child_session_id: record.child_session_id.clone(),
         child_assistant_id: child_assistant_id.to_string(),
         child_user_message_id: child_user_message_id.to_string(),

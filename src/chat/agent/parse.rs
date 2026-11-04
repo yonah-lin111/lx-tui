@@ -13,11 +13,12 @@ use super::{
 };
 use crate::chat::tools::{ToolErrorCode, ToolFailure};
 
-/// 七个子 agent 控制工具之一；非控制工具返回 None，参数非法返回 Err。
+/// 八个子 agent 控制工具之一；非控制工具返回 None，参数非法返回 Err。
 pub fn parse_control(name: &str, arguments_json: &str) -> Option<Result<SubagentOp, ToolFailure>> {
     match name {
         "spawn_agent" => Some(checked_size(arguments_json).and_then(parse_spawn)),
         "send_input" => Some(checked_size(arguments_json).and_then(parse_send_input)),
+        "interrupt_agent" => Some(checked_size(arguments_json).and_then(parse_interrupt)),
         "resume_agent" => Some(checked_size(arguments_json).and_then(parse_resume)),
         "wait_agent" => Some(checked_size(arguments_json).and_then(parse_wait)),
         "close_agent" => Some(checked_size(arguments_json).and_then(parse_close)),
@@ -41,16 +42,30 @@ fn checked_size(arguments_json: &str) -> Result<&str, ToolFailure> {
     Ok(arguments_json)
 }
 
-/// `spawn_agent` 的参数解析：`role, title` +（`task` 或 `items` 互斥）。
+/// `spawn_agent` 的参数解析：`role, title` +（`task` 或 `items` 互斥）+ 可选 `fork_context` / `model` / `reasoning_effort`。
 fn parse_spawn(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
     let object = object_of(arguments_json)?;
-    reject_unknown(&object, &["role", "title", "task", "items"])?;
+    reject_unknown(
+        &object,
+        &[
+            "role",
+            "title",
+            "task",
+            "items",
+            "fork_context",
+            "model",
+            "reasoning_effort",
+        ],
+    )?;
     let role_text = object
         .get("role")
         .and_then(Value::as_str)
-        .ok_or_else(|| ToolFailure::invalid("`role` must be \"explorer\" or \"executor\""))?;
-    let role = AgentRole::parse(role_text)
-        .ok_or_else(|| ToolFailure::invalid("`role` must be \"explorer\" or \"executor\""))?;
+        .ok_or_else(|| ToolFailure::invalid("`role` must be a valid role identifier"))?;
+    let role = AgentRole::parse(role_text).ok_or_else(|| {
+        ToolFailure::invalid(
+            "`role` must be a valid role identifier (lowercase `[a-z][a-z0-9_]{0,31}`)",
+        )
+    })?;
     // 旧会话的 spawn 参数没有 title：执行层容忍缺失（历史卡片照常显示 task），
     // 新调用传入 title 时必须为非空字符串且不超长。
     let title = match object.get("title") {
@@ -72,6 +87,15 @@ fn parse_spawn(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
         }
         None => String::new(),
     };
+    let fork_context = match object.get("fork_context") {
+        None | Some(Value::Null) => false,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| ToolFailure::invalid("`fork_context` must be a boolean"))?,
+    };
+    let model = parse_optional_string_field(object.get("model"), "model", 128)?;
+    let reasoning_effort =
+        parse_optional_string_field(object.get("reasoning_effort"), "reasoning_effort", 64)?;
     let has_task = object.contains_key("task");
     let has_items = object.contains_key("items");
     if has_task && has_items {
@@ -101,7 +125,45 @@ fn parse_spawn(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
         title,
         task,
         items,
+        fork_context,
+        model,
+        reasoning_effort,
     })
+}
+
+/// 解析可选非空短字符串字段（`model` / `reasoning_effort`）。
+fn parse_optional_string_field(
+    value: Option<&Value>,
+    field: &str,
+    max_chars: usize,
+) -> Result<Option<String>, ToolFailure> {
+    let Some(value) = value.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let raw = value
+        .as_str()
+        .ok_or_else(|| ToolFailure::invalid(format!("`{field}` must be a string")))?
+        .trim();
+    if raw.is_empty() {
+        return Err(ToolFailure::invalid(format!(
+            "`{field}` must not be empty when provided"
+        )));
+    }
+    if raw.chars().count() > max_chars {
+        return Err(ToolFailure::new(
+            ToolErrorCode::TooLarge,
+            format!("`{field}` must be at most {max_chars} characters"),
+        ));
+    }
+    Ok(Some(raw.to_string()))
+}
+
+/// `interrupt_agent` 的参数解析。
+fn parse_interrupt(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
+    let object = object_of(arguments_json)?;
+    reject_unknown(&object, &["target"])?;
+    let target = parse_id_field(object.get("target"), "target")?;
+    Ok(SubagentOp::Interrupt { target })
 }
 
 /// `send_input` 的参数解析：`target` +（`message` 或 `items` 互斥）+ 可选 `interrupt`。

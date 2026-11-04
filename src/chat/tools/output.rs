@@ -218,13 +218,38 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
     match outcome {
         SubagentOutcome::Spawned {
             agent_id,
+            nickname,
             role,
             title,
-        } => format!(
-            "Spawned subagent `{agent_id}` ({}) titled `{title}`. It runs in the background; \
-             use `wait_agent` when you need its result.\n",
-            role.as_str()
-        ),
+            model,
+            reasoning_effort,
+            fork_context,
+        } => {
+            let nick_part = nickname
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|n| format!(" (nickname `{n}`, role `{}`)", role.as_str()))
+                .unwrap_or_else(|| format!(" ({})", role.as_str()));
+            let mut extras = Vec::new();
+            if let Some(m) = model.as_deref().filter(|s| !s.is_empty()) {
+                extras.push(format!("model={m}"));
+            }
+            if let Some(e) = reasoning_effort.as_deref().filter(|s| !s.is_empty()) {
+                extras.push(format!("reasoning_effort={e}"));
+            }
+            if *fork_context {
+                extras.push("fork_context=true".to_string());
+            }
+            let extra_str = if extras.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", extras.join(", "))
+            };
+            format!(
+                "Spawned subagent `{agent_id}`{nick_part} titled `{title}`{extra_str}. It runs in the background; \
+                 use `wait_agent` when you need its result.\n"
+            )
+        }
         SubagentOutcome::InputAccepted {
             submission_id,
             agent_id,
@@ -235,6 +260,22 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
             "Accepted input `{submission_id}` for subagent `{agent_id}` \
              (status={status}, queued_count={queued_count}, interrupt={interrupt}).\n"
         ),
+        SubagentOutcome::Interrupted {
+            agent_id,
+            nickname,
+            previous_status,
+            queued_count,
+        } => {
+            let nick_part = nickname
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|n| format!(" (`{n}`)"))
+                .unwrap_or_default();
+            format!(
+                "Interrupted subagent `{agent_id}`{nick_part} (was {previous_status}, queued_count={queued_count}). \
+                 It remains active in `idle` state; queued inputs are paused until you call `send_input` or `resume_agent`.\n"
+            )
+        }
         SubagentOutcome::Resumed {
             agent_id,
             status,
@@ -247,9 +288,16 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
         } => {
             let mut text = format!("timed_out: {timed_out}\n");
             for agent in agents {
+                let nick_part = agent
+                    .nickname
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|n| format!(" nickname={n}"))
+                    .unwrap_or_default();
                 text.push_str(&format!(
-                    "- agent_id={} role={} status={}\n",
+                    "- agent_id={}{} role={} status={}\n",
                     agent.agent_id,
+                    nick_part,
                     agent.role.as_str(),
                     agent.status
                 ));
@@ -275,9 +323,16 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
             }
             let mut text = format!("agents: {}\n", agents.len());
             for agent in agents {
+                let nick_part = agent
+                    .nickname
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|n| format!(" nickname={n}"))
+                    .unwrap_or_default();
                 text.push_str(&format!(
-                    "- agent_id={} role={} status={} queued_count={} title={:?}\n",
+                    "- agent_id={}{} role={} status={} queued_count={} title={:?}\n",
                     agent.agent_id,
+                    nick_part,
                     agent.role.as_str(),
                     agent.status,
                     agent.queued_count,

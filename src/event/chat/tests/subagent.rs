@@ -82,6 +82,9 @@ async fn spawn_explorer(
             title: "test title".into(),
             task: task.into(),
             items: Vec::new(),
+            fork_context: false,
+            model: None,
+            reasoning_effort: None,
         },
     )
     .await
@@ -186,6 +189,9 @@ async fn fourth_spawn_is_rejected_and_earlier_runs_stay_running() {
             title: "too many".into(),
             task: "one too many".into(),
             items: Vec::new(),
+            fork_context: false,
+            model: None,
+            reasoning_effort: None,
         },
     )
     .await
@@ -213,6 +219,7 @@ async fn wait_claims_the_report_exactly_once() {
     // 等价于 `finish_subagent` 的 DB 效果：agent 行 completed + report_json。
     let report = crate::chat::agent::SubagentReportView {
         agent_id: agent_id.clone(),
+        nickname: None,
         title: "test title".into(),
         role: AgentRole::Explorer,
         status: "completed".into(),
@@ -294,6 +301,7 @@ async fn idle_parent_batches_pending_reports_into_one_turn() {
     for (agent_id, body) in [(&first, "first answer"), (&second, "second answer")] {
         let report = crate::chat::agent::SubagentReportView {
             agent_id: agent_id.clone(),
+            nickname: None,
             title: format!("title {agent_id}"),
             role: AgentRole::Explorer,
             status: "completed".into(),
@@ -413,6 +421,7 @@ async fn queued_user_chat_wins_before_report_drain() {
     let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first").await;
     let report = crate::chat::agent::SubagentReportView {
         agent_id: agent_id.clone(),
+        nickname: None,
         title: "title".into(),
         role: AgentRole::Explorer,
         status: "completed".into(),
@@ -876,6 +885,7 @@ fn deleting_the_parent_session_cancels_live_children() {
         super::super::subagent::SubagentHandle {
             parent: key.clone(),
             agent_id: "sub-agent".into(),
+            nickname: None,
             child_session_id: "sess-child".into(),
             child_assistant_id: "msg-child".into(),
             child_user_message_id: "msg-user".into(),

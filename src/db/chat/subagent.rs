@@ -14,7 +14,9 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{ChatPart, ModelSnapshot, TurnCommitted, TurnOutcome, Usage};
-use crate::chat::agent::{AgentRole, MAX_REPORT_BYTES, SubagentReportView, truncate_report_body};
+use crate::chat::agent::{
+    AgentRole, BaseRole, MAX_REPORT_BYTES, SubagentReportView, truncate_report_body,
+};
 use crate::db::{Database, DbError, Result, new_external_id, now_ms};
 
 /// 一个 subagent 的元数据行（列表用；不含消息流）。
@@ -22,6 +24,8 @@ use crate::db::{Database, DbError, Result, new_external_id, now_ms};
 pub struct SubagentRecord {
     /// 稳定 agent id。
     pub agent_id: String,
+    /// 可选唯一昵称（如 `"Turing"`；旧记录为 None）。
+    pub nickname: Option<String>,
     /// 子会话 external id。
     pub child_session_id: String,
     /// 父会话 external id。
@@ -140,6 +144,43 @@ impl Database {
         dedupe_key: Option<&str>,
         parent_call_id: Option<&str>,
     ) -> Result<SubagentCommitted> {
+        self.begin_subagent_turn_with_options(
+            workspace,
+            parent_session,
+            child_session_id,
+            None,
+            role,
+            title,
+            task,
+            items,
+            model,
+            spawn_message_id,
+            dedupe_key,
+            parent_call_id,
+            false,
+            &None,
+        )
+    }
+
+    /// spawn（支持 `nickname`、`fork_context` 历史克隆与图片路径重写）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_subagent_turn_with_options(
+        &self,
+        workspace: &Path,
+        parent_session: &str,
+        child_session_id: Option<&str>,
+        nickname: Option<&str>,
+        role: AgentRole,
+        title: &str,
+        task: &str,
+        items: &[PersistedInputItem],
+        model: &ModelSnapshot,
+        spawn_message_id: Option<&str>,
+        dedupe_key: Option<&str>,
+        parent_call_id: Option<&str>,
+        fork_context: bool,
+        image_rewrite: &Option<(String, String)>,
+    ) -> Result<SubagentCommitted> {
         if task.trim().is_empty() && items.is_empty() {
             return Err(DbError::InvalidDraft);
         }
@@ -147,6 +188,10 @@ impl Database {
         if title.is_empty() {
             return Err(DbError::InvalidDraft);
         }
+        let clean_nickname = nickname
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
@@ -160,9 +205,10 @@ impl Database {
         transaction.execute(
             r#"INSERT INTO agent_session
                    (external_id, workspace_id, source, title, first_user_message,
-                    model_provider, model_id, variant, status, archived, agent_role,
+                    model_provider, model_id, variant, status, archived,
+                    agent_nickname, agent_role, agent_path,
                     created_at_ms, updated_at_ms, last_message_at_ms)
-               VALUES (?1, ?2, 'subagent', ?3, ?4, ?5, ?6, ?7, 'active', 0, ?8, ?9, ?9, ?9)"#,
+               VALUES (?1, ?2, 'subagent', ?3, ?4, ?5, ?6, ?7, 'active', 0, ?8, ?9, ?10, ?11, ?11, ?11)"#,
             params![
                 child_session_id,
                 workspace_external,
@@ -171,16 +217,31 @@ impl Database {
                 model.provider,
                 model.model,
                 model.variant,
+                clean_nickname,
                 role.as_str(),
+                role.base().as_str(),
                 now,
             ],
         )?;
+        let (user_seq, turn_idx) = if fork_context {
+            let boundary = super::fork::completed_boundary_sequence(&transaction, parent_session)?;
+            super::fork::copy_completed_history_to_child(
+                &transaction,
+                parent_session,
+                &child_session_id,
+                boundary,
+                image_rewrite,
+            )?
+        } else {
+            (0, 0)
+        };
+        let assistant_seq = user_seq.saturating_add(1);
         let user_message_id = new_external_id("msg");
         transaction.execute(
             r#"INSERT INTO agent_message
                    (external_id, session_id, sequence, turn_index, role, status, created_at_ms)
-               VALUES (?1, ?2, 0, 0, 'user', 'complete', ?3)"#,
-            params![user_message_id, child_session_id, now],
+               VALUES (?1, ?2, ?3, ?4, 'user', 'complete', ?5)"#,
+            params![user_message_id, child_session_id, user_seq, turn_idx, now],
         )?;
         transaction.execute(
             r#"INSERT INTO agent_message_part
@@ -194,10 +255,12 @@ impl Database {
             r#"INSERT INTO agent_message
                    (external_id, session_id, sequence, turn_index, role, status,
                     model_provider, model_id, variant, created_at_ms)
-               VALUES (?1, ?2, 1, 0, 'assistant', 'streaming', ?3, ?4, ?5, ?6)"#,
+               VALUES (?1, ?2, ?3, ?4, 'assistant', 'streaming', ?5, ?6, ?7, ?8)"#,
             params![
                 assistant_message_id,
                 child_session_id,
+                assistant_seq,
+                turn_idx,
                 model.provider,
                 model.model,
                 model.variant,
@@ -210,15 +273,17 @@ impl Database {
         transaction.execute(
             r#"INSERT INTO agent_subagent
                    (external_id, parent_session_id, child_session_id, spawn_message_id,
-                    status, role, model_provider, model_id, variant, title,
+                    status, nickname, role, agent_path, model_provider, model_id, variant, title,
                     created_at_ms, updated_at_ms)
-               VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, ?8, ?9, ?10, ?10)"#,
+               VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)"#,
             params![
                 agent_id,
                 parent_session,
                 child_session_id,
                 spawn_message_id,
+                clean_nickname,
                 role.as_str(),
+                role.base().as_str(),
                 model.provider,
                 model.model,
                 model.variant,
@@ -299,21 +364,29 @@ impl Database {
         };
         let now = now_ms();
         let transaction = self.conn.unchecked_transaction()?;
-        let row: Option<(Option<String>, String)> = transaction
+        let row = transaction
             .query_row(
-                r#"SELECT a.role, a.child_session_id FROM agent_subagent a
+                r#"SELECT a.role, a.agent_path, a.nickname, a.child_session_id FROM agent_subagent a
                    JOIN agent_session p ON p.external_id = a.parent_session_id
                    WHERE a.external_id = ?1 AND p.workspace_id = ?2"#,
                 params![agent_id, workspace_external],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
             )
             .optional()?;
-        let Some((role, child_session_id)) = row else {
+        let Some((role, agent_path, nickname, child_session_id)) = row else {
             return Err(DbError::SessionMissing);
         };
+        let base_role = agent_path.as_deref().and_then(BaseRole::parse);
         let role = role
             .as_deref()
-            .and_then(AgentRole::parse)
+            .and_then(|r| AgentRole::from_name_and_base(r, base_role))
             .ok_or(DbError::SessionMissing)?;
         let child_user_message_id: Option<String> = transaction
             .query_row(
@@ -349,6 +422,11 @@ impl Database {
             let clean_title = super::single_line_preview(&payload.title, 80);
             SubagentReportView {
                 agent_id: agent_id.to_string(),
+                nickname: nickname
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
                 title: clean_title,
                 role,
                 status: status.to_string(),
@@ -410,7 +488,7 @@ impl Database {
             .query_row(
                 r#"SELECT a.external_id, a.child_session_id, a.parent_session_id, a.spawn_message_id,
                           a.role, a.status, a.title, a.created_at_ms, a.completed_at_ms,
-                          a.report_json, a.report_delivered
+                          a.report_json, a.report_delivered, a.nickname, a.agent_path
                    FROM agent_subagent a
                    JOIN agent_session s ON s.external_id = a.child_session_id
                    JOIN agent_session p ON p.external_id = a.parent_session_id
@@ -428,6 +506,28 @@ impl Database {
         Ok(Some(record))
     }
 
+    /// 按 `agent_id` 精确匹配或按同父会话 `nickname`（ASCII 大小写不敏感）双向寻址子 agent。
+    pub fn resolve_owned_subagent(
+        &self,
+        workspace: &Path,
+        parent_session: &str,
+        target_or_nickname: &str,
+    ) -> Result<Option<SubagentRecord>> {
+        let key = target_or_nickname.trim();
+        if key.is_empty() {
+            return Ok(None);
+        }
+        if let Some(record) = self.owned_subagent(workspace, parent_session, key)? {
+            return Ok(Some(record));
+        }
+        let all = self.list_subagents(workspace, parent_session)?;
+        Ok(all.into_iter().find(|rec| {
+            rec.nickname
+                .as_deref()
+                .is_some_and(|nick| nick.eq_ignore_ascii_case(key))
+        }))
+    }
+
     /// 列表：一条 SQL 联查元数据（不含消息流）。
     pub fn list_subagents(
         &self,
@@ -440,7 +540,7 @@ impl Database {
         let mut statement = self.conn.prepare(
             r#"SELECT a.external_id, a.child_session_id, a.parent_session_id, a.spawn_message_id,
                       a.role, a.status, a.title, a.created_at_ms, a.completed_at_ms,
-                      a.report_json, a.report_delivered
+                      a.report_json, a.report_delivered, a.nickname, a.agent_path
                FROM agent_subagent a
                JOIN agent_session s ON s.external_id = a.child_session_id
                JOIN agent_session p ON p.external_id = a.parent_session_id
@@ -778,15 +878,21 @@ fn read_subagent_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<(SubagentRecord, Option<String>)> {
     let role: Option<String> = row.get(4)?;
+    let nickname: Option<String> = row.get(11)?;
+    let agent_path: Option<String> = row.get(12)?;
+    let base_role = agent_path.as_deref().and_then(BaseRole::parse);
     Ok((
         SubagentRecord {
             agent_id: row.get(0)?,
+            nickname: nickname
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             child_session_id: row.get(1)?,
             parent_session_id: row.get(2)?,
             spawn_message_id: row.get(3)?,
             role: role
                 .as_deref()
-                .and_then(AgentRole::parse)
+                .and_then(|r| AgentRole::from_name_and_base(r, base_role))
                 .unwrap_or(AgentRole::Executor),
             status: row.get(5)?,
             title: row.get(6)?,

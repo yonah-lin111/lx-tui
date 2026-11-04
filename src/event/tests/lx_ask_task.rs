@@ -121,6 +121,7 @@ fn lx_task_output_and_agents_detail_selection_scroll_and_copy() {
         let mut run =
             crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
                 agent_id: "sub-1".into(),
+                nickname: None,
                 child_session_id: "sess-1".into(),
                 parent_session_id: "parent".into(),
                 spawn_message_id: None,

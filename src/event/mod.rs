@@ -244,6 +244,7 @@ async fn run_loop(
     }
     // 模型配置：启动加载（首次已由 main 导入）；加载后刷新状态行。
     load_models_snapshot(state);
+    state.subagents_config = crate::config::subagents::load_subagents_or_default();
     // 自定义命令重载触发：启动、切换显示工作区与设置页写入后。
     let mut commands_reload = true;
     // skill 目录缓存刷新触发：切换显示工作区与设置页写入后；启动时单独预扫描。

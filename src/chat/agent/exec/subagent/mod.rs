@@ -156,6 +156,8 @@ pub(crate) struct ExecSubagentPool {
     running: HashMap<String, ChildHandle>,
     resumed: HashSet<String>,
     interrupted: HashSet<String>,
+    paused_by_interrupt: HashSet<String>,
+    subagents_config: crate::config::subagents::SubagentsSection,
     waits: HashMap<u64, PendingWait>,
     next_wait_id: u64,
 }
@@ -186,6 +188,8 @@ impl ExecSubagentPool {
             running: HashMap::new(),
             resumed: HashSet::new(),
             interrupted: HashSet::new(),
+            paused_by_interrupt: HashSet::new(),
+            subagents_config: crate::config::subagents::load_subagents_or_default(),
             waits: HashMap::new(),
             next_wait_id: 1,
         }
@@ -206,6 +210,9 @@ impl ExecSubagentPool {
                 title,
                 task,
                 items,
+                fork_context,
+                model,
+                reasoning_effort,
             } => {
                 let out = self.spawn(
                     db,
@@ -215,6 +222,9 @@ impl ExecSubagentPool {
                     &title,
                     &task,
                     &items,
+                    fork_context,
+                    model.as_deref(),
+                    reasoning_effort.as_deref(),
                 );
                 let _ = reply.send(out);
             }
@@ -230,6 +240,10 @@ impl ExecSubagentPool {
             } => {
                 let out =
                     self.send_input(db, parent_assistant_id, call_id, &target, &items, interrupt);
+                let _ = reply.send(out);
+            }
+            SubagentOp::Interrupt { target } => {
+                let out = self.interrupt(db, &target);
                 let _ = reply.send(out);
             }
             SubagentOp::Resume { id } => {
@@ -315,11 +329,37 @@ impl ExecSubagentPool {
         title: &str,
         task: &str,
         items: &[SubagentInputItem],
+        fork_context: bool,
+        model_override: Option<&str>,
+        reasoning_effort_override: Option<&str>,
     ) -> Result<SubagentOutcome, HostError> {
-        if self.running.len() >= MAX_CONCURRENT_SUBAGENTS {
+        let role_spec = self
+            .subagents_config
+            .resolve_role(role.as_str())
+            .ok_or_else(|| failed(&format!("unknown subagent role '{}'", role.as_str())))?;
+        let role = role.with_base(role_spec.base_role);
+        let max_concurrent = self
+            .subagents_config
+            .max_concurrent
+            .clamp(1, crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT);
+        if self.running.len() >= max_concurrent {
             return Err(failed(LIMIT_REACHED_CODE));
         }
+        let existing_records = db
+            .list_subagents(&self.workspace, &self.parent_session_id)
+            .unwrap_or_default();
+        let used_nicknames: Vec<String> = existing_records
+            .into_iter()
+            .filter_map(|r| r.nickname)
+            .collect();
+        let nickname =
+            crate::chat::agent::allocate_nickname(&used_nicknames, &role_spec.nickname_candidates);
         let child_session_id = new_external_id("sess");
+        let image_rewrite = if fork_context {
+            crate::db::chat::copy_session_images(&self.parent_session_id, &child_session_id)
+        } else {
+            None
+        };
         let source: Vec<SubagentInputItem> = if items.is_empty() {
             vec![SubagentInputItem::Text {
                 text: task.to_string(),
@@ -354,10 +394,11 @@ impl ExecSubagentPool {
                 self.parent_session_id, parent_assistant_id
             )
         });
-        let committed = match db.begin_subagent_turn_with_items(
+        let committed = match db.begin_subagent_turn_with_options(
             &self.workspace,
             &self.parent_session_id,
             Some(&child_session_id),
+            Some(&nickname),
             role,
             &title,
             &task_text,
@@ -366,6 +407,8 @@ impl ExecSubagentPool {
             Some(parent_assistant_id),
             dedupe.as_deref(),
             call_id,
+            fork_context,
+            &image_rewrite,
         ) {
             Ok(committed) => committed,
             Err(error) => {
@@ -392,8 +435,12 @@ impl ExecSubagentPool {
         }
         Ok(SubagentOutcome::Spawned {
             agent_id: committed.agent_id,
+            nickname: Some(nickname),
             role,
             title,
+            model: model_override.map(str::to_string),
+            reasoning_effort: reasoning_effort_override.map(str::to_string),
+            fork_context,
         })
     }
 
@@ -408,13 +455,15 @@ impl ExecSubagentPool {
         interrupt: bool,
     ) -> Result<SubagentOutcome, HostError> {
         let record = db
-            .owned_subagent(&self.workspace, &self.parent_session_id, target)
+            .resolve_owned_subagent(&self.workspace, &self.parent_session_id, target)
             .map_err(db_failed)?
             .ok_or_else(|| failed(NOT_FOUND_CODE))?;
+        let target = record.agent_id.as_str();
         let is_running = self.running.contains_key(target);
         if !is_running && !self.resumed.contains(target) {
             return Err(failed(NOT_ACTIVE_CODE));
         }
+        self.paused_by_interrupt.remove(target);
         let persisted = self.prepare_input_items(&record.child_session_id, items)?;
         let dedupe = match call_id.filter(|cid| !cid.trim().is_empty()) {
             Some(cid) => format!(
@@ -470,14 +519,48 @@ impl ExecSubagentPool {
         })
     }
 
-    fn resume(&mut self, db: &Database, agent_id: &str) -> Result<SubagentOutcome, HostError> {
-        if db
-            .owned_subagent(&self.workspace, &self.parent_session_id, agent_id)
+    fn interrupt(&mut self, db: &Database, target: &str) -> Result<SubagentOutcome, HostError> {
+        let record = db
+            .resolve_owned_subagent(&self.workspace, &self.parent_session_id, target)
             .map_err(db_failed)?
-            .is_none()
-        {
-            return Err(failed(NOT_FOUND_CODE));
+            .ok_or_else(|| failed(NOT_FOUND_CODE))?;
+        let canonical_id = record.agent_id;
+        let queued_count = db
+            .subagent_queue_states(&self.workspace, &self.parent_session_id)
+            .unwrap_or_default()
+            .get(&canonical_id)
+            .map_or(0, |state| state.queued_count);
+        if let Some(handle) = self.running.get(&canonical_id) {
+            self.paused_by_interrupt.insert(canonical_id.clone());
+            self.resumed.insert(canonical_id.clone());
+            self.interrupted.remove(&canonical_id);
+            let _ = handle.cancel_tx.send(true);
+            return Ok(SubagentOutcome::Interrupted {
+                agent_id: canonical_id,
+                nickname: record.nickname,
+                previous_status: STATUS_RUNNING.to_string(),
+                queued_count,
+            });
         }
+        if self.resumed.contains(&canonical_id) {
+            self.paused_by_interrupt.insert(canonical_id.clone());
+            return Ok(SubagentOutcome::Interrupted {
+                agent_id: canonical_id,
+                nickname: record.nickname,
+                previous_status: STATUS_IDLE.to_string(),
+                queued_count,
+            });
+        }
+        Err(failed(NOT_ACTIVE_CODE))
+    }
+
+    fn resume(&mut self, db: &Database, agent_id: &str) -> Result<SubagentOutcome, HostError> {
+        let record = db
+            .resolve_owned_subagent(&self.workspace, &self.parent_session_id, agent_id)
+            .map_err(db_failed)?
+            .ok_or_else(|| failed(NOT_FOUND_CODE))?;
+        let agent_id = record.agent_id.as_str();
+        self.paused_by_interrupt.remove(agent_id);
         let queued_count = db
             .subagent_queue_states(&self.workspace, &self.parent_session_id)
             .unwrap_or_default()
@@ -491,7 +574,11 @@ impl ExecSubagentPool {
                 queued_count,
             });
         }
-        if queued_count > 0 && self.running.len() >= MAX_CONCURRENT_SUBAGENTS {
+        let max_concurrent = self
+            .subagents_config
+            .max_concurrent
+            .clamp(1, crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT);
+        if queued_count > 0 && self.running.len() >= max_concurrent {
             return Err(failed(LIMIT_REACHED_CODE));
         }
         db.recover_subagent_for_resume(&self.workspace, &self.parent_session_id, agent_id)
@@ -512,9 +599,10 @@ impl ExecSubagentPool {
 
     fn close(&mut self, db: &Database, target: &str) -> Result<SubagentOutcome, HostError> {
         let record = db
-            .owned_subagent(&self.workspace, &self.parent_session_id, target)
+            .resolve_owned_subagent(&self.workspace, &self.parent_session_id, target)
             .map_err(db_failed)?
             .ok_or_else(|| failed(NOT_FOUND_CODE))?;
+        let target = record.agent_id.as_str();
         let previous_status = if self.running.contains_key(target) {
             STATUS_RUNNING.to_string()
         } else {
@@ -524,6 +612,7 @@ impl ExecSubagentPool {
             let _ = handle.cancel_tx.send(true);
         }
         self.interrupted.remove(target);
+        self.paused_by_interrupt.remove(target);
         self.resumed.remove(target);
         Ok(SubagentOutcome::Closed {
             agent_id: target.to_string(),
@@ -542,6 +631,7 @@ impl ExecSubagentPool {
             .iter()
             .map(|record| AgentListItemView {
                 agent_id: record.agent_id.clone(),
+                nickname: record.nickname.clone(),
                 role: record.role,
                 title: record.title.clone(),
                 status: self.projected_status(record, queues.get(&record.agent_id)),

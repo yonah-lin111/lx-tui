@@ -94,6 +94,7 @@ fn same_state_reuses_snapshot() {
 fn report_expansion_rebuilds_only_the_clicked_block() {
     let report = |agent: &str, title: &str| crate::chat::agent::SubagentReportView {
         agent_id: agent.into(),
+        nickname: None,
         title: title.into(),
         role: crate::chat::agent::AgentRole::Explorer,
         status: "completed".into(),
@@ -132,6 +133,7 @@ fn report_more_expansion_rebuilds_snapshot_geometry() {
     let mut row = message("report-row", "user", "complete", Vec::new());
     row.reports.push(crate::chat::agent::SubagentReportView {
         agent_id: "r1".into(),
+        nickname: None,
         title: "report".into(),
         role: crate::chat::agent::AgentRole::Explorer,
         status: "completed".into(),

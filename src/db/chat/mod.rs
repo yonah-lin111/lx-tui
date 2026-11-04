@@ -22,7 +22,7 @@ pub use compact::{
     COMPACT_ACTIVE, COMPACT_REVERTED, CompactCheckpoint, CompactCommit, CompactCommitted,
     CompactRevert,
 };
-pub use fork::ForkedChatSession;
+pub use fork::{ForkedChatSession, copy_session_images};
 pub use model_switch::{ModelSwitchCommit, ModelSwitchRecord};
 pub use process::{NewProcess, OutputSnapshot, ProcessFinish, ProcessRecord};
 pub use rewind::{
@@ -985,20 +985,13 @@ pub fn initial_session_title_for_meta(
 
 /// 联合分配会话内下一个单调递增 `sequence`（消息、撤销提示、compact 检查点、模型切换共用编号空间）。
 pub(super) fn next_session_sequence(transaction: &Connection, session_id: &str) -> Result<i64> {
+    const SQL: &str = "SELECT COALESCE(MAX(sequence) + 1, 0) FROM (\
+        SELECT sequence FROM agent_message WHERE session_id = ?1 UNION ALL \
+        SELECT sequence FROM agent_session_notice WHERE session_id = ?1 UNION ALL \
+        SELECT sequence FROM agent_compact_checkpoint WHERE session_id = ?1 UNION ALL \
+        SELECT sequence FROM agent_model_switch WHERE session_id = ?1)";
     transaction
-        .query_row(
-            r#"SELECT COALESCE(MAX(sequence) + 1, 0) FROM (
-                   SELECT sequence FROM agent_message WHERE session_id = ?1
-                   UNION ALL
-                   SELECT sequence FROM agent_session_notice WHERE session_id = ?1
-                   UNION ALL
-                   SELECT sequence FROM agent_compact_checkpoint WHERE session_id = ?1
-                   UNION ALL
-                   SELECT sequence FROM agent_model_switch WHERE session_id = ?1
-               )"#,
-            params![session_id],
-            |row| row.get(0),
-        )
+        .query_row(SQL, params![session_id], |row| row.get(0))
         .map_err(DbError::from)
 }
 

@@ -277,8 +277,12 @@ fn collab_calls_carry_the_agent_identity() {
     let executed = ToolOutcome::Executed(ToolExecutionResult::Subagent(Box::new(
         SubagentOutcome::Spawned {
             agent_id: "sub-1".to_string(),
+            nickname: None,
             role: AgentRole::Explorer,
             title: "inspect cli".to_string(),
+            model: None,
+            reasoning_effort: None,
+            fork_context: false,
         },
     )));
     match item_details_for_finish(&call, &executed) {

@@ -518,6 +518,9 @@ fn collab_summary(outcome: &SubagentOutcome) -> String {
         SubagentOutcome::InputAccepted { agent_id, .. } => {
             format!("input accepted for {agent_id}")
         }
+        SubagentOutcome::Interrupted { agent_id, .. } => {
+            format!("interrupted {agent_id}")
+        }
         SubagentOutcome::Resumed { agent_id, .. } => format!("resumed {agent_id}"),
         SubagentOutcome::Waited {
             timed_out, agents, ..
@@ -542,12 +545,14 @@ fn collab_identity(outcome: &SubagentOutcome) -> (Option<String>, Option<String>
             agent_id,
             role,
             title,
+            ..
         } => (
             Some(agent_id.clone()),
             Some(role.as_str().to_string()),
             Some(title.clone()),
         ),
         SubagentOutcome::InputAccepted { agent_id, .. }
+        | SubagentOutcome::Interrupted { agent_id, .. }
         | SubagentOutcome::Resumed { agent_id, .. }
         | SubagentOutcome::Closed { agent_id, .. }
         | SubagentOutcome::InputCancelled { agent_id, .. } => (Some(agent_id.clone()), None, None),

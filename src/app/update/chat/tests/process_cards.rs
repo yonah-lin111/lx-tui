@@ -326,6 +326,7 @@ fn background_output_updates_subagent_command_card() {
     call.detail = Some(Box::new(command_detail(12)));
     let mut run = SubagentRun::from_record(&SubagentRecord {
         agent_id: "sub-child".into(),
+        nickname: None,
         child_session_id: "sess-child".into(),
         parent_session_id: "sess-parent".into(),
         spawn_message_id: None,

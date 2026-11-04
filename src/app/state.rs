@@ -303,6 +303,8 @@ pub struct AppState {
     pub settings_open_requested: bool,
     /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
     pub models: ModelsSnapshot,
+    /// 子 agent 角色与并发配置快照（`config/subagents.json`）：设置页保存后由事件层热更新。
+    pub subagents_config: crate::config::subagents::SubagentsSection,
     /// 在途的新会话自动标题生成（session_id 集合；手动 `/rename`、`/resume` 改名或删除立即移除）。
     pub pending_session_titles: std::collections::HashSet<String>,
     /// 在途的 Prompt 模板块 `/title` 生成请求映射（按 `request_id` 索引）。
@@ -453,6 +455,7 @@ impl AppState {
             settings_available: false,
             settings_open_requested: false,
             models: ModelsSnapshot::default(),
+            subagents_config: crate::config::subagents::SubagentsSection::default(),
             pending_session_titles: std::collections::HashSet::new(),
             pending_prompt_titles: std::collections::HashMap::new(),
             prompt_title_request_counter: 0,

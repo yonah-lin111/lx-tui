@@ -15,6 +15,7 @@
   <button id="tab-provider" onclick="showTab('provider')">Provider</button>
   <button id="tab-mcp" onclick="showTab('mcp')">MCP</button>
   <button id="tab-skills" onclick="showTab('skills')">Skills</button>
+  <button id="tab-subagents" onclick="showTab('subagents')">Subagents</button>
 </nav>
 <div class="side-resizer" id="side-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
 <main>
@@ -455,10 +456,91 @@
       </section>
     </div>
   </section>
+
+  <section id="view-subagents" class="view hidden">
+    <div class="view-head">
+      <h2>Subagents</h2>
+      <div id="actions-subagents" class="view-actions"></div>
+    </div>
+    <div class="models-toolbar">
+      <button class="ghost" onclick="loadSubagents(true)">Reload</button>
+      <span class="status" id="subagents-status">Loading…</span>
+    </div>
+    <fieldset>
+      <legend>Concurrency</legend>
+      <div class="field-grid">
+        <div>
+          <label for="subagents-max-concurrent">Max concurrent subagents per session (1–8)</label>
+          <input id="subagents-max-concurrent" type="number" min="1" max="8" value="3">
+        </div>
+      </div>
+    </fieldset>
+    <div class="models-grid">
+      <nav class="models-nav" aria-label="Subagent roles">
+        <div id="subagent-role-list" class="provider-list"></div>
+        <button id="new-subagent-role-row" type="button" class="nav-item new" onclick="newSubagentRole()">
+          <span class="nav-slash">+</span>
+          <span class="nav-name">New role</span>
+        </button>
+      </nav>
+      <div class="models-resizer" role="separator" aria-orientation="vertical"></div>
+      <section class="editor-card">
+        <div id="subagent-empty" class="editor-empty">
+          <p>Select a subagent role to configure or create a custom role.</p>
+          <button class="primary" onclick="newSubagentRole()">New role</button>
+        </div>
+        <div id="subagent-editor" class="hidden">
+          <div class="editor-head">
+            <h3 id="subagent-legend">Edit role</h3>
+            <div class="actions">
+              <button class="ghost" onclick="hideSubagentEditor()">Cancel</button>
+              <button id="subagent-reset-default" class="ghost hidden" onclick="resetBuiltinRoleToDefault()">Reset to default</button>
+              <button id="subagent-delete-role" class="danger hidden" onclick="deleteSubagentRole()">Delete</button>
+            </div>
+          </div>
+          <div class="editor-body">
+            <fieldset>
+              <div class="field-grid">
+                <div>
+                  <label for="subagent-name">Role name (lowercase a-z, 0-9, _)</label>
+                  <input id="subagent-name" type="text" placeholder="reviewer">
+                </div>
+                <div>
+                  <label>Base permission</label>
+                  <div id="subagent-base-role-host" class="select-host"></div>
+                </div>
+                <div>
+                  <label>Default model</label>
+                  <div id="subagent-model-host" class="select-host"></div>
+                </div>
+                <div>
+                  <label>Default reasoning effort</label>
+                  <div id="subagent-effort-host" class="select-host"></div>
+                </div>
+                <div class="field-wide">
+                  <label for="subagent-nicknames">Nickname candidates (comma separated, optional)</label>
+                  <input id="subagent-nicknames" type="text" placeholder="Turing, Curie, Euler, Noether">
+                </div>
+                <div class="field-wide">
+                  <label for="subagent-description">Description (shown to main agent in spawn_agent)</label>
+                  <input id="subagent-description" type="text" placeholder="Short description of when to delegate to this role">
+                </div>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>System prompt</legend>
+              <textarea id="subagent-prompt" rows="18"></textarea>
+            </fieldset>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
 </main>
 <script src="/settings.js"></script>
 <script src="/settings_models.js"></script>
 <script src="/settings_mcp.js"></script>
 <script src="/settings_skills.js"></script>
+<script src="/settings_subagents.js"></script>
 </body>
 </html>

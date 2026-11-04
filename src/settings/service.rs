@@ -9,6 +9,7 @@ mod mcp;
 mod models;
 mod page;
 mod skills;
+mod subagents;
 
 #[cfg(test)]
 mod tests;
@@ -68,6 +69,8 @@ pub enum SettingsEvent {
     McpCredentialsChanged,
     /// skill 内容或启停状态变化：失效缓存并刷新 `/` 面板。
     SkillsChanged,
+    /// 子 agent 角色或并发上限配置已保存。
+    SubagentsChanged(Box<crate::config::subagents::SubagentsSection>),
 }
 
 /// 服务共享状态：token、事件发送端、命令快照与关闭标记。

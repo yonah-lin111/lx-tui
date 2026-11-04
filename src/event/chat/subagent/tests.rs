@@ -89,6 +89,124 @@ async fn run_op(
     receiver.await.expect("reply")
 }
 
+/// 无额外选项的 `spawn_agent` 操作（选项字段默认继承父会话）。
+fn spawn_op(role: AgentRole, title: impl Into<String>, task: &str) -> SubagentOp {
+    spawn_op_with(role, title, task, None, None)
+}
+
+/// 带显式模型/思考等级的 `spawn_agent` 操作。
+fn spawn_op_with(
+    role: AgentRole,
+    title: impl Into<String>,
+    task: &str,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> SubagentOp {
+    SubagentOp::Spawn {
+        role,
+        title: title.into(),
+        task: task.into(),
+        items: Vec::new(),
+        fork_context: false,
+        model: model.map(str::to_string),
+        reasoning_effort: reasoning_effort.map(str::to_string),
+    }
+}
+
+/// 新测试的紧凑上下文：持有 fixture 生命周期并封装重复的事件层调用。
+struct Ctx {
+    _fixture: Fixture,
+    state: AppState,
+    streams: ChatStreams,
+    persistence: Persistence,
+    key: RequestKey,
+}
+
+impl Ctx {
+    fn new() -> Self {
+        let (fixture, state, key, persistence, streams, _parent) = setup_parent();
+        Self {
+            _fixture: fixture,
+            state,
+            streams,
+            persistence,
+            key,
+        }
+    }
+
+    async fn run(&mut self, call_id: &str, op: SubagentOp) -> SubagentOutcome {
+        run_op(
+            &mut self.state,
+            &mut self.streams,
+            &self.persistence,
+            &self.key,
+            Some(call_id),
+            op,
+        )
+        .await
+        .expect("subagent op")
+    }
+
+    fn child(&self, agent_id: &str) -> String {
+        child_of(&self.streams, agent_id)
+    }
+
+    fn finish(&mut self, child_session: &str, reason: StopReason) {
+        finish(
+            &mut self.state,
+            &mut self.streams,
+            &self.persistence,
+            &self.key,
+            child_session,
+            reason,
+        );
+    }
+}
+
+fn spawned(outcome: &SubagentOutcome) -> (&str, &str) {
+    let SubagentOutcome::Spawned {
+        agent_id,
+        nickname: Some(nickname),
+        ..
+    } = outcome
+    else {
+        panic!("expected spawned");
+    };
+    (agent_id, nickname)
+}
+
+fn child_of(streams: &ChatStreams, agent_id: &str) -> String {
+    streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("subagent handle")
+        .child_session_id
+        .clone()
+}
+
+fn finish(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+    key: &RequestKey,
+    child_session: &str,
+    reason: StopReason,
+) {
+    finish_subagent(
+        state,
+        streams,
+        persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session.to_string(),
+            generation: key.generation,
+        },
+        reason,
+        Usage::default(),
+    );
+}
+
 #[tokio::test]
 async fn queued_inputs_drain_in_order_and_require_resume_after_terminal_completion() {
     let (_fixture, mut state, key, persistence, mut streams, _parent) = setup_parent();
@@ -98,24 +216,14 @@ async fn queued_inputs_drain_in_order_and_require_resume_after_terminal_completi
         &persistence,
         &key,
         Some("call-spawn"),
-        SubagentOp::Spawn {
-            role: AgentRole::Explorer,
-            title: "Multi turn".into(),
-            task: "turn 1".into(),
-            items: Vec::new(),
-        },
+        spawn_op(AgentRole::Explorer, "Multi turn", "turn 1"),
     )
     .await
     .expect("spawn");
     let SubagentOutcome::Spawned { agent_id, .. } = spawned else {
         panic!("expected spawned");
     };
-    let child_session = streams
-        .subagents
-        .values()
-        .find(|h| h.agent_id == agent_id)
-        .map(|h| h.child_session_id.clone())
-        .expect("child session");
+    let child_session = child_of(&streams, &agent_id);
 
     // 运行中发送普通输入：持久排队，不中断当前轮
     let sent = run_op(
@@ -174,17 +282,13 @@ async fn queued_inputs_drain_in_order_and_require_resume_after_terminal_completi
     }
 
     // 第 1 轮完成：队列非空，自动接续启动第 2 轮
-    finish_subagent(
+    finish(
         &mut state,
         &mut streams,
         &persistence,
-        RequestKey {
-            pane: key.pane,
-            session: child_session.clone(),
-            generation: key.generation,
-        },
+        &key,
+        &child_session,
         StopReason::Complete,
-        Usage::default(),
     );
     assert!(
         streams.subagents.contains_key(&child_session),
@@ -192,17 +296,13 @@ async fn queued_inputs_drain_in_order_and_require_resume_after_terminal_completi
     );
 
     // 第 2 轮完成且队列已空：释放恢复标记，进入终态
-    finish_subagent(
+    finish(
         &mut state,
         &mut streams,
         &persistence,
-        RequestKey {
-            pane: key.pane,
-            session: child_session.clone(),
-            generation: key.generation,
-        },
+        &key,
+        &child_session,
         StopReason::Complete,
-        Usage::default(),
     );
     assert!(!streams.subagents.contains_key(&child_session));
     assert!(!streams.resumed_subagents.contains(&agent_id));
@@ -299,23 +399,13 @@ async fn interrupt_cancels_current_turn_without_report_and_runs_ahead_of_older_q
         &persistence,
         &key,
         Some("c-spawn"),
-        SubagentOp::Spawn {
-            role: AgentRole::Executor,
-            title: "Interrupt test".into(),
-            task: "turn 1".into(),
-            items: Vec::new(),
-        },
+        spawn_op(AgentRole::Executor, "Interrupt test", "turn 1"),
     )
     .await
     .expect("spawn") else {
         panic!("expected spawned");
     };
-    let child_session = streams
-        .subagents
-        .values()
-        .find(|h| h.agent_id == agent_id)
-        .map(|h| h.child_session_id.clone())
-        .expect("child");
+    let child_session = child_of(&streams, &agent_id);
 
     // 先排一条普通输入
     run_op(
@@ -370,17 +460,13 @@ async fn interrupt_cancels_current_turn_without_report_and_runs_ahead_of_older_q
     assert!(*cancel_rx.borrow(), "当前运行轮收到取消信号");
 
     // 旧轮以 Cancelled 封口：不生成报告，且立即启动 urgent interrupt 输入，保留旧普通队列（剩余 1 条）
-    finish_subagent(
+    finish(
         &mut state,
         &mut streams,
         &persistence,
-        RequestKey {
-            pane: key.pane,
-            session: child_session.clone(),
-            generation: key.generation,
-        },
+        &key,
+        &child_session,
         StopReason::Cancelled,
-        Usage::default(),
     );
     let handle = streams.subagents.get(&child_session).expect("restarted");
     assert_eq!(handle.task, "urgent interrupt");
@@ -401,23 +487,13 @@ async fn failed_turn_pauses_queue_until_explicit_resume() {
         &persistence,
         &key,
         Some("c-spawn"),
-        SubagentOp::Spawn {
-            role: AgentRole::Executor,
-            title: "Fail test".into(),
-            task: "turn 1".into(),
-            items: Vec::new(),
-        },
+        spawn_op(AgentRole::Executor, "Fail test", "turn 1"),
     )
     .await
     .expect("spawn") else {
         panic!("expected spawned");
     };
-    let child_session = streams
-        .subagents
-        .values()
-        .find(|h| h.agent_id == agent_id)
-        .map(|h| h.child_session_id.clone())
-        .expect("child");
+    let child_session = child_of(&streams, &agent_id);
 
     run_op(
         &mut state,
@@ -437,19 +513,15 @@ async fn failed_turn_pauses_queue_until_explicit_resume() {
     .expect("queue");
 
     // 第 1 轮失败：生成失败报告，但暂停后续队列且清除恢复标记
-    finish_subagent(
+    finish(
         &mut state,
         &mut streams,
         &persistence,
-        RequestKey {
-            pane: key.pane,
-            session: child_session.clone(),
-            generation: key.generation,
-        },
+        &key,
+        &child_session,
         StopReason::Failed {
             code: "http 500".into(),
         },
-        Usage::default(),
     );
     assert!(
         !streams.subagents.contains_key(&child_session),
@@ -536,6 +608,9 @@ async fn image_items_archive_preserve_interleaved_order_and_block_when_archive_m
                     text: "Second text".into(),
                 },
             ],
+            fork_context: false,
+            model: None,
+            reasoning_effort: None,
         },
     )
     .await
@@ -546,12 +621,7 @@ async fn image_items_archive_preserve_interleaved_order_and_block_when_archive_m
     // 立刻删除工作区原图：后续回放必须走子会话归档副本，不依赖原路径
     std::fs::remove_file(&img_path).expect("remove source image");
 
-    let child_session = streams
-        .subagents
-        .values()
-        .find(|h| h.agent_id == agent_id)
-        .map(|h| h.child_session_id.clone())
-        .expect("child session");
+    let child_session = child_of(&streams, &agent_id);
 
     // 排入带内联 data URL 的第 2 轮输入
     let sent = run_op(
@@ -596,17 +666,13 @@ async fn image_items_archive_preserve_interleaved_order_and_block_when_archive_m
     );
 
     // 验证跨轮上下文装配保持 [text, image, text] 严格顺序（即使原图已被删）
-    finish_subagent(
+    finish(
         &mut state,
         &mut streams,
         &persistence,
-        RequestKey {
-            pane: key.pane,
-            session: child_session.clone(),
-            generation: key.generation,
-        },
+        &key,
+        &child_session,
         StopReason::Complete,
-        Usage::default(),
     );
     assert!(
         streams.subagents.contains_key(&child_session),
@@ -655,17 +721,13 @@ async fn image_items_archive_preserve_interleaved_order_and_block_when_archive_m
     }
 
     // 第 2 轮完成：尝试消费 bad_sub_id 时检测到归档缺失，保持 queued + error_code=image_missing
-    finish_subagent(
+    finish(
         &mut state,
         &mut streams,
         &persistence,
-        RequestKey {
-            pane: key.pane,
-            session: child_session.clone(),
-            generation: key.generation,
-        },
+        &key,
+        &child_session,
         StopReason::Complete,
-        Usage::default(),
     );
     assert!(
         !streams.subagents.contains_key(&child_session),
@@ -729,23 +791,13 @@ async fn auto_compact_persists_checkpoint_and_replays_in_subsequent_turn() {
         &persistence,
         &key,
         Some("c-spawn-compact"),
-        SubagentOp::Spawn {
-            role: AgentRole::Explorer,
-            title: "Compact child".into(),
-            task: "turn 1 task".into(),
-            items: Vec::new(),
-        },
+        spawn_op(AgentRole::Explorer, "Compact child", "turn 1 task"),
     )
     .await
     .expect("spawn") else {
         panic!("expected spawned");
     };
-    let child_session = streams
-        .subagents
-        .values()
-        .find(|h| h.agent_id == agent_id)
-        .map(|h| h.child_session_id.clone())
-        .expect("child");
+    let child_session = child_of(&streams, &agent_id);
 
     let child_key = RequestKey {
         pane: key.pane,
@@ -777,13 +829,13 @@ async fn auto_compact_persists_checkpoint_and_replays_in_subsequent_turn() {
     assert_eq!(cp.summary_text, "compacted child summary");
 
     // 结束第 1 轮（已被 checkpoint 覆盖），再跑完第 2 轮（checkpoint 之后的历史），最后装配第 3 轮
-    finish_subagent(
+    finish(
         &mut state,
         &mut streams,
         &persistence,
-        child_key,
+        &key,
+        &child_session,
         StopReason::Complete,
-        Usage::default(),
     );
     run_op(
         &mut state,
@@ -813,17 +865,13 @@ async fn auto_compact_persists_checkpoint_and_replays_in_subsequent_turn() {
     )
     .await
     .expect("send turn 2");
-    finish_subagent(
+    finish(
         &mut state,
         &mut streams,
         &persistence,
-        RequestKey {
-            pane: key.pane,
-            session: child_session.clone(),
-            generation: key.generation,
-        },
+        &key,
+        &child_session,
         StopReason::Complete,
-        Usage::default(),
     );
 
     let model = crate::db::chat::ModelSnapshot {
@@ -841,6 +889,7 @@ async fn auto_compact_persists_checkpoint_and_replays_in_subsequent_turn() {
         "msg-next",
         AgentRole::Explorer,
         super::context::ChildPromptContext {
+            system_prompt_override: None,
             model_identity: None,
             environment: "<environment_context/>",
             instructions: None,
@@ -878,36 +927,22 @@ async fn wait_agent_does_not_mistake_previous_completed_turn_for_current_running
         &persistence,
         &key,
         Some("c-spawn"),
-        SubagentOp::Spawn {
-            role: AgentRole::Explorer,
-            title: "Two turns".into(),
-            task: "turn 1".into(),
-            items: Vec::new(),
-        },
+        spawn_op(AgentRole::Explorer, "Two turns", "turn 1"),
     )
     .await
     .expect("spawn") else {
         panic!("expected spawned");
     };
-    let child_session = streams
-        .subagents
-        .values()
-        .find(|h| h.agent_id == agent_id)
-        .map(|h| h.child_session_id.clone())
-        .expect("child");
+    let child_session = child_of(&streams, &agent_id);
 
     // 第 1 轮完成并领取第 1 轮报告
-    finish_subagent(
+    finish(
         &mut state,
         &mut streams,
         &persistence,
-        RequestKey {
-            pane: key.pane,
-            session: child_session.clone(),
-            generation: key.generation,
-        },
+        &key,
+        &child_session,
         StopReason::Complete,
-        Usage::default(),
     );
     let waited_1 = settle_wait(
         &mut streams,
@@ -984,23 +1019,13 @@ async fn p0_wait_any_does_not_wake_early_between_queued_turns_and_p1_cancel_unbl
         &persistence,
         &key,
         Some("c-spawn-p0"),
-        SubagentOp::Spawn {
-            role: AgentRole::Explorer,
-            title: "Queue transition".into(),
-            task: "turn 1".into(),
-            items: Vec::new(),
-        },
+        spawn_op(AgentRole::Explorer, "Queue transition", "turn 1"),
     )
     .await
     .expect("spawn") else {
         panic!("expected spawned");
     };
-    let child_session = streams
-        .subagents
-        .values()
-        .find(|h| h.agent_id == agent_id)
-        .map(|h| h.child_session_id.clone())
-        .expect("child");
+    let child_session = child_of(&streams, &agent_id);
 
     // 排入第 2 轮输入
     run_op(
@@ -1029,17 +1054,13 @@ async fn p0_wait_any_does_not_wake_early_between_queued_turns_and_p1_cancel_unbl
         .subscribe();
 
     // 第 1 轮完成并立即接续启动第 2 轮（continued == true）：done 通道必须复用且不触发完成信号
-    finish_subagent(
+    finish(
         &mut state,
         &mut streams,
         &persistence,
-        RequestKey {
-            pane: key.pane,
-            session: child_session.clone(),
-            generation: key.generation,
-        },
+        &key,
+        &child_session,
         StopReason::Complete,
-        Usage::default(),
     );
     assert!(
         !*done_rx.borrow(),
@@ -1051,17 +1072,13 @@ async fn p0_wait_any_does_not_wake_early_between_queued_turns_and_p1_cancel_unbl
     );
 
     // 第 2 轮完成且队列已空（!continued）：此时 done 才置为 true
-    finish_subagent(
+    finish(
         &mut state,
         &mut streams,
         &persistence,
-        RequestKey {
-            pane: key.pane,
-            session: child_session.clone(),
-            generation: key.generation,
-        },
+        &key,
+        &child_session,
         StopReason::Complete,
-        Usage::default(),
     );
     assert!(*done_rx.borrow(), "队列全部消费完毕后 done 置为 true");
 }
@@ -1079,35 +1096,21 @@ async fn p1_send_input_to_idle_agent_at_concurrency_limit_does_not_leave_orphan_
         &persistence,
         &key,
         Some("c-idle-spawn"),
-        SubagentOp::Spawn {
-            role: AgentRole::Explorer,
-            title: "Idle target".into(),
-            task: "turn 1".into(),
-            items: Vec::new(),
-        },
+        spawn_op(AgentRole::Explorer, "Idle target", "turn 1"),
     )
     .await
     .expect("spawn idle")
     else {
         panic!("expected spawned");
     };
-    let idle_child = streams
-        .subagents
-        .values()
-        .find(|h| h.agent_id == idle_agent)
-        .map(|h| h.child_session_id.clone())
-        .expect("child");
-    finish_subagent(
+    let idle_child = child_of(&streams, &idle_agent);
+    finish(
         &mut state,
         &mut streams,
         &persistence,
-        RequestKey {
-            pane: key.pane,
-            session: idle_child,
-            generation: key.generation,
-        },
+        &key,
+        &idle_child,
         StopReason::Complete,
-        Usage::default(),
     );
     run_op(
         &mut state,
@@ -1130,12 +1133,7 @@ async fn p1_send_input_to_idle_agent_at_concurrency_limit_does_not_leave_orphan_
             &persistence,
             &key,
             Some(&format!("c-busy-{idx}")),
-            SubagentOp::Spawn {
-                role: AgentRole::Explorer,
-                title: format!("Busy {idx}"),
-                task: "work".into(),
-                items: Vec::new(),
-            },
+            spawn_op(AgentRole::Explorer, format!("Busy {idx}"), "work"),
         )
         .await
         .expect("spawn busy");
@@ -1202,23 +1200,13 @@ async fn resumed_subagent_inherits_updated_parent_pane_model() {
         &persistence,
         &key,
         Some("c-spawn-model"),
-        SubagentOp::Spawn {
-            role: AgentRole::Explorer,
-            title: "Model inheritance".into(),
-            task: "turn 1".into(),
-            items: Vec::new(),
-        },
+        spawn_op(AgentRole::Explorer, "Model inheritance", "turn 1"),
     )
     .await
     .expect("spawn") else {
         panic!("expected spawned");
     };
-    let child_session = streams
-        .subagents
-        .values()
-        .find(|h| h.agent_id == agent_id)
-        .map(|h| h.child_session_id.clone())
-        .expect("child");
+    let child_session = child_of(&streams, &agent_id);
     assert_eq!(
         streams.frozen.get(&child_session).map(|f| f.model.as_str()),
         Some("m"),
@@ -1252,17 +1240,13 @@ async fn resumed_subagent_inherits_updated_parent_pane_model() {
     }
 
     // 第 1 轮结束自动接续第 2 轮：必须使用父窗格当前模型，而不是子会话旧缓存。
-    finish_subagent(
+    finish(
         &mut state,
         &mut streams,
         &persistence,
-        RequestKey {
-            pane: key.pane,
-            session: child_session.clone(),
-            generation: key.generation,
-        },
+        &key,
+        &child_session,
         StopReason::Complete,
-        Usage::default(),
     );
     assert!(
         streams.subagents.contains_key(&child_session),
@@ -1304,4 +1288,141 @@ fn replay_persisted_items_degrades_historical_images_when_model_lacks_vision() {
             "Inspect this screenshot\nERROR: Cannot read \"screen.png\" (this model does not support image input). Inform the user.".into()
         )]
     );
+}
+
+fn text(value: &str) -> SubagentInputItem {
+    SubagentInputItem::Text { text: value.into() }
+}
+
+#[rustfmt::skip]
+#[tokio::test]
+async fn nicknames_are_unique_and_address_control_tools_case_insensitively() {
+    let mut ctx = Ctx::new();
+    let first = ctx.run("c1", spawn_op(AgentRole::Explorer, "first", "task 1")).await;
+    let second = ctx.run("c2", spawn_op(AgentRole::Explorer, "second", "task 2")).await;
+    let (first_id, first_nick) = spawned(&first);
+    let (second_id, second_nick) = spawned(&second);
+    assert_eq!((first_nick, second_nick), ("Turing", "Curie"));
+    let (first_child, second_child) = (ctx.child(first_id), ctx.child(second_id));
+
+    let sent = ctx.run("c3", SubagentOp::SendInput { target: first_nick.to_lowercase(), items: vec![text("turn 2")], interrupt: false }).await;
+    assert!(matches!(sent, SubagentOutcome::InputAccepted { agent_id, .. } if agent_id == first_id));
+    let interrupted = ctx.run("c4", SubagentOp::Interrupt { target: second_nick.to_uppercase() }).await;
+    assert!(matches!(
+        interrupted,
+        SubagentOutcome::Interrupted { agent_id, nickname: Some(nick), previous_status, .. }
+            if agent_id == second_id && nick == second_nick && previous_status == "running"
+    ));
+    let closed = ctx.run("c5", SubagentOp::Close { target: second_nick.to_lowercase() }).await;
+    assert!(matches!(closed, SubagentOutcome::Closed { agent_id, .. } if agent_id == second_id));
+
+    ctx.finish(&second_child, StopReason::Cancelled);
+    ctx.finish(&first_child, StopReason::Complete);
+    ctx.finish(&first_child, StopReason::Complete);
+    let waited = ctx.run("c6", SubagentOp::Wait { targets: vec![first_nick.to_uppercase()], mode: WaitMode::All, timeout_ms: 1_000 }).await;
+    assert!(matches!(
+        waited,
+        SubagentOutcome::Waited { agents, .. }
+            if agents[0].agent_id == first_id && agents[0].nickname.as_deref() == Some(first_nick)
+    ));
+    let resumed = ctx.run("c7", SubagentOp::Resume { id: first_nick.to_lowercase() }).await;
+    assert_eq!(resumed, SubagentOutcome::Resumed { agent_id: first_id.into(), status: "idle".into(), queued_count: 0 });
+}
+
+#[rustfmt::skip]
+#[tokio::test]
+async fn interrupt_agent_keeps_idle_and_pauses_queue_until_send_input_or_resume() {
+    let mut ctx = Ctx::new();
+    let spawn = ctx.run("i1", spawn_op(AgentRole::Explorer, "interrupt", "turn 1")).await;
+    let agent_id = spawned(&spawn).0.to_string();
+    let child = ctx.child(&agent_id);
+    for (call_id, body) in [("i2", "q1"), ("i3", "q2")] {
+        ctx.run(call_id, SubagentOp::SendInput { target: agent_id.clone(), items: vec![text(body)], interrupt: false }).await;
+    }
+    let cancel = ctx.streams.subagents.get(&child).expect("handle").cancel.subscribe();
+    let interrupted = ctx.run("i4", SubagentOp::Interrupt { target: agent_id.clone() }).await;
+    assert!(matches!(interrupted, SubagentOutcome::Interrupted { previous_status, queued_count, .. } if previous_status == "running" && queued_count == 2));
+    assert!(*cancel.borrow(), "当前轮收到取消信号");
+
+    // 被中断轮次封口后保持 idle，剩余 queued 输入不得自动消费。
+    ctx.finish(&child, StopReason::Cancelled);
+    assert!(!ctx.streams.subagents.contains_key(&child));
+    assert!(ctx.streams.resumed_subagents.contains(&agent_id));
+
+    // 后续 send_input 解除暂停并消费队首旧输入（不跳过队列）。
+    let sent = ctx.run("i5", SubagentOp::SendInput { target: agent_id.clone(), items: vec![text("nudge")], interrupt: false }).await;
+    assert!(matches!(sent, SubagentOutcome::InputAccepted { status, queued_count, .. } if status == "queued" && queued_count == 2));
+    assert_eq!(ctx.streams.subagents.get(&child).map(|h| h.task.as_str()), Some("q1"));
+    ctx.finish(&child, StopReason::Complete);
+    assert_eq!(ctx.streams.subagents.get(&child).map(|h| h.task.as_str()), Some("q2"));
+
+    // 再次中断后，resume_agent 解除暂停并消费剩余输入。
+    ctx.run("i6", SubagentOp::Interrupt { target: agent_id.clone() }).await;
+    ctx.finish(&child, StopReason::Cancelled);
+    let resumed = ctx.run("i7", SubagentOp::Resume { id: agent_id.clone() }).await;
+    assert_eq!(resumed, SubagentOutcome::Resumed { agent_id, status: "running".into(), queued_count: 0 });
+    assert_eq!(ctx.streams.subagents.get(&child).map(|h| h.task.as_str()), Some("nudge"));
+}
+
+#[rustfmt::skip]
+#[tokio::test]
+async fn subagent_model_resolution_prefers_explicit_then_role_then_parent() {
+    let mut ctx = Ctx::new();
+    {
+        let provider = ctx.state.models.settings.providers.get_mut("p").expect("provider");
+        let base = provider.models.get("m").cloned().expect("model");
+        for (id, variant) in [("m2", "low"), ("m3", "high")] {
+            let mut model = crate::config::ai::ModelConfig { id: id.into(), name: id.into(), ..base.clone() };
+            model.variants.insert(variant.into(), serde_json::json!({}));
+            model.variant = Some(variant.into());
+            provider.models.insert(id.into(), model);
+        }
+    }
+    let ghost = AgentRole::from_name_and_base("ghost", None).expect("custom role");
+    let err = run_op(&mut ctx.state, &mut ctx.streams, &ctx.persistence, &ctx.key, Some("b1"), spawn_op(ghost, "ghost", "task")).await.expect_err("unknown role");
+    assert!(matches!(err, HostError::Failed { code } if code == "unknown subagent role 'ghost'"));
+    let err = run_op(&mut ctx.state, &mut ctx.streams, &ctx.persistence, &ctx.key, Some("b2"), spawn_op_with(AgentRole::Explorer, "bad", "task", Some("nope"), None)).await.expect_err("unavailable model");
+    assert!(matches!(err, HostError::Failed { code } if code.contains("not found")));
+
+    // 三级优先级：无覆写继承父会话冻结模型。
+    let parent = ctx.run("m1", spawn_op(AgentRole::Explorer, "parent", "task")).await;
+    let parent_id = spawned(&parent).0;
+    assert!(matches!(&parent, SubagentOutcome::Spawned { model: None, reasoning_effort: None, .. }));
+    assert_eq!(ctx.streams.frozen.get(&ctx.child(parent_id)).map(|f| f.model.as_str()), Some("m"));
+
+    // 角色默认模型覆盖父会话。
+    ctx.state.subagents_config.builtins.explorer.model = Some(crate::config::ai::ModelSelection { provider: "p".into(), model: "m2".into(), variant: Some("low".into()) });
+    let role = ctx.run("m2", spawn_op(AgentRole::Explorer, "role", "task")).await;
+    assert!(matches!(&role, SubagentOutcome::Spawned { model: Some(model), reasoning_effort: Some(effort), .. } if model == "p/m2" && effort == "low"));
+
+    // 显式参数覆盖角色默认。
+    let explicit = ctx.run("m3", spawn_op_with(AgentRole::Explorer, "explicit", "task", Some("m3"), Some("high"))).await;
+    assert!(matches!(&explicit, SubagentOutcome::Spawned { model: Some(model), reasoning_effort: Some(effort), .. } if model == "p/m3" && effort == "high"));
+}
+
+#[rustfmt::skip]
+#[tokio::test]
+async fn custom_role_resumes_after_it_is_removed_from_config() {
+    let mut ctx = Ctx::new();
+    let role = AgentRole::from_name_and_base("reviewer", Some(crate::config::subagents::BaseRole::Explorer)).expect("custom role");
+    ctx.state.subagents_config.roles.push(crate::config::subagents::CustomRoleConfig {
+        name: "reviewer".into(), base_role: crate::config::subagents::BaseRole::Explorer,
+        description: "review".into(), system_prompt: "review code".into(), model: None,
+        nickname_candidates: vec!["Ada".into()],
+    });
+    let spawn = ctx.run("r1", spawn_op(role, "custom", "task")).await;
+    let (agent_id, nickname) = spawned(&spawn);
+    assert_eq!(nickname, "Ada");
+    let agent_id = agent_id.to_string();
+    let child = ctx.child(&agent_id);
+    ctx.finish(&child, StopReason::Complete);
+
+    // 角色配置删除后，按历史记录仍可恢复并继续执行。
+    ctx.state.subagents_config.roles.clear();
+    let resumed = ctx.run("r2", SubagentOp::Resume { id: "ada".into() }).await;
+    assert_eq!(resumed, SubagentOutcome::Resumed { agent_id: agent_id.clone(), status: "idle".into(), queued_count: 0 });
+    let sent = ctx.run("r3", SubagentOp::SendInput { target: "ADA".into(), items: vec![text("again")], interrupt: false }).await;
+    let SubagentOutcome::InputAccepted { agent_id: resumed_id, status, .. } = sent else { panic!("expected input accepted") };
+    assert_eq!(resumed_id, agent_id);
+    assert_eq!(status, "running");
 }

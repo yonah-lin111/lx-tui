@@ -514,6 +514,7 @@ fn stats_line_returns_after_the_last_report() {
     let mut report_row = message("user", "complete", Vec::new());
     report_row.reports = vec![crate::chat::agent::SubagentReportView {
         agent_id: "sub-1".into(),
+        nickname: None,
         title: "host flow".into(),
         role: crate::chat::agent::AgentRole::Explorer,
         status: "completed".into(),
@@ -543,6 +544,7 @@ fn stats_line_returns_after_the_last_report() {
 fn report(agent_id: &str, title: &str, status: &str) -> crate::chat::agent::SubagentReportView {
     crate::chat::agent::SubagentReportView {
         agent_id: agent_id.into(),
+        nickname: None,
         title: title.into(),
         role: crate::chat::agent::AgentRole::Explorer,
         status: status.into(),
@@ -640,6 +642,7 @@ fn stats_follow_the_final_assistant_of_a_report_chain() {
         .push(crate::app::state::SubagentRun::from_record(
             &crate::db::chat::SubagentRecord {
                 agent_id: "sub-3".into(),
+                nickname: None,
                 child_session_id: "child".into(),
                 parent_session_id: "parent".into(),
                 spawn_message_id: None,
@@ -691,6 +694,7 @@ fn stats_line_is_hidden_while_a_subagent_is_running() {
         .push(crate::app::state::SubagentRun::from_record(
             &crate::db::chat::SubagentRecord {
                 agent_id: "sub-1".into(),
+                nickname: None,
                 child_session_id: "child".into(),
                 parent_session_id: "parent".into(),
                 spawn_message_id: None,

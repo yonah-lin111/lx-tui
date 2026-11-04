@@ -349,6 +349,7 @@ fn page_keys_scroll_the_agents_detail_on_the_agents_tab() {
     open_with_processes(&mut state, pane);
     let mut run = crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
         agent_id: "a1".into(),
+        nickname: None,
         child_session_id: "s1".into(),
         parent_session_id: "sess-1".into(),
         spawn_message_id: None,
@@ -406,6 +407,7 @@ fn ctrl_d_on_agents_tab_stops_the_selected_subagent() {
     let run =
         crate::app::state::lx::agent::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
             agent_id: "sub-a".into(),
+            nickname: None,
             child_session_id: "sess-a".into(),
             parent_session_id: "sess-1".into(),
             spawn_message_id: None,
@@ -423,6 +425,7 @@ fn ctrl_d_on_agents_tab_stops_the_selected_subagent() {
     let second =
         crate::app::state::lx::agent::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
             agent_id: "sub-b".into(),
+            nickname: None,
             child_session_id: "sess-b".into(),
             parent_session_id: "sess-1".into(),
             spawn_message_id: None,

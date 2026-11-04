@@ -73,28 +73,29 @@ pub fn on_subagent_delta(state: &mut AppState, child_session: &str, deltas: &[Ch
 ///
 /// spawn 的工具调用在子 agent 启动时就已经返回，不能拿工具状态冒充运行状态。
 pub fn refresh_subagent_cards(state: &mut AppState, pane: PaneId) -> bool {
+    struct RunCardSnapshot {
+        agent_id: String,
+        nickname: Option<String>,
+        role: AgentRole,
+        title: String,
+        status: String,
+        report: Option<SubagentReportView>,
+    }
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    let runs: Vec<(
-        String,
-        AgentRole,
-        String,
-        String,
-        Option<SubagentReportView>,
-    )> = target
+    let runs: Vec<RunCardSnapshot> = target
         .lx
         .agents
         .runs
         .iter()
-        .map(|run| {
-            (
-                run.agent_id.clone(),
-                run.role,
-                run.title.clone(),
-                run.status.clone(),
-                run.report.clone(),
-            )
+        .map(|run| RunCardSnapshot {
+            agent_id: run.agent_id.clone(),
+            nickname: run.nickname.clone(),
+            role: run.role,
+            title: run.title.clone(),
+            status: run.status.clone(),
+            report: run.report.clone(),
         })
         .collect();
     // 历史会话不一定回投了 Agents 列表；父消息里的汇报同样带终态。
@@ -117,11 +118,16 @@ pub fn refresh_subagent_cards(state: &mut AppState, pane: PaneId) -> bool {
             };
             if call.name == "spawn_agent"
                 && let Some(agent_id) = view.agent_id.as_deref()
-                && let Some((title, status, report)) = runs
+                && let Some((nickname, title, status, report)) = runs
                     .iter()
-                    .find(|(id, _, _, _, _)| id == agent_id)
-                    .map(|(_, _, title, status, report)| {
-                        (title.clone(), status.clone(), report.clone())
+                    .find(|r| r.agent_id == agent_id)
+                    .map(|r| {
+                        (
+                            r.nickname.clone(),
+                            r.title.clone(),
+                            r.status.clone(),
+                            r.report.clone(),
+                        )
                     })
                     .or_else(|| {
                         reports
@@ -129,6 +135,7 @@ pub fn refresh_subagent_cards(state: &mut AppState, pane: PaneId) -> bool {
                             .find(|report| report.agent_id == agent_id)
                             .map(|report| {
                                 (
+                                    report.nickname.clone(),
                                     report.title.clone(),
                                     report.status.clone(),
                                     Some(report.clone()),
@@ -140,12 +147,36 @@ pub fn refresh_subagent_cards(state: &mut AppState, pane: PaneId) -> bool {
                     view.agent_status = Some(status);
                     changed = true;
                 }
+                if view.nickname.is_none() && nickname.is_some() {
+                    view.nickname = nickname;
+                    changed = true;
+                }
                 if view.title.as_deref().unwrap_or("").is_empty() && !title.is_empty() {
                     view.title = Some(title);
                     changed = true;
                 }
                 if view.report != report {
                     view.report = report;
+                    changed = true;
+                }
+            }
+            if matches!(
+                call.name.as_str(),
+                "send_input" | "interrupt_agent" | "resume_agent" | "close_agent"
+            ) && let Some(target_key) = view.agent_id.as_deref()
+                && let Some(matched) = runs.iter().find(|r| {
+                    r.agent_id == target_key
+                        || r.nickname
+                            .as_deref()
+                            .is_some_and(|n| n.eq_ignore_ascii_case(target_key))
+                })
+            {
+                if view.nickname != matched.nickname {
+                    view.nickname = matched.nickname.clone();
+                    changed = true;
+                }
+                if view.role != Some(matched.role) {
+                    view.role = Some(matched.role);
                     changed = true;
                 }
             }
@@ -160,23 +191,29 @@ pub fn refresh_subagent_cards(state: &mut AppState, pane: PaneId) -> bool {
             let agents: Vec<AgentStatusView> = view
                 .targets
                 .iter()
-                .filter_map(|agent_id| {
-                    runs.iter().find(|(id, _, _, _, _)| id == agent_id).map(
-                        |(agent_id, role, title, status, report)| AgentStatusView {
-                            agent_id: agent_id.clone(),
-                            title: title.clone(),
-                            role: *role,
-                            status: status.clone(),
-                            report: report.as_ref().map(|report| report.body.clone()).or_else(
+                .filter_map(|target_key| {
+                    runs.iter()
+                        .find(|r| {
+                            r.agent_id == *target_key
+                                || r.nickname
+                                    .as_deref()
+                                    .is_some_and(|n| n.eq_ignore_ascii_case(target_key))
+                        })
+                        .map(|r| AgentStatusView {
+                            agent_id: r.agent_id.clone(),
+                            nickname: r.nickname.clone(),
+                            title: r.title.clone(),
+                            role: r.role,
+                            status: r.status.clone(),
+                            report: r.report.as_ref().map(|report| report.body.clone()).or_else(
                                 || {
                                     reports
                                         .iter()
-                                        .find(|report| report.agent_id == *agent_id)
+                                        .find(|report| report.agent_id == r.agent_id)
                                         .map(|report| report.body.clone())
                                 },
                             ),
-                        },
-                    )
+                        })
                 })
                 .collect();
             if view.agents != agents {
@@ -331,6 +368,10 @@ pub fn set_subagent_list(
         match target.lx.agents.by_agent_mut(&record.agent_id) {
             Some(run) => {
                 // 只同步元数据；消息模型与滚动状态归本地。
+                if run.nickname != record.nickname && record.nickname.is_some() {
+                    run.nickname = record.nickname.clone();
+                    changed = true;
+                }
                 if run.status != record.status {
                     run.status = record.status.clone();
                     changed = true;
@@ -403,12 +444,13 @@ fn consume_agent_focus(lx: &mut crate::app::state::Lx) -> bool {
     let Some(agent_id) = lx.task.as_ref().and_then(|page| page.agents_focus.clone()) else {
         return false;
     };
-    let Some(index) = lx
-        .agents
-        .runs
-        .iter()
-        .position(|run| run.agent_id == agent_id)
-    else {
+    let Some(index) = lx.agents.runs.iter().position(|run| {
+        run.agent_id == agent_id
+            || run
+                .nickname
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(&agent_id))
+    }) else {
         return false;
     };
     let Some(page) = lx.task.as_mut() else {

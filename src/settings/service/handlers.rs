@@ -250,6 +250,9 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
         (_, path) if path.starts_with("/api/models/") => models::route(request, state).await,
         (_, path) if path.starts_with("/api/mcp") => super::mcp::route(request, state).await,
         (_, path) if path.starts_with("/api/skills") => super::skills::route(request, state).await,
+        (_, path) if path.starts_with("/api/subagents") => {
+            super::subagents::route(request, state).await
+        }
         _ => Response::error(404, "not found"),
     }
 }

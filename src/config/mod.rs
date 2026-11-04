@@ -6,6 +6,7 @@
 pub mod ai;
 pub mod mcp;
 pub mod skills;
+pub mod subagents;
 
 use std::fmt;
 use std::path::{Path, PathBuf};

@@ -148,8 +148,17 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     for entry in ["loadSkills", "saveSkill", "/api/skills"] {
         assert!(skills_js_body.contains(entry), "skills js entry: {entry}");
     }
+    let subagents_js = request(port, &get("/settings_subagents.js")).await;
+    assert_eq!(status(&subagents_js), 200);
+    let subagents_js_body = body(&subagents_js);
+    for entry in ["loadSubagents", "saveSubagents", "/api/subagents"] {
+        assert!(
+            subagents_js_body.contains(entry),
+            "subagents js entry: {entry}"
+        );
+    }
 
-    // 六份资源均无外部引用。
+    // 七份资源均无外部引用。
     for (name, text) in [
         ("html", html),
         ("css", body(&css)),
@@ -157,6 +166,7 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         ("models_js", models_js_body),
         ("mcp_js", mcp_js_body),
         ("skills_js", skills_js_body),
+        ("subagents_js", subagents_js_body),
     ] {
         assert!(
             !text.contains("https://"),
@@ -975,6 +985,78 @@ async fn skills_api_lists_creates_disables_and_deletes() {
     .await;
     assert_eq!(status(&delete), 200, "{delete}");
     assert!(!path.exists(), "skill deleted");
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn subagents_api_crud_and_events() {
+    let (service, mut events, _dir) = start("subagents-api").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let origin = format!("http://127.0.0.1:{port}");
+    let url = format!("/api/subagents?token={token}");
+
+    let list = request(port, &get(&url)).await;
+    assert_eq!(status(&list), 200, "{list}");
+    let listing = body(&list);
+    for entry in ["\"maxConcurrent\"", "\"defaults\"", "Turing"] {
+        assert!(listing.contains(entry), "listing: {entry}");
+    }
+
+    let saved = request(
+        port,
+        &write("PUT", &url, r#"{"maxConcurrent":2}"#, Some(&origin)),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{saved}");
+    match events.try_recv() {
+        Ok(SettingsEvent::SubagentsChanged(section)) => assert_eq!(section.max_concurrent, 2),
+        other => panic!("expected SubagentsChanged, got {other:?}"),
+    }
+
+    let created = request(
+        port,
+        &write(
+            "POST",
+            &format!("/api/subagents/roles?token={token}"),
+            r#"{"name":"reviewer","baseRole":"explorer","description":"Review code.","systemPrompt":"You review code.","nicknameCandidates":["Ada"]}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&created), 200, "{created}");
+    match events.try_recv() {
+        Ok(SettingsEvent::SubagentsChanged(section)) => {
+            assert_eq!(section.max_concurrent, 2);
+            assert_eq!(section.roles.len(), 1);
+            assert_eq!(section.roles[0].name, "reviewer");
+            assert_eq!(section.roles[0].nickname_candidates, ["Ada"]);
+        }
+        other => panic!("expected SubagentsChanged, got {other:?}"),
+    }
+
+    let reset = request(
+        port,
+        &write(
+            "DELETE",
+            &format!("/api/subagents/builtins/explorer?token={token}"),
+            "",
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&reset), 200, "{reset}");
+    match events.try_recv() {
+        Ok(SettingsEvent::SubagentsChanged(section)) => {
+            assert!(section.builtins.explorer.is_empty());
+        }
+        other => panic!("expected SubagentsChanged, got {other:?}"),
+    }
+
+    let after = request(port, &get(&url)).await;
+    let saved = body(&after);
+    assert!(saved.contains("\"maxConcurrent\":2"), "{saved}");
+    assert!(saved.contains("\"name\":\"reviewer\""), "{saved}");
     service.shutdown();
 }
 

@@ -407,6 +407,7 @@ pub const VERB_TOOL_ASK: &str = "Ask";
 pub const VERB_TOOL_CURR_TIME: &str = "Current time";
 pub const VERB_TOOL_SPAWN_AGENT: &str = "Spawn agent";
 pub const VERB_TOOL_SEND_INPUT: &str = "Send agent input";
+pub const VERB_TOOL_INTERRUPT_AGENT: &str = "Interrupt agent";
 pub const VERB_TOOL_RESUME_AGENT: &str = "Resume agent";
 pub const VERB_TOOL_WAIT_AGENTS: &str = "Wait agents";
 pub const VERB_TOOL_CLOSE_AGENT: &str = "Close agent";
@@ -416,6 +417,8 @@ pub const VERB_TOOL_CANCEL_AGENT_INPUT: &str = "Cancel agent input";
 pub const VERB_TOOL_SUBAGENT_REPORT: &str = "Subagent report";
 /// 委派卡片：角色与任务首行之间的分隔。
 pub const SPAWN_ROLE_SEP: &str = " · ";
+/// `spawn_agent(fork_context=true)` 卡片尾部的标记。
+pub const FORKED_CONTEXT_TAG: &str = "forked";
 /// `wait_agent` 摘要里的目标计数单位。
 pub const AGENTS_LABEL: &str = "agents";
 pub const WAIT_TIMED_OUT: &str = "timed out";

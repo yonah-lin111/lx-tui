@@ -304,6 +304,7 @@ pub(crate) fn part_block_signature(
 /// 汇报块的列表指纹字段（展开状态另由块指纹承担）。
 fn report_signature(hash: &mut Fnv, report: &crate::app::state::SubagentReportView) {
     hash.write_str(&report.agent_id);
+    hash.write_str(report.nickname.as_deref().unwrap_or(""));
     hash.write_str(&report.title);
     hash.write_str(report.role.as_str());
     hash.write_str(&report.status);

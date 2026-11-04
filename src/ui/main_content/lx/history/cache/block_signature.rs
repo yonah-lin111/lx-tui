@@ -25,6 +25,7 @@ pub(crate) fn report_block_signature(
 ) -> u64 {
     let mut hash = Fnv::new();
     hash.write_str(&report.agent_id);
+    hash.write_str(report.nickname.as_deref().unwrap_or(""));
     hash.write_str(&report.title);
     hash.write_str(report.role.as_str());
     hash.write_str(&report.status);

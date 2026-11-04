@@ -20,6 +20,7 @@ fn tool_order_and_names_are_fixed() {
             "curr_time",
             "spawn_agent",
             "send_input",
+            "interrupt_agent",
             "resume_agent",
             "wait_agent",
             "close_agent",
@@ -90,12 +91,22 @@ fn subagent_schemas_are_strict_and_use_constants() {
         spawn["properties"]["title"]["maxLength"],
         crate::chat::agent::MAX_TITLE_CHARS
     );
+    assert_eq!(spawn["properties"]["role"]["type"], "string");
     assert_eq!(
-        spawn["properties"]["role"]["enum"],
-        serde_json::json!(["explorer", "executor"])
+        spawn["properties"]["role"]["maxLength"],
+        crate::chat::agent::MAX_ROLE_NAME_LEN
     );
+    assert!(spawn["properties"]["role"].get("enum").is_none());
+    assert_eq!(spawn["properties"]["fork_context"]["type"], "boolean");
+    assert_eq!(spawn["properties"]["fork_context"]["default"], false);
+    assert_eq!(spawn["properties"]["model"]["maxLength"], 128);
+    assert_eq!(spawn["properties"]["reasoning_effort"]["maxLength"], 64);
     assert_eq!(spawn["properties"]["task"]["maxLength"], MAX_TASK_CHARS);
     assert!(spawn["properties"]["items"].is_object());
+
+    let interrupt = spec("interrupt_agent");
+    assert_eq!(interrupt["additionalProperties"], false);
+    assert_eq!(interrupt["required"], serde_json::json!(["target"]));
 
     let wait = spec("wait_agent");
     assert_eq!(wait["additionalProperties"], false);
@@ -293,6 +304,44 @@ fn ask_schema_is_strict_and_documents_limits() {
             .expect("description")
             .contains(&crate::chat::tools::ask::MAX_ASK_HEADER_CHARS.to_string())
     );
+}
+
+#[test]
+fn turn_tools_with_subagents_injects_custom_roles_into_spawn() {
+    use crate::config::subagents::{BaseRole, CustomRoleConfig, SubagentsSection};
+
+    let section = SubagentsSection {
+        roles: vec![CustomRoleConfig {
+            name: "reviewer".into(),
+            base_role: BaseRole::Explorer,
+            description: "Strict security and regression reviewer.".into(),
+            system_prompt: "You are a reviewer.".into(),
+            model: None,
+            nickname_candidates: Vec::new(),
+        }],
+        ..SubagentsSection::default()
+    };
+    let decls = super::turn_tools_with_subagents(
+        crate::chat::agent::ToolSurface::Main,
+        &crate::mcp::McpToolSnapshot::default(),
+        Some(&section),
+    );
+    let spawn = decls
+        .iter()
+        .find(|decl| decl.name == "spawn_agent")
+        .expect("spawn_agent");
+    assert!(spawn.description.contains("`reviewer`"));
+    assert!(
+        spawn
+            .description
+            .contains("Strict security and regression reviewer.")
+    );
+    assert_eq!(
+        spawn.parameters["properties"]["role"]["enum"],
+        serde_json::json!(["explorer", "executor", "reviewer"])
+    );
+    let read = decls.iter().find(|decl| decl.name == "read").expect("read");
+    assert!(!read.description.contains("reviewer"));
 }
 
 #[test]

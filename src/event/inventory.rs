@@ -86,6 +86,9 @@ pub(crate) fn drain_settings_events(
                 super::chat::skills::invalidate_skill_cache();
                 *skills_reload = true;
             }
+            SettingsEvent::SubagentsChanged(subagents) => {
+                state.subagents_config = *subagents;
+            }
         }
         changed = true;
     }

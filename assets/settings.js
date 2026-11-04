@@ -22,8 +22,8 @@ function api(path, options) {
 
 function showTab(name) {
   resetWebSearchReveals();
-  const tabs = {general: 'tab-general', commands: 'tab-commands', model: 'tab-model', provider: 'tab-provider', mcp: 'tab-mcp', skills: 'tab-skills'};
-  const views = {general: 'view-general', commands: 'view-commands', model: 'view-model', provider: 'view-provider', mcp: 'view-mcp', skills: 'view-skills'};
+  const tabs = {general: 'tab-general', commands: 'tab-commands', model: 'tab-model', provider: 'tab-provider', mcp: 'tab-mcp', skills: 'tab-skills', subagents: 'tab-subagents'};
+  const views = {general: 'view-general', commands: 'view-commands', model: 'view-model', provider: 'view-provider', mcp: 'view-mcp', skills: 'view-skills', subagents: 'view-subagents'};
   for (const key of Object.keys(tabs)) {
     const active = key === name;
     document.getElementById(tabs[key]).classList.toggle('active', active);
@@ -38,6 +38,7 @@ function showTab(name) {
   }
   if (name === 'mcp' && (typeof mcpState === 'undefined' || mcpState === null)) { loadMcp(); }
   if (name === 'skills' && (typeof skillsState === 'undefined' || skillsState === null)) { loadSkills(); }
+  if (name === 'subagents' && (typeof subagentsState === 'undefined' || subagentsState === null)) { loadSubagents(); }
   refreshActionBars();
 }
 
@@ -230,7 +231,7 @@ function element(tag, className, text) {
 // 页面内不再有其它保存入口。状态圆点：绿=已保存，白=未保存，红=保存失败，灰脉冲=保存中。
 
 const actionBars = {};
-const TAB_KEYS = ['general', 'commands', 'model', 'provider', 'mcp', 'skills'];
+const TAB_KEYS = ['general', 'commands', 'model', 'provider', 'mcp', 'skills', 'subagents'];
 let settingsSaving = false;
 let settingsFailed = false;
 
@@ -323,6 +324,7 @@ function refreshActionBars() {
   if (typeof updateProviderDirtyDots === 'function') { updateProviderDirtyDots(); }
   if (typeof updateMcpDirtyDots === 'function') { updateMcpDirtyDots(); }
   if (typeof updateSkillDirtyDots === 'function') { updateSkillDirtyDots(); }
+  if (typeof updateSubagentDirtyDots === 'function') { updateSubagentDirtyDots(); }
   const dirtyMap = {};
   let anyDirty = false;
   for (const [key, bar] of Object.entries(actionBars)) {

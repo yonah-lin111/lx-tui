@@ -7,6 +7,7 @@ fn lx_with_report(body: &str) -> Lx {
     let mut message = message("assistant", "complete", Vec::new());
     message.reports.push(crate::app::state::SubagentReportView {
         agent_id: "sub-1".into(),
+        nickname: None,
         title: "report".into(),
         role: crate::chat::agent::AgentRole::Explorer,
         status: "completed".into(),
@@ -317,6 +318,7 @@ fn agent_link_wins_over_the_whole_card_fold_region() {
 
     let report = SubagentReportView {
         agent_id: "sub-1".into(),
+        nickname: None,
         title: "report".into(),
         role: crate::chat::agent::AgentRole::Explorer,
         status: "completed".into(),
@@ -331,10 +333,13 @@ fn agent_link_wins_over_the_whole_card_fold_region() {
     call.summary = None;
     call.detail = Some(Box::new(ToolDetailView::Subagent(SubagentDetailView {
         role: Some(crate::chat::agent::AgentRole::Explorer),
+        nickname: None,
         title: Some("report".into()),
         task: Some("investigate".into()),
         agent_id: Some("sub-1".into()),
         agent_status: Some("completed".into()),
+        model_label: None,
+        fork_context: false,
         targets: Vec::new(),
         all: false,
         mode: WaitMode::All,

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::chat::agent::AgentRole;
+use crate::chat::agent::{AgentRole, BaseRole};
 use crate::db::Database;
 use crate::db::chat::SESSION_PAGE_SIZE;
 use crate::db::chat::{ChatPart, ModelSnapshot, TurnOutcome};
@@ -788,6 +788,160 @@ fn queued_input_images_are_included_in_referenced_attachment_paths() {
         referenced.contains(&archive_path),
         "未处理队列中的归档图片必须纳入 GC 引用集"
     );
+    cleanup(fixture.root);
+}
+
+#[test]
+fn begin_with_options_persists_nickname_and_custom_role_and_resolves_by_nickname() {
+    let fixture = Fixture::new("nickname-role");
+    let parent = fixture.parent();
+    let role =
+        AgentRole::from_name_and_base("reviewer", Some(BaseRole::Explorer)).expect("reviewer");
+    let items = [PersistedInputItem::Text {
+        text: "review the diff".into(),
+    }];
+    let committed = fixture
+        .database
+        .begin_subagent_turn_with_options(
+            fixture.workspace(),
+            &parent,
+            None,
+            Some("Turing"),
+            role,
+            "review diff",
+            "review the diff",
+            &items,
+            &Fixture::model(),
+            None,
+            None,
+            None,
+            false,
+            &None,
+        )
+        .expect("spawn");
+
+    let record = fixture
+        .database
+        .list_subagents(fixture.workspace(), &parent)
+        .expect("list")[0]
+        .clone();
+    assert_eq!(record.nickname.as_deref(), Some("Turing"));
+    assert_eq!(record.role, role);
+    assert_eq!(record.role.base(), BaseRole::Explorer);
+    assert!(!record.role.is_builtin());
+
+    let (nickname, role_name, agent_path): (Option<String>, Option<String>, Option<String>) =
+        fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT agent_nickname, agent_role, agent_path FROM agent_session \
+                 WHERE external_id = ?1",
+                params![committed.child_session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("child session identity");
+    assert_eq!(nickname.as_deref(), Some("Turing"));
+    assert_eq!(role_name.as_deref(), Some("reviewer"));
+    assert_eq!(agent_path.as_deref(), Some("explorer"));
+
+    let by_id = fixture
+        .database
+        .resolve_owned_subagent(fixture.workspace(), &parent, &committed.agent_id)
+        .expect("resolve by id")
+        .expect("found by id");
+    assert_eq!(by_id.agent_id, committed.agent_id);
+
+    let by_nickname = fixture
+        .database
+        .resolve_owned_subagent(fixture.workspace(), &parent, "turing")
+        .expect("resolve by nickname")
+        .expect("found by nickname");
+    assert_eq!(by_nickname.agent_id, committed.agent_id);
+    assert_eq!(by_nickname.nickname.as_deref(), Some("Turing"));
+
+    assert!(
+        fixture
+            .database
+            .resolve_owned_subagent(fixture.workspace(), &parent, "missing")
+            .expect("resolve missing")
+            .is_none()
+    );
+    cleanup(fixture.root);
+}
+
+#[test]
+fn fork_context_clones_only_completed_turns_before_the_streaming_turn() {
+    let fixture = Fixture::new("fork-context");
+    let parent = fixture.parent();
+    // 父会话第二轮仍在 streaming：fork 只能看到上一轮已完成历史。
+    fixture
+        .database
+        .begin_turn(
+            fixture.workspace(),
+            Some(&parent),
+            "streaming question",
+            &Fixture::model(),
+        )
+        .expect("streaming parent turn");
+    let items = [PersistedInputItem::Text {
+        text: "child task".into(),
+    }];
+    let committed = fixture
+        .database
+        .begin_subagent_turn_with_options(
+            fixture.workspace(),
+            &parent,
+            None,
+            Some("Curie"),
+            AgentRole::Executor,
+            "child task",
+            "child task",
+            &items,
+            &Fixture::model(),
+            None,
+            None,
+            None,
+            true,
+            &None,
+        )
+        .expect("fork spawn");
+
+    let messages = fixture
+        .database
+        .load_chat_session(fixture.workspace(), &committed.child_session_id)
+        .expect("load")
+        .expect("child exists");
+    let summary: Vec<(i64, i64, &str, &str)> = messages
+        .iter()
+        .map(|message| {
+            (
+                message.sequence,
+                message.turn_index,
+                message.role.as_str(),
+                message
+                    .parts
+                    .first()
+                    .map(|part| part.content.as_str())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        vec![
+            (0, 0, "user", "parent question"),
+            (1, 0, "assistant", "parent answer"),
+            (2, 1, "user", "child task"),
+            (3, 1, "assistant", ""),
+        ]
+    );
+    assert!(messages.iter().all(|message| {
+        message
+            .parts
+            .iter()
+            .all(|part| part.content != "streaming question")
+    }));
     cleanup(fixture.root);
 }
 

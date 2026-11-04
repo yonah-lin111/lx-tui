@@ -31,6 +31,7 @@ fn verb(name: &str) -> &'static str {
     match name {
         "spawn_agent" => text::agent::VERB_TOOL_SPAWN_AGENT,
         "send_input" => text::agent::VERB_TOOL_SEND_INPUT,
+        "interrupt_agent" => text::agent::VERB_TOOL_INTERRUPT_AGENT,
         "resume_agent" => text::agent::VERB_TOOL_RESUME_AGENT,
         "wait_agent" => text::agent::VERB_TOOL_WAIT_AGENTS,
         "close_agent" => text::agent::VERB_TOOL_CLOSE_AGENT,
@@ -48,29 +49,36 @@ fn view(call: &ToolCallView) -> Option<&SubagentDetailView> {
     }
 }
 
-/// `agent名  title`；缺字段时按可用信息回退，不展示 task 原文。
+/// `Turing [explorer] · title`；无昵称时回退 `explorer · title`，不展示 task 原文。
 fn agent_line(view: &SubagentDetailView) -> String {
     let role = view.role.map_or("", |role| role.as_str());
+    let identity = crate::chat::agent::format_agent_identity(view.nickname.as_deref(), role);
     let title = view
         .title
         .as_deref()
         .map(|title| single_line(title, TEXT_SAMPLE_CHARS))
         .unwrap_or_default();
     let agent_id = view.agent_id.as_deref().unwrap_or_default();
-    let name = if role.is_empty() {
+    let name = if identity.is_empty() {
         if agent_id.is_empty() {
-            text::agent::AGENTS_LABEL
+            text::agent::AGENTS_LABEL.to_string()
         } else {
-            agent_id
+            agent_id.to_string()
         }
     } else {
-        role
+        identity
     };
-    if title.is_empty() {
-        name.to_string()
-    } else {
-        format!("{name}{}{title}", text::agent::SPAWN_ROLE_SEP)
+    let mut parts = vec![name];
+    if !title.is_empty() {
+        parts.push(title);
     }
+    if let Some(model) = view.model_label.as_deref().filter(|s| !s.is_empty()) {
+        parts.push(model.to_string());
+    }
+    if view.fork_context {
+        parts.push(text::agent::FORKED_CONTEXT_TAG.to_string());
+    }
+    parts.join(text::agent::SPAWN_ROLE_SEP)
 }
 
 /// wait 目标状态色：只保留绿 / 黄 / 红三档，不使用呼吸动画。
@@ -194,13 +202,23 @@ fn timeout_label(ms: u64) -> String {
     }
 }
 
-/// 目标行节点：`■ role  title`（静态状态色）。
+/// 目标行节点：`■ Turing [role] · title`（静态状态色）。
 fn target_node(view: &SubagentDetailView, agent_id: &str) -> Node {
-    let status = view.agents.iter().find(|agent| agent.agent_id == agent_id);
+    let status = view.agents.iter().find(|agent| {
+        agent.agent_id == agent_id
+            || agent
+                .nickname
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(agent_id))
+    });
     let color = status.map_or(WaitColor::Yellow, |agent| status_color(&agent.status));
     let body = match status {
         Some(agent) => {
-            let mut parts = vec![agent.role.as_str().to_string()];
+            let identity = crate::chat::agent::format_agent_identity(
+                agent.nickname.as_deref(),
+                agent.role.as_str(),
+            );
+            let mut parts = vec![identity];
             if !agent.title.is_empty() {
                 parts.push(agent.title.clone());
             }
@@ -292,8 +310,8 @@ fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
             }
         }
         _ => {
-            // close / send_input / resume_agent / cancel_agent_input：目标行 + 状态。
-            let target = if view.role.is_some() || view.title.is_some() {
+            // close / interrupt_agent / send_input / resume_agent / cancel_agent_input：目标行 + 状态。
+            let target = if view.role.is_some() || view.title.is_some() || view.nickname.is_some() {
                 agent_line(view)
             } else {
                 single_line(
@@ -304,6 +322,11 @@ fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
             built
                 .nodes
                 .push(Node::text(target, style::chat_tool_param()));
+            if let Some(agent_id) = view.agent_id.as_ref().filter(|s| !s.is_empty())
+                && call.name != "cancel_agent_input"
+            {
+                built.links.push((0, agent_id.clone()));
+            }
             if let Some(status) = &view.closed_status {
                 built.nodes.push(Node::text(
                     format!("{} {status}", text::agent::PREVIOUS_STATUS_LABEL),
@@ -456,10 +479,13 @@ mod tests {
     fn wait_view() -> SubagentDetailView {
         SubagentDetailView {
             role: None,
+            nickname: None,
             title: None,
             task: None,
             agent_id: None,
             agent_status: None,
+            model_label: None,
+            fork_context: false,
             targets: vec!["a1".into(), "a2".into()],
             all: false,
             mode: WaitMode::All,
@@ -468,6 +494,7 @@ mod tests {
             agents: vec![
                 AgentStatusView {
                     agent_id: "a1".into(),
+                    nickname: None,
                     title: "调查事件流".into(),
                     role: AgentRole::Explorer,
                     status: "completed".into(),
@@ -475,6 +502,7 @@ mod tests {
                 },
                 AgentStatusView {
                     agent_id: "a2".into(),
+                    nickname: None,
                     title: "检查存储层".into(),
                     role: AgentRole::Explorer,
                     status: "running".into(),
@@ -564,10 +592,13 @@ mod tests {
     fn spawn_and_close_use_role_dot_separator() {
         let spawn = SubagentDetailView {
             role: Some(AgentRole::Explorer),
+            nickname: None,
             title: Some("调查".into()),
             task: None,
             agent_id: Some("a1".into()),
             agent_status: Some("running".into()),
+            model_label: None,
+            fork_context: false,
             targets: Vec::new(),
             all: false,
             mode: WaitMode::All,
@@ -582,10 +613,13 @@ mod tests {
 
         let close = SubagentDetailView {
             role: None,
+            nickname: None,
             title: None,
             task: None,
             agent_id: Some("a1".into()),
             agent_status: None,
+            model_label: None,
+            fork_context: false,
             targets: Vec::new(),
             all: false,
             mode: WaitMode::All,
@@ -599,6 +633,62 @@ mod tests {
         assert!(text.contains("a1"), "{text}");
         assert!(!text.contains('·'), "{text}");
         assert!(text.contains("previous: running"), "{text}");
+    }
+
+    #[test]
+    fn spawn_card_shows_nickname_model_and_fork_tag() {
+        let spawn = SubagentDetailView {
+            role: Some(AgentRole::Explorer),
+            nickname: Some("Turing".into()),
+            title: Some("investigate event flow".into()),
+            task: None,
+            agent_id: Some("a1".into()),
+            agent_status: Some("running".into()),
+            model_label: Some("openai/gpt-4.1-mini (low)".into()),
+            fork_context: true,
+            targets: Vec::new(),
+            all: false,
+            mode: WaitMode::All,
+            timeout_ms: None,
+            timed_out: false,
+            agents: Vec::new(),
+            report: None,
+            closed_status: None,
+        };
+        let text = flat(&call("spawn_agent", spawn), 100, false);
+        assert!(
+            text.contains(
+                "Turing [explorer] · investigate event flow · \
+                 openai/gpt-4.1-mini (low) · forked"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn interrupt_card_shows_previous_status_and_paused_inputs() {
+        let interrupt = SubagentDetailView {
+            role: None,
+            nickname: Some("Turing".into()),
+            title: None,
+            task: None,
+            agent_id: Some("a1".into()),
+            agent_status: None,
+            model_label: None,
+            fork_context: false,
+            targets: Vec::new(),
+            all: false,
+            mode: WaitMode::All,
+            timeout_ms: None,
+            timed_out: false,
+            agents: Vec::new(),
+            report: None,
+            closed_status: Some("was running · 1 paused".into()),
+        };
+        let text = flat(&call("interrupt_agent", interrupt), 60, false);
+        assert!(text.contains("Interrupt agent"), "{text}");
+        assert!(text.contains("Turing"), "{text}");
+        assert!(text.contains("previous: was running · 1 paused"), "{text}");
     }
 
     #[test]

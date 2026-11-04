@@ -9,6 +9,8 @@ use super::{AgentRole, MAX_REPORT_BYTES};
 pub struct SubagentReportView {
     /// 稳定 agent id。
     pub agent_id: String,
+    /// 可选唯一昵称（如 `"Turing"`；旧记录为 None）。
+    pub nickname: Option<String>,
     /// 面向用户的短标题；旧记录为空。
     pub title: String,
     /// 角色。
@@ -32,7 +34,7 @@ impl SubagentReportView {
     }
 
     fn to_value(&self) -> Value {
-        json!({
+        let mut obj = json!({
             "agent_id": self.agent_id,
             "title": self.title,
             "role": self.role.as_str(),
@@ -41,7 +43,13 @@ impl SubagentReportView {
             "duration_ms": self.duration_ms,
             "body": self.body,
             "delivered_at_ms": self.delivered_at_ms,
-        })
+        });
+        if let Some(nickname) = self.nickname.as_deref().filter(|s| !s.is_empty())
+            && let Some(map) = obj.as_object_mut()
+        {
+            map.insert("nickname".to_string(), Value::String(nickname.to_string()));
+        }
+        obj
     }
 
     /// 从落库 JSON 还原单条报告；损坏返回 None。
@@ -53,6 +61,12 @@ impl SubagentReportView {
     fn from_value(value: &Value) -> Option<Self> {
         Some(Self {
             agent_id: value.get("agent_id")?.as_str()?.to_string(),
+            nickname: value
+                .get("nickname")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
             title: value
                 .get("title")
                 .and_then(Value::as_str)
@@ -101,9 +115,16 @@ pub fn format_report_envelope(report: &SubagentReportView) -> String {
         .duration_ms
         .map(|value| format!("{value}"))
         .unwrap_or_else(|| "unknown".to_string());
+    let nickname_attr = report
+        .nickname
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(|nick| format!(" nickname=\"{}\"", escape_attribute(nick.trim())))
+        .unwrap_or_default();
     format!(
-        "<subagent_report agent_id=\"{}\" title=\"{}\" role=\"{}\" status=\"{}\" files_changed=\"{}\" duration_ms=\"{}\">\n{}\n</subagent_report>",
+        "<subagent_report agent_id=\"{}\"{} title=\"{}\" role=\"{}\" status=\"{}\" files_changed=\"{}\" duration_ms=\"{}\">\n{}\n</subagent_report>",
         escape_attribute(&report.agent_id),
+        nickname_attr,
         escape_attribute(&report.title),
         report.role.as_str(),
         escape_attribute(&report.status),

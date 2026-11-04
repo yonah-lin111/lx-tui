@@ -23,6 +23,7 @@ fn processes_page(scroll: usize) -> crate::app::state::TaskPage {
 fn agent_run(follow: bool) -> crate::app::state::SubagentRun {
     let mut run = crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
         agent_id: "a1".into(),
+        nickname: None,
         child_session_id: "s1".into(),
         parent_session_id: "sess-1".into(),
         spawn_message_id: None,
@@ -207,6 +208,7 @@ fn reloaded_message_subtracts_ask_tool_waiting_duration() {
         .push(crate::app::state::SubagentRun::from_record(
             &crate::db::chat::SubagentRecord {
                 agent_id: "a1".into(),
+                nickname: None,
                 child_session_id: "s1".into(),
                 parent_session_id: "sess-1".into(),
                 spawn_message_id: None,

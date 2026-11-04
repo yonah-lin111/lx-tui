@@ -11,8 +11,10 @@ use crate::chat::tools::ToolExecutionResult;
 pub mod exec;
 mod instructions;
 mod model_switch;
+mod nickname;
 mod parse;
 mod report;
+mod role;
 
 pub use instructions::{
     AGENTS_MD_SEPARATOR, CANDIDATE_AGENT_FILENAMES, DEFAULT_AGENTS_MD_FILENAME,
@@ -23,74 +25,32 @@ pub use model_switch::{
     ModelIdentity, SOURCE_CORE_AGENTS_MD, SOURCE_CORE_MODEL, SOURCE_CORE_REASONING_EFFORT,
     compute_updated_sources, render_model_switch_update, wrap_system_update,
 };
+pub use nickname::{DEFAULT_NICKNAME_CANDIDATES, allocate_nickname, format_agent_identity};
 pub use parse::parse_control;
 pub use report::{
     SubagentReportView, format_report_envelope, reports_from_json, reports_to_json,
     truncate_report_body,
 };
+pub use role::{AgentRole, BaseRole, MAX_ROLE_NAME_LEN, is_valid_role_name};
 
 #[cfg(test)]
 mod tests;
 
-/// 内置子 agent 角色。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentRole {
-    /// 只读调查：`read` / `search` / `web_search`。
-    Explorer,
-    /// 有边界的实现：文件、进程与联网检索工具，无 `ask`、无计划槽、无递归。
-    Executor,
-}
-
-impl AgentRole {
-    /// 全部角色（固定顺序）。
-    pub const ALL: [AgentRole; 2] = [Self::Explorer, Self::Executor];
-
-    /// 稳定存储/协议值：`explorer` / `executor`。
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Explorer => "explorer",
-            Self::Executor => "executor",
-        }
-    }
-
-    /// 解析稳定值；未知值返回 None。
-    pub fn parse(text: &str) -> Option<Self> {
-        match text {
-            "explorer" => Some(Self::Explorer),
-            "executor" => Some(Self::Executor),
-            _ => None,
-        }
-    }
-
-    /// 角色系统提示（英文，见 `docs/feature/lx-subagent/design.md` §7）。
-    pub const fn system_prompt(self) -> &'static str {
-        match self {
-            Self::Explorer => EXPLORER_PROMPT,
-            Self::Executor => EXECUTOR_PROMPT,
-        }
-    }
-
-    /// 该角色可用工具名白名单。
-    pub const fn tools(self) -> &'static [&'static str] {
-        ToolSurface::from_role(self).names()
-    }
-}
-
 /// 工具面：决定一次请求声明哪些工具。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSurface {
-    /// 主 agent：现有内置工具 + 7 个控制工具。
+    /// 主 agent：现有内置工具 + 8 个控制工具。
     Main,
     /// 只读调查。
     Explorer,
     /// 有边界的实现。
     Executor,
-    /// CLI exec 无头主 agent：剔除交互式 ask 后的全部主工具（16 项）。
+    /// CLI exec 无头主 agent：剔除交互式 ask 后的全部主工具（17 项）。
     ExecMain,
 }
 
 /// 主 agent 工具名（顺序即呈现顺序）。
-const MAIN_TOOLS: [&str; 17] = [
+const MAIN_TOOLS: [&str; 18] = [
     "read",
     "search",
     "web_search",
@@ -103,6 +63,7 @@ const MAIN_TOOLS: [&str; 17] = [
     "curr_time",
     "spawn_agent",
     "send_input",
+    "interrupt_agent",
     "resume_agent",
     "wait_agent",
     "close_agent",
@@ -111,7 +72,7 @@ const MAIN_TOOLS: [&str; 17] = [
 ];
 
 /// exec 无头主 agent 工具名：`MAIN_TOOLS` 去掉交互式 `ask`，顺序保持一致。
-const EXEC_MAIN_TOOLS: [&str; 16] = [
+const EXEC_MAIN_TOOLS: [&str; 17] = [
     "read",
     "search",
     "web_search",
@@ -123,6 +84,7 @@ const EXEC_MAIN_TOOLS: [&str; 16] = [
     "curr_time",
     "spawn_agent",
     "send_input",
+    "interrupt_agent",
     "resume_agent",
     "wait_agent",
     "close_agent",
@@ -155,11 +117,11 @@ impl ToolSurface {
         }
     }
 
-    /// 角色对应的工具面。
+    /// 角色对应的工具面（由底层 `BaseRole` 决定）。
     pub const fn from_role(role: AgentRole) -> Self {
-        match role {
-            AgentRole::Explorer => Self::Explorer,
-            AgentRole::Executor => Self::Executor,
+        match role.base() {
+            BaseRole::Explorer => Self::Explorer,
+            BaseRole::Executor => Self::Executor,
         }
     }
 }
@@ -269,6 +231,7 @@ pub fn joined_input_text(items: &[SubagentInputItem]) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentListItemView {
     pub agent_id: String,
+    pub nickname: Option<String>,
     pub role: AgentRole,
     pub title: String,
     pub status: String,
@@ -286,6 +249,12 @@ pub enum SubagentOp {
         task: String,
         /// 有序结构化输入项（旧 `task` 参数走单条 `Text`）。
         items: Vec<SubagentInputItem>,
+        /// 是否克隆父会话当前流式轮次之前的已完成历史。
+        fork_context: bool,
+        /// 可选模型覆写（`"provider/model"` 或 `"model"`）。
+        model: Option<String>,
+        /// 可选思考等级覆写（对应模型 `variants` key）。
+        reasoning_effort: Option<String>,
     },
     /// 向已恢复或运行中的子 agent 发送输入（持久排队或插队中断当前轮）。
     SendInput {
@@ -293,6 +262,8 @@ pub enum SubagentOp {
         items: Vec<SubagentInputItem>,
         interrupt: bool,
     },
+    /// 中断正在运行的子 agent 当前轮次，保留其 `idle` 活动态并暂停消费后续排队输入。
+    Interrupt { target: String },
     /// 显式恢复终态或重启后的子 agent。
     Resume { id: String },
     /// 等待子 agent 结束（或超时）。`targets` 为空表示等待本会话全部
@@ -316,8 +287,12 @@ pub enum SubagentOutcome {
     /// 已派发（不等待）。
     Spawned {
         agent_id: String,
+        nickname: Option<String>,
         role: AgentRole,
         title: String,
+        model: Option<String>,
+        reasoning_effort: Option<String>,
+        fork_context: bool,
     },
     /// 输入已持久接收并入队（或立即启动）。
     InputAccepted {
@@ -326,6 +301,13 @@ pub enum SubagentOutcome {
         status: String,
         queued_count: usize,
         interrupt: bool,
+    },
+    /// 已中断当前正在运行的轮次（保留半截输出、保持 `idle` 且暂停后续队列自动消费）。
+    Interrupted {
+        agent_id: String,
+        nickname: Option<String>,
+        previous_status: String,
+        queued_count: usize,
     },
     /// 子 agent 已显式恢复。
     Resumed {
@@ -363,6 +345,8 @@ pub enum SubagentOutcome {
 pub struct AgentStatusView {
     /// 稳定 agent id。
     pub agent_id: String,
+    /// 可选唯一昵称。
+    pub nickname: Option<String>,
     /// 面向用户的短标题；旧记录可能为空。
     pub title: String,
     /// 角色。
@@ -379,6 +363,7 @@ impl SubagentOutcome {
         match self {
             Self::Spawned { .. } => "spawn_agent",
             Self::InputAccepted { .. } => "send_input",
+            Self::Interrupted { .. } => "interrupt_agent",
             Self::Resumed { .. } => "resume_agent",
             Self::Waited { .. } => "wait_agent",
             Self::Closed { .. } => "close_agent",
@@ -392,14 +377,35 @@ impl SubagentOutcome {
         match self {
             Self::Spawned {
                 agent_id,
+                nickname,
                 role,
                 title,
-            } => json!({
-                "tool": "spawn_agent",
-                "agent_id": agent_id,
-                "role": role.as_str(),
-                "title": title,
-            }),
+                model,
+                reasoning_effort,
+                fork_context,
+            } => {
+                let mut obj = json!({
+                    "tool": "spawn_agent",
+                    "agent_id": agent_id,
+                    "role": role.as_str(),
+                    "title": title,
+                });
+                if let Some(map) = obj.as_object_mut() {
+                    if let Some(nick) = nickname.as_deref().filter(|s| !s.is_empty()) {
+                        map.insert("nickname".into(), Value::String(nick.to_string()));
+                    }
+                    if let Some(m) = model.as_deref().filter(|s| !s.is_empty()) {
+                        map.insert("model".into(), Value::String(m.to_string()));
+                    }
+                    if let Some(effort) = reasoning_effort.as_deref().filter(|s| !s.is_empty()) {
+                        map.insert("reasoning_effort".into(), Value::String(effort.to_string()));
+                    }
+                    if *fork_context {
+                        map.insert("fork_context".into(), Value::Bool(true));
+                    }
+                }
+                obj
+            }
             Self::InputAccepted {
                 submission_id,
                 agent_id,
@@ -414,6 +420,25 @@ impl SubagentOutcome {
                 "queued_count": queued_count,
                 "interrupt": interrupt,
             }),
+            Self::Interrupted {
+                agent_id,
+                nickname,
+                previous_status,
+                queued_count,
+            } => {
+                let mut obj = json!({
+                    "tool": "interrupt_agent",
+                    "agent_id": agent_id,
+                    "previous_status": previous_status,
+                    "queued_count": queued_count,
+                });
+                if let Some(nick) = nickname.as_deref().filter(|s| !s.is_empty())
+                    && let Some(map) = obj.as_object_mut()
+                {
+                    map.insert("nickname".into(), Value::String(nick.to_string()));
+                }
+                obj
+            }
             Self::Resumed {
                 agent_id,
                 status,
@@ -436,13 +461,21 @@ impl SubagentOutcome {
                 "wait_for": mode.as_str(),
                 "agents": agents
                     .iter()
-                    .map(|agent| json!({
-                        "agent_id": agent.agent_id,
-                        "title": agent.title,
-                        "role": agent.role.as_str(),
-                        "status": agent.status,
-                        "report": agent.report,
-                    }))
+                    .map(|agent| {
+                        let mut item = json!({
+                            "agent_id": agent.agent_id,
+                            "title": agent.title,
+                            "role": agent.role.as_str(),
+                            "status": agent.status,
+                            "report": agent.report,
+                        });
+                        if let Some(nick) = agent.nickname.as_deref().filter(|s| !s.is_empty())
+                            && let Some(map) = item.as_object_mut()
+                        {
+                            map.insert("nickname".into(), Value::String(nick.to_string()));
+                        }
+                        item
+                    })
                     .collect::<Vec<_>>(),
             }),
             Self::Closed {
@@ -457,13 +490,21 @@ impl SubagentOutcome {
                 "tool": "list_agents",
                 "agents": agents
                     .iter()
-                    .map(|agent| json!({
-                        "agent_id": agent.agent_id,
-                        "role": agent.role.as_str(),
-                        "title": agent.title,
-                        "status": agent.status,
-                        "queued_count": agent.queued_count,
-                    }))
+                    .map(|agent| {
+                        let mut item = json!({
+                            "agent_id": agent.agent_id,
+                            "role": agent.role.as_str(),
+                            "title": agent.title,
+                            "status": agent.status,
+                            "queued_count": agent.queued_count,
+                        });
+                        if let Some(nick) = agent.nickname.as_deref().filter(|s| !s.is_empty())
+                            && let Some(map) = item.as_object_mut()
+                        {
+                            map.insert("nickname".into(), Value::String(nick.to_string()));
+                        }
+                        item
+                    })
                     .collect::<Vec<_>>(),
             }),
             Self::InputCancelled {
@@ -486,12 +527,31 @@ impl SubagentOutcome {
         match value.get("tool").and_then(Value::as_str)? {
             "spawn_agent" => Some(Self::Spawned {
                 agent_id: value.get("agent_id")?.as_str()?.to_string(),
+                nickname: value
+                    .get("nickname")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
                 role: AgentRole::parse(value.get("role")?.as_str()?)?,
                 title: value
                     .get("title")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
+                model: value
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                reasoning_effort: value
+                    .get("reasoning_effort")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                fork_context: value
+                    .get("fork_context")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             }),
             "send_input" => Some(Self::InputAccepted {
                 submission_id: value.get("submission_id")?.as_str()?.to_string(),
@@ -508,6 +568,26 @@ impl SubagentOutcome {
                     .get("interrupt")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+            }),
+            "interrupt_agent" => Some(Self::Interrupted {
+                agent_id: value.get("agent_id")?.as_str()?.to_string(),
+                nickname: value
+                    .get("nickname")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                previous_status: value
+                    .get("previous_status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("running")
+                    .to_string(),
+                queued_count: usize::try_from(
+                    value
+                        .get("queued_count")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                )
+                .unwrap_or(0),
             }),
             "resume_agent" => Some(Self::Resumed {
                 agent_id: value.get("agent_id")?.as_str()?.to_string(),
@@ -526,6 +606,11 @@ impl SubagentOutcome {
                 for agent in agents {
                     parsed.push(AgentStatusView {
                         agent_id: agent.get("agent_id")?.as_str()?.to_string(),
+                        nickname: agent
+                            .get("nickname")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string),
                         title: agent
                             .get("title")
                             .and_then(Value::as_str)
@@ -561,6 +646,11 @@ impl SubagentOutcome {
                 for entry in entries {
                     agents.push(AgentListItemView {
                         agent_id: entry.get("agent_id")?.as_str()?.to_string(),
+                        nickname: entry
+                            .get("nickname")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string),
                         role: AgentRole::parse(entry.get("role")?.as_str()?)?,
                         title: entry
                             .get("title")
@@ -612,11 +702,20 @@ pub fn compose_subagent_prompt(
     role: AgentRole,
     parts: crate::chat::prompt::PromptParts<'_>,
 ) -> String {
-    format!(
-        "{}\n\n{}\n",
-        role.system_prompt(),
-        parts.render_tail_with(false)
-    )
+    compose_subagent_prompt_with_override(role, None, parts)
+}
+
+/// 子 agent 系统提示（支持传入设置页覆写或自定义角色的系统提示词）。
+pub fn compose_subagent_prompt_with_override(
+    role: AgentRole,
+    custom_prompt: Option<&str>,
+    parts: crate::chat::prompt::PromptParts<'_>,
+) -> String {
+    let head = custom_prompt
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| role.system_prompt());
+    format!("{head}\n\n{}\n", parts.render_tail_with(false))
 }
 
 /// explorer 角色提示。

@@ -75,6 +75,7 @@ fn fork_panel_excludes_subagent_report_messages() {
             .reports
             .push(crate::chat::agent::SubagentReportView {
                 agent_id: "agent-1".into(),
+                nickname: None,
                 title: "report".into(),
                 role: crate::chat::agent::AgentRole::Explorer,
                 status: "completed".into(),

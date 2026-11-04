@@ -146,8 +146,12 @@ pub struct ChatStreams {
     pub(crate) resumed_subagents: std::collections::HashSet<String>,
     /// 因 `send_input(interrupt=true)` 正在中断当前轮、封口后需立即消费新输入的 `agent_id` 集合。
     pub(crate) interrupted_subagents: std::collections::HashSet<String>,
+    /// 因 `interrupt_agent` 正在中断当前轮、封口后保持 `idle` 且暂停自动消费队列的 `agent_id` 集合。
+    pub(crate) paused_by_interrupt: std::collections::HashSet<String>,
     /// spawn 时冻结的模型（父会话与子会话各登记一份）。
     pub(crate) frozen: HashMap<String, crate::app::state::FrozenModel>,
+    /// 显式覆写或角色绑定了专属模型的子会话（`child_session_id -> FrozenModel`）。
+    pub(crate) pinned_subagent_models: HashMap<String, crate::app::state::FrozenModel>,
 }
 
 /// 一次等待作答的提问：回执通道 + 归属用的 `call_id`。
@@ -637,10 +641,12 @@ fn start_stream(
             &model_switches,
             &skill_blocks,
         );
-        assembled.request.tools = std::sync::Arc::new(crate::chat::tools::turn_tools(
-            crate::chat::agent::ToolSurface::Main,
-            &mcp_snapshot,
-        ));
+        assembled.request.tools =
+            std::sync::Arc::new(crate::chat::tools::turn_tools_with_subagents(
+                crate::chat::agent::ToolSurface::Main,
+                &mcp_snapshot,
+                Some(&state.subagents_config),
+            ));
         // 计划快照先克隆：运行上下文摘要要在后面的可变借用窗外拼装。
         let current_plan = pane.lx.chat.plan.clone();
         (

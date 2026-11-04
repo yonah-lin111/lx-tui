@@ -158,12 +158,11 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         let mark_w = u16::try_from(mark_text.width()).unwrap_or(2);
         grid.put_clipped(row_x, y, &mark_text, mark_style, row_w);
         let mut x = row_x.saturating_add(mark_w);
-        // 角色 / 状态 / 时长三段固定宽度优先；task 吃掉剩余。
+        // 身份（昵称 + 角色） / 状态 / 时长三段固定宽度优先；title 吃掉剩余。
         let age = crate::app::state::lx::task::age_label(run.elapsed_ms(now));
         let age_w = u16::try_from(age.width()).unwrap_or(0);
-        let role_w = u16::try_from(run.role.as_str().width())
-            .unwrap_or(0)
-            .max(ROLE_MIN);
+        let identity = run.display_identity();
+        let role_w = u16::try_from(identity.width()).unwrap_or(0).max(ROLE_MIN);
         let status_label = text::agent_status_with_queue(&run.status, run.queued_count);
         let status_w = u16::try_from(status_label.width())
             .unwrap_or(0)
@@ -174,12 +173,12 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
             .saturating_add(CELL_GAP)
             .saturating_add(age_w)
             .saturating_add(CELL_GAP);
-        // 窄窗格：放不下角色 + 状态就整项丢弃（只留标记，与进程行同一规则）。
+        // 窄窗格：放不下身份 + 状态就整项丢弃（只留标记，与进程行同一规则）。
         if fixed.saturating_add(ROLE_MIN) > row_w {
             continue;
         }
         let role_right = x.saturating_add(role_w);
-        grid.put_clipped(x, y, run.role.as_str(), row_style, role_right);
+        grid.put_clipped(x, y, &identity, row_style, role_right);
         x = role_right.saturating_add(CELL_GAP);
         let status_right = x.saturating_add(status_w);
         let status_style = match run.status.as_str() {

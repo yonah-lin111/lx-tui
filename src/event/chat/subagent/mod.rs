@@ -12,6 +12,7 @@ use tokio::sync::{oneshot, watch};
 use super::*;
 
 mod context;
+mod model_resolve;
 mod runner;
 mod settle;
 #[cfg(test)]
@@ -59,6 +60,8 @@ pub(crate) struct SubagentHandle {
     pub parent: RequestKey,
     /// 稳定 agent id。
     pub agent_id: String,
+    /// 可选唯一昵称。
+    pub nickname: Option<String>,
     /// 子会话 external id。
     pub child_session_id: String,
     /// 当前子轮落库的 assistant 行（子 turn 工具归属校验的锚点）。
@@ -141,6 +144,9 @@ pub(crate) fn handle_subagent_op_with_call(
             title,
             task,
             items,
+            fork_context,
+            model,
+            reasoning_effort,
         } => {
             let effective_items = if items.is_empty() {
                 vec![SubagentInputItem::Text { text: task.clone() }]
@@ -157,6 +163,9 @@ pub(crate) fn handle_subagent_op_with_call(
                 &title,
                 &task,
                 &effective_items,
+                fork_context,
+                model.as_deref(),
+                reasoning_effort.as_deref(),
             );
             match result {
                 Ok(outcome) => {
@@ -192,6 +201,12 @@ pub(crate) fn handle_subagent_op_with_call(
                     let _ = reply.send(Err(HostError::Failed { code }));
                 }
             }
+            changed
+        }
+        SubagentOp::Interrupt { target } => {
+            let result = interrupt(state, streams, persistence, &key, &target);
+            let changed = result.is_ok();
+            let _ = reply.send(result);
             changed
         }
         SubagentOp::Resume { id } => {
@@ -247,6 +262,69 @@ pub(crate) fn handle_subagent_op_with_call(
     }
 }
 
+/// `interrupt_agent`：中止正在运行的轮次并保留已生成内容，维持 `idle` 活动态且暂停消费后续队列。
+fn interrupt(
+    _state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+    key: &RequestKey,
+    target: &str,
+) -> Result<SubagentOutcome, HostError> {
+    let Some(database) = persistence.database() else {
+        return Err(HostError::Failed {
+            code: NOT_FOUND_CODE.to_string(),
+        });
+    };
+    let Some(workspace) = streams.db_workspaces.get(key).cloned() else {
+        return Err(HostError::Failed {
+            code: NOT_FOUND_CODE.to_string(),
+        });
+    };
+    let Ok(Some(record)) = database.resolve_owned_subagent(&workspace, &key.session, target) else {
+        return Err(HostError::Failed {
+            code: NOT_FOUND_CODE.to_string(),
+        });
+    };
+    let canonical_id = record.agent_id.clone();
+    let queued_count = database
+        .subagent_queue_states(&workspace, &key.session)
+        .ok()
+        .and_then(|map| map.get(&canonical_id).map(|q| q.queued_count))
+        .unwrap_or(0);
+
+    if let Some(handle) = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == canonical_id && handle.parent.session == key.session)
+        && handle.status == STATUS_RUNNING
+    {
+        streams.paused_by_interrupt.insert(canonical_id.clone());
+        streams.resumed_subagents.insert(canonical_id.clone());
+        streams.interrupted_subagents.remove(&canonical_id);
+        let _ = handle.cancel.send(true);
+        return Ok(SubagentOutcome::Interrupted {
+            agent_id: canonical_id,
+            nickname: record.nickname,
+            previous_status: STATUS_RUNNING.to_string(),
+            queued_count,
+        });
+    }
+
+    if streams.resumed_subagents.contains(&canonical_id) {
+        streams.paused_by_interrupt.insert(canonical_id.clone());
+        return Ok(SubagentOutcome::Interrupted {
+            agent_id: canonical_id,
+            nickname: record.nickname,
+            previous_status: STATUS_IDLE.to_string(),
+            queued_count,
+        });
+    }
+
+    Err(HostError::Failed {
+        code: crate::chat::agent::NOT_ACTIVE_CODE.to_string(),
+    })
+}
+
 /// close：关闭活动运行或 idle 身份，保留子会话、队列和历史（后续可 `resume_agent`）。
 fn close(
     state: &mut AppState,
@@ -255,26 +333,44 @@ fn close(
     key: &RequestKey,
     target: &str,
 ) -> Result<SubagentOutcome, HostError> {
-    if let Some(handle) = streams
-        .subagents
-        .values()
-        .find(|handle| handle.agent_id == target && handle.parent.session == key.session)
-    {
+    let resolved_id = persistence
+        .database()
+        .and_then(|db| {
+            streams.db_workspaces.get(key).and_then(|ws| {
+                db.resolve_owned_subagent(ws, &key.session, target)
+                    .ok()
+                    .flatten()
+                    .map(|r| r.agent_id)
+            })
+        })
+        .unwrap_or_else(|| target.to_string());
+    let target = resolved_id.as_str();
+
+    if let Some(handle) = streams.subagents.values().find(|handle| {
+        (handle.agent_id == target
+            || handle
+                .nickname
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(target)))
+            && handle.parent.session == key.session
+    }) {
+        let canonical_id = handle.agent_id.clone();
         let previous = handle.status.to_string();
         if handle.status != STATUS_RUNNING {
             return Err(HostError::Failed {
                 code: FINISHED_CODE.to_string(),
             });
         }
-        streams.resumed_subagents.remove(target);
-        streams.interrupted_subagents.remove(target);
+        streams.resumed_subagents.remove(&canonical_id);
+        streams.interrupted_subagents.remove(&canonical_id);
+        streams.paused_by_interrupt.remove(&canonical_id);
         if handle.cancel.send(true).is_err() {
             return Err(HostError::Failed {
                 code: FINISHED_CODE.to_string(),
             });
         }
         return Ok(SubagentOutcome::Closed {
-            agent_id: target.to_string(),
+            agent_id: canonical_id,
             previous_status: previous,
         });
     }
@@ -288,32 +384,33 @@ fn close(
             code: NOT_FOUND_CODE.to_string(),
         });
     };
-    let Ok(Some(record)) = database.owned_subagent(&workspace, &key.session, target) else {
+    let Ok(Some(record)) = database.resolve_owned_subagent(&workspace, &key.session, target) else {
         return Err(HostError::Failed {
             code: NOT_FOUND_CODE.to_string(),
         });
     };
-    if streams.resumed_subagents.remove(target) {
-        streams.interrupted_subagents.remove(target);
+    let canonical_id = record.agent_id;
+    if streams.resumed_subagents.remove(&canonical_id) {
+        streams.interrupted_subagents.remove(&canonical_id);
+        streams.paused_by_interrupt.remove(&canonical_id);
         let _ = database.finish_input(
             &workspace,
             &key.session,
-            target,
+            &canonical_id,
             None,
             STATUS_CANCELLED,
             None,
         );
         if let Some(pane) = state.pane_mut_anywhere(key.pane)
-            && let Some(run) = pane.lx.agents.by_agent_mut(target)
+            && let Some(run) = pane.lx.agents.by_agent_mut(&canonical_id)
         {
             run.status = STATUS_CANCELLED.to_string();
         }
         return Ok(SubagentOutcome::Closed {
-            agent_id: target.to_string(),
+            agent_id: canonical_id,
             previous_status: STATUS_IDLE.to_string(),
         });
     }
-    let _ = record;
     Err(HostError::Failed {
         code: FINISHED_CODE.to_string(),
     })
@@ -349,6 +446,7 @@ fn list_agents(
             let q = queue_states.get(&record.agent_id);
             AgentListItemView {
                 agent_id: record.agent_id.clone(),
+                nickname: record.nickname.clone(),
                 role: record.role,
                 title: record.title.clone(),
                 status: projected_agent_status(streams, record, q),

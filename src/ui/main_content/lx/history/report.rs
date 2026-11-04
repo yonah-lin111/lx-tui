@@ -51,13 +51,14 @@ fn verb_style(status: &str) -> ratatui::style::Style {
     }
 }
 
-/// `agent名 · title`（不显示 task 提示词）。
+/// `Turing [explorer] · title`（无昵称时回退 `explorer · title`，不显示 task 提示词）。
 fn agent_line(report: &SubagentReportView) -> String {
-    let role = report.role.as_str();
+    let identity =
+        crate::chat::agent::format_agent_identity(report.nickname.as_deref(), report.role.as_str());
     if report.title.is_empty() {
-        role.to_string()
+        identity
     } else {
-        format!("{role}{}{}", text::agent::SPAWN_ROLE_SEP, report.title)
+        format!("{identity}{}{}", text::agent::SPAWN_ROLE_SEP, report.title)
     }
 }
 
@@ -267,6 +268,7 @@ mod tests {
     fn report(body: &str) -> SubagentReportView {
         SubagentReportView {
             agent_id: "sub-1".into(),
+            nickname: None,
             title: "test title".into(),
             role: crate::chat::agent::AgentRole::Explorer,
             status: "completed".into(),
@@ -334,6 +336,23 @@ mod tests {
             "汇报头必须带自己的标题：{line}"
         );
         assert!(!line.contains("任务提示词"), "{line}");
+    }
+
+    #[test]
+    fn nickname_renders_in_the_report_header() {
+        let report = SubagentReportView {
+            nickname: Some("Curie".into()),
+            ..report("body")
+        };
+        let area = Rect::new(0, 0, 60, 10);
+        let mut grid = Grid::new(area);
+        let mut row = 0;
+        draw(&mut grid, area, &report, 0, &mut row, 0, false, false, 0);
+        let header: String = (0..60).map(|x| grid.cell(x, 1).ch).collect();
+        assert!(
+            header.contains("Curie [explorer] · test title"),
+            "汇报头显示昵称与角色：{header}"
+        );
     }
 
     #[test]

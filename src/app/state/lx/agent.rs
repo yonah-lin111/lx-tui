@@ -18,6 +18,8 @@ use crate::chat::events::PartKind;
 pub struct SubagentRun {
     /// 稳定 agent id。
     pub agent_id: String,
+    /// 可选唯一昵称（如 `"Turing"`；旧记录为 None）。
+    pub nickname: Option<String>,
     /// 子会话 external id（delta/工具回投的定位键）。
     pub child_session_id: String,
     /// 父会话 external id：切会话后拒绝迟到回投把旧 run 塞进新会话。
@@ -65,6 +67,7 @@ impl SubagentRun {
     pub fn from_record(record: &SubagentRecord) -> Self {
         Self {
             agent_id: record.agent_id.clone(),
+            nickname: record.nickname.clone(),
             child_session_id: record.child_session_id.clone(),
             parent_session_id: record.parent_session_id.clone(),
             role: record.role,
@@ -110,6 +113,11 @@ impl SubagentRun {
         } else {
             self.title.as_str()
         }
+    }
+
+    /// 列表与卡片可读身份：`Turing [explorer]`（无昵称时回退 `explorer`）。
+    pub fn display_identity(&self) -> String {
+        crate::chat::agent::format_agent_identity(self.nickname.as_deref(), self.role.as_str())
     }
 }
 

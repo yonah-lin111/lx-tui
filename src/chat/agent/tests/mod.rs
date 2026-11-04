@@ -28,7 +28,18 @@ fn role_parse_roundtrips_and_rejects_unknown() {
     }
     assert_eq!(AgentRole::parse(""), None);
     assert_eq!(AgentRole::parse("Explorer"), None);
-    assert_eq!(AgentRole::parse("planner"), None);
+    assert_eq!(AgentRole::parse("1bad"), None);
+    assert_eq!(AgentRole::parse("bad-name"), None);
+    let planner = AgentRole::parse("planner").expect("custom role");
+    assert_eq!(planner.as_str(), "planner");
+    assert_eq!(planner.base(), BaseRole::Explorer);
+    assert!(!planner.is_builtin());
+    assert!(!has_cjk(planner.system_prompt()));
+    let reviewer =
+        AgentRole::from_name_and_base("reviewer", Some(BaseRole::Executor)).expect("reviewer");
+    assert_eq!(reviewer.as_str(), "reviewer");
+    assert_eq!(reviewer.base(), BaseRole::Executor);
+    assert!(!reviewer.is_builtin());
 }
 
 #[test]
@@ -48,6 +59,7 @@ fn tool_surfaces_are_exact() {
             "curr_time",
             "spawn_agent",
             "send_input",
+            "interrupt_agent",
             "resume_agent",
             "wait_agent",
             "close_agent",
@@ -86,7 +98,7 @@ fn tool_surfaces_are_exact() {
 #[test]
 fn exec_main_surface_drops_only_ask() {
     let names = ToolSurface::ExecMain.names();
-    assert_eq!(names.len(), 16);
+    assert_eq!(names.len(), 17);
     assert!(!names.contains(&"ask"));
     let expected: Vec<&str> = ToolSurface::Main
         .names()
@@ -118,6 +130,15 @@ fn parse_control_accepts_valid_arguments() {
             items: vec![SubagentInputItem::Text {
                 text: "find the compact entry".into(),
             }],
+            fork_context: false,
+            model: None,
+            reasoning_effort: None,
+        }))
+    );
+    assert_eq!(
+        parse_control("interrupt_agent", r#"{"target":"sub-1"}"#),
+        Some(Ok(SubagentOp::Interrupt {
+            target: "sub-1".into(),
         }))
     );
     assert_eq!(
@@ -167,6 +188,27 @@ fn parse_wait_supports_all_and_any_modes() {
 }
 
 #[test]
+fn parse_control_accepts_custom_role_and_spawn_overrides() {
+    assert_eq!(
+        parse_control(
+            "spawn_agent",
+            r#"{"role":"reviewer","title":"review","task":"review it","fork_context":true,"model":"openai/gpt-4.1-mini","reasoning_effort":"high"}"#
+        ),
+        Some(Ok(SubagentOp::Spawn {
+            role: AgentRole::from_name_and_base("reviewer", None).expect("reviewer"),
+            title: "review".into(),
+            task: "review it".into(),
+            items: vec![SubagentInputItem::Text {
+                text: "review it".into(),
+            }],
+            fork_context: true,
+            model: Some("openai/gpt-4.1-mini".into()),
+            reasoning_effort: Some("high".into()),
+        }))
+    );
+}
+
+#[test]
 fn parse_control_rejects_bad_arguments() {
     // 缺字段。
     assert!(parse_control("spawn_agent", r#"{"role":"explorer"}"#).is_some_and(|r| r.is_err()));
@@ -176,9 +218,9 @@ fn parse_control_rejects_bad_arguments() {
         parse_control("spawn_agent", r#"{"role":"explorer","task":"x","extra":1}"#)
             .is_some_and(|r| r.is_err())
     );
-    // 非法 role。
+    // 非法 role 语法。
     assert!(
-        parse_control("spawn_agent", r#"{"role":"planner","task":"x"}"#)
+        parse_control("spawn_agent", r#"{"role":"Bad-Role","task":"x"}"#)
             .is_some_and(|r| r.is_err())
     );
     // 非对象。
@@ -229,14 +271,25 @@ fn outcome_json_roundtrips() {
     let cases = [
         SubagentOutcome::Spawned {
             agent_id: "sub-1".into(),
+            nickname: Some("Turing".into()),
             role: AgentRole::Executor,
             title: "fix it".into(),
+            model: Some("openai/gpt-4.1-mini".into()),
+            reasoning_effort: Some("high".into()),
+            fork_context: true,
+        },
+        SubagentOutcome::Interrupted {
+            agent_id: "sub-1".into(),
+            nickname: Some("Turing".into()),
+            previous_status: "running".into(),
+            queued_count: 2,
         },
         SubagentOutcome::Waited {
             timed_out: true,
             agents: vec![
                 AgentStatusView {
                     agent_id: "sub-1".into(),
+                    nickname: Some("Turing".into()),
                     title: "compact entry".into(),
                     role: AgentRole::Explorer,
                     status: "completed".into(),
@@ -244,6 +297,7 @@ fn outcome_json_roundtrips() {
                 },
                 AgentStatusView {
                     agent_id: "sub-2".into(),
+                    nickname: None,
                     title: "fix tests".into(),
                     role: AgentRole::Executor,
                     status: "running".into(),
@@ -272,6 +326,7 @@ fn outcome_json_roundtrips() {
         SubagentOutcome::Listed {
             agents: vec![AgentListItemView {
                 agent_id: "sub-1".into(),
+                nickname: Some("Turing".into()),
                 role: AgentRole::Explorer,
                 title: "inspect".into(),
                 status: "idle".into(),
@@ -290,6 +345,79 @@ fn outcome_json_roundtrips() {
         assert_eq!(SubagentOutcome::from_json(&json), Some(outcome));
     }
     assert_eq!(SubagentOutcome::from_json(&json!({"tool": "read"})), None);
+}
+
+#[test]
+fn interrupted_outcome_roundtrips_with_and_without_nickname() {
+    for nickname in [None, Some("Turing".to_string())] {
+        let outcome = SubagentOutcome::Interrupted {
+            agent_id: "sub-1".into(),
+            nickname: nickname.clone(),
+            previous_status: "running".into(),
+            queued_count: 3,
+        };
+        let json = outcome.to_json();
+        assert_eq!(json["tool"], "interrupt_agent");
+        assert_eq!(
+            json.get("nickname").and_then(serde_json::Value::as_str),
+            nickname.as_deref()
+        );
+        assert_eq!(SubagentOutcome::from_json(&json), Some(outcome));
+    }
+}
+
+#[test]
+fn allocate_nickname_uses_defaults_custom_pool_and_round_suffixes() {
+    assert_eq!(allocate_nickname(&[], &[]), DEFAULT_NICKNAME_CANDIDATES[0]);
+    assert_eq!(
+        allocate_nickname(&["turing".into()], &[]),
+        DEFAULT_NICKNAME_CANDIDATES[1],
+        "ASCII 大小写不敏感去重"
+    );
+
+    let custom = vec!["Ada".to_string(), "Grace".to_string()];
+    assert_eq!(allocate_nickname(&[], &custom), "Ada");
+    assert_eq!(
+        allocate_nickname(&["  ada  ".into()], &custom),
+        "Grace",
+        "自定义候选池优先于默认池"
+    );
+    assert_eq!(
+        allocate_nickname(&[], &["  Ada  ".into(), "   ".into()]),
+        "Ada",
+        "空白候选被裁剪或忽略"
+    );
+
+    let all_defaults: Vec<String> = DEFAULT_NICKNAME_CANDIDATES
+        .iter()
+        .map(|name| name.to_string())
+        .collect();
+    assert_eq!(
+        allocate_nickname(&all_defaults, &[]),
+        format!("{} #2", DEFAULT_NICKNAME_CANDIDATES[0])
+    );
+    let mut used = all_defaults;
+    used.push(format!("{} #2", DEFAULT_NICKNAME_CANDIDATES[0]));
+    assert_eq!(
+        allocate_nickname(&used, &[]),
+        format!("{} #2", DEFAULT_NICKNAME_CANDIDATES[1])
+    );
+}
+
+#[test]
+fn format_agent_identity_combines_nickname_and_role() {
+    assert_eq!(
+        format_agent_identity(Some("Turing"), "explorer"),
+        "Turing [explorer]"
+    );
+    assert_eq!(
+        format_agent_identity(Some("  Turing "), " reviewer "),
+        "Turing [reviewer]"
+    );
+    assert_eq!(format_agent_identity(None, "executor"), "executor");
+    assert_eq!(format_agent_identity(Some("   "), "executor"), "executor");
+    assert_eq!(format_agent_identity(Some("Turing"), ""), "Turing");
+    assert_eq!(format_agent_identity(None, ""), "");
 }
 
 #[test]
@@ -328,6 +456,9 @@ fn parse_control_handles_new_codex_tools_and_items_contract() {
                     image_url: "data:image/png;base64,iVBORw0KGgo=".into()
                 },
             ],
+            fork_context: false,
+            model: None,
+            reasoning_effort: None,
         }))
     );
 
@@ -434,6 +565,7 @@ fn parse_control_handles_new_codex_tools_and_items_contract() {
 fn report_envelope_escapes_and_truncates() {
     let report = SubagentReportView {
         agent_id: "sub-<1>".into(),
+        nickname: Some("Turing".into()),
         title: "test title".into(),
         role: AgentRole::Explorer,
         status: "completed".into(),
@@ -445,6 +577,7 @@ fn report_envelope_escapes_and_truncates() {
     let envelope = format_report_envelope(&report);
     assert!(envelope.starts_with("<subagent_report "));
     assert!(envelope.contains("agent_id=\"sub-&lt;1&gt;\""));
+    assert!(envelope.contains("nickname=\"Turing\""));
     assert!(envelope.contains("role=\"explorer\""));
     assert!(envelope.contains("files_changed=\"2\""));
     assert!(envelope.contains("duration_ms=\"14200\""));
@@ -454,6 +587,7 @@ fn report_envelope_escapes_and_truncates() {
     // 控制字符被剥离，正文超限截断并显式标注。
     let report = SubagentReportView {
         agent_id: "sub-1".into(),
+        nickname: None,
         title: "test title".into(),
         role: AgentRole::Executor,
         status: "failed".into(),
@@ -472,6 +606,7 @@ fn report_envelope_escapes_and_truncates() {
 fn report_view_json_roundtrips_and_rejects_garbage() {
     let report = SubagentReportView {
         agent_id: "sub-1".into(),
+        nickname: Some("Turing".into()),
         title: "test title".into(),
         role: AgentRole::Executor,
         status: "completed".into(),

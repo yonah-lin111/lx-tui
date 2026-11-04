@@ -10,6 +10,7 @@ use crate::db::chat::SubagentRecord;
 fn run(child_session: &str, agent_id: &str, role: AgentRole) -> SubagentRun {
     SubagentRun::from_record(&SubagentRecord {
         agent_id: agent_id.into(),
+        nickname: None,
         child_session_id: child_session.into(),
         parent_session_id: "sess-parent".into(),
         spawn_message_id: None,
@@ -77,6 +78,7 @@ fn set_subagent_list_is_idempotent_and_keeps_local_runs() {
     update::on_subagent_started(&mut state, pane, started);
     let record = SubagentRecord {
         agent_id: "sub-a".into(),
+        nickname: None,
         child_session_id: "sess-a".into(),
         parent_session_id: "sess-parent".into(),
         spawn_message_id: None,
@@ -88,6 +90,7 @@ fn set_subagent_list_is_idempotent_and_keeps_local_runs() {
         report_json: Some(
             SubagentReportView {
                 agent_id: "sub-a".into(),
+                nickname: None,
                 title: "test title".into(),
                 role: AgentRole::Explorer,
                 status: "completed".into(),
@@ -277,6 +280,7 @@ fn stale_subagent_replies_are_ignored_by_session() {
         .session_id = Some("sess-b".into());
     let record = SubagentRecord {
         agent_id: "sub-a".into(),
+        nickname: None,
         child_session_id: "sess-a".into(),
         parent_session_id: "sess-a-parent".into(),
         spawn_message_id: None,

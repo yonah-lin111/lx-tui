@@ -40,6 +40,7 @@ pub(crate) fn finish_subagent_with_billing(
         return false;
     };
     let was_interrupted_by_input = streams.interrupted_subagents.remove(&handle.agent_id);
+    let was_paused_by_interrupt = streams.paused_by_interrupt.remove(&handle.agent_id);
     handle.status = match reason {
         StopReason::Complete => STATUS_COMPLETED,
         StopReason::Cancelled => STATUS_CANCELLED,
@@ -90,6 +91,7 @@ pub(crate) fn finish_subagent_with_billing(
         }
         report_view = Some(SubagentReportView {
             agent_id: handle.agent_id.clone(),
+            nickname: handle.nickname.clone(),
             title: handle.title.clone(),
             role: handle.role,
             status: handle.status.to_string(),
@@ -174,6 +176,14 @@ pub(crate) fn finish_subagent_with_billing(
                     Some(handle.done.clone()),
                 ) {
                     continued = true;
+                }
+            } else if was_paused_by_interrupt {
+                // `interrupt_agent`：保持 `idle` 活动态，暂停自动消费后续排队队列。
+                streams.resumed_subagents.insert(handle.agent_id.clone());
+                if let Some(pane) = state.pane_mut_anywhere(handle.parent.pane)
+                    && let Some(run) = pane.lx.agents.by_agent_mut(&handle.agent_id)
+                {
+                    run.status = STATUS_IDLE.to_string();
                 }
             } else {
                 streams.resumed_subagents.remove(&handle.agent_id);

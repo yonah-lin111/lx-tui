@@ -366,6 +366,116 @@ fn ensure_no_streaming(conn: &Connection, session_id: &str) -> Result<()> {
 }
 
 /// 复制源会话图片目录；返回旧/新受管路径前缀（未复制时为 None）。
+pub fn copy_session_images(source_session: &str, new_session_id: &str) -> Option<(String, String)> {
+    copy_images(source_session, new_session_id)
+}
+
+/// 计算父会话已完成历史消息的 `sequence` 上界（不含正在 `streaming` 的当前轮次）。
+pub(super) fn completed_boundary_sequence(conn: &Connection, session_id: &str) -> Result<i64> {
+    let streaming_turn: Option<i64> = conn
+        .query_row(
+            "SELECT MIN(turn_index) FROM agent_message WHERE session_id = ?1 AND status = 'streaming'",
+            params![session_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(turn_idx) = streaming_turn {
+        let turn_start_seq: Option<i64> = conn
+            .query_row(
+                "SELECT MIN(sequence) FROM agent_message WHERE session_id = ?1 AND turn_index = ?2",
+                params![session_id, turn_idx],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        if let Some(seq) = turn_start_seq {
+            return Ok(seq);
+        }
+    }
+    Ok(i64::MAX)
+}
+
+/// 将源会话 `sequence < boundary` 的已完成历史轮次克隆到子会话，返回子会话下一轮可用的 `(next_sequence, next_turn_index)`。
+pub(super) fn copy_completed_history_to_child(
+    transaction: &Connection,
+    source_session: &str,
+    child_session_id: &str,
+    boundary: i64,
+    image_rewrite: &Option<(String, String)>,
+) -> Result<(i64, i64)> {
+    let messages = load_messages(transaction, source_session, boundary)?;
+    let mut message_ids: HashMap<String, String> = HashMap::new();
+    let mut max_seq: Option<i64> = None;
+    let mut max_turn: Option<i64> = None;
+    for message in &messages {
+        if message.status == "streaming" {
+            continue;
+        }
+        let new_id = new_external_id("msg");
+        transaction.execute(
+            r#"INSERT INTO agent_message
+                   (external_id, session_id, sequence, turn_index, role, status,
+                    model_provider, model_id, variant, stop_reason, error_code,
+                    input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                    created_at_ms, completed_at_ms, kind, user_shell_json, subagent_report_json)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                       ?16, ?17, ?18, ?19, ?20)"#,
+            params![
+                new_id,
+                child_session_id,
+                message.sequence,
+                message.turn_index,
+                message.role,
+                message.status,
+                message.model_provider,
+                message.model_id,
+                message.variant,
+                message.stop_reason,
+                message.error_code,
+                message.input_tokens,
+                message.output_tokens,
+                message.cache_read_tokens,
+                message.cache_write_tokens,
+                message.created_at_ms,
+                message.completed_at_ms,
+                message.kind,
+                message.user_shell_json,
+                message.subagent_report_json,
+            ],
+        )?;
+        max_seq = Some(max_seq.map_or(message.sequence, |cur| cur.max(message.sequence)));
+        max_turn = Some(max_turn.map_or(message.turn_index, |cur| cur.max(message.turn_index)));
+        message_ids.insert(message.external_id.clone(), new_id);
+    }
+
+    if !message_ids.is_empty() {
+        copy_parts(transaction, &message_ids, source_session, boundary)?;
+        copy_tools(
+            transaction,
+            child_session_id,
+            &message_ids,
+            source_session,
+            boundary,
+            image_rewrite,
+        )?;
+        copy_attachments(
+            transaction,
+            &message_ids,
+            source_session,
+            boundary,
+            image_rewrite,
+        )?;
+        copy_checkpoints(transaction, child_session_id, source_session, boundary)?;
+        copy_switches(transaction, child_session_id, source_session, boundary)?;
+    }
+
+    let next_seq = max_seq.map_or(0, |s| s.saturating_add(1));
+    let next_turn = max_turn.map_or(0, |t| t.saturating_add(1));
+    Ok((next_seq, next_turn))
+}
+
+/// 复制源会话图片目录；返回旧/新受管路径前缀（未复制时为 None）。
 fn copy_images(source_session: &str, new_session_id: &str) -> Option<(String, String)> {
     let root = crate::platform::sessions_root_dir().ok()?;
     match crate::platform::fork_session_images_in(&root, source_session, new_session_id) {

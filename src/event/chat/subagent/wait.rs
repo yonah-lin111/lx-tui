@@ -50,8 +50,34 @@ pub(super) fn wait(
     } else {
         let mut unique = Vec::new();
         for target in requested {
-            if !unique.contains(&target) {
-                unique.push(target);
+            let trimmed = target.trim();
+            let resolved = records
+                .iter()
+                .find(|record| {
+                    record.agent_id == trimmed
+                        || record
+                            .nickname
+                            .as_deref()
+                            .is_some_and(|n| n.eq_ignore_ascii_case(trimmed))
+                })
+                .map(|record| record.agent_id.clone())
+                .or_else(|| {
+                    streams
+                        .subagents
+                        .values()
+                        .find(|handle| {
+                            handle.parent.session == parent
+                                && (handle.agent_id == trimmed
+                                    || handle
+                                        .nickname
+                                        .as_deref()
+                                        .is_some_and(|n| n.eq_ignore_ascii_case(trimmed)))
+                        })
+                        .map(|handle| handle.agent_id.clone())
+                })
+                .unwrap_or(target);
+            if !unique.contains(&resolved) {
+                unique.push(resolved);
             }
         }
         unique
@@ -254,6 +280,7 @@ pub(crate) fn settle_wait(
         let status = super::projected_agent_status(streams, record, queue_states.get(target));
         agents.push(AgentStatusView {
             agent_id: record.agent_id.clone(),
+            nickname: record.nickname.clone(),
             title: record.title.clone(),
             role: record.role,
             status,

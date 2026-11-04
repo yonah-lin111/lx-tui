@@ -22,7 +22,7 @@ use crate::chat::process::{
 };
 
 /// 固定工具表：顺序即给模型的呈现顺序。
-static TOOLS: [ToolSpec; 17] = [
+static TOOLS: [ToolSpec; 18] = [
     ToolSpec::new(
         "read",
         "Read a UTF-8 text file, view an image file (PNG, JPEG, GIF, WebP, BMP, TIFF), or list a directory. \
@@ -139,6 +139,7 @@ static TOOLS: [ToolSpec; 17] = [
     ),
     super::subagent::spawn_agent_spec(),
     super::subagent::send_input_spec(),
+    super::subagent::interrupt_agent_spec(),
     super::subagent::resume_agent_spec(),
     super::subagent::wait_agent_spec(),
     super::subagent::close_agent_spec(),
@@ -146,7 +147,7 @@ static TOOLS: [ToolSpec; 17] = [
     super::subagent::cancel_agent_input_spec(),
 ];
 
-/// 全部可用工具规格（固定十七个）。
+/// 全部可用工具规格（固定十八个）。
 pub fn available_tools() -> &'static [ToolSpec] {
     &TOOLS
 }
@@ -165,6 +166,20 @@ pub fn builtin_tools(surface: crate::chat::agent::ToolSurface) -> Vec<super::typ
         .into_iter()
         .map(super::types::ToolDecl::from)
         .collect()
+}
+
+/// 内置工具的本轮声明（主工具面下自动将 `SubagentsSection` 角色配置注入 `spawn_agent`）。
+pub fn builtin_tools_with_subagents(
+    surface: crate::chat::agent::ToolSurface,
+    subagents: Option<&crate::config::subagents::SubagentsSection>,
+) -> Vec<super::types::ToolDecl> {
+    let mut decls = builtin_tools(surface);
+    if let Some(subagents) = subagents {
+        for decl in &mut decls {
+            super::subagent::enrich_spawn_tool_decl(decl, subagents);
+        }
+    }
+    decls
 }
 
 /// resources 三个工具的内置声明（仅在有 server 声明 resources capability 时加入）。
@@ -215,7 +230,16 @@ pub fn turn_tools(
     surface: crate::chat::agent::ToolSurface,
     mcp: &crate::mcp::McpToolSnapshot,
 ) -> Vec<super::types::ToolDecl> {
-    let mut decls = builtin_tools(surface);
+    turn_tools_with_subagents(surface, mcp, None)
+}
+
+/// 一轮的完整工具声明（支持注入 `SubagentsSection` 角色指导与枚举）。
+pub fn turn_tools_with_subagents(
+    surface: crate::chat::agent::ToolSurface,
+    mcp: &crate::mcp::McpToolSnapshot,
+    subagents: Option<&crate::config::subagents::SubagentsSection>,
+) -> Vec<super::types::ToolDecl> {
+    let mut decls = builtin_tools_with_subagents(surface, subagents);
     decls.extend(mcp.tools().iter().map(|tool| super::types::ToolDecl {
         name: tool.qualified.clone(),
         description: tool.description.clone(),

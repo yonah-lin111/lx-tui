@@ -314,6 +314,8 @@ pub use web_search::{MAX_RESULT_LINE_CHARS, WebSearchDetailView};
 ///
 /// 文件分支与摘要并存：摘要回答"哪个文件、多少行"，详情回答"哪几行变成什么"；
 /// `search` 的摘要回答搜了什么/命中多少，详情回答具体命中行。
+// `ToolCallView.detail` 已是 `Option<Box<ToolDetailView>>`，外层已装箱，内层变体无需二次堆分配。
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolDetailView {
     Command(CommandView),
@@ -382,19 +384,25 @@ impl SearchDetailView {
     }
 }
 
-/// `spawn_agent` / `wait_agent` / `close_agent` 共用的详情（按 `name` 取标题）。
+/// `spawn_agent` / `wait_agent` / `close_agent` / `interrupt_agent` 等共用的详情（按 `name` 取标题）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubagentDetailView {
     /// spawn 的角色。
     pub role: Option<crate::chat::agent::AgentRole>,
+    /// 子 agent 唯一昵称（如 `"Turing"`；无昵称时为 None）。
+    pub nickname: Option<String>,
     /// spawn 的短标题（卡片标题；不是 task 原文）。
     pub title: Option<String>,
     /// spawn 的完整任务文本（只保留在状态里；卡片不再显示提示词）。
     pub task: Option<String>,
-    /// spawn/close 的 agent id。
+    /// spawn/close/interrupt 的 agent id。
     pub agent_id: Option<String>,
     /// spawn 对应子 agent 的实时/历史状态（不由工具调用状态代替）。
     pub agent_status: Option<String>,
+    /// spawn 显式或角色覆写模型的展示标签（如 `"gpt-4.1-mini (low)"`）。
+    pub model_label: Option<String>,
+    /// spawn 是否开启了 `fork_context`。
+    pub fork_context: bool,
     /// wait 的目标 id；为空表示等待本会话全部子 agent。
     pub targets: Vec<String>,
     /// wait 是否以全部子 agent 为目标。
@@ -409,7 +417,7 @@ pub struct SubagentDetailView {
     pub agents: Vec<crate::chat::agent::AgentStatusView>,
     /// spawn 卡片展开时显示的子 agent 最终报告。
     pub report: Option<crate::chat::agent::SubagentReportView>,
-    /// close 前的状态。
+    /// close/interrupt 前的状态。
     pub closed_status: Option<String>,
 }
 
@@ -425,10 +433,13 @@ impl SubagentDetailView {
     fn empty() -> Self {
         Self {
             role: None,
+            nickname: None,
             title: None,
             task: None,
             agent_id: None,
             agent_status: None,
+            model_label: None,
+            fork_context: false,
             targets: Vec::new(),
             all: false,
             mode: crate::chat::agent::WaitMode::All,
@@ -443,25 +454,47 @@ impl SubagentDetailView {
     fn apply_op(&mut self, op: crate::chat::agent::SubagentOp) {
         match op {
             crate::chat::agent::SubagentOp::Spawn {
-                role, title, task, ..
+                role,
+                title,
+                task,
+                fork_context,
+                model,
+                reasoning_effort,
+                ..
             } => {
                 self.role = Some(role);
                 self.title = Some(title);
                 self.task = Some(task);
+                if fork_context {
+                    self.fork_context = true;
+                }
+                if self.model_label.is_none() {
+                    self.model_label =
+                        format_spawn_model_label(model.as_deref(), reasoning_effort.as_deref());
+                }
             }
             crate::chat::agent::SubagentOp::SendInput {
                 target,
                 items,
                 interrupt,
             } => {
-                self.agent_id = Some(target);
+                if self.agent_id.is_none() {
+                    self.agent_id = Some(target);
+                }
                 self.task = Some(crate::chat::agent::joined_input_text(&items));
                 if interrupt && self.agent_status.is_none() {
                     self.agent_status = Some("interrupt".into());
                 }
             }
+            crate::chat::agent::SubagentOp::Interrupt { target } => {
+                if self.agent_id.is_none() {
+                    self.agent_id = Some(target);
+                }
+            }
             crate::chat::agent::SubagentOp::Resume { id } => {
-                self.agent_id = Some(id);
+                if self.agent_id.is_none() {
+                    self.agent_id = Some(id);
+                }
             }
             crate::chat::agent::SubagentOp::Wait {
                 targets,
@@ -474,7 +507,9 @@ impl SubagentDetailView {
                 self.timeout_ms = Some(timeout_ms);
             }
             crate::chat::agent::SubagentOp::Close { target } => {
-                self.agent_id = Some(target);
+                if self.agent_id.is_none() {
+                    self.agent_id = Some(target);
+                }
             }
             crate::chat::agent::SubagentOp::List => {}
             crate::chat::agent::SubagentOp::CancelInput { submission_id } => {
@@ -505,27 +540,18 @@ impl SubagentDetailView {
 
     /// 由落库结果 JSON 的形状构造（无参数侧信息）。
     pub fn from_outcome_value(value: &Value) -> Option<Self> {
-        let mut view = Self {
-            role: None,
-            title: None,
-            task: None,
-            agent_id: None,
-            agent_status: None,
-            targets: Vec::new(),
-            all: false,
-            mode: crate::chat::agent::WaitMode::All,
-            timeout_ms: None,
-            timed_out: false,
-            agents: Vec::new(),
-            report: None,
-            closed_status: None,
-        };
+        let mut view = Self::empty();
         match value.get("tool").and_then(Value::as_str)? {
             "spawn_agent" => {
                 view.role = value
                     .get("role")
                     .and_then(Value::as_str)
                     .and_then(crate::chat::agent::AgentRole::parse);
+                view.nickname = value
+                    .get("nickname")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
                 view.title = value
                     .get("title")
                     .and_then(Value::as_str)
@@ -534,6 +560,14 @@ impl SubagentDetailView {
                     .get("agent_id")
                     .and_then(Value::as_str)
                     .map(str::to_string);
+                view.fork_context = value
+                    .get("fork_context")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                view.model_label = format_spawn_model_label(
+                    value.get("model").and_then(Value::as_str),
+                    value.get("reasoning_effort").and_then(Value::as_str),
+                );
             }
             "wait_agent" => {
                 view.timed_out = value
@@ -561,6 +595,11 @@ impl SubagentDetailView {
                         };
                         view.agents.push(crate::chat::agent::AgentStatusView {
                             agent_id: agent_id.to_string(),
+                            nickname: agent
+                                .get("nickname")
+                                .and_then(Value::as_str)
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string),
                             title: agent
                                 .get("title")
                                 .and_then(Value::as_str)
@@ -589,6 +628,30 @@ impl SubagentDetailView {
                     .get("previous_status")
                     .and_then(Value::as_str)
                     .map(str::to_string);
+            }
+            "interrupt_agent" => {
+                view.agent_id = value
+                    .get("agent_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                view.nickname = value
+                    .get("nickname")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                let prev = value
+                    .get("previous_status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("running");
+                let queued = value
+                    .get("queued_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                view.closed_status = Some(if queued > 0 {
+                    format!("was {prev} · {queued} paused")
+                } else {
+                    format!("was {prev}")
+                });
             }
             "send_input" | "resume_agent" => {
                 view.agent_id = value
@@ -634,6 +697,11 @@ impl SubagentDetailView {
                             .unwrap_or(0);
                         view.agents.push(crate::chat::agent::AgentStatusView {
                             agent_id: agent_id.to_string(),
+                            nickname: agent
+                                .get("nickname")
+                                .and_then(Value::as_str)
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string),
                             title: agent
                                 .get("title")
                                 .and_then(Value::as_str)
@@ -663,6 +731,18 @@ impl SubagentDetailView {
             _ => return None,
         }
         Some(view)
+    }
+}
+
+/// 组装紧凑的覆写模型标签（如 `"gpt-4.1-mini (low)"` 或 `"high"`）。
+fn format_spawn_model_label(model: Option<&str>, reasoning_effort: Option<&str>) -> Option<String> {
+    let clean_model = model.map(str::trim).filter(|s| !s.is_empty());
+    let clean_effort = reasoning_effort.map(str::trim).filter(|s| !s.is_empty());
+    match (clean_model, clean_effort) {
+        (Some(m), Some(e)) => Some(format!("{m} ({e})")),
+        (Some(m), None) => Some(m.to_string()),
+        (None, Some(e)) => Some(format!("effort:{e}")),
+        (None, None) => None,
     }
 }
 
@@ -814,8 +894,8 @@ impl ToolDetailView {
                 Some(Self::Plan(PlanSnapshotView::from_snapshot(&snapshot)))
             }
             "ask" => Some(Self::Ask(AskDetailView::from_value(&value)?)),
-            "spawn_agent" | "send_input" | "resume_agent" | "wait_agent" | "close_agent"
-            | "list_agents" | "cancel_agent_input" => Some(Self::Subagent(
+            "spawn_agent" | "send_input" | "interrupt_agent" | "resume_agent" | "wait_agent"
+            | "close_agent" | "list_agents" | "cancel_agent_input" => Some(Self::Subagent(
                 SubagentDetailView::from_outcome_value(&value)?,
             )),
             "search" => Some(Self::Search(SearchDetailView::from_value(&value)?)),

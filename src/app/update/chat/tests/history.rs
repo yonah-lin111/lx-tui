@@ -231,6 +231,7 @@ fn report_more_click_adds_a_batch_and_whole_click_collapses() {
     };
     message.reports.push(crate::app::state::SubagentReportView {
         agent_id: "sub-1".into(),
+        nickname: None,
         title: "report".into(),
         role: crate::chat::agent::AgentRole::Explorer,
         status: "completed".into(),

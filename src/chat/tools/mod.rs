@@ -61,7 +61,11 @@ pub use read_version::{
     registry as read_registry, require_missing as require_new_target,
     require_read_version as require_version,
 };
-pub use schema::{available_tools, builtin_tools, resource_tools, tools_for, turn_tools};
+pub use schema::{
+    available_tools, builtin_tools, builtin_tools_with_subagents, resource_tools, tools_for,
+    turn_tools, turn_tools_with_subagents,
+};
+pub use subagent::{build_spawn_role_guidance, enrich_spawn_tool_decl};
 pub use types::{
     ArchivedImage, FileChange, FileChangeKind, McpToolResult, ReadKind, SUBAGENT_TOOL_NAMES,
     SearchMatch, TOOL_NAMES, ToolContext, ToolDecl, ToolErrorCode, ToolExecutionResult,

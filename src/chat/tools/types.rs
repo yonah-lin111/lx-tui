@@ -20,10 +20,11 @@ pub const TOOL_NAMES: [&str; 10] = [
     "curr_time",
 ];
 
-/// 七个 subagent 控制工具（顺序即 `TOOLS` 中的顺序）。
-pub const SUBAGENT_TOOL_NAMES: [&str; 7] = [
+/// 八个 subagent 控制工具（顺序即 `TOOLS` 中的顺序）。
+pub const SUBAGENT_TOOL_NAMES: [&str; 8] = [
     "spawn_agent",
     "send_input",
+    "interrupt_agent",
     "resume_agent",
     "wait_agent",
     "close_agent",

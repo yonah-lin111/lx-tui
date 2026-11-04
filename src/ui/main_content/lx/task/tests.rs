@@ -582,6 +582,7 @@ fn clicking_an_agents_row_selects_it_with_the_scroll_offset() {
             .map(|index| {
                 crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
                     agent_id: format!("a{index}"),
+                    nickname: None,
                     child_session_id: format!("s{index}"),
                     parent_session_id: "p".into(),
                     spawn_message_id: None,
@@ -622,6 +623,7 @@ fn agents_list_uses_the_title_not_the_task_prompt() {
     });
     let mut run = crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
         agent_id: "a1".into(),
+        nickname: None,
         child_session_id: "s1".into(),
         parent_session_id: "p".into(),
         spawn_message_id: None,
@@ -648,6 +650,44 @@ fn agents_list_uses_the_title_not_the_task_prompt() {
             .any(|line| line.contains("Investigate every branch")),
         "列表不得显示 task 提示词"
     );
+}
+
+#[test]
+fn agents_list_shows_nickname_and_falls_back_to_role() {
+    let mut lx = lx_with_messages();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        ..TaskPage::default()
+    });
+    for (nickname, title) in [(Some("Turing"), "named task"), (None, "unnamed task")] {
+        let run = crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+            agent_id: format!("a-{title}"),
+            nickname: nickname.map(str::to_string),
+            child_session_id: format!("s-{title}"),
+            parent_session_id: "p".into(),
+            spawn_message_id: None,
+            role: crate::chat::agent::AgentRole::Explorer,
+            status: "running".into(),
+            title: title.into(),
+            created_at_ms: 0,
+            completed_at_ms: None,
+            report_json: None,
+            report_delivered: false,
+        });
+        lx.agents.runs.push(run);
+    }
+    let lines = render_lines(&lx, 70, 20);
+    let named = lines
+        .iter()
+        .find(|line| line.contains("named task"))
+        .expect("named agent row");
+    assert!(named.contains("Turing [explorer]"), "{named}");
+    let unnamed = lines
+        .iter()
+        .find(|line| line.contains("unnamed task"))
+        .expect("unnamed agent row");
+    assert!(unnamed.contains("explorer"), "{unnamed}");
+    assert!(!unnamed.contains("Turing"), "{unnamed}");
 }
 
 #[test]
@@ -705,6 +745,7 @@ fn agents_list_renders_queued_counts_and_projected_statuses_without_overlap() {
         let mut run =
             crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
                 agent_id: format!("sub-very-long-identifier-{idx}"),
+                nickname: None,
                 child_session_id: format!("sess-{idx}"),
                 parent_session_id: "p".into(),
                 spawn_message_id: None,

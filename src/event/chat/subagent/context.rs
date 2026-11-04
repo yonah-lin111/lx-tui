@@ -12,9 +12,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::chat::agent::{
-    AgentRole, IMAGE_MISSING_CODE, SubagentInputItem, compose_subagent_prompt,
-};
+use crate::chat::agent::{AgentRole, IMAGE_MISSING_CODE, SubagentInputItem};
 use crate::chat::agent_loop::ModelContext;
 use crate::chat::events::{ChatRequest, ChatTurn, ModelImage, ModelItem, RequestPurpose};
 use crate::db::Database;
@@ -153,11 +151,69 @@ fn resolve_image_path(cwd: &Path, raw: &str) -> Result<std::path::PathBuf, Strin
 
 /// 子会话系统提示词冻结输入段。
 pub(super) struct ChildPromptContext<'a> {
+    pub system_prompt_override: Option<&'a str>,
     pub model_identity: Option<&'a str>,
     pub environment: &'a str,
     pub instructions: Option<&'a str>,
     pub skills: Option<&'a str>,
     pub mcp: &'a crate::mcp::McpToolSnapshot,
+}
+
+/// 采集子轮系统提示词所需的冻结输入段。
+pub(super) struct CapturedChildPromptInputs {
+    pub system_prompt_override: Option<String>,
+    pub model_identity: String,
+    pub environment: String,
+    pub instructions: Option<String>,
+    pub skills: Option<String>,
+    pub mcp: Arc<crate::mcp::McpToolSnapshot>,
+}
+
+pub(super) fn capture_child_prompt_inputs(
+    state: &crate::app::state::AppState,
+    persistence: &crate::db::service::Persistence,
+    workspace: &Path,
+    cwd: &Path,
+    frozen: &crate::app::state::FrozenModel,
+    role: AgentRole,
+) -> CapturedChildPromptInputs {
+    let environment = crate::chat::prompt::environment_snapshot(
+        &crate::platform::EnvironmentFacts::capture(),
+        Some(cwd),
+        Some(cwd),
+        &[],
+    );
+    let (skills, _) = super::super::skills::catalog_prompt(persistence, Some(workspace), true);
+    let mcp = super::super::mcp::snapshot_for_turn(persistence, Some(workspace));
+    let model_identity = crate::chat::agent::ModelIdentity {
+        display_name: state
+            .models
+            .model_display_name(&frozen.provider, &frozen.model),
+        provider_id: frozen.provider.clone(),
+        model_id: frozen.model.clone(),
+        variant: frozen.variant.clone(),
+        supports_image_input: frozen.supports_image_input,
+    }
+    .render_prompt_section();
+    let instructions = crate::chat::agent::load_instructions(
+        crate::config::user_data_root().ok().as_deref(),
+        Some(workspace),
+        Some(cwd),
+        persistence.is_trusted(cwd) || persistence.is_trusted(workspace),
+    )
+    .render_prompt_section();
+    let system_prompt_override = state
+        .subagents_config
+        .resolve_role(role.as_str())
+        .and_then(|r| r.system_prompt_override);
+    CapturedChildPromptInputs {
+        system_prompt_override,
+        model_identity,
+        environment,
+        instructions,
+        skills,
+        mcp,
+    }
 }
 
 /// 从持久化的 `PersistedInputItem` 重放有序 `ModelItem`（严格校验归档文件与摘要）。
@@ -337,8 +393,9 @@ pub(super) fn assemble_child_context(
     items.extend(current_model_items);
 
     let mcp_prompt = prompt_ctx.mcp.instructions_prompt();
-    let system_prompt = compose_subagent_prompt(
+    let system_prompt = crate::chat::agent::compose_subagent_prompt_with_override(
         role,
+        prompt_ctx.system_prompt_override,
         crate::chat::prompt::PromptParts {
             model_identity: prompt_ctx.model_identity,
             environment: Some(prompt_ctx.environment),

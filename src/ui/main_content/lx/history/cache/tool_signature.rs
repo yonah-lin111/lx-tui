@@ -76,10 +76,13 @@ pub(super) fn tool_signature(
         Some(ToolDetailView::Subagent(view)) => {
             hash.write_u8(7);
             hash.write_str(view.role.map_or("", |role| role.as_str()));
+            hash.write_str(view.nickname.as_deref().unwrap_or(""));
             hash.write_str(view.title.as_deref().unwrap_or(""));
             hash.write_str(view.task.as_deref().unwrap_or(""));
             hash.write_str(view.agent_id.as_deref().unwrap_or(""));
             hash.write_str(view.agent_status.as_deref().unwrap_or(""));
+            hash.write_str(view.model_label.as_deref().unwrap_or(""));
+            hash.write_u8(u8::from(view.fork_context));
             hash.write_usize(view.targets.len());
             for target in &view.targets {
                 hash.write_str(target);
@@ -91,6 +94,7 @@ pub(super) fn tool_signature(
             hash.write_usize(view.agents.len());
             for agent in &view.agents {
                 hash.write_str(&agent.agent_id);
+                hash.write_str(agent.nickname.as_deref().unwrap_or(""));
                 hash.write_str(&agent.title);
                 hash.write_str(agent.role.as_str());
                 hash.write_str(&agent.status);
@@ -104,6 +108,7 @@ pub(super) fn tool_signature(
             if let Some(report) = &view.report {
                 hash.write_u8(1);
                 hash.write_str(&report.agent_id);
+                hash.write_str(report.nickname.as_deref().unwrap_or(""));
                 hash.write_str(&report.title);
                 hash.write_str(report.role.as_str());
                 hash.write_str(&report.status);

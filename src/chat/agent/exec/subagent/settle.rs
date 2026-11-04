@@ -49,6 +49,7 @@ impl ExecSubagentPool {
         }
         self.resumed.clear();
         self.interrupted.clear();
+        self.paused_by_interrupt.clear();
     }
 
     pub(super) fn finish(
@@ -64,6 +65,7 @@ impl ExecSubagentPool {
             return;
         };
         let was_interrupted_by_input = self.interrupted.remove(agent_id);
+        let was_paused_by_interrupt = self.paused_by_interrupt.remove(agent_id);
         close_open_part(&mut handle.parts, &mut handle.open_part_index);
         tracing::debug!(
             target: "lx::exec", agent_id, role = handle.role.as_str(),
@@ -117,6 +119,8 @@ impl ExecSubagentPool {
                         }
                         Err(_) => {}
                     }
+                } else if was_paused_by_interrupt {
+                    self.resumed.insert(agent_id.to_string());
                 } else {
                     self.resumed.remove(agent_id);
                 }
@@ -194,6 +198,21 @@ impl ExecSubagentPool {
                 .collect()
         } else {
             requested
+                .into_iter()
+                .map(|target| {
+                    let trimmed = target.trim();
+                    records
+                        .iter()
+                        .find(|r| {
+                            r.agent_id == trimmed
+                                || r.nickname
+                                    .as_deref()
+                                    .is_some_and(|n| n.eq_ignore_ascii_case(trimmed))
+                        })
+                        .map(|r| r.agent_id.clone())
+                        .unwrap_or(target)
+                })
+                .collect()
         };
         if !all {
             let mut seen = HashSet::new();
@@ -389,6 +408,7 @@ impl ExecSubagentPool {
             }
             agents.push(AgentStatusView {
                 agent_id: record.agent_id.clone(),
+                nickname: record.nickname.clone(),
                 title: record.title.clone(),
                 role: record.role,
                 status: self.projected_status(record, queues.get(target)),
