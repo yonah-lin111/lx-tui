@@ -89,14 +89,15 @@
   - 新增 `pub(super) fn completed_boundary_sequence(conn: &Connection, session_id: &str) -> Result<i64>`：查找父会话当前正在 `streaming` 的轮次起始 `sequence`（无 `streaming` 则返回 `i64::MAX`）。
   - 公开内部事务复制函数 `pub(super) fn copy_completed_history_to_child(tx: &Transaction<'_>, source_session: &str, child_session: &str, boundary: i64, image_rewrite: &Option<(String, String)>) -> Result<(i64, i64)>`：复制 `sequence < boundary` 且非 `streaming` 的消息、parts、tool_calls、attachments、compact_checkpoints、model_switches，并返回子会话下一条消息应使用的 `(next_sequence, next_turn_index)`。
   - 公开 `pub(crate) fn copy_session_images(source_session: &str, target_session: &str) -> Option<(String, String)>`。
-- [x] **4.2 扩展 `src/db/chat/subagent.rs` (~80 行改动)**
+- [x] **4.2 扩展 `src/db/chat/subagent.rs` 并拆分 `record.rs` / `report.rs`**
   - `SubagentRecord` 新增字段：
     ```rust
     pub nickname: Option<String>,
-    pub model_provider: Option<String>,
-    pub model_id: Option<String>,
-    pub variant: Option<String>,
+    pub model_provider: String,
+    pub model_id: String,
+    pub model_variant: Option<String>,
     ```
+  - 新增 `Database::close_idle_subagent`：将 `idle` / `interrupted` 子 Agent 及其残留 `queued` / `interrupted` 输入同事务置为 `cancelled`。
   - `SpawnSubagentParams`（或 `begin_subagent_turn_with_options`）接收 `nickname: Option<&str>`、`fork_context: bool`、`role: &AgentRole`：
     - 将 `role.as_str()` 写入 `agent_subagent.role` 与 `agent_session.agent_role`；
     - 将 `role.base().as_str()` 写入 `agent_subagent.agent_path` 与 `agent_session.agent_path`；
@@ -143,8 +144,8 @@
 
 > **目标**：在浏览器设置页新增 `Subagents` 页签，支持配置全局并发上限、覆写/重置内置角色（`explorer`/`executor`）以及增删改自定义角色。
 
-- [x] **6.1 新增设置页后端模块 `src/settings/service/subagents.rs` (~360 行)**
-  - 在 `src/settings/service.rs` 中新增 `SettingsEvent::SubagentsUpdated(SubagentsSection)`，并在 `src/event/settings.rs` 中处理该事件以实时更新 `state.subagents_config`。
+- [x] **6.1 新增设置页后端模块 `src/settings/service/subagents.rs` (~340 行)**
+  - 在 `src/settings/service.rs` 中新增 `SettingsEvent::SubagentsChanged(SubagentsSection)`，并在 `src/event/inventory.rs` 中处理该事件以实时更新 `state.subagents_config`。
   - 实现路由 `pub fn route(request: &Request, state: &ServiceState) -> Response`：
     - `GET /api/subagents`：返回 `{ maxConcurrent, builtins, roles, defaults: { explorer, executor }, models: [...] }`；
     - `PUT /api/subagents/general`：更新 `maxConcurrent`；
@@ -156,7 +157,7 @@
   - 在 `assets/settings.js` 的 `showTab` 中接入 `'subagents'` 分支调用 `loadSubagents()`。
 - [x] **6.3 阶段六单元测试 (`src/settings/service/tests.rs`)**
   - 测试 `/settings_subagents.js` 静态资源返回 200。
-  - 测试 `/api/subagents` GET/PUT/POST/DELETE 全链路、参数 422 校验、磁盘持久化与 `SettingsEvent::SubagentsUpdated` 事件投递。
+  - 测试 `/api/subagents` GET/PUT/POST/DELETE 全链路、部分字段 PUT 保留既有角色、参数 422 校验、磁盘持久化与 `SettingsEvent::SubagentsChanged` 事件投递。
 
 ---
 
@@ -167,8 +168,8 @@
 - [x] **7.1 更新状态视图 (`src/app/state/lx/agent.rs`、`src/app/state/lx/chat/tool_view.rs`、`src/app/update/chat/subagent.rs`)**
   - `SubagentRun` 新增 `pub nickname: Option<String>` 与 `pub model_label: Option<String>`，新增 `pub fn display_identity(&self) -> String`（返回 `format_agent_identity(self.nickname.as_deref(), self.role.as_str())`）。
   - `SubagentDetailView` 新增 `pub nickname: Option<String>`、`pub model_label: Option<String>`、`pub fork_context: bool`。
-- [x] **7.2 更新 UI 文案与绘制 (`src/ui/text.rs`、`src/ui/main_content/lx/history/tool/subagent.rs`、`report.rs`、`task/agents.rs`)**
-  - `src/ui/text.rs`：新增 `VERB_TOOL_INTERRUPT_AGENT = "Interrupted"`、`FORKED_CONTEXT_TAG = "forked"`。
+- [x] **7.2 更新 UI 文案与绘制 (`src/ui/text/agent.rs`、`src/ui/main_content/lx/history/tool/subagent.rs`、`report.rs`、`task/agents.rs`)**
+  - `src/ui/text/agent.rs`：新增 `VERB_TOOL_INTERRUPT_AGENT = "Interrupt agent"`、`FORKED_CONTEXT_TAG = "forked"`。
   - `history/tool/subagent.rs`：支持 `"interrupt_agent"` 卡片渲染；`agent_line` 与 `target_node` 使用 `format_agent_identity` 显示 `Turing [explorer] · title`。
   - `history/report.rs`：`agent_line` 显示 `Turing [explorer] · title`。
   - `task/agents.rs`：`draw_list` 使用 `run.display_identity()` 绘制 `❯ ■ Turing [explorer]  running  14s  title`。
@@ -192,3 +193,5 @@
     - `cargo test ui::main_content::lx`
   - 运行 `cargo fmt --check` 与 `cargo clippy --all-targets -- -D warnings`。
   - 核查所有修改与新增生产文件行数均 ≤ 1000 行，无 `unwrap()` / `expect()`。
+- [x] **8.3 Code Review 修复与 CLI 端到端验证 (`verification.md`)**
+  - 完成 P0–P3 全量审查与修复（跨进程固定模型恢复、`Subagents` 设置页状态同步、`interrupt_agent` 队列暂停状态机、`fork_context` 历史用户图片回放与 `next_session_sequence`、`exec` `CollabToolCall` 昵称/模型/分叉字段补齐），详见 [`verification.md`](verification.md)。

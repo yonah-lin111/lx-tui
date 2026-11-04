@@ -40,7 +40,7 @@
    - **暂停自动消费后续排队队列**（未执行的 `queued` 输入原样保留，等下一次 `send_input` 或 `resume_agent` 触发时继续消费）；对已处于 `idle` 的子 Agent 调用幂等返回。
 5. **自定义角色与内置角色覆写（`src/settings/` Subagents 页面 + `config/subagents.json`）**：
    - 内置角色 `explorer` 与 `executor` 支持在设置页覆写默认模型、思考等级、描述与系统提示词，并支持一键恢复默认（Reset）。
-   - 支持新建、编辑、删除自定义角色（名称满足 `[a-z0-9_]{1,32}`），每个自定义角色必须绑定基础权限档位（`explorer` 只读或 `executor` 读写），并配置描述、系统提示词、可选默认模型/思考等级与可选昵称池。
+   - 支持新建、编辑、删除自定义角色（名称满足 `[a-z][a-z0-9_]{0,31}`），每个自定义角色必须绑定基础权限档位（`explorer` 只读或 `executor` 读写），并配置描述、系统提示词、可选默认模型/思考等级与可选昵称池。
    - 支持配置全局单会话最大并发子 Agent 数 `max_concurrent`（默认 `3`，合法范围 `1..=8`）。
    - 动态将已配置角色的描述列表注入 `spawn_agent` 的工具 Schema 描述，供主 Agent 按职责选用。
 6. **TUI 界面升级 (`src/ui/main_content/lx/`)**：
@@ -131,7 +131,7 @@ impl BaseRole {
 /// 关联常量与 `as_str(&self) -> &str`，最大限度兼容现有调用点。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AgentRole {
-    /// 稳定角色名（全小写 `[a-z0-9_]{1,32}`）。
+    /// 稳定角色名（全小写 `[a-z][a-z0-9_]{0,31}`）。
     name: String,
     /// 冻结的基础权限档位（内置角色固定对应，自定义角色由配置或 DB 快照决定）。
     base: BaseRole,
@@ -436,7 +436,7 @@ pub struct RoleOverrideConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomRoleConfig {
-    /// 唯一角色名（`[a-z0-9_]{1,32}`，禁止与 `"explorer"` / `"executor"` 重名）。
+    /// 唯一角色名（`[a-z][a-z0-9_]{0,31}`，禁止与 `"explorer"` / `"executor"` 重名）。
     pub name: String,
     /// 基础权限档位：`explorer`（只读）或 `executor`（读写）。
     pub base_role: BaseRole,
@@ -635,13 +635,13 @@ pub(crate) fn resolve_subagent_model(
 - `GET /api/subagents`：
   - 返回当前 `SubagentsConfigFile` 内容、内置角色的默认描述与默认系统提示词（供前端展示 placeholder 与 Reset 对比）、以及当前已启用供应商的模型与 `variants` 列表。
 - `PUT /api/subagents/general`：
-  - 请求体：`{"maxConcurrent": 3}`，校验 `1..=8` 后保存 `config/subagents.json`，并通过 `state.sender().send(SettingsEvent::SubagentsUpdated)` 通知 TUI 主循环热更新 `state.subagents_config`。
+  - 请求体：`{"maxConcurrent": 3}`，校验 `1..=8` 后保存 `config/subagents.json`，并通过 `state.sender().send(SettingsEvent::SubagentsChanged)` 通知 TUI 主循环热更新 `state.subagents_config`。
 - `PUT /api/subagents/builtins/<role>`（`<role>` 为 `explorer` 或 `executor`）：
   - 保存内置角色的覆写项（`description`, `systemPrompt`, `model`, `nicknameCandidates`），空字符串自动归一化为 `None`。
 - `DELETE /api/subagents/builtins/<role>`：
   - 一键重置该内置角色的全部覆写项为默认值。
 - `POST /api/subagents/roles` / `PUT /api/subagents/roles/<name>` / `DELETE /api/subagents/roles/<name>`：
-  - 新建、更新、删除自定义角色；校验 `name` 合法性（`[a-z0-9_]{1,32}` 且非 `"explorer"`/`"executor"`）、`baseRole`（`"explorer"`/`"executor"`）、`description` 与 `systemPrompt` 非空且不超长。
+  - 新建、更新、删除自定义角色；校验 `name` 合法性（`[a-z][a-z0-9_]{0,31}` 且非 `"explorer"`/`"executor"`）、`baseRole`（`"explorer"`/`"executor"`）、`description` 与 `systemPrompt` 非空且不超长。
 
 #### 3.6.2 前端界面 (`assets/settings.html` + `assets/settings_subagents.js`)
 遵循 `docs/standards/html-assets.md`（纯原生 HTML/CSS/JS、全英文 UI 文案、复用 `Commands` / `Skills` 页的左列表右编辑器双栏布局）：
