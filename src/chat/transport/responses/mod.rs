@@ -82,17 +82,36 @@ pub fn build(
     }
     if let Some(params) = &request.variant_params {
         let mut reasoning = serde_json::Map::new();
-        if let Some(effort) = params.get("reasoningEffort").and_then(Value::as_str) {
+        if let Some(effort) = params
+            .get("reasoningEffort")
+            .or_else(|| params.get("effort"))
+            .and_then(Value::as_str)
+        {
             reasoning.insert("effort".into(), json!(effort));
         }
         if let Some(summary) = params.get("reasoningSummary").and_then(Value::as_str) {
             reasoning.insert("summary".into(), json!(summary));
+        } else if reasoning
+            .get("effort")
+            .and_then(Value::as_str)
+            .is_some_and(|effort| effort != "none")
+        {
+            // 对齐 opencode-dev（variant.ts `responsesEffort`）：
+            // Responses API 必须显式请求 `summary: "auto"` 才会在流中下发思考摘要块。
+            reasoning.insert("summary".into(), json!("auto"));
         }
         if !reasoning.is_empty() {
             body["reasoning"] = Value::Object(reasoning);
         }
         if let Some(include) = params.get("include").and_then(Value::as_array) {
             body["include"] = json!(include);
+        } else if body.get("reasoning").is_some() {
+            body["include"] = json!(["reasoning.encrypted_content"]);
+        }
+        if let Some(extra) = params.get("requestExtra").and_then(Value::as_object) {
+            for (key, value) in extra {
+                body[key.as_str()] = value.clone();
+            }
         }
     }
     Ok(TransportRequest {
@@ -318,6 +337,24 @@ impl StreamDecoder for Decoder {
                         call_id,
                         arguments_json,
                     });
+                }
+            }
+            "response.output_item.done" => {
+                if let Some(item) = value.get("item")
+                    && item.get("type").and_then(Value::as_str) == Some("function_call")
+                    && let Ok(ordinal) = self.ordinal_of(&value)
+                {
+                    if let Some(arguments) = item.get("arguments").and_then(Value::as_str) {
+                        self.calls.replace_arguments(ordinal, arguments)?;
+                    }
+                    self.flush_delta(ordinal, &mut out);
+                    if let Some((call_id, arguments_json)) = self.calls.end(ordinal) {
+                        validate_arguments(&arguments_json)?;
+                        out.push(ChatDelta::ToolInputEnded {
+                            call_id,
+                            arguments_json,
+                        });
+                    }
                 }
             }
             "response.completed" => {

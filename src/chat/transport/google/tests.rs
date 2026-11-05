@@ -387,6 +387,24 @@ fn thought_part_is_reasoning_and_order_preserved() {
     );
 }
 
+#[test]
+fn usage_metadata_sums_thoughts_tokens_and_reads_cached_content_token_count() {
+    let mut decoder = decoder();
+    let deltas = decode_all(
+        &mut decoder,
+        &[
+            r#"{"candidates":[{"content":{"parts":[{"text":"ok"}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"thoughtsTokenCount":80,"cachedContentTokenCount":60}}"#,
+        ],
+    );
+    assert!(deltas.iter().any(|delta| matches!(
+        delta,
+        ChatDelta::Usage(usage)
+            if usage.input == Some(100)
+                && usage.output == Some(100)
+                && usage.cache_read == Some(60)
+    )));
+}
+
 /// 单 functionCall：Started + Ended（args 已是完整对象）+ ResponseFinished{ToolCalls}。
 #[test]
 fn single_function_call_emits_started_and_ended() {

@@ -262,11 +262,16 @@ fn merge_provider_models(
             if model.transport.is_none() {
                 model.transport = existing.transport;
             }
-            if model.variant.is_none() {
-                model.variant = existing.variant.clone();
-            }
             if !existing.variants.is_empty() {
                 model.variants = existing.variants.clone();
+            }
+            if model.variant.is_none()
+                || model
+                    .variant
+                    .as_ref()
+                    .is_some_and(|variant| !model.variants.contains_key(variant))
+            {
+                model.variant = existing.variant.clone();
             }
         }
         if is_openai_provider && model.transport.is_none() {

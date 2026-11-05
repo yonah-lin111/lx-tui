@@ -142,7 +142,7 @@ pub fn parse_models_dev_catalog(
                 api.contains_key("responses")
                     .then_some(super::ModelTransport::OpenaiResponses)
             });
-            let variants = reasoning_variants(provider_id, id, model);
+            let variants = reasoning_variants(provider_id, id, transport, model);
             let default_variant = variants.contains_key("high").then(|| "high".to_string());
             models.insert(
                 id.to_string(),
@@ -201,6 +201,7 @@ fn json_object(input: Option<&Vec<Value>>, output: Option<&Vec<Value>>) -> Value
 fn reasoning_variants(
     provider_id: &str,
     model_id: &str,
+    transport: Option<super::ModelTransport>,
     model: &serde_json::Map<String, Value>,
 ) -> BTreeMap<String, Value> {
     let reasoning = model
@@ -211,32 +212,7 @@ fn reasoning_variants(
     if !reasoning_enabled(reasoning) {
         return BTreeMap::new();
     }
-    let is_google = provider_id == "google" || provider_id.starts_with("google-vertex");
-    let is_legacy_gemini = model_id.starts_with("gemini-1") || model_id.starts_with("gemini-2");
-    ["low", "medium", "high"]
-        .into_iter()
-        .map(|level| {
-            let value = if is_google && !is_legacy_gemini {
-                serde_json::json!({
-                    "includeThoughts": true,
-                    "thinkingLevel": level,
-                })
-            } else if is_google {
-                let budget = match level {
-                    "low" => 2048,
-                    "medium" => 8192,
-                    _ => 16000,
-                };
-                serde_json::json!({
-                    "includeThoughts": true,
-                    "thinkingBudget": budget,
-                })
-            } else {
-                serde_json::json!({ "reasoningEffort": level })
-            };
-            (level.to_string(), value)
-        })
-        .collect()
+    super::verify::protocol_reasoning_variants(provider_id, model_id, transport)
 }
 
 fn reasoning_enabled(value: Option<&Value>) -> bool {

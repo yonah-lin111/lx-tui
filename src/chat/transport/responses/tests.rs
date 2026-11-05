@@ -218,11 +218,18 @@ fn variant_maps_reasoning_structure() {
     let mut req = request();
     req.variant_params = Some(json!({
         "reasoningEffort": "high",
-        "reasoningSummary": "auto",
     }));
     let body = body_of(&req);
     assert_eq!(body["reasoning"]["effort"], "high");
-    assert_eq!(body["reasoning"]["summary"], "auto");
+    assert_eq!(
+        body["reasoning"]["summary"], "auto",
+        "reasoningEffort must default summary to auto"
+    );
+    assert_eq!(
+        body["include"],
+        json!(["reasoning.encrypted_content"]),
+        "reasoning must default include to reasoning.encrypted_content"
+    );
 }
 
 #[test]

@@ -75,16 +75,63 @@ pub fn build(
         body["tools"] = anthropic_tools(&tool_decls);
     }
     if let Some(params) = &request.variant_params {
-        // thinking 预算：thinkingBudget（token 数）映射为协议 thinking 结构。
-        if let Some(budget) = params.get("thinkingBudget").and_then(Value::as_i64) {
-            body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
-            // 有预算时 max_tokens 必须大于预算（协议约束）。
-            if budget >= DEFAULT_MAX_TOKENS {
+        if let Some(thinking) = params.get("thinking").filter(|value| value.is_object()) {
+            body["thinking"] = thinking.clone();
+            if let Some(budget) = thinking.get("budget_tokens").and_then(Value::as_i64)
+                && budget >= DEFAULT_MAX_TOKENS
+            {
                 body["max_tokens"] = json!(budget.saturating_add(1024));
             }
         }
-        if let Some(effort) = params.get("effort").and_then(Value::as_str) {
-            body["reasoning_effort"] = json!(effort);
+        // thinking 预算：thinkingBudget（token 数）映射为协议 thinking 结构。
+        if let Some(budget) = params.get("thinkingBudget").and_then(Value::as_i64) {
+            let clamped = budget.max(1024);
+            body["thinking"] = json!({"type": "enabled", "budget_tokens": clamped});
+            // 有预算时 max_tokens 必须大于预算（协议约束）。
+            if clamped >= DEFAULT_MAX_TOKENS {
+                body["max_tokens"] = json!(clamped.saturating_add(1024));
+            }
+        }
+        if let Some(effort) = params
+            .get("effort")
+            .or_else(|| params.get("reasoningEffort"))
+            .and_then(Value::as_str)
+            .filter(|effort| !effort.is_empty())
+        {
+            if effort == "none" {
+                body["thinking"] = json!({"type": "disabled"});
+            } else if is_manual_thinking_claude(&request.model.model) {
+                if body.get("thinking").is_none() {
+                    let budget = match effort {
+                        "low" => 4096,
+                        "medium" => 8192,
+                        "high" => 16000,
+                        _ => 31999,
+                    };
+                    body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
+                    if budget >= DEFAULT_MAX_TOKENS {
+                        body["max_tokens"] = json!(budget + 1024);
+                    }
+                }
+                if is_opus_4_5(&request.model.model) {
+                    body["output_config"] = json!({"effort": effort});
+                }
+            } else {
+                // 对齐 opencode-dev（variant.ts `anthropicMessages` + anthropic-messages.ts）：
+                // Claude 4.6+ / 5.x 使用 adaptive thinking（含 display: summarized）与 output_config.effort。
+                if body.get("thinking").is_none() {
+                    body["thinking"] = json!({
+                        "type": "adaptive",
+                        "display": "summarized",
+                    });
+                }
+                body["output_config"] = json!({"effort": effort});
+            }
+        }
+        if let Some(extra) = params.get("requestExtra").and_then(Value::as_object) {
+            for (key, value) in extra {
+                body[key.as_str()] = value.clone();
+            }
         }
     }
     Ok(TransportRequest {
@@ -92,10 +139,35 @@ pub fn build(
         headers: vec![
             ("x-api-key".into(), key.to_string()),
             ("anthropic-version".into(), API_VERSION.into()),
+            (
+                "anthropic-beta".into(),
+                "interleaved-thinking-2025-05-14".into(),
+            ),
         ],
         body: serde_json::to_string(&body).map_err(|error| format!("encode body: {error}"))?,
         tools_requested: request.tools_surface().is_some(),
     })
+}
+
+/// Claude 3.7 与 Claude 4.0/4.1/4.5 仅支持手动 `type: "enabled"` + `budget_tokens`；
+/// Claude 4.6+ 及 5.x 支持 `type: "adaptive"` + `output_config.effort`。
+fn is_manual_thinking_claude(model_id: &str) -> bool {
+    let lower = model_id.to_ascii_lowercase();
+    lower.contains("3-7")
+        || lower.contains("3.7")
+        || lower.contains("4-0")
+        || lower.contains("4.0")
+        || lower.contains("4-1")
+        || lower.contains("4.1")
+        || lower.contains("4-5")
+        || lower.contains("4.5")
+        || lower.ends_with("-4")
+        || lower.contains("-4-2025")
+}
+
+fn is_opus_4_5(model_id: &str) -> bool {
+    let lower = model_id.to_ascii_lowercase();
+    lower.contains("opus-4-5") || lower.contains("opus-4.5") || lower.contains("4-5-opus")
 }
 
 /// 编码 `messages`：`items` 非空时把同一 assistant 的文本与 tool_use 合进一条消息的
@@ -340,6 +412,36 @@ impl StreamDecoder for Decoder {
                     "thinking" => {
                         self.bind_kind(index, BlockKind::Thinking);
                         self.bind_block(index, index);
+                        if let Some(thinking) = block.and_then(|block| json_str(block, "thinking"))
+                        {
+                            out.push(reasoning_delta(thinking));
+                        }
+                        if let Some(signature) =
+                            block.and_then(|block| json_str(block, "signature"))
+                        {
+                            out.push(ChatDelta::Part(PartDelta {
+                                kind: PartKind::Reasoning,
+                                text: String::new(),
+                                metadata: Some(json!({
+                                    "signature": signature,
+                                    "blockIndex": index,
+                                })),
+                            }));
+                        }
+                    }
+                    "redacted_thinking" => {
+                        self.bind_kind(index, BlockKind::Thinking);
+                        self.bind_block(index, index);
+                        if let Some(data) = block.and_then(|block| json_str(block, "data")) {
+                            out.push(ChatDelta::Part(PartDelta {
+                                kind: PartKind::Reasoning,
+                                text: String::new(),
+                                metadata: Some(json!({
+                                    "redactedData": data,
+                                    "blockIndex": index,
+                                })),
+                            }));
+                        }
                     }
                     // 供应商托管工具（如服务端 web 搜索）不得当成本地文件工具执行。
                     "server_tool_use" | "web_search_tool_result" | "code_execution_tool_result" => {
@@ -499,7 +601,7 @@ impl Decoder {
         }
         let stop = match reason {
             "tool_use" => ModelStepStop::ToolCalls,
-            "end_turn" | "stop_sequence" | "max_tokens" => ModelStepStop::Final,
+            "end_turn" | "stop_sequence" | "max_tokens" | "pause_turn" => ModelStepStop::Final,
             other => {
                 return Err(protocol_error(format!("unknown stop_reason: {other}")));
             }

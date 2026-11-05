@@ -50,7 +50,8 @@ pub fn build(
     } else {
         join_url(OFFICIAL_BASE, "chat/completions")
     };
-    let messages = messages_of(request)?;
+    let require_reasoning = requires_reasoning_content(request, base_url);
+    let messages = messages_of(request, require_reasoning)?;
     let mut body = json!({
         "model": request.model.model,
         "messages": messages,
@@ -65,8 +66,27 @@ pub fn build(
     }
     if let Some(params) = &request.variant_params {
         // 已知 variant 字段（reasoningEffort 等）映射为协议字段；不伪造等级。
-        if let Some(effort) = params.get("reasoningEffort").and_then(Value::as_str) {
+        if let Some(effort) = params
+            .get("reasoningEffort")
+            .or_else(|| params.get("effort"))
+            .and_then(Value::as_str)
+        {
             body["reasoning_effort"] = json!(effort);
+        }
+        // Alibaba / Qwen 思考开关与预算。
+        if let Some(enable) = params.get("enableThinking").and_then(Value::as_bool) {
+            body["enable_thinking"] = json!(enable);
+        }
+        if let Some(budget) = params.get("thinkingBudget").and_then(Value::as_i64) {
+            body["thinking_budget"] = json!(budget);
+        }
+        // DeepSeek V3.2 / Kimi K2.5 / GLM-5 思考开关对象。
+        if let Some(thinking) = params.get("thinking").filter(|value| value.is_object()) {
+            body["thinking"] = thinking.clone();
+        }
+        // OpenRouter 统一 reasoning 对象。
+        if let Some(reasoning) = params.get("reasoning").filter(|value| value.is_object()) {
+            body["reasoning"] = reasoning.clone();
         }
         // 供应商明确配置的附加参数原样并入顶层（仅对象字段）。
         if let Some(extra) = params.get("requestExtra").and_then(Value::as_object) {
@@ -83,11 +103,50 @@ pub fn build(
     })
 }
 
+/// DeepSeek / Kimi / Moonshot / Zhipu 等在开启思考并发起 `tool_calls` 时，
+/// 要求历史 assistant 消息必须携带 `reasoning_content` 字段（对齐 opencode-dev `openai-chat.ts`）。
+fn requires_reasoning_content(request: &ChatRequest, base_url: &str) -> bool {
+    let provider = request.model.provider.to_ascii_lowercase();
+    let model = request.model.model.to_ascii_lowercase();
+    let url = base_url.to_ascii_lowercase();
+    if matches!(
+        provider.as_str(),
+        "deepseek" | "moonshotai" | "moonshotai-cn" | "kimi-for-coding" | "zai" | "zhipuai"
+    ) {
+        return true;
+    }
+    if url.contains("deepseek.com")
+        || url.contains("moonshot.ai")
+        || url.contains("moonshot.cn")
+        || url.contains("kimi.com")
+        || url.contains("bigmodel.cn")
+        || url.contains("z.ai")
+    {
+        return true;
+    }
+    if model.contains("deepseek") || model.contains("kimi") || model.contains("glm-") {
+        return true;
+    }
+    request.variant_params.as_ref().is_some_and(|params| {
+        params.get("enableThinking").and_then(Value::as_bool) == Some(true)
+            || params
+                .get("thinking")
+                .or_else(|| {
+                    params
+                        .get("requestExtra")
+                        .and_then(|extra| extra.get("thinking"))
+                })
+                .and_then(|thinking| thinking.get("type"))
+                .and_then(Value::as_str)
+                == Some("enabled")
+    })
+}
+
 /// 编码 `messages`：首段 system + 其余段的前置 user 规则 + 历史；`items` 非空走结构化历史。
 ///
 /// 形状见 [`super::SystemPromptParts`]：首段走 system，其余规则**合并成一条** user
 /// 消息前置，避免代理把多条 system 拼回一条后按 2000 码元整条替换。
-fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
+fn messages_of(request: &ChatRequest, require_reasoning: bool) -> Result<Vec<Value>, String> {
     let parts = super::SystemPromptParts::split(&request.resolve_system_prompt());
     let mut messages: Vec<Value> = vec![json!({"role": "system", "content": parts.head})];
     if let Some(tail) = parts.tail_message() {
@@ -169,12 +228,21 @@ fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
                     } else if let Some(object) = last.as_object_mut() {
                         object.insert("tool_calls".into(), json!([call]));
                     }
+                    if require_reasoning && let Some(object) = last.as_object_mut() {
+                        object
+                            .entry("reasoning_content")
+                            .or_insert_with(|| json!(""));
+                    }
                 } else {
-                    messages.push(json!({
+                    let mut assistant = json!({
                         "role": "assistant",
                         "content": Value::Null,
                         "tool_calls": [call],
-                    }));
+                    });
+                    if require_reasoning && let Some(object) = assistant.as_object_mut() {
+                        object.insert("reasoning_content".into(), json!(""));
+                    }
+                    messages.push(assistant);
                 }
             }
             HistoryBlock::ToolResult {
@@ -264,17 +332,42 @@ impl StreamDecoder for Decoder {
             return Ok(out);
         };
         for choice in choices {
+            if self.usage.is_none()
+                && let Some(usage) = openai_usage(choice)
+            {
+                if let ChatDelta::Usage(usage_value) = &usage {
+                    self.usage = Some(*usage_value);
+                }
+                out.push(usage);
+            }
             let delta = choice.get("delta");
             if let Some(delta) = delta {
                 // 原生推理字段：独立 reasoning part（不进标签状态机）。
                 // 空串（端点常在每帧回 `reasoning_content:""`）不产出空 part。
-                for key in ["reasoning_content", "reasoning"] {
+                let mut emitted_reasoning = false;
+                for key in ["reasoning_content", "reasoning", "reasoning_text"] {
                     if let Some(text) = delta
                         .get(key)
                         .and_then(Value::as_str)
                         .filter(|text| !text.is_empty())
                     {
                         out.push(reasoning_delta(text));
+                        emitted_reasoning = true;
+                    }
+                }
+                // OpenRouter / Kimi 结构化 `reasoning_details` 数组兼容。
+                if !emitted_reasoning
+                    && let Some(details) = delta.get("reasoning_details").and_then(Value::as_array)
+                {
+                    for item in details {
+                        if let Some(text) = item
+                            .get("text")
+                            .or_else(|| item.get("summary"))
+                            .and_then(Value::as_str)
+                            .filter(|text| !text.is_empty())
+                        {
+                            out.push(reasoning_delta(text));
+                        }
                     }
                 }
                 if let Some(text) = delta

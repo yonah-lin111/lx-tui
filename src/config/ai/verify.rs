@@ -108,7 +108,7 @@ pub fn merge_discovered_models_for_preset(
             .filter(|name| !name.is_empty())
             .unwrap_or(&item.id)
             .to_string();
-        let variants = reasoning_variants(&item.id);
+        let variants = reasoning_variants(provider_id, &item.id);
         let default_variant = variants.contains_key("high").then(|| "high".to_string());
         out.insert(
             item.id.clone(),
@@ -400,23 +400,103 @@ fn is_reasoning_model(model_id: &str) -> bool {
         || segment.starts_with("o3")
         || segment.starts_with("o4")
         || lowered.contains("gpt-5")
+        || lowered.contains("gpt-6")
         || lowered.contains("claude-opus-4")
         || lowered.contains("claude-sonnet-4")
+        || lowered.contains("claude-haiku-4-5")
+        || lowered.contains("claude-opus-5")
+        || lowered.contains("claude-sonnet-5")
+        || lowered.contains("claude-haiku-5")
+        || lowered.contains("claude-fable")
+        || lowered.contains("claude-mythos")
         || lowered.contains("claude-3-7")
         || lowered.contains("gemini-2.5")
         || lowered.contains("gemini-3")
+        || lowered.contains("gemini-4")
         || lowered.contains("deepseek-r1")
         || lowered.contains("deepseek-reasoner")
+        || lowered.contains("deepseek-v3.2")
+        || lowered.contains("deepseek-v4")
+        || lowered.contains("kimi-k2")
+        || lowered.contains("kimi-k3")
+        || lowered.contains("glm-4.5")
+        || lowered.contains("glm-5")
+        || lowered.contains("qwen3")
         || lowered.contains("qwq")
+        || lowered.contains("minimax-m2")
+        || lowered.contains("grok-3")
+        || lowered.contains("grok-4")
 }
 
-fn reasoning_variants(model_id: &str) -> BTreeMap<String, Value> {
+fn reasoning_variants(provider_id: &str, model_id: &str) -> BTreeMap<String, Value> {
     if !is_reasoning_model(model_id) {
         return BTreeMap::new();
     }
+    protocol_reasoning_variants(provider_id, model_id, None)
+}
+
+/// 按供应商与协议生成对应的 low/medium/high 思考参数（对齐 opencode-dev `variant.ts`）。
+pub(crate) fn protocol_reasoning_variants(
+    provider_id: &str,
+    model_id: &str,
+    model_transport: Option<super::ModelTransport>,
+) -> BTreeMap<String, Value> {
+    let preset_transport = super::presets::find_preset(provider_id).map(|preset| preset.transport);
+    let is_google = provider_id == "google"
+        || provider_id.starts_with("google-vertex")
+        || preset_transport == Some(super::ProviderTransport::Google);
+    let is_legacy_gemini = model_id.starts_with("gemini-1") || model_id.starts_with("gemini-2");
+    let is_responses =
+        model_transport == Some(super::ModelTransport::OpenaiResponses) || provider_id == "openai";
+    let is_anthropic =
+        provider_id == "anthropic" || preset_transport == Some(super::ProviderTransport::Anthropic);
+    let is_alibaba = provider_id.starts_with("alibaba");
+    let is_deepseek =
+        provider_id == "deepseek" || model_id.to_ascii_lowercase().contains("deepseek");
+
     ["low", "medium", "high"]
         .into_iter()
-        .map(|level| (level.to_string(), json!({ "reasoningEffort": level })))
+        .map(|level| {
+            let value = if is_google && !is_legacy_gemini {
+                json!({
+                    "includeThoughts": true,
+                    "thinkingLevel": level,
+                })
+            } else if is_google {
+                let budget = match level {
+                    "low" => 2048,
+                    "medium" => 8192,
+                    _ => 16000,
+                };
+                json!({
+                    "includeThoughts": true,
+                    "thinkingBudget": budget,
+                })
+            } else if is_responses {
+                json!({
+                    "reasoningEffort": level,
+                    "reasoningSummary": "auto",
+                    "include": ["reasoning.encrypted_content"],
+                })
+            } else if is_anthropic {
+                json!({ "effort": level })
+            } else if is_alibaba {
+                json!({
+                    "reasoningEffort": level,
+                    "enableThinking": true,
+                })
+            } else if is_deepseek {
+                json!({
+                    "reasoningEffort": level,
+                    "requestExtra": {
+                        "thinking": { "type": "enabled" }
+                    },
+                })
+            } else {
+                json!({ "reasoningEffort": level })
+            };
+            (level.to_string(), value)
+        })
         .collect()
 }
 

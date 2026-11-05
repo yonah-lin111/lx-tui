@@ -429,13 +429,25 @@ impl StreamDecoder for Decoder {
             return Err(format!("api error: {}", truncate(message)));
         }
         // usageMetadata（每帧可重复，取最后一次为准的事件层合并）。
+        // 对齐 opencode-dev（protocols/gemini.ts）：
+        // - output = candidatesTokenCount（可见输出）+ thoughtsTokenCount（思考输出）
+        // - cache_read 优先读取顶层 cachedContentTokenCount，兼容 promptTokensDetails.cachedTokens。
         if let Some(usage) = value.get("usageMetadata") {
             let input = json_i64(usage, "promptTokenCount");
-            let output = json_i64(usage, "candidatesTokenCount");
-            let cache_read = usage
-                .get("promptTokensDetails")
-                .and_then(|details| json_i64(details, "cachedTokens"));
-            if input.is_some() || output.is_some() {
+            let visible = json_i64(usage, "candidatesTokenCount");
+            let thoughts = json_i64(usage, "thoughtsTokenCount");
+            let output = match (visible, thoughts) {
+                (Some(v), Some(t)) => Some(v.saturating_add(t)),
+                (Some(v), None) => Some(v),
+                (None, Some(t)) => Some(t),
+                (None, None) => None,
+            };
+            let cache_read = json_i64(usage, "cachedContentTokenCount").or_else(|| {
+                usage
+                    .get("promptTokensDetails")
+                    .and_then(|details| json_i64(details, "cachedTokens"))
+            });
+            if input.is_some() || output.is_some() || cache_read.is_some() {
                 out.push(ChatDelta::Usage(crate::db::chat::Usage {
                     input,
                     output,

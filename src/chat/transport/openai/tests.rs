@@ -325,8 +325,24 @@ fn no_variant_sends_no_reasoning_field() {
 #[test]
 fn variant_reasoning_effort_mapped() {
     let mut req = request();
-    req.variant_params = Some(json!({"reasoningEffort": "high"}));
-    assert_eq!(body_of(&req)["reasoning_effort"], "high");
+    req.variant_params = Some(json!({"reasoningEffort": "high", "enableThinking": true}));
+    let body = body_of(&req);
+    assert_eq!(body["reasoning_effort"], "high");
+    assert_eq!(body["enable_thinking"], true);
+}
+
+#[test]
+fn deepseek_and_kimi_tool_calls_include_empty_reasoning_content() {
+    let mut req = tool_request();
+    req.model.provider = "deepseek".into();
+    req.model.model = "deepseek-reasoner".into();
+    let body = body_of(&req);
+    let messages = body["messages"].as_array().expect("messages");
+    let assistant_with_tools = messages
+        .iter()
+        .find(|msg| msg.get("tool_calls").is_some())
+        .expect("assistant tool_calls message");
+    assert_eq!(assistant_with_tools["reasoning_content"], "");
 }
 
 #[test]

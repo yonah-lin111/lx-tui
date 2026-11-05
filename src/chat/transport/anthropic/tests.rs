@@ -261,6 +261,24 @@ fn thinking_budget_maps_to_thinking_structure() {
     assert!(body["max_tokens"].as_i64().unwrap_or(0) > 4096);
 }
 
+#[test]
+fn effort_maps_to_adaptive_thinking_and_output_config() {
+    let mut req = request();
+    req.model.model = "claude-sonnet-4-6".into();
+    req.variant_params = Some(json!({"effort": "high"}));
+    let body = body_of(&req);
+    assert_eq!(body["thinking"]["type"], "adaptive");
+    assert_eq!(body["thinking"]["display"], "summarized");
+    assert_eq!(body["output_config"]["effort"], "high");
+
+    req.model.model = "claude-sonnet-4-5".into();
+    req.variant_params = Some(json!({"effort": "high"}));
+    let body = body_of(&req);
+    assert_eq!(body["thinking"]["type"], "enabled");
+    assert_eq!(body["thinking"]["budget_tokens"], 16000);
+    assert!(body["max_tokens"].as_i64().unwrap_or(0) > 16000);
+}
+
 // ---------------------------------------------------------------- 解码：thinking
 
 #[test]
