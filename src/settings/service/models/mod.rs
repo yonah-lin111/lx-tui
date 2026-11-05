@@ -160,42 +160,10 @@ async fn put_settings(request: &Request, state: &ServiceState) -> Response {
         Ok(None) => crate::config::ai::connect::ConnectSettings::default(),
         Err(error) => return Response::error(500, &error.to_string()),
     };
-    let current_for_verify = current.clone();
     let merged = match merge_settings(Some(current), &body, Some(&connect)) {
         Ok(settings) => settings,
         Err(message) => return Response::error(422, &message),
     };
-    // 新增/变更的 API Key 必须通过真实探测（离线测试域名由 verify 内部短路）。
-    for (provider_id, provider) in &merged.providers {
-        let Some(api_key) = provider
-            .options
-            .api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|key| !key.is_empty())
-        else {
-            continue;
-        };
-        let previous = current_for_verify
-            .providers
-            .get(provider_id)
-            .and_then(|existing| existing.options.api_key.as_deref())
-            .map(str::trim);
-        if previous == Some(api_key) {
-            continue;
-        }
-        let probe_model = provider.models.keys().next().map(String::as_str);
-        if let Err(message) = crate::config::ai::verify::verify_provider_api_key(
-            provider.kind,
-            &provider.options.base_url,
-            api_key,
-            probe_model,
-        )
-        .await
-        {
-            return Response::error(422, &format!("Provider '{}': {message}", provider.name));
-        }
-    }
     if let Err(error) = crate::config::ai::save_ai(&path, &merged) {
         return Response::error(500, &error.to_string());
     }

@@ -118,6 +118,13 @@ pub fn parse_models_dev_catalog(
             if model.get("status").and_then(Value::as_str) == Some("deprecated") {
                 continue;
             }
+            if model
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind != "chat")
+            {
+                continue;
+            }
             let id = model
                 .get("id")
                 .and_then(Value::as_str)
@@ -131,17 +138,22 @@ pub fn parse_models_dev_catalog(
                 .filter(|name| !name.is_empty())
                 .unwrap_or(id)
                 .to_string();
+            let transport = model.get("api").and_then(Value::as_object).and_then(|api| {
+                api.contains_key("responses")
+                    .then_some(super::ModelTransport::OpenaiResponses)
+            });
             let variants = reasoning_variants(model);
+            let default_variant = variants.contains_key("high").then(|| "high".to_string());
             models.insert(
                 id.to_string(),
                 ModelConfig {
                     id: id.to_string(),
                     name,
-                    transport: None,
+                    transport,
                     limit: parse_limit(model.get("limit")),
                     modalities: parse_modalities(model.get("modalities")),
                     variants,
-                    variant: None,
+                    variant: default_variant,
                     pricing: None,
                     extra: serde_json::Map::new(),
                 },
@@ -334,6 +346,7 @@ pub async fn refresh_connected_provider_models(
     ai_path: &Path,
     provider_id: Option<&str>,
 ) -> Result<usize, String> {
+    #[cfg(not(test))]
     if let Err(error) = refresh_models_catalog().await {
         tracing::warn!(error = %error, "cloud model catalog refresh skipped");
     }

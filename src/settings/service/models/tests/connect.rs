@@ -394,33 +394,28 @@ async fn fetch_models_works_for_quick_connect_preset() {
         .expect("bind mock");
     let model_port = listener.local_addr().expect("addr").port();
     let mock = tokio::spawn(async move {
-        let mut requests = Vec::new();
-        // 第一次是 PUT /connect 的 Key 校验，第二次是 POST /fetch。
-        for _ in 0..2 {
-            let (mut stream, _) = listener.accept().await.expect("accept");
-            let mut buffer = Vec::new();
-            let mut chunk = [0_u8; 4096];
-            loop {
-                let read = stream.read(&mut chunk).await.expect("read");
-                if read == 0 {
-                    break;
-                }
-                buffer.extend_from_slice(&chunk[..read]);
-                if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
-                    break;
-                }
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut buffer = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut chunk).await.expect("read");
+            if read == 0 {
+                break;
             }
-            let payload = r#"{"data":[{"id":"quick-m1","owned_by":"preset"}]}"#;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                payload.len(),
-                payload
-            );
-            let _ = stream.write_all(response.as_bytes()).await;
-            let _ = stream.shutdown().await;
-            requests.push(String::from_utf8_lossy(&buffer).into_owned());
+            buffer.extend_from_slice(&chunk[..read]);
+            if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
         }
-        requests.join("\n")
+        let payload = r#"{"data":[{"id":"quick-m1","owned_by":"preset"}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+        let _ = stream.shutdown().await;
+        String::from_utf8_lossy(&buffer).into_owned()
     });
 
     let (service, _events, _dir) = start_models("models-connect-fetch").await;
@@ -441,26 +436,6 @@ async fn fetch_models_works_for_quick_connect_preset() {
     .await;
     assert_eq!(status(&saved), 200, "{}", body(&saved));
 
-    // 校验成功后的 `/models` 结果已合并进 connect.json 的预设模型表。
-    let after_connect = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
-    assert_eq!(status(&after_connect), 200);
-    let after_connect: serde_json::Value =
-        serde_json::from_str(body(&after_connect)).expect("json");
-    let openai = after_connect["quickConnect"]
-        .as_array()
-        .expect("quickConnect")
-        .iter()
-        .find(|preset| preset["id"] == serde_json::json!("openai"))
-        .expect("openai preset");
-    assert!(
-        openai["models"]
-            .as_array()
-            .expect("models")
-            .iter()
-            .any(|model| model["id"] == serde_json::json!("quick-m1")),
-        "discovered model merged into preset record: {openai}"
-    );
-
     let response = request(
         port,
         &write(
@@ -479,137 +454,5 @@ async fn fetch_models_works_for_quick_connect_preset() {
         recorded.contains("GET /v1/models"),
         "命中预设地址的 /v1/models：{recorded}"
     );
-    service.shutdown();
-}
-/// 启动一次性本地 mock：返回端口与记录到的请求文本。
-async fn spawn_json_response(
-    status_line: &'static str,
-    payload: &'static str,
-) -> (u16, tokio::task::JoinHandle<String>) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .expect("bind mock");
-    let port = listener.local_addr().expect("addr").port();
-    let handle = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.expect("accept");
-        let mut buffer = Vec::new();
-        let mut chunk = [0_u8; 4096];
-        loop {
-            let read = stream.read(&mut chunk).await.expect("read");
-            if read == 0 {
-                break;
-            }
-            buffer.extend_from_slice(&chunk[..read]);
-            if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
-                break;
-            }
-        }
-        let response = format!(
-            "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            payload.len(),
-            payload
-        );
-        let _ = stream.write_all(response.as_bytes()).await;
-        let _ = stream.shutdown().await;
-        String::from_utf8_lossy(&buffer).into_owned()
-    });
-    (port, handle)
-}
-
-#[tokio::test]
-async fn connect_rejects_unauthorized_key_without_writing() {
-    let (model_port, mock) = spawn_json_response(
-        "401 Unauthorized",
-        r#"{"error":{"message":"invalid x-api-key"}}"#,
-    )
-    .await;
-    let (service, _events, _dir) = start_models("models-connect-401").await;
-    let port = service.port();
-    let token = service.token().to_string();
-    let root = state_user_root(&service);
-
-    let payload = format!(
-        r#"{{"providers":[{{"id":"openai","apiKey":"sk-invalid-401","baseUrl":"http://127.0.0.1:{model_port}/v1"}}]}}"#
-    );
-    let response = request(
-        port,
-        &write(
-            "PUT",
-            &format!("/api/models/connect?token={token}"),
-            &payload,
-            None,
-        ),
-    )
-    .await;
-    assert_eq!(
-        status(&response),
-        422,
-        "invalid key rejected: {}",
-        body(&response)
-    );
-    assert!(
-        body(&response).contains("Invalid API key"),
-        "error mentions invalid key: {}",
-        body(&response)
-    );
-    assert!(
-        !root.join("config").join("connect.json").exists(),
-        "invalid key must not be written"
-    );
-    let recorded = mock.await.expect("mock join");
-    assert!(recorded.contains("GET /v1/models"), "{recorded}");
-    service.shutdown();
-}
-
-#[tokio::test]
-async fn settings_put_rejects_unauthorized_key_without_writing() {
-    let (model_port, mock) = spawn_json_response(
-        "401 Unauthorized",
-        r#"{"error":{"message":"unauthorized"}}"#,
-    )
-    .await;
-    let (service, _events, _dir) = start_models("models-settings-401").await;
-    let port = service.port();
-    let token = service.token().to_string();
-    let root = state_user_root(&service);
-
-    let payload = format!(
-        r#"{{
-  "providers": [{{"key": "p", "id": "p", "type": "openai-compatible", "name": "P",
-    "baseUrl": "http://127.0.0.1:{model_port}/v1", "apiKey": "sk-invalid-settings", "models": []}}],
-  "enabledProviders": [],
-  "revision": ""
-}}"#
-    );
-    let response = request(
-        port,
-        &write(
-            "PUT",
-            &format!("/api/models/settings?token={token}"),
-            &payload,
-            None,
-        ),
-    )
-    .await;
-    assert_eq!(
-        status(&response),
-        422,
-        "invalid key rejected: {}",
-        body(&response)
-    );
-    assert!(
-        body(&response).contains("Invalid API key"),
-        "error mentions invalid key: {}",
-        body(&response)
-    );
-    assert!(
-        !root.join("config").join("ai.json").exists(),
-        "invalid key must not be written"
-    );
-    let recorded = mock.await.expect("mock join");
-    assert!(recorded.contains("GET /v1/models"), "{recorded}");
     service.shutdown();
 }

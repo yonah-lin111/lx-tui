@@ -14,8 +14,7 @@ use crate::config::ai::connect::{
     load_connect_or_default, save_connect,
 };
 use crate::config::ai::oauth::{OAuthStarted, OAuthTaskHandle, start_oauth_flow};
-use crate::config::ai::presets::{default_models_for_preset, find_preset, resolve_preset_base_url};
-use crate::config::ai::verify::{merge_discovered_models_for_preset, verify_provider_api_key};
+use crate::config::ai::presets::{find_preset, resolve_preset_base_url};
 use crate::event::AppEvent;
 use crate::layout::PaneId;
 
@@ -333,25 +332,22 @@ async fn save_preset_connection(
     record.enabled = true;
     record.form_answers = form_answers;
     if let Some(api_key) = api_key {
+        let trimmed = api_key.trim();
+        if trimmed.is_empty() {
+            return Err("API key cannot be empty".to_string());
+        }
         let spec = find_preset(provider_id)
             .ok_or_else(|| format!("unknown preset provider '{provider_id}'"))?;
         let base_url =
             resolve_preset_base_url(spec, &record.form_answers, record.base_url.as_deref());
-        let probe_model = default_models_for_preset(provider_id)
-            .keys()
-            .next()
-            .cloned();
-        let outcome =
-            verify_provider_api_key(spec.transport, &base_url, &api_key, probe_model.as_deref())
-                .await?;
-        if record.models.is_none() && !outcome.discovered_models.is_empty() {
-            record.models = Some(merge_discovered_models_for_preset(
-                provider_id,
-                record.models.as_ref(),
-                &outcome.discovered_models,
+        if base_url.contains("${") {
+            return Err(format!(
+                "Provider '{}': base URL is not configured",
+                spec.name
             ));
         }
-        record.api_key = Some(api_key);
+        ai::validate_base_url(&base_url).map_err(|error| error.to_string())?;
+        record.api_key = Some(trimmed.to_string());
         record.oauth = None;
     }
     if let Some(oauth) = oauth {

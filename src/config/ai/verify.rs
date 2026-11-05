@@ -1,8 +1,8 @@
-//! API Key 校验与远端模型发现（OpenAI / OpenAI 兼容 / Anthropic / Google）。
+//! 远端模型发现与合并（OpenAI / OpenAI 兼容 / Anthropic / Google）。
 //!
-//! 校验分两级：优先探测 `<baseURL>/models`，端点缺失（404/405/501）或返回非 JSON
-//! 时回退到一次极简对话请求。任何一级命中鉴权错误都视为 Key 无效；供应商服务端
-//! 错误单独报告。`fetch_provider_models` 复用同一套端点规则，供设置页拉取模型列表。
+//! `fetch_provider_models` 按协议带鉴权头请求 `<baseURL>/models`，供设置页与
+//! `/connect` 手动刷新拉取模型列表；`merge_discovered_models_for_preset` 将发现的模型
+//! 与预设目录元数据对齐合并。
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -19,20 +19,11 @@ pub struct DiscoveredModel {
     pub name: Option<String>,
 }
 
-/// API Key 校验结果：校验通过时附带 `/models` 返回的模型。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifyOutcome {
-    pub discovered_models: Vec<DiscoveredModel>,
-}
-
-/// Anthropic 版本头（`/models` 与 `/messages` 均要求）。
+/// Anthropic 版本头（`/models` 要求）。
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// 模型探测整体超时。
 const MODELS_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// 对话探测整体超时（生成请求通常比列表慢）。
-const CHAT_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// 响应体上限，避免异常供应商拖垮内存。
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
@@ -47,40 +38,6 @@ const AUTH_ERROR_KEYWORDS: [&str; 7] = [
     "unauthorized",
     "unauthenticated",
 ];
-
-/// 校验 API Key：先探测 `/models`，必要时回退到极简对话请求。
-pub async fn verify_provider_api_key(
-    transport: ProviderTransport,
-    base_url: &str,
-    api_key: &str,
-    probe_model: Option<&str>,
-) -> Result<VerifyOutcome, String> {
-    let api_key = api_key.trim();
-    if api_key.is_empty() {
-        return Err("API key cannot be empty".into());
-    }
-    validate_base_url(base_url).map_err(|error| error.to_string())?;
-    // 离线单元测试使用的保留域名/本地固定端口：不做真实 DNS 与网络请求。
-    if is_offline_dummy(base_url) {
-        return Ok(VerifyOutcome {
-            discovered_models: Vec::new(),
-        });
-    }
-
-    let client = build_client(MODELS_PROBE_TIMEOUT)?;
-    match probe_models(&client, transport, base_url, api_key).await {
-        ModelsProbe::Models(models) => Ok(VerifyOutcome {
-            discovered_models: models,
-        }),
-        ModelsProbe::Auth(message)
-        | ModelsProbe::Server(message)
-        | ModelsProbe::Rejected(message) => Err(message),
-        ModelsProbe::Fallback => {
-            let client = build_client(CHAT_PROBE_TIMEOUT)?;
-            chat_probe(&client, transport, base_url, api_key, probe_model).await
-        }
-    }
-}
 
 /// 拉取供应商远端模型列表（四种协议均支持），按模型 id 排序。
 pub async fn fetch_provider_models(
@@ -245,114 +202,6 @@ async fn probe_models(
     }
 }
 
-async fn chat_probe(
-    client: &reqwest::Client,
-    transport: ProviderTransport,
-    base_url: &str,
-    api_key: &str,
-    probe_model: Option<&str>,
-) -> Result<VerifyOutcome, String> {
-    let model = probe_model
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .unwrap_or("gpt-4o-mini");
-    let requests = chat_probe_requests(transport, base_url, model);
-    let mut last_unavailable = None;
-    for (index, probe) in requests.iter().enumerate() {
-        let last = index + 1 == requests.len();
-        let request = apply_auth(
-            client.post(&probe.url).header("Accept", "application/json"),
-            transport,
-            api_key,
-        )
-        .json(&probe.body);
-        let (status, text) = send(request).await?;
-        let code = status.as_u16();
-        if code == 401 || code == 403 || contains_auth_error(&text) {
-            return Err(format!("Invalid API key (HTTP {code})"));
-        }
-        if status.is_success() {
-            return Ok(VerifyOutcome {
-                discovered_models: Vec::new(),
-            });
-        }
-        let json_ok = serde_json::from_str::<Value>(&text).is_ok();
-        // 400/404/422 且返回合法 JSON：说明鉴权已通过，只是模型或参数被拒绝。
-        // 还有备用端点时先尝试（OpenAI Responses / Anthropic 无 `/v1` 前缀），
-        // 全部端点都 404 后再按同一规则收敛。
-        if matches!(code, 400 | 404 | 422) && json_ok {
-            if !last && matches!(code, 404 | 405) {
-                last_unavailable = Some(format!("probe endpoint unavailable (HTTP {code})"));
-                continue;
-            }
-            return Ok(VerifyOutcome {
-                discovered_models: Vec::new(),
-            });
-        }
-        if code == 404 || code == 405 {
-            last_unavailable = Some(format!("probe endpoint unavailable (HTTP {code})"));
-            continue;
-        }
-        return Err(format!(
-            "Provider rejected the verification request (HTTP {code})"
-        ));
-    }
-    Err(last_unavailable.unwrap_or_else(|| "Provider verification failed".to_string()))
-}
-
-struct ChatProbeRequest {
-    url: String,
-    body: Value,
-}
-
-fn chat_probe_requests(
-    transport: ProviderTransport,
-    base_url: &str,
-    model: &str,
-) -> Vec<ChatProbeRequest> {
-    let chat_body = || {
-        json!({
-            "model": model,
-            "messages": [{"role": "user", "content": "hi"}],
-            "max_tokens": 1,
-        })
-    };
-    match transport {
-        ProviderTransport::Openai => vec![
-            ChatProbeRequest {
-                url: join_url(base_url, "responses"),
-                body: json!({
-                    "model": model,
-                    "input": "hi",
-                    "max_output_tokens": 16,
-                }),
-            },
-            ChatProbeRequest {
-                url: join_url(base_url, "chat/completions"),
-                body: chat_body(),
-            },
-        ],
-        ProviderTransport::OpenaiCompatible => vec![ChatProbeRequest {
-            url: join_url(base_url, "chat/completions"),
-            body: chat_body(),
-        }],
-        ProviderTransport::Anthropic => anthropic_message_urls(base_url)
-            .into_iter()
-            .map(|url| ChatProbeRequest {
-                url,
-                body: chat_body(),
-            })
-            .collect(),
-        ProviderTransport::Google => {
-            let model = model.trim_start_matches("models/");
-            vec![ChatProbeRequest {
-                url: join_url(base_url, &format!("models/{model}:generateContent")),
-                body: json!({"contents": [{"parts": [{"text": "hi"}]}]}),
-            }]
-        }
-    }
-}
-
 fn models_urls(transport: ProviderTransport, base_url: &str) -> Vec<String> {
     let base = base_url.trim_end_matches('/');
     match transport {
@@ -374,15 +223,6 @@ fn models_urls(transport: ProviderTransport, base_url: &str) -> Vec<String> {
             vec![join_url(base, "models")]
         }
     }
-}
-
-fn anthropic_message_urls(base_url: &str) -> Vec<String> {
-    let base = base_url.trim_end_matches('/');
-    let mut urls = vec![join_url(base, "messages")];
-    if !base.ends_with("/v1") {
-        urls.push(join_url(base, "v1/messages"));
-    }
-    urls
 }
 
 fn join_url(base_url: &str, path: &str) -> String {
@@ -426,18 +266,6 @@ fn request_error(error: reqwest::Error) -> String {
     } else {
         "provider request failed".to_string()
     }
-}
-
-/// 离线测试域名：`.invalid` 保留域名与本地 `20128` 开发端口。
-fn is_offline_dummy(base_url: &str) -> bool {
-    let host = host_of(base_url);
-    let hostname = host.split(':').next().unwrap_or_default();
-    hostname.ends_with(".invalid") || host == "localhost:20128"
-}
-
-fn host_of(url: &str) -> &str {
-    let rest = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    rest.split(['/', '?', '#']).next().unwrap_or_default()
 }
 
 /// 顶层错误对象且没有模型数组：语义上等于鉴权失败。

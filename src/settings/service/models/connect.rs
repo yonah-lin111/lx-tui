@@ -25,7 +25,6 @@ use crate::config::ai::presets::{
     PresetAuthMethod, PresetProviderSpec, all_presets, default_models_for_preset, find_preset,
     resolve_preset_base_url,
 };
-use crate::config::ai::verify::{merge_discovered_models_for_preset, verify_provider_api_key};
 
 /// OAuth 尝试状态（设置页轮询）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,10 +164,7 @@ fn connection_label(source: Option<&ConnectionSource>) -> String {
     }
 }
 
-/// `PUT /api/models/connect`：保存一个或多个快捷连接项。
-///
-/// 新增或变更的 API Key 先做真实鉴权探测；失败直接 422，且不写 `connect.json`。
-/// 探测成功时把 `/models` 发现的模型合并进预设记录（用户显式提交 `models` 时跳过）。
+/// `PUT /api/models/connect`：保存一个或多个快捷连接项（对齐 opencode-dev，仅校验结构与表单，不做阻塞探测）。
 async fn put_connect(request: &Request, state: &ServiceState) -> Response {
     let body: Value = match serde_json::from_str(&request.body) {
         Ok(value) => value,
@@ -192,75 +188,8 @@ async fn put_connect(request: &Request, state: &ServiceState) -> Response {
         Err(error) => return Response::error(500, &error.to_string()),
     };
     for item in items {
-        let pending_key = item
-            .get("apiKey")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|key| !key.is_empty())
-            .map(str::to_string);
-        let provider_id = item
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-            .map(str::to_string);
-        let key_changed = match (pending_key.as_deref(), provider_id.as_deref()) {
-            (Some(key), Some(id)) => {
-                settings
-                    .providers
-                    .get(id)
-                    .and_then(|record| record.api_key.as_deref())
-                    .map(str::trim)
-                    != Some(key)
-            }
-            _ => false,
-        };
-        let custom_models = item.get("models").and_then(Value::as_array).is_some();
         if let Err(message) = apply_connect_item(&mut settings, item) {
             return Response::error(422, &message);
-        }
-        if !key_changed {
-            continue;
-        }
-        let (Some(api_key), Some(id)) = (pending_key, provider_id) else {
-            continue;
-        };
-        let Some(spec) = find_preset(&id) else {
-            return Response::error(422, &format!("unknown preset provider '{id}'"));
-        };
-        let base_url = settings
-            .providers
-            .get(&id)
-            .map(|record| resolve_record_base_url(spec, record))
-            .unwrap_or_default();
-        if base_url.contains("${") {
-            return Response::error(
-                422,
-                &format!("Provider '{}': base URL is not configured", spec.name),
-            );
-        }
-        let probe_models = default_models_for_preset(spec.id);
-        let probe_model = probe_models.keys().next().map(String::as_str);
-        match verify_provider_api_key(spec.transport, &base_url, &api_key, probe_model).await {
-            Ok(outcome) => {
-                if !custom_models && !outcome.discovered_models.is_empty() {
-                    let existing = settings
-                        .providers
-                        .get(&id)
-                        .and_then(|record| record.models.clone());
-                    let merged = merge_discovered_models_for_preset(
-                        spec.id,
-                        existing.as_ref(),
-                        &outcome.discovered_models,
-                    );
-                    if let Some(record) = settings.providers.get_mut(&id) {
-                        record.models = Some(merged);
-                    }
-                }
-            }
-            Err(error) => {
-                return Response::error(422, &format!("Provider '{}': {error}", spec.name));
-            }
         }
     }
     match commit_connect_change(state, &settings) {
@@ -270,11 +199,6 @@ async fn put_connect(request: &Request, state: &ServiceState) -> Response {
         }
         Err(message) => Response::error(422, &message),
     }
-}
-
-/// 按当前记录（表单答案 + Base URL 覆盖）解析快捷连接的最终 Base URL。
-fn resolve_record_base_url(spec: &PresetProviderSpec, record: &ConnectedPresetRecord) -> String {
-    resolve_preset_base_url(spec, &record.form_answers, record.base_url.as_deref())
 }
 
 fn apply_connect_item(settings: &mut ConnectSettings, item: &Value) -> Result<(), String> {

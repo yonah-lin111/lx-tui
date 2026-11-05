@@ -6,20 +6,10 @@ use super::*;
 
 #[tokio::test]
 async fn empty_api_key_is_rejected_without_network() {
-    let error = verify_provider_api_key(
-        ProviderTransport::Openai,
-        "https://api.example.com/v1",
-        "   ",
-        None,
-    )
-    .await
-    .expect_err("empty key");
-    assert_eq!(error, "API key cannot be empty");
-
     let error = fetch_provider_models(
         ProviderTransport::Google,
         "https://generativelanguage.googleapis.com/v1beta",
-        "",
+        "   ",
     )
     .await
     .expect_err("empty key");
@@ -28,25 +18,10 @@ async fn empty_api_key_is_rejected_without_network() {
 
 #[tokio::test]
 async fn invalid_base_url_is_rejected() {
-    let error = verify_provider_api_key(ProviderTransport::Openai, "ftp://bad", "key", None)
+    let error = fetch_provider_models(ProviderTransport::Openai, "ftp://bad", "key")
         .await
         .expect_err("bad url");
     assert!(error.contains("scheme"), "{error}");
-}
-
-#[tokio::test]
-async fn offline_dummy_hosts_short_circuit() {
-    for base_url in [
-        "https://api.example.invalid/v1",
-        "http://localhost:20128/v1",
-        "https://vendor.invalid",
-    ] {
-        let outcome =
-            verify_provider_api_key(ProviderTransport::OpenaiCompatible, base_url, "k", None)
-                .await
-                .expect("offline dummy");
-        assert!(outcome.discovered_models.is_empty(), "{base_url}");
-    }
 }
 
 #[test]

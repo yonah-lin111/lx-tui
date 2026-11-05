@@ -69,7 +69,7 @@ const V1_CATALOG: &str = r#"{
 fn parses_v2_catalog_with_limits_modalities_and_variants() {
     let catalog = parse_models_dev_catalog(V2_CATALOG).expect("v2 parses");
     let openai = &catalog["openai"];
-    assert_eq!(openai.len(), 2, "deprecated model filtered");
+    assert_eq!(openai.len(), 1, "deprecated and non-chat models filtered");
     let gpt5 = &openai["gpt-5"];
     assert_eq!(gpt5.name, "GPT-5");
     assert_eq!(gpt5.limit.map(|limit| limit.context), Some(400_000));

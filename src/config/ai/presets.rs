@@ -229,17 +229,50 @@ pub fn default_models_for_preset(id: &str) -> BTreeMap<String, ModelConfig> {
     models.get(id).cloned().unwrap_or_default()
 }
 
-/// 用云端目录更新进程内模型表；同名模型覆盖，未出现的供应商/模型保留。
+/// 用云端目录更新进程内模型表；同名模型保留嵌入目录已声明的 `transport` 与默认 `variant`。
 pub fn update_catalog_models(updates: BTreeMap<String, BTreeMap<String, ModelConfig>>) {
+    let presets = all_presets();
     let mut models = catalog()
         .models
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     for (provider_id, provider_models) in updates {
-        models
-            .entry(provider_id)
-            .or_default()
-            .extend(provider_models);
+        let is_openai = presets
+            .iter()
+            .find(|spec| spec.id == provider_id)
+            .is_some_and(|spec| spec.transport == ProviderTransport::Openai);
+        let target = models.entry(provider_id).or_default();
+        merge_provider_models(target, provider_models, is_openai);
+    }
+}
+
+fn merge_provider_models(
+    target: &mut BTreeMap<String, ModelConfig>,
+    incoming: BTreeMap<String, ModelConfig>,
+    is_openai_provider: bool,
+) {
+    for (model_id, mut model) in incoming {
+        let valid_limit = model
+            .limit
+            .is_some_and(|limit| limit.context > 0 && limit.output > 0);
+        if !valid_limit {
+            continue;
+        }
+        if let Some(existing) = target.get(&model_id) {
+            if model.transport.is_none() {
+                model.transport = existing.transport;
+            }
+            if model.variant.is_none() {
+                model.variant = existing.variant.clone();
+            }
+            if model.variants.is_empty() && !existing.variants.is_empty() {
+                model.variants = existing.variants.clone();
+            }
+        }
+        if is_openai_provider && model.transport.is_none() {
+            model.transport = Some(ModelTransport::OpenaiResponses);
+        }
+        target.insert(model_id, model);
     }
 }
 
@@ -466,9 +499,17 @@ fn build_catalog() -> Catalog {
             .cmp(&right.name.to_ascii_lowercase())
             .then_with(|| left.id.cmp(right.id))
     });
-    // 磁盘缓存（上次云端同步结果）叠加在嵌入目录之上：同名模型以缓存为准。
+    // 磁盘缓存（上次云端同步结果）叠加在嵌入目录之上。
     for (provider_id, cached_models) in super::catalog_refresh::cached_catalog_models() {
-        models.entry(provider_id).or_default().extend(cached_models);
+        let is_openai = presets
+            .iter()
+            .find(|spec| spec.id == provider_id)
+            .is_some_and(|spec| spec.transport == ProviderTransport::Openai);
+        merge_provider_models(
+            models.entry(provider_id).or_default(),
+            cached_models,
+            is_openai,
+        );
     }
     Catalog {
         presets: leak_slice(presets),
