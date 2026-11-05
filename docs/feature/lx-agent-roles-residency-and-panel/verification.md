@@ -8,7 +8,7 @@
 | 领域、配置与工具单测 | `cargo test --lib config::subagents && cargo test --lib chat::agent && cargo test --lib chat::tools` | 通过（524 passed） |
 | 事件层与无头 `exec` 单测 | `cargo test --lib event::chat && cargo test --lib chat::agent::exec` | 通过（238 passed） |
 | App 状态、TUI 面板与设置 API | `cargo test --lib app::state::lx && cargo test --lib app::update && cargo test --lib ui::main_content::lx && cargo test --lib settings` | 通过（1648 passed） |
-| `lx-tui exec` CLI 实机多场景检验 | `./target/debug/lx-tui exec --ephemeral --json "..."`（6 组实机场景） | 全部通过（Exit Code 0） |
+| `lx-tui exec` CLI 实机持久化多场景检验 | `./target/debug/lx-tui exec --json "..."` & `exec resume --last --json "..."` | 全部通过并已落库（Exit Code 0） |
 
 ---
 

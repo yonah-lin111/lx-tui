@@ -121,7 +121,9 @@ pub(crate) fn projected_agent_status(
         .values()
         .any(|handle| handle.agent_id == record.agent_id && handle.status == STATUS_RUNNING);
     let resumed_or_paused = streams.resumed_subagents.contains(&record.agent_id)
-        || streams.paused_by_interrupt.contains(&record.agent_id);
+        || streams.paused_by_interrupt.contains(&record.agent_id)
+        || (record.status != STATUS_FAILED
+            && queue.is_some_and(|q| q.queued_count > 0 && q.head_error_code.is_none()));
     let has_blocked_head = queue.and_then(|q| q.head_error_code.as_ref()).is_some();
     let projected = crate::chat::agent::projected_agent_status(
         running,
