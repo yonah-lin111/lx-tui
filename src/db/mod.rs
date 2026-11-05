@@ -291,6 +291,10 @@ impl Database {
     /// `linked_worktree` 由入口传入：开发环境在 linked worktree 内使用独立库文件，
     /// 避免不同分支的 Schema 互相判废。
     pub fn open_default(linked_worktree: Option<&Path>) -> Result<Self> {
+        #[cfg(test)]
+        if let Some(overridden) = crate::platform::test_db_override() {
+            return Self::open(&overridden);
+        }
         if let Some(overridden) = std::env::var_os("LX_TUI_DB_PATH").filter(|path| !path.is_empty())
         {
             return Self::open(Path::new(&overridden));
@@ -831,6 +835,11 @@ impl Database {
 
 /// 数据库目录：生产 `~/.lx-t/db`，开发 `~/.lx-t-dev/db`。
 pub fn database_dir(is_dev: bool) -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(home) = crate::platform::test_home_override() {
+        let root = if is_dev { ".lx-t-dev" } else { ".lx-t" };
+        return Ok(home.join(root).join("db"));
+    }
     let home = std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)

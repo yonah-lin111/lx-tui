@@ -27,7 +27,7 @@ pub(super) fn execute(db_path: &Path, workspace: &Path, request: &RewindRequest)
     run(&database, workspace, request)
 }
 
-fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> RewindOutcome {
+pub(super) fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> RewindOutcome {
     // 异常退出遗留的未完成操作：不自动重跑，避免重复副作用。读取失败不能当成“没有”。
     match database.unfinished_operation(&request.session_id) {
         Ok(Some(unfinished)) => {

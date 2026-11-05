@@ -31,6 +31,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::config::Config;
 
 pub use handlers::{CommandView, Request, Response};
+pub(crate) use models::fetch_remote_models;
 
 /// TUI 推送给设置页的已打开项目。
 #[derive(Debug, Clone, PartialEq, Eq)]

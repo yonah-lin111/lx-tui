@@ -65,6 +65,10 @@ pub fn try_lock_named(group: &str, name: &str) -> io::Result<Option<FileGuard>> 
 
 /// 锁根目录：与数据库同环境的 `~/.lx-t[-dev]/locks`。
 pub fn lock_root() -> io::Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(home) = super::test_home_override() {
+        return Ok(home.join(".lx-t-dev").join("locks"));
+    }
     let home = std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)

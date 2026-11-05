@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod chat;
+pub mod cli;
 pub mod config;
 pub mod db;
 pub mod detect;

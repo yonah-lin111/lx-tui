@@ -107,6 +107,10 @@ pub struct ArchivedSessionImage {
 
 /// 会话数据根目录：生产 `~/.lx-t/session`，开发 `~/.lx-t-dev/session`。
 pub fn sessions_root_dir() -> Result<PathBuf, ImagePrepareError> {
+    #[cfg(test)]
+    if let Some(home) = super::test_home_override() {
+        return Ok(home.join(".lx-t-dev").join("session"));
+    }
     let home = std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
         .map(PathBuf::from)

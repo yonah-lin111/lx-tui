@@ -32,6 +32,15 @@ pub enum RewindOutcome {
     },
 }
 
+/// 供无头 CLI 与事件层共用的同步撤销执行入口（在给定数据库连接上执行预检、文件恢复与事务提交）。
+pub fn execute_rewind(
+    database: &crate::db::Database,
+    workspace: &std::path::Path,
+    request: &crate::app::effects::RewindRequest,
+) -> RewindOutcome {
+    restore::run(database, workspace, request)
+}
+
 /// 取走并执行撤销类效应；返回是否发生变化。
 pub fn apply_rewind_effects(
     state: &mut AppState,

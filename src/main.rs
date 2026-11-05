@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use lx_tui::app::state::AppState;
-use lx_tui::chat::agent::exec::{CliAction, EXIT_ERR, EXIT_OK, help_text, parse_cli, run_main};
+use lx_tui::cli::{CliAction, EXIT_ERR, EXIT_OK, parse_cli, run_cli};
 use lx_tui::config::Config;
 use lx_tui::db::is_dev_environment;
 use lx_tui::db::service::Persistence;
@@ -38,19 +38,11 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         }
     };
     match action {
-        CliAction::Help(topic) => {
-            print!("{}", help_text(topic));
-            Ok(EXIT_OK)
-        }
-        CliAction::Version => {
-            println!("lx-tui {}", env!("CARGO_PKG_VERSION"));
-            Ok(EXIT_OK)
-        }
-        CliAction::Exec(cli) => run_main(cli, database_worktree().as_deref()),
         CliAction::Tui => {
             run_tui()?;
             Ok(EXIT_OK)
         }
+        other => run_cli(other, database_worktree().as_deref()),
     }
 }
 

@@ -479,7 +479,7 @@ async fn fetch_models(request: &Request, state: &ServiceState) -> Response {
 }
 
 /// 异步执行一次发现请求。
-async fn fetch_remote_models(
+pub(crate) async fn fetch_remote_models(
     base_url: &str,
     api_key: &str,
 ) -> Result<Vec<(String, String)>, String> {

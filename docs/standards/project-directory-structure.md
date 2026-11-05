@@ -19,6 +19,11 @@ lx-tui/
   src/
     main.rs                     启动编排：日志、终端初始化与恢复
     lib.rs                      crate 根；main.rs 保持薄入口，逻辑放模块
+    cli/                        全功能无头 CLI（`lx-tui <command>`）：顶层路由（mod.rs）、
+                                通用参数扫描与多行长文本输入（args.rs）、工作区与开发库定位及会话锁
+                                （context.rs）、双模式人类可读/JSON 输出器（output.rs）、全局帮助手册
+                                （help.rs），以及 session / prompt / todo / workspace / model /
+                                mcp / skill / command / subagent / settings 领域子命令模块与测试
     layout.rs                   BSP 平铺模型（含折叠窄条）与几何计算，纯函数、不渲染
     app/                        应用状态与更新逻辑，纯数据、无 IO、可测试
       mod.rs
@@ -163,11 +168,13 @@ lx-tui/
 14. `platform/`：OS 专属代码唯一落点，按 `#[cfg(...)]` 门控（含文件/目录权限收紧、原子文件替换 `write_file_atomic`/`rename_over`）；核心模块不得出现裸 OS 分支。
 15. `tests/`：跨模块集成测试；单元测试体严格镜像生产模块结构，下沉到对应子模块的 `tests.rs` 或子场景测试模块中，由主文件的 `#[cfg(test)] mod tests;` 引入，不集中堆积在父模块根部。
 16. `assets/`：浏览器前端资源，HTML/CSS/JS 分文件维护，经 `include_str!` 编译进二进制并按独立路由提供，遵循 `html-assets.md`。
+17. `cli/`：全功能无头 CLI 入口与领域子命令编排（`session`、`prompt`、`todo`、`workspace`、`model`、`mcp`、`skill`、`command`、`subagent`、`settings`，以及委托 `chat::agent::exec` 的 `exec`）；复用 `db`、`config`、`settings`、`mcp`、`skills`、`git` 与 `platform` 的持久层及跨进程会话锁能力，不初始化备用屏或原始模式。
 
 ## 依赖方向
 
 ```text
 main -> 所有模块（只装配，不写业务）
+cli -> chat, db, config, settings, mcp, skills, git, platform, event::chat::rewind（纯同步回滚入口）
 event -> input, app, ui, tui, pty, terminal, git, db, settings, chat
 ui -> app（只读状态）, layout（窗格几何）, terminal（只读网格）
 input -> app（行为定义）, layout（方向导航）

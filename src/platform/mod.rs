@@ -58,6 +58,30 @@ pub fn dev_environment() -> bool {
     }
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static TEST_HOME_OVERRIDE: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+    static TEST_DB_OVERRIDE: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_env(home: Option<std::path::PathBuf>, db: Option<std::path::PathBuf>) {
+    TEST_HOME_OVERRIDE.with(|slot| *slot.borrow_mut() = home);
+    TEST_DB_OVERRIDE.with(|slot| *slot.borrow_mut() = db);
+}
+
+#[cfg(test)]
+pub(crate) fn test_home_override() -> Option<std::path::PathBuf> {
+    TEST_HOME_OVERRIDE.with(|slot| slot.borrow().clone())
+}
+
+#[cfg(test)]
+pub(crate) fn test_db_override() -> Option<std::path::PathBuf> {
+    TEST_DB_OVERRIDE.with(|slot| slot.borrow().clone())
+}
+
 mod paste_path;
 pub use paste_path::{parse_path_text, resolve_pasted_path, sniff_image_file};
 
