@@ -35,6 +35,7 @@ pub enum TooltipTarget {
     CollapseAgents,
     /// 窗格顶边框的视图切换按钮。
     PaneToggle(PaneId),
+    WorkspaceMode,
     AddWorkspace,
     AddTab,
     TabScrollLeft,

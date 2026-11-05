@@ -50,6 +50,49 @@ pub(crate) fn handle_key_event(
         *dirty = true;
         return;
     }
+    // 侧栏工作区历史列表处于打开态且侧栏持焦点时，处理搜索框输入与列表导航。
+    if overlay.is_none()
+        && state.sidebar_focused()
+        && update::workspace_history_mode(state)
+        && !(key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL))
+    {
+        if let Some(history_key) = input::sidebar_history_key(key) {
+            let visible = ui::workspace_history_visible_rows(view, state).unwrap_or(1);
+            match history_key {
+                OverlayKey::Clear | OverlayKey::Copy => {
+                    if let Some(text) = state.workspace_history.search.selected_text() {
+                        if !text.trim().is_empty() {
+                            copy_with_toast(state, &text, None);
+                        }
+                        *dirty = true;
+                    } else if update::clear_workspace_history_search(state, visible) {
+                        *dirty = true;
+                    }
+                }
+                OverlayKey::Cut => {
+                    if let Some(text) = update::cut_workspace_history_search(state, visible) {
+                        if !text.is_empty() {
+                            copy_with_toast(state, &text, None);
+                        }
+                        *dirty = true;
+                    }
+                }
+                OverlayKey::Enter => {
+                    if update::apply_workspace_history_key(state, history_key, visible) {
+                        ensure_workspace_visible(state, view);
+                        reveal_active_tab(state, view);
+                        *dirty = true;
+                    }
+                }
+                _ => {
+                    if update::apply_workspace_history_key(state, history_key, visible) {
+                        *dirty = true;
+                    }
+                }
+            }
+        }
+        return;
+    }
     let Some(routed) = input::route(key, mode, state.focus(), overlay, pane_lx) else {
         return;
     };
@@ -250,9 +293,13 @@ pub(crate) fn handle_paste_event(
         }
         return;
     }
-    // 侧栏没有键盘交互（`input::route` 把它的按键全吞掉），粘贴必须同样吞掉：
-    // 否则焦点在侧栏时粘贴会落进别的容器的输入框。
+    // 侧栏：仅在工作区历史列表模式下将粘贴写入搜索框，活跃列表模式下吞掉粘贴。
     if state.sidebar_focused() {
+        if update::workspace_history_mode(state)
+            && update::apply_workspace_history_paste(state, &text, 10)
+        {
+            *dirty = true;
+        }
         return;
     }
     if state.todo_focused() {

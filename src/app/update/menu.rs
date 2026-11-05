@@ -73,10 +73,42 @@ pub fn open_workspace_list_menu(state: &mut AppState, anchor: (u16, u16)) {
     state.workspace_scroll_drag = None;
     state.workspace_drag = None;
     state.workspace_dragging = false;
+    state.workspace_history.scroll_drag = None;
+    state.workspace_history.search_drag = false;
     state.overlay = Some(Overlay::Menu(Menu {
         anchor,
         target: OverlayTarget::WorkspaceList,
         commands: vec![MenuCommand::NewWorkspace],
+        selected: 0,
+        confirming: false,
+    }));
+}
+
+/// 打开工作区历史列表条目右键菜单：
+/// - 磁盘路径存在：`[Open, Rename]`；
+/// - 磁盘路径不存在：`[Open, Rename, Delete]`（Delete 带行内二次确认并级联删除）。
+pub fn open_workspace_history_menu(state: &mut AppState, visible_row: usize, anchor: (u16, u16)) {
+    state.workspace_history.scroll_drag = None;
+    state.workspace_history.search_drag = false;
+    super::workspace_history::select_workspace_history_row(state, visible_row);
+    let Some(&entry_index) = state.workspace_history.filtered_indices().get(visible_row) else {
+        return;
+    };
+    let Some(entry) = state.workspace_history.entries.get_mut(entry_index) else {
+        return;
+    };
+    entry.exists = entry.path.is_dir();
+    let mut commands = vec![
+        MenuCommand::OpenWorkspaceHistory,
+        MenuCommand::RenameWorkspace,
+    ];
+    if !entry.exists {
+        commands.push(MenuCommand::DeleteWorkspaceHistory);
+    }
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor,
+        target: OverlayTarget::WorkspaceHistory(entry_index),
+        commands,
         selected: 0,
         confirming: false,
     }));
@@ -290,6 +322,22 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
                 target: RenameTarget::Workspace(target),
                 input: TextInput::new(workspace.name.clone()),
             }));
+        }
+        (Some(MenuCommand::OpenWorkspaceHistory), OverlayTarget::WorkspaceHistory(entry_index)) => {
+            super::workspace_history::open_workspace_history_entry(state, entry_index);
+        }
+        (Some(MenuCommand::RenameWorkspace), OverlayTarget::WorkspaceHistory(entry_index)) => {
+            let entry = state.workspace_history.entries.get(entry_index)?;
+            state.overlay = Some(Overlay::Rename(Rename {
+                target: RenameTarget::WorkspaceHistory(entry_index),
+                input: TextInput::new(entry.name.clone()),
+            }));
+        }
+        (
+            Some(MenuCommand::DeleteWorkspaceHistory),
+            OverlayTarget::WorkspaceHistory(entry_index),
+        ) => {
+            super::workspace_history::delete_workspace_history_entry(state, entry_index);
         }
         (Some(MenuCommand::OpenWorktree), OverlayTarget::Workspace(target)) => {
             open_worktree_dialog(state, target);

@@ -135,6 +135,20 @@ impl Persistence {
         }
     }
 
+    /// 登记启动初始工作区并载入全局工作区历史列表（启动信任通过后调用一次）。
+    pub fn load_workspace_history(&self, state: &mut AppState) {
+        let Some(db) = self.db.as_ref() else {
+            return;
+        };
+        if let Some(ws) = state.workspaces.first()
+            && let Some(cwd) = ws.cwd.as_deref()
+            && let Err(error) = db.record_workspace_open(cwd, &ws.name)
+        {
+            tracing::warn!(%error, "recording initial workspace failed");
+        }
+        self.reload_workspace_history(state);
+    }
+
     /// 执行全部待办效应并惰性载入显示中工作区的提示词树；返回状态是否有变化。
     ///
     /// 聊天的网络效应（StartChatStream/CancelChatStream）不在此执行——
@@ -552,6 +566,19 @@ impl Persistence {
                 self.todo_write(state, |db| db.rollover_todos_to_date(&ids, &target_date));
                 false
             }
+            Effect::RecordWorkspace { path, name } => {
+                self.with_db(|db| db.record_workspace_open(&path, &name));
+                self.reload_workspace_history(state)
+            }
+            Effect::RenameWorkspace { path, name } => {
+                self.with_db(|db| db.rename_workspace(&path, &name));
+                self.reload_workspace_history(state)
+            }
+            Effect::DeleteWorkspaceHistory { path } => {
+                self.with_db(|db| db.delete_workspace(&path));
+                self.reload_workspace_history(state)
+            }
+            Effect::LoadWorkspaceHistory => self.reload_workspace_history(state),
             // 网络与进程效应由事件层执行（pump 已过滤；此处兜底忽略并记录）。
             // 进程句柄只存在于事件层的运行实例里，持久化层既读不到也停不了。
             Effect::StartChatStream { .. }
@@ -737,6 +764,26 @@ impl Persistence {
                 tracing::warn!(%error, "referenced folder load failed");
                 state.referenced.apply(key.to_path_buf(), Vec::new(), true);
                 true
+            }
+        }
+    }
+
+    /// 从数据库重新加载工作区历史列表并同步到 `state.workspace_history`。
+    fn reload_workspace_history(&self, state: &mut AppState) -> bool {
+        let Some(db) = &self.db else {
+            return false;
+        };
+        match db.list_workspaces() {
+            Ok(records) => {
+                let pairs = records
+                    .into_iter()
+                    .map(|record| (record.name, record.path))
+                    .collect();
+                update::apply_workspace_history(state, pairs)
+            }
+            Err(error) => {
+                tracing::warn!(%error, "workspace history load failed");
+                false
             }
         }
     }

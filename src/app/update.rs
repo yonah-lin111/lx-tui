@@ -15,6 +15,7 @@ mod selection;
 mod todo;
 mod trust;
 mod workspace;
+mod workspace_history;
 mod workspace_list;
 mod worktree;
 
@@ -33,6 +34,7 @@ pub use selection::*;
 pub use todo::*;
 pub use trust::*;
 pub use workspace::*;
+pub use workspace_history::*;
 pub use workspace_list::*;
 pub use worktree::{
     apply_git_refresh, apply_worktree_list, apply_worktree_open_key, commit_worktree_open,

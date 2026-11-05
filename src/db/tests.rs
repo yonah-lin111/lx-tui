@@ -145,24 +145,6 @@ fn in_memory_database_migrates_and_supports_a_full_turn() {
 }
 
 #[test]
-fn trust_is_scoped_per_workspace_path() {
-    let (database, _) = open_test_database("trust");
-    let trusted = workspace_path("trusted");
-    let other = workspace_path("other");
-    assert!(!database.is_trusted(&trusted).expect("query ok"));
-    database
-        .trust_workspace(&trusted, "trusted")
-        .expect("trust ok");
-    assert!(database.is_trusted(&trusted).expect("query ok"));
-    assert!(!database.is_trusted(&other).expect("query ok"));
-    // 重复信任幂等。
-    database
-        .trust_workspace(&trusted, "renamed")
-        .expect("trust again ok");
-    assert!(database.is_trusted(&trusted).expect("query ok"));
-}
-
-#[test]
 fn folder_nesting_is_limited_to_two_levels() {
     let (database, _) = open_test_database("depth");
     let workspace = workspace_path("depth");

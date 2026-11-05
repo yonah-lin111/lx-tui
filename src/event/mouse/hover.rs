@@ -116,6 +116,9 @@ pub(crate) fn handle_mouse_moved(
         if update::set_todo_hover(state, None) {
             *dirty = true;
         }
+        if update::set_workspace_history_hover(state, None) {
+            *dirty = true;
+        }
         // 引用文件夹内容弹窗的边框按钮可提示；其余浮层抑制 tooltip。
         let tooltip_target = if matches!(state.overlay, Some(Overlay::ReferencedFolderSearch(_))) {
             ui::tooltip::target_at(view, state, rects, *screen, mouse.column, mouse.row)
@@ -133,10 +136,16 @@ pub(crate) fn handle_mouse_moved(
     } else {
         ui::workspace_item_at(view, state, mouse.column, mouse.row)
     };
+    let history_hover = if state.sidebar_collapsed {
+        None
+    } else {
+        ui::workspace_history_row_at(view, state, mouse.column, mouse.row)
+    };
     let tab_layout = ui::tab_bar::layout(view, state.active_workspace(), state.tab_scroll);
     let tab_hover = ui::tab_bar::tab_at(&tab_layout, mouse.column, mouse.row);
     let agent_hover = ui::agent_item_index_at(view, state, mouse.column, mouse.row);
     let mut item_hover_changed = update::set_workspace_hover(state, workspace_hover);
+    item_hover_changed |= update::set_workspace_history_hover(state, history_hover);
     item_hover_changed |= update::set_tab_hover(state, tab_hover);
     item_hover_changed |= update::set_agent_hover(state, agent_hover);
     if item_hover_changed {

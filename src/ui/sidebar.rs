@@ -1,24 +1,32 @@
 //! 侧栏渲染：Workspaces 列表与 Agents 分区；渲染、命中与滚动几何共用。
 
+pub mod history;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 
-use crate::app::state::{AppState, Workspace};
+use crate::app::state::{AppState, Workspace, WorkspaceMode};
 use crate::detect::PaneAgentSnapshot;
 use crate::layout::{COLLAPSED_STRIP, PaneId};
 
 use super::{PANEL_BUTTON_MARGIN, PANEL_BUTTON_WIDTH, layout, style, text, widgets};
 
+pub use history::{
+    workspace_history_blank_at, workspace_history_row_at, workspace_history_scrollbar,
+    workspace_history_search_char_at, workspace_history_visible_rows,
+};
+
 /// 工作区列表顶层项的统一缩进列数；子项连接符与父项/普通项名字在此列对齐。
 pub(crate) const WORKSPACE_ITEM_INDENT: usize = 2;
 
-/// 侧栏：上半工作区列表，竖直中线的分割线标题为 agents，下半为 agents 分区。
-pub fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+/// 侧栏：上半工作区列表（或历史列表），竖直中线的分割线标题为 agents，下半为 agents 分区。
+/// 当处于历史列表且侧栏持焦点时，返回搜索框硬件光标坐标。
+pub fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
-        return;
+        return None;
     }
     // 侧栏边框随焦点描边：它自己持焦点时用强调色，其余容器持焦点时保持 muted。
     let block = Block::bordered()
@@ -30,27 +38,38 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
-        return;
+        return None;
     }
     let Some(sections) = layout::sidebar_sections(area, state.agents_collapsed) else {
+        if state.workspace_history.mode == WorkspaceMode::History {
+            return history::render(frame, inner, state);
+        }
         let items = workspace_items(state, usize::from(inner.width));
         frame.render_widget(List::new(items), inner);
-        return;
+        return None;
     };
     let list = sections.workspaces;
-    let scrollbar = workspace_scrollbar_for(list, state);
-    let list_area = match &scrollbar {
-        Some(_) => Rect {
-            width: list.width.saturating_sub(1),
-            ..list
-        },
-        None => list,
+    let cursor = if state.workspace_history.mode == WorkspaceMode::History {
+        history::render(frame, list, state)
+    } else {
+        let scrollbar = workspace_scrollbar_for(list, state);
+        let list_area = match &scrollbar {
+            Some(_) => Rect {
+                width: list.width.saturating_sub(1),
+                ..list
+            },
+            None => list,
+        };
+        let items = workspace_items(state, usize::from(list_area.width));
+        let mut list_state = ListState::default().with_offset(state.workspace_scroll);
+        frame.render_stateful_widget(List::new(items), list_area, &mut list_state);
+        if let Some(scrollbar) = &scrollbar {
+            widgets::scrollbar::render(frame, scrollbar);
+        }
+        None
     };
-    let items = workspace_items(state, usize::from(list_area.width));
-    let mut list_state = ListState::default().with_offset(state.workspace_scroll);
-    frame.render_stateful_widget(List::new(items), list_area, &mut list_state);
-    if let Some(scrollbar) = &scrollbar {
-        widgets::scrollbar::render(frame, scrollbar);
+    if let Some(button) = mode_button_area(area) {
+        render_workspace_mode_button(frame, button, state.workspace_history.mode);
     }
     if let Some(button) = add_button_area(area) {
         render_add_workspace_button(frame, button);
@@ -61,6 +80,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         agents_button_area(area, sections.divider),
     );
     render_agents(frame, sections.agents, state);
+    cursor
 }
 
 /// 工作区列表项：激活项行首 `❯` 标记（同 Agents 条目，不独立着色）；
@@ -200,6 +220,9 @@ pub fn workspace_scrollbar(
     view: &layout::ViewLayout,
     state: &AppState,
 ) -> Option<widgets::scrollbar::ScrollbarLayout> {
+    if state.workspace_history.mode != WorkspaceMode::Active {
+        return None;
+    }
     let sections = layout::sidebar_sections(view.sidebar, state.agents_collapsed)?;
     workspace_scrollbar_for(sections.workspaces, state)
 }
@@ -242,6 +265,41 @@ pub fn sidebar_boundary_at(view: &layout::ViewLayout, column: u16, row: u16) -> 
         return false;
     }
     column == view.sidebar.right().saturating_sub(1) || column == view.sidebar.right()
+}
+
+/// 工作区历史列表切换按钮矩形：位于 `[+]` 左侧 1 列（`[≡] [+]`）；折叠或空间不足时不显示。
+pub fn workspace_mode_button(view: &layout::ViewLayout) -> Option<Rect> {
+    mode_button_area(view.sidebar)
+}
+
+fn mode_button_area(sidebar: Rect) -> Option<Rect> {
+    let add = add_button_area(sidebar)?;
+    let width = text::PROMPT_MODE_LIST_LABEL.chars().count() as u16;
+    let x = add.x.checked_sub(width.saturating_add(1))?;
+    let min_x = sidebar
+        .x
+        .saturating_add(1)
+        .saturating_add(text::SIDEBAR_TITLE.chars().count() as u16)
+        .saturating_add(2);
+    (x >= min_x).then_some(Rect::new(x, sidebar.y, width, 1))
+}
+
+/// 工作区历史列表切换按钮：默认显示 `[≡]`，历史模式下显示 `[/]`。
+fn render_workspace_mode_button(frame: &mut Frame<'_>, area: Rect, mode: WorkspaceMode) {
+    let label = match mode {
+        WorkspaceMode::Active => text::PROMPT_MODE_LIST_LABEL,
+        WorkspaceMode::History => text::PROMPT_MODE_EDIT_LABEL,
+    };
+    for (offset, symbol) in label.chars().enumerate() {
+        if let Some(cell) = frame
+            .buffer_mut()
+            .cell_mut((area.x + offset as u16, area.y))
+        {
+            cell.reset();
+            cell.set_char(symbol);
+            cell.set_style(style::accent());
+        }
+    }
 }
 
 /// 新建工作区按钮矩形：侧栏顶边框右端（原折叠按钮位置）；折叠或空间不足时不显示。
@@ -312,6 +370,9 @@ fn workspace_slot_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
+    if state.workspace_history.mode != WorkspaceMode::Active {
+        return None;
+    }
     let content = workspace_list_content(view, state)?;
     if !content.contains((column, row).into()) {
         return None;
@@ -354,6 +415,9 @@ pub fn workspace_group_toggle_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
+    if state.workspace_history.mode != WorkspaceMode::Active {
+        return None;
+    }
     let list = workspace_list_rect(view, state)?;
     if column != list.x || !list.contains((column, row).into()) {
         return None;
@@ -374,6 +438,9 @@ pub fn workspace_drop_index(
     state: &AppState,
     row: u16,
 ) -> Option<usize> {
+    if state.workspace_history.mode != WorkspaceMode::Active {
+        return None;
+    }
     let list = workspace_list_rect(view, state)?;
     let rows = state.workspace_rows();
     if rows.is_empty() {

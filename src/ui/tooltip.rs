@@ -112,6 +112,9 @@ fn targets(
             targets.push((TooltipTarget::PaneToggle(*pane), area));
         }
     }
+    if let Some(area) = sidebar::workspace_mode_button(view) {
+        targets.push((TooltipTarget::WorkspaceMode, area));
+    }
     if let Some(area) = sidebar::add_workspace_button(view) {
         targets.push((TooltipTarget::AddWorkspace, area));
     }

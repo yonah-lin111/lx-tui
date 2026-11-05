@@ -22,6 +22,7 @@ pub mod pane;
 pub mod prompt_history;
 pub mod todo;
 pub mod workspace;
+pub mod workspace_history;
 
 pub use lx::LxInputMode;
 pub use lx::{
@@ -47,6 +48,7 @@ pub use workspace::{
     current_workspace_identity, home_dir, path_tail_two, tab_label, unique_workspace_name,
     workspace_label, workspace_name,
 };
+pub use workspace_history::{WorkspaceHistoryEntry, WorkspaceHistoryPanel, WorkspaceMode};
 
 /// 全局 prompt 右栏的兜底初始宽度（列，含边框）；
 /// 生产启动时按主区可用宽度的一半覆盖，之后可拖拽。
@@ -227,6 +229,8 @@ pub struct AppState {
     pub right_tab_hover: Option<RightTab>,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
+    /// 左侧栏工作区历史列表状态（视图模式、过滤、选中与滚动）。
+    pub workspace_history: WorkspaceHistoryPanel,
     /// 标签栏滚动偏移（首个可见标签索引）；仅作用于当前工作区。
     pub tab_scroll: usize,
     /// 鼠标悬停的可见标签索引；None 表示未悬停任何标签。
@@ -417,6 +421,7 @@ impl AppState {
                 prompt_panel: PromptPanel::new(),
             }],
             active_workspace: 0,
+            workspace_history: WorkspaceHistoryPanel::new(),
             tab_scroll: 0,
             tab_hover: None,
             prompt_tree_hover: None,

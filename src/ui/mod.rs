@@ -29,7 +29,9 @@ pub(crate) use controls::collapsed_content_x;
 pub use sidebar::{
     add_workspace_button, agent_item_at, agent_item_index_at, agent_list_rows, agent_scrollbar,
     agents_section_at, sidebar_boundary_at, workspace_drop_index, workspace_group_toggle_at,
-    workspace_item_at, workspace_list_blank_at, workspace_list_rows, workspace_scrollbar,
+    workspace_history_blank_at, workspace_history_row_at, workspace_history_scrollbar,
+    workspace_history_search_char_at, workspace_history_visible_rows, workspace_item_at,
+    workspace_list_blank_at, workspace_list_rows, workspace_mode_button, workspace_scrollbar,
     workspace_section_at,
 };
 
@@ -77,14 +79,18 @@ pub(crate) fn render_cached(
         config.min_pane_height,
     );
 
-    if view.sidebar.width > 0 {
+    let sidebar_cursor = if view.sidebar.width > 0 {
         if state.sidebar_collapsed {
             controls::render_collapsed_strip(frame, view.sidebar, true);
+            None
         } else {
-            sidebar::render(frame, view.sidebar, state);
+            let cursor = sidebar::render(frame, view.sidebar, state);
             controls::render_settings_button(frame, &view, state);
+            cursor
         }
-    }
+    } else {
+        None
+    };
     tab_bar::render(frame, &view, state);
     controls::render_exit_button(frame, &view);
     // 主区折叠：只画右缘窄条，不渲染窗格内容（PTY 尺寸保持折叠前）。
@@ -94,7 +100,9 @@ pub(crate) fn render_cached(
     } else {
         panes::render_panes(frame, &pane_rects, state, cache)
     };
-    let prompt_cursor = right_panel::render(frame, &view, state).or(pane_cursor);
+    let prompt_cursor = right_panel::render(frame, &view, state)
+        .or(pane_cursor)
+        .or(sidebar_cursor);
     controls::render_swap_button(frame, &view);
     controls::render_panel_buttons(frame, &view, state);
     controls::render_resize_hint(frame, &view, state);

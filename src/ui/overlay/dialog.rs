@@ -222,7 +222,9 @@ pub fn trust_button_at(
 /// 重命名浮层标题：按目标种类分派。
 fn rename_title(target: RenameTarget) -> &'static str {
     match target {
-        RenameTarget::Workspace(_) => text::RENAME_WORKSPACE_TITLE,
+        RenameTarget::Workspace(_) | RenameTarget::WorkspaceHistory(_) => {
+            text::RENAME_WORKSPACE_TITLE
+        }
         RenameTarget::Tab { .. } => text::RENAME_TAB_TITLE,
         RenameTarget::PromptFolder { .. } => text::RENAME_FOLDER_TITLE,
         RenameTarget::PromptItem { .. } => text::RENAME_PROMPT_TITLE,

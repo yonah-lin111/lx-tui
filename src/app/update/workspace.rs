@@ -100,15 +100,24 @@ pub fn create_workspace_with_cwd(state: &mut AppState, target_cwd: Option<PathBu
             None => current_workspace_identity(),
         },
     };
-    let name = unique_workspace_name(&base, |candidate| {
+    let saved_manual = cwd.as_deref().and_then(|path| {
+        state
+            .workspace_history
+            .entries
+            .iter()
+            .find(|entry| entry.path == path && entry.name != base && !entry.name.trim().is_empty())
+            .map(|entry| entry.name.clone())
+    });
+    let effective_base = saved_manual.as_deref().unwrap_or(&base);
+    let name = unique_workspace_name(effective_base, |candidate| {
         state
             .workspaces
             .iter()
             .any(|workspace| workspace.name == candidate)
     });
-    state
-        .workspaces
-        .push(Workspace::single_terminal(name, cwd.clone()));
+    let mut workspace = Workspace::single_terminal(name, cwd.clone());
+    workspace.name_is_manual = saved_manual.is_some();
+    state.workspaces.push(workspace);
     let from = state.active_workspace;
     state.active_workspace = state.workspaces.len().saturating_sub(1);
     if state.prompt_pinned.is_none() {
@@ -116,7 +125,14 @@ pub fn create_workspace_with_cwd(state: &mut AppState, target_cwd: Option<PathBu
     }
     if let Some(cwd) = cwd.as_deref() {
         request_git_refresh(state, cwd);
+        state
+            .effects
+            .push(crate::app::effects::Effect::RecordWorkspace {
+                path: cwd.to_path_buf(),
+                name: base,
+            });
     }
+    super::workspace_history::exit_workspace_history(state);
     clear_selection(state);
     super::focus::focus_panes(state);
 }

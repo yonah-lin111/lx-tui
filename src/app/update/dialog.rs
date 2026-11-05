@@ -267,8 +267,32 @@ fn commit_rename(state: &mut AppState) {
                 state.overlay = None;
                 return;
             };
-            workspace.name = name;
+            let cwd = workspace.cwd.clone();
+            workspace.name = name.clone();
             workspace.name_is_manual = true;
+            if let Some(path) = cwd {
+                for entry in &mut state.workspace_history.entries {
+                    if entry.path == path {
+                        entry.name = name.clone();
+                    }
+                }
+                state.effects.push(Effect::RenameWorkspace { path, name });
+            }
+        }
+        RenameTarget::WorkspaceHistory(entry_index) => {
+            let Some(entry) = state.workspace_history.entries.get_mut(entry_index) else {
+                state.overlay = None;
+                return;
+            };
+            let path = entry.path.clone();
+            entry.name = name.clone();
+            for workspace in &mut state.workspaces {
+                if workspace.cwd.as_deref() == Some(path.as_path()) {
+                    workspace.name = name.clone();
+                    workspace.name_is_manual = true;
+                }
+            }
+            state.effects.push(Effect::RenameWorkspace { path, name });
         }
         RenameTarget::Tab { workspace, tab } => {
             let Some(tab_state) = state

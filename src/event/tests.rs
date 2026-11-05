@@ -28,3 +28,4 @@ mod prompt_recent;
 mod prompt_tree;
 mod terminal;
 mod todo;
+mod workspace_history;

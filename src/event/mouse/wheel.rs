@@ -570,14 +570,24 @@ pub(crate) fn handle_mouse_wheel(
             *dirty = true;
         }
     } else if ui::workspace_section_at(view, state, mouse.column, mouse.row)
-        && let Some(rows) = ui::workspace_list_rows(view, state)
         && let Some(delta) = vertical_wheel_delta(mouse.kind)
-        && update::scroll_workspace_list(state, delta, rows)
     {
-        // 列表滚动后指针下的工作区可能已换行：按新偏移重算悬停。
-        let hover = ui::workspace_item_at(view, state, mouse.column, mouse.row);
-        update::set_workspace_hover(state, hover);
-        *dirty = true;
+        if update::workspace_history_mode(state) {
+            if let Some(rows) = ui::workspace_history_visible_rows(view, state)
+                && update::scroll_workspace_history(state, delta, rows)
+            {
+                let hover = ui::workspace_history_row_at(view, state, mouse.column, mouse.row);
+                update::set_workspace_history_hover(state, hover);
+                *dirty = true;
+            }
+        } else if let Some(rows) = ui::workspace_list_rows(view, state)
+            && update::scroll_workspace_list(state, delta, rows)
+        {
+            // 列表滚动后指针下的工作区可能已换行：按新偏移重算悬停。
+            let hover = ui::workspace_item_at(view, state, mouse.column, mouse.row);
+            update::set_workspace_hover(state, hover);
+            *dirty = true;
+        }
     } else if ui::agents_section_at(view, state, mouse.column, mouse.row)
         && let Some(rows) = ui::agent_list_rows(view, state)
         && let Some(delta) = vertical_wheel_delta(mouse.kind)

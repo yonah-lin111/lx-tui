@@ -465,6 +465,14 @@ pub(crate) fn open_right_click_menu(
         update::open_tab_menu(state, index, (column, row));
         return true;
     }
+    if let Some(vis_row) = ui::workspace_history_row_at(view, state, column, row) {
+        update::open_workspace_history_menu(state, vis_row, (column, row));
+        return true;
+    }
+    if ui::workspace_history_blank_at(view, state, column, row) {
+        update::open_workspace_list_menu(state, (column, row));
+        return true;
+    }
     if let Some(index) = ui::workspace_item_at(view, state, column, row) {
         update::open_workspace_menu(state, index, (column, row));
         return true;

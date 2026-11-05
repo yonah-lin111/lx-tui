@@ -447,6 +447,14 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
     }
 }
 
+/// 侧栏工作区历史列表视图按键映射：复用单行搜索 + 列表上下导航按键集。
+pub fn sidebar_history_key(key: KeyEvent) -> Option<OverlayKey> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    overlay_key(key, OverlayKind::WorktreeOpen)
+}
+
 /// 编辑键映射；Shift 用于字符输入、@ 面板目录导航与 `Ctrl/Cmd+Enter` 变体。
 ///
 /// `Shift+Enter` 映射为 @ 面板目录进入命令；面板未消费时回落为行尾另起一行

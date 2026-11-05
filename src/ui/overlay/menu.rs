@@ -25,6 +25,12 @@ pub(crate) fn menu_title(state: &AppState, menu: &Menu) -> String {
             .get(*index)
             .map(|workspace| workspace.name.clone())
             .unwrap_or_else(|| text::MENU_TITLE_WORKSPACE.to_string()),
+        OverlayTarget::WorkspaceHistory(index) => state
+            .workspace_history
+            .entries
+            .get(*index)
+            .map(|entry| entry.name.clone())
+            .unwrap_or_else(|| text::MENU_TITLE_WORKSPACE.to_string()),
         OverlayTarget::Tab { workspace, tab } => state
             .workspaces
             .get(*workspace)
@@ -165,6 +171,14 @@ pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
                 MenuCommand::RenamePage => text::MENU_PAGE_RENAME,
                 MenuCommand::NewPage => text::MENU_PAGE_NEW,
                 MenuCommand::ForkPage => text::MENU_PAGE_FORK,
+                MenuCommand::OpenWorkspaceHistory => text::MENU_OPEN_WORKSPACE_HISTORY,
+                MenuCommand::DeleteWorkspaceHistory => {
+                    if confirming {
+                        text::MENU_CONFIRM_DELETE
+                    } else {
+                        text::MENU_DELETE_WORKSPACE_HISTORY
+                    }
+                }
             }
         })
         .collect()

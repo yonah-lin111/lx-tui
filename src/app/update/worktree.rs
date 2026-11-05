@@ -277,6 +277,10 @@ pub(super) fn open_worktree_checkout(
         main_branch,
     });
     state.workspaces.push(workspace);
+    state.effects.push(Effect::RecordWorkspace {
+        path: entry.path.clone(),
+        name: base,
+    });
     let child = state.workspaces.len().saturating_sub(1);
     let from = state.active_workspace;
     state.active_workspace = child;

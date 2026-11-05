@@ -15,6 +15,9 @@ mod image_migration;
 mod migration;
 pub mod service;
 pub mod todo;
+pub mod workspace;
+
+pub use workspace::WorkspaceRecord;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -319,61 +322,6 @@ impl Database {
             out.push_str(&format!("{table}={count}\n"));
         }
         Ok(out)
-    }
-
-    /// 路径是否已信任（`is_trusted = 1`）。
-    pub fn is_trusted(&self, path: &Path) -> Result<bool> {
-        let trusted: i64 = self
-            .conn
-            .query_row(
-                "SELECT is_trusted FROM workspace WHERE path = ?1",
-                params![path_string(path)],
-                |row| row.get(0),
-            )
-            .optional()?
-            .unwrap_or(0);
-        Ok(trusted == 1)
-    }
-
-    /// 记录工作区信任：按 path upsert `is_trusted = 1`。
-    pub fn trust_workspace(&self, path: &Path, name: &str) -> Result<()> {
-        self.ensure_workspace_row(path, name, true)
-    }
-
-    /// 确保工作区行存在（提示词读写前置）；已存在时不修改信任位。
-    pub fn ensure_workspace(&self, path: &Path) -> Result<()> {
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path_string(path));
-        self.ensure_workspace_row(path, &name, false)
-    }
-
-    /// 工作区行 upsert；`trust` 为真时同时提升信任位。
-    fn ensure_workspace_row(&self, path: &Path, name: &str, trust: bool) -> Result<()> {
-        let trusted = i64::from(trust);
-        self.conn.execute(
-            r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, created_at, updated_at)
-               VALUES (?1, ?2, 'filesystem', ?3, ?4, datetime('now'), datetime('now'))
-               ON CONFLICT(path) DO UPDATE SET
-                   name = excluded.name,
-                   is_trusted = MAX(workspace.is_trusted, excluded.is_trusted),
-                   updated_at = datetime('now')"#,
-            params![new_external_id("ws"), name, path_string(path), trusted],
-        )?;
-        Ok(())
-    }
-
-    /// 工作区外部标识；未登记时 None。
-    pub(crate) fn workspace_external_id(&self, path: &Path) -> Result<Option<String>> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT external_id FROM workspace WHERE path = ?1",
-                params![path_string(path)],
-                |row| row.get(0),
-            )
-            .optional()?)
     }
 
     /// 工作区内全部文件夹（按创建顺序）。

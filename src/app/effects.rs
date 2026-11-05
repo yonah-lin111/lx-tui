@@ -325,6 +325,15 @@ pub enum Effect {
         ids: Vec<String>,
         target_date: String,
     },
+    // ===== 工作区历史列表 =====
+    /// 记录工作区显式创建/打开并刷新历史列表（若数据库已有自定义名称则同步回活跃工作区）。
+    RecordWorkspace { path: PathBuf, name: String },
+    /// 持久化工作区重命名并刷新历史列表。
+    RenameWorkspace { path: PathBuf, name: String },
+    /// 删除路径已失效的工作区历史记录（级联清理关联数据）并刷新历史列表。
+    DeleteWorkspaceHistory { path: PathBuf },
+    /// 从数据库重新加载工作区历史列表。
+    LoadWorkspaceHistory,
 }
 
 /// 撤销执行请求：目标身份、动作与回填所需的原文全部在发起时冻结。

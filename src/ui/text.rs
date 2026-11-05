@@ -281,6 +281,12 @@ pub const AGENTS_EXPAND_LABEL: &str = "[▲]";
 
 /// 侧栏工作区列表底部的新建按钮。
 pub const ADD_WORKSPACE_LABEL: &str = "[+]";
+/// 侧栏工作区历史列表：搜索占位与空态文案。
+pub const WORKSPACE_HISTORY_SEARCH_PLACEHOLDER: &str = "search workspaces…";
+pub const WORKSPACE_HISTORY_EMPTY: &str = "no workspaces yet";
+pub const WORKSPACE_HISTORY_NO_MATCHES: &str = "no matching workspaces";
+pub const MENU_OPEN_WORKSPACE_HISTORY: &str = "Open";
+pub const MENU_DELETE_WORKSPACE_HISTORY: &str = "Delete";
 
 /// 标签栏：新建标签按钮、标签分隔线、溢出滚动按钮与条目左侧图标。
 pub const ADD_TAB_LABEL: &str = "[+]";
@@ -1063,6 +1069,10 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             Some(PaneView::Lx) => "switch to terminal",
             Some(PaneView::Terminal) => "switch to lx",
             None => "switch view",
+        },
+        TooltipTarget::WorkspaceMode => match state.workspace_history.mode {
+            crate::app::state::WorkspaceMode::Active => "open workspace history",
+            crate::app::state::WorkspaceMode::History => "open active workspaces",
         },
         TooltipTarget::AddWorkspace => "new workspace",
         TooltipTarget::AddTab => "new tab",

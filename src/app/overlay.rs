@@ -272,6 +272,8 @@ pub struct Menu {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverlayTarget {
     Workspace(usize),
+    /// 工作区历史列表条目（`entries` 中的原始下标）。
+    WorkspaceHistory(usize),
     /// 工作区列表空白区域。
     WorkspaceList,
     Tab {
@@ -371,6 +373,10 @@ pub enum MenuCommand {
     ForkPage,
     /// 页列表：删除该页（行内二次确认）。
     DeletePage,
+    /// 工作区历史列表：打开该工作区。
+    OpenWorkspaceHistory,
+    /// 工作区历史列表：删除失效路径的工作区（级联删除，行内二次确认）。
+    DeleteWorkspaceHistory,
 }
 
 impl MenuCommand {
@@ -385,6 +391,7 @@ impl MenuCommand {
                 | Self::DeletePrompt
                 | Self::DeleteTodo
                 | Self::DeletePage
+                | Self::DeleteWorkspaceHistory
                 | Self::SwitchToWorkspaceCwd
                 | Self::SyncWorkspaceToTerminalCwd
         )
@@ -395,6 +402,7 @@ impl MenuCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameTarget {
     Workspace(usize),
+    WorkspaceHistory(usize),
     Tab { workspace: usize, tab: usize },
     PromptFolder { workspace: usize, folder_id: i64 },
     PromptItem { workspace: usize, item_id: i64 },

@@ -70,6 +70,36 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if state.workspace_history.search_drag {
+        if !update::workspace_history_mode(state) {
+            state.workspace_history.search_drag = false;
+            return;
+        }
+        if let Some(sections) = ui::layout::sidebar_sections(view.sidebar, state.agents_collapsed) {
+            let input = &mut state.workspace_history.search;
+            let char_idx = ui::prompt::tree::input_char_at(
+                sections.workspaces,
+                input.text(),
+                input.cursor(),
+                mouse.column,
+            )
+            .unwrap_or(0);
+            input.drag_selection(char_idx);
+            *dirty = true;
+        }
+        return;
+    }
+    if let Some(grab) = state.workspace_history.scroll_drag {
+        if let Some(bar) = ui::workspace_history_scrollbar(view, state)
+            && let Some(rows) = ui::workspace_history_visible_rows(view, state)
+        {
+            let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+            if update::set_workspace_history_scroll(state, offset, rows) {
+                *dirty = true;
+            }
+        }
+        return;
+    }
     if let Some(grab) = state.referenced_search_scroll_drag {
         if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref()
             && let Some(layout) = ui::overlay::referenced_search_layout(geometry.screen, search)
@@ -504,7 +534,18 @@ pub(crate) fn handle_mouse_up_left(
         *dirty = true;
         return;
     }
+    if state.workspace_history.search_drag {
+        state.workspace_history.search_drag = false;
+        if !state.workspace_history.search.has_selection() {
+            state.workspace_history.search.clear_selection();
+        }
+        *dirty = true;
+        return;
+    }
     if state.overlay.is_some() {
+        return;
+    }
+    if state.workspace_history.scroll_drag.take().is_some() {
         return;
     }
     if state.workspace_scroll_drag.take().is_some() {

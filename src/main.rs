@@ -71,6 +71,7 @@ fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("lx-tui: {}", lx_tui::ui::text::TRUST_REFUSED_MESSAGE);
         return Ok(());
     }
+    persistence.load_workspace_history(&mut state);
     let mut tui = Tui::init()?;
     let result = event::run(&mut tui, &mut state, &config, persistence);
     tui.restore()?;

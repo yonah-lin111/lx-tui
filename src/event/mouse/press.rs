@@ -22,7 +22,7 @@ use super::hit::{
     apply_block_button, apply_template_button, block_button_at, dismiss_lx_toast_outside,
     handle_agent_scrollbar_press, handle_lx_history_scrollbar_press,
     handle_lx_input_scrollbar_press, handle_prompt_recent_scrollbar_press,
-    handle_prompt_scrollbar_press, handle_task_agents_scrollbar_press,
+    handle_prompt_scrollbar_press, handle_sidebar_press, handle_task_agents_scrollbar_press,
     handle_terminal_scrollbar_press, handle_todo_scrollbar_press, handle_workspace_scrollbar_press,
     lx_toast_at, mention_item_at, mention_tab_at, pane_at, pane_boundary_draggable,
     pane_content_inner, pane_toggle_button_at, panel_item_at, prompt_boundary_hit,
@@ -220,42 +220,7 @@ pub(crate) fn handle_mouse_down_left(
         || handle_agent_scrollbar_press(state, view, mouse.column, mouse.row)
     {
         *dirty = true;
-    } else if let Some(pane) = ui::agent_item_at(view, state, mouse.column, mouse.row) {
-        if update::focus_agent_pane(state, pane) {
-            ensure_workspace_visible(state, view);
-            reveal_active_tab(state, view);
-            *dirty = true;
-        }
-    } else if let Some(index) = ui::workspace_group_toggle_at(view, state, mouse.column, mouse.row)
-    {
-        update::toggle_workspace_group(state, index);
-        if let Some(rows) = ui::workspace_list_rows(view, state) {
-            update::clamp_workspace_scroll(state, rows);
-        }
-        ensure_workspace_visible(state, view);
-        *dirty = true;
-    } else if let Some(index) = ui::workspace_item_at(view, state, mouse.column, mouse.row) {
-        // 点侧栏条目：侧栏成为焦点容器，同时切换工作区（切换本身会把焦点交回主区，
-        // 这里在切换之后再抢回，保证「点哪个容器就高亮哪个」）。
-        update::switch_workspace(state, index);
-        update::focus_sidebar(state);
-        ensure_workspace_visible(state, view);
-        reveal_active_tab(state, view);
-        update::begin_workspace_drag(state, index);
-        *dirty = true;
-    } else if ui::add_workspace_button(view)
-        .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
-    {
-        update::open_new_workspace_dialog(state);
-        ensure_workspace_visible(state, view);
-        reveal_active_tab(state, view);
-        *dirty = true;
-    } else if !state.sidebar_collapsed && view.sidebar.contains((mouse.column, mouse.row).into()) {
-        // 侧栏内其余位置（工作区列表空白、Agents 分区空白、边框）都让侧栏进入选中态。
-        // 必须排在所有侧栏控件之后：放前面会把条目点击整块吃掉。
-        if update::focus_sidebar(state) {
-            *dirty = true;
-        }
+    } else if handle_sidebar_press(state, view, mouse.column, mouse.row, dirty) {
     } else if ui::swap_button_at(view, mouse.column, mouse.row) {
         // 交换按钮是控件：命中优先于分割线拖拽与面板点击；
         // 宽度按位置模型重置：右列取侧栏默认宽、左列占其余。

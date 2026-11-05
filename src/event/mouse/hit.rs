@@ -10,13 +10,32 @@ use crate::app::update;
 use crate::layout::{self, BoundaryHit, PaneId};
 use crate::ui;
 
-/// 工作区滚动条按下：thumb 开始拖拽，轨道点击跳转；返回是否命中。
+use super::super::session::{ensure_workspace_visible, reveal_active_tab};
+
+/// 工作区（或历史列表）滚动条按下：thumb 开始拖拽，轨道点击跳转；返回是否命中。
 pub(crate) fn handle_workspace_scrollbar_press(
     state: &mut AppState,
     view: &ui::layout::ViewLayout,
     column: u16,
     row: u16,
 ) -> bool {
+    if update::workspace_history_mode(state) {
+        let Some(bar) = ui::workspace_history_scrollbar(view, state) else {
+            return false;
+        };
+        if !bar.track.contains((column, row).into()) {
+            return false;
+        }
+        let rows = ui::workspace_history_visible_rows(view, state).unwrap_or(0);
+        match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+            Some(grab) => state.workspace_history.scroll_drag = Some(grab),
+            None => {
+                let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+                update::set_workspace_history_scroll(state, offset, rows);
+            }
+        }
+        return true;
+    }
     let Some(bar) = ui::workspace_scrollbar(view, state) else {
         return false;
     };
@@ -32,6 +51,90 @@ pub(crate) fn handle_workspace_scrollbar_press(
         }
     }
     true
+}
+
+/// 侧栏区域左键按下分派：Agents 条目、工作区树/历史列表、顶边框 `[≡]`/`[+]` 按钮与侧栏聚焦。
+pub(crate) fn handle_sidebar_press(
+    state: &mut AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+    dirty: &mut bool,
+) -> bool {
+    if let Some(pane) = ui::agent_item_at(view, state, column, row) {
+        if update::focus_agent_pane(state, pane) {
+            ensure_workspace_visible(state, view);
+            reveal_active_tab(state, view);
+            *dirty = true;
+        }
+        return true;
+    }
+    if let Some(index) = ui::workspace_group_toggle_at(view, state, column, row) {
+        update::toggle_workspace_group(state, index);
+        if let Some(rows) = ui::workspace_list_rows(view, state) {
+            update::clamp_workspace_scroll(state, rows);
+        }
+        ensure_workspace_visible(state, view);
+        *dirty = true;
+        return true;
+    }
+    if let Some(index) = ui::workspace_item_at(view, state, column, row) {
+        update::switch_workspace(state, index);
+        update::focus_sidebar(state);
+        ensure_workspace_visible(state, view);
+        reveal_active_tab(state, view);
+        update::begin_workspace_drag(state, index);
+        *dirty = true;
+        return true;
+    }
+    if ui::workspace_mode_button(view).is_some_and(|area| area.contains((column, row).into())) {
+        update::toggle_workspace_mode(state);
+        *dirty = true;
+        return true;
+    }
+    if ui::add_workspace_button(view).is_some_and(|area| area.contains((column, row).into())) {
+        update::open_new_workspace_dialog(state);
+        ensure_workspace_visible(state, view);
+        reveal_active_tab(state, view);
+        *dirty = true;
+        return true;
+    }
+    if let Some(char_idx) = ui::workspace_history_search_char_at(view, state, column, row) {
+        update::focus_sidebar(state);
+        let clicks = crate::app::selection::next_click_count(
+            &mut state.selection_click,
+            column,
+            row,
+            Instant::now(),
+        );
+        state
+            .workspace_history
+            .search
+            .begin_selection_with_clicks(char_idx, clicks);
+        state.workspace_history.search_drag = true;
+        *dirty = true;
+        return true;
+    }
+    if let Some(vis_row) = ui::workspace_history_row_at(view, state, column, row) {
+        update::focus_sidebar(state);
+        let now = Instant::now();
+        update::select_workspace_history_row(state, vis_row);
+        if update::workspace_history_row_double_click(state, vis_row, now)
+            && update::open_workspace_history_row(state, vis_row)
+        {
+            ensure_workspace_visible(state, view);
+            reveal_active_tab(state, view);
+        }
+        *dirty = true;
+        return true;
+    }
+    if !state.sidebar_collapsed && view.sidebar.contains((column, row).into()) {
+        if update::focus_sidebar(state) {
+            *dirty = true;
+        }
+        return true;
+    }
+    false
 }
 
 /// prompt 滚动条按下：thumb 开始拖拽，轨道点击跳转；树视图滚动树、编辑视图滚动文本；
