@@ -40,6 +40,9 @@ use crate::chat::thinking::TagSplitter;
 /// Gemini API 基础 URL。
 const GOOGLE_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 
+/// Google 官方文档规定的历史 `functionCall` 重放哨兵签名（原始 `thoughtSignature` 未落库时使用）。
+const SKIP_THOUGHT_SIGNATURE_VALIDATOR: &str = "skip_thought_signature_validator";
+
 /// 构造 streamGenerateContent 请求。
 pub fn build(
     base_url: &str,
@@ -78,11 +81,24 @@ pub fn build(
     }
     let mut generation_config = serde_json::Map::new();
     if let Some(params) = &request.variant_params {
+        let mut thinking_config = serde_json::Map::new();
         if let Some(budget) = params.get("thinkingBudget").and_then(Value::as_i64) {
-            generation_config.insert("thinkingConfig".into(), json!({"thinkingBudget": budget}));
+            thinking_config.insert("thinkingBudget".into(), json!(budget));
         }
         if let Some(include) = params.get("includeThoughts").and_then(Value::as_bool) {
-            generation_config.insert("thinkingConfig".into(), json!({"includeThoughts": include}));
+            thinking_config.insert("includeThoughts".into(), json!(include));
+        }
+        if let Some(level) = params
+            .get("thinkingLevel")
+            .or_else(|| params.get("reasoningEffort"))
+            .and_then(Value::as_str)
+            .filter(|level| matches!(*level, "minimal" | "low" | "medium" | "high"))
+            && !legacy_tool_media_model(model)
+        {
+            thinking_config.insert("thinkingLevel".into(), json!(level));
+        }
+        if !thinking_config.is_empty() {
+            generation_config.insert("thinkingConfig".into(), Value::Object(thinking_config));
         }
     }
     if !generation_config.is_empty() {
@@ -146,10 +162,15 @@ fn contents_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
             } => {
                 // model functionCall part：args 是 JSON 对象。
                 // 内部合成的 call ID 不写进供应商字段（Gemini 无原生 ID）。
+                // Gemini 3+ 要求历史重放的 functionCall 携带 thoughtSignature；
+                // 对齐 opencode-dev，使用官方哨兵 `skip_thought_signature_validator`。
                 push_parts(
                     &mut contents,
                     "model",
-                    json!({"functionCall": {"name": name, "args": input}}),
+                    json!({
+                        "functionCall": {"name": name, "args": input},
+                        "thoughtSignature": SKIP_THOUGHT_SIGNATURE_VALIDATOR,
+                    }),
                 );
             }
             HistoryBlock::ToolResult {

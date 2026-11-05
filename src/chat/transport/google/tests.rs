@@ -205,7 +205,7 @@ fn system_instruction_carries_lx_prompt() {
     assert!(tail.starts_with("<system-instructions>"));
 }
 
-/// `tools[0].functionDeclarations` 与 `available_tools()` 一一对应。
+/// `tools[0].functionDeclarations` 与 `available_tools()` 一一对应，且内置工具也做 Gemini schema 裁剪。
 #[test]
 fn tools_use_function_declarations() {
     let body = body_of(&request());
@@ -217,7 +217,16 @@ fn tools_use_function_declarations() {
     for (wire, spec) in declarations.iter().zip(specs) {
         assert_eq!(wire["name"], spec.name);
         assert_eq!(wire["description"], spec.description);
-        assert_eq!(wire["parameters"], spec.parameters());
+        assert_eq!(
+            wire["parameters"],
+            crate::mcp::trim_for_gemini(&spec.parameters())
+        );
+        assert!(
+            wire["parameters"].get("additionalProperties").is_none(),
+            "{} parameters still contains additionalProperties: {}",
+            spec.name,
+            wire["parameters"]
+        );
     }
 }
 
@@ -233,12 +242,17 @@ fn tool_history_encodes_function_call_and_response_parts() {
         "user → model → user → model → user"
     );
     assert_eq!(contents[base]["parts"][0]["text"], "读 a.rs");
-    // model functionCall：args 是对象，不写入合成 call ID。
-    let call = &contents[base + 1]["parts"][0]["functionCall"];
+    // model functionCall：args 是对象，不写入合成 call ID，携带官方重放哨兵 thoughtSignature。
+    let call_part = &contents[base + 1]["parts"][0];
+    let call = &call_part["functionCall"];
     assert_eq!(contents[base + 1]["role"], "model");
     assert_eq!(call["name"], "read");
     assert_eq!(call["args"], json!({"path": "a.rs"}));
     assert!(call.get("id").is_none(), "不得把合成 ID 写进供应商字段");
+    assert_eq!(
+        call_part["thoughtSignature"],
+        "skip_thought_signature_validator"
+    );
     // user functionResponse：name 由配对调用解析，response 包装结构化结果。
     assert_eq!(contents[base + 2]["role"], "user");
     let response = &contents[base + 2]["parts"][0]["functionResponse"];
@@ -306,6 +320,17 @@ fn thinking_budget_maps_to_generation_config() {
     assert_eq!(
         body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
         1024
+    );
+
+    req.variant_params = Some(json!({"includeThoughts": true, "thinkingLevel": "medium"}));
+    let body = body_of(&req);
+    assert_eq!(
+        body["generationConfig"]["thinkingConfig"]["includeThoughts"],
+        true
+    );
+    assert_eq!(
+        body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+        "medium"
     );
 }
 

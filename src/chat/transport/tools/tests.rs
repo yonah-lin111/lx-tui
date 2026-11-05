@@ -61,7 +61,18 @@ fn google_tools_use_function_declarations() {
     assert_eq!(declarations.len(), available_tools().len());
     for (wire, spec) in declarations.iter().zip(available_tools()) {
         assert_eq!(wire["name"], spec.name);
-        assert_eq!(wire["parameters"], spec.parameters());
+        assert_eq!(
+            wire["parameters"],
+            crate::mcp::trim_for_gemini(&spec.parameters())
+        );
+        assert!(
+            !wire["parameters"]
+                .to_string()
+                .contains("additionalProperties"),
+            "{} leaked additionalProperties: {}",
+            spec.name,
+            wire["parameters"]
+        );
     }
 }
 
