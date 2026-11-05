@@ -1,6 +1,6 @@
 # 左侧栏工作区历史列表（Workspace History List）— 执行任务清单 (`task.md`)
 
-- **状态**：**已在 `.worktrees/workspace-history-list` (`feature/workspace-history-list`) 完成实现与测试，待用户确认合并**
+- **状态**：**已合入 `dev`（`5061509c`，合并提交 `07553c8c`）；原 worktree 与分支已移除**
 - **设计依据**：`docs/feature/workspace-history-list/design.md`
 
 ---
@@ -155,4 +155,5 @@ rtk cargo test
 - [x] 活跃列表与历史列表共用 `workspace.position`（v23），任一侧拖拽都写回并保持相对顺序；未匹配历史的活跃工作区保持原槽位。
 - [x] 历史打开未信任条目先走 `CheckTrust`；删除仍存在的 linked worktree 写入 `workspace_hidden`（v24），重启后不自动复活；最后一个打开工作区删除后保留“已信任 + 隐藏”行。
 - [x] 侧栏折叠、滚动偏移夹取、选中项揭示、宽字符截断、折叠箭头命中列、Ctrl+X 确认态复位等边界修复完成。
-- [x] 所有生产代码单文件 ≤ 1000 行，无 `unwrap()` / `expect()`，`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全部通过（唯一既有失败：分支落后 dev 的 `exec_turn_declares_main_tools_without_ask`，dev `580eb0de` 已修复）。
+- [x] 所有生产代码单文件 ≤ 1000 行，无 `unwrap()` / `expect()`，`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全部通过。
+- [x] 合并 `dev` 后修复两处 PTY 集成测试与旧交互假设的冲突：`NewWorkspace` 改为内联 Confirm，侧栏 `[≡]` 与 Prompt `[≡]` 同名按钮按最右出现消歧。

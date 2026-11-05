@@ -2,7 +2,7 @@
 
 - **特性目录**：`docs/feature/workspace-history-list/`
 - **关联任务清单**：`docs/feature/workspace-history-list/task.md`
-- **当前状态**：**已在 `.worktrees/workspace-history-list` (`feature/workspace-history-list`) 完成实现、review 修复与测试，待用户确认合并**
+- **当前状态**：**已合入 `dev`（`5061509c`，合并提交 `07553c8c`）；原 `.worktrees/workspace-history-list` 与 `feature/workspace-history-list` 分支已移除**
 - **目标范围**：
   - `src/db/`（`mod.rs`、`workspace.rs`、`service.rs`）
   - `src/app/`（`state.rs`、`state/workspace.rs`、`state/workspace_history.rs`、`effects.rs`、`overlay.rs`、`tooltip.rs`、`actions.rs`、`update/mod.rs`、`update/workspace.rs`、`update/workspace_history.rs`、`update/menu.rs`、`update/dialog.rs`、`update/worktree.rs`）

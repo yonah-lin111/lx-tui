@@ -2,8 +2,9 @@
 
 - **审查范围**：`feature/workspace-history-list` 相对 `dev` 的全部改动（工作区历史列表、Git worktree 树、新建/重命名/删除、全局排序与拖拽）。
 - **审查基线**：`69ae1df6`（review 前）。
+- **合并状态**：已合入 `dev`（`5061509c`，合并提交 `07553c8c`）；worktree 与 feature 分支已移除。
 - **审查方式**：3 路并行审查（DB/持久化、App 状态机、UI/事件/输入）+ 人工复核代码与测试；所有结论均以当前源码为准。
-- **结论**：**0 个 P0；4 个 P1、11 个 P2 已全部修复；9 个 P3 中 7 个修复、2 个保留并说明取舍**。修复后 `cargo clippy --all-targets -- -D warnings` 通过，全量测试 4492 passed。
+- **结论**：**0 个 P0；4 个 P1、11 个 P2 已全部修复；9 个 P3 中 7 个修复、2 个保留并说明取舍**。修复后 `cargo clippy --all-targets -- -D warnings` 通过；合并 `dev` 后全量测试 4641 passed。
 
 | 级别 | 数量 | 状态 |
 | --- | --- | --- |
@@ -224,13 +225,13 @@
 ## 验证
 
 ```text
-rtk cargo fmt
+rtk cargo fmt --check
 rtk cargo clippy --all-targets -- -D warnings   # 通过
-rtk cargo test --lib -- --skip exec_turn_declares_main_tools_without_ask
-# 4492 passed, 3 ignored, 1 filtered out
+rtk cargo test                                  # 4641 passed, 3 ignored
 ```
 
-- 跳过的 `chat::transport::tools::tests::exec_turn_declares_main_tools_without_ask` 是分支落后 `dev` 的既有失败（`dev` 的 `580eb0de` 已修复工具数量断言），与本次功能无关。
+- 合并 `dev` 时自动合入 `src/app/effects.rs`、`state.rs`、`event/input.rs`、`event/mod.rs`、`mouse/press.rs`、`ui/text.rs` 等 6 个重叠文件，无文本冲突；另修复两处 PTY 集成测试与旧交互假设的冲突（`NewWorkspace` 内联 Confirm、侧栏与 Prompt 的 `[≡]` 同名按钮消歧）。
+- `chat::transport::tools::tests::exec_turn_declares_main_tools_without_ask` 已随 `dev` 的 `580eb0de` 修复，无需再跳过。
 - 新增/更新的关键测试文件：
   - `src/db/workspace.rs` tests（canonical、隐藏、子目录、Git 树、position）
   - `src/db/service/tests.rs`（最后打开工作区、解除隐藏）
