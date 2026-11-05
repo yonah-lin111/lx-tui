@@ -139,17 +139,29 @@ pub fn build_spawn_role_guidance(subagents: &SubagentsSection) -> String {
         subagents.max_concurrent, subagents.max_depth
     );
     for role in roles {
+        let model_label = if role.lock_model {
+            "locked model"
+        } else {
+            "default model"
+        };
+        let lock_suffix = if role.lock_model && role.default_model.is_some() {
+            " — cannot be overridden"
+        } else {
+            ""
+        };
         let model_note = match &role.default_model {
             Some(sel) => match &sel.variant {
                 Some(v) => format!(
-                    " (base: {}, default model: {}/{} ({v}))",
+                    " (base: {}, {}: {}/{} ({v}){lock_suffix})",
                     role.base_role.as_str(),
+                    model_label,
                     sel.provider,
                     sel.model
                 ),
                 None => format!(
-                    " (base: {}, default model: {}/{})",
+                    " (base: {}, {}: {}/{}{lock_suffix})",
                     role.base_role.as_str(),
+                    model_label,
                     sel.provider,
                     sel.model
                 ),
@@ -159,9 +171,24 @@ pub fn build_spawn_role_guidance(subagents: &SubagentsSection) -> String {
                 role.base_role.as_str()
             ),
         };
+        let mut restrictions = Vec::new();
+        if !role.capabilities.allow_web_search {
+            restrictions.push("no web_search");
+        }
+        if !role.capabilities.allow_mcp {
+            restrictions.push("no mcp");
+        }
+        if !role.capabilities.allow_skills {
+            restrictions.push("no skills");
+        }
+        let cap_note = if restrictions.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", restrictions.join(", "))
+        };
         out.push_str(&format!(
-            "- `{}`{}: {}\n",
-            role.name, model_note, role.description
+            "- `{}`{}{}: {}\n",
+            role.name, model_note, cap_note, role.description
         ));
     }
     out.trim_end().to_string()

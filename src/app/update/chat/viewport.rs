@@ -201,7 +201,9 @@ pub fn resolve_task_agents_visible(
                 if page.tab != crate::app::state::TaskTab::Agents {
                     return None;
                 }
-                let run = target.lx.agents.runs.get(page.agents_window.active)?;
+                let run = page
+                    .selected_agent_index(&target.lx.agents)
+                    .and_then(|index| target.lx.agents.runs.get(index))?;
                 Some((
                     run.rows_dirty || run.total_rows == 0,
                     usize::from(
@@ -226,7 +228,10 @@ pub fn resolve_task_agents_visible(
         let Some(page) = target.lx.task.as_mut() else {
             continue;
         };
-        let Some(run) = target.lx.agents.runs.get_mut(page.agents_window.active) else {
+        let Some(active) = page.selected_agent_index(&target.lx.agents) else {
+            continue;
+        };
+        let Some(run) = target.lx.agents.runs.get_mut(active) else {
             continue;
         };
         let total = total.unwrap_or(run.total_rows);
@@ -318,11 +323,9 @@ pub fn jump_lx_history_bottom(state: &mut AppState, pane: PaneId) -> bool {
                 page.pin_output_to_tail();
                 page.output_scroll != before
             }
-            crate::app::state::TaskTab::Agents => target
-                .lx
-                .agents
-                .runs
-                .get_mut(page.agents_window.active)
+            crate::app::state::TaskTab::Agents => page
+                .selected_agent_index(&target.lx.agents)
+                .and_then(|index| target.lx.agents.runs.get_mut(index))
                 .is_some_and(|run| {
                     let changed = !run.follow;
                     run.follow = true;

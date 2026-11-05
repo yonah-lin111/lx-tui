@@ -1352,6 +1352,7 @@ fn initial_page_shows_status_on_pane_bottom_border() {
         input_tokens: Some(720_000),
         streaming: false,
         omitted_turns: None,
+        blocked_subagents: 0,
     };
     let lay = layout(inner, &lx);
     let input = lay.input.expect("input");

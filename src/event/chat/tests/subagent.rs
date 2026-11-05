@@ -8,7 +8,7 @@ use crate::chat::agent::{
 };
 
 /// 带父会话的事件层 fixture：冻结模型与工作区已登记，事件通道常驻。
-fn fixture_with_parent() -> (
+pub(super) fn fixture_with_parent() -> (
     Fixture,
     AppState,
     RequestKey,
@@ -46,7 +46,7 @@ fn fixture_with_parent() -> (
 }
 
 /// 执行一次控制操作并等待回执。
-async fn op(
+pub(super) async fn op(
     state: &mut AppState,
     streams: &mut ChatStreams,
     persistence: &Persistence,
@@ -65,7 +65,7 @@ async fn op(
     receiver.await.expect("reply")
 }
 
-async fn spawn_explorer(
+pub(super) async fn spawn_explorer(
     state: &mut AppState,
     streams: &mut ChatStreams,
     persistence: &Persistence,

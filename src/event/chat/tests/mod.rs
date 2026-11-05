@@ -719,5 +719,6 @@ mod limits;
 mod process_tools;
 mod resume;
 mod subagent;
+mod subagent_roles;
 mod user_shell;
 mod workspace;

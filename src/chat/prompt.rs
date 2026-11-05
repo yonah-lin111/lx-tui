@@ -25,7 +25,7 @@ use crate::platform::EnvironmentFacts;
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
-pub const PROMPT_VERSION: &str = "lx-11";
+pub const PROMPT_VERSION: &str = "lx-12";
 
 /// 环境快照单字段最大字符数（转义前）。
 const MAX_FIELD_CHARS: usize = 240;
@@ -120,7 +120,8 @@ Each subagent starts with a clean context by default (`fork_context: false`) and
 
 - `explorer` — read-only investigation (`read`, `search`, `web_search`) for codebase or web questions.
 - `executor` — bounded implementation (file, process, and web tools; no `ask` or plan tools, and subagent delegation tools when below the configured `max_depth`) for one well-defined change.
-- Custom roles configured in settings appear in `spawn_agent`; optional `model`, `reasoning_effort`, and `task_name` override defaults.
+- `monitor` — long-running command and process watcher (`exec_command`, `write_stdin`, `read`, `search`; no file edits or subagent delegation) for builds, test suites, or background job polling.
+- Custom roles configured in settings or project `.lx/agents/*.json` appear in `spawn_agent`; optional `model`, `reasoning_effort`, and `task_name` override defaults unless locked by the role.
 
 Delegate independent work with a clear boundary (goal + owned files/modules + deliverable) and a short `title` (3–8 words). Do not delegate trivial edits or questions needing user input.
 
@@ -528,7 +529,7 @@ mod tests {
                 "提示缺少 ask 规则 `{needle}`"
             );
         }
-        assert_eq!(PROMPT_VERSION, "lx-11");
+        assert_eq!(PROMPT_VERSION, "lx-12");
         assert!(
             LX_SYSTEM_PROMPT.contains("You can call these tools:")
                 && LX_SYSTEM_PROMPT.contains("`ask`"),

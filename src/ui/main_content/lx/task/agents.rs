@@ -103,7 +103,12 @@ pub(crate) fn detail_rows(rect: Rect, run: &SubagentRun) -> usize {
 
 /// 列表绘制：`❯ ● explorer  running  14s  <task 首行>`。
 pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &AgentsState) {
-    if agents.runs.is_empty() {
+    let indices = agents.filtered_indices(page.agent_filter);
+    let visible_runs: Vec<&SubagentRun> = indices
+        .iter()
+        .filter_map(|index| agents.runs.get(*index))
+        .collect();
+    if visible_runs.is_empty() {
         grid.put_clipped(
             list.x,
             list.y,
@@ -116,7 +121,7 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
     let visible = usize::from(list.height);
     let start = window_start(page, agents, visible);
     let now = crate::db::now_ms();
-    for (offset, run) in agents.runs.iter().skip(start).take(visible).enumerate() {
+    for (offset, run) in visible_runs.iter().skip(start).take(visible).enumerate() {
         let index = start + offset;
         let y = list.y + u16::try_from(offset).unwrap_or(0);
         let selected = index == page.agents_window.active;
@@ -134,7 +139,7 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         if row_w == 0 {
             continue;
         }
-        if let Some(prefix) = tree_prefix(run, &agents.runs, index) {
+        if let Some(prefix) = tree_prefix(run, &visible_runs, index) {
             let prefix_w = u16::try_from(prefix.width()).unwrap_or(0);
             // 连前缀都放不下时整行丢弃，不能留下悬空的 `└─`。
             if row_w <= prefix_w {
@@ -230,12 +235,20 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
 }
 
 /// 树形缩进前缀：直接子 agent 不缩进；孙辈起用 `├─ `/`└─ ` 表示同级末项。
-fn tree_prefix(run: &SubagentRun, runs: &[SubagentRun], index: usize) -> Option<String> {
+///
+/// 父节点被当前筛选隐藏时不画悬空连接符（`Active`/`Done` 视图的树视觉仍完整）。
+fn tree_prefix(run: &SubagentRun, runs: &[&SubagentRun], index: usize) -> Option<String> {
     let depth = run.depth();
     if depth < 2 {
         return None;
     }
     let parent = parent_path(&run.agent_path)?;
+    if !runs
+        .iter()
+        .any(|other| other.agent_path.eq_ignore_ascii_case(parent))
+    {
+        return None;
+    }
     // 只看同一父节点下的后续兄弟；遇到更浅层或另一个父分支即当前子树结束，
     // 更深的后代属于当前/后续兄弟的子树，继续向后找。
     let last = !runs.get(index.saturating_add(1)..).is_some_and(|rest| {
@@ -264,7 +277,7 @@ fn parent_path(agent_path: &str) -> Option<&str> {
 
 /// 列表窗口起点（与进程列表同口径）。
 pub(super) fn window_start(page: &TaskPage, agents: &AgentsState, visible: usize) -> usize {
-    let len = agents.runs.len();
+    let len = agents.filtered_indices(page.agent_filter).len();
     if visible == 0 || len <= visible {
         return 0;
     }

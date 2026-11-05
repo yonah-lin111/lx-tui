@@ -4,8 +4,10 @@
 //! channel 回到无头事件循环聚合为 `ChatPart`。与 [`super::runner`] 同边界：不导入
 //! `app` / `ui` / `tui` / `event`。
 //!
-//! 池控制入口在本文件；子轮上下文装配见 [`turn`]，等待与结算见 [`settle`]。
+//! 池控制入口在本文件；子轮上下文装配见 [`context`]，输入归档与宿主事件见 [`turn`]，
+//! 等待与结算见 [`settle`]。
 
+mod context;
 mod settle;
 mod turn;
 

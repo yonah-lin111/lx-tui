@@ -63,7 +63,7 @@ pub use read_version::{
 };
 pub use schema::{
     available_tools, builtin_tools, builtin_tools_with_subagents, resource_tools, tools_for,
-    turn_tools, turn_tools_with_subagents,
+    turn_tools, turn_tools_for_subagent, turn_tools_with_subagents,
 };
 pub use subagent::{build_spawn_role_guidance, enrich_spawn_tool_decl};
 pub use types::{

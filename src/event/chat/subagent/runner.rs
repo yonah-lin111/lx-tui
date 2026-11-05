@@ -146,18 +146,22 @@ pub(super) fn spawn(
         .event_sender
         .as_ref()
         .ok_or_else(|| "subagent event channel unavailable".to_string())?;
-    let role_spec = state
-        .subagents_config
-        .resolve_role(role.as_str())
-        .ok_or_else(|| format!("unknown subagent role '{}'", role.as_str()))?;
-    let role = role.with_base(role_spec.base_role);
-
     let parent_session = key.session.clone();
     let workspace = streams
         .db_workspaces
         .get(key)
         .cloned()
+        .or_else(|| super::workspace_for_pane(state, key.pane))
         .ok_or_else(|| "subagent workspace unavailable".to_string())?;
+    let effective_subagents = crate::config::subagents::merge_project_roles(
+        &state.subagents_config,
+        Some(&workspace),
+        persistence.is_trusted(&workspace),
+    );
+    let role_spec = effective_subagents
+        .resolve_role(role.as_str())
+        .ok_or_else(|| format!("unknown subagent role '{}'", role.as_str()))?;
+    let role = role.with_base(role_spec.base_role);
     let database = persistence
         .database()
         .ok_or_else(|| "subagent persistence unavailable".to_string())?;
@@ -186,7 +190,9 @@ pub(super) fn spawn(
     let resolved_model = super::model_resolve::resolve_subagent_model(
         &state.models,
         &parent_frozen,
+        role_spec.base_role,
         role_spec.default_model.as_ref(),
+        role_spec.lock_model,
         model_override,
         reasoning_effort_override,
     )?;
@@ -376,6 +382,7 @@ pub(super) fn send_input(
         .db_workspaces
         .get(key)
         .cloned()
+        .or_else(|| super::workspace_for_pane(state, key.pane))
         .ok_or_else(|| "subagent workspace unavailable".to_string())?;
     let database = persistence
         .database()
@@ -568,6 +575,7 @@ pub(super) fn resume(
         .db_workspaces
         .get(key)
         .cloned()
+        .or_else(|| super::workspace_for_pane(state, key.pane))
         .ok_or_else(|| "subagent workspace unavailable".to_string())?;
     let database = persistence
         .database()
@@ -797,6 +805,11 @@ pub(crate) fn schedule_next_queued_input_with_done(
         model: frozen.model.clone(),
         variant: frozen.variant.clone(),
     };
+    let effective_subagents = crate::config::subagents::merge_project_roles(
+        &state.subagents_config,
+        Some(workspace),
+        persistence.is_trusted(workspace),
+    );
     let inputs = super::context::capture_child_prompt_inputs(
         state,
         persistence,
@@ -828,7 +841,7 @@ pub(crate) fn schedule_next_queued_input_with_done(
         frozen.output_limit,
         frozen.supports_image_input,
         &next_input.items,
-        &state.subagents_config,
+        &effective_subagents,
         limits,
     ) {
         let code = if err.contains(IMAGE_MISSING_CODE) {
@@ -912,7 +925,7 @@ pub(super) fn sync_agent_ui_queue(
 }
 
 /// 从窗格当前模型配置解析 `FrozenModel`。
-fn resolve_frozen_for_pane(
+pub(super) fn resolve_frozen_for_pane(
     state: &AppState,
     pane: PaneId,
 ) -> Option<crate::app::state::FrozenModel> {

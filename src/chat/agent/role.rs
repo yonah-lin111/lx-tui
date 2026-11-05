@@ -12,15 +12,17 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub use crate::config::subagents::{BaseRole, MAX_ROLE_NAME_LEN, is_valid_role_name};
 
-use super::{EXECUTOR_PROMPT, EXPLORER_PROMPT, ToolSurface};
+use super::{EXECUTOR_PROMPT, EXPLORER_PROMPT, MONITOR_PROMPT, ToolSurface};
 
-/// 子 agent 角色标识（内置 `Explorer` / `Executor` 或自定义角色）。
+/// 子 agent 角色标识（内置 `Explorer` / `Executor` / `Monitor` 或自定义角色）。
 #[derive(Debug, Clone, Copy)]
 pub enum AgentRole {
     /// 内置只读调查角色（`"explorer"`）。
     Explorer,
     /// 内置有边界实现角色（`"executor"`）。
     Executor,
+    /// 内置长耗时命令与进程监控角色（`"monitor"`）。
+    Monitor,
     /// 用户自定义角色（名称满足 `[a-z][a-z0-9_]{0,31}`，绑定冻结的基础权限档位）。
     Custom { name: &'static str, base: BaseRole },
 }
@@ -54,14 +56,15 @@ impl<'de> Deserialize<'de> for AgentRole {
 }
 
 impl AgentRole {
-    /// 两个内置角色（固定顺序）。
-    pub const ALL: [AgentRole; 2] = [Self::Explorer, Self::Executor];
+    /// 三个内置角色（固定顺序）。
+    pub const ALL: [AgentRole; 3] = [Self::Explorer, Self::Executor, Self::Monitor];
 
-    /// 稳定角色名（如 `"explorer"`、`"executor"` 或自定义 `"reviewer"`）。
+    /// 稳定角色名（如 `"explorer"`、`"executor"`、`"monitor"` 或自定义 `"reviewer"`）。
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Explorer => "explorer",
             Self::Executor => "executor",
+            Self::Monitor => "monitor",
             Self::Custom { name, .. } => name,
         }
     }
@@ -71,13 +74,14 @@ impl AgentRole {
         match self {
             Self::Explorer => BaseRole::Explorer,
             Self::Executor => BaseRole::Executor,
+            Self::Monitor => BaseRole::Monitor,
             Self::Custom { base, .. } => base,
         }
     }
 
-    /// 是否为内置角色（`explorer` / `executor`）。
+    /// 是否为内置角色（`explorer` / `executor` / `monitor`）。
     pub const fn is_builtin(self) -> bool {
-        matches!(self, Self::Explorer | Self::Executor)
+        matches!(self, Self::Explorer | Self::Executor | Self::Monitor)
     }
 
     /// 用指定基础权限档位更新自定义角色（内置角色保持不变）。
@@ -85,6 +89,7 @@ impl AgentRole {
         match self {
             Self::Explorer => Self::Explorer,
             Self::Executor => Self::Executor,
+            Self::Monitor => Self::Monitor,
             Self::Custom { name, .. } => Self::Custom { name, base },
         }
     }
@@ -94,6 +99,7 @@ impl AgentRole {
         match name {
             "explorer" => Some(Self::Explorer),
             "executor" => Some(Self::Executor),
+            "monitor" => Some(Self::Monitor),
             other if is_valid_role_name(other) => Some(Self::Custom {
                 name: intern_role_name(other),
                 base: base.unwrap_or(BaseRole::Explorer),
@@ -107,11 +113,12 @@ impl AgentRole {
         Self::from_name_and_base(text, None)
     }
 
-    /// 解析仅限内置角色名（`"explorer"` / `"executor"`）。
+    /// 解析仅限内置角色名（`"explorer"` / `"executor"` / `"monitor"`）。
     pub fn parse_builtin(text: &str) -> Option<Self> {
         match text {
             "explorer" => Some(Self::Explorer),
             "executor" => Some(Self::Executor),
+            "monitor" => Some(Self::Monitor),
             _ => None,
         }
     }
@@ -121,6 +128,7 @@ impl AgentRole {
         match self.base() {
             BaseRole::Explorer => EXPLORER_PROMPT,
             BaseRole::Executor => EXECUTOR_PROMPT,
+            BaseRole::Monitor => MONITOR_PROMPT,
         }
     }
 

@@ -558,6 +558,7 @@ fn start_stream(
         skill_omitted,
         workspace_root,
         agents_md_count,
+        effective_subagents,
     ) = {
         let Some(pane) = state.pane_anywhere(key.pane) else {
             return false;
@@ -619,6 +620,11 @@ fn start_stream(
             || config_root
                 .as_deref()
                 .is_some_and(|root| persistence.is_trusted(root));
+        let effective_subagents = crate::config::subagents::merge_project_roles(
+            &state.subagents_config,
+            workspace_root.as_deref(),
+            workspace_trusted,
+        );
         let loaded_instructions = crate::chat::agent::load_instructions(
             crate::config::user_data_root().ok().as_deref(),
             config_root.as_deref(),
@@ -650,7 +656,7 @@ fn start_stream(
             std::sync::Arc::new(crate::chat::tools::turn_tools_with_subagents(
                 crate::chat::agent::ToolSurface::Main,
                 &mcp_snapshot,
-                Some(&state.subagents_config),
+                Some(&effective_subagents),
             ));
         // 计划快照先克隆：运行上下文摘要要在后面的可变借用窗外拼装。
         let current_plan = pane.lx.chat.plan.clone();
@@ -662,6 +668,7 @@ fn start_stream(
             skill_omitted,
             workspace_root,
             agents_md_count,
+            effective_subagents,
         )
     };
     state
@@ -783,16 +790,22 @@ fn start_stream(
             mcp_snapshot,
             key.session.clone(),
         );
-    // 本地运行上下文：存活进程 + 当前计划 + 在册子 agent + 未投递报告。
+    // 本地运行上下文：存活进程 + 当前计划 + 在册子 agent + 委派模式。
     let mut summary = runtime_context_summary(runtime.manager.as_ref(), &current_plan);
-    let subagent_lines = subagent::running_subagent_lines(streams, &key.session);
+    if let Some(guidance) = crate::chat::agent::delegation_mode_guidance(
+        effective_subagents.delegation_mode,
+        frozen.variant.as_deref(),
+    ) {
+        append_summary(&mut summary, guidance);
+    }
+    let subagent_lines = subagent::known_subagent_lines(
+        streams,
+        persistence.database(),
+        Some(&session_key),
+        &key.session,
+    );
     if !subagent_lines.is_empty() {
-        let mut text = summary.unwrap_or_default();
-        if !text.is_empty() {
-            text.push('\n');
-        }
-        text.push_str(&subagent_lines.join("\n"));
-        summary = Some(text);
+        append_summary(&mut summary, &subagent_lines.join("\n"));
     }
     prepared.context = prepared.context.with_runtime_summary(summary);
     let transport = frozen.transport.clone();
@@ -841,6 +854,15 @@ fn start_stream(
         report_turn(net_sender, stream_key, summary);
     });
     true
+}
+
+/// 追加一段运行上下文摘要（非空块之间空行分隔）。
+fn append_summary(summary: &mut Option<String>, block: &str) {
+    let text = summary.get_or_insert_with(String::new);
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text.push_str(block);
 }
 
 /// 启动前失败：直接回投整轮失败终态。

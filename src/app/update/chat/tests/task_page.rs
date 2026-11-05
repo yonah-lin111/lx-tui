@@ -787,6 +787,174 @@ fn ctrl_a_on_agents_tab_stops_all_subagents() {
     );
 }
 
+/// 指定状态的 agent 记录（列表筛选测试用）。
+fn agent_with_status(
+    agent_id: &str,
+    child_session: &str,
+    status: &str,
+) -> crate::app::state::SubagentRun {
+    let mut run = running_agent(agent_id, child_session);
+    run.status = status.into();
+    if status != "running" {
+        run.completed_at_ms = Some(1_000);
+    }
+    run
+}
+
+/// 打开 Agents 页并回投三条记录（running / idle / completed）。
+fn open_agents_with_statuses(state: &mut AppState, pane: PaneId) -> Vec<&'static str> {
+    assert!(open_task_page(state, pane));
+    let mut running = agent_with_status("sub-run", "sess-run", "running");
+    running.agent_path = "/root/run".into();
+    let mut idle = agent_with_status("sub-idle", "sess-idle", "idle");
+    idle.agent_path = "/root/idle".into();
+    let mut done = agent_with_status("sub-done", "sess-done", "completed");
+    done.agent_path = "/root/done".into();
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.lx.agents.runs = vec![running, idle, done];
+    let page = target.lx.task.as_mut().expect("task");
+    page.tab = TaskTab::Agents;
+    page.agents_window.active = 2;
+    vec!["sub-run", "sub-idle", "sub-done"]
+}
+
+#[test]
+fn tab_cycles_agent_filter_and_clamps_selection() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    let input = crate::app::update::pane::apply_lx_input;
+
+    input(&mut state, crate::app::actions::LxInput::Tab);
+    let filtered = page(&state, pane);
+    assert_eq!(
+        filtered.agent_filter,
+        crate::app::state::AgentFilter::Active,
+        "All -> Active"
+    );
+    assert_eq!(
+        filtered.len(&state.pane_anywhere(pane).unwrap().lx.agents),
+        2
+    );
+    assert_eq!(filtered.agents_window.active, 1, "高亮被钳到筛选后的末项");
+
+    input(&mut state, crate::app::actions::LxInput::Tab);
+    let filtered = page(&state, pane);
+    assert_eq!(filtered.agent_filter, crate::app::state::AgentFilter::Done);
+    assert_eq!(filtered.agents_window.active, 0, "Done 只剩一条");
+
+    input(&mut state, crate::app::actions::LxInput::Tab);
+    let filtered = page(&state, pane);
+    assert_eq!(filtered.agent_filter, crate::app::state::AgentFilter::All);
+    assert_eq!(filtered.agents_window.active, 0, "回到 All 后保持钳制结果");
+}
+
+#[test]
+fn selected_agent_index_maps_filtered_position_to_real_run() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    let page = target.lx.task.as_mut().expect("task");
+    page.agent_filter = crate::app::state::AgentFilter::Done;
+    page.agents_window.active = 0;
+    assert_eq!(
+        page.selected_agent_index(&target.lx.agents),
+        Some(2),
+        "Done 视图第一项对应 runs[2]"
+    );
+    assert_eq!(
+        page.selected_agent(&target.lx.agents)
+            .map(|run| run.agent_id.as_str()),
+        Some("sub-done")
+    );
+}
+
+#[test]
+fn enter_opens_inline_reply_and_submit_emits_effect() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        let page = target.lx.task.as_mut().expect("task");
+        page.agent_filter = crate::app::state::AgentFilter::Done;
+        page.agents_window.active = 0;
+    }
+    state.effects.clear();
+
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(
+        page(&state, pane).agent_reply.is_some(),
+        "Enter 打开内联追问输入框"
+    );
+    input(&mut state, crate::app::actions::LxInput::Char('h'));
+    input(&mut state, crate::app::actions::LxInput::Char('i'));
+    input(&mut state, crate::app::actions::LxInput::Enter);
+
+    let page = page(&state, pane);
+    assert!(page.agent_reply.is_none(), "提交后退出输入态");
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput {
+                pane: p,
+                session_id,
+                agent_id,
+                text,
+            } if *p == pane
+                && session_id == "sess-1"
+                && agent_id == "sub-done"
+                && text == "hi"
+        )),
+        "Enter 提交内联追问：{:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn escape_cancels_reply_without_closing_task_page() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(page(&state, pane).agent_reply.is_some());
+
+    input(&mut state, crate::app::actions::LxInput::Escape);
+    let page = page(&state, pane);
+    assert!(page.agent_reply.is_none(), "Esc 只退出输入态");
+    assert_eq!(page.tab, TaskTab::Agents, "面板仍停留在 Agents 页");
+    assert!(
+        state.pane_anywhere(pane).unwrap().lx.task.is_some(),
+        "Esc 不关闭后台任务页"
+    );
+}
+
+#[test]
+fn reply_to_cancelled_subagent_shows_warning() {
+    let (mut state, pane) = state_with_session("");
+    assert!(open_task_page(&mut state, pane));
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.lx.agents.runs = vec![agent_with_status("sub-dead", "sess-dead", "cancelled")];
+    let task_page = target.lx.task.as_mut().expect("task");
+    task_page.tab = TaskTab::Agents;
+    task_page.agents_window.active = 0;
+
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Enter);
+    let page = page(&state, pane);
+    assert!(page.agent_reply.is_none(), "已关闭子 agent 不进入输入态");
+    let toast = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .toast
+        .as_ref()
+        .expect("warning toast");
+    assert_eq!(
+        toast.message,
+        crate::ui::text::LX_TASK_AGENT_REPLY_CLOSED,
+        "提示不可向已关闭子 agent 发送输入"
+    );
+}
+
 #[test]
 fn subagents_slash_command_opens_the_agents_tab() {
     assert_eq!(

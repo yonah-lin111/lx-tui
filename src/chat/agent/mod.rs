@@ -9,17 +9,20 @@ use serde_json::{Value, json};
 use crate::chat::tools::ToolExecutionResult;
 
 mod budget;
+mod envelope;
 pub mod exec;
 mod instructions;
 mod model_switch;
 mod nickname;
 mod parse;
 mod path;
+mod prompts;
 mod report;
 mod role;
 mod status;
 
 pub use budget::*;
+pub use envelope::*;
 pub use instructions::{
     AGENTS_MD_SEPARATOR, CANDIDATE_AGENT_FILENAMES, DEFAULT_AGENTS_MD_FILENAME,
     LOCAL_AGENTS_MD_FILENAME, LoadedInstructions, MAX_GLOBAL_DOC_BYTES, MAX_PROJECT_DOC_BYTES,
@@ -32,6 +35,7 @@ pub use model_switch::{
 pub use nickname::{DEFAULT_NICKNAME_CANDIDATES, allocate_nickname, format_agent_identity};
 pub use parse::parse_control;
 pub use path::*;
+pub use prompts::*;
 pub use report::{
     MAX_REPORT_CHANGED_PATHS, SubagentReportView, format_report_envelope, reports_from_json,
     reports_to_json, synthesize_partial_report_body, truncate_report_body,
@@ -53,6 +57,8 @@ pub enum ToolSurface {
     Executor,
     /// 未达 `max_depth` 的实现者：7 项实现工具 + 8 项子 agent 控制工具（共 15 项）。
     ExecutorCoordinator,
+    /// 专职监控子 agent：4 项工具（`read`, `search`, `exec_command`, `write_stdin`），任何深度均不含写文件与控制工具。
+    Monitor,
     /// CLI exec 无头主 agent：剔除交互式 ask 后的全部主工具（17 项）。
     ExecMain,
 }
@@ -133,6 +139,9 @@ const EXECUTOR_COORDINATOR_TOOLS: [&str; 15] = [
     "cancel_agent_input",
 ];
 
+/// monitor 工具名白名单（4 项：只读文件检索 + 命令执行/轮询，严禁 edit/write 与控制工具）。
+pub const MONITOR_TOOLS: [&str; 4] = ["read", "search", "exec_command", "write_stdin"];
+
 impl ToolSurface {
     /// 该工具面的工具名（逐字稳定，测试锁死）。
     pub const fn names(self) -> &'static [&'static str] {
@@ -141,6 +150,7 @@ impl ToolSurface {
             Self::Explorer => &EXPLORER_TOOLS,
             Self::Executor => &EXECUTOR_TOOLS,
             Self::ExecutorCoordinator => &EXECUTOR_COORDINATOR_TOOLS,
+            Self::Monitor => &MONITOR_TOOLS,
             Self::ExecMain => &EXEC_MAIN_TOOLS,
         }
     }
@@ -150,13 +160,16 @@ impl ToolSurface {
         match role.base() {
             BaseRole::Explorer => Self::Explorer,
             BaseRole::Executor => Self::Executor,
+            BaseRole::Monitor => Self::Monitor,
         }
     }
 
-    /// 角色在指定深度下的工具面：`Executor` 仅在 `depth < max_depth` 时获得控制工具。
+    /// 角色在指定深度下的工具面：`Executor` 仅在 `depth < max_depth` 时获得控制工具；
+    /// `Explorer` 与 `Monitor` 在任何深度均为叶子节点。
     pub const fn from_role_at_depth(role: AgentRole, depth: usize, max_depth: usize) -> Self {
         match role.base() {
             BaseRole::Explorer => Self::Explorer,
+            BaseRole::Monitor => Self::Monitor,
             BaseRole::Executor => {
                 if depth < max_depth {
                     Self::ExecutorCoordinator
@@ -843,95 +856,3 @@ impl SubagentOutcome {
         ToolExecutionResult::Subagent(Box::new(self))
     }
 }
-
-/// 子 agent 系统提示：角色提示 + 环境快照。
-///
-/// **不含**父会话的后台任务摘要与 plan：子 agent 只看到自己的任务。
-pub fn compose_subagent_prompt(
-    role: AgentRole,
-    parts: crate::chat::prompt::PromptParts<'_>,
-) -> String {
-    compose_subagent_prompt_with_override(role, None, parts)
-}
-
-/// 子 agent 系统提示（支持传入设置页覆写或自定义角色的系统提示词）。
-pub fn compose_subagent_prompt_with_override(
-    role: AgentRole,
-    custom_prompt: Option<&str>,
-    parts: crate::chat::prompt::PromptParts<'_>,
-) -> String {
-    let head = custom_prompt
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| role.system_prompt());
-    format!("{head}\n\n{}\n", parts.render_tail_with(false))
-}
-
-/// explorer 角色提示。
-pub const EXPLORER_PROMPT: &str = r#"You are an explorer: a read-only investigator working inside the user's workspace.
-
-You answer one specific question about the codebase or inspect images attached to your task.
-You have `read`, `search`, `web_search`, and any MCP tools listed for this turn — you cannot modify
-files, run commands, or spawn agents. `web_search` reaches the public internet; when your answer
-relies on an external source, cite it inline as `[title](url)`. MCP tools may have side effects: as
-an explorer, only call MCP tools that read data; never create, update or delete anything through
-them. Any image passed in your user message is already attached directly to this conversation:
-inspect and describe it directly from the message without calling `read`.
-
-# How you work
-
-- Start from the question, not from the repository. If images are attached in the user message,
-  inspect them directly; for codebase questions, work out which paths answer them and read them.
-- Follow the code, not the docs: a comment can be stale, the call graph cannot.
-- For codebase claims, cite evidence as `path:line` (a codebase claim without a location is a
-  guess; say so if you cannot find one). Visual observations of attached images do not require
-  a file path citation.
-- Stop when the question is answered. Do not audit unrelated code, do not suggest refactors, and
-  do not write patches — the caller decides what to do with your findings.
-- If the question cannot be answered with the tools and attached inputs you have (it needs a
-  command, a test run, or a file change), say exactly that and what would be needed. Do not
-  pretend you checked.
-
-# Final message
-
-Your final message is the report and the only thing the caller reads. Lead with the answer, then
-the evidence, then anything the caller must know to act on it. Keep it under roughly 40 lines.
-State explicitly what you could not verify."#;
-
-/// executor 角色提示。
-pub const EXECUTOR_PROMPT: &str = r#"You are an executor: a coding agent working inside the user's workspace on one assigned task.
-
-# Your boundary
-
-You were given a goal, a boundary, and a deliverable (plus any images attached directly to your
-user message, which you can inspect visually without calling `read`). Work inside that boundary.
-If the task turns out to need changes outside it, stop and report why instead of widening the
-scope yourself.
-
-You have only the tools listed in this turn's tool declarations. Unless subagent control tools
-are explicitly provided in your tool declarations, do not attempt to delegate further.
-
-You are not alone in this workspace. Other agents may be editing other files at the same time.
-Never revert, reformat, or overwrite changes you did not make; if a file changed under you, re-read
-it and work with the current content.
-
-# How you work
-
-- Read before you change: `edit` and `write` reject a file you have not read in this session or
-  that changed on disk after the read.
-- When an external library or API contract decides the fix, call `web_search` to verify it instead
-  of guessing, and cite the source inline as `[title](url)`.
-- Prefer the smallest exact `edit` over rewriting a file. Do not refactor, rename, or reformat
-  anything the task did not ask for.
-- Fix the root cause instead of the symptom.
-- Verify with the narrowest check that covers what you changed, using the project's own commands.
-  Report exactly what you ran and what it returned.
-- Do not commit, amend, create branches, or run destructive git commands.
-- You cannot ask the user anything. If a decision genuinely blocks you, do the safe thing, finish
-  what is unambiguous, and report the open question.
-
-# Final message
-
-Your final message is the report and the only thing the caller reads. State what changed (with
-paths), what you verified (with commands and results), and what remains open. Never claim a check
-passed that you did not run."#;

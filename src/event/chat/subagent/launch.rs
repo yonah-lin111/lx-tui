@@ -45,6 +45,11 @@ pub(super) fn launch_child_turn(
         model: frozen.model.clone(),
         variant: frozen.variant.clone(),
     };
+    let effective_subagents = crate::config::subagents::merge_project_roles(
+        &state.subagents_config,
+        Some(workspace),
+        persistence.is_trusted(workspace),
+    );
     let inputs = super::context::capture_child_prompt_inputs(
         state,
         persistence,
@@ -76,7 +81,7 @@ pub(super) fn launch_child_turn(
         frozen.output_limit,
         frozen.supports_image_input,
         items,
-        &state.subagents_config,
+        &effective_subagents,
         limits,
     )?;
     let mcp_snapshot = inputs.mcp;

@@ -829,6 +829,107 @@ fn tree_agent(
 }
 
 #[test]
+fn agents_filter_pills_render_and_hit() {
+    let mut lx = lx_with_messages();
+    lx.agents
+        .runs
+        .push(tree_agent("a", "/root/a", "running", None));
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        agent_filter: crate::app::state::AgentFilter::Active,
+        ..TaskPage::default()
+    });
+    let lines = render_lines(&lx, 80, 20);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("all · active · done")),
+        "Agents 页签右侧渲染筛选胶囊：{lines:?}"
+    );
+
+    let rect = Rect::new(0, 0, 80, 20);
+    let page = lx.task.as_ref().expect("task");
+    let pills = filter_row_rects(rect, page);
+    assert_eq!(pills.len(), 3, "三个筛选胶囊");
+    let (filter, x, _) = pills[1];
+    assert_eq!(filter, crate::app::state::AgentFilter::Active);
+    assert_eq!(
+        hit(rect, page, &lx.agents, x, rect.y + TOP_BORDER),
+        Some(TaskHit::AgentFilter(filter)),
+        "点击活动筛选胶囊命中"
+    );
+}
+
+#[test]
+fn inline_reply_renders_to_selected_nickname() {
+    let mut lx = lx_with_messages();
+    let mut run = tree_agent("a", "/root/turing", "completed", None);
+    run.nickname = Some("Turing".into());
+    lx.agents.runs.push(run);
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        agent_reply: Some(crate::app::overlay::TextInput::new("hello")),
+        ..TaskPage::default()
+    });
+    let lines = render_lines(&lx, 80, 20);
+    assert!(
+        lines.iter().any(|line| line.contains("To Turing: hello")),
+        "顶栏渲染内联追问：{lines:?}"
+    );
+}
+
+#[test]
+fn agents_filter_hit_maps_to_real_run_index() {
+    let rect = Rect::new(0, 0, 70, 10);
+    let mut agents = crate::app::state::AgentsState::default();
+    agents
+        .runs
+        .push(tree_agent("done", "/root/done", "completed", None));
+    agents
+        .runs
+        .push(tree_agent("live", "/root/live", "running", None));
+    let page = TaskPage {
+        tab: TaskTab::Agents,
+        agent_filter: crate::app::state::AgentFilter::Active,
+        ..TaskPage::default()
+    };
+    let list_y = rect.y + TOP_BORDER + TAB_ROW;
+    assert_eq!(
+        hit(rect, &page, &agents, rect.x, list_y),
+        Some(TaskHit::Agent(1)),
+        "筛选后的第一行映射回 runs[1]"
+    );
+}
+
+#[test]
+fn filtered_view_omits_dangling_tree_connectors() {
+    let mut lx = lx_with_messages();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        agent_filter: crate::app::state::AgentFilter::Active,
+        ..TaskPage::default()
+    });
+    lx.agents.runs = vec![
+        tree_agent("parent", "/root/turing", "completed", None),
+        tree_agent("grand", "/root/turing/curie", "running", None),
+    ];
+    lx.agents.sort_runs_tree_order();
+    let lines = render_lines(&lx, 80, 20);
+    let grand = lines
+        .iter()
+        .find(|line| line.contains("grand"))
+        .expect("grandchild row");
+    assert!(
+        !grand.contains("├─") && !grand.contains("└─"),
+        "父节点被筛选隐藏时不画悬空连接符：{grand}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("parent")),
+        "Completed 父节点在 Active 视图中隐藏：{lines:?}"
+    );
+}
+
+#[test]
 fn agents_list_indents_subtree_and_shows_tokens() {
     let mut lx = lx_with_messages();
     lx.task = Some(TaskPage {

@@ -726,6 +726,9 @@ pub(crate) fn handle_mouse_down_left(
                         ui::main_content::lx::task::TaskHit::Agent(index) => {
                             update::select_task_agent(state, pane, index);
                         }
+                        ui::main_content::lx::task::TaskHit::AgentFilter(filter) => {
+                            update::select_task_agent_filter(state, pane, filter);
+                        }
                     }
                     *dirty = true;
                     return;

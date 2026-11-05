@@ -49,14 +49,264 @@ fn reset_active_agent_follow(state: &mut AppState, pane: PaneId) {
     if page.tab != crate::app::state::TaskTab::Agents {
         return;
     }
-    let active = page.agents_window.active;
+    let Some(active) = page.selected_agent_index(&target.lx.agents) else {
+        return;
+    };
     if let Some(run) = target.lx.agents.runs.get_mut(active) {
         run.follow = true;
         run.scroll = usize::MAX;
     }
 }
 
+/// 内联追问输入态：拦截全部按键，字符/编辑键委托给 `TextInput`。
+fn apply_agent_reply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
+    let composing = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.task.as_ref())
+        .is_some_and(|page| {
+            page.tab == crate::app::state::TaskTab::Agents && page.agent_reply.is_some()
+        });
+    if !composing {
+        return false;
+    }
+    match command {
+        LxInput::Escape => {
+            if let Some(page) = state
+                .pane_mut_anywhere(pane)
+                .and_then(|target| target.lx.task.as_mut())
+            {
+                page.agent_reply = None;
+            }
+        }
+        LxInput::Enter => {
+            submit_agent_reply(state, pane);
+        }
+        LxInput::Char(ch) => {
+            edit_agent_reply(state, pane, |reply| reply.insert_char(ch));
+        }
+        LxInput::Backspace => edit_agent_reply(state, pane, |reply| reply.backspace()),
+        LxInput::Delete => edit_agent_reply(state, pane, |reply| reply.delete()),
+        LxInput::Left => edit_agent_reply(state, pane, |reply| reply.move_left()),
+        LxInput::Right => edit_agent_reply(state, pane, |reply| reply.move_right()),
+        LxInput::Home | LxInput::LineStart => {
+            edit_agent_reply(state, pane, |reply| reply.move_home());
+        }
+        LxInput::End | LxInput::LineEnd => {
+            edit_agent_reply(state, pane, |reply| reply.move_end());
+        }
+        LxInput::WordLeft => edit_agent_reply(state, pane, |reply| reply.move_word_left()),
+        LxInput::WordRight => edit_agent_reply(state, pane, |reply| reply.move_word_right()),
+        LxInput::DeleteWordBackward => {
+            edit_agent_reply(state, pane, |reply| reply.delete_word_backward());
+        }
+        LxInput::DeleteToLineStart => {
+            edit_agent_reply(state, pane, |reply| reply.delete_to_line_start());
+        }
+        LxInput::DeleteToLineEnd => {
+            edit_agent_reply(state, pane, |reply| reply.delete_to_line_end());
+        }
+        // 输入态不响应列表/面板快捷键，全部吞掉。
+        _ => {}
+    }
+    true
+}
+
+/// 修改内联追问输入框（输入态已经由调用方确认存在）。
+fn edit_agent_reply(
+    state: &mut AppState,
+    pane: PaneId,
+    edit: impl FnOnce(&mut crate::app::overlay::TextInput),
+) {
+    if let Some(reply) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.task.as_mut())
+        .and_then(|page| page.agent_reply.as_mut())
+    {
+        edit(reply);
+    }
+}
+
+/// 提交内联追问：非空文本按选中 run 发出 `SendSubagentUserInput`。
+fn submit_agent_reply(state: &mut AppState, pane: PaneId) -> bool {
+    let effect = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
+        let Some(page) = target.lx.task.as_mut() else {
+            return false;
+        };
+        let Some(input) = page.agent_reply.take() else {
+            return false;
+        };
+        let text = input.text().trim().to_string();
+        if text.is_empty() {
+            return true;
+        }
+        let Some(index) = page.selected_agent_index(&target.lx.agents) else {
+            return true;
+        };
+        let Some(run) = target.lx.agents.runs.get(index) else {
+            return true;
+        };
+        let Some(session_id) = target.lx.chat.session_id.clone() else {
+            return true;
+        };
+        crate::app::effects::Effect::SendSubagentUserInput {
+            pane,
+            session_id,
+            agent_id: run.agent_id.clone(),
+            text,
+        }
+    };
+    state.effects.push(effect);
+    true
+}
+
+/// 打开内联追问；`cancelled` 子 agent 不可再接收输入。
+fn open_agent_reply(state: &mut AppState, pane: PaneId) -> bool {
+    let cancelled = {
+        let Some(target) = state.pane_anywhere(pane) else {
+            return false;
+        };
+        let Some(page) = target.lx.task.as_ref() else {
+            return false;
+        };
+        let Some(run) = page.selected_agent(&target.lx.agents) else {
+            return false;
+        };
+        run.status == "cancelled"
+    };
+    if cancelled {
+        crate::app::update::show_lx_toast(
+            state,
+            pane,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Warning,
+                crate::ui::text::LX_TASK_AGENT_REPLY_CLOSED,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        );
+        return false;
+    }
+    let Some(page) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.task.as_mut())
+    else {
+        return false;
+    };
+    page.agent_reply = Some(crate::app::overlay::TextInput::new(""));
+    true
+}
+
+/// `Tab`：轮转 `all -> active -> done -> all` 并钳制高亮。
+fn cycle_agent_filter(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let Some(page) = target.lx.task.as_mut() else {
+        return false;
+    };
+    if page.tab != crate::app::state::TaskTab::Agents {
+        return false;
+    }
+    page.agent_filter = page.agent_filter.next();
+    let filtered = target.lx.agents.filtered_indices(page.agent_filter).len();
+    page.agents_window.clamp(filtered);
+    true
+}
+
+/// 按当前筛选后的可见条目数钳制 Agents 高亮（切 tab 后调用）。
+fn clamp_agents_window(state: &mut AppState, pane: PaneId) {
+    let filtered = state.pane_anywhere(pane).and_then(|target| {
+        target
+            .lx
+            .task
+            .as_ref()
+            .map(|page| target.lx.agents.filtered_indices(page.agent_filter).len())
+    });
+    let Some(filtered) = filtered else {
+        return;
+    };
+    if let Some(page) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.task.as_mut())
+    {
+        page.agents_window.clamp(filtered);
+    }
+}
+
+/// 已加载的选中 run 刷新访问序；未加载则请求从 DB 懒加载。
+fn ensure_selected_agent_loaded(state: &mut AppState, pane: PaneId) {
+    let pending = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return;
+        };
+        let Some(page) = target.lx.task.as_ref() else {
+            return;
+        };
+        if page.tab != crate::app::state::TaskTab::Agents {
+            return;
+        }
+        let Some(index) = page.selected_agent_index(&target.lx.agents) else {
+            return;
+        };
+        let Some(run) = target.lx.agents.runs.get_mut(index) else {
+            return;
+        };
+        let agent_id = run.agent_id.clone();
+        let child_session = run.child_session_id.clone();
+        let loaded = run.loaded;
+        if loaded {
+            run.touch_access();
+        }
+        target.lx.agents.evict_excess_idle_chats(Some(&agent_id));
+        (!loaded).then_some((agent_id, child_session))
+    };
+    if let Some((agent_id, child_session)) = pending {
+        state
+            .effects
+            .push(crate::app::effects::Effect::LoadSubagentSession {
+                pane,
+                agent_id,
+                child_session,
+            });
+    }
+}
+
+/// 鼠标点击筛选胶囊（事件层入口）。
+pub fn select_task_agent_filter(
+    state: &mut AppState,
+    pane: PaneId,
+    filter: crate::app::state::AgentFilter,
+) -> bool {
+    let changed = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
+        let Some(page) = target.lx.task.as_mut() else {
+            return false;
+        };
+        if page.tab != crate::app::state::TaskTab::Agents || page.agent_filter == filter {
+            return false;
+        }
+        page.agent_filter = filter;
+        page.agent_reply = None;
+        let filtered = target.lx.agents.filtered_indices(filter).len();
+        page.agents_window.clamp(filtered);
+        true
+    };
+    if changed {
+        ensure_selected_agent_loaded(state, pane);
+        crate::app::update::clear_lx_selection_for(state, pane);
+    }
+    changed
+}
+
 pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command: LxInput) {
+    if apply_agent_reply_input(state, pane, command) {
+        return;
+    }
     // `PageUp`/`PageDown`：翻输出区（`↑`/`↓` 已经归任务列表高亮）。
     if let Some(delta) = task_output_delta(command) {
         let agents_tab = state
@@ -92,6 +342,7 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
                 .is_some_and(|page| page.move_active_len(len, -1));
             if moved {
                 reset_active_agent_follow(state, pane);
+                ensure_selected_agent_loaded(state, pane);
                 crate::app::update::clear_lx_selection_for(state, pane);
             } else {
                 chat::close_task_page(state, pane);
@@ -105,6 +356,7 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
                 .is_some_and(|page| page.move_active_len(len, 1));
             if moved {
                 reset_active_agent_follow(state, pane);
+                ensure_selected_agent_loaded(state, pane);
                 crate::app::update::clear_lx_selection_for(state, pane);
             }
         }
@@ -115,6 +367,8 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
                 .and_then(|target| target.lx.task.as_mut())
                 .is_some_and(|page| page.cycle_tab(-1));
             if cycled {
+                clamp_agents_window(state, pane);
+                ensure_selected_agent_loaded(state, pane);
                 crate::app::update::clear_lx_selection_for(state, pane);
             }
         }
@@ -124,7 +378,27 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
                 .and_then(|target| target.lx.task.as_mut())
                 .is_some_and(|page| page.cycle_tab(1));
             if cycled {
+                clamp_agents_window(state, pane);
+                ensure_selected_agent_loaded(state, pane);
                 crate::app::update::clear_lx_selection_for(state, pane);
+            }
+        }
+        // `Tab`：Agents 页签轮转状态筛选（all -> active -> done）。
+        LxInput::Tab => {
+            let cycled = cycle_agent_filter(state, pane);
+            if cycled {
+                ensure_selected_agent_loaded(state, pane);
+                crate::app::update::clear_lx_selection_for(state, pane);
+            }
+        }
+        // `Enter`：Agents 页签打开选中子 agent 的内联追问输入框。
+        LxInput::Enter => {
+            let agents_tab = state
+                .pane_anywhere(pane)
+                .and_then(|target| target.lx.task.as_ref())
+                .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
+            if agents_tab {
+                open_agent_reply(state, pane);
             }
         }
         // `^d` 停止高亮进程 / 子 agent（对齐 opencode `composer.shell.kill`）。

@@ -9,7 +9,9 @@ use super::fixtures::{
     ScriptedFactory, Step, TestDir, assemble, delayed, session_messages, text_step,
     tool_result_texts, tool_step,
 };
-use crate::chat::agent::{SubagentReportView, format_report_envelope};
+use crate::chat::agent::{
+    SUBAGENT_TURN_ABORTED_MARKER, SubagentReportView, format_report_envelope,
+};
 use crate::chat::agent_loop::TurnOutcome;
 use crate::chat::events::{ChatRequest, ModelItem, RequestPurpose};
 use crate::db::Database;
@@ -163,6 +165,33 @@ async fn interrupting_a_subagent_with_send_input_runs_the_queued_turn_to_complet
             .iter()
             .any(|text| text.contains("urgent answer from child")),
         "wait_agent results: {waited:?}"
+    );
+
+    // 被中断首轮保留，并在后续 send_input 轮次注入 <turn_aborted> 与 NEW_TASK 信封。
+    let requests = factory.requests();
+    let child_requests: Vec<&ChatRequest> = requests
+        .iter()
+        .filter(|request| matches!(request.purpose, RequestPurpose::Subagent(_)))
+        .collect();
+    let follow_up = child_requests.last().expect("follow-up child request");
+    assert!(
+        follow_up
+            .items
+            .iter()
+            .any(|item| matches!(item, ModelItem::UserText(text)
+            if text.contains(SUBAGENT_TURN_ABORTED_MARKER))),
+        "follow-up must replay the interrupted turn marker: {:?}",
+        follow_up.items
+    );
+    assert!(
+        follow_up
+            .items
+            .iter()
+            .any(|item| matches!(item, ModelItem::UserText(text)
+            if text.starts_with("Message Type: NEW_TASK")
+                && text.contains("answer the urgent follow-up"))),
+        "follow-up must be wrapped in an inter-agent envelope: {:?}",
+        follow_up.items
     );
 }
 

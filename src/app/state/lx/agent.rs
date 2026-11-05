@@ -5,6 +5,8 @@
 
 pub use crate::chat::agent::SubagentReportView;
 
+use std::sync::atomic::{AtomicI64, Ordering};
+
 use crate::chat::agent::AgentRole;
 use crate::db::chat::{SubagentRecord, Usage};
 
@@ -12,6 +14,26 @@ use super::chat::{AssistantStepView, ChatMessageView, ChatPartView, LxChat};
 use super::compact::LxCompact;
 use crate::app::state::{RequestKey, RequestState};
 use crate::chat::events::PartKind;
+
+/// 内存中同时保留完整 `LxChat` 消息树的非运行态子 agent 上限。
+pub const MAX_RESIDENT_SUBAGENT_CHATS: usize = 6;
+
+/// 访问序号：同一毫秒内连续选中也要严格递增，保证 LRU 顺序确定。
+static ACCESS_TICK: AtomicI64 = AtomicI64::new(0);
+
+/// 严格递增的访问序号（取当前毫秒与上一次序号 + 1 的较大值）。
+fn next_access_tick() -> i64 {
+    let now = crate::db::now_ms();
+    let mut current = ACCESS_TICK.load(Ordering::Relaxed);
+    loop {
+        let next = now.max(current.saturating_add(1));
+        match ACCESS_TICK.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => return next,
+            Err(actual) => current = actual,
+        }
+    }
+}
 
 /// 一个 subagent 的展示态。
 #[derive(Debug)]
@@ -62,6 +84,8 @@ pub struct SubagentRun {
     pub rows_dirty: bool,
     /// 是否跟随底部（用户上翻即停）。
     pub follow: bool,
+    /// 最近一次被选中/加载的访问序号（空闲子会话 LRU 回收用）。
+    pub last_accessed_ms: i64,
 }
 
 impl SubagentRun {
@@ -95,7 +119,27 @@ impl SubagentRun {
             total_rows: 0,
             rows_dirty: true,
             follow: true,
+            last_accessed_ms: record.completed_at_ms.unwrap_or(record.created_at_ms),
         }
+    }
+
+    /// 刷新访问序号（选中/加载后调用，保持 LRU 顺序）。
+    pub fn touch_access(&mut self) {
+        self.last_accessed_ms = next_access_tick();
+    }
+
+    /// 卸载空闲子会话的内存消息树（保留元数据、Token 统计与汇报摘要）。
+    ///
+    /// 再次选中时由 `Effect::LoadSubagentSession` 从 SQLite 懒加载。
+    pub fn evict_chat_memory(&mut self) {
+        if self.is_running() || !self.loaded {
+            return;
+        }
+        self.chat = LxChat::new();
+        self.compact = LxCompact::default();
+        self.loaded = false;
+        self.total_rows = 0;
+        self.rows_dirty = true;
     }
 
     /// 已运行时长（毫秒）；结束的按结束时刻算。
@@ -406,5 +450,55 @@ impl AgentsState {
     /// 仍在运行的子 agent 数（底边框运行指标）。
     pub fn running_count(&self) -> usize {
         self.runs.iter().filter(|run| run.is_running()).count()
+    }
+
+    /// 阻塞（队首输入校验失败）的子 agent 数（底边框异常提醒）。
+    pub fn blocked_count(&self) -> usize {
+        self.runs
+            .iter()
+            .filter(|run| run.status == "blocked")
+            .count()
+    }
+
+    /// 按筛选器取真实下标（保持 `runs` 的树形前序）。
+    pub fn filtered_indices(&self, filter: super::task::AgentFilter) -> Vec<usize> {
+        self.runs
+            .iter()
+            .enumerate()
+            .filter(|(_, run)| filter.matches(run))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// 空闲子会话 LRU 回收：已加载的非运行态 run 超过上限时卸载最久未访问的。
+    ///
+    /// `protected_agent_id` 是当前选中的 run，永不卸载；返回被卸载的 agent id。
+    pub fn evict_excess_idle_chats(&mut self, protected_agent_id: Option<&str>) -> Vec<String> {
+        let mut evicted = Vec::new();
+        loop {
+            let loaded = self
+                .runs
+                .iter()
+                .filter(|run| !run.is_running() && run.loaded)
+                .count();
+            if loaded <= MAX_RESIDENT_SUBAGENT_CHATS {
+                break;
+            }
+            let candidate = self
+                .runs
+                .iter()
+                .enumerate()
+                .filter(|(_, run)| !run.is_running() && run.loaded)
+                .filter(|(_, run)| Some(run.agent_id.as_str()) != protected_agent_id)
+                .min_by_key(|(_, run)| run.last_accessed_ms)
+                .map(|(index, _)| index);
+            let Some(index) = candidate else {
+                break;
+            };
+            let agent_id = self.runs[index].agent_id.clone();
+            self.runs[index].evict_chat_memory();
+            evicted.push(agent_id);
+        }
+        evicted
     }
 }

@@ -8,9 +8,10 @@
 //! 主体是当前 tab 的列表，底部一行键位提示。`Agents` 上半区是选中子 agent 的完整
 //! 消息流（复用主历史渲染与折叠），下半区是列表（滚动/点击切换）。
 
+use crate::chat::agent::AgentStatus;
 use crate::ui::text;
 
-use super::agent::AgentsState;
+use super::agent::{AgentsState, SubagentRun};
 use super::slash::PanelWindow;
 
 /// 后台任务页的 tab（固定顺序，←/→ 轮转）。
@@ -32,6 +33,60 @@ impl TaskTab {
         match self {
             Self::Processes => text::LX_TASK_TAB_PROCESSES,
             Self::Agents => text::LX_TASK_TAB_AGENTS,
+        }
+    }
+}
+
+/// Agents 面板列表的状态筛选器。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AgentFilter {
+    /// 全部子 agent。
+    #[default]
+    All,
+    /// 仅活动态（`running` / `idle` / `blocked`）。
+    Active,
+    /// 仅已结束态（`completed` / `failed` / `interrupted` / `cancelled`）。
+    Done,
+}
+
+impl AgentFilter {
+    /// 固定展示顺序。
+    pub const ALL: [Self; 3] = [Self::All, Self::Active, Self::Done];
+
+    /// 筛选胶囊标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Active => "active",
+            Self::Done => "done",
+        }
+    }
+
+    /// 轮转到下一个筛选器。
+    pub const fn next(self) -> Self {
+        match self {
+            Self::All => Self::Active,
+            Self::Active => Self::Done,
+            Self::Done => Self::All,
+        }
+    }
+
+    /// 该 run 是否满足当前筛选。
+    pub fn matches(self, run: &SubagentRun) -> bool {
+        let status = AgentStatus::parse(&run.status).unwrap_or(AgentStatus::Completed);
+        match self {
+            Self::All => true,
+            Self::Active => matches!(
+                status,
+                AgentStatus::Running | AgentStatus::Idle | AgentStatus::Blocked
+            ),
+            Self::Done => matches!(
+                status,
+                AgentStatus::Completed
+                    | AgentStatus::Failed
+                    | AgentStatus::Interrupted
+                    | AgentStatus::Cancelled
+            ),
         }
     }
 }
@@ -111,6 +166,10 @@ pub struct TaskPage {
     pub agents_window: PanelWindow,
     /// 一次性的 agent 定位请求（点击卡片链接时写入；列表回投后消费）。
     pub agents_focus: Option<String>,
+    /// Agents 列表的状态筛选器。
+    pub agent_filter: AgentFilter,
+    /// Agents 面板顶栏的内联追问输入框（`None` 为普通浏览态）。
+    pub agent_reply: Option<crate::app::overlay::TextInput>,
 }
 
 impl TaskPage {
@@ -118,7 +177,7 @@ impl TaskPage {
     pub fn len(&self, agents: &AgentsState) -> usize {
         match self.tab {
             TaskTab::Processes => self.processes.len(),
-            TaskTab::Agents => agents.runs.len(),
+            TaskTab::Agents => agents.filtered_indices(self.agent_filter).len(),
         }
     }
 
@@ -136,9 +195,9 @@ impl TaskPage {
             TaskTab::Processes => {
                 self.output_visible == 0 || self.output_scroll >= self.output_max_scroll()
             }
-            TaskTab::Agents => agents
-                .runs
-                .get(self.agents_window.active)
+            TaskTab::Agents => self
+                .selected_agent_index(agents)
+                .and_then(|index| agents.runs.get(index))
                 .is_none_or(|run| {
                     run.chat.messages.is_empty()
                         || run.follow
@@ -156,13 +215,19 @@ impl TaskPage {
     }
 
     /// 高亮当前的子 agent（`Agents` tab 且索引有效时）。
-    pub fn selected_agent<'a>(
-        &self,
-        agents: &'a AgentsState,
-    ) -> Option<&'a super::agent::SubagentRun> {
+    pub fn selected_agent<'a>(&self, agents: &'a AgentsState) -> Option<&'a SubagentRun> {
         matches!(self.tab, TaskTab::Agents)
-            .then(|| agents.runs.get(self.agents_window.active))
+            .then(|| self.selected_agent_index(agents))
             .flatten()
+            .and_then(|index| agents.runs.get(index))
+    }
+
+    /// 把筛选后列表里的高亮位置映射回 `agents.runs` 的真实下标。
+    pub fn selected_agent_index(&self, agents: &AgentsState) -> Option<usize> {
+        agents
+            .filtered_indices(self.agent_filter)
+            .get(self.agents_window.active)
+            .copied()
     }
 
     /// 当前 tab 的高亮窗口（进程 / 子 agent 各一份）。
@@ -184,7 +249,8 @@ impl TaskPage {
     /// 按当前 tab 集合钳制高亮窗口。
     pub fn clamp(&mut self, agents: &AgentsState) {
         self.window.clamp(self.processes.len());
-        self.agents_window.clamp(agents.runs.len());
+        self.agents_window
+            .clamp(agents.filtered_indices(self.agent_filter).len());
     }
 
     /// 切换 tab（←/→ 轮转），并钳制高亮。
@@ -213,6 +279,7 @@ impl TaskPage {
             return false;
         }
         self.tab = tab;
+        self.agent_reply = None;
         self.window.clamp(self.processes.len());
         true
     }

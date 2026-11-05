@@ -242,14 +242,34 @@ pub fn turn_tools_with_subagents(
     mcp: &crate::mcp::McpToolSnapshot,
     subagents: Option<&crate::config::subagents::SubagentsSection>,
 ) -> Vec<super::types::ToolDecl> {
+    turn_tools_for_subagent(
+        surface,
+        crate::config::subagents::RoleCapabilities::default(),
+        mcp,
+        subagents,
+    )
+}
+
+/// 子 agent 轮次的完整工具声明（按 `RoleCapabilities` 执行细粒度能力收紧：只减不增）。
+pub fn turn_tools_for_subagent(
+    surface: crate::chat::agent::ToolSurface,
+    capabilities: crate::config::subagents::RoleCapabilities,
+    mcp: &crate::mcp::McpToolSnapshot,
+    subagents: Option<&crate::config::subagents::SubagentsSection>,
+) -> Vec<super::types::ToolDecl> {
     let mut decls = builtin_tools_with_subagents(surface, subagents);
-    decls.extend(mcp.tools().iter().map(|tool| super::types::ToolDecl {
-        name: tool.qualified.clone(),
-        description: tool.description.clone(),
-        parameters: tool.parameters.clone(),
-    }));
-    if mcp.has_resources() {
-        decls.extend(resource_tools());
+    if !capabilities.allow_web_search {
+        decls.retain(|decl| decl.name != "web_search");
+    }
+    if capabilities.allow_mcp {
+        decls.extend(mcp.tools().iter().map(|tool| super::types::ToolDecl {
+            name: tool.qualified.clone(),
+            description: tool.description.clone(),
+            parameters: tool.parameters.clone(),
+        }));
+        if mcp.has_resources() {
+            decls.extend(resource_tools());
+        }
     }
     decls
 }

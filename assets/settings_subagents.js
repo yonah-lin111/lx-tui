@@ -6,10 +6,12 @@ let subagentsNew = false;
 let subagentBaseRoleSelect = null;
 let subagentModelSelect = null;
 let subagentEffortSelect = null;
+let subagentDelegationModeSelect = null;
 
 let subagentsBaselineMaxConcurrent = 4;
 let subagentsBaselineMaxDepth = 2;
 let subagentsBaselineDefaultMaxTokens = null;
+let subagentsBaselineDelegationMode = 'auto';
 let subagentsGeneralInputsWired = false;
 const subagentBaselines = new Map();
 const subagentDrafts = new Map();
@@ -23,7 +25,11 @@ const NEW_SUBAGENT_ROLE_DEFAULT = {
   systemPrompt: '',
   modelKey: '',
   variant: '',
-  nicknames: ''
+  nicknames: '',
+  lockModel: false,
+  allowWebSearch: true,
+  allowMcp: true,
+  allowSkills: true
 };
 
 function modelKeyOf(modelObj) {
@@ -62,7 +68,11 @@ function builtinRecordFromState(name, overrideObj, defaultsObj) {
     systemPrompt: (ov.systemPrompt && ov.systemPrompt.trim()) ? ov.systemPrompt.trim() : (def.systemPrompt || ''),
     modelKey: modelKeyOf(m),
     variant: (m && m.variant) ? m.variant : '',
-    nicknames: Array.isArray(ov.nicknameCandidates) ? ov.nicknameCandidates.join(', ') : ''
+    nicknames: Array.isArray(ov.nicknameCandidates) ? ov.nicknameCandidates.join(', ') : '',
+    lockModel: !!ov.lockModel,
+    allowWebSearch: ov.allowWebSearch === undefined ? true : !!ov.allowWebSearch,
+    allowMcp: ov.allowMcp === undefined ? true : !!ov.allowMcp,
+    allowSkills: ov.allowSkills === undefined ? true : !!ov.allowSkills
   };
 }
 
@@ -76,7 +86,11 @@ function customRecordFromState(roleObj) {
     systemPrompt: roleObj.systemPrompt || '',
     modelKey: modelKeyOf(m),
     variant: (m && m.variant) ? m.variant : '',
-    nicknames: Array.isArray(roleObj.nicknameCandidates) ? roleObj.nicknameCandidates.join(', ') : ''
+    nicknames: Array.isArray(roleObj.nicknameCandidates) ? roleObj.nicknameCandidates.join(', ') : '',
+    lockModel: !!roleObj.lockModel,
+    allowWebSearch: roleObj.allowWebSearch === undefined ? true : !!roleObj.allowWebSearch,
+    allowMcp: roleObj.allowMcp === undefined ? true : !!roleObj.allowMcp,
+    allowSkills: roleObj.allowSkills === undefined ? true : !!roleObj.allowSkills
   };
 }
 
@@ -89,7 +103,11 @@ function normalizeSubagentDraft(rec) {
     systemPrompt: (rec.systemPrompt || '').trim(),
     modelKey: rec.modelKey || '',
     variant: rec.variant || '',
-    nicknames: parseNicknamesInput(rec.nicknames).join(', ')
+    nicknames: parseNicknamesInput(rec.nicknames).join(', '),
+    lockModel: !!rec.lockModel,
+    allowWebSearch: rec.allowWebSearch === undefined ? true : !!rec.allowWebSearch,
+    allowMcp: rec.allowMcp === undefined ? true : !!rec.allowMcp,
+    allowSkills: rec.allowSkills === undefined ? true : !!rec.allowSkills
   };
 }
 
@@ -122,6 +140,12 @@ function currentDefaultMaxTokensValue() {
   return raw === '' ? null : Number(raw);
 }
 
+function currentDelegationModeValue() {
+  return subagentDelegationModeSelect
+    ? (subagentDelegationModeSelect.value() || 'auto')
+    : subagentsBaselineDelegationMode;
+}
+
 function validateSubagentsGeneral(maxConcurrent, maxDepth, defaultMaxTokens) {
   if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 12) {
     return 'Max concurrent subagents must be an integer between 1 and 12';
@@ -144,6 +168,25 @@ function ensureSubagentsGeneralInputs() {
     el.addEventListener('input', () => { refreshActionBars(); });
     el.addEventListener('change', () => { refreshActionBars(); });
   }
+  for (const id of ['subagent-lock-model', 'subagent-allow-web-search', 'subagent-allow-mcp', 'subagent-allow-skills']) {
+    const el = document.getElementById(id);
+    if (!el) { continue; }
+    el.addEventListener('change', () => { refreshActionBars(); });
+  }
+  if (!subagentDelegationModeSelect) {
+    const host = document.getElementById('subagents-delegation-mode');
+    if (host) {
+      subagentDelegationModeSelect = createSelect(host, {
+        options: [
+          {value: 'auto', label: 'Auto (proactive on high effort)'},
+          {value: 'proactive', label: 'Proactive (parallelize eagerly)'},
+          {value: 'explicit', label: 'Explicit (only when requested)'}
+        ],
+        value: subagentsBaselineDelegationMode,
+        onChange: () => { refreshActionBars(); }
+      });
+    }
+  }
 }
 
 function subagentsDirty() {
@@ -152,6 +195,7 @@ function subagentsDirty() {
   if (currentMaxConcurrentValue() !== subagentsBaselineMaxConcurrent) { return true; }
   if (currentMaxDepthValue() !== subagentsBaselineMaxDepth) { return true; }
   if (currentDefaultMaxTokensValue() !== subagentsBaselineDefaultMaxTokens) { return true; }
+  if (currentDelegationModeValue() !== subagentsBaselineDelegationMode) { return true; }
   for (const name of subagentDrafts.keys()) {
     if (isSubagentRoleDirty(name)) { return true; }
   }
@@ -163,7 +207,8 @@ function ensureSubagentSelects() {
     subagentBaseRoleSelect = createSelect(document.getElementById('subagent-base-role-host'), {
       options: [
         {value: 'explorer', label: 'explorer (read-only)'},
-        {value: 'executor', label: 'executor (read & write)'}
+        {value: 'executor', label: 'executor (read & write)'},
+        {value: 'monitor', label: 'monitor (command & process watcher)'}
       ],
       value: 'explorer',
       onChange: () => { refreshActionBars(); }
@@ -230,7 +275,11 @@ function readSubagentEditorValues() {
     variant: subagentEffortSelect.value() || '',
     nicknames: document.getElementById('subagent-nicknames').value,
     description: document.getElementById('subagent-description').value,
-    systemPrompt: document.getElementById('subagent-prompt').value
+    systemPrompt: document.getElementById('subagent-prompt').value,
+    lockModel: document.getElementById('subagent-lock-model').checked,
+    allowWebSearch: document.getElementById('subagent-allow-web-search').checked,
+    allowMcp: document.getElementById('subagent-allow-mcp').checked,
+    allowSkills: document.getElementById('subagent-allow-skills').checked
   };
 }
 
@@ -268,6 +317,7 @@ async function loadSubagents(showReloadToast) {
     subagentsBaselineDefaultMaxTokens = (data.defaultMaxTokens === null || data.defaultMaxTokens === undefined)
       ? null
       : Number(data.defaultMaxTokens);
+    subagentsBaselineDelegationMode = data.delegationMode || 'auto';
     const maxInput = document.getElementById('subagents-max-concurrent');
     if (maxInput) { maxInput.value = String(subagentsBaselineMaxConcurrent); }
     const depthInput = document.getElementById('subagents-max-depth');
@@ -275,6 +325,9 @@ async function loadSubagents(showReloadToast) {
     const tokensInput = document.getElementById('subagents-default-max-tokens');
     if (tokensInput) {
       tokensInput.value = subagentsBaselineDefaultMaxTokens === null ? '' : String(subagentsBaselineDefaultMaxTokens);
+    }
+    if (subagentDelegationModeSelect) {
+      subagentDelegationModeSelect.setValue(subagentsBaselineDelegationMode);
     }
 
     const previousName = subagentsSelectedName;
@@ -286,6 +339,7 @@ async function loadSubagents(showReloadToast) {
     const defaults = data.defaults || {};
     subagentBaselines.set('explorer', builtinRecordFromState('explorer', builtins.explorer, defaults.explorer));
     subagentBaselines.set('executor', builtinRecordFromState('executor', builtins.executor, defaults.executor));
+    subagentBaselines.set('monitor', builtinRecordFromState('monitor', builtins.monitor, defaults.monitor));
 
     for (const r of (data.roles || [])) {
       const rec = customRecordFromState(r);
@@ -293,7 +347,7 @@ async function loadSubagents(showReloadToast) {
     }
 
     const totalCustom = (data.roles || []).length;
-    statusEl.textContent = '2 built-in + ' + totalCustom + ' custom role(s)';
+    statusEl.textContent = '3 built-in + ' + totalCustom + ' custom role(s)';
 
     const keepName = (previousName && subagentBaselines.has(previousName)) ? previousName : 'explorer';
     subagentsNew = false;
@@ -390,6 +444,10 @@ function showSubagentEditor(rec) {
   document.getElementById('subagent-nicknames').value = rec.nicknames || '';
   document.getElementById('subagent-description').value = rec.description || '';
   document.getElementById('subagent-prompt').value = rec.systemPrompt || '';
+  document.getElementById('subagent-lock-model').checked = !!rec.lockModel;
+  document.getElementById('subagent-allow-web-search').checked = rec.allowWebSearch !== false;
+  document.getElementById('subagent-allow-mcp').checked = rec.allowMcp !== false;
+  document.getElementById('subagent-allow-skills').checked = rec.allowSkills !== false;
 
   document.getElementById('subagent-reset-default').classList.toggle('hidden', !rec.isBuiltin);
   document.getElementById('subagent-delete-role').classList.toggle('hidden', !!rec.isBuiltin || subagentsNew);
@@ -409,7 +467,7 @@ function hideSubagentEditor() {
 }
 
 async function resetBuiltinRoleToDefault() {
-  if (!subagentsSelectedName || (subagentsSelectedName !== 'explorer' && subagentsSelectedName !== 'executor')) {
+  if (!subagentsSelectedName || (subagentsSelectedName !== 'explorer' && subagentsSelectedName !== 'executor' && subagentsSelectedName !== 'monitor')) {
     return;
   }
   try {
@@ -448,6 +506,9 @@ function resetSubagents() {
   if (tokensInput) {
     tokensInput.value = subagentsBaselineDefaultMaxTokens === null ? '' : String(subagentsBaselineDefaultMaxTokens);
   }
+  if (subagentDelegationModeSelect) {
+    subagentDelegationModeSelect.setValue(subagentsBaselineDelegationMode);
+  }
   const keepName = (!subagentsNew && subagentsSelectedName && subagentBaselines.has(subagentsSelectedName))
     ? subagentsSelectedName
     : 'explorer';
@@ -466,6 +527,10 @@ function recordToBuiltinOverride(rec, defaultsObj) {
     description: (desc && desc !== (def.description || '').trim()) ? desc : null,
     systemPrompt: (prompt && prompt !== (def.systemPrompt || '').trim()) ? prompt : null,
     model: parseModelKey(rec.modelKey, rec.variant),
+    lockModel: !!rec.lockModel,
+    allowWebSearch: rec.allowWebSearch !== false,
+    allowMcp: rec.allowMcp !== false,
+    allowSkills: rec.allowSkills !== false,
     nicknameCandidates: parseNicknamesInput(rec.nicknames)
   };
 }
@@ -477,6 +542,10 @@ function recordToCustomRole(rec) {
     description: (rec.description || '').trim(),
     systemPrompt: (rec.systemPrompt || '').trim(),
     model: parseModelKey(rec.modelKey, rec.variant),
+    lockModel: !!rec.lockModel,
+    allowWebSearch: rec.allowWebSearch !== false,
+    allowMcp: rec.allowMcp !== false,
+    allowSkills: rec.allowSkills !== false,
     nicknameCandidates: parseNicknamesInput(rec.nicknames)
   };
 }
@@ -497,6 +566,7 @@ async function saveSubagents() {
   const defaults = (subagentsState && subagentsState.defaults) || {};
   const explorerRec = subagentDrafts.get('explorer') || subagentBaselines.get('explorer');
   const executorRec = subagentDrafts.get('executor') || subagentBaselines.get('executor');
+  const monitorRec = subagentDrafts.get('monitor') || subagentBaselines.get('monitor');
 
   const roles = [];
   for (const [name, base] of subagentBaselines.entries()) {
@@ -515,9 +585,11 @@ async function saveSubagents() {
     maxConcurrent: maxConcurrent,
     maxDepth: maxDepth,
     defaultMaxTokens: defaultMaxTokens,
+    delegationMode: currentDelegationModeValue(),
     builtins: {
       explorer: recordToBuiltinOverride(explorerRec, defaults.explorer),
-      executor: recordToBuiltinOverride(executorRec, defaults.executor)
+      executor: recordToBuiltinOverride(executorRec, defaults.executor),
+      monitor: recordToBuiltinOverride(monitorRec, defaults.monitor)
     },
     roles: roles
   };
