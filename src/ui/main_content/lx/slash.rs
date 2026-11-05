@@ -139,6 +139,130 @@ pub(super) fn items<'a>(
                 }
             })
             .collect(),
+        SlashPanel::Connect(panel) => connect_items(panel),
+    }
+}
+
+/// `/connect` 各阶段的条目（全部借用面板内的稳定字符串）。
+fn connect_items(panel: &crate::app::state::ConnectPanel) -> Vec<CommandItem<'_>> {
+    use crate::app::state::{ConnectPromptStep, ConnectStage};
+    match &panel.stage {
+        ConnectStage::Providers => {
+            if panel.filtered.is_empty() {
+                return vec![CommandItem::Inline {
+                    label: if panel.is_filter_empty() {
+                        text::LX_SLASH_NO_MATCHES
+                    } else {
+                        text::LX_CONNECT_EMPTY
+                    },
+                    preview: "",
+                    tag: "",
+                }];
+            }
+            panel
+                .visible()
+                .into_iter()
+                .map(|entry| CommandItem::Inline {
+                    label: &entry.name,
+                    preview: &entry.note,
+                    tag: &entry.tag,
+                })
+                .collect()
+        }
+        ConnectStage::Manage { actions, .. } => actions
+            .iter()
+            .map(|action| CommandItem::Inline {
+                label: action.label(),
+                preview: "",
+                tag: "",
+            })
+            .collect(),
+        ConnectStage::Methods { methods, .. } => methods
+            .iter()
+            .map(|method| CommandItem::Inline {
+                label: method.label(),
+                preview: "",
+                tag: if method.oauth_flow().is_some() {
+                    text::LX_CONNECT_METHOD_OAUTH_TAG
+                } else {
+                    text::LX_CONNECT_METHOD_API_KEY_TAG
+                },
+            })
+            .collect(),
+        ConnectStage::InputPrompt {
+            provider_name,
+            step,
+            error,
+            ..
+        } => match step {
+            ConnectPromptStep::FormField { field, .. } => {
+                if field.options.is_empty() {
+                    vec![CommandItem::Inline {
+                        label: field.label,
+                        preview: error
+                            .as_deref()
+                            .filter(|error| !error.is_empty())
+                            .unwrap_or(field.placeholder),
+                        tag: text::LX_CONNECT_INPUT_TAG,
+                    }]
+                } else {
+                    field
+                        .options
+                        .iter()
+                        .map(|option| CommandItem::Inline {
+                            label: option.label,
+                            preview: option.description,
+                            tag: option.value,
+                        })
+                        .collect()
+                }
+            }
+            ConnectPromptStep::ApiKey => vec![CommandItem::Inline {
+                label: provider_name,
+                preview: text::LX_CONNECT_API_KEY_PROMPT,
+                tag: error
+                    .as_deref()
+                    .filter(|error| !error.is_empty())
+                    .unwrap_or(text::LX_CONNECT_METHOD_API_KEY_TAG),
+            }],
+        },
+        ConnectStage::OAuthWaiting {
+            url,
+            user_code,
+            instructions,
+            error,
+            ..
+        } => {
+            let status = if instructions.is_empty() {
+                text::LX_CONNECT_OAUTH_WAITING
+            } else {
+                instructions.as_str()
+            };
+            if url.is_empty() {
+                return vec![CommandItem::Inline {
+                    label: status,
+                    preview: error.as_deref().unwrap_or(""),
+                    tag: "",
+                }];
+            }
+            vec![
+                CommandItem::Inline {
+                    label: text::LX_CONNECT_OPEN_BROWSER,
+                    preview: url,
+                    tag: "",
+                },
+                CommandItem::Inline {
+                    label: text::LX_CONNECT_COPY_CODE,
+                    preview: user_code.as_deref().unwrap_or(url),
+                    tag: "",
+                },
+                CommandItem::Inline {
+                    label: status,
+                    preview: error.as_deref().unwrap_or(""),
+                    tag: "",
+                },
+            ]
+        }
     }
 }
 
@@ -179,6 +303,7 @@ fn is_placeholder(panel: &crate::app::state::SlashPanel) -> bool {
         crate::app::state::SlashPanel::Fork(_) => false,
         crate::app::state::SlashPanel::Commands { .. } => false,
         crate::app::state::SlashPanel::Rewind(_) => false,
+        crate::app::state::SlashPanel::Connect(panel) => panel.is_placeholder(),
     }
 }
 
@@ -220,9 +345,55 @@ fn view<'a>(
             panel.window,
             text::LX_REWIND_PANEL_FOOTER,
         ),
+        SlashPanel::Connect(panel) => {
+            use crate::app::state::{ConnectPromptStep, ConnectStage};
+            let (title, footer) = match &panel.stage {
+                ConnectStage::Providers => (
+                    text::LX_CONNECT_PANEL_TITLE,
+                    text::LX_CONNECT_PROVIDERS_FOOTER,
+                ),
+                ConnectStage::Manage { .. } => (
+                    text::LX_CONNECT_MANAGE_TITLE,
+                    text::LX_CONNECT_SELECT_FOOTER,
+                ),
+                ConnectStage::Methods { .. } => (
+                    text::LX_CONNECT_METHOD_TITLE,
+                    text::LX_CONNECT_SELECT_FOOTER,
+                ),
+                ConnectStage::InputPrompt { step, .. } => {
+                    let footer = match step {
+                        ConnectPromptStep::FormField { field, .. } if !field.options.is_empty() => {
+                            text::LX_CONNECT_SELECT_FOOTER
+                        }
+                        _ => text::LX_CONNECT_INPUT_FOOTER,
+                    };
+                    (text::LX_CONNECT_PANEL_TITLE, footer)
+                }
+                ConnectStage::OAuthWaiting { mode, .. } => (
+                    text::LX_CONNECT_OAUTH_TITLE,
+                    if *mode == crate::config::ai::oauth::OAuthPromptMode::Code {
+                        text::LX_CONNECT_OAUTH_CODE_FOOTER
+                    } else {
+                        text::LX_CONNECT_OAUTH_FOOTER
+                    },
+                ),
+            };
+            (title, panel.window(), footer)
+        }
     };
-    // 撤销面板顶边右侧固定说明恢复范围；窄面板由渲染侧裁剪。
-    let right_title = matches!(panel, SlashPanel::Rewind(_)).then_some(text::LX_REWIND_SCOPE);
+    // 撤销面板顶边右侧固定说明恢复范围；连接面板显示当前供应商名。
+    let right_title = match panel {
+        SlashPanel::Rewind(_) => Some(text::LX_REWIND_SCOPE),
+        SlashPanel::Connect(panel) => match &panel.stage {
+            crate::app::state::ConnectStage::Manage { provider_name, .. }
+            | crate::app::state::ConnectStage::Methods { provider_name, .. }
+            | crate::app::state::ConnectStage::OAuthWaiting { provider_name, .. } => {
+                Some(provider_name.as_str())
+            }
+            _ => None,
+        },
+        _ => None,
+    };
     let above = input.y.saturating_sub(area.y);
     let cap = above.min(
         mention::MAX_POPUP_ROWS

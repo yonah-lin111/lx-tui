@@ -130,6 +130,8 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .select-host { position: relative; }
 .select-button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--border-strong); background: var(--field); color: var(--text); font: inherit; cursor: pointer; text-align: left; }
 .select-button:hover { border-color: var(--border-overlay); background: var(--field-hover); }
+.select-button:disabled { opacity: .55; cursor: default; }
+.select-button:disabled:hover { border-color: var(--border-strong); background: var(--field); }
 .select-button:focus-visible { outline: 1px solid var(--accent); border-color: var(--accent); }
 .select-button[aria-expanded="true"] { border-color: var(--accent); background: var(--field-hover); }
 .select-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -208,5 +210,33 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
   .model-grid-3 { grid-template-columns: 1fr; }
   .check-grid { grid-template-columns: 1fr; }
 }
+
+/* ===== Models view: Quick Connect / Custom 双 Tab 与预设编辑区 ===== */
+.provider-tabs { display: flex; flex-shrink: 0; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.provider-tab { flex: 1 1 0; min-width: 0; padding: 6px 8px; border: 1px solid transparent; border-bottom: 0; background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+.provider-tab:hover { color: var(--text); background: var(--hover); }
+.provider-tab.active { color: var(--text); background: var(--panel-raised); border-color: var(--border); font-weight: 600; }
+.provider-search-wrap { flex-shrink: 0; padding: 6px 0 2px; }
+.provider-search-wrap input { width: 100%; padding: 5px 8px; border: 1px solid var(--border-strong); font: inherit; font-size: 12px; background: var(--field); color: var(--text); }
+.provider-search-wrap input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+.nav-item .nav-status { grid-column: 2; grid-row: 2; justify-self: start; font-size: 11px; border: 1px solid var(--border-strong); padding: 1px 6px; color: var(--muted); }
+.nav-item .nav-status.connected { color: var(--ok); border-color: var(--ok); }
+.preset-banner { flex-shrink: 0; border: 1px solid var(--border-strong); background: var(--panel-raised); padding: 10px 12px; margin-bottom: 12px; }
+.preset-banner.hidden { display: none; }
+.preset-banner-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.preset-badge { font-size: 11px; border: 1px solid var(--border-strong); padding: 1px 6px; color: var(--text); letter-spacing: .04em; text-transform: uppercase; }
+.preset-status-badge { font-size: 11px; border: 1px solid var(--border-strong); padding: 1px 6px; color: var(--muted); }
+.preset-status-badge.connected { color: var(--ok); border-color: var(--ok); }
+.preset-banner-desc, .preset-banner-methods { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.preset-oauth-methods { display: flex; flex-wrap: wrap; gap: 8px; }
+.preset-oauth-pending { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+.preset-oauth-pending.hidden { display: none; }
+.preset-oauth-url { font-size: 12px; color: var(--muted); word-break: break-all; }
+.preset-oauth-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.preset-oauth-code { font-size: 13px; color: var(--text); border: 1px solid var(--border-strong); padding: 2px 8px; }
+.preset-oauth-inline { display: flex; gap: 8px; align-items: center; }
+.preset-oauth-inline input { flex: 1 1 auto; }
+#preset-form-fields .field-wide { grid-column: 1 / -1; }
+#prov-name[readonly] { opacity: 0.7; }
 
 .hidden { display: none; }

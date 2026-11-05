@@ -255,6 +255,33 @@ pub enum Effect {
     SaveDefaultModel {
         selection: crate::config::ai::ModelSelection,
     },
+    // ===== `/connect` 快捷连接 =====
+    /// 保存预设供应商的 API Key 或 OAuth 凭证到 `connect.json`。
+    SavePresetConnection {
+        pane: crate::layout::PaneId,
+        provider_id: String,
+        api_key: Option<String>,
+        oauth: Option<crate::config::ai::connect::OAuthCredential>,
+        form_answers: std::collections::BTreeMap<String, String>,
+    },
+    /// 从 `connect.json` 移除预设供应商记录（断开连接）。
+    DisconnectPreset {
+        pane: crate::layout::PaneId,
+        provider_id: String,
+    },
+    /// 启动预设供应商的 OAuth 授权流。
+    StartPresetOAuth {
+        pane: crate::layout::PaneId,
+        provider_id: String,
+        method_id: String,
+        form_answers: std::collections::BTreeMap<String, String>,
+    },
+    /// 取消进行中的 OAuth 授权流。
+    CancelPresetOAuth { attempt_id: String },
+    /// 手动提交 OAuth 授权码（仅授权码模式）。
+    SubmitPresetOAuthCode { attempt_id: String, code: String },
+    /// 打开浏览器（OAuth 授权链接）。
+    OpenBrowser { url: String },
     /// 持久化一条已发送 prompt 到全局历史表（去重置顶、裁剪到上限）。
     ///
     /// 内存历史已在 `on_turn_committed` 同步更新；本效应只负责落库，

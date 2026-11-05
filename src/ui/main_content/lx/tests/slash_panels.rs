@@ -2,7 +2,11 @@
 
 use super::*;
 use crate::app::state::lx::slash::{HistoryEntry, HistoryPanel};
-use crate::app::state::{ModelCandidate, ModelPickerStage, SlashPanel};
+use crate::app::state::{
+    ConnectManageAction, ConnectPanel, ConnectPromptStep, ConnectStage, ModelCandidate,
+    ModelPickerStage, PanelWindow, SlashPanel,
+};
+use crate::config::ai::connect::ConnectSettings;
 
 /// 把整页缓冲区拼成文本行。
 pub(super) fn buffer_lines(buf: &Buffer, area: Rect) -> Vec<String> {
@@ -65,6 +69,134 @@ fn history_panel_lx() -> Lx {
         window: PanelWindow::new(1),
     })));
     lx
+}
+
+/// `/connect` 面板，指定阶段。
+fn connect_panel_lx(stage: ConnectStage) -> Lx {
+    let mut panel = ConnectPanel::new_with_env(&ConnectSettings::default(), |_| None);
+    panel.stage = stage;
+    let mut lx = Lx::new();
+    lx.slash = Some(SlashPanel::Connect(Box::new(panel)));
+    lx
+}
+
+fn render_lines(lx: &Lx) -> Vec<String> {
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, lx, false, None, &mut PaneCache::default());
+    buffer_lines(&buf, area)
+}
+
+#[test]
+fn connect_providers_panel_renders_names_notes_and_status_tags() {
+    let lx = connect_panel_lx(ConnectStage::Providers);
+    let lines = render_lines(&lx);
+    let text = lines.join("\n");
+    assert!(text.contains("302.AI"), "首个 A-Z 供应商可见: {lines:?}");
+    assert!(text.contains("Connect"), "面板标题: {lines:?}");
+    assert!(text.contains("type to filter"), "底栏提示: {lines:?}");
+}
+
+#[test]
+fn connect_manage_panel_renders_actions() {
+    let lx = connect_panel_lx(ConnectStage::Manage {
+        provider_id: "anthropic".into(),
+        provider_name: "Anthropic".into(),
+        source: crate::config::ai::connect::ConnectionSource::ApiKey,
+        actions: vec![
+            ConnectManageAction::SelectModel,
+            ConnectManageAction::Reconnect,
+            ConnectManageAction::Disconnect,
+        ],
+        window: PanelWindow::default(),
+    });
+    let text = render_lines(&lx).join("\n");
+    assert!(text.contains("Manage connection"));
+    assert!(text.contains("Select model"));
+    assert!(text.contains("Reconnect / Replace credentials"));
+    assert!(text.contains("Disconnect"));
+    assert!(text.contains("Anthropic"));
+}
+
+#[test]
+fn connect_methods_panel_renders_oauth_before_api_key() {
+    let methods = crate::config::ai::presets::find_preset("openai")
+        .expect("openai")
+        .methods;
+    let lx = connect_panel_lx(ConnectStage::Methods {
+        provider_id: "openai".into(),
+        provider_name: "OpenAI".into(),
+        methods,
+        window: PanelWindow::default(),
+    });
+    let lines = render_lines(&lx);
+    let text = lines.join("\n");
+    assert!(text.contains("Sign-in method"));
+    assert!(text.contains("ChatGPT Plus/Pro (browser)"));
+    assert!(text.contains("OAuth"));
+    assert!(text.contains("API key"));
+}
+
+#[test]
+fn connect_form_options_panel_renders_choices() {
+    let field = crate::config::ai::presets::find_preset("github-copilot")
+        .expect("copilot")
+        .methods[0]
+        .form()[0]
+        .clone();
+    let lx = connect_panel_lx(ConnectStage::InputPrompt {
+        provider_id: "github-copilot".into(),
+        provider_name: "GitHub Copilot".into(),
+        method_index: 0,
+        step: ConnectPromptStep::FormField {
+            field_index: 0,
+            field,
+            option_window: PanelWindow::default(),
+        },
+        answers: std::collections::BTreeMap::new(),
+        error: None,
+    });
+    let text = render_lines(&lx).join("\n");
+    assert!(text.contains("GitHub.com"));
+    assert!(text.contains("GitHub Enterprise"));
+}
+
+#[test]
+fn connect_api_key_panel_renders_provider_and_paste_hint() {
+    let lx = connect_panel_lx(ConnectStage::InputPrompt {
+        provider_id: "anthropic".into(),
+        provider_name: "Anthropic".into(),
+        method_index: 0,
+        step: ConnectPromptStep::ApiKey,
+        answers: std::collections::BTreeMap::new(),
+        error: None,
+    });
+    let body = render_lines(&lx).join("\n");
+    assert!(body.contains("Anthropic"));
+    assert!(body.contains(text::LX_CONNECT_API_KEY_PROMPT));
+}
+
+#[test]
+fn connect_oauth_panel_renders_open_copy_and_waiting_status() {
+    let lx = connect_panel_lx(ConnectStage::OAuthWaiting {
+        attempt_id: "a".into(),
+        provider_id: "github-copilot".into(),
+        provider_name: "GitHub Copilot".into(),
+        method_id: "device".into(),
+        form_answers: std::collections::BTreeMap::new(),
+        url: "https://github.com/login/device".into(),
+        user_code: Some("ABCD-1234".into()),
+        instructions: "Enter code: ABCD-1234".into(),
+        mode: crate::config::ai::oauth::OAuthPromptMode::Auto,
+        error: None,
+        window: PanelWindow::default(),
+    });
+    let text = render_lines(&lx).join("\n");
+    assert!(text.contains("Open in browser"));
+    assert!(text.contains("Copy code / URL"));
+    assert!(text.contains("ABCD-1234"));
+    assert!(text.contains("https://github.com/login/device"));
+    assert!(text.contains("Enter code: ABCD-1234"));
 }
 
 #[test]

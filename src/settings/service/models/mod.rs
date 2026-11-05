@@ -12,10 +12,15 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::handlers::{Request, Response};
-use super::{ServiceState, SettingsEvent, ai_path};
+use super::{ServiceState, SettingsEvent, ai_path, connect_path};
+
+pub(super) mod connect;
 
 /// `/api/models` 系列入口。
 pub async fn route(request: &Request, state: &ServiceState) -> Response {
+    if request.path.starts_with("/api/models/connect") {
+        return connect::route(request, state).await;
+    }
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/api/models/settings") => get_settings(state),
         ("PUT", "/api/models/settings") => put_settings(request, state),
@@ -28,7 +33,7 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
 ///
 /// 只覆盖模型相关字段：`webSearch` 等非模型配置不参与乐观锁，否则在 General
 /// 页保存 Key 后，已打开的 Models 页会拿着旧 revision 误报 409。
-fn revision_of(settings: &crate::config::ai::AiSettings) -> String {
+pub(super) fn revision_of(settings: &crate::config::ai::AiSettings) -> String {
     let value = json!({
         "defaultModel": &settings.default_model,
         "titleSummary": &settings.title_summary,
@@ -58,6 +63,11 @@ fn get_settings(state: &ServiceState) -> Response {
         Ok(None) => crate::config::ai::AiSettings::empty(),
         Err(error) => return Response::error(500, &error.to_string()),
     };
+    let connect = match crate::config::ai::connect::load_connect(&connect_path(state)) {
+        Ok(Some(connect)) => connect,
+        Ok(None) => crate::config::ai::connect::ConnectSettings::default(),
+        Err(error) => return Response::error(500, &error.to_string()),
+    };
     let providers: Vec<Value> = settings
         .providers
         .iter()
@@ -71,19 +81,7 @@ fn get_settings(state: &ServiceState) -> Response {
                 "apiKey": provider.options.api_key.as_deref().unwrap_or(""),
                 "enabled": settings.enabled_providers.contains(key),
                 "models": provider.models.iter().map(|(model_key, model)| {
-                    json!({
-                        "id": model.id,
-                        "key": model_key,
-                        "name": model.name,
-                        "transport": model.transport.map(|transport| transport.as_str()),
-                        "limit": model.limit.as_ref().map(|limit| json!({
-                            "context": limit.context,
-                            "output": limit.output,
-                        })),
-                        "modalities": model.modalities,
-                        "variants": model.variants,
-                        "variant": model.variant,
-                    })
+                    model_value(model_key, model)
                 }).collect::<Vec<_>>(),
             })
         })
@@ -112,6 +110,7 @@ fn get_settings(state: &ServiceState) -> Response {
         .unwrap_or(Value::Null);
     let body = json!({
         "providers": providers,
+        "quickConnect": connect::quick_connect_json(&connect),
         "enabledProviders": settings.enabled_providers,
         "defaultModel": default_model,
         "titleSummary": title_summary,
@@ -120,6 +119,23 @@ fn get_settings(state: &ServiceState) -> Response {
         "revision": revision_of(&settings),
     });
     Response::json(200, serde_json::to_string(&body).unwrap_or_default())
+}
+
+/// 单个模型的 API 形状（自定义供应商与快捷连接共用）。
+pub(super) fn model_value(model_key: &str, model: &crate::config::ai::ModelConfig) -> Value {
+    json!({
+        "id": model.id,
+        "key": model_key,
+        "name": model.name,
+        "transport": model.transport.map(|transport| transport.as_str()),
+        "limit": model.limit.as_ref().map(|limit| json!({
+            "context": limit.context,
+            "output": limit.output,
+        })),
+        "modalities": model.modalities,
+        "variants": model.variants,
+        "variant": model.variant,
+    })
 }
 
 /// PUT：完整验证后原子保存；成功投递 ModelsChanged。
@@ -141,16 +157,23 @@ fn put_settings(request: &Request, state: &ServiceState) -> Response {
     if !provided.is_empty() && provided != current_revision {
         return Response::error(409, "configuration changed elsewhere; reload and retry");
     }
-    let merged = match merge_settings(Some(current), &body) {
+    let connect = match crate::config::ai::connect::load_connect(&connect_path(state)) {
+        Ok(Some(connect)) => connect,
+        Ok(None) => crate::config::ai::connect::ConnectSettings::default(),
+        Err(error) => return Response::error(500, &error.to_string()),
+    };
+    let merged = match merge_settings(Some(current), &body, Some(&connect)) {
         Ok(settings) => settings,
         Err(message) => return Response::error(422, &message),
     };
     if let Err(error) = crate::config::ai::save_ai(&path, &merged) {
         return Response::error(500, &error.to_string());
     }
+    // TUI 需要完整运行时快照：自定义供应商 + 已连接的快捷连接供应商。
+    let runtime = crate::config::ai::connect::merge_runtime_ai_settings(&merged, &connect);
     let _ = state
         .sender()
-        .send(SettingsEvent::ModelsChanged(Box::new(merged.clone())));
+        .send(SettingsEvent::ModelsChanged(Box::new(runtime)));
     let body = json!({"ok": true, "revision": revision_of(&merged)});
     Response::json(200, serde_json::to_string(&body).unwrap_or_default())
 }
@@ -160,10 +183,9 @@ fn put_settings(request: &Request, state: &ServiceState) -> Response {
 fn merge_settings(
     current: Option<crate::config::ai::AiSettings>,
     body: &Value,
+    connect: Option<&crate::config::ai::connect::ConnectSettings>,
 ) -> Result<crate::config::ai::AiSettings, String> {
-    use crate::config::ai::{
-        ModelConfig, ModelLimit, ModelTransport, ProviderConfig, ProviderOptions, ProviderTransport,
-    };
+    use crate::config::ai::{ProviderConfig, ProviderOptions, ProviderTransport};
     let mut settings = current.unwrap_or_default();
     let Some(providers_value) = body.get("providers").and_then(Value::as_array) else {
         return Err("body must contain a providers array".into());
@@ -204,100 +226,12 @@ fn merge_settings(
         // Key 三态合并。
         let existing = settings.providers.get(&key);
         let api_key = merge_api_key(existing, item)?;
-        let mut models = std::collections::BTreeMap::new();
-        if let Some(models_value) = item.get("models").and_then(Value::as_array) {
-            for model_item in models_value {
-                // 记录键以模型 id 为准（lx-agent 语义：`selection.model` 就是发给
-                // 供应商的模型 id）。前端可能派生一个独立的显示键，这里忽略它，
-                // 直接按 id 存储，避免“键与 id 不一致”这类无意义冲突。
-                let model_id = model_item
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .or_else(|| model_item.get("key").and_then(Value::as_str))
-                    .map(str::trim)
-                    .filter(|id| !id.is_empty())
-                    .ok_or("model id is required")?
-                    .to_string();
-                let model_name = model_item
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .filter(|name| !name.trim().is_empty())
-                    .unwrap_or(&model_id)
-                    .to_string();
-                let transport = model_item
-                    .get("transport")
-                    .and_then(Value::as_str)
-                    .and_then(ModelTransport::parse);
-                let limit = model_item.get("limit").and_then(|limit| {
-                    let context = limit.get("context").and_then(Value::as_u64)?;
-                    let output = limit.get("output").and_then(Value::as_u64)?;
-                    Some(ModelLimit { context, output })
-                });
-                let mut variants = std::collections::BTreeMap::new();
-                if let Some(variants_value) = model_item.get("variants").and_then(Value::as_object)
-                {
-                    for (variant_key, variant_value) in variants_value {
-                        variants.insert(variant_key.clone(), variant_value.clone());
-                    }
-                }
-                let variant = model_item
-                    .get("variant")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .filter(|variant| !variant.is_empty());
-                if let Some(variant) = &variant
-                    && !variants.contains_key(variant)
-                {
-                    return Err(format!(
-                        "model '{model_id}' variant '{variant}' is not in variants"
-                    ));
-                }
-                let previous_model = existing.and_then(|provider| provider.models.get(&model_id));
-                // 模态三态：字段缺失 = 保留旧值，显式 null = 清除，对象 = 覆盖。
-                let modalities = match model_item.get("modalities") {
-                    Some(Value::Null) => None,
-                    Some(value) => Some(value.clone()),
-                    None => previous_model.and_then(|model| model.modalities.clone()),
-                };
-                // 未知字段（`extra`）同样往返保留：已知键之外的字段并入。
-                const KNOWN_KEYS: [&str; 9] = [
-                    "id",
-                    "key",
-                    "name",
-                    "transport",
-                    "limit",
-                    "variants",
-                    "variant",
-                    "modalities",
-                    "pricing",
-                ];
-                let mut extra = previous_model
-                    .map(|model| model.extra.clone())
-                    .unwrap_or_default();
-                if let Some(item) = model_item.as_object() {
-                    for (field, value) in item {
-                        if KNOWN_KEYS.contains(&field.as_str()) {
-                            continue;
-                        }
-                        extra.insert(field.clone(), value.clone());
-                    }
-                }
-                models.insert(
-                    model_id.clone(),
-                    ModelConfig {
-                        id: model_id.clone(),
-                        name: model_name,
-                        transport,
-                        limit,
-                        modalities,
-                        variants,
-                        variant,
-                        pricing: previous_model.and_then(|model| model.pricing.clone()),
-                        extra,
-                    },
-                );
+        let models = match item.get("models").and_then(Value::as_array) {
+            Some(models_value) => {
+                parse_models(models_value, existing.map(|provider| &provider.models))?
             }
-        }
+            None => std::collections::BTreeMap::new(),
+        };
         providers.insert(
             key.clone(),
             ProviderConfig {
@@ -344,8 +278,113 @@ fn merge_settings(
     if let Some(timeout) = body.get("streamIdleTimeoutMs").and_then(Value::as_u64) {
         settings.stream_idle_timeout_ms = Some(timeout);
     }
-    settings.validate().map_err(|error| error.to_string())?;
+    // 校验必须使用同目录的 `connect.json`：默认模型/标题模型允许指向已连接的
+    // 快捷连接供应商（`save_ai` 自身也会按磁盘上的 connect.json 再校验一次）。
+    settings
+        .validate_with_connect(connect)
+        .map_err(|error| error.to_string())?;
     Ok(settings)
+}
+
+/// 解析请求里的模型数组为存储表。
+///
+/// 记录键以模型 id 为准（lx-agent 语义：`selection.model` 就是发给供应商的
+/// 模型 id）；模态三态（缺失保留、显式 null 清除、对象覆盖）与未知字段往返
+/// 保留都以 `existing` 为基准。
+pub(super) fn parse_models(
+    models_value: &[Value],
+    existing: Option<&std::collections::BTreeMap<String, crate::config::ai::ModelConfig>>,
+) -> Result<std::collections::BTreeMap<String, crate::config::ai::ModelConfig>, String> {
+    use crate::config::ai::{ModelConfig, ModelLimit, ModelTransport};
+    let mut models = std::collections::BTreeMap::new();
+    for model_item in models_value {
+        let model_id = model_item
+            .get("id")
+            .and_then(Value::as_str)
+            .or_else(|| model_item.get("key").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .ok_or("model id is required")?
+            .to_string();
+        let model_name = model_item
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or(&model_id)
+            .to_string();
+        let transport = model_item
+            .get("transport")
+            .and_then(Value::as_str)
+            .and_then(ModelTransport::parse);
+        let limit = model_item.get("limit").and_then(|limit| {
+            let context = limit.get("context").and_then(Value::as_u64)?;
+            let output = limit.get("output").and_then(Value::as_u64)?;
+            Some(ModelLimit { context, output })
+        });
+        let mut variants = std::collections::BTreeMap::new();
+        if let Some(variants_value) = model_item.get("variants").and_then(Value::as_object) {
+            for (variant_key, variant_value) in variants_value {
+                variants.insert(variant_key.clone(), variant_value.clone());
+            }
+        }
+        let variant = model_item
+            .get("variant")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|variant| !variant.is_empty());
+        if let Some(variant) = &variant
+            && !variants.contains_key(variant)
+        {
+            return Err(format!(
+                "model '{model_id}' variant '{variant}' is not in variants"
+            ));
+        }
+        let previous_model = existing.and_then(|models| models.get(&model_id));
+        // 模态三态：字段缺失 = 保留旧值，显式 null = 清除，对象 = 覆盖。
+        let modalities = match model_item.get("modalities") {
+            Some(Value::Null) => None,
+            Some(value) => Some(value.clone()),
+            None => previous_model.and_then(|model| model.modalities.clone()),
+        };
+        // 未知字段（`extra`）同样往返保留：已知键之外的字段并入。
+        const KNOWN_KEYS: [&str; 9] = [
+            "id",
+            "key",
+            "name",
+            "transport",
+            "limit",
+            "variants",
+            "variant",
+            "modalities",
+            "pricing",
+        ];
+        let mut extra = previous_model
+            .map(|model| model.extra.clone())
+            .unwrap_or_default();
+        if let Some(item) = model_item.as_object() {
+            for (field, value) in item {
+                if KNOWN_KEYS.contains(&field.as_str()) {
+                    continue;
+                }
+                extra.insert(field.clone(), value.clone());
+            }
+        }
+        models.insert(
+            model_id.clone(),
+            ModelConfig {
+                id: model_id.clone(),
+                name: model_name,
+                transport,
+                limit,
+                modalities,
+                variants,
+                variant,
+                pricing: previous_model.and_then(|model| model.pricing.clone()),
+                extra,
+            },
+        );
+    }
+    Ok(models)
 }
 
 fn parse_model_selection_field(
@@ -410,22 +449,52 @@ async fn fetch_models(request: &Request, state: &ServiceState) -> Response {
             let path = ai_path(state);
             let settings = match crate::config::ai::load_ai(&path) {
                 Ok(Some(settings)) => settings,
-                Ok(None) => return Response::error(422, "no saved configuration"),
+                Ok(None) => crate::config::ai::AiSettings::empty(),
                 Err(error) => return Response::error(500, &error.to_string()),
             };
-            let Some(provider) = settings.providers.get(provider_id) else {
-                return Response::error(422, "provider not found");
-            };
-            let key = provider.options.api_key.clone().or_else(|| {
-                body.get("apiKey")
+            if let Some(provider) = settings.providers.get(provider_id) {
+                let key = provider.options.api_key.clone().or_else(|| {
+                    body.get("apiKey")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                });
+                (
+                    provider.options.base_url.clone(),
+                    key,
+                    provider.kind.as_str().to_string(),
+                )
+            } else {
+                // 快捷连接供应商：按 `connect.json` + 预设目录物化，
+                // 让 Fetch models 对已连接的预设同样可用。
+                let spec = crate::config::ai::presets::find_preset(provider_id);
+                let connect =
+                    crate::config::ai::connect::load_connect_or_default(&connect_path(state))
+                        .unwrap_or_default();
+                let materialized = spec.and_then(|spec| {
+                    crate::config::ai::connect::materialize_preset_provider(
+                        spec,
+                        connect.providers.get(provider_id),
+                    )
+                });
+                let Some((provider, _enabled)) = materialized else {
+                    return Response::error(422, "provider not found");
+                };
+                // 页面上的草稿值优先于已保存值；未展开的模板地址交回物化结果。
+                let base_url = body
+                    .get("baseUrl")
                     .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty() && !url.contains("${"))
                     .map(str::to_string)
-            });
-            (
-                provider.options.base_url.clone(),
-                key,
-                provider.kind.as_str().to_string(),
-            )
+                    .unwrap_or_else(|| provider.options.base_url.clone());
+                let key = body
+                    .get("apiKey")
+                    .and_then(Value::as_str)
+                    .filter(|key| !key.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| provider.options.api_key.clone());
+                (base_url, key, provider.kind.as_str().to_string())
+            }
         }
         None => {
             let transport = body

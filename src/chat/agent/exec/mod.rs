@@ -439,7 +439,8 @@ fn read_stdin() -> std::io::Result<String> {
 /// 读取模型配置；文件缺失时返回空设置，由模型解析给出可读错误。
 fn load_ai_settings() -> Result<crate::config::ai::AiSettings, Box<dyn std::error::Error>> {
     let path = crate::config::ai::ai_config_path()?;
-    Ok(crate::config::ai::load_ai(&path)?.unwrap_or_else(crate::config::ai::AiSettings::empty))
+    Ok(crate::config::ai::connect::load_runtime_ai(&path)?
+        .unwrap_or_else(crate::config::ai::AiSettings::empty))
 }
 
 /// 联网搜索密钥：与 TUI 同源读取 `ai.json`；文件缺失时使用内置默认值。

@@ -93,6 +93,8 @@ pub struct ServiceState {
     oauth: tokio::sync::Mutex<
         std::collections::HashMap<String, crate::mcp::oauth::PendingAuthorization>,
     >,
+    /// 进行中的 Quick Connect OAuth 尝试（设置页轮询）。
+    connect_oauth: models::connect::PendingConnectOAuthMap,
     shutdown: AtomicBool,
 }
 
@@ -193,6 +195,11 @@ impl ServiceState {
         &self.oauth
     }
 
+    /// Quick Connect OAuth 尝试表（后台任务与请求处理器共享同一份）。
+    pub(crate) fn connect_oauth(&self) -> models::connect::PendingConnectOAuthMap {
+        self.connect_oauth.clone()
+    }
+
     /// 按 scope 找项目根；`user` 返回 None（调用方按用户作用域处理）。
     pub fn project_for_scope(&self, scope: &str) -> Option<ProjectView> {
         self.projects()
@@ -218,6 +225,11 @@ pub(super) fn ai_path(state: &ServiceState) -> PathBuf {
             crate::config::ai::ai_config_path().unwrap_or_else(|_| PathBuf::from("config/ai.json"))
         }
     }
+}
+
+/// 快捷连接配置（`config/connect.json`）路径：与 `ai.json` 同目录。
+pub(super) fn connect_path(state: &ServiceState) -> PathBuf {
+    crate::config::ai::connect::connect_path_for_ai_path(&ai_path(state))
 }
 
 /// 运行中的本地设置服务句柄。
@@ -271,6 +283,7 @@ impl SettingsService {
             projects: std::sync::Mutex::new(Vec::new()),
             mcp_status: std::sync::Mutex::new(Vec::new()),
             oauth: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            connect_oauth: models::connect::PendingConnectOAuthMap::default(),
             shutdown: AtomicBool::new(false),
         });
         let accept_state = state.clone();

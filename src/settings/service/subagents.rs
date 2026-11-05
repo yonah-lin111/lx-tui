@@ -82,10 +82,9 @@ fn commit_and_notify(
 }
 
 fn available_models_json(state: &ServiceState) -> serde_json::Value {
-    let settings = crate::config::ai::load_ai(&ai_path(state))
-        .ok()
-        .flatten()
-        .unwrap_or_else(AiSettings::empty);
+    // 合并运行时快照：自定义供应商 + 已连接的快捷连接供应商（含环境变量命中）。
+    let settings = crate::config::ai::connect::load_runtime_ai_or_empty(&ai_path(state))
+        .unwrap_or_else(|_| AiSettings::empty());
     let mut list = Vec::new();
     for prov_id in &settings.enabled_providers {
         let Some(prov) = settings.providers.get(prov_id) else {

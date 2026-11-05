@@ -573,7 +573,11 @@ impl ExecSubagentPool {
             .unwrap_or_else(|| self.model.clone());
         let settings = crate::config::ai::ai_config_path()
             .ok()
-            .and_then(|path| crate::config::ai::load_ai(&path).ok().flatten())
+            .and_then(|path| {
+                crate::config::ai::connect::load_runtime_ai(&path)
+                    .ok()
+                    .flatten()
+            })
             .unwrap_or_else(crate::config::ai::AiSettings::empty);
         let monitor_default = base_role == crate::config::subagents::BaseRole::Monitor
             && explicit_effort.is_none()
@@ -641,7 +645,11 @@ impl ExecSubagentPool {
         if differs && !self.child_models.contains_key(&record.child_session_id) {
             let settings = crate::config::ai::ai_config_path()
                 .ok()
-                .and_then(|path| crate::config::ai::load_ai(&path).ok().flatten())
+                .and_then(|path| {
+                    crate::config::ai::connect::load_runtime_ai(&path)
+                        .ok()
+                        .flatten()
+                })
                 .unwrap_or_else(crate::config::ai::AiSettings::empty);
             let reference = match record
                 .model_variant

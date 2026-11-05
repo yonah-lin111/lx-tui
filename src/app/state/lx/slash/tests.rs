@@ -1,6 +1,7 @@
 //! `/` 面板状态单元测试：相对时间、当前项与窗口定位。
 
 use super::*;
+use crate::config::ai::connect::ConnectSettings;
 
 /// 构造一条会话条目（`updated_at_ms` 为绝对毫秒）。
 fn entry(session_id: &str, title: &str, updated_at_ms: i64) -> HistoryEntry {
@@ -55,6 +56,75 @@ fn absolute_date_formats_known_epochs() {
     assert_eq!(format_date(0), "1970-01-01");
     assert_eq!(format_date(951_868_800_000), "2000-03-01");
     assert_eq!(format_date(1_709_164_800_000), "2024-02-29");
+}
+
+#[test]
+fn connect_command_is_registered_and_matched() {
+    assert_eq!(SlashCommand::Connect.name(), "connect");
+    assert_eq!(SlashCommand::Connect.text(), "/connect");
+    assert!(SlashCommand::Connect.aliases().is_empty());
+    assert_eq!(
+        SlashCommand::Connect.description(),
+        crate::ui::text::LX_CONNECT_COMMAND_DESC
+    );
+    let matched = SlashPanel::commands_matching("/conn");
+    assert_eq!(matched.first(), Some(&SlashCommand::Connect));
+}
+
+#[test]
+fn connect_panel_lists_presets_alphabetically() {
+    let panel =
+        crate::app::state::ConnectPanel::new_with_env(&ConnectSettings::default(), |_| None);
+    assert!(panel.entries.len() > 10, "预设目录非空");
+    let names: Vec<String> = panel
+        .entries
+        .iter()
+        .map(|entry| entry.name.to_ascii_lowercase())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted, "供应商按名称 A-Z 排序");
+    assert_eq!(panel.filtered.len(), panel.entries.len());
+    assert_eq!(panel.stage, crate::app::state::ConnectStage::Providers);
+}
+
+#[test]
+fn connect_panel_refilters_by_name_and_id() {
+    let mut panel =
+        crate::app::state::ConnectPanel::new_with_env(&ConnectSettings::default(), |_| None);
+    panel.refilter("github-copilot");
+    assert_eq!(
+        panel.active_entry().map(|entry| entry.id.as_str()),
+        Some("github-copilot"),
+        "id 精确命中排在首位"
+    );
+    panel.refilter("deepseek");
+    assert!(
+        panel
+            .visible()
+            .iter()
+            .all(|entry| entry.name.to_ascii_lowercase().contains("deepseek")
+                || entry.id.contains("deepseek"))
+    );
+    panel.refilter("zzzz-no-such-provider");
+    assert!(panel.filtered.is_empty());
+    assert!(panel.is_filter_empty());
+    panel.refilter("");
+    assert_eq!(
+        panel.filtered.len(),
+        panel.entries.len(),
+        "清空搜索恢复全量"
+    );
+}
+
+#[test]
+fn connect_panel_reports_stage_windows() {
+    let mut panel =
+        crate::app::state::ConnectPanel::new_with_env(&ConnectSettings::default(), |_| None);
+    panel.refilter("openai");
+    assert_eq!(panel.item_count(), 1);
+    assert!(panel.move_active(1));
+    assert_eq!(panel.window().active, 0, "单项列表移动后仍在首项");
 }
 
 #[test]

@@ -4,6 +4,8 @@
 
 use crate::config::ai::{AiSettings, ModelSelection};
 
+use super::connect::ConnectPanel;
+
 /// 面板候选窗口状态：键盘/悬停/滚轮共用的高亮、锚点与显式视口。
 ///
 /// 与 `@` 提及面板同一套语义：键盘移动高亮并让窗口锚点跟随；悬停只改高亮
@@ -91,11 +93,13 @@ pub enum SlashCommand {
     Subagents,
     /// `/rename`（别名 `/title`）：重命名当前会话。
     Rename,
+    /// `/connect`：快捷连接预设供应商（API Key / OAuth）。
+    Connect,
 }
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 8] = [
+    pub const ALL: [SlashCommand; 9] = [
         SlashCommand::Model,
         SlashCommand::Resume,
         SlashCommand::Fork,
@@ -104,6 +108,7 @@ impl SlashCommand {
         SlashCommand::Compact,
         SlashCommand::Subagents,
         SlashCommand::Rename,
+        SlashCommand::Connect,
     ];
 
     /// 命令名（不含 `/`）。
@@ -117,6 +122,7 @@ impl SlashCommand {
             Self::Compact => "compact",
             Self::Subagents => "subagents",
             Self::Rename => "rename",
+            Self::Connect => "connect",
         }
     }
 
@@ -131,6 +137,7 @@ impl SlashCommand {
             Self::Compact => &["summarize"],
             Self::Subagents => &["agents"],
             Self::Rename => &["title"],
+            Self::Connect => &[],
         }
     }
 
@@ -145,6 +152,7 @@ impl SlashCommand {
             Self::Compact => "/compact",
             Self::Subagents => "/subagents",
             Self::Rename => "/rename",
+            Self::Connect => "/connect",
         }
     }
 
@@ -159,6 +167,7 @@ impl SlashCommand {
             Self::Compact => crate::ui::text::LX_COMPACT_COMMAND_DESC,
             Self::Subagents => "Open background subagents panel",
             Self::Rename => crate::ui::text::LX_RENAME_COMMAND_DESC,
+            Self::Connect => crate::ui::text::LX_CONNECT_COMMAND_DESC,
         }
     }
 
@@ -231,6 +240,40 @@ pub struct ModelPicker {
 }
 
 impl ModelPicker {
+    /// 构造只展示 `provider_id` 候选的第一级面板（连接成功后自动跳转）。
+    ///
+    /// 该供应商没有可用模型时回退到全部候选，避免连接成功后看到一个空面板。
+    pub fn for_provider(
+        settings: &AiSettings,
+        current: Option<&ModelSelection>,
+        provider_id: &str,
+    ) -> ModelPicker {
+        let mut candidates = Self::candidates(settings)
+            .into_iter()
+            .filter(|candidate| candidate.selection.provider == provider_id)
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            candidates = Self::candidates(settings);
+        }
+        let current_index = current.and_then(|selection| {
+            candidates.iter().position(|candidate| {
+                candidate.selection.provider == selection.provider
+                    && candidate.selection.model == selection.model
+            })
+        });
+        let active = current_index.unwrap_or(0);
+        let len = candidates.len();
+        ModelPicker {
+            stage: ModelPickerStage::Models,
+            candidates,
+            current: current_index,
+            current_variant: None,
+            window: PanelWindow::new(active),
+            filter: String::new(),
+            filtered: (0..len).collect(),
+        }
+    }
+
     /// 从配置构造第一级候选（只含已启用且有模型与 Key 的 provider）。
     pub fn candidates(settings: &AiSettings) -> Vec<ModelCandidate> {
         let mut out = Vec::new();
@@ -582,7 +625,7 @@ impl ModelPicker {
 }
 
 /// 多个候选字段取最高分（任一命中即保留）。
-fn best_score(targets: &[&str], query: &str) -> Option<u32> {
+pub(crate) fn best_score(targets: &[&str], query: &str) -> Option<u32> {
     targets
         .iter()
         .filter_map(|target| command_score(&target.to_lowercase(), query))
@@ -606,6 +649,8 @@ pub enum SlashPanel {
     Fork(Box<ForkPanel>),
     /// `/rewind` 四项动作面板。
     Rewind(Box<crate::app::state::lx::rewind::RewindPanel>),
+    /// `/connect` 预设供应商快捷连接面板。
+    Connect(Box<ConnectPanel>),
 }
 
 impl SlashPanel {
@@ -664,6 +709,7 @@ impl SlashPanel {
             Self::Fork(panel) => panel.filtered.len(),
             // 动作集按目标类型不同（普通轮次四项 / compact 两项），以面板为准。
             Self::Rewind(panel) => panel.len(),
+            Self::Connect(panel) => panel.item_count(),
         }
     }
 
@@ -675,6 +721,7 @@ impl SlashPanel {
             Self::History(panel) => panel.window,
             Self::Fork(panel) => panel.window,
             Self::Rewind(panel) => panel.window,
+            Self::Connect(panel) => panel.window(),
         }
     }
 
@@ -698,6 +745,7 @@ impl SlashPanel {
             }
             Self::Fork(_) => None,
             Self::Rewind(_) => None,
+            Self::Connect(_) => None,
         }
     }
 
@@ -711,6 +759,7 @@ impl SlashPanel {
             Self::History(panel) => panel.window = window,
             Self::Fork(panel) => panel.window = window,
             Self::Rewind(panel) => panel.window = window,
+            Self::Connect(panel) => panel.set_window(window),
         }
     }
 

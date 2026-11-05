@@ -23,6 +23,8 @@ const VARIANT_PRESETS = {
 let modelsDraft = null;      // 全局编辑草稿
 let modelsBaseline = null;   // 最近一次加载/保存的快照（Reset 回填基准）
 let selectedProviderKey = null;
+let activeProviderTab = 'quick'; // 'quick' | 'custom'
+let selectedPresetId = null;
 const modelSelects = {};
 const expandedModels = new Set();
 
@@ -30,8 +32,15 @@ function suffix() {
   return Date.now().toString(36).slice(-6);
 }
 
+// 当前编辑对象：Quick Connect 预设或自定义供应商，字段形状一致。
+function currentPreset() {
+  if (!modelsDraft) { return null; }
+  return (modelsDraft.quickConnect || []).find((preset) => preset.id === selectedPresetId) || null;
+}
+
 function currentProvider() {
   if (!modelsDraft) { return null; }
+  if (activeProviderTab === 'quick') { return currentPreset(); }
   return modelsDraft.providers.find((provider) => provider.key === selectedProviderKey) || null;
 }
 
@@ -57,7 +66,12 @@ function isModelSettingsDirty() {
 
 function isProviderSettingsDirty() {
   if (!modelsDraft || !modelsBaseline) { return false; }
-  return JSON.stringify(modelsDraft.providers) !== JSON.stringify(modelsBaseline.providers);
+  if (JSON.stringify(modelsDraft.providers) !== JSON.stringify(modelsBaseline.providers)) { return true; }
+  // 快捷连接草稿与基线逐项比较（后端会把保存后的连接状态写回 GET）。
+  return (modelsDraft.quickConnect || []).some((preset) => {
+    const base = (modelsBaseline.quickConnect || []).find((item) => item.id === preset.id);
+    return !base || JSON.stringify(preset) !== JSON.stringify(base);
+  });
 }
 
 function computeModelsDirty() {
@@ -67,12 +81,19 @@ function computeModelsDirty() {
 function updateProviderDirtyDots() {
   const list = document.getElementById('provider-list');
   if (!list || !modelsDraft) { return; }
-  const rows = list.querySelectorAll('.nav-item');
-  modelsDraft.providers.forEach((provider, index) => {
-    if (rows[index]) {
-      rows[index].classList.toggle('dirty', isProviderDirty(provider));
+  for (const row of list.querySelectorAll('.nav-item')) {
+    const key = row.dataset.key || '';
+    let dirty = false;
+    if (activeProviderTab === 'quick') {
+      const preset = (modelsDraft.quickConnect || []).find((item) => item.id === key);
+      const base = ((modelsBaseline && modelsBaseline.quickConnect) || []).find((item) => item.id === key);
+      dirty = !!preset && (!base || JSON.stringify(preset) !== JSON.stringify(base));
+    } else {
+      const provider = modelsDraft.providers.find((item) => item.key === key);
+      dirty = !!provider && isProviderDirty(provider);
     }
-  });
+    row.classList.toggle('dirty', dirty);
+  }
 }
 
 function markModelsDirty() {
@@ -104,6 +125,9 @@ function resetModels() {
   if (!modelsDraft.providers.some((provider) => provider.key === selectedProviderKey)) {
     selectedProviderKey = null;
   }
+  if (!(modelsDraft.quickConnect || []).some((preset) => preset.id === selectedPresetId)) {
+    selectedPresetId = null;
+  }
   renderModelsView();
 }
 
@@ -114,6 +138,13 @@ function loadModels() {
     // 默认不选中任何 provider：直接显示空状态。
     if (!modelsDraft.providers.some((provider) => provider.key === selectedProviderKey)) {
       selectedProviderKey = null;
+    }
+    if (!(modelsDraft.quickConnect || []).some((preset) => preset.id === selectedPresetId)) {
+      selectedPresetId = null;
+    }
+    // 最小化 mock（没有 quickConnect 数据）时直接落到 Custom，保证可编辑。
+    if (!(modelsDraft.quickConnect || []).length && modelsDraft.providers.length) {
+      switchProviderTab('custom');
     }
     renderModelsView();
     const revEl = document.getElementById('models-revision');
@@ -139,6 +170,19 @@ function refreshRevision() {
   });
 }
 
+function draftModels(models) {
+  return (models || []).map((model) => ({
+    id: model.id,
+    name: model.name,
+    transport: model.transport || null,
+    context: model.limit ? String(model.limit.context) : '',
+    output: model.limit ? String(model.limit.output) : '',
+    variant: model.variant || null,
+    variantRows: Object.entries(model.variants || {}).map(([key, value]) => ({key: key, text: JSON.stringify(value)})),
+    modalities: normalizedModalities(model.modalities)
+  }));
+}
+
 function snapshotToDraft(snapshot) {
   return {
     revision: snapshot.revision || '',
@@ -154,16 +198,17 @@ function snapshotToDraft(snapshot) {
       baseUrl: provider.baseUrl,
       enabled: !!provider.enabled,
       apiKey: provider.apiKey || '',
-      models: (provider.models || []).map((model) => ({
-        id: model.id,
-        name: model.name,
-        transport: model.transport || null,
-        context: model.limit ? String(model.limit.context) : '',
-        output: model.limit ? String(model.limit.output) : '',
-        variant: model.variant || null,
-        variantRows: Object.entries(model.variants || {}).map(([key, value]) => ({key: key, text: JSON.stringify(value)})),
-        modalities: normalizedModalities(model.modalities)
-      }))
+      models: draftModels(provider.models)
+    })),
+    quickConnect: (snapshot.quickConnect || []).map((preset) => ({
+      key: preset.id, id: preset.id, type: preset.type, name: preset.name,
+      note: preset.note || '', defaultBaseUrl: preset.defaultBaseUrl || '',
+      baseUrl: preset.baseUrl || '', enabled: !!preset.enabled, connected: !!preset.connected,
+      connectionType: preset.connectionType || null,
+      connectionLabel: preset.connectionLabel || 'Not connected',
+      apiKey: preset.apiKey || '', formAnswers: Object.assign({}, preset.formAnswers || {}),
+      envVars: preset.envVars || [], methods: preset.methods || [],
+      models: draftModels(preset.models), defaultModels: draftModels(preset.defaultModels)
     }))
   };
 }
@@ -184,14 +229,24 @@ function renderModelsView() {
 function renderProviders() {
   const list = document.getElementById('provider-list');
   while (list.firstChild) { list.removeChild(list.firstChild); }
-  const providers = (modelsDraft && modelsDraft.providers) || [];
+  if (activeProviderTab === 'quick') {
+    renderPresetList();
+    return;
+  }
+  const query = providerSearch.trim().toLowerCase();
+  const providers = ((modelsDraft && modelsDraft.providers) || []).filter((provider) => {
+    if (!query) { return true; }
+    return String(provider.name || '').toLowerCase().includes(query)
+      || String(provider.id || '').toLowerCase().includes(query);
+  });
   if (providers.length === 0) {
-    list.appendChild(element('p', 'nav-empty', 'No providers configured.'));
+    list.appendChild(element('p', 'nav-empty', query ? 'No matching providers.' : 'No providers configured.'));
   }
   for (const provider of providers) {
     const dirty = isProviderDirty(provider);
     const row = element('button', 'nav-item' + (provider.key === selectedProviderKey ? ' selected' : '') + (dirty ? ' dirty' : ''));
     row.type = 'button';
+    row.dataset.key = provider.key;
     const name = element('span', 'nav-name', provider.name || provider.id);
     const tag = element('span', 'tag', provider.type + (provider.apiKey ? '' : ' · no key') + (provider.enabled ? '' : ' · off'));
     row.appendChild(name);
@@ -202,6 +257,11 @@ function renderProviders() {
 }
 
 function renderEditor() {
+  if (activeProviderTab === 'quick') {
+    renderPresetEditor();
+    return;
+  }
+  hidePresetEditor();
   const provider = currentProvider();
   document.getElementById('provider-empty').classList.toggle('hidden', !!provider);
   document.getElementById('provider-editor').classList.toggle('hidden', !provider);
@@ -223,6 +283,7 @@ function renderEditor() {
 
 function selectProvider(key) {
   hideFetchCandidates();
+  if (activeProviderTab !== 'custom') { switchProviderTab('custom'); }
   selectedProviderKey = key;
   renderProviders();
   renderEditor();
@@ -230,6 +291,7 @@ function selectProvider(key) {
 
 function newProvider() {
   if (!modelsDraft) { return; }
+  if (activeProviderTab !== 'custom') { switchProviderTab('custom'); }
   hideFetchCandidates();
   const id = 'provider-' + suffix();
   modelsDraft.providers.push({
@@ -572,16 +634,8 @@ function applyVariantPreset(model, kind) {
 
 function renderDefaultModel() {
   if (!modelsDraft) { return; }
-  const options = [{value: '', label: '(none)'}];
-  for (const provider of modelsDraft.providers) {
-    if (!provider.enabled) { continue; }
-    for (const model of provider.models) {
-      options.push({
-        value: provider.id + '\u0000' + model.id,
-        label: (provider.name || provider.id) + ' / ' + (model.name || model.id)
-      });
-    }
-  }
+  // Custom 与快捷连接共用同一份选项；快捷连接附 `(Quick Connect)` 标识。
+  const options = [{value: '', label: '(none)'}].concat(defaultModelOptions());
   let value = modelsDraft.defaultModel ? modelsDraft.defaultModel.provider + '\u0000' + modelsDraft.defaultModel.model : '';
   if (value && !options.some((option) => option.value === value)) {
     modelsDraft.defaultModel = null;
@@ -711,22 +765,9 @@ function buildPayload() {
     }
   }
   const enabledProviders = modelsDraft.providers.filter((provider) => provider.enabled).map((provider) => provider.id.trim());
-  let defaultModel = null;
-  if (modelsDraft.defaultModel) {
-    const provider = modelsDraft.providers.find((item) => item.enabled && item.id === modelsDraft.defaultModel.provider);
-    const model = provider && provider.models.find((item) => item.id.trim() === modelsDraft.defaultModel.model);
-    if (provider && model) {
-      defaultModel = {provider: provider.id, model: model.id.trim(), variant: resolveSelectionVariant(modelsDraft.defaultModel, model)};
-    }
-  }
-  let titleSummary = null;
-  if (modelsDraft.titleSummary) {
-    const provider = modelsDraft.providers.find((item) => item.enabled && item.id === modelsDraft.titleSummary.provider);
-    const model = provider && provider.models.find((item) => item.id.trim() === modelsDraft.titleSummary.model);
-    if (provider && model) {
-      titleSummary = {provider: provider.id, model: model.id.trim(), variant: resolveSelectionVariant(modelsDraft.titleSummary, model)};
-    }
-  }
+  // 选择可以指向 Custom 供应商，也可以指向已连接且启用的快捷连接供应商。
+  const defaultModel = resolveDraftSelection(modelsDraft.defaultModel);
+  const titleSummary = resolveDraftSelection(modelsDraft.titleSummary);
   return {
     providers: providers,
     enabledProviders: enabledProviders,
@@ -748,7 +789,9 @@ async function saveModels() {
     throw error;
   }
   try {
+    // 自定义供应商走 `ai.json`；快捷连接草稿走独立的 `connect.json`。
     await api('/api/models/settings', {method: 'PUT', body: JSON.stringify(payload)});
+    await savePresetDrafts();
     showToast('Saved', 'ok');
     await loadModels();
   } catch (error) {
@@ -771,7 +814,8 @@ function fetchModels() {
     baseUrl: provider.baseUrl.trim(),
     apiKey: provider.apiKey || undefined
   };
-  if (provider.apiKey) { body.providerId = provider.key; }
+  // 快捷连接预设总是带 providerId：OAuth 连接的 Key 不在页面上，需由后端物化。
+  if (activeProviderTab === 'quick' || provider.apiKey) { body.providerId = provider.key; }
   api('/api/models/fetch', {method: 'POST', body: JSON.stringify(body)}).then((result) => {
     showToast(result.models.length + ' model(s) found', 'ok');
     renderFetchCandidates(result.models);
@@ -874,6 +918,8 @@ function initModelsView() {
       {value: 'google', label: 'google'}
     ],
     onChange: (value) => {
+      // Quick Connect 预设的传输协议由预设固定，不随编辑器下拉改变。
+      if (activeProviderTab !== 'custom') { return; }
       const provider = currentProvider();
       if (provider) { provider.type = value; markModelsDirty(); }
     }
@@ -925,6 +971,7 @@ function initModelsView() {
   initProviderFields();
 }
 
+// 顶部操作条复用 settings.js 的 createActionBar（脏状态显示 "Unsaved changes"）。
 actionBars.model = createActionBar('actions-model', {
   isDirty: isModelSettingsDirty,
   save: saveModels,

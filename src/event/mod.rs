@@ -188,6 +188,8 @@ pub enum AppEvent {
     },
     /// `lx` 会话自动标题或 Prompt 模板块 `/title` 后台生成完成。
     TitleGenerated(chat::TitleGeneratedEvent),
+    /// `/connect` 快捷连接的后台结果（凭证保存、OAuth 回调）。
+    Connect(chat::connect::ConnectEvent),
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -245,14 +247,14 @@ async fn run_loop(
         service.set_projects(chat::mcp::project_views(state, persistence));
     }
     // 模型配置：启动加载（首次已由 main 导入）；加载后刷新状态行。
-    load_models_snapshot(state);
+    chat::connect::load_models_snapshot(state);
     state.subagents_config = crate::config::subagents::load_subagents_or_default();
     // 自定义命令重载触发：启动、切换显示工作区与设置页写入后。
     let mut commands_reload = true;
     // skill 目录缓存刷新触发：切换显示工作区与设置页写入后；启动时单独预扫描。
     let mut skills_reload = false;
     let mut last_prompt_workspace = state.prompt_workspace();
-    initialize_layout_widths(tui, state, &config)?;
+    session::initialize_layout_widths(tui, state, &config)?;
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
     let mut sessions: HashMap<PaneId, PtySession> = HashMap::new();
     let mut events = EventStream::new();
@@ -271,6 +273,7 @@ async fn run_loop(
     let mut git_inflight: HashSet<PathBuf> = HashSet::new();
     // lx 聊天在途流的取消句柄 + 会话进程运行实例。
     let mut chat_streams = chat::ChatStreams::default();
+    let connect_tasks = chat::connect::ConnectTasks::default();
     // 进程 UI 事件走独立通道：它们不携带请求代次，只按进程会话 ID 过滤归属。
     let (process_sender, mut process_receiver) = mpsc::unbounded_channel::<ProcessUiEvent>();
     chat_streams.set_process_sender(process_sender);
@@ -372,6 +375,10 @@ async fn run_loop(
         }
         // 续轮的 session guard 必须在 BeginChatTurn 事务之前取得。
         if chat::guard_begin_turns(state, &mut chat_streams, persistence) {
+            dirty = true;
+        }
+        // `/connect` 效应先于持久化泵取走：connect.json 写入、OAuth 授权流与浏览器打开。
+        if chat::connect::apply_effects(state, &connect_tasks, &sender) {
             dirty = true;
         }
         // 执行 app 层效应出箱（信任检查/授予、提示词 CRUD 与剪贴板）并载入提示词树。
@@ -658,36 +665,6 @@ async fn run_loop(
     Ok(())
 }
 
-/// 启动时确定栏宽：右栏取主区可用宽度的 2/5（主区更宽），左栏取配置值。
-fn initialize_layout_widths(
-    tui: &mut Tui,
-    state: &mut AppState,
-    config: &Config,
-) -> io::Result<()> {
-    let size = tui.terminal().size()?;
-    let area = Rect::new(0, 0, size.width, size.height);
-    state.sidebar_width = config.sidebar_width;
-    state.prompt_width = ui::layout::default_side_width(area, config, state.sidebar_collapsed);
-    Ok(())
-}
-
-/// 启动加载模型配置快照；缺失或损坏时留空配置并刷新状态行。
-fn load_models_snapshot(state: &mut AppState) {
-    let path = match crate::config::ai::ai_config_path() {
-        Ok(path) => path,
-        Err(error) => {
-            tracing::warn!(%error, "ai config path unavailable");
-            return;
-        }
-    };
-    match crate::config::ai::load_ai(&path) {
-        Ok(Some(settings)) => state.models.settings = settings,
-        Ok(None) => {}
-        Err(error) => tracing::warn!(%error, "ai config load failed"),
-    }
-    update::refresh_all_lx_status(state);
-}
-
 fn handle_terminal_event(
     event: TerminalEvent,
     state: &mut AppState,
@@ -892,6 +869,9 @@ fn handle_app_event(
                 &operation_id,
                 outcome,
             );
+        }
+        AppEvent::Connect(event) => {
+            chat::connect::handle_event(state, event);
         }
         AppEvent::ProcessesReaped {
             workspace,

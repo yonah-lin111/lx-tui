@@ -1,0 +1,363 @@
+//! OAuth 授权流：Device Code 轮询与本地回环 Browser PKCE 回调。
+//!
+//! 与 `opencode-dev` 的认证插件对齐：设备码流返回授权 URL + 用户码并在后台轮询
+//! token 端点；浏览器流在 `127.0.0.1` 上监听回调、校验 `state`、用授权码换取
+//! token。所有进行中的尝试由 [`OAuthTaskHandle`] 取消，默认 10 分钟超时。
+//!
+//! 凭证只通过 [`OAuthCredential`] 返回给调用方，不写入日志。
+
+use std::collections::BTreeMap;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use tokio::sync::{mpsc, oneshot, watch};
+
+use super::connect::OAuthCredential;
+use super::presets::{OAuthFlowKind, PresetAuthMethod, find_preset};
+
+pub(super) const OAUTH_TIMEOUT: Duration = Duration::from_secs(600);
+
+mod browser;
+mod device;
+
+#[cfg(test)]
+mod tests;
+
+/// 授权提示模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthPromptMode {
+    /// 自动完成（设备码轮询 / 浏览器回调）。
+    Auto,
+    /// 需要用户手动粘贴授权码。
+    Code,
+}
+
+impl OAuthPromptMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Code => "code",
+        }
+    }
+}
+
+/// 启动后的授权提示（展示给 `/connect` 面板或设置页）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthStarted {
+    pub attempt_id: String,
+    pub url: String,
+    pub user_code: Option<String>,
+    pub instructions: String,
+    pub mode: OAuthPromptMode,
+}
+
+/// 进行中的 OAuth 尝试：取消句柄 + 结果接收端。
+pub struct OAuthTaskHandle {
+    attempt_id: String,
+    cancel: watch::Sender<bool>,
+    result: oneshot::Receiver<Result<OAuthCredential, String>>,
+    code: Option<mpsc::Sender<String>>,
+}
+
+impl OAuthTaskHandle {
+    pub fn attempt_id(&self) -> &str {
+        &self.attempt_id
+    }
+
+    /// 取消授权流，释放本地回调端口与轮询任务。
+    pub fn cancel(&self) {
+        let _ = self.cancel.send(true);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        *self.cancel.borrow()
+    }
+
+    /// 手动提交授权码（仅 [`OAuthFlowKind::AuthorizationCode`] 支持）。
+    pub fn submit_code(&self, code: impl Into<String>) -> Result<(), String> {
+        let sender = self
+            .code
+            .as_ref()
+            .ok_or_else(|| "this OAuth flow does not accept a manual code".to_string())?;
+        sender
+            .try_send(code.into())
+            .map_err(|_| "OAuth flow is no longer waiting for a code".to_string())
+    }
+
+    /// 等待授权完成；被取消或失败时返回错误。
+    pub async fn wait(mut self) -> Result<OAuthCredential, String> {
+        (&mut self.result)
+            .await
+            .map_err(|_| "OAuth flow ended without a result".to_string())?
+    }
+
+    /// 取出结果接收端（供设置页轮询任务使用）。
+    pub fn take_result(&mut self) -> Option<oneshot::Receiver<Result<OAuthCredential, String>>> {
+        let placeholder = oneshot::channel();
+        let result = std::mem::replace(&mut self.result, placeholder.1);
+        Some(result)
+    }
+}
+
+/// 启动 OAuth 授权流。
+pub async fn start_oauth_flow(
+    provider_id: &str,
+    method_id: &str,
+    form_answers: &BTreeMap<String, String>,
+) -> Result<(OAuthStarted, OAuthTaskHandle), String> {
+    let spec = find_preset(provider_id)
+        .ok_or_else(|| format!("unknown preset provider '{provider_id}'"))?;
+    let flow = spec
+        .method(method_id)
+        .and_then(PresetAuthMethod::oauth_flow)
+        .ok_or_else(|| format!("provider '{provider_id}' has no OAuth method '{method_id}'"))?;
+    let attempt_id = random_token(16)?;
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let (result_tx, result_rx) = oneshot::channel();
+    let (started, code_tx) = match flow {
+        OAuthFlowKind::DeviceCode {
+            device_code_url,
+            token_url,
+            client_id,
+            scope,
+        } => {
+            let started = device::start_device_flow(
+                spec,
+                method_id,
+                device_code_url,
+                token_url,
+                client_id,
+                scope,
+                form_answers,
+                attempt_id.clone(),
+                cancel_rx,
+                result_tx,
+            )
+            .await?;
+            (started, None)
+        }
+        OAuthFlowKind::BrowserPkce {
+            authorize_url,
+            token_url,
+            client_id,
+            scope,
+            fixed_port,
+        } => {
+            let started = browser::start_browser_flow(
+                spec,
+                method_id,
+                authorize_url,
+                token_url,
+                client_id,
+                scope,
+                fixed_port,
+                form_answers,
+                attempt_id.clone(),
+                cancel_rx,
+                result_tx,
+            )
+            .await?;
+            (started, None)
+        }
+        OAuthFlowKind::AuthorizationCode {
+            authorize_url,
+            token_url,
+            client_id,
+            scope,
+        } => {
+            let (code_tx, code_rx) = mpsc::channel(1);
+            let started = browser::start_code_flow(
+                method_id,
+                authorize_url,
+                token_url,
+                client_id,
+                scope,
+                form_answers,
+                attempt_id.clone(),
+                cancel_rx,
+                code_rx,
+                result_tx,
+            )?;
+            (started, Some(code_tx))
+        }
+    };
+    Ok((
+        started,
+        OAuthTaskHandle {
+            attempt_id,
+            cancel: cancel_tx,
+            result: result_rx,
+            code: code_tx,
+        },
+    ))
+}
+
+pub(super) fn credential_from_token(
+    method_id: &str,
+    value: &Value,
+) -> Result<OAuthCredential, String> {
+    let access_token = json_string(value, "access_token")
+        .or_else(|| json_string(value, "api_key"))
+        .filter(|token| !token.trim().is_empty())
+        .ok_or_else(|| "token response has no access token".to_string())?;
+    let refresh_token = json_string(value, "refresh_token").filter(|token| !token.is_empty());
+    let expires_in =
+        json_i64(value, "expires_in").or_else(|| json_i64(value, "api_key_expires_in"));
+    Ok(OAuthCredential {
+        method_id: method_id.to_string(),
+        access_token,
+        refresh_token,
+        expires_at_ms: expires_in.map(|seconds| now_ms() + seconds * 1000),
+        account_label: None,
+        metadata: BTreeMap::new(),
+    })
+}
+
+/// 刷新 OAuth 凭证（存在 `refresh_token` 时）。
+pub async fn refresh_oauth_credential(
+    provider_id: &str,
+    method_id: &str,
+    credential: &OAuthCredential,
+) -> Result<OAuthCredential, String> {
+    let spec = find_preset(provider_id)
+        .ok_or_else(|| format!("unknown preset provider '{provider_id}'"))?;
+    let method = spec
+        .method(method_id)
+        .ok_or_else(|| format!("provider '{provider_id}' has no method '{method_id}'"))?;
+    let flow = method
+        .oauth_flow()
+        .ok_or_else(|| "credential is not an OAuth method".to_string())?;
+    if provider_id == "github-copilot" {
+        return Ok(credential.clone());
+    }
+    let refresh_token = credential
+        .refresh_token
+        .as_deref()
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| "OAuth credential has no refresh token".to_string())?;
+    let client = http_client()?;
+    let mut form = vec![
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+        ("client_id", flow.client_id()),
+    ];
+    if !flow.scope().is_empty() {
+        form.push(("scope", flow.scope()));
+    }
+    let token_url = expand_flow_url(flow.token_url(), &credential.metadata);
+    let response = client
+        .post(&token_url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .form(&form)
+        .send()
+        .await
+        .map_err(|error| format!("token refresh failed: {error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("token refresh response failed: {error}"))?;
+    if !status.is_success() {
+        return Err(format!("token refresh failed: HTTP {}", status.as_u16()));
+    }
+    let value: Value = serde_json::from_str(&body)
+        .map_err(|_| "token refresh returned invalid JSON".to_string())?;
+    let mut refreshed = credential_from_token(method_id, &value)?;
+    refreshed.account_label = credential.account_label.clone();
+    refreshed.metadata = credential.metadata.clone();
+    Ok(refreshed)
+}
+
+/// 凭证是否需要在 5 分钟内刷新。
+pub fn credential_needs_refresh(credential: &OAuthCredential, now_ms: i64) -> bool {
+    credential
+        .expires_at_ms
+        .is_some_and(|expires| expires - now_ms < 5 * 60 * 1000)
+        && credential
+            .refresh_token
+            .as_deref()
+            .is_some_and(|token| !token.is_empty())
+}
+
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+pub(super) fn http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent(concat!("lx-tui/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|error| format!("http client: {error}"))
+}
+
+pub(super) async fn wait_or_cancel(
+    duration: Duration,
+    cancel_rx: &mut watch::Receiver<bool>,
+) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(duration) => false,
+        _ = cancel_rx.changed() => true,
+    }
+}
+
+pub(super) fn expand_flow_url(url: &str, answers: &BTreeMap<String, String>) -> String {
+    let instance = answers
+        .get("instanceUrl")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("https://gitlab.com")
+        .trim_end_matches('/');
+    url.replace("${instanceUrl}", instance)
+}
+
+pub(super) fn pkce_challenge(verifier: &str) -> String {
+    let digest = Sha256::digest(verifier.as_bytes());
+    URL_SAFE_NO_PAD.encode(digest)
+}
+
+pub(super) fn random_token(bytes: usize) -> Result<String, String> {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let mut buffer = vec![0u8; bytes];
+    let filled = std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut buffer))
+        .is_ok();
+    if !filled {
+        let now = now_ms() as u64;
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut seed =
+            now ^ (u64::from(std::process::id()) << 32) ^ seq.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        for chunk in buffer.chunks_mut(8) {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let raw = seed.to_le_bytes();
+            let len = chunk.len();
+            chunk.copy_from_slice(&raw[..len]);
+        }
+    }
+    Ok(URL_SAFE_NO_PAD.encode(buffer))
+}
+
+pub(super) fn json_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .map(|text| text.trim().to_string())
+}
+
+pub(super) fn json_i64(value: &Value, key: &str) -> Option<i64> {
+    value.get(key).and_then(|value| {
+        value
+            .as_i64()
+            .or_else(|| value.as_str().and_then(|text| text.parse::<i64>().ok()))
+    })
+}

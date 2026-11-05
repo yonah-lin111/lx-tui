@@ -866,6 +866,67 @@ pub const LX_HISTORY_PANEL_FOOTER: &str = "↑↓ select · ↵ open · ^c copy 
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
 pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
 
+// ===== `/connect` 快捷连接 =====
+
+/// `/connect` 命令描述。
+pub const LX_CONNECT_COMMAND_DESC: &str = "Connect a provider with an API key or browser sign-in";
+/// 供应商列表与输入阶段的标题。
+pub const LX_CONNECT_PANEL_TITLE: &str = "Connect";
+/// 已连接供应商的管理菜单标题。
+pub const LX_CONNECT_MANAGE_TITLE: &str = "Manage connection";
+/// 多认证方式选择标题。
+pub const LX_CONNECT_METHOD_TITLE: &str = "Sign-in method";
+/// OAuth 等待阶段标题。
+pub const LX_CONNECT_OAUTH_TITLE: &str = "Authorize";
+/// 各阶段底边快捷键提示。
+pub const LX_CONNECT_PROVIDERS_FOOTER: &str = "type to filter · ↑↓ select · ↵ connect · esc close";
+pub const LX_CONNECT_SELECT_FOOTER: &str = "↑↓ select · ↵ confirm · esc back";
+pub const LX_CONNECT_INPUT_FOOTER: &str = "type below · ↵ submit · esc back";
+pub const LX_CONNECT_OAUTH_FOOTER: &str = "↵ open · o open · c copy · esc cancel";
+pub const LX_CONNECT_OAUTH_CODE_FOOTER: &str = "paste code below · ↵ submit · esc cancel";
+/// 已连接供应商的管理动作。
+pub const LX_CONNECT_ACTION_SELECT_MODEL: &str = "Select model";
+pub const LX_CONNECT_ACTION_RECONNECT: &str = "Reconnect / Replace credentials";
+pub const LX_CONNECT_ACTION_DISCONNECT: &str = "Disconnect";
+/// 认证方式右侧标签。
+pub const LX_CONNECT_METHOD_OAUTH_TAG: &str = "OAuth";
+pub const LX_CONNECT_METHOD_API_KEY_TAG: &str = "API key";
+/// 表单/API Key 输入提示。
+pub const LX_CONNECT_API_KEY_PROMPT: &str = "Paste key in the input box below and press Enter";
+pub const LX_CONNECT_FIELD_REQUIRED: &str = "This field is required";
+pub const LX_CONNECT_INPUT_TAG: &str = "type below";
+pub const LX_CONNECT_EMPTY: &str = "no providers";
+pub const LX_CONNECT_NO_METHODS: &str = "No sign-in methods available for this provider";
+pub const LX_CONNECT_API_KEY_EMPTY: &str = "API key cannot be empty";
+/// OAuth 等待阶段的行文案。
+pub const LX_CONNECT_OPEN_BROWSER: &str = "Open in browser";
+pub const LX_CONNECT_COPY_CODE: &str = "Copy code / URL";
+pub const LX_CONNECT_OAUTH_STARTING: &str = "Starting browser authorization…";
+pub const LX_CONNECT_OAUTH_WAITING: &str = "Waiting for authorization…";
+pub const LX_CONNECT_OAUTH_OPENED: &str = "Opened browser";
+pub const LX_CONNECT_CONNECTED_PREFIX: &str = "Connected";
+pub const LX_CONNECT_DISCONNECTED_PREFIX: &str = "Disconnected";
+
+/// 连接成功提示：`Connected <Provider>`。
+pub fn lx_connect_connected(provider: &str) -> String {
+    format!("{LX_CONNECT_CONNECTED_PREFIX} {provider}")
+}
+
+/// 断开连接提示：`Disconnected <Provider>`。
+pub fn lx_connect_disconnected(provider: &str) -> String {
+    format!("{LX_CONNECT_DISCONNECTED_PREFIX} {provider}")
+}
+
+/// 保存连接失败提示。
+pub fn lx_connect_failed(error: &str) -> String {
+    format!("Connection failed: {error}")
+}
+
+/// OAuth 授权失败提示。
+pub fn lx_connect_oauth_failed(error: &str) -> String {
+    format!("Authorization failed: {error}")
+}
+
 /// 后台任务页（窗格内整页）：tab 标签、标题、底边提示与空态。
 ///
 /// 对齐 opencode 的 composer 多 tab：进程与子代理各占一个 tab，指标与列表同一名词。

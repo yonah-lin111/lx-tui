@@ -8,6 +8,7 @@
 
 pub mod ask;
 pub mod compact;
+pub mod connect;
 mod context_summary;
 mod file_snapshots;
 mod host;
