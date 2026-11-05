@@ -8,10 +8,10 @@ use serde_json::{Value, json};
 
 use super::{ToolDecl, ToolSpec};
 use crate::chat::agent::{
-    DEFAULT_WAIT_TIMEOUT_MS, MAX_INPUT_ITEMS, MAX_ROLE_NAME_LEN, MAX_TASK_CHARS, MAX_TITLE_CHARS,
-    MAX_WAIT_TARGETS, MAX_WAIT_TIMEOUT_MS,
+    DEFAULT_WAIT_TIMEOUT_MS, MAX_FORK_TURNS, MAX_INPUT_ITEMS, MAX_PATH_SEGMENT_LEN,
+    MAX_ROLE_NAME_LEN, MAX_TASK_CHARS, MAX_TITLE_CHARS, MAX_WAIT_TARGETS, MAX_WAIT_TIMEOUT_MS,
 };
-use crate::config::subagents::SubagentsSection;
+use crate::config::subagents::{MIN_SUBAGENT_MAX_TOKENS, SubagentsSection};
 
 /// `spawn_agent` 规格。
 pub(crate) const fn spawn_agent_spec() -> ToolSpec {
@@ -19,13 +19,18 @@ pub(crate) const fn spawn_agent_spec() -> ToolSpec {
         "spawn_agent",
         "Delegate one well-defined task to a subagent. By default (`fork_context=false`) it starts \
          with a clean context; set `fork_context=true` to clone all completed turns from the \
-         parent conversation before appending this task. Built-in roles are `explorer` (read-only \
-         `read`/`search`/`web_search`) and `executor` (file and process tools, no `ask`, no plan \
-         tool), plus any custom roles configured in settings. Optionally pass `model` \
-         ('provider/model' or 'model') and `reasoning_effort` to override the role or parent \
-         model. Always give it a short human-readable `title` plus either `task` (plain text) or \
-         `items` (ordered text and image items, mutually exclusive with `task`). Returns \
-         `agent_id` and `nickname` immediately; the subagent runs in the background.",
+         parent conversation before appending this task, or pass `fork_turns` (1-64) to clone \
+         only the most recent completed turns. Built-in roles are `explorer` (read-only \
+         `read`/`search`/`web_search`), `executor` (file and process tools, no `ask`, no plan \
+         tool), and `monitor` (command polling `read`/`search`/`exec_command`/`write_stdin`, \
+         leaf-only), plus any custom roles configured in settings or discovered from \
+         `.lx/agents/*.json` and `.agents/roles/*.json`. Optionally pass `model` \
+         ('provider/model' or 'model'), `reasoning_effort`, and `max_tokens` to override the role \
+         or parent model and cap the subagent's token budget. Always give it a short \
+         human-readable `title` plus either `task` (plain text) or `items` (ordered text and \
+         image items, mutually exclusive with `task`). Use `task_name` to control the stable \
+         path segment when the subagent may itself delegate. Returns `agent_id`, `nickname`, and \
+         `agent_path` immediately; the subagent runs in the background.",
         spawn_parameters,
     )
 }
@@ -35,13 +40,14 @@ pub(crate) const fn send_input_spec() -> ToolSpec {
     ToolSpec::new(
         "send_input",
         "Send a follow-up message or ordered input items to an active or resumed subagent. \
-         Provide `target` (`agent_id` or `nickname` in this conversation) and either `message` \
-         or `items` (mutually exclusive). When the subagent is running and `interrupt` is false \
-         (default), the input is durably queued and runs after the current turn completes. When \
-         `interrupt` is true, the current turn is cancelled, its partial output is preserved, \
-         and the new input runs first ahead of older queued items. A subagent that has already \
-         finished, failed, or been closed must be resumed with `resume_agent` before calling \
-         `send_input`.",
+         Provide `target` (`agent_id`, `nickname`, or `agent_path` in this conversation) and \
+         either `message` or `items` (mutually exclusive). When the subagent is running and \
+         `interrupt` is false (default), the input is durably queued and runs after the current \
+         turn completes. When `interrupt` is true, the current turn is cancelled, its partial \
+         output is preserved, and the new input runs first ahead of older queued items. Set \
+         `trigger_turn=false` to queue input without waking an idle subagent (not allowed with \
+         `interrupt=true`). A subagent that has already finished, failed, or been closed must be \
+         resumed with `resume_agent` before calling `send_input`.",
         send_input_parameters,
     )
 }
@@ -50,7 +56,8 @@ pub(crate) const fn send_input_spec() -> ToolSpec {
 pub(crate) const fn interrupt_agent_spec() -> ToolSpec {
     ToolSpec::new(
         "interrupt_agent",
-        "Interrupt a running subagent's current turn by `target` (`agent_id` or `nickname`), \
+        "Interrupt a running subagent's current turn by `target` (`agent_id`, `nickname`, or \
+         `agent_path`), \
          preserving its partial output while keeping the subagent in active `idle` state ready \
          for follow-up `send_input`. Any remaining queued inputs are paused until you send new \
          input or call `resume_agent`. Calling `interrupt_agent` on an already `idle` subagent \
@@ -63,8 +70,8 @@ pub(crate) const fn interrupt_agent_spec() -> ToolSpec {
 pub(crate) const fn resume_agent_spec() -> ToolSpec {
     ToolSpec::new(
         "resume_agent",
-        "Resume a completed, failed, cancelled, or restarted subagent by `id` (`agent_id` or \
-         `nickname`) so it can continue working across turns. Restores its history, compact \
+        "Resume a completed, failed, cancelled, or restarted subagent by `id` (`agent_id`, \
+         `nickname`, or `agent_path`) so it can continue working across turns. Restores its history, compact \
          checkpoints, and role within this conversation. If the agent has queued inputs, the \
          next queued input starts immediately; otherwise the agent enters `idle` state ready \
          for `send_input`. Calling `resume_agent` on an already active agent is idempotent.",
@@ -77,8 +84,8 @@ pub(crate) const fn wait_agent_spec() -> ToolSpec {
     ToolSpec::new(
         "wait_agent",
         "Wait for subagents. Omit `targets` or pass an empty array to wait for every \
-         subagent in this conversation; pass `agent_id` or `nickname` values for one or more \
-         specific agents. `wait_for=all` (default) keeps waiting until all targets finish; the \
+         subagent in this conversation; pass `agent_id`, `nickname`, or `agent_path` values for \
+         one or more specific agents. `wait_for=all` (default) keeps waiting until all targets finish; the \
          timeout is only an internal recheck interval, so the call does not end the turn early. \
          `wait_for=any` returns as soon as one target finishes or the timeout expires. \
          Returns each agent's status and, the first time a completed or failed turn is settled, \
@@ -91,10 +98,10 @@ pub(crate) const fn wait_agent_spec() -> ToolSpec {
 pub(crate) const fn close_agent_spec() -> ToolSpec {
     ToolSpec::new(
         "close_agent",
-        "Stop a running or idle subagent by `target` (`agent_id` or `nickname`). It produces no \
-         report for an interrupted turn; use this to stop work that is no longer needed. The \
-         agent's session, history, and queued inputs remain stored and can be resumed later with \
-         `resume_agent`.",
+        "Stop a running or idle subagent by `target` (`agent_id`, `nickname`, or `agent_path`), \
+         including all of its surviving descendants. It produces no report for an interrupted \
+         turn; use this to stop work that is no longer needed. The agent's session, history, and \
+         queued inputs remain stored and can be resumed later with `resume_agent`.",
         close_parameters,
     )
 }
@@ -103,10 +110,11 @@ pub(crate) const fn close_agent_spec() -> ToolSpec {
 pub(crate) const fn list_agents_spec() -> ToolSpec {
     ToolSpec::new(
         "list_agents",
-        "List all subagents belonging to the current conversation with their `agent_id`, \
-         `nickname`, `role`, `title`, `status`, and `queued_count`. Use this to inspect active \
-         or resumable agents before calling `resume_agent`, `send_input`, `interrupt_agent`, \
-         or `wait_agent`.",
+        "List subagents belonging to the current conversation with their `agent_id`, \
+         `nickname`, `agent_path`, `role`, `title`, `status`, and `queued_count`. Pass \
+         `path_prefix` (absolute like `/root/turing` or relative like `turing`) to restrict the \
+         result to one subtree. Use this to inspect active or resumable agents before calling \
+         `resume_agent`, `send_input`, `interrupt_agent`, or `wait_agent`.",
         list_parameters,
     )
 }
@@ -127,21 +135,35 @@ pub(crate) const fn cancel_agent_input_spec() -> ToolSpec {
 pub fn build_spawn_role_guidance(subagents: &SubagentsSection) -> String {
     let roles = subagents.all_roles();
     let mut out = format!(
-        "\n\nConcurrency limit: at most {} subagents may run at once per conversation.\nAvailable roles:\n",
-        subagents.max_concurrent
+        "\n\nConcurrency limit: at most {} subagents may run at once across the whole session \
+         tree.\nMaximum delegation depth: {} (1 = only the main agent delegates; 2 = subagents \
+         may delegate once).\nAvailable roles:\n",
+        subagents.max_concurrent, subagents.max_depth
     );
     for role in roles {
+        let model_label = if role.lock_model {
+            "locked model"
+        } else {
+            "default model"
+        };
+        let lock_suffix = if role.lock_model && role.default_model.is_some() {
+            " — cannot be overridden"
+        } else {
+            ""
+        };
         let model_note = match &role.default_model {
             Some(sel) => match &sel.variant {
                 Some(v) => format!(
-                    " (base: {}, default model: {}/{} ({v}))",
+                    " (base: {}, {}: {}/{} ({v}){lock_suffix})",
                     role.base_role.as_str(),
+                    model_label,
                     sel.provider,
                     sel.model
                 ),
                 None => format!(
-                    " (base: {}, default model: {}/{})",
+                    " (base: {}, {}: {}/{}{lock_suffix})",
                     role.base_role.as_str(),
+                    model_label,
                     sel.provider,
                     sel.model
                 ),
@@ -151,9 +173,24 @@ pub fn build_spawn_role_guidance(subagents: &SubagentsSection) -> String {
                 role.base_role.as_str()
             ),
         };
+        let mut restrictions = Vec::new();
+        if !role.capabilities.allow_web_search {
+            restrictions.push("no web_search");
+        }
+        if !role.capabilities.allow_mcp {
+            restrictions.push("no mcp");
+        }
+        if !role.capabilities.allow_skills {
+            restrictions.push("no skills");
+        }
+        let cap_note = if restrictions.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", restrictions.join(", "))
+        };
         out.push_str(&format!(
-            "- `{}`{}: {}\n",
-            role.name, model_note, role.description
+            "- `{}`{}{}: {}\n",
+            role.name, model_note, cap_note, role.description
         ));
     }
     out.trim_end().to_string()
@@ -230,13 +267,20 @@ fn spawn_parameters() -> Value {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": MAX_ROLE_NAME_LEN,
-                "description": "Subagent role identifier (`explorer`, `executor`, or a configured custom role name).",
+                "description": "Subagent role identifier (`explorer`, `executor`, `monitor`, or a configured/project custom role name).",
             },
             "title": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": MAX_TITLE_CHARS,
                 "description": "Short human-readable title for cards and the Agents list; not the task prompt.",
+            },
+            "task_name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_PATH_SEGMENT_LEN,
+                "pattern": "^[a-z0-9][a-z0-9_]{0,31}$",
+                "description": "Optional stable path segment for this subagent (`[a-z0-9_]{1,32}`, must not be `root`). Omit to derive it from the nickname.",
             },
             "task": {
                 "type": "string",
@@ -249,6 +293,17 @@ fn spawn_parameters() -> Value {
                 "type": "boolean",
                 "default": false,
                 "description": "When true, clones all completed turns from the parent conversation into the subagent before appending this task. Defaults to false (clean context).",
+            },
+            "fork_turns": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": MAX_FORK_TURNS,
+                "description": "When greater than 0, clones only the most recent N completed turns and implies `fork_context=true`. 0 disables history cloning.",
+            },
+            "max_tokens": {
+                "type": "integer",
+                "minimum": MIN_SUBAGENT_MAX_TOKENS,
+                "description": format!("Optional token budget for this subagent turn (at least {MIN_SUBAGENT_MAX_TOKENS}). Omit to use the configured default or no limit."),
             },
             "model": {
                 "type": "string",
@@ -276,7 +331,7 @@ fn send_input_parameters() -> Value {
             "target": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Target `agent_id` or `nickname` belonging to this conversation.",
+                "description": "Target `agent_id`, `nickname`, or `agent_path` (absolute like `/root/turing` or relative like `turing`) belonging to this conversation.",
             },
             "message": {
                 "type": "string",
@@ -288,7 +343,12 @@ fn send_input_parameters() -> Value {
             "interrupt": {
                 "type": "boolean",
                 "default": false,
-                "description": "When true, cancel the currently running turn, save its partial output, and run this input next before older queued items.",
+                "description": "When true, cancel the currently running turn, save its partial output, and run this input next before older queued items. Cannot be combined with `trigger_turn=false`.",
+            },
+            "trigger_turn": {
+                "type": "boolean",
+                "default": true,
+                "description": "When true (default), start a new turn immediately if the target is idle. When false, only enqueue the input without waking the subagent.",
             },
         },
     })
@@ -304,7 +364,7 @@ fn interrupt_parameters() -> Value {
             "target": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Target subagent `agent_id` or `nickname` in this conversation.",
+                "description": "Target subagent `agent_id`, `nickname`, or `agent_path` in this conversation.",
             },
         },
     })
@@ -320,7 +380,7 @@ fn resume_parameters() -> Value {
             "id": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Agent id (`agent_id`) or `nickname` to resume in this conversation.",
+                "description": "Agent id (`agent_id`), `nickname`, or `agent_path` to resume in this conversation.",
             },
         },
     })
@@ -337,7 +397,7 @@ fn wait_parameters() -> Value {
                 "type": "array",
                 "maxItems": MAX_WAIT_TARGETS,
                 "items": { "type": "string" },
-                "description": "Agent ids (`agent_id`) or `nickname` values returned by spawn_agent, or omit/empty to wait for every subagent in this conversation.",
+                "description": "Agent ids (`agent_id`), `nickname` values, or `agent_path` values returned by spawn_agent, or omit/empty to wait for every subagent in this conversation.",
             },
             "wait_for": {
                 "type": "string",
@@ -366,7 +426,7 @@ fn close_parameters() -> Value {
             "target": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Agent id (`agent_id`) or `nickname` to stop.",
+                "description": "Agent id (`agent_id`), `nickname`, or `agent_path` to stop (its surviving descendants are stopped too).",
             },
         },
     })
@@ -378,7 +438,13 @@ fn list_parameters() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [],
-        "properties": {},
+        "properties": {
+            "path_prefix": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Optional `agent_path` prefix (absolute like `/root/turing` or relative like `turing`) restricting the listing to one subtree.",
+            },
+        },
     })
 }
 

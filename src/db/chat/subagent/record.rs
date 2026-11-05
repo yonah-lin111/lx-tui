@@ -2,7 +2,7 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::chat::agent::{AgentRole, BaseRole};
+use crate::chat::agent::AgentRole;
 use crate::db::{DbError, Result};
 
 /// 一个 subagent 的元数据行（列表用；不含消息流）。
@@ -12,6 +12,8 @@ pub struct SubagentRecord {
     pub agent_id: String,
     /// 可选唯一昵称（如 `"Turing"`；旧记录为 None）。
     pub nickname: Option<String>,
+    /// 规范层级路径（如 `"/root/turing"`、`"/root/turing/curie"`）。
+    pub agent_path: String,
     /// 子会话 external id。
     pub child_session_id: String,
     /// 父会话 external id。
@@ -83,6 +85,8 @@ pub struct ReportPayload {
     pub body: String,
     /// 去重后的改动文件数。
     pub files_changed: usize,
+    /// 去重后的变更文件相对路径（最多 32 条）。
+    pub changed_paths: Vec<String>,
     /// 子 turn 耗时（毫秒）。
     pub duration_ms: Option<i64>,
 }
@@ -95,16 +99,24 @@ pub struct ReportPayload {
 pub(in crate::db::chat) fn read_subagent_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<(SubagentRecord, Option<String>)> {
+    let agent_id: String = row.get(0)?;
     let role: Option<String> = row.get(4)?;
-    let nickname: Option<String> = row.get(11)?;
+    let nickname: Option<String> = row
+        .get::<_, Option<String>>(11)?
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let agent_path: Option<String> = row.get(12)?;
-    let base_role = agent_path.as_deref().and_then(BaseRole::parse);
+    let (base_role, decoded_path) =
+        crate::chat::agent::decode_stored_role_and_path(agent_path.as_deref());
+    let agent_path = decoded_path.unwrap_or_else(|| {
+        let segment = nickname.as_deref().unwrap_or(&agent_id);
+        format!("/root/{}", crate::chat::agent::slugify_segment(segment))
+    });
     Ok((
         SubagentRecord {
-            agent_id: row.get(0)?,
-            nickname: nickname
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty()),
+            agent_id,
+            nickname,
+            agent_path,
             child_session_id: row.get(1)?,
             parent_session_id: row.get(2)?,
             spawn_message_id: row.get(3)?,

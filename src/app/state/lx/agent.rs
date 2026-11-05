@@ -5,6 +5,8 @@
 
 pub use crate::chat::agent::SubagentReportView;
 
+use std::sync::atomic::{AtomicI64, Ordering};
+
 use crate::chat::agent::AgentRole;
 use crate::db::chat::{SubagentRecord, Usage};
 
@@ -13,6 +15,26 @@ use super::compact::LxCompact;
 use crate::app::state::{RequestKey, RequestState};
 use crate::chat::events::PartKind;
 
+/// 内存中同时保留完整 `LxChat` 消息树的非运行态子 agent 上限。
+pub const MAX_RESIDENT_SUBAGENT_CHATS: usize = 6;
+
+/// 访问序号：同一毫秒内连续选中也要严格递增，保证 LRU 顺序确定。
+static ACCESS_TICK: AtomicI64 = AtomicI64::new(0);
+
+/// 严格递增的访问序号（取当前毫秒与上一次序号 + 1 的较大值）。
+fn next_access_tick() -> i64 {
+    let now = crate::db::now_ms();
+    let mut current = ACCESS_TICK.load(Ordering::Relaxed);
+    loop {
+        let next = now.max(current.saturating_add(1));
+        match ACCESS_TICK.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => return next,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
 /// 一个 subagent 的展示态。
 #[derive(Debug)]
 pub struct SubagentRun {
@@ -20,6 +42,8 @@ pub struct SubagentRun {
     pub agent_id: String,
     /// 可选唯一昵称（如 `"Turing"`；旧记录为 None）。
     pub nickname: Option<String>,
+    /// 规范层级路径（如 `"/root/turing"`、`"/root/turing/curie"`）。
+    pub agent_path: String,
     /// 子会话 external id（delta/工具回投的定位键）。
     pub child_session_id: String,
     /// 父会话 external id：切会话后拒绝迟到回投把旧 run 塞进新会话。
@@ -60,6 +84,8 @@ pub struct SubagentRun {
     pub rows_dirty: bool,
     /// 是否跟随底部（用户上翻即停）。
     pub follow: bool,
+    /// 最近一次被选中/加载的访问序号（空闲子会话 LRU 回收用）。
+    pub last_accessed_ms: i64,
 }
 
 impl SubagentRun {
@@ -68,6 +94,7 @@ impl SubagentRun {
         Self {
             agent_id: record.agent_id.clone(),
             nickname: record.nickname.clone(),
+            agent_path: record.agent_path.clone(),
             child_session_id: record.child_session_id.clone(),
             parent_session_id: record.parent_session_id.clone(),
             role: record.role,
@@ -92,7 +119,27 @@ impl SubagentRun {
             total_rows: 0,
             rows_dirty: true,
             follow: true,
+            last_accessed_ms: record.completed_at_ms.unwrap_or(record.created_at_ms),
         }
+    }
+
+    /// 刷新访问序号（选中/加载后调用，保持 LRU 顺序）。
+    pub fn touch_access(&mut self) {
+        self.last_accessed_ms = next_access_tick();
+    }
+
+    /// 卸载空闲子会话的内存消息树（保留元数据、Token 统计与汇报摘要）。
+    ///
+    /// 再次选中时由 `Effect::LoadSubagentSession` 从 SQLite 懒加载。
+    pub fn evict_chat_memory(&mut self) {
+        if self.is_running() || !self.loaded {
+            return;
+        }
+        self.chat = LxChat::new();
+        self.compact = LxCompact::default();
+        self.loaded = false;
+        self.total_rows = 0;
+        self.rows_dirty = true;
     }
 
     /// 已运行时长（毫秒）；结束的按结束时刻算。
@@ -104,6 +151,78 @@ impl SubagentRun {
     /// 是否仍在运行。
     pub fn is_running(&self) -> bool {
         self.status == "running"
+    }
+
+    /// 层级深度：`/root` -> 0，`/root/turing` -> 1，`/root/turing/curie` -> 2。
+    pub fn depth(&self) -> usize {
+        crate::chat::agent::path_depth(&self.agent_path)
+    }
+
+    /// 本轮 token 总量：终态取回投的输入/输出，运行中读实时聚合槽。
+    pub fn total_tokens(&self) -> Option<i64> {
+        if self.input_tokens.is_some() || self.output_tokens.is_some() {
+            let total = self
+                .input_tokens
+                .unwrap_or(0)
+                .saturating_add(self.output_tokens.unwrap_or(0));
+            if total > 0 {
+                return Some(total);
+            }
+        }
+        if self.is_running() {
+            let step = &self.chat.step_usage;
+            let total = step
+                .input
+                .unwrap_or(0)
+                .saturating_add(step.output.unwrap_or(0));
+            if total > 0 {
+                return Some(total);
+            }
+        }
+        None
+    }
+
+    /// 运行中子 agent 的实时动作摘要（主历史 `spawn_agent` 卡片用）。
+    ///
+    /// 只读本地消息模型：先看最新 assistant 消息里是否还有在途工具，
+    /// 否则退回最后一步的思考/正文预览；终态返回 None。
+    pub fn live_activity(&self) -> Option<String> {
+        if !self.is_running() {
+            return None;
+        }
+        let message = self
+            .chat
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "assistant")?;
+        for step in message.steps.iter().rev() {
+            let AssistantStepView::Tool { call, .. } = step else {
+                continue;
+            };
+            if matches!(
+                call.status,
+                crate::app::state::ToolStatus::Pending | crate::app::state::ToolStatus::Running
+            ) {
+                return Some(tool_activity(call));
+            }
+        }
+        let Some(AssistantStepView::Part { part, .. }) = message.steps.last() else {
+            return None;
+        };
+        if part.reasoning_open() {
+            return Some("Thinking...".to_string());
+        }
+        if part.kind != PartKind::Text {
+            return None;
+        }
+        let line = part
+            .content
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())?
+            .trim();
+        (!line.is_empty()).then(|| line.to_string())
     }
 
     /// 列表标题；旧记录没有单独标题时为空（不显示 task 提示词）。
@@ -118,6 +237,49 @@ impl SubagentRun {
     /// 列表与卡片可读身份：`Turing [explorer]`（无昵称时回退 `explorer`）。
     pub fn display_identity(&self) -> String {
         crate::chat::agent::format_agent_identity(self.nickname.as_deref(), self.role.as_str())
+    }
+}
+
+/// 在途工具的单行动作摘要（`$ cmd` / `edit src/a.rs` / `search pat`）。
+fn tool_activity(call: &crate::app::state::ToolCallView) -> String {
+    match call.name.as_str() {
+        "exec_command" | "write_stdin" => {
+            let command = serde_json::from_str::<serde_json::Value>(&call.arguments_json)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("command")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                });
+            match command {
+                Some(command) => {
+                    let first = command.lines().next().unwrap_or_default().trim();
+                    if first.is_empty() {
+                        call.name.clone()
+                    } else {
+                        format!("$ {first}")
+                    }
+                }
+                None => call.name.clone(),
+            }
+        }
+        "read" | "edit" | "write" => call
+            .summary
+            .as_ref()
+            .and_then(|summary| summary.path.as_deref())
+            .map_or_else(|| call.name.clone(), |path| format!("{} {path}", call.name)),
+        "search" | "web_search" => call
+            .summary
+            .as_ref()
+            .and_then(|summary| summary.pattern.as_deref())
+            .map_or_else(
+                || "search".to_string(),
+                |pattern| format!("search {pattern}"),
+            ),
+        "spawn_agent" => "spawning subagent...".to_string(),
+        "wait_agent" => "waiting for subagents...".to_string(),
+        _ => call.name.clone(),
     }
 }
 
@@ -205,7 +367,7 @@ pub fn seed_chat_model(
 /// 面板数据：本窗格的 subagent 集合（面板关闭时依然保留）。
 #[derive(Debug, Default)]
 pub struct AgentsState {
-    /// 按创建顺序排列的运行记录。
+    /// 运行记录：按 `agent_path` 树形前序排列（兄弟间保持创建顺序）。
     pub runs: Vec<SubagentRun>,
 }
 
@@ -234,6 +396,52 @@ impl AgentsState {
         self.runs.iter_mut().find(|run| run.agent_id == agent_id)
     }
 
+    /// 按 `agent_path` 的树形前序重排：父节点之后紧跟其全部后代，再轮到下一个兄弟。
+    ///
+    /// 同层与兄弟之间保持创建顺序；父 run 不在列表里（历史缺失）时按根节点处理。
+    pub fn sort_runs_tree_order(&mut self) {
+        if self.runs.len() < 2 {
+            return;
+        }
+        let index_by_path: std::collections::HashMap<String, usize> = self
+            .runs
+            .iter()
+            .enumerate()
+            .map(|(index, run)| (run.agent_path.to_ascii_lowercase(), index))
+            .collect();
+        let mut children = vec![Vec::new(); self.runs.len()];
+        let mut roots = Vec::new();
+        for (index, run) in self.runs.iter().enumerate() {
+            let parent = run
+                .agent_path
+                .trim_end_matches('/')
+                .rsplit_once('/')
+                .map(|(parent, _)| parent.to_ascii_lowercase());
+            match parent.and_then(|parent| index_by_path.get(&parent).copied()) {
+                Some(parent) if parent != index => children[parent].push(index),
+                _ => roots.push(index),
+            }
+        }
+        let mut pending: Vec<Option<SubagentRun>> = std::mem::take(&mut self.runs)
+            .into_iter()
+            .map(Some)
+            .collect();
+        let mut stack: Vec<usize> = roots.into_iter().rev().collect();
+        let mut ordered = Vec::with_capacity(pending.len());
+        while let Some(index) = stack.pop() {
+            let Some(run) = pending[index].take() else {
+                continue;
+            };
+            ordered.push(run);
+            for child in children[index].iter().rev() {
+                stack.push(*child);
+            }
+        }
+        // 防御：理论上不可达的节点（坏路径/重复路径）按原顺序补回。
+        ordered.extend(pending.into_iter().flatten());
+        self.runs = ordered;
+    }
+
     /// 是否为空。
     pub fn is_empty(&self) -> bool {
         self.runs.is_empty()
@@ -242,5 +450,55 @@ impl AgentsState {
     /// 仍在运行的子 agent 数（底边框运行指标）。
     pub fn running_count(&self) -> usize {
         self.runs.iter().filter(|run| run.is_running()).count()
+    }
+
+    /// 阻塞（队首输入校验失败）的子 agent 数（底边框异常提醒）。
+    pub fn blocked_count(&self) -> usize {
+        self.runs
+            .iter()
+            .filter(|run| run.status == "blocked")
+            .count()
+    }
+
+    /// 按筛选器取真实下标（保持 `runs` 的树形前序）。
+    pub fn filtered_indices(&self, filter: super::task::AgentFilter) -> Vec<usize> {
+        self.runs
+            .iter()
+            .enumerate()
+            .filter(|(_, run)| filter.matches(run))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// 空闲子会话 LRU 回收：已加载的非运行态 run 超过上限时卸载最久未访问的。
+    ///
+    /// `protected_agent_id` 是当前选中的 run，永不卸载；返回被卸载的 agent id。
+    pub fn evict_excess_idle_chats(&mut self, protected_agent_id: Option<&str>) -> Vec<String> {
+        let mut evicted = Vec::new();
+        loop {
+            let loaded = self
+                .runs
+                .iter()
+                .filter(|run| !run.is_running() && run.loaded)
+                .count();
+            if loaded <= MAX_RESIDENT_SUBAGENT_CHATS {
+                break;
+            }
+            let candidate = self
+                .runs
+                .iter()
+                .enumerate()
+                .filter(|(_, run)| !run.is_running() && run.loaded)
+                .filter(|(_, run)| Some(run.agent_id.as_str()) != protected_agent_id)
+                .min_by_key(|(_, run)| run.last_accessed_ms)
+                .map(|(index, _)| index);
+            let Some(index) = candidate else {
+                break;
+            };
+            let agent_id = self.runs[index].agent_id.clone();
+            self.runs[index].evict_chat_memory();
+            evicted.push(agent_id);
+        }
+        evicted
     }
 }

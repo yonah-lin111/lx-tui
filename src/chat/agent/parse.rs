@@ -7,11 +7,12 @@
 use serde_json::Value;
 
 use super::{
-    AgentRole, DEFAULT_WAIT_TIMEOUT_MS, MAX_INPUT_ITEMS, MAX_TASK_CHARS, MAX_TITLE_CHARS,
-    MAX_WAIT_TARGETS, MAX_WAIT_TIMEOUT_MS, SubagentInputItem, SubagentOp, WaitMode,
-    joined_input_text,
+    AgentRole, DEFAULT_WAIT_TIMEOUT_MS, MAX_FORK_TURNS, MAX_INPUT_ITEMS, MAX_TASK_CHARS,
+    MAX_TITLE_CHARS, MAX_WAIT_TARGETS, MAX_WAIT_TIMEOUT_MS, SubagentInputItem, SubagentOp,
+    WaitMode, is_valid_path_segment, joined_input_text,
 };
 use crate::chat::tools::{ToolErrorCode, ToolFailure};
+use crate::config::subagents::MIN_SUBAGENT_MAX_TOKENS;
 
 /// 八个子 agent 控制工具之一；非控制工具返回 None，参数非法返回 Err。
 pub fn parse_control(name: &str, arguments_json: &str) -> Option<Result<SubagentOp, ToolFailure>> {
@@ -42,7 +43,8 @@ fn checked_size(arguments_json: &str) -> Result<&str, ToolFailure> {
     Ok(arguments_json)
 }
 
-/// `spawn_agent` 的参数解析：`role, title` +（`task` 或 `items` 互斥）+ 可选 `fork_context` / `model` / `reasoning_effort`。
+/// `spawn_agent` 的参数解析：`role, title` +（`task` 或 `items` 互斥）+
+/// 可选 `task_name` / `fork_context` / `fork_turns` / `max_tokens` / `model` / `reasoning_effort`。
 fn parse_spawn(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
     let object = object_of(arguments_json)?;
     reject_unknown(
@@ -50,9 +52,12 @@ fn parse_spawn(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
         &[
             "role",
             "title",
+            "task_name",
             "task",
             "items",
             "fork_context",
+            "fork_turns",
+            "max_tokens",
             "model",
             "reasoning_effort",
         ],
@@ -87,11 +92,61 @@ fn parse_spawn(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
         }
         None => String::new(),
     };
-    let fork_context = match object.get("fork_context") {
+    let task_name = match object.get("task_name") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let raw = value
+                .as_str()
+                .ok_or_else(|| ToolFailure::invalid("`task_name` must be a string"))?
+                .trim();
+            if !is_valid_path_segment(raw) {
+                return Err(ToolFailure::invalid(
+                    "`task_name` must match `[a-z0-9][a-z0-9_]{0,31}` and must not be `root`",
+                ));
+            }
+            Some(raw.to_string())
+        }
+    };
+    let mut fork_context = match object.get("fork_context") {
         None | Some(Value::Null) => false,
         Some(value) => value
             .as_bool()
             .ok_or_else(|| ToolFailure::invalid("`fork_context` must be a boolean"))?,
+    };
+    let fork_turns = match object.get("fork_turns") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let turns = value.as_u64().ok_or_else(|| {
+                ToolFailure::invalid("`fork_turns` must be a non-negative integer")
+            })?;
+            if turns > u64::from(MAX_FORK_TURNS) {
+                return Err(ToolFailure::invalid(format!(
+                    "`fork_turns` must be between 0 and {MAX_FORK_TURNS}"
+                )));
+            }
+            Some(turns as u32)
+        }
+    };
+    match fork_turns {
+        // 按轮次分叉隐含启用分叉，调用方检查 `fork_context` 时必须看到 true；
+        // `0` 显式关闭分叉，即使同时传了 `fork_context=true`。
+        Some(0) => fork_context = false,
+        Some(_) => fork_context = true,
+        None => {}
+    }
+    let max_tokens = match object.get("max_tokens") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let tokens = value
+                .as_u64()
+                .ok_or_else(|| ToolFailure::invalid("`max_tokens` must be a positive integer"))?;
+            if tokens < MIN_SUBAGENT_MAX_TOKENS {
+                return Err(ToolFailure::invalid(format!(
+                    "`max_tokens` must be at least {MIN_SUBAGENT_MAX_TOKENS}"
+                )));
+            }
+            Some(tokens)
+        }
     };
     let model = parse_optional_string_field(object.get("model"), "model", 128)?;
     let reasoning_effort =
@@ -123,9 +178,12 @@ fn parse_spawn(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
     Ok(SubagentOp::Spawn {
         role,
         title,
+        task_name,
         task,
         items,
         fork_context,
+        fork_turns,
+        max_tokens,
         model,
         reasoning_effort,
     })
@@ -166,10 +224,14 @@ fn parse_interrupt(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
     Ok(SubagentOp::Interrupt { target })
 }
 
-/// `send_input` 的参数解析：`target` +（`message` 或 `items` 互斥）+ 可选 `interrupt`。
+/// `send_input` 的参数解析：`target` +（`message` 或 `items` 互斥）+
+/// 可选 `interrupt` / `trigger_turn`。
 fn parse_send_input(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
     let object = object_of(arguments_json)?;
-    reject_unknown(&object, &["target", "message", "items", "interrupt"])?;
+    reject_unknown(
+        &object,
+        &["target", "message", "items", "interrupt", "trigger_turn"],
+    )?;
     let target = parse_id_field(object.get("target"), "target")?;
     let interrupt = match object.get("interrupt") {
         None | Some(Value::Null) => false,
@@ -177,6 +239,17 @@ fn parse_send_input(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
             .as_bool()
             .ok_or_else(|| ToolFailure::invalid("`interrupt` must be a boolean"))?,
     };
+    let trigger_turn = match object.get("trigger_turn") {
+        None | Some(Value::Null) => true,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| ToolFailure::invalid("`trigger_turn` must be a boolean"))?,
+    };
+    if interrupt && !trigger_turn {
+        return Err(ToolFailure::invalid(
+            "cannot set `interrupt: true` when `trigger_turn` is false",
+        ));
+    }
     let has_message = object.contains_key("message");
     let has_items = object.contains_key("items");
     if has_message && has_items {
@@ -202,6 +275,7 @@ fn parse_send_input(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
         target,
         items,
         interrupt,
+        trigger_turn,
     })
 }
 
@@ -213,11 +287,17 @@ fn parse_resume(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
     Ok(SubagentOp::Resume { id })
 }
 
-/// `list_agents` 的参数解析：严格空对象。
+/// `list_agents` 的参数解析：空对象 / 空字符串，或可选 `path_prefix`。
 fn parse_list(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
-    let object = object_of(arguments_json)?;
-    reject_unknown(&object, &[])?;
-    Ok(SubagentOp::List)
+    let raw = if arguments_json.trim().is_empty() {
+        "{}"
+    } else {
+        arguments_json
+    };
+    let object = object_of(raw)?;
+    reject_unknown(&object, &["path_prefix"])?;
+    let path_prefix = parse_optional_string_field(object.get("path_prefix"), "path_prefix", 128)?;
+    Ok(SubagentOp::List { path_prefix })
 }
 
 /// `cancel_agent_input` 的参数解析。

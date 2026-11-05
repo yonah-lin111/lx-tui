@@ -22,15 +22,14 @@
 //! ```
 
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use tokio::sync::{oneshot, watch};
 
 use crate::chat::client::StreamOutcome;
 use crate::chat::compact::AutoCompactNotice;
 use crate::chat::events::{
-    ChatDelta, ChatRequest, ModelItem, ModelStepStop, PartKind, StopReason,
-    TOOL_ARGUMENTS_INVALID_CODE,
+    ChatDelta, ChatRequest, ModelStepStop, PartKind, StopReason, TOOL_ARGUMENTS_INVALID_CODE,
 };
 use crate::chat::tools::ask::{AskAnswers, AskQuestion};
 use crate::chat::tools::{self, ToolContext, ToolErrorCode, ToolExecutionResult, ToolFailure};
@@ -38,13 +37,18 @@ use crate::chat::transport::tools::{TOOL_INPUT_TRUNCATED_CODE, TOOL_PROTOCOL_ERR
 use crate::db::chat::{ToolCallTicket, Usage};
 
 mod auto_compact;
+mod context;
 mod executor;
 
+#[cfg(test)]
+use crate::chat::events::ModelItem;
 use auto_compact::maybe_auto_compact;
+use context::compact_summary_prompt;
 
 #[cfg(test)]
 mod tests;
 
+pub use context::ModelContext;
 pub use executor::{AgentTools, TurnExecution, plan_snapshot_of};
 
 /// 自动压缩触发线：上下文达到上限的 90% 时压缩。
@@ -369,6 +373,8 @@ pub struct TurnSummary {
     pub usage: Usage,
     /// 整轮累计 usage：会话账单与 CLI 统计使用，跨步求和。
     pub billing: Usage,
+    /// 是否因 Token 预算耗尽而熔断（终态仍为 `Interrupted`，可恢复）。
+    pub budget_exceeded: bool,
 }
 
 impl TurnSummary {
@@ -378,6 +384,7 @@ impl TurnSummary {
             outcome: TurnOutcome::Complete,
             usage,
             billing: usage,
+            budget_exceeded: false,
         }
     }
 
@@ -387,6 +394,7 @@ impl TurnSummary {
             outcome: TurnOutcome::Interrupted,
             usage,
             billing: usage,
+            budget_exceeded: false,
         }
     }
 
@@ -396,6 +404,17 @@ impl TurnSummary {
             outcome: TurnOutcome::Failed { code: code.into() },
             usage,
             billing: usage,
+            budget_exceeded: false,
+        }
+    }
+
+    /// Token 预算耗尽：按中断收尾，但标记 `budget_exceeded` 供事件层生成半程汇报。
+    pub fn budget_exceeded(usage: Usage) -> Self {
+        Self {
+            outcome: TurnOutcome::Interrupted,
+            usage,
+            billing: usage,
+            budget_exceeded: true,
         }
     }
 
@@ -412,210 +431,6 @@ impl TurnSummary {
             TurnOutcome::Interrupted => StopReason::Cancelled,
             TurnOutcome::Failed { code } => StopReason::Failed { code: code.clone() },
         }
-    }
-}
-
-/// 本轮上下文：冻结的请求骨架 + 逐步累积的结构化历史项 + 冻结的工作区 cwd。
-///
-/// 多次采样共用同一上下文（当前轮的 call/result 不回到 DB 重新装配），
-/// 只把本次响应产生的内容/调用与工具结果追加进来。
-#[derive(Debug, Clone)]
-pub struct ModelContext {
-    /// 初始请求骨架（turns / model / variant_params 冻结）。
-    request: ChatRequest,
-    /// 结构化历史（初始为装配结果，逐步追加）。
-    items: Vec<ModelItem>,
-    /// 发送时冻结的工作区根；文件工具的相对路径基准。
-    cwd: PathBuf,
-    /// 本轮开始时的**本地运行上下文**摘要（存活进程 + 当前计划）。
-    ///
-    /// 它不是工具结果，也不伪装成新的调用：只在第一次采样时并入用户消息末尾，
-    /// 避免历史裁剪后模型忘记 `session_id` 或把已完成的计划当成当前计划。
-    runtime_summary: Option<String>,
-    /// 模型上下文上限（token）；None 时用 [`FALLBACK_CONTEXT_LIMIT_TOKENS`]。
-    context_limit: Option<u64>,
-    /// 运行时自动压缩或持久化检查点恢复的摘要；非空时注入系统提示，替代被丢掉的旧 items。
-    compact_summary: Option<String>,
-    /// 上一次自动压缩失败时的 items 数量（避免同一批 items 压缩失败后死循环重试）。
-    last_failed_compact_items: Option<usize>,
-}
-
-impl ModelContext {
-    /// 以装配好的请求与冻结 cwd 构造上下文。
-    pub fn new(request: ChatRequest, cwd: impl Into<PathBuf>) -> Self {
-        let items = request.items.clone();
-        Self {
-            request,
-            items,
-            cwd: cwd.into(),
-            runtime_summary: None,
-            context_limit: None,
-            compact_summary: None,
-            last_failed_compact_items: None,
-        }
-    }
-
-    /// 附加本地运行上下文摘要（存活进程与当前计划的有界快照）。
-    pub fn with_runtime_summary(mut self, summary: Option<String>) -> Self {
-        self.runtime_summary = summary;
-        self
-    }
-
-    /// 设置模型上下文上限；未设置时使用回退值。
-    pub fn with_context_limit(mut self, limit: Option<u64>) -> Self {
-        self.context_limit = limit.filter(|value| *value > 0);
-        self
-    }
-
-    /// 注入已持久化的自动压缩摘要检查点（子 agent 多轮恢复时使用）。
-    pub fn with_compact_summary(mut self, summary: Option<String>) -> Self {
-        self.compact_summary = summary.filter(|text| !text.trim().is_empty());
-        self
-    }
-
-    /// 当前生效的压缩摘要（测试与诊断用）。
-    pub fn compact_summary(&self) -> Option<&str> {
-        self.compact_summary.as_deref()
-    }
-
-    /// 冻结的工作区根。
-    pub fn cwd(&self) -> &Path {
-        &self.cwd
-    }
-
-    /// 当前结构化历史（诊断与测试用）。
-    pub fn items(&self) -> &[ModelItem] {
-        &self.items
-    }
-
-    /// 下一次采样请求：turns/model 不变，items 为本轮累计结果。
-    ///
-    /// 运行上下文摘要只在**第一次**采样时并入（后续采样已包含在 items 里）。
-    fn next_request(&self) -> ChatRequest {
-        // 自动压缩的摘要放在系统段：与手动 compact 的注入位置一致，不伪造
-        // user/assistant 消息；原始任务仍作为 items 的第一条保留。
-        let system_prompt = self.request.system_prompt.as_ref().map(|base| {
-            self.compact_summary.as_ref().map_or_else(
-                || base.clone(),
-                |summary| format!("{base}\n\n{}", compact_summary_prompt(summary)),
-            )
-        });
-        ChatRequest {
-            turns: self.request.turns.clone(),
-            items: self.items.clone(),
-            model: self.request.model.clone(),
-            variant_params: self.request.variant_params.clone(),
-            // 用途随轮次冻结：子 agent 的请求必须保持 `Subagent(role)`，
-            // 否则第二次采样会重新声明主工具面（模型就能越权 spawn）。
-            purpose: self.request.purpose,
-            // 系统提示在 turn 创建时冻结（稳定提示 + 环境快照 + compact 摘要）。
-            // 每次采样都必须原样复用：写成 None 会让 transport 现场重采集，
-            // 丢摘要且同一轮看到不同环境。
-            system_prompt,
-            // 工具快照随轮次冻结：同一 turn 的后续采样不会看到新启动的 MCP 工具。
-            tools: self.request.tools.clone(),
-        }
-    }
-
-    /// 本轮是否为子 agent（禁止递归控制工具）。
-    pub fn is_subagent(&self) -> bool {
-        matches!(
-            self.request.purpose,
-            crate::chat::events::RequestPurpose::Subagent(_)
-        )
-    }
-
-    /// 运行上下文摘要（诊断与测试用）。
-    pub fn runtime_summary(&self) -> Option<&str> {
-        self.runtime_summary.as_deref()
-    }
-
-    /// 把运行上下文摘要并入最后一次用户消息（只并入一次）。
-    fn absorb_runtime_summary(&mut self) {
-        let Some(summary) = self.runtime_summary.take() else {
-            return;
-        };
-        match self.items.last_mut() {
-            Some(ModelItem::UserText(text)) => {
-                if !text.is_empty() {
-                    text.push_str("\n\n");
-                }
-                text.push_str(&summary);
-            }
-            Some(ModelItem::UserContent { text, images }) if images.is_empty() => {
-                if !text.is_empty() {
-                    text.push_str("\n\n");
-                }
-                text.push_str(&summary);
-            }
-            Some(ModelItem::UserContent { .. }) => {
-                self.items.push(ModelItem::UserContent {
-                    text: summary,
-                    images: Vec::new(),
-                });
-            }
-            _ => {
-                // 末尾不是用户消息（理论上不会发生）：不伪造位置，直接放弃摘要。
-            }
-        }
-    }
-
-    /// 追加一次模型响应：可见正文（若有）按出现顺序合并为一条 assistant 文本，
-    /// 随后按 ordinal 顺序追加工具调用（结构必须保留，不能拼进文本）。
-    ///
-    /// 参数不是 JSON 对象时跳过该调用（`ready_calls` 已保证对象，这里只做防御）。
-    fn push_response(&mut self, text: String, calls: &[ReadyToolCall]) {
-        if !text.is_empty() {
-            self.items.push(ModelItem::AssistantText(text));
-        }
-        for call in calls {
-            let Ok(input) = serde_json::from_str::<serde_json::Value>(&call.arguments_json) else {
-                tracing::debug!(
-                    target: "lx::agent",
-                    call_id = %call.call_id,
-                    name = %call.name,
-                    "skip tool call in current turn: arguments are not valid JSON"
-                );
-                continue;
-            };
-            self.items.push(ModelItem::AssistantToolCall {
-                call_id: call.call_id.clone(),
-                name: call.name.clone(),
-                input,
-            });
-        }
-    }
-
-    /// 追加一条本地命令结果（user 角色事实，排在已闭合工具对之后）。
-    ///
-    /// 同时进入 `turns` 纯文本视图与 `items` 结构化视图：不支持 item 的 transport
-    /// 也能读到命令事实。
-    fn push_user_context(&mut self, text: String) {
-        self.items.push(ModelItem::UserText(text.clone()));
-        self.request.turns.push(crate::chat::events::ChatTurn {
-            role: "user".into(),
-            text,
-            reasoning_metadata: None,
-        });
-    }
-
-    /// 追加一条工具结果（与前面的调用成对；失败结果带 `is_error`）。
-    ///
-    /// 回放侧单条结果上限与历史装配同一口径（[`MAX_TOOL_RESULT_REPLAY_BYTES`]）：
-    /// 超限截断并显式标记，不静默省略；落库结果体本身不变。
-    fn push_tool_result(
-        &mut self,
-        call_id: &str,
-        content: String,
-        is_error: bool,
-        images: Vec<crate::chat::events::ModelImage>,
-    ) {
-        self.items.push(ModelItem::ToolResult {
-            call_id: call_id.to_string(),
-            content: crate::chat::context::truncate_result_for_replay(&content),
-            is_error,
-            images,
-        });
     }
 }
 
@@ -638,15 +453,6 @@ fn tool_result_images(result: &ToolExecutionResult) -> Vec<crate::chat::events::
             })
         })
         .collect()
-}
-
-/// 自动压缩摘要的系统段包裹（与手动 compact 的 `<compact_summary>` 同形）。
-fn compact_summary_prompt(summary: &str) -> String {
-    format!(
-        "<compact_summary>\nThis is a summary of earlier work in this subagent run that was \
-         compacted automatically. Treat it as established context, not as a new request.\n\n\
-         {summary}\n</compact_summary>"
-    )
 }
 
 /// 执行一轮 agent 任务：多步采样 + 串行工具调度。
@@ -693,9 +499,21 @@ where
         }
         let outcome = stream_one(context.next_request(), cancel.clone()).await;
         // 上下文占用只认最后一次模型响应的 usage；账单口径单独跨步累加。
+        let mut budget_exhausted = false;
+        let mut budget_reminder = None;
         if let Some(latest) = step_usage(&outcome.deltas) {
             add_usage(&mut billing, latest);
             usage = latest;
+            budget_exhausted = context
+                .token_budget
+                .as_mut()
+                .is_some_and(|budget| budget.record_step_usage(latest));
+            if !budget_exhausted {
+                budget_reminder = context
+                    .token_budget
+                    .as_mut()
+                    .and_then(crate::chat::agent::SubagentTokenBudget::take_pending_reminder);
+            }
         }
         match &outcome.stop {
             StopReason::Cancelled => return TurnSummary::interrupted(usage).with_billing(billing),
@@ -757,10 +575,10 @@ where
             // 工具面执行文件、进程或递归控制工具。失败结果仍走 begin/finish 落库。
             // 唯一权威是本轮冻结的工具声明：内置白名单 + MCP + resources 都已在里面。
             let allowed = if context.request.tools.is_empty() {
-                // 测试与旧调用路径未注入冻结快照时，回退到角色白名单。
+                // 测试与旧调用路径未注入冻结快照时，回退到角色白名单（按深度收紧）。
                 context
                     .request
-                    .tools_surface()
+                    .tools_surface_at_depth(context.subagent_depth, context.max_subagent_depth)
                     .is_some_and(|surface| surface.names().contains(&call.name.as_str()))
             } else {
                 context
@@ -770,33 +588,41 @@ where
                     .any(|decl| decl.name == call.name)
             };
             let control = crate::chat::agent::parse_control(&call.name, &call.arguments_json);
-            let result = if !allowed {
+            // 深度守卫优先于工具面校验：子 agent 伪造/残留控制工具调用时，
+            // 派发工具给出稳定深度错误，其余控制工具按“不可用”拒绝。
+            let result = if control.is_some() && context.is_subagent() && !context.can_delegate() {
+                let code = if call.name == "spawn_agent"
+                    && matches!(
+                        context.request.purpose,
+                        crate::chat::events::RequestPurpose::Subagent(role)
+                            if role.base() == crate::chat::agent::BaseRole::Executor
+                    ) {
+                    crate::chat::agent::DEPTH_LIMIT_REACHED_CODE
+                } else {
+                    crate::chat::agent::UNAVAILABLE_CODE
+                };
+                ToolFailure::new(ToolErrorCode::Io, code).into_result(Vec::new())
+            } else if !allowed {
                 ToolFailure::new(ToolErrorCode::Io, crate::chat::agent::UNAVAILABLE_CODE)
                     .into_result(Vec::new())
             } else if let Some(parsed) = control {
-                // 子 agent 内禁止递归：即使模型伪造控制工具调用，也按工具级失败回给模型。
-                if context.is_subagent() {
-                    ToolFailure::new(ToolErrorCode::Io, crate::chat::agent::UNAVAILABLE_CODE)
-                        .into_result(Vec::new())
-                } else {
-                    match parsed {
-                        Err(failure) => failure.into_result(Vec::new()),
-                        Ok(op) => match host
-                            .subagent_with_call(Some(call.call_id.clone()), op)
-                            .await
-                        {
-                            Ok(outcome) => outcome.into_result(),
-                            Err(HostError::Cancelled) => {
-                                let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
-                                cancel_unstarted(&mut host, remaining).await;
-                                return TurnSummary::interrupted(usage).with_billing(billing);
-                            }
-                            // 并发超限 / 目标不存在：工具级失败，轮次继续。
-                            Err(HostError::Failed { code }) => {
-                                ToolFailure::new(ToolErrorCode::Io, code).into_result(Vec::new())
-                            }
-                        },
-                    }
+                match parsed {
+                    Err(failure) => failure.into_result(Vec::new()),
+                    Ok(op) => match host
+                        .subagent_with_call(Some(call.call_id.clone()), op)
+                        .await
+                    {
+                        Ok(outcome) => outcome.into_result(),
+                        Err(HostError::Cancelled) => {
+                            let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
+                            cancel_unstarted(&mut host, remaining).await;
+                            return TurnSummary::interrupted(usage).with_billing(billing);
+                        }
+                        // 并发超限 / 目标不存在：工具级失败，轮次继续。
+                        Err(HostError::Failed { code }) => {
+                            ToolFailure::new(ToolErrorCode::Io, code).into_result(Vec::new())
+                        }
+                    },
                 }
             } else if call.name == crate::chat::tools::ask::ASK_TOOL {
                 match crate::chat::tools::ask::parse_arguments(&call.arguments_json) {
@@ -864,6 +690,14 @@ where
                 }
             }
             context.push_tool_result(&call.call_id, content, is_error, tool_images);
+        }
+        // 当前步的全部工具已结算：预算耗尽时在此熔断，保证 call/result 成对落库。
+        if budget_exhausted {
+            return TurnSummary::budget_exceeded(usage).with_billing(billing);
+        }
+        // 未耗尽时把跨过 25% / 10% 阈值的提醒注入下一轮采样。
+        if let Some(reminder) = budget_reminder {
+            context.push_user_context(reminder);
         }
     }
 }

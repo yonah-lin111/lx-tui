@@ -219,17 +219,25 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
         SubagentOutcome::Spawned {
             agent_id,
             nickname,
+            agent_path,
             role,
             title,
             model,
             reasoning_effort,
             fork_context,
+            fork_turns,
+            max_tokens,
         } => {
             let nick_part = nickname
                 .as_deref()
                 .filter(|s| !s.is_empty())
                 .map(|n| format!(" (nickname `{n}`, role `{}`)", role.as_str()))
                 .unwrap_or_else(|| format!(" ({})", role.as_str()));
+            let path_part = agent_path
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|path| format!(" at `{path}`"))
+                .unwrap_or_default();
             let mut extras = Vec::new();
             if let Some(m) = model.as_deref().filter(|s| !s.is_empty()) {
                 extras.push(format!("model={m}"));
@@ -237,8 +245,13 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
             if let Some(e) = reasoning_effort.as_deref().filter(|s| !s.is_empty()) {
                 extras.push(format!("reasoning_effort={e}"));
             }
-            if *fork_context {
+            if let Some(turns) = fork_turns {
+                extras.push(format!("fork_turns={turns}"));
+            } else if *fork_context {
                 extras.push("fork_context=true".to_string());
+            }
+            if let Some(tokens) = max_tokens {
+                extras.push(format!("max_tokens={tokens}"));
             }
             let extra_str = if extras.is_empty() {
                 String::new()
@@ -246,7 +259,7 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
                 format!(" [{}]", extras.join(", "))
             };
             format!(
-                "Spawned subagent `{agent_id}`{nick_part} titled `{title}`{extra_str}. It runs in the background; \
+                "Spawned subagent `{agent_id}`{nick_part}{path_part} titled `{title}`{extra_str}. It runs in the background; \
                  use `wait_agent` when you need its result.\n"
             )
         }
@@ -256,9 +269,10 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
             status,
             queued_count,
             interrupt,
+            trigger_turn,
         } => format!(
             "Accepted input `{submission_id}` for subagent `{agent_id}` \
-             (status={status}, queued_count={queued_count}, interrupt={interrupt}).\n"
+             (status={status}, queued_count={queued_count}, interrupt={interrupt}, trigger_turn={trigger_turn}).\n"
         ),
         SubagentOutcome::Interrupted {
             agent_id,
@@ -294,10 +308,17 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
                     .filter(|s| !s.is_empty())
                     .map(|n| format!(" nickname={n}"))
                     .unwrap_or_default();
+                let path_part = agent
+                    .agent_path
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|path| format!(" agent_path={path}"))
+                    .unwrap_or_default();
                 text.push_str(&format!(
-                    "- agent_id={}{} role={} status={}\n",
+                    "- agent_id={}{}{} role={} status={}\n",
                     agent.agent_id,
                     nick_part,
+                    path_part,
                     agent.role.as_str(),
                     agent.status
                 ));
@@ -329,10 +350,17 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
                     .filter(|s| !s.is_empty())
                     .map(|n| format!(" nickname={n}"))
                     .unwrap_or_default();
+                let path_part = agent
+                    .agent_path
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|path| format!(" agent_path={path}"))
+                    .unwrap_or_default();
                 text.push_str(&format!(
-                    "- agent_id={}{} role={} status={} queued_count={} title={:?}\n",
+                    "- agent_id={}{}{} role={} status={} queued_count={} title={:?}\n",
                     agent.agent_id,
                     nick_part,
+                    path_part,
                     agent.role.as_str(),
                     agent.status,
                     agent.queued_count,

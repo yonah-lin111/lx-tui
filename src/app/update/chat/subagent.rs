@@ -5,15 +5,15 @@
 //! 会话已切）。
 
 use crate::app::state::{
-    AppState, AssistantStepView, CardTarget, ChatMessageView, CompactNoticeView,
-    SubagentReportView, SubagentRun, ToolDetailView, ToolStatus,
+    AppState, CardTarget, ChatMessageView, CompactNoticeView, SubagentReportView, SubagentRun,
 };
 use crate::app::update::chat::view::view_message_of;
-use crate::chat::agent::{AgentRole, AgentStatusView};
 use crate::chat::compact::AutoCompactNotice;
 use crate::chat::events::{ChatDelta, StopReason};
 use crate::db::chat::{ChatMessage, SubagentRecord, Usage};
 use crate::layout::PaneId;
+
+pub use super::subagent_cards::refresh_subagent_cards;
 
 /// 找到持有该子会话的窗格。
 fn pane_of_session(state: &AppState, child_session: &str) -> Option<PaneId> {
@@ -25,23 +25,82 @@ fn pane_of_session(state: &AppState, child_session: &str) -> Option<PaneId> {
 }
 
 /// spawn 回执：把一个运行记录插入窗格。
+///
+/// 孙 agent 的 `parent_session_id` 指向 depth-1 run 的子会话，而不是根窗格的
+/// `chat.session_id`；窗格持有该父 run 时同样视为同一棵会话树。
 pub fn on_subagent_started(state: &mut AppState, pane: PaneId, mut run: SubagentRun) -> bool {
     let project_root = state.project_root_for_pane(pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
     // 迟到的 spawn 回执不得把旧会话的 run 塞进已经切走的新会话。
-    if target
+    let switched_away = target
         .lx
         .chat
         .session_id
         .as_deref()
-        .is_some_and(|current| current != run.parent_session_id)
-    {
+        .is_some_and(|current| current != run.parent_session_id);
+    let owns_parent = target
+        .lx
+        .agents
+        .by_session(&run.parent_session_id)
+        .is_some();
+    if switched_away && !owns_parent {
         return false;
     }
+    let selected = current_selected_agent_id(&target.lx);
     run.chat.set_project_root(project_root);
     target.lx.agents.runs.push(run);
+    restore_selected_task_agent(&mut target.lx, selected.as_deref());
+    refresh_status(state, pane);
+    true
+}
+
+fn current_selected_agent_id(lx: &crate::app::state::Lx) -> Option<String> {
+    lx.task
+        .as_ref()
+        .and_then(|page| page.selected_agent_index(&lx.agents))
+        .and_then(|index| lx.agents.runs.get(index))
+        .map(|run| run.agent_id.clone())
+}
+
+/// 按树形前序重排 run，并让筛选后的列表高亮继续指向修改前捕获的 `selected_agent_id`；
+/// 若目标已被当前筛选隐藏则钳制到合法范围。
+pub fn restore_selected_task_agent(
+    lx: &mut crate::app::state::Lx,
+    selected_agent_id: Option<&str>,
+) {
+    lx.agents.sort_runs_tree_order();
+    let Some(page) = lx.task.as_mut() else {
+        return;
+    };
+    let filtered = lx.agents.filtered_indices(page.agent_filter);
+    if let Some(selected) = selected_agent_id
+        && let Some(index) = lx
+            .agents
+            .runs
+            .iter()
+            .position(|run| run.agent_id == selected)
+        && let Some(position) = filtered.iter().position(|real| *real == index)
+    {
+        page.agents_window.active = position;
+        page.agents_window.anchor = position;
+        page.agents_window.viewport = None;
+    } else {
+        page.agents_window.clamp(filtered.len());
+    }
+}
+
+/// 同步底边框的 blocked 计数（子 agent 状态变化后调用）。
+fn refresh_status(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let blocked = target.lx.agents.blocked_count();
+    if target.lx.chat.status.blocked_subagents == blocked {
+        return false;
+    }
+    target.lx.chat.status.blocked_subagents = blocked;
     true
 }
 
@@ -64,165 +123,9 @@ pub fn on_subagent_delta(state: &mut AppState, child_session: &str, deltas: &[Ch
     if changed {
         run.rows_dirty = true;
     }
-    changed
-}
-
-/// 子 agent 卡片状态回填：
-/// - `spawn_agent` 标题状态跟对应 run 的 running/completed 走；
-/// - 运行中的 `wait_agent` 目标状态用当前 run 快照实时填充。
-///
-/// spawn 的工具调用在子 agent 启动时就已经返回，不能拿工具状态冒充运行状态。
-pub fn refresh_subagent_cards(state: &mut AppState, pane: PaneId) -> bool {
-    struct RunCardSnapshot {
-        agent_id: String,
-        nickname: Option<String>,
-        role: AgentRole,
-        title: String,
-        status: String,
-        report: Option<SubagentReportView>,
-    }
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    let runs: Vec<RunCardSnapshot> = target
-        .lx
-        .agents
-        .runs
-        .iter()
-        .map(|run| RunCardSnapshot {
-            agent_id: run.agent_id.clone(),
-            nickname: run.nickname.clone(),
-            role: run.role,
-            title: run.title.clone(),
-            status: run.status.clone(),
-            report: run.report.clone(),
-        })
-        .collect();
-    // 历史会话不一定回投了 Agents 列表；父消息里的汇报同样带终态。
-    let reports: Vec<SubagentReportView> = target
-        .lx
-        .chat
-        .messages
-        .iter()
-        .flat_map(|message| &message.reports)
-        .cloned()
-        .collect();
-    let mut changed = false;
-    for message in &mut target.lx.chat.messages {
-        for step in &mut message.steps {
-            let AssistantStepView::Tool { call, .. } = step else {
-                continue;
-            };
-            let Some(ToolDetailView::Subagent(view)) = call.detail.as_deref_mut() else {
-                continue;
-            };
-            if call.name == "spawn_agent"
-                && let Some(agent_id) = view.agent_id.as_deref()
-                && let Some((nickname, title, status, report)) = runs
-                    .iter()
-                    .find(|r| r.agent_id == agent_id)
-                    .map(|r| {
-                        (
-                            r.nickname.clone(),
-                            r.title.clone(),
-                            r.status.clone(),
-                            r.report.clone(),
-                        )
-                    })
-                    .or_else(|| {
-                        reports
-                            .iter()
-                            .find(|report| report.agent_id == agent_id)
-                            .map(|report| {
-                                (
-                                    report.nickname.clone(),
-                                    report.title.clone(),
-                                    report.status.clone(),
-                                    Some(report.clone()),
-                                )
-                            })
-                    })
-            {
-                if view.agent_status.as_deref() != Some(status.as_str()) {
-                    view.agent_status = Some(status);
-                    changed = true;
-                }
-                if view.nickname.is_none() && nickname.is_some() {
-                    view.nickname = nickname;
-                    changed = true;
-                }
-                if view.title.as_deref().unwrap_or("").is_empty() && !title.is_empty() {
-                    view.title = Some(title);
-                    changed = true;
-                }
-                if view.report != report {
-                    view.report = report;
-                    changed = true;
-                }
-            }
-            if matches!(
-                call.name.as_str(),
-                "send_input" | "interrupt_agent" | "resume_agent" | "close_agent"
-            ) && let Some(target_key) = view.agent_id.as_deref()
-                && let Some(matched) = runs.iter().find(|r| {
-                    r.agent_id == target_key
-                        || r.nickname
-                            .as_deref()
-                            .is_some_and(|n| n.eq_ignore_ascii_case(target_key))
-                })
-            {
-                if view.nickname != matched.nickname {
-                    view.nickname = matched.nickname.clone();
-                    changed = true;
-                }
-                if view.role != Some(matched.role) {
-                    view.role = Some(matched.role);
-                    changed = true;
-                }
-            }
-            if call.name != "wait_agent"
-                || !matches!(call.status, ToolStatus::Pending | ToolStatus::Running)
-            {
-                continue;
-            }
-            if view.all || view.targets.is_empty() {
-                continue;
-            }
-            let agents: Vec<AgentStatusView> = view
-                .targets
-                .iter()
-                .filter_map(|target_key| {
-                    runs.iter()
-                        .find(|r| {
-                            r.agent_id == *target_key
-                                || r.nickname
-                                    .as_deref()
-                                    .is_some_and(|n| n.eq_ignore_ascii_case(target_key))
-                        })
-                        .map(|r| AgentStatusView {
-                            agent_id: r.agent_id.clone(),
-                            nickname: r.nickname.clone(),
-                            title: r.title.clone(),
-                            role: r.role,
-                            status: r.status.clone(),
-                            report: r.report.as_ref().map(|report| report.body.clone()).or_else(
-                                || {
-                                    reports
-                                        .iter()
-                                        .find(|report| report.agent_id == r.agent_id)
-                                        .map(|report| report.body.clone())
-                                },
-                            ),
-                        })
-                })
-                .collect();
-            if view.agents != agents {
-                view.agents = agents;
-                changed = true;
-            }
-        }
-    }
-    changed
+    // 子 agent 的实时动作（在途工具 / 思考 / 正文）挂在父消息的 spawn 卡片上：
+    // 每次增量都要同步，否则要等下一次主轮事件才会刷新。
+    changed | refresh_subagent_cards(state, pane)
 }
 
 /// 把一批增量应用到子 agent 的消息模型（与主聊天同一套方法）。
@@ -272,7 +175,8 @@ pub fn on_subagent_tool_pending(state: &mut AppState, child_session: &str, call_
     else {
         return false;
     };
-    run.chat.mark_tool_pending(call_id)
+    let changed = run.chat.mark_tool_pending(call_id);
+    changed | refresh_subagent_cards(state, pane)
 }
 
 /// 工具 running（子会话）。
@@ -286,7 +190,8 @@ pub fn on_subagent_tool_running(state: &mut AppState, child_session: &str, call_
     else {
         return false;
     };
-    run.chat.mark_tool_running(call_id)
+    let changed = run.chat.mark_tool_running(call_id);
+    changed | refresh_subagent_cards(state, pane)
 }
 
 /// 工具结算（子会话）：写终态、摘要、结果体与类型化详情。
@@ -340,7 +245,7 @@ pub fn on_subagent_tool_settled(
         }
         changed = true;
     }
-    changed
+    changed | refresh_subagent_cards(state, pane)
 }
 
 /// 列表元数据回投（幂等：内容相同返回 false）。
@@ -363,6 +268,7 @@ pub fn set_subagent_list(
     {
         return false;
     }
+    let selected = current_selected_agent_id(&target.lx);
     let mut changed = false;
     for record in records {
         match target.lx.agents.by_agent_mut(&record.agent_id) {
@@ -397,15 +303,14 @@ pub fn set_subagent_list(
         }
     }
     if changed {
-        let runs = target.lx.agents.runs.len();
-        if let Some(page) = target.lx.task.as_mut() {
-            page.agents_window.clamp(runs);
-        }
+        restore_selected_task_agent(&mut target.lx, selected.as_deref());
     }
     let focused = consume_agent_focus(&mut target.lx);
     let changed = changed || focused;
     // 历史主消息里的 spawn 卡片也要拿 run 状态。
-    changed || refresh_subagent_cards(state, pane)
+    let cards = refresh_subagent_cards(state, pane);
+    refresh_status(state, pane);
+    changed || cards
 }
 
 /// 打开 Agents 面板并定位到指定 agent；列表尚未回投时留下一次性定位请求。
@@ -445,49 +350,143 @@ fn consume_agent_focus(lx: &mut crate::app::state::Lx) -> bool {
         return false;
     };
     let Some(index) = lx.agents.runs.iter().position(|run| {
-        run.agent_id == agent_id
-            || run
-                .nickname
-                .as_deref()
-                .is_some_and(|n| n.eq_ignore_ascii_case(&agent_id))
+        crate::chat::agent::matches_agent_target(
+            &run.agent_id,
+            run.nickname.as_deref(),
+            Some(run.agent_path.as_str()),
+            crate::chat::agent::ROOT_AGENT_PATH,
+            &agent_id,
+        )
     }) else {
         return false;
     };
+    let Some(page) = lx.task.as_ref() else {
+        return false;
+    };
+    // 目标被当前筛选隐藏时回退到 all，保证定位后真的可见。
+    let mut filter = page.agent_filter;
+    let mut position = lx
+        .agents
+        .filtered_indices(filter)
+        .iter()
+        .position(|real| *real == index);
+    if position.is_none() && filter != crate::app::state::AgentFilter::All {
+        filter = crate::app::state::AgentFilter::All;
+        position = lx
+            .agents
+            .filtered_indices(filter)
+            .iter()
+            .position(|real| *real == index);
+    }
+    let Some(position) = position else {
+        return false;
+    };
+    let agent_id = lx.agents.runs[index].agent_id.clone();
     let Some(page) = lx.task.as_mut() else {
         return false;
     };
     page.agents_focus = None;
-    page.agents_window.active = index;
-    page.agents_window.anchor = index;
+    page.agent_filter = filter;
+    if page
+        .agent_reply_target
+        .as_ref()
+        .is_some_and(|(target_id, _)| target_id != &agent_id)
+    {
+        page.agent_reply = None;
+        page.agent_reply_target = None;
+    }
+    page.agents_window.active = position;
+    page.agents_window.anchor = position;
     page.agents_window.viewport = None;
     if let Some(run) = lx.agents.runs.get_mut(index) {
         run.follow = true;
         run.scroll = usize::MAX;
+        run.touch_access();
     }
+    lx.agents.evict_excess_idle_chats(Some(&agent_id));
     true
 }
 
 /// 点击 Agents 列表某一行：切换高亮并把详情贴回最新消息。
+///
+/// `index` 是 `agents.runs` 的真实下标；筛选视图下先映射到可见位置。
 pub fn select_task_agent(state: &mut AppState, pane: PaneId, index: usize) -> bool {
+    let position = {
+        let Some(target) = state.pane_anywhere(pane) else {
+            return false;
+        };
+        let Some(page) = target.lx.task.as_ref() else {
+            return false;
+        };
+        if page.tab != crate::app::state::TaskTab::Agents {
+            return false;
+        }
+        let Some(position) = target
+            .lx
+            .agents
+            .filtered_indices(page.agent_filter)
+            .iter()
+            .position(|real| *real == index)
+        else {
+            return false;
+        };
+        position
+    };
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    let clicked_agent_id = target.lx.agents.runs.get(index).map(|r| r.agent_id.clone());
     let Some(page) = target.lx.task.as_mut() else {
         return false;
     };
-    if page.tab != crate::app::state::TaskTab::Agents || index >= target.lx.agents.runs.len() {
-        return false;
+    if page
+        .agent_reply_target
+        .as_ref()
+        .is_some_and(|(target_id, _)| Some(target_id) != clicked_agent_id.as_ref())
+    {
+        page.agent_reply = None;
+        page.agent_reply_target = None;
     }
-    page.agents_window.active = index;
-    page.agents_window.anchor = index;
+    page.agents_window.active = position;
+    page.agents_window.anchor = position;
     page.agents_window.viewport = None;
     page.agents_focus = None;
     if let Some(run) = target.lx.agents.runs.get_mut(index) {
         run.follow = true;
         run.scroll = usize::MAX;
     }
+    ensure_agent_loaded(state, pane, index);
     crate::app::update::clear_lx_selection_for(state, pane);
     true
+}
+
+/// 选中 run 后的驻留维护：已加载则刷新访问序，未加载则请求从 DB 懒加载。
+fn ensure_agent_loaded(state: &mut AppState, pane: PaneId, index: usize) {
+    let pending = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return;
+        };
+        let Some(run) = target.lx.agents.runs.get_mut(index) else {
+            return;
+        };
+        let agent_id = run.agent_id.clone();
+        let child_session = run.child_session_id.clone();
+        let loaded = run.loaded;
+        if loaded {
+            run.touch_access();
+        }
+        target.lx.agents.evict_excess_idle_chats(Some(&agent_id));
+        (!loaded).then_some((agent_id, child_session))
+    };
+    if let Some((agent_id, child_session)) = pending {
+        state
+            .effects
+            .push(crate::app::effects::Effect::LoadSubagentSession {
+                pane,
+                agent_id,
+                child_session,
+            });
+    }
 }
 
 /// 切换 Agents 详情区某个可折叠块（工具 / 思考 / compact / 汇报）。
@@ -508,7 +507,9 @@ pub fn toggle_agent_card(state: &mut AppState, pane: PaneId, target: CardTarget)
         let agent_id = agent_id.clone();
         return open_agent_page(state, pane, &agent_id);
     }
-    let active = page.agents_window.active;
+    let Some(active) = page.selected_agent_index(&target_pane.lx.agents) else {
+        return false;
+    };
     let Some(run) = target_pane.lx.agents.runs.get_mut(active) else {
         return false;
     };
@@ -650,6 +651,8 @@ pub fn on_subagent_loaded(
     run.chat.set_project_root(project_root);
     run.loaded = true;
     run.rows_dirty = true;
+    run.touch_access();
+    target.lx.agents.evict_excess_idle_chats(Some(agent_id));
     true
 }
 
@@ -664,6 +667,15 @@ pub fn on_subagent_finished(
     let Some(pane) = pane_of_session(state, child_session) else {
         return false;
     };
+    let protected = state
+        .pane_anywhere(pane)
+        .and_then(|target| {
+            target.lx.task.as_ref().and_then(|page| {
+                page.selected_agent_index(&target.lx.agents)
+                    .and_then(|index| target.lx.agents.runs.get(index))
+            })
+        })
+        .map(|run| run.agent_id.clone());
     let Some(run) = state
         .pane_mut_anywhere(pane)
         .and_then(|target| target.lx.agents.by_session_mut(child_session))
@@ -709,6 +721,16 @@ pub fn on_subagent_finished(
     if let Some(report) = report {
         run.report = Some(report);
     }
+    run.touch_access();
+    let _ = run;
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target
+            .lx
+            .agents
+            .evict_excess_idle_chats(protected.as_deref());
+        restore_selected_task_agent(&mut target.lx, protected.as_deref());
+    }
+    refresh_status(state, pane);
     true
 }
 
@@ -826,7 +848,9 @@ pub fn scroll_agents_detail(state: &mut AppState, pane: PaneId, delta: isize) ->
     if page.tab != crate::app::state::TaskTab::Agents {
         return false;
     }
-    let active = page.agents_window.active;
+    let Some(active) = page.selected_agent_index(&target.lx.agents) else {
+        return false;
+    };
     let Some(run) = target.lx.agents.runs.get_mut(active) else {
         return false;
     };
@@ -861,7 +885,10 @@ pub fn set_task_agents_scroll(state: &mut AppState, pane: PaneId, offset: usize)
     if page.tab != crate::app::state::TaskTab::Agents {
         return false;
     }
-    let Some(run) = target.lx.agents.runs.get_mut(page.agents_window.active) else {
+    let Some(active) = page.selected_agent_index(&target.lx.agents) else {
+        return false;
+    };
+    let Some(run) = target.lx.agents.runs.get_mut(active) else {
         return false;
     };
     let max = run.total_rows.saturating_sub(run.visible.max(1));
@@ -873,7 +900,7 @@ pub fn set_task_agents_scroll(state: &mut AppState, pane: PaneId, offset: usize)
     before != clamped || was_following != run.follow
 }
 
-/// Agents 面板 `^d`：停止当前高亮的 running 子 agent。
+/// Agents 面板 `^d`：停止当前高亮的 running 子 agent（事件层沿 `agent_path` 级联停止后代）。
 ///
 /// Esc 只停主轮与正在等待的 wait 回执，所有 running 子 agent 继续跑；
 /// 这里按选中项单独停止，partial transcript 留在 Agents 面板，不自动重跑、不起报告轮。
@@ -887,7 +914,12 @@ pub fn stop_selected_subagent(state: &mut AppState, pane: PaneId) -> bool {
     let Some(run) = page.selected_agent(&target.lx.agents) else {
         return false;
     };
-    if !run.is_running() {
+    // 选中的父 run 已结束但仍有后代在跑时，停止操作要沿路径级联下去。
+    let has_running_descendant = target.lx.agents.runs.iter().any(|other| {
+        other.is_running()
+            && crate::chat::agent::is_strict_descendant_path(&run.agent_path, &other.agent_path)
+    });
+    if !run.is_running() && !has_running_descendant {
         crate::app::update::show_lx_toast(
             state,
             pane,

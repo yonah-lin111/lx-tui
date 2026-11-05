@@ -437,6 +437,8 @@ pub const WAIT_UNTIL_DONE: &str = "until done";
 pub const WAIT_REPORT: &str = "Report";
 /// 汇报块正文标题（工具卡片语法，单独一条 `└─`）。
 pub const REPORT_LABEL: &str = "Report:";
+/// 展开态报告里的变更文件列表前缀。
+pub const CHANGED_FILES_LABEL: &str = "Changed files:";
 pub const AGENT_ID_LABEL: &str = "agent_id:";
 pub const PREVIOUS_STATUS_LABEL: &str = "previous:";
 /// 选项标记：单选圆点、多选方框、高亮前缀。

@@ -593,6 +593,7 @@ fn collab_identity(outcome: &SubagentOutcome) -> CollabIdentity {
             model,
             reasoning_effort,
             fork_context,
+            ..
         } => CollabIdentity {
             agent_id: Some(agent_id.clone()),
             role: Some(role.as_str().to_string()),

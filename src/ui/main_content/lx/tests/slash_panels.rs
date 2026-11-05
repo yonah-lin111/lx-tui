@@ -561,10 +561,10 @@ fn lx_slash_and_mention_panels_adapt_height_up_to_max() {
     let area = Rect::new(0, 0, 80, 24);
     let frame_rows = mention::PANEL_BORDER_ROWS + mention::PANEL_FOOTER_ROWS;
 
-    // 1. `/` 命令列表（7 个命令）与空态 `/resume`（1 行占位）按条目数自适应高度。
+    // 1. `/` 命令列表（8 个内置命令）与空态 `/resume`（1 行占位）按条目数自适应高度。
     let slash_lx = slash_commands_lx(0);
     let slash_panel = slash_layout(area, &slash_lx).expect("slash layout");
-    assert_eq!(slash_panel.rect.height, 7 + frame_rows);
+    assert_eq!(slash_panel.rect.height, 8 + frame_rows);
 
     let empty_resume = slash_resume_empty_lx();
     let resume_panel = slash_layout(area, &empty_resume).expect("empty resume layout");

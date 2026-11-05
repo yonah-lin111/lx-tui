@@ -151,12 +151,27 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     let subagents_js = request(port, &get("/settings_subagents.js")).await;
     assert_eq!(status(&subagents_js), 200);
     let subagents_js_body = body(&subagents_js);
-    for entry in ["loadSubagents", "saveSubagents", "/api/subagents"] {
+    for entry in [
+        "loadSubagents",
+        "saveSubagents",
+        "/api/subagents",
+        "delegationMode",
+        "lockModel",
+        "allowWebSearch",
+        "subagents-delegation-mode",
+    ] {
         assert!(
             subagents_js_body.contains(entry),
             "subagents js entry: {entry}"
         );
     }
+    assert!(html.contains("subagent-lock-model"), "lock model toggle");
+    assert!(
+        html.contains("subagent-allow-web-search")
+            && html.contains("subagent-allow-mcp")
+            && html.contains("subagent-allow-skills"),
+        "capability toggles"
+    );
 
     // 七份资源均无外部引用。
     for (name, text) in [
@@ -999,7 +1014,13 @@ async fn subagents_api_crud_and_events() {
     let list = request(port, &get(&url)).await;
     assert_eq!(status(&list), 200, "{list}");
     let listing = body(&list);
-    for entry in ["\"maxConcurrent\"", "\"defaults\"", "Turing"] {
+    for entry in [
+        "\"maxConcurrent\"",
+        "\"maxDepth\"",
+        "\"defaultMaxTokens\"",
+        "\"defaults\"",
+        "Turing",
+    ] {
         assert!(listing.contains(entry), "listing: {entry}");
     }
 
@@ -1061,6 +1082,103 @@ async fn subagents_api_crud_and_events() {
 }
 
 #[tokio::test]
+async fn subagents_monitor_override_capabilities_and_delegation_mode() {
+    let (service, mut events, _dir) = start("subagents-monitor-mode").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let origin = format!("http://127.0.0.1:{port}");
+    let url = format!("/api/subagents?token={token}");
+
+    let listing = body(&request(port, &get(&url)).await).to_string();
+    assert!(listing.contains("\"delegationMode\":\"auto\""), "{listing}");
+    assert!(listing.contains("\"monitor\""), "{listing}");
+    assert!(listing.contains("\"baseRole\":\"monitor\""), "{listing}");
+
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/subagents/builtins/monitor?token={token}"),
+            r#"{"description":"Watch long builds.","lockModel":true,"allowWebSearch":false,"allowMcp":false,"allowSkills":true}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{saved}");
+    match events.try_recv() {
+        Ok(SettingsEvent::SubagentsChanged(section)) => {
+            let monitor = &section.builtins.monitor;
+            assert!(monitor.lock_model);
+            assert!(!monitor.capabilities.allow_web_search);
+            assert!(!monitor.capabilities.allow_mcp);
+            assert!(monitor.capabilities.allow_skills);
+            assert_eq!(monitor.description.as_deref(), Some("Watch long builds."));
+        }
+        other => panic!("expected SubagentsChanged, got {other:?}"),
+    }
+
+    let settings = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/subagents/settings?token={token}"),
+            r#"{"delegationMode":"proactive"}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&settings), 200, "{settings}");
+    match events.try_recv() {
+        Ok(SettingsEvent::SubagentsChanged(section)) => {
+            assert_eq!(
+                section.delegation_mode,
+                crate::config::subagents::DelegationMode::Proactive
+            );
+        }
+        other => panic!("expected SubagentsChanged, got {other:?}"),
+    }
+
+    let full = request(
+        port,
+        &write(
+            "PUT",
+            &url,
+            r#"{"maxConcurrent":3,"delegationMode":"explicit","builtins":{"explorer":{"lockModel":true,"allowWebSearch":false},"monitor":{"description":"Watch long builds.","lockModel":true,"allowWebSearch":false,"allowMcp":false,"allowSkills":true}}}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&full), 200, "{full}");
+    match events.try_recv() {
+        Ok(SettingsEvent::SubagentsChanged(section)) => {
+            assert_eq!(
+                section.delegation_mode,
+                crate::config::subagents::DelegationMode::Explicit
+            );
+            assert!(section.builtins.explorer.lock_model);
+            assert!(!section.builtins.explorer.capabilities.allow_web_search);
+            assert!(section.builtins.monitor.lock_model, "monitor override kept");
+        }
+        other => panic!("expected SubagentsChanged, got {other:?}"),
+    }
+
+    let final_listing = body(&request(port, &get(&url)).await).to_string();
+    assert!(
+        final_listing.contains("\"delegationMode\":\"explicit\""),
+        "{final_listing}"
+    );
+    assert!(
+        final_listing.contains("\"lockModel\":true"),
+        "{final_listing}"
+    );
+    assert!(
+        final_listing.contains("\"allowWebSearch\":false"),
+        "{final_listing}"
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn subagents_put_partial_payload_preserves_custom_roles() {
     let (service, mut events, _dir) = start("subagents-partial-put").await;
     let port = service.port();
@@ -1103,6 +1221,147 @@ async fn subagents_put_partial_payload_preserves_custom_roles() {
     let response = request(port, &get(&format!("/api/subagents?token={token}"))).await;
     let listing = body(&response);
     assert!(listing.contains("\"name\":\"reviewer\""), "{listing}");
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn subagents_round_trip_depth_and_token_budget() {
+    let (service, mut events, _dir) = start("subagents-general-roundtrip").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let origin = format!("http://127.0.0.1:{port}");
+
+    // 默认值：并发 4、深度 2、预算不限。
+    let list = request(port, &get(&format!("/api/subagents?token={token}"))).await;
+    assert_eq!(status(&list), 200, "{list}");
+    let listing = body(&list);
+    assert!(listing.contains("\"maxConcurrent\":4"), "{listing}");
+    assert!(listing.contains("\"maxDepth\":2"), "{listing}");
+    assert!(listing.contains("\"defaultMaxTokens\":null"), "{listing}");
+
+    // general 端点：并发上限取到 12、深度 3、预算 100000。
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/subagents/general?token={token}"),
+            r#"{"maxConcurrent":12,"maxDepth":3,"defaultMaxTokens":100000}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{saved}");
+    match events.try_recv() {
+        Ok(SettingsEvent::SubagentsChanged(section)) => {
+            assert_eq!(section.max_concurrent, 12);
+            assert_eq!(section.max_depth, 3);
+            assert_eq!(section.default_max_tokens, Some(100_000));
+        }
+        other => panic!("expected SubagentsChanged, got {other:?}"),
+    }
+
+    // 全量 PUT 覆盖三个字段。
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/subagents?token={token}"),
+            r#"{"maxConcurrent":6,"maxDepth":1,"defaultMaxTokens":2500}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{saved}");
+    match events.try_recv() {
+        Ok(SettingsEvent::SubagentsChanged(section)) => {
+            assert_eq!(section.max_concurrent, 6);
+            assert_eq!(section.max_depth, 1);
+            assert_eq!(section.default_max_tokens, Some(2_500));
+        }
+        other => panic!("expected SubagentsChanged, got {other:?}"),
+    }
+
+    // 显式 null 清除预算，缺省的 maxDepth 保留原值。
+    let cleared = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/subagents?token={token}"),
+            r#"{"maxConcurrent":6,"defaultMaxTokens":null}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&cleared), 200, "{cleared}");
+    match events.try_recv() {
+        Ok(SettingsEvent::SubagentsChanged(section)) => {
+            assert_eq!(section.max_depth, 1, "omitted maxDepth keeps its value");
+            assert_eq!(section.default_max_tokens, None);
+        }
+        other => panic!("expected SubagentsChanged, got {other:?}"),
+    }
+
+    let after = request(port, &get(&format!("/api/subagents?token={token}"))).await;
+    let after_body = body(&after);
+    assert!(after_body.contains("\"maxConcurrent\":6"), "{after_body}");
+    assert!(after_body.contains("\"maxDepth\":1"), "{after_body}");
+    assert!(
+        after_body.contains("\"defaultMaxTokens\":null"),
+        "{after_body}"
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn subagents_reject_out_of_range_depth_and_concurrency() {
+    let (service, _events, _dir) = start("subagents-range").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let origin = format!("http://127.0.0.1:{port}");
+
+    for depth in [0, 4] {
+        let rejected = request(
+            port,
+            &write(
+                "PUT",
+                &format!("/api/subagents/general?token={token}"),
+                &format!(r#"{{"maxConcurrent":4,"maxDepth":{depth}}}"#),
+                Some(&origin),
+            ),
+        )
+        .await;
+        assert_eq!(status(&rejected), 422, "maxDepth {depth}: {rejected}");
+    }
+
+    let bad_all = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/subagents?token={token}"),
+            r#"{"maxConcurrent":4,"maxDepth":4}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&bad_all), 422, "{bad_all}");
+
+    let too_many = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/subagents?token={token}"),
+            r#"{"maxConcurrent":13,"maxDepth":2}"#,
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&too_many), 422, "{too_many}");
+
+    // 被拒绝的写入不改变已保存配置。
+    let list = request(port, &get(&format!("/api/subagents?token={token}"))).await;
+    let listing = body(&list);
+    assert!(listing.contains("\"maxDepth\":2"), "{listing}");
+    assert!(listing.contains("\"maxConcurrent\":4"), "{listing}");
     service.shutdown();
 }
 

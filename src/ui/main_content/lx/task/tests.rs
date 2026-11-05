@@ -583,6 +583,7 @@ fn clicking_an_agents_row_selects_it_with_the_scroll_offset() {
                 crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
                     agent_id: format!("a{index}"),
                     nickname: None,
+                    agent_path: "/root/agent".into(),
                     child_session_id: format!("s{index}"),
                     parent_session_id: "p".into(),
                     spawn_message_id: None,
@@ -627,6 +628,7 @@ fn agents_list_uses_the_title_not_the_task_prompt() {
     let mut run = crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
         agent_id: "a1".into(),
         nickname: None,
+        agent_path: "/root/agent".into(),
         child_session_id: "s1".into(),
         parent_session_id: "p".into(),
         spawn_message_id: None,
@@ -669,6 +671,7 @@ fn agents_list_shows_nickname_and_falls_back_to_role() {
         let run = crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
             agent_id: format!("a-{title}"),
             nickname: nickname.map(str::to_string),
+            agent_path: "/root/agent".into(),
             child_session_id: format!("s-{title}"),
             parent_session_id: "p".into(),
             spawn_message_id: None,
@@ -755,6 +758,7 @@ fn agents_list_renders_queued_counts_and_projected_statuses_without_overlap() {
             crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
                 agent_id: format!("sub-very-long-identifier-{idx}"),
                 nickname: None,
+                agent_path: "/root/agent".into(),
                 child_session_id: format!("sess-{idx}"),
                 parent_session_id: "p".into(),
                 spawn_message_id: None,
@@ -789,5 +793,188 @@ fn agents_list_renders_queued_counts_and_projected_statuses_without_overlap() {
     let narrow = render_lines(&lx, 18, 12);
     for line in &narrow {
         assert!(line.chars().count() <= 18);
+    }
+}
+
+/// 多级子 agent：孙辈起用树形连接符缩进，并在耗时后展示紧凑 token 用量。
+fn tree_agent(
+    agent_id: &str,
+    agent_path: &str,
+    status: &str,
+    tokens: Option<(i64, i64)>,
+) -> crate::app::state::SubagentRun {
+    let mut run = crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+        agent_id: agent_id.into(),
+        nickname: None,
+        agent_path: agent_path.into(),
+        child_session_id: format!("sess-{agent_id}"),
+        parent_session_id: "p".into(),
+        spawn_message_id: None,
+        role: crate::chat::agent::AgentRole::Executor,
+        model_provider: String::new(),
+        model_id: String::new(),
+        model_variant: None,
+        status: status.into(),
+        title: agent_id.into(),
+        created_at_ms: 0,
+        completed_at_ms: Some(1_000),
+        report_json: None,
+        report_delivered: false,
+    });
+    if let Some((input, output)) = tokens {
+        run.input_tokens = Some(input);
+        run.output_tokens = Some(output);
+    }
+    run
+}
+
+#[test]
+fn agents_filter_pills_render_and_hit() {
+    let mut lx = lx_with_messages();
+    lx.agents
+        .runs
+        .push(tree_agent("a", "/root/a", "running", None));
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        agent_filter: crate::app::state::AgentFilter::Active,
+        ..TaskPage::default()
+    });
+    let lines = render_lines(&lx, 80, 20);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("all · active · done")),
+        "Agents 页签右侧渲染筛选胶囊：{lines:?}"
+    );
+
+    let rect = Rect::new(0, 0, 80, 20);
+    let page = lx.task.as_ref().expect("task");
+    let pills = filter_row_rects(rect, page);
+    assert_eq!(pills.len(), 3, "三个筛选胶囊");
+    let (filter, x, _) = pills[1];
+    assert_eq!(filter, crate::app::state::AgentFilter::Active);
+    assert_eq!(
+        hit(rect, page, &lx.agents, x, rect.y + TOP_BORDER),
+        Some(TaskHit::AgentFilter(filter)),
+        "点击活动筛选胶囊命中"
+    );
+}
+
+#[test]
+fn inline_reply_renders_to_selected_nickname() {
+    let mut lx = lx_with_messages();
+    let mut run = tree_agent("a", "/root/turing", "completed", None);
+    run.nickname = Some("Turing".into());
+    lx.agents.runs.push(run);
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        agent_reply: Some(crate::app::overlay::TextInput::new("hello")),
+        ..TaskPage::default()
+    });
+    let lines = render_lines(&lx, 80, 20);
+    assert!(
+        lines.iter().any(|line| line.contains("To Turing: hello")),
+        "顶栏渲染内联追问：{lines:?}"
+    );
+}
+
+#[test]
+fn agents_filter_hit_maps_to_real_run_index() {
+    let rect = Rect::new(0, 0, 70, 10);
+    let mut agents = crate::app::state::AgentsState::default();
+    agents
+        .runs
+        .push(tree_agent("done", "/root/done", "completed", None));
+    agents
+        .runs
+        .push(tree_agent("live", "/root/live", "running", None));
+    let page = TaskPage {
+        tab: TaskTab::Agents,
+        agent_filter: crate::app::state::AgentFilter::Active,
+        ..TaskPage::default()
+    };
+    let list_y = rect.y + TOP_BORDER + TAB_ROW;
+    assert_eq!(
+        hit(rect, &page, &agents, rect.x, list_y),
+        Some(TaskHit::Agent(1)),
+        "筛选后的第一行映射回 runs[1]"
+    );
+}
+
+#[test]
+fn filtered_view_omits_dangling_tree_connectors() {
+    let mut lx = lx_with_messages();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        agent_filter: crate::app::state::AgentFilter::Active,
+        ..TaskPage::default()
+    });
+    lx.agents.runs = vec![
+        tree_agent("parent", "/root/turing", "completed", None),
+        tree_agent("grand", "/root/turing/curie", "running", None),
+    ];
+    lx.agents.sort_runs_tree_order();
+    let lines = render_lines(&lx, 80, 20);
+    let grand = lines
+        .iter()
+        .find(|line| line.contains("grand"))
+        .expect("grandchild row");
+    assert!(
+        !grand.contains("├─") && !grand.contains("└─"),
+        "父节点被筛选隐藏时不画悬空连接符：{grand}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("parent")),
+        "Completed 父节点在 Active 视图中隐藏：{lines:?}"
+    );
+}
+
+#[test]
+fn agents_list_indents_subtree_and_shows_tokens() {
+    let mut lx = lx_with_messages();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        ..TaskPage::default()
+    });
+    lx.agents.runs = vec![
+        tree_agent("parent", "/root/turing", "completed", Some((1_500, 300))),
+        tree_agent("first", "/root/turing/curie", "completed", None),
+        tree_agent("second", "/root/turing/bohr", "running", None),
+        tree_agent("grand", "/root/turing/curie/lovelace", "completed", None),
+    ];
+    lx.agents.sort_runs_tree_order();
+    let order: Vec<&str> = lx
+        .agents
+        .runs
+        .iter()
+        .map(|run| run.agent_id.as_str())
+        .collect();
+    assert_eq!(
+        order,
+        ["parent", "first", "grand", "second"],
+        "孙辈紧跟父节点，再轮到下一个兄弟"
+    );
+    let lines = render_lines(&lx, 80, 20);
+    let first = lines
+        .iter()
+        .find(|line| line.contains("first"))
+        .expect("first child row");
+    let second = lines
+        .iter()
+        .find(|line| line.contains("second"))
+        .expect("second child row");
+    let grand = lines
+        .iter()
+        .find(|line| line.contains("grand"))
+        .expect("grandchild row");
+    assert!(first.contains("├─ "), "非末项用分支连接符：{first}");
+    assert!(second.contains("└─ "), "末项用收口连接符：{second}");
+    assert!(grand.contains("  └─ "), "孙辈再缩进一级并收口：{grand}");
+    assert!(
+        lines.iter().any(|line| line.contains("1.8k tok")),
+        "运行/终态 token 用量可见：{lines:?}"
+    );
+    for line in &lines {
+        assert!(line.chars().count() <= 80);
     }
 }

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
-use super::context::assemble_child_context;
+use super::context::{ChildTurnLimits, assemble_child_context};
 use super::*;
 use crate::app::state::lx::agent::{SubagentRun, seed_chat_model};
 use crate::app::state::{RequestKey, RequestState};
@@ -30,6 +30,8 @@ pub(super) fn launch_child_turn(
     items: &[PersistedInputItem],
     is_new_agent: bool,
     reused_done: Option<watch::Sender<bool>>,
+    limits: ChildTurnLimits,
+    root_session: &str,
 ) -> Result<(), String> {
     let sender = streams
         .event_sender
@@ -43,6 +45,13 @@ pub(super) fn launch_child_turn(
         model: frozen.model.clone(),
         variant: frozen.variant.clone(),
     };
+    let workspace_trusted = persistence.is_trusted(cwd) || persistence.is_trusted(workspace);
+    let effective_subagents = crate::config::subagents::merge_project_roles_for_paths(
+        &state.subagents_config,
+        Some(workspace),
+        Some(cwd),
+        workspace_trusted,
+    );
     let inputs = super::context::capture_child_prompt_inputs(
         state,
         persistence,
@@ -74,6 +83,8 @@ pub(super) fn launch_child_turn(
         frozen.output_limit,
         frozen.supports_image_input,
         items,
+        &effective_subagents,
+        limits,
     )?;
     let mcp_snapshot = inputs.mcp;
 
@@ -165,6 +176,9 @@ pub(super) fn launch_child_turn(
         parent: parent_key.clone(),
         agent_id: record.agent_id.clone(),
         nickname: record.nickname.clone(),
+        agent_path: record.agent_path.clone(),
+        root_session: root_session.to_string(),
+        depth: limits.depth,
         child_session_id: record.child_session_id.clone(),
         child_assistant_id: child_assistant_id.to_string(),
         child_user_message_id: child_user_message_id.to_string(),
@@ -175,6 +189,8 @@ pub(super) fn launch_child_turn(
         done: done_sender,
         status: STATUS_RUNNING,
         started_at_ms,
+        max_tokens: limits.max_tokens,
+        closed_without_report: false,
         chat: child_chat,
         workspace: workspace.to_path_buf(),
     };
@@ -223,6 +239,7 @@ pub(super) fn launch_child_turn(
                     reason: StopReason::Failed {
                         code: "subagent session busy".into(),
                     },
+                    budget_exceeded: false,
                     usage: Usage::default(),
                     billing: Usage::default(),
                 }));
@@ -270,6 +287,7 @@ pub(super) fn launch_child_turn(
         let _ = net_sender.send(AppEvent::ChatNet(ChatNetEvent::Finished {
             key: stream_key,
             reason: summary.stop_reason(),
+            budget_exceeded: summary.budget_exceeded,
             usage: summary.usage,
             billing: summary.billing,
         }));

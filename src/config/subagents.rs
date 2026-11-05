@@ -13,12 +13,26 @@ use serde::{Deserialize, Serialize};
 use super::ai::ModelSelection;
 use super::{ConfigError, user_data_root};
 
-/// 默认单会话最大并发子 agent 数。
-pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 3;
-/// 单会话最大并发子 agent 数下限。
+pub mod discover;
+pub use discover::{
+    MAX_PROJECT_ROLES, MAX_ROLE_FILE_BYTES, discover_project_roles, merge_project_roles,
+    merge_project_roles_for_paths,
+};
+
+/// 默认整棵根会话树最大并发子 agent 数。
+pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 4;
+/// 整棵根会话树最大并发子 agent 数下限。
 pub const MIN_CONCURRENT_SUBAGENTS: usize = 1;
-/// 单会话最大并发子 agent 数上限。
-pub const MAX_CONCURRENT_SUBAGENTS_LIMIT: usize = 8;
+/// 整棵根会话树最大并发子 agent 数上限。
+pub const MAX_CONCURRENT_SUBAGENTS_LIMIT: usize = 12;
+/// 允许配置的最小 Agent 递归深度（1 = 仅主 Agent 可派发子 Agent）。
+pub const MIN_AGENT_DEPTH: usize = 1;
+/// 默认 Agent 递归深度（2 = 主 Agent -> 子 Agent -> 孙 Agent）。
+pub const DEFAULT_MAX_AGENT_DEPTH: usize = 2;
+/// 允许配置的最大 Agent 递归深度上限。
+pub const MAX_AGENT_DEPTH_LIMIT: usize = 3;
+/// 单个子 agent 单轮 Token 预算的最小值。
+pub const MIN_SUBAGENT_MAX_TOKENS: u64 = 1_000;
 /// 角色名最大长度（字节/ASCII 字符）。
 pub const MAX_ROLE_NAME_LEN: usize = 32;
 /// 角色简短描述最大字符数。
@@ -36,38 +50,53 @@ pub const DEFAULT_EXPLORER_DESCRIPTION: &str =
 /// 内置 `executor` 默认简短英文描述。
 pub const DEFAULT_EXECUTOR_DESCRIPTION: &str =
     "Bounded implementation worker with file and process tools (`edit`, `write`, `exec_command`).";
+/// 内置 `monitor` 默认简短英文描述。
+pub const DEFAULT_MONITOR_DESCRIPTION: &str = "Long-running command and process monitor (`exec_command`, `write_stdin`, `read`, `search`). Use for lengthy builds, test suites, or background process polling without file-modification risk.";
 
 const fn default_max_concurrent() -> usize {
     DEFAULT_MAX_CONCURRENT_SUBAGENTS
 }
 
+const fn default_max_depth() -> usize {
+    DEFAULT_MAX_AGENT_DEPTH
+}
+
+const fn default_true() -> bool {
+    true
+}
+
 /// 子 agent 的底层安全权限档位（决定工具白名单与默认内置系统提示词）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BaseRole {
     /// 只读调查：`read` / `search` / `web_search`（及只读 MCP）。
+    #[default]
     Explorer,
     /// 有边界的实现：`read` / `search` / `web_search` / `edit` / `write` / `exec_command` / `write_stdin`。
     Executor,
+    /// 长耗时命令与进程监控：`read` / `search` / `exec_command` / `write_stdin`（无写文件与派发权限）。
+    Monitor,
 }
 
 impl BaseRole {
     /// 全部内置基础权限档位（固定顺序）。
-    pub const ALL: [BaseRole; 2] = [Self::Explorer, Self::Executor];
+    pub const ALL: [BaseRole; 3] = [Self::Explorer, Self::Executor, Self::Monitor];
 
-    /// 稳定协议/存储值：`explorer` / `executor`。
+    /// 稳定协议/存储值：`explorer` / `executor` / `monitor`。
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Explorer => "explorer",
             Self::Executor => "executor",
+            Self::Monitor => "monitor",
         }
     }
 
-    /// 解析稳定值；仅接受 `"explorer"` 或 `"executor"`。
+    /// 解析稳定值；仅接受 `"explorer"`、`"executor"` 或 `"monitor"`。
     pub fn parse(text: &str) -> Option<Self> {
         match text.trim() {
             "explorer" => Some(Self::Explorer),
             "executor" => Some(Self::Executor),
+            "monitor" => Some(Self::Monitor),
             _ => None,
         }
     }
@@ -77,7 +106,77 @@ impl BaseRole {
         match self {
             Self::Explorer => DEFAULT_EXPLORER_DESCRIPTION,
             Self::Executor => DEFAULT_EXECUTOR_DESCRIPTION,
+            Self::Monitor => DEFAULT_MONITOR_DESCRIPTION,
         }
+    }
+}
+
+/// 主 agent 的子任务委派积极度模式（对齐 Codex `MultiAgentMode`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DelegationMode {
+    /// 默认智能模式：当主会话推理档位为 `high`/`xhigh`/`max` 时自动采用 `Proactive`，否则保持标准平衡策略。
+    #[default]
+    Auto,
+    /// 主动并行拆解：面对多模块调查、独立文件修改或长耗时验证时优先并行委派子 agent。
+    Proactive,
+    /// 仅显式委派：仅在用户明确要求委派/子 agent，或需要后台盯长耗时进程时才调用 `spawn_agent`。
+    Explicit,
+}
+
+impl DelegationMode {
+    /// 全部模式（固定顺序）。
+    pub const ALL: [Self; 3] = [Self::Auto, Self::Proactive, Self::Explicit];
+
+    /// 稳定字符串值。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Proactive => "proactive",
+            Self::Explicit => "explicit",
+        }
+    }
+
+    /// 解析稳定字符串值。
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "auto" => Some(Self::Auto),
+            "proactive" => Some(Self::Proactive),
+            "explicit" => Some(Self::Explicit),
+            _ => None,
+        }
+    }
+}
+
+/// 角色在 `BaseRole` 基础上的细粒度能力收紧配置（只减不增）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoleCapabilities {
+    /// 是否允许使用 `web_search` 工具（仅对原本含 `web_search` 的 Explorer/Executor 有效，Monitor 恒无）。
+    #[serde(default = "default_true")]
+    pub allow_web_search: bool,
+    /// 是否允许加载并调用外部 MCP 工具。
+    #[serde(default = "default_true")]
+    pub allow_mcp: bool,
+    /// 是否允许在系统提示词中注入 Skills 目录。
+    #[serde(default = "default_true")]
+    pub allow_skills: bool,
+}
+
+impl Default for RoleCapabilities {
+    fn default() -> Self {
+        Self {
+            allow_web_search: true,
+            allow_mcp: true,
+            allow_skills: true,
+        }
+    }
+}
+
+impl RoleCapabilities {
+    /// 是否三项能力全部保持默认开启。
+    pub const fn is_all_enabled(self) -> bool {
+        self.allow_web_search && self.allow_mcp && self.allow_skills
     }
 }
 
@@ -104,10 +203,19 @@ pub struct SubagentsConfigFile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentsSection {
-    /// 单父会话最大并发子 agent 数（`1..=8`，默认 `3`）。
+    /// 整棵根会话树的最大并发运行子 agent 数（`1..=12`，默认 `4`）。
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: usize,
-    /// 内置角色（`explorer` / `executor`）的可选覆写项。
+    /// 最大递归派发深度（`1..=3`，默认 `2`：主 agent -> 子 agent -> 孙 agent）。
+    #[serde(default = "default_max_depth")]
+    pub max_depth: usize,
+    /// 可选单轮默认 Token 预算上限（None 表示不限）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_max_tokens: Option<u64>,
+    /// 主会话的子任务委派积极度模式（默认 `auto`）。
+    #[serde(default)]
+    pub delegation_mode: DelegationMode,
+    /// 内置角色（`explorer` / `executor` / `monitor`）的可选覆写项。
     #[serde(default)]
     pub builtins: BuiltinRoleOverrides,
     /// 用户自定义角色列表。
@@ -119,13 +227,16 @@ impl Default for SubagentsSection {
     fn default() -> Self {
         Self {
             max_concurrent: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+            max_depth: DEFAULT_MAX_AGENT_DEPTH,
+            default_max_tokens: None,
+            delegation_mode: DelegationMode::Auto,
             builtins: BuiltinRoleOverrides::default(),
             roles: Vec::new(),
         }
     }
 }
 
-/// 两个内置角色的可选覆写配置。
+/// 三个内置角色的可选覆写配置。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuiltinRoleOverrides {
@@ -133,6 +244,8 @@ pub struct BuiltinRoleOverrides {
     pub explorer: RoleOverrideConfig,
     #[serde(default)]
     pub executor: RoleOverrideConfig,
+    #[serde(default)]
+    pub monitor: RoleOverrideConfig,
 }
 
 /// 内置角色的可选覆写字段（空值表示使用内置默认或继承父模型）。
@@ -148,6 +261,12 @@ pub struct RoleOverrideConfig {
     /// 默认模型与思考等级（None 表示继承父会话模型）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelSelection>,
+    /// 是否锁定模型与思考等级（为 true 且配置了 `model` 时忽略调用方覆盖）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lock_model: bool,
+    /// 细粒度能力收紧开关（默认全部开启）。
+    #[serde(default, flatten)]
+    pub capabilities: RoleCapabilities,
     /// 自定义昵称候选列表（空数组表示使用全局默认科学家昵称池）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nickname_candidates: Vec<String>,
@@ -159,6 +278,8 @@ impl RoleOverrideConfig {
         self.description.is_none()
             && self.system_prompt.is_none()
             && self.model.is_none()
+            && !self.lock_model
+            && self.capabilities.is_all_enabled()
             && self.nickname_candidates.is_empty()
     }
 
@@ -178,6 +299,8 @@ impl RoleOverrideConfig {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string),
             model: self.model.as_ref().and_then(normalize_model_selection),
+            lock_model: self.lock_model,
+            capabilities: self.capabilities,
             nickname_candidates: normalize_nicknames(&self.nickname_candidates),
         }
     }
@@ -187,9 +310,9 @@ impl RoleOverrideConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomRoleConfig {
-    /// 唯一角色名（`[a-z][a-z0-9_]{0,31}`，禁止与 `"explorer"` / `"executor"` 重名）。
+    /// 唯一角色名（`[a-z][a-z0-9_]{0,31}`，禁止与 `"explorer"` / `"executor"` / `"monitor"` 重名）。
     pub name: String,
-    /// 基础权限档位：`explorer`（只读）或 `executor`（读写）。
+    /// 基础权限档位：`explorer`（只读）、`executor`（读写）或 `monitor`（监控与命令）。
     pub base_role: BaseRole,
     /// 必填角色描述（注入 `spawn_agent` 工具说明）。
     pub description: String,
@@ -198,9 +321,34 @@ pub struct CustomRoleConfig {
     /// 可选默认模型与思考等级。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelSelection>,
+    /// 是否锁定模型与思考等级（为 true 且配置了 `model` 时忽略调用方覆盖）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lock_model: bool,
+    /// 细粒度能力收紧开关（默认全部开启）。
+    #[serde(default, flatten)]
+    pub capabilities: RoleCapabilities,
     /// 可选专属昵称池。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nickname_candidates: Vec<String>,
+    /// 是否来自项目级 `.lx/agents/*.json` 或 `.agents/roles/*.json`（仅内存标记，不写回全局配置）。
+    #[serde(skip)]
+    pub is_project_scoped: bool,
+}
+
+impl Default for CustomRoleConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            base_role: BaseRole::Explorer,
+            description: String::new(),
+            system_prompt: String::new(),
+            model: None,
+            lock_model: false,
+            capabilities: RoleCapabilities::default(),
+            nickname_candidates: Vec::new(),
+            is_project_scoped: false,
+        }
+    }
 }
 
 impl CustomRoleConfig {
@@ -212,7 +360,10 @@ impl CustomRoleConfig {
             description: self.description.trim().to_string(),
             system_prompt: self.system_prompt.trim().to_string(),
             model: self.model.as_ref().and_then(normalize_model_selection),
+            lock_model: self.lock_model,
+            capabilities: self.capabilities,
             nickname_candidates: normalize_nicknames(&self.nickname_candidates),
+            is_project_scoped: self.is_project_scoped,
         }
     }
 }
@@ -223,10 +374,13 @@ pub struct ResolvedRoleSpec {
     pub name: String,
     pub base_role: BaseRole,
     pub is_builtin: bool,
+    pub is_project_scoped: bool,
     pub description: String,
     /// 角色覆写或自定义系统提示词（None 表示使用 `base_role` 的内置默认提示词）。
     pub system_prompt_override: Option<String>,
     pub default_model: Option<ModelSelection>,
+    pub lock_model: bool,
+    pub capabilities: RoleCapabilities,
     pub nickname_candidates: Vec<String>,
 }
 
@@ -235,9 +389,13 @@ impl SubagentsSection {
     pub fn normalized(&self) -> Self {
         Self {
             max_concurrent: self.max_concurrent,
+            max_depth: self.max_depth,
+            default_max_tokens: self.default_max_tokens,
+            delegation_mode: self.delegation_mode,
             builtins: BuiltinRoleOverrides {
                 explorer: self.builtins.explorer.normalized(),
                 executor: self.builtins.executor.normalized(),
+                monitor: self.builtins.monitor.normalized(),
             },
             roles: self
                 .roles
@@ -256,13 +414,26 @@ impl SubagentsSection {
                 "maxConcurrent must be between {MIN_CONCURRENT_SUBAGENTS} and {MAX_CONCURRENT_SUBAGENTS_LIMIT}"
             )));
         }
+        if !(MIN_AGENT_DEPTH..=MAX_AGENT_DEPTH_LIMIT).contains(&self.max_depth) {
+            return Err(SubagentsConfigError::Invalid(format!(
+                "maxDepth must be between {MIN_AGENT_DEPTH} and {MAX_AGENT_DEPTH_LIMIT}"
+            )));
+        }
+        if let Some(tokens) = self.default_max_tokens
+            && tokens < MIN_SUBAGENT_MAX_TOKENS
+        {
+            return Err(SubagentsConfigError::Invalid(format!(
+                "defaultMaxTokens must be at least {MIN_SUBAGENT_MAX_TOKENS}"
+            )));
+        }
         validate_override("explorer", &self.builtins.explorer)?;
         validate_override("executor", &self.builtins.executor)?;
+        validate_override("monitor", &self.builtins.monitor)?;
 
         let mut seen = HashSet::new();
         for role in &self.roles {
             let name = role.name.trim();
-            if name == "explorer" || name == "executor" {
+            if matches!(name, "explorer" | "executor" | "monitor") {
                 return Err(SubagentsConfigError::Invalid(format!(
                     "custom role name '{name}' is reserved for built-in roles"
                 )));
@@ -305,7 +476,7 @@ impl SubagentsSection {
         Ok(())
     }
 
-    /// 按角色名解析当前配置下的生效规格（内置 `explorer`/`executor` 或已配置的自定义角色）。
+    /// 按角色名解析当前配置下的生效规格（内置 `explorer`/`executor`/`monitor` 或已配置的自定义角色）。
     pub fn resolve_role(&self, name: &str) -> Option<ResolvedRoleSpec> {
         match name.trim() {
             "explorer" => {
@@ -314,11 +485,14 @@ impl SubagentsSection {
                     name: "explorer".to_string(),
                     base_role: BaseRole::Explorer,
                     is_builtin: true,
+                    is_project_scoped: false,
                     description: ov
                         .description
                         .unwrap_or_else(|| BaseRole::Explorer.default_description().to_string()),
                     system_prompt_override: ov.system_prompt,
                     default_model: ov.model,
+                    lock_model: ov.lock_model,
+                    capabilities: ov.capabilities,
                     nickname_candidates: ov.nickname_candidates,
                 })
             }
@@ -328,11 +502,31 @@ impl SubagentsSection {
                     name: "executor".to_string(),
                     base_role: BaseRole::Executor,
                     is_builtin: true,
+                    is_project_scoped: false,
                     description: ov
                         .description
                         .unwrap_or_else(|| BaseRole::Executor.default_description().to_string()),
                     system_prompt_override: ov.system_prompt,
                     default_model: ov.model,
+                    lock_model: ov.lock_model,
+                    capabilities: ov.capabilities,
+                    nickname_candidates: ov.nickname_candidates,
+                })
+            }
+            "monitor" => {
+                let ov = self.builtins.monitor.normalized();
+                Some(ResolvedRoleSpec {
+                    name: "monitor".to_string(),
+                    base_role: BaseRole::Monitor,
+                    is_builtin: true,
+                    is_project_scoped: false,
+                    description: ov
+                        .description
+                        .unwrap_or_else(|| BaseRole::Monitor.default_description().to_string()),
+                    system_prompt_override: ov.system_prompt,
+                    default_model: ov.model,
+                    lock_model: ov.lock_model,
+                    capabilities: ov.capabilities,
                     nickname_candidates: ov.nickname_candidates,
                 })
             }
@@ -346,23 +540,29 @@ impl SubagentsSection {
                         name: norm.name,
                         base_role: norm.base_role,
                         is_builtin: false,
+                        is_project_scoped: norm.is_project_scoped,
                         description: norm.description,
                         system_prompt_override: Some(norm.system_prompt),
                         default_model: norm.model,
+                        lock_model: norm.lock_model,
+                        capabilities: norm.capabilities,
                         nickname_candidates: norm.nickname_candidates,
                     }
                 }),
         }
     }
 
-    /// 按固定顺序返回所有生效角色（`explorer`、`executor` + 自定义角色列表）。
+    /// 按固定顺序返回所有生效角色（`explorer`、`executor`、`monitor` + 自定义角色列表）。
     pub fn all_roles(&self) -> Vec<ResolvedRoleSpec> {
-        let mut out = Vec::with_capacity(2 + self.roles.len());
+        let mut out = Vec::with_capacity(3 + self.roles.len());
         if let Some(exp) = self.resolve_role("explorer") {
             out.push(exp);
         }
         if let Some(exe) = self.resolve_role("executor") {
             out.push(exe);
+        }
+        if let Some(mon) = self.resolve_role("monitor") {
+            out.push(mon);
         }
         for custom in &self.roles {
             if let Some(resolved) = self.resolve_role(&custom.name) {

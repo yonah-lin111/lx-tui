@@ -36,6 +36,10 @@ struct RecordingHost {
     issued: Arc<Mutex<Vec<ToolCallTicket>>>,
     /// 提问回执脚本（默认空答案）。`HostError` 可 Clone，可重复消费。
     ask_result: Arc<Mutex<Result<AskAnswers, HostError>>>,
+    /// 子 agent 控制操作回执（默认取消：模拟无事件层）。
+    subagent_result: Arc<Mutex<Result<crate::chat::agent::SubagentOutcome, HostError>>>,
+    /// 收到的子 agent 控制操作（断言有没有真正下发给事件层）。
+    subagent_ops: Arc<Mutex<Vec<crate::chat::agent::SubagentOp>>>,
 }
 
 impl Default for RecordingHost {
@@ -46,6 +50,8 @@ impl Default for RecordingHost {
             finish_failures: Arc::new(Mutex::new(Vec::new())),
             issued: Arc::new(Mutex::new(Vec::new())),
             ask_result: Arc::new(Mutex::new(Ok(AskAnswers::new()))),
+            subagent_result: Arc::new(Mutex::new(Err(HostError::Cancelled))),
+            subagent_ops: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -81,6 +87,17 @@ impl RecordingHost {
         host
     }
 
+    /// 子 agent 控制工具调用回执成功（模拟事件层派发）。
+    fn subagent_returning(outcome: crate::chat::agent::SubagentOutcome) -> Self {
+        let host = Self::new();
+        *host.subagent_result.lock().expect("lock") = Ok(outcome);
+        host
+    }
+
+    fn subagent_ops(&self) -> Vec<crate::chat::agent::SubagentOp> {
+        self.subagent_ops.lock().expect("lock").clone()
+    }
+
     fn trace(&self) -> Vec<HostTrace> {
         self.trace.lock().expect("lock").clone()
     }
@@ -92,8 +109,10 @@ impl AgentHost for RecordingHost {
             AgentHostRequest::UserShellUpdates { reply } => {
                 let _ = reply.send(Vec::new());
             }
-            AgentHostRequest::Subagent { reply, .. } => {
-                let _ = reply.send(Err(HostError::Cancelled));
+            AgentHostRequest::Subagent { op, reply, .. } => {
+                self.subagent_ops.lock().expect("lock").push(op);
+                let result = self.subagent_result.lock().expect("lock").clone();
+                let _ = reply.send(result);
             }
             AgentHostRequest::AskUser {
                 call_id,
@@ -825,5 +844,192 @@ async fn mcp_cancelled_result_settles_as_cancelled_and_stops_the_turn() {
             HostTrace::Finish("call_mcp".into(), true),
         ],
         "取消按 cancelled 结算，不写工具结果"
+    );
+}
+
+/// 子 agent 上下文：指定角色与递归深度；工具快照留空，走按深度收紧的回退白名单。
+fn subagent_context(
+    cwd: &Path,
+    role: crate::chat::agent::AgentRole,
+    depth: usize,
+    max_depth: usize,
+) -> ModelContext {
+    let mut context = context(cwd);
+    context.request.purpose = crate::chat::events::RequestPurpose::Subagent(role);
+    context
+        .request
+        .items
+        .push(ModelItem::UserText("do work".into()));
+    context.with_subagent_depth(depth, max_depth)
+}
+
+/// 剩余 25% / 10% 两档各注入一次 `<rollout_budget>`，且提醒进入下一轮采样。
+#[tokio::test]
+async fn token_budget_injects_reminders_at_25_and_10_percent_remaining() {
+    let fixture = Fixture::new("budget-reminder");
+    let read_args = r#"{"path":"."}"#.to_string();
+    let script = Script::new(
+        vec![
+            tool_calls(&[("c1", "read", &read_args, 0)], Some((800, 0))),
+            tool_calls(&[("c2", "read", &read_args, 1)], Some((100, 0))),
+            final_response("done", Some((0, 0))),
+        ],
+        StopReason::Complete,
+    );
+    let summary = run_agent_turn(
+        context(fixture.path()).with_token_budget(Some(1000)),
+        RecordingHost::new(),
+        RecordingExecutor::new(),
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert!(!summary.budget_exceeded);
+    let first = format!("{:?}", script.items_of(1));
+    assert!(
+        first.contains("You have 200 tokens left in your token budget"),
+        "{first}"
+    );
+    let second = format!("{:?}", script.items_of(2));
+    assert!(
+        second.contains("You have 100 tokens left in your token budget"),
+        "{second}"
+    );
+    assert_eq!(
+        second.matches("<rollout_budget>").count(),
+        2,
+        "每个阈值只提醒一次"
+    );
+}
+
+/// 预算耗尽：当前步工具完整结算后熔断，不再发起下一次采样。
+#[tokio::test]
+async fn token_budget_exhaustion_stops_the_turn_after_current_tool_step() {
+    let fixture = Fixture::new("budget-exhausted");
+    let read_args = r#"{"path":"."}"#.to_string();
+    let script = Script::new(
+        vec![tool_calls(
+            &[("c1", "read", &read_args, 0)],
+            Some((1000, 0)),
+        )],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::new();
+    let summary = run_agent_turn(
+        context(fixture.path()).with_token_budget(Some(1000)),
+        host.clone(),
+        RecordingExecutor::new(),
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Interrupted);
+    assert!(summary.budget_exceeded);
+    assert_eq!(summary.usage.input, Some(1000));
+    assert_eq!(summary.billing.input, Some(1000));
+    assert_eq!(script.request_count(), 1, "预算耗尽后不再采样");
+    assert_eq!(
+        host.trace(),
+        vec![
+            HostTrace::Begin("c1".into()),
+            HostTrace::Finish("c1".into(), false),
+        ],
+        "当前步工具仍完整结算"
+    );
+}
+
+/// 未达深度上限的 executor 子 agent 可以派发孙 agent。
+#[tokio::test]
+async fn executor_subagent_below_depth_limit_can_spawn_children() {
+    use crate::chat::agent::{AgentRole, SubagentOp, SubagentOutcome};
+
+    let fixture = Fixture::new("depth-allowed");
+    let args = r#"{"role":"explorer","title":"probe","task":"look"}"#.to_string();
+    let script = Script::new(
+        vec![
+            tool_calls(&[("call_spawn", "spawn_agent", &args, 0)], None),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::subagent_returning(SubagentOutcome::Spawned {
+        agent_id: "child".into(),
+        nickname: None,
+        agent_path: Some("/root/turing/curie".into()),
+        role: AgentRole::Explorer,
+        title: "probe".into(),
+        model: None,
+        reasoning_effort: None,
+        fork_context: false,
+        fork_turns: None,
+        max_tokens: None,
+    });
+    let executor = RecordingExecutor::new();
+    let executed = executor.executed.clone();
+    let summary = run_agent_turn(
+        subagent_context(fixture.path(), AgentRole::Executor, 1, 2),
+        host.clone(),
+        executor,
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert!(
+        executed.lock().expect("lock").is_empty(),
+        "控制工具不经文件执行器"
+    );
+    let ops = host.subagent_ops();
+    assert_eq!(ops.len(), 1);
+    assert!(matches!(
+        &ops[0],
+        SubagentOp::Spawn {
+            role: AgentRole::Explorer,
+            ..
+        }
+    ));
+    let items = format!("{:?}", script.items_of(1));
+    assert!(items.contains("/root/turing/curie"), "{items}");
+}
+
+/// 到达深度上限的 executor 子 agent 派发时得到稳定深度错误，且不下发事件层。
+#[tokio::test]
+async fn executor_subagent_at_depth_limit_gets_stable_depth_error() {
+    use crate::chat::agent::{AgentRole, DEPTH_LIMIT_REACHED_CODE};
+
+    let fixture = Fixture::new("depth-blocked");
+    let args = r#"{"role":"explorer","title":"probe","task":"look"}"#.to_string();
+    let script = Script::new(
+        vec![
+            tool_calls(&[("call_spawn", "spawn_agent", &args, 0)], None),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::new();
+    let summary = run_agent_turn(
+        subagent_context(fixture.path(), AgentRole::Executor, 2, 2),
+        host.clone(),
+        RecordingExecutor::new(),
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    let items = format!("{:?}", script.items_of(1));
+    assert!(items.contains(DEPTH_LIMIT_REACHED_CODE), "{items}");
+    assert!(host.subagent_ops().is_empty(), "不得下发派发操作");
+    assert_eq!(
+        host.trace(),
+        vec![
+            HostTrace::Begin("call_spawn".into()),
+            HostTrace::Finish("call_spawn".into(), false),
+        ],
+        "失败结果仍走 begin/finish 落库"
     );
 }

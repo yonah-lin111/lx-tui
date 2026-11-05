@@ -105,9 +105,12 @@ fn spawn_op_with(
     SubagentOp::Spawn {
         role,
         title: title.into(),
+        task_name: None,
         task: task.into(),
         items: Vec::new(),
         fork_context: false,
+        fork_turns: None,
+        max_tokens: None,
         model: model.map(str::to_string),
         reasoning_effort: reasoning_effort.map(str::to_string),
     }
@@ -238,6 +241,7 @@ async fn queued_inputs_drain_in_order_and_require_resume_after_terminal_completi
                 text: "turn 2".into(),
             }],
             interrupt: false,
+            trigger_turn: true,
         },
     )
     .await
@@ -267,6 +271,7 @@ async fn queued_inputs_drain_in_order_and_require_resume_after_terminal_completi
                 text: "turn 2".into(),
             }],
             interrupt: false,
+            trigger_turn: true,
         },
     )
     .await
@@ -320,6 +325,7 @@ async fn queued_inputs_drain_in_order_and_require_resume_after_terminal_completi
                 text: "turn 3".into(),
             }],
             interrupt: false,
+            trigger_turn: true,
         },
     )
     .await
@@ -366,6 +372,7 @@ async fn queued_inputs_drain_in_order_and_require_resume_after_terminal_completi
                 text: "turn 3".into(),
             }],
             interrupt: false,
+            trigger_turn: true,
         },
     )
     .await
@@ -391,7 +398,7 @@ async fn queued_inputs_drain_in_order_and_require_resume_after_terminal_completi
 }
 
 #[tokio::test]
-async fn interrupt_cancels_current_turn_without_report_and_runs_ahead_of_older_queue() {
+async fn interrupt_cancels_current_turn_with_partial_report_and_runs_ahead_of_older_queue() {
     let (fixture, mut state, key, persistence, mut streams, _parent) = setup_parent();
     let SubagentOutcome::Spawned { agent_id, .. } = run_op(
         &mut state,
@@ -420,6 +427,7 @@ async fn interrupt_cancels_current_turn_without_report_and_runs_ahead_of_older_q
                 text: "normal queued".into(),
             }],
             interrupt: false,
+            trigger_turn: true,
         },
     )
     .await
@@ -444,6 +452,7 @@ async fn interrupt_cancels_current_turn_without_report_and_runs_ahead_of_older_q
                 text: "urgent interrupt".into(),
             }],
             interrupt: true,
+            trigger_turn: true,
         },
     )
     .await
@@ -459,7 +468,7 @@ async fn interrupt_cancels_current_turn_without_report_and_runs_ahead_of_older_q
     }
     assert!(*cancel_rx.borrow(), "当前运行轮收到取消信号");
 
-    // 旧轮以 Cancelled 封口：不生成报告，且立即启动 urgent interrupt 输入，保留旧普通队列（剩余 1 条）
+    // 旧轮以 Cancelled 封口：生成半程汇报，且立即启动 urgent interrupt 输入，保留旧普通队列（剩余 1 条）
     finish(
         &mut state,
         &mut streams,
@@ -475,7 +484,15 @@ async fn interrupt_cancels_current_turn_without_report_and_runs_ahead_of_older_q
         .expect("db")
         .pending_reports(fixture.workspace(), &key.session)
         .expect("reports");
-    assert!(reports.is_empty(), "被中断的子轮不生成完成报告");
+    assert_eq!(reports.len(), 1, "被中断的子轮生成半程汇报");
+    let report = crate::chat::agent::SubagentReportView::from_json(&reports[0].report_json)
+        .expect("partial report");
+    assert!(
+        report.body.contains("[Partial report (interrupted)]"),
+        "partial body: {}",
+        report.body
+    );
+    assert_eq!(report.status, "cancelled");
 }
 
 #[tokio::test]
@@ -507,6 +524,7 @@ async fn failed_turn_pauses_queue_until_explicit_resume() {
                 text: "queued after fail".into(),
             }],
             interrupt: false,
+            trigger_turn: true,
         },
     )
     .await
@@ -543,7 +561,7 @@ async fn failed_turn_pauses_queue_until_explicit_resume() {
         &persistence,
         &key,
         Some("c-list"),
-        SubagentOp::List,
+        SubagentOp::List { path_prefix: None },
     )
     .await
     .expect("list");
@@ -596,6 +614,7 @@ async fn image_items_archive_preserve_interleaved_order_and_block_when_archive_m
         SubagentOp::Spawn {
             role: AgentRole::Explorer,
             title: "Visual inspect".into(),
+            task_name: None,
             task: "First".into(),
             items: vec![
                 SubagentInputItem::Text {
@@ -609,6 +628,8 @@ async fn image_items_archive_preserve_interleaved_order_and_block_when_archive_m
                 },
             ],
             fork_context: false,
+            fork_turns: None,
+            max_tokens: None,
             model: None,
             reasoning_effort: None,
         },
@@ -644,6 +665,7 @@ async fn image_items_archive_preserve_interleaved_order_and_block_when_archive_m
                 },
             ],
             interrupt: false,
+            trigger_turn: true,
         },
     )
     .await
@@ -697,6 +719,7 @@ async fn image_items_archive_preserve_interleaved_order_and_block_when_archive_m
                 },
             ],
             interrupt: false,
+            trigger_turn: true,
         },
     )
     .await
@@ -747,7 +770,7 @@ async fn image_items_archive_preserve_interleaved_order_and_block_when_archive_m
         &persistence,
         &key,
         Some("c-list-blocked"),
-        SubagentOp::List,
+        SubagentOp::List { path_prefix: None },
     )
     .await
     .expect("list");
@@ -861,6 +884,7 @@ async fn auto_compact_persists_checkpoint_and_replays_in_subsequent_turn() {
                 text: "post-checkpoint turn 2".into(),
             }],
             interrupt: false,
+            trigger_turn: true,
         },
     )
     .await
@@ -905,16 +929,26 @@ async fn auto_compact_persists_checkpoint_and_replays_in_subsequent_turn() {
         &[crate::db::chat::PersistedInputItem::Text {
             text: "turn 3 question".into(),
         }],
+        &crate::config::subagents::SubagentsSection::default(),
+        super::context::ChildTurnLimits {
+            depth: 1,
+            max_depth: 2,
+            max_tokens: None,
+        },
     )
     .expect("assemble child context");
     assert_eq!(ctx.compact_summary(), Some("compacted child summary"));
+    let items = ctx.items();
+    assert_eq!(items.len(), 3);
     assert_eq!(
-        ctx.items(),
-        &[
-            ModelItem::UserText("post-checkpoint turn 2".into()),
-            ModelItem::AssistantText(String::new()),
-            ModelItem::UserText("turn 3 question".into()),
-        ]
+        items[0],
+        ModelItem::UserText("post-checkpoint turn 2".into())
+    );
+    assert_eq!(items[1], ModelItem::AssistantText(String::new()));
+    assert!(
+        matches!(&items[2], ModelItem::UserText(text)
+            if text.starts_with("Message Type: NEW_TASK") && text.ends_with("turn 3 question")),
+        "follow-up turn must be wrapped in an inter-agent envelope: {items:?}"
     );
 }
 
@@ -984,6 +1018,7 @@ async fn wait_agent_does_not_mistake_previous_completed_turn_for_current_running
                 text: "turn 2".into(),
             }],
             interrupt: false,
+            trigger_turn: true,
         },
     )
     .await
@@ -1040,6 +1075,7 @@ async fn p0_wait_any_does_not_wake_early_between_queued_turns_and_p1_cancel_unbl
                 text: "turn 2".into(),
             }],
             interrupt: false,
+            trigger_turn: true,
         },
     )
     .await
@@ -1152,6 +1188,7 @@ async fn p1_send_input_to_idle_agent_at_concurrency_limit_does_not_leave_orphan_
                 text: "should not persist".into(),
             }],
             interrupt: false,
+            trigger_turn: true,
         },
     )
     .await
@@ -1226,6 +1263,7 @@ async fn resumed_subagent_inherits_updated_parent_pane_model() {
                 text: "turn 2".into(),
             }],
             interrupt: false,
+            trigger_turn: true,
         },
     )
     .await
@@ -1305,7 +1343,7 @@ async fn nicknames_are_unique_and_address_control_tools_case_insensitively() {
     assert_eq!((first_nick, second_nick), ("Turing", "Curie"));
     let (first_child, second_child) = (ctx.child(first_id), ctx.child(second_id));
 
-    let sent = ctx.run("c3", SubagentOp::SendInput { target: first_nick.to_lowercase(), items: vec![text("turn 2")], interrupt: false }).await;
+    let sent = ctx.run("c3", SubagentOp::SendInput { target: first_nick.to_lowercase(), items: vec![text("turn 2")], interrupt: false, trigger_turn: true }).await;
     assert!(matches!(sent, SubagentOutcome::InputAccepted { agent_id, .. } if agent_id == first_id));
     let interrupted = ctx.run("c4", SubagentOp::Interrupt { target: second_nick.to_uppercase() }).await;
     assert!(matches!(
@@ -1336,12 +1374,12 @@ async fn interrupt_agent_keeps_idle_and_pauses_queue_until_send_input_or_resume(
     let spawn = ctx.run("i1", spawn_op(AgentRole::Explorer, "interrupt", "turn 1")).await;
     let agent_id = spawned(&spawn).0.to_string();
     let child = ctx.child(&agent_id);
-    let drop_sub = match ctx.run("i1_drop", SubagentOp::SendInput { target: agent_id.clone(), items: vec![text("q_drop")], interrupt: false }).await {
+    let drop_sub = match ctx.run("i1_drop", SubagentOp::SendInput { target: agent_id.clone(), items: vec![text("q_drop")], interrupt: false, trigger_turn: true }).await {
         SubagentOutcome::InputAccepted { submission_id, .. } => submission_id,
         other => panic!("expected InputAccepted, got {other:?}"),
     };
     for (call_id, body) in [("i2", "q1"), ("i3", "q2")] {
-        ctx.run(call_id, SubagentOp::SendInput { target: agent_id.clone(), items: vec![text(body)], interrupt: false }).await;
+        ctx.run(call_id, SubagentOp::SendInput { target: agent_id.clone(), items: vec![text(body)], interrupt: false, trigger_turn: true }).await;
     }
     let cancel = ctx.streams.subagents.get(&child).expect("handle").cancel.subscribe();
     let interrupted = ctx.run("i4", SubagentOp::Interrupt { target: agent_id.clone() }).await;
@@ -1356,7 +1394,7 @@ async fn interrupt_agent_keeps_idle_and_pauses_queue_until_send_input_or_resume(
     assert!(!ctx.streams.subagents.contains_key(&child), "cancel_input must not bypass interrupt pause");
 
     // 后续 send_input 解除暂停并消费队首旧输入（不跳过队列）。
-    let sent = ctx.run("i5", SubagentOp::SendInput { target: agent_id.clone(), items: vec![text("nudge")], interrupt: false }).await;
+    let sent = ctx.run("i5", SubagentOp::SendInput { target: agent_id.clone(), items: vec![text("nudge")], interrupt: false, trigger_turn: true }).await;
     assert!(matches!(sent, SubagentOutcome::InputAccepted { status, queued_count, .. } if status == "queued" && queued_count == 2));
     assert_eq!(ctx.streams.subagents.get(&child).map(|h| h.task.as_str()), Some("q1"));
     ctx.finish(&child, StopReason::Complete);
@@ -1421,7 +1459,7 @@ async fn custom_role_resumes_after_it_is_removed_from_config() {
     ctx.state.subagents_config.roles.push(crate::config::subagents::CustomRoleConfig {
         name: "reviewer".into(), base_role: crate::config::subagents::BaseRole::Explorer,
         description: "review".into(), system_prompt: "review code".into(), model: None,
-        nickname_candidates: vec!["Ada".into()],
+        nickname_candidates: vec!["Ada".into()], ..Default::default()
     });
     let spawn = ctx.run("r1", spawn_op(role, "custom", "task")).await;
     let (agent_id, nickname) = spawned(&spawn);
@@ -1434,7 +1472,7 @@ async fn custom_role_resumes_after_it_is_removed_from_config() {
     ctx.state.subagents_config.roles.clear();
     let resumed = ctx.run("r2", SubagentOp::Resume { id: "ada".into() }).await;
     assert_eq!(resumed, SubagentOutcome::Resumed { agent_id: agent_id.clone(), status: "idle".into(), queued_count: 0 });
-    let sent = ctx.run("r3", SubagentOp::SendInput { target: "ADA".into(), items: vec![text("again")], interrupt: false }).await;
+    let sent = ctx.run("r3", SubagentOp::SendInput { target: "ADA".into(), items: vec![text("again")], interrupt: false, trigger_turn: true }).await;
     let SubagentOutcome::InputAccepted { agent_id: resumed_id, status, .. } = sent else { panic!("expected input accepted") };
     assert_eq!(resumed_id, agent_id);
     assert_eq!(status, "running");

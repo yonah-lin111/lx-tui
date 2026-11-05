@@ -24,6 +24,7 @@ pub mod rewind;
 mod session;
 mod slash;
 mod subagent;
+mod subagent_cards;
 mod task_page;
 pub mod title;
 pub mod user_shell;
@@ -69,8 +70,8 @@ pub use subagent::{
     apply_deltas as apply_subagent_deltas, on_report_batch_committed, on_subagent_auto_compact,
     on_subagent_delta, on_subagent_finished, on_subagent_loaded, on_subagent_started,
     on_subagent_tool_pending, on_subagent_tool_running, on_subagent_tool_settled, open_agent_page,
-    refresh_subagent_cards, scroll_agents_detail, select_task_agent, set_subagent_list,
-    set_task_agents_scroll, stop_selected_subagent, toggle_agent_card,
+    refresh_subagent_cards, restore_selected_task_agent, scroll_agents_detail, select_task_agent,
+    set_subagent_list, set_task_agents_scroll, stop_selected_subagent, toggle_agent_card,
 };
 pub use task_page::{
     close_task_page, on_process_listed, on_task_output, open_task_page, open_task_page_at,

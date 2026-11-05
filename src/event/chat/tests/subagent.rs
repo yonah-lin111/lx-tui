@@ -3,12 +3,12 @@
 
 use super::*;
 use crate::chat::agent::{
-    AgentRole, LIMIT_REACHED_CODE, MAX_CONCURRENT_SUBAGENTS, NOT_FOUND_CODE, SubagentOp,
-    SubagentOutcome,
+    AgentRole, LIMIT_REACHED_CODE, MAX_CONCURRENT_SUBAGENTS, NOT_FOUND_CODE, SubagentInputItem,
+    SubagentOp, SubagentOutcome,
 };
 
 /// 带父会话的事件层 fixture：冻结模型与工作区已登记，事件通道常驻。
-fn fixture_with_parent() -> (
+pub(super) fn fixture_with_parent() -> (
     Fixture,
     AppState,
     RequestKey,
@@ -46,7 +46,7 @@ fn fixture_with_parent() -> (
 }
 
 /// 执行一次控制操作并等待回执。
-async fn op(
+pub(super) async fn op(
     state: &mut AppState,
     streams: &mut ChatStreams,
     persistence: &Persistence,
@@ -65,7 +65,7 @@ async fn op(
     receiver.await.expect("reply")
 }
 
-async fn spawn_explorer(
+pub(super) async fn spawn_explorer(
     state: &mut AppState,
     streams: &mut ChatStreams,
     persistence: &Persistence,
@@ -80,9 +80,12 @@ async fn spawn_explorer(
         SubagentOp::Spawn {
             role: AgentRole::Explorer,
             title: "test title".into(),
+            task_name: None,
             task: task.into(),
             items: Vec::new(),
             fork_context: false,
+            fork_turns: None,
+            max_tokens: None,
             model: None,
             reasoning_effort: None,
         },
@@ -187,9 +190,12 @@ async fn fourth_spawn_is_rejected_and_earlier_runs_stay_running() {
         SubagentOp::Spawn {
             role: AgentRole::Executor,
             title: "too many".into(),
+            task_name: None,
             task: "one too many".into(),
             items: Vec::new(),
             fork_context: false,
+            fork_turns: None,
+            max_tokens: None,
             model: None,
             reasoning_effort: None,
         },
@@ -224,6 +230,7 @@ async fn wait_claims_the_report_exactly_once() {
         role: AgentRole::Explorer,
         status: "completed".into(),
         files_changed: 1,
+        changed_paths: Vec::new(),
         duration_ms: Some(20),
         body: "the answer".into(),
         delivered_at_ms: 1,
@@ -306,6 +313,7 @@ async fn idle_parent_batches_pending_reports_into_one_turn() {
             role: AgentRole::Explorer,
             status: "completed".into(),
             files_changed: 0,
+            changed_paths: Vec::new(),
             duration_ms: Some(20),
             body: body.into(),
             delivered_at_ms: 1,
@@ -426,6 +434,7 @@ async fn queued_user_chat_wins_before_report_drain() {
         role: AgentRole::Explorer,
         status: "completed".into(),
         files_changed: 0,
+        changed_paths: Vec::new(),
         duration_ms: Some(20),
         body: "answer".into(),
         delivered_at_ms: 1,
@@ -580,7 +589,7 @@ async fn wait_all_auto_continues_instead_of_returning_timeout() {
         &mut streams,
         &persistence,
         key.clone(),
-        Vec::new(),
+        vec![agent_id.clone()],
         true,
         true,
         crate::chat::agent::WaitMode::All,
@@ -869,6 +878,7 @@ async fn selected_cancel_only_stops_the_target_child() {
         &mut streams,
         &parent,
         Some(&first),
+        None,
     ));
     assert!(*first_cancel.borrow(), "选中的子 agent 收到取消");
     assert!(!*second_cancel.borrow(), "其他 running 子 agent 继续");
@@ -886,6 +896,9 @@ fn deleting_the_parent_session_cancels_live_children() {
             parent: key.clone(),
             agent_id: "sub-agent".into(),
             nickname: None,
+            agent_path: "/root/agent".into(),
+            root_session: parent.clone(),
+            depth: 1,
             child_session_id: "sess-child".into(),
             child_assistant_id: "msg-child".into(),
             child_user_message_id: "msg-user".into(),
@@ -896,6 +909,8 @@ fn deleting_the_parent_session_cancels_live_children() {
             done,
             status: crate::event::chat::subagent::STATUS_RUNNING,
             started_at_ms: 0,
+            max_tokens: None,
+            closed_without_report: false,
             chat: crate::app::state::LxChat::new(),
             workspace: fixture.workspace().to_path_buf(),
         },
@@ -910,6 +925,7 @@ fn deleting_the_parent_session_cancels_live_children() {
     assert!(crate::event::chat::subagent::cancel_for_session(
         &mut streams,
         &parent,
+        None,
         None,
     ));
     assert!(cancel_rx.has_changed().expect("receiver alive"));
@@ -948,4 +964,537 @@ fn wait_timeout_is_not_an_error_and_carries_no_report() {
     assert!(timed_out);
     assert_eq!(agents[0].status, "running");
     assert_eq!(agents[0].report, None, "超时不带报告");
+}
+
+/// 派发一个任意角色的子 agent（多级树测试用）。
+async fn spawn_agent(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+    key: &RequestKey,
+    role: AgentRole,
+    title: &str,
+    task_name: Option<&str>,
+) -> (String, String, String) {
+    let outcome = op(
+        state,
+        streams,
+        persistence,
+        key,
+        SubagentOp::Spawn {
+            role,
+            title: title.into(),
+            task_name: task_name.map(str::to_string),
+            task: format!("{title} task"),
+            items: Vec::new(),
+            fork_context: false,
+            fork_turns: None,
+            max_tokens: None,
+            model: None,
+            reasoning_effort: None,
+        },
+    )
+    .await
+    .expect("spawn");
+    let SubagentOutcome::Spawned {
+        agent_id,
+        agent_path: Some(agent_path),
+        ..
+    } = outcome
+    else {
+        panic!("expected spawned");
+    };
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("subagent handle")
+        .child_session_id
+        .clone();
+    (agent_id, agent_path, child_session)
+}
+
+fn child_key(parent: &RequestKey, child_session: &str) -> RequestKey {
+    RequestKey {
+        pane: parent.pane,
+        session: child_session.to_string(),
+        generation: parent.generation,
+    }
+}
+
+fn finish_child(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+    key: &RequestKey,
+    child_session: &str,
+    reason: crate::chat::events::StopReason,
+) {
+    crate::event::chat::finish_subagent(
+        state,
+        streams,
+        persistence,
+        child_key(key, child_session),
+        reason,
+        crate::db::chat::Usage::default(),
+    );
+}
+
+#[tokio::test]
+async fn trigger_turn_false_only_queues_and_never_wakes_an_idle_agent() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let (agent_id, _path, child) = spawn_agent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        AgentRole::Explorer,
+        "queue",
+        None,
+    )
+    .await;
+    finish_child(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        &child,
+        crate::chat::events::StopReason::Complete,
+    );
+    op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::Resume {
+            id: agent_id.clone(),
+        },
+    )
+    .await
+    .expect("resume");
+
+    let queued = op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::SendInput {
+            target: agent_id.clone(),
+            items: vec![SubagentInputItem::Text {
+                text: "deferred".into(),
+            }],
+            interrupt: false,
+            trigger_turn: false,
+        },
+    )
+    .await
+    .expect("send deferred");
+    let SubagentOutcome::InputAccepted {
+        status,
+        queued_count,
+        trigger_turn,
+        ..
+    } = queued
+    else {
+        panic!("expected input accepted");
+    };
+    assert_eq!(status, "idle", "trigger_turn=false 不唤醒 idle 子 agent");
+    assert_eq!(queued_count, 1);
+    assert!(!trigger_turn);
+    assert!(
+        !streams.subagents.contains_key(&child),
+        "仅入队，不启动新轮次"
+    );
+
+    op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::Resume {
+            id: agent_id.clone(),
+        },
+    )
+    .await
+    .expect("resume again");
+    assert_eq!(
+        streams
+            .subagents
+            .get(&child)
+            .map(|handle| handle.task.as_str()),
+        Some("deferred")
+    );
+}
+
+#[tokio::test]
+async fn interrupt_agent_saves_and_attaches_a_partial_report() {
+    let (fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let (agent_id, _path, child) = spawn_agent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        AgentRole::Executor,
+        "partial",
+        None,
+    )
+    .await;
+    op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::Interrupt {
+            target: agent_id.clone(),
+        },
+    )
+    .await
+    .expect("interrupt");
+    finish_child(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        &child,
+        crate::chat::events::StopReason::Cancelled,
+    );
+
+    assert!(!streams.subagents.contains_key(&child));
+    assert!(streams.resumed_subagents.contains(&agent_id));
+    assert!(streams.paused_by_interrupt.contains(&agent_id));
+    let reports = persistence
+        .database()
+        .expect("db")
+        .pending_reports(fixture.workspace(), &key.session)
+        .expect("reports");
+    assert_eq!(reports.len(), 1, "interrupt_agent 生成半程汇报");
+    let view = crate::chat::agent::SubagentReportView::from_json(&reports[0].report_json)
+        .expect("partial report");
+    assert!(
+        view.body.contains("[Partial report (interrupted)]"),
+        "partial body: {}",
+        view.body
+    );
+    let run = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent(&agent_id)
+        .expect("run");
+    assert_eq!(run.status, "idle");
+    assert!(run.report.is_some(), "半程汇报同时挂到面板 run 上");
+}
+
+#[tokio::test]
+async fn nested_spawn_allocates_paths_and_enforces_the_depth_limit() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    state.subagents_config.max_depth = 2;
+    let (_parent_id, parent_path, child) = spawn_agent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        AgentRole::Executor,
+        "coordinator",
+        None,
+    )
+    .await;
+    assert_eq!(parent_path, "/root/turing");
+
+    let child_request = child_key(&key, &child);
+    let (grand_id, grand_path, grand_session) = spawn_agent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &child_request,
+        AgentRole::Executor,
+        "leaf",
+        Some("curie"),
+    )
+    .await;
+    assert_eq!(grand_path, "/root/turing/curie");
+    assert_eq!(
+        streams
+            .subagents
+            .values()
+            .find(|handle| handle.agent_id == grand_id)
+            .map(|handle| handle.depth),
+        Some(2)
+    );
+
+    // 到达 max_depth 后再派发必须返回稳定深度错误。
+    let grand_request = child_key(&key, &grand_session);
+    let error = op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &grand_request,
+        SubagentOp::Spawn {
+            role: AgentRole::Executor,
+            title: "too deep".into(),
+            task_name: None,
+            task: "leaf task".into(),
+            items: Vec::new(),
+            fork_context: false,
+            fork_turns: None,
+            max_tokens: None,
+            model: None,
+            reasoning_effort: None,
+        },
+    )
+    .await
+    .expect_err("depth limit");
+    assert_eq!(
+        error,
+        HostError::Failed {
+            code: crate::chat::agent::DEPTH_LIMIT_REACHED_CODE.to_string()
+        }
+    );
+
+    let listed = op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::List {
+            path_prefix: Some("turing/curie".into()),
+        },
+    )
+    .await
+    .expect("list");
+    let SubagentOutcome::Listed { agents } = listed else {
+        panic!("expected listed");
+    };
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].agent_path.as_deref(), Some("/root/turing/curie"));
+}
+
+#[tokio::test]
+async fn nested_executor_wait_all_only_waits_for_descendants_not_itself() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let (executor_id, _executor_path, executor_session) = spawn_agent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        AgentRole::Executor,
+        "coordinator",
+        None,
+    )
+    .await;
+    let executor_request = child_key(&key, &executor_session);
+    let (grandchild_id, _grandchild_path, _grandchild_session) = spawn_agent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &executor_request,
+        AgentRole::Executor,
+        "leaf",
+        Some("curie"),
+    )
+    .await;
+    let (events, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
+    streams.set_event_sender(events);
+    let (reply, reply_rx) = tokio::sync::oneshot::channel();
+    crate::event::chat::subagent::handle_subagent_op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        executor_request,
+        SubagentOp::Wait {
+            targets: Vec::new(),
+            mode: crate::chat::agent::WaitMode::All,
+            timeout_ms: 20,
+        },
+        reply,
+    );
+    drop(reply_rx);
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv())
+        .await
+        .expect("wait_ready event")
+        .expect("event channel");
+    let AppEvent::SubagentWaitReady { targets, .. } = event else {
+        panic!("expected wait event, got {event:?}");
+    };
+    assert_eq!(targets, vec![grandchild_id]);
+    assert!(
+        !targets.contains(&executor_id),
+        "wait_for=all 不得把调用者自身算作目标"
+    );
+}
+
+#[tokio::test]
+async fn multi_step_token_budget_exceeded_marks_subagent_idle_with_partial_report() {
+    let (fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let outcome = op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::Spawn {
+            role: AgentRole::Executor,
+            title: "budgeted".into(),
+            task_name: None,
+            task: "long task".into(),
+            items: Vec::new(),
+            fork_context: false,
+            fork_turns: None,
+            max_tokens: Some(10_000),
+            model: None,
+            reasoning_effort: None,
+        },
+    )
+    .await
+    .expect("spawn");
+    let SubagentOutcome::Spawned { agent_id, .. } = outcome else {
+        panic!("expected spawned");
+    };
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("subagent handle")
+        .child_session_id
+        .clone();
+    assert!(handle_net_event(
+        &mut state,
+        &mut streams,
+        &persistence,
+        ChatNetEvent::Delta {
+            key: child_key(&key, &child_session),
+            deltas: vec![ChatDelta::Part(crate::chat::events::PartDelta {
+                kind: PartKind::Text,
+                text: "partial work so far".into(),
+                metadata: None,
+            })],
+        },
+    ));
+    // 多步累计预算耗尽：单步 usage 未必达到上限，只有 `budget_exceeded` 标志能区分。
+    assert!(crate::event::chat::finish_subagent_with_billing(
+        &mut state,
+        &mut streams,
+        &persistence,
+        child_key(&key, &child_session),
+        crate::chat::events::StopReason::Cancelled,
+        true,
+        crate::db::chat::Usage::default(),
+        crate::db::chat::Usage::default(),
+    ));
+    let run = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent(&agent_id)
+        .expect("run");
+    assert_eq!(run.status, "idle", "预算熔断保持 idle 而不是 cancelled");
+    let reports = persistence
+        .database()
+        .expect("db")
+        .pending_reports(fixture.workspace(), &key.session)
+        .expect("reports");
+    let view = crate::chat::agent::SubagentReportView::from_json(&reports[0].report_json)
+        .expect("partial report");
+    assert!(
+        view.body.starts_with("[Partial report (budget_exceeded)]"),
+        "partial body: {}",
+        view.body
+    );
+    assert!(
+        view.body.contains("partial work so far"),
+        "非空正文也要补半程汇报头: {}",
+        view.body
+    );
+}
+
+#[tokio::test]
+async fn close_agent_cascades_to_descendants_and_suppresses_reports() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    state.subagents_config.max_depth = 2;
+    let (parent_id, parent_path, child) = spawn_agent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        AgentRole::Executor,
+        "coordinator",
+        None,
+    )
+    .await;
+    let child_request = child_key(&key, &child);
+    let (grand_id, _grand_path, _grand_session) = spawn_agent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &child_request,
+        AgentRole::Executor,
+        "leaf",
+        Some("curie"),
+    )
+    .await;
+
+    let parent_cancel = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == parent_id)
+        .expect("parent handle")
+        .cancel
+        .subscribe();
+    let grand_cancel = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == grand_id)
+        .expect("grandchild handle")
+        .cancel
+        .subscribe();
+
+    let closed = op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::Close {
+            target: parent_path,
+        },
+    )
+    .await
+    .expect("close");
+    assert!(matches!(
+        closed,
+        SubagentOutcome::Closed { agent_id, previous_status }
+            if agent_id == parent_id && previous_status == "running"
+    ));
+    assert!(*parent_cancel.borrow(), "父 agent 收到取消信号");
+    assert!(*grand_cancel.borrow(), "后代 agent 一并级联取消");
+    assert!(
+        streams
+            .subagents
+            .values()
+            .filter(|handle| handle.agent_id == parent_id || handle.agent_id == grand_id)
+            .all(|handle| handle.closed_without_report)
+    );
+
+    let error = op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::SendInput {
+            target: grand_id,
+            items: vec![SubagentInputItem::Text {
+                text: "again".into(),
+            }],
+            interrupt: false,
+            trigger_turn: true,
+        },
+    )
+    .await
+    .expect_err("closed agent is not active");
+    assert_eq!(
+        error,
+        HostError::Failed {
+            code: crate::chat::agent::NOT_ACTIVE_CODE.to_string()
+        }
+    );
 }

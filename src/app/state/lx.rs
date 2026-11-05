@@ -30,7 +30,7 @@ use history::HistoryBrowse;
 pub(crate) use history::HistoryMove;
 pub use shell::LxInputMode;
 
-pub use agent::{AgentsState, SubagentReportView, SubagentRun};
+pub use agent::{AgentsState, MAX_RESIDENT_SUBAGENT_CHATS, SubagentReportView, SubagentRun};
 pub use ask::{AskEditor, AskHit, AskState, AskWheelZone};
 pub use chat::SHELL_SLOT;
 pub use chat::{
@@ -53,7 +53,7 @@ pub use slash::{
     ForkEntry, ForkPanel, HistoryEntry, HistoryPanel, ModelCandidate, ModelPicker,
     ModelPickerStage, PanelWindow, SlashCommand, SlashEntry, SlashPanel,
 };
-pub use task::{ProcessEntry, TaskPage, TaskTab};
+pub use task::{AgentFilter, ProcessEntry, TaskPage, TaskTab};
 
 /// lx 页三个入口：原生 agent、混合 agent、自动化 agent。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

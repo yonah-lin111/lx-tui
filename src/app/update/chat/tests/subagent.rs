@@ -2,6 +2,10 @@
 
 use super::*;
 use crate::app::state::lx::agent::{AgentsState, SubagentRun, seed_chat};
+use crate::app::state::{
+    AssistantStepView, ChatMessageView, SubagentDetailView, ToolCallView, ToolDetailView,
+    ToolStatus,
+};
 use crate::app::update;
 use crate::chat::agent::{AgentRole, SubagentReportView};
 use crate::chat::events::PartDelta;
@@ -11,6 +15,7 @@ fn run(child_session: &str, agent_id: &str, role: AgentRole) -> SubagentRun {
     SubagentRun::from_record(&SubagentRecord {
         agent_id: agent_id.into(),
         nickname: None,
+        agent_path: "/root/agent".into(),
         child_session_id: child_session.into(),
         parent_session_id: "sess-parent".into(),
         spawn_message_id: None,
@@ -82,6 +87,7 @@ fn set_subagent_list_is_idempotent_and_keeps_local_runs() {
     let record = SubagentRecord {
         agent_id: "sub-a".into(),
         nickname: None,
+        agent_path: "/root/agent".into(),
         child_session_id: "sess-a".into(),
         parent_session_id: "sess-parent".into(),
         spawn_message_id: None,
@@ -101,6 +107,7 @@ fn set_subagent_list_is_idempotent_and_keeps_local_runs() {
                 role: AgentRole::Explorer,
                 status: "completed".into(),
                 files_changed: 1,
+                changed_paths: Vec::new(),
                 duration_ms: Some(1_000),
                 body: "done".into(),
                 delivered_at_ms: 2_000,
@@ -287,6 +294,7 @@ fn stale_subagent_replies_are_ignored_by_session() {
     let record = SubagentRecord {
         agent_id: "sub-a".into(),
         nickname: None,
+        agent_path: "/root/agent".into(),
         child_session_id: "sess-a".into(),
         parent_session_id: "sess-a-parent".into(),
         spawn_message_id: None,
@@ -636,4 +644,500 @@ fn finished_run_records_status_and_tokens() {
     assert_eq!(message.status, "complete", "统计行只在终态消息上出现");
     assert_eq!(message.input_tokens, Some(7));
     assert_eq!(message.output_tokens, Some(3));
+}
+
+/// 父消息里的一张委派工具卡（`spawn_agent` / `wait_agent`）。
+fn parent_tool_message(
+    name: &str,
+    detail: SubagentDetailView,
+    status: ToolStatus,
+) -> ChatMessageView {
+    ChatMessageView {
+        id: format!("parent-{name}"),
+        sequence: 0,
+        kind: "chat".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        shell: None,
+        steps: vec![AssistantStepView::Tool {
+            position: 0,
+            call: ToolCallView {
+                call_id: format!("call-{name}"),
+                name: name.into(),
+                position: 0,
+                arguments_json: "{}".into(),
+                status,
+                summary: None,
+                error: None,
+                result_json: None,
+                detail: Some(Box::new(ToolDetailView::Subagent(detail))),
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+        reports: Vec::new(),
+        attachments: Vec::new(),
+    }
+}
+
+/// 取父消息里第一张委派卡片的详情视图。
+fn first_subagent_view(state: &AppState, pane: PaneId) -> SubagentDetailView {
+    state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .iter()
+        .flat_map(|message| &message.steps)
+        .find_map(|step| match step {
+            AssistantStepView::Tool { call, .. } => match call.detail.as_deref() {
+                Some(ToolDetailView::Subagent(view)) => Some(view.clone()),
+                _ => None,
+            },
+            AssistantStepView::Part { .. } => None,
+        })
+        .expect("subagent detail")
+}
+
+#[test]
+fn spawn_card_backfills_agent_path_and_live_activity() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some("sess-parent".into());
+    }
+    let mut started = run("sess-a", "sub-a", AgentRole::Executor);
+    started.agent_path = "/root/turing".into();
+    seed_chat(&mut started, key(pane, "sess-a"), "msg-a");
+    started
+        .chat
+        .messages
+        .last_mut()
+        .expect("assistant")
+        .steps
+        .push(AssistantStepView::Tool {
+            position: 0,
+            call: ToolCallView {
+                call_id: "call-exec".into(),
+                name: "exec_command".into(),
+                position: 0,
+                arguments_json: r#"{"command":"cargo test --all\n--nocapture"}"#.into(),
+                status: ToolStatus::Running,
+                summary: None,
+                error: None,
+                result_json: None,
+                detail: None,
+            },
+        });
+    assert!(update::on_subagent_started(&mut state, pane, started));
+    let mut detail = SubagentDetailView::from_arguments(
+        "spawn_agent",
+        r#"{"role":"executor","task":"run tests","title":"run tests"}"#,
+    )
+    .expect("spawn detail");
+    detail.agent_id = Some("sub-a".into());
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .push(parent_tool_message(
+            "spawn_agent",
+            detail,
+            ToolStatus::Completed,
+        ));
+
+    assert!(update::refresh_subagent_cards(&mut state, pane));
+    let view = first_subagent_view(&state, pane);
+    assert_eq!(view.agent_path.as_deref(), Some("/root/turing"));
+    assert_eq!(view.live_activity.as_deref(), Some("$ cargo test --all"));
+}
+
+#[test]
+fn wait_all_card_tracks_every_running_subagent() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some("sess-parent".into());
+    }
+    let mut first = run("sess-a", "sub-a", AgentRole::Explorer);
+    first.agent_path = "/root/turing".into();
+    let mut second = run("sess-b", "sub-b", AgentRole::Executor);
+    second.agent_path = "/root/turing/curie".into();
+    assert!(update::on_subagent_started(&mut state, pane, first));
+    assert!(update::on_subagent_started(&mut state, pane, second));
+    let detail = SubagentDetailView::from_arguments("wait_agent", "{}").expect("wait detail");
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .push(parent_tool_message(
+            "wait_agent",
+            detail,
+            ToolStatus::Running,
+        ));
+
+    assert!(update::refresh_subagent_cards(&mut state, pane));
+    let view = first_subagent_view(&state, pane);
+    assert!(view.all, "空 targets 表示等待全部");
+    assert_eq!(view.agents.len(), 2, "逐目标回填而不是只画 All");
+    assert_eq!(view.agents[0].agent_path.as_deref(), Some("/root/turing"));
+    assert_eq!(
+        view.agents[1].agent_path.as_deref(),
+        Some("/root/turing/curie")
+    );
+    assert!(view.agents.iter().all(|agent| agent.status == "running"));
+}
+
+#[test]
+fn wait_targets_match_agent_path() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some("sess-parent".into());
+    }
+    let mut first = run("sess-a", "sub-a", AgentRole::Explorer);
+    first.agent_path = "/root/turing".into();
+    let mut second = run("sess-b", "sub-b", AgentRole::Executor);
+    second.agent_path = "/root/curie".into();
+    assert!(update::on_subagent_started(&mut state, pane, first));
+    assert!(update::on_subagent_started(&mut state, pane, second));
+    let detail = SubagentDetailView::from_arguments("wait_agent", r#"{"targets":["/root/curie"]}"#)
+        .expect("wait detail");
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .push(parent_tool_message(
+            "wait_agent",
+            detail,
+            ToolStatus::Running,
+        ));
+
+    assert!(update::refresh_subagent_cards(&mut state, pane));
+    let view = first_subagent_view(&state, pane);
+    assert_eq!(view.agents.len(), 1);
+    assert_eq!(view.agents[0].agent_id, "sub-b");
+}
+
+#[test]
+fn depth_two_spawn_matches_inner_parent_session_and_sorts_tree() {
+    use crate::app::state::{TaskPage, TaskTab};
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-parent".into());
+
+    let mut first = run("sess-a", "sub-a", AgentRole::Executor);
+    first.agent_path = "/root/a".into();
+    let mut sibling = run("sess-b", "sub-b", AgentRole::Executor);
+    sibling.agent_path = "/root/b".into();
+    assert!(update::on_subagent_started(&mut state, pane, first));
+    assert!(update::on_subagent_started(&mut state, pane, sibling));
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.task = Some(TaskPage {
+            tab: TaskTab::Agents,
+            ..TaskPage::default()
+        });
+        target.lx.task.as_mut().expect("task").agents_window.active = 1;
+    }
+
+    let mut grandchild = run("sess-c", "sub-c", AgentRole::Explorer);
+    grandchild.agent_path = "/root/a/c".into();
+    grandchild.parent_session_id = "sess-a".into();
+    assert!(
+        update::on_subagent_started(&mut state, pane, grandchild),
+        "孙 agent 的父会话是 depth-1 子会话"
+    );
+
+    let target = state.pane_anywhere(pane).expect("pane");
+    let order: Vec<&str> = target
+        .lx
+        .agents
+        .runs
+        .iter()
+        .map(|run| run.agent_id.as_str())
+        .collect();
+    assert_eq!(order, ["sub-a", "sub-c", "sub-b"], "树形前序");
+    let page = target.lx.task.as_ref().expect("task");
+    assert_eq!(
+        target.lx.agents.runs[page.agents_window.active].agent_id, "sub-b",
+        "重排后高亮仍指向原 agent"
+    );
+}
+
+/// 已加载的终态 run（LRU 回收测试用）。
+fn completed_run(
+    child_session: &str,
+    agent_id: &str,
+    completed_ms: i64,
+    last_accessed_ms: i64,
+) -> SubagentRun {
+    let mut run = run(child_session, agent_id, AgentRole::Explorer);
+    run.status = "completed".into();
+    run.completed_at_ms = Some(completed_ms);
+    run.loaded = true;
+    run.chat.session_id = Some(child_session.into());
+    run.last_accessed_ms = last_accessed_ms;
+    run
+}
+
+#[test]
+fn idle_chat_lru_evicts_oldest_and_protects_running_and_selected() {
+    use crate::app::state::lx::agent::MAX_RESIDENT_SUBAGENT_CHATS;
+
+    assert_eq!(MAX_RESIDENT_SUBAGENT_CHATS, 6);
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-parent".into());
+
+    let mut runs: Vec<SubagentRun> = (0..8)
+        .map(|index| {
+            completed_run(
+                &format!("sess-{index}"),
+                &format!("sub-{index}"),
+                1_000 + index,
+                index,
+            )
+        })
+        .collect();
+    let mut running = run("sess-running", "sub-running", AgentRole::Executor);
+    running.loaded = true;
+    running.last_accessed_ms = -1;
+    runs.push(running);
+    state.pane_mut_anywhere(pane).expect("pane").lx.agents.runs = runs;
+
+    let evicted = state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .evict_excess_idle_chats(Some("sub-1"));
+    assert_eq!(evicted, ["sub-0", "sub-2"], "最久未访问的空闲会话先卸载");
+    let agents = &state.pane_anywhere(pane).expect("pane").lx.agents;
+    assert_eq!(
+        agents
+            .runs
+            .iter()
+            .filter(|run| !run.is_running() && run.loaded)
+            .count(),
+        MAX_RESIDENT_SUBAGENT_CHATS,
+        "驻留数收敛到上限"
+    );
+    assert!(
+        agents.by_agent("sub-running").expect("running").loaded,
+        "运行中不卸载"
+    );
+    assert!(
+        agents.by_agent("sub-1").expect("selected").loaded,
+        "选中项受保护"
+    );
+    assert!(!agents.by_agent("sub-0").expect("evicted").loaded);
+    assert!(
+        agents
+            .by_agent("sub-0")
+            .expect("evicted")
+            .chat
+            .session_id
+            .is_none(),
+        "内存消息树已清空"
+    );
+}
+
+#[test]
+fn reselecting_an_evicted_run_requests_a_lazy_load() {
+    use crate::app::state::{TaskPage, TaskTab};
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-parent".into());
+    let runs: Vec<SubagentRun> = (0..7)
+        .map(|index| {
+            completed_run(
+                &format!("sess-{index}"),
+                &format!("sub-{index}"),
+                1_000 + index,
+                index,
+            )
+        })
+        .collect();
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.lx.agents.runs = runs;
+    let evicted = target.lx.agents.evict_excess_idle_chats(None);
+    assert_eq!(evicted, ["sub-0"], "只卸载最旧的一条");
+    target.lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        ..TaskPage::default()
+    });
+    state.effects.clear();
+
+    assert!(update::select_task_agent(&mut state, pane, 0));
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::LoadSubagentSession { pane: p, agent_id, child_session }
+                if *p == pane && agent_id == "sub-0" && child_session == "sess-0"
+        )),
+        "重新选中已卸载 run 时请求懒加载：{:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn subagent_loaded_and_finished_trigger_idle_eviction() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-parent".into());
+    let mut runs: Vec<SubagentRun> = (0..7)
+        .map(|index| {
+            completed_run(
+                &format!("sess-{index}"),
+                &format!("sub-{index}"),
+                1_000 + index,
+                index,
+            )
+        })
+        .collect();
+    let mut pending = run("sess-target", "sub-target", AgentRole::Explorer);
+    pending.status = "completed".into();
+    pending.completed_at_ms = Some(2_000);
+    pending.loaded = false;
+    runs.push(pending);
+    state.pane_mut_anywhere(pane).expect("pane").lx.agents.runs = runs;
+
+    assert!(update::on_subagent_loaded(
+        &mut state,
+        pane,
+        "sub-target",
+        &[]
+    ));
+    let agents = &state.pane_anywhere(pane).expect("pane").lx.agents;
+    assert!(agents.by_agent("sub-target").expect("target").loaded);
+    assert_eq!(
+        agents
+            .runs
+            .iter()
+            .filter(|run| !run.is_running() && run.loaded)
+            .count(),
+        6,
+        "加载完成后自动回收超限会话"
+    );
+
+    let mut running = run("sess-running", "sub-running", AgentRole::Executor);
+    running.loaded = true;
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .runs
+        .push(running);
+    assert!(update::on_subagent_finished(
+        &mut state,
+        "sess-running",
+        "completed",
+        None,
+        crate::db::chat::Usage::default(),
+    ));
+    let agents = &state.pane_anywhere(pane).expect("pane").lx.agents;
+    assert!(
+        agents.by_agent("sub-running").expect("finished").loaded,
+        "刚结束的会话视为最近访问，不立即卸载"
+    );
+    assert_eq!(
+        agents
+            .runs
+            .iter()
+            .filter(|run| !run.is_running() && run.loaded)
+            .count(),
+        6,
+        "终态后同样回收超限会话"
+    );
+}
+
+#[test]
+fn refresh_subagent_cards_updates_nested_spawn_cards() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-parent".into());
+
+    let mut parent = run("sess-a", "sub-a", AgentRole::Executor);
+    parent.agent_path = "/root/a".into();
+    let mut detail = SubagentDetailView::from_arguments(
+        "spawn_agent",
+        r#"{"role":"explorer","task":"scan","title":"scan"}"#,
+    )
+    .expect("spawn detail");
+    detail.agent_id = Some("sub-c".into());
+    parent.chat.messages.push(parent_tool_message(
+        "spawn_agent",
+        detail,
+        ToolStatus::Completed,
+    ));
+    assert!(update::on_subagent_started(&mut state, pane, parent));
+
+    let mut child = run("sess-c", "sub-c", AgentRole::Explorer);
+    child.agent_path = "/root/a/c".into();
+    child.parent_session_id = "sess-a".into();
+    child.title = "scan".into();
+    assert!(update::on_subagent_started(&mut state, pane, child));
+
+    assert!(update::refresh_subagent_cards(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
+    let parent = target.lx.agents.by_agent("sub-a").expect("parent run");
+    let view = parent
+        .chat
+        .messages
+        .iter()
+        .flat_map(|message| &message.steps)
+        .find_map(|step| match step {
+            AssistantStepView::Tool { call, .. } => match call.detail.as_deref() {
+                Some(ToolDetailView::Subagent(view)) => Some(view.clone()),
+                _ => None,
+            },
+            AssistantStepView::Part { .. } => None,
+        })
+        .expect("nested spawn detail");
+    assert_eq!(view.agent_status.as_deref(), Some("running"));
+    assert_eq!(view.agent_path.as_deref(), Some("/root/a/c"));
 }

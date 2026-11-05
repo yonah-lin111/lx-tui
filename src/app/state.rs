@@ -26,19 +26,19 @@ pub mod workspace_history;
 
 pub use lx::LxInputMode;
 pub use lx::{
-    AgentsState, AskAnsweredView, AskDetailView, AskEditor, AskHit, AskState, AskWheelZone,
-    AssistantStepView, CardSection, CardTarget, ChatMessageView, ChatPartView, CommandView,
-    CompactNoticeView, DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView,
+    AgentFilter, AgentsState, AskAnsweredView, AskDetailView, AskEditor, AskHit, AskState,
+    AskWheelZone, AssistantStepView, CardSection, CardTarget, ChatMessageView, ChatPartView,
+    CommandView, CompactNoticeView, DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView,
     FileDiffView, ForkEntry, ForkPanel, FrozenModel, HistoryEntry, HistoryPanel, InputHintLevel,
-    InteractionAction, Lx, LxChat, LxCompact, LxEntry, LxModelSwitch, McpDetailView, McpImageView,
-    ModelCandidate, ModelPicker, ModelPickerStage, ModelSwitchNoticeView, ModelsSnapshot,
-    PanelWindow, PendingShell, PlanSnapshotView, PlanStepView, ProcessEntry,
-    ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey, RequestState,
-    RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindTarget, RewindTargetKind,
-    SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand, SlashEntry, SlashPanel,
-    SnapshotState, StartupCount, StartupCounts, SubagentDetailView, SubagentReportView,
-    SubagentRun, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary,
-    UserShellView, WebSearchDetailView,
+    InteractionAction, Lx, LxChat, LxCompact, LxEntry, LxModelSwitch, MAX_RESIDENT_SUBAGENT_CHATS,
+    McpDetailView, McpImageView, ModelCandidate, ModelPicker, ModelPickerStage,
+    ModelSwitchNoticeView, ModelsSnapshot, PanelWindow, PendingShell, PlanSnapshotView,
+    PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView, QueuedSubmission,
+    RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView, RewindPanel,
+    RewindTarget, RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand,
+    SlashEntry, SlashPanel, SnapshotState, StartupCount, StartupCounts, SubagentDetailView,
+    SubagentReportView, SubagentRun, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus,
+    ToolSummary, UserShellView, WebSearchDetailView,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};

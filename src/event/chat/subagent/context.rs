@@ -150,7 +150,7 @@ fn resolve_image_path(cwd: &Path, raw: &str) -> Result<std::path::PathBuf, Strin
 }
 
 /// 子会话系统提示词冻结输入段。
-pub(super) struct ChildPromptContext<'a> {
+pub(crate) struct ChildPromptContext<'a> {
     pub system_prompt_override: Option<&'a str>,
     pub model_identity: Option<&'a str>,
     pub environment: &'a str,
@@ -159,8 +159,19 @@ pub(super) struct ChildPromptContext<'a> {
     pub mcp: &'a crate::mcp::McpToolSnapshot,
 }
 
+/// 子轮层级与预算：决定工具面（是否开放控制工具）与 Token 预算护栏。
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ChildTurnLimits {
+    /// 当前子 agent 所处深度（根为 0，直接子 agent 为 1）。
+    pub depth: usize,
+    /// 配置的最大递归深度。
+    pub max_depth: usize,
+    /// 单轮 Token 预算；None 表示不限。
+    pub max_tokens: Option<u64>,
+}
+
 /// 采集子轮系统提示词所需的冻结输入段。
-pub(super) struct CapturedChildPromptInputs {
+pub(crate) struct CapturedChildPromptInputs {
     pub system_prompt_override: Option<String>,
     pub model_identity: String,
     pub environment: String,
@@ -169,7 +180,7 @@ pub(super) struct CapturedChildPromptInputs {
     pub mcp: Arc<crate::mcp::McpToolSnapshot>,
 }
 
-pub(super) fn capture_child_prompt_inputs(
+pub(crate) fn capture_child_prompt_inputs(
     state: &crate::app::state::AppState,
     persistence: &crate::db::service::Persistence,
     workspace: &Path,
@@ -183,8 +194,28 @@ pub(super) fn capture_child_prompt_inputs(
         Some(cwd),
         &[],
     );
-    let (skills, _) = super::super::skills::catalog_prompt(persistence, Some(workspace), true);
-    let mcp = super::super::mcp::snapshot_for_turn(persistence, Some(workspace));
+    let workspace_trusted = persistence.is_trusted(cwd) || persistence.is_trusted(workspace);
+    let effective_subagents = crate::config::subagents::merge_project_roles_for_paths(
+        &state.subagents_config,
+        Some(workspace),
+        Some(cwd),
+        workspace_trusted,
+    );
+    let role_spec = effective_subagents.resolve_role(role.as_str());
+    let capabilities = role_spec
+        .as_ref()
+        .map(|spec| spec.capabilities)
+        .unwrap_or_default();
+    let (skills, _) = if capabilities.allow_skills {
+        super::super::skills::catalog_prompt(persistence, Some(workspace), true)
+    } else {
+        (None, 0)
+    };
+    let mcp = if capabilities.allow_mcp {
+        super::super::mcp::snapshot_for_turn(persistence, Some(workspace))
+    } else {
+        Arc::new(crate::mcp::McpToolSnapshot::default())
+    };
     let model_identity = crate::chat::agent::ModelIdentity {
         display_name: state
             .models
@@ -202,10 +233,7 @@ pub(super) fn capture_child_prompt_inputs(
         persistence.is_trusted(cwd) || persistence.is_trusted(workspace),
     )
     .render_prompt_section();
-    let system_prompt_override = state
-        .subagents_config
-        .resolve_role(role.as_str())
-        .and_then(|r| r.system_prompt_override);
+    let system_prompt_override = role_spec.and_then(|spec| spec.system_prompt_override);
     CapturedChildPromptInputs {
         system_prompt_override,
         model_identity,
@@ -331,7 +359,7 @@ fn historical_attachment_items(
 
 /// 组装子会话新一轮的完整 `ModelContext`（含持久化压缩检查点、完整轮次预算裁剪与有序多模态输入）。
 #[allow(clippy::too_many_arguments)]
-pub(super) fn assemble_child_context(
+pub(crate) fn assemble_child_context(
     database: &Database,
     workspace: &Path,
     parent_session: &str,
@@ -347,12 +375,9 @@ pub(super) fn assemble_child_context(
     output_limit: Option<u64>,
     supports_image_input: bool,
     current_items: &[PersistedInputItem],
+    subagents: &crate::config::subagents::SubagentsSection,
+    limits: ChildTurnLimits,
 ) -> Result<ModelContext, String> {
-    let current_model_items =
-        replay_persisted_items(child_session_id, supports_image_input, true, current_items)?;
-    let current_text = PersistedInputItem::joined_text(current_items);
-    let current_tokens = estimate_items_tokens(&current_model_items);
-
     let checkpoint = database
         .active_checkpoint(workspace, child_session_id)
         .map_err(|err| err.code().to_string())?;
@@ -366,6 +391,9 @@ pub(super) fn assemble_child_context(
     let turn_items_map = database
         .load_subagent_turn_items(workspace, parent_session, agent_id)
         .map_err(|err| err.code().to_string())?;
+    let turn_envelopes = database
+        .load_subagent_turn_envelopes(workspace, parent_session, agent_id)
+        .unwrap_or_default();
 
     let retained: Vec<&ChatMessage> = messages
         .iter()
@@ -373,6 +401,40 @@ pub(super) fn assemble_child_context(
         .collect();
 
     let planned = plan_child_historical_turns(&retained, &turn_items_map, supports_image_input);
+    // 非克隆子轮来自 `agent_subagent_input`；当前轮若已落库也会计入，故按是否包含当前消息
+    // 调整阈值。该判断基于完整历史，不受 compact 检查点裁剪影响。
+    let non_cloned_user_count = messages
+        .iter()
+        .filter(|msg| msg.role == "user" && turn_items_map.contains_key(&msg.external_id))
+        .count();
+    let current_tracked = messages
+        .iter()
+        .any(|msg| msg.external_id == current_user_message_id);
+    let is_follow_up = non_cloned_user_count > usize::from(current_tracked);
+    let raw_current_text = PersistedInputItem::joined_text(current_items);
+    let mut current_model_items =
+        replay_persisted_items(child_session_id, supports_image_input, true, current_items)?;
+    let current_text = if is_follow_up {
+        let (msg_type, child_path, sender_path) = resolve_current_envelope(
+            database,
+            workspace,
+            parent_session,
+            agent_id,
+            current_user_message_id,
+            &turn_envelopes,
+        );
+        current_model_items =
+            wrap_envelope_items(current_model_items, msg_type, &child_path, &sender_path);
+        crate::chat::agent::format_inter_agent_envelope(
+            msg_type,
+            &child_path,
+            &sender_path,
+            &raw_current_text,
+        )
+    } else {
+        raw_current_text
+    };
+    let current_tokens = estimate_items_tokens(&current_model_items);
 
     let output_reserve = output_limit.unwrap_or(0).min(8192);
     let budget = context_limit.map(|limit| {
@@ -431,10 +493,15 @@ pub(super) fn assemble_child_context(
     });
     items.extend(current_model_items);
 
+    let capabilities = subagents
+        .resolve_role(role.as_str())
+        .map(|spec| spec.capabilities)
+        .unwrap_or_default();
     let mcp_prompt = prompt_ctx.mcp.instructions_prompt();
-    let system_prompt = crate::chat::agent::compose_subagent_prompt_with_override(
+    let system_prompt = crate::chat::agent::compose_subagent_prompt_with_capabilities(
         role,
         prompt_ctx.system_prompt_override,
+        capabilities,
         crate::chat::prompt::PromptParts {
             model_identity: prompt_ctx.model_identity,
             environment: Some(prompt_ctx.environment),
@@ -451,14 +518,176 @@ pub(super) fn assemble_child_context(
         variant_params,
         purpose: RequestPurpose::Subagent(role),
         system_prompt: Some(system_prompt),
-        tools: std::sync::Arc::new(crate::chat::tools::turn_tools(
-            crate::chat::agent::ToolSurface::from_role(role),
+        tools: std::sync::Arc::new(child_tool_decls(
+            crate::chat::agent::ToolSurface::from_role_at_depth(
+                role,
+                limits.depth,
+                limits.max_depth,
+            ),
+            capabilities,
             prompt_ctx.mcp,
+            subagents,
         )),
     };
     Ok(ModelContext::new(request, cwd.to_path_buf())
         .with_context_limit(context_limit)
+        .with_subagent_depth(limits.depth, limits.max_depth)
+        .with_token_budget(limits.max_tokens)
         .with_compact_summary(compact_summary))
+}
+
+/// 子 agent 的工具声明：按角色能力收紧 `web_search` 与 MCP 工具。
+fn child_tool_decls(
+    surface: crate::chat::agent::ToolSurface,
+    capabilities: crate::config::subagents::RoleCapabilities,
+    mcp: &crate::mcp::McpToolSnapshot,
+    subagents: &crate::config::subagents::SubagentsSection,
+) -> Vec<crate::chat::tools::ToolDecl> {
+    crate::chat::tools::turn_tools_for_subagent(surface, capabilities, mcp, Some(subagents))
+}
+
+/// 测试专用：与子上下文使用同一入口生成工具名集合。
+#[cfg(test)]
+pub(crate) fn child_tool_names(
+    surface: crate::chat::agent::ToolSurface,
+    capabilities: crate::config::subagents::RoleCapabilities,
+    mcp: &crate::mcp::McpToolSnapshot,
+    subagents: &crate::config::subagents::SubagentsSection,
+) -> Vec<String> {
+    child_tool_decls(surface, capabilities, mcp, subagents)
+        .into_iter()
+        .map(|decl| decl.name)
+        .collect()
+}
+
+/// 解析当前跟进轮次的信封类型与 `(child_path, sender_path)`。
+fn resolve_current_envelope(
+    database: &Database,
+    workspace: &Path,
+    parent_session: &str,
+    agent_id: &str,
+    current_user_message_id: &str,
+    turn_envelopes: &HashMap<String, crate::db::chat::SubagentTurnEnvelopeMeta>,
+) -> (crate::chat::agent::InterAgentMessageType, String, String) {
+    if !current_user_message_id.is_empty()
+        && let Some(meta) = turn_envelopes.get(current_user_message_id)
+    {
+        let (child_path, sender_path) = envelope_paths(
+            database,
+            workspace,
+            parent_session,
+            agent_id,
+            meta.caller_session_id.as_deref(),
+        );
+        return (
+            crate::chat::agent::InterAgentMessageType::from_trigger_turn(meta.trigger_turn),
+            child_path,
+            sender_path,
+        );
+    }
+    if let Ok(Some(queued)) = database.next_queued_input(workspace, parent_session, agent_id) {
+        let (child_path, sender_path) = envelope_paths(
+            database,
+            workspace,
+            parent_session,
+            agent_id,
+            queued.caller_session_id(),
+        );
+        return (
+            crate::chat::agent::InterAgentMessageType::from_trigger_turn(queued.trigger_turn()),
+            child_path,
+            sender_path,
+        );
+    }
+    if let Some(latest) = turn_envelopes.values().max_by_key(|m| m.position) {
+        let (child_path, sender_path) = envelope_paths(
+            database,
+            workspace,
+            parent_session,
+            agent_id,
+            latest.caller_session_id.as_deref(),
+        );
+        return (
+            crate::chat::agent::InterAgentMessageType::from_trigger_turn(latest.trigger_turn),
+            child_path,
+            sender_path,
+        );
+    }
+    let (child_path, sender_path) =
+        envelope_paths(database, workspace, parent_session, agent_id, None);
+    (
+        crate::chat::agent::InterAgentMessageType::NewTask,
+        child_path,
+        sender_path,
+    )
+}
+
+/// 子 agent 与发送者的规范路径（用于 `send_input` 后续轮次的结构化信封）。
+fn envelope_paths(
+    database: &Database,
+    workspace: &Path,
+    parent_session: &str,
+    agent_id: &str,
+    caller_session: Option<&str>,
+) -> (String, String) {
+    let child_path = database
+        .owned_subagent(workspace, parent_session, agent_id)
+        .ok()
+        .flatten()
+        .map(|record| record.agent_path)
+        .filter(|path| !path.trim().is_empty())
+        .unwrap_or_else(|| "/root/subagent".to_string());
+    let sender_session = caller_session
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(parent_session);
+    let sender_path = database
+        .resolve_session_tree_root(workspace, sender_session)
+        .map(|(_, _, path)| path)
+        .unwrap_or_else(|_| crate::chat::agent::ROOT_AGENT_PATH.to_string());
+    (child_path, sender_path)
+}
+
+/// 只在模型请求侧包裹后续 `send_input` 的用户文本（DB 与 TUI 保持原文）。
+fn wrap_envelope_items(
+    items: Vec<ModelItem>,
+    message_type: crate::chat::agent::InterAgentMessageType,
+    child_path: &str,
+    sender_path: &str,
+) -> Vec<ModelItem> {
+    let mut wrapped = false;
+    items
+        .into_iter()
+        .map(|item| match item {
+            ModelItem::UserText(text) if !wrapped => {
+                wrapped = true;
+                ModelItem::UserText(crate::chat::agent::format_inter_agent_envelope(
+                    message_type,
+                    child_path,
+                    sender_path,
+                    &text,
+                ))
+            }
+            ModelItem::UserContent { text, images } if !wrapped => {
+                wrapped = true;
+                let payload = if text.trim().is_empty() {
+                    format!("[{} image(s)]", images.len())
+                } else {
+                    text
+                };
+                ModelItem::UserContent {
+                    text: crate::chat::agent::format_inter_agent_envelope(
+                        message_type,
+                        child_path,
+                        sender_path,
+                        &payload,
+                    ),
+                    images,
+                }
+            }
+            other => other,
+        })
+        .collect()
 }
 
 struct PlannedChildTurn<'a> {
@@ -494,7 +723,8 @@ fn plan_child_historical_turns<'a>(
         let (Some(user), Some(assistant)) = (user, assistant) else {
             continue;
         };
-        if user.status != "complete" || assistant.status != "complete" {
+        let aborted = matches!(assistant.status.as_str(), "interrupted" | "cancelled");
+        if user.status != "complete" || !(assistant.status == "complete" || aborted) {
             continue;
         }
         let user_text = message_text(user);
@@ -514,8 +744,19 @@ fn plan_child_historical_turns<'a>(
         } else {
             Vec::new()
         };
-        let assistant_text = message_text(assistant);
-        let assistant_items = crate::chat::context::assistant_items(assistant);
+        let mut assistant_text = message_text(assistant);
+        let mut assistant_items = crate::chat::context::assistant_items(assistant);
+        if aborted {
+            assistant_items
+                .retain(|item| !matches!(item, ModelItem::AssistantText(text) if text.is_empty()));
+            assistant_items.push(ModelItem::UserText(
+                crate::chat::agent::SUBAGENT_TURN_ABORTED_MARKER.to_string(),
+            ));
+            if !assistant_text.is_empty() {
+                assistant_text.push('\n');
+            }
+            assistant_text.push_str(crate::chat::agent::SUBAGENT_TURN_ABORTED_MARKER);
+        }
         planned.push(PlannedChildTurn {
             user_text,
             assistant_text,

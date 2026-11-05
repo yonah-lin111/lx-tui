@@ -90,6 +90,7 @@ pub(super) fn agent_status(
     AgentStatusView {
         agent_id: agent_id.to_string(),
         nickname: None,
+        agent_path: None,
         title: title.to_string(),
         role,
         status: status.to_string(),
@@ -101,6 +102,7 @@ pub(super) fn agent_list_item(agent_id: &str, role: AgentRole, title: &str) -> A
     AgentListItemView {
         agent_id: agent_id.to_string(),
         nickname: None,
+        agent_path: None,
         role,
         title: title.to_string(),
         status: "completed".to_string(),

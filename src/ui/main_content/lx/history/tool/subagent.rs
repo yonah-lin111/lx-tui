@@ -205,11 +205,13 @@ fn timeout_label(ms: u64) -> String {
 /// 目标行节点：`■ Turing [role] · title`（静态状态色）。
 fn target_node(view: &SubagentDetailView, agent_id: &str) -> Node {
     let status = view.agents.iter().find(|agent| {
-        agent.agent_id == agent_id
-            || agent
-                .nickname
-                .as_deref()
-                .is_some_and(|n| n.eq_ignore_ascii_case(agent_id))
+        crate::chat::agent::matches_agent_target(
+            &agent.agent_id,
+            agent.nickname.as_deref(),
+            agent.agent_path.as_deref(),
+            crate::chat::agent::ROOT_AGENT_PATH,
+            agent_id,
+        )
     });
     let color = status.map_or(WaitColor::Yellow, |agent| status_color(&agent.status));
     let body = match status {
@@ -233,12 +235,22 @@ fn target_node(view: &SubagentDetailView, agent_id: &str) -> Node {
 }
 
 /// 展开态报告：`Report:` + 压暗 markdown 正文，整块一个多行节点。
-fn report_node(body: &str, width: u16) -> Node {
+fn report_node(body: &str, changed_paths: &[String], width: u16) -> Node {
     let body_width = u16::try_from(tree::content_width(width)).unwrap_or(1);
     let mut lines: Vec<Vec<Segment>> = vec![vec![Segment::new(
         text::agent::REPORT_LABEL,
         style::muted(),
     )]];
+    if !changed_paths.is_empty() {
+        lines.push(vec![Segment::new(
+            format!(
+                "{} {}",
+                text::agent::CHANGED_FILES_LABEL,
+                changed_paths.join(", ")
+            ),
+            style::muted(),
+        )]);
+    }
     lines.extend(muted_markdown_lines(body, body_width));
     Node::block(lines)
 }
@@ -279,24 +291,37 @@ fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
                     .links
                     .push((0, view.agent_id.clone().unwrap_or_default()));
             }
+            if view.agent_status.as_deref() == Some("running")
+                && let Some(activity) = view.live_activity.as_deref().filter(|s| !s.is_empty())
+            {
+                built.nodes.push(Node::text(
+                    single_line(activity, TEXT_SAMPLE_CHARS),
+                    style::muted(),
+                ));
+            }
             if expanded && let Some(report) = &view.report {
-                built.nodes.push(report_node(&report.body, width));
+                built
+                    .nodes
+                    .push(report_node(&report.body, &report.changed_paths, width));
             }
         }
         "wait_agent" => {
-            let targets: Vec<String> = if view.all || view.targets.is_empty() {
-                Vec::new()
-            } else {
+            let display_ids: Vec<String> = if !view.all && !view.targets.is_empty() {
                 view.targets.clone()
+            } else {
+                view.agents
+                    .iter()
+                    .map(|agent| agent.agent_id.clone())
+                    .collect()
             };
-            if targets.is_empty() {
+            if display_ids.is_empty() {
                 let color = all_color(view, call.status);
                 built.nodes.push(Node::new(vec![
                     Segment::new(format!("{} ", text::agent::STEP_MARK_FILLED), color.style()),
                     Segment::new(text::agent::WAIT_ALL.to_string(), style::text()),
                 ]));
             } else {
-                for target in &targets {
+                for target in &display_ids {
                     let index = built.nodes.len();
                     built.nodes.push(target_node(view, target));
                     built.links.push((index, target.clone()));
@@ -310,7 +335,7 @@ fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
                         .is_some_and(|b| !b.trim().is_empty())
                 }) {
                     if let Some(body) = agent.report.as_deref() {
-                        built.nodes.push(report_node(body, width));
+                        built.nodes.push(report_node(body, &[], width));
                     }
                 }
             }
@@ -507,6 +532,8 @@ mod tests {
             title: None,
             task: None,
             agent_id: None,
+            agent_path: None,
+            live_activity: None,
             agent_status: None,
             model_label: None,
             fork_context: false,
@@ -519,6 +546,7 @@ mod tests {
                 AgentStatusView {
                     agent_id: "a1".into(),
                     nickname: None,
+                    agent_path: None,
                     title: "调查事件流".into(),
                     role: AgentRole::Explorer,
                     status: "completed".into(),
@@ -527,6 +555,7 @@ mod tests {
                 AgentStatusView {
                     agent_id: "a2".into(),
                     nickname: None,
+                    agent_path: None,
                     title: "检查存储层".into(),
                     role: AgentRole::Explorer,
                     status: "running".into(),
@@ -620,6 +649,8 @@ mod tests {
             title: Some("调查".into()),
             task: None,
             agent_id: Some("a1".into()),
+            agent_path: None,
+            live_activity: None,
             agent_status: Some("running".into()),
             model_label: None,
             fork_context: false,
@@ -641,6 +672,8 @@ mod tests {
             title: None,
             task: None,
             agent_id: Some("a1".into()),
+            agent_path: None,
+            live_activity: None,
             agent_status: None,
             model_label: None,
             fork_context: false,
@@ -667,6 +700,8 @@ mod tests {
             title: Some("investigate event flow".into()),
             task: None,
             agent_id: Some("a1".into()),
+            agent_path: None,
+            live_activity: None,
             agent_status: Some("running".into()),
             model_label: Some("openai/gpt-4.1-mini (low)".into()),
             fork_context: true,
@@ -697,6 +732,8 @@ mod tests {
             title: None,
             task: None,
             agent_id: Some("a1".into()),
+            agent_path: None,
+            live_activity: None,
             agent_status: None,
             model_label: None,
             fork_context: false,
@@ -762,5 +799,70 @@ mod tests {
         view.agent_status = Some("interrupted".into());
         let call = call("spawn_agent", view.clone());
         assert_eq!(agent_mark(&view, &call, 0), StepMark::Interrupted);
+    }
+
+    #[test]
+    fn wait_all_renders_every_agent_row_and_link() {
+        let mut view = wait_view();
+        view.targets.clear();
+        view.all = true;
+        let call = call("wait_agent", view);
+        let text = flat(&call, 60, false);
+        assert!(text.contains("调查事件流"), "{text}");
+        assert!(text.contains("检查存储层"), "{text}");
+        assert!(
+            !text.lines().any(|line| line.contains("All")),
+            "有目标时必须逐行渲染，不再退回单行 All：{text}"
+        );
+        let links = agent_links(&call, 60);
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].1, "a1");
+        assert_eq!(links[1].1, "a2");
+    }
+
+    #[test]
+    fn spawn_card_shows_live_activity_only_while_running() {
+        let mut view = SubagentDetailView::from_arguments(
+            "spawn_agent",
+            r#"{"role":"explorer","task":"investigate","title":"investigate"}"#,
+        )
+        .expect("spawn detail");
+        view.agent_id = Some("a1".into());
+        view.agent_status = Some("running".into());
+        view.live_activity = Some("$ cargo test".into());
+        let text = flat(&call("spawn_agent", view.clone()), 80, false);
+        assert!(text.contains("$ cargo test"), "{text}");
+
+        view.agent_status = Some("completed".into());
+        let text = flat(&call("spawn_agent", view), 80, false);
+        assert!(!text.contains("$ cargo test"), "完成后收起：{text}");
+    }
+
+    #[test]
+    fn expanded_report_lists_changed_paths() {
+        let mut view = SubagentDetailView::from_arguments(
+            "spawn_agent",
+            r#"{"role":"executor","task":"edit","title":"edit"}"#,
+        )
+        .expect("spawn detail");
+        view.agent_id = Some("a1".into());
+        view.agent_status = Some("completed".into());
+        view.report = Some(crate::chat::agent::SubagentReportView {
+            agent_id: "a1".into(),
+            nickname: None,
+            title: "edit".into(),
+            role: AgentRole::Executor,
+            status: "completed".into(),
+            files_changed: 2,
+            changed_paths: vec!["src/a.rs".into(), "src/b.rs".into()],
+            duration_ms: Some(1_000),
+            body: "done".into(),
+            delivered_at_ms: 1,
+        });
+        let text = flat(&call("spawn_agent", view), 80, true);
+        assert!(
+            text.contains("Changed files: src/a.rs, src/b.rs"),
+            "变更文件明细在报告正文上方：{text}"
+        );
     }
 }

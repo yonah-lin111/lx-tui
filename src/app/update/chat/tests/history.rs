@@ -236,6 +236,7 @@ fn report_more_click_adds_a_batch_and_whole_click_collapses() {
         role: crate::chat::agent::AgentRole::Explorer,
         status: "completed".into(),
         files_changed: 0,
+        changed_paths: Vec::new(),
         duration_ms: Some(1_000),
         body: (0..60)
             .map(|index| format!("line {index}"))

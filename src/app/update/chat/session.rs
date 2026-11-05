@@ -42,6 +42,34 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
+/// `/subagents`（别名 `/agents`）：打开后台任务页并直接落在 `Agents` 页签。
+///
+/// 与 [`open_agent_page`](super::open_agent_page) 同一数据流：先建页面骨架，
+/// 再请求事件层回投本会话的子 agent 列表（历史会话也能看到）。
+pub fn open_subagents_page(state: &mut AppState, pane: PaneId) -> bool {
+    if !super::open_task_page(state, pane) {
+        return false;
+    }
+    let session = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
+        if let Some(page) = target.lx.task.as_mut() {
+            page.select_tab(crate::app::state::TaskTab::Agents);
+        }
+        target.lx.chat.session_id.clone()
+    };
+    if let Some(parent_session) = session {
+        state
+            .effects
+            .push(crate::app::effects::Effect::ListSubagents {
+                pane,
+                parent_session,
+            });
+    }
+    true
+}
+
 /// 历史列表回投：填充 `/resume` 面板。
 ///
 /// 当前窗格已绑定的会话打上 `❯` 标记，并作为高亮与窗口定位目标

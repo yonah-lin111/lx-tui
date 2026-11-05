@@ -318,6 +318,7 @@ fn turn_tools_with_subagents_injects_custom_roles_into_spawn() {
             system_prompt: "You are a reviewer.".into(),
             model: None,
             nickname_candidates: Vec::new(),
+            ..CustomRoleConfig::default()
         }],
         ..SubagentsSection::default()
     };
@@ -338,10 +339,89 @@ fn turn_tools_with_subagents_injects_custom_roles_into_spawn() {
     );
     assert_eq!(
         spawn.parameters["properties"]["role"]["enum"],
-        serde_json::json!(["explorer", "executor", "reviewer"])
+        serde_json::json!(["explorer", "executor", "monitor", "reviewer"])
     );
     let read = decls.iter().find(|decl| decl.name == "read").expect("read");
     assert!(!read.description.contains("reviewer"));
+}
+
+#[test]
+fn turn_tools_for_subagent_narrows_capabilities() {
+    use crate::chat::agent::ToolSurface;
+    use crate::config::subagents::RoleCapabilities;
+
+    let snapshot = crate::mcp::McpToolSnapshot::default();
+    let open = super::turn_tools_for_subagent(
+        ToolSurface::Executor,
+        RoleCapabilities::default(),
+        &snapshot,
+        None,
+    );
+    assert!(open.iter().any(|decl| decl.name == "web_search"));
+
+    let narrowed = super::turn_tools_for_subagent(
+        ToolSurface::Executor,
+        RoleCapabilities {
+            allow_web_search: false,
+            allow_mcp: false,
+            allow_skills: false,
+        },
+        &snapshot,
+        None,
+    );
+    assert!(
+        !narrowed.iter().any(|decl| decl.name == "web_search"),
+        "web_search is removed"
+    );
+    assert!(
+        !narrowed.iter().any(|decl| decl.name.starts_with("mcp__")),
+        "MCP tools are not injected"
+    );
+    assert!(
+        !narrowed
+            .iter()
+            .any(|decl| decl.name == "list_resources" || decl.name == "read_resource"),
+        "MCP resource tools are not injected"
+    );
+    // 内置工具面不受能力收紧影响。
+    for name in ["read", "search", "edit", "write", "exec_command"] {
+        assert!(narrowed.iter().any(|decl| decl.name == name), "{name}");
+    }
+}
+
+#[test]
+fn build_spawn_role_guidance_shows_locked_model_and_restrictions() {
+    use crate::chat::tools::build_spawn_role_guidance;
+    use crate::config::ai::ModelSelection;
+    use crate::config::subagents::{BaseRole, CustomRoleConfig, SubagentsSection};
+
+    let section = SubagentsSection {
+        roles: vec![CustomRoleConfig {
+            name: "reviewer".into(),
+            base_role: BaseRole::Explorer,
+            description: "Strict security reviewer.".into(),
+            system_prompt: "You review.".into(),
+            model: Some(ModelSelection {
+                provider: "openai".into(),
+                model: "gpt-4.1-mini".into(),
+                variant: Some("high".into()),
+            }),
+            lock_model: true,
+            capabilities: crate::config::subagents::RoleCapabilities {
+                allow_web_search: false,
+                allow_mcp: false,
+                allow_skills: true,
+            },
+            ..CustomRoleConfig::default()
+        }],
+        ..SubagentsSection::default()
+    };
+    let guidance = build_spawn_role_guidance(&section);
+    assert!(guidance.contains("`reviewer`"));
+    assert!(guidance.contains("locked model: openai/gpt-4.1-mini (high)"));
+    assert!(guidance.contains("cannot be overridden"));
+    assert!(guidance.contains("[no web_search, no mcp]"));
+    assert!(guidance.contains("`monitor`"));
 }
 
 #[test]

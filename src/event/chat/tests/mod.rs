@@ -414,6 +414,7 @@ where
     let terminal = AppEvent::ChatNet(ChatNetEvent::Finished {
         key: key.clone(),
         reason: summary.stop_reason(),
+        budget_exceeded: false,
         usage: summary.usage,
         billing: summary.billing,
     });
@@ -534,6 +535,7 @@ fn pump(
         AppEvent::ChatNet(ChatNetEvent::Finished {
             key,
             reason,
+            budget_exceeded,
             usage,
             billing,
         }) => {
@@ -545,6 +547,7 @@ fn pump(
                 ChatNetEvent::Finished {
                     key,
                     reason,
+                    budget_exceeded,
                     usage,
                     billing,
                 },
@@ -716,5 +719,6 @@ mod limits;
 mod process_tools;
 mod resume;
 mod subagent;
+mod subagent_roles;
 mod user_shell;
 mod workspace;

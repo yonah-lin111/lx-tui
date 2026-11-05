@@ -243,6 +243,23 @@ impl ChatRequest {
         self.purpose.tools_surface()
     }
 
+    /// 本次请求在指定子 agent 深度下的工具面。
+    ///
+    /// 子 agent 的可用工具随深度收紧：`Executor` 仅在 `depth < max_depth` 时保留
+    /// 控制工具（见 [`crate::chat::agent::AgentRole::tool_surface_at_depth`]）。
+    pub fn tools_surface_at_depth(
+        &self,
+        depth: usize,
+        max_depth: usize,
+    ) -> Option<crate::chat::agent::ToolSurface> {
+        match self.purpose {
+            RequestPurpose::Chat => Some(crate::chat::agent::ToolSurface::Main),
+            RequestPurpose::ExecTurn => Some(crate::chat::agent::ToolSurface::ExecMain),
+            RequestPurpose::Subagent(role) => Some(role.tool_surface_at_depth(depth, max_depth)),
+            RequestPurpose::CompactSummary => None,
+        }
+    }
+
     /// transport 实际声明的工具列表：冻结快照优先，空列表回退到内置工具面。
     pub fn declared_tools(&self) -> std::borrow::Cow<'_, [crate::chat::tools::ToolDecl]> {
         if !self.tools.is_empty() {

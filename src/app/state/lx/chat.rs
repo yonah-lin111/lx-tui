@@ -12,6 +12,7 @@ pub mod file_diff;
 pub mod shell;
 mod steps;
 mod stream;
+pub mod subagent_view;
 pub mod tool_view;
 mod usage;
 
@@ -326,6 +327,8 @@ pub struct ChatStatus {
     pub streaming: bool,
     /// 上下文裁剪省略提示（一次性）。
     pub omitted_turns: Option<usize>,
+    /// 阻塞（队首输入校验失败）的子 agent 数（底边框异常提醒）。
+    pub blocked_subagents: usize,
 }
 
 /// 置顶用户消息行的抑制记忆（对齐 codex `suppressed_prompt_header`）。

@@ -25,7 +25,7 @@ use crate::platform::EnvironmentFacts;
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
-pub const PROMPT_VERSION: &str = "lx-10";
+pub const PROMPT_VERSION: &str = "lx-12";
 
 /// 环境快照单字段最大字符数（转义前）。
 const MAX_FIELD_CHARS: usize = 240;
@@ -116,22 +116,23 @@ You are lx, a terminal coding agent working inside the user's workspace. You are
 # Subagents
 
 Eight tools coordinate subagents: `spawn_agent`, `send_input`, `interrupt_agent`, `resume_agent`, `wait_agent`, `close_agent`, `list_agents`, and `cancel_agent_input`.
-Each subagent starts with a clean context by default (`fork_context: false`) and sees only its role prompt, environment snapshot, and the `task` or ordered `items` (`text`, `local_image`, `image`) you send; pass `fork_context: true` to clone completed parent turns first.
+Each subagent starts with a clean context by default (`fork_context: false`) and sees only its role prompt, environment snapshot, and the `task` or ordered `items` (`text`, `local_image`, `image`) you send; pass `fork_context: true` or `fork_turns` (`1..=64`) to clone sanitized completed parent turns first, and optional `max_tokens` to cap its token budget.
 
 - `explorer` — read-only investigation (`read`, `search`, `web_search`) for codebase or web questions.
-- `executor` — bounded implementation (file, process, and web tools; no `ask`, plan, or subagent tools) for one well-defined change.
-- Custom roles configured in settings appear in `spawn_agent`; optional `model` and `reasoning_effort` override the role/parent model.
+- `executor` — bounded implementation (file, process, and web tools; no `ask` or plan tools, and subagent delegation tools when below the configured `max_depth`) for one well-defined change.
+- `monitor` — long-running command and process watcher (`exec_command`, `write_stdin`, `read`, `search`; no file edits or subagent delegation) for builds, test suites, or background job polling.
+- Custom roles configured in settings or project `.lx/agents/*.json` appear in `spawn_agent`; optional `model`, `reasoning_effort`, and `task_name` override defaults unless locked by the role.
 
 Delegate independent work with a clear boundary (goal + owned files/modules + deliverable) and a short `title` (3–8 words). Do not delegate trivial edits or questions needing user input.
 
 Rules:
-- At most 3 subagents may run at once per conversation by default (up to the configured limit shown in `spawn_agent`); calls beyond the limit are rejected.
+- At most 4 subagents may run at once across the session tree by default (up to the configured limit shown in `spawn_agent`); calls beyond the concurrency or depth limit are rejected.
 - Subagents share the workspace: tell each one not to revert or overwrite others' edits.
-- Each subagent gets a unique `nickname` (e.g. `Turing`) alongside `agent_id`; control tools accept either.
+- Each subagent gets a unique `nickname` (e.g. `Turing`) and hierarchical `agent_path` (e.g. `/root/turing` or `/root/coord/leaf`) alongside `agent_id`; control tools accept `agent_id`, `agent_path` (absolute or caller-relative), or `nickname`.
 - Start a subagent, keep working, and call `wait_agent` when needed (`wait_for: \"any\"` for first result; default `\"all\"` waits until done). Prefer long waits (minutes).
-- Use `send_input` for follow-ups (`interrupt: false` queues; `interrupt: true` cancels the current turn and runs next).
-- Use `interrupt_agent` to stop a running turn while keeping the agent `idle` and pausing queued inputs; `close_agent` stops it without a report.
-- Call `resume_agent` before `send_input` on a finished/failed/closed agent; use `list_agents` to inspect status and `cancel_agent_input` (`submission_id`) if a queued image is `blocked`.
+- Use `send_input` for follow-ups (`interrupt: false` queues; `interrupt: true` cancels the current turn and runs next; `trigger_turn: false` queues without waking an `idle` subagent).
+- Use `interrupt_agent` to stop a running turn while keeping the agent `idle` and producing a partial report; `close_agent` cascades to descendants and stops without a report.
+- Call `resume_agent` before `send_input` on a finished/failed/closed agent; use `list_agents` (optional `path_prefix`) to inspect status and `cancel_agent_input` (`submission_id`) if a queued image is `blocked`.
 
 # Tools
 
@@ -476,7 +477,10 @@ mod tests {
             "`close_agent`",
             "`explorer`",
             "`executor`",
-            "At most 3 subagents",
+            "At most 4 subagents",
+            "`agent_path`",
+            "`fork_turns`",
+            "`trigger_turn: false`",
         ] {
             assert!(
                 LX_SYSTEM_PROMPT.contains(needle),
@@ -525,7 +529,7 @@ mod tests {
                 "提示缺少 ask 规则 `{needle}`"
             );
         }
-        assert_eq!(PROMPT_VERSION, "lx-10");
+        assert_eq!(PROMPT_VERSION, "lx-12");
         assert!(
             LX_SYSTEM_PROMPT.contains("You can call these tools:")
                 && LX_SYSTEM_PROMPT.contains("`ask`"),

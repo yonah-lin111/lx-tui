@@ -6,18 +6,124 @@ use std::path::Path;
 
 use tokio::sync::watch;
 
-use super::context::{assemble_child_context, prepare_input_items};
+use super::context::{ChildTurnLimits, assemble_child_context, prepare_input_items};
 use super::*;
 use crate::app::state::RequestKey;
 use crate::chat::agent::{
-    AgentRole, IMAGE_MISSING_CODE, LIMIT_REACHED_CODE, NOT_ACTIVE_CODE, NOT_FOUND_CODE,
-    SubagentInputItem, SubagentOutcome, joined_input_text,
+    AgentRole, DEPTH_LIMIT_REACHED_CODE, ForkSpec, IMAGE_MISSING_CODE, LIMIT_REACHED_CODE,
+    NOT_ACTIVE_CODE, NOT_FOUND_CODE, SubagentInputItem, SubagentOutcome, allocate_child_path,
+    joined_input_text,
 };
-use crate::db::chat::{ModelSnapshot, PersistedInputItem, SubagentRecord};
-use crate::db::new_external_id;
+use crate::db::chat::{ModelSnapshot, PersistedInputItem, SubagentQueueState, SubagentRecord};
+use crate::db::{Database, new_external_id};
 use crate::layout::PaneId;
 
-/// spawn：角色与模型校验 → 并发检查 → 图片严格归档 → 事务落库 → 注册句柄并标记活动 → 启动首轮 → 回执。
+/// 根会话树快照：根会话、调用者深度/路径与整树子 agent 记录。
+pub(super) struct SubagentTree {
+    /// 根会话 external id。
+    pub root_session: String,
+    /// 调用者（发起控制工具的会话）所处深度；根为 0。
+    pub caller_depth: usize,
+    /// 调用者的规范路径；根为 `/root`。
+    pub caller_path: String,
+    /// 整棵树的子 agent 记录（按创建时间升序）。
+    pub records: Vec<SubagentRecord>,
+}
+
+/// 读取根会话树快照；旧库或空树时回退到当前会话的直接子 agent 列表。
+pub(super) fn load_subagent_tree(
+    database: &Database,
+    workspace: &Path,
+    session: &str,
+) -> SubagentTree {
+    let (root_session, caller_depth, caller_path) = database
+        .resolve_session_tree_root(workspace, session)
+        .unwrap_or_else(|_| {
+            (
+                session.to_string(),
+                0,
+                crate::chat::agent::ROOT_AGENT_PATH.to_string(),
+            )
+        });
+    let records = database
+        .list_subagent_tree(workspace, &root_session)
+        .or_else(|_| database.list_subagents(workspace, session))
+        .unwrap_or_default();
+    SubagentTree {
+        root_session,
+        caller_depth,
+        caller_path,
+        records,
+    }
+}
+
+/// 三合一寻址（`agent_id` / `nickname` / 绝对或相对 `agent_path`）在整棵树内解析目标。
+pub(super) fn resolve_tree_target<'a>(
+    tree: &'a SubagentTree,
+    target: &str,
+) -> Option<&'a SubagentRecord> {
+    tree.records.iter().find(|record| {
+        crate::chat::agent::matches_agent_target(
+            &record.agent_id,
+            record.nickname.as_deref(),
+            Some(&record.agent_path),
+            &tree.caller_path,
+            target,
+        )
+    })
+}
+
+/// 目标自身与其所有后代路径（按树的记录集合展开）。
+pub(super) fn subtree_paths(records: &[SubagentRecord], target_path: &str) -> Vec<String> {
+    let prefix = format!(
+        "{}/",
+        target_path.trim_end_matches('/').to_ascii_lowercase()
+    );
+    let mut paths = vec![target_path.to_string()];
+    for record in records {
+        let candidate = record.agent_path.to_ascii_lowercase();
+        if candidate != target_path.to_ascii_lowercase() && candidate.starts_with(&prefix) {
+            paths.push(record.agent_path.clone());
+        }
+    }
+    paths
+}
+
+/// 整棵根会话树中正在运行的子 agent 数量。
+pub(super) fn running_in_tree(streams: &ChatStreams, root_session: &str) -> usize {
+    streams
+        .subagents
+        .values()
+        .filter(|handle| handle.root_session == root_session && handle.status == STATUS_RUNNING)
+        .count()
+}
+
+/// 整树排队状态：按每个子 agent 的真实父会话分别读取后合并（孙 agent 的队列也可见）。
+pub(super) fn tree_queue_states(
+    database: &Database,
+    workspace: &Path,
+    tree: &SubagentTree,
+) -> std::collections::HashMap<String, SubagentQueueState> {
+    let mut parents: Vec<&str> = vec![tree.root_session.as_str()];
+    for record in &tree.records {
+        let parent = record.parent_session_id.as_str();
+        if !parents.contains(&parent) {
+            parents.push(parent);
+        }
+    }
+    let mut states = std::collections::HashMap::new();
+    for parent in parents {
+        for (agent_id, state) in database
+            .subagent_queue_states(workspace, parent)
+            .unwrap_or_default()
+        {
+            states.insert(agent_id, state);
+        }
+    }
+    states
+}
+
+/// spawn：角色与模型校验 → 树深度/整树并发检查 → 图片严格归档 → 事务落库 → 注册句柄并标记活动 → 启动首轮 → 回执。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn(
     state: &mut AppState,
@@ -27,9 +133,12 @@ pub(super) fn spawn(
     call_id: Option<&str>,
     role: AgentRole,
     title: &str,
+    task_name: Option<&str>,
     task: &str,
     items: &[SubagentInputItem],
     fork_context: bool,
+    fork_turns: Option<u32>,
+    max_tokens: Option<u64>,
     model_override: Option<&str>,
     reasoning_effort_override: Option<&str>,
 ) -> Result<SubagentOutcome, String> {
@@ -37,19 +146,44 @@ pub(super) fn spawn(
         .event_sender
         .as_ref()
         .ok_or_else(|| "subagent event channel unavailable".to_string())?;
-    let role_spec = state
-        .subagents_config
+    let parent_session = key.session.clone();
+    let workspace = streams
+        .db_workspaces
+        .get(key)
+        .cloned()
+        .or_else(|| super::workspace_for_pane(state, key.pane))
+        .ok_or_else(|| "subagent workspace unavailable".to_string())?;
+    let cwd = state
+        .workspace_cwd_for_pane(key.pane)
+        .unwrap_or_else(|| workspace.clone());
+    let workspace_trusted = persistence.is_trusted(&cwd) || persistence.is_trusted(&workspace);
+    let effective_subagents = crate::config::subagents::merge_project_roles_for_paths(
+        &state.subagents_config,
+        Some(&workspace),
+        Some(&cwd),
+        workspace_trusted,
+    );
+    let role_spec = effective_subagents
         .resolve_role(role.as_str())
         .ok_or_else(|| format!("unknown subagent role '{}'", role.as_str()))?;
     let role = role.with_base(role_spec.base_role);
-
-    let parent_session = key.session.clone();
+    let database = persistence
+        .database()
+        .ok_or_else(|| "subagent persistence unavailable".to_string())?;
+    let tree = load_subagent_tree(database, &workspace, &parent_session);
+    let max_depth = state
+        .subagents_config
+        .max_depth
+        .clamp(1, crate::config::subagents::MAX_AGENT_DEPTH_LIMIT);
+    let next_depth = tree.caller_depth.saturating_add(1);
+    if next_depth > max_depth {
+        return Err(DEPTH_LIMIT_REACHED_CODE.to_string());
+    }
     let max_concurrent = state
         .subagents_config
         .max_concurrent
         .clamp(1, crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT);
-    let running = running_count_for_parent(streams, &parent_session);
-    if running >= max_concurrent {
+    if running_in_tree(streams, &tree.root_session) >= max_concurrent {
         return Err(LIMIT_REACHED_CODE.to_string());
     }
     let parent_frozen = streams
@@ -61,39 +195,40 @@ pub(super) fn spawn(
     let resolved_model = super::model_resolve::resolve_subagent_model(
         &state.models,
         &parent_frozen,
+        role_spec.base_role,
         role_spec.default_model.as_ref(),
+        role_spec.lock_model,
         model_override,
         reasoning_effort_override,
     )?;
     let frozen = resolved_model.frozen;
-    let workspace = streams
-        .db_workspaces
-        .get(key)
-        .cloned()
-        .ok_or_else(|| "subagent workspace unavailable".to_string())?;
-    let database = persistence
-        .database()
-        .ok_or_else(|| "subagent persistence unavailable".to_string())?;
-    let cwd = state
-        .workspace_cwd_for_pane(key.pane)
-        .unwrap_or_else(|| workspace.clone());
     // 确认进程运行实例可用，避免 DB 落库后无法启动执行器。
     if streams.process_sender.is_none() {
         return Err("process runtime unavailable".to_string());
     }
 
-    let existing_records = database
-        .list_subagents(&workspace, &parent_session)
-        .unwrap_or_default();
-    let used_nicknames: Vec<String> = existing_records
-        .into_iter()
-        .filter_map(|r| r.nickname)
+    let used_nicknames: Vec<String> = tree
+        .records
+        .iter()
+        .filter_map(|record| record.nickname.clone())
         .collect();
     let nickname =
         crate::chat::agent::allocate_nickname(&used_nicknames, &role_spec.nickname_candidates);
+    let existing_paths: Vec<String> = tree
+        .records
+        .iter()
+        .map(|record| record.agent_path.clone())
+        .collect();
+    let agent_path = allocate_child_path(
+        &tree.caller_path,
+        task_name.unwrap_or(&nickname),
+        &existing_paths,
+    );
+    let fork_spec = ForkSpec::from_params(fork_context, fork_turns);
+    let effective_max_tokens = max_tokens.or(state.subagents_config.default_max_tokens);
 
     let child_session_id = new_external_id("sess");
-    let image_rewrite = if fork_context {
+    let image_rewrite = if fork_spec.is_enabled() {
         crate::db::chat::copy_session_images(&parent_session, &child_session_id)
     } else {
         None
@@ -135,7 +270,7 @@ pub(super) fn spawn(
         model: frozen.model.clone(),
         variant: frozen.variant.clone(),
     };
-    let committed = match database.begin_subagent_turn_with_options(
+    let committed = match database.begin_subagent_turn_with_full_options(
         &workspace,
         &parent_session,
         Some(&child_session_id),
@@ -148,7 +283,9 @@ pub(super) fn spawn(
         spawn_message_id.as_deref(),
         dedupe_key.as_deref(),
         call_id,
-        fork_context,
+        fork_spec.is_enabled(),
+        Some(&agent_path),
+        fork_spec.fork_turns(),
         &image_rewrite,
     ) {
         Ok(committed) => committed,
@@ -161,6 +298,7 @@ pub(super) fn spawn(
     let record = SubagentRecord {
         agent_id: committed.agent_id.clone(),
         nickname: Some(nickname.clone()),
+        agent_path: agent_path.clone(),
         child_session_id: committed.child_session_id.clone(),
         parent_session_id: parent_session.clone(),
         spawn_message_id,
@@ -179,12 +317,20 @@ pub(super) fn spawn(
     streams
         .frozen
         .insert(committed.child_session_id.clone(), frozen.clone());
+    streams
+        .subagent_budgets
+        .insert(committed.agent_id.clone(), effective_max_tokens);
     if resolved_model.pinned {
         streams
             .pinned_subagent_models
             .insert(committed.child_session_id.clone(), frozen.clone());
     }
 
+    let limits = ChildTurnLimits {
+        depth: next_depth,
+        max_depth,
+        max_tokens: effective_max_tokens,
+    };
     super::launch::launch_child_turn(
         state,
         streams,
@@ -201,20 +347,26 @@ pub(super) fn spawn(
         &persisted_items,
         true,
         None,
+        limits,
+        &tree.root_session,
     )?;
 
     Ok(SubagentOutcome::Spawned {
         agent_id: committed.agent_id,
         nickname: Some(nickname),
+        agent_path: Some(agent_path),
         role,
         title: effective_title,
         model: resolved_model.model_override_label,
         reasoning_effort: resolved_model.effort_override_label,
-        fork_context,
+        fork_context: fork_spec.is_enabled(),
+        fork_turns: fork_spec.fork_turns(),
+        max_tokens: effective_max_tokens,
     })
 }
 
-/// `send_input`：校验归属与活动态 → 严格归档图片 → 原子入队 → 若 interrupt 则取消当前轮，若 idle 则立即调度。
+/// `send_input`：校验归属与活动态 → 严格归档图片 → 原子入队 →
+/// `trigger_turn=true` 时若 idle 立即调度，`false` 时仅入队（`queued`，不唤醒）。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn send_input(
     state: &mut AppState,
@@ -225,52 +377,69 @@ pub(super) fn send_input(
     target: &str,
     items: &[SubagentInputItem],
     interrupt: bool,
+    trigger_turn: bool,
 ) -> Result<SubagentOutcome, String> {
     let parent_session = key.session.clone();
     let workspace = streams
         .db_workspaces
         .get(key)
         .cloned()
+        .or_else(|| super::workspace_for_pane(state, key.pane))
         .ok_or_else(|| "subagent workspace unavailable".to_string())?;
     let database = persistence
         .database()
         .ok_or_else(|| "subagent persistence unavailable".to_string())?;
-    let record = database
-        .resolve_owned_subagent(&workspace, &parent_session, target)
-        .map_err(|err| err.code().to_string())?
+    let tree = load_subagent_tree(database, &workspace, &parent_session);
+    let record = resolve_tree_target(&tree, target)
+        .cloned()
         .ok_or_else(|| NOT_FOUND_CODE.to_string())?;
     let target = record.agent_id.as_str();
+    // 队列/归属操作必须使用目标真正的父会话（目标可能是孙 agent）。
+    let owner_session = record.parent_session_id.clone();
+    let owner_key = RequestKey {
+        pane: key.pane,
+        session: owner_session.clone(),
+        generation: key.generation,
+    };
 
-    let is_running = streams.subagents.values().any(|h| {
-        h.agent_id == target && h.parent.session == parent_session && h.status == STATUS_RUNNING
-    });
+    // 整树寻址：目标可能不是调用者的直接子 agent，句柄按全局唯一 `agent_id` 匹配。
+    let is_running = streams
+        .subagents
+        .values()
+        .any(|h| h.agent_id == target && h.status == STATUS_RUNNING && !h.closed_without_report);
     let is_resumed = streams.resumed_subagents.contains(target);
     if !is_running && !is_resumed {
         return Err(NOT_ACTIVE_CODE.to_string());
     }
-    let was_cancelling_from_interrupt = streams.paused_by_interrupt.remove(target);
+    // `trigger_turn=false` 只入队：`interrupt` 在解析层已禁止与它同传，且不解除 interrupt 暂停态。
+    let interrupt = interrupt && trigger_turn;
+    let was_cancelling_from_interrupt = trigger_turn && streams.paused_by_interrupt.remove(target);
     let max_concurrent = state
         .subagents_config
         .max_concurrent
         .clamp(1, crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT);
 
     // P1-1：非运行态（idle）下入库前先校验队首未阻断且存在可用并发槽，避免入库后再报错遗留孤儿 queued 项。
-    if !is_running {
-        if let Ok(Some(head)) = database.next_queued_input(&workspace, &parent_session, target)
+    if !is_running && trigger_turn {
+        if let Ok(Some(head)) = database.next_queued_input(&workspace, &owner_session, target)
             && let Some(code) = head.error_code
         {
             return Err(format!("subagent input blocked: {code}"));
         }
-        if running_count_for_parent(streams, &parent_session) >= max_concurrent {
+        if running_in_tree(streams, &tree.root_session) >= max_concurrent {
             return Err(LIMIT_REACHED_CODE.to_string());
         }
     }
 
     let frozen = {
-        let parent_frozen = resolve_frozen_for_pane(state, key.pane)
-            .or_else(|| streams.frozen.get(&parent_session).cloned())
-            .or_else(|| streams.frozen.get(&record.child_session_id).cloned())
-            .ok_or_else(|| "subagent model snapshot unavailable".to_string())?;
+        let parent_frozen = resolve_parent_frozen_for_session(
+            state,
+            streams,
+            key.pane,
+            &owner_session,
+            &record.child_session_id,
+        )
+        .ok_or_else(|| "subagent model snapshot unavailable".to_string())?;
         super::model_resolve::child_frozen_for(state, streams, &record, &parent_frozen)
     };
     streams
@@ -288,19 +457,20 @@ pub(super) fn send_input(
     )?;
 
     let parent_message_id = active_assistant_id(state, key);
+    let prefix = if trigger_turn { "send" } else { "msg" };
     let dedupe_key = match call_id.filter(|cid| !cid.trim().is_empty()) {
         Some(cid) => format!(
-            "send:{}:{}:{cid}",
+            "{prefix}:{}:{}:{cid}",
             parent_session,
             parent_message_id.as_deref().unwrap_or_default()
         ),
-        None => format!("send:{}:{}", parent_session, new_external_id("dedupe")),
+        None => format!("{prefix}:{}:{}", parent_session, new_external_id("dedupe")),
     };
 
     let enqueued = database
         .enqueue_input(
             &workspace,
-            &parent_session,
+            &owner_session,
             target,
             &dedupe_key,
             call_id,
@@ -310,14 +480,33 @@ pub(super) fn send_input(
         )
         .map_err(|err| err.code().to_string())?;
 
+    if !trigger_turn {
+        sync_agent_ui_queue(
+            state,
+            streams,
+            persistence,
+            key.pane,
+            &workspace,
+            &owner_session,
+        );
+        let queue = database
+            .subagent_queue_states(&workspace, &owner_session)
+            .unwrap_or_default();
+        let status = super::projected_agent_status(streams, &record, queue.get(target));
+        return Ok(SubagentOutcome::InputAccepted {
+            submission_id: enqueued.submission_id,
+            agent_id: target.to_string(),
+            status,
+            queued_count: enqueued.queued_count,
+            interrupt: false,
+            trigger_turn: false,
+        });
+    }
+
     if is_running {
         if (interrupt || was_cancelling_from_interrupt) && enqueued.created {
             streams.interrupted_subagents.insert(target.to_string());
-            if let Some(handle) = streams
-                .subagents
-                .values()
-                .find(|h| h.agent_id == target && h.parent.session == parent_session)
-            {
+            if let Some(handle) = streams.subagents.values().find(|h| h.agent_id == target) {
                 let _ = handle.cancel.send(true);
             }
         }
@@ -327,7 +516,7 @@ pub(super) fn send_input(
             persistence,
             key.pane,
             &workspace,
-            &parent_session,
+            &owner_session,
         );
         return Ok(SubagentOutcome::InputAccepted {
             submission_id: enqueued.submission_id,
@@ -335,13 +524,14 @@ pub(super) fn send_input(
             status: enqueued.status,
             queued_count: enqueued.queued_count,
             interrupt,
+            trigger_turn: true,
         });
     }
 
     // 目标处于已恢复 idle 态：尝试立即消费队首输入。
     let mut final_status = enqueued.status;
     let mut final_queued = enqueued.queued_count;
-    match schedule_next_queued_input(state, streams, persistence, key, &workspace, target) {
+    match schedule_next_queued_input(state, streams, persistence, &owner_key, &workspace, target) {
         Ok(Some(claimed)) => {
             if claimed.submission_id == enqueued.submission_id {
                 final_status = STATUS_RUNNING.to_string();
@@ -356,7 +546,7 @@ pub(super) fn send_input(
                 persistence,
                 key.pane,
                 &workspace,
-                &parent_session,
+                &owner_session,
             );
             return Err(err);
         }
@@ -367,7 +557,7 @@ pub(super) fn send_input(
         persistence,
         key.pane,
         &workspace,
-        &parent_session,
+        &owner_session,
     );
     Ok(SubagentOutcome::InputAccepted {
         submission_id: enqueued.submission_id,
@@ -375,6 +565,7 @@ pub(super) fn send_input(
         status: final_status,
         queued_count: final_queued,
         interrupt,
+        trigger_turn: true,
     })
 }
 
@@ -391,26 +582,35 @@ pub(super) fn resume(
         .db_workspaces
         .get(key)
         .cloned()
+        .or_else(|| super::workspace_for_pane(state, key.pane))
         .ok_or_else(|| "subagent workspace unavailable".to_string())?;
     let database = persistence
         .database()
         .ok_or_else(|| "subagent persistence unavailable".to_string())?;
-    let record = database
-        .resolve_owned_subagent(&workspace, &parent_session, agent_id)
-        .map_err(|err| err.code().to_string())?
+    let tree = load_subagent_tree(database, &workspace, &parent_session);
+    let record = resolve_tree_target(&tree, agent_id)
+        .cloned()
         .ok_or_else(|| NOT_FOUND_CODE.to_string())?;
     let agent_id = record.agent_id.as_str();
+    // 队列/归属操作必须使用目标真正的父会话（目标可能是孙 agent）。
+    let owner_session = record.parent_session_id.clone();
+    let owner_key = RequestKey {
+        pane: key.pane,
+        session: owner_session.clone(),
+        generation: key.generation,
+    };
     // resume 先判运行态：interrupt 已发出取消但子轮尚未落定时，这里只是把「恢复」意图
     // 转交结算路径（`finish` 看到 interrupted 标记后会继续消费队列）。
-    let is_running = streams.subagents.values().any(|h| {
-        h.agent_id == agent_id && h.parent.session == parent_session && h.status == STATUS_RUNNING
-    });
+    let is_running = streams
+        .subagents
+        .values()
+        .any(|h| h.agent_id == agent_id && h.status == STATUS_RUNNING && !h.closed_without_report);
     if streams.paused_by_interrupt.remove(agent_id) && is_running {
         streams.interrupted_subagents.insert(agent_id.to_string());
     }
 
     let queue_map = database
-        .subagent_queue_states(&workspace, &parent_session)
+        .subagent_queue_states(&workspace, &owner_session)
         .unwrap_or_default();
     let queued_count = queue_map.get(agent_id).map_or(0, |q| q.queued_count);
 
@@ -428,18 +628,18 @@ pub(super) fn resume(
         .subagents_config
         .max_concurrent
         .clamp(1, crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT);
-    if queued_count > 0 && running_count_for_parent(streams, &parent_session) >= max_concurrent {
+    if queued_count > 0 && running_in_tree(streams, &tree.root_session) >= max_concurrent {
         return Err(LIMIT_REACHED_CODE.to_string());
     }
 
     database
-        .recover_subagent_for_resume(&workspace, &parent_session, agent_id)
+        .recover_subagent_for_resume(&workspace, &owner_session, agent_id)
         .map_err(|err| err.code().to_string())?;
     streams.resumed_subagents.insert(agent_id.to_string());
 
     if let Some(parent_frozen) = streams
         .frozen
-        .get(&parent_session)
+        .get(&owner_session)
         .cloned()
         .or_else(|| resolve_frozen_for_pane(state, key.pane))
         .or_else(|| streams.frozen.get(&record.child_session_id).cloned())
@@ -451,7 +651,14 @@ pub(super) fn resume(
             .insert(record.child_session_id.clone(), frozen);
     }
 
-    match schedule_next_queued_input(state, streams, persistence, key, &workspace, agent_id) {
+    match schedule_next_queued_input(
+        state,
+        streams,
+        persistence,
+        &owner_key,
+        &workspace,
+        agent_id,
+    ) {
         Ok(Some(claimed)) => {
             sync_agent_ui_queue(
                 state,
@@ -459,7 +666,7 @@ pub(super) fn resume(
                 persistence,
                 key.pane,
                 &workspace,
-                &parent_session,
+                &owner_session,
             );
             Ok(SubagentOutcome::Resumed {
                 agent_id: agent_id.to_string(),
@@ -474,7 +681,7 @@ pub(super) fn resume(
                 persistence,
                 key.pane,
                 &workspace,
-                &parent_session,
+                &owner_session,
             );
             Ok(SubagentOutcome::Resumed {
                 agent_id: agent_id.to_string(),
@@ -489,7 +696,7 @@ pub(super) fn resume(
                 persistence,
                 key.pane,
                 &workspace,
-                &parent_session,
+                &owner_session,
             );
             Err(err)
         }
@@ -557,17 +764,44 @@ pub(crate) fn schedule_next_queued_input_with_done(
         .subagents_config
         .max_concurrent
         .clamp(1, crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT);
-    let running = running_count_for_parent(streams, &parent_session);
-    if running >= max_concurrent {
+    let (root_session, _, _) = database
+        .resolve_session_tree_root(workspace, &parent_session)
+        .unwrap_or_else(|_| {
+            (
+                parent_session.clone(),
+                0,
+                crate::chat::agent::ROOT_AGENT_PATH.to_string(),
+            )
+        });
+    if running_in_tree(streams, &root_session) >= max_concurrent {
         return Err(LIMIT_REACHED_CODE.to_string());
     }
+    let max_depth = state
+        .subagents_config
+        .max_depth
+        .clamp(1, crate::config::subagents::MAX_AGENT_DEPTH_LIMIT);
+    // 队列轮沿用 spawn 时冻结的预算覆写（无记录时回退当前默认值）。
+    let max_tokens = streams
+        .subagent_budgets
+        .get(agent_id)
+        .copied()
+        .unwrap_or(state.subagents_config.default_max_tokens);
+    let limits = ChildTurnLimits {
+        depth: crate::chat::agent::path_depth(&record.agent_path),
+        max_depth,
+        max_tokens,
+    };
 
     // 若该子会话有显式/角色绑定的固定模型，优先沿用固定模型；
     // 否则继承父会话最新模型，再回退到数据库里持久化的子 agent 模型快照。
-    let parent_frozen = resolve_frozen_for_pane(state, parent_key.pane)
-        .or_else(|| streams.frozen.get(&parent_session).cloned())
-        .or_else(|| streams.frozen.get(&record.child_session_id).cloned())
-        .ok_or_else(|| "subagent model snapshot unavailable".to_string())?;
+    let parent_frozen = resolve_parent_frozen_for_session(
+        state,
+        streams,
+        parent_key.pane,
+        &parent_session,
+        &record.child_session_id,
+    )
+    .ok_or_else(|| "subagent model snapshot unavailable".to_string())?;
     let frozen = super::model_resolve::child_frozen_for(state, streams, &record, &parent_frozen);
     streams
         .frozen
@@ -582,6 +816,13 @@ pub(crate) fn schedule_next_queued_input_with_done(
         model: frozen.model.clone(),
         variant: frozen.variant.clone(),
     };
+    let workspace_trusted = persistence.is_trusted(&cwd) || persistence.is_trusted(workspace);
+    let effective_subagents = crate::config::subagents::merge_project_roles_for_paths(
+        &state.subagents_config,
+        Some(workspace),
+        Some(&cwd),
+        workspace_trusted,
+    );
     let inputs = super::context::capture_child_prompt_inputs(
         state,
         persistence,
@@ -613,6 +854,8 @@ pub(crate) fn schedule_next_queued_input_with_done(
         frozen.output_limit,
         frozen.supports_image_input,
         &next_input.items,
+        &effective_subagents,
+        limits,
     ) {
         let code = if err.contains(IMAGE_MISSING_CODE) {
             IMAGE_MISSING_CODE
@@ -655,12 +898,14 @@ pub(crate) fn schedule_next_queued_input_with_done(
         &claimed.items,
         false,
         reused_done,
+        limits,
+        &root_session,
     )?;
 
     Ok(Some(claimed))
 }
 
-/// 同步窗格 `Agents` 列表中的状态投影与 `queued_count`。
+/// 同步窗格 `Agents` 列表中的状态投影与 `queued_count`（并刷新底栏 `N blocked` 计数与筛选高亮）。
 pub(super) fn sync_agent_ui_queue(
     state: &mut AppState,
     streams: &ChatStreams,
@@ -672,16 +917,22 @@ pub(super) fn sync_agent_ui_queue(
     let Some(database) = persistence.database() else {
         return;
     };
-    let Ok(records) = database.list_subagents(workspace, parent_session) else {
+    let tree = load_subagent_tree(database, workspace, parent_session);
+    if tree.records.is_empty() {
         return;
-    };
-    let queue_states = database
-        .subagent_queue_states(workspace, parent_session)
-        .unwrap_or_default();
+    }
+    let queue_states = tree_queue_states(database, workspace, &tree);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return;
     };
-    for record in &records {
+    let selected_agent_id = target
+        .lx
+        .task
+        .as_ref()
+        .and_then(|page| page.selected_agent_index(&target.lx.agents))
+        .and_then(|index| target.lx.agents.runs.get(index))
+        .map(|run| run.agent_id.clone());
+    for record in &tree.records {
         let q = queue_states.get(&record.agent_id);
         let projected = super::projected_agent_status(streams, record, q);
         let queued_count = q.map_or(0, |s| s.queued_count);
@@ -690,19 +941,40 @@ pub(super) fn sync_agent_ui_queue(
             run.queued_count = queued_count;
         }
     }
+    target.lx.chat.status.blocked_subagents = target.lx.agents.blocked_count();
+    crate::app::update::restore_selected_task_agent(&mut target.lx, selected_agent_id.as_deref());
 }
 
-/// 统计当前父会话下正在运行的子 agent 数量。
-fn running_count_for_parent(streams: &ChatStreams, parent_session: &str) -> usize {
-    streams
-        .subagents
-        .values()
-        .filter(|handle| handle.parent.session == parent_session && handle.status == STATUS_RUNNING)
-        .count()
+/// 解析父会话的最新模型快照：
+/// - 若 `owner_session` 即窗格当前主会话，优先读窗格最新模型选择（支持用户在主窗格切换模型后被恢复的子 agent 继承）；
+/// - 若 `owner_session` 是嵌套的父子 agent 会话，优先读该父子会话的冻结模型快照。
+fn resolve_parent_frozen_for_session(
+    state: &AppState,
+    streams: &ChatStreams,
+    pane: PaneId,
+    owner_session: &str,
+    child_session_id: &str,
+) -> Option<crate::app::state::FrozenModel> {
+    let is_pane_root = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.session_id.as_deref())
+        .is_some_and(|root| root == owner_session);
+    if is_pane_root {
+        resolve_frozen_for_pane(state, pane)
+            .or_else(|| streams.frozen.get(owner_session).cloned())
+            .or_else(|| streams.frozen.get(child_session_id).cloned())
+    } else {
+        streams
+            .frozen
+            .get(owner_session)
+            .cloned()
+            .or_else(|| resolve_frozen_for_pane(state, pane))
+            .or_else(|| streams.frozen.get(child_session_id).cloned())
+    }
 }
 
 /// 从窗格当前模型配置解析 `FrozenModel`。
-fn resolve_frozen_for_pane(
+pub(super) fn resolve_frozen_for_pane(
     state: &AppState,
     pane: PaneId,
 ) -> Option<crate::app::state::FrozenModel> {

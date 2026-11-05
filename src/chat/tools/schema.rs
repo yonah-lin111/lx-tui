@@ -153,6 +153,9 @@ pub fn available_tools() -> &'static [ToolSpec] {
 }
 
 /// 按工具面过滤：顺序跟随 [`TOOLS`]，集合等于 `surface.names()`。
+///
+/// 过滤只按名字集合进行，`ToolSurface::ExecutorCoordinator`（未达深度上限的实现者）
+/// 自动获得 7 项实现工具 + 8 项控制工具。
 pub fn tools_for(surface: crate::chat::agent::ToolSurface) -> Vec<&'static ToolSpec> {
     TOOLS
         .iter()
@@ -239,14 +242,34 @@ pub fn turn_tools_with_subagents(
     mcp: &crate::mcp::McpToolSnapshot,
     subagents: Option<&crate::config::subagents::SubagentsSection>,
 ) -> Vec<super::types::ToolDecl> {
+    turn_tools_for_subagent(
+        surface,
+        crate::config::subagents::RoleCapabilities::default(),
+        mcp,
+        subagents,
+    )
+}
+
+/// 子 agent 轮次的完整工具声明（按 `RoleCapabilities` 执行细粒度能力收紧：只减不增）。
+pub fn turn_tools_for_subagent(
+    surface: crate::chat::agent::ToolSurface,
+    capabilities: crate::config::subagents::RoleCapabilities,
+    mcp: &crate::mcp::McpToolSnapshot,
+    subagents: Option<&crate::config::subagents::SubagentsSection>,
+) -> Vec<super::types::ToolDecl> {
     let mut decls = builtin_tools_with_subagents(surface, subagents);
-    decls.extend(mcp.tools().iter().map(|tool| super::types::ToolDecl {
-        name: tool.qualified.clone(),
-        description: tool.description.clone(),
-        parameters: tool.parameters.clone(),
-    }));
-    if mcp.has_resources() {
-        decls.extend(resource_tools());
+    if !capabilities.allow_web_search {
+        decls.retain(|decl| decl.name != "web_search");
+    }
+    if capabilities.allow_mcp {
+        decls.extend(mcp.tools().iter().map(|tool| super::types::ToolDecl {
+            name: tool.qualified.clone(),
+            description: tool.description.clone(),
+            parameters: tool.parameters.clone(),
+        }));
+        if mcp.has_resources() {
+            decls.extend(resource_tools());
+        }
     }
     decls
 }

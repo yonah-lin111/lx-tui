@@ -109,6 +109,8 @@ pub enum AppEvent {
     SubagentFinished {
         key: crate::app::state::RequestKey,
         reason: crate::chat::events::StopReason,
+        /// 多步累计 Token 预算耗尽（子轮专用）；与普通取消区分。
+        budget_exceeded: bool,
         usage: crate::db::chat::Usage,
         billing: crate::db::chat::Usage,
     },
@@ -789,6 +791,7 @@ fn handle_app_event(
         AppEvent::SubagentFinished {
             key,
             reason,
+            budget_exceeded,
             usage,
             billing,
         } => {
@@ -798,6 +801,7 @@ fn handle_app_event(
                 persistence,
                 key,
                 reason,
+                budget_exceeded,
                 usage,
                 billing,
             );

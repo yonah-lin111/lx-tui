@@ -82,7 +82,11 @@ pub(super) fn layout(
     }
     let space = end.saturating_sub(left);
     // 运行指标贴在模型/上下文右侧，因此先从可用宽度里给它和分隔符留位。
-    let activity = activity_text(tasks, subagents, space);
+    let activity = if status.blocked_subagents == 0 {
+        activity_text(tasks, subagents, space)
+    } else {
+        activity_text_with_blocked(tasks, subagents, status.blocked_subagents, space)
+    };
     let activity_w = activity
         .as_ref()
         .map_or(0, |value| u16::try_from(value.width()).unwrap_or(u16::MAX));
@@ -233,9 +237,10 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
     }
     // 运行指标：`1 process · 2 subagents`，紧凑贴在模型/上下文右侧。
     if lay.activity.width > 0 {
-        if let Some(activity) = activity_text(
+        if let Some(activity) = activity_text_with_blocked(
             lx.background_tasks,
             lx.agents.running_count(),
+            lx.chat.status.blocked_subagents,
             lay.activity.width,
         ) {
             put(
@@ -322,9 +327,22 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
 /// 宽度不足时按后台任务、子 agent 的顺序尽量保留能放下的段；
 /// 单段都放不下才整段隐藏，绝不画出半截宽字符。
 fn activity_text(tasks: usize, subagents: usize, available: u16) -> Option<String> {
+    activity_text_with_blocked(tasks, subagents, 0, available)
+}
+
+/// 运行指标 + 阻塞提醒：`1 process · 2 subagents · 1 blocked`。
+///
+/// 宽度不足时按后台任务、子 agent、阻塞提醒的顺序尽量保留能放下的段。
+fn activity_text_with_blocked(
+    tasks: usize,
+    subagents: usize,
+    blocked: usize,
+    available: u16,
+) -> Option<String> {
     let candidates = [
         (tasks > 0).then(|| text::lx_task_count_label(tasks)),
         (subagents > 0).then(|| text::lx_subagent_count_label(subagents)),
+        (blocked > 0).then(|| text::lx_subagent_blocked_label(blocked)),
     ];
     let mut out = String::new();
     let mut width = 0u16;

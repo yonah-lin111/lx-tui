@@ -51,6 +51,7 @@ impl LxChat {
             input_tokens: self.context_tokens,
             streaming: self.request.is_busy(),
             omitted_turns: self.omitted_turns_notice.take(),
+            blocked_subagents: self.status.blocked_subagents,
         };
     }
 

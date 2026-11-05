@@ -278,11 +278,14 @@ fn collab_calls_carry_the_agent_identity() {
         SubagentOutcome::Spawned {
             agent_id: "sub-1".to_string(),
             nickname: None,
+            agent_path: None,
             role: AgentRole::Explorer,
             title: "inspect cli".to_string(),
             model: None,
             reasoning_effort: None,
             fork_context: false,
+            fork_turns: None,
+            max_tokens: None,
         },
     )));
     match item_details_for_finish(&call, &executed) {
@@ -312,11 +315,14 @@ fn collab_calls_carry_the_agent_identity() {
         SubagentOutcome::Spawned {
             agent_id: "sub-2".to_string(),
             nickname: Some("Dijkstra".to_string()),
+            agent_path: Some("/root/dijkstra".to_string()),
             role: AgentRole::parse("reviewer").expect("role"),
             title: "audit auth".to_string(),
             model: Some("openai/gpt-5".to_string()),
             reasoning_effort: Some("high".to_string()),
             fork_context: true,
+            fork_turns: Some(3),
+            max_tokens: Some(50_000),
         },
     )));
     match item_details_for_finish(&call, &rich) {

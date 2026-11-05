@@ -273,6 +273,7 @@ mod tests {
             role: crate::chat::agent::AgentRole::Explorer,
             status: "completed".into(),
             files_changed: 2,
+            changed_paths: Vec::new(),
             duration_ms: Some(14_200),
             body: body.into(),
             delivered_at_ms: 1,

@@ -24,10 +24,10 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::state::{TaskPage, TaskTab};
+use crate::app::state::{AgentFilter, TaskPage, TaskTab};
 use crate::ui::{style, text};
 
 /// 面板顶部边框占用的行数。
@@ -231,6 +231,13 @@ pub(super) fn draw_list(
             rect.right(),
         );
     }
+    if page.tab == TaskTab::Agents {
+        if page.agent_reply.is_some() {
+            draw_agent_reply(grid, rect, page, agents);
+        } else {
+            draw_filter_pills(grid, rect, page);
+        }
+    }
 
     let list = Rect::new(
         rect.x,
@@ -257,11 +264,24 @@ pub(super) fn draw_agents_detail(
     let Some(page) = lx.task.as_ref() else {
         return;
     };
-    match lx.agents.runs.get(page.agents_window.active) {
+    match page
+        .selected_agent_index(&lx.agents)
+        .and_then(|index| lx.agents.runs.get(index))
+    {
         Some(run) => {
             let _ = agents::draw_detail(grid, rect, run, run.scroll, lx.chat.loading_frame, cache);
         }
-        None => draw_output_container(grid, rect, page),
+        None => {
+            if rect.width > 0 && rect.height > 0 {
+                grid.put_clipped(
+                    rect.x,
+                    rect.y,
+                    text::LX_TASK_AGENTS_EMPTY,
+                    style::muted(),
+                    rect.width,
+                );
+            }
+        }
     }
 }
 
@@ -275,6 +295,19 @@ pub(super) fn draw_footer(buf: &mut Buffer, area: Rect, page: &TaskPage) {
     let left = area.x.saturating_add(2);
     let right = area.right().saturating_sub(1);
     if right <= left {
+        return;
+    }
+    // 内联追问有独立的键位提示（避免面板快捷键与输入编辑混淆）。
+    if page.tab == TaskTab::Agents && page.agent_reply.is_some() {
+        let room = usize::from(right.saturating_sub(left));
+        put_buf(
+            buf,
+            left,
+            y,
+            text::LX_TASK_HINTS_AGENT_REPLY,
+            style::muted(),
+            left.saturating_add(u16::try_from(room).unwrap_or(0)),
+        );
         return;
     }
     // 按项拼接：窄窗格里**整项丢弃**（从右往左），绝不把 `[back esc]` 截成半截。
@@ -324,8 +357,10 @@ pub(crate) enum TaskHit {
     Tab(usize),
     /// 右上角的 `[esc]`：关闭面板。
     Close,
-    /// Agents 页签的某个子 agent 条目（0 基索引）。
+    /// Agents 页签的某个子 agent 条目（`agents.runs` 的真实下标）。
     Agent(usize),
+    /// Agents 页签的状态筛选胶囊。
+    AgentFilter(AgentFilter),
 }
 
 /// tab 行各段几何：`(tab 索引/标签的起始列, 宽度)` + `[esc]` 矩形。
@@ -351,6 +386,146 @@ fn tab_row_rects(rect: Rect) -> (Vec<(usize, u16, u16)>, Option<Rect>) {
     (tabs, close)
 }
 
+/// tab 行右侧筛选胶囊几何：`(筛选器, 起始列, 宽度)`。
+///
+/// 从右向左排布（紧邻 `[close esc]`），空间不足时整体不画也不命中。
+fn filter_row_rects(rect: Rect, page: &TaskPage) -> Vec<(AgentFilter, u16, u16)> {
+    if page.tab != TaskTab::Agents {
+        return Vec::new();
+    }
+    let (tabs, close) = tab_row_rects(rect);
+    let Some((_, last_x, last_w)) = tabs.last().copied() else {
+        return Vec::new();
+    };
+    let tabs_end = last_x.saturating_add(last_w);
+    let right = close.map_or(rect.right(), |close| close.x);
+    let sep_w = u16::try_from(text::LX_TASK_TAB_SEP.width()).unwrap_or(0);
+    let labels: Vec<(AgentFilter, u16)> = AgentFilter::ALL
+        .iter()
+        .map(|filter| {
+            (
+                *filter,
+                u16::try_from(filter.label().width()).unwrap_or(u16::MAX),
+            )
+        })
+        .collect();
+    let total = labels
+        .iter()
+        .map(|(_, width)| *width)
+        .sum::<u16>()
+        .saturating_add(sep_w.saturating_mul(labels.len().saturating_sub(1) as u16));
+    if right < total {
+        return Vec::new();
+    }
+    let start = right - total;
+    if start <= tabs_end.saturating_add(GAP) {
+        return Vec::new();
+    }
+    let mut x = start;
+    let mut rects = Vec::with_capacity(labels.len());
+    for (index, (filter, width)) in labels.into_iter().enumerate() {
+        if index > 0 {
+            x = x.saturating_add(sep_w);
+        }
+        rects.push((filter, x, width));
+        x = x.saturating_add(width);
+    }
+    rects
+}
+
+/// 绘制 `all · active · done` 筛选胶囊。
+fn draw_filter_pills(grid: &mut super::grid::Grid, rect: Rect, page: &TaskPage) {
+    let y = rect.y.saturating_add(TOP_BORDER);
+    let sep_w = u16::try_from(text::LX_TASK_TAB_SEP.width()).unwrap_or(0);
+    for (index, (filter, x, width)) in filter_row_rects(rect, page).into_iter().enumerate() {
+        if index > 0 {
+            put_grid(
+                grid,
+                x.saturating_sub(sep_w),
+                y,
+                text::LX_TASK_TAB_SEP,
+                style::muted(),
+                x,
+            );
+        }
+        let pill_style = if filter == page.agent_filter {
+            style::text().add_modifier(Modifier::BOLD)
+        } else {
+            style::muted()
+        };
+        put_grid(grid, x, y, filter.label(), pill_style, x + width);
+    }
+}
+
+/// 顶栏内联追问：`To <nickname>: <text>`，光标处反显。
+fn draw_agent_reply(
+    grid: &mut super::grid::Grid,
+    rect: Rect,
+    page: &TaskPage,
+    agents: &crate::app::state::AgentsState,
+) {
+    let Some(reply) = page.agent_reply.as_ref() else {
+        return;
+    };
+    let fallback_name = page
+        .selected_agent_index(agents)
+        .and_then(|index| agents.runs.get(index))
+        .map(|run| {
+            run.nickname
+                .as_deref()
+                .filter(|nickname| !nickname.is_empty())
+                .or_else(|| (!run.title.is_empty()).then_some(run.title.as_str()))
+                .unwrap_or_else(|| run.role.as_str())
+        });
+    let Some(name) = page
+        .agent_reply_target
+        .as_ref()
+        .map(|(_, label)| label.as_str())
+        .or(fallback_name)
+    else {
+        return;
+    };
+    let prefix = format!("To {name}: ");
+    let (tabs, close) = tab_row_rects(rect);
+    let start = tabs.last().map_or(rect.x, |(_, x, width)| {
+        x.saturating_add(*width).saturating_add(GAP)
+    });
+    let limit = close.map_or(rect.right(), |close| close.x);
+    if start >= limit {
+        return;
+    }
+    let y = rect.y.saturating_add(TOP_BORDER);
+    let mut x = put_grid(grid, start, y, &prefix, style::accent(), limit);
+    let cursor = reply.cursor();
+    for (index, ch) in reply.text().chars().enumerate() {
+        let width = ch.width().unwrap_or(0) as u16;
+        if width == 0 {
+            continue;
+        }
+        if x.saturating_add(width) > limit {
+            return;
+        }
+        let cell_style = if index == cursor {
+            style::text().add_modifier(Modifier::REVERSED)
+        } else {
+            style::text()
+        };
+        let cell = ch.to_string();
+        put_grid(grid, x, y, &cell, cell_style, x.saturating_add(width));
+        x = x.saturating_add(width);
+    }
+    if cursor >= reply.text().chars().count() && x < limit {
+        put_grid(
+            grid,
+            x,
+            y,
+            " ",
+            style::text().add_modifier(Modifier::REVERSED),
+            x.saturating_add(1),
+        );
+    }
+}
+
 /// 面板点击命中：**item 列表**的 tab 行与右端 `[close esc]`；点在别处返回 None。
 ///
 /// 输出容器不再有边框与自己的 `[close esc]`（用户要求移除多余横线），因此那一侧
@@ -371,11 +546,21 @@ pub(crate) fn hit(
     {
         return Some(TaskHit::Close);
     }
+    let tab_y = rect.y.saturating_add(TOP_BORDER);
     if let Some((index, _, _)) = tabs.iter().find(|(_, x, width)| {
         let right = x.saturating_add(*width);
-        row == rect.y.saturating_add(TOP_BORDER) && column >= *x && column < right
+        row == tab_y && column >= *x && column < right
     }) {
         return Some(TaskHit::Tab(*index));
+    }
+    // 筛选胶囊：只在 Agents 页签且未进入内联输入态时可点。
+    if page.tab == TaskTab::Agents
+        && page.agent_reply.is_none()
+        && let Some((filter, _, _)) = filter_row_rects(rect, page)
+            .into_iter()
+            .find(|(_, x, width)| row == tab_y && column >= *x && column < x.saturating_add(*width))
+    {
+        return Some(TaskHit::AgentFilter(filter));
     }
     // item 行：进程列表走原逻辑，Agents 列表按同一套窗口起点命中。
     let list_y = rect.y.saturating_add(TOP_BORDER + TAB_ROW);
@@ -384,8 +569,12 @@ pub(crate) fn hit(
     }
     let visible = usize::from(rect.height.saturating_sub(TOP_BORDER + TAB_ROW));
     let start = agents::window_start(page, agents, visible);
-    let index = start.saturating_add(usize::from(row.saturating_sub(list_y)));
-    (index < agents.runs.len()).then_some(TaskHit::Agent(index))
+    let position = start.saturating_add(usize::from(row.saturating_sub(list_y)));
+    agents
+        .filtered_indices(page.agent_filter)
+        .get(position)
+        .copied()
+        .map(TaskHit::Agent)
 }
 
 /// 进程列表：每行 `❯ 命令 · cwd · running 12s`，行尾右对齐时长。
@@ -584,6 +773,8 @@ pub(super) fn agents_rows(area: Rect, lx: &crate::app::state::Lx) -> Option<(usi
         return None;
     }
     let rect = super::layout(area, lx).task_output?;
-    let run = lx.agents.runs.get(page.agents_window.active)?;
+    let run = page
+        .selected_agent_index(&lx.agents)
+        .and_then(|index| lx.agents.runs.get(index))?;
     Some((usize::from(rect.height), agents::detail_rows(rect, run)))
 }
