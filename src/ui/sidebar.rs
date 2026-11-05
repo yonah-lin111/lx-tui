@@ -258,21 +258,21 @@ pub fn sidebar_boundary_at(view: &layout::ViewLayout, column: u16, row: u16) -> 
     column == view.sidebar.right().saturating_sub(1) || column == view.sidebar.right()
 }
 
-/// 工作区历史列表切换按钮矩形：位于 `[+]` 左侧 1 列（`[≡] [+]`）；折叠或空间不足时不显示。
+/// 工作区历史列表切换按钮矩形：侧栏顶边框右端（`[+] [≡]` 右侧按钮）；折叠或空间不足时不显示。
 pub fn workspace_mode_button(view: &layout::ViewLayout) -> Option<Rect> {
     mode_button_area(view.sidebar)
 }
 
 fn mode_button_area(sidebar: Rect) -> Option<Rect> {
-    let add = add_button_area(sidebar)?;
+    if sidebar.width <= COLLAPSED_STRIP || sidebar.height == 0 {
+        return None;
+    }
     let width = text::PROMPT_MODE_LIST_LABEL.chars().count() as u16;
-    let x = add.x.checked_sub(width.saturating_add(1))?;
-    let min_x = sidebar
-        .x
-        .saturating_add(1)
-        .saturating_add(text::SIDEBAR_TITLE.chars().count() as u16)
-        .saturating_add(2);
-    (x >= min_x).then_some(Rect::new(x, sidebar.y, width, 1))
+    let x = sidebar
+        .right()
+        .saturating_sub(width.saturating_add(PANEL_BUTTON_MARGIN));
+    (sidebar.width >= width.saturating_add(PANEL_BUTTON_MARGIN).saturating_add(1))
+        .then_some(Rect::new(x, sidebar.y, width, 1))
 }
 
 /// 工作区历史列表切换按钮：默认显示 `[≡]`，历史模式下显示 `[/]`。
@@ -293,21 +293,21 @@ fn render_workspace_mode_button(frame: &mut Frame<'_>, area: Rect, mode: Workspa
     }
 }
 
-/// 新建工作区按钮矩形：侧栏顶边框右端（原折叠按钮位置）；折叠或空间不足时不显示。
+/// 新建工作区按钮矩形：位于列表按钮 `[≡]` 左侧 1 列（`[+] [≡]`）；折叠或空间不足时不显示。
 pub fn add_workspace_button(view: &layout::ViewLayout) -> Option<Rect> {
     add_button_area(view.sidebar)
 }
 
 fn add_button_area(sidebar: Rect) -> Option<Rect> {
-    if sidebar.width <= COLLAPSED_STRIP || sidebar.height == 0 {
-        return None;
-    }
+    let mode = mode_button_area(sidebar)?;
     let width = text::ADD_WORKSPACE_LABEL.chars().count() as u16;
-    let x = sidebar
-        .right()
-        .saturating_sub(width.saturating_add(PANEL_BUTTON_MARGIN));
-    (sidebar.width >= width.saturating_add(PANEL_BUTTON_MARGIN).saturating_add(1))
-        .then_some(Rect::new(x, sidebar.y, width, 1))
+    let x = mode.x.checked_sub(width.saturating_add(1))?;
+    let min_x = sidebar
+        .x
+        .saturating_add(1)
+        .saturating_add(text::SIDEBAR_TITLE.chars().count() as u16)
+        .saturating_add(2);
+    (x >= min_x).then_some(Rect::new(x, sidebar.y, width, 1))
 }
 
 /// 新建工作区按钮：强调色标签，点击立即创建并激活。

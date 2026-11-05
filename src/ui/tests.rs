@@ -684,9 +684,11 @@ fn add_workspace_button_sits_at_sidebar_top_border_right() {
     let state = AppState::demo();
     let view = view_for(&state);
     let button = add_workspace_button(&view).expect("button is visible");
-    // 原折叠按钮位置：顶边框右端，距右边框 1 列。
+    let mode_button = workspace_mode_button(&view).expect("mode button is visible");
+    // 顶边框右端：`[+] [≡]`，列表按钮居右端，新建按钮紧邻其左侧 1 列。
     assert_eq!(button.y, view.sidebar.y);
-    assert_eq!(button.right(), view.sidebar.right() - 1);
+    assert_eq!(mode_button.right(), view.sidebar.right() - 1);
+    assert_eq!(button.right() + 1, mode_button.x);
     assert_eq!(
         button.width,
         text::ADD_WORKSPACE_LABEL.chars().count() as u16

@@ -238,7 +238,17 @@ pub(crate) fn commit_new_workspace(state: &mut AppState) {
                     root: None,
                     trigger: TrustTrigger::CreateWorkspace { cwd: path },
                 }),
-                None => create_workspace_with_cwd(state, None),
+                None => {
+                    if super::workspace_history_mode(state) {
+                        if let Some(path) =
+                            base_cwd.or_else(|| crate::app::state::current_workspace_identity().0)
+                        {
+                            super::record_workspace_in_history_list(state, path);
+                        }
+                    } else {
+                        create_workspace_with_cwd(state, None);
+                    }
+                }
             }
         }
         Err(err) => {

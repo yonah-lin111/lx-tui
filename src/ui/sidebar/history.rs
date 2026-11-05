@@ -415,7 +415,7 @@ mod tests {
     use crate::ui;
 
     #[test]
-    fn workspace_mode_button_sits_left_of_add_button_and_flips_label() {
+    fn workspace_mode_button_sits_right_of_add_button_and_flips_label() {
         let mut state = AppState::demo();
         let config = Config::default();
         let area = Rect::new(0, 0, 100, 30);
@@ -433,10 +433,11 @@ mod tests {
         let mode_btn = ui::workspace_mode_button(&view).expect("mode button");
         assert_eq!(mode_btn.y, add_btn.y);
         assert_eq!(mode_btn.width, 3);
+        assert_eq!(mode_btn.right(), view.sidebar.right() - 1);
         assert_eq!(
-            mode_btn.right() + 1,
-            add_btn.x,
-            "紧邻 [+] 左侧并留 1 列间隔"
+            add_btn.right() + 1,
+            mode_btn.x,
+            "[+] 位于 [≡] 左侧并留 1 列间隔"
         );
 
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");

@@ -368,6 +368,48 @@ pub fn delete_workspace_history_entry(state: &mut AppState, entry_index: usize) 
     true
 }
 
+/// 在历史列表（`ws list`）视图下新建工作区：仅登记入库、清空搜索过滤并选中该新建项，
+/// 保持停留在历史列表视图而不直接打开激活该工作区（对齐 Prompt List 新建节点行为）。
+pub fn record_workspace_in_history_list(state: &mut AppState, cwd: std::path::PathBuf) -> bool {
+    let base = workspace_label(&cwd, home_dir().as_deref());
+    state.workspace_history.search.clear();
+    state.workspace_history.row_click = None;
+    if !state
+        .workspace_history
+        .entries
+        .iter()
+        .any(|entry| entry.path == cwd)
+    {
+        let exists = cwd.is_dir();
+        state.workspace_history.entries.insert(
+            0,
+            WorkspaceHistoryEntry {
+                name: base.clone(),
+                path: cwd.clone(),
+                exists,
+                name_is_manual: false,
+                git: None,
+            },
+        );
+    }
+    let filtered = state.workspace_history.filtered_indices();
+    if let Some(pos) = filtered.iter().position(|&idx| {
+        state
+            .workspace_history
+            .entries
+            .get(idx)
+            .is_some_and(|entry| entry.path == cwd)
+    }) {
+        state.workspace_history.selected = pos;
+    }
+    state.effects.push(Effect::RecordWorkspace {
+        path: cwd,
+        name: base,
+    });
+    super::focus::focus_sidebar(state);
+    true
+}
+
 /// 处理历史列表模式下的键盘按键（上下选择、回车打开、Esc 退出、搜索框编辑）。
 pub fn apply_workspace_history_key(
     state: &mut AppState,
@@ -778,5 +820,60 @@ mod tests {
                 name: "ActiveRenamed".into(),
             }]
         );
+    }
+
+    #[test]
+    fn creating_workspace_in_history_mode_records_and_selects_without_opening() {
+        let mut state = AppState::demo();
+        let initial_ws_count = state.workspaces.len();
+        let target_dir = std::env::temp_dir();
+        apply_workspace_history(
+            &mut state,
+            vec![plain_entry(
+                "OldEntry",
+                PathBuf::from("/tmp/lx-old-entry"),
+                true,
+            )],
+        );
+        show_workspace_history(&mut state);
+        state.workspace_history.search.insert_str("old");
+        assert_eq!(state.workspace_history.selected, 0);
+
+        // 在历史列表模式下打开新建工作区弹窗并提交路径（经过信任放行 resume_trust）。
+        crate::app::update::open_new_workspace_dialog(&mut state);
+        if let Some(Overlay::NewWorkspace(dialog)) = state.overlay.as_mut() {
+            dialog.input.insert_str(&target_dir.to_string_lossy());
+        }
+        state.effects.clear();
+        apply_overlay_key(&mut state, OverlayKey::Enter);
+        let Some(Effect::CheckTrust { trigger, .. }) = state.effects.first().cloned() else {
+            panic!("CheckTrust expected");
+        };
+        state.effects.clear();
+        crate::app::update::resume_trust(&mut state, trigger);
+
+        // 保持停留在历史列表模式，不直接向活跃工作区列表添加/打开新工作区。
+        assert!(
+            workspace_history_mode(&state),
+            "在 ws list 中新建后保持停留在历史列表"
+        );
+        assert_eq!(
+            state.workspaces.len(),
+            initial_ws_count,
+            "不直接打开新建工作区"
+        );
+        assert!(
+            state.workspace_history.search.text().is_empty(),
+            "新建后自动清空搜索过滤以展示新条目"
+        );
+        let (_, selected_entry) = state
+            .workspace_history
+            .entry_at_visible_row(state.workspace_history.selected)
+            .expect("selected entry");
+        let canon_target = std::fs::canonicalize(&target_dir).unwrap_or(target_dir);
+        assert_eq!(selected_entry.path, canon_target);
+        assert!(state.effects.iter().any(
+            |eff| matches!(eff, Effect::RecordWorkspace { path, .. } if *path == canon_target)
+        ));
     }
 }

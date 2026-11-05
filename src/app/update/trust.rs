@@ -22,7 +22,11 @@ pub fn open_trust_dialog(state: &mut AppState, path: PathBuf, trigger: TrustTrig
 pub fn resume_trust(state: &mut AppState, trigger: TrustTrigger) {
     match trigger {
         TrustTrigger::CreateWorkspace { cwd } => {
-            super::create_workspace_with_cwd(state, Some(cwd));
+            if super::workspace_history_mode(state) {
+                super::record_workspace_in_history_list(state, cwd);
+            } else {
+                super::create_workspace_with_cwd(state, Some(cwd));
+            }
         }
         TrustTrigger::SyncWorkspaceCwd { workspace, pane } => {
             super::sync_workspace_cwd(state, workspace, pane);
