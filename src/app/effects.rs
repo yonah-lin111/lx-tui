@@ -280,6 +280,13 @@ pub enum Effect {
     CancelPresetOAuth { attempt_id: String },
     /// 手动提交 OAuth 授权码（仅授权码模式）。
     SubmitPresetOAuthCode { attempt_id: String, code: String },
+    /// 刷新云端模型目录与已连接供应商的实时模型列表。
+    ///
+    /// `pane` 为 None 时是启动静默同步（不弹 Toast）；指定供应商时只刷新该供应商。
+    RefreshModelsCatalog {
+        pane: Option<crate::layout::PaneId>,
+        provider_id: Option<String>,
+    },
     /// 打开浏览器（OAuth 授权链接）。
     OpenBrowser { url: String },
     /// 持久化一条已发送 prompt 到全局历史表（去重置顶、裁剪到上限）。

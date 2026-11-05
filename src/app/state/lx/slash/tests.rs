@@ -73,8 +73,9 @@ fn connect_command_is_registered_and_matched() {
 
 #[test]
 fn connect_panel_lists_presets_alphabetically() {
+    let pane = crate::layout::PaneId::alloc();
     let panel =
-        crate::app::state::ConnectPanel::new_with_env(&ConnectSettings::default(), |_| None);
+        crate::app::state::ConnectPanel::new_with_env(pane, &ConnectSettings::default(), |_| None);
     assert!(panel.entries.len() > 10, "预设目录非空");
     let names: Vec<String> = panel
         .entries
@@ -90,8 +91,9 @@ fn connect_panel_lists_presets_alphabetically() {
 
 #[test]
 fn connect_panel_refilters_by_name_and_id() {
+    let pane = crate::layout::PaneId::alloc();
     let mut panel =
-        crate::app::state::ConnectPanel::new_with_env(&ConnectSettings::default(), |_| None);
+        crate::app::state::ConnectPanel::new_with_env(pane, &ConnectSettings::default(), |_| None);
     panel.refilter("github-copilot");
     assert_eq!(
         panel.active_entry().map(|entry| entry.id.as_str()),
@@ -119,8 +121,9 @@ fn connect_panel_refilters_by_name_and_id() {
 
 #[test]
 fn connect_panel_reports_stage_windows() {
+    let pane = crate::layout::PaneId::alloc();
     let mut panel =
-        crate::app::state::ConnectPanel::new_with_env(&ConnectSettings::default(), |_| None);
+        crate::app::state::ConnectPanel::new_with_env(pane, &ConnectSettings::default(), |_| None);
     panel.refilter("openai");
     assert_eq!(panel.item_count(), 1);
     assert!(panel.move_active(1));
@@ -570,4 +573,66 @@ fn model_picker_refilter_resets_selected_item_to_first() {
 
     picker.refilter("gpt-5");
     assert_eq!(picker.window.active, 0, "再次变动 query 重置为首项");
+}
+
+#[test]
+fn connect_panel_tracks_text_input_and_inline_errors() {
+    use crate::app::state::{ConnectPromptStep, ConnectStage, PanelWindow};
+    let pane = crate::layout::PaneId::alloc();
+    let mut panel =
+        crate::app::state::ConnectPanel::new_with_env(pane, &ConnectSettings::default(), |_| None);
+    assert!(panel.has_text_input(), "供应商列表过滤使用模态输入框");
+    panel.stage = ConnectStage::InputPrompt {
+        provider_id: "anthropic".into(),
+        provider_name: "Anthropic".into(),
+        method_index: 0,
+        step: ConnectPromptStep::ApiKey,
+        answers: std::collections::BTreeMap::new(),
+        error: None,
+    };
+    assert!(panel.has_text_input());
+    panel.set_error("Invalid API key");
+    assert_eq!(panel.current_error(), Some("Invalid API key"));
+    panel.clear_error();
+    assert_eq!(panel.current_error(), None);
+    panel.validating = true;
+    panel.hover = Some(2);
+    panel.reset_to_providers();
+    assert_eq!(panel.stage, ConnectStage::Providers);
+    assert!(!panel.validating);
+    assert!(panel.hover.is_none());
+    assert!(panel.input.text().is_empty());
+    panel.stage = ConnectStage::Manage {
+        provider_id: "anthropic".into(),
+        provider_name: "Anthropic".into(),
+        source: crate::config::ai::connect::ConnectionSource::ApiKey,
+        actions: vec![crate::app::state::ConnectManageAction::SelectModel],
+        window: PanelWindow::default(),
+    };
+    assert!(!panel.has_text_input(), "管理菜单没有输入框");
+}
+
+#[test]
+fn connect_panel_refresh_entries_updates_tags_and_count() {
+    use crate::config::ai::connect::{ConnectSettings, ConnectedPresetRecord};
+    let pane = crate::layout::PaneId::alloc();
+    let mut panel =
+        crate::app::state::ConnectPanel::new_with_env(pane, &ConnectSettings::default(), |_| None);
+    assert_eq!(panel.connected_count(), 0);
+    let mut connect = ConnectSettings::default();
+    let mut record = ConnectedPresetRecord::new("anthropic");
+    record.api_key = Some("key".into());
+    connect.providers.insert("anthropic".into(), record);
+    panel.refresh_entries(&connect);
+    assert_eq!(panel.connected_count(), 1);
+    let entry = panel
+        .entries
+        .iter()
+        .find(|entry| entry.id == "anthropic")
+        .expect("anthropic entry");
+    assert_eq!(
+        entry.source,
+        Some(crate::config::ai::connect::ConnectionSource::ApiKey)
+    );
+    assert!(entry.tag.contains("API key"));
 }

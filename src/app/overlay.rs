@@ -32,6 +32,8 @@ pub enum OverlayKind {
     ReferencedFolderDelete,
     /// `/resume` 会话编辑模态：改名与删除（`Shift+Enter` 打开）。
     ResumeSessionEdit,
+    /// `/connect` 预设供应商居中模态。
+    Connect,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -51,6 +53,8 @@ pub enum Overlay {
     ReferencedFolderDelete(ReferencedFolderDelete),
     /// `/resume` 会话编辑模态：改名与删除（`Shift+Enter` 打开）。
     ResumeSessionEdit(ResumeSessionEdit),
+    /// `/connect` 预设供应商居中模态。
+    Connect(Box<crate::app::state::ConnectPanel>),
 }
 
 impl Overlay {
@@ -70,6 +74,7 @@ impl Overlay {
             Self::ReferencedFolderSearch(_) => OverlayKind::ReferencedFolderSearch,
             Self::ReferencedFolderDelete(_) => OverlayKind::ReferencedFolderDelete,
             Self::ResumeSessionEdit(_) => OverlayKind::ResumeSessionEdit,
+            Self::Connect(_) => OverlayKind::Connect,
         }
     }
 
@@ -84,6 +89,7 @@ impl Overlay {
             Self::ReferencedFolderInput(i) => Some(&i.input),
             Self::ReferencedFolderSearch(s) => Some(&s.query),
             Self::ResumeSessionEdit(r) => Some(&r.input),
+            Self::Connect(panel) if panel.has_text_input() => Some(&panel.input),
             _ => None,
         }
     }
@@ -99,6 +105,9 @@ impl Overlay {
             Self::ReferencedFolderInput(i) => Some(&mut i.input),
             Self::ReferencedFolderSearch(s) => Some(&mut s.query),
             Self::ResumeSessionEdit(r) => Some(&mut r.input),
+            Self::Connect(panel) if panel.has_text_input() && !panel.validating => {
+                Some(&mut panel.input)
+            }
             _ => None,
         }
     }

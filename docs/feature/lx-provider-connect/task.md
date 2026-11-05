@@ -35,6 +35,13 @@
 - [x] **Q5（独立 JSON 持久化存储）**：
   - 快捷连接与自定义供应商分文件存储：自定义保持在 `~/.lx-t[-dev]/config/ai.json`，快捷连接独立保存在 **`~/.lx-t[-dev]/config/connect.json`**（`0600` 权限 + 同目录临时文件原子写入），未连接的预设不落盘；
   - 运行时 `load_runtime_ai_settings()` 自动合并两份配置供 `/model`、聊天流、标题生成、子 Agent 与无头 CLI 统一消费。
+- [x] **Q6（`/connect` 居中模态弹窗，参考 `refdir`）**：
+  - `/connect` 执行后打开居中模态弹窗 `Overlay::Connect(Box<ConnectPanel>)`（`72 × 20`，参考 `src/ui/overlay/referenced/`），背景压暗、强调色方框、内部自带 `>` 单行输入框、下方实时显示校验状态/红字报错、列表带 `❯` 标记与滚动条、底栏显示快捷键提示。
+- [x] **Q7（API Key 真伪检测与双端拦截）**：
+  - 在 `/connect` 弹窗与设置页保存新增/修改的 API Key 时执行两级真实 HTTP 探测（优先请求 `<baseURL>/models`，`404/405` 时回退极简对话请求）；`401/403`、鉴权错误响应或连接失败一律拒绝落盘并在界面原地报错。
+- [x] **Q8（对齐 `opencode-dev` 拉取最新模型）**：
+  - 支持从 `models.opencode.ai` / `models.dev` 拉取最新云端模型目录并缓存到 `config/models_catalog_cache.json`，同时支持 `openai` / `openai-compatible` / `anthropic` / `google` 四协议 `/models` 实时拉取；
+  - 提供启动后台静默更新、连接时自动同步、`/connect` 弹窗 `Ctrl+R` / `Refresh models` 手动刷新与设置页全协议 `Fetch models`。
 
 ---
 

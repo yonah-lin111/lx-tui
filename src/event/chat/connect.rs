@@ -14,6 +14,8 @@ use crate::config::ai::connect::{
     load_connect_or_default, save_connect,
 };
 use crate::config::ai::oauth::{OAuthStarted, OAuthTaskHandle, start_oauth_flow};
+use crate::config::ai::presets::{default_models_for_preset, find_preset, resolve_preset_base_url};
+use crate::config::ai::verify::{merge_discovered_models_for_preset, verify_provider_api_key};
 use crate::event::AppEvent;
 use crate::layout::PaneId;
 
@@ -48,6 +50,18 @@ pub enum ConnectEvent {
         attempt_id: String,
         error: String,
     },
+    /// 云端目录与已连接供应商模型刷新完成；`pane` 为 None 时是启动静默同步。
+    ModelsRefreshed {
+        pane: Option<PaneId>,
+        count: usize,
+        settings: Box<ai::AiSettings>,
+        connect: ConnectSettings,
+    },
+    /// 模型刷新失败；`pane` 为 None 时只记录日志。
+    ModelsRefreshFailed {
+        pane: Option<PaneId>,
+        error: String,
+    },
 }
 
 /// 进行中的 OAuth 尝试：事件循环与后台任务共享的取消/授权码句柄。
@@ -73,6 +87,7 @@ fn is_connect_effect(effect: &Effect) -> bool {
             | Effect::StartPresetOAuth { .. }
             | Effect::CancelPresetOAuth { .. }
             | Effect::SubmitPresetOAuthCode { .. }
+            | Effect::RefreshModelsCatalog { .. }
             | Effect::OpenBrowser { .. }
     )
 }
@@ -103,9 +118,11 @@ pub fn apply_effects(
                 form_answers,
             } => {
                 let sender = sender.clone();
-                tokio::task::spawn_blocking(move || {
+                tokio::spawn(async move {
                     let event =
-                        match save_preset_connection(&provider_id, api_key, oauth, form_answers) {
+                        match save_preset_connection(&provider_id, api_key, oauth, form_answers)
+                            .await
+                        {
                             Ok((connect, settings)) => ConnectEvent::Connected {
                                 pane,
                                 provider_id,
@@ -144,6 +161,21 @@ pub fn apply_effects(
                 if let Some(handle) = tasks.lock().remove(&attempt_id) {
                     handle.cancel();
                 }
+            }
+            Effect::RefreshModelsCatalog { pane, provider_id } => {
+                let sender = sender.clone();
+                tokio::spawn(async move {
+                    let event = match refresh_models(provider_id.as_deref()).await {
+                        Ok((count, settings, connect)) => ConnectEvent::ModelsRefreshed {
+                            pane,
+                            count,
+                            settings: Box::new(settings),
+                            connect,
+                        },
+                        Err(error) => ConnectEvent::ModelsRefreshFailed { pane, error },
+                    };
+                    let _ = sender.send(AppEvent::Connect(event));
+                });
             }
             Effect::SubmitPresetOAuthCode { attempt_id, code } => {
                 let error = tasks
@@ -195,6 +227,15 @@ pub fn handle_event(state: &mut AppState, event: ConnectEvent) -> bool {
             attempt_id,
             error,
         } => update::on_preset_oauth_failed(state, pane, &provider_id, &attempt_id, &error),
+        ConnectEvent::ModelsRefreshed {
+            pane,
+            count,
+            settings,
+            connect,
+        } => update::on_models_refreshed(state, pane, count, *settings, connect),
+        ConnectEvent::ModelsRefreshFailed { pane, error } => {
+            update::on_models_refresh_failed(state, pane, &error)
+        }
     }
 }
 
@@ -251,7 +292,9 @@ fn start_oauth_task(
                     None,
                     Some(credential),
                     form_answers,
-                ) {
+                )
+                .await
+                {
                     Ok((connect, settings)) => ConnectEvent::Connected {
                         pane,
                         provider_id,
@@ -274,7 +317,7 @@ fn start_oauth_task(
     });
 }
 
-fn save_preset_connection(
+async fn save_preset_connection(
     provider_id: &str,
     api_key: Option<String>,
     oauth: Option<OAuthCredential>,
@@ -290,6 +333,24 @@ fn save_preset_connection(
     record.enabled = true;
     record.form_answers = form_answers;
     if let Some(api_key) = api_key {
+        let spec = find_preset(provider_id)
+            .ok_or_else(|| format!("unknown preset provider '{provider_id}'"))?;
+        let base_url =
+            resolve_preset_base_url(spec, &record.form_answers, record.base_url.as_deref());
+        let probe_model = default_models_for_preset(provider_id)
+            .keys()
+            .next()
+            .cloned();
+        let outcome =
+            verify_provider_api_key(spec.transport, &base_url, &api_key, probe_model.as_deref())
+                .await?;
+        if record.models.is_none() && !outcome.discovered_models.is_empty() {
+            record.models = Some(merge_discovered_models_for_preset(
+                provider_id,
+                record.models.as_ref(),
+                &outcome.discovered_models,
+            ));
+        }
         record.api_key = Some(api_key);
         record.oauth = None;
     }
@@ -301,6 +362,23 @@ fn save_preset_connection(
     save_connect(&connect_path, &settings).map_err(|error| error.to_string())?;
     let runtime = connect::load_runtime_ai_or_empty(&ai_path).map_err(|error| error.to_string())?;
     Ok((settings, runtime))
+}
+
+/// 后台刷新云端目录与已连接供应商模型，并重新加载运行时快照。
+async fn refresh_models(
+    provider_id: Option<&str>,
+) -> Result<(usize, ai::AiSettings, ConnectSettings), String> {
+    let ai_path = ai::ai_config_path().map_err(|error| error.to_string())?;
+    let count = crate::config::ai::catalog_refresh::refresh_connected_provider_models(
+        &ai_path,
+        provider_id,
+    )
+    .await?;
+    let connect_path = connect_path_for_ai_path(&ai_path);
+    let connect_settings =
+        load_connect_or_default(&connect_path).map_err(|error| error.to_string())?;
+    let runtime = connect::load_runtime_ai_or_empty(&ai_path).map_err(|error| error.to_string())?;
+    Ok((count, runtime, connect_settings))
 }
 
 fn disconnect_preset(provider_id: &str) -> Result<(ConnectSettings, ai::AiSettings), String> {

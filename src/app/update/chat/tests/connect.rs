@@ -1,13 +1,13 @@
-//! `/connect` 状态机：供应商过滤、认证方式推进、表单/API Key 提交与管理动作。
+//! `/connect` 居中模态：供应商过滤、认证推进、表单/API Key 提交、OAuth 与模型刷新。
 
 use super::*;
+use crate::app::actions::OverlayKey;
+use crate::app::overlay::{Overlay, TextInput};
 use crate::app::state::{
     ConnectManageAction, ConnectPanel, ConnectPromptStep, ConnectStage, PanelWindow, SlashCommand,
 };
-use crate::app::update::{apply_connect_enter, apply_connect_esc, open_connect_panel};
-use crate::config::ai::connect::{
-    ConnectSettings, ConnectedPresetRecord, ConnectionSource, OAuthCredential,
-};
+use crate::app::update::{apply_connect_overlay_key, open_connect_panel};
+use crate::config::ai::connect::{ConnectSettings, ConnectedPresetRecord, ConnectionSource};
 use crate::config::ai::oauth::{OAuthPromptMode, OAuthStarted};
 use crate::config::ai::presets::find_preset;
 
@@ -19,30 +19,32 @@ fn connect_state() -> (AppState, PaneId) {
 
 fn open(state: &mut AppState, pane: PaneId) {
     assert!(open_connect_panel(state, pane));
-    assert!(matches!(
-        state
-            .pane_anywhere(pane)
-            .and_then(|target| target.lx.slash.clone()),
-        Some(SlashPanel::Connect(_))
-    ));
+    assert!(matches!(state.overlay, Some(Overlay::Connect(_))));
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.slash.is_none(),
+        "`/connect` 不再占用斜杠面板"
+    );
+    assert!(state.pane_anywhere(pane).expect("pane").lx.input.is_empty());
 }
 
-fn connect_panel(state: &AppState, pane: PaneId) -> ConnectPanel {
-    match state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.slash.clone())
-    {
-        Some(SlashPanel::Connect(panel)) => *panel,
-        other => panic!("connect panel expected, got {other:?}"),
+fn connect_panel(state: &AppState) -> ConnectPanel {
+    match state.overlay.as_ref() {
+        Some(Overlay::Connect(panel)) => (**panel).clone(),
+        other => panic!("connect overlay expected, got {other:?}"),
     }
 }
 
-fn select_provider(state: &mut AppState, pane: PaneId, id: &str) {
-    let target = state.pane_mut_anywhere(pane).expect("pane");
-    let Some(SlashPanel::Connect(panel)) = target.lx.slash.as_mut() else {
-        panic!("connect panel");
-    };
-    panel.refilter(id);
+fn connect_panel_mut(state: &mut AppState) -> &mut ConnectPanel {
+    match state.overlay.as_mut() {
+        Some(Overlay::Connect(panel)) => panel,
+        other => panic!("connect overlay expected, got {other:?}"),
+    }
+}
+
+fn select_provider(state: &mut AppState, id: &str) {
+    let panel = connect_panel_mut(state);
+    panel.input = TextInput::new(id);
+    panel.refilter_from_input();
     panel.window = PanelWindow::new(0);
     assert_eq!(
         panel.active_entry().map(|entry| entry.id.as_str()),
@@ -52,16 +54,15 @@ fn select_provider(state: &mut AppState, pane: PaneId, id: &str) {
 }
 
 fn type_input(state: &mut AppState, pane: PaneId, text: &str) {
-    let target = state.pane_mut_anywhere(pane).expect("pane");
-    target.lx.input = text.to_string();
-    target.lx.cursor = text.len();
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.input = text.to_string();
+        target.lx.cursor = text.len();
+    }
+    connect_panel_mut(state).input = TextInput::new(text);
 }
 
-fn input(state: &AppState, pane: PaneId) -> String {
-    state
-        .pane_anywhere(pane)
-        .map(|target| target.lx.input.clone())
-        .unwrap_or_default()
+fn input(state: &AppState) -> String {
+    connect_panel(state).input.text().to_string()
 }
 
 fn settings_for(provider_id: &str, provider_name: &str) -> AiSettings {
@@ -99,22 +100,24 @@ fn settings_for(provider_id: &str, provider_name: &str) -> AiSettings {
 }
 
 #[test]
-fn connect_command_opens_provider_panel() {
+fn connect_command_opens_centered_overlay() {
     let (mut state, pane) = connect_state();
     assert!(apply_slash_command(&mut state, pane, SlashCommand::Connect));
-    let panel = connect_panel(&state, pane);
+    let panel = connect_panel(&state);
     assert_eq!(panel.stage, ConnectStage::Providers);
+    assert_eq!(panel.pane, pane);
     assert!(panel.entries.len() > 10);
     assert_eq!(panel.filtered.len(), panel.entries.len());
 }
 
 #[test]
-fn typing_in_input_filters_provider_list_in_real_time() {
+fn typing_in_modal_input_filters_provider_list_in_real_time() {
     let (mut state, pane) = connect_state();
     open(&mut state, pane);
-    type_input(&mut state, pane, "github");
-    crate::app::update::refresh_slash_panel(&mut state, pane);
-    let panel = connect_panel(&state, pane);
+    for ch in "github".chars() {
+        apply_connect_overlay_key(&mut state, OverlayKey::Char(ch));
+    }
+    let panel = connect_panel(&state);
     assert_eq!(panel.filter, "github");
     assert!(
         panel
@@ -125,28 +128,10 @@ fn typing_in_input_filters_provider_list_in_real_time() {
         "只保留命中的供应商"
     );
     assert!(panel.active_entry().is_some());
-    type_input(&mut state, pane, "");
-    crate::app::update::refresh_slash_panel(&mut state, pane);
+    apply_connect_overlay_key(&mut state, OverlayKey::DeleteToLineStart);
     assert_eq!(
-        connect_panel(&state, pane).filtered.len(),
-        connect_panel(&state, pane).entries.len()
-    );
-}
-
-#[test]
-fn slash_typed_in_connect_filter_keeps_connect_panel() {
-    let (mut state, pane) = connect_state();
-    open(&mut state, pane);
-    type_input(&mut state, pane, "/model");
-    crate::app::update::refresh_slash_panel(&mut state, pane);
-    assert!(
-        matches!(
-            state
-                .pane_anywhere(pane)
-                .and_then(|target| target.lx.slash.clone()),
-            Some(SlashPanel::Connect(_))
-        ),
-        "`/connect` 输入框里的 `/` 是过滤词，不切换成命令候选"
+        connect_panel(&state).filtered.len(),
+        connect_panel(&state).entries.len()
     );
 }
 
@@ -154,9 +139,9 @@ fn slash_typed_in_connect_filter_keeps_connect_panel() {
 fn single_method_provider_goes_straight_to_api_key_prompt() {
     let (mut state, pane) = connect_state();
     open(&mut state, pane);
-    select_provider(&mut state, pane, "anthropic");
-    assert!(apply_connect_enter(&mut state, pane));
-    let panel = connect_panel(&state, pane);
+    select_provider(&mut state, "anthropic");
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
+    let panel = connect_panel(&state);
     assert!(matches!(
         panel.stage,
         ConnectStage::InputPrompt {
@@ -166,8 +151,14 @@ fn single_method_provider_goes_straight_to_api_key_prompt() {
     ));
 
     type_input(&mut state, pane, "sk-ant-test");
-    assert!(apply_connect_enter(&mut state, pane));
-    assert!(input(&state, pane).is_empty(), "提交后清空输入框");
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
+    let panel = connect_panel(&state);
+    assert!(panel.validating, "提交后进入校验态");
+    assert_eq!(
+        panel.status_message.as_deref(),
+        Some(text::LX_CONNECT_VERIFYING)
+    );
+    assert_eq!(panel.input.text(), "sk-ant-test", "失败时可原地修改");
     let saved = state
         .effects
         .iter()
@@ -187,30 +178,36 @@ fn single_method_provider_goes_straight_to_api_key_prompt() {
 }
 
 #[test]
-fn empty_api_key_is_rejected_with_toast() {
+fn empty_api_key_is_rejected_in_modal() {
     let (mut state, pane) = connect_state();
     open(&mut state, pane);
-    select_provider(&mut state, pane, "anthropic");
-    apply_connect_enter(&mut state, pane);
-    assert!(apply_connect_enter(&mut state, pane));
+    select_provider(&mut state, "anthropic");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
     assert!(state.effects.iter().all(|effect| !matches!(
         effect,
         crate::app::effects::Effect::SavePresetConnection { .. }
     )));
-    let toast = state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.toast.as_ref())
-        .expect("pane toast");
-    assert_eq!(toast.message, text::LX_CONNECT_API_KEY_EMPTY);
+    let panel = connect_panel(&state);
+    assert_eq!(panel.current_error(), Some(text::LX_CONNECT_API_KEY_EMPTY));
+    assert!(!panel.validating);
+    assert!(!panel.entries.is_empty(), "模态保持打开");
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|target| target.lx.toast.as_ref())
+            .is_none(),
+        "错误显示在模态内，不再弹 Toast"
+    );
 }
 
 #[test]
 fn multi_method_provider_opens_methods_with_oauth_first() {
     let (mut state, pane) = connect_state();
     open(&mut state, pane);
-    select_provider(&mut state, pane, "openai");
-    apply_connect_enter(&mut state, pane);
-    let panel = connect_panel(&state, pane);
+    select_provider(&mut state, "openai");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    let panel = connect_panel(&state);
     let ConnectStage::Methods {
         methods, window, ..
     } = panel.stage
@@ -221,19 +218,19 @@ fn multi_method_provider_opens_methods_with_oauth_first() {
     assert!(methods[0].oauth_flow().is_some(), "OAuth 排在前面");
     assert!(window.active < methods.len(), "高亮落在有效方法上");
 
-    assert!(apply_connect_esc(&mut state, pane));
-    let panel = connect_panel(&state, pane);
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Esc));
+    let panel = connect_panel(&state);
     assert_eq!(panel.stage, ConnectStage::Providers);
-    assert!(input(&state, pane).is_empty());
+    assert!(panel.input.text().is_empty());
 }
 
 #[test]
 fn form_option_selects_enterprise_and_asks_for_url() {
     let (mut state, pane) = connect_state();
     open(&mut state, pane);
-    select_provider(&mut state, pane, "github-copilot");
-    apply_connect_enter(&mut state, pane);
-    let panel = connect_panel(&state, pane);
+    select_provider(&mut state, "github-copilot");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    let panel = connect_panel(&state);
     let ConnectStage::InputPrompt {
         step: ConnectPromptStep::FormField { field, .. },
         ..
@@ -243,13 +240,9 @@ fn form_option_selects_enterprise_and_asks_for_url() {
     };
     assert_eq!(field.options[0].value, "github.com");
 
-    let target = state.pane_mut_anywhere(pane).expect("pane");
-    let Some(SlashPanel::Connect(panel)) = target.lx.slash.as_mut() else {
-        panic!("connect");
-    };
-    panel.move_active(1);
-    assert!(apply_connect_enter(&mut state, pane));
-    let panel = connect_panel(&state, pane);
+    connect_panel_mut(&mut state).move_active(1);
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
+    let panel = connect_panel(&state);
     let ConnectStage::InputPrompt {
         step: ConnectPromptStep::FormField { field, .. },
         answers,
@@ -265,8 +258,8 @@ fn form_option_selects_enterprise_and_asks_for_url() {
     );
 
     type_input(&mut state, pane, "company.ghe.com");
-    assert!(apply_connect_enter(&mut state, pane));
-    let panel = connect_panel(&state, pane);
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
+    let panel = connect_panel(&state);
     assert!(matches!(panel.stage, ConnectStage::OAuthWaiting { .. }));
     let started = state
         .effects
@@ -291,21 +284,21 @@ fn form_option_selects_enterprise_and_asks_for_url() {
 fn free_text_form_fields_then_api_key_submits_answers() {
     let (mut state, pane) = connect_state();
     open(&mut state, pane);
-    select_provider(&mut state, pane, "cloudflare-ai-gateway");
-    apply_connect_enter(&mut state, pane);
+    select_provider(&mut state, "cloudflare-ai-gateway");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
     type_input(&mut state, pane, "account-123");
-    assert!(apply_connect_enter(&mut state, pane));
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
     type_input(&mut state, pane, "gateway-456");
-    assert!(apply_connect_enter(&mut state, pane));
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
     assert!(matches!(
-        connect_panel(&state, pane).stage,
+        connect_panel(&state).stage,
         ConnectStage::InputPrompt {
             step: ConnectPromptStep::ApiKey,
             ..
         }
     ));
     type_input(&mut state, pane, "cf-token");
-    assert!(apply_connect_enter(&mut state, pane));
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
     let (api_key, answers) = state
         .effects
         .iter()
@@ -330,7 +323,7 @@ fn free_text_form_fields_then_api_key_submits_answers() {
 }
 
 #[test]
-fn connected_provider_opens_manage_with_disconnect() {
+fn connected_provider_opens_manage_with_refresh_and_disconnect() {
     let (mut state, pane) = connect_state();
     let mut connect = ConnectSettings::default();
     let mut record = ConnectedPresetRecord::new("anthropic");
@@ -338,27 +331,24 @@ fn connected_provider_opens_manage_with_disconnect() {
     connect.providers.insert("anthropic".into(), record);
     state.connect = connect;
     open(&mut state, pane);
-    select_provider(&mut state, pane, "anthropic");
+    select_provider(&mut state, "anthropic");
     assert_eq!(
-        connect_panel(&state, pane)
+        connect_panel(&state)
             .active_entry()
             .and_then(|entry| entry.source.clone()),
         Some(ConnectionSource::ApiKey)
     );
-    assert!(apply_connect_enter(&mut state, pane));
-    let ConnectStage::Manage { actions, .. } = connect_panel(&state, pane).stage else {
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
+    let ConnectStage::Manage { actions, .. } = connect_panel(&state).stage else {
         panic!("manage stage");
     };
     assert!(actions.contains(&ConnectManageAction::SelectModel));
     assert!(actions.contains(&ConnectManageAction::Reconnect));
+    assert!(actions.contains(&ConnectManageAction::RefreshModels));
     assert!(actions.contains(&ConnectManageAction::Disconnect));
 
-    let target = state.pane_mut_anywhere(pane).expect("pane");
-    let Some(SlashPanel::Connect(panel)) = target.lx.slash.as_mut() else {
-        panic!("connect");
-    };
-    panel.move_active(2);
-    assert!(apply_connect_enter(&mut state, pane));
+    connect_panel_mut(&mut state).move_active(3);
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
         crate::app::effects::Effect::DisconnectPreset { provider_id, .. } if provider_id == "anthropic"
@@ -366,38 +356,84 @@ fn connected_provider_opens_manage_with_disconnect() {
 }
 
 #[test]
-fn reconnect_from_manage_returns_to_method_form() {
+fn manage_refresh_models_enters_validating_and_emits_effect() {
     let (mut state, pane) = connect_state();
     let mut connect = ConnectSettings::default();
-    let mut record = ConnectedPresetRecord::new("openai");
-    record.oauth = Some(OAuthCredential {
-        method_id: "chatgpt-browser".into(),
-        access_token: "token".into(),
-        refresh_token: None,
-        expires_at_ms: None,
-        account_label: None,
-        metadata: std::collections::BTreeMap::new(),
-    });
-    connect.providers.insert("openai".into(), record);
+    let mut record = ConnectedPresetRecord::new("anthropic");
+    record.api_key = Some("stored-key".into());
+    connect.providers.insert("anthropic".into(), record);
     state.connect = connect;
     open(&mut state, pane);
-    select_provider(&mut state, pane, "openai");
-    apply_connect_enter(&mut state, pane);
-    let target = state.pane_mut_anywhere(pane).expect("pane");
-    let Some(SlashPanel::Connect(panel)) = target.lx.slash.as_mut() else {
-        panic!("connect");
-    };
-    panel.move_active(1);
-    assert!(apply_connect_enter(&mut state, pane));
-    assert!(matches!(
-        connect_panel(&state, pane).stage,
-        ConnectStage::Methods { .. }
-    ));
+    select_provider(&mut state, "anthropic");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    connect_panel_mut(&mut state).move_active(2);
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
+    let panel = connect_panel(&state);
+    assert!(panel.validating);
+    assert_eq!(
+        panel.status_message.as_deref(),
+        Some(text::LX_CONNECT_REFRESHING)
+    );
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        crate::app::effects::Effect::RefreshModelsCatalog {
+            provider_id: Some(provider_id),
+            ..
+        } if provider_id == "anthropic"
+    )));
 }
 
 #[test]
-fn connected_event_switches_to_model_picker_and_toasts() {
+fn ctrl_r_in_provider_list_refreshes_all_connections() {
     let (mut state, pane) = connect_state();
+    open(&mut state, pane);
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Refresh));
+    assert!(connect_panel(&state).validating);
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        crate::app::effects::Effect::RefreshModelsCatalog {
+            provider_id: None,
+            ..
+        }
+    )));
+    assert!(
+        !apply_connect_overlay_key(&mut state, OverlayKey::Enter),
+        "刷新中阻止重复提交"
+    );
+}
+
+#[test]
+fn manage_select_model_closes_overlay_and_opens_model_picker() {
+    let (mut state, pane) = connect_state();
+    let mut connect = ConnectSettings::default();
+    let mut record = ConnectedPresetRecord::new("anthropic");
+    record.api_key = Some("stored-key".into());
+    connect.providers.insert("anthropic".into(), record);
+    state.connect = connect;
+    state.models.settings = settings_for("anthropic", "Anthropic");
+    open(&mut state, pane);
+    select_provider(&mut state, "anthropic");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
+    assert!(state.overlay.is_none());
+    let Some(SlashPanel::Model(picker)) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.slash.clone())
+    else {
+        panic!("model panel");
+    };
+    assert!(
+        picker
+            .candidates
+            .iter()
+            .all(|candidate| candidate.selection.provider == "anthropic")
+    );
+}
+
+#[test]
+fn connected_event_closes_overlay_switches_to_model_picker_and_toasts() {
+    let (mut state, pane) = connect_state();
+    open(&mut state, pane);
     state.connect = ConnectSettings::default();
     let settings = settings_for("anthropic", "Anthropic");
     let connect = state.connect.clone();
@@ -408,6 +444,7 @@ fn connected_event_switches_to_model_picker_and_toasts() {
         connect,
         settings
     ));
+    assert!(state.overlay.is_none(), "连接成功后关闭模态");
     let toast = state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.toast.as_ref())
@@ -432,7 +469,7 @@ fn connected_event_switches_to_model_picker_and_toasts() {
 fn disconnected_event_restores_provider_list() {
     let (mut state, pane) = connect_state();
     open(&mut state, pane);
-    select_provider(&mut state, pane, "anthropic");
+    select_provider(&mut state, "anthropic");
     state
         .connect
         .providers
@@ -444,7 +481,7 @@ fn disconnected_event_restores_provider_list() {
         ConnectSettings::default(),
         settings_for("anthropic", "Anthropic"),
     ));
-    let panel = connect_panel(&state, pane);
+    let panel = connect_panel(&state);
     assert_eq!(panel.stage, ConnectStage::Providers);
     assert_eq!(
         panel.active_entry().and_then(|entry| entry.source.clone()),
@@ -459,15 +496,55 @@ fn disconnected_event_restores_provider_list() {
 }
 
 #[test]
+fn connect_failure_sets_inline_error_and_keeps_input() {
+    let (mut state, pane) = connect_state();
+    open(&mut state, pane);
+    select_provider(&mut state, "anthropic");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    type_input(&mut state, pane, "bad-key");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    crate::app::update::on_connect_failed(&mut state, pane, "Invalid API key (HTTP 401)");
+    let panel = connect_panel(&state);
+    assert!(!panel.validating);
+    assert!(panel.status_message.is_none());
+    assert_eq!(panel.current_error(), Some("Invalid API key (HTTP 401)"));
+    assert_eq!(input(&state), "bad-key", "保留输入以便原地修改");
+    assert!(state.overlay.is_some(), "失败不关闭模态");
+}
+
+#[test]
+fn models_refreshed_clears_validating_and_toasts() {
+    let (mut state, pane) = connect_state();
+    open(&mut state, pane);
+    apply_connect_overlay_key(&mut state, OverlayKey::Refresh);
+    assert!(connect_panel(&state).validating);
+    assert!(crate::app::update::on_models_refreshed(
+        &mut state,
+        Some(pane),
+        7,
+        AiSettings::empty(),
+        ConnectSettings::default(),
+    ));
+    let panel = connect_panel(&state);
+    assert!(!panel.validating);
+    assert!(panel.status_message.is_none());
+    let toast = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.toast.as_ref())
+        .expect("pane toast");
+    assert_eq!(toast.message, "Refreshed 7 models");
+}
+
+#[test]
 fn oauth_prompt_fills_url_and_shortcuts_open_browser() {
     let (mut state, pane) = connect_state();
     open(&mut state, pane);
-    select_provider(&mut state, pane, "github-copilot");
-    apply_connect_enter(&mut state, pane);
+    select_provider(&mut state, "github-copilot");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
     // github.com 是默认选项：选企业的路径已在另一个测试覆盖；这里直接选默认项启动。
-    assert!(apply_connect_enter(&mut state, pane));
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
     assert!(matches!(
-        connect_panel(&state, pane).stage,
+        connect_panel(&state).stage,
         ConnectStage::OAuthWaiting { .. }
     ));
     assert!(crate::app::update::on_preset_oauth_prompt(
@@ -483,27 +560,19 @@ fn oauth_prompt_fills_url_and_shortcuts_open_browser() {
             mode: OAuthPromptMode::Auto,
         }
     ));
-    let panel = connect_panel(&state, pane);
+    let panel = connect_panel(&state);
     let ConnectStage::OAuthWaiting { url, user_code, .. } = &panel.stage else {
         panic!("oauth waiting");
     };
     assert_eq!(url, "https://github.com/login/device");
     assert_eq!(user_code.as_deref(), Some("ABCD-1234"));
 
-    assert!(crate::app::update::handle_connect_input(
-        &mut state,
-        pane,
-        crate::app::actions::LxInput::Char('c')
-    ));
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Char('c')));
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
         crate::app::effects::Effect::CopyToClipboard { text, .. } if text == "ABCD-1234"
     )));
-    assert!(crate::app::update::handle_connect_input(
-        &mut state,
-        pane,
-        crate::app::actions::LxInput::Char('o')
-    ));
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Char('o')));
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
         crate::app::effects::Effect::OpenBrowser { url } if url == "https://github.com/login/device"
@@ -514,9 +583,9 @@ fn oauth_prompt_fills_url_and_shortcuts_open_browser() {
 fn oauth_code_mode_submits_typed_code() {
     let (mut state, pane) = connect_state();
     open(&mut state, pane);
-    select_provider(&mut state, pane, "github-copilot");
-    apply_connect_enter(&mut state, pane);
-    apply_connect_enter(&mut state, pane);
+    select_provider(&mut state, "github-copilot");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
     crate::app::update::on_preset_oauth_prompt(
         &mut state,
         pane,
@@ -531,8 +600,7 @@ fn oauth_code_mode_submits_typed_code() {
         },
     );
     type_input(&mut state, pane, "one-time-code");
-    assert!(apply_connect_enter(&mut state, pane));
-    assert!(input(&state, pane).is_empty());
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
         crate::app::effects::Effect::SubmitPresetOAuthCode { attempt_id, code }
@@ -544,9 +612,9 @@ fn oauth_code_mode_submits_typed_code() {
 fn esc_cancels_oauth_and_returns_to_providers() {
     let (mut state, pane) = connect_state();
     open(&mut state, pane);
-    select_provider(&mut state, pane, "github-copilot");
-    apply_connect_enter(&mut state, pane);
-    apply_connect_enter(&mut state, pane);
+    select_provider(&mut state, "github-copilot");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
     crate::app::update::on_preset_oauth_prompt(
         &mut state,
         pane,
@@ -560,20 +628,20 @@ fn esc_cancels_oauth_and_returns_to_providers() {
             mode: OAuthPromptMode::Auto,
         },
     );
-    assert!(apply_connect_esc(&mut state, pane));
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Esc));
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
         crate::app::effects::Effect::CancelPresetOAuth { attempt_id } if attempt_id == "attempt-cancel"
     )));
-    assert_eq!(connect_panel(&state, pane).stage, ConnectStage::Providers);
+    assert_eq!(connect_panel(&state).stage, ConnectStage::Providers);
 }
 
 #[test]
-fn esc_in_providers_closes_panel() {
+fn esc_in_providers_closes_overlay() {
     let (mut state, pane) = connect_state();
     open(&mut state, pane);
-    assert!(apply_connect_esc(&mut state, pane));
-    assert!(state.pane_anywhere(pane).expect("pane").lx.slash.is_none());
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Esc));
+    assert!(state.overlay.is_none());
 }
 
 #[test]

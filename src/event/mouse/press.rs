@@ -68,6 +68,23 @@ pub(crate) fn handle_mouse_down_left(
         }
     }
     if state.overlay.is_some() {
+        // `/connect` 模态的滚动条独立于模态点击：命中轨道/thumb 时滚动视口后再走浮层点击。
+        if let Some(Overlay::Connect(panel)) = state.overlay.as_ref()
+            && let Some(layout) = ui::overlay::connect_layout(*screen, panel)
+            && let Some(bar) = layout.scrollbar
+            && bar.track.contains((mouse.column, mouse.row).into())
+        {
+            match ui::widgets::scrollbar::thumb_grab_offset(&bar, mouse.row) {
+                Some(grab) => state.connect_scroll_drag = Some(grab),
+                None => {
+                    let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, mouse.row);
+                    if update::set_connect_viewport(state, offset, layout.visible) {
+                        *dirty = true;
+                    }
+                }
+            }
+            return;
+        }
         // 引用文件夹搜索弹窗的滚动条独立于模态点击：命中轨道/thumb 时滚动视口后再走浮层点击。
         if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref()
             && let Some(layout) = ui::overlay::referenced_search_layout(*screen, search)

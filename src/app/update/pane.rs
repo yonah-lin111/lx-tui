@@ -147,18 +147,6 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         }
         LxHistoryRoute::None => {}
     }
-    // `/connect` 面板：Enter/Esc 与 OAuth 快捷键由连接面板自己消费；
-    // 其余可编辑阶段继续走下方输入框编辑并实时过滤供应商。
-    if state.pane_anywhere(pane_id).is_some_and(|pane| {
-        pane.view == PaneView::Lx
-            && matches!(
-                pane.lx.slash,
-                Some(super::super::state::SlashPanel::Connect(_))
-            )
-    }) && super::chat::handle_connect_input(state, pane_id, command)
-    {
-        return;
-    }
     let referenced_folders = state.referenced.folders.clone();
     let Some(pane) = state.active_pane_mut() else {
         return;
@@ -290,11 +278,7 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                 panel.move_active(delta);
             }
         };
-        let editable = matches!(slash, super::super::state::SlashPanel::Commands { .. })
-            || matches!(
-                slash,
-                super::super::state::SlashPanel::Connect(panel) if panel.accepts_text_input()
-            );
+        let editable = matches!(slash, super::super::state::SlashPanel::Commands { .. });
         match command {
             LxInput::Up => {
                 move_panel(lx, -1);
@@ -341,8 +325,6 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                     // 命令候选面板（`/`）不清：它的过滤词就是命令本身，由
                     // `accept_slash_command` 按行删除，`Esc` 关闭时草稿应原样保留。
                     super::super::state::SlashPanel::Commands { .. } => lx.slash = None,
-                    // `/connect` 的 Esc 已在上方连接面板路由里消费。
-                    super::super::state::SlashPanel::Connect(_) => {}
                     _ => {
                         lx.slash = None;
                         lx.clear();

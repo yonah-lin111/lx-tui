@@ -258,6 +258,17 @@ pub(crate) fn handle_mouse_wheel(
         return;
     }
     if let Some(delta) = vertical_wheel_delta(mouse.kind)
+        && let Some(crate::app::overlay::Overlay::Connect(panel)) = state.overlay.as_ref()
+        && let Some(layout) = ui::overlay::connect_layout(geometry.screen, panel)
+        && layout.area.contains((mouse.column, mouse.row).into())
+    {
+        // 连接模态内滚轮滚动列表视口（高亮不动、越界钳制），不穿透到底层。
+        if update::scroll_connect(state, delta, layout.start, layout.visible) {
+            *dirty = true;
+        }
+        return;
+    }
+    if let Some(delta) = vertical_wheel_delta(mouse.kind)
         && let Some(crate::app::overlay::Overlay::ReferencedFolderMenu(menu)) =
             state.overlay.as_ref()
     {

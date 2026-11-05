@@ -196,7 +196,6 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
         }
         // 撤销动作面板：第二次 Enter 才执行（第一次 Enter 只是打开面板）。
         SlashPanel::Rewind(_) => super::rewind::apply_enter(state, pane),
-        SlashPanel::Connect(_) => super::connect::apply_connect_enter(state, pane),
     }
 }
 
@@ -510,23 +509,14 @@ pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
         }
         return;
     }
-    // 二级面板（`/model`、`/resume`、`/connect`）的过滤词是**输入框全文**：任何编辑后都重算一次。
+    // 二级面板（`/model`、`/resume`）的过滤词是**输入框全文**：任何编辑后都重算一次。
     refresh_slash_filter(state, pane);
-    // `/connect` 面板独占输入：底部草稿是搜索词或认证表单值，绝不替换成命令候选。
-    if state.pane_anywhere(pane).is_some_and(|target| {
-        matches!(
-            target.lx.slash,
-            Some(crate::app::state::SlashPanel::Connect(_))
-        )
-    }) {
-        return;
-    }
     let query = state.pane_anywhere(pane).and_then(|target| {
         let masked = crate::app::paste::mask_pasted_text(&target.lx.input);
         crate::app::state::lx::slash::slash_trigger(&masked, target.lx.cursor)
     });
     let Some(query) = query else {
-        // 离开命令位置时关闭命令候选面板（model/resume/connect 面板不受影响）。
+        // 离开命令位置时关闭命令候选面板（model/resume 面板不受影响）。
         if let Some(target) = state.pane_mut_anywhere(pane)
             && matches!(
                 target.lx.slash,
@@ -581,11 +571,6 @@ fn refresh_slash_filter(state: &mut AppState, pane: PaneId) {
         Some(crate::app::state::SlashPanel::History(panel)) => panel.refilter(&query),
         Some(crate::app::state::SlashPanel::Model(picker)) => picker.refilter(&query),
         Some(crate::app::state::SlashPanel::Fork(panel)) => panel.refilter(&query),
-        Some(crate::app::state::SlashPanel::Connect(panel))
-            if matches!(panel.stage, crate::app::state::ConnectStage::Providers) =>
-        {
-            panel.refilter(&query);
-        }
         _ => {}
     }
 }

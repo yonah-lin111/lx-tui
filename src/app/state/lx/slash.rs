@@ -4,8 +4,6 @@
 
 use crate::config::ai::{AiSettings, ModelSelection};
 
-use super::connect::ConnectPanel;
-
 /// 面板候选窗口状态：键盘/悬停/滚轮共用的高亮、锚点与显式视口。
 ///
 /// 与 `@` 提及面板同一套语义：键盘移动高亮并让窗口锚点跟随；悬停只改高亮
@@ -649,8 +647,6 @@ pub enum SlashPanel {
     Fork(Box<ForkPanel>),
     /// `/rewind` 四项动作面板。
     Rewind(Box<crate::app::state::lx::rewind::RewindPanel>),
-    /// `/connect` 预设供应商快捷连接面板。
-    Connect(Box<ConnectPanel>),
 }
 
 impl SlashPanel {
@@ -709,7 +705,6 @@ impl SlashPanel {
             Self::Fork(panel) => panel.filtered.len(),
             // 动作集按目标类型不同（普通轮次四项 / compact 两项），以面板为准。
             Self::Rewind(panel) => panel.len(),
-            Self::Connect(panel) => panel.item_count(),
         }
     }
 
@@ -721,7 +716,6 @@ impl SlashPanel {
             Self::History(panel) => panel.window,
             Self::Fork(panel) => panel.window,
             Self::Rewind(panel) => panel.window,
-            Self::Connect(panel) => panel.window(),
         }
     }
 
@@ -745,7 +739,6 @@ impl SlashPanel {
             }
             Self::Fork(_) => None,
             Self::Rewind(_) => None,
-            Self::Connect(_) => None,
         }
     }
 
@@ -759,7 +752,6 @@ impl SlashPanel {
             Self::History(panel) => panel.window = window,
             Self::Fork(panel) => panel.window = window,
             Self::Rewind(panel) => panel.window = window,
-            Self::Connect(panel) => panel.set_window(window),
         }
     }
 

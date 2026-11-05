@@ -5,9 +5,11 @@
 
 use std::collections::BTreeMap;
 
+use crate::app::overlay::TextInput;
 use crate::config::ai::connect::{ConnectSettings, ConnectionSource};
 use crate::config::ai::oauth::OAuthPromptMode;
 use crate::config::ai::presets::{PresetAuthMethod, PresetFormField, all_presets};
+use crate::layout::PaneId;
 use crate::ui::text;
 
 use super::slash::{PanelWindow, best_score};
@@ -31,6 +33,7 @@ pub struct ConnectProviderEntry {
 pub enum ConnectManageAction {
     SelectModel,
     Reconnect,
+    RefreshModels,
     Disconnect,
 }
 
@@ -40,6 +43,7 @@ impl ConnectManageAction {
         match self {
             Self::SelectModel => text::LX_CONNECT_ACTION_SELECT_MODEL,
             Self::Reconnect => text::LX_CONNECT_ACTION_RECONNECT,
+            Self::RefreshModels => text::LX_CONNECT_ACTION_REFRESH_MODELS,
             Self::Disconnect => text::LX_CONNECT_ACTION_DISCONNECT,
         }
     }
@@ -104,9 +108,19 @@ pub enum ConnectStage {
     },
 }
 
-/// `/connect` 命令面板完整状态。
+/// `/connect` 居中模态的完整状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectPanel {
+    /// 触发 `/connect` 的 `lx` 窗格；回执与 Toast 都按它路由。
+    pub pane: PaneId,
+    /// 模态内置单行输入框：`Providers` 阶段是过滤词，输入阶段是凭证/表单值。
+    pub input: TextInput,
+    /// 后台校验/刷新中（阻止重复提交与粘贴）。
+    pub validating: bool,
+    /// 校验/刷新状态行文案。
+    pub status_message: Option<String>,
+    /// 指针悬停的可见行索引；只铺底色，不移动 `❯`。
+    pub hover: Option<usize>,
     pub entries: Vec<ConnectProviderEntry>,
     pub filtered: Vec<usize>,
     pub filter: String,
@@ -116,22 +130,43 @@ pub struct ConnectPanel {
 
 impl ConnectPanel {
     /// 从磁盘快照构造；环境变量探测使用当前进程。
-    pub fn new(connect: &ConnectSettings) -> Self {
-        Self::new_with_env(connect, |name| std::env::var(name).ok())
+    pub fn new(pane: PaneId, connect: &ConnectSettings) -> Self {
+        Self::new_with_env(pane, connect, |name| std::env::var(name).ok())
     }
 
     /// 可注入环境变量查询的构造器（测试用，避免宿主环境影响结果）。
-    pub fn new_with_env<F>(connect: &ConnectSettings, env: F) -> Self
+    pub fn new_with_env<F>(pane: PaneId, connect: &ConnectSettings, env: F) -> Self
     where
         F: Fn(&str) -> Option<String>,
     {
-        let entries = all_presets()
+        let entries = Self::build_entries(connect, &env);
+        let filtered = (0..entries.len()).collect();
+        Self {
+            pane,
+            input: TextInput::new(""),
+            validating: false,
+            status_message: None,
+            hover: None,
+            entries,
+            filtered,
+            filter: String::new(),
+            window: PanelWindow::default(),
+            stage: ConnectStage::Providers,
+        }
+    }
+
+    /// 按连接状态重建条目（模型刷新/断开后同步标签）。
+    fn build_entries<F>(connect: &ConnectSettings, env: &F) -> Vec<ConnectProviderEntry>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        all_presets()
             .iter()
             .map(|spec| {
                 let source = crate::config::ai::connect::resolve_preset_connection_source_with_env(
                     spec,
                     connect.providers.get(spec.id),
-                    &env,
+                    env,
                 );
                 let tag = source
                     .as_ref()
@@ -146,15 +181,36 @@ impl ConnectPanel {
                     tag,
                 }
             })
-            .collect::<Vec<_>>();
-        let filtered = (0..entries.len()).collect();
-        Self {
-            entries,
-            filtered,
-            filter: String::new(),
-            window: PanelWindow::default(),
-            stage: ConnectStage::Providers,
+            .collect()
+    }
+
+    /// 用新的连接快照刷新条目与标签。
+    pub fn refresh_entries(&mut self, connect: &ConnectSettings) {
+        self.entries = Self::build_entries(connect, &|name| std::env::var(name).ok());
+        if matches!(self.stage, ConnectStage::Providers) {
+            self.refilter_from_input();
+        } else {
+            self.filtered = (0..self.entries.len()).collect();
         }
+        self.clamp_window();
+    }
+
+    /// 按模态输入框当前文本重算供应商过滤视图。
+    pub fn refilter_from_input(&mut self) {
+        let query = self.input.text().to_string();
+        self.refilter(&query);
+    }
+
+    /// 退回供应商列表并清空临时输入/窗口。
+    pub fn reset_to_providers(&mut self) {
+        self.stage = ConnectStage::Providers;
+        self.input = TextInput::new("");
+        self.filter.clear();
+        self.filtered = (0..self.entries.len()).collect();
+        self.window = PanelWindow::default();
+        self.hover = None;
+        self.validating = false;
+        self.status_message = None;
     }
 
     /// 按 `query` 重算供应商过滤视图：匹配名称或 id，同分保持 A-Z 原序。
@@ -190,11 +246,16 @@ impl ConnectPanel {
             .collect()
     }
 
+    /// 过滤视图位置对应的供应商（渲染/命中共用，O(1)）。
+    pub fn entry_at_view(&self, index: usize) -> Option<&ConnectProviderEntry> {
+        self.filtered
+            .get(index)
+            .and_then(|index| self.entries.get(*index))
+    }
+
     /// 当前高亮的供应商。
     pub fn active_entry(&self) -> Option<&ConnectProviderEntry> {
-        self.filtered
-            .get(self.window.active)
-            .and_then(|index| self.entries.get(*index))
+        self.entry_at_view(self.window.active)
     }
 
     /// 高亮项在 `entries` 中的真实索引。
@@ -217,8 +278,8 @@ impl ConnectPanel {
         matches!(self.stage, ConnectStage::Providers) && self.filtered.is_empty()
     }
 
-    /// 当前阶段是否允许在底部输入框打字。
-    pub fn accepts_text_input(&self) -> bool {
+    /// 当前阶段是否使用模态内置输入框。
+    pub fn has_text_input(&self) -> bool {
         match &self.stage {
             ConnectStage::Providers => true,
             ConnectStage::InputPrompt { step, .. } => match step {
@@ -228,6 +289,66 @@ impl ConnectPanel {
             ConnectStage::OAuthWaiting { mode, .. } => *mode == OAuthPromptMode::Code,
             _ => false,
         }
+    }
+
+    /// 当前阶段的错误文案。
+    pub fn current_error(&self) -> Option<&str> {
+        match &self.stage {
+            ConnectStage::InputPrompt { error, .. } | ConnectStage::OAuthWaiting { error, .. } => {
+                error.as_deref().filter(|error| !error.is_empty())
+            }
+            _ => None,
+        }
+    }
+
+    /// 在当前输入/OAuth 阶段展示错误。
+    pub fn set_error(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        match &mut self.stage {
+            ConnectStage::InputPrompt { error, .. } | ConnectStage::OAuthWaiting { error, .. } => {
+                *error = Some(message);
+            }
+            _ => {}
+        }
+    }
+
+    /// 清除当前阶段的错误。
+    pub fn clear_error(&mut self) {
+        match &mut self.stage {
+            ConnectStage::InputPrompt { error, .. } | ConnectStage::OAuthWaiting { error, .. } => {
+                *error = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// 当前阶段对应的供应商名（供应商列表阶段为空）。
+    pub fn provider_name(&self) -> Option<&str> {
+        match &self.stage {
+            ConnectStage::Providers => None,
+            ConnectStage::Manage { provider_name, .. }
+            | ConnectStage::Methods { provider_name, .. }
+            | ConnectStage::InputPrompt { provider_name, .. }
+            | ConnectStage::OAuthWaiting { provider_name, .. } => Some(provider_name),
+        }
+    }
+
+    /// 进行中的 OAuth 尝试 id（无则 None）。
+    pub fn oauth_attempt_id(&self) -> Option<&str> {
+        match &self.stage {
+            ConnectStage::OAuthWaiting { attempt_id, .. } if !attempt_id.is_empty() => {
+                Some(attempt_id)
+            }
+            _ => None,
+        }
+    }
+
+    /// 已连接的供应商数量（顶栏右侧摘要）。
+    pub fn connected_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.source.is_some())
+            .count()
     }
 
     /// OAuth 等待阶段的 `o` / `c` 快捷键（仅自动模式）。

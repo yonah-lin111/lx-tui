@@ -61,6 +61,8 @@ pub enum OverlayKey {
     Copy,
     /// Ctrl/Cmd+D 或 Del：引用文件夹目录弹窗移除高亮记录（打开删除确认）。
     Remove,
+    /// Ctrl/Cmd+R：`/connect` 模态刷新模型目录。
+    Refresh,
 }
 
 /// lx 页输入命令；仅在焦点窗格显示 lx 页时产生。

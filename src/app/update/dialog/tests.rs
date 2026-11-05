@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::app::overlay::*;
-use crate::app::state::AppState;
+use crate::app::state::{AppState, ConnectPanel};
+use crate::config::ai::connect::ConnectSettings;
 use std::path::PathBuf;
 
 fn text_overlays(state: &AppState) -> Vec<Overlay> {
@@ -70,6 +71,11 @@ fn text_overlays(state: &AppState) -> Vec<Overlay> {
             confirming_delete: false,
             hint: None,
         }),
+        Overlay::Connect(Box::new(ConnectPanel::new_with_env(
+            pane,
+            &ConnectSettings::default(),
+            |_| None,
+        ))),
     ]
 }
 
@@ -116,6 +122,15 @@ fn overlay_paste_respects_guard_states() {
             confirming_delete: true,
             hint: None,
         }),
+        {
+            let mut panel = ConnectPanel::new_with_env(
+                state.active_tab().layout.focus(),
+                &ConnectSettings::default(),
+                |_| None,
+            );
+            panel.validating = true;
+            Overlay::Connect(Box::new(panel))
+        },
     ];
     for overlay in guarded {
         let kind = overlay.kind();

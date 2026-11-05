@@ -4,11 +4,12 @@
 //! 默认 Base URL、环境变量、认证方法与常用聊天模型；模型条目含上下文/输出上限、
 //! 模态、思考等级 `variants` 与默认 `variant`。
 //!
-//! 目录在首次访问时解析并泄漏为 `'static`，之后只读复用；供应商按名称首字母
-//! （A-Z，不区分大小写）排序，不设分组。
+//! 供应商规格在首次访问时解析并泄漏为 `'static`，之后只读复用；模型表放在
+//! `RwLock` 中，启动时叠加磁盘缓存、运行时可被云端目录热更新。供应商按名称
+//! 首字母（A-Z，不区分大小写）排序，不设分组。
 
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -221,7 +222,25 @@ pub fn find_preset(id: &str) -> Option<&'static PresetProviderSpec> {
 
 /// 获取某预设供应商的内置默认模型表（按需从嵌入目录物化）。
 pub fn default_models_for_preset(id: &str) -> BTreeMap<String, ModelConfig> {
-    catalog().models.get(id).cloned().unwrap_or_default()
+    let models = catalog()
+        .models
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    models.get(id).cloned().unwrap_or_default()
+}
+
+/// 用云端目录更新进程内模型表；同名模型覆盖，未出现的供应商/模型保留。
+pub fn update_catalog_models(updates: BTreeMap<String, BTreeMap<String, ModelConfig>>) {
+    let mut models = catalog()
+        .models
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for (provider_id, provider_models) in updates {
+        models
+            .entry(provider_id)
+            .or_default()
+            .extend(provider_models);
+    }
 }
 
 /// 解析预设 Base URL：表单占位符展开、覆盖值与特殊域名规则。
@@ -375,7 +394,7 @@ fn screaming_snake_case(key: &str) -> String {
 
 struct Catalog {
     presets: &'static [PresetProviderSpec],
-    models: BTreeMap<String, BTreeMap<String, ModelConfig>>,
+    models: RwLock<BTreeMap<String, BTreeMap<String, ModelConfig>>>,
 }
 
 static CATALOG: OnceLock<Catalog> = OnceLock::new();
@@ -391,7 +410,7 @@ fn build_catalog() -> Catalog {
             tracing::error!(error = %error, "embedded preset catalog is malformed");
             return Catalog {
                 presets: &[],
-                models: BTreeMap::new(),
+                models: RwLock::new(BTreeMap::new()),
             };
         }
     };
@@ -447,9 +466,13 @@ fn build_catalog() -> Catalog {
             .cmp(&right.name.to_ascii_lowercase())
             .then_with(|| left.id.cmp(right.id))
     });
+    // 磁盘缓存（上次云端同步结果）叠加在嵌入目录之上：同名模型以缓存为准。
+    for (provider_id, cached_models) in super::catalog_refresh::cached_catalog_models() {
+        models.entry(provider_id).or_default().extend(cached_models);
+    }
     Catalog {
         presets: leak_slice(presets),
-        models,
+        models: RwLock::new(models),
     }
 }
 

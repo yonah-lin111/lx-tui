@@ -1,11 +1,15 @@
 //! 浮层渲染：右键菜单、重命名与关闭确认；几何与命中供事件循环复用。
 
+mod connect;
 pub mod dialog;
 pub mod menu;
 mod referenced;
 pub mod save_draft;
 mod worktree;
 
+pub use connect::{
+    CONNECT_HEIGHT, CONNECT_WIDTH, ConnectLayout, connect_layout, connect_row_at, render_connect,
+};
 pub use dialog::*;
 pub use menu::*;
 pub use referenced::{
@@ -89,8 +93,12 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
             dialog::render_referenced_delete(frame, screen, delete);
             None
         }
+        Overlay::Connect(panel) => render_connect(frame, screen, panel),
     }
 }
 
+#[cfg(test)]
+#[path = "overlay/connect_tests.rs"]
+mod connect_tests;
 #[cfg(test)]
 mod tests;

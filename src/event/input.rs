@@ -520,6 +520,7 @@ fn overlay_selected_text(state: &AppState) -> Option<String> {
         Overlay::ReferencedFolderInput(i) => i.input.selected_text(),
         Overlay::ReferencedFolderSearch(s) => s.query.selected_text(),
         Overlay::ResumeSessionEdit(r) => r.input.selected_text(),
+        Overlay::Connect(panel) if panel.has_text_input() => panel.input.selected_text(),
         _ => None,
     }
 }

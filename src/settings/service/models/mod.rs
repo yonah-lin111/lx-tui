@@ -7,8 +7,6 @@
 //! - fetch 用当前编辑中的 base URL/key 做一次性远端发现，后台异步执行，
 //!   不堵本地连接；响应不含 Key。
 
-use std::time::Duration;
-
 use serde_json::{Value, json};
 
 use super::handlers::{Request, Response};
@@ -23,7 +21,7 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
     }
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/api/models/settings") => get_settings(state),
-        ("PUT", "/api/models/settings") => put_settings(request, state),
+        ("PUT", "/api/models/settings") => put_settings(request, state).await,
         ("POST", "/api/models/fetch") => fetch_models(request, state).await,
         _ => Response::error(404, "not found"),
     }
@@ -139,7 +137,7 @@ pub(super) fn model_value(model_key: &str, model: &crate::config::ai::ModelConfi
 }
 
 /// PUT：完整验证后原子保存；成功投递 ModelsChanged。
-fn put_settings(request: &Request, state: &ServiceState) -> Response {
+async fn put_settings(request: &Request, state: &ServiceState) -> Response {
     let body: Value = match serde_json::from_str(&request.body) {
         Ok(value) => value,
         Err(error) => return Response::error(422, &format!("invalid json: {error}")),
@@ -162,10 +160,42 @@ fn put_settings(request: &Request, state: &ServiceState) -> Response {
         Ok(None) => crate::config::ai::connect::ConnectSettings::default(),
         Err(error) => return Response::error(500, &error.to_string()),
     };
+    let current_for_verify = current.clone();
     let merged = match merge_settings(Some(current), &body, Some(&connect)) {
         Ok(settings) => settings,
         Err(message) => return Response::error(422, &message),
     };
+    // 新增/变更的 API Key 必须通过真实探测（离线测试域名由 verify 内部短路）。
+    for (provider_id, provider) in &merged.providers {
+        let Some(api_key) = provider
+            .options
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+        else {
+            continue;
+        };
+        let previous = current_for_verify
+            .providers
+            .get(provider_id)
+            .and_then(|existing| existing.options.api_key.as_deref())
+            .map(str::trim);
+        if previous == Some(api_key) {
+            continue;
+        }
+        let probe_model = provider.models.keys().next().map(String::as_str);
+        if let Err(message) = crate::config::ai::verify::verify_provider_api_key(
+            provider.kind,
+            &provider.options.base_url,
+            api_key,
+            probe_model,
+        )
+        .await
+        {
+            return Response::error(422, &format!("Provider '{}': {message}", provider.name));
+        }
+    }
     if let Err(error) = crate::config::ai::save_ai(&path, &merged) {
         return Response::error(500, &error.to_string());
     }
@@ -523,99 +553,28 @@ async fn fetch_models(request: &Request, state: &ServiceState) -> Response {
     let Some(api_key) = api_key.filter(|key| !key.is_empty()) else {
         return Response::error(422, "api key is required to fetch models");
     };
-    // 仅支持 OpenAI 兼容发现端点；其它协议明确禁用（不伪造列表）。
-    if transport != "openai-compatible" && transport != "openai" {
+    // 四种协议均支持远端发现：openai / openai-compatible / anthropic / google。
+    let Some(transport) = crate::config::ai::ProviderTransport::parse(&transport) else {
         return Response::error(
             422,
             "model discovery is not supported for this provider type",
         );
-    }
+    };
     // 直接 await 远端发现（连接/整体超时在 fetch 内设定）；事件循环是 Tokio 运行时，
     // 不能在运行时中再 `block_on`（会 panic）。
-    match fetch_remote_models(&base_url, &api_key).await {
+    match crate::config::ai::verify::fetch_provider_models(transport, &base_url, &api_key).await {
         Ok(models) => {
             let models_json: Vec<Value> = models
                 .iter()
-                .map(|(id, owned_by)| json!({"id": id, "ownedBy": owned_by}))
+                .map(|model| json!({"id": model.id, "name": model.name, "ownedBy": ""}))
                 .collect();
             Response::json(
                 200,
                 serde_json::to_string(&json!({"models": models_json})).unwrap_or_default(),
             )
         }
-        Err(code) => Response::error(502, &code),
+        Err(message) => Response::error(502, &message),
     }
-}
-
-/// 异步执行一次发现请求。
-async fn fetch_remote_models(
-    base_url: &str,
-    api_key: &str,
-) -> Result<Vec<(String, String)>, String> {
-    let url = join_models_url(base_url);
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| format!("client build failed: {error}"))?;
-    let response = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {api_key}"))
-        .send()
-        .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                "upstream timeout".to_string()
-            } else {
-                "upstream request failed".to_string()
-            }
-        })?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!("upstream http {}", status.as_u16()));
-    }
-    let text = response
-        .text()
-        .await
-        .map_err(|_| "upstream read failed".to_string())?;
-    if text.len() > MAX_FETCH_BODY_BYTES {
-        return Err("upstream response too large".into());
-    }
-    let value: Value = serde_json::from_str(&text).map_err(|_| "upstream response is not json")?;
-    let Some(data) = value.get("data").and_then(Value::as_array) else {
-        return Err("upstream response missing data array".into());
-    };
-    // 去重 + 按 id 排序。
-    let mut models: Vec<(String, String)> = data
-        .iter()
-        .filter_map(|item| {
-            let id = item.get("id").and_then(Value::as_str)?;
-            let owned_by = item
-                .get("owned_by")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            Some((id.to_string(), owned_by.to_string()))
-        })
-        .collect();
-    models.sort();
-    models.dedup_by(|left, right| left.0 == right.0);
-    Ok(models)
-}
-
-/// 发现响应体上限。
-const MAX_FETCH_BODY_BYTES: usize = 512 * 1024;
-
-/// baseURL + `/models`（兼容重复 `/v1`）。
-fn join_models_url(base_url: &str) -> String {
-    let base = base_url.trim_end_matches('/');
-    let path = "models";
-    if let Some(stripped) = path.strip_prefix("v1/")
-        && base.ends_with("/v1")
-    {
-        return format!("{base}/{stripped}");
-    }
-    format!("{base}/{path}")
 }
 
 #[cfg(test)]

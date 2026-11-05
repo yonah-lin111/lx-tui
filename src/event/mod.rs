@@ -248,6 +248,13 @@ async fn run_loop(
     }
     // 模型配置：启动加载（首次已由 main 导入）；加载后刷新状态行。
     chat::connect::load_models_snapshot(state);
+    // 启动后台静默刷新云端模型目录（不阻塞首帧，也不弹 Toast）。
+    state
+        .effects
+        .push(crate::app::effects::Effect::RefreshModelsCatalog {
+            pane: None,
+            provider_id: None,
+        });
     state.subagents_config = crate::config::subagents::load_subagents_or_default();
     // 自定义命令重载触发：启动、切换显示工作区与设置页写入后。
     let mut commands_reload = true;

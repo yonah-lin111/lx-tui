@@ -1,25 +1,24 @@
-//! `/connect` 面板交互：供应商选择、认证方式推进、表单/API Key 提交与 OAuth 回调。
+//! `/connect` 居中模态：供应商选择、认证推进、表单/API Key 提交、OAuth 与模型刷新。
 
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use crate::app::actions::LxInput;
+use crate::app::actions::OverlayKey;
 use crate::app::effects::Effect;
+use crate::app::overlay::{Overlay, TextInput};
 use crate::app::state::{
     AppState, ConnectManageAction, ConnectPanel, ConnectPromptStep, ConnectStage, ModelPicker,
-    SlashPanel,
+    PanelWindow, SlashPanel,
 };
 use crate::app::toast::{Toast, ToastKind};
 use crate::config::ai::AiSettings;
 use crate::config::ai::connect::ConnectSettings;
 use crate::config::ai::oauth::{OAuthPromptMode, OAuthStarted};
-use crate::config::ai::presets::{PresetAuthMethod, find_preset};
+use crate::config::ai::presets::{PresetAuthMethod, PresetFormField, find_preset};
 use crate::layout::PaneId;
 use crate::ui::text;
 
-use super::slash::clear_lx_input;
-
-/// `/connect` 命令采纳：打开 A-Z 供应商面板。
+/// `/connect` 命令采纳：打开居中模态，并清空草稿与斜杠面板。
 pub fn open_connect_panel(state: &mut AppState, pane: PaneId) -> bool {
     if !state
         .pane_anywhere(pane)
@@ -27,78 +26,169 @@ pub fn open_connect_panel(state: &mut AppState, pane: PaneId) -> bool {
     {
         return false;
     }
-    let panel = ConnectPanel::new(&state.connect);
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    target.lx.clear();
-    target.lx.slash = Some(SlashPanel::Connect(Box::new(panel)));
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.clear();
+        target.lx.slash = None;
+    }
+    let panel = ConnectPanel::new(pane, &state.connect);
+    state.overlay = Some(Overlay::Connect(Box::new(panel)));
     true
 }
 
-/// `/connect` 面板按键的特殊动作（Enter/Esc 与 OAuth 快捷键）。
-///
-/// 返回 `true` 表示已消费；返回 `false` 时编辑键继续走输入框编辑分支。
-pub fn handle_connect_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
-    let Some(panel) = current_panel(state, pane) else {
-        return false;
-    };
-    match command {
-        LxInput::Enter | LxInput::Tab => {
-            apply_connect_enter(state, pane);
-            true
-        }
-        LxInput::Escape => {
-            apply_connect_esc(state, pane);
-            true
-        }
-        LxInput::Char(ch) if panel.shortcut_char(ch) => {
-            let input_empty = state
-                .pane_anywhere(pane)
-                .is_some_and(|target| target.lx.input.trim().is_empty());
-            if !input_empty {
-                return false;
-            }
-            apply_connect_shortcut(state, pane, ch);
-            true
-        }
-        _ => false,
+/// 当前 `/connect` 模态快照。
+fn current_panel(state: &AppState) -> Option<ConnectPanel> {
+    match state.overlay.as_ref() {
+        Some(Overlay::Connect(panel)) => Some((**panel).clone()),
+        _ => None,
     }
 }
 
-/// 当前 `/connect` 面板快照。
-fn current_panel(state: &AppState, pane: PaneId) -> Option<ConnectPanel> {
-    state
-        .pane_anywhere(pane)
-        .and_then(|target| match &target.lx.slash {
-            Some(SlashPanel::Connect(panel)) => Some((**panel).clone()),
-            _ => None,
-        })
+/// `/connect` 模态按键分派。
+pub fn apply_connect_overlay_key(state: &mut AppState, key: OverlayKey) -> bool {
+    let Some(panel) = current_panel(state) else {
+        return false;
+    };
+    let validating = panel.validating;
+    match key {
+        OverlayKey::Esc => apply_connect_esc(state),
+        OverlayKey::Enter => {
+            if validating {
+                return false;
+            }
+            apply_connect_enter(state)
+        }
+        OverlayKey::Up => !validating && move_connect_active(state, -1),
+        OverlayKey::Down => !validating && move_connect_active(state, 1),
+        OverlayKey::Refresh => {
+            if validating {
+                return false;
+            }
+            let provider_id = match &panel.stage {
+                ConnectStage::Manage { provider_id, .. } => Some(provider_id.clone()),
+                _ => None,
+            };
+            start_models_refresh(state, provider_id)
+        }
+        OverlayKey::Char(ch) if panel.shortcut_char(ch) => apply_connect_shortcut(state, ch),
+        _ => edit_connect_input(state, key),
+    }
 }
 
-/// `/connect` 面板确认。
-pub fn apply_connect_enter(state: &mut AppState, pane: PaneId) -> bool {
-    let Some(panel) = current_panel(state, pane) else {
+/// 编辑模态输入框；`Providers` 阶段同步重算过滤视图。
+fn edit_connect_input(state: &mut AppState, key: OverlayKey) -> bool {
+    let Some(Overlay::Connect(panel)) = state.overlay.as_mut() else {
+        return false;
+    };
+    if panel.validating || !panel.has_text_input() || !panel.input.apply_edit_key(key) {
+        return false;
+    }
+    if matches!(panel.stage, ConnectStage::Providers) {
+        panel.refilter_from_input();
+    } else {
+        panel.clear_error();
+    }
+    true
+}
+
+/// 指针悬停行：只记录悬停（铺底色），不移动 `❯` 选中标记。
+pub fn hover_connect(state: &mut AppState, hover: Option<usize>) -> bool {
+    let Some(Overlay::Connect(panel)) = state.overlay.as_mut() else {
+        return false;
+    };
+    let hover = hover.filter(|index| *index < panel.item_count());
+    if panel.hover == hover {
+        return false;
+    }
+    panel.hover = hover;
+    true
+}
+
+/// 点击行：把 `❯` 移到该可见行（不自动执行动作）。
+pub fn set_connect_selection(state: &mut AppState, index: usize) -> bool {
+    let Some(Overlay::Connect(panel)) = state.overlay.as_mut() else {
+        return false;
+    };
+    if index >= panel.item_count() {
+        return false;
+    }
+    let mut window = panel.window();
+    if window.active == index {
+        return false;
+    }
+    window.set_active(index);
+    panel.set_window(window);
+    true
+}
+
+/// 滚轮滚动模态列表视口（高亮不动、越界钳制）。
+pub fn scroll_connect(state: &mut AppState, delta: isize, base: usize, visible: usize) -> bool {
+    let Some(Overlay::Connect(panel)) = state.overlay.as_mut() else {
+        return false;
+    };
+    let total = panel.item_count();
+    if total <= visible {
+        return false;
+    }
+    let max_offset = total - visible;
+    let mut window = panel.window();
+    let current = window.viewport.unwrap_or(base).min(max_offset);
+    let next = (current as isize + delta).clamp(0, max_offset as isize) as usize;
+    if next == current && window.viewport.is_some() {
+        return false;
+    }
+    window.viewport = Some(next);
+    panel.set_window(window);
+    true
+}
+
+/// 设置模态列表的显式视口起点（滚动条轨道/拖拽）。
+pub fn set_connect_viewport(state: &mut AppState, offset: usize, visible: usize) -> bool {
+    let Some(Overlay::Connect(panel)) = state.overlay.as_mut() else {
+        return false;
+    };
+    let total = panel.item_count();
+    if total <= visible {
+        return false;
+    }
+    let next = offset.min(total - visible);
+    let mut window = panel.window();
+    if window.viewport == Some(next) {
+        return false;
+    }
+    window.viewport = Some(next);
+    panel.set_window(window);
+    true
+}
+
+fn move_connect_active(state: &mut AppState, delta: isize) -> bool {
+    let Some(Overlay::Connect(panel)) = state.overlay.as_mut() else {
+        return false;
+    };
+    panel.move_active(delta)
+}
+
+/// `/connect` 模态确认。
+pub fn apply_connect_enter(state: &mut AppState) -> bool {
+    let Some(panel) = current_panel(state) else {
         return false;
     };
     match panel.stage {
-        ConnectStage::Providers => enter_provider(state, pane, &panel),
-        ConnectStage::Manage { .. } => enter_manage(state, pane, &panel),
-        ConnectStage::Methods { .. } => enter_method(state, pane, &panel),
-        ConnectStage::InputPrompt { .. } => enter_input_prompt(state, pane, &panel),
-        ConnectStage::OAuthWaiting { .. } => enter_oauth_waiting(state, pane, &panel),
+        ConnectStage::Providers => enter_provider(state, &panel),
+        ConnectStage::Manage { .. } => enter_manage(state, &panel),
+        ConnectStage::Methods { .. } => enter_method(state, &panel),
+        ConnectStage::InputPrompt { .. } => enter_input_prompt(state, &panel),
+        ConnectStage::OAuthWaiting { .. } => enter_oauth_waiting(state, &panel),
     }
 }
 
 /// 供应商列表 Enter：已连接进入管理菜单，未连接直接进入认证流程。
-fn enter_provider(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) -> bool {
+fn enter_provider(state: &mut AppState, panel: &ConnectPanel) -> bool {
     let Some(entry) = panel.active_entry().cloned() else {
         return true;
     };
     let Some(source) = entry.source.clone() else {
         return begin_auth(
             state,
-            pane,
             &entry.id,
             &entry.name,
             entry.methods,
@@ -108,26 +198,26 @@ fn enter_provider(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) -> b
     let mut actions = vec![
         ConnectManageAction::SelectModel,
         ConnectManageAction::Reconnect,
+        ConnectManageAction::RefreshModels,
     ];
     if has_stored_credentials(&state.connect, &entry.id) {
         actions.push(ConnectManageAction::Disconnect);
     }
     replace_panel(
         state,
-        pane,
         panel.clone(),
         ConnectStage::Manage {
             provider_id: entry.id,
             provider_name: entry.name,
             source,
             actions,
-            window: crate::app::state::PanelWindow::default(),
+            window: PanelWindow::default(),
         },
     )
 }
 
-/// 管理菜单 Enter：选模型 / 重新认证 / 断开连接。
-fn enter_manage(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) -> bool {
+/// 管理菜单 Enter：选模型 / 重新认证 / 刷新模型 / 断开连接。
+fn enter_manage(state: &mut AppState, panel: &ConnectPanel) -> bool {
     let ConnectStage::Manage {
         provider_id,
         provider_name,
@@ -144,11 +234,12 @@ fn enter_manage(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) -> boo
     match action {
         ConnectManageAction::SelectModel => {
             let current = state
-                .pane_anywhere(pane)
+                .pane_anywhere(panel.pane)
                 .and_then(|target| target.lx.chat.effective_selection(&state.models));
             let picker =
                 ModelPicker::for_provider(&state.models.settings, current.as_ref(), provider_id);
-            let Some(target) = state.pane_mut_anywhere(pane) else {
+            state.overlay = None;
+            let Some(target) = state.pane_mut_anywhere(panel.pane) else {
                 return true;
             };
             target.lx.clear();
@@ -161,16 +252,18 @@ fn enter_manage(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) -> boo
             };
             begin_auth(
                 state,
-                pane,
                 provider_id,
                 provider_name,
                 spec.methods,
                 BTreeMap::new(),
             )
         }
+        ConnectManageAction::RefreshModels => {
+            start_models_refresh(state, Some(provider_id.clone()))
+        }
         ConnectManageAction::Disconnect => {
             state.effects.push(Effect::DisconnectPreset {
-                pane,
+                pane: panel.pane,
                 provider_id: provider_id.clone(),
             });
             true
@@ -179,7 +272,7 @@ fn enter_manage(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) -> boo
 }
 
 /// 认证方式 Enter：进入所选方法的表单/Key 输入或直接启动 OAuth。
-fn enter_method(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) -> bool {
+fn enter_method(state: &mut AppState, panel: &ConnectPanel) -> bool {
     let ConnectStage::Methods {
         provider_id,
         provider_name,
@@ -192,7 +285,6 @@ fn enter_method(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) -> boo
     let method_index = window.active.min(methods.len().saturating_sub(1));
     begin_method(
         state,
-        pane,
         provider_id,
         provider_name,
         methods,
@@ -202,7 +294,7 @@ fn enter_method(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) -> boo
 }
 
 /// 表单/API Key Enter。
-fn enter_input_prompt(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) -> bool {
+fn enter_input_prompt(state: &mut AppState, panel: &ConnectPanel) -> bool {
     let ConnectStage::InputPrompt {
         provider_id,
         provider_name,
@@ -221,19 +313,10 @@ fn enter_input_prompt(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) 
             option_window,
         } => {
             if field.options.is_empty() {
-                let value = state
-                    .pane_anywhere(pane)
-                    .map(|target| target.lx.input.trim().to_string())
-                    .unwrap_or_default();
+                let value = panel.input.text().trim().to_string();
                 if field.required && value.is_empty() {
-                    return set_prompt_error(
-                        state,
-                        pane,
-                        panel,
-                        text::LX_CONNECT_FIELD_REQUIRED.to_string(),
-                    );
+                    return set_prompt_error(state, panel, text::LX_CONNECT_FIELD_REQUIRED);
                 }
-                clear_lx_input(state, pane);
                 let mut answers = answers.clone();
                 if value.is_empty() {
                     answers.remove(field.key);
@@ -242,7 +325,6 @@ fn enter_input_prompt(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) 
                 }
                 return advance_after_field(
                     state,
-                    pane,
                     provider_id,
                     provider_name,
                     *method_index,
@@ -257,7 +339,6 @@ fn enter_input_prompt(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) 
             answers.insert(field.key.to_string(), option.value.to_string());
             advance_after_field(
                 state,
-                pane,
                 provider_id,
                 provider_name,
                 *method_index,
@@ -266,20 +347,16 @@ fn enter_input_prompt(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) 
             )
         }
         ConnectPromptStep::ApiKey => {
-            let value = state
-                .pane_anywhere(pane)
-                .map(|target| target.lx.input.trim().to_string())
-                .unwrap_or_default();
+            let value = panel.input.text().trim().to_string();
             if value.is_empty() {
-                show_lx_toast(
-                    state,
-                    pane,
-                    ToastKind::Warning,
-                    text::LX_CONNECT_API_KEY_EMPTY.to_string(),
-                );
-                return true;
+                return set_prompt_error(state, panel, text::LX_CONNECT_API_KEY_EMPTY);
             }
-            clear_lx_input(state, pane);
+            let pane = panel.pane;
+            let mut panel = panel.clone();
+            panel.validating = true;
+            panel.status_message = Some(text::LX_CONNECT_VERIFYING.to_string());
+            panel.clear_error();
+            state.overlay = Some(Overlay::Connect(Box::new(panel)));
             state.effects.push(Effect::SavePresetConnection {
                 pane,
                 provider_id: provider_id.clone(),
@@ -293,7 +370,7 @@ fn enter_input_prompt(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) 
 }
 
 /// OAuth 等待 Enter：打开浏览器 / 复制代码 / 提交授权码。
-fn enter_oauth_waiting(state: &mut AppState, pane: PaneId, panel: &ConnectPanel) -> bool {
+fn enter_oauth_waiting(state: &mut AppState, panel: &ConnectPanel) -> bool {
     let ConnectStage::OAuthWaiting {
         attempt_id,
         url,
@@ -306,12 +383,8 @@ fn enter_oauth_waiting(state: &mut AppState, pane: PaneId, panel: &ConnectPanel)
         return true;
     };
     if *mode == OAuthPromptMode::Code {
-        let code = state
-            .pane_anywhere(pane)
-            .map(|target| target.lx.input.trim().to_string())
-            .unwrap_or_default();
+        let code = panel.input.text().trim().to_string();
         if !code.is_empty() {
-            clear_lx_input(state, pane);
             if !attempt_id.is_empty() {
                 state.effects.push(Effect::SubmitPresetOAuthCode {
                     attempt_id: attempt_id.clone(),
@@ -322,97 +395,88 @@ fn enter_oauth_waiting(state: &mut AppState, pane: PaneId, panel: &ConnectPanel)
         }
     }
     match window.active {
-        0 => open_browser(state, pane, url),
-        1 => copy_oauth_text(state, pane, user_code.as_deref().unwrap_or(url)),
+        0 => open_browser(state, panel.pane, url),
+        1 => copy_oauth_text(state, panel.pane, user_code.as_deref().unwrap_or(url)),
         _ => true,
     }
 }
 
-/// OAuth 等待阶段的 `o` / `c` 快捷键（仅自动模式、输入框为空时）。
-fn apply_connect_shortcut(state: &mut AppState, pane: PaneId, ch: char) -> bool {
-    let Some(panel) = current_panel(state, pane) else {
+/// OAuth 等待阶段的 `o` / `c` 快捷键（仅自动模式）。
+fn apply_connect_shortcut(state: &mut AppState, ch: char) -> bool {
+    let Some(panel) = current_panel(state) else {
         return false;
     };
     let ConnectStage::OAuthWaiting { url, user_code, .. } = &panel.stage else {
         return false;
     };
     match ch {
-        'o' => open_browser(state, pane, url),
-        'c' => copy_oauth_text(state, pane, user_code.as_deref().unwrap_or(url)),
+        'o' => open_browser(state, panel.pane, url),
+        'c' => copy_oauth_text(state, panel.pane, user_code.as_deref().unwrap_or(url)),
         _ => false,
     }
 }
 
-/// `/connect` 面板 Esc：OAuth 取消并退回列表；其余阶段退回列表；列表关闭面板。
-pub fn apply_connect_esc(state: &mut AppState, pane: PaneId) -> bool {
-    let Some(panel) = current_panel(state, pane) else {
+/// `/connect` 模态 Esc：OAuth 取消并退回列表；其余阶段退回列表；列表关闭模态。
+pub fn apply_connect_esc(state: &mut AppState) -> bool {
+    let Some(panel) = current_panel(state) else {
         return false;
     };
-    if let ConnectStage::OAuthWaiting { attempt_id, .. } = &panel.stage
-        && !attempt_id.is_empty()
-    {
+    if let Some(attempt_id) = panel.oauth_attempt_id() {
         state.effects.push(Effect::CancelPresetOAuth {
-            attempt_id: attempt_id.clone(),
+            attempt_id: attempt_id.to_string(),
         });
     }
-    clear_lx_input(state, pane);
     if matches!(panel.stage, ConnectStage::Providers) {
-        if let Some(target) = state.pane_mut_anywhere(pane) {
-            target.lx.slash = None;
-        }
+        state.overlay = None;
         return true;
     }
     let mut panel = panel;
-    panel.stage = ConnectStage::Providers;
-    panel.refilter("");
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return true;
-    };
-    target.lx.slash = Some(SlashPanel::Connect(Box::new(panel)));
+    panel.reset_to_providers();
+    state.overlay = Some(Overlay::Connect(Box::new(panel)));
     true
 }
 
 /// 开始认证：多方法先选方法，单方法直接进入该方法。
 fn begin_auth(
     state: &mut AppState,
-    pane: PaneId,
     provider_id: &str,
     provider_name: &str,
     methods: &'static [PresetAuthMethod],
     answers: BTreeMap<String, String>,
 ) -> bool {
     if methods.is_empty() {
+        let Some(panel) = current_panel(state) else {
+            return false;
+        };
         show_lx_toast(
             state,
-            pane,
+            panel.pane,
             ToastKind::Warning,
             text::LX_CONNECT_NO_METHODS.to_string(),
         );
         return true;
     }
     if methods.len() > 1 {
-        let Some(panel) = current_panel(state, pane) else {
+        let Some(panel) = current_panel(state) else {
             return false;
         };
         return replace_panel(
             state,
-            pane,
             panel,
             ConnectStage::Methods {
                 provider_id: provider_id.to_string(),
                 provider_name: provider_name.to_string(),
                 methods,
-                window: crate::app::state::PanelWindow::default(),
+                window: PanelWindow::default(),
             },
         );
     }
-    begin_method(state, pane, provider_id, provider_name, methods, 0, answers)
+    begin_method(state, provider_id, provider_name, methods, 0, answers)
 }
 
 /// 进入某个认证方法的首个表单字段/Key 输入/OAuth 启动。
 fn begin_method(
     state: &mut AppState,
-    pane: PaneId,
     provider_id: &str,
     provider_name: &str,
     methods: &'static [PresetAuthMethod],
@@ -426,7 +490,6 @@ fn begin_method(
         let field = method.form()[field_index].clone();
         return set_form_field(
             state,
-            pane,
             provider_id,
             provider_name,
             method_index,
@@ -436,16 +499,11 @@ fn begin_method(
         );
     }
     match method {
-        PresetAuthMethod::ApiKey { .. } => set_api_key_prompt(
-            state,
-            pane,
-            provider_id,
-            provider_name,
-            method_index,
-            answers,
-        ),
+        PresetAuthMethod::ApiKey { .. } => {
+            set_api_key_prompt(state, provider_id, provider_name, method_index, answers)
+        }
         PresetAuthMethod::OAuth { id, .. } => {
-            start_oauth(state, pane, provider_id, provider_name, id, answers)
+            start_oauth(state, provider_id, provider_name, id, answers)
         }
     }
 }
@@ -453,7 +511,6 @@ fn begin_method(
 /// 表单字段填完后：继续下一个字段，或进入 Key 输入 / 启动 OAuth。
 fn advance_after_field(
     state: &mut AppState,
-    pane: PaneId,
     provider_id: &str,
     provider_name: &str,
     method_index: usize,
@@ -470,7 +527,6 @@ fn advance_after_field(
         let field = method.form()[next_index].clone();
         return set_form_field(
             state,
-            pane,
             provider_id,
             provider_name,
             method_index,
@@ -480,16 +536,11 @@ fn advance_after_field(
         );
     }
     match method {
-        PresetAuthMethod::ApiKey { .. } => set_api_key_prompt(
-            state,
-            pane,
-            provider_id,
-            provider_name,
-            method_index,
-            answers,
-        ),
+        PresetAuthMethod::ApiKey { .. } => {
+            set_api_key_prompt(state, provider_id, provider_name, method_index, answers)
+        }
         PresetAuthMethod::OAuth { id, .. } => {
-            start_oauth(state, pane, provider_id, provider_name, id, answers)
+            start_oauth(state, provider_id, provider_name, id, answers)
         }
     }
 }
@@ -511,20 +562,18 @@ fn first_active_field(
 
 fn set_form_field(
     state: &mut AppState,
-    pane: PaneId,
     provider_id: &str,
     provider_name: &str,
     method_index: usize,
     field_index: usize,
-    field: crate::config::ai::presets::PresetFormField,
+    field: PresetFormField,
     answers: BTreeMap<String, String>,
 ) -> bool {
-    let Some(panel) = current_panel(state, pane) else {
+    let Some(panel) = current_panel(state) else {
         return false;
     };
     replace_panel(
         state,
-        pane,
         panel,
         ConnectStage::InputPrompt {
             provider_id: provider_id.to_string(),
@@ -533,7 +582,7 @@ fn set_form_field(
             step: ConnectPromptStep::FormField {
                 field_index,
                 field,
-                option_window: crate::app::state::PanelWindow::default(),
+                option_window: PanelWindow::default(),
             },
             answers,
             error: None,
@@ -543,18 +592,16 @@ fn set_form_field(
 
 fn set_api_key_prompt(
     state: &mut AppState,
-    pane: PaneId,
     provider_id: &str,
     provider_name: &str,
     method_index: usize,
     answers: BTreeMap<String, String>,
 ) -> bool {
-    let Some(panel) = current_panel(state, pane) else {
+    let Some(panel) = current_panel(state) else {
         return false;
     };
     replace_panel(
         state,
-        pane,
         panel,
         ConnectStage::InputPrompt {
             provider_id: provider_id.to_string(),
@@ -567,44 +614,32 @@ fn set_api_key_prompt(
     )
 }
 
-fn set_prompt_error(
-    state: &mut AppState,
-    pane: PaneId,
-    panel: &ConnectPanel,
-    error: String,
-) -> bool {
+fn set_prompt_error(state: &mut AppState, panel: &ConnectPanel, error: &str) -> bool {
     let mut panel = panel.clone();
-    if let ConnectStage::InputPrompt { error: slot, .. } = &mut panel.stage {
-        *slot = Some(error);
-    }
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return true;
-    };
-    target.lx.slash = Some(SlashPanel::Connect(Box::new(panel)));
+    panel.set_error(error);
+    state.overlay = Some(Overlay::Connect(Box::new(panel)));
     true
 }
 
 /// 启动 OAuth：入队效应并进入等待阶段（链接由回投事件补齐）。
 fn start_oauth(
     state: &mut AppState,
-    pane: PaneId,
     provider_id: &str,
     provider_name: &str,
     method_id: &str,
     answers: BTreeMap<String, String>,
 ) -> bool {
+    let Some(panel) = current_panel(state) else {
+        return false;
+    };
     state.effects.push(Effect::StartPresetOAuth {
-        pane,
+        pane: panel.pane,
         provider_id: provider_id.to_string(),
         method_id: method_id.to_string(),
         form_answers: answers.clone(),
     });
-    let Some(panel) = current_panel(state, pane) else {
-        return false;
-    };
     replace_panel(
         state,
-        pane,
         panel,
         ConnectStage::OAuthWaiting {
             attempt_id: String::new(),
@@ -617,23 +652,37 @@ fn start_oauth(
             instructions: text::LX_CONNECT_OAUTH_STARTING.to_string(),
             mode: OAuthPromptMode::Auto,
             error: None,
-            window: crate::app::state::PanelWindow::default(),
+            window: PanelWindow::default(),
         },
     )
 }
 
-fn replace_panel(
-    state: &mut AppState,
-    pane: PaneId,
-    mut panel: ConnectPanel,
-    stage: ConnectStage,
-) -> bool {
+fn replace_panel(state: &mut AppState, mut panel: ConnectPanel, stage: ConnectStage) -> bool {
     panel.stage = stage;
+    panel.input = TextInput::new("");
+    panel.validating = false;
+    panel.status_message = None;
+    panel.hover = None;
+    panel.window = PanelWindow::default();
     panel.clamp_window();
-    let Some(target) = state.pane_mut_anywhere(pane) else {
+    state.overlay = Some(Overlay::Connect(Box::new(panel)));
+    true
+}
+
+/// Ctrl+R / `Refresh models`：进入校验态并请求后台刷新。
+fn start_models_refresh(state: &mut AppState, provider_id: Option<String>) -> bool {
+    let Some(panel) = current_panel(state) else {
         return false;
     };
-    target.lx.slash = Some(SlashPanel::Connect(Box::new(panel)));
+    let pane = panel.pane;
+    let mut panel = panel;
+    panel.validating = true;
+    panel.status_message = Some(text::LX_CONNECT_REFRESHING.to_string());
+    state.overlay = Some(Overlay::Connect(Box::new(panel)));
+    state.effects.push(Effect::RefreshModelsCatalog {
+        pane: Some(pane),
+        provider_id,
+    });
     true
 }
 
@@ -679,7 +728,7 @@ fn has_stored_credentials(connect: &ConnectSettings, provider_id: &str) -> bool 
             .is_some_and(|oauth| !oauth.access_token.trim().is_empty())
 }
 
-/// 连接保存成功：刷新快照、弹窗格 Toast，并切到该供应商的 `/model` 面板。
+/// 连接保存成功：关闭模态、刷新快照、弹窗格 Toast，并切到该供应商的 `/model` 面板。
 pub fn on_preset_connected(
     state: &mut AppState,
     pane: PaneId,
@@ -695,6 +744,7 @@ pub fn on_preset_connected(
         .and_then(|target| target.lx.chat.effective_selection(&state.models));
     state.models.settings = settings;
     state.connect = connect;
+    state.overlay = None;
     super::refresh_all_lx_status(state);
     show_lx_toast(
         state,
@@ -711,7 +761,7 @@ pub fn on_preset_connected(
     true
 }
 
-/// 断开连接完成：刷新快照与面板连接状态。
+/// 断开连接完成：刷新快照与模态连接状态。
 pub fn on_preset_disconnected(
     state: &mut AppState,
     pane: PaneId,
@@ -722,6 +772,10 @@ pub fn on_preset_disconnected(
     let name = find_preset(provider_id)
         .map(|spec| spec.name.to_string())
         .unwrap_or_else(|| provider_id.to_string());
+    let modal = state.overlay.as_ref().and_then(|overlay| match overlay {
+        Overlay::Connect(panel) if panel.pane == pane => Some(panel.pane),
+        _ => None,
+    });
     state.models.settings = settings;
     state.connect = connect;
     super::refresh_all_lx_status(state);
@@ -731,19 +785,23 @@ pub fn on_preset_disconnected(
         ToastKind::Default,
         text::lx_connect_disconnected(&name),
     );
-    let refreshed = ConnectPanel::new(&state.connect);
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return true;
-    };
-    if matches!(target.lx.slash, Some(SlashPanel::Connect(_))) {
-        target.lx.clear();
-        target.lx.slash = Some(SlashPanel::Connect(Box::new(refreshed)));
+    if let Some(pane) = modal {
+        let refreshed = ConnectPanel::new(pane, &state.connect);
+        state.overlay = Some(Overlay::Connect(Box::new(refreshed)));
     }
     true
 }
 
-/// 连接保存/断开失败：窗格内危险 Toast。
+/// 连接保存/校验失败：在模态内原地报错并保留输入；模态不在时退化为窗格 Toast。
 pub fn on_connect_failed(state: &mut AppState, pane: PaneId, error: &str) -> bool {
+    if let Some(Overlay::Connect(panel)) = state.overlay.as_mut()
+        && panel.pane == pane
+    {
+        panel.validating = false;
+        panel.status_message = None;
+        panel.set_error(error.to_string());
+        return true;
+    }
     show_lx_toast(
         state,
         pane,
@@ -762,8 +820,8 @@ pub fn on_preset_oauth_prompt(
     started: OAuthStarted,
 ) -> bool {
     let mut applied = false;
-    if let Some(target) = state.pane_mut_anywhere(pane)
-        && let Some(SlashPanel::Connect(panel)) = target.lx.slash.as_mut()
+    if let Some(Overlay::Connect(panel)) = state.overlay.as_mut()
+        && panel.pane == pane
         && let ConnectStage::OAuthWaiting {
             attempt_id,
             provider_id: active_provider,
@@ -786,7 +844,7 @@ pub fn on_preset_oauth_prompt(
         *instructions = started.instructions;
         *mode = started.mode;
         *error = None;
-        *window = crate::app::state::PanelWindow::default();
+        *window = PanelWindow::default();
         applied = true;
     }
     if !applied && !started.attempt_id.is_empty() {
@@ -797,7 +855,7 @@ pub fn on_preset_oauth_prompt(
     applied
 }
 
-/// OAuth 授权失败：面板内保留错误与危险 Toast。
+/// OAuth 授权失败：模态内保留错误与危险 Toast。
 pub fn on_preset_oauth_failed(
     state: &mut AppState,
     pane: PaneId,
@@ -806,8 +864,8 @@ pub fn on_preset_oauth_failed(
     error: &str,
 ) -> bool {
     let mut applied = false;
-    if let Some(target) = state.pane_mut_anywhere(pane)
-        && let Some(SlashPanel::Connect(panel)) = target.lx.slash.as_mut()
+    if let Some(Overlay::Connect(panel)) = state.overlay.as_mut()
+        && panel.pane == pane
         && let ConnectStage::OAuthWaiting {
             attempt_id: active_attempt,
             provider_id: active_provider,
@@ -827,6 +885,50 @@ pub fn on_preset_oauth_failed(
         text::lx_connect_oauth_failed(error),
     );
     applied
+}
+
+/// 模型刷新完成：更新运行时快照、清掉校验态并按需弹 Toast。
+pub fn on_models_refreshed(
+    state: &mut AppState,
+    pane: Option<PaneId>,
+    count: usize,
+    settings: AiSettings,
+    connect: ConnectSettings,
+) -> bool {
+    state.models.settings = settings;
+    state.connect = connect;
+    if let Some(Overlay::Connect(panel)) = state.overlay.as_mut() {
+        panel.validating = false;
+        panel.status_message = None;
+        panel.refresh_entries(&state.connect);
+    }
+    super::refresh_all_lx_status(state);
+    if let Some(pane) = pane {
+        show_lx_toast(
+            state,
+            pane,
+            ToastKind::Default,
+            text::lx_connect_refreshed_models(count),
+        );
+    }
+    true
+}
+
+/// 模型刷新失败：清掉校验态；用户主动触发时提示，启动静默同步只记日志。
+pub fn on_models_refresh_failed(state: &mut AppState, pane: Option<PaneId>, error: &str) -> bool {
+    if let Some(Overlay::Connect(panel)) = state.overlay.as_mut() {
+        panel.validating = false;
+        panel.status_message = None;
+    }
+    if let Some(pane) = pane {
+        show_lx_toast(
+            state,
+            pane,
+            ToastKind::Warning,
+            text::lx_connect_refresh_failed(error),
+        );
+    }
+    true
 }
 
 /// 统一构造窗格 Toast（保留 `Instant::now()` 单一入口）。

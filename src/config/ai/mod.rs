@@ -18,9 +18,11 @@ use serde::{Deserialize, Serialize};
 
 use super::{ConfigError, user_data_root};
 
+pub mod catalog_refresh;
 pub mod connect;
 pub mod oauth;
 pub mod presets;
+pub mod verify;
 
 /// 默认流式空闲超时（毫秒），对齐 codex 的 5 分钟。
 ///

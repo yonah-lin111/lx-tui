@@ -40,12 +40,11 @@ pub use compact::{
     on_compact_revert_failed, on_compact_reverted, set_checkpoints as set_compact_checkpoints,
     toggle_checkpoint,
 };
-pub(crate) use connect::handle_connect_input;
-#[cfg(test)]
-pub(crate) use connect::{apply_connect_enter, apply_connect_esc};
 pub use connect::{
-    on_connect_failed, on_preset_connected, on_preset_disconnected, on_preset_oauth_failed,
-    on_preset_oauth_prompt, open_connect_panel,
+    apply_connect_overlay_key, hover_connect, on_connect_failed, on_models_refresh_failed,
+    on_models_refreshed, on_preset_connected, on_preset_disconnected, on_preset_oauth_failed,
+    on_preset_oauth_prompt, open_connect_panel, scroll_connect, set_connect_selection,
+    set_connect_viewport,
 };
 pub use fork::{on_fork_completed, on_fork_failed, open_fork_panel};
 pub use model_switch::{set_switches as set_model_switches, toggle_model_switch};
