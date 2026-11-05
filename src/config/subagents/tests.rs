@@ -5,6 +5,11 @@ use std::path::PathBuf;
 use super::*;
 use crate::config::ai::ModelSelection;
 
+fn write_role_json(dir: &std::path::Path, file: &str, body: &str) {
+    std::fs::create_dir_all(dir).expect("create role dir");
+    std::fs::write(dir.join(file), body).expect("write role file");
+}
+
 fn temp_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "lx-subagents-cfg-{}-{label}-{}",
@@ -49,6 +54,7 @@ fn save_and_load_round_trip_with_builtin_overrides_and_custom_roles() {
             max_concurrent: 12,
             max_depth: 3,
             default_max_tokens: Some(100_000),
+            delegation_mode: DelegationMode::Auto,
             builtins: BuiltinRoleOverrides {
                 explorer: RoleOverrideConfig {
                     description: Some(" Fast read-only scout ".into()),
@@ -59,8 +65,10 @@ fn save_and_load_round_trip_with_builtin_overrides_and_custom_roles() {
                         variant: Some("low".into()),
                     }),
                     nickname_candidates: vec!["Turing".into(), "turing".into(), "Curie".into()],
+                    ..RoleOverrideConfig::default()
                 },
                 executor: RoleOverrideConfig::default(),
+                monitor: RoleOverrideConfig::default(),
             },
             roles: vec![CustomRoleConfig {
                 name: "reviewer".into(),
@@ -73,6 +81,7 @@ fn save_and_load_round_trip_with_builtin_overrides_and_custom_roles() {
                     variant: Some("high".into()),
                 }),
                 nickname_candidates: vec!["Dijkstra".into(), "Hoare".into()],
+                ..CustomRoleConfig::default()
             }],
         },
     };
@@ -102,8 +111,218 @@ fn save_and_load_round_trip_with_builtin_overrides_and_custom_roles() {
         reviewer.system_prompt_override.as_deref(),
         Some("You are a code reviewer.")
     );
-    assert_eq!(loaded.subagents.all_roles().len(), 3);
+    assert_eq!(loaded.subagents.all_roles().len(), 4);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn monitor_base_role_roundtrips_through_serde_and_parse() {
+    let monitor = BaseRole::Monitor;
+    assert_eq!(monitor.as_str(), "monitor");
+    assert_eq!(BaseRole::parse(" monitor "), Some(monitor));
+    assert_eq!(
+        serde_json::from_str::<BaseRole>("\"monitor\"").expect("deserialize monitor"),
+        monitor
+    );
+    assert_eq!(
+        serde_json::to_string(&monitor).expect("serialize monitor"),
+        "\"monitor\""
+    );
+    assert!(monitor.default_description().contains("monitor"));
+
+    let section = SubagentsSection {
+        max_depth: 3,
+        ..SubagentsSection::default()
+    };
+    let resolved = section.resolve_role("monitor").expect("monitor role");
+    assert_eq!(resolved.base_role, BaseRole::Monitor);
+    assert!(resolved.is_builtin);
+    assert_eq!(resolved.system_prompt_override, None);
+    assert_eq!(section.all_roles().len(), 3);
+}
+
+#[test]
+fn delegation_mode_serializes_to_stable_strings() {
+    assert_eq!(DelegationMode::default(), DelegationMode::Auto);
+    for (mode, raw) in [
+        (DelegationMode::Auto, "auto"),
+        (DelegationMode::Proactive, "proactive"),
+        (DelegationMode::Explicit, "explicit"),
+    ] {
+        assert_eq!(mode.as_str(), raw);
+        assert_eq!(DelegationMode::parse(raw), Some(mode));
+        assert_eq!(
+            serde_json::to_string(&mode).expect("serialize mode"),
+            format!("\"{raw}\"")
+        );
+        assert_eq!(
+            serde_json::from_str::<DelegationMode>(&format!("\"{raw}\"")).expect("parse mode"),
+            mode
+        );
+    }
+    assert_eq!(DelegationMode::parse("always"), None);
+
+    let parsed = parse_subagents(r#"{"subagents":{"delegationMode":"proactive"}}"#)
+        .expect("parse delegation mode");
+    assert_eq!(parsed.subagents.delegation_mode, DelegationMode::Proactive);
+}
+
+#[test]
+fn role_capabilities_and_lock_model_serialize_flat() {
+    let role = CustomRoleConfig {
+        name: "reviewer".into(),
+        base_role: BaseRole::Explorer,
+        description: "Review code.".into(),
+        system_prompt: "Review code.".into(),
+        lock_model: true,
+        capabilities: RoleCapabilities {
+            allow_web_search: false,
+            allow_mcp: false,
+            allow_skills: true,
+        },
+        ..CustomRoleConfig::default()
+    };
+    let value = serde_json::to_value(&role).expect("serialize custom role");
+    assert_eq!(value["lockModel"], true);
+    assert_eq!(value["allowWebSearch"], false);
+    assert_eq!(value["allowMcp"], false);
+    assert_eq!(value["allowSkills"], true);
+    let decoded: CustomRoleConfig = serde_json::from_value(value).expect("deserialize");
+    assert!(decoded.lock_model);
+    assert!(!decoded.capabilities.allow_web_search);
+    assert!(!decoded.capabilities.allow_mcp);
+    assert!(decoded.capabilities.allow_skills);
+
+    // 缺省值：锁定关闭，三项能力全部开启。
+    let defaults: RoleOverrideConfig =
+        serde_json::from_str("{}").expect("deserialize empty override");
+    assert!(!defaults.lock_model);
+    assert_eq!(defaults.capabilities, RoleCapabilities::default());
+    assert!(defaults.is_empty());
+
+    let override_config = RoleOverrideConfig {
+        lock_model: true,
+        capabilities: RoleCapabilities {
+            allow_web_search: false,
+            allow_mcp: true,
+            allow_skills: false,
+        },
+        ..RoleOverrideConfig::default()
+    };
+    let value = serde_json::to_value(&override_config).expect("serialize override");
+    assert_eq!(value["lockModel"], true);
+    assert_eq!(value["allowWebSearch"], false);
+    assert_eq!(value["allowMcp"], true);
+    assert_eq!(value["allowSkills"], false);
+}
+
+#[test]
+fn validation_rejects_monitor_as_custom_role_name() {
+    for name in ["explorer", "executor", "monitor"] {
+        let section = SubagentsSection {
+            roles: vec![CustomRoleConfig {
+                name: name.into(),
+                base_role: BaseRole::Executor,
+                description: "desc".into(),
+                system_prompt: "prompt".into(),
+                ..CustomRoleConfig::default()
+            }],
+            ..SubagentsSection::default()
+        };
+        let error = section.validate().expect_err("reserved name rejected");
+        assert!(error.to_string().contains("reserved"), "{name}: {error}");
+    }
+}
+
+#[test]
+fn discovers_project_roles_when_trusted_and_defaults_name_to_stem() {
+    let workspace = temp_dir("project-discover");
+    write_role_json(
+        &workspace.join(".lx").join("agents"),
+        "reviewer.json",
+        r#"{"baseRole":"explorer","description":"Review changes.","systemPrompt":"You review."}"#,
+    );
+    write_role_json(
+        &workspace.join(".agents").join("roles"),
+        "watcher.json",
+        r#"{"name":"watcher","baseRole":"monitor","description":"Watch builds.","systemPrompt":"You watch.","lockModel":true,"allowWebSearch":false}"#,
+    );
+
+    let discovered = discover_project_roles(&workspace);
+    assert_eq!(discovered.len(), 2);
+    let reviewer = discovered
+        .iter()
+        .find(|role| role.name == "reviewer")
+        .expect("reviewer discovered from file stem");
+    assert_eq!(reviewer.base_role, BaseRole::Explorer);
+    let watcher = discovered
+        .iter()
+        .find(|role| role.name == "watcher")
+        .expect("watcher discovered");
+    assert_eq!(watcher.base_role, BaseRole::Monitor);
+    assert!(watcher.lock_model);
+    assert!(!watcher.capabilities.allow_web_search);
+    assert!(discovered.iter().all(|role| role.is_project_scoped));
+
+    let base = SubagentsSection::default();
+    let merged = merge_project_roles(&base, Some(workspace.as_path()), true);
+    assert_eq!(merged.roles.len(), 2);
+    assert_eq!(base.roles.len(), 0, "base section is not mutated");
+
+    let untrusted = merge_project_roles(&base, Some(workspace.as_path()), false);
+    assert!(untrusted.roles.is_empty());
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn project_roles_cannot_shadow_builtins_or_global_custom_roles() {
+    let workspace = temp_dir("project-shadow");
+    let roles_dir = workspace.join(".lx").join("agents");
+    for name in ["explorer", "executor", "monitor"] {
+        write_role_json(
+            &roles_dir,
+            &format!("{name}.json"),
+            &format!(r#"{{"name":"{name}","description":"Hijack.","systemPrompt":"Hijack."}}"#),
+        );
+    }
+    write_role_json(
+        &roles_dir,
+        "reviewer.json",
+        r#"{"description":"Shadowed global role.","systemPrompt":"Shadowed."}"#,
+    );
+    write_role_json(
+        &roles_dir,
+        "auditor.json",
+        r#"{"description":"Independent auditor.","systemPrompt":"You audit."}"#,
+    );
+
+    let base = SubagentsSection {
+        roles: vec![CustomRoleConfig {
+            name: "reviewer".into(),
+            base_role: BaseRole::Explorer,
+            description: "Global reviewer.".into(),
+            system_prompt: "You review.".into(),
+            ..CustomRoleConfig::default()
+        }],
+        ..SubagentsSection::default()
+    };
+    let discovered = discover_project_roles(&workspace);
+    assert_eq!(
+        discovered
+            .iter()
+            .map(|role| role.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["auditor", "reviewer"],
+        "built-in names are skipped before merging"
+    );
+
+    let merged = merge_project_roles(&base, Some(workspace.as_path()), true);
+    assert_eq!(merged.roles.len(), 2);
+    assert_eq!(merged.roles[0].name, "reviewer");
+    assert_eq!(merged.roles[0].description, "Global reviewer.");
+    assert_eq!(merged.roles[1].name, "auditor");
+    assert!(merged.roles[1].is_project_scoped);
+    let _ = std::fs::remove_dir_all(workspace);
 }
 
 #[test]
@@ -122,6 +341,7 @@ fn validation_rejects_invalid_concurrency_reserved_or_duplicate_names() {
             system_prompt: "prompt".into(),
             model: None,
             nickname_candidates: Vec::new(),
+            ..CustomRoleConfig::default()
         }],
         ..SubagentsSection::default()
     };
@@ -135,6 +355,7 @@ fn validation_rejects_invalid_concurrency_reserved_or_duplicate_names() {
             system_prompt: "prompt".into(),
             model: None,
             nickname_candidates: Vec::new(),
+            ..CustomRoleConfig::default()
         }],
         ..SubagentsSection::default()
     };
@@ -265,4 +486,51 @@ fn old_json_without_new_fields_uses_defaults_and_omits_none_budget() {
     };
     let serialized = serde_json::to_value(&with_budget).expect("serialize");
     assert_eq!(serialized["defaultMaxTokens"], 50_000);
+}
+
+#[test]
+fn project_role_discovery_rejects_unknown_fields_and_merges_worktree_plus_workspace() {
+    let ws = temp_dir("ws-roles");
+    let wt = temp_dir("wt-roles");
+    let ws_agents = ws.join(".lx").join("agents");
+    let wt_agents = wt.join(".lx").join("agents");
+    std::fs::create_dir_all(&ws_agents).expect("mkdir ws");
+    std::fs::create_dir_all(&wt_agents).expect("mkdir wt");
+
+    // 含未知 snake_case 字段 `allow_mcp` 的角色文件必须被拒绝跳过，防止能力收紧 fail-open
+    std::fs::write(
+        ws_agents.join("typo_role.json"),
+        r#"{"baseRole":"explorer","description":"typo","systemPrompt":"prompt","allow_mcp":false}"#,
+    )
+    .expect("write typo");
+    std::fs::write(
+        ws_agents.join("repo_role.json"),
+        r#"{"baseRole":"explorer","description":"repo role","systemPrompt":"repo prompt"}"#,
+    )
+    .expect("write repo role");
+    std::fs::write(
+        wt_agents.join("wt_role.json"),
+        r#"{"baseRole":"monitor","description":"wt role","systemPrompt":"wt prompt","allowMcp":false}"#,
+    )
+    .expect("write wt role");
+
+    let merged = super::merge_project_roles_for_paths(
+        &SubagentsSection::default(),
+        Some(&ws),
+        Some(&wt),
+        true,
+    );
+    assert!(
+        merged.resolve_role("typo_role").is_none(),
+        "unknown field role must be rejected"
+    );
+    assert!(
+        merged.resolve_role("repo_role").is_some(),
+        "workspace root role must be discovered"
+    );
+    let wt_spec = merged.resolve_role("wt_role").expect("worktree role");
+    assert_eq!(wt_spec.base_role, BaseRole::Monitor);
+    assert!(!wt_spec.capabilities.allow_mcp);
+    let _ = std::fs::remove_dir_all(ws);
+    let _ = std::fs::remove_dir_all(wt);
 }

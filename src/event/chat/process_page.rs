@@ -107,11 +107,9 @@ pub fn refresh_open_task_pages(state: &mut AppState) -> bool {
         };
         if page.tab == crate::app::state::TaskTab::Agents {
             // 懒加载：高亮项还没有消息流时补一次（历史 run 只在选中后读库）。
-            let pending_load = target
-                .lx
-                .agents
-                .runs
-                .get(page.agents_window.active)
+            let pending_load = page
+                .selected_agent_index(&target.lx.agents)
+                .and_then(|idx| target.lx.agents.runs.get(idx))
                 .filter(|run| !run.loaded)
                 .map(|run| (run.agent_id.clone(), run.child_session_id.clone()));
             state

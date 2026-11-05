@@ -467,7 +467,7 @@
       <span class="status" id="subagents-status">Loading…</span>
     </div>
     <fieldset>
-      <legend>Concurrency</legend>
+      <legend>General</legend>
       <div class="field-grid">
         <div>
           <label for="subagents-max-concurrent">Max concurrent subagents per session (1–12)</label>
@@ -480,6 +480,10 @@
         <div>
           <label for="subagents-default-max-tokens">Default token budget per turn (optional, min 1000)</label>
           <input id="subagents-default-max-tokens" type="number" min="1000" step="1000" placeholder="Unlimited">
+        </div>
+        <div>
+          <label>Delegation mode</label>
+          <div id="subagents-delegation-mode" class="select-host"></div>
         </div>
       </div>
     </fieldset>
@@ -532,6 +536,14 @@
                 <div class="field-wide">
                   <label for="subagent-description">Description (shown to main agent in spawn_agent)</label>
                   <input id="subagent-description" type="text" placeholder="Short description of when to delegate to this role">
+                </div>
+                <div class="field-wide">
+                  <label class="field-hint"><input id="subagent-lock-model" type="checkbox"> Lock model &amp; reasoning effort (ignore caller overrides)</label>
+                </div>
+                <div class="field-wide check-row">
+                  <label class="check-item"><input id="subagent-allow-web-search" type="checkbox"> Allow web_search</label>
+                  <label class="check-item"><input id="subagent-allow-mcp" type="checkbox"> Allow MCP tools</label>
+                  <label class="check-item"><input id="subagent-allow-skills" type="checkbox"> Allow skills</label>
                 </div>
               </div>
             </fieldset>

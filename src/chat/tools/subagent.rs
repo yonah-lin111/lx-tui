@@ -21,8 +21,10 @@ pub(crate) const fn spawn_agent_spec() -> ToolSpec {
          with a clean context; set `fork_context=true` to clone all completed turns from the \
          parent conversation before appending this task, or pass `fork_turns` (1-64) to clone \
          only the most recent completed turns. Built-in roles are `explorer` (read-only \
-         `read`/`search`/`web_search`) and `executor` (file and process tools, no `ask`, no plan \
-         tool), plus any custom roles configured in settings. Optionally pass `model` \
+         `read`/`search`/`web_search`), `executor` (file and process tools, no `ask`, no plan \
+         tool), and `monitor` (command polling `read`/`search`/`exec_command`/`write_stdin`, \
+         leaf-only), plus any custom roles configured in settings or discovered from \
+         `.lx/agents/*.json` and `.agents/roles/*.json`. Optionally pass `model` \
          ('provider/model' or 'model'), `reasoning_effort`, and `max_tokens` to override the role \
          or parent model and cap the subagent's token budget. Always give it a short \
          human-readable `title` plus either `task` (plain text) or `items` (ordered text and \
@@ -139,17 +141,29 @@ pub fn build_spawn_role_guidance(subagents: &SubagentsSection) -> String {
         subagents.max_concurrent, subagents.max_depth
     );
     for role in roles {
+        let model_label = if role.lock_model {
+            "locked model"
+        } else {
+            "default model"
+        };
+        let lock_suffix = if role.lock_model && role.default_model.is_some() {
+            " — cannot be overridden"
+        } else {
+            ""
+        };
         let model_note = match &role.default_model {
             Some(sel) => match &sel.variant {
                 Some(v) => format!(
-                    " (base: {}, default model: {}/{} ({v}))",
+                    " (base: {}, {}: {}/{} ({v}){lock_suffix})",
                     role.base_role.as_str(),
+                    model_label,
                     sel.provider,
                     sel.model
                 ),
                 None => format!(
-                    " (base: {}, default model: {}/{})",
+                    " (base: {}, {}: {}/{}{lock_suffix})",
                     role.base_role.as_str(),
+                    model_label,
                     sel.provider,
                     sel.model
                 ),
@@ -159,9 +173,24 @@ pub fn build_spawn_role_guidance(subagents: &SubagentsSection) -> String {
                 role.base_role.as_str()
             ),
         };
+        let mut restrictions = Vec::new();
+        if !role.capabilities.allow_web_search {
+            restrictions.push("no web_search");
+        }
+        if !role.capabilities.allow_mcp {
+            restrictions.push("no mcp");
+        }
+        if !role.capabilities.allow_skills {
+            restrictions.push("no skills");
+        }
+        let cap_note = if restrictions.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", restrictions.join(", "))
+        };
         out.push_str(&format!(
-            "- `{}`{}: {}\n",
-            role.name, model_note, role.description
+            "- `{}`{}{}: {}\n",
+            role.name, model_note, cap_note, role.description
         ));
     }
     out.trim_end().to_string()
@@ -238,7 +267,7 @@ fn spawn_parameters() -> Value {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": MAX_ROLE_NAME_LEN,
-                "description": "Subagent role identifier (`explorer`, `executor`, or a configured custom role name).",
+                "description": "Subagent role identifier (`explorer`, `executor`, `monitor`, or a configured/project custom role name).",
             },
             "title": {
                 "type": "string",

@@ -886,6 +886,210 @@ fn depth_two_spawn_matches_inner_parent_session_and_sorts_tree() {
     );
 }
 
+/// 已加载的终态 run（LRU 回收测试用）。
+fn completed_run(
+    child_session: &str,
+    agent_id: &str,
+    completed_ms: i64,
+    last_accessed_ms: i64,
+) -> SubagentRun {
+    let mut run = run(child_session, agent_id, AgentRole::Explorer);
+    run.status = "completed".into();
+    run.completed_at_ms = Some(completed_ms);
+    run.loaded = true;
+    run.chat.session_id = Some(child_session.into());
+    run.last_accessed_ms = last_accessed_ms;
+    run
+}
+
+#[test]
+fn idle_chat_lru_evicts_oldest_and_protects_running_and_selected() {
+    use crate::app::state::lx::agent::MAX_RESIDENT_SUBAGENT_CHATS;
+
+    assert_eq!(MAX_RESIDENT_SUBAGENT_CHATS, 6);
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-parent".into());
+
+    let mut runs: Vec<SubagentRun> = (0..8)
+        .map(|index| {
+            completed_run(
+                &format!("sess-{index}"),
+                &format!("sub-{index}"),
+                1_000 + index,
+                index,
+            )
+        })
+        .collect();
+    let mut running = run("sess-running", "sub-running", AgentRole::Executor);
+    running.loaded = true;
+    running.last_accessed_ms = -1;
+    runs.push(running);
+    state.pane_mut_anywhere(pane).expect("pane").lx.agents.runs = runs;
+
+    let evicted = state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .evict_excess_idle_chats(Some("sub-1"));
+    assert_eq!(evicted, ["sub-0", "sub-2"], "最久未访问的空闲会话先卸载");
+    let agents = &state.pane_anywhere(pane).expect("pane").lx.agents;
+    assert_eq!(
+        agents
+            .runs
+            .iter()
+            .filter(|run| !run.is_running() && run.loaded)
+            .count(),
+        MAX_RESIDENT_SUBAGENT_CHATS,
+        "驻留数收敛到上限"
+    );
+    assert!(
+        agents.by_agent("sub-running").expect("running").loaded,
+        "运行中不卸载"
+    );
+    assert!(
+        agents.by_agent("sub-1").expect("selected").loaded,
+        "选中项受保护"
+    );
+    assert!(!agents.by_agent("sub-0").expect("evicted").loaded);
+    assert!(
+        agents
+            .by_agent("sub-0")
+            .expect("evicted")
+            .chat
+            .session_id
+            .is_none(),
+        "内存消息树已清空"
+    );
+}
+
+#[test]
+fn reselecting_an_evicted_run_requests_a_lazy_load() {
+    use crate::app::state::{TaskPage, TaskTab};
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-parent".into());
+    let runs: Vec<SubagentRun> = (0..7)
+        .map(|index| {
+            completed_run(
+                &format!("sess-{index}"),
+                &format!("sub-{index}"),
+                1_000 + index,
+                index,
+            )
+        })
+        .collect();
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.lx.agents.runs = runs;
+    let evicted = target.lx.agents.evict_excess_idle_chats(None);
+    assert_eq!(evicted, ["sub-0"], "只卸载最旧的一条");
+    target.lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        ..TaskPage::default()
+    });
+    state.effects.clear();
+
+    assert!(update::select_task_agent(&mut state, pane, 0));
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::LoadSubagentSession { pane: p, agent_id, child_session }
+                if *p == pane && agent_id == "sub-0" && child_session == "sess-0"
+        )),
+        "重新选中已卸载 run 时请求懒加载：{:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn subagent_loaded_and_finished_trigger_idle_eviction() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-parent".into());
+    let mut runs: Vec<SubagentRun> = (0..7)
+        .map(|index| {
+            completed_run(
+                &format!("sess-{index}"),
+                &format!("sub-{index}"),
+                1_000 + index,
+                index,
+            )
+        })
+        .collect();
+    let mut pending = run("sess-target", "sub-target", AgentRole::Explorer);
+    pending.status = "completed".into();
+    pending.completed_at_ms = Some(2_000);
+    pending.loaded = false;
+    runs.push(pending);
+    state.pane_mut_anywhere(pane).expect("pane").lx.agents.runs = runs;
+
+    assert!(update::on_subagent_loaded(
+        &mut state,
+        pane,
+        "sub-target",
+        &[]
+    ));
+    let agents = &state.pane_anywhere(pane).expect("pane").lx.agents;
+    assert!(agents.by_agent("sub-target").expect("target").loaded);
+    assert_eq!(
+        agents
+            .runs
+            .iter()
+            .filter(|run| !run.is_running() && run.loaded)
+            .count(),
+        6,
+        "加载完成后自动回收超限会话"
+    );
+
+    let mut running = run("sess-running", "sub-running", AgentRole::Executor);
+    running.loaded = true;
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .runs
+        .push(running);
+    assert!(update::on_subagent_finished(
+        &mut state,
+        "sess-running",
+        "completed",
+        None,
+        crate::db::chat::Usage::default(),
+    ));
+    let agents = &state.pane_anywhere(pane).expect("pane").lx.agents;
+    assert!(
+        agents.by_agent("sub-running").expect("finished").loaded,
+        "刚结束的会话视为最近访问，不立即卸载"
+    );
+    assert_eq!(
+        agents
+            .runs
+            .iter()
+            .filter(|run| !run.is_running() && run.loaded)
+            .count(),
+        6,
+        "终态后同样回收超限会话"
+    );
+}
+
 #[test]
 fn refresh_subagent_cards_updates_nested_spawn_cards() {
     let mut state = AppState::demo();

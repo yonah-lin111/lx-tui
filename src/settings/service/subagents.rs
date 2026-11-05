@@ -7,11 +7,13 @@ use serde_json::json;
 
 use super::handlers::{Request, Response};
 use super::{ServiceState, SettingsEvent, ai_path};
-use crate::chat::agent::{DEFAULT_NICKNAME_CANDIDATES, EXECUTOR_PROMPT, EXPLORER_PROMPT};
+use crate::chat::agent::{
+    DEFAULT_NICKNAME_CANDIDATES, EXECUTOR_PROMPT, EXPLORER_PROMPT, MONITOR_PROMPT,
+};
 use crate::config::ai::{AiSettings, ModelSelection};
 use crate::config::subagents::{
-    BaseRole, CustomRoleConfig, RoleOverrideConfig, SubagentsConfigFile, SubagentsSection,
-    load_subagents, save_subagents,
+    BaseRole, CustomRoleConfig, DelegationMode, RoleCapabilities, RoleOverrideConfig,
+    SubagentsConfigFile, SubagentsSection, load_subagents, save_subagents,
 };
 
 /// `/api/subagents` 系列入口。
@@ -19,11 +21,14 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/api/subagents") => get_subagents(state),
         ("PUT", "/api/subagents") => put_subagents_all(request, state),
+        ("PUT", "/api/subagents/settings") => put_settings(request, state),
         ("PUT", "/api/subagents/general") => put_general(request, state),
         ("PUT", "/api/subagents/builtins/explorer") => put_builtin("explorer", request, state),
         ("PUT", "/api/subagents/builtins/executor") => put_builtin("executor", request, state),
+        ("PUT", "/api/subagents/builtins/monitor") => put_builtin("monitor", request, state),
         ("DELETE", "/api/subagents/builtins/explorer") => reset_builtin("explorer", state),
         ("DELETE", "/api/subagents/builtins/executor") => reset_builtin("executor", state),
+        ("DELETE", "/api/subagents/builtins/monitor") => reset_builtin("monitor", state),
         ("POST", "/api/subagents/roles") => create_role(request, state),
         ("PUT", path) if path.starts_with("/api/subagents/roles/") => {
             let name = path.trim_start_matches("/api/subagents/roles/");
@@ -120,6 +125,7 @@ fn build_response_json(section: &SubagentsSection, state: &ServiceState) -> Resp
         "maxConcurrent": section.max_concurrent,
         "maxDepth": section.max_depth,
         "defaultMaxTokens": section.default_max_tokens,
+        "delegationMode": section.delegation_mode.as_str(),
         "builtins": section.builtins,
         "roles": section.roles,
         "defaults": {
@@ -132,6 +138,11 @@ fn build_response_json(section: &SubagentsSection, state: &ServiceState) -> Resp
                 "baseRole": "executor",
                 "description": BaseRole::Executor.default_description(),
                 "systemPrompt": EXECUTOR_PROMPT,
+            },
+            "monitor": {
+                "baseRole": "monitor",
+                "description": BaseRole::Monitor.default_description(),
+                "systemPrompt": MONITOR_PROMPT,
             },
             "nicknameCandidates": DEFAULT_NICKNAME_CANDIDATES,
         },
@@ -159,6 +170,17 @@ where
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct PartialBuiltinRoleOverrides {
+    #[serde(default)]
+    explorer: Option<RoleOverrideConfig>,
+    #[serde(default)]
+    executor: Option<RoleOverrideConfig>,
+    #[serde(default)]
+    monitor: Option<RoleOverrideConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PutAllPayload {
     max_concurrent: usize,
     #[serde(default)]
@@ -167,7 +189,9 @@ struct PutAllPayload {
     #[serde(default, deserialize_with = "deserialize_present_option")]
     default_max_tokens: Option<Option<u64>>,
     #[serde(default)]
-    builtins: Option<crate::config::subagents::BuiltinRoleOverrides>,
+    delegation_mode: Option<DelegationMode>,
+    #[serde(default)]
+    builtins: Option<PartialBuiltinRoleOverrides>,
     #[serde(default)]
     roles: Option<Vec<CustomRoleConfig>>,
 }
@@ -188,11 +212,48 @@ fn put_subagents_all(request: &Request, state: &ServiceState) -> Response {
     if let Some(tokens) = payload.default_max_tokens {
         file.subagents.default_max_tokens = tokens;
     }
+    if let Some(mode) = payload.delegation_mode {
+        file.subagents.delegation_mode = mode;
+    }
     if let Some(builtins) = payload.builtins {
-        file.subagents.builtins = builtins;
+        if let Some(explorer) = builtins.explorer {
+            file.subagents.builtins.explorer = explorer;
+        }
+        if let Some(executor) = builtins.executor {
+            file.subagents.builtins.executor = executor;
+        }
+        if let Some(monitor) = builtins.monitor {
+            file.subagents.builtins.monitor = monitor;
+        }
     }
     if let Some(roles) = payload.roles {
         file.subagents.roles = roles;
+    }
+    match commit_and_notify(&path, &file, state) {
+        Ok(saved) => build_response_json(&saved, state),
+        Err(resp) => resp,
+    }
+}
+
+/// `PUT /api/subagents/settings`：仅更新全局委派模式，不触碰并发与角色列表。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsPayload {
+    #[serde(default)]
+    delegation_mode: Option<DelegationMode>,
+}
+
+fn put_settings(request: &Request, state: &ServiceState) -> Response {
+    let (path, mut file) = match load_current(state) {
+        Ok(pair) => pair,
+        Err(resp) => return resp,
+    };
+    let payload: SettingsPayload = match serde_json::from_str(&request.body) {
+        Ok(p) => p,
+        Err(err) => return Response::error(400, &format!("invalid json: {err}")),
+    };
+    if let Some(mode) = payload.delegation_mode {
+        file.subagents.delegation_mode = mode;
     }
     match commit_and_notify(&path, &file, state) {
         Ok(saved) => build_response_json(&saved, state),
@@ -240,7 +301,15 @@ struct BuiltinOverridePayload {
     #[serde(default)]
     model: Option<ModelSelection>,
     #[serde(default)]
-    nickname_candidates: Vec<String>,
+    lock_model: Option<bool>,
+    #[serde(default)]
+    allow_web_search: Option<bool>,
+    #[serde(default)]
+    allow_mcp: Option<bool>,
+    #[serde(default)]
+    allow_skills: Option<bool>,
+    #[serde(default)]
+    nickname_candidates: Option<Vec<String>>,
 }
 
 fn put_builtin(role: &str, request: &Request, state: &ServiceState) -> Response {
@@ -252,15 +321,23 @@ fn put_builtin(role: &str, request: &Request, state: &ServiceState) -> Response 
         Ok(p) => p,
         Err(err) => return Response::error(400, &format!("invalid json: {err}")),
     };
+    let existing = match role {
+        "explorer" => file.subagents.builtins.explorer.clone(),
+        "executor" => file.subagents.builtins.executor.clone(),
+        "monitor" => file.subagents.builtins.monitor.clone(),
+        _ => return Response::error(404, "unknown built-in role"),
+    };
     // 若提交的描述或系统提示词与内置默认值完全一致，自动视作未覆写（None）。
     let default_desc = match role {
         "explorer" => BaseRole::Explorer.default_description(),
         "executor" => BaseRole::Executor.default_description(),
+        "monitor" => BaseRole::Monitor.default_description(),
         _ => "",
     };
     let default_prompt = match role {
         "explorer" => EXPLORER_PROMPT,
         "executor" => EXECUTOR_PROMPT,
+        "monitor" => MONITOR_PROMPT,
         _ => "",
     };
     let ov = RoleOverrideConfig {
@@ -269,12 +346,25 @@ fn put_builtin(role: &str, request: &Request, state: &ServiceState) -> Response 
             .system_prompt
             .filter(|p| p.trim() != default_prompt.trim()),
         model: payload.model,
-        nickname_candidates: payload.nickname_candidates,
+        lock_model: payload.lock_model.unwrap_or(existing.lock_model),
+        capabilities: RoleCapabilities {
+            allow_web_search: payload
+                .allow_web_search
+                .unwrap_or(existing.capabilities.allow_web_search),
+            allow_mcp: payload.allow_mcp.unwrap_or(existing.capabilities.allow_mcp),
+            allow_skills: payload
+                .allow_skills
+                .unwrap_or(existing.capabilities.allow_skills),
+        },
+        nickname_candidates: payload
+            .nickname_candidates
+            .unwrap_or(existing.nickname_candidates),
     }
     .normalized();
     match role {
         "explorer" => file.subagents.builtins.explorer = ov,
         "executor" => file.subagents.builtins.executor = ov,
+        "monitor" => file.subagents.builtins.monitor = ov,
         _ => return Response::error(404, "unknown built-in role"),
     }
     match commit_and_notify(&path, &file, state) {
@@ -291,6 +381,7 @@ fn reset_builtin(role: &str, state: &ServiceState) -> Response {
     match role {
         "explorer" => file.subagents.builtins.explorer = RoleOverrideConfig::default(),
         "executor" => file.subagents.builtins.executor = RoleOverrideConfig::default(),
+        "monitor" => file.subagents.builtins.monitor = RoleOverrideConfig::default(),
         _ => return Response::error(404, "unknown built-in role"),
     }
     match commit_and_notify(&path, &file, state) {
@@ -329,11 +420,15 @@ fn update_role(name: &str, request: &Request, state: &ServiceState) -> Response 
         Ok(pair) => pair,
         Err(resp) => return resp,
     };
-    let custom: CustomRoleConfig = match serde_json::from_str(&request.body) {
+    let raw_obj: serde_json::Value = match serde_json::from_str(&request.body) {
+        Ok(v) => v,
+        Err(err) => return Response::error(400, &format!("invalid json: {err}")),
+    };
+    let custom: CustomRoleConfig = match serde_json::from_value(raw_obj.clone()) {
         Ok(c) => c,
         Err(err) => return Response::error(400, &format!("invalid json: {err}")),
     };
-    let norm = custom.normalized();
+    let mut norm = custom.normalized();
     let Some(idx) = file
         .subagents
         .roles
@@ -342,6 +437,21 @@ fn update_role(name: &str, request: &Request, state: &ServiceState) -> Response 
     else {
         return Response::error(404, &format!("custom role '{name}' not found"));
     };
+    let existing = &file.subagents.roles[idx];
+    if let Some(obj) = raw_obj.as_object() {
+        if !obj.contains_key("lockModel") {
+            norm.lock_model = existing.lock_model;
+        }
+        if !obj.contains_key("allowWebSearch") {
+            norm.capabilities.allow_web_search = existing.capabilities.allow_web_search;
+        }
+        if !obj.contains_key("allowMcp") {
+            norm.capabilities.allow_mcp = existing.capabilities.allow_mcp;
+        }
+        if !obj.contains_key("allowSkills") {
+            norm.capabilities.allow_skills = existing.capabilities.allow_skills;
+        }
+    }
     file.subagents.roles[idx] = norm;
     match commit_and_notify(&path, &file, state) {
         Ok(saved) => build_response_json(&saved, state),

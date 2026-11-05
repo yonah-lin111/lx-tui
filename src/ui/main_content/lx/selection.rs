@@ -55,9 +55,10 @@ pub(crate) fn content_geom(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option
         if output_rect.width == 0 || output_rect.height == 0 {
             return None;
         }
-        if page.tab == TaskTab::Agents
-            && let Some(run) = lx.agents.runs.get(page.agents_window.active)
-        {
+        if page.tab == TaskTab::Agents {
+            let run = page
+                .selected_agent_index(&lx.agents)
+                .and_then(|index| lx.agents.runs.get(index))?;
             if run.chat.messages.is_empty() {
                 let rect = history::content_rect(output_rect);
                 return (rect.width > 0 && rect.height > 0).then_some(ContentGeom {
@@ -286,9 +287,13 @@ fn render_chunk(
     cache: &mut PaneCache,
 ) {
     if let Some(page) = lx.task.as_ref() {
-        if page.tab == TaskTab::Agents
-            && let Some(run) = lx.agents.runs.get(page.agents_window.active)
-        {
+        if page.tab == TaskTab::Agents {
+            let Some(run) = page
+                .selected_agent_index(&lx.agents)
+                .and_then(|index| lx.agents.runs.get(index))
+            else {
+                return;
+            };
             if run.chat.messages.is_empty() {
                 if chunk_start == 0 {
                     task::agents::draw_empty_detail(grid, chunk_rect, run, lx.chat.loading_frame);

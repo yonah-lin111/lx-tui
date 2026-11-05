@@ -938,13 +938,17 @@ async fn auto_compact_persists_checkpoint_and_replays_in_subsequent_turn() {
     )
     .expect("assemble child context");
     assert_eq!(ctx.compact_summary(), Some("compacted child summary"));
+    let items = ctx.items();
+    assert_eq!(items.len(), 3);
     assert_eq!(
-        ctx.items(),
-        &[
-            ModelItem::UserText("post-checkpoint turn 2".into()),
-            ModelItem::AssistantText(String::new()),
-            ModelItem::UserText("turn 3 question".into()),
-        ]
+        items[0],
+        ModelItem::UserText("post-checkpoint turn 2".into())
+    );
+    assert_eq!(items[1], ModelItem::AssistantText(String::new()));
+    assert!(
+        matches!(&items[2], ModelItem::UserText(text)
+            if text.starts_with("Message Type: NEW_TASK") && text.ends_with("turn 3 question")),
+        "follow-up turn must be wrapped in an inter-agent envelope: {items:?}"
     );
 }
 
@@ -1455,7 +1459,7 @@ async fn custom_role_resumes_after_it_is_removed_from_config() {
     ctx.state.subagents_config.roles.push(crate::config::subagents::CustomRoleConfig {
         name: "reviewer".into(), base_role: crate::config::subagents::BaseRole::Explorer,
         description: "review".into(), system_prompt: "review code".into(), model: None,
-        nickname_candidates: vec!["Ada".into()],
+        nickname_candidates: vec!["Ada".into()], ..Default::default()
     });
     let spawn = ctx.run("r1", spawn_op(role, "custom", "task")).await;
     let (agent_id, nickname) = spawned(&spawn);

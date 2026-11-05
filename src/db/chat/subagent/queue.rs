@@ -72,6 +72,38 @@ pub struct SubagentInputRecord {
     pub items: Vec<PersistedInputItem>,
 }
 
+impl SubagentInputRecord {
+    /// 是否为 `trigger_turn = true` 的唤醒输入（`msg:` 前缀表示 `trigger_turn = false` 仅入队）。
+    pub fn trigger_turn(&self) -> bool {
+        !self.dedupe_key.starts_with("msg:")
+    }
+
+    /// 从 `dedupe_key`（`send:<caller_session>:...` 或 `msg:<caller_session>:...`）提取发送方会话 ID。
+    pub fn caller_session_id(&self) -> Option<&str> {
+        parse_input_dedupe_meta(&self.dedupe_key).1
+    }
+}
+
+/// 单轮子会话输入的信封元数据（由 `agent_subagent_input` 派生，零 schema 变更）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentTurnEnvelopeMeta {
+    pub position: i64,
+    pub trigger_turn: bool,
+    pub caller_session_id: Option<String>,
+}
+
+/// 解析 `dedupe_key` 中的 `(trigger_turn, caller_session_id)`。
+pub fn parse_input_dedupe_meta(dedupe_key: &str) -> (bool, Option<&str>) {
+    let trigger_turn = !dedupe_key.starts_with("msg:");
+    let caller_session_id = dedupe_key
+        .strip_prefix("send:")
+        .or_else(|| dedupe_key.strip_prefix("msg:"))
+        .and_then(|rest| rest.split(':').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    (trigger_turn, caller_session_id)
+}
+
 /// `enqueue_input` 的提交回执。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnqueuedInput {
@@ -596,6 +628,69 @@ impl Database {
             map.entry(msg_id).or_default().push(item);
         }
         Ok(map)
+    }
+
+    /// 读取某个子会话下各 `child_user_message_id` 对应的信封元数据（`position`、`trigger_turn`、`caller_session_id`）。
+    pub fn load_subagent_turn_envelopes(
+        &self,
+        workspace: &Path,
+        parent_session: &str,
+        agent_id: &str,
+    ) -> Result<HashMap<String, SubagentTurnEnvelopeMeta>> {
+        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
+            return Ok(HashMap::new());
+        };
+        ensure_agent_owned(&self.conn, agent_id, parent_session, &workspace_external)?;
+        let mut stmt = self.conn.prepare(
+            r#"SELECT child_user_message_id, position, dedupe_key
+               FROM agent_subagent_input
+               WHERE agent_id = ?1 AND child_user_message_id IS NOT NULL
+               ORDER BY position ASC"#,
+        )?;
+        let rows = stmt.query_map(params![agent_id], |row| {
+            let msg_id: String = row.get(0)?;
+            let position: i64 = row.get(1)?;
+            let dedupe_key: String = row.get(2)?;
+            let (trigger_turn, caller) = parse_input_dedupe_meta(&dedupe_key);
+            Ok((
+                msg_id,
+                SubagentTurnEnvelopeMeta {
+                    position,
+                    trigger_turn,
+                    caller_session_id: caller.map(str::to_string),
+                },
+            ))
+        })?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let (msg_id, meta) = row?;
+            map.insert(msg_id, meta);
+        }
+        Ok(map)
+    }
+
+    /// 判断指定子 agent 的 `queued` 队列中是否存在至少一条可自动触发新一轮的输入（非 `msg:` 仅入队项）。
+    pub fn has_triggerable_queued_input(
+        &self,
+        workspace: &Path,
+        parent_session: &str,
+        agent_id: &str,
+    ) -> Result<bool> {
+        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
+            return Ok(false);
+        };
+        ensure_agent_owned(&self.conn, agent_id, parent_session, &workspace_external)?;
+        let exists: Option<i64> = self
+            .conn
+            .query_row(
+                r#"SELECT 1 FROM agent_subagent_input
+                   WHERE agent_id = ?1 AND status = 'queued' AND dedupe_key NOT LIKE 'msg:%'
+                   LIMIT 1"#,
+                params![agent_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(exists.is_some())
     }
 }
 

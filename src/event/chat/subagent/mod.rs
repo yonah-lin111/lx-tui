@@ -16,15 +16,26 @@ mod launch;
 mod model_resolve;
 mod runner;
 mod settle;
+mod snapshot;
 #[cfg(test)]
 mod tests;
 mod tools;
 mod wait;
 
 #[cfg(test)]
+pub(crate) use context::{
+    ChildPromptContext, ChildTurnLimits, assemble_child_context, capture_child_prompt_inputs,
+    child_tool_names,
+};
+#[cfg(test)]
 pub(crate) use settle::finish_subagent;
 pub(crate) use settle::{
     drain_reports, finish_subagent_with_billing, handle_subagent_auto_compact,
+};
+#[allow(unused_imports)]
+pub(crate) use snapshot::{
+    MAX_SNAPSHOT_SUBAGENT_BYTES, MAX_SNAPSHOT_SUBAGENTS, known_subagent_lines,
+    running_subagent_lines,
 };
 pub(crate) use tools::{begin_child_tool, finish_child_tool};
 pub(crate) use wait::handle_subagent_wait_ready;
@@ -67,6 +78,7 @@ pub(crate) struct SubagentHandle {
     /// 所属根会话 id（整树并发计数与整树等待共用）。
     pub root_session: String,
     /// 当前层级深度（主 agent 派发为 1）。
+    #[allow(dead_code)]
     pub depth: usize,
     /// 子会话 external id。
     pub child_session_id: String,
@@ -109,7 +121,9 @@ pub(crate) fn projected_agent_status(
         .values()
         .any(|handle| handle.agent_id == record.agent_id && handle.status == STATUS_RUNNING);
     let resumed_or_paused = streams.resumed_subagents.contains(&record.agent_id)
-        || streams.paused_by_interrupt.contains(&record.agent_id);
+        || streams.paused_by_interrupt.contains(&record.agent_id)
+        || (record.status != STATUS_FAILED
+            && queue.is_some_and(|q| q.queued_count > 0 && q.head_error_code.is_none()));
     let has_blocked_head = queue.and_then(|q| q.head_error_code.as_ref()).is_some();
     let projected = crate::chat::agent::projected_agent_status(
         running,
@@ -755,6 +769,7 @@ pub fn apply_subagent_effects(
                     | Effect::LoadSubagentSession { .. }
                     | Effect::CancelSubagents { .. }
                     | Effect::DrainSubagentReports { .. }
+                    | Effect::SendSubagentUserInput { .. }
             )
         })
         .cloned()
@@ -769,6 +784,7 @@ pub fn apply_subagent_effects(
                 | Effect::LoadSubagentSession { .. }
                 | Effect::CancelSubagents { .. }
                 | Effect::DrainSubagentReports { .. }
+                | Effect::SendSubagentUserInput { .. }
         )
     });
     let mut changed = false;
@@ -889,6 +905,22 @@ pub fn apply_subagent_effects(
             Effect::DrainSubagentReports { pane } => {
                 changed |= drain_reports(state, persistence, pane);
             }
+            Effect::SendSubagentUserInput {
+                pane,
+                session_id,
+                agent_id,
+                text,
+            } => {
+                changed |= snapshot::send_user_input_from_panel(
+                    state,
+                    streams,
+                    persistence,
+                    pane,
+                    &session_id,
+                    &agent_id,
+                    &text,
+                );
+            }
             _ => {}
         }
     }
@@ -900,49 +932,4 @@ pub(super) fn workspace_for_pane(state: &AppState, pane: PaneId) -> Option<PathB
     state
         .chat_session_key_for_pane(pane)
         .or_else(|| state.workspace_cwd_for_pane(pane))
-}
-
-/// 运行中的子 agent 摘要（`runtime_context_summary` 追加段）。
-pub(crate) fn running_subagent_lines(streams: &ChatStreams, parent_session: &str) -> Vec<String> {
-    let running: Vec<&SubagentHandle> = streams
-        .subagents
-        .values()
-        .filter(|handle| handle.parent.session == parent_session && handle.status == STATUS_RUNNING)
-        .collect();
-    if running.is_empty() {
-        return Vec::new();
-    }
-    let mut lines =
-        vec!["[local runtime] running subagents (use wait_agent / close_agent):".to_string()];
-    for handle in running
-        .iter()
-        .take(crate::config::subagents::MAX_CONCURRENT_SUBAGENTS_LIMIT)
-    {
-        let head: String = handle
-            .task
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .chars()
-            .take(120)
-            .collect();
-        let nickname = handle
-            .nickname
-            .as_deref()
-            .map(str::trim)
-            .filter(|nick| !nick.is_empty())
-            .map(|nick| format!(" nickname={nick}"))
-            .unwrap_or_default();
-        let depth = if handle.depth > 1 {
-            format!(" depth={}", handle.depth)
-        } else {
-            String::new()
-        };
-        lines.push(format!(
-            "- agent_id={} role={}{nickname}{depth} · {head}",
-            handle.agent_id,
-            handle.role.as_str()
-        ));
-    }
-    lines
 }

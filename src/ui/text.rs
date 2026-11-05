@@ -901,14 +901,18 @@ pub const LX_TASK_HINTS_PROCESSES: [Hint; 4] = [
     hint("tabs", "←→"),
     hint("back", "esc"),
 ];
-/// 子代理 tab 的键位提示（`^d` 停选中项、`^a` 停整树）。
-pub const LX_TASK_HINTS_AGENTS: [Hint; 5] = [
+/// 子代理 tab 的键位提示（`tab` 切换筛选、`↵` 内联追问、`^d`/`^a` 停止）。
+pub const LX_TASK_HINTS_AGENTS: [Hint; 7] = [
     hint("select", "↑↓"),
+    hint("filter", "tab"),
+    hint("reply", "↵"),
     hint("stop", "^d"),
     hint("stop all", "^a"),
     hint("tabs", "←→"),
     hint("back", "esc"),
 ];
+/// Agents 内联追问输入态的底边框键位提示。
+pub const LX_TASK_HINTS_AGENT_REPLY: &str = "[send ↵]  [cancel esc]";
 /// 顶边右端的 tab 指示分隔符（`·`）。
 pub const LX_TASK_TAB_SEP: &str = " · ";
 /// 行尾的运行时长前缀（`running 1m 30s`）。
@@ -926,6 +930,11 @@ pub fn lx_task_count_label(count: usize) -> String {
 }
 pub const LX_TASK_COUNT_NOUN_ONE: &str = "process";
 pub const LX_TASK_COUNT_NOUN_MANY: &str = "processes";
+
+/// 输入框底边框左端的阻塞子 agent 指标：`1 blocked` / `3 blocked`。
+pub fn lx_subagent_blocked_label(count: usize) -> String {
+    format!("{count} blocked")
+}
 
 /// 输入框底边框左端的运行中子 agent 计数指标：`1 subagent` / `3 subagents`。
 pub fn lx_subagent_count_label(count: usize) -> String {
@@ -951,6 +960,8 @@ pub fn agent_status_with_queue(status: &str, queued_count: usize) -> String {
 pub const LX_TASK_STOPPED: &str = "Stopped 1 background process";
 /// Agents 面板高亮项已结束（^d 不会误停别的子 agent）。
 pub const LX_TASK_SELECTED_AGENT_NOT_RUNNING: &str = "Selected subagent is not running";
+/// Agents 面板内联追问目标已被关闭（cancelled 不可再接收输入）。
+pub const LX_TASK_AGENT_REPLY_CLOSED: &str = "Cannot send input to a closed subagent";
 /// Agents 面板停止选中子 agent 的提示。
 pub fn stopping_subagents(count: usize) -> String {
     let noun = if count == 1 { "subagent" } else { "subagents" };

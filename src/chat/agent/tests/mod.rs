@@ -91,7 +91,33 @@ fn tool_surfaces_are_exact() {
         ToolSurface::from_role(AgentRole::Executor),
         ToolSurface::Executor
     );
+    assert_eq!(
+        ToolSurface::Monitor.names(),
+        &["read", "search", "exec_command", "write_stdin"]
+    );
+    assert_eq!(
+        ToolSurface::from_role(AgentRole::Monitor),
+        ToolSurface::Monitor
+    );
     assert_eq!(AgentRole::Explorer.tools(), ToolSurface::Explorer.names());
+}
+
+#[test]
+fn monitor_role_is_a_leaf_at_every_depth() {
+    assert_eq!(AgentRole::parse("monitor"), Some(AgentRole::Monitor));
+    assert_eq!(AgentRole::Monitor.base(), BaseRole::Monitor);
+    assert!(AgentRole::Monitor.is_builtin());
+    for depth in 0..=4 {
+        assert_eq!(
+            ToolSurface::from_role_at_depth(AgentRole::Monitor, depth, 3),
+            ToolSurface::Monitor,
+            "depth {depth}"
+        );
+        let tools = AgentRole::Monitor.tool_surface_at_depth(depth, 3).names();
+        for forbidden in ["edit", "write", "spawn_agent", "send_input", "web_search"] {
+            assert!(!tools.contains(&forbidden), "depth {depth}: {forbidden}");
+        }
+    }
 }
 
 /// exec 工具面 = 主工具面去掉交互式 `ask`，顺序与其保持一致。
@@ -830,6 +856,12 @@ fn stored_role_and_path_encodes_and_decodes_legacy_formats() {
         decode_stored_role_and_path(Some(&encoded)),
         (Some(BaseRole::Executor), Some("/root/turing".into()))
     );
+    let monitor = encode_stored_role_and_path(BaseRole::Monitor, "/root/watcher");
+    assert_eq!(monitor, "monitor:/root/watcher");
+    assert_eq!(
+        decode_stored_role_and_path(Some(&monitor)),
+        (Some(BaseRole::Monitor), Some("/root/watcher".into()))
+    );
     assert_eq!(
         decode_stored_role_and_path(Some("explorer")),
         (Some(BaseRole::Explorer), None)
@@ -1185,6 +1217,74 @@ fn synthesize_partial_report_body_uses_text_or_progress() {
     assert!(without_text.contains("modified 2 file(s): src/a.rs, src/b.rs"));
     let no_files = synthesize_partial_report_body("   ", 0, &[], "failed");
     assert!(no_files.contains("no files modified"));
+}
+
+#[test]
+fn inter_agent_envelope_wraps_messages_and_is_idempotent() {
+    let message = format_inter_agent_envelope(
+        InterAgentMessageType::Message,
+        "/root/turing",
+        "/root",
+        "  extra context  ",
+    );
+    assert_eq!(
+        message,
+        "Message Type: MESSAGE\nTask name: /root/turing\nSender: /root\nPayload:\nextra context"
+    );
+    let new_task = format_inter_agent_envelope(
+        InterAgentMessageType::NewTask,
+        " /root/watcher ",
+        " /root/turing ",
+        "run the suite",
+    );
+    assert_eq!(
+        new_task,
+        "Message Type: NEW_TASK\nTask name: /root/watcher\nSender: /root/turing\nPayload:\nrun the suite"
+    );
+    assert_eq!(
+        InterAgentMessageType::from_trigger_turn(true),
+        InterAgentMessageType::NewTask
+    );
+    assert_eq!(
+        InterAgentMessageType::from_trigger_turn(false),
+        InterAgentMessageType::Message
+    );
+    // 已带信封前缀的文本原样返回，避免重复包裹。
+    assert_eq!(
+        format_inter_agent_envelope(InterAgentMessageType::Message, "/root", "/root", &message),
+        message
+    );
+    let fallback = format_inter_agent_envelope(InterAgentMessageType::Message, " ", "", "hello");
+    assert!(fallback.contains("Task name: /root"));
+    assert!(fallback.contains("Sender: /root"));
+}
+
+#[test]
+fn delegation_mode_guidance_follows_effort_and_explicit_mode() {
+    use crate::config::subagents::DelegationMode;
+
+    assert_eq!(delegation_mode_guidance(DelegationMode::Auto, None), None);
+    assert_eq!(
+        delegation_mode_guidance(DelegationMode::Auto, Some("low")),
+        None
+    );
+    for effort in ["high", "xhigh", "max", " HIGH "] {
+        assert_eq!(
+            delegation_mode_guidance(DelegationMode::Auto, Some(effort)),
+            Some(PROACTIVE_DELEGATION_GUIDANCE),
+            "{effort}"
+        );
+    }
+    assert_eq!(
+        delegation_mode_guidance(DelegationMode::Proactive, Some("low")),
+        Some(PROACTIVE_DELEGATION_GUIDANCE)
+    );
+    assert_eq!(
+        delegation_mode_guidance(DelegationMode::Explicit, Some("high")),
+        Some(EXPLICIT_DELEGATION_GUIDANCE)
+    );
+    assert!(!has_cjk(PROACTIVE_DELEGATION_GUIDANCE));
+    assert!(!has_cjk(EXPLICIT_DELEGATION_GUIDANCE));
 }
 
 #[test]

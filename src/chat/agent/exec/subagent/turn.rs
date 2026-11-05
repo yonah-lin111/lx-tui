@@ -1,7 +1,7 @@
-//! 子轮上下文装配、输入归档与子轮宿主事件落库。
+//! 子轮输入归档与子轮宿主事件落库。
 //!
-//! 由 [`super::ExecSubagentPool`] 的池控制入口调用：所有方法直接读写 Database，
-//! 不接触事件层状态。等待与终态结算见 [`super::settle`]。
+//! 上下文装配见 [`super::context`]；由 [`super::ExecSubagentPool`] 的池控制入口调用，
+//! 所有方法直接读写 Database，不接触事件层状态。等待与终态结算见 [`super::settle`]。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,15 +9,11 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, watch};
 
 use crate::chat::agent::{
-    AgentRole, DEPTH_LIMIT_REACHED_CODE, ForkSpec, IMAGE_MISSING_CODE, ToolSurface,
-    allocate_child_path, joined_input_text,
+    AgentRole, DEPTH_LIMIT_REACHED_CODE, ForkSpec, allocate_child_path, joined_input_text,
 };
-use crate::chat::agent_loop::{AgentTools, ModelContext, TurnExecution};
-use crate::chat::events::{
-    ChatDelta, ChatRequest, ChatTurn, ModelImage, ModelItem, RequestPurpose,
-};
+use crate::chat::agent_loop::{AgentTools, TurnExecution};
+use crate::chat::events::{ChatDelta, ChatRequest};
 use crate::chat::process::{ProcessManager, ProcessOwner};
-use crate::chat::prompt::PromptParts;
 use crate::db::chat::PersistedInputItem;
 use crate::db::{Database, new_external_id};
 
@@ -25,183 +21,6 @@ use super::super::runner::{append_deltas_to_parts, db_result_of, new_mutation_re
 use super::*;
 
 impl ExecSubagentPool {
-    /// 子轮请求：历史按已完成轮次回放（工具步骤与历史图片保留），末尾接当前输入。
-    // 子轮上下文需要工作区库、标识、角色、当前输入项与深度/预算护栏参数；保持显式传参比额外包装结构更直观。
-    #[allow(clippy::too_many_arguments)]
-    fn child_context(
-        &self,
-        db: &Database,
-        agent_id: &str,
-        parent_session_id: &str,
-        child_session_id: &str,
-        role: AgentRole,
-        current_items: &[PersistedInputItem],
-        depth: usize,
-        max_depth: usize,
-        max_tokens: Option<u64>,
-    ) -> Result<ModelContext, String> {
-        let child_model = self
-            .child_models
-            .get(child_session_id)
-            .unwrap_or(&self.model);
-        let supports_image_input = child_model.supports_image_input;
-        let (mut turns, mut items) = (Vec::new(), Vec::new());
-        let checkpoint = db
-            .active_checkpoint(&self.workspace, child_session_id)
-            .map_err(|error| error.code().to_string())?;
-        let start_after = checkpoint.as_ref().map_or(i64::MIN, |cp| cp.end_sequence);
-        let messages: Vec<_> = db
-            .load_chat_session(&self.workspace, child_session_id)
-            .map_err(|error| error.code().to_string())?
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|message| message.sequence > start_after)
-            .collect();
-        let turn_items = db
-            .load_subagent_turn_items(&self.workspace, parent_session_id, agent_id)
-            .unwrap_or_default();
-        let mut index = 0;
-        while index < messages.len() {
-            let turn_index = messages[index].turn_index;
-            let (mut user, mut assistant) = (None, None);
-            while index < messages.len() && messages[index].turn_index == turn_index {
-                let message = &messages[index];
-                match message.role.as_str() {
-                    "user" if user.is_none() => user = Some(message),
-                    "assistant" if assistant.is_none() => assistant = Some(message),
-                    _ => {}
-                }
-                index += 1;
-            }
-            let (Some(user), Some(assistant)) = (user, assistant) else {
-                continue;
-            };
-            if user.status != "complete" || assistant.status != "complete" {
-                continue;
-            }
-            let user_text = message_text(user);
-            turns.push(ChatTurn {
-                role: "user".into(),
-                text: user_text.clone(),
-                reasoning_metadata: None,
-            });
-            turns.push(ChatTurn {
-                role: "assistant".into(),
-                text: message_text(assistant),
-                reasoning_metadata: None,
-            });
-            match turn_items.get(&user.external_id) {
-                Some(stored) if has_images(stored) => {
-                    items.extend(replay_input_items(
-                        child_session_id,
-                        supports_image_input,
-                        false,
-                        stored,
-                    )?);
-                }
-                None if supports_image_input => {
-                    // fork 克隆的历史轮次没有子输入项记录：回放消息附件里仍在磁盘上的图片。
-                    let attachments: Vec<&crate::db::chat::MessageAttachmentMeta> = user
-                        .attachments
-                        .iter()
-                        .filter(|att| {
-                            att.kind == crate::db::chat::MessageAttachmentKind::Image
-                                && att
-                                    .source_path
-                                    .as_deref()
-                                    .is_some_and(|path| Path::new(path).is_file())
-                        })
-                        .collect();
-                    if attachments.is_empty() {
-                        items.push(ModelItem::UserText(user_text));
-                    } else {
-                        items.extend(replay_message_attachments(
-                            db,
-                            &self.workspace,
-                            child_session_id,
-                            user_text,
-                            &attachments,
-                        ));
-                    }
-                }
-                _ => items.push(ModelItem::UserText(user_text)),
-            }
-            items.extend(crate::chat::context::assistant_items(assistant));
-        }
-        let current_text = PersistedInputItem::joined_text(current_items);
-        turns.push(ChatTurn {
-            role: "user".into(),
-            text: current_text,
-            reasoning_metadata: None,
-        });
-        items.extend(replay_input_items(
-            child_session_id,
-            supports_image_input,
-            true,
-            current_items,
-        )?);
-        let identity = crate::chat::agent::ModelIdentity {
-            display_name: child_model.display_name.clone(),
-            provider_id: child_model.provider.clone(),
-            model_id: child_model.model.clone(),
-            variant: child_model.variant.clone(),
-            supports_image_input: child_model.supports_image_input,
-        }
-        .render_prompt_section();
-        let environment = crate::chat::prompt::environment_snapshot(
-            &crate::platform::EnvironmentFacts::capture(),
-            Some(&self.workspace),
-            Some(&self.cwd),
-            &[],
-        );
-        let instructions = crate::chat::agent::load_instructions(
-            crate::config::user_data_root().ok().as_deref(),
-            Some(&self.workspace),
-            Some(&self.cwd),
-            true,
-        )
-        .render_prompt_section();
-        let skills = super::super::skills_catalog_prompt(&self.workspace, true);
-        let mcp_prompt = self.mcp_snapshot.instructions_prompt();
-        let custom_prompt = self
-            .subagents_config
-            .resolve_role(role.as_str())
-            .and_then(|r| r.system_prompt_override);
-        let system_prompt = crate::chat::agent::compose_subagent_prompt_with_override(
-            role,
-            custom_prompt.as_deref(),
-            PromptParts {
-                model_identity: Some(&identity),
-                environment: Some(&environment),
-                instructions: instructions.as_deref(),
-                skills: skills.as_deref(),
-                mcp: mcp_prompt.as_deref(),
-                compact: None,
-            },
-        );
-        let request = ChatRequest {
-            turns,
-            items,
-            model: child_model.snapshot(),
-            variant_params: child_model.variant_params.clone(),
-            purpose: RequestPurpose::Subagent(role),
-            system_prompt: Some(system_prompt),
-            tools: Arc::new(crate::chat::tools::turn_tools_with_subagents(
-                ToolSurface::from_role_at_depth(role, depth, max_depth),
-                &self.mcp_snapshot,
-                Some(&self.subagents_config),
-            )),
-        };
-        let context = ModelContext::new(request, self.cwd.clone())
-            .with_context_limit(child_model.context_limit)
-            .with_subagent_depth(depth, max_depth)
-            .with_token_budget(max_tokens);
-        Ok(match checkpoint {
-            Some(checkpoint) => context.with_compact_summary(Some(checkpoint.summary_text)),
-            None => context,
-        })
-    }
-
     /// 预校验并归档一次输入的全部图片；失败时由调用方决定是否清理会话图片目录。
     pub(super) fn prepare_input_items(
         &self,
@@ -570,10 +389,18 @@ impl ExecSubagentPool {
         if self.running.len() >= max_concurrent {
             return Err(failed(LIMIT_REACHED_CODE));
         }
+        let locked = role_spec.lock_model && role_spec.default_model.is_some();
+        let (effective_model_override, effective_effort_override) = if locked {
+            (None, None)
+        } else {
+            (model_override, reasoning_effort_override)
+        };
         let child_target = self.resolve_child_model(
+            role_spec.base_role,
             role_spec.default_model.as_ref(),
-            model_override,
-            reasoning_effort_override,
+            role_spec.lock_model,
+            effective_model_override,
+            effective_effort_override,
         )?;
         let tree_records = db
             .list_subagent_tree(&self.workspace, &root_session)
@@ -691,7 +518,7 @@ impl ExecSubagentPool {
             self.resumed.remove(&committed.agent_id);
             return Err(error);
         }
-        let model_label = if model_override.is_some()
+        let model_label = if effective_model_override.is_some()
             || child_target.provider != self.model.provider
             || child_target.model != self.model.model
         {
@@ -699,13 +526,12 @@ impl ExecSubagentPool {
         } else {
             None
         };
-        let effort_label = if reasoning_effort_override.is_some()
-            || (role_spec.default_model.is_some() && child_target.variant != self.model.variant)
-        {
-            child_target.variant.clone()
-        } else {
-            None
-        };
+        let effort_label =
+            if effective_effort_override.is_some() || child_target.variant != self.model.variant {
+                child_target.variant.clone()
+            } else {
+                None
+            };
         Ok(SubagentOutcome::Spawned {
             agent_id: committed.agent_id,
             nickname: Some(nickname),
@@ -722,25 +548,44 @@ impl ExecSubagentPool {
 
     fn resolve_child_model(
         &self,
+        base_role: crate::config::subagents::BaseRole,
         role_default: Option<&crate::config::ai::ModelSelection>,
+        lock_model: bool,
         model_override: Option<&str>,
         effort_override: Option<&str>,
     ) -> Result<ExecModelTarget, HostError> {
-        let explicit_model = model_override.map(str::trim).filter(|s| !s.is_empty());
-        let explicit_effort = effort_override.map(str::trim).filter(|s| !s.is_empty());
+        let locked = lock_model && role_default.is_some();
+        let explicit_model = if locked {
+            None
+        } else {
+            model_override.map(str::trim).filter(|s| !s.is_empty())
+        };
+        let explicit_effort = if locked {
+            None
+        } else {
+            effort_override.map(str::trim).filter(|s| !s.is_empty())
+        };
         // 父 fallback 取调用者自身冻结的模型：嵌套 executor 的子 agent 必须继承它，而不是池根模型。
         let parent_model = self
             .child_models
             .get(&self.parent_session_id)
             .cloned()
             .unwrap_or_else(|| self.model.clone());
-        if explicit_model.is_none() && explicit_effort.is_none() && role_default.is_none() {
-            return Ok(parent_model);
-        }
         let settings = crate::config::ai::ai_config_path()
             .ok()
             .and_then(|path| crate::config::ai::load_ai(&path).ok().flatten())
             .unwrap_or_else(crate::config::ai::AiSettings::empty);
+        let monitor_default = base_role == crate::config::subagents::BaseRole::Monitor
+            && explicit_effort.is_none()
+            && role_default
+                .and_then(|sel| sel.variant.as_deref())
+                .is_none();
+        if explicit_model.is_none() && explicit_effort.is_none() && role_default.is_none() {
+            if monitor_default && supports_low_variant(&settings, &parent_model) {
+                return resolve_with_low(&settings, &parent_model);
+            }
+            return Ok(parent_model);
+        }
         if settings.providers.is_empty() {
             // 只有单元测试环境（无 ai.json）才允许用父模型做兜底；真实运行中配置缺失
             // 必须显式失败，不能把 `provider/model` 静默塞进 model 字段。
@@ -777,8 +622,13 @@ impl ExecSubagentPool {
             let e = explicit_effort.unwrap_or_default();
             format!("{}/{}#{e}", parent_model.provider, parent_model.model)
         };
-        crate::chat::agent::exec::resolve_model_target(&settings, Some(&raw_spec), None)
-            .map_err(|err| failed(&err))
+        let target =
+            crate::chat::agent::exec::resolve_model_target(&settings, Some(&raw_spec), None)
+                .map_err(|err| failed(&err))?;
+        if monitor_default && supports_low_variant(&settings, &target) {
+            return resolve_with_low(&settings, &target);
+        }
+        Ok(target)
     }
 
     /// 子 agent 的模型目标：内存缓存 > 数据库持久化快照（重启后恢复）> 父模型。
@@ -858,115 +708,27 @@ fn archive_image(
     })
 }
 
-/// 持久化输入 → 模型项：当前输入加载失败即拒绝，历史轮次降级为可读占位文本。
-fn replay_input_items(
-    child_session_id: &str,
-    supports_image_input: bool,
-    is_current_input: bool,
-    items: &[PersistedInputItem],
-) -> Result<Vec<ModelItem>, String> {
-    if has_images(items) && !supports_image_input {
-        if is_current_input {
-            return Err("current model does not support image input".to_string());
-        }
-        let mut lines = Vec::new();
-        for item in items {
-            match item {
-                PersistedInputItem::Text { text } => {
-                    if !text.is_empty() {
-                        lines.push(text.clone());
-                    }
-                }
-                PersistedInputItem::Image { label, .. } => lines.push(format!(
-                    "ERROR: Cannot read \"{label}\" (this model does not support image input). Inform the user."
-                )),
-            }
-        }
-        return Ok(vec![ModelItem::UserText(lines.join("\n"))]);
-    }
-    if !has_images(items) {
-        return Ok(vec![ModelItem::UserText(PersistedInputItem::joined_text(
-            items,
-        ))]);
-    }
-    let mut out = Vec::with_capacity(items.len());
-    for item in items {
-        match item {
-            PersistedInputItem::Text { text } => out.push(ModelItem::UserContent {
-                text: text.clone(),
-                images: Vec::new(),
-            }),
-            PersistedInputItem::Image {
-                archive_path,
-                mime,
-                content_hash,
-                width,
-                height,
-                ..
-            } => {
-                let bytes = crate::platform::verify_archived_image(
-                    child_session_id,
-                    Path::new(archive_path),
-                    mime,
-                    content_hash,
-                    *width,
-                    *height,
-                )
-                .map_err(|_| IMAGE_MISSING_CODE.to_string())?;
-                out.push(ModelItem::UserContent {
-                    text: String::new(),
-                    images: vec![ModelImage {
-                        mime: mime.clone(),
-                        bytes: Arc::new(bytes),
-                    }],
-                });
-            }
-        }
-    }
-    Ok(out)
+/// 目标模型是否声明 `low` 思考档位。
+fn supports_low_variant(
+    settings: &crate::config::ai::AiSettings,
+    target: &ExecModelTarget,
+) -> bool {
+    settings
+        .providers
+        .get(&target.provider)
+        .and_then(|provider| provider.models.get(&target.model))
+        .is_some_and(|model| model.variants.contains_key("low"))
+        && target.variant.as_deref() != Some("low")
 }
 
-fn has_images(items: &[PersistedInputItem]) -> bool {
-    items
-        .iter()
-        .any(|item| matches!(item, PersistedInputItem::Image { .. }))
-}
-
-/// 回放 fork 克隆历史轮的图片附件（这些消息没有 `agent_subagent_input` 记录）。
-fn replay_message_attachments(
-    db: &Database,
-    workspace: &Path,
-    child_session_id: &str,
-    text: String,
-    attachments: &[&crate::db::chat::MessageAttachmentMeta],
-) -> Vec<ModelItem> {
-    let ids: Vec<&str> = attachments.iter().map(|att| att.id.as_str()).collect();
-    let payloads = db
-        .load_image_payloads(workspace, child_session_id, &ids)
-        .unwrap_or_default();
-    let mut images = Vec::new();
-    for att in attachments {
-        if let Some(bytes) = payloads.get(&att.id) {
-            images.push(ModelImage {
-                mime: att.mime.clone().unwrap_or_else(|| "image/png".to_string()),
-                bytes: Arc::new(bytes.clone()),
-            });
-        }
-    }
-    if images.is_empty() {
-        return vec![ModelItem::UserText(text)];
-    }
-    vec![ModelItem::UserContent { text, images }]
-}
-
-fn message_text(message: &crate::db::chat::ChatMessage) -> String {
-    message
-        .parts
-        .iter()
-        .filter(|part| part.kind == "text")
-        .map(|part| part.content.as_str())
-        .collect::<Vec<_>>()
-        .join("")
+/// 以 `low` 档位重新解析目标（同时刷新 `variant_params`）。
+fn resolve_with_low(
+    settings: &crate::config::ai::AiSettings,
+    target: &ExecModelTarget,
+) -> Result<ExecModelTarget, HostError> {
+    let raw = format!("{}/{}#low", target.provider, target.model);
+    crate::chat::agent::exec::resolve_model_target(settings, Some(&raw), None)
+        .map_err(|err| failed(&err))
 }
 
 /// 测试兜底模型解析：`<provider>/<model>` 拆分写入 provider/model，纯模型 ID 只改 model。

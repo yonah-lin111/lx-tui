@@ -136,7 +136,10 @@ pub fn scroll_task_list(state: &mut AppState, pane: PaneId, delta: isize) -> boo
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    let agents_len = target.lx.agents.runs.len();
+    let Some(filter) = target.lx.task.as_ref().map(|page| page.agent_filter) else {
+        return false;
+    };
+    let agents_len = target.lx.agents.filtered_indices(filter).len();
     let Some(page) = target.lx.task.as_mut() else {
         return false;
     };

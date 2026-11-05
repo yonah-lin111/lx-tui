@@ -291,7 +291,9 @@ pub(crate) fn task_agents_card_target_at(
         return None;
     }
     let rect = task::task_output_rect(area, lx)?;
-    let run = lx.agents.runs.get(page.agents_window.active)?;
+    let run = page
+        .selected_agent_index(&lx.agents)
+        .and_then(|index| lx.agents.runs.get(index))?;
     let source = history::HistorySource::from_chat(&run.chat, &run.compact);
     let view = history::view_source_plain_ready(rect, source, cache);
     let visible = usize::from(view.body.height);
@@ -311,7 +313,9 @@ pub(crate) fn task_agents_scrollbar(
         return None;
     }
     let rect = task::task_output_rect(area, lx)?;
-    let run = lx.agents.runs.get(page.agents_window.active)?;
+    let run = page
+        .selected_agent_index(&lx.agents)
+        .and_then(|index| lx.agents.runs.get(index))?;
     let source = history::HistorySource::from_chat(&run.chat, &run.compact);
     let view = history::view_source_plain_ready(rect, source, cache);
     let visible = usize::from(view.body.height);

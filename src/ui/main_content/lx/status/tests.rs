@@ -26,6 +26,7 @@ fn status(
         input_tokens: input,
         streaming,
         omitted_turns: None,
+        blocked_subagents: 0,
     }
 }
 
@@ -468,6 +469,28 @@ fn no_variant_leaves_no_gap() {
 }
 
 /// 宽度不足时先丢上下文占用，再丢思考等级，模型名始终保留。
+#[test]
+fn blocked_subagents_show_on_border() {
+    let mut lx = lx_with_status(status(Some("M"), Some("P"), None, None, false));
+    let mut blocked = running_subagent("blocked");
+    blocked.status = "blocked".into();
+    lx.agents.runs.push(blocked);
+    lx.chat.status.blocked_subagents = 1;
+    let line = render_border(&lx, 80);
+    assert!(
+        line.contains(text::lx_subagent_blocked_label(1).as_str()),
+        "阻塞子 agent 显示 `1 blocked`：{line}"
+    );
+
+    // 同时有运行中的子 agent：两段用圆点分隔。
+    lx.agents.runs.push(running_subagent("running"));
+    let line = render_border(&lx, 80);
+    assert!(
+        line.contains("1 subagent · 1 blocked"),
+        "运行与阻塞指标并列：{line}"
+    );
+}
+
 #[test]
 fn narrow_drops_context_before_variant() {
     let mut st = status(Some("M"), Some("P"), Some(1_000), Some(500), false);

@@ -48,34 +48,60 @@ pub fn on_subagent_started(state: &mut AppState, pane: PaneId, mut run: Subagent
     if switched_away && !owns_parent {
         return false;
     }
+    let selected = current_selected_agent_id(&target.lx);
     run.chat.set_project_root(project_root);
     target.lx.agents.runs.push(run);
-    sort_runs_preserving_selection(&mut target.lx);
+    restore_selected_task_agent(&mut target.lx, selected.as_deref());
+    refresh_status(state, pane);
     true
 }
 
-/// 按树形前序重排 run，并让列表高亮继续指向同一个 agent。
-fn sort_runs_preserving_selection(lx: &mut crate::app::state::Lx) {
-    let selected = lx
-        .task
+fn current_selected_agent_id(lx: &crate::app::state::Lx) -> Option<String> {
+    lx.task
         .as_ref()
-        .and_then(|page| lx.agents.runs.get(page.agents_window.active))
-        .map(|run| run.agent_id.clone());
+        .and_then(|page| page.selected_agent_index(&lx.agents))
+        .and_then(|index| lx.agents.runs.get(index))
+        .map(|run| run.agent_id.clone())
+}
+
+/// 按树形前序重排 run，并让筛选后的列表高亮继续指向修改前捕获的 `selected_agent_id`；
+/// 若目标已被当前筛选隐藏则钳制到合法范围。
+pub fn restore_selected_task_agent(
+    lx: &mut crate::app::state::Lx,
+    selected_agent_id: Option<&str>,
+) {
     lx.agents.sort_runs_tree_order();
-    let Some(selected) = selected else {
+    let Some(page) = lx.task.as_mut() else {
         return;
     };
-    if let Some(index) = lx
-        .agents
-        .runs
-        .iter()
-        .position(|run| run.agent_id == selected)
-        && let Some(page) = lx.task.as_mut()
+    let filtered = lx.agents.filtered_indices(page.agent_filter);
+    if let Some(selected) = selected_agent_id
+        && let Some(index) = lx
+            .agents
+            .runs
+            .iter()
+            .position(|run| run.agent_id == selected)
+        && let Some(position) = filtered.iter().position(|real| *real == index)
     {
-        page.agents_window.active = index;
-        page.agents_window.anchor = index;
+        page.agents_window.active = position;
+        page.agents_window.anchor = position;
         page.agents_window.viewport = None;
+    } else {
+        page.agents_window.clamp(filtered.len());
     }
+}
+
+/// 同步底边框的 blocked 计数（子 agent 状态变化后调用）。
+fn refresh_status(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let blocked = target.lx.agents.blocked_count();
+    if target.lx.chat.status.blocked_subagents == blocked {
+        return false;
+    }
+    target.lx.chat.status.blocked_subagents = blocked;
+    true
 }
 
 /// 子会话增量 → 对应 run.chat（找不到即忽略）。
@@ -242,6 +268,7 @@ pub fn set_subagent_list(
     {
         return false;
     }
+    let selected = current_selected_agent_id(&target.lx);
     let mut changed = false;
     for record in records {
         match target.lx.agents.by_agent_mut(&record.agent_id) {
@@ -276,16 +303,14 @@ pub fn set_subagent_list(
         }
     }
     if changed {
-        sort_runs_preserving_selection(&mut target.lx);
-        let runs = target.lx.agents.runs.len();
-        if let Some(page) = target.lx.task.as_mut() {
-            page.agents_window.clamp(runs);
-        }
+        restore_selected_task_agent(&mut target.lx, selected.as_deref());
     }
     let focused = consume_agent_focus(&mut target.lx);
     let changed = changed || focused;
     // 历史主消息里的 spawn 卡片也要拿 run 状态。
-    changed || refresh_subagent_cards(state, pane)
+    let cards = refresh_subagent_cards(state, pane);
+    refresh_status(state, pane);
+    changed || cards
 }
 
 /// 打开 Agents 面板并定位到指定 agent；列表尚未回投时留下一次性定位请求。
@@ -335,41 +360,133 @@ fn consume_agent_focus(lx: &mut crate::app::state::Lx) -> bool {
     }) else {
         return false;
     };
+    let Some(page) = lx.task.as_ref() else {
+        return false;
+    };
+    // 目标被当前筛选隐藏时回退到 all，保证定位后真的可见。
+    let mut filter = page.agent_filter;
+    let mut position = lx
+        .agents
+        .filtered_indices(filter)
+        .iter()
+        .position(|real| *real == index);
+    if position.is_none() && filter != crate::app::state::AgentFilter::All {
+        filter = crate::app::state::AgentFilter::All;
+        position = lx
+            .agents
+            .filtered_indices(filter)
+            .iter()
+            .position(|real| *real == index);
+    }
+    let Some(position) = position else {
+        return false;
+    };
+    let agent_id = lx.agents.runs[index].agent_id.clone();
     let Some(page) = lx.task.as_mut() else {
         return false;
     };
     page.agents_focus = None;
-    page.agents_window.active = index;
-    page.agents_window.anchor = index;
+    page.agent_filter = filter;
+    if page
+        .agent_reply_target
+        .as_ref()
+        .is_some_and(|(target_id, _)| target_id != &agent_id)
+    {
+        page.agent_reply = None;
+        page.agent_reply_target = None;
+    }
+    page.agents_window.active = position;
+    page.agents_window.anchor = position;
     page.agents_window.viewport = None;
     if let Some(run) = lx.agents.runs.get_mut(index) {
         run.follow = true;
         run.scroll = usize::MAX;
+        run.touch_access();
     }
+    lx.agents.evict_excess_idle_chats(Some(&agent_id));
     true
 }
 
 /// 点击 Agents 列表某一行：切换高亮并把详情贴回最新消息。
+///
+/// `index` 是 `agents.runs` 的真实下标；筛选视图下先映射到可见位置。
 pub fn select_task_agent(state: &mut AppState, pane: PaneId, index: usize) -> bool {
+    let position = {
+        let Some(target) = state.pane_anywhere(pane) else {
+            return false;
+        };
+        let Some(page) = target.lx.task.as_ref() else {
+            return false;
+        };
+        if page.tab != crate::app::state::TaskTab::Agents {
+            return false;
+        }
+        let Some(position) = target
+            .lx
+            .agents
+            .filtered_indices(page.agent_filter)
+            .iter()
+            .position(|real| *real == index)
+        else {
+            return false;
+        };
+        position
+    };
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    let clicked_agent_id = target.lx.agents.runs.get(index).map(|r| r.agent_id.clone());
     let Some(page) = target.lx.task.as_mut() else {
         return false;
     };
-    if page.tab != crate::app::state::TaskTab::Agents || index >= target.lx.agents.runs.len() {
-        return false;
+    if page
+        .agent_reply_target
+        .as_ref()
+        .is_some_and(|(target_id, _)| Some(target_id) != clicked_agent_id.as_ref())
+    {
+        page.agent_reply = None;
+        page.agent_reply_target = None;
     }
-    page.agents_window.active = index;
-    page.agents_window.anchor = index;
+    page.agents_window.active = position;
+    page.agents_window.anchor = position;
     page.agents_window.viewport = None;
     page.agents_focus = None;
     if let Some(run) = target.lx.agents.runs.get_mut(index) {
         run.follow = true;
         run.scroll = usize::MAX;
     }
+    ensure_agent_loaded(state, pane, index);
     crate::app::update::clear_lx_selection_for(state, pane);
     true
+}
+
+/// 选中 run 后的驻留维护：已加载则刷新访问序，未加载则请求从 DB 懒加载。
+fn ensure_agent_loaded(state: &mut AppState, pane: PaneId, index: usize) {
+    let pending = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return;
+        };
+        let Some(run) = target.lx.agents.runs.get_mut(index) else {
+            return;
+        };
+        let agent_id = run.agent_id.clone();
+        let child_session = run.child_session_id.clone();
+        let loaded = run.loaded;
+        if loaded {
+            run.touch_access();
+        }
+        target.lx.agents.evict_excess_idle_chats(Some(&agent_id));
+        (!loaded).then_some((agent_id, child_session))
+    };
+    if let Some((agent_id, child_session)) = pending {
+        state
+            .effects
+            .push(crate::app::effects::Effect::LoadSubagentSession {
+                pane,
+                agent_id,
+                child_session,
+            });
+    }
 }
 
 /// 切换 Agents 详情区某个可折叠块（工具 / 思考 / compact / 汇报）。
@@ -390,7 +507,9 @@ pub fn toggle_agent_card(state: &mut AppState, pane: PaneId, target: CardTarget)
         let agent_id = agent_id.clone();
         return open_agent_page(state, pane, &agent_id);
     }
-    let active = page.agents_window.active;
+    let Some(active) = page.selected_agent_index(&target_pane.lx.agents) else {
+        return false;
+    };
     let Some(run) = target_pane.lx.agents.runs.get_mut(active) else {
         return false;
     };
@@ -532,6 +651,8 @@ pub fn on_subagent_loaded(
     run.chat.set_project_root(project_root);
     run.loaded = true;
     run.rows_dirty = true;
+    run.touch_access();
+    target.lx.agents.evict_excess_idle_chats(Some(agent_id));
     true
 }
 
@@ -546,6 +667,15 @@ pub fn on_subagent_finished(
     let Some(pane) = pane_of_session(state, child_session) else {
         return false;
     };
+    let protected = state
+        .pane_anywhere(pane)
+        .and_then(|target| {
+            target.lx.task.as_ref().and_then(|page| {
+                page.selected_agent_index(&target.lx.agents)
+                    .and_then(|index| target.lx.agents.runs.get(index))
+            })
+        })
+        .map(|run| run.agent_id.clone());
     let Some(run) = state
         .pane_mut_anywhere(pane)
         .and_then(|target| target.lx.agents.by_session_mut(child_session))
@@ -591,6 +721,16 @@ pub fn on_subagent_finished(
     if let Some(report) = report {
         run.report = Some(report);
     }
+    run.touch_access();
+    let _ = run;
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target
+            .lx
+            .agents
+            .evict_excess_idle_chats(protected.as_deref());
+        restore_selected_task_agent(&mut target.lx, protected.as_deref());
+    }
+    refresh_status(state, pane);
     true
 }
 
@@ -708,7 +848,9 @@ pub fn scroll_agents_detail(state: &mut AppState, pane: PaneId, delta: isize) ->
     if page.tab != crate::app::state::TaskTab::Agents {
         return false;
     }
-    let active = page.agents_window.active;
+    let Some(active) = page.selected_agent_index(&target.lx.agents) else {
+        return false;
+    };
     let Some(run) = target.lx.agents.runs.get_mut(active) else {
         return false;
     };
@@ -743,7 +885,10 @@ pub fn set_task_agents_scroll(state: &mut AppState, pane: PaneId, offset: usize)
     if page.tab != crate::app::state::TaskTab::Agents {
         return false;
     }
-    let Some(run) = target.lx.agents.runs.get_mut(page.agents_window.active) else {
+    let Some(active) = page.selected_agent_index(&target.lx.agents) else {
+        return false;
+    };
+    let Some(run) = target.lx.agents.runs.get_mut(active) else {
         return false;
     };
     let max = run.total_rows.saturating_sub(run.visible.max(1));

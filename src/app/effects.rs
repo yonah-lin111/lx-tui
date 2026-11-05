@@ -211,6 +211,13 @@ pub enum Effect {
     },
     /// 父轮次结束后尝试把未投递报告合并成自动轮；用户输入优先。
     DrainSubagentReports { pane: crate::layout::PaneId },
+    /// 在 `Agents` 面板向指定子 agent 直接发送内联追问（若已结束则自动先 `resume` 再触发新轮次）。
+    SendSubagentUserInput {
+        pane: crate::layout::PaneId,
+        session_id: String,
+        agent_id: String,
+        text: String,
+    },
     /// 加载单个会话及有序消息（恢复旧会话）。
     LoadChatSession {
         pane: crate::layout::PaneId,

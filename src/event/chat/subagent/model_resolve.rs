@@ -5,6 +5,7 @@
 
 use crate::app::state::{AppState, FrozenModel, ModelsSnapshot};
 use crate::config::ai::ModelSelection;
+use crate::config::subagents::BaseRole;
 use crate::db::chat::SubagentRecord;
 use crate::event::chat::ChatStreams;
 
@@ -50,23 +51,65 @@ pub(crate) struct ResolvedSubagentModel {
 }
 
 /// 按三级优先级解析子 agent 的 `FrozenModel`；模型不存在、未启用、缺 Key 或不支持指定 `reasoning_effort` 时返回明确英文错误。
+///
+/// `lock_model == true` 且角色配置了默认模型时，调用方传入的 `model_override` /
+/// `effort_override` 一律静默忽略；`monitor` 角色未显式指定思考等级时优先选 `low`。
 pub(crate) fn resolve_subagent_model(
     models: &ModelsSnapshot,
     parent_frozen: &FrozenModel,
+    base_role: BaseRole,
     role_default: Option<&ModelSelection>,
+    lock_model: bool,
     model_override: Option<&str>,
     effort_override: Option<&str>,
 ) -> Result<ResolvedSubagentModel, String> {
-    let explicit_model = model_override.map(str::trim).filter(|s| !s.is_empty());
-    let explicit_effort = effort_override.map(str::trim).filter(|s| !s.is_empty());
+    let locked = lock_model && role_default.is_some();
+    let explicit_model = if locked {
+        None
+    } else {
+        model_override.map(str::trim).filter(|s| !s.is_empty())
+    };
+    let explicit_effort = if locked {
+        None
+    } else {
+        effort_override.map(str::trim).filter(|s| !s.is_empty())
+    };
 
     // 若既无显式参数也无角色默认模型，直接继承父会话已冻结模型（零额外校验，兼容测试直注 FrozenModel）。
     if explicit_model.is_none() && explicit_effort.is_none() && role_default.is_none() {
+        let mut selection = ModelSelection {
+            provider: parent_frozen.provider.clone(),
+            model: parent_frozen.model.clone(),
+            variant: parent_frozen.variant.clone(),
+        };
+        if !apply_monitor_default_effort(
+            models,
+            &mut selection,
+            base_role,
+            role_default,
+            explicit_effort,
+        ) {
+            return Ok(ResolvedSubagentModel {
+                frozen: parent_frozen.clone(),
+                pinned: false,
+                model_override_label: None,
+                effort_override_label: None,
+            });
+        }
+        let frozen = FrozenModel::resolve(models, &selection).ok_or_else(|| {
+            format!(
+                "model '{}/{}' is unavailable (provider disabled or API key missing)",
+                selection.provider, selection.model
+            )
+        })?;
+        let effort_override_label = (frozen.variant != parent_frozen.variant)
+            .then(|| frozen.variant.clone())
+            .flatten();
         return Ok(ResolvedSubagentModel {
-            frozen: parent_frozen.clone(),
-            pinned: false,
+            frozen,
+            pinned: true,
             model_override_label: None,
-            effort_override_label: None,
+            effort_override_label,
         });
     }
 
@@ -81,6 +124,13 @@ pub(crate) fn resolve_subagent_model(
             variant: parent_frozen.variant.clone(),
         }
     };
+    let monitor_default_low = apply_monitor_default_effort(
+        models,
+        &mut selection,
+        base_role,
+        role_default,
+        explicit_effort,
+    );
 
     if let Some(effort) = explicit_effort {
         // 若仍在父模型上仅覆盖 reasoning_effort，且 models.settings 中有该模型配置，校验 variants；
@@ -134,12 +184,13 @@ pub(crate) fn resolve_subagent_model(
     } else {
         None
     };
-    let effort_override_label =
-        if explicit_effort.is_some() || (effort_differs && role_default.is_some()) {
-            frozen.variant.clone()
-        } else {
-            None
-        };
+    let effort_override_label = if explicit_effort.is_some()
+        || (effort_differs && (role_default.is_some() || monitor_default_low))
+    {
+        frozen.variant.clone()
+    } else {
+        None
+    };
 
     Ok(ResolvedSubagentModel {
         frozen,
@@ -147,6 +198,36 @@ pub(crate) fn resolve_subagent_model(
         model_override_label,
         effort_override_label,
     })
+}
+
+/// `monitor` 未显式指定思考等级且角色未配置 `variant` 时，目标模型支持 `"low"` 则默认选中。
+fn apply_monitor_default_effort(
+    models: &ModelsSnapshot,
+    selection: &mut ModelSelection,
+    base_role: BaseRole,
+    role_default: Option<&ModelSelection>,
+    explicit_effort: Option<&str>,
+) -> bool {
+    if base_role != BaseRole::Monitor
+        || explicit_effort.is_some()
+        || role_default
+            .and_then(|sel| sel.variant.as_deref())
+            .is_some()
+        || selection.variant.as_deref() == Some("low")
+    {
+        return false;
+    }
+    let supports_low = models
+        .settings
+        .providers
+        .get(&selection.provider)
+        .and_then(|provider| provider.models.get(&selection.model))
+        .is_some_and(|model| model.variants.contains_key("low"));
+    if !supports_low {
+        return false;
+    }
+    selection.variant = Some("low".to_string());
+    true
 }
 
 /// 解析 `"provider/model"` 或同 provider 下 `"model"` 简写。

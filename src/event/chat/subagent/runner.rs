@@ -146,18 +146,27 @@ pub(super) fn spawn(
         .event_sender
         .as_ref()
         .ok_or_else(|| "subagent event channel unavailable".to_string())?;
-    let role_spec = state
-        .subagents_config
-        .resolve_role(role.as_str())
-        .ok_or_else(|| format!("unknown subagent role '{}'", role.as_str()))?;
-    let role = role.with_base(role_spec.base_role);
-
     let parent_session = key.session.clone();
     let workspace = streams
         .db_workspaces
         .get(key)
         .cloned()
+        .or_else(|| super::workspace_for_pane(state, key.pane))
         .ok_or_else(|| "subagent workspace unavailable".to_string())?;
+    let cwd = state
+        .workspace_cwd_for_pane(key.pane)
+        .unwrap_or_else(|| workspace.clone());
+    let workspace_trusted = persistence.is_trusted(&cwd) || persistence.is_trusted(&workspace);
+    let effective_subagents = crate::config::subagents::merge_project_roles_for_paths(
+        &state.subagents_config,
+        Some(&workspace),
+        Some(&cwd),
+        workspace_trusted,
+    );
+    let role_spec = effective_subagents
+        .resolve_role(role.as_str())
+        .ok_or_else(|| format!("unknown subagent role '{}'", role.as_str()))?;
+    let role = role.with_base(role_spec.base_role);
     let database = persistence
         .database()
         .ok_or_else(|| "subagent persistence unavailable".to_string())?;
@@ -186,14 +195,13 @@ pub(super) fn spawn(
     let resolved_model = super::model_resolve::resolve_subagent_model(
         &state.models,
         &parent_frozen,
+        role_spec.base_role,
         role_spec.default_model.as_ref(),
+        role_spec.lock_model,
         model_override,
         reasoning_effort_override,
     )?;
     let frozen = resolved_model.frozen;
-    let cwd = state
-        .workspace_cwd_for_pane(key.pane)
-        .unwrap_or_else(|| workspace.clone());
     // 确认进程运行实例可用，避免 DB 落库后无法启动执行器。
     if streams.process_sender.is_none() {
         return Err("process runtime unavailable".to_string());
@@ -376,6 +384,7 @@ pub(super) fn send_input(
         .db_workspaces
         .get(key)
         .cloned()
+        .or_else(|| super::workspace_for_pane(state, key.pane))
         .ok_or_else(|| "subagent workspace unavailable".to_string())?;
     let database = persistence
         .database()
@@ -402,9 +411,9 @@ pub(super) fn send_input(
     if !is_running && !is_resumed {
         return Err(NOT_ACTIVE_CODE.to_string());
     }
-    // `trigger_turn=false` 只入队：`interrupt` 在解析层已禁止与它同传。
+    // `trigger_turn=false` 只入队：`interrupt` 在解析层已禁止与它同传，且不解除 interrupt 暂停态。
     let interrupt = interrupt && trigger_turn;
-    let was_cancelling_from_interrupt = streams.paused_by_interrupt.remove(target);
+    let was_cancelling_from_interrupt = trigger_turn && streams.paused_by_interrupt.remove(target);
     let max_concurrent = state
         .subagents_config
         .max_concurrent
@@ -423,10 +432,14 @@ pub(super) fn send_input(
     }
 
     let frozen = {
-        let parent_frozen = resolve_frozen_for_pane(state, key.pane)
-            .or_else(|| streams.frozen.get(&owner_session).cloned())
-            .or_else(|| streams.frozen.get(&record.child_session_id).cloned())
-            .ok_or_else(|| "subagent model snapshot unavailable".to_string())?;
+        let parent_frozen = resolve_parent_frozen_for_session(
+            state,
+            streams,
+            key.pane,
+            &owner_session,
+            &record.child_session_id,
+        )
+        .ok_or_else(|| "subagent model snapshot unavailable".to_string())?;
         super::model_resolve::child_frozen_for(state, streams, &record, &parent_frozen)
     };
     streams
@@ -444,13 +457,14 @@ pub(super) fn send_input(
     )?;
 
     let parent_message_id = active_assistant_id(state, key);
+    let prefix = if trigger_turn { "send" } else { "msg" };
     let dedupe_key = match call_id.filter(|cid| !cid.trim().is_empty()) {
         Some(cid) => format!(
-            "send:{}:{}:{cid}",
+            "{prefix}:{}:{}:{cid}",
             parent_session,
             parent_message_id.as_deref().unwrap_or_default()
         ),
-        None => format!("send:{}:{}", parent_session, new_external_id("dedupe")),
+        None => format!("{prefix}:{}:{}", parent_session, new_external_id("dedupe")),
     };
 
     let enqueued = database
@@ -568,6 +582,7 @@ pub(super) fn resume(
         .db_workspaces
         .get(key)
         .cloned()
+        .or_else(|| super::workspace_for_pane(state, key.pane))
         .ok_or_else(|| "subagent workspace unavailable".to_string())?;
     let database = persistence
         .database()
@@ -779,10 +794,14 @@ pub(crate) fn schedule_next_queued_input_with_done(
 
     // 若该子会话有显式/角色绑定的固定模型，优先沿用固定模型；
     // 否则继承父会话最新模型，再回退到数据库里持久化的子 agent 模型快照。
-    let parent_frozen = resolve_frozen_for_pane(state, parent_key.pane)
-        .or_else(|| streams.frozen.get(&parent_session).cloned())
-        .or_else(|| streams.frozen.get(&record.child_session_id).cloned())
-        .ok_or_else(|| "subagent model snapshot unavailable".to_string())?;
+    let parent_frozen = resolve_parent_frozen_for_session(
+        state,
+        streams,
+        parent_key.pane,
+        &parent_session,
+        &record.child_session_id,
+    )
+    .ok_or_else(|| "subagent model snapshot unavailable".to_string())?;
     let frozen = super::model_resolve::child_frozen_for(state, streams, &record, &parent_frozen);
     streams
         .frozen
@@ -797,6 +816,13 @@ pub(crate) fn schedule_next_queued_input_with_done(
         model: frozen.model.clone(),
         variant: frozen.variant.clone(),
     };
+    let workspace_trusted = persistence.is_trusted(&cwd) || persistence.is_trusted(workspace);
+    let effective_subagents = crate::config::subagents::merge_project_roles_for_paths(
+        &state.subagents_config,
+        Some(workspace),
+        Some(&cwd),
+        workspace_trusted,
+    );
     let inputs = super::context::capture_child_prompt_inputs(
         state,
         persistence,
@@ -828,7 +854,7 @@ pub(crate) fn schedule_next_queued_input_with_done(
         frozen.output_limit,
         frozen.supports_image_input,
         &next_input.items,
-        &state.subagents_config,
+        &effective_subagents,
         limits,
     ) {
         let code = if err.contains(IMAGE_MISSING_CODE) {
@@ -879,7 +905,7 @@ pub(crate) fn schedule_next_queued_input_with_done(
     Ok(Some(claimed))
 }
 
-/// 同步窗格 `Agents` 列表中的状态投影与 `queued_count`。
+/// 同步窗格 `Agents` 列表中的状态投影与 `queued_count`（并刷新底栏 `N blocked` 计数与筛选高亮）。
 pub(super) fn sync_agent_ui_queue(
     state: &mut AppState,
     streams: &ChatStreams,
@@ -891,16 +917,22 @@ pub(super) fn sync_agent_ui_queue(
     let Some(database) = persistence.database() else {
         return;
     };
-    let Ok(records) = database.list_subagents(workspace, parent_session) else {
+    let tree = load_subagent_tree(database, workspace, parent_session);
+    if tree.records.is_empty() {
         return;
-    };
-    let queue_states = database
-        .subagent_queue_states(workspace, parent_session)
-        .unwrap_or_default();
+    }
+    let queue_states = tree_queue_states(database, workspace, &tree);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return;
     };
-    for record in &records {
+    let selected_agent_id = target
+        .lx
+        .task
+        .as_ref()
+        .and_then(|page| page.selected_agent_index(&target.lx.agents))
+        .and_then(|index| target.lx.agents.runs.get(index))
+        .map(|run| run.agent_id.clone());
+    for record in &tree.records {
         let q = queue_states.get(&record.agent_id);
         let projected = super::projected_agent_status(streams, record, q);
         let queued_count = q.map_or(0, |s| s.queued_count);
@@ -909,10 +941,40 @@ pub(super) fn sync_agent_ui_queue(
             run.queued_count = queued_count;
         }
     }
+    target.lx.chat.status.blocked_subagents = target.lx.agents.blocked_count();
+    crate::app::update::restore_selected_task_agent(&mut target.lx, selected_agent_id.as_deref());
+}
+
+/// 解析父会话的最新模型快照：
+/// - 若 `owner_session` 即窗格当前主会话，优先读窗格最新模型选择（支持用户在主窗格切换模型后被恢复的子 agent 继承）；
+/// - 若 `owner_session` 是嵌套的父子 agent 会话，优先读该父子会话的冻结模型快照。
+fn resolve_parent_frozen_for_session(
+    state: &AppState,
+    streams: &ChatStreams,
+    pane: PaneId,
+    owner_session: &str,
+    child_session_id: &str,
+) -> Option<crate::app::state::FrozenModel> {
+    let is_pane_root = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.session_id.as_deref())
+        .is_some_and(|root| root == owner_session);
+    if is_pane_root {
+        resolve_frozen_for_pane(state, pane)
+            .or_else(|| streams.frozen.get(owner_session).cloned())
+            .or_else(|| streams.frozen.get(child_session_id).cloned())
+    } else {
+        streams
+            .frozen
+            .get(owner_session)
+            .cloned()
+            .or_else(|| resolve_frozen_for_pane(state, pane))
+            .or_else(|| streams.frozen.get(child_session_id).cloned())
+    }
 }
 
 /// 从窗格当前模型配置解析 `FrozenModel`。
-fn resolve_frozen_for_pane(
+pub(super) fn resolve_frozen_for_pane(
     state: &AppState,
     pane: PaneId,
 ) -> Option<crate::app::state::FrozenModel> {
