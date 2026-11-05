@@ -48,6 +48,7 @@ struct CatalogCache {
 }
 
 /// 启动时读取磁盘缓存（缺失/损坏返回空表）。
+#[cfg(not(test))]
 pub(crate) fn cached_catalog_models() -> BTreeMap<String, BTreeMap<String, ModelConfig>> {
     load_cache().map(|cache| cache.models).unwrap_or_default()
 }
@@ -348,7 +349,7 @@ pub async fn refresh_connected_provider_models(
         tracing::warn!(error = %error, "cloud model catalog refresh skipped");
     }
     let connect_file = connect_path_for_ai_path(ai_path);
-    let mut connect = load_connect(&connect_file)
+    let connect = load_connect(&connect_file)
         .map_err(|error| error.to_string())?
         .unwrap_or_default();
     let mut custom = super::load_ai(ai_path)
@@ -357,7 +358,7 @@ pub async fn refresh_connected_provider_models(
     let targets = collect_refresh_targets(&connect, &custom, provider_id)?;
     let mut total = 0;
     let mut custom_changed = false;
-    let mut connect_changed = false;
+    let mut refreshed_models: BTreeMap<String, BTreeMap<String, ModelConfig>> = BTreeMap::new();
     let mut last_error = None;
     for target in targets {
         match fetch_provider_models(target.transport, &target.base_url, &target.api_key).await {
@@ -391,14 +392,7 @@ pub async fn refresh_connected_provider_models(
                         &discovered,
                     );
                     total += merged.len();
-                    let record = connect
-                        .providers
-                        .entry(target.id.clone())
-                        .or_insert_with(|| super::connect::ConnectedPresetRecord::new(&target.id));
-                    if record.models.as_ref() != Some(&merged) {
-                        record.models = Some(merged);
-                        connect_changed = true;
-                    }
+                    refreshed_models.insert(target.id.clone(), merged);
                 }
             }
             Err(error) => {
@@ -409,8 +403,23 @@ pub async fn refresh_connected_provider_models(
     if custom_changed {
         super::save_ai(ai_path, &custom).map_err(|error| error.to_string())?;
     }
-    if connect_changed {
-        save_connect(&connect_file, &connect).map_err(|error| error.to_string())?;
+    // 网络探测期间 connect.json 可能已被其它入口改写：重新加载后再合并写入。
+    if !refreshed_models.is_empty() {
+        let mut latest = load_connect(&connect_file)
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+        let mut connect_changed = false;
+        for (provider_id, models) in refreshed_models {
+            if let Some(record) = latest.providers.get_mut(&provider_id)
+                && record.models.as_ref() != Some(&models)
+            {
+                record.models = Some(models);
+                connect_changed = true;
+            }
+        }
+        if connect_changed {
+            save_connect(&connect_file, &latest).map_err(|error| error.to_string())?;
+        }
     }
     if total == 0
         && let Some(error) = last_error

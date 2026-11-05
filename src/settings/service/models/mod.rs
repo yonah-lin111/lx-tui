@@ -32,7 +32,29 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
 /// 只覆盖模型相关字段：`webSearch` 等非模型配置不参与乐观锁，否则在 General
 /// 页保存 Key 后，已打开的 Models 页会拿着旧 revision 误报 409。
 pub(super) fn revision_of(settings: &crate::config::ai::AiSettings) -> String {
-    let value = json!({
+    revision_hash(&revision_value(settings, None).to_string())
+}
+
+/// 同时纳入 `connect.json` 内容的 revision。
+///
+/// GET 使用该口径；PUT 同时接受本口径与 legacy `revision_of`，因为
+/// `PUT /api/models/settings` 不写 `connect.json`，快捷连接先保存后不应让
+/// 已打开的 Models 页误报 409。
+pub(super) fn revision_of_with_connect(
+    settings: &crate::config::ai::AiSettings,
+    connect: Option<&crate::config::ai::connect::ConnectSettings>,
+) -> String {
+    revision_hash(&revision_value(settings, connect).to_string())
+}
+
+fn revision_value(
+    settings: &crate::config::ai::AiSettings,
+    connect: Option<&crate::config::ai::connect::ConnectSettings>,
+) -> Value {
+    let connect_text = connect
+        .and_then(|connect| serde_json::to_string(connect).ok())
+        .unwrap_or_default();
+    let mut value = json!({
         "defaultModel": &settings.default_model,
         "titleSummary": &settings.title_summary,
         "titleLanguage": settings.effective_title_language().as_str(),
@@ -40,7 +62,10 @@ pub(super) fn revision_of(settings: &crate::config::ai::AiSettings) -> String {
         "providers": &settings.providers,
         "streamIdleTimeoutMs": settings.stream_idle_timeout_ms,
     });
-    revision_hash(&value.to_string())
+    if connect.is_some() {
+        value["connect"] = Value::String(connect_text);
+    }
+    value
 }
 
 /// 稳定内容哈希（FNV-1a 64 位，hex 16 位）。
@@ -114,7 +139,7 @@ fn get_settings(state: &ServiceState) -> Response {
         "titleSummary": title_summary,
         "titleLanguage": settings.effective_title_language().as_str(),
         "streamIdleTimeoutMs": settings.idle_timeout_ms(),
-        "revision": revision_of(&settings),
+        "revision": revision_of_with_connect(&settings, Some(&connect)),
     });
     Response::json(200, serde_json::to_string(&body).unwrap_or_default())
 }
@@ -150,16 +175,19 @@ async fn put_settings(request: &Request, state: &ServiceState) -> Response {
         Ok(None) => crate::config::ai::AiSettings::empty(),
         Err(error) => return Response::error(500, &error.to_string()),
     };
-    let current_revision = revision_of(&current);
-    let provided = body.get("revision").and_then(Value::as_str).unwrap_or("");
-    if !provided.is_empty() && provided != current_revision {
-        return Response::error(409, "configuration changed elsewhere; reload and retry");
-    }
     let connect = match crate::config::ai::connect::load_connect(&connect_path(state)) {
         Ok(Some(connect)) => connect,
         Ok(None) => crate::config::ai::connect::ConnectSettings::default(),
         Err(error) => return Response::error(500, &error.to_string()),
     };
+    // 同时接受含 `connect.json` 的新口径与 legacy 模型字段口径：Models 页
+    // 不写 connect.json，先保存快捷连接后不应让这里误报 409。
+    let current_revision = revision_of_with_connect(&current, Some(&connect));
+    let current_legacy_revision = revision_of(&current);
+    let provided = body.get("revision").and_then(Value::as_str).unwrap_or("");
+    if !provided.is_empty() && provided != current_revision && provided != current_legacy_revision {
+        return Response::error(409, "configuration changed elsewhere; reload and retry");
+    }
     let merged = match merge_settings(Some(current), &body, Some(&connect)) {
         Ok(settings) => settings,
         Err(message) => return Response::error(422, &message),
@@ -172,7 +200,10 @@ async fn put_settings(request: &Request, state: &ServiceState) -> Response {
     let _ = state
         .sender()
         .send(SettingsEvent::ModelsChanged(Box::new(runtime)));
-    let body = json!({"ok": true, "revision": revision_of(&merged)});
+    let body = json!({
+        "ok": true,
+        "revision": revision_of_with_connect(&merged, Some(&connect)),
+    });
     Response::json(200, serde_json::to_string(&body).unwrap_or_default())
 }
 
@@ -441,6 +472,8 @@ async fn fetch_models(request: &Request, state: &ServiceState) -> Response {
         Ok(value) => value,
         Err(error) => return Response::error(422, &format!("invalid json: {error}")),
     };
+    // 短效 OAuth Token 在远端发现前先刷新，避免过期凭证直接 401。
+    crate::config::ai::oauth::ensure_connect_oauth_fresh(&ai_path(state)).await;
     // providerId 或显式 {type, baseUrl, apiKey}。
     let (base_url, api_key, transport) = match body.get("providerId").and_then(Value::as_str) {
         Some(provider_id) => {
@@ -451,16 +484,28 @@ async fn fetch_models(request: &Request, state: &ServiceState) -> Response {
                 Err(error) => return Response::error(500, &error.to_string()),
             };
             if let Some(provider) = settings.providers.get(provider_id) {
-                let key = provider.options.api_key.clone().or_else(|| {
-                    body.get("apiKey")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                });
-                (
-                    provider.options.base_url.clone(),
-                    key,
-                    provider.kind.as_str().to_string(),
-                )
+                // 页面草稿值优先于已保存值（非空才覆盖）。
+                let base_url = body
+                    .get("baseUrl")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| provider.options.base_url.clone());
+                let key = body
+                    .get("apiKey")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|key| !key.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| {
+                        provider
+                            .options
+                            .api_key
+                            .clone()
+                            .filter(|key| !key.trim().is_empty())
+                    });
+                (base_url, key, provider.kind.as_str().to_string())
             } else {
                 // 快捷连接供应商：按 `connect.json` + 预设目录物化，
                 // 让 Fetch models 对已连接的预设同样可用。
@@ -488,9 +533,16 @@ async fn fetch_models(request: &Request, state: &ServiceState) -> Response {
                 let key = body
                     .get("apiKey")
                     .and_then(Value::as_str)
+                    .map(str::trim)
                     .filter(|key| !key.is_empty())
                     .map(str::to_string)
-                    .or_else(|| provider.options.api_key.clone());
+                    .or_else(|| {
+                        provider
+                            .options
+                            .api_key
+                            .clone()
+                            .filter(|key| !key.trim().is_empty())
+                    });
                 (base_url, key, provider.kind.as_str().to_string())
             }
         }

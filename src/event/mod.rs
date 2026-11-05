@@ -247,7 +247,9 @@ async fn run_loop(
         service.set_projects(chat::mcp::project_views(state, persistence));
     }
     // 模型配置：启动加载（首次已由 main 导入）；加载后刷新状态行。
-    chat::connect::load_models_snapshot(state);
+    chat::connect::load_models_snapshot(state).await;
+    // 预设环境变量快照：`/connect` 的 `$ENV` 状态与断开判定统一读这份内存快照。
+    state.connect_env = crate::config::ai::collect_preset_env_snapshot();
     // 启动后台静默刷新云端模型目录（不阻塞首帧，也不弹 Toast）。
     state
         .effects

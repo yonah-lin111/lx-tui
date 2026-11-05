@@ -87,7 +87,8 @@ pub fn merge_discovered_models_for_preset(
             {
                 current.name = name.to_string();
             }
-            if let Some(catalog_model) = catalog.get(&item.id)
+            if current.variants.is_empty()
+                && let Some(catalog_model) = catalog.get(&item.id)
                 && !catalog_model.variants.is_empty()
             {
                 current.variants = catalog_model.variants.clone();

@@ -13,12 +13,12 @@ use tokio::sync::oneshot;
 
 use super::super::handlers::{Request, Response};
 use super::super::{ServiceState, SettingsEvent, ai_path, connect_path};
-use super::{model_value, parse_models, revision_of};
+use super::{model_value, parse_models, revision_of_with_connect};
 use crate::config::ai::AiSettings;
 use crate::config::ai::connect::{
     ConnectSettings, ConnectedPresetRecord, ConnectionSource, OAuthCredential, load_connect,
-    load_connect_or_default, materialize_preset_provider, merge_runtime_ai_settings,
-    resolve_preset_connection_source, save_connect,
+    materialize_preset_provider, merge_runtime_ai_settings, resolve_preset_connection_source,
+    save_connect,
 };
 use crate::config::ai::oauth::{OAuthTaskHandle, start_oauth_flow};
 use crate::config::ai::presets::{
@@ -164,6 +164,54 @@ fn connection_label(source: Option<&ConnectionSource>) -> String {
     }
 }
 
+/// 计算预设最终生效的 Base URL（OAuth 动态端点 / 表单展开 / 覆盖值）。
+///
+/// `allow_override` 为 false 时忽略 `record.base_url`，用于判断页面回传的
+/// 地址是否只是预设物化结果；任何未展开的 `${...}` 模板都视为无效。
+fn preset_resolved_base_url(
+    spec: &PresetProviderSpec,
+    record: &ConnectedPresetRecord,
+    allow_override: bool,
+) -> Option<String> {
+    let oauth_endpoint = record
+        .oauth
+        .as_ref()
+        .and_then(|oauth| oauth.metadata.get("apiEndpoint"))
+        .map(|endpoint| endpoint.trim().trim_end_matches('/').to_string())
+        .filter(|endpoint| !endpoint.is_empty());
+    let resolved = match oauth_endpoint {
+        Some(endpoint) => endpoint,
+        None => {
+            let instance = record
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.metadata.get("instanceUrl"))
+                .map(String::as_str)
+                .filter(|instance| spec.id == "gitlab" && !instance.trim().is_empty());
+            let method_override = record
+                .oauth
+                .as_ref()
+                .and_then(|oauth| spec.method(&oauth.method_id))
+                .and_then(PresetAuthMethod::base_url_override);
+            let override_url = if allow_override {
+                record.base_url.as_deref().or(method_override)
+            } else {
+                method_override
+            };
+            match instance {
+                Some(instance) => {
+                    resolve_preset_base_url(spec, &record.form_answers, Some(instance))
+                }
+                None => resolve_preset_base_url(spec, &record.form_answers, override_url),
+            }
+        }
+    };
+    if resolved.contains("${") {
+        return None;
+    }
+    Some(resolved)
+}
+
 /// `PUT /api/models/connect`：保存一个或多个快捷连接项（对齐 opencode-dev，仅校验结构与表单，不做阻塞探测）。
 async fn put_connect(request: &Request, state: &ServiceState) -> Response {
     let body: Value = match serde_json::from_str(&request.body) {
@@ -194,10 +242,13 @@ async fn put_connect(request: &Request, state: &ServiceState) -> Response {
     }
     match commit_connect_change(state, &settings) {
         Ok((custom, _runtime)) => {
-            let body = json!({"ok": true, "revision": revision_of(&custom)});
+            let body = json!({
+                "ok": true,
+                "revision": revision_of_with_connect(&custom, Some(&settings)),
+            });
             Response::json(200, body.to_string())
         }
-        Err(message) => Response::error(422, &message),
+        Err(response) => response,
     }
 }
 
@@ -219,11 +270,13 @@ fn apply_connect_item(settings: &mut ConnectSettings, item: &Value) -> Result<()
     }
     if let Some(api_key) = item.get("apiKey").and_then(Value::as_str) {
         let trimmed = api_key.trim();
-        record.api_key = if trimmed.is_empty() {
-            None
+        if trimmed.is_empty() {
+            record.api_key = None;
         } else {
-            Some(trimmed.to_string())
-        };
+            // API Key 与 OAuth 互斥：新 Key 必须压过旧 OAuth 凭证。
+            record.api_key = Some(trimmed.to_string());
+            record.oauth = None;
+        }
     }
     if let Some(answers) = item.get("formAnswers").and_then(Value::as_object) {
         record.form_answers = answers
@@ -239,17 +292,34 @@ fn apply_connect_item(settings: &mut ConnectSettings, item: &Value) -> Result<()
     }
     if let Some(base_url) = item.get("baseUrl").and_then(Value::as_str) {
         let trimmed = base_url.trim();
-        // 空值 / 未展开的模板 / 与预设默认值相同的地址都不算覆盖：
-        // 覆盖值会绕过模板展开，存下来会让该预设永远无法物化。
-        record.base_url =
-            if trimmed.is_empty() || trimmed.contains("${") || trimmed == spec.default_base_url {
-                None
-            } else {
-                Some(trimmed.to_string())
-            };
+        // 空值 / 未展开的模板 / 与预设默认值或物化结果相同的地址都不算覆盖：
+        // 覆盖值会绕过模板与 OAuth 动态端点，存下来会让该预设被永久冻结。
+        let default_resolved = preset_resolved_base_url(spec, &record, false);
+        record.base_url = if trimmed.is_empty()
+            || trimmed.contains("${")
+            || trimmed == spec.default_base_url
+            || default_resolved.as_deref() == Some(trimmed)
+        {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
     }
     if let Some(models) = item.get("models").and_then(Value::as_array) {
-        record.models = Some(parse_models(models, record.models.as_ref())?);
+        let parsed = parse_models(models, record.models.as_ref())?;
+        // 与内置默认模型表一致时不落覆盖值，继续跟随云端目录更新。
+        record.models = if parsed == default_models_for_preset(spec.id) {
+            None
+        } else {
+            Some(parsed)
+        };
+    }
+    if record.enabled && resolve_preset_connection_source(spec, Some(&record)).is_some() {
+        let valid = preset_resolved_base_url(spec, &record, true)
+            .is_some_and(|url| crate::config::ai::validate_base_url(&url).is_ok());
+        if !valid {
+            return Err("Base URL is incomplete or invalid; fill required form fields".into());
+        }
     }
     settings.providers.insert(id.to_string(), record);
     Ok(())
@@ -275,31 +345,25 @@ fn disconnect(request: &Request, state: &ServiceState) -> Response {
         Err(error) => return Response::error(500, &error.to_string()),
     };
     let record = settings.providers.get(provider_id).cloned();
-    let has_credentials = record.as_ref().is_some_and(|record| {
-        record
-            .api_key
-            .as_deref()
-            .is_some_and(|key| !key.trim().is_empty())
-            || record
-                .oauth
-                .as_ref()
-                .is_some_and(|oauth| !oauth.access_token.trim().is_empty())
+    // 仅命中环境变量时也必须保留一条 `enabled: false` 记录阻断自动探测；
+    // 否则删除记录后会立即回退命中 `$ENV`，断开操作失效。
+    let env_connected = spec.env_vars.iter().any(|name| {
+        std::env::var(name)
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty())
     });
-    let env_connected = !has_credentials
-        && spec
-            .env_vars
-            .iter()
-            .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()));
     if env_connected {
         let mut record = record.unwrap_or_else(|| ConnectedPresetRecord::new(provider_id));
         record.enabled = false;
+        record.api_key = None;
+        record.oauth = None;
         settings.providers.insert(provider_id.to_string(), record);
     } else {
         settings.providers.remove(provider_id);
     }
     match commit_connect_change(state, &settings) {
         Ok(_) => Response::json(200, "{\"ok\":true}"),
-        Err(message) => Response::error(422, &message),
+        Err(response) => response,
     }
 }
 
@@ -310,7 +374,7 @@ fn disconnect(request: &Request, state: &ServiceState) -> Response {
 fn commit_connect_change(
     state: &ServiceState,
     connect: &ConnectSettings,
-) -> Result<(AiSettings, AiSettings), String> {
+) -> Result<(AiSettings, AiSettings), Response> {
     let ai_file = ai_path(state);
     let connect_file = connect_path(state);
     let mut custom = match crate::config::ai::load_ai(&ai_file) {
@@ -321,16 +385,16 @@ fn commit_connect_change(
             AiSettings::empty()
         }
     };
-    save_connect(&connect_file, connect).map_err(|error| error.to_string())?;
+    save_connect(&connect_file, connect)
+        .map_err(|error| Response::error(500, &error.to_string()))?;
     let runtime = merge_runtime_ai_settings(&custom, connect);
     if custom.default_model != runtime.default_model
         || custom.title_summary != runtime.title_summary
     {
         custom.default_model = runtime.default_model.clone();
         custom.title_summary = runtime.title_summary.clone();
-        if let Err(error) = crate::config::ai::save_ai(&ai_file, &custom) {
-            tracing::warn!(error = %error, "failed to drop dangling model selections from ai.json");
-        }
+        crate::config::ai::save_ai(&ai_file, &custom)
+            .map_err(|error| Response::error(500, &error.to_string()))?;
     }
     let _ = state
         .sender()
@@ -454,13 +518,19 @@ fn persist_oauth_credential(
     credential: OAuthCredential,
     sender: &tokio::sync::mpsc::UnboundedSender<SettingsEvent>,
 ) -> Result<(), String> {
-    let mut settings = load_connect_or_default(connect_file).map_err(|error| error.to_string())?;
+    let mut settings = match load_connect(connect_file) {
+        Ok(Some(settings)) => settings,
+        Ok(None) => ConnectSettings::default(),
+        Err(error) => return Err(format!("failed to load connect.json: {error}")),
+    };
     let mut record = settings
         .providers
         .get(provider_id)
         .cloned()
         .unwrap_or_else(|| ConnectedPresetRecord::new(provider_id));
+    // OAuth 与 API Key 互斥：新 OAuth 凭证必须压过旧 API Key。
     record.oauth = Some(credential);
+    record.api_key = None;
     record.form_answers = form_answers.clone();
     record.enabled = true;
     settings.providers.insert(provider_id.to_string(), record);
@@ -480,13 +550,22 @@ async fn oauth_status(request: &Request, state: &ServiceState) -> Response {
         return Response::error(422, "attemptId is required");
     };
     let map = state.connect_oauth();
-    let guard = map.lock().await;
+    let mut guard = map.lock().await;
     let Some(entry) = guard.get(&attempt_id) else {
         return Response::error(404, "unknown oauth attempt");
     };
-    let mut body = json!({"status": entry.status.as_str()});
-    if let Some(error) = &entry.error {
+    let status = entry.status;
+    let error = entry.error.clone();
+    let mut body = json!({"status": status.as_str()});
+    if let Some(error) = &error {
         body["error"] = json!(error);
+    }
+    // 终态条目立即移除，避免长期运行累积内存。
+    if matches!(
+        status,
+        ConnectOAuthStatus::Complete | ConnectOAuthStatus::Failed
+    ) {
+        guard.remove(&attempt_id);
     }
     Response::json(200, body.to_string())
 }

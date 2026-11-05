@@ -24,6 +24,11 @@ pub mod oauth;
 pub mod presets;
 pub mod verify;
 
+pub use connect::{
+    collect_preset_env_snapshot, disconnect_preset_on_disk, disconnect_preset_on_disk_with_env,
+};
+pub use oauth::ensure_connect_oauth_fresh;
+
 /// 默认流式空闲超时（毫秒），对齐 codex 的 5 分钟。
 ///
 /// 60s 对大上下文预填充和慢供应商太短：最新子 agent session 里就有一次
@@ -711,7 +716,16 @@ fn parse_ai_root(text: &str) -> Result<AiSettings, AiConfigError> {
 /// 目录权限交由 `ensure_config_dir`（0700）；保存失败不破坏旧文件。
 /// 临时文件名带进程 ID 与进程内原子序号，并发保存互不覆盖。
 pub fn save_ai(path: &Path, settings: &AiSettings) -> Result<(), AiConfigError> {
-    settings.validate_with_connect(load_connect_for_ai(path).as_ref())?;
+    save_ai_with_connect(path, settings, load_connect_for_ai(path).as_ref())
+}
+
+/// 与 [`save_ai`] 相同，但允许显式指定 `connect.json` 内容进行校验。
+pub(crate) fn save_ai_with_connect(
+    path: &Path,
+    settings: &AiSettings,
+    connect: Option<&connect::ConnectSettings>,
+) -> Result<(), AiConfigError> {
+    settings.validate_with_connect(connect)?;
     let mut root = serde_json::Map::new();
     root.insert(
         "ai".to_string(),

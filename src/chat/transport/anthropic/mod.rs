@@ -62,6 +62,7 @@ pub fn build(
     if let Some(tail) = parts.tail_message() {
         messages.insert(0, json!({"role": "user", "content": tail}));
     }
+    let unsigned_tool_history = messages_have_unsigned_assistant_tool_use(&messages);
     let mut body = json!({
         "model": request.model.model,
         "system": parts.head,
@@ -100,32 +101,30 @@ pub fn build(
         {
             if effort == "none" {
                 body["thinking"] = json!({"type": "disabled"});
-            } else if is_manual_thinking_claude(&request.model.model) {
-                if body.get("thinking").is_none() {
-                    let budget = match effort {
-                        "low" => 4096,
-                        "medium" => 8192,
-                        "high" => 16000,
-                        _ => 31999,
-                    };
-                    body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
-                    if budget >= DEFAULT_MAX_TOKENS {
-                        body["max_tokens"] = json!(budget + 1024);
-                    }
+            } else if supports_adaptive_thinking(&request.model.model) {
+                // 对齐 opencode-dev（variant.ts `anthropicMessages` + anthropic-messages.ts）：
+                // Claude 4.6+ / 5.x 使用 adaptive thinking（含 display: summarized）与 output_config.effort。
+                body["thinking"] = json!({
+                    "type": "adaptive",
+                    "display": "summarized",
+                });
+                body["output_config"] = json!({"effort": effort});
+            } else {
+                // Claude 3.7/4.0/4.1/4.5 与 MiniMax / Kimi / GLM 等 Anthropic
+                // 兼容端点只支持手动 thinking + budget_tokens。
+                let budget = match effort {
+                    "low" => 4096,
+                    "medium" => 8192,
+                    "high" => 16000,
+                    _ => 31999,
+                };
+                body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
+                if budget >= DEFAULT_MAX_TOKENS {
+                    body["max_tokens"] = json!(budget + 1024);
                 }
                 if is_opus_4_5(&request.model.model) {
                     body["output_config"] = json!({"effort": effort});
                 }
-            } else {
-                // 对齐 opencode-dev（variant.ts `anthropicMessages` + anthropic-messages.ts）：
-                // Claude 4.6+ / 5.x 使用 adaptive thinking（含 display: summarized）与 output_config.effort。
-                if body.get("thinking").is_none() {
-                    body["thinking"] = json!({
-                        "type": "adaptive",
-                        "display": "summarized",
-                    });
-                }
-                body["output_config"] = json!({"effort": effort});
             }
         }
         if let Some(extra) = params.get("requestExtra").and_then(Value::as_object) {
@@ -134,35 +133,76 @@ pub fn build(
             }
         }
     }
+    // 手动 thinking 要求 assistant tool_use 历史携带签名 thinking 块；跨厂商
+    // 切换不回放 reasoning，因此工具续轮直接省略 thinking，避免 HTTP 400。
+    if body
+        .get("thinking")
+        .and_then(|thinking| thinking.get("type"))
+        .and_then(Value::as_str)
+        == Some("enabled")
+        && unsigned_tool_history
+        && let Some(object) = body.as_object_mut()
+    {
+        object.remove("thinking");
+    }
+    let mut headers = vec![
+        ("x-api-key".into(), key.to_string()),
+        ("anthropic-version".into(), API_VERSION.into()),
+    ];
+    if body.get("thinking").is_some() || base.contains("anthropic.com") {
+        headers.push((
+            "anthropic-beta".into(),
+            "interleaved-thinking-2025-05-14".into(),
+        ));
+    }
     Ok(TransportRequest {
         url,
-        headers: vec![
-            ("x-api-key".into(), key.to_string()),
-            ("anthropic-version".into(), API_VERSION.into()),
-            (
-                "anthropic-beta".into(),
-                "interleaved-thinking-2025-05-14".into(),
-            ),
-        ],
+        headers,
         body: serde_json::to_string(&body).map_err(|error| format!("encode body: {error}"))?,
         tools_requested: request.tools_surface().is_some(),
     })
 }
 
-/// Claude 3.7 与 Claude 4.0/4.1/4.5 仅支持手动 `type: "enabled"` + `budget_tokens`；
-/// Claude 4.6+ 及 5.x 支持 `type: "adaptive"` + `output_config.effort`。
-fn is_manual_thinking_claude(model_id: &str) -> bool {
+/// Claude 4.6 / 4.7 / 5.x（含 Fable / Mythos）支持 `type: "adaptive"` +
+/// `output_config.effort`；其余 Claude 与 Anthropic 兼容模型走手动 budget。
+fn supports_adaptive_thinking(model_id: &str) -> bool {
     let lower = model_id.to_ascii_lowercase();
-    lower.contains("3-7")
-        || lower.contains("3.7")
-        || lower.contains("4-0")
-        || lower.contains("4.0")
-        || lower.contains("4-1")
-        || lower.contains("4.1")
-        || lower.contains("4-5")
-        || lower.contains("4.5")
-        || lower.ends_with("-4")
-        || lower.contains("-4-2025")
+    if !lower.contains("claude") {
+        return false;
+    }
+    let version_5 = lower.contains("-5")
+        && !lower.contains("3-5")
+        && !lower.contains("4-5")
+        && !lower.contains("4.5");
+    lower.contains("4-6")
+        || lower.contains("4.6")
+        || lower.contains("4-7")
+        || lower.contains("4.7")
+        || version_5
+        || lower.contains("fable")
+        || lower.contains("mythos")
+}
+
+/// 历史中是否存在不含 thinking 块的 assistant `tool_use` 消息。
+fn messages_have_unsigned_assistant_tool_use(messages: &[Value]) -> bool {
+    messages.iter().any(|message| {
+        if message.get("role").and_then(Value::as_str) != Some("assistant") {
+            return false;
+        }
+        let Some(blocks) = message.get("content").and_then(Value::as_array) else {
+            return false;
+        };
+        let has_tool_use = blocks
+            .iter()
+            .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"));
+        let has_thinking = blocks.iter().any(|block| {
+            matches!(
+                block.get("type").and_then(Value::as_str),
+                Some("thinking" | "redacted_thinking")
+            )
+        });
+        has_tool_use && !has_thinking
+    })
 }
 
 fn is_opus_4_5(model_id: &str) -> bool {

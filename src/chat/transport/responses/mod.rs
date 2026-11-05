@@ -437,6 +437,7 @@ impl Decoder {
             return Ok(ordinal as usize);
         }
         let item_id = json_str(value, "item_id")
+            .or_else(|| value.get("item").and_then(|item| json_str(item, "id")))
             .ok_or_else(|| protocol_error("function call arguments event without output_index"))?;
         self.item_indexes
             .iter()

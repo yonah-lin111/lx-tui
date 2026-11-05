@@ -30,7 +30,7 @@ pub fn open_connect_panel(state: &mut AppState, pane: PaneId) -> bool {
         target.lx.clear();
         target.lx.slash = None;
     }
-    let panel = ConnectPanel::new(pane, &state.connect);
+    let panel = ConnectPanel::new_with_env_map(pane, &state.connect, &state.connect_env);
     state.overlay = Some(Overlay::Connect(Box::new(panel)));
     true
 }
@@ -195,14 +195,13 @@ fn enter_provider(state: &mut AppState, panel: &ConnectPanel) -> bool {
             BTreeMap::new(),
         );
     };
-    let mut actions = vec![
+    let actions = vec![
         ConnectManageAction::SelectModel,
         ConnectManageAction::Reconnect,
         ConnectManageAction::RefreshModels,
+        // Manage 只在已连接时打开；`$ENV` 连接同样允许 Disconnect（落盘禁用）。
+        ConnectManageAction::Disconnect,
     ];
-    if has_stored_credentials(&state.connect, &entry.id) {
-        actions.push(ConnectManageAction::Disconnect);
-    }
     replace_panel(
         state,
         panel.clone(),
@@ -713,21 +712,6 @@ fn copy_oauth_text(state: &mut AppState, pane: PaneId, text_value: &str) -> bool
     true
 }
 
-/// 是否存在可断开的落盘凭证（API Key / OAuth）。
-fn has_stored_credentials(connect: &ConnectSettings, provider_id: &str) -> bool {
-    let Some(record) = connect.providers.get(provider_id) else {
-        return false;
-    };
-    record
-        .api_key
-        .as_deref()
-        .is_some_and(|key| !key.trim().is_empty())
-        || record
-            .oauth
-            .as_ref()
-            .is_some_and(|oauth| !oauth.access_token.trim().is_empty())
-}
-
 /// 连接保存成功：关闭模态、刷新快照、弹窗格 Toast，并切到该供应商的 `/model` 面板。
 pub fn on_preset_connected(
     state: &mut AppState,
@@ -744,6 +728,10 @@ pub fn on_preset_connected(
         .and_then(|target| target.lx.chat.effective_selection(&state.models));
     state.models.settings = settings;
     state.connect = connect;
+    state.effects.push(Effect::RefreshModelsCatalog {
+        pane: Some(pane),
+        provider_id: Some(provider_id.to_string()),
+    });
     state.overlay = None;
     super::refresh_all_lx_status(state);
     show_lx_toast(
@@ -786,21 +774,22 @@ pub fn on_preset_disconnected(
         text::lx_connect_disconnected(&name),
     );
     if let Some(pane) = modal {
-        let refreshed = ConnectPanel::new(pane, &state.connect);
+        let refreshed = ConnectPanel::new_with_env_map(pane, &state.connect, &state.connect_env);
         state.overlay = Some(Overlay::Connect(Box::new(refreshed)));
     }
     true
 }
 
-/// 连接保存/校验失败：在模态内原地报错并保留输入；模态不在时退化为窗格 Toast。
+/// 连接保存/校验失败：在输入阶段原地报错并保留输入；其余阶段（如断开失败）弹窗格 Toast。
 pub fn on_connect_failed(state: &mut AppState, pane: PaneId, error: &str) -> bool {
     if let Some(Overlay::Connect(panel)) = state.overlay.as_mut()
         && panel.pane == pane
     {
         panel.validating = false;
         panel.status_message = None;
-        panel.set_error(error.to_string());
-        return true;
+        if panel.set_error(error.to_string()) {
+            return true;
+        }
     }
     show_lx_toast(
         state,
@@ -878,12 +867,14 @@ pub fn on_preset_oauth_failed(
         *slot = Some(error.to_string());
         applied = true;
     }
-    show_lx_toast(
-        state,
-        pane,
-        ToastKind::Danger,
-        text::lx_connect_oauth_failed(error),
-    );
+    if applied && !error.to_ascii_lowercase().contains("cancelled") {
+        show_lx_toast(
+            state,
+            pane,
+            ToastKind::Danger,
+            text::lx_connect_oauth_failed(error),
+        );
+    }
     applied
 }
 
@@ -900,7 +891,7 @@ pub fn on_models_refreshed(
     if let Some(Overlay::Connect(panel)) = state.overlay.as_mut() {
         panel.validating = false;
         panel.status_message = None;
-        panel.refresh_entries(&state.connect);
+        panel.refresh_entries(&state.connect, &state.connect_env);
     }
     super::refresh_all_lx_status(state);
     if let Some(pane) = pane {

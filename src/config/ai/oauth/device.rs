@@ -42,7 +42,15 @@ pub(super) async fn start_device_flow(
     result_tx: oneshot::Sender<Result<OAuthCredential, String>>,
 ) -> Result<OAuthStarted, String> {
     let client = http_client()?;
-    let grant = request_device_grant(&client, spec.id, device_code_url, client_id, scope).await?;
+    let grant = request_device_grant(
+        &client,
+        spec.id,
+        device_code_url,
+        client_id,
+        scope,
+        form_answers,
+    )
+    .await?;
     let started = OAuthStarted {
         attempt_id,
         url: grant.url.clone(),
@@ -78,10 +86,19 @@ async fn request_device_grant(
     device_code_url: &str,
     client_id: &str,
     scope: &str,
+    answers: &BTreeMap<String, String>,
 ) -> Result<DeviceGrant, String> {
     if provider_id == "openai" {
         return request_openai_device_grant(client, device_code_url, client_id).await;
     }
+    let device_code_url = if provider_id == "github-copilot" {
+        format!(
+            "https://{}/login/device/code",
+            github_copilot_domain(answers)
+        )
+    } else {
+        device_code_url.to_string()
+    };
     let mut form = vec![("client_id", client_id)];
     if !scope.is_empty() {
         form.push(("scope", scope));
@@ -90,7 +107,7 @@ async fn request_device_grant(
         form.push(("supports_org_scope", "true"));
     }
     let response = client
-        .post(device_code_url)
+        .post(&device_code_url)
         .header(reqwest::header::ACCEPT, "application/json")
         .form(&form)
         .send()
@@ -177,8 +194,20 @@ async fn poll_device_grant(
     grant: &DeviceGrant,
     mut cancel_rx: watch::Receiver<bool>,
 ) -> Result<OAuthCredential, String> {
+    let token_url = if provider_id == "github-copilot" {
+        format!(
+            "https://{}/login/oauth/access_token",
+            github_copilot_domain(form_answers)
+        )
+    } else {
+        token_url.to_string()
+    };
+    let deadline = tokio::time::Instant::now() + super::OAUTH_TIMEOUT;
     let mut interval = grant.interval.max(Duration::from_secs(1));
     loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err("OAuth device authorization timed out".to_string());
+        }
         if wait_or_cancel(interval + POLL_SAFETY_MARGIN, &mut cancel_rx).await {
             return Err("OAuth flow was cancelled".to_string());
         }
@@ -188,7 +217,7 @@ async fn poll_device_grant(
                 None => continue,
             }
         } else {
-            match poll_standard_device(client, token_url, client_id, grant).await? {
+            match poll_standard_device(client, &token_url, client_id, grant).await? {
                 PollOutcome::Token(value) => value,
                 PollOutcome::Pending => continue,
                 PollOutcome::SlowDown => {

@@ -356,8 +356,16 @@ pub(crate) fn handle_overlay_click(
                 return None;
             }
             if let Some(index) = hit {
-                update::set_connect_selection(state, index);
-                update::apply_connect_overlay_key(state, OverlayKey::Enter);
+                let was_active = match &state.overlay {
+                    Some(Overlay::Connect(panel)) => panel.active_row() == Some(index),
+                    _ => false,
+                };
+                // 单击只移动 `❯`；再次点击已选中的同一行才确认执行，避免误触断开/授权。
+                if was_active {
+                    update::apply_connect_overlay_key(state, OverlayKey::Enter);
+                } else {
+                    update::set_connect_selection(state, index);
+                }
             }
             None
         }

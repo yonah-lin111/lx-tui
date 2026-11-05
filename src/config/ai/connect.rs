@@ -414,6 +414,105 @@ fn sanitize_runtime_selections(settings: &mut AiSettings) {
     );
 }
 
+/// 采集所有预设环境变量（非空、去首尾空白）的快照，供 `app/` 层注入使用。
+pub fn collect_preset_env_snapshot() -> BTreeMap<String, String> {
+    let mut snapshot = BTreeMap::new();
+    for spec in all_presets() {
+        for name in spec.env_vars {
+            if snapshot.contains_key(*name) {
+                continue;
+            }
+            if let Ok(value) = std::env::var(name) {
+                let value = value.trim();
+                if !value.is_empty() {
+                    snapshot.insert((*name).to_string(), value.to_string());
+                }
+            }
+        }
+    }
+    snapshot
+}
+
+/// 断开预设连接并清理 `ai.json` 中悬空的默认模型选择（进程环境变量版本）。
+pub fn disconnect_preset_on_disk(
+    ai_path: &Path,
+    provider_id: &str,
+) -> Result<AiSettings, AiConfigError> {
+    disconnect_preset_on_disk_with_env(ai_path, provider_id, |name| std::env::var(name).ok())
+}
+
+/// 断开预设连接并清理 `ai.json` 中悬空的默认模型选择。
+///
+/// 若该预设仍能通过环境变量连接，则保留记录并置为禁用；否则直接移除记录。
+pub fn disconnect_preset_on_disk_with_env<F>(
+    ai_path: &Path,
+    provider_id: &str,
+    env: F,
+) -> Result<AiSettings, AiConfigError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let connect_path = connect_path_for_ai_path(ai_path);
+    let mut connect = load_connect(&connect_path)?.unwrap_or_default();
+    if has_active_preset_env(provider_id, &env) {
+        let record = connect
+            .providers
+            .entry(provider_id.to_string())
+            .or_insert_with(|| ConnectedPresetRecord::new(provider_id));
+        record.enabled = false;
+        record.api_key = None;
+        record.oauth = None;
+    } else {
+        connect.providers.remove(provider_id);
+    }
+    save_connect(&connect_path, &connect)?;
+
+    if ai_path.exists() {
+        let text = std::fs::read_to_string(ai_path)?;
+        let mut ai_settings = super::parse_ai_root(&text)?;
+        let before_default = ai_settings.default_model.clone();
+        let before_title = ai_settings.title_summary.clone();
+        ai_settings.sanitize_optional_selections_with_connect(Some(&connect));
+        for slot in [
+            &mut ai_settings.default_model,
+            &mut ai_settings.title_summary,
+        ] {
+            let dangling = slot.as_ref().is_some_and(|selection| {
+                find_preset(&selection.provider).is_some()
+                    && !is_connected_preset_selection_with_env(&connect, selection, &env)
+            });
+            if dangling {
+                *slot = None;
+            }
+        }
+        if ai_settings.default_model != before_default || ai_settings.title_summary != before_title
+        {
+            super::save_ai_with_connect(ai_path, &ai_settings, Some(&connect))?;
+        }
+        return Ok(merge_runtime_ai_settings_with_env(
+            &ai_settings,
+            &connect,
+            &env,
+        ));
+    }
+    Ok(merge_runtime_ai_settings_with_env(
+        &AiSettings::empty(),
+        &connect,
+        &env,
+    ))
+}
+
+fn has_active_preset_env<F>(provider_id: &str, env: &F) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
+    find_preset(provider_id).is_some_and(|spec| {
+        spec.env_vars
+            .iter()
+            .any(|name| env(name).is_some_and(|value| !value.trim().is_empty()))
+    })
+}
+
 /// 读取运行时合并后的模型配置：`ai.json` + 同目录 `connect.json`。
 pub fn load_runtime_ai(ai_path: &Path) -> Result<Option<AiSettings>, AiConfigError> {
     let custom = load_custom_for_runtime(ai_path)?;
@@ -468,11 +567,23 @@ pub(crate) fn is_connected_preset_selection(
     connect: &ConnectSettings,
     selection: &ModelSelection,
 ) -> bool {
+    is_connected_preset_selection_with_env(connect, selection, |name| std::env::var(name).ok())
+}
+
+/// 可注入环境变量版本的 [`is_connected_preset_selection`]。
+pub(crate) fn is_connected_preset_selection_with_env<F>(
+    connect: &ConnectSettings,
+    selection: &ModelSelection,
+    env: F,
+) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
     let Some(spec) = find_preset(&selection.provider) else {
         return false;
     };
     let Some((provider, enabled)) =
-        materialize_preset_provider(spec, connect.providers.get(spec.id))
+        materialize_preset_provider_with_env(spec, connect.providers.get(spec.id), env)
     else {
         return false;
     };

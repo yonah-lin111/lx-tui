@@ -129,9 +129,18 @@ pub struct ConnectPanel {
 }
 
 impl ConnectPanel {
-    /// 从磁盘快照构造；环境变量探测使用当前进程。
+    /// 从磁盘快照构造；默认不探测环境变量，保持 `app/` 纯状态边界。
     pub fn new(pane: PaneId, connect: &ConnectSettings) -> Self {
-        Self::new_with_env(pane, connect, |name| std::env::var(name).ok())
+        Self::new_with_env(pane, connect, |_| None)
+    }
+
+    /// 从进程环境快照构造；生产调用方传入事件层采集的 `AppState::connect_env`。
+    pub fn new_with_env_map(
+        pane: PaneId,
+        connect: &ConnectSettings,
+        env: &BTreeMap<String, String>,
+    ) -> Self {
+        Self::new_with_env(pane, connect, |name| env.get(name).cloned())
     }
 
     /// 可注入环境变量查询的构造器（测试用，避免宿主环境影响结果）。
@@ -185,8 +194,8 @@ impl ConnectPanel {
     }
 
     /// 用新的连接快照刷新条目与标签。
-    pub fn refresh_entries(&mut self, connect: &ConnectSettings) {
-        self.entries = Self::build_entries(connect, &|name| std::env::var(name).ok());
+    pub fn refresh_entries(&mut self, connect: &ConnectSettings, env: &BTreeMap<String, String>) {
+        self.entries = Self::build_entries(connect, &|name| env.get(name).cloned());
         if matches!(self.stage, ConnectStage::Providers) {
             self.refilter_from_input();
         } else {
@@ -301,14 +310,15 @@ impl ConnectPanel {
         }
     }
 
-    /// 在当前输入/OAuth 阶段展示错误。
-    pub fn set_error(&mut self, message: impl Into<String>) {
+    /// 在当前输入/OAuth 阶段展示错误；其他阶段返回 `false` 由调用方降级为 Toast。
+    pub fn set_error(&mut self, message: impl Into<String>) -> bool {
         let message = message.into();
         match &mut self.stage {
             ConnectStage::InputPrompt { error, .. } | ConnectStage::OAuthWaiting { error, .. } => {
                 *error = Some(message);
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 
@@ -379,6 +389,26 @@ impl ConnectPanel {
                     3
                 }
             }
+        }
+    }
+
+    /// 当前阶段可点击确认的行索引；没有可点击行或纯输入阶段返回 `None`。
+    pub fn active_row(&self) -> Option<usize> {
+        match &self.stage {
+            ConnectStage::Providers if !self.filtered.is_empty() => Some(self.window.active),
+            ConnectStage::Manage { window, .. } | ConnectStage::Methods { window, .. } => {
+                Some(window.active)
+            }
+            ConnectStage::InputPrompt {
+                step: ConnectPromptStep::FormField { field, .. },
+                ..
+            } if !field.options.is_empty() => Some(self.window().active),
+            ConnectStage::OAuthWaiting {
+                mode: OAuthPromptMode::Auto,
+                window,
+                ..
+            } => Some(window.active),
+            _ => None,
         }
     }
 

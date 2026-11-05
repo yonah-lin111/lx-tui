@@ -242,7 +242,7 @@ async fn disconnect_removes_preset_and_clears_dangling_default_model() {
         &write(
             "PUT",
             &format!("/api/models/connect?token={token}"),
-            r#"{"providers":[{"id":"openai","apiKey":"sk-disconnect-test","baseUrl":"https://api.example.invalid/v1"}]}"#,
+            r#"{"providers":[{"id":"cerebras","apiKey":"sk-disconnect-test","baseUrl":"https://api.example.invalid/v1"}]}"#,
             None,
         ),
     )
@@ -252,18 +252,18 @@ async fn disconnect_removes_preset_and_clears_dangling_default_model() {
 
     let got = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
     let parsed: serde_json::Value = serde_json::from_str(body(&got)).expect("json");
-    let openai = parsed["quickConnect"]
+    let preset = parsed["quickConnect"]
         .as_array()
         .expect("quickConnect")
         .iter()
-        .find(|preset| preset["id"] == serde_json::json!("openai"))
-        .expect("openai preset");
-    let model_id = openai["models"][0]["id"]
+        .find(|preset| preset["id"] == serde_json::json!("cerebras"))
+        .expect("cerebras preset");
+    let model_id = preset["models"][0]["id"]
         .as_str()
         .expect("preset model id")
         .to_string();
     let payload = format!(
-        r#"{{"providers": [], "enabledProviders": [], "defaultModel": {{"provider": "openai", "model": "{model_id}"}}, "revision": ""}}"#
+        r#"{{"providers": [], "enabledProviders": [], "defaultModel": {{"provider": "cerebras", "model": "{model_id}"}}, "revision": ""}}"#
     );
     let saved = request(
         port,
@@ -283,7 +283,7 @@ async fn disconnect_removes_preset_and_clears_dangling_default_model() {
         &write(
             "POST",
             &format!("/api/models/connect/disconnect?token={token}"),
-            r#"{"providerId":"openai"}"#,
+            r#"{"providerId":"cerebras"}"#,
             None,
         ),
     )
@@ -300,15 +300,15 @@ async fn disconnect_removes_preset_and_clears_dangling_default_model() {
     let after = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
     let after_json: serde_json::Value = serde_json::from_str(body(&after)).expect("json");
     assert_eq!(after_json["defaultModel"], serde_json::Value::Null);
-    let openai = after_json["quickConnect"]
+    let preset = after_json["quickConnect"]
         .as_array()
         .expect("quickConnect")
         .iter()
-        .find(|preset| preset["id"] == serde_json::json!("openai"))
-        .expect("openai preset");
-    assert_eq!(openai["connected"], serde_json::json!(false));
+        .find(|preset| preset["id"] == serde_json::json!("cerebras"))
+        .expect("cerebras preset");
+    assert_eq!(preset["connected"], serde_json::json!(false));
     assert_eq!(
-        openai["connectionLabel"],
+        preset["connectionLabel"],
         serde_json::json!("Not connected")
     );
 
@@ -318,7 +318,7 @@ async fn disconnect_removes_preset_and_clears_dangling_default_model() {
         .expect("event present");
     match event {
         SettingsEvent::ModelsChanged(settings) => {
-            assert!(!settings.providers.contains_key("openai"));
+            assert!(!settings.providers.contains_key("cerebras"));
             assert!(settings.default_model.is_none());
         }
         other => panic!("unexpected event: {other:?}"),
@@ -454,5 +454,94 @@ async fn fetch_models_works_for_quick_connect_preset() {
         recorded.contains("GET /v1/models"),
         "命中预设地址的 /v1/models：{recorded}"
     );
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn put_connect_api_key_replaces_oauth_credential() {
+    let (service, _events, _dir) = start_models("models-connect-api-key-wins").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let root = state_user_root(&service);
+    let connect_path = root.join("config").join("connect.json");
+    std::fs::create_dir_all(connect_path.parent().expect("config dir")).expect("config dir");
+    std::fs::write(
+        &connect_path,
+        r#"{"providers":{"openai":{"id":"openai","enabled":true,"oauth":{"methodId":"chatgpt-browser","accessToken":"old-oauth-token"},"formAnswers":{}}}}"#,
+    )
+    .expect("seed connect.json");
+
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/connect?token={token}"),
+            r#"{"providers":[{"id":"openai","apiKey":"sk-new-key","baseUrl":"https://api.example.invalid/v1"}]}"#,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{}", body(&saved));
+
+    let text = std::fs::read_to_string(&connect_path).expect("connect.json readable");
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("json");
+    let record = &parsed["providers"]["openai"];
+    assert_eq!(record["apiKey"], serde_json::json!("sk-new-key"), "{text}");
+    assert!(
+        record.get("oauth").is_none(),
+        "OAuth must be cleared: {text}"
+    );
+    assert!(!text.contains("old-oauth-token"), "{text}");
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn put_connect_does_not_freeze_materialized_defaults() {
+    let (service, _events, _dir) = start_models("models-connect-defaults-not-frozen").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let root = state_user_root(&service);
+
+    let got = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    let parsed: serde_json::Value = serde_json::from_str(body(&got)).expect("json");
+    let openai = parsed["quickConnect"]
+        .as_array()
+        .expect("quickConnect")
+        .iter()
+        .find(|preset| preset["id"] == serde_json::json!("openai"))
+        .expect("openai preset");
+    let payload = serde_json::json!({
+        "providers": [{
+            "id": "openai",
+            "apiKey": "sk-default-values",
+            "baseUrl": openai["defaultBaseUrl"],
+            "models": openai["defaultModels"],
+        }]
+    });
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/connect?token={token}"),
+            &payload.to_string(),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{}", body(&saved));
+
+    let text = std::fs::read_to_string(root.join("config").join("connect.json"))
+        .expect("connect.json readable");
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("json");
+    let record = &parsed["providers"]["openai"];
+    assert!(
+        record.get("baseUrl").is_none(),
+        "default base URL must not be frozen: {text}"
+    );
+    assert!(
+        record.get("models").is_none(),
+        "default models must not be frozen: {text}"
+    );
+    assert_eq!(record["apiKey"], serde_json::json!("sk-default-values"));
     service.shutdown();
 }

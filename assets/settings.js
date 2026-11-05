@@ -79,7 +79,7 @@ function createSelect(host, config) {
   if (host._selectMenu && host._selectMenu.parentNode) {
     host._selectMenu.parentNode.removeChild(host._selectMenu);
   }
-  host.innerHTML = '';
+  host.replaceChildren();
   host.classList.add('select-host');
   const button = document.createElement('button');
   button.type = 'button';
@@ -257,7 +257,7 @@ function saveAllDirty() {
   let chain = Promise.resolve();
   const seenSaves = new Set();
   for (const key of dirty) {
-    const saveFn = actionBars[key].save;
+    const saveFn = actionBars[key].saveFn;
     if (seenSaves.has(saveFn)) { continue; }
     seenSaves.add(saveFn);
     chain = chain.then(() => saveFn().catch((error) => {
@@ -322,6 +322,8 @@ function createActionBar(hostId, controller) {
   return {
     refresh: refresh,
     isDirty: () => controller.isDirty(),
+    // 原始函数引用用于 `saveAllDirty` 去重：多个视图共用 saveModels 时只调用一次。
+    saveFn: controller.save,
     save: () => controller.save()
   };
 }

@@ -113,6 +113,10 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         js_body.contains("textContent"),
         "dynamic text via textContent"
     );
+    assert!(
+        !js_body.contains(".innerHTML"),
+        "no innerHTML in settings js"
+    );
 
     // Models 视图独立资源：加载/保存/复制/删除/远端获取与模态、思考等级入口。
     let models_js = request(port, &get("/settings_models.js")).await;

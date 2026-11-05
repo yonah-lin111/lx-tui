@@ -3,9 +3,16 @@
 use std::collections::BTreeMap;
 
 use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
 
 use super::browser::{browser_authorize_url, parse_query, percent_decode, percent_encode};
-use super::{credential_from_token, credential_needs_refresh, now_ms, pkce_challenge};
+use super::{
+    credential_from_token, credential_needs_refresh, now_ms, pkce_challenge,
+    refresh_oauth_credential,
+};
+use crate::config::ai::connect::OAuthCredential;
 
 fn callback_params(url: &str) -> BTreeMap<String, String> {
     url.split_once('?')
@@ -82,4 +89,110 @@ async fn start_oauth_flow_rejects_unknown_provider_and_method() {
             .await
             .is_err()
     );
+}
+
+async fn serve_json_once(listener: TcpListener, body: &'static str) {
+    let (mut stream, _) = listener.accept().await.expect("accept");
+    let mut buffer = [0u8; 8192];
+    let _ = stream.read(&mut buffer).await;
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .expect("write response");
+}
+
+async fn http_round_trip(port: u16, request: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect callback listener");
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .await
+        .expect("read response");
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+#[tokio::test]
+async fn refresh_preserves_refresh_token_and_metadata_when_response_omits_them() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind token server");
+    let port = listener.local_addr().expect("token server address").port();
+    let server = tokio::spawn(serve_json_once(
+        listener,
+        r#"{"access_token":"new-access","expires_in":3600}"#,
+    ));
+    let instance = format!("http://127.0.0.1:{port}");
+    let credential = OAuthCredential {
+        method_id: "pkce".to_string(),
+        access_token: "old-access".to_string(),
+        refresh_token: Some("keep-refresh".to_string()),
+        expires_at_ms: Some(0),
+        account_label: Some("work".to_string()),
+        metadata: BTreeMap::from([
+            ("instanceUrl".to_string(), instance.clone()),
+            ("custom".to_string(), "keep".to_string()),
+        ]),
+    };
+    let answers = BTreeMap::from([("instanceUrl".to_string(), instance)]);
+    let refreshed = refresh_oauth_credential("gitlab", &credential, &answers)
+        .await
+        .expect("refresh");
+    server.await.expect("token server");
+    assert_eq!(refreshed.access_token, "new-access");
+    assert_eq!(refreshed.refresh_token.as_deref(), Some("keep-refresh"));
+    assert_eq!(refreshed.account_label.as_deref(), Some("work"));
+    assert_eq!(
+        refreshed.metadata.get("custom").map(String::as_str),
+        Some("keep")
+    );
+    assert!(refreshed.metadata.contains_key("instanceUrl"));
+}
+
+#[tokio::test]
+async fn digitalocean_implicit_callback_without_query_state_succeeds() {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind callback listener");
+    let port = listener
+        .local_addr()
+        .expect("callback listener address")
+        .port();
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let flow = super::browser::BrowserFlow::for_test(
+        listener,
+        "digitalocean",
+        "https://cloud.digitalocean.com/v1/oauth/token",
+        "expected-state",
+        "/auth/callback",
+        cancel_rx,
+    );
+    let task = tokio::spawn(super::browser::run_browser_flow(flow));
+
+    let response = http_round_trip(
+        port,
+        "GET /auth/callback HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(response.contains("200 OK"), "{response}");
+    assert!(response.contains("access_token"), "{response}");
+
+    let body = r#"{"access_token":"do-token","state":"expected-state","expires_in":3600}"#;
+    let request = format!(
+        "POST /auth/token HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let response = http_round_trip(port, &request).await;
+    assert!(response.contains("200 OK"), "{response}");
+    let credential = task.await.expect("join callback task").expect("callback");
+    assert_eq!(credential.access_token, "do-token");
 }

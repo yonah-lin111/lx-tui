@@ -219,11 +219,12 @@ pub(super) fn credential_from_token(
 /// 刷新 OAuth 凭证（存在 `refresh_token` 时）。
 pub async fn refresh_oauth_credential(
     provider_id: &str,
-    method_id: &str,
     credential: &OAuthCredential,
+    form_answers: &BTreeMap<String, String>,
 ) -> Result<OAuthCredential, String> {
     let spec = find_preset(provider_id)
         .ok_or_else(|| format!("unknown preset provider '{provider_id}'"))?;
+    let method_id = credential.method_id.as_str();
     let method = spec
         .method(method_id)
         .ok_or_else(|| format!("provider '{provider_id}' has no method '{method_id}'"))?;
@@ -247,7 +248,10 @@ pub async fn refresh_oauth_credential(
     if !flow.scope().is_empty() {
         form.push(("scope", flow.scope()));
     }
-    let token_url = expand_flow_url(flow.token_url(), &credential.metadata);
+    // 表单答案（如 GitLab `instanceUrl`）用于展开 token URL；凭证 metadata 优先。
+    let mut url_answers = form_answers.clone();
+    url_answers.extend(credential.metadata.clone());
+    let token_url = expand_flow_url(flow.token_url(), &url_answers);
     let response = client
         .post(&token_url)
         .header(reqwest::header::ACCEPT, "application/json")
@@ -266,9 +270,67 @@ pub async fn refresh_oauth_credential(
     let value: Value = serde_json::from_str(&body)
         .map_err(|_| "token refresh returned invalid JSON".to_string())?;
     let mut refreshed = credential_from_token(method_id, &value)?;
-    refreshed.account_label = credential.account_label.clone();
-    refreshed.metadata = credential.metadata.clone();
+    refreshed.refresh_token = refreshed
+        .refresh_token
+        .or_else(|| credential.refresh_token.clone());
+    refreshed.account_label = refreshed
+        .account_label
+        .or_else(|| credential.account_label.clone());
+    for (key, value) in &credential.metadata {
+        refreshed
+            .metadata
+            .entry(key.clone())
+            .or_insert_with(|| value.clone());
+    }
     Ok(refreshed)
+}
+
+/// 刷新 `connect.json` 中所有即将过期的 OAuth 凭证；有刷新发生时返回 `true`。
+pub async fn ensure_connect_oauth_fresh(ai_path: &std::path::Path) -> bool {
+    let connect_path = super::connect::connect_path_for_ai_path(ai_path);
+    let connect = match super::connect::load_connect(&connect_path) {
+        Ok(Some(connect)) => connect,
+        _ => return false,
+    };
+    let now = now_ms();
+    let pending: Vec<(String, OAuthCredential, BTreeMap<String, String>)> = connect
+        .providers
+        .iter()
+        .filter(|(_, record)| record.enabled)
+        .filter_map(|(provider_id, record)| {
+            let oauth = record.oauth.as_ref()?;
+            credential_needs_refresh(oauth, now).then(|| {
+                (
+                    provider_id.clone(),
+                    oauth.clone(),
+                    record.form_answers.clone(),
+                )
+            })
+        })
+        .collect();
+    if pending.is_empty() {
+        return false;
+    }
+    let mut refreshed = Vec::new();
+    for (provider_id, oauth, form_answers) in pending {
+        if let Ok(credential) = refresh_oauth_credential(&provider_id, &oauth, &form_answers).await
+        {
+            refreshed.push((provider_id, credential));
+        }
+    }
+    if refreshed.is_empty() {
+        return false;
+    }
+    let mut latest = match super::connect::load_connect(&connect_path) {
+        Ok(Some(latest)) => latest,
+        _ => return false,
+    };
+    for (provider_id, credential) in refreshed {
+        if let Some(record) = latest.providers.get_mut(&provider_id) {
+            record.oauth = Some(credential);
+        }
+    }
+    super::connect::save_connect(&connect_path, &latest).is_ok()
 }
 
 /// 凭证是否需要在 5 分钟内刷新。
@@ -292,6 +354,7 @@ pub fn now_ms() -> i64 {
 pub(super) fn http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent(concat!("lx-tui/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|error| format!("http client: {error}"))

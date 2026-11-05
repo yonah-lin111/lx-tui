@@ -9,16 +9,16 @@
   - 供应商认证插件：`packages/core/src/plugin/provider/{opencode,openai,chatgpt,github-copilot,xai,poe,gitlab,digitalocean,cloudflare-ai-gateway,azure}.ts`
   - 设置页供应商管理：`packages/app/src/settings/providers/providers.tsx`、`packages/app/src/providers/connect/dialog.tsx`
 - **目标范围**：
-  - `src/config/ai/`（`mod.rs`、新增 `presets.rs`、新增 `connect.rs`、新增 `oauth.rs`）
+  - `src/config/ai/`（`mod.rs`、新增 `presets.rs`、新增 `connect.rs`、新增 `oauth/{mod,browser,device}.rs`、新增 `verify.rs`、新增 `catalog_refresh.rs`）
   - `src/app/`（`state.rs`、`effects.rs`、`state/lx/slash.rs`、新增 `state/lx/connect.rs`、`update/pane.rs`、`update/chat/slash.rs`、新增 `update/chat/connect.rs`）
   - `src/event/`（`mod.rs`、`inventory.rs`、新增 `chat/connect.rs`）
-  - `src/ui/`（`text.rs`、`main_content/lx/slash.rs`）
+  - `src/ui/`（`text.rs`、新增 `text/connect.rs`、新增 `overlay/connect.rs`）
   - `src/settings/`（`commands.rs`、`service.rs`、`service/page.rs`、`service/models/mod.rs`、新增 `service/models/connect.rs`）
   - `assets/`（`settings.html`、`settings.css`、`settings_models.js`、新增 `settings_connect.js`）
 - **架构约束**：
   - 严格保持 `app/`（纯状态与更新，禁止 IO）、`ui/`（纯渲染只读状态，禁止修改状态或执行 IO）、`event/` & `settings/`（异步网络与持久化编排）边界清晰；
   - 所有 TUI 与浏览器设置页用户可见文案一律使用英文，TUI 文案集中定义在 `src/ui/text.rs`；
-  - 生产代码单文件行数上限 1000 行（当前 `src/app/update/pane.rs` 已达 989 行、`assets/settings_models.js` 已达 939 行、`src/app/state/lx/slash.rs` 已达 868 行，必须按职责拆分子模块），禁止 `unwrap()` / `expect()`；
+  - 生产代码单文件行数上限 1000 行（当前 `assets/settings_models.js` 997 行、`assets/settings.js` 1000 行、`src/app/update/chat/connect.rs` 932 行，接近上限，后续改动必须按职责拆分），禁止 `unwrap()` / `expect()`；
   - 浏览器前端资源遵循 `docs/standards/html-assets.md`，严禁外部链接、严禁 `innerHTML`，新增脚本 `assets/settings_connect.js` 在 `src/settings/service/page.rs` 静态白名单注册。
 
 ---
@@ -29,9 +29,9 @@
 | --- | --- | --- |
 | **`opencode-dev` 预设目录与 `/connect`** | `packages/core/src/plugin/models-dev.ts:40-58` 将 `models.dev` 快照转换为带 `key` + `env` 方法的预设集成；`packages/core/src/plugin/provider/*.ts` 为 `opencode`、`openai`、`github-copilot`、`xai`、`poe`、`gitlab`、`digitalocean`、`cloudflare-ai-gateway` 等注册 OAuth（Browser PKCE / Device Code）与附加 `form` 字段（如 Enterprise URL、Account ID）；`dialog-integration.tsx:1249-1283` 连接成功后立即跳转到该 Provider 的 `DialogModel` 选择模型。 | 1. 提取并内联对齐 `opencode-dev` 的预设供应商目录（含默认 `baseURL`、协议 `transport`、环境变量 `env`、认证方法 `methods` 与内置主干模型）；<br>2. 按用户确认，**取消 `Popular`/`Services` 分组，统一按供应商名称首字母（A-Z）排序**；<br>3. 完整支持 API Key、附加表单字段（如 URL/Account ID）、OAuth（浏览器回调 / 设备码 URL 认证）与环境变量 `$ENV` 探测；<br>4. 连接成功后自动切入该供应商的 `/model` 选择面板。 |
 | **`lx-tui` 模型配置存储** | `src/config/ai/mod.rs:309-350, 581-636`：当前所有自定义供应商与全局 `defaultModel`/`titleSummary` 均保存在单一 `~/.lx-t[-dev]/config/ai.json` 中（`0600` 权限原子写）。 | 按用户确认：**快捷连接（Quick Connect）的 JSON 与自定义（Custom）分离存储**。自定义供应商继续存 `config/ai.json`；快捷连接的凭证（API Key / OAuth Token）、启用态、端点覆盖与模型增补独立存放在 `~/.lx-t[-dev]/config/connect.json`（同为 `0600` 原子写）。运行时 `ModelsSnapshot` 自动合并两者。 |
-| **`lx-tui` 斜杠命令与面板体系** | `src/app/state/lx/slash.rs:75-107` 定义 `SlashCommand` 枚举（当前 8 个：`Model, Resume, Fork, New, Rewind, Compact, Subagents, Rename`）；`src/ui/main_content/lx/slash.rs:21-283` 将 `SlashPanel` 渲染为输入框上方的无边框 `CommandPanel`；`src/app/update/pane.rs:270-359` 处理面板导航与底部输入框联动。 | 1. `SlashCommand` 新增 `Connect`（`/connect`），`RESERVED_NAMES`（`src/settings/commands.rs:222`）同步加入 `"connect"`；<br>2. `SlashPanel` 新增 `Connect(Box<ConnectPanel>)`，复用无边框 `CommandPanel` + 底部输入框完成「选供应商 → 选认证方式/管理已连接 → 填表单/Key 或 OAuth URL 授权 → 跳 `/model`」闭环。 |
-| **设置页 Provider 视图与 API** | `src/settings/service/models/mod.rs:18-25` 提供 `GET/PUT /api/models/settings` 与 `POST /api/models/fetch`；`assets/settings.html:180-262` 与 `assets/settings_models.js`（939 行）渲染单列表 `#provider-list`。 | 1. 左侧列表 `nav.models-nav` 顶部新增 `Quick Connect` / `Custom` 双 Tab 切换与搜索过滤框；<br>2. 右侧详情区为 `Quick Connect` 项展示专属预设说明横幅、连接状态标签、OAuth 登录弹窗/按钮、`Disconnect` 与 `Reset to Preset` 动作；<br>3. 前端逻辑拆入 `assets/settings_connect.js`，后端新增 `src/settings/service/models/connect.rs` 处理 `connect.json` 读写与 OAuth 会话。 |
-| **单文件行数水位** | `src/app/update/pane.rs`：989 行；`assets/settings_models.js`：939 行；`src/app/state/lx/slash.rs`：868 行；`src/config/ai/mod.rs`：677 行；`src/settings/service/models/mod.rs`：553 行。 | 严守 1000 行红线：新增逻辑全部落入职责清晰的子模块（`config/ai/{presets,connect,oauth}.rs`、`app/state/lx/connect.rs`、`app/update/chat/connect.rs`、`event/chat/connect.rs`、`settings/service/models/connect.rs`、`assets/settings_connect.js`），并将 `pane.rs` 中斜杠面板辅助函数下沉到 `update/chat/slash.rs`，确保所有生产文件 ≤ 950 行。 |
+| **`lx-tui` 斜杠命令与面板体系** | `src/app/state/lx/slash.rs:75-107` 定义 `SlashCommand` 枚举（当前 8 个：`Model, Resume, Fork, New, Rewind, Compact, Subagents, Rename`）；`src/ui/main_content/lx/slash.rs` 渲染输入框上方的 `SlashPanel`，`src/ui/overlay/connect.rs` 渲染 `/connect` 居中模态弹窗。 | 1. `SlashCommand` 新增 `Connect`（`/connect`），`RESERVED_NAMES`（`src/settings/commands.rs:222`）同步加入 `"connect"`；<br>2. 新增居中模态弹窗 **`Overlay::Connect(Box<ConnectPanel>)`**（`src/ui/overlay/connect.rs`），由 `src/event/overlay.rs` 路由键盘/鼠标；连接成功后关闭弹窗并把 `pane.lx.slash` 切到 `SlashPanel::Model(ModelPicker::for_provider(...))`。 |
+| **设置页 Provider 视图与 API** | `src/settings/service/models/mod.rs:18-25` 提供 `GET/PUT /api/models/settings` 与 `POST /api/models/fetch`；`assets/settings.html` 与 `assets/settings_models.js`（997 行）渲染 `#provider-list`。 | 1. 左侧列表 `nav.models-nav` 顶部新增 `Quick Connect` / `Custom` 双 Tab 切换与搜索过滤框；<br>2. 右侧详情区为 `Quick Connect` 项展示专属预设说明横幅、连接状态标签、OAuth 登录弹窗/按钮、`Disconnect` 与 `Reset to Preset` 动作；<br>3. 前端逻辑拆入 `assets/settings_connect.js`，后端新增 `src/settings/service/models/connect.rs` 处理 `connect.json` 读写与 OAuth 会话。 |
+| **单文件行数水位** | `src/app/update/pane.rs`：823 行；`src/app/state/lx/slash.rs`：909 行；`src/config/ai/mod.rs`：799 行；`src/settings/service/models/mod.rs`：601 行。 | 严守 1000 行红线：新增逻辑全部落入职责清晰的子模块（`config/ai/{presets,connect}.rs`、`config/ai/oauth/{mod,browser,device}.rs`、`app/state/lx/connect.rs`、`app/update/chat/connect.rs`、`event/chat/connect.rs`、`ui/overlay/connect.rs`、`settings/service/models/connect.rs`、`assets/settings_connect.js`），并将 `pane.rs` 中斜杠面板辅助函数下沉到 `update/chat/slash.rs`，确保所有生产文件 ≤ 1000 行。 |
 
 ---
 
@@ -43,7 +43,7 @@
    - 预设供应商列表统一按**名称首字母（A-Z，不区分大小写）排序**，**不设 `Popular` / `Services` 分组**；
    - 支持 **API Key 认证**、**带附加 URL/参数表单的认证**（如 GitHub Copilot Enterprise URL、GitLab Instance URL、Cloudflare Account/Gateway ID、自定义 Base URL）以及 **OAuth URL 认证**（Device Code 设备码流与本地回环 PKCE 浏览器授权流）和 **环境变量 `$ENV` 自动探测**。
 2. **新增 `lx` 窗格 `/connect` 斜杠命令**：
-   - 在 `src/ui/main_content/lx/` 支持 `/connect` 命令，复用输入框上方无边框 `SlashPanel` 与底部输入框联动；
+   - 在 `lx` 窗格支持 `/connect` 命令，打开居中模态弹窗 `Overlay::Connect(Box<ConnectPanel>)`（`src/ui/overlay/connect.rs`），弹窗内自带输入框与状态行；
    - 完整支持「A-Z 搜索选择供应商 → 已连接项管理（`Reconnect` / `Disconnect`）或认证方式选择（OAuth 优先、API Key 次之）→ 表单/API Key 输入或 OAuth URL/设备码展示（`Enter`/`o` 打开浏览器、`c` 复制设备码或链接、后台轮询）→ 成功后弹窗格内 Toast 并自动切换到该供应商的 `/model` 选择器」。
 3. **独立 `connect.json` 持久化存储**：
    - 快捷连接供应商的配置与凭证独立保存在 `~/.lx-t[-dev]/config/connect.json`（`0600` 权限、同目录临时文件原子写入），与自定义供应商的 `~/.lx-t[-dev]/config/ai.json` 物理隔离；
@@ -65,7 +65,7 @@
 | --- | --- | --- |
 | **Q1** | **预设供应商目录与排序规则** | 直接对齐 `opencode-dev` 的预设供应商目录（名称、协议、默认 `baseURL`、环境变量名、认证方法、主力模型及 `variants`/`limit`/`modalities`）；**不设 `Popular` / `Services` 分组，所有预设供应商统一按名称首字母（A-Z）排序**。 |
 | **Q2** | **认证方式覆盖范围** | 完全对齐 `opencode-dev`：支持 **API Key**、**附加表单字段（URL / Domain / Account ID 等）**、**OAuth URL 授权（含 Device Code 设备码轮询与本地回环 Browser PKCE 回调）** 以及 **进程环境变量（`$ENV`）自动探测**。当同一供应商有多种交互式认证方式时，OAuth 排在 API Key 之前。 |
-| **Q3** | **TUI `/connect` 界面容器与四步流转** | 收口在 `lx` 窗格的输入框上方无边框 `SlashPanel::Connect` + 底部输入框联动：<br>1. `Providers`：A-Z 列表 + 底部打字实时过滤，已连接项显示 `✓` 与连接方式 tag；点选已连接项进入 `Reconnect` / `Disconnect` 管理；<br>2. `Methods`：多认证方式时列出选择，单方式自动跳过；<br>3. `Auth`：表单/API Key 通过底部输入框单行提交；OAuth URL 在面板内展示授权链接与设备码（`Enter`/`o` 打开浏览器、`c` 复制设备码或 URL、后台自动轮询）；<br>4. 连接成功后在窗格内弹 `Connected <Provider>` Toast，并自动将面板切换为仅过滤该供应商的 `/model` 模型选择器。 |
+| **Q3** | **TUI `/connect` 界面容器与四步流转** | 收口为居中模态弹窗 `Overlay::Connect(Box<ConnectPanel>)`（`src/ui/overlay/connect.rs`），弹窗内自带输入框与列表区：<br>1. `Providers`：A-Z 列表 + 弹窗输入框实时过滤，已连接项显示 `✓` 与连接方式 tag；点选已连接项进入 `Reconnect` / `Disconnect` 管理；<br>2. `Methods`：多认证方式时列出选择，单方式自动跳过；<br>3. `Auth`：表单/API Key 通过弹窗输入行提交；OAuth URL 在面板内展示授权链接与设备码（`Enter`/`o` 打开浏览器、`c` 复制设备码或 URL、后台自动轮询）；<br>4. 连接成功后关闭弹窗、在窗格内弹 `Connected <Provider>` Toast，并将 `pane.lx.slash` 切换为仅过滤该供应商的 `/model` 模型选择器。 |
 | **Q4** | **设置页 Provider 双 Tab 与编辑区交互** | 1. 左侧列表顶部新增 `Quick Connect`（默认）与 `Custom` 双 Tab 切换；<br>2. `Quick Connect` Tab 顶部带搜索框，列出 A-Z 预设供应商并标记 `Connected · API key` / `Connected · OAuth` / `Connected · $ENV` / `Not connected`，隐藏 `+ New Provider`；`Custom` Tab 仅列自定义供应商并保留 `+ New Provider`；<br>3. 右侧编辑区在 `Quick Connect` 下顶部展示 `Quick Connect Preset` 说明横幅，锁定 `Provider ID` 与 `Type`，提供 OAuth 授权按钮与 API Key 输入，右上角按钮改为 `Cancel` / `Reset to Preset` / `Disconnect`。 |
 | **Q5** | **独立 JSON 持久化存储与兼容** | **快捷连接与自定义供应商分文件存储**：<br>1. 自定义供应商与全局 `defaultModel`/`titleSummary`/`webSearch` 保持在 `~/.lx-t[-dev]/config/ai.json`；<br>2. 快捷连接的已连接凭证（API Key / OAuth Token）、启用开关、Base URL 覆盖与模型增补独立存储在 **`~/.lx-t[-dev]/config/connect.json`**（`0600` 权限 + 同目录原子写）；未连接的预设不落盘；<br>3. 运行时 `load_runtime_ai_settings()` 将内置预设 + `connect.json` + 环境变量探测与 `ai.json` 合并为统一 `AiSettings` 快照，对 `/model`、聊天流、标题生成、子 Agent、无头 CLI 完全透明。 |
 | **Q6** | **`/connect` 居中模态弹窗（参考 `refdir`）** | 将 `/connect` 从输入框上方无边框 `SlashPanel` 改为**独立的居中模态弹窗 `Overlay::Connect(Box<ConnectPanel>)`**（尺寸 `72 × 20`，完全参考 `src/ui/overlay/referenced/{search,menu,input}.rs`）：<br>1. 背景压暗（`widgets::modal::dim_background`）+ 强调色边框（`Block::bordered().border_style(style::accent())`）；<br>2. 弹窗内部顶部自带 `>` 单行输入框（`dialog::render_input`），光标直接聚焦在弹窗内：在 `Providers` 阶段用于实时过滤供应商，在 `InputPrompt` 阶段用于输入/粘贴 API Key 或表单参数；<br>3. 输入框下方预留实时状态/错误行（校验中显示 `Verifying API key…`，失败显示红字错误并保留已输入文本重试，不关闭弹窗）；<br>4. 列表区复用 `refdir` 的 `❯` 选中标记、悬停底色（`style::overlay_selection()`）、右侧连接状态标签、右缘滚动条与底栏快捷键提示。 |
@@ -94,11 +94,11 @@
 │                                                     ▼                                    │
 │                                        `ModelsSnapshot` (TUI / CLI / Subagent 统一消费)   │
 ├──────────────────────────────────────────────────────────────────────────────────────────┤
-│ 2. TUI `/connect` 四步状态机链路 (`src/app/` ↔ `src/event/` ↔ `src/ui/main_content/lx/`) │
+│ 2. TUI `/connect` 四步状态机链路 (`src/app/` ↔ `src/event/` ↔ `src/ui/overlay/`)      │
 │                                                                                          │
 │   用户输入 `/connect` + Enter                                                            │
 │     └─► `open_connect_panel(state, pane)`                                                │
-│           └─► `SlashPanel::Connect(ConnectPanel { stage: Providers, ... })`              │
+│           └─► `Overlay::Connect(Box<ConnectPanel>)` (居中模态弹窗)                      │
 │                 ├─ [已连接项 Enter] ──► `ConnectStage::Manage { provider_id }`           │
 │                 │                        ├─ `Reconnect` ──► 进入 Methods / Auth          │
 │                 │                        └─ `Disconnect` ──► `Effect::DisconnectPreset`  │
@@ -346,7 +346,7 @@ pub fn connect_config_path() -> Result<PathBuf, AiConfigError> {
 
 ---
 
-### 4.2 OAuth 授权流与凭证刷新（`src/config/ai/oauth.rs` & `src/event/chat/connect.rs`）
+### 4.2 OAuth 授权流与凭证刷新（`src/config/ai/oauth/{mod,browser,device}.rs` & `src/event/chat/connect.rs`）
 
 #### 关键点
 1. **对齐 `opencode-dev` 的三类 OAuth 流程**：
@@ -365,7 +365,7 @@ pub fn connect_config_path() -> Result<PathBuf, AiConfigError> {
 
 ---
 
-### 4.3 TUI `/connect` 命令与四步面板状态机（`src/app/state/lx/connect.rs` & `src/app/update/chat/connect.rs` & `src/ui/main_content/lx/slash.rs`）
+### 4.3 TUI `/connect` 命令与四步面板状态机（`src/app/state/lx/connect.rs` & `src/app/update/chat/connect.rs` & `src/ui/overlay/connect.rs`）
 
 #### 关键点
 1. **斜杠命令注册（`src/app/state/lx/slash.rs` & `src/settings/commands.rs`）**：
@@ -376,9 +376,9 @@ pub fn connect_config_path() -> Result<PathBuf, AiConfigError> {
      - `description() -> crate::ui::text::LX_CONNECT_COMMAND_DESC`（`"Connect a provider with an API key or browser sign-in"`）
    - `RESERVED_NAMES`（`src/settings/commands.rs:222`）加入 `"connect"`。
 2. **`ConnectPanel` 状态机（`src/app/state/lx/connect.rs`）**：
-   - 挂在 `SlashPanel::Connect(Box<ConnectPanel>)` 下；
+   - 挂在居中模态弹窗 `Overlay::Connect(Box<ConnectPanel>)` 下，由 `src/ui/overlay/connect.rs` 渲染、`src/event/overlay.rs` 路由键盘与鼠标；
    - 包含 5 个阶段枚举 `ConnectStage`：
-     1. `Providers`：展示按 A-Z 排序的全部预设供应商 `Vec<ConnectProviderItem>`。每项包含 `id`、`name`、`connected: Option<ConnectionSource>`。底部输入框文本作为实时搜索词（不区分大小写匹配 `name` 与 `id`）。已连接项在左侧或标签展示 `✓ Connected (API key / OAuth / $ENV)`。
+     1. `Providers`：展示按 A-Z 排序的全部预设供应商 `Vec<ConnectProviderItem>`。每项包含 `id`、`name`、`connected: Option<ConnectionSource>`。弹窗输入框文本作为实时搜索词（不区分大小写匹配 `name` 与 `id`）。已连接项在左侧或标签展示 `✓ Connected (API key / OAuth / $ENV)`。
      2. `Manage { provider_id, provider_name, source }`：当用户在 `Providers` 阶段对**已存有凭证（API Key 或 OAuth）**的供应商按 `Enter` 时进入，提供 3 个动作项：
         - `Select model`（直接打开该供应商的 `/model` 选择器）
         - `Reconnect / Replace credentials`（重新走认证流程）
@@ -387,7 +387,7 @@ pub fn connect_config_path() -> Result<PathBuf, AiConfigError> {
      4. `InputPrompt { provider_id, provider_name, method_index, step, answers, error }`：
         - 当需要填写前置 `form` 字段（如选择 `GitHub.com` vs `GitHub Enterprise`、输入 `Enterprise URL` 或 `Account ID`）或最终输入 `API key` 时使用；
         - 若当前字段有 `options`（如 `GitHub.com` / `GitHub Enterprise`），在面板列表渲染可选项供 `↑↓` + `Enter` 选择；
-        - 若当前字段为自由文本或 `API key`，面板展示 1 行提示说明（如 `Enter API key for Anthropic (paste and press Enter)`，若有校验错误则显示错误提示），用户直接在底部 `lx` 输入框输入/粘贴文本并按 `Enter` 提交！
+        - 若当前字段为自由文本或 `API key`，面板展示 1 行提示说明（如 `Enter API key for Anthropic (paste and press Enter)`，若有校验错误则显示错误提示），用户直接在弹窗输入框输入/粘贴文本并按 `Enter` 提交！
      5. `OAuthWaiting { attempt_id, provider_id, provider_name, url, user_code, instructions, error }`：
         - 面板展示 3 条操作/状态行：
           - 行 1：`Open in browser`（右侧 preview 显示截断后的 `url`，按 `Enter` 或 `o` 调用 `platform::open_browser` 打开浏览器）；
@@ -395,13 +395,13 @@ pub fn connect_config_path() -> Result<PathBuf, AiConfigError> {
           - 行 3：状态行 `Waiting for authorization…`（或失败原因）。
    - **级间 `Esc` 回退**：
      - 在 `OAuthWaiting` 按 `Esc`：触发 `Effect::CancelPresetOAuth { attempt_id }` 并退回 `Methods`（或 `Providers`）；
-     - 在 `InputPrompt` / `Methods` / `Manage` 按 `Esc`：清空底部输入框，退回 `Providers` 阶段并恢复预设列表；
-     - 在 `Providers` 阶段按 `Esc`：清空底部输入框并关闭 `/connect` 面板。
+     - 在 `InputPrompt` / `Methods` / `Manage` 按 `Esc`：清空弹窗输入框，退回 `Providers` 阶段并恢复预设列表；
+     - 在 `Providers` 阶段按 `Esc`：清空弹窗输入框并关闭 `/connect` 弹窗。
 3. **连接成功后无缝跳转 `/model`（对齐 `opencode-dev`）**：
    - 当 API Key 保存成功或 OAuth 授权完成时，触发 `on_preset_connected(state, pane, provider_id)`：
      - 重新加载合并后的 `state.models.settings`；
      - 在当前 `pane.lx.toast` 弹出 `Connected <Provider Name>`；
-     - 清空底部输入框，构造仅过滤该 `provider_id`（或预填该供应商名过滤词并定位首项）的 `ModelPicker`，将 `pane.lx.slash` 直接切换为 ` Some(SlashPanel::Model(Box::new(picker)))`！
+     - 关闭 `Overlay::Connect`，构造仅过滤该 `provider_id`（或预填该供应商名过滤词并定位首项）的 `ModelPicker`，将 `pane.lx.slash` 直接切换为 `Some(SlashPanel::Model(Box::new(picker)))`！
 
 #### 关键代码
 
@@ -511,7 +511,7 @@ pub struct ConnectPanel {
    - `revision_of` 同时纳入 `connect.json` 内容计算 FNV-1a 64 哈希，防止并发修改丢失。
 2. **新增快捷连接专属 API 路由（`src/settings/service/models/connect.rs`）**：
    - `PUT /api/models/connect`：保存单个或全量快捷连接供应商配置到 `connect.json`（支持设置/更新 `apiKey`、`formAnswers`、`baseUrl`、`enabled`、`models`），保存成功后广播 `SettingsEvent::ModelsChanged` 通知 TUI 立即热更新；
-   - `POST /api/models/connect/disconnect`：入参 `{"providerId": "..."}`，从 `connect.json` 移除该预设供应商（若 `ai.json` 的 `defaultModel` / `titleSummary` 恰好指向该供应商且无环境变量回退，则安全清空该悬空选择），广播 `SettingsEvent::ModelsChanged`；
+   - `POST /api/models/connect/disconnect`：入参 `{"providerId": "..."}`，清除该预设的凭证；若命中进程环境变量 `$ENV` 则保留 `enabled: false` 记录阻断自动探测，否则从 `connect.json` 移除；若 `ai.json` 的 `defaultModel` / `titleSummary` 恰好指向该供应商，则安全清空悬空选择（失败返回 500 且不静默吞错），广播 `SettingsEvent::ModelsChanged`；
    - `POST /api/models/connect/oauth/start`：入参 `{"providerId": "...", "methodId": "...", "answers": {...}}`，启动 OAuth Device Code 或 Browser PKCE 流程，返回 `{"attemptId", "url", "userCode", "instructions", "mode"}`；
    - `GET /api/models/connect/oauth/status?attemptId=...`：前端每 800ms 轮询 OAuth 状态，返回 `{"status": "pending" | "complete" | "failed", "error"?: "..."}`；完成时自动写入 `connect.json` 并广播 `SettingsEvent::ModelsChanged`；
    - `POST /api/models/connect/oauth/complete`：用于 `mode == "code"` 时手动提交授权码；
@@ -650,31 +650,70 @@ pub fn quick_connect_json(connect: &ConnectSettings) -> String {
 
 ---
 
-## 5. 涉及文件与行数预算（严格控制在 1000 行以内）
+### 4.6 四协议思考、签名、Token 统计与工具 Schema 对齐（对齐 `opencode-dev`）
 
-| 文件路径 | 操作 | 现状行数 | 预计行数 | 说明（生产代码 ≤ 1000 行） |
+#### 协议矩阵
+
+| 协议 | 文件 | 思考参数 | 签名 / 历史回放 | Token 统计 |
 | --- | --- | --- | --- | --- |
-| `src/config/ai/mod.rs` | 修改 | 677 | ~720 | 导出 `presets`/`connect`/`oauth` 子模块，提供 `load_runtime_ai_settings()` 合并入口 |
-| `src/config/ai/presets.rs` | 新建 | 0 | ~550 | 对齐 `opencode-dev` 的 A-Z 预设供应商目录、协议映射、环境变量与默认模型加载 |
-| `src/config/ai/presets_catalog.json` | 新建 | 0 | 数据文件 | 从 `opencode-dev` 提取的精简预设供应商与模型快照（`include_str!` 编译期嵌入） |
-| `src/config/ai/connect.rs` | 新建 | 0 | ~380 | `connect.json` 数据结构、权限 `0600` 原子读写、环境变量探测与 `ProviderConfig` 物化 |
-| `src/config/ai/oauth.rs` | 新建 | 0 | ~460 | Device Code 与 Browser PKCE OAuth 授权流、本地回环回调服务与 Token 刷新 |
-| `src/app/state/lx/slash.rs` | 修改 | 868 | ~890 | `SlashCommand::Connect`、`SlashPanel::Connect(Box<ConnectPanel>)` 分派 |
-| `src/app/state/lx/connect.rs` | 新建 | 0 | ~420 | `ConnectPanel`、`ConnectStage`、`ConnectProviderEntry` 状态机与过滤/导航纯函数 |
-| `src/app/update/pane.rs` | 修改 | 989 | ~920 | 接入 `SlashPanel::Connect` 键盘路由，并将部分斜杠辅助函数下沉至 `update/chat/slash.rs` 降低行数 |
-| `src/app/update/chat/slash.rs` | 修改 | 535 | ~610 | `SlashCommand::Connect` 分派与 `ModelPicker::for_provider` |
-| `src/app/update/chat/connect.rs` | 新建 | 0 | ~480 | `/connect` 四步状态转换、表单/API Key 提交、OAuth 启动/取消/完成回调与跳 `/model` |
-| `src/event/chat/connect.rs` | 新建 | 0 | ~320 | 异步执行 `StartPresetOAuth`、`SavePresetConnection`、`DisconnectPreset` 效应与回投事件 |
-| `src/ui/main_content/lx/slash.rs` | 修改 | 293 | ~430 | 渲染 `SlashPanel::Connect` 各阶段列表项、标题与底部快捷键提示 |
-| `src/ui/text.rs` | 修改 | — | +35 | 新增 `/connect` 面板标题、描述、底栏提示与 Toast 英文常量 |
-| `src/settings/commands.rs` | 修改 | 574 | ~576 | `RESERVED_NAMES` 新增 `"connect"` |
-| `src/settings/service/page.rs` | 修改 | 52 | ~58 | 静态资源白名单新增 `"/settings_connect.js"` |
-| `src/settings/service/models/mod.rs` | 修改 | 553 | ~610 | `GET /api/models/settings` 附带 `quickConnect` 并委托 `/api/models/connect/*` 路由 |
-| `src/settings/service/models/connect.rs` | 新建 | 0 | ~490 | `PUT /api/models/connect`、`POST disconnect`、OAuth start/status/complete/cancel 处理器 |
-| `assets/settings.html` | 修改 | 566 | ~620 | Provider 列表双 Tab、搜索框、快捷连接说明横幅、OAuth 卡片与 `<script src="/settings_connect.js">` |
-| `assets/settings.css` | 修改 | 212 | ~280 | `.provider-tabs`、`.provider-tab`、`.preset-banner`、`.preset-badge`、`.preset-oauth-*` 样式 |
-| `assets/settings_models.js` | 修改 | 939 | ~860 | 抽离部分公共渲染钩子，与 `settings_connect.js` 协同切换 `Quick Connect` / `Custom` |
-| `assets/settings_connect.js` | 新建 | 0 | ~520 | `Quick Connect` Tab 列表渲染、搜索过滤、预设详情编辑、OAuth 轮询、保存/断开/重置逻辑 |
+| **Anthropic Messages** | `src/chat/transport/anthropic/mod.rs` | Claude 4.6 / 4.7 / 5.x（含 Fable / Mythos）走 `thinking: {"type":"adaptive","display":"summarized"}` + `output_config.effort`；Claude 3.7/4.0/4.1/4.5 与 Kimi / MiniMax / GLM 等兼容端点走 `thinking: {"type":"enabled","budget_tokens":...}`；`thinkingBudget` / `reasoningEffort` / `effort` 均映射到同一套预算。 | thinking 块通过 `content_block_index` 绑定 `signature` / `signature_delta`；请求带 thinking 或命中 `anthropic.com` 时附加 `interleaved-thinking-2025-05-14` beta 头；若历史存在不含 thinking 块的 assistant `tool_use`（工具续轮），自动省略手动 `thinking`，避免 HTTP 400。 | 读取 `message_start.message.usage` 与 `message_delta.usage`，合并 input/output/cache_read。 |
+| **OpenAI Responses** | `src/chat/transport/responses/mod.rs` | `reasoning.effort` 来自 `reasoningEffort`；未指定 summary 时显式补 `summary: "auto"`，确保流中下发思考摘要；有 reasoning 时附带 `include: ["reasoning.encrypted_content"]`。 | `response.output_item.done` 同时从顶层 `item_id` 与 `item.id` 解析 ordinal，修复无 `output_index` 帧的 id 映射；function call 回放保持 `call_id` 与输出项一致。 | `response.completed.usage` 映射 input/output；reasoning token 计入 output。 |
+| **OpenAI Chat Completions / Compatible** | `src/chat/transport/openai/mod.rs` | `reasoningEffort` 直出；兼容 `enable_thinking` + `thinking_budget`（Qwen/Alibaba）、`thinking` 对象（DeepSeek V3.2 / Kimi K2.5 / GLM-5）与 OpenRouter `reasoning` 对象。 | DeepSeek / Kimi / Moonshot / Zhipu 开启思考并调用工具时，历史 assistant 消息必须携带 `reasoning_content`；编码器按需补齐该字段（含空串占位），避免工具续轮 400。流式解析兼容 `reasoning_content` / `reasoning` / `reasoning_text` 与 OpenRouter `reasoning_details` 数组。 | 解析 `usage.prompt_tokens/completion_tokens`，并兼容 `prompt_tokens_details.cached_tokens` 与 reasoning token 明细。 |
+| **Google Gemini** | `src/chat/transport/google/mod.rs` | 思考参数默认 `includeThoughts: true`（模型未声明时也请求思考块），映射 `thinkingLevel` / `thinkingBudget`。 | 历史 `functionCall` 回放附带 `thoughtSignature`，保证 Gemini 3 等要求签名的模型可续轮；内置工具 schema 先经 `src/mcp/schema.rs` 裁剪。 | output = `candidatesTokenCount` + `thoughtsTokenCount`；cache_read 优先读顶层 `cachedContentTokenCount`，回退 `promptTokensDetails.cachedTokens`。 |
+
+#### 工具 Schema 与模型目录
+
+1. **工具 Schema 对齐（`src/mcp/schema.rs`、`src/chat/transport/tools/mod.rs`）**：
+   - `trim_for_gemini` 将 `anyOf` / `oneOf` 中的可空联合扁平化为主类型并置 `nullable: true`，为 `type: "object"` 补齐 `properties`，并过滤 `required` 中不存在的字段；
+   - 内置工具（shell / read / write / edit / search 等）在发送前统一裁剪 Gemini 不支持的 JSON Schema 关键字，避免 `400 INVALID_ARGUMENT`。
+2. **思考等级与目录同步（`src/config/ai/verify.rs`、`src/config/ai/catalog_refresh.rs`、`src/config/ai/presets.rs`）**：
+   - `protocol_reasoning_variants(provider_id, model_id, transport)` 按供应商 + 协议生成 `low` / `medium` / `high`（必要时 `none` / `xhigh` / `max`）参数，供云端目录与 `/models` 发现共用；
+   - `catalog_refresh.rs` 合并 `models.dev` 快照时保留模型既有 `transport` 与默认 `variant`，仅对 `openai` 官方新增且未标注 transport 的模型默认 `OpenaiResponses`；
+   - `presets.rs` 的预设模型表与运行时 reasoning variants 使用同一映射，避免设置页展示与实际请求不一致。
+
+#### 验证覆盖
+
+- `src/chat/transport/anthropic/tests.rs`、`src/chat/transport/responses/tests.rs`、`src/chat/transport/openai/tests.rs`、`src/chat/transport/google/tests.rs` 覆盖 adaptive / manual thinking、unsigned tool history 省略、`reasoning_content` 回放、`includeThoughts`、`thoughtSignature` 与 token 统计；
+- `src/mcp/schema/tests.rs` 覆盖 Gemini nullable union 扁平化与 required 过滤；
+- `src/config/ai/verify_tests.rs`、`src/config/ai/catalog_refresh_tests.rs`、`src/config/ai/presets_tests.rs` 覆盖 reasoning variants 与目录合并保留规则。
+
+---
+
+## 5. 涉及文件与行数现状（生产代码 ≤ 1000 行、测试 ≤ 1500 行）
+
+| 文件路径 | 操作 | 现状行数 | 说明（生产代码 ≤ 1000 行；测试文件 ≤ 1500 行） |
+| --- | --- | --- | --- |
+| `src/config/ai/mod.rs` | 修改 | 799 | 导出 `presets`/`connect`/`oauth` 子模块，提供运行时合并入口与 `validate_base_url` |
+| `src/config/ai/presets.rs` | 新建 | 734 | A-Z 预设供应商目录、协议映射、默认模型与 `resolve_preset_base_url` |
+| `src/config/ai/presets_catalog.json` | 新建 | 数据文件 | 从 `opencode-dev` 提取的预设供应商与模型快照（`include_str!` 编译期嵌入） |
+| `src/config/ai/connect.rs` | 新建 | 591 | `connect.json` 数据结构、`0600` 原子读写、环境变量探测与 `ProviderConfig` 物化 |
+| `src/config/ai/oauth/mod.rs` | 新建 | 426 | OAuth 公共类型、Token 刷新（`refresh_oauth_credential`、`ensure_connect_oauth_fresh`） |
+| `src/config/ai/oauth/browser.rs` | 新建 | 671 | Browser PKCE / 授权码本地回环回调与隐式流处理 |
+| `src/config/ai/oauth/device.rs` | 新建 | 453 | Device Code 授权、轮询与总超时 |
+| `src/config/ai/verify.rs` | 新建 | 506 | 四协议远端模型发现、`protocol_reasoning_variants` 与连接校验 |
+| `src/config/ai/catalog_refresh.rs` | 新建 | 516 | `models.dev` 云端目录同步、ETag 缓存与已连接模型刷新（写前重读 `connect.json`） |
+| `src/app/state/lx/connect.rs` | 新建 | 463 | `ConnectPanel`、`ConnectStage`、`ConnectProviderEntry` 状态机与过滤/导航纯函数 |
+| `src/app/update/chat/connect.rs` | 新建 | 932 | `/connect` 弹窗状态转换、表单/API Key 提交、OAuth 启动/取消/完成回调与跳 `/model` |
+| `src/event/chat/connect.rs` | 新建 | 416 | 异步执行 `StartPresetOAuth`、`SavePresetConnection`、`DisconnectPreset` 效应与回投事件 |
+| `src/event/overlay.rs` | 修改 | 619 | `Overlay::Connect` 键盘/鼠标路由（点击仅移动焦点，`Enter` 才确认） |
+| `src/event/inventory.rs` | 修改 | 490 | `ModelsChanged` 同步重载 `connect.json`、环境变量快照与已打开弹窗 |
+| `src/ui/overlay/connect.rs` | 新建 | 566 | 渲染 `Overlay::Connect(Box<ConnectPanel>)` 各阶段列表、输入行、状态行与快捷键提示 |
+| `src/ui/text/connect.rs` | 新建 | 99 | `/connect` 英文文案常量与 `lx_connect_*` 文案函数（从 `text.rs` 拆出） |
+| `src/ui/text.rs` | 修改 | 1470 | 承载其余既有文案，`/connect` 文案已迁出到 `text/connect.rs` |
+| `src/settings/commands.rs` | 修改 | — | `RESERVED_NAMES` 新增 `"connect"` |
+| `src/settings/service/page.rs` | 修改 | — | 静态资源白名单新增 `"/settings_connect.js"` |
+| `src/settings/service/models/mod.rs` | 修改 | 601 | `GET /api/models/settings` 附带 `quickConnect`、含 `connect.json` 的 revision 与 `/api/models/connect/*` 路由 |
+| `src/settings/service/models/connect.rs` | 修改 | 630 | `PUT /api/models/connect`、`disconnect`、OAuth start/status/complete/cancel；API Key/OAuth 互斥与模板地址校验 |
+| `src/settings/service/models/tests.rs` | 修改 | 1029 | Models API 测试（含 revision 兼容、无 `innerHTML` 资源检查） |
+| `src/settings/service/models/tests/connect.rs` | 修改 | 547 | Quick Connect / OAuth / Fetch models 场景测试 |
+| `src/settings/service/tests.rs` | 修改 | 1493 | 设置页资源、路由与视图回归测试（含 `settings.js` 无 `innerHTML` 检查） |
+| `assets/settings.html` | 修改 | — | Provider 双 Tab、搜索框、快捷连接横幅、OAuth 卡片与 `<script src="/settings_connect.js">` |
+| `assets/settings.css` | 修改 | — | `.provider-tabs`、`.preset-banner`、`.preset-oauth-*` 等样式 |
+| `assets/settings_models.js` | 修改 | 997 | Quick Connect / Custom 协同；`saveModels` 先保存预设再提交 `ai.json`，共用 `saveModels` 只调用一次 |
+| `assets/settings_connect.js` | 新建 | 490 | Quick Connect 列表、搜索过滤、表单编辑、OAuth 轮询、保存/断开/重置 |
+| `assets/settings.js` | 修改 | 1000 | 全局 toast/select/操作条；`createActionBar` 暴露 `saveFn` 去重，`replaceChildren` 替代 `innerHTML` |
+
+> 说明：`src/ui/text.rs` 为既有历史文件，本次已将全部 `/connect` 文案迁入 `src/ui/text/connect.rs`；该文件剩余部分不在本特性范围内，后续按职责继续拆分。
 
 ---
 
@@ -687,13 +726,13 @@ pub fn quick_connect_json(connect: &ConnectSettings) -> String {
    - `connect.json` 原子保存、权限 `0600`、API Key / OAuth 凭证往返读写；
    - `load_runtime_ai_settings()` 正确合并 `ai.json`（Custom）与 `connect.json`（Quick Connect），且 `defaultModel` 指向快捷连接模型时通过校验；
    - 环境变量探测：当某预设未在 `connect.json` 存 Key 但环境变量存在时，识别为 `ConnectionSource::Env`。
-2. **TUI `/connect` 状态机与交互测试（`src/app/state/lx/slash/tests.rs`、`src/app/update/chat/tests/slash_panels.rs`、`src/ui/main_content/lx/tests/slash_panels.rs`）**：
-   - 输入 `/connect` 命中 `SlashCommand::Connect`，采纳后打开 `SlashPanel::Connect`（`Providers` 阶段，A-Z 排序）；
-   - 在 `Providers` 阶段打字实时过滤供应商名称/ID，按 `Esc` 关闭面板；
+2. **TUI `/connect` 状态机与交互测试（`src/app/update/chat/tests/connect.rs`、`src/ui/overlay/connect_tests.rs`）**：
+   - 输入 `/connect` 命中 `SlashCommand::Connect`，采纳后打开 `Overlay::Connect(Box<ConnectPanel>)`（`Providers` 阶段，A-Z 排序）；
+   - 在 `Providers` 阶段输入实时过滤供应商名称/ID，按 `Esc` 关闭弹窗；
    - 选择单方法（仅 API Key）未连接供应商直接进入 `InputPrompt(ApiKey)`，输入 Key 按回车触发 `Effect::SavePresetConnection`；
    - 选择多方法供应商（如 `openai` / `github-copilot`）先进入 `Methods`（OAuth 在前、API Key 在后），`Esc` 退回 `Providers`；
    - 选择已连接供应商进入 `Manage`（`Select model` / `Reconnect` / `Disconnect`）；
-   - `on_preset_connected` 触发后弹出窗格内 `Connected <Name>` Toast，并将 `lx.slash` 自动切换为仅过滤该供应商的 `SlashPanel::Model`。
+   - `on_preset_connected` 触发后弹出窗格内 `Connected <Name>` Toast，关闭弹窗并将 `pane.lx.slash` 自动切换为仅过滤该供应商的 `SlashPanel::Model`。
 3. **设置页 HTTP API 与前端资源测试（`src/settings/service/models/tests.rs`、`src/settings/service/tests.rs`）**：
    - `GET /api/models/settings` 同时返回 `providers`（仅 Custom）与 `quickConnect`（A-Z 预设列表及连接状态）；
    - `PUT /api/models/connect` 写入 `connect.json`、不污染 `ai.json`，并投递 `SettingsEvent::ModelsChanged`；

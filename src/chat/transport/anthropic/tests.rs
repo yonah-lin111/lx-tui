@@ -279,6 +279,24 @@ fn effort_maps_to_adaptive_thinking_and_output_config() {
     assert!(body["max_tokens"].as_i64().unwrap_or(0) > 16000);
 }
 
+#[test]
+fn manual_thinking_is_omitted_for_unsigned_tool_continuation() {
+    let mut req = tool_request();
+    req.model.model = "claude-sonnet-4-5".into();
+    req.variant_params = Some(json!({"effort": "high"}));
+    let body = body_of(&req);
+    assert!(
+        body.get("thinking").is_none(),
+        "无签名 thinking 的 tool_use 历史不得继续发送手动 thinking"
+    );
+
+    req.model.model = "claude-sonnet-4-6".into();
+    let body = body_of(&req);
+    assert_eq!(body["thinking"]["type"], "adaptive");
+    assert_eq!(body["thinking"]["display"], "summarized");
+    assert_eq!(body["output_config"]["effort"], "high");
+}
+
 // ---------------------------------------------------------------- 解码：thinking
 
 #[test]

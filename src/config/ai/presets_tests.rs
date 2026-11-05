@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use super::presets::*;
-use super::{ModelTransport, ProviderTransport};
+use super::{ModelConfig, ModelTransport, ProviderTransport};
 
 #[test]
 fn presets_are_sorted_by_name_case_insensitively() {
@@ -284,7 +284,73 @@ fn resolve_base_url_expands_form_templates() {
     ]);
     assert_eq!(
         resolve_preset_base_url(copilot, &answers, None),
-        "https://api.company.ghe.com"
+        "https://copilot-api.company.ghe.com"
+    );
+}
+
+fn model_with_limit(id: &str, transport: Option<ModelTransport>) -> ModelConfig {
+    ModelConfig {
+        id: id.to_string(),
+        name: id.to_string(),
+        transport,
+        limit: Some(super::ModelLimit {
+            context: 128_000,
+            output: 8_192,
+        }),
+        modalities: None,
+        variants: BTreeMap::new(),
+        variant: None,
+        pricing: None,
+        extra: serde_json::Map::new(),
+    }
+}
+
+#[test]
+fn merge_only_defaults_responses_transport_for_openai_provider() {
+    let mut target = BTreeMap::new();
+    merge_provider_models(
+        &mut target,
+        BTreeMap::from([(
+            "claude-sonnet".to_string(),
+            model_with_limit("claude-sonnet", None),
+        )]),
+        false,
+    );
+    assert_eq!(
+        target["claude-sonnet"].transport, None,
+        "非 openai 官方预设不得默认 openai-responses"
+    );
+
+    let mut target = BTreeMap::new();
+    merge_provider_models(
+        &mut target,
+        BTreeMap::from([("gpt-test".to_string(), model_with_limit("gpt-test", None))]),
+        true,
+    );
+    assert_eq!(
+        target["gpt-test"].transport,
+        Some(ModelTransport::OpenaiResponses)
+    );
+}
+
+#[test]
+fn merge_preserves_existing_model_transport() {
+    let mut target = BTreeMap::from([(
+        "claude-sonnet".to_string(),
+        model_with_limit("claude-sonnet", Some(ModelTransport::Anthropic)),
+    )]);
+    merge_provider_models(
+        &mut target,
+        BTreeMap::from([(
+            "claude-sonnet".to_string(),
+            model_with_limit("claude-sonnet", None),
+        )]),
+        true,
+    );
+    assert_eq!(
+        target["claude-sonnet"].transport,
+        Some(ModelTransport::Anthropic),
+        "已有模型的 transport 必须保留"
     );
 }
 

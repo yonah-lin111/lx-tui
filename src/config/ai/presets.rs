@@ -231,22 +231,18 @@ pub fn default_models_for_preset(id: &str) -> BTreeMap<String, ModelConfig> {
 
 /// 用云端目录更新进程内模型表；同名模型保留嵌入目录已声明的 `transport` 与默认 `variant`。
 pub fn update_catalog_models(updates: BTreeMap<String, BTreeMap<String, ModelConfig>>) {
-    let presets = all_presets();
     let mut models = catalog()
         .models
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     for (provider_id, provider_models) in updates {
-        let is_openai = presets
-            .iter()
-            .find(|spec| spec.id == provider_id)
-            .is_some_and(|spec| spec.transport == ProviderTransport::Openai);
+        let is_openai = provider_id == "openai";
         let target = models.entry(provider_id).or_default();
         merge_provider_models(target, provider_models, is_openai);
     }
 }
 
-fn merge_provider_models(
+pub(super) fn merge_provider_models(
     target: &mut BTreeMap<String, ModelConfig>,
     incoming: BTreeMap<String, ModelConfig>,
     is_openai_provider: bool,
@@ -321,7 +317,7 @@ pub fn resolve_preset_base_url(
             .map(|value| normalize_host(value))
             .filter(|value| !value.is_empty())
     {
-        return format!("https://api.{domain}");
+        return format!("https://copilot-api.{domain}");
     }
 
     for (key, value) in form_answers {
@@ -504,12 +500,10 @@ fn build_catalog() -> Catalog {
             .cmp(&right.name.to_ascii_lowercase())
             .then_with(|| left.id.cmp(right.id))
     });
-    // 磁盘缓存（上次云端同步结果）叠加在嵌入目录之上。
+    // 磁盘缓存（上次云端同步结果）叠加在嵌入目录之上；单元测试不得依赖开发机缓存。
+    #[cfg(not(test))]
     for (provider_id, cached_models) in super::catalog_refresh::cached_catalog_models() {
-        let is_openai = presets
-            .iter()
-            .find(|spec| spec.id == provider_id)
-            .is_some_and(|spec| spec.transport == ProviderTransport::Openai);
+        let is_openai = provider_id == "openai";
         merge_provider_models(
             models.entry(provider_id).or_default(),
             cached_models,

@@ -300,7 +300,12 @@ pub fn run_main(
     };
     let prompt = resolve_prompt_input(prompt_arg, std::io::stdin().is_terminal(), read_stdin)?;
 
-    let settings = load_ai_settings()?;
+    // MCP 冷启动必须先有 Tokio 运行时：同步 prewarm 在短命 CLI 进程里永远只能拿到空快照。
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    // OAuth 凭证刷新需要 runtime：先刷新再解析模型配置。
+    let settings = runtime.block_on(load_ai_settings())?;
     let effective_worktree = linked_worktree.map(Path::to_path_buf).or_else(|| {
         crate::db::is_dev_environment()
             .then(|| crate::git::linked_worktree_root(&cwd))
@@ -335,11 +340,6 @@ pub fn run_main(
             )
         }),
     )?;
-
-    // MCP 冷启动必须先有 Tokio 运行时：同步 prewarm 在短命 CLI 进程里永远只能拿到空快照。
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
     let snapshot = mcp_snapshot_for_turn_async(&db, &workspace, cancel_rx.clone());
     let mcp_snapshot = runtime.block_on(snapshot);
@@ -437,8 +437,9 @@ fn read_stdin() -> std::io::Result<String> {
 }
 
 /// 读取模型配置；文件缺失时返回空设置，由模型解析给出可读错误。
-fn load_ai_settings() -> Result<crate::config::ai::AiSettings, Box<dyn std::error::Error>> {
+async fn load_ai_settings() -> Result<crate::config::ai::AiSettings, Box<dyn std::error::Error>> {
     let path = crate::config::ai::ai_config_path()?;
+    crate::config::ai::oauth::ensure_connect_oauth_fresh(&path).await;
     Ok(crate::config::ai::connect::load_runtime_ai(&path)?
         .unwrap_or_else(crate::config::ai::AiSettings::empty))
 }

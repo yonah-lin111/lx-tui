@@ -582,6 +582,7 @@ fn connect_panel_tracks_text_input_and_inline_errors() {
     let mut panel =
         crate::app::state::ConnectPanel::new_with_env(pane, &ConnectSettings::default(), |_| None);
     assert!(panel.has_text_input(), "供应商列表过滤使用模态输入框");
+    assert_eq!(panel.active_row(), Some(0), "供应商列表默认高亮首项");
     panel.stage = ConnectStage::InputPrompt {
         provider_id: "anthropic".into(),
         provider_name: "Anthropic".into(),
@@ -591,7 +592,8 @@ fn connect_panel_tracks_text_input_and_inline_errors() {
         error: None,
     };
     assert!(panel.has_text_input());
-    panel.set_error("Invalid API key");
+    assert_eq!(panel.active_row(), None, "API Key 输入阶段没有可执行行");
+    assert!(panel.set_error("Invalid API key"));
     assert_eq!(panel.current_error(), Some("Invalid API key"));
     panel.clear_error();
     assert_eq!(panel.current_error(), None);
@@ -610,6 +612,11 @@ fn connect_panel_tracks_text_input_and_inline_errors() {
         window: PanelWindow::default(),
     };
     assert!(!panel.has_text_input(), "管理菜单没有输入框");
+    assert_eq!(panel.active_row(), Some(0), "管理菜单可执行当前高亮动作");
+    assert!(
+        !panel.set_error("disconnect failed"),
+        "管理阶段错误降级为 Toast"
+    );
 }
 
 #[test]
@@ -623,7 +630,7 @@ fn connect_panel_refresh_entries_updates_tags_and_count() {
     let mut record = ConnectedPresetRecord::new("anthropic");
     record.api_key = Some("key".into());
     connect.providers.insert("anthropic".into(), record);
-    panel.refresh_entries(&connect);
+    panel.refresh_entries(&connect, &std::collections::BTreeMap::new());
     assert_eq!(panel.connected_count(), 1);
     let entry = panel
         .entries

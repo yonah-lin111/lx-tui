@@ -316,6 +316,8 @@ pub struct AppState {
     pub models: ModelsSnapshot,
     /// 快捷连接配置快照（`connect.json`）：由事件层加载，`/connect` 面板据此展示连接状态。
     pub connect: crate::config::ai::connect::ConnectSettings,
+    /// 预设供应商环境变量快照（`$ENV` 连接）：由事件层采集，`app/` 不直接读进程环境。
+    pub connect_env: BTreeMap<String, String>,
     /// 子 agent 角色与并发配置快照（`config/subagents.json`）：设置页保存后由事件层热更新。
     pub subagents_config: crate::config::subagents::SubagentsSection,
     /// 在途的新会话自动标题生成（session_id 集合；手动 `/rename`、`/resume` 改名或删除立即移除）。
@@ -472,6 +474,7 @@ impl AppState {
             settings_open_requested: false,
             models: ModelsSnapshot::default(),
             connect: crate::config::ai::connect::ConnectSettings::default(),
+            connect_env: BTreeMap::new(),
             subagents_config: crate::config::subagents::SubagentsSection::default(),
             pending_session_titles: std::collections::HashSet::new(),
             pending_prompt_titles: std::collections::HashMap::new(),

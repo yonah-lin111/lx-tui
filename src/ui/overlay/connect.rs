@@ -367,8 +367,12 @@ fn render_row(
             } else {
                 text::LX_CONNECT_METHOD_API_KEY_TAG
             };
-            paint_tag(frame, rect, base, tag, style::muted());
-            paint_label(frame, rect, x, method.label(), base);
+            let right = paint_tag(frame, rect, base, tag, style::muted());
+            let width = right.saturating_sub(x);
+            if width > 0 {
+                let label_area = Rect::new(x, rect.y, width, 1);
+                paint_label(frame, label_area, x, method.label(), base);
+            }
         }
         ConnectStage::InputPrompt {
             step: ConnectPromptStep::FormField { field, .. },

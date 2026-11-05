@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::connect::*;
-use super::presets::{default_models_for_preset, find_preset};
+use super::presets::{all_presets, default_models_for_preset, find_preset};
 use super::{
     AiSettings, ModelConfig, ModelLimit, ModelSelection, ProviderConfig, ProviderOptions,
     ProviderTransport, load_ai, save_ai,
@@ -437,4 +437,91 @@ fn missing_connect_file_returns_none() {
         load_connect_or_default(&dir.join("connect.json")).expect("default"),
         ConnectSettings::default()
     );
+}
+
+#[test]
+fn env_snapshot_only_contains_known_non_empty_variables() {
+    let known: std::collections::BTreeSet<&str> = all_presets()
+        .iter()
+        .flat_map(|preset| preset.env_vars.iter().copied())
+        .collect();
+    for (name, value) in collect_preset_env_snapshot() {
+        assert!(known.contains(name.as_str()), "unexpected env var {name}");
+        assert!(!value.is_empty());
+        assert_eq!(value, value.trim());
+    }
+}
+
+#[test]
+fn disconnect_with_env_keeps_disabled_record_and_clears_defaults() {
+    let dir = temp_dir("disconnect-env");
+    let ai_path = dir.join("ai.json");
+    let connect_path = dir.join("connect.json");
+    let model_id = openai_model_id();
+    let mut connect = ConnectSettings::default();
+    let mut record = openai_record();
+    record.form_answers.insert("custom".into(), "keep".into());
+    connect.providers.insert("openai".into(), record);
+    save_connect(&connect_path, &connect).expect("save connect");
+    std::fs::write(
+        &ai_path,
+        format!(
+            r#"{{"ai":{{"enabled_providers":[],"providers":{{}},"defaultModel":{{"provider":"openai","model":"{model_id}"}},"titleSummary":{{"provider":"openai","model":"{model_id}"}}}}}}"#
+        ),
+    )
+    .expect("write ai");
+
+    let runtime = disconnect_preset_on_disk_with_env(&ai_path, "openai", |name| {
+        (name == "OPENAI_API_KEY").then(|| "env-key".to_string())
+    })
+    .expect("disconnect");
+
+    let saved = load_connect(&connect_path).expect("load").expect("exists");
+    let record = &saved.providers["openai"];
+    assert!(!record.enabled, "环境变量仍可用时必须禁用而不是删除");
+    assert!(record.api_key.is_none());
+    assert!(record.oauth.is_none());
+    assert_eq!(
+        record.form_answers.get("custom").map(String::as_str),
+        Some("keep")
+    );
+    assert!(!runtime.providers.contains_key("openai"));
+
+    let text = std::fs::read_to_string(&ai_path).expect("read ai");
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert!(parsed["ai"].get("defaultModel").is_none());
+    assert!(parsed["ai"].get("titleSummary").is_none());
+}
+
+#[test]
+fn disconnect_without_env_removes_record() {
+    let dir = temp_dir("disconnect-remove");
+    let ai_path = dir.join("ai.json");
+    let connect_path = dir.join("connect.json");
+    let model_id = openai_model_id();
+    let mut connect = ConnectSettings::default();
+    connect.providers.insert("openai".into(), openai_record());
+    save_connect(&connect_path, &connect).expect("save connect");
+    std::fs::write(
+        &ai_path,
+        format!(
+            r#"{{"ai":{{"enabled_providers":[],"providers":{{}},"defaultModel":{{"provider":"openai","model":"{model_id}"}}}}}}"#
+        ),
+    )
+    .expect("write ai");
+
+    let runtime =
+        disconnect_preset_on_disk_with_env(&ai_path, "openai", |_| None).expect("disconnect");
+
+    let saved = load_connect(&connect_path).expect("load").expect("exists");
+    assert!(!saved.providers.contains_key("openai"));
+    assert!(!runtime.providers.contains_key("openai"));
+}
+
+#[test]
+fn disconnect_propagates_corrupted_connect_file() {
+    let dir = temp_dir("disconnect-corrupt");
+    let ai_path = dir.join("ai.json");
+    std::fs::write(dir.join("connect.json"), "{not valid json").expect("write connect");
+    assert!(disconnect_preset_on_disk_with_env(&ai_path, "openai", |_| None).is_err());
 }

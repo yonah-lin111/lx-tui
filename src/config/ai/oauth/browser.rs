@@ -76,7 +76,7 @@ pub(super) async fn start_browser_flow(
     Ok(started)
 }
 
-struct BrowserFlow {
+pub(super) struct BrowserFlow {
     listener: TcpListener,
     provider_id: String,
     method_id: String,
@@ -90,7 +90,33 @@ struct BrowserFlow {
     cancel_rx: watch::Receiver<bool>,
 }
 
-async fn run_browser_flow(mut flow: BrowserFlow) -> Result<OAuthCredential, String> {
+impl BrowserFlow {
+    #[cfg(test)]
+    pub(super) fn for_test(
+        listener: TcpListener,
+        provider_id: &str,
+        token_url: &str,
+        state: &str,
+        callback_path: &'static str,
+        cancel_rx: watch::Receiver<bool>,
+    ) -> Self {
+        Self {
+            listener,
+            provider_id: provider_id.to_string(),
+            method_id: "browser".to_string(),
+            token_url: token_url.to_string(),
+            client_id: "client".to_string(),
+            redirect: "http://127.0.0.1/auth/callback".to_string(),
+            state: state.to_string(),
+            verifier: "verifier".to_string(),
+            callback_path,
+            answers: BTreeMap::new(),
+            cancel_rx,
+        }
+    }
+}
+
+pub(super) async fn run_browser_flow(mut flow: BrowserFlow) -> Result<OAuthCredential, String> {
     let callback = wait_for_callback(&mut flow).await?;
     let client = http_client()?;
     match callback {
@@ -211,7 +237,12 @@ async fn wait_for_callback(flow: &mut BrowserFlow) -> Result<BrowserCallback, St
             .await;
             return Err(detail);
         }
-        if params.get("state").map(String::as_str) != Some(flow.state.as_str()) {
+        // 隐式授权流（DigitalOcean）的 token/state 位于 URL fragment，首次 GET
+        // 的 query 为空；state 由随后的 POST /auth/token 校验。
+        let implicit_callback = flow.token_url.is_empty() || flow.provider_id == "digitalocean";
+        if !implicit_callback
+            && params.get("state").map(String::as_str) != Some(flow.state.as_str())
+        {
             let message = "Invalid OAuth state";
             write_response(
                 &mut stream,
@@ -222,7 +253,7 @@ async fn wait_for_callback(flow: &mut BrowserFlow) -> Result<BrowserCallback, St
             .await;
             return Err(message.to_string());
         }
-        if flow.provider_id == "digitalocean" {
+        if implicit_callback {
             write_response(
                 &mut stream,
                 "200 OK",

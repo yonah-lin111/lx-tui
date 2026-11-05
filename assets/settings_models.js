@@ -779,19 +779,30 @@ function buildPayload() {
   };
 }
 
+// 自定义供应商/模型选择是否真的有改动；仅预设草稿变化时跳过 `ai.json` 提交。
+function hasCustomModelChanges() {
+  if (!modelsDraft || !modelsBaseline) { return false; }
+  if (isModelSettingsDirty()) { return true; }
+  return modelsDraft.providers.some((provider) => isProviderDirty(provider));
+}
+
 async function saveModels() {
   if (!modelsDraft) { return; }
-  let payload;
   try {
-    payload = buildPayload();
-  } catch (error) {
-    showToast(error.message, 'error');
-    throw error;
-  }
-  try {
-    // 自定义供应商走 `ai.json`；快捷连接草稿走独立的 `connect.json`。
-    await api('/api/models/settings', {method: 'PUT', body: JSON.stringify(payload)});
-    await savePresetDrafts();
+    // 快捷连接草稿必须先落盘：`ai.json` 的 defaultModel 校验依赖最新 connect.json。
+    if (typeof savePresetDrafts === 'function') { await savePresetDrafts(); }
+    if (hasCustomModelChanges()) {
+      // connect.json 已变化，先刷新 revision 再提交模型设置，避免误报 409。
+      await refreshRevision();
+      let payload;
+      try {
+        payload = buildPayload();
+      } catch (error) {
+        showToast(error.message, 'error');
+        throw error;
+      }
+      await api('/api/models/settings', {method: 'PUT', body: JSON.stringify(payload)});
+    }
     showToast('Saved', 'ok');
     await loadModels();
   } catch (error) {

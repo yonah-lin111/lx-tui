@@ -11,7 +11,7 @@ use crate::app::update;
 use crate::config::ai;
 use crate::config::ai::connect::{
     self, ConnectSettings, ConnectedPresetRecord, OAuthCredential, connect_path_for_ai_path,
-    load_connect_or_default, save_connect,
+    load_connect, load_connect_or_default, save_connect,
 };
 use crate::config::ai::oauth::{OAuthStarted, OAuthTaskHandle, start_oauth_flow};
 use crate::config::ai::presets::{find_preset, resolve_preset_base_url};
@@ -324,7 +324,9 @@ async fn save_preset_connection(
 ) -> Result<(ConnectSettings, ai::AiSettings), String> {
     let ai_path = ai::ai_config_path().map_err(|error| error.to_string())?;
     let connect_path = connect_path_for_ai_path(&ai_path);
-    let mut settings = load_connect_or_default(&connect_path).map_err(|error| error.to_string())?;
+    let mut settings = load_connect(&connect_path)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
     let mut record = settings
         .providers
         .remove(provider_id)
@@ -373,22 +375,25 @@ async fn refresh_models(
     let connect_path = connect_path_for_ai_path(&ai_path);
     let connect_settings =
         load_connect_or_default(&connect_path).map_err(|error| error.to_string())?;
+    crate::config::ai::oauth::ensure_connect_oauth_fresh(&ai_path).await;
     let runtime = connect::load_runtime_ai_or_empty(&ai_path).map_err(|error| error.to_string())?;
     Ok((count, runtime, connect_settings))
 }
 
 fn disconnect_preset(provider_id: &str) -> Result<(ConnectSettings, ai::AiSettings), String> {
     let ai_path = ai::ai_config_path().map_err(|error| error.to_string())?;
+    crate::config::ai::disconnect_preset_on_disk(&ai_path, provider_id)
+        .map_err(|error| error.to_string())?;
     let connect_path = connect_path_for_ai_path(&ai_path);
-    let mut settings = load_connect_or_default(&connect_path).map_err(|error| error.to_string())?;
-    settings.providers.remove(provider_id);
-    save_connect(&connect_path, &settings).map_err(|error| error.to_string())?;
+    let settings = load_connect(&connect_path)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
     let runtime = connect::load_runtime_ai_or_empty(&ai_path).map_err(|error| error.to_string())?;
     Ok((settings, runtime))
 }
 
 /// 启动加载模型配置快照：`ai.json` + `connect.json` 合并后的运行时视图。
-pub(crate) fn load_models_snapshot(state: &mut AppState) {
+pub(crate) async fn load_models_snapshot(state: &mut AppState) {
     let path = match ai::ai_config_path() {
         Ok(path) => path,
         Err(error) => {
@@ -396,6 +401,7 @@ pub(crate) fn load_models_snapshot(state: &mut AppState) {
             return;
         }
     };
+    crate::config::ai::oauth::ensure_connect_oauth_fresh(&path).await;
     let connect_path = connect_path_for_ai_path(&path);
     match connect::load_connect_or_default(&connect_path) {
         Ok(settings) => state.connect = settings,
