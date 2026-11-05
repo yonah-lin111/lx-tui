@@ -92,10 +92,33 @@ pub fn build(
             .get("thinkingLevel")
             .or_else(|| params.get("reasoningEffort"))
             .and_then(Value::as_str)
-            .filter(|level| matches!(*level, "minimal" | "low" | "medium" | "high"))
-            && !legacy_tool_media_model(model)
+            .filter(|level| matches!(*level, "minimal" | "low" | "medium" | "high" | "max"))
         {
-            thinking_config.insert("thinkingLevel".into(), json!(level));
+            if legacy_tool_media_model(model) {
+                if !thinking_config.contains_key("thinkingBudget") {
+                    let budget = match level {
+                        "minimal" => 512,
+                        "low" => 2048,
+                        "medium" => 8192,
+                        "high" => 16000,
+                        _ => 24576,
+                    };
+                    thinking_config.insert("thinkingBudget".into(), json!(budget));
+                }
+            } else if matches!(level, "minimal" | "low" | "medium" | "high") {
+                thinking_config.insert("thinkingLevel".into(), json!(level));
+            }
+        }
+        // 对齐 opencode-dev（packages/ai/src/protocols/gemini.ts）：
+        // 只要启用了思考（thinkingLevel 或非零 thinkingBudget）且未显式指定 includeThoughts，
+        // 默认设为 true，否则 Gemini 只在后台思考而不返回 `thought: true` 思考块。
+        let has_active_thinking = thinking_config.contains_key("thinkingLevel")
+            || thinking_config
+                .get("thinkingBudget")
+                .and_then(Value::as_i64)
+                .is_some_and(|budget| budget != 0);
+        if has_active_thinking && !thinking_config.contains_key("includeThoughts") {
+            thinking_config.insert("includeThoughts".into(), json!(true));
         }
         if !thinking_config.is_empty() {
             generation_config.insert("thinkingConfig".into(), Value::Object(thinking_config));

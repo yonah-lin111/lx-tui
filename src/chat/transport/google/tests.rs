@@ -321,16 +321,20 @@ fn thinking_budget_maps_to_generation_config() {
         body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
         1024
     );
+    assert_eq!(
+        body["generationConfig"]["thinkingConfig"]["includeThoughts"], true,
+        "non-zero thinkingBudget must default includeThoughts to true"
+    );
 
-    req.variant_params = Some(json!({"includeThoughts": true, "thinkingLevel": "medium"}));
+    req.variant_params = Some(json!({"reasoningEffort": "high"}));
     let body = body_of(&req);
     assert_eq!(
-        body["generationConfig"]["thinkingConfig"]["includeThoughts"],
-        true
+        body["generationConfig"]["thinkingConfig"]["includeThoughts"], true,
+        "reasoningEffort/thinkingLevel must default includeThoughts to true"
     );
     assert_eq!(
         body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
-        "medium"
+        "high"
     );
 }
 

@@ -265,7 +265,7 @@ fn merge_provider_models(
             if model.variant.is_none() {
                 model.variant = existing.variant.clone();
             }
-            if model.variants.is_empty() && !existing.variants.is_empty() {
+            if !existing.variants.is_empty() {
                 model.variants = existing.variants.clone();
             }
         }

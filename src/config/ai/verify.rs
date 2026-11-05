@@ -87,6 +87,14 @@ pub fn merge_discovered_models_for_preset(
             {
                 current.name = name.to_string();
             }
+            if let Some(catalog_model) = catalog.get(&item.id)
+                && !catalog_model.variants.is_empty()
+            {
+                current.variants = catalog_model.variants.clone();
+                if current.variant.is_none() {
+                    current.variant = catalog_model.variant.clone();
+                }
+            }
             continue;
         }
         if let Some(model) = catalog.get(&item.id) {
@@ -100,6 +108,8 @@ pub fn merge_discovered_models_for_preset(
             .filter(|name| !name.is_empty())
             .unwrap_or(&item.id)
             .to_string();
+        let variants = reasoning_variants(&item.id);
+        let default_variant = variants.contains_key("high").then(|| "high".to_string());
         out.insert(
             item.id.clone(),
             ModelConfig {
@@ -108,8 +118,8 @@ pub fn merge_discovered_models_for_preset(
                 transport: None,
                 limit: None,
                 modalities: None,
-                variants: reasoning_variants(&item.id),
-                variant: None,
+                variants,
+                variant: default_variant,
                 pricing: None,
                 extra: serde_json::Map::new(),
             },
