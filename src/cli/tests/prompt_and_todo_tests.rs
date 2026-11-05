@@ -84,6 +84,13 @@ fn prompt_folder_entry_page_and_ref_crud_end_to_end() {
     assert_exit_ok(env.exec(&["prompt", "page", "list", &prompt_id]));
     assert_exit_ok(env.exec(&["prompt", "page", "delete", &second_page_id]));
 
+    // Deleting the last remaining page must be rejected
+    let first_page_id = with_two_pages[0].pages[0].id.to_string();
+    let last_page_err = env
+        .exec(&["prompt", "page", "delete", &first_page_id])
+        .expect_err("must reject deleting last page");
+    assert!(last_page_err.contains("must keep at least one page"));
+
     // Move prompt to root, rename, and delete
     assert_exit_ok(env.exec(&["prompt", "move", &prompt_id, "--root"]));
     assert_exit_ok(env.exec(&["prompt", "rename", &prompt_id, "Root System Prompt"]));

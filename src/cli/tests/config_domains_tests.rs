@@ -254,3 +254,87 @@ fn mcp_skill_command_subagent_and_settings_crud_work() {
     let reset_cfg = crate::config::load_settings().expect("load reset settings");
     assert_eq!(reset_cfg, crate::config::Config::default());
 }
+
+#[test]
+fn untrusted_workspace_and_validation_guards_reject_invalid_writes() {
+    let env = CliTestEnv::new("untrusted-and-guards");
+
+    // Project-scoped writes in an untrusted workspace must be rejected
+    assert!(
+        env.exec(&[
+            "mcp",
+            "add-stdio",
+            "s1",
+            "--command",
+            "echo",
+            "--scope",
+            "project"
+        ])
+        .is_err()
+    );
+    assert!(
+        env.exec(&[
+            "skill",
+            "create",
+            "s1",
+            "--description",
+            "d",
+            "--content",
+            "b",
+            "--scope",
+            "project",
+        ])
+        .is_err()
+    );
+    assert!(
+        env.exec(&[
+            "command",
+            "create",
+            "c1",
+            "--kind",
+            "agentMD",
+            "--description",
+            "d",
+            "--content",
+            "b",
+            "--scope",
+            "project",
+        ])
+        .is_err()
+    );
+    assert!(
+        env.exec(&[
+            "subagent",
+            "role-set",
+            "r1",
+            "--description",
+            "d",
+            "--scope",
+            "project"
+        ])
+        .is_err()
+    );
+
+    // Subagent & settings bounds guards
+    assert!(
+        env.exec(&["subagent", "set", "--max-concurrent", "99"])
+            .is_err()
+    );
+    assert!(env.exec(&["subagent", "set", "--max-depth", "9"]).is_err());
+    assert!(
+        env.exec(&["subagent", "role-set", "Bad-Name", "--description", "d"])
+            .is_err()
+    );
+    assert!(env.exec(&["subagent", "role-rm", "explorer"]).is_err());
+    assert!(
+        env.exec(&[
+            "settings",
+            "set",
+            "--sidebar-min-width",
+            "40",
+            "--sidebar-max-width",
+            "20",
+        ])
+        .is_err()
+    );
+}

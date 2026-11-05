@@ -379,6 +379,17 @@ pub(super) fn page_active(ctx: &Context, command: &PromptCommand) -> Result<(), 
 
 pub(super) fn page_delete(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
     let id = command.id(0, "PAGE_ID")?;
+    let prompts = db(ctx.db.list_prompts(&ctx.ws), "failed to list prompts")?;
+    if let Some(prompt) = prompts
+        .iter()
+        .find(|p| p.pages.iter().any(|page| page.id == id))
+        && prompt.pages.len() <= 1
+    {
+        return Err(format!(
+            "cannot delete page {id}: prompt {} must keep at least one page",
+            prompt.id
+        ));
+    }
     let next = db(ctx.db.delete_prompt_page(id), "failed to delete page")?;
     let message = next.map_or_else(
         || format!("Deleted page {id}."),

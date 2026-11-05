@@ -3,7 +3,7 @@
 - **验证工作区**：`/Users/yonah/projects/agent/lx-tui/.worktrees/lx-full-cli` (`feature/lx-full-cli`)
 - **测试二进制**：`./target/debug/lx-tui`
 - **隔离环境**：临时 `HOME` + `LX_TUI_DB_PATH` + 本地 Mock OpenAI/MCP 服务
-- **总结论**：**36 / 36 项 CLI 端到端验证全部通过（PASS）**
+- **总结论**：**50 / 50 项 CLI 端到端验证全部通过（PASS）**
 
 ---
 
@@ -263,4 +263,92 @@
 - **输入内容**：`lx-tui settings -C <DIR> --json open --no-open`
 - **验证步骤**：后台启动 `settings open --no-open`，读取 `stdout` JSON 中的 `url`（`http://127.0.0.1:<port>/?token=...`），随后发送 `SIGINT` 停止进程。
 - **期望结果**：立即输出合法本地环回地址与鉴权 URL，收到 `SIGINT` 后优雅关闭服务并退出，退出码 `0`。
+- **结果**：PASS
+
+---
+
+## 12. 边界场景、安全门控与跨模块深度联调（V37–V50）
+
+### V37：会话前缀歧义拦截与空工作区 `--last` 报错
+- **输入内容**：`lx-tui session show sess-`（同工作区含多个会话）、空工作区下 `lx-tui session show --last`
+- **验证步骤**：在有 2 个会话的工作区传入共同前缀 `sess-`；在空工作区执行 `--last`。
+- **期望结果**：均返回退出码 `1`，`stderr` 分别提示 `session prefix 'sess-' is ambiguous` 与 `no sessions found in workspace`。
+- **结果**：PASS
+
+### V38：Agent 工具写文件与 `session rewind` 磁盘文件快照真实回滚
+- **输入内容**：`lx-tui exec "Create file"`（调用 `write` 工具生成 `created_by_agent.txt`）、`lx-tui session rewind --last --mode revert-only --json`
+- **验证步骤**：通过 `exec` 触发 Agent 创建新文件落盘，再执行 `session rewind --last --mode revert-only`。
+- **期望结果**：JSON 返回 `restored_files: 1`，磁盘上的 `created_by_agent.txt` 被自动清理恢复至轮次前状态，退出码 `0`。
+- **结果**：PASS
+
+### V39：未信任工作区项目级写操作安全门控（`mcp` / `skill` / `command` / `subagent`）
+- **输入内容**：未信任工作区下执行 `lx-tui mcp add-stdio ... --scope project`、`skill create ... --scope project`、`command create ... --scope project`、`subagent role-set ... --scope project`
+- **验证步骤**：在未执行 `workspace trust` 的新目录依次运行上述 4 条项目级写入命令。
+- **期望结果**：4 条命令全部被拦截并返回退出码 `1`，`stderr` 提示工作区未信任。
+- **结果**：PASS
+
+### V40：Git Linked Worktree 自动归并主仓库根
+- **输入内容**：`lx-tui workspace status -C /Users/yonah/projects/agent/lx-tui/.worktrees/lx-full-cli --json`
+- **验证步骤**：在 linked worktree 目录执行 `workspace status --json`。
+- **期望结果**：`path` 自动归并为主仓库根 `/Users/yonah/projects/agent/lx-tui`，`git.is_linked: true`，退出码 `0`。
+- **结果**：PASS
+
+### V41：提示词最后一页删除保护与越界页码拦截
+- **输入内容**：`lx-tui prompt page delete <ONLY_PAGE_ID>`、`lx-tui prompt show <PID> --page 99`
+- **验证步骤**：对仅剩 1 页的提示词执行 `page delete`；查询不存在的第 99 页。
+- **期望结果**：均返回退出码 `1`，`stderr` 提示 `must keep at least one page` 与 `page '99' not found`。
+- **结果**：PASS
+
+### V42：长文本输入冲突拦截与 `--content -` 标准输入读取
+- **输入内容**：`lx-tui prompt edit <PID> --content "a" -f b.md`、`echo "Dash stdin" | lx-tui prompt edit <PID> --content -`
+- **验证步骤**：同时传入 `--content` 与 `-f` 验证冲突报错；使用 `--content -` 从管道读取。
+- **期望结果**：同时传参返回退出码 `1`；`--content -` 成功写入 `"Dash stdin"`，退出码 `0`。
+- **结果**：PASS
+
+### V43：待办非法日期/优先级拦截与 `--past-incomplete` 过滤
+- **输入内容**：`lx-tui todo add "Bad" --date 2026-13-45`、`lx-tui todo add "Bad" -p P9`、`lx-tui todo list --past-incomplete --json`
+- **验证步骤**：传入非法日期和优先级验证校验；写入历史日期未完成项后按 `--past-incomplete` 过滤。
+- **期望结果**：非法参数返回退出码 `1`；`--past-incomplete` 准确返回历史未完成条目，退出码 `0`。
+- **结果**：PASS
+
+### V44：标题摘要默认模型（`model default --title-summary`）与 `--clear` 清除
+- **输入内容**：`lx-tui model default mockprov/mock-gpt-1 --title-summary`、`lx-tui model default --clear --title-summary`、`lx-tui model default --clear`
+- **验证步骤**：分别设置与清除标题摘要模型及主默认模型，通过 `model show --json` 检查。
+- **期望结果**：`titleSummary` 与 `defaultModel` 独立设置和清空生效，退出码 `0`。
+- **结果**：PASS
+
+### V45：模型思维链 Variant（`#high`）选择与 `--clear-api-key` 密钥清除
+- **输入内容**：`lx-tui model default mockprov/mock-gpt-1#high`、`lx-tui model provider-set mockprov --clear-api-key`
+- **验证步骤**：带 `#high` 设定默认模型后查看 `defaultModel.variant`；清除 API Key 后查看供应商详情。
+- **期望结果**：`defaultModel.variant` 为 `"high"`；清除后 `apiKey` 显示为 `"-"`，退出码 `0`。
+- **结果**：PASS
+
+### V46：MCP OAuth 完整授权闭环（`mcp login --no-open` 本地回调换 Token）
+- **输入内容**：`lx-tui mcp login mock-oauth --no-open`
+- **验证步骤**：配好 `--auth oauth` 服务后启动 `mcp login --no-open`，解析其输出的本地回调 `redirect_uri` 与 `state` 并模拟浏览器访问回调完成 PKCE 换 Token。
+- **期望结果**：本地环回服务返回 `200 OK`，Token 成功写入 `mcp-credentials.json`，进程退出码 `0`。
+- **结果**：PASS
+
+### V47：自定义斜杠命令重名保护与 `--overwrite` 覆盖
+- **输入内容**：重复执行 `lx-tui command create dup-cmd --kind agentMD --description "v2" --content "c2"`，再加 `--overwrite` 执行
+- **验证步骤**：首次创建后不带 `--overwrite` 再次创建同名命令；随后带 `--overwrite` 创建。
+- **期望结果**：不带 `--overwrite` 返回退出码 `1`；带 `--overwrite` 覆盖写入成功，退出码 `0`。
+- **结果**：PASS
+
+### V48：Subagent 越界并发/深度、非法角色名与内置角色删除拦截
+- **输入内容**：`lx-tui subagent set --max-concurrent 99`、`--max-depth 9`、`subagent role-set Bad-Name --description d`、`subagent role-rm explorer`
+- **验证步骤**：依次执行超上限并发/深度、非法角色命名、删除内置角色。
+- **期望结果**：4 条命令全部被拦截并返回退出码 `1`。
+- **结果**：PASS
+
+### V49：设置项侧栏最小/最大宽度冲突拦截（`settings set`）
+- **输入内容**：`lx-tui settings set --sidebar-min-width 40 --sidebar-max-width 20`
+- **验证步骤**：传入最小宽度大于最大宽度的参数组合。
+- **期望结果**：校验拒绝且不修改磁盘配置，返回退出码 `1`。
+- **结果**：PASS
+
+### V50：`settings open` Web API 鉴权与状态读取（`GET /api/state`）
+- **输入内容**：启动 `lx-tui settings open --no-open --json`，提取 `token` 请求 `GET /api/state?token=<TOKEN>` 与无 token 请求
+- **验证步骤**：分别发起无 token 请求与带有效 token 的 `/api/state` 请求，随后发送 `SIGINT` 关闭。
+- **期望结果**：无 token 返回 `403 Forbidden`，带有效 token 返回 `200 OK` 及完整 `config` JSON，进程收到 `SIGINT` 后退出码 `0`。
 - **结果**：PASS
