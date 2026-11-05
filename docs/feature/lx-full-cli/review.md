@@ -1,6 +1,6 @@
 # `lx-tui` 全功能无头 CLI 代码审查报告（Review）
 
-- **审查分支**：`feature/lx-full-cli`（工作树 `.worktrees/lx-full-cli`，对比基线 `dev`）
+- **审查分支**：`feature/lx-full-cli`（已合入主工作区 `dev`，原工作树 `.worktrees/lx-full-cli` 已清理）
 - **审查范围**：`src/cli/**`、`src/main.rs`、`src/lib.rs`、`src/db/mod.rs`、`src/platform/**`、`src/event/chat/rewind/**`、`src/settings/service/**` 以及 `docs/feature/lx-full-cli/{design,task,verification}.md`、`docs/standards/project-directory-structure.md`
 - **优先级定义**：
   - **P0（致命）**：可能导致用户数据或工作区历史被误删、破坏性极强的缺陷

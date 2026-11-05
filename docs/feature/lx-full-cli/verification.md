@@ -1,6 +1,6 @@
 # `lx-tui` 全功能无头 CLI 验证报告
 
-- **验证工作区**：`/Users/yonah/projects/agent/lx-tui/.worktrees/lx-full-cli` (`feature/lx-full-cli`)
+- **验证工作区**：`/Users/yonah/projects/agent/lx-tui`（`dev`，由 `feature/lx-full-cli` 合入）
 - **测试二进制**：`./target/debug/lx-tui`
 - **隔离环境**：临时 `HOME` + `LX_TUI_DB_PATH` + 本地 Mock OpenAI/MCP 服务
 - **总结论**：**56 / 56 项 CLI 端到端验证全部通过（PASS）**
