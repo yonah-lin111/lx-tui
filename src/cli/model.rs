@@ -56,7 +56,7 @@ pub struct ProviderSetArgs {
 pub struct ModelSetArgs {
     pub target: String,
     pub name: Option<String>,
-    pub transport: Option<ModelTransport>,
+    pub transport: Option<Option<ModelTransport>>,
     pub context_limit: Option<u64>,
     pub output_limit: Option<u64>,
     pub variant: Option<String>,
@@ -249,10 +249,19 @@ fn parse_model_set(args: &[String]) -> Result<ModelSetArgs, String> {
         ..Default::default()
     };
     if let Some(value) = raw.get("--transport") {
-        parsed.transport = Some(
-            ModelTransport::parse(value.trim())
-                .ok_or_else(|| format!("invalid '--transport' value '{value}'"))?,
-        );
+        let trimmed = value.trim().to_ascii_lowercase();
+        let transport = match trimmed.as_str() {
+            "auto" => None,
+            "chat" => Some(ModelTransport::OpenaiCompatible),
+            "responses" => Some(ModelTransport::OpenaiResponses),
+            "messages" => Some(ModelTransport::Anthropic),
+            "gemini" => Some(ModelTransport::Google),
+            other => Some(
+                ModelTransport::parse(other)
+                    .ok_or_else(|| format!("invalid '--transport' value '{value}'"))?,
+            ),
+        };
+        parsed.transport = Some(transport);
     }
     parsed.name = raw.get("--name");
     parsed.context_limit = raw

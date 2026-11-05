@@ -412,7 +412,7 @@ fn run_model_set(out: &Output, args: &ModelSetArgs) -> Result<(), String> {
         model.name = name.clone();
     }
     if let Some(transport) = args.transport {
-        model.transport = Some(transport);
+        model.transport = transport;
     }
     if args.context_limit.is_some() || args.output_limit.is_some() {
         let mut limit = model.limit.unwrap_or(ModelLimit {

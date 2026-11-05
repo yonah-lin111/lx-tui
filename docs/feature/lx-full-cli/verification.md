@@ -1,0 +1,266 @@
+# `lx-tui` 全功能无头 CLI 验证报告
+
+- **验证工作区**：`/Users/yonah/projects/agent/lx-tui/.worktrees/lx-full-cli` (`feature/lx-full-cli`)
+- **测试二进制**：`./target/debug/lx-tui`
+- **隔离环境**：临时 `HOME` + `LX_TUI_DB_PATH` + 本地 Mock OpenAI/MCP 服务
+- **总结论**：**36 / 36 项 CLI 端到端验证全部通过（PASS）**
+
+---
+
+## 1. 顶层路由、帮助、版本与全局选项
+
+### V01：版本信息输出
+- **输入内容**：`lx-tui --version` / `lx-tui -V` / `lx-tui version`
+- **验证步骤**：依次执行三条命令并检查 `stdout` 与退出码。
+- **期望结果**：`stdout` 输出 `lx-tui 0.1.0`，退出码 `0`。
+- **结果**：PASS
+
+### V02：全局与各领域帮助手册
+- **输入内容**：`lx-tui --help` 及 `lx-tui help <exec|session|prompt|todo|workspace|model|mcp|skill|command|subagent|settings>`、`lx-tui <domain> --help`
+- **验证步骤**：遍历全部 11 个子命令执行 `help` 与 `--help`。
+- **期望结果**：`stdout` 输出对应英文 `Usage:` 帮助文档，退出码 `0`。
+- **结果**：PASS
+
+### V03：未知命令与非法参数拦截
+- **输入内容**：`lx-tui bogus-cmd`、`lx-tui session --bogus`
+- **验证步骤**：执行非法命令与非法标志，检查 `stderr` 与退出码。
+- **期望结果**：`stderr` 输出英文错误提示，退出码 `1`。
+- **结果**：PASS
+
+### V04：全局选项 `-C/--cd`、`--json`、`--color`
+- **输入内容**：`lx-tui workspace status -C <DIR> --json --color never`
+- **验证步骤**：在非工作区目录传入 `-C <DIR>` 与 `--json` 执行。
+- **期望结果**：上下文定位到 `<DIR>`，`stdout` 输出合法 JSON 且无 ANSI 转义码，退出码 `0`。
+- **结果**：PASS
+
+---
+
+## 2. `workspace` 工作区历史、信任与 Worktree
+
+### V05：工作区添加、信任与状态查询
+- **输入内容**：`lx-tui workspace add <DIR> --name MainWS --trust --json`、`lx-tui workspace status -C <DIR> --json`
+- **验证步骤**：登记并信任工作区后查询状态。
+- **期望结果**：返回 JSON 中 `trusted: true`、`name: "MainWS"` 及有效 `db_path`，退出码 `0`。
+- **结果**：PASS
+
+### V06：工作区历史列表（树形 / `--raw` / `--search`）
+- **输入内容**：`lx-tui workspace list`、`lx-tui workspace list --raw --search Main --json`
+- **验证步骤**：添加两个工作区后分别按树形与扁平模式检索。
+- **期望结果**：准确返回匹配的工作区记录，退出码 `0`。
+- **结果**：PASS
+
+### V07：工作区重命名、重排与级联删除
+- **输入内容**：`lx-tui workspace rename NewName`、`lx-tui workspace reorder <DIR2> <DIR1>`、`lx-tui workspace delete <DIR2> [--include-worktrees]`
+- **验证步骤**：依次执行重命名、排序和删除，再执行 `workspace list --raw --json`。
+- **期望结果**：名称与 `sort_order` 更新生效，被删工作区从历史列表移除，退出码 `0`。
+- **结果**：PASS
+
+### V08：Git Worktree 列表查询
+- **输入内容**：`lx-tui workspace worktrees -C /Users/yonah/projects/agent/lx-tui/.worktrees/lx-full-cli --json`
+- **验证步骤**：在当前新建 worktree 下执行 `workspace worktrees`。
+- **期望结果**：返回主仓库根路径及包含 `.worktrees/lx-full-cli` (`feature/lx-full-cli`) 的 worktree 数组，退出码 `0`。
+- **结果**：PASS
+
+---
+
+## 3. `session` 聊天会话管理（含 `exec` 联动）
+
+### V09：会话创建、续跑与列表查询
+- **输入内容**：`lx-tui exec "First user turn"`、`lx-tui exec resume --last "Second user turn"`、`lx-tui session list --limit 10 --offset 0 --json`
+- **验证步骤**：通过 `exec` 生成 2 轮对话后执行 `session list`。
+- **期望结果**：`sessions` 数组返回 1 条含累计 token 与模型标识的会话记录，退出码 `0`。
+- **结果**：PASS
+
+### V10：会话详情查看（`<ID>` / 唯一前缀 / `--last`）
+- **输入内容**：`lx-tui session show --last --tools --thinking --json`
+- **验证步骤**：分别用完整 ID、唯一前缀、`--last` 查看会话详情。
+- **期望结果**：完整输出 4 条消息（2 轮 user/assistant）及元数据，退出码 `0`。
+- **结果**：PASS
+
+### V11：会话重命名与分叉（`rename` / `fork`）
+- **输入内容**：`lx-tui session rename --last "Renamed"`、`lx-tui session fork <ID> [--before <MSG_ID>] --json`
+- **验证步骤**：重命名后分别执行完整分叉与按消息边界分叉。
+- **期望结果**：标题更新为 `"Renamed"`，分叉返回新 `new_session_id` 且历史消息按边界复制，退出码 `0`。
+- **结果**：PASS
+
+### V12：子 Agent 列表/树与进程列表（`agents` / `processes`）
+- **输入内容**：`lx-tui session agents --last --tree --filter all --json`、`lx-tui session processes --last --json`
+- **验证步骤**：对包含子 Agent 记录的会话执行列表与树形查询，以及进程查询。
+- **期望结果**：输出包含 `role`、`projected_status`、`depth` 的 `agents` 数组与 `processes` 数组，退出码 `0`。
+- **结果**：PASS
+
+### V13：会话在线压缩与恢复（`compact` / `compact --revert`）
+- **输入内容**：`lx-tui session compact <ID> -m mockprov/mock-gpt-1 --json`、`lx-tui session compact <ID> --revert --json`
+- **验证步骤**：调用模型生成摘要检查点并落库，随后执行 `--revert`。
+- **期望结果**：压缩生成有效 `checkpoint_id`；`--revert` 成功撤销活跃检查点，退出码 `0`。
+- **结果**：PASS
+
+### V14：会话回滚预检与执行（`rewind --dry-run` / `--mode`）
+- **输入内容**：`lx-tui session rewind <ID> --dry-run --json`、`lx-tui session rewind <ID> --mode <revert-and-delete|delete-only|revert-only|restore-compact> --json`
+- **验证步骤**：先执行 `--dry-run` 检查目标轮次与文件恢复计划，再执行回滚。
+- **期望结果**：`--dry-run` 只读输出 `target_user_message_id` 与 `paths`；执行后最后一轮对话按模式回滚，退出码 `0`。
+- **结果**：PASS
+
+### V15：会话删除与跨进程会话锁保护
+- **输入内容**：`lx-tui session delete <ID>`（分别在持锁与释放锁状态下执行）
+- **验证步骤**：持有会话文件锁时执行 `session delete/rewind/compact` 及 `workspace delete`；释放锁后再执行 `session delete`。
+- **期望结果**：持锁期间写命令全部返回退出码 `1` 并提示会话正在运行（只读命令 `list/show` 正常返回 `0`）；释放锁后删除成功，退出码 `0`。
+- **结果**：PASS
+
+---
+
+## 4. `prompt` 提示词库管理
+
+### V16：提示词文件夹 CRUD（`prompt folder`）
+- **输入内容**：`lx-tui prompt folder create Arch`、`rename <ID> Architecture`、`move <ID> --root`、`list --json`、`delete <ID>`
+- **验证步骤**：创建根/子文件夹，执行重命名、移动、列表与删除。
+- **期望结果**：文件夹树结构与名称按指令更新，删除后清空，退出码 `0`。
+- **结果**：PASS
+
+### V17：提示词条目 CRUD 与三种长文本输入（`--content` / `-f` / `stdin`）
+- **输入内容**：`lx-tui prompt create Design --folder <FID> --content "inline"`、`prompt edit <PID> -f body.md`、`echo "stdin" | lx-tui prompt edit <PID>`、`show <PID> --json`、`rename`、`move --root`、`delete`
+- **验证步骤**：依次通过内联参数、文件、标准输入管道更新内容并查看详情，最后移动并删除。
+- **期望结果**：三种输入方式均精确写入活动页，重命名/移动/删除生效，退出码 `0`。
+- **结果**：PASS
+
+### V18：提示词多页管理（`prompt page`）
+- **输入内容**：`lx-tui prompt page create <PID> P2 --content "p2"`、`list <PID>`、`active <PID> <PAGE_ID>`、`rename <PAGE_ID> P2New`、`edit <PAGE_ID> --content "p2v2"`、`delete <PAGE_ID>`
+- **验证步骤**：新增第二页、切换活动页、重命名、编辑后删除该页（验证保留最后一页保护）。
+- **期望结果**：分页列表与 `active_page_id` 正确变更，退出码 `0`。
+- **结果**：PASS
+
+### V19：外部引用目录管理（`prompt ref`）
+- **输入内容**：`lx-tui prompt ref add <DIR>`、`lx-tui prompt ref list --json`、`lx-tui prompt ref remove <REF_ID>`
+- **验证步骤**：添加外部目录引用，查询列表后移除。
+- **期望结果**：列表包含规范化绝对路径，移除后列表为空，退出码 `0`。
+- **结果**：PASS
+
+---
+
+## 5. `todo` 全局日程待办
+
+### V20：待办新增与多维过滤列表（`todo add` / `list`）
+- **输入内容**：`lx-tui todo add "Task" --date 2026-11-05 -p P0 --status todo`、`lx-tui todo list [--date|--all|--past-incomplete] [--status] [-p] --json`
+- **验证步骤**：写入跨日期与不同优先级的待办，按日期、状态、优先级过滤查询。
+- **期望结果**：过滤结果与写入项一致，退出码 `0`。
+- **结果**：PASS
+
+### V21：待办更新（含唯一前缀）与状态流转（`update` / `start` / `done` / `reopen` / `delete`）
+- **输入内容**：`lx-tui todo update <PREFIX> --text "New" -p P1`、`todo start <ID>`、`todo done <ID>`、`todo reopen <ID>`、`todo delete <ID>`
+- **验证步骤**：用 ID 唯一前缀更新文本和优先级，依次切换为进行中、已完成、重开并删除。
+- **期望结果**：`done` 自动记录 `completed_date`，`reopen` 清除完成日期，`delete` 移除记录，退出码 `0`。
+- **结果**：PASS
+
+### V22：同日重排、历史顺延与区间统计（`reorder` / `rollover` / `stats`）
+- **输入内容**：`lx-tui todo reorder --date 2026-11-05 <ID2> <ID1>`、`lx-tui todo rollover --to 2026-11-05`、`lx-tui todo stats --from 2026-11-01 --to 2026-11-05 --json`
+- **验证步骤**：重排今日待办，将历史未完成项顺延至今日，查询统计。
+- **期望结果**：顺序更新，历史未完成项 `entry_date` 迁至 `2026-11-05`，`stats` 输出每日完成率，退出码 `0`。
+- **结果**：PASS
+
+---
+
+## 6. `model` 模型与供应商管理
+
+### V23：供应商与模型配置及默认模型设定
+- **输入内容**：`lx-tui model provider-set mockprov --type openai-compatible --base-url <URL> --api-key sk-1234567890abcdef --enable`、`model model-set mockprov/mock-gpt-1 --transport chat --context-limit 128000 --output-limit 16384 --image-input true`、`model default mockprov/mock-gpt-1`
+- **验证步骤**：配置供应商、模型参数与默认模型后检查 `config/ai.json`。
+- **期望结果**：配置原子写入 `ai.json`，默认模型为 `mockprov/mock-gpt-1`，退出码 `0`。
+- **结果**：PASS
+
+### V24：远端模型自动发现（`model fetch`）
+- **输入内容**：`lx-tui model fetch mockprov --save --json`
+- **验证步骤**：向本地 Mock `/v1/models` 服务拉取模型列表并带 `--save` 保存。
+- **期望结果**：返回远端模型数组（`mock-gpt-1`、`mock-gpt-2`）并写入供应商模型表，退出码 `0`。
+- **结果**：PASS
+
+### V25：模型展示（密钥脱敏）、全局 AI 配置与删除
+- **输入内容**：`lx-tui model show mockprov --json`、`model config --title-language en --timeout-ms 60000`、`model model-rm mockprov/mock-gpt-2`、`model provider-rm mockprov`
+- **验证步骤**：查看供应商详情验证脱敏，更新全局参数，最后删除模型与供应商。
+- **期望结果**：`show` 中 `apiKey` 脱敏为 `"sk-...cdef"`，配置更新与删除均生效，退出码 `0`。
+- **结果**：PASS
+
+---
+
+## 7. `mcp` MCP 服务管理
+
+### V26：Stdio / HTTP 服务注册与双作用域展示
+- **输入内容**：`lx-tui mcp add-stdio mock-stdio --command python3 --arg mock_mcp.py --scope project`、`mcp add-http mock-http --url https://example.com/mcp --auth bearer --bearer-token tok_1234567890abcdef`、`mcp list --json`、`mcp show mock-http --json`
+- **验证步骤**：分别在项目级与用户级添加 stdio/http 服务，查询列表与详情。
+- **期望结果**：配置文件写入对应作用域，`show` 中 `bearerToken` 脱敏为 `"tok_...cdef"`，退出码 `0`。
+- **结果**：PASS
+
+### V27：MCP 服务在线握手与工具探测（`mcp probe`）
+- **输入内容**：`lx-tui mcp probe mock-stdio --scope project --json`
+- **验证步骤**：对本地 JSON-RPC stdio MCP 脚本执行 `mcp probe`。
+- **期望结果**：成功完成 `initialize` 与 `tools/list` 握手，输出包含 `"ping_tool"` 的工具列表，退出码 `0`。
+- **结果**：PASS
+
+### V28：MCP 启停、登出与删除（`disable` / `enable` / `logout` / `remove`）
+- **输入内容**：`lx-tui mcp disable mock-http`、`mcp enable mock-http`、`mcp logout mock-http`、`mcp remove mock-http`
+- **验证步骤**：依次禁用、启用、清理凭证并移除服务。
+- **期望结果**：`enabled` 状态切换准确，移除后配置项清空，退出码 `0`。
+- **结果**：PASS
+
+---
+
+## 8. `skill` 技能发现与管理
+
+### V29：技能创建、列表发现、详情与编辑
+- **输入内容**：`lx-tui skill create demo-skill --description "Demo" --content "# Body" --scope project`、`skill list --scope project --json`、`skill show demo-skill --scope project`、`skill edit demo-skill --description "Updated" --scope project`
+- **验证步骤**：在已信任工作区创建项目级技能，执行发现列表、详情读取与描述修改。
+- **期望结果**：生成 `.lx/skills/demo-skill/SKILL.md`，frontmatter 与正文更新正确，退出码 `0`。
+- **结果**：PASS
+
+### V30：技能启停与删除（`disable` / `enable` / `delete`）
+- **输入内容**：`lx-tui skill disable demo-skill`、`skill enable demo-skill`、`skill delete demo-skill --scope project`
+- **验证步骤**：切换技能禁用列表状态后删除该技能。
+- **期望结果**：`skills.json` 的 `disabled` 列表同步增删，`delete` 删除技能目录，退出码 `0`。
+- **结果**：PASS
+
+---
+
+## 9. `command` 自定义斜杠命令管理
+
+### V31：`agentMD` 与 `agentBlock` 命令创建、列表与查看
+- **输入内容**：`lx-tui command create check-code --kind agentMD --description "Check" --md-scope global --content "Body"`、`command create tmpl-block --kind agentBlock --description "Block" --block template --arg-hint "<file>" --title "Block" --content "Inspect $1" --scope project`、`command list --json`、`command show check-code`
+- **验证步骤**：分别创建用户级 `agentMD` 与项目级 `agentBlock` 命令，执行列表与详情查询。
+- **期望结果**：准确返回 2 条命令及其 frontmatter 属性，退出码 `0`。
+- **结果**：PASS
+
+### V32：自定义命令编辑、重命名与删除
+- **输入内容**：`lx-tui command edit check-code --description "Check v2"`、`command rename check-code audit-code`、`command delete audit-code`
+- **验证步骤**：更新命令描述，重命名后删除。
+- **期望结果**：文件名与 frontmatter 同步更新，删除后文件移除，退出码 `0`。
+- **结果**：PASS
+
+---
+
+## 10. `subagent` 子 Agent 角色与并发配置
+
+### V33：全局并发、深度、Token 与委派模式设置
+- **输入内容**：`lx-tui subagent set --max-concurrent 6 --max-depth 3 --default-max-tokens 50000 --delegation-mode proactive`
+- **验证步骤**：修改全局参数后执行 `subagent show --json`。
+- **期望结果**：`maxConcurrent: 6`、`maxDepth: 3`、`defaultMaxTokens: 50000`、`delegationMode: "proactive"`，越界值（如 `--max-concurrent 99`）被拦截，退出码 `0`。
+- **结果**：PASS
+
+### V34：内置角色覆盖（含 `monitor`）与自定义角色管理（用户级 / 项目级）
+- **输入内容**：`lx-tui subagent role-set monitor --description "Custom monitor" --lock-model true`、`subagent role-set code_auditor --base explorer --description "Auditor" --prompt "Audit" --allow-web-search false --nicknames Alice,Bob --scope project`、`subagent role-reset monitor`、`subagent role-rm code_auditor --scope project`
+- **验证步骤**：覆盖内置 `monitor` 角色、创建项目级 `.lx/agents/code_auditor.json` 角色，查看后重置并删除。
+- **期望结果**：内置角色覆盖与项目级角色均生效，重置与删除后恢复默认，退出码 `0`。
+- **结果**：PASS
+
+---
+
+## 11. `settings` 通用设置与 Web 设置服务
+
+### V35：通用布局设置查看、修改与重置
+- **输入内容**：`lx-tui settings set --sidebar-width 30`、`lx-tui settings show --json`、`lx-tui settings reset`
+- **验证步骤**：修改侧栏宽度、验证 JSON 输出、重置为默认值（同时验证非法范围如 `--sidebar-min-width 99` 被拒绝）。
+- **期望结果**：`sidebar_width` 设为 `30`，重置后恢复默认值 `24`，非法范围返回退出码 `1`。
+- **结果**：PASS
+
+### V36：独立启动本地设置 Web 服务（`settings open`）
+- **输入内容**：`lx-tui settings -C <DIR> --json open --no-open`
+- **验证步骤**：后台启动 `settings open --no-open`，读取 `stdout` JSON 中的 `url`（`http://127.0.0.1:<port>/?token=...`），随后发送 `SIGINT` 停止进程。
+- **期望结果**：立即输出合法本地环回地址与鉴权 URL，收到 `SIGINT` 后优雅关闭服务并退出，退出码 `0`。
+- **结果**：PASS
