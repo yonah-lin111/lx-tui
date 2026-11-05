@@ -234,7 +234,11 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
         &prepared.model_images,
         &mut request.items,
     );
-    let subagents_config = crate::config::subagents::load_subagents_or_default();
+    let subagents_config = crate::config::subagents::merge_project_roles(
+        &crate::config::subagents::load_subagents_or_default(),
+        Some(cwd),
+        true,
+    );
     request.purpose = RequestPurpose::ExecTurn;
     request.system_prompt = Some(assembly.system_prompt);
     request.tools = Arc::new(crate::chat::tools::turn_tools_with_subagents(

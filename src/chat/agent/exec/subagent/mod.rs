@@ -188,6 +188,11 @@ impl ExecSubagentPool {
         sender: mpsc::UnboundedSender<ExecLoopEvent>,
         stream_factory: Arc<dyn ExecStreamFactory>,
     ) -> Self {
+        let subagents_config = crate::config::subagents::merge_project_roles(
+            &crate::config::subagents::load_subagents_or_default(),
+            Some(&cwd),
+            true,
+        );
         Self {
             workspace,
             cwd,
@@ -205,7 +210,7 @@ impl ExecSubagentPool {
             closed: HashSet::new(),
             child_models: HashMap::new(),
             agent_budgets: HashMap::new(),
-            subagents_config: crate::config::subagents::load_subagents_or_default(),
+            subagents_config,
             waits: HashMap::new(),
             next_wait_id: 1,
         }
