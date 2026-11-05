@@ -89,6 +89,8 @@ pub fn open_workspace_list_menu(state: &mut AppState, anchor: (u16, u16)) {
 pub fn open_workspace_history_menu(state: &mut AppState, visible_row: usize, anchor: (u16, u16)) {
     state.workspace_history.scroll_drag = None;
     state.workspace_history.search_drag = false;
+    state.workspace_history.drag = None;
+    state.workspace_history.dragging = false;
     super::workspace_history::select_workspace_history_row(state, visible_row);
     let Some(&entry_index) = state.workspace_history.filtered_indices().get(visible_row) else {
         return;

@@ -128,6 +128,7 @@ pub(crate) fn handle_sidebar_press(
         update::focus_sidebar(state);
         let now = Instant::now();
         update::select_workspace_history_row(state, vis_row);
+        update::begin_workspace_history_drag(state, vis_row);
         if update::workspace_history_row_double_click(state, vis_row, now)
             && update::open_workspace_history_row(state, vis_row)
         {

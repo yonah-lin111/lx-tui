@@ -34,18 +34,18 @@
 
 ### 1.1 目标
 1. **新增工作区历史列表切换按钮**：在左侧栏 `Workspaces` 顶边框右上角（`[+]` 按钮左侧，间隔 1 列）增加列表按钮，默认显示 `[≡]`，点击打开工作区历史列表并将图标切换为 `[/]`。
-2. **工作区历史自动记录与持久化**：凡是显式创建或打开过的工作区（启动初始工作区、`[+]` 新建、从 Worktree 打开、从历史列表打开）均按规范化路径 `path` 去重记录到 SQLite `workspace` 表，按最近打开时间（`updated_at DESC, id DESC`）排序；终端内执行 `cd` 切换子目录不产生新历史记录。
+2. **工作区历史自动记录与持久化**：凡是显式创建或打开过的工作区（启动初始工作区、`[+]` 新建、从 Worktree 打开、从历史列表打开）均按规范化路径 `path` 去重记录到 SQLite `workspace` 表，并与活跃列表共用全局顺序列 `position`（schema v23）；拖拽排序写回，重启后保持一致；终端内执行 `cd` 切换子目录不产生新历史记录。
 3. **对齐 Prompt List 的交互体验**：
    - 在左侧栏上半区 `Workspaces` 原位渲染「顶部搜索框 + 分割线 + 扁平历史列表 + 滚动条」，下半区 `Agents` 不变；
    - 支持实时搜索过滤（匹配名称或路径，不区分大小写）、键盘上下选择、回车/双击打开、鼠标悬停高亮；
-   - 支持新建工作区（Create）、重命名工作区并双向同步（Update/Rename）、双击或右键打开（Open）。
+   - 支持新建工作区（Create）、重命名工作区并双向同步（Update/Rename）、双击或右键打开（Open）、拖拽排序（与活跃列表同为 Git 整组块移动）。
 4. **失效路径高亮与级联删除**：
    - 当历史工作区的目录路径在磁盘上已不存在（`!path.is_dir()`）时，该条目使用错误/危险语义色（`style::error()`，红色）渲染；
-   - 仅针对此类路径不存在的失效条目，右键菜单额外提供 `Delete`（带行内二次确认 `Confirm delete`），确认后从数据库删除该工作区并直接级联删除其关联的所有提示词、文件夹、引用目录及聊天会话数据。
+   - 所有历史条目均提供 `Delete`（3 击菜单确认 + 最终弹窗确认），确认后中断该工作区运行中的 Agent / 子 Agent / 本地命令，并从数据库级联删除其关联的所有提示词、文件夹、引用目录及聊天会话数据。
 
 ### 1.2 非目标
-- 历史列表不引入文件夹层级或 `tmp:` / `saved:` 分区，也不支持拖拽排序（固定按最近打开时间倒序）。
-- 路径仍然存在的正常历史条目不提供删除按钮，防止用户误删仍有磁盘项目的历史记录及关联资产。
+- 历史列表不引入文件夹层级或 `tmp:` / `saved:` 分区。
+- 搜索过滤期间不响应拖拽排序（避免对过滤子集重排导致隐藏条目的相对顺序不可预期）。
 
 ---
 
@@ -53,11 +53,12 @@
 
 | 编号 | 决策维度 | 已确认方案 |
 | --- | --- | --- |
-| **Q1** | **数据来源与生命周期** | 凡是显式创建或打开过的工作区自动持久化到 SQLite `workspace` 表（按最近打开时间倒序）。在当前活跃列表中执行 `Close Workspace` 仅从内存 `AppState.workspaces` 移除并结束终端进程，保留历史记录。 |
+| **Q1** | **数据来源与生命周期** | 凡是显式创建或打开过的工作区自动持久化到 SQLite `workspace` 表，与活跃列表共用全局顺序列 `position`（拖拽排序写回，重启后保持）。在当前活跃列表中执行 `Close Workspace` 仅从内存 `AppState.workspaces` 移除并结束终端进程，保留历史记录。 |
 | **Q2 / Q3** | **历史条目的完整 CRUD 与单弹窗确认** | 历史列表中的所有工作区均支持：**查看/搜索（Read）**、**新建（Create，在首个 `NewWorkspace` 弹窗内直接二次确认 `[Create]` → `[Confirm]`，不再弹第二个 `TrustWorkspace` 弹窗；在 `ws list` 下新建后仅入库并选中，保持停留在 `ws list`）**、**重命名（Update）**、**双击/回车/右键打开（Open）**、以及**全量级联删除（Delete，需右键菜单 3 击确认 + 最终弹窗确认，若有运行中 Agent 直接中断并级联删除数据库记录）**。 |
 | **Q4** | **按钮位置、图标与视图切换** | 顶边框右端顺序为 `[+] [≡]`（列表按钮 `[≡]`/`[/]` 居右端，新建按钮 `[+]` 紧邻其左侧 1 列）。默认显示 `[≡]`，点击后上半区 `Workspaces` 原地切换为历史列表，图标变为 `[/]`（下半区 `Agents` 不变）。点击 `[/]`、按 `Esc`、或双击/回车成功打开历史工作区后，自动切回活跃工作区列表。 |
 | **Q5** | **列表结构、Git 树形与搜索过滤** | 顶部为 `> search workspaces…` 搜索框 + `├────┤` 分割线；移除 `⑂` 图标，Git 仓库自动以主工作区（`repo_root`）为父节点（`▾/▸ <主工作区名>`，支持点击箭头折叠/展开），下挂 `git worktree list` 的全部工作区及数据库中的历史 worktree（`├─/└─ <分支短名或自定义名>`），独立工作区直接显示 `<name>`。搜索框实时不区分大小写匹配工作区 `name`、分支短名与 `path`，无结果时显示 `no matching workspaces`（空库显示 `no workspaces yet`）。 |
-| **Q6** | **命名污染修复、路径去重、重命名同步与失效路径级联删除** | 1. **主工作区命名修复与自愈**：修复 `startup_trust` 在 linked worktree 启动时将子工作区名误写入主工作区路径的 Bug，并在加载历史列表时对已污染的主工作区名称自动自愈回主工作区目录名（如 `lx-tui`）。<br>2. **按路径去重**：以规范化路径 `path` 唯一去重，重复打开仅刷新 `updated_at`；终端内 `cd` 不写入历史列表。<br>3. **重命名双向同步**：在活跃列表或历史列表重命名工作区均写入 `workspace.name`，并同步更新另一侧显示名；重新打开时保留自定义名称。<br>4. **双击打开防重与父项自动补齐**：若目标路径已在 `AppState.workspaces` 中打开则直接切换过去；若打开的是 linked worktree，自动调用 `ensure_main_workspace` 补开主工作区父项并退出历史视图。<br>5. **失效路径特殊颜色与级联删除**：若历史条目的 `path` 在磁盘上不存在（`!path.is_dir()`），条目文字使用 `style::error()`（红色）展示；双击打开时弹 Danger Toast `Directory does not exist` 并留在历史列表；右键菜单对该类失效条目开放 `Delete`（行内二次确认 `Confirm delete`），确认后直接删除 `workspace` 行并级联清理全部关联表数据。 |
+| **Q6** | **命名污染修复、路径去重、重命名同步与失效路径级联删除** | 1. **主工作区命名修复与自愈**：修复 `startup_trust` 在 linked worktree 启动时将子工作区名误写入主工作区路径的 Bug，并在加载历史列表时对已污染的主工作区名称自动自愈回主工作区目录名（如 `lx-tui`）。<br>2. **按路径去重**：以规范化路径 `path` 唯一去重，重复打开仅刷新 `updated_at`，不改变 `position` 顺序；终端内 `cd` 不写入历史列表。<br>3. **重命名双向同步**：在活跃列表或历史列表重命名工作区均写入 `workspace.name`，并同步更新另一侧显示名；重新打开时保留自定义名称。<br>4. **双击打开防重与父项自动补齐**：若目标路径已在 `AppState.workspaces` 中打开则直接切换过去；若打开的是 linked worktree，自动调用 `ensure_main_workspace` 补开主工作区父项并退出历史视图。<br>5. **失效路径特殊颜色与全量级联删除**：若历史条目的 `path` 在磁盘上不存在（`!path.is_dir()`），条目文字使用 `style::error()`（红色）展示；双击打开时弹 Danger Toast `Directory does not exist` 并留在历史列表；全部条目右键菜单开放 `Delete`（3 击菜单确认 + 最终弹窗确认），确认后中断运行中的 Agent / 子 Agent / 本地命令并级联清理全部关联表数据。 |
+| **Q7** | **全局排序与拖拽** | `workspace.position` 是活跃列表与历史列表唯一的顺序源（schema v23）：`list_workspaces` 按 `position ASC, id ASC` 返回，历史列表再按 Git 树形展开；活跃列表按历史顺序稳定重排（未打开项保持槽位）。两个列表均支持以 Git 仓库整组块为单位的拖拽排序：拖父项或任一 linked 子项都会移动整组；非 Git 项单独移动。历史列表搜索过滤期间不响应拖拽。拖拽结束后通过 `Effect::SaveWorkspaceOrder` 将完整顺序写回 SQLite。 |
 
 ---
 
@@ -270,7 +271,9 @@ impl WorkspaceHistoryPanel {
    - **新增 `rename_workspace(path, name)`**：
      - 显式重命名工作区时调用，`ON CONFLICT(path) DO UPDATE SET name = excluded.name`。
    - **新增 `list_workspaces()`**：
-     - 查询 `SELECT name, path FROM workspace WHERE path IS NOT NULL AND path != '' ORDER BY updated_at DESC, id DESC`，返回 `Vec<WorkspaceRecord>`。
+     - 查询 `SELECT name, path, position FROM workspace WHERE path IS NOT NULL AND path != '' ORDER BY position ASC, id ASC`，返回 `Vec<WorkspaceRecord>`。
+   - **新增 `save_workspace_order(order)`**：
+     - 拖拽排序结束后按给定顺序把 `position` 写回 `0..n`；历史列表中尚未入库的 Git worktree 顺带补建 `workspace` 行（`is_trusted = 0`）。
    - **新增 `delete_workspace(path)`**：
      - 先在事务内清理该工作区下的子 Agent 会话（或直接利用 `agent_session.workspace_id REFERENCES workspace(external_id) ON DELETE CASCADE`），执行 `DELETE FROM workspace WHERE path = ?1`，由 SQLite 外键级联删除 `workspace_folder`、`workspace_prompt`、`workspace_prompt_page`、`workspace_referenced_folder`、`agent_session` 及全部聊天子表。
 2. **新增 `Effect` 变体（`src/app/effects.rs`）**：
@@ -371,20 +374,22 @@ impl Database {
         Ok(())
     }
 
-    /// 按最近打开时间倒序返回全部工作区历史记录。
+    /// 按全局展示顺序返回全部工作区历史记录。
     pub fn list_workspaces(&self) -> Result<Vec<WorkspaceRecord>> {
         let mut statement = self.conn.prepare(
-            r#"SELECT name, path
+            r#"SELECT name, path, position
                FROM workspace
                WHERE path IS NOT NULL AND path != ''
-               ORDER BY updated_at DESC, id DESC"#,
+               ORDER BY position ASC, id ASC"#,
         )?;
         let rows = statement.query_map([], |row| {
             let name: String = row.get(0)?;
             let raw_path: String = row.get(1)?;
+            let position: i64 = row.get(2)?;
             Ok(WorkspaceRecord {
                 name,
                 path: PathBuf::from(raw_path),
+                position,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()

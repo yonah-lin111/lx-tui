@@ -136,7 +136,7 @@ pub(crate) fn handle_mouse_moved(
     } else {
         ui::workspace_item_at(view, state, mouse.column, mouse.row)
     };
-    let history_hover = if state.sidebar_collapsed {
+    let history_hover = if state.sidebar_collapsed || state.workspace_history.drag.is_some() {
         None
     } else {
         ui::workspace_history_row_at(view, state, mouse.column, mouse.row)
@@ -339,12 +339,15 @@ pub(crate) fn handle_mouse_moved(
         *dirty = true;
     }
     // 按钮 tooltip：拖拽排序/列表拖拽或指针在 toast 上时不触发；目标变化重置显示计时。
-    let tooltip_target =
-        if hovering_toast || state.workspace_drag.is_some() || state.prompt_drag.is_some() {
-            None
-        } else {
-            ui::tooltip::target_at(view, state, rects, *screen, mouse.column, mouse.row)
-        };
+    let tooltip_target = if hovering_toast
+        || state.workspace_drag.is_some()
+        || state.workspace_history.drag.is_some()
+        || state.prompt_drag.is_some()
+    {
+        None
+    } else {
+        ui::tooltip::target_at(view, state, rects, *screen, mouse.column, mouse.row)
+    };
     if update::set_tooltip_target(state, tooltip_target, Instant::now()) {
         *dirty = true;
     }

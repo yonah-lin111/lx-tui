@@ -261,6 +261,33 @@ impl Database {
         if version < 22 {
             self.migrate_v22_model_switch()?;
         }
+        if version < 23 {
+            self.migrate_v23_workspace_position()?;
+        }
+        Ok(())
+    }
+
+    /// v23：工作区全局展示顺序列 `position`。
+    ///
+    /// 旧库按当时的历史顺序（`updated_at DESC, id DESC`）回填，升级后列表不跳序；
+    /// 新库由 `SCHEMA` 直接建出该列，回填 0 行。拖拽排序后续写回为 0..n 的连续值。
+    fn migrate_v23_workspace_position(&mut self) -> Result<()> {
+        let transaction = self.conn.unchecked_transaction()?;
+        if !column_exists(&transaction, "workspace", "position")? {
+            transaction.execute_batch(
+                "ALTER TABLE workspace ADD COLUMN position INTEGER NOT NULL DEFAULT 0;",
+            )?;
+            transaction.execute_batch(
+                r#"UPDATE workspace SET position = (
+                       SELECT COUNT(*) FROM workspace AS newer
+                       WHERE newer.updated_at > workspace.updated_at
+                          OR (newer.updated_at = workspace.updated_at AND newer.id > workspace.id)
+                   );"#,
+            )?;
+        }
+        ensure_no_foreign_key_violation(&transaction)?;
+        transaction.pragma_update(None, "user_version", 23)?;
+        transaction.commit()?;
         Ok(())
     }
 

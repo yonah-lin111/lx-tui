@@ -332,6 +332,8 @@ pub enum Effect {
     RenameWorkspace { path: PathBuf, name: String },
     /// 删除路径已失效的工作区历史记录（级联清理关联数据）并刷新历史列表。
     DeleteWorkspaceHistory { path: PathBuf },
+    /// 持久化工作区全局展示顺序（活跃列表与历史列表共用；含尚未入库的 worktree）。
+    SaveWorkspaceOrder { entries: Vec<(PathBuf, String)> },
     /// 从数据库重新加载工作区历史列表。
     LoadWorkspaceHistory,
 }

@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS workspace (
     "type" TEXT NOT NULL DEFAULT 'filesystem',
     path TEXT UNIQUE,
     is_trusted INTEGER NOT NULL DEFAULT 1,
+    -- 全局展示顺序：活跃列表与历史列表共用，拖拽排序写回。
+    position INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

@@ -593,6 +593,13 @@ impl Persistence {
                 self.with_db(|db| db.delete_workspace(&path));
                 self.reload_workspace_history(state)
             }
+            Effect::SaveWorkspaceOrder { entries } => {
+                let changed = self
+                    .with_db(|db| db.save_workspace_order(&entries))
+                    .is_some();
+                let reloaded = self.reload_workspace_history(state);
+                changed || reloaded
+            }
             Effect::LoadWorkspaceHistory => self.reload_workspace_history(state),
             // 网络与进程效应由事件层执行（pump 已过滤；此处兜底忽略并记录）。
             // 进程句柄只存在于事件层的运行实例里，持久化层既读不到也停不了。

@@ -152,10 +152,15 @@ pub fn drag_workspace_to(state: &mut AppState, target: usize) -> bool {
     true
 }
 
-/// 结束拖动排序。
+/// 结束拖动排序；真正移动过时把相对次序回写历史条目并持久化全局顺序。
 pub fn end_workspace_drag(state: &mut AppState) {
+    let persist = state.workspace_dragging;
     state.workspace_drag = None;
     state.workspace_dragging = false;
+    if persist {
+        super::workspace_history::sync_history_entries_from_active(state);
+        super::workspace_history::persist_workspace_order(state);
+    }
 }
 
 /// 保证当前工作区可见并钳制偏移；列表长度或可见行变化后调用；返回是否变化。

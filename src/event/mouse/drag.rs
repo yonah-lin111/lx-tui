@@ -313,6 +313,14 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if state.workspace_history.drag.is_some() {
+        if let Some(target) = ui::workspace_history_drop_index(view, state, mouse.row)
+            && update::drag_workspace_history_to(state, target)
+        {
+            *dirty = true;
+        }
+        return;
+    }
     // prompt 列表拖拽：必须在窗格转发之前 return，否则拖动会被当成终端选区/输入。
     if state.prompt_drag.is_some() {
         let hit = ui::prompt::tree::drop_hit_at(
@@ -587,6 +595,11 @@ pub(crate) fn handle_mouse_up_left(
     }
     if state.workspace_drag.is_some() {
         update::end_workspace_drag(state);
+        *dirty = true;
+        return;
+    }
+    if state.workspace_history.drag.is_some() {
+        update::end_workspace_history_drag(state);
         *dirty = true;
         return;
     }

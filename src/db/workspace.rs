@@ -13,6 +13,8 @@ use crate::app::state::{WorkspaceGit, WorkspaceHistoryEntry, home_dir, workspace
 pub struct WorkspaceRecord {
     pub name: String,
     pub path: PathBuf,
+    /// 全局展示顺序（活跃列表与历史列表共用）。
+    pub position: i64,
 }
 
 impl Database {
@@ -30,11 +32,13 @@ impl Database {
         Ok(trusted == 1)
     }
 
-    /// 记录工作区信任：按 path upsert `is_trusted = 1`，已存在时保留原自定义名称。
+    /// 记录工作区信任：按 path upsert `is_trusted = 1`，已存在时保留原自定义名称与顺序。
     pub fn trust_workspace(&self, path: &Path, name: &str) -> Result<()> {
         self.conn.execute(
-            r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, created_at, updated_at)
-               VALUES (?1, ?2, 'filesystem', ?3, 1, datetime('now'), datetime('now'))
+            r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, position, created_at, updated_at)
+               VALUES (?1, ?2, 'filesystem', ?3, 1,
+                       COALESCE((SELECT MAX(position) + 1 FROM workspace), 0),
+                       datetime('now'), datetime('now'))
                ON CONFLICT(path) DO UPDATE SET
                    is_trusted = 1,
                    updated_at = datetime('now')"#,
@@ -50,22 +54,26 @@ impl Database {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path_string(path));
         self.conn.execute(
-            r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, created_at, updated_at)
-               VALUES (?1, ?2, 'filesystem', ?3, 0, datetime('now'), datetime('now'))
+            r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, position, created_at, updated_at)
+               VALUES (?1, ?2, 'filesystem', ?3, 0,
+                       COALESCE((SELECT MAX(position) + 1 FROM workspace), 0),
+                       datetime('now'), datetime('now'))
                ON CONFLICT(path) DO NOTHING"#,
             params![new_external_id("ws"), name, path_string(path)],
         )?;
         Ok(())
     }
 
-    /// 记录工作区显式创建/打开：新路径写入 `default_name`（不隐式授予信任），
-    /// 已有路径保留数据库中的名称与信任位并刷新 `updated_at`；
+    /// 记录工作区显式创建/打开：新路径写入 `default_name`（不隐式授予信任）并追加到顺序末尾；
+    /// 已有路径保留数据库中的名称、信任位与顺序并刷新 `updated_at`；
     /// 返回数据库中保存的名称（供打开时恢复自定义名称）。
     pub fn record_workspace_open(&self, path: &Path, default_name: &str) -> Result<String> {
         let path_str = path_string(path);
         self.conn.execute(
-            r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, created_at, updated_at)
-               VALUES (?1, ?2, 'filesystem', ?3, 0, datetime('now'), datetime('now'))
+            r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, position, created_at, updated_at)
+               VALUES (?1, ?2, 'filesystem', ?3, 0,
+                       COALESCE((SELECT MAX(position) + 1 FROM workspace), 0),
+                       datetime('now'), datetime('now'))
                ON CONFLICT(path) DO UPDATE SET
                    updated_at = datetime('now')"#,
             params![new_external_id("ws"), default_name, path_str],
@@ -78,11 +86,13 @@ impl Database {
         Ok(saved_name)
     }
 
-    /// 显式重命名工作区：按 path upsert 新名称。
+    /// 显式重命名工作区：按 path upsert 新名称；新行追加到顺序末尾。
     pub fn rename_workspace(&self, path: &Path, name: &str) -> Result<()> {
         self.conn.execute(
-            r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, created_at, updated_at)
-               VALUES (?1, ?2, 'filesystem', ?3, 0, datetime('now'), datetime('now'))
+            r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, position, created_at, updated_at)
+               VALUES (?1, ?2, 'filesystem', ?3, 0,
+                       COALESCE((SELECT MAX(position) + 1 FROM workspace), 0),
+                       datetime('now'), datetime('now'))
                ON CONFLICT(path) DO UPDATE SET
                    name = excluded.name"#,
             params![new_external_id("ws"), name, path_string(path)],
@@ -90,24 +100,52 @@ impl Database {
         Ok(())
     }
 
-    /// 按最近打开时间倒序返回全部工作区历史记录。
+    /// 按全局展示顺序返回全部工作区历史记录。
     pub fn list_workspaces(&self) -> Result<Vec<WorkspaceRecord>> {
         let mut statement = self.conn.prepare(
-            r#"SELECT name, path
+            r#"SELECT name, path, position
                FROM workspace
                WHERE path IS NOT NULL AND path != ''
-               ORDER BY updated_at DESC, id DESC"#,
+               ORDER BY position ASC, id ASC"#,
         )?;
         let rows = statement.query_map([], |row| {
             let name: String = row.get(0)?;
             let raw_path: String = row.get(1)?;
+            let position: i64 = row.get(2)?;
             Ok(WorkspaceRecord {
                 name,
                 path: PathBuf::from(raw_path),
+                position,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(DbError::from)
+    }
+
+    /// 持久化工作区全局展示顺序：按给定顺序写回 `position = 0..n`。
+    ///
+    /// 历史列表会展示尚未入库的 Git worktree；拖拽排序时顺带补建这些行（`is_trusted = 0`，
+    /// 保持后续打开仍需信任检查）。已存在行只更新顺序，不改名称、信任位与时间。
+    pub fn save_workspace_order(&self, order: &[(PathBuf, String)]) -> Result<()> {
+        if order.is_empty() {
+            return Ok(());
+        }
+        let transaction = self.conn.unchecked_transaction()?;
+        for (position, (path, name)) in order.iter().enumerate() {
+            transaction.execute(
+                r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, position, created_at, updated_at)
+                   VALUES (?1, ?2, 'filesystem', ?3, 0, ?4, datetime('now'), datetime('now'))
+                   ON CONFLICT(path) DO UPDATE SET position = excluded.position"#,
+                params![
+                    new_external_id("ws"),
+                    name,
+                    path_string(path),
+                    position as i64
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     /// 组装工作区历史列表（含 Git 仓库主工作区归位、全部 `git worktree` 子节点合并与历史命名污染自愈）。
@@ -117,12 +155,19 @@ impl Database {
         let home_ref = home.as_deref();
 
         let mut db_names: HashMap<PathBuf, String> = HashMap::new();
+        let mut record_positions: HashMap<PathBuf, i64> = HashMap::new();
         for record in &records {
             db_names
                 .entry(record.path.clone())
                 .or_insert_with(|| record.name.clone());
+            record_positions
+                .entry(record.path.clone())
+                .or_insert(record.position);
             if let Ok(canon) = std::fs::canonicalize(&record.path) {
-                db_names.entry(canon).or_insert_with(|| record.name.clone());
+                db_names
+                    .entry(canon.clone())
+                    .or_insert_with(|| record.name.clone());
+                record_positions.entry(canon).or_insert(record.position);
             }
         }
 
@@ -204,6 +249,7 @@ impl Database {
                     path: repo_root.clone(),
                     exists: repo_root.is_dir(),
                     name_is_manual: repo_manual,
+                    position: record.position,
                     git: Some(WorkspaceGit {
                         repo_root: repo_root.clone(),
                         checkout_path: repo_root.clone(),
@@ -213,11 +259,20 @@ impl Database {
                     }),
                 });
 
-                for wt in wt_list.entries.iter().skip(1) {
+                // 组内子项：实时 worktree 与数据库历史记录合并后按 position 排序；
+                // 尚未入库的 worktree 暂排组尾（首次拖拽排序时补建记录并写回位置）。
+                let mut children: Vec<(i64, usize, WorkspaceHistoryEntry)> = Vec::new();
+                for (live_index, wt) in wt_list.entries.iter().enumerate().skip(1) {
                     if wt.is_bare || wt.path == repo_root {
                         continue;
                     }
                     seen_paths.insert(wt.path.clone());
+                    let canon = std::fs::canonicalize(&wt.path).unwrap_or_else(|_| wt.path.clone());
+                    let position = record_positions
+                        .get(&wt.path)
+                        .or_else(|| record_positions.get(&canon))
+                        .copied()
+                        .unwrap_or(i64::MAX);
                     let default_wt_name = workspace_label(&wt.path, home_ref);
                     let (wt_name, wt_manual) = match db_names
                         .get(&wt.path)
@@ -226,22 +281,28 @@ impl Database {
                         Some(saved) => (saved.clone(), saved != &default_wt_name),
                         None => (default_wt_name, false),
                     };
-                    out.push(WorkspaceHistoryEntry {
-                        name: wt_name,
-                        path: wt.path.clone(),
-                        exists: wt.path.is_dir(),
-                        name_is_manual: wt_manual,
-                        git: Some(WorkspaceGit {
-                            repo_root: repo_root.clone(),
-                            checkout_path: wt.path.clone(),
-                            is_linked: true,
-                            branch: wt.branch.clone(),
-                            main_branch: main_branch.clone(),
-                        }),
-                    });
+                    children.push((
+                        position,
+                        live_index,
+                        WorkspaceHistoryEntry {
+                            name: wt_name,
+                            path: wt.path.clone(),
+                            exists: wt.path.is_dir(),
+                            name_is_manual: wt_manual,
+                            position,
+                            git: Some(WorkspaceGit {
+                                repo_root: repo_root.clone(),
+                                checkout_path: wt.path.clone(),
+                                is_linked: true,
+                                branch: wt.branch.clone(),
+                                main_branch: main_branch.clone(),
+                            }),
+                        },
+                    ));
                 }
 
-                for r in &records {
+                let historical_base = wt_list.entries.len();
+                for (record_index, r) in records.iter().enumerate() {
                     let canon_r = std::fs::canonicalize(&r.path).unwrap_or_else(|_| r.path.clone());
                     if path_to_repo.get(&r.path) == Some(&repo_root)
                         && !seen_paths.contains(&r.path)
@@ -250,21 +311,28 @@ impl Database {
                         seen_paths.insert(r.path.clone());
                         let default_wt_name = workspace_label(&r.path, home_ref);
                         let wt_manual = r.name != default_wt_name && !r.name.trim().is_empty();
-                        out.push(WorkspaceHistoryEntry {
-                            name: r.name.clone(),
-                            path: r.path.clone(),
-                            exists: r.path.is_dir(),
-                            name_is_manual: wt_manual,
-                            git: Some(WorkspaceGit {
-                                repo_root: repo_root.clone(),
-                                checkout_path: r.path.clone(),
-                                is_linked: true,
-                                branch: None,
-                                main_branch: main_branch.clone(),
-                            }),
-                        });
+                        children.push((
+                            r.position,
+                            historical_base + record_index,
+                            WorkspaceHistoryEntry {
+                                name: r.name.clone(),
+                                path: r.path.clone(),
+                                exists: r.path.is_dir(),
+                                name_is_manual: wt_manual,
+                                position: r.position,
+                                git: Some(WorkspaceGit {
+                                    repo_root: repo_root.clone(),
+                                    checkout_path: r.path.clone(),
+                                    is_linked: true,
+                                    branch: None,
+                                    main_branch: main_branch.clone(),
+                                }),
+                            },
+                        ));
                     }
                 }
+                children.sort_by_key(|(position, seq, _)| (*position, *seq));
+                out.extend(children.into_iter().map(|(_, _, entry)| entry));
             } else {
                 let canon =
                     std::fs::canonicalize(&record.path).unwrap_or_else(|_| record.path.clone());
@@ -280,6 +348,7 @@ impl Database {
                     path: record.path.clone(),
                     exists: record.path.is_dir(),
                     name_is_manual,
+                    position: record.position,
                     git: None,
                 });
             }
@@ -505,5 +574,68 @@ mod tests {
         assert!(entries[2].git.as_ref().is_some_and(|g| g.is_linked));
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn workspace_positions_append_and_save_order_round_trips() {
+        let db = Database::open_in_memory().expect("in-memory db");
+        let alpha = PathBuf::from("/tmp/lx-order-alpha");
+        let beta = PathBuf::from("/tmp/lx-order-beta");
+        let gamma = PathBuf::from("/tmp/lx-order-gamma");
+        for (path, name) in [(&alpha, "alpha"), (&beta, "beta"), (&gamma, "gamma")] {
+            db.record_workspace_open(path, name).expect("record");
+        }
+
+        let order = |db: &Database| -> Vec<PathBuf> {
+            db.list_workspaces()
+                .expect("list")
+                .into_iter()
+                .map(|record| record.path)
+                .collect()
+        };
+        assert_eq!(order(&db), vec![alpha.clone(), beta.clone(), gamma.clone()]);
+
+        // 重复打开已有项不改变全局顺序。
+        db.record_workspace_open(&alpha, "alpha").expect("reopen");
+        assert_eq!(order(&db), vec![alpha.clone(), beta.clone(), gamma.clone()]);
+
+        // 拖拽写回：整表重排为 0..n。
+        db.save_workspace_order(&[
+            (gamma.clone(), "gamma".into()),
+            (alpha.clone(), "alpha".into()),
+            (beta.clone(), "beta".into()),
+        ])
+        .expect("save order");
+        assert_eq!(order(&db), vec![gamma.clone(), alpha.clone(), beta.clone()]);
+
+        // 新记录追加到末尾，不受 updated_at 影响。
+        let delta = PathBuf::from("/tmp/lx-order-delta");
+        db.record_workspace_open(&delta, "delta").expect("record");
+        assert_eq!(
+            order(&db),
+            vec![gamma.clone(), alpha.clone(), beta.clone(), delta.clone()]
+        );
+    }
+
+    #[test]
+    fn save_workspace_order_registers_unopened_worktrees_untrusted() {
+        let db = Database::open_in_memory().expect("in-memory db");
+        let repo = PathBuf::from("/tmp/lx-order-repo");
+        let worktree = PathBuf::from("/tmp/lx-order-repo/.worktrees/feat");
+        db.record_workspace_open(&repo, "repo").expect("record");
+        db.save_workspace_order(&[
+            (repo.clone(), "repo".into()),
+            (worktree.clone(), "feat".into()),
+        ])
+        .expect("save order");
+
+        let list = db.list_workspaces().expect("list");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[1].path, worktree);
+        assert_eq!(list[1].position, 1);
+        assert!(
+            !db.is_trusted(&worktree).expect("trust query"),
+            "历史列表补建的 worktree 行不得隐式授予信任"
+        );
     }
 }

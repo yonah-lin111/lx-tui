@@ -19,6 +19,7 @@ fn mouse_click_mode_button_toggles_history_and_typing_filters_rows() {
                 path: existing,
                 exists: true,
                 name_is_manual: true,
+                position: 0,
                 git: None,
             },
             crate::app::state::WorkspaceHistoryEntry {
@@ -26,6 +27,7 @@ fn mouse_click_mode_button_toggles_history_and_typing_filters_rows() {
                 path: missing,
                 exists: false,
                 name_is_manual: true,
+                position: 1,
                 git: None,
             },
         ],

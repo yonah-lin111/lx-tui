@@ -4,7 +4,9 @@ use super::*;
 use crate::app::overlay::{MenuCommand, Overlay, OverlayTarget, RenameTarget};
 use crate::app::state::{FocusedContainer, WorkspaceGit};
 use crate::app::update::{
-    activate_menu, apply_overlay_key, open_workspace_history_menu, open_workspace_menu,
+    activate_menu, apply_overlay_key, begin_workspace_drag, begin_workspace_history_drag,
+    drag_workspace_to, end_workspace_drag, end_workspace_history_drag, open_workspace_history_menu,
+    open_workspace_menu,
 };
 
 fn plain_entry(name: &str, path: PathBuf, manual: bool) -> WorkspaceHistoryEntry {
@@ -14,8 +16,80 @@ fn plain_entry(name: &str, path: PathBuf, manual: bool) -> WorkspaceHistoryEntry
         path,
         exists,
         name_is_manual: manual,
+        position: 0,
         git: None,
     }
+}
+
+fn git_meta(
+    repo_root: &std::path::Path,
+    checkout_path: &std::path::Path,
+    is_linked: bool,
+) -> WorkspaceGit {
+    WorkspaceGit {
+        repo_root: repo_root.to_path_buf(),
+        checkout_path: checkout_path.to_path_buf(),
+        is_linked,
+        branch: Some(if is_linked { "feature/x" } else { "dev" }.into()),
+        main_branch: Some("dev".into()),
+    }
+}
+
+fn git_entry(name: &str, path: PathBuf, position: i64, git: WorkspaceGit) -> WorkspaceHistoryEntry {
+    let exists = path.is_dir();
+    WorkspaceHistoryEntry {
+        name: name.into(),
+        path,
+        exists,
+        name_is_manual: false,
+        position,
+        git: Some(git),
+    }
+}
+
+/// 构造「仓库父项 + linked 子项 + 独立工作区」三个活跃工作区与对应历史条目。
+fn git_tree_fixture() -> (
+    AppState,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+    Vec<WorkspaceHistoryEntry>,
+) {
+    let repo = PathBuf::from("/tmp/lx-drag-repo");
+    let child = repo.join(".worktrees").join("feat");
+    let standalone = PathBuf::from("/tmp/lx-drag-standalone");
+
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(repo.clone());
+    state.workspaces[0].git = Some(git_meta(&repo, &repo, false));
+    crate::app::update::create_workspace_with_cwd(&mut state, Some(child.clone()));
+    state.workspaces[1].git = Some(git_meta(&repo, &child, true));
+    crate::app::update::create_workspace_with_cwd(&mut state, Some(standalone.clone()));
+    state.effects.clear();
+
+    let entries = vec![
+        git_entry("lx-tui", repo.clone(), 0, git_meta(&repo, &repo, false)),
+        git_entry("feat", child.clone(), 1, git_meta(&repo, &child, true)),
+        plain_entry("standalone", standalone.clone(), false),
+    ];
+    (state, repo, child, standalone, entries)
+}
+
+fn active_paths(state: &AppState) -> Vec<PathBuf> {
+    state
+        .workspaces
+        .iter()
+        .filter_map(|workspace| workspace.cwd.clone())
+        .collect()
+}
+
+fn entry_paths(state: &AppState) -> Vec<PathBuf> {
+    state
+        .workspace_history
+        .entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect()
 }
 
 #[test]
@@ -91,6 +165,7 @@ fn git_tree_grouping_collapse_and_opening_linked_worktree_auto_opens_main_parent
                 path: repo_root.clone(),
                 exists: true,
                 name_is_manual: false,
+                position: 0,
                 git: Some(WorkspaceGit {
                     repo_root: repo_root.clone(),
                     checkout_path: repo_root.clone(),
@@ -104,6 +179,7 @@ fn git_tree_grouping_collapse_and_opening_linked_worktree_auto_opens_main_parent
                 path: wt_path.clone(),
                 exists: true,
                 name_is_manual: false,
+                position: 1,
                 git: Some(WorkspaceGit {
                     repo_root: repo_root.clone(),
                     checkout_path: wt_path.clone(),
@@ -434,4 +510,124 @@ fn creating_workspace_in_history_mode_records_and_selects_without_opening() {
             |eff| matches!(eff, Effect::RecordWorkspace { path, .. } if *path == canon_target)
         )
     );
+}
+
+#[test]
+fn apply_workspace_history_reorders_open_workspaces_to_match() {
+    let (mut state, repo, child, standalone, entries) = git_tree_fixture();
+    // 活跃列表构造顺序为 [父项, 子项, 独立项]；先把激活项切到子项，验证索引重映射。
+    crate::app::update::switch_workspace(&mut state, 1);
+    let active_path = state.active_workspace().cwd.clone();
+    apply_workspace_history(&mut state, entries);
+
+    // 历史顺序为 [父项, 子项, 独立项]，活跃列表已一致。
+    assert_eq!(
+        active_paths(&state),
+        vec![repo.clone(), child.clone(), standalone]
+    );
+    assert_eq!(
+        state.active_workspace().cwd.as_deref(),
+        active_path.as_deref(),
+        "激活项随重排指向同一工作区"
+    );
+}
+
+#[test]
+fn history_drag_moves_group_block_and_syncs_active_order() {
+    let (mut state, repo, child, standalone, entries) = git_tree_fixture();
+    apply_workspace_history(&mut state, entries);
+    show_workspace_history(&mut state);
+
+    // 拖拽独立项到仓库组之前。
+    assert!(begin_workspace_history_drag(&mut state, 2));
+    assert_eq!(state.workspace_history.drag, Some(2));
+    assert!(!state.workspace_history.dragging);
+    assert!(drag_workspace_history_to(&mut state, 0));
+    assert!(state.workspace_history.dragging);
+    assert_eq!(
+        entry_paths(&state),
+        vec![standalone.clone(), repo.clone(), child.clone()]
+    );
+    assert_eq!(
+        active_paths(&state),
+        vec![standalone.clone(), repo.clone(), child.clone()],
+        "活跃列表同步为历史顺序"
+    );
+    assert_eq!(state.workspace_history.drag, Some(0));
+
+    state.effects.clear();
+    end_workspace_history_drag(&mut state);
+    assert_eq!(state.workspace_history.drag, None);
+    assert!(!state.workspace_history.dragging);
+    let Some(Effect::SaveWorkspaceOrder { entries }) = state.effects.first() else {
+        panic!("拖拽结束后必须持久化全局顺序: {:?}", state.effects);
+    };
+    let paths: Vec<&std::path::Path> = entries.iter().map(|(path, _)| path.as_path()).collect();
+    assert_eq!(
+        paths,
+        vec![standalone.as_path(), repo.as_path(), child.as_path()]
+    );
+}
+
+#[test]
+fn active_drag_syncs_history_entries_and_persists() {
+    let (mut state, repo, child, standalone, entries) = git_tree_fixture();
+    apply_workspace_history(&mut state, entries);
+
+    // 把独立项拖到最前。
+    begin_workspace_drag(&mut state, 2);
+    assert!(drag_workspace_to(&mut state, 0));
+    assert_eq!(
+        active_paths(&state),
+        vec![standalone.clone(), repo.clone(), child.clone()]
+    );
+
+    state.effects.clear();
+    end_workspace_drag(&mut state);
+    assert_eq!(
+        entry_paths(&state),
+        vec![standalone.clone(), repo.clone(), child.clone()],
+        "松开时历史条目同步为活跃顺序"
+    );
+    assert!(
+        matches!(
+            state.effects.as_slice(),
+            [Effect::SaveWorkspaceOrder { entries }]
+                if entries.iter().map(|(path, _)| path.as_path()).collect::<Vec<_>>()
+                    == vec![standalone.as_path(), repo.as_path(), child.as_path()]
+        ),
+        "活跃列表拖拽结束后必须持久化全局顺序: {:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn history_drag_moves_whole_git_group_when_child_is_dragged() {
+    let (mut state, repo, child, standalone, entries) = git_tree_fixture();
+    apply_workspace_history(&mut state, entries);
+    show_workspace_history(&mut state);
+
+    // 拖拽子项（可见行 1）：整组（父项 + 子项）一起移到最后。
+    assert!(begin_workspace_history_drag(&mut state, 1));
+    assert!(drag_workspace_history_to(&mut state, 2));
+    assert_eq!(
+        entry_paths(&state),
+        vec![standalone.clone(), repo.clone(), child.clone()]
+    );
+    assert_eq!(
+        state.workspace_history.drag,
+        Some(2),
+        "拖动索引跟随组内被拖子项的新位置"
+    );
+}
+
+#[test]
+fn history_drag_is_ignored_while_search_filters_rows() {
+    let (mut state, _repo, _child, _standalone, entries) = git_tree_fixture();
+    apply_workspace_history(&mut state, entries);
+    show_workspace_history(&mut state);
+    state.workspace_history.search.insert_str("standalone");
+
+    assert!(!begin_workspace_history_drag(&mut state, 0));
+    assert_eq!(state.workspace_history.drag, None);
 }

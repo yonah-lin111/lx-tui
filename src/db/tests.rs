@@ -1617,3 +1617,55 @@ fn v11_upgrade_adds_rewind_schema_and_keeps_history() {
     Database::open(&path).expect("idempotent reopen");
     let _ = std::fs::remove_dir_all(workspace);
 }
+
+#[test]
+fn migrating_v22_backfills_workspace_position_from_updated_at() {
+    let (database, path) = open_test_database("v23-position");
+    let older = workspace_path("v23-older");
+    let newer = workspace_path("v23-newer");
+    database
+        .record_workspace_open(&older, "older")
+        .expect("record older");
+    database
+        .record_workspace_open(&newer, "newer")
+        .expect("record newer");
+
+    // 回退到 v22：旧库没有 position 列，顺序由 updated_at DESC 决定。
+    database
+        .conn
+        .execute(
+            "UPDATE workspace SET updated_at = '2024-01-01 00:00:00' WHERE path = ?1",
+            [path_string(&older)],
+        )
+        .expect("timestamp older");
+    database
+        .conn
+        .execute(
+            "UPDATE workspace SET updated_at = '2024-02-01 00:00:00' WHERE path = ?1",
+            [path_string(&newer)],
+        )
+        .expect("timestamp newer");
+    database
+        .conn
+        .execute_batch(
+            "ALTER TABLE workspace DROP COLUMN position;
+             PRAGMA user_version = 22;",
+        )
+        .expect("downgrade to v22");
+    drop(database);
+
+    let database = Database::open(&path).expect("reopen migrates");
+    let list = database.list_workspaces().expect("list workspaces");
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].path, newer, "旧版最近打开项排在首位");
+    assert_eq!(list[0].position, 0);
+    assert_eq!(list[1].path, older);
+    assert_eq!(list[1].position, 1);
+    let version: i64 = database
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    assert_eq!(version, SCHEMA_VERSION);
+    drop(database);
+    let _ = std::fs::remove_dir_all(path.parent().unwrap_or(Path::new(".")));
+}

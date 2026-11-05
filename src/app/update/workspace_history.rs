@@ -1,5 +1,7 @@
-//! 侧栏工作区历史列表交互：模式切换、Git 树形折叠、搜索过滤、上下导航、双击打开与失效条目级联删除。
+//! 侧栏工作区历史列表交互：模式切换、Git 树形分组与折叠、搜索过滤、上下导航、双击打开、拖拽排序与级联删除。
 
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::app::actions::OverlayKey;
@@ -44,6 +46,8 @@ pub fn show_workspace_history(state: &mut AppState) -> bool {
     state.workspace_history.row_click = None;
     state.workspace_history.scroll_drag = None;
     state.workspace_history.search_drag = false;
+    state.workspace_history.drag = None;
+    state.workspace_history.dragging = false;
     state.workspace_history.refresh_existence();
     // 默认将选中行对齐到当前激活工作区对应的历史项（若存在）。
     if let Some(active_cwd) = state.active_workspace().cwd.as_deref() {
@@ -73,6 +77,8 @@ pub fn exit_workspace_history(state: &mut AppState) -> bool {
     state.workspace_history.row_click = None;
     state.workspace_history.scroll_drag = None;
     state.workspace_history.search_drag = false;
+    state.workspace_history.drag = None;
+    state.workspace_history.dragging = false;
     state.workspace_history.search.clear_selection();
     true
 }
@@ -111,6 +117,235 @@ pub fn toggle_workspace_history_group(state: &mut AppState, visible_row: usize) 
     true
 }
 
+/// 归一化历史条目为完整树形顺序（Git 父项在前、子项紧随）；返回是否有变化。
+pub fn normalize_workspace_history_entries(state: &mut AppState) -> bool {
+    state.workspace_history.normalize()
+}
+
+/// 开始拖拽历史条目：按路径重新定位并归一化树序；搜索过滤中不支持拖拽。
+pub fn begin_workspace_history_drag(state: &mut AppState, visible_row: usize) -> bool {
+    if state.workspace_history.mode != WorkspaceMode::History
+        || !state.workspace_history.search.text().trim().is_empty()
+    {
+        return false;
+    }
+    let Some((_, entry)) = state.workspace_history.entry_at_visible_row(visible_row) else {
+        return false;
+    };
+    let path = entry.path.clone();
+    normalize_workspace_history_entries(state);
+    let Some(row) = state
+        .workspace_history
+        .visible_rows()
+        .iter()
+        .position(|row| {
+            state
+                .workspace_history
+                .entries
+                .get(row.index)
+                .is_some_and(|entry| entry.path == path)
+        })
+    else {
+        return false;
+    };
+    state.workspace_history.selected = row;
+    state.workspace_history.drag = state
+        .workspace_history
+        .visible_rows()
+        .get(row)
+        .map(|row| row.index);
+    state.workspace_history.dragging = false;
+    state.workspace_history.hover = None;
+    true
+}
+
+/// 拖拽历史条目：以 Git 分组块为单位移动到目标可见行；同步活跃列表顺序。
+pub fn drag_workspace_history_to(state: &mut AppState, target_visible_row: usize) -> bool {
+    let Some(from) = state.workspace_history.drag else {
+        return false;
+    };
+    let len = state.workspace_history.entries.len();
+    if from >= len || !state.workspace_history.search.text().trim().is_empty() {
+        return false;
+    }
+    let Some(target) = state
+        .workspace_history
+        .visible_rows()
+        .get(target_visible_row)
+        .map(|row| row.index)
+    else {
+        return false;
+    };
+    if target >= len {
+        return false;
+    }
+    state.workspace_history.dragging = true;
+    let block = state.workspace_history.drag_block(from);
+    let hovered = state.workspace_history.drag_block(target);
+    if hovered.iter().any(|member| block.contains(member)) {
+        return false;
+    }
+    // 落点坐标：向下拖插到目标块之后，向上拖插到目标块之前。
+    let at = if target > from {
+        hovered.last().map_or(len, |last| last.saturating_add(1))
+    } else {
+        hovered.first().copied().unwrap_or(0)
+    };
+    let removed_before =
+        |position: usize| block.iter().filter(|member| **member < position).count();
+    let insert_at = at - removed_before(at);
+    let offset = block.iter().position(|member| *member == from).unwrap_or(0);
+    let kept: Vec<usize> = (0..len).filter(|index| !block.contains(index)).collect();
+    let mut order = kept;
+    for (slot, member) in block.iter().enumerate() {
+        order.insert(insert_at + slot, *member);
+    }
+    if !state.workspace_history.reorder_entries(&order) {
+        return false;
+    }
+    state.workspace_history.drag = Some(insert_at + offset);
+    state.workspace_history.selected = state
+        .workspace_history
+        .visible_rows()
+        .iter()
+        .position(|row| row.index == insert_at + offset)
+        .unwrap_or(0);
+    sync_active_order_to_history(state);
+    true
+}
+
+/// 结束历史列表拖拽；真正移动过时持久化全局顺序。
+pub fn end_workspace_history_drag(state: &mut AppState) {
+    let persist = state.workspace_history.dragging;
+    state.workspace_history.drag = None;
+    state.workspace_history.dragging = false;
+    if persist {
+        persist_workspace_order(state);
+    }
+}
+
+/// 将当前历史条目顺序登记为持久化效应。
+pub fn persist_workspace_order(state: &mut AppState) {
+    if state.workspace_history.entries.is_empty() {
+        return;
+    }
+    let entries = state
+        .workspace_history
+        .entries
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.name.clone()))
+        .collect();
+    state.effects.push(Effect::SaveWorkspaceOrder { entries });
+}
+
+/// 按历史列表顺序稳定重排已打开工作区；返回是否有变化。
+///
+/// 历史条目之外的活跃工作区排在末尾并保持原有相对顺序；激活项与钉住的
+/// prompt 索引随重排一并重映射。
+pub fn sync_active_order_to_history(state: &mut AppState) -> bool {
+    let len = state.workspaces.len();
+    if len < 2 {
+        return false;
+    }
+    let entries = &state.workspace_history.entries;
+    let mut keyed: Vec<(usize, usize)> = state
+        .workspaces
+        .iter()
+        .enumerate()
+        .map(|(index, workspace)| {
+            let rank = entries
+                .iter()
+                .position(|entry| {
+                    workspace.cwd.as_deref() == Some(entry.path.as_path())
+                        || workspace
+                            .git
+                            .as_ref()
+                            .is_some_and(|git| git.checkout_path == entry.path)
+                })
+                .unwrap_or(usize::MAX);
+            (index, rank)
+        })
+        .collect();
+    keyed.sort_by_key(|&(index, rank)| (rank, index));
+    let order: Vec<usize> = keyed.into_iter().map(|(index, _)| index).collect();
+    if order.iter().copied().eq(0..len) {
+        return false;
+    }
+    let active = state.active_workspace;
+    let pinned = state.prompt_pinned;
+    let new_active = order.iter().position(|&old| old == active);
+    let new_pinned = pinned.and_then(|pinned| order.iter().position(|&old| old == pinned));
+    let mut slots: Vec<Option<Workspace>> = state.workspaces.drain(..).map(Some).collect();
+    state.workspaces = order
+        .into_iter()
+        .filter_map(|old| slots.get_mut(old).and_then(Option::take))
+        .collect();
+    if let Some(index) = new_active {
+        state.active_workspace = index;
+    }
+    state.prompt_pinned = new_pinned;
+    true
+}
+
+/// 活跃列表拖拽后，把已打开工作区的相对顺序回写到历史条目。
+///
+/// 未打开的历史条目保持原槽位不动（稳定交错），只替换已打开条目的先后次序；
+/// 随后归一化为树形顺序。返回是否有变化。
+pub fn sync_history_entries_from_active(state: &mut AppState) -> bool {
+    if state.workspace_history.entries.is_empty() {
+        return false;
+    }
+    let open_paths: Vec<PathBuf> = state
+        .workspaces
+        .iter()
+        .filter_map(|workspace| {
+            workspace
+                .cwd
+                .clone()
+                .or_else(|| workspace.git.as_ref().map(|git| git.checkout_path.clone()))
+        })
+        .collect();
+    if open_paths.is_empty() {
+        return false;
+    }
+    let panel = &mut state.workspace_history;
+    let index_by_path: HashMap<PathBuf, usize> = panel
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (entry.path.clone(), index))
+        .collect();
+    let mut pending: VecDeque<WorkspaceHistoryEntry> = VecDeque::new();
+    let mut open_set: HashSet<PathBuf> = HashSet::new();
+    for path in open_paths {
+        if let Some(&index) = index_by_path.get(&path)
+            && open_set.insert(path)
+        {
+            pending.push_back(panel.entries[index].clone());
+        }
+    }
+    if pending.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    let mut rebuilt = Vec::with_capacity(panel.entries.len());
+    for entry in panel.entries.drain(..) {
+        if open_set.contains(&entry.path) {
+            if let Some(next) = pending.pop_front() {
+                changed |= next != entry;
+                rebuilt.push(next);
+            } else {
+                rebuilt.push(entry);
+            }
+        } else {
+            rebuilt.push(entry);
+        }
+    }
+    panel.entries = rebuilt;
+    changed |= panel.normalize();
+    changed
+}
+
 /// 接收数据库加载的工作区历史记录并更新状态（同时将数据库保存的自定义名称回填到活跃工作区）。
 pub fn apply_workspace_history(
     state: &mut AppState,
@@ -145,6 +380,9 @@ pub fn apply_workspace_history(
     let was_loaded = state.workspace_history.loaded;
     state.workspace_history.entries = new_entries;
     state.workspace_history.loaded = true;
+    // 数据库按 position 返回，但历史条目中的 Git 树必须父项在前、子项紧随；
+    // 归一化后 raw entries 顺序与渲染树序一致，活跃列表可直接按它重排。
+    let normalized = state.workspace_history.normalize();
 
     if let Some(target_path) = selected_path {
         let filtered = state.workspace_history.filtered_indices();
@@ -166,7 +404,12 @@ pub fn apply_workspace_history(
         state.workspace_history.selected = state.workspace_history.selected.min(total - 1);
     }
 
-    entries_changed || !was_loaded || ws_renamed
+    // 两个列表共用同一顺序：数据库快照到达后，已打开工作区按历史顺序稳定重排。
+    let ws_reordered = state.workspace_history.drag.is_none()
+        && state.workspace_drag.is_none()
+        && sync_active_order_to_history(state);
+
+    entries_changed || normalized || !was_loaded || ws_renamed || ws_reordered
 }
 
 /// 上下移动历史列表选中项并保持在视口内；返回是否变化。
@@ -343,6 +586,8 @@ pub fn open_workspace_history_entry(state: &mut AppState, entry_index: usize) ->
     }
     ensure_main_workspace(state, child);
     request_git_refresh(state, &entry.path);
+    // 立即按历史顺序重排已打开工作区（不必等待数据库回执）。
+    sync_active_order_to_history(state);
     state.effects.push(Effect::RecordWorkspace {
         path: entry.path,
         name: entry.name,
@@ -492,16 +737,21 @@ pub fn record_workspace_in_history_list(state: &mut AppState, cwd: std::path::Pa
         .any(|entry| entry.path == cwd)
     {
         let exists = cwd.is_dir();
-        state.workspace_history.entries.insert(
-            0,
-            WorkspaceHistoryEntry {
-                name: base.clone(),
-                path: cwd.clone(),
-                exists,
-                name_is_manual: false,
-                git: None,
-            },
-        );
+        let position = state
+            .workspace_history
+            .entries
+            .iter()
+            .map(|entry| entry.position)
+            .max()
+            .map_or(0, |position| position.saturating_add(1));
+        state.workspace_history.entries.push(WorkspaceHistoryEntry {
+            name: base.clone(),
+            path: cwd.clone(),
+            exists,
+            name_is_manual: false,
+            position,
+            git: None,
+        });
     }
     let filtered = state.workspace_history.filtered_indices();
     if let Some(pos) = filtered.iter().position(|&idx| {

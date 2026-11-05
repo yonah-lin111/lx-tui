@@ -22,10 +22,12 @@ pub enum WorkspaceMode {
 pub struct WorkspaceHistoryEntry {
     pub name: String,
     pub path: PathBuf,
-    /// 目标目录当前在磁盘上是否存在（`!exists` 时以异色显示并允许级联删除）。
+    /// 目标目录当前在磁盘上是否存在（`!exists` 时以异色显示）。
     pub exists: bool,
     /// 用户是否手动重命名过该工作区。
     pub name_is_manual: bool,
+    /// 全局展示顺序（活跃列表与历史列表共用）。
+    pub position: i64,
     /// 所属 git checkout 的元数据（主 checkout 或 linked worktree）；非 Git 目录为 None。
     pub git: Option<WorkspaceGit>,
 }
@@ -82,6 +84,10 @@ pub struct WorkspaceHistoryPanel {
     pub scroll_drag: Option<u16>,
     /// 是否正在拖拽选择搜索框文本。
     pub search_drag: bool,
+    /// 拖拽排序中的条目在 `entries` 中的原始下标。
+    pub drag: Option<usize>,
+    /// 指针是否已真正移动（按下未移动不整块反显）。
+    pub dragging: bool,
     /// 最近一次左键按下记录 `(visible_row, pressed_at)`，用于 400ms 双击判定。
     pub row_click: Option<(usize, Instant)>,
     /// 启动后是否已完成首次数据库加载。
@@ -108,6 +114,8 @@ impl WorkspaceHistoryPanel {
             hover: None,
             scroll_drag: None,
             search_drag: false,
+            drag: None,
+            dragging: false,
             row_click: None,
             loaded: false,
         }
@@ -131,6 +139,80 @@ impl WorkspaceHistoryPanel {
         } else {
             self.collapsed_repos.push(repo_root.to_path_buf());
         }
+    }
+
+    /// 忽略折叠与搜索的完整树形顺序：Git 分组的父项在前，子项紧随其后。
+    ///
+    /// 活跃列表按同一顺序重排，保证两个列表的相对次序一致。
+    pub fn tree_order(&self) -> Vec<usize> {
+        tree_order_indices(&self.entries)
+    }
+
+    /// 按完整树形顺序重排条目；顺序非法或未变化时返回 false。
+    pub fn reorder_entries(&mut self, order: &[usize]) -> bool {
+        if order.len() != self.entries.len() {
+            return false;
+        }
+        if order.iter().copied().eq(0..self.entries.len()) {
+            return false;
+        }
+        let mut slots: Vec<Option<WorkspaceHistoryEntry>> =
+            self.entries.drain(..).map(Some).collect();
+        self.entries = order
+            .iter()
+            .filter_map(|&index| slots.get_mut(index).and_then(Option::take))
+            .collect();
+        true
+    }
+
+    /// 归一化为完整树形顺序（Git 父项在前、子项紧随）；返回是否有变化。
+    pub fn normalize(&mut self) -> bool {
+        let order = self.tree_order();
+        self.reorder_entries(&order)
+    }
+
+    /// 拖拽块：Git 分组返回父项 + 全部 linked worktree；重复主 checkout 等独立项返回自身。
+    pub fn drag_block(&self, index: usize) -> Vec<usize> {
+        let Some(entry) = self.entries.get(index) else {
+            return vec![index];
+        };
+        let Some(git) = entry.git.as_ref() else {
+            return vec![index];
+        };
+        let root = git.repo_root.as_path();
+        let parent = self.entries.iter().position(|entry| {
+            entry
+                .git
+                .as_ref()
+                .is_some_and(|git| git.repo_root == root && !git.is_linked)
+        });
+        let has_linked = self.entries.iter().any(|entry| {
+            entry
+                .git
+                .as_ref()
+                .is_some_and(|git| git.repo_root == root && git.is_linked)
+        });
+        let Some(parent) = parent.filter(|_| has_linked) else {
+            return vec![index];
+        };
+        if index != parent && !git.is_linked {
+            return vec![index];
+        }
+        let mut block = vec![parent];
+        block.extend(
+            self.entries
+                .iter()
+                .enumerate()
+                .filter_map(|(other, entry)| {
+                    (other != parent
+                        && entry
+                            .git
+                            .as_ref()
+                            .is_some_and(|git| git.repo_root == root && git.is_linked))
+                    .then_some(other)
+                }),
+        );
+        block
     }
 
     /// 计算当前可见的树形行列表（含折叠裁剪与搜索词过滤）。
@@ -341,4 +423,63 @@ impl WorkspaceHistoryPanel {
         let max_scroll = total.saturating_sub(visible);
         self.scroll = self.scroll.min(max_scroll);
     }
+}
+
+/// 完整树形顺序（忽略折叠与搜索）：Git 分组的父项在前，子项紧随其后；
+/// 未成组的独立项保持原有相对顺序。
+fn tree_order_indices(entries: &[WorkspaceHistoryEntry]) -> Vec<usize> {
+    let mut parent_by_repo: BTreeMap<&Path, usize> = BTreeMap::new();
+    let mut children_by_repo: BTreeMap<&Path, Vec<usize>> = BTreeMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let Some(git) = entry.git.as_ref() else {
+            continue;
+        };
+        let root = git.repo_root.as_path();
+        if git.is_linked {
+            children_by_repo.entry(root).or_default().push(index);
+        } else {
+            parent_by_repo.entry(root).or_insert(index);
+        }
+    }
+    parent_by_repo.retain(|root, _| {
+        children_by_repo
+            .get(root)
+            .is_some_and(|children| !children.is_empty())
+    });
+
+    let mut out = Vec::with_capacity(entries.len());
+    let mut emitted = vec![false; entries.len()];
+    for index in 0..entries.len() {
+        if emitted[index] {
+            continue;
+        }
+        let Some(git) = entries[index].git.as_ref() else {
+            emitted[index] = true;
+            out.push(index);
+            continue;
+        };
+        let root = git.repo_root.as_path();
+        if git.is_linked && parent_by_repo.contains_key(root) {
+            // 成组子项统一在父项位置输出。
+            continue;
+        }
+        if parent_by_repo.get(root) == Some(&index) {
+            emitted[index] = true;
+            out.push(index);
+            for &child in children_by_repo
+                .get(root)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+            {
+                if !emitted[child] {
+                    emitted[child] = true;
+                    out.push(child);
+                }
+            }
+        } else {
+            emitted[index] = true;
+            out.push(index);
+        }
+    }
+    out
 }

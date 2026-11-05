@@ -145,6 +145,10 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
     }
     let scroll = panel.scroll.min(rows.len().saturating_sub(1));
     let selected = panel.selected.min(rows.len().saturating_sub(1));
+    let drag_block = panel
+        .drag
+        .map(|index| panel.drag_block(index))
+        .unwrap_or_default();
     for (vis_row, row) in rows
         .iter()
         .enumerate()
@@ -155,8 +159,9 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
             continue;
         };
         let y = rows_area.y + (vis_row - scroll) as u16;
+        let dragging = panel.dragging && drag_block.contains(&row.index);
         let hovered = panel.hover == Some(vis_row);
-        let highlight = if hovered {
+        let highlight = if dragging || hovered {
             fill_row(buf, rows_area, y);
             style::selection()
         } else {
@@ -348,6 +353,23 @@ pub fn workspace_history_row_at(
     (slot < total).then_some(slot)
 }
 
+/// 拖动排序目标可见行：指针行纵向钳到列表首/末行（横向不限，对齐活跃列表）。
+pub fn workspace_history_drop_index(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    row: u16,
+) -> Option<usize> {
+    let list = history_list_rect(view, state)?;
+    let total = state.workspace_history.visible_rows().len();
+    if total == 0 {
+        return None;
+    }
+    let clamped = row.clamp(list.y, list.bottom().saturating_sub(1));
+    let scroll = state.workspace_history.scroll.min(total.saturating_sub(1));
+    let slot = scroll.saturating_add(usize::from(clamped - list.y));
+    (slot < total).then_some(slot)
+}
+
 /// 历史列表空白区域命中：内容区内（排除搜索框、分割线与滚动条列）且行槽越出已渲染条目。
 pub fn workspace_history_blank_at(
     view: &layout::ViewLayout,
@@ -473,6 +495,7 @@ mod tests {
                 path: repo_root.clone(),
                 exists: true,
                 name_is_manual: false,
+                position: 0,
                 git: Some(WorkspaceGit {
                     repo_root: repo_root.clone(),
                     checkout_path: repo_root.clone(),
@@ -486,6 +509,7 @@ mod tests {
                 path: wt_path.clone(),
                 exists: false,
                 name_is_manual: false,
+                position: 1,
                 git: Some(WorkspaceGit {
                     repo_root,
                     checkout_path: wt_path,
@@ -552,5 +576,76 @@ mod tests {
             name_x,
             row1_y + 1
         ));
+    }
+
+    #[test]
+    fn dragged_history_item_renders_selection_across_full_row() {
+        let mut state = AppState::demo();
+        let config = Config::default();
+        state.workspace_history.entries = vec![
+            WorkspaceHistoryEntry {
+                name: "alpha".into(),
+                path: PathBuf::from("/tmp/lx-drag-alpha"),
+                exists: true,
+                name_is_manual: false,
+                position: 0,
+                git: None,
+            },
+            WorkspaceHistoryEntry {
+                name: "beta".into(),
+                path: PathBuf::from("/tmp/lx-drag-beta"),
+                exists: true,
+                name_is_manual: false,
+                position: 1,
+                git: None,
+            },
+        ];
+        state.workspace_history.mode = WorkspaceMode::History;
+        state.workspace_history.drag = Some(0);
+        state.workspace_history.dragging = true;
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        terminal
+            .draw(|frame| ui::render(frame, &state, &config))
+            .expect("draw");
+        let view = ui::layout::compute(
+            Rect::new(0, 0, 100, 30),
+            &config,
+            state.sidebar_collapsed,
+            state.sidebar_width,
+            state.prompt_collapsed,
+            state.prompt_width,
+            state.prompt_left,
+            state.panes_collapsed,
+        );
+        let sections =
+            ui::layout::sidebar_sections(view.sidebar, state.agents_collapsed).expect("sections");
+        let row0_y = sections.workspaces.y + PROMPT_TREE_HEADER_HEIGHT;
+        let row1_y = row0_y + 1;
+        let buf = terminal.backend().buffer();
+        assert_eq!(
+            buf[(sections.workspaces.x, row0_y)].bg,
+            Color::Indexed(240),
+            "拖动中的历史条目整行反显"
+        );
+        assert_eq!(
+            buf[(sections.workspaces.right() - 1, row0_y)].bg,
+            Color::Indexed(240),
+            "反显覆盖整行空白区"
+        );
+        assert_ne!(
+            buf[(sections.workspaces.x, row1_y)].bg,
+            Color::Indexed(240),
+            "未拖动的条目不高亮"
+        );
+
+        // 只按块反显：拖拽子项时同组父项一起高亮由 drag_block 决定。
+        state.workspace_history.drag = None;
+        state.workspace_history.dragging = false;
+        terminal
+            .draw(|frame| ui::render(frame, &state, &config))
+            .expect("draw");
+        let buf = terminal.backend().buffer();
+        assert_ne!(buf[(sections.workspaces.x, row0_y)].bg, Color::Indexed(240));
     }
 }

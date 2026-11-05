@@ -19,7 +19,7 @@
 
 ## 1. 需求与边界确认清单（Grill Me 已确认）
 
-- [x] **Q1（数据来源与生命周期）**：所有显式创建/打开过的工作区自动持久化到 SQLite `workspace` 表（按最近打开时间倒序）；活跃列表 `Close Workspace` 仅移除内存工作区，保留历史记录。
+- [x] **Q1（数据来源与生命周期）**：所有显式创建/打开过的工作区自动持久化到 SQLite `workspace` 表（与活跃列表共用 `position` 全局顺序）；活跃列表 `Close Workspace` 仅移除内存工作区，保留历史记录。
 - [x] **Q2 / Q3（常规条目 CRUD 边界）**：磁盘路径存在的常规历史条目支持搜索查看（Read）、新建工作区（Create）、重命名工作区（Update/Rename）和双击/回车/右键打开（Open），不提供删除。
 - [x] **Q4（按钮位置、图标与视图切换）**：列表按钮位于左侧栏 `Workspaces` 顶边框右上角、`[+]` 按钮左侧 1 列（`[≡] [+]`）；默认显示 `[≡]`，进入历史列表后显示 `[/]`；仅原位切换侧栏上半区 `Workspaces`，下半区 `Agents` 不变；点击 `[/]`、按 `Esc` 或成功打开历史工作区后自动返回活跃列表视图。
 - [x] **Q5（列表结构、行样式与搜索过滤）**：无文件夹扁平列表，顶部为 `> Search...` 搜索框 + `├────┤` 分割线；每行展示 `❯ • <name>`（未选中 `  • <name>`）；实时不区分大小写过滤名称与路径。
@@ -186,13 +186,14 @@
     - 支持 `WorkspaceMode::History` 下的滚动条点击/拖拽、搜索框点击定位光标、历史条目按下选中与记录双击时间戳。
   - `src/event/mouse/drag.rs`：
     - 支持历史列表滚动条拖拽与搜索框鼠标拖选；
+    - 支持历史条目拖拽排序：以 Git 仓库整组块为单位移动，拖拽过程中整块反显，松开时写回 SQLite `workspace.position` 并同步活跃列表顺序；
     - 左键松开时若命中历史条目且未发生拖拽，判定 400ms 同行双击：双击调用 `open_workspace_history_row(state, row)` 并同步视口可见性。
   - `src/event/mouse/wheel.rs`：在 `WorkspaceMode::History` 下滚动历史列表并重算 `hover`。
   - `src/event/mouse/hover.rs`：在 `WorkspaceMode::History` 下更新 `state.workspace_history.hover`。
   - `src/event/overlay.rs`：`open_right_click_menu` 在 `WorkspaceMode::History` 下优先命中历史条目（打开 `open_workspace_history_menu`）或历史空白区（打开 `open_workspace_list_menu`）。
 - [x] **4.3 Phase 4 集成与事件测试（`src/event/tests/`）**
   - 测试鼠标点击 `[≡]` 打开历史列表、输入搜索词、双击条目打开工作区并自动切回 `Active` 模式；
-  - 测试右键有效条目与右键失效路径条目的菜单项差异及级联删除全链路。
+  - 测试右键菜单 3 击 + 最终弹窗级联删除全链路，以及历史/活跃两个列表的拖拽顺序互同步。
 
 ---
 
@@ -214,7 +215,7 @@ rtk cargo test
 - [x] 在 `ws list`（历史列表视图）中通过 `[+]` 或右键 `New Workspace` 新建条目时，校验并信任路径后仅写入历史列表、清空搜索词并自动选中新条目，保持停留在 `ws list` 而不直接打开工作区（对齐右侧 Prompt List）。
 - [x] 修复 `startup_trust` 在 linked worktree 启动时将子工作区名写入主工作区路径的命名污染，并在加载历史列表时对已污染的主工作区名称自动自愈回主工作区目录名（如 `lx-tui`）。
 - [x] 历史列表（`[≡]`）支持 Git 项目树形结构且移除 `⑂` 图标：自动扫描 `git worktree list` 并合并数据库历史 worktree，父节点显示 `▾/▸ <主工作区名>`（点击箭头可折叠/展开），子节点显示 `├─/└─ <分支短名或自定义名>`；从历史列表打开 linked worktree 时自动补开主工作区父节点。
-- [x] 所有显式创建/打开的工作区自动按路径去重持久化到 SQLite，按最近打开时间倒序排列；终端内 `cd` 不污染历史列表。
+- [x] 所有显式创建/打开的工作区自动按路径去重持久化到 SQLite，按全局 `position` 顺序排列（拖拽可重排）；终端内 `cd` 不污染历史列表。
 - [x] 支持顶部搜索框实时过滤、鼠标双击/键盘回车打开、新建工作区、重命名双向同步。
 - [x] 新建工作区（`NewWorkspace`）直接在首个弹窗内完成二次确认（主按钮由 `Create` 切换为 `Confirm`），不再调用第二个 `TrustWorkspace` 弹窗。
 - [x] 全部工作区均支持级联删除（`Delete`），需经过「右键菜单连续 3 次点击（`Delete` → `Confirm delete (1/2)` → `Confirm delete (2/2)`）+ 最终确认弹窗（`Delete Workspace`）」后执行；若有正在运行的 Agent 流、子 Agent 或本地命令，立即强制中断并级联删除 SQLite 关联数据。
