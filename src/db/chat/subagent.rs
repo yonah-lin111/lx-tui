@@ -8,7 +8,8 @@ mod queue;
 mod record;
 mod report;
 pub use queue::{
-    ClaimedSubagentTurn, EnqueuedInput, PersistedInputItem, SubagentInputRecord, SubagentQueueState,
+    ClaimedSubagentTurn, EnqueuedInput, PersistedInputItem, SubagentInputRecord,
+    SubagentQueueState, SubagentTurnEnvelopeMeta, parse_input_dedupe_meta,
 };
 pub use record::{ReportPayload, SubagentCommitted, SubagentRecord, SubagentReportRecord};
 pub(super) use record::{ensure_session_owned, read_subagent_row};

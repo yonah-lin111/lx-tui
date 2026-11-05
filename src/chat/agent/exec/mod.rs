@@ -234,8 +234,9 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
         &prepared.model_images,
         &mut request.items,
     );
-    let subagents_config = crate::config::subagents::merge_project_roles(
+    let subagents_config = crate::config::subagents::merge_project_roles_for_paths(
         &crate::config::subagents::load_subagents_or_default(),
+        Some(workspace),
         Some(cwd),
         true,
     );
@@ -246,8 +247,27 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
         &mcp_snapshot,
         Some(&subagents_config),
     ));
-    let context =
-        ModelContext::new(request, cwd.to_path_buf()).with_context_limit(model.context_limit);
+    let mut runtime_summary: Option<String> = None;
+    if let Some(guidance) = crate::chat::agent::delegation_mode_guidance(
+        subagents_config.delegation_mode,
+        model.variant.as_deref(),
+    ) {
+        runtime_summary = Some(guidance.to_string());
+    }
+    let subagent_lines = subagent::known_subagent_lines(db, workspace, &committed.session_id);
+    if !subagent_lines.is_empty() {
+        let block = subagent_lines.join("\n");
+        match &mut runtime_summary {
+            Some(existing) => {
+                existing.push_str("\n\n");
+                existing.push_str(&block);
+            }
+            None => runtime_summary = Some(block),
+        }
+    }
+    let context = ModelContext::new(request, cwd.to_path_buf())
+        .with_context_limit(model.context_limit)
+        .with_runtime_summary(runtime_summary);
 
     Ok(ExecTurnConfig {
         workspace: workspace.to_path_buf(),

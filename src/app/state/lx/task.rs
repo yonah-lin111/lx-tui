@@ -170,6 +170,8 @@ pub struct TaskPage {
     pub agent_filter: AgentFilter,
     /// Agents 面板顶栏的内联追问输入框（`None` 为普通浏览态）。
     pub agent_reply: Option<crate::app::overlay::TextInput>,
+    /// 打开内联追问时锁定的目标 `(agent_id, display_nickname)`，防止列表重排/状态变更串发。
+    pub agent_reply_target: Option<(String, String)>,
 }
 
 impl TaskPage {
@@ -266,6 +268,8 @@ impl TaskPage {
             return false;
         }
         self.tab = tab;
+        self.agent_reply = None;
+        self.agent_reply_target = None;
         // 窗口状态属于**进程列表**，与当前 tab 的条目数无关：`Agents` 恒为 0，
         // 若按 `self.len()` 钳制会把 `active/anchor/viewport` 全部抹成 0，
         // 切回 Processes 时用户原来选的那项已经丢了（`^d` 会停错进程）。
@@ -280,6 +284,7 @@ impl TaskPage {
         }
         self.tab = tab;
         self.agent_reply = None;
+        self.agent_reply_target = None;
         self.window.clamp(self.processes.len());
         true
     }

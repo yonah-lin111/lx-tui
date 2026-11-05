@@ -16,6 +16,7 @@ use super::{ConfigError, user_data_root};
 pub mod discover;
 pub use discover::{
     MAX_PROJECT_ROLES, MAX_ROLE_FILE_BYTES, discover_project_roles, merge_project_roles,
+    merge_project_roles_for_paths,
 };
 
 /// 默认整棵根会话树最大并发子 agent 数。

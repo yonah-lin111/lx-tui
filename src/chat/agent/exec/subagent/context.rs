@@ -56,6 +56,9 @@ impl ExecSubagentPool {
         let turn_items = db
             .load_subagent_turn_items(&self.workspace, parent_session_id, agent_id)
             .unwrap_or_default();
+        let turn_envelopes = db
+            .load_subagent_turn_envelopes(&self.workspace, parent_session_id, agent_id)
+            .unwrap_or_default();
         // 非克隆子轮来自 `agent_subagent_input`（当前轮已 claim 并计入）；> 1 即第 2 轮及
         // 之后的 `send_input` 跟进（fork 克隆的父历史没有输入记录，不会误判）。
         let is_follow_up = turn_items.len() > 1;
@@ -87,7 +90,9 @@ impl ExecSubagentPool {
             });
             let mut assistant_text = message_text(assistant);
             if aborted {
-                assistant_text.push('\n');
+                if !assistant_text.is_empty() {
+                    assistant_text.push('\n');
+                }
                 assistant_text.push_str(crate::chat::agent::SUBAGENT_TURN_ABORTED_MARKER);
             }
             turns.push(ChatTurn {
@@ -133,6 +138,9 @@ impl ExecSubagentPool {
             }
             let mut assistant_items = crate::chat::context::assistant_items(assistant);
             if aborted {
+                assistant_items.retain(
+                    |item| !matches!(item, ModelItem::AssistantText(text) if text.is_empty()),
+                );
                 assistant_items.push(ModelItem::UserText(
                     crate::chat::agent::SUBAGENT_TURN_ABORTED_MARKER.to_string(),
                 ));
@@ -140,11 +148,21 @@ impl ExecSubagentPool {
             items.extend(assistant_items);
         }
         let raw_current_text = PersistedInputItem::joined_text(current_items);
-        let (child_path, sender_path) =
-            envelope_paths(db, &self.workspace, parent_session_id, agent_id);
+        let latest_meta = turn_envelopes.values().max_by_key(|m| m.position);
+        let current_msg_type = latest_meta
+            .map_or(crate::chat::agent::InterAgentMessageType::NewTask, |meta| {
+                crate::chat::agent::InterAgentMessageType::from_trigger_turn(meta.trigger_turn)
+            });
+        let (child_path, sender_path) = envelope_paths(
+            db,
+            &self.workspace,
+            parent_session_id,
+            agent_id,
+            latest_meta.and_then(|meta| meta.caller_session_id.as_deref()),
+        );
         let current_text = if is_follow_up {
             crate::chat::agent::format_inter_agent_envelope(
-                crate::chat::agent::InterAgentMessageType::NewTask,
+                current_msg_type,
                 &child_path,
                 &sender_path,
                 &raw_current_text,
@@ -160,8 +178,12 @@ impl ExecSubagentPool {
         let mut current_model_items =
             replay_input_items(child_session_id, supports_image_input, true, current_items)?;
         if is_follow_up {
-            current_model_items =
-                wrap_envelope_items(current_model_items, &child_path, &sender_path);
+            current_model_items = wrap_envelope_items(
+                current_model_items,
+                current_msg_type,
+                &child_path,
+                &sender_path,
+            );
         }
         items.extend(current_model_items);
         let identity = crate::chat::agent::ModelIdentity {
@@ -198,9 +220,10 @@ impl ExecSubagentPool {
         };
         let mcp_prompt = mcp.instructions_prompt();
         let custom_prompt = role_spec.and_then(|spec| spec.system_prompt_override);
-        let system_prompt = crate::chat::agent::compose_subagent_prompt_with_override(
+        let system_prompt = crate::chat::agent::compose_subagent_prompt_with_capabilities(
             role,
             custom_prompt.as_deref(),
+            capabilities,
             PromptParts {
                 model_identity: Some(&identity),
                 environment: Some(&environment),
@@ -241,6 +264,7 @@ fn envelope_paths(
     workspace: &Path,
     parent_session_id: &str,
     agent_id: &str,
+    caller_session: Option<&str>,
 ) -> (String, String) {
     let child_path = db
         .owned_subagent(workspace, parent_session_id, agent_id)
@@ -249,8 +273,12 @@ fn envelope_paths(
         .map(|record| record.agent_path)
         .filter(|path| !path.trim().is_empty())
         .unwrap_or_else(|| "/root/subagent".to_string());
+    let sender_session = caller_session
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(parent_session_id);
     let sender_path = db
-        .resolve_session_tree_root(workspace, parent_session_id)
+        .resolve_session_tree_root(workspace, sender_session)
         .map(|(_, _, path)| path)
         .unwrap_or_else(|_| crate::chat::agent::ROOT_AGENT_PATH.to_string());
     (child_path, sender_path)
@@ -259,6 +287,7 @@ fn envelope_paths(
 /// 只在模型请求侧包裹后续 `send_input` 的用户文本（DB 与 TUI 保持原文）。
 fn wrap_envelope_items(
     items: Vec<ModelItem>,
+    message_type: crate::chat::agent::InterAgentMessageType,
     child_path: &str,
     sender_path: &str,
 ) -> Vec<ModelItem> {
@@ -269,20 +298,25 @@ fn wrap_envelope_items(
             ModelItem::UserText(text) if !wrapped => {
                 wrapped = true;
                 ModelItem::UserText(crate::chat::agent::format_inter_agent_envelope(
-                    crate::chat::agent::InterAgentMessageType::NewTask,
+                    message_type,
                     child_path,
                     sender_path,
                     &text,
                 ))
             }
-            ModelItem::UserContent { text, images } if !wrapped && !text.trim().is_empty() => {
+            ModelItem::UserContent { text, images } if !wrapped => {
                 wrapped = true;
+                let payload = if text.trim().is_empty() {
+                    format!("[{} image(s)]", images.len())
+                } else {
+                    text
+                };
                 ModelItem::UserContent {
                     text: crate::chat::agent::format_inter_agent_envelope(
-                        crate::chat::agent::InterAgentMessageType::NewTask,
+                        message_type,
                         child_path,
                         sender_path,
-                        &text,
+                        &payload,
                     ),
                     images,
                 }
@@ -293,7 +327,7 @@ fn wrap_envelope_items(
 }
 
 /// 持久化输入 → 模型项：当前输入加载失败即拒绝，历史轮次降级为可读占位文本。
-fn replay_input_items(
+pub(super) fn replay_input_items(
     child_session_id: &str,
     supports_image_input: bool,
     is_current_input: bool,
@@ -401,4 +435,117 @@ fn message_text(message: &crate::db::chat::ChatMessage) -> String {
         .map(|part| part.content.as_str())
         .collect::<Vec<_>>()
         .join("")
+}
+
+/// 生成无头 `exec` 会话树下已知子 agent 的 `<subagents>` 结构化摘要（上限 8 条 / 1024 B）。
+pub(in crate::chat::agent::exec) fn known_subagent_lines(
+    db: &Database,
+    workspace: &Path,
+    parent_session: &str,
+) -> Vec<String> {
+    let Ok((root_session, _, _)) = db.resolve_session_tree_root(workspace, parent_session) else {
+        return Vec::new();
+    };
+    let Ok(records) = db.list_subagent_tree(workspace, &root_session) else {
+        return Vec::new();
+    };
+    if records.is_empty() {
+        return Vec::new();
+    }
+    let mut entries = Vec::new();
+    for record in records {
+        let queue = db
+            .subagent_queue_states(workspace, &record.parent_session_id)
+            .ok()
+            .and_then(|mut map| map.remove(&record.agent_id));
+        let resumed_or_paused = record.status != "failed"
+            && queue
+                .as_ref()
+                .is_some_and(|q| q.queued_count > 0 && q.head_error_code.is_none());
+        let has_blocked_head = queue
+            .as_ref()
+            .and_then(|q| q.head_error_code.as_ref())
+            .is_some();
+        let mut status = crate::chat::agent::projected_agent_status(
+            record.status == "running",
+            resumed_or_paused,
+            has_blocked_head,
+            &record.status,
+        )
+        .as_str()
+        .to_string();
+        if status == "cancelled"
+            && queue.as_ref().and_then(|q| q.last_input_status.as_deref()) == Some("interrupted")
+        {
+            status = "interrupted".to_string();
+        }
+        if status == "cancelled" {
+            continue;
+        }
+        entries.push((record, status));
+    }
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    entries.sort_by(|(left_rec, left_st), (right_rec, right_st)| {
+        exec_status_priority(left_st)
+            .cmp(&exec_status_priority(right_st))
+            .then(right_rec.created_at_ms.cmp(&left_rec.created_at_ms))
+    });
+    let header = "<subagents>";
+    let footer = "</subagents>";
+    let mut bytes = header.len() + footer.len() + 2;
+    let mut lines = vec![header.to_string()];
+    for (record, status) in entries.into_iter().take(8) {
+        let nick = record
+            .nickname
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("-");
+        let title = record.title.lines().next().unwrap_or("").trim();
+        let line = if title.is_empty() {
+            format!(
+                "- path={} id={} nickname={} role={} status={}",
+                record.agent_path,
+                record.agent_id,
+                nick,
+                record.role.as_str(),
+                status
+            )
+        } else {
+            format!(
+                "- path={} id={} nickname={} role={} status={} · {}",
+                record.agent_path,
+                record.agent_id,
+                nick,
+                record.role.as_str(),
+                status,
+                title
+            )
+        };
+        let extra = line.len() + 1;
+        if bytes.saturating_add(extra) > 1024 {
+            continue;
+        }
+        bytes = bytes.saturating_add(extra);
+        lines.push(line);
+    }
+    if lines.len() == 1 {
+        return Vec::new();
+    }
+    lines.push(footer.to_string());
+    lines
+}
+
+fn exec_status_priority(status: &str) -> u8 {
+    match crate::chat::agent::AgentStatus::parse(status) {
+        Some(crate::chat::agent::AgentStatus::Running) => 0,
+        Some(crate::chat::agent::AgentStatus::Blocked) => 1,
+        Some(crate::chat::agent::AgentStatus::Idle) => 2,
+        Some(crate::chat::agent::AgentStatus::Interrupted) => 3,
+        Some(crate::chat::agent::AgentStatus::Failed) => 4,
+        Some(crate::chat::agent::AgentStatus::Completed) => 5,
+        Some(crate::chat::agent::AgentStatus::Cancelled) | None => 6,
+    }
 }

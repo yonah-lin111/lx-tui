@@ -20,7 +20,7 @@ pub use popups::{
     select_lx_mention, select_lx_paste, select_lx_refer, select_lx_slash, switch_lx_mention_tab,
     sync_all_lx_mention_roots, sync_lx_mention_root, take_lx_mention_scan_requests,
 };
-pub use task_page::select_task_agent_filter;
+pub use task_page::{apply_task_paste, select_task_agent_filter};
 
 /// 按方向滚动终端窗格回滚视口（负数向上、正数向下）；返回视口是否移动。
 pub fn scroll_pane(state: &mut AppState, id: PaneId, direction: isize) -> bool {

@@ -37,10 +37,6 @@ pub fn format_inter_agent_envelope(
     sender_path: &str,
     payload: &str,
 ) -> String {
-    let trimmed = payload.trim();
-    if trimmed.starts_with("Message Type: ") {
-        return payload.to_string();
-    }
     let recipient = if recipient_path.trim().is_empty() {
         "/root"
     } else {
@@ -51,6 +47,12 @@ pub fn format_inter_agent_envelope(
     } else {
         sender_path.trim()
     };
+    let trimmed = payload.trim();
+    if trimmed.starts_with("Message Type: ")
+        && trimmed.contains(&format!("\nSender: {sender}\nPayload:\n"))
+    {
+        return payload.to_string();
+    }
     format!(
         "Message Type: {}\nTask name: {}\nSender: {}\nPayload:\n{}",
         message_type.as_str(),

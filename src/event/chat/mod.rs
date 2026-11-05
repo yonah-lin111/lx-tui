@@ -620,8 +620,9 @@ fn start_stream(
             || config_root
                 .as_deref()
                 .is_some_and(|root| persistence.is_trusted(root));
-        let effective_subagents = crate::config::subagents::merge_project_roles(
+        let effective_subagents = crate::config::subagents::merge_project_roles_for_paths(
             &state.subagents_config,
+            config_root.as_deref(),
             workspace_root.as_deref(),
             workspace_trusted,
         );

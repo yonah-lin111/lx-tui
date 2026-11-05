@@ -48,47 +48,46 @@ pub fn on_subagent_started(state: &mut AppState, pane: PaneId, mut run: Subagent
     if switched_away && !owns_parent {
         return false;
     }
+    let selected = current_selected_agent_id(&target.lx);
     run.chat.set_project_root(project_root);
     target.lx.agents.runs.push(run);
-    sort_runs_preserving_selection(&mut target.lx);
+    restore_selected_task_agent(&mut target.lx, selected.as_deref());
     refresh_status(state, pane);
     true
 }
 
-/// 按树形前序重排 run，并让列表高亮继续指向同一个 agent。
-fn sort_runs_preserving_selection(lx: &mut crate::app::state::Lx) {
-    let selected = lx
-        .task
+fn current_selected_agent_id(lx: &crate::app::state::Lx) -> Option<String> {
+    lx.task
         .as_ref()
         .and_then(|page| page.selected_agent_index(&lx.agents))
-        .map(|index| lx.agents.runs[index].agent_id.clone());
+        .and_then(|index| lx.agents.runs.get(index))
+        .map(|run| run.agent_id.clone())
+}
+
+/// 按树形前序重排 run，并让筛选后的列表高亮继续指向修改前捕获的 `selected_agent_id`；
+/// 若目标已被当前筛选隐藏则钳制到合法范围。
+pub fn restore_selected_task_agent(
+    lx: &mut crate::app::state::Lx,
+    selected_agent_id: Option<&str>,
+) {
     lx.agents.sort_runs_tree_order();
-    let Some(selected) = selected else {
+    let Some(page) = lx.task.as_mut() else {
         return;
     };
-    let Some(index) = lx
-        .agents
-        .runs
-        .iter()
-        .position(|run| run.agent_id == selected)
-    else {
-        return;
-    };
-    let Some(page) = lx.task.as_ref() else {
-        return;
-    };
-    let Some(position) = lx
-        .agents
-        .filtered_indices(page.agent_filter)
-        .iter()
-        .position(|real| *real == index)
-    else {
-        return;
-    };
-    if let Some(page) = lx.task.as_mut() {
+    let filtered = lx.agents.filtered_indices(page.agent_filter);
+    if let Some(selected) = selected_agent_id
+        && let Some(index) = lx
+            .agents
+            .runs
+            .iter()
+            .position(|run| run.agent_id == selected)
+        && let Some(position) = filtered.iter().position(|real| *real == index)
+    {
         page.agents_window.active = position;
         page.agents_window.anchor = position;
         page.agents_window.viewport = None;
+    } else {
+        page.agents_window.clamp(filtered.len());
     }
 }
 
@@ -269,6 +268,7 @@ pub fn set_subagent_list(
     {
         return false;
     }
+    let selected = current_selected_agent_id(&target.lx);
     let mut changed = false;
     for record in records {
         match target.lx.agents.by_agent_mut(&record.agent_id) {
@@ -303,17 +303,7 @@ pub fn set_subagent_list(
         }
     }
     if changed {
-        sort_runs_preserving_selection(&mut target.lx);
-        let filtered = target
-            .lx
-            .task
-            .as_ref()
-            .map_or(target.lx.agents.runs.len(), |page| {
-                target.lx.agents.filtered_indices(page.agent_filter).len()
-            });
-        if let Some(page) = target.lx.task.as_mut() {
-            page.agents_window.clamp(filtered);
-        }
+        restore_selected_task_agent(&mut target.lx, selected.as_deref());
     }
     let focused = consume_agent_focus(&mut target.lx);
     let changed = changed || focused;
@@ -397,6 +387,14 @@ fn consume_agent_focus(lx: &mut crate::app::state::Lx) -> bool {
     };
     page.agents_focus = None;
     page.agent_filter = filter;
+    if page
+        .agent_reply_target
+        .as_ref()
+        .is_some_and(|(target_id, _)| target_id != &agent_id)
+    {
+        page.agent_reply = None;
+        page.agent_reply_target = None;
+    }
     page.agents_window.active = position;
     page.agents_window.anchor = position;
     page.agents_window.viewport = None;
@@ -437,9 +435,18 @@ pub fn select_task_agent(state: &mut AppState, pane: PaneId, index: usize) -> bo
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    let clicked_agent_id = target.lx.agents.runs.get(index).map(|r| r.agent_id.clone());
     let Some(page) = target.lx.task.as_mut() else {
         return false;
     };
+    if page
+        .agent_reply_target
+        .as_ref()
+        .is_some_and(|(target_id, _)| Some(target_id) != clicked_agent_id.as_ref())
+    {
+        page.agent_reply = None;
+        page.agent_reply_target = None;
+    }
     page.agents_window.active = position;
     page.agents_window.anchor = position;
     page.agents_window.viewport = None;
@@ -721,16 +728,7 @@ pub fn on_subagent_finished(
             .lx
             .agents
             .evict_excess_idle_chats(protected.as_deref());
-        let filtered = target
-            .lx
-            .task
-            .as_ref()
-            .map_or(target.lx.agents.runs.len(), |page| {
-                target.lx.agents.filtered_indices(page.agent_filter).len()
-            });
-        if let Some(page) = target.lx.task.as_mut() {
-            page.agents_window.clamp(filtered);
-        }
+        restore_selected_task_agent(&mut target.lx, protected.as_deref());
     }
     refresh_status(state, pane);
     true

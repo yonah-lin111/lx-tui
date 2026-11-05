@@ -170,6 +170,17 @@ where
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct PartialBuiltinRoleOverrides {
+    #[serde(default)]
+    explorer: Option<RoleOverrideConfig>,
+    #[serde(default)]
+    executor: Option<RoleOverrideConfig>,
+    #[serde(default)]
+    monitor: Option<RoleOverrideConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PutAllPayload {
     max_concurrent: usize,
     #[serde(default)]
@@ -180,7 +191,7 @@ struct PutAllPayload {
     #[serde(default)]
     delegation_mode: Option<DelegationMode>,
     #[serde(default)]
-    builtins: Option<crate::config::subagents::BuiltinRoleOverrides>,
+    builtins: Option<PartialBuiltinRoleOverrides>,
     #[serde(default)]
     roles: Option<Vec<CustomRoleConfig>>,
 }
@@ -205,7 +216,15 @@ fn put_subagents_all(request: &Request, state: &ServiceState) -> Response {
         file.subagents.delegation_mode = mode;
     }
     if let Some(builtins) = payload.builtins {
-        file.subagents.builtins = builtins;
+        if let Some(explorer) = builtins.explorer {
+            file.subagents.builtins.explorer = explorer;
+        }
+        if let Some(executor) = builtins.executor {
+            file.subagents.builtins.executor = executor;
+        }
+        if let Some(monitor) = builtins.monitor {
+            file.subagents.builtins.monitor = monitor;
+        }
     }
     if let Some(roles) = payload.roles {
         file.subagents.roles = roles;
@@ -282,11 +301,15 @@ struct BuiltinOverridePayload {
     #[serde(default)]
     model: Option<ModelSelection>,
     #[serde(default)]
-    lock_model: bool,
-    #[serde(default, flatten)]
-    capabilities: RoleCapabilities,
+    lock_model: Option<bool>,
     #[serde(default)]
-    nickname_candidates: Vec<String>,
+    allow_web_search: Option<bool>,
+    #[serde(default)]
+    allow_mcp: Option<bool>,
+    #[serde(default)]
+    allow_skills: Option<bool>,
+    #[serde(default)]
+    nickname_candidates: Option<Vec<String>>,
 }
 
 fn put_builtin(role: &str, request: &Request, state: &ServiceState) -> Response {
@@ -297,6 +320,12 @@ fn put_builtin(role: &str, request: &Request, state: &ServiceState) -> Response 
     let payload: BuiltinOverridePayload = match serde_json::from_str(&request.body) {
         Ok(p) => p,
         Err(err) => return Response::error(400, &format!("invalid json: {err}")),
+    };
+    let existing = match role {
+        "explorer" => file.subagents.builtins.explorer.clone(),
+        "executor" => file.subagents.builtins.executor.clone(),
+        "monitor" => file.subagents.builtins.monitor.clone(),
+        _ => return Response::error(404, "unknown built-in role"),
     };
     // 若提交的描述或系统提示词与内置默认值完全一致，自动视作未覆写（None）。
     let default_desc = match role {
@@ -317,9 +346,19 @@ fn put_builtin(role: &str, request: &Request, state: &ServiceState) -> Response 
             .system_prompt
             .filter(|p| p.trim() != default_prompt.trim()),
         model: payload.model,
-        lock_model: payload.lock_model,
-        capabilities: payload.capabilities,
-        nickname_candidates: payload.nickname_candidates,
+        lock_model: payload.lock_model.unwrap_or(existing.lock_model),
+        capabilities: RoleCapabilities {
+            allow_web_search: payload
+                .allow_web_search
+                .unwrap_or(existing.capabilities.allow_web_search),
+            allow_mcp: payload.allow_mcp.unwrap_or(existing.capabilities.allow_mcp),
+            allow_skills: payload
+                .allow_skills
+                .unwrap_or(existing.capabilities.allow_skills),
+        },
+        nickname_candidates: payload
+            .nickname_candidates
+            .unwrap_or(existing.nickname_candidates),
     }
     .normalized();
     match role {
@@ -381,11 +420,15 @@ fn update_role(name: &str, request: &Request, state: &ServiceState) -> Response 
         Ok(pair) => pair,
         Err(resp) => return resp,
     };
-    let custom: CustomRoleConfig = match serde_json::from_str(&request.body) {
+    let raw_obj: serde_json::Value = match serde_json::from_str(&request.body) {
+        Ok(v) => v,
+        Err(err) => return Response::error(400, &format!("invalid json: {err}")),
+    };
+    let custom: CustomRoleConfig = match serde_json::from_value(raw_obj.clone()) {
         Ok(c) => c,
         Err(err) => return Response::error(400, &format!("invalid json: {err}")),
     };
-    let norm = custom.normalized();
+    let mut norm = custom.normalized();
     let Some(idx) = file
         .subagents
         .roles
@@ -394,6 +437,21 @@ fn update_role(name: &str, request: &Request, state: &ServiceState) -> Response 
     else {
         return Response::error(404, &format!("custom role '{name}' not found"));
     };
+    let existing = &file.subagents.roles[idx];
+    if let Some(obj) = raw_obj.as_object() {
+        if !obj.contains_key("lockModel") {
+            norm.lock_model = existing.lock_model;
+        }
+        if !obj.contains_key("allowWebSearch") {
+            norm.capabilities.allow_web_search = existing.capabilities.allow_web_search;
+        }
+        if !obj.contains_key("allowMcp") {
+            norm.capabilities.allow_mcp = existing.capabilities.allow_mcp;
+        }
+        if !obj.contains_key("allowSkills") {
+            norm.capabilities.allow_skills = existing.capabilities.allow_skills;
+        }
+    }
     file.subagents.roles[idx] = norm;
     match commit_and_notify(&path, &file, state) {
         Ok(saved) => build_response_json(&saved, state),

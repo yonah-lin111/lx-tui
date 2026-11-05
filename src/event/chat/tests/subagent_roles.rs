@@ -429,6 +429,12 @@ async fn interrupted_turn_is_replayed_with_turn_aborted_and_followup_envelope() 
     .expect("assemble child context");
     let items = ctx.items();
     assert!(
+        !items
+            .iter()
+            .any(|item| matches!(item, ModelItem::AssistantText(s) if s.is_empty())),
+        "aborted turn without text must not emit empty AssistantText block: {items:?}"
+    );
+    assert!(
         items
             .iter()
             .any(|item| matches!(item, ModelItem::UserText(text)
@@ -529,4 +535,150 @@ async fn send_subagent_user_input_effect_resumes_completed_agent_and_starts_a_tu
         .map(|part| part.content.as_str())
         .collect();
     assert_eq!(text, "ask again", "DB keeps the clean user text");
+}
+
+#[tokio::test]
+async fn trigger_turn_false_stays_idle_after_running_turn_and_uses_message_envelope_on_wake() {
+    let (fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let spawned = op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::Spawn {
+            role: AgentRole::Monitor,
+            title: "poller".into(),
+            task_name: Some("poller".into()),
+            task: "initial watch".into(),
+            items: vec![crate::chat::agent::SubagentInputItem::Text {
+                text: "initial watch".into(),
+            }],
+            fork_context: false,
+            fork_turns: None,
+            model: None,
+            reasoning_effort: None,
+            max_tokens: None,
+        },
+    )
+    .await
+    .expect("spawn");
+    let SubagentOutcome::Spawned { agent_id, .. } = spawned else {
+        panic!("expected spawned");
+    };
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+
+    // 1. 运行期间调用 send_input(trigger_turn=false) 仅排队补充上下文。
+    op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::SendInput {
+            target: agent_id.clone(),
+            items: vec![crate::chat::agent::SubagentInputItem::Text {
+                text: "context note alpha".into(),
+            }],
+            interrupt: false,
+            trigger_turn: false,
+        },
+    )
+    .await
+    .expect("queue note");
+
+    // 2. 首轮自然完成后不得自动消费仅入队的 `trigger_turn=false` 消息，必须保持 idle + queued=1。
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session.clone(),
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    assert!(
+        !streams.subagents.contains_key(&child_session),
+        "trigger_turn=false must not auto-start a turn after Complete"
+    );
+    assert!(
+        streams.resumed_subagents.contains(&agent_id),
+        "subagent with queued note stays in idle resumed state"
+    );
+
+    // 3. 显式调用 resume_agent 唤醒后，认领该条消息并包裹为 `Message Type: MESSAGE` 信封。
+    op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::Resume {
+            id: agent_id.clone(),
+        },
+    )
+    .await
+    .expect("resume");
+    let handle = streams.subagents.get(&child_session).expect("running turn");
+    let current_user_id = handle.child_user_message_id.clone();
+
+    let frozen = streams.frozen.get(&child_session).expect("frozen").clone();
+    let inputs = crate::event::chat::subagent::capture_child_prompt_inputs(
+        &state,
+        &persistence,
+        fixture.workspace(),
+        fixture.workspace(),
+        &frozen,
+        AgentRole::Monitor,
+    );
+    let model = crate::db::chat::ModelSnapshot {
+        provider: frozen.provider.clone(),
+        model: frozen.model.clone(),
+        variant: frozen.variant.clone(),
+    };
+    let ctx = crate::event::chat::subagent::assemble_child_context(
+        persistence.database().expect("db"),
+        fixture.workspace(),
+        &key.session,
+        &agent_id,
+        &child_session,
+        &current_user_id,
+        AgentRole::Monitor,
+        crate::event::chat::subagent::ChildPromptContext {
+            system_prompt_override: inputs.system_prompt_override.as_deref(),
+            model_identity: Some(&inputs.model_identity),
+            environment: &inputs.environment,
+            instructions: inputs.instructions.as_deref(),
+            skills: inputs.skills.as_deref(),
+            mcp: &inputs.mcp,
+        },
+        fixture.workspace(),
+        &model,
+        frozen.variant_params.clone(),
+        frozen.context_limit,
+        frozen.output_limit,
+        frozen.supports_image_input,
+        &[crate::db::chat::PersistedInputItem::Text {
+            text: "context note alpha".into(),
+        }],
+        &state.subagents_config,
+        crate::event::chat::subagent::ChildTurnLimits {
+            depth: 1,
+            max_depth: 2,
+            max_tokens: None,
+        },
+    )
+    .expect("assemble child context");
+    let items = ctx.items();
+    assert!(
+        matches!(items.last(), Some(ModelItem::UserText(text))
+            if text.starts_with("Message Type: MESSAGE\nTask name: /root/poller\nSender: /root\nPayload:\ncontext note alpha")),
+        "trigger_turn=false input must use MESSAGE envelope: {items:?}"
+    );
 }

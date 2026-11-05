@@ -956,6 +956,73 @@ fn reply_to_cancelled_subagent_shows_warning() {
 }
 
 #[test]
+fn inline_reply_locks_target_across_active_filter_changes_and_handles_paste() {
+    let (mut state, pane) = state_with_session("draft-keep");
+    assert!(open_task_page(&mut state, pane));
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        let mut r1 = agent_with_status("sub-1", "sess-c1", "running");
+        r1.nickname = Some("Turing".into());
+        r1.agent_path = "/root/turing".into();
+        let mut r2 = agent_with_status("sub-2", "sess-c2", "running");
+        r2.nickname = Some("Curie".into());
+        r2.agent_path = "/root/curie".into();
+        target.lx.agents.runs = vec![r1, r2];
+        let task_page = target.lx.task.as_mut().expect("task");
+        task_page.tab = TaskTab::Agents;
+        task_page.agent_filter = crate::app::state::AgentFilter::Active;
+        task_page.agents_window.active = 1; // 选中第 2 个 running agent (Curie)
+    }
+
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(page(&state, pane).agent_reply.is_some());
+
+    // 空回车保持输入态不误退
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(page(&state, pane).agent_reply.is_some());
+
+    // 粘贴进入内联追问框，不污染隐藏的主草稿框
+    assert!(crate::app::update::apply_task_paste(
+        &mut state,
+        pane,
+        "hello\nworld"
+    ));
+    assert_eq!(
+        state.pane_anywhere(pane).unwrap().lx.input.as_str(),
+        "draft-keep"
+    );
+
+    // 第 1 个子 agent 结束并从 Active 筛选视图消失：高亮身份保持在 sub-2，且提交仍发给 sub-2
+    crate::app::update::on_subagent_finished(
+        &mut state,
+        "sess-c1",
+        "completed",
+        None,
+        crate::db::chat::Usage::default(),
+    );
+    assert_eq!(
+        page(&state, pane).selected_agent_index(&state.pane_anywhere(pane).unwrap().lx.agents),
+        Some(1),
+        "Active 筛选下前序项完成时当前选中项保持指向 sub-2"
+    );
+
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput {
+                agent_id,
+                text,
+                ..
+            } if agent_id == "sub-2" && text == "hello world"
+        )),
+        "内联追问必须发给锁定的 sub-2：{:?}",
+        state.effects
+    );
+}
+
+#[test]
 fn subagents_slash_command_opens_the_agents_tab() {
     assert_eq!(
         crate::app::state::SlashPanel::commands_matching("/agents").first(),

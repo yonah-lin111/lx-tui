@@ -21,8 +21,10 @@ pub(crate) const fn spawn_agent_spec() -> ToolSpec {
          with a clean context; set `fork_context=true` to clone all completed turns from the \
          parent conversation before appending this task, or pass `fork_turns` (1-64) to clone \
          only the most recent completed turns. Built-in roles are `explorer` (read-only \
-         `read`/`search`/`web_search`) and `executor` (file and process tools, no `ask`, no plan \
-         tool), plus any custom roles configured in settings. Optionally pass `model` \
+         `read`/`search`/`web_search`), `executor` (file and process tools, no `ask`, no plan \
+         tool), and `monitor` (command polling `read`/`search`/`exec_command`/`write_stdin`, \
+         leaf-only), plus any custom roles configured in settings or discovered from \
+         `.lx/agents/*.json` and `.agents/roles/*.json`. Optionally pass `model` \
          ('provider/model' or 'model'), `reasoning_effort`, and `max_tokens` to override the role \
          or parent model and cap the subagent's token budget. Always give it a short \
          human-readable `title` plus either `task` (plain text) or `items` (ordered text and \
@@ -265,7 +267,7 @@ fn spawn_parameters() -> Value {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": MAX_ROLE_NAME_LEN,
-                "description": "Subagent role identifier (`explorer`, `executor`, or a configured custom role name).",
+                "description": "Subagent role identifier (`explorer`, `executor`, `monitor`, or a configured/project custom role name).",
             },
             "title": {
                 "type": "string",

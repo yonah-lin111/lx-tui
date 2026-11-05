@@ -160,23 +160,60 @@ pub(crate) fn finish_subagent_with_billing(
                     run.status = STATUS_IDLE.to_string();
                 }
             } else if streams.resumed_subagents.contains(&handle.agent_id) {
-                match schedule_next_queued_input_with_done(
-                    state,
-                    streams,
-                    persistence,
-                    &handle.parent,
-                    &handle.workspace,
-                    &handle.agent_id,
-                    Some(handle.done.clone()),
-                ) {
-                    Ok(Some(_)) => {
-                        continued = true;
+                let has_triggerable = persistence
+                    .database()
+                    .and_then(|db| {
+                        db.has_triggerable_queued_input(
+                            &handle.workspace,
+                            &handle.parent.session,
+                            &handle.agent_id,
+                        )
+                        .ok()
+                    })
+                    .unwrap_or(false);
+                if has_triggerable {
+                    match schedule_next_queued_input_with_done(
+                        state,
+                        streams,
+                        persistence,
+                        &handle.parent,
+                        &handle.workspace,
+                        &handle.agent_id,
+                        Some(handle.done.clone()),
+                    ) {
+                        Ok(Some(_)) => {
+                            continued = true;
+                        }
+                        Ok(None) => {
+                            streams.resumed_subagents.remove(&handle.agent_id);
+                        }
+                        Err(_) => {
+                            // 队首输入 blocked（如 image_missing）：保留队列，停止继续消费。
+                        }
                     }
-                    Ok(None) => {
+                } else {
+                    let has_queued = persistence
+                        .database()
+                        .and_then(|db| {
+                            db.next_queued_input(
+                                &handle.workspace,
+                                &handle.parent.session,
+                                &handle.agent_id,
+                            )
+                            .ok()
+                            .flatten()
+                        })
+                        .is_some();
+                    if has_queued {
+                        // 仅含 `trigger_turn = false`（`msg:`）入队消息：保持 idle 等待显式唤醒。
+                        streams.resumed_subagents.insert(handle.agent_id.clone());
+                        if let Some(pane) = state.pane_mut_anywhere(handle.parent.pane)
+                            && let Some(run) = pane.lx.agents.by_agent_mut(&handle.agent_id)
+                        {
+                            run.status = STATUS_IDLE.to_string();
+                        }
+                    } else {
                         streams.resumed_subagents.remove(&handle.agent_id);
-                    }
-                    Err(_) => {
-                        // 队首输入 blocked（如 image_missing）：保留队列，停止继续消费。
                     }
                 }
             }

@@ -281,6 +281,15 @@ pub(crate) fn handle_paste_event(
         let id = state.active_tab().layout.focus();
         if state
             .pane_anywhere(id)
+            .is_some_and(|pane| pane.lx.task.is_some())
+        {
+            if update::apply_task_paste(state, id, &text) {
+                *dirty = true;
+            }
+            return;
+        }
+        if state
+            .pane_anywhere(id)
             .is_some_and(|pane| pane.lx.ask.is_some())
         {
             if update::apply_ask_paste(state, id, &text) {

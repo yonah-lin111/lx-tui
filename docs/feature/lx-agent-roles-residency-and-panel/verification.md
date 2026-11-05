@@ -12,7 +12,7 @@
 
 ---
 
-## 2. 贯通验证项（V01–V06）
+## 2. 贯通验证项（V01–V07）
 
 ### V01 — `monitor` 内置角色、默认 `low` 推理档位与两阶段续轮（模块 H & J）
 - **输入内容**：依次调用 `spawn_agent(role="monitor", task_name="cmd_watcher", task="Run exec_command echo MONITOR_STAGE_1")` → `wait_agent` → `resume_agent` → `send_input(message="Reply with MONITOR_STAGE_2", trigger_turn=true)` → `wait_agent`。
@@ -43,3 +43,8 @@
 - **输入内容**：在 `Agents` 面板按 `Tab` 切换 `all · active · done`，按 `Enter` 对已结束子 Agent 发送内联追问 `To <nickname>: `，存在 `status="blocked"` 子 Agent，以及调用 `/api/subagents` 系列接口。
 - **验证步骤**：执行 `cargo test --lib app::update::chat::tests::task_page`、`cargo test --lib ui::main_content::lx::task::tests`、`cargo test --lib ui::main_content::lx::status::tests` 与 `cargo test --lib settings::service::tests`。
 - **期望结果**：`Tab` 过滤可见项且在父节点被隐藏时省略悬空 `├─/└─`；`Enter` 自动 `resume + send_input`；底栏渲染 `1 blocked`；Web 设置 API 完整读写 `monitor`、`delegationMode`、`lockModel` 与 3 项能力开关（实测通过）。
+
+### V07 — Review 专项修复验证：`MESSAGE` 信封、`trigger_turn=false` 不误触发、子目录 Worktree 角色发现与内联追问目标锁定（P0–P3）
+- **输入内容**：1) 调用 `send_input(trigger_turn=false)` 排队消息后由 `resume_agent` 唤醒，检查子 Agent 收到的 `Message Type` 与 `Sender`；2) 在 linked worktree 的子目录 `-C src` 下调用工作树根 `.lx/agents/strict_scout.json`；3) 在 `Active` 过滤下对第 2 个子 Agent 打开内联追问并粘贴多行文本，期间第 1 个子 Agent 完成退出。
+- **验证步骤**：执行 `./target/debug/lx-tui exec --json "...send_input(..., trigger_turn=false) -> resume_agent..."`、`./target/debug/lx-tui exec -C src --ephemeral --json "Call spawn_agent with role='strict_scout'..."`，以及 `cargo test --lib event::chat::tests::subagent_roles::trigger_turn_false_stays_idle_after_running_turn_and_uses_message_envelope_on_wake` 与 `cargo test --lib app::update::chat::tests::task_page::inline_reply_locks_target_across_active_filter_changes_and_handles_paste`。
+- **期望结果**：`trigger_turn=false` 在运行轮自然完成后保持 `idle (queued_count=1)` 不自动开轮，唤醒后精确包裹 `Message Type: MESSAGE` 与真实 `Sender: /root`；被中断的无文本轮次不产生空 `AssistantText("")`；`-C src` 跨子目录成功解析 worktree 项目角色并返回 `STRICT_SCOUT_OK`；内联追问跨列表重排始终锁定原目标且粘贴不污染底部隐藏草稿（实测通过）。

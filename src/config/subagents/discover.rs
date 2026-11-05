@@ -6,7 +6,7 @@
 //! 3. 禁止覆盖内置角色名（`explorer` / `executor` / `monitor`）或全局 `subagents.json` 中已定义的自定义角色；
 //! 4. 损坏或不合法的单文件仅记录 `tracing::warn!` 并跳过，不中断会话。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::Deserialize;
@@ -42,18 +42,30 @@ struct ProjectRoleFile {
     capabilities: RoleCapabilities,
     #[serde(default)]
     nickname_candidates: Vec<String>,
+    #[serde(default, flatten)]
+    extra: HashMap<String, serde_json::Value>,
 }
 
 /// 扫描受信任工作区下的 `.lx/agents/*.json` 与 `.agents/roles/*.json`。
 pub fn discover_project_roles(workspace_root: &Path) -> Vec<CustomRoleConfig> {
     let candidate_dirs = [
-        workspace_root.join(".lx").join("agents"),
-        workspace_root.join(".agents").join("roles"),
+        (
+            workspace_root.join(".lx"),
+            workspace_root.join(".lx").join("agents"),
+        ),
+        (
+            workspace_root.join(".agents"),
+            workspace_root.join(".agents").join("roles"),
+        ),
     ];
     let mut out = Vec::new();
     let mut seen_names = HashSet::new();
 
-    for dir in &candidate_dirs {
+    for (parent_dir, dir) in &candidate_dirs {
+        if is_symlink_path(parent_dir) || is_symlink_path(dir) {
+            tracing::warn!(path = %dir.display(), "skipping symlinked project role directory");
+            continue;
+        }
         let Ok(read_dir) = std::fs::read_dir(dir) else {
             continue;
         };
@@ -101,6 +113,14 @@ pub fn discover_project_roles(workspace_root: &Path) -> Vec<CustomRoleConfig> {
                     continue;
                 }
             };
+            if !parsed.extra.is_empty() {
+                tracing::warn!(
+                    path = %path.display(),
+                    unknown_keys = ?parsed.extra.keys().collect::<Vec<_>>(),
+                    "skipping project role json with unknown fields"
+                );
+                continue;
+            }
             let stem = path
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -153,29 +173,66 @@ pub fn merge_project_roles(
     workspace: Option<&Path>,
     workspace_trusted: bool,
 ) -> SubagentsSection {
+    merge_project_roles_for_paths(base, workspace, None, workspace_trusted)
+}
+
+/// 同时扫描执行目录 `cwd`（如 linked worktree）与仓库根 `workspace` 的项目角色：
+/// `cwd` 优先于 `workspace`，全局 `base.roles` 与内置角色名最高优先。
+pub fn merge_project_roles_for_paths(
+    base: &SubagentsSection,
+    workspace: Option<&Path>,
+    cwd: Option<&Path>,
+    workspace_trusted: bool,
+) -> SubagentsSection {
     let mut merged = base.clone();
     if !workspace_trusted {
         return merged;
     }
-    let Some(ws) = workspace else {
-        return merged;
-    };
-    let existing: HashSet<String> = merged
+    let mut seen: HashSet<String> = merged
         .roles
         .iter()
         .map(|r| r.name.trim().to_string())
         .collect();
-    for role in discover_project_roles(ws) {
-        if existing.contains(role.name.as_str()) {
-            tracing::warn!(
-                role = %role.name,
-                "project role shadowed by global custom role in subagents.json"
-            );
-            continue;
+    let mut roots: Vec<std::path::PathBuf> = Vec::with_capacity(3);
+    if let Some(cwd_path) = cwd {
+        roots.push(cwd_path.to_path_buf());
+        if let Some(wt_root) = crate::git::linked_worktree_root(cwd_path)
+            && !roots.contains(&wt_root)
+        {
+            roots.push(wt_root);
         }
-        merged.roles.push(role);
+    }
+    if let Some(ws_path) = workspace {
+        let ws_buf = ws_path.to_path_buf();
+        if !roots.contains(&ws_buf) {
+            roots.push(ws_buf);
+        }
+    }
+    for root in &roots {
+        for role in discover_project_roles(root) {
+            if merged
+                .roles
+                .iter()
+                .filter(|r| !r.is_project_scoped)
+                .any(|r| r.name.trim() == role.name.as_str())
+            {
+                tracing::warn!(
+                    role = %role.name,
+                    "project role shadowed by global custom role in subagents.json"
+                );
+                continue;
+            }
+            if !seen.insert(role.name.clone()) {
+                continue;
+            }
+            merged.roles.push(role);
+        }
     }
     merged
+}
+
+fn is_symlink_path(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
 }
 
 fn validate_single_project_role(role: &CustomRoleConfig) -> Result<(), String> {

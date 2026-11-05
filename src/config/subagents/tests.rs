@@ -487,3 +487,50 @@ fn old_json_without_new_fields_uses_defaults_and_omits_none_budget() {
     let serialized = serde_json::to_value(&with_budget).expect("serialize");
     assert_eq!(serialized["defaultMaxTokens"], 50_000);
 }
+
+#[test]
+fn project_role_discovery_rejects_unknown_fields_and_merges_worktree_plus_workspace() {
+    let ws = temp_dir("ws-roles");
+    let wt = temp_dir("wt-roles");
+    let ws_agents = ws.join(".lx").join("agents");
+    let wt_agents = wt.join(".lx").join("agents");
+    std::fs::create_dir_all(&ws_agents).expect("mkdir ws");
+    std::fs::create_dir_all(&wt_agents).expect("mkdir wt");
+
+    // 含未知 snake_case 字段 `allow_mcp` 的角色文件必须被拒绝跳过，防止能力收紧 fail-open
+    std::fs::write(
+        ws_agents.join("typo_role.json"),
+        r#"{"baseRole":"explorer","description":"typo","systemPrompt":"prompt","allow_mcp":false}"#,
+    )
+    .expect("write typo");
+    std::fs::write(
+        ws_agents.join("repo_role.json"),
+        r#"{"baseRole":"explorer","description":"repo role","systemPrompt":"repo prompt"}"#,
+    )
+    .expect("write repo role");
+    std::fs::write(
+        wt_agents.join("wt_role.json"),
+        r#"{"baseRole":"monitor","description":"wt role","systemPrompt":"wt prompt","allowMcp":false}"#,
+    )
+    .expect("write wt role");
+
+    let merged = super::merge_project_roles_for_paths(
+        &SubagentsSection::default(),
+        Some(&ws),
+        Some(&wt),
+        true,
+    );
+    assert!(
+        merged.resolve_role("typo_role").is_none(),
+        "unknown field role must be rejected"
+    );
+    assert!(
+        merged.resolve_role("repo_role").is_some(),
+        "workspace root role must be discovered"
+    );
+    let wt_spec = merged.resolve_role("wt_role").expect("worktree role");
+    assert_eq!(wt_spec.base_role, BaseRole::Monitor);
+    assert!(!wt_spec.capabilities.allow_mcp);
+    let _ = std::fs::remove_dir_all(ws);
+    let _ = std::fs::remove_dir_all(wt);
+}

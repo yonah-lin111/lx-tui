@@ -11,6 +11,8 @@ mod context;
 mod settle;
 mod turn;
 
+pub(super) use context::known_subagent_lines;
+
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
@@ -188,8 +190,9 @@ impl ExecSubagentPool {
         sender: mpsc::UnboundedSender<ExecLoopEvent>,
         stream_factory: Arc<dyn ExecStreamFactory>,
     ) -> Self {
-        let subagents_config = crate::config::subagents::merge_project_roles(
+        let subagents_config = crate::config::subagents::merge_project_roles_for_paths(
             &crate::config::subagents::load_subagents_or_default(),
+            Some(&workspace),
             Some(&cwd),
             true,
         );
@@ -382,19 +385,20 @@ impl ExecSubagentPool {
         if !is_running && !self.resumed.contains(target) {
             return Err(failed(NOT_ACTIVE_CODE));
         }
-        // `trigger_turn=false` 只入队：不唤醒 idle 子 agent。
+        // `trigger_turn=false` 只入队：不唤醒 idle 子 agent，也不解除 interrupt 暂停态。
         let interrupt = interrupt && trigger_turn;
-        let was_cancelling_from_interrupt = self.paused_by_interrupt.remove(target);
+        let was_cancelling_from_interrupt = trigger_turn && self.paused_by_interrupt.remove(target);
         let supports_image_input = self.child_model_for(&record).supports_image_input;
         let persisted =
             self.prepare_input_items(&record.child_session_id, items, supports_image_input)?;
+        let prefix = if trigger_turn { "send" } else { "msg" };
         let dedupe = match call_id.filter(|cid| !cid.trim().is_empty()) {
             Some(cid) => format!(
-                "send:{}:{}:{cid}",
+                "{prefix}:{}:{}:{cid}",
                 self.parent_session_id, parent_assistant_id
             ),
             None => format!(
-                "send:{}:{}",
+                "{prefix}:{}:{}",
                 self.parent_session_id,
                 new_external_id("dedupe")
             ),
@@ -744,7 +748,22 @@ impl ExecSubagentPool {
         if self.running.len() >= max_concurrent {
             return Err(failed(LIMIT_REACHED_CODE));
         }
-        let child_snapshot = self.child_model_for(&record).snapshot();
+        let child_target = self.child_model_for(&record);
+        if let Err(err) = context::replay_input_items(
+            &record.child_session_id,
+            child_target.supports_image_input,
+            true,
+            &next.items,
+        ) {
+            let _ = db.set_input_error(
+                &self.workspace,
+                owner_session_id,
+                &next.submission_id,
+                Some(&err),
+            );
+            return Err(failed(&format!("subagent input blocked: {err}")));
+        }
+        let child_snapshot = child_target.snapshot();
         let claimed = db
             .claim_input(
                 &self.workspace,

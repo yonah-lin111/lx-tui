@@ -123,18 +123,42 @@ impl ExecSubagentPool {
                         self.paused_by_interrupt.insert(agent_id.to_string());
                         self.resumed.insert(agent_id.to_string());
                     } else if self.resumed.contains(agent_id) {
-                        match self.launch_next_queued(
-                            db,
-                            &handle.parent_session_id,
-                            agent_id,
-                            Some(handle.done_tx.clone()),
-                        ) {
-                            Ok(true) => continued = true,
-                            Ok(false) => {
+                        let has_triggerable = db
+                            .has_triggerable_queued_input(
+                                &self.workspace,
+                                &handle.parent_session_id,
+                                agent_id,
+                            )
+                            .unwrap_or(false);
+                        if has_triggerable {
+                            match self.launch_next_queued(
+                                db,
+                                &handle.parent_session_id,
+                                agent_id,
+                                Some(handle.done_tx.clone()),
+                            ) {
+                                Ok(true) => continued = true,
+                                Ok(false) => {
+                                    self.resumed.remove(agent_id);
+                                }
+                                // 队首输入 blocked（如 image_missing）：保留队列，停止继续消费。
+                                Err(_) => {}
+                            }
+                        } else {
+                            let has_queued = db
+                                .next_queued_input(
+                                    &self.workspace,
+                                    &handle.parent_session_id,
+                                    agent_id,
+                                )
+                                .ok()
+                                .flatten()
+                                .is_some();
+                            if has_queued {
+                                self.resumed.insert(agent_id.to_string());
+                            } else {
                                 self.resumed.remove(agent_id);
                             }
-                            // 队首输入 blocked（如 image_missing）：保留队列，停止继续消费。
-                            Err(_) => {}
                         }
                     }
                 }

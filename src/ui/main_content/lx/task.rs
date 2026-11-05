@@ -271,7 +271,17 @@ pub(super) fn draw_agents_detail(
         Some(run) => {
             let _ = agents::draw_detail(grid, rect, run, run.scroll, lx.chat.loading_frame, cache);
         }
-        None => draw_output_container(grid, rect, page),
+        None => {
+            if rect.width > 0 && rect.height > 0 {
+                grid.put_clipped(
+                    rect.x,
+                    rect.y,
+                    text::LX_TASK_AGENTS_EMPTY,
+                    style::muted(),
+                    rect.width,
+                );
+            }
+        }
     }
 }
 
@@ -457,18 +467,24 @@ fn draw_agent_reply(
     let Some(reply) = page.agent_reply.as_ref() else {
         return;
     };
-    let Some(run) = page
+    let fallback_name = page
         .selected_agent_index(agents)
         .and_then(|index| agents.runs.get(index))
+        .map(|run| {
+            run.nickname
+                .as_deref()
+                .filter(|nickname| !nickname.is_empty())
+                .or_else(|| (!run.title.is_empty()).then_some(run.title.as_str()))
+                .unwrap_or_else(|| run.role.as_str())
+        });
+    let Some(name) = page
+        .agent_reply_target
+        .as_ref()
+        .map(|(_, label)| label.as_str())
+        .or(fallback_name)
     else {
         return;
     };
-    let name = run
-        .nickname
-        .as_deref()
-        .filter(|nickname| !nickname.is_empty())
-        .or_else(|| (!run.title.is_empty()).then_some(run.title.as_str()))
-        .unwrap_or_else(|| run.role.as_str());
     let prefix = format!("To {name}: ");
     let (tabs, close) = tab_row_rects(rect);
     let start = tabs.last().map_or(rect.x, |(_, x, width)| {

@@ -33,6 +33,7 @@ pub use rewind::{
 pub use subagent::{
     ClaimedSubagentTurn, EnqueuedInput, PersistedInputItem, ReportPayload, SubagentCommitted,
     SubagentInputRecord, SubagentQueueState, SubagentRecord, SubagentReportRecord,
+    SubagentTurnEnvelopeMeta, parse_input_dedupe_meta,
 };
 pub use tools::{
     INTERRUPTED_ERROR_CODE, MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_RESULT_BYTES, ToolCallRecord,

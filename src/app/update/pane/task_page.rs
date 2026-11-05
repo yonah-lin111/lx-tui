@@ -76,6 +76,7 @@ fn apply_agent_reply_input(state: &mut AppState, pane: PaneId, command: LxInput)
                 .and_then(|target| target.lx.task.as_mut())
             {
                 page.agent_reply = None;
+                page.agent_reply_target = None;
             }
         }
         LxInput::Enter => {
@@ -126,8 +127,9 @@ fn edit_agent_reply(
     }
 }
 
-/// 提交内联追问：非空文本按选中 run 发出 `SendSubagentUserInput`。
+/// 提交内联追问：非空文本按锁定的目标 `agent_id`（无锁定时回退当前选中 run）发出 `SendSubagentUserInput`。
 fn submit_agent_reply(state: &mut AppState, pane: PaneId) -> bool {
+    let mut closed = false;
     let effect = {
         let Some(target) = state.pane_mut_anywhere(pane) else {
             return false;
@@ -135,36 +137,67 @@ fn submit_agent_reply(state: &mut AppState, pane: PaneId) -> bool {
         let Some(page) = target.lx.task.as_mut() else {
             return false;
         };
-        let Some(input) = page.agent_reply.take() else {
+        let Some(text) = page
+            .agent_reply
+            .as_ref()
+            .map(|input| input.text().trim().to_string())
+        else {
             return false;
         };
-        let text = input.text().trim().to_string();
         if text.is_empty() {
             return true;
         }
-        let Some(index) = page.selected_agent_index(&target.lx.agents) else {
+        let _ = page.agent_reply.take();
+        let locked_target = page.agent_reply_target.take().map(|(id, _)| id);
+        let target_agent_id = locked_target.or_else(|| {
+            page.selected_agent_index(&target.lx.agents)
+                .and_then(|index| target.lx.agents.runs.get(index))
+                .map(|run| run.agent_id.clone())
+        });
+        let Some(agent_id) = target_agent_id else {
             return true;
         };
-        let Some(run) = target.lx.agents.runs.get(index) else {
-            return true;
-        };
-        let Some(session_id) = target.lx.chat.session_id.clone() else {
-            return true;
-        };
-        crate::app::effects::Effect::SendSubagentUserInput {
-            pane,
-            session_id,
-            agent_id: run.agent_id.clone(),
-            text,
+        if target
+            .lx
+            .agents
+            .by_agent(&agent_id)
+            .is_some_and(|run| run.status == "cancelled")
+        {
+            closed = true;
+            None
+        } else {
+            target.lx.chat.session_id.clone().map(|session_id| {
+                crate::app::effects::Effect::SendSubagentUserInput {
+                    pane,
+                    session_id,
+                    agent_id,
+                    text,
+                }
+            })
         }
     };
-    state.effects.push(effect);
+    if closed {
+        crate::app::update::show_lx_toast(
+            state,
+            pane,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Warning,
+                crate::ui::text::LX_TASK_AGENT_REPLY_CLOSED,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        );
+        return true;
+    }
+    if let Some(effect) = effect {
+        state.effects.push(effect);
+    }
     true
 }
 
 /// 打开内联追问；`cancelled` 子 agent 不可再接收输入。
 fn open_agent_reply(state: &mut AppState, pane: PaneId) -> bool {
-    let cancelled = {
+    let target_meta = {
         let Some(target) = state.pane_anywhere(pane) else {
             return false;
         };
@@ -174,9 +207,16 @@ fn open_agent_reply(state: &mut AppState, pane: PaneId) -> bool {
         let Some(run) = page.selected_agent(&target.lx.agents) else {
             return false;
         };
-        run.status == "cancelled"
+        let label = run
+            .nickname
+            .as_deref()
+            .filter(|nickname| !nickname.is_empty())
+            .or_else(|| (!run.title.is_empty()).then_some(run.title.as_str()))
+            .unwrap_or_else(|| run.role.as_str())
+            .to_string();
+        (run.status == "cancelled", run.agent_id.clone(), label)
     };
-    if cancelled {
+    if target_meta.0 {
         crate::app::update::show_lx_toast(
             state,
             pane,
@@ -195,7 +235,33 @@ fn open_agent_reply(state: &mut AppState, pane: PaneId) -> bool {
     else {
         return false;
     };
+    page.agent_reply_target = Some((target_meta.1, target_meta.2));
     page.agent_reply = Some(crate::app::overlay::TextInput::new(""));
+    true
+}
+
+/// `TaskPage` 打开时的粘贴处理：若处于内联追问输入态则单行化写入 `agent_reply`，
+/// 否则直接吞掉粘贴事件，绝不穿透污染隐藏的主聊天草稿框。
+pub fn apply_task_paste(state: &mut AppState, pane: PaneId, text: &str) -> bool {
+    let Some(page) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.task.as_mut())
+    else {
+        return false;
+    };
+    let Some(reply) = page.agent_reply.as_mut() else {
+        return false;
+    };
+    let single_line: String = text
+        .chars()
+        .map(|ch| if matches!(ch, '\n' | '\r') { ' ' } else { ch })
+        .collect();
+    if single_line.is_empty() {
+        return false;
+    }
+    for ch in single_line.chars() {
+        reply.insert_char(ch);
+    }
     true
 }
 
@@ -211,6 +277,8 @@ fn cycle_agent_filter(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     }
     page.agent_filter = page.agent_filter.next();
+    page.agent_reply = None;
+    page.agent_reply_target = None;
     let filtered = target.lx.agents.filtered_indices(page.agent_filter).len();
     page.agents_window.clamp(filtered);
     true
@@ -292,6 +360,7 @@ pub fn select_task_agent_filter(
         }
         page.agent_filter = filter;
         page.agent_reply = None;
+        page.agent_reply_target = None;
         let filtered = target.lx.agents.filtered_indices(filter).len();
         page.agents_window.clamp(filtered);
         true

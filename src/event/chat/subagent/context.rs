@@ -194,10 +194,12 @@ pub(crate) fn capture_child_prompt_inputs(
         Some(cwd),
         &[],
     );
-    let effective_subagents = crate::config::subagents::merge_project_roles(
+    let workspace_trusted = persistence.is_trusted(cwd) || persistence.is_trusted(workspace);
+    let effective_subagents = crate::config::subagents::merge_project_roles_for_paths(
         &state.subagents_config,
         Some(workspace),
-        persistence.is_trusted(workspace),
+        Some(cwd),
+        workspace_trusted,
     );
     let role_spec = effective_subagents.resolve_role(role.as_str());
     let capabilities = role_spec
@@ -389,6 +391,9 @@ pub(crate) fn assemble_child_context(
     let turn_items_map = database
         .load_subagent_turn_items(workspace, parent_session, agent_id)
         .map_err(|err| err.code().to_string())?;
+    let turn_envelopes = database
+        .load_subagent_turn_envelopes(workspace, parent_session, agent_id)
+        .unwrap_or_default();
 
     let retained: Vec<&ChatMessage> = messages
         .iter()
@@ -410,11 +415,18 @@ pub(crate) fn assemble_child_context(
     let mut current_model_items =
         replay_persisted_items(child_session_id, supports_image_input, true, current_items)?;
     let current_text = if is_follow_up {
-        let (child_path, sender_path) =
-            envelope_paths(database, workspace, parent_session, agent_id);
-        current_model_items = wrap_envelope_items(current_model_items, &child_path, &sender_path);
+        let (msg_type, child_path, sender_path) = resolve_current_envelope(
+            database,
+            workspace,
+            parent_session,
+            agent_id,
+            current_user_message_id,
+            &turn_envelopes,
+        );
+        current_model_items =
+            wrap_envelope_items(current_model_items, msg_type, &child_path, &sender_path);
         crate::chat::agent::format_inter_agent_envelope(
-            crate::chat::agent::InterAgentMessageType::NewTask,
+            msg_type,
             &child_path,
             &sender_path,
             &raw_current_text,
@@ -481,10 +493,15 @@ pub(crate) fn assemble_child_context(
     });
     items.extend(current_model_items);
 
+    let capabilities = subagents
+        .resolve_role(role.as_str())
+        .map(|spec| spec.capabilities)
+        .unwrap_or_default();
     let mcp_prompt = prompt_ctx.mcp.instructions_prompt();
-    let system_prompt = crate::chat::agent::compose_subagent_prompt_with_override(
+    let system_prompt = crate::chat::agent::compose_subagent_prompt_with_capabilities(
         role,
         prompt_ctx.system_prompt_override,
+        capabilities,
         crate::chat::prompt::PromptParts {
             model_identity: prompt_ctx.model_identity,
             environment: Some(prompt_ctx.environment),
@@ -494,10 +511,6 @@ pub(crate) fn assemble_child_context(
             compact: None,
         },
     );
-    let capabilities = subagents
-        .resolve_role(role.as_str())
-        .map(|spec| spec.capabilities)
-        .unwrap_or_default();
     let request = ChatRequest {
         turns,
         items,
@@ -547,12 +560,75 @@ pub(crate) fn child_tool_names(
         .collect()
 }
 
+/// 解析当前跟进轮次的信封类型与 `(child_path, sender_path)`。
+fn resolve_current_envelope(
+    database: &Database,
+    workspace: &Path,
+    parent_session: &str,
+    agent_id: &str,
+    current_user_message_id: &str,
+    turn_envelopes: &HashMap<String, crate::db::chat::SubagentTurnEnvelopeMeta>,
+) -> (crate::chat::agent::InterAgentMessageType, String, String) {
+    if !current_user_message_id.is_empty()
+        && let Some(meta) = turn_envelopes.get(current_user_message_id)
+    {
+        let (child_path, sender_path) = envelope_paths(
+            database,
+            workspace,
+            parent_session,
+            agent_id,
+            meta.caller_session_id.as_deref(),
+        );
+        return (
+            crate::chat::agent::InterAgentMessageType::from_trigger_turn(meta.trigger_turn),
+            child_path,
+            sender_path,
+        );
+    }
+    if let Ok(Some(queued)) = database.next_queued_input(workspace, parent_session, agent_id) {
+        let (child_path, sender_path) = envelope_paths(
+            database,
+            workspace,
+            parent_session,
+            agent_id,
+            queued.caller_session_id(),
+        );
+        return (
+            crate::chat::agent::InterAgentMessageType::from_trigger_turn(queued.trigger_turn()),
+            child_path,
+            sender_path,
+        );
+    }
+    if let Some(latest) = turn_envelopes.values().max_by_key(|m| m.position) {
+        let (child_path, sender_path) = envelope_paths(
+            database,
+            workspace,
+            parent_session,
+            agent_id,
+            latest.caller_session_id.as_deref(),
+        );
+        return (
+            crate::chat::agent::InterAgentMessageType::from_trigger_turn(latest.trigger_turn),
+            child_path,
+            sender_path,
+        );
+    }
+    let (child_path, sender_path) =
+        envelope_paths(database, workspace, parent_session, agent_id, None);
+    (
+        crate::chat::agent::InterAgentMessageType::NewTask,
+        child_path,
+        sender_path,
+    )
+}
+
 /// 子 agent 与发送者的规范路径（用于 `send_input` 后续轮次的结构化信封）。
 fn envelope_paths(
     database: &Database,
     workspace: &Path,
     parent_session: &str,
     agent_id: &str,
+    caller_session: Option<&str>,
 ) -> (String, String) {
     let child_path = database
         .owned_subagent(workspace, parent_session, agent_id)
@@ -561,8 +637,12 @@ fn envelope_paths(
         .map(|record| record.agent_path)
         .filter(|path| !path.trim().is_empty())
         .unwrap_or_else(|| "/root/subagent".to_string());
+    let sender_session = caller_session
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(parent_session);
     let sender_path = database
-        .resolve_session_tree_root(workspace, parent_session)
+        .resolve_session_tree_root(workspace, sender_session)
         .map(|(_, _, path)| path)
         .unwrap_or_else(|_| crate::chat::agent::ROOT_AGENT_PATH.to_string());
     (child_path, sender_path)
@@ -571,6 +651,7 @@ fn envelope_paths(
 /// 只在模型请求侧包裹后续 `send_input` 的用户文本（DB 与 TUI 保持原文）。
 fn wrap_envelope_items(
     items: Vec<ModelItem>,
+    message_type: crate::chat::agent::InterAgentMessageType,
     child_path: &str,
     sender_path: &str,
 ) -> Vec<ModelItem> {
@@ -581,20 +662,25 @@ fn wrap_envelope_items(
             ModelItem::UserText(text) if !wrapped => {
                 wrapped = true;
                 ModelItem::UserText(crate::chat::agent::format_inter_agent_envelope(
-                    crate::chat::agent::InterAgentMessageType::NewTask,
+                    message_type,
                     child_path,
                     sender_path,
                     &text,
                 ))
             }
-            ModelItem::UserContent { text, images } if !wrapped && !text.trim().is_empty() => {
+            ModelItem::UserContent { text, images } if !wrapped => {
                 wrapped = true;
+                let payload = if text.trim().is_empty() {
+                    format!("[{} image(s)]", images.len())
+                } else {
+                    text
+                };
                 ModelItem::UserContent {
                     text: crate::chat::agent::format_inter_agent_envelope(
-                        crate::chat::agent::InterAgentMessageType::NewTask,
+                        message_type,
                         child_path,
                         sender_path,
-                        &text,
+                        &payload,
                     ),
                     images,
                 }
@@ -661,10 +747,14 @@ fn plan_child_historical_turns<'a>(
         let mut assistant_text = message_text(assistant);
         let mut assistant_items = crate::chat::context::assistant_items(assistant);
         if aborted {
+            assistant_items
+                .retain(|item| !matches!(item, ModelItem::AssistantText(text) if text.is_empty()));
             assistant_items.push(ModelItem::UserText(
                 crate::chat::agent::SUBAGENT_TURN_ABORTED_MARKER.to_string(),
             ));
-            assistant_text.push('\n');
+            if !assistant_text.is_empty() {
+                assistant_text.push('\n');
+            }
             assistant_text.push_str(crate::chat::agent::SUBAGENT_TURN_ABORTED_MARKER);
         }
         planned.push(PlannedChildTurn {

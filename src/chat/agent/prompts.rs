@@ -65,11 +65,46 @@ pub fn compose_subagent_prompt_with_override(
     custom_prompt: Option<&str>,
     parts: crate::chat::prompt::PromptParts<'_>,
 ) -> String {
+    compose_subagent_prompt_with_capabilities(
+        role,
+        custom_prompt,
+        crate::config::subagents::RoleCapabilities::default(),
+        parts,
+    )
+}
+
+/// 子 agent 系统提示（含自定义提示词与 `RoleCapabilities` 限制声明）。
+pub fn compose_subagent_prompt_with_capabilities(
+    role: AgentRole,
+    custom_prompt: Option<&str>,
+    capabilities: crate::config::subagents::RoleCapabilities,
+    parts: crate::chat::prompt::PromptParts<'_>,
+) -> String {
     let head = custom_prompt
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| role.system_prompt());
-    format!("{head}\n\n{}\n", parts.render_tail_with(false))
+    let mut restrictions = Vec::new();
+    if !capabilities.allow_web_search {
+        restrictions.push("- `web_search` is disabled for this role; do not attempt to call it.");
+    }
+    if !capabilities.allow_mcp {
+        restrictions.push(
+            "- MCP tools are disabled for this role; do not attempt to call any `mcp__*` tool.",
+        );
+    }
+    if !capabilities.allow_skills {
+        restrictions.push("- Skills are disabled for this role.");
+    }
+    if restrictions.is_empty() {
+        format!("{head}\n\n{}\n", parts.render_tail_with(false))
+    } else {
+        format!(
+            "{head}\n\n# Capability Restrictions\n\n{}\n\n{}\n",
+            restrictions.join("\n"),
+            parts.render_tail_with(false)
+        )
+    }
 }
 
 /// explorer 角色提示。

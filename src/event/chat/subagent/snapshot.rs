@@ -91,18 +91,21 @@ pub(crate) fn known_subagent_lines(
     let mut bytes = header.len() + footer.len() + 2;
     let mut lines = vec![header.to_string()];
     for entry in entries.into_iter().take(MAX_SNAPSHOT_SUBAGENTS) {
-        let line = format!(
-            "- path={} id={} nickname={} role={} status={} · {}",
-            entry.agent_path,
-            entry.agent_id,
-            entry.nickname,
-            entry.role,
-            entry.status,
-            first_line(&entry.title)
-        );
+        let title = first_line(&entry.title);
+        let line = if title.is_empty() {
+            format!(
+                "- path={} id={} nickname={} role={} status={}",
+                entry.agent_path, entry.agent_id, entry.nickname, entry.role, entry.status
+            )
+        } else {
+            format!(
+                "- path={} id={} nickname={} role={} status={} · {}",
+                entry.agent_path, entry.agent_id, entry.nickname, entry.role, entry.status, title
+            )
+        };
         let extra = line.len() + 1;
         if bytes.saturating_add(extra) > MAX_SNAPSHOT_SUBAGENT_BYTES {
-            break;
+            continue;
         }
         bytes = bytes.saturating_add(extra);
         lines.push(line);
@@ -153,6 +156,38 @@ pub(super) fn send_user_input_from_panel(
         streams.frozen.insert(session_id.to_string(), frozen);
     }
 
+    let record = persistence.database().and_then(|database| {
+        streams.db_workspaces.get(&key).and_then(|workspace| {
+            database
+                .resolve_owned_subagent(workspace, session_id, agent_id)
+                .ok()
+                .flatten()
+        })
+    });
+    let closed_in_memory = streams
+        .subagents
+        .values()
+        .any(|handle| handle.agent_id == agent_id && handle.closed_without_report);
+    let closed_in_db = record.as_ref().is_some_and(|rec| {
+        let queue = persistence.database().and_then(|db| {
+            streams.db_workspaces.get(&key).and_then(|ws| {
+                db.subagent_queue_states(ws, &rec.parent_session_id)
+                    .ok()
+                    .and_then(|mut map| map.remove(&rec.agent_id))
+            })
+        });
+        super::projected_agent_status(streams, rec, queue.as_ref()) == STATUS_CANCELLED
+    });
+    if closed_in_memory || closed_in_db {
+        show_panel_toast(
+            state,
+            pane,
+            ToastKind::Warning,
+            crate::ui::text::LX_TASK_AGENT_REPLY_CLOSED.to_string(),
+        );
+        return true;
+    }
+
     let is_active = streams.subagents.values().any(|handle| {
         handle.agent_id == agent_id
             && handle.status == STATUS_RUNNING
@@ -162,15 +197,6 @@ pub(super) fn send_user_input_from_panel(
         show_panel_toast(state, pane, ToastKind::Danger, error);
         return true;
     }
-
-    let record = persistence.database().and_then(|database| {
-        streams.db_workspaces.get(&key).and_then(|workspace| {
-            database
-                .resolve_owned_subagent(workspace, session_id, agent_id)
-                .ok()
-                .flatten()
-        })
-    });
     let nickname = record
         .as_ref()
         .and_then(|record| record.nickname.as_deref())
