@@ -29,10 +29,10 @@ pub(crate) use controls::collapsed_content_x;
 pub use sidebar::{
     add_workspace_button, agent_item_at, agent_item_index_at, agent_list_rows, agent_scrollbar,
     agents_section_at, sidebar_boundary_at, workspace_drop_index, workspace_group_toggle_at,
-    workspace_history_blank_at, workspace_history_row_at, workspace_history_scrollbar,
-    workspace_history_search_char_at, workspace_history_visible_rows, workspace_item_at,
-    workspace_list_blank_at, workspace_list_rows, workspace_mode_button, workspace_scrollbar,
-    workspace_section_at,
+    workspace_history_blank_at, workspace_history_group_toggle_at, workspace_history_row_at,
+    workspace_history_scrollbar, workspace_history_search_char_at, workspace_history_visible_rows,
+    workspace_item_at, workspace_list_blank_at, workspace_list_rows, workspace_mode_button,
+    workspace_scrollbar, workspace_section_at,
 };
 
 use ratatui::Frame;

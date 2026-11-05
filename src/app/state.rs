@@ -48,7 +48,9 @@ pub use workspace::{
     current_workspace_identity, home_dir, path_tail_two, tab_label, unique_workspace_name,
     workspace_label, workspace_name,
 };
-pub use workspace_history::{WorkspaceHistoryEntry, WorkspaceHistoryPanel, WorkspaceMode};
+pub use workspace_history::{
+    WorkspaceHistoryEntry, WorkspaceHistoryPanel, WorkspaceHistoryRow, WorkspaceMode,
+};
 
 /// 全局 prompt 右栏的兜底初始宽度（列，含边框）；
 /// 生产启动时按主区可用宽度的一半覆盖，之后可拖拽。

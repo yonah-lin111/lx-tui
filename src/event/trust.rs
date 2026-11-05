@@ -27,7 +27,7 @@ pub fn startup_trust(persistence: &Persistence, state: &mut AppState) -> io::Res
     let Some(path) = startup_trust_target(persistence, state) else {
         return Ok(true);
     };
-    let name = state.active_workspace().name.clone();
+    let name = crate::app::state::workspace_label(&path, crate::app::state::home_dir().as_deref());
     // 行内会话：不进入备用屏，先在当前终端屏幕显示信任页。
     let mut tui = Tui::init_inline()?;
     let outcome = screen(&mut tui, &path);

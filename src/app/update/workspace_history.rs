@@ -1,6 +1,5 @@
-//! 侧栏工作区历史列表交互：模式切换、搜索过滤、上下导航、双击打开与失效条目级联删除。
+//! 侧栏工作区历史列表交互：模式切换、Git 树形折叠、搜索过滤、上下导航、双击打开与失效条目级联删除。
 
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::app::actions::OverlayKey;
@@ -16,7 +15,7 @@ use super::editor::swap_display_prompt;
 use super::interaction::show_toast;
 use super::selection::clear_selection;
 use super::workspace::switch_workspace;
-use super::worktree::request_git_refresh;
+use super::worktree::{ensure_main_workspace, request_git_refresh};
 
 /// 历史列表同行双击时间窗口（对齐 Prompt 树与页列表的 400ms）。
 pub const WORKSPACE_HISTORY_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
@@ -78,28 +77,62 @@ pub fn exit_workspace_history(state: &mut AppState) -> bool {
     true
 }
 
-/// 接收数据库加载的工作区历史记录并更新状态（同时将数据库保存的自定义名称回填到未手动改名的活跃工作区）。
-pub fn apply_workspace_history(state: &mut AppState, records: Vec<(String, PathBuf)>) -> bool {
+/// 切换工作区历史列表中 Git 仓库父节点的折叠/展开状态。
+pub fn toggle_workspace_history_group(state: &mut AppState, visible_row: usize) -> bool {
+    let Some(row) = state
+        .workspace_history
+        .visible_rows()
+        .get(visible_row)
+        .copied()
+    else {
+        return false;
+    };
+    if !row.parent {
+        return false;
+    }
+    let Some(repo_root) = state
+        .workspace_history
+        .entries
+        .get(row.index)
+        .and_then(|entry| entry.git.as_ref())
+        .map(|git| git.repo_root.clone())
+    else {
+        return false;
+    };
+    state.workspace_history.toggle_repo_collapsed(&repo_root);
+    state.workspace_history.row_click = None;
+    let total = state.workspace_history.visible_rows().len();
+    if total == 0 {
+        state.workspace_history.selected = 0;
+        state.workspace_history.scroll = 0;
+    } else {
+        state.workspace_history.selected = state.workspace_history.selected.min(total - 1);
+    }
+    true
+}
+
+/// 接收数据库加载的工作区历史记录并更新状态（同时将数据库保存的自定义名称回填到活跃工作区）。
+pub fn apply_workspace_history(
+    state: &mut AppState,
+    mut new_entries: Vec<WorkspaceHistoryEntry>,
+) -> bool {
     let selected_path = state
         .workspace_history
         .entry_at_visible_row(state.workspace_history.selected)
         .map(|(_, entry)| entry.path.clone());
 
-    let mut new_entries = Vec::with_capacity(records.len());
     let mut ws_renamed = false;
-    for (name, path) in records {
-        let exists = path.is_dir();
-        let default_label = workspace_label(&path, home_dir().as_deref());
-        if name != default_label {
+    for entry in &mut new_entries {
+        entry.exists = entry.path.is_dir();
+        if entry.name_is_manual {
             for ws in &mut state.workspaces {
-                if !ws.name_is_manual && ws.cwd.as_deref() == Some(path.as_path()) {
-                    ws.name = name.clone();
+                if !ws.name_is_manual && ws.cwd.as_deref() == Some(entry.path.as_path()) {
+                    ws.name = entry.name.clone();
                     ws.name_is_manual = true;
                     ws_renamed = true;
                 }
             }
         }
-        new_entries.push(WorkspaceHistoryEntry { name, path, exists });
     }
 
     let entries_changed = state.workspace_history.entries != new_entries;
@@ -119,7 +152,7 @@ pub fn apply_workspace_history(state: &mut AppState, records: Vec<(String, PathB
             state.workspace_history.selected = pos;
         }
     }
-    let total = state.workspace_history.filtered_indices().len();
+    let total = state.workspace_history.visible_rows().len();
     if total == 0 {
         state.workspace_history.selected = 0;
         state.workspace_history.scroll = 0;
@@ -136,7 +169,7 @@ pub fn move_workspace_history_selection(
     delta: isize,
     visible_rows: usize,
 ) -> bool {
-    let total = state.workspace_history.filtered_indices().len();
+    let total = state.workspace_history.visible_rows().len();
     if total == 0 || delta == 0 {
         return false;
     }
@@ -153,7 +186,7 @@ pub fn move_workspace_history_selection(
 
 /// 选中指定可见行下标。
 pub fn select_workspace_history_row(state: &mut AppState, visible_row: usize) -> bool {
-    let total = state.workspace_history.filtered_indices().len();
+    let total = state.workspace_history.visible_rows().len();
     if visible_row >= total {
         return false;
     }
@@ -164,7 +197,7 @@ pub fn select_workspace_history_row(state: &mut AppState, visible_row: usize) ->
 
 /// 滚轮滚动工作区历史列表；返回是否变化。
 pub fn scroll_workspace_history(state: &mut AppState, delta: isize, visible_rows: usize) -> bool {
-    let total = state.workspace_history.filtered_indices().len();
+    let total = state.workspace_history.visible_rows().len();
     let max = total.saturating_sub(visible_rows.max(1));
     let target = (state.workspace_history.scroll.min(max) as isize).saturating_add(delta);
     let offset = target.clamp(0, max as isize) as usize;
@@ -181,7 +214,7 @@ pub fn set_workspace_history_scroll(
     offset: usize,
     visible_rows: usize,
 ) -> bool {
-    let total = state.workspace_history.filtered_indices().len();
+    let total = state.workspace_history.visible_rows().len();
     let max = total.saturating_sub(visible_rows.max(1));
     let next = offset.min(max);
     if next == state.workspace_history.scroll {
@@ -225,16 +258,21 @@ pub fn activate_workspace_history_selected(state: &mut AppState) -> bool {
 
 /// 按过滤后的可见行下标打开历史工作区（双击触发）。
 pub fn open_workspace_history_row(state: &mut AppState, visible_row: usize) -> bool {
-    let Some(&entry_index) = state.workspace_history.filtered_indices().get(visible_row) else {
+    let Some(row) = state
+        .workspace_history
+        .visible_rows()
+        .get(visible_row)
+        .copied()
+    else {
         return false;
     };
-    open_workspace_history_entry(state, entry_index)
+    open_workspace_history_entry(state, row.index)
 }
 
 /// 按 `entries` 中的原始下标打开历史工作区：
 /// - 路径不存在时刷新为失效态（红字）并弹出 Danger Toast，留在历史列表；
-/// - 路径已在活跃列表中打开时直接切换过去并退回活跃视图；
-/// - 路径未打开时按保存的名称与路径创建并激活工作区，退回活跃视图。
+/// - 路径已在活跃列表中打开时直接切换过去（若为 linked worktree 则自动补开主工作区）并退回活跃视图；
+/// - 路径未打开时按保存的名称、路径与 Git 元数据创建并激活工作区（若为 linked worktree 则自动补开主工作区），退回活跃视图。
 pub fn open_workspace_history_entry(state: &mut AppState, entry_index: usize) -> bool {
     let Some(entry) = state.workspace_history.entries.get(entry_index).cloned() else {
         return false;
@@ -261,6 +299,7 @@ pub fn open_workspace_history_entry(state: &mut AppState, entry_index: usize) ->
                 .is_some_and(|git| git.checkout_path == entry.path)
     }) {
         switch_workspace(state, existing);
+        ensure_main_workspace(state, existing);
         state.effects.push(Effect::RecordWorkspace {
             path: entry.path,
             name: entry.name,
@@ -270,7 +309,7 @@ pub fn open_workspace_history_entry(state: &mut AppState, entry_index: usize) ->
     }
 
     let default_base = workspace_label(&entry.path, home_dir().as_deref());
-    let is_manual = entry.name != default_base && !entry.name.trim().is_empty();
+    let is_manual = entry.name_is_manual && !entry.name.trim().is_empty();
     let base = if is_manual {
         entry.name.as_str()
     } else {
@@ -284,12 +323,15 @@ pub fn open_workspace_history_entry(state: &mut AppState, entry_index: usize) ->
     });
     let mut workspace = Workspace::single_terminal(name, Some(entry.path.clone()));
     workspace.name_is_manual = is_manual;
+    workspace.git = entry.git.clone();
     state.workspaces.push(workspace);
+    let child = state.workspaces.len().saturating_sub(1);
     let from = state.active_workspace;
-    state.active_workspace = state.workspaces.len().saturating_sub(1);
+    state.active_workspace = child;
     if state.prompt_pinned.is_none() {
         swap_display_prompt(state, from, state.active_workspace);
     }
+    ensure_main_workspace(state, child);
     request_git_refresh(state, &entry.path);
     state.effects.push(Effect::RecordWorkspace {
         path: entry.path,
@@ -313,7 +355,7 @@ pub fn delete_workspace_history_entry(state: &mut AppState, entry_index: usize) 
         return true;
     }
     state.workspace_history.entries.remove(entry_index);
-    let total = state.workspace_history.filtered_indices().len();
+    let total = state.workspace_history.visible_rows().len();
     if total == 0 {
         state.workspace_history.selected = 0;
         state.workspace_history.scroll = 0;
@@ -412,12 +454,25 @@ pub fn apply_workspace_history_paste(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::app::overlay::{MenuCommand, Overlay, OverlayTarget, RenameTarget};
-    use crate::app::state::FocusedContainer;
+    use crate::app::state::{FocusedContainer, WorkspaceGit};
     use crate::app::update::{
         activate_menu, apply_overlay_key, open_workspace_history_menu, open_workspace_menu,
     };
+
+    fn plain_entry(name: &str, path: PathBuf, manual: bool) -> WorkspaceHistoryEntry {
+        let exists = path.is_dir();
+        WorkspaceHistoryEntry {
+            name: name.into(),
+            path,
+            exists,
+            name_is_manual: manual,
+            git: None,
+        }
+    }
 
     #[test]
     fn toggle_workspace_mode_switches_and_focuses_sidebar() {
@@ -446,8 +501,8 @@ mod tests {
         apply_workspace_history(
             &mut state,
             vec![
-                ("Alpha Project".into(), existing_dir.clone()),
-                ("Missing Project".into(), missing_dir.clone()),
+                plain_entry("Alpha Project", existing_dir, true),
+                plain_entry("Missing Project", missing_dir, true),
             ],
         );
         assert_eq!(state.workspace_history.entries.len(), 2);
@@ -480,6 +535,66 @@ mod tests {
     }
 
     #[test]
+    fn git_tree_grouping_collapse_and_opening_linked_worktree_auto_opens_main_parent() {
+        let mut state = AppState::demo();
+        let repo_root = std::env::temp_dir();
+        let wt_path = std::env::temp_dir().join(".");
+        apply_workspace_history(
+            &mut state,
+            vec![
+                WorkspaceHistoryEntry {
+                    name: "lx-tui".into(),
+                    path: repo_root.clone(),
+                    exists: true,
+                    name_is_manual: false,
+                    git: Some(WorkspaceGit {
+                        repo_root: repo_root.clone(),
+                        checkout_path: repo_root.clone(),
+                        is_linked: false,
+                        branch: Some("dev".into()),
+                        main_branch: Some("dev".into()),
+                    }),
+                },
+                WorkspaceHistoryEntry {
+                    name: "workspace-history-list".into(),
+                    path: wt_path.clone(),
+                    exists: true,
+                    name_is_manual: false,
+                    git: Some(WorkspaceGit {
+                        repo_root: repo_root.clone(),
+                        checkout_path: wt_path.clone(),
+                        is_linked: true,
+                        branch: Some("feature/workspace-history-list".into()),
+                        main_branch: Some("dev".into()),
+                    }),
+                },
+            ],
+        );
+
+        let rows = state.workspace_history.visible_rows();
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].parent && !rows[0].collapsed);
+        assert!(rows[1].child && rows[1].last_child);
+        assert_eq!(
+            state.workspace_history.entries[0].display_label(rows[0].child),
+            "lx-tui"
+        );
+        assert_eq!(
+            state.workspace_history.entries[1].display_label(rows[1].child),
+            "feature/workspace-history-list"
+        );
+
+        // 点击父节点折叠/展开子工作区。
+        assert!(toggle_workspace_history_group(&mut state, 0));
+        let collapsed_rows = state.workspace_history.visible_rows();
+        assert_eq!(collapsed_rows.len(), 1);
+        assert!(collapsed_rows[0].parent && collapsed_rows[0].collapsed);
+
+        assert!(toggle_workspace_history_group(&mut state, 0));
+        assert_eq!(state.workspace_history.visible_rows().len(), 2);
+    }
+
+    #[test]
     fn double_click_opens_existing_or_shows_toast_on_missing_directory() {
         let mut state = AppState::demo();
         let dir_a = std::env::temp_dir();
@@ -487,8 +602,8 @@ mod tests {
         apply_workspace_history(
             &mut state,
             vec![
-                ("TempWS".into(), dir_a.clone()),
-                ("GoneWS".into(), missing.clone()),
+                plain_entry("TempWS", dir_a.clone(), true),
+                plain_entry("GoneWS", missing, true),
             ],
         );
         show_workspace_history(&mut state);
@@ -542,8 +657,8 @@ mod tests {
         apply_workspace_history(
             &mut state,
             vec![
-                ("ValidWS".into(), existing_dir),
-                ("BrokenWS".into(), missing_dir.clone()),
+                plain_entry("ValidWS", existing_dir, true),
+                plain_entry("BrokenWS", missing_dir.clone(), true),
             ],
         );
         show_workspace_history(&mut state);
@@ -603,7 +718,10 @@ mod tests {
         let mut state = AppState::demo();
         let path = PathBuf::from("/tmp/lx-rename-sync-test");
         state.workspaces[0].cwd = Some(path.clone());
-        apply_workspace_history(&mut state, vec![("OldName".into(), path.clone())]);
+        apply_workspace_history(
+            &mut state,
+            vec![plain_entry("OldName", path.clone(), false)],
+        );
 
         // 从历史列表重命名：同步更新活跃工作区名称并登记 RenameWorkspace 效应。
         show_workspace_history(&mut state);
@@ -622,6 +740,7 @@ mod tests {
         apply_overlay_key(&mut state, OverlayKey::Enter);
 
         assert_eq!(state.workspace_history.entries[0].name, "NewHistoryName");
+        assert!(state.workspace_history.entries[0].name_is_manual);
         assert_eq!(state.workspaces[0].name, "NewHistoryName");
         assert!(state.workspaces[0].name_is_manual);
         assert_eq!(

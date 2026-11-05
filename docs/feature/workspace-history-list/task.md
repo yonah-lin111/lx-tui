@@ -211,7 +211,9 @@ rtk cargo test
 ## 4. 完成定义（DoD）
 
 - [x] 左侧栏 `Workspaces` 顶边框右上角（`[+]` 左侧 1 列）显示 `[≡]`，点击切换为 `[/]` 并在上半区展示工作区历史列表（下半区 `Agents` 不变）。
+- [x] 修复 `startup_trust` 在 linked worktree 启动时将子工作区名写入主工作区路径的命名污染，并在加载历史列表时对已污染的主工作区名称自动自愈回主工作区目录名（如 `lx-tui`）。
+- [x] 历史列表（`[≡]`）支持 Git 项目树形结构：自动扫描 `git worktree list` 并合并数据库历史 worktree，父节点显示 `▾/▸ ⑂ <主工作区名>`（点击箭头可折叠/展开），子节点显示 `├─/└─ ⑂ <分支短名或自定义名>`；从历史列表打开 linked worktree 时自动补开主工作区父节点。
 - [x] 所有显式创建/打开的工作区自动按路径去重持久化到 SQLite，按最近打开时间倒序排列；终端内 `cd` 不污染历史列表。
 - [x] 支持顶部搜索框实时过滤、鼠标双击/键盘回车打开、新建工作区、重命名双向同步。
-- [x] 磁盘路径已不存在的历史条目以红色（`style::error()`）字体展示，双击提示 `Directory not found`，右键菜单提供 `Delete`（含 `Confirm delete` 二次确认）并直接级联删除数据库关联内容。
+- [x] 磁盘路径已不存在的历史条目以红色（`style::error()`）字体展示，双击提示 `Directory does not exist`，右键菜单提供 `Delete`（含 `Confirm delete` 二次确认）并直接级联删除数据库关联内容。
 - [x] 所有生产代码单文件 ≤ 1000 行，无 `unwrap()` / `expect()`，`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全部通过。

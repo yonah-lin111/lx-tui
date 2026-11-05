@@ -274,6 +274,7 @@ fn commit_rename(state: &mut AppState) {
                 for entry in &mut state.workspace_history.entries {
                     if entry.path == path {
                         entry.name = name.clone();
+                        entry.name_is_manual = true;
                     }
                 }
                 state.effects.push(Effect::RenameWorkspace { path, name });
@@ -286,6 +287,7 @@ fn commit_rename(state: &mut AppState) {
             };
             let path = entry.path.clone();
             entry.name = name.clone();
+            entry.name_is_manual = true;
             for workspace in &mut state.workspaces {
                 if workspace.cwd.as_deref() == Some(path.as_path()) {
                     workspace.name = name.clone();

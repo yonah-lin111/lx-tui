@@ -1,4 +1,4 @@
-//! 侧栏工作区历史列表渲染与鼠标命中：顶部搜索框 + 分割线 + 扁平历史条目 + 滚动条。
+//! 侧栏工作区历史列表渲染与鼠标命中：顶部搜索框 + 分割线 + Git 树形历史条目 + 滚动条。
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -9,6 +9,8 @@ use unicode_width::UnicodeWidthChar;
 use crate::app::state::{AppState, WorkspaceMode};
 use crate::layout::PROMPT_TREE_HEADER_HEIGHT;
 use crate::ui::{layout, style, text, widgets};
+
+use super::WORKSPACE_ITEM_INDENT;
 
 /// 渲染工作区历史列表；当侧栏聚焦时返回搜索框硬件光标位置。
 pub fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<(u16, u16)> {
@@ -118,14 +120,14 @@ fn paint_divider(buf: &mut Buffer, area: Rect, y: u16, focused: bool) {
     }
 }
 
-/// 绘制历史工作区条目列表；路径不存在的条目使用 `style::error()` 异色高亮。
+/// 绘制历史工作区树形条目列表；路径不存在的条目使用 `style::error()` 异色高亮。
 fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
     if rows_area.width == 0 || rows_area.height == 0 {
         return;
     }
     let panel = &state.workspace_history;
-    let filtered = panel.filtered_indices();
-    if filtered.is_empty() {
+    let rows = panel.visible_rows();
+    if rows.is_empty() {
         let empty = if panel.search.text().trim().is_empty() {
             text::WORKSPACE_HISTORY_EMPTY
         } else {
@@ -141,15 +143,15 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
         );
         return;
     }
-    let scroll = panel.scroll.min(filtered.len().saturating_sub(1));
-    let selected = panel.selected.min(filtered.len().saturating_sub(1));
-    for (vis_row, &entry_idx) in filtered
+    let scroll = panel.scroll.min(rows.len().saturating_sub(1));
+    let selected = panel.selected.min(rows.len().saturating_sub(1));
+    for (vis_row, row) in rows
         .iter()
         .enumerate()
         .skip(scroll)
         .take(usize::from(rows_area.height))
     {
-        let Some(entry) = panel.entries.get(entry_idx) else {
+        let Some(entry) = panel.entries.get(row.index) else {
             continue;
         };
         let y = rows_area.y + (vis_row - scroll) as u16;
@@ -166,8 +168,18 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
         } else {
             highlight.patch(style::error())
         };
+        let prefix_style = if row.parent && entry.exists {
+            highlight.patch(style::accent())
+        } else {
+            item_style
+        };
         let icon_style = if entry.exists {
             style::muted().patch(highlight)
+        } else {
+            highlight.patch(style::error())
+        };
+        let mark_style = if entry.exists {
+            highlight.patch(style::accent())
         } else {
             highlight.patch(style::error())
         };
@@ -176,12 +188,45 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
         } else {
             "  ".to_string()
         };
-        let icon = format!("{} ", text::WORKSPACE_NON_GIT_ICON);
+        let group_prefix = if row.parent {
+            let arrow = if row.collapsed {
+                text::WORKSPACE_GROUP_COLLAPSED
+            } else {
+                text::WORKSPACE_GROUP_EXPANDED
+            };
+            format!("{arrow} ")
+        } else if row.child {
+            let tree = if row.last_child {
+                text::WORKSPACE_TREE_LAST
+            } else {
+                text::WORKSPACE_TREE_MIDDLE
+            };
+            format!("{:width$}{tree} ", "", width = WORKSPACE_ITEM_INDENT)
+        } else {
+            " ".repeat(WORKSPACE_ITEM_INDENT)
+        };
+        let icon = if entry.git.is_some() {
+            text::WORKSPACE_GIT_ICON
+        } else {
+            text::WORKSPACE_NON_GIT_ICON
+        };
+        let icon_prefix = format!("{icon} ");
+        let label = entry.display_label(row.child);
+        let index_text = row
+            .child_index
+            .map(|index| format!(" {index}"))
+            .unwrap_or_default();
+
         let mut x = paint_text(buf, rows_area.x, y, &marker, item_style, rows_area.right());
-        x = paint_text(buf, x, y, &icon, icon_style, rows_area.right());
-        let max_width = usize::from(rows_area.right().saturating_sub(x));
-        let label = text::ellipsize(&entry.name, max_width);
-        paint_text(buf, x, y, &label, item_style, rows_area.right());
+        x = paint_text(buf, x, y, &group_prefix, prefix_style, rows_area.right());
+        x = paint_text(buf, x, y, &icon_prefix, icon_style, rows_area.right());
+        let max_width = usize::from(rows_area.right().saturating_sub(x))
+            .saturating_sub(index_text.chars().count());
+        let truncated = text::ellipsize(&label, max_width);
+        x = paint_text(buf, x, y, &truncated, item_style, rows_area.right());
+        if !index_text.is_empty() {
+            paint_text(buf, x, y, &index_text, mark_style, rows_area.right());
+        }
     }
 }
 
@@ -208,7 +253,7 @@ fn history_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect
 }
 
 fn scrollbar_for(list: Rect, state: &AppState) -> Option<widgets::scrollbar::ScrollbarLayout> {
-    let total = state.workspace_history.filtered_indices().len();
+    let total = state.workspace_history.visible_rows().len();
     widgets::scrollbar::layout(
         list,
         total,
@@ -282,9 +327,25 @@ fn history_slot_at(
     if content.width == 0 || !content.contains((column, row).into()) {
         return None;
     }
-    let total = state.workspace_history.filtered_indices().len();
+    let total = state.workspace_history.visible_rows().len();
     let scroll = state.workspace_history.scroll.min(total.saturating_sub(1));
     Some(scroll.saturating_add(usize::from(row - content.y)))
+}
+
+/// 历史列表父节点折叠箭头命中：命中父节点左侧箭头区（前 4 列）时返回该可见行下标 `visible_row`。
+pub fn workspace_history_group_toggle_at(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let list = history_list_rect(view, state)?;
+    if column >= list.x.saturating_add(4) {
+        return None;
+    }
+    let slot = history_slot_at(view, state, column, row)?;
+    let rows = state.workspace_history.visible_rows();
+    rows.get(slot).filter(|item| item.parent).map(|_| slot)
 }
 
 /// 历史列表条目命中：返回过滤后的可见行下标 `visible_row`。
@@ -295,7 +356,7 @@ pub fn workspace_history_row_at(
     row: u16,
 ) -> Option<usize> {
     let slot = history_slot_at(view, state, column, row)?;
-    let total = state.workspace_history.filtered_indices().len();
+    let total = state.workspace_history.visible_rows().len();
     (slot < total).then_some(slot)
 }
 
@@ -306,7 +367,7 @@ pub fn workspace_history_blank_at(
     column: u16,
     row: u16,
 ) -> bool {
-    let total = state.workspace_history.filtered_indices().len();
+    let total = state.workspace_history.visible_rows().len();
     history_slot_at(view, state, column, row).is_some_and(|slot| slot >= total)
 }
 
@@ -360,7 +421,7 @@ mod tests {
     use ratatui::style::Color;
 
     use super::*;
-    use crate::app::state::WorkspaceHistoryEntry;
+    use crate::app::state::{WorkspaceGit, WorkspaceHistoryEntry};
     use crate::app::update::show_workspace_history;
     use crate::config::Config;
     use crate::ui;
@@ -412,19 +473,37 @@ mod tests {
     }
 
     #[test]
-    fn missing_directory_entry_renders_in_error_color() {
+    fn missing_directory_entry_renders_in_error_color_and_git_tree_renders_connectors() {
         let mut state = AppState::demo();
         let config = Config::default();
+        let repo_root = PathBuf::from("/tmp/lx-tui");
+        let wt_path = PathBuf::from("/tmp/lx-tui/.worktrees/workspace-history-list");
         state.workspace_history.entries = vec![
             WorkspaceHistoryEntry {
-                name: "ValidRepo".into(),
-                path: PathBuf::from("/tmp/valid"),
+                name: "lx-tui".into(),
+                path: repo_root.clone(),
                 exists: true,
+                name_is_manual: false,
+                git: Some(WorkspaceGit {
+                    repo_root: repo_root.clone(),
+                    checkout_path: repo_root.clone(),
+                    is_linked: false,
+                    branch: Some("dev".into()),
+                    main_branch: Some("dev".into()),
+                }),
             },
             WorkspaceHistoryEntry {
-                name: "MissingRepo".into(),
-                path: PathBuf::from("/tmp/missing"),
+                name: "workspace-history-list".into(),
+                path: wt_path.clone(),
                 exists: false,
+                name_is_manual: false,
+                git: Some(WorkspaceGit {
+                    repo_root,
+                    checkout_path: wt_path,
+                    is_linked: true,
+                    branch: Some("feature/workspace-history-list".into()),
+                    main_branch: Some("dev".into()),
+                }),
             },
         ];
         state.workspace_history.mode = WorkspaceMode::History;
@@ -447,11 +526,29 @@ mod tests {
             ui::layout::sidebar_sections(view.sidebar, state.agents_collapsed).expect("sections");
         let row0_y = sections.workspaces.y + PROMPT_TREE_HEADER_HEIGHT;
         let row1_y = row0_y + 1;
-        let name_x = sections.workspaces.x + 4;
+        let name_x = sections.workspaces.x + 8;
 
         let buf = terminal.backend().buffer();
+        let row0_text: String = (sections.workspaces.x..sections.workspaces.right())
+            .map(|x| buf[(x, row0_y)].symbol())
+            .collect();
+        let row1_text: String = (sections.workspaces.x..sections.workspaces.right())
+            .map(|x| buf[(x, row1_y)].symbol())
+            .collect();
+        assert!(
+            row0_text.contains("▾ ⑂ lx-tui"),
+            "父行应显示主工作区名: {row0_text}"
+        );
+        assert!(
+            row1_text.contains("└─ ⑂ feature/work"),
+            "子行应缩进显示树连接符与分支名: {row1_text}"
+        );
         assert_ne!(buf[(name_x, row0_y)].fg, Color::Red);
         assert_eq!(buf[(name_x, row1_y)].fg, Color::Red);
+        assert_eq!(
+            ui::workspace_history_group_toggle_at(&view, &state, sections.workspaces.x + 2, row0_y),
+            Some(0)
+        );
         assert_eq!(
             ui::workspace_history_row_at(&view, &state, name_x, row0_y),
             Some(0)

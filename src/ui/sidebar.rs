@@ -15,8 +15,8 @@ use crate::layout::{COLLAPSED_STRIP, PaneId};
 use super::{PANEL_BUTTON_MARGIN, PANEL_BUTTON_WIDTH, layout, style, text, widgets};
 
 pub use history::{
-    workspace_history_blank_at, workspace_history_row_at, workspace_history_scrollbar,
-    workspace_history_search_char_at, workspace_history_visible_rows,
+    workspace_history_blank_at, workspace_history_group_toggle_at, workspace_history_row_at,
+    workspace_history_scrollbar, workspace_history_search_char_at, workspace_history_visible_rows,
 };
 
 /// 工作区列表顶层项的统一缩进列数；子项连接符与父项/普通项名字在此列对齐。

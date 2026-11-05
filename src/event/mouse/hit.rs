@@ -115,6 +115,15 @@ pub(crate) fn handle_sidebar_press(
         *dirty = true;
         return true;
     }
+    if let Some(vis_row) = ui::workspace_history_group_toggle_at(view, state, column, row) {
+        update::focus_sidebar(state);
+        update::toggle_workspace_history_group(state, vis_row);
+        if let Some(rows) = ui::workspace_history_visible_rows(view, state) {
+            state.workspace_history.clamp(rows);
+        }
+        *dirty = true;
+        return true;
+    }
     if let Some(vis_row) = ui::workspace_history_row_at(view, state, column, row) {
         update::focus_sidebar(state);
         let now = Instant::now();

@@ -773,14 +773,8 @@ impl Persistence {
         let Some(db) = &self.db else {
             return false;
         };
-        match db.list_workspaces() {
-            Ok(records) => {
-                let pairs = records
-                    .into_iter()
-                    .map(|record| (record.name, record.path))
-                    .collect();
-                update::apply_workspace_history(state, pairs)
-            }
+        match db.list_workspace_history_entries() {
+            Ok(entries) => update::apply_workspace_history(state, entries),
             Err(error) => {
                 tracing::warn!(%error, "workspace history load failed");
                 false

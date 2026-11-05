@@ -93,13 +93,23 @@ pub fn ensure_main_workspace(state: &mut AppState, index: usize) -> Option<usize
         })
         .unwrap_or(index);
     let base = workspace_label(&repo_root, home_dir().as_deref());
-    let name = unique_workspace_name(&base, |candidate| {
+    let saved_manual = state
+        .workspace_history
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.path == repo_root && entry.name_is_manual && !entry.name.trim().is_empty()
+        })
+        .map(|entry| entry.name.clone());
+    let effective_base = saved_manual.as_deref().unwrap_or(&base);
+    let name = unique_workspace_name(effective_base, |candidate| {
         state
             .workspaces
             .iter()
             .any(|workspace| workspace.name == candidate)
     });
     let mut workspace = Workspace::single_terminal(name, Some(repo_root.clone()));
+    workspace.name_is_manual = saved_manual.is_some();
     workspace.git = Some(WorkspaceGit {
         repo_root: repo_root.clone(),
         checkout_path: repo_root,

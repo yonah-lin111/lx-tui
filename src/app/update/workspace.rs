@@ -105,7 +105,9 @@ pub fn create_workspace_with_cwd(state: &mut AppState, target_cwd: Option<PathBu
             .workspace_history
             .entries
             .iter()
-            .find(|entry| entry.path == path && entry.name != base && !entry.name.trim().is_empty())
+            .find(|entry| {
+                entry.path == path && entry.name_is_manual && !entry.name.trim().is_empty()
+            })
             .map(|entry| entry.name.clone())
     });
     let effective_base = saved_manual.as_deref().unwrap_or(&base);

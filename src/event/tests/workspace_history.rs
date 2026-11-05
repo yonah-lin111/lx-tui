@@ -14,8 +14,20 @@ fn mouse_click_mode_button_toggles_history_and_typing_filters_rows() {
     update::apply_workspace_history(
         &mut state,
         vec![
-            ("AlphaWorkspace".into(), existing),
-            ("BrokenWorkspace".into(), missing),
+            crate::app::state::WorkspaceHistoryEntry {
+                name: "AlphaWorkspace".into(),
+                path: existing,
+                exists: true,
+                name_is_manual: true,
+                git: None,
+            },
+            crate::app::state::WorkspaceHistoryEntry {
+                name: "BrokenWorkspace".into(),
+                path: missing,
+                exists: false,
+                name_is_manual: true,
+                git: None,
+            },
         ],
     );
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -95,7 +107,7 @@ fn double_click_history_row_opens_workspace_and_right_click_missing_cascades_del
         ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
     let row0_y = sections.workspaces.y + layout::PROMPT_TREE_HEADER_HEIGHT;
     let row1_y = row0_y + 1;
-    let row_x = sections.workspaces.x + 2;
+    let row_x = sections.workspaces.x + 5;
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
