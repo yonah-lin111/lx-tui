@@ -173,11 +173,6 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
         } else {
             item_style
         };
-        let icon_style = if entry.exists {
-            style::muted().patch(highlight)
-        } else {
-            highlight.patch(style::error())
-        };
         let mark_style = if entry.exists {
             highlight.patch(style::accent())
         } else {
@@ -205,12 +200,6 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
         } else {
             " ".repeat(WORKSPACE_ITEM_INDENT)
         };
-        let icon = if entry.git.is_some() {
-            text::WORKSPACE_GIT_ICON
-        } else {
-            text::WORKSPACE_NON_GIT_ICON
-        };
-        let icon_prefix = format!("{icon} ");
         let label = entry.display_label(row.child);
         let index_text = row
             .child_index
@@ -219,7 +208,6 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
 
         let mut x = paint_text(buf, rows_area.x, y, &marker, item_style, rows_area.right());
         x = paint_text(buf, x, y, &group_prefix, prefix_style, rows_area.right());
-        x = paint_text(buf, x, y, &icon_prefix, icon_style, rows_area.right());
         let max_width = usize::from(rows_area.right().saturating_sub(x))
             .saturating_sub(index_text.chars().count());
         let truncated = text::ellipsize(&label, max_width);
@@ -536,11 +524,11 @@ mod tests {
             .map(|x| buf[(x, row1_y)].symbol())
             .collect();
         assert!(
-            row0_text.contains("▾ ⑂ lx-tui"),
+            row0_text.contains("▾ lx-tui"),
             "父行应显示主工作区名: {row0_text}"
         );
         assert!(
-            row1_text.contains("└─ ⑂ feature/work"),
+            row1_text.contains("└─ feature/work"),
             "子行应缩进显示树连接符与分支名: {row1_text}"
         );
         assert_ne!(buf[(name_x, row0_y)].fg, Color::Red);

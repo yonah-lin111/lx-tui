@@ -300,10 +300,6 @@ pub const TAB_ASK_MARKER: &str = "?";
 /// 初始工作区标记：不可移除，跟随启动工作区。
 pub const INITIAL_WORKSPACE_MARKER: &str = " *";
 
-/// 工作区条目标记：Git 仓库与普通目录（标准单宽通用符号）。
-pub const WORKSPACE_GIT_ICON: &str = "⑂";
-pub const WORKSPACE_NON_GIT_ICON: &str = "•";
-
 /// 工作区分组折叠箭头：展开 / 折叠。
 pub const WORKSPACE_GROUP_EXPANDED: &str = "▾";
 pub const WORKSPACE_GROUP_COLLAPSED: &str = "▸";

@@ -206,23 +206,11 @@ fn ui_icons_are_single_width_and_non_pua() {
         1,
         "输入框前缀图标必须严格占用 1 列宽"
     );
-    assert_eq!(WORKSPACE_GIT_ICON.width(), 1, "Git 图标必须严格占用 1 列宽");
-    assert_eq!(
-        WORKSPACE_NON_GIT_ICON.width(),
-        1,
-        "非 Git 图标必须严格占用 1 列宽"
-    );
-    assert_ne!(
-        WORKSPACE_GIT_ICON, WORKSPACE_NON_GIT_ICON,
-        "Git 与非 Git 图标必须不同"
-    );
 
     for (name, icon) in [
         ("MENTION_DIR_ICON", MENTION_DIR_ICON),
         ("MENTION_FILE_ICON", MENTION_FILE_ICON),
         ("TAB_ITEM_ICON", TAB_ITEM_ICON),
-        ("WORKSPACE_GIT_ICON", WORKSPACE_GIT_ICON),
-        ("WORKSPACE_NON_GIT_ICON", WORKSPACE_NON_GIT_ICON),
     ] {
         for ch in icon.chars() {
             let cp = ch as u32;

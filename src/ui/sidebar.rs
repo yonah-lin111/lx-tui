@@ -153,13 +153,6 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
         // 特殊标记（`*` 表示最初路径、去重序号）用强调色标识，hover 只提供背景。
         let mark_style = highlight.patch(style::accent());
         let prefix = format!("{marker}{group_prefix}");
-        let icon = if workspace.git.is_some() {
-            text::WORKSPACE_GIT_ICON
-        } else {
-            text::WORKSPACE_NON_GIT_ICON
-        };
-        let icon_prefix = format!("{icon} ");
-        let icon_style = style::muted().patch(highlight);
         let label = workspace_item_label(workspace, row.child);
         let index_text = row
             .child_index
@@ -167,7 +160,6 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             .unwrap_or_default();
         let name_width = width
             .saturating_sub(prefix.chars().count())
-            .saturating_sub(icon_prefix.chars().count())
             .saturating_sub(index_text.chars().count())
             .saturating_sub(if workspace.is_initial {
                 marker_width
@@ -179,7 +171,6 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
         if !group_prefix.is_empty() {
             spans.push(Span::styled(group_prefix, prefix_style));
         }
-        spans.push(Span::styled(icon_prefix, icon_style));
         spans.push(Span::styled(
             text::ellipsize(&label, name_width),
             item_style,
