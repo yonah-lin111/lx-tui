@@ -117,6 +117,29 @@ impl App {
             .unwrap_or_else(|| panic!("screen missing {needle:?}\n{}", self.screen()));
         self.click_at(col, row);
     }
+    /// 点击屏幕上最后一次出现的 `needle`（用于同名按钮消歧，如侧栏与 Prompt 都有 `[≡]`）。
+    fn click_last(&self, needle: &str) {
+        let terminal = self.emulator.lock().unwrap();
+        let grid = terminal.grid();
+        let cols = usize::from(terminal.size().cols);
+        let rows = usize::from(terminal.size().rows);
+        let width = needle.chars().count();
+        let mut found = None;
+        for row in 0..rows {
+            let mut line = String::new();
+            for col in 0..cols {
+                line.push(grid[Line(row as i32)][Column(col)].c);
+            }
+            if let Some(byte_index) = line.rfind(needle) {
+                let col = line[..byte_index].chars().count() + width / 2;
+                found = Some((col as u16, row as u16));
+            }
+        }
+        drop(terminal);
+        let (col, row) =
+            found.unwrap_or_else(|| panic!("screen missing {needle:?}\n{}", self.screen()));
+        self.click_at(col, row);
+    }
 
     /// 在包含 `anchor` 的行内查找 `needle`（避开其他行的同名按钮，如侧栏/标签栏的 `[+]`）。
     fn find_in_row_of(&self, anchor: &str, needle: &str) -> Option<(u16, u16)> {
@@ -264,7 +287,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     let app = spawn_trusted("flow");
 
     // [≡] → 树视图：搜索框、[+] 按钮与 default temp 行（列表恒有 default temp）。
-    app.click(text::PROMPT_MODE_LIST_LABEL);
+    app.click_last(text::PROMPT_MODE_LIST_LABEL);
     assert!(
         app.wait_for(text::PROMPT_TEMP_DEFAULT_NAME),
         "tree: \n{}",
@@ -332,7 +355,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     );
 
     // 回到树：出现正式条目行，不再有状态标签。
-    app.click(text::PROMPT_MODE_LIST_LABEL);
+    app.click_last(text::PROMPT_MODE_LIST_LABEL);
     assert!(app.wait_for("• New prompt"), "item row: \n{}", app.screen());
     assert!(
         app.find_in_row_of("• New prompt", "[todo]").is_none(),
@@ -359,7 +382,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         app.screen()
     );
     // 回到列表继续后续断言。
-    app.click(text::PROMPT_MODE_LIST_LABEL);
+    app.click_last(text::PROMPT_MODE_LIST_LABEL);
     assert!(
         app.wait_for("• New prompt"),
         "list reentered: \n{}",
@@ -412,7 +435,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         "draft saved into new folder: \n{}",
         app.screen()
     );
-    app.click(text::PROMPT_MODE_LIST_LABEL);
+    app.click_last(text::PROMPT_MODE_LIST_LABEL);
     assert!(
         app.wait_for("notes"),
         "new folder visible in tree: \n{}",

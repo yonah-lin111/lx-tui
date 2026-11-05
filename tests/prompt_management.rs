@@ -87,7 +87,7 @@ fn draw_tree(state: &AppState) {
 }
 
 #[test]
-fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
+fn in_app_trust_inline_folder_nesting_persistence_and_workspace_isolation() {
     let root = temp_root("main");
     let workspace_a = root.join("workspace-a");
     let workspace_b = root.join("workspace-b");
@@ -107,33 +107,24 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
     assert!(service.is_trusted(&workspace_a), "已信任工作区无启动信任页");
     assert!(state.overlay.is_none());
 
-    // 2. 应用内信任弹窗：显式新建未信任工作区 b → 弹信任浮层 → 确认后创建并入库。
+    // 2. 新建未信任工作区 b：首个 NewWorkspace 弹窗内联确认，不再弹第二个 TrustWorkspace。
     state.overlay = Some(Overlay::NewWorkspace(NewWorkspace {
         input: TextInput::new(workspace_b.to_string_lossy()),
     }));
+    // 第一次 Enter 只切到 Confirm，第二次 Enter 才提交。
     update::apply_overlay_key(&mut state, OverlayKey::Enter);
-    assert!(state.overlay.is_none(), "新建弹窗先关闭");
-    service.pump(&mut state);
-    // 未信任的显式路径先登记仓库根解析（真实运行由事件层后台查询 git）。
-    assert_eq!(state.trust_resolutions.len(), 1, "未信任路径登记仓库根解析");
-    let resolution = state.trust_resolutions.pop().expect("resolution queued");
-    state
-        .effects
-        .push(lx_tui::app::effects::Effect::CheckTrust {
-            path: resolution.path.clone(),
-            // 非 git 路径：仓库根即自身。
-            root: Some(resolution.path),
-            trigger: resolution.trigger,
-        });
+    assert!(
+        matches!(state.overlay, Some(Overlay::NewWorkspace(_))),
+        "第一次 Enter 进入内联 Confirm"
+    );
+    update::apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(state.overlay.is_none(), "确认后新建弹窗关闭");
     service.pump(&mut state);
     assert!(
-        matches!(state.overlay, Some(Overlay::TrustWorkspace(_))),
-        "未信任路径弹信任浮层"
+        state.trust_resolutions.is_empty(),
+        "内联确认不应再登记 TrustWorkspace 解析"
     );
-    assert_eq!(state.workspaces.len(), 1, "确认前不创建");
-    update::apply_overlay_key(&mut state, OverlayKey::Enter);
-    service.pump(&mut state);
-    assert_eq!(state.workspaces.len(), 2, "信任后创建工作区");
+    assert_eq!(state.workspaces.len(), 2, "确认后直接创建工作区");
     assert_eq!(
         state.workspaces[1].cwd.as_deref(),
         Some(workspace_b.as_path())
@@ -141,7 +132,7 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
     let reader = Database::open(&db_path).expect("reader opens");
     assert!(
         reader.is_trusted(&workspace_b).expect("trust query"),
-        "信任已持久化"
+        "内联确认已持久化信任"
     );
 
     // 3. 回到工作区 a，切到树视图，空白菜单新建文件夹。
