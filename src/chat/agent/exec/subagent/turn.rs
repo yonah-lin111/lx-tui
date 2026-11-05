@@ -32,6 +32,7 @@ impl ExecSubagentPool {
         &self,
         db: &Database,
         agent_id: &str,
+        parent_session_id: &str,
         child_session_id: &str,
         role: AgentRole,
         current_items: &[PersistedInputItem],
@@ -57,7 +58,7 @@ impl ExecSubagentPool {
             .filter(|message| message.sequence > start_after)
             .collect();
         let turn_items = db
-            .load_subagent_turn_items(&self.workspace, &self.parent_session_id, agent_id)
+            .load_subagent_turn_items(&self.workspace, parent_session_id, agent_id)
             .unwrap_or_default();
         let mut index = 0;
         while index < messages.len() {
@@ -185,9 +186,10 @@ impl ExecSubagentPool {
             variant_params: child_model.variant_params.clone(),
             purpose: RequestPurpose::Subagent(role),
             system_prompt: Some(system_prompt),
-            tools: Arc::new(crate::chat::tools::turn_tools(
+            tools: Arc::new(crate::chat::tools::turn_tools_with_subagents(
                 ToolSurface::from_role_at_depth(role, depth, max_depth),
                 &self.mcp_snapshot,
+                Some(&self.subagents_config),
             )),
         };
         let context = ModelContext::new(request, self.cwd.clone())
@@ -253,6 +255,7 @@ impl ExecSubagentPool {
         &mut self,
         db: &Database,
         agent_id: &str,
+        parent_session_id: &str,
         child_session_id: &str,
         child_assistant_id: &str,
         child_user_message_id: &str,
@@ -270,6 +273,7 @@ impl ExecSubagentPool {
             .child_context(
                 db,
                 agent_id,
+                parent_session_id,
                 child_session_id,
                 role,
                 current_items,
@@ -371,6 +375,7 @@ impl ExecSubagentPool {
             agent_id.to_string(),
             ChildHandle {
                 agent_id: agent_id.to_string(),
+                parent_session_id: parent_session_id.to_string(),
                 child_session_id: child_session_id.to_string(),
                 child_assistant_id: child_assistant_id.to_string(),
                 child_user_message_id: child_user_message_id.to_string(),
@@ -664,9 +669,11 @@ impl ExecSubagentPool {
         self.resumed.insert(committed.agent_id.clone());
         self.agent_budgets
             .insert(committed.agent_id.clone(), effective_max_tokens);
+        let parent_session_id = self.parent_session_id.clone();
         let started = self.start_child(
             db,
             &committed.agent_id,
+            &parent_session_id,
             &committed.child_session_id,
             &committed.child_assistant_id,
             &committed.child_user_message_id,
@@ -721,8 +728,14 @@ impl ExecSubagentPool {
     ) -> Result<ExecModelTarget, HostError> {
         let explicit_model = model_override.map(str::trim).filter(|s| !s.is_empty());
         let explicit_effort = effort_override.map(str::trim).filter(|s| !s.is_empty());
+        // 父 fallback 取调用者自身冻结的模型：嵌套 executor 的子 agent 必须继承它，而不是池根模型。
+        let parent_model = self
+            .child_models
+            .get(&self.parent_session_id)
+            .cloned()
+            .unwrap_or_else(|| self.model.clone());
         if explicit_model.is_none() && explicit_effort.is_none() && role_default.is_none() {
-            return Ok(self.model.clone());
+            return Ok(parent_model);
         }
         let settings = crate::config::ai::ai_config_path()
             .ok()
@@ -734,7 +747,7 @@ impl ExecSubagentPool {
             if !cfg!(test) {
                 return Err(failed("model configuration unavailable"));
             }
-            let mut fallback = self.model.clone();
+            let mut fallback = parent_model;
             if let Some(m) = explicit_model {
                 apply_reference_to_target(&mut fallback, m);
             } else if let Some(sel) = role_default {
@@ -762,7 +775,7 @@ impl ExecSubagentPool {
             }
         } else {
             let e = explicit_effort.unwrap_or_default();
-            format!("{}/{}#{e}", self.model.provider, self.model.model)
+            format!("{}/{}#{e}", parent_model.provider, parent_model.model)
         };
         crate::chat::agent::exec::resolve_model_target(&settings, Some(&raw_spec), None)
             .map_err(|err| failed(&err))

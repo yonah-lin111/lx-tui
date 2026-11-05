@@ -23,7 +23,16 @@ pub(crate) fn finish_subagent(
     reason: StopReason,
     usage: Usage,
 ) -> bool {
-    finish_subagent_with_billing(state, streams, persistence, key, reason, usage, usage)
+    finish_subagent_with_billing(
+        state,
+        streams,
+        persistence,
+        key,
+        reason,
+        false,
+        usage,
+        usage,
+    )
 }
 
 /// 子 turn 终态（区分消息 usage 与会话 billing）。
@@ -33,6 +42,7 @@ pub(crate) fn finish_subagent_with_billing(
     persistence: &Persistence,
     key: RequestKey,
     reason: StopReason,
+    budget_exceeded: bool,
     usage: Usage,
     billing: Usage,
 ) -> bool {
@@ -61,7 +71,7 @@ pub(crate) fn finish_subagent_with_billing(
         },
     };
     let duration_ms = Some((crate::db::now_ms() - handle.started_at_ms).max(0));
-    let budget_hit = budget_exceeded(&reason, handle.max_tokens, usage);
+    let budget_hit = budget_exceeded || max_tokens_hit(&reason, handle.max_tokens, usage);
     let mut report_view = None;
     if let Some(database) = persistence.database() {
         let report = (!was_closed).then(|| {
@@ -73,12 +83,14 @@ pub(crate) fn finish_subagent_with_billing(
                 )
                 .unwrap_or_default();
             let mut body = report_body(&handle);
-            if !matches!(reason, StopReason::Complete) && body.trim().is_empty() {
+            // 非正常终态一律补半程汇报头（已带前缀的除外），否则多步/预算中断
+            // 会退化成普通助手正文，父 agent 无法区分这是中断产物。
+            if handle.status != STATUS_COMPLETED && !body.starts_with("[Partial report") {
                 body = crate::chat::agent::synthesize_partial_report_body(
                     &body,
                     completed_tools(&handle.chat, &handle.child_assistant_id),
                     &changed_paths,
-                    partial_reason_label(&reason, handle.max_tokens, usage),
+                    partial_reason_label(&reason, handle.max_tokens, usage, budget_exceeded),
                 );
             }
             ReportPayload {
@@ -397,8 +409,8 @@ fn completed_tools(chat: &crate::app::state::LxChat, assistant_id: &str) -> usiz
         .unwrap_or_default()
 }
 
-/// 交互式事件层拿不到 `TurnSummary.budget_exceeded`：用「被取消 + 本步用量已达预算」识别熔断。
-fn budget_exceeded(reason: &StopReason, max_tokens: Option<u64>, usage: Usage) -> bool {
+/// 交互式事件层拿不到 `TurnSummary.budget_exceeded` 的历史路径：用「被取消 + 本步用量已达预算」兜底。
+fn max_tokens_hit(reason: &StopReason, max_tokens: Option<u64>, usage: Usage) -> bool {
     matches!(reason, StopReason::Cancelled)
         && max_tokens
             .is_some_and(|limit| usage.context_tokens().is_some_and(|tokens| tokens >= limit))
@@ -409,8 +421,9 @@ fn partial_reason_label(
     reason: &StopReason,
     max_tokens: Option<u64>,
     usage: Usage,
+    budget_exceeded: bool,
 ) -> &'static str {
-    if budget_exceeded(reason, max_tokens, usage) {
+    if budget_exceeded || max_tokens_hit(reason, max_tokens, usage) {
         return "budget_exceeded";
     }
     match reason {

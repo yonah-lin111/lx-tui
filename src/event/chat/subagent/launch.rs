@@ -76,6 +76,7 @@ pub(super) fn launch_child_turn(
         frozen.output_limit,
         frozen.supports_image_input,
         items,
+        &state.subagents_config,
         limits,
     )?;
     let mcp_snapshot = inputs.mcp;
@@ -231,6 +232,7 @@ pub(super) fn launch_child_turn(
                     reason: StopReason::Failed {
                         code: "subagent session busy".into(),
                     },
+                    budget_exceeded: false,
                     usage: Usage::default(),
                     billing: Usage::default(),
                 }));
@@ -278,6 +280,7 @@ pub(super) fn launch_child_turn(
         let _ = net_sender.send(AppEvent::ChatNet(ChatNetEvent::Finished {
             key: stream_key,
             reason: summary.stop_reason(),
+            budget_exceeded: summary.budget_exceeded,
             usage: summary.usage,
             billing: summary.billing,
         }));

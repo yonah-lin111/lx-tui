@@ -530,26 +530,27 @@ impl Database {
         if let Some(record) = self.owned_subagent(workspace, parent_session, key)? {
             return Ok(Some(record));
         }
+        let (root_session, _, caller_path) =
+            self.resolve_session_tree_root(workspace, parent_session)?;
         let direct = self.list_subagents(workspace, parent_session)?;
         if let Some(record) = direct.into_iter().find(|rec| {
             crate::chat::agent::matches_agent_target(
                 &rec.agent_id,
                 rec.nickname.as_deref(),
                 Some(&rec.agent_path),
-                crate::chat::agent::ROOT_AGENT_PATH,
+                &caller_path,
                 key,
             )
         }) {
             return Ok(Some(record));
         }
-        let (root_session, _, _) = self.resolve_session_tree_root(workspace, parent_session)?;
         let tree = self.list_subagent_tree(workspace, &root_session)?;
         Ok(tree.into_iter().find(|rec| {
             crate::chat::agent::matches_agent_target(
                 &rec.agent_id,
                 rec.nickname.as_deref(),
                 Some(&rec.agent_path),
-                crate::chat::agent::ROOT_AGENT_PATH,
+                &caller_path,
                 key,
             )
         }))
@@ -710,7 +711,8 @@ impl Database {
                FROM agent_file_mutation m
                JOIN agent_turn_file_scope s
                  ON s.session_id = m.session_id AND s.user_message_id = m.user_message_id
-               WHERE m.session_id = ?1 AND m.user_message_id = ?2 AND m.state = 'committed'
+               WHERE m.session_id = ?1 AND m.user_message_id = ?2
+                 AND m.state = 'committed' AND m.success = 1
                  AND m.session_id IN (
                      SELECT external_id FROM agent_session WHERE workspace_id = ?3
                  )
@@ -757,7 +759,8 @@ impl Database {
         };
         let count: i64 = self.conn.query_row(
             r#"SELECT COUNT(DISTINCT target_path) FROM agent_file_mutation m
-               WHERE m.session_id = ?1 AND m.user_message_id = ?2 AND m.state = 'committed'
+               WHERE m.session_id = ?1 AND m.user_message_id = ?2
+                 AND m.state = 'committed' AND m.success = 1
                  AND m.session_id IN (
                      SELECT external_id FROM agent_session WHERE workspace_id = ?3
                  )"#,

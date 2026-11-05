@@ -79,3 +79,32 @@
 - **输入内容**：`PUT /api/subagents/general` 传入 `{"maxConcurrent":12,"maxDepth":3,"defaultMaxTokens":100000}`，以及越界参数 `maxDepth: 0 / 4`、`maxConcurrent: 13`。
 - **验证步骤**：执行 `cargo test --lib settings::service::tests::subagents_round_trip_depth_and_token_budget` 与 `cargo test --lib settings::service::tests::subagents_reject_out_of_range_depth_and_concurrency`。
 - **期望结果**：合法配置在 `GET /api/subagents` 与全量 `PUT /api/subagents` 中无损往返（传 `null` 可清除 `defaultMaxTokens`）；越界参数返回 HTTP `422 Unprocessable Entity` 且不污染原配置（实测通过）。
+
+---
+
+## 3. 代码审查（P0–P3）修复与回归验证
+
+### P0-1 — 嵌套 `Executor` 无参 `wait_agent({})` 自等待死锁与跨层报告误消费
+- **输入内容**：深度 1 `Executor`（`/root/coord`）派发深度 2 `Explorer`（`/root/coord/leaf`）后调用无参 `wait_agent({})`。
+- **验证步骤**：执行 `cargo test --lib event::chat::tests::subagent::nested_executor_wait_all_only_waits_for_descendants_not_itself`、`cargo test --lib chat::agent::exec::tests::subagent_tests::nested_executor_wait_all_and_grandchild_queued_input_succeed` 及 `./target/debug/lx-tui exec --ephemeral --json "..."` 实机多级 `wait_agent({})`。
+- **期望结果**：`wait_agent(all)` 仅等待调用者严格后代（排除调用者自身），显式传自身直接报错拒绝，且 `settle_wait` 仅消费直接子节点的待投递报告（实测通过）。
+
+### P0-2 — TUI 深度 2 孙节点 `on_subagent_started` 会话归属拒绝修复
+- **输入内容**：深度 1 `Executor`（`child_session = "sess-d1"`）派发深度 2 孙节点（`parent_session_id = "sess-d1"`）。
+- **验证步骤**：执行 `cargo test --lib app::update::chat::tests::subagent::depth_two_spawn_matches_inner_parent_session_and_sorts_tree`。
+- **期望结果**：根窗格识别 `pane.lx.agents.by_session(&run.parent_session_id)` 并将孙节点纳入 `runs`，后续流式增量与终态正常更新（实测通过）。
+
+### P1-1 — TUI 多步累计 Token 预算耗尽（`budget_exceeded`）透传与跨轮预算保持
+- **输入内容**：子 Agent 配置 `max_tokens = 2000`，分两步各消耗 `1200` tokens（单步 `< 2000`、累计 `2400 >= 2000`）触发预算熔断。
+- **验证步骤**：执行 `cargo test --lib event::chat::tests::subagent::multi_step_token_budget_exceeded_marks_subagent_idle_with_partial_report`。
+- **期望结果**：`ChatNetEvent::Finished` 透传 `summary.budget_exceeded = true`，结算为 `idle` 并产出 `[Partial report (budget_exceeded)]`（实测通过）。
+
+### P1-2 — 无头 `exec` 跨层队列续跑、真实 `parent_session_id` 归属与相对路径寻址
+- **输入内容**：深度 1 `/root/coord` 对相对路径 `"leaf"` 调用 `send_input`，或对 `"./worker/"` / `"/root/worker/"` 调用 `resume_agent` / `send_input` / `wait_agent`。
+- **验证步骤**：执行 `cargo test --lib chat::agent::exec::tests::subagent_tests::nested_executor_wait_all_and_grandchild_queued_input_succeed` 及 `./target/debug/lx-tui exec --ephemeral --json` 实机验证。
+- **期望结果**：孙节点首轮结束后按真实 `parent_session_id` 自动唤醒排队输入，相对路径与尾斜杠规范化寻址一致命中目标（实测通过）。
+
+### P1-3 & P1-4 — TUI `Agents` 列表树形先序（DFS）排序与子会话内部卡片回填
+- **输入内容**：依次派发 `/root/a`、`/root/b` 后再由 `/root/a` 派发 `/root/a/c`；以及深度 1 子会话内部的 `spawn_agent` 卡片。
+- **验证步骤**：执行 `cargo test --lib app::update::chat::tests::subagent::depth_two_spawn_matches_inner_parent_session_and_sorts_tree` 与 `cargo test --lib app::update::chat::tests::subagent::refresh_subagent_cards_updates_nested_spawn_cards`。
+- **期望结果**：`runs` 按树先序重排为 `[/root/a, /root/a/c, /root/b]` 并正确绘制 `├─ ` / `└─ `；子会话内部卡片同步回填孙节点状态与报告（实测通过）。

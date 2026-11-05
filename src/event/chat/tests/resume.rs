@@ -413,6 +413,7 @@ fn start_stream_fails_the_turn_when_draft_exceeds_context() {
         ChatNetEvent::Finished {
             key: key.clone(),
             reason: reason.clone(),
+            budget_exceeded: false,
             usage: Usage::default(),
             billing: Usage::default(),
         }

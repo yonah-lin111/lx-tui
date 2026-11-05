@@ -50,15 +50,34 @@ pub(super) fn wait(
     let root_session = tree.root_session.clone();
     let records = tree.records.clone();
     let unique: Vec<String> = if all {
+        // `wait_for=all` 只等调用者的严格后代：调用者自身的记录也在整树里，
+        // 若不排除，嵌套 Executor 等待时会把自己算成目标而永远等不到结束。
         records
             .iter()
+            .filter(|record| {
+                record.child_session_id != key.session
+                    && crate::chat::agent::is_strict_descendant_path(
+                        &tree.caller_path,
+                        &record.agent_path,
+                    )
+            })
             .map(|record| record.agent_id.clone())
             .collect()
     } else {
         let mut unique = Vec::new();
         for target in requested {
             let trimmed = target.trim();
-            let resolved = super::runner::resolve_tree_target(&tree, trimmed)
+            let resolved = super::runner::resolve_tree_target(&tree, trimmed);
+            if let Some(record) = resolved
+                && (record.child_session_id == key.session
+                    || record.agent_path.eq_ignore_ascii_case(&tree.caller_path))
+            {
+                let _ = reply.send(Err(invalid_target(&format!(
+                    "subagent target `{target}` cannot wait on itself"
+                ))));
+                return;
+            }
+            let resolved = resolved
                 .map(|record| record.agent_id.clone())
                 .or_else(|| {
                     streams
@@ -220,6 +239,13 @@ pub(super) fn wait(
     });
 }
 
+/// 等待目标本身（调用者自己）不是合法目标：稳定错误、且不进入等待。
+fn invalid_target(message: &str) -> HostError {
+    HostError::Failed {
+        code: message.to_string(),
+    }
+}
+
 /// 等待到期后的结算：读 DB 状态与未投递报告，领取正文（恰好一次）。
 pub(crate) fn settle_wait(
     streams: &mut ChatStreams,
@@ -253,7 +279,9 @@ pub(crate) fn settle_wait(
             .values()
             .any(|h| h.agent_id == *target && h.status == STATUS_RUNNING);
         let mut report_bodies = Vec::new();
-        if !is_running {
+        // 只领取调用者自己的直接子报告：祖辈 `wait_agent` 不能把孙 agent 的报告
+        // 从它的 depth-1 父 Executor 手里截走（否则父级再也收不到逐轮报告）。
+        if !is_running && record.parent_session_id == key.session {
             let pending = database
                 .pending_reports(workspace, &record.parent_session_id)
                 .unwrap_or_default();
@@ -327,11 +355,10 @@ pub(crate) fn handle_subagent_wait_ready(
                 .map(|(root, _, _)| root)
         })
         .unwrap_or(parent);
-    let still_running = streams.subagents.values().any(|handle| {
-        handle.root_session == root_session
-            && handle.status == STATUS_RUNNING
-            && (all || targets.iter().any(|target| target == &handle.agent_id))
-    });
+    let still_running = streams
+        .subagents
+        .values()
+        .any(|handle| handle.status == STATUS_RUNNING && targets.contains(&handle.agent_id));
     let any_target_finished = !targets.is_empty()
         && targets.iter().any(|target| {
             !streams.subagents.values().any(|handle| {

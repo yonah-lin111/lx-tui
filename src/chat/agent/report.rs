@@ -122,7 +122,14 @@ impl SubagentReportView {
         if shown.is_empty() {
             return self.body.clone();
         }
-        format!("{}\nChanged files: {}", self.body, shown.join(", "))
+        let total = self.files_changed.max(self.changed_paths.len());
+        let hidden = total.saturating_sub(shown.len());
+        let suffix = if hidden > 0 {
+            format!(" (+{hidden} more)")
+        } else {
+            String::new()
+        };
+        format!("{}\nChanged files: {}{suffix}", self.body, shown.join(", "))
     }
 }
 
@@ -159,10 +166,8 @@ pub fn format_report_envelope(report: &SubagentReportView) -> String {
             .collect();
         if !shown.is_empty() {
             body.push_str(&format!("\nChanged files: {}", shown.join(", ")));
-            let hidden = report
-                .changed_paths
-                .len()
-                .saturating_sub(MAX_REPORT_CHANGED_PATHS);
+            let total = report.files_changed.max(report.changed_paths.len());
+            let hidden = total.saturating_sub(shown.len());
             if hidden > 0 {
                 body.push_str(&format!(" (+{hidden} more)"));
             }

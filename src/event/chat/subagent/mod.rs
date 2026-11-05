@@ -34,7 +34,8 @@ pub(crate) use wait::settle_wait;
 use crate::app::state::RequestKey;
 use crate::chat::agent::{
     AgentListItemView, AgentRole, FINISHED_CODE, INPUT_NOT_FOUND_CODE, NOT_FOUND_CODE,
-    SubagentInputItem, SubagentOp, SubagentOutcome, WaitMode, path_matches_prefix,
+    SubagentInputItem, SubagentOp, SubagentOutcome, WaitMode, is_strict_descendant_path,
+    path_matches_caller_prefix,
 };
 use crate::db::chat::{SubagentQueueState, SubagentRecord};
 use crate::event::AppEvent;
@@ -311,6 +312,23 @@ fn interrupt(
         .and_then(|map| map.get(&canonical_id).map(|q| q.queued_count))
         .unwrap_or(0);
     let subtree = runner::subtree_paths(&tree.records, &record.agent_path);
+    // 活动性检查必须早于任何取消信号：目标自身在跑、处于已恢复 idle、或有仍在跑的
+    // 严格后代，三者皆无时返回 NOT_ACTIVE 且不产生副作用（否则会 cancel 掉无关句柄
+    // 后再报“未活动”）。
+    let target_running = streams
+        .subagents
+        .values()
+        .any(|handle| handle.agent_id == canonical_id && handle.status == STATUS_RUNNING);
+    let target_resumed = streams.resumed_subagents.contains(&canonical_id);
+    let descendant_running = streams.subagents.values().any(|handle| {
+        handle.status == STATUS_RUNNING
+            && is_strict_descendant_path(&record.agent_path, &handle.agent_path)
+    });
+    if !target_running && !target_resumed && !descendant_running {
+        return Err(HostError::Failed {
+            code: crate::chat::agent::NOT_ACTIVE_CODE.to_string(),
+        });
+    }
 
     let mut previous_status = None;
     for handle in streams.subagents.values_mut() {
@@ -344,8 +362,12 @@ fn interrupt(
         });
     }
 
-    Err(HostError::Failed {
-        code: crate::chat::agent::NOT_ACTIVE_CODE.to_string(),
+    // 只有后代在跑：目标自身保持 idle，但子树取消已完成。
+    Ok(SubagentOutcome::Interrupted {
+        agent_id: canonical_id,
+        nickname: record.nickname,
+        previous_status: STATUS_IDLE.to_string(),
+        queued_count,
     })
 }
 
@@ -381,7 +403,12 @@ fn close(
         .find(|handle| handle.agent_id == canonical_id)
         .map(|handle| handle.status);
     let idle = streams.resumed_subagents.contains(&canonical_id);
-    if handle_status.is_none() && !idle {
+    // 目标句柄可能已结算，但严格后代仍在跑：仍要级联关闭，不能直接报 FINISHED。
+    let running_descendants = streams.subagents.values().any(|handle| {
+        handle.status == STATUS_RUNNING
+            && is_strict_descendant_path(&record.agent_path, &handle.agent_path)
+    });
+    if handle_status.is_none() && !idle && !running_descendants {
         return Err(HostError::Failed {
             code: FINISHED_CODE.to_string(),
         });
@@ -390,7 +417,9 @@ fn close(
 
     // 级联：目标自身及其所有存活后代都标记「关闭不产报告」并取消在途轮次。
     for handle in streams.subagents.values_mut() {
-        if !subtree.contains(&handle.agent_path) {
+        if !subtree.contains(&handle.agent_path)
+            && !is_strict_descendant_path(&record.agent_path, &handle.agent_path)
+        {
             continue;
         }
         streams.resumed_subagents.remove(&handle.agent_id);
@@ -493,7 +522,9 @@ fn list_agents(
         .records
         .iter()
         .filter(|record| {
-            path_prefix.is_none_or(|prefix| path_matches_prefix(&record.agent_path, prefix))
+            path_prefix.is_none_or(|prefix| {
+                path_matches_caller_prefix(&record.agent_path, &tree.caller_path, prefix)
+            })
         })
         .map(|record| {
             let q = queue_states.get(&record.agent_id);
@@ -631,6 +662,7 @@ pub(crate) fn handle_subagent_net_event(
         ChatNetEvent::Finished {
             key,
             reason,
+            budget_exceeded,
             usage,
             billing,
         } => {
@@ -638,6 +670,7 @@ pub(crate) fn handle_subagent_net_event(
                 let _ = sender.send(AppEvent::SubagentFinished {
                     key,
                     reason,
+                    budget_exceeded,
                     usage,
                     billing,
                 });
@@ -652,8 +685,10 @@ pub(crate) fn cancel_for_session(
     streams: &mut ChatStreams,
     session_id: &str,
     agent_id: Option<&str>,
+    agent_path: Option<&str>,
 ) -> bool {
-    // 种子：显式 agent 自身，或该会话直接相关的句柄；再沿 `agent_path` 前缀级联后代。
+    // 种子：显式 agent 自身，或该会话直接相关的句柄；再沿 `agent_path` 级联后代。
+    // `agent_path` 来自 DB 记录：目标句柄已结算时仍能按路径找到在跑的后代。
     let seeds: Vec<String> = streams
         .subagents
         .values()
@@ -664,12 +699,11 @@ pub(crate) fn cancel_for_session(
         .map(|handle| handle.agent_path.clone())
         .collect();
     let selected = |path: &str| {
-        seeds.iter().any(|seed| {
-            path.eq_ignore_ascii_case(seed)
-                || path
-                    .to_ascii_lowercase()
-                    .starts_with(&format!("{}/", seed.to_ascii_lowercase()))
-        })
+        agent_path.is_some_and(|target| {
+            path.eq_ignore_ascii_case(target) || is_strict_descendant_path(target, path)
+        }) || seeds
+            .iter()
+            .any(|seed| path.eq_ignore_ascii_case(seed) || is_strict_descendant_path(seed, path))
     };
 
     let mut cancelled = false;
@@ -758,6 +792,15 @@ pub fn apply_subagent_effects(
                         projected_agent_status(streams, record, queue_states.get(&record.agent_id));
                 }
                 changed |= update::set_subagent_list(state, pane, &parent_session, &records);
+                // 整树队列（含孙 agent）都要回写到面板 run：只同步直接子 agent 会漏掉
+                // 更深层级的 queued_count。
+                if let Some(target) = state.pane_mut_anywhere(pane) {
+                    for (agent_id, queue) in &queue_states {
+                        if let Some(run) = target.lx.agents.by_agent_mut(agent_id) {
+                            run.queued_count = queue.queued_count;
+                        }
+                    }
+                }
                 runner::sync_agent_ui_queue(
                     state,
                     streams,
@@ -806,7 +849,26 @@ pub fn apply_subagent_effects(
                 agent_id,
             } => {
                 changed |= match agent_id.as_deref() {
-                    Some(id) => cancel_for_session(streams, &session_id, Some(id)),
+                    Some(id) => {
+                        let target_path = state
+                            .all_pane_ids()
+                            .into_iter()
+                            .find(|pane| {
+                                state
+                                    .pane_anywhere(*pane)
+                                    .and_then(|target| target.lx.chat.session_id.as_deref())
+                                    == Some(session_id.as_str())
+                            })
+                            .and_then(|pane| workspace_for_pane(state, pane))
+                            .zip(persistence.database())
+                            .and_then(|(workspace, database)| {
+                                let tree =
+                                    runner::load_subagent_tree(database, &workspace, &session_id);
+                                runner::resolve_tree_target(&tree, id)
+                                    .map(|record| record.agent_path.clone())
+                            });
+                        cancel_for_session(streams, &session_id, Some(id), target_path.as_deref())
+                    }
                     None => {
                         // 停全部：优先按窗格所属根会话树级联；找不到窗格时退回在册句柄。
                         let pane = state.all_pane_ids().into_iter().find(|pane| {
@@ -819,7 +881,7 @@ pub fn apply_subagent_effects(
                             Some(pane) => {
                                 stop_all_subagents_for_pane(state, streams, persistence, pane) > 0
                             }
-                            None => cancel_for_session(streams, &session_id, None),
+                            None => cancel_for_session(streams, &session_id, None, None),
                         }
                     }
                 };

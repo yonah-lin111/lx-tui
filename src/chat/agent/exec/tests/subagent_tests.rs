@@ -11,7 +11,7 @@ use super::fixtures::{
 };
 use crate::chat::agent::{SubagentReportView, format_report_envelope};
 use crate::chat::agent_loop::TurnOutcome;
-use crate::chat::events::RequestPurpose;
+use crate::chat::events::{ChatRequest, ModelItem, RequestPurpose};
 use crate::db::Database;
 
 // ===== 1. spawn + wait =====
@@ -442,5 +442,79 @@ async fn interrupt_agent_by_path_produces_partial_report_while_close_suppresses_
         closer.report_json.is_none(),
         "close must suppress the report: {:?}",
         closer.report_json
+    );
+}
+
+// ===== 8. 嵌套 executor：wait all 不等自己、孙 agent 队列轮可续跑 =====
+
+/// 空 `targets` 的 `wait_agent` 只能等调用者的严格后代：depth-1 executor 不得把自己算进
+/// 等待集合（否则等自己的 done 信号永久死锁），且 depth-2 孙 agent 的排队输入必须在其
+/// 首轮结束后按真实父会话续跑。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nested_executor_wait_all_and_grandchild_queued_input_succeed() {
+    let dir = TestDir::new("subagent-nested");
+    let db = Database::open_in_memory().expect("in-memory db");
+    let spawn_coord = r#"{"role":"executor","title":"coordinate","task":"coordinate the leaf","task_name":"coord"}"#;
+    let spawn_leaf = r#"{"role":"explorer","title":"leaf scan","task":"scan for the answer","task_name":"leaf"}"#;
+    let send_leaf = r#"{"target":"leaf","message":"follow-up for leaf","trigger_turn":true}"#;
+    let wait_all = r#"{"timeout_ms":10000}"#;
+    let config = assemble(&db, &dir, "delegate to a coordinator", None);
+    let factory = ScriptedFactory::new(
+        vec![
+            tool_step(&[("call-spawn-coord", "spawn_agent", spawn_coord)]),
+            tool_step(&[("call-wait-coord", "wait_agent", wait_all)]),
+            text_step("root finished"),
+        ],
+        vec![
+            // /root/coord：派发孙 agent → 相对路径排队跟进输入 → 等全部后代。
+            tool_step(&[
+                ("call-spawn-leaf", "spawn_agent", spawn_leaf),
+                ("call-send-leaf", "send_input", send_leaf),
+                ("call-wait-leaf", "wait_agent", wait_all),
+            ]),
+            // 首轮故意跨过 send_input：确保排队输入落在运行中的孙 agent 上，而不是竞态下的 idle 拒绝。
+            delayed(1500, text_step("leaf initial report")),
+            text_step("leaf follow-up report"),
+            text_step("coord report: leaf finished"),
+        ],
+    );
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let summary = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        run_exec_turn(&db, config, &mut processor, factory.clone(), cancel_rx),
+    )
+    .await
+    .expect("nested wait_agent must not deadlock");
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert_eq!(stdout, b"root finished\n");
+    let requests = factory.requests();
+    let subagent_requests: Vec<&ChatRequest> = requests
+        .iter()
+        .filter(|request| matches!(request.purpose, RequestPurpose::Subagent(_)))
+        .collect();
+    assert_eq!(
+        subagent_requests.len(),
+        4,
+        "coord turn + leaf initial + leaf queued + coord report"
+    );
+    assert!(
+        subagent_requests.iter().any(|request| request
+            .items
+            .iter()
+            .any(|item| matches!(item, ModelItem::UserText(text) if text.contains("follow-up for leaf")))),
+        "grandchild queued input must run its own turn"
+    );
+    let main = factory.main_requests();
+    assert_eq!(main.len(), 3, "parent turns: {}", main.len());
+    let waited = tool_result_texts(&main[2]);
+    let waited = waited.last().expect("root wait_agent result");
+    assert!(
+        waited.contains("/root/coord") && waited.contains("coord report: leaf finished"),
+        "root wait_agent results: {waited:?}"
     );
 }

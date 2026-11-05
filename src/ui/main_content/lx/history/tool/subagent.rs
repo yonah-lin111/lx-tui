@@ -205,15 +205,13 @@ fn timeout_label(ms: u64) -> String {
 /// 目标行节点：`■ Turing [role] · title`（静态状态色）。
 fn target_node(view: &SubagentDetailView, agent_id: &str) -> Node {
     let status = view.agents.iter().find(|agent| {
-        agent.agent_id == agent_id
-            || agent
-                .nickname
-                .as_deref()
-                .is_some_and(|n| n.eq_ignore_ascii_case(agent_id))
-            || agent
-                .agent_path
-                .as_deref()
-                .is_some_and(|p| p.eq_ignore_ascii_case(agent_id))
+        crate::chat::agent::matches_agent_target(
+            &agent.agent_id,
+            agent.nickname.as_deref(),
+            agent.agent_path.as_deref(),
+            crate::chat::agent::ROOT_AGENT_PATH,
+            agent_id,
+        )
     });
     let color = status.map_or(WaitColor::Yellow, |agent| status_color(&agent.status));
     let body = match status {

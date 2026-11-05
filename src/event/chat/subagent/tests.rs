@@ -929,6 +929,7 @@ async fn auto_compact_persists_checkpoint_and_replays_in_subsequent_turn() {
         &[crate::db::chat::PersistedInputItem::Text {
             text: "turn 3 question".into(),
         }],
+        &crate::config::subagents::SubagentsSection::default(),
         super::context::ChildTurnLimits {
             depth: 1,
             max_depth: 2,

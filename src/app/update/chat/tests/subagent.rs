@@ -833,3 +833,107 @@ fn wait_targets_match_agent_path() {
     assert_eq!(view.agents.len(), 1);
     assert_eq!(view.agents[0].agent_id, "sub-b");
 }
+
+#[test]
+fn depth_two_spawn_matches_inner_parent_session_and_sorts_tree() {
+    use crate::app::state::{TaskPage, TaskTab};
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-parent".into());
+
+    let mut first = run("sess-a", "sub-a", AgentRole::Executor);
+    first.agent_path = "/root/a".into();
+    let mut sibling = run("sess-b", "sub-b", AgentRole::Executor);
+    sibling.agent_path = "/root/b".into();
+    assert!(update::on_subagent_started(&mut state, pane, first));
+    assert!(update::on_subagent_started(&mut state, pane, sibling));
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.task = Some(TaskPage {
+            tab: TaskTab::Agents,
+            ..TaskPage::default()
+        });
+        target.lx.task.as_mut().expect("task").agents_window.active = 1;
+    }
+
+    let mut grandchild = run("sess-c", "sub-c", AgentRole::Explorer);
+    grandchild.agent_path = "/root/a/c".into();
+    grandchild.parent_session_id = "sess-a".into();
+    assert!(
+        update::on_subagent_started(&mut state, pane, grandchild),
+        "孙 agent 的父会话是 depth-1 子会话"
+    );
+
+    let target = state.pane_anywhere(pane).expect("pane");
+    let order: Vec<&str> = target
+        .lx
+        .agents
+        .runs
+        .iter()
+        .map(|run| run.agent_id.as_str())
+        .collect();
+    assert_eq!(order, ["sub-a", "sub-c", "sub-b"], "树形前序");
+    let page = target.lx.task.as_ref().expect("task");
+    assert_eq!(
+        target.lx.agents.runs[page.agents_window.active].agent_id, "sub-b",
+        "重排后高亮仍指向原 agent"
+    );
+}
+
+#[test]
+fn refresh_subagent_cards_updates_nested_spawn_cards() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-parent".into());
+
+    let mut parent = run("sess-a", "sub-a", AgentRole::Executor);
+    parent.agent_path = "/root/a".into();
+    let mut detail = SubagentDetailView::from_arguments(
+        "spawn_agent",
+        r#"{"role":"explorer","task":"scan","title":"scan"}"#,
+    )
+    .expect("spawn detail");
+    detail.agent_id = Some("sub-c".into());
+    parent.chat.messages.push(parent_tool_message(
+        "spawn_agent",
+        detail,
+        ToolStatus::Completed,
+    ));
+    assert!(update::on_subagent_started(&mut state, pane, parent));
+
+    let mut child = run("sess-c", "sub-c", AgentRole::Explorer);
+    child.agent_path = "/root/a/c".into();
+    child.parent_session_id = "sess-a".into();
+    child.title = "scan".into();
+    assert!(update::on_subagent_started(&mut state, pane, child));
+
+    assert!(update::refresh_subagent_cards(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
+    let parent = target.lx.agents.by_agent("sub-a").expect("parent run");
+    let view = parent
+        .chat
+        .messages
+        .iter()
+        .flat_map(|message| &message.steps)
+        .find_map(|step| match step {
+            AssistantStepView::Tool { call, .. } => match call.detail.as_deref() {
+                Some(ToolDetailView::Subagent(view)) => Some(view.clone()),
+                _ => None,
+            },
+            AssistantStepView::Part { .. } => None,
+        })
+        .expect("nested spawn detail");
+    assert_eq!(view.agent_status.as_deref(), Some("running"));
+    assert_eq!(view.agent_path.as_deref(), Some("/root/a/c"));
+}

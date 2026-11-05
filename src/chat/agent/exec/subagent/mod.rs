@@ -20,7 +20,6 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::chat::agent::{
     AgentListItemView, AgentRole, INPUT_NOT_FOUND_CODE, LIMIT_REACHED_CODE, NOT_ACTIVE_CODE,
     NOT_FOUND_CODE, SubagentInputItem, SubagentOp, SubagentOutcome, WaitMode, path_depth,
-    path_matches_prefix,
 };
 use crate::chat::agent_loop::{
     AgentHost, AgentHostRequest, HostError, TurnSummary, run_agent_turn,
@@ -73,6 +72,8 @@ pub(crate) enum ExecSubagentEvent {
 
 struct ChildHandle {
     agent_id: String,
+    /// 子 agent 的真实父会话（孙 agent 的队列与续跑按它归属，而不是池的根会话）。
+    parent_session_id: String,
     child_session_id: String,
     child_assistant_id: String,
     child_user_message_id: String,
@@ -99,6 +100,8 @@ struct PendingWait {
     mode: WaitMode,
     timeout_ms: u64,
     auto_continue: bool,
+    /// 发起等待的会话：只有它名下的报告可在结算时领取。
+    caller_session: String,
     parent_cancel: watch::Receiver<bool>,
     reply: oneshot::Sender<Result<SubagentOutcome, HostError>>,
     cancelled: Arc<AtomicBool>,
@@ -360,6 +363,9 @@ impl ExecSubagentPool {
             .map_err(db_failed)?
             .ok_or_else(|| failed(NOT_FOUND_CODE))?;
         let target = record.agent_id.as_str();
+        // 队列与续跑必须归属目标真正的父会话：目标可能是孙 agent。
+        let owner_session = record.parent_session_id.clone();
+        self.closed.remove(target);
         if let Some(handle) = self.running.get(target)
             && handle.closed_without_report
         {
@@ -389,7 +395,7 @@ impl ExecSubagentPool {
         let enqueued = db
             .enqueue_input(
                 &self.workspace,
-                &self.parent_session_id,
+                &owner_session,
                 target,
                 &dedupe,
                 call_id,
@@ -400,7 +406,7 @@ impl ExecSubagentPool {
             .map_err(db_failed)?;
         if !trigger_turn {
             let queues = db
-                .subagent_queue_states(&self.workspace, &self.parent_session_id)
+                .subagent_queue_states(&self.workspace, &owner_session)
                 .unwrap_or_default();
             let status = self.projected_status(&record, queues.get(target));
             return Ok(SubagentOutcome::InputAccepted {
@@ -432,7 +438,7 @@ impl ExecSubagentPool {
             });
         }
         let (mut status, mut queued_count) = (enqueued.status, enqueued.queued_count);
-        if let Some(claimed) = self.claim_and_launch(db, target, None)? {
+        if let Some(claimed) = self.claim_and_launch(db, &owner_session, target, None)? {
             if claimed.submission_id == enqueued.submission_id {
                 status = STATUS_RUNNING.to_string();
             }
@@ -454,12 +460,12 @@ impl ExecSubagentPool {
             .map_err(db_failed)?
             .ok_or_else(|| failed(NOT_FOUND_CODE))?;
         let canonical_id = record.agent_id.clone();
-        let queued_count = db
-            .subagent_queue_states(&self.workspace, &self.parent_session_id)
-            .unwrap_or_default()
+        let records = self.load_tree_records(db);
+        let queued_count = self
+            .tree_queue_states(db, &records)
             .get(&canonical_id)
             .map_or(0, |state| state.queued_count);
-        let subtree = self.subtree_paths(db, &record.agent_path);
+        let subtree = subtree_paths(&records, &record.agent_path);
         let mut previous_status = None;
         for handle in self.running.values_mut() {
             if !subtree.contains(&handle.agent_path) {
@@ -499,13 +505,16 @@ impl ExecSubagentPool {
             .map_err(db_failed)?
             .ok_or_else(|| failed(NOT_FOUND_CODE))?;
         let agent_id = record.agent_id.as_str();
+        let owner_session = record.parent_session_id.clone();
+        // close 过再 resume：清掉结算抑制标记，新一轮报告必须正常投递。
+        self.closed.remove(agent_id);
         // 先判运行态：interrupt 取消未落定时，resume 只是把「恢复」意图交给结算路径。
         let is_running = self.running.contains_key(agent_id);
         if self.paused_by_interrupt.remove(agent_id) && is_running {
             self.interrupted.insert(agent_id.to_string());
         }
         let queued_count = db
-            .subagent_queue_states(&self.workspace, &self.parent_session_id)
+            .subagent_queue_states(&self.workspace, &owner_session)
             .unwrap_or_default()
             .get(agent_id)
             .map_or(0, |state| state.queued_count);
@@ -524,10 +533,10 @@ impl ExecSubagentPool {
         if queued_count > 0 && self.running.len() >= max_concurrent {
             return Err(failed(LIMIT_REACHED_CODE));
         }
-        db.recover_subagent_for_resume(&self.workspace, &self.parent_session_id, agent_id)
+        db.recover_subagent_for_resume(&self.workspace, &owner_session, agent_id)
             .map_err(db_failed)?;
         self.resumed.insert(agent_id.to_string());
-        match self.claim_and_launch(db, agent_id, None)? {
+        match self.claim_and_launch(db, &owner_session, agent_id, None)? {
             Some(claimed) => Ok(SubagentOutcome::Resumed {
                 agent_id: agent_id.to_string(),
                 status: STATUS_RUNNING.to_string(),
@@ -555,10 +564,8 @@ impl ExecSubagentPool {
         } else {
             record.status
         };
-        let subtree = self.subtree_paths(db, &record.agent_path);
-        let tree = db
-            .list_subagent_tree(&self.workspace, &self.parent_session_id)
-            .unwrap_or_default();
+        let tree = self.load_tree_records(db);
+        let subtree = subtree_paths(&tree, &record.agent_path);
         // 级联：目标及其所有存活后代标记「关闭不产报告」并取消在途轮次。
         for handle in self.running.values_mut() {
             if !subtree.contains(&handle.agent_path) {
@@ -575,7 +582,10 @@ impl ExecSubagentPool {
             .iter()
             .filter(|agent| subtree.contains(&agent.agent_path))
         {
-            self.closed.insert(agent.agent_id.clone());
+            // 只有仍在运行的 agent 才需要抑制报告；给 idle agent 打标记会毒化后续 resume。
+            if self.running.contains_key(&agent.agent_id) {
+                self.closed.insert(agent.agent_id.clone());
+            }
             self.interrupted.remove(&agent.agent_id);
             self.paused_by_interrupt.remove(&agent.agent_id);
             self.resumed.remove(&agent.agent_id);
@@ -590,7 +600,7 @@ impl ExecSubagentPool {
     }
 
     fn list(&self, db: &Database, path_prefix: Option<&str>) -> Result<SubagentOutcome, HostError> {
-        let (root_session, _, _) = db
+        let (root_session, _, caller_path) = db
             .resolve_session_tree_root(&self.workspace, &self.parent_session_id)
             .unwrap_or_else(|_| {
                 (
@@ -602,13 +612,17 @@ impl ExecSubagentPool {
         let records = db
             .list_subagent_tree(&self.workspace, &root_session)
             .unwrap_or_default();
-        let queues = db
-            .subagent_queue_states(&self.workspace, &self.parent_session_id)
-            .unwrap_or_default();
+        let queues = self.tree_queue_states(db, &records);
         let agents = records
             .iter()
             .filter(|record| {
-                path_prefix.is_none_or(|prefix| path_matches_prefix(&record.agent_path, prefix))
+                path_prefix.is_none_or(|prefix| {
+                    crate::chat::agent::path_matches_caller_prefix(
+                        &record.agent_path,
+                        &caller_path,
+                        prefix,
+                    )
+                })
             })
             .map(|record| AgentListItemView {
                 agent_id: record.agent_id.clone(),
@@ -623,23 +637,44 @@ impl ExecSubagentPool {
         Ok(SubagentOutcome::Listed { agents })
     }
 
-    /// 目标自身与其所有后代路径。
-    fn subtree_paths(&self, db: &Database, target_path: &str) -> Vec<String> {
-        let tree = db
-            .list_subagent_tree(&self.workspace, &self.parent_session_id)
-            .unwrap_or_default();
-        let prefix = format!(
-            "{}/",
-            target_path.trim_end_matches('/').to_ascii_lowercase()
-        );
-        let mut paths = vec![target_path.to_string()];
-        for record in tree {
-            let candidate = record.agent_path.to_ascii_lowercase();
-            if candidate != target_path.to_ascii_lowercase() && candidate.starts_with(&prefix) {
-                paths.push(record.agent_path);
+    /// 整棵根会话树的记录；查询失败时回退到当前会话的直接子 agent。
+    fn load_tree_records(&self, db: &Database) -> Vec<SubagentRecord> {
+        let (root_session, _, _) = db
+            .resolve_session_tree_root(&self.workspace, &self.parent_session_id)
+            .unwrap_or_else(|_| {
+                (
+                    self.parent_session_id.clone(),
+                    0,
+                    crate::chat::agent::ROOT_AGENT_PATH.to_string(),
+                )
+            });
+        db.list_subagent_tree(&self.workspace, &root_session)
+            .or_else(|_| db.list_subagents(&self.workspace, &self.parent_session_id))
+            .unwrap_or_default()
+    }
+
+    /// 整树排队状态：按每个子 agent 的真实父会话分别读取后合并（孙 agent 的队列也可见）。
+    fn tree_queue_states(
+        &self,
+        db: &Database,
+        records: &[SubagentRecord],
+    ) -> HashMap<String, SubagentQueueState> {
+        let mut parents = vec![self.parent_session_id.clone()];
+        for record in records {
+            if !parents.contains(&record.parent_session_id) {
+                parents.push(record.parent_session_id.clone());
             }
         }
-        paths
+        let mut states = HashMap::new();
+        for parent in parents {
+            for (agent_id, state) in db
+                .subagent_queue_states(&self.workspace, &parent)
+                .unwrap_or_default()
+            {
+                states.insert(agent_id, state);
+            }
+        }
+        states
     }
 
     fn cancel_input(
@@ -647,24 +682,35 @@ impl ExecSubagentPool {
         db: &Database,
         submission_id: &str,
     ) -> Result<SubagentOutcome, HostError> {
-        match db
-            .cancel_input(&self.workspace, &self.parent_session_id, submission_id)
-            .map_err(db_failed)?
-        {
-            Some((agent_id, status, queued_count)) => Ok(SubagentOutcome::InputCancelled {
-                submission_id: submission_id.to_string(),
-                agent_id,
-                status,
-                queued_count,
-            }),
-            None => Err(failed(INPUT_NOT_FOUND_CODE)),
+        // 输入行按目标真实父会话归属：整树寻址时逐个候选父会话尝试。
+        let records = self.load_tree_records(db);
+        let mut parents = vec![self.parent_session_id.clone()];
+        for record in &records {
+            if !parents.contains(&record.parent_session_id) {
+                parents.push(record.parent_session_id.clone());
+            }
         }
+        for parent in parents {
+            if let Some((agent_id, status, queued_count)) = db
+                .cancel_input(&self.workspace, &parent, submission_id)
+                .map_err(db_failed)?
+            {
+                return Ok(SubagentOutcome::InputCancelled {
+                    submission_id: submission_id.to_string(),
+                    agent_id,
+                    status,
+                    queued_count,
+                });
+            }
+        }
+        Err(failed(INPUT_NOT_FOUND_CODE))
     }
 
     /// 认领队首输入并启动下一轮；没有可执行输入返回 `Ok(None)`。
     fn claim_and_launch(
         &mut self,
         db: &Database,
+        owner_session_id: &str,
         agent_id: &str,
         reused_done: Option<watch::Sender<bool>>,
     ) -> Result<Option<crate::db::chat::ClaimedSubagentTurn>, HostError> {
@@ -672,11 +718,11 @@ impl ExecSubagentPool {
             return Ok(None);
         }
         let record = db
-            .owned_subagent(&self.workspace, &self.parent_session_id, agent_id)
+            .owned_subagent(&self.workspace, owner_session_id, agent_id)
             .map_err(db_failed)?
             .ok_or_else(|| failed(NOT_FOUND_CODE))?;
         let Some(next) = db
-            .next_queued_input(&self.workspace, &self.parent_session_id, agent_id)
+            .next_queued_input(&self.workspace, owner_session_id, agent_id)
             .map_err(db_failed)?
         else {
             return Ok(None);
@@ -695,7 +741,7 @@ impl ExecSubagentPool {
         let claimed = db
             .claim_input(
                 &self.workspace,
-                &self.parent_session_id,
+                owner_session_id,
                 agent_id,
                 &next.submission_id,
                 &child_snapshot,
@@ -713,6 +759,7 @@ impl ExecSubagentPool {
         self.start_child(
             db,
             agent_id,
+            &record.parent_session_id,
             &claimed.child_session_id,
             &claimed.child_assistant_id,
             &claimed.child_user_message_id,
@@ -733,10 +780,13 @@ impl ExecSubagentPool {
     fn launch_next_queued(
         &mut self,
         db: &Database,
+        owner_session_id: &str,
         agent_id: &str,
         reused_done: Option<watch::Sender<bool>>,
     ) -> Result<bool, HostError> {
-        Ok(self.claim_and_launch(db, agent_id, reused_done)?.is_some())
+        Ok(self
+            .claim_and_launch(db, owner_session_id, agent_id, reused_done)?
+            .is_some())
     }
 
     fn projected_status(
@@ -764,6 +814,22 @@ impl ExecSubagentPool {
         }
         projected.as_str().to_string()
     }
+}
+
+/// 目标自身与其所有后代路径（按根会话树的记录集合展开）。
+fn subtree_paths(records: &[SubagentRecord], target_path: &str) -> Vec<String> {
+    let prefix = format!(
+        "{}/",
+        target_path.trim_end_matches('/').to_ascii_lowercase()
+    );
+    let mut paths = vec![target_path.to_string()];
+    for record in records {
+        let candidate = record.agent_path.to_ascii_lowercase();
+        if candidate != target_path.to_ascii_lowercase() && candidate.starts_with(&prefix) {
+            paths.push(record.agent_path.clone());
+        }
+    }
+    paths
 }
 
 fn failed(code: &str) -> HostError {

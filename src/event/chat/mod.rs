@@ -152,6 +152,9 @@ pub struct ChatStreams {
     pub(crate) frozen: HashMap<String, crate::app::state::FrozenModel>,
     /// 显式覆写或角色绑定了专属模型的子会话（`child_session_id -> FrozenModel`）。
     pub(crate) pinned_subagent_models: HashMap<String, crate::app::state::FrozenModel>,
+    /// spawn 时冻结的单轮 Token 预算覆写（`agent_id -> max_tokens`），
+    /// 供后续排队/恢复轮次沿用，避免多轮累计预算退回默认值。
+    pub(crate) subagent_budgets: HashMap<String, Option<u64>>,
 }
 
 /// 一次等待作答的提问：回执通道 + 归属用的 `call_id`。
@@ -300,6 +303,8 @@ pub enum ChatNetEvent {
     Finished {
         key: RequestKey,
         reason: StopReason,
+        /// 是否因多步累计 Token 预算耗尽而熔断（仅子 agent 会置真）。
+        budget_exceeded: bool,
         /// 最后一次模型响应：上下文占用与消息统计口径。
         usage: Usage,
         /// 整轮累计：会话账单与 CLI 统计口径。
@@ -845,6 +850,7 @@ fn fail_turn(sender: &mpsc::UnboundedSender<AppEvent>, key: RequestKey, code: &s
         reason: StopReason::Failed {
             code: code.to_string(),
         },
+        budget_exceeded: false,
         usage: Usage::default(),
         billing: Usage::default(),
     }));
@@ -863,6 +869,7 @@ fn report_turn(sender: mpsc::UnboundedSender<AppEvent>, key: RequestKey, summary
     let _ = sender.send(AppEvent::ChatNet(ChatNetEvent::Finished {
         key,
         reason: summary.stop_reason(),
+        budget_exceeded: false,
         usage: summary.usage,
         billing: summary.billing,
     }));
@@ -900,6 +907,7 @@ pub fn handle_net_event(
         ChatNetEvent::Finished {
             key,
             reason,
+            budget_exceeded: _,
             usage,
             billing,
         } => {

@@ -324,6 +324,7 @@ fn stream_finish_sweeps_the_pending_ask() {
         ChatNetEvent::Finished {
             key: key.clone(),
             reason: StopReason::Cancelled,
+            budget_exceeded: false,
             usage: Usage::default(),
             billing: Usage::default(),
         },

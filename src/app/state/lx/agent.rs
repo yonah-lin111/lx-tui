@@ -323,7 +323,7 @@ pub fn seed_chat_model(
 /// 面板数据：本窗格的 subagent 集合（面板关闭时依然保留）。
 #[derive(Debug, Default)]
 pub struct AgentsState {
-    /// 按创建顺序排列的运行记录。
+    /// 运行记录：按 `agent_path` 树形前序排列（兄弟间保持创建顺序）。
     pub runs: Vec<SubagentRun>,
 }
 
@@ -350,6 +350,52 @@ impl AgentsState {
     /// 按 agent id 查找可变引用。
     pub fn by_agent_mut(&mut self, agent_id: &str) -> Option<&mut SubagentRun> {
         self.runs.iter_mut().find(|run| run.agent_id == agent_id)
+    }
+
+    /// 按 `agent_path` 的树形前序重排：父节点之后紧跟其全部后代，再轮到下一个兄弟。
+    ///
+    /// 同层与兄弟之间保持创建顺序；父 run 不在列表里（历史缺失）时按根节点处理。
+    pub fn sort_runs_tree_order(&mut self) {
+        if self.runs.len() < 2 {
+            return;
+        }
+        let index_by_path: std::collections::HashMap<String, usize> = self
+            .runs
+            .iter()
+            .enumerate()
+            .map(|(index, run)| (run.agent_path.to_ascii_lowercase(), index))
+            .collect();
+        let mut children = vec![Vec::new(); self.runs.len()];
+        let mut roots = Vec::new();
+        for (index, run) in self.runs.iter().enumerate() {
+            let parent = run
+                .agent_path
+                .trim_end_matches('/')
+                .rsplit_once('/')
+                .map(|(parent, _)| parent.to_ascii_lowercase());
+            match parent.and_then(|parent| index_by_path.get(&parent).copied()) {
+                Some(parent) if parent != index => children[parent].push(index),
+                _ => roots.push(index),
+            }
+        }
+        let mut pending: Vec<Option<SubagentRun>> = std::mem::take(&mut self.runs)
+            .into_iter()
+            .map(Some)
+            .collect();
+        let mut stack: Vec<usize> = roots.into_iter().rev().collect();
+        let mut ordered = Vec::with_capacity(pending.len());
+        while let Some(index) = stack.pop() {
+            let Some(run) = pending[index].take() else {
+                continue;
+            };
+            ordered.push(run);
+            for child in children[index].iter().rev() {
+                stack.push(*child);
+            }
+        }
+        // 防御：理论上不可达的节点（坏路径/重复路径）按原顺序补回。
+        ordered.extend(pending.into_iter().flatten());
+        self.runs = ordered;
     }
 
     /// 是否为空。

@@ -136,12 +136,13 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         }
         if let Some(prefix) = tree_prefix(run, &agents.runs, index) {
             let prefix_w = u16::try_from(prefix.width()).unwrap_or(0);
+            // 连前缀都放不下时整行丢弃，不能留下悬空的 `└─`。
+            if row_w <= prefix_w {
+                continue;
+            }
             grid.put_clipped(row_x, y, &prefix, style::chat_notice_connector(), row_w);
             row_x = row_x.saturating_add(prefix_w);
             row_w = row_w.saturating_sub(prefix_w);
-            if row_w == 0 {
-                continue;
-            }
         }
         let row_style = if selected {
             style::text()
@@ -235,9 +236,14 @@ fn tree_prefix(run: &SubagentRun, runs: &[SubagentRun], index: usize) -> Option<
         return None;
     }
     let parent = parent_path(&run.agent_path)?;
+    // 只看同一父节点下的后续兄弟；遇到更浅层或另一个父分支即当前子树结束，
+    // 更深的后代属于当前/后续兄弟的子树，继续向后找。
     let last = !runs.get(index.saturating_add(1)..).is_some_and(|rest| {
         rest.iter()
-            .any(|other| other.depth() == depth && parent_path(&other.agent_path) == Some(parent))
+            .find(|other| other.depth() <= depth)
+            .is_some_and(|other| {
+                other.depth() == depth && parent_path(&other.agent_path) == Some(parent)
+            })
     });
     let connector = if last {
         text::agent::TREE_LEAF.trim_start()

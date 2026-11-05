@@ -24,6 +24,7 @@ pub mod rewind;
 mod session;
 mod slash;
 mod subagent;
+mod subagent_cards;
 mod task_page;
 pub mod title;
 pub mod user_shell;

@@ -358,6 +358,7 @@ pub(super) fn assemble_child_context(
     output_limit: Option<u64>,
     supports_image_input: bool,
     current_items: &[PersistedInputItem],
+    subagents: &crate::config::subagents::SubagentsSection,
     limits: ChildTurnLimits,
 ) -> Result<ModelContext, String> {
     let current_model_items =
@@ -463,13 +464,14 @@ pub(super) fn assemble_child_context(
         variant_params,
         purpose: RequestPurpose::Subagent(role),
         system_prompt: Some(system_prompt),
-        tools: std::sync::Arc::new(crate::chat::tools::turn_tools(
+        tools: std::sync::Arc::new(crate::chat::tools::turn_tools_with_subagents(
             crate::chat::agent::ToolSurface::from_role_at_depth(
                 role,
                 limits.depth,
                 limits.max_depth,
             ),
             prompt_ctx.mcp,
+            Some(subagents),
         )),
     };
     Ok(ModelContext::new(request, cwd.to_path_buf())

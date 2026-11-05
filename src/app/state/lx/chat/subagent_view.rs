@@ -168,13 +168,17 @@ impl SubagentDetailView {
         };
         // send_input / resume_agent / close_agent / interrupt_agent 允许用昵称寻址：
         // 结果体只带解析后的 `sub-...` id，昵称要从参数里补回。
-        if self.nickname.is_none()
-            && let Some(target) = arguments.agent_id.as_deref()
+        if let Some(target) = arguments.agent_id.as_deref()
             && self.agent_id.as_deref() != Some(target)
             && !target.starts_with("sub-")
             && !target.starts_with("sub_")
         {
-            self.nickname = Some(target.to_string());
+            // 绝对路径是 agent 位置而不是昵称；相对路径交给 `matches_agent_target` 解析。
+            if target.starts_with('/') {
+                self.agent_path.get_or_insert_with(|| target.to_string());
+            } else if self.nickname.is_none() {
+                self.nickname = Some(target.to_string());
+            }
         }
         self.nickname = self.nickname.take().or(arguments.nickname);
         self.role = self.role.take().or(arguments.role);

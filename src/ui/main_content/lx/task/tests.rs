@@ -841,6 +841,18 @@ fn agents_list_indents_subtree_and_shows_tokens() {
         tree_agent("second", "/root/turing/bohr", "running", None),
         tree_agent("grand", "/root/turing/curie/lovelace", "completed", None),
     ];
+    lx.agents.sort_runs_tree_order();
+    let order: Vec<&str> = lx
+        .agents
+        .runs
+        .iter()
+        .map(|run| run.agent_id.as_str())
+        .collect();
+    assert_eq!(
+        order,
+        ["parent", "first", "grand", "second"],
+        "孙辈紧跟父节点，再轮到下一个兄弟"
+    );
     let lines = render_lines(&lx, 80, 20);
     let first = lines
         .iter()

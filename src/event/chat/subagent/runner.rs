@@ -309,6 +309,9 @@ pub(super) fn spawn(
     streams
         .frozen
         .insert(committed.child_session_id.clone(), frozen.clone());
+    streams
+        .subagent_budgets
+        .insert(committed.agent_id.clone(), effective_max_tokens);
     if resolved_model.pinned {
         streams
             .pinned_subagent_models
@@ -762,11 +765,16 @@ pub(crate) fn schedule_next_queued_input_with_done(
         .subagents_config
         .max_depth
         .clamp(1, crate::config::subagents::MAX_AGENT_DEPTH_LIMIT);
-    // 队列轮沿用会话默认预算：spawn 的单次覆写只作用于它自己那一轮。
+    // 队列轮沿用 spawn 时冻结的预算覆写（无记录时回退当前默认值）。
+    let max_tokens = streams
+        .subagent_budgets
+        .get(agent_id)
+        .copied()
+        .unwrap_or(state.subagents_config.default_max_tokens);
     let limits = ChildTurnLimits {
         depth: crate::chat::agent::path_depth(&record.agent_path),
         max_depth,
-        max_tokens: state.subagents_config.default_max_tokens,
+        max_tokens,
     };
 
     // 若该子会话有显式/角色绑定的固定模型，优先沿用固定模型；
@@ -820,6 +828,7 @@ pub(crate) fn schedule_next_queued_input_with_done(
         frozen.output_limit,
         frozen.supports_image_input,
         &next_input.items,
+        &state.subagents_config,
         limits,
     ) {
         let code = if err.contains(IMAGE_MISSING_CODE) {

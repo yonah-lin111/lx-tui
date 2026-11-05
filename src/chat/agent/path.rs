@@ -70,7 +70,7 @@ pub fn allocate_child_path(
 ) -> String {
     let parent = {
         let p = parent_path.trim().trim_end_matches('/');
-        if p.is_empty() || !p.starts_with("/root") {
+        if p.is_empty() || !(p == ROOT_AGENT_PATH || p.starts_with("/root/")) {
             ROOT_AGENT_PATH
         } else {
             p
@@ -90,7 +90,18 @@ pub fn allocate_child_path(
     }
     let mut suffix = 2usize;
     loop {
-        let next = format!("{parent}/{base_seg}_{suffix}");
+        let suffix_str = format!("_{suffix}");
+        let max_base = MAX_PATH_SEGMENT_LEN.saturating_sub(suffix_str.len()).max(1);
+        let trimmed_base = base_seg
+            .get(..base_seg.len().min(max_base))
+            .unwrap_or(base_seg.as_str())
+            .trim_end_matches('_');
+        let trimmed_base = if trimmed_base.is_empty() {
+            "a"
+        } else {
+            trimmed_base
+        };
+        let next = format!("{parent}/{trimmed_base}{suffix_str}");
         if !existing_paths
             .iter()
             .any(|path| path.eq_ignore_ascii_case(&next))
@@ -114,11 +125,12 @@ pub fn decode_stored_role_and_path(stored: Option<&str>) -> (Option<BaseRole>, O
     let Some(raw) = stored.map(str::trim).filter(|s| !s.is_empty()) else {
         return (None, None);
     };
-    if let Some((left, right)) = raw.split_once(':') {
-        let base = BaseRole::parse(left);
+    if let Some((left, right)) = raw.split_once(':')
+        && let Some(base) = BaseRole::parse(left)
+    {
         let path = right.trim();
         let path_opt = (!path.is_empty()).then(|| path.to_string());
-        return (base, path_opt);
+        return (Some(base), path_opt);
     }
     if let Some(base) = BaseRole::parse(raw) {
         return (Some(base), None);
@@ -129,7 +141,7 @@ pub fn decode_stored_role_and_path(stored: Option<&str>) -> (Option<BaseRole>, O
     (None, None)
 }
 
-/// 三合一寻址：`agent_id` / `nickname` / `agent_path`（绝对或相对 `caller_path`）。
+/// 三合一寻址（优先级：`agent_id` → `agent_path`（绝对或相对 `caller_path`） → `nickname`）。
 pub fn matches_agent_target(
     agent_id: &str,
     nickname: Option<&str>,
@@ -144,37 +156,77 @@ pub fn matches_agent_target(
     if agent_id == trimmed {
         return true;
     }
-    if nickname.is_some_and(|name| name.eq_ignore_ascii_case(trimmed)) {
-        return true;
+    let norm_target = trimmed
+        .strip_prefix("./")
+        .unwrap_or(trimmed)
+        .trim_end_matches('/');
+    if let Some(raw_path) = agent_path.map(str::trim).filter(|path| !path.is_empty()) {
+        let path = raw_path.trim_end_matches('/');
+        if !norm_target.is_empty() {
+            if path.eq_ignore_ascii_case(norm_target) {
+                return true;
+            }
+            if !norm_target.starts_with('/') {
+                let caller = caller_path.trim().trim_end_matches('/');
+                let caller = if caller.is_empty() {
+                    ROOT_AGENT_PATH
+                } else {
+                    caller
+                };
+                let rel_caller = format!("{caller}/{norm_target}");
+                let rel_root = format!("/root/{norm_target}");
+                if path.eq_ignore_ascii_case(&rel_caller) || path.eq_ignore_ascii_case(&rel_root) {
+                    return true;
+                }
+            }
+        }
     }
-    let Some(path) = agent_path.map(str::trim).filter(|path| !path.is_empty()) else {
+    nickname.is_some_and(|name| name.eq_ignore_ascii_case(trimmed))
+}
+
+/// 判断 `candidate_path` 是否为 `ancestor_path` 的严格后代（不含自身）。
+pub fn is_strict_descendant_path(ancestor_path: &str, candidate_path: &str) -> bool {
+    let ancestor = ancestor_path.trim().trim_end_matches('/');
+    let candidate = candidate_path.trim().trim_end_matches('/');
+    if ancestor.is_empty() || candidate.is_empty() || ancestor.eq_ignore_ascii_case(candidate) {
         return false;
-    };
-    if path.eq_ignore_ascii_case(trimmed) {
-        return true;
     }
-    if trimmed.starts_with('/') {
-        return false;
-    }
-    let rel_caller = format!("{}/{trimmed}", caller_path.trim_end_matches('/'));
-    path.eq_ignore_ascii_case(&rel_caller) || path.eq_ignore_ascii_case(&format!("/root/{trimmed}"))
+    candidate
+        .to_ascii_lowercase()
+        .starts_with(&format!("{}/", ancestor.to_ascii_lowercase()))
 }
 
 /// 路径前缀匹配：`prefix` 不以 `/` 开头时按根树相对路径处理（`"/root/<prefix>"`）。
 pub fn path_matches_prefix(agent_path: &str, prefix: &str) -> bool {
-    let trimmed = prefix.trim();
-    let normalized = if trimmed.starts_with('/') {
-        trimmed.to_string()
-    } else {
-        format!("/root/{trimmed}")
-    };
-    let normalized = normalized.trim_end_matches('/');
-    if normalized.is_empty() {
+    path_matches_caller_prefix(agent_path, ROOT_AGENT_PATH, prefix)
+}
+
+/// 支持调用者相对前缀的路径前缀匹配：`prefix` 不以 `/` 开头时同时匹配 `<caller_path>/<prefix>` 与 `/root/<prefix>`。
+pub fn path_matches_caller_prefix(agent_path: &str, caller_path: &str, prefix: &str) -> bool {
+    let trimmed = prefix.trim().strip_prefix("./").unwrap_or(prefix.trim());
+    let trimmed = trimmed.trim_end_matches('/');
+    if trimmed.is_empty() {
         return true;
     }
-    let path = agent_path.trim();
-    path.eq_ignore_ascii_case(normalized)
-        || path
-            .to_ascii_lowercase()
-            .starts_with(&format!("{}/", normalized.to_ascii_lowercase()))
+    let path = agent_path.trim().trim_end_matches('/');
+    let matches_norm = |norm: &str| {
+        let norm = norm.trim_end_matches('/');
+        if norm.is_empty() {
+            return true;
+        }
+        path.eq_ignore_ascii_case(norm)
+            || path
+                .to_ascii_lowercase()
+                .starts_with(&format!("{}/", norm.to_ascii_lowercase()))
+    };
+    if trimmed.starts_with('/') {
+        return matches_norm(trimmed);
+    }
+    let caller = caller_path.trim().trim_end_matches('/');
+    let caller = if caller.is_empty() {
+        ROOT_AGENT_PATH
+    } else {
+        caller
+    };
+    matches_norm(&format!("{caller}/{trimmed}")) || matches_norm(&format!("/root/{trimmed}"))
 }
