@@ -457,6 +457,19 @@ async fn run_loop(
         {
             dirty = true;
         }
+        // 历史列表的滚动与选中项：折叠 Agents / 终端变高后夹取偏移，
+        // 并在进入/新建/重载后把选中项滚入可见区（渲染层只读，不能自行修正）。
+        if let Some(rows) = ui::workspace_history_visible_rows(&geometry.view, state) {
+            let mut changed = state.workspace_history.clamp(rows);
+            if state.workspace_history.reveal_selected {
+                state.workspace_history.scroll_selected_into_view(rows);
+                state.workspace_history.reveal_selected = false;
+                changed = true;
+            }
+            if changed {
+                dirty = true;
+            }
+        }
         if geometry.rects != last_rects || state.prompt_resize_pending {
             update::resize_panes(state, &geometry.rects);
             state.prompt_resize_pending = false;

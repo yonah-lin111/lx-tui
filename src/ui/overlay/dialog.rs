@@ -280,9 +280,15 @@ fn confirm_text(state: &AppState, target: &OverlayTarget) -> (&'static str, Stri
 pub fn confirm_question(state: &AppState, target: &OverlayTarget) -> String {
     let (_, name) = confirm_text(state, target);
     match target {
-        OverlayTarget::WorkspaceHistory(_) | OverlayTarget::Workspace(_) => {
-            text::confirm_delete_workspace_question(&name)
+        OverlayTarget::WorkspaceHistory(index) => {
+            let worktrees = state.workspace_history.delete_worktree_count(*index);
+            if worktrees > 0 {
+                text::confirm_delete_workspace_group_question(&name, worktrees)
+            } else {
+                text::confirm_delete_workspace_question(&name)
+            }
         }
+        OverlayTarget::Workspace(_) => text::confirm_delete_workspace_question(&name),
         _ => text::confirm_delete_page_question(&name),
     }
 }

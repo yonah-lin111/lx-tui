@@ -23,6 +23,8 @@ pub enum TrustTrigger {
         /// 主 checkout 分支；linked worktree 状态栏展示用。
         main_branch: Option<String>,
     },
+    /// 从历史列表打开工作区：信任后创建/切换，拒绝则留在历史列表并提示。
+    OpenWorkspaceHistory { path: PathBuf, name: String },
 }
 
 /// 信任浮层载荷：目标路径与触发场景。

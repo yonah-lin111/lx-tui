@@ -53,6 +53,7 @@ pub(crate) fn handle_key_event(
     // 侧栏工作区历史列表处于打开态且侧栏持焦点时，处理搜索框输入与列表导航。
     if overlay.is_none()
         && state.sidebar_focused()
+        && !state.sidebar_collapsed
         && update::workspace_history_mode(state)
         && !(key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL))
     {

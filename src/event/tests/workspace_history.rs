@@ -20,6 +20,7 @@ fn mouse_click_mode_button_toggles_history_and_typing_filters_rows() {
                 exists: true,
                 name_is_manual: true,
                 position: 0,
+                trusted: true,
                 git: None,
             },
             crate::app::state::WorkspaceHistoryEntry {
@@ -28,6 +29,7 @@ fn mouse_click_mode_button_toggles_history_and_typing_filters_rows() {
                 exists: false,
                 name_is_manual: true,
                 position: 1,
+                trusted: true,
                 git: None,
             },
         ],
@@ -93,6 +95,8 @@ fn double_click_history_row_opens_workspace_and_right_click_missing_cascades_del
 
     db.record_workspace_open(&existing, "ExistingWS")
         .expect("record existing");
+    db.trust_workspace(&existing, "ExistingWS")
+        .expect("trust existing");
     db.record_workspace_open(&missing, "MissingWS")
         .expect("record missing");
     db.create_folder(&missing, None, "orphan-folder")

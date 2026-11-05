@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use super::*;
 use crate::app::overlay::{MenuCommand, Overlay, OverlayTarget, RenameTarget};
 use crate::app::state::{FocusedContainer, WorkspaceGit};
+use crate::app::trust::TrustTrigger;
 use crate::app::update::{
     activate_menu, apply_overlay_key, begin_workspace_drag, begin_workspace_history_drag,
     drag_workspace_to, end_workspace_drag, end_workspace_history_drag, open_workspace_history_menu,
@@ -17,6 +18,7 @@ fn plain_entry(name: &str, path: PathBuf, manual: bool) -> WorkspaceHistoryEntry
         exists,
         name_is_manual: manual,
         position: 0,
+        trusted: true,
         git: None,
     }
 }
@@ -43,6 +45,7 @@ fn git_entry(name: &str, path: PathBuf, position: i64, git: WorkspaceGit) -> Wor
         exists,
         name_is_manual: false,
         position,
+        trusted: true,
         git: Some(git),
     }
 }
@@ -166,6 +169,7 @@ fn git_tree_grouping_collapse_and_opening_linked_worktree_auto_opens_main_parent
                 exists: true,
                 name_is_manual: false,
                 position: 0,
+                trusted: true,
                 git: Some(WorkspaceGit {
                     repo_root: repo_root.clone(),
                     checkout_path: repo_root.clone(),
@@ -180,6 +184,7 @@ fn git_tree_grouping_collapse_and_opening_linked_worktree_auto_opens_main_parent
                 exists: true,
                 name_is_manual: false,
                 position: 1,
+                trusted: true,
                 git: Some(WorkspaceGit {
                     repo_root: repo_root.clone(),
                     checkout_path: wt_path.clone(),
@@ -630,4 +635,182 @@ fn history_drag_is_ignored_while_search_filters_rows() {
 
     assert!(!begin_workspace_history_drag(&mut state, 0));
     assert_eq!(state.workspace_history.drag, None);
+}
+
+#[test]
+fn untrusted_history_entry_requests_trust_instead_of_opening() {
+    let mut state = AppState::demo();
+    let dir = std::env::temp_dir().join(format!("lx-history-trust-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let mut entry = plain_entry("untrusted", dir.clone(), true);
+    entry.trusted = false;
+    apply_workspace_history(&mut state, vec![entry]);
+    let before = state.workspaces.len();
+    state.effects.clear();
+
+    assert!(open_workspace_history_entry(&mut state, 0));
+    assert_eq!(state.workspaces.len(), before, "信任检查前不得创建工作区");
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::CheckTrust {
+                path,
+                trigger: TrustTrigger::OpenWorkspaceHistory { .. },
+                ..
+            } if *path == dir
+        )),
+        "未信任条目必须先走 CheckTrust: {:?}",
+        state.effects
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn opening_already_open_history_entry_returns_focus_to_panes() {
+    let mut state = AppState::demo();
+    let cwd = state.active_workspace().cwd.clone().expect("demo cwd");
+    let entry = plain_entry("demo", cwd, true);
+    apply_workspace_history(&mut state, vec![entry]);
+    show_workspace_history(&mut state);
+    assert_eq!(state.focus(), FocusedContainer::Sidebar);
+
+    assert!(open_workspace_history_entry(&mut state, 0));
+    assert_eq!(state.workspace_history.mode, WorkspaceMode::Active);
+    assert_eq!(state.focus(), FocusedContainer::Panes);
+}
+
+#[test]
+fn delete_worktree_count_reports_only_group_parent_children() {
+    let (mut state, repo, child, standalone, entries) = git_tree_fixture();
+    apply_workspace_history(&mut state, entries);
+    let parent = state
+        .workspace_history
+        .entries
+        .iter()
+        .position(|entry| entry.path == repo)
+        .expect("parent");
+    let child_index = state
+        .workspace_history
+        .entries
+        .iter()
+        .position(|entry| entry.path == child)
+        .expect("child");
+    let standalone_index = state
+        .workspace_history
+        .entries
+        .iter()
+        .position(|entry| entry.path == standalone)
+        .expect("standalone");
+
+    assert_eq!(state.workspace_history.delete_worktree_count(parent), 1);
+    assert_eq!(
+        state.workspace_history.delete_worktree_count(child_index),
+        0
+    );
+    assert_eq!(
+        state
+            .workspace_history
+            .delete_worktree_count(standalone_index),
+        0
+    );
+}
+
+#[test]
+fn clamp_limits_history_scroll_to_viewport() {
+    use crate::app::state::WorkspaceHistoryPanel;
+
+    let mut panel = WorkspaceHistoryPanel::new();
+    panel.entries = (0..20)
+        .map(|index| {
+            plain_entry(
+                &format!("ws-{index}"),
+                PathBuf::from(format!("/tmp/ws-{index}")),
+                false,
+            )
+        })
+        .collect();
+    panel.scroll = 18;
+    assert!(panel.clamp(5));
+    assert_eq!(
+        panel.scroll, 15,
+        "滚动上限必须是 total - viewport，而非 total - 1"
+    );
+}
+
+#[test]
+fn deleting_only_open_workspace_keeps_it_open_and_queues_delete() {
+    let mut state = AppState::demo();
+    let cwd = state.active_workspace().cwd.clone().expect("demo cwd");
+    apply_workspace_history(&mut state, vec![plain_entry("demo", cwd.clone(), true)]);
+    state.effects.clear();
+
+    assert!(delete_workspace_history_entry(&mut state, 0));
+    assert!(state.workspace_history.entries.is_empty());
+    assert_eq!(state.workspaces.len(), 1, "最后一个工作区保持打开");
+    assert!(
+        state.effects.iter().any(
+            |effect| matches!(effect, Effect::DeleteWorkspaceHistory { path } if *path == cwd)
+        ),
+        "必须登记数据库删除效应"
+    );
+}
+
+#[test]
+fn history_sync_keeps_unmatched_active_workspace_in_its_slot() {
+    let base = std::env::temp_dir().join(format!("lx-history-slot-{}", std::process::id()));
+    let a = base.join("a");
+    let b = base.join("b");
+    let x = base.join("x");
+    for dir in [&a, &b, &x] {
+        std::fs::create_dir_all(dir).expect("create dir");
+    }
+    let a = std::fs::canonicalize(&a).expect("canon a");
+    let b = std::fs::canonicalize(&b).expect("canon b");
+    let x = std::fs::canonicalize(&x).expect("canon x");
+
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(a.clone());
+    crate::app::update::create_workspace_with_cwd(&mut state, Some(b.clone()));
+    crate::app::update::create_workspace_with_cwd(&mut state, Some(x.clone()));
+    state.workspaces.swap(1, 2);
+    state.effects.clear();
+
+    apply_workspace_history(
+        &mut state,
+        vec![
+            plain_entry("a", a.clone(), false),
+            plain_entry("b", b.clone(), false),
+        ],
+    );
+
+    assert_eq!(
+        state
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.cwd.clone())
+            .collect::<Vec<_>>(),
+        vec![Some(a), Some(x), Some(b)],
+        "未出现在历史中的工作区应保持原槽位，而不是被挤到末尾"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn history_drag_inside_same_block_does_not_persist_order() {
+    let (mut state, _repo, _child, _standalone, entries) = git_tree_fixture();
+    apply_workspace_history(&mut state, entries);
+    show_workspace_history(&mut state);
+    assert!(begin_workspace_history_drag(&mut state, 0));
+    assert!(!drag_workspace_history_to(&mut state, 0));
+    assert!(state.workspace_history.dragging, "指针移动后仍显示拖动反显");
+    assert!(!state.workspace_history.drag_moved);
+    state.effects.clear();
+    end_workspace_history_drag(&mut state);
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::SaveWorkspaceOrder { .. })),
+        "未改变顺序时松开不得写库"
+    );
 }

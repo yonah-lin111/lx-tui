@@ -686,3 +686,12 @@ fn template_count_segments_aligns_three_digits_and_clamps() {
         ]
     );
 }
+
+#[test]
+fn ellipsize_width_counts_display_columns() {
+    assert_eq!(ellipsize_width("abc", 3), "abc");
+    assert_eq!(ellipsize_width("abc", 2), "a…");
+    assert_eq!(ellipsize_width("中文", 3), "中…");
+    assert_eq!(ellipsize_width("中文", 4), "中文");
+    assert_eq!(ellipsize_width("中文", 0), "");
+}

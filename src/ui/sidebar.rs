@@ -212,7 +212,7 @@ pub fn workspace_scrollbar(
     view: &layout::ViewLayout,
     state: &AppState,
 ) -> Option<widgets::scrollbar::ScrollbarLayout> {
-    if state.workspace_history.mode != WorkspaceMode::Active {
+    if state.sidebar_collapsed || state.workspace_history.mode != WorkspaceMode::Active {
         return None;
     }
     let sections = layout::sidebar_sections(view.sidebar, state.agents_collapsed)?;
@@ -233,6 +233,9 @@ fn workspace_scrollbar_for(
 
 /// 工作区列表可见行数；无分区时 None。
 pub fn workspace_list_rows(view: &layout::ViewLayout, state: &AppState) -> Option<usize> {
+    if state.sidebar_collapsed {
+        return None;
+    }
     let sections = layout::sidebar_sections(view.sidebar, state.agents_collapsed)?;
     Some(usize::from(sections.workspaces.height))
 }
@@ -244,6 +247,9 @@ pub fn workspace_section_at(
     column: u16,
     row: u16,
 ) -> bool {
+    if state.sidebar_collapsed {
+        return false;
+    }
     layout::sidebar_sections(view.sidebar, state.agents_collapsed)
         .is_some_and(|sections| sections.workspaces.contains((column, row).into()))
 }
@@ -327,6 +333,9 @@ fn render_add_workspace_button(frame: &mut Frame<'_>, area: Rect) {
 
 /// 工作区列表内容区（不含滚动条列）；分区缺失时退回侧栏内容区。
 fn workspace_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
+    if state.sidebar_collapsed {
+        return None;
+    }
     let list = match layout::sidebar_sections(view.sidebar, state.agents_collapsed) {
         Some(sections) => sections.workspaces,
         None => {
@@ -400,7 +409,7 @@ pub fn workspace_list_blank_at(
         .is_some_and(|slot| slot >= state.workspace_rows().len())
 }
 
-/// 分组折叠箭头命中：仅父项行的箭头格（内容区第 0 列）；返回父项工作区索引。
+/// 分组折叠箭头命中：仅父项行的箭头格（行首 2 列标记之后的箭头列）；返回父项工作区索引。
 pub fn workspace_group_toggle_at(
     view: &layout::ViewLayout,
     state: &AppState,
@@ -411,7 +420,9 @@ pub fn workspace_group_toggle_at(
         return None;
     }
     let list = workspace_list_rect(view, state)?;
-    if column != list.x || !list.contains((column, row).into()) {
+    if column != list.x.saturating_add(WORKSPACE_ITEM_INDENT as u16)
+        || !list.contains((column, row).into())
+    {
         return None;
     }
     let slot = state
@@ -522,6 +533,9 @@ pub fn agent_items(state: &AppState) -> Vec<AgentListItem> {
 
 /// Agents 分区内容区；分区缺失或折叠收为 0 行时 None。
 fn agents_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
+    if state.sidebar_collapsed {
+        return None;
+    }
     let sections = layout::sidebar_sections(view.sidebar, state.agents_collapsed)?;
     (sections.agents.width > 0 && sections.agents.height > 0).then_some(sections.agents)
 }

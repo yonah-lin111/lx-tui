@@ -24,6 +24,7 @@ pub fn open_new_workspace_dialog(state: &mut AppState) {
     state.workspace_scroll_drag = None;
     state.workspace_drag = None;
     state.workspace_dragging = false;
+    state.workspace_drag_moved = false;
     state.workspace_history.new_workspace_confirming = false;
     state.overlay = Some(Overlay::NewWorkspace(NewWorkspace {
         input: TextInput::new(String::new()),
@@ -87,6 +88,7 @@ pub fn parse_workspace_path(
 pub fn create_workspace_with_cwd(state: &mut AppState, target_cwd: Option<PathBuf>) {
     let (cwd, base) = match target_cwd {
         Some(cwd) => {
+            let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
             let base = workspace_label(&cwd, home_dir().as_deref());
             (Some(cwd), base)
         }
@@ -95,6 +97,7 @@ pub fn create_workspace_with_cwd(state: &mut AppState, target_cwd: Option<PathBu
             .or_else(|| state.active_workspace().cwd.clone())
         {
             Some(cwd) => {
+                let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
                 let base = workspace_label(&cwd, home_dir().as_deref());
                 (Some(cwd), base)
             }
@@ -240,6 +243,7 @@ pub(crate) fn sync_workspace_cwd(state: &mut AppState, workspace: usize, pane: P
     else {
         return;
     };
+    let new_cwd = std::fs::canonicalize(&new_cwd).unwrap_or(new_cwd);
     let target_ws = workspace;
     let name_is_manual = state
         .workspaces
@@ -266,6 +270,7 @@ pub(crate) fn sync_workspace_cwd(state: &mut AppState, workspace: usize, pane: P
     }
     workspace.git = None;
     request_git_refresh(state, &new_cwd);
+    let record_path = new_cwd.clone();
     if state.prompt_workspace() == target_ws {
         state.prompt_root = Some(new_cwd);
         sync_mention_root(state);
@@ -276,6 +281,13 @@ pub(crate) fn sync_workspace_cwd(state: &mut AppState, workspace: usize, pane: P
     {
         draft.root = Some(new_cwd);
     }
+    // 显式同步 cwd 等同一次打开：登记历史，保证活跃/历史顺序与信任记录一致。
+    state
+        .effects
+        .push(crate::app::effects::Effect::RecordWorkspace {
+            name: workspace_label(&record_path, home_dir().as_deref()),
+            path: record_path,
+        });
 }
 
 /// 切换当前工作区；越界忽略。

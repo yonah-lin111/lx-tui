@@ -143,7 +143,8 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
         );
         return;
     }
-    let scroll = panel.scroll.min(rows.len().saturating_sub(1));
+    let max_scroll = rows.len().saturating_sub(usize::from(rows_area.height));
+    let scroll = panel.scroll.min(max_scroll);
     let selected = panel.selected.min(rows.len().saturating_sub(1));
     let drag_block = panel
         .drag
@@ -215,7 +216,7 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
         x = paint_text(buf, x, y, &group_prefix, prefix_style, rows_area.right());
         let max_width = usize::from(rows_area.right().saturating_sub(x))
             .saturating_sub(index_text.chars().count());
-        let truncated = text::ellipsize(&label, max_width);
+        let truncated = text::ellipsize_width(&label, max_width);
         x = paint_text(buf, x, y, &truncated, item_style, rows_area.right());
         if !index_text.is_empty() {
             paint_text(buf, x, y, &index_text, mark_style, rows_area.right());
@@ -247,12 +248,11 @@ fn history_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect
 
 fn scrollbar_for(list: Rect, state: &AppState) -> Option<widgets::scrollbar::ScrollbarLayout> {
     let total = state.workspace_history.visible_rows().len();
-    widgets::scrollbar::layout(
-        list,
-        total,
-        usize::from(list.height),
-        state.workspace_history.scroll,
-    )
+    let scroll = state
+        .workspace_history
+        .scroll
+        .min(total.saturating_sub(usize::from(list.height)));
+    widgets::scrollbar::layout(list, total, usize::from(list.height), scroll)
 }
 
 /// 历史列表滚动条几何；不需要滚动或非历史模式时返回 None。
@@ -321,19 +321,26 @@ fn history_slot_at(
         return None;
     }
     let total = state.workspace_history.visible_rows().len();
-    let scroll = state.workspace_history.scroll.min(total.saturating_sub(1));
+    let max_scroll = total.saturating_sub(usize::from(list.height));
+    let scroll = state.workspace_history.scroll.min(max_scroll);
     Some(scroll.saturating_add(usize::from(row - content.y)))
 }
 
-/// 历史列表父节点折叠箭头命中：命中父节点左侧箭头区（前 4 列）时返回该可见行下标 `visible_row`。
+/// 历史列表父节点折叠箭头命中：命中父节点左侧箭头格时返回该可见行下标 `visible_row`。
+///
+/// 行首是 2 列选中标记，箭头从内容区第 2 列开始（`▾ ` / `▸ ` 两列）；只接受箭头字形所在列，
+/// 点击选中标记/名字仍按行选中处理。搜索过滤期间匹配项强制展开，不响应折叠切换。
 pub fn workspace_history_group_toggle_at(
     view: &layout::ViewLayout,
     state: &AppState,
     column: u16,
     row: u16,
 ) -> Option<usize> {
+    if !state.workspace_history.search.text().trim().is_empty() {
+        return None;
+    }
     let list = history_list_rect(view, state)?;
-    if column >= list.x.saturating_add(4) {
+    if column != list.x.saturating_add(WORKSPACE_ITEM_INDENT as u16) {
         return None;
     }
     let slot = history_slot_at(view, state, column, row)?;
@@ -365,9 +372,11 @@ pub fn workspace_history_drop_index(
         return None;
     }
     let clamped = row.clamp(list.y, list.bottom().saturating_sub(1));
-    let scroll = state.workspace_history.scroll.min(total.saturating_sub(1));
+    let total = state.workspace_history.visible_rows().len();
+    let max_scroll = total.saturating_sub(usize::from(list.height));
+    let scroll = state.workspace_history.scroll.min(max_scroll);
     let slot = scroll.saturating_add(usize::from(clamped - list.y));
-    (slot < total).then_some(slot)
+    Some(slot.min(total.saturating_sub(1)))
 }
 
 /// 历史列表空白区域命中：内容区内（排除搜索框、分割线与滚动条列）且行槽越出已渲染条目。
@@ -496,6 +505,7 @@ mod tests {
                 exists: true,
                 name_is_manual: false,
                 position: 0,
+                trusted: true,
                 git: Some(WorkspaceGit {
                     repo_root: repo_root.clone(),
                     checkout_path: repo_root.clone(),
@@ -510,6 +520,7 @@ mod tests {
                 exists: false,
                 name_is_manual: false,
                 position: 1,
+                trusted: true,
                 git: Some(WorkspaceGit {
                     repo_root,
                     checkout_path: wt_path,
@@ -589,6 +600,7 @@ mod tests {
                 exists: true,
                 name_is_manual: false,
                 position: 0,
+                trusted: true,
                 git: None,
             },
             WorkspaceHistoryEntry {
@@ -597,6 +609,7 @@ mod tests {
                 exists: true,
                 name_is_manual: false,
                 position: 1,
+                trusted: true,
                 git: None,
             },
         ];
@@ -647,5 +660,114 @@ mod tests {
             .expect("draw");
         let buf = terminal.backend().buffer();
         assert_ne!(buf[(sections.workspaces.x, row0_y)].bg, Color::Indexed(240));
+    }
+}
+
+#[cfg(test)]
+mod drop_tests {
+    use super::*;
+    use crate::app::state::{WorkspaceHistoryEntry, WorkspaceMode};
+    use crate::config::Config;
+    use crate::ui;
+
+    #[test]
+    fn drop_index_clamps_blank_area_to_last_item() {
+        let mut state = AppState::demo();
+        state.workspace_history.entries = (0..2)
+            .map(|index| WorkspaceHistoryEntry {
+                name: format!("ws-{index}"),
+                path: std::path::PathBuf::from(format!("/tmp/ws-{index}")),
+                exists: true,
+                name_is_manual: false,
+                position: index as i64,
+                trusted: true,
+                git: None,
+            })
+            .collect();
+        state.workspace_history.mode = WorkspaceMode::History;
+        let config = Config::default();
+        let view = ui::layout::compute(
+            Rect::new(0, 0, 100, 30),
+            &config,
+            state.sidebar_collapsed,
+            state.sidebar_width,
+            state.prompt_collapsed,
+            state.prompt_width,
+            state.prompt_left,
+            state.panes_collapsed,
+        );
+        let sections =
+            ui::layout::sidebar_sections(view.sidebar, state.agents_collapsed).expect("sections");
+        let last_row = sections.workspaces.bottom().saturating_sub(1);
+        assert_eq!(
+            workspace_history_drop_index(&view, &state, last_row),
+            Some(1),
+            "列表条目少于视口时，末尾空白应吸附到最后一条"
+        );
+    }
+
+    #[test]
+    fn group_toggle_is_disabled_while_searching() {
+        let mut state = AppState::demo();
+        let repo = std::path::PathBuf::from("/repo");
+        let child = repo.join(".worktrees/feat");
+        state.workspace_history.entries = vec![
+            WorkspaceHistoryEntry {
+                name: "repo".into(),
+                path: repo.clone(),
+                exists: true,
+                name_is_manual: false,
+                position: 0,
+                trusted: true,
+                git: Some(crate::app::state::WorkspaceGit {
+                    repo_root: repo.clone(),
+                    checkout_path: repo,
+                    is_linked: false,
+                    branch: Some("dev".into()),
+                    main_branch: Some("dev".into()),
+                }),
+            },
+            WorkspaceHistoryEntry {
+                name: "feat".into(),
+                path: child.clone(),
+                exists: true,
+                name_is_manual: false,
+                position: 1,
+                trusted: true,
+                git: Some(crate::app::state::WorkspaceGit {
+                    repo_root: std::path::PathBuf::from("/repo"),
+                    checkout_path: child,
+                    is_linked: true,
+                    branch: Some("feat".into()),
+                    main_branch: Some("dev".into()),
+                }),
+            },
+        ];
+        state.workspace_history.mode = WorkspaceMode::History;
+        let config = Config::default();
+        let view = ui::layout::compute(
+            Rect::new(0, 0, 100, 30),
+            &config,
+            state.sidebar_collapsed,
+            state.sidebar_width,
+            state.prompt_collapsed,
+            state.prompt_width,
+            state.prompt_left,
+            state.panes_collapsed,
+        );
+        let sections =
+            ui::layout::sidebar_sections(view.sidebar, state.agents_collapsed).expect("sections");
+        let row = sections.workspaces.y + PROMPT_TREE_HEADER_HEIGHT;
+        assert_eq!(
+            workspace_history_group_toggle_at(&view, &state, sections.workspaces.x + 2, row),
+            Some(0)
+        );
+
+        state.workspace_history.search.insert_str("feat");
+        assert_eq!(
+            workspace_history_group_toggle_at(&view, &state, sections.workspaces.x + 2, row),
+            None,
+            "搜索态匹配项强制展开，折叠箭头不响应"
+        );
     }
 }

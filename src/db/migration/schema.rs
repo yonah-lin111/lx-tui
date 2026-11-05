@@ -15,6 +15,12 @@ CREATE TABLE IF NOT EXISTS workspace (
     updated_at TEXT NOT NULL
 );
 
+-- 用户在历史列表显式删除、但磁盘上仍存在的 Git worktree 路径；重新登记/打开时解除。
+CREATE TABLE IF NOT EXISTS workspace_hidden (
+    path TEXT PRIMARY KEY,
+    hidden_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS workspace_folder (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     external_id TEXT NOT NULL UNIQUE,
@@ -630,4 +636,12 @@ CREATE TABLE IF NOT EXISTS agent_model_switch (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_model_switch_session_seq
     ON agent_model_switch(session_id, sequence);
+"#;
+
+/// v24：历史列表隐藏路径（删除仍存在于磁盘的 worktree 后防止自动扫描复活）。
+pub(super) const SCHEMA_V24: &str = r#"
+CREATE TABLE IF NOT EXISTS workspace_hidden (
+    path TEXT PRIMARY KEY,
+    hidden_at TEXT NOT NULL
+);
 "#;

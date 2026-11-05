@@ -415,6 +415,9 @@ pub fn cut_overlay_selected_text(state: &mut AppState) -> Option<String> {
     if refresh_search {
         super::refresh_referenced_search(state);
     }
+    if matches!(state.overlay, Some(Overlay::NewWorkspace(_))) {
+        state.workspace_history.new_workspace_confirming = false;
+    }
     Some(text)
 }
 

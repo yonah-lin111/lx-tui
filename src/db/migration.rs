@@ -264,6 +264,19 @@ impl Database {
         if version < 23 {
             self.migrate_v23_workspace_position()?;
         }
+        if version < 24 {
+            self.migrate_v24_workspace_hidden()?;
+        }
+        Ok(())
+    }
+
+    /// v24：持久化历史列表隐藏路径；旧库与新建库都幂等建表。
+    fn migrate_v24_workspace_hidden(&mut self) -> Result<()> {
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute_batch(SCHEMA_V24)?;
+        ensure_no_foreign_key_violation(&transaction)?;
+        transaction.pragma_update(None, "user_version", 24)?;
+        transaction.commit()?;
         Ok(())
     }
 

@@ -38,6 +38,9 @@ pub fn resume_trust(state: &mut AppState, trigger: TrustTrigger) {
         } => {
             super::worktree::open_worktree_checkout(state, entry, repo_root, main_branch);
         }
+        TrustTrigger::OpenWorkspaceHistory { path, name } => {
+            super::workspace_history::open_workspace_history_trusted(state, path, name);
+        }
     }
 }
 
@@ -69,6 +72,9 @@ pub fn apply_trust_decision(state: &mut AppState, granted: bool) {
     }
     match trust.trigger {
         TrustTrigger::SyncWorkspaceCwd { .. } => toast_cancelled(state, text::TOAST_SYNC_CANCELLED),
+        TrustTrigger::OpenWorkspaceHistory { .. } => {
+            toast_cancelled(state, text::TOAST_OPEN_CANCELLED)
+        }
         TrustTrigger::CreateWorkspace { .. } | TrustTrigger::OpenWorktree { .. } => {
             toast_cancelled(state, text::TOAST_CREATE_CANCELLED);
         }

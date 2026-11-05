@@ -5440,3 +5440,24 @@ fn lx_document_navigation_and_document_selection() {
     apply_lx_input(&mut state, LxInput::Delete);
     assert_eq!(state.active_pane().expect("pane").lx.input, "");
 }
+
+#[test]
+fn cut_in_new_workspace_resets_inline_confirmation() {
+    let mut state = AppState::demo();
+    let dir = std::env::temp_dir();
+    open_new_workspace_dialog(&mut state);
+    if let Some(Overlay::NewWorkspace(ref mut dialog)) = state.overlay {
+        dialog.input = TextInput::new(dir.to_string_lossy());
+    }
+    commit_new_workspace(&mut state);
+    assert!(state.workspace_history.new_workspace_confirming);
+    if let Some(Overlay::NewWorkspace(ref mut dialog)) = state.overlay {
+        dialog.input.apply_edit_key(OverlayKey::SelectAll);
+    }
+
+    assert!(cut_overlay_selected_text(&mut state).is_some());
+    assert!(
+        !state.workspace_history.new_workspace_confirming,
+        "Ctrl+X 改变输入后必须退出 Confirm 态"
+    );
+}

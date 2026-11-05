@@ -1610,3 +1610,50 @@ fn resume_edit_modal_confirm_state_second_button_is_cancel() {
         "确认态第二个按钮是取消（退回编辑态）"
     );
 }
+
+#[test]
+fn workspace_history_group_delete_question_lists_worktrees() {
+    use crate::app::state::{WorkspaceGit, WorkspaceHistoryEntry};
+
+    let mut state = AppState::demo();
+    let repo = PathBuf::from("/repo");
+    let child = repo.join(".worktrees/feat");
+    state.workspace_history.entries = vec![
+        WorkspaceHistoryEntry {
+            name: "repo".into(),
+            path: repo.clone(),
+            exists: true,
+            name_is_manual: false,
+            position: 0,
+            trusted: true,
+            git: Some(WorkspaceGit {
+                repo_root: repo.clone(),
+                checkout_path: repo,
+                is_linked: false,
+                branch: Some("dev".into()),
+                main_branch: Some("dev".into()),
+            }),
+        },
+        WorkspaceHistoryEntry {
+            name: "feat".into(),
+            path: child.clone(),
+            exists: true,
+            name_is_manual: false,
+            position: 1,
+            trusted: true,
+            git: Some(WorkspaceGit {
+                repo_root: PathBuf::from("/repo"),
+                checkout_path: child,
+                is_linked: true,
+                branch: Some("feat".into()),
+                main_branch: Some("dev".into()),
+            }),
+        },
+    ];
+
+    let question = confirm_question(&state, &OverlayTarget::WorkspaceHistory(0));
+    assert!(
+        question.contains("1 linked worktree"),
+        "父项删除必须明确提示同仓库子项: {question}"
+    );
+}

@@ -480,6 +480,11 @@ pub fn confirm_delete_workspace_question(name: &str) -> String {
     format!("delete workspace \"{name}\" and all its data?")
 }
 
+/// 删除 Git 仓库父项时，明确提示会一并删除的同仓库 linked worktree 数量。
+pub fn confirm_delete_workspace_group_question(name: &str, worktrees: usize) -> String {
+    format!("delete workspace \"{name}\", {worktrees} linked worktree(s), and all their data?")
+}
+
 /// 按显示宽度换行：优先在空白处断行，超宽单词按字符硬断（宽字符占两列）；
 /// 空文本返回单行空串，保证调用方至少有一行可渲染。
 pub fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -551,6 +556,7 @@ pub fn toast_copied_chars(count: usize) -> String {
 }
 /// 工作区反馈 toast 的边框标题。
 pub const TOAST_WORKSPACE_TITLE: &str = "Workspace";
+pub const TOAST_WORKSPACE_WRITE_FAILED: &str = "Workspace update failed";
 /// 工作区路径不存在。
 pub const TOAST_DIRECTORY_NOT_FOUND: &str = "Directory does not exist";
 /// 工作区路径非目录。
@@ -1015,6 +1021,7 @@ pub fn tool_status_label(status: crate::app::state::ToolStatus) -> &'static str 
 
 /// 信任检查拒绝时的取消提示。
 pub const TOAST_CREATE_CANCELLED: &str = "Workspace creation cancelled";
+pub const TOAST_OPEN_CANCELLED: &str = "Workspace open cancelled";
 pub const TOAST_SYNC_CANCELLED: &str = "Workspace sync cancelled";
 
 /// tooltip 边框标题；当前所有按钮共用一个固定标题。
@@ -1259,6 +1266,20 @@ pub fn ellipsize(text: &str, max_chars: usize) -> String {
     let mut truncated: String = text.chars().take(max_chars - 1).collect();
     truncated.push('…');
     truncated
+}
+
+/// 按显示列截断并追加省略号；宽字符不会越界。
+pub fn ellipsize_width(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if text.width() <= max_width {
+        return text.to_string();
+    }
+    if max_width == 1 {
+        return "…".to_string();
+    }
+    format!("{}…", take_prefix_width(text, max_width - 1))
 }
 
 /// 路径中间截断：保留首尾并在中间放省略号（对齐 opencode 的 `truncateMiddle`）。

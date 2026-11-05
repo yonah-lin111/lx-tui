@@ -568,18 +568,44 @@ impl Persistence {
             }
             Effect::RecordWorkspace { path, name } => {
                 self.with_db(|db| db.record_workspace_open(&path, &name));
+                self.with_db(|db| db.unhide_workspace(&path));
+                // 任何显式登记入口（历史列表、worktree 对话框、同步 cwd）都应解除临时隐藏，
+                // 否则删除后重新打开同一 worktree 会被 apply_workspace_history 永久过滤。
+                state
+                    .workspace_history
+                    .hidden_worktrees
+                    .retain(|hidden| hidden != &path);
                 self.reload_workspace_history(state)
             }
             Effect::RenameWorkspace { path, name } => {
-                self.with_db(|db| db.rename_workspace(&path, &name));
+                let written = self.with_db(|db| db.rename_workspace(&path, &name));
+                if written.is_none() {
+                    self.workspace_write_failed(state);
+                }
                 self.reload_workspace_history(state)
             }
             Effect::DeleteWorkspaceHistory { path } => {
-                if let Some(sessions) =
-                    self.with_db(|db| db.list_chat_sessions(&path, 0, usize::MAX))
-                {
+                // 最后一个打开的工作区无法关闭；删除其历史数据后需要保留一条已信任的
+                // 隐藏行，供仍运行的终端/后续 prompt 保存使用，否则会以未信任默认名复活。
+                let open_name = state
+                    .workspaces
+                    .iter()
+                    .find(|workspace| {
+                        workspace.cwd.as_deref() == Some(path.as_path())
+                            || workspace
+                                .git
+                                .as_ref()
+                                .is_some_and(|git| git.checkout_path == path)
+                    })
+                    .map(|workspace| workspace.name.clone());
+                // 分页接口有 200 条上限；循环取全量，确保第 201 条及更早的运行中会话也被中断。
+                let mut offset = 0;
+                while let Some(page) = self.with_db(|db| {
+                    db.list_chat_sessions(&path, offset, crate::db::chat::SESSION_PAGE_SIZE)
+                }) {
+                    let page_len = page.len();
                     let panes = state.all_pane_ids();
-                    for summary in sessions {
+                    for summary in page {
                         state.effects.push(Effect::CancelSubagents {
                             session_id: summary.external_id.clone(),
                             agent_id: None,
@@ -589,8 +615,24 @@ impl Persistence {
                             update::on_session_removed(state, pane, &summary.external_id);
                         }
                     }
+                    if page_len < crate::db::chat::SESSION_PAGE_SIZE {
+                        break;
+                    }
+                    offset += page_len;
                 }
-                self.with_db(|db| db.delete_workspace(&path));
+                // 仅对仍存在的 linked worktree（`.git` 为文件）持久化隐藏；
+                // 普通目录/仓库根删行后不会通过 `git worktree list` 自动复活，无需隐藏。
+                if path.join(".git").is_file() {
+                    self.with_db(|db| db.hide_workspace(&path));
+                }
+                let deleted = self.with_db(|db| db.delete_workspace(&path));
+                if deleted.is_none() {
+                    self.workspace_write_failed(state);
+                }
+                if let Some(name) = open_name {
+                    self.with_db(|db| db.trust_workspace(&path, &name));
+                    self.with_db(|db| db.hide_workspace(&path));
+                }
                 self.reload_workspace_history(state)
             }
             Effect::SaveWorkspaceOrder { entries } => {
@@ -677,6 +719,21 @@ impl Persistence {
                 None
             }
         }
+    }
+
+    /// 工作区写失败提示；无数据库（只读降级）时不打扰用户。
+    fn workspace_write_failed(&self, state: &mut AppState) {
+        if self.db.is_none() {
+            return;
+        }
+        let toast = Toast::new(
+            ToastKind::Danger,
+            text::TOAST_WORKSPACE_WRITE_FAILED,
+            None,
+            Instant::now(),
+        )
+        .with_title(text::TOAST_WORKSPACE_TITLE);
+        update::show_toast(state, toast);
     }
 
     /// 重载指定 prompt 键的全部工作区面板：同仓库的主 checkout 与 linked worktree

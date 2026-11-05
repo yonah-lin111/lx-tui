@@ -28,6 +28,8 @@ pub struct WorkspaceHistoryEntry {
     pub name_is_manual: bool,
     /// 全局展示顺序（活跃列表与历史列表共用）。
     pub position: i64,
+    /// 该路径或其仓库根是否已信任；false 时从历史列表打开需先走信任检查。
+    pub trusted: bool,
     /// 所属 git checkout 的元数据（主 checkout 或 linked worktree）；非 Git 目录为 None。
     pub git: Option<WorkspaceGit>,
 }
@@ -88,8 +90,12 @@ pub struct WorkspaceHistoryPanel {
     pub drag: Option<usize>,
     /// 指针是否已真正移动（按下未移动不整块反显）。
     pub dragging: bool,
-    /// 最近一次左键按下记录 `(visible_row, pressed_at)`，用于 400ms 双击判定。
-    pub row_click: Option<(usize, Instant)>,
+    /// 拖拽是否真正改变了顺序；仅用于松开时决定是否持久化。
+    pub drag_moved: bool,
+    /// 最近一次左键按下记录 `(entry_path, pressed_at)`，用于 400ms 双击判定。
+    pub row_click: Option<(PathBuf, Instant)>,
+    /// 下一次有可见行数时把选中项滚入视口（进入/新建/重载后由事件循环消费）。
+    pub reveal_selected: bool,
     /// 启动后是否已完成首次数据库加载。
     pub loaded: bool,
 }
@@ -116,7 +122,9 @@ impl WorkspaceHistoryPanel {
             search_drag: false,
             drag: None,
             dragging: false,
+            drag_moved: false,
             row_click: None,
+            reveal_selected: false,
             loaded: false,
         }
     }
@@ -213,6 +221,28 @@ impl WorkspaceHistoryPanel {
                 }),
         );
         block
+    }
+
+    /// 删除该条目时会一并删除的同仓库 linked worktree 数量（不含自身）。
+    pub fn delete_worktree_count(&self, index: usize) -> usize {
+        let Some(entry) = self.entries.get(index) else {
+            return 0;
+        };
+        let Some(git) = entry.git.as_ref() else {
+            return 0;
+        };
+        if git.is_linked {
+            return 0;
+        }
+        self.entries
+            .iter()
+            .filter(|other| {
+                other.path != entry.path
+                    && other.git.as_ref().is_some_and(|other_git| {
+                        other_git.repo_root == git.repo_root && other_git.is_linked
+                    })
+            })
+            .count()
     }
 
     /// 计算当前可见的树形行列表（含折叠裁剪与搜索词过滤）。
@@ -393,17 +423,22 @@ impl WorkspaceHistoryPanel {
         changed
     }
 
-    /// 钳制选中项与滚动偏移。
-    pub fn clamp(&mut self, visible_rows: usize) {
+    /// 钳制选中项与滚动偏移；返回是否有变化。
+    pub fn clamp(&mut self, visible_rows: usize) -> bool {
         let total = self.visible_rows().len();
         if total == 0 {
+            let changed = self.selected != 0 || self.scroll != 0;
             self.selected = 0;
             self.scroll = 0;
-            return;
+            return changed;
         }
-        self.selected = self.selected.min(total - 1);
+        let selected = self.selected.min(total - 1);
         let max_scroll = total.saturating_sub(visible_rows.max(1));
-        self.scroll = self.scroll.min(max_scroll);
+        let scroll = self.scroll.min(max_scroll);
+        let changed = selected != self.selected || scroll != self.scroll;
+        self.selected = selected;
+        self.scroll = scroll;
+        changed
     }
 
     /// 确保当前选中行在可见视口内。

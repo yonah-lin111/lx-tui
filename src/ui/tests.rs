@@ -767,6 +767,11 @@ fn workspace_list_blank_hidden_when_sidebar_collapsed() {
     state.sidebar_collapsed = true;
     let view = view_for(&state);
     assert!(!workspace_list_blank_at(&view, &state, 0, 1));
+    // 折叠态内部仍存在 x+1..x+2 的几何分区；这些列不能命中隐藏的列表内容。
+    assert!(!workspace_list_blank_at(&view, &state, 1, 1));
+    assert!(!workspace_list_blank_at(&view, &state, 2, 1));
+    assert_eq!(workspace_item_at(&view, &state, 1, 1), None);
+    assert_eq!(workspace_item_at(&view, &state, 2, 1), None);
 }
 
 #[test]
@@ -2953,9 +2958,14 @@ fn workspace_group_toggle_hit_targets_parent_chevron_cell_only() {
         .expect("sidebar sections")
         .workspaces;
     assert_eq!(
-        workspace_group_toggle_at(&view, &state, list.x, list.y),
+        workspace_group_toggle_at(&view, &state, list.x + 2, list.y),
         Some(0),
         "父项箭头格命中"
+    );
+    assert_eq!(
+        workspace_group_toggle_at(&view, &state, list.x, list.y),
+        None,
+        "选中标记列不命中箭头"
     );
     assert_eq!(
         workspace_group_toggle_at(&view, &state, list.x + 1, list.y),
@@ -2963,7 +2973,7 @@ fn workspace_group_toggle_hit_targets_parent_chevron_cell_only() {
         "箭头之外不命中"
     );
     assert_eq!(
-        workspace_group_toggle_at(&view, &state, list.x, list.y + 1),
+        workspace_group_toggle_at(&view, &state, list.x + 2, list.y + 1),
         None,
         "子项行不命中"
     );

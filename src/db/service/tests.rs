@@ -1364,3 +1364,63 @@ fn move_folder_with_children_reports_nested_reason() {
     let toast = state.toast.as_ref().expect("失败给出反馈");
     assert_eq!(toast.message, text::TOAST_PROMPT_MOVE_NESTED);
 }
+
+#[test]
+fn deleting_last_open_workspace_keeps_hidden_trusted_row() {
+    let (mut service, mut state, cwd, _) = trusted_service("delete-open-last");
+    service
+        .database()
+        .expect("db")
+        .record_workspace_open(&cwd, "workspace")
+        .expect("record");
+    state.effects.clear();
+    state
+        .effects
+        .push(Effect::DeleteWorkspaceHistory { path: cwd.clone() });
+
+    service.pump(&mut state);
+
+    let db = service.database().expect("db");
+    assert!(
+        db.is_trusted(&cwd).expect("trust query"),
+        "仍打开的最后工作区必须保留已信任行"
+    );
+    assert!(
+        db.hidden_workspace_paths().expect("hidden").contains(&cwd),
+        "保留行必须隐藏，避免历史列表立刻复活"
+    );
+    assert!(
+        db.list_workspace_history_entries()
+            .expect("entries")
+            .iter()
+            .all(|entry| entry.path != cwd),
+        "隐藏行不应出现在历史列表"
+    );
+}
+
+#[test]
+fn record_workspace_unhides_previously_hidden_path() {
+    let (mut service, mut state, cwd, _) = trusted_service("unhide-record");
+    service
+        .database()
+        .expect("db")
+        .hide_workspace(&cwd)
+        .expect("hide");
+    state.effects.clear();
+    state.effects.push(Effect::RecordWorkspace {
+        path: cwd.clone(),
+        name: "workspace".into(),
+    });
+
+    service.pump(&mut state);
+
+    assert!(
+        !service
+            .database()
+            .expect("db")
+            .hidden_workspace_paths()
+            .expect("hidden")
+            .contains(&cwd),
+        "显式登记必须解除隐藏，否则重新打开后历史列表仍看不到"
+    );
+}

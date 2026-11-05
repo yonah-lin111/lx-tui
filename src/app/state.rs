@@ -287,6 +287,8 @@ pub struct AppState {
     pub workspace_drag: Option<usize>,
     /// 拖拽是否已产生指针移动；按下未移动时不整块反显。
     pub workspace_dragging: bool,
+    /// 拖拽是否真正改变了顺序；仅用于松开时决定是否持久化，避免轻微抖动触发整表写回。
+    pub workspace_drag_moved: bool,
     /// 同一时刻最多一个浮层：右键菜单、重命名、关闭确认或 worktree 对话框。
     pub overlay: Option<Overlay>,
     /// 待执行的效应出箱（DB 读写与剪贴板）；由持久化服务取走执行。
@@ -451,6 +453,7 @@ impl AppState {
             agent_scroll_drag: None,
             workspace_drag: None,
             workspace_dragging: false,
+            workspace_drag_moved: false,
             overlay: None,
             effects: Vec::new(),
             git_requests: Vec::new(),

@@ -89,6 +89,7 @@ pub fn begin_workspace_drag(state: &mut AppState, index: usize) {
     if index < state.workspaces.len() {
         state.workspace_drag = Some(index);
         state.workspace_dragging = false;
+        state.workspace_drag_moved = false;
         state.workspace_hover = None;
     }
 }
@@ -104,13 +105,14 @@ pub fn drag_workspace_to(state: &mut AppState, target: usize) -> bool {
     if len == 0 || from >= len {
         return false;
     }
-    state.workspace_dragging = true;
     let target = target.min(len - 1);
+    state.workspace_dragging = true;
     let block = state.workspace_block(from);
     let hovered = state.workspace_block(target);
     if hovered.iter().any(|member| block.contains(member)) {
         return false;
     }
+    state.workspace_dragging = true;
     // 落点坐标：向下拖插到目标块之后，向上拖插到目标块之前。
     let at = if target > from {
         hovered.last().map_or(len, |last| last.saturating_add(1))
@@ -128,6 +130,7 @@ pub fn drag_workspace_to(state: &mut AppState, target: usize) -> bool {
     if order.iter().enumerate().all(|(index, old)| index == *old) {
         return false;
     }
+    state.workspace_drag_moved = true;
     let new_index = |old: usize| match block.iter().position(|member| *member == old) {
         Some(offset) => insert_at + offset,
         None => {
@@ -154,9 +157,10 @@ pub fn drag_workspace_to(state: &mut AppState, target: usize) -> bool {
 
 /// 结束拖动排序；真正移动过时把相对次序回写历史条目并持久化全局顺序。
 pub fn end_workspace_drag(state: &mut AppState) {
-    let persist = state.workspace_dragging;
+    let persist = state.workspace_drag_moved;
     state.workspace_drag = None;
     state.workspace_dragging = false;
+    state.workspace_drag_moved = false;
     if persist {
         super::workspace_history::sync_history_entries_from_active(state);
         super::workspace_history::persist_workspace_order(state);

@@ -39,6 +39,7 @@ pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u1
     state.workspace_scroll_drag = None;
     state.workspace_drag = None;
     state.workspace_dragging = false;
+    state.workspace_drag_moved = false;
     let mut commands = vec![MenuCommand::NewTerminal];
     if state
         .workspaces
@@ -73,6 +74,7 @@ pub fn open_workspace_list_menu(state: &mut AppState, anchor: (u16, u16)) {
     state.workspace_scroll_drag = None;
     state.workspace_drag = None;
     state.workspace_dragging = false;
+    state.workspace_drag_moved = false;
     state.workspace_history.scroll_drag = None;
     state.workspace_history.search_drag = false;
     state.overlay = Some(Overlay::Menu(Menu {
@@ -91,6 +93,7 @@ pub fn open_workspace_history_menu(state: &mut AppState, visible_row: usize, anc
     state.workspace_history.search_drag = false;
     state.workspace_history.drag = None;
     state.workspace_history.dragging = false;
+    state.workspace_history.drag_moved = false;
     super::workspace_history::select_workspace_history_row(state, visible_row);
     let Some(&entry_index) = state.workspace_history.filtered_indices().get(visible_row) else {
         return;

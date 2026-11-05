@@ -15,16 +15,55 @@ pub struct WorkspaceRecord {
     pub path: PathBuf,
     /// 全局展示顺序（活跃列表与历史列表共用）。
     pub position: i64,
+    /// 路径或仓库根是否已信任（决定历史列表打开时是否仍需信任浮层）。
+    pub trusted: bool,
 }
 
 impl Database {
+    /// 查找指向同一目录的已有工作区行，返回数据库中的原始 `path` 文本。
+    ///
+    /// 先精确匹配（常见路径零额外开销）；未命中时按文件系统 canonical 等价匹配，
+    /// 兼容旧库/终端 cwd 留下的尾斜杠、`..` 与符号链接文本。目标不存在时无法 canonical 化，
+    /// 只接受精确匹配（已删除的历史 worktree 仍能命中）。
+    fn workspace_row_path(&self, path: &Path) -> Result<Option<PathBuf>> {
+        let exact = path_string(path);
+        let found: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT path FROM workspace WHERE path = ?1",
+                params![exact],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(found) = found {
+            return Ok(Some(PathBuf::from(found)));
+        }
+        let Ok(target) = std::fs::canonicalize(path) else {
+            return Ok(None);
+        };
+        let mut statement = self
+            .conn
+            .prepare("SELECT path FROM workspace WHERE path IS NOT NULL AND path != ''")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        for saved in rows {
+            let saved = PathBuf::from(saved?);
+            if std::fs::canonicalize(&saved).is_ok_and(|candidate| candidate == target) {
+                return Ok(Some(saved));
+            }
+        }
+        Ok(None)
+    }
+
     /// 路径是否已信任（`is_trusted = 1`）。
     pub fn is_trusted(&self, path: &Path) -> Result<bool> {
+        let Some(row_path) = self.workspace_row_path(path)? else {
+            return Ok(false);
+        };
         let trusted: i64 = self
             .conn
             .query_row(
                 "SELECT is_trusted FROM workspace WHERE path = ?1",
-                params![path_string(path)],
+                params![path_string(&row_path)],
                 |row| row.get(0),
             )
             .optional()?
@@ -34,14 +73,18 @@ impl Database {
 
     /// 记录工作区信任：按 path upsert `is_trusted = 1`，已存在时保留原自定义名称与顺序。
     pub fn trust_workspace(&self, path: &Path, name: &str) -> Result<()> {
+        if let Some(row_path) = self.workspace_row_path(path)? {
+            self.conn.execute(
+                "UPDATE workspace SET is_trusted = 1, updated_at = datetime('now') WHERE path = ?1",
+                params![path_string(&row_path)],
+            )?;
+            return Ok(());
+        }
         self.conn.execute(
             r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, position, created_at, updated_at)
                VALUES (?1, ?2, 'filesystem', ?3, 1,
                        COALESCE((SELECT MAX(position) + 1 FROM workspace), 0),
-                       datetime('now'), datetime('now'))
-               ON CONFLICT(path) DO UPDATE SET
-                   is_trusted = 1,
-                   updated_at = datetime('now')"#,
+                       datetime('now'), datetime('now'))"#,
             params![new_external_id("ws"), name, path_string(path)],
         )?;
         Ok(())
@@ -49,6 +92,9 @@ impl Database {
 
     /// 确保工作区行存在（提示词/会话读写前置）；已存在时不覆盖名称、不修改信任位与打开时间。
     pub fn ensure_workspace(&self, path: &Path) -> Result<()> {
+        if self.workspace_row_path(path)?.is_some() {
+            return Ok(());
+        }
         let name = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -57,8 +103,7 @@ impl Database {
             r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, position, created_at, updated_at)
                VALUES (?1, ?2, 'filesystem', ?3, 0,
                        COALESCE((SELECT MAX(position) + 1 FROM workspace), 0),
-                       datetime('now'), datetime('now'))
-               ON CONFLICT(path) DO NOTHING"#,
+                       datetime('now'), datetime('now'))"#,
             params![new_external_id("ws"), name, path_string(path)],
         )?;
         Ok(())
@@ -68,33 +113,42 @@ impl Database {
     /// 已有路径保留数据库中的名称、信任位与顺序并刷新 `updated_at`；
     /// 返回数据库中保存的名称（供打开时恢复自定义名称）。
     pub fn record_workspace_open(&self, path: &Path, default_name: &str) -> Result<String> {
-        let path_str = path_string(path);
+        if let Some(row_path) = self.workspace_row_path(path)? {
+            self.conn.execute(
+                "UPDATE workspace SET updated_at = datetime('now') WHERE path = ?1",
+                params![path_string(&row_path)],
+            )?;
+            let saved_name: String = self.conn.query_row(
+                "SELECT name FROM workspace WHERE path = ?1",
+                params![path_string(&row_path)],
+                |row| row.get(0),
+            )?;
+            return Ok(saved_name);
+        }
         self.conn.execute(
             r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, position, created_at, updated_at)
                VALUES (?1, ?2, 'filesystem', ?3, 0,
                        COALESCE((SELECT MAX(position) + 1 FROM workspace), 0),
-                       datetime('now'), datetime('now'))
-               ON CONFLICT(path) DO UPDATE SET
-                   updated_at = datetime('now')"#,
-            params![new_external_id("ws"), default_name, path_str],
+                       datetime('now'), datetime('now'))"#,
+            params![new_external_id("ws"), default_name, path_string(path)],
         )?;
-        let saved_name: String = self.conn.query_row(
-            "SELECT name FROM workspace WHERE path = ?1",
-            params![path_str],
-            |row| row.get(0),
-        )?;
-        Ok(saved_name)
+        Ok(default_name.to_string())
     }
 
     /// 显式重命名工作区：按 path upsert 新名称；新行追加到顺序末尾。
     pub fn rename_workspace(&self, path: &Path, name: &str) -> Result<()> {
+        if let Some(row_path) = self.workspace_row_path(path)? {
+            self.conn.execute(
+                "UPDATE workspace SET name = ?1 WHERE path = ?2",
+                params![name, path_string(&row_path)],
+            )?;
+            return Ok(());
+        }
         self.conn.execute(
             r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, position, created_at, updated_at)
                VALUES (?1, ?2, 'filesystem', ?3, 0,
                        COALESCE((SELECT MAX(position) + 1 FROM workspace), 0),
-                       datetime('now'), datetime('now'))
-               ON CONFLICT(path) DO UPDATE SET
-                   name = excluded.name"#,
+                       datetime('now'), datetime('now'))"#,
             params![new_external_id("ws"), name, path_string(path)],
         )?;
         Ok(())
@@ -103,7 +157,7 @@ impl Database {
     /// 按全局展示顺序返回全部工作区历史记录。
     pub fn list_workspaces(&self) -> Result<Vec<WorkspaceRecord>> {
         let mut statement = self.conn.prepare(
-            r#"SELECT name, path, position
+            r#"SELECT name, path, position, is_trusted
                FROM workspace
                WHERE path IS NOT NULL AND path != ''
                ORDER BY position ASC, id ASC"#,
@@ -112,10 +166,12 @@ impl Database {
             let name: String = row.get(0)?;
             let raw_path: String = row.get(1)?;
             let position: i64 = row.get(2)?;
+            let trusted: i64 = row.get(3)?;
             Ok(WorkspaceRecord {
                 name,
                 path: PathBuf::from(raw_path),
                 position,
+                trusted: trusted == 1,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -130,8 +186,18 @@ impl Database {
         if order.is_empty() {
             return Ok(());
         }
+        let mut seen = HashSet::new();
+        let mut rows: Vec<(PathBuf, String)> = Vec::with_capacity(order.len());
+        for (path, name) in order {
+            let key = self
+                .workspace_row_path(path)?
+                .unwrap_or_else(|| path.clone());
+            if seen.insert(key.clone()) {
+                rows.push((key, name.clone()));
+            }
+        }
         let transaction = self.conn.unchecked_transaction()?;
-        for (position, (path, name)) in order.iter().enumerate() {
+        for (position, (path, name)) in rows.iter().enumerate() {
             transaction.execute(
                 r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, position, created_at, updated_at)
                    VALUES (?1, ?2, 'filesystem', ?3, 0, ?4, datetime('now'), datetime('now'))
@@ -151,11 +217,17 @@ impl Database {
     /// 组装工作区历史列表（含 Git 仓库主工作区归位、全部 `git worktree` 子节点合并与历史命名污染自愈）。
     pub fn list_workspace_history_entries(&self) -> Result<Vec<WorkspaceHistoryEntry>> {
         let records = self.list_workspaces()?;
+        let hidden = self.hidden_workspace_paths()?;
+        let is_hidden = |path: &Path| -> bool {
+            hidden.contains(path)
+                || std::fs::canonicalize(path).is_ok_and(|canon| hidden.contains(&canon))
+        };
         let home = home_dir();
         let home_ref = home.as_deref();
 
         let mut db_names: HashMap<PathBuf, String> = HashMap::new();
         let mut record_positions: HashMap<PathBuf, i64> = HashMap::new();
+        let mut record_trusted: HashMap<PathBuf, bool> = HashMap::new();
         for record in &records {
             db_names
                 .entry(record.path.clone())
@@ -163,11 +235,21 @@ impl Database {
             record_positions
                 .entry(record.path.clone())
                 .or_insert(record.position);
+            record_trusted
+                .entry(record.path.clone())
+                .and_modify(|trusted| *trusted |= record.trusted)
+                .or_insert(record.trusted);
             if let Ok(canon) = std::fs::canonicalize(&record.path) {
                 db_names
                     .entry(canon.clone())
                     .or_insert_with(|| record.name.clone());
-                record_positions.entry(canon).or_insert(record.position);
+                record_positions
+                    .entry(canon.clone())
+                    .or_insert(record.position);
+                record_trusted
+                    .entry(canon)
+                    .and_modify(|trusted| *trusted |= record.trusted)
+                    .or_insert(record.trusted);
             }
         }
 
@@ -179,6 +261,18 @@ impl Database {
             }
             if let Some(list) = crate::git::list_worktrees(&record.path) {
                 let root = list.repo_root.clone();
+                let record_canon =
+                    std::fs::canonicalize(&record.path).unwrap_or_else(|_| record.path.clone());
+                // 只有记录路径本身是主 checkout 或某个 worktree 根时才归入 Git 树；
+                // 仓库子目录（如 `<repo>/src`）是独立工作区，不能当成 linked worktree 子项。
+                let is_checkout = record_canon == root
+                    || list.entries.iter().any(|wt| {
+                        std::fs::canonicalize(&wt.path).unwrap_or_else(|_| wt.path.clone())
+                            == record_canon
+                    });
+                if !is_checkout {
+                    continue;
+                }
                 path_to_repo.insert(record.path.clone(), root.clone());
                 path_to_repo.insert(root.clone(), root.clone());
                 for wt in &list.entries {
@@ -187,18 +281,45 @@ impl Database {
                 repo_lists.entry(root).or_insert(list);
             }
         }
-        // 已删除的历史 worktree 路径：若挂在已知 Git 仓库根路径之下，归入该仓库分组。
+        // 已删除/已 prune 的历史 worktree 路径：仅归入 Git 分组，普通仓库子目录保持顶层。
         let known_roots: Vec<PathBuf> = repo_lists.keys().cloned().collect();
+        let historical_worktrees: HashSet<PathBuf> = known_roots
+            .iter()
+            .flat_map(|root| deleted_worktree_paths(root))
+            .collect();
         for record in &records {
             if path_to_repo.contains_key(&record.path) {
                 continue;
             }
+            let record_canon =
+                std::fs::canonicalize(&record.path).unwrap_or_else(|_| record.path.clone());
             if let Some(root) = known_roots
                 .iter()
-                .filter(|root| record.path != **root && record.path.starts_with(root))
+                .filter(|root| {
+                    if record_canon == **root || !record_canon.starts_with(root) {
+                        return false;
+                    }
+                    let worktrees_dir = root.join(".worktrees");
+                    historical_worktrees.contains(&record_canon)
+                        || record_canon.parent() == Some(worktrees_dir.as_path())
+                })
                 .max_by_key(|root| root.as_os_str().len())
             {
                 path_to_repo.insert(record.path.clone(), root.clone());
+            }
+        }
+
+        let mut repo_trusted: HashMap<PathBuf, bool> = HashMap::new();
+        for record in &records {
+            if !record.trusted {
+                continue;
+            }
+            if let Some(root) = path_to_repo.get(&record.path) {
+                let record_canon =
+                    std::fs::canonicalize(&record.path).unwrap_or_else(|_| record.path.clone());
+                if record_canon == *root {
+                    repo_trusted.insert(root.clone(), true);
+                }
             }
         }
 
@@ -207,8 +328,11 @@ impl Database {
         let mut out = Vec::with_capacity(records.len());
 
         for record in &records {
+            if is_hidden(&record.path) {
+                continue;
+            }
             if let Some(repo_root) = path_to_repo.get(&record.path).cloned() {
-                if !seen_repos.insert(repo_root.clone()) {
+                if is_hidden(&repo_root) || !seen_repos.insert(repo_root.clone()) {
                     continue;
                 }
                 let Some(wt_list) = repo_lists.get(&repo_root) else {
@@ -220,17 +344,14 @@ impl Database {
                     .and_then(|entry| entry.branch.clone());
                 let default_repo_name = workspace_label(&repo_root, home_ref);
                 let is_polluted = |saved: &str| -> bool {
+                    // 仅匹配“与某个 live linked worktree 目录名相同”的旧版污染特征，
+                    // 不再扫描仓库下任意历史记录，降低误伤合法手动改名的概率。
                     saved != default_repo_name
-                        && (wt_list
+                        && wt_list
                             .entries
                             .iter()
                             .skip(1)
                             .any(|wt| workspace_label(&wt.path, home_ref) == saved)
-                            || records.iter().any(|r| {
-                                r.path != repo_root
-                                    && r.path.starts_with(&repo_root)
-                                    && workspace_label(&r.path, home_ref) == saved
-                            }))
                 };
                 let (repo_name, repo_manual) = match db_names.get(&repo_root) {
                     Some(saved) if is_polluted(saved) => {
@@ -250,6 +371,7 @@ impl Database {
                     exists: repo_root.is_dir(),
                     name_is_manual: repo_manual,
                     position: record.position,
+                    trusted: repo_trusted.get(&repo_root).copied().unwrap_or(false),
                     git: Some(WorkspaceGit {
                         repo_root: repo_root.clone(),
                         checkout_path: repo_root.clone(),
@@ -263,7 +385,7 @@ impl Database {
                 // 尚未入库的 worktree 暂排组尾（首次拖拽排序时补建记录并写回位置）。
                 let mut children: Vec<(i64, usize, WorkspaceHistoryEntry)> = Vec::new();
                 for (live_index, wt) in wt_list.entries.iter().enumerate().skip(1) {
-                    if wt.is_bare || wt.path == repo_root {
+                    if wt.is_bare || wt.path == repo_root || is_hidden(&wt.path) {
                         continue;
                     }
                     seen_paths.insert(wt.path.clone());
@@ -290,6 +412,9 @@ impl Database {
                             exists: wt.path.is_dir(),
                             name_is_manual: wt_manual,
                             position,
+                            trusted: repo_trusted.get(&repo_root).copied().unwrap_or(false)
+                                || record_trusted.get(&wt.path).copied().unwrap_or(false)
+                                || record_trusted.get(&canon).copied().unwrap_or(false),
                             git: Some(WorkspaceGit {
                                 repo_root: repo_root.clone(),
                                 checkout_path: wt.path.clone(),
@@ -305,6 +430,7 @@ impl Database {
                 for (record_index, r) in records.iter().enumerate() {
                     let canon_r = std::fs::canonicalize(&r.path).unwrap_or_else(|_| r.path.clone());
                     if path_to_repo.get(&r.path) == Some(&repo_root)
+                        && !is_hidden(&r.path)
                         && !seen_paths.contains(&r.path)
                         && !seen_paths.contains(&canon_r)
                     {
@@ -320,6 +446,9 @@ impl Database {
                                 exists: r.path.is_dir(),
                                 name_is_manual: wt_manual,
                                 position: r.position,
+                                trusted: repo_trusted.get(&repo_root).copied().unwrap_or(false)
+                                    || record_trusted.get(&r.path).copied().unwrap_or(false)
+                                    || record_trusted.get(&canon_r).copied().unwrap_or(false),
                                 git: Some(WorkspaceGit {
                                     repo_root: repo_root.clone(),
                                     checkout_path: r.path.clone(),
@@ -349,6 +478,7 @@ impl Database {
                     exists: record.path.is_dir(),
                     name_is_manual,
                     position: record.position,
+                    trusted: record.trusted,
                     git: None,
                 });
             }
@@ -359,24 +489,125 @@ impl Database {
     /// 删除指定路径的工作区行；外键 `ON DELETE CASCADE` 自动级联删除该工作区下的
     /// 文件夹、提示词、分页、引用目录与全部聊天会话及子表数据。
     pub fn delete_workspace(&self, path: &Path) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM workspace WHERE path = ?1",
-            params![path_string(path)],
-        )?;
+        // 旧库可能因尾斜杠/符号链接/`..` 留下同一目录的多行文本；按 canonical 等价全部清理，
+        // 避免只删到其中一行、历史列表仍从另一行复活。
+        let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let mut statement = self
+            .conn
+            .prepare("SELECT path FROM workspace WHERE path IS NOT NULL AND path != ''")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut keys = Vec::new();
+        for saved in rows {
+            let saved = PathBuf::from(saved?);
+            if saved == path || std::fs::canonicalize(&saved).is_ok_and(|c| c == target) {
+                keys.push(saved);
+            }
+        }
+        drop(statement);
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let transaction = self.conn.unchecked_transaction()?;
+        for key in keys {
+            transaction.execute(
+                "DELETE FROM workspace WHERE path = ?1",
+                params![path_string(&key)],
+            )?;
+        }
+        transaction.commit()?;
         Ok(())
     }
 
     /// 工作区外部标识；未登记时 None。
     pub(crate) fn workspace_external_id(&self, path: &Path) -> Result<Option<String>> {
+        let Some(row_path) = self.workspace_row_path(path)? else {
+            return Ok(None);
+        };
         Ok(self
             .conn
             .query_row(
                 "SELECT external_id FROM workspace WHERE path = ?1",
-                params![path_string(path)],
+                params![path_string(&row_path)],
                 |row| row.get(0),
             )
             .optional()?)
     }
+
+    /// 持久化隐藏路径：删除仍存在于磁盘的 worktree 后，避免 Git 自动扫描在重启后复活。
+    pub fn hide_workspace(&self, path: &Path) -> Result<()> {
+        let key = self
+            .workspace_row_path(path)?
+            .unwrap_or_else(|| path.to_path_buf());
+        self.conn.execute(
+            r#"INSERT INTO workspace_hidden (path, hidden_at)
+               VALUES (?1, datetime('now'))
+               ON CONFLICT(path) DO UPDATE SET hidden_at = datetime('now')"#,
+            params![path_string(&key)],
+        )?;
+        Ok(())
+    }
+
+    /// 解除隐藏：显式登记/打开该路径时调用；同时清理 canonical 等价文本。
+    pub fn unhide_workspace(&self, path: &Path) -> Result<()> {
+        for key in self.matching_hidden_paths(path)? {
+            self.conn.execute(
+                "DELETE FROM workspace_hidden WHERE path = ?1",
+                params![path_string(&key)],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// 全部隐藏路径（原始文本）。
+    pub fn hidden_workspace_paths(&self) -> Result<HashSet<PathBuf>> {
+        let mut statement = self.conn.prepare("SELECT path FROM workspace_hidden")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut out = HashSet::new();
+        for saved in rows {
+            let path = PathBuf::from(saved?);
+            if let Ok(canon) = std::fs::canonicalize(&path) {
+                out.insert(canon);
+            }
+            out.insert(path);
+        }
+        Ok(out)
+    }
+
+    /// 与 `path` 指向同一目录的隐藏行（精确 + canonical 等价）。
+    fn matching_hidden_paths(&self, path: &Path) -> Result<Vec<PathBuf>> {
+        let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let mut statement = self.conn.prepare("SELECT path FROM workspace_hidden")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for saved in rows {
+            let saved = PathBuf::from(saved?);
+            if saved == path || std::fs::canonicalize(&saved).is_ok_and(|c| c == target) {
+                out.push(saved);
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// 扫描 `.git/worktrees/*/gitdir`，返回仍保留管理记录的 worktree 根路径。
+///
+/// 目录被删除但尚未 `git worktree prune` 时，`git worktree list` 仍会列出它；
+/// 已 prune 的记录只能靠调用方保留的历史路径判断。普通仓库子目录不会出现在这里。
+fn deleted_worktree_paths(repo_root: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let Ok(entries) = std::fs::read_dir(repo_root.join(".git").join("worktrees")) else {
+        return paths;
+    };
+    for entry in entries.flatten() {
+        let Ok(text) = std::fs::read_to_string(entry.path().join("gitdir")) else {
+            continue;
+        };
+        let Some(parent) = Path::new(text.trim()).parent() else {
+            continue;
+        };
+        paths.push(std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf()));
+    }
+    paths
 }
 
 #[cfg(test)]
@@ -557,11 +788,13 @@ mod tests {
         assert_eq!(entries[0].path, canon_repo);
         assert_eq!(entries[0].name, "lx-tui");
         assert!(!entries[0].name_is_manual);
+        assert!(entries[0].trusted, "主仓库行已信任");
         assert!(entries[0].git.as_ref().is_some_and(|g| !g.is_linked));
 
         // 实时扫描到的 git worktree 子节点：
         assert_eq!(entries[1].path, canon_wt1);
         assert!(entries[1].exists);
+        assert!(entries[1].trusted, "仓库根已信任时子 worktree 视为已信任");
         assert!(entries[1].git.as_ref().is_some_and(|g| g.is_linked));
         assert_eq!(
             entries[1].display_label(true),
@@ -637,5 +870,109 @@ mod tests {
             !db.is_trusted(&worktree).expect("trust query"),
             "历史列表补建的 worktree 行不得隐式授予信任"
         );
+    }
+}
+
+#[cfg(test)]
+mod canonical_tests {
+    use super::super::*;
+
+    #[test]
+    fn workspace_rows_resolve_canonical_equivalent_paths() {
+        let base = std::env::temp_dir().join(format!("lx-ws-canonical-{}", std::process::id()));
+        let real = base.join("real");
+        std::fs::create_dir_all(&real).expect("create real dir");
+        let non_canonical = real.join("..").join("real");
+        let db = Database::open_in_memory().expect("in-memory db");
+
+        db.record_workspace_open(&non_canonical, "real")
+            .expect("record");
+        db.trust_workspace(&real, "real").expect("trust canonical");
+        assert!(
+            db.is_trusted(&non_canonical).expect("trust query"),
+            "canonical 等价路径必须命中同一行"
+        );
+        db.rename_workspace(&real, "renamed")
+            .expect("rename canonical");
+        let list = db.list_workspaces().expect("list");
+        assert_eq!(list.len(), 1, "不得为同一目录插入第二行");
+        assert_eq!(list[0].path, non_canonical);
+        assert_eq!(list[0].name, "renamed");
+
+        db.delete_workspace(&real).expect("delete canonical");
+        assert!(db.list_workspaces().expect("list").is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn repo_subdirectory_stays_top_level_in_history() {
+        use std::process::Command;
+
+        if !Command::new("git")
+            .arg("--version")
+            .output()
+            .is_ok_and(|out| out.status.success())
+        {
+            return;
+        }
+        let base = std::env::temp_dir().join(format!("lx-ws-subdir-{}", std::process::id()));
+        let repo = base.join("repo");
+        let src = repo.join("src");
+        std::fs::create_dir_all(&src).expect("create src");
+        let run_git = |args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .expect("run git");
+            assert!(out.status.success());
+        };
+        run_git(&["init", "--quiet", "-b", "dev"]);
+        run_git(&[
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "init",
+        ]);
+
+        let canon_repo = std::fs::canonicalize(&repo).expect("canon repo");
+        let canon_src = std::fs::canonicalize(&src).expect("canon src");
+        let db = Database::open_in_memory().expect("in-memory db");
+        db.record_workspace_open(&canon_repo, "repo")
+            .expect("record repo");
+        db.record_workspace_open(&canon_src, "src")
+            .expect("record src");
+
+        let entries = db.list_workspace_history_entries().expect("entries");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].path, canon_repo);
+        assert!(entries[0].git.as_ref().is_some_and(|git| !git.is_linked));
+        assert_eq!(entries[1].path, canon_src);
+        assert!(
+            entries[1].git.is_none(),
+            "仓库子目录不能伪装成 linked worktree"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod hidden_tests {
+    use super::super::*;
+
+    #[test]
+    fn hidden_workspace_paths_persist_until_unhidden() {
+        let db = Database::open_in_memory().expect("in-memory db");
+        let path = std::path::PathBuf::from("/tmp/lx-hidden-worktree");
+        db.hide_workspace(&path).expect("hide");
+        assert!(db.hidden_workspace_paths().expect("hidden").contains(&path));
+        db.unhide_workspace(&path).expect("unhide");
+        assert!(db.hidden_workspace_paths().expect("hidden").is_empty());
     }
 }
