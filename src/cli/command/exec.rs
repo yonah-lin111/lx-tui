@@ -30,9 +30,15 @@ pub fn run(
 }
 
 fn is_trusted(ctx: &WorkspaceContext) -> Result<bool, String> {
-    ctx.open_db()?
-        .is_trusted(&ctx.workspace)
-        .map_err(|error| error.code().to_string())
+    let db = ctx.open_db()?;
+    Ok(ctx.is_trusted(&db))
+}
+
+fn ensure_single_line(field: &str, value: &str) -> Result<(), String> {
+    if value.contains('\n') || value.contains('\r') {
+        return Err(format!("{field} must not contain line breaks"));
+    }
+    Ok(())
 }
 
 fn user_root() -> Result<PathBuf, String> {
@@ -123,14 +129,19 @@ fn run_list(
     scope: ListScopeArg,
     kind: Option<CommandKind>,
 ) -> Result<(), String> {
-    let user = commands::list(CommandScope::User, &user_root()?).0;
-    let project = if trusted {
+    let mut user = commands::list(CommandScope::User, &user_root()?).0;
+    let mut project = if trusted {
         commands::list(CommandScope::Project, &ctx.workspace).0
     } else {
         Vec::new()
     };
+    // 先按 kind 过滤再合并：项目同名异类型命令不应吞掉用户级目标类型。
+    if let Some(kind) = kind {
+        user.retain(|record| record.kind == kind);
+        project.retain(|record| record.kind == kind);
+    }
     let mut overridden: HashSet<String> = HashSet::new();
-    let mut records: Vec<(CommandRecord, CommandScope)> = match scope {
+    let records: Vec<(CommandRecord, CommandScope)> = match scope {
         ListScopeArg::User => user
             .into_iter()
             .map(|record| (record, CommandScope::User))
@@ -157,9 +168,6 @@ fn run_list(
                 .collect()
         }
     };
-    if let Some(kind) = kind {
-        records.retain(|(record, _)| record.kind == kind);
-    }
     let (mut rows, mut values) = (Vec::new(), Vec::new());
     for (record, record_scope) in &records {
         rows.push(vec![
@@ -174,7 +182,7 @@ fn run_list(
             }
             .into(),
         ]);
-        values.push(json!({"name": record.name, "kind": record.kind.as_str(), "scope": record_scope.as_str(), "description": record.description, "path": record.path, "overridden": overridden.contains(&record.name)}));
+        values.push(json!({"name": record.name, "kind": record.kind.as_str(), "scope": record_scope.as_str(), "description": record.description, "mdScope": record.scope.as_str(), "title": record.title, "blockType": record.block.as_str(), "path": record.path, "overridden": overridden.contains(&record.name)}));
     }
     out.emit(
         &json!({"trusted": trusted, "commands": values}),
@@ -232,6 +240,10 @@ fn run_create(
     }
     let scope = to_command_scope(args.scope);
     let root = scope_root(scope, ctx)?;
+    ensure_single_line("description", &args.description)?;
+    if let Some(title) = &args.title {
+        ensure_single_line("title", title)?;
+    }
     let (md_scope, block) = match args.kind {
         CommandKind::AgentMd => (
             args.md_scope.unwrap_or(MdScope::Global),
@@ -239,13 +251,17 @@ fn run_create(
         ),
         CommandKind::AgentBlock => (MdScope::Template, args.block.unwrap_or(BlockType::Template)),
     };
+    let body = args.content.resolve(false)?.unwrap_or_default();
+    if body.trim().is_empty() {
+        return Err("command content cannot be empty".into());
+    }
     let record = CommandRecord {
         name: args.name.clone(),
         scope: md_scope,
         description: args.description.clone(),
         argument_hint: args.arg_hint.clone(),
         title: args.title.clone(),
-        body: args.content.resolve(false)?.unwrap_or_default(),
+        body,
         kind: args.kind,
         block,
         path: command_path(scope, &root, args.kind, &args.name),
@@ -274,12 +290,15 @@ fn run_edit(
         return Err("'--md-scope' applies only to agentMD commands".into());
     }
     if let Some(description) = &args.description {
+        ensure_single_line("description", description)?;
         record.description = description.clone();
     }
     if let Some(hint) = &args.arg_hint {
+        ensure_single_line("argument hint", hint)?;
         record.argument_hint = Some(hint.clone());
     }
     if let Some(title) = &args.title {
+        ensure_single_line("title", title)?;
         record.title = Some(title.clone());
     }
     match (record.kind, args.md_scope, args.block) {
@@ -289,6 +308,9 @@ fn run_edit(
     }
     if let Some(body) = args.content.resolve(false)? {
         record.body = body;
+    }
+    if record.body.trim().is_empty() {
+        return Err("command content cannot be empty".into());
     }
     commands::save(scope, &scope_root(scope, ctx)?, &record, true)
         .map_err(|error| error.to_string())?;

@@ -2,6 +2,7 @@
 
 mod args_and_help_tests;
 mod config_domains_tests;
+mod config_regressions_tests;
 mod prompt_and_todo_tests;
 mod session_tests;
 
@@ -77,6 +78,39 @@ impl CliTestEnv {
         run_cli(action, None).map_err(|e| e.to_string())
     }
 
+    pub fn home(&self) -> PathBuf {
+        self.root.join("home")
+    }
+
+    /// 在子进程中执行 CLI 并捕获 stdout（用于断言 `--json` 输出内容）。
+    ///
+    /// 进程级 stdout 无法在并行测试线程内安全重定向，因此复用当前测试二进制，
+    /// 通过 `#[ignore]` 的 `cli_capture_child` 入口执行真实 CLI。
+    pub fn exec_captured(&self, args: &[&str]) -> Result<String, String> {
+        let exe = std::env::current_exe()
+            .map_err(|error| format!("failed to locate test binary: {error}"))?;
+        let output = std::process::Command::new(exe)
+            .args([
+                "--ignored",
+                "--exact",
+                "cli::tests::cli_capture_child",
+                "--nocapture",
+            ])
+            .env("LX_CLI_TEST_ARGS", args.join("\u{1f}"))
+            .env("HOME", self.home())
+            .env("LX_TUI_ENV", "dev")
+            .env("LX_TUI_DB_PATH", &self.db_path)
+            .output()
+            .map_err(|error| format!("failed to spawn CLI capture child: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "CLI capture child failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
     pub fn workspace_str(&self) -> &str {
         self.workspace.to_str().expect("utf8 workspace path")
     }
@@ -113,4 +147,18 @@ pub(super) fn assert_exit_ok(res: Result<i32, String>) {
 
 pub(super) fn path_str(path: &Path) -> &str {
     path.to_str().expect("utf8 path")
+}
+
+/// `exec_captured` 的子进程入口：仅在被显式调用时执行参数中的真实 CLI。
+#[test]
+#[ignore = "invoked as a subprocess by CliTestEnv::exec_captured"]
+fn cli_capture_child() {
+    let Some(raw) = std::env::var_os("LX_CLI_TEST_ARGS") else {
+        return;
+    };
+    let raw = raw.to_string_lossy();
+    let mut full = vec!["lx-tui".to_string()];
+    full.extend(raw.split('\u{1f}').map(str::to_string));
+    let action = parse_cli(full).expect("parse captured CLI");
+    run_cli(action, None).expect("run captured CLI");
 }

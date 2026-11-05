@@ -323,5 +323,29 @@ fn parse_config(args: &[String]) -> Result<ConfigArgs, String> {
     Ok(parsed)
 }
 
+fn mask_opt(value: Option<&str>) -> String {
+    match value {
+        Some(raw) if !raw.trim().is_empty() => mask_secret(raw),
+        _ => "-".to_string(),
+    }
+}
+
+fn transport_label(provider: &ProviderConfig, model: &ModelConfig) -> &'static str {
+    model
+        .transport
+        .map(ModelTransport::as_str)
+        .unwrap_or_else(|| provider.kind.as_str())
+}
+
+fn format_selection(selection: Option<&ModelSelection>) -> String {
+    match selection {
+        Some(sel) => match &sel.variant {
+            Some(variant) => format!("{}/{}#{variant}", sel.provider, sel.model),
+            None => format!("{}/{}", sel.provider, sel.model),
+        },
+        None => "(none)".to_string(),
+    }
+}
+
 mod exec;
 pub use exec::run;

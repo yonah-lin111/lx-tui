@@ -83,6 +83,10 @@ pub fn user_skills_root() -> Result<PathBuf, SkillsConfigError> {
 
 /// 用户级 `.agents` skill 根：`~/.agents/skills/`。
 pub fn user_agents_skills_root() -> Result<PathBuf, SkillsConfigError> {
+    #[cfg(test)]
+    if let Some(home) = crate::platform::test_home_override() {
+        return Ok(home.join(".agents").join("skills"));
+    }
     let home = std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)

@@ -2,6 +2,9 @@
 
 use super::*;
 
+mod list;
+use list::run as list;
+
 pub fn run(
     cli: WorkspaceCli,
     linked_worktree: Option<&Path>,
@@ -28,174 +31,29 @@ pub fn run(
     Ok(EXIT_OK)
 }
 
-fn list(db: &Database, raw: bool, search: Option<&str>, out: &Output) -> Result<(), String> {
-    if raw {
-        let records = db
-            .list_workspaces()
-            .map_err(|e| format!("failed to list workspaces: {}", e.code()))?;
-        let records = records
-            .into_iter()
-            .filter(|r| matches_search(&r.name, &r.path, search))
-            .collect::<Vec<_>>();
-        let rows = records.iter().map(|r| json!({ "name": r.name, "path": r.path, "position": r.position, "trusted": r.trusted })).collect::<Vec<_>>();
-        let value = json!({ "raw": true, "workspaces": &rows });
-        return out.emit(&value, |out, writer| {
-            let table = rows
-                .iter()
-                .map(|r| {
-                    vec![
-                        r["name"].as_str().unwrap_or("-").to_string(),
-                        r["path"].as_str().unwrap_or("-").to_string(),
-                        r["position"].to_string(),
-                        r["trusted"].to_string(),
-                    ]
-                })
-                .collect::<Vec<_>>();
-            out.print_table(writer, &["NAME", "PATH", "POSITION", "TRUSTED"], &table)
-        });
-    }
-    let entries = db
-        .list_workspace_history_entries()
-        .map_err(|e| format!("failed to list workspace history: {}", e.code()))?;
-    let entries = entries
-        .into_iter()
-        .filter(|entry| {
-            matches_search(&entry.name, &entry.path, search)
-                || entry.git.as_ref().is_some_and(|g| {
-                    matches_search("", &g.repo_root, search)
-                        || g.branch.as_deref().is_some_and(|b| {
-                            search.is_some_and(|q| b.to_lowercase().contains(&q.to_lowercase()))
-                        })
-                })
-        })
-        .collect::<Vec<_>>();
-    let rows = entries.iter().map(|e| json!({
-        "name": e.name, "display_name": e.display_label(false), "path": e.path, "exists": e.exists,
-        "name_is_manual": e.name_is_manual, "position": e.position, "trusted": e.trusted,
-        "git": e.git.as_ref().map(|g| json!({ "repo_root": g.repo_root, "checkout_path": g.checkout_path, "is_linked": g.is_linked, "branch": g.branch, "main_branch": g.main_branch })),
-    })).collect::<Vec<_>>();
-    let value = json!({ "raw": false, "workspaces": &rows });
-    out.emit(&value, |out, writer| {
-        if entries.is_empty() {
-            return writeln!(writer, "{}", out.muted("No workspaces found."));
-        }
-        out.print_table(
-            writer,
-            &[
-                "WORKSPACE",
-                "PATH",
-                "BRANCH",
-                "EXISTS",
-                "TRUSTED",
-                "POSITION",
-            ],
-            &history_rows(&entries),
-        )
-    })
-}
-
-fn matches_search(name: &str, path: &Path, search: Option<&str>) -> bool {
-    let Some(query) = search else { return true };
-    let query = query.to_lowercase();
-    name.to_lowercase().contains(&query) || path.to_string_lossy().to_lowercase().contains(&query)
-}
-
-/// 历史列表树形排版：Git 主 checkout 父项 + linked worktree 子项。
-fn history_rows(entries: &[crate::app::state::WorkspaceHistoryEntry]) -> Vec<Vec<String>> {
-    let mut groups: Vec<(PathBuf, Vec<usize>)> = Vec::new();
-    for (index, entry) in entries.iter().enumerate() {
-        let key = entry
-            .git
-            .as_ref()
-            .map(|g| g.repo_root.clone())
-            .unwrap_or_else(|| entry.path.clone());
-        match groups.iter().position(|(existing, _)| *existing == key) {
-            Some(group) => groups[group].1.push(index),
-            None => groups.push((key, vec![index])),
-        }
-    }
-    let mut rows = Vec::new();
-    for (repo_root, indices) in groups {
-        let parent = entries
-            .iter()
-            .position(|e| e.path == repo_root)
-            .filter(|i| indices.contains(i));
-        let mut children: Vec<usize> = indices.into_iter().filter(|i| Some(*i) != parent).collect();
-        if let Some(parent) = parent {
-            rows.push(entry_row(&entries[parent], None));
-            let count = children.len();
-            for (position, index) in children.drain(..).enumerate() {
-                rows.push(entry_row(
-                    &entries[index],
-                    Some(if position + 1 == count {
-                        "└─ "
-                    } else {
-                        "├─ "
-                    }),
-                ));
-            }
-        } else {
-            rows.extend(
-                children
-                    .into_iter()
-                    .map(|index| entry_row(&entries[index], None)),
-            );
-        }
-    }
-    rows
-}
-fn entry_row(
-    entry: &crate::app::state::WorkspaceHistoryEntry,
-    connector: Option<&str>,
-) -> Vec<String> {
-    let label = match connector {
-        Some(prefix) => format!("{prefix}{}", entry.display_label(true)),
-        None => entry.name.clone(),
-    };
-    let branch = entry
-        .git
-        .as_ref()
-        .and_then(|g| g.short_branch())
-        .unwrap_or("-")
-        .to_string();
-    vec![
-        label,
-        entry.path.display().to_string(),
-        branch,
-        entry.exists.to_string(),
-        entry.trusted.to_string(),
-        entry.position.to_string(),
-    ]
-}
 fn status(ctx: &WorkspaceContext, db: &Database, out: &Output) -> Result<(), String> {
+    let target = ctx.checkout_path();
     let records = db
         .list_workspaces()
         .map_err(|e| format!("failed to list workspaces: {}", e.code()))?;
-    let record = find_record(&records, &ctx.workspace);
+    let record = find_record(&records, &target).or_else(|| find_record(&records, &ctx.workspace));
     let hidden = db
         .hidden_workspace_paths()
         .map_err(|e| format!("failed to read hidden workspaces: {}", e.code()))?;
-    let hidden = is_hidden(&hidden, &ctx.workspace);
-    let trusted = record
-        .map(|r| r.trusted)
-        .unwrap_or_else(|| db.is_trusted(&ctx.workspace).unwrap_or(false));
+    let hidden = is_hidden(&hidden, &target);
+    let trusted = ctx.is_trusted(db);
     let git =
         crate::git::list_worktrees(&ctx.cwd).and_then(|list| crate::git::checkout(&list, &ctx.cwd));
     let db_path = database_file(ctx)?;
     let value = json!({
-        "path": ctx.workspace, "cwd": ctx.cwd, "name": record.map(|r| r.name.clone()),
+        "path": target, "cwd": ctx.cwd, "name": record.map(|r| r.name.clone()),
         "position": record.map(|r| r.position), "trusted": trusted, "hidden": hidden,
-        "exists": ctx.workspace.is_dir(),
+        "exists": target.is_dir(),
         "git": git.as_ref().map(|c| json!({ "repo_root": c.repo_root, "checkout_path": c.checkout_path, "is_linked": c.is_linked, "branch": c.branch, "main_branch": c.main_branch })),
         "database": db_path,
     });
     out.emit(&value, |out, writer| {
-        writeln!(
-            writer,
-            "{} {}",
-            out.bold("Workspace:"),
-            ctx.workspace.display()
-        )?;
+        writeln!(writer, "{} {}", out.bold("Workspace:"), target.display())?;
         writeln!(
             writer,
             "{} {}",
@@ -204,7 +62,7 @@ fn status(ctx: &WorkspaceContext, db: &Database, out: &Output) -> Result<(), Str
         )?;
         writeln!(writer, "{} {}", out.bold("Trusted:"), trusted)?;
         writeln!(writer, "{} {}", out.bold("Hidden:"), hidden)?;
-        writeln!(writer, "{} {}", out.bold("Exists:"), ctx.workspace.is_dir())?;
+        writeln!(writer, "{} {}", out.bold("Exists:"), target.is_dir())?;
         match &git {
             Some(c) => {
                 writeln!(
@@ -235,6 +93,12 @@ fn add(
     out: &Output,
 ) -> Result<(), String> {
     let target = resolve_path(ctx, dir);
+    if !target.is_dir() {
+        return Err(format!(
+            "workspace path '{}' does not exist or is not a directory",
+            target.display()
+        ));
+    }
     let default_name = name
         .map(str::to_string)
         .or_else(|| file_name(&target))
@@ -248,7 +112,8 @@ fn add(
         db.trust_workspace(&target, &saved)
             .map_err(|e| format!("failed to trust workspace: {}", e.code()))?;
     }
-    let value = json!({ "added": true, "path": target, "name": saved, "trusted": trust });
+    let trusted = db.is_trusted(&target).unwrap_or(trust);
+    let value = json!({ "added": true, "path": target, "name": saved, "trusted": trusted });
     out.emit(&value, |out, writer| {
         writeln!(
             writer,
@@ -256,7 +121,7 @@ fn add(
             out.green("OK"),
             target.display(),
             saved,
-            if trust { " (trusted)" } else { "" }
+            if trusted { " (trusted)" } else { "" }
         )
     })
 }
@@ -269,12 +134,13 @@ fn rename(
     let records = db
         .list_workspaces()
         .map_err(|e| format!("failed to list workspaces: {}", e.code()))?;
-    // 已登记的 linked worktree 优先重命名 cwd；否则重命名仓库主工作区。
-    let target = if ctx.cwd != ctx.workspace && find_record(&records, &ctx.cwd).is_some() {
-        ctx.cwd.clone()
-    } else {
-        ctx.workspace.clone()
-    };
+    let target = resolve_path(ctx, None);
+    if find_record(&records, &target).is_none() {
+        return Err(format!(
+            "workspace '{}' is not registered in the history list",
+            target.display()
+        ));
+    }
     db.rename_workspace(&target, new_name)
         .map_err(|e| format!("failed to rename workspace: {}", e.code()))?;
     let value = json!({ "renamed": true, "path": target, "name": new_name });
@@ -300,18 +166,27 @@ fn delete(
         .list_workspaces()
         .map_err(|e| format!("failed to list workspaces: {}", e.code()))?;
     if find_record(&records, &target).is_none() {
-        return Err(format!(
-            "workspace '{}' is not registered in the history list",
-            target.display()
-        ));
+        let history = db
+            .list_workspace_history_entries()
+            .map_err(|e| format!("failed to list workspace history: {}", e.code()))?;
+        if !history.iter().any(|entry| same_path(&entry.path, &target)) {
+            return Err(format!(
+                "workspace '{}' is not registered in the history list",
+                target.display()
+            ));
+        }
     }
+    // 只有 target 本身是主 checkout 时才展开同仓库 linked worktree；
+    // 仓库子目录或 linked worktree 绝不能把主仓库/兄弟 worktree 带上。
+    let is_main_root =
+        crate::git::list_worktrees(&target).is_some_and(|list| list.repo_root == target);
     let mut targets = vec![target.clone()];
-    if include_worktrees && !target.join(".git").is_file() {
-        targets.extend(linked_worktrees(&target, &records));
+    if include_worktrees || is_main_root {
+        targets.extend(linked_worktrees(db, &target)?);
     }
     let (mut deleted, mut hidden) = (Vec::new(), Vec::new());
     for candidate in targets {
-        let _guards = ensure_no_active_sessions(db, &candidate)?;
+        let (guards, sessions) = lock_workspace_sessions(db, &candidate)?;
         if candidate.join(".git").is_file() {
             db.hide_workspace(&candidate)
                 .map_err(|e| format!("failed to hide workspace: {}", e.code()))?;
@@ -319,6 +194,10 @@ fn delete(
         }
         db.delete_workspace(&candidate)
             .map_err(|e| format!("failed to delete workspace: {}", e.code()))?;
+        for session in &sessions {
+            crate::platform::remove_session_images(session);
+        }
+        drop(guards);
         deleted.push(candidate);
     }
     let value = json!({ "deleted": true, "workspaces": &deleted, "hidden": &hidden, "include_worktrees": include_worktrees });
@@ -336,34 +215,71 @@ fn delete(
 }
 
 /// 同仓库下需要一并清理的 linked worktree（当前存在的 + DB 里仍留存的）。
-fn linked_worktrees(target: &Path, records: &[WorkspaceRecord]) -> Vec<PathBuf> {
-    let mut candidates: Vec<PathBuf> = crate::git::list_worktrees(target)
-        .map(|list| {
-            list.entries
-                .into_iter()
-                .map(|entry| entry.path)
-                .filter(|path| path != target)
-                .collect()
-        })
-        .unwrap_or_default();
+fn linked_worktrees(db: &Database, target: &Path) -> Result<Vec<PathBuf>, String> {
+    let Some(list) = crate::git::list_worktrees(target) else {
+        return Ok(Vec::new());
+    };
+    if list.repo_root != target {
+        return Ok(Vec::new());
+    }
+    let mut candidates: Vec<PathBuf> = list
+        .entries
+        .iter()
+        .filter(|entry| entry.path != list.repo_root)
+        .map(|entry| entry.path.clone())
+        .collect();
+    let records = db
+        .list_workspaces()
+        .map_err(|e| format!("failed to list workspaces: {}", e.code()))?;
     for record in records {
-        if record.path.as_path() != target
-            && record.path.starts_with(target)
-            && record.path.join(".git").is_file()
-        {
-            candidates.push(record.path.clone());
+        if record.path != target && gitdir_points_into(&record.path, target) {
+            candidates.push(record.path);
         }
     }
     let mut seen = HashSet::new();
-    candidates
+    Ok(candidates
         .into_iter()
         .filter(|path| seen.insert(path.clone()))
-        .collect()
+        .collect())
 }
 
-/// 目标工作区存在运行中的会话时拒绝删除；返回的 guard 必须活到删除完成。
-fn ensure_no_active_sessions(db: &Database, workspace: &Path) -> Result<Vec<FileGuard>, String> {
+/// `.git` 文件的 `gitdir:` 是否指向 `repo_root/.git/worktrees/`（排除嵌套子模块）。
+fn gitdir_points_into(worktree: &Path, repo_root: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(worktree.join(".git")) else {
+        return false;
+    };
+    let Some(raw) = text
+        .lines()
+        .find_map(|line| line.strip_prefix("gitdir:").map(str::trim))
+    else {
+        return false;
+    };
+    let path = Path::new(raw);
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        worktree.join(path)
+    };
+    let resolved = std::fs::canonicalize(&resolved).unwrap_or(resolved);
+    let expected = repo_root.join(".git").join("worktrees");
+    let expected = std::fs::canonicalize(&expected).unwrap_or(expected);
+    resolved.starts_with(expected)
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    left == right
+        || std::fs::canonicalize(left)
+            .is_ok_and(|left| std::fs::canonicalize(right).is_ok_and(|right| left == right))
+}
+
+/// 目标工作区存在运行中的会话时拒绝删除；返回的 guard 必须活到删除完成，
+/// 同时返回该工作区全部会话 ID 供删除后清理图片。
+fn lock_workspace_sessions(
+    db: &Database,
+    workspace: &Path,
+) -> Result<(Vec<FileGuard>, Vec<String>), String> {
     let mut guards = Vec::new();
+    let mut session_ids = Vec::new();
     let mut offset = 0;
     loop {
         let sessions = db
@@ -390,13 +306,14 @@ fn ensure_no_active_sessions(db: &Database, workspace: &Path) -> Result<Vec<File
                     ));
                 }
             }
+            session_ids.push(session.external_id.clone());
         }
         if count < 200 {
             break;
         }
         offset += count;
     }
-    Ok(guards)
+    Ok((guards, session_ids))
 }
 fn reorder(
     ctx: &WorkspaceContext,
@@ -407,17 +324,25 @@ fn reorder(
     let records = db
         .list_workspaces()
         .map_err(|e| format!("failed to list workspaces: {}", e.code()))?;
-    let order = paths
-        .iter()
-        .map(|path| {
-            let resolved = resolve_path(ctx, Some(path.as_path()));
-            let name = find_record(&records, &resolved)
-                .map(|r| r.name.clone())
-                .or_else(|| file_name(&resolved))
-                .unwrap_or_else(|| "workspace".to_string());
-            (resolved, name)
-        })
-        .collect::<Vec<_>>();
+    let mut order: Vec<(PathBuf, String)> = Vec::new();
+    for path in paths {
+        let resolved = resolve_path(ctx, Some(path.as_path()));
+        let Some(record) = find_record(&records, &resolved) else {
+            return Err(format!(
+                "workspace '{}' is not registered in the history list",
+                resolved.display()
+            ));
+        };
+        if !order.iter().any(|(existing, _)| existing == &record.path) {
+            order.push((record.path.clone(), record.name.clone()));
+        }
+    }
+    // 未显式列出的工作区保持当前相对顺序追加，避免 position 重复或记录丢失。
+    for record in &records {
+        if !order.iter().any(|(existing, _)| existing == &record.path) {
+            order.push((record.path.clone(), record.name.clone()));
+        }
+    }
     db.save_workspace_order(&order)
         .map_err(|e| format!("failed to save workspace order: {}", e.code()))?;
     let value = json!({ "reordered": true, "workspaces": order.iter().map(|(path, name)| json!({ "path": path, "name": name })).collect::<Vec<_>>() });
@@ -435,7 +360,7 @@ fn trust(
     name: Option<&str>,
     out: &Output,
 ) -> Result<(), String> {
-    let target = ctx.workspace.clone();
+    let target = ctx.checkout_path();
     let name = name
         .map(str::to_string)
         .or_else(|| file_name(&target))
@@ -457,15 +382,16 @@ fn trust(
 fn worktrees(ctx: &WorkspaceContext, out: &Output) -> Result<(), String> {
     let list = crate::git::list_worktrees(&ctx.cwd)
         .ok_or_else(|| format!("'{}' is not inside a Git repository", ctx.cwd.display()))?;
-    let current = std::fs::canonicalize(&ctx.cwd).unwrap_or_else(|_| ctx.cwd.clone());
+    let current_checkout = crate::git::checkout(&list, &ctx.cwd).map(|c| c.checkout_path);
     let rows = list
         .entries
         .iter()
         .enumerate()
         .map(|(index, entry)| {
             json!({
-                "path": entry.path, "branch": entry.branch, "bare": entry.is_bare,
-                "main": index == 0, "current": current.starts_with(&entry.path),
+                "path": entry.path, "branch": entry.branch, "head": short_head(&entry.path),
+                "bare": entry.is_bare, "main": index == 0,
+                "current": current_checkout.as_deref() == Some(entry.path.as_path()),
             })
         })
         .collect::<Vec<_>>();
@@ -477,6 +403,7 @@ fn worktrees(ctx: &WorkspaceContext, out: &Output) -> Result<(), String> {
                 vec![
                     row["path"].as_str().unwrap_or("-").to_string(),
                     row["branch"].as_str().unwrap_or("-").to_string(),
+                    row["head"].as_str().unwrap_or("-").to_string(),
                     row["bare"].to_string(),
                     row["main"].to_string(),
                     row["current"].to_string(),
@@ -485,17 +412,31 @@ fn worktrees(ctx: &WorkspaceContext, out: &Output) -> Result<(), String> {
             .collect::<Vec<_>>();
         out.print_table(
             writer,
-            &["PATH", "BRANCH", "BARE", "MAIN", "CURRENT"],
+            &["PATH", "BRANCH", "HEAD", "BARE", "MAIN", "CURRENT"],
             &table,
         )
     })
+}
+
+fn short_head(path: &Path) -> String {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|sha| sha.trim().to_string())
+        .filter(|sha| !sha.is_empty())
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn resolve_path(ctx: &WorkspaceContext, path: Option<&Path>) -> PathBuf {
     let target = match path {
         Some(path) if path.is_absolute() => path.to_path_buf(),
         Some(path) => ctx.cwd.join(path),
-        None => ctx.workspace.clone(),
+        None => ctx.checkout_path(),
     };
     std::fs::canonicalize(&target).unwrap_or(target)
 }

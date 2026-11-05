@@ -205,6 +205,99 @@ fn session_rewind_dry_run_delete_only_and_compact_revert_work() {
 }
 
 #[test]
+fn session_list_rejects_zero_limit_and_rename_last_requires_title_for_session_ids() {
+    let env = CliTestEnv::new("session-limit-rename");
+    let (session_id, _, _) = seed_completed_turn(&env, None, "Question", "Answer");
+
+    let err = env
+        .exec(&["session", "list", "--limit", "0"])
+        .expect_err("zero limit must be rejected");
+    assert!(err.contains("at least 1"), "unexpected error: {err}");
+    let err = env
+        .exec(&["session", "list", "--limit=0"])
+        .expect_err("zero limit must be rejected");
+    assert!(err.contains("at least 1"), "unexpected error: {err}");
+
+    // A session-id-shaped positional after `--last` is ambiguous, not a title.
+    let err = env
+        .exec(&["session", "rename", "--last", "sess-abc"])
+        .expect_err("session-id-shaped title must be rejected");
+    assert!(err.contains("--title"), "unexpected error: {err}");
+
+    // `--title` disambiguates and succeeds without touching the session ID.
+    assert_exit_ok(env.exec(&["session", "rename", "--last", "--title", "New Title"]));
+    let db = env.open_db();
+    assert_eq!(
+        db.chat_session_title(&env.workspace, &session_id)
+            .expect("title")
+            .as_deref(),
+        Some("New Title")
+    );
+}
+
+#[test]
+fn rewind_dry_run_restore_compact_requires_active_checkpoint() {
+    let env = CliTestEnv::new("session-rewind-precheck");
+    let (session_id, _, _) = seed_completed_turn(&env, None, "Turn", "Reply");
+
+    let err = env
+        .exec(&[
+            "session",
+            "rewind",
+            "--last",
+            "--dry-run",
+            "--mode",
+            "restore-compact",
+        ])
+        .expect_err("missing checkpoint must be rejected");
+    assert!(
+        err.contains("no active compact checkpoint"),
+        "unexpected error: {err}"
+    );
+
+    let db = env.open_db();
+    let rev = db.session_revision(&session_id).expect("revision");
+    db.commit_compact(
+        &env.workspace,
+        &CompactCommit {
+            session_id: session_id.clone(),
+            expected_revision: rev,
+            base_checkpoint_id: None,
+            start_sequence: 1,
+            end_sequence: 2,
+            summary_text: "Compact summary".to_string(),
+            model_label: "gpt-5.4".to_string(),
+            operation_id: "op-rewind-dry-run".to_string(),
+        },
+    )
+    .expect("commit compact");
+
+    // Dry run only inspects the checkpoint and must not revert it.
+    assert_exit_ok(env.exec(&[
+        "session",
+        "rewind",
+        "--last",
+        "--dry-run",
+        "--mode",
+        "restore-compact",
+    ]));
+    assert_exit_ok(env.exec(&[
+        "session",
+        "rewind",
+        "--last",
+        "--dry-run",
+        "--mode",
+        "restore-compact",
+        "--json",
+    ]));
+    assert!(
+        db.active_checkpoint(&env.workspace, &session_id)
+            .expect("active checkpoint")
+            .is_some()
+    );
+}
+
+#[test]
 fn session_agents_and_processes_list_subagents_and_process_records() {
     let env = CliTestEnv::new("session-agents");
     let (session_id, _, assistant_id) =

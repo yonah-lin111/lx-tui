@@ -22,9 +22,13 @@ pub fn run(
     Ok(EXIT_OK)
 }
 fn is_trusted(ctx: &WorkspaceContext) -> Result<bool, String> {
-    ctx.open_db()?
-        .is_trusted(&ctx.workspace)
-        .map_err(|error| error.code().to_string())
+    let db = ctx.open_db()?;
+    Ok(ctx.is_trusted(&db))
+}
+
+/// 当前检出的根（linked worktree 取自身，非 Git 目录回退工作区根）。
+fn checkout_root(ctx: &WorkspaceContext) -> PathBuf {
+    ctx.checkout_path()
 }
 fn require_trusted(ctx: &WorkspaceContext, trusted: bool) -> Result<(), String> {
     if trusted {
@@ -257,13 +261,14 @@ fn run_role_set(
     }
     if args.scope == ScopeArg::Project {
         require_trusted(ctx, trusted)?;
+        let checkout_root = checkout_root(ctx);
         if base.roles.iter().any(|role| role.name == args.name) {
             return Err(format!(
                 "custom role '{}' already exists in the user scope; use '--scope user' to edit it",
                 args.name
             ));
         }
-        let mut role = match read_project_role(&ctx.workspace, &args.name)? {
+        let mut role = match read_project_role(&checkout_root, &args.name)? {
             Some(role) => role,
             None => merged
                 .resolve_role(&args.name)
@@ -294,7 +299,7 @@ fn run_role_set(
                 args.name
             ));
         }
-        let path = write_project_role(&ctx.workspace, &role)?;
+        let path = write_project_role(&checkout_root, &role)?;
         return out.emit(
             &json!({"role": args.name, "scope": "project", "path": path}),
             |_, w| {
@@ -372,25 +377,29 @@ fn run_role_rm(
         save_section(&section)?;
     } else {
         require_trusted(ctx, trusted)?;
+        let checkout_root = checkout_root(ctx);
+        let mut roots = vec![checkout_root.clone()];
+        if checkout_root != ctx.workspace {
+            roots.push(ctx.workspace.clone());
+        }
         let mut removed = false;
-        for path in [
-            ctx.workspace
-                .join(".lx/agents")
-                .join(format!("{name}.json")),
-            ctx.workspace
-                .join(".agents/roles")
-                .join(format!("{name}.json")),
-        ] {
-            if path.is_file() {
-                std::fs::remove_file(&path)
-                    .map_err(|error| format!("failed to remove '{}': {error}", path.display()))?;
-                removed = true;
+        for root in &roots {
+            for path in [
+                root.join(".lx/agents").join(format!("{name}.json")),
+                root.join(".agents/roles").join(format!("{name}.json")),
+            ] {
+                if path.is_file() {
+                    std::fs::remove_file(&path).map_err(|error| {
+                        format!("failed to remove '{}': {error}", path.display())
+                    })?;
+                    removed = true;
+                }
             }
         }
         if !removed {
             return Err(format!(
                 "project role '{name}' was not found under '{}'",
-                ctx.workspace.display()
+                checkout_root.display()
             ));
         }
     }

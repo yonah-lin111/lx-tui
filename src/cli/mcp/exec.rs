@@ -2,6 +2,9 @@
 
 use super::*;
 
+mod add;
+use add::{run_add_http, run_add_stdio};
+
 pub fn run(cli: McpCli, linked_worktree: Option<&Path>) -> Result<i32, Box<dyn std::error::Error>> {
     let ctx = WorkspaceContext::resolve(cli.global.cwd.as_deref(), linked_worktree)?;
     let out = Output::new(cli.global.json, cli.global.color);
@@ -31,9 +34,8 @@ fn load_file(path: &Path) -> Result<McpConfigFile, String> {
         .map(|file| file.unwrap_or_default())
 }
 fn is_trusted(ctx: &WorkspaceContext) -> Result<bool, String> {
-    ctx.open_db()?
-        .is_trusted(&ctx.workspace)
-        .map_err(|error| error.code().to_string())
+    let db = ctx.open_db()?;
+    Ok(ctx.is_trusted(&db))
 }
 fn require_trusted(ctx: &WorkspaceContext) -> Result<(), String> {
     if is_trusted(ctx)? {
@@ -56,7 +58,12 @@ fn write_path(ctx: &WorkspaceContext, scope: ScopeArg) -> Result<PathBuf, String
 fn effective_servers_for(ctx: &WorkspaceContext) -> Result<Vec<EffectiveServer>, String> {
     let trusted = is_trusted(ctx)?;
     let user = load_mcp(&user_path()?).map_err(|error| error.to_string())?;
-    let project = load_mcp(&project_path(&ctx.workspace)?).map_err(|error| error.to_string())?;
+    // 未信任时不读取项目文件：损坏的 `mcp.json` 不应阻断 `mcp list`。
+    let project = if trusted {
+        load_mcp(&project_path(&ctx.workspace)?).map_err(|error| error.to_string())?
+    } else {
+        Some(McpConfigFile::default())
+    };
     Ok(effective_servers(
         user.as_ref(),
         project.as_ref(),
@@ -72,19 +79,30 @@ fn fetch_server(
     if let Some(scope) = scope {
         let path = match scope {
             ScopeArg::User => user_path()?,
-            ScopeArg::Project => project_path(&ctx.workspace)?,
+            ScopeArg::Project => {
+                require_trusted(ctx)?;
+                project_path(&ctx.workspace)?
+            }
         };
-        let config = load_file(&path)?
-            .mcp
-            .servers
-            .get(name)
-            .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "MCP server '{name}' is not configured in the {} scope",
-                    scope.as_str()
-                )
-            })?;
+        let file = load_file(&path)?;
+        if scope == ScopeArg::Project
+            && file
+                .project_root
+                .as_deref()
+                .is_some_and(|root| root != ctx.workspace.as_path())
+        {
+            return Err(format!(
+                "project MCP config '{}' does not belong to workspace '{}'",
+                path.display(),
+                ctx.workspace.display()
+            ));
+        }
+        let config = file.mcp.servers.get(name).cloned().ok_or_else(|| {
+            format!(
+                "MCP server '{name}' is not configured in the {} scope",
+                scope.as_str()
+            )
+        })?;
         return Ok(EffectiveServer {
             name: name.into(),
             scope: match scope {
@@ -127,12 +145,24 @@ fn mask_opt(value: Option<&str>) -> String {
     }
 }
 fn run_list(ctx: &WorkspaceContext, out: &Output, scope: ListScopeArg) -> Result<(), String> {
-    let servers = effective_servers_for(ctx)?;
+    let servers = if scope == ListScopeArg::User {
+        // 显式查询用户作用域时直接读用户文件，避免被项目同名服务覆盖后消失。
+        load_file(&user_path()?)?
+            .mcp
+            .servers
+            .into_iter()
+            .map(|(name, config)| EffectiveServer {
+                name,
+                scope: McpScope::User,
+                config,
+                shadowed_user: false,
+            })
+            .collect()
+    } else {
+        effective_servers_for(ctx)?
+    };
     let (mut rows, mut values) = (Vec::new(), Vec::new());
     for server in &servers {
-        if scope == ListScopeArg::User && server.scope != McpScope::User {
-            continue;
-        }
         if scope == ListScopeArg::Project && server.scope != McpScope::Project {
             continue;
         }
@@ -188,6 +218,14 @@ fn mask_secrets(value: &mut Value) {
                     if let Some(raw) = item.as_str() {
                         *item = Value::String(mask_opt(Some(raw)));
                     }
+                } else if matches!(key.as_str(), "http_headers" | "env") {
+                    if let Value::Object(entries) = item {
+                        for entry in entries.values_mut() {
+                            if let Some(raw) = entry.as_str() {
+                                *entry = Value::String(mask_secret(raw));
+                            }
+                        }
+                    }
                 } else {
                     mask_secrets(item);
                 }
@@ -196,96 +234,6 @@ fn mask_secrets(value: &mut Value) {
         Value::Array(items) => items.iter_mut().for_each(mask_secrets),
         _ => {}
     }
-}
-fn save_server(
-    ctx: &WorkspaceContext,
-    out: &Output,
-    scope: ScopeArg,
-    name: &str,
-    transport: McpTransportConfig,
-    startup: Option<u64>,
-    tool: Option<u64>,
-) -> Result<(), String> {
-    validate_server_name(name).map_err(|error| error.to_string())?;
-    let path = write_path(ctx, scope)?;
-    let mut file = load_file(&path)?;
-    if scope == ScopeArg::Project {
-        file.project_root = Some(ctx.workspace.clone());
-    }
-    let existing = file.mcp.servers.get(name).cloned();
-    file.mcp.servers.insert(
-        name.into(),
-        McpServerConfig {
-            enabled: existing
-                .as_ref()
-                .map(|server| server.enabled)
-                .unwrap_or(true),
-            transport,
-            startup_timeout_sec: startup.or_else(|| {
-                existing
-                    .as_ref()
-                    .and_then(|server| server.startup_timeout_sec)
-            }),
-            tool_timeout_sec: tool
-                .or_else(|| existing.as_ref().and_then(|server| server.tool_timeout_sec)),
-            enabled_tools: existing
-                .as_ref()
-                .and_then(|server| server.enabled_tools.clone()),
-            disabled_tools: existing
-                .as_ref()
-                .map(|server| server.disabled_tools.clone())
-                .unwrap_or_default(),
-        },
-    );
-    save_mcp(&path, &file).map_err(|error| error.to_string())?;
-    out.emit(
-        &json!({"name": name, "scope": scope.as_str(), "path": path}),
-        |_, w| {
-            writeln!(
-                w,
-                "MCP server '{name}' saved in the {} scope.",
-                scope.as_str()
-            )
-        },
-    )
-}
-fn run_add_stdio(ctx: &WorkspaceContext, out: &Output, args: &AddStdioArgs) -> Result<(), String> {
-    save_server(
-        ctx,
-        out,
-        args.scope,
-        &args.name,
-        McpTransportConfig::Stdio {
-            command: args.command.clone(),
-            args: args.args.clone(),
-            cwd: args.cwd.clone(),
-            env: args.env.clone(),
-            env_vars: args.env_vars.clone(),
-        },
-        args.startup_timeout,
-        args.tool_timeout,
-    )
-}
-fn run_add_http(ctx: &WorkspaceContext, out: &Output, args: &AddHttpArgs) -> Result<(), String> {
-    save_server(
-        ctx,
-        out,
-        args.scope,
-        &args.name,
-        McpTransportConfig::Http {
-            url: args.url.trim().into(),
-            auth: args.auth,
-            bearer_token: args.bearer_token.clone(),
-            bearer_token_env_var: args.bearer_env.clone(),
-            http_headers: args.headers.clone(),
-            env_http_headers: BTreeMap::new(),
-            scopes: args.scopes.clone(),
-            client_id: args.client_id.clone(),
-            client_secret: args.client_secret.clone(),
-        },
-        args.startup_timeout,
-        args.tool_timeout,
-    )
 }
 fn run_remove(
     ctx: &WorkspaceContext,
@@ -397,23 +345,37 @@ fn run_login(ctx: &WorkspaceContext, out: &Output, args: &LoginArgs) -> Result<(
         .enable_all()
         .build()
         .map_err(|error| format!("failed to initialize async runtime: {error}"))?;
-    runtime.block_on(async {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.map_err(|error| format!("failed to bind OAuth callback listener: {error}"))?;
-        let port = listener.local_addr().map_err(|error| format!("failed to read OAuth callback port: {error}"))?.port();
+    let (redirect_uri, authorize_url) = runtime.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|error| format!("failed to bind OAuth callback listener: {error}"))?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| format!("failed to read OAuth callback port: {error}"))?
+            .port();
         let redirect_uri = format!("http://127.0.0.1:{port}/mcp/oauth/callback");
-        let pending = crate::mcp::oauth::begin_authorization(&server, &ctx.workspace, &redirect_uri).await?;
-        out.emit(&json!({"name": args.name, "authorizeUrl": pending.authorize_url, "redirectUri": redirect_uri}), |_, w| {
-            writeln!(w, "Authorize URL: {}", pending.authorize_url)?;
-            writeln!(w, "Waiting for the OAuth callback on {redirect_uri} ...")
-        })?;
-        if !args.no_open { let _ = crate::platform::open_browser(&pending.authorize_url); }
+        let pending =
+            crate::mcp::oauth::begin_authorization(&server, &ctx.workspace, &redirect_uri).await?;
+        if !out.is_json() {
+            eprintln!("Authorize URL: {}", pending.authorize_url);
+            eprintln!("Waiting for the OAuth callback on {redirect_uri} ...");
+        }
+        if !args.no_open {
+            let _ = crate::platform::open_browser(&pending.authorize_url);
+        }
         let code = wait_for_callback(&listener, &pending.state).await?;
         crate::mcp::oauth::complete_authorization(&pending, &code, store.as_ref()).await?;
-        Ok::<(), String>(())
+        Ok::<(String, String), String>((redirect_uri, pending.authorize_url))
     })?;
     out.emit(
-        &json!({"name": args.name, "status": "authorized"}),
-        |_, w| writeln!(w, "OAuth credentials saved for MCP server '{}'.", args.name),
+        &json!({"name": args.name, "status": "authorized", "authorizeUrl": authorize_url, "redirectUri": redirect_uri}),
+        |_, w| {
+            writeln!(
+                w,
+                "OAuth credentials saved for MCP server '{}'.",
+                args.name
+            )
+        },
     )
 }
 fn run_logout(
@@ -430,117 +392,4 @@ fn run_logout(
         &json!({"name": name, "scope": server.scope.as_str(), "loggedOut": true}),
         |_, w| writeln!(w, "OAuth credentials removed for MCP server '{name}'."),
     )
-}
-async fn wait_for_callback(
-    listener: &tokio::net::TcpListener,
-    expected_state: &str,
-) -> Result<String, String> {
-    let (mut stream, _) = tokio::time::timeout(Duration::from_secs(300), listener.accept())
-        .await
-        .map_err(|_| "OAuth callback timed out after 300 seconds".to_string())?
-        .map_err(|error| format!("failed to accept OAuth callback: {error}"))?;
-    let mut buffer = vec![0u8; 8192];
-    let read = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut buffer))
-        .await
-        .map_err(|_| "timed out reading the OAuth callback".to_string())?
-        .map_err(|error| format!("failed to read the OAuth callback: {error}"))?;
-    let result = parse_callback(&String::from_utf8_lossy(&buffer[..read]), expected_state);
-    let (status, body) = if result.is_ok() {
-        (
-            "200 OK",
-            "<!doctype html><html><body><h1>Authorization complete</h1><p>You can close this window and return to the terminal.</p></body></html>",
-        )
-    } else {
-        (
-            "400 Bad Request",
-            "<!doctype html><html><body><h1>Authorization failed</h1><p>Return to the terminal for details.</p></body></html>",
-        )
-    };
-    let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    let _ = stream.write_all(response.as_bytes()).await;
-    let _ = stream.flush().await;
-    result
-}
-fn parse_callback(request: &str, expected_state: &str) -> Result<String, String> {
-    let first = request
-        .lines()
-        .next()
-        .ok_or_else(|| "empty OAuth callback request".to_string())?;
-    let mut parts = first.split_whitespace();
-    let method = parts
-        .next()
-        .ok_or_else(|| "malformed OAuth callback request line".to_string())?;
-    let target = parts
-        .next()
-        .ok_or_else(|| "malformed OAuth callback request line".to_string())?;
-    if method != "GET" {
-        return Err("OAuth callback must use GET".to_string());
-    }
-    let (path, query) = target
-        .split_once('?')
-        .ok_or_else(|| "OAuth callback is missing query parameters".to_string())?;
-    if path != "/mcp/oauth/callback" {
-        return Err("unexpected OAuth callback path".to_string());
-    }
-    let (mut code, mut state, mut error, mut description) = (None, None, None, None);
-    for pair in query.split('&') {
-        let Some((key, value)) = pair.split_once('=') else {
-            continue;
-        };
-        let value = percent_decode(value);
-        match key {
-            "code" => code = Some(value),
-            "state" => state = Some(value),
-            "error" => error = Some(value),
-            "error_description" => description = Some(value),
-            _ => {}
-        }
-    }
-    if let Some(error) = error {
-        let detail = description.unwrap_or_default();
-        return Err(if detail.is_empty() {
-            format!("authorization was denied: {error}")
-        } else {
-            format!("authorization was denied: {error} ({detail})")
-        });
-    }
-    if state.as_deref() != Some(expected_state) {
-        return Err("OAuth callback state does not match the pending authorization".to_string());
-    }
-    code.filter(|value| !value.is_empty())
-        .ok_or_else(|| "OAuth callback did not include an authorization code".to_string())
-}
-fn percent_decode(raw: &str) -> String {
-    let bytes = raw.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                let (high, low) = (
-                    (bytes[i + 1] as char).to_digit(16),
-                    (bytes[i + 2] as char).to_digit(16),
-                );
-                if let (Some(high), Some(low)) = (high, low) {
-                    out.push((high * 16 + low) as u8);
-                    i += 3;
-                    continue;
-                }
-                out.push(bytes[i]);
-                i += 1;
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            byte => {
-                out.push(byte);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }

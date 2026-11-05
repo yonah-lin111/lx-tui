@@ -131,6 +131,7 @@ struct Scan<'a> {
     index: usize,
     positionals: Vec<String>,
     last: bool,
+    literal: bool,
 }
 impl<'a> Scan<'a> {
     fn new(args: &'a [String]) -> Self {
@@ -139,6 +140,7 @@ impl<'a> Scan<'a> {
             index: 0,
             positionals: Vec::new(),
             last: false,
+            literal: false,
         }
     }
     fn token(&mut self) -> Option<String> {
@@ -147,6 +149,9 @@ impl<'a> Scan<'a> {
         Some(token)
     }
     fn value(&mut self, current: &str, short: &str, long: &str) -> Result<Option<String>, String> {
+        if self.literal {
+            return Ok(None);
+        }
         if (!short.is_empty() && current == short) || current == long {
             let label = if long.is_empty() { short } else { long };
             let value = self
@@ -168,6 +173,14 @@ impl<'a> Scan<'a> {
         Ok(None)
     }
     fn positional(&mut self, arg: &str) -> Result<(), String> {
+        if self.literal {
+            self.positionals.push(arg.to_string());
+            return Ok(());
+        }
+        if arg == "--" {
+            self.literal = true;
+            return Ok(());
+        }
         if arg == "--last" {
             self.last = true;
             return Ok(());
@@ -245,6 +258,9 @@ fn parse_list(args: &[String]) -> Result<SessionCommand, String> {
             return Err(format!("unexpected argument '{arg}' for 'session list'"));
         }
     }
+    if limit == 0 {
+        return Err("--limit must be at least 1".to_string());
+    }
     Ok(SessionCommand::List { limit, offset })
 }
 fn parse_show(args: &[String]) -> Result<SessionCommand, String> {
@@ -266,10 +282,38 @@ fn parse_show(args: &[String]) -> Result<SessionCommand, String> {
 }
 fn parse_rename(args: &[String]) -> Result<SessionCommand, String> {
     let mut scan = Scan::new(args);
+    let mut title = None;
     while let Some(arg) = scan.token() {
-        scan.positional(&arg)?;
+        if let Some(value) = scan.value(&arg, "", "--title")? {
+            title = Some(required_non_empty(&value, "--title")?);
+        } else {
+            scan.positional(&arg)?;
+        }
+    }
+    if let Some(title) = title {
+        let session_id = match (scan.last, scan.positionals.as_slice()) {
+            (true, []) => None,
+            (false, [id]) => Some(id.clone()),
+            _ => {
+                return Err(
+                    "usage: lx-tui session rename (<SESSION_ID> | --last) --title <NEW_TITLE>"
+                        .into(),
+                );
+            }
+        };
+        return Ok(SessionCommand::Rename {
+            session_id,
+            last: scan.last,
+            new_title: title,
+        });
     }
     let (session_id, title) = match (scan.last, scan.positionals.as_slice()) {
+        (true, [title]) if title.starts_with("sess-") => {
+            return Err(
+                "cannot pass both a session ID and '--last'; use '--title <TITLE>' if the new title starts with 'sess-'"
+                    .into(),
+            );
+        }
         (true, [title]) => (None, title.clone()),
         (false, [id, title]) => (Some(id.clone()), title.clone()),
         _ => return Err("usage: lx-tui session rename (<SESSION_ID> | --last) <NEW_TITLE>".into()),

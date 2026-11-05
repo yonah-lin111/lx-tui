@@ -39,11 +39,21 @@ pub fn run(
         }
         SessionCommand::Delete { session_id, last } => {
             let id = resolve_target_session(&db, ws, session_id.as_deref(), last)?;
+            let descendants = db
+                .descendant_session_ids(&id)
+                .map_err(|e| format!("failed to list descendant sessions: {}", e.code()))?;
             // 与 TUI 的 DeleteChatSession 效应一致：先取得跨进程锁，再级联删除会话。
             let guard = acquire_session_lock(&id)?;
             db.delete_chat_session(ws, &id)
                 .map_err(|e| format!("failed to delete session: {}", e.code()))?;
             drop(guard);
+            for child in descendants
+                .iter()
+                .map(String::as_str)
+                .chain(Some(id.as_str()))
+            {
+                crate::platform::remove_session_images(child);
+            }
             emit_ok(
                 &out,
                 json!({ "deleted": true, "session_id": id }),
@@ -113,9 +123,7 @@ fn list(
     offset: usize,
     out: &Output,
 ) -> Result<(), String> {
-    let sessions = db
-        .list_chat_sessions(&ctx.workspace, offset, limit)
-        .map_err(|e| format!("failed to list sessions: {}", e.code()))?;
+    let sessions = list_sessions(db, &ctx.workspace, offset, limit)?;
     let rows = sessions.iter().map(|s| json!({
         "id": s.external_id, "title": s.title, "model": session_model(s), "status": s.status,
         "updated_at_ms": s.updated_at_ms, "total_input_tokens": s.total_input_tokens, "total_output_tokens": s.total_output_tokens,
@@ -145,6 +153,29 @@ fn list(
             &table,
         )
     })
+}
+// 单页上限固定 200；更大 `--limit` 通过分页拉满，避免被底层静默截断。
+fn list_sessions(
+    db: &Database,
+    workspace: &Path,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<SessionSummary>, String> {
+    let mut sessions = Vec::new();
+    let mut page_offset = offset;
+    loop {
+        let page_size = (limit - sessions.len()).min(200);
+        let page = db
+            .list_chat_sessions(workspace, page_offset, page_size)
+            .map_err(|e| format!("failed to list sessions: {}", e.code()))?;
+        let count = page.len();
+        sessions.extend(page);
+        if limit <= 200 || sessions.len() >= limit || count < page_size {
+            break;
+        }
+        page_offset = page_offset.saturating_add(count);
+    }
+    Ok(sessions)
 }
 fn session_model(session: &SessionSummary) -> String {
     model_label(

@@ -3,7 +3,7 @@
 - **验证工作区**：`/Users/yonah/projects/agent/lx-tui/.worktrees/lx-full-cli` (`feature/lx-full-cli`)
 - **测试二进制**：`./target/debug/lx-tui`
 - **隔离环境**：临时 `HOME` + `LX_TUI_DB_PATH` + 本地 Mock OpenAI/MCP 服务
-- **总结论**：**50 / 50 项 CLI 端到端验证全部通过（PASS）**
+- **总结论**：**56 / 56 项 CLI 端到端验证全部通过（PASS）**
 
 ---
 
@@ -40,7 +40,7 @@
 ### V05：工作区添加、信任与状态查询
 - **输入内容**：`lx-tui workspace add <DIR> --name MainWS --trust --json`、`lx-tui workspace status -C <DIR> --json`
 - **验证步骤**：登记并信任工作区后查询状态。
-- **期望结果**：返回 JSON 中 `trusted: true`、`name: "MainWS"` 及有效 `db_path`，退出码 `0`。
+- **期望结果**：返回 JSON 中 `trusted: true`、`name: "MainWS"` 及有效 `database` 路径，退出码 `0`。
 - **结果**：PASS
 
 ### V06：工作区历史列表（树形 / `--raw` / `--search`）
@@ -52,7 +52,7 @@
 ### V07：工作区重命名、重排与级联删除
 - **输入内容**：`lx-tui workspace rename NewName`、`lx-tui workspace reorder <DIR2> <DIR1>`、`lx-tui workspace delete <DIR2> [--include-worktrees]`
 - **验证步骤**：依次执行重命名、排序和删除，再执行 `workspace list --raw --json`。
-- **期望结果**：名称与 `sort_order` 更新生效，被删工作区从历史列表移除，退出码 `0`。
+- **期望结果**：名称与 `position` 更新生效，被删工作区从历史列表移除，退出码 `0`。
 - **结果**：PASS
 
 ### V08：Git Worktree 列表查询
@@ -86,7 +86,7 @@
 ### V12：子 Agent 列表/树与进程列表（`agents` / `processes`）
 - **输入内容**：`lx-tui session agents --last --tree --filter all --json`、`lx-tui session processes --last --json`
 - **验证步骤**：对包含子 Agent 记录的会话执行列表与树形查询，以及进程查询。
-- **期望结果**：输出包含 `role`、`projected_status`、`depth` 的 `agents` 数组与 `processes` 数组，退出码 `0`。
+- **期望结果**：输出包含 `role`、`status`、`depth` 的 `agents` 数组与 `processes` 数组，退出码 `0`。
 - **结果**：PASS
 
 ### V13：会话在线压缩与恢复（`compact` / `compact --revert`）
@@ -186,7 +186,7 @@
 ### V26：Stdio / HTTP 服务注册与双作用域展示
 - **输入内容**：`lx-tui mcp add-stdio mock-stdio --command python3 --arg mock_mcp.py --scope project`、`mcp add-http mock-http --url https://example.com/mcp --auth bearer --bearer-token tok_1234567890abcdef`、`mcp list --json`、`mcp show mock-http --json`
 - **验证步骤**：分别在项目级与用户级添加 stdio/http 服务，查询列表与详情。
-- **期望结果**：配置文件写入对应作用域，`show` 中 `bearerToken` 脱敏为 `"tok_...cdef"`，退出码 `0`。
+- **期望结果**：配置文件写入对应作用域，`show` 的 `config.bearer_token` 脱敏为 `"tok...cdef"`；`http_headers` 与 `env` 的值同样逐项掩码，退出码 `0`。
 - **结果**：PASS
 
 ### V27：MCP 服务在线握手与工具探测（`mcp probe`）
@@ -208,7 +208,7 @@
 ### V29：技能创建、列表发现、详情与编辑
 - **输入内容**：`lx-tui skill create demo-skill --description "Demo" --content "# Body" --scope project`、`skill list --scope project --json`、`skill show demo-skill --scope project`、`skill edit demo-skill --description "Updated" --scope project`
 - **验证步骤**：在已信任工作区创建项目级技能，执行发现列表、详情读取与描述修改。
-- **期望结果**：生成 `.lx/skills/demo-skill/SKILL.md`，frontmatter 与正文更新正确，退出码 `0`。
+- **期望结果**：生成 `<DATA_DIR>/skills/projects/<scope>/demo-skill/SKILL.md`（项目级技能根为 `<DATA_DIR>/skills/projects/<scope>/`，例如 `<DATA_DIR>/skills/projects/<scope>/cli-verifier/SKILL.md`），frontmatter 与正文更新正确，退出码 `0`。
 - **结果**：PASS
 
 ### V30：技能启停与删除（`disable` / `enable` / `delete`）
@@ -224,7 +224,7 @@
 ### V31：`agentMD` 与 `agentBlock` 命令创建、列表与查看
 - **输入内容**：`lx-tui command create check-code --kind agentMD --description "Check" --md-scope global --content "Body"`、`command create tmpl-block --kind agentBlock --description "Block" --block template --arg-hint "<file>" --title "Block" --content "Inspect $1" --scope project`、`command list --json`、`command show check-code`
 - **验证步骤**：分别创建用户级 `agentMD` 与项目级 `agentBlock` 命令，执行列表与详情查询。
-- **期望结果**：准确返回 2 条命令及其 frontmatter 属性，退出码 `0`。
+- **期望结果**：准确返回 2 条命令及其 frontmatter 属性；用户级文件位于 `<DATA_DIR>/command/agentMD/check-code.md`，项目级文件位于 `<workspace>/.lx-t/command/agentBlock/tmpl-block.md`，退出码 `0`。
 - **结果**：PASS
 
 ### V32：自定义命令编辑、重命名与删除
@@ -290,7 +290,7 @@
 ### V40：Git Linked Worktree 自动归并主仓库根
 - **输入内容**：`lx-tui workspace status -C /Users/yonah/projects/agent/lx-tui/.worktrees/lx-full-cli --json`
 - **验证步骤**：在 linked worktree 目录执行 `workspace status --json`。
-- **期望结果**：`path` 自动归并为主仓库根 `/Users/yonah/projects/agent/lx-tui`，`git.is_linked: true`，退出码 `0`。
+- **期望结果**：`path` 为当前 linked worktree 的 checkout 根 `/Users/yonah/projects/agent/lx-tui/.worktrees/lx-full-cli`，`git.repo_root` 为主仓库根 `/Users/yonah/projects/agent/lx-tui`，`git.is_linked: true`，退出码 `0`。
 - **结果**：PASS
 
 ### V41：提示词最后一页删除保护与越界页码拦截
@@ -326,7 +326,7 @@
 ### V46：MCP OAuth 完整授权闭环（`mcp login --no-open` 本地回调换 Token）
 - **输入内容**：`lx-tui mcp login mock-oauth --no-open`
 - **验证步骤**：配好 `--auth oauth` 服务后启动 `mcp login --no-open`，解析其输出的本地回调 `redirect_uri` 与 `state` 并模拟浏览器访问回调完成 PKCE 换 Token。
-- **期望结果**：本地环回服务返回 `200 OK`，Token 成功写入 `mcp-credentials.json`，进程退出码 `0`。
+- **期望结果**：本地环回服务返回 `200 OK`，Token 成功写入 `<DATA_DIR>/mcp/credentials.json`，进程退出码 `0`。
 - **结果**：PASS
 
 ### V47：自定义斜杠命令重名保护与 `--overwrite` 覆盖
@@ -351,4 +351,44 @@
 - **输入内容**：启动 `lx-tui settings open --no-open --json`，提取 `token` 请求 `GET /api/state?token=<TOKEN>` 与无 token 请求
 - **验证步骤**：分别发起无 token 请求与带有效 token 的 `/api/state` 请求，随后发送 `SIGINT` 关闭。
 - **期望结果**：无 token 返回 `403 Forbidden`，带有效 token 返回 `200 OK` 及完整 `config` JSON，进程收到 `SIGINT` 后退出码 `0`。
+- **结果**：PASS
+
+---
+
+## 13. 代码审查修复回归（V51–V56）
+
+### V51：`workspace delete --include-worktrees` 在仓库子目录目标上不误删主仓库
+- **输入内容**：将 Git 仓库子目录 `<repo>/src` 登记为工作区后执行 `lx-tui workspace delete <repo>/src --include-worktrees --json`
+- **验证步骤**：在含 linked worktree 的仓库中登记 `<repo>/src`，带 `--include-worktrees` 删除该子目录，再执行 `lx-tui workspace list --raw --json` 并检查主仓库与 linked worktree 的会话。
+- **期望结果**：JSON `workspaces` 仅包含 `<repo>/src`；主仓库 `<repo>` 与所有 linked worktree 的历史记录、会话和磁盘图片均保持不变。仅当目标本身是主 checkout（`git worktree list` 的 `repo_root == target`）时才展开同仓库 linked worktree；普通子目录不会被 `.git` 文件启发式误判，嵌套子模块也不会进入删除列表，退出码 `0`。
+- **结果**：PASS
+
+### V52：Linked worktree 的 `checkout_path` 默认目标与统一信任门控
+- **输入内容**：在 linked worktree 中执行 `lx-tui workspace status --json`、`lx-tui workspace trust`，随后执行 `lx-tui skill create demo --description Demo --content Body --scope project`；再执行无参数 `lx-tui workspace delete --json`。
+- **验证步骤**：确认 `status.path` 指向当前 linked worktree 而非主仓库根；无参 `trust` 信任当前 checkout；项目级写入通过 `WorkspaceContext::is_trusted`（cwd / checkout / workspace 根任一已信任）放行；无参 `delete` 仅作用于当前 linked worktree。
+- **期望结果**：`path` 为 linked worktree checkout 根，`git.repo_root` 为主仓库根且 `git.is_linked: true`；`trust` 后项目级 `skill create` 成功；无参 `delete` 只删除当前 linked worktree 的历史记录并写入隐藏，不删除主仓库及其会话，退出码 `0`。
+- **结果**：PASS
+
+### V53：`prompt move --folder` 与跨工作区分页隔离
+- **输入内容**：`lx-tui prompt move <PROMPT_ID> --folder <FOLDER_ID> --json`；在工作区 B 执行 `prompt page edit/rename/active/delete` 并传入工作区 A 的 `PAGE_ID`。
+- **验证步骤**：修正 `PromptCommand::folder_destination` 后验证移动；再在另一个工作区用 A 的分页 ID 依次执行 `page edit`、`page rename`、`page active <B_PROMPT> <A_PAGE>` 与 `page delete`。
+- **期望结果**：`prompt move --folder` 正确写入目标文件夹；跨工作区的所有分页写操作均返回退出码 `1` 且错误包含 `prompt page <id> not found`，工作区 A 的分页内容、名称、活动页与页数保持不变（无法绕过“至少保留一页”保护）。
+- **结果**：PASS
+
+### V54：非交互式 `skill edit` / `command edit` 保留正文并校验 frontmatter
+- **输入内容**：`lx-tui skill edit demo-skill --description "Updated" </dev/null`、`lx-tui command edit check-code --description "Check v2" </dev/null`；再执行 `--content ""` 与含换行的 `--description`。
+- **验证步骤**：在 stdin 为 `/dev/null` 的非交互环境中仅更新元数据，随后用 `show --json` 检查正文；分别传入空正文和多行描述。
+- **期望结果**：描述更新成功且原有正文完整保留（可选正文从空 stdin 读到空文本时 `ContentInput::resolve_with` 返回 `Ok(None)`）；空正文返回退出码 `1`（`skill/command content cannot be empty`），含 `\n`/`\r` 的 `description`/`title`/`argument-hint` 被拒绝，退出码 `1`。
+- **结果**：PASS
+
+### V55：`mcp add-http` / `add-stdio` 局部更新保留未重传字段
+- **输入内容**：先 `mcp add-http svc --url <URL1> --auth bearer --bearer-token <TOKEN> --header <K=V> --scope-item <SCOPE>`，再执行 `mcp add-http svc --url <URL2>`；先 `mcp add-stdio tool --command python3 --arg a --env K=V --cwd <DIR>`，再执行 `mcp add-stdio tool --command python3.12`。
+- **验证步骤**：对已存在的同名同类型服务只重传部分参数，更新后读取配置文件并用 `mcp show --json` 检查（敏感值仅校验掩码后的形状）。
+- **期望结果**：HTTP 服务的 `auth`、`bearer_token`/`bearer_token_env_var`、`client_id`/`client_secret`、`http_headers`、`env_http_headers`、`scopes` 保留旧值，仅 `url` 更新；Stdio 服务的 `args`、`env`、`cwd` 保留旧值，仅 `command` 更新；`enabled`、启动/工具超时与工具白/黑名单同样保留，退出码 `0`。
+- **结果**：PASS
+
+### V56：`--` 终止符与全局带值选项的值保护
+- **输入内容**：`lx-tui todo add -- -C`、`lx-tui prompt edit <PROMPT_ID> --content --json`
+- **验证步骤**：前者验证全局扫描在 `--` 处停止并把 `-C` 当作位置文本；后者验证 `--content` 的取值 token `--json` 不被全局扫描吞掉。随后用 `todo list --json` 与 `prompt show <PROMPT_ID> --json` 检查落库内容。
+- **期望结果**：`todo add -- -C` 成功创建文本为 `-C` 的待办，不报未知选项；`prompt edit --content --json` 将字面量 `--json` 写入正文且不启用 JSON 输出（人类可读输出），退出码 `0`。
 - **结果**：PASS

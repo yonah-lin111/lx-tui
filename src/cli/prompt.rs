@@ -94,9 +94,14 @@ impl PromptCommand {
             ..Self::default()
         };
         let mut index = 0;
+        let mut positional_only = false;
         while index < args.len() {
             let arg = args[index].as_str();
-            if let Some(value) = take_opt(args, &mut index, "", "--folder")? {
+            if positional_only {
+                command.words.push(arg.to_string());
+            } else if arg == "--" {
+                positional_only = true;
+            } else if let Some(value) = take_opt(args, &mut index, "", "--folder")? {
                 command.folder = Some(parse_id(&value, "--folder")?);
             } else if let Some(value) = take_opt(args, &mut index, "", "--parent")? {
                 command.parent = Some(parse_id(&value, "--parent")?);
@@ -134,8 +139,16 @@ impl PromptCommand {
         parse_id(&self.word(index, label)?, label)
     }
 
-    fn destination(&self, flag: &str) -> Result<Option<i64>, String> {
-        match (self.parent, self.root) {
+    fn folder_destination(&self) -> Result<Option<i64>, String> {
+        Self::destination(self.folder, self.root, "--folder")
+    }
+
+    fn parent_destination(&self) -> Result<Option<i64>, String> {
+        Self::destination(self.parent, self.root, "--parent")
+    }
+
+    fn destination(target: Option<i64>, root: bool, flag: &str) -> Result<Option<i64>, String> {
+        match (target, root) {
             (Some(id), false) => Ok(Some(id)),
             (None, true) => Ok(None),
             (Some(_), true) => Err(format!("cannot specify both '{flag}' and '--root'")),
@@ -169,6 +182,58 @@ fn missing_subcommand(action: &str) -> String {
 
 fn unexpected(arg: &str, action: &str) -> String {
     format!("unexpected argument '{arg}'; run 'lx-tui {action} --help' for usage")
+}
+
+fn folder_name(folders: &[FolderRecord], id: Option<i64>) -> Option<String> {
+    let id = id?;
+    folders
+        .iter()
+        .find(|folder| folder.id == id)
+        .map(|folder| folder.name.clone())
+}
+
+fn find_prompt(prompts: &[PromptRecord], id: i64) -> Result<&PromptRecord, String> {
+    let prompt = prompts.iter().find(|prompt| prompt.id == id);
+    prompt.ok_or_else(|| format!("prompt {id} not found"))
+}
+
+fn active_page(prompt: &PromptRecord) -> Result<&PromptPageRecord, String> {
+    prompt
+        .active_page_id
+        .and_then(|id| prompt.pages.iter().find(|page| page.id == id))
+        .or_else(|| prompt.pages.first())
+        .ok_or_else(|| format!("prompt {} has no pages", prompt.id))
+}
+
+fn page_by_id(prompt: &PromptRecord, id: i64) -> Result<&PromptPageRecord, String> {
+    prompt
+        .pages
+        .iter()
+        .find(|page| page.id == id)
+        .ok_or_else(|| format!("page {id} not found"))
+}
+
+fn resolve_page<'a>(prompt: &'a PromptRecord, raw: &str) -> Result<&'a PromptPageRecord, String> {
+    let number = raw.trim().parse::<i64>().ok();
+    let page = number.and_then(|value| {
+        prompt
+            .pages
+            .iter()
+            .find(|page| page.id == value)
+            .or_else(|| {
+                usize::try_from(value)
+                    .ok()
+                    .and_then(|index| index.checked_sub(1))
+                    .and_then(|index| prompt.pages.get(index))
+            })
+    });
+    let count = prompt.pages.len();
+    page.ok_or_else(|| {
+        format!(
+            "page '{raw}' not found in prompt {} ({count} pages)",
+            prompt.id
+        )
+    })
 }
 
 /// 执行已解析的 prompt 命令。

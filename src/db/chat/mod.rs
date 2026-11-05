@@ -718,23 +718,24 @@ impl Database {
         Ok(updated > 0)
     }
 
-    /// 删除会话：双条件校验后级联删除消息/parts/工具/子 Agent 关系与子会话。
-    ///
-    /// 子会话的 `agent_session` 行没有指向父会话的外键（它属于同一 workspace），
-    /// 只删父行会留下孤儿子会话；这里在同一事务里先删子会话（连带关系行与消息）。
+    /// 递归收集全部后代子会话 ID（广度优先，父先子后；最多 8 层防环）。
+    pub fn descendant_session_ids(&self, session_id: &str) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "WITH RECURSIVE tree(child, depth) AS (SELECT child_session_id, 1 FROM agent_subagent WHERE parent_session_id = ?1 UNION ALL SELECT a.child_session_id, t.depth + 1 FROM agent_subagent a JOIN tree t ON a.parent_session_id = t.child WHERE t.depth < 8) SELECT child FROM tree",
+        )?;
+        let rows = statement.query_map(params![session_id], |row| row.get(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(DbError::from)
+    }
+
+    /// 删除会话：双条件校验后级联删除全部后代子会话（连带消息/parts/工具/关系行）。
     pub fn delete_chat_session(&self, workspace: &Path, session_id: &str) -> Result<()> {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
+        let descendants = self.descendant_session_ids(session_id)?;
         let transaction = self.conn.unchecked_transaction()?;
-        let children: Vec<String> = {
-            let mut statement = transaction.prepare(
-                "SELECT child_session_id FROM agent_subagent WHERE parent_session_id = ?1",
-            )?;
-            let rows = statement.query_map(params![session_id], |row| row.get(0))?;
-            rows.collect::<std::result::Result<Vec<_>, _>>()?
-        };
-        for child in &children {
+        for child in descendants.iter().rev() {
             transaction.execute(
                 "DELETE FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
                 params![child, workspace_external],
@@ -748,10 +749,9 @@ impl Database {
             return Err(DbError::SessionMissing);
         }
         transaction.commit()?;
-        for child in &children {
-            crate::platform::remove_session_images(child);
+        for child in std::iter::once(session_id.to_string()).chain(descendants) {
+            crate::platform::remove_session_images(&child);
         }
-        crate::platform::remove_session_images(session_id);
         Ok(())
     }
 

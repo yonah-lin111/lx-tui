@@ -3,8 +3,8 @@
 - **特性目录**：`docs/feature/lx-full-cli/`
 - **关联任务清单**：[`task.md`](task.md)
 - **参考基线**：`src/chat/agent/exec/`（既有 `lx-tui exec` 无头 CLI）、`src/db/`、`src/config/`、`src/settings/`、`src/mcp/`、`src/skills/`、`src/git/`
-- **目标范围**：`src/main.rs`、`src/lib.rs`、`src/cli/`（新增）、`src/chat/agent/exec/`、`src/event/chat/rewind.rs`、`src/settings/service/models/mod.rs`、`docs/standards/project-directory-structure.md`
-- **当前状态**：**已在 `.worktrees/lx-full-cli` (`feature/lx-full-cli`) 完成实现与测试验证**
+- **目标范围**：`src/main.rs`、`src/lib.rs`、`src/cli/`（新增）、`src/chat/agent/exec/`、`src/db/mod.rs`、`src/db/chat/mod.rs`、`src/config/skills.rs`、`src/platform/**`、`src/event/chat/rewind/**`、`src/settings/service/**`、`docs/standards/project-directory-structure.md`
+- **当前状态**：**已在 `.worktrees/lx-full-cli` (`feature/lx-full-cli`) 完成实现、`review.md` P0–P3 修复与测试验证**
 
 ---
 
@@ -15,10 +15,10 @@
 | 核验维度 | 代码库当前真实状态 | 设计影响与应对策略 |
 | :--- | :--- | :--- |
 | **入口与 `exec` 解析器体积** | `src/main.rs`（103 行）直接调用 `chat::agent::exec::{parse_cli, run_main, help_text}`；而 `src/chat/agent/exec/cli.rs` 已达 **847 行**，逼近单文件 1000 行红线。 | 严禁往 `src/chat/agent/exec/cli.rs` 继续堆叠全项目子命令。新增顶层 `src/cli/` 模块负责顶层路由与新增领域子命令；`exec` 保持原有结构体与解析函数，由 `src/cli/` 直接委托转发。 |
-| **工作区与开发库隔离** | `src/chat/agent/exec/mod.rs` 通过 `resolve_cwd(-C)` 解析目录，`git::list_worktrees(&cwd).repo_root` 解析项目工作区根，开发态（`db::is_dev_environment()`）通过 `git::linked_worktree_root(&cwd)` 定位隔离库 `Database::open_default(linked_worktree)`。 | 在 `src/cli/context.rs` 中提炼统一的 `CliWorkspaceContext`，供 `session`、`prompt`、`workspace`、`mcp`、`skill`、`command` 共用，保证 CLI 与 TUI / `exec` 读写完全相同的数据库与项目根。 |
-| **工作区与历史列表 CRUD（兼容刚合入的 `feature/workspace-history-list` `07553c8c`）** | `SCHEMA_VERSION` 已升至 **24**（v23 新增 `workspace.position`，v24 新增 `workspace_hidden`）。`src/db/workspace.rs` 已从 `src/db/mod.rs` 拆出，并提供完整工作区历史列表能力：`list_workspaces()`、`list_workspace_history_entries()`（含 Git 主工作区与 linked worktree 树归并、`exists`、`trusted`、过滤 `workspace_hidden`）、`record_workspace_open`、`rename_workspace`、`delete_workspace`（`ON DELETE CASCADE` 级联清理文件夹/提示词/引用目录/聊天会话）、`save_workspace_order`、`hide_workspace`/`unhide_workspace`。 | 1. `lx-tui workspace` 子命令同步扩展完整工作区历史 CRUD：`list`（树形历史列表 / `--raw` 扁平表）、`add`（`record_workspace_open` + `unhide_workspace`）、`rename`（`rename_workspace`）、`delete`（校验无运行中会话锁 → linked worktree 写 `hide_workspace` → `delete_workspace` 级联删除，支持 `--include-worktrees` 一并清理同仓库子 worktree）、`reorder`（`save_workspace_order`）、`status`、`trust`、`worktrees`。<br>2. 写命令（`prompt create` 等）先调 `db.ensure_workspace(&ctx.workspace)`（`DO NOTHING` 不覆盖自定义工作区名）。 |
+| **工作区与开发库隔离** | `src/chat/agent/exec/mod.rs` 通过 `resolve_cwd(-C)` 解析目录，`git::list_worktrees(&cwd).repo_root` 解析项目工作区根，开发态（`db::is_dev_environment()`）通过 `git::linked_worktree_root(&cwd)` 定位隔离库 `Database::open_default(linked_worktree)`。 | 在 `src/cli/context.rs` 中提炼统一的 `WorkspaceContext`，提供 `cwd`、`workspace`、`checkout_path()` 与 `is_trusted(&db)`，供 `session`、`prompt`、`workspace`、`mcp`、`skill`、`command` 共用，保证 CLI 与 TUI / `exec` 读写完全相同的数据库与项目根。 |
+| **工作区与历史列表 CRUD（兼容刚合入的 `feature/workspace-history-list` `07553c8c`）** | `SCHEMA_VERSION` 已升至 **24**（v23 新增 `workspace.position`，v24 新增 `workspace_hidden`）。`src/db/workspace.rs` 已从 `src/db/mod.rs` 拆出，并提供完整工作区历史列表能力：`list_workspaces()`、`list_workspace_history_entries()`（含 Git 主工作区与 linked worktree 树归并、`exists`、`trusted`、过滤 `workspace_hidden`）、`record_workspace_open`、`rename_workspace`、`delete_workspace`（`ON DELETE CASCADE` 级联清理文件夹/提示词/引用目录/聊天会话）、`save_workspace_order`、`hide_workspace`/`unhide_workspace`。 | 1. `lx-tui workspace` 子命令同步扩展完整工作区历史 CRUD：`list`（树形历史列表 / `--raw` 扁平表）、`add`（`record_workspace_open` + `unhide_workspace`）、`rename`（`rename_workspace`）、`delete`（默认目标 `ctx.checkout_path()`；校验无运行中会话锁 → linked worktree 写 `hide_workspace` → `delete_workspace` 级联删除；仅当目标本身是主 checkout 时 `--include-worktrees` 才展开同仓库 linked worktree，仓库子目录不会误删主仓库）、`reorder`（`save_workspace_order`）、`status`、`trust`、`worktrees`（默认目标同样取 `checkout_path()`）。<br>2. 写命令（`prompt create` 等）先调 `db.ensure_workspace(&ctx.workspace)`（`DO NOTHING` 不覆盖自定义工作区名）。 |
 | **子 Agent 角色扩展与层级树（兼容刚合入的 `feature/lx-agent-roles-residency-and-panel` `65f90a62` 与 `339065ce`）** | 1. 内置角色已扩为 **3 个**：`explorer`、`executor`、**`monitor`**（`BaseRole::Monitor` / `AgentRole::Monitor`）；<br>2. `SubagentsSection` 新增 `delegation_mode: DelegationMode`（`auto\|proactive\|explicit`）；<br>3. `RoleOverrideConfig` / `CustomRoleConfig` 新增 `lock_model: bool` 与 `capabilities: RoleCapabilities`（`allow_web_search`/`allow_mcp`/`allow_skills`）；<br>4. 新增项目级角色发现 `src/config/subagents/discover.rs`（`discover_project_roles`、`merge_project_roles_for_paths` 扫描 `<workspace>/.lx/agents/*.json` 与 `.agents/roles/*.json`）；<br>5. `src/chat/agent/{path,status}.rs` 提供 `decode_stored_role_and_path` 与 `projected_agent_status`（7 态投影与队列感知）。 | 1. `lx-tui subagent` 完整对接 3 个内置角色（含 `monitor`）、`--delegation-mode`、`--lock-model`、`--allow-web-search`/`--allow-mcp`/`--allow-skills`，支持 `--scope <user\|project>` 查看合并后的项目级角色或读写 `<workspace>/.lx/agents/<name>.json`；<br>2. `lx-tui session agents` 复用 `decode_stored_role_and_path`、`has_queued_input` 与 `projected_agent_status` 输出准确的层级路径（`agent_path`）与 7 态状态。 |
-| **跨进程会话锁** | `crate::platform::try_lock_session(session_id) -> io::Result<Option<SessionLockGuard>>` 已在 `exec` 与 `event/chat/rewind/restore.rs` 中用于防并发篡改。 | `session delete`、`session compact` 在 CLI 执行前必须调用 `platform::try_lock_session`；`session rewind` 复用 `event::chat::rewind::execute_rewind`（内部已持 `try_lock_session`）。若返回 `Ok(None)`，立即报错退出码 `1`。 |
+| **跨进程会话锁** | `crate::platform::try_lock_session(session_id) -> io::Result<Option<FileGuard>>` 已在 `exec` 与 `event/chat/rewind/restore.rs` 中用于防并发篡改。 | `session delete`、`session compact` 在 CLI 执行前必须调用 `platform::try_lock_session`；`session rewind` 复用 `event::chat::rewind::execute_rewind`（内部已持 `try_lock_session`）。若返回 `Ok(None)`，立即报错退出码 `1`。 |
 | **Rewind 与 Compact 复用** | `src/event/chat/rewind/restore.rs:30` 的 `run(database, workspace, request)` 已完整实现预检、路径加锁、文件恢复、失败逆序补偿与 `commit_rewind`；`src/chat/compact.rs` 已提供纯数据 `playable_messages`、`incremental`、`summary_request`、`validate_summary`。 | 将 `restore::run` 通过 `src/event/chat/rewind.rs` 暴露为 `pub fn execute_rewind(database: &Database, workspace: &Path, request: &RewindRequest) -> RewindOutcome`；CLI 的 `session rewind` 与 `session compact` 直接复用现有事务与校验链路，零重复实现。 |
 | **配置与扩展真实类型名** | 经核对源码：<br>- Todo：`TodoRecord`、`TodoStatus`、`TodoPriority`、`TodoDayStats`（`src/db/todo.rs`）<br>- AI：`AiSettings`、`ProviderConfig`、`ModelConfig`、`ModelSelection`（`src/config/ai/mod.rs`）<br>- MCP：`McpConfigFile`、`McpServerConfig`、`McpScope`、`effective_servers`（`src/config/mcp.rs`）<br>- Skills：`SkillsConfigFile`、`SkillEntry`、`discover::discover`、`store::{read_skill_at, write_skill, delete_skill}`（`src/config/skills.rs`、`src/skills/`）<br>- Commands：`CommandRecord`、`CommandKind`、`CommandScope`（`src/settings/commands.rs`）<br>- Subagents：`SubagentsConfigFile`、`SubagentsSection`、`CustomRoleConfig`（`src/config/subagents.rs`）<br>- Settings Web：`SettingsService::start`（`src/settings/service.rs`） | 所有子模块严格对接上述真实 Rust 类型与公开 API，所有配置文件保存均走已有的 0600 原子写函数（`save_ai`、`save_mcp`、`save_skills`、`save_subagents`、`config::save`、`commands::save`）。 |
 
@@ -43,38 +43,55 @@
 
 ```text
 src/
-  main.rs                        薄入口：调用 lx_tui::cli::parse_cli 与 lx_tui::cli::run_cli
-  lib.rs                         导出 pub mod cli;
+  main.rs                        薄入口：调用 lx_tui::cli::parse_cli 与 lx_tui::cli::run_cli (96 行)
+  lib.rs                         导出 pub mod cli; (23 行)
   cli/
-    mod.rs                       顶层 CliAction 枚举、parse_cli 入口、run_cli 分发器 (~220 行)
-    args.rs                      通用零依赖参数扫描器 RawArgs、GlobalFlags(-C/--json/--color)、长文本输入解析 (~320 行)
-    context.rs                   CliContext：cwd/workspace/linked_worktree 解析、Database 打开、会话锁辅助 (~200 行)
-    output.rs                    OutputWriter：Human 表格/键值排版、ANSI 颜色控制、--json 序列化输出 (~240 行)
-    help.rs                      全局与各领域子命令英文帮助文本（HelpTopic 扩展与常量文本） (~380 行)
+    mod.rs                       顶层 CliAction 枚举、parse_cli 入口、run_cli 分发器 (131 行)
+    args.rs                      通用零依赖参数扫描器、GlobalOpts(-C/--json/--color)、
+                                 `--` 终止符与带值选项保护、ContentInput 长文本输入解析 (428 行)
+    context.rs                   WorkspaceContext：cwd/workspace/checkout_path 解析、open_db/db_path、
+                                 is_trusted 统一信任门控、会话解析与跨进程会话锁 (184 行)
+    output.rs                    Output：Human 表格/键值排版、ANSI 颜色控制、--json 序列化输出 (178 行)
+    help.rs                      全局与各领域子命令英文帮助文本（HelpTopic 扩展与常量文本） (398 行)
     session/
-      mod.rs                     `lx-tui session` 参数解析与子命令分发（list/show/rename/delete/fork/agents/processes） (~450 行)
-      ops.rs                     `session rewind`（含 --dry-run 与 4 种模式）与 `session compact`（含 --revert 与摘要流） (~380 行)
-    prompt.rs                    `lx-tui prompt` 参数解析与执行（条目 CRUD、folder 子命令、page 子命令、ref 子命令） (~480 行)
-    todo.rs                      `lx-tui todo` 参数解析与执行（list/add/update/done/undone/delete/reorder/rollover/stats） (~380 行)
-    workspace.rs                 `lx-tui workspace` 参数解析与执行（list/add/rename/delete/reorder/status/trust/worktrees） (~340 行)
-    model.rs                     `lx-tui model` 参数解析与执行（list/default/show/provider-set/provider-rm/model-set/model-rm/fetch） (~460 行)
-    mcp.rs                       `lx-tui mcp` 参数解析与执行（list/show/add-stdio/add-http/remove/enable/disable/probe/login/logout） (~480 行)
-    skill.rs                     `lx-tui skill` 参数解析与执行（list/show/enable/disable/create/edit/delete） (~360 行)
-    command.rs                   `lx-tui command` 参数解析与执行（list/show/create/edit/rename/delete） (~360 行)
-    subagent.rs                  `lx-tui subagent` 参数解析与执行（show/set/role-set/role-reset/role-rm，含 monitor 与项目级角色） (~420 行)
-    settings.rs                  `lx-tui settings` 参数解析与执行（show/set/reset/open 前台驻留 Web 服务） (~320 行)
+      mod.rs                     `lx-tui session` 参数解析与子命令枚举 (413 行)
+      views.rs                   list/show/rename/delete/fork/agents/processes 执行与输出 (500 行)
+      ops.rs                     `session rewind`（含 --dry-run 与 4 种模式）与
+                                 `session compact`（含 --revert 与摘要流） (494 行)
+    prompt.rs                    `lx-tui prompt` 参数解析与子命令枚举 (242 行)
+    prompt/exec.rs               条目 CRUD、folder/page/ref 子命令执行与工作区归属校验 (487 行)
+    todo.rs                      `lx-tui todo` 参数解析与子命令枚举 (249 行)
+    todo/exec.rs                 list/add/update/done/start/reopen/delete/reorder/rollover/stats 执行 (347 行)
+    workspace.rs                 `lx-tui workspace` 参数解析与子命令枚举 (254 行)
+    workspace/exec.rs            list/add/rename/delete/reorder/status/trust/worktrees 执行 (471 行)
+    workspace/exec/list.rs       树形历史列表、`--raw` 扁平表与搜索过滤 (148 行)
+    model.rs                     `lx-tui model` 参数解析与子命令枚举 (351 行)
+    model/exec.rs                list/default/show/provider-set/model-set/rm 执行 (493 行)
+    model/exec/remote.rs         `model fetch` 远端发现与 `model config` 全局设置 (136 行)
+    mcp.rs                       `lx-tui mcp` 参数解析与子命令枚举 (494 行)
+    mcp/exec.rs                  list/show/remove/enable/disable/probe/login/logout 执行 (395 行)
+    mcp/exec/add.rs              add-stdio/add-http 增量保存：未显式重传的可选字段保留旧值 (208 行)
+    skill.rs                     `lx-tui skill` 参数解析与子命令枚举 (289 行)
+    skill/exec.rs                list/show/enable/disable/create/edit/delete 执行 (424 行)
+    command.rs                   `lx-tui command` 参数解析与子命令枚举 (422 行)
+    command/exec.rs              list/show/create/edit/rename/delete 执行 (356 行)
+    subagent.rs                  `lx-tui subagent` 参数解析与子命令枚举 (399 行)
+    subagent/exec.rs             show/set/role-set/role-reset/role-rm 执行 (476 行)
+    settings.rs                  `lx-tui settings` 参数解析与 show/set/reset/open 前台驻留服务 (360 行)
     tests/
-      mod.rs                     CLI 测试入口与公共临时环境 Fixture (~120 行)
-      args_and_help_tests.rs     顶层路由、全局标志、帮助主题与内容输入测试 (~280 行)
-      session_tests.rs           session list/show/rename/delete/fork/rewind/compact/lock 测试 (~420 行)
-      prompt_and_todo_tests.rs   prompt/folder/page/ref 与 todo 全链路 CRUD 测试 (~420 行)
-      config_domains_tests.rs    workspace/model/mcp/skill/command/subagent/settings 测试 (~450 行)
+      mod.rs                     CLI 测试入口、隔离临时 HOME/DB/工作区 Fixture 与子进程输出捕获 (164 行)
+      args_and_help_tests.rs     顶层路由、全局标志、`--` 保护、帮助主题与内容输入测试 (242 行)
+      session_tests.rs           session list/show/rename/delete/fork/rewind/compact/lock 测试 (335 行)
+      prompt_and_todo_tests.rs   prompt/folder/page/ref 与 todo 全链路 CRUD、工作区隔离测试 (374 行)
+      config_domains_tests.rs    workspace/model/mcp/skill/command/subagent/settings 测试 (340 行)
+      config_regressions_tests.rs P0–P2 回归：workspace 删除/重排、mcp 局部更新、
+                                 skill/command 正文保留、command kind 合并、model 空 ID (346 行)
 ```
 
 ### 2.2 模块依赖方向合规性
 
 在 `docs/standards/project-directory-structure.md` 中：
-- `main -> cli -> {chat, db, config, settings, mcp, skills, git, platform}`
+- `main -> cli -> {app, chat, config, db, event, git, layout, mcp, platform, settings, skills}`
 - `cli/` **不依赖** `tui`、`ui`、`input`、`terminal`、`pty`（无头执行不初始化备用屏或原始模式）；
 - 唯一复用的 `event` 能力是 `event::chat::rewind::execute_rewind`（纯同步 DB + 文件恢复函数，不启动 TUI 事件循环）。
 - 所有 CLI 用户可见文案（帮助、表头、状态提示、错误消息）**100% 使用英文**，中文仅用于代码注释与 `tracing` 日志。
@@ -113,7 +130,7 @@ src/
 - `lx-tui session fork (<SESSION_ID> | --last) [--before <USER_MESSAGE_ID>] [-C <DIR>] [--json]`
   - 分叉会话（默认克隆全部已完成轮次；传 `--before` 则克隆该条用户消息之前的历史并返回 `restore_text`），打印新会话 ID。
 - `lx-tui session rewind (<SESSION_ID> | --last) [--mode <revert-and-delete|delete-only|revert-only|restore-compact>] [--dry-run] [-C <DIR>] [--json]`
-  - **需获取会话锁**：对最新一轮用户消息执行回滚（默认 `revert-and-delete`）。`--dry-run` 仅运行 `restore_plan` / `rewind_availability` 预检并列出受影响文件路径与可用性状态，不改磁盘与数据库。
+  - **非 dry-run 需获取会话锁**：对最新一轮用户消息执行回滚（默认 `revert-and-delete`）。`--dry-run` 为只读预检（普通模式运行 `restore_plan` / `rewind_availability`，`restore-compact` 模式预检 active checkpoint），列出受影响文件路径与可用性状态，不写库不改盘。
 - `lx-tui session compact (<SESSION_ID> | --last) [-m, --model <MODEL>] [--revert] [-C <DIR>] [--json]`
   - **需获取会话锁**：
     - 默认模式：加载会话可回放增量轮次，使用指定模型（或会话模型/默认模型）发起流式摘要请求，校验通过后调用 `db.commit_compact` 落库检查点；
@@ -218,14 +235,14 @@ src/
   - 查看单个 MCP 服务的详细配置（敏感 token 脱敏）。
 - `lx-tui mcp add-stdio <NAME> --command <CMD> [--arg <ARG>...] [--cwd <DIR>] [--env <KEY=VAL>...] [--env-var <VAR>...] [--startup-timeout <SEC>] [--tool-timeout <SEC>] [--scope <user|project>] [-C <DIR>] [--json]`
   - 新增或更新 Stdio 类型 MCP 服务。
-- `lx-tui mcp add-http <NAME> --url <URL> [--auth <none|bearer|oauth>] [--bearer-token <TOKEN>] [--bearer-env <VAR>] [--header <KEY=VAL>...] [--scope-item <SCOPE>...] [--client-id <ID>] [--client-secret <SECRET>] [--startup-timeout <SEC>] [--tool-timeout <SEC>] [--scope <user|project>] [-C <DIR>] [--json]`
+- `lx-tui mcp add-http <NAME> --url <URL> [--auth <none|bearer|oauth>] [--bearer-token <TOKEN>] [--bearer-env <VAR>] [--header <KEY=VAL>...] [--env-http-header <HEADER=ENV_VAR>...] [--scope-item <SCOPE>...] [--client-id <ID>] [--client-secret <SECRET>] [--startup-timeout <SEC>] [--tool-timeout <SEC>] [--scope <user|project>] [-C <DIR>] [--json]`
   - 新增或更新 HTTP/SSE 类型 MCP 服务。
 - `lx-tui mcp remove <NAME> [--scope <user|project>] [-C <DIR>] [--json]`
   - 删除指定作用域下的 MCP 服务配置。
 - `lx-tui mcp enable <NAME> [--scope <user|project>] [-C <DIR>] [--json]` / `lx-tui mcp disable <NAME> [--scope <user|project>] [-C <DIR>] [--json]`
   - 启用或禁用指定 MCP 服务。
 - `lx-tui mcp probe <NAME> [--scope <user|project>] [-C <DIR>] [--json]`
-  - 实际启动/连接该 MCP 服务并握手探测（调用 `mcp::manager().probe`），输出发现的工具名称列表。
+  - 实际启动/连接该 MCP 服务并握手探测（调用 `mcp::manager::manager().probe`），输出发现的工具名称列表。
 - `lx-tui mcp login <NAME> [--scope <user|project>] [--no-open] [-C <DIR>] [--json]`
   - 为 `auth=oauth` 的 HTTP MCP 服务启动临时本地回调监听、调用 `mcp::oauth::begin_authorization` 并打开浏览器授权，收到回调后调用 `complete_authorization` 将凭据写入 `<data>/mcp/credentials.json`。
 - `lx-tui mcp logout <NAME> [--scope <user|project>] [-C <DIR>] [--json]`
@@ -453,9 +470,16 @@ pub struct ContentInput {
 }
 
 impl ContentInput {
-    /// 解析最终文本：优先级 `--content`（若为 `"-"` 则读 stdin） > `--file` > 非终端管道 stdin。
-    /// `required = true` 时若三者皆无则报错；`required = false` 时返回 `Ok(None)`。
-    pub fn resolve(
+    /// 使用进程真实 `stdin` 解析内容。
+    pub fn resolve(&self, required: bool) -> Result<Option<String>, String> {
+        self.resolve_with(required, std::io::stdin().is_terminal(), read_stdin_to_end)
+    }
+
+    /// 解析最终文本：优先级 `--content`（`"-"` 读 stdin） > `--file`（`"-"` 读 stdin） >
+    /// 非终端管道 stdin。`required = true` 时若三者皆无则报错；`required = false` 时返回
+    /// `Ok(None)`；可选正文从非 TTY stdin 读到空文本时同样返回 `Ok(None)`，避免脚本/CI 的
+    /// `/dev/null` 或空管道静默覆盖已有正文。
+    pub fn resolve_with(
         &self,
         required: bool,
         stdin_is_terminal: bool,
@@ -472,12 +496,19 @@ impl ContentInput {
             return Ok(Some(raw.clone()));
         }
         if let Some(path) = &self.file {
+            if path.as_os_str() == "-" {
+                let text = read_stdin().map_err(|e| format!("failed to read stdin: {e}"))?;
+                return Ok(Some(text));
+            }
             let text = std::fs::read_to_string(path)
                 .map_err(|e| format!("failed to read '{}': {e}", path.display()))?;
             return Ok(Some(text));
         }
         if !stdin_is_terminal {
             let text = read_stdin().map_err(|e| format!("failed to read stdin: {e}"))?;
+            if !required && text.is_empty() {
+                return Ok(None);
+            }
             return Ok(Some(text));
         }
         if required {
@@ -488,7 +519,14 @@ impl ContentInput {
     }
 }
 
+fn read_stdin_to_end() -> std::io::Result<String> {
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf)?;
+    Ok(buf)
+}
+
 /// 扫描并剥离全局选项（`-C/--cd`、`--json`、`--color`、`-h/--help`），保留其余参数按原顺序交由子命令解析。
+/// `VALUE_OPTIONS` 是全部已知带值选项的静态表（完整列表见 `src/cli/args.rs`）。
 pub fn extract_global_opts(
     raw_args: &[OsString],
 ) -> Result<(GlobalOpts, Vec<String>, bool), String> {
@@ -515,14 +553,29 @@ pub fn extract_global_opts(
             i += 1;
             continue;
         }
-        if let Some(val) = take_opt_value(raw_args, &mut i, arg, "-C", "--cd")? {
+        if let Some(val) = take_os_opt_value(raw_args, &mut i, arg, "-C", "--cd")? {
             global.cwd = Some(PathBuf::from(required_non_empty(&val, "--cd")?));
             i += 1;
             continue;
         }
-        if let Some(val) = take_opt_value(raw_args, &mut i, arg, "", "--color")? {
-            global.color = ColorMode::parse(&val)?;
+        if let Some(val) = take_os_opt_value(raw_args, &mut i, arg, "", "--color")? {
+            global.color = ColorMode::parse(&val).ok_or_else(|| {
+                format!("invalid '--color' value '{val}'; expected 'auto', 'always', or 'never'")
+            })?;
             i += 1;
+            continue;
+        }
+        // 已知带值选项（`--content`、`--description`、`--title`、`--model` 等）连同
+        // 紧随的取值 token 原样保留，避免 `--content --json` 误吞全局标志。
+        let value_flag = arg.split_once('=').map_or(arg, |(name, _)| name);
+        if VALUE_OPTIONS.contains(&value_flag) {
+            rest.push(arg.to_string());
+            if arg.contains('=') || i + 1 >= raw_args.len() {
+                i += 1;
+            } else {
+                rest.push(utf8(&raw_args[i + 1])?.to_string());
+                i += 2;
+            }
             continue;
         }
         rest.push(arg.to_string());
@@ -544,7 +597,7 @@ use std::path::{Path, PathBuf};
 
 use crate::db::{self, Database};
 use crate::git;
-use crate::platform::SessionLockGuard;
+use crate::platform::FileGuard;
 
 /// 工作区与数据库解析上下文。
 pub struct WorkspaceContext {
@@ -576,7 +629,7 @@ impl WorkspaceContext {
         let cwd = std::fs::canonicalize(&target).unwrap_or(target);
         let workspace = git::list_worktrees(&cwd)
             .map(|list| list.repo_root)
-            .unwrap_or_else(|_| cwd.clone());
+            .unwrap_or_else(|| cwd.clone());
         let effective_worktree = if cwd_override.is_some() {
             if db::is_dev_environment() {
                 git::linked_worktree_root(&cwd)
@@ -595,10 +648,31 @@ impl WorkspaceContext {
         })
     }
 
+    /// 当前所在 checkout 根：linked worktree 返回其自身路径，否则回退工作区根。
+    pub fn checkout_path(&self) -> PathBuf {
+        git::list_worktrees(&self.cwd)
+            .and_then(|list| git::checkout(&list, &self.cwd))
+            .map(|checkout| checkout.checkout_path)
+            .unwrap_or_else(|| self.workspace.clone())
+    }
+
+    /// 项目级写操作的统一信任门控：cwd、当前 checkout 与工作区根任一已信任即可。
+    pub fn is_trusted(&self, db: &Database) -> bool {
+        db.is_trusted(&self.cwd).unwrap_or(false)
+            || db.is_trusted(&self.checkout_path()).unwrap_or(false)
+            || db.is_trusted(&self.workspace).unwrap_or(false)
+    }
+
     /// 打开默认 SQLite 数据库。
     pub fn open_db(&self) -> Result<Database, String> {
         Database::open_default(self.effective_worktree.as_deref())
             .map_err(|e| format!("failed to open database: {}", e.code()))
+    }
+
+    /// 返回当前生效的默认数据库文件路径。
+    pub fn db_path(&self) -> Result<PathBuf, String> {
+        db::database_path(db::is_dev_environment(), self.effective_worktree.as_deref())
+            .map_err(|e| format!("failed to resolve database path: {}", e.code()))
     }
 }
 
@@ -615,9 +689,21 @@ pub fn resolve_target_session(
     if !last && session_id.is_none() {
         return Err("specify a <SESSION_ID> or pass '--last'".to_string());
     }
-    let sessions = db
-        .list_chat_sessions(workspace, 0, 200)
-        .map_err(|e| format!("failed to list sessions: {}", e.code()))?;
+    // 分页拉取全部会话：单页上限 200，避免超出后无法按 ID/前缀解析；
+    // 空标题会话同样参与匹配。
+    let mut sessions = Vec::new();
+    let mut offset = 0usize;
+    loop {
+        let page = db
+            .list_chat_sessions(workspace, offset, 200)
+            .map_err(|e| format!("failed to list sessions: {}", e.code()))?;
+        let count = page.len();
+        sessions.extend(page);
+        if count < 200 {
+            break;
+        }
+        offset = offset.saturating_add(count);
+    }
     if last {
         return sessions
             .into_iter()
@@ -626,16 +712,11 @@ pub fn resolve_target_session(
             .ok_or_else(|| format!("no sessions found in workspace '{}'", workspace.display()));
     }
     let query = session_id.unwrap_or_default().trim();
+    if query.is_empty() {
+        return Err("session ID must not be empty".to_string());
+    }
     if let Some(exact) = sessions.iter().find(|s| s.external_id == query) {
         return Ok(exact.external_id.clone());
-    }
-    // 若不在前 200 条但数据库中精确存在：
-    if db
-        .chat_session_title(workspace, query)
-        .map_err(|e| format!("failed to query session: {}", e.code()))?
-        .is_some()
-    {
-        return Ok(query.to_string());
     }
     let prefix_matches: Vec<&str> = sessions
         .iter()
@@ -656,7 +737,7 @@ pub fn resolve_target_session(
 }
 
 /// 获取跨进程会话独占锁；被 TUI 或其它 `exec` 占用时返回可读英文错误。
-pub fn acquire_session_lock(session_id: &str) -> Result<SessionLockGuard, String> {
+pub fn acquire_session_lock(session_id: &str) -> Result<FileGuard, String> {
     match crate::platform::try_lock_session(session_id) {
         Ok(Some(guard)) => Ok(guard),
         Ok(None) => Err(format!(
@@ -756,9 +837,9 @@ pub fn execute_rewind(
 }
 ```
 在 `src/cli/session/ops.rs` 中：
-- 若 `--mode restore-compact`：先获取 `acquire_session_lock(&session_id)`，查询 `db.active_checkpoint(&ctx.workspace, &session_id)` 与 `db.session_revision(&session_id)`，调用 `db.revert_compact(...)`。
-- 若 `--dry-run`：查询 `db.latest_user_turn(&ctx.workspace, &session_id)`，调用 `db.restore_plan(&ctx.workspace, &session_id, &latest.user_message_id)`，输出目标用户消息、文件可用性（`Ready`/`KnownEmpty`/`AlreadyRestored`/`Unavailable`/`Incomplete`）与受影响文件路径清单，不写库不改盘。
-- 若正常执行（`revert-and-delete` / `delete-only` / `revert-only`）：构造 `RewindRequest`，直接调用 `crate::event::chat::rewind::execute_rewind(&db, &ctx.workspace, &request)`，根据 `RewindOutcome::Succeeded` / `Failed` 输出结果或返回退出码 `1`。
+- 若 `--mode restore-compact`：先获取 `acquire_session_lock(&session_id)`，查询 `db.active_checkpoint(&ctx.workspace, &session_id)` 与 `db.session_revision(&session_id)`，调用 `db.revert_compact(...)`；`--dry-run` 时改为只读预检 `db.active_session_checkpoint(...)`，不写库不改盘。
+- 若普通模式 `--dry-run`：查询 `db.latest_user_turn(&ctx.workspace, &session_id)`，调用 `db.restore_plan(...)` 与 `db.rewind_availability(...)`，输出目标用户消息、文件可用性（`Ready`/`KnownEmpty`/`AlreadyRestored`/`Unavailable`/`Incomplete`）与受影响文件路径清单，不写库不改盘。
+- 若正常执行（`revert-and-delete` / `delete-only` / `revert-only`）：**先获取会话锁再读取** `latest_user_turn`，构造 `RewindRequest` 后释放锁，再调用 `crate::event::chat::rewind::execute_rewind(&db, &ctx.workspace, &request)`（内部重新取同一把锁），根据 `RewindOutcome::Succeeded` / `Failed` 输出结果或返回退出码 `1`。
 
 #### 4.5.2 `session compact`：复用 `chat::compact` 与 `db::chat::compact`
 ```rust
@@ -828,8 +909,9 @@ pub fn run_compact(
         .build()
         .map_err(|e| format!("failed to start async runtime: {e}"))?;
     let summary = runtime.block_on(async {
-        let (_cancel_tx, cancel_rx) = crate::chat::client::uncancellable();
         let mut text = String::new();
+        let mut saw_tool_call = false;
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
         let outcome = crate::chat::client::run_stream(
             &target.transport,
             &target.base_url,
@@ -837,13 +919,29 @@ pub fn run_compact(
             std::time::Duration::from_millis(target.idle_timeout_ms),
             chat_request,
             cancel_rx,
-            |delta| {
-                if let crate::chat::events::ChatDelta::Text(chunk) = delta {
-                    text.push_str(&chunk);
+            |deltas: &[crate::chat::events::ChatDelta]| {
+                for delta in deltas {
+                    match delta {
+                        crate::chat::events::ChatDelta::ToolInputStarted { .. }
+                        | crate::chat::events::ChatDelta::ToolInputDelta { .. }
+                        | crate::chat::events::ChatDelta::ToolInputEnded { .. } => {
+                            saw_tool_call = true;
+                            let _ = cancel_tx.send(true);
+                        }
+                        crate::chat::events::ChatDelta::Part(part)
+                            if part.kind == crate::chat::events::PartKind::Text =>
+                        {
+                            text.push_str(&part.text);
+                        }
+                        _ => {}
+                    }
                 }
             },
         )
         .await;
+        if saw_tool_call {
+            return Err("compact summary response unexpectedly contained tool calls".to_string());
+        }
         if outcome.stop != crate::chat::events::StopReason::Complete {
             return Err(format!("compact summary request failed: {}", outcome.stop.as_str()));
         }
@@ -856,7 +954,7 @@ pub fn run_compact(
             &crate::db::chat::CompactCommit {
                 session_id: session_id.to_string(),
                 expected_revision: revision,
-                base_checkpoint_id: active.map(|c| c.id),
+                base_checkpoint_id: active.as_ref().map(|checkpoint| checkpoint.id.clone()),
                 start_sequence: input.start_sequence,
                 end_sequence: input.end_sequence,
                 summary_text: summary,
@@ -875,7 +973,7 @@ pub fn run_compact(
 ### 4.6 MCP 探测与 OAuth 登录 (`src/cli/mcp.rs`) & 设置服务驻留 (`src/cli/settings.rs`)
 
 #### 4.6.1 `mcp probe` 与 `mcp login`
-- `mcp probe <NAME>`：读取用户级与项目级 `McpConfigFile`，构造目标 `EffectiveServer`，在 Tokio runtime 中调用 `crate::mcp::manager().probe(&effective, &ctx.workspace).await`，成功后调用 `crate::mcp::manager().shutdown().await` 清理子进程，打印工具列表。
+- `mcp probe <NAME>`：读取用户级与项目级 `McpConfigFile`，构造目标 `EffectiveServer`，在 Tokio runtime 中调用 `crate::mcp::manager::manager().probe(&effective, &ctx.workspace).await`，成功后调用 `crate::mcp::manager::manager().shutdown().await` 清理子进程，打印工具列表。
 - `mcp login <NAME>`：
   1. 绑定临时本地回环端口 `tokio::net::TcpListener::bind("127.0.0.1:0")`，构造 `redirect_uri = format!("http://127.0.0.1:{port}/mcp/oauth/callback")`；
   2. 调用 `crate::mcp::oauth::begin_authorization(&effective, &ctx.workspace, &redirect_uri).await` 获取 `PendingAuthorization`；
@@ -885,25 +983,27 @@ pub fn run_compact(
 #### 4.6.2 `settings open` 前台驻留服务
 ```rust
 // src/cli/settings.rs (关键代码)
-fn run_open(ctx: &WorkspaceContext, no_open: bool, out: &Output) -> Result<i32, String> {
+fn run_open(ctx: &WorkspaceContext, out: &Output, no_open: bool) -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("failed to initialize async runtime: {e}"))?;
     runtime.block_on(async {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let service = crate::settings::service::SettingsService::start(tx)
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let service = crate::settings::service::SettingsService::start(sender)
             .await
             .map_err(|e| format!("failed to start settings server: {e}"))?;
         // 注入当前工作区项目视图，使设置页中的 Project 级 MCP/Skills 可见
+        let mut trusted = false;
         if let Ok(db) = ctx.open_db() {
-            let trusted = db.is_trusted(&ctx.workspace).unwrap_or(false);
+            trusted = ctx.is_trusted(&db);
             let name = ctx
                 .workspace
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "workspace".to_string());
-            let scope = crate::platform::path_text::scope_dir_name(&ctx.workspace);
+            let scope = crate::platform::path_text::scope_dir_name(&ctx.workspace)
+                .unwrap_or_else(|| "workspace".to_string());
             service.set_projects(vec![crate::settings::service::ProjectView {
                 scope,
                 root: ctx.workspace.clone(),
@@ -911,37 +1011,60 @@ fn run_open(ctx: &WorkspaceContext, no_open: bool, out: &Output) -> Result<i32, 
                 trusted,
             }]);
         }
+        // 用户级命令恒注入；工作区受信任时追加项目级命令快照。
+        if let Ok(user_root) = crate::config::user_data_root() {
+            let (records, _) =
+                crate::settings::commands::list(crate::settings::commands::CommandScope::User, &user_root);
+            let mut views: Vec<crate::settings::service::CommandView> = records
+                .iter()
+                .map(|record| crate::settings::service::CommandView::of(
+                    record,
+                    crate::settings::commands::CommandScope::User,
+                ))
+                .collect();
+            if trusted {
+                let (records, _) = crate::settings::commands::list(
+                    crate::settings::commands::CommandScope::Project,
+                    &ctx.workspace,
+                );
+                views.extend(records.iter().map(|record| {
+                    crate::settings::service::CommandView::of(
+                        record,
+                        crate::settings::commands::CommandScope::Project,
+                    )
+                }));
+            }
+            service.set_commands_snapshot(&views);
+        }
         let url = service.url();
+        out.emit(
+            &serde_json::json!({
+                "url": url,
+                "port": service.port(),
+                "workspace": ctx.workspace,
+            }),
+            |_, w| {
+                writeln!(w, "Settings server running at: {url}")?;
+                writeln!(w, "Press Ctrl+C to stop.")
+            },
+        )?;
         if !no_open {
             let _ = crate::platform::open_browser(&url);
-        }
-        if out.is_json() {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "url": url,
-                    "port": service.port(),
-                    "workspace": ctx.workspace,
-                })
-            );
-        } else {
-            eprintln!("Settings server running at: {url}");
-            eprintln!("Press Ctrl+C to stop.");
         }
         // 消费后台事件防止通道堆积，同时等待 Ctrl+C
         loop {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => break,
-                 maybe_ev = rx.recv() => {
-                    if maybe_ev.is_none() {
+                event = receiver.recv() => {
+                    if event.is_none() {
                         break;
                     }
                 }
             }
         }
         service.shutdown();
-        crate::mcp::manager().shutdown().await;
-        Ok(EXIT_OK)
+        crate::mcp::manager::manager().shutdown().await;
+        Ok(())
     })
 }
 ```

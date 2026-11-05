@@ -113,6 +113,163 @@ fn prompt_folder_entry_page_and_ref_crud_end_to_end() {
 }
 
 #[test]
+fn prompt_move_and_folder_move_update_database_parents() {
+    let env = CliTestEnv::new("prompt-move");
+    assert_exit_ok(env.exec(&["prompt", "folder", "create", "Target"]));
+    assert_exit_ok(env.exec(&["prompt", "folder", "create", "Other"]));
+    let db = env.open_db();
+    let folders = db.list_folders(&env.workspace).expect("folders");
+    let target_id = folders
+        .iter()
+        .find(|folder| folder.name == "Target")
+        .expect("target folder")
+        .id;
+    let other_id = folders
+        .iter()
+        .find(|folder| folder.name == "Other")
+        .expect("other folder")
+        .id;
+
+    assert_exit_ok(env.exec(&["prompt", "folder", "create", "Child"]));
+    let child_id = db
+        .list_folders(&env.workspace)
+        .expect("folders")
+        .into_iter()
+        .find(|folder| folder.name == "Child")
+        .expect("child folder")
+        .id;
+
+    assert_exit_ok(env.exec(&["prompt", "create", "Movable Prompt", "--content", "Move me"]));
+    let prompt_id = db.list_prompts(&env.workspace).expect("prompts")[0]
+        .id
+        .to_string();
+
+    assert_exit_ok(env.exec(&[
+        "prompt",
+        "move",
+        &prompt_id,
+        "--folder",
+        &target_id.to_string(),
+    ]));
+    let moved = db.list_prompts(&env.workspace).expect("moved prompt");
+    assert_eq!(moved[0].folder_id, Some(target_id));
+
+    // P1-3 regression: folder move must read `--parent`, not the prompt `--folder` slot.
+    assert_exit_ok(env.exec(&[
+        "prompt",
+        "folder",
+        "move",
+        &child_id.to_string(),
+        "--parent",
+        &other_id.to_string(),
+    ]));
+    let folders = db.list_folders(&env.workspace).expect("folders after move");
+    assert_eq!(
+        folders
+            .iter()
+            .find(|folder| folder.id == child_id)
+            .expect("child folder")
+            .parent_id,
+        Some(other_id)
+    );
+}
+
+#[test]
+fn prompt_writes_are_isolated_to_the_current_workspace() {
+    let env = CliTestEnv::new("prompt-isolation");
+    let workspace_b = env.create_subdir("workspace-b");
+    let workspace_b = path_str(&workspace_b);
+
+    assert_exit_ok(env.exec(&[
+        "prompt",
+        "create",
+        "Workspace A Prompt",
+        "--content",
+        "Original A body",
+    ]));
+    let db = env.open_db();
+    let prompt = db.list_prompts(&env.workspace).expect("prompts")[0].clone();
+    let prompt_id = prompt.id.to_string();
+    let page_id = prompt.pages[0].id.to_string();
+
+    // P1-4 regression: workspace B must not be able to edit/delete A's page or prompt.
+    let err = env
+        .exec_raw(&[
+            "prompt",
+            "-C",
+            workspace_b,
+            "page",
+            "edit",
+            &page_id,
+            "--content",
+            "hijacked",
+        ])
+        .expect_err("cross-workspace page edit must be rejected");
+    assert!(err.contains("not found"), "unexpected error: {err}");
+    let err = env
+        .exec_raw(&["prompt", "-C", workspace_b, "page", "delete", &page_id])
+        .expect_err("cross-workspace page delete must be rejected");
+    assert!(err.contains("not found"), "unexpected error: {err}");
+    let err = env
+        .exec_raw(&["prompt", "-C", workspace_b, "delete", &prompt_id])
+        .expect_err("cross-workspace prompt delete must be rejected");
+    assert!(err.contains("not found"), "unexpected error: {err}");
+
+    let prompts = db.list_prompts(&env.workspace).expect("prompts intact");
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].id, prompt.id);
+    assert_eq!(prompts[0].pages.len(), 1);
+    assert_eq!(prompts[0].pages[0].id, prompt.pages[0].id);
+    assert_eq!(prompts[0].pages[0].content, "Original A body");
+    assert!(
+        db.list_prompts(std::path::Path::new(workspace_b))
+            .expect("workspace b prompts")
+            .is_empty()
+    );
+}
+
+#[test]
+fn todo_text_flag_preserves_completion_and_rejects_rollover_for_done() {
+    let env = CliTestEnv::new("todo-regressions");
+
+    // P2-3 regression: `--text` is a valid alternative to the positional TEXT.
+    assert_exit_ok(env.exec_raw(&["todo", "add", "--text", "From flag"]));
+    let db = env.open_db();
+    let todos = db.list_todos().expect("todos");
+    assert_eq!(todos.len(), 1);
+    assert_eq!(todos[0].text, "From flag");
+    let todo_id = todos[0].id.clone();
+
+    // Mark done with a historical completion date, then run `done` again.
+    let mut done = todos[0].clone();
+    done.status = TodoStatus::Done;
+    done.completed_date = Some("2000-01-01".to_string());
+    db.save_todo(&done).expect("seed completed todo");
+    assert_exit_ok(env.exec_raw(&["todo", "done", &todo_id]));
+    let completed = db
+        .list_todos()
+        .expect("todos")
+        .into_iter()
+        .find(|todo| todo.id == todo_id)
+        .expect("todo");
+    assert_eq!(completed.status, TodoStatus::Done);
+    assert_eq!(
+        completed.completed_date.as_deref(),
+        Some("2000-01-01"),
+        "repeated `todo done` must preserve the original completed_date"
+    );
+
+    // P2-3 regression: completed todos cannot be rolled over.
+    let err = env
+        .exec_raw(&["todo", "rollover", "--id", &todo_id])
+        .expect_err("rollover of a done todo must be rejected");
+    assert!(
+        err.contains("cannot roll over completed todo"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn todo_add_update_status_reorder_rollover_and_stats_end_to_end() {
     let env = CliTestEnv::new("todo-crud");
     let today = today_date();

@@ -56,6 +56,7 @@ struct Scan<'a> {
     args: &'a [String],
     index: usize,
     positionals: Vec<String>,
+    literal: bool,
 }
 impl<'a> Scan<'a> {
     fn new(args: &'a [String]) -> Self {
@@ -63,6 +64,7 @@ impl<'a> Scan<'a> {
             args,
             index: 0,
             positionals: Vec::new(),
+            literal: false,
         }
     }
     fn token(&mut self) -> Option<String> {
@@ -71,6 +73,9 @@ impl<'a> Scan<'a> {
         Some(token)
     }
     fn value(&mut self, current: &str, long: &str) -> Result<Option<String>, String> {
+        if self.literal {
+            return Ok(None);
+        }
         if current == long {
             let value = self
                 .args
@@ -88,6 +93,14 @@ impl<'a> Scan<'a> {
         Ok(None)
     }
     fn positional(&mut self, arg: &str) -> Result<(), String> {
+        if self.literal {
+            self.positionals.push(arg.to_string());
+            return Ok(());
+        }
+        if arg == "--" {
+            self.literal = true;
+            return Ok(());
+        }
         if arg.starts_with('-') && arg != "-" {
             return Err(format!(
                 "unknown option '{arg}'; run '{HELP} --help' for usage"

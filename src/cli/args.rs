@@ -139,6 +139,10 @@ impl ContentInput {
         }
         if !stdin_is_terminal {
             let text = read_stdin().map_err(|e| format!("failed to read stdin: {e}"))?;
+            // 可选正文的隐式 stdin（脚本/CI 的空管道）不得覆盖已有正文。
+            if !required && text.is_empty() {
+                return Ok(None);
+            }
             return Ok(Some(text));
         }
         if required {
@@ -163,6 +167,97 @@ pub fn utf8(raw: &OsStr) -> Result<&str, String> {
     raw.to_str()
         .ok_or_else(|| format!("argument '{}' is not valid UTF-8", raw.to_string_lossy()))
 }
+
+/// 已知需要取值的子命令选项：全局扫描必须连同紧随的值原样保留，
+/// 否则像 `--content --json` 这样的值会被误当成全局标志吞掉。
+const VALUE_OPTIONS: &[&str] = &[
+    "--content",
+    "-f",
+    "--file",
+    "--description",
+    "--prompt",
+    "--title",
+    "--name",
+    "--text",
+    "--note",
+    "--command",
+    "--arg",
+    "--env",
+    "--env-var",
+    "--header",
+    "--env-http-header",
+    "--url",
+    "--base-url",
+    "--api-key",
+    "--bearer-token",
+    "--bearer-token-env",
+    "--bearer-env",
+    "--client-id",
+    "--client-secret",
+    "--scope-item",
+    "--cwd",
+    "--folder",
+    "--parent",
+    "--page",
+    "--page-name",
+    "--date",
+    "-d",
+    "-p",
+    "--priority",
+    "--status",
+    "-m",
+    "--model",
+    "--mode",
+    "--before",
+    "--limit",
+    "--offset",
+    "--search",
+    "-s",
+    "--scope",
+    "--kind",
+    "--type",
+    "--md-scope",
+    "--block",
+    "--block-type",
+    "--arg-hint",
+    "--argument-hint",
+    "--when-to-use",
+    "--base",
+    "--delegation-mode",
+    "--auth",
+    "--transport",
+    "--variant",
+    "--context-limit",
+    "--output-limit",
+    "--image-input",
+    "--filter",
+    "--to",
+    "--id",
+    "--days",
+    "--from",
+    "--exa-key",
+    "--tavily-key",
+    "--title-language",
+    "--timeout-ms",
+    "--max-concurrent",
+    "--max-depth",
+    "--default-max-tokens",
+    "--startup-timeout",
+    "--tool-timeout",
+    "--sidebar-width",
+    "--sidebar-min-width",
+    "--sidebar-max-width",
+    "--narrow-width",
+    "--min-width",
+    "--min-height",
+    "--min-pane-width",
+    "--min-pane-height",
+    "--lock-model",
+    "--allow-web-search",
+    "--allow-mcp",
+    "--allow-skills",
+    "--nicknames",
+];
 
 /// 扫描并剥离全局选项（`-C/--cd`、`--json`、`--color`、`-h/--help`），
 /// 保留其余参数按原顺序交由子命令解析。
@@ -202,6 +297,17 @@ pub fn extract_global_opts(
                 format!("invalid '--color' value '{val}'; expected 'auto', 'always', or 'never'")
             })?;
             i += 1;
+            continue;
+        }
+        let value_flag = arg.split_once('=').map_or(arg, |(name, _)| name);
+        if VALUE_OPTIONS.contains(&value_flag) {
+            rest.push(arg.to_string());
+            if arg.contains('=') || i + 1 >= raw_args.len() {
+                i += 1;
+            } else {
+                rest.push(utf8(&raw_args[i + 1])?.to_string());
+                i += 2;
+            }
             continue;
         }
         rest.push(arg.to_string());
@@ -311,9 +417,9 @@ pub fn parse_bool_flag(value: &str, flag: &str) -> Result<bool, String> {
     }
 }
 
-/// 若参数以 `-` 开头（且不是单独的 `"-"`），拒绝为未知选项。
+/// 若参数以 `-` 开头（且不是单独的 `"-"` 或 `--` 终止符），拒绝为未知选项。
 pub fn reject_unknown_flag(arg: &str, help_cmd: &str) -> Result<(), String> {
-    if arg.starts_with('-') && arg != "-" {
+    if arg.starts_with('-') && arg != "-" && arg != "--" {
         return Err(format!(
             "unknown option '{arg}'; run '{help_cmd} --help' for usage"
         ));

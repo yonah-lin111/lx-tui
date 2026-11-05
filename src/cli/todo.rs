@@ -1,14 +1,11 @@
 //! `lx-tui todo` 无头 CLI：全局日程待办的增删改查、状态切换、重排、顺延与统计。
 use std::ffi::OsString;
-use std::path::Path;
 
 use serde_json::{Value, json};
 
 use crate::cli::args::{GlobalOpts, extract_global_opts, parse_usize_flag, take_opt};
-use crate::cli::context::open_global_db;
 use crate::cli::output::Output;
-use crate::cli::{CliAction, EXIT_OK, HelpTopic};
-use crate::db::Database;
+use crate::cli::{CliAction, HelpTopic};
 use crate::db::todo::{TodoPriority, TodoRecord, TodoStatus, parse_date, shift_date, today_date};
 
 /// `lx-tui todo` 的解析结果。
@@ -80,9 +77,14 @@ impl TodoCommand {
             ..Self::default()
         };
         let mut index = 0;
+        let mut positional_only = false;
         while index < args.len() {
             let arg = args[index].as_str();
-            if let Some(value) = take_opt(args, &mut index, "", "--date")? {
+            if positional_only {
+                command.words.push(arg.to_string());
+            } else if arg == "--" {
+                positional_only = true;
+            } else if let Some(value) = take_opt(args, &mut index, "", "--date")? {
                 command.date = Some(value);
             } else if arg == "--all" {
                 command.all = true;
@@ -144,365 +146,12 @@ fn parse_priority(raw: &str) -> Result<TodoPriority, String> {
     }
 }
 
-fn date_value(raw: &str, flag: &str) -> Result<String, String> {
-    let date = raw.trim();
-    let shape = date.len() == 10
-        && date.as_bytes().get(4) == Some(&b'-')
-        && date.as_bytes().get(7) == Some(&b'-');
-    if shape && parse_date(date).is_some() {
-        Ok(date.to_string())
-    } else {
-        Err(format!(
-            "invalid date '{raw}' for '{flag}'; expected YYYY-MM-DD"
-        ))
-    }
-}
-
 fn missing_subcommand() -> String {
     "todo requires a subcommand; run 'lx-tui todo --help' for usage".to_string()
 }
 
 fn unexpected(arg: &str, action: &str) -> String {
     format!("unexpected argument '{arg}'; run 'lx-tui {action} --help' for usage")
-}
-
-/// 执行已解析的 todo 命令。
-pub fn run(
-    cli: TodoCli,
-    linked_worktree: Option<&Path>,
-) -> Result<i32, Box<dyn std::error::Error>> {
-    execute(cli, linked_worktree).map_err(Into::into)
-}
-
-fn execute(cli: TodoCli, linked_worktree: Option<&Path>) -> Result<i32, String> {
-    let db = open_global_db(cli.global.cwd.as_deref(), linked_worktree)?;
-    let ctx = Context {
-        db,
-        out: Output::new(cli.global.json, cli.global.color),
-    };
-    let handler = COMMANDS
-        .iter()
-        .find(|(name, _, _)| *name == cli.command.action)
-        .map(|(_, _, handler)| *handler)
-        .ok_or_else(|| format!("unknown todo command '{}'", cli.command.action))?;
-    handler(&ctx, &cli.command)?;
-    Ok(EXIT_OK)
-}
-
-struct Context {
-    db: Database,
-    out: Output,
-}
-
-fn list(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
-    let today = today_date();
-    let selected =
-        usize::from(command.date.is_some()) + usize::from(command.all) + usize::from(command.past);
-    if selected > 1 {
-        return Err("cannot combine '--date', '--all', and '--past-incomplete'".to_string());
-    }
-    let (scope, date, mut todos) = if command.all {
-        (
-            "all",
-            None,
-            db(ctx.db.list_todos(), "failed to list todos")?,
-        )
-    } else if command.past {
-        (
-            "past_incomplete",
-            None,
-            db(
-                ctx.db.list_past_incomplete_todos(&today),
-                "failed to list past todos",
-            )?,
-        )
-    } else {
-        let date = match command.date.as_deref() {
-            Some(raw) => date_value(raw, "--date")?,
-            None => today,
-        };
-        let records = db(
-            ctx.db.list_todos_by_date(&date),
-            "failed to list todos by date",
-        )?;
-        ("day", Some(date), records)
-    };
-    if let Some(status) = command.status {
-        todos.retain(|todo| todo.status == status);
-    }
-    if let Some(priority) = command.priority {
-        todos.retain(|todo| todo.priority == priority);
-    }
-    let payload = json!({
-        "scope": scope,
-        "date": date,
-        "count": todos.len(),
-        "todos": todos.iter().map(todo_json).collect::<Vec<_>>(),
-    });
-    ctx.out.emit(&payload, |out, writer| {
-        if todos.is_empty() {
-            return writeln!(writer, "No todos found.");
-        }
-        writeln!(writer, "{}", out.bold("ID  DATE  PRIORITY  STATUS  TEXT"))?;
-        for todo in &todos {
-            writeln!(
-                writer,
-                "{}  {}  {}  {}  {}",
-                todo.id,
-                todo.entry_date,
-                todo.priority.as_str(),
-                todo.status.as_str(),
-                todo.text
-            )?;
-        }
-        Ok(())
-    })
-}
-
-fn add(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
-    let text = command
-        .text()
-        .ok_or_else(|| "missing <TEXT>; run 'lx-tui todo add --help' for usage".to_string())?;
-    let date = match command.date.as_deref() {
-        Some(raw) => date_value(raw, "--date")?,
-        None => today_date(),
-    };
-    let status = command.status.unwrap_or(TodoStatus::Todo);
-    let priority = command.priority.unwrap_or(TodoPriority::P1);
-    let position = db(
-        ctx.db.list_todos_by_date(&date),
-        "failed to list todos by date",
-    )?
-    .len();
-    let record = TodoRecord::new_on(date.clone(), text, status, priority, position as i64);
-    db(ctx.db.save_todo(&record), "failed to create todo")?;
-    action(
-        &ctx.out,
-        "add",
-        &record.id,
-        format!("Added todo {} on {date}.", record.id),
-    )
-}
-
-fn update(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
-    let query = one_id(command)?;
-    let todos = db(ctx.db.list_todos(), "failed to list todos")?;
-    let mut record = resolve(&todos, &query)?.clone();
-    if command.text.is_none()
-        && command.status.is_none()
-        && command.priority.is_none()
-        && command.date.is_none()
-    {
-        return Err(
-            "no changes specified; pass '--text', '--status', '--priority', or '--date'"
-                .to_string(),
-        );
-    }
-    if let Some(text) = &command.text {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Err("'--text' must not be empty".to_string());
-        }
-        record.text = trimmed.to_string();
-    }
-    if let Some(status) = command.status {
-        record.status = status;
-        record.completed_date = (status == TodoStatus::Done).then(today_date);
-    }
-    if let Some(priority) = command.priority {
-        record.priority = priority;
-    }
-    if let Some(raw) = &command.date {
-        let date = date_value(raw, "--date")?;
-        if date != record.entry_date {
-            record.position = db(
-                ctx.db.list_todos_by_date(&date),
-                "failed to list todos by date",
-            )?
-            .len() as i64;
-            record.entry_date = date;
-        }
-    }
-    db(ctx.db.save_todo(&record), "failed to update todo")?;
-    action(
-        &ctx.out,
-        "update",
-        &record.id,
-        format!("Updated todo {}.", record.id),
-    )
-}
-
-fn done(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
-    set_status(ctx, command, TodoStatus::Done)
-}
-
-fn start(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
-    set_status(ctx, command, TodoStatus::InProgress)
-}
-
-fn reopen(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
-    set_status(ctx, command, TodoStatus::Todo)
-}
-
-fn set_status(ctx: &Context, command: &TodoCommand, status: TodoStatus) -> Result<(), String> {
-    let query = one_id(command)?;
-    let todos = db(ctx.db.list_todos(), "failed to list todos")?;
-    let mut record = resolve(&todos, &query)?.clone();
-    record.status = status;
-    record.completed_date = (status == TodoStatus::Done).then(today_date);
-    db(ctx.db.save_todo(&record), "failed to update todo")?;
-    action(
-        &ctx.out,
-        "status",
-        &record.id,
-        format!("Todo {} is now {}.", record.id, status.as_str()),
-    )
-}
-
-fn delete(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
-    let query = one_id(command)?;
-    let todos = db(ctx.db.list_todos(), "failed to list todos")?;
-    let record = resolve(&todos, &query)?;
-    db(ctx.db.delete_todo(&record.id), "failed to delete todo")?;
-    action(
-        &ctx.out,
-        "delete",
-        &record.id,
-        format!("Deleted todo {}.", record.id),
-    )
-}
-
-fn reorder(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
-    let date = command
-        .date
-        .as_deref()
-        .ok_or_else(|| "missing '--date <YYYY-MM-DD>'".to_string())?;
-    let date = date_value(date, "--date")?;
-    if command.words.is_empty() {
-        return Err("missing todo IDs; pass at least one <TODO_ID>".to_string());
-    }
-    let todos = db(
-        ctx.db.list_todos_by_date(&date),
-        "failed to list todos by date",
-    )?;
-    let mut ids = Vec::with_capacity(command.words.len());
-    for query in &command.words {
-        ids.push(resolve(&todos, query)?.id.clone());
-    }
-    db(ctx.db.reorder_todos(&date, &ids), "failed to reorder todos")?;
-    let payload = json!({ "action": "reorder", "date": date, "ids": ids });
-    ctx.out.emit(&payload, |_, writer| {
-        writeln!(
-            writer,
-            "Reordered {} todos on {}.",
-            payload["ids"].as_array().map_or(0, Vec::len),
-            payload["date"].as_str().unwrap_or("")
-        )
-    })
-}
-
-fn rollover(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
-    let target = match command.to.as_deref() {
-        Some(raw) => date_value(raw, "--to")?,
-        None => today_date(),
-    };
-    let mut ids = Vec::with_capacity(command.ids.len());
-    if command.ids.is_empty() {
-        let past = db(
-            ctx.db.list_past_incomplete_todos(&target),
-            "failed to list past todos",
-        )?;
-        ids.extend(past.into_iter().map(|todo| todo.id));
-    } else {
-        let todos = db(ctx.db.list_todos(), "failed to list todos")?;
-        for query in &command.ids {
-            ids.push(resolve(&todos, query)?.id.clone());
-        }
-    }
-    db(
-        ctx.db.rollover_todos_to_date(&ids, &target),
-        "failed to roll over todos",
-    )?;
-    let payload = json!({ "action": "rollover", "to": target, "count": ids.len(), "ids": ids });
-    ctx.out.emit(&payload, |_, writer| {
-        writeln!(
-            writer,
-            "Rolled over {} todos to {}.",
-            payload["count"],
-            payload["to"].as_str().unwrap_or("")
-        )
-    })
-}
-
-fn stats(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
-    let (from, to) = range(command)?;
-    let days = db(
-        ctx.db.query_range_stats(&from, &to),
-        "failed to query stats",
-    )?;
-    let all = db(ctx.db.list_todos(), "failed to list todos")?;
-    let mut status_counts = [0usize; 3];
-    let mut priority_counts = [0usize; 4];
-    for todo in all.iter().filter(|todo| {
-        todo.entry_date.as_str() >= from.as_str() && todo.entry_date.as_str() <= to.as_str()
-    }) {
-        status_counts[match todo.status {
-            TodoStatus::Todo => 0,
-            TodoStatus::InProgress => 1,
-            TodoStatus::Done => 2,
-        }] += 1;
-        priority_counts[match todo.priority {
-            TodoPriority::P0 => 0,
-            TodoPriority::P1 => 1,
-            TodoPriority::P2 => 2,
-            TodoPriority::P3 => 3,
-        }] += 1;
-    }
-    let planned: usize = days.iter().map(|day| day.planned_count).sum();
-    let completed: usize = days.iter().map(|day| day.completed_count).sum();
-    let percent = if planned == 0 {
-        0.0
-    } else {
-        completed as f64 * 100.0 / planned as f64
-    };
-    let payload = json!({
-        "from": from,
-        "to": to,
-        "planned": planned,
-        "completed": completed,
-        "completion_percent": percent,
-        "by_status": { "todo": status_counts[0], "in_progress": status_counts[1], "done": status_counts[2] },
-        "by_priority": { "p0": priority_counts[0], "p1": priority_counts[1], "p2": priority_counts[2], "p3": priority_counts[3] },
-        "days": days.iter().map(|day| json!({
-            "date": day.date, "planned": day.planned_count, "completed": day.completed_count,
-        })).collect::<Vec<_>>(),
-    });
-    ctx.out.emit(&payload, |_, writer| {
-        writeln!(writer, "Todo statistics: {from} .. {to}")?;
-        writeln!(
-            writer,
-            "Planned: {planned}  Completed: {completed}  Completion: {percent:.1}%"
-        )?;
-        writeln!(
-            writer,
-            "Status: todo {}, in_progress {}, done {}",
-            status_counts[0], status_counts[1], status_counts[2]
-        )?;
-        writeln!(
-            writer,
-            "Priority: P0 {}, P1 {}, P2 {}, P3 {}",
-            priority_counts[0], priority_counts[1], priority_counts[2], priority_counts[3]
-        )?;
-        writeln!(writer, "DATE  COMPLETED/PLANNED")?;
-        for day in &days {
-            writeln!(
-                writer,
-                "{}  {}/{}",
-                day.date, day.completed_count, day.planned_count
-            )?;
-        }
-        Ok(())
-    })
 }
 
 fn range(command: &TodoCommand) -> Result<(String, String), String> {
@@ -531,6 +180,20 @@ fn range(command: &TodoCommand) -> Result<(String, String), String> {
             Ok((shift_date(&to, -6), to))
         }
         _ => Err("both '--from' and '--to' must be provided together".to_string()),
+    }
+}
+
+fn date_value(raw: &str, flag: &str) -> Result<String, String> {
+    let date = raw.trim();
+    let shape = date.len() == 10
+        && date.as_bytes().get(4) == Some(&b'-')
+        && date.as_bytes().get(7) == Some(&b'-');
+    if shape && parse_date(date).is_some() {
+        Ok(date.to_string())
+    } else {
+        Err(format!(
+            "invalid date '{raw}' for '{flag}'; expected YYYY-MM-DD"
+        ))
     }
 }
 
@@ -579,3 +242,8 @@ fn action(out: &Output, name: &str, id: &str, message: String) -> Result<(), Str
 fn db<T>(result: crate::db::Result<T>, context: &str) -> Result<T, String> {
     result.map_err(|error| format!("{context}: {}", error.code()))
 }
+
+/// 执行已解析的 todo 命令。
+mod exec;
+pub use exec::run;
+use exec::*;

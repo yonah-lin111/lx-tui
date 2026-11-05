@@ -2,6 +2,9 @@
 
 use super::*;
 
+mod remote;
+use remote::{run_config, run_fetch};
+
 pub fn run(cli: ModelCli) -> Result<i32, Box<dyn std::error::Error>> {
     let out = Output::new(cli.global.json, cli.global.color);
     match cli.command {
@@ -35,27 +38,6 @@ fn save_settings(settings: &AiSettings) -> Result<(), String> {
 }
 fn is_enabled(settings: &AiSettings, provider: &str) -> bool {
     settings.enabled_providers.iter().any(|id| id == provider)
-}
-fn mask_opt(value: Option<&str>) -> String {
-    match value {
-        Some(raw) if !raw.trim().is_empty() => mask_secret(raw),
-        _ => "-".to_string(),
-    }
-}
-fn transport_label(provider: &ProviderConfig, model: &ModelConfig) -> &'static str {
-    model
-        .transport
-        .map(ModelTransport::as_str)
-        .unwrap_or_else(|| provider.kind.as_str())
-}
-fn format_selection(selection: Option<&ModelSelection>) -> String {
-    match selection {
-        Some(sel) => match &sel.variant {
-            Some(variant) => format!("{}/{}#{variant}", sel.provider, sel.model),
-            None => format!("{}/{}", sel.provider, sel.model),
-        },
-        None => "(none)".to_string(),
-    }
 }
 fn run_list(out: &Output, all: bool) -> Result<(), String> {
     let settings = load_settings()?;
@@ -280,6 +262,9 @@ fn run_default(
     })
 }
 fn run_provider_set(out: &Output, args: &ProviderSetArgs) -> Result<(), String> {
+    if args.provider.trim().is_empty() {
+        return Err("provider ID cannot be empty".into());
+    }
     let mut settings = load_settings()?;
     let existing = settings.providers.get(&args.provider).cloned();
     let was_enabled = is_enabled(&settings, &args.provider);
@@ -366,6 +351,9 @@ fn run_provider_set(out: &Output, args: &ProviderSetArgs) -> Result<(), String> 
     )
 }
 fn run_provider_rm(out: &Output, provider: &str) -> Result<(), String> {
+    if provider.trim().is_empty() {
+        return Err("provider ID cannot be empty".into());
+    }
     let mut settings = load_settings()?;
     if settings.providers.remove(provider).is_none() {
         return Err(format!("provider '{provider}' is not configured"));
@@ -388,6 +376,12 @@ fn run_model_set(out: &Output, args: &ModelSetArgs) -> Result<(), String> {
         .split_once('/')
         .ok_or_else(|| format!("invalid model target '{}'", args.target))?;
     let (provider_id, model_id) = (provider_id.trim(), model_id.trim());
+    if provider_id.is_empty() {
+        return Err("provider ID cannot be empty".into());
+    }
+    if model_id.is_empty() {
+        return Err("model ID cannot be empty".into());
+    }
     let mut settings = load_settings()?;
     let provider = settings
         .providers
@@ -469,6 +463,12 @@ fn run_model_rm(out: &Output, target: &str) -> Result<(), String> {
         .split_once('/')
         .ok_or_else(|| format!("invalid model target '{target}'"))?;
     let (provider_id, model_id) = (provider_id.trim(), model_id.trim());
+    if provider_id.is_empty() {
+        return Err("provider ID cannot be empty".into());
+    }
+    if model_id.is_empty() {
+        return Err("model ID cannot be empty".into());
+    }
     let mut settings = load_settings()?;
     let provider = settings
         .providers
@@ -490,115 +490,4 @@ fn run_model_rm(out: &Output, target: &str) -> Result<(), String> {
         &json!({"provider": provider_id, "removed": model_id}),
         |_, w| writeln!(w, "Model '{provider_id}/{model_id}' removed."),
     )
-}
-fn run_fetch(out: &Output, args: &FetchArgs) -> Result<(), String> {
-    let mut settings = load_settings()?;
-    let provider = settings
-        .providers
-        .get(&args.provider)
-        .cloned()
-        .ok_or_else(|| format!("provider '{}' is not configured", args.provider))?;
-    let base_url = args
-        .base_url
-        .clone()
-        .unwrap_or_else(|| provider.options.base_url.clone());
-    if base_url.trim().is_empty() {
-        return Err(format!(
-            "provider '{}' has no base URL; pass '--base-url <URL>'",
-            args.provider
-        ));
-    }
-    let api_key = args
-        .api_key
-        .clone()
-        .or_else(|| provider.options.api_key.clone())
-        .unwrap_or_default();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("failed to initialize async runtime: {error}"))?;
-    let models = runtime.block_on(crate::settings::service::fetch_remote_models(
-        base_url.trim(),
-        &api_key,
-    ))?;
-    let mut added = 0;
-    if args.save {
-        let target = settings
-            .providers
-            .get_mut(&args.provider)
-            .ok_or_else(|| format!("provider '{}' is not configured", args.provider))?;
-        for (id, _) in &models {
-            if target.models.contains_key(id) {
-                continue;
-            }
-            target.models.insert(
-                id.clone(),
-                ModelConfig {
-                    id: id.clone(),
-                    name: id.clone(),
-                    transport: None,
-                    limit: None,
-                    modalities: None,
-                    variants: Default::default(),
-                    variant: None,
-                    pricing: None,
-                    extra: serde_json::Map::new(),
-                },
-            );
-            added += 1;
-        }
-        save_settings(&settings)?;
-    }
-    let value = json!({"provider": args.provider, "models": models.iter().map(|(id, owner)| json!({"id": id, "ownedBy": owner})).collect::<Vec<_>>(), "saved": args.save, "added": added});
-    out.emit(&value, |out, w| {
-        if models.is_empty() {
-            return writeln!(w, "The provider returned no models.");
-        }
-        let rows: Vec<Vec<String>> = models
-            .iter()
-            .map(|(id, owner)| vec![id.clone(), owner.clone()])
-            .collect();
-        out.print_table(w, &["MODEL", "OWNED BY"], &rows)?;
-        if args.save {
-            writeln!(w, "\nSaved {added} new model(s) under '{}'.", args.provider)?;
-        }
-        Ok(())
-    })
-}
-fn run_config(out: &Output, args: &ConfigArgs) -> Result<(), String> {
-    let mut settings = load_settings()?;
-    if let Some(language) = args.title_language {
-        settings.title_language = Some(language);
-    }
-    if let Some(timeout) = args.timeout_ms {
-        settings.stream_idle_timeout_ms = (timeout > 0).then_some(timeout);
-    }
-    if let Some(key) = &args.exa_key {
-        settings.web_search.exa_api_key = key.trim().into();
-    }
-    if let Some(key) = &args.tavily_key {
-        settings.web_search.tavily_api_key = key.trim().into();
-    }
-    save_settings(&settings)?;
-    let value = json!({"titleLanguage": settings.effective_title_language().as_str(), "streamIdleTimeoutMs": settings.idle_timeout_ms(), "exaApiKey": mask_opt(Some(settings.web_search.exa_api_key.as_str())), "tavilyApiKey": mask_opt(Some(settings.web_search.tavily_api_key.as_str()))});
-    out.emit(&value, |_, w| {
-        for (label, value) in [
-            (
-                "Title language:",
-                settings.effective_title_language().as_str().to_string(),
-            ),
-            ("Stream idle (ms):", settings.idle_timeout_ms().to_string()),
-            (
-                "Exa API key:",
-                mask_opt(Some(settings.web_search.exa_api_key.as_str())),
-            ),
-            (
-                "Tavily API key:",
-                mask_opt(Some(settings.web_search.tavily_api_key.as_str())),
-            ),
-        ] {
-            writeln!(w, "{label:<18}{value}")?;
-        }
-        Ok(())
-    })
 }

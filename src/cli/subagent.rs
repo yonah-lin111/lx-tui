@@ -22,6 +22,8 @@ pub struct SubagentCli {
     pub command: SubagentCommand,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+// 变体体积差异来自携带完整角色参数的 `RoleSetArgs`；命令只在启动时分发一次，
+// 装箱会让所有匹配点多一层解引用，收益不抵改造成本。
 #[allow(clippy::large_enum_variant)]
 pub enum SubagentCommand {
     Show {

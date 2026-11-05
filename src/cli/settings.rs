@@ -296,8 +296,9 @@ fn run_open(ctx: &WorkspaceContext, out: &Output, no_open: bool) -> Result<(), S
         let service = SettingsService::start(sender)
             .await
             .map_err(|error| format!("failed to start settings server: {error}"))?;
+        let mut trusted = false;
         if let Ok(db) = ctx.open_db() {
-            let trusted = db.is_trusted(&ctx.workspace).unwrap_or(false);
+            trusted = ctx.is_trusted(&db);
             let name = ctx
                 .workspace
                 .file_name()
@@ -314,11 +315,20 @@ fn run_open(ctx: &WorkspaceContext, out: &Output, no_open: bool) -> Result<(), S
         }
         if let Ok(user_root) = config::user_data_root() {
             let (records, _) = crate::settings::commands::list(CommandScope::User, &user_root);
-            let views: Vec<CommandView> = records
+            let mut views: Vec<CommandView> = records
                 .iter()
                 .map(|record| CommandView::of(record, CommandScope::User))
                 .collect();
-            service.replace_user_commands(views);
+            if trusted {
+                let (records, _) =
+                    crate::settings::commands::list(CommandScope::Project, &ctx.workspace);
+                views.extend(
+                    records
+                        .iter()
+                        .map(|record| CommandView::of(record, CommandScope::Project)),
+                );
+            }
+            service.set_commands_snapshot(&views);
         }
         let url = service.url();
         let value = json!({

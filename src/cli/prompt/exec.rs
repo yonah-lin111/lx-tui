@@ -2,6 +2,8 @@
 
 use super::*;
 
+const FIRST_PAGE_NAME: &str = "Page 1";
+
 pub fn run(
     cli: PromptCli,
     linked_worktree: Option<&Path>,
@@ -38,7 +40,7 @@ pub(super) fn list(ctx: &Context, command: &PromptCommand) -> Result<(), String>
     let mut prompts = load_prompts(ctx)?;
     if let Some(id) = command.folder {
         ensure_folder(ctx, id)?;
-        folders.retain(|item| item.id == id || item.parent_id == Some(id));
+        folders.retain(|folder| folder.id == id || folder.parent_id == Some(id));
         prompts.retain(|prompt| prompt.folder_id == Some(id));
     }
     let payload = json!({
@@ -52,38 +54,15 @@ pub(super) fn list(ctx: &Context, command: &PromptCommand) -> Result<(), String>
         }
         if !folders.is_empty() {
             writeln!(writer, "{}", out.bold("Folders"))?;
-            writeln!(writer, "{}", out.bold("ID  PARENT  NAME"))?;
-            for folder in &folders {
-                writeln!(
-                    writer,
-                    "{}  {}  {}",
-                    folder.id,
-                    folder
-                        .parent_id
-                        .map_or_else(|| "-".to_string(), |id| id.to_string()),
-                    folder.name
-                )?;
-            }
+            out.print_table(writer, &["ID", "PARENT", "NAME"], &folder_rows(&folders))?;
         }
         if !prompts.is_empty() {
             if !folders.is_empty() {
                 writeln!(writer)?;
             }
             writeln!(writer, "{}", out.bold("Prompts"))?;
-            writeln!(writer, "{}", out.bold("ID  FOLDER  NAME  PAGES  ACTIVE"))?;
-            for prompt in &prompts {
-                writeln!(
-                    writer,
-                    "{}  {}  {}  {}  {}",
-                    prompt.id,
-                    folder_name(&folders, prompt.folder_id).unwrap_or_else(|| "(root)".to_string()),
-                    prompt.name,
-                    prompt.pages.len(),
-                    prompt
-                        .active_page_id
-                        .map_or_else(|| "-".to_string(), |id| id.to_string())
-                )?;
-            }
+            let rows = prompt_rows(&prompts, &folders);
+            out.print_table(writer, &["ID", "FOLDER", "NAME", "PAGES", "ACTIVE"], &rows)?;
         }
         Ok(())
     })
@@ -105,11 +84,8 @@ pub(super) fn show(ctx: &Context, command: &PromptCommand) -> Result<(), String>
         "page_count": prompt.pages.len(), "pages": pages_json(prompt, &selected),
     });
     ctx.out.emit(&payload, |out, writer| {
-        writeln!(
-            writer,
-            "{}",
-            out.bold(&format!("Prompt: {} (id={})", prompt.name, prompt.id))
-        )?;
+        let title = format!("Prompt: {} (id={})", prompt.name, prompt.id);
+        writeln!(writer, "{}", out.bold(&title))?;
         writeln!(writer, "Folder: {}", display.as_deref().unwrap_or("(root)"))?;
         for page in &selected {
             writeln!(writer)?;
@@ -118,16 +94,13 @@ pub(super) fn show(ctx: &Context, command: &PromptCommand) -> Result<(), String>
             } else {
                 ""
             };
-            writeln!(
-                writer,
-                "{}",
-                out.cyan(&format!(
-                    "[{}] {} (id={}){marker}",
-                    page.position + 1,
-                    page.name,
-                    page.id
-                ))
-            )?;
+            let heading = format!(
+                "[{}] {} (id={}){marker}",
+                page.position + 1,
+                page.name,
+                page.id
+            );
+            writeln!(writer, "{}", out.cyan(&heading))?;
             write!(writer, "{}", page.content)?;
             if !page.content.ends_with('\n') {
                 writeln!(writer)?;
@@ -139,48 +112,25 @@ pub(super) fn show(ctx: &Context, command: &PromptCommand) -> Result<(), String>
 
 pub(super) fn create(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
     let name = command.word(0, "NAME")?;
-    let content = command.content.resolve(false)?.unwrap_or_default();
     if let Some(folder) = command.folder {
         ensure_folder(ctx, folder)?;
     }
-    db(
-        ctx.db.ensure_workspace(&ctx.ws),
-        "failed to register workspace",
-    )?;
-    let id = db(
-        ctx.db.create_prompt(&ctx.ws, command.folder, &name, &[]),
-        "failed to create prompt",
-    )?;
-    let prompts = load_prompts(ctx)?;
-    let first = find_prompt(&prompts, id)?
-        .pages
-        .first()
-        .ok_or_else(|| format!("prompt {id} was created without pages"))?;
+    let content = command.content.resolve(false)?.unwrap_or_default();
     let page_name = command
         .page_name
         .clone()
-        .unwrap_or_else(|| "Page 1".to_string());
-    if page_name != "Page 1" {
-        db(
-            ctx.db.rename_prompt_page(first.id, &page_name),
-            "failed to rename first page",
-        )?;
-    }
-    if !content.is_empty() {
-        db(
-            ctx.db.update_page_content(first.id, &content),
-            "failed to write page content",
-        )?;
-    }
-    action(
-        &ctx.out,
-        "create",
-        id,
-        format!(
-            "Created prompt {id} ('{name}') with page {} ('{page_name}').",
-            first.id
-        ),
-    )
+        .unwrap_or_else(|| FIRST_PAGE_NAME.to_string());
+    let pages = vec![(page_name.clone(), content)];
+    let id = db(
+        ctx.db.create_prompt(&ctx.ws, command.folder, &name, &pages),
+        "failed to create prompt",
+    )?;
+    let page_id = find_prompt(&load_prompts(ctx)?, id)?
+        .pages
+        .first()
+        .map_or(0, |page| page.id);
+    let message = format!("Created prompt {id} ('{name}') with page {page_id} ('{page_name}').");
+    action(&ctx.out, "create", id, message)
 }
 
 pub(super) fn edit(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
@@ -198,28 +148,25 @@ pub(super) fn edit(ctx: &Context, command: &PromptCommand) -> Result<(), String>
         ctx.db.update_page_content(page.id, &text),
         "failed to update page",
     )?;
-    action(
-        &ctx.out,
-        "edit",
-        prompt_id,
-        format!("Updated page {} of prompt {prompt_id}.", page.id),
-    )
+    let message = format!("Updated page {} of prompt {prompt_id}.", page.id);
+    action(&ctx.out, "edit", prompt_id, message)
 }
 
 pub(super) fn rename_prompt(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
     let id = command.id(0, "PROMPT_ID")?;
     ensure_prompt(ctx, id)?;
-    db(
-        ctx.db.rename_prompt(id, &command.word(1, "NEW_NAME")?),
-        "failed to rename prompt",
-    )?;
+    let name = command.word(1, "NEW_NAME")?;
+    db(ctx.db.rename_prompt(id, &name), "failed to rename prompt")?;
     action(&ctx.out, "rename", id, format!("Renamed prompt {id}."))
 }
 
 pub(super) fn move_prompt(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
     let id = command.id(0, "PROMPT_ID")?;
     ensure_prompt(ctx, id)?;
-    let folder = command.destination("--folder")?;
+    let folder = command.folder_destination()?;
+    if let Some(folder) = folder {
+        ensure_folder(ctx, folder)?;
+    }
     db(ctx.db.move_prompt(id, folder), "failed to move prompt")?;
     action(&ctx.out, "move", id, format!("Moved prompt {id}."))
 }
@@ -238,27 +185,11 @@ pub(super) fn folder_list(ctx: &Context, _command: &PromptCommand) -> Result<(),
         if folders.is_empty() {
             return writeln!(writer, "No folders found.");
         }
-        writeln!(writer, "{}", out.bold("ID  PARENT  NAME"))?;
-        for folder in &folders {
-            writeln!(
-                writer,
-                "{}  {}  {}",
-                folder.id,
-                folder
-                    .parent_id
-                    .map_or_else(|| "-".to_string(), |id| id.to_string()),
-                folder.name
-            )?;
-        }
-        Ok(())
+        out.print_table(writer, &["ID", "PARENT", "NAME"], &folder_rows(&folders))
     })
 }
 
 pub(super) fn folder_create(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
-    db(
-        ctx.db.ensure_workspace(&ctx.ws),
-        "failed to register workspace",
-    )?;
     let name = command.word(0, "NAME")?;
     let id = db(
         ctx.db.create_folder(&ctx.ws, command.parent, &name),
@@ -270,17 +201,18 @@ pub(super) fn folder_create(ctx: &Context, command: &PromptCommand) -> Result<()
 pub(super) fn folder_rename(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
     let id = command.id(0, "FOLDER_ID")?;
     ensure_folder(ctx, id)?;
-    db(
-        ctx.db.rename_folder(id, &command.word(1, "NEW_NAME")?),
-        "failed to rename folder",
-    )?;
+    let name = command.word(1, "NEW_NAME")?;
+    db(ctx.db.rename_folder(id, &name), "failed to rename folder")?;
     action(&ctx.out, "rename", id, format!("Renamed folder {id}."))
 }
 
 pub(super) fn folder_move(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
     let id = command.id(0, "FOLDER_ID")?;
     ensure_folder(ctx, id)?;
-    let parent = command.destination("--parent")?;
+    let parent = command.parent_destination()?;
+    if let Some(parent) = parent {
+        ensure_folder(ctx, parent)?;
+    }
     db(ctx.db.move_folder(id, parent), "failed to move folder")?;
     action(&ctx.out, "move", id, format!("Moved folder {id}."))
 }
@@ -304,23 +236,25 @@ pub(super) fn page_list(ctx: &Context, command: &PromptCommand) -> Result<(), St
         if prompt.pages.is_empty() {
             return writeln!(writer, "No pages found.");
         }
-        writeln!(writer, "{}", out.bold("ID  #  NAME  ACTIVE  CHARS"))?;
-        for page in &prompt.pages {
-            writeln!(
-                writer,
-                "{}  {}  {}  {}  {}",
-                page.id,
-                page.position + 1,
-                page.name,
-                if prompt.active_page_id == Some(page.id) {
+        let rows: Vec<Vec<String>> = prompt
+            .pages
+            .iter()
+            .map(|page| {
+                let active = if prompt.active_page_id == Some(page.id) {
                     "yes"
                 } else {
                     "no"
-                },
-                page.content.chars().count()
-            )?;
-        }
-        Ok(())
+                };
+                vec![
+                    page.id.to_string(),
+                    (page.position + 1).to_string(),
+                    page.name.clone(),
+                    active.to_string(),
+                    page.content.chars().count().to_string(),
+                ]
+            })
+            .collect();
+        out.print_table(writer, &["ID", "#", "NAME", "ACTIVE", "CHARS"], &rows)
     })
 }
 
@@ -333,16 +267,13 @@ pub(super) fn page_create(ctx: &Context, command: &PromptCommand) -> Result<(), 
         ctx.db.create_prompt_page(prompt_id, &name, &content),
         "failed to create page",
     )?;
-    action(
-        &ctx.out,
-        "create",
-        id,
-        format!("Created page {id} in prompt {prompt_id}."),
-    )
+    let message = format!("Created page {id} in prompt {prompt_id}.");
+    action(&ctx.out, "create", id, message)
 }
 
 pub(super) fn page_edit(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
     let id = command.id(0, "PAGE_ID")?;
+    prompt_for_page(&load_prompts(ctx)?, id)?;
     let Some(text) = command.content.resolve(true)? else {
         return Err("missing content".to_string());
     };
@@ -355,8 +286,10 @@ pub(super) fn page_edit(ctx: &Context, command: &PromptCommand) -> Result<(), St
 
 pub(super) fn page_rename(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
     let id = command.id(0, "PAGE_ID")?;
+    prompt_for_page(&load_prompts(ctx)?, id)?;
+    let name = command.word(1, "NEW_NAME")?;
     db(
-        ctx.db.rename_prompt_page(id, &command.word(1, "NEW_NAME")?),
+        ctx.db.rename_prompt_page(id, &name),
         "failed to rename page",
     )?;
     action(&ctx.out, "rename", id, format!("Renamed page {id}."))
@@ -365,26 +298,22 @@ pub(super) fn page_rename(ctx: &Context, command: &PromptCommand) -> Result<(), 
 pub(super) fn page_active(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
     let prompt_id = command.id(0, "PROMPT_ID")?;
     let page_id = command.id(1, "PAGE_ID")?;
+    let prompts = load_prompts(ctx)?;
+    let prompt = find_prompt(&prompts, prompt_id)?;
+    page_by_id(prompt, page_id)?;
     db(
         ctx.db.set_prompt_active_page(prompt_id, page_id),
         "failed to set active page",
     )?;
-    action(
-        &ctx.out,
-        "active",
-        page_id,
-        format!("Set page {page_id} as the active page of prompt {prompt_id}."),
-    )
+    let message = format!("Set page {page_id} as the active page of prompt {prompt_id}.");
+    action(&ctx.out, "active", page_id, message)
 }
 
 pub(super) fn page_delete(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
     let id = command.id(0, "PAGE_ID")?;
-    let prompts = db(ctx.db.list_prompts(&ctx.ws), "failed to list prompts")?;
-    if let Some(prompt) = prompts
-        .iter()
-        .find(|p| p.pages.iter().any(|page| page.id == id))
-        && prompt.pages.len() <= 1
-    {
+    let prompts = load_prompts(ctx)?;
+    let prompt = prompt_for_page(&prompts, id)?;
+    if prompt.pages.len() <= 1 {
         return Err(format!(
             "cannot delete page {id}: prompt {} must keep at least one page",
             prompt.id
@@ -410,20 +339,20 @@ pub(super) fn ref_list(ctx: &Context, _command: &PromptCommand) -> Result<(), St
         if records.is_empty() {
             return writeln!(writer, "No referenced folders found.");
         }
-        writeln!(writer, "{}", out.bold("ID  PATH"))?;
-        for record in &records {
-            writeln!(writer, "{}  {}", record.id, record.path)?;
-        }
-        Ok(())
+        let rows: Vec<Vec<String>> = records
+            .iter()
+            .map(|record| vec![record.id.to_string(), record.path.clone()])
+            .collect();
+        out.print_table(writer, &["ID", "PATH"], &rows)
     })
 }
 
 pub(super) fn ref_add(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
-    let path = PathBuf::from(command.word(0, "DIR_PATH")?);
-    let path = if path.is_absolute() {
-        path
+    let raw = PathBuf::from(command.word(0, "DIR_PATH")?);
+    let path = if raw.is_absolute() {
+        raw
     } else {
-        ctx.cwd.join(path)
+        ctx.cwd.join(raw)
     };
     let absolute = std::fs::canonicalize(&path)
         .map_err(|error| format!("failed to resolve directory '{}': {error}", path.display()))?;
@@ -431,43 +360,29 @@ pub(super) fn ref_add(ctx: &Context, command: &PromptCommand) -> Result<(), Stri
         return Err(format!("'{}' is not a directory", absolute.display()));
     }
     let value = absolute.to_string_lossy().into_owned();
-    db(
-        ctx.db.ensure_workspace(&ctx.ws),
-        "failed to register workspace",
-    )?;
     let id = db(
         ctx.db.add_referenced_folder(&ctx.ws, &value),
         "failed to add referenced folder",
     )?;
-    action(
-        &ctx.out,
-        "add",
-        id,
-        format!("Referenced folder {id}: {value}"),
-    )
+    let message = format!("Referenced folder {id}: {value}");
+    action(&ctx.out, "add", id, message)
 }
 
 pub(super) fn ref_remove(ctx: &Context, command: &PromptCommand) -> Result<(), String> {
     let id = command.id(0, "REF_ID")?;
-    if db(
+    let records = db(
         ctx.db.list_referenced_folders(&ctx.ws),
         "failed to list referenced folders",
-    )?
-    .iter()
-    .all(|record| record.id != id)
-    {
+    )?;
+    if records.iter().all(|record| record.id != id) {
         return Err(format!("referenced folder {id} not found"));
     }
     db(
         ctx.db.delete_referenced_folder(&ctx.ws, id),
         "failed to remove referenced folder",
     )?;
-    action(
-        &ctx.out,
-        "remove",
-        id,
-        format!("Removed referenced folder {id}."),
-    )
+    let message = format!("Removed referenced folder {id}.");
+    action(&ctx.out, "remove", id, message)
 }
 
 fn action(out: &Output, name: &str, id: i64, message: String) -> Result<(), String> {
@@ -479,12 +394,12 @@ pub(super) fn load_folders(ctx: &Context) -> Result<Vec<FolderRecord>, String> {
     db(ctx.db.list_folders(&ctx.ws), "failed to list folders")
 }
 
-fn db<T>(result: crate::db::Result<T>, context: &str) -> Result<T, String> {
-    result.map_err(|error| format!("{context}: {}", error.code()))
-}
-
 pub(super) fn load_prompts(ctx: &Context) -> Result<Vec<PromptRecord>, String> {
     db(ctx.db.list_prompts(&ctx.ws), "failed to list prompts")
+}
+
+fn db<T>(result: crate::db::Result<T>, context: &str) -> Result<T, String> {
+    result.map_err(|error| format!("{context}: {}", error.code()))
 }
 
 pub(super) fn ensure_folder(ctx: &Context, id: i64) -> Result<(), String> {
@@ -496,17 +411,52 @@ pub(super) fn ensure_folder(ctx: &Context, id: i64) -> Result<(), String> {
 }
 
 pub(super) fn ensure_prompt(ctx: &Context, id: i64) -> Result<(), String> {
-    load_prompts(ctx)?
+    find_prompt(&load_prompts(ctx)?, id).map(|_| ())
+}
+
+fn prompt_for_page(prompts: &[PromptRecord], page_id: i64) -> Result<&PromptRecord, String> {
+    prompts
         .iter()
-        .any(|prompt| prompt.id == id)
-        .then_some(())
-        .ok_or_else(|| format!("prompt {id} not found"))
+        .find(|prompt| prompt.pages.iter().any(|page| page.id == page_id))
+        .ok_or_else(|| format!("prompt page {page_id} not found"))
+}
+
+fn folder_rows(folders: &[FolderRecord]) -> Vec<Vec<String>> {
+    folders
+        .iter()
+        .map(|folder| {
+            let parent = folder
+                .parent_id
+                .map_or_else(|| "-".to_string(), |id| id.to_string());
+            vec![folder.id.to_string(), parent, folder.name.clone()]
+        })
+        .collect()
+}
+
+fn prompt_rows(prompts: &[PromptRecord], folders: &[FolderRecord]) -> Vec<Vec<String>> {
+    prompts
+        .iter()
+        .map(|prompt| {
+            let folder =
+                folder_name(folders, prompt.folder_id).unwrap_or_else(|| "(root)".to_string());
+            let active = prompt
+                .active_page_id
+                .map_or_else(|| "-".to_string(), |id| id.to_string());
+            vec![
+                prompt.id.to_string(),
+                folder,
+                prompt.name.clone(),
+                prompt.pages.len().to_string(),
+                active,
+            ]
+        })
+        .collect()
 }
 
 fn folders_json(folders: &[FolderRecord]) -> Vec<Value> {
     folders
         .iter()
-        .map(|folder| json!({"id": folder.id, "parent_id": folder.parent_id, "name": folder.name}))
+        .map(|f| json!({"id": f.id, "parent_id": f.parent_id, "name": f.name}))
         .collect()
 }
 
@@ -527,64 +477,11 @@ fn pages_json(prompt: &PromptRecord, pages: &[&PromptPageRecord]) -> Vec<Value> 
     pages
         .iter()
         .map(|page| {
+            let active = prompt.active_page_id == Some(page.id);
             json!({
                 "id": page.id, "position": page.position, "name": page.name,
-                "content": page.content, "active": prompt.active_page_id == Some(page.id),
+                "content": page.content, "active": active,
             })
         })
         .collect()
-}
-
-fn folder_name(folders: &[FolderRecord], id: Option<i64>) -> Option<String> {
-    id.and_then(|id| {
-        folders
-            .iter()
-            .find(|folder| folder.id == id)
-            .map(|folder| folder.name.clone())
-    })
-}
-
-fn find_prompt(prompts: &[PromptRecord], id: i64) -> Result<&PromptRecord, String> {
-    prompts
-        .iter()
-        .find(|prompt| prompt.id == id)
-        .ok_or_else(|| format!("prompt {id} not found"))
-}
-fn active_page(prompt: &PromptRecord) -> Result<&PromptPageRecord, String> {
-    prompt
-        .active_page_id
-        .and_then(|id| prompt.pages.iter().find(|page| page.id == id))
-        .or_else(|| prompt.pages.first())
-        .ok_or_else(|| format!("prompt {} has no pages", prompt.id))
-}
-
-fn page_by_id(prompt: &PromptRecord, id: i64) -> Result<&PromptPageRecord, String> {
-    prompt
-        .pages
-        .iter()
-        .find(|page| page.id == id)
-        .ok_or_else(|| format!("page {id} not found"))
-}
-
-fn resolve_page<'a>(prompt: &'a PromptRecord, raw: &str) -> Result<&'a PromptPageRecord, String> {
-    let value = raw.trim().parse::<i64>().ok();
-    let page = value.and_then(|value| {
-        prompt
-            .pages
-            .iter()
-            .find(|page| page.id == value)
-            .or_else(|| {
-                usize::try_from(value)
-                    .ok()
-                    .and_then(|index| index.checked_sub(1))
-                    .and_then(|index| prompt.pages.get(index))
-            })
-    });
-    page.ok_or_else(|| {
-        format!(
-            "page '{raw}' not found in prompt {} ({} pages)",
-            prompt.id,
-            prompt.pages.len()
-        )
-    })
 }

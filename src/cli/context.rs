@@ -66,6 +66,21 @@ impl WorkspaceContext {
         })
     }
 
+    /// 当前所在 checkout 根：linked worktree 返回其自身路径，否则回退工作区根。
+    pub fn checkout_path(&self) -> PathBuf {
+        git::list_worktrees(&self.cwd)
+            .and_then(|list| git::checkout(&list, &self.cwd))
+            .map(|checkout| checkout.checkout_path)
+            .unwrap_or_else(|| self.workspace.clone())
+    }
+
+    /// 项目级写操作的统一信任门控：cwd、当前 checkout 与工作区根任一已信任即可。
+    pub fn is_trusted(&self, db: &Database) -> bool {
+        db.is_trusted(&self.cwd).unwrap_or(false)
+            || db.is_trusted(&self.checkout_path()).unwrap_or(false)
+            || db.is_trusted(&self.workspace).unwrap_or(false)
+    }
+
     /// 打开默认 SQLite 数据库。
     pub fn open_db(&self) -> Result<Database, String> {
         Database::open_default(self.effective_worktree.as_deref())
@@ -110,9 +125,21 @@ pub fn resolve_target_session(
     if !last && session_id.is_none() {
         return Err("specify a <SESSION_ID> or pass '--last'".to_string());
     }
-    let sessions = db
-        .list_chat_sessions(workspace, 0, 500)
-        .map_err(|e| format!("failed to list sessions: {}", e.code()))?;
+    // 分页拉取全部会话：单页上限 200，避免超出后无法按 ID/前缀解析；
+    // 空标题会话同样参与匹配。
+    let mut sessions = Vec::new();
+    let mut offset = 0usize;
+    loop {
+        let page = db
+            .list_chat_sessions(workspace, offset, 200)
+            .map_err(|e| format!("failed to list sessions: {}", e.code()))?;
+        let count = page.len();
+        sessions.extend(page);
+        if count < 200 {
+            break;
+        }
+        offset = offset.saturating_add(count);
+    }
     if last {
         return sessions
             .into_iter()
@@ -126,13 +153,6 @@ pub fn resolve_target_session(
     }
     if let Some(exact) = sessions.iter().find(|s| s.external_id == query) {
         return Ok(exact.external_id.clone());
-    }
-    if db
-        .chat_session_title(workspace, query)
-        .map_err(|e| format!("failed to query session: {}", e.code()))?
-        .is_some()
-    {
-        return Ok(query.to_string());
     }
     let prefix_matches: Vec<&str> = sessions
         .iter()

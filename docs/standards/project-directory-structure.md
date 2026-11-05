@@ -20,10 +20,20 @@ lx-tui/
     main.rs                     启动编排：日志、终端初始化与恢复
     lib.rs                      crate 根；main.rs 保持薄入口，逻辑放模块
     cli/                        全功能无头 CLI（`lx-tui <command>`）：顶层路由（mod.rs）、
-                                通用参数扫描与多行长文本输入（args.rs）、工作区与开发库定位及会话锁
-                                （context.rs）、双模式人类可读/JSON 输出器（output.rs）、全局帮助手册
-                                （help.rs），以及 session / prompt / todo / workspace / model /
-                                mcp / skill / command / subagent / settings 领域子命令模块与测试
+                                通用参数扫描与多行长文本输入（args.rs，含 `--` 终止符与带值选项保护）、
+                                工作区/checkout 定位、统一信任门控与跨进程会话锁（context.rs）、
+                                双模式人类可读/JSON 输出器（output.rs）、全局帮助手册（help.rs）
+      session/                  参数解析（mod.rs）、子命令执行与输出（views.rs）、rewind/compact（ops.rs）
+      workspace/                参数解析（workspace.rs）、执行（exec.rs）、树形历史列表（exec/list.rs）
+      prompt/                   参数解析（prompt.rs）、条目/文件夹/分页/引用目录执行与归属校验（exec.rs）
+      todo/                     参数解析（todo.rs）、执行（exec.rs）
+      model/                    参数解析（model.rs）、执行（exec.rs）、远端发现与全局配置（exec/remote.rs）
+      mcp/                      参数解析（mcp.rs）、执行与探测/授权（exec.rs）、增量保存（exec/add.rs）
+      skill/                    参数解析（skill.rs）、执行与技能目录读写（exec.rs）
+      command/                  参数解析（command.rs）、执行与命令文件读写（exec.rs）
+      subagent/                 参数解析（subagent.rs）、执行与角色配置读写（exec.rs）
+      settings.rs               通用设置与浏览器设置服务
+      tests/                    按领域拆分的 CLI 测试（args/session/prompt/config_domains/config_regressions）
     layout.rs                   BSP 平铺模型（含折叠窄条）与几何计算，纯函数、不渲染
     app/                        应用状态与更新逻辑，纯数据、无 IO、可测试
       mod.rs
@@ -168,13 +178,14 @@ lx-tui/
 14. `platform/`：OS 专属代码唯一落点，按 `#[cfg(...)]` 门控（含文件/目录权限收紧、原子文件替换 `write_file_atomic`/`rename_over`）；核心模块不得出现裸 OS 分支。
 15. `tests/`：跨模块集成测试；单元测试体严格镜像生产模块结构，下沉到对应子模块的 `tests.rs` 或子场景测试模块中，由主文件的 `#[cfg(test)] mod tests;` 引入，不集中堆积在父模块根部。
 16. `assets/`：浏览器前端资源，HTML/CSS/JS 分文件维护，经 `include_str!` 编译进二进制并按独立路由提供，遵循 `html-assets.md`。
-17. `cli/`：全功能无头 CLI 入口与领域子命令编排（`session`、`prompt`、`todo`、`workspace`、`model`、`mcp`、`skill`、`command`、`subagent`、`settings`，以及委托 `chat::agent::exec` 的 `exec`）；复用 `db`、`config`、`settings`、`mcp`、`skills`、`git` 与 `platform` 的持久层及跨进程会话锁能力，不初始化备用屏或原始模式。
+17. `cli/`：全功能无头 CLI 入口与领域子命令编排（`session`、`prompt`、`todo`、`workspace`、`model`、`mcp`、`skill`、`command`、`subagent`、`settings`，以及委托 `chat::agent::exec` 的 `exec`）；每个领域按“参数解析模块 + 执行子模块”（`exec.rs`、`session/{views,ops}.rs`）拆分，`context.rs` 的 `WorkspaceContext` 统一提供 `cwd`/`workspace`/`checkout_path` 解析、数据库打开、`is_trusted` 信任门控与跨进程会话锁；复用 `db`、`config`、`settings`、`mcp`、`skills`、`git` 与 `platform` 的持久层能力，不初始化备用屏或原始模式。
 
 ## 依赖方向
 
 ```text
 main -> 所有模块（只装配，不写业务）
-cli -> chat, db, config, settings, mcp, skills, git, platform, event::chat::rewind（纯同步回滚入口）
+cli -> app, chat, config, db, event, git, layout, mcp, platform, settings, skills
+       （event 仅复用 event::chat::rewind 的纯同步回滚入口）
 event -> input, app, ui, tui, pty, terminal, git, db, settings, chat
 ui -> app（只读状态）, layout（窗格几何）, terminal（只读网格）
 input -> app（行为定义）, layout（方向导航）

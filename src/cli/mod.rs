@@ -26,6 +26,9 @@ pub use crate::chat::agent::exec::{EXIT_ERR, EXIT_INTERRUPTED, EXIT_OK};
 pub use help::{HelpTopic, help_text};
 
 /// 顶层 CLI 动作枚举：进程启动时一次性解析。
+///
+/// 子命令结构体携带完整解析结果，枚举值体积差异大；进程只解析一次，
+/// 用堆分配换解析路径的零拷贝不划算，因此保留内联并显式豁免该 lint。
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)]
 pub enum CliAction {

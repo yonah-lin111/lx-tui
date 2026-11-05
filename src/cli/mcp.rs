@@ -22,6 +22,8 @@ pub struct McpCli {
     pub command: McpCommand,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+// 变体体积差异来自携带完整 HTTP/OAuth 参数的 `AddHttpArgs`；命令只在启动时分发一次，
+// 装箱会让所有匹配点多一层解引用，收益不抵改造成本。
 #[allow(clippy::large_enum_variant)]
 pub enum McpCommand {
     List {
@@ -71,10 +73,12 @@ pub struct AddStdioArgs {
 pub struct AddHttpArgs {
     pub name: String,
     pub url: String,
-    pub auth: McpHttpAuth,
+    /// 仅在显式传入 `--auth` 时为 `Some`；省略时更新已有服务保留原值。
+    pub auth: Option<McpHttpAuth>,
     pub bearer_token: Option<String>,
     pub bearer_env: Option<String>,
     pub headers: BTreeMap<String, String>,
+    pub env_http_headers: Vec<(String, String)>,
     pub scopes: Vec<String>,
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
@@ -325,7 +329,7 @@ fn parse_add_http(args: &[String]) -> Result<AddHttpArgs, String> {
             "--tool-timeout",
             "--scope",
         ],
-        &["--header", "--scope-item"],
+        &["--header", "--env-http-header", "--scope-item"],
         &[],
         help,
     )?;
@@ -336,14 +340,24 @@ fn parse_add_http(args: &[String]) -> Result<AddHttpArgs, String> {
     parsed.url = raw
         .get("--url")
         .ok_or_else(|| format!("missing '--url <URL>'; run '{help} --help' for usage"))?;
-    if let Some(value) = raw.get("--auth") {
-        parsed.auth = parse_auth(&value)?;
-    }
+    parsed.auth = raw
+        .get("--auth")
+        .map(|value| parse_auth(&value))
+        .transpose()?;
     parsed.bearer_token = raw.get("--bearer-token");
     parsed.bearer_env = raw.get("--bearer-env");
     for item in raw.list("--header") {
         let (key, value) = parse_pair(&item, "--header")?;
         parsed.headers.insert(key, value);
+    }
+    for item in raw.list("--env-http-header") {
+        let (key, value) = parse_pair(&item, "--env-http-header")?;
+        if value.is_empty() {
+            return Err(format!(
+                "invalid '--env-http-header' value '{item}'; environment variable must not be empty"
+            ));
+        }
+        parsed.env_http_headers.push((key, value));
     }
     parsed.scopes = raw.list("--scope-item");
     parsed.client_id = raw.get("--client-id");
@@ -358,6 +372,122 @@ fn parse_add_http(args: &[String]) -> Result<AddHttpArgs, String> {
         .transpose()?;
     parsed.scope = raw.scope()?.unwrap_or(ScopeArg::User);
     Ok(parsed)
+}
+
+async fn wait_for_callback(
+    listener: &tokio::net::TcpListener,
+    expected_state: &str,
+) -> Result<String, String> {
+    let (mut stream, _) = tokio::time::timeout(Duration::from_secs(300), listener.accept())
+        .await
+        .map_err(|_| "OAuth callback timed out after 300 seconds".to_string())?
+        .map_err(|error| format!("failed to accept OAuth callback: {error}"))?;
+    let mut buffer = vec![0u8; 8192];
+    let read = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut buffer))
+        .await
+        .map_err(|_| "timed out reading the OAuth callback".to_string())?
+        .map_err(|error| format!("failed to read the OAuth callback: {error}"))?;
+    let result = parse_callback(&String::from_utf8_lossy(&buffer[..read]), expected_state);
+    let (status, body) = if result.is_ok() {
+        (
+            "200 OK",
+            "<!doctype html><html><body><h1>Authorization complete</h1><p>You can close this window and return to the terminal.</p></body></html>",
+        )
+    } else {
+        (
+            "400 Bad Request",
+            "<!doctype html><html><body><h1>Authorization failed</h1><p>Return to the terminal for details.</p></body></html>",
+        )
+    };
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = stream.flush().await;
+    result
+}
+
+fn parse_callback(request: &str, expected_state: &str) -> Result<String, String> {
+    let first = request
+        .lines()
+        .next()
+        .ok_or_else(|| "empty OAuth callback request".to_string())?;
+    let mut parts = first.split_whitespace();
+    let method = parts
+        .next()
+        .ok_or_else(|| "malformed OAuth callback request line".to_string())?;
+    let target = parts
+        .next()
+        .ok_or_else(|| "malformed OAuth callback request line".to_string())?;
+    if method != "GET" {
+        return Err("OAuth callback must use GET".to_string());
+    }
+    let (path, query) = target
+        .split_once('?')
+        .ok_or_else(|| "OAuth callback is missing query parameters".to_string())?;
+    if path != "/mcp/oauth/callback" {
+        return Err("unexpected OAuth callback path".to_string());
+    }
+    let (mut code, mut state, mut error, mut description) = (None, None, None, None);
+    for pair in query.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        let value = percent_decode(value);
+        match key {
+            "code" => code = Some(value),
+            "state" => state = Some(value),
+            "error" => error = Some(value),
+            "error_description" => description = Some(value),
+            _ => {}
+        }
+    }
+    if let Some(error) = error {
+        let detail = description.unwrap_or_default();
+        return Err(if detail.is_empty() {
+            format!("authorization was denied: {error}")
+        } else {
+            format!("authorization was denied: {error} ({detail})")
+        });
+    }
+    if state.as_deref() != Some(expected_state) {
+        return Err("OAuth callback state does not match the pending authorization".to_string());
+    }
+    code.filter(|value| !value.is_empty())
+        .ok_or_else(|| "OAuth callback did not include an authorization code".to_string())
+}
+
+fn percent_decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let (high, low) = (
+                    (bytes[i + 1] as char).to_digit(16),
+                    (bytes[i + 2] as char).to_digit(16),
+                );
+                if let (Some(high), Some(low)) = (high, low) {
+                    out.push((high * 16 + low) as u8);
+                    i += 3;
+                    continue;
+                }
+                out.push(bytes[i]);
+                i += 1;
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            byte => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 mod exec;

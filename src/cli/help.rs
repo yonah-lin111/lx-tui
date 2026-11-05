@@ -205,6 +205,7 @@ Subcommands:
   stats [--days <N> | --from <YYYY-MM-DD> --to <YYYY-MM-DD>]
 
 Global Options:
+  -C, --cd <DIR>                Working directory
       --json                    Output as JSON
       --color <auto|always|never>
   -h, --help                    Print help
@@ -262,6 +263,7 @@ Subcommands:
          [--exa-key <KEY>] [--tavily-key <KEY>]
 
 Global Options:
+  -C, --cd <DIR>                Working directory
       --json                    Output as JSON
       --color <auto|always|never>
   -h, --help                    Print help

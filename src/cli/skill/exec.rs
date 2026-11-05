@@ -40,9 +40,24 @@ pub fn run(
 }
 
 fn is_trusted(ctx: &WorkspaceContext) -> Result<bool, String> {
-    ctx.open_db()?
-        .is_trusted(&ctx.workspace)
-        .map_err(|error| error.code().to_string())
+    let db = ctx.open_db()?;
+    Ok(ctx.is_trusted(&db))
+}
+
+fn ensure_single_line(field: &str, value: &str) -> Result<(), String> {
+    if value.contains('\n') || value.contains('\r') {
+        return Err(format!("{field} must not contain line breaks"));
+    }
+    Ok(())
+}
+
+fn entry_dir_name(entry: &SkillEntry) -> &str {
+    entry
+        .path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or(&entry.name)
 }
 
 fn catalog(ctx: &WorkspaceContext, trusted: bool) -> Result<SkillCatalog, String> {
@@ -304,6 +319,7 @@ fn run_create(
     }
     let skill_scope = to_skill_scope(scope);
     let root = scope_root(skill_scope, ctx)?;
+    ensure_single_line("description", description)?;
     if crate::skills::find_skill_file(&root.join(name)).is_some() {
         return Err(format!(
             "skill '{name}' already exists in the {} scope; use 'lx-tui skill edit'",
@@ -311,6 +327,9 @@ fn run_create(
         ));
     }
     let body = content.resolve(false)?.unwrap_or_default();
+    if body.trim().is_empty() {
+        return Err("skill content cannot be empty".into());
+    }
     let path = crate::skills::store::write_skill(&root, name, description, &body)?;
     out.emit(
         &json!({"name": name, "scope": skill_scope.as_str(), "path": path}),
@@ -348,10 +367,15 @@ fn run_edit(
     let description = description
         .map(str::to_string)
         .unwrap_or(current_description);
+    ensure_single_line("description", &description)?;
     let body = content.resolve(false)?.unwrap_or(body);
+    if body.trim().is_empty() {
+        return Err("skill content cannot be empty".into());
+    }
+    let dir_name = entry_dir_name(&entry);
     let path = crate::skills::store::write_skill(
         &scope_root(entry.scope, ctx)?,
-        &skill_name,
+        dir_name,
         &description,
         &body,
     )?;
@@ -385,7 +409,7 @@ fn run_delete(
             "skill '{name}' comes from '.agents' and is read-only"
         ));
     }
-    crate::skills::store::delete_skill(&scope_root(entry.scope, ctx)?, &entry.name)?;
+    crate::skills::store::delete_skill(&scope_root(entry.scope, ctx)?, entry_dir_name(&entry))?;
     out.emit(
         &json!({"name": entry.name, "scope": entry.scope.as_str()}),
         |_, w| {

@@ -96,11 +96,14 @@ pub fn run_rewind(
     out: &Output,
 ) -> Result<(), String> {
     if dry_run {
-        return rewind_dry_run(ctx, db, session_id, out);
+        return rewind_dry_run(ctx, db, session_id, mode, out);
     }
     if mode == RewindModeArg::RestoreCompact {
         return restore_compact(ctx, db, session_id, out);
     }
+    // 先加锁再读取目标轮次，避免活跃会话被读取后立即改写；
+    // execute_rewind 内部会再次取同一把锁，因此读完即释放。
+    let guard = acquire_session_lock(session_id)?;
     let turn = db
         .latest_user_turn(&ctx.workspace, session_id)
         .map_err(|e| format!("failed to read the latest user turn: {}", e.code()))?
@@ -121,6 +124,7 @@ pub fn run_rewind(
         user_text: turn.text.clone(),
         operation_id: operation_id("rewind"),
     };
+    drop(guard);
     match execute_rewind(db, &ctx.workspace, &request) {
         RewindOutcome::Succeeded {
             action,
@@ -174,8 +178,12 @@ fn rewind_dry_run(
     ctx: &WorkspaceContext,
     db: &Database,
     session_id: &str,
+    mode: RewindModeArg,
     out: &Output,
 ) -> Result<(), String> {
+    if mode == RewindModeArg::RestoreCompact {
+        return restore_compact_dry_run(ctx, db, session_id, out);
+    }
     let turn = db
         .latest_user_turn(&ctx.workspace, session_id)
         .map_err(|e| format!("failed to read the latest user turn: {}", e.code()))?
@@ -224,6 +232,50 @@ fn rewind_dry_run(
             }
         }
         Ok(())
+    })
+}
+
+/// `--dry-run --mode restore-compact`：只读预检当前生效的 compact 检查点。
+fn restore_compact_dry_run(
+    ctx: &WorkspaceContext,
+    db: &Database,
+    session_id: &str,
+    out: &Output,
+) -> Result<(), String> {
+    let checkpoint = db
+        .active_checkpoint(&ctx.workspace, session_id)
+        .map_err(|e| format!("failed to query compact checkpoint: {}", e.code()))?
+        .ok_or_else(|| format!("session '{session_id}' has no active compact checkpoint"))?;
+    let revision = db
+        .session_revision(session_id)
+        .map_err(|e| format!("failed to read session revision: {}", e.code()))?;
+    let value = json!({
+        "dry_run": true,
+        "session_id": session_id,
+        "mode": "restore-compact",
+        "revision": revision,
+        "checkpoint_id": checkpoint.id,
+        "sequence": checkpoint.sequence,
+        "start_sequence": checkpoint.start_sequence,
+        "end_sequence": checkpoint.end_sequence,
+        "model": checkpoint.model_label,
+        "summary": checkpoint.summary_text,
+    });
+    out.emit(&value, |out, writer| {
+        writeln!(writer, "{}", out.bold("Rewind dry run"))?;
+        writeln!(writer, "  session: {session_id}")?;
+        writeln!(writer, "  mode:    restore-compact")?;
+        writeln!(
+            writer,
+            "  checkpoint: {} ({})",
+            checkpoint.id, checkpoint.state
+        )?;
+        writeln!(
+            writer,
+            "  range:   {}..{}",
+            checkpoint.start_sequence, checkpoint.end_sequence
+        )?;
+        writeln!(writer, "  revision: {revision}")
     })
 }
 
@@ -363,7 +415,8 @@ pub fn run_compact(
         .map_err(|e| format!("failed to start async runtime: {e}"))?;
     let summary = runtime.block_on(async {
         let mut text = String::new();
-        let (_cancel_tx, cancel_rx) = crate::chat::client::uncancellable();
+        let mut saw_tool_call = false;
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
         let outcome = crate::chat::client::run_stream(
             &target.transport,
             &target.base_url,
@@ -373,15 +426,25 @@ pub fn run_compact(
             cancel_rx,
             |deltas: &[ChatDelta]| {
                 for delta in deltas {
-                    if let ChatDelta::Part(part) = delta
-                        && part.kind == PartKind::Text
-                    {
-                        text.push_str(&part.text);
+                    match delta {
+                        ChatDelta::ToolInputStarted { .. }
+                        | ChatDelta::ToolInputDelta { .. }
+                        | ChatDelta::ToolInputEnded { .. } => {
+                            saw_tool_call = true;
+                            let _ = cancel_tx.send(true);
+                        }
+                        ChatDelta::Part(part) if part.kind == PartKind::Text => {
+                            text.push_str(&part.text);
+                        }
+                        _ => {}
                     }
                 }
             },
         )
         .await;
+        if saw_tool_call {
+            return Err("compact summary response unexpectedly contained tool calls".to_string());
+        }
         if outcome.stop != StopReason::Complete {
             return Err(format!(
                 "compact summary request failed: {}",
