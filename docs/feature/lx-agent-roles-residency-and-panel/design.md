@@ -12,7 +12,7 @@
   - `codex-rs/core/src/agent/control/{delivery.rs, residency.rs}`
   - `codex-rs/tui/src/app/{agents_overview.rs, agents_overview_view.rs, agent_navigation.rs}`、`codex-rs/tui/src/bottom_pane/pending_thread_approvals.rs`
 - **目标范围**：`src/chat/agent/`、`src/chat/tools/`、`src/config/subagents.rs`、`src/event/chat/subagent/`、`src/app/`、`src/ui/main_content/lx/`、`src/settings/`、`assets/`
-- **当前状态**：**已实现、已通过 P0–P3 审查修复，验证结果见 [`verification.md`](verification.md)**
+- **当前状态**：**已实现、已通过 P0–P3 审查修复并合入 `dev`（合并提交 `65f90a62`），验证结果见 [`verification.md`](verification.md)**
 
 ---
 

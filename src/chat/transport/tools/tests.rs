@@ -378,7 +378,7 @@ fn every_wire_shape_respects_tool_surface() {
     }
 }
 
-/// exec 轮次：工具面为 16 项主工具（无交互式 `ask`），四协议一致。
+/// exec 轮次：工具面为 17 项主工具（无交互式 `ask`），四协议一致。
 #[test]
 fn exec_turn_declares_main_tools_without_ask() {
     use crate::chat::events::RequestPurpose;
@@ -387,7 +387,7 @@ fn exec_turn_declares_main_tools_without_ask() {
         Some(ToolSurface::ExecMain)
     );
     let tools = crate::chat::tools::builtin_tools(ToolSurface::ExecMain);
-    assert_eq!(tools.len(), 16);
+    assert_eq!(tools.len(), 17);
     let names = |tools: &Value| -> Vec<String> {
         tools
             .as_array()
@@ -415,7 +415,7 @@ fn exec_turn_declares_main_tools_without_ask() {
         names(&anthropic_tools(&tools)),
         names(&google_tools(&tools)[0]["functionDeclarations"]),
     ] {
-        assert_eq!(names.len(), 16);
+        assert_eq!(names.len(), 17);
         assert_eq!(names, expected);
     }
 }
