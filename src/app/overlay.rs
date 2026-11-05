@@ -375,8 +375,12 @@ pub enum MenuCommand {
     DeletePage,
     /// 工作区历史列表：打开该工作区。
     OpenWorkspaceHistory,
-    /// 工作区历史列表：删除失效路径的工作区（级联删除，行内二次确认）。
+    /// 工作区历史列表：删除工作区（3 击菜单确认 + 最终弹窗确认，级联删除）。
     DeleteWorkspaceHistory,
+    /// 工作区历史列表：删除第 1 次点击后的待确认态（1/2）。
+    DeleteWorkspaceHistoryStep1,
+    /// 工作区历史列表：删除第 2 次点击后的待确认态（2/2）。
+    DeleteWorkspaceHistoryStep2,
 }
 
 impl MenuCommand {
@@ -391,7 +395,6 @@ impl MenuCommand {
                 | Self::DeletePrompt
                 | Self::DeleteTodo
                 | Self::DeletePage
-                | Self::DeleteWorkspaceHistory
                 | Self::SwitchToWorkspaceCwd
                 | Self::SyncWorkspaceToTerminalCwd
         )

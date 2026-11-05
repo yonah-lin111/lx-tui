@@ -287,6 +287,9 @@ pub const WORKSPACE_HISTORY_EMPTY: &str = "no workspaces yet";
 pub const WORKSPACE_HISTORY_NO_MATCHES: &str = "no matching workspaces";
 pub const MENU_OPEN_WORKSPACE_HISTORY: &str = "Open";
 pub const MENU_DELETE_WORKSPACE_HISTORY: &str = "Delete";
+pub const MENU_CONFIRM_DELETE_STEP1: &str = "Confirm delete (1/2)";
+pub const MENU_CONFIRM_DELETE_STEP2: &str = "Confirm delete (2/2)";
+pub const CONFIRM_DELETE_WORKSPACE_TITLE: &str = "Delete Workspace";
 
 /// 标签栏：新建标签按钮、标签分隔线、溢出滚动按钮与条目左侧图标。
 pub const ADD_TAB_LABEL: &str = "[+]";
@@ -470,6 +473,11 @@ pub const BUTTON_OPEN: &str = " ↵ open ";
 /// 删除提示词页确认问题文案。
 pub fn confirm_delete_page_question(name: &str) -> String {
     format!("delete page \"{name}\"?")
+}
+
+/// 删除工作区最终确认弹窗问题文案。
+pub fn confirm_delete_workspace_question(name: &str) -> String {
+    format!("delete workspace \"{name}\" and all its data?")
 }
 
 /// 按显示宽度换行：优先在空白处断行，超宽单词按字符硬断（宽字符占两列）；

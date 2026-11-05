@@ -122,6 +122,12 @@ pub fn apply_workspace_history(
         .map(|(_, entry)| entry.path.clone());
 
     let mut ws_renamed = false;
+    new_entries.retain(|entry| {
+        !state
+            .workspace_history
+            .hidden_worktrees
+            .contains(&entry.path)
+    });
     for entry in &mut new_entries {
         entry.exists = entry.path.is_dir();
         if entry.name_is_manual {
@@ -291,6 +297,10 @@ pub fn open_workspace_history_entry(state: &mut AppState, entry_index: usize) ->
         show_toast(state, toast);
         return true;
     }
+    state
+        .workspace_history
+        .hidden_worktrees
+        .retain(|hidden| hidden != &entry.path);
     if let Some(existing) = state.workspaces.iter().position(|ws| {
         ws.cwd.as_deref() == Some(entry.path.as_path())
             || ws
@@ -343,18 +353,113 @@ pub fn open_workspace_history_entry(state: &mut AppState, entry_index: usize) ->
     true
 }
 
-/// 删除路径已不存在的历史工作区条目，并登记数据库级联删除效应。
+/// 级联删除工作区历史条目：
+/// - 若存在正在运行的 Agent 流、子 Agent 或本地命令，立即发出中断/取消效应并解绑会话；
+/// - 若该工作区已在活跃列表中打开，将其关闭（若仅剩最后一个工作区则清空其会话与提示词树）；
+/// - 登记 `Effect::DeleteWorkspaceHistory` 从 SQLite 级联删除该工作区及全部关联表数据。
 pub fn delete_workspace_history_entry(state: &mut AppState, entry_index: usize) -> bool {
     let Some(entry) = state.workspace_history.entries.get(entry_index).cloned() else {
         return false;
     };
-    if entry.path.is_dir() {
-        if let Some(slot) = state.workspace_history.entries.get_mut(entry_index) {
-            slot.exists = true;
+    let mut paths_to_delete = vec![entry.path.clone()];
+    if entry.git.as_ref().is_some_and(|git| !git.is_linked) {
+        for other in &state.workspace_history.entries {
+            if other.path != entry.path
+                && other
+                    .git
+                    .as_ref()
+                    .is_some_and(|git| git.repo_root == entry.path)
+            {
+                paths_to_delete.push(other.path.clone());
+            }
         }
-        return true;
+    } else if entry.git.as_ref().is_some_and(|git| git.is_linked)
+        && !state
+            .workspace_history
+            .hidden_worktrees
+            .contains(&entry.path)
+    {
+        state
+            .workspace_history
+            .hidden_worktrees
+            .push(entry.path.clone());
     }
-    state.workspace_history.entries.remove(entry_index);
+
+    // 中断所有归属待删路径的运行中 Agent、子 Agent 与本地 Shell，并关闭已打开的对应活跃工作区。
+    let matching_ws: Vec<usize> = state
+        .workspaces
+        .iter()
+        .enumerate()
+        .filter(|(_, ws)| {
+            ws.cwd
+                .as_ref()
+                .is_some_and(|cwd| paths_to_delete.contains(cwd))
+                || ws
+                    .git
+                    .as_ref()
+                    .is_some_and(|git| paths_to_delete.contains(&git.checkout_path))
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+
+    for &ws_idx in matching_ws.iter().rev() {
+        let pane_ids: Vec<crate::layout::PaneId> = state
+            .workspaces
+            .get(ws_idx)
+            .map(|ws| {
+                ws.tabs
+                    .iter()
+                    .flat_map(|tab| tab.layout.pane_ids())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for pane_id in pane_ids {
+            state
+                .effects
+                .push(Effect::CancelUserShells { pane: pane_id });
+            let (streaming_key, committing_gen, session_id) = state
+                .pane_anywhere(pane_id)
+                .map(|pane| {
+                    let streaming = match &pane.lx.chat.request {
+                        crate::app::state::RequestState::Streaming { key, .. } => Some(key.clone()),
+                        _ => None,
+                    };
+                    let committing = match &pane.lx.chat.request {
+                        crate::app::state::RequestState::Committing { generation, .. } => {
+                            Some(*generation)
+                        }
+                        _ => None,
+                    };
+                    (streaming, committing, pane.lx.chat.session_id.clone())
+                })
+                .unwrap_or((None, None, None));
+            if let Some(key) = streaming_key {
+                state.effects.push(Effect::CancelChatStream { key });
+            }
+            if let Some(generation) = committing_gen {
+                super::on_turn_failed(state, pane_id, generation);
+            }
+            if let Some(sid) = session_id {
+                state.effects.push(Effect::CancelSubagents {
+                    session_id: sid.clone(),
+                    agent_id: None,
+                });
+                super::on_session_deleted(state, pane_id, &sid);
+                super::on_session_removed(state, pane_id, &sid);
+            }
+        }
+        if state.workspaces.len() > 1 {
+            super::workspace::close_workspace(state, ws_idx);
+        } else if let Some(ws) = state.workspaces.get_mut(ws_idx) {
+            ws.prompt_panel.tree.replace(Vec::new(), Vec::new());
+            state.referenced.reset(None);
+        }
+    }
+
+    state
+        .workspace_history
+        .entries
+        .retain(|item| !paths_to_delete.contains(&item.path));
     let total = state.workspace_history.visible_rows().len();
     if total == 0 {
         state.workspace_history.selected = 0;
@@ -362,9 +467,11 @@ pub fn delete_workspace_history_entry(state: &mut AppState, entry_index: usize) 
     } else {
         state.workspace_history.selected = state.workspace_history.selected.min(total - 1);
     }
-    state
-        .effects
-        .push(Effect::DeleteWorkspaceHistory { path: entry.path });
+    for del_path in paths_to_delete {
+        state
+            .effects
+            .push(Effect::DeleteWorkspaceHistory { path: del_path });
+    }
     true
 }
 
@@ -374,6 +481,10 @@ pub fn record_workspace_in_history_list(state: &mut AppState, cwd: std::path::Pa
     let base = workspace_label(&cwd, home_dir().as_deref());
     state.workspace_history.search.clear();
     state.workspace_history.row_click = None;
+    state
+        .workspace_history
+        .hidden_worktrees
+        .retain(|hidden| hidden != &cwd);
     if !state
         .workspace_history
         .entries
@@ -495,385 +606,4 @@ pub fn apply_workspace_history_paste(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use super::*;
-    use crate::app::overlay::{MenuCommand, Overlay, OverlayTarget, RenameTarget};
-    use crate::app::state::{FocusedContainer, WorkspaceGit};
-    use crate::app::update::{
-        activate_menu, apply_overlay_key, open_workspace_history_menu, open_workspace_menu,
-    };
-
-    fn plain_entry(name: &str, path: PathBuf, manual: bool) -> WorkspaceHistoryEntry {
-        let exists = path.is_dir();
-        WorkspaceHistoryEntry {
-            name: name.into(),
-            path,
-            exists,
-            name_is_manual: manual,
-            git: None,
-        }
-    }
-
-    #[test]
-    fn toggle_workspace_mode_switches_and_focuses_sidebar() {
-        let mut state = AppState::demo();
-        assert!(!workspace_history_mode(&state));
-
-        assert!(toggle_workspace_mode(&mut state));
-        assert!(workspace_history_mode(&state));
-        assert_eq!(state.focus(), FocusedContainer::Sidebar);
-        assert!(
-            state
-                .effects
-                .iter()
-                .any(|eff| matches!(eff, Effect::LoadWorkspaceHistory))
-        );
-
-        assert!(toggle_workspace_mode(&mut state));
-        assert!(!workspace_history_mode(&state));
-    }
-
-    #[test]
-    fn search_filtering_and_navigation_in_workspace_history() {
-        let mut state = AppState::demo();
-        let existing_dir = std::env::temp_dir();
-        let missing_dir = PathBuf::from("/tmp/lx-nonexistent-history-dir-999999");
-        apply_workspace_history(
-            &mut state,
-            vec![
-                plain_entry("Alpha Project", existing_dir, true),
-                plain_entry("Missing Project", missing_dir, true),
-            ],
-        );
-        assert_eq!(state.workspace_history.entries.len(), 2);
-        assert!(state.workspace_history.entries[0].exists);
-        assert!(!state.workspace_history.entries[1].exists);
-
-        show_workspace_history(&mut state);
-        assert_eq!(state.workspace_history.filtered_indices(), vec![0, 1]);
-
-        // Down / Up 移动选中项。
-        assert!(move_workspace_history_selection(&mut state, 1, 5));
-        assert_eq!(state.workspace_history.selected, 1);
-        assert!(move_workspace_history_selection(&mut state, -1, 5));
-        assert_eq!(state.workspace_history.selected, 0);
-
-        // 搜索过滤（不区分大小写，匹配名称和路径）。
-        for ch in "missing".chars() {
-            apply_workspace_history_key(&mut state, OverlayKey::Char(ch), 5);
-        }
-        assert_eq!(state.workspace_history.filtered_indices(), vec![1]);
-        assert_eq!(state.workspace_history.selected, 0);
-
-        // 清空搜索恢复全部条目。
-        assert!(clear_workspace_history_search(&mut state, 5));
-        assert_eq!(state.workspace_history.filtered_indices(), vec![0, 1]);
-
-        // Esc 退出历史模式。
-        assert!(apply_workspace_history_key(&mut state, OverlayKey::Esc, 5));
-        assert!(!workspace_history_mode(&state));
-    }
-
-    #[test]
-    fn git_tree_grouping_collapse_and_opening_linked_worktree_auto_opens_main_parent() {
-        let mut state = AppState::demo();
-        let repo_root = std::env::temp_dir();
-        let wt_path = std::env::temp_dir().join(".");
-        apply_workspace_history(
-            &mut state,
-            vec![
-                WorkspaceHistoryEntry {
-                    name: "lx-tui".into(),
-                    path: repo_root.clone(),
-                    exists: true,
-                    name_is_manual: false,
-                    git: Some(WorkspaceGit {
-                        repo_root: repo_root.clone(),
-                        checkout_path: repo_root.clone(),
-                        is_linked: false,
-                        branch: Some("dev".into()),
-                        main_branch: Some("dev".into()),
-                    }),
-                },
-                WorkspaceHistoryEntry {
-                    name: "workspace-history-list".into(),
-                    path: wt_path.clone(),
-                    exists: true,
-                    name_is_manual: false,
-                    git: Some(WorkspaceGit {
-                        repo_root: repo_root.clone(),
-                        checkout_path: wt_path.clone(),
-                        is_linked: true,
-                        branch: Some("feature/workspace-history-list".into()),
-                        main_branch: Some("dev".into()),
-                    }),
-                },
-            ],
-        );
-
-        let rows = state.workspace_history.visible_rows();
-        assert_eq!(rows.len(), 2);
-        assert!(rows[0].parent && !rows[0].collapsed);
-        assert!(rows[1].child && rows[1].last_child);
-        assert_eq!(
-            state.workspace_history.entries[0].display_label(rows[0].child),
-            "lx-tui"
-        );
-        assert_eq!(
-            state.workspace_history.entries[1].display_label(rows[1].child),
-            "feature/workspace-history-list"
-        );
-
-        // 点击父节点折叠/展开子工作区。
-        assert!(toggle_workspace_history_group(&mut state, 0));
-        let collapsed_rows = state.workspace_history.visible_rows();
-        assert_eq!(collapsed_rows.len(), 1);
-        assert!(collapsed_rows[0].parent && collapsed_rows[0].collapsed);
-
-        assert!(toggle_workspace_history_group(&mut state, 0));
-        assert_eq!(state.workspace_history.visible_rows().len(), 2);
-    }
-
-    #[test]
-    fn double_click_opens_existing_or_shows_toast_on_missing_directory() {
-        let mut state = AppState::demo();
-        let dir_a = std::env::temp_dir();
-        let missing = PathBuf::from("/tmp/lx-nonexistent-history-dir-888888");
-        apply_workspace_history(
-            &mut state,
-            vec![
-                plain_entry("TempWS", dir_a.clone(), true),
-                plain_entry("GoneWS", missing, true),
-            ],
-        );
-        show_workspace_history(&mut state);
-
-        // 双击第 1 行（路径不存在）：弹 Danger Toast 并留在历史列表模式。
-        let now = Instant::now();
-        assert!(!workspace_history_row_double_click(&mut state, 1, now));
-        assert!(workspace_history_row_double_click(
-            &mut state,
-            1,
-            now + Duration::from_millis(100)
-        ));
-        assert!(open_workspace_history_row(&mut state, 1));
-        assert!(
-            workspace_history_mode(&state),
-            "路径不存在时保持在历史列表视图"
-        );
-        let toast = state.toast.as_ref().expect("danger toast shown");
-        assert_eq!(toast.kind, ToastKind::Danger);
-        assert_eq!(toast.message, text::TOAST_DIRECTORY_NOT_FOUND);
-
-        // 双击第 0 行（路径存在且尚未在 state.workspaces 打开）：新建并激活该工作区，退回活跃列表。
-        let now2 = now + Duration::from_secs(1);
-        assert!(!workspace_history_row_double_click(&mut state, 0, now2));
-        assert!(workspace_history_row_double_click(
-            &mut state,
-            0,
-            now2 + Duration::from_millis(120)
-        ));
-        assert!(open_workspace_history_row(&mut state, 0));
-        assert!(!workspace_history_mode(&state));
-        assert_eq!(
-            state.active_workspace().cwd.as_deref(),
-            Some(dir_a.as_path())
-        );
-        assert_eq!(state.active_workspace().name, "TempWS");
-        let count_after_first_open = state.workspaces.len();
-
-        // 再次进入历史列表打开同一个已打开的路径：只切换过去，不重复创建。
-        show_workspace_history(&mut state);
-        assert!(open_workspace_history_row(&mut state, 0));
-        assert!(!workspace_history_mode(&state));
-        assert_eq!(state.workspaces.len(), count_after_first_open);
-    }
-
-    #[test]
-    fn context_menu_offers_delete_only_for_missing_path_and_cascades_on_confirm() {
-        let mut state = AppState::demo();
-        let existing_dir = std::env::temp_dir();
-        let missing_dir = PathBuf::from("/tmp/lx-nonexistent-history-dir-777777");
-        apply_workspace_history(
-            &mut state,
-            vec![
-                plain_entry("ValidWS", existing_dir, true),
-                plain_entry("BrokenWS", missing_dir.clone(), true),
-            ],
-        );
-        show_workspace_history(&mut state);
-
-        // 有效路径条目菜单：仅 Open 与 Rename，不含 Delete。
-        open_workspace_history_menu(&mut state, 0, (5, 5));
-        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
-            panic!("menu expected");
-        };
-        assert_eq!(menu.target, OverlayTarget::WorkspaceHistory(0));
-        assert_eq!(
-            menu.commands,
-            vec![
-                MenuCommand::OpenWorkspaceHistory,
-                MenuCommand::RenameWorkspace
-            ]
-        );
-
-        // 失效路径条目菜单：包含 Open、Rename 与 Delete。
-        open_workspace_history_menu(&mut state, 1, (5, 6));
-        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
-            panic!("menu expected");
-        };
-        assert_eq!(menu.target, OverlayTarget::WorkspaceHistory(1));
-        assert_eq!(
-            menu.commands,
-            vec![
-                MenuCommand::OpenWorkspaceHistory,
-                MenuCommand::RenameWorkspace,
-                MenuCommand::DeleteWorkspaceHistory
-            ]
-        );
-
-        // 选中 Delete：第一次激活进入行内二次确认，第二次激活执行删除并登记级联删除效应。
-        if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
-            menu.selected = 2;
-        }
-        state.effects.clear();
-        activate_menu(&mut state);
-        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
-            panic!("menu stays open for inline confirmation");
-        };
-        assert!(menu.confirming);
-        assert_eq!(state.workspace_history.entries.len(), 2);
-
-        activate_menu(&mut state);
-        assert!(state.overlay.is_none());
-        assert_eq!(state.workspace_history.entries.len(), 1);
-        assert_eq!(
-            state.effects,
-            vec![Effect::DeleteWorkspaceHistory { path: missing_dir }]
-        );
-    }
-
-    #[test]
-    fn rename_syncs_between_active_workspace_and_history_list() {
-        let mut state = AppState::demo();
-        let path = PathBuf::from("/tmp/lx-rename-sync-test");
-        state.workspaces[0].cwd = Some(path.clone());
-        apply_workspace_history(
-            &mut state,
-            vec![plain_entry("OldName", path.clone(), false)],
-        );
-
-        // 从历史列表重命名：同步更新活跃工作区名称并登记 RenameWorkspace 效应。
-        show_workspace_history(&mut state);
-        open_workspace_history_menu(&mut state, 0, (4, 4));
-        if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
-            menu.selected = 1;
-        }
-        activate_menu(&mut state);
-        let Some(Overlay::Rename(rename)) = state.overlay.as_mut() else {
-            panic!("rename overlay expected");
-        };
-        assert_eq!(rename.target, RenameTarget::WorkspaceHistory(0));
-        rename.input.clear();
-        rename.input.insert_str("NewHistoryName");
-        state.effects.clear();
-        apply_overlay_key(&mut state, OverlayKey::Enter);
-
-        assert_eq!(state.workspace_history.entries[0].name, "NewHistoryName");
-        assert!(state.workspace_history.entries[0].name_is_manual);
-        assert_eq!(state.workspaces[0].name, "NewHistoryName");
-        assert!(state.workspaces[0].name_is_manual);
-        assert_eq!(
-            state.effects,
-            vec![Effect::RenameWorkspace {
-                path: path.clone(),
-                name: "NewHistoryName".into(),
-            }]
-        );
-
-        // 从活跃列表重命名：同步更新历史列表条目名称并登记 RenameWorkspace 效应。
-        exit_workspace_history(&mut state);
-        open_workspace_menu(&mut state, 0, (4, 4));
-        if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
-            menu.selected = menu
-                .commands
-                .iter()
-                .position(|cmd| *cmd == MenuCommand::RenameWorkspace)
-                .unwrap_or(0);
-        }
-        activate_menu(&mut state);
-        if let Some(Overlay::Rename(rename)) = state.overlay.as_mut() {
-            rename.input.clear();
-            rename.input.insert_str("ActiveRenamed");
-        }
-        state.effects.clear();
-        apply_overlay_key(&mut state, OverlayKey::Enter);
-
-        assert_eq!(state.workspaces[0].name, "ActiveRenamed");
-        assert_eq!(state.workspace_history.entries[0].name, "ActiveRenamed");
-        assert_eq!(
-            state.effects,
-            vec![Effect::RenameWorkspace {
-                path,
-                name: "ActiveRenamed".into(),
-            }]
-        );
-    }
-
-    #[test]
-    fn creating_workspace_in_history_mode_records_and_selects_without_opening() {
-        let mut state = AppState::demo();
-        let initial_ws_count = state.workspaces.len();
-        let target_dir = std::env::temp_dir();
-        apply_workspace_history(
-            &mut state,
-            vec![plain_entry(
-                "OldEntry",
-                PathBuf::from("/tmp/lx-old-entry"),
-                true,
-            )],
-        );
-        show_workspace_history(&mut state);
-        state.workspace_history.search.insert_str("old");
-        assert_eq!(state.workspace_history.selected, 0);
-
-        // 在历史列表模式下打开新建工作区弹窗并提交路径（经过信任放行 resume_trust）。
-        crate::app::update::open_new_workspace_dialog(&mut state);
-        if let Some(Overlay::NewWorkspace(dialog)) = state.overlay.as_mut() {
-            dialog.input.insert_str(&target_dir.to_string_lossy());
-        }
-        state.effects.clear();
-        apply_overlay_key(&mut state, OverlayKey::Enter);
-        let Some(Effect::CheckTrust { trigger, .. }) = state.effects.first().cloned() else {
-            panic!("CheckTrust expected");
-        };
-        state.effects.clear();
-        crate::app::update::resume_trust(&mut state, trigger);
-
-        // 保持停留在历史列表模式，不直接向活跃工作区列表添加/打开新工作区。
-        assert!(
-            workspace_history_mode(&state),
-            "在 ws list 中新建后保持停留在历史列表"
-        );
-        assert_eq!(
-            state.workspaces.len(),
-            initial_ws_count,
-            "不直接打开新建工作区"
-        );
-        assert!(
-            state.workspace_history.search.text().is_empty(),
-            "新建后自动清空搜索过滤以展示新条目"
-        );
-        let (_, selected_entry) = state
-            .workspace_history
-            .entry_at_visible_row(state.workspace_history.selected)
-            .expect("selected entry");
-        let canon_target = std::fs::canonicalize(&target_dir).unwrap_or(target_dir);
-        assert_eq!(selected_entry.path, canon_target);
-        assert!(state.effects.iter().any(
-            |eff| matches!(eff, Effect::RecordWorkspace { path, .. } if *path == canon_target)
-        ));
-    }
-}
+mod tests;

@@ -22,30 +22,31 @@ fn new_workspace_dialog_with(state: &mut AppState, path: &str) {
 }
 
 #[test]
-fn explicit_new_workspace_queues_trust_check() {
+fn explicit_new_workspace_confirms_in_first_dialog_without_second_trust_overlay() {
     let dir = workspace_dir("explicit");
     std::fs::create_dir_all(&dir).expect("temp dir");
     let mut state = AppState::demo();
     new_workspace_dialog_with(&mut state, dir.to_str().expect("utf8 path"));
+    // 第 1 次回车：在首个弹窗内切换为二次确认态。
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(
+        matches!(state.overlay, Some(Overlay::NewWorkspace(_))),
+        "首个弹窗保持打开并进入二次确认态"
+    );
+    assert!(state.workspace_history.new_workspace_confirming);
+    assert_eq!(state.workspaces.len(), 1, "二次确认前不创建");
+
+    // 第 2 次回车：直接授予信任并完成创建，不弹第二个 TrustWorkspace 浮层。
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert!(state.overlay.is_none(), "弹窗关闭");
-    assert_eq!(state.workspaces.len(), 1, "未检查前不创建");
-    let effect = state
-        .effects
-        .iter()
-        .find(|effect| matches!(effect, Effect::CheckTrust { .. }))
-        .cloned();
-    let Some(Effect::CheckTrust {
-        path,
-        root,
-        trigger,
-    }) = effect
-    else {
-        panic!("trust check queued");
-    };
-    assert_eq!(path, std::fs::canonicalize(&dir).expect("canonical"));
-    assert!(root.is_none(), "显式路径的仓库归属由事件层后台解析");
-    assert!(matches!(trigger, TrustTrigger::CreateWorkspace { .. }));
+    assert_eq!(state.workspaces.len(), 2, "二次确认后直接创建");
+    let canonical = std::fs::canonicalize(&dir).expect("canonical");
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::GrantTrust { path, .. } if *path == canonical))
+    );
 }
 
 #[test]

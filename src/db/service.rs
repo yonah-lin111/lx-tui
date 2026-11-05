@@ -575,6 +575,21 @@ impl Persistence {
                 self.reload_workspace_history(state)
             }
             Effect::DeleteWorkspaceHistory { path } => {
+                if let Some(sessions) =
+                    self.with_db(|db| db.list_chat_sessions(&path, 0, usize::MAX))
+                {
+                    let panes = state.all_pane_ids();
+                    for summary in sessions {
+                        state.effects.push(Effect::CancelSubagents {
+                            session_id: summary.external_id.clone(),
+                            agent_id: None,
+                        });
+                        for &pane in &panes {
+                            update::on_session_deleted(state, pane, &summary.external_id);
+                            update::on_session_removed(state, pane, &summary.external_id);
+                        }
+                    }
+                }
                 self.with_db(|db| db.delete_workspace(&path));
                 self.reload_workspace_history(state)
             }

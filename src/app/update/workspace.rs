@@ -24,6 +24,7 @@ pub fn open_new_workspace_dialog(state: &mut AppState) {
     state.workspace_scroll_drag = None;
     state.workspace_drag = None;
     state.workspace_dragging = false;
+    state.workspace_history.new_workspace_confirming = false;
     state.overlay = Some(Overlay::NewWorkspace(NewWorkspace {
         input: TextInput::new(String::new()),
     }));
@@ -126,6 +127,10 @@ pub fn create_workspace_with_cwd(state: &mut AppState, target_cwd: Option<PathBu
         swap_display_prompt(state, from, state.active_workspace);
     }
     if let Some(cwd) = cwd.as_deref() {
+        state
+            .workspace_history
+            .hidden_worktrees
+            .retain(|hidden| hidden.as_path() != cwd);
         request_git_refresh(state, cwd);
         state
             .effects

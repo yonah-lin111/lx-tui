@@ -172,13 +172,9 @@ pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
                 MenuCommand::NewPage => text::MENU_PAGE_NEW,
                 MenuCommand::ForkPage => text::MENU_PAGE_FORK,
                 MenuCommand::OpenWorkspaceHistory => text::MENU_OPEN_WORKSPACE_HISTORY,
-                MenuCommand::DeleteWorkspaceHistory => {
-                    if confirming {
-                        text::MENU_CONFIRM_DELETE
-                    } else {
-                        text::MENU_DELETE_WORKSPACE_HISTORY
-                    }
-                }
+                MenuCommand::DeleteWorkspaceHistory => text::MENU_DELETE_WORKSPACE_HISTORY,
+                MenuCommand::DeleteWorkspaceHistoryStep1 => text::MENU_CONFIRM_DELETE_STEP1,
+                MenuCommand::DeleteWorkspaceHistoryStep2 => text::MENU_CONFIRM_DELETE_STEP2,
             }
         })
         .collect()

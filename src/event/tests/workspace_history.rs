@@ -135,7 +135,7 @@ fn double_click_history_row_opens_workspace_and_right_click_missing_cascades_del
     assert!(matches!(menu.target, OverlayTarget::WorkspaceHistory(_)));
     assert!(menu.commands.contains(&MenuCommand::DeleteWorkspaceHistory));
 
-    // 通过键盘选中 Delete 并回车两次（行内二次确认 -> 级联删除）。
+    // 通过键盘选中 Delete 并执行「3 次回车菜单确认 + 1 次最终弹窗确认」级联删除。
     handle_terminal_event(
         crossterm::event::Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
         &mut state,
@@ -154,6 +154,7 @@ fn double_click_history_row_opens_workspace_and_right_click_missing_cascades_del
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
+    // 第 1 击：Confirm delete (1/2)
     handle_terminal_event(
         crossterm::event::Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         &mut state,
@@ -165,8 +166,37 @@ fn double_click_history_row_opens_workspace_and_right_click_missing_cascades_del
     );
     assert!(
         matches!(state.overlay, Some(Overlay::Menu(ref m)) if m.confirming),
-        "first enter arms inline confirm"
+        "first enter arms step 1/2"
     );
+    // 第 2 击：Confirm delete (2/2)
+    handle_terminal_event(
+        crossterm::event::Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(
+        matches!(state.overlay, Some(Overlay::Menu(ref m)) if m.confirming),
+        "second enter arms step 2/2"
+    );
+    // 第 3 击：弹出最终确认弹窗（ConfirmClose）
+    handle_terminal_event(
+        crossterm::event::Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(
+        matches!(state.overlay, Some(Overlay::ConfirmClose(_))),
+        "third enter opens final confirmation modal"
+    );
+    // 最终弹窗回车确认：执行级联删除
     handle_terminal_event(
         crossterm::event::Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         &mut state,

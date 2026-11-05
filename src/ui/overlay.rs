@@ -57,7 +57,12 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
         }
         Overlay::Rename(rename) => dialog::render_rename(frame, screen, rename),
         Overlay::ResumeSessionEdit(edit) => dialog::render_resume_session_edit(frame, screen, edit),
-        Overlay::NewWorkspace(new_ws) => dialog::render_new_workspace(frame, screen, new_ws),
+        Overlay::NewWorkspace(new_ws) => dialog::render_new_workspace(
+            frame,
+            screen,
+            new_ws,
+            state.workspace_history.new_workspace_confirming,
+        ),
         Overlay::ConfirmClose(confirm) => {
             dialog::render_confirm(frame, screen, state, confirm);
             None

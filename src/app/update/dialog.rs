@@ -7,7 +7,6 @@ use crate::app::effects::Effect;
 use crate::app::overlay::{Overlay, OverlayKind, RenameTarget};
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
-use crate::app::trust::TrustTrigger;
 use crate::layout::PaneId;
 use crate::ui::text;
 
@@ -211,14 +210,18 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
 
 /// 对单行输入类浮层（重命名、新建工作区路径）执行一次编辑；其他浮层忽略。
 fn edit_text_input(state: &mut AppState, key: OverlayKey) {
+    if matches!(state.overlay, Some(Overlay::NewWorkspace(_))) {
+        state.workspace_history.new_workspace_confirming = false;
+    }
     if let Some(input) = state.overlay.as_mut().and_then(Overlay::input_mut) {
         input.apply_edit_key(key);
     }
 }
 
-/// 提交新建工作区：校验路径，成功时关闭弹窗；
-/// 显式路径先登记信任检查（效应由事件层执行；仓库归属未知时后台解析仓库根），
-/// 空输入继承当前路径直接创建；失败时弹出 Toast 错误并保持弹窗打开以便用户修改。
+/// 提交新建工作区：直接在首个弹窗内完成二次确认（不再弹第二个 `TrustWorkspace` 弹窗）：
+/// - 显式路径第 1 次回车/点击 `[Create]`：校验路径存在且为目录后，将弹窗切换为二次确认态（主按钮变为 `[Confirm]`）；
+/// - 显式路径第 2 次回车/点击 `[Confirm]`：直接记录信任并完成创建（`ws list` 下仅入库并选中，默认视图下打开激活）；
+/// - 空输入继承当前路径直接创建；校验失败时弹出 Toast 错误并保持弹窗打开。
 pub(crate) fn commit_new_workspace(state: &mut AppState) {
     let Some(Overlay::NewWorkspace(dialog)) = state.overlay.as_ref() else {
         return;
@@ -230,28 +233,44 @@ pub(crate) fn commit_new_workspace(state: &mut AppState) {
         .clone()
         .or_else(|| state.active_terminal_cwd());
     match parse_workspace_path(&text_val, base_cwd.as_deref()) {
-        Ok(parsed_cwd) => {
-            state.overlay = None;
-            match parsed_cwd {
-                Some(path) => state.effects.push(Effect::CheckTrust {
+        Ok(parsed_cwd) => match parsed_cwd {
+            Some(path) => {
+                if !state.workspace_history.new_workspace_confirming {
+                    state.workspace_history.new_workspace_confirming = true;
+                    return;
+                }
+                state.workspace_history.new_workspace_confirming = false;
+                state.overlay = None;
+                let name = crate::app::state::workspace_label(
+                    &path,
+                    crate::app::state::home_dir().as_deref(),
+                );
+                state.effects.push(Effect::GrantTrust {
                     path: path.clone(),
-                    root: None,
-                    trigger: TrustTrigger::CreateWorkspace { cwd: path },
-                }),
-                None => {
-                    if super::workspace_history_mode(state) {
-                        if let Some(path) =
-                            base_cwd.or_else(|| crate::app::state::current_workspace_identity().0)
-                        {
-                            super::record_workspace_in_history_list(state, path);
-                        }
-                    } else {
-                        create_workspace_with_cwd(state, None);
-                    }
+                    name,
+                });
+                if super::workspace_history_mode(state) {
+                    super::record_workspace_in_history_list(state, path);
+                } else {
+                    create_workspace_with_cwd(state, Some(path));
                 }
             }
-        }
+            None => {
+                state.workspace_history.new_workspace_confirming = false;
+                state.overlay = None;
+                if super::workspace_history_mode(state) {
+                    if let Some(path) =
+                        base_cwd.or_else(|| crate::app::state::current_workspace_identity().0)
+                    {
+                        super::record_workspace_in_history_list(state, path);
+                    }
+                } else {
+                    create_workspace_with_cwd(state, None);
+                }
+            }
+        },
         Err(err) => {
+            state.workspace_history.new_workspace_confirming = false;
             show_toast(
                 state,
                 Toast::new(ToastKind::Danger, err, None, Instant::now())
@@ -324,9 +343,14 @@ fn commit_rename(state: &mut AppState) {
     state.overlay = None;
 }
 
-/// 确认关闭浮层回调。
+/// 确认关闭浮层回调（含工作区级联删除最终弹窗确认）。
 fn confirm_close(state: &mut AppState) {
-    let _ = state.overlay.take();
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.take() else {
+        return;
+    };
+    if let crate::app::overlay::OverlayTarget::WorkspaceHistory(entry_index) = confirm.target {
+        super::workspace_history::delete_workspace_history_entry(state, entry_index);
+    }
 }
 
 /// 终端粘贴进入当前浮层的单行输入框；返回是否实际写入。
@@ -358,6 +382,9 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
     };
     if refresh_search {
         super::refresh_referenced_search(state);
+    }
+    if matches!(state.overlay, Some(Overlay::NewWorkspace(_))) {
+        state.workspace_history.new_workspace_confirming = false;
     }
     true
 }

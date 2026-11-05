@@ -216,5 +216,6 @@ rtk cargo test
 - [x] 历史列表（`[≡]`）支持 Git 项目树形结构且移除 `⑂` 图标：自动扫描 `git worktree list` 并合并数据库历史 worktree，父节点显示 `▾/▸ <主工作区名>`（点击箭头可折叠/展开），子节点显示 `├─/└─ <分支短名或自定义名>`；从历史列表打开 linked worktree 时自动补开主工作区父节点。
 - [x] 所有显式创建/打开的工作区自动按路径去重持久化到 SQLite，按最近打开时间倒序排列；终端内 `cd` 不污染历史列表。
 - [x] 支持顶部搜索框实时过滤、鼠标双击/键盘回车打开、新建工作区、重命名双向同步。
-- [x] 磁盘路径已不存在的历史条目以红色（`style::error()`）字体展示，双击提示 `Directory does not exist`，右键菜单提供 `Delete`（含 `Confirm delete` 二次确认）并直接级联删除数据库关联内容。
+- [x] 新建工作区（`NewWorkspace`）直接在首个弹窗内完成二次确认（主按钮由 `Create` 切换为 `Confirm`），不再调用第二个 `TrustWorkspace` 弹窗。
+- [x] 全部工作区均支持级联删除（`Delete`），需经过「右键菜单连续 3 次点击（`Delete` → `Confirm delete (1/2)` → `Confirm delete (2/2)`）+ 最终确认弹窗（`Delete Workspace`）」后执行；若有正在运行的 Agent 流、子 Agent 或本地命令，立即强制中断并级联删除 SQLite 关联数据。
 - [x] 所有生产代码单文件 ≤ 1000 行，无 `unwrap()` / `expect()`，`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全部通过。

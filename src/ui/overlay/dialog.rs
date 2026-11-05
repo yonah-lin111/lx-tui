@@ -45,6 +45,11 @@ pub(crate) const NEW_NODE_BUTTONS: [&str; 3] =
     [text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
 pub(crate) const NEW_WORKSPACE_BUTTONS: [&str; 3] =
     [text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
+pub(crate) const NEW_WORKSPACE_CONFIRM_BUTTONS: [&str; 3] = [
+    text::BUTTON_CONFIRM,
+    text::BUTTON_CLEAR,
+    text::BUTTON_CANCEL,
+];
 const CONFIRM_BUTTONS: [&str; 2] = [text::BUTTON_CONFIRM, text::BUTTON_CANCEL];
 pub(crate) const TRUST_BUTTONS: [&str; 2] = [text::BUTTON_TRUST, text::BUTTON_DONT_TRUST];
 /// 信任浮层按钮行号（相对内容区）。
@@ -172,7 +177,15 @@ pub fn new_workspace_button_at(
         BUTTON_GAP,
         RENAME_BUTTON_ROW,
     );
-    match widgets::modal::button_at(&rects, column, row) {
+    let confirm_rects = widgets::modal::button_row(
+        shell.inner,
+        &NEW_WORKSPACE_CONFIRM_BUTTONS,
+        BUTTON_GAP,
+        RENAME_BUTTON_ROW,
+    );
+    match widgets::modal::button_at(&rects, column, row)
+        .or_else(|| widgets::modal::button_at(&confirm_rects, column, row))
+    {
         Some(0) => Some(NewWorkspaceButton::Create),
         Some(1) => Some(NewWorkspaceButton::Clear),
         Some(2) => Some(NewWorkspaceButton::Cancel),
@@ -231,7 +244,7 @@ fn rename_title(target: RenameTarget) -> &'static str {
     }
 }
 
-/// 确认浮层标题与目标名（供页码菜单删除非空页使用）。
+/// 确认浮层标题与目标名（供页码菜单删除非空页与工作区级联删除使用）。
 fn confirm_text(state: &AppState, target: &OverlayTarget) -> (&'static str, String) {
     match target {
         OverlayTarget::PromptPage {
@@ -242,6 +255,23 @@ fn confirm_text(state: &AppState, target: &OverlayTarget) -> (&'static str, Stri
             text::CONFIRM_DELETE_PAGE_TITLE,
             prompt_page_name(state, *workspace, *owner, *page).unwrap_or_default(),
         ),
+        OverlayTarget::WorkspaceHistory(entry_index) => (
+            text::CONFIRM_DELETE_WORKSPACE_TITLE,
+            state
+                .workspace_history
+                .entries
+                .get(*entry_index)
+                .map(|entry| entry.name.clone())
+                .unwrap_or_default(),
+        ),
+        OverlayTarget::Workspace(index) => (
+            text::CONFIRM_DELETE_WORKSPACE_TITLE,
+            state
+                .workspaces
+                .get(*index)
+                .map(|ws| ws.name.clone())
+                .unwrap_or_default(),
+        ),
         _ => (text::CONFIRM_DELETE_PAGE_TITLE, String::new()),
     }
 }
@@ -249,7 +279,12 @@ fn confirm_text(state: &AppState, target: &OverlayTarget) -> (&'static str, Stri
 /// 确认浮层的问题文案。
 pub fn confirm_question(state: &AppState, target: &OverlayTarget) -> String {
     let (_, name) = confirm_text(state, target);
-    text::confirm_delete_page_question(&name)
+    match target {
+        OverlayTarget::WorkspaceHistory(_) | OverlayTarget::Workspace(_) => {
+            text::confirm_delete_workspace_question(&name)
+        }
+        _ => text::confirm_delete_page_question(&name),
+    }
 }
 
 /// 重命名浮层：单行输入 + 底部按钮；输入视口与光标由公共单行输入组件承担。
@@ -282,27 +317,33 @@ pub(crate) fn render_rename(
     )
 }
 
-/// 新建工作区浮层：单行路径输入 + 底部按钮；输入视口与光标由公共单行输入组件承担。
+/// 新建工作区浮层：单行路径输入 + 底部按钮（首次提交进入弹窗内二次确认态，主按钮切换为 Confirm）。
 pub(crate) fn render_new_workspace(
     frame: &mut Frame<'_>,
     screen: Rect,
     new_ws: &NewWorkspace,
+    confirming: bool,
 ) -> Option<(u16, u16)> {
     let shell = new_workspace_shell(screen)?;
     widgets::modal::render(frame, &shell, text::NEW_WORKSPACE_TITLE);
     if shell.inner.width == 0 || shell.inner.height == 0 {
         return None;
     }
+    let labels = if confirming {
+        &NEW_WORKSPACE_CONFIRM_BUTTONS
+    } else {
+        &NEW_WORKSPACE_BUTTONS
+    };
+    let primary_label = if confirming {
+        text::BUTTON_CONFIRM
+    } else {
+        text::BUTTON_CREATE
+    };
     render_buttons(
         frame,
-        &widgets::modal::button_row(
-            shell.inner,
-            &NEW_WORKSPACE_BUTTONS,
-            BUTTON_GAP,
-            NEW_WORKSPACE_BUTTON_ROW,
-        ),
+        &widgets::modal::button_row(shell.inner, labels, BUTTON_GAP, NEW_WORKSPACE_BUTTON_ROW),
         &[
-            (text::BUTTON_CREATE, style::button_primary()),
+            (primary_label, style::button_primary()),
             (text::BUTTON_CLEAR, style::button_secondary()),
             (text::BUTTON_CANCEL, style::button_secondary()),
         ],

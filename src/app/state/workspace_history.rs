@@ -67,6 +67,10 @@ pub struct WorkspaceHistoryPanel {
     pub entries: Vec<WorkspaceHistoryEntry>,
     /// 已折叠的 Git 仓库根路径集合。
     pub collapsed_repos: Vec<PathBuf>,
+    /// 用户显式从历史列表中删除的同仓库 worktree 路径（防止磁盘仍存在时在自动扫描中复活）。
+    pub hidden_worktrees: Vec<PathBuf>,
+    /// 新建工作区弹窗（`Overlay::NewWorkspace`）是否已进入单弹窗内的二次确认状态。
+    pub new_workspace_confirming: bool,
     pub search: TextInput,
     /// 当前选中可见行下标（相对于 `visible_rows`）。
     pub selected: usize,
@@ -96,6 +100,8 @@ impl WorkspaceHistoryPanel {
             mode: WorkspaceMode::Active,
             entries: Vec::new(),
             collapsed_repos: Vec::new(),
+            hidden_worktrees: Vec::new(),
+            new_workspace_confirming: false,
             search: TextInput::new(String::new()),
             selected: 0,
             scroll: 0,

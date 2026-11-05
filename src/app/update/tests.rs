@@ -3717,7 +3717,7 @@ fn commit_new_workspace_empty_input_uses_active_cwd() {
 }
 
 #[test]
-fn commit_new_workspace_valid_path_queues_trust_check() {
+fn commit_new_workspace_valid_path_confirms_in_place_then_grants_trust_and_creates() {
     let mut state = AppState::demo();
     let initial_count = state.workspaces.len();
     let tmp = std::env::temp_dir();
@@ -3728,13 +3728,22 @@ fn commit_new_workspace_valid_path_queues_trust_check() {
         dialog.input = TextInput::new(canonical_tmp.to_string_lossy());
     }
 
+    // 第 1 次提交：进入弹窗内二次确认态，不关闭弹窗、不直接创建。
     commit_new_workspace(&mut state);
+    assert!(
+        matches!(state.overlay, Some(Overlay::NewWorkspace(_))),
+        "首次提交保持在首个弹窗内进行二次确认"
+    );
+    assert!(state.workspace_history.new_workspace_confirming);
+    assert_eq!(state.workspaces.len(), initial_count, "二次确认前不创建");
 
-    assert!(state.overlay.is_none(), "弹窗关闭");
-    assert_eq!(state.workspaces.len(), initial_count, "信任检查前不创建");
+    // 第 2 次提交：关闭弹窗、直接记录信任并创建工作区（不弹第二个弹窗）。
+    commit_new_workspace(&mut state);
+    assert!(state.overlay.is_none(), "二次确认后弹窗关闭");
+    assert_eq!(state.workspaces.len(), initial_count + 1);
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
-        Effect::CheckTrust { path, .. } if *path == canonical_tmp
+        Effect::GrantTrust { path, .. } if *path == canonical_tmp
     )));
 }
 
