@@ -12,7 +12,7 @@
   - `codex-rs/core/src/agent/control/{delivery.rs, residency.rs}`
   - `codex-rs/tui/src/app/{agents_overview.rs, agents_overview_view.rs, agent_navigation.rs}`、`codex-rs/tui/src/bottom_pane/pending_thread_approvals.rs`
 - **目标范围**：`src/chat/agent/`、`src/chat/tools/`、`src/config/subagents.rs`、`src/event/chat/subagent/`、`src/app/`、`src/ui/main_content/lx/`、`src/settings/`、`assets/`
-- **当前状态**：**已与刚合入的 `lx-agent-hierarchy-and-guards` (`dc1208c9`) 完成兼容性审阅与对齐，待用户确认后执行**
+- **当前状态**：**已实现、已通过 P0–P3 审查修复，验证结果见 [`verification.md`](verification.md)**
 
 ---
 
@@ -298,14 +298,17 @@ pub struct ResolvedRoleSpec {
 
 #### 3.2.3 项目级角色自动发现 (`src/config/subagents/discover.rs`)
 对齐 `src/skills/discover.rs` 与 `src/chat/agent/instructions.rs` 的安全边界：
-- **扫描目录**：仅当 `workspace_trusted == true` 时，按顺序扫描：
-  1. `<workspace>/.lx/agents/`
-  2. `<workspace>/.agents/roles/`
+- **扫描目录**：仅当工作区已信任（`is_trusted(cwd) || is_trusted(workspace)`）时，按优先级依次扫描：
+  1. 窗格/`exec -C` 执行目录 `cwd`（支持仓库子目录）；
+  2. `cwd` 所属的 linked worktree 根（`git::linked_worktree_root(cwd)`）；
+  3. 会话仓库根 `workspace`（主 checkout 或普通仓库根）。
+  每个根目录内再依次扫描 `.lx/agents/` 与 `.agents/roles/`；同名角色按上述优先级先到先得，全局 `subagents.json` 与内置角色名最高优先。TUI 主会话、TUI 子 Agent 解析与 `lx-tui exec` 共用 `merge_project_roles_for_paths`，避免“声明角色用 worktree、实际 spawn 用主 checkout”的路径分裂。
 - **文件约束**：
-  - 仅读取顶层 `.json` 普通文件（拒绝软链越界与隐藏文件）；
+  - 仅读取顶层 `.json` 普通文件（拒绝符号链接文件与符号链接目录，拒绝隐藏文件）；
   - 单文件大小上限 `MAX_ROLE_FILE_BYTES = 64 * 1024`（64 KiB），单工作区最多加载 `MAX_PROJECT_ROLES = 32` 个角色；
   - 若 JSON 内省略 `"name"` 字段，默认取文件名去掉 `.json` 后缀；
   - 复用 `CustomRoleConfig::normalized()` 与单角色校验逻辑；
+  - **未知字段拒绝**：反序列化使用 `#[serde(flatten)] extra` 收集未知键；只要出现未知字段（例如把 `allowMcp` 误写成 `allow_mcp`），整份文件记录 `tracing::warn!` 后跳过，防止能力收紧因拼写错误静默 fail-open；
   - **防覆盖保护**：若角色名为 `"explorer"` / `"executor"` / `"monitor"`，或与全局 `subagents.json` 中已定义的自定义角色重名，跳过该文件并记录 `tracing::warn!`（全局用户配置优先于仓库配置）。
 
 ---
@@ -440,7 +443,12 @@ pub fn format_inter_agent_envelope(
 
 - **接入点 (`src/event/chat/subagent/context.rs` & `src/chat/agent/exec/subagent/context.rs`)**：
   - 首轮 `spawn_agent` 的初始任务（即子会话自身的第 1 条非克隆用户消息）保持原始 `user_text` 不变；
-  - 后续通过 `send_input` 投递的跟进轮次，在组装 `ChatTurn` 与 `ModelItem` 发送给模型时，调用 `format_inter_agent_envelope(InterAgentMessageType::NewTask, &child_path, &sender_path, &text)` 包裹；
+  - 后续通过 `send_input` 投递的跟进轮次，在组装 `ChatTurn` 与 `ModelItem` 发送给模型时包裹结构化信封；类型由落库的 `trigger_turn` 决定：`trigger_turn=true → NEW_TASK`，`trigger_turn=false → MESSAGE`；
+  - **零 schema 变更的触发类型持久化**：`send_input` 的 `dedupe_key` 前缀编码 `send:<caller_session>:...`（唤醒）或 `msg:<caller_session>:...`（仅入队），`SubagentInputRecord::trigger_turn()` / `caller_session_id()` 与 `Database::load_subagent_turn_envelopes` 从该列派生当前轮及历史轮的 `(MessageType, sender_session)`；
+  - **发送方真实归因**：`Sender` 取实际调用方会话的树路径（`resolve_session_tree_root(caller_session)`），而非目标子 Agent 的 `parent_session`；从 TUI 面板跨层追问或跨分支 `send_input` 时不会误标发送方；
+  - **纯图片跟进**：`ModelItem::UserContent` 文本为空时，以 `"[N image(s)]"` 作为 payload 包裹信封头，保证图片轮同样携带归属信息；
+  - **幂等与防伪造**：若 payload 已以 `Message Type: ` 开头，仅当其中 `Sender: {sender}` 与本次调用一致时才原样返回，否则重新包裹，避免历史文本伪造发送方；
+  - `trigger_turn=false` 仅入队：运行轮自然完成后 `settle.rs` 仅在队列存在可触发项（`has_triggerable_queued_input`，即非 `msg:` 前缀）时才自动续轮；否则子 Agent 保持 `idle`（`queued_count > 0`），等待显式 `resume_agent` 或下一条 `trigger_turn=true` 输入；
   - 数据库 `agent_message` 与 TUI `SubagentRun.chat` 中存储的仍是原始干净文本，用户点开 `Agents` 详情面板不会看到协议头噪音。
 
 #### 3.4.2 空闲子会话 LRU 内存驻留回收 (`src/app/state/lx/agent.rs`)
@@ -536,6 +544,10 @@ impl AgentFilter {
 - `TaskPage` 新增：
   - `pub agent_filter: AgentFilter`（默认 `AgentFilter::All`）；
   - `pub agent_reply: Option<crate::app::overlay::TextInput>`（内联追问输入框，`None` 表示普通列表浏览态）；
+  - `pub agent_reply_target: Option<(String, String)>`（打开输入态时锁定的 `(agent_id, display_label)`，防止列表重排/状态更新后追问串发到其他子 Agent）。
+- **筛选视图下的选中稳定性**：
+  - 所有对 `runs` 顺序或状态的修改（`set_subagent_list`、`on_subagent_started`、`on_subagent_finished`）都先捕获当前选中的 `agent_id`，修改后再通过 `restore_selected_task_agent` 映射回新的过滤下标；禁止在状态变更后重新读取 `filtered_indices` 再决定选中项；
+  - `TaskPage::agent_reply_target` 在点击其他列表行、切换筛选、切换 Tab 时同步清空 `agent_reply`，避免“隐形输入态”；
 - **与 `sort_runs_tree_order` 及 `tree_prefix` 的兼容**：
   - `AgentsState::filtered_indices(filter) -> Vec<usize>` 按先序保留满足 `filter.matches(run)` 的真实下标；
   - `TaskPage::len(agents)` 在 `TaskTab::Agents` 下返回 `agents.filtered_indices(self.agent_filter).len()`；
@@ -553,6 +565,10 @@ impl AgentFilter {
      - 按 **`Esc` (`LxInput::Cancel`)**：置 `page.agent_reply = None`（仅退出内联输入，不关闭 `TaskPage`）；
      - 按 **`Enter` (`LxInput::Submit`)**：若输入非空，取出文本并发出 `Effect::SendSubagentUserInput { pane, session_id, agent_id, text }`，同时置 `page.agent_reply = None`。
 2. **事件层自动恢复并投递 (`src/event/chat/subagent/snapshot.rs`)**：
+   - 提交时优先使用 `agent_reply_target` 锁定的 `agent_id`（缺失时才回退当前高亮），保证输入期间列表重排/过滤变化不会改变收件人；
+   - 空回车保持输入态，不发送空消息，也不误退；
+   - 若锁定目标已变为 `cancelled`（`close_agent` 关闭），弹窗格内 toast `"Cannot send input to a closed subagent"` 并丢弃本条输入；
+   - 粘贴（`Cmd+V`）在输入态单行化写入 `agent_reply`；浏览态由 `apply_task_paste` 直接吞掉，禁止穿透污染隐藏的主聊天草稿框；
    - 处理 `Effect::SendSubagentUserInput` 时：
      - 先通过 `runner::load_subagent_tree` + `runner::resolve_tree_target` 找到目标 `SubagentRecord`（支持深度 1 直接子节点与深度 2 孙节点，取其真实 `record.parent_session_id` 构造 `RequestKey`）；
      - 若目标子 Agent 尚未处于 `running` 或 `resumed_subagents`（即已 `completed` / `interrupted` / `failed`），先调用 `runner::resume(state, streams, persistence, &key, &record.agent_id)` 将其恢复为活动态；

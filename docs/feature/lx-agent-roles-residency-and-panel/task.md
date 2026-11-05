@@ -17,6 +17,7 @@
 | **T5** | 模块 K | TUI 渲染层：`Agents` 面板三态筛选栏、可见父节点树缩进兼容、顶栏内联追问输入框与主界面底边框 `blocked` 提醒 | `src/ui/main_content/lx/{task.rs, task/agents.rs, status.rs}`、`src/ui/text.rs` | 已完成 |
 | **T6** | 模块 G, H, I | Web 设置页扩展（`monitor` 内置角色、`delegationMode`、`lockModel` 与能力收紧开关） | `src/settings/service/subagents.rs`、`assets/{settings.html, settings_subagents.js}` | 已完成 |
 | **T7** | 全模块 | 单元测试、回归测试补充与 Clippy / Fmt 校验（严守单文件行数上限） | `src/config/subagents/tests.rs`、`src/chat/agent/tests/mod.rs`、`src/event/chat/tests/subagent_roles.rs`、`src/ui/main_content/lx/task/tests.rs` | 已完成 |
+| **T8** | 全模块 | Review 专项修复：`trigger_turn` 信封语义、`<turn_aborted>` 空块清理、面板追问目标锁定、worktree 子目录角色发现、`exec` 运行时摘要、粘贴隔离与设置 API 部分更新保持 | `src/db/chat/subagent/queue.rs`、`src/event/chat/subagent/*`、`src/chat/agent/exec/*`、`src/app/*`、`src/settings/service/subagents.rs`、`src/config/subagents/discover.rs` | 已完成 |
 
 ---
 
@@ -166,3 +167,22 @@
   4. 补充 `format_inter_agent_envelope` 模型侧信封包裹与 `MAX_RESIDENT_SUBAGENT_CHATS = 6` LRU 内存卸载测试；
   5. 补充 `Agents` 面板 `AgentFilter` 切换（含过滤视图下树缩进退化保护）、`Enter` 内联追问自动恢复已结束子 Agent、底边框 `blocked` 计数渲染测试；
   6. 执行 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 与受影响模块 `cargo test`。
+
+---
+
+### Task 8 (T8)：Review 专项修复（P0–P3，提交 `fd720210`）
+- **目标文件**：
+  - `src/db/chat/subagent/{queue.rs, subagent.rs}`、`src/db/chat/mod.rs`
+  - `src/event/chat/subagent/{runner.rs, settle.rs, context.rs, snapshot.rs}`、`src/event/chat/mod.rs`
+  - `src/chat/agent/exec/{mod.rs, subagent/*}`、`src/chat/agent/{envelope.rs, prompts.rs}`
+  - `src/app/state/lx/{task.rs, agent.rs}`、`src/app/update/{pane/task_page.rs, chat/subagent.rs, chat/task_page.rs}`、`src/event/input.rs`
+  - `src/config/subagents/{discover.rs, tests.rs}`、`src/settings/service/subagents.rs`
+- **实施细节**：
+  1. **P0-1 信封与队列语义**：`dedupe_key` 编码 `send:` / `msg:` 前缀与真实调用方会话；新增 `load_subagent_turn_envelopes`、`has_triggerable_queued_input`；`Message MESSAGE` / `NEW_TASK` 按落库 `trigger_turn` 精确选择；`trigger_turn=false` 在 `Complete` 后保持 `idle` 等待显式唤醒；纯图片跟进也包裹信封；`envelope.rs` 幂等检查同时校验 `Sender` 一致性。
+  2. **P0-2 中断空块**：追加 `SUBAGENT_TURN_ABORTED_MARKER` 前剔除空的 `AssistantText("")`，无正文时不补前导换行，避免 Anthropic 空 text block 400。
+  3. **P0-3 面板追问**：`TaskPage.agent_reply_target` 锁定 `(agent_id, display_label)`；空回车保持输入态；提交前复查 `cancelled`；状态/顺序变更统一走 `restore_selected_task_agent` 保持筛选视图选中身份。
+  4. **P1-1 worktree 角色发现**：新增 `merge_project_roles_for_paths(base, workspace, cwd, trusted)`，按 `cwd → linked worktree root → workspace` 合并，TUI 与 `exec` 全路径统一。
+  5. **P1-2 `exec` 运行时摘要**：`lx-tui exec` 主会话同步注入 `DelegationMode` 与 `<subagents>` 快照。
+  6. **P1-3/4 交互与边界**：面板打开时粘贴不再穿透隐藏草稿；`scroll_task_list` 使用过滤后长度；面板追问在自动 `resume` 前拦截 `close_agent` 关闭目标。
+  7. **P2/P3 完善**：`sync_agent_ui_queue` 刷新 `blocked_subagents`；空筛选渲染空态；角色能力收紧写入 `# Capability Restrictions`；设置 API 部分更新保留 `lockModel` / 三项能力；项目角色 JSON 拒绝未知字段与符号链接目录。
+- **验证点**：`cargo fmt --check && cargo clippy --all-targets -- -D warnings` 全绿；新增回归单测与 `lx-tui exec` 实机场景见 `verification.md` V07。
