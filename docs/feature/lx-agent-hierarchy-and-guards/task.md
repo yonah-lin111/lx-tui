@@ -14,9 +14,9 @@
 | **T3** | 模块 A, C, F | 数据库分叉历史清洗 (`fork_turns`)、树溯源查询与变更文件列表 | `src/db/chat/{fork.rs, subagent.rs}`、`src/db/chat/subagent/record.rs` | 已完成 |
 | **T4** | 模块 B & F | `run_agent_turn` 预算阈值提醒、耗尽熔断与多级协调工具面门控 | `src/chat/agent_loop/{mod.rs, context.rs}`、`src/chat/context/mod.rs` | 已完成 |
 | **T5** | 模块 B, C, F | 交互式事件层 & 无头 `exec` 池：多级寻址、整树并发、级联关闭、`trigger_turn` 与半程汇报 | `src/event/chat/subagent/{mod.rs, runner.rs, launch.rs, settle.rs, wait.rs}`、`src/chat/agent/exec/subagent/{mod.rs, turn.rs, settle.rs}` | 已完成 |
-| **T6** | 模块 E | App 状态与 TUI 渲染：`wait_agent(all)` 实时列表、`spawn_agent` 实时活动、`Agents` 树缩进/Token/`^a` 与 `/subagents` | `src/app/state/lx/{agent.rs, slash.rs}`、`src/app/update/chat/subagent.rs`、`src/app/update/pane/task_page.rs`、`src/ui/main_content/lx/{history/tool/subagent.rs, task/agents.rs}`、`src/ui/text.rs` | 已完成 |
+| **T6** | 模块 E | App 状态与 TUI 渲染：`wait_agent(all)` 实时列表、`spawn_agent` 实时活动、`Agents` 树缩进/Token/`^a` 与 `/subagents` | `src/app/state/lx/{agent.rs, slash.rs, chat/subagent_view.rs}`、`src/app/update/chat/{subagent.rs, subagent_cards.rs, task_page.rs, slash.rs}`、`src/ui/main_content/lx/{history/tool/subagent.rs, task/agents.rs}`、`src/ui/text/mod.rs` | 已完成 |
 | **T7** | 模块 B & F | Web 设置页扩展（`maxDepth`、`maxConcurrent`、`defaultMaxTokens`） | `src/settings/service/subagents.rs`、`assets/{settings.html, settings_subagents.js}` | 已完成 |
-| **T8** | 全模块 | 单元测试、回归测试补充与 Clippy / Fmt 校验 | `src/chat/agent/tests/`、`src/db/chat/subagent/tests.rs`、`src/event/chat/tests/subagent.rs`、`src/ui/main_content/lx/history/tests/` | 已完成 |
+| **T8** | 全模块 | 单元测试、CLI 实机验证、P0–P3 审查修复与 `verification.md` 报告 | `src/chat/agent/tests/`、`src/chat/agent/exec/tests/subagent_tests.rs`、`src/db/chat/subagent/tests.rs`、`src/event/chat/tests/subagent.rs`、`src/app/update/chat/tests/subagent.rs`、`docs/feature/lx-agent-hierarchy-and-guards/verification.md` | 已完成 |
 
 ---
 
@@ -166,16 +166,19 @@
 
 ---
 
-### Task 8 (T8)：全链路单测补充与静态检查收口
+### Task 8 (T8)：全链路单测补充、P0–P3 审查修复与静态检查收口
 - **目标文件**：
   - `src/chat/agent/tests/mod.rs`
+  - `src/chat/agent/exec/tests/subagent_tests.rs`
   - `src/db/chat/subagent/tests.rs`
   - `src/event/chat/tests/subagent.rs`
-  - `src/ui/main_content/lx/history/tests/cards.rs`
+  - `src/app/update/chat/tests/subagent.rs`
+  - `src/ui/main_content/lx/task/tests.rs`
+  - `docs/feature/lx-agent-hierarchy-and-guards/verification.md`
 - **实施细节**：
-  1. 补充多级路径分配、三合一寻址、深度超限拦截（`DEPTH_LIMIT_REACHED_CODE`）测试；
+  1. 补充多级路径分配、三合一寻址（`id → path → nickname`）、深度超限拦截（`DEPTH_LIMIT_REACHED_CODE`）测试；
   2. 补充 `fork_turns` 轮次裁剪与思考块剥离、token 置空测试；
-  3. 补充 `SubagentTokenBudget` 25%/10% `<rollout_budget>` 注入与耗尽熔断 + 半程汇报生成测试；
-  4. 补充 `send_input(trigger_turn=false)` 仅入队不唤醒测试；
-  5. 补充 `wait_agent(all)` 逐目标渲染、`spawn_agent` 实时活动行、`Agents` 面板树缩进与 `/subagents` 命令测试；
-  6. 执行 `cargo fmt`、`cargo clippy --all-targets -- -D warnings` 与受影响模块全量 `cargo test`。
+  3. 补充 `SubagentTokenBudget` 25%/10% `<rollout_budget>` 注入与多步累计耗尽熔断 + 半程汇报生成测试；
+  4. 补充 `send_input(trigger_turn=false)` 仅入队不唤醒测试，以及嵌套 `Executor` 无参 `wait_agent({})` 严格后代过滤与孙节点队列自动续跑测试；
+  5. 补充 `wait_agent(all)` 逐目标渲染、`spawn_agent` 实时活动行（含子会话内部卡片刷新）、`Agents` 面板 DFS 树形排序与缩进、`/subagents` 命令测试；
+  6. 递增 `PROMPT_VERSION` 至 `"lx-11"`，完成 `verification.md` 报告，执行 `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、受影响模块全量 `cargo test` 及 `./target/debug/lx-tui exec` CLI 实机校验。
