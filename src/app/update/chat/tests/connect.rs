@@ -450,15 +450,14 @@ fn connected_event_closes_overlay_switches_to_model_picker_and_toasts() {
         settings
     ));
     assert!(state.overlay.is_none(), "连接成功后关闭模态");
-    let toast = state.toast.as_ref().expect("global toast");
+    let toast = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.toast.as_ref())
+        .expect("pane toast");
     assert_eq!(toast.message, "Connected Anthropic");
-    assert!(toast.anchor.is_none(), "模态弹窗触发的 Toast 必须全局显示");
     assert!(
-        state
-            .pane_anywhere(pane)
-            .and_then(|target| target.lx.toast.as_ref())
-            .is_none(),
-        "不得写入固定容器 pane.lx.toast"
+        state.toast.is_none(),
+        "连接成功立即关闭全部弹窗后，Toast 应落在打开弹窗的源容器而非全局"
     );
     let Some(SlashPanel::Model(picker)) = state
         .pane_anywhere(pane)
@@ -581,7 +580,7 @@ fn oauth_prompt_fills_url_and_shortcuts_open_browser() {
     assert!(apply_connect_overlay_key(&mut state, OverlayKey::Char('c')));
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
-        crate::app::effects::Effect::CopyToClipboard { text, anchor: None } if text == "ABCD-1234"
+        crate::app::effects::Effect::CopyToClipboard { text, anchor } if text == "ABCD-1234" && *anchor == Some(pane)
     )));
     assert!(apply_connect_overlay_key(&mut state, OverlayKey::Char('o')));
     assert!(state.effects.iter().any(|effect| matches!(

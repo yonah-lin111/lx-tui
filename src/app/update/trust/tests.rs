@@ -193,6 +193,9 @@ fn refuse_on_sync_cancels_with_toast() {
     let path = workspace_dir("sync-refuse");
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.view = crate::app::state::PaneView::Terminal;
+    }
     open_trust_dialog(
         &mut state,
         path,
@@ -202,6 +205,11 @@ fn refuse_on_sync_cancels_with_toast() {
     assert!(!state.should_quit);
     let toast = state.toast.as_ref().expect("cancelled toast");
     assert_eq!(toast.message, crate::ui::text::TOAST_SYNC_CANCELLED);
+    assert_eq!(
+        toast.anchor,
+        Some(pane),
+        "关闭弹窗后回到触发它的终端窗格容器"
+    );
     assert!(state.effects.is_empty(), "拒绝不写库");
 }
 

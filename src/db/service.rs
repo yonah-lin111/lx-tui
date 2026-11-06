@@ -456,13 +456,15 @@ impl Persistence {
                 let key = prompt_key_for(state, &workspace);
                 let added = self.with_db(|db| db.add_referenced_folder(&key, &path));
                 if added.is_none() {
-                    // 写失败：不制造“已保存”假象，在输入弹窗上显示错误并保留输入重试。
-                    update::show_toast(
+                    // 写失败：不制造“已保存”假象，在输入弹窗上显示错误并保留输入重试（弹窗未关，show_toast_at 走全局）。
+                    let source = Some(state.prompt.id());
+                    update::show_toast_at(
                         state,
+                        source,
                         Toast::new(
                             ToastKind::Danger,
                             text::TOAST_REFERENCED_SAVE_FAILED,
-                            None,
+                            source,
                             Instant::now(),
                         ),
                     );
@@ -477,12 +479,15 @@ impl Persistence {
                 let key = prompt_key_for(state, &workspace);
                 let deleted = self.with_db(|db| db.delete_referenced_folder(&key, id));
                 if deleted.is_none() {
-                    update::show_toast(
+                    // 删除确认弹窗点击后已立即关闭，Toast 回到打开弹窗的右侧面板容器显示。
+                    let source = Some(state.prompt.id());
+                    update::show_toast_at(
                         state,
+                        source,
                         Toast::new(
                             ToastKind::Danger,
                             text::TOAST_REFERENCED_DELETE_FAILED,
-                            None,
+                            source,
                             Instant::now(),
                         ),
                     );
