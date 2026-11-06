@@ -731,8 +731,9 @@ pub fn on_preset_connected(
     state.last_connect_provider = Some(provider_id.to_string());
     state.models.settings = settings;
     state.connect = connect;
+    // 连接后静默同步模型目录（`pane: None` 不弹刷新成功/鉴权失败 Toast，错误 Key 仅在发消息时报错）。
     state.effects.push(Effect::RefreshModelsCatalog {
-        pane: Some(pane),
+        pane: None,
         provider_id: Some(provider_id.to_string()),
     });
     state.overlay = None;
