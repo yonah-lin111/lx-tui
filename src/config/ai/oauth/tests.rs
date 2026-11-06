@@ -196,3 +196,21 @@ async fn digitalocean_implicit_callback_without_query_state_succeeds() {
     let credential = task.await.expect("join callback task").expect("callback");
     assert_eq!(credential.access_token, "do-token");
 }
+
+#[test]
+fn resolve_verification_url_expands_relative_console_paths() {
+    let url = super::device::resolve_verification_url(
+        "https://opencode.ai/console/auth/device/code",
+        "/console/device?user_code=LCBQ-NTRM&client_id=opencode-cli",
+    );
+    assert_eq!(
+        url,
+        "https://opencode.ai/console/device?user_code=LCBQ-NTRM&client_id=opencode-cli"
+    );
+
+    let full = super::device::resolve_verification_url(
+        "https://github.com/login/device/code",
+        "https://github.com/login/device",
+    );
+    assert_eq!(full, "https://github.com/login/device");
+}

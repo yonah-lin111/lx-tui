@@ -99,17 +99,30 @@ async fn request_device_grant(
     } else {
         device_code_url.to_string()
     };
-    let mut form = vec![("client_id", client_id)];
-    if !scope.is_empty() {
-        form.push(("scope", scope));
-    }
-    if provider_id.starts_with("opencode") {
-        form.push(("supports_org_scope", "true"));
-    }
-    let response = client
+    let request = client
         .post(&device_code_url)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .form(&form)
+        .header(reqwest::header::ACCEPT, "application/json");
+    let request = if provider_id.starts_with("opencode") {
+        request.json(&json!({
+            "client_id": client_id,
+            "supports_org_scope": true,
+        }))
+    } else if provider_id == "github-copilot" {
+        request.json(&json!({
+            "client_id": client_id,
+            "scope": scope,
+        }))
+    } else {
+        let mut form = vec![("client_id", client_id)];
+        if !scope.is_empty() {
+            form.push(("scope", scope));
+        }
+        if provider_id == "xai" {
+            form.push(("referrer", "opencode"));
+        }
+        request.form(&form)
+    };
+    let response = request
         .send()
         .await
         .map_err(|error| format!("device authorization request failed: {error}"))?;
@@ -128,9 +141,10 @@ async fn request_device_grant(
         .map_err(|_| "device authorization returned invalid JSON".to_string())?;
     let user_code = json_string(&value, "user_code")
         .ok_or_else(|| "device authorization response has no user code".to_string())?;
-    let url = json_string(&value, "verification_uri_complete")
+    let raw_url = json_string(&value, "verification_uri_complete")
         .or_else(|| json_string(&value, "verification_uri"))
         .ok_or_else(|| "device authorization response has no verification URL".to_string())?;
+    let url = resolve_verification_url(&device_code_url, &raw_url);
     let device_code = json_string(&value, "device_code")
         .ok_or_else(|| "device authorization response has no device code".to_string())?;
     Ok(DeviceGrant {
@@ -217,7 +231,7 @@ async fn poll_device_grant(
                 None => continue,
             }
         } else {
-            match poll_standard_device(client, &token_url, client_id, grant).await? {
+            match poll_standard_device(client, provider_id, &token_url, client_id, grant).await? {
                 PollOutcome::Token(value) => value,
                 PollOutcome::Pending => continue,
                 PollOutcome::SlowDown => {
@@ -229,6 +243,10 @@ async fn poll_device_grant(
         let mut credential = credential_from_token(method_id, &value)?;
         if provider_id == "github-copilot" {
             credential = github_copilot_metadata(client, form_answers, credential).await;
+        } else if provider_id.starts_with("opencode")
+            && let Some(org_id) = json_string(&value, "org_id")
+        {
+            credential.metadata.insert("orgID".to_string(), org_id);
         }
         return Ok(credential);
     }
@@ -242,6 +260,7 @@ enum PollOutcome {
 
 async fn poll_standard_device(
     client: &reqwest::Client,
+    provider_id: &str,
     token_url: &str,
     client_id: &str,
     grant: &DeviceGrant,
@@ -250,15 +269,24 @@ async fn poll_standard_device(
         .device_code
         .as_deref()
         .ok_or_else(|| "device flow has no device code".to_string())?;
-    let form = [
-        ("client_id", client_id),
-        ("device_code", device_code),
-        ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-    ];
-    let response = client
+    let request = client
         .post(token_url)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .form(&form)
+        .header(reqwest::header::ACCEPT, "application/json");
+    let request = if provider_id.starts_with("opencode") || provider_id == "github-copilot" {
+        request.json(&json!({
+            "client_id": client_id,
+            "device_code": device_code,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        }))
+    } else {
+        let form = [
+            ("client_id", client_id),
+            ("device_code", device_code),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+        ];
+        request.form(&form)
+    };
+    let response = request
         .send()
         .await
         .map_err(|error| format!("device token request failed: {error}"))?;
@@ -436,6 +464,24 @@ fn github_copilot_domain(answers: &BTreeMap<String, String>) -> String {
 fn json_interval(value: &Value) -> Duration {
     let seconds = json_i64(value, "interval").unwrap_or(5).max(1) as u64;
     Duration::from_secs(seconds)
+}
+
+/// 将相对验证路径（如 OpenCode Console 返回的 `/console/device?user_code=...`）解析为完整 HTTP(S) URL。
+pub(super) fn resolve_verification_url(endpoint_url: &str, verification_uri: &str) -> String {
+    let trimmed = verification_uri.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return trimmed.to_string();
+    }
+    if let Some((scheme, rest)) = endpoint_url.split_once("://") {
+        let host = rest.split('/').next().unwrap_or_default();
+        if !host.is_empty() {
+            if trimmed.starts_with('/') {
+                return format!("{scheme}://{host}{trimmed}");
+            }
+            return format!("{scheme}://{host}/{trimmed}");
+        }
+    }
+    trimmed.to_string()
 }
 
 fn normalize_host(value: &str) -> String {

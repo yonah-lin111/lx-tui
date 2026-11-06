@@ -151,8 +151,8 @@ fn preset_auth_methods_match_opencode() {
     assert!(matches!(
         oauth,
         OAuthFlowKind::DeviceCode {
-            device_code_url: "https://opencode.ai/auth/device/code",
-            token_url: "https://opencode.ai/auth/device/token",
+            device_code_url: "https://opencode.ai/console/auth/device/code",
+            token_url: "https://opencode.ai/console/auth/device/token",
             client_id: "opencode-cli",
             scope: "model.request",
         }

@@ -252,10 +252,19 @@ pub async fn refresh_oauth_credential(
     let mut url_answers = form_answers.clone();
     url_answers.extend(credential.metadata.clone());
     let token_url = expand_flow_url(flow.token_url(), &url_answers);
-    let response = client
+    let request = client
         .post(&token_url)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .form(&form)
+        .header(reqwest::header::ACCEPT, "application/json");
+    let request = if provider_id.starts_with("opencode") {
+        request.json(&serde_json::json!({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": flow.client_id(),
+        }))
+    } else {
+        request.form(&form)
+    };
+    let response = request
         .send()
         .await
         .map_err(|error| format!("token refresh failed: {error}"))?;

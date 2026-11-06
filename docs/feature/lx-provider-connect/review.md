@@ -58,6 +58,24 @@
   1. 改为正向判定 `supports_adaptive_thinking(model_id)`（仅匹配 Claude 4.6 / 4.7 / 5.x / Fable / Mythos）；其余模型一律将 `effort` 映射为 `thinking: {"type": "enabled", "budget_tokens": ...}`；
   2. 在 `anthropic::build` 中检查 `messages`：若当前配置生成了手动 `thinking: {"type": "enabled"}`，但 `messages` 中已存在不含 `thinking` 块的 `assistant` `tool_use` 历史消息（即处于工具调用续轮），自动在该步省略 `thinking` 字段（保留 `max_tokens`），避免无签名历史触发 400。
 
+### P0-4：OpenCode Zen / OpenCode Go 设备码登录返回 `HTTP 302`（端点路径缺少 `/console`、请求体需为 JSON、相对验证 URL 未补全域名）
+- **涉及位置**：
+  - `src/config/ai/presets_catalog.json`（`opencode`、`opencode-go`、`xai`、`poe`、`digitalocean` OAuth 参数）
+  - `src/config/ai/oauth/device.rs:94-144, 243-265`
+  - `src/config/ai/oauth/mod.rs:254-265`
+  - `src/ui/overlay/connect.rs:421-431`
+- **关键点**：
+  - 对照 `opencode-dev/packages/core/src/console-access.ts`（`defaultServer = "https://opencode.ai/console"`）与 `opencode.ts`：OpenCode Console 设备码端点在 2026 年 8 月后迁移至 `https://opencode.ai/console/auth/device/code` 与 `https://opencode.ai/console/auth/device/token`。
+- **错误原因**：
+  1. `presets_catalog.json` 中 `opencode` / `opencode-go` 仍配置为旧路径 `https://opencode.ai/auth/device/code`，服务端对该路径返回 `HTTP 302 Found -> https://opencode.ai/console/login`；
+  2. `opencode.ts` 与 `github-copilot.ts` 要求 `POST /auth/device/code` 与 `POST /auth/device/token` 发送 `application/json` 请求体，而非 `application/x-www-form-urlencoded`；
+  3. OpenCode Console 返回的 `verification_uri_complete` 为相对路径（`"/console/device?user_code=...&client_id=opencode-cli"`），未拼接 `https://opencode.ai` 域名会导致无法拉起浏览器；
+  4. 当 OAuth 启动阶段失败（`url.is_empty()` 且 `error.is_some()`）时，`src/ui/overlay/connect.rs` 列表首行仍显示 `"Starting browser authorization…"`。
+- **修复方案**：
+  1. 将 `presets_catalog.json` 中 `opencode` 与 `opencode-go` 的设备码与 Token URL 更新为 `https://opencode.ai/console/auth/device/{code,token}`，同时对齐 `xai`、`poe`、`digitalocean` 的最新 OAuth 参数；
+  2. 在 `device.rs` 与 `oauth/mod.rs` 中对 `opencode*` 与 `github-copilot` 使用 JSON 请求体，新增 `resolve_verification_url` 将相对验证路径补全为完整 `https://opencode.ai/console/device?...`；
+  3. 在 `src/ui/overlay/connect.rs` 中当 OAuth 启动失败时将首行状态文案切换为 `"Authorization could not start (press Esc to go back)"`。
+
 ---
 
 ## P1（高优先级缺陷）

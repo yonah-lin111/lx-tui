@@ -420,7 +420,10 @@ fn render_oauth_row(
     };
     if url.is_empty() {
         if index == 0 {
-            let status = if instructions.is_empty() {
+            let has_error = error.as_deref().is_some_and(|error| !error.is_empty());
+            let status = if has_error {
+                text::LX_CONNECT_OAUTH_FAILED_HINT
+            } else if instructions.is_empty() {
                 text::LX_CONNECT_OAUTH_WAITING
             } else {
                 instructions

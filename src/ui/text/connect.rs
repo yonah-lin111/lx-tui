@@ -34,6 +34,8 @@ pub const LX_CONNECT_OPEN_BROWSER: &str = "Open in browser";
 pub const LX_CONNECT_COPY_CODE: &str = "Copy code / URL";
 pub const LX_CONNECT_OAUTH_STARTING: &str = "Starting browser authorization…";
 pub const LX_CONNECT_OAUTH_WAITING: &str = "Waiting for authorization…";
+pub const LX_CONNECT_OAUTH_FAILED_HINT: &str =
+    "Authorization could not start (press Esc to go back)";
 pub const LX_CONNECT_OAUTH_OPENED: &str = "Opened browser";
 pub const LX_CONNECT_CONNECTED_PREFIX: &str = "Connected";
 pub const LX_CONNECT_DISCONNECTED_PREFIX: &str = "Disconnected";
