@@ -222,6 +222,11 @@ fn multi_method_provider_opens_methods_with_oauth_first() {
     let panel = connect_panel(&state);
     assert_eq!(panel.stage, ConnectStage::Providers);
     assert!(panel.input.text().is_empty());
+    assert_eq!(
+        panel.active_entry().map(|entry| entry.id.as_str()),
+        Some("openai"),
+        "退回供应商列表后保持之前选中的供应商"
+    );
 }
 
 #[test]
@@ -445,11 +450,16 @@ fn connected_event_closes_overlay_switches_to_model_picker_and_toasts() {
         settings
     ));
     assert!(state.overlay.is_none(), "连接成功后关闭模态");
-    let toast = state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.toast.as_ref())
-        .expect("pane toast");
+    let toast = state.toast.as_ref().expect("global toast");
     assert_eq!(toast.message, "Connected Anthropic");
+    assert!(toast.anchor.is_none(), "模态弹窗触发的 Toast 必须全局显示");
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|target| target.lx.toast.as_ref())
+            .is_none(),
+        "不得写入固定容器 pane.lx.toast"
+    );
     let Some(SlashPanel::Model(picker)) = state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.slash.clone())
@@ -484,15 +494,18 @@ fn disconnected_event_restores_provider_list() {
     let panel = connect_panel(&state);
     assert_eq!(panel.stage, ConnectStage::Providers);
     assert_eq!(
+        panel.active_entry().map(|entry| entry.id.as_str()),
+        Some("anthropic"),
+        "断开连接回到列表后保持选中之前的供应商"
+    );
+    assert_eq!(
         panel.active_entry().and_then(|entry| entry.source.clone()),
         None,
         "断开后不再显示已连接标签"
     );
-    let toast = state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.toast.as_ref())
-        .expect("pane toast");
+    let toast = state.toast.as_ref().expect("global toast");
     assert_eq!(toast.message, "Disconnected Anthropic");
+    assert!(toast.anchor.is_none(), "模态弹窗触发的 Toast 必须全局显示");
 }
 
 #[test]
@@ -528,11 +541,9 @@ fn models_refreshed_clears_validating_and_toasts() {
     let panel = connect_panel(&state);
     assert!(!panel.validating);
     assert!(panel.status_message.is_none());
-    let toast = state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.toast.as_ref())
-        .expect("pane toast");
+    let toast = state.toast.as_ref().expect("global toast");
     assert_eq!(toast.message, "Refreshed 7 models");
+    assert!(toast.anchor.is_none(), "模态弹窗触发的 Toast 必须全局显示");
 }
 
 #[test]
@@ -570,13 +581,16 @@ fn oauth_prompt_fills_url_and_shortcuts_open_browser() {
     assert!(apply_connect_overlay_key(&mut state, OverlayKey::Char('c')));
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
-        crate::app::effects::Effect::CopyToClipboard { text, .. } if text == "ABCD-1234"
+        crate::app::effects::Effect::CopyToClipboard { text, anchor: None } if text == "ABCD-1234"
     )));
     assert!(apply_connect_overlay_key(&mut state, OverlayKey::Char('o')));
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
         crate::app::effects::Effect::OpenBrowser { url } if url == "https://github.com/login/device"
     )));
+    let toast = state.toast.as_ref().expect("global toast");
+    assert_eq!(toast.message, text::LX_CONNECT_OAUTH_OPENED);
+    assert!(toast.anchor.is_none());
 }
 
 #[test]
@@ -633,7 +647,13 @@ fn esc_cancels_oauth_and_returns_to_providers() {
         effect,
         crate::app::effects::Effect::CancelPresetOAuth { attempt_id } if attempt_id == "attempt-cancel"
     )));
-    assert_eq!(connect_panel(&state).stage, ConnectStage::Providers);
+    let panel = connect_panel(&state);
+    assert_eq!(panel.stage, ConnectStage::Providers);
+    assert_eq!(
+        panel.active_entry().map(|entry| entry.id.as_str()),
+        Some("github-copilot"),
+        "取消 OAuth 退回列表后保持之前选中的供应商"
+    );
 }
 
 #[test]

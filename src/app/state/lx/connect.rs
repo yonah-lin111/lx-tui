@@ -195,9 +195,19 @@ impl ConnectPanel {
 
     /// 用新的连接快照刷新条目与标签。
     pub fn refresh_entries(&mut self, connect: &ConnectSettings, env: &BTreeMap<String, String>) {
+        let selected_id = if matches!(self.stage, ConnectStage::Providers) {
+            self.active_entry().map(|entry| entry.id.clone())
+        } else {
+            None
+        };
         self.entries = Self::build_entries(connect, &|name| env.get(name).cloned());
         if matches!(self.stage, ConnectStage::Providers) {
             self.refilter_from_input();
+            if self.filter.trim().is_empty()
+                && let Some(provider_id) = selected_id.as_deref()
+            {
+                self.select_provider(provider_id);
+            }
         } else {
             self.filtered = (0..self.entries.len()).collect();
         }
@@ -210,16 +220,33 @@ impl ConnectPanel {
         self.refilter(&query);
     }
 
-    /// 退回供应商列表并清空临时输入/窗口。
+    /// 退回供应商列表并清空临时输入，同时保持之前选中的供应商处于高亮与可见窗口内。
     pub fn reset_to_providers(&mut self) {
+        let selected_id = self.provider_id().map(str::to_string);
         self.stage = ConnectStage::Providers;
         self.input = TextInput::new("");
         self.filter.clear();
         self.filtered = (0..self.entries.len()).collect();
         self.window = PanelWindow::default();
+        if let Some(provider_id) = selected_id.as_deref() {
+            self.select_provider(provider_id);
+        }
         self.hover = None;
         self.validating = false;
         self.status_message = None;
+    }
+
+    /// 在当前过滤视图中选中指定 `provider_id` 并将其同步到可见窗口；命中返回 `true`。
+    pub fn select_provider(&mut self, provider_id: &str) -> bool {
+        let Some(view_index) = self.filtered.iter().position(|&entry_index| {
+            self.entries
+                .get(entry_index)
+                .is_some_and(|entry| entry.id == provider_id)
+        }) else {
+            return false;
+        };
+        self.window = PanelWindow::new(view_index);
+        true
     }
 
     /// 按 `query` 重算供应商过滤视图：匹配名称或 id，同分保持 A-Z 原序。
@@ -329,6 +356,17 @@ impl ConnectPanel {
                 *error = None;
             }
             _ => {}
+        }
+    }
+
+    /// 当前阶段对应的供应商 ID（供应商列表阶段取当前高亮项）。
+    pub fn provider_id(&self) -> Option<&str> {
+        match &self.stage {
+            ConnectStage::Providers => self.active_entry().map(|entry| entry.id.as_str()),
+            ConnectStage::Manage { provider_id, .. }
+            | ConnectStage::Methods { provider_id, .. }
+            | ConnectStage::InputPrompt { provider_id, .. }
+            | ConnectStage::OAuthWaiting { provider_id, .. } => Some(provider_id),
         }
     }
 

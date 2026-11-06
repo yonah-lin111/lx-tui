@@ -30,7 +30,10 @@ pub fn open_connect_panel(state: &mut AppState, pane: PaneId) -> bool {
         target.lx.clear();
         target.lx.slash = None;
     }
-    let panel = ConnectPanel::new_with_env_map(pane, &state.connect, &state.connect_env);
+    let mut panel = ConnectPanel::new_with_env_map(pane, &state.connect, &state.connect_env);
+    if let Some(provider_id) = state.last_connect_provider.as_deref() {
+        panel.select_provider(provider_id);
+    }
     state.overlay = Some(Overlay::Connect(Box::new(panel)));
     true
 }
@@ -181,11 +184,12 @@ pub fn apply_connect_enter(state: &mut AppState) -> bool {
     }
 }
 
-/// 供应商列表 Enter：已连接进入管理菜单，未连接直接进入认证流程。
+/// 供应商列表 Enter：记录所选供应商；已连接进入管理菜单，未连接直接进入认证流程。
 fn enter_provider(state: &mut AppState, panel: &ConnectPanel) -> bool {
     let Some(entry) = panel.active_entry().cloned() else {
         return true;
     };
+    state.last_connect_provider = Some(entry.id.clone());
     let Some(source) = entry.source.clone() else {
         return begin_auth(
             state,
@@ -444,12 +448,11 @@ fn begin_auth(
     answers: BTreeMap<String, String>,
 ) -> bool {
     if methods.is_empty() {
-        let Some(panel) = current_panel(state) else {
+        if current_panel(state).is_none() {
             return false;
         };
-        show_lx_toast(
+        show_connect_toast(
             state,
-            panel.pane,
             ToastKind::Warning,
             text::LX_CONNECT_NO_METHODS.to_string(),
         );
@@ -685,34 +688,33 @@ fn start_models_refresh(state: &mut AppState, provider_id: Option<String>) -> bo
     true
 }
 
-fn open_browser(state: &mut AppState, pane: PaneId, url: &str) -> bool {
+fn open_browser(state: &mut AppState, _pane: PaneId, url: &str) -> bool {
     if url.is_empty() {
         return true;
     }
     state.effects.push(Effect::OpenBrowser {
         url: url.to_string(),
     });
-    show_lx_toast(
+    show_connect_toast(
         state,
-        pane,
         ToastKind::Default,
         text::LX_CONNECT_OAUTH_OPENED.to_string(),
     );
     true
 }
 
-fn copy_oauth_text(state: &mut AppState, pane: PaneId, text_value: &str) -> bool {
+fn copy_oauth_text(state: &mut AppState, _pane: PaneId, text_value: &str) -> bool {
     if text_value.is_empty() {
         return true;
     }
     state.effects.push(Effect::CopyToClipboard {
         text: text_value.to_string(),
-        anchor: Some(pane),
+        anchor: None,
     });
     true
 }
 
-/// 连接保存成功：关闭模态、刷新快照、弹窗格 Toast，并切到该供应商的 `/model` 面板。
+/// 连接保存成功：关闭模态、刷新快照、弹全局 Toast，并切到该供应商的 `/model` 面板。
 pub fn on_preset_connected(
     state: &mut AppState,
     pane: PaneId,
@@ -726,6 +728,7 @@ pub fn on_preset_connected(
     let current = state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.chat.effective_selection(&state.models));
+    state.last_connect_provider = Some(provider_id.to_string());
     state.models.settings = settings;
     state.connect = connect;
     state.effects.push(Effect::RefreshModelsCatalog {
@@ -734,12 +737,7 @@ pub fn on_preset_connected(
     });
     state.overlay = None;
     super::refresh_all_lx_status(state);
-    show_lx_toast(
-        state,
-        pane,
-        ToastKind::Default,
-        text::lx_connect_connected(&name),
-    );
+    show_connect_toast(state, ToastKind::Default, text::lx_connect_connected(&name));
     let picker = ModelPicker::for_provider(&state.models.settings, current.as_ref(), provider_id);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return true;
@@ -749,7 +747,7 @@ pub fn on_preset_connected(
     true
 }
 
-/// 断开连接完成：刷新快照与模态连接状态。
+/// 断开连接完成：刷新快照与模态连接状态，并保持高亮在刚断开的供应商上。
 pub fn on_preset_disconnected(
     state: &mut AppState,
     pane: PaneId,
@@ -764,23 +762,25 @@ pub fn on_preset_disconnected(
         Overlay::Connect(panel) if panel.pane == pane => Some(panel.pane),
         _ => None,
     });
+    state.last_connect_provider = Some(provider_id.to_string());
     state.models.settings = settings;
     state.connect = connect;
     super::refresh_all_lx_status(state);
-    show_lx_toast(
+    show_connect_toast(
         state,
-        pane,
         ToastKind::Default,
         text::lx_connect_disconnected(&name),
     );
     if let Some(pane) = modal {
-        let refreshed = ConnectPanel::new_with_env_map(pane, &state.connect, &state.connect_env);
+        let mut refreshed =
+            ConnectPanel::new_with_env_map(pane, &state.connect, &state.connect_env);
+        refreshed.select_provider(provider_id);
         state.overlay = Some(Overlay::Connect(Box::new(refreshed)));
     }
     true
 }
 
-/// 连接保存/校验失败：在输入阶段原地报错并保留输入；其余阶段（如断开失败）弹窗格 Toast。
+/// 连接保存/校验失败：在输入阶段原地报错并保留输入；其余阶段（如断开失败）弹全局 Toast。
 pub fn on_connect_failed(state: &mut AppState, pane: PaneId, error: &str) -> bool {
     if let Some(Overlay::Connect(panel)) = state.overlay.as_mut()
         && panel.pane == pane
@@ -791,12 +791,7 @@ pub fn on_connect_failed(state: &mut AppState, pane: PaneId, error: &str) -> boo
             return true;
         }
     }
-    show_lx_toast(
-        state,
-        pane,
-        ToastKind::Danger,
-        text::lx_connect_failed(error),
-    );
+    show_connect_toast(state, ToastKind::Danger, text::lx_connect_failed(error));
     true
 }
 
@@ -868,9 +863,8 @@ pub fn on_preset_oauth_failed(
         applied = true;
     }
     if applied && !error.to_ascii_lowercase().contains("cancelled") {
-        show_lx_toast(
+        show_connect_toast(
             state,
-            pane,
             ToastKind::Danger,
             text::lx_connect_oauth_failed(error),
         );
@@ -878,7 +872,7 @@ pub fn on_preset_oauth_failed(
     applied
 }
 
-/// 模型刷新完成：更新运行时快照、清掉校验态并按需弹 Toast。
+/// 模型刷新完成：更新运行时快照、清掉校验态并按需弹全局 Toast。
 pub fn on_models_refreshed(
     state: &mut AppState,
     pane: Option<PaneId>,
@@ -894,10 +888,9 @@ pub fn on_models_refreshed(
         panel.refresh_entries(&state.connect, &state.connect_env);
     }
     super::refresh_all_lx_status(state);
-    if let Some(pane) = pane {
-        show_lx_toast(
+    if pane.is_some() {
+        show_connect_toast(
             state,
-            pane,
             ToastKind::Default,
             text::lx_connect_refreshed_models(count),
         );
@@ -911,10 +904,9 @@ pub fn on_models_refresh_failed(state: &mut AppState, pane: Option<PaneId>, erro
         panel.validating = false;
         panel.status_message = None;
     }
-    if let Some(pane) = pane {
-        show_lx_toast(
+    if pane.is_some() {
+        show_connect_toast(
             state,
-            pane,
             ToastKind::Warning,
             text::lx_connect_refresh_failed(error),
         );
@@ -922,11 +914,7 @@ pub fn on_models_refresh_failed(state: &mut AppState, pane: Option<PaneId>, erro
     true
 }
 
-/// 统一构造窗格 Toast（保留 `Instant::now()` 单一入口）。
-fn show_lx_toast(state: &mut AppState, pane: PaneId, kind: ToastKind, message: String) {
-    crate::app::update::show_lx_toast(
-        state,
-        pane,
-        Toast::new(kind, message, Some(pane), Instant::now()),
-    );
+/// 统一构造 `/connect` 模态触发的全局 Toast（`anchor: None`，显示在屏幕顶部居中、晚于模态渲染）。
+fn show_connect_toast(state: &mut AppState, kind: ToastKind, message: String) {
+    crate::app::update::show_toast(state, Toast::new(kind, message, None, Instant::now()));
 }
