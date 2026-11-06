@@ -17,6 +17,7 @@ pub mod connect;
 mod edit;
 mod folded;
 mod history;
+pub mod mcp;
 pub mod mention;
 pub mod model_switch;
 mod panels;
@@ -47,6 +48,7 @@ pub use compact::{CompactNoticeView, LxCompact};
 pub use connect::{
     ConnectManageAction, ConnectPanel, ConnectPromptStep, ConnectProviderEntry, ConnectStage,
 };
+pub use mcp::{McpCatalogEntry, McpPanel, McpPanelEntry, McpRuntimeState, McpServerState};
 pub use mention::{LxMention, LxMentionView};
 pub use model_switch::{LxModelSwitch, ModelSwitchNoticeView};
 pub use rewind::{
@@ -157,6 +159,8 @@ pub struct Lx {
     pub background_tasks: usize,
     /// 首页资源计数：MCP server 与 skill 的加载/失败状态。
     pub startup: StartupCounts,
+    /// 本窗格手动禁用的 MCP server 名称集合（仅内存，跨会话保持，新分屏默认为空）。
+    disabled_mcp_servers: std::collections::BTreeSet<String>,
     /// 撤销历史（上限 `LX_HISTORY_LIMIT`）。
     undo: Vec<LxSnapshot>,
     /// 重做历史。
@@ -245,10 +249,39 @@ impl Lx {
             plain,
             background_tasks: 0,
             startup: StartupCounts::default(),
+            disabled_mcp_servers: std::collections::BTreeSet::new(),
             undo: Vec::new(),
             redo: Vec::new(),
             history: HistoryBrowse::default(),
         }
+    }
+
+    /// 当前窗格已禁用的 MCP server 集合。
+    pub fn disabled_mcp_servers(&self) -> &std::collections::BTreeSet<String> {
+        &self.disabled_mcp_servers
+    }
+
+    /// 判断指定 MCP server 在当前窗格是否被禁用。
+    pub fn is_mcp_server_disabled(&self, name: &str) -> bool {
+        self.disabled_mcp_servers.contains(name)
+    }
+
+    /// 设置指定 MCP server 在当前窗格的禁用状态；返回状态是否发生变化。
+    pub fn set_mcp_server_disabled(&mut self, name: &str, disabled: bool) -> bool {
+        let changed = if disabled {
+            self.disabled_mcp_servers.insert(name.to_string())
+        } else {
+            self.disabled_mcp_servers.remove(name)
+        };
+        if changed {
+            let masked = crate::app::paste::mask_pasted_text(&self.input).into_owned();
+            self.mention.set_disabled_mcp_servers(
+                self.disabled_mcp_servers.clone(),
+                &masked,
+                self.cursor,
+            );
+        }
+        changed
     }
 
     /// 清空子 agent 展示态（会话切换/新建时随会话一起复位）。

@@ -152,6 +152,7 @@ fn mcp_skill_command_subagent_and_settings_crud_work() {
         "project",
     ]));
     assert_exit_ok(env.exec(&["mcp", "list", "--json"]));
+    assert_exit_ok(env.exec(&["mcp", "list", "--disable-mcp", "local-fs", "--json"]));
     assert_exit_ok(env.exec(&["mcp", "show", "proj-remote", "--scope", "project", "--json"]));
     assert_exit_ok(env.exec(&["mcp", "disable", "local-fs"]));
     assert_exit_ok(env.exec(&["mcp", "enable", "local-fs"]));

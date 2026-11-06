@@ -178,10 +178,18 @@ pub fn hover_lx_slash(state: &mut AppState, id: PaneId, index: usize) -> bool {
 
 /// 鼠标点选 `/` 命令面板条目：按该条目的 Enter 语义采纳；返回是否消费。
 pub fn select_lx_slash(state: &mut AppState, id: PaneId, index: usize) -> bool {
-    if let Some(pane) = state.pane_mut_anywhere(id)
-        && let Some(panel) = pane.lx.slash.as_mut()
-    {
-        panel.set_active(index);
+    let valid = state
+        .pane_mut_anywhere(id)
+        .and_then(|pane| pane.lx.slash.as_mut())
+        .is_some_and(|panel| {
+            if index >= panel.item_count() {
+                return false;
+            }
+            let _ = panel.set_active(index);
+            true
+        });
+    if !valid {
+        return false;
     }
     super::super::chat::apply_slash_enter(state, id)
 }

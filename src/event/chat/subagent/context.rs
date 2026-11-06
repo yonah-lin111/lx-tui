@@ -183,6 +183,7 @@ pub(crate) struct CapturedChildPromptInputs {
 pub(crate) fn capture_child_prompt_inputs(
     state: &crate::app::state::AppState,
     persistence: &crate::db::service::Persistence,
+    parent_pane: crate::layout::PaneId,
     workspace: &Path,
     cwd: &Path,
     frozen: &crate::app::state::FrozenModel,
@@ -212,7 +213,11 @@ pub(crate) fn capture_child_prompt_inputs(
         (None, 0)
     };
     let mcp = if capabilities.allow_mcp {
-        super::super::mcp::snapshot_for_turn(persistence, Some(workspace))
+        let empty = std::collections::BTreeSet::new();
+        let disabled = state
+            .pane_anywhere(parent_pane)
+            .map_or(&empty, |pane| pane.lx.disabled_mcp_servers());
+        super::super::mcp::snapshot_for_turn_with_disabled(persistence, Some(workspace), disabled)
     } else {
         Arc::new(crate::mcp::McpToolSnapshot::default())
     };

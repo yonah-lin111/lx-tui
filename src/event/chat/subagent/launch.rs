@@ -55,6 +55,7 @@ pub(super) fn launch_child_turn(
     let inputs = super::context::capture_child_prompt_inputs(
         state,
         persistence,
+        parent_key.pane,
         workspace,
         cwd,
         frozen,

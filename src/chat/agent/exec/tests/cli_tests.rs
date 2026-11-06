@@ -102,7 +102,35 @@ fn exec_without_flags_uses_defaults() {
     assert!(!cli.json);
     assert!(!cli.ephemeral);
     assert!(cli.images.is_empty());
+    assert!(cli.disabled_mcp_servers.is_empty());
     assert!(cli.command.is_none());
+}
+
+#[test]
+fn exec_parses_disable_mcp_flags_and_rejects_invalid_names() {
+    let cli = parse_exec(&[
+        "exec",
+        "--disable-mcp",
+        "alpha,beta",
+        "--disable-mcp=gamma",
+        "run check",
+    ]);
+    assert_eq!(
+        cli.disabled_mcp_servers,
+        vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()]
+    );
+    assert_eq!(cli.prompt.as_deref(), Some("run check"));
+    let resumed = parse_exec(&[
+        "exec",
+        "resume",
+        "--last",
+        "--disable-mcp",
+        "alpha",
+        "continue",
+    ]);
+    assert_eq!(resumed.disabled_mcp_servers, vec!["alpha".to_string()]);
+    assert!(parse(&["exec", "--disable-mcp", ""]).is_err());
+    assert!(parse(&["exec", "--disable-mcp", "bad name"]).is_err());
 }
 
 #[test]

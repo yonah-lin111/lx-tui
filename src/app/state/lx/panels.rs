@@ -26,6 +26,15 @@ impl Lx {
             self.scroll_cursor_into_view();
             return;
         }
+        // 二级斜杠面板（如 `/mcp`、`/model`、`/resume`、`/fork`）打开期间输入框全文作为过滤词，
+        // 压制 `@` 提及、Markdown 块与快捷引用面板，防止输入 `@` 唤醒隐藏面板抢走按键与鼠标。
+        if self.slash.is_some() && !matches!(self.slash, Some(super::SlashPanel::Commands { .. })) {
+            self.panel = None;
+            self.refer = None;
+            self.mention.suppress();
+            self.scroll_cursor_into_view();
+            return;
+        }
         let masked = crate::app::paste::mask_pasted_text(&self.input).into_owned();
         self.mention.unsuppress();
         self.mention.refresh(&masked, self.cursor);

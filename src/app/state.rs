@@ -32,14 +32,15 @@ pub use lx::{
     ConnectProviderEntry, ConnectStage, DiffHunkView, DiffLineView, FileChangeView,
     FileDiffDetailView, FileDiffView, ForkEntry, ForkPanel, FrozenModel, HistoryEntry,
     HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat, LxCompact, LxEntry, LxModelSwitch,
-    MAX_RESIDENT_SUBAGENT_CHATS, McpDetailView, McpImageView, ModelCandidate, ModelPicker,
-    ModelPickerStage, ModelSwitchNoticeView, ModelsSnapshot, PanelWindow, PendingShell,
-    PlanSnapshotView, PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView,
-    QueuedSubmission, RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView,
-    RewindPanel, RewindTarget, RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView,
-    SlashCommand, SlashEntry, SlashPanel, SnapshotState, StartupCount, StartupCounts,
-    SubagentDetailView, SubagentReportView, SubagentRun, TaskPage, TaskTab, ToolCallView,
-    ToolDetailView, ToolStatus, ToolSummary, UserShellView, WebSearchDetailView,
+    MAX_RESIDENT_SUBAGENT_CHATS, McpCatalogEntry, McpDetailView, McpImageView, McpPanel,
+    McpPanelEntry, McpRuntimeState, McpServerState, ModelCandidate, ModelPicker, ModelPickerStage,
+    ModelSwitchNoticeView, ModelsSnapshot, PanelWindow, PendingShell, PlanSnapshotView,
+    PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView, QueuedSubmission,
+    RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView, RewindPanel,
+    RewindTarget, RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand,
+    SlashEntry, SlashPanel, SnapshotState, StartupCount, StartupCounts, SubagentDetailView,
+    SubagentReportView, SubagentRun, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus,
+    ToolSummary, UserShellView, WebSearchDetailView,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
@@ -332,6 +333,8 @@ pub struct AppState {
     pub agents_md_inventory: BTreeMap<Option<PathBuf>, usize>,
     /// 按项目根汇总的 MCP 装载计数；首页按窗格所属工作区取用。
     pub mcp_inventory: BTreeMap<PathBuf, StartupCount>,
+    /// 按项目根汇总的生效 MCP server 目录与实时运行状态（供 `/mcp` 面板与窗格独立计数使用）。
+    pub mcp_catalog: BTreeMap<PathBuf, Vec<McpCatalogEntry>>,
     /// 按工作区根汇总的 skill 计数；None 表示无可用工作区根。
     pub skill_inventory: BTreeMap<Option<PathBuf>, StartupCount>,
     /// 全局已发送 prompt 历史（跨窗格/工作区/会话共享；末尾为最近使用）。
@@ -484,6 +487,7 @@ impl AppState {
             prompt_title_request_counter: 0,
             agents_md_inventory: BTreeMap::new(),
             mcp_inventory: BTreeMap::new(),
+            mcp_catalog: BTreeMap::new(),
             skill_inventory: BTreeMap::new(),
             prompt_history: PromptHistory::new(),
             todo: TodoPanel::new(),
@@ -506,7 +510,7 @@ impl AppState {
     /// 把按项目/工作区汇总的 AGENTS.md、MCP、skill 计数同步到所有窗格；新窗格、切换工作区与
     /// 状态事件都走这一条路径，避免窗格自己维护第二份真相。
     pub fn sync_lx_inventory(&mut self) -> bool {
-        let counts: Vec<StartupCounts> = self
+        let workspace_meta: Vec<(Option<PathBuf>, usize, StartupCount)> = self
             .workspaces
             .iter()
             .map(|workspace| {
@@ -517,31 +521,72 @@ impl AppState {
                     .or_else(|| self.agents_md_inventory.get(&root))
                     .copied()
                     .unwrap_or(0);
-                StartupCounts {
-                    agents_md,
-                    mcp: root
-                        .as_ref()
-                        .and_then(|root| self.mcp_inventory.get(root))
-                        .copied()
-                        .unwrap_or_default(),
-                    skills: self.skill_inventory.get(&root).copied().unwrap_or_default(),
-                }
+                let skills = self.skill_inventory.get(&root).copied().unwrap_or_default();
+                (root, agents_md, skills)
             })
             .collect();
         let mut changed = false;
-        for (workspace, counts) in self.workspaces.iter_mut().zip(counts) {
+        for (workspace, (root, agents_md, skills)) in self.workspaces.iter_mut().zip(workspace_meta)
+        {
             for tab in &mut workspace.tabs {
                 for id in tab.layout.pane_ids() {
-                    if let Some(pane) = tab.pane_mut(id)
-                        && pane.lx.startup != counts
-                    {
-                        pane.lx.startup = counts;
-                        changed = true;
+                    if let Some(pane) = tab.pane_mut(id) {
+                        let mcp = Self::compute_pane_mcp_count(
+                            &self.mcp_catalog,
+                            &self.mcp_inventory,
+                            root.as_deref(),
+                            pane.lx.disabled_mcp_servers(),
+                        );
+                        let counts = StartupCounts {
+                            agents_md,
+                            mcp,
+                            skills,
+                        };
+                        if pane.lx.startup != counts {
+                            pane.lx.startup = counts;
+                            changed = true;
+                        }
                     }
                 }
             }
         }
         changed
+    }
+
+    fn compute_pane_mcp_count(
+        mcp_catalog: &BTreeMap<PathBuf, Vec<McpCatalogEntry>>,
+        mcp_inventory: &BTreeMap<PathBuf, StartupCount>,
+        root: Option<&Path>,
+        disabled: &std::collections::BTreeSet<String>,
+    ) -> StartupCount {
+        let Some(root) = root else {
+            return StartupCount::default();
+        };
+        if let Some(entries) = mcp_catalog.get(root) {
+            let mut total = 0usize;
+            let mut ready = 0usize;
+            let mut errors = 0usize;
+            let mut starting = 0usize;
+            for entry in entries {
+                if !entry.config_enabled || disabled.contains(&entry.name) {
+                    continue;
+                }
+                total += 1;
+                match entry.runtime {
+                    McpRuntimeState::Ready { .. } => ready += 1,
+                    McpRuntimeState::Failed { .. } | McpRuntimeState::NeedsLogin => errors += 1,
+                    McpRuntimeState::Connecting => starting += 1,
+                }
+            }
+            let settled = ready.saturating_add(errors);
+            return StartupCount {
+                total,
+                ready,
+                errors,
+                loading: starting > 0 || (total > 0 && settled < total),
+            };
+        }
+        mcp_inventory.get(root).copied().unwrap_or_default()
     }
 
     /// 显示中 prompt 的工作区索引：钉住时为其目标，否则为激活工作区。

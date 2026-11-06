@@ -91,6 +91,7 @@ pub fn resolve_resume_session(
 ///
 /// 恢复会话时先读取既有历史（模型切换判定需要最后一条 assistant 的模型），
 /// 再记录模型切换与开轮：切换记录必须排在新的 user 消息之前，才能按时间线注入。
+#[cfg(test)]
 pub fn assemble_exec_turn(
     db: &Database,
     workspace: &Path,
@@ -341,7 +342,9 @@ pub fn run_main(
         }),
     )?;
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    let snapshot = mcp_snapshot_for_turn_async(&db, &workspace, cancel_rx.clone());
+    let disabled_mcp: std::collections::BTreeSet<String> =
+        cli.disabled_mcp_servers.iter().cloned().collect();
+    let snapshot = mcp_snapshot_for_turn_async(&db, &workspace, &disabled_mcp, cancel_rx.clone());
     let mcp_snapshot = runtime.block_on(snapshot);
 
     let turn_config = assemble_exec_turn_with_snapshot(
@@ -634,6 +637,7 @@ fn discover_workspace_skills(workspace: &Path) -> crate::skills::SkillCatalog {
     )
 }
 
+#[cfg(test)]
 fn mcp_snapshot_for_turn(_db: &Database, workspace: &Path) -> Arc<crate::mcp::McpToolSnapshot> {
     let manager = crate::mcp::global_manager();
     manager.prewarm(workspace.to_path_buf(), effective_mcp_servers(workspace));
@@ -643,14 +647,25 @@ fn mcp_snapshot_for_turn(_db: &Database, workspace: &Path) -> Arc<crate::mcp::Mc
 async fn mcp_snapshot_for_turn_async(
     _db: &Database,
     workspace: &Path,
+    disabled_mcp: &std::collections::BTreeSet<String>,
     cancel: tokio::sync::watch::Receiver<bool>,
 ) -> Arc<crate::mcp::McpToolSnapshot> {
     let manager = crate::mcp::global_manager();
-    let servers = effective_mcp_servers(workspace);
+    let all_servers = effective_mcp_servers(workspace);
+    for name in disabled_mcp {
+        if !all_servers.iter().any(|server| &server.name == name) {
+            tracing::warn!(server = %name, "'--disable-mcp' server is not configured in this workspace");
+        }
+    }
+    let servers: Vec<_> = all_servers
+        .into_iter()
+        .filter(|server| !disabled_mcp.contains(&server.name))
+        .collect();
     if servers.iter().any(|server| server.config.enabled) {
         Arc::new(manager.snapshot_for(workspace, &servers, cancel).await)
+            .without_servers(disabled_mcp)
     } else {
-        manager.cached_snapshot(workspace)
+        Arc::new(crate::mcp::McpToolSnapshot::default())
     }
 }
 

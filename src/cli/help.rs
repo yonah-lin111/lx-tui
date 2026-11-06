@@ -276,7 +276,7 @@ Usage:
   lx-tui mcp <SUBCOMMAND> [OPTIONS]
 
 Subcommands:
-  list [--scope <all|user|project>]
+  list [--scope <all|user|project>] [--disable-mcp <NAME>...]
   show <NAME> [--scope <user|project>]
   add-stdio <NAME> --command <CMD> [--arg <ARG>...] [--cwd <DIR>] [--env <KEY=VAL>...]
             [--env-var <VAR>...] [--startup-timeout <SEC>] [--tool-timeout <SEC>] [--scope <user|project>]

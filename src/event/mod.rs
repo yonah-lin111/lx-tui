@@ -374,31 +374,21 @@ async fn run_loop(
             inventory::refresh_agents_md(state, persistence);
             inventory::spawn_skills_preload(state, persistence, &sender);
         }
-        // 撤销效应先取走：预检同步、执行转后台；持久化泵不再看到它们。
-        if chat::apply_rewind_effects(state, &sender, persistence) {
-            dirty = true;
-        }
-        // 压缩效应：摘要请求转后台、检查点事务在独立连接执行。
-        if chat::apply_compact_effects(state, &sender, persistence) {
-            dirty = true;
-        }
-        // 续轮的 session guard 必须在 BeginChatTurn 事务之前取得。
-        if chat::guard_begin_turns(state, &mut chat_streams, persistence) {
-            dirty = true;
-        }
-        // `/connect` 效应先于持久化泵取走：connect.json 写入、OAuth 授权流与浏览器打开。
-        if chat::connect::apply_effects(state, &connect_tasks, &sender) {
-            dirty = true;
-        }
-        // 执行 app 层效应出箱（信任检查/授予、提示词 CRUD 与剪贴板）并载入提示词树。
-        if persistence.pump(state) {
-            dirty = true;
-        }
-        // 工作区集合、cwd（含 linked worktree / 子目录）或信任状态变化时精准刷新 AGENTS.md 计数。
+        // 撤销、压缩、续轮 session guard、`/connect`、`/mcp` 与持久化泵效应按序执行。
+        dirty |= chat::apply_rewind_effects(state, &sender, persistence);
+        dirty |= chat::apply_compact_effects(state, &sender, persistence);
+        dirty |= chat::guard_begin_turns(state, &mut chat_streams, persistence);
+        dirty |= chat::connect::apply_effects(state, &connect_tasks, &sender);
+        dirty |= inventory::apply_mcp_effects(state, persistence, &mut mcp_statuses);
+        dirty |= persistence.pump(state);
+        // 工作区集合、cwd（含 linked worktree / 子目录）或信任状态变化时精准刷新 AGENTS.md 与项目级 MCP。
         let current_agents_scopes = inventory::agents_md_scopes(state, persistence);
         if current_agents_scopes != agents_scopes {
             agents_scopes = current_agents_scopes;
             inventory::refresh_agents_md(state, persistence);
+            let roots = chat::mcp::project_roots(state);
+            inventory::prune_mcp_statuses(persistence, &roots, &mut mcp_statuses);
+            inventory::refresh_mcp(state, persistence, &roots, &mcp_statuses);
             dirty = true;
         }
         // 双 Esc 待命超时：3 秒窗口外自动失效（不产生历史记录）。

@@ -257,6 +257,7 @@ const VALUE_OPTIONS: &[&str] = &[
     "--allow-mcp",
     "--allow-skills",
     "--nicknames",
+    "--disable-mcp",
 ];
 
 /// 扫描并剥离全局选项（`-C/--cd`、`--json`、`--color`、`-h/--help`），

@@ -227,3 +227,128 @@ fn refresh_agents_md_isolates_linked_worktree_and_subdirectory_counts() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn drain_mcp_events_updates_open_mcp_panel_and_suppresses_toast_on_disabled_pane() {
+    use crate::app::state::{
+        Direction, McpCatalogEntry, McpRuntimeState, McpServerState, SlashCommand, SlashPanel,
+    };
+
+    let mut state = AppState::demo();
+    let root = PathBuf::from("/repo");
+    state.workspaces[0].cwd = Some(root.clone());
+    state.workspaces[0].git = None;
+    state.mcp_catalog.insert(
+        root.clone(),
+        vec![
+            McpCatalogEntry {
+                name: "alpha".into(),
+                summary: "stdio: alpha".into(),
+                config_enabled: true,
+                runtime: McpRuntimeState::Connecting,
+            },
+            McpCatalogEntry {
+                name: "beta".into(),
+                summary: "stdio: beta".into(),
+                config_enabled: true,
+                runtime: McpRuntimeState::Connecting,
+            },
+        ],
+    );
+
+    let pane1 = state.active_tab().layout.focus();
+    let pane2 = state
+        .active_tab_mut()
+        .split_pane(pane1, Direction::Horizontal)
+        .expect("split pane");
+
+    // Disable "beta" in pane1, keep it enabled in pane2; open `/mcp` panel in pane1.
+    state
+        .pane_mut_anywhere(pane1)
+        .expect("pane1")
+        .lx
+        .set_mcp_server_disabled("beta", true);
+    assert!(update::apply_slash_command(
+        &mut state,
+        pane1,
+        SlashCommand::Mcp
+    ));
+
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let _ = sender.send(McpEvent::Status {
+        project: root.clone(),
+        server: "alpha".into(),
+        status: ServerStatus::Ready { tools: 5 },
+    });
+    let _ = sender.send(McpEvent::Status {
+        project: root,
+        server: "beta".into(),
+        status: ServerStatus::Failed {
+            error: "timeout".into(),
+        },
+    });
+
+    let mut statuses = BTreeMap::new();
+    let mut toasted = HashSet::new();
+    assert!(drain_mcp_events(
+        &mut receiver,
+        &mut state,
+        None,
+        &mut statuses,
+        &mut toasted
+    ));
+
+    // Open `/mcp` panel in pane1 updates "alpha" to Connected { tools: 5 } and keeps "beta" DisabledInPane.
+    let p1 = &state.pane_anywhere(pane1).expect("pane1").lx;
+    let Some(SlashPanel::Mcp(panel)) = &p1.slash else {
+        panic!("mcp panel open");
+    };
+    assert_eq!(
+        panel.entries[0].state,
+        McpServerState::Connected { tools: 5 }
+    );
+    assert_eq!(panel.entries[1].state, McpServerState::DisabledInPane);
+
+    // Failure toast for "beta" is suppressed on pane1 (where "beta" is disabled) and shown on pane2.
+    assert!(p1.toast.is_none(), "disabled pane must not receive toast");
+    assert!(
+        state
+            .pane_anywhere(pane2)
+            .expect("pane2")
+            .lx
+            .toast
+            .is_some(),
+        "enabled pane receives failure toast"
+    );
+
+    // Clearing toast on pane2, emitting Starting -> Failed with the same error re-triggers toast (P2-2).
+    state.pane_mut_anywhere(pane2).expect("pane2").lx.toast = None;
+    let _ = sender.send(McpEvent::Status {
+        project: PathBuf::from("/repo"),
+        server: "beta".into(),
+        status: ServerStatus::Starting,
+    });
+    let _ = sender.send(McpEvent::Status {
+        project: PathBuf::from("/repo"),
+        server: "beta".into(),
+        status: ServerStatus::Failed {
+            error: "timeout".into(),
+        },
+    });
+    assert!(drain_mcp_events(
+        &mut receiver,
+        &mut state,
+        None,
+        &mut statuses,
+        &mut toasted
+    ));
+    assert!(
+        state
+            .pane_anywhere(pane2)
+            .expect("pane2")
+            .lx
+            .toast
+            .is_some(),
+        "retrying a failed server must re-arm failure toast for the same error"
+    );
+}

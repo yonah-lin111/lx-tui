@@ -581,3 +581,75 @@ fn lx_slash_and_mention_panels_adapt_height_up_to_max() {
     assert_eq!(single.rect.height, 1 + frame_rows);
     assert_eq!(before.rect.bottom(), single.rect.bottom());
 }
+
+#[test]
+fn mcp_panel_renders_statuses_and_dims_settings_disabled_rows() {
+    use crate::app::state::{McpPanel, McpPanelEntry, McpServerState};
+
+    let area = Rect::new(0, 0, 90, 24);
+    let mut lx = Lx::new();
+    lx.slash = Some(SlashPanel::Mcp(Box::new(McpPanel::new(vec![
+        McpPanelEntry {
+            name: "codegraph".into(),
+            summary: "stdio: codegraph".into(),
+            preview: "2 tools · stdio: codegraph".into(),
+            state: McpServerState::Connected { tools: 2 },
+        },
+        McpPanelEntry {
+            name: "memory".into(),
+            summary: "stdio: memory".into(),
+            preview: "stdio: memory".into(),
+            state: McpServerState::DisabledInPane,
+        },
+        McpPanelEntry {
+            name: "github".into(),
+            summary: "https://api.github.com/mcp".into(),
+            preview: "https://api.github.com/mcp".into(),
+            state: McpServerState::DisabledInSettings,
+        },
+    ]))));
+
+    let panel = slash_layout(area, &lx).expect("mcp layout");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
+    let lines = buffer_lines(&buf, area);
+    let all = lines.join("\n");
+
+    assert!(all.contains(text::LX_MCP_PANEL_TITLE), "顶栏标题: {all}");
+    assert!(all.contains(text::LX_MCP_PANEL_FOOTER), "底栏快捷键: {all}");
+    assert!(all.contains("[Connected]"), "Connected 标签: {all}");
+    assert!(all.contains("[Disabled]"), "Disabled 标签: {all}");
+    assert!(
+        all.contains("[Disabled in settings]"),
+        "Disabled in settings 标签: {all}"
+    );
+
+    // Row 2 ("github", DisabledInSettings) must be rendered with muted foreground.
+    let disabled_row_y = panel.content.y + 2;
+    assert_eq!(
+        buf[(panel.content.x + 2, disabled_row_y)].fg,
+        crate::ui::style::muted()
+            .fg
+            .unwrap_or(ratatui::style::Color::Reset),
+        "设置中禁用的行使用 muted 置灰渲染"
+    );
+
+    // Navigating onto Row 2 ("github", DisabledInSettings) still renders a muted `❯` cursor marker.
+    if let Some(SlashPanel::Mcp(mcp)) = lx.slash.as_mut() {
+        mcp.window.set_active(2);
+    }
+    let mut buf2 = Buffer::empty(area);
+    let _ = render(area, &mut buf2, &lx, false, None, &mut PaneCache::default());
+    assert_eq!(
+        buf2[(panel.content.x, disabled_row_y)].symbol(),
+        text::CURRENT_ITEM_MARKER,
+        "焦点落在 Disabled in settings 行时仍显示 ❯ 光标"
+    );
+    assert_eq!(
+        buf2[(panel.content.x, disabled_row_y)].fg,
+        crate::ui::style::muted()
+            .fg
+            .unwrap_or(ratatui::style::Color::Reset),
+        "Disabled in settings 行的 ❯ 光标使用 muted 颜色"
+    );
+}

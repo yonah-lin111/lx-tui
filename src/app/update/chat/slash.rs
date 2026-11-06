@@ -196,6 +196,8 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
         }
         // 撤销动作面板：第二次 Enter 才执行（第一次 Enter 只是打开面板）。
         SlashPanel::Rewind(_) => super::rewind::apply_enter(state, pane),
+        // `/mcp` 面板：Enter 原地切换当前高亮项启用/禁用或触发失败重连（保持面板打开）。
+        SlashPanel::Mcp(_) => super::mcp::toggle_mcp_entry(state, pane),
     }
 }
 
@@ -418,6 +420,7 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
         SlashCommand::Compact => super::compact::compact_command(state, pane),
         SlashCommand::Subagents => super::session::open_subagents_page(state, pane),
         SlashCommand::Connect => super::connect::open_connect_panel(state, pane),
+        SlashCommand::Mcp => super::mcp::open_mcp_panel(state, pane),
         SlashCommand::Rename => {
             if let Some(target) = state.pane_mut_anywhere(pane)
                 && let Some(prefix) = command.echo_prefix()
@@ -509,8 +512,17 @@ pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
         }
         return;
     }
-    // 二级面板（`/model`、`/resume`）的过滤词是**输入框全文**：任何编辑后都重算一次。
+    // 二级面板（`/model`、`/resume`、`/fork`、`/mcp`）的过滤词是**输入框全文**：任何编辑后都重算一次，
+    // 且二级面板打开期间禁止 `/` 命令候选触发逻辑将其覆盖为 `SlashPanel::Commands`。
     refresh_slash_filter(state, pane);
+    if state.pane_anywhere(pane).is_some_and(|target| {
+        !matches!(
+            target.lx.slash,
+            None | Some(crate::app::state::SlashPanel::Commands { .. })
+        )
+    }) {
+        return;
+    }
     let query = state.pane_anywhere(pane).and_then(|target| {
         let masked = crate::app::paste::mask_pasted_text(&target.lx.input);
         crate::app::state::lx::slash::slash_trigger(&masked, target.lx.cursor)
@@ -571,6 +583,7 @@ fn refresh_slash_filter(state: &mut AppState, pane: PaneId) {
         Some(crate::app::state::SlashPanel::History(panel)) => panel.refilter(&query),
         Some(crate::app::state::SlashPanel::Model(picker)) => picker.refilter(&query),
         Some(crate::app::state::SlashPanel::Fork(panel)) => panel.refilter(&query),
+        Some(crate::app::state::SlashPanel::Mcp(panel)) => panel.refilter(&query),
         _ => {}
     }
 }

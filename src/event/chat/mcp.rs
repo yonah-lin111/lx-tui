@@ -47,6 +47,15 @@ pub(crate) fn snapshot_for_turn(
     manager.cached_snapshot(root)
 }
 
+/// 取本轮冻结且排除了当前窗格已禁用 server 的 MCP 快照。
+pub(crate) fn snapshot_for_turn_with_disabled(
+    persistence: &Persistence,
+    workspace_root: Option<&Path>,
+    disabled_servers: &BTreeSet<String>,
+) -> Arc<McpToolSnapshot> {
+    snapshot_for_turn(persistence, workspace_root).without_servers(disabled_servers)
+}
+
 /// 当前打开工作区的仓库根（去重、保持稳定顺序）。
 pub(crate) fn project_roots(state: &AppState) -> Vec<PathBuf> {
     let mut seen = BTreeSet::new();
@@ -98,6 +107,9 @@ pub(crate) fn prewarm_projects(persistence: &Persistence, roots: &[PathBuf]) {
 
 /// 强制重启某个 server（`None` = 全部）在所有打开项目里的连接。
 pub(crate) fn restart_projects(persistence: &Persistence, roots: &[PathBuf], server: Option<&str>) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
     let jobs: Vec<(PathBuf, Vec<EffectiveServer>)> = roots
         .iter()
         .map(|root| (root.clone(), effective_for_root(persistence, root)))

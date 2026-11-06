@@ -72,6 +72,21 @@ fn connect_command_is_registered_and_matched() {
 }
 
 #[test]
+fn mcp_command_and_mcps_alias_match_in_command_panel() {
+    assert_eq!(SlashCommand::Mcp.name(), "mcp");
+    assert_eq!(SlashCommand::Mcp.text(), "/mcp");
+    assert_eq!(SlashCommand::Mcp.aliases(), &["mcps"]);
+    assert_eq!(
+        SlashCommand::Mcp.description(),
+        crate::ui::text::LX_MCP_COMMAND_DESC
+    );
+    let matched_mcp = SlashPanel::commands_matching("/mcp");
+    assert_eq!(matched_mcp.first(), Some(&SlashCommand::Mcp));
+    let matched_mcps = SlashPanel::commands_matching("/mcps");
+    assert_eq!(matched_mcps.first(), Some(&SlashCommand::Mcp));
+}
+
+#[test]
 fn connect_panel_lists_presets_alphabetically() {
     let pane = crate::layout::PaneId::alloc();
     let panel =

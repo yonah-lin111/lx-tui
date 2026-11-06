@@ -97,6 +97,8 @@ pub struct ExecCli {
     pub ephemeral: bool,
     /// `--color <auto|always|never>`。
     pub color: ColorMode,
+    /// `--disable-mcp <NAME>`：仅对本轮/本窗格会话禁用指定 MCP server（不修改 `mcp.json`）。
+    pub disabled_mcp_servers: Vec<String>,
 }
 
 /// `exec` 子命令。
@@ -275,6 +277,9 @@ impl ExecParser {
         } else if arg == "--color" {
             let raw = take_value(args, index, arg)?;
             self.set_color(raw, arg)?;
+        } else if arg == "--disable-mcp" {
+            let raw = take_value(args, index, arg)?;
+            self.push_disabled_mcp(raw, arg)?;
         } else if let Some(value) = inline_value(arg, "--cd") {
             self.set_cwd(OsStr::new(value), "--cd")?;
         } else if let Some(value) = inline_value(arg, "--model") {
@@ -285,6 +290,8 @@ impl ExecParser {
             self.push_images(OsStr::new(value), "--image")?;
         } else if let Some(value) = inline_value(arg, "--color") {
             self.set_color(OsStr::new(value), "--color")?;
+        } else if let Some(value) = inline_value(arg, "--disable-mcp") {
+            self.push_disabled_mcp(OsStr::new(value), "--disable-mcp")?;
         } else {
             return Ok(OptionOutcome::Unrecognized);
         }
@@ -343,6 +350,21 @@ impl ExecParser {
             None => &mut self.exec.images,
         };
         images.extend(paths);
+        Ok(())
+    }
+
+    fn push_disabled_mcp(&mut self, raw: &OsStr, flag: &str) -> Result<(), String> {
+        let text = required_text(raw, flag)?;
+        for part in text.split(',') {
+            let name = part.trim();
+            if name.is_empty() {
+                return Err(format!("empty MCP server name in '{text}'"));
+            }
+            crate::config::mcp::validate_server_name(name).map_err(|e| e.to_string())?;
+            if !self.exec.disabled_mcp_servers.iter().any(|s| s == name) {
+                self.exec.disabled_mcp_servers.push(name.to_string());
+            }
+        }
         Ok(())
     }
 
@@ -514,6 +536,7 @@ Options:
   -m, --model <MODEL>               <provider>/<model>[#<variant>] or <model>[#<variant>]
   -i, --image <FILE>                Attach an image (repeatable, comma-separated allowed)
   -o, --output-last-message <FILE>  Write the final assistant message to FILE
+      --disable-mcp <NAME>          Disable MCP server(s) for this turn only (repeatable/comma-separated)
       --json                        Emit one JSON event per line on stdout
       --ephemeral                   Keep the session in memory only (not persisted)
       --color <auto|always|never>   ANSI color for human-readable output (default: auto)
@@ -544,6 +567,7 @@ Options:
   -m, --model <MODEL>               <provider>/<model>[#<variant>] or <model>[#<variant>]
   -i, --image <FILE>                Attach an image (repeatable, comma-separated allowed)
   -o, --output-last-message <FILE>  Write the final assistant message to FILE
+      --disable-mcp <NAME>          Disable MCP server(s) for this turn only (repeatable/comma-separated)
       --json                        Emit one JSON event per line on stdout
       --color <auto|always|never>   ANSI color for human-readable output (default: auto)
   -h, --help                        Print this help

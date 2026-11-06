@@ -168,6 +168,7 @@ impl McpManager {
         server: &str,
     ) -> Option<Arc<Connection>> {
         let project = snapshot.project()?;
+        snapshot.server(server)?;
         let slots = self.slots.lock().await;
         slots
             .get(&(project.to_path_buf(), server.to_string()))

@@ -219,7 +219,7 @@ async fn monitor_only_defaults_to_low_when_the_model_supports_it() {
 
 #[tokio::test]
 async fn role_capabilities_strip_skills_mcp_and_web_search() {
-    let (fixture, mut state, _key, persistence, _streams, _parent) = fixture_with_parent();
+    let (fixture, mut state, key, persistence, _streams, _parent) = fixture_with_parent();
     let capabilities = RoleCapabilities {
         allow_web_search: false,
         allow_mcp: false,
@@ -245,6 +245,7 @@ async fn role_capabilities_strip_skills_mcp_and_web_search() {
     let inputs = crate::event::chat::subagent::capture_child_prompt_inputs(
         &state,
         &persistence,
+        key.pane,
         fixture.workspace(),
         fixture.workspace(),
         &frozen,
@@ -632,6 +633,7 @@ async fn trigger_turn_false_stays_idle_after_running_turn_and_uses_message_envel
     let inputs = crate::event::chat::subagent::capture_child_prompt_inputs(
         &state,
         &persistence,
+        key.pane,
         fixture.workspace(),
         fixture.workspace(),
         &frozen,

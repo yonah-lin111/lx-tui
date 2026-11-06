@@ -826,6 +826,7 @@ pub(crate) fn schedule_next_queued_input_with_done(
     let inputs = super::context::capture_child_prompt_inputs(
         state,
         persistence,
+        parent_key.pane,
         workspace,
         &cwd,
         &frozen,
