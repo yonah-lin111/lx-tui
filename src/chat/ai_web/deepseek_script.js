@@ -10,6 +10,7 @@ const HOME = 'https://chat.deepseek.com';
 const SIGN_IN = 'https://chat.deepseek.com/sign_in';
 const ACTION = process.env.LX_AI_WEB_ACTION || 'chat';
 const PROMPT = process.env.LX_AI_WEB_PROMPT || '';
+const FIRST_TURN = process.env.LX_AI_WEB_FIRST_TURN === '1';
 
 function emit(obj) {
   process.stdout.write(PREFIX + JSON.stringify(obj) + '\n');
@@ -77,9 +78,52 @@ async function main() {
     return;
   }
 
-  // Channel A: clone the completion SSE stream and replay its JSON patches.
-  await js(`
+  if (FIRST_TURN) {
+    const clickedNew = await js(String.raw`
+      (() => {
+        if (location.pathname === '/' && document.querySelectorAll('.ds-message').length === 0) {
+          return false;
+        }
+        const target = Array.from(document.querySelectorAll('button, a, div, span')).find((el) => {
+          const label = (el.innerText || '').trim();
+          return label === '开启新对话' || label === 'New chat';
+        });
+        if (!target) return false;
+        (target.closest('button, a, [tabindex="0"]') || target).click();
+        return true;
+      })()
+    `);
+    if (clickedNew) {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+  }
+
+  // Ensure DeepThink ("深度思考") is enabled so reasoning deltas are streamed.
+  await js(String.raw`
     (() => {
+      try {
+        const raw = localStorage.getItem('thinkingEnabled');
+        const enabled = raw && JSON.parse(raw).value === true;
+        if (enabled) return true;
+      } catch (e) {}
+      const btn = Array.from(document.querySelectorAll('.ds-toggle-button')).find((el) => {
+        const label = (el.innerText || '').trim();
+        return label === '深度思考' || label === 'DeepThink';
+      });
+      if (btn) {
+        btn.click();
+        return true;
+      }
+      return false;
+    })()
+  `);
+
+  // Channel A: intercept /api/v0/chat/completion over XMLHttpRequest & fetch.
+  await js(String.raw`
+    (() => {
+      const existingKeys = Array.from(
+        document.querySelectorAll('[data-virtual-list-item-key]'),
+      ).map((el) => el.getAttribute('data-virtual-list-item-key') || '');
       const stream = {
         queue: [],
         done: false,
@@ -92,9 +136,32 @@ async function main() {
         domText: '',
         domLastSample: '',
         domStableTicks: 0,
-        initialCount: document.querySelectorAll('.ds-message').length,
+        seenKeys: new Set(existingKeys),
+        targetKey: null,
+        sseBuffer: '',
+        sseEventName: '',
+        sseDataLines: [],
+        cleanText(text, holdIncomplete) {
+          if (!text || typeof text !== 'string') return '';
+          let out = text.replace(/\[(?:citation|reference):[^\]]*\]/g, '');
+          if (holdIncomplete) {
+            const tail = out.lastIndexOf('[');
+            if (tail >= 0 && out.indexOf(']', tail) < 0) {
+              const suffix = out.slice(tail + 1).toLowerCase();
+              if (
+                'reference:'.startsWith(suffix)
+                || 'citation:'.startsWith(suffix)
+                || suffix.startsWith('reference:')
+                || suffix.startsWith('citation:')
+              ) {
+                out = out.slice(0, tail);
+              }
+            }
+          }
+          return out;
+        },
         push(kind, delta) {
-          if (!delta) return;
+          if (!kind || !delta) return;
           this.sseActive = true;
           this.queue.push({ kind: kind, delta: delta });
         },
@@ -120,7 +187,10 @@ async function main() {
           if (delta) this.queue.push({ kind: kind, delta: delta });
         },
         fragmentKind(fragment) {
-          return fragment && fragment.type === 'THINK' ? 'thinking' : 'text';
+          if (!fragment) return null;
+          if (fragment.type === 'THINK') return 'thinking';
+          if (!fragment.type || fragment.type === 'RESPONSE') return 'text';
+          return null;
         },
         parseDeltas(raw, state) {
           if (!raw || typeof raw !== 'object') return [];
@@ -228,49 +298,148 @@ async function main() {
           if (op === 'APPEND') {
             for (const fragment of value) {
               if (!fragment || typeof fragment !== 'object') continue;
+              const index = this.fragments.length;
               const entry = {
                 type: fragment.type || 'RESPONSE',
-                content: typeof fragment.content === 'string' ? fragment.content : '',
+                content: '',
+                emitted: '',
+                sepEmitted: false,
               };
               this.fragments.push(entry);
-              if (entry.content) {
-                this.push(this.fragmentKind(entry), entry.content);
+              if (typeof fragment.content === 'string' && fragment.content) {
+                this.applyFragmentContent(index, 'SET', fragment.content);
               }
             }
             return;
           }
           value.forEach((fragment, index) => {
             if (!fragment || typeof fragment !== 'object') return;
-            const current = this.fragments[index] || { content: '' };
+            const current = this.fragments[index] || {
+              type: fragment.type || 'RESPONSE',
+              content: '',
+              emitted: '',
+              sepEmitted: false,
+            };
             if (fragment.type) current.type = fragment.type;
-            if (typeof fragment.content !== 'string') {
-              this.fragments[index] = current;
-              return;
-            }
-            const previous = typeof current.content === 'string' ? current.content : '';
-            const delta = fragment.content.startsWith(previous)
-              ? fragment.content.slice(previous.length)
-              : fragment.content;
-            current.content = fragment.content;
             this.fragments[index] = current;
-            if (delta) this.push(this.fragmentKind(current), delta);
+            if (typeof fragment.content === 'string') {
+              this.applyFragmentContent(index, 'SET', fragment.content);
+            }
           });
         },
         applyFragmentContent(index, op, value) {
           if (typeof value !== 'string') return;
-          const fragment = this.fragments[index] || (this.fragments[index] = { content: '' });
-          const previous = typeof fragment.content === 'string' ? fragment.content : '';
+          const fragment = this.fragments[index] || (this.fragments[index] = {
+            content: '',
+            emitted: '',
+            sepEmitted: false,
+          });
+          const previousRaw = typeof fragment.content === 'string' ? fragment.content : '';
+          const nextRaw = op === 'APPEND' ? previousRaw + value : value;
+          fragment.content = nextRaw;
+          const kind = this.fragmentKind(fragment);
+          if (!kind) return;
+          const cleaned = kind === 'text' ? this.cleanText(nextRaw, true) : nextRaw;
+          const previousEmitted = typeof fragment.emitted === 'string' ? fragment.emitted : '';
           let delta = '';
-          if (op === 'APPEND') {
-            delta = value;
-          } else if (op === 'SET') {
-            delta = value.startsWith(previous) ? value.slice(previous.length) : value;
+          if (cleaned.startsWith(previousEmitted)) {
+            delta = cleaned.slice(previousEmitted.length);
           } else {
-            delta = value;
+            let pos = 0;
+            while (
+              pos < cleaned.length
+              && pos < previousEmitted.length
+              && cleaned[pos] === previousEmitted[pos]
+            ) {
+              pos += 1;
+            }
+            delta = cleaned.slice(pos);
           }
-          fragment.content = op === 'APPEND' ? previous + value : value;
-          this.fragments[index] = fragment;
-          this.push(this.fragmentKind(fragment), delta);
+          fragment.emitted = cleaned;
+          if (!delta) return;
+          if (kind === 'thinking' && !fragment.sepEmitted) {
+            fragment.sepEmitted = true;
+            const hasEarlierThink = this.fragments
+              .slice(0, index)
+              .some((item) => item && item.type === 'THINK' && item.emitted);
+            if (hasEarlierThink) {
+              delta = '\n\n' + delta;
+            }
+          }
+          this.push(kind, delta);
+        },
+        flushSseFrame() {
+          const data = this.sseDataLines.join('\n').trim();
+          const name = this.sseEventName;
+          this.sseDataLines = [];
+          this.sseEventName = '';
+          if (name === 'finish' || name === 'close') this.done = true;
+          if (!data) return;
+          if (data === '[DONE]') {
+            this.done = true;
+            return;
+          }
+          try {
+            if (!name || name === 'delta') {
+              this.applyEvent(JSON.parse(data));
+            }
+          } catch (error) {
+            // Ignore keep-alive and non-patch frames.
+          }
+        },
+        feedSseChunk(chunk, isFinal) {
+          if (chunk) this.sseBuffer += chunk;
+          const trimLeadingSpace = (s) => (s.startsWith(' ') ? s.slice(1) : s);
+          let index;
+          while ((index = this.sseBuffer.indexOf('\n')) >= 0) {
+            let line = this.sseBuffer.slice(0, index);
+            this.sseBuffer = this.sseBuffer.slice(index + 1);
+            if (line.endsWith('\r')) line = line.slice(0, -1);
+            if (!line) {
+              this.flushSseFrame();
+              continue;
+            }
+            if (line.startsWith('event:')) {
+              this.sseEventName = line.slice(6).trim();
+            } else if (line.startsWith('data:')) {
+              this.sseDataLines.push(trimLeadingSpace(line.slice(5)));
+            }
+          }
+          if (isFinal) {
+            if (this.sseBuffer.trim()) {
+              if (this.sseBuffer.startsWith('data:')) {
+                this.sseDataLines.push(trimLeadingSpace(this.sseBuffer.slice(5)));
+              } else if (this.sseBuffer.startsWith('event:')) {
+                this.sseEventName = this.sseBuffer.slice(6).trim();
+              }
+              this.sseBuffer = '';
+            }
+            this.flushSseFrame();
+            if (this.sseActive) this.done = true;
+          }
+        },
+        attachXhr(xhr) {
+          if (!xhr) return;
+          let consumed = 0;
+          const self = this;
+          const pull = (isFinal) => {
+            try {
+              const full = typeof xhr.responseText === 'string' ? xhr.responseText : '';
+              if (full.length > consumed) {
+                const delta = full.slice(consumed);
+                consumed = full.length;
+                self.feedSseChunk(delta, isFinal);
+              } else if (isFinal) {
+                self.feedSseChunk('', true);
+              }
+            } catch (e) {}
+          };
+          xhr.addEventListener('progress', () => pull(false));
+          xhr.addEventListener('readystatechange', () => {
+            if (xhr.readyState === 3) pull(false);
+            if (xhr.readyState === 4) pull(true);
+          });
+          xhr.addEventListener('loadend', () => pull(true));
         },
         attach(response) {
           if (!response || !response.body) return;
@@ -281,57 +450,12 @@ async function main() {
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
           const self = this;
-          let buffer = '';
-          let eventName = '';
-          let dataLines = [];
-          const flush = () => {
-            const data = dataLines.join('\\n').trim();
-            const name = eventName;
-            dataLines = [];
-            eventName = '';
-            if (name === 'finish' || name === 'close') self.done = true;
-            if (!data) return;
-            if (data === '[DONE]') {
-              self.done = true;
-              return;
-            }
-            try {
-              self.applyEvent(JSON.parse(data));
-            } catch (error) {
-              // Ignore keep-alive and non-patch frames.
-            }
-          };
-          const trimLeadingSpace = (s) => (s.startsWith(' ') ? s.slice(1) : s);
           const pump = () => reader.read().then((chunk) => {
             if (chunk.done) {
-              if (buffer.trim()) {
-                if (buffer.startsWith('data:')) {
-                  dataLines.push(trimLeadingSpace(buffer.slice(5)));
-                } else if (buffer.startsWith('event:')) {
-                  eventName = buffer.slice(6).trim();
-                }
-                buffer = '';
-              }
-              flush();
-              if (self.sseActive) self.done = true;
+              self.feedSseChunk('', true);
               return;
             }
-            buffer += decoder.decode(chunk.value, { stream: true });
-            let index;
-            while ((index = buffer.indexOf('\\n')) >= 0) {
-              let line = buffer.slice(0, index);
-              buffer = buffer.slice(index + 1);
-              if (line.endsWith('\\r')) line = line.slice(0, -1);
-              if (!line) {
-                flush();
-                continue;
-              }
-              if (line.startsWith('event:')) {
-                eventName = line.slice(6).trim();
-              } else if (line.startsWith('data:')) {
-                dataLines.push(trimLeadingSpace(line.slice(5)));
-              }
-            }
+            self.feedSseChunk(decoder.decode(chunk.value, { stream: true }), false);
             return pump();
           }).catch(() => {
             if (self.sseActive) self.done = true;
@@ -340,15 +464,22 @@ async function main() {
         },
         tickDom() {
           if (this.sseActive) return;
-          const nodes = Array.prototype.slice.call(
-            document.querySelectorAll('.ds-message'),
-            this.initialCount,
-          );
+          const items = Array.from(document.querySelectorAll('[data-virtual-list-item-key]'));
           let target = null;
-          for (let index = nodes.length - 1; index >= 0; index -= 1) {
-            if (nodes[index].querySelector('.ds-markdown, .ds-think-content')) {
-              target = nodes[index];
-              break;
+          if (this.targetKey) {
+            target = items.find(
+              (el) => el.getAttribute('data-virtual-list-item-key') === this.targetKey,
+            ) || null;
+          } else {
+            for (let index = items.length - 1; index >= 0; index -= 1) {
+              const el = items[index];
+              const key = el.getAttribute('data-virtual-list-item-key') || '';
+              if (this.seenKeys.has(key)) continue;
+              if (el.querySelector('.ds-markdown, .ds-think-content')) {
+                this.targetKey = key;
+                target = el;
+                break;
+              }
             }
           }
           if (!target) return;
@@ -363,7 +494,6 @@ async function main() {
             this.domLastSample = sample;
             this.domStableTicks = 0;
           }
-          // 兜底通道没有网络终态：正文已经出现且发送按钮恢复禁用态（生成结束）、内容稳定后收尾。
           const idleButton = Boolean(
             document.querySelector('.ds-button--primary.ds-button--disabled'),
           );
@@ -378,6 +508,26 @@ async function main() {
         },
       };
       window.__lxDeepSeekStream = stream;
+      if (!window.__lxXhrWrapped) {
+        window.__lxXhrWrapped = true;
+        const origOpen = XMLHttpRequest.prototype.open;
+        const origSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function(method, url) {
+          this.__lxUrl = typeof url === 'string' ? url : String(url || '');
+          return origOpen.apply(this, arguments);
+        };
+        XMLHttpRequest.prototype.send = function() {
+          if (this.__lxUrl && this.__lxUrl.includes('/api/v0/chat/completion')) {
+            const current = window.__lxDeepSeekStream;
+            if (current) {
+              try {
+                current.attachXhr(this);
+              } catch (e) {}
+            }
+          }
+          return origSend.apply(this, arguments);
+        };
+      }
       if (!window.__lxFetchWrapped) {
         window.__lxFetchWrapped = true;
         const originalFetch = window.fetch.bind(window);

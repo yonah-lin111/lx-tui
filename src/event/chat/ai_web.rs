@@ -60,11 +60,14 @@ pub fn start_stream(
     if active_assistant_id(state, &key).is_none() || streams.cancels.contains_key(&key) {
         return false;
     }
+    let first_turn = state
+        .pane_anywhere(key.pane)
+        .is_some_and(|pane| pane.lx.chat.messages.len() <= 2);
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
     streams.cancels.insert(key.clone(), cancel_tx);
     let sender = sender.clone();
     tokio::spawn(async move {
-        run_chat(sender, key, site, prompt, &mut cancel_rx).await;
+        run_chat(sender, key, site, prompt, first_turn, &mut cancel_rx).await;
     });
     true
 }
@@ -80,6 +83,7 @@ async fn run_chat(
     key: RequestKey,
     site: AiWebSite,
     prompt: String,
+    first_turn: bool,
     cancel: &mut watch::Receiver<bool>,
 ) {
     tracing::debug!(?site, session = %key.session, "ai web stream started");
@@ -114,7 +118,7 @@ async fn run_chat(
         return;
     };
     if stdin
-        .write_all(script_source("chat", Some(&prompt)).as_bytes())
+        .write_all(script_source("chat", Some(&prompt), first_turn).as_bytes())
         .await
         .is_err()
         || stdin.shutdown().await.is_err()
@@ -274,7 +278,7 @@ fn spawn_action(action: &'static str, prompt: Option<String>) {
             return;
         };
         if let Some(mut stdin) = child.stdin.take() {
-            let source = script_source(action, prompt.as_deref());
+            let source = script_source(action, prompt.as_deref(), false);
             if stdin.write_all(source.as_bytes()).await.is_ok() {
                 let _ = stdin.shutdown().await;
             }
@@ -287,10 +291,13 @@ fn spawn_action(action: &'static str, prompt: Option<String>) {
 ///
 /// `ego-browser` 会剥离调用方的大部分环境变量，所以把动作与提示词显式写进脚本
 /// 前置赋值，脚本本身仍按 `LX_AI_WEB_*` 的约定读取。
-fn script_source(action: &str, prompt: Option<&str>) -> String {
+fn script_source(action: &str, prompt: Option<&str>, first_turn: bool) -> String {
     let mut source = String::from("process.env.LX_AI_WEB_ACTION = ");
     source.push_str(&json_string(action));
     source.push_str(";\n");
+    if first_turn {
+        source.push_str("process.env.LX_AI_WEB_FIRST_TURN = \"1\";\n");
+    }
     if let Some(prompt) = prompt {
         source.push_str("process.env.LX_AI_WEB_PROMPT = ");
         source.push_str(&json_string(prompt));
