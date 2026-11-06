@@ -341,7 +341,9 @@ pub fn run_main(
         }),
     )?;
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    let snapshot = mcp_snapshot_for_turn_async(&db, &workspace, cancel_rx.clone());
+    let disabled_mcp: std::collections::BTreeSet<String> =
+        cli.disabled_mcp_servers.iter().cloned().collect();
+    let snapshot = mcp_snapshot_for_turn_async(&db, &workspace, &disabled_mcp, cancel_rx.clone());
     let mcp_snapshot = runtime.block_on(snapshot);
 
     let turn_config = assemble_exec_turn_with_snapshot(
@@ -643,15 +645,20 @@ fn mcp_snapshot_for_turn(_db: &Database, workspace: &Path) -> Arc<crate::mcp::Mc
 async fn mcp_snapshot_for_turn_async(
     _db: &Database,
     workspace: &Path,
+    disabled_mcp: &std::collections::BTreeSet<String>,
     cancel: tokio::sync::watch::Receiver<bool>,
 ) -> Arc<crate::mcp::McpToolSnapshot> {
     let manager = crate::mcp::global_manager();
-    let servers = effective_mcp_servers(workspace);
-    if servers.iter().any(|server| server.config.enabled) {
+    let servers: Vec<_> = effective_mcp_servers(workspace)
+        .into_iter()
+        .filter(|server| !disabled_mcp.contains(&server.name))
+        .collect();
+    let snapshot = if servers.iter().any(|server| server.config.enabled) {
         Arc::new(manager.snapshot_for(workspace, &servers, cancel).await)
     } else {
         manager.cached_snapshot(workspace)
-    }
+    };
+    snapshot.without_servers(disabled_mcp)
 }
 
 fn effective_mcp_servers(workspace: &Path) -> Vec<crate::config::mcp::EffectiveServer> {

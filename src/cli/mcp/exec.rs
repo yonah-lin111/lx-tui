@@ -9,7 +9,7 @@ pub fn run(cli: McpCli, linked_worktree: Option<&Path>) -> Result<i32, Box<dyn s
     let ctx = WorkspaceContext::resolve(cli.global.cwd.as_deref(), linked_worktree)?;
     let out = Output::new(cli.global.json, cli.global.color);
     match cli.command {
-        McpCommand::List { scope } => run_list(&ctx, &out, scope)?,
+        McpCommand::List { scope, disabled } => run_list(&ctx, &out, scope, &disabled)?,
         McpCommand::Show { name, scope } => run_show(&ctx, &out, &name, scope)?,
         McpCommand::AddStdio(args) => run_add_stdio(&ctx, &out, &args)?,
         McpCommand::AddHttp(args) => run_add_http(&ctx, &out, &args)?,
@@ -144,7 +144,12 @@ fn mask_opt(value: Option<&str>) -> String {
         _ => "-".to_string(),
     }
 }
-fn run_list(ctx: &WorkspaceContext, out: &Output, scope: ListScopeArg) -> Result<(), String> {
+fn run_list(
+    ctx: &WorkspaceContext,
+    out: &Output,
+    scope: ListScopeArg,
+    disabled: &std::collections::BTreeSet<String>,
+) -> Result<(), String> {
     let servers = if scope == ListScopeArg::User {
         // 显式查询用户作用域时直接读用户文件，避免被项目同名服务覆盖后消失。
         load_file(&user_path()?)?
@@ -166,15 +171,33 @@ fn run_list(ctx: &WorkspaceContext, out: &Output, scope: ListScopeArg) -> Result
         if scope == ListScopeArg::Project && server.scope != McpScope::Project {
             continue;
         }
+        let pane_disabled = disabled.contains(&server.name);
+        let effective_enabled = server.config.enabled && !pane_disabled;
+        let enabled_label = if !server.config.enabled {
+            "no"
+        } else if pane_disabled {
+            "no (pane)"
+        } else {
+            "yes"
+        };
         rows.push(vec![
             server.name.clone(),
             server.scope.as_str().into(),
             transport_label(&server.config).into(),
-            if server.config.enabled { "yes" } else { "no" }.into(),
+            enabled_label.into(),
             target_label(&server.config),
             if server.shadowed_user { "yes" } else { "-" }.into(),
         ]);
-        values.push(json!({"name": server.name, "scope": server.scope.as_str(), "transport": transport_label(&server.config), "enabled": server.config.enabled, "target": target_label(&server.config), "overridesUser": server.shadowed_user}));
+        values.push(json!({
+            "name": server.name,
+            "scope": server.scope.as_str(),
+            "transport": transport_label(&server.config),
+            "enabled": server.config.enabled,
+            "paneDisabled": pane_disabled,
+            "effectiveEnabled": effective_enabled,
+            "target": target_label(&server.config),
+            "overridesUser": server.shadowed_user
+        }));
     }
     out.emit(&json!({"servers": values}), |out, w| {
         if rows.is_empty() {

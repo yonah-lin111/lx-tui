@@ -28,6 +28,7 @@ pub struct McpCli {
 pub enum McpCommand {
     List {
         scope: ListScopeArg,
+        disabled: std::collections::BTreeSet<String>,
     },
     Show {
         name: String,
@@ -102,12 +103,19 @@ pub fn parse(raw_args: &[OsString]) -> Result<CliAction, String> {
     };
     let command = match sub.as_str() {
         "list" => {
-            let raw = collect(tail, &["--scope"], &[], &[], "lx-tui mcp list")?;
+            let raw = collect(
+                tail,
+                &["--scope"],
+                &["--disable-mcp"],
+                &[],
+                "lx-tui mcp list",
+            )?;
             let scope = match raw.get("--scope") {
                 Some(v) => ListScopeArg::parse(&v)?,
                 None => ListScopeArg::All,
             };
-            McpCommand::List { scope }
+            let disabled = parse_disabled_set(&raw.list("--disable-mcp"))?;
+            McpCommand::List { scope, disabled }
         }
         "show" => {
             let (name, scope) = named(tail, "lx-tui mcp show")?;
@@ -251,6 +259,20 @@ fn collect(
 fn named(args: &[String], help: &str) -> Result<(String, Option<ScopeArg>), String> {
     let raw = collect(args, &["--scope"], &[], &[], help)?;
     Ok((raw.required("<NAME>", help)?, raw.scope()?))
+}
+fn parse_disabled_set(raw_list: &[String]) -> Result<std::collections::BTreeSet<String>, String> {
+    let mut set = std::collections::BTreeSet::new();
+    for raw in raw_list {
+        for part in raw.split(',') {
+            let name = part.trim();
+            if name.is_empty() {
+                return Err("option '--disable-mcp' requires a non-empty server name".to_string());
+            }
+            validate_server_name(name).map_err(|e| e.to_string())?;
+            set.insert(name.to_string());
+        }
+    }
+    Ok(set)
 }
 fn parse_pair(raw: &str, flag: &str) -> Result<(String, String), String> {
     let (key, value) = raw
