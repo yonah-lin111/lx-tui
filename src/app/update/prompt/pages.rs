@@ -407,7 +407,7 @@ pub fn rename_prompt_page_title(
     }
     super::super::focus_prompt(state);
     state.prompt.clear_panel();
-    state.selection = None;
+    crate::app::update::clear_selection(state);
     let lookup = crate::app::markdown::find_first_template_title_span(state.prompt.text());
     match lookup {
         crate::app::markdown::TemplateTitleLookup::Found {

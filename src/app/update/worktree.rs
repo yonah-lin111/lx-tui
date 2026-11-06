@@ -186,6 +186,9 @@ pub fn apply_worktree_list(
 
 /// 对话框按键：编辑搜索、移动选择、打开或关闭。
 pub fn apply_worktree_open_key(state: &mut AppState, key: OverlayKey) {
+    if key == OverlayKey::Esc && super::escape_clear_selection(state) {
+        return;
+    }
     match key {
         OverlayKey::Esc => state.overlay = None,
         OverlayKey::Enter => commit_worktree_open(state),

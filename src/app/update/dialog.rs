@@ -21,6 +21,12 @@ use super::worktree::apply_worktree_open_key;
 ///
 /// 确认切换工作区路径时返回写入目标窗格的 shell 命令；其余返回 None。
 pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneId, Vec<u8>)> {
+    if key == OverlayKey::Esc && super::escape_clear_selection(state) {
+        return None;
+    }
+    if key == OverlayKey::SelectAll {
+        super::clear_selection(state);
+    }
     // `/connect` 居中模态：导航、提交、刷新与输入编辑都在连接状态机内部处理。
     if matches!(state.overlay, Some(Overlay::Connect(_))) {
         super::chat::apply_connect_overlay_key(state, key);

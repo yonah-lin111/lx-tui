@@ -57,6 +57,9 @@ fn current_panel(state: &AppState) -> Option<ConnectPanel> {
 
 /// `/connect` 模态按键分派。
 pub fn apply_connect_overlay_key(state: &mut AppState, key: OverlayKey) -> bool {
+    if key == OverlayKey::Esc && crate::app::update::escape_clear_selection(state) {
+        return true;
+    }
     let Some(panel) = current_panel(state) else {
         return false;
     };

@@ -285,6 +285,13 @@ pub fn end_terminal_selection_drag(state: &mut AppState) -> bool {
     true
 }
 
+/// 终端窗格当前是否存在可见选区范围（与 `renderable_content().selection` 同源，不分配字符串）。
+pub fn terminal_has_selection(state: &AppState, pane: PaneId) -> bool {
+    state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.kind == PaneKind::Terminal && target.terminal.has_selection())
+}
+
 /// 读取终端窗格当前保留的选区文本（保留高亮，供 Ctrl/Cmd+C 复制）；无有效选区返回 None。
 pub fn terminal_selection_text(state: &AppState, pane: PaneId) -> Option<String> {
     let target = state.pane_anywhere(pane)?;
@@ -323,38 +330,232 @@ pub fn clear_terminal_selection(state: &mut AppState) {
     }
 }
 
-/// 清除 prompt、终端、lx 页与 lx 输入框选区以及输入框滚动条拖拽。
-pub fn clear_selection(state: &mut AppState) {
-    state.selection = None;
+/// 终止所有正在进行的鼠标选区拖拽、自动滚动与空选区锚点，但保留已成立的静态选区。
+pub fn stop_active_selection_drags(state: &mut AppState) {
     state.selection_autoscroll = None;
-    state.lx_selection = None;
     state.lx_card_press = None;
     state.lx_scroll_drag = None;
     state.lx_history_scroll_drag = None;
     state.task_agents_scroll_drag = None;
     state.lx_input_drag = None;
+    state.overlay_input_drag = false;
     state.ask_input_drag = None;
     state.todo_input_drag = false;
-    state.prompt.clear_preview_selection();
-    if let Some(input) = state.todo.edit_input_mut() {
-        input.clear_selection();
+    state.prompt_search_drag = false;
+    state.workspace_history.search_drag = false;
+    end_selection_drag(state);
+    let _ = end_lx_selection_drag(state);
+    let _ = end_terminal_selection_drag(state);
+    if state.prompt.is_preview_dragging() {
+        state.prompt.finish_preview_selection();
+    }
+    if !state.workspace_history.search.has_selection() {
+        state.workspace_history.search.clear_selection();
+    }
+    if let Some(overlay) = state.overlay.as_mut()
+        && !overlay.has_selection()
+    {
+        overlay.clear_selection();
+    }
+    if state
+        .todo
+        .edit_input()
+        .is_some_and(|inp| !inp.has_selection())
+    {
+        state.todo.clear_selection();
     }
     for workspace in &mut state.workspaces {
+        if !workspace.prompt_panel.search.has_selection() {
+            workspace.prompt_panel.search.clear_selection();
+        }
+        if !workspace.prompt_panel.pages_view.search.has_selection() {
+            workspace.prompt_panel.pages_view.search.clear_selection();
+        }
+        for tab in &mut workspace.tabs {
+            for id in tab.layout.pane_ids() {
+                if let Some(target) = tab.pane_mut(id) {
+                    if target.lx.is_preview_dragging() {
+                        target.lx.finish_preview_selection();
+                    }
+                    if target.lx.text_selection_range().is_none() {
+                        target.lx.clear_text_selection();
+                    }
+                    if let Some(ask) = target.lx.ask.as_mut()
+                        && let Some(editor) = ask.editor_mut()
+                        && editor.text_selection_range().is_none()
+                    {
+                        editor.clear_text_selection();
+                    }
+                    if let Some(task) = target.lx.task.as_mut()
+                        && let Some(reply) = task.agent_reply.as_mut()
+                        && !reply.has_selection()
+                    {
+                        reply.clear_selection();
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 清除全应用所有容器的文本选区以及正在进行的鼠标拖选/自动滚动状态。
+pub fn clear_selection(state: &mut AppState) {
+    stop_active_selection_drags(state);
+    state.selection = None;
+    state.lx_selection = None;
+    state.workspace_history.search.clear_selection();
+    if let Some(overlay) = state.overlay.as_mut() {
+        overlay.clear_selection();
+    }
+    state.prompt.clear_preview_selection();
+    state.todo.clear_selection();
+    for workspace in &mut state.workspaces {
+        workspace.prompt_panel.search.clear_selection();
+        workspace.prompt_panel.pages_view.search.clear_selection();
         for tab in &mut workspace.tabs {
             for id in tab.layout.pane_ids() {
                 if let Some(target) = tab.pane_mut(id) {
                     target.lx.clear_text_selection();
                     target.lx.clear_preview_selection();
-                    if let Some(ask) = target.lx.ask.as_mut()
-                        && let Some(editor) = ask.editor_mut()
+                    if let Some(ask) = target.lx.ask.as_mut() {
+                        ask.clear_all_text_selections();
+                    }
+                    if let Some(task) = target.lx.task.as_mut()
+                        && let Some(reply) = task.agent_reply.as_mut()
                     {
-                        editor.clear_text_selection();
+                        reply.clear_selection();
                     }
                 }
             }
         }
     }
     clear_terminal_selection(state);
+}
+
+/// 当前界面是否存在对用户可见的非空文本选区。
+///
+/// 规则（对齐 OpenCode 选区拦截与可见性隔离）：
+/// 1. 模态浮层打开时，仅检查该浮层自身的输入框选区；被浮层遮挡的底层容器选区不计入。
+/// 2. 无模态浮层时，按各容器可见性检查：
+///    - 左栏：未折叠且处于工作区历史列表模式时，检查 `workspace_history.search`；
+///    - 右栏：未折叠时，按 `right_tab`（`Prompt` 树/页/正文与展开芯片，或 `Todo` 编辑框）检查；
+///    - 主窗格区：未折叠时，遍历当前活动标签页中的所有可见窗格：
+///      - `PaneView::Lx`：检查主内容区 `state.lx_selection`（含后台任务页输出区选区）；
+///        若后台任务页打开则检查 `agent_reply`；若 `ask` 处于编辑态则检查 `ask.editor()`；
+///        若 `task` 与 `ask` 均未遮挡输入框，则检查 `lx.preview_selection()` 与 `lx.text_selection_range()`；
+///      - `PaneView::Terminal`：检查 `terminal_has_selection(state, id)`（与渲染高亮同源）。
+pub fn has_visible_selection(state: &AppState) -> bool {
+    if let Some(overlay) = state.overlay.as_ref() {
+        return overlay.has_selection();
+    }
+
+    if !state.sidebar_collapsed
+        && super::workspace_history_mode(state)
+        && state.workspace_history.search.has_selection()
+    {
+        return true;
+    }
+
+    if !state.prompt_collapsed {
+        match state.right_tab {
+            crate::app::state::RightTab::Prompt => {
+                if super::prompt_tree_mode(state) {
+                    if state.prompt_owner().prompt_panel.search.has_selection() {
+                        return true;
+                    }
+                } else if super::prompt_pages_mode(state) {
+                    if state
+                        .prompt_owner()
+                        .prompt_panel
+                        .pages_view
+                        .search
+                        .has_selection()
+                    {
+                        return true;
+                    }
+                } else if state.prompt.preview_selection().is_some()
+                    || prompt_selection_range(state).is_some()
+                {
+                    return true;
+                }
+            }
+            crate::app::state::RightTab::Todo => {
+                if state
+                    .todo
+                    .edit_input()
+                    .is_some_and(|input| input.has_selection())
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    if !state.panes_collapsed {
+        for id in state.active_tab().layout.pane_ids() {
+            let Some(pane) = state.pane_anywhere(id) else {
+                continue;
+            };
+            match pane.view {
+                crate::app::state::PaneView::Lx => {
+                    if state
+                        .lx_selection
+                        .is_some_and(|sel| sel.pane() == id && sel.range().is_some())
+                    {
+                        return true;
+                    }
+                    if let Some(task) = pane.lx.task.as_ref() {
+                        if task
+                            .agent_reply
+                            .as_ref()
+                            .is_some_and(|reply| reply.has_selection())
+                        {
+                            return true;
+                        }
+                    } else if let Some(ask) = pane.lx.ask.as_ref() {
+                        if ask.editing
+                            && ask
+                                .editor()
+                                .is_some_and(|ed| ed.text_selection_range().is_some())
+                        {
+                            return true;
+                        }
+                    } else if pane.lx.preview_selection().is_some()
+                        || pane.lx.text_selection_range().is_some()
+                    {
+                        return true;
+                    }
+                }
+                crate::app::state::PaneView::Terminal => {
+                    if terminal_has_selection(state, id) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// 按下 `Esc` 时尝试取消当前可见的文字选区（对齐 OpenCode `handleSelectionKey` 优先级 101）。
+///
+/// - 若存在可见的非空文本选区：清除选区并终止所有拖选/自动滚动状态，返回 `true`（消费该次 `Esc`）。
+/// - 若不存在可见的非空文本选区：仅终止进行中的拖选、自动滚动与空选区锚点（保留后台 Tab 或被浮层遮挡的静态选区），返回 `false`（不消费 `Esc`，继续后续路由）。
+pub fn escape_clear_selection(state: &mut AppState) -> bool {
+    let had_selection = has_visible_selection(state);
+    state.selection_click = None;
+    stop_active_selection_drags(state);
+    if state.overlay.is_some() {
+        if had_selection && let Some(overlay) = state.overlay.as_mut() {
+            overlay.clear_selection();
+        }
+        return had_selection;
+    }
+    if had_selection {
+        clear_selection(state);
+    }
+    had_selection
 }
 
 /// 松开鼠标：结束拖动；空选区（未拖动）直接清除，非空选区保留供复制或删除。
@@ -595,3 +796,6 @@ pub(crate) fn prompt_selection_bounds(state: &AppState) -> Option<(usize, usize)
         .prompt
         .selection_bounds_with(start, end, allow_single_cell)
 }
+
+#[cfg(test)]
+mod tests;

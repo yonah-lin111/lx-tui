@@ -330,6 +330,9 @@ pub fn begin_todo_edit(state: &mut AppState, target: TodoEditTarget) -> bool {
 
 /// todo 按键总入口：按 `editing` 分派到单行编辑或列表动作。
 pub fn apply_todo_key(state: &mut AppState, key: TodoKey) -> bool {
+    if key == TodoKey::Esc && super::escape_clear_selection(state) {
+        return true;
+    }
     if state.todo.is_editing() {
         return apply_todo_edit_key(state, key);
     }
@@ -415,6 +418,10 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
             input.cursor() != before || had_sel
         }
         TodoKey::SelectAll => {
+            if state.todo.edit_input().is_none() {
+                return false;
+            }
+            super::clear_selection(state);
             let Some(input) = state.todo.edit_input_mut() else {
                 return false;
             };

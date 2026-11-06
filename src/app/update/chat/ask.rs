@@ -46,6 +46,9 @@ enum Follow {
 
 /// ask 面板接管 lx 输入；返回是否产生状态变化。
 pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
+    if command == LxInput::Escape && crate::app::update::escape_clear_selection(state) {
+        return true;
+    }
     let Some(ask) = state
         .pane_mut_anywhere(pane)
         .and_then(|target| target.lx.ask.as_mut())
@@ -318,6 +321,17 @@ fn apply_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) -> boo
 
 /// 把编辑类命令转发给手写缓冲。
 fn editor_edit(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
+    if super::super::pane::is_select_command(command) {
+        let clear_others = command == LxInput::SelectAll
+            || state
+                .pane_anywhere(pane)
+                .and_then(|target| target.lx.ask.as_ref())
+                .and_then(AskState::editor)
+                .is_some_and(|editor| !editor.has_text_selection());
+        if clear_others {
+            crate::app::update::clear_selection(state);
+        }
+    }
     state
         .pane_mut_anywhere(pane)
         .and_then(|target| target.lx.ask.as_mut())

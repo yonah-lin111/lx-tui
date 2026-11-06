@@ -32,6 +32,14 @@ pub(crate) fn handle_key_event(
         return;
     }
 
+    // 对齐 OpenCode (priority 101)：裸 Esc 最优先取消当前可见文字选区并消费按键，
+    // 绝不穿透到终端 PTY、模态浮层关闭、自动补全面板关闭、退出编辑态或双 Esc 中断。
+    if key.code == KeyCode::Esc && key.modifiers.is_empty() && update::escape_clear_selection(state)
+    {
+        *dirty = true;
+        return;
+    }
+
     let mode = state
         .active_pane()
         .map(|pane| pane.terminal.mode())
@@ -405,27 +413,28 @@ fn copy_lx_selection(
     let request = state
         .pane_anywhere(pane)
         .filter(|target| target.view == PaneView::Lx);
-    let task_open = request.is_some_and(|target| target.lx.task.is_some());
     let ask_blocked =
         request.is_some_and(|target| target.lx.ask.as_ref().is_some_and(|ask| !ask.editing));
     if ask_blocked {
         // Ask 列表态没有可见输入框：绝不复制隐藏的底层草稿。
         return false;
     }
-    // 任务页占用输入框矩形时，底层草稿不可见：跳过输入框选区，仅保留主内容区复制。
-    if !task_open
-        && let Some(text) = request.and_then(|target| {
-            if let Some(ask) = target.lx.ask.as_ref()
-                && ask.editing
-            {
-                ask.editor().and_then(|ed| ed.selected_text())
-            } else if let Some((start, end)) = target.lx.preview_selection() {
-                Some(target.lx.projection().copy_display_range(start..end))
-            } else {
-                target.lx.selected_text()
-            }
-        })
-    {
+    // 任务页打开时优先复制内联追问框选区；未打开时按 Ask 手写框 / 展开芯片预览 / 底部输入框顺序复制。
+    if let Some(text) = request.and_then(|target| {
+        if let Some(task) = target.lx.task.as_ref() {
+            task.agent_reply
+                .as_ref()
+                .and_then(|reply| reply.selected_text())
+        } else if let Some(ask) = target.lx.ask.as_ref()
+            && ask.editing
+        {
+            ask.editor().and_then(|ed| ed.selected_text())
+        } else if let Some((start, end)) = target.lx.preview_selection() {
+            Some(target.lx.projection().copy_display_range(start..end))
+        } else {
+            target.lx.selected_text()
+        }
+    }) {
         if !text.trim().is_empty() {
             copy_with_toast(state, &text, Some(pane));
         }
@@ -468,15 +477,22 @@ fn cut_lx_selection(state: &mut AppState) -> bool {
     }
     if !state
         .pane_anywhere(pane)
-        .is_some_and(|target| target.view == PaneView::Lx && target.lx.task.is_none())
+        .is_some_and(|target| target.view == PaneView::Lx)
     {
         return false;
     }
-    let (text, from_ask) = {
+    let (text, from_sub_editor) = {
         let Some(target) = state.pane_mut_anywhere(pane) else {
             return false;
         };
-        if target.lx.ask.as_ref().is_some_and(|ask| ask.editing) {
+        if let Some(task) = target.lx.task.as_mut() {
+            (
+                task.agent_reply
+                    .as_mut()
+                    .and_then(|reply| reply.cut_selected()),
+                true,
+            )
+        } else if target.lx.ask.as_ref().is_some_and(|ask| ask.editing) {
             (
                 target
                     .lx
@@ -500,7 +516,7 @@ fn cut_lx_selection(state: &mut AppState) -> bool {
     let Some(text) = text else {
         return false;
     };
-    if !from_ask {
+    if !from_sub_editor {
         update::refresh_slash_panel(state, pane);
     }
     if !text.is_empty() {
@@ -511,16 +527,5 @@ fn cut_lx_selection(state: &mut AppState) -> bool {
 
 /// 读取当前浮层单行输入框中被选中的文本。
 fn overlay_selected_text(state: &AppState) -> Option<String> {
-    match state.overlay.as_ref()? {
-        Overlay::Rename(r) => r.input.selected_text(),
-        Overlay::NewWorkspace(ws) => ws.input.selected_text(),
-        Overlay::NewNode(n) => n.name.selected_text(),
-        Overlay::SaveDraft(d) => d.name.selected_text(),
-        Overlay::WorktreeOpen(w) => w.query.selected_text(),
-        Overlay::ReferencedFolderInput(i) => i.input.selected_text(),
-        Overlay::ReferencedFolderSearch(s) => s.query.selected_text(),
-        Overlay::ResumeSessionEdit(r) => r.input.selected_text(),
-        Overlay::Connect(panel) if panel.has_text_input() => panel.input.selected_text(),
-        _ => None,
-    }
+    state.overlay.as_ref()?.input()?.selected_text()
 }

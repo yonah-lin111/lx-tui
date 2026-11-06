@@ -77,6 +77,9 @@ pub fn apply_resume_session_edit_key(
     key: crate::app::actions::OverlayKey,
 ) -> bool {
     use crate::app::actions::OverlayKey;
+    if key == OverlayKey::Esc && super::escape_clear_selection(state) {
+        return false;
+    }
     let Some(Overlay::ResumeSessionEdit(edit)) = state.overlay.as_ref() else {
         return false;
     };

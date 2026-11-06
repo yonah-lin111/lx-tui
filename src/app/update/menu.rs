@@ -564,6 +564,7 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
             focus_prompt(state);
         }
         (Some(MenuCommand::SelectAll), OverlayTarget::PromptPage { .. }) => {
+            clear_selection(state);
             state.select_all_prompt();
             focus_prompt(state);
         }
