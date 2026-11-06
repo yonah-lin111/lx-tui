@@ -34,6 +34,7 @@ pub mod user_shell;
 mod view;
 mod viewport;
 
+pub use ai_web::{is_ai_web_session, try_send_ai_web};
 pub use ask::{
     apply_ask_click, apply_ask_paste, apply_ask_wheel, apply_input as apply_ask_input, submit_all,
 };

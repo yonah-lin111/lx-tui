@@ -5,7 +5,8 @@
 
 use std::process::Stdio;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpListener;
 use tokio::process::Command;
 
 use super::*;
@@ -109,7 +110,16 @@ async fn run_chat(
         }
     };
 
+    let (line_tx, mut line_rx) = mpsc::unbounded_channel::<String>();
+    let (stream_url, listener_task) = match spawn_stream_listener(line_tx.clone()).await {
+        Some((url, handle)) => (Some(url), Some(handle)),
+        None => (None, None),
+    };
+
     let Some(mut stdin) = child.stdin.take() else {
+        if let Some(handle) = listener_task {
+            handle.abort();
+        }
         finished(
             &sender,
             key,
@@ -117,12 +127,11 @@ async fn run_chat(
         );
         return;
     };
-    if stdin
-        .write_all(script_source("chat", Some(&prompt), first_turn).as_bytes())
-        .await
-        .is_err()
-        || stdin.shutdown().await.is_err()
-    {
+    let source = script_source("chat", Some(&prompt), first_turn, stream_url.as_deref());
+    if stdin.write_all(source.as_bytes()).await.is_err() || stdin.shutdown().await.is_err() {
+        if let Some(handle) = listener_task {
+            handle.abort();
+        }
         finished(
             &sender,
             key,
@@ -132,10 +141,8 @@ async fn run_chat(
     }
     drop(stdin);
 
-    // `ego-browser nodejs` 会将脚本内 `process.stdout.write` / `cliLog` 定向到 stderr，
-    // 因此同时读取 stdout 与 stderr 并汇总到同一行通道解析 `@@LX_AI_WEB@@` 协议行。
-    let (line_tx, mut line_rx) = mpsc::unbounded_channel::<String>();
-    if let Some(stdout) = child.stdout.take() {
+    // 同时采集 stdout 与 stderr，并在二者均 EOF（子进程已退出）时关闭实时 HTTP 监听。
+    let stdout_task = child.stdout.take().map(|stdout| {
         let tx = line_tx.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
@@ -144,9 +151,9 @@ async fn run_chat(
                     break;
                 }
             }
-        });
-    }
-    if let Some(stderr) = child.stderr.take() {
+        })
+    });
+    let stderr_task = child.stderr.take().map(|stderr| {
         let tx = line_tx.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
@@ -155,9 +162,20 @@ async fn run_chat(
                     break;
                 }
             }
-        });
-    }
+        })
+    });
     drop(line_tx);
+    tokio::spawn(async move {
+        if let Some(t) = stdout_task {
+            let _ = t.await;
+        }
+        if let Some(t) = stderr_task {
+            let _ = t.await;
+        }
+        if let Some(handle) = listener_task {
+            handle.abort();
+        }
+    });
 
     let mut received = false;
     let mut last_diag: Option<String> = None;
@@ -278,7 +296,7 @@ fn spawn_action(action: &'static str, prompt: Option<String>) {
             return;
         };
         if let Some(mut stdin) = child.stdin.take() {
-            let source = script_source(action, prompt.as_deref(), false);
+            let source = script_source(action, prompt.as_deref(), false, None);
             if stdin.write_all(source.as_bytes()).await.is_ok() {
                 let _ = stdin.shutdown().await;
             }
@@ -287,16 +305,93 @@ fn spawn_action(action: &'static str, prompt: Option<String>) {
     });
 }
 
+/// 启动本地回环 HTTP 接收器：绕过 `ego-browser nodejs` 对 stdio 的进程级缓冲，
+/// 让脚本通过 `fetch(STREAM_URL, { method: 'POST' })` 实时推送每一个流分片。
+async fn spawn_stream_listener(
+    line_tx: mpsc::UnboundedSender<String>,
+) -> Option<(String, tokio::task::JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").await.ok()?;
+    let port = listener.local_addr().ok()?.port();
+    let handle = tokio::spawn(async move {
+        let _keep_tx = line_tx.clone();
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let tx = line_tx.clone();
+            tokio::spawn(async move {
+                let mut buf = Vec::with_capacity(2048);
+                let mut chunk = [0u8; 1024];
+                let header_end = loop {
+                    let Ok(n) = socket.read(&mut chunk).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        break None;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break Some(pos + 4);
+                    }
+                };
+                if let Some(body_start) = header_end {
+                    let header_str = String::from_utf8_lossy(&buf[..body_start]);
+                    let content_len = header_str
+                        .lines()
+                        .find_map(|line| {
+                            let (k, v) = line.split_once(':')?;
+                            k.trim()
+                                .eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse::<usize>().ok())?
+                        })
+                        .unwrap_or(0);
+                    let target_len = body_start.saturating_add(content_len);
+                    while buf.len() < target_len {
+                        let Ok(n) = socket.read(&mut chunk).await else {
+                            break;
+                        };
+                        if n == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                    }
+                    let end = target_len.min(buf.len());
+                    let body = String::from_utf8_lossy(&buf[body_start..end]);
+                    for line in body.lines() {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            let _ = tx.send(trimmed.to_string());
+                        }
+                    }
+                }
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
+            });
+        }
+    });
+    Some((format!("http://127.0.0.1:{port}"), handle))
+}
+
 /// 组装交给 `ego-browser nodejs` 的脚本。
 ///
 /// `ego-browser` 会剥离调用方的大部分环境变量，所以把动作与提示词显式写进脚本
 /// 前置赋值，脚本本身仍按 `LX_AI_WEB_*` 的约定读取。
-fn script_source(action: &str, prompt: Option<&str>, first_turn: bool) -> String {
+fn script_source(
+    action: &str,
+    prompt: Option<&str>,
+    first_turn: bool,
+    stream_url: Option<&str>,
+) -> String {
     let mut source = String::from("process.env.LX_AI_WEB_ACTION = ");
     source.push_str(&json_string(action));
     source.push_str(";\n");
     if first_turn {
         source.push_str("process.env.LX_AI_WEB_FIRST_TURN = \"1\";\n");
+    }
+    if let Some(url) = stream_url {
+        source.push_str("process.env.LX_AI_WEB_STREAM_URL = ");
+        source.push_str(&json_string(url));
+        source.push_str(";\n");
     }
     if let Some(prompt) = prompt {
         source.push_str("process.env.LX_AI_WEB_PROMPT = ");

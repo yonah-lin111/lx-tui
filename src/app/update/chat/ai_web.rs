@@ -75,6 +75,8 @@ pub fn try_send_ai_web(
     };
     let site = target.lx.ai_web_site;
     target.lx.clear();
+    target.lx.clear_rewind();
+    target.lx.chat.generation_counter = generation;
     target.lx.chat.stop_armed_at = None;
     target.lx.chat.main_stopped = false;
     let session_id = match target.lx.chat.session_id.as_deref() {
@@ -284,5 +286,44 @@ mod tests {
             target.lx.toast.as_ref().map(|toast| toast.message.as_str()),
             Some(text::LX_AI_WEB_ONLY_NEW_CMD)
         );
+    }
+
+    #[test]
+    fn multi_turn_send_advances_generation_and_keeps_qa_order() {
+        let (mut state, pane) = ai_web_state();
+        draft(&mut state, pane, "你是谁");
+        assert!(super::super::try_send(&mut state, pane));
+        finish(&mut state, pane);
+
+        draft(&mut state, pane, "最近有什么新闻");
+        assert!(super::super::try_send(&mut state, pane));
+        let key2 = match &state
+            .pane_anywhere(pane)
+            .map(|target| &target.lx.chat.request)
+        {
+            Some(RequestState::Streaming { key, .. }) => key.clone(),
+            _ => panic!("expected streaming request on turn 2"),
+        };
+        assert_eq!(key2.generation, 2);
+        let delta2 = ChatDelta::Part(PartDelta {
+            kind: PartKind::Text,
+            text: "second reply".into(),
+            metadata: None,
+        });
+        assert!(super::super::on_stream_delta(&mut state, &key2, &[delta2]));
+        assert!(super::super::on_stream_finished(
+            &mut state,
+            &key2,
+            &StopReason::Complete,
+            Usage::default(),
+            Usage::default(),
+        ));
+
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert_eq!(target.lx.chat.messages.len(), 4);
+        assert_eq!(target.lx.chat.messages[0].text(), "你是谁");
+        assert_eq!(target.lx.chat.messages[1].text(), "reply");
+        assert_eq!(target.lx.chat.messages[2].text(), "最近有什么新闻");
+        assert_eq!(target.lx.chat.messages[3].text(), "second reply");
     }
 }

@@ -815,10 +815,16 @@ impl LxChat {
     ///
     /// `step_index` 是**时间线步骤下标**（含工具步骤），与 UI 命中几何同源。
     pub fn reasoning_expanded(&self, message_index: usize, step_index: usize) -> bool {
-        self.thinking_toggled
+        if let Some((_, _, expanded)) = self
+            .thinking_toggled
             .iter()
             .find(|(message, step, _)| *message == message_index && *step == step_index)
-            .is_some_and(|(_, _, expanded)| *expanded)
+        {
+            return *expanded;
+        }
+        self.session_id
+            .as_deref()
+            .is_some_and(crate::app::update::is_ai_web_session)
     }
 
     /// 该思考块是否仍在生成：该步骤是 Reasoning、其独立完成字段为空、且消息仍在流中。

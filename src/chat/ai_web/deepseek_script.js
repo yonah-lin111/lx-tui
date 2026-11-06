@@ -11,9 +11,22 @@ const SIGN_IN = 'https://chat.deepseek.com/sign_in';
 const ACTION = process.env.LX_AI_WEB_ACTION || 'chat';
 const PROMPT = process.env.LX_AI_WEB_PROMPT || '';
 const FIRST_TURN = process.env.LX_AI_WEB_FIRST_TURN === '1';
+const STREAM_URL = process.env.LX_AI_WEB_STREAM_URL || '';
 
-function emit(obj) {
-  process.stdout.write(PREFIX + JSON.stringify(obj) + '\n');
+async function emitMany(objs) {
+  if (!objs || objs.length === 0) return;
+  const payload = objs.map((obj) => PREFIX + JSON.stringify(obj) + '\n').join('');
+  if (STREAM_URL) {
+    try {
+      await fetch(STREAM_URL, { method: 'POST', body: payload });
+      return;
+    } catch (e) {}
+  }
+  process.stdout.write(payload);
+}
+
+async function emit(obj) {
+  await emitMany([obj]);
 }
 
 async function main() {
@@ -30,7 +43,7 @@ async function main() {
   if (!loggedIn) {
     await openOrReuseTab(SIGN_IN, { wait: true, timeout: 20 });
     await handOffTaskSpace();
-    emit({ event: 'login_required', url: SIGN_IN });
+    await emit({ event: 'login_required', url: SIGN_IN });
     return;
   }
 
@@ -49,7 +62,7 @@ async function main() {
         return true;
       })()
     `);
-    emit({ event: 'done' });
+    await emit({ event: 'done' });
     return;
   }
 
@@ -69,12 +82,12 @@ async function main() {
         return true;
       })()
     `);
-    emit({ event: 'done' });
+    await emit({ event: 'done' });
     return;
   }
 
   if (ACTION !== 'chat') {
-    emit({ event: 'error', message: 'unknown AI Web action: ' + ACTION });
+    await emit({ event: 'error', message: 'unknown AI Web action: ' + ACTION });
     return;
   }
 
@@ -101,17 +114,14 @@ async function main() {
   // Ensure DeepThink ("深度思考") is enabled so reasoning deltas are streamed.
   await js(String.raw`
     (() => {
-      try {
-        const raw = localStorage.getItem('thinkingEnabled');
-        const enabled = raw && JSON.parse(raw).value === true;
-        if (enabled) return true;
-      } catch (e) {}
       const btn = Array.from(document.querySelectorAll('.ds-toggle-button')).find((el) => {
         const label = (el.innerText || '').trim();
         return label === '深度思考' || label === 'DeepThink';
       });
       if (btn) {
-        btn.click();
+        if (!btn.className.includes('ds-toggle-button--selected')) {
+          btn.click();
+        }
         return true;
       }
       return false;
@@ -587,7 +597,7 @@ async function main() {
       return true;
     })()
   `);
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  await new Promise((resolve) => setTimeout(resolve, 80));
 
   const cleared = await js(`
     (() => {
@@ -621,14 +631,16 @@ async function main() {
       })()
     `);
     if (!snapshot) throw new Error('DeepSeek stream collector was lost');
-    for (const item of snapshot.queue) {
-      emit({ event: item.kind, delta: item.delta });
+    if (snapshot.queue.length > 0) {
+      await emitMany(
+        snapshot.queue.map((item) => ({ event: item.kind, delta: item.delta })),
+      );
     }
     if (snapshot.done) {
-      emit({ event: 'done' });
+      await emit({ event: 'done' });
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await new Promise((resolve) => setTimeout(resolve, 60));
   }
   throw new Error('timed out waiting for DeepSeek to finish the reply');
 }
@@ -636,5 +648,5 @@ async function main() {
 try {
   await main();
 } catch (error) {
-  emit({ event: 'error', message: String((error && error.message) || error) });
+  await emit({ event: 'error', message: String((error && error.message) || error) });
 }

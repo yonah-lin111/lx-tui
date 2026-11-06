@@ -183,8 +183,13 @@ pub(crate) fn reasoning_body_visible(
     message_index: usize,
     step_index: usize,
 ) -> bool {
+    let is_ai_web = source
+        .chat
+        .session_id
+        .as_deref()
+        .is_some_and(crate::app::update::is_ai_web_session);
     source.chat.reasoning_expanded(message_index, step_index)
-        && !source.chat.reasoning_streaming(message_index, step_index)
+        && (is_ai_web || !source.chat.reasoning_streaming(message_index, step_index))
 }
 
 /// 本地命令卡片：正文与折叠状态影响行数。
@@ -242,7 +247,7 @@ fn step_signature(
                     hash.write_u8(1);
                     let streaming = source.chat.reasoning_streaming(message_index, step_index);
                     let expanded = source.chat.reasoning_expanded(message_index, step_index);
-                    let body_visible = expanded && !streaming;
+                    let body_visible = reasoning_body_visible(source, message_index, step_index);
                     hash.write_u8(u8::from(streaming));
                     hash.write_u8(u8::from(expanded));
                     hash.write_u8(u8::from(body_visible));
