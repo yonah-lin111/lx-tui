@@ -185,9 +185,9 @@ fn wide_page_renders_brand_entries_and_input() {
         &mut PaneCache::default(),
     );
     let text = buffer_text(&buf);
-    assert!(text.contains("Native Agent"), "{text}");
-    assert!(text.contains("Hybrid Agent"), "{text}");
-    assert!(text.contains("Automation Agent"), "{text}");
+    assert!(text.contains("Native"), "{text}");
+    assert!(text.contains("Hybrid"), "{text}");
+    assert!(text.contains("Automation"), "{text}");
     assert!(text.contains("AI Web"), "{text}");
     assert!(text.contains("Ask anything"), "{text}");
     assert!(text.contains("Tip:"), "Tip 前缀可见");

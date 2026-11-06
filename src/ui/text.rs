@@ -226,9 +226,9 @@ pub const LX_SHELL_STOP_ARMED: &str = "Press Esc again to stop the running comma
 pub const LX_JUMP_BOTTOM: &str = "↓";
 pub const LX_JUMP_BOTTOM_HINT: &str = "jump to bottom";
 /// lx 页四个入口标签。
-pub const LX_ENTRY_NATIVE: &str = "Native Agent";
-pub const LX_ENTRY_HYBRID: &str = "Hybrid Agent";
-pub const LX_ENTRY_AUTOMATION: &str = "Automation Agent";
+pub const LX_ENTRY_NATIVE: &str = "Native";
+pub const LX_ENTRY_HYBRID: &str = "Hybrid";
+pub const LX_ENTRY_AUTOMATION: &str = "Automation";
 pub const LX_ENTRY_AI_WEB: &str = "AI Web";
 /// AI Web 目标站点标签。
 pub const AI_WEB_SITE_DEEPSEEK: &str = "DeepSeek";

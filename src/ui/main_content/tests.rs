@@ -137,7 +137,7 @@ fn lx_view_renders_page_with_input_cursor() {
     );
     assert!(cursor.is_some(), "聚焦时输入框产生硬件光标");
     let text = buffer_text(&buf);
-    assert!(text.contains("Native Agent"), "入口标签可见");
+    assert!(text.contains("Native"), "入口标签可见");
     assert!(text.contains("Ask anything"), "输入框占位可见");
     assert!(!text.contains("click [>_]"), "旧的切换提示已移除");
 }
