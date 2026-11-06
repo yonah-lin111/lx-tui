@@ -152,6 +152,9 @@ pub fn select_page_row(state: &mut AppState, row: usize) -> bool {
 
 /// 页列表搜索框编辑：按单行输入语义执行命令；过滤词变化后选中落回首项并钳制滚动。
 pub fn apply_page_search(state: &mut AppState, command: &EditorCommand) -> bool {
+    if matches!(command, EditorCommand::SelectAll) {
+        crate::app::update::clear_selection(state);
+    }
     let workspace = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
     let Some(ws) = state.workspaces.get_mut(workspace) else {

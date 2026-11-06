@@ -389,6 +389,119 @@ fn key_and_paste_snap_scrolled_pane_back_to_bottom() {
 }
 
 #[test]
+fn esc_clears_active_terminal_selection_and_stops_drag_without_forwarding_to_pty() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    scrolled_pane(&mut state, pane);
+    let inner = pane_inner(&geo, pane);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 按住鼠标拖出非空终端选区（尚未松开鼠标左键）。
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), inner.x, inner.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            inner.x + 5,
+            inner.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(
+        crate::app::update::terminal_selection_text(&state, pane).is_some(),
+        "拖拽产生非空终端选区"
+    );
+    let scrolled_offset = state
+        .pane_anywhere(pane)
+        .expect("terminal pane")
+        .terminal
+        .display_offset();
+    assert!(scrolled_offset > 0);
+
+    // 第一次按裸 Esc：仅清除终端选区并中止拖拽，不触发 write_to_pane（视口不跳回底部）。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(
+        crate::app::update::terminal_selection_text(&state, pane).is_none(),
+        "第一下 Esc 清除终端选区"
+    );
+    assert!(
+        state.terminal_selection.is_none(),
+        "第一下 Esc 终止进行中的终端鼠标拖选"
+    );
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("terminal pane")
+            .terminal
+            .display_offset(),
+        scrolled_offset,
+        "有选区时按 Esc 不穿透到终端 PTY（不重置回滚偏移）"
+    );
+
+    // 鼠标仍按住继续移动：因为拖拽已被 Esc 终止，不会重新拉出选区。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            inner.x + 8,
+            inner.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(
+        crate::app::update::terminal_selection_text(&state, pane).is_none(),
+        "Esc 终止拖选后继续移动鼠标不得重新产生选区"
+    );
+
+    // 第二次按裸 Esc（此时无选区）：正常透传到终端窗格（触发回滚归底）。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("terminal pane")
+            .terminal
+            .display_offset(),
+        0,
+        "无选区时按 Esc 正常透传给终端窗格"
+    );
+}
+
+#[test]
 fn terminal_selection_retains_on_mouse_up_scrolls_and_copies_on_ctrl_c() {
     let config = Config::default();
     let mut state = demo_terminal();

@@ -111,6 +111,27 @@ impl Overlay {
             _ => None,
         }
     }
+
+    /// 当前浮层是否存在可见且非空的文本选区。
+    pub fn has_selection(&self) -> bool {
+        self.input().is_some_and(TextInput::has_selection)
+    }
+
+    /// 清除当前浮层内单行输入框的文本选区（不受校验锁定状态限制）。
+    pub fn clear_selection(&mut self) {
+        match self {
+            Self::Rename(r) => r.input.clear_selection(),
+            Self::NewWorkspace(ws) => ws.input.clear_selection(),
+            Self::WorktreeOpen(w) => w.query.clear_selection(),
+            Self::NewNode(n) => n.name.clear_selection(),
+            Self::SaveDraft(d) => d.name.clear_selection(),
+            Self::ReferencedFolderInput(i) => i.input.clear_selection(),
+            Self::ReferencedFolderSearch(s) => s.query.clear_selection(),
+            Self::ResumeSessionEdit(r) => r.input.clear_selection(),
+            Self::Connect(panel) => panel.input.clear_selection(),
+            _ => {}
+        }
+    }
 }
 
 /// `/resume` 会话编辑模态：目标会话、标题输入与删除确认态。

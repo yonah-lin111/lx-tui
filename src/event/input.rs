@@ -32,6 +32,14 @@ pub(crate) fn handle_key_event(
         return;
     }
 
+    // 对齐 OpenCode (priority 101)：裸 Esc 最优先取消当前可见文字选区并消费按键，
+    // 绝不穿透到终端 PTY、模态浮层关闭、自动补全面板关闭、退出编辑态或双 Esc 中断。
+    if key.code == KeyCode::Esc && key.modifiers.is_empty() && update::escape_clear_selection(state)
+    {
+        *dirty = true;
+        return;
+    }
+
     let mode = state
         .active_pane()
         .map(|pane| pane.terminal.mode())

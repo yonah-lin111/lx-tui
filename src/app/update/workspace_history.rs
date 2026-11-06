@@ -901,6 +901,12 @@ pub fn apply_workspace_history_key(
     key: OverlayKey,
     visible_rows: usize,
 ) -> bool {
+    if key == OverlayKey::Esc && super::escape_clear_selection(state) {
+        return true;
+    }
+    if key == OverlayKey::SelectAll {
+        super::clear_selection(state);
+    }
     match key {
         OverlayKey::Esc => exit_workspace_history(state),
         OverlayKey::Up => move_workspace_history_selection(state, -1, visible_rows),

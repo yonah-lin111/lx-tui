@@ -655,7 +655,7 @@ impl AppState {
         let max_col = if self.prompt.text().is_empty() {
             0
         } else {
-            width.saturating_sub(1)
+            width.saturating_sub(1).max(u16::from(max_row == 0))
         };
         self.selection = Some(Selection::full(self.prompt.id(), max_row, max_col));
     }

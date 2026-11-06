@@ -82,6 +82,9 @@ pub fn set_lx_scroll(state: &mut AppState, id: PaneId, offset: usize) -> bool {
 /// 提及面板打开时 `↑`/`↓` 移动高亮、`Tab`/`Enter` 采纳、`Shift+Enter` 进入目录、`Esc` 关闭。
 /// 无面板时 `↑`/`↓` 先尝试历史切换（光标在文首/文末才接管），否则回落光标移动。
 pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
+    if command == LxInput::Escape && super::escape_clear_selection(state) {
+        return;
+    }
     let pane_id = state.active_tab().layout.focus();
     // 主内容区或底部输入框存在非空选区（且非 /resume 历史面板）时，
     // Ctrl/Cmd+C 只负责复制选区（由事件层处理），不清空输入框草稿。
@@ -382,6 +385,14 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::PageUp | LxInput::PageDown => {}
         // 停止进程只在后台任务面板里有对象；聊天页不消费（Ctrl+D 原本也无动作）。
         LxInput::StopProcess => {}
+        command if is_select_command(command) => {
+            if command == LxInput::SelectAll || !lx.has_text_selection() {
+                clear_selection(state);
+            }
+            if let Some(target) = state.pane_mut_anywhere(pane_id) {
+                apply_editor_edit(&mut target.lx, command);
+            }
+        }
         // 纯文本编辑（ask 面板的编辑态复用同一套逻辑）；未改写的命令落到下面专用分支。
         _ if apply_editor_edit(lx, command) => {
             after_editor_edit(state, pane_id, command);
@@ -566,6 +577,24 @@ pub(crate) fn apply_editor_edit<T: TextEdit>(target: &mut T, command: LxInput) -
         _ => return false,
     }
     true
+}
+
+/// 是否为键盘扩展/全选选区命令。
+pub(crate) fn is_select_command(command: LxInput) -> bool {
+    matches!(
+        command,
+        LxInput::SelectLeft
+            | LxInput::SelectRight
+            | LxInput::SelectWordLeft
+            | LxInput::SelectWordRight
+            | LxInput::SelectHome
+            | LxInput::SelectEnd
+            | LxInput::SelectUp
+            | LxInput::SelectDown
+            | LxInput::SelectAll
+            | LxInput::SelectDocStart
+            | LxInput::SelectDocEnd
+    )
 }
 
 /// 历史 prompt 与当前按键的路由结果。

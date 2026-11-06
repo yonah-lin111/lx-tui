@@ -192,6 +192,9 @@ pub fn edit_selected_prompt(state: &mut AppState) -> bool {
 /// 树视图搜索框编辑：按单行输入语义执行命令（字符/移动/删除/清空）；
 /// 过滤词变化后选中落到首个结果，清空后钳制；返回是否被搜索框消费。
 pub fn apply_prompt_search(state: &mut AppState, command: &EditorCommand) -> bool {
+    if matches!(command, EditorCommand::SelectAll) {
+        crate::app::update::clear_selection(state);
+    }
     let index = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
     let Some(workspace_state) = state.workspaces.get_mut(index) else {

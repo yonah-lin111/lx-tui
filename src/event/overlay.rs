@@ -23,29 +23,40 @@ pub(crate) fn handle_overlay_click(
     column: u16,
     row: u16,
 ) -> Option<(PaneId, Vec<u8>)> {
-    if let Some(overlay) = state.overlay.as_mut()
-        && let Some((area, input)) = overlay_input_hit_mut(screen, overlay)
+    if let Some((area, char_idx)) = state
+        .overlay
+        .as_mut()
+        .and_then(|overlay| overlay_input_hit_mut(screen, overlay))
+        .and_then(|(area, input)| {
+            let text_x = area.x.saturating_add(2);
+            let text_w = area.width.saturating_sub(2);
+            (row == area.y && column >= area.x && column < area.right()).then(|| {
+                let rel_col = column.saturating_sub(text_x);
+                let char_idx = ui::widgets::input::char_index_at_col(
+                    input.text(),
+                    input.cursor(),
+                    usize::from(text_w),
+                    rel_col,
+                );
+                (area, char_idx)
+            })
+        })
     {
-        let text_x = area.x.saturating_add(2);
-        let text_w = area.width.saturating_sub(2);
-        if row == area.y && column >= area.x && column < area.right() {
-            let rel_col = column.saturating_sub(text_x);
-            let char_idx = ui::widgets::input::char_index_at_col(
-                input.text(),
-                input.cursor(),
-                usize::from(text_w),
-                rel_col,
-            );
-            let clicks = crate::app::selection::next_click_count(
-                &mut state.selection_click,
-                column,
-                row,
-                Instant::now(),
-            );
+        let _ = area;
+        let clicks = crate::app::selection::next_click_count(
+            &mut state.selection_click,
+            column,
+            row,
+            Instant::now(),
+        );
+        update::clear_selection(state);
+        if let Some(overlay) = state.overlay.as_mut()
+            && let Some((_, input)) = overlay_input_hit_mut(screen, overlay)
+        {
             input.begin_selection_with_clicks(char_idx, clicks);
             state.overlay_input_drag = true;
-            return None;
         }
+        return None;
     }
     match state.overlay.as_ref() {
         Some(Overlay::Menu(menu)) => {

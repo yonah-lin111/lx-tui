@@ -32,6 +32,9 @@ pub fn apply_pasted_text(state: &mut AppState, text: String) {
 /// prompt 存在选区时：输入类命令用新内容替换选区，Backspace/Delete 删除选区，
 /// 其余命令先清除选区再执行（选区删除/替换作为一步撤销）。
 pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
+    if command == EditorCommand::Escape && super::escape_clear_selection(state) {
+        return;
+    }
     if command == EditorCommand::ToggleRecentPages {
         state.prompt.clear_panel();
         crate::app::update::toggle_prompt_recent(state);
@@ -109,7 +112,10 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::End => state.prompt.move_end(),
         EditorCommand::LineStart => state.prompt.move_line_start(),
         EditorCommand::LineEnd => state.prompt.move_line_end(),
-        EditorCommand::SelectAll => state.select_all_prompt(),
+        EditorCommand::SelectAll => {
+            clear_selection(state);
+            state.select_all_prompt();
+        }
         EditorCommand::WordLeft => state.prompt.move_word_backward(),
         EditorCommand::WordRight => state.prompt.move_word_forward(),
         EditorCommand::DeleteToLineStart => state.prompt.delete_to_line_start(),

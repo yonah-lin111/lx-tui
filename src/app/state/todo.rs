@@ -762,12 +762,24 @@ impl TodoPanel {
         self.editing.take()
     }
 
+    /// 当前编辑输入（只读）。
+    pub fn edit_input(&self) -> Option<&TextInput> {
+        self.editing.as_ref().map(|edit| &edit.input)
+    }
+
     /// 当前编辑输入（若有）。
     pub fn edit_input_mut(&mut self) -> Option<&mut TextInput> {
         if self.editing.is_some() {
             self.follow_selected = true;
         }
         self.editing.as_mut().map(|edit| &mut edit.input)
+    }
+
+    /// 清除当前编辑输入框选区（不触发视口跟随重置）。
+    pub fn clear_selection(&mut self) {
+        if let Some(edit) = self.editing.as_mut() {
+            edit.input.clear_selection();
+        }
     }
 
     /// 在 `at` 处插入一条记录并归一位置；返回新下标。

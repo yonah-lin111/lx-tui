@@ -150,6 +150,9 @@ pub fn commit_new_node(state: &mut AppState) {
 
 /// 新建节点浮层按键：回车确认、Esc 取消、其余为名称输入编辑。
 pub fn apply_new_node_key(state: &mut AppState, key: OverlayKey) {
+    if key == OverlayKey::Esc && crate::app::update::escape_clear_selection(state) {
+        return;
+    }
     match key {
         OverlayKey::Esc => cancel_new_node(state),
         OverlayKey::Enter => commit_new_node(state),
@@ -163,6 +166,9 @@ pub fn apply_new_node_key(state: &mut AppState, key: OverlayKey) {
 
 /// 草稿保存选择器按键：上下移动、回车确认、Esc 关闭；其余按键归属顶部提示词名称。
 pub fn apply_save_draft_key(state: &mut AppState, key: OverlayKey) {
+    if key == OverlayKey::Esc && crate::app::update::escape_clear_selection(state) {
+        return;
+    }
     match key {
         OverlayKey::Esc => state.overlay = None,
         OverlayKey::Up => {

@@ -106,6 +106,23 @@ fn apply_agent_reply_input(state: &mut AppState, pane: PaneId, command: LxInput)
         LxInput::DeleteToLineEnd => {
             edit_agent_reply(state, pane, |reply| reply.delete_to_line_end());
         }
+        LxInput::DeleteWordForward => {
+            edit_agent_reply(state, pane, |reply| reply.delete_word_forward());
+        }
+        LxInput::SelectAll => {
+            crate::app::update::clear_selection(state);
+            edit_agent_reply(state, pane, |reply| reply.select_all());
+        }
+        LxInput::Undo => {
+            edit_agent_reply(state, pane, |reply| {
+                reply.undo();
+            });
+        }
+        LxInput::Redo => {
+            edit_agent_reply(state, pane, |reply| {
+                reply.redo();
+            });
+        }
         // 输入态不响应列表/面板快捷键，全部吞掉。
         _ => {}
     }
