@@ -128,26 +128,35 @@ async fn run_chat(
     }
     drop(stdin);
 
-    // stderr 只用于诊断；必须持续读取，否则管道写满会卡住子进程。
-    if let Some(stderr) = child.stderr.take() {
+    // `ego-browser nodejs` 会将脚本内 `process.stdout.write` / `cliLog` 定向到 stderr，
+    // 因此同时读取 stdout 与 stderr 并汇总到同一行通道解析 `@@LX_AI_WEB@@` 协议行。
+    let (line_tx, mut line_rx) = mpsc::unbounded_channel::<String>();
+    if let Some(stdout) = child.stdout.take() {
+        let tx = line_tx.clone();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
+            let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                tracing::debug!(target: "lx::ai_web", %line, "ego-browser stderr");
+                if tx.send(line).is_err() {
+                    break;
+                }
             }
         });
     }
+    if let Some(stderr) = child.stderr.take() {
+        let tx = line_tx.clone();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    drop(line_tx);
 
-    let Some(stdout) = child.stdout.take() else {
-        finished(
-            &sender,
-            key,
-            failed(crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE),
-        );
-        return;
-    };
-    let mut lines = BufReader::new(stdout).lines();
     let mut received = false;
+    let mut last_diag: Option<String> = None;
     loop {
         tokio::select! {
             changed = cancel.changed() => {
@@ -159,9 +168,9 @@ async fn run_chat(
                 finished(&sender, key, StopReason::Cancelled);
                 return;
             }
-            line = lines.next_line() => {
+            line = line_rx.recv() => {
                 match line {
-                    Ok(Some(line)) => match parse_script_line(&line) {
+                    Some(line) => match parse_script_line(&line) {
                         Some(AiWebStreamEvent::Thinking(delta)) => {
                             received = true;
                             send_delta(&sender, &key, PartKind::Reasoning, delta);
@@ -186,24 +195,24 @@ async fn run_chat(
                             finished(&sender, key, StopReason::Complete);
                             return;
                         }
-                        None => {}
+                        None => {
+                            let trimmed = line.trim();
+                            if !trimmed.is_empty() && !trimmed.starts_with("[ego-browser:") {
+                                tracing::debug!(target: "lx::ai_web", %trimmed, "ego-browser output");
+                                last_diag = Some(trimmed.to_string());
+                            }
+                        }
                     },
-                    Ok(None) => {
+                    None => {
                         let reason = if received {
                             StopReason::Complete
                         } else {
-                            failed(crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE)
+                            let msg = last_diag
+                                .as_deref()
+                                .unwrap_or(crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE);
+                            failed(msg)
                         };
                         finished(&sender, key, reason);
-                        return;
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "ai web: failed to read ego-browser output");
-                        finished(
-                            &sender,
-                            key,
-                            failed(crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE),
-                        );
                         return;
                     }
                 }

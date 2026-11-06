@@ -17,7 +17,11 @@ function emit(obj) {
 
 async function main() {
   await useOrCreateTaskSpace(SPACE);
-  await openOrReuseTab(HOME, { wait: true, timeout: 25 });
+  const current = await pageInfo().catch(() => null);
+  const currentUrl = (current && current.url) || '';
+  if (!currentUrl.startsWith(HOME)) {
+    await openOrReuseTab(HOME, { wait: true, timeout: 25 });
+  }
 
   const loggedIn = await js(
     "Boolean(localStorage.getItem('userToken')) && !location.pathname.startsWith('/sign_in')",
@@ -49,11 +53,11 @@ async function main() {
   }
 
   if (ACTION === 'stop') {
-    await js(`
+    await js(String.raw`
       (() => {
         const labelled = Array.from(document.querySelectorAll('button, [role="button"], .ds-button')).find((el) => {
           const text = (el.getAttribute('aria-label') || '') + ' ' + (el.title || '');
-          return /stop|停止/i.test(text);
+          return text.toLowerCase().includes('stop') || text.includes('停止');
         });
         const button = document.querySelector('.ds-button--primary .ds-icon-stop')?.closest('button, [role="button"], .ds-button')
           || labelled
@@ -179,20 +183,22 @@ async function main() {
             this.applyFragments(op, value);
             return;
           }
-          const match = /^response\/fragments\/(-?\d+)\/([A-Za-z_]+)$/.exec(path);
-          if (match) {
-            const rawIndex = Number(match[1]);
-            const index = rawIndex < 0 ? Math.max(0, this.fragments.length + rawIndex) : rawIndex;
-            const field = match[2];
-            const fragment = this.fragments[index] || (this.fragments[index] = { content: '' });
-            if (field === 'content') {
-              this.applyFragmentContent(index, op, value);
-            } else if (field === 'type') {
-              fragment.type = value;
-            } else {
-              fragment[field] = value;
+          const parts = path.split('/');
+          if (parts.length === 4 && parts[0] === 'response' && parts[1] === 'fragments') {
+            const rawIndex = Number(parts[2]);
+            if (!Number.isNaN(rawIndex)) {
+              const index = rawIndex < 0 ? Math.max(0, this.fragments.length + rawIndex) : rawIndex;
+              const field = parts[3];
+              const fragment = this.fragments[index] || (this.fragments[index] = { content: '' });
+              if (field === 'content') {
+                this.applyFragmentContent(index, op, value);
+              } else if (field === 'type') {
+                fragment.type = value;
+              } else {
+                fragment[field] = value;
+              }
+              return;
             }
-            return;
           }
           if (path === 'response/thinking_content') {
             this.applyScalar('thinking', op, value);
@@ -295,11 +301,12 @@ async function main() {
               // Ignore keep-alive and non-patch frames.
             }
           };
+          const trimLeadingSpace = (s) => (s.startsWith(' ') ? s.slice(1) : s);
           const pump = () => reader.read().then((chunk) => {
             if (chunk.done) {
               if (buffer.trim()) {
                 if (buffer.startsWith('data:')) {
-                  dataLines.push(buffer.slice(5).replace(/^ /, ''));
+                  dataLines.push(trimLeadingSpace(buffer.slice(5)));
                 } else if (buffer.startsWith('event:')) {
                   eventName = buffer.slice(6).trim();
                 }
@@ -322,7 +329,7 @@ async function main() {
               if (line.startsWith('event:')) {
                 eventName = line.slice(6).trim();
               } else if (line.startsWith('data:')) {
-                dataLines.push(line.slice(5).replace(/^ /, ''));
+                dataLines.push(trimLeadingSpace(line.slice(5)));
               }
             }
             return pump();
@@ -349,7 +356,7 @@ async function main() {
           const text = target.querySelector('.ds-markdown');
           this.pushDom('thinking', think ? (think.innerText || '') : '');
           this.pushDom('text', text ? (text.innerText || '') : '');
-          const sample = (this.domThink || '') + '\u0000' + (this.domText || '');
+          const sample = (this.domThink || '') + ':::' + (this.domText || '');
           if (sample === this.domLastSample) {
             this.domStableTicks += 1;
           } else {
