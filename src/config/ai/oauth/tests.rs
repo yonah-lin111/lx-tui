@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -9,7 +11,7 @@ use tokio::sync::watch;
 
 use super::browser::{browser_authorize_url, parse_query, percent_decode, percent_encode};
 use super::{
-    credential_from_token, credential_needs_refresh, now_ms, pkce_challenge,
+    credential_from_token_for, credential_needs_refresh, now_ms, pkce_challenge,
     refresh_oauth_credential,
 };
 use crate::config::ai::connect::OAuthCredential;
@@ -65,7 +67,7 @@ fn percent_codec_round_trips() {
 #[test]
 fn credential_from_token_reads_api_key_and_expiry() {
     let value = json!({ "api_key": "sk-test", "api_key_expires_in": 3600 });
-    let mut credential = credential_from_token("browser", &value).expect("credential");
+    let mut credential = credential_from_token_for("poe", "browser", &value).expect("credential");
     assert_eq!(credential.access_token, "sk-test");
     assert!(credential.expires_at_ms.is_some());
     assert!(
@@ -74,6 +76,81 @@ fn credential_from_token_reads_api_key_and_expiry() {
     );
     credential.refresh_token = Some("refresh".to_string());
     assert!(credential_needs_refresh(&credential, now_ms() + 3_600_000));
+}
+
+fn unsigned_jwt(claims: serde_json::Value) -> String {
+    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
+    let payload =
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).expect("serialize JWT claims"));
+    format!("{header}.{payload}.signature")
+}
+
+#[test]
+fn openai_credential_adds_backend_endpoint_and_chatgpt_account() {
+    let id_token = unsigned_jwt(json!({
+        "https://api.openai.com/auth": {"chatgpt_account_id": "acct_nested"}
+    }));
+    let value = json!({"access_token": "access", "id_token": id_token});
+    let credential =
+        credential_from_token_for("openai", "chatgpt-browser", &value).expect("credential");
+    assert_eq!(
+        credential.metadata.get("apiEndpoint").map(String::as_str),
+        Some("https://chatgpt.com/backend-api/codex")
+    );
+    assert_eq!(
+        credential
+            .metadata
+            .get("chatgptAccountId")
+            .map(String::as_str),
+        Some("acct_nested")
+    );
+}
+
+#[test]
+fn openai_credential_falls_back_to_organization_id() {
+    let access_token = unsigned_jwt(json!({
+        "organizations": [{"id": "org_first"}]
+    }));
+    let value = json!({"access_token": access_token});
+    let credential =
+        credential_from_token_for("openai", "chatgpt-headless", &value).expect("credential");
+    assert_eq!(
+        credential
+            .metadata
+            .get("chatgptAccountId")
+            .map(String::as_str),
+        Some("org_first")
+    );
+}
+
+/// Device 流程显式传入 provider_id：OpenAI 专属 claim 触发同样的 metadata。
+#[test]
+fn credential_from_token_for_extracts_openai_provider_from_jwt_claims() {
+    let access_token = unsigned_jwt(json!({
+        "https://api.openai.com/auth": {"chatgpt_account_id": "acct_inferred"}
+    }));
+    let value = json!({"access_token": access_token});
+    let credential =
+        credential_from_token_for("openai", "chatgpt-headless", &value).expect("credential");
+    assert_eq!(
+        credential.metadata.get("apiEndpoint").map(String::as_str),
+        Some("https://chatgpt.com/backend-api/codex")
+    );
+    assert_eq!(
+        credential
+            .metadata
+            .get("chatgptAccountId")
+            .map(String::as_str),
+        Some("acct_inferred")
+    );
+}
+
+#[test]
+fn non_openai_credential_has_no_openai_metadata() {
+    let value = json!({"access_token": "access"});
+    let credential =
+        credential_from_token_for("github-copilot", "device", &value).expect("credential");
+    assert!(credential.metadata.is_empty());
 }
 
 #[tokio::test]

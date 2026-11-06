@@ -170,6 +170,7 @@ pub async fn start_oauth_flow(
         } => {
             let (code_tx, code_rx) = mpsc::channel(1);
             let started = browser::start_code_flow(
+                provider_id,
                 method_id,
                 authorize_url,
                 token_url,
@@ -195,7 +196,9 @@ pub async fn start_oauth_flow(
     ))
 }
 
-pub(super) fn credential_from_token(
+/// 按供应商补齐凭证 metadata（OpenAI 需要 ChatGPT 后端端点与账户 ID）。
+pub(super) fn credential_from_token_for(
+    provider_id: &str,
     method_id: &str,
     value: &Value,
 ) -> Result<OAuthCredential, String> {
@@ -206,14 +209,61 @@ pub(super) fn credential_from_token(
     let refresh_token = json_string(value, "refresh_token").filter(|token| !token.is_empty());
     let expires_in =
         json_i64(value, "expires_in").or_else(|| json_i64(value, "api_key_expires_in"));
+    let mut metadata = BTreeMap::new();
+    if provider_id == "openai" {
+        metadata.insert(
+            "apiEndpoint".to_string(),
+            "https://chatgpt.com/backend-api/codex".to_string(),
+        );
+        let id_token = json_string(value, "id_token");
+        let claims = jwt_claims(id_token.as_deref().unwrap_or(access_token.as_str()));
+        if let Some(account_id) = claims.as_ref().and_then(chatgpt_account_id) {
+            metadata.insert("chatgptAccountId".to_string(), account_id);
+        }
+    }
     Ok(OAuthCredential {
         method_id: method_id.to_string(),
         access_token,
         refresh_token,
         expires_at_ms: expires_in.map(|seconds| now_ms() + seconds * 1000),
         account_label: None,
-        metadata: BTreeMap::new(),
+        metadata,
     })
+}
+
+/// JWT 第二段：base64url 无填充解码为 JSON claims。
+fn jwt_claims(token: &str) -> Option<Value> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
+    serde_json::from_slice(&decoded).ok()
+}
+
+/// 从 JWT claims 中提取 ChatGPT 账户 ID。
+fn chatgpt_account_id(claims: &Value) -> Option<String> {
+    let auth = claims.get("https://api.openai.com/auth");
+    let direct = claims
+        .get("chatgpt_account_id")
+        .or_else(|| auth.and_then(|auth| auth.get("chatgpt_account_id")))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    if let Some(id) = direct {
+        return Some(id.to_string());
+    }
+    [Some(claims), auth]
+        .into_iter()
+        .flatten()
+        .find_map(|container| {
+            container
+                .get("organizations")
+                .and_then(Value::as_array)
+                .and_then(|organizations| organizations.first())
+                .and_then(|organization| organization.get("id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+        })
 }
 
 /// 刷新 OAuth 凭证（存在 `refresh_token` 时）。
@@ -278,7 +328,7 @@ pub async fn refresh_oauth_credential(
     }
     let value: Value = serde_json::from_str(&body)
         .map_err(|_| "token refresh returned invalid JSON".to_string())?;
-    let mut refreshed = credential_from_token(method_id, &value)?;
+    let mut refreshed = credential_from_token_for(provider_id, method_id, &value)?;
     refreshed.refresh_token = refreshed
         .refresh_token
         .or_else(|| credential.refresh_token.clone());
@@ -398,9 +448,7 @@ pub(super) fn pkce_challenge(verifier: &str) -> String {
 pub(super) fn random_token(bytes: usize) -> Result<String, String> {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let mut buffer = vec![0u8; bytes];
-    let filled = std::fs::File::open("/dev/urandom")
-        .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut buffer))
-        .is_ok();
+    let filled = crate::platform::fill_random_bytes(&mut buffer).is_ok();
     if !filled {
         let now = now_ms() as u64;
         let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

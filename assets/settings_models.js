@@ -23,19 +23,13 @@ const VARIANT_PRESETS = {
 let modelsDraft = null;      // 全局编辑草稿
 let modelsBaseline = null;   // 最近一次加载/保存的快照（Reset 回填基准）
 let selectedProviderKey = null;
-let activeProviderTab = 'quick'; // 'quick' | 'custom'
+let activeProviderTab = null; // 'quick' | 'custom'，由 settings_connect.js 初始化
 let selectedPresetId = null;
 const modelSelects = {};
 const expandedModels = new Set();
 
 function suffix() {
   return Date.now().toString(36).slice(-6);
-}
-
-// 当前编辑对象：Quick Connect 预设或自定义供应商，字段形状一致。
-function currentPreset() {
-  if (!modelsDraft) { return null; }
-  return (modelsDraft.quickConnect || []).find((preset) => preset.id === selectedPresetId) || null;
 }
 
 function currentProvider() {
@@ -74,10 +68,7 @@ function isProviderSettingsDirty() {
   });
 }
 
-function computeModelsDirty() {
-  return isModelSettingsDirty() || isProviderSettingsDirty();
-}
-
+// computeModelsDirty 已移除：模型页脏状态由 isModelSettingsDirty / isProviderSettingsDirty 分别驱动。
 function updateProviderDirtyDots() {
   const list = document.getElementById('provider-list');
   if (!list || !modelsDraft) { return; }
@@ -86,8 +77,7 @@ function updateProviderDirtyDots() {
     let dirty = false;
     if (activeProviderTab === 'quick') {
       const preset = (modelsDraft.quickConnect || []).find((item) => item.id === key);
-      const base = ((modelsBaseline && modelsBaseline.quickConnect) || []).find((item) => item.id === key);
-      dirty = !!preset && (!base || JSON.stringify(preset) !== JSON.stringify(base));
+      dirty = !!preset && isPresetDirty(preset);
     } else {
       const provider = modelsDraft.providers.find((item) => item.key === key);
       dirty = !!provider && isProviderDirty(provider);
@@ -200,16 +190,7 @@ function snapshotToDraft(snapshot) {
       apiKey: provider.apiKey || '',
       models: draftModels(provider.models)
     })),
-    quickConnect: (snapshot.quickConnect || []).map((preset) => ({
-      key: preset.id, id: preset.id, type: preset.type, name: preset.name,
-      note: preset.note || '', defaultBaseUrl: preset.defaultBaseUrl || '',
-      baseUrl: preset.baseUrl || '', enabled: !!preset.enabled, connected: !!preset.connected,
-      connectionType: preset.connectionType || null,
-      connectionLabel: preset.connectionLabel || 'Not connected',
-      apiKey: preset.apiKey || '', formAnswers: Object.assign({}, preset.formAnswers || {}),
-      envVars: preset.envVars || [], methods: preset.methods || [],
-      models: draftModels(preset.models), defaultModels: draftModels(preset.defaultModels)
-    }))
+    quickConnect: (snapshot.quickConnect || []).map(draftPresetSnapshot)
   };
 }
 
@@ -823,7 +804,8 @@ function fetchModels() {
   const body = {
     type: provider.type,
     baseUrl: provider.baseUrl.trim(),
-    apiKey: provider.apiKey || undefined
+    apiKey: provider.apiKey || undefined,
+    formAnswers: provider.formAnswers || {}
   };
   // 快捷连接预设总是带 providerId：OAuth 连接的 Key 不在页面上，需由后端物化。
   if (activeProviderTab === 'quick' || provider.apiKey) { body.providerId = provider.key; }
@@ -873,49 +855,6 @@ function hideFetchCandidates() {
   const box = document.getElementById('fetch-candidates');
   while (box.firstChild) { box.removeChild(box.firstChild); }
   box.classList.add('hidden');
-}
-
-function initProviderFields() {
-  // 小眼睛：在 password / text 之间切换，只影响本次显示，不改动草稿值。
-  const reveal = document.getElementById('prov-key-reveal');
-  const keyInput = document.getElementById('prov-api-key');
-  reveal.addEventListener('click', () => {
-    const show = keyInput.type === 'password';
-    keyInput.type = show ? 'text' : 'password';
-    reveal.classList.toggle('revealed', show);
-    reveal.setAttribute('aria-pressed', show ? 'true' : 'false');
-    reveal.setAttribute('aria-label', show ? 'Hide API key' : 'Show API key');
-    keyInput.focus();
-  });
-  document.getElementById('prov-name').addEventListener('input', (event) => {
-    const provider = currentProvider();
-    if (provider) { provider.name = event.target.value; markModelsDirty(); }
-  });
-  document.getElementById('prov-base-url').addEventListener('input', (event) => {
-    const provider = currentProvider();
-    if (provider) { provider.baseUrl = event.target.value; markModelsDirty(); }
-  });
-  document.getElementById('prov-api-key').addEventListener('input', (event) => {
-    const provider = currentProvider();
-    if (provider) { provider.apiKey = event.target.value; markModelsDirty(); }
-  });
-  document.getElementById('prov-enabled').addEventListener('change', (event) => {
-    const provider = currentProvider();
-    if (!provider) { return; }
-    provider.enabled = event.target.checked;
-    // 关掉默认模型或标题模型所属 provider 时清空对应选择，避免后端校验 422。
-    if (!provider.enabled && modelsDraft.defaultModel && modelsDraft.defaultModel.provider === provider.id) {
-      modelsDraft.defaultModel = null;
-      showToast('Default model cleared (its provider was turned off)', 'info');
-    }
-    if (!provider.enabled && modelsDraft.titleSummary && modelsDraft.titleSummary.provider === provider.id) {
-      modelsDraft.titleSummary = null;
-      showToast('Title model cleared (its provider was turned off)', 'info');
-    }
-    markModelsDirty();
-    renderProviders();
-    renderDefaultModel();
-  });
 }
 
 function initModelsView() {
@@ -979,7 +918,6 @@ function initModelsView() {
       markModelsDirty();
     }
   });
-  initProviderFields();
 }
 
 // 顶部操作条复用 settings.js 的 createActionBar（脏状态显示 "Unsaved changes"）。

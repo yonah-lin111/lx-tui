@@ -330,7 +330,7 @@ pub fn copy_referenced_menu_selected(state: &mut AppState) -> bool {
     };
     state.effects.push(Effect::CopyToClipboard {
         text: text_value,
-        anchor: None,
+        anchor: Some(state.prompt.id()),
     });
     true
 }

@@ -251,6 +251,82 @@ fn tool_history_encodes_tool_use_and_tool_result_blocks() {
     );
 }
 
+/// `tool_result` 之后的用户文本必须另起一条 user 消息，不得并入含结果的块数组。
+#[test]
+fn user_text_after_tool_result_starts_new_user_message() {
+    let mut req = request();
+    req.turns = Vec::new();
+    req.items = vec![
+        ModelItem::UserText("读 src/main.rs".into()),
+        ModelItem::AssistantToolCall {
+            call_id: "toolu_a".into(),
+            name: "read".into(),
+            input: json!({"path": "src/main.rs"}),
+        },
+        ModelItem::ToolResult {
+            call_id: "toolu_a".into(),
+            content: "1: fn main() {}".into(),
+            is_error: false,
+            images: Vec::new(),
+        },
+        ModelItem::UserText("继续".into()),
+    ];
+    let body = body_of(&req);
+    let messages = body["messages"].as_array().expect("messages");
+    let base = system_rule_prefix(&body);
+    assert_eq!(messages.len() - base, 4);
+    let result_message = &messages[base + 2];
+    assert_eq!(result_message["role"], "user");
+    assert_eq!(
+        result_message["content"].as_array().expect("blocks").len(),
+        1
+    );
+    assert_eq!(result_message["content"][0]["type"], "tool_result");
+    let text_message = &messages[base + 3];
+    assert_eq!(text_message["role"], "user");
+    assert_eq!(text_message["content"][0]["type"], "text");
+    assert_eq!(text_message["content"][0]["text"], "继续");
+}
+
+/// 多个连续 `tool_result` 仍合并在同一条 user 消息内。
+#[test]
+fn consecutive_tool_results_stay_in_one_user_message() {
+    let mut req = request();
+    req.turns = Vec::new();
+    req.items = vec![
+        ModelItem::UserText("读两个文件".into()),
+        ModelItem::AssistantToolCall {
+            call_id: "toolu_a".into(),
+            name: "read".into(),
+            input: json!({"path": "a.rs"}),
+        },
+        ModelItem::AssistantToolCall {
+            call_id: "toolu_b".into(),
+            name: "read".into(),
+            input: json!({"path": "b.rs"}),
+        },
+        ModelItem::ToolResult {
+            call_id: "toolu_a".into(),
+            content: "a".into(),
+            is_error: false,
+            images: Vec::new(),
+        },
+        ModelItem::ToolResult {
+            call_id: "toolu_b".into(),
+            content: "b".into(),
+            is_error: false,
+            images: Vec::new(),
+        },
+    ];
+    let body = body_of(&req);
+    let messages = body["messages"].as_array().expect("messages");
+    let base = system_rule_prefix(&body);
+    let results = messages[base + 2]["content"].as_array().expect("results");
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["tool_use_id"], "toolu_a");
+    assert_eq!(results[1]["tool_use_id"], "toolu_b");
+}
+
 #[test]
 fn thinking_budget_maps_to_thinking_structure() {
     let mut req = request();

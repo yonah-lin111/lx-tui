@@ -7,12 +7,30 @@
 //! - fetch 用当前编辑中的 base URL/key 做一次性远端发现，后台异步执行，
 //!   不堵本地连接；响应不含 Key。
 
+use std::collections::BTreeMap;
+
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::handlers::{Request, Response};
 use super::{ServiceState, SettingsEvent, ai_path, connect_path};
 
 pub(super) mod connect;
+
+/// `POST /api/models/fetch` 请求体。
+#[derive(Debug, Default, Deserialize)]
+struct FetchBody {
+    #[serde(default, rename = "providerId")]
+    provider_id: Option<String>,
+    #[serde(default, rename = "type")]
+    provider_type: Option<String>,
+    #[serde(default, rename = "baseUrl")]
+    base_url: Option<String>,
+    #[serde(default, rename = "apiKey")]
+    api_key: Option<String>,
+    #[serde(default, rename = "formAnswers")]
+    form_answers: BTreeMap<String, String>,
+}
 
 /// `/api/models` 系列入口。
 pub async fn route(request: &Request, state: &ServiceState) -> Response {
@@ -464,18 +482,30 @@ fn merge_api_key(
 
 /// POST fetch：远端模型发现（仅 openai-compatible 的 `/v1/models` 语义）。
 ///
-/// 使用请求 body 里的 `{type, baseUrl, apiKey}`（页面当前编辑值）；未带 Key
-/// 时回落服务端已保存 Key。在事件循环的 Tokio 运行时内直接 await（连接超时短），
-/// 绝不在运行时内再建运行时。
+/// 使用请求 body 里的 `{type, baseUrl, apiKey, formAnswers}`（页面当前编辑值）；
+/// 未带 Key 时回落服务端已保存 Key，未保存的预设按表单答案展开地址。在事件循环
+/// 的 Tokio 运行时内直接 await（连接超时短），绝不在运行时内再建运行时。
 async fn fetch_models(request: &Request, state: &ServiceState) -> Response {
-    let body: Value = match serde_json::from_str(&request.body) {
+    let body: FetchBody = match serde_json::from_str(&request.body) {
         Ok(value) => value,
         Err(error) => return Response::error(422, &format!("invalid json: {error}")),
     };
     // 短效 OAuth Token 在远端发现前先刷新，避免过期凭证直接 401。
-    crate::config::ai::oauth::ensure_connect_oauth_fresh(&ai_path(state)).await;
+    if crate::config::ai::oauth::ensure_connect_oauth_fresh(&ai_path(state)).await {
+        match crate::config::ai::connect::load_runtime_ai(&ai_path(state)) {
+            Ok(Some(runtime)) => {
+                let _ = state
+                    .sender()
+                    .send(SettingsEvent::ModelsChanged(Box::new(runtime)));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to reload runtime settings after oauth refresh");
+            }
+        }
+    }
     // providerId 或显式 {type, baseUrl, apiKey}。
-    let (base_url, api_key, transport) = match body.get("providerId").and_then(Value::as_str) {
+    let (base_url, api_key, transport) = match body.provider_id.as_deref() {
         Some(provider_id) => {
             let path = ai_path(state);
             let settings = match crate::config::ai::load_ai(&path) {
@@ -483,88 +513,83 @@ async fn fetch_models(request: &Request, state: &ServiceState) -> Response {
                 Ok(None) => crate::config::ai::AiSettings::empty(),
                 Err(error) => return Response::error(500, &error.to_string()),
             };
-            if let Some(provider) = settings.providers.get(provider_id) {
-                // 页面草稿值优先于已保存值（非空才覆盖）。
-                let base_url = body
-                    .get("baseUrl")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|url| !url.is_empty())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| provider.options.base_url.clone());
-                let key = body
-                    .get("apiKey")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|key| !key.is_empty())
-                    .map(str::to_string)
-                    .or_else(|| {
-                        provider
-                            .options
-                            .api_key
-                            .clone()
-                            .filter(|key| !key.trim().is_empty())
-                    });
-                (base_url, key, provider.kind.as_str().to_string())
-            } else {
-                // 快捷连接供应商：按 `connect.json` + 预设目录物化，
-                // 让 Fetch models 对已连接的预设同样可用。
-                let spec = crate::config::ai::presets::find_preset(provider_id);
-                let connect =
-                    crate::config::ai::connect::load_connect_or_default(&connect_path(state))
-                        .unwrap_or_default();
-                let materialized = spec.and_then(|spec| {
-                    crate::config::ai::connect::materialize_preset_provider(
-                        spec,
-                        connect.providers.get(provider_id),
+            let (saved_base_url, saved_key, transport) =
+                if let Some(provider) = settings.providers.get(provider_id) {
+                    (
+                        provider.options.base_url.clone(),
+                        provider.options.api_key.clone(),
+                        provider.kind.as_str().to_string(),
                     )
-                });
-                let Some((provider, _enabled)) = materialized else {
-                    return Response::error(422, "provider not found");
+                } else {
+                    // 快捷连接供应商：已保存时按 `connect.json` 物化；尚未保存
+                    // （Quick Connect 首次 Fetch）时按预设目录 + 表单答案展开，
+                    // 不能因为 connect.json 里还没有记录就报 provider not found。
+                    let Some(spec) = crate::config::ai::presets::find_preset(provider_id) else {
+                        return Response::error(422, "provider not found");
+                    };
+                    let connect =
+                        crate::config::ai::connect::load_connect_or_default(&connect_path(state))
+                            .unwrap_or_default();
+                    let record = connect.providers.get(provider_id);
+                    match crate::config::ai::connect::materialize_preset_provider(spec, record) {
+                        Some((provider, _enabled)) => (
+                            provider.options.base_url,
+                            provider.options.api_key,
+                            provider.kind.as_str().to_string(),
+                        ),
+                        None => {
+                            let mut answers = record
+                                .map(|record| record.form_answers.clone())
+                                .unwrap_or_default();
+                            for (key, value) in &body.form_answers {
+                                let value = value.trim();
+                                if !value.is_empty() {
+                                    answers.insert(key.clone(), value.to_string());
+                                }
+                            }
+                            let base_url = crate::config::ai::presets::resolve_preset_base_url(
+                                spec,
+                                &answers,
+                                body.base_url.as_deref(),
+                            );
+                            let env_key = spec.env_vars.iter().find_map(|name| {
+                                std::env::var(name)
+                                    .ok()
+                                    .map(|value| value.trim().to_string())
+                                    .filter(|value| !value.is_empty())
+                            });
+                            (base_url, env_key, spec.transport.as_str().to_string())
+                        }
+                    }
                 };
-                // 页面上的草稿值优先于已保存值；未展开的模板地址交回物化结果。
-                let base_url = body
-                    .get("baseUrl")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|url| !url.is_empty() && !url.contains("${"))
-                    .map(str::to_string)
-                    .unwrap_or_else(|| provider.options.base_url.clone());
-                let key = body
-                    .get("apiKey")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|key| !key.is_empty())
-                    .map(str::to_string)
-                    .or_else(|| {
-                        provider
-                            .options
-                            .api_key
-                            .clone()
-                            .filter(|key| !key.trim().is_empty())
-                    });
-                (base_url, key, provider.kind.as_str().to_string())
-            }
+            // 页面草稿值优先于已保存值（非空才覆盖；未展开模板交回物化结果）。
+            let base_url = body
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|url| !url.is_empty() && !url.contains("${"))
+                .map(str::to_string)
+                .unwrap_or(saved_base_url);
+            let key = body
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(str::to_string)
+                .or_else(|| saved_key.filter(|key| !key.trim().is_empty()));
+            (base_url, key, transport)
         }
         None => {
             let transport = body
-                .get("type")
-                .and_then(Value::as_str)
+                .provider_type
+                .as_deref()
                 .unwrap_or("openai-compatible")
                 .to_string();
-            let base_url = body
-                .get("baseUrl")
-                .and_then(Value::as_str)
-                .ok_or("baseUrl is required")
-                .map(str::to_string);
-            let api_key = body
-                .get("apiKey")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            match (base_url, api_key) {
-                (Ok(base_url), api_key) => (base_url, api_key, transport),
-                (Err(message), _) => return Response::error(422, message),
-            }
+            let Some(base_url) = body.base_url.as_deref().map(str::to_string) else {
+                return Response::error(422, "baseUrl is required");
+            };
+            let api_key = body.api_key;
+            (base_url, api_key, transport)
         }
     };
     if let Err(error) = crate::config::ai::validate_base_url(&base_url) {

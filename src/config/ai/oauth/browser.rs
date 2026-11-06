@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use super::super::connect::OAuthCredential;
 use super::super::presets::PresetProviderSpec;
 use super::{
-    OAUTH_TIMEOUT, OAuthPromptMode, OAuthStarted, credential_from_token, expand_flow_url,
+    OAUTH_TIMEOUT, OAuthPromptMode, OAuthStarted, credential_from_token_for, expand_flow_url,
     http_client, json_i64, json_string, now_ms, pkce_challenge, random_token,
 };
 
@@ -34,7 +34,13 @@ pub(super) async fn start_browser_flow(
         .map_err(|error| format!("OAuth callback listener has no address: {error}"))?
         .port();
     let callback_path = callback_path(spec.id);
-    let redirect = format!("http://127.0.0.1:{port}{callback_path}");
+    // 固定端口的供应商（OpenAI 1455 / DigitalOcean 19845）要求 localhost 白名单，
+    // 监听本身仍只绑定 127.0.0.1。
+    let redirect = if fixed_port.is_some() {
+        format!("http://localhost:{port}{callback_path}")
+    } else {
+        format!("http://127.0.0.1:{port}{callback_path}")
+    };
     let verifier = random_token(32)?;
     let challenge = pkce_challenge(&verifier);
     let state = random_token(24)?;
@@ -123,6 +129,7 @@ pub(super) async fn run_browser_flow(mut flow: BrowserFlow) -> Result<OAuthCrede
         BrowserCallback::Code(code) => {
             let mut credential = exchange_authorization_code(
                 &client,
+                &flow.provider_id,
                 &flow.method_id,
                 &flow.token_url,
                 &flow.client_id,
@@ -291,6 +298,7 @@ async fn wait_for_callback(flow: &mut BrowserFlow) -> Result<BrowserCallback, St
 
 async fn exchange_authorization_code(
     client: &reqwest::Client,
+    provider_id: &str,
     method_id: &str,
     token_url: &str,
     client_id: &str,
@@ -321,11 +329,12 @@ async fn exchange_authorization_code(
     }
     let value: Value =
         serde_json::from_str(&body).map_err(|_| "token response is invalid JSON".to_string())?;
-    credential_from_token(method_id, &value)
+    credential_from_token_for(provider_id, method_id, &value)
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn start_code_flow(
+    provider_id: &str,
     method_id: &str,
     authorize_url: &str,
     token_url: &str,
@@ -356,6 +365,7 @@ pub(super) fn start_code_flow(
         instructions: "Paste the authorization code shown in your browser.".to_string(),
         mode: OAuthPromptMode::Code,
     };
+    let provider_id = provider_id.to_string();
     let method_id = method_id.to_string();
     let client_id = client_id.to_string();
     let token_url = token;
@@ -366,6 +376,7 @@ pub(super) fn start_code_flow(
                 Some(code) => match http_client() {
                     Ok(client) => exchange_authorization_code(
                         &client,
+                        &provider_id,
                         &method_id,
                         &token_url,
                         &client_id,
@@ -630,42 +641,33 @@ fn escape_html(value: &str) -> String {
     out
 }
 
+/// 浏览器回调页模板（`{{TITLE}}` / `{{BODY}}` 占位）。
+const CALLBACK_PAGE: &str = include_str!("../../../../assets/oauth_callback.html");
+/// DigitalOcean 隐式授权：浏览器从 URL fragment 取 token 并 POST 回本地。
+const IMPLICIT_PAGE: &str = include_str!("../../../../assets/oauth_implicit.html");
+
 fn success_page(provider: &str) -> String {
-    format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Authorization complete</title></head>\
-<body style=\"font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem\">\
-<h1>Authorization complete</h1><p>{provider} is now connected to lx. You can close this window.</p></body></html>",
-        provider = escape_html(provider)
-    )
+    let body = format!(
+        "<h1>Authorization complete</h1><p>{} is now connected to lx. You can close this window.</p>",
+        escape_html(provider)
+    );
+    callback_page("Authorization complete", &body)
 }
 
 fn error_page(message: &str) -> String {
-    format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Authorization failed</title></head>\
-<body style=\"font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem\">\
-<h1>Authorization failed</h1><p>{message}</p></body></html>",
-        message = escape_html(message)
-    )
+    let body = format!(
+        "<h1>Authorization failed</h1><p>{}</p>",
+        escape_html(message)
+    );
+    callback_page("Authorization failed", &body)
+}
+
+fn callback_page(title: &str, body: &str) -> String {
+    CALLBACK_PAGE
+        .replace("{{TITLE}}", &escape_html(title))
+        .replace("{{BODY}}", body)
 }
 
 fn digitalocean_bootstrap_page() -> String {
-    "<!doctype html><html><head><meta charset=\"utf-8\"><title>Authorization complete</title></head>\
-<body style=\"font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem\">\
-<h1>Finishing sign-in…</h1><p id=\"status\">Waiting for the authorization token.</p>\
-<script>\
-var params = new URLSearchParams(window.location.hash.replace(/^#/, ''));\
-var token = params.get('access_token');\
-var state = params.get('state');\
-if (!token) { document.getElementById('status').textContent = 'Missing access token.'; }\
-else {\
-fetch('/auth/token', { method: 'POST', headers: { 'Content-Type': 'application/json' },\
-body: JSON.stringify({ access_token: token, state: state, expires_in: params.get('expires_in') }) })\
-.then(function (response) {\
-if (!response.ok) { throw new Error('Token exchange failed'); }\
-document.getElementById('status').textContent = 'Authorization complete. You can close this window.';\
-})\
-.catch(function (error) { document.getElementById('status').textContent = error.message; });\
-}\
-</script></body></html>"
-        .to_string()
+    IMPLICIT_PAGE.to_string()
 }

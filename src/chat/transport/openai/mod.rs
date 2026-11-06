@@ -18,7 +18,7 @@
 use serde_json::{Value, json};
 
 use super::super::transport::tools::{
-    HistoryBlock, ToolCallBuffer, arguments_string, history_blocks, openai_chat_tools,
+    HistoryBlock, Role, ToolCallBuffer, arguments_string, history_blocks, openai_chat_tools,
     protocol_error,
 };
 use super::{
@@ -35,7 +35,8 @@ const OFFICIAL_BASE: &str = "https://api.openai.com/v1";
 
 /// 构造 Chat Completions 请求。
 ///
-/// `compatible` 为真时用配置 baseURL（典型已含 `/v1`）；官方端点固定 URL。
+/// 配置了 baseURL 时优先使用（官方预设如 `opencode` / `github-copilot` 也会带
+/// 自定义端点）；仅空 baseURL 时回退官方 URL，`compatible` 且为空视为配置缺失。
 /// 四工具定义恒发（`tool_choice` 保持默认 auto）；`items` 非空时按 call/result
 /// 成对编码历史，为空时沿用纯文本 `turns`（与旧行为逐字等价）。
 pub fn build(
@@ -45,10 +46,14 @@ pub fn build(
     compatible: bool,
 ) -> Result<TransportRequest, String> {
     let key = api_key.ok_or("missing api key")?;
-    let url = if compatible {
-        join_url(base_url, "chat/completions")
-    } else {
+    let base = base_url.trim();
+    let url = if base.is_empty() {
+        if compatible {
+            return Err("missing base url".to_string());
+        }
         join_url(OFFICIAL_BASE, "chat/completions")
+    } else {
+        join_url(base, "chat/completions")
     };
     let require_reasoning = requires_reasoning_content(request, base_url);
     let messages = messages_of(request, require_reasoning)?;
@@ -166,7 +171,13 @@ fn messages_of(request: &ChatRequest, require_reasoning: bool) -> Result<Vec<Val
         match block {
             HistoryBlock::Text { role, text } => {
                 flush_tool_media(&mut messages, &mut pending_media);
-                messages.push(json!({"role": role.as_str(), "content": text}));
+                let mut message = json!({"role": role.as_str(), "content": text});
+                // Kimi / DeepSeek 开启 thinking 时要求所有历史 assistant 消息都带
+                // `reasoning_content`，纯文本（无 tool_calls）消息也不例外。
+                if require_reasoning && role == Role::Assistant {
+                    message["reasoning_content"] = json!("");
+                }
+                messages.push(message);
             }
             HistoryBlock::UserContent { text, images } => {
                 flush_tool_media(&mut messages, &mut pending_media);

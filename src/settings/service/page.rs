@@ -1,8 +1,9 @@
 //! 设置页前端资源：`assets/` 下的 HTML/CSS/JS，经 `include_str!` 编译进二进制。
 //!
-//! 页面与静态资源分离：`GET /` 返回 `settings.html`，`GET /settings.css`、
-//! `GET /settings.js` 返回对应资源。所有资源自包含、无外部依赖，遵循
-//! `docs/standards/html-assets.md`。
+//! 页面与静态资源分离：`GET /` 返回 `settings.html`，`GET /settings.css` 与
+//! `settings.js`、`settings_models.js`、`settings_connect.js`、`settings_mcp.js`、
+//! `settings_skills.js`、`settings_subagents.js` 分别返回对应脚本。所有资源自包含、
+//! 无外部依赖，遵循 `docs/standards/html-assets.md`。
 
 /// 设置页正文；`token` 从 `location.search` 读取，所有请求附带。
 pub fn html() -> &'static str {

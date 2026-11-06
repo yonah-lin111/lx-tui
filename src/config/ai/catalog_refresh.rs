@@ -185,7 +185,25 @@ fn parse_modalities(value: Option<&Value>) -> Option<Value> {
     if input.is_none() && output.is_none() {
         return None;
     }
-    Some(json_object(input, output))
+    let input = normalize_modalities(input);
+    let output = normalize_modalities(output);
+    Some(json_object(input.as_ref(), output.as_ref()))
+}
+
+/// models.dev v2 把图片输入写成 MIME（`image/png` 等）：归一为 `image` 并去重。
+fn normalize_modalities(items: Option<&Vec<Value>>) -> Option<Vec<Value>> {
+    let items = items?;
+    let mut normalized: Vec<Value> = Vec::with_capacity(items.len());
+    for item in items {
+        let value = match item.as_str() {
+            Some(text) if text.starts_with("image/") => Value::String("image".to_string()),
+            _ => item.clone(),
+        };
+        if !normalized.contains(&value) {
+            normalized.push(value);
+        }
+    }
+    Some(normalized)
 }
 
 fn json_object(input: Option<&Vec<Value>>, output: Option<&Vec<Value>>) -> Value {

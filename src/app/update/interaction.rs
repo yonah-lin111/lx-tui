@@ -181,14 +181,15 @@ pub fn dismiss_toast(state: &mut AppState) -> bool {
 /// - 若当前打开了居中模态弹窗（`Overlay` 非 `Menu`），一律走全局 `AppState.toast`（`anchor: None`），
 ///   在屏幕顶部居中绘制且晚于模态渲染，避免落在底层固定容器里被模态压暗或遮挡；
 /// - 否则有锚点且锚点窗格是 lx 页 → 落该窗格自己的槽；
-/// - 其余情况（无锚点、窗格已不存在、锚点是终端视图）保持全局 toast。
+/// - 锚点窗格已关闭且不是 prompt 栏 → 清空 anchor 后降级到全局槽，避免指向已不存在的容器；
+/// - 其余情况（无锚点、锚点是终端视图或 prompt 栏）保持全局 toast。
 pub fn show_toast_at(state: &mut AppState, anchor: Option<PaneId>, toast: Toast) {
+    let mut toast = toast;
     if state
         .overlay
         .as_ref()
         .is_some_and(|overlay| !matches!(overlay, crate::app::overlay::Overlay::Menu(_)))
     {
-        let mut toast = toast;
         toast.anchor = None;
         show_toast(state, toast);
         return;
@@ -201,7 +202,13 @@ pub fn show_toast_at(state: &mut AppState, anchor: Option<PaneId>, toast: Toast)
         {
             show_lx_toast(state, pane, toast);
         }
-        _ => show_toast(state, toast),
+        Some(pane) => {
+            if state.pane_anywhere(pane).is_none() && pane != state.prompt.id() {
+                toast.anchor = None;
+            }
+            show_toast(state, toast);
+        }
+        None => show_toast(state, toast),
     }
 }
 

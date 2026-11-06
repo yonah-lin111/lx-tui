@@ -496,6 +496,113 @@ async fn put_connect_api_key_replaces_oauth_credential() {
 }
 
 #[tokio::test]
+async fn first_api_key_connect_enables_preset_even_when_payload_disables_it() {
+    let (service, mut events, _dir) = start_models("models-connect-first-enable").await;
+    let port = service.port();
+    let token = service.token().to_string();
+
+    // 网页 Quick Connect 默认不勾选 Enabled；首次提交 Key 必须强制启用。
+    let payload = r#"{"providers":[{"id":"cerebras","apiKey":"sk-test","enabled":false}]}"#;
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/connect?token={token}"),
+            payload,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{}", body(&saved));
+
+    let got = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    let parsed: serde_json::Value = serde_json::from_str(body(&got)).expect("json");
+    let preset = parsed["quickConnect"]
+        .as_array()
+        .expect("quickConnect")
+        .iter()
+        .find(|preset| preset["id"] == serde_json::json!("cerebras"))
+        .expect("cerebras preset");
+    assert_eq!(preset["connected"], serde_json::json!(true));
+    assert_eq!(preset["enabled"], serde_json::json!(true));
+
+    let event = tokio::time::timeout(Duration::from_secs(3), events.recv())
+        .await
+        .expect("event within timeout")
+        .expect("event present");
+    match event {
+        SettingsEvent::ModelsChanged(settings) => {
+            assert!(settings.providers.contains_key("cerebras"));
+            assert!(
+                settings.enabled_providers.iter().any(|id| id == "cerebras"),
+                "first connect must land in enabled_providers"
+            );
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn fetch_models_works_for_unsaved_quick_connect_preset() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind mock");
+    let model_port = listener.local_addr().expect("addr").port();
+    let mock = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut buffer = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut chunk).await.expect("read");
+            if read == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+            if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let payload = r#"{"data":[{"id":"unsaved-m1","owned_by":"preset"}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+        let _ = stream.shutdown().await;
+        String::from_utf8_lossy(&buffer).into_owned()
+    });
+
+    let (service, _events, _dir) = start_models("models-connect-fetch-unsaved").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    // 未保存 connect.json：直接按预设 + 请求里的 baseUrl/apiKey 发现模型。
+    let payload = format!(
+        r#"{{"providerId":"openai","baseUrl":"http://127.0.0.1:{model_port}/v1","apiKey":"sk-unsaved","formAnswers":{{}}}}"#
+    );
+    let response = request(
+        port,
+        &write(
+            "POST",
+            &format!("/api/models/fetch?token={token}"),
+            &payload,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&response), 200, "{}", body(&response));
+    let parsed: serde_json::Value = serde_json::from_str(body(&response)).expect("json");
+    assert_eq!(parsed["models"][0]["id"], serde_json::json!("unsaved-m1"));
+    let recorded = mock.await.expect("mock join");
+    assert!(recorded.contains("GET /v1/models"), "{recorded}");
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn put_connect_does_not_freeze_materialized_defaults() {
     let (service, _events, _dir) = start_models("models-connect-defaults-not-frozen").await;
     let port = service.port();

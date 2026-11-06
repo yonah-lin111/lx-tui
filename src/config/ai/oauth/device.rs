@@ -9,7 +9,7 @@ use tokio::sync::{oneshot, watch};
 use super::super::connect::OAuthCredential;
 use super::super::presets::PresetProviderSpec;
 use super::{
-    OAuthPromptMode, OAuthStarted, credential_from_token, http_client, json_i64, json_string,
+    OAuthPromptMode, OAuthStarted, credential_from_token_for, http_client, json_i64, json_string,
     wait_or_cancel,
 };
 
@@ -240,7 +240,7 @@ async fn poll_device_grant(
                 }
             }
         };
-        let mut credential = credential_from_token(method_id, &value)?;
+        let mut credential = credential_from_token_for(provider_id, method_id, &value)?;
         if provider_id == "github-copilot" {
             credential = github_copilot_metadata(client, form_answers, credential).await;
         } else if provider_id.starts_with("opencode")

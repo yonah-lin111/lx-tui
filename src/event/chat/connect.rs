@@ -362,11 +362,33 @@ async fn save_preset_connection(
     Ok((settings, runtime))
 }
 
+/// 发起聊天请求前刷新 OAuth 凭证；无刷新时沿用发送时冻结的 Key。
+///
+/// 长时运行后 access token 可能已过期，发送时冻结的 `FrozenModel.api_key` 会过期导致
+/// 401；调用方在真正发起 HTTP 请求前用返回值覆盖本次请求的 key。
+pub(crate) async fn chat_api_key(provider_id: &str, frozen: String) -> String {
+    let Some(ai_path) = ai::ai_config_path().ok() else {
+        return frozen;
+    };
+    if !crate::config::ai::oauth::ensure_connect_oauth_fresh(&ai_path).await {
+        return frozen;
+    }
+    connect::load_runtime_ai(&ai_path)
+        .ok()
+        .flatten()
+        .and_then(|settings| settings.providers.get(provider_id)?.options.api_key.clone())
+        .filter(|key| !key.is_empty())
+        .unwrap_or(frozen)
+}
+
 /// 后台刷新云端目录与已连接供应商模型，并重新加载运行时快照。
 async fn refresh_models(
     provider_id: Option<&str>,
 ) -> Result<(usize, ai::AiSettings, ConnectSettings), String> {
     let ai_path = ai::ai_config_path().map_err(|error| error.to_string())?;
+    // Token 必须在校验 `/models` 之前刷新：否则过期 OAuth 会让单 provider 探测直接 401，
+    // 即使刷新成功也不会重试本次请求。
+    crate::config::ai::oauth::ensure_connect_oauth_fresh(&ai_path).await;
     let count = crate::config::ai::catalog_refresh::refresh_connected_provider_models(
         &ai_path,
         provider_id,
@@ -375,7 +397,6 @@ async fn refresh_models(
     let connect_path = connect_path_for_ai_path(&ai_path);
     let connect_settings =
         load_connect_or_default(&connect_path).map_err(|error| error.to_string())?;
-    crate::config::ai::oauth::ensure_connect_oauth_fresh(&ai_path).await;
     let runtime = connect::load_runtime_ai_or_empty(&ai_path).map_err(|error| error.to_string())?;
     Ok((count, runtime, connect_settings))
 }

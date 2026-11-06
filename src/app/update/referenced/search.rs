@@ -245,7 +245,7 @@ pub fn copy_referenced_entry_reference(state: &mut AppState) -> bool {
     };
     state.effects.push(Effect::CopyToClipboard {
         text: text_value,
-        anchor: None,
+        anchor: Some(state.prompt.id()),
     });
     true
 }
@@ -258,7 +258,7 @@ pub fn copy_referenced_root_path(state: &mut AppState) -> bool {
     let path = search.root.to_string_lossy().into_owned();
     state.effects.push(Effect::CopyToClipboard {
         text: path,
-        anchor: None,
+        anchor: Some(state.prompt.id()),
     });
     true
 }

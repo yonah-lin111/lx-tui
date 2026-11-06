@@ -1,9 +1,7 @@
-
 const token = new URLSearchParams(location.search).get('token') || '';
 let state = null;
 let selected = null;
 let draft = false;
-
 function api(path, options) {
   const url = path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
   return fetch(url, Object.assign({headers: {'Content-Type': 'application/json'}}, options || {})).then(async (response) => {
@@ -22,12 +20,10 @@ function api(path, options) {
 
 function showTab(name) {
   resetWebSearchReveals();
-  const tabs = {general: 'tab-general', commands: 'tab-commands', model: 'tab-model', provider: 'tab-provider', mcp: 'tab-mcp', skills: 'tab-skills', subagents: 'tab-subagents'};
-  const views = {general: 'view-general', commands: 'view-commands', model: 'view-model', provider: 'view-provider', mcp: 'view-mcp', skills: 'view-skills', subagents: 'view-subagents'};
-  for (const key of Object.keys(tabs)) {
+  for (const key of TAB_KEYS) {
     const active = key === name;
-    document.getElementById(tabs[key]).classList.toggle('active', active);
-    document.getElementById(views[key]).classList.toggle('hidden', !active);
+    document.getElementById('tab-' + key).classList.toggle('active', active);
+    document.getElementById('view-' + key).classList.toggle('hidden', !active);
   }
   if (name === 'model' || name === 'provider') {
     if (typeof modelsDraft === 'undefined' || modelsDraft === null) {
@@ -52,11 +48,9 @@ function showTab(name) {
 // ===== 页面级组件：toast 与自绘 select =====
 // 操作结果反馈走 toast；常驻状态（数量、revision、key 状态）留在页面内。
 // 所有 <select> 一律用 createSelect，避免系统原生弹层与黑灰主题分裂。
-
 const toastHost = document.createElement('div');
 toastHost.className = 'toast-host';
 document.body.appendChild(toastHost);
-
 function showToast(message, kind) {
   const item = document.createElement('div');
   item.className = 'toast' + (kind ? ' ' + kind : '');
@@ -70,7 +64,6 @@ function showToast(message, kind) {
 
 // 菜单挂在 body 上用固定定位，避免被滚动容器裁剪；打开中的实例统一关闭。
 const openSelects = new Set();
-
 function createSelect(host, config) {
   const optionsConfig = config || {};
   if (host._selectInstance) {
@@ -95,23 +88,19 @@ function createSelect(host, config) {
   button.appendChild(label);
   button.appendChild(caret);
   host.appendChild(button);
-
   const menu = document.createElement('div');
   menu.className = 'select-menu hidden';
   menu.setAttribute('role', 'listbox');
   document.body.appendChild(menu);
-
   let options = [];
   let current = optionsConfig.value === undefined ? '' : optionsConfig.value;
   let active = 0;
   let opened = false;
-
   const renderLabel = () => {
     const match = options.find((option) => option.value === current);
     label.textContent = match ? match.label : (optionsConfig.placeholder || '');
     label.classList.toggle('placeholder', !match);
   };
-
   const renderMenu = () => {
     while (menu.firstChild) { menu.removeChild(menu.firstChild); }
     options.forEach((option, index) => {
@@ -124,7 +113,6 @@ function createSelect(host, config) {
       menu.appendChild(row);
     });
   };
-
   const reposition = () => {
     const rect = button.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom - 8;
@@ -141,14 +129,12 @@ function createSelect(host, config) {
       menu.style.top = (rect.bottom + 4) + 'px';
     }
   };
-
   const close = () => {
     opened = false;
     menu.classList.add('hidden');
     button.setAttribute('aria-expanded', 'false');
     openSelects.delete(instance);
   };
-
   const choose = (value, notify) => {
     const changed = value !== current;
     current = value;
@@ -157,7 +143,6 @@ function createSelect(host, config) {
     if (notify && changed && typeof optionsConfig.onChange === 'function') { optionsConfig.onChange(value); }
     refreshActionBars();
   };
-
   const open = () => {
     if (opened || button.disabled) { return; }
     openSelects.forEach((other) => { other.close(); });
@@ -169,7 +154,6 @@ function createSelect(host, config) {
     reposition();
     openSelects.add(instance);
   };
-
   button.addEventListener('click', () => { if (opened) { close(); } else { open(); } });
   button.addEventListener('keydown', (event) => {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -188,7 +172,6 @@ function createSelect(host, config) {
     }
     if (event.key === 'Escape') { close(); }
   });
-
   const instance = {
     el: host,
     menu,
@@ -217,7 +200,6 @@ function createSelect(host, config) {
   instance.setOptions(optionsConfig.options || [], current);
   return instance;
 }
-
 document.addEventListener('click', (event) => {
   openSelects.forEach((instance) => {
     if (!instance.el.contains(event.target) && !instance.menu.contains(event.target)) { instance.close(); }
@@ -225,7 +207,6 @@ document.addEventListener('click', (event) => {
 });
 window.addEventListener('resize', () => { openSelects.forEach((instance) => instance.reposition()); });
 window.addEventListener('scroll', () => { openSelects.forEach((instance) => instance.reposition()); }, true);
-
 function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) { node.className = className; }
@@ -236,16 +217,13 @@ function element(tag, className, text) {
 // ===== 页面级组件：视图操作条（状态 + Reset + Save）=====
 // 每个视图注册一个控制器（isDirty/save/reset），标题行右侧只有这一套按钮；
 // 页面内不再有其它保存入口。状态圆点：绿=已保存，白=未保存，红=保存失败，灰脉冲=保存中。
-
 const actionBars = {};
 const TAB_KEYS = ['general', 'commands', 'model', 'provider', 'mcp', 'skills', 'subagents'];
 let settingsSaving = false;
 let settingsFailed = false;
-
 function anySettingsDirty() {
   return Object.values(actionBars).some((bar) => bar.isDirty());
 }
-
 // 任意视图的 Save 都保存全部脏视图；tab 左侧黄点由同一份 isDirty 派生。
 function saveAllDirty() {
   if (settingsSaving) { return Promise.resolve(); }
@@ -291,19 +269,11 @@ function createActionBar(hostId, controller) {
   const refresh = (knownDirty, knownAnyDirty) => {
     const dirty = knownDirty !== undefined ? knownDirty : controller.isDirty();
     const anyDirty = knownAnyDirty !== undefined ? knownAnyDirty : anySettingsDirty();
-    if (settingsSaving) {
-      dot.className = 'status-dot saving';
-      text.textContent = 'Saving…';
-    } else if (settingsFailed) {
-      dot.className = 'status-dot error';
-      text.textContent = 'Save failed';
-    } else if (anyDirty) {
-      dot.className = 'status-dot dirty';
-      text.textContent = 'Unsaved changes';
-    } else {
-      dot.className = 'status-dot clean';
-      text.textContent = 'Saved';
-    }
+    const state = settingsSaving ? ['saving', 'Saving…']
+      : settingsFailed ? ['error', 'Save failed']
+        : anyDirty ? ['dirty', 'Unsaved changes'] : ['clean', 'Saved'];
+    dot.className = 'status-dot ' + state[0];
+    text.textContent = state[1];
     save.disabled = settingsSaving || !anyDirty;
     reset.disabled = settingsSaving || !dirty;
   };
@@ -349,7 +319,6 @@ function refreshActionBars() {
     if (tab) { tab.classList.toggle('dirty', !!dirtyMap[key]); }
   }
 }
-
 document.addEventListener('input', refreshActionBars);
 document.addEventListener('change', refreshActionBars);
 
@@ -358,7 +327,6 @@ document.addEventListener('change', refreshActionBars);
 const CONFIG_KEYS = ['sidebar_width','sidebar_min_width','sidebar_max_width','narrow_width','min_width','min_height','min_pane_width','min_pane_height'];
 const WEB_SEARCH_KEYS = ['web_search_exa_api_key', 'web_search_tavily_api_key'];
 let generalBaseline = null;
-
 function generalValues() {
   const values = {};
   for (const key of CONFIG_KEYS) {
@@ -405,7 +373,6 @@ async function saveGeneral() {
     throw error;
   }
 }
-
 function applyGeneralData(data) {
   resetWebSearchReveals();
   for (const key of CONFIG_KEYS) {
@@ -418,7 +385,6 @@ function applyGeneralData(data) {
   document.getElementById('general-status').textContent = 'Settings loaded';
   document.getElementById('general-status').className = 'status ok';
 }
-
 // 小眼睛：在 password / text 之间切换，只影响本次显示，不改动输入值。
 function bindPasswordReveal(inputId, buttonId) {
   const input = document.getElementById(inputId);
@@ -433,7 +399,6 @@ function bindPasswordReveal(inputId, buttonId) {
     input.focus();
   });
 }
-
 // 收起明文：数据重填、Reset 与切换 Tab 时强制回到 password，避免明文残留。
 function resetWebSearchReveals() {
   for (const [inputId, buttonId] of [
@@ -451,14 +416,10 @@ function resetWebSearchReveals() {
     }
   }
 }
-
 bindPasswordReveal('web_search_exa_api_key', 'exa-key-reveal');
 bindPasswordReveal('web_search_tavily_api_key', 'tavily-key-reveal');
-
 function loadGeneral() {
   return api('/api/state').then((data) => {
-    if (!state) { state = {}; }
-    state.config = data.config;
     applyGeneralData(data);
     refreshActionBars();
   }).catch((error) => {
@@ -466,7 +427,6 @@ function loadGeneral() {
     document.getElementById('general-status').className = 'status error';
   });
 }
-
 function loadState() {
   return api('/api/state').then((data) => {
     state = data;
@@ -481,7 +441,6 @@ function loadState() {
     document.getElementById('commands-status').className = 'status error';
   });
 }
-
 // ===== Commands view =====
 
 const KIND_LABELS = {agentMD: 'Markdown', agentBlock: 'Template'};
@@ -610,10 +569,7 @@ function renderCommands() {
   document.getElementById('editor-empty-text').textContent =
     all.length === 0 ? 'No custom commands yet.' : 'Select a command to edit.';
   if (commands.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'nav-empty';
-    empty.textContent = all.length === 0 ? 'No custom commands yet.' : 'No commands match this filter.';
-    list.appendChild(empty);
+    list.appendChild(element('p', 'nav-empty', all.length === 0 ? 'No custom commands yet.' : 'No commands match this filter.'));
   }
   for (const command of commands) {
     const key = commandKey(command);
@@ -624,15 +580,9 @@ function renderCommands() {
     row.className = 'nav-item' + (isSelected ? ' selected' : '') + (isDirty ? ' dirty' : '');
     row.dataset.key = key;
     if (isSelected) { row.setAttribute('aria-current', 'true'); }
-    const slash = document.createElement('span');
-    slash.className = 'nav-slash';
-    slash.textContent = '/';
-    const name = document.createElement('span');
-    name.className = 'nav-name';
-    name.textContent = command.name;
-    const tag = document.createElement('span');
-    tag.className = 'tag';
-    tag.textContent = (command.scope === 'project' ? 'Project' : 'User') + ' · ' + (KIND_LABELS[command.kind] || command.kind);
+    const slash = element('span', 'nav-slash', '/');
+    const name = element('span', 'nav-name', command.name);
+    const tag = element('span', 'tag', (command.scope === 'project' ? 'Project' : 'User') + ' · ' + (KIND_LABELS[command.kind] || command.kind));
     row.appendChild(slash);
     row.appendChild(name);
     row.appendChild(tag);
@@ -684,9 +634,7 @@ function newCommand() {
   draft = true;
   selected = null;
   selectedCommandKey = null;
-  if (!newCommandDraft) {
-    newCommandDraft = Object.assign({}, NEW_COMMAND_DEFAULT);
-  }
+  if (!newCommandDraft) { newCommandDraft = Object.assign({}, NEW_COMMAND_DEFAULT); }
   showEditor(newCommandDraft, '');
   renderCommands();
 }

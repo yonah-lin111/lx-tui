@@ -91,6 +91,37 @@ fn parses_v2_catalog_with_limits_modalities_and_variants() {
 }
 
 #[test]
+fn v2_mime_image_modalities_are_normalized_and_deduped() {
+    let catalog = r#"{
+      "openai": {
+        "id": "openai",
+        "name": "OpenAI",
+        "models": {
+          "gpt-vision": {
+            "id": "gpt-vision",
+            "type": "chat",
+            "name": "GPT Vision",
+            "modalities": {
+              "input": ["text", "image/png", "image/jpeg", "image"],
+              "output": ["text"]
+            }
+          }
+        }
+      }
+    }"#;
+    let catalog = parse_models_dev_catalog(catalog).expect("v2 parses");
+    let model = &catalog["openai"]["gpt-vision"];
+    assert_eq!(
+        model
+            .modalities
+            .as_ref()
+            .and_then(|value| value.get("input")),
+        Some(&serde_json::json!(["text", "image"]))
+    );
+    assert!(model.supports_image_input());
+}
+
+#[test]
 fn parses_v1_catalog_with_reasoning_flag() {
     let catalog = parse_models_dev_catalog(V1_CATALOG).expect("v1 parses");
     let openai = &catalog["openai"];

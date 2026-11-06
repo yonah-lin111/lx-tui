@@ -75,6 +75,10 @@ pub fn build(
         "input": input,
         "stream": true,
     });
+    // ChatGPT Codex 后端禁止服务端持久化响应，必须显式关闭 store。
+    if base_url.contains("chatgpt.com/backend-api") {
+        body["store"] = json!(false);
+    }
     // 摘要请求不声明工具（无工具就无从发起调用）。
     let tool_decls = request.declared_tools();
     if !tool_decls.is_empty() {

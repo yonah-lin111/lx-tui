@@ -287,6 +287,10 @@ fn google_role(role: Role) -> &'static str {
 }
 
 /// 追加 parts：相邻同 role 的 content 合并为一帧的 parts 数组。
+///
+/// `functionResponse` 与普通 `text` / `inlineData` 不能混在同一条 user
+/// `Content` 里（Gemini 要求工具结果单独成帧）；仅两侧都是纯
+/// `functionResponse` 或两侧都不含 `functionResponse` 时才合并。
 fn push_parts(contents: &mut Vec<Value>, role: &str, part: Value) {
     let same_role = contents
         .last()
@@ -298,11 +302,24 @@ fn push_parts(contents: &mut Vec<Value>, role: &str, part: Value) {
             .last_mut()
             .and_then(|content| content.get_mut("parts"))
             .and_then(Value::as_array_mut)
+        && (role != "user" || user_parts_mergeable(parts, &part))
     {
         parts.push(part);
         return;
     }
     contents.push(json!({"role": role, "parts": [part]}));
+}
+
+/// user `Content` 的 parts 是否可与新 part 合并（禁止 functionResponse 与文本混排）。
+fn user_parts_mergeable(existing: &[Value], next: &Value) -> bool {
+    let existing_has_response = existing.iter().any(is_function_response);
+    let existing_all_responses = !existing.is_empty() && existing.iter().all(is_function_response);
+    let next_is_response = is_function_response(next);
+    (!existing_has_response && !next_is_response) || (existing_all_responses && next_is_response)
+}
+
+fn is_function_response(part: &Value) -> bool {
+    part.get("functionResponse").is_some_and(Value::is_object)
 }
 
 /// Gemini SSE 解码器：每帧是一个完整 JSON（非事件流），含 candidates parts。
@@ -486,11 +503,23 @@ impl StreamDecoder for Decoder {
                         out.extend(segments_to_deltas(self.splitter.feed(text)));
                     }
                 }
-                // finishReason：STOP/SAFETY/RECITATION 视为本次响应结束。
-                if let Some(reason) = json_str(candidate, "finishReason")
-                    && matches!(reason, "STOP" | "SAFETY" | "RECITATION" | "MAX_TOKENS")
-                {
-                    out.extend(self.finish_response());
+                // finishReason：正常完成 / 安全拦截 / 未知（等待客户端兜底）。
+                if let Some(reason) = json_str(candidate, "finishReason") {
+                    match reason {
+                        "STOP" | "MAX_TOKENS" | "OTHER" | "FINISH_REASON_UNSPECIFIED" => {
+                            out.extend(self.finish_response());
+                        }
+                        "SAFETY"
+                        | "RECITATION"
+                        | "PROHIBITED_CONTENT"
+                        | "BLOCKLIST"
+                        | "SPII"
+                        | "IMAGE_SAFETY"
+                        | "MALFORMED_FUNCTION_CALL" => {
+                            return Err(protocol_error(format!("generation stopped: {reason}")));
+                        }
+                        _ => {}
+                    }
                 }
             }
         }

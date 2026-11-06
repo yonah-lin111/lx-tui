@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::app::actions::OverlayKey;
-use crate::app::overlay::{Overlay, TextInput};
+use crate::app::overlay::{Overlay, ResumeSessionEdit, TextInput};
 use crate::app::state::{
     ConnectManageAction, ConnectPanel, ConnectPromptStep, ConnectStage, PanelWindow, SlashCommand,
 };
@@ -10,6 +10,7 @@ use crate::app::update::{apply_connect_overlay_key, open_connect_panel};
 use crate::config::ai::connect::{ConnectSettings, ConnectedPresetRecord, ConnectionSource};
 use crate::config::ai::oauth::{OAuthPromptMode, OAuthStarted};
 use crate::config::ai::presets::find_preset;
+use std::path::PathBuf;
 
 fn connect_state() -> (AppState, PaneId) {
     let state = ready_state("");
@@ -354,10 +355,17 @@ fn connected_provider_opens_manage_with_refresh_and_disconnect() {
 
     connect_panel_mut(&mut state).move_active(3);
     assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
+    let panel = connect_panel(&state);
+    assert!(panel.validating, "断开中锁住模态，防止连按 Enter 重复触发");
+    assert_eq!(panel.status_message.as_deref(), Some("Disconnecting…"));
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
         crate::app::effects::Effect::DisconnectPreset { provider_id, .. } if provider_id == "anthropic"
     )));
+    assert!(
+        !apply_connect_overlay_key(&mut state, OverlayKey::Enter),
+        "断开在途时 Enter 不再触发"
+    );
 }
 
 #[test]
@@ -475,6 +483,75 @@ fn connected_event_closes_overlay_switches_to_model_picker_and_toasts() {
 }
 
 #[test]
+fn connected_event_after_escape_keeps_draft_and_does_not_open_model_picker() {
+    let (mut state, pane) = connect_state();
+    open(&mut state, pane);
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Esc));
+    assert!(state.overlay.is_none());
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.input = "unrelated draft".to_string();
+    }
+    state.connect = ConnectSettings::default();
+    let settings = settings_for("anthropic", "Anthropic");
+    let connect = state.connect.clone();
+    assert!(crate::app::update::on_preset_connected(
+        &mut state,
+        pane,
+        "anthropic",
+        connect,
+        settings
+    ));
+    assert!(state.overlay.is_none(), "不得凭空重新打开弹窗");
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.input, "unrelated draft", "不得清空无关草稿");
+    assert!(
+        target.lx.slash.is_none(),
+        "用户已关闭 `/connect` 时不得强行打开 `/model`"
+    );
+    assert_eq!(
+        target.lx.toast.as_ref().map(|toast| toast.message.as_str()),
+        Some("Connected Anthropic"),
+        "连接反馈落在打开弹窗的源容器"
+    );
+}
+
+#[test]
+fn connected_event_does_not_close_unrelated_modal() {
+    let (mut state, pane) = connect_state();
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.input = "unrelated draft".to_string();
+    }
+    state.overlay = Some(Overlay::ResumeSessionEdit(ResumeSessionEdit {
+        pane,
+        workspace: PathBuf::from("/tmp/ws"),
+        session_id: "session-1".into(),
+        input: TextInput::new("Title"),
+        confirming_delete: false,
+        hint: None,
+    }));
+    state.connect = ConnectSettings::default();
+    let settings = settings_for("anthropic", "Anthropic");
+    let connect = state.connect.clone();
+    assert!(crate::app::update::on_preset_connected(
+        &mut state,
+        pane,
+        "anthropic",
+        connect,
+        settings
+    ));
+    assert!(
+        matches!(state.overlay, Some(Overlay::ResumeSessionEdit(_))),
+        "不得关闭无关模态"
+    );
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.input, "unrelated draft", "不得清空无关草稿");
+    assert!(target.lx.slash.is_none());
+    let toast = state.toast.as_ref().expect("global toast");
+    assert_eq!(toast.message, "Connected Anthropic");
+    assert!(toast.anchor.is_none(), "模态仍在屏时 Toast 必须全局显示");
+}
+
+#[test]
 fn disconnected_event_restores_provider_list() {
     let (mut state, pane) = connect_state();
     open(&mut state, pane);
@@ -501,6 +578,35 @@ fn disconnected_event_restores_provider_list() {
         panel.active_entry().and_then(|entry| entry.source.clone()),
         None,
         "断开后不再显示已连接标签"
+    );
+    let toast = state.toast.as_ref().expect("global toast");
+    assert_eq!(toast.message, "Disconnected Anthropic");
+    assert!(toast.anchor.is_none(), "模态弹窗触发的 Toast 必须全局显示");
+}
+
+#[test]
+fn disconnected_event_keeps_active_oauth_stage() {
+    let (mut state, pane) = connect_state();
+    open(&mut state, pane);
+    select_provider(&mut state, "github-copilot");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(matches!(
+        connect_panel(&state).stage,
+        ConnectStage::OAuthWaiting { .. }
+    ));
+
+    assert!(crate::app::update::on_preset_disconnected(
+        &mut state,
+        pane,
+        "anthropic",
+        ConnectSettings::default(),
+        AiSettings::empty(),
+    ));
+    let panel = connect_panel(&state);
+    assert!(
+        matches!(panel.stage, ConnectStage::OAuthWaiting { .. }),
+        "断开其它供应商不得打断当前 OAuth 流程"
     );
     let toast = state.toast.as_ref().expect("global toast");
     assert_eq!(toast.message, "Disconnected Anthropic");
@@ -622,20 +728,28 @@ fn oauth_code_mode_submits_typed_code() {
 }
 
 #[test]
-fn esc_cancels_oauth_and_returns_to_providers() {
+fn esc_cancels_oauth_then_steps_back_through_methods() {
     let (mut state, pane) = connect_state();
     open(&mut state, pane);
-    select_provider(&mut state, "github-copilot");
+    select_provider(&mut state, "openai");
     apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(matches!(
+        connect_panel(&state).stage,
+        ConnectStage::Methods { .. }
+    ));
     apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(matches!(
+        connect_panel(&state).stage,
+        ConnectStage::OAuthWaiting { .. }
+    ));
     crate::app::update::on_preset_oauth_prompt(
         &mut state,
         pane,
-        "github-copilot",
-        "device",
+        "openai",
+        "chatgpt-browser",
         OAuthStarted {
             attempt_id: "attempt-cancel".into(),
-            url: "https://github.com/login/device".into(),
+            url: "https://auth.openai.com/authorize".into(),
             user_code: None,
             instructions: String::new(),
             mode: OAuthPromptMode::Auto,
@@ -647,11 +761,97 @@ fn esc_cancels_oauth_and_returns_to_providers() {
         crate::app::effects::Effect::CancelPresetOAuth { attempt_id } if attempt_id == "attempt-cancel"
     )));
     let panel = connect_panel(&state);
+    let ConnectStage::Methods {
+        methods, window, ..
+    } = &panel.stage
+    else {
+        panic!("第一次 Esc 退回认证方式选择");
+    };
+    assert_eq!(*window, PanelWindow::new(0), "高亮停留在当前 OAuth 方法");
+    assert!(methods.len() > 1);
+
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Esc));
+    let panel = connect_panel(&state);
     assert_eq!(panel.stage, ConnectStage::Providers);
     assert_eq!(
         panel.active_entry().map(|entry| entry.id.as_str()),
-        Some("github-copilot"),
-        "取消 OAuth 退回列表后保持之前选中的供应商"
+        Some("openai"),
+        "第二次 Esc 退回列表后保持之前选中的供应商"
+    );
+}
+
+#[test]
+fn esc_from_input_prompt_returns_to_methods_for_multi_method_provider() {
+    let (mut state, pane) = connect_state();
+    open(&mut state, pane);
+    select_provider(&mut state, "openai");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    connect_panel_mut(&mut state).move_active(2);
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Enter));
+    let panel = connect_panel(&state);
+    assert!(matches!(
+        panel.stage,
+        ConnectStage::InputPrompt {
+            method_index: 2,
+            step: ConnectPromptStep::ApiKey,
+            ..
+        }
+    ));
+
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Esc));
+    let panel = connect_panel(&state);
+    let ConnectStage::Methods { window, .. } = &panel.stage else {
+        panic!("输入阶段 Esc 应退回认证方式选择");
+    };
+    assert_eq!(*window, PanelWindow::new(2), "高亮停留在正在填写的方法");
+
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Esc));
+    assert_eq!(connect_panel(&state).stage, ConnectStage::Providers);
+}
+
+#[test]
+fn esc_from_single_method_input_prompt_returns_to_providers() {
+    let (mut state, pane) = connect_state();
+    open(&mut state, pane);
+    select_provider(&mut state, "anthropic");
+    apply_connect_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(matches!(
+        connect_panel(&state).stage,
+        ConnectStage::InputPrompt {
+            step: ConnectPromptStep::ApiKey,
+            ..
+        }
+    ));
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Esc));
+    let panel = connect_panel(&state);
+    assert_eq!(panel.stage, ConnectStage::Providers);
+    assert_eq!(
+        panel.active_entry().map(|entry| entry.id.as_str()),
+        Some("anthropic")
+    );
+}
+
+#[test]
+fn provider_navigation_syncs_last_connect_provider() {
+    let (mut state, pane) = connect_state();
+    open(&mut state, pane);
+    let second_id = connect_panel(&state)
+        .entry_at_view(1)
+        .map(|entry| entry.id.clone())
+        .expect("second provider");
+    assert!(crate::app::update::set_connect_selection(&mut state, 1));
+    assert_eq!(
+        state.last_connect_provider.as_deref(),
+        Some(second_id.as_str())
+    );
+    assert!(apply_connect_overlay_key(&mut state, OverlayKey::Down));
+    let active = connect_panel(&state)
+        .active_entry()
+        .map(|entry| entry.id.clone())
+        .expect("active provider");
+    assert_eq!(
+        state.last_connect_provider.as_deref(),
+        Some(active.as_str())
     );
 }
 

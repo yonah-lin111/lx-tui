@@ -312,13 +312,20 @@ fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
 }
 
 /// 追加一个 content block：相邻同 role 时并入同一条消息的 content 数组。
+///
+/// 例外：`tool_result` 消息后的普通用户文本不得并入同一条 user 消息——Anthropic
+/// 要求 `tool_result` 块位于消息最前，且不能被后续自然语言盖过；新文本另起一条。
 fn push_block(messages: &mut Vec<Value>, role: &str, block: Value) {
     let same_role = messages
         .last()
         .and_then(|message| message.get("role"))
         .and_then(Value::as_str)
         == Some(role);
+    let is_text = block.get("type").and_then(Value::as_str) == Some("text");
+    let blocked_by_tool_result =
+        same_role && is_text && messages.last().is_some_and(message_has_tool_result);
     if same_role
+        && !blocked_by_tool_result
         && let Some(content) = messages
             .last_mut()
             .and_then(|message| message.get_mut("content"))
@@ -328,6 +335,18 @@ fn push_block(messages: &mut Vec<Value>, role: &str, block: Value) {
         return;
     }
     messages.push(json!({"role": role, "content": [block]}));
+}
+
+/// 消息 content 数组中是否含 `tool_result` 块。
+fn message_has_tool_result(message: &Value) -> bool {
+    message
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|blocks| {
+            blocks
+                .iter()
+                .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+        })
 }
 
 /// Messages SSE 解码器。

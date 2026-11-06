@@ -20,9 +20,69 @@ function isPresetDirty(preset) {
   return !base || JSON.stringify(preset) !== JSON.stringify(base);
 }
 
+// 当前编辑对象：Quick Connect 预设或自定义供应商，字段形状一致。
+function currentPreset() {
+  if (!modelsDraft) { return null; }
+  return (modelsDraft.quickConnect || []).find((preset) => preset.id === selectedPresetId) || null;
+}
+
+// GET 快照到预设草稿的映射（settings_models.js 的 snapshotToDraft 复用）。
+function draftPresetSnapshot(preset) {
+  return {
+    key: preset.id, id: preset.id, type: preset.type, name: preset.name,
+    note: preset.note || '', defaultBaseUrl: preset.defaultBaseUrl || '',
+    baseUrl: preset.baseUrl || '', enabled: !!preset.enabled, connected: !!preset.connected,
+    connectionType: preset.connectionType || null,
+    connectionLabel: preset.connectionLabel || 'Not connected',
+    apiKey: preset.apiKey || '', formAnswers: Object.assign({}, preset.formAnswers || {}),
+    envVars: preset.envVars || [], methods: preset.methods || [],
+    models: draftModels(preset.models), defaultModels: draftModels(preset.defaultModels)
+  };
+}
+
+// 只刷新 quickConnect 快照（不重放 Custom 草稿）：Disconnect / OAuth / 预设保存
+// 完成后调用，避免全量 loadModels() 冲掉用户在 Custom Tab 未保存的修改。
+async function refreshQuickConnectState(targetIds) {
+  if (!modelsDraft) { return; }
+  const targets = new Set(Array.isArray(targetIds) ? targetIds : (targetIds ? [targetIds] : []));
+  const data = await api('/api/models/settings');
+  const latest = (data.quickConnect || []).map(draftPresetSnapshot);
+  const latestById = new Map(latest.map((preset) => [preset.id, preset]));
+  const dirty = new Set((modelsDraft.quickConnect || []).filter(isPresetDirty).map((preset) => preset.id));
+  modelsDraft.revision = data.revision || '';
+  if (modelsBaseline) {
+    modelsBaseline.revision = modelsDraft.revision;
+    modelsBaseline.quickConnect = JSON.parse(JSON.stringify(latest));
+  }
+  for (const preset of (modelsDraft.quickConnect || [])) {
+    const next = latestById.get(preset.id);
+    if (!next) { continue; }
+    if (!dirty.has(preset.id) || targets.has(preset.id)) {
+      Object.assign(preset, JSON.parse(JSON.stringify(next)));
+    }
+  }
+  // 指向已断开/已禁用预设的默认与标题选择立即清空，下次保存不再 422。
+  const presetIds = new Set(latest.map((preset) => preset.id));
+  const usable = new Set(latest.filter((preset) => preset.connected && preset.enabled).map((preset) => preset.id));
+  for (const key of ['defaultModel', 'titleSummary']) {
+    const selection = modelsDraft[key];
+    if (selection && presetIds.has(selection.provider) && !usable.has(selection.provider)) {
+      modelsDraft[key] = null;
+    }
+  }
+  const revEl = document.getElementById('models-revision');
+  if (revEl) { revEl.textContent = 'revision ' + String(data.revision || '').slice(0, 8); }
+  renderProviders();
+  renderEditor();
+  renderDefaultModel();
+  refreshActionBars();
+}
+
 function switchProviderTab(tab) {
-  activeProviderTab = tab === 'custom' ? 'custom' : 'quick';
-  dismissPresetOAuth(false);
+  const next = tab === 'custom' ? 'custom' : 'quick';
+  if (activeProviderTab === next) { return; }
+  activeProviderTab = next;
+  // 切 Tab 不取消后台 OAuth：切回 Quick Connect 时继续展示等待卡片。
   hideFetchCandidates();
   const quickTab = document.getElementById('prov-tab-quick');
   const customTab = document.getElementById('prov-tab-custom');
@@ -32,9 +92,17 @@ function switchProviderTab(tab) {
   quickTab.setAttribute('aria-selected', quick ? 'true' : 'false');
   customTab.setAttribute('aria-selected', quick ? 'false' : 'true');
   document.getElementById('new-provider-row').classList.toggle('hidden', quick);
+  setEmptyNewProviderVisible(!quick);
   renderProviders();
   renderEditor();
   refreshActionBars();
+}
+
+// 空态的 “New provider” 只属于 Custom；Quick Connect 预设不能再新建。
+function setEmptyNewProviderVisible(visible) {
+  const button = document.getElementById('btn-empty-new-provider')
+    || document.querySelector('#provider-empty .primary');
+  if (button) { button.classList.toggle('hidden', !visible); }
 }
 
 function onProviderSearchInput(value) {
@@ -154,6 +222,7 @@ function presetField(preset, field, answers) {
 }
 
 function renderPresetEditor() {
+  setEmptyNewProviderVisible(false);
   const preset = currentPreset();
   document.getElementById('provider-empty').classList.toggle('hidden', !!preset);
   document.getElementById('provider-editor').classList.toggle('hidden', !preset);
@@ -198,7 +267,7 @@ function hidePresetEditor() {
   document.getElementById('prov-name').readOnly = false;
   const typeButton = document.querySelector('#prov-type-host .select-button');
   if (typeButton) { typeButton.disabled = false; }
-  dismissPresetOAuth(false);
+  setEmptyNewProviderVisible(true);
 }
 
 function renderPresetOAuth(preset) {
@@ -278,6 +347,7 @@ function startPresetOAuth(methodId) {
       userCode: data.userCode || '',
       instructions: data.instructions || '',
       mode: data.mode || 'auto',
+      failures: 0,
       timer: null
     };
     renderPresetOAuthPending();
@@ -307,18 +377,30 @@ function pollPresetOAuth() {
     if (!presetOAuth || presetOAuth.attemptId !== attemptId) { return; }
     if (data.status === 'complete') {
       const preset = currentPreset();
+      const targetId = preset ? preset.id : null;
       const name = preset ? (preset.name || preset.id) : 'provider';
       stopPresetOAuthPolling();
       presetOAuth = null;
+      renderPresetOAuthPending();
       showToast('Connected ' + name, 'ok');
-      loadModels();
+      refreshQuickConnectState(targetId).catch((error) => showToast(error.message, 'error'));
     } else if (data.status === 'failed') {
       stopPresetOAuthPolling();
       presetOAuth = null;
       renderPresetOAuthPending();
       showToast(data.error || 'OAuth sign-in failed', 'error');
     }
-  }).catch(() => {});
+  }).catch((err) => {
+    if (!presetOAuth || presetOAuth.attemptId !== attemptId) { return; }
+    presetOAuth.failures = (presetOAuth.failures || 0) + 1;
+    // 404 是会话已被服务端清理；连续失败则停止轮询，避免无限请求。
+    if ((err && err.status === 404) || presetOAuth.failures >= 3) {
+      stopPresetOAuthPolling();
+      presetOAuth = null;
+      renderPresetOAuthPending();
+      showToast((err && err.message) || 'Authorization session expired', 'error');
+    }
+  });
 }
 
 function dismissPresetOAuth(notify) {
@@ -381,7 +463,7 @@ function disconnectPresetProvider() {
     body: JSON.stringify({providerId: preset.id})
   }).then(() => {
     showToast('Disconnected ' + (preset.name || preset.id), 'ok');
-    return loadModels();
+    return refreshQuickConnectState(preset.id);
   }).catch((error) => showToast(error.message, 'error'));
 }
 
@@ -430,15 +512,20 @@ async function savePresetDrafts() {
   if (!modelsDraft) { return; }
   const dirty = presetList().filter((preset) => isPresetDirty(preset));
   if (dirty.length === 0) { return; }
-  const providers = dirty.map((preset) => ({
-    id: preset.id,
-    enabled: !!preset.enabled,
-    apiKey: preset.apiKey || '',
-    formAnswers: preset.formAnswers || {},
-    baseUrl: (preset.baseUrl || '').trim(),
-    models: buildPresetModels(preset)
-  }));
+  const providers = dirty.map((preset) => {
+    const apiKey = (preset.apiKey || '').trim();
+    return {
+      id: preset.id,
+      // 首次填写 Key 的预设必须启用，即便页面上的 Enabled 还没勾选。
+      enabled: !preset.connected && apiKey ? true : !!preset.enabled,
+      apiKey: preset.apiKey || '',
+      formAnswers: preset.formAnswers || {},
+      baseUrl: (preset.baseUrl || '').trim(),
+      models: buildPresetModels(preset)
+    };
+  });
   await api('/api/models/connect', {method: 'PUT', body: JSON.stringify({providers: providers})});
+  await refreshQuickConnectState(dirty.map((preset) => preset.id));
 }
 
 // Model 页下拉：已启用的 Custom 供应商 + 已连接且启用的快捷连接供应商。
@@ -479,11 +566,66 @@ function resolveDraftSelection(selection) {
   };
 }
 
+function initProviderFields() {
+  // 小眼睛：在 password / text 之间切换，只影响本次显示，不改动草稿值。
+  const reveal = document.getElementById('prov-key-reveal');
+  const keyInput = document.getElementById('prov-api-key');
+  reveal.addEventListener('click', () => {
+    const show = keyInput.type === 'password';
+    keyInput.type = show ? 'text' : 'password';
+    reveal.classList.toggle('revealed', show);
+    reveal.setAttribute('aria-pressed', show ? 'true' : 'false');
+    reveal.setAttribute('aria-label', show ? 'Hide API key' : 'Show API key');
+    keyInput.focus();
+  });
+  document.getElementById('prov-name').addEventListener('input', (event) => {
+    const provider = currentProvider();
+    if (provider) { provider.name = event.target.value; markModelsDirty(); }
+  });
+  document.getElementById('prov-base-url').addEventListener('input', (event) => {
+    const provider = currentProvider();
+    if (provider) { provider.baseUrl = event.target.value; markModelsDirty(); }
+  });
+  document.getElementById('prov-api-key').addEventListener('input', (event) => {
+    const provider = currentProvider();
+    if (provider) { provider.apiKey = event.target.value; markModelsDirty(); }
+    // Quick Connect 首次填入 Key 即视为连接：自动勾选 Enabled。
+    if (activeProviderTab !== 'quick') { return; }
+    const preset = currentPreset();
+    if (!preset || preset.connected) { return; }
+    if (!String(event.target.value || '').trim()) { return; }
+    preset.enabled = true;
+    const enabled = document.getElementById('prov-enabled');
+    if (enabled) { enabled.checked = true; }
+    markModelsDirty();
+    renderProviders();
+    renderDefaultModel();
+  });
+  document.getElementById('prov-enabled').addEventListener('change', (event) => {
+    const provider = currentProvider();
+    if (!provider) { return; }
+    provider.enabled = event.target.checked;
+    // 关掉默认模型或标题模型所属 provider 时清空对应选择，避免后端校验 422。
+    if (!provider.enabled && modelsDraft.defaultModel && modelsDraft.defaultModel.provider === provider.id) {
+      modelsDraft.defaultModel = null;
+      showToast('Default model cleared (its provider was turned off)', 'info');
+    }
+    if (!provider.enabled && modelsDraft.titleSummary && modelsDraft.titleSummary.provider === provider.id) {
+      modelsDraft.titleSummary = null;
+      showToast('Title model cleared (its provider was turned off)', 'info');
+    }
+    markModelsDirty();
+    renderProviders();
+    renderDefaultModel();
+  });
+}
+
 function initPresetView() {
   const search = document.getElementById('provider-search');
   if (search) {
     search.addEventListener('input', () => onProviderSearchInput(search.value));
   }
+  initProviderFields();
   switchProviderTab('quick');
 }
 

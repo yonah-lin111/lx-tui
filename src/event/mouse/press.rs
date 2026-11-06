@@ -52,6 +52,10 @@ pub(crate) fn handle_mouse_down_left(
     // 新的一次按下意味着上一轮 Down→Up 已经结束：指针在拖动中移出窗口会丢掉 Up，
     // 残留现场若被这次无关的 Up 消费，会按旧行号误点（如点工具栏却折叠了树里的文件夹）。
     state.prompt_drag = None;
+    // 模态列表滚动条拖拽同理：丢失 Up 后下一次手势不得沿用旧 thumb 偏移。
+    state.connect_scroll_drag = None;
+    state.referenced_search_scroll_drag = None;
+    state.referenced_menu_scroll_drag = None;
     // 历史列表的搜索拖选/滚动条/行拖拽同理：丢失 Up 后下一次手势不得被旧状态劫持。
     state.workspace_history.search_drag = false;
     state.workspace_history.scroll_drag = None;

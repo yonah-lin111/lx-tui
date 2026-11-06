@@ -133,6 +133,22 @@ fn body_uses_input_not_messages() {
     assert_eq!(system_rule_prefix(&body), 1);
 }
 
+/// ChatGPT Codex 后端要求 `store: false`；普通 OpenAI 兼容端点不携带该字段。
+#[test]
+fn chatgpt_backend_requires_store_false() {
+    let built = super::build(
+        "https://chatgpt.com/backend-api/codex",
+        Some("key"),
+        &request(),
+    )
+    .expect("build ok");
+    let body: Value = serde_json::from_str(&built.body).expect("json");
+    assert_eq!(body["store"], false);
+
+    let body = body_of(&request());
+    assert!(body.get("store").is_none());
+}
+
 /// 前置系统规则项的条数（`role=user` 且以 `<system-instructions>` 开头）。
 fn system_rule_prefix(body: &Value) -> usize {
     body["input"]

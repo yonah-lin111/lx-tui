@@ -64,6 +64,44 @@ pub use paste_path::{parse_path_text, resolve_pasted_path, sniff_image_file};
 pub mod path_text;
 pub use path_text::{decode_path, encode_path, path_anchor, verify_path_chain};
 
+/// 用系统随机源填充缓冲区（Unix 读 `/dev/urandom`；Windows 等平台用时间/地址/计数器混合兜底）。
+pub fn fill_random_bytes(buf: &mut [u8]) -> io::Result<()> {
+    fill_random_bytes_impl(buf)
+}
+
+#[cfg(unix)]
+fn fill_random_bytes_impl(buf: &mut [u8]) -> io::Result<()> {
+    use std::io::Read;
+    std::fs::File::open("/dev/urandom")?.read_exact(buf)
+}
+
+#[cfg(not(unix))]
+fn fill_random_bytes_impl(buf: &mut [u8]) -> io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or_default();
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let address = buf.as_ptr() as usize as u64;
+    let mut seed = now
+        ^ u64::from(std::process::id()).rotate_left(32)
+        ^ seq.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ address;
+    for chunk in buf.chunks_mut(8) {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        let raw = seed.to_le_bytes();
+        let len = chunk.len();
+        chunk.copy_from_slice(&raw[..len]);
+    }
+    Ok(())
+}
+
 /// 收紧文件权限到仅所有者可读写（Unix 0600；Windows no-op）。
 ///
 /// 已有权限更严格时不放宽；失败返回错误由调用方决定是否致命。

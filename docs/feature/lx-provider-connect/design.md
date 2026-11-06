@@ -393,15 +393,15 @@ pub fn connect_config_path() -> Result<PathBuf, AiConfigError> {
           - 行 1：`Open in browser`（右侧 preview 显示截断后的 `url`，按 `Enter` 或 `o` 调用 `platform::open_browser` 打开浏览器）；
           - 行 2：`Copy code / link`（若有 `user_code` 显示 `Code: XXXX-XXXX`，按 `c` 或选中回车复制到剪贴板并弹 Toast）；
           - 行 3：状态行 `Waiting for authorization…`（或失败原因）。
-   - **级间 `Esc` 回退**：
-     - 在 `OAuthWaiting` 按 `Esc`：触发 `Effect::CancelPresetOAuth { attempt_id }` 并退回 `Methods`（或 `Providers`）；
-     - 在 `InputPrompt` / `Methods` / `Manage` 按 `Esc`：清空弹窗输入框，退回 `Providers` 阶段并恢复预设列表；
-     - 在 `Providers` 阶段按 `Esc`：清空弹窗输入框并关闭 `/connect` 弹窗。
-3. **连接成功后无缝跳转 `/model`（对齐 `opencode-dev`）**：
-   - 当 API Key 保存成功或 OAuth 授权完成时，触发 `on_preset_connected(state, pane, provider_id)`：
-     - 重新加载合并后的 `state.models.settings`；
-     - 在当前 `pane.lx.toast` 弹出 `Connected <Provider Name>`；
-     - 关闭 `Overlay::Connect`，构造仅过滤该 `provider_id`（或预填该供应商名过滤词并定位首项）的 `ModelPicker`，将 `pane.lx.slash` 直接切换为 `Some(SlashPanel::Model(Box::new(picker)))`！
+   - **级间 `Esc` 回退与列表焦点记忆**：
+     - 在 `OAuthWaiting` 或首步 `InputPrompt` 按 `Esc`：触发 `Effect::CancelPresetOAuth { attempt_id }`（如在 OAuth 等待中）；若该供应商有多种认证方法则退回二级 `Methods` 并恢复原方法高亮，单方法则退回一级 `Providers` 并保持之前选中的供应商高亮与可见窗口；
+     - 在 `Methods` / `Manage` 按 `Esc`：清空弹窗输入框，退回一级 `Providers` 阶段并恢复选中之前的供应商；
+     - 在 `Providers` 阶段按 `Esc`：清空弹窗输入框并关闭 `/connect` 弹窗（重开 `/connect` 时根据 `state.last_connect_provider` 自动恢复上次选中的供应商）。
+3. **连接成功后无缝跳转 `/model` 与模态 Toast 分派规则**：
+   - 当 API Key 保存成功或 OAuth 授权完成时，触发 `on_preset_connected(state, pane, provider_id, ...)`：
+     - 重新加载合并后的 `state.models.settings` 与 `state.connect`，后台静默触发 `Effect::RefreshModelsCatalog { pane: None, provider_id: Some(...) }`（错误 API Key 仅在实际发消息时报错）；
+     - 若当前 `state.overlay` 仍为该 `pane` 的 `Overlay::Connect`，则关闭 `Overlay::Connect`（`state.overlay = None`），构造仅过滤该 `provider_id` 的 `ModelPicker` 并切入 `SlashPanel::Model`；
+     - **模态 Toast 路由规则**：点击后马上关闭全部模态弹窗（`state.overlay == None`，如连接成功返回 `lx` 窗格）时，Toast 经 `show_toast_at` 落回打开弹窗的源容器（`pane.lx.toast`）；若关闭二级视图后仍停留在第一级模态弹窗（如 `Manage` 点击 `Disconnect` 退回一级 `Providers` 列表）或弹窗未关闭（如打开浏览器、复制授权码、手动刷新模型），Toast 一律显示在全局位置（`AppState.toast` 且 `anchor: None`，屏幕顶部正中央）。
 
 #### 关键代码
 
@@ -692,26 +692,29 @@ pub fn quick_connect_json(connect: &ConnectSettings) -> String {
 | `src/config/ai/oauth/device.rs` | 新建 | 453 | Device Code 授权、轮询与总超时 |
 | `src/config/ai/verify.rs` | 新建 | 506 | 四协议远端模型发现、`protocol_reasoning_variants` 与连接校验 |
 | `src/config/ai/catalog_refresh.rs` | 新建 | 516 | `models.dev` 云端目录同步、ETag 缓存与已连接模型刷新（写前重读 `connect.json`） |
-| `src/app/state/lx/connect.rs` | 新建 | 463 | `ConnectPanel`、`ConnectStage`、`ConnectProviderEntry` 状态机与过滤/导航纯函数 |
-| `src/app/update/chat/connect.rs` | 新建 | 932 | `/connect` 弹窗状态转换、表单/API Key 提交、OAuth 启动/取消/完成回调与跳 `/model` |
-| `src/event/chat/connect.rs` | 新建 | 416 | 异步执行 `StartPresetOAuth`、`SavePresetConnection`、`DisconnectPreset` 效应与回投事件 |
-| `src/event/overlay.rs` | 修改 | 619 | `Overlay::Connect` 键盘/鼠标路由（点击仅移动焦点，`Enter` 才确认） |
+| `src/app/state/lx/connect.rs` | 新建 | 495 | `ConnectPanel`、`ConnectStage`、`ConnectProviderEntry` 状态机、供应商焦点记忆与过滤/导航纯函数 |
+| `src/app/update/chat/connect/mod.rs` | 新建 | 534 | `/connect` 弹窗按键/鼠标导航、阶段推进、级间 `Esc` 回退与表单/API Key 提交 |
+| `src/app/update/chat/connect/events.rs` | 新建 | 550 | `/connect` 异步回投（连接成功/断开/失败、OAuth 启动/失败、模型刷新）与 `show_toast_at` 分派 |
+| `src/event/chat/connect.rs` | 新建 | 428 | 异步执行 `StartPresetOAuth`、`SavePresetConnection`、`DisconnectPreset`、聊天前 OAuth 刷新与回投事件 |
+| `src/event/overlay.rs` | 修改 | 619 | `Overlay::Connect` 键盘/鼠标路由（点击仅移动焦点，再次点击已选中行或按 `Enter` 才确认） |
 | `src/event/inventory.rs` | 修改 | 490 | `ModelsChanged` 同步重载 `connect.json`、环境变量快照与已打开弹窗 |
-| `src/ui/overlay/connect.rs` | 新建 | 566 | 渲染 `Overlay::Connect(Box<ConnectPanel>)` 各阶段列表、输入行、状态行与快捷键提示 |
-| `src/ui/text/connect.rs` | 新建 | 99 | `/connect` 英文文案常量与 `lx_connect_*` 文案函数（从 `text.rs` 拆出） |
+| `src/ui/overlay/connect.rs` | 新建 | 569 | 渲染 `Overlay::Connect(Box<ConnectPanel>)` 各阶段列表、输入行、状态行与快捷键提示 |
+| `src/ui/text/connect.rs` | 新建 | 101 | `/connect` 英文文案常量与 `lx_connect_*` 文案函数（从 `text.rs` 拆出） |
 | `src/ui/text.rs` | 修改 | 1470 | 承载其余既有文案，`/connect` 文案已迁出到 `text/connect.rs` |
 | `src/settings/commands.rs` | 修改 | — | `RESERVED_NAMES` 新增 `"connect"` |
 | `src/settings/service/page.rs` | 修改 | — | 静态资源白名单新增 `"/settings_connect.js"` |
-| `src/settings/service/models/mod.rs` | 修改 | 601 | `GET /api/models/settings` 附带 `quickConnect`、含 `connect.json` 的 revision 与 `/api/models/connect/*` 路由 |
-| `src/settings/service/models/connect.rs` | 修改 | 630 | `PUT /api/models/connect`、`disconnect`、OAuth start/status/complete/cancel；API Key/OAuth 互斥与模板地址校验 |
+| `src/settings/service/models/mod.rs` | 修改 | 625 | `GET /api/models/settings` 附带 `quickConnect`、支持未保存预设 `Fetch models` 与 `/api/models/connect/*` 路由 |
+| `src/settings/service/models/connect.rs` | 修改 | 645 | `PUT /api/models/connect`（首次填 Key 自动启用）、`disconnect`、OAuth start/status/complete/cancel |
 | `src/settings/service/models/tests.rs` | 修改 | 1029 | Models API 测试（含 revision 兼容、无 `innerHTML` 资源检查） |
-| `src/settings/service/models/tests/connect.rs` | 修改 | 547 | Quick Connect / OAuth / Fetch models 场景测试 |
+| `src/settings/service/models/tests/connect.rs` | 修改 | 615 | Quick Connect / 首次连接自动启用 / 未保存预设 Fetch models / OAuth 场景测试 |
 | `src/settings/service/tests.rs` | 修改 | 1493 | 设置页资源、路由与视图回归测试（含 `settings.js` 无 `innerHTML` 检查） |
 | `assets/settings.html` | 修改 | — | Provider 双 Tab、搜索框、快捷连接横幅、OAuth 卡片与 `<script src="/settings_connect.js">` |
 | `assets/settings.css` | 修改 | — | `.provider-tabs`、`.preset-banner`、`.preset-oauth-*` 等样式 |
-| `assets/settings_models.js` | 修改 | 997 | Quick Connect / Custom 协同；`saveModels` 先保存预设再提交 `ai.json`，共用 `saveModels` 只调用一次 |
-| `assets/settings_connect.js` | 新建 | 490 | Quick Connect 列表、搜索过滤、表单编辑、OAuth 轮询、保存/断开/重置 |
-| `assets/settings.js` | 修改 | 1000 | 全局 toast/select/操作条；`createActionBar` 暴露 `saveFn` 去重，`replaceChildren` 替代 `innerHTML` |
+| `assets/settings_models.js` | 修改 | 935 | Quick Connect / Custom 协同；`saveModels` 先保存预设再提交 `ai.json`，`fetchModels` 传递 `formAnswers` |
+| `assets/settings_connect.js` | 新建 | 632 | Quick Connect 列表、搜索过滤、局部状态刷新 `refreshQuickConnectState`、OAuth 轮询、保存/断开/重置 |
+| `assets/settings.js` | 修改 | 948 | 全局 toast/select/操作条；`createActionBar` 暴露 `saveFn` 去重，`replaceChildren` 替代 `innerHTML` |
+| `assets/oauth_callback.html` | 新建 | 36 | OAuth 浏览器回调结果页静态 HTML 模板（`include_str!` 加载） |
+| `assets/oauth_implicit.html` | 新建 | 44 | OAuth 隐式授权流（fragment 转发）静态 HTML 模板（`include_str!` 加载） |
 
 > 说明：`src/ui/text.rs` 为既有历史文件，本次已将全部 `/connect` 文案迁入 `src/ui/text/connect.rs`；该文件剩余部分不在本特性范围内，后续按职责继续拆分。
 

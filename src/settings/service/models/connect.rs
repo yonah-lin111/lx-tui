@@ -265,9 +265,18 @@ fn apply_connect_item(settings: &mut ConnectSettings, item: &Value) -> Result<()
         .get(id)
         .cloned()
         .unwrap_or_else(|| ConnectedPresetRecord::new(id));
+    let had_credentials = record
+        .api_key
+        .as_deref()
+        .is_some_and(|key| !key.trim().is_empty())
+        || record.oauth.is_some();
     if let Some(enabled) = item.get("enabled").and_then(Value::as_bool) {
         record.enabled = enabled;
     }
+    let has_new_api_key = item
+        .get("apiKey")
+        .and_then(Value::as_str)
+        .is_some_and(|key| !key.trim().is_empty());
     if let Some(api_key) = item.get("apiKey").and_then(Value::as_str) {
         let trimmed = api_key.trim();
         if trimmed.is_empty() {
@@ -313,6 +322,11 @@ fn apply_connect_item(settings: &mut ConnectSettings, item: &Value) -> Result<()
         } else {
             Some(parsed)
         };
+    }
+    // 首次连接（此前没有有效凭证）提交非空 Key 时立即启用：设置页默认未勾选
+    // Enabled，不能因此把新连接的预设留在 `enabled_providers` 之外。
+    if has_new_api_key && !had_credentials {
+        record.enabled = true;
     }
     if record.enabled && resolve_preset_connection_source(spec, Some(&record)).is_some() {
         let valid = preset_resolved_base_url(spec, &record, true)
@@ -535,11 +549,25 @@ fn persist_oauth_credential(
     record.enabled = true;
     settings.providers.insert(provider_id.to_string(), record);
     save_connect(connect_file, &settings).map_err(|error| error.to_string())?;
-    let custom = crate::config::ai::load_ai(ai_file)
-        .ok()
-        .flatten()
-        .unwrap_or_else(AiSettings::empty);
+    // 读取失败不得回退成空配置广播：那会把 TUI 的自定义供应商全部清空。
+    let mut custom = match crate::config::ai::load_ai(ai_file) {
+        Ok(Some(settings)) => settings,
+        Ok(None) => AiSettings::empty(),
+        Err(error) => {
+            tracing::warn!(error = %error, "ai.json is unreadable; skipping runtime broadcast");
+            return Err(format!("failed to load ai.json: {error}"));
+        }
+    };
     let runtime = merge_runtime_ai_settings(&custom, &settings);
+    // 与 `commit_connect_change` 一致：新的连接状态可能让旧的默认/标题选择悬空，
+    // 清理后原子写回，避免下一次校验报 422。
+    if custom.default_model != runtime.default_model
+        || custom.title_summary != runtime.title_summary
+    {
+        custom.default_model = runtime.default_model.clone();
+        custom.title_summary = runtime.title_summary.clone();
+        crate::config::ai::save_ai(ai_file, &custom).map_err(|error| error.to_string())?;
+    }
     let _ = sender.send(SettingsEvent::ModelsChanged(Box::new(runtime)));
     Ok(())
 }

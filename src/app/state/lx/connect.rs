@@ -129,11 +129,6 @@ pub struct ConnectPanel {
 }
 
 impl ConnectPanel {
-    /// 从磁盘快照构造；默认不探测环境变量，保持 `app/` 纯状态边界。
-    pub fn new(pane: PaneId, connect: &ConnectSettings) -> Self {
-        Self::new_with_env(pane, connect, |_| None)
-    }
-
     /// 从进程环境快照构造；生产调用方传入事件层采集的 `AppState::connect_env`。
     pub fn new_with_env_map(
         pane: PaneId,
@@ -203,9 +198,7 @@ impl ConnectPanel {
         self.entries = Self::build_entries(connect, &|name| env.get(name).cloned());
         if matches!(self.stage, ConnectStage::Providers) {
             self.refilter_from_input();
-            if self.filter.trim().is_empty()
-                && let Some(provider_id) = selected_id.as_deref()
-            {
+            if let Some(provider_id) = selected_id.as_deref() {
                 self.select_provider(provider_id);
             }
         } else {

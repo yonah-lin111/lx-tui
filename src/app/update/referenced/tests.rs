@@ -456,14 +456,21 @@ fn copy_reference_uses_refer_file_and_refer_folder_syntax() {
     set_referenced_search_selection(&mut state, file_index);
     assert!(copy_referenced_entry_reference(&mut state));
     assert!(copy_referenced_root_path(&mut state));
-    let texts: Vec<&str> = state
+    let prompt = state.prompt.id();
+    let copies: Vec<(&str, Option<crate::layout::PaneId>)> = state
         .effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::CopyToClipboard { text, .. } => Some(text.as_str()),
+            Effect::CopyToClipboard { text, anchor } => Some((text.as_str(), *anchor)),
             _ => None,
         })
         .collect();
+    assert_eq!(copies.len(), 3);
+    assert!(
+        copies.iter().all(|(_, anchor)| *anchor == Some(prompt)),
+        "复制引用必须锚定右侧 prompt 容器"
+    );
+    let texts: Vec<&str> = copies.into_iter().map(|(text, _)| text).collect();
     assert_eq!(texts.len(), 3);
     assert!(texts[0].starts_with("@[refer-folder]("), "{}", texts[0]);
     assert!(texts[0].contains(&format!("{}/dir", alpha.display())));
@@ -550,9 +557,10 @@ fn menu_copy_uses_refer_folder_syntax() {
     assert!(set_referenced_menu_selection(&mut state, index));
     assert!(copy_referenced_menu_selected(&mut state));
     let expected = format!("@[refer-folder]({})", beta.display());
+    let prompt = state.prompt.id();
     assert!(matches!(
         state.effects.as_slice(),
-        [Effect::CopyToClipboard { text, .. }] if *text == expected
+        [Effect::CopyToClipboard { text, anchor }] if *text == expected && *anchor == Some(prompt)
     ));
 }
 

@@ -158,22 +158,18 @@
 
 > 目标：逐项关闭 `docs/feature/lx-provider-connect/review.md` 中的 P0–P3 缺陷。
 
-- [x] **P0-1 OAuth 自动刷新接线**：`refresh_oauth_credential` 保留旧 `refresh_token` / `account_label` 并合并 `metadata`；新增 `ensure_connect_oauth_fresh(ai_path)`，在 TUI 启动/刷新、聊天采样前、`/models` 发现前统一调用。
-- [x] **P0-2 云端目录 transport 合并**：仅 `openai` 官方预设的新增无 transport 模型默认 `OpenaiResponses`；`github-copilot` / `opencode` 等保留 `None` 或既有 transport。
-- [x] **P0-3 Anthropic thinking 兼容**：接入 Phase 4 的 `supports_adaptive_thinking` 与 unsigned tool history 省略逻辑（`src/chat/transport/anthropic/mod.rs`、`src/config/ai/verify.rs`）。
-- [x] **P1-1 `/connect` 单击语义**：单击仅移动 `❯`，再次点击已选中行或按 `Enter` 才执行动作（`src/event/overlay.rs`）。
-- [x] **P1-2 `app/` 环境变量边界**：`AppState.connect_env` 快照由 `config::ai::collect_preset_env_snapshot()` 注入，`ConnectPanel` 不再直接调用 `std::env::var`；设置页测试改用宿主不常设置的预设。
-- [x] **P1-3 Disconnect 一致性**：TUI 与设置页断开时同步清理 `ai.json` 悬空 `defaultModel` / `titleSummary`；命中 `$ENV` 时写入 `enabled: false` 记录阻断回退探测。
-- [x] **P1-4 保存顺序与凭证互斥**：`saveModels` 先 `savePresetDrafts()` 再提交 `ai.json`；写入非空 API Key 时清空 OAuth，写入 OAuth 时清空 API Key。
-- [x] **P1-5 OAuth 边界**：DigitalOcean 隐式回调先放行无 `state` 的 GET；Device Code 轮询加入 10 分钟总超时；GitHub Copilot Enterprise 展开设备码/Token 域名与 `copilot-api.{domain}` 回退。
-- [x] **P2-1 `connect.json` 并发安全**：后台模型刷新在探测完成后重读最新文件再合并；所有写路径使用严格 `load_connect`，损坏时拒绝覆盖。
-- [x] **P2-2 设置页变更同步 TUI**：`ModelsChanged` 重载 `connect.json` 与 `connect_env`，刷新已打开的 `Overlay::Connect`；连接成功自动入队 `RefreshModelsCatalog`。
-- [x] **P2-3 OAuth 取消与内存清理**：用户主动取消不再弹红色错误 Toast；`oauth_status` 返回 `complete` / `failed` 后移除 `attempt_id`。
-- [x] **P2-4 预设物化值不落盘**：`put_connect` 对比默认/物化 Base URL 与默认模型表，相等时保持 `None`；启用中的模板地址未展开或非法时返回 422。
-- [x] **P2-5 测试隔离与前端去重**：`build_catalog()` 测试环境不叠加开发机磁盘缓存；Responses `output_item.done` 支持 `item.id`；`createActionBar` 保存原始 `saveFn` 引用，多个脏视图共用 `saveModels` 时只调用一次。
-- [x] **P3-1 文案拆分**：新增 `src/ui/text/connect.rs` 承载 `/connect` 文案，`src/ui/text.rs` 统一 re-export；`LX_CONNECT_VERIFYING` 更名为 `"Saving API key…"`。
-- [x] **P3-2 前端与弹窗规范**：`assets/settings.js` 使用 `replaceChildren()` 替代 `innerHTML`，设置服务测试覆盖 `settings.js` 无 `innerHTML` 断言；`src/ui/overlay/connect.rs` 方法行按右侧 tag 边界裁剪 label。
-- [x] **P3-3 文档同步**：`design.md` 统一为 `Overlay::Connect(Box<ConnectPanel>)` 与 `src/ui/overlay/connect.rs`，新增 §4.6 四协议对齐与最新文件表；`task.md` 更新 Phase 2 并新增 Phase 4/5。
+- [x] **P0-1 OAuth 自动刷新全路径接线**：`refresh_oauth_credential` 保留旧 `refresh_token` / `account_label` 并合并 `metadata`；`RefreshModelsCatalog` 先执行 `ensure_connect_oauth_fresh` 再探测 `/models`；TUI 聊天采样前（`chat_api_key`）、设置页 `fetch_models`（刷新后广播 `ModelsChanged`）与 CLI 执行入口统一自动刷新。
+- [x] **P0-2 网页首次用 API Key 连接预设自动启用**：`apply_connect_item` 对此前无凭证且本次提交非空 `api_key` 的预设强制置 `record.enabled = true`，前端输入 API Key 时同步勾选 `Enabled`，确保新连接的供应商立即进入 `enabled_providers`。
+- [x] **P0-3 `openai` 传输层 `base_url` 与云端目录 transport 合并**：`openai::build` 在 `req.base_url` 非空时始终使用配置地址；云端目录同步仅对 `openai` 官方新增无 transport 模型默认 `OpenaiResponses`。
+- [x] **P0-4 OpenCode Zen / Go 设备码与 OpenAI ChatGPT OAuth 端点对齐**：`opencode*` 使用 `/console/auth/device/{code,token}` JSON 请求体并补全相对验证 URL；`openai` OAuth 使用 `localhost` 回调、注入 `https://chatgpt.com/backend-api/codex` 端点与 `chatgptAccountId`，并在 Responses 请求体附带 `store: false`。
+- [x] **P0-5 Anthropic thinking 兼容**：正向判定 `supports_adaptive_thinking`，并在历史含无签名 `assistant` `tool_use` 续轮时自动省略手动 `thinking`。
+- [x] **P1-1 云端目录图片模态归一化**：`parse_modalities` 将 `"image/*"` 归一化为 `"image"`，`supports_image_input` 兼容 `"image/*"` MIME。
+- [x] **P1-2 Anthropic / Google 工具结果消息隔离**：禁止将后续 `UserText` 合并进含 `tool_result` 或 `functionResponse` 的 `user` 消息。
+- [x] **P1-3 未保存预设支持 `Fetch models`**：前后端传递 `formAnswers`，未落盘预设按表单答案与请求 `apiKey` 直接探测 `/models`。
+- [x] **P1-4 设置页 Tab 切换与局部状态刷新**：切换 Tab 不取消进行中的 OAuth；`Disconnect` / OAuth 完成使用 `refreshQuickConnectState` 增量刷新，不冲掉 `Custom` Tab 未保存草稿。
+- [x] **P1-5 TUI `/connect` 异步回投关联校验、单击语义、环境隔离与 Disconnect 清理**：`on_preset_connected` / `on_preset_disconnected` / `on_connect_failed` 校验当前弹窗阶段与 `provider_id`；`Manage` 断开增加 `validating` 防重；`AppState.connect_env` 隔离 `std::env::var`；`disconnect_preset_on_disk` 同步清理 `ai.json` 悬空模型。
+- [x] **P2-1 ~ P2-6 模态 Toast 规则、多级 `Esc` 回退、协议与并发细节**：`show_toast_at` 按弹窗是否全部关闭自动分派至源容器或全局，并在源窗格已销毁时清 `anchor = None`；多方法供应商按 `Esc` 逐级退回 `Methods -> Providers` 并记忆上次选中供应商；纯文本 `assistant` 历史补 `reasoning_content`；Gemini 覆盖全部安全/结束 `finishReason`。
+- [x] **P3-1 ~ P3-2 规范拆分与 HTML/OS 隔离**：OAuth 回调 HTML 迁入 `assets/oauth_*.html`；随机数生成迁入 `src/platform::fill_random_bytes`；`src/app/update/chat/connect` 拆分为 `mod.rs`（534 行）与 `events.rs`（550 行），`assets/settings*.js` 均控制在 950 行以内。
 
 ---
 
