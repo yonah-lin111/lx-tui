@@ -454,3 +454,64 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
     }
     changed
 }
+
+/// 切换指定 thinking 块展开状态。
+///
+/// 先 [`super::pin_lx_viewport`] 再切换：跟随底部时 `history_scroll` 是过期值，不先锚定就会
+/// 让展开后的界面跳回历史最顶部（表现为「点了没反应 / 展不开」）。
+pub fn toggle_thinking_at(
+    state: &mut AppState,
+    pane: PaneId,
+    message_index: usize,
+    step_index: usize,
+) -> bool {
+    let Some(target) = state.pane_anywhere(pane) else {
+        return false;
+    };
+    let Some(message) = target.lx.chat.messages.get(message_index) else {
+        return false;
+    };
+    if !matches!(
+        message.step_at(step_index),
+        Some(crate::app::state::AssistantStepView::Part { part, .. })
+            if part.kind == crate::chat::events::PartKind::Reasoning
+    ) {
+        return false;
+    }
+    super::pin_lx_viewport(state, pane);
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    target.lx.chat.toggle_reasoning(message_index, step_index);
+    crate::app::update::clear_lx_selection_for(state, pane);
+    true
+}
+
+/// 切换最近一条 assistant 消息里的最后一个 thinking 块（Ctrl+T）。
+pub fn toggle_latest_thinking(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let mut found = None;
+    'outer: for (message_index, message) in target.lx.chat.messages.iter().enumerate().rev() {
+        for (step_index, step) in message.steps.iter().enumerate().rev() {
+            if step
+                .part()
+                .is_some_and(|part| part.kind == crate::chat::events::PartKind::Reasoning)
+            {
+                found = Some((message_index, step_index));
+                break 'outer;
+            }
+        }
+    }
+    let Some((message_index, step_index)) = found else {
+        return false;
+    };
+    super::pin_lx_viewport(state, pane);
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    target.lx.chat.toggle_reasoning(message_index, step_index);
+    crate::app::update::clear_lx_selection_for(state, pane);
+    true
+}

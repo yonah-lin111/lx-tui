@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::app::state::lx::slash::{HistoryEntry, HistoryPanel};
-use crate::app::state::{ModelCandidate, ModelPickerStage, SlashPanel};
+use crate::app::state::{ModelCandidate, ModelPickerStage, PanelWindow, SlashPanel};
 
 /// 把整页缓冲区拼成文本行。
 pub(super) fn buffer_lines(buf: &Buffer, area: Rect) -> Vec<String> {

@@ -48,12 +48,14 @@ lx-tui/
                                 文件差异详情（chat/file_diff.rs：从落库 result_json 解码的
                                 类型化 FileDiffDetailView，坏文件局部降级）、
                                 流事件→步骤状态转换（chat/stream.rs）、`/` 命令面板（slash.rs）、
+                                `/connect` 预设供应商面板状态机（connect.rs）、
                                 输入模式判定（shell.rs：仅首个非空白 `!`/`！` 进入 shell）、
                                 本地命令卡片与队列视图（chat/shell.rs）
       update/                   行为到状态的转换（含 update/pane/popups.rs：lx 输入框浮层更新；
                                 update/pane/task_page.rs：后台任务页按键与关闭；
                                 update/chat：发送/流事件/终态；
                                 update/chat/session.rs：会话生命周期与 `/` 命令；
+                                update/chat/connect/：`/connect` 模态按键/鼠标导航与异步回投；
                                 update/chat/view.rs：DB 记录→步骤时间线投影；
                                 update/chat/process.rs：卡片展开/键盘选择、进程事件更新、
                                 计划提交与重载恢复；
@@ -78,6 +80,7 @@ lx-tui/
     event/                      唯一事件循环：tokio select、PTY 消息与渲染调度
       chat/mod.rs               聊天轮次编排：取走网络效应、装配上下文、启动 agent turn、
                                 工具调用 BeginTool/FinishTool 的 DB→状态→回执握手与按 key 过滤
+      chat/connect.rs           `/connect` 预设连接、OAuth 启动/轮询、模型目录同步与回投事件
       chat/host.rs              agent loop ↔ 事件层的请求枚举与 `AgentHost` 生产实现
       chat/tool_calls.rs        BeginTool/FinishTool 握手：pending/running/结果落库门槛与结算
       chat/timeline.rs          步骤 position、parts 快照、checkpoint 与草稿提取
@@ -99,7 +102,9 @@ lx-tui/
       service.rs                同步持久化服务：执行 app 层效应出箱、按需载入提示词树
     tui/                        终端生命周期：原始模式、备用屏幕、恢复
     config/                     配置模型、默认值与校验
-      ai.rs                     模型配置（config/ai.json）：类型、校验与原子保存
+      ai/                       模型与预设供应商配置：ai.json（mod.rs）、预设目录与云端缓存合并（presets.rs）、
+                                快捷连接 connect.json 与运行时合并（connect.rs）、models.dev 同步（catalog_refresh.rs）、
+                                远端 /models 发现（verify.rs）、OAuth Device Code 与 PKCE 授权及刷新（oauth/）
     chat/                       流式聊天协议适配：统一事件、SSE 帧解析、thinking 标签、五种 transport、请求执行与上下文装配；
                                 lx agent 身份提示（prompt.rs：唯一稳定系统指令文本）；
                                 transport/tools/：七工具 wire 形状（Chat/Responses/Anthropic/Google）、
@@ -148,14 +153,19 @@ lx-tui/
     settings/                   设置与命令文件持久化，及本地回环设置 Web 服务
       commands.rs               自定义命令 Markdown 文件的读写
       service.rs                回环 HTTP 服务：静态设置页、JSON API 与事件投递（路由 async，禁止在运行时内再建运行时）
-      service/models.rs         模型设置 API：GET 脱敏 / PUT 原子保存 / POST 远端发现（发现直接 await，不 block_on）
-    platform/                   OS 专属实现（剪贴板、会话图片归档与 30 天 GC、鼠标捕获与指针形状、默认 shell、进程 cwd、打开浏览器、文件/目录权限、原子文件替换）
+      service/models/           模型设置与 Quick Connect API：GET/PUT `/api/models/settings`、POST `/api/models/fetch`（mod.rs）、
+                                `/api/models/connect/*` 预设保存/断开与 OAuth 授权流（connect.rs）
+    platform/                   OS 专属实现（剪贴板、会话图片归档与 30 天 GC、鼠标捕获与指针形状、默认 shell、进程 cwd、打开浏览器、文件/目录权限、随机数填充、原子文件替换）
   tests/                        集成测试
   scripts/                      开发与维护脚本，按需创建
   assets/                       浏览器前端资源（HTML/CSS/JS），经 include_str! 嵌入二进制
     settings.html               设置页结构
     settings.css                设置页样式
-    settings.js                 设置页脚本
+    settings.js                 设置页骨架与全局组件
+    settings_models.js          设置页 Models 视图脚本
+    settings_connect.js         设置页 Quick Connect 视图脚本
+    oauth_callback.html         OAuth 浏览器回调结果页模板
+    oauth_implicit.html         OAuth 隐式授权流回调页模板
 ```
 
 以上为目标结构。未实现的能力不提前创建目录或空文件，`按需创建` 的目录同理。

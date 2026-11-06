@@ -8,6 +8,7 @@
 
 pub mod ask;
 pub mod compact;
+pub mod connect;
 mod context_summary;
 mod file_snapshots;
 mod host;
@@ -809,6 +810,7 @@ fn start_stream(
         append_summary(&mut summary, &subagent_lines.join("\n"));
     }
     prepared.context = prepared.context.with_runtime_summary(summary);
+    let provider = frozen.provider.clone();
     let transport = frozen.transport.clone();
     let base_url = frozen.base_url.clone();
     let api_key = frozen.api_key.clone();
@@ -816,6 +818,7 @@ fn start_stream(
     let net_sender = sender.clone();
     let stream_key = key.clone();
     tokio::spawn(async move {
+        let api_key = connect::chat_api_key(&provider, api_key).await;
         // 每次采样一次模型流；增量即时回投（打字机效果），整轮终态在 loop 结束时上报。
         let live_sender = net_sender.clone();
         let live_key = stream_key.clone();

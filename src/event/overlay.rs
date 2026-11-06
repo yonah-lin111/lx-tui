@@ -336,6 +336,39 @@ pub(crate) fn handle_overlay_click(
             }
             None
         }
+        Some(Overlay::Connect(panel)) => {
+            let Some(layout) = ui::overlay::connect_layout(screen, panel) else {
+                update::close_overlay(state);
+                return None;
+            };
+            let inside = layout.area.contains((column, row).into());
+            let hit = inside
+                .then(|| ui::overlay::connect_row_at(screen, panel, column, row))
+                .flatten();
+            let attempt = panel.oauth_attempt_id().map(str::to_string);
+            if !inside {
+                if let Some(attempt_id) = attempt {
+                    state
+                        .effects
+                        .push(crate::app::effects::Effect::CancelPresetOAuth { attempt_id });
+                }
+                update::close_overlay(state);
+                return None;
+            }
+            if let Some(index) = hit {
+                let was_active = match &state.overlay {
+                    Some(Overlay::Connect(panel)) => panel.active_row() == Some(index),
+                    _ => false,
+                };
+                // 单击只移动 `❯`；再次点击已选中的同一行才确认执行，避免误触断开/授权。
+                if was_active {
+                    update::apply_connect_overlay_key(state, OverlayKey::Enter);
+                } else {
+                    update::set_connect_selection(state, index);
+                }
+            }
+            None
+        }
         Some(Overlay::ResumeSessionEdit(edit)) => {
             let confirming = edit.confirming_delete;
             let Some(shell) = ui::overlay::resume_edit_shell(screen) else {
@@ -422,6 +455,10 @@ pub(crate) fn overlay_input_hit_mut(
                 Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
                 &mut r.input,
             ))
+        }
+        Overlay::Connect(panel) if panel.has_text_input() && !panel.validating => {
+            let layout = ui::overlay::connect_layout(screen, panel)?;
+            Some((layout.input_rect, &mut panel.input))
         }
         _ => None,
     }

@@ -47,9 +47,16 @@ fn gemini_trims_unknown_keywords() {
         "type": "object",
         "additionalProperties": false,
         "$ref": "#/x",
-        "properties": {"q": {"type": "string", "minLength": 1}}
+        "properties": {
+            "q": {"type": "string", "minLength": 1},
+            "opt": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+            "free_map": {"type": "object", "additionalProperties": {"type": "string"}}
+        }
     }));
     assert!(trimmed.get("additionalProperties").is_none());
     assert!(trimmed.get("$ref").is_none());
     assert_eq!(trimmed["properties"]["q"]["type"], "string");
+    assert_eq!(trimmed["properties"]["opt"]["type"], "integer");
+    assert_eq!(trimmed["properties"]["opt"]["nullable"], true);
+    assert_eq!(trimmed["properties"]["free_map"]["properties"], json!({}));
 }

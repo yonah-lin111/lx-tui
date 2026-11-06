@@ -110,6 +110,13 @@ pub(crate) fn handle_mouse_moved(
         {
             *dirty = true;
         }
+        if let Some(Overlay::Connect(panel)) = state.overlay.as_ref() {
+            // 悬停只铺底色，不移动 `❯` 选中标记；离开行/边框时清空。
+            let hover = ui::overlay::connect_row_at(*screen, panel, mouse.column, mouse.row);
+            if update::hover_connect(state, hover) {
+                *dirty = true;
+            }
+        }
         if update::set_prompt_tree_hover(state, None) {
             *dirty = true;
         }

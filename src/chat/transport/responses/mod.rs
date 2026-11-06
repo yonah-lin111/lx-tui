@@ -75,6 +75,10 @@ pub fn build(
         "input": input,
         "stream": true,
     });
+    // ChatGPT Codex 后端禁止服务端持久化响应，必须显式关闭 store。
+    if base_url.contains("chatgpt.com/backend-api") {
+        body["store"] = json!(false);
+    }
     // 摘要请求不声明工具（无工具就无从发起调用）。
     let tool_decls = request.declared_tools();
     if !tool_decls.is_empty() {
@@ -82,17 +86,36 @@ pub fn build(
     }
     if let Some(params) = &request.variant_params {
         let mut reasoning = serde_json::Map::new();
-        if let Some(effort) = params.get("reasoningEffort").and_then(Value::as_str) {
+        if let Some(effort) = params
+            .get("reasoningEffort")
+            .or_else(|| params.get("effort"))
+            .and_then(Value::as_str)
+        {
             reasoning.insert("effort".into(), json!(effort));
         }
         if let Some(summary) = params.get("reasoningSummary").and_then(Value::as_str) {
             reasoning.insert("summary".into(), json!(summary));
+        } else if reasoning
+            .get("effort")
+            .and_then(Value::as_str)
+            .is_some_and(|effort| effort != "none")
+        {
+            // 对齐 opencode-dev（variant.ts `responsesEffort`）：
+            // Responses API 必须显式请求 `summary: "auto"` 才会在流中下发思考摘要块。
+            reasoning.insert("summary".into(), json!("auto"));
         }
         if !reasoning.is_empty() {
             body["reasoning"] = Value::Object(reasoning);
         }
         if let Some(include) = params.get("include").and_then(Value::as_array) {
             body["include"] = json!(include);
+        } else if body.get("reasoning").is_some() {
+            body["include"] = json!(["reasoning.encrypted_content"]);
+        }
+        if let Some(extra) = params.get("requestExtra").and_then(Value::as_object) {
+            for (key, value) in extra {
+                body[key.as_str()] = value.clone();
+            }
         }
     }
     Ok(TransportRequest {
@@ -320,6 +343,24 @@ impl StreamDecoder for Decoder {
                     });
                 }
             }
+            "response.output_item.done" => {
+                if let Some(item) = value.get("item")
+                    && item.get("type").and_then(Value::as_str) == Some("function_call")
+                    && let Ok(ordinal) = self.ordinal_of(&value)
+                {
+                    if let Some(arguments) = item.get("arguments").and_then(Value::as_str) {
+                        self.calls.replace_arguments(ordinal, arguments)?;
+                    }
+                    self.flush_delta(ordinal, &mut out);
+                    if let Some((call_id, arguments_json)) = self.calls.end(ordinal) {
+                        validate_arguments(&arguments_json)?;
+                        out.push(ChatDelta::ToolInputEnded {
+                            call_id,
+                            arguments_json,
+                        });
+                    }
+                }
+            }
             "response.completed" => {
                 // usage 必须先于终态发出：`Finished` 之后不再允许任何增量。
                 if let Some(usage) = value
@@ -400,6 +441,7 @@ impl Decoder {
             return Ok(ordinal as usize);
         }
         let item_id = json_str(value, "item_id")
+            .or_else(|| value.get("item").and_then(|item| json_str(item, "id")))
             .ok_or_else(|| protocol_error("function call arguments event without output_index"))?;
         self.item_indexes
             .iter()

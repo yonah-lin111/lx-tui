@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod chat;
+pub mod connect;
 pub mod mcp;
 pub mod skills;
 pub mod todo;
@@ -14,6 +15,7 @@ use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::detect::{AgentKind, AgentState};
 use crate::layout::PaneId;
 
+pub use connect::*;
 pub use todo::*;
 
 pub const SIDEBAR_TITLE: &str = "Workspaces";

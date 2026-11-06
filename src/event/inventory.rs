@@ -67,6 +67,18 @@ pub(crate) fn drain_settings_events(
                 // 模型配置已落盘：更新快照；在途请求继续持有旧快照到结束，
                 // 下一轮发送才用新配置。
                 update::apply_models_changed(state, &settings);
+                // 设置页可能同时改动了 connect.json：同步连接快照与 `$ENV` 探测结果。
+                if let Ok(path) = crate::config::ai::ai_config_path() {
+                    let connect_path = crate::config::ai::connect::connect_path_for_ai_path(&path);
+                    match crate::config::ai::connect::load_connect(&connect_path) {
+                        Ok(settings) => state.connect = settings.unwrap_or_default(),
+                        Err(error) => tracing::warn!(%error, "connect config reload failed"),
+                    }
+                }
+                state.connect_env = crate::config::ai::collect_preset_env_snapshot();
+                if let Some(crate::app::overlay::Overlay::Connect(panel)) = &mut state.overlay {
+                    panel.refresh_entries(&state.connect, &state.connect_env);
+                }
             }
             SettingsEvent::McpChanged => {
                 let roots = super::chat::mcp::project_roots(state);

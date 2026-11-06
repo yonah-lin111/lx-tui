@@ -159,6 +159,26 @@ fn official_uses_fixed_url() {
     assert_eq!(built.url, "https://api.openai.com/v1/chat/completions");
 }
 
+/// 官方 transport 预设（opencode / github-copilot 等）配置的 baseURL 必须生效。
+#[test]
+fn official_transport_uses_configured_base_url() {
+    let built = super::build(
+        "https://api.example.com/v1/",
+        Some("key"),
+        &request(),
+        false,
+    )
+    .expect("build ok");
+    assert_eq!(built.url, "https://api.example.com/v1/chat/completions");
+}
+
+/// 兼容 transport 缺少 baseURL 仍是配置错误，不得退化为相对路径。
+#[test]
+fn compatible_without_base_url_is_rejected() {
+    assert!(super::build("", Some("key"), &request(), true).is_err());
+    assert!(super::build("   ", Some("key"), &request(), true).is_err());
+}
+
 /// 前置系统规则消息的条数（`role=user` 且以 `<system-instructions>` 开头）。
 fn system_rule_prefix(body: &Value) -> usize {
     body["messages"]
@@ -325,8 +345,46 @@ fn no_variant_sends_no_reasoning_field() {
 #[test]
 fn variant_reasoning_effort_mapped() {
     let mut req = request();
-    req.variant_params = Some(json!({"reasoningEffort": "high"}));
-    assert_eq!(body_of(&req)["reasoning_effort"], "high");
+    req.variant_params = Some(json!({"reasoningEffort": "high", "enableThinking": true}));
+    let body = body_of(&req);
+    assert_eq!(body["reasoning_effort"], "high");
+    assert_eq!(body["enable_thinking"], true);
+}
+
+#[test]
+fn deepseek_and_kimi_tool_calls_include_empty_reasoning_content() {
+    let mut req = tool_request();
+    req.model.provider = "deepseek".into();
+    req.model.model = "deepseek-reasoner".into();
+    let body = body_of(&req);
+    let messages = body["messages"].as_array().expect("messages");
+    let assistant_with_tools = messages
+        .iter()
+        .find(|msg| msg.get("tool_calls").is_some())
+        .expect("assistant tool_calls message");
+    assert_eq!(assistant_with_tools["reasoning_content"], "");
+}
+
+/// 纯文本 assistant 历史同样需要 `reasoning_content`（无 tool_calls 也不例外）。
+#[test]
+fn deepseek_plain_assistant_text_includes_empty_reasoning_content() {
+    let mut req = request();
+    req.turns = Vec::new();
+    req.items = vec![
+        ModelItem::UserText("第一问".into()),
+        ModelItem::AssistantText("第一答".into()),
+        ModelItem::UserText("第二问".into()),
+    ];
+    req.model.provider = "deepseek".into();
+    req.model.model = "deepseek-reasoner".into();
+    let body = body_of(&req);
+    let messages = body["messages"].as_array().expect("messages");
+    let assistant = messages
+        .iter()
+        .find(|msg| msg.get("role").and_then(Value::as_str) == Some("assistant"))
+        .expect("assistant text message");
+    assert_eq!(assistant["content"], "第一答");
+    assert_eq!(assistant["reasoning_content"], "");
 }
 
 #[test]

@@ -289,22 +289,27 @@ pub(crate) fn json_i64(value: &Value, key: &str) -> Option<i64> {
     value.get(key).and_then(Value::as_i64)
 }
 
-/// 构造 OpenAI 风格 usage 增量（prompt/completion/total_tokens）。
+/// 构造 OpenAI 风格 usage 增量（prompt/completion/total_tokens，兼容 DeepSeek/Z.ai/Moonshot 缓存字段）。
 pub(crate) fn openai_usage(value: &Value) -> Option<ChatDelta> {
     let usage = value.get("usage")?;
     let input = json_i64(usage, "prompt_tokens");
     let output = json_i64(usage, "completion_tokens");
     let cache_read = usage
         .get("prompt_tokens_details")
-        .and_then(|details| json_i64(details, "cached_tokens"));
-    if input.is_none() && output.is_none() && cache_read.is_none() {
+        .and_then(|details| json_i64(details, "cached_tokens"))
+        .or_else(|| json_i64(usage, "prompt_cache_hit_tokens"))
+        .or_else(|| json_i64(usage, "cached_tokens"))
+        .or_else(|| json_i64(usage, "cache_read_input_tokens"));
+    let cache_write = json_i64(usage, "cache_created_input_tokens")
+        .or_else(|| json_i64(usage, "cache_creation_input_tokens"));
+    if input.is_none() && output.is_none() && cache_read.is_none() && cache_write.is_none() {
         return None;
     }
     Some(ChatDelta::Usage(crate::db::chat::Usage {
         input,
         output,
         cache_read,
-        cache_write: None,
+        cache_write,
     }))
 }
 

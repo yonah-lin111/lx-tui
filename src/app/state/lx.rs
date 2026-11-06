@@ -13,6 +13,7 @@ pub mod agent;
 pub mod ask;
 pub mod chat;
 pub mod compact;
+pub mod connect;
 mod edit;
 mod folded;
 mod history;
@@ -43,6 +44,9 @@ pub use chat::{
     ToolStatus, ToolSummary, UserShellView, WebSearchDetailView,
 };
 pub use compact::{CompactNoticeView, LxCompact};
+pub use connect::{
+    ConnectManageAction, ConnectPanel, ConnectPromptStep, ConnectProviderEntry, ConnectStage,
+};
 pub use mention::{LxMention, LxMentionView};
 pub use model_switch::{LxModelSwitch, ModelSwitchNoticeView};
 pub use rewind::{

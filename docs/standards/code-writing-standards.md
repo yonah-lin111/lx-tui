@@ -10,6 +10,7 @@
 - 标识符、配置键与状态值使用英文稳定值；中文只用于代码注释与日志；TUI 和浏览器设置页的用户可见文案一律英文；禁止写入 Unicode 替换字符 `U+FFFD`。
 - 公共项使用 `///` 文档注释说明职责与错误条件；内部逻辑使用简体中文单行注释，保持简洁。
 - 所有用户可见文案集中在 `src/ui/text.rs`，禁止在组件或逻辑中硬编码字符串。
+- 居中模态弹窗（`Overlay` 非 `Menu`）触发的 Toast 统一经 `app::update::show_toast_at(state, source_anchor, toast)` 分派：若触发时仍有模态弹窗在屏（含关闭二级弹窗/二级视图后退回一级弹窗），必须走全局 `AppState.toast`（`anchor: None`）；若点击/确认后已关闭全部模态弹窗（`state.overlay == None`），则落回打开该弹窗的源容器（`lx` 窗格落 `pane.lx.toast`、终端窗格落 `Some(pane_id)`、右侧面板落 `Some(state.prompt.id())`、左侧栏维持 `None`）。
 
 ## 模型提示词（模型可见文本）
 

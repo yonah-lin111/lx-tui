@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Authorization complete</title>
+</head>
+<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem">
+<h1>Finishing sign-in…</h1>
+<p id="status">Waiting for the authorization token.</p>
+<script>
+var params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+var token = params.get('access_token');
+var state = params.get('state');
+if (!token) {
+  document.getElementById('status').textContent = 'Missing access token.';
+} else {
+  fetch('/auth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      access_token: token,
+      state: state,
+      expires_in: params.get('expires_in')
+    })
+  })
+    .then(function (response) {
+      if (!response.ok) {
+        throw new Error('Token exchange failed');
+      }
+      document.getElementById('status').textContent =
+        'Authorization complete. You can close this window.';
+    })
+    .catch(function (error) {
+      document.getElementById('status').textContent = error.message;
+    });
+}
+</script>
+</body>
+</html>

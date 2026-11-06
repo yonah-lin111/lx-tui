@@ -40,6 +40,9 @@ use crate::chat::thinking::TagSplitter;
 /// Gemini API 基础 URL。
 const GOOGLE_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 
+/// Google 官方文档规定的历史 `functionCall` 重放哨兵签名（原始 `thoughtSignature` 未落库时使用）。
+const SKIP_THOUGHT_SIGNATURE_VALIDATOR: &str = "skip_thought_signature_validator";
+
 /// 构造 streamGenerateContent 请求。
 pub fn build(
     base_url: &str,
@@ -78,11 +81,47 @@ pub fn build(
     }
     let mut generation_config = serde_json::Map::new();
     if let Some(params) = &request.variant_params {
+        let mut thinking_config = serde_json::Map::new();
         if let Some(budget) = params.get("thinkingBudget").and_then(Value::as_i64) {
-            generation_config.insert("thinkingConfig".into(), json!({"thinkingBudget": budget}));
+            thinking_config.insert("thinkingBudget".into(), json!(budget));
         }
         if let Some(include) = params.get("includeThoughts").and_then(Value::as_bool) {
-            generation_config.insert("thinkingConfig".into(), json!({"includeThoughts": include}));
+            thinking_config.insert("includeThoughts".into(), json!(include));
+        }
+        if let Some(level) = params
+            .get("thinkingLevel")
+            .or_else(|| params.get("reasoningEffort"))
+            .and_then(Value::as_str)
+            .filter(|level| matches!(*level, "minimal" | "low" | "medium" | "high" | "max"))
+        {
+            if legacy_tool_media_model(model) {
+                if !thinking_config.contains_key("thinkingBudget") {
+                    let budget = match level {
+                        "minimal" => 512,
+                        "low" => 2048,
+                        "medium" => 8192,
+                        "high" => 16000,
+                        _ => 24576,
+                    };
+                    thinking_config.insert("thinkingBudget".into(), json!(budget));
+                }
+            } else if matches!(level, "minimal" | "low" | "medium" | "high") {
+                thinking_config.insert("thinkingLevel".into(), json!(level));
+            }
+        }
+        // 对齐 opencode-dev（packages/ai/src/protocols/gemini.ts）：
+        // 只要启用了思考（thinkingLevel 或非零 thinkingBudget）且未显式指定 includeThoughts，
+        // 默认设为 true，否则 Gemini 只在后台思考而不返回 `thought: true` 思考块。
+        let has_active_thinking = thinking_config.contains_key("thinkingLevel")
+            || thinking_config
+                .get("thinkingBudget")
+                .and_then(Value::as_i64)
+                .is_some_and(|budget| budget != 0);
+        if has_active_thinking && !thinking_config.contains_key("includeThoughts") {
+            thinking_config.insert("includeThoughts".into(), json!(true));
+        }
+        if !thinking_config.is_empty() {
+            generation_config.insert("thinkingConfig".into(), Value::Object(thinking_config));
         }
     }
     if !generation_config.is_empty() {
@@ -146,10 +185,15 @@ fn contents_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
             } => {
                 // model functionCall part：args 是 JSON 对象。
                 // 内部合成的 call ID 不写进供应商字段（Gemini 无原生 ID）。
+                // Gemini 3+ 要求历史重放的 functionCall 携带 thoughtSignature；
+                // 对齐 opencode-dev，使用官方哨兵 `skip_thought_signature_validator`。
                 push_parts(
                     &mut contents,
                     "model",
-                    json!({"functionCall": {"name": name, "args": input}}),
+                    json!({
+                        "functionCall": {"name": name, "args": input},
+                        "thoughtSignature": SKIP_THOUGHT_SIGNATURE_VALIDATOR,
+                    }),
                 );
             }
             HistoryBlock::ToolResult {
@@ -243,6 +287,10 @@ fn google_role(role: Role) -> &'static str {
 }
 
 /// 追加 parts：相邻同 role 的 content 合并为一帧的 parts 数组。
+///
+/// `functionResponse` 与普通 `text` / `inlineData` 不能混在同一条 user
+/// `Content` 里（Gemini 要求工具结果单独成帧）；仅两侧都是纯
+/// `functionResponse` 或两侧都不含 `functionResponse` 时才合并。
 fn push_parts(contents: &mut Vec<Value>, role: &str, part: Value) {
     let same_role = contents
         .last()
@@ -254,11 +302,24 @@ fn push_parts(contents: &mut Vec<Value>, role: &str, part: Value) {
             .last_mut()
             .and_then(|content| content.get_mut("parts"))
             .and_then(Value::as_array_mut)
+        && (role != "user" || user_parts_mergeable(parts, &part))
     {
         parts.push(part);
         return;
     }
     contents.push(json!({"role": role, "parts": [part]}));
+}
+
+/// user `Content` 的 parts 是否可与新 part 合并（禁止 functionResponse 与文本混排）。
+fn user_parts_mergeable(existing: &[Value], next: &Value) -> bool {
+    let existing_has_response = existing.iter().any(is_function_response);
+    let existing_all_responses = !existing.is_empty() && existing.iter().all(is_function_response);
+    let next_is_response = is_function_response(next);
+    (!existing_has_response && !next_is_response) || (existing_all_responses && next_is_response)
+}
+
+fn is_function_response(part: &Value) -> bool {
+    part.get("functionResponse").is_some_and(Value::is_object)
 }
 
 /// Gemini SSE 解码器：每帧是一个完整 JSON（非事件流），含 candidates parts。
@@ -385,13 +446,25 @@ impl StreamDecoder for Decoder {
             return Err(format!("api error: {}", truncate(message)));
         }
         // usageMetadata（每帧可重复，取最后一次为准的事件层合并）。
+        // 对齐 opencode-dev（protocols/gemini.ts）：
+        // - output = candidatesTokenCount（可见输出）+ thoughtsTokenCount（思考输出）
+        // - cache_read 优先读取顶层 cachedContentTokenCount，兼容 promptTokensDetails.cachedTokens。
         if let Some(usage) = value.get("usageMetadata") {
             let input = json_i64(usage, "promptTokenCount");
-            let output = json_i64(usage, "candidatesTokenCount");
-            let cache_read = usage
-                .get("promptTokensDetails")
-                .and_then(|details| json_i64(details, "cachedTokens"));
-            if input.is_some() || output.is_some() {
+            let visible = json_i64(usage, "candidatesTokenCount");
+            let thoughts = json_i64(usage, "thoughtsTokenCount");
+            let output = match (visible, thoughts) {
+                (Some(v), Some(t)) => Some(v.saturating_add(t)),
+                (Some(v), None) => Some(v),
+                (None, Some(t)) => Some(t),
+                (None, None) => None,
+            };
+            let cache_read = json_i64(usage, "cachedContentTokenCount").or_else(|| {
+                usage
+                    .get("promptTokensDetails")
+                    .and_then(|details| json_i64(details, "cachedTokens"))
+            });
+            if input.is_some() || output.is_some() || cache_read.is_some() {
                 out.push(ChatDelta::Usage(crate::db::chat::Usage {
                     input,
                     output,
@@ -430,11 +503,23 @@ impl StreamDecoder for Decoder {
                         out.extend(segments_to_deltas(self.splitter.feed(text)));
                     }
                 }
-                // finishReason：STOP/SAFETY/RECITATION 视为本次响应结束。
-                if let Some(reason) = json_str(candidate, "finishReason")
-                    && matches!(reason, "STOP" | "SAFETY" | "RECITATION" | "MAX_TOKENS")
-                {
-                    out.extend(self.finish_response());
+                // finishReason：正常完成 / 安全拦截 / 未知（等待客户端兜底）。
+                if let Some(reason) = json_str(candidate, "finishReason") {
+                    match reason {
+                        "STOP" | "MAX_TOKENS" | "OTHER" | "FINISH_REASON_UNSPECIFIED" => {
+                            out.extend(self.finish_response());
+                        }
+                        "SAFETY"
+                        | "RECITATION"
+                        | "PROHIBITED_CONTENT"
+                        | "BLOCKLIST"
+                        | "SPII"
+                        | "IMAGE_SAFETY"
+                        | "MALFORMED_FUNCTION_CALL" => {
+                            return Err(protocol_error(format!("generation stopped: {reason}")));
+                        }
+                        _ => {}
+                    }
                 }
             }
         }

@@ -100,6 +100,18 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if let Some(grab) = state.connect_scroll_drag {
+        if let Some(Overlay::Connect(panel)) = state.overlay.as_ref()
+            && let Some(layout) = ui::overlay::connect_layout(geometry.screen, panel)
+            && let Some(bar) = layout.scrollbar
+        {
+            let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+            if update::set_connect_viewport(state, offset, layout.visible) {
+                *dirty = true;
+            }
+        }
+        return;
+    }
     if let Some(grab) = state.referenced_search_scroll_drag {
         if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref()
             && let Some(layout) = ui::overlay::referenced_search_layout(geometry.screen, search)
@@ -497,6 +509,10 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     if state.referenced_menu_scroll_drag.take().is_some() {
+        *dirty = true;
+        return;
+    }
+    if state.connect_scroll_drag.take().is_some() {
         *dirty = true;
         return;
     }

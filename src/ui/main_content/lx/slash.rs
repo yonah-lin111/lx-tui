@@ -221,8 +221,11 @@ fn view<'a>(
             text::LX_REWIND_PANEL_FOOTER,
         ),
     };
-    // 撤销面板顶边右侧固定说明恢复范围；窄面板由渲染侧裁剪。
-    let right_title = matches!(panel, SlashPanel::Rewind(_)).then_some(text::LX_REWIND_SCOPE);
+    // 撤销面板顶边右侧固定说明恢复范围。
+    let right_title = match panel {
+        SlashPanel::Rewind(_) => Some(text::LX_REWIND_SCOPE),
+        _ => None,
+    };
     let above = input.y.saturating_sub(area.y);
     let cap = above.min(
         mention::MAX_POPUP_ROWS

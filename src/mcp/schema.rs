@@ -43,6 +43,9 @@ pub fn sanitize_json_schema(schema: &Value) -> (Value, bool) {
 }
 
 /// Gemini 只接受 schema 子集：只保留 type/description/properties/required/items/enum/format/nullable。
+///
+/// 同时对齐 Gemini 服务端校验规则：`required` 仅在 `type == "object"` 且 `properties`
+/// 存在时保留，并过滤掉不在 `properties` 中的字段名；过滤后为空数组时省略 `required`。
 pub fn trim_for_gemini(schema: &Value) -> Value {
     match schema {
         Value::Object(map) => {
@@ -51,7 +54,6 @@ pub fn trim_for_gemini(schema: &Value) -> Value {
                 "type",
                 "description",
                 "properties",
-                "required",
                 "items",
                 "enum",
                 "format",
@@ -71,6 +73,44 @@ pub fn trim_for_gemini(schema: &Value) -> Value {
                             _ => value.clone(),
                         },
                     );
+                }
+            }
+            if !out.contains_key("type")
+                && let Some(Value::Array(variants)) = map.get("anyOf").or_else(|| map.get("oneOf"))
+            {
+                let has_null = variants
+                    .iter()
+                    .any(|variant| variant.get("type").and_then(Value::as_str) == Some("null"));
+                if let Some(primary) = variants
+                    .iter()
+                    .find(|variant| variant.get("type").and_then(Value::as_str) != Some("null"))
+                    && let Value::Object(trimmed_primary) = trim_for_gemini(primary)
+                {
+                    for (key, value) in trimmed_primary {
+                        out.entry(key).or_insert(value);
+                    }
+                    if has_null {
+                        out.insert("nullable".to_string(), json!(true));
+                    }
+                }
+            }
+            if out.get("type").and_then(Value::as_str) == Some("object") {
+                out.entry("properties".to_string())
+                    .or_insert_with(|| json!({}));
+                if let Some(Value::Object(properties)) = out.get("properties")
+                    && let Some(Value::Array(required)) = map.get("required")
+                {
+                    let valid_required: Vec<Value> = required
+                        .iter()
+                        .filter(|item| {
+                            item.as_str()
+                                .is_some_and(|name| properties.contains_key(name))
+                        })
+                        .cloned()
+                        .collect();
+                    if !valid_required.is_empty() {
+                        out.insert("required".to_string(), Value::Array(valid_required));
+                    }
                 }
             }
             Value::Object(out)

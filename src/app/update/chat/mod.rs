@@ -17,6 +17,7 @@ use crate::ui::text;
 
 pub mod ask;
 pub mod compact;
+mod connect;
 mod fork;
 pub mod model_switch;
 mod process;
@@ -38,6 +39,12 @@ pub use compact::{
     compact_command, on_compact_empty, on_compact_failed, on_compact_finished,
     on_compact_revert_failed, on_compact_reverted, set_checkpoints as set_compact_checkpoints,
     toggle_checkpoint,
+};
+pub use connect::{
+    apply_connect_overlay_key, hover_connect, on_connect_failed, on_models_refresh_failed,
+    on_models_refreshed, on_preset_connected, on_preset_disconnected, on_preset_oauth_failed,
+    on_preset_oauth_prompt, open_connect_panel, scroll_connect, set_connect_selection,
+    set_connect_viewport,
 };
 pub use fork::{on_fork_completed, on_fork_failed, open_fork_panel};
 pub use model_switch::{set_switches as set_model_switches, toggle_model_switch};
@@ -61,10 +68,11 @@ pub use session::{
 };
 #[cfg(test)]
 pub(crate) use slash::finish_model_selection;
+pub(crate) use slash::refresh_slash_panel;
 use slash::unknown_slash_command;
 pub use slash::{
-    apply_models_changed, apply_slash_command, apply_slash_enter, open_history, open_model_picker,
-    persist_default_model,
+    accept_slash_command, apply_models_changed, apply_slash_command, apply_slash_enter,
+    open_history, open_model_picker, persist_default_model,
 };
 pub use subagent::{
     apply_deltas as apply_subagent_deltas, on_report_batch_committed, on_subagent_auto_compact,
@@ -91,7 +99,8 @@ pub(crate) use view::view_message_of;
 pub use viewport::{
     hover_lx_chat, hover_lx_jump_bottom, jump_lx_history_bottom, jump_lx_history_to_prompt,
     resolve_ask_list_window, resolve_task_agents_visible, resolve_task_output_visible,
-    scroll_lx_history, set_lx_history_scroll, toggle_lx_card,
+    scroll_lx_history, set_lx_history_scroll, toggle_latest_thinking, toggle_lx_card,
+    toggle_thinking_at,
 };
 pub(crate) use viewport::{resolve_lx_history, resolve_lx_rewind_center};
 
@@ -849,67 +858,6 @@ pub fn pin_lx_viewport(state: &mut AppState, pane: PaneId) -> bool {
     };
     target.lx.chat.history_scroll = scroll;
     target.lx.chat.follow_bottom = false;
-    true
-}
-
-/// 切换指定 thinking 块展开状态。
-///
-/// 先 [`pin_lx_viewport`] 再切换：跟随底部时 `history_scroll` 是过期值，不先锚定就会
-/// 让展开后的界面跳回历史最顶部（表现为「点了没反应 / 展不开」）。
-pub fn toggle_thinking_at(
-    state: &mut AppState,
-    pane: PaneId,
-    message_index: usize,
-    step_index: usize,
-) -> bool {
-    let Some(target) = state.pane_anywhere(pane) else {
-        return false;
-    };
-    let Some(message) = target.lx.chat.messages.get(message_index) else {
-        return false;
-    };
-    if !matches!(
-        message.step_at(step_index),
-        Some(crate::app::state::AssistantStepView::Part { part, .. })
-            if part.kind == crate::chat::events::PartKind::Reasoning
-    ) {
-        return false;
-    }
-    pin_lx_viewport(state, pane);
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    target.lx.chat.toggle_reasoning(message_index, step_index);
-    crate::app::update::clear_lx_selection_for(state, pane);
-    true
-}
-
-/// 切换最近一条 assistant 消息里的最后一个 thinking 块（Ctrl+T）。
-pub fn toggle_latest_thinking(state: &mut AppState, pane: PaneId) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    let mut found = None;
-    'outer: for (message_index, message) in target.lx.chat.messages.iter().enumerate().rev() {
-        for (step_index, step) in message.steps.iter().enumerate().rev() {
-            if step
-                .part()
-                .is_some_and(|part| part.kind == PartKind::Reasoning)
-            {
-                found = Some((message_index, step_index));
-                break 'outer;
-            }
-        }
-    }
-    let Some((message_index, step_index)) = found else {
-        return false;
-    };
-    pin_lx_viewport(state, pane);
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    target.lx.chat.toggle_reasoning(message_index, step_index);
-    crate::app::update::clear_lx_selection_for(state, pane);
     true
 }
 

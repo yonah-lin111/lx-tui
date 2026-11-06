@@ -62,6 +62,7 @@ pub fn build(
     if let Some(tail) = parts.tail_message() {
         messages.insert(0, json!({"role": "user", "content": tail}));
     }
+    let unsigned_tool_history = messages_have_unsigned_assistant_tool_use(&messages);
     let mut body = json!({
         "model": request.model.model,
         "system": parts.head,
@@ -75,27 +76,138 @@ pub fn build(
         body["tools"] = anthropic_tools(&tool_decls);
     }
     if let Some(params) = &request.variant_params {
-        // thinking 预算：thinkingBudget（token 数）映射为协议 thinking 结构。
-        if let Some(budget) = params.get("thinkingBudget").and_then(Value::as_i64) {
-            body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
-            // 有预算时 max_tokens 必须大于预算（协议约束）。
-            if budget >= DEFAULT_MAX_TOKENS {
+        if let Some(thinking) = params.get("thinking").filter(|value| value.is_object()) {
+            body["thinking"] = thinking.clone();
+            if let Some(budget) = thinking.get("budget_tokens").and_then(Value::as_i64)
+                && budget >= DEFAULT_MAX_TOKENS
+            {
                 body["max_tokens"] = json!(budget.saturating_add(1024));
             }
         }
-        if let Some(effort) = params.get("effort").and_then(Value::as_str) {
-            body["reasoning_effort"] = json!(effort);
+        // thinking 预算：thinkingBudget（token 数）映射为协议 thinking 结构。
+        if let Some(budget) = params.get("thinkingBudget").and_then(Value::as_i64) {
+            let clamped = budget.max(1024);
+            body["thinking"] = json!({"type": "enabled", "budget_tokens": clamped});
+            // 有预算时 max_tokens 必须大于预算（协议约束）。
+            if clamped >= DEFAULT_MAX_TOKENS {
+                body["max_tokens"] = json!(clamped.saturating_add(1024));
+            }
         }
+        if let Some(effort) = params
+            .get("effort")
+            .or_else(|| params.get("reasoningEffort"))
+            .and_then(Value::as_str)
+            .filter(|effort| !effort.is_empty())
+        {
+            if effort == "none" {
+                body["thinking"] = json!({"type": "disabled"});
+            } else if supports_adaptive_thinking(&request.model.model) {
+                // 对齐 opencode-dev（variant.ts `anthropicMessages` + anthropic-messages.ts）：
+                // Claude 4.6+ / 5.x 使用 adaptive thinking（含 display: summarized）与 output_config.effort。
+                body["thinking"] = json!({
+                    "type": "adaptive",
+                    "display": "summarized",
+                });
+                body["output_config"] = json!({"effort": effort});
+            } else {
+                // Claude 3.7/4.0/4.1/4.5 与 MiniMax / Kimi / GLM 等 Anthropic
+                // 兼容端点只支持手动 thinking + budget_tokens。
+                let budget = match effort {
+                    "low" => 4096,
+                    "medium" => 8192,
+                    "high" => 16000,
+                    _ => 31999,
+                };
+                body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
+                if budget >= DEFAULT_MAX_TOKENS {
+                    body["max_tokens"] = json!(budget + 1024);
+                }
+                if is_opus_4_5(&request.model.model) {
+                    body["output_config"] = json!({"effort": effort});
+                }
+            }
+        }
+        if let Some(extra) = params.get("requestExtra").and_then(Value::as_object) {
+            for (key, value) in extra {
+                body[key.as_str()] = value.clone();
+            }
+        }
+    }
+    // 手动 thinking 要求 assistant tool_use 历史携带签名 thinking 块；跨厂商
+    // 切换不回放 reasoning，因此工具续轮直接省略 thinking，避免 HTTP 400。
+    if body
+        .get("thinking")
+        .and_then(|thinking| thinking.get("type"))
+        .and_then(Value::as_str)
+        == Some("enabled")
+        && unsigned_tool_history
+        && let Some(object) = body.as_object_mut()
+    {
+        object.remove("thinking");
+    }
+    let mut headers = vec![
+        ("x-api-key".into(), key.to_string()),
+        ("anthropic-version".into(), API_VERSION.into()),
+    ];
+    if body.get("thinking").is_some() || base.contains("anthropic.com") {
+        headers.push((
+            "anthropic-beta".into(),
+            "interleaved-thinking-2025-05-14".into(),
+        ));
     }
     Ok(TransportRequest {
         url,
-        headers: vec![
-            ("x-api-key".into(), key.to_string()),
-            ("anthropic-version".into(), API_VERSION.into()),
-        ],
+        headers,
         body: serde_json::to_string(&body).map_err(|error| format!("encode body: {error}"))?,
         tools_requested: request.tools_surface().is_some(),
     })
+}
+
+/// Claude 4.6 / 4.7 / 5.x（含 Fable / Mythos）支持 `type: "adaptive"` +
+/// `output_config.effort`；其余 Claude 与 Anthropic 兼容模型走手动 budget。
+fn supports_adaptive_thinking(model_id: &str) -> bool {
+    let lower = model_id.to_ascii_lowercase();
+    if !lower.contains("claude") {
+        return false;
+    }
+    let version_5 = lower.contains("-5")
+        && !lower.contains("3-5")
+        && !lower.contains("4-5")
+        && !lower.contains("4.5");
+    lower.contains("4-6")
+        || lower.contains("4.6")
+        || lower.contains("4-7")
+        || lower.contains("4.7")
+        || version_5
+        || lower.contains("fable")
+        || lower.contains("mythos")
+}
+
+/// 历史中是否存在不含 thinking 块的 assistant `tool_use` 消息。
+fn messages_have_unsigned_assistant_tool_use(messages: &[Value]) -> bool {
+    messages.iter().any(|message| {
+        if message.get("role").and_then(Value::as_str) != Some("assistant") {
+            return false;
+        }
+        let Some(blocks) = message.get("content").and_then(Value::as_array) else {
+            return false;
+        };
+        let has_tool_use = blocks
+            .iter()
+            .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"));
+        let has_thinking = blocks.iter().any(|block| {
+            matches!(
+                block.get("type").and_then(Value::as_str),
+                Some("thinking" | "redacted_thinking")
+            )
+        });
+        has_tool_use && !has_thinking
+    })
+}
+
+fn is_opus_4_5(model_id: &str) -> bool {
+    let lower = model_id.to_ascii_lowercase();
+    lower.contains("opus-4-5") || lower.contains("opus-4.5") || lower.contains("4-5-opus")
 }
 
 /// 编码 `messages`：`items` 非空时把同一 assistant 的文本与 tool_use 合进一条消息的
@@ -200,13 +312,20 @@ fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
 }
 
 /// 追加一个 content block：相邻同 role 时并入同一条消息的 content 数组。
+///
+/// 例外：`tool_result` 消息后的普通用户文本不得并入同一条 user 消息——Anthropic
+/// 要求 `tool_result` 块位于消息最前，且不能被后续自然语言盖过；新文本另起一条。
 fn push_block(messages: &mut Vec<Value>, role: &str, block: Value) {
     let same_role = messages
         .last()
         .and_then(|message| message.get("role"))
         .and_then(Value::as_str)
         == Some(role);
+    let is_text = block.get("type").and_then(Value::as_str) == Some("text");
+    let blocked_by_tool_result =
+        same_role && is_text && messages.last().is_some_and(message_has_tool_result);
     if same_role
+        && !blocked_by_tool_result
         && let Some(content) = messages
             .last_mut()
             .and_then(|message| message.get_mut("content"))
@@ -216,6 +335,18 @@ fn push_block(messages: &mut Vec<Value>, role: &str, block: Value) {
         return;
     }
     messages.push(json!({"role": role, "content": [block]}));
+}
+
+/// 消息 content 数组中是否含 `tool_result` 块。
+fn message_has_tool_result(message: &Value) -> bool {
+    message
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|blocks| {
+            blocks
+                .iter()
+                .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+        })
 }
 
 /// Messages SSE 解码器。
@@ -340,6 +471,36 @@ impl StreamDecoder for Decoder {
                     "thinking" => {
                         self.bind_kind(index, BlockKind::Thinking);
                         self.bind_block(index, index);
+                        if let Some(thinking) = block.and_then(|block| json_str(block, "thinking"))
+                        {
+                            out.push(reasoning_delta(thinking));
+                        }
+                        if let Some(signature) =
+                            block.and_then(|block| json_str(block, "signature"))
+                        {
+                            out.push(ChatDelta::Part(PartDelta {
+                                kind: PartKind::Reasoning,
+                                text: String::new(),
+                                metadata: Some(json!({
+                                    "signature": signature,
+                                    "blockIndex": index,
+                                })),
+                            }));
+                        }
+                    }
+                    "redacted_thinking" => {
+                        self.bind_kind(index, BlockKind::Thinking);
+                        self.bind_block(index, index);
+                        if let Some(data) = block.and_then(|block| json_str(block, "data")) {
+                            out.push(ChatDelta::Part(PartDelta {
+                                kind: PartKind::Reasoning,
+                                text: String::new(),
+                                metadata: Some(json!({
+                                    "redactedData": data,
+                                    "blockIndex": index,
+                                })),
+                            }));
+                        }
                     }
                     // 供应商托管工具（如服务端 web 搜索）不得当成本地文件工具执行。
                     "server_tool_use" | "web_search_tool_result" | "code_execution_tool_result" => {
@@ -499,7 +660,7 @@ impl Decoder {
         }
         let stop = match reason {
             "tool_use" => ModelStepStop::ToolCalls,
-            "end_turn" | "stop_sequence" | "max_tokens" => ModelStepStop::Final,
+            "end_turn" | "stop_sequence" | "max_tokens" | "pause_turn" => ModelStepStop::Final,
             other => {
                 return Err(protocol_error(format!("unknown stop_reason: {other}")));
             }

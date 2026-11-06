@@ -2241,6 +2241,32 @@ fn toggling_pane_view_or_closing_pane_clears_anchored_toast() {
 }
 
 #[test]
+fn show_toast_at_clears_anchor_when_anchored_pane_was_closed() {
+    let (mut state, _first, second) = demo_two_panes();
+    open_pane_menu(&mut state, second, (0, 0));
+    select_menu_command(&mut state, MenuCommand::ClosePane);
+    activate_menu(&mut state);
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(state.pane_anywhere(second).is_none());
+
+    show_toast_at(
+        &mut state,
+        Some(second),
+        Toast::new(
+            ToastKind::Default,
+            "Copied 5 chars",
+            Some(second),
+            Instant::now(),
+        ),
+    );
+    let toast = state.toast.as_ref().expect("global toast");
+    assert_eq!(
+        toast.anchor, None,
+        "锚点窗格已关闭时必须清空 anchor，降级到屏幕顶部全局可见"
+    );
+}
+
+#[test]
 fn close_pane_refuses_last_pane() {
     let mut state = AppState::demo();
     let only = state.active_tab().layout.focus();

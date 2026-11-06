@@ -432,6 +432,15 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Char('d' | 'D') if ctrl => Some(OverlayKey::Remove),
             _ => overlay_text_edit_key(key),
         },
+        OverlayKind::Connect => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Up => Some(OverlayKey::Up),
+            KeyCode::Down => Some(OverlayKey::Down),
+            // `^R` / `⌘R`：刷新云端目录与已连接供应商模型。
+            KeyCode::Char('r' | 'R') if ctrl => Some(OverlayKey::Refresh),
+            _ => overlay_text_edit_key(key),
+        },
         OverlayKind::Rename | OverlayKind::NewWorkspace | OverlayKind::NewNode => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),

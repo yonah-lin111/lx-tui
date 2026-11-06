@@ -1144,6 +1144,7 @@ fn all_text_overlays_route_word_ops_and_cut() {
         OverlayKind::ReferencedFolderInput,
         OverlayKind::ReferencedFolderSearch,
         OverlayKind::ResumeSessionEdit,
+        OverlayKind::Connect,
     ];
     let cases = [
         (
@@ -1183,6 +1184,34 @@ fn all_text_overlays_route_word_ops_and_cut() {
             );
         }
     }
+}
+
+#[test]
+fn connect_overlay_routes_refresh_navigation_and_text_edits() {
+    let key =
+        |code, modifiers| super::overlay_key(KeyEvent::new(code, modifiers), OverlayKind::Connect);
+    assert_eq!(
+        key(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        Some(OverlayKey::Refresh)
+    );
+    assert_eq!(
+        key(KeyCode::Char('r'), KeyModifiers::SUPER),
+        Some(OverlayKey::Refresh)
+    );
+    assert_eq!(key(KeyCode::Esc, KeyModifiers::NONE), Some(OverlayKey::Esc));
+    assert_eq!(
+        key(KeyCode::Enter, KeyModifiers::NONE),
+        Some(OverlayKey::Enter)
+    );
+    assert_eq!(key(KeyCode::Up, KeyModifiers::NONE), Some(OverlayKey::Up));
+    assert_eq!(
+        key(KeyCode::Down, KeyModifiers::NONE),
+        Some(OverlayKey::Down)
+    );
+    assert_eq!(
+        key(KeyCode::Char('a'), KeyModifiers::NONE),
+        Some(OverlayKey::Char('a'))
+    );
 }
 
 #[test]

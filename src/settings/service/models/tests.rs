@@ -406,6 +406,11 @@ async fn variant_params_and_modalities_survive_round_trip() {
     // 再保存一次（模拟设置页编辑后保存）：参数与模态不丢。
     let revision = revision_of(body(&current)).expect("revision");
     let mut again: serde_json::Value = serde_json::from_str(body(&current)).expect("json");
+    // quickConnect 是只读视图，设置页保存时不会回传；剥离以免请求体超过上限。
+    again
+        .as_object_mut()
+        .expect("object")
+        .remove("quickConnect");
     again["revision"] = serde_json::json!(revision);
     let resaved = request(
         port,
@@ -471,6 +476,7 @@ async fn modalities_returned_and_explicit_null_clears() {
     // 字段缺失 = 保留旧值（老客户端往返不丢模态）。
     let revision = revision_of(body(&current)).expect("revision");
     let mut keep: serde_json::Value = serde_json::from_str(body(&current)).expect("json");
+    keep.as_object_mut().expect("object").remove("quickConnect");
     keep["revision"] = serde_json::json!(revision);
     keep["providers"][0]["models"][0]
         .as_object_mut()
@@ -497,6 +503,10 @@ async fn modalities_returned_and_explicit_null_clears() {
     // 显式 null = 清除（设置页清空全部勾选）。
     let revision = revision_of(body(&after_keep)).expect("revision 2");
     let mut clear: serde_json::Value = after_keep_json.clone();
+    clear
+        .as_object_mut()
+        .expect("object")
+        .remove("quickConnect");
     clear["revision"] = serde_json::json!(revision);
     clear["providers"][0]["models"][0]["modalities"] = serde_json::Value::Null;
     let cleared = request(
@@ -542,27 +552,91 @@ async fn fetch_without_key_is_422() {
 
 #[tokio::test]
 async fn fetch_unsupported_transport_is_422() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind mock");
+    let model_port = listener.local_addr().expect("addr").port();
+    let mock = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut buffer = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            loop {
+                let read = stream.read(&mut chunk).await.expect("read");
+                if read == 0 {
+                    break;
+                }
+                buffer.extend_from_slice(&chunk[..read]);
+                if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let payload = r#"{"data":[{"id":"mock-anthropic","display_name":"Mock Anthropic"}],"models":[{"name":"models/mock-google","displayName":"Mock Google"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                payload.len(),
+                payload
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.shutdown().await;
+            requests.push(String::from_utf8_lossy(&buffer).into_owned());
+        }
+        requests.join("\n")
+    });
+
     let (service, _events, _dir) = start_models("models-fetch-transport").await;
     let port = service.port();
     let token = service.token().to_string();
 
-    // anthropic/google 不支持发现：明确禁用，不伪造列表。
-    for kind in ["anthropic", "google"] {
-        let body = format!(
-            r#"{{"type": "{kind}", "baseUrl": "https://api.example.invalid", "apiKey": "k"}}"#
-        );
+    // anthropic 与 google 现在都支持 `/models` 发现。
+    for (kind, base_url) in [
+        ("anthropic", format!("http://127.0.0.1:{model_port}/v1")),
+        ("google", format!("http://127.0.0.1:{model_port}/v1beta")),
+    ] {
+        let payload = format!(r#"{{"type": "{kind}", "baseUrl": "{base_url}", "apiKey": "k"}}"#);
         let response = request(
             port,
             &write(
                 "POST",
                 &format!("/api/models/fetch?token={token}"),
-                &body,
+                &payload,
                 None,
             ),
         )
         .await;
-        assert_eq!(status(&response), 422, "{kind} 禁用发现");
+        assert_eq!(
+            status(&response),
+            200,
+            "{kind} 支持发现: {}",
+            body(&response)
+        );
+        let parsed: serde_json::Value = serde_json::from_str(body(&response)).expect("json");
+        assert!(
+            !parsed["models"].as_array().expect("models").is_empty(),
+            "{kind} returns models"
+        );
     }
+    let recorded = mock.await.expect("mock join");
+    assert!(recorded.contains("GET /v1/models"), "{recorded}");
+    assert!(recorded.contains("GET /v1beta/models"), "{recorded}");
+
+    // 未知协议仍然 422。
+    let body = r#"{"type": "bogus", "baseUrl": "https://api.example.invalid", "apiKey": "k"}"#;
+    let response = request(
+        port,
+        &write(
+            "POST",
+            &format!("/api/models/fetch?token={token}"),
+            body,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&response), 422, "unknown transport rejected");
     service.shutdown();
 }
 
@@ -949,3 +1023,7 @@ async fn models_save_preserves_unknown_top_level_ai_fields() {
     );
     service.shutdown();
 }
+
+#[cfg(test)]
+#[path = "tests/connect.rs"]
+mod connect;

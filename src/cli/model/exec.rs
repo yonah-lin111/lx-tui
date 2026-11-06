@@ -33,6 +33,11 @@ fn load_settings() -> Result<AiSettings, String> {
         None => Ok(AiSettings::empty()),
     }
 }
+fn load_runtime_settings() -> Result<AiSettings, String> {
+    Ok(crate::config::ai::connect::load_runtime_ai(&ai_path()?)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(AiSettings::empty))
+}
 fn save_settings(settings: &AiSettings) -> Result<(), String> {
     crate::config::ai::save_ai(&ai_path()?, settings).map_err(|error| error.to_string())
 }
@@ -40,7 +45,7 @@ fn is_enabled(settings: &AiSettings, provider: &str) -> bool {
     settings.enabled_providers.iter().any(|id| id == provider)
 }
 fn run_list(out: &Output, all: bool) -> Result<(), String> {
-    let settings = load_settings()?;
+    let settings = load_runtime_settings()?;
     let (mut rows, mut providers) = (Vec::new(), Vec::new());
     for (id, provider) in &settings.providers {
         let enabled = is_enabled(&settings, id);
@@ -91,7 +96,7 @@ fn run_list(out: &Output, all: bool) -> Result<(), String> {
     })
 }
 fn run_show(out: &Output, target: Option<&str>) -> Result<(), String> {
-    let settings = load_settings()?;
+    let settings = load_runtime_settings()?;
     let Some(spec) = target else {
         let value = json!({"defaultModel": settings.default_model, "titleSummary": settings.title_summary, "titleLanguage": settings.effective_title_language().as_str(), "streamIdleTimeoutMs": settings.idle_timeout_ms(), "exaApiKey": mask_opt(Some(settings.web_search.exa_api_key.as_str())), "tavilyApiKey": mask_opt(Some(settings.web_search.tavily_api_key.as_str()))});
         return out.emit(&value, |_, w| {
@@ -250,7 +255,8 @@ fn run_default(
             writeln!(w, "{label}: {}", format_selection(current.as_ref()))
         });
     };
-    let selection = parse_selection(spec, &settings)?;
+    let runtime = load_runtime_settings()?;
+    let selection = parse_selection(spec, &runtime)?;
     if title_summary {
         settings.title_summary = Some(selection.clone());
     } else {

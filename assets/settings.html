@@ -189,6 +189,13 @@
     </div>
     <div class="models-grid">
       <nav class="models-nav" aria-label="Model providers">
+        <div class="provider-tabs" role="tablist" aria-label="Provider source">
+          <button class="provider-tab active" id="prov-tab-quick" type="button" role="tab" aria-selected="true" onclick="switchProviderTab('quick')">Quick Connect</button>
+          <button class="provider-tab" id="prov-tab-custom" type="button" role="tab" aria-selected="false" onclick="switchProviderTab('custom')">Custom</button>
+        </div>
+        <div class="provider-search-wrap" id="provider-search-wrap">
+          <input class="input input-sm" id="provider-search" type="search" placeholder="Filter providers…">
+        </div>
         <div id="provider-list" class="provider-list"></div>
         <button id="new-provider-row" type="button" class="nav-item new" onclick="newProvider()">
           <span class="nav-slash">+</span>
@@ -202,15 +209,39 @@
           <button class="primary" onclick="newProvider()">New provider</button>
         </div>
         <div id="provider-editor" class="hidden">
+          <div class="preset-banner hidden" id="preset-banner">
+            <div class="preset-banner-main">
+              <div class="preset-banner-title-row">
+                <span class="preset-badge">Quick Connect Preset</span>
+                <span class="preset-status-badge" id="preset-status-badge">Not connected</span>
+              </div>
+              <p class="preset-banner-desc" id="preset-banner-desc"></p>
+              <p class="preset-banner-methods" id="preset-banner-methods"></p>
+            </div>
+          </div>
           <div class="editor-head">
             <h3 id="provider-legend">Edit provider</h3>
-            <div class="actions">
-              <button class="ghost" onclick="cancelProvider()">Cancel</button>
-              <button class="ghost" onclick="duplicateProvider()">Duplicate</button>
-              <button class="danger" onclick="deleteProvider()">Delete</button>
+            <div class="actions" id="custom-editor-actions">
+              <button class="ghost" type="button" onclick="cancelProvider()">Cancel</button>
+              <button class="ghost" type="button" onclick="duplicateProvider()">Duplicate</button>
+              <button class="danger" type="button" onclick="deleteProvider()">Delete</button>
+            </div>
+            <div class="actions hidden" id="preset-editor-actions">
+              <button class="ghost" id="cancel-preset-btn" type="button" onclick="cancelPresetProvider()">Cancel</button>
+              <button class="ghost" id="reset-preset-btn" type="button" onclick="resetPresetProvider()">Reset to Preset</button>
+              <button class="danger" id="disconnect-preset-btn" type="button" onclick="disconnectPresetProvider()">Disconnect</button>
             </div>
           </div>
           <div class="editor-body" id="provider-editor-body">
+            <div class="card hidden" id="preset-oauth-card">
+              <div class="card-head"><h3 class="card-title">Quick Sign-in (OAuth / URL)</h3></div>
+              <div id="preset-oauth-methods" class="preset-oauth-methods"></div>
+              <div id="preset-oauth-pending" class="preset-oauth-pending hidden"></div>
+            </div>
+            <div class="card hidden" id="preset-fields-card">
+              <div class="card-head"><h3 class="card-title">Preset Settings</h3></div>
+              <div id="preset-form-fields" class="field-grid"></div>
+            </div>
             <div class="card">
               <div class="card-head"><h3 class="card-title">Provider</h3></div>
               <div class="field-grid">
@@ -559,6 +590,7 @@
 </main>
 <script src="/settings.js"></script>
 <script src="/settings_models.js"></script>
+<script src="/settings_connect.js"></script>
 <script src="/settings_mcp.js"></script>
 <script src="/settings_skills.js"></script>
 <script src="/settings_subagents.js"></script>

@@ -28,17 +28,18 @@ pub use lx::LxInputMode;
 pub use lx::{
     AgentFilter, AgentsState, AskAnsweredView, AskDetailView, AskEditor, AskHit, AskState,
     AskWheelZone, AssistantStepView, CardSection, CardTarget, ChatMessageView, ChatPartView,
-    CommandView, CompactNoticeView, DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView,
-    FileDiffView, ForkEntry, ForkPanel, FrozenModel, HistoryEntry, HistoryPanel, InputHintLevel,
-    InteractionAction, Lx, LxChat, LxCompact, LxEntry, LxModelSwitch, MAX_RESIDENT_SUBAGENT_CHATS,
-    McpDetailView, McpImageView, ModelCandidate, ModelPicker, ModelPickerStage,
-    ModelSwitchNoticeView, ModelsSnapshot, PanelWindow, PendingShell, PlanSnapshotView,
-    PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView, QueuedSubmission,
-    RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView, RewindPanel,
-    RewindTarget, RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand,
-    SlashEntry, SlashPanel, SnapshotState, StartupCount, StartupCounts, SubagentDetailView,
-    SubagentReportView, SubagentRun, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus,
-    ToolSummary, UserShellView, WebSearchDetailView,
+    CommandView, CompactNoticeView, ConnectManageAction, ConnectPanel, ConnectPromptStep,
+    ConnectProviderEntry, ConnectStage, DiffHunkView, DiffLineView, FileChangeView,
+    FileDiffDetailView, FileDiffView, ForkEntry, ForkPanel, FrozenModel, HistoryEntry,
+    HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat, LxCompact, LxEntry, LxModelSwitch,
+    MAX_RESIDENT_SUBAGENT_CHATS, McpDetailView, McpImageView, ModelCandidate, ModelPicker,
+    ModelPickerStage, ModelSwitchNoticeView, ModelsSnapshot, PanelWindow, PendingShell,
+    PlanSnapshotView, PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView,
+    QueuedSubmission, RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView,
+    RewindPanel, RewindTarget, RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView,
+    SlashCommand, SlashEntry, SlashPanel, SnapshotState, StartupCount, StartupCounts,
+    SubagentDetailView, SubagentReportView, SubagentRun, TaskPage, TaskTab, ToolCallView,
+    ToolDetailView, ToolStatus, ToolSummary, UserShellView, WebSearchDetailView,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
@@ -271,6 +272,8 @@ pub struct AppState {
     pub referenced_search_scroll_drag: Option<u16>,
     /// 拖拽引用文件夹目录弹窗滚动条 thumb 时相对顶部的抓取偏移。
     pub referenced_menu_scroll_drag: Option<u16>,
+    /// 拖拽 `/connect` 模态滚动条 thumb 时相对顶部的抓取偏移。
+    pub connect_scroll_drag: Option<u16>,
     /// 拖拽终端窗格滚动条 thumb：窗格与相对顶部的抓取偏移。
     pub terminal_scroll_drag: Option<(PaneId, u16)>,
     /// 拖拽 lx 输入框滚动条 thumb：窗格与相对顶部的抓取偏移。
@@ -311,6 +314,12 @@ pub struct AppState {
     pub settings_open_requested: bool,
     /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
     pub models: ModelsSnapshot,
+    /// 快捷连接配置快照（`connect.json`）：由事件层加载，`/connect` 面板据此展示连接状态。
+    pub connect: crate::config::ai::connect::ConnectSettings,
+    /// 预设供应商环境变量快照（`$ENV` 连接）：由事件层采集，`app/` 不直接读进程环境。
+    pub connect_env: BTreeMap<String, String>,
+    /// 最近在 `/connect` 面板中选中的预设供应商 ID：重开 `/connect` 或返回列表时恢复高亮。
+    pub last_connect_provider: Option<String>,
     /// 子 agent 角色与并发配置快照（`config/subagents.json`）：设置页保存后由事件层热更新。
     pub subagents_config: crate::config::subagents::SubagentsSection,
     /// 在途的新会话自动标题生成（session_id 集合；手动 `/rename`、`/resume` 改名或删除立即移除）。
@@ -445,6 +454,7 @@ impl AppState {
             referenced_menu_click: None,
             referenced_search_scroll_drag: None,
             referenced_menu_scroll_drag: None,
+            connect_scroll_drag: None,
             terminal_scroll_drag: None,
             lx_scroll_drag: None,
             lx_history_scroll_drag: None,
@@ -465,6 +475,9 @@ impl AppState {
             settings_available: false,
             settings_open_requested: false,
             models: ModelsSnapshot::default(),
+            connect: crate::config::ai::connect::ConnectSettings::default(),
+            connect_env: BTreeMap::new(),
+            last_connect_provider: None,
             subagents_config: crate::config::subagents::SubagentsSection::default(),
             pending_session_titles: std::collections::HashSet::new(),
             pending_prompt_titles: std::collections::HashMap::new(),

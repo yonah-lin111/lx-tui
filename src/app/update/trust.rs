@@ -71,21 +71,23 @@ pub fn apply_trust_decision(state: &mut AppState, granted: bool) {
         return;
     }
     match trust.trigger {
-        TrustTrigger::SyncWorkspaceCwd { .. } => toast_cancelled(state, text::TOAST_SYNC_CANCELLED),
+        TrustTrigger::SyncWorkspaceCwd { pane, .. } => {
+            toast_cancelled(state, Some(pane), text::TOAST_SYNC_CANCELLED);
+        }
         TrustTrigger::OpenWorkspaceHistory { .. } => {
-            toast_cancelled(state, text::TOAST_OPEN_CANCELLED)
+            toast_cancelled(state, None, text::TOAST_OPEN_CANCELLED);
         }
         TrustTrigger::CreateWorkspace { .. } | TrustTrigger::OpenWorktree { .. } => {
-            toast_cancelled(state, text::TOAST_CREATE_CANCELLED);
+            toast_cancelled(state, None, text::TOAST_CREATE_CANCELLED);
         }
     }
 }
 
-/// 取消操作的工作区告警 toast。
-fn toast_cancelled(state: &mut AppState, message: &str) {
-    let toast = Toast::new(ToastKind::Danger, message, None, Instant::now())
+/// 取消操作的工作区告警 toast：弹窗已关闭，按打开弹窗的源容器锚定（侧栏来源维持全局 `None`）。
+fn toast_cancelled(state: &mut AppState, anchor: Option<crate::layout::PaneId>, message: &str) {
+    let toast = Toast::new(ToastKind::Danger, message, anchor, Instant::now())
         .with_title(text::TOAST_WORKSPACE_TITLE);
-    super::show_toast(state, toast);
+    super::show_toast_at(state, anchor, toast);
 }
 
 #[cfg(test)]

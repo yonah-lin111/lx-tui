@@ -205,7 +205,7 @@ fn system_instruction_carries_lx_prompt() {
     assert!(tail.starts_with("<system-instructions>"));
 }
 
-/// `tools[0].functionDeclarations` 与 `available_tools()` 一一对应。
+/// `tools[0].functionDeclarations` 与 `available_tools()` 一一对应，且内置工具也做 Gemini schema 裁剪。
 #[test]
 fn tools_use_function_declarations() {
     let body = body_of(&request());
@@ -217,7 +217,16 @@ fn tools_use_function_declarations() {
     for (wire, spec) in declarations.iter().zip(specs) {
         assert_eq!(wire["name"], spec.name);
         assert_eq!(wire["description"], spec.description);
-        assert_eq!(wire["parameters"], spec.parameters());
+        assert_eq!(
+            wire["parameters"],
+            crate::mcp::trim_for_gemini(&spec.parameters())
+        );
+        assert!(
+            wire["parameters"].get("additionalProperties").is_none(),
+            "{} parameters still contains additionalProperties: {}",
+            spec.name,
+            wire["parameters"]
+        );
     }
 }
 
@@ -233,12 +242,17 @@ fn tool_history_encodes_function_call_and_response_parts() {
         "user → model → user → model → user"
     );
     assert_eq!(contents[base]["parts"][0]["text"], "读 a.rs");
-    // model functionCall：args 是对象，不写入合成 call ID。
-    let call = &contents[base + 1]["parts"][0]["functionCall"];
+    // model functionCall：args 是对象，不写入合成 call ID，携带官方重放哨兵 thoughtSignature。
+    let call_part = &contents[base + 1]["parts"][0];
+    let call = &call_part["functionCall"];
     assert_eq!(contents[base + 1]["role"], "model");
     assert_eq!(call["name"], "read");
     assert_eq!(call["args"], json!({"path": "a.rs"}));
     assert!(call.get("id").is_none(), "不得把合成 ID 写进供应商字段");
+    assert_eq!(
+        call_part["thoughtSignature"],
+        "skip_thought_signature_validator"
+    );
     // user functionResponse：name 由配对调用解析，response 包装结构化结果。
     assert_eq!(contents[base + 2]["role"], "user");
     let response = &contents[base + 2]["parts"][0]["functionResponse"];
@@ -248,6 +262,80 @@ fn tool_history_encodes_function_call_and_response_parts() {
     let failed = &contents[base + 4]["parts"][0]["functionResponse"];
     assert_eq!(failed["name"], "write");
     assert_eq!(failed["response"]["error"], "permission_denied");
+}
+
+/// `functionResponse` 之后的用户文本必须另起一条 user `Content`，不能混排。
+#[test]
+fn user_text_after_function_response_starts_new_content() {
+    let mut req = request();
+    req.turns = Vec::new();
+    req.items = vec![
+        ModelItem::UserText("读 a.rs".into()),
+        ModelItem::AssistantToolCall {
+            call_id: "gemini-1-0-0-read".into(),
+            name: "read".into(),
+            input: json!({"path": "a.rs"}),
+        },
+        ModelItem::ToolResult {
+            call_id: "gemini-1-0-0-read".into(),
+            content: "1: fn main() {}".into(),
+            is_error: false,
+            images: Vec::new(),
+        },
+        ModelItem::UserText("继续".into()),
+    ];
+    let body = body_of(&req);
+    let contents = body["contents"].as_array().expect("contents");
+    let base = system_rule_prefix(&body);
+    assert_eq!(contents.len() - base, 4, "user → model → user → user");
+    let result_content = &contents[base + 2];
+    assert_eq!(result_content["role"], "user");
+    let result_parts = result_content["parts"].as_array().expect("parts");
+    assert_eq!(result_parts.len(), 1);
+    assert!(result_parts[0].get("functionResponse").is_some());
+    let text_content = &contents[base + 3];
+    assert_eq!(text_content["role"], "user");
+    assert_eq!(text_content["parts"][0]["text"], "继续");
+    assert!(text_content["parts"][0].get("functionResponse").is_none());
+}
+
+/// 多个连续 `functionResponse` 仍合并在同一条 user `Content` 内。
+#[test]
+fn consecutive_function_responses_stay_in_one_content() {
+    let mut req = request();
+    req.turns = Vec::new();
+    req.items = vec![
+        ModelItem::UserText("读两个文件".into()),
+        ModelItem::AssistantToolCall {
+            call_id: "gemini-1-0-0-read".into(),
+            name: "read".into(),
+            input: json!({"path": "a.rs"}),
+        },
+        ModelItem::AssistantToolCall {
+            call_id: "gemini-1-0-1-read".into(),
+            name: "read".into(),
+            input: json!({"path": "b.rs"}),
+        },
+        ModelItem::ToolResult {
+            call_id: "gemini-1-0-0-read".into(),
+            content: "a".into(),
+            is_error: false,
+            images: Vec::new(),
+        },
+        ModelItem::ToolResult {
+            call_id: "gemini-1-0-1-read".into(),
+            content: "b".into(),
+            is_error: false,
+            images: Vec::new(),
+        },
+    ];
+    let body = body_of(&req);
+    let contents = body["contents"].as_array().expect("contents");
+    let base = system_rule_prefix(&body);
+    let parts = contents[base + 2]["parts"].as_array().expect("parts");
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0]["functionResponse"]["name"], "read");
+    assert_eq!(parts[1]["functionResponse"]["name"], "read");
 }
 
 /// **不污染请求**：`functionResponse` 只含 `name` / `response`，
@@ -307,6 +395,21 @@ fn thinking_budget_maps_to_generation_config() {
         body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
         1024
     );
+    assert_eq!(
+        body["generationConfig"]["thinkingConfig"]["includeThoughts"], true,
+        "non-zero thinkingBudget must default includeThoughts to true"
+    );
+
+    req.variant_params = Some(json!({"reasoningEffort": "high"}));
+    let body = body_of(&req);
+    assert_eq!(
+        body["generationConfig"]["thinkingConfig"]["includeThoughts"], true,
+        "reasoningEffort/thinkingLevel must default includeThoughts to true"
+    );
+    assert_eq!(
+        body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+        "high"
+    );
 }
 
 // ---------------------------------------------------------------- 解码
@@ -356,6 +459,24 @@ fn thought_part_is_reasoning_and_order_preserved() {
             reason: StopReason::Complete
         })
     );
+}
+
+#[test]
+fn usage_metadata_sums_thoughts_tokens_and_reads_cached_content_token_count() {
+    let mut decoder = decoder();
+    let deltas = decode_all(
+        &mut decoder,
+        &[
+            r#"{"candidates":[{"content":{"parts":[{"text":"ok"}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"thoughtsTokenCount":80,"cachedContentTokenCount":60}}"#,
+        ],
+    );
+    assert!(deltas.iter().any(|delta| matches!(
+        delta,
+        ChatDelta::Usage(usage)
+            if usage.input == Some(100)
+                && usage.output == Some(100)
+                && usage.cache_read == Some(60)
+    )));
 }
 
 /// 单 functionCall：Started + Ended（args 已是完整对象）+ ResponseFinished{ToolCalls}。
@@ -539,14 +660,14 @@ fn function_call_with_non_object_args_is_invalid() {
     assert!(error.contains(TOOL_ARGUMENTS_INVALID_CODE), "{error}");
 }
 
-/// 未知 finishReason（如 MAX_TOKENS 之外的值）不产生终态，EOF 由 client 判失败。
+/// 真正未知的 finishReason 不产生终态，EOF 由 client 判失败。
 #[test]
 fn unknown_finish_reason_waits_for_client() {
     let mut decoder = decoder();
     let deltas = decode_frames(
         &mut decoder,
         &[
-            r#"{"candidates":[{"content":{"parts":[{"text":"x"}],"role":"model"},"finishReason":"OTHER"}]}"#,
+            r#"{"candidates":[{"content":{"parts":[{"text":"x"}],"role":"model"},"finishReason":"UNRECOGNIZED_REASON"}]}"#,
         ],
     );
     assert!(!decoder.has_completion());
@@ -555,6 +676,48 @@ fn unknown_finish_reason_waits_for_client() {
             .iter()
             .any(|delta| matches!(delta, ChatDelta::Finished { .. }))
     );
+}
+
+/// `OTHER` / `FINISH_REASON_UNSPECIFIED` 表示响应正常结束（内容可能不完整但仍算完成）。
+#[test]
+fn other_and_unspecified_finish_reasons_complete_response() {
+    for reason in ["OTHER", "FINISH_REASON_UNSPECIFIED"] {
+        let mut decoder = decoder();
+        let frame = format!(
+            r#"{{"candidates":[{{"content":{{"parts":[{{"text":"x"}}],"role":"model"}},"finishReason":"{reason}"}}]}}"#
+        );
+        let deltas = decode_all(&mut decoder, &[&frame]);
+        assert!(deltas.contains(&ChatDelta::ResponseFinished {
+            stop: ModelStepStop::Final
+        }));
+        assert!(deltas.contains(&ChatDelta::Finished {
+            reason: StopReason::Complete
+        }));
+    }
+}
+
+/// 安全 / 内容拦截类 finishReason 必须报协议错误，不能伪装成正常完成。
+#[test]
+fn blocked_finish_reasons_are_protocol_errors() {
+    for reason in [
+        "SAFETY",
+        "RECITATION",
+        "PROHIBITED_CONTENT",
+        "BLOCKLIST",
+        "SPII",
+        "IMAGE_SAFETY",
+        "MALFORMED_FUNCTION_CALL",
+    ] {
+        let mut decoder = decoder();
+        let frame = format!(
+            r#"{{"candidates":[{{"content":{{"parts":[{{"text":"x"}}],"role":"model"}},"finishReason":"{reason}"}}]}}"#
+        );
+        let error = decoder
+            .decode_frame(&frame)
+            .expect_err("blocked reason rejected");
+        assert!(error.contains("generation stopped"), "{error}");
+        assert!(error.contains(reason), "{error}");
+    }
 }
 
 /// `MAX_TOKENS` 也视为本次响应结束（内容已截断但响应本身完成）。

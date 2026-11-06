@@ -52,6 +52,10 @@ pub(crate) fn handle_mouse_down_left(
     // 新的一次按下意味着上一轮 Down→Up 已经结束：指针在拖动中移出窗口会丢掉 Up，
     // 残留现场若被这次无关的 Up 消费，会按旧行号误点（如点工具栏却折叠了树里的文件夹）。
     state.prompt_drag = None;
+    // 模态列表滚动条拖拽同理：丢失 Up 后下一次手势不得沿用旧 thumb 偏移。
+    state.connect_scroll_drag = None;
+    state.referenced_search_scroll_drag = None;
+    state.referenced_menu_scroll_drag = None;
     // 历史列表的搜索拖选/滚动条/行拖拽同理：丢失 Up 后下一次手势不得被旧状态劫持。
     state.workspace_history.search_drag = false;
     state.workspace_history.scroll_drag = None;
@@ -68,6 +72,23 @@ pub(crate) fn handle_mouse_down_left(
         }
     }
     if state.overlay.is_some() {
+        // `/connect` 模态的滚动条独立于模态点击：命中轨道/thumb 时滚动视口后再走浮层点击。
+        if let Some(Overlay::Connect(panel)) = state.overlay.as_ref()
+            && let Some(layout) = ui::overlay::connect_layout(*screen, panel)
+            && let Some(bar) = layout.scrollbar
+            && bar.track.contains((mouse.column, mouse.row).into())
+        {
+            match ui::widgets::scrollbar::thumb_grab_offset(&bar, mouse.row) {
+                Some(grab) => state.connect_scroll_drag = Some(grab),
+                None => {
+                    let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, mouse.row);
+                    if update::set_connect_viewport(state, offset, layout.visible) {
+                        *dirty = true;
+                    }
+                }
+            }
+            return;
+        }
         // 引用文件夹搜索弹窗的滚动条独立于模态点击：命中轨道/thumb 时滚动视口后再走浮层点击。
         if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref()
             && let Some(layout) = ui::overlay::referenced_search_layout(*screen, search)

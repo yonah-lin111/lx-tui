@@ -18,6 +18,17 @@ use serde::{Deserialize, Serialize};
 
 use super::{ConfigError, user_data_root};
 
+pub mod catalog_refresh;
+pub mod connect;
+pub mod oauth;
+pub mod presets;
+pub mod verify;
+
+pub use connect::{
+    collect_preset_env_snapshot, disconnect_preset_on_disk, disconnect_preset_on_disk_with_env,
+};
+pub use oauth::ensure_connect_oauth_fresh;
+
 /// 默认流式空闲超时（毫秒），对齐 codex 的 5 分钟。
 ///
 /// 60s 对大上下文预填充和慢供应商太短：最新子 agent session 里就有一次
@@ -175,13 +186,19 @@ pub struct ModelConfig {
 }
 
 impl ModelConfig {
-    /// 该模型是否声明支持图像输入（`modalities.input` 数组包含 `"image"`）。
+    /// 该模型是否声明支持图像输入（`modalities.input` 包含 `image` 或 `image/*` MIME）。
     pub fn supports_image_input(&self) -> bool {
         self.modalities
             .as_ref()
             .and_then(|m| m.get("input"))
             .and_then(serde_json::Value::as_array)
-            .is_some_and(|inputs| inputs.iter().any(|v| v.as_str() == Some("image")))
+            .is_some_and(|inputs| {
+                inputs.iter().any(|value| {
+                    value
+                        .as_str()
+                        .is_some_and(|item| item == "image" || item.starts_with("image/"))
+                })
+            })
     }
 }
 
@@ -372,17 +389,27 @@ impl AiSettings {
     /// 加载容错：当磁盘上的可选选择项（如 `titleSummary`）指向已移除/未启用的供应商或模型时，
     /// 清理悬空引用而不让整份 `ai.json` 失效。
     pub fn sanitize_optional_selections(&mut self) {
+        self.sanitize_optional_selections_with_connect(None);
+    }
+
+    /// 与 [`Self::sanitize_optional_selections`] 相同，但允许选择指向 `connect.json`
+    /// 中已连接的预设供应商。
+    pub fn sanitize_optional_selections_with_connect(
+        &mut self,
+        connect: Option<&connect::ConnectSettings>,
+    ) {
         let enabled: std::collections::HashSet<String> = self
             .enabled_providers
             .iter()
             .filter(|id| self.providers.contains_key(*id))
             .cloned()
             .collect();
-        sanitize_selection_slot(
+        sanitize_selection_slot_with_connect(
             "title model",
             &mut self.title_summary,
             &self.providers,
             &enabled,
+            connect,
         );
     }
 
@@ -396,6 +423,21 @@ impl AiSettings {
     /// 校验整体一致性：provider id 匹配、默认选择指向存在且启用的模型、
     /// variant 存在于该模型 variants、base URL 合法。
     pub fn validate(&self) -> Result<(), AiConfigError> {
+        self.validate_inner(None)
+    }
+
+    /// 与 [`Self::validate`] 相同，但允许默认选择指向 `connect.json` 中已连接的预设模型。
+    pub(crate) fn validate_with_connect(
+        &self,
+        connect: Option<&connect::ConnectSettings>,
+    ) -> Result<(), AiConfigError> {
+        self.validate_inner(connect)
+    }
+
+    fn validate_inner(
+        &self,
+        connect: Option<&connect::ConnectSettings>,
+    ) -> Result<(), AiConfigError> {
         let mut enabled = std::collections::HashSet::new();
         for id in &self.enabled_providers {
             if !self.providers.contains_key(id) {
@@ -438,25 +480,52 @@ impl AiSettings {
             }
         }
         if let Some(selection) = &self.default_model {
-            validate_selection("default model", selection, &self.providers, &enabled)?;
+            validate_selection_with_connect(
+                "default model",
+                selection,
+                &self.providers,
+                &enabled,
+                connect,
+            )?;
         }
         if let Some(selection) = &self.title_summary {
-            validate_selection("title model", selection, &self.providers, &enabled)?;
+            validate_selection_with_connect(
+                "title model",
+                selection,
+                &self.providers,
+                &enabled,
+                connect,
+            )?;
         }
         Ok(())
     }
 }
 
-fn sanitize_selection_slot(
+pub(crate) fn sanitize_selection_slot(
     role: &str,
     slot: &mut Option<ModelSelection>,
     providers: &BTreeMap<String, ProviderConfig>,
     enabled: &std::collections::HashSet<String>,
 ) {
+    sanitize_selection_slot_with_connect(role, slot, providers, enabled, None);
+}
+
+fn sanitize_selection_slot_with_connect(
+    role: &str,
+    slot: &mut Option<ModelSelection>,
+    providers: &BTreeMap<String, ProviderConfig>,
+    enabled: &std::collections::HashSet<String>,
+    connect: Option<&connect::ConnectSettings>,
+) {
     let Some(selection) = slot.as_mut() else {
         return;
     };
     let Some(provider) = providers.get(&selection.provider) else {
+        if connect
+            .is_some_and(|settings| connect::is_connected_preset_selection(settings, selection))
+        {
+            return;
+        }
         tracing::warn!(
             role,
             provider = %selection.provider,
@@ -532,6 +601,22 @@ fn validate_selection(
     Ok(())
 }
 
+fn validate_selection_with_connect(
+    role: &str,
+    selection: &ModelSelection,
+    providers: &BTreeMap<String, ProviderConfig>,
+    enabled: &std::collections::HashSet<String>,
+    connect: Option<&connect::ConnectSettings>,
+) -> Result<(), AiConfigError> {
+    if providers.contains_key(&selection.provider) {
+        return validate_selection(role, selection, providers, enabled);
+    }
+    if connect.is_some_and(|settings| connect::is_connected_preset_selection(settings, selection)) {
+        return Ok(());
+    }
+    validate_selection(role, selection, providers, enabled)
+}
+
 impl Default for AiSettings {
     fn default() -> Self {
         Self::empty()
@@ -589,20 +674,46 @@ pub fn load_ai(path: &Path) -> Result<Option<AiSettings>, AiConfigError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(AiConfigError::Io(error)),
     };
-    let settings = parse_ai(&text)?;
+    let settings = parse_ai_with_connect(&text, load_connect_for_ai(path).as_ref())?;
     Ok(Some(settings))
+}
+
+fn load_connect_for_ai(ai_path: &Path) -> Option<connect::ConnectSettings> {
+    let path = connect::connect_path_for_ai_path(ai_path);
+    match connect::load_connect(&path) {
+        Ok(settings) => settings,
+        Err(error) => {
+            tracing::warn!(path = %path.display(), error = %error, "ignoring unreadable connect.json");
+            None
+        }
+    }
 }
 
 /// 解析并校验 `ai.json` 文本。
 pub fn parse_ai(text: &str) -> Result<AiSettings, AiConfigError> {
+    let mut settings = parse_ai_root(text)?;
+    settings.sanitize_optional_selections();
+    settings.validate()?;
+    Ok(settings)
+}
+
+fn parse_ai_with_connect(
+    text: &str,
+    connect: Option<&connect::ConnectSettings>,
+) -> Result<AiSettings, AiConfigError> {
+    let mut settings = parse_ai_root(text)?;
+    settings.sanitize_optional_selections_with_connect(connect);
+    settings.validate_with_connect(connect)?;
+    Ok(settings)
+}
+
+fn parse_ai_root(text: &str) -> Result<AiSettings, AiConfigError> {
     #[derive(Deserialize)]
     struct Root {
         ai: AiSettings,
     }
-    let mut root: Root = serde_json::from_str(text)
+    let root: Root = serde_json::from_str(text)
         .map_err(|error| AiConfigError::Invalid(format!("malformed json: {error}")))?;
-    root.ai.sanitize_optional_selections();
-    root.ai.validate()?;
     Ok(root.ai)
 }
 
@@ -611,7 +722,16 @@ pub fn parse_ai(text: &str) -> Result<AiSettings, AiConfigError> {
 /// 目录权限交由 `ensure_config_dir`（0700）；保存失败不破坏旧文件。
 /// 临时文件名带进程 ID 与进程内原子序号，并发保存互不覆盖。
 pub fn save_ai(path: &Path, settings: &AiSettings) -> Result<(), AiConfigError> {
-    settings.validate()?;
+    save_ai_with_connect(path, settings, load_connect_for_ai(path).as_ref())
+}
+
+/// 与 [`save_ai`] 相同，但允许显式指定 `connect.json` 内容进行校验。
+pub(crate) fn save_ai_with_connect(
+    path: &Path,
+    settings: &AiSettings,
+    connect: Option<&connect::ConnectSettings>,
+) -> Result<(), AiConfigError> {
+    settings.validate_with_connect(connect)?;
     let mut root = serde_json::Map::new();
     root.insert(
         "ai".to_string(),
@@ -620,7 +740,11 @@ pub fn save_ai(path: &Path, settings: &AiSettings) -> Result<(), AiConfigError> 
     );
     let body = serde_json::to_string_pretty(&root)
         .map_err(|error| AiConfigError::Invalid(format!("serialize failed: {error}")))?;
-    let body = format!("{body}\n");
+    save_private_json(path, &format!("{body}\n"))
+}
+
+/// 同目录临时文件原子写（0600 权限），供 `ai.json` 与 `connect.json` 共用。
+pub(crate) fn save_private_json(path: &Path, body: &str) -> Result<(), AiConfigError> {
     if let Some(parent) = path.parent() {
         create_private_dir(parent)?;
     }
@@ -673,5 +797,9 @@ pub fn validate_base_url(url: &str) -> Result<(), AiConfigError> {
     Ok(())
 }
 
+#[cfg(test)]
+mod connect_tests;
+#[cfg(test)]
+mod presets_tests;
 #[cfg(test)]
 mod tests;

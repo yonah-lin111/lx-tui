@@ -13,14 +13,20 @@
 
 ```text
 assets/
-  settings.html        设置页结构（src/settings/service/page.rs 经 include_str! 加载）
-  settings.css         设置页样式
-  settings.js          设置页核心脚本（标签页、General、Commands、toast 与 select 组件）
-  settings_models.js   Models 视图脚本（全局草稿、模型卡片、模态与思考等级编辑）
+  settings.html           设置页结构（src/settings/service/page.rs 经 include_str! 加载）
+  settings.css            设置页样式
+  settings.js             页面骨架与全局组件（标签页、General、Commands、toast 与自绘 select）
+  settings_models.js      Models 视图脚本（全局草稿、模型卡片、模态与思考等级编辑）
+  settings_connect.js     Quick Connect 视图脚本（预设列表、表单、OAuth、连接状态与预设草稿）
+  settings_mcp.js         MCP 视图脚本（服务器草稿、探测与保存）
+  settings_skills.js      Skills 视图脚本（技能草稿与保存）
+  settings_subagents.js   Subagents 视图脚本（角色、委派模式与模型锁定）
+  oauth_callback.html     OAuth 浏览器回调结果页模板（src/config/ai/oauth/browser.rs 经 include_str! 加载）
+  oauth_implicit.html     OAuth 隐式授权流（fragment 转发）回调页模板
 ```
 
 - 文件名使用小写 `snake_case`，一名一页；同一页面的 HTML / CSS / JS 共用词干（`<name>.html` / `.css` / `.js`）。
-- 单页脚本超过 1000 行时按职责拆分：主 `<name>.js` 保留页面骨架与全局组件，其余视图拆为 `<name>_<section>.js`，均在 `page::asset` 登记并按 HTML 中的顺序加载。
+- 单页脚本超过 1000 行时按职责拆分：主 `<name>.js` 保留页面骨架与全局组件，其余视图拆为 `<name>_<section>.js`，均在 `page::asset` 登记并按 HTML 中的顺序加载（`settings.js` → `settings_models.js` → `settings_connect.js` → `settings_mcp.js` → `settings_skills.js` → `settings_subagents.js`）。拆分后的脚本共享同一全局作用域，加载顺序即依赖顺序：后加载文件可调用先加载文件定义的全局函数与变量。
 - **结构、样式、脚本分文件维护**：HTML 不含内联 `<style>` / `<script>` 正文，改为 `<link rel="stylesheet" href="/<name>.css">` 与 `<script src="/<name>.js"></script>`。
 - 若确需嵌入非 HTML 资源（图标、字体等二进制），单独放置并以扩展名区分；二进制用 `include_bytes!`，文本用 `include_str!`。
 

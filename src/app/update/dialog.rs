@@ -21,6 +21,11 @@ use super::worktree::apply_worktree_open_key;
 ///
 /// 确认切换工作区路径时返回写入目标窗格的 shell 命令；其余返回 None。
 pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneId, Vec<u8>)> {
+    // `/connect` 居中模态：导航、提交、刷新与输入编辑都在连接状态机内部处理。
+    if matches!(state.overlay, Some(Overlay::Connect(_))) {
+        super::chat::apply_connect_overlay_key(state, key);
+        return None;
+    }
     if matches!(state.overlay, Some(Overlay::WorktreeOpen(_))) {
         apply_worktree_open_key(state, key);
         return None;
@@ -171,7 +176,8 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 | OverlayKind::ReferencedFolderInput
                 | OverlayKind::ReferencedFolderSearch
                 | OverlayKind::ReferencedFolderDelete
-                | OverlayKind::ResumeSessionEdit,
+                | OverlayKind::ResumeSessionEdit
+                | OverlayKind::Connect,
             )
             | None => None,
         },
@@ -203,6 +209,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         | OverlayKey::Back
         | OverlayKey::Copy
         | OverlayKey::Remove
+        | OverlayKey::Refresh
         | OverlayKey::PageUp
         | OverlayKey::PageDown => None,
     }
@@ -357,13 +364,14 @@ fn confirm_close(state: &mut AppState) {
 ///
 /// 无输入框的浮层与受保护状态（校验中、删除确认中）只吞掉粘贴，绝不穿透到底层终端。
 pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
-    let refresh_search = {
+    let (refresh_search, refresh_connect) = {
         let Some(overlay) = state.overlay.as_mut() else {
             return false;
         };
         match overlay {
             Overlay::ReferencedFolderInput(input) if input.validating => return false,
             Overlay::ResumeSessionEdit(edit) if edit.confirming_delete => return false,
+            Overlay::Connect(panel) if panel.validating => return false,
             _ => {}
         }
         let Some(input) = overlay.input_mut() else {
@@ -376,12 +384,22 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
             Overlay::ReferencedFolderInput(input) => input.error = None,
             Overlay::ResumeSessionEdit(edit) => edit.hint = None,
             Overlay::WorktreeOpen(dialog) => dialog.normalize_selection(),
+            Overlay::Connect(panel) => panel.clear_error(),
             _ => {}
         }
-        matches!(overlay, Overlay::ReferencedFolderSearch(_))
+        (
+            matches!(overlay, Overlay::ReferencedFolderSearch(_)),
+            matches!(
+                overlay,
+                Overlay::Connect(panel) if matches!(panel.stage, crate::app::state::ConnectStage::Providers)
+            ),
+        )
     };
     if refresh_search {
         super::refresh_referenced_search(state);
+    }
+    if refresh_connect && let Some(Overlay::Connect(panel)) = state.overlay.as_mut() {
+        panel.refilter_from_input();
     }
     if matches!(state.overlay, Some(Overlay::NewWorkspace(_))) {
         state.workspace_history.new_workspace_confirming = false;
@@ -393,11 +411,12 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
 ///
 /// 删除记入输入框自身的一步撤销；列表类浮层同步重算高亮/过滤。
 pub fn cut_overlay_selected_text(state: &mut AppState) -> Option<String> {
-    let (text, refresh_search) = {
+    let (text, refresh_search, refresh_connect) = {
         let overlay = state.overlay.as_mut()?;
         match overlay {
             Overlay::ReferencedFolderInput(input) if input.validating => return None,
             Overlay::ResumeSessionEdit(edit) if edit.confirming_delete => return None,
+            Overlay::Connect(panel) if panel.validating => return None,
             _ => {}
         }
         let text = overlay.input_mut()?.cut_selected()?;
@@ -408,12 +427,23 @@ pub fn cut_overlay_selected_text(state: &mut AppState) -> Option<String> {
                 edit.confirming_delete = false;
             }
             Overlay::WorktreeOpen(dialog) => dialog.normalize_selection(),
+            Overlay::Connect(panel) => panel.clear_error(),
             _ => {}
         }
-        (text, matches!(overlay, Overlay::ReferencedFolderSearch(_)))
+        (
+            text,
+            matches!(overlay, Overlay::ReferencedFolderSearch(_)),
+            matches!(
+                overlay,
+                Overlay::Connect(panel) if matches!(panel.stage, crate::app::state::ConnectStage::Providers)
+            ),
+        )
     };
     if refresh_search {
         super::refresh_referenced_search(state);
+    }
+    if refresh_connect && let Some(Overlay::Connect(panel)) = state.overlay.as_mut() {
+        panel.refilter_from_input();
     }
     if matches!(state.overlay, Some(Overlay::NewWorkspace(_))) {
         state.workspace_history.new_workspace_confirming = false;

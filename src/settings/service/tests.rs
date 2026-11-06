@@ -113,6 +113,10 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         js_body.contains("textContent"),
         "dynamic text via textContent"
     );
+    assert!(
+        !js_body.contains(".innerHTML"),
+        "no innerHTML in settings js"
+    );
 
     // Models 视图独立资源：加载/保存/复制/删除/远端获取与模态、思考等级入口。
     let models_js = request(port, &get("/settings_models.js")).await;
@@ -134,6 +138,34 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(
         !models_js_body.contains(".innerHTML"),
         "no innerHTML for dynamic data"
+    );
+
+    // Quick Connect 视图独立资源：双 Tab、搜索、OAuth/断连与 connect.json 保存。
+    let connect_js = request(port, &get("/settings_connect.js")).await;
+    assert_eq!(status(&connect_js), 200);
+    assert!(connect_js.contains("javascript"), "connect js content type");
+    let connect_js_body = body(&connect_js);
+    for entry in [
+        "switchProviderTab",
+        "renderPresetList",
+        "renderPresetEditor",
+        "savePresetDrafts",
+        "resetPresetProvider",
+        "disconnectPresetProvider",
+        "/api/models/connect",
+        "/api/models/connect/disconnect",
+        "/api/models/connect/oauth/start",
+        "/api/models/connect/oauth/status",
+    ] {
+        assert!(connect_js_body.contains(entry), "connect js entry: {entry}");
+    }
+    assert!(
+        !connect_js_body.contains(".innerHTML"),
+        "no innerHTML in connect js"
+    );
+    assert!(
+        html.contains("/settings_connect.js"),
+        "connect script linked"
     );
 
     let mcp_js = request(port, &get("/settings_mcp.js")).await;
@@ -173,12 +205,13 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "capability toggles"
     );
 
-    // 七份资源均无外部引用。
+    // 八份资源均无外部引用。
     for (name, text) in [
         ("html", html),
         ("css", body(&css)),
         ("js", js_body),
         ("models_js", models_js_body),
+        ("connect_js", connect_js_body),
         ("mcp_js", mcp_js_body),
         ("skills_js", skills_js_body),
         ("subagents_js", subagents_js_body),

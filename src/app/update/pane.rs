@@ -14,6 +14,8 @@ use super::selection::{WHEEL_LINES, clear_selection};
 mod popups;
 mod task_page;
 
+#[cfg(test)]
+pub use super::chat::accept_slash_command;
 pub use popups::{
     apply_lx_mention_entries, hover_lx_mention, hover_lx_paste, hover_lx_refer, hover_lx_slash,
     lx_mention_root_for_pane, scroll_lx_mention, scroll_lx_refer, scroll_lx_slash,
@@ -439,7 +441,7 @@ fn after_editor_edit(state: &mut AppState, pane_id: PaneId, command: LxInput) {
     let rewrote =
         edits_text(command) && !matches!(command, LxInput::Newline | LxInput::EnterFolder);
     if rewrote {
-        refresh_slash_panel(state, pane_id);
+        super::chat::refresh_slash_panel(state, pane_id);
     }
 }
 
@@ -639,174 +641,6 @@ fn edits_text(command: LxInput) -> bool {
             | LxInput::Clear
             | LxInput::Cut
     )
-}
-
-/// 编辑后刷新 `/` 命令候选面板：行首命令位置输入 `/` 时打开/过滤。
-pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
-    // Shell 模式：`/` 是命令字面值，不打开任何内置面板。
-    if state
-        .pane_anywhere(pane)
-        .is_some_and(|target| target.lx.shell_mode())
-    {
-        if let Some(target) = state.pane_mut_anywhere(pane) {
-            target.lx.slash = None;
-        }
-        return;
-    }
-    // 二级面板（`/model`、`/resume`）的过滤词是**输入框全文**：任何编辑后都重算一次。
-    refresh_slash_filter(state, pane);
-    let query = state.pane_anywhere(pane).and_then(|target| {
-        let masked = crate::app::paste::mask_pasted_text(&target.lx.input);
-        super::super::state::lx::slash::slash_trigger(&masked, target.lx.cursor)
-    });
-    let Some(query) = query else {
-        // 离开命令位置时关闭命令候选面板（model/resume 面板不受影响）。
-        if let Some(target) = state.pane_mut_anywhere(pane)
-            && matches!(
-                target.lx.slash,
-                Some(super::super::state::SlashPanel::Commands { .. })
-            )
-        {
-            target.lx.slash = None;
-        }
-        return;
-    };
-    // `/` 前缀或更具体前缀：命令候选实时过滤；skill 归 `@` 面板管理。
-    let matching = super::super::state::lx::slash::SlashPanel::command_entries(&query);
-    if let Some(target) = state.pane_mut_anywhere(pane) {
-        if matching.is_empty() {
-            if matches!(
-                target.lx.slash,
-                Some(super::super::state::SlashPanel::Commands { .. })
-            ) {
-                target.lx.slash = None;
-            }
-            return;
-        }
-        // 模糊匹配过滤词变化时，对齐 codex 重置高亮至首项 (0)；未变时保留原高亮与窗口。
-        let query_changed = match &target.lx.slash {
-            Some(super::super::state::SlashPanel::Commands {
-                query: prev_query, ..
-            }) => prev_query != &query,
-            _ => true,
-        };
-        let mut window = match &target.lx.slash {
-            Some(super::super::state::SlashPanel::Commands { window, .. }) if !query_changed => {
-                *window
-            }
-            _ => super::super::state::lx::slash::PanelWindow::default(),
-        };
-        window.clamp(matching.len());
-        target.lx.slash = Some(super::super::state::SlashPanel::Commands {
-            items: matching,
-            window,
-            query,
-        });
-    }
-}
-
-/// 按输入框全文重算二级面板（`/model`、`/resume`）的过滤视图。
-///
-/// 只在相应面板打开时生效；`CommandPanelView` 候选面板由 `refresh_slash_panel`
-/// 自己按行首 `/...` 过滤，不走这里。过滤词是**输入框全文**（含其它行草稿），
-/// 与用户在编辑区看到的内容一致，不做任何暂存/恢复。
-fn refresh_slash_filter(state: &mut AppState, pane: PaneId) {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return;
-    };
-    let query = target.lx.input.clone();
-    match target.lx.slash.as_mut() {
-        Some(super::super::state::SlashPanel::History(panel)) => panel.refilter(&query),
-        Some(super::super::state::SlashPanel::Model(picker)) => picker.refilter(&query),
-        Some(super::super::state::SlashPanel::Fork(panel)) => panel.refilter(&query),
-        _ => {}
-    }
-}
-
-/// 采纳 `/` 命令候选：消费整条命令文本（不写入草稿或 DB）。
-pub fn accept_slash_command(state: &mut AppState, pane: PaneId) -> bool {
-    // 只读取出候选与输入，避免在调用 update 函数时仍持有窗格可变借用。
-    let Some((entry, input, cursor)) = state.pane_anywhere(pane).and_then(|target| {
-        let Some(super::super::state::SlashPanel::Commands { items, window, .. }) =
-            target.lx.slash.clone()
-        else {
-            return None;
-        };
-        items
-            .get(window.active)
-            .cloned()
-            .map(|entry| (entry, target.lx.input.clone(), target.lx.cursor))
-    }) else {
-        if let Some(target) = state.pane_mut_anywhere(pane) {
-            target.lx.slash = None;
-        }
-        return false;
-    };
-    let super::super::state::SlashEntry::Command(command) = entry;
-    // 带参回显命令（如 `/rename`）：必须独立占满单行，采纳后将输入替换为 `<cmd> ` 并留待输入参数。
-    if let Some(prefix) = command.echo_prefix() {
-        let trimmed = input.trim();
-        let line_start = input[..cursor].rfind('\n').map_or(0, |offset| offset + 1);
-        let line = input[line_start..].trim();
-        let standalone = trimmed == line
-            && input[cursor..].trim().is_empty()
-            && !line.contains('\n')
-            && !line.contains('\r')
-            && !line.contains(char::is_whitespace)
-            && line.starts_with('/');
-        if !standalone {
-            super::chat::show_lx_hint(
-                state,
-                pane,
-                super::super::state::InputHintLevel::Warning,
-                crate::ui::text::LX_RENAME_STANDALONE_FAILED,
-            );
-            return true;
-        }
-        if let Some(target) = state.pane_mut_anywhere(pane) {
-            target.lx.replace_input(prefix);
-            target.lx.slash = None;
-        }
-        return true;
-    }
-    // 撤销命令必须独立占满输入：夹带正文/多行/参数/光标前后残留时拒绝并保留草稿。
-    if command == super::super::state::SlashCommand::Rewind {
-        let trimmed = input.trim();
-        let line_start = input[..cursor].rfind('\n').map_or(0, |offset| offset + 1);
-        let line = input[line_start..].trim();
-        let standalone = trimmed == line
-            && input[cursor..].trim().is_empty()
-            && !line.contains('\n')
-            && !line.contains('\r')
-            && !line.contains(char::is_whitespace)
-            && line.starts_with('/');
-        if !standalone {
-            super::chat::show_lx_hint(
-                state,
-                pane,
-                super::super::state::InputHintLevel::Warning,
-                crate::ui::text::LX_REWIND_FAILED,
-            );
-            return true;
-        }
-        // 命令文本整条消费（不进入历史/撤销栈）。
-        if let Some(target) = state.pane_mut_anywhere(pane) {
-            target.lx.input.clear();
-            target.lx.cursor = 0;
-            target.lx.slash = None;
-        }
-        super::chat::apply_slash_command(state, pane, command);
-        return true;
-    }
-    let line_start = input[..cursor].rfind('\n').map_or(0, |offset| offset + 1);
-    // 消费整条命令：删除该行命令文本。
-    if let Some(target) = state.pane_mut_anywhere(pane) {
-        target.lx.input.replace_range(line_start..cursor, "");
-        target.lx.cursor = line_start;
-        target.lx.slash = None;
-    }
-    super::chat::apply_slash_command(state, pane, command);
-    true
 }
 
 /// 切换 lx 页选中入口（仅鼠标点击触发）；切换入口会取消在途粘贴面板。

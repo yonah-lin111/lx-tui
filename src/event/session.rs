@@ -24,6 +24,19 @@ pub(crate) const CWD_CHECK_DELAY: Duration = Duration::from_millis(300);
 /// PTY 输出后的 Agent 去抖扫描延迟；与 cwd 检查共用窗口。
 pub(crate) const AGENT_CHECK_DELAY: Duration = Duration::from_millis(300);
 
+/// 启动时确定栏宽：右栏取主区可用宽度的 2/5（主区更宽），左栏取配置值。
+pub(crate) fn initialize_layout_widths(
+    tui: &mut Tui,
+    state: &mut AppState,
+    config: &Config,
+) -> io::Result<()> {
+    let size = tui.terminal().size()?;
+    let area = Rect::new(0, 0, size.width, size.height);
+    state.sidebar_width = config.sidebar_width;
+    state.prompt_width = ui::layout::default_side_width(area, config, state.sidebar_collapsed);
+    Ok(())
+}
+
 /// 当前帧几何：整屏区域、窗格矩形与区域划分；渲染、命中测试与 PTY 尺寸同步共用。
 pub(crate) struct Geometry {
     pub(crate) screen: Rect,
