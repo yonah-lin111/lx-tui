@@ -320,4 +320,35 @@ fn drain_mcp_events_updates_open_mcp_panel_and_suppresses_toast_on_disabled_pane
             .is_some(),
         "enabled pane receives failure toast"
     );
+
+    // Clearing toast on pane2, emitting Starting -> Failed with the same error re-triggers toast (P2-2).
+    state.pane_mut_anywhere(pane2).expect("pane2").lx.toast = None;
+    let _ = sender.send(McpEvent::Status {
+        project: PathBuf::from("/repo"),
+        server: "beta".into(),
+        status: ServerStatus::Starting,
+    });
+    let _ = sender.send(McpEvent::Status {
+        project: PathBuf::from("/repo"),
+        server: "beta".into(),
+        status: ServerStatus::Failed {
+            error: "timeout".into(),
+        },
+    });
+    assert!(drain_mcp_events(
+        &mut receiver,
+        &mut state,
+        None,
+        &mut statuses,
+        &mut toasted
+    ));
+    assert!(
+        state
+            .pane_anywhere(pane2)
+            .expect("pane2")
+            .lx
+            .toast
+            .is_some(),
+        "retrying a failed server must re-arm failure toast for the same error"
+    );
 }

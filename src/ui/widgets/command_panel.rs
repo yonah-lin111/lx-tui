@@ -676,11 +676,14 @@ fn render_items(buf: &mut Buffer, layout: &PanelLayout, view: &CommandPanelView<
             .and_then(|mask| mask.get(index))
             .copied()
             .unwrap_or(false);
+        let show_active = !view.hide_active_marker
+            && (!is_disabled || view.window_anchor.is_some())
+            && index == view.active;
         render_item(
             buf,
             row,
             item,
-            !view.hide_active_marker && !is_disabled && index == view.active,
+            show_active,
             !is_disabled && view.current == Some(index),
             view.hide_active_marker || is_disabled,
             marker,
@@ -729,7 +732,12 @@ fn render_item(
     let lead = usize::from(!borderless);
     let (marker_span, marker_style) = if borderless {
         if active {
-            (format!("{} ", text::CURRENT_ITEM_MARKER), style::text())
+            let s = if placeholder {
+                style::muted()
+            } else {
+                style::text()
+            };
+            (format!("{} ", text::CURRENT_ITEM_MARKER), s)
         } else if current {
             (format!("{} ", text::CURRENT_ITEM_MARKER), style::accent())
         } else {

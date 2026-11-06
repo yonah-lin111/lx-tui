@@ -170,15 +170,27 @@ pub struct McpPanelEntry {
 - [x] 在 `items()` 中实现 `SlashPanel::Mcp(panel)` 分支（空态 `LX_MCP_EMPTY`、过滤无果 `LX_SLASH_NO_MATCHES`、正常条目 `CommandItem::Inline { label: &entry.name, preview: &entry.preview, tag: entry.status_tag() }`）。
 - [x] 在 `is_placeholder()` 中补充 `SlashPanel::Mcp(p) => p.entries.is_empty() || p.is_filter_empty()`。
 - [x] 在 `view()` 中补充 `SlashPanel::Mcp(panel)` 的标题 `LX_MCP_PANEL_TITLE` 与底栏 `LX_MCP_PANEL_FOOTER`。
-- [x] 新增 `disabled_mask(panel: &SlashPanel) -> Option<Vec<bool>>`，在 `layout()`、`item_at()`、`render()` 中传入 `CommandPanelView.disabled`，使 `DisabledInSettings` 条目置灰且不显示 `❯` 标记。
+- [x] 新增 `disabled_mask(panel: &SlashPanel) -> Option<Vec<bool>>`，在 `layout()`、`item_at()`、`render()` 中传入 `CommandPanelView.disabled`，使 `DisabledInSettings` 条目置灰并在聚焦时显示 `style::muted()` 的 `❯` 标记。
 
 ---
 
-## 6. 测试任务
+## 6. CLI 扩展与代码评审修复（`review.md` P1–P3）
+
+- [x] `lx-tui mcp list --disable-mcp <NAME>...` 与 `lx-tui exec [resume] --disable-mcp <NAME>...` 无头 CLI 扩展（`src/cli/{args,help,mcp}.rs`、`src/cli/mcp/exec.rs`、`src/chat/agent/exec/{cli,mod}.rs`）。
+- [x] **P1-1**：`refresh_slash_panel` 守卫已打开的二级面板（`/mcp`、`/model`、`/resume`、`/fork`、`/rewind`），输入 `/` 开头的过滤词不再被覆写为 `SlashPanel::Commands`。
+- [x] **P1-2**：`Lx::refresh_panel` 与 `open_mcp_panel` 在二级斜杠面板打开期间压制 `LxMention` / `BlockPanel` / `ReferPanel`，输入 `@` 过滤不再唤醒隐藏提及面板抢走按键与鼠标。
+- [x] **P1-3**：`src/event/mod.rs` 在 `persistence.pump` 后当 `agents_md_scopes`（含工作区信任状态）变化时同步调用 `prune_mcp_statuses` + `refresh_mcp`，确保授予工作区信任后立即加载项目级 MCP。
+- [x] **P2-1**：`src/ui/widgets/command_panel.rs` 对带 `window_anchor` 的斜杠面板在焦点处于 `Disabled in settings` 行时保留 `style::muted()` 的 `❯` 焦点标记。
+- [x] **P2-2 & P2-3**：`drain_mcp_events` 在 `Starting`/`Ready` 时重武装 `mcp_toasted`、不覆盖 `entry.config_enabled`，且 `Effect::RefreshMcpCatalog` 同步更新 `@` 候选并触发 `prewarm_projects`。
+- [x] **P2-4 & P3-1..P3-4**：`mcp_snapshot_for_turn_async` 全禁用返回空快照并对未知 server 告警、`mcp_root_for_pane` 回退 `workspace_cwd_for_pane`、`sanitize_single_line` 剥离 ANSI 控制序列、`select_lx_slash` 边界校验、`restart_projects` 增加 Tokio runtime 守卫。
+
+---
+
+## 7. 测试任务
 
 - [x] `src/app/state/lx/mcp/tests.rs`：
-  - `catalog_to_panel_entry_maps_all_six_states_and_tool_pluralization`
-  - `mcp_panel_refilter_and_sync_entries_preserve_highlighted_server`
+  - `catalog_to_panel_entry_maps_all_six_states_and_tool_pluralization`（含 ANSI 序列剥离断言）
+  - `mcp_panel_refilter_and_sync_entries_preserve_highlighted_server`（含过滤失配重置窗口断言）
 - [x] `src/app/state/lx/slash/tests.rs`：
   - `mcp_command_and_mcps_alias_match_in_command_panel`
 - [x] `src/mcp/manager/tests.rs`：
@@ -187,14 +199,18 @@ pub struct McpPanelEntry {
   - `mcp_panel_toggles_per_pane_without_affecting_sibling_pane`
   - `mcp_panel_space_and_enter_keep_panel_open_and_persist_across_new_session`
   - `mcp_panel_failed_entry_triggers_restart_and_settings_disabled_shows_warning`
+  - `mcp_panel_typing_slash_or_at_filters_without_hijacking_and_rejects_oob_click`
 - [x] `src/ui/main_content/lx/tests/slash_panels.rs`：
-  - `mcp_panel_renders_statuses_and_dims_settings_disabled_rows`
+  - `mcp_panel_renders_statuses_and_dims_settings_disabled_rows`（含 `DisabledInSettings` 焦点 `❯` 断言）
 - [x] `src/event/inventory/tests.rs`：
-  - `drain_mcp_events_updates_open_mcp_panel_and_suppresses_toast_on_disabled_pane`
+  - `drain_mcp_events_updates_open_mcp_panel_and_suppresses_toast_on_disabled_pane`（含 `Starting -> Failed` Toast 重武装断言）
+- [x] `src/chat/agent/exec/tests/cli_tests.rs` & `src/cli/tests/config_domains_tests.rs`：
+  - `exec_parses_disable_mcp_flags_and_rejects_invalid_names`（含 `exec resume --disable-mcp`）
+  - `mcp_skill_command_subagent_and_settings_crud_work`
 
 ---
 
-## 7. 验证命令与完成定义（DoD）
+## 8. 验证命令与完成定义（DoD）
 
 ```bash
 rtk cargo fmt --all -- --check
@@ -205,6 +221,8 @@ rtk cargo test mcp::manager::tests
 rtk cargo test app::update::chat::tests::slash_panels
 rtk cargo test ui::main_content::lx::tests::slash_panels
 rtk cargo test event::inventory::tests
+rtk cargo test chat::agent::exec::tests::cli_tests
+rtk cargo test cli::tests::config_domains_tests
 ```
 
 ### 完成定义（DoD）

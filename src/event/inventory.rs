@@ -139,6 +139,9 @@ pub(crate) fn drain_mcp_events(
                         error: error.clone(),
                     },
                 );
+                if matches!(status, ServerStatus::Starting | ServerStatus::Ready { .. }) {
+                    mcp_toasted.retain(|(p, s, _)| p != &project || s != &server);
+                }
                 if let Some(entries) = state.mcp_catalog.get_mut(&project)
                     && let Some(entry) = entries.iter_mut().find(|entry| entry.name == server)
                 {
@@ -147,22 +150,18 @@ pub(crate) fn drain_mcp_events(
                             entry.config_enabled = false;
                         }
                         ServerStatus::Starting => {
-                            entry.config_enabled = true;
                             entry.runtime = crate::app::state::McpRuntimeState::Connecting;
                         }
                         ServerStatus::Ready { tools } => {
-                            entry.config_enabled = true;
                             entry.runtime =
                                 crate::app::state::McpRuntimeState::Ready { tools: *tools };
                         }
                         ServerStatus::Failed { error } => {
-                            entry.config_enabled = true;
                             entry.runtime = crate::app::state::McpRuntimeState::Failed {
                                 error: error.clone(),
                             };
                         }
                         ServerStatus::NeedsLogin => {
-                            entry.config_enabled = true;
                             entry.runtime = crate::app::state::McpRuntimeState::NeedsLogin;
                         }
                     }
@@ -182,22 +181,25 @@ pub(crate) fn drain_mcp_events(
                     )),
                     _ => None,
                 };
-                if let Some((message, key, kind)) = notice
-                    && mcp_toasted.insert((project.clone(), server.clone(), key))
-                {
-                    let panes = panes_for_project(state, &project);
-                    for pane in panes {
-                        if state
-                            .pane_anywhere(pane)
-                            .is_some_and(|target| target.lx.is_mcp_server_disabled(&server))
-                        {
-                            continue;
+                if let Some((message, key, kind)) = notice {
+                    let target_panes: Vec<PaneId> = panes_for_project(state, &project)
+                        .into_iter()
+                        .filter(|&pane| {
+                            !state
+                                .pane_anywhere(pane)
+                                .is_some_and(|target| target.lx.is_mcp_server_disabled(&server))
+                        })
+                        .collect();
+                    if !target_panes.is_empty()
+                        && mcp_toasted.insert((project.clone(), server.clone(), key))
+                    {
+                        for pane in target_panes {
+                            update::show_lx_toast(
+                                state,
+                                pane,
+                                Toast::new(kind, message.clone(), Some(pane), Instant::now()),
+                            );
                         }
-                        update::show_lx_toast(
-                            state,
-                            pane,
-                            Toast::new(kind, message.clone(), Some(pane), Instant::now()),
-                        );
                     }
                 }
                 if let Some(service) = settings_service {
@@ -416,6 +418,18 @@ pub(crate) fn apply_mcp_effects(
                 if let Some(root) = update::mcp_root_for_pane(state, pane) {
                     let effective = super::chat::mcp::effective_for_root(persistence, &root);
                     sync_mcp_catalog_for_root(state, &root, &effective, statuses);
+                    let mentions: Vec<crate::app::prompt::McpMentionEntry> = effective
+                        .iter()
+                        .filter(|server| server.config.enabled)
+                        .map(|server| {
+                            crate::app::prompt::McpMentionEntry::new(
+                                server.name.clone(),
+                                server.config.summary(),
+                            )
+                        })
+                        .collect();
+                    apply_mcp_mentions(state, &root, &mentions);
+                    super::chat::mcp::prewarm_projects(persistence, std::slice::from_ref(&root));
                     update::refresh_pane_mcp_panel(state, pane);
                     state.sync_lx_inventory();
                     changed = true;

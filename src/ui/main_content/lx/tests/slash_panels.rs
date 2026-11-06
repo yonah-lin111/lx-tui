@@ -633,4 +633,23 @@ fn mcp_panel_renders_statuses_and_dims_settings_disabled_rows() {
             .unwrap_or(ratatui::style::Color::Reset),
         "设置中禁用的行使用 muted 置灰渲染"
     );
+
+    // Navigating onto Row 2 ("github", DisabledInSettings) still renders a muted `❯` cursor marker.
+    if let Some(SlashPanel::Mcp(mcp)) = lx.slash.as_mut() {
+        mcp.window.set_active(2);
+    }
+    let mut buf2 = Buffer::empty(area);
+    let _ = render(area, &mut buf2, &lx, false, None, &mut PaneCache::default());
+    assert_eq!(
+        buf2[(panel.content.x, disabled_row_y)].symbol(),
+        text::CURRENT_ITEM_MARKER,
+        "焦点落在 Disabled in settings 行时仍显示 ❯ 光标"
+    );
+    assert_eq!(
+        buf2[(panel.content.x, disabled_row_y)].fg,
+        crate::ui::style::muted()
+            .fg
+            .unwrap_or(ratatui::style::Color::Reset),
+        "Disabled in settings 行的 ❯ 光标使用 muted 颜色"
+    );
 }

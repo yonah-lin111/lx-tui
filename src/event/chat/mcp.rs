@@ -107,6 +107,9 @@ pub(crate) fn prewarm_projects(persistence: &Persistence, roots: &[PathBuf]) {
 
 /// 强制重启某个 server（`None` = 全部）在所有打开项目里的连接。
 pub(crate) fn restart_projects(persistence: &Persistence, roots: &[PathBuf], server: Option<&str>) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
     let jobs: Vec<(PathBuf, Vec<EffectiveServer>)> = roots
         .iter()
         .map(|root| (root.clone(), effective_for_root(persistence, root)))

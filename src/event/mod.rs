@@ -381,11 +381,14 @@ async fn run_loop(
         dirty |= chat::connect::apply_effects(state, &connect_tasks, &sender);
         dirty |= inventory::apply_mcp_effects(state, persistence, &mut mcp_statuses);
         dirty |= persistence.pump(state);
-        // 工作区集合、cwd（含 linked worktree / 子目录）或信任状态变化时精准刷新 AGENTS.md 计数。
+        // 工作区集合、cwd（含 linked worktree / 子目录）或信任状态变化时精准刷新 AGENTS.md 与项目级 MCP。
         let current_agents_scopes = inventory::agents_md_scopes(state, persistence);
         if current_agents_scopes != agents_scopes {
             agents_scopes = current_agents_scopes;
             inventory::refresh_agents_md(state, persistence);
+            let roots = chat::mcp::project_roots(state);
+            inventory::prune_mcp_statuses(persistence, &roots, &mut mcp_statuses);
+            inventory::refresh_mcp(state, persistence, &roots, &mcp_statuses);
             dirty = true;
         }
         // 双 Esc 待命超时：3 秒窗口外自动失效（不产生历史记录）。

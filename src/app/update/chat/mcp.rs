@@ -11,11 +11,11 @@ use crate::ui::text;
 
 use super::session::show_lx_hint;
 
-/// 解析窗格所属的 MCP 配置根（仓库主 checkout 优先，回退工作区根）。
+/// 解析窗格所属的 MCP 配置根（仓库主 checkout 优先，回退窗格所属工作区 cwd）。
 pub fn mcp_root_for_pane(state: &AppState, pane: PaneId) -> Option<PathBuf> {
     state
         .chat_session_key_for_pane(pane)
-        .or_else(|| state.active_workspace().repo_key().map(PathBuf::from))
+        .or_else(|| state.workspace_cwd_for_pane(pane))
 }
 
 /// 按当前 `state.mcp_catalog` 与窗格禁用集构建 `McpPanelEntry` 列表。
@@ -48,7 +48,14 @@ pub fn open_mcp_panel(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    target.lx.slash = Some(SlashPanel::Mcp(Box::new(McpPanel::new(entries))));
+    target.lx.mention_escape();
+    target.lx.panel = None;
+    target.lx.refer = None;
+    let mut panel = McpPanel::new(entries);
+    if !target.lx.input.is_empty() {
+        panel.refilter(&target.lx.input);
+    }
+    target.lx.slash = Some(SlashPanel::Mcp(Box::new(panel)));
     state.effects.push(Effect::RefreshMcpCatalog { pane });
     true
 }

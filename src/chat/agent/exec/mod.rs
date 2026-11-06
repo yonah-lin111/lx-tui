@@ -91,6 +91,7 @@ pub fn resolve_resume_session(
 ///
 /// 恢复会话时先读取既有历史（模型切换判定需要最后一条 assistant 的模型），
 /// 再记录模型切换与开轮：切换记录必须排在新的 user 消息之前，才能按时间线注入。
+#[cfg(test)]
 pub fn assemble_exec_turn(
     db: &Database,
     workspace: &Path,
@@ -636,6 +637,7 @@ fn discover_workspace_skills(workspace: &Path) -> crate::skills::SkillCatalog {
     )
 }
 
+#[cfg(test)]
 fn mcp_snapshot_for_turn(_db: &Database, workspace: &Path) -> Arc<crate::mcp::McpToolSnapshot> {
     let manager = crate::mcp::global_manager();
     manager.prewarm(workspace.to_path_buf(), effective_mcp_servers(workspace));
@@ -649,16 +651,22 @@ async fn mcp_snapshot_for_turn_async(
     cancel: tokio::sync::watch::Receiver<bool>,
 ) -> Arc<crate::mcp::McpToolSnapshot> {
     let manager = crate::mcp::global_manager();
-    let servers: Vec<_> = effective_mcp_servers(workspace)
+    let all_servers = effective_mcp_servers(workspace);
+    for name in disabled_mcp {
+        if !all_servers.iter().any(|server| &server.name == name) {
+            tracing::warn!(server = %name, "'--disable-mcp' server is not configured in this workspace");
+        }
+    }
+    let servers: Vec<_> = all_servers
         .into_iter()
         .filter(|server| !disabled_mcp.contains(&server.name))
         .collect();
-    let snapshot = if servers.iter().any(|server| server.config.enabled) {
+    if servers.iter().any(|server| server.config.enabled) {
         Arc::new(manager.snapshot_for(workspace, &servers, cancel).await)
+            .without_servers(disabled_mcp)
     } else {
-        manager.cached_snapshot(workspace)
-    };
-    snapshot.without_servers(disabled_mcp)
+        Arc::new(crate::mcp::McpToolSnapshot::default())
+    }
 }
 
 fn effective_mcp_servers(workspace: &Path) -> Vec<crate::config::mcp::EffectiveServer> {

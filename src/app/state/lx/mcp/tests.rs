@@ -28,7 +28,7 @@ fn sample_catalog() -> Vec<McpCatalogEntry> {
             summary: "stdio: delta-bin".to_string(),
             config_enabled: true,
             runtime: McpRuntimeState::Failed {
-                error: "\n  connection refused\nextra trace line".to_string(),
+                error: "\n  \x1b[31mconnection refused\x1b[0m\nextra trace line".to_string(),
             },
         },
         McpCatalogEntry {
@@ -133,4 +133,19 @@ fn mcp_panel_refilter_and_sync_entries_preserve_highlighted_server() {
     panel.refilter("no-such-mcp");
     assert!(panel.visible().is_empty());
     assert!(panel.is_filter_empty());
+
+    // When active item disappears under current filter during sync_entries, window resets cleanly to 0.
+    panel.refilter("stdio");
+    panel.window.set_active(2);
+    panel.sync_entries(vec![entries_for_sync_test()]);
+    assert_eq!(panel.window.active, 0);
+}
+
+fn entries_for_sync_test() -> McpPanelEntry {
+    McpPanelEntry {
+        name: "alpha".to_string(),
+        summary: "stdio: npx alpha".to_string(),
+        preview: "1 tool · stdio: npx alpha".to_string(),
+        state: McpServerState::Connected { tools: 1 },
+    }
 }

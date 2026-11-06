@@ -1086,6 +1086,45 @@ fn mcp_panel_failed_entry_triggers_restart_and_settings_disabled_shows_warning()
 }
 
 #[test]
+fn mcp_panel_typing_slash_or_at_filters_without_hijacking_and_rejects_oob_click() {
+    use crate::app::actions::LxInput;
+    use crate::app::state::SlashCommand;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    seed_mcp_catalog(&mut state);
+    assert!(apply_slash_command(&mut state, pane, SlashCommand::Mcp));
+
+    // Typing '/' in `/mcp` filter must NOT replace `SlashPanel::Mcp` with `SlashPanel::Commands`.
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('/'));
+    assert!(
+        matches!(
+            state.pane_anywhere(pane).unwrap().lx.slash,
+            Some(SlashPanel::Mcp(_))
+        ),
+        "typing '/' must keep SlashPanel::Mcp open"
+    );
+    crate::app::update::apply_lx_input(&mut state, LxInput::Backspace);
+
+    // Typing '@' in `/mcp` filter must NOT open the `@` mention panel underneath.
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('@'));
+    let lx = &state.pane_anywhere(pane).unwrap().lx;
+    assert!(!lx.mention_visible(), "'@' must not open mention panel");
+    assert!(!lx.mention().is_open());
+    crate::app::update::apply_lx_input(&mut state, LxInput::Backspace);
+
+    // Out-of-bounds mouse click on `/mcp` returns false and does not toggle item 0.
+    assert!(!crate::app::update::select_lx_slash(&mut state, pane, 99));
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .is_mcp_server_disabled("alpha")
+    );
+}
+
+#[test]
 fn selecting_rename_from_slash_panel_echoes_command_with_trailing_space() {
     use crate::app::actions::LxInput;
 

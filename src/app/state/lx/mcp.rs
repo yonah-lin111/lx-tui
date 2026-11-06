@@ -107,11 +107,39 @@ impl McpPanelEntry {
 }
 
 fn sanitize_single_line(raw: &str) -> String {
-    raw.lines()
+    let stripped = strip_ansi_and_controls(raw);
+    stripped
+        .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
         .unwrap_or_default()
         .to_string()
+}
+
+fn strip_ansi_and_controls(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                let _ = chars.next();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if ch == '\n' || ch == '\r' {
+            out.push('\n');
+        } else if ch == '\t' {
+            out.push(' ');
+        } else if !ch.is_control() {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 fn build_preview(summary: &str, state: &McpServerState) -> String {
@@ -171,6 +199,8 @@ impl McpPanel {
                 .position(|&idx| self.entries.get(idx).is_some_and(|e| e.name == name))
         {
             self.window.set_active(pos);
+        } else {
+            self.window = PanelWindow::default();
         }
         self.clamp_window();
     }

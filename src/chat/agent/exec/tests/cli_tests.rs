@@ -120,6 +120,15 @@ fn exec_parses_disable_mcp_flags_and_rejects_invalid_names() {
         vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()]
     );
     assert_eq!(cli.prompt.as_deref(), Some("run check"));
+    let resumed = parse_exec(&[
+        "exec",
+        "resume",
+        "--last",
+        "--disable-mcp",
+        "alpha",
+        "continue",
+    ]);
+    assert_eq!(resumed.disabled_mcp_servers, vec!["alpha".to_string()]);
     assert!(parse(&["exec", "--disable-mcp", ""]).is_err());
     assert!(parse(&["exec", "--disable-mcp", "bad name"]).is_err());
 }

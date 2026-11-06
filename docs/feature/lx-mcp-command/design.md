@@ -1,27 +1,28 @@
 # `/mcp` 命令与窗格级 MCP 管理 — 详细技术设计 (`design.md`)
 
 - **特性目录**：`docs/feature/lx-mcp-command/`
-- **关联任务清单**：[`task.md`](task.md)
-- **当前状态**：待用户审核确认
+- **关联任务清单**：[`task.md`](task.md) · [`verification.md`](verification.md) · [`review.md`](review.md)
+- **当前状态**：已完成实现、CLI 扩展与评审修复
 - **参考实现**：`/Users/yonah/projects/agent/opencode-dev`
   - `packages/tui/src/component/dialog-mcp.tsx`（TUI `/mcps` 面板：名称排序、模糊过滤、状态标签、原地切换/重连）
   - `packages/app/src/providers/connect/mcp-dialog.tsx`（App `/mcp` 面板）
   - `packages/app/src/new-session/mcp.ts`（会话/草稿级 MCP 开关控制）
 - **目标范围**：
-  - `src/app/state/lx/mcp.rs`（新增：`/mcp` 面板状态、条目状态机、工作区 MCP 目录项 `McpCatalogEntry`）
+  - `src/app/state/lx/mcp.rs`（新增：`/mcp` 面板状态、条目状态机、工作区 MCP 目录项 `McpCatalogEntry`、ANSI/控制字符净化）
   - `src/app/state/lx/slash.rs`（注册 `SlashCommand::Mcp` 及别名 `"mcps"`，扩展 `SlashPanel::Mcp`）
-  - `src/app/state/lx.rs`（`Lx` 窗格新增 `disabled_mcp_servers: BTreeSet<String>` 及读写接口）
+  - `src/app/state/lx.rs` & `src/app/state/lx/panels.rs`（`Lx` 窗格新增 `disabled_mcp_servers: BTreeSet<String>`，二级斜杠面板打开时压制 `@` 提及/块/引用面板）
   - `src/app/state/lx/mention.rs`（`LxMention` 过滤当前窗格已禁用的 MCP server）
   - `src/app/state.rs`（`AppState` 新增 `mcp_catalog: BTreeMap<PathBuf, Vec<McpCatalogEntry>>`，`sync_lx_inventory` 按窗格禁用集合计算 `pane.lx.startup.mcp`）
-  - `src/app/effects.rs`（新增 `Effect::RefreshMcpCatalog` 与 `Effect::RestartMcpServer`）
+  - `src/app/effects.rs` & `src/db/service.rs`（新增 `Effect::RefreshMcpCatalog` 与 `Effect::RestartMcpServer`）
   - `src/app/update/chat/mcp.rs`（新增：打开 `/mcp` 面板、原地切换窗格级启用/禁用、触发失败重连、实时同步已打开面板）
-  - `src/app/update/chat/slash.rs`（接入 `SlashCommand::Mcp`、`SlashPanel::Mcp` 的 `Enter`/过滤分派）
-  - `src/app/update/pane.rs`（`SlashPanel::Mcp` 打开时拦截 `Space` 键触发原地切换，保持面板不关闭）
+  - `src/app/update/chat/slash.rs`（接入 `SlashCommand::Mcp`、`SlashPanel::Mcp` 分派，守卫二级面板过滤词不被 `/` 命令触发覆盖）
+  - `src/app/update/pane.rs` & `src/app/update/pane/popups.rs`（`SlashPanel::Mcp` 打开时拦截 `Space` 键原地切换、校验点击边界、切换终端视图时清理悬空面板）
   - `src/mcp/manager/snapshot.rs` & `src/mcp/manager/resources.rs`（`McpToolSnapshot::without_servers` 过滤窗格已禁用的 MCP 工具、系统提示与 resources 访问）
   - `src/event/chat/mcp.rs`、`src/event/chat/mod.rs`、`src/event/chat/subagent/{context,launch,runner}.rs`（主 Agent 与派生 Subagent 按所属窗格 `disabled_mcp_servers` 裁剪本轮冻结的 `McpToolSnapshot`）
-  - `src/event/inventory.rs` & `src/event/mod.rs`（维护 `state.mcp_catalog`、处理 `RefreshMcpCatalog`/`RestartMcpServer` 效应、在 `McpEvent::Status` 到达时实时刷新已打开的 `/mcp` 面板）
-  - `src/ui/main_content/lx/slash.rs` & `src/ui/text.rs`（渲染 `SlashPanel::Mcp`，提供英文文案常量与 `disabled` 掩码）
+  - `src/event/inventory.rs` & `src/event/mod.rs`（维护 `state.mcp_catalog`、处理 `RefreshMcpCatalog`/`RestartMcpServer` 效应、信任变更时同步项目级 MCP、`McpEvent::Status` 实时刷新已打开面板并维护 `mcp_toasted` 重武装）
+  - `src/ui/main_content/lx/slash.rs`、`src/ui/widgets/command_panel.rs` & `src/ui/text.rs`（渲染 `SlashPanel::Mcp`，提供英文文案常量，`[Disabled in settings]` 行置灰且聚焦时保留 `❯` 标记）
   - `src/settings/commands.rs`（将 `"mcp"` 与 `"mcps"` 加入 `RESERVED_NAMES`）
+  - `src/cli/{args,help,mcp}.rs`、`src/cli/mcp/exec.rs`、`src/chat/agent/exec/{cli,mod}.rs`（CLI 新增 `lx-tui mcp list --disable-mcp <NAME>` 与 `lx-tui exec --disable-mcp <NAME>` 无头按轮次禁用支持）
 - **架构约束**：
   - 严格保持 `app/`（纯状态与更新）与 `ui/`（纯渲染）边界清晰；渲染只读状态，禁止在渲染中修改状态或执行 IO；
   - 所有 TUI 用户可见文案与提示词一律英文，集中在 `src/ui/text.rs`；
@@ -829,37 +830,53 @@ pub enum SlashPanel {
    - 在 `is_placeholder()` 中加入：
      `SlashPanel::Mcp(p) => p.entries.is_empty() || p.is_filter_empty(),`
    - 新增 `disabled_mask(panel: &SlashPanel) -> Option<Vec<bool>>`：
-     当 `SlashPanel::Mcp(panel)` 非空态时，生成 `panel.visible().into_iter().map(McpPanelEntry::is_settings_disabled).collect()`，传入 `CommandPanelView.disabled`，使 `[Disabled in settings]` 行自动以 `style::muted()` 置灰渲染。
+     当 `SlashPanel::Mcp(panel)` 非空态时，生成 `panel.visible().into_iter().map(McpPanelEntry::is_settings_disabled).collect()`，传入 `CommandPanelView.disabled`；在 `src/ui/widgets/command_panel.rs` 中，带 `window_anchor` 的斜杠面板在焦点落在 `Disabled in settings` 行时仍绘制 `style::muted()` 的 `❯` 标记，避免导航焦点消失。
    - 在 `view()` 中新增 `SlashPanel::Mcp(panel)` 的标题（`LX_MCP_PANEL_TITLE`）与底栏（`LX_MCP_PANEL_FOOTER`）。
+
+---
+
+### 4.9 CLI 无头模式与列表投影扩展：`src/cli/mcp.rs` & `src/chat/agent/exec/`
+
+1. **`lx-tui mcp list [--disable-mcp <NAME>...] [--json]`**：
+   - 在 `McpCommand::List` 中新增 `disabled: BTreeSet<String>`（支持多次传入或逗号分隔，校验合法 server 名称）；
+   - 表格输出在 `server.config.enabled && disabled.contains(&server.name)` 时将 `ENABLED` 列显示为 `no (pane)`；
+   - JSON 输出新增 `"paneDisabled"` 与 `"effectiveEnabled"` 布尔字段，且不修改磁盘 `mcp.json`。
+2. **`lx-tui exec [--disable-mcp <NAME>...]`（含 `exec resume`）**：
+   - 在 `ExecCli` 中新增 `disabled_mcp_servers: Vec<String>`；
+   - 在 `mcp_snapshot_for_turn_async` 中过滤掉 `disabled_mcp` 指定的 server，并通过 `without_servers(disabled_mcp)` 裁剪快照（无任何启用 server 时直接返回空 `McpToolSnapshot::default()`，对未配置的名称记录 `tracing::warn!`）；无头 Subagent 共享父轮已裁剪的 `mcp_snapshot`。
 
 ---
 
 ## 5. 文件改动清单与行数预算
 
-| 文件路径 | 操作 | 现有行数 | 预计改动后行数 | 预算合规（生产 ≤1000 / 测试 ≤1500） |
-|---|---|---:|---:|---|
-| `src/app/state/lx/mcp.rs` | 新增 | 0 | ~220 | 合规 |
-| `src/app/state/lx/mcp/tests.rs` | 新增 | 0 | ~180 | 合规 |
-| `src/app/state/lx/slash.rs` | 修改 | 870 | ~895 | 合规 |
-| `src/app/state/lx.rs` | 修改 | 695 | ~730 | 合规 |
-| `src/app/state/lx/mention.rs` | 修改 | 445 | ~470 | 合规 |
-| `src/app/state.rs` | 修改 | 815 | ~865 | 合规 |
-| `src/app/effects.rs` | 修改 | 320 | ~335 | 合规 |
-| `src/app/update/chat/mcp.rs` | 新增 | 0 | ~165 | 合规 |
-| `src/app/update/chat/slash.rs` | 修改 | 700 | ~710 | 合规 |
-| `src/app/update/pane.rs` | 修改 | 780 | ~790 | 合规 |
-| `src/mcp/manager/snapshot.rs` | 修改 | 81 | ~110 | 合规 |
-| `src/mcp/manager/resources.rs` | 修改 | 287 | ~290 | 合规 |
-| `src/event/chat/mcp.rs` | 修改 | 113 | ~130 | 合规 |
-| `src/event/chat/mod.rs` | 修改 | 850 | ~855 | 合规 |
-| `src/event/chat/subagent/context.rs` | 修改 | 265 | ~275 | 合规 |
-| `src/event/chat/subagent/launch.rs` | 修改 | 290 | ~295 | 合规 |
-| `src/event/chat/subagent/runner.rs` | 修改 | 880 | ~885 | 合规 |
-| `src/event/inventory.rs` | 修改 | 440 | ~520 | 合规 |
-| `src/event/mod.rs` | 修改 | 640 | ~648 | 合规 |
-| `src/ui/main_content/lx/slash.rs` | 修改 | 296 | ~340 | 合规 |
-| `src/ui/text.rs` | 修改 | 1240 | ~1265 | 合规（常量表文件） |
-| `src/settings/commands.rs` | 修改 | 280 | ~282 | 合规 |
+| 文件路径 | 操作 | 改动后行数 | 预算合规（生产 ≤1000 / 测试 ≤1500） |
+|---|---|---:|---|
+| `src/app/state/lx/mcp.rs` | 新增 | 269 | 合规 |
+| `src/app/state/lx/mcp/tests.rs` | 新增 | 150 | 合规 |
+| `src/app/state/lx/slash.rs` | 修改 | 922 | 合规 |
+| `src/app/state/lx.rs` | 修改 | 663 | 合规 |
+| `src/app/state/lx/panels.rs` | 修改 | 285 | 合规 |
+| `src/app/state/lx/mention.rs` | 修改 | 583 | 合规 |
+| `src/app/state.rs` | 修改 | 776 | 合规 |
+| `src/app/effects.rs` | 修改 | 441 | 合规 |
+| `src/app/update/chat/mcp.rs` | 新增 | 171 | 合规 |
+| `src/app/update/chat/slash.rs` | 修改 | 712 | 合规 |
+| `src/app/update/pane.rs` | 修改 | 832 | 合规 |
+| `src/app/update/pane/popups.rs` | 修改 | 206 | 合规 |
+| `src/mcp/manager/snapshot.rs` | 修改 | 111 | 合规 |
+| `src/mcp/manager/resources.rs` | 修改 | 288 | 合规 |
+| `src/event/chat/mcp.rs` | 修改 | 125 | 合规 |
+| `src/event/chat/mod.rs` | 修改 | 997 | 合规 |
+| `src/event/chat/subagent/context.rs` | 修改 | 843 | 合规 |
+| `src/event/inventory.rs` | 修改 | 661 | 合规 |
+| `src/event/mod.rs` | 修改 | 988 | 合规 |
+| `src/ui/main_content/lx/slash.rs` | 修改 | 354 | 合规 |
+| `src/ui/widgets/command_panel.rs` | 修改 | 886 | 合规 |
+| `src/settings/commands.rs` | 修改 | 577 | 合规 |
+| `src/cli/mcp.rs` | 修改 | 516 | 合规 |
+| `src/cli/mcp/exec.rs` | 修改 | 418 | 合规 |
+| `src/chat/agent/exec/cli.rs` | 修改 | 871 | 合规 |
+| `src/chat/agent/exec/mod.rs` | 修改 | 786 | 合规 |
 
 ---
 
@@ -867,17 +884,20 @@ pub enum SlashPanel {
 
 1. **状态与过滤单测（`src/app/state/lx/mcp/tests.rs` & `src/app/state/lx/slash/tests.rs`）**：
    - `/mcp` 与别名 `/mcps` 在 `SlashPanel::commands_matching` 中均可命中 `SlashCommand::Mcp`；
-   - `McpPanelEntry::from_catalog` 正确映射 6 种状态（`Connected` 含单复数 `1 tool`/`N tools`、`Connecting`、`Failed` 单行化错误摘要、`NeedsLogin`、`DisabledInPane`、`DisabledInSettings`）；
-   - `McpPanel::refilter` 与 `sync_entries` 保持当前高亮 server 名称不漂移。
+   - `McpPanelEntry::from_catalog` 正确映射 6 种状态（`Connected` 含单复数 `1 tool`/`N tools`、`Connecting`、`Failed` 剥离 ANSI 控制字符并单行化错误摘要、`NeedsLogin`、`DisabledInPane`、`DisabledInSettings`）；
+   - `McpPanel::refilter` 与 `sync_entries` 保持当前高亮 server 名称不漂移，当原高亮项不在过滤结果中时重置为 0。
 2. **窗格隔离与交互单测（`src/app/update/chat/tests/slash_panels.rs`）**：
    - 在 Pane 1 执行 `/mcp` 打开面板，按 `Space` 或 `Enter` 切换某个 `Connected` MCP 为 `Disabled`，面板保持打开；
    - Pane 1 的 `disabled_mcp_servers`、面板状态标签、`@` 提及 `filtered_mcp_servers` 与 `pane.lx.startup.mcp` 同步更新，而同工作区的 Pane 2 完全不受影响；
    - 在同一 Pane 内执行 `/new` 后，`disabled_mcp_servers` 依然保留；分屏新建的 Pane 默认不禁用任何 MCP；
-   - 对 `Failed` 条目按 `Space`/`Enter` 发出 `Effect::RestartMcpServer` 并切为 `Connecting`；对 `DisabledInSettings` 条目按 `Space`/`Enter` 弹出窗格内警告 Toast 且不改变状态。
-3. **快照裁剪单测（`src/mcp/manager/tests.rs`）**：
-   - `McpToolSnapshot::without_servers` 剔除指定 server 的工具与 `ServerSnapshot`，`instructions_prompt()` 不再包含被禁用的 server，当唯一含 resources 的 server 被禁用时 `has_resources()` 返回 `false`。
-4. **UI 渲染单测（`src/ui/main_content/lx/tests/slash_panels.rs`）**：
-   - `SlashPanel::Mcp` 渲染顶栏标题 `MCP servers`、底栏 `↑↓ select · space/↵ toggle · esc close`、右对齐状态标签 `[Connected]`/`[Disabled]`，且 `[Disabled in settings]` 条目置灰且不画 `❯` 标记。
+   - 对 `Failed` 条目按 `Space`/`Enter` 发出 `Effect::RestartMcpServer` 并切为 `Connecting`；对 `DisabledInSettings` 条目按 `Space`/`Enter` 弹出窗格内警告 Toast 且不改变状态；
+   - 在 `/mcp` 过滤框中输入 `/` 或 `@` 不会覆盖 `/mcp` 面板或唤醒 `@` 提及面板，越界鼠标点击安全拒绝。
+3. **快照裁剪与事件层单测（`src/mcp/manager/tests.rs` & `src/event/inventory/tests.rs`）**：
+   - `McpToolSnapshot::without_servers` 剔除指定 server 的工具与 `ServerSnapshot`，`instructions_prompt()` 不再包含被禁用的 server，当唯一含 resources 的 server 被禁用时 `has_resources()` 返回 `false`；
+   - `drain_mcp_events` 实时刷新已打开的 `/mcp` 面板、抑制已禁用窗格的失败 Toast，并在 `Starting`/`Ready` 时重武装 `mcp_toasted`。
+4. **UI 渲染与 CLI 单测（`src/ui/main_content/lx/tests/slash_panels.rs` & `src/chat/agent/exec/tests/cli_tests.rs`）**：
+   - `SlashPanel::Mcp` 渲染顶栏标题 `MCP servers`、底栏 `↑↓ select · space/↵ toggle · esc close`、右对齐状态标签，且 `[Disabled in settings]` 条目置灰并在聚焦时显示 `style::muted()` 的 `❯` 标记；
+   - `lx-tui mcp list --disable-mcp` 与 `lx-tui exec [resume] --disable-mcp` 解析与输出验证。
 
 ---
 

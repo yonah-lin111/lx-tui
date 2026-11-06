@@ -669,8 +669,12 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
         // 切换视图时取消在途粘贴面板：隐藏的 lx 页不再持有悬空面板。
         pane.lx.text_paste_cancel();
         pane.lx.paste_cancel();
-        // 隐藏的 lx 页不得保留可点击的提及面板。
+        // 隐藏的 lx 页不得保留可点击的提及面板或 `/mcp` 面板。
         pane.lx.mention_escape();
+        if matches!(pane.lx.slash, Some(super::super::state::SlashPanel::Mcp(_))) {
+            pane.lx.slash = None;
+            pane.lx.clear();
+        }
         // 视图切换时清理旧视图残留的窗格内 toast，避免冻结态残留。
         pane.lx.toast = None;
         pane.view
