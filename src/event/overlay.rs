@@ -23,7 +23,7 @@ pub(crate) fn handle_overlay_click(
     column: u16,
     row: u16,
 ) -> Option<(PaneId, Vec<u8>)> {
-    if let Some((area, char_idx)) = state
+    if let Some(char_idx) = state
         .overlay
         .as_mut()
         .and_then(|overlay| overlay_input_hit_mut(screen, overlay))
@@ -32,17 +32,15 @@ pub(crate) fn handle_overlay_click(
             let text_w = area.width.saturating_sub(2);
             (row == area.y && column >= area.x && column < area.right()).then(|| {
                 let rel_col = column.saturating_sub(text_x);
-                let char_idx = ui::widgets::input::char_index_at_col(
+                ui::widgets::input::char_index_at_col(
                     input.text(),
                     input.cursor(),
                     usize::from(text_w),
                     rel_col,
-                );
-                (area, char_idx)
+                )
             })
         })
     {
-        let _ = area;
         let clicks = crate::app::selection::next_click_count(
             &mut state.selection_click,
             column,

@@ -315,6 +315,18 @@ impl Terminal {
         }
     }
 
+    /// 当前是否存在非空渲染选区范围（与 `renderable_content().selection` 同源，不分配字符串）。
+    ///
+    /// 单击未拖动（`clicks == 1` 且未调用 `update_selection`）时 `to_range` 返回 `None`；
+    /// 拖出高亮或双击/三击产生选区时返回 `true`（即使选区仅覆盖空白单元格）。
+    pub fn has_selection(&self) -> bool {
+        self.term
+            .selection
+            .as_ref()
+            .and_then(|sel| sel.to_range(&self.term))
+            .is_some()
+    }
+
     /// 读取当前选区文本（保留选区高亮）；空选区或全空白选区返回 None。
     pub fn selection_text(&self) -> Option<String> {
         self.term

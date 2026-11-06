@@ -95,6 +95,8 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
             return;
         }
         clear_selection(state);
+    } else if super::prompt_selection_range(state).is_some() {
+        clear_selection(state);
     }
     match command {
         EditorCommand::InsertChar(ch) => state.prompt.insert_char(ch),

@@ -488,6 +488,13 @@ impl AskState {
         self.custom.get(self.current)
     }
 
+    /// 清除全部题目手写缓冲的文本选区。
+    pub fn clear_all_text_selections(&mut self) {
+        for editor in &mut self.custom {
+            editor.clear_text_selection();
+        }
+    }
+
     /// 同步全部手写缓冲的软换行宽度与可视高度。
     ///
     /// 渲染宽度与折行宽度必须同源：创建面板时按输入框宽度初始化，窗格 resize 时

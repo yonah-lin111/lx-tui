@@ -534,3 +534,158 @@ fn single_selection_invariant_clears_previous_container_on_keyboard_select() {
     );
     assert!(prompt_selection_bounds(&state).is_some());
 }
+
+#[test]
+fn review_fixes_whitespace_selection_menu_exclusivity_and_background_tab_preservation() {
+    use crate::app::overlay::{Menu, MenuCommand, OverlayTarget};
+    use crate::app::prompt::PromptPageId;
+    use crate::app::update::{
+        activate_menu, begin_selection_with_clicks, create_tab, drag_selection,
+        prompt_selection_range, terminal_has_selection,
+    };
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+
+    // 1. 终端纯空白拖选（尚未松开鼠标）：屏幕存在反显选区，has_visible_selection 必须为 true，按 Esc 消费按键。
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Terminal;
+        target.terminal.feed(b"     \r\n");
+    }
+    begin_terminal_selection_with_clicks(&mut state, pane, 0, 0, 1);
+    drag_terminal_selection(&mut state, pane, 0, 3);
+    assert!(terminal_has_selection(&state, pane));
+    assert!(
+        terminal_selection_text(&state, pane).is_none(),
+        "纯空白选区无非空复制文本"
+    );
+    assert!(
+        has_visible_selection(&state),
+        "纯空白终端选区有反显高亮，应判定为可见选区"
+    );
+    assert!(
+        escape_clear_selection(&mut state),
+        "纯空白终端选区按 Esc 必须消费按键以防穿透到 PTY"
+    );
+    assert!(!terminal_has_selection(&state, pane));
+
+    // 2. Prompt 展开粘贴芯片 + 行尾空白拖选（prompt_selection_bounds 为 None，但 prompt_selection_range 为 Some）：
+    //    第一下 Esc 仅清除行尾空白反显，不收起已展开粘贴芯片；第二下 Esc 才收起芯片。
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+    }
+    state.prompt.resize(60, 10);
+    state.prompt.set_text("");
+    let token = encode_pasted_text("l1\nl2\nl3\nl4");
+    state.prompt.insert_str(&token);
+    state.prompt.insert_str("\n");
+    let parsed = crate::app::paste::folded_tokens(state.prompt.text())[0].clone();
+    assert!(state.prompt.toggle_paste(parsed.id, 0));
+    assert!(state.prompt.has_expanded_pastes());
+
+    let prompt_id = state.prompt.id();
+    let empty_row = (state.prompt.visual_rows().len() - 1) as u16;
+    begin_selection_with_clicks(&mut state, prompt_id, empty_row, 5, 1);
+    drag_selection(&mut state, prompt_id, empty_row, 15);
+    assert!(prompt_selection_range(&state).is_some());
+    assert!(
+        prompt_selection_bounds(&state).is_none(),
+        "行尾越界空白拖选无字节范围，但有视觉高亮范围"
+    );
+    assert!(has_visible_selection(&state));
+    apply_editor(&mut state, EditorCommand::Escape);
+    assert!(
+        prompt_selection_range(&state).is_none(),
+        "第一下 Esc 清除行尾空白选区"
+    );
+    assert!(
+        state.prompt.has_expanded_pastes(),
+        "第一下 Esc 不得连带收起已展开粘贴芯片"
+    );
+    apply_editor(&mut state, EditorCommand::Escape);
+    assert!(
+        !state.prompt.has_expanded_pastes(),
+        "第二下 Esc 收起已展开粘贴芯片"
+    );
+
+    // 3. 右键菜单 Overlay::Menu 打开且底层有选区：第一下 Esc 仅关闭菜单并保留底层选区，第二下 Esc 清除底层选区。
+    apply_editor(&mut state, EditorCommand::SelectAll);
+    assert!(prompt_selection_range(&state).is_some());
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor: (10, 5),
+        target: OverlayTarget::PromptPage {
+            workspace: 0,
+            owner: crate::app::prompt::PromptEditing::Temp(1),
+            page: PromptPageId::Temp(1),
+        },
+        commands: vec![MenuCommand::SelectAll],
+        selected: 0,
+        confirming: false,
+    }));
+    assert!(
+        !has_visible_selection(&state),
+        "右键菜单自身无输入框选区，不阻塞关闭菜单"
+    );
+    apply_overlay_key(&mut state, OverlayKey::Esc);
+    assert!(state.overlay.is_none(), "第一下 Esc 关闭右键菜单");
+    assert!(
+        prompt_selection_range(&state).is_some(),
+        "关闭右键菜单时保留底层 Prompt 选区"
+    );
+    assert!(
+        escape_clear_selection(&mut state),
+        "第二下 Esc 清除底层 Prompt 选区"
+    );
+    assert!(prompt_selection_range(&state).is_none());
+
+    // 4. 右键菜单 SelectAll 互斥清理：先在 Lx 产生选区，再通过右键菜单触发 Prompt SelectAll，Lx 选区应被清除。
+    begin_lx_selection_range(&mut state, pane, (0, 0), (0, 4), SelectionUnit::Word);
+    assert!(state.lx_selection.is_some());
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor: (10, 5),
+        target: OverlayTarget::PromptPage {
+            workspace: 0,
+            owner: crate::app::prompt::PromptEditing::Temp(1),
+            page: PromptPageId::Temp(1),
+        },
+        commands: vec![MenuCommand::SelectAll],
+        selected: 0,
+        confirming: false,
+    }));
+    activate_menu(&mut state);
+    assert!(
+        state.lx_selection.is_none(),
+        "右键菜单 SelectAll 应清除其他容器选区"
+    );
+    assert!(prompt_selection_range(&state).is_some());
+
+    // 5. 后台 Tab / 折叠容器选区保留：当选区位于后台 Tab 或已折叠容器中（当前不可见）时，按 Esc 不清空它。
+    crate::app::update::clear_selection(&mut state);
+    create_tab(&mut state);
+    {
+        let bg_pane = state.pane_mut_anywhere(pane).expect("bg pane");
+        bg_pane.lx.insert_str("bg draft");
+        bg_pane.lx.select_all();
+    }
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("bg pane")
+            .lx
+            .text_selection_range()
+            .is_some()
+    );
+    assert!(!has_visible_selection(&state), "当前活动 Tab 无可见选区");
+    assert!(!escape_clear_selection(&mut state));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("bg pane")
+            .lx
+            .text_selection_range()
+            .is_some(),
+        "当前 Tab 无可见选区时按 Esc 不得清空后台 Tab 保留的静态选区"
+    );
+}

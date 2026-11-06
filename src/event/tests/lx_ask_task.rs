@@ -672,3 +672,102 @@ fn task_page_does_not_cut_or_copy_hidden_composer_selection() {
         assert_eq!(target.lx.selected_text().as_deref(), Some("ab"));
     }
 }
+
+#[test]
+fn task_page_agent_reply_renders_selection_and_supports_copy_cut_and_esc() {
+    use crate::app::overlay::TextInput;
+    use crate::app::state::{PaneView, TaskPage, TaskTab};
+    use ratatui::buffer::Buffer;
+    use ratatui::style::Modifier;
+
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 22));
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        let mut page = TaskPage {
+            tab: TaskTab::Agents,
+            agent_reply_target: Some(("ag-1".into(), "Bot".into())),
+            agent_reply: Some(TextInput::new("hello")),
+            ..TaskPage::default()
+        };
+        page.agent_reply.as_mut().expect("reply").select_all();
+        target.lx.task = Some(page);
+    }
+
+    // 1. 验证 UI 渲染层对 agent_reply 的选中文本渲染 REVERSED 反显。
+    let inner = pane_inner(&geo, pane);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 120, 30));
+    {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::render(
+            inner,
+            &mut buf,
+            &target.lx,
+            true,
+            None,
+            &mut ui::main_content::lx::PaneCache::default(),
+        );
+    }
+    let task_rects = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::task_rects(inner, &target.lx).expect("task rects")
+    };
+    let header_y = task_rects.list.y + 1;
+    let reversed_chars: String = (task_rects.list.x..task_rects.list.right())
+        .filter_map(|x| {
+            let cell = buf.cell((x, header_y))?;
+            cell.modifier
+                .contains(Modifier::REVERSED)
+                .then(|| cell.symbol().chars().next().unwrap_or(' '))
+        })
+        .collect();
+    assert!(
+        reversed_chars.contains("hello"),
+        "agent_reply 全选后必须在顶栏渲染 REVERSED 反显: got {reversed_chars:?}"
+    );
+
+    // 2. Ctrl+C 复制追问框选区并保留选区，随后第一下 Esc 清除选区，第二下 Esc 关闭追问框。
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|p| p.lx.task.as_ref())
+            .and_then(|t| t.agent_reply.as_ref())
+            .is_some_and(TextInput::has_selection),
+        "Ctrl+C 复制后保留追问框选区"
+    );
+
+    // Ctrl+X 剪切追问框选区：文本清空，选区消除。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|p| p.lx.task.as_ref())
+            .and_then(|t| t.agent_reply.as_ref())
+            .map(TextInput::text),
+        Some(""),
+        "Ctrl+X 剪切后追问框文本清空"
+    );
+}

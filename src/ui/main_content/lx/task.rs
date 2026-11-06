@@ -497,6 +497,7 @@ fn draw_agent_reply(
     let y = rect.y.saturating_add(TOP_BORDER);
     let mut x = put_grid(grid, start, y, &prefix, style::accent(), limit);
     let cursor = reply.cursor();
+    let selection = reply.selection();
     for (index, ch) in reply.text().chars().enumerate() {
         let width = ch.width().unwrap_or(0) as u16;
         if width == 0 {
@@ -505,7 +506,9 @@ fn draw_agent_reply(
         if x.saturating_add(width) > limit {
             return;
         }
-        let cell_style = if index == cursor {
+        let selected =
+            selection.is_some_and(|(sel_start, sel_end)| index >= sel_start && index < sel_end);
+        let cell_style = if selected || (selection.is_none() && index == cursor) {
             style::text().add_modifier(Modifier::REVERSED)
         } else {
             style::text()
@@ -514,7 +517,7 @@ fn draw_agent_reply(
         put_grid(grid, x, y, &cell, cell_style, x.saturating_add(width));
         x = x.saturating_add(width);
     }
-    if cursor >= reply.text().chars().count() && x < limit {
+    if selection.is_none() && cursor >= reply.text().chars().count() && x < limit {
         put_grid(
             grid,
             x,
